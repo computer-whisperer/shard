@@ -1853,6 +1853,154 @@ mod tests {
         assert_eq!(r, false_v());
     }
 
+    // ------------------------------------------------------------------
+    // Slice 18: a STRETCH proof.
+    //
+    //   ∀ xs : List Int. (length (id_list xs)) = (length xs)
+    //
+    // Composes two recursive fns. The Cons case threads
+    // Unfold-Reduce-Rewrite across BOTH sides of the equation, using
+    // the IH in the middle. First proof where:
+    //   - Unfold has to RECURSE into a Call's args to find the target
+    //     (the outer Call is `length`, the target is `id_list`).
+    //     unfold_one_in_list is exercised at runtime for the first
+    //     time.
+    //   - The proof script has 8+ steps in one branch, interleaving
+    //     side dispatches.
+    //   - Primitives (`+`) appear in the equation but stay structural
+    //     under ι — both sides reduce to the SAME un-evaluated
+    //     (+ 1 (length _t)) shape and Refl closes via expr_eq.
+    //
+    // Goal of this slice: see whether the existing kernel survives a
+    // proof that wasn't designed in by the prior tests. Expected
+    // outcome — uncertain. Either the streak holds, or we learn
+    // something specific.
+    // ------------------------------------------------------------------
+
+    /// Module with (type (List T) ...), id_list, and length.
+    /// Reused inside the slice 18 test.
+    fn list_id_length_module() -> ast::Expr {
+        let list_td = type_def("List", vec!["T"], vec![
+            ctor_def("Nil",  vec![]),
+            ctor_def("Cons", vec![tvar("T"), tcon("List", vec![tvar("T")])]),
+        ]);
+        let list_int = tcon("List", vec![tcon("Int", vec![])]);
+
+        // (fn id_list ((xs (List Int))) (List Int)
+        //   (match xs (Nil Nil) ((Cons h t) (Cons h (id_list t)))))
+        let id_list_body = nmatch(
+            bvar(0),
+            vec![
+                narm(pctor("Nil", vec![]), ctor_app("Nil", vec![])),
+                narm(pctor("Cons", vec![pvar(), pvar()]),
+                     ctor_app("Cons", vec![
+                        bvar(1),                            // h
+                        call("id_list", vec![bvar(0)]),    // (id_list t)
+                     ])),
+            ],
+        );
+        let id_list_fn = fn_def("id_list",
+            vec![list_int.clone()],
+            list_int.clone(),
+            id_list_body,
+        );
+
+        // (fn length ((xs (List Int))) Int
+        //   (match xs (Nil 0) ((Cons h t) (+ 1 (length t)))))
+        //
+        // Cons arm pat_arity=2 (h then t source-order):
+        //   inside arm body: BVar 0 = t (innermost), BVar 1 = h.
+        // The body (+ 1 (length t)) doesn't reference h.
+        let length_body = nmatch(
+            bvar(0),
+            vec![
+                narm(pctor("Nil", vec![]), intlit(0)),
+                narm(pctor("Cons", vec![pvar(), pvar()]),
+                     call("+", vec![
+                        intlit(1),
+                        call("length", vec![bvar(0)]),     // (length t)
+                     ])),
+            ],
+        );
+        let length_fn = fn_def("length",
+            vec![list_int.clone()],
+            tcon("Int", vec![]),
+            length_body,
+        );
+
+        module(vec![list_td], vec![id_list_fn, length_fn], vec![])
+    }
+
+    /// Headline stretch test.
+    #[test]
+    fn check_seq_length_of_id_list_equals_length() {
+        let m = load_kernel();
+        let mod_v = list_id_length_module();
+        let list_int = tcon("List", vec![tcon("Int", vec![])]);
+
+        let seq = sequent(
+            vec![param("xs", list_int)],
+            vec![], vec![],
+            equation(
+                call("length", vec![call("id_list", vec![fvar("xs")])]),
+                call("length", vec![fvar("xs")]),
+            ),
+        );
+
+        // Nil case after subst (xs := Nil):
+        //   (length (id_list Nil)) = (length Nil)
+        // Simp Both drives both to 0. Refl.
+        let nil_case = steps(vec![simp(side_both())], refl());
+
+        // Cons case after subst (xs := (Cons _h _t)):
+        //   (length (id_list (Cons _h _t))) = (length (Cons _h _t))
+        // IH at Hyp 0: (length (id_list _t)) = (length _t)
+        //
+        // Steps (Lhs side):
+        //   1. Unfold id_list Lhs:
+        //      Outer Call is `length`, not id_list. unfold_one_in
+        //      recurses into args, finds inner Call id_list,
+        //      applies. Lhs becomes
+        //      (length (Match (Cons _h _t) [Nil->Nil; Cons->...])).
+        //   2. Reduce Lhs (ι): fires the inner Match's Cons arm.
+        //      Lhs becomes (length (Cons _h (id_list _t))).
+        //   3. Unfold length Lhs:
+        //      Outer Call IS length. Applies. Lhs becomes
+        //      (Match (Cons _h (id_list _t)) [Nil->0; Cons->(+ 1 (length t))]).
+        //   4. Reduce Lhs (ι): fires Cons arm. Lhs becomes
+        //      (+ 1 (length (id_list _t))).
+        //   5. Rewrite (Hyp 0) Lr Lhs all=True: pat = (length (id_list _t)),
+        //      repl = (length _t). Found inside the Call + args.
+        //      Lhs becomes (+ 1 (length _t)).
+        //
+        // Steps (Rhs side):
+        //   6. Unfold length Rhs: Rhs = (length (Cons _h _t)). Becomes
+        //      (Match (Cons _h _t) [Nil->0; Cons->(+ 1 (length t))]).
+        //   7. Reduce Rhs (ι): fires Cons arm. Rhs becomes
+        //      (+ 1 (length _t)).
+        //
+        //   8. Refl: both sides are (+ 1 (length _t)).
+        let cons_case = steps(
+            vec![
+                unfold("id_list", side_lhs()),
+                reduce(side_lhs()),
+                unfold("length",  side_lhs()),
+                reduce(side_lhs()),
+                rewrite(er_hyp(0), dir_lr(), side_lhs(), bool_true(), vec![]),
+                unfold("length",  side_rhs()),
+                reduce(side_rhs()),
+            ],
+            refl(),
+        );
+
+        let pf = induct("xs", vec![
+            case_arm("Nil",  nil_case),
+            case_arm("Cons", cons_case),
+        ]);
+        let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
+        assert_eq!(r, true_v());
+    }
+
     /// Axiom citation works the same as Proven. Both lookup_lemma
     /// arms match on a sym_eq of the name and return the carried
     /// Goal — the tag is just an audit marker (see BOUNDARIES.md).
