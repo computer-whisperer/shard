@@ -121,6 +121,76 @@
     Refl))
 
 ;; ---------------------------------------------------------------------------
+;; read_swap_i: ∀ m i j. (int_eq i j) = False ⊢
+;;   (read (swap m i j) i) = (read m j).
+;;
+;; Observing a swap at the i end returns what was at j — when i ≠ j.
+;; Two-step framing: the OUTER write (at j) is skipped by the
+;; disequality (read_write_neq, premise discharged from the goal's
+;; i≠j), exposing the INNER write (at i) which read_write_eq collapses.
+;; First use of RewriteWith here: cite the CONDITIONAL read_write_neq,
+;; discharge its (int_eq i j)=False premise with the goal's own premise,
+;; then continue.
+;; ---------------------------------------------------------------------------
+
+(claim read_swap_i
+  (Goal
+    (list (Param 'm (ty Map Int))
+          (Param 'i (ty Int))
+          (Param 'j (ty Int)))
+    (list
+      (Equation (Call 'int_eq (list (FVar 'i) (FVar 'j))) (Ctor 'False (list))))
+    (Equation
+      (Call 'read (list (Call 'swap (list (FVar 'm) (FVar 'i) (FVar 'j)))
+                        (FVar 'i)))
+      (Call 'read (list (FVar 'm) (FVar 'j)))))
+  (Steps
+    (list (Unfold 'swap Lhs))   ; (read (write (write m i (read m j)) j (read m i)) i)
+    ;; Skip the outer write (at j): read_write_neq, premise (int_eq i j)=False.
+    (RewriteWith (Lemma 'read_write_neq) Lr Lhs
+      (list)
+      (list (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl))
+      ;; Now (read (write m i (read m j)) i): inner write at i is the hit.
+      (Steps (list (Rewrite (Lemma 'read_write_eq) Lr Lhs True (list))) Refl))))
+
+;; ---------------------------------------------------------------------------
+;; read_swap_other: ∀ m i j p. (int_eq p j) = False, (int_eq p i) = False ⊢
+;;   (read (swap m i j) p) = (read m p).
+;;
+;; A swap of i and j is invisible to a read at any OTHER position p.
+;; Both writes are skipped, each by a read_write_neq whose premise is
+;; discharged from the matching goal premise (nested RewriteWith). This
+;; is the framing the loop invariant leans on most — the bulk of memory
+;; is untouched by each swap.
+;; ---------------------------------------------------------------------------
+
+(claim read_swap_other
+  (Goal
+    (list (Param 'm (ty Map Int))
+          (Param 'i (ty Int))
+          (Param 'j (ty Int))
+          (Param 'p (ty Int)))
+    (list
+      (Equation (Call 'int_eq (list (FVar 'p) (FVar 'j))) (Ctor 'False (list)))
+      (Equation (Call 'int_eq (list (FVar 'p) (FVar 'i))) (Ctor 'False (list))))
+    (Equation
+      (Call 'read (list (Call 'swap (list (FVar 'm) (FVar 'i) (FVar 'j)))
+                        (FVar 'p)))
+      (Call 'read (list (FVar 'm) (FVar 'p)))))
+  (Steps
+    (list (Unfold 'swap Lhs))   ; (read (write (write m i (read m j)) j (read m i)) p)
+    ;; Skip outer write (at j): premise (int_eq p j)=False is Premise 0.
+    (RewriteWith (Lemma 'read_write_neq) Lr Lhs
+      (list)
+      (list (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl))
+      ;; Now (read (write m i (read m j)) p): skip inner write (at i),
+      ;; premise (int_eq p i)=False is Premise 1.
+      (RewriteWith (Lemma 'read_write_neq) Lr Lhs
+        (list)
+        (list (Steps (list (Rewrite (Premise 1) Lr Lhs True (list))) Refl))
+        Refl))))                ; (read m p) = (read m p)
+
+;; ---------------------------------------------------------------------------
 ;; rev_loop_zero: ∀ m i j. (rev_loop m i j Z) = m.
 ;;
 ;; The loop base case: zero swaps leave memory unchanged. Trivial by
@@ -155,23 +225,25 @@
 ;; is the M3 data-refinement: list ↔ linear memory, proven for
 ;; universal n. Cites list_lib's `rev`.
 ;;
-;; WHY IT'S NOT A CLAIM YET (the slice-34 reassess point): the proof is
-;; an induction maintaining a loop invariant ("after k swaps, position p
-;; holds the cell originally at its mirror image"), discharged with the
-;; swap framing lemmas. Standing it up surfaced the concrete gaps to
-;; decide on next:
-;;   1. read_swap at the OTHER positions (read_swap_i, read_swap_other)
-;;      needs the CONDITIONAL framing lemma read_write_neq cited via
-;;      RewriteWith with disequality-premise discharge — straightforward
-;;      but not yet written.
-;;   2. The loop guard / invariant arithmetic is INEQUALITY reasoning
-;;      (i < j, p between bounds, i + j = n - 1). Our LIA backend decides
-;;      EQUALITIES only; the moment the invariant needs `lt`/`le`, we'll
-;;      want an order/inequality decision procedure (a sibling backend,
-;;      or an LIA extension). This is the predicted "next infrastructure"
-;;      from the M3 discussion, now confirmed concretely.
+;; WHY IT'S NOT A CLAIM YET: the proof is an induction maintaining a
+;; loop invariant ("after k swaps, position p holds the cell originally
+;; at its mirror image"), discharged with the swap framing lemmas.
+;; Progress against the gaps surfaced when standing it up:
+;;   1. [DONE, slice 36] read_swap at all three position classes
+;;      (read_swap_j / read_swap_i / read_swap_other) — the full per-
+;;      position swap framing, via RewriteWith + read_write_neq with
+;;      disequality-premise discharge.
+;;   2. [BACKEND READY, slice 35] the loop guard / invariant arithmetic
+;;      is INEQUALITY reasoning (i < j, p between bounds, i + j = n - 1).
+;;      The `ord` backend now decides `lt`/`le` tautologies; conditional
+;;      bounds come in as premises. The invariant induction (below) is
+;;      where these get consumed — the remaining work.
 ;;   3. The list↔memory bridge (load/dump) carries a plumbing tax
 ;;      (length_nat / half_nat / int_of_nat conversions) — TRANSFER's
-;;      "representation alignment is death by a thousand lemmas". Worth
-;;      deciding whether to lean on the order backend (1,2) to erase it.
+;;      "representation alignment is death by a thousand lemmas". The
+;;      open design question: how much of it the ord backend erases.
+;;
+;; NEXT: state and prove the loop-invariant lemma (induction on the Nat
+;; counter k), the inductive heart that read_swap_* + ord + rev feed
+;; into. That is the dragon TRANSFER names; it gets its own slice.
 ;; ---------------------------------------------------------------------------

@@ -38,7 +38,7 @@ PASS  plus_comm
 …
 PASS  le_linear_cancel
 
-30 passed, 0 failed
+32 passed, 0 failed
 ```
 
 The `check` binary loads the bundled kernel, then walks each
