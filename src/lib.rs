@@ -803,4 +803,87 @@ mod tests {
         let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
         assert_eq!(r, true_v());
     }
+
+    // ------------------------------------------------------------------
+    // Slice 9: Absurd — close from a contradictory in-scope equation.
+    //
+    // Counterpart to Refl: where Refl closes when both sides ARE equal,
+    // Absurd closes when a cited equation HAS to be false. Useful in
+    // induction's vacuous cases (the "impossible" branch). v2's Absurd
+    // requires the cited equation to be ground (no ∀-binders, no
+    // premises); richer cases wait for later slices.
+    //
+    // Goals are intentionally chosen so Refl could NOT close them, to
+    // make Absurd's contribution unambiguous.
+    // ------------------------------------------------------------------
+
+    /// Premise `1 = 2` is impossible (distinct IntLits). Absurd closes
+    /// the arbitrary goal `0 = 1`, which Refl could not.
+    #[test]
+    fn check_seq_absurd_premise_int_clash() {
+        let m = load_kernel();
+        let seq = sequent(
+            vec![], vec![],
+            vec![equation(intlit(1), intlit(2))],     // false premise
+            equation(intlit(0), intlit(1)),           // arbitrary goal
+        );
+        let pf = absurd(er_premise(0));
+        let r = run_check_sequent(&m, module(vec![], vec![], vec![]), theory_empty(), seq, pf);
+        assert_eq!(r, true_v());
+    }
+
+    /// Hypothesis `(Cons 1 Nil) = Nil` is impossible (distinct ctors).
+    /// Absurd closes any goal.
+    #[test]
+    fn check_seq_absurd_hyp_ctor_clash() {
+        let m = load_kernel();
+        let bad_hyp = goal(
+            vec![], vec![],
+            equation(
+                ctor_app("Cons", vec![intlit(1), ctor_app("Nil", vec![])]),
+                ctor_app("Nil", vec![]),
+            ),
+        );
+        let seq = sequent(
+            vec![],
+            vec![bad_hyp],
+            vec![],
+            equation(intlit(0), intlit(1)),
+        );
+        let pf = absurd(er_hyp(0));
+        let r = run_check_sequent(&m, module(vec![], vec![], vec![]), theory_empty(), seq, pf);
+        assert_eq!(r, true_v());
+    }
+
+    /// Premise `(double 5) = 10` simps to `10 = 10` — no head clash.
+    /// Absurd does NOT apply, returns False. Tests that Absurd looks
+    /// at the simped form, not the surface form (where lhs and rhs
+    /// have different heads: Call vs IntLit).
+    #[test]
+    fn check_seq_absurd_rejects_actually_true_premise() {
+        let m = load_kernel();
+        let mod_v = double_module();
+        let seq = sequent(
+            vec![], vec![],
+            vec![equation(call("double", vec![intlit(5)]), intlit(10))],
+            equation(intlit(0), intlit(1)),
+        );
+        let pf = absurd(er_premise(0));
+        let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
+        assert_eq!(r, false_v());
+    }
+
+    /// Out-of-bounds EqRef: resolve_eq returns None, Absurd returns
+    /// False. Pins the safe-rejection behavior.
+    #[test]
+    fn check_seq_absurd_invalid_eqref() {
+        let m = load_kernel();
+        let seq = sequent(
+            vec![], vec![], vec![],                  // no premises
+            equation(intlit(0), intlit(1)),
+        );
+        let pf = absurd(er_premise(0));              // index 0 doesn't exist
+        let r = run_check_sequent(&m, module(vec![], vec![], vec![]), theory_empty(), seq, pf);
+        assert_eq!(r, false_v());
+    }
 }

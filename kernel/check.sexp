@@ -76,6 +76,39 @@
         ((Lemma n)   (lookup_lemma n th))))))
 
 ;; ---------------------------------------------------------------------------
+;; head_clash: True iff `a` and `b` must be distinct because their
+;; outermost structure can't unify under any binding. Used by Absurd
+;; to detect contradictory equations after simp.
+;;
+;; Distinct ctors / distinct IntLits / distinct SymLits, OR a
+;; cross-variant value-type mismatch (Ctor vs IntLit, etc.) — these
+;; all clash. FVar / BVar / stuck Call / stuck Match / Let / If on
+;; either side means "we can't decide" — return False.
+;; ---------------------------------------------------------------------------
+
+(fn head_clash ((a Expr) (b Expr)) Bool
+  (match a
+    ((Ctor na _)
+      (match b
+        ((Ctor nb _) (if (sym_eq na nb) False True))
+        ((IntLit _)  True)
+        ((SymLit _)  True)
+        (_           False)))
+    ((IntLit na)
+      (match b
+        ((IntLit nb) (if (int_eq na nb) False True))
+        ((Ctor _ _)  True)
+        ((SymLit _)  True)
+        (_           False)))
+    ((SymLit na)
+      (match b
+        ((SymLit nb) (if (sym_eq na nb) False True))
+        ((Ctor _ _)  True)
+        ((IntLit _)  True)
+        (_           False)))
+    (_ False)))
+
+;; ---------------------------------------------------------------------------
 ;; check_sequent: dispatch on the Proof. Returns True iff accepted.
 ;; ---------------------------------------------------------------------------
 
@@ -108,9 +141,18 @@
       False)
 
     ((Absurd er)
-      ;; TODO: ground-eq check on resolved er; simp both sides; accept
-      ;; iff they head-clash to distinct constructors.
-      False)
+      ;; Close the current goal from a contradictory in-scope equation.
+      ;; Resolve er, require it to be a ground Goal (no ∀-binders, no
+      ;; premises), simp both sides, accept iff they can't unify at
+      ;; the head. v2 limitation: ∀-binders not yet supported — open
+      ;; with fresh FVars + premise discharge belong to a later slice.
+      (match (resolve_eq er seq th)
+        (None False)
+        ((Some g)
+          (match g
+            ((Goal Nil Nil (Equation l r))
+              (head_clash (simp_expr m l) (simp_expr m r)))
+            (_ False)))))
 
     ((ByTheory theory_name cert)
       ;; TODO: dispatch to the per-theory checker registered under

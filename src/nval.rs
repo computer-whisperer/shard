@@ -124,6 +124,14 @@ pub fn refl() -> Expr { ctor("Refl", vec![]) }
 pub fn steps(stps: Vec<Expr>, rest: Expr) -> Expr {
     ctor("Steps", vec![list(stps), rest])
 }
+pub fn absurd(er: Expr) -> Expr { ctor("Absurd", vec![er]) }
+
+// EqRef variants.
+pub fn er_hyp(k: i64) -> Expr     { ctor("Hyp",     vec![Expr::IntLit(k)]) }
+pub fn er_premise(k: i64) -> Expr { ctor("Premise", vec![Expr::IntLit(k)]) }
+pub fn er_lemma(name: &str) -> Expr {
+    ctor("Lemma", vec![Expr::SymLit(name.into())])
+}
 pub fn unfold(name: &str, side: Expr) -> Expr {
     ctor("Unfold", vec![Expr::SymLit(name.into()), side])
 }
