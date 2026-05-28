@@ -351,6 +351,124 @@
                       Refl)))))))))))
 
 ;; ---------------------------------------------------------------------------
+;; Above-the-range case. Flipped-orientation arithmetic helpers (the
+;; bounds now read (lt j p) — p above j — so the disequalities come out
+;; with p on the other side from the below case).
+;; ---------------------------------------------------------------------------
+
+;; (lt j p)=True ⊢ (lt (- j 1) p)=True.   (feed the IH at the shrunk j-1)
+(claim lt_pred_from_lt
+  (Goal
+    (list (Param 'j (ty Int)) (Param 'p (ty Int)))
+    (list (Equation (Call 'lt (list (FVar 'j) (FVar 'p))) (Ctor 'True (list))))
+    (Equation
+      (Call 'lt (list (Call '- (list (FVar 'j) (IntLit 1))) (FVar 'p)))
+      (Ctor 'True (list))))
+  (ByTheory 'farkas (Cert 'farkas (list 1 1))))
+
+;; (lt a b)=True ⊢ (int_eq b a)=False.   (flipped: ≠ with the larger first)
+;; The negated goal is the equality b=a; cancelling it against the
+;; premise needs goal multiplier -1 — allowed because the goal is a
+;; disequality (equality negation), not an inequality.
+(claim lt_implies_neq_flip
+  (Goal
+    (list (Param 'a (ty Int)) (Param 'b (ty Int)))
+    (list (Equation (Call 'lt (list (FVar 'a) (FVar 'b))) (Ctor 'True (list))))
+    (Equation
+      (Call 'int_eq (list (FVar 'b) (FVar 'a)))
+      (Ctor 'False (list))))
+  (ByTheory 'farkas (Cert 'farkas (list -1 1))))
+
+;; (lt i j)=True, (lt j p)=True ⊢ (int_eq p i)=False.   (i < j < p ⟹ p ≠ i)
+(claim lt_trans_to_neq_flip
+  (Goal
+    (list (Param 'i (ty Int)) (Param 'j (ty Int)) (Param 'p (ty Int)))
+    (list (Equation (Call 'lt (list (FVar 'i) (FVar 'j))) (Ctor 'True (list)))
+          (Equation (Call 'lt (list (FVar 'j) (FVar 'p))) (Ctor 'True (list))))
+    (Equation
+      (Call 'int_eq (list (FVar 'p) (FVar 'i)))
+      (Ctor 'False (list))))
+  (ByTheory 'farkas (Cert 'farkas (list -1 1 1))))
+
+;; read_swap_above: ∀ m i j p. (lt i j)=True, (lt j p)=True ⊢
+;;   (read (swap m i j) p) = (read m p).   (p above the swap range)
+(claim read_swap_above
+  (Goal
+    (list (Param 'm (ty Map Int))
+          (Param 'i (ty Int))
+          (Param 'j (ty Int))
+          (Param 'p (ty Int)))
+    (list (Equation (Call 'lt (list (FVar 'i) (FVar 'j))) (Ctor 'True (list)))
+          (Equation (Call 'lt (list (FVar 'j) (FVar 'p))) (Ctor 'True (list))))
+    (Equation
+      (Call 'read (list (Call 'swap (list (FVar 'm) (FVar 'i) (FVar 'j)))
+                        (FVar 'p)))
+      (Call 'read (list (FVar 'm) (FVar 'p)))))
+  (RewriteWith (Lemma 'read_swap_other) Lr Lhs (list)
+    (list
+      ;; premise 0: (int_eq p j) = False — from (lt j p) [Premise 1], flipped.
+      (RewriteWith (Lemma 'lt_implies_neq_flip) Lr Lhs (list)
+        (list (Steps (list (Rewrite (Premise 1) Lr Lhs True (list))) Refl))
+        Refl)
+      ;; premise 1: (int_eq p i) = False — from (lt i j),(lt j p), pin j.
+      (RewriteWith (Lemma 'lt_trans_to_neq_flip) Lr Lhs (list (Inst 'j (FVar 'j)))
+        (list
+          (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl)   ; (lt i j)=True
+          (Steps (list (Rewrite (Premise 1) Lr Lhs True (list))) Refl))  ; (lt j p)=True
+        Refl))
+    Refl))
+
+;; ---------------------------------------------------------------------------
+;; rev_loop_untouched_above: ∀ m i j p k. (lt j p) = True ⊢
+;;   (read (rev_loop m i j k) p) = (read m p).
+;;
+;; Mirror of rev_loop_untouched_below: a cell above the swap range is
+;; unchanged. Same induction; the IH precondition at the shrunk segment
+;; is p > j-1 (lt_pred_from_lt of p > j), and the swap is peeled by
+;; read_swap_above.
+;; ---------------------------------------------------------------------------
+
+(claim rev_loop_untouched_above
+  (Goal
+    (list (Param 'm (ty Map Int))
+          (Param 'i (ty Int))
+          (Param 'j (ty Int))
+          (Param 'p (ty Int))
+          (Param 'k (ty Nat)))
+    (list (Equation (Call 'lt (list (FVar 'j) (FVar 'p))) (Ctor 'True (list))))
+    (Equation
+      (Call 'read (list (Call 'rev_loop (list (FVar 'm) (FVar 'i) (FVar 'j) (FVar 'k)))
+                        (FVar 'p)))
+      (Call 'read (list (FVar 'm) (FVar 'p)))))
+  (Induct 'k
+    (list
+      (Case 'Z
+        (Steps (list (Simp Lhs)) Refl))
+      (Case 'S
+        (Steps (list (Simp Lhs))
+          (CaseOn (Call 'lt (list (FVar 'i) (FVar 'j))) 'Bool
+            (list
+              (Case 'False
+                (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))
+                             (Simp Lhs))
+                       Refl))
+              (Case 'True
+                (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))
+                             (Simp Lhs))
+                  ;; IH at the shrunk segment; precondition p > j-1.
+                  (RewriteWith (Hyp 1) Lr Lhs (list)
+                    (list
+                      (RewriteWith (Lemma 'lt_pred_from_lt) Lr Lhs (list)
+                        (list (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl))
+                        Refl))
+                    ;; (read (swap m i j) p): peel (p above the range).
+                    (RewriteWith (Lemma 'read_swap_above) Lr Lhs (list)
+                      (list
+                        (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl)        ; (lt i j)=True
+                        (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl))   ; (lt j p)=True
+                      Refl)))))))))))
+
+;; ---------------------------------------------------------------------------
 ;; CAPSTONE (stated, not yet proven) — mem_reverses:
 ;;
 ;;   ∀ xs : (List Int).
