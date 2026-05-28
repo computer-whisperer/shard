@@ -2561,6 +2561,135 @@ mod tests {
         assert_eq!(r, true_v());
     }
 
+    // ------------------------------------------------------------------
+    // Slice 27: RewriteWith — conditional lemma citation. The cited
+    // equation carries premises; the rewriter matches its conclusion
+    // against the goal side, instantiates each premise with the match
+    // binding env, and dispatches sub-proofs to discharge them. After
+    // all premises are checked, the rewrite is applied and the rest
+    // of the proof continues on the new sequent.
+    // ------------------------------------------------------------------
+
+    /// Cite a conditional axiom:
+    ///   ∀ a : Nat. (a = Z) ⇒ ((add_nat a Z) = Z)
+    /// to close (add_nat Z Z) = Z. Match binds a := Z; instantiated
+    /// premise (Z = Z) is discharged with Refl; rewritten goal Z = Z
+    /// closed with Refl.
+    ///
+    /// Exercises:
+    ///   - apply_rewrite_with_env returning (Pair env new_eq).
+    ///   - check_premise_proofs walking the cited premises in lockstep
+    ///     with the supplied sub-proofs.
+    ///   - resolve_eq + open_eq_with on a multi-component Goal.
+    #[test]
+    fn check_seq_rewrite_with_conditional_axiom() {
+        let m = load_kernel();
+        let mod_v = nat_module();
+        // Conditional axiom: ∀ a : Nat. (a = Z) ⇒ ((add_nat a Z) = Z).
+        // BVar 0 stands in for `a` throughout (innermost-first).
+        let cond_goal = goal(
+            vec![param("a", tcon("Nat", vec![]))],
+            vec![equation(bvar(0), ctor_app("Z", vec![]))],
+            equation(
+                call("add_nat", vec![bvar(0), ctor_app("Z", vec![])]),
+                ctor_app("Z", vec![]),
+            ),
+        );
+        let th = theory_cons(
+            axiom("triv_lemma", cond_goal),
+            theory_empty(),
+        );
+        let seq = sequent(
+            vec![], vec![], vec![],
+            equation(
+                call("add_nat",
+                     vec![ctor_app("Z", vec![]), ctor_app("Z", vec![])]),
+                ctor_app("Z", vec![]),
+            ),
+        );
+        let pf = rewrite_with(
+            er_lemma("triv_lemma"), dir_lr(), side_lhs(),
+            vec![],         // no insts
+            vec![refl()],   // one sub-proof for the one premise
+            refl(),         // continuation after rewrite
+        );
+        let r = run_check_sequent(&m, mod_v, th, seq, pf);
+        assert_eq!(r, true_v());
+    }
+
+    /// Arity-mismatch rejection: if the cited equation has N premises
+    /// but the proof supplies M ≠ N sub-proofs, check_premise_proofs
+    /// returns False.
+    #[test]
+    fn check_seq_rewrite_with_arity_mismatch_rejects() {
+        let m = load_kernel();
+        let mod_v = nat_module();
+        let cond_goal = goal(
+            vec![param("a", tcon("Nat", vec![]))],
+            vec![equation(bvar(0), ctor_app("Z", vec![]))],
+            equation(
+                call("add_nat", vec![bvar(0), ctor_app("Z", vec![])]),
+                ctor_app("Z", vec![]),
+            ),
+        );
+        let th = theory_cons(
+            axiom("triv_lemma", cond_goal),
+            theory_empty(),
+        );
+        let seq = sequent(
+            vec![], vec![], vec![],
+            equation(
+                call("add_nat",
+                     vec![ctor_app("Z", vec![]), ctor_app("Z", vec![])]),
+                ctor_app("Z", vec![]),
+            ),
+        );
+        // Zero premise proofs supplied, but the lemma has one premise.
+        let pf = rewrite_with(
+            er_lemma("triv_lemma"), dir_lr(), side_lhs(),
+            vec![], vec![], refl(),
+        );
+        let r = run_check_sequent(&m, mod_v, th, seq, pf);
+        assert_eq!(r, false_v());
+    }
+
+    /// Non-Nil Insts is rejected in v2 (mirrors the unconditional
+    /// Rewrite Step's restriction).
+    #[test]
+    fn check_seq_rewrite_with_insts_unsupported() {
+        let m = load_kernel();
+        let mod_v = nat_module();
+        let cond_goal = goal(
+            vec![param("a", tcon("Nat", vec![]))],
+            vec![],   // no premises — keep this test focused
+            equation(
+                call("add_nat", vec![bvar(0), ctor_app("Z", vec![])]),
+                bvar(0),
+            ),
+        );
+        let th = theory_cons(
+            axiom("uncond_lemma", cond_goal),
+            theory_empty(),
+        );
+        let sz = ctor_app("S", vec![ctor_app("Z", vec![])]);
+        let seq = sequent(
+            vec![], vec![], vec![],
+            equation(
+                call("add_nat", vec![sz.clone(), ctor_app("Z", vec![])]),
+                sz,
+            ),
+        );
+        // Supplying an Inst should be rejected by the v2 arm.
+        let pf = rewrite_with(
+            er_lemma("uncond_lemma"), dir_lr(), side_lhs(),
+            vec![inst("a", ctor_app("S", vec![ctor_app("Z", vec![])]))],
+            vec![],
+            refl(),
+        );
+        let r = run_check_sequent(&m, mod_v, th, seq, pf);
+        assert_eq!(r, false_v());
+    }
+
     /// Axiom citation works the same as Proven. Both lookup_lemma
     /// arms match on a sym_eq of the name and return the carried
     /// Goal — the tag is just an audit marker (see BOUNDARIES.md).

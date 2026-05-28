@@ -131,11 +131,50 @@
       (do_case_on m th seq scrut ty cases))
 
     ((RewriteWith er dir side insts premise_proofs rest)
-      ;; TODO (rewriter, conditional): resolve er, specialize via
-      ;; insts, match its lhs/rhs (per dir) against the chosen side;
-      ;; instantiate each premise with the match binding and discharge
-      ;; with the supplied sub-proof; continue with the rewritten seq.
-      False)
+      ;; Conditional rewrite. Cited equation may have ∀-binders AND
+      ;; non-empty premises:
+      ;;   1. Resolve er → cited Goal.
+      ;;   2. Open its ∀-binders to fresh FVars (names = pat_vars).
+      ;;   3. Match the (opened) conclusion against the chosen Side
+      ;;      of the goal eq via apply_rewrite_with_env. The match
+      ;;      yields a binding env over pat_vars AND the rewritten
+      ;;      equation.
+      ;;   4. For each cited premise (also opened), substitute the
+      ;;      env and discharge with the corresponding sub-proof.
+      ;;   5. If all premises discharge, continue with `rest` on the
+      ;;      rewritten sequent.
+      ;;
+      ;; v2 limitations (documented in REVISIT):
+      ;;   - non-Nil Insts not supported (matches Rewrite's stance).
+      ;;   - single match site only (no all-occurrences variant).
+      ;;   - Both selector picks lhs match first, falls back to rhs.
+      (match insts
+        (Nil
+          (match (resolve_eq er seq th)
+            (None False)
+            ((Some g)
+              (match g
+                ((Goal cited_params cited_premises cited_eq)
+                  (let ((pat_var_names (fresh_syms_for_params cited_params)))
+                    (let ((opening_fvars (reverse_exprs
+                                           (syms_to_fvars pat_var_names))))
+                      (let ((opened_eq (open_eq_with opening_fvars cited_eq))
+                            (opened_premises
+                              (open_eqs_with opening_fvars cited_premises)))
+                        (match seq
+                          ((Sequent s_params s_hyps s_premises goal_eq)
+                            (match (apply_rewrite_with_env
+                                     pat_var_names opened_eq dir side goal_eq)
+                              (None False)
+                              ((Some (Pair env new_eq))
+                                (if (check_premise_proofs
+                                       m th s_params s_hyps s_premises
+                                       env opened_premises premise_proofs)
+                                    (check_sequent m th
+                                      (Sequent s_params s_hyps s_premises new_eq)
+                                      rest)
+                                    False)))))))))))))
+        (_ False)))                                   ; non-Nil insts
 
     ((Absurd er)
       ;; Close the current goal from a contradictory in-scope equation.
@@ -448,6 +487,59 @@
             (None       None)))))))
 
 ;; ---------------------------------------------------------------------------
+;; rewrite_first_with_env: same walk as rewrite_first, but ALSO returns
+;; the binding env produced by expr_match at the successful match site.
+;;
+;; RewriteWith needs this env so it can substitute it into the cited
+;; equation's premises and dispatch each as a sub-sequent. Plain
+;; rewrite_first discards the env after using it to subst repl.
+;;
+;; First-occurrence only; no `all_occ` variant. Multi-match would
+;; require carrying a List Env (different match sites can bind the
+;; same pat_var differently) — out of scope for v2; documented in
+;; REVISIT.md, "RewriteWith — single-match only".
+;; ---------------------------------------------------------------------------
+
+(fn rewrite_first_with_env ((pat_vars (List Symbol)) (pat Expr) (repl Expr) (e Expr))
+                            (Option (Pair Env Expr))
+  (match (expr_match pat_vars pat e Empty)
+    ((Some env) (Some (Pair env (subst env repl))))
+    (None
+      (match e
+        ((Ctor c args)
+          (match (rewrite_first_list_with_env pat_vars pat repl args)
+            ((Some (Pair env args2)) (Some (Pair env (Ctor c args2))))
+            (None None)))
+        ((Call f args)
+          (match (rewrite_first_list_with_env pat_vars pat repl args)
+            ((Some (Pair env args2)) (Some (Pair env (Call f args2))))
+            (None None)))
+        ((If c t el)
+          (match (rewrite_first_with_env pat_vars pat repl c)
+            ((Some (Pair env c2)) (Some (Pair env (If c2 t el))))
+            (None
+              (match (rewrite_first_with_env pat_vars pat repl t)
+                ((Some (Pair env t2)) (Some (Pair env (If c t2 el))))
+                (None
+                  (match (rewrite_first_with_env pat_vars pat repl el)
+                    ((Some (Pair env el2)) (Some (Pair env (If c t el2))))
+                    (None None)))))))
+        (_ None)))))
+
+(fn rewrite_first_list_with_env
+    ((pat_vars (List Symbol)) (pat Expr) (repl Expr) (es (List Expr)))
+    (Option (Pair Env (List Expr)))
+  (match es
+    (Nil None)
+    ((Cons h t)
+      (match (rewrite_first_with_env pat_vars pat repl h)
+        ((Some (Pair env h2)) (Some (Pair env (Cons h2 t))))
+        (None
+          (match (rewrite_first_list_with_env pat_vars pat repl t)
+            ((Some (Pair env t2)) (Some (Pair env (Cons h t2))))
+            (None None)))))))
+
+;; ---------------------------------------------------------------------------
 ;; apply_rewrite: flip the cited equation by Dir, then rewrite on the
 ;; chosen Side using either rewrite_first or rewrite_all per `all`.
 ;; ---------------------------------------------------------------------------
@@ -489,6 +581,77 @@
   (if all_occ
       (rewrite_all pat_vars pat repl e)
       (rewrite_first pat_vars pat repl e)))
+
+;; ---------------------------------------------------------------------------
+;; apply_rewrite_with_env: like apply_rewrite, but for RewriteWith. Uses
+;; rewrite_first_with_env (always single-match — see REVISIT) and
+;; returns the binding env alongside the new equation.
+;;
+;; Both side semantics: lhs-first single match. If lhs matches we use
+;; that env; otherwise we try rhs. Multi-site Both would require
+;; per-site envs in the cert shape; deferred.
+;; ---------------------------------------------------------------------------
+
+(fn apply_rewrite_with_env ((pat_vars (List Symbol)) (cited Equation)
+                            (dir Dir) (side Side) (goal_eq Equation))
+                            (Option (Pair Env Equation))
+  (match cited
+    ((Equation cl cr)
+      (match dir
+        ((Lr) (rewrite_side_with_env pat_vars cl cr side goal_eq))
+        ((Rl) (rewrite_side_with_env pat_vars cr cl side goal_eq))))))
+
+(fn rewrite_side_with_env ((pat_vars (List Symbol)) (pat Expr) (repl Expr)
+                            (side Side) (goal_eq Equation))
+                            (Option (Pair Env Equation))
+  (match goal_eq
+    ((Equation gl gr)
+      (match side
+        ((Lhs)
+          (match (rewrite_first_with_env pat_vars pat repl gl)
+            ((Some (Pair env gl2)) (Some (Pair env (Equation gl2 gr))))
+            (None None)))
+        ((Rhs)
+          (match (rewrite_first_with_env pat_vars pat repl gr)
+            ((Some (Pair env gr2)) (Some (Pair env (Equation gl gr2))))
+            (None None)))
+        ((Both)
+          (match (rewrite_first_with_env pat_vars pat repl gl)
+            ((Some (Pair env gl2)) (Some (Pair env (Equation gl2 gr))))
+            (None
+              (match (rewrite_first_with_env pat_vars pat repl gr)
+                ((Some (Pair env gr2)) (Some (Pair env (Equation gl gr2))))
+                (None None)))))))))
+
+;; ---------------------------------------------------------------------------
+;; check_premise_proofs: dispatch one sub-proof per cited-equation
+;; premise. Each premise, after env-substitution by the rewriter's
+;; match binding, becomes a concrete Equation to discharge in the
+;; PARENT sequent's context (params, hyps, premises preserved).
+;;
+;; Arity mismatch (more or fewer proofs than premises) returns False.
+;; Any sub-proof failing returns False. All pass → True.
+;; ---------------------------------------------------------------------------
+
+(fn check_premise_proofs
+    ((m Module) (th Theory)
+     (s_params (List Param)) (s_hyps (List Goal)) (s_premises (List Equation))
+     (env Env) (cited_premises (List Equation)) (proofs (List Proof))) Bool
+  (match cited_premises
+    (Nil
+      (match proofs
+        (Nil True)                                    ; arity OK
+        (_   False)))                                 ; too many proofs
+    ((Cons cp cp_rest)
+      (match proofs
+        (Nil False)                                   ; too few proofs
+        ((Cons pf pf_rest)
+          (let ((sub_seq (Sequent s_params s_hyps s_premises
+                                  (subst_eq env cp))))
+            (if (check_sequent m th sub_seq pf)
+                (check_premise_proofs m th s_params s_hyps s_premises
+                                      env cp_rest pf_rest)
+                False)))))))
 
 ;; Unfold one occurrence on the chosen side(s) of an equation.
 ;; For Both: succeed if at least one side has a matching occurrence.
@@ -554,6 +717,27 @@
   (match eqs
     (Nil Nil)
     ((Cons e rest) (Cons (close_eq names e) (close_eqs names rest)))))
+
+;; ---------------------------------------------------------------------------
+;; close_goal_for_storage: convert a Goal that was authored / proved with
+;; param-name FVars in its eq + premises into the canonical BVar-closed
+;; form that the kernel uses for stored lemmas. The Sequent-form (open
+;; FVars) is convenient for top-level proof steps (Induct, Rewrite by
+;; name); the Theory-form (closed BVars) is what citations open back to
+;; fresh FVars. This helper bridges the two.
+;;
+;; Innermost-first convention: BVar 0 = last param. Hence reverse_syms
+;; on (param_names params) before close_many: close_many treats the
+;; FIRST name in its list as BVar 0.
+;; ---------------------------------------------------------------------------
+
+(fn close_goal_for_storage ((g Goal)) Goal
+  (match g
+    ((Goal params premises eq)
+      (let ((names (reverse_syms (param_names params))))
+        (Goal params
+              (close_eqs names premises)
+              (close_eq  names eq))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Equation opening (open_many lifted to Equation and lists thereof).

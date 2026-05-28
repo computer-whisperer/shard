@@ -1,0 +1,46 @@
+;;; RewriteWith demo. First prove a conditional lemma, then cite it
+;;; via RewriteWith to close a follow-up goal.
+;;;
+;;; Lemma:
+;;;   ∀ a : Nat. (a = Z) ⇒ ((add_nat a Z) = Z)
+;;;
+;;; Trivial as math (the premise pins a to Z, then add_nat unfolds
+;;; to Z by the Z arm) but exercises the non-empty-premises path.
+;;;
+;;; Then:
+;;;   (add_nat Z Z) = Z
+;;; closed by citing trivial_lemma — the kernel's rewriter matches
+;;; (add_nat a Z) against (add_nat Z Z) yielding a→Z, instantiates
+;;; the premise to (Z = Z), discharges it with Refl, applies the
+;;; rewrite (lhs becomes Z), and continues with Refl on Z = Z.
+
+(use-module "nat_lib.sexp")
+
+(claim trivial_lemma
+  (Goal
+    (list (Param 'a (TCon 'Nat (list))))
+    (list (Equation (FVar 'a) (Ctor 'Z (list))))    ; premise: a = Z
+    (Equation                                       ; conclusion:
+      (Call 'add_nat (list (FVar 'a) (Ctor 'Z (list))))    ;   (add_nat a Z)
+      (Ctor 'Z (list))))                                   ;   = Z
+  ;; Proof: Rewrite (Premise 0) Lr Lhs all=True replaces FVar 'a → Z
+  ;; on lhs. Then Unfold add_nat + Reduce collapse to Z. Refl.
+  (Steps
+    (list (Rewrite (Premise 0) Lr Lhs True (list))
+          (Unfold 'add_nat Lhs)
+          (Reduce Lhs))
+    Refl))
+
+(claim use_trivial_lemma
+  (Goal (list) (list)
+    (Equation
+      (Call 'add_nat (list (Ctor 'Z (list)) (Ctor 'Z (list))))
+      (Ctor 'Z (list))))
+  ;; Cite the conditional lemma. The rewriter matches lhs of conclusion
+  ;; (add_nat a Z) against goal lhs (add_nat Z Z); captures a→Z; the
+  ;; premise (a = Z) becomes (Z = Z), discharged by Refl. After the
+  ;; rewrite, goal is Z = Z; Refl closes.
+  (RewriteWith (Lemma 'trivial_lemma) Lr Lhs
+    (list)               ; insts (empty — match-determined)
+    (list Refl)          ; one sub-proof per cited premise
+    Refl))               ; continuation after the rewrite

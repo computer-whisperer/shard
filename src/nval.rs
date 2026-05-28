@@ -197,6 +197,18 @@ pub fn rewrite(er: Expr, dir: Expr, side: Expr, all_occ: Expr, insts: Vec<Expr>)
     ctor("Rewrite", vec![er, dir, side, all_occ, list(insts)])
 }
 
+/// `(RewriteWith er dir side insts premise_proofs rest)` — Proof ctor.
+/// Conditional rewrite: cited equation may carry premises which must
+/// be discharged with one sub-proof each (substituted by the match's
+/// binding env).
+pub fn rewrite_with(
+    er: Expr, dir: Expr, side: Expr,
+    insts: Vec<Expr>, premise_proofs: Vec<Expr>, rest: Expr,
+) -> Expr {
+    ctor("RewriteWith",
+         vec![er, dir, side, list(insts), list(premise_proofs), rest])
+}
+
 // Dir variants.
 pub fn dir_lr() -> Expr { ctor("Lr", vec![]) }
 pub fn dir_rl() -> Expr { ctor("Rl", vec![]) }

@@ -195,6 +195,51 @@ is where to start when planning v3.
   certificate format (e.g., one wants opaque binary blobs); promote
   the payload to a more general carrier.
 
+### RewriteWith — single-match only, no Insts (v2)
+- **Chose (slice 27):** the conditional rewrite proof step lands with
+  two restrictions:
+    - Match is **single-occurrence only**. There's no `all_occ`
+      variant. Even with `Both`, the kernel takes the first match
+      (lhs preferred) and produces a single binding env; rhs is
+      consulted only if lhs has no match.
+    - Non-Nil `(List Inst)` is rejected (`False`), mirroring the
+      unconditional Rewrite Step's stance.
+- **Why now:** multi-match mode would require a per-site env in the
+  proof cert (`(List (List Proof))` instead of `(List Proof)`),
+  which is a non-trivial grammar change. Inst pre-instantiation is
+  an orthogonal feature that wants its own slice. Both restrictions
+  let RewriteWith ship as a clean ~140 lines of narrow without
+  re-litigating those design corners.
+- **Revisit when:** a real proof needs to rewrite multiple
+  occurrences of a conditional pattern in one step (rare in
+  practice — most authoring threads the rewrite into a Steps
+  prefix), or when pre-instantiation becomes necessary for
+  partially-matchable conclusions.
+
+### Open-vs-closed Goal forms (binary's storage convention)
+- **State (slice 27):** the kernel uses two conventions for the
+  Goal ADT depending on context:
+    - Top-level Sequent being proved: ∀-bound vars are *opened* to
+      FVars matching the Param names. Required so steps like
+      Induct (substitutes by name) and Rewrite (matches by name)
+      fire correctly.
+    - Goal stored in the Theory as a Proven/Axiom entry: ∀-bound
+      vars are *closed* to BVars, innermost-first. Required so
+      `resolve_eq` / the Rewrite + RewriteWith arms can open them
+      to fresh FVars at citation time.
+- **Binary's bridge:** authors write claim Goals in FVar form
+  (friendlier). After a claim PASSES, the binary calls
+  `close_goal_for_storage` (kernel helper) on the goal value before
+  consing it onto the running Theory.
+- **Why now:** slice 27 surfaced this — RewriteWith couldn't
+  exercise the binary's path without the close step (FVar-form
+  Goals stored in theory don't open correctly). The Rust tests
+  always wrote stored Goals directly in BVar form, so the gap
+  hadn't shown up.
+- **Revisit when:** a different convention emerges (e.g., if we
+  add explicit `(open …)` / `(close …)` forms to the proof
+  language and want everything in one canonical shape).
+
 ### Rewrite pattern-matching descends into `Match` arm bodies
 - **Chose:** v2's rewriter descends under binders (v1 refused to,
   to dodge variable capture). Locally-nameless makes this capture-

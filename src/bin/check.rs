@@ -87,9 +87,31 @@ fn main() -> ExitCode {
             ) {
                 Outcome::Pass { name, goal } => {
                     println!("PASS  {}", name);
+                    // Close param-name FVars in eq + premises to BVars
+                    // so the stored Goal matches the kernel's
+                    // convention for citation (resolve_eq + the
+                    // Rewrite / RewriteWith arms open BVars to fresh
+                    // FVars). Authors write FVar form in claim
+                    // bodies because it's friendlier; the binary
+                    // does the close. See REVISIT, "Open-vs-closed
+                    // Goal forms".
+                    let close_call = ast::Expr::Call(
+                        "close_goal_for_storage".into(),
+                        vec![goal],
+                    );
+                    let closed_goal = match eval::eval(&kernel, &close_call) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            eprintln!(
+                                "error closing goal for `{}`: {:?}",
+                                name, e,
+                            );
+                            return ExitCode::from(2);
+                        }
+                    };
                     let entry = ctor(
                         "Proven",
-                        vec![ast::Expr::SymLit(name), goal],
+                        vec![ast::Expr::SymLit(name), closed_goal],
                     );
                     theory = ctor("TheoryCons", vec![entry, theory]);
                     passed += 1;
