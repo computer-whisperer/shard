@@ -160,6 +160,15 @@
         ((Some s2) (Some (Match s2 arms)))
         (None      None)))))
 
+;; simp_expr: drive `step` to fixed point. Returns the normal form of
+;; e under m. Termination depends on the kernel's user-fn bodies; the
+;; trusted Rust runtime will diverge if step does. See REVISIT.md —
+;; "Reduce and Simp collapsed into one in v2".
+(fn simp_expr ((m Module) (e Expr)) Expr
+  (match (step m e)
+    (None      e)
+    ((Some e2) (simp_expr m e2))))
+
 ;; step_list: try to step the first reducible expression in es, left to
 ;; right. Returns the new list if some step succeeded, else None.
 (fn step_list ((m Module) (es (List Expr))) (Option (List Expr))

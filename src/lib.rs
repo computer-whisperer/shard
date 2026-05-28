@@ -556,13 +556,25 @@ mod tests {
         assert_eq!(r, nctor("None", vec![]));
     }
 
-    /// (Steps [Reduce(Lhs)] Refl) — apply_step on Reduce is currently
-    /// stubbed to None, so apply_steps short-circuits to None and the
-    /// Steps arm returns False. Documents the present stub behavior
-    /// AND validates the None-path of the Steps arm. This test will
-    /// need to change when Reduce gets a real implementation.
+    // ------------------------------------------------------------------
+    // Slice 7c: Reduce wired — first nontrivial proof end-to-end.
+    //
+    // With apply_step's Reduce arm calling simp_expr, the kernel can
+    // now actually *reduce* a goal's side before closing with Refl.
+    // The kernel checks proofs that do work — not just trivially-equal
+    // statements.
+    //
+    // The headline test proves (if True 7 42) = 7 via the proof
+    // (Steps [(Reduce Lhs)] (Refl)) — reduce normalizes the lhs, Refl
+    // closes the equality. This is the smallest possible "real" proof
+    // and the bootstrap's first dogfooded validation.
+    // ------------------------------------------------------------------
+
+    /// Reduce on an already-NF side is a no-op; equation unchanged; Refl
+    /// closes. Sanity case: Reduce doesn't *break* trivially-closed
+    /// goals.
     #[test]
-    fn check_seq_steps_with_stubbed_reduce() {
+    fn check_seq_reduce_on_nf_then_refl() {
         let m = load_kernel();
         let call = format!(
             "(check_sequent {} {} \
@@ -572,6 +584,100 @@ mod tests {
             empty_theory_v()
         );
         let e = load::expr_from_str(&call, &m).expect("parses");
+        assert_eq!(eval::eval(&m, &e).unwrap(), true_v());
+    }
+
+    /// Headline: (if True 7 42) = 7. Reduce on Lhs simplifies it via
+    /// the new If arm of step, Refl closes. First proof where the
+    /// kernel does real reduction work.
+    #[test]
+    fn check_seq_proves_if_true_equals_then_branch() {
+        let m = load_kernel();
+        let call = format!(
+            "(check_sequent {} {} \
+              (Sequent (Nil) (Nil) (Nil) \
+                (Equation (If (Ctor (quote True) (Nil)) (IntLit 7) (IntLit 42)) \
+                          (IntLit 7))) \
+              (Steps (Cons (Reduce (Lhs)) (Nil)) (Refl)))",
+            empty_module_v(),
+            empty_theory_v()
+        );
+        let e = load::expr_from_str(&call, &m).expect("parses");
+        assert_eq!(eval::eval(&m, &e).unwrap(), true_v());
+    }
+
+    /// Same shape, False branch. (if False 7 42) = 42.
+    #[test]
+    fn check_seq_proves_if_false_equals_else_branch() {
+        let m = load_kernel();
+        let call = format!(
+            "(check_sequent {} {} \
+              (Sequent (Nil) (Nil) (Nil) \
+                (Equation (If (Ctor (quote False) (Nil)) (IntLit 7) (IntLit 42)) \
+                          (IntLit 42))) \
+              (Steps (Cons (Reduce (Lhs)) (Nil)) (Refl)))",
+            empty_module_v(),
+            empty_theory_v()
+        );
+        let e = load::expr_from_str(&call, &m).expect("parses");
+        assert_eq!(eval::eval(&m, &e).unwrap(), true_v());
+    }
+
+    /// Falsifying proof: claim (if True 7 42) = 42. Reduce normalizes
+    /// lhs to 7; equation becomes 7 = 42; Refl fails; check_sequent
+    /// returns False. The kernel REJECTS a bogus claim.
+    ///
+    /// This is the "doesn't admit nonsense" half of soundness — at
+    /// least for this microcosm. Just as important as the positive
+    /// case.
+    #[test]
+    fn check_seq_rejects_false_claim() {
+        let m = load_kernel();
+        let call = format!(
+            "(check_sequent {} {} \
+              (Sequent (Nil) (Nil) (Nil) \
+                (Equation (If (Ctor (quote True) (Nil)) (IntLit 7) (IntLit 42)) \
+                          (IntLit 42))) \
+              (Steps (Cons (Reduce (Lhs)) (Nil)) (Refl)))",
+            empty_module_v(),
+            empty_theory_v()
+        );
+        let e = load::expr_from_str(&call, &m).expect("parses");
+        assert_eq!(eval::eval(&m, &e).unwrap(), false_v());
+    }
+
+    /// Reduce Both: simplify lhs AND rhs before Refl. Symmetric
+    /// reduction in a single step.  Proves
+    ///   (if True 1 2) = (if False 1 2)  ... is FALSE (1 != 2)
+    /// And also
+    ///   (if True 1 2) = (if False 2 1)  ... is TRUE (both -> 1).
+    #[test]
+    fn check_seq_reduce_both_sides() {
+        let m = load_kernel();
+        // Positive: both reduce to 1.
+        let pos = format!(
+            "(check_sequent {} {} \
+              (Sequent (Nil) (Nil) (Nil) \
+                (Equation (If (Ctor (quote True)  (Nil)) (IntLit 1) (IntLit 2)) \
+                          (If (Ctor (quote False) (Nil)) (IntLit 2) (IntLit 1)))) \
+              (Steps (Cons (Reduce (Both)) (Nil)) (Refl)))",
+            empty_module_v(),
+            empty_theory_v()
+        );
+        let e = load::expr_from_str(&pos, &m).expect("parses");
+        assert_eq!(eval::eval(&m, &e).unwrap(), true_v());
+
+        // Negative: lhs->1, rhs->2.
+        let neg = format!(
+            "(check_sequent {} {} \
+              (Sequent (Nil) (Nil) (Nil) \
+                (Equation (If (Ctor (quote True)  (Nil)) (IntLit 1) (IntLit 2)) \
+                          (If (Ctor (quote False) (Nil)) (IntLit 1) (IntLit 2)))) \
+              (Steps (Cons (Reduce (Both)) (Nil)) (Refl)))",
+            empty_module_v(),
+            empty_theory_v()
+        );
+        let e = load::expr_from_str(&neg, &m).expect("parses");
         assert_eq!(eval::eval(&m, &e).unwrap(), false_v());
     }
 }

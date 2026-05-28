@@ -138,8 +138,13 @@
       ;; fname with its body opened.
       None)
     ((Reduce side)
-      ;; TODO: reduce_iota — fire ctor-headed matches on side(s).
-      None)
+      ;; Reduce: drive simp_expr on the chosen side(s) of the
+      ;; current equation. In v2 this is full δ+ι (see REVISIT —
+      ;; "Reduce and Simp collapsed into one").
+      (match seq
+        ((Sequent params hyps premises eq)
+          (Some (Sequent params hyps premises
+                  (reduce_side_eq m side eq))))))
     ((Simp side)
       ;; TODO: simp — the guarded reducer (memoized; the v1 blowup
       ;; fix is non-negotiable, see REVISIT and TRANSFER notes).
@@ -149,6 +154,14 @@
       ;; insts, require no premises, match pat against side, replace
       ;; either first occurrence or all per `all`.
       None)))
+
+(fn reduce_side_eq ((m Module) (side Side) (eq Equation)) Equation
+  (match eq
+    ((Equation l r)
+      (match side
+        ((Lhs)  (Equation (simp_expr m l) r))
+        ((Rhs)  (Equation l               (simp_expr m r)))
+        ((Both) (Equation (simp_expr m l) (simp_expr m r)))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Equation / Goal substitution. FVar-based; the hyp's own bound vars
