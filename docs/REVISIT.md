@@ -162,27 +162,98 @@ is where to start when planning v3.
   artifact store with dependency tracking — a separate concern from
   the kernel ADT, but it would replace `Theory`.
 
-### `Reduce` and `Simp` are now split (was: collapsed)
+### `Reduce` and `Simp` are now split — Simp guarded by gated δ
 - **History:** between slices 7c and 13, `Reduce` was wired as full
   δ+ι (driving `simp_expr` = `step` to fixed point). `Simp` was
   stubbed. Slice 13b surfaced the gap: IH-consuming inductive
   proofs need a reducer that fires Matches/Ifs but STOPS at
   recursive sub-calls, so a Rewrite-via-IH can match the exposed
-  subterm. Slice 14 split them.
-- **Chose (slice 14):**
+  subterm. Slice 14 split them. Slice 30 guarded the δ side.
+- **State (after slice 30):**
   - `Reduce side` is ι-only: drives `simp_iota_expr`, which uses
     `step_iota` — Match firing, If dispatch, Let opening, descend
     into Ctor/Call args. NEVER unfolds a Call (user fn or primitive).
-  - `Simp side` is full δ+ι: drives `simp_expr` (= the previous
-    Reduce semantics).
-- **Why now:** the split is what enables the canonical
-  `Induct → case → Unfold → Reduce → Rewrite IH → Refl` pattern.
-- **Revisit when:** the v1 "blowup" problem reappears. The classical
-  fix is to make `Simp` *guarded* — memoized, with cycle detection
-  or size bounds. `Reduce` (ι-only) is naturally bounded since
-  every step strictly decreases reducible-match count, but `Simp`
-  is not. v1's lesson is non-negotiable here; the unguarded `Simp`
-  is a known liability inherited from this slice.
+  - `Simp side` is ι + *gated* δ: drives `simp_expr` (now backed
+    by `step_smart` + a list-based memo). A user-fn Call only
+    unfolds if `step_head` would take a one-step reduction on the
+    unfolded body — i.e., the body's head is a Match with a
+    value-headed scrutinee, an If with True/False condition, a
+    Let, or a primitive Call with all-value args. Otherwise the
+    Call stays surface, and Simp tries to step its args. Primitives
+    at the head always reduce.
+- **Why the gate is *head-only* (not full `step`):** using full
+  `step` as the gate let `(append (append (Cons _ _) ys) zs)`
+  unfold its OUTER call (because `step` recurses through Match
+  scrutinees into the inner Call, which itself steps). The
+  resulting Match-on-stuck-scrut never composed back to the
+  surface form the IH wanted. The head-only check is precise:
+  commit only when the unfolded body reduces *at the head* in one
+  move. Fewer unfoldings, but the ones that happen are exactly
+  the ones the author wanted.
+- **What this buys:** the slice-29 LCF helper-lemma tax collapses.
+  The reverse tower shrank from 10 lemmas (with 6 per-ctor `_step`
+  helpers) to 4 — author drives recursive-fn reduction with
+  `(Simp Both)` directly. v1's "blowup" liability is also
+  mitigated: the gate refuses unfoldings whose result wouldn't
+  immediately progress, bounding pathological re-substitution.
+- **What this does NOT solve:** general non-termination of
+  recursive fns. If a fn's recursion has no halting structure on
+  ground inputs (e.g. closed `(loop_forever)`), Simp still
+  diverges. The gate is necessary, not sufficient.
+- **Revisit if:** authors find the gate too conservative (a real
+  proof wants Simp to push past one of the cases it refuses), or
+  too permissive (a real blowup case where memoization isn't
+  enough). The structurally-shared / hash-cons memo is the v3
+  successor; the list-based memo here is a deliberate
+  quadratic-cost placeholder.
+
+### Simp memoization: list-based, quadratic (placeholder)
+- **Chose (slice 30):** `simp_expr_loop` carries a
+  `(List (Pair Expr Expr))` memo through its fixed-point recursion;
+  the public `simp_expr` wraps it with `Nil` and discards the result
+  table. Lookup is linear via `expr_eq`; insert is `Cons`.
+- **Why now:** the v1 lesson on memoization is real; an unmemoized
+  `simp_expr` would re-traverse substituted subterms in pathological
+  call-graphs. List-based memo gives correctness today without
+  inventing a hashable Expr representation or a runtime-provided
+  map primitive.
+- **Cost:** O(n²) per simp_expr call where n is the number of
+  distinct sub-reductions performed. Each top-level reducer step
+  appends one entry and scans all prior entries. Acceptable at v2's
+  proof-obligation scale; will not survive larger reductions.
+- **Scope:** only the OUTER simp_expr loop is memoized.
+  `step_smart`'s internal recursion (Ctor args, Match scrutinees,
+  step_smart_list) does NOT thread the memo — narrow has no
+  monadic bind, so threading would multiply every step_smart_* fn's
+  signature. The outer memo catches "same Expr appears multiple
+  times as a top-level reducer target."
+- **Revisit when:** structurally-shared / content-addressed Expr
+  storage exists (hash-cons via Symbol interning extended to
+  whole-Expr fingerprints, or a Rust-side hash-map primitive). At
+  that point both the memo data structure and the granularity (full
+  step_smart recursion, not just the outer loop) should be revisited
+  together.
+
+### LCF helper-lemma discipline — RESOLVED (slice 29 → slice 30)
+- **State (slice 29):** the kernel's reducer couldn't always do the
+  targeted reduction a proof wanted. `Unfold` is greedy on the
+  outermost matching Call, and `Reduce` (ι-only) doesn't step
+  Calls. A proof with nested `(append (append _ _) _)` shape
+  exposed this — the outer unfold blocked before the inner Call
+  became value-headed. The slice-29 workaround was to prove one
+  helper lemma per ctor arm of each recursive fn (~5 LOC each,
+  mechanical) and cite them via Rewrite.
+- **Resolved (slice 30):** the gated-δ Simp can now do the
+  targeted reduction directly. `(Simp Lhs)` on `(append (Cons h t)
+  ys)` reduces to `(Cons h (append t ys))` and stops at the IH-
+  blocked inner call. The 6 helper lemmas the reverse tower needed
+  (append/rev/fast × Nil/Cons) all collapse into `(Simp …)` steps.
+  The slice-29 author burden is gone going forward.
+- **Tradeoff:** the gate is conservative — a proof that wanted Simp
+  to push *past* an IH-blocked subterm (rare; the author usually
+  wants the opposite) would now need an explicit Unfold + Reduce
+  + lemma-cite chain. The conservative direction is the right
+  default for IH-style proofs.
 
 ### `ByTheory` cert payload under-specified per theory
 - **Chose:** `(Cert Symbol Expr)` — theory name plus a payload
@@ -488,27 +559,18 @@ is where to start when planning v3.
   (currently only the typedef's own fields; fn signatures' generic
   params would want similar treatment for full polymorphism).
 
-### LCF helper-lemma discipline (per-ctor step lemmas)
-- **State (slice 29):** the kernel's reducer can't always do the
-  targeted reduction a proof wants: `Unfold` is greedy on the
-  outermost matching Call, and `Reduce` (ι-only) doesn't step
-  Calls. A proof with nested `(append (append _ _) _)` shape
-  exposes this — the outer unfold blocks before the inner Call
-  becomes value-headed.
-- **Resolution:** for each user-defined recursive fn, prove
-  one helper lemma per ctor arm:
-    - `f_nil_step:  (f Nil <other args>) = <Nil-arm body>`
-    - `f_cons_step: (f (Cons h t) <other args>) = <Cons-arm body>`
-  Each is a direct `Unfold + Reduce + Refl` proof. Then any proof
-  that needs to reduce `(f <ctor-headed term> …)` at arbitrary
-  depth cites the appropriate step lemma via Rewrite. This is the
-  LCF discipline TRANSFER.md references: when the kernel can't
-  reduce, prove a helper lemma. The reverse tower
-  (`examples/list_lemmas.sexp`) uses 6 such helpers (2 per fn) to
-  reach `(fast xs Nil) = (rev xs)`.
-- **Cost:** each recursive fn → 2 helper-lemma claims. ~5 LOC
-  each. Mechanical.
-- **Revisit if:** Simp guarding (the long-deferred liability)
-  lands and makes the helpers unnecessary for typical cases — at
-  that point the kernel can reduce safely past stuck arguments.
-  Until then, helper lemmas are the right pattern.
+### LCF helper-lemma discipline (per-ctor step lemmas) — historical
+- **History:** during slice 29 the kernel's unguarded `Simp` over-
+  reduced (no head-only gate; recursive sub-calls were chased to
+  forms that didn't match the IH). The workaround was to prove one
+  helper lemma per ctor arm of each recursive fn (~5 LOC each,
+  `Unfold + Reduce + Refl`) and cite them via Rewrite for surgical
+  per-arm reductions. The reverse tower used 6 such helpers.
+- **Resolved (slice 30):** the new head-only-gated Simp does the
+  per-arm reduction directly. See "Reduce and Simp are now split"
+  above. The reverse tower (`examples/list_lemmas.sexp`) now uses
+  4 lemmas (down from 10) and drives ctor-case reductions with
+  `(Simp Both)` instead of `Unfold + Reduce + per-arm-lemma cites`.
+- **What remains true:** when the kernel still can't reduce
+  (Simp's gate is conservative, won't push past stuck heads), the
+  helper-lemma pattern remains available — just rarely needed.

@@ -327,15 +327,6 @@
     (None      e)
     ((Some e2) (simp_iota_expr m e2))))
 
-;; simp_expr: drive `step` to fixed point. Returns the normal form of
-;; e under m. Termination depends on the kernel's user-fn bodies; the
-;; trusted Rust runtime will diverge if step does. See REVISIT.md —
-;; "Reduce and Simp collapsed into one in v2".
-(fn simp_expr ((m Module) (e Expr)) Expr
-  (match (step m e)
-    (None      e)
-    ((Some e2) (simp_expr m e2))))
-
 ;; step_list: try to step the first reducible expression in es, left to
 ;; right. Returns the new list if some step succeeded, else None.
 (fn step_list ((m Module) (es (List Expr))) (Option (List Expr))
@@ -348,3 +339,189 @@
           (match (step_list m t)
             ((Some t2) (Some (Cons h t2)))
             (None      None)))))))
+
+;; ---------------------------------------------------------------------------
+;; step_head: HEAD-only one-step reducer. Fires when the expression's
+;; head can reduce in a single move without descending into subterms:
+;;   - Match with value-headed (Ctor/IntLit/SymLit) scrutinee → fires
+;;   - If with True/False condition → fires
+;;   - Let → opens
+;;   - Call that's a primitive with all-value args → fires
+;;   - everything else → None (including user-fn Calls — head_step
+;;     does NOT unfold those)
+;;
+;; This is the gate for step_smart's δ-step. Cheap, non-recursive,
+;; mechanically obvious. Distinguished from `step` (which recurses
+;; into scrutinees / args) and `step_iota` (which descends into Ctor
+;; / Call args but doesn't fire primitives).
+;; ---------------------------------------------------------------------------
+
+(fn step_head ((e Expr)) (Option Expr)
+  (match e
+    ((Match s arms) (head_match s arms))
+    ((Let bs body)  (Some (open_many bs body)))
+    ((If c t el)
+      (match c
+        ((Ctor (quote True)  Nil) (Some t))
+        ((Ctor (quote False) Nil) (Some el))
+        (_                        None)))
+    ((Call f args) (try_step_prim f args))
+    (_ None)))
+
+(fn head_match ((s Expr) (arms (List Arm))) (Option Expr)
+  (match s
+    ((Ctor _ _)  (try_match_arms arms s))
+    ((IntLit _)  (try_match_arms arms s))
+    ((SymLit _)  (try_match_arms arms s))
+    (_           None)))
+
+;; ---------------------------------------------------------------------------
+;; step_smart: ι plus *gated* δ. Wired into `simp_expr` so the kernel's
+;; full reducer is no longer naively unfolding-on-demand.
+;;
+;; The gate, for a user-fn Call: compute the would-be unfolded body
+;; (via apply_fn), then check whether `step_head` can take a one-step
+;; reduction on it AT THE HEAD. If yes — commit the unfolding; if no
+;; — leave the Call stuck and try to step its args.
+;;
+;; What this buys: a Call whose unfolded body would immediately stick
+;; on a non-value Match scrutinee (e.g. `(append xs Nil)` where `xs`
+;; is FVar) is NOT unfolded. The IH-shaped subterm stays exposed for
+;; Rewrite. The per-ctor-arm helper-lemma tax v1 paid (and the v2
+;; pre-slice-30 author paid via append_nil_step etc.) collapses to
+;; one Simp step. Primitives at the head still always reduce.
+;;
+;; Why step_head (not full step): full step recurses through Match
+;; scrutinees into Calls, so `(append (append (Cons …) ys) zs)`
+;; would gate-pass on its outer body (Match scrut is a Call that
+;; itself steps), unfolding too eagerly. step_head's "head-only"
+;; semantics keeps unfolding precise — only commit when the body
+;; will reduce DIRECTLY.
+;;
+;; See REVISIT — "Simp guarding (gated δ + list-memo)".
+;; ---------------------------------------------------------------------------
+
+(fn step_smart ((m Module) (e Expr)) (Option Expr)
+  (match e
+    ((Call f args)  (step_smart_call m f args))
+    ((Match s arms) (step_smart_match m s arms))
+    ((Let bs body)  (Some (open_many bs body)))
+    ((If c t el)
+      (match c
+        ((Ctor (quote True)  Nil) (Some t))
+        ((Ctor (quote False) Nil) (Some el))
+        (_
+          (match (step_smart m c)
+            ((Some c2) (Some (If c2 t el)))
+            (None      None)))))
+    ((Ctor c args)
+      (match (step_smart_list m args)
+        ((Some args2) (Some (Ctor c args2)))
+        (None         None)))
+    ((FVar _)   None)
+    ((BVar _)   None)
+    ((IntLit _) None)
+    ((SymLit _) None)))
+
+(fn step_smart_call ((m Module) (f Symbol) (args (List Expr))) (Option Expr)
+  (match m
+    ((Module _ fns _)
+      (match (lookup_fn f fns)
+        ((Some fd)
+          ;; User fn — apply with gate.
+          (match (apply_fn fd args)
+            (None
+              (step_smart_args_in_call m f args))   ; arity mismatch
+            ((Some body)
+              ;; Gate: head-only one-step lookahead.
+              (match (step_head body)
+                ((Some _) (Some body))              ; gate passes — commit
+                (None     (step_smart_args_in_call m f args))))))
+        (None
+          ;; Not a user fn — try primitive table; primitives have no
+          ;; gate (they always reduce when arg shapes match).
+          (match (try_step_prim f args)
+            ((Some e2) (Some e2))
+            (None      (step_smart_args_in_call m f args))))))))
+
+(fn step_smart_args_in_call ((m Module) (f Symbol) (args (List Expr)))
+                             (Option Expr)
+  (match (step_smart_list m args)
+    ((Some args2) (Some (Call f args2)))
+    (None         None)))
+
+(fn step_smart_match ((m Module) (s Expr) (arms (List Arm))) (Option Expr)
+  (match s
+    ((Ctor _ _)  (try_match_arms arms s))
+    ((IntLit _)  (try_match_arms arms s))
+    ((SymLit _)  (try_match_arms arms s))
+    (_
+      (match (step_smart m s)
+        ((Some s2) (Some (Match s2 arms)))
+        (None      None)))))
+
+(fn step_smart_list ((m Module) (es (List Expr))) (Option (List Expr))
+  (match es
+    (Nil None)
+    ((Cons h t)
+      (match (step_smart m h)
+        ((Some h2) (Some (Cons h2 t)))
+        (None
+          (match (step_smart_list m t)
+            ((Some t2) (Some (Cons h t2)))
+            (None      None)))))))
+
+;; ---------------------------------------------------------------------------
+;; Memoization for simp_expr's fixed-point loop.
+;;
+;; The memo maps inputs to their normal forms. Each top-level
+;; reduction step checks the memo first; on a hit, return the cached
+;; NF without re-running step_smart. On miss, step + recurse + record.
+;;
+;; This is the v1 lesson — "any reducer that re-traverses substituted
+;; subterms needs sharing/memoization from the start" (TRANSFER.md).
+;;
+;; Scope: only the OUTER simp_expr loop is memoized. step_smart's
+;; internal recursion (into Ctor/Call args, Match scrutinees, etc.)
+;; does NOT thread the memo — the narrow language has no monadic
+;; do-notation, so threading would multiply every step_smart_* fn's
+;; signature. The outer memo catches "the same Expr appears multiple
+;; times as a top-level reducer target" (LHS/RHS sharing, repeated
+;; subterms after substitution). Finer-grained memoization is a v3
+;; concern and pairs with hash-cons or structural sharing.
+;;
+;; TODO[v3]: replace the list-based memo with a content-addressed
+;; / hash-cons store. The current quadratic cost (linear lookup ×
+;; linear insert) is acceptable at the scale of v2 proof obligations
+;; but won't survive larger reductions.
+;; ---------------------------------------------------------------------------
+
+(fn memo_lookup ((memo (List (Pair Expr Expr))) (e Expr)) (Option Expr)
+  (match memo
+    (Nil None)
+    ((Cons (Pair k v) rest)
+      (if (expr_eq k e) (Some v) (memo_lookup rest e)))))
+
+(fn simp_expr_loop ((m Module) (memo (List (Pair Expr Expr))) (e Expr))
+                    (Pair Expr (List (Pair Expr Expr)))
+  (match (memo_lookup memo e)
+    ((Some e_nf) (Pair e_nf memo))
+    (None
+      (match (step_smart m e)
+        (None
+          ;; e is already normal — record it as its own NF.
+          (Pair e (Cons (Pair e e) memo)))
+        ((Some e2)
+          (match (simp_expr_loop m memo e2)
+            ((Pair e_nf memo2)
+              (Pair e_nf (Cons (Pair e e_nf) memo2)))))))))
+
+;; simp_expr: drive `step_smart` to fixed point with memoization.
+;; The public entry point — kernel callers (apply_step's Simp arm,
+;; head_clash in Absurd) hit this. Termination is bounded only by
+;; the underlying user fns' termination; the gate prevents
+;; immediately-stuck unfoldings but does not solve general
+;; non-termination.
+(fn simp_expr ((m Module) (e Expr)) Expr
+  (match (simp_expr_loop m Nil e)
+    ((Pair e_nf _) e_nf)))

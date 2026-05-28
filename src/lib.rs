@@ -2773,4 +2773,67 @@ mod tests {
         let r = run_check_sequent(&m, mod_v, th, seq, pf);
         assert_eq!(r, true_v());
     }
+
+    /// Slice 30 regression: the reverse tower's append_assoc, built
+    /// in Rust against the new smart simp_expr. Mirror of the sexp
+    /// claim in examples/list_lemmas.sexp; safety net for the kernel
+    /// reducer changes (gated δ + head-only lookahead).
+    ///
+    /// Both Nil and Cons cases close with `(Simp Both) [...]; Refl` —
+    /// no per-ctor helper lemmas needed. Before slice 30 this proof
+    /// shape required Unfold + Reduce + per-arm Rewrite chains.
+    #[test]
+    fn check_seq_append_assoc_smart_simp() {
+        let m = load_kernel();
+        let list_td = type_def("List", vec!["T"], vec![
+            ctor_def("Nil",  vec![]),
+            ctor_def("Cons", vec![tvar("T"), tcon("List", vec![tvar("T")])]),
+        ]);
+        let list_int = tcon("List", vec![tcon("Int", vec![])]);
+        let append_body = nmatch(
+            bvar(1),
+            vec![
+                narm(pctor("Nil", vec![]), bvar(0)),
+                narm(pctor("Cons", vec![pvar(), pvar()]),
+                     ctor_app("Cons", vec![
+                        bvar(1),
+                        call("append", vec![bvar(0), bvar(2)]),
+                     ])),
+            ],
+        );
+        let append_fn = fn_def("append",
+            vec![list_int.clone(), list_int.clone()],
+            list_int.clone(), append_body);
+        let mod_v = module(vec![list_td], vec![append_fn], vec![]);
+
+        let seq = sequent(
+            vec![
+                param("xs", list_int.clone()),
+                param("ys", list_int.clone()),
+                param("zs", list_int.clone()),
+            ],
+            vec![], vec![],
+            equation(
+                call("append", vec![
+                    call("append", vec![fvar("xs"), fvar("ys")]),
+                    fvar("zs"),
+                ]),
+                call("append", vec![
+                    fvar("xs"),
+                    call("append", vec![fvar("ys"), fvar("zs")]),
+                ]),
+            ),
+        );
+        let pf = induct("xs", vec![
+            case_arm("Nil",
+                steps(vec![simp(side_both())], refl())),
+            case_arm("Cons",
+                steps(vec![
+                    simp(side_both()),
+                    rewrite(er_hyp(0), dir_lr(), side_lhs(), bool_true(), vec![]),
+                ], refl())),
+        ]);
+        let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
+        assert_eq!(r, true_v());
+    }
 }
