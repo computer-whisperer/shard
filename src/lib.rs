@@ -1325,6 +1325,50 @@ mod tests {
         assert_eq!(r, false_v());
     }
 
+    /// `∀ n : Nat. (id n) = n` via Induct + Unfold + Refl.
+    ///
+    /// id is the trivial identity (body is just BVar 0). After Unfold
+    /// in each subgoal:
+    ///   Z case:  (id Z) -> Z         => Z = Z, Refl closes.
+    ///   S case:  (id (S _f)) -> (S _f) => (S _f) = (S _f), Refl closes.
+    ///
+    /// First Induct proof that goes through a step beyond Refl on the
+    /// substituted equation. Validates that user fns interact correctly
+    /// with the inductively-introduced fresh fvars and substitution.
+    ///
+    /// Note: id is non-recursive, so no IH consumption is needed (the
+    /// S case's IH `(id _f) = _f` is built but unused). IH-CONSUMING
+    /// proofs need a single-step ι reduction we don't have yet —
+    /// `Reduce` is greedy and would unfold the recursive call too
+    /// eagerly. Tracked for a follow-up slice.
+    #[test]
+    fn check_seq_induct_plus_unfold_proves_id() {
+        let m = load_kernel();
+        let nat_td = type_def("Nat", vec![], vec![
+            ctor_def("Z", vec![]),
+            ctor_def("S", vec![tcon("Nat", vec![])]),
+        ]);
+        // (fn id ((n Nat)) Nat n)  — body is BVar 0.
+        let id_fn = fn_def("id",
+            vec![tcon("Nat", vec![])],
+            tcon("Nat", vec![]),
+            bvar(0),
+        );
+        let mod_v = module(vec![nat_td], vec![id_fn], vec![]);
+        let seq = sequent(
+            vec![param("n", tcon("Nat", vec![]))],
+            vec![], vec![],
+            equation(call("id", vec![fvar("n")]), fvar("n")),
+        );
+        let branch = steps(vec![unfold("id", side_lhs())], refl());
+        let pf = induct("n", vec![
+            case_arm("Z", branch.clone()),
+            case_arm("S", branch),
+        ]);
+        let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
+        assert_eq!(r, true_v());
+    }
+
     /// Missing case for one ctor. check_induct_cases reaches the S
     /// ctor, find_case returns None, returns False.
     #[test]
