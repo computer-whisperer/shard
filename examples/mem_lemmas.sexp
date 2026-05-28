@@ -967,6 +967,53 @@
                 (list)
                 Refl))))))))
 
+;; --- the front/back flip: rev (dump …) = rdump … ---------------------------
+
+;; lia index tautologies used to reconcile the int_of_nat index shapes
+;; that dump/rdump recursion produces.
+(claim sub_zero
+  (Goal (list (Param 'x (ty Int))) (list)
+    (Equation (Call '- (list (FVar 'x) (IntLit 0))) (FVar 'x)))
+  (ByTheory 'lia (Cert 'lia (list))))
+
+(claim sub_sub_one
+  (Goal (list (Param 'x (ty Int)) (Param 'y (ty Int))) (list)
+    (Equation (Call '- (list (Call '- (list (FVar 'x) (IntLit 1))) (FVar 'y)))
+              (Call '- (list (FVar 'x) (Call '+ (list (IntLit 1) (FVar 'y)))))))
+  (ByTheory 'lia (Cert 'lia (list))))
+
+;; rdump_snoc: peel the LAST cell of an rdump. rdump top (S c) A =
+;; (rdump top c A) ++ [read A (top - c)]. Induction on c; the Z case
+;; needs (top-0)=top, the S case reconciles (top-1)-c' with top-(1+c').
+(claim rdump_snoc
+  (Goal
+    (list (Param 'top (ty Int)) (Param 'c (ty Nat)) (Param 'A (ty Map Int)))
+    (list)
+    (Equation
+      (Call 'rdump (list (FVar 'top) (Ctor 'S (list (FVar 'c))) (FVar 'A)))
+      (Call 'append
+        (list (Call 'rdump (list (FVar 'top) (FVar 'c) (FVar 'A)))
+              (Ctor 'Cons
+                (list (Call 'read (list (FVar 'A)
+                                        (Call '- (list (FVar 'top)
+                                                       (Call 'int_of_nat (list (FVar 'c)))))))
+                      (Ctor 'Nil (list))))))))
+  (Induct 'c
+    (list
+      (Case 'Z
+        (Steps (list (Simp Both))
+          (RewriteWith (Lemma 'sub_zero) Lr Rhs (list) (list) Refl)))
+      (Case 'S
+        ;; Simp fully unfolds both sides (S c' is a concrete ctor). We
+        ;; reconcile the RHS back to the LHS's normal form: fix the snoc
+        ;; index shape (sub_sub_one Rl), fold append→rdump via the IH
+        ;; (Rl), then re-Simp the RHS to the same NF as the LHS.
+        (Steps (list (Simp Both)
+                     (Rewrite (Lemma 'sub_sub_one) Rl Rhs True (list))
+                     (Rewrite (Hyp 0) Rl Rhs False (list))
+                     (Simp Rhs))
+          Refl)))))
+
 ;; ---------------------------------------------------------------------------
 ;; CAPSTONE (stated, not yet proven) — mem_reverses:
 ;;

@@ -94,3 +94,12 @@
   (match k
     (Z Nil)
     ((S k2) (Cons (read m base) (dump (+ base 1) k2 m)))))
+
+;; rdump: read k cells DOWNWARD from top (top, top-1, …), as a list.
+;; The reverse-order companion to dump: rev (dump base k m) = rdump
+;; (base+k-1) k m. Used to bridge the mirror's high→low read order to
+;; the forward dump in the capstone (structural on k).
+(fn rdump ((top Int) (k Nat) (m (Map Int))) (List Int)
+  (match k
+    (Z Nil)
+    ((S k2) (Cons (read m top) (rdump (- top 1) k2 m)))))
