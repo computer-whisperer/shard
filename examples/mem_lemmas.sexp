@@ -227,14 +227,20 @@
       (Ctor 'False (list))))
   (ByTheory 'farkas (Cert 'farkas (list 1 1 1))))
 
-;; precond_shrink: the Nat/Int bridge for the mirror induction.
-;;   P: (j-i)+1 <= 2*int_of_nat(S n)          [outer completion bound]
-;;   L: int_of_nat(S n) = 1 + int_of_nat(n)   [the definitional link]
-;;   ⊢ (j-i)-1 <= 2*int_of_nat(n)             [IH's completion bound]
+;; precond_shrink: the Nat/Int bridge for the mirror induction. Shaped
+;; to discharge the mirror IH's completion-bound premise EXACTLY: when
+;; the IH is applied at the shrunk segment (i+1, j-1, k2), its bound
+;; premise comes out with the literal segment arithmetic
+;; ((j-1)-(i+1))+1, NOT pre-normalized — so the conclusion's LHS must be
+;; that same tree (lemma application matches by AST, not by polynomial).
+;;   P (Q0): (j-i)+1 <= 2*int_of_nat(S n)        [outer completion bound]
+;;   L (Q1): int_of_nat(S n) = 1 + int_of_nat(n) [the definitional link]
+;;   ⊢ ((j-1)-(i+1))+1 <= 2*int_of_nat(n)        [IH's completion bound]
 ;; farkas can't unfold int_of_nat in a premise, so the successor link L
 ;; is supplied as a premise (discharged by Simp at the cite site, where
 ;; (S n) is a constructor) and consumed here as an equality constraint.
 ;; cert: G=1 on ¬goal, +1 on P (inequality), -2 on L (equality, any sign).
+;; (The polynomial is still j-i-1 <= 2N; only the tree shape changed.)
 (claim precond_shrink
   (Goal
     (list (Param 'i (ty Int)) (Param 'j (ty Int)) (Param 'n (ty Nat)))
@@ -248,7 +254,9 @@
         (Call 'int_of_nat (list (Ctor 'S (list (FVar 'n)))))
         (Call '+ (list (IntLit 1) (Call 'int_of_nat (list (FVar 'n)))))))
     (Equation
-      (Call 'le (list (Call '- (list (Call '- (list (FVar 'j) (FVar 'i))) (IntLit 1)))
+      (Call 'le (list (Call '+ (list (Call '- (list (Call '- (list (FVar 'j) (IntLit 1)))
+                                                    (Call '+ (list (FVar 'i) (IntLit 1)))))
+                                     (IntLit 1)))
                       (Call '* (list (IntLit 2) (Call 'int_of_nat (list (FVar 'n)))))))
       (Ctor 'True (list))))
   (ByTheory 'farkas (Cert 'farkas (list 1 1 -2))))
@@ -509,6 +517,367 @@
                         (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl))   ; (lt j p)=True
                       Refl)))))))))))
 
+;; ===========================================================================
+;; rev_loop_mirror — THE substantive M3 case. After running the loop,
+;; every position p in [i,j] holds the cell originally at its mirror
+;; image i+j-p (the center i+j is recursion-invariant). Proven by
+;; induction on the counter k, with a completion bound P2 guaranteeing
+;; the loop runs far enough.
+;;
+;;   ∀ m i j p k.
+;;     [ i <= p,  p <= j,  (j-i)+1 <= 2*int_of_nat k ]
+;;     ⊢ (read (rev_loop m i j k) p) = (read m (i+j-p))
+;;
+;; The proof's spine:
+;;   Z   : the bound forces (j-i)+1 <= 0 while i<=p<=j forces (j-i)>=0 —
+;;         contradictory, so the index collapses (mirror_idx_z, link
+;;         int_of_nat Z = 0 discharged by Simp).
+;;   S k2: CaseOn the guard (lt i j):
+;;     False: pointers crossed ⟹ i=j=p, loop=identity, index collapses
+;;            (mirror_idx_cross).
+;;     True : i<j. Split p three ways via CaseOn (lt i p), (lt p j):
+;;       p=i (lt i p False): the low end. Loop leaves it below the
+;;            shrunk range (untouched_below), the first swap put m[j]
+;;            there (read_swap_i), and i+j-p = j (idx_lo).
+;;       p=j (lt p j False): the high end, mirror of the above
+;;            (untouched_above / read_swap_j / idx_hi).
+;;       i<p<j: the interior. The IH at (i+1,j-1,k2) carries it (its
+;;            bound premise via precond_shrink), the inner index
+;;            (i+1)+(j-1)-p normalizes to i+j-p (idx_inner_simp), and
+;;            that interior cell is untouched by the outer swap
+;;            (read_swap_other, ends discharged by inner_neq_*).
+;;
+;; The farkas/lia helpers below are each a single linear fact; they were
+;; verified in isolation before the induction was assembled.
+;; ===========================================================================
+
+;; --- index collapses (plain term-equalities, two-sided farkas) -------------
+
+;; Z base: from a contradictory premise set (the link int_of_nat Z = 0
+;; makes the completion bound impossible), the mirror index is anything;
+;; we collapse it to p. G=0 (premises alone refute); -2 on the link.
+(claim mirror_idx_z
+  (Goal
+    (list (Param 'i (ty Int)) (Param 'j (ty Int)) (Param 'p (ty Int)))
+    (list
+      (Equation (Call 'le (list (FVar 'i) (FVar 'p))) (Ctor 'True (list)))
+      (Equation (Call 'le (list (FVar 'p) (FVar 'j))) (Ctor 'True (list)))
+      (Equation
+        (Call 'le (list (Call '+ (list (Call '- (list (FVar 'j) (FVar 'i))) (IntLit 1)))
+                        (Call '* (list (IntLit 2)
+                                       (Call 'int_of_nat (list (Ctor 'Z (list))))))))
+        (Ctor 'True (list)))
+      (Equation (Call 'int_of_nat (list (Ctor 'Z (list)))) (IntLit 0)))
+    (Equation
+      (Call '- (list (Call '+ (list (FVar 'i) (FVar 'j))) (FVar 'p)))
+      (FVar 'p)))
+  (ByTheory 'farkas (Cert 'farkas (list (list 0 1 1 1 -2) (list 0 1 1 1 -2)))))
+
+;; guard-false: i<=p, p<=j, and (lt i j)=False (i>=j) squeeze p=i=j, so
+;; the mirror index collapses to p. Same polynomial as idx_collapse, but
+;; the third premise is the guard's (lt i j)=False (not (le j i)).
+(claim mirror_idx_cross
+  (Goal
+    (list (Param 'i (ty Int)) (Param 'j (ty Int)) (Param 'p (ty Int)))
+    (list
+      (Equation (Call 'le (list (FVar 'i) (FVar 'p))) (Ctor 'True (list)))
+      (Equation (Call 'le (list (FVar 'p) (FVar 'j))) (Ctor 'True (list)))
+      (Equation (Call 'lt (list (FVar 'i) (FVar 'j))) (Ctor 'False (list))))
+    (Equation
+      (Call '- (list (Call '+ (list (FVar 'i) (FVar 'j))) (FVar 'p)))
+      (FVar 'p)))
+  (ByTheory 'farkas (Cert 'farkas (list (list 1 2 0 1) (list 1 0 2 1)))))
+
+;; low end (p=i, given i<=p and ¬(i<p)): the mirror index i+j-p = j.
+(claim idx_lo
+  (Goal
+    (list (Param 'i (ty Int)) (Param 'j (ty Int)) (Param 'p (ty Int)))
+    (list
+      (Equation (Call 'le (list (FVar 'i) (FVar 'p))) (Ctor 'True (list)))
+      (Equation (Call 'lt (list (FVar 'i) (FVar 'p))) (Ctor 'False (list))))
+    (Equation
+      (Call '- (list (Call '+ (list (FVar 'i) (FVar 'j))) (FVar 'p)))
+      (FVar 'j)))
+  (ByTheory 'farkas (Cert 'farkas (list (list 1 1 0) (list 1 0 1)))))
+
+;; high end (p=j, given p<=j and ¬(p<j)): the mirror index i+j-p = i.
+(claim idx_hi
+  (Goal
+    (list (Param 'i (ty Int)) (Param 'j (ty Int)) (Param 'p (ty Int)))
+    (list
+      (Equation (Call 'le (list (FVar 'p) (FVar 'j))) (Ctor 'True (list)))
+      (Equation (Call 'lt (list (FVar 'p) (FVar 'j))) (Ctor 'False (list))))
+    (Equation
+      (Call '- (list (Call '+ (list (FVar 'i) (FVar 'j))) (FVar 'p)))
+      (FVar 'i)))
+  (ByTheory 'farkas (Cert 'farkas (list (list 1 0 1) (list 1 1 0)))))
+
+;; interior index normalization (pure tautology, no premises):
+;;   (i+1)+(j-1)-p = i+j-p.   The IH returns the left shape; the outer
+;;   read wants the right. lia canonicalizes both to i+j-p.
+(claim idx_inner_simp
+  (Goal
+    (list (Param 'i (ty Int)) (Param 'j (ty Int)) (Param 'p (ty Int)))
+    (list)
+    (Equation
+      (Call '- (list (Call '+ (list (Call '+ (list (FVar 'i) (IntLit 1)))
+                                    (Call '- (list (FVar 'j) (IntLit 1)))))
+                     (FVar 'p)))
+      (Call '- (list (Call '+ (list (FVar 'i) (FVar 'j))) (FVar 'p)))))
+  (ByTheory 'lia (Cert 'lia (list))))
+
+;; --- variable identifications (p collapses to an endpoint) -----------------
+
+;; p=i from i<=p and ¬(i<p). Cited with both binders Inst-pinned so the
+;; pattern is the literal FVar p (rewrites p → i at a chosen site).
+(claim eq_lo
+  (Goal
+    (list (Param 'i (ty Int)) (Param 'p (ty Int)))
+    (list
+      (Equation (Call 'le (list (FVar 'i) (FVar 'p))) (Ctor 'True (list)))
+      (Equation (Call 'lt (list (FVar 'i) (FVar 'p))) (Ctor 'False (list))))
+    (Equation (FVar 'p) (FVar 'i)))
+  (ByTheory 'farkas (Cert 'farkas (list (list 1 0 1) (list 1 1 0)))))
+
+;; p=j from p<=j and ¬(p<j).
+(claim eq_hi
+  (Goal
+    (list (Param 'j (ty Int)) (Param 'p (ty Int)))
+    (list
+      (Equation (Call 'le (list (FVar 'p) (FVar 'j))) (Ctor 'True (list)))
+      (Equation (Call 'lt (list (FVar 'p) (FVar 'j))) (Ctor 'False (list))))
+    (Equation (FVar 'p) (FVar 'j)))
+  (ByTheory 'farkas (Cert 'farkas (list (list 1 1 0) (list 1 0 1)))))
+
+;; --- order facts feeding the untouched lemmas / the IH ---------------------
+
+;; p<i+1 from i<=p and ¬(i<p) (p=i ⟹ p below the shrunk range i+1).
+(claim lt_succ_lo
+  (Goal
+    (list (Param 'i (ty Int)) (Param 'p (ty Int)))
+    (list
+      (Equation (Call 'le (list (FVar 'i) (FVar 'p))) (Ctor 'True (list)))
+      (Equation (Call 'lt (list (FVar 'i) (FVar 'p))) (Ctor 'False (list))))
+    (Equation
+      (Call 'lt (list (FVar 'p) (Call '+ (list (FVar 'i) (IntLit 1)))))
+      (Ctor 'True (list))))
+  (ByTheory 'farkas (Cert 'farkas (list 1 0 1))))
+
+;; j-1<p from p<=j and ¬(p<j) (p=j ⟹ p above the shrunk range j-1).
+(claim lt_pred_hi
+  (Goal
+    (list (Param 'j (ty Int)) (Param 'p (ty Int)))
+    (list
+      (Equation (Call 'le (list (FVar 'p) (FVar 'j))) (Ctor 'True (list)))
+      (Equation (Call 'lt (list (FVar 'p) (FVar 'j))) (Ctor 'False (list))))
+    (Equation
+      (Call 'lt (list (Call '- (list (FVar 'j) (IntLit 1))) (FVar 'p)))
+      (Ctor 'True (list))))
+  (ByTheory 'farkas (Cert 'farkas (list 1 0 1))))
+
+;; i+1<=p from i<p (the interior IH's lower-bound premise).
+(claim le_succ_from_lt
+  (Goal
+    (list (Param 'i (ty Int)) (Param 'p (ty Int)))
+    (list (Equation (Call 'lt (list (FVar 'i) (FVar 'p))) (Ctor 'True (list))))
+    (Equation
+      (Call 'le (list (Call '+ (list (FVar 'i) (IntLit 1))) (FVar 'p)))
+      (Ctor 'True (list))))
+  (ByTheory 'farkas (Cert 'farkas (list 1 1))))
+
+;; p<=j-1 from p<j (the interior IH's upper-bound premise).
+(claim le_pred_from_lt
+  (Goal
+    (list (Param 'p (ty Int)) (Param 'j (ty Int)))
+    (list (Equation (Call 'lt (list (FVar 'p) (FVar 'j))) (Ctor 'True (list))))
+    (Equation
+      (Call 'le (list (FVar 'p) (Call '- (list (FVar 'j) (IntLit 1)))))
+      (Ctor 'True (list))))
+  (ByTheory 'farkas (Cert 'farkas (list 1 1))))
+
+;; --- interior cell is not an endpoint (read_swap_other's premises) ---------
+
+;; i+j-p ≠ j from i<p (i.e. i-p ≠ 0). Goal mult +1 (G any sign for diseq).
+(claim inner_neq_hi
+  (Goal
+    (list (Param 'i (ty Int)) (Param 'j (ty Int)) (Param 'p (ty Int)))
+    (list (Equation (Call 'lt (list (FVar 'i) (FVar 'p))) (Ctor 'True (list))))
+    (Equation
+      (Call 'int_eq (list (Call '- (list (Call '+ (list (FVar 'i) (FVar 'j))) (FVar 'p)))
+                          (FVar 'j)))
+      (Ctor 'False (list))))
+  (ByTheory 'farkas (Cert 'farkas (list 1 1))))
+
+;; i+j-p ≠ i from p<j (i.e. j-p ≠ 0). Goal mult -1 (equality-negation).
+(claim inner_neq_lo
+  (Goal
+    (list (Param 'i (ty Int)) (Param 'j (ty Int)) (Param 'p (ty Int)))
+    (list (Equation (Call 'lt (list (FVar 'p) (FVar 'j))) (Ctor 'True (list))))
+    (Equation
+      (Call 'int_eq (list (Call '- (list (Call '+ (list (FVar 'i) (FVar 'j))) (FVar 'p)))
+                          (FVar 'i)))
+      (Ctor 'False (list))))
+  (ByTheory 'farkas (Cert 'farkas (list -1 1))))
+
+;; ---------------------------------------------------------------------------
+;; The induction. (Hyp indices: each CaseOn prepends its hypothesis at 0,
+;; the IH is appended last — so inside the deepest case the order is
+;; (lt p j), (lt i p), (lt i j), IH. Premises P0/P1/P2 = i<=p / p<=j /
+;; completion-bound throughout.)
+;; ---------------------------------------------------------------------------
+
+(claim rev_loop_mirror
+  (Goal
+    (list (Param 'm (ty Map Int))
+          (Param 'i (ty Int))
+          (Param 'j (ty Int))
+          (Param 'p (ty Int))
+          (Param 'k (ty Nat)))
+    (list
+      (Equation (Call 'le (list (FVar 'i) (FVar 'p))) (Ctor 'True (list)))
+      (Equation (Call 'le (list (FVar 'p) (FVar 'j))) (Ctor 'True (list)))
+      (Equation
+        (Call 'le (list (Call '+ (list (Call '- (list (FVar 'j) (FVar 'i))) (IntLit 1)))
+                        (Call '* (list (IntLit 2) (Call 'int_of_nat (list (FVar 'k)))))))
+        (Ctor 'True (list))))
+    (Equation
+      (Call 'read (list (Call 'rev_loop (list (FVar 'm) (FVar 'i) (FVar 'j) (FVar 'k)))
+                        (FVar 'p)))
+      (Call 'read (list (FVar 'm)
+                        (Call '- (list (Call '+ (list (FVar 'i) (FVar 'j))) (FVar 'p)))))))
+  (Induct 'k
+    (list
+      ;; -------------------------------------------------------------------
+      ;; Z: rev_loop = identity; the premises are contradictory, so the
+      ;; mirror index collapses to p (mirror_idx_z, link by Simp).
+      ;; -------------------------------------------------------------------
+      (Case 'Z
+        (Steps (list (Simp Lhs))                  ; (read m p) = (read m (i+j-p))
+          (RewriteWith (Lemma 'mirror_idx_z) Lr Rhs (list)
+            (list
+              (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl)  ; i<=p
+              (Steps (list (Rewrite (Premise 1) Lr Lhs True (list))) Refl)  ; p<=j
+              (Steps (list (Rewrite (Premise 2) Lr Lhs True (list))) Refl)  ; bound
+              (Steps (list (Simp Lhs)) Refl))                               ; int_of_nat Z = 0
+            Refl)))
+      ;; -------------------------------------------------------------------
+      ;; S k2.
+      ;; -------------------------------------------------------------------
+      (Case 'S
+        (Steps (list (Simp Lhs))   ; (read (if (lt i j) (rev_loop (swap m i j)(i+1)(j-1) k2) m) p)
+          (CaseOn (Call 'lt (list (FVar 'i) (FVar 'j))) 'Bool
+            (list
+              ;; guard False: i>=j, loop is identity, index collapses.
+              (Case 'False
+                (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))   ; (lt i j) → False
+                             (Simp Lhs))                            ; → (read m p)
+                  (RewriteWith (Lemma 'mirror_idx_cross) Lr Rhs (list)
+                    (list
+                      (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl)  ; i<=p
+                      (Steps (list (Rewrite (Premise 1) Lr Lhs True (list))) Refl)  ; p<=j
+                      (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))     ; (lt i j)=False
+                    Refl)))
+              ;; guard True: i<j (Hyp 0). Drop into the loop body, then
+              ;; split p three ways.
+              (Case 'True
+                (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))   ; (lt i j) → True
+                             (Simp Lhs))                            ; → (read (rev_loop (swap m i j)(i+1)(j-1) k2) p)
+                  ;; Now hyps: 0=(lt i j)=True, 1=IH.
+                  (CaseOn (Call 'lt (list (FVar 'i) (FVar 'p))) 'Bool
+                    (list
+                      ;; ---- p = i (low end). hyps: 0=(lt i p)F,1=(lt i j)T,2=IH
+                      (Case 'False
+                        ;; RHS: i+j-p → j.
+                        (RewriteWith (Lemma 'idx_lo) Lr Rhs (list)
+                          (list
+                            (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl)  ; i<=p
+                            (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))      ; (lt i p)=False
+                          ;; LHS: p is below the shrunk range — untouched.
+                          (RewriteWith (Lemma 'rev_loop_untouched_below) Lr Lhs (list)
+                            (list
+                              (RewriteWith (Lemma 'lt_succ_lo) Lr Lhs (list)
+                                (list
+                                  (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl)
+                                  (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+                                Refl))
+                            ;; (read (swap m i j) p): rewrite p → i, then read_swap_i.
+                            (RewriteWith (Lemma 'eq_lo) Lr Lhs
+                              (list (Inst 'p (FVar 'p)) (Inst 'i (FVar 'i)))
+                              (list
+                                (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl)
+                                (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+                              (RewriteWith (Lemma 'read_swap_i) Lr Lhs (list)
+                                (list
+                                  (RewriteWith (Lemma 'lt_implies_neq) Lr Lhs (list)
+                                    (list
+                                      (Steps (list (Rewrite (Hyp 1) Lr Lhs True (list))) Refl))  ; (lt i j)=True
+                                    Refl))
+                                Refl)))))
+                      ;; ---- i < p. split on (lt p j).
+                      (Case 'True
+                        (CaseOn (Call 'lt (list (FVar 'p) (FVar 'j))) 'Bool
+                          (list
+                            ;; ---- p = j (high end). hyps: 0=(lt p j)F,1=(lt i p)T,2=(lt i j)T,3=IH
+                            (Case 'False
+                              ;; RHS: i+j-p → i.
+                              (RewriteWith (Lemma 'idx_hi) Lr Rhs (list)
+                                (list
+                                  (Steps (list (Rewrite (Premise 1) Lr Lhs True (list))) Refl)  ; p<=j
+                                  (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))      ; (lt p j)=False
+                                ;; LHS: p above the shrunk range — untouched.
+                                (RewriteWith (Lemma 'rev_loop_untouched_above) Lr Lhs (list)
+                                  (list
+                                    (RewriteWith (Lemma 'lt_pred_hi) Lr Lhs (list)
+                                      (list
+                                        (Steps (list (Rewrite (Premise 1) Lr Lhs True (list))) Refl)
+                                        (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+                                      Refl))
+                                  ;; (read (swap m i j) p): rewrite p → j, then read_swap_j.
+                                  (RewriteWith (Lemma 'eq_hi) Lr Lhs
+                                    (list (Inst 'p (FVar 'p)) (Inst 'j (FVar 'j)))
+                                    (list
+                                      (Steps (list (Rewrite (Premise 1) Lr Lhs True (list))) Refl)
+                                      (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+                                    (RewriteWith (Lemma 'read_swap_j) Lr Lhs (list)
+                                      (list)
+                                      Refl)))))
+                            ;; ---- i < p < j (interior). hyps: 0=(lt p j)T,1=(lt i p)T,2=(lt i j)T,3=IH
+                            (Case 'True
+                              ;; Apply the IH at (swap m i j, i+1, j-1, k2).
+                              (RewriteWith (Hyp 3) Lr Lhs (list)
+                                (list
+                                  ;; IH prem0: i+1 <= p   (from i<p)
+                                  (RewriteWith (Lemma 'le_succ_from_lt) Lr Lhs (list)
+                                    (list
+                                      (Steps (list (Rewrite (Hyp 1) Lr Lhs True (list))) Refl))
+                                    Refl)
+                                  ;; IH prem1: p <= j-1   (from p<j)
+                                  (RewriteWith (Lemma 'le_pred_from_lt) Lr Lhs (list)
+                                    (list
+                                      (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+                                    Refl)
+                                  ;; IH prem2: completion bound at k2 (precond_shrink).
+                                  (RewriteWith (Lemma 'precond_shrink) Lr Lhs (list)
+                                    (list
+                                      (Steps (list (Rewrite (Premise 2) Lr Lhs True (list))) Refl)  ; outer bound
+                                      (Steps (list (Simp Lhs)) Refl))                               ; int_of_nat(S k2) link
+                                    Refl))
+                                ;; LHS now: (read (swap m i j) ((i+1)+(j-1)-p)). Normalize index.
+                                (RewriteWith (Lemma 'idx_inner_simp) Lr Lhs (list)
+                                  (list)
+                                  ;; (read (swap m i j) (i+j-p)): interior cell, untouched by the swap.
+                                  (RewriteWith (Lemma 'read_swap_other) Lr Lhs (list)
+                                    (list
+                                      (RewriteWith (Lemma 'inner_neq_hi) Lr Lhs (list)
+                                        (list
+                                          (Steps (list (Rewrite (Hyp 1) Lr Lhs True (list))) Refl))  ; (lt i p)=True
+                                        Refl)
+                                      (RewriteWith (Lemma 'inner_neq_lo) Lr Lhs (list)
+                                        (list
+                                          (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))  ; (lt p j)=True
+                                        Refl))
+                                    Refl))))))))))))))))))
+
 ;; ---------------------------------------------------------------------------
 ;; CAPSTONE (stated, not yet proven) — mem_reverses:
 ;;
@@ -543,16 +912,19 @@
 ;;      "representation alignment is death by a thousand lemmas". The
 ;;      open design question: how much of it the ord backend erases.
 ;;
-;; PROGRESS (slice 39): the loop-invariant induction WORKS — see
-;; rev_loop_untouched_below above (the below-the-range case), proven by
-;; induction on k with the guarded loop, the IH at the shrunk segment,
-;; and read_swap_below. This validates the whole approach end to end.
+;; PROGRESS:
+;;   [DONE, slice 39/40] rev_loop_untouched_below / _above — a cell
+;;     outside the swap range is unchanged by the whole loop.
+;;   [DONE, slice 44] rev_loop_mirror — a position p in [i,j] ends up
+;;     holding (read m (i+j-p)); the center i+j is recursion-invariant.
+;;     Induction on k with a completion bound P2 = (j-i)+1 <= 2k; the
+;;     S-case splits p three ways (the two swap ends via untouched +
+;;     read_swap_i/j, the interior via the IH + read_swap_other), the
+;;     Nat/Int bound threading goes through precond_shrink, and the Z
+;;     base is closed by contradiction (mirror_idx_z). This is the
+;;     in-place-reverse correctness statement — the M3 "dragon".
 ;; REMAINING for the capstone:
-;;   - rev_loop_untouched_above (symmetric; p > j).
-;;   - rev_loop_mirror: a swapped position p ends up holding
-;;     (read m (i+j-p)) — the center i+j is recursion-invariant. This is
-;;     the substantive case (both swap ends + the middle).
 ;;   - the list↔memory bridge: dump∘load = id, and dump-of-mirror = rev,
-;;     then instantiate at i=0, j=n-1, k=half(n) and discharge the
-;;     bound arithmetic via farkas.
+;;     then instantiate rev_loop_mirror at i=0, j=n-1, k=half(n) and
+;;     discharge the bound arithmetic via farkas.
 ;; ---------------------------------------------------------------------------
