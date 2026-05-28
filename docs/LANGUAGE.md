@@ -66,9 +66,20 @@ polymorphism in narrow].
 
 ### 2.2 `fn` — user-defined function
 
+Monomorphic:
 ```sexp
 (fn add ((a Int) (b Int)) Int
   (+ a b))
+```
+
+Polymorphic (slice 31) — head is a list `(NAME TPARAM …)`, mirroring
+the `type` syntax. Bare TPARAM symbols inside parameter or return
+types become `TVar`s:
+```sexp
+(fn (append T) ((xs (List T)) (ys (List T))) (List T)
+  (match xs
+    (Nil          ys)
+    ((Cons h t)   (Cons h (append t ys)))))
 ```
 
 Parameter list is `((NAME TYPE) …)`; can be empty. The body sees
@@ -80,6 +91,11 @@ documentation in narrow — the v2 evaluator does no type checking
 
 ```sexp
 (extern wall_clock_ns () Int)
+```
+
+Same parameterized-head form for polymorphic externs:
+```sexp
+(extern (read_at T) ((p Path) (n Int)) (Option T))
 ```
 
 A signature with no body. The evaluator treats calls to extern
@@ -303,7 +319,25 @@ Used throughout the kernel; no privileged status — just user types
 that happen to be ubiquitous.
 
 
-## 10. The narrow / full distinction
+## 10. Proof-file surface sugars
+
+Beyond the narrow source forms above, the loader recognizes a small
+set of sugars used inside `(claim …)` bodies — most of them produce
+runtime Expr/Goal *values* rather than source-level terms (see
+REVISIT, *Expr-value vs source-Expr distinction*).
+
+| Form              | Expands to                                  | Slice |
+|-------------------|---------------------------------------------|-------|
+| `'foo`            | `(quote foo)` → `SymLit foo`                 | 25    |
+| `(list a b c)`    | `(Cons a (Cons b (Cons c Nil)))`             | 25    |
+| `(ty NAME a1 a2)` | `(TCon 'NAME (list a1 a2))`; bare symbols inside become 0-ary TCons | 28 |
+| `(tv T)`          | `(TVar 'T)` — type variable               | 31    |
+
+`'foo` is handled by `lexpr`'s reader; the rest are recognized in
+`src/load.rs::load_expr`. The (claim NAME GOAL PROOF) form is itself
+recognized by `src/bin/check.rs`, not by the kernel.
+
+## 11. The narrow / full distinction
 
 The "narrow" language described above is what the v2 loader and
 evaluator accept. The "full" language — the eventual surface for
@@ -312,6 +346,9 @@ users writing proofs and refinements — will add:
 - Higher-order: lambdas, partial application, `apply$` defunctionalization
 - Effect-as-data: `Action` trees built from `Pure` / `Bind` / `Yield`
 - Bridging axioms tying externs to in-language models
+- Finite maps / collections with their lemma library
+- Measure / well-founded recursion (termination as discharged obligation)
+- Mutual recursion and mutual induction
 - (Possibly) sequential `let*` and pattern syntax sugar
 - (Possibly) module imports / visibility
 
@@ -321,7 +358,7 @@ compilation, never the full language directly. See TRANSFER.md and
 docs/BOUNDARIES.md for the broader picture.
 
 
-## 11. Worked example: a fragment
+## 12. Worked example: a fragment
 
 ```sexp
 ;; List-typed length.
@@ -344,7 +381,7 @@ docs/BOUNDARIES.md for the broader picture.
 ```
 
 
-## 12. Things deliberately not in narrow
+## 13. Things deliberately not in narrow
 
 - No lambdas (use top-level fns).
 - No partial application; calls must be saturated.
