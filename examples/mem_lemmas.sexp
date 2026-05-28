@@ -1061,6 +1061,188 @@
                      (Rewrite (Lemma 'idx_cancel) Lr Rhs True (list)))    ; (IDX1 - c) → base
           Refl)))))
 
+;; --- dump of the reversed memory = rdump of the original (the mirror) ---
+
+;; 0 <= x ⊢ 0 <= x+1  (step the nonneg witness; farkas).
+(claim le0_succ
+  (Goal (list (Param 'x (ty Int)))
+    (list (Equation (Call 'le (list (IntLit 0) (FVar 'x))) (Ctor 'True (list))))
+    (Equation (Call 'le (list (IntLit 0) (Call '+ (list (IntLit 1) (FVar 'x)))))
+              (Ctor 'True (list))))
+  (ByTheory 'farkas (Cert 'farkas (list 1 1))))
+
+;; int_of_nat is nonnegative. Induction on n; S case steps le0_succ on
+;; the IH (which farkas can't see directly — it lives in the hyps, so we
+;; thread it through le0_succ's premise).
+(claim int_of_nat_nonneg
+  (Goal (list (Param 'n (ty Nat))) (list)
+    (Equation (Call 'le (list (IntLit 0) (Call 'int_of_nat (list (FVar 'n)))))
+              (Ctor 'True (list))))
+  (Induct 'n
+    (list
+      (Case 'Z (Steps (list (Simp Lhs)) Refl))
+      (Case 'S
+        (Steps (list (Simp Lhs))   ; (le 0 (+ 1 (int_of_nat k)))
+          (RewriteWith (Lemma 'le0_succ) Lr Lhs (list)
+            (list (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+            Refl))))))
+
+;; base <= j, from base+(S c) <= j+1 (the load/dump range bound), the
+;; successor link, and int_of_nat c >= 0. c is a pivot (premises only),
+;; so it is Inst-pinned at the cite site.
+(claim base_le_j
+  (Goal
+    (list (Param 'base (ty Int)) (Param 'j (ty Int)) (Param 'c (ty Nat)))
+    (list
+      (Equation
+        (Call 'le (list (Call '+ (list (FVar 'base)
+                                       (Call 'int_of_nat (list (Ctor 'S (list (FVar 'c)))))))
+                        (Call '+ (list (FVar 'j) (IntLit 1)))))
+        (Ctor 'True (list)))
+      (Equation (Call 'int_of_nat (list (Ctor 'S (list (FVar 'c)))))
+                (Call '+ (list (IntLit 1) (Call 'int_of_nat (list (FVar 'c))))))
+      (Equation (Call 'le (list (IntLit 0) (Call 'int_of_nat (list (FVar 'c)))))
+                (Ctor 'True (list))))
+    (Equation (Call 'le (list (FVar 'base) (FVar 'j))) (Ctor 'True (list))))
+  (ByTheory 'farkas (Cert 'farkas (list 1 1 1 1))))
+
+;; i <= base ⊢ i <= base+1  (step the IH's lower bound; farkas).
+(claim le_succ_r
+  (Goal (list (Param 'i (ty Int)) (Param 'base (ty Int)))
+    (list (Equation (Call 'le (list (FVar 'i) (FVar 'base))) (Ctor 'True (list))))
+    (Equation (Call 'le (list (FVar 'i) (Call '+ (list (FVar 'base) (IntLit 1)))))
+              (Ctor 'True (list))))
+  (ByTheory 'farkas (Cert 'farkas (list 1 1))))
+
+;; the dump-range bound steps to the IH: base+(S c) <= j+1 (+ link)
+;; ⊢ (base+1)+c <= j+1.  Same polynomial, shifted shape (cf. precond_shrink).
+(claim bound_step
+  (Goal
+    (list (Param 'base (ty Int)) (Param 'j (ty Int)) (Param 'c (ty Nat)))
+    (list
+      (Equation
+        (Call 'le (list (Call '+ (list (FVar 'base)
+                                       (Call 'int_of_nat (list (Ctor 'S (list (FVar 'c)))))))
+                        (Call '+ (list (FVar 'j) (IntLit 1)))))
+        (Ctor 'True (list)))
+      (Equation (Call 'int_of_nat (list (Ctor 'S (list (FVar 'c)))))
+                (Call '+ (list (IntLit 1) (Call 'int_of_nat (list (FVar 'c)))))))
+    (Equation
+      (Call 'le (list (Call '+ (list (Call '+ (list (FVar 'base) (IntLit 1)))
+                                     (Call 'int_of_nat (list (FVar 'c)))))
+                      (Call '+ (list (FVar 'j) (IntLit 1)))))
+      (Ctor 'True (list))))
+  (ByTheory 'farkas (Cert 'farkas (list 1 1 1))))
+
+;; lia: s-(base+1) = (s-base)-1  (reconcile the rdump recursion index).
+(claim idx_pred
+  (Goal (list (Param 's (ty Int)) (Param 'base (ty Int))) (list)
+    (Equation
+      (Call '- (list (FVar 's) (Call '+ (list (FVar 'base) (IntLit 1)))))
+      (Call '- (list (Call '- (list (FVar 's) (FVar 'base))) (IntLit 1)))))
+  (ByTheory 'lia (Cert 'lia (list))))
+
+;; dump_R_rdump_step: ONE peel of the mirror traversal, with the counter
+;; `c` a NAMED param (so base_le_j's pivot c binds via Inst — after an
+;; Induct the field is an anonymous fresh symbol we can't name, hence the
+;; factoring). The tail equation is taken as a premise (Premise 3); the
+;; outer induction supplies it from its IH.
+;;   head: read (rev_loop M i j k) base → read M (i+j-base) (rev_loop_mirror,
+;;         base<=j via base_le_j from the range bound + link + nonneg);
+;;   tail: the premise rewrites dump (base+1) c R → rdump (i+j-(base+1)) c M;
+;;   then idx_pred reconciles (i+j-(base+1)) with ((i+j-base)-1).
+(claim dump_R_rdump_step
+  (Goal
+    (list (Param 'M (ty Map Int))
+          (Param 'i (ty Int)) (Param 'j (ty Int)) (Param 'k (ty Nat))
+          (Param 'base (ty Int)) (Param 'c (ty Nat)))
+    (list
+      (Equation (Call 'le (list (FVar 'i) (FVar 'base))) (Ctor 'True (list)))
+      (Equation
+        (Call 'le (list (Call '+ (list (FVar 'base)
+                                       (Call 'int_of_nat (list (Ctor 'S (list (FVar 'c)))))))
+                        (Call '+ (list (FVar 'j) (IntLit 1)))))
+        (Ctor 'True (list)))
+      (Equation
+        (Call 'le (list (Call '- (list (FVar 'j) (FVar 'i)))
+                        (Call '* (list (IntLit 2) (Call 'int_of_nat (list (FVar 'k)))))))
+        (Ctor 'True (list)))
+      (Equation
+        (Call 'dump (list (Call '+ (list (FVar 'base) (IntLit 1))) (FVar 'c)
+                          (Call 'rev_loop (list (FVar 'M) (FVar 'i) (FVar 'j) (FVar 'k)))))
+        (Call 'rdump (list (Call '- (list (Call '+ (list (FVar 'i) (FVar 'j)))
+                                          (Call '+ (list (FVar 'base) (IntLit 1)))))
+                           (FVar 'c) (FVar 'M)))))
+    (Equation
+      (Call 'dump (list (FVar 'base) (Ctor 'S (list (FVar 'c)))
+                        (Call 'rev_loop (list (FVar 'M) (FVar 'i) (FVar 'j) (FVar 'k)))))
+      (Call 'rdump (list (Call '- (list (Call '+ (list (FVar 'i) (FVar 'j))) (FVar 'base)))
+                         (Ctor 'S (list (FVar 'c))) (FVar 'M)))))
+  (Steps (list (Simp Both))
+    ;; head: read (rev_loop M i j k) base → read M (i+j-base).
+    (RewriteWith (Lemma 'rev_loop_mirror) Lr Lhs (list)
+      (list
+        (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl)   ; i<=base
+        (RewriteWith (Lemma 'base_le_j) Lr Lhs (list (Inst 'c (FVar 'c)))
+          (list
+            (Steps (list (Rewrite (Premise 1) Lr Lhs True (list))) Refl)  ; range bound
+            (Steps (list (Simp Lhs)) Refl)                                ; link
+            (RewriteWith (Lemma 'int_of_nat_nonneg) Lr Lhs (list) (list) Refl))  ; 0<=int_of_nat c
+          Refl)
+        (Steps (list (Rewrite (Premise 2) Lr Lhs True (list))) Refl))   ; loop bound
+      ;; tail: dump (base+1) c R → rdump (i+j-(base+1)) c M  (Premise 3).
+      (RewriteWith (Premise 3) Lr Lhs (list)
+        (list)
+        ;; reconcile rdump index (i+j-(base+1)) → ((i+j-base)-1).
+        (RewriteWith (Lemma 'idx_pred) Lr Lhs (list) (list) Refl)))))
+
+;; dump_R_rdump: dumping cnt cells of the reversed memory (rev_loop M i j k)
+;; forward from base = reading the ORIGINAL memory M backward from i+j-base.
+;; Induction on cnt; the S case delegates the peel to dump_R_rdump_step,
+;; supplying its tail premise from the IH (lower bound via le_succ_r, range
+;; bound via bound_step, loop bound carried).
+(claim dump_R_rdump
+  (Goal
+    (list (Param 'M (ty Map Int))
+          (Param 'i (ty Int)) (Param 'j (ty Int)) (Param 'k (ty Nat))
+          (Param 'base (ty Int)) (Param 'cnt (ty Nat)))
+    (list
+      (Equation (Call 'le (list (FVar 'i) (FVar 'base))) (Ctor 'True (list)))
+      (Equation
+        (Call 'le (list (Call '+ (list (FVar 'base) (Call 'int_of_nat (list (FVar 'cnt)))))
+                        (Call '+ (list (FVar 'j) (IntLit 1)))))
+        (Ctor 'True (list)))
+      (Equation
+        (Call 'le (list (Call '- (list (FVar 'j) (FVar 'i)))
+                        (Call '* (list (IntLit 2) (Call 'int_of_nat (list (FVar 'k)))))))
+        (Ctor 'True (list))))
+    (Equation
+      (Call 'dump (list (FVar 'base) (FVar 'cnt)
+                        (Call 'rev_loop (list (FVar 'M) (FVar 'i) (FVar 'j) (FVar 'k)))))
+      (Call 'rdump (list (Call '- (list (Call '+ (list (FVar 'i) (FVar 'j))) (FVar 'base)))
+                         (FVar 'cnt) (FVar 'M)))))
+  (Induct 'cnt
+    (list
+      (Case 'Z (Steps (list (Simp Both)) Refl))
+      (Case 'S
+        (RewriteWith (Lemma 'dump_R_rdump_step) Lr Lhs (list)
+          (list
+            (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl)   ; i<=base
+            (Steps (list (Rewrite (Premise 1) Lr Lhs True (list))) Refl)   ; range bound at S c
+            (Steps (list (Rewrite (Premise 2) Lr Lhs True (list))) Refl)   ; loop bound
+            ;; tail premise: dump (base+1) c R = rdump (i+j-(base+1)) c M, via the IH.
+            (RewriteWith (Hyp 0) Lr Lhs (list)
+              (list
+                (RewriteWith (Lemma 'le_succ_r) Lr Lhs (list)
+                  (list (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl)) Refl)
+                (RewriteWith (Lemma 'bound_step) Lr Lhs (list)
+                  (list
+                    (Steps (list (Rewrite (Premise 1) Lr Lhs True (list))) Refl)
+                    (Steps (list (Simp Lhs)) Refl)) Refl)
+                (Steps (list (Rewrite (Premise 2) Lr Lhs True (list))) Refl))
+              Refl))
+          Refl)))))
+
 ;; ---------------------------------------------------------------------------
 ;; CAPSTONE (stated, not yet proven) — mem_reverses:
 ;;
