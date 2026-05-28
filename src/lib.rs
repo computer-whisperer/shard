@@ -436,4 +436,98 @@ mod tests {
         ]);
         assert_eq!(r, expected);
     }
+
+    // ------------------------------------------------------------------
+    // Slice 6: drive check_sequent against tiny proofs.
+    //
+    // First time the proof checker runs end-to-end. We exercise:
+    //   - the Refl arm (the kernel's base case)
+    //   - the Steps arm (recursive dispatch back into check_sequent)
+    //   - the Some/None paths through apply_steps
+    //
+    // Everything else in check_sequent is still stubbed (returns False),
+    // so the deeper Proof shapes wait for slice 7+.
+    //
+    // Helper note: building Sequent / Equation / Module *values* by hand
+    // in sexp is verbose. If we keep this up we'll want either narrow
+    // builder fns or a tiny Rust DSL. For four tests we tolerate it.
+    // ------------------------------------------------------------------
+
+    fn empty_module_v() -> &'static str {
+        "(Module (Nil) (Nil) (Nil))"
+    }
+    fn empty_theory_v() -> &'static str {
+        "(TheoryEmpty)"
+    }
+
+    /// Refl on 1 = 1 — both sides syntactically equal. Routes through
+    /// the kernel's expr_eq, and through Sequent destructuring. The
+    /// simplest possible "valid proof."
+    #[test]
+    fn check_seq_refl_hit() {
+        let m = load_kernel();
+        let call = format!(
+            "(check_sequent {} {} \
+              (Sequent (Nil) (Nil) (Nil) (Equation (IntLit 1) (IntLit 1))) \
+              (Refl))",
+            empty_module_v(),
+            empty_theory_v()
+        );
+        let e = load::expr_from_str(&call, &m).expect("parses");
+        assert_eq!(eval::eval(&m, &e).unwrap(), true_v());
+    }
+
+    /// Refl on 1 = 2 — the same path, but expr_eq returns False.
+    /// Catches the case where the kernel always returns True (e.g. a
+    /// bug that ignored the equation entirely).
+    #[test]
+    fn check_seq_refl_miss() {
+        let m = load_kernel();
+        let call = format!(
+            "(check_sequent {} {} \
+              (Sequent (Nil) (Nil) (Nil) (Equation (IntLit 1) (IntLit 2))) \
+              (Refl))",
+            empty_module_v(),
+            empty_theory_v()
+        );
+        let e = load::expr_from_str(&call, &m).expect("parses");
+        assert_eq!(eval::eval(&m, &e).unwrap(), false_v());
+    }
+
+    /// (Steps Nil Refl) — apply_steps on an empty step list returns
+    /// (Some seq) unchanged; check_sequent then recurses into Refl.
+    /// Validates that the Steps arm's recursive dispatch threads
+    /// state correctly.
+    #[test]
+    fn check_seq_steps_empty_then_refl() {
+        let m = load_kernel();
+        let call = format!(
+            "(check_sequent {} {} \
+              (Sequent (Nil) (Nil) (Nil) (Equation (IntLit 7) (IntLit 7))) \
+              (Steps (Nil) (Refl)))",
+            empty_module_v(),
+            empty_theory_v()
+        );
+        let e = load::expr_from_str(&call, &m).expect("parses");
+        assert_eq!(eval::eval(&m, &e).unwrap(), true_v());
+    }
+
+    /// (Steps [Reduce(Lhs)] Refl) — apply_step on Reduce is currently
+    /// stubbed to None, so apply_steps short-circuits to None and the
+    /// Steps arm returns False. Documents the present stub behavior
+    /// AND validates the None-path of the Steps arm. This test will
+    /// need to change when Reduce gets a real implementation.
+    #[test]
+    fn check_seq_steps_with_stubbed_reduce() {
+        let m = load_kernel();
+        let call = format!(
+            "(check_sequent {} {} \
+              (Sequent (Nil) (Nil) (Nil) (Equation (IntLit 1) (IntLit 1))) \
+              (Steps (Cons (Reduce (Lhs)) (Nil)) (Refl)))",
+            empty_module_v(),
+            empty_theory_v()
+        );
+        let e = load::expr_from_str(&call, &m).expect("parses");
+        assert_eq!(eval::eval(&m, &e).unwrap(), false_v());
+    }
 }
