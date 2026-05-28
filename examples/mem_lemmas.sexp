@@ -20,6 +20,7 @@
 
 (use-module "nat_lib.sexp")
 (use-module "map_lib.sexp")
+(use-module "list_lib.sexp")
 (use-module "mem_lib.sexp")
 
 ;; ---------------------------------------------------------------------------
@@ -880,6 +881,91 @@
                                           (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))  ; (lt p j)=True
                                         Refl))
                                     Refl))))))))))))))))))
+
+;; ===========================================================================
+;; The list <-> linear-memory bridge. load writes a list into memory at
+;; base..base+len-1; dump reads len cells back out. We prove the round
+;; trip (dump . load = id), which together with the mirror gives the
+;; capstone. (These are the "representation alignment" lemmas TRANSFER.md
+;; flagged — each is an induction on the list/counter with index side-
+;; conditions discharged by the order/farkas backends.)
+;; ===========================================================================
+
+;; q < x+1 is a tautology helper used to step a load/dump index past its
+;; own base (no premises).
+(claim lt_self_succ
+  (Goal
+    (list (Param 'x (ty Int)))
+    (list)
+    (Equation (Call 'lt (list (FVar 'x) (Call '+ (list (FVar 'x) (IntLit 1)))))
+              (Ctor 'True (list))))
+  (ByTheory 'farkas (Cert 'farkas (list 1))))
+
+;; read_load_below: a cell strictly below the load's base is untouched by
+;; the load (load only writes base, base+1, …). Induction on xs: the Cons
+;; case writes `base`, recurses at base+1 (IH, premise q<base+1 from q<base
+;; via lt_succ_from_lt), then steps back over the base write (read_write_neq,
+;; q≠base from lt_implies_neq).
+(claim read_load_below
+  (Goal
+    (list (Param 'xs (ty List Int))
+          (Param 'base (ty Int))
+          (Param 'm (ty Map Int))
+          (Param 'q (ty Int)))
+    (list (Equation (Call 'lt (list (FVar 'q) (FVar 'base))) (Ctor 'True (list))))
+    (Equation
+      (Call 'read (list (Call 'load (list (FVar 'xs) (FVar 'base) (FVar 'm))) (FVar 'q)))
+      (Call 'read (list (FVar 'm) (FVar 'q)))))
+  (Induct 'xs
+    (list
+      (Case 'Nil (Steps (list (Simp Lhs)) Refl))
+      (Case 'Cons
+        (Steps (list (Simp Lhs))   ; read (load t (base+1) (write m base h)) q
+          ;; IH at (base+1, write m base h); premise q < base+1.
+          (RewriteWith (Hyp 0) Lr Lhs (list)
+            (list
+              (RewriteWith (Lemma 'lt_succ_from_lt) Lr Lhs (list)
+                (list (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl))
+                Refl))
+            ;; (read (write m base h) q): q ≠ base, step over the write.
+            (RewriteWith (Lemma 'read_write_neq) Lr Lhs (list)
+              (list
+                (RewriteWith (Lemma 'lt_implies_neq) Lr Lhs (list)
+                  (list (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl))
+                  Refl))
+              Refl)))))))
+
+;; dump_load_id: the round trip. dump base (length xs) (load xs base m) =
+;; xs — reading back the n cells you wrote gives the list. Induction on
+;; xs: the Cons case Simp-fires length/load/dump one step, the IH handles
+;; the tail dump at base+1, and the head cell is recovered by stepping the
+;; load past base (read_load_below, base<base+1) then read_write_eq.
+(claim dump_load_id
+  (Goal
+    (list (Param 'xs (ty List Int))
+          (Param 'base (ty Int))
+          (Param 'm (ty Map Int)))
+    (list)
+    (Equation
+      (Call 'dump (list (FVar 'base)
+                        (Call 'length_nat (list (FVar 'xs)))
+                        (Call 'load (list (FVar 'xs) (FVar 'base) (FVar 'm)))))
+      (FVar 'xs)))
+  (Induct 'xs
+    (list
+      (Case 'Nil (Steps (list (Simp Lhs)) Refl))
+      (Case 'Cons
+        (Steps (list (Simp Lhs))   ; Cons (read M base) (dump (base+1) (length t) M),  M = load t (base+1)(write m base h)
+          ;; tail: IH at (base+1, write m base h).
+          (RewriteWith (Hyp 0) Lr Lhs (list)
+            (list)
+            ;; head: read M base = read (write m base h) base (load base+1 > base) = h.
+            (RewriteWith (Lemma 'read_load_below) Lr Lhs (list)
+              (list
+                (RewriteWith (Lemma 'lt_self_succ) Lr Lhs (list) (list) Refl))
+              (RewriteWith (Lemma 'read_write_eq) Lr Lhs (list)
+                (list)
+                Refl))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; CAPSTONE (stated, not yet proven) — mem_reverses:
