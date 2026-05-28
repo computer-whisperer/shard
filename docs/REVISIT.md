@@ -287,3 +287,57 @@ is where to start when planning v3.
 - **Chose:** placeholder `.sexp` extension; project remains
   "proving_bootstrap_test_v2".
 - **Revisit:** once the kernel takes shape and a name suggests itself.
+
+## CLI / Tooling
+
+### Proof-file surface syntax is value-construction sexp, no sugar
+- **Chose (slice 23):** `(claim NAME GOAL PROOF)` where GOAL and PROOF
+  are narrow expressions parsed against the kernel's ctor set and
+  evaluated. No quote shorthand, no `list` helper — list literals
+  are explicit Cons-Nil chains and symbol literals are spelled
+  `(quote x)`.
+- **Why now:** reuses `load::expr_from_value` plus the existing
+  evaluator. Zero new converter code; the kernel's ctor application
+  IS the value-construction syntax. Ships the CLI without inventing
+  a parallel surface.
+- **Cost:** verbose. A two-parameter goal with two FVar references
+  is ~10 lines of Cons/Nil scaffolding. Manageable for hand-written
+  smoke tests; painful at any scale beyond that.
+- **Revisit when:** real proof scripts start getting authored.
+  Cheap mitigations: a `list` form expanded at parse time to
+  Cons-Nil, a `'foo` reader macro for `(quote foo)` (lexpr may
+  already grant this — needs verification). Heavier: a separate
+  proof-script surface syntax that lowers to canonical claim sexp.
+
+### Proof-file module syntax: parse-but-error
+- **Chose (slice 23):** `(module NAME)` is recognized as a top-level
+  form but rejected with "not yet implemented in v1".
+- **Why now:** locks in the syntax so v1 proof files won't need
+  rewriting when the directory-tree loader lands. Avoids implementing
+  the loader (with name resolution, cycle detection, path
+  resolution) before the kernel's scale demands it.
+- **Revisit when:** a proof artifact wants to span multiple files
+  with cross-references. Likely concurrent with introducing
+  hierarchical names (which v1 supports via Symbols already, but
+  nothing produces or relies on hierarchical Symbol contents yet).
+
+### User-module slot empty in v1
+- **Chose (slice 23):** the `check` binary always passes
+  `(Module Nil Nil Nil)` as the user-module arg to `check_sequent`.
+- **Why now:** LIA-decidable claims and claims over primitives don't
+  need a user module. Lets the v1 binary ship without inventing
+  `(use-module …)` semantics, which want their own slice.
+- **Revisit when:** a proof-file claim needs to talk about a
+  user-defined fn (e.g., `(double n) = (+ n n)`). The natural shape
+  is `(use-module path/to/module.sexp)` to declare the user module
+  for subsequent claims.
+
+### Kernel loader is a flat path list
+- **Chose:** the kernel's seven `.sexp` files are loaded by a
+  hardcoded list in `lib.rs::load_kernel_from`. Tests and the
+  `check` binary share that list.
+- **Why now:** the kernel itself doesn't yet use the (module …)
+  directive (and `module` isn't implemented anyway). Migrating the
+  kernel to a module-tree layout is a separable slice.
+- **Revisit when:** the directory-tree loader lands. Migrating the
+  kernel to `kernel/mod.sexp` becomes a consistency cleanup.

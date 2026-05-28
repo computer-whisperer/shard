@@ -108,9 +108,18 @@ pub fn expr_from_str(src: &str, module: &Module) -> Result<Expr, LoadError> {
     let v: Value = src
         .parse()
         .map_err(|e: lexpr::parse::Error| LoadError::Parse(e.to_string()))?;
+    expr_from_value(&v, module)
+}
+
+/// Convert a pre-parsed `lexpr::Value` to a narrow `Expr` against the
+/// module's ctor set. The string-input variant `expr_from_str` is a
+/// thin wrapper around this. Useful when the caller has already walked
+/// the sexp surface (e.g., the `check` binary scanning a proof file
+/// for `(claim …)` forms).
+pub fn expr_from_value(v: &Value, module: &Module) -> Result<Expr, LoadError> {
     let ctors = ctor_set(module);
     let mut ctx = LoadCtx::new();
-    load_expr(&v, &mut ctx, &ctors)
+    load_expr(v, &mut ctx, &ctors)
 }
 
 fn parse_all(src: &str) -> Result<Vec<Value>, LoadError> {

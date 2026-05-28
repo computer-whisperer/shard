@@ -20,6 +20,34 @@ pub mod prim;
 #[cfg(test)]
 mod nval;
 
+/// Load the kernel from a directory of `.sexp` files. The file list
+/// is fixed (the kernel itself is not yet a module tree — see
+/// docs/REVISIT.md, "Kernel loader is a flat path list"); this helper
+/// is shared by tests and the `check` binary so the list is in one
+/// place.
+pub fn load_kernel_from<P: AsRef<std::path::Path>>(
+    kernel_dir: P,
+) -> Result<ast::Module, load::LoadError> {
+    let dir = kernel_dir.as_ref();
+    let p = |n: &str| dir.join(n);
+    load::module_from_paths(&[
+        p("stdlib.sexp"),
+        p("module.sexp"),
+        p("proof.sexp"),
+        p("term.sexp"),
+        p("reduce.sexp"),
+        p("check.sexp"),
+        p("lia.sexp"),
+    ])
+}
+
+/// The kernel directory that ships with this crate (compile-time
+/// `CARGO_MANIFEST_DIR/kernel`). Convenience for callers that don't
+/// need to point at a different tree.
+pub fn default_kernel_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("kernel")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -39,19 +67,11 @@ mod tests {
 
     /// Load the on-disk narrow kernel. Order is significant for
     /// readability only — the loader handles forward refs across files.
+    /// Thin wrapper around the crate-public `load_kernel_from` so the
+    /// file list stays in one place (shared with the `check` binary).
     fn load_kernel() -> ast::Module {
-        let manifest = env!("CARGO_MANIFEST_DIR");
-        let p = |n: &str| std::path::PathBuf::from(manifest).join("kernel").join(n);
-        load::module_from_paths(&[
-            p("stdlib.sexp"),
-            p("module.sexp"),
-            p("proof.sexp"),
-            p("term.sexp"),
-            p("reduce.sexp"),
-            p("check.sexp"),
-            p("lia.sexp"),
-        ])
-        .expect("kernel loads")
+        super::load_kernel_from(super::default_kernel_dir())
+            .expect("kernel loads")
     }
 
     /// Construct a runtime narrow-Expr ctor value: `nctor("Foo", vec![…])`
