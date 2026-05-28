@@ -36,9 +36,17 @@
 ;;;   2. The combination must canonicalize to a lone CONSTANT (all
 ;;;      variables cancel) that is strictly < 0.
 ;;;
-;;; Scope / caveats (same family as lia): conclusions are order facts
-;;; (`lt`/`le` = True) only — equality CONCLUSIONS stay with lia (a
-;;; tautology) or would need a two-sided combination (future). Opaque
+;;; Conclusions are order facts (`lt`/`le` = True) OR disequalities
+;;; (`int_eq a b` = False). A disequality goal is refuted by assuming
+;;; the EQUALITY `a = b` (`a - b = 0`, an any-sign constraint) and
+;;; combining it with the premises to a negative constant — e.g.
+;;; `(lt a b)=True ⊢ (int_eq a b)=False` (from a < b, a ≠ b), which is
+;;; what the M3 swap framing needs to turn loop bounds into the
+;;; `(int_eq p i)=False` premises read_swap_other consumes.
+;;;
+;;; Scope / caveats (same family as lia): EQUALITY conclusions
+;;; (`a = b`) stay with lia (a tautology) or would need a two-sided
+;;; combination (future). Opaque
 ;;; atoms are assumed integer-typed (inherited from lia_collect). A
 ;;; premise that isn't a recognized linear (in)equality is usable only
 ;;; with multiplier 0; a nonzero multiplier on an uninterpretable
@@ -114,11 +122,16 @@
             (_ (Some (plain_eq_constraint lhs rhs)))))
         (_ (Some (plain_eq_constraint lhs rhs)))))))
 
-;; The negated goal, as a `>= 0` polynomial. Goal must be an order
-;; conclusion (lt|le a b) = True:
-;;   ¬(a <= b)  =  a > b   =  a - b - 1 >= 0
-;;   ¬(a <  b)  =  a >= b  =  a - b     >= 0
-(fn neg_goal_poly ((goal Equation)) (Option (List (Pair Int (Option Expr))))
+;; The negated goal, as a constraint polynomial paired with its
+;; `needs_nonneg` flag (the goal-multiplier's sign rule):
+;;   goal (le a b)=True   → ¬ is  a - b - 1 >= 0   (inequality, nonneg)
+;;   goal (lt a b)=True   → ¬ is  a - b     >= 0   (inequality, nonneg)
+;;   goal (int_eq a b)=False → ¬ is the EQUALITY a - b = 0 (any sign)
+;; A disequality goal is refuted by assuming a = b and combining with
+;; the (linear) premises; since the assumed a=b is an equality, its
+;; multiplier may take any sign — hence needs_nonneg False.
+(fn neg_goal_poly ((goal Equation))
+                  (Option (Pair (List (Pair Int (Option Expr))) Bool))
   (match goal
     ((Equation lhs rhs)
       (match lhs
@@ -129,11 +142,15 @@
                 ((Ctor tn _)
                   (if (sym_eq tn (quote True))
                       (if (sym_eq f (quote le))
-                          (Some (poly_minus1 (poly_sub a b)))
+                          (Some (Pair (poly_minus1 (poly_sub a b)) True))
                           (if (sym_eq f (quote lt))
-                              (Some (poly_sub a b))
+                              (Some (Pair (poly_sub a b) True))
                               None))
-                      None))
+                      (if (sym_eq tn (quote False))
+                          (if (sym_eq f (quote int_eq))
+                              (Some (Pair (poly_sub a b) False))
+                              None)
+                          None)))
                 (_ None)))
             (_ None)))
         (_ None)))))
@@ -173,6 +190,14 @@
     ((Some c) (lt c 0))
     (None     False)))
 
+;; Form the combination and test for contradiction (shared by both
+;; goal-multiplier sign regimes below).
+(fn farkas_finish ((premises (List Equation)) (prem_mults (List Int))
+                   (ng (List (Pair Int (Option Expr)))) (goal_mult Int)) Bool
+  (match (farkas_combine premises prem_mults (lia_scale goal_mult ng))
+    (None False)
+    ((Some total) (farkas_contradiction (lia_canonical total)))))
+
 ;; ---------------------------------------------------------------------------
 ;; Entry point. cert payload = (list G M0 M1 ...): G is the negated-goal
 ;; multiplier, Mk the premise-k multipliers (aligned, in order).
@@ -183,14 +208,15 @@
     ((Cert _ payload)
       (match payload
         ((Cons goal_mult prem_mults)
-          (if (lt goal_mult 0)
-              False                                  ; GUARD 1: goal mult must be >= 0
-              (match (neg_goal_poly goal)
-                (None False)                         ; goal not an order conclusion
-                ((Some ng)
-                  (match (farkas_combine premises prem_mults
-                                         (lia_scale goal_mult ng))
-                    (None False)
-                    ((Some total)
-                      (farkas_contradiction (lia_canonical total))))))))
+          (match (neg_goal_poly goal)
+            (None False)                             ; goal not an order/diseq conclusion
+            ((Some (Pair ng goal_needs_nonneg))
+              ;; GUARD 1 on the goal multiplier: required nonneg only
+              ;; when the negated goal is an inequality (lt/le goals);
+              ;; an int_eq=False goal negates to an EQUALITY, any sign.
+              (if goal_needs_nonneg
+                  (if (lt goal_mult 0)
+                      False
+                      (farkas_finish premises prem_mults ng goal_mult))
+                  (farkas_finish premises prem_mults ng goal_mult)))))
         (_ False)))))                                ; payload not a non-empty list

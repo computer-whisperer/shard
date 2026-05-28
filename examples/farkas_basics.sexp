@@ -56,3 +56,16 @@
       (Call 'le (list (FVar 'a) (FVar 'b)))
       (Ctor 'True (list))))
   (ByTheory 'farkas (Cert 'farkas (list 1 1))))
+
+;; ∀ a b. (lt a b) = True ⊢ (int_eq a b) = False.  (DISEQUALITY conclusion)
+;; The M3 enabler: a strict bound yields a ≠ b. The goal negates to the
+;; equality a = b (a-b = 0, any-sign multiplier); 1·(a-b)[¬goal] +
+;; 1·(b-a-1)[premise] = -1 < 0.
+(claim lt_implies_neq
+  (Goal
+    (list (Param 'a (ty Int)) (Param 'b (ty Int)))
+    (list (Equation (Call 'lt (list (FVar 'a) (FVar 'b))) (Ctor 'True (list))))
+    (Equation
+      (Call 'int_eq (list (FVar 'a) (FVar 'b)))
+      (Ctor 'False (list))))
+  (ByTheory 'farkas (Cert 'farkas (list 1 1))))

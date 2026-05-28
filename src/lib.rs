@@ -2734,6 +2734,45 @@ mod tests {
         assert_eq!(r, false_v());
     }
 
+    /// Positive (slice 38 — DISEQUALITY conclusion): (lt a b)=True ⊢
+    /// (int_eq a b)=False. The goal negates to the equality a=b, so the
+    /// goal multiplier may be any sign; here [1,1] suffices. This is the
+    /// M3 enabler turning a strict bound into a ≠ fact for read_swap.
+    #[test]
+    fn check_seq_farkas_lt_implies_neq() {
+        let m = load_kernel();
+        let int = tcon("Int", vec![]);
+        let seq = sequent(
+            vec![param("a", int.clone()), param("b", int)],
+            vec![],
+            vec![equation(call("lt", vec![fvar("a"), fvar("b")]), ctor_app("True", vec![]))],
+            equation(call("int_eq", vec![fvar("a"), fvar("b")]), ctor_app("False", vec![])),
+        );
+        let r = run_check_sequent(&m,
+            module(vec![], vec![], vec![]),
+            theory_empty(), seq, farkas_pf(vec![1, 1]));
+        assert_eq!(r, true_v());
+    }
+
+    /// Negative (slice 38): a disequality is NOT entailed by an equality.
+    /// (int_eq a b)=True ⊬ (int_eq a b)=False — assuming a=b for the
+    /// negation just restates the premise; no contradiction. Rejected.
+    #[test]
+    fn check_seq_farkas_rejects_neq_from_eq() {
+        let m = load_kernel();
+        let int = tcon("Int", vec![]);
+        let seq = sequent(
+            vec![param("a", int.clone()), param("b", int)],
+            vec![],
+            vec![equation(call("int_eq", vec![fvar("a"), fvar("b")]), ctor_app("True", vec![]))],
+            equation(call("int_eq", vec![fvar("a"), fvar("b")]), ctor_app("False", vec![])),
+        );
+        let r = run_check_sequent(&m,
+            module(vec![], vec![], vec![]),
+            theory_empty(), seq, farkas_pf(vec![1, 1]));
+        assert_eq!(r, false_v());
+    }
+
     // ------------------------------------------------------------------
     // Slice 21: commutativity of add_nat by lemma composition.
     //

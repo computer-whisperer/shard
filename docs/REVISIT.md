@@ -331,7 +331,15 @@ is where to start when planning v3.
   place to add strict/non-strict mixing or `(lt a b) = False` ⟺
   `(le b a) = True` if a proof needs the negated form.
 
-### `farkas` — linear-integer entailment via certificate (slice 37)
+### `farkas` — linear-integer entailment via certificate (slice 37, 38)
+- **Slice 38 extension:** also decides DISEQUALITY conclusions
+  `premises ⊢ (int_eq a b) = False`, by negating to the equality
+  `a = b` (an any-sign constraint) and refuting against the premises —
+  e.g. `(lt a b)=True ⊢ (int_eq a b)=False`. The goal multiplier's
+  nonneg requirement is conditional: enforced for `lt`/`le` goals
+  (inequality negation), any-sign for `int_eq=False` goals (equality
+  negation). This is the M3 enabler turning loop bounds into the
+  `(int_eq p i)=False` premises `read_swap_other` consumes.
 - **Chose:** a fourth `ByTheory` backend that decides
   `premises ⊢ (lt|le a b) = True` by CHECKING a Farkas combination:
   the cert payload `(list G M0 M1 …)` supplies nonnegative multipliers
