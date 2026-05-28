@@ -191,6 +191,84 @@
         Refl))))                ; (read m p) = (read m p)
 
 ;; ---------------------------------------------------------------------------
+;; Arithmetic helpers for the loop invariant, proven by the farkas
+;; entailment backend (each is a linear consequence of its premises).
+;; Re-proven here (self-containment) — same shapes as farkas_basics.
+;; ---------------------------------------------------------------------------
+
+;; (lt p i)=True ⊢ (lt p (+ i 1))=True.   (feed the IH at the shrunk segment)
+(claim lt_succ_from_lt
+  (Goal
+    (list (Param 'p (ty Int)) (Param 'i (ty Int)))
+    (list (Equation (Call 'lt (list (FVar 'p) (FVar 'i))) (Ctor 'True (list))))
+    (Equation
+      (Call 'lt (list (FVar 'p) (Call '+ (list (FVar 'i) (IntLit 1)))))
+      (Ctor 'True (list))))
+  (ByTheory 'farkas (Cert 'farkas (list 1 1))))
+
+;; (lt a b)=True ⊢ (int_eq a b)=False.   (a strict bound gives a ≠ b)
+(claim lt_implies_neq
+  (Goal
+    (list (Param 'a (ty Int)) (Param 'b (ty Int)))
+    (list (Equation (Call 'lt (list (FVar 'a) (FVar 'b))) (Ctor 'True (list))))
+    (Equation
+      (Call 'int_eq (list (FVar 'a) (FVar 'b)))
+      (Ctor 'False (list))))
+  (ByTheory 'farkas (Cert 'farkas (list 1 1))))
+
+;; (lt p i)=True, (lt i j)=True ⊢ (int_eq p j)=False.   (p < i < j ⟹ p ≠ j)
+(claim lt_trans_to_neq
+  (Goal
+    (list (Param 'p (ty Int)) (Param 'i (ty Int)) (Param 'j (ty Int)))
+    (list (Equation (Call 'lt (list (FVar 'p) (FVar 'i))) (Ctor 'True (list)))
+          (Equation (Call 'lt (list (FVar 'i) (FVar 'j))) (Ctor 'True (list))))
+    (Equation
+      (Call 'int_eq (list (FVar 'p) (FVar 'j)))
+      (Ctor 'False (list))))
+  (ByTheory 'farkas (Cert 'farkas (list 1 1 1))))
+
+;; ---------------------------------------------------------------------------
+;; read_swap_below: ∀ m i j p. (lt p i)=True, (lt i j)=True ⊢
+;;   (read (swap m i j) p) = (read m p).
+;;
+;; The swap-framing lemma in ORDER form (what the loop invariant has):
+;; a position below the swap range is untouched. Bridges the order
+;; premises (p<i, i<j) to read_swap_other's disequality premises by
+;; citing the neq helpers: p≠i from (lt p i), p≠j from (lt p i)+(lt i j).
+;; ---------------------------------------------------------------------------
+
+(claim read_swap_below
+  (Goal
+    (list (Param 'm (ty Map Int))
+          (Param 'i (ty Int))
+          (Param 'j (ty Int))
+          (Param 'p (ty Int)))
+    (list (Equation (Call 'lt (list (FVar 'p) (FVar 'i))) (Ctor 'True (list)))
+          (Equation (Call 'lt (list (FVar 'i) (FVar 'j))) (Ctor 'True (list))))
+    (Equation
+      (Call 'read (list (Call 'swap (list (FVar 'm) (FVar 'i) (FVar 'j)))
+                        (FVar 'p)))
+      (Call 'read (list (FVar 'm) (FVar 'p)))))
+  ;; Cite read_swap_other (premises p≠j, p≠i); discharge each from the
+  ;; order premises via the neq helpers.
+  (RewriteWith (Lemma 'read_swap_other) Lr Lhs (list)
+    (list
+      ;; premise 0 of read_swap_other: (int_eq p j) = False.
+      ;; lt_trans_to_neq's middle var `i` appears only in its premises,
+      ;; not its conclusion (int_eq p j) — so pin it with an Inst.
+      (RewriteWith (Lemma 'lt_trans_to_neq) Lr Lhs (list (Inst 'i (FVar 'i)))
+        (list
+          (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl)   ; (lt p i)=True
+          (Steps (list (Rewrite (Premise 1) Lr Lhs True (list))) Refl))  ; (lt i j)=True
+        Refl)
+      ;; premise 1 of read_swap_other: (int_eq p i) = False
+      (RewriteWith (Lemma 'lt_implies_neq) Lr Lhs (list)
+        (list
+          (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl))  ; (lt p i)=True
+        Refl))
+    Refl))
+
+;; ---------------------------------------------------------------------------
 ;; rev_loop_zero: ∀ m i j. (rev_loop m i j Z) = m.
 ;;
 ;; The loop base case: zero swaps leave memory unchanged. Trivial by
@@ -208,6 +286,69 @@
       (Call 'rev_loop (list (FVar 'm) (FVar 'i) (FVar 'j) (Ctor 'Z (list))))
       (FVar 'm)))
   (Steps (list (Simp Lhs)) Refl))
+
+;; ---------------------------------------------------------------------------
+;; rev_loop_untouched_below (THE loop invariant, below-the-range case):
+;;   ∀ m i j p k. (lt p i) = True ⊢ (read (rev_loop m i j k) p) = (read m p).
+;;
+;; A cell below the swap range is unchanged by the whole loop. Induction
+;; on the counter k:
+;;   Z: the loop is the identity (Simp).
+;;   S: unfold one step to (if (lt i j) <recurse> m), CASE-SPLIT on the
+;;      guard (lt i j):
+;;        False: pointers crossed, loop returns m — done.
+;;        True:  i < j is now a hypothesis. Apply the IH at the shrunk
+;;               segment (swap m i j, i+1, j-1) — its premise p < i+1 is
+;;               lt_succ_from_lt of the goal premise p < i — leaving
+;;               (read (swap m i j) p), which read_swap_below collapses
+;;               to (read m p) using p < i (premise) and i < j (the
+;;               case hypothesis).
+;; This is the structural-induction-plus-discharge proof the whole
+;; framing + ord + farkas stack was built to enable.
+;; ---------------------------------------------------------------------------
+
+(claim rev_loop_untouched_below
+  (Goal
+    (list (Param 'm (ty Map Int))
+          (Param 'i (ty Int))
+          (Param 'j (ty Int))
+          (Param 'p (ty Int))
+          (Param 'k (ty Nat)))
+    (list (Equation (Call 'lt (list (FVar 'p) (FVar 'i))) (Ctor 'True (list))))
+    (Equation
+      (Call 'read (list (Call 'rev_loop (list (FVar 'm) (FVar 'i) (FVar 'j) (FVar 'k)))
+                        (FVar 'p)))
+      (Call 'read (list (FVar 'm) (FVar 'p)))))
+  (Induct 'k
+    (list
+      (Case 'Z
+        (Steps (list (Simp Lhs)) Refl))
+      (Case 'S
+        ;; Lhs: (read (rev_loop m i j (S k2)) p). Unfold one loop step.
+        (Steps (list (Simp Lhs))     ; → (read (if (lt i j) (rev_loop (swap m i j) (i+1) (j-1) k2) m) p)
+          (CaseOn (Call 'lt (list (FVar 'i) (FVar 'j))) 'Bool
+            (list
+              ;; guard False — pointers crossed, loop is the identity.
+              (Case 'False
+                (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))   ; (lt i j) → False
+                             (Simp Lhs))                            ; if False → m → (read m p)
+                       Refl))
+              ;; guard True — i < j is Hyp 0; IH is Hyp 1.
+              (Case 'True
+                (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))   ; (lt i j) → True
+                             (Simp Lhs))                            ; if True → (read (rev_loop (swap m i j) (i+1) (j-1) k2) p)
+                  ;; Apply the IH at the shrunk segment; its premise is p < i+1.
+                  (RewriteWith (Hyp 1) Lr Lhs (list)
+                    (list
+                      (RewriteWith (Lemma 'lt_succ_from_lt) Lr Lhs (list)
+                        (list (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl))
+                        Refl))
+                    ;; Now (read (swap m i j) p): peel the swap (p below the range).
+                    (RewriteWith (Lemma 'read_swap_below) Lr Lhs (list)
+                      (list
+                        (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl)   ; (lt p i)=True
+                        (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))      ; (lt i j)=True
+                      Refl)))))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; CAPSTONE (stated, not yet proven) — mem_reverses:
@@ -243,7 +384,16 @@
 ;;      "representation alignment is death by a thousand lemmas". The
 ;;      open design question: how much of it the ord backend erases.
 ;;
-;; NEXT: state and prove the loop-invariant lemma (induction on the Nat
-;; counter k), the inductive heart that read_swap_* + ord + rev feed
-;; into. That is the dragon TRANSFER names; it gets its own slice.
+;; PROGRESS (slice 39): the loop-invariant induction WORKS — see
+;; rev_loop_untouched_below above (the below-the-range case), proven by
+;; induction on k with the guarded loop, the IH at the shrunk segment,
+;; and read_swap_below. This validates the whole approach end to end.
+;; REMAINING for the capstone:
+;;   - rev_loop_untouched_above (symmetric; p > j).
+;;   - rev_loop_mirror: a swapped position p ends up holding
+;;     (read m (i+j-p)) — the center i+j is recursion-invariant. This is
+;;     the substantive case (both swap ends + the middle).
+;;   - the list↔memory bridge: dump∘load = id, and dump-of-mirror = rev,
+;;     then instantiate at i=0, j=n-1, k=half(n) and discharge the
+;;     bound arithmetic via farkas.
 ;; ---------------------------------------------------------------------------

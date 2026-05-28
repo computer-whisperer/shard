@@ -40,15 +40,22 @@
 (fn swap ((m (Map Int)) (i Int) (j Int)) (Map Int)
   (write (write m i (read m j)) j (read m i)))
 
-;; rev_loop: swap ends inward, k times. k is the swap count (= n/2),
-;; a Nat so the recursion is structural (the address pair i,j are Ints
-;; with no structural decrease — the Nat counter carries termination).
-;; This counter is the loop's natural iteration bound, not a halting-
-;; fuel hack: floor(n/2) swaps reverse n cells.
+;; rev_loop: swap ends inward while i < j. The Nat counter k carries
+;; STRUCTURAL termination (the address pair i,j are Ints with no
+;; structural decrease); the `(lt i j)` GUARD carries CORRECTNESS —
+;; real work stops when the pointers cross, independent of k. Running
+;; with k = floor(n/2) reverses n cells; the guard makes a too-large k
+;; harmless (it just stops early). The guard is also what makes the
+;; loop-invariant proof clean: the recursive branch supplies `i < j`
+;; as a case hypothesis, so "position p < i is untouched" needs only
+;; p < i (no int_of_nat k bound arithmetic).
 (fn rev_loop ((m (Map Int)) (i Int) (j Int) (k Nat)) (Map Int)
   (match k
     (Z m)
-    ((S k2) (rev_loop (swap m i j) (+ i 1) (- j 1) k2))))
+    ((S k2)
+      (if (lt i j)
+          (rev_loop (swap m i j) (+ i 1) (- j 1) k2)
+          m))))
 
 ;; ---------------------------------------------------------------------------
 ;; Bridge functions — list ↔ linear memory. Used only to STATE the

@@ -39,7 +39,7 @@ PASS  plus_comm
 …
 PASS  lt_implies_neq
 
-37 passed, 0 failed
+42 passed, 0 failed
 ```
 
 The `check` binary loads the bundled kernel, then walks each
@@ -102,7 +102,7 @@ examples/              ; user modules + proof-script claim files
                        ;     lookup_insert_neq, insert_shadow + int_eq_refl
   mem_lib.sexp         ;   M3 linear memory = (Map Int): read/write/swap/rev_loop
   mem_lemmas.sexp      ;   M3 array framing (slice 34): read_write_eq/_neq,
-                       ;     read_swap_j + capstone statement (proof = WIP)
+                       ;     read_swap framing + rev_loop_untouched_below (slice 39)
   ord_basics.sexp      ;   order-reflection examples (slice 35): lt_succ, le_refl
   farkas_basics.sexp   ;   linear-entailment examples (slice 37): lt_succ_from_lt,
                        ;     le_trans, le_from_eq (premises ⊢ order conclusion)
@@ -151,7 +151,8 @@ Feature checklist (✓ = shipped in v2; → = next):
 | M3 linear-memory model + array framing  | ✓        | 34     |
 | `ord` theory (`lt`/`le` = True via LIA diff) | ✓   | 35     |
 | `farkas` theory (entailment + disequality, cert) | ✓ | 37,38 |
-| M3 capstone (`rev_loop ⊑ rev`, loop invariant) | →  |        |
+| M3 loop invariant — untouched-below case | ✓        | 39     |
+| M3 capstone (`rev_loop ⊑ rev`: mirror + bridge) | →  |        |
 | Polymorphic-key maps `(Map K V)`        | →        |        |
 | Defunctionalized higher-order           | →        |        |
 | Measure / well-founded recursion        | →        |        |
