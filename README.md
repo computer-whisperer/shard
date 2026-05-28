@@ -39,7 +39,7 @@ PASS  plus_comm
 …
 PASS  lt_implies_neq
 
-47 passed, 0 failed
+48 passed, 0 failed
 ```
 
 The `check` binary loads the bundled kernel, then walks each
@@ -57,7 +57,7 @@ Run the Rust test suite (loader, evaluator, kernel-from-rust mirrors):
 cargo test --release
 ```
 
-102 tests as of slice 38.
+104 tests as of slice 41.
 
 ## Repository layout
 
@@ -71,7 +71,7 @@ docs/
   REVISIT.md           ; design-decision ledger — every choice + when to
                        ;   revisit. The "why" lives here.
 
-kernel/                ; the trusted kernel, written in narrow (1,689 NCNB)
+kernel/                ; the trusted kernel, written in narrow (1,724 NCNB)
   stdlib.sexp          ;   List / Option / Pair / Bool
   term.sexp            ;   Expr / Pat / shift / subst / open_many / close_many
   reduce.sexp          ;   step / step_iota / step_smart (gated δ) / memo
@@ -89,7 +89,7 @@ src/                   ; the trusted-by-review Rust component
   eval.rs              ;   CBV evaluator; stuck-and-intercept for primitives
   prim.rs              ;   primitive table (+ - * mod, int_eq, gen_fresh, …)
   nval.rs              ;   narrow-value builders for tests
-  lib.rs               ;   loader entrypoint + Rust test suite (102 tests)
+  lib.rs               ;   loader entrypoint + Rust test suite (104 tests)
   bin/check.rs         ;   the `check` proof-script driver binary
 
 examples/              ; user modules + proof-script claim files
@@ -150,7 +150,7 @@ Feature checklist (✓ = shipped in v2; → = next):
 | Cross-module composition (`use-module` deps) | ✓   | 34     |
 | M3 linear-memory model + array framing  | ✓        | 34     |
 | `ord` theory (`lt`/`le` = True via LIA diff) | ✓   | 35     |
-| `farkas` theory (entailment + disequality, cert) | ✓ | 37,38 |
+| `farkas` theory (entailment: ≤/</≠/=, cert) | ✓ | 37,38,41 |
 | M3 loop invariant — untouched (below + above) | ✓     | 39,40  |
 | M3 capstone (`rev_loop ⊑ rev`: mirror + bridge) | →  |        |
 | Polymorphic-key maps `(Map K V)`        | →        |        |
@@ -283,7 +283,7 @@ the audit boundary visible at the kernel layer.
   guarding, ByTheory (LIA + eqdec + ord + farkas), Insts, finite maps (Int
   keys), and the M3 linear-memory model + array framing.
 - **Trusted core size:**
-  - Kernel narrow code: **1,689 NCNB** across 10 `kernel/*.sexp`.
+  - Kernel narrow code: **1,724 NCNB** across 10 `kernel/*.sexp`.
   - Rust trusted-by-review: **1,136 NCNB** across
     `ast.rs` + `eval.rs` + `load.rs` + `prim.rs` + `bin/check.rs`.
   - (Plus ~2,000 NCNB of Rust tests + builders in `lib.rs` + `nval.rs`

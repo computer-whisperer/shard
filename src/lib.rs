@@ -2773,6 +2773,53 @@ mod tests {
         assert_eq!(r, false_v());
     }
 
+    /// Build a two-sided farkas proof for an equality goal:
+    /// payload = (list le_mults ge_mults), each a raw-Int list.
+    fn farkas_pf_eq(le: Vec<i64>, ge: Vec<i64>) -> ast::Expr {
+        let mk = |v: Vec<i64>| list(v.into_iter().map(ast::Expr::IntLit).collect());
+        by_theory("farkas", cert("farkas", list(vec![mk(le), mk(ge)])))
+    }
+
+    /// Positive (slice 41 — EQUALITY conclusion): antisymmetry.
+    /// (le a b)=True, (le b a)=True ⊢ (int_eq a b)=True, two-sided.
+    #[test]
+    fn check_seq_farkas_eq_from_le_both() {
+        let m = load_kernel();
+        let int = tcon("Int", vec![]);
+        let seq = sequent(
+            vec![param("a", int.clone()), param("b", int)],
+            vec![],
+            vec![
+                equation(call("le", vec![fvar("a"), fvar("b")]), ctor_app("True", vec![])),
+                equation(call("le", vec![fvar("b"), fvar("a")]), ctor_app("True", vec![])),
+            ],
+            equation(call("int_eq", vec![fvar("a"), fvar("b")]), ctor_app("True", vec![])),
+        );
+        let r = run_check_sequent(&m,
+            module(vec![], vec![], vec![]),
+            theory_empty(), seq, farkas_pf_eq(vec![1, 1, 0], vec![1, 0, 1]));
+        assert_eq!(r, true_v());
+    }
+
+    /// Negative (slice 41, soundness): a single bound cannot prove
+    /// equality. (le a b)=True ⊬ (int_eq a b)=True — the b<=a direction
+    /// is not entailed, so its refutation can't cancel the variables.
+    #[test]
+    fn check_seq_farkas_rejects_eq_one_sided() {
+        let m = load_kernel();
+        let int = tcon("Int", vec![]);
+        let seq = sequent(
+            vec![param("a", int.clone()), param("b", int)],
+            vec![],
+            vec![equation(call("le", vec![fvar("a"), fvar("b")]), ctor_app("True", vec![]))],
+            equation(call("int_eq", vec![fvar("a"), fvar("b")]), ctor_app("True", vec![])),
+        );
+        let r = run_check_sequent(&m,
+            module(vec![], vec![], vec![]),
+            theory_empty(), seq, farkas_pf_eq(vec![1, 1], vec![1, 1]));
+        assert_eq!(r, false_v());
+    }
+
     // ------------------------------------------------------------------
     // Slice 21: commutativity of add_nat by lemma composition.
     //

@@ -36,17 +36,17 @@
 ;;;   2. The combination must canonicalize to a lone CONSTANT (all
 ;;;      variables cancel) that is strictly < 0.
 ;;;
-;;; Conclusions are order facts (`lt`/`le` = True) OR disequalities
-;;; (`int_eq a b` = False). A disequality goal is refuted by assuming
-;;; the EQUALITY `a = b` (`a - b = 0`, an any-sign constraint) and
-;;; combining it with the premises to a negative constant — e.g.
-;;; `(lt a b)=True ⊢ (int_eq a b)=False` (from a < b, a ≠ b), which is
-;;; what the M3 swap framing needs to turn loop bounds into the
-;;; `(int_eq p i)=False` premises read_swap_other consumes.
+;;; Conclusions handled:
+;;;   - order      `(lt|le a b) = True`  — single refutation of ¬goal.
+;;;   - disequality `(int_eq a b) = False` — refute the assumed equality
+;;;     a = b (an any-sign constraint); e.g. (lt a b)=True ⊢ a ≠ b.
+;;;   - equality   `(int_eq a b) = True`  — TWO-SIDED: prove a <= b AND
+;;;     b <= a (each its own Farkas refutation), so a = b over ℤ. The
+;;;     cert carries two multiplier lists: (list le_mults ge_mults).
+;;; The disequality and equality cases are what the M3 swap framing and
+;;; mirror index arithmetic need (e.g. i = j = p ⊢ i+j-p = p).
 ;;;
-;;; Scope / caveats (same family as lia): EQUALITY conclusions
-;;; (`a = b`) stay with lia (a tautology) or would need a two-sided
-;;; combination (future). Opaque
+;;; Scope / caveats (same family as lia): opaque
 ;;; atoms are assumed integer-typed (inherited from lia_collect). A
 ;;; premise that isn't a recognized linear (in)equality is usable only
 ;;; with multiplier 0; a nonzero multiplier on an uninterpretable
@@ -198,25 +198,73 @@
     (None False)
     ((Some total) (farkas_contradiction (lia_canonical total)))))
 
+;; One Farkas refutation given a multiplier list (G M0 M1 ...) and the
+;; negated-goal polynomial `ng` (an inequality `>= 0`, so GUARD 1 here
+;; requires the goal multiplier G nonnegative).
+(fn farkas_refute ((premises (List Equation)) (mults (List Int))
+                   (ng (List (Pair Int (Option Expr))))) Bool
+  (match mults
+    ((Cons goal_mult prem_mults)
+      (if (lt goal_mult 0)
+          False                                      ; GUARD 1: G must be >= 0
+          (farkas_finish premises prem_mults ng goal_mult)))
+    (_ False)))
+
+;; Single-sided goals — order (lt/le = True) or disequality
+;; (int_eq = False). Here the negated goal may be an inequality (G
+;; nonneg) or an equality (G any sign), so the guard is conditional.
+(fn farkas_check_single ((premises (List Equation)) (goal Equation)
+                         (payload Expr)) Bool
+  (match payload
+    ((Cons goal_mult prem_mults)
+      (match (neg_goal_poly goal)
+        (None False)                                 ; not an order/diseq conclusion
+        ((Some (Pair ng goal_needs_nonneg))
+          (if goal_needs_nonneg
+              (if (lt goal_mult 0)
+                  False                              ; GUARD 1 (inequality negation)
+                  (farkas_finish premises prem_mults ng goal_mult))
+              (farkas_finish premises prem_mults ng goal_mult)))))
+    (_ False)))
+
+;; Equality conclusion (int_eq a b) = True: prove a <= b AND b <= a,
+;; each a Farkas refutation (¬(a<=b) = a-b-1 >= 0; ¬(b<=a) = b-a-1 >= 0).
+;; Both holding gives a = b over ℤ. payload = (list le_mults ge_mults).
+(fn farkas_check_eq ((premises (List Equation)) (a Expr) (b Expr)
+                     (payload Expr)) Bool
+  (match payload
+    ((Cons le_mults (Cons ge_mults _))
+      (if (farkas_refute premises le_mults (poly_minus1 (poly_sub a b)))
+          (farkas_refute premises ge_mults (poly_minus1 (poly_sub b a)))
+          False))
+    (_ False)))                                      ; payload not a 2-list
+
+;; Goal is (int_eq a b) = True?
+(fn farkas_is_eq_true_goal ((f Symbol) (rhs Expr)) Bool
+  (if (sym_eq f (quote int_eq))
+      (match rhs
+        ((Ctor tn _) (sym_eq tn (quote True)))
+        (_ False))
+      False))
+
 ;; ---------------------------------------------------------------------------
-;; Entry point. cert payload = (list G M0 M1 ...): G is the negated-goal
-;; multiplier, Mk the premise-k multipliers (aligned, in order).
+;; Entry point. Dispatch on the goal shape: an (int_eq a b)=True
+;; conclusion takes the two-sided equality path (payload = two
+;; multiplier lists); everything else is single-sided (payload =
+;; one list (G M0 M1 ...)).
 ;; ---------------------------------------------------------------------------
 
 (fn farkas_check ((premises (List Equation)) (goal Equation) (cert Cert)) Bool
   (match cert
     ((Cert _ payload)
-      (match payload
-        ((Cons goal_mult prem_mults)
-          (match (neg_goal_poly goal)
-            (None False)                             ; goal not an order/diseq conclusion
-            ((Some (Pair ng goal_needs_nonneg))
-              ;; GUARD 1 on the goal multiplier: required nonneg only
-              ;; when the negated goal is an inequality (lt/le goals);
-              ;; an int_eq=False goal negates to an EQUALITY, any sign.
-              (if goal_needs_nonneg
-                  (if (lt goal_mult 0)
-                      False
-                      (farkas_finish premises prem_mults ng goal_mult))
-                  (farkas_finish premises prem_mults ng goal_mult)))))
-        (_ False)))))                                ; payload not a non-empty list
+      (match goal
+        ((Equation lhs rhs)
+          (match lhs
+            ((Call f args)
+              (match args
+                ((Cons a (Cons b Nil))
+                  (if (farkas_is_eq_true_goal f rhs)
+                      (farkas_check_eq premises a b payload)
+                      (farkas_check_single premises goal payload)))
+                (_ (farkas_check_single premises goal payload))))
+            (_ (farkas_check_single premises goal payload))))))))

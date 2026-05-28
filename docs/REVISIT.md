@@ -331,7 +331,13 @@ is where to start when planning v3.
   place to add strict/non-strict mixing or `(lt a b) = False` ⟺
   `(le b a) = True` if a proof needs the negated form.
 
-### `farkas` — linear-integer entailment via certificate (slice 37, 38)
+### `farkas` — linear-integer entailment via certificate (slice 37, 38, 41)
+- **Slice 41 extension:** also decides EQUALITY conclusions
+  `premises ⊢ (int_eq a b) = True`, two-sided — prove `a <= b` AND
+  `b <= a`, each its own Farkas refutation (reusing farkas_refute /
+  farkas_finish). Cert payload becomes a pair of multiplier lists
+  `(list le_mults ge_mults)`. Sound over ℤ (antisymmetry); the M3
+  mirror index arithmetic (e.g. `i = j = p ⊢ i+j-p = p`) needs it.
 - **Slice 38 extension:** also decides DISEQUALITY conclusions
   `premises ⊢ (int_eq a b) = False`, by negating to the equality
   `a = b` (an any-sign constraint) and refuting against the premises —

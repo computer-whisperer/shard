@@ -69,3 +69,17 @@
       (Call 'int_eq (list (FVar 'a) (FVar 'b)))
       (Ctor 'False (list))))
   (ByTheory 'farkas (Cert 'farkas (list 1 1))))
+
+;; ∀ a b. (le a b)=True, (le b a)=True ⊢ (int_eq a b)=True.  (antisymmetry)
+;; EQUALITY conclusion — two-sided. payload = (list le_mults ge_mults):
+;;   a<=b: ¬(a<=b)=a-b-1; 1·¬ + 1·(le a b)[b-a] = -1 < 0  → le_mults (1 1 0)
+;;   b<=a: ¬(b<=a)=b-a-1; 1·¬ + 1·(le b a)[a-b] = -1 < 0  → ge_mults (1 0 1)
+(claim eq_from_le_both
+  (Goal
+    (list (Param 'a (ty Int)) (Param 'b (ty Int)))
+    (list (Equation (Call 'le (list (FVar 'a) (FVar 'b))) (Ctor 'True (list)))
+          (Equation (Call 'le (list (FVar 'b) (FVar 'a))) (Ctor 'True (list))))
+    (Equation
+      (Call 'int_eq (list (FVar 'a) (FVar 'b)))
+      (Ctor 'True (list))))
+  (ByTheory 'farkas (Cert 'farkas (list (list 1 1 0) (list 1 0 1)))))
