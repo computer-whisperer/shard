@@ -1014,6 +1014,53 @@
                      (Simp Rhs))
           Refl)))))
 
+;; two more lia index tautologies for the flip's recursion-shape glue.
+(claim reassoc_succ
+  (Goal (list (Param 'b (ty Int)) (Param 'y (ty Int))) (list)
+    (Equation
+      (Call '- (list (Call '+ (list (FVar 'b) (Call '+ (list (IntLit 1) (FVar 'y))))) (IntLit 1)))
+      (Call '- (list (Call '+ (list (Call '+ (list (FVar 'b) (IntLit 1))) (FVar 'y))) (IntLit 1)))))
+  (ByTheory 'lia (Cert 'lia (list))))
+
+(claim idx_cancel
+  (Goal (list (Param 'b (ty Int)) (Param 'y (ty Int))) (list)
+    (Equation
+      (Call '- (list (Call '- (list (Call '+ (list (Call '+ (list (FVar 'b) (IntLit 1))) (FVar 'y)))
+                                    (IntLit 1)))
+                     (FVar 'y)))
+      (FVar 'b)))
+  (ByTheory 'lia (Cert 'lia (list))))
+
+;; rev_dump_rdump: the front/back flip. rev (dump base cnt A) =
+;; rdump (base+cnt-1) cnt A — reading forward then reversing equals
+;; reading backward from the top. Induction on cnt: the S case Simps the
+;; LHS (rev unfolds to append … [read A base]), applies the IH to the
+;; inner rev, then on the RHS unfolds int_of_nat(S c), reassociates the
+;; top index (reassoc_succ), snocs via rdump_snoc, and cancels the tail
+;; index (idx_cancel) so both sides are append (rdump … c A) [read A base].
+(claim rev_dump_rdump
+  (Goal
+    (list (Param 'base (ty Int)) (Param 'cnt (ty Nat)) (Param 'A (ty Map Int)))
+    (list)
+    (Equation
+      (Call 'rev (list (Call 'dump (list (FVar 'base) (FVar 'cnt) (FVar 'A)))))
+      (Call 'rdump (list (Call '- (list (Call '+ (list (FVar 'base)
+                                                       (Call 'int_of_nat (list (FVar 'cnt)))))
+                                        (IntLit 1)))
+                         (FVar 'cnt) (FVar 'A)))))
+  (Induct 'cnt
+    (list
+      (Case 'Z (Steps (list (Simp Both)) Refl))
+      (Case 'S
+        (Steps (list (Simp Lhs)                                   ; append (rev (dump (base+1) c A)) [read A base]
+                     (Rewrite (Hyp 0) Lr Lhs False (list))        ; inner rev → rdump IDX1 c A
+                     (Unfold 'int_of_nat Rhs)                     ; expose int_of_nat(S c)
+                     (Reduce Rhs)                                 ; → (+ 1 (int_of_nat c))
+                     (Rewrite (Lemma 'reassoc_succ) Lr Rhs True (list))   ; top idx → IDX1
+                     (Rewrite (Lemma 'rdump_snoc) Lr Rhs False (list))    ; rdump IDX1 (S c) A → append … [read A (IDX1 - c)]
+                     (Rewrite (Lemma 'idx_cancel) Lr Rhs True (list)))    ; (IDX1 - c) → base
+          Refl)))))
+
 ;; ---------------------------------------------------------------------------
 ;; CAPSTONE (stated, not yet proven) — mem_reverses:
 ;;
