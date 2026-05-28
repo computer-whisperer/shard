@@ -273,26 +273,52 @@ is where to start when planning v3.
   certificate format (e.g., one wants opaque binary blobs); promote
   the payload to a more general carrier.
 
-### RewriteWith — single-match only, no Insts (v2)
-- **Chose (slice 27):** the conditional rewrite proof step lands with
-  two restrictions:
+### RewriteWith — single-match only (Insts shipped slice 32)
+- **Chose (slice 27):** the conditional rewrite proof step landed
+  with two restrictions:
     - Match is **single-occurrence only**. There's no `all_occ`
       variant. Even with `Both`, the kernel takes the first match
       (lhs preferred) and produces a single binding env; rhs is
       consulted only if lhs has no match.
-    - Non-Nil `(List Inst)` is rejected (`False`), mirroring the
-      unconditional Rewrite Step's stance.
-- **Why now:** multi-match mode would require a per-site env in the
-  proof cert (`(List (List Proof))` instead of `(List Proof)`),
-  which is a non-trivial grammar change. Inst pre-instantiation is
-  an orthogonal feature that wants its own slice. Both restrictions
-  let RewriteWith ship as a clean ~140 lines of narrow without
-  re-litigating those design corners.
+    - Non-Nil `(List Inst)` was rejected (`False`).
+- **Updated (slice 32):** Insts pre-instantiation now works in both
+  Rewrite and RewriteWith. The single-match-only restriction
+  remains; see "Insts pre-instantiation" below for the Insts
+  mechanism.
 - **Revisit when:** a real proof needs to rewrite multiple
   occurrences of a conditional pattern in one step (rare in
   practice — most authoring threads the rewrite into a Steps
-  prefix), or when pre-instantiation becomes necessary for
-  partially-matchable conclusions.
+  prefix).
+
+### Insts pre-instantiation (slice 32)
+- **Chose (slice 32):** an `(Inst NAME EXPR)` in a Rewrite or
+  RewriteWith step pre-instantiates one of the cited Goal's
+  ∀-binders before the conclusion pattern match runs. The kernel's
+  `split_params_by_insts` walks cited_params in introduction order;
+  each param is either pinned by an Inst (binding = the Inst's
+  Expr) or left for capture-matching (binding = fresh FVar,
+  added to pat_vars).
+- **Why now:** without Insts, citing a lemma whose pattern can't
+  cover all its ∀-binders was impossible — the rewriter would
+  substitute the cited equation with fresh FVars that never
+  appeared in the goal. Concrete blocker: lemmas with a "pivot"
+  binder appearing only on the RHS (e.g., the LIA identity
+  `∀ pivot a. a = (a - pivot) + pivot` in `examples/lia_basics.sexp`
+  — `pivot` is invisible to the LHS pattern, so the user must
+  pin it). Unblocks the natural transitivity-shaped lemma
+  pattern that was on the v2 deferred list.
+- **Validation:** `all_insts_named` rejects an Inst that names a
+  Param not in cited_params (returns None / False). Duplicates
+  within Insts are first-match-wins via `find_inst` — later
+  duplicates are silently ignored. Could tighten to "reject
+  duplicates" if it becomes an authoring footgun.
+- **Cost:** ~40 NCNB in `check.sexp` (three helpers + reworked
+  Rewrite / RewriteWith arms). Kernel growth.
+- **Revisit if:** Insts ergonomics need more polish (e.g.,
+  positional Insts instead of by-name; or scope-checking against
+  declared tparams). The by-name form is more verbose but
+  unambiguous, matching Rust's `Foo::<T = Bar>` rather than
+  `Foo<Bar>`.
 
 ### Open-vs-closed Goal forms (binary's storage convention)
 - **State (slice 27):** the kernel uses two conventions for the

@@ -45,3 +45,40 @@
               (FVar 'x)))
       (IntLit 1)))
   (ByTheory 'lia (Cert 'lia (list))))
+
+;; ---------------------------------------------------------------------------
+;; Slice 32 demo — Insts pre-instantiation.
+;;
+;; The lemma `pad_with_pivot` states ∀ pivot a : Int. a = (a - pivot) + pivot.
+;; LIA decides it as a polynomial identity. Its LHS is just `a`, so the
+;; rewriter's conclusion-match path can pin `a` from any goal LHS but
+;; the `pivot` ∀-binder is invisible to the match. The only way to cite
+;; this lemma is with an Inst that pre-instantiates pivot.
+;; ---------------------------------------------------------------------------
+
+(claim pad_with_pivot
+  (Goal
+    (list (Param 'pivot (ty Int))
+          (Param 'a     (ty Int)))
+    (list)
+    (Equation
+      (FVar 'a)
+      (Call '+ (list (Call '- (list (FVar 'a) (FVar 'pivot)))
+                     (FVar 'pivot)))))
+  (ByTheory 'lia (Cert 'lia (list))))
+
+;; Cite pad_with_pivot Lr Lhs at goal 5 = (5 - 3) + 3, pinning pivot := 3.
+;; Without (Inst 'pivot (IntLit 3)) the rewriter would substitute `pivot`
+;; with an FVar that never appears in the goal, leaving the equation
+;; structurally non-equal. With the Inst, the substituted RHS exactly
+;; matches the goal's RHS, and Refl closes.
+(claim pad_5_with_3
+  (Goal (list) (list)
+    (Equation
+      (IntLit 5)
+      (Call '+ (list (Call '- (list (IntLit 5) (IntLit 3)))
+                     (IntLit 3)))))
+  (Steps
+    (list (Rewrite (Lemma 'pad_with_pivot) Lr Lhs True
+                   (list (Inst 'pivot (IntLit 3)))))
+    Refl))

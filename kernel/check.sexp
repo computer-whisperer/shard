@@ -145,36 +145,36 @@
       ;;      rewritten sequent.
       ;;
       ;; v2 limitations (documented in REVISIT):
-      ;;   - non-Nil Insts not supported (matches Rewrite's stance).
       ;;   - single match site only (no all-occurrences variant).
       ;;   - Both selector picks lhs match first, falls back to rhs.
-      (match insts
-        (Nil
-          (match (resolve_eq er seq th)
-            (None False)
-            ((Some g)
-              (match g
-                ((Goal cited_params cited_premises cited_eq)
-                  (let ((pat_var_names (fresh_syms_for_params cited_params)))
-                    (let ((opening_fvars (reverse_exprs
-                                           (syms_to_fvars pat_var_names))))
-                      (let ((opened_eq (open_eq_with opening_fvars cited_eq))
-                            (opened_premises
-                              (open_eqs_with opening_fvars cited_premises)))
-                        (match seq
-                          ((Sequent s_params s_hyps s_premises goal_eq)
-                            (match (apply_rewrite_with_env
-                                     pat_var_names opened_eq dir side goal_eq)
-                              (None False)
-                              ((Some (Pair env new_eq))
-                                (if (check_premise_proofs
-                                       m th s_params s_hyps s_premises
-                                       env opened_premises premise_proofs)
-                                    (check_sequent m th
-                                      (Sequent s_params s_hyps s_premises new_eq)
-                                      rest)
-                                    False)))))))))))))
-        (_ False)))                                   ; non-Nil insts
+      ;; Insts pre-instantiate cited ∀-binders before the match, same
+      ;; mechanism as Rewrite's Inst path (slice 32).
+      (match (resolve_eq er seq th)
+        (None False)
+        ((Some g)
+          (match g
+            ((Goal cited_params cited_premises cited_eq)
+              (if (all_insts_named insts cited_params)
+                  (match (split_params_by_insts cited_params insts)
+                    ((Pair openings pat_var_names)
+                      (let ((opening_fvars (reverse_exprs openings)))
+                        (let ((opened_eq (open_eq_with opening_fvars cited_eq))
+                              (opened_premises
+                                (open_eqs_with opening_fvars cited_premises)))
+                          (match seq
+                            ((Sequent s_params s_hyps s_premises goal_eq)
+                              (match (apply_rewrite_with_env
+                                       pat_var_names opened_eq dir side goal_eq)
+                                (None False)
+                                ((Some (Pair env new_eq))
+                                  (if (check_premise_proofs
+                                         m th s_params s_hyps s_premises
+                                         env opened_premises premise_proofs)
+                                      (check_sequent m th
+                                        (Sequent s_params s_hyps s_premises new_eq)
+                                        rest)
+                                      False)))))))))
+                  False))))))
 
     ((Absurd er)
       ;; Close the current goal from a contradictory in-scope equation.
@@ -248,29 +248,30 @@
                   (simp_side_eq m side eq))))))
     ((Rewrite er dir side all insts)
       ;; Pattern-variable Rewrite. The cited Goal's ∀-binders become
-      ;; capture variables: opened to fresh FVars in the equation,
-      ;; their names listed as `pat_vars` for expr_match to recognize.
-      ;; Premises must still be Nil (unconditional). insts not yet
-      ;; supported — RewriteWith handles conditional cases.
-      (match insts
-        (Nil
-          (match (resolve_eq er seq th)
-            (None None)
-            ((Some g)
-              (match g
-                ((Goal cited_params Nil cited_eq)
-                  (let ((pat_var_names (fresh_syms_for_params cited_params)))
-                    (let ((opening_fvars (reverse_exprs (syms_to_fvars pat_var_names))))
-                      (let ((opened_eq (open_eq_with opening_fvars cited_eq)))
-                        (match seq
-                          ((Sequent s_params hyps premises goal_eq)
-                            (match (apply_rewrite pat_var_names opened_eq
-                                                  dir side all goal_eq)
-                              ((Some new_eq)
-                                (Some (Sequent s_params hyps premises new_eq)))
-                              (None None))))))))
-                (_ None)))))                              ;; non-Nil premises
-        (_ None)))))                                       ;; non-Nil insts
+      ;; capture variables (fresh FVars listed in pat_vars) unless
+      ;; pre-instantiated by an Inst — those binders are pinned to a
+      ;; user-supplied Expr before the conclusion match runs.
+      ;; Premises must still be Nil (unconditional). RewriteWith
+      ;; handles the conditional case.
+      (match (resolve_eq er seq th)
+        (None None)
+        ((Some g)
+          (match g
+            ((Goal cited_params Nil cited_eq)
+              (if (all_insts_named insts cited_params)
+                  (match (split_params_by_insts cited_params insts)
+                    ((Pair openings pat_var_names)
+                      (let ((opening_fvars (reverse_exprs openings)))
+                        (let ((opened_eq (open_eq_with opening_fvars cited_eq)))
+                          (match seq
+                            ((Sequent s_params hyps premises goal_eq)
+                              (match (apply_rewrite pat_var_names opened_eq
+                                                    dir side all goal_eq)
+                                ((Some new_eq)
+                                  (Some (Sequent s_params hyps premises new_eq)))
+                                (None None))))))))
+                  None))
+            (_ None)))))))                                  ;; non-Nil premises
 
 ;; Drive simp_expr (full δ+ι) on the chosen side(s) of an equation.
 ;; Used by apply_step's `Simp` arm.
@@ -829,6 +830,59 @@
   (match ss
     (Nil Nil)
     ((Cons s rest) (Cons (FVar s) (syms_to_fvars rest)))))
+
+;; ---------------------------------------------------------------------------
+;; Inst-processing helpers (slice 32).
+;;
+;; An `Inst NAME EXPR` pre-instantiates one of a cited Goal's ∀-vars
+;; before the conclusion pattern match runs. Unblocks citations where
+;; the LHS pattern can't infer some ∀-binder (e.g., a "pivot" var that
+;; appears only on the RHS, or any binder the match would leave free).
+;;
+;; The Rewrite / RewriteWith arms use `split_params_by_insts` to walk
+;; the cited Goal's Params in introduction order; for each Param, the
+;; binding is either:
+;;   - the user-supplied Inst value (if an Inst names this Param), or
+;;   - a fresh FVar (otherwise — these names become pat_vars for the
+;;     ordinary capture-matching path).
+;;
+;; Validation: `all_insts_named` rejects Insts that name a Param not
+;; present in the cited Goal. Duplicates within Insts are first-match-
+;; wins via `find_inst`; later duplicates are silently ignored.
+;; ---------------------------------------------------------------------------
+
+(fn find_inst ((name Symbol) (insts (List Inst))) (Option Expr)
+  (match insts
+    (Nil None)
+    ((Cons (Inst iname ival) rest)
+      (if (sym_eq iname name) (Some ival) (find_inst name rest)))))
+
+(fn all_insts_named ((insts (List Inst)) (cited_params (List Param))) Bool
+  (match insts
+    (Nil True)
+    ((Cons (Inst iname _) rest)
+      (match (find_param iname cited_params)
+        (None False)
+        ((Some _) (all_insts_named rest cited_params))))))
+
+;; Returns (openings, pat_var_names). openings is in INTRODUCTION
+;; ORDER — caller reverses before passing to open_many. pat_var_names
+;; contains only the fresh-FVar names; Insts-bound params contribute
+;; no pat_var (their binders are already pinned, not captured).
+(fn split_params_by_insts ((cited_params (List Param)) (insts (List Inst)))
+                           (Pair (List Expr) (List Symbol))
+  (match cited_params
+    (Nil (Pair Nil Nil))
+    ((Cons (Param pname _) rest)
+      (match (split_params_by_insts rest insts)
+        ((Pair rest_openings rest_pvs)
+          (match (find_inst pname insts)
+            ((Some val)
+              (Pair (Cons val rest_openings) rest_pvs))
+            (None
+              (let ((fresh (gen_fresh)))
+                (Pair (Cons (FVar fresh) rest_openings)
+                      (Cons fresh rest_pvs))))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; open_goal: enter a Goal as a Sequent. Display names are used directly

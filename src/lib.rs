@@ -1235,12 +1235,12 @@ mod tests {
         assert_eq!(r, false_v());
     }
 
-    /// Non-empty insts not yet supported. Premise `(FVar x) = True`,
-    /// proof tries to rewrite with `[(Inst y True)]` (which would
-    /// pre-instantiate a ∀-var that doesn't exist on a ground eq
-    /// anyway). v2 rejects rather than silently ignoring.
+    /// Insts naming a nonexistent ∀-var must be rejected. The cited
+    /// premise here is a ground equation (no ∀-binders), so any Inst
+    /// names a name not in cited_params — rejected by all_insts_named.
+    /// Negative regression for the validation path.
     #[test]
-    fn check_seq_rewrite_insts_not_supported() {
+    fn check_seq_rewrite_insts_unknown_name_rejected() {
         let m = load_kernel();
         let mod_v = bool_module();
         let seq = sequent(
@@ -2656,12 +2656,21 @@ mod tests {
     /// Non-Nil Insts is rejected in v2 (mirrors the unconditional
     /// Rewrite Step's restriction).
     #[test]
-    fn check_seq_rewrite_with_insts_unsupported() {
+    /// RewriteWith with an Inst that pre-instantiates the cited ∀-var
+    /// to a concrete value. Goal `(add_nat (S Z) Z) = (S Z)`; cite
+    /// the polymorphic axiom `∀ a. (add_nat a Z) = a` with the Inst
+    /// pinning a := (S Z). After Inst, the conclusion is the literal
+    /// goal LHS, so the Rewrite Lr Lhs fires trivially.
+    ///
+    /// This is the canonical Insts pattern: skip the pattern-match
+    /// inference and pin the ∀-binder directly.
+    #[test]
+    fn check_seq_rewrite_with_insts_pin_pivot() {
         let m = load_kernel();
         let mod_v = nat_module();
         let cond_goal = goal(
             vec![param("a", tcon("Nat", vec![]))],
-            vec![],   // no premises — keep this test focused
+            vec![],
             equation(
                 call("add_nat", vec![bvar(0), ctor_app("Z", vec![])]),
                 bvar(0),
@@ -2676,18 +2685,17 @@ mod tests {
             vec![], vec![], vec![],
             equation(
                 call("add_nat", vec![sz.clone(), ctor_app("Z", vec![])]),
-                sz,
+                sz.clone(),
             ),
         );
-        // Supplying an Inst should be rejected by the v2 arm.
         let pf = rewrite_with(
             er_lemma("uncond_lemma"), dir_lr(), side_lhs(),
-            vec![inst("a", ctor_app("S", vec![ctor_app("Z", vec![])]))],
-            vec![],
+            vec![inst("a", sz)],
+            vec![],  // no premises on the cited axiom
             refl(),
         );
         let r = run_check_sequent(&m, mod_v, th, seq, pf);
-        assert_eq!(r, false_v());
+        assert_eq!(r, true_v());
     }
 
     /// Slice 29 isolation test — Rust mirror of examples/list_lemmas.sexp's
