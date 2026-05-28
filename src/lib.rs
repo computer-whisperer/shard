@@ -1736,4 +1736,148 @@ mod tests {
         let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
         assert_eq!(r, false_v());
     }
+
+    // ------------------------------------------------------------------
+    // Slice 17: lemma citation via (Lemma name) EqRef.
+    //
+    // First runtime exercise of:
+    //   - lookup_lemma (in check.sexp) — walks a TheoryCons-shaped
+    //     accumulator looking for a named Proven or Axiom entry.
+    //   - resolve_eq's Lemma arm — returns the cited Goal.
+    //   - Building a non-empty Theory value (theory_cons + proven /
+    //     axiom) and threading it through check_sequent.
+    //
+    // Up to slice 16 every test passed `theory_empty()`. The Theory
+    // type and its citation path have existed since slice 4 but have
+    // never been driven runtime.
+    //
+    // V2 limitation (unchanged): cited Goal must be ground
+    // (Goal Nil Nil eq) for Rewrite to use it — same gate as the
+    // Premise / Hyp paths. ∀-binder capture in cited lemmas is the
+    // pattern-variable Rewrite slice.
+    // ------------------------------------------------------------------
+
+    /// Headline: cite a Proven lemma to rewrite the goal lhs.
+    ///   Theory: [Proven "double_5_is_10" (Goal Nil Nil ((double 5) = 10))]
+    ///   Goal:   (double 5) = 10
+    ///   Proof:  Rewrite (Lemma "double_5_is_10") Lr Lhs True []; Refl
+    /// After rewrite, lhs becomes 10; goal becomes 10 = 10; Refl closes.
+    #[test]
+    fn check_seq_cites_proven_lemma() {
+        let m = load_kernel();
+        let mod_v = double_module();
+        let lemma_goal = goal(
+            vec![], vec![],
+            equation(call("double", vec![intlit(5)]), intlit(10)),
+        );
+        let th = theory_cons(
+            proven("double_5_is_10", lemma_goal),
+            theory_empty(),
+        );
+        let seq = sequent(
+            vec![], vec![], vec![],
+            equation(call("double", vec![intlit(5)]), intlit(10)),
+        );
+        let pf = steps(
+            vec![rewrite(er_lemma("double_5_is_10"),
+                         dir_lr(), side_lhs(), bool_true(), vec![])],
+            refl(),
+        );
+        let r = run_check_sequent(&m, mod_v, th, seq, pf);
+        assert_eq!(r, true_v());
+    }
+
+    /// Lemma citation composes with Simp. Use the lemma to substitute
+    /// a sub-expression, then Simp computes the result.
+    ///   Theory: [Proven "double_5_is_10" ((double 5) = 10)]
+    ///   Goal:   (+ (double 5) 1) = 11
+    ///   Proof:  Rewrite Lemma Lr Lhs (replaces (double 5) -> 10);
+    ///           Simp Lhs (computes (+ 10 1) -> 11); Refl.
+    #[test]
+    fn check_seq_lemma_then_simp() {
+        let m = load_kernel();
+        let mod_v = double_module();
+        let lemma_goal = goal(
+            vec![], vec![],
+            equation(call("double", vec![intlit(5)]), intlit(10)),
+        );
+        let th = theory_cons(
+            proven("double_5_is_10", lemma_goal),
+            theory_empty(),
+        );
+        let seq = sequent(
+            vec![], vec![], vec![],
+            equation(
+                call("+", vec![call("double", vec![intlit(5)]), intlit(1)]),
+                intlit(11),
+            ),
+        );
+        let pf = steps(
+            vec![
+                rewrite(er_lemma("double_5_is_10"),
+                        dir_lr(), side_lhs(), bool_true(), vec![]),
+                simp(side_lhs()),
+            ],
+            refl(),
+        );
+        let r = run_check_sequent(&m, mod_v, th, seq, pf);
+        assert_eq!(r, true_v());
+    }
+
+    /// Negative: cite a lemma name that's not in the theory.
+    /// lookup_lemma walks the entire theory, returns None at
+    /// TheoryEmpty; resolve_eq returns None; Rewrite returns None;
+    /// Steps fails; result False.
+    #[test]
+    fn check_seq_rejects_unknown_lemma() {
+        let m = load_kernel();
+        let mod_v = double_module();
+        let lemma_goal = goal(
+            vec![], vec![],
+            equation(call("double", vec![intlit(5)]), intlit(10)),
+        );
+        let th = theory_cons(
+            proven("a_different_name", lemma_goal),
+            theory_empty(),
+        );
+        let seq = sequent(
+            vec![], vec![], vec![],
+            equation(call("double", vec![intlit(5)]), intlit(10)),
+        );
+        let pf = steps(
+            vec![rewrite(er_lemma("double_5_is_10"),    // not in theory
+                         dir_lr(), side_lhs(), bool_true(), vec![])],
+            refl(),
+        );
+        let r = run_check_sequent(&m, mod_v, th, seq, pf);
+        assert_eq!(r, false_v());
+    }
+
+    /// Axiom citation works the same as Proven. Both lookup_lemma
+    /// arms match on a sym_eq of the name and return the carried
+    /// Goal — the tag is just an audit marker (see BOUNDARIES.md).
+    #[test]
+    fn check_seq_cites_axiom() {
+        let m = load_kernel();
+        let mod_v = double_module();
+        let ax_goal = goal(
+            vec![], vec![],
+            equation(call("double", vec![intlit(5)]), intlit(10)),
+        );
+        let th = theory_cons(
+            axiom("double_5_is_10", ax_goal),
+            theory_empty(),
+        );
+        let seq = sequent(
+            vec![], vec![], vec![],
+            equation(call("double", vec![intlit(5)]), intlit(10)),
+        );
+        let pf = steps(
+            vec![rewrite(er_lemma("double_5_is_10"),
+                         dir_lr(), side_lhs(), bool_true(), vec![])],
+            refl(),
+        );
+        let r = run_check_sequent(&m, mod_v, th, seq, pf);
+        assert_eq!(r, true_v());
+    }
 }
