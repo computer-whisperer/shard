@@ -1257,4 +1257,90 @@ mod tests {
         let r = run_check_sequent(&m, module(vec![], vec![], vec![]), theory_empty(), seq, pf);
         assert_eq!(r, true_v());
     }
+
+    // ------------------------------------------------------------------
+    // Slice 13a: Induct — first runtime exercise of do_induct.
+    //
+    // do_induct + check_induct_cases + build_induct_subgoal + build_ihs
+    // + build_ih have existed since slice 4 but have never executed.
+    // First runs surface latent bugs.
+    //
+    // The smoke test proves `∀ n : Nat. n = n` by induction. Both
+    // sub-sequents reduce to syntactically-equal sides (Z = Z and
+    // (S _fresh0) = (S _fresh0)) so Refl closes each branch. The IH
+    // in the S case is built but unused — slice 13a validates
+    // construction, not IH consumption.
+    //
+    // Real inductive proofs that USE the IH (via Rewrite) come in a
+    // follow-up slice — they need user fns with match bodies, which
+    // requires more nval builders (Match, Arm, Pat).
+    // ------------------------------------------------------------------
+
+    /// Module containing just (type Nat (Z) (S Nat)).
+    fn nat_module() -> ast::Expr {
+        let nat_td = type_def("Nat", vec![], vec![
+            ctor_def("Z", vec![]),
+            ctor_def("S", vec![tcon("Nat", vec![])]),
+        ]);
+        module(vec![nat_td], vec![], vec![])
+    }
+
+    /// Smoke test: `∀ n : Nat. n = n` by Induction.
+    /// Z case: subgoal eq becomes (Z = Z), Refl closes.
+    /// S case: subgoal eq becomes ((S _fresh0) = (S _fresh0)), Refl closes.
+    /// Exercises every helper in do_induct's call chain.
+    #[test]
+    fn check_seq_induct_trivial_refl() {
+        let m = load_kernel();
+        let mod_v = nat_module();
+        let seq = sequent(
+            vec![param("n", tcon("Nat", vec![]))],
+            vec![], vec![],
+            equation(fvar("n"), fvar("n")),
+        );
+        let pf = induct("n", vec![
+            case_arm("Z", refl()),
+            case_arm("S", refl()),
+        ]);
+        let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
+        assert_eq!(r, true_v());
+    }
+
+    /// Inducting on a name that isn't in scope. find_param returns
+    /// None; do_induct returns False.
+    #[test]
+    fn check_seq_induct_var_not_in_params() {
+        let m = load_kernel();
+        let mod_v = nat_module();
+        let seq = sequent(
+            vec![param("n", tcon("Nat", vec![]))],
+            vec![], vec![],
+            equation(fvar("n"), fvar("n")),
+        );
+        let pf = induct("m", vec![                    // m, not n
+            case_arm("Z", refl()),
+            case_arm("S", refl()),
+        ]);
+        let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
+        assert_eq!(r, false_v());
+    }
+
+    /// Missing case for one ctor. check_induct_cases reaches the S
+    /// ctor, find_case returns None, returns False.
+    #[test]
+    fn check_seq_induct_missing_case() {
+        let m = load_kernel();
+        let mod_v = nat_module();
+        let seq = sequent(
+            vec![param("n", tcon("Nat", vec![]))],
+            vec![], vec![],
+            equation(fvar("n"), fvar("n")),
+        );
+        let pf = induct("n", vec![
+            case_arm("Z", refl()),
+            // S case missing
+        ]);
+        let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
+        assert_eq!(r, false_v());
+    }
 }

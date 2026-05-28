@@ -131,6 +131,13 @@ pub fn case_on(scrut: Expr, ty: &str, cases: Vec<Expr>) -> Expr {
     ctor("CaseOn", vec![scrut, Expr::SymLit(ty.into()), list(cases)])
 }
 
+/// (Induct var cases). `var` is a Symbol naming an in-scope ∀-bound
+/// param. The kernel splits per ctor of the param's type and adds
+/// one IH per recursive field.
+pub fn induct(var: &str, cases: Vec<Expr>) -> Expr {
+    ctor("Induct", vec![Expr::SymLit(var.into()), list(cases)])
+}
+
 /// (Case cname pf). One arm of a CaseOn or Induct.
 pub fn case_arm(cname: &str, pf: Expr) -> Expr {
     ctor("Case", vec![Expr::SymLit(cname.into()), pf])
