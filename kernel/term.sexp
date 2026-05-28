@@ -1,0 +1,353 @@
+;;; The narrow object language: term/pattern ADTs and the binder
+;;; operations the kernel needs.
+;;;
+;;; Variables come in two flavors (locally-nameless encoding):
+;;;
+;;;   FVar Symbol   — free variable, by name; survives in goal display
+;;;   BVar Int      — bound variable, 0-based de Bruijn index;
+;;;                   0 is the innermost enclosing binder
+;;;
+;;; Patterns introduce binders structurally; the body's BVars index
+;;; into them. Convention: for `(PCtor 'Cons (PVar PVar))`, the FIRST
+;;; PVar (head) becomes the outer binder (higher index) and the LAST
+;;; PVar (tail) becomes BVar 0. Bindings collected during a match
+;;; are stored innermost-first: `bindings[k]` corresponds to BVar k.
+;;;
+;;; The three traversal operations carried below — `shift`, `subst`,
+;;; `open_many` — are the locally-nameless cost. `subst` is the hot
+;;; path and is depth-free; the depth-tracking ones fire only when
+;;; the kernel deliberately enters or exits a binder.
+
+;; ---------------------------------------------------------------------------
+;; ADTs
+;; ---------------------------------------------------------------------------
+
+(type Expr
+  (FVar   Symbol)
+  (BVar   Int)
+  (Ctor   Symbol (List Expr))
+  (Call   Symbol (List Expr))
+  (Match  Expr (List Arm))
+  (Let    (List Expr) Expr)            ; bindings are RHSs; body sees them as BVars
+  (If     Expr Expr Expr)              ; reduces by True/False ctor; no binders
+  (IntLit Int)
+  (SymLit Symbol))
+
+(type Arm (Arm Pat Expr))
+
+(type Pat
+  (PVar)                               ; binds next BVar
+  (PCtor Symbol (List Pat))
+  (PInt  Int)
+  (PSym  Symbol))
+
+;; ---------------------------------------------------------------------------
+;; Environments: FVar -> Expr, association list.
+;; ---------------------------------------------------------------------------
+
+(type Env
+  (Empty)
+  (Bind Symbol Expr Env))
+
+(fn lookup ((x Symbol) (env Env)) (Option Expr)
+  (match env
+    (Empty None)
+    ((Bind y v rest)
+      (if (sym_eq x y)
+          (Some v)
+          (lookup x rest)))))
+
+;; ---------------------------------------------------------------------------
+;; Pattern arity: how many binders a pattern introduces.
+;; ---------------------------------------------------------------------------
+
+(fn pat_arity ((p Pat)) Int
+  (match p
+    ((PVar)         1)
+    ((PCtor _ pats) (pats_arity pats))
+    ((PInt _)       0)
+    ((PSym _)       0)))
+
+(fn pats_arity ((ps (List Pat))) Int
+  (match ps
+    (Nil 0)
+    ((Cons p rest) (+ (pat_arity p) (pats_arity rest)))))
+
+;; ---------------------------------------------------------------------------
+;; List-of-Expr helpers, specialized. In the full language these
+;; collapse to polymorphic `len` / `nth_opt`; here narrow eats the
+;; duplication (see REVISIT.md — Erased polymorphism in narrow).
+;; ---------------------------------------------------------------------------
+
+(fn len ((es (List Expr))) Int
+  (match es
+    (Nil 0)
+    ((Cons _ t) (+ 1 (len t)))))
+
+(fn nth_opt ((es (List Expr)) (k Int)) (Option Expr)
+  (match es
+    (Nil None)
+    ((Cons h t)
+      (if (int_eq k 0)
+          (Some h)
+          (nth_opt t (- k 1))))))
+
+;; ---------------------------------------------------------------------------
+;; shift: bump every free BVar (index >= cutoff) in e by `by`.
+;; Used when relocating a term under additional binders.
+;; ---------------------------------------------------------------------------
+
+(fn shift ((by Int) (cutoff Int) (e Expr)) Expr
+  (match e
+    ((BVar k)       (if (lt k cutoff) e (BVar (+ k by))))
+    ((FVar _)       e)
+    ((Ctor cn args) (Ctor cn (shift_list by cutoff args)))
+    ((Call f args)  (Call f (shift_list by cutoff args)))
+    ((Match s arms) (Match (shift by cutoff s)
+                           (shift_arms by cutoff arms)))
+    ((Let bs body)  (Let (shift_list by cutoff bs)
+                         (shift by (+ cutoff (len bs)) body)))
+    ((If c t e2)    (If (shift by cutoff c)
+                        (shift by cutoff t)
+                        (shift by cutoff e2)))
+    ((IntLit _) e)
+    ((SymLit _) e)))
+
+(fn shift_list ((by Int) (cutoff Int) (es (List Expr))) (List Expr)
+  (match es
+    (Nil Nil)
+    ((Cons h t) (Cons (shift by cutoff h) (shift_list by cutoff t)))))
+
+(fn shift_arms ((by Int) (cutoff Int) (arms (List Arm))) (List Arm)
+  (match arms
+    (Nil Nil)
+    ((Cons (Arm p body) rest)
+      (Cons (Arm p (shift by (+ cutoff (pat_arity p)) body))
+            (shift_arms by cutoff rest)))))
+
+;; ---------------------------------------------------------------------------
+;; subst: replace FVars by env's mapping. BVars unchanged; no depth
+;; tracking. Single-pass — env values are not themselves re-substituted
+;; (see REVISIT.md). Env values must be well-formed in the target
+;; context (no dangling BVars from a foreign scope).
+;; ---------------------------------------------------------------------------
+
+(fn subst ((env Env) (e Expr)) Expr
+  (match e
+    ((FVar x)
+      (match (lookup x env)
+        ((Some v) v)
+        (None     e)))
+    ((BVar _)       e)
+    ((Ctor cn args) (Ctor cn (subst_list env args)))
+    ((Call f args)  (Call f (subst_list env args)))
+    ((Match s arms) (Match (subst env s) (subst_arms env arms)))
+    ((Let bs body)  (Let (subst_list env bs) (subst env body)))
+    ((If c t e2)    (If (subst env c) (subst env t) (subst env e2)))
+    ((IntLit _) e)
+    ((SymLit _) e)))
+
+(fn subst_list ((env Env) (es (List Expr))) (List Expr)
+  (match es
+    (Nil Nil)
+    ((Cons h t) (Cons (subst env h) (subst_list env t)))))
+
+(fn subst_arms ((env Env) (arms (List Arm))) (List Arm)
+  (match arms
+    (Nil Nil)
+    ((Cons (Arm p body) rest)
+      (Cons (Arm p (subst env body))
+            (subst_arms env rest)))))
+
+;; ---------------------------------------------------------------------------
+;; open_many: simultaneously replace BVar(k) by bindings[k] for each k
+;; in [0, len bindings). Outer BVars (k >= len bindings) shift down by
+;; len bindings — their binders are gone after opening. Used to reduce
+;; a match arm into its outer context.
+;; ---------------------------------------------------------------------------
+
+(fn open_many ((bindings (List Expr)) (e Expr)) Expr
+  (open_many_at 0 bindings e))
+
+(fn open_many_at ((depth Int) (bindings (List Expr)) (e Expr)) Expr
+  (match e
+    ((BVar k)
+      (if (lt k depth)
+          e                                       ; bound inside e — keep
+          (match (nth_opt bindings (- k depth))
+            ((Some v) (shift depth 0 v))          ; value placed under `depth` binders
+            (None     (BVar (- k (len bindings))))))) ; outer binder, shifted by the opening
+    ((FVar _)       e)
+    ((Ctor cn args) (Ctor cn (open_many_list depth bindings args)))
+    ((Call f args)  (Call f (open_many_list depth bindings args)))
+    ((Match s arms) (Match (open_many_at depth bindings s)
+                           (open_many_arms depth bindings arms)))
+    ((Let bs body)  (Let (open_many_list depth bindings bs)
+                         (open_many_at (+ depth (len bs)) bindings body)))
+    ((If c t e2)    (If (open_many_at depth bindings c)
+                        (open_many_at depth bindings t)
+                        (open_many_at depth bindings e2)))
+    ((IntLit _) e)
+    ((SymLit _) e)))
+
+(fn open_many_list ((depth Int) (bindings (List Expr)) (es (List Expr))) (List Expr)
+  (match es
+    (Nil Nil)
+    ((Cons h t) (Cons (open_many_at depth bindings h)
+                      (open_many_list depth bindings t)))))
+
+(fn open_many_arms ((depth Int) (bindings (List Expr)) (arms (List Arm))) (List Arm)
+  (match arms
+    (Nil Nil)
+    ((Cons (Arm p body) rest)
+      (Cons (Arm p (open_many_at (+ depth (pat_arity p)) bindings body))
+            (open_many_arms depth bindings rest)))))
+
+;; ---------------------------------------------------------------------------
+;; close_many: the inverse of open_many. Replace each free FVar named
+;; in `names` with a BVar. Convention: names[k] becomes BVar k (so the
+;; list is innermost-first, matching open_many's bindings convention).
+;; Existing free BVars in e get shifted UP by (len names), making room
+;; for the new innermost binders.
+;; ---------------------------------------------------------------------------
+
+(fn close_many ((names (List Symbol)) (e Expr)) Expr
+  (close_many_at 0 names e))
+
+(fn close_many_at ((depth Int) (names (List Symbol)) (e Expr)) Expr
+  (match e
+    ((FVar x)
+      (match (find_index_sym x names 0)
+        ((Some k) (BVar (+ depth k)))
+        (None     e)))
+    ((BVar k)
+      (if (lt k depth)
+          e                                       ; bound inside e
+          (BVar (+ k (len_sym names)))))           ; outer BVar — shift up
+    ((Ctor cn args) (Ctor cn (close_many_list depth names args)))
+    ((Call f args)  (Call f (close_many_list depth names args)))
+    ((Match s arms) (Match (close_many_at depth names s)
+                           (close_many_arms depth names arms)))
+    ((Let bs body)  (Let (close_many_list depth names bs)
+                         (close_many_at (+ depth (len bs)) names body)))
+    ((If c t e2)    (If (close_many_at depth names c)
+                        (close_many_at depth names t)
+                        (close_many_at depth names e2)))
+    ((IntLit _) e)
+    ((SymLit _) e)))
+
+(fn close_many_list ((depth Int) (names (List Symbol)) (es (List Expr))) (List Expr)
+  (match es
+    (Nil Nil)
+    ((Cons h t) (Cons (close_many_at depth names h)
+                      (close_many_list depth names t)))))
+
+(fn close_many_arms ((depth Int) (names (List Symbol)) (arms (List Arm))) (List Arm)
+  (match arms
+    (Nil Nil)
+    ((Cons (Arm p body) rest)
+      (Cons (Arm p (close_many_at (+ depth (pat_arity p)) names body))
+            (close_many_arms depth names rest)))))
+
+;; List-of-Symbol helpers, specialized (no polymorphism in narrow).
+
+(fn find_index_sym ((x Symbol) (xs (List Symbol)) (k Int)) (Option Int)
+  (match xs
+    (Nil None)
+    ((Cons h t)
+      (if (sym_eq x h) (Some k) (find_index_sym x t (+ k 1))))))
+
+(fn len_sym ((xs (List Symbol))) Int
+  (match xs
+    (Nil 0)
+    ((Cons _ t) (+ 1 (len_sym t)))))
+
+;; ---------------------------------------------------------------------------
+;; Structural equality on Expr / Arm / Pat. Used by Refl and by anywhere
+;; the kernel compares two terms verbatim (e.g. checking a hypothesis
+;; matches what a step expects). Hand-written per ADT — see REVISIT.md
+;; (Erased polymorphism in narrow) for why narrow lacks polymorphic eq.
+;; ---------------------------------------------------------------------------
+
+(fn expr_eq ((a Expr) (b Expr)) Bool
+  (match a
+    ((FVar xa)
+      (match b ((FVar xb) (sym_eq xa xb)) (_ False)))
+    ((BVar ia)
+      (match b ((BVar ib) (int_eq ia ib)) (_ False)))
+    ((Ctor ca aa)
+      (match b
+        ((Ctor cb ab)
+          (if (sym_eq ca cb) (expr_eq_list aa ab) False))
+        (_ False)))
+    ((Call fa aa)
+      (match b
+        ((Call fb ab)
+          (if (sym_eq fa fb) (expr_eq_list aa ab) False))
+        (_ False)))
+    ((Match sa arms_a)
+      (match b
+        ((Match sb arms_b)
+          (if (expr_eq sa sb) (arm_eq_list arms_a arms_b) False))
+        (_ False)))
+    ((Let bs_a body_a)
+      (match b
+        ((Let bs_b body_b)
+          (if (expr_eq_list bs_a bs_b) (expr_eq body_a body_b) False))
+        (_ False)))
+    ((If ca ta ea)
+      (match b
+        ((If cb tb eb)
+          (if (expr_eq ca cb)
+              (if (expr_eq ta tb) (expr_eq ea eb) False)
+              False))
+        (_ False)))
+    ((IntLit na)
+      (match b ((IntLit nb) (int_eq na nb)) (_ False)))
+    ((SymLit sa)
+      (match b ((SymLit sb) (sym_eq sa sb)) (_ False)))))
+
+(fn expr_eq_list ((xs (List Expr)) (ys (List Expr))) Bool
+  (match xs
+    (Nil (match ys (Nil True) (_ False)))
+    ((Cons x xrest)
+      (match ys
+        (Nil False)
+        ((Cons y yrest)
+          (if (expr_eq x y) (expr_eq_list xrest yrest) False))))))
+
+(fn arm_eq ((a Arm) (b Arm)) Bool
+  (match a
+    ((Arm pa ba)
+      (match b
+        ((Arm pb bb)
+          (if (pat_eq pa pb) (expr_eq ba bb) False))))))
+
+(fn arm_eq_list ((xs (List Arm)) (ys (List Arm))) Bool
+  (match xs
+    (Nil (match ys (Nil True) (_ False)))
+    ((Cons x xrest)
+      (match ys
+        (Nil False)
+        ((Cons y yrest)
+          (if (arm_eq x y) (arm_eq_list xrest yrest) False))))))
+
+(fn pat_eq ((a Pat) (b Pat)) Bool
+  (match a
+    ((PVar)    (match b ((PVar) True) (_ False)))
+    ((PInt na) (match b ((PInt nb) (int_eq na nb)) (_ False)))
+    ((PSym sa) (match b ((PSym sb) (sym_eq sa sb)) (_ False)))
+    ((PCtor ca pa)
+      (match b
+        ((PCtor cb pb)
+          (if (sym_eq ca cb) (pat_eq_list pa pb) False))
+        (_ False)))))
+
+(fn pat_eq_list ((xs (List Pat)) (ys (List Pat))) Bool
+  (match xs
+    (Nil (match ys (Nil True) (_ False)))
+    ((Cons x xrest)
+      (match ys
+        (Nil False)
+        ((Cons y yrest)
+          (if (pat_eq x y) (pat_eq_list xrest yrest) False))))))

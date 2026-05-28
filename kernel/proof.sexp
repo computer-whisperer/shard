@@ -1,0 +1,125 @@
+;;; Proof certificate language: what the kernel checks. The shape is
+;;; equational throughout — every claim is a conditional ∀-equation,
+;;; every step transforms a sequent, and `Refl` closes when both
+;;; sides are syntactically equal.
+;;;
+;;; Authored proof scripts (tactics) live ABOVE this layer and emit
+;;; certificates of this shape; the kernel only sees certificates.
+;;;
+;;; Goals and equations are locally-nameless: bound vars carry display
+;;; names on the binder; bodies refer to them as BVar indices. The
+;;; kernel opens binders to fresh FVars when entering a sequent.
+
+;; ---------------------------------------------------------------------------
+;; Equations and goals
+;; ---------------------------------------------------------------------------
+
+(type Equation
+  (Equation Expr Expr))                   ; lhs = rhs
+
+;; A bound-variable binding: display name + type. Same type used both
+;; for ∀-bound vars in a Goal and for opened FVars in a Sequent.
+(type Param (Param Symbol Type))
+
+(type Goal
+  (Goal
+    (List Param)                          ; ∀-bound vars (name + type, intro order)
+    (List Equation)                       ; conditional premises
+    Equation))                            ; the equation to prove
+;;
+;; Convention: Goal's `(List Param)` is in introduction order
+;; (outermost first). BVars in the body/premises are innermost-first,
+;; so BVar 0 refers to the LAST Param in the list and BVar (len-1)
+;; refers to the first. This matches the term-language pattern-
+;; binding convention (last PVar in a pattern is the innermost binder).
+
+;; ---------------------------------------------------------------------------
+;; Selectors: which side of the goal a step acts on, which direction a
+;; rewrite goes, and which equation it cites.
+;; ---------------------------------------------------------------------------
+
+(type Side
+  (Lhs)
+  (Rhs)
+  (Both))
+
+(type Dir
+  (Lr)                                    ; replace match of fact.lhs by fact.rhs
+  (Rl))                                   ; replace match of fact.rhs by fact.lhs
+
+(type EqRef
+  (Hyp Int)                               ; in-scope hypothesis (induction / case-on)
+  (Premise Int)                           ; premise of current goal
+  (Lemma Symbol))                         ; previously-proven theorem by name
+
+;; ∀-elimination: pre-instantiate a named bound var of the cited
+;; equation before matching. Lets the proof pin a "pivot" var the
+;; conclusion match cannot infer (e.g. the middle term of transitivity).
+(type Inst
+  (Inst Symbol Expr))
+
+;; ---------------------------------------------------------------------------
+;; Non-branching inference step
+;; ---------------------------------------------------------------------------
+
+(type Step
+  (Unfold Symbol Side)                    ; δ: unfold one layer of calls to fn
+  (Reduce Side)                           ; ι: fire all ctor-headed matches
+  (Simp Side)                             ; guarded δ+ι (the workhorse)
+  (Rewrite                                ; replace by equals (unconditional)
+    EqRef                                 ;   which equation
+    Dir                                   ;   direction
+    Side                                  ;   which side of the goal
+    Bool                                  ;   all-occurrences? (else first)
+    (List Inst)))                         ;   ∀-pre-instantiations (often empty)
+
+;; ---------------------------------------------------------------------------
+;; Proof tree
+;; ---------------------------------------------------------------------------
+
+(type Proof
+  (Refl)                                  ; close: both sides syntactically equal
+  (Steps (List Step) Proof)               ; flat sequence of non-branching steps
+  (Induct Symbol (List Case))             ; induct on a named ∀-var of the goal
+  (CaseOn Expr Symbol (List Case))        ; case-split an expr of named type
+  (RewriteWith                            ; rewrite with a conditional equation
+    EqRef Dir Side
+    (List Inst)
+    (List Proof)                          ;   one sub-proof per premise of cited eq
+    Proof)                                ;   continue after the rewrite
+  (Absurd EqRef)                          ; close from contradictory equation
+  (ByTheory Symbol Cert))                 ; close via decidable-theory certificate
+
+(type Case
+  (Case Symbol Proof))                    ; ctor name + sub-proof
+
+;; ---------------------------------------------------------------------------
+;; Decidable-theory certificate. The kernel has a tiny per-theory
+;; checker for each Symbol it accepts. Concrete payload shapes (LRAT-
+;; style trace for LIA, bitblasting transcript for BV, etc.) are
+;; pinned when each theory's checker lands — using Expr keeps the
+;; on-disk encoding sexp-native and lets cert data reuse the term
+;; grammar.
+;; ---------------------------------------------------------------------------
+
+(type Cert
+  (Cert Symbol Expr))                     ; theory name, theory-specific payload
+
+;; ---------------------------------------------------------------------------
+;; Theorem and theory (a citable accumulator of proven claims)
+;; ---------------------------------------------------------------------------
+
+(type Theorem
+  (Theorem Symbol Goal Proof))            ; name, claim, closing proof
+
+;; A theorem in the accumulated theory: either proven from a closing
+;; Proof, or admitted as an axiom. The Axiom tag makes the audit
+;; boundary visible at the kernel layer — see docs/BOUNDARIES.md.
+(type TheoryEntry
+  (Proven Symbol Goal)                    ; admitted because a Proof checked
+  (Axiom  Symbol Goal))                   ; admitted without proof
+
+(type Theory
+  (TheoryEmpty)
+  (TheoryCons TheoryEntry Theory))        ; entries prepended; later proofs
+                                          ; cite earlier ones by name

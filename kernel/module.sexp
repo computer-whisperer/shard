@@ -1,0 +1,128 @@
+;;; Module-level structures: type definitions, function definitions,
+;;; and the Module that aggregates them. Loaded from source files;
+;;; the reducer reads them to dispatch Call expressions.
+;;;
+;;; FnDef bodies are stored in locally-nameless form: BVars 0..arity-1
+;;; refer to the parameters. The loader is responsible for converting
+;;; source-level parameter names into BVars at parse time, following
+;;; the same innermost-first convention as match arms (last parameter
+;;; in the source list becomes BVar 0).
+
+(type Type
+  (TCon Symbol (List Type))         ; type application: Nat, (List Nat), (Map K V)
+  (TVar Symbol))                    ; type variable (erased at runtime in narrow)
+
+(type CtorDef
+  (CtorDef Symbol (List Type)))     ; ctor name, field types
+
+(type TypeDef
+  (TypeDef
+    Symbol                          ; type name
+    (List Symbol)                   ; type parameters (e.g., 'T for List)
+    (List CtorDef)))                ; constructors
+
+(type FnDef
+  (FnDef
+    Symbol                          ; function name
+    (List Type)                     ; parameter types (length = arity)
+    Type                            ; return type
+    Expr))                          ; body — BVars 0..arity-1 are parameters
+
+;; Extern function: signature only, no body. Opaque to the reducer;
+;; calls remain stuck (same protocol as native primitives), and the
+;; Rust runtime intercepts them and dispatches to a linked native
+;; implementation. See docs/BOUNDARIES.md.
+(type ExternDef
+  (ExternDef
+    Symbol                          ; function name
+    (List Type)                     ; parameter types
+    Type))                          ; return type
+
+(type Module
+  (Module
+    (List TypeDef)
+    (List FnDef)
+    (List ExternDef)))              ; extern signatures (may be Nil)
+
+;; ---------------------------------------------------------------------------
+;; Type-level helpers.
+;; ---------------------------------------------------------------------------
+
+(fn lookup_typedef ((name Symbol) (m Module)) (Option TypeDef)
+  (match m
+    ((Module tds _ _) (find_typedef name tds))))
+
+;; Lookup an extern declaration by name. The runtime uses this when
+;; intercepting stuck calls to extern symbols; not needed by the
+;; reducer (which treats all unknown calls as stuck regardless).
+(fn lookup_extern ((name Symbol) (m Module)) (Option ExternDef)
+  (match m
+    ((Module _ _ exts) (find_extern name exts))))
+
+(fn find_extern ((name Symbol) (exts (List ExternDef))) (Option ExternDef)
+  (match exts
+    (Nil None)
+    ((Cons ed rest)
+      (match ed
+        ((ExternDef ename _ _)
+          (if (sym_eq name ename) (Some ed) (find_extern name rest)))))))
+
+(fn find_typedef ((name Symbol) (tds (List TypeDef))) (Option TypeDef)
+  (match tds
+    (Nil None)
+    ((Cons td rest)
+      (match td
+        ((TypeDef tname _ _)
+          (if (sym_eq name tname) (Some td) (find_typedef name rest)))))))
+
+;; type_head: extract (ctor_name, args) from a TCon; None for TVar.
+(fn type_head ((t Type)) (Option (Pair Symbol (List Type)))
+  (match t
+    ((TCon c args) (Some (Pair c args)))
+    ((TVar _)      None)))
+
+;; Structural equality on Type.
+(fn type_eq ((a Type) (b Type)) Bool
+  (match a
+    ((TVar xa) (match b ((TVar xb) (sym_eq xa xb)) (_ False)))
+    ((TCon ca aa)
+      (match b
+        ((TCon cb ab) (if (sym_eq ca cb) (type_eq_list aa ab) False))
+        (_ False)))))
+
+(fn type_eq_list ((xs (List Type)) (ys (List Type))) Bool
+  (match xs
+    (Nil (match ys (Nil True) (_ False)))
+    ((Cons x xr)
+      (match ys
+        (Nil False)
+        ((Cons y yr) (if (type_eq x y) (type_eq_list xr yr) False))))))
+
+;; type_subst: substitute TVars in t per the assoc list. Used to
+;; instantiate a TypeDef's parameters when inducting on a generic type.
+(fn type_subst ((env (List (Pair Symbol Type))) (t Type)) Type
+  (match t
+    ((TVar x)
+      (match (assoc_sym_type x env)
+        ((Some t2) t2)
+        (None      t)))
+    ((TCon c args) (TCon c (type_subst_list env args)))))
+
+(fn type_subst_list ((env (List (Pair Symbol Type))) (ts (List Type))) (List Type)
+  (match ts
+    (Nil Nil)
+    ((Cons h t) (Cons (type_subst env h) (type_subst_list env t)))))
+
+(fn assoc_sym_type ((x Symbol) (env (List (Pair Symbol Type)))) (Option Type)
+  (match env
+    (Nil None)
+    ((Cons (Pair k v) rest)
+      (if (sym_eq x k) (Some v) (assoc_sym_type x rest)))))
+
+(fn zip_pairs ((xs (List Symbol)) (ys (List Type))) (List (Pair Symbol Type))
+  (match xs
+    (Nil Nil)
+    ((Cons x xrest)
+      (match ys
+        (Nil Nil)
+        ((Cons y yrest) (Cons (Pair x y) (zip_pairs xrest yrest)))))))
