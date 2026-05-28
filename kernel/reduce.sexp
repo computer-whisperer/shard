@@ -113,9 +113,13 @@
     ((IntLit _) None)
     ((SymLit _) None)))
 
-;; step_call: unfold user-fn application if possible; otherwise try to
-;; step an argument. Stuck calls (unknown function name, arity mismatch
-;; with no reducible arg) return None.
+;; step_call: unfold user-fn application if possible; otherwise try
+;; the primitive table; otherwise step an argument. Stuck calls
+;; (unknown name AND not a primitive AND no reducible arg) return None.
+;;
+;; The primitive dispatch happens at the data level — the kernel is
+;; reducing a Call VALUE, not invoking a function. See REVISIT —
+;; "Primitives reachable from the kernel's reducer".
 (fn step_call ((m Module) (f Symbol) (args (List Expr))) (Option Expr)
   (match m
     ((Module _ fns _)
@@ -125,7 +129,50 @@
             ((Some e2) (Some e2))
             (None      (step_args_in_call m f args))))
         (None
-          (step_args_in_call m f args))))))
+          (match (try_step_prim f args)
+            ((Some e2) (Some e2))
+            (None      (step_args_in_call m f args))))))))
+
+;; try_step_prim: dispatch a Call value to the primitive table when
+;; all args are already values of the expected shapes. Returns None
+;; if `f` isn't a known primitive or the args don't fit (e.g. not yet
+;; reduced to literals). The primitives invoked in the bodies below
+;; ARE narrow calls — the Rust runtime intercepts them via the same
+;; mechanism that powers ordinary in-language arithmetic.
+;;
+;; KEEP IN SYNC with src/prim.rs.
+(fn try_step_prim ((f Symbol) (args (List Expr))) (Option Expr)
+  (match args
+    ;; Two-Int primitives.
+    ((Cons (IntLit a) (Cons (IntLit b) Nil))
+      (if (sym_eq f (quote +))      (Some (IntLit (+ a b)))
+      (if (sym_eq f (quote -))      (Some (IntLit (- a b)))
+      (if (sym_eq f (quote *))      (Some (IntLit (* a b)))
+      (if (sym_eq f (quote /))      (Some (IntLit (/ a b)))
+      (if (sym_eq f (quote mod))    (Some (IntLit (mod a b)))
+      (if (sym_eq f (quote band))   (Some (IntLit (band a b)))
+      (if (sym_eq f (quote bor))    (Some (IntLit (bor a b)))
+      (if (sym_eq f (quote bxor))   (Some (IntLit (bxor a b)))
+      (if (sym_eq f (quote bshl))   (Some (IntLit (bshl a b)))
+      (if (sym_eq f (quote bshr))   (Some (IntLit (bshr a b)))
+      (if (sym_eq f (quote int_eq)) (Some (bool_as_expr (int_eq a b)))
+      (if (sym_eq f (quote lt))     (Some (bool_as_expr (lt a b)))
+      (if (sym_eq f (quote le))     (Some (bool_as_expr (le a b)))
+                                    None))))))))))))))
+    ;; Two-Symbol primitives.
+    ((Cons (SymLit a) (Cons (SymLit b) Nil))
+      (if (sym_eq f (quote sym_eq))
+          (Some (bool_as_expr (sym_eq a b)))
+          None))
+    (_ None)))
+
+;; Convert a Bool VALUE to the corresponding narrow Expr VALUE
+;; (Ctor "True" Nil) / (Ctor "False" Nil). Used by try_step_prim's
+;; comparison cases.
+(fn bool_as_expr ((b Bool)) Expr
+  (if b
+      (Ctor (quote True)  Nil)
+      (Ctor (quote False) Nil)))
 
 (fn step_args_in_call ((m Module) (f Symbol) (args (List Expr))) (Option Expr)
   (match (step_list m args)

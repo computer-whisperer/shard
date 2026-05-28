@@ -101,6 +101,33 @@ is where to start when planning v3.
 - **Revisit if:** multiple incompatible `Bool` definitions need to
   coexist, or the coupling pinches when bootstrapping variants.
 
+### Primitives reachable from the kernel's reducer
+- **Chose:** the kernel's `step` (and through it `simp_expr`) handles
+  primitive calls via a `try_step_prim` helper. When `lookup_fn`
+  fails on a Call value's symbol, `try_step_prim` pattern-matches
+  the args against the primitive shapes (two IntLit / two SymLit /
+  …) and invokes the primitive *in narrow code* (e.g. literal
+  `(+ a b)` inside `try_step_prim`'s body). The Rust evaluator's
+  stuck-and-intercept then dispatches it to `prim::try_apply`.
+- **Why now:** stuck-and-intercept on the OUTER level handles Calls
+  the Rust eval is asked to execute as code. But when the kernel's
+  step is reducing an Expr VALUE (data) that happens to be a Call
+  to a primitive, the Rust eval never sees a `+` to execute — it
+  sees a Ctor value with "+" in it. The kernel has to do its own
+  primitive dispatch on that data. Discovered at slice 8 when the
+  first user-fn proof fell over because `(double 5)` correctly
+  unfolded to `(+ 5 5)` but then stuck (no kernel handling of `+`).
+- **Cost:** the kernel duplicates the primitive table (names and
+  argument-shape patterns). Each primitive added in `src/prim.rs`
+  also needs a clause in `try_step_prim`.
+- **Revisit if:** the primitive set grows beyond a dozen or two,
+  or if we want primitives to be discoverable rather than
+  hardcoded. The cleaner long-term fix is for the kernel to call
+  out to an extern (`try_prim_step`) that the Rust runtime
+  intercepts, putting the primitive table on one side only. That
+  introduces a runtime hook the kernel's reducer doesn't currently
+  need; weighed against the table-duplication cost, deferred.
+
 ### Primitive call protocol: stuck-and-intercept
 - **Chose:** the narrow reducer treats Call'd symbols with no `FnDef`
   as stuck (returns `None`). The Rust runtime, driving the reducer,

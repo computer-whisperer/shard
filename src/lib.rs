@@ -18,6 +18,9 @@ pub mod load;
 pub mod prim;
 
 #[cfg(test)]
+mod nval;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -679,5 +682,125 @@ mod tests {
         );
         let e = load::expr_from_str(&neg, &m).expect("parses");
         assert_eq!(eval::eval(&m, &e).unwrap(), false_v());
+    }
+
+    // ------------------------------------------------------------------
+    // Slice 8: prove equations about USER-defined functions.
+    //
+    // Up to slice 7, all proofs were over closed primitive expressions
+    // (if/True/False, IntLits). This slice adds a Module containing a
+    // user-defined fn `double`, then asks the kernel to prove
+    // `(double 5) = 10` — exercising the full
+    //   simp_expr → step → step_call → lookup_fn → apply_fn → open_many
+    // chain on a USER fn, inside the kernel, running in our trusted
+    // Rust evaluator.
+    //
+    // Test inputs are built with src/nval.rs (narrow-value builders)
+    // rather than sexp source: constructing FnDef / Module values by
+    // hand in sexp was the friction flagged at slice 6. The builder
+    // approach also makes the BVar-vs-FVar / Symbol-as-arg distinctions
+    // explicit at the call site.
+    // ------------------------------------------------------------------
+
+    use nval::*;
+
+    /// Run `(check_sequent m th seq pf)` and return the result.
+    fn run_check_sequent(
+        m: &ast::Module,
+        mod_val: ast::Expr,
+        th: ast::Expr,
+        seq: ast::Expr,
+        pf: ast::Expr,
+    ) -> ast::Expr {
+        // Construct the call as a Rust ast::Expr directly. The Call's
+        // four args are ALREADY runtime-value Exprs (from the
+        // builders); the evaluator's CBV will see they're in normal
+        // form for the constructors and pass them straight through to
+        // check_sequent's body opening.
+        let call_expr = ast::Expr::Call(
+            "check_sequent".into(),
+            vec![mod_val, th, seq, pf],
+        );
+        eval::eval(m, &call_expr).expect("eval succeeds")
+    }
+
+    /// Module containing one user fn: (fn double ((x Int)) Int (+ x x)).
+    /// With one parameter, x = BVar 0.
+    fn double_module() -> ast::Expr {
+        let body = call("+", vec![bvar(0), bvar(0)]);
+        let double = fn_def("double", vec![ty_int()], ty_int(), body);
+        module(vec![], vec![double], vec![])
+    }
+
+    /// Headline: kernel proves (double 5) = 10 by reducing the lhs.
+    /// step_call finds double in the module, apply_fn opens the body
+    /// with [IntLit 5] reversed → body becomes (+ 5 5), step fires the
+    /// + primitive → 10. Refl on 10 = 10 closes.
+    #[test]
+    fn check_seq_proves_double_5_equals_10() {
+        let m = load_kernel();
+        let mod_v = double_module();
+        let seq = sequent(
+            vec![], vec![], vec![],
+            equation(call("double", vec![intlit(5)]), intlit(10)),
+        );
+        let pf = steps(vec![reduce(side_lhs())], refl());
+        let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
+        assert_eq!(r, true_v());
+    }
+
+    /// Same proof script, false claim. (double 5) = 11. Lhs reduces to
+    /// 10; Refl on 10 = 11 fails; check_sequent returns False.
+    #[test]
+    fn check_seq_rejects_double_5_equals_11() {
+        let m = load_kernel();
+        let mod_v = double_module();
+        let seq = sequent(
+            vec![], vec![], vec![],
+            equation(call("double", vec![intlit(5)]), intlit(11)),
+        );
+        let pf = steps(vec![reduce(side_lhs())], refl());
+        let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
+        assert_eq!(r, false_v());
+    }
+
+    /// Reduce Both makes user-fn and primitive reductions meet in the
+    /// middle: prove (double 5) = (+ 4 6). LHS: user fn double → 10.
+    /// RHS: prim + → 10. Refl on 10 = 10 closes. Demonstrates that
+    /// step_call dispatches uniformly to user fns AND primitives.
+    #[test]
+    fn check_seq_proves_user_fn_meets_primitive() {
+        let m = load_kernel();
+        let mod_v = double_module();
+        let seq = sequent(
+            vec![], vec![], vec![],
+            equation(
+                call("double", vec![intlit(5)]),
+                call("+", vec![intlit(4), intlit(6)]),
+            ),
+        );
+        let pf = steps(vec![reduce(side_both())], refl());
+        let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
+        assert_eq!(r, true_v());
+    }
+
+    /// Nested user-fn application: (double (double 3)) = 12.
+    /// Inner call reduces to (+ 3 3) → 6, outer becomes (double 6)
+    /// → (+ 6 6) → 12. The kernel's simp_expr drives `step` through
+    /// the whole chain.
+    #[test]
+    fn check_seq_proves_nested_user_fn() {
+        let m = load_kernel();
+        let mod_v = double_module();
+        let seq = sequent(
+            vec![], vec![], vec![],
+            equation(
+                call("double", vec![call("double", vec![intlit(3)])]),
+                intlit(12),
+            ),
+        );
+        let pf = steps(vec![reduce(side_lhs())], refl());
+        let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
+        assert_eq!(r, true_v());
     }
 }
