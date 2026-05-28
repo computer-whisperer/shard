@@ -2243,6 +2243,153 @@ mod tests {
         assert_eq!(r, true_v());
     }
 
+    // ------------------------------------------------------------------
+    // Slice 21: commutativity of add_nat by lemma composition.
+    //
+    //   ∀ a b : Nat. (add_nat a b) = (add_nat b a)
+    //
+    // Cites two pre-proven ∀-quantified lemmas:
+    //   add_nat_right_id        : ∀ x. (add_nat x Z) = x
+    //   add_nat_succ_pull_out   : ∀ a b. (add_nat a (S b)) = (S (add_nat a b))
+    // Both were proven in slices 19/20 (we admit them as Proven here).
+    //
+    // Stresses pat-var Rewrite three different ways in a single proof:
+    //   - Z case Rewrite right_id captures one var (x := b).
+    //   - S case Rewrite IH captures one var (b := _f).
+    //   - S case Rewrite succ_pull_out captures TWO vars (a, b).
+    //
+    // No new kernel code; first proof that genuinely composes lemmas
+    // across the inductive structure.
+    // ------------------------------------------------------------------
+
+    /// Headline.
+    #[test]
+    fn check_seq_commutativity_via_lemma_composition() {
+        let m = load_kernel();
+        let nat = tcon("Nat", vec![]);
+        let nat_td = type_def("Nat", vec![], vec![
+            ctor_def("Z", vec![]),
+            ctor_def("S", vec![nat.clone()]),
+        ]);
+        let add_nat_body = nmatch(
+            bvar(1),
+            vec![
+                narm(pctor("Z", vec![]), bvar(0)),
+                narm(pctor("S", vec![pvar()]),
+                     ctor_app("S", vec![
+                        call("add_nat", vec![bvar(0), bvar(1)]),
+                     ])),
+            ],
+        );
+        let add_nat_fn = fn_def("add_nat",
+            vec![nat.clone(), nat.clone()],
+            nat.clone(),
+            add_nat_body,
+        );
+        let mod_v = module(vec![nat_td], vec![add_nat_fn], vec![]);
+
+        // Lemmas as ground Goal VALUES — Proven, admitted by the
+        // theory accumulator.
+        //
+        // right_id: Goal [Param x Nat] []
+        //                ((add_nat BVar0 Z) = BVar0)
+        let right_id = goal(
+            vec![param("x", nat.clone())],
+            vec![],
+            equation(
+                call("add_nat", vec![bvar(0), ctor_app("Z", vec![])]),
+                bvar(0),
+            ),
+        );
+
+        // succ_pull_out: Goal [Param a Nat; Param b Nat] []
+        //                     ((add_nat BVar1 (S BVar0))
+        //                          = (S (add_nat BVar1 BVar0)))
+        //
+        // BVar indices innermost-first: BVar 0 = b (last param),
+        // BVar 1 = a.
+        let succ_pull_out = goal(
+            vec![param("a", nat.clone()), param("b", nat.clone())],
+            vec![],
+            equation(
+                call("add_nat", vec![
+                    bvar(1),                                   // a
+                    ctor_app("S", vec![bvar(0)]),              // (S b)
+                ]),
+                ctor_app("S", vec![
+                    call("add_nat", vec![bvar(1), bvar(0)]),   // (add_nat a b)
+                ]),
+            ),
+        );
+
+        let th = theory_cons(
+            proven("add_nat_right_id", right_id),
+            theory_cons(
+                proven("add_nat_succ_pull_out", succ_pull_out),
+                theory_empty(),
+            ),
+        );
+
+        // Goal: ∀ a b : Nat. (add_nat a b) = (add_nat b a)
+        let seq = sequent(
+            vec![param("a", nat.clone()), param("b", nat)],
+            vec![], vec![],
+            equation(
+                call("add_nat", vec![fvar("a"), fvar("b")]),
+                call("add_nat", vec![fvar("b"), fvar("a")]),
+            ),
+        );
+
+        // Z case: (add_nat Z b) = (add_nat b Z)
+        //   1. Unfold add_nat Lhs (opens body with [b, Z]).
+        //   2. Reduce Lhs (fires Z arm) -> (FVar b).
+        //   3. Rewrite right_id Lr Rhs: matches (add_nat b Z),
+        //      captures x := b, substitutes to b. Rhs -> (FVar b).
+        //   4. Refl on (FVar b) = (FVar b).
+        let z_case = steps(
+            vec![
+                unfold("add_nat", side_lhs()),
+                reduce(side_lhs()),
+                rewrite(er_lemma("add_nat_right_id"),
+                        dir_lr(), side_rhs(), bool_true(), vec![]),
+            ],
+            refl(),
+        );
+
+        // S case: (add_nat (S _f) b) = (add_nat b (S _f))
+        //   IH at Hyp 0: (add_nat _f BVar0) = (add_nat BVar0 _f).
+        //
+        //   1. Unfold add_nat Lhs.
+        //   2. Reduce Lhs -> (S (add_nat _f b)).
+        //   3. Rewrite IH (Hyp 0) Lr Lhs: opens BVar 0 to fresh
+        //      pat_var, matches (add_nat _f b) inside (S ...),
+        //      captures pat_var := b, substitutes IH's rhs
+        //      (add_nat BVar0 _f) -> (add_nat b _f).
+        //      Lhs -> (S (add_nat b _f)).
+        //   4. Rewrite succ_pull_out Lr Rhs: matches the whole rhs
+        //      (add_nat b (S _f)) against (add_nat <a> (S <b>)),
+        //      captures a := b, b := _f, substitutes to
+        //      (S (add_nat b _f)). Rhs -> (S (add_nat b _f)).
+        //   5. Refl.
+        let s_case = steps(
+            vec![
+                unfold("add_nat", side_lhs()),
+                reduce(side_lhs()),
+                rewrite(er_hyp(0), dir_lr(), side_lhs(), bool_true(), vec![]),
+                rewrite(er_lemma("add_nat_succ_pull_out"),
+                        dir_lr(), side_rhs(), bool_true(), vec![]),
+            ],
+            refl(),
+        );
+
+        let pf = induct("a", vec![
+            case_arm("Z", z_case),
+            case_arm("S", s_case),
+        ]);
+        let r = run_check_sequent(&m, mod_v, th, seq, pf);
+        assert_eq!(r, true_v());
+    }
+
     /// Axiom citation works the same as Proven. Both lookup_lemma
     /// arms match on a sym_eq of the name and return the carried
     /// Goal — the tag is just an audit marker (see BOUNDARIES.md).
