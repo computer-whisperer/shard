@@ -321,16 +321,36 @@ is where to start when planning v3.
   hierarchical names (which v1 supports via Symbols already, but
   nothing produces or relies on hierarchical Symbol contents yet).
 
-### User-module slot empty in v1
-- **Chose (slice 23):** the `check` binary always passes
-  `(Module Nil Nil Nil)` as the user-module arg to `check_sequent`.
-- **Why now:** LIA-decidable claims and claims over primitives don't
-  need a user module. Lets the v1 binary ship without inventing
-  `(use-module …)` semantics, which want their own slice.
-- **Revisit when:** a proof-file claim needs to talk about a
-  user-defined fn (e.g., `(double n) = (+ n n)`). The natural shape
-  is `(use-module path/to/module.sexp)` to declare the user module
-  for subsequent claims.
+### `(use-module "path")` accumulates, does not replace
+- **Chose (slice 24):** each `(use-module "path/to/file.sexp")`
+  directive loads that file as a Rust `ast::Module` and *merges*
+  its types / fns / externs into a running user-module accumulator.
+  All subsequent claims (until end-of-run) see the merged module
+  as the `m` arg to `check_sequent`. The accumulator persists across
+  files in a single binary invocation (no per-file reset).
+- **Why now:** matches Rust's `mod` semantics in spirit (declarations
+  bring items into scope, additively). Lets a proof file pull in
+  multiple lib files cumulatively without manual concatenation.
+  Last-replaces would force any claim file using lib A and lib B
+  to manually concat them upstream.
+- **Cost:** name conflicts across modules are silent — first
+  declaration wins on lookup_fn / lookup_typedef. A real scaling
+  story wants explicit imports / namespacing; for v2 this likely
+  unifies with `(module …)` and hierarchical names.
+- **Revisit when:** any of: real conflicts arise; per-file isolation
+  becomes desirable (e.g., for parallel checking); or the (module …)
+  loader lands and subsumes use-module's role.
+
+### ast::Module → runtime-value conversion in the binary
+- **Chose (slice 24):** the mechanical Rust-AST → runtime-Ctor-value
+  conversion (Expr/Pat/Type/CtorDef/FnDef/ExternDef/TypeDef/Module)
+  lives in `src/bin/check.rs`. ~110 LOC, no public API change.
+- **Why now:** the binary is the only caller; promoting to lib /
+  ast.rs would grow the trusted core for a single consumer.
+- **Revisit when:** a second caller appears (e.g., tests that want
+  to load a user module from disk rather than building with nval
+  helpers, or a future REPL). At that point promote to a
+  `pub module_value::to_value` API.
 
 ### Kernel loader is a flat path list
 - **Chose:** the kernel's seven `.sexp` files are loaded by a

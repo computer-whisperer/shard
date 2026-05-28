@@ -9,21 +9,24 @@
 //!     Theory as `(Proven NAME GOAL)`, available to subsequent
 //!     claims via `(Lemma NAME)` citations.
 //!
+//!   (use-module "path/to/file.sexp")
+//!     Load the named .sexp file as a user-defined module (types,
+//!     fns, externs) and merge it into the running user module. The
+//!     `m` arg to subsequent check_sequent calls is the merged
+//!     value, so claims can reason about user fns (e.g., a Simp
+//!     step can unfold them). Path is relative to the proof file's
+//!     directory.
+//!
 //!   (module NAME)
-//!     v1: parsed but not implemented. Reserved for v2 directory-
-//!     tree loading. Errors at this slice — see docs/REVISIT.md,
-//!     "Proof-file module syntax".
+//!     Parsed but not implemented. Reserved for the directory-tree
+//!     loader (a later slice). Errors at this slice — see
+//!     docs/REVISIT.md, "Proof-file module syntax".
 //!
 //! GOAL and PROOF are parsed as narrow expressions against the
 //! kernel's ctor set (so `(Goal …)`, `(Refl)`, `(ByTheory …)` etc.
 //! resolve as `Ctor`s) and then evaluated to runtime values. This
 //! avoids inventing a new sexp-to-value protocol — the kernel's
 //! existing ctor application IS the value-construction syntax.
-//!
-//! User-module slot: currently always `(Module Nil Nil Nil)` — the
-//! claim file cannot yet declare its own user fns. Means v1 claims
-//! are practically limited to LIA-decidable goals and goals over
-//! primitive ops. Adding `(use-module …)` is a follow-up slice.
 //!
 //! Exit codes: 0 = all claims passed, 1 = some claim failed, 2 =
 //! a load or eval error (no claim outcome could be determined).
@@ -51,9 +54,10 @@ fn main() -> ExitCode {
         }
     };
 
-    // User module is empty for v1: no user fns, no user types beyond
-    // the kernel's. Adequate for LIA claims over primitives.
-    let user_module = ctor("Module", vec![nil(), nil(), nil()]);
+    // Running user module: starts empty, grows as (use-module …)
+    // forms are processed. Re-rendered to a value after each merge.
+    let mut user_module = ast::Module::default();
+    let mut user_module_value = module_to_value(&user_module);
 
     let mut theory = ctor("TheoryEmpty", vec![]);
     let mut passed = 0usize;
@@ -78,11 +82,11 @@ fn main() -> ExitCode {
         };
 
         for form in &forms {
-            match process_form(form, &kernel, &user_module, &theory, &path) {
+            match process_form(
+                form, &kernel, &user_module_value, &theory, &path,
+            ) {
                 Outcome::Pass { name, goal } => {
                     println!("PASS  {}", name);
-                    // Cons onto the running theory so later claims can
-                    // cite this one via (Lemma NAME).
                     let entry = ctor(
                         "Proven",
                         vec![ast::Expr::SymLit(name), goal],
@@ -93,6 +97,26 @@ fn main() -> ExitCode {
                 Outcome::Fail { name } => {
                     println!("FAIL  {}", name);
                     failed += 1;
+                }
+                Outcome::UseModule(rel_path) => {
+                    // Resolve relative to the proof file's dir.
+                    let resolved = match path.parent() {
+                        Some(d) => d.join(&rel_path),
+                        None    => PathBuf::from(&rel_path),
+                    };
+                    match load::module_from_paths(&[&resolved]) {
+                        Ok(loaded) => {
+                            merge_module(&mut user_module, loaded);
+                            user_module_value = module_to_value(&user_module);
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "error: {}: use-module {}: {}",
+                                path.display(), resolved.display(), e,
+                            );
+                            return ExitCode::from(2);
+                        }
+                    }
                 }
                 Outcome::Fatal(msg) => {
                     eprintln!("error: {}", msg);
@@ -114,6 +138,8 @@ fn main() -> ExitCode {
 enum Outcome {
     Pass { name: String, goal: ast::Expr },
     Fail { name: String },
+    /// `(use-module "rel/path.sexp")` — caller resolves and loads.
+    UseModule(String),
     Fatal(String),
 }
 
@@ -141,6 +167,21 @@ fn process_form(
     };
     match head {
         "claim" => process_claim(&items, kernel, user_module, theory, path),
+        "use-module" => {
+            if items.len() != 2 {
+                return Outcome::Fatal(format!(
+                    "{}: use-module expects (use-module \"PATH\"), got {} arg(s)",
+                    path.display(), items.len() - 1,
+                ));
+            }
+            match items[1].as_str() {
+                Some(s) => Outcome::UseModule(s.to_string()),
+                None => Outcome::Fatal(format!(
+                    "{}: use-module PATH must be a string literal, got {}",
+                    path.display(), items[1],
+                )),
+            }
+        }
         "module" => {
             let name = items.get(1).and_then(|v| v.as_symbol()).unwrap_or("?");
             Outcome::Fatal(format!(
@@ -151,7 +192,7 @@ fn process_form(
             ))
         }
         other => Outcome::Fatal(format!(
-            "{}: unknown top-level form `{}` (expected `claim` or `module`)",
+            "{}: unknown top-level form `{}` (expected `claim`, `use-module`, or `module`)",
             path.display(), other,
         )),
     }
@@ -269,4 +310,136 @@ fn parse_top_level(src: &str) -> Result<Vec<Value>, String> {
             Err(e) => return Err(e.to_string()),
         }
     }
+}
+
+/// Append all items from `incoming` into `dst`. Used to accumulate
+/// multiple (use-module …) declarations into one user-module value.
+/// Name collisions are not checked — first wins on any later lookup
+/// since the kernel's lookup_fn / lookup_typedef walks declaration
+/// order and stops at the first match. Documented in REVISIT.
+fn merge_module(dst: &mut ast::Module, incoming: ast::Module) {
+    dst.types.extend(incoming.types);
+    dst.fns.extend(incoming.fns);
+    dst.externs.extend(incoming.externs);
+}
+
+// ----------------------------------------------------------------------
+// ast::Module → runtime Module value
+//
+// The narrow kernel's check_sequent takes the user module AS A VALUE
+// (Ctor("Module", […])). That value is what kernel-side lookup_fn /
+// simp_expr / step_call walk to find user fn bodies for unfolding.
+// The Rust-level evaluator already runs the kernel's code with the
+// kernel `ast::Module`; what we need here is to reify the user's
+// `ast::Module` as data the kernel can read.
+//
+// The conversion is mechanical 1:1 with kernel/term.sexp's Expr/Pat
+// and kernel/module.sexp's TypeDef/CtorDef/FnDef/ExternDef/Module
+// declarations. If those evolve, this file follows.
+// ----------------------------------------------------------------------
+
+fn module_to_value(m: &ast::Module) -> ast::Expr {
+    ctor("Module", vec![
+        list_of(m.types.iter().map(type_def_to_value).collect()),
+        list_of(m.fns.iter().map(fn_def_to_value).collect()),
+        list_of(m.externs.iter().map(extern_def_to_value).collect()),
+    ])
+}
+
+fn type_def_to_value(td: &ast::TypeDef) -> ast::Expr {
+    ctor("TypeDef", vec![
+        ast::Expr::SymLit(td.name.clone()),
+        list_of(td.params.iter().cloned().map(ast::Expr::SymLit).collect()),
+        list_of(td.ctors.iter().map(ctor_def_to_value).collect()),
+    ])
+}
+
+fn ctor_def_to_value(cd: &ast::CtorDef) -> ast::Expr {
+    ctor("CtorDef", vec![
+        ast::Expr::SymLit(cd.name.clone()),
+        list_of(cd.fields.iter().map(type_to_value).collect()),
+    ])
+}
+
+fn fn_def_to_value(fd: &ast::FnDef) -> ast::Expr {
+    ctor("FnDef", vec![
+        ast::Expr::SymLit(fd.name.clone()),
+        list_of(fd.params.iter().map(type_to_value).collect()),
+        type_to_value(&fd.ret),
+        expr_to_value(&fd.body),
+    ])
+}
+
+fn extern_def_to_value(ed: &ast::ExternDef) -> ast::Expr {
+    ctor("ExternDef", vec![
+        ast::Expr::SymLit(ed.name.clone()),
+        list_of(ed.params.iter().map(type_to_value).collect()),
+        type_to_value(&ed.ret),
+    ])
+}
+
+fn type_to_value(t: &ast::Type) -> ast::Expr {
+    match t {
+        ast::Type::TCon(n, args) => ctor("TCon", vec![
+            ast::Expr::SymLit(n.clone()),
+            list_of(args.iter().map(type_to_value).collect()),
+        ]),
+        ast::Type::TVar(n) => ctor("TVar", vec![ast::Expr::SymLit(n.clone())]),
+    }
+}
+
+fn expr_to_value(e: &ast::Expr) -> ast::Expr {
+    match e {
+        ast::Expr::FVar(n) =>
+            ctor("FVar", vec![ast::Expr::SymLit(n.clone())]),
+        ast::Expr::BVar(k) =>
+            ctor("BVar", vec![ast::Expr::IntLit(*k as i64)]),
+        ast::Expr::IntLit(n) =>
+            ctor("IntLit", vec![ast::Expr::IntLit(*n)]),
+        ast::Expr::SymLit(s) =>
+            ctor("SymLit", vec![ast::Expr::SymLit(s.clone())]),
+        ast::Expr::Ctor(n, args) => ctor("Ctor", vec![
+            ast::Expr::SymLit(n.clone()),
+            list_of(args.iter().map(expr_to_value).collect()),
+        ]),
+        ast::Expr::Call(n, args) => ctor("Call", vec![
+            ast::Expr::SymLit(n.clone()),
+            list_of(args.iter().map(expr_to_value).collect()),
+        ]),
+        ast::Expr::If(c, t, e) => ctor("If", vec![
+            expr_to_value(c), expr_to_value(t), expr_to_value(e),
+        ]),
+        ast::Expr::Match(scrut, arms) => ctor("Match", vec![
+            expr_to_value(scrut),
+            list_of(arms.iter().map(arm_to_value).collect()),
+        ]),
+        ast::Expr::Let(rhss, body) => ctor("Let", vec![
+            list_of(rhss.iter().map(expr_to_value).collect()),
+            expr_to_value(body),
+        ]),
+    }
+}
+
+fn arm_to_value(a: &ast::Arm) -> ast::Expr {
+    ctor("Arm", vec![pat_to_value(&a.pat), expr_to_value(&a.body)])
+}
+
+fn pat_to_value(p: &ast::Pat) -> ast::Expr {
+    match p {
+        ast::Pat::PVar => ctor("PVar", vec![]),
+        ast::Pat::PCtor(n, sub) => ctor("PCtor", vec![
+            ast::Expr::SymLit(n.clone()),
+            list_of(sub.iter().map(pat_to_value).collect()),
+        ]),
+        ast::Pat::PInt(n) => ctor("PInt", vec![ast::Expr::IntLit(*n)]),
+        ast::Pat::PSym(s) => ctor("PSym", vec![ast::Expr::SymLit(s.clone())]),
+    }
+}
+
+fn list_of(items: Vec<ast::Expr>) -> ast::Expr {
+    let mut acc = nil();
+    for it in items.into_iter().rev() {
+        acc = ctor("Cons", vec![it, acc]);
+    }
+    acc
 }
