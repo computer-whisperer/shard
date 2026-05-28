@@ -946,6 +946,126 @@ mod tests {
         assert_eq!(r, false_v());
     }
 
+    // ------------------------------------------------------------------
+    // Slice 11: CaseOn — per-ctor sub-sequents with a new hypothesis.
+    //
+    // The kernel splits a goal into one sub-proof per constructor of
+    // the given type. Each sub-sequent gets:
+    //   - fresh FVars for the ctor's fields (added to params)
+    //   - a new hyp at index 0: scrut = (Ctor cname fresh-fields…)
+    //
+    // v2 limitation: the new hypothesis can't yet be *used* in the
+    // sub-proof — that requires Rewrite. So slice 11 tests dispatch
+    // structure only: every sub-proof closes via Refl or another
+    // hyp-free path. Hypothesis-consuming proofs wait for slice 12.
+    // ------------------------------------------------------------------
+
+    /// Module containing just `(type Bool (False) (True))`.
+    fn bool_module() -> ast::Expr {
+        let bool_td = type_def("Bool", vec![], vec![
+            ctor_def("False", vec![]),
+            ctor_def("True",  vec![]),
+        ]);
+        module(vec![bool_td], vec![], vec![])
+    }
+
+    /// Both branches close trivially with Refl on `1 = 1`. Validates
+    /// that CaseOn dispatches to BOTH ctor branches and accepts when
+    /// ALL succeed.
+    #[test]
+    fn check_seq_case_on_bool_trivial() {
+        let m = load_kernel();
+        let mod_v = bool_module();
+        let seq = sequent(
+            vec![], vec![], vec![],
+            equation(intlit(1), intlit(1)),
+        );
+        let pf = case_on(fvar("x"), "Bool", vec![
+            case_arm("True",  refl()),
+            case_arm("False", refl()),
+        ]);
+        let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
+        assert_eq!(r, true_v());
+    }
+
+    /// Only the True case provided. check_case_on_cases reaches the
+    /// False ctor, find_case returns None, returns False.
+    #[test]
+    fn check_seq_case_on_missing_case() {
+        let m = load_kernel();
+        let mod_v = bool_module();
+        let seq = sequent(
+            vec![], vec![], vec![],
+            equation(intlit(1), intlit(1)),
+        );
+        let pf = case_on(fvar("x"), "Bool", vec![
+            case_arm("True", refl()),
+            // False case omitted
+        ]);
+        let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
+        assert_eq!(r, false_v());
+    }
+
+    /// CaseOn on a type the module doesn't declare. lookup_typedef
+    /// returns None; do_case_on returns False.
+    #[test]
+    fn check_seq_case_on_unknown_type() {
+        let m = load_kernel();
+        let mod_v = bool_module();
+        let seq = sequent(
+            vec![], vec![], vec![],
+            equation(intlit(1), intlit(1)),
+        );
+        let pf = case_on(fvar("x"), "Color", vec![
+            case_arm("Red", refl()),
+        ]);
+        let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
+        assert_eq!(r, false_v());
+    }
+
+    /// CaseOn on a type with field-bearing ctors (IntList). Exercises
+    /// mk_fresh_params + gen_fresh + ctor-expr construction with
+    /// non-empty fresh-field lists. The sub-proofs still don't USE the
+    /// new hypothesis; we just validate that the kernel builds the
+    /// sub-sequents correctly when there's structure to build.
+    #[test]
+    fn check_seq_case_on_with_fields() {
+        let m = load_kernel();
+        let intlist_td = type_def("IntList", vec![], vec![
+            ctor_def("INil", vec![]),
+            ctor_def("ICons", vec![ty_int(), tcon("IntList", vec![])]),
+        ]);
+        let mod_v = module(vec![intlist_td], vec![], vec![]);
+        let seq = sequent(
+            vec![], vec![], vec![],
+            equation(intlit(1), intlit(1)),
+        );
+        let pf = case_on(fvar("xs"), "IntList", vec![
+            case_arm("INil",  refl()),
+            case_arm("ICons", refl()),
+        ]);
+        let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
+        assert_eq!(r, true_v());
+    }
+
+    /// Sub-proof fails: goal `0 = 1` can't close with Refl on either
+    /// branch. check_case_on_cases short-circuits at the first failure.
+    #[test]
+    fn check_seq_case_on_sub_proof_fails() {
+        let m = load_kernel();
+        let mod_v = bool_module();
+        let seq = sequent(
+            vec![], vec![], vec![],
+            equation(intlit(0), intlit(1)),                  // false goal
+        );
+        let pf = case_on(fvar("x"), "Bool", vec![
+            case_arm("True",  refl()),                       // Refl fails: 0 != 1
+            case_arm("False", refl()),
+        ]);
+        let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
+        assert_eq!(r, false_v());
+    }
+
     /// Unfold + Reduce composition. Goal: (double (double 3)) = 12.
     /// Unfold the outer call -> (+ (double 3) (double 3)). Then
     /// Reduce simps to 12. Refl closes. Same answer as Reduce alone

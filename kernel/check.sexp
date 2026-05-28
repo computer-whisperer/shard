@@ -128,10 +128,7 @@
       (do_induct m th seq var cases))
 
     ((CaseOn scrut ty cases)
-      ;; TODO (do_case_on): for each ctor of `ty`, fresh FVars per
-      ;; field, hypothesize `scrut = (Ctor ctor fresh…)`; check each
-      ;; Case against its sub-sequent.
-      False)
+      (do_case_on m th seq scrut ty cases))
 
     ((RewriteWith er dir side insts premise_proofs rest)
       ;; TODO (rewriter, conditional): resolve er, specialize via
@@ -381,6 +378,57 @@
       (match c
         ((Case cn pf)
           (if (sym_eq cn ctor_name) (Some pf) (find_case ctor_name rest)))))))
+
+;; ---------------------------------------------------------------------------
+;; do_case_on: per-ctor sub-sequents with an added hypothesis that
+;; `scrut` equals (Ctor cname fresh-fields). Strictly simpler than
+;; do_induct — no IH machinery, scrut is not substituted (it may not
+;; even be a variable).
+;;
+;; v2 limitation: type-args of parametric types are NOT instantiated.
+;; The ctor's field types are used as declared, which may carry TVars
+;; for parametric types. Since narrow erases types at runtime, that
+;; doesn't break execution; it just means the fresh field Params
+;; carry abstract TVar types until a later slice supplies type-args.
+;; Documented in REVISIT — "Erased polymorphism in narrow".
+;; ---------------------------------------------------------------------------
+
+(fn do_case_on ((m Module) (th Theory) (seq Sequent)
+                (scrut Expr) (ty Symbol) (cases (List Case))) Bool
+  (match (lookup_typedef ty m)
+    (None False)                              ; unknown type
+    ((Some (TypeDef _ _ ctors))
+      (check_case_on_cases m th seq scrut ctors cases))))
+
+(fn check_case_on_cases
+    ((m Module) (th Theory) (seq Sequent)
+     (scrut Expr) (ctors (List CtorDef)) (cases (List Case))) Bool
+  (match ctors
+    (Nil True)                                ; all branches checked
+    ((Cons (CtorDef cname field_types) rest)
+      (match (find_case cname cases)
+        (None False)                          ; user didn't supply a sub-proof
+        ((Some case_pf)
+          (let ((subgoal (build_case_on_subgoal seq scrut cname field_types)))
+            (if (check_sequent m th subgoal case_pf)
+                (check_case_on_cases m th seq scrut rest cases)
+                False)))))))
+
+;; Build the per-ctor sub-sequent: fresh field Params, an added
+;; hypothesis `scrut = (Ctor cname <fresh-fvars>)`. The hypothesis is
+;; prepended to hyps, so the sub-proof cites it as (Hyp 0).
+(fn build_case_on_subgoal ((seq Sequent) (scrut Expr)
+                           (cname Symbol) (field_types (List Type))) Sequent
+  (match seq
+    ((Sequent params hyps premises eq)
+      (let ((field_params (mk_fresh_params field_types)))
+        (let ((ctor_expr (Ctor cname (params_to_fvar_exprs field_params))))
+          (let ((case_hyp (Goal Nil Nil (Equation scrut ctor_expr))))
+            (Sequent
+              (append_params params field_params)
+              (Cons case_hyp hyps)
+              premises
+              eq)))))))
 
 ;; ---------------------------------------------------------------------------
 ;; do_induct: per-ctor sub-sequents with fresh FVars and IHs.

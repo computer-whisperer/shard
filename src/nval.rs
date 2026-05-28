@@ -126,6 +126,16 @@ pub fn steps(stps: Vec<Expr>, rest: Expr) -> Expr {
 }
 pub fn absurd(er: Expr) -> Expr { ctor("Absurd", vec![er]) }
 
+/// (CaseOn scrut ty cases). `ty` is a Symbol naming a type.
+pub fn case_on(scrut: Expr, ty: &str, cases: Vec<Expr>) -> Expr {
+    ctor("CaseOn", vec![scrut, Expr::SymLit(ty.into()), list(cases)])
+}
+
+/// (Case cname pf). One arm of a CaseOn or Induct.
+pub fn case_arm(cname: &str, pf: Expr) -> Expr {
+    ctor("Case", vec![Expr::SymLit(cname.into()), pf])
+}
+
 // EqRef variants.
 pub fn er_hyp(k: i64) -> Expr     { ctor("Hyp",     vec![Expr::IntLit(k)]) }
 pub fn er_premise(k: i64) -> Expr { ctor("Premise", vec![Expr::IntLit(k)]) }
