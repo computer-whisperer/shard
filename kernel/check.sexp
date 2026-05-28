@@ -200,26 +200,30 @@
           (Some (Sequent params hyps premises
                   (simp_side_eq m side eq))))))
     ((Rewrite er dir side all insts)
-      ;; v2 first slice: GROUND rewrite only.
-      ;; Require insts=Nil and the cited Goal to be Goal Nil Nil eq
-      ;; (no ∀-binders, no premises). With that, matching reduces to
-      ;; structural equality (expr_eq) — no capture needed.
-      ;; Pattern-variable Rewrite waits for proofs that need it.
+      ;; Pattern-variable Rewrite. The cited Goal's ∀-binders become
+      ;; capture variables: opened to fresh FVars in the equation,
+      ;; their names listed as `pat_vars` for expr_match to recognize.
+      ;; Premises must still be Nil (unconditional). insts not yet
+      ;; supported — RewriteWith handles conditional cases.
       (match insts
         (Nil
           (match (resolve_eq er seq th)
             (None None)
             ((Some g)
               (match g
-                ((Goal Nil Nil cited_eq)
-                  (match seq
-                    ((Sequent params hyps premises goal_eq)
-                      (match (apply_rewrite cited_eq dir side all goal_eq)
-                        ((Some new_eq)
-                          (Some (Sequent params hyps premises new_eq)))
-                        (None None)))))
-                (_ None)))))
-        (_ None)))))
+                ((Goal cited_params Nil cited_eq)
+                  (let ((pat_var_names (fresh_syms_for_params cited_params)))
+                    (let ((opening_fvars (reverse_exprs (syms_to_fvars pat_var_names))))
+                      (let ((opened_eq (open_eq_with opening_fvars cited_eq)))
+                        (match seq
+                          ((Sequent s_params hyps premises goal_eq)
+                            (match (apply_rewrite pat_var_names opened_eq
+                                                  dir side all goal_eq)
+                              ((Some new_eq)
+                                (Some (Sequent s_params hyps premises new_eq)))
+                              (None None))))))))
+                (_ None)))))                              ;; non-Nil premises
+        (_ None)))))                                       ;; non-Nil insts
 
 ;; Drive simp_expr (full δ+ι) on the chosen side(s) of an equation.
 ;; Used by apply_step's `Simp` arm.
@@ -242,10 +246,10 @@
         ((Both) (Equation (simp_iota_expr m l) (simp_iota_expr m r)))))))
 
 ;; ---------------------------------------------------------------------------
-;; Ground rewriting on Expr values. pat is matched by structural
-;; equality (expr_eq); on match, replaced by repl. v2 limitation: no
-;; pattern variables / capture — that needs ∀-binder support and
-;; arrives with the pattern-rewriter slice.
+;; Pattern-variable rewriting on Expr values. The cited equation can
+;; have ∀-bound vars; they're opened to fresh FVars before matching,
+;; and listed in `pat_vars` so expr_match knows to treat them as
+;; capture variables rather than literal FVars.
 ;;
 ;; rewrite_first walks top-down left-to-right, replaces the FIRST hit,
 ;; returns Some on success. rewrite_all walks the whole tree replacing
@@ -254,97 +258,184 @@
 ;; one match was found, None if no match anywhere.
 ;;
 ;; Neither descends under binders (Match arm bodies, Let bodies) —
-;; depth-aware rewriting waits for the pattern-rewriter slice.
+;; depth-aware rewriting still pending.
 ;; ---------------------------------------------------------------------------
 
-(fn rewrite_first ((pat Expr) (repl Expr) (e Expr)) (Option Expr)
-  (if (expr_eq pat e)
-      (Some repl)
+;; sym_member: True iff x is in xs.
+(fn sym_member ((x Symbol) (xs (List Symbol))) Bool
+  (match xs
+    (Nil False)
+    ((Cons h t) (if (sym_eq x h) True (sym_member x t)))))
+
+;; expr_match: structural match of `pat` against `cand`, treating
+;; FVars whose name is in `pat_vars` as CAPTURE variables. Other
+;; FVars must match literally (same name). Returns Some env on
+;; successful match — env binds each captured pat_var to the
+;; matched Expr. Repeated occurrences of the same pat_var must
+;; match consistently (the second sighting checks expr_eq against
+;; the first binding).
+;;
+;; v2 limitation: no descent under Match arm bodies / Let bodies.
+;; A pattern that contains a Match or Let just fails to match.
+(fn expr_match ((pat_vars (List Symbol)) (pat Expr) (cand Expr) (env Env))
+                (Option Env)
+  (match pat
+    ((FVar x)
+      (if (sym_member x pat_vars)
+          (match (lookup x env)
+            ((Some v) (if (expr_eq v cand) (Some env) None))
+            (None     (Some (Bind x cand env))))
+          (match cand
+            ((FVar y) (if (sym_eq x y) (Some env) None))
+            (_        None))))
+    ((BVar k)
+      (match cand
+        ((BVar j) (if (int_eq k j) (Some env) None))
+        (_        None)))
+    ((Ctor c args)
+      (match cand
+        ((Ctor c2 args2)
+          (if (sym_eq c c2) (expr_match_list pat_vars args args2 env) None))
+        (_ None)))
+    ((Call f args)
+      (match cand
+        ((Call f2 args2)
+          (if (sym_eq f f2) (expr_match_list pat_vars args args2 env) None))
+        (_ None)))
+    ((If c t el)
+      (match cand
+        ((If c2 t2 el2)
+          (match (expr_match pat_vars c c2 env)
+            ((Some env1)
+              (match (expr_match pat_vars t t2 env1)
+                ((Some env2) (expr_match pat_vars el el2 env2))
+                (None        None)))
+            (None None)))
+        (_ None)))
+    ((IntLit n)
+      (match cand
+        ((IntLit m) (if (int_eq n m) (Some env) None))
+        (_          None)))
+    ((SymLit s)
+      (match cand
+        ((SymLit t) (if (sym_eq s t) (Some env) None))
+        (_          None)))
+    (_ None)))                                  ;; Match/Let in pat: not yet
+
+(fn expr_match_list ((pat_vars (List Symbol)) (ps (List Expr)) (cs (List Expr)) (env Env))
+                     (Option Env)
+  (match ps
+    (Nil
+      (match cs
+        (Nil (Some env))
+        (_   None)))
+    ((Cons p prest)
+      (match cs
+        (Nil None)
+        ((Cons c crest)
+          (match (expr_match pat_vars p c env)
+            ((Some env2) (expr_match_list pat_vars prest crest env2))
+            (None        None)))))))
+
+;; ---------------------------------------------------------------------------
+;; Rewriter (pattern-variable aware). When pat_vars is Nil, expr_match
+;; reduces to expr_eq and rewrite_first/all behave as the old ground
+;; rewriters did. The successful-match arm of each top-level case
+;; substitutes the captured env into the replacement.
+;; ---------------------------------------------------------------------------
+
+(fn rewrite_first ((pat_vars (List Symbol)) (pat Expr) (repl Expr) (e Expr))
+                   (Option Expr)
+  (match (expr_match pat_vars pat e Empty)
+    ((Some env) (Some (subst env repl)))
+    (None
       (match e
         ((Ctor c args)
-          (match (rewrite_first_list pat repl args)
+          (match (rewrite_first_list pat_vars pat repl args)
             ((Some args2) (Some (Ctor c args2)))
             (None         None)))
         ((Call f args)
-          (match (rewrite_first_list pat repl args)
+          (match (rewrite_first_list pat_vars pat repl args)
             ((Some args2) (Some (Call f args2)))
             (None         None)))
         ((If c t el)
-          (match (rewrite_first pat repl c)
+          (match (rewrite_first pat_vars pat repl c)
             ((Some c2) (Some (If c2 t el)))
             (None
-              (match (rewrite_first pat repl t)
+              (match (rewrite_first pat_vars pat repl t)
                 ((Some t2) (Some (If c t2 el)))
                 (None
-                  (match (rewrite_first pat repl el)
+                  (match (rewrite_first pat_vars pat repl el)
                     ((Some el2) (Some (If c t el2)))
                     (None       None)))))))
-        (_ None))))
+        (_ None)))))
 
-(fn rewrite_first_list ((pat Expr) (repl Expr) (es (List Expr)))
+(fn rewrite_first_list ((pat_vars (List Symbol)) (pat Expr) (repl Expr) (es (List Expr)))
                         (Option (List Expr))
   (match es
     (Nil None)
     ((Cons h t)
-      (match (rewrite_first pat repl h)
+      (match (rewrite_first pat_vars pat repl h)
         ((Some h2) (Some (Cons h2 t)))
         (None
-          (match (rewrite_first_list pat repl t)
+          (match (rewrite_first_list pat_vars pat repl t)
             ((Some t2) (Some (Cons h t2)))
             (None      None)))))))
 
-(fn rewrite_all ((pat Expr) (repl Expr) (e Expr)) (Option Expr)
-  (if (expr_eq pat e)
-      (Some repl)                                ; don't recurse into repl
+(fn rewrite_all ((pat_vars (List Symbol)) (pat Expr) (repl Expr) (e Expr))
+                 (Option Expr)
+  (match (expr_match pat_vars pat e Empty)
+    ((Some env) (Some (subst env repl)))      ; don't recurse into repl
+    (None
       (match e
         ((Ctor c args)
-          (match (rewrite_all_list pat repl args)
+          (match (rewrite_all_list pat_vars pat repl args)
             ((Some args2) (Some (Ctor c args2)))
             (None         None)))
         ((Call f args)
-          (match (rewrite_all_list pat repl args)
+          (match (rewrite_all_list pat_vars pat repl args)
             ((Some args2) (Some (Call f args2)))
             (None         None)))
         ((If c t el)
-          (rewrite_all_if pat repl c t el))
-        (_ None))))
+          (rewrite_all_if pat_vars pat repl c t el))
+        (_ None)))))
 
-(fn rewrite_all_list ((pat Expr) (repl Expr) (es (List Expr)))
+(fn rewrite_all_list ((pat_vars (List Symbol)) (pat Expr) (repl Expr) (es (List Expr)))
                       (Option (List Expr))
   (match es
     (Nil None)
     ((Cons h t)
-      (match (rewrite_all pat repl h)
+      (match (rewrite_all pat_vars pat repl h)
         ((Some h2)
-          (match (rewrite_all_list pat repl t)
+          (match (rewrite_all_list pat_vars pat repl t)
             ((Some t2) (Some (Cons h2 t2)))
             (None      (Some (Cons h2 t)))))
         (None
-          (match (rewrite_all_list pat repl t)
+          (match (rewrite_all_list pat_vars pat repl t)
             ((Some t2) (Some (Cons h t2)))
             (None      None)))))))
 
-(fn rewrite_all_if ((pat Expr) (repl Expr) (c Expr) (t Expr) (el Expr))
-                    (Option Expr)
-  (match (rewrite_all pat repl c)
+(fn rewrite_all_if ((pat_vars (List Symbol)) (pat Expr) (repl Expr)
+                    (c Expr) (t Expr) (el Expr)) (Option Expr)
+  (match (rewrite_all pat_vars pat repl c)
     ((Some c2)
-      (match (rewrite_all pat repl t)
+      (match (rewrite_all pat_vars pat repl t)
         ((Some t2)
-          (match (rewrite_all pat repl el)
+          (match (rewrite_all pat_vars pat repl el)
             ((Some el2) (Some (If c2 t2 el2)))
             (None       (Some (If c2 t2 el)))))
         (None
-          (match (rewrite_all pat repl el)
+          (match (rewrite_all pat_vars pat repl el)
             ((Some el2) (Some (If c2 t el2)))
             (None       (Some (If c2 t el)))))))
     (None
-      (match (rewrite_all pat repl t)
+      (match (rewrite_all pat_vars pat repl t)
         ((Some t2)
-          (match (rewrite_all pat repl el)
+          (match (rewrite_all pat_vars pat repl el)
             ((Some el2) (Some (If c t2 el2)))
             (None       (Some (If c t2 el)))))
         (None
-          (match (rewrite_all pat repl el)
+          (match (rewrite_all pat_vars pat repl el)
             ((Some el2) (Some (If c t el2)))
             (None       None)))))))
 
@@ -353,43 +444,43 @@
 ;; chosen Side using either rewrite_first or rewrite_all per `all`.
 ;; ---------------------------------------------------------------------------
 
-(fn apply_rewrite ((cited Equation) (dir Dir) (side Side)
+(fn apply_rewrite ((pat_vars (List Symbol)) (cited Equation) (dir Dir) (side Side)
                    (all_occ Bool) (goal_eq Equation)) (Option Equation)
   (match cited
     ((Equation cl cr)
       (match dir
-        ((Lr) (rewrite_side cl cr side all_occ goal_eq))
-        ((Rl) (rewrite_side cr cl side all_occ goal_eq))))))
+        ((Lr) (rewrite_side pat_vars cl cr side all_occ goal_eq))
+        ((Rl) (rewrite_side pat_vars cr cl side all_occ goal_eq))))))
 
-(fn rewrite_side ((pat Expr) (repl Expr) (side Side)
+(fn rewrite_side ((pat_vars (List Symbol)) (pat Expr) (repl Expr) (side Side)
                   (all_occ Bool) (goal_eq Equation)) (Option Equation)
   (match goal_eq
     ((Equation gl gr)
       (match side
         ((Lhs)
-          (match (rewrite_one_or_all all_occ pat repl gl)
+          (match (rewrite_one_or_all pat_vars all_occ pat repl gl)
             ((Some gl2) (Some (Equation gl2 gr)))
             (None       None)))
         ((Rhs)
-          (match (rewrite_one_or_all all_occ pat repl gr)
+          (match (rewrite_one_or_all pat_vars all_occ pat repl gr)
             ((Some gr2) (Some (Equation gl gr2)))
             (None       None)))
         ((Both)
-          (match (rewrite_one_or_all all_occ pat repl gl)
+          (match (rewrite_one_or_all pat_vars all_occ pat repl gl)
             ((Some gl2)
-              (match (rewrite_one_or_all all_occ pat repl gr)
+              (match (rewrite_one_or_all pat_vars all_occ pat repl gr)
                 ((Some gr2) (Some (Equation gl2 gr2)))
                 (None       (Some (Equation gl2 gr)))))
             (None
-              (match (rewrite_one_or_all all_occ pat repl gr)
+              (match (rewrite_one_or_all pat_vars all_occ pat repl gr)
                 ((Some gr2) (Some (Equation gl gr2)))
                 (None       None)))))))))
 
-(fn rewrite_one_or_all ((all_occ Bool) (pat Expr) (repl Expr) (e Expr))
-                        (Option Expr)
+(fn rewrite_one_or_all ((pat_vars (List Symbol)) (all_occ Bool)
+                        (pat Expr) (repl Expr) (e Expr)) (Option Expr)
   (if all_occ
-      (rewrite_all pat repl e)
-      (rewrite_first pat repl e)))
+      (rewrite_all pat_vars pat repl e)
+      (rewrite_first pat_vars pat repl e)))
 
 ;; Unfold one occurrence on the chosen side(s) of an equation.
 ;; For Both: succeed if at least one side has a matching occurrence.
@@ -532,6 +623,20 @@
   (match types
     (Nil Nil)
     ((Cons t rest) (Cons (Param (gen_fresh) t) (mk_fresh_params rest)))))
+
+;; Generate one fresh Symbol per Param. Used by the Rewrite arm to
+;; open the cited equation's ∀-binders to fresh FVars; the names
+;; double as the pat_vars list passed to expr_match.
+(fn fresh_syms_for_params ((ps (List Param))) (List Symbol)
+  (match ps
+    (Nil Nil)
+    ((Cons _ rest) (Cons (gen_fresh) (fresh_syms_for_params rest)))))
+
+;; Convert a list of Symbols to FVar Expr values, preserving order.
+(fn syms_to_fvars ((ss (List Symbol))) (List Expr)
+  (match ss
+    (Nil Nil)
+    ((Cons s rest) (Cons (FVar s) (syms_to_fvars rest)))))
 
 ;; ---------------------------------------------------------------------------
 ;; open_goal: enter a Goal as a Sequent. Display names are used directly

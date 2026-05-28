@@ -2098,6 +2098,151 @@ mod tests {
         assert_eq!(r, true_v());
     }
 
+    // ------------------------------------------------------------------
+    // Slice 20: pattern-variable Rewrite — ∀-binder capture.
+    //
+    // The cited Goal can now have non-empty params; its ∀-bound vars
+    // are opened to fresh FVars before matching, the names are passed
+    // to expr_match as pat_vars, and on a successful match the
+    // captured env is substituted into the replacement.
+    //
+    // Unlocks:
+    //   - Citing ∀-quantified lemmas (slice 17 had only ground lemmas).
+    //   - Consuming the inductive hypothesis built by build_ih in
+    //     slice 19 (the IH has Goal [Param ... ] eq, which the old
+    //     ground Rewrite rejected).
+    // ------------------------------------------------------------------
+
+    /// Simpler pat-var test: cite ∀ x. (add_nat x Z) = x as a lemma
+    /// (proven externally, so admitted), use it to rewrite
+    /// (add_nat (S Z) Z) to (S Z), then Refl.
+    /// Captures x := (S Z).
+    #[test]
+    fn check_seq_cites_universally_quantified_lemma() {
+        let m = load_kernel();
+        let mod_v = nat_module();
+        // Lemma: ∀ x : Nat. (add_nat x Z) = x.
+        // Goal value: (Goal [Param x Nat] [] (Eq (add_nat BVar0 Z) BVar0))
+        let lemma_goal = goal(
+            vec![param("x", tcon("Nat", vec![]))],
+            vec![],
+            equation(
+                call("add_nat", vec![bvar(0), ctor_app("Z", vec![])]),
+                bvar(0),
+            ),
+        );
+        let th = theory_cons(
+            proven("add_nat_right_id", lemma_goal),
+            theory_empty(),
+        );
+        let sz = ctor_app("S", vec![ctor_app("Z", vec![])]);
+        let seq = sequent(
+            vec![], vec![], vec![],
+            equation(
+                call("add_nat", vec![sz.clone(), ctor_app("Z", vec![])]),
+                sz,
+            ),
+        );
+        let pf = steps(
+            vec![rewrite(er_lemma("add_nat_right_id"),
+                         dir_lr(), side_lhs(), bool_true(), vec![])],
+            refl(),
+        );
+        let r = run_check_sequent(&m, mod_v, th, seq, pf);
+        assert_eq!(r, true_v());
+    }
+
+    /// Headline: HD-consuming inductive proof of successor pull-out.
+    ///
+    ///   ∀ a b : Nat. (add_nat a (S b)) = (S (add_nat a b))
+    ///
+    /// Induct on a, leaving b as an outer ∀-var. The IH built in the
+    /// S case is
+    ///   Goal [Param b Nat] [] (Eq (add_nat _f (S BVar0)) (S (add_nat _f BVar0)))
+    /// — a quantified statement that the old ground Rewrite rejected.
+    /// With pat-var Rewrite, the IH can be CITED in the proof.
+    ///
+    /// Z case: (add_nat Z (S b)) = (S (add_nat Z b))
+    ///   Unfold + Reduce both sides: lhs -> (S b), rhs -> (S b). Refl.
+    ///
+    /// S case: (add_nat (S _f) (S b)) = (S (add_nat (S _f) b))
+    ///   Unfold + Reduce Lhs -> (S (add_nat _f (S b))).
+    ///   Rewrite IH Lr Lhs all=True:
+    ///     Pat var fresh1 opens b. Opened_lhs = (add_nat _f (S fresh1)).
+    ///     Match against (add_nat _f (S b)) -> fresh1 captures (FVar b).
+    ///     Substitute into opened_rhs (S (add_nat _f fresh1)) ->
+    ///       (S (add_nat _f b)).
+    ///     Replace (add_nat _f (S b)) with that in the lhs.
+    ///   Lhs -> (S (S (add_nat _f b))).
+    ///   Unfold + Reduce Rhs -> (S (S (add_nat _f b))). Refl.
+    #[test]
+    fn check_seq_induct_successor_pull_out() {
+        let m = load_kernel();
+        let nat_td = type_def("Nat", vec![], vec![
+            ctor_def("Z", vec![]),
+            ctor_def("S", vec![tcon("Nat", vec![])]),
+        ]);
+        let add_nat_body = nmatch(
+            bvar(1),                                          // a
+            vec![
+                narm(pctor("Z", vec![]), bvar(0)),            // -> b
+                narm(pctor("S", vec![pvar()]),
+                     ctor_app("S", vec![
+                        call("add_nat", vec![bvar(0), bvar(1)]),
+                     ])),
+            ],
+        );
+        let add_nat_fn = fn_def("add_nat",
+            vec![tcon("Nat", vec![]), tcon("Nat", vec![])],
+            tcon("Nat", vec![]),
+            add_nat_body,
+        );
+        let mod_v = module(vec![nat_td], vec![add_nat_fn], vec![]);
+
+        let nat = tcon("Nat", vec![]);
+        let seq = sequent(
+            vec![param("a", nat.clone()), param("b", nat)],
+            vec![], vec![],
+            equation(
+                // (add_nat a (S b))
+                call("add_nat", vec![
+                    fvar("a"),
+                    ctor_app("S", vec![fvar("b")]),
+                ]),
+                // (S (add_nat a b))
+                ctor_app("S", vec![
+                    call("add_nat", vec![fvar("a"), fvar("b")]),
+                ]),
+            ),
+        );
+
+        let z_case = steps(
+            vec![
+                unfold("add_nat", side_lhs()),
+                reduce(side_lhs()),
+                unfold("add_nat", side_rhs()),
+                reduce(side_rhs()),
+            ],
+            refl(),
+        );
+        let s_case = steps(
+            vec![
+                unfold("add_nat", side_lhs()),
+                reduce(side_lhs()),
+                rewrite(er_hyp(0), dir_lr(), side_lhs(), bool_true(), vec![]),
+                unfold("add_nat", side_rhs()),
+                reduce(side_rhs()),
+            ],
+            refl(),
+        );
+        let pf = induct("a", vec![
+            case_arm("Z", z_case),
+            case_arm("S", s_case),
+        ]);
+        let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
+        assert_eq!(r, true_v());
+    }
+
     /// Axiom citation works the same as Proven. Both lookup_lemma
     /// arms match on a sym_eq of the name and return the carried
     /// Goal — the tag is just an audit marker (see BOUNDARIES.md).
