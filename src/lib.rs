@@ -39,6 +39,7 @@ pub fn load_kernel_from<P: AsRef<std::path::Path>>(
         p("check.sexp"),
         p("lia.sexp"),
         p("eqdec.sexp"),
+        p("ord.sexp"),
     ])
 }
 
@@ -2500,6 +2501,109 @@ mod tests {
         let r = run_check_sequent(&m,
             module(vec![], vec![], vec![]),
             theory_empty(), seq, eqdec_pf());
+        assert_eq!(r, false_v());
+    }
+
+    // ------------------------------------------------------------------
+    // Slice 35: ord ByTheory backend (kernel/ord.sexp).
+    //
+    // Decides order-reflection goals (lt a b) = True / (le a b) = True
+    // by canonicalizing (b - a) via LIA and checking it's a constant of
+    // the right sign. Mirrors guard the soundness boundary: strictness
+    // (lt a a is rejected) and direction (le (a+1) a rejected), and the
+    // "not a tautology" path (lt a b for independent vars rejected).
+    // ------------------------------------------------------------------
+
+    fn ord_pf() -> ast::Expr {
+        by_theory("ord", cert("ord", symlit("")))
+    }
+
+    /// Positive: ∀ a. (lt a (a+1)) = True. diff = 1 ≥ 1.
+    #[test]
+    fn check_seq_ord_lt_succ() {
+        let m = load_kernel();
+        let int = tcon("Int", vec![]);
+        let seq = sequent(
+            vec![param("a", int)],
+            vec![], vec![],
+            equation(
+                call("lt", vec![fvar("a"), call("+", vec![fvar("a"), intlit(1)])]),
+                ctor_app("True", vec![]),
+            ),
+        );
+        let r = run_check_sequent(&m,
+            module(vec![], vec![], vec![]),
+            theory_empty(), seq, ord_pf());
+        assert_eq!(r, true_v());
+    }
+
+    /// Positive: ∀ a. (le a a) = True. diff = 0 ≥ 0.
+    #[test]
+    fn check_seq_ord_le_refl() {
+        let m = load_kernel();
+        let int = tcon("Int", vec![]);
+        let seq = sequent(
+            vec![param("a", int)],
+            vec![], vec![],
+            equation(call("le", vec![fvar("a"), fvar("a")]), ctor_app("True", vec![])),
+        );
+        let r = run_check_sequent(&m,
+            module(vec![], vec![], vec![]),
+            theory_empty(), seq, ord_pf());
+        assert_eq!(r, true_v());
+    }
+
+    /// Negative (not a tautology): (lt a b) for independent a, b. diff =
+    /// b - a has variables → rejected.
+    #[test]
+    fn check_seq_ord_rejects_lt_distinct() {
+        let m = load_kernel();
+        let int = tcon("Int", vec![]);
+        let seq = sequent(
+            vec![param("a", int.clone()), param("b", int)],
+            vec![], vec![],
+            equation(call("lt", vec![fvar("a"), fvar("b")]), ctor_app("True", vec![])),
+        );
+        let r = run_check_sequent(&m,
+            module(vec![], vec![], vec![]),
+            theory_empty(), seq, ord_pf());
+        assert_eq!(r, false_v());
+    }
+
+    /// Negative (strictness): (lt a a) = True must be REJECTED. diff = 0,
+    /// which is ≥ 0 but NOT ≥ 1. Guards the strict/non-strict boundary.
+    #[test]
+    fn check_seq_ord_rejects_lt_irreflexive() {
+        let m = load_kernel();
+        let int = tcon("Int", vec![]);
+        let seq = sequent(
+            vec![param("a", int)],
+            vec![], vec![],
+            equation(call("lt", vec![fvar("a"), fvar("a")]), ctor_app("True", vec![])),
+        );
+        let r = run_check_sequent(&m,
+            module(vec![], vec![], vec![]),
+            theory_empty(), seq, ord_pf());
+        assert_eq!(r, false_v());
+    }
+
+    /// Negative (direction): (le (a+1) a) = True must be REJECTED.
+    /// diff = a - (a+1) = -1 < 0.
+    #[test]
+    fn check_seq_ord_rejects_le_backwards() {
+        let m = load_kernel();
+        let int = tcon("Int", vec![]);
+        let seq = sequent(
+            vec![param("a", int)],
+            vec![], vec![],
+            equation(
+                call("le", vec![call("+", vec![fvar("a"), intlit(1)]), fvar("a")]),
+                ctor_app("True", vec![]),
+            ),
+        );
+        let r = run_check_sequent(&m,
+            module(vec![], vec![], vec![]),
+            theory_empty(), seq, ord_pf());
         assert_eq!(r, false_v());
     }
 

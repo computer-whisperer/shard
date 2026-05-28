@@ -27,7 +27,8 @@ cargo run --bin check -- examples/lia_basics.sexp \
                          examples/rewrite_with_demo.sexp \
                          examples/list_lemmas.sexp \
                          examples/map_lemmas.sexp \
-                         examples/mem_lemmas.sexp
+                         examples/mem_lemmas.sexp \
+                         examples/ord_basics.sexp
 ```
 
 Expected output:
@@ -35,9 +36,9 @@ Expected output:
 ```
 PASS  plus_comm
 …
-PASS  rev_loop_zero
+PASS  le_linear_cancel
 
-26 passed, 0 failed
+30 passed, 0 failed
 ```
 
 The `check` binary loads the bundled kernel, then walks each
@@ -55,7 +56,7 @@ Run the Rust test suite (loader, evaluator, kernel-from-rust mirrors):
 cargo test --release
 ```
 
-90 tests as of slice 33.
+95 tests as of slice 35.
 
 ## Repository layout
 
@@ -69,7 +70,7 @@ docs/
   REVISIT.md           ; design-decision ledger — every choice + when to
                        ;   revisit. The "why" lives here.
 
-kernel/                ; the trusted kernel, written in narrow (1,537 NCNB)
+kernel/                ; the trusted kernel, written in narrow (1,575 NCNB)
   stdlib.sexp          ;   List / Option / Pair / Bool
   term.sexp            ;   Expr / Pat / shift / subst / open_many / close_many
   reduce.sexp          ;   step / step_iota / step_smart (gated δ) / memo
@@ -78,6 +79,7 @@ kernel/                ; the trusted kernel, written in narrow (1,537 NCNB)
   check.sexp           ;   check_sequent — the entry point
   lia.sexp             ;   LIA decision procedure (ByTheory backend)
   eqdec.sexp           ;   equality-reflection backend (int_eq/sym_eq = True)
+  ord.sexp             ;   order-reflection backend (lt/le = True via LIA diff)
 
 src/                   ; the trusted-by-review Rust component
   ast.rs               ;   Expr / Pat / Type / Module ADTs the loader produces
@@ -85,7 +87,7 @@ src/                   ; the trusted-by-review Rust component
   eval.rs              ;   CBV evaluator; stuck-and-intercept for primitives
   prim.rs              ;   primitive table (+ - * mod, int_eq, gen_fresh, …)
   nval.rs              ;   narrow-value builders for tests
-  lib.rs               ;   loader entrypoint + Rust test suite (90 tests)
+  lib.rs               ;   loader entrypoint + Rust test suite (95 tests)
   bin/check.rs         ;   the `check` proof-script driver binary
 
 examples/              ; user modules + proof-script claim files
@@ -99,6 +101,7 @@ examples/              ; user modules + proof-script claim files
   mem_lib.sexp         ;   M3 linear memory = (Map Int): read/write/swap/rev_loop
   mem_lemmas.sexp      ;   M3 array framing (slice 34): read_write_eq/_neq,
                        ;     read_swap_j + capstone statement (proof = WIP)
+  ord_basics.sexp      ;   order-reflection examples (slice 35): lt_succ, le_refl
   …
 
 tools/
@@ -142,8 +145,8 @@ Feature checklist (✓ = shipped in v2; → = next):
 | Finite maps (Int keys) + extensional lemmas | ✓    | 33     |
 | Cross-module composition (`use-module` deps) | ✓   | 34     |
 | M3 linear-memory model + array framing  | ✓        | 34     |
+| `ord` theory (`lt`/`le` = True via LIA diff) | ✓   | 35     |
 | M3 capstone (`rev_loop ⊑ rev`, loop invariant) | →  |        |
-| Order / inequality decision procedure   | →        |        |
 | Polymorphic-key maps `(Map K V)`        | →        |        |
 | Defunctionalized higher-order           | →        |        |
 | Measure / well-founded recursion        | →        |        |
@@ -271,9 +274,10 @@ the audit boundary visible at the kernel layer.
 
 - **Substrate:** v2 kernel + loader + driver. Feature-complete for
   the v1 reverse-tower headline; extended with polymorphism, Simp
-  guarding, ByTheory (LIA + eqdec), Insts, and finite maps (Int keys).
+  guarding, ByTheory (LIA + eqdec + ord), Insts, finite maps (Int
+  keys), and the M3 linear-memory model + array framing.
 - **Trusted core size:**
-  - Kernel narrow code: **1,537 NCNB** across 8 `kernel/*.sexp`.
+  - Kernel narrow code: **1,575 NCNB** across 9 `kernel/*.sexp`.
   - Rust trusted-by-review: **1,136 NCNB** across
     `ast.rs` + `eval.rs` + `load.rs` + `prim.rs` + `bin/check.rs`.
   - (Plus ~2,000 NCNB of Rust tests + builders in `lib.rs` + `nval.rs`

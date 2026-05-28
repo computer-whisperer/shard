@@ -203,6 +203,9 @@
       ;;           expr_eq. See eqdec.sexp. This is what discharges
       ;;           reflexivity facts like `int_eq k k = True` that the
       ;;           reducer leaves stuck on variables.
+      ;;   ord   — order-reflection: decides `(lt a b) = True` and
+      ;;           `(le a b) = True` when (b - a) canonicalizes to a
+      ;;           constant of the right sign. See ord.sexp.
       (if (sym_eq theory_name (quote lia))
           (match seq
             ((Sequent _ _ _ (Equation lhs rhs))
@@ -211,7 +214,11 @@
               (match seq
                 ((Sequent _ _ _ (Equation lhs rhs))
                   (eqdec_decide lhs rhs)))
-              False)))))                             ; unknown theory
+              (if (sym_eq theory_name (quote ord))
+                  (match seq
+                    ((Sequent _ _ _ (Equation lhs rhs))
+                      (ord_decide lhs rhs)))
+                  False))))))                         ; unknown theory
 
 ;; ---------------------------------------------------------------------------
 ;; apply_steps / apply_step: run non-branching steps, threading the

@@ -305,6 +305,32 @@ is where to start when planning v3.
   expose the breadth gap). Also a natural home to widen to other
   reflected primitives (`lt`/`le` reflected into Bool, etc.).
 
+### `ord` — order-reflection backend (slice 35)
+- **Chose:** a third `ByTheory` backend (`kernel/ord.sexp`) that
+  decides `(lt a b) = True` and `(le a b) = True` by reusing LIA's
+  canonicalizer on `(b - a)`: accept iff the difference reduces to a
+  lone constant `c` with `c >= 1` (strict) or `c >= 0` (non-strict).
+  Only the `= True` direction; fixed orientation; variables surviving
+  in the difference → reject (not a tautology). Motivated by the M3
+  loop invariant, whose guard/bounds reasoning is inequality, not
+  equality (LIA decides equalities only).
+- **Why now:** the M3 capstone (slice 34) confirmed concretely that
+  the loop invariant needs `lt`/`le`. Smallest backend that unblocks
+  it; reuses LIA's polynomial machinery, so it's ~30 lines.
+- **Caveats (same family as lia/eqdec):** opaque atoms assumed
+  integer-typed (inherited from `lia_collect`); the threshold check
+  `c >= threshold` uses the concrete `le` PRIMITIVE on known integers
+  — deciding a symbolic order fact by concrete arithmetic, sound and
+  not circular. Conditional order facts (transitivity, bounds under a
+  hypothesis) are NOT proven — they arrive as premises, like eqdec's
+  disequalities.
+- **Revisit if:** a proof needs to PROVE a conditional inequality
+  (e.g. derive `a < c` from `a < b` and `b <= c` without the chain
+  being a closed-form constant) — that wants a richer LIA/Presburger
+  fragment or premise-aware deduction in the backend. Also the natural
+  place to add strict/non-strict mixing or `(lt a b) = False` ⟺
+  `(le b a) = True` if a proof needs the negated form.
+
 ### RewriteWith — single-match only (Insts shipped slice 32)
 - **Chose (slice 27):** the conditional rewrite proof step landed
   with two restrictions:

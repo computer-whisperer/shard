@@ -1,0 +1,75 @@
+;;; ord: a decision backend for order-reflection goals.
+;;;
+;;; Third ByTheory backend, after `lia` (equalities) and `eqdec`
+;;; (equality reflection). Decides goals of the form
+;;;
+;;;     (lt a b) = True       and       (le a b) = True
+;;;
+;;; — comparison on the LHS, the `True` ctor on the RHS — by reusing
+;;; LIA's polynomial canonicalizer on the difference (b - a):
+;;;
+;;;   - canonicalize (b - a). If it reduces to a LONE CONSTANT c (no
+;;;     variable monomials remain), the comparison is valid for ALL
+;;;     integer assignments:
+;;;       lt  holds iff c >= 1   (a < b  ⟺  b - a >= 1 over the integers)
+;;;       le  holds iff c >= 0   (a ≤ b  ⟺  b - a >= 0)
+;;;   - if any variable monomial survives, (b - a) is not a fixed sign,
+;;;     so the order is NOT a tautology → reject (conservative).
+;;;
+;;; So `(lt a (+ a 1)) = True` is decided (diff = 1), `(le a a) = True`
+;;; is decided (diff = 0), but `(lt a b) = True` for independent a, b is
+;;; correctly rejected (diff = b - a has variables). Conditional order
+;;; facts (transitivity, bounds under a hypothesis) are NOT proven here;
+;;; like eqdec's disequalities, they arrive as premises and the proof
+;;; consumes them.
+;;;
+;;; Scope / caveats mirror eqdec and lia: only the `= True` direction;
+;;; fixed orientation; opaque atoms are assumed integer-typed (inherited
+;;; from lia_collect). The threshold check `c >= threshold` uses the
+;;; concrete `le` primitive on known integers — deciding a symbolic
+;;; order fact by concrete arithmetic, not circular.
+;;; See REVISIT — "ord — order-reflection backend".
+
+;; Extract the constant value of a canonicalized polynomial, or None if
+;; any variable monomial remains. Post-canonical there is at most one
+;; constant monomial and no duplicate atoms; the recursive sum is
+;; defensive. A surviving (Some _) atom means "has a variable" → None.
+(fn lia_const_value ((p (List (Pair Int (Option Expr))))) (Option Int)
+  (match p
+    (Nil (Some 0))
+    ((Cons (Pair c atom) rest)
+      (match atom
+        (None
+          (match (lia_const_value rest)
+            ((Some rest_c) (Some (+ c rest_c)))
+            (None          None)))
+        ((Some _) None)))))                          ; variable monomial
+
+;; Decide `a <cmp> b` where the validity threshold on (b - a) is given:
+;; threshold 1 for strict `<`, threshold 0 for `<=`. Canonicalize
+;; (b - a); accept iff it's a constant c with c >= threshold.
+(fn ord_check_diff ((a Expr) (b Expr) (threshold Int)) Bool
+  (match (lia_const_value
+           (lia_canonical
+             (lia_concat (lia_collect b 1)
+                         (lia_collect a (- 0 1)))))
+    ((Some c) (le threshold c))                      ; concrete: c >= threshold
+    (None     False)))                               ; variables remain
+
+(fn ord_decide ((lhs Expr) (rhs Expr)) Bool
+  (match rhs
+    ((Ctor tname _)
+      (if (sym_eq tname (quote True))
+          (match lhs
+            ((Call f args)
+              (match args
+                ((Cons a (Cons b Nil))
+                  (if (sym_eq f (quote lt))
+                      (ord_check_diff a b 1)
+                      (if (sym_eq f (quote le))
+                          (ord_check_diff a b 0)
+                          False)))                   ; unknown comparison prim
+                (_ False)))                          ; not a binary call
+            (_ False))                               ; LHS not a Call
+          False))                                    ; RHS ctor isn't True
+    (_ False)))                                      ; RHS not a ctor
