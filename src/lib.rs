@@ -1854,6 +1854,103 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
+    // Slice 19: Induct with non-empty rest_params.
+    //
+    // First runtime exercise of build_ih's close path on a non-Nil
+    // rest_params list: when the sequent has OTHER ∀-bound vars
+    // besides the one being inducted on, the IH abstracts over them
+    // via close_eq + reverse_syms. Until now every Induct test had
+    // exactly one ∀-bound var (rest_params = []), so close_eq was
+    // always called with an empty names list and the path was a no-op.
+    //
+    // Theorem: ∀ a b : Nat. (add_nat (S a) b) = (S (add_nat a b))
+    //   Induct on `a`, keeping `b` as a ∀-var.
+    //
+    // Both subgoals close via Unfold add_nat Lhs + Reduce Lhs + Refl
+    // because the statement is computationally direct: one unfold of
+    // add_nat on the lhs fires the (S k) arm and produces the rhs's
+    // shape exactly. The IH that build_ih constructs in the S case
+    // — namely (Goal [Param b Nat] [] (closed eq)) where the closed
+    // eq references BVar 0 for the abstracted b — is built but not
+    // consumed. This isolates the test to the build mechanism.
+    //
+    // Note: the IH cannot be consumed by Rewrite at v2 anyway — its
+    // Goal has a non-Nil params list, which the Rewrite arm rejects
+    // (gates require Goal Nil Nil). Pattern-variable Rewrite would
+    // unlock that path; it's not implemented.
+    // ------------------------------------------------------------------
+
+    /// ∀ a b : Nat. (add_nat (S a) b) = (S (add_nat a b)).
+    /// Induct on a; b survives as an outer ∀-var.
+    #[test]
+    fn check_seq_induct_with_other_universal_present() {
+        let m = load_kernel();
+        let nat_td = type_def("Nat", vec![], vec![
+            ctor_def("Z", vec![]),
+            ctor_def("S", vec![tcon("Nat", vec![])]),
+        ]);
+        // (fn add_nat ((a Nat) (b Nat)) Nat
+        //   (match a (Z b) ((S k) (S (add_nat k b)))))
+        let add_nat_body = nmatch(
+            bvar(1),                                          // a
+            vec![
+                narm(pctor("Z", vec![]), bvar(0)),            // -> b
+                narm(pctor("S", vec![pvar()]),
+                     ctor_app("S", vec![
+                        call("add_nat", vec![bvar(0), bvar(1)]),   // (add_nat k b)
+                     ])),
+            ],
+        );
+        let add_nat_fn = fn_def("add_nat",
+            vec![tcon("Nat", vec![]), tcon("Nat", vec![])],
+            tcon("Nat", vec![]),
+            add_nat_body,
+        );
+        let mod_v = module(vec![nat_td], vec![add_nat_fn], vec![]);
+
+        let nat = tcon("Nat", vec![]);
+        let seq = sequent(
+            vec![param("a", nat.clone()), param("b", nat)],
+            vec![], vec![],
+            equation(
+                call("add_nat", vec![
+                    ctor_app("S", vec![fvar("a")]),
+                    fvar("b"),
+                ]),
+                ctor_app("S", vec![
+                    call("add_nat", vec![fvar("a"), fvar("b")]),
+                ]),
+            ),
+        );
+
+        // Z case after subst (a := Z):
+        //   (add_nat (S Z) b) = (S (add_nat Z b))
+        //   Unfold + Reduce on Lhs: fires the (S k) arm with k = Z,
+        //   yielding (S (add_nat Z b)). RHS is unchanged. Refl.
+        // S case after subst (a := S _f):
+        //   (add_nat (S (S _f)) b) = (S (add_nat (S _f) b))
+        //   IH at Hyp 0: ∀ b. (add_nat (S _f) b) = (S (add_nat _f b)).
+        //   The IH is BUILT via close_eq on [b] — first runtime
+        //   exercise of the close path with a non-empty names list.
+        //   We do NOT consume the IH; same Unfold + Reduce + Refl
+        //   closes (the (S (S _f)) gets one S peeled and add_nat
+        //   unfolds correspondingly).
+        let branch = steps(
+            vec![
+                unfold("add_nat", side_lhs()),
+                reduce(side_lhs()),
+            ],
+            refl(),
+        );
+        let pf = induct("a", vec![
+            case_arm("Z", branch.clone()),
+            case_arm("S", branch),
+        ]);
+        let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
+        assert_eq!(r, true_v());
+    }
+
+    // ------------------------------------------------------------------
     // Slice 18: a STRETCH proof.
     //
     //   ∀ xs : List Int. (length (id_list xs)) = (length xs)
