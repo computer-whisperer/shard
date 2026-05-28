@@ -49,6 +49,7 @@ mod tests {
             p("term.sexp"),
             p("reduce.sexp"),
             p("check.sexp"),
+            p("lia.sexp"),
         ])
         .expect("kernel loads")
     }
@@ -2241,6 +2242,156 @@ mod tests {
         ]);
         let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
         assert_eq!(r, true_v());
+    }
+
+    // ------------------------------------------------------------------
+    // Slice 22: ByTheory + LIA decision procedure.
+    //
+    // First decidable-theory backend. The kernel registers one
+    // theory name "lia"; the ByTheory arm dispatches there and
+    // returns the result of `lia_decide` on the goal eq's sides.
+    //
+    // Cert payload: presence-only for v2 (LIA is poly-time; no
+    // asymmetry to exploit). The slot remains for theories where
+    // checking is cheaper than searching.
+    //
+    // LIA handles `+ - *` (the * only by integer constants),
+    // IntLit, and arbitrary opaque atoms (FVar, BVar, non-arithmetic
+    // Calls). Decision: lhs - rhs canonicalizes to all-zero coeffs.
+    // ------------------------------------------------------------------
+
+    /// Helper: the empty Cert for LIA.
+    fn lia_cert() -> ast::Expr {
+        cert("lia", symlit(""))
+    }
+    fn lia_pf() -> ast::Expr {
+        by_theory("lia", lia_cert())
+    }
+
+    /// Commutativity over `+`: ∀ x y : Int. (+ x y) = (+ y x).
+    /// Both sides normalize to [(1, x), (1, y)]; diff = 0.
+    #[test]
+    fn check_seq_lia_plus_commutativity() {
+        let m = load_kernel();
+        let int = tcon("Int", vec![]);
+        let seq = sequent(
+            vec![param("x", int.clone()), param("y", int)],
+            vec![], vec![],
+            equation(
+                call("+", vec![fvar("x"), fvar("y")]),
+                call("+", vec![fvar("y"), fvar("x")]),
+            ),
+        );
+        let r = run_check_sequent(&m,
+            module(vec![], vec![], vec![]),
+            theory_empty(), seq, lia_pf());
+        assert_eq!(r, true_v());
+    }
+
+    /// Constant arithmetic: (+ 1 (+ 2 3)) = 6.
+    /// lhs collapses to [(6, None)], rhs to [(6, None)]; diff = 0.
+    #[test]
+    fn check_seq_lia_constants() {
+        let m = load_kernel();
+        let seq = sequent(
+            vec![], vec![], vec![],
+            equation(
+                call("+", vec![intlit(1),
+                    call("+", vec![intlit(2), intlit(3)])]),
+                intlit(6),
+            ),
+        );
+        let r = run_check_sequent(&m,
+            module(vec![], vec![], vec![]),
+            theory_empty(), seq, lia_pf());
+        assert_eq!(r, true_v());
+    }
+
+    /// Distributivity + commutativity over `*`:
+    /// (* (+ x y) 2) = (+ (* 2 x) (* y 2))
+    /// Both sides normalize to [(2, x), (2, y)].
+    #[test]
+    fn check_seq_lia_distributivity() {
+        let m = load_kernel();
+        let int = tcon("Int", vec![]);
+        let seq = sequent(
+            vec![param("x", int.clone()), param("y", int)],
+            vec![], vec![],
+            equation(
+                call("*", vec![
+                    call("+", vec![fvar("x"), fvar("y")]),
+                    intlit(2),
+                ]),
+                call("+", vec![
+                    call("*", vec![intlit(2), fvar("x")]),
+                    call("*", vec![fvar("y"), intlit(2)]),
+                ]),
+            ),
+        );
+        let r = run_check_sequent(&m,
+            module(vec![], vec![], vec![]),
+            theory_empty(), seq, lia_pf());
+        assert_eq!(r, true_v());
+    }
+
+    /// Subtraction: (- (+ x y) x) = y.
+    /// lhs: [(1, x), (1, y), (-1, x)] -> canonical [(1, y)].
+    /// rhs: [(1, y)]. Diff = 0.
+    #[test]
+    fn check_seq_lia_subtraction() {
+        let m = load_kernel();
+        let int = tcon("Int", vec![]);
+        let seq = sequent(
+            vec![param("x", int.clone()), param("y", int)],
+            vec![], vec![],
+            equation(
+                call("-", vec![
+                    call("+", vec![fvar("x"), fvar("y")]),
+                    fvar("x"),
+                ]),
+                fvar("y"),
+            ),
+        );
+        let r = run_check_sequent(&m,
+            module(vec![], vec![], vec![]),
+            theory_empty(), seq, lia_pf());
+        assert_eq!(r, true_v());
+    }
+
+    /// Negative: math is wrong. (+ x y) = (+ x 1) only if y = 1, not
+    /// in general. lia_decide finds diff = [(1, y), (-1, None)] ≠ 0.
+    #[test]
+    fn check_seq_lia_rejects_non_equal() {
+        let m = load_kernel();
+        let int = tcon("Int", vec![]);
+        let seq = sequent(
+            vec![param("x", int.clone()), param("y", int)],
+            vec![], vec![],
+            equation(
+                call("+", vec![fvar("x"), fvar("y")]),
+                call("+", vec![fvar("x"), intlit(1)]),
+            ),
+        );
+        let r = run_check_sequent(&m,
+            module(vec![], vec![], vec![]),
+            theory_empty(), seq, lia_pf());
+        assert_eq!(r, false_v());
+    }
+
+    /// Negative: unknown theory. ByTheory "magic" doesn't match any
+    /// registered theory, so the ByTheory arm returns False.
+    #[test]
+    fn check_seq_by_theory_rejects_unknown_theory() {
+        let m = load_kernel();
+        let seq = sequent(
+            vec![], vec![], vec![],
+            equation(intlit(1), intlit(1)),    // even though this IS true
+        );
+        let pf = by_theory("magic", cert("magic", symlit("")));
+        let r = run_check_sequent(&m,
+            module(vec![], vec![], vec![]),
+            theory_empty(), seq, pf);
+        assert_eq!(r, false_v());
     }
 
     // ------------------------------------------------------------------

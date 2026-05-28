@@ -1,0 +1,141 @@
+;;; LIA: Linear Integer Arithmetic decision procedure.
+;;;
+;;; Decides closed equalities over integer linear expressions built
+;;; from `+`, `-`, `*` (by integer constants only), IntLit, and
+;;; opaque atoms (FVar, BVar, non-arithmetic Calls).
+;;;
+;;; v2 cert protocol: the payload is unused — the kernel does the
+;;; polynomial-time decision itself. For theories where checking is
+;;; meaningfully cheaper than searching (LRAT for SAT, e.g.), the
+;;; cert payload would carry a refutation trace and the kernel
+;;; would verify it instead. LIA is poly-time, so the asymmetry
+;;; doesn't pay off here.
+;;;
+;;; Normal form: a Polynomial is a (List (Pair Int (Option Expr))).
+;;; Each monomial is (coeff, atom):
+;;;   atom = None    -> constant
+;;;   atom = Some e  -> e is an opaque sub-expression (FVar, BVar,
+;;;                     non-arithmetic Call, etc.)
+;;; Like terms share the same atom; equality decision is "lhs - rhs
+;;; canonicalizes to all-zero coefficients."
+
+;; ---------------------------------------------------------------------------
+;; Collection: walk an Expr, accumulating monomials.
+;; ---------------------------------------------------------------------------
+
+(fn lia_collect ((e Expr) (sign Int)) (List (Pair Int (Option Expr)))
+  (match e
+    ((Call f args)
+      (if (sym_eq f (quote +))
+          (lia_collect_plus args sign)
+          (if (sym_eq f (quote -))
+              (lia_collect_minus args sign)
+              (if (sym_eq f (quote *))
+                  (lia_collect_times args sign)
+                  (lia_atom e sign)))))
+    ((IntLit n)
+      (Cons (Pair (* sign n) None) Nil))
+    (_ (lia_atom e sign))))
+
+;; Helper for an opaque sub-expression — single monomial, coeff=sign.
+(fn lia_atom ((e Expr) (sign Int)) (List (Pair Int (Option Expr)))
+  (Cons (Pair sign (Some e)) Nil))
+
+;; (+ a b): collect both, combine.
+(fn lia_collect_plus ((args (List Expr)) (sign Int))
+                      (List (Pair Int (Option Expr)))
+  (match args
+    ((Cons a (Cons b Nil))
+      (lia_concat (lia_collect a sign) (lia_collect b sign)))
+    (_ (lia_atom (Call (quote +) args) sign))))     ; malformed; treat opaque
+
+;; (- a b): collect a with sign, b with -sign.
+(fn lia_collect_minus ((args (List Expr)) (sign Int))
+                       (List (Pair Int (Option Expr)))
+  (match args
+    ((Cons a (Cons b Nil))
+      (lia_concat (lia_collect a sign) (lia_collect b (- 0 sign))))
+    (_ (lia_atom (Call (quote -) args) sign))))
+
+;; (* k e) or (* e k) — k must be an IntLit (linearity).
+(fn lia_collect_times ((args (List Expr)) (sign Int))
+                       (List (Pair Int (Option Expr)))
+  (match args
+    ((Cons (IntLit k) (Cons inner Nil))
+      (lia_scale (* sign k) (lia_collect inner 1)))
+    ((Cons inner (Cons (IntLit k) Nil))
+      (lia_scale (* sign k) (lia_collect inner 1)))
+    (_ (lia_atom (Call (quote *) args) sign))))     ; non-linear; treat opaque
+
+(fn lia_scale ((k Int) (p (List (Pair Int (Option Expr)))))
+              (List (Pair Int (Option Expr)))
+  (match p
+    (Nil Nil)
+    ((Cons (Pair c a) rest)
+      (Cons (Pair (* k c) a) (lia_scale k rest)))))
+
+(fn lia_concat ((a (List (Pair Int (Option Expr))))
+                (b (List (Pair Int (Option Expr)))))
+                (List (Pair Int (Option Expr)))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (lia_concat t b)))))
+
+;; ---------------------------------------------------------------------------
+;; Canonicalization: merge like terms, drop zero coefficients.
+;; ---------------------------------------------------------------------------
+
+(fn lia_canonical ((p (List (Pair Int (Option Expr)))))
+                   (List (Pair Int (Option Expr)))
+  (match p
+    (Nil Nil)
+    ((Cons (Pair c a) rest)
+      (match (lia_split_atom a rest)
+        ((Pair total rest_no_a)
+          (let ((coeff      (+ c total))
+                (rest_canon (lia_canonical rest_no_a)))
+            (if (int_eq coeff 0)
+                rest_canon
+                (Cons (Pair coeff a) rest_canon))))))))
+
+;; Split a polynomial into (sum_of_coeffs_for_atom_a, rest_without_a).
+(fn lia_split_atom ((a (Option Expr)) (p (List (Pair Int (Option Expr)))))
+                    (Pair Int (List (Pair Int (Option Expr))))
+  (match p
+    (Nil (Pair 0 Nil))
+    ((Cons (Pair c b) rest)
+      (match (lia_split_atom a rest)
+        ((Pair total others)
+          (if (lia_atom_eq a b)
+              (Pair (+ c total) others)
+              (Pair total (Cons (Pair c b) others))))))))
+
+;; Atom equality. Constants compare equal; opaque expressions
+;; compare by expr_eq.
+(fn lia_atom_eq ((a (Option Expr)) (b (Option Expr))) Bool
+  (match a
+    (None
+      (match b (None True) (_ False)))
+    ((Some ea)
+      (match b
+        ((Some eb) (expr_eq ea eb))
+        (_         False)))))
+
+;; ---------------------------------------------------------------------------
+;; Final test: are all coefficients zero?
+;; ---------------------------------------------------------------------------
+
+(fn lia_all_zero ((p (List (Pair Int (Option Expr))))) Bool
+  (match p
+    (Nil True)
+    ((Cons (Pair c _) rest)
+      (if (int_eq c 0) (lia_all_zero rest) False))))
+
+;; ---------------------------------------------------------------------------
+;; Entry point: decide lhs = rhs by checking (lhs - rhs) canonicalizes
+;; to all zeros.
+;; ---------------------------------------------------------------------------
+
+(fn lia_decide ((lhs Expr) (rhs Expr)) Bool
+  (let ((diff (lia_concat (lia_collect lhs 1) (lia_collect rhs (- 0 1)))))
+    (lia_all_zero (lia_canonical diff))))

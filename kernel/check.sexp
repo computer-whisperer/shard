@@ -152,9 +152,17 @@
             (_ False)))))
 
     ((ByTheory theory_name cert)
-      ;; TODO: dispatch to the per-theory checker registered under
-      ;; theory_name; accept iff the cert validates the current goal.
-      False)))
+      ;; Per-theory dispatch. The cert's payload is theory-specific.
+      ;; v2 currently registers one theory: lia (linear integer
+      ;; arithmetic). The LIA path decides by normalizing both sides
+      ;; of the goal eq into polynomials and checking lhs - rhs
+      ;; canonicalizes to all zero coefficients; the cert payload is
+      ;; unused (LIA is poly-time; no asymmetry to exploit).
+      (if (sym_eq theory_name (quote lia))
+          (match seq
+            ((Sequent _ _ _ (Equation lhs rhs))
+              (lia_decide lhs rhs)))
+          False))))                                  ; unknown theory
 
 ;; ---------------------------------------------------------------------------
 ;; apply_steps / apply_step: run non-branching steps, threading the

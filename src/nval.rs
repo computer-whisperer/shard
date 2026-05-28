@@ -164,6 +164,17 @@ pub fn induct(var: &str, cases: Vec<Expr>) -> Expr {
     ctor("Induct", vec![Expr::SymLit(var.into()), list(cases)])
 }
 
+/// (ByTheory theory_name cert) — top-level Proof.
+pub fn by_theory(theory_name: &str, cert: Expr) -> Expr {
+    ctor("ByTheory", vec![Expr::SymLit(theory_name.into()), cert])
+}
+
+/// (Cert theory_name payload) — theory cert value. Payload is
+/// theory-specific; for v2 LIA, ignored.
+pub fn cert(theory_name: &str, payload: Expr) -> Expr {
+    ctor("Cert", vec![Expr::SymLit(theory_name.into()), payload])
+}
+
 /// (Case cname pf). One arm of a CaseOn or Induct.
 pub fn case_arm(cname: &str, pf: Expr) -> Expr {
     ctor("Case", vec![Expr::SymLit(cname.into()), pf])
