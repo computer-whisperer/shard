@@ -1,0 +1,56 @@
+;;; eqdec: a decision backend for equality-reflection goals.
+;;;
+;;; The primitive comparisons `int_eq` / `sym_eq` return a value of the
+;;; user `Bool` type. The reducer evaluates them only on CLOSED args
+;;; (two IntLits, two SymLits) — on a variable, `(int_eq k k)` is left
+;;; stuck. But reflexivity (and, for ints, any LIA-equality) is a
+;;; decidable fact about the primitive, so we decide it rather than
+;;; axiomatize it: the audit ledger stays empty.
+;;;
+;;; This is the second `ByTheory` backend after `lia` (see lia.sexp).
+;;; It decides goals of the form
+;;;
+;;;     (<eqprim> a b) = True
+;;;
+;;; with the equality test on the LHS and the `True` ctor on the RHS:
+;;;   - int_eq → `(lia_decide a b)`  (a and b are LIA-equal; covers
+;;;                                   reflexivity `int_eq k k` and e.g.
+;;;                                   `int_eq (+ k 1) (+ 1 k)` for free)
+;;;   - sym_eq → `(expr_eq a b)`     (symbols have no arithmetic; the
+;;;                                   only decidable case is syntactic
+;;;                                   identity)
+;;;
+;;; Soundness rests on well-typedness, the same as `lia`: `lia_decide`
+;;; treats opaque atoms as integers, and `expr_eq` accepts any two
+;;; identical Exprs (broader than the runtime `sym_eq`, which fires
+;;; only on two SymLits — but reflexivity on a symbol VARIABLE is the
+;;; intended use and needs exactly that breadth). For well-typed terms
+;;; both deciders are sound. See REVISIT — "eqdec — equality-reflection
+;;; backend".
+;;;
+;;; Scope (deliberately minimal):
+;;;   - Only the `= True` direction. Disequalities (`= False`) are never
+;;;     PROVEN here — they arrive as hypotheses/premises in conditional
+;;;     lemmas (lookup_insert_neq), where the proof consumes them.
+;;;   - Orientation is fixed: comparison on the LHS, `True` on the RHS.
+;;;     A flipped goal returns False (clean rejection). The kernel's
+;;;     authored lemmas state the canonical orientation.
+;;;   - Any other head, arity, or RHS shape → False.
+
+(fn eqdec_decide ((lhs Expr) (rhs Expr)) Bool
+  (match rhs
+    ((Ctor tname _)
+      (if (sym_eq tname (quote True))
+          (match lhs
+            ((Call f args)
+              (match args
+                ((Cons a (Cons b Nil))
+                  (if (sym_eq f (quote int_eq))
+                      (lia_decide a b)
+                      (if (sym_eq f (quote sym_eq))
+                          (expr_eq a b)
+                          False)))                 ; unknown comparison prim
+                (_ False)))                        ; not a binary call
+            (_ False))                             ; LHS not a Call
+          False))                                  ; RHS ctor isn't True
+    (_ False)))                                    ; RHS not a ctor

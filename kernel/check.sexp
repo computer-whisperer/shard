@@ -192,16 +192,26 @@
 
     ((ByTheory theory_name cert)
       ;; Per-theory dispatch. The cert's payload is theory-specific.
-      ;; v2 currently registers one theory: lia (linear integer
-      ;; arithmetic). The LIA path decides by normalizing both sides
-      ;; of the goal eq into polynomials and checking lhs - rhs
-      ;; canonicalizes to all zero coefficients; the cert payload is
-      ;; unused (LIA is poly-time; no asymmetry to exploit).
+      ;; v2 registers two theories:
+      ;;   lia   — linear integer arithmetic. Decides by normalizing
+      ;;           both sides of the goal eq into polynomials and
+      ;;           checking lhs - rhs canonicalizes to all zero
+      ;;           coefficients. Cert payload unused (poly-time; no
+      ;;           checking/searching asymmetry to exploit).
+      ;;   eqdec — equality-reflection: decides `(int_eq a b) = True`
+      ;;           via lia_decide and `(sym_eq a b) = True` via
+      ;;           expr_eq. See eqdec.sexp. This is what discharges
+      ;;           reflexivity facts like `int_eq k k = True` that the
+      ;;           reducer leaves stuck on variables.
       (if (sym_eq theory_name (quote lia))
           (match seq
             ((Sequent _ _ _ (Equation lhs rhs))
               (lia_decide lhs rhs)))
-          False))))                                  ; unknown theory
+          (if (sym_eq theory_name (quote eqdec))
+              (match seq
+                ((Sequent _ _ _ (Equation lhs rhs))
+                  (eqdec_decide lhs rhs)))
+              False)))))                             ; unknown theory
 
 ;; ---------------------------------------------------------------------------
 ;; apply_steps / apply_step: run non-branching steps, threading the

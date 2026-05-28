@@ -38,6 +38,7 @@ pub fn load_kernel_from<P: AsRef<std::path::Path>>(
         p("reduce.sexp"),
         p("check.sexp"),
         p("lia.sexp"),
+        p("eqdec.sexp"),
     ])
 }
 
@@ -2411,6 +2412,94 @@ mod tests {
         let r = run_check_sequent(&m,
             module(vec![], vec![], vec![]),
             theory_empty(), seq, pf);
+        assert_eq!(r, false_v());
+    }
+
+    // ------------------------------------------------------------------
+    // Slice 33: eqdec ByTheory backend (kernel/eqdec.sexp).
+    //
+    // Second decidable-theory backend. Decides equality-reflection
+    // goals `(int_eq a b) = True` (via lia_decide) and
+    // `(sym_eq a b) = True` (via expr_eq). The motivating use is
+    // reflexivity on a variable — `int_eq k k = True` — which the
+    // reducer leaves stuck (int_eq only fires on closed IntLits).
+    //
+    // These Rust mirrors guard the trusted backend directly, including
+    // the rejection paths the end-to-end sexp claims don't exercise:
+    // distinct keys must NOT be provably equal, and only the `= True`
+    // direction is decided (disequalities arrive as hypotheses).
+    // ------------------------------------------------------------------
+
+    fn eqdec_pf() -> ast::Expr {
+        by_theory("eqdec", cert("eqdec", symlit("")))
+    }
+
+    /// Positive: ∀ k : Int. (int_eq k k) = True. lia_decide k k = 0.
+    /// This is the `int_eq_refl` lemma's kernel core.
+    #[test]
+    fn check_seq_eqdec_int_eq_refl() {
+        let m = load_kernel();
+        let int = tcon("Int", vec![]);
+        let seq = sequent(
+            vec![param("k", int)],
+            vec![], vec![],
+            equation(call("int_eq", vec![fvar("k"), fvar("k")]), ctor_app("True", vec![])),
+        );
+        let r = run_check_sequent(&m,
+            module(vec![], vec![], vec![]),
+            theory_empty(), seq, eqdec_pf());
+        assert_eq!(r, true_v());
+    }
+
+    /// Positive: ∀ a. (sym_eq a a) = True, decided by expr_eq.
+    #[test]
+    fn check_seq_eqdec_sym_eq_refl() {
+        let m = load_kernel();
+        let sym = tcon("Symbol", vec![]);
+        let seq = sequent(
+            vec![param("a", sym)],
+            vec![], vec![],
+            equation(call("sym_eq", vec![fvar("a"), fvar("a")]), ctor_app("True", vec![])),
+        );
+        let r = run_check_sequent(&m,
+            module(vec![], vec![], vec![]),
+            theory_empty(), seq, eqdec_pf());
+        assert_eq!(r, true_v());
+    }
+
+    /// Negative (soundness): distinct keys are NOT provably equal.
+    /// (int_eq j k) = True must be REJECTED — lia_decide j k = [(1,j),(-1,k)] ≠ 0.
+    #[test]
+    fn check_seq_eqdec_rejects_distinct_keys() {
+        let m = load_kernel();
+        let int = tcon("Int", vec![]);
+        let seq = sequent(
+            vec![param("j", int.clone()), param("k", int)],
+            vec![], vec![],
+            equation(call("int_eq", vec![fvar("j"), fvar("k")]), ctor_app("True", vec![])),
+        );
+        let r = run_check_sequent(&m,
+            module(vec![], vec![], vec![]),
+            theory_empty(), seq, eqdec_pf());
+        assert_eq!(r, false_v());
+    }
+
+    /// Negative (scope): eqdec only decides the `= True` direction.
+    /// `(int_eq k k) = False` is FALSE and must be rejected — even
+    /// though `int_eq k k` IS reflexively true, the asserted RHS is
+    /// False. (Disequalities are consumed as hypotheses, never proven.)
+    #[test]
+    fn check_seq_eqdec_rejects_false_direction() {
+        let m = load_kernel();
+        let int = tcon("Int", vec![]);
+        let seq = sequent(
+            vec![param("k", int)],
+            vec![], vec![],
+            equation(call("int_eq", vec![fvar("k"), fvar("k")]), ctor_app("False", vec![])),
+        );
+        let r = run_check_sequent(&m,
+            module(vec![], vec![], vec![]),
+            theory_empty(), seq, eqdec_pf());
         assert_eq!(r, false_v());
     }
 

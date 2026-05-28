@@ -25,7 +25,8 @@ cargo run --bin check -- examples/lia_basics.sexp \
                          examples/double_claims.sexp \
                          examples/add_nat_zero.sexp \
                          examples/rewrite_with_demo.sexp \
-                         examples/list_lemmas.sexp
+                         examples/list_lemmas.sexp \
+                         examples/map_lemmas.sexp
 ```
 
 Expected output:
@@ -33,9 +34,9 @@ Expected output:
 ```
 PASS  plus_comm
 …
-PASS  fast_eq_rev_at_sym
+PASS  insert_shadow
 
-16 passed, 0 failed
+21 passed, 0 failed
 ```
 
 The `check` binary loads the bundled kernel, then walks each
@@ -53,7 +54,7 @@ Run the Rust test suite (loader, evaluator, kernel-from-rust mirrors):
 cargo test --release
 ```
 
-86 tests as of slice 32.
+90 tests as of slice 33.
 
 ## Repository layout
 
@@ -67,7 +68,7 @@ docs/
   REVISIT.md           ; design-decision ledger — every choice + when to
                        ;   revisit. The "why" lives here.
 
-kernel/                ; the trusted kernel, written in narrow (1,985 NCNB)
+kernel/                ; the trusted kernel, written in narrow (1,537 NCNB)
   stdlib.sexp          ;   List / Option / Pair / Bool
   term.sexp            ;   Expr / Pat / shift / subst / open_many / close_many
   reduce.sexp          ;   step / step_iota / step_smart (gated δ) / memo
@@ -75,6 +76,7 @@ kernel/                ; the trusted kernel, written in narrow (1,985 NCNB)
   module.sexp          ;   Module / FnDef / TypeDef / ExternDef
   check.sexp           ;   check_sequent — the entry point
   lia.sexp             ;   LIA decision procedure (ByTheory backend)
+  eqdec.sexp           ;   equality-reflection backend (int_eq/sym_eq = True)
 
 src/                   ; the trusted-by-review Rust component
   ast.rs               ;   Expr / Pat / Type / Module ADTs the loader produces
@@ -82,7 +84,7 @@ src/                   ; the trusted-by-review Rust component
   eval.rs              ;   CBV evaluator; stuck-and-intercept for primitives
   prim.rs              ;   primitive table (+ - * mod, int_eq, gen_fresh, …)
   nval.rs              ;   narrow-value builders for tests
-  lib.rs               ;   loader entrypoint + Rust test suite (86 tests)
+  lib.rs               ;   loader entrypoint + Rust test suite (90 tests)
   bin/check.rs         ;   the `check` proof-script driver binary
 
 examples/              ; user modules + proof-script claim files
@@ -90,6 +92,9 @@ examples/              ; user modules + proof-script claim files
   list_lemmas.sexp     ;   reverse tower over (List T) + concrete-type
                        ;     reuse demos (fast_eq_rev_at_int / _at_sym)
   lia_basics.sexp      ;   LIA examples incl. the Insts demo (slice 32)
+  map_lib.sexp         ;   finite (Map V) over Int keys — lookup / insert
+  map_lemmas.sexp      ;   extensional map lemmas (slice 33): lookup_insert_eq,
+                       ;     lookup_insert_neq, insert_shadow + int_eq_refl
   …
 
 tools/
@@ -121,6 +126,7 @@ Feature checklist (✓ = shipped in v2; → = next):
 | Pattern-variable `Rewrite` (∀-capture)  | ✓        | 20     |
 | `Absurd` (closing by contradiction)     | ✓        | 9      |
 | `ByTheory` + LIA decision procedure     | ✓        | 22     |
+| `eqdec` theory (`int_eq`/`sym_eq` = True) | ✓      | 33     |
 | CLI driver (`check` binary)             | ✓        | 23     |
 | `(use-module …)` loader                 | ✓        | 24     |
 | Surface sugars (`'foo`, `(list …)`, `(ty …)`) | ✓  | 25, 28 |
@@ -129,7 +135,8 @@ Feature checklist (✓ = shipped in v2; → = next):
 | Simp guarding (gated δ + list-memo)     | ✓        | 30     |
 | Polymorphism in fn sigs + `(tv T)`      | ✓        | 31     |
 | Insts pre-instantiation                 | ✓        | 32     |
-| First-class finite maps / collections   | →        |        |
+| Finite maps (Int keys) + extensional lemmas | ✓    | 33     |
+| Polymorphic-key maps `(Map K V)`        | →        |        |
 | Defunctionalized higher-order           | →        |        |
 | Measure / well-founded recursion        | →        |        |
 | Mutual recursion + mutual induction     | →        |        |
@@ -149,14 +156,19 @@ premises"). Each item links to its REVISIT entry if one exists.
 
 ### Big-ticket mandate items
 
-1. **Finite maps / collections** — TRANSFER mandate #2. Real
-   programs index things; the lemma library for arrays/maps is also
-   the gateway to declarative specs (e.g. `perm` for sorting). The
-   theory is decidable, so this also fits the SMT-as-certificate
-   story. Likely shape: polymorphic `(type (Map K V) …)` over an
-   inner ADT (BST or assoc list), small lemma library
-   (`lookup_insert`, `insert_insert`, etc.), and possibly a
-   Rust-side hashmap primitive for performance.
+1. **Finite maps / collections** — TRANSFER mandate #2. *Slice 33
+   shipped the first cut:* `(Map V)` over **Int keys** (assoc list,
+   prepend-insert, first-match-lookup) with an extensional lemma
+   library (`lookup_insert_eq`, `lookup_insert_neq`, `insert_shadow`),
+   enabled by the `eqdec` backend deciding `int_eq k k = True`. Map
+   facts are stated EXTENSIONALLY — quantified over a probe key under
+   `lookup` — because prepend-insert leaves structurally-distinct but
+   observationally-equal maps. *Remaining:* polymorphic keys
+   `(Map K V)` (needs a key-equality mechanism — couples to the
+   defunctionalized-HOF item below); a richer lemma library
+   (`remove`, `keys`, domain reasoning); the gateway to declarative
+   specs like `perm` for sorting; and possibly a Rust-side hashmap
+   primitive for performance.
 
 2. **Defunctionalized higher-order** — TRANSFER mandate #3. Pass
    function *names*, not closures. ACL2's `apply$` is the model.
@@ -251,10 +263,10 @@ the audit boundary visible at the kernel layer.
 
 - **Substrate:** v2 kernel + loader + driver. Feature-complete for
   the v1 reverse-tower headline; extended with polymorphism, Simp
-  guarding, ByTheory, and Insts.
+  guarding, ByTheory (LIA + eqdec), Insts, and finite maps (Int keys).
 - **Trusted core size:**
-  - Kernel narrow code: **1,516 NCNB** across 7 `kernel/*.sexp`.
-  - Rust trusted-by-review: **1,140 NCNB** across
+  - Kernel narrow code: **1,537 NCNB** across 8 `kernel/*.sexp`.
+  - Rust trusted-by-review: **1,136 NCNB** across
     `ast.rs` + `eval.rs` + `load.rs` + `prim.rs` + `bin/check.rs`.
   - (Plus ~2,000 NCNB of Rust tests + builders in `lib.rs` + `nval.rs`
     that are not part of the trusted surface.)

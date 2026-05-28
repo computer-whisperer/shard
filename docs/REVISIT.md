@@ -273,6 +273,38 @@ is where to start when planning v3.
   certificate format (e.g., one wants opaque binary blobs); promote
   the payload to a more general carrier.
 
+### `eqdec` — equality-reflection backend (slice 33)
+- **Chose:** a second `ByTheory` backend (`kernel/eqdec.sexp`) that
+  decides `(int_eq a b) = True` via `lia_decide a b` and
+  `(sym_eq a b) = True` via `expr_eq a b`. Fixed orientation
+  (comparison on LHS, `True` on RHS); only the `= True` direction;
+  any other head / arity / RHS shape → `False`. Motivated by finite
+  maps needing reflexivity `int_eq k k = True`, which the reducer
+  leaves stuck on a variable (`int_eq` only fires on closed IntLits).
+- **Why now:** decided-not-axiomatized keeps the audit ledger empty,
+  and it's the smallest possible second backend — proves the
+  pluggable-`ByTheory` slot generalizes past LIA.
+- **Two caveats (both the standard erased-types caveat, surfaced by
+  the slice-33 soundness review):**
+    - `sym_eq`'s decider is `expr_eq`, which returns `True` for ANY
+      two structurally-identical Exprs (equal FVars, equal Calls,
+      etc.) — broader than the runtime `sym_eq` primitive, which only
+      fires on two `SymLit`s. This is *required*: reflexivity on a
+      symbol VARIABLE (`sym_eq x x`, x an FVar) is the whole point and
+      can't be expressed by restricting to `SymLit`. Sound for
+      well-typed terms (where `sym_eq`'s args are symbols, so
+      syntactic identity ⟹ equal symbol ⟹ `True`); a compound-term
+      `sym_eq` is ill-typed and never arises in well-typed proofs. No
+      `sym_eq`-via-eqdec lemma is authored yet, so this path is
+      currently unexercised.
+    - `int_eq` over opaque atoms inherits LIA's "atoms are assumed
+      integer-typed" assumption (see `lia_collect`). Not new to eqdec.
+- **Revisit if:** the full-language type checker lands and we want the
+  backend to *enforce* operand types rather than rely on well-typed
+  inputs; or if a `sym_eq`-over-compound goal ever surfaces (it would
+  expose the breadth gap). Also a natural home to widen to other
+  reflected primitives (`lt`/`le` reflected into Bool, etc.).
+
 ### RewriteWith — single-match only (Insts shipped slice 32)
 - **Chose (slice 27):** the conditional rewrite proof step landed
   with two restrictions:
