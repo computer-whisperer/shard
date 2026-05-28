@@ -148,6 +148,25 @@ pub fn unfold(name: &str, side: Expr) -> Expr {
 pub fn reduce(side: Expr) -> Expr { ctor("Reduce", vec![side]) }
 pub fn simp(side: Expr) -> Expr   { ctor("Simp",   vec![side]) }
 
+/// `(Rewrite er dir side all_occ insts)` — Step ctor.
+pub fn rewrite(er: Expr, dir: Expr, side: Expr, all_occ: Expr, insts: Vec<Expr>) -> Expr {
+    ctor("Rewrite", vec![er, dir, side, all_occ, list(insts)])
+}
+
+// Dir variants.
+pub fn dir_lr() -> Expr { ctor("Lr", vec![]) }
+pub fn dir_rl() -> Expr { ctor("Rl", vec![]) }
+
+// Bool values (for Step::Rewrite's `all_occ` field; also useful as
+// any narrow Bool ctor value).
+pub fn bool_true()  -> Expr { ctor("True",  vec![]) }
+pub fn bool_false() -> Expr { ctor("False", vec![]) }
+
+// Inst — pre-instantiation of a ∀-bound var in the cited equation.
+pub fn inst(name: &str, e: Expr) -> Expr {
+    ctor("Inst", vec![Expr::SymLit(name.into()), e])
+}
+
 pub fn side_lhs() -> Expr  { ctor("Lhs",  vec![]) }
 pub fn side_rhs() -> Expr  { ctor("Rhs",  vec![]) }
 pub fn side_both() -> Expr { ctor("Both", vec![]) }

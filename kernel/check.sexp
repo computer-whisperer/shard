@@ -195,10 +195,26 @@
       ;; fix is non-negotiable, see REVISIT and TRANSFER notes).
       None)
     ((Rewrite er dir side all insts)
-      ;; TODO (rewriter, unconditional): resolve er, specialize via
-      ;; insts, require no premises, match pat against side, replace
-      ;; either first occurrence or all per `all`.
-      None)))
+      ;; v2 first slice: GROUND rewrite only.
+      ;; Require insts=Nil and the cited Goal to be Goal Nil Nil eq
+      ;; (no ∀-binders, no premises). With that, matching reduces to
+      ;; structural equality (expr_eq) — no capture needed.
+      ;; Pattern-variable Rewrite waits for proofs that need it.
+      (match insts
+        (Nil
+          (match (resolve_eq er seq th)
+            (None None)
+            ((Some g)
+              (match g
+                ((Goal Nil Nil cited_eq)
+                  (match seq
+                    ((Sequent params hyps premises goal_eq)
+                      (match (apply_rewrite cited_eq dir side all goal_eq)
+                        ((Some new_eq)
+                          (Some (Sequent params hyps premises new_eq)))
+                        (None None)))))
+                (_ None)))))
+        (_ None)))))
 
 (fn reduce_side_eq ((m Module) (side Side) (eq Equation)) Equation
   (match eq
@@ -207,6 +223,156 @@
         ((Lhs)  (Equation (simp_expr m l) r))
         ((Rhs)  (Equation l               (simp_expr m r)))
         ((Both) (Equation (simp_expr m l) (simp_expr m r)))))))
+
+;; ---------------------------------------------------------------------------
+;; Ground rewriting on Expr values. pat is matched by structural
+;; equality (expr_eq); on match, replaced by repl. v2 limitation: no
+;; pattern variables / capture — that needs ∀-binder support and
+;; arrives with the pattern-rewriter slice.
+;;
+;; rewrite_first walks top-down left-to-right, replaces the FIRST hit,
+;; returns Some on success. rewrite_all walks the whole tree replacing
+;; every non-overlapping match (does NOT recurse into a replacement
+;; so cycles like (x = (f x)) are bounded); returns Some if at least
+;; one match was found, None if no match anywhere.
+;;
+;; Neither descends under binders (Match arm bodies, Let bodies) —
+;; depth-aware rewriting waits for the pattern-rewriter slice.
+;; ---------------------------------------------------------------------------
+
+(fn rewrite_first ((pat Expr) (repl Expr) (e Expr)) (Option Expr)
+  (if (expr_eq pat e)
+      (Some repl)
+      (match e
+        ((Ctor c args)
+          (match (rewrite_first_list pat repl args)
+            ((Some args2) (Some (Ctor c args2)))
+            (None         None)))
+        ((Call f args)
+          (match (rewrite_first_list pat repl args)
+            ((Some args2) (Some (Call f args2)))
+            (None         None)))
+        ((If c t el)
+          (match (rewrite_first pat repl c)
+            ((Some c2) (Some (If c2 t el)))
+            (None
+              (match (rewrite_first pat repl t)
+                ((Some t2) (Some (If c t2 el)))
+                (None
+                  (match (rewrite_first pat repl el)
+                    ((Some el2) (Some (If c t el2)))
+                    (None       None)))))))
+        (_ None))))
+
+(fn rewrite_first_list ((pat Expr) (repl Expr) (es (List Expr)))
+                        (Option (List Expr))
+  (match es
+    (Nil None)
+    ((Cons h t)
+      (match (rewrite_first pat repl h)
+        ((Some h2) (Some (Cons h2 t)))
+        (None
+          (match (rewrite_first_list pat repl t)
+            ((Some t2) (Some (Cons h t2)))
+            (None      None)))))))
+
+(fn rewrite_all ((pat Expr) (repl Expr) (e Expr)) (Option Expr)
+  (if (expr_eq pat e)
+      (Some repl)                                ; don't recurse into repl
+      (match e
+        ((Ctor c args)
+          (match (rewrite_all_list pat repl args)
+            ((Some args2) (Some (Ctor c args2)))
+            (None         None)))
+        ((Call f args)
+          (match (rewrite_all_list pat repl args)
+            ((Some args2) (Some (Call f args2)))
+            (None         None)))
+        ((If c t el)
+          (rewrite_all_if pat repl c t el))
+        (_ None))))
+
+(fn rewrite_all_list ((pat Expr) (repl Expr) (es (List Expr)))
+                      (Option (List Expr))
+  (match es
+    (Nil None)
+    ((Cons h t)
+      (match (rewrite_all pat repl h)
+        ((Some h2)
+          (match (rewrite_all_list pat repl t)
+            ((Some t2) (Some (Cons h2 t2)))
+            (None      (Some (Cons h2 t)))))
+        (None
+          (match (rewrite_all_list pat repl t)
+            ((Some t2) (Some (Cons h t2)))
+            (None      None)))))))
+
+(fn rewrite_all_if ((pat Expr) (repl Expr) (c Expr) (t Expr) (el Expr))
+                    (Option Expr)
+  (match (rewrite_all pat repl c)
+    ((Some c2)
+      (match (rewrite_all pat repl t)
+        ((Some t2)
+          (match (rewrite_all pat repl el)
+            ((Some el2) (Some (If c2 t2 el2)))
+            (None       (Some (If c2 t2 el)))))
+        (None
+          (match (rewrite_all pat repl el)
+            ((Some el2) (Some (If c2 t el2)))
+            (None       (Some (If c2 t el)))))))
+    (None
+      (match (rewrite_all pat repl t)
+        ((Some t2)
+          (match (rewrite_all pat repl el)
+            ((Some el2) (Some (If c t2 el2)))
+            (None       (Some (If c t2 el)))))
+        (None
+          (match (rewrite_all pat repl el)
+            ((Some el2) (Some (If c t el2)))
+            (None       None)))))))
+
+;; ---------------------------------------------------------------------------
+;; apply_rewrite: flip the cited equation by Dir, then rewrite on the
+;; chosen Side using either rewrite_first or rewrite_all per `all`.
+;; ---------------------------------------------------------------------------
+
+(fn apply_rewrite ((cited Equation) (dir Dir) (side Side)
+                   (all_occ Bool) (goal_eq Equation)) (Option Equation)
+  (match cited
+    ((Equation cl cr)
+      (match dir
+        ((Lr) (rewrite_side cl cr side all_occ goal_eq))
+        ((Rl) (rewrite_side cr cl side all_occ goal_eq))))))
+
+(fn rewrite_side ((pat Expr) (repl Expr) (side Side)
+                  (all_occ Bool) (goal_eq Equation)) (Option Equation)
+  (match goal_eq
+    ((Equation gl gr)
+      (match side
+        ((Lhs)
+          (match (rewrite_one_or_all all_occ pat repl gl)
+            ((Some gl2) (Some (Equation gl2 gr)))
+            (None       None)))
+        ((Rhs)
+          (match (rewrite_one_or_all all_occ pat repl gr)
+            ((Some gr2) (Some (Equation gl gr2)))
+            (None       None)))
+        ((Both)
+          (match (rewrite_one_or_all all_occ pat repl gl)
+            ((Some gl2)
+              (match (rewrite_one_or_all all_occ pat repl gr)
+                ((Some gr2) (Some (Equation gl2 gr2)))
+                (None       (Some (Equation gl2 gr)))))
+            (None
+              (match (rewrite_one_or_all all_occ pat repl gr)
+                ((Some gr2) (Some (Equation gl gr2)))
+                (None       None)))))))))
+
+(fn rewrite_one_or_all ((all_occ Bool) (pat Expr) (repl Expr) (e Expr))
+                        (Option Expr)
+  (if all_occ
+      (rewrite_all pat repl e)
+      (rewrite_first pat repl e)))
 
 ;; Unfold one occurrence on the chosen side(s) of an equation.
 ;; For Both: succeed if at least one side has a matching occurrence.

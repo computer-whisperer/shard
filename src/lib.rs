@@ -1091,4 +1091,170 @@ mod tests {
         let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
         assert_eq!(r, true_v());
     }
+
+    // ------------------------------------------------------------------
+    // Slice 12: Rewrite — GROUND substitute via a cited equation.
+    //
+    // v2's first Rewrite supports only:
+    //   - insts = Nil
+    //   - cited Goal has Goal Nil Nil eq (no ∀-binders, no premises)
+    //
+    // That makes matching pure structural equality (expr_eq) — no
+    // capture, no occurs check. Pattern-variable Rewrite (with ∀-bound
+    // var capture from the cited equation) waits for the slice that
+    // needs it (inductive proofs typically).
+    // ------------------------------------------------------------------
+
+    /// Premise `(FVar x) = (True)`. Rewrite Lr Lhs True (= all) replaces
+    /// the FVar in the goal lhs with True. Then Reduce + Refl closes.
+    /// First proof that a real Rewrite step transforms the goal.
+    #[test]
+    fn check_seq_rewrite_premise_then_reduce() {
+        let m = load_kernel();
+        let mod_v = bool_module();
+        // Premise rhs: the EXPR VALUE representing source (True), i.e.
+        // (Ctor "True" Nil). `bool_true()` would give Ctor("True", [])
+        // — the *Bool* value, which step's If arm doesn't recognize
+        // (it looks for the Expr-value shape, not the bare Bool ctor).
+        let seq = sequent(
+            vec![param("x", tcon("Bool", vec![]))],
+            vec![],
+            vec![equation(fvar("x"), ctor_app("True", vec![]))],
+            equation(
+                if_expr(fvar("x"), intlit(1), intlit(2)),
+                intlit(1),
+            ),
+        );
+        let pf = steps(
+            vec![
+                rewrite(er_premise(0), dir_lr(), side_lhs(), bool_true(), vec![]),
+                reduce(side_lhs()),
+            ],
+            refl(),
+        );
+        let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
+        assert_eq!(r, true_v());
+    }
+
+    /// Headline: CaseOn + Rewrite together. Prove `(if x 7 7) = 7` for
+    /// an arbitrary Bool x. Without Rewrite, neither branch's sub-proof
+    /// could close. With Rewrite, each branch rewrites x to its case
+    /// ctor, then Reduce simps the if, Refl closes 7 = 7.
+    ///
+    /// This is the canonical case-and-rewrite proof, and the first
+    /// proof where Hyp 0 (the new hypothesis introduced by CaseOn) is
+    /// actually USED.
+    #[test]
+    fn check_seq_case_on_with_rewrite_proves_if_x_77() {
+        let m = load_kernel();
+        let mod_v = bool_module();
+        let seq = sequent(
+            vec![param("x", tcon("Bool", vec![]))],
+            vec![],
+            vec![],
+            equation(
+                if_expr(fvar("x"), intlit(7), intlit(7)),
+                intlit(7),
+            ),
+        );
+        let branch_proof = steps(
+            vec![
+                rewrite(er_hyp(0), dir_lr(), side_lhs(), bool_true(), vec![]),
+                reduce(side_lhs()),
+            ],
+            refl(),
+        );
+        let pf = case_on(fvar("x"), "Bool", vec![
+            case_arm("True",  branch_proof.clone()),
+            case_arm("False", branch_proof),
+        ]);
+        let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
+        assert_eq!(r, true_v());
+    }
+
+    /// Direction Rl: cited.rhs → cited.lhs. Premise `(IntLit 1) = (IntLit 2)`,
+    /// goal `2 = 1`. Rewrite Rl Lhs replaces 2 with 1. Goal becomes
+    /// `1 = 1`. Refl closes.
+    #[test]
+    fn check_seq_rewrite_dir_rl() {
+        let m = load_kernel();
+        let seq = sequent(
+            vec![], vec![],
+            vec![equation(intlit(1), intlit(2))],
+            equation(intlit(2), intlit(1)),
+        );
+        let pf = steps(
+            vec![rewrite(er_premise(0), dir_rl(), side_lhs(), bool_true(), vec![])],
+            refl(),
+        );
+        let r = run_check_sequent(&m, module(vec![], vec![], vec![]), theory_empty(), seq, pf);
+        assert_eq!(r, true_v());
+    }
+
+    /// Pattern not present on the chosen side. Premise `1 = 2`, goal
+    /// `5 = 6`. Rewrite Lr Lhs (pat=1) finds no 1 in the lhs. Returns
+    /// None; apply_steps short-circuits; Steps arm returns False.
+    #[test]
+    fn check_seq_rewrite_pattern_absent() {
+        let m = load_kernel();
+        let seq = sequent(
+            vec![], vec![],
+            vec![equation(intlit(1), intlit(2))],
+            equation(intlit(5), intlit(6)),
+        );
+        let pf = steps(
+            vec![rewrite(er_premise(0), dir_lr(), side_lhs(), bool_true(), vec![])],
+            refl(),
+        );
+        let r = run_check_sequent(&m, module(vec![], vec![], vec![]), theory_empty(), seq, pf);
+        assert_eq!(r, false_v());
+    }
+
+    /// Non-empty insts not yet supported. Premise `(FVar x) = True`,
+    /// proof tries to rewrite with `[(Inst y True)]` (which would
+    /// pre-instantiate a ∀-var that doesn't exist on a ground eq
+    /// anyway). v2 rejects rather than silently ignoring.
+    #[test]
+    fn check_seq_rewrite_insts_not_supported() {
+        let m = load_kernel();
+        let mod_v = bool_module();
+        let seq = sequent(
+            vec![param("x", tcon("Bool", vec![]))],
+            vec![],
+            vec![equation(fvar("x"), bool_true())],
+            equation(fvar("x"), bool_true()),
+        );
+        let pf = steps(
+            vec![rewrite(er_premise(0), dir_lr(), side_lhs(), bool_true(),
+                         vec![inst("y", bool_true())])],
+            refl(),
+        );
+        let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
+        assert_eq!(r, false_v());
+    }
+
+    /// `all=False` first-occurrence mode. Premise `1 = 99`, goal
+    /// `(+ 1 (+ 1 1)) = (+ 99 (+ 1 1))`. Rewrite Lr Lhs all=False
+    /// replaces only the FIRST 1 in lhs (leftmost-outermost), giving
+    /// `(+ 99 (+ 1 1)) = (+ 99 (+ 1 1))`. Refl closes.
+    /// With all=True, all three 1s would be replaced and the rhs
+    /// wouldn't match — different proof.
+    #[test]
+    fn check_seq_rewrite_first_only() {
+        let m = load_kernel();
+        let seq = sequent(
+            vec![], vec![],
+            vec![equation(intlit(1), intlit(99))],
+            equation(
+                call("+", vec![intlit(1), call("+", vec![intlit(1), intlit(1)])]),
+                call("+", vec![intlit(99), call("+", vec![intlit(1), intlit(1)])]),
+            ),
+        );
+        let pf = steps(
+            vec![rewrite(er_premise(0), dir_lr(), side_lhs(), bool_false(), vec![])],
+            refl(),
+        );
+        let r = run_check_sequent(&m, module(vec![], vec![], vec![]), theory_empty(), seq, pf);
+        assert_eq!(r, true_v());
+    }
 }
