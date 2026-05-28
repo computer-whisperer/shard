@@ -34,6 +34,29 @@ mod tests {
         ast::Expr::Ctor("False".into(), Vec::new())
     }
 
+    /// Load the on-disk narrow kernel. Order is significant for
+    /// readability only — the loader handles forward refs across files.
+    fn load_kernel() -> ast::Module {
+        let manifest = env!("CARGO_MANIFEST_DIR");
+        let p = |n: &str| std::path::PathBuf::from(manifest).join("kernel").join(n);
+        load::module_from_paths(&[
+            p("stdlib.sexp"),
+            p("module.sexp"),
+            p("proof.sexp"),
+            p("term.sexp"),
+            p("reduce.sexp"),
+            p("check.sexp"),
+        ])
+        .expect("kernel loads")
+    }
+
+    /// Construct a runtime narrow-Expr ctor value: `nctor("Foo", vec![…])`
+    /// builds `Ctor("Foo", […])`. Used to write expected results for
+    /// tests that exercise kernel fns over Expr/Pat/Env *values*.
+    fn nctor(name: &str, args: Vec<ast::Expr>) -> ast::Expr {
+        ast::Expr::Ctor(name.into(), args)
+    }
+
     // ------------------------------------------------------------------
     // Slice 1: arithmetic MVP — user fn + primitive.
     // ------------------------------------------------------------------
@@ -232,17 +255,7 @@ mod tests {
     /// see what falls over.
     #[test]
     fn load_real_kernel() {
-        let manifest = env!("CARGO_MANIFEST_DIR");
-        let p = |n: &str| std::path::PathBuf::from(manifest).join("kernel").join(n);
-        let paths = [
-            p("stdlib.sexp"),
-            p("module.sexp"),
-            p("proof.sexp"),
-            p("term.sexp"),
-            p("reduce.sexp"),
-            p("check.sexp"),
-        ];
-        let module = load::module_from_paths(&paths).expect("kernel loads");
+        let module = load_kernel();
         // Sanity: we should have meaningfully many definitions.
         assert!(module.types.len() >= 10, "got {} types", module.types.len());
         assert!(module.fns.len() >= 20, "got {} fns", module.fns.len());
@@ -278,17 +291,7 @@ mod tests {
     /// test programs.
     #[test]
     fn run_kernel_pat_arity() {
-        let manifest = env!("CARGO_MANIFEST_DIR");
-        let p = |n: &str| std::path::PathBuf::from(manifest).join("kernel").join(n);
-        let module = load::module_from_paths(&[
-            p("stdlib.sexp"),
-            p("module.sexp"),
-            p("proof.sexp"),
-            p("term.sexp"),
-            p("reduce.sexp"),
-            p("check.sexp"),
-        ])
-        .expect("kernel loads");
+        let module = load_kernel();
 
         // pat_arity of various pats
         for (call, expected) in [
@@ -300,5 +303,137 @@ mod tests {
             let r = eval::eval(&module, &e).expect("evals");
             assert_eq!(r, ast::Expr::IntLit(expected), "{call}");
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Slice 5: exercise larger kernel functions end-to-end.
+    //
+    // pat_arity is one short match away from the IntLit it returns; it
+    // doesn't really stress the kernel. These tests drive
+    // `subst`, `open_many`, and `match_pat` over real Expr/Pat values.
+    // Each one transits multiple kernel helpers (lookup, nth_opt,
+    // shift, match_pats, etc.), so a regression in any of them lands
+    // here.
+    //
+    // Inputs and expected outputs are constructed at the
+    // narrow-Expr-value level: e.g. `(IntLit 42)` is source that *builds*
+    // a runtime value `Ctor("IntLit", [IntLit(42)])`. This is the level
+    // the kernel pattern-matches on.
+    // ------------------------------------------------------------------
+
+    /// `subst` replaces a matching FVar with the env's bound value.
+    /// Exercises: `subst`'s FVar arm → `lookup` → `sym_eq` prim.
+    #[test]
+    fn run_kernel_subst_fvar_hit() {
+        let m = load_kernel();
+        let call = "(subst (Bind (quote x) (IntLit 42) (Empty)) (FVar (quote x)))";
+        let e = load::expr_from_str(call, &m).expect("parses");
+        let r = eval::eval(&m, &e).expect("evals");
+        // Expected runtime Expr value: `Ctor("IntLit", [IntLit 42])`.
+        assert_eq!(r, nctor("IntLit", vec![ast::Expr::IntLit(42)]));
+    }
+
+    /// `subst` leaves an FVar untouched when the env doesn't bind it.
+    /// Same code paths as above plus the `None` arm of `lookup`.
+    #[test]
+    fn run_kernel_subst_fvar_miss() {
+        let m = load_kernel();
+        let call = "(subst (Bind (quote x) (IntLit 42) (Empty)) (FVar (quote y)))";
+        let e = load::expr_from_str(call, &m).expect("parses");
+        let r = eval::eval(&m, &e).expect("evals");
+        // Unchanged — returns the FVar value.
+        assert_eq!(r, nctor("FVar", vec![ast::Expr::SymLit("y".into())]));
+    }
+
+    /// `open_many` fills a BVar from the bindings list at index 0.
+    /// Exercises: `open_many` → `open_many_at` → `nth_opt` → `shift`
+    /// (with by=0, a no-op) → primitive `lt` / `int_eq`. The whole
+    /// locally-nameless opening core in one call.
+    #[test]
+    fn run_kernel_open_many_bvar0() {
+        let m = load_kernel();
+        let call = "(open_many (Cons (IntLit 99) (Nil)) (BVar 0))";
+        let e = load::expr_from_str(call, &m).expect("parses");
+        let r = eval::eval(&m, &e).expect("evals");
+        assert_eq!(r, nctor("IntLit", vec![ast::Expr::IntLit(99)]));
+    }
+
+    /// `open_many` shifts an outer BVar down by `len bindings`.
+    /// Catches off-by-one in the "outer binder" arm of `open_many_at`.
+    #[test]
+    fn run_kernel_open_many_outer_bvar() {
+        let m = load_kernel();
+        // One binding, BVar 5 — outer, becomes BVar 4.
+        let call = "(open_many (Cons (IntLit 99) (Nil)) (BVar 5))";
+        let e = load::expr_from_str(call, &m).expect("parses");
+        let r = eval::eval(&m, &e).expect("evals");
+        assert_eq!(r, nctor("BVar", vec![ast::Expr::IntLit(4)]));
+    }
+
+    /// `match_pat` against a PVar: captures the value at the front of
+    /// the accumulator (innermost-first).
+    #[test]
+    fn run_kernel_match_pat_pvar() {
+        let m = load_kernel();
+        let call = "(match_pat (PVar) (IntLit 7) (Nil))";
+        let e = load::expr_from_str(call, &m).expect("parses");
+        let r = eval::eval(&m, &e).expect("evals");
+        // Some (Cons (IntLit 7) Nil)
+        let intlit_7 = nctor("IntLit", vec![ast::Expr::IntLit(7)]);
+        let expected = nctor("Some",
+            vec![nctor("Cons", vec![intlit_7, nctor("Nil", vec![])])]);
+        assert_eq!(r, expected);
+    }
+
+    /// `match_pat` against an int-literal pattern: success when the
+    /// values match, None when they don't. Exercises the `PInt` arm,
+    /// the inner `match v` on `IntLit`, and the `int_eq` prim.
+    #[test]
+    fn run_kernel_match_pat_pint() {
+        let m = load_kernel();
+        // Hit.
+        let hit = load::expr_from_str(
+            "(match_pat (PInt 5) (IntLit 5) (Nil))", &m).expect("parses");
+        assert_eq!(eval::eval(&m, &hit).unwrap(),
+            nctor("Some", vec![nctor("Nil", vec![])]));
+        // Miss.
+        let miss = load::expr_from_str(
+            "(match_pat (PInt 5) (IntLit 6) (Nil))", &m).expect("parses");
+        assert_eq!(eval::eval(&m, &miss).unwrap(),
+            nctor("None", vec![]));
+    }
+
+    /// `match_pat` over `(PCtor Cons [PVar PVar])` against a list value
+    /// — exercises nested matching via `match_pats` and the
+    /// innermost-first capture order. Result acc is
+    /// (Cons <tail> (Cons <head> Nil)) — head first PVar → highest BVar,
+    /// tail second PVar → BVar 0 → at front of acc.
+    #[test]
+    fn run_kernel_match_pat_pctor_nested() {
+        let m = load_kernel();
+        // Pattern: (PCtor Cons [PVar PVar])
+        // Value:   (Ctor Cons [IntLit 1, Ctor Nil []])
+        //   — note narrow Cons is a 2-arg ctor (head, tail),
+        //   so its runtime layout matches the pattern's arity.
+        let call = "(match_pat \
+                      (PCtor (quote Cons) (Cons (PVar) (Cons (PVar) (Nil)))) \
+                      (Ctor (quote Cons) (Cons (IntLit 1) (Cons (Ctor (quote Nil) (Nil)) (Nil)))) \
+                      (Nil))";
+        let e = load::expr_from_str(call, &m).expect("parses");
+        let r = eval::eval(&m, &e).expect("evals");
+        let intlit_1 = nctor("IntLit", vec![ast::Expr::IntLit(1)]);
+        let nil_v = nctor("Ctor", vec![
+            ast::Expr::SymLit("Nil".into()),
+            nctor("Nil", vec![]),
+        ]);
+        // After two PVar captures (head, then tail), insert-at-front
+        // gives: acc = [tail, head] = (Cons nil_v (Cons intlit_1 Nil)).
+        let expected = nctor("Some", vec![
+            nctor("Cons", vec![
+                nil_v,
+                nctor("Cons", vec![intlit_1, nctor("Nil", vec![])]),
+            ]),
+        ]);
+        assert_eq!(r, expected);
     }
 }
