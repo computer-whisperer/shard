@@ -1481,6 +1481,125 @@ mod tests {
         assert_eq!(r, true_v());
     }
 
+    // ------------------------------------------------------------------
+    // Slice 15: bigger inductive proof — 2-arg recursive fn.
+    //
+    // Stress-tests the slice 14 setup. Proves
+    //   ∀ n : Nat. (add_nat n Z) = n
+    // where add_nat is the standard recursive definition pattern-
+    // matching on its first arg.
+    //
+    // What's new vs slice 14's id_match proof:
+    //   - 2-argument fn — body's BVars index BOTH params + pattern-
+    //     introduced vars. The S arm body has BVar 0 (k, pat-bound)
+    //     AND BVar 1 (b, outer fn param, shifted by pat_arity=1).
+    //   - The goal eq mentions the inductive var in TWO positions
+    //     (in the Call and in the rhs). build_ih substitutes both,
+    //     producing IH = (add_nat _f Z) = _f.
+    //   - The S case's lhs after Reduce contains the IH's lhs as a
+    //     subterm of (Ctor S [...]), forcing Rewrite to descend into
+    //     a Ctor's args. Slice 12 covered Rewrite's descent in
+    //     isolation; here it composes with everything else.
+    // ------------------------------------------------------------------
+
+    /// Headline: `∀ n : Nat. (add_nat n Z) = n` by induction.
+    #[test]
+    fn check_seq_induct_add_nat_zero_right() {
+        let m = load_kernel();
+        let nat_td = type_def("Nat", vec![], vec![
+            ctor_def("Z", vec![]),
+            ctor_def("S", vec![tcon("Nat", vec![])]),
+        ]);
+        // (fn add_nat ((a Nat) (b Nat)) Nat
+        //   (match a
+        //     (Z b)
+        //     ((S k) (S (add_nat k b)))))
+        //
+        // BVar indices in the static body (innermost-first):
+        //   outer-fn-body: BVar 0 = b (last param), BVar 1 = a
+        //   S arm body (pat_arity=1, so outer BVars shift up by 1):
+        //     BVar 0 = k (pat-bound), BVar 1 = b
+        let body = nmatch(
+            bvar(1),                            // scrutinee: a
+            vec![
+                // Z arm: body is b, which is BVar 0 at the outer level
+                narm(pctor("Z", vec![]), bvar(0)),
+                // S arm: body is (S (add_nat k b)).
+                // k = BVar 0 (innermost, pat-bound), b = BVar 1 (shifted).
+                narm(pctor("S", vec![pvar()]),
+                     ctor_app("S", vec![
+                        call("add_nat", vec![bvar(0), bvar(1)]),
+                     ])),
+            ],
+        );
+        let add_nat_fn = fn_def("add_nat",
+            vec![tcon("Nat", vec![]), tcon("Nat", vec![])],
+            tcon("Nat", vec![]),
+            body,
+        );
+        let mod_v = module(vec![nat_td], vec![add_nat_fn], vec![]);
+
+        let seq = sequent(
+            vec![param("n", tcon("Nat", vec![]))],
+            vec![], vec![],
+            equation(
+                call("add_nat", vec![fvar("n"), ctor_app("Z", vec![])]),
+                fvar("n"),
+            ),
+        );
+
+        // Z case after substitution (n := Z):
+        //   (add_nat Z Z) = Z
+        //   Unfold add_nat → opens body with args [Z, Z] (reversed).
+        //     Match scrutinee = a's value = Z (BVar 1 → bindings[1] = Z).
+        //     Z arm body = b's value = Z (BVar 0 → bindings[0] = Z).
+        //     Result: (Match Z [(Z → Z); (S k) → ...]).
+        //   Reduce ι → fires Z arm → Z. Refl on Z = Z.
+        let z_case = steps(
+            vec![
+                unfold("add_nat", side_lhs()),
+                reduce(side_lhs()),
+            ],
+            refl(),
+        );
+
+        // S case after substitution (n := S _f):
+        //   (add_nat (S _f) Z) = (S _f)
+        //   IH at Hyp 0: (Goal [] [] ((add_nat _f Z) = _f))
+        //   Unfold add_nat → opens body with args [Z, (S _f)] (reversed):
+        //     Match scrutinee = (S _f) (BVar 1 → bindings[1]).
+        //     Z arm body = Z (BVar 0 → bindings[0] = Z).
+        //     S arm body: BVar 0 stays BVar 0 (pat-bound k),
+        //                 BVar 1 → bindings[0] = Z (b's value).
+        //     Result: (Match (S _f) [(Z → Z); ((S k) → (S (add_nat k Z)))]).
+        //   Reduce ι → fires S arm with k captured = _f:
+        //     → (S (add_nat _f Z))
+        //     Then ι tries to step the Ctor S args. The inner Call
+        //     to add_nat is NOT unfolded (ι doesn't do δ). All args
+        //     of that Call are value-headed (FVar / Ctor). step_iota
+        //     stops here.
+        //   Rewrite Hyp 0 Lr Lhs all=True:
+        //     pat = (Call add_nat [_f, Z]), repl = (FVar _f).
+        //     Found inside (Ctor S [...]). Replace.
+        //     Lhs becomes (S _f).
+        //   Refl on (S _f) = (S _f).
+        let s_case = steps(
+            vec![
+                unfold("add_nat", side_lhs()),
+                reduce(side_lhs()),
+                rewrite(er_hyp(0), dir_lr(), side_lhs(), bool_true(), vec![]),
+            ],
+            refl(),
+        );
+
+        let pf = induct("n", vec![
+            case_arm("Z", z_case),
+            case_arm("S", s_case),
+        ]);
+        let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
+        assert_eq!(r, true_v());
+    }
+
     /// Missing case for one ctor. check_induct_cases reaches the S
     /// ctor, find_case returns None, returns False.
     #[test]
