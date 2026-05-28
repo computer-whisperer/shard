@@ -512,6 +512,50 @@ mod tests {
         assert_eq!(eval::eval(&m, &e).unwrap(), true_v());
     }
 
+    // ------------------------------------------------------------------
+    // Slice 7a: step's If case — small consistency fix in narrow.
+    //
+    // Until now step had no If arm, so any If would be stuck. With the
+    // arm added: True/False head fires; otherwise step the condition
+    // and rebuild. These three tests pin both branches plus the
+    // stuck-c path.
+    // ------------------------------------------------------------------
+
+    /// step over (if True a b) -> Some a
+    #[test]
+    fn step_if_true_fires() {
+        let m = load_kernel();
+        let call = "(step (Module (Nil) (Nil) (Nil)) \
+                          (If (Ctor (quote True) (Nil)) (IntLit 1) (IntLit 2)))";
+        let e = load::expr_from_str(call, &m).expect("parses");
+        let r = eval::eval(&m, &e).expect("evals");
+        assert_eq!(r, nctor("Some", vec![nctor("IntLit", vec![ast::Expr::IntLit(1)])]));
+    }
+
+    /// step over (if False a b) -> Some b
+    #[test]
+    fn step_if_false_fires() {
+        let m = load_kernel();
+        let call = "(step (Module (Nil) (Nil) (Nil)) \
+                          (If (Ctor (quote False) (Nil)) (IntLit 1) (IntLit 2)))";
+        let e = load::expr_from_str(call, &m).expect("parses");
+        let r = eval::eval(&m, &e).expect("evals");
+        assert_eq!(r, nctor("Some", vec![nctor("IntLit", vec![ast::Expr::IntLit(2)])]));
+    }
+
+    /// step over (if <FVar> a b) -> None — condition is irreducible,
+    /// so the If is stuck. Exercises the fall-through arm that
+    /// recursively tries to step the condition.
+    #[test]
+    fn step_if_stuck_on_fvar() {
+        let m = load_kernel();
+        let call = "(step (Module (Nil) (Nil) (Nil)) \
+                          (If (FVar (quote x)) (IntLit 1) (IntLit 2)))";
+        let e = load::expr_from_str(call, &m).expect("parses");
+        let r = eval::eval(&m, &e).expect("evals");
+        assert_eq!(r, nctor("None", vec![]));
+    }
+
     /// (Steps [Reduce(Lhs)] Refl) — apply_step on Reduce is currently
     /// stubbed to None, so apply_steps short-circuits to None and the
     /// Steps arm returns False. Documents the present stub behavior

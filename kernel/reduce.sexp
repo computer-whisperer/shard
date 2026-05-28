@@ -93,6 +93,17 @@
     ((Call f args)  (step_call m f args))
     ((Match s arms) (step_match m s arms))
     ((Let bs body)  (Some (open_many bs body)))
+    ;; If: True/False at the head fires; otherwise step the condition.
+    ;; Bool ctor names are hardcoded (cf. prim.rs and REVISIT.md —
+    ;; "Primitive comparisons return user Bool").
+    ((If c t el)
+      (match c
+        ((Ctor (quote True)  Nil) (Some t))
+        ((Ctor (quote False) Nil) (Some el))
+        (_
+          (match (step m c)
+            ((Some c2) (Some (If c2 t el)))
+            (None      None)))))
     ((Ctor c args)
       (match (step_list m args)
         ((Some args2) (Some (Ctor c args2)))
