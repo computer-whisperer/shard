@@ -183,17 +183,22 @@
             ((Some eq2) (Some (Sequent params hyps premises eq2)))
             (None       None)))))
     ((Reduce side)
-      ;; Reduce: drive simp_expr on the chosen side(s) of the
-      ;; current equation. In v2 this is full δ+ι (see REVISIT —
-      ;; "Reduce and Simp collapsed into one").
+      ;; ι-only: fire matches, dispatch True/False ifs, open lets,
+      ;; descend Ctor / Call args. Does NOT unfold Calls. This is
+      ;; what IH-consuming inductive proofs need — Reduce stops at
+      ;; the recursive sub-call instead of chasing it forever.
       (match seq
         ((Sequent params hyps premises eq)
           (Some (Sequent params hyps premises
-                  (reduce_side_eq m side eq))))))
+                  (reduce_iota_side_eq m side eq))))))
     ((Simp side)
-      ;; TODO: simp — the guarded reducer (memoized; the v1 blowup
-      ;; fix is non-negotiable, see REVISIT and TRANSFER notes).
-      None)
+      ;; Full δ+ι: drives `step` (the kernel's universal reducer) to
+      ;; fixed point — unfolds user fns, fires primitives, evaluates
+      ;; matches, ifs, lets. The workhorse.
+      (match seq
+        ((Sequent params hyps premises eq)
+          (Some (Sequent params hyps premises
+                  (simp_side_eq m side eq))))))
     ((Rewrite er dir side all insts)
       ;; v2 first slice: GROUND rewrite only.
       ;; Require insts=Nil and the cited Goal to be Goal Nil Nil eq
@@ -216,13 +221,25 @@
                 (_ None)))))
         (_ None)))))
 
-(fn reduce_side_eq ((m Module) (side Side) (eq Equation)) Equation
+;; Drive simp_expr (full δ+ι) on the chosen side(s) of an equation.
+;; Used by apply_step's `Simp` arm.
+(fn simp_side_eq ((m Module) (side Side) (eq Equation)) Equation
   (match eq
     ((Equation l r)
       (match side
         ((Lhs)  (Equation (simp_expr m l) r))
         ((Rhs)  (Equation l               (simp_expr m r)))
         ((Both) (Equation (simp_expr m l) (simp_expr m r)))))))
+
+;; Drive simp_iota_expr (ι-only) on the chosen side(s) of an equation.
+;; Used by apply_step's `Reduce` arm.
+(fn reduce_iota_side_eq ((m Module) (side Side) (eq Equation)) Equation
+  (match eq
+    ((Equation l r)
+      (match side
+        ((Lhs)  (Equation (simp_iota_expr m l) r))
+        ((Rhs)  (Equation l                    (simp_iota_expr m r)))
+        ((Both) (Equation (simp_iota_expr m l) (simp_iota_expr m r)))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Ground rewriting on Expr values. pat is matched by structural

@@ -162,24 +162,27 @@ is where to start when planning v3.
   artifact store with dependency tracking — a separate concern from
   the kernel ADT, but it would replace `Theory`.
 
-### `Reduce` and `Simp` collapsed into one in v2
-- **Chose:** `Reduce` step is implemented as `simp_expr` — step to
-  fixed point using the kernel's `step` function, which does δ+ι
-  uniformly (unfolds Calls AND fires ctor-headed matches). `Simp`
-  remains stubbed; in practice `Reduce` does what `Simp` was
-  conceptually meant to do. The original proof.sexp comments
-  described `Reduce` as ι-only and `Simp` as guarded δ+ι.
-- **Why now:** the kernel's `step` doesn't separate ι from δ, and
-  introducing a `step_iota` variant just to honor the distinction
-  would be premature. The current target is "first nontrivial proof
-  end-to-end"; the conflated `Reduce` gets us there.
-- **Revisit when:** v1's "blowup" problem reappears — naive δ+ι
-  diverges on non-terminating expansion paths. v1's fix was a
-  guarded, memoized `simp`; v2 will need the same. At that point:
-  (a) split ι from δ in `step`; (b) reintroduce `Simp` as the
-  guarded reducer with cycle detection / size bounds; (c) keep
-  `Reduce` as pure ι. Until then, the proof grammar carries both
-  names but they behave identically.
+### `Reduce` and `Simp` are now split (was: collapsed)
+- **History:** between slices 7c and 13, `Reduce` was wired as full
+  δ+ι (driving `simp_expr` = `step` to fixed point). `Simp` was
+  stubbed. Slice 13b surfaced the gap: IH-consuming inductive
+  proofs need a reducer that fires Matches/Ifs but STOPS at
+  recursive sub-calls, so a Rewrite-via-IH can match the exposed
+  subterm. Slice 14 split them.
+- **Chose (slice 14):**
+  - `Reduce side` is ι-only: drives `simp_iota_expr`, which uses
+    `step_iota` — Match firing, If dispatch, Let opening, descend
+    into Ctor/Call args. NEVER unfolds a Call (user fn or primitive).
+  - `Simp side` is full δ+ι: drives `simp_expr` (= the previous
+    Reduce semantics).
+- **Why now:** the split is what enables the canonical
+  `Induct → case → Unfold → Reduce → Rewrite IH → Refl` pattern.
+- **Revisit when:** the v1 "blowup" problem reappears. The classical
+  fix is to make `Simp` *guarded* — memoized, with cycle detection
+  or size bounds. `Reduce` (ι-only) is naturally bounded since
+  every step strictly decreases reducible-match count, but `Simp`
+  is not. v1's lesson is non-negotiable here; the unguarded `Simp`
+  is a known liability inherited from this slice.
 
 ### `ByTheory` cert payload under-specified per theory
 - **Chose:** `(Cert Symbol Expr)` — theory name plus a payload

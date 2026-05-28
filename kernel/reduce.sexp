@@ -258,6 +258,75 @@
             ((Some t2) (Some (Cons h t2)))
             (None      None)))))))
 
+;; ---------------------------------------------------------------------------
+;; ι-only step. Fires ctor-headed Matches, dispatches True/False Ifs,
+;; opens Lets, descends into Ctor args. Does NOT unfold Calls (neither
+;; user fns nor primitives) and does NOT recurse into Match arm bodies.
+;;
+;; Drives `Reduce` after the v2 Reduce/Simp split — see REVISIT.
+;;
+;; Distinct from `step` in two ways:
+;;   - Call args: descended for ι-reduction but the Call ITSELF is
+;;     never unfolded. (+ 5 5) stays (+ 5 5).
+;;   - Recursive calls in unfolded bodies are not chased, which is
+;;     exactly what IH-consuming inductive proofs need: Unfold once
+;;     to expose a Match, ι-reduce until the recursive sub-call
+;;     blocks, then Rewrite with the IH.
+;; ---------------------------------------------------------------------------
+
+(fn step_iota ((m Module) (e Expr)) (Option Expr)
+  (match e
+    ((Match s arms) (step_match_iota m s arms))
+    ((Let bs body)  (Some (open_many bs body)))         ; ζ
+    ((If c t el)
+      (match c
+        ((Ctor (quote True)  Nil) (Some t))
+        ((Ctor (quote False) Nil) (Some el))
+        (_
+          (match (step_iota m c)
+            ((Some c2) (Some (If c2 t el)))
+            (None      None)))))
+    ((Ctor c args)
+      (match (step_iota_list m args)
+        ((Some args2) (Some (Ctor c args2)))
+        (None         None)))
+    ((Call f args)
+      ;; Do NOT unfold the call. Try to step args ι-only.
+      (match (step_iota_list m args)
+        ((Some args2) (Some (Call f args2)))
+        (None         None)))
+    ((FVar _)   None)
+    ((BVar _)   None)
+    ((IntLit _) None)
+    ((SymLit _) None)))
+
+(fn step_match_iota ((m Module) (s Expr) (arms (List Arm))) (Option Expr)
+  (match s
+    ((Ctor _ _)  (try_match_arms arms s))
+    ((IntLit _)  (try_match_arms arms s))
+    ((SymLit _)  (try_match_arms arms s))
+    (_
+      (match (step_iota m s)
+        ((Some s2) (Some (Match s2 arms)))
+        (None      None)))))
+
+(fn step_iota_list ((m Module) (es (List Expr))) (Option (List Expr))
+  (match es
+    (Nil None)
+    ((Cons h t)
+      (match (step_iota m h)
+        ((Some h2) (Some (Cons h2 t)))
+        (None
+          (match (step_iota_list m t)
+            ((Some t2) (Some (Cons h t2)))
+            (None      None)))))))
+
+;; Drive step_iota to fixed point.
+(fn simp_iota_expr ((m Module) (e Expr)) Expr
+  (match (step_iota m e)
+    (None      e)
+    ((Some e2) (simp_iota_expr m e2))))
+
 ;; simp_expr: drive `step` to fixed point. Returns the normal form of
 ;; e under m. Termination depends on the kernel's user-fn bodies; the
 ;; trusted Rust runtime will diverge if step does. See REVISIT.md —

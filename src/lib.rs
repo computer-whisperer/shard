@@ -732,10 +732,14 @@ mod tests {
         module(vec![], vec![double], vec![])
     }
 
-    /// Headline: kernel proves (double 5) = 10 by reducing the lhs.
+    /// Headline: kernel proves (double 5) = 10 by simping the lhs.
     /// step_call finds double in the module, apply_fn opens the body
     /// with [IntLit 5] reversed → body becomes (+ 5 5), step fires the
     /// + primitive → 10. Refl on 10 = 10 closes.
+    ///
+    /// Uses `Simp` (full δ+ι). Previously this test used `Reduce`, but
+    /// slice 14 split Reduce → ι-only and Simp → full; user-fn
+    /// unfolding is δ, so it now belongs to Simp.
     #[test]
     fn check_seq_proves_double_5_equals_10() {
         let m = load_kernel();
@@ -744,12 +748,12 @@ mod tests {
             vec![], vec![], vec![],
             equation(call("double", vec![intlit(5)]), intlit(10)),
         );
-        let pf = steps(vec![reduce(side_lhs())], refl());
+        let pf = steps(vec![simp(side_lhs())], refl());
         let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
         assert_eq!(r, true_v());
     }
 
-    /// Same proof script, false claim. (double 5) = 11. Lhs reduces to
+    /// Same proof script, false claim. (double 5) = 11. Lhs simps to
     /// 10; Refl on 10 = 11 fails; check_sequent returns False.
     #[test]
     fn check_seq_rejects_double_5_equals_11() {
@@ -759,15 +763,14 @@ mod tests {
             vec![], vec![], vec![],
             equation(call("double", vec![intlit(5)]), intlit(11)),
         );
-        let pf = steps(vec![reduce(side_lhs())], refl());
+        let pf = steps(vec![simp(side_lhs())], refl());
         let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
         assert_eq!(r, false_v());
     }
 
-    /// Reduce Both makes user-fn and primitive reductions meet in the
+    /// Simp Both makes user-fn and primitive reductions meet in the
     /// middle: prove (double 5) = (+ 4 6). LHS: user fn double → 10.
-    /// RHS: prim + → 10. Refl on 10 = 10 closes. Demonstrates that
-    /// step_call dispatches uniformly to user fns AND primitives.
+    /// RHS: prim + → 10. Refl on 10 = 10 closes.
     #[test]
     fn check_seq_proves_user_fn_meets_primitive() {
         let m = load_kernel();
@@ -779,15 +782,14 @@ mod tests {
                 call("+", vec![intlit(4), intlit(6)]),
             ),
         );
-        let pf = steps(vec![reduce(side_both())], refl());
+        let pf = steps(vec![simp(side_both())], refl());
         let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
         assert_eq!(r, true_v());
     }
 
     /// Nested user-fn application: (double (double 3)) = 12.
     /// Inner call reduces to (+ 3 3) → 6, outer becomes (double 6)
-    /// → (+ 6 6) → 12. The kernel's simp_expr drives `step` through
-    /// the whole chain.
+    /// → (+ 6 6) → 12. simp_expr drives `step` through the whole chain.
     #[test]
     fn check_seq_proves_nested_user_fn() {
         let m = load_kernel();
@@ -799,7 +801,7 @@ mod tests {
                 intlit(12),
             ),
         );
-        let pf = steps(vec![reduce(side_lhs())], refl());
+        let pf = steps(vec![simp(side_lhs())], refl());
         let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
         assert_eq!(r, true_v());
     }
@@ -1066,12 +1068,14 @@ mod tests {
         assert_eq!(r, false_v());
     }
 
-    /// Unfold + Reduce composition. Goal: (double (double 3)) = 12.
+    /// Unfold + Simp composition. Goal: (double (double 3)) = 12.
     /// Unfold the outer call -> (+ (double 3) (double 3)). Then
-    /// Reduce simps to 12. Refl closes. Same answer as Reduce alone
-    /// would give, but demonstrates that Unfold and Reduce compose.
+    /// Simp drives to 12. Refl closes. Demonstrates Unfold and Simp
+    /// compose. (Previously used Reduce; now uses Simp because Reduce
+    /// is ι-only after slice 14 and the post-Unfold form needs δ
+    /// for the inner double-calls and `+`.)
     #[test]
-    fn check_seq_proves_unfold_then_reduce() {
+    fn check_seq_proves_unfold_then_simp() {
         let m = load_kernel();
         let mod_v = double_module();
         let seq = sequent(
@@ -1084,7 +1088,7 @@ mod tests {
         let pf = steps(
             vec![
                 unfold("double", side_lhs()),
-                reduce(side_lhs()),
+                simp(side_lhs()),
             ],
             refl(),
         );
@@ -1364,6 +1368,114 @@ mod tests {
         let pf = induct("n", vec![
             case_arm("Z", branch.clone()),
             case_arm("S", branch),
+        ]);
+        let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
+        assert_eq!(r, true_v());
+    }
+
+    // ------------------------------------------------------------------
+    // Slice 14: Reduce/Simp split — Reduce becomes ι-only.
+    //
+    // Before this slice, Reduce drove simp_expr (full δ+ι). Slice 13b
+    // hit the wall: IH-consuming inductive proofs need a reducer that
+    // STOPS at recursive calls so Rewrite can match the exposed sub-
+    // call against the IH. Slice 14 adds step_iota in the kernel and
+    // routes Reduce through it, freeing Simp to take over what Reduce
+    // used to do.
+    //
+    // Documented in REVISIT under "Reduce and Simp are now split".
+    // ------------------------------------------------------------------
+
+    /// Reduce on a user-fn-headed lhs does NOT unfold anymore.
+    /// (double 5) stays (double 5); Refl fails on (double 5) = 10.
+    /// Pins the semantic split.
+    #[test]
+    fn check_seq_reduce_no_longer_unfolds_user_fn() {
+        let m = load_kernel();
+        let mod_v = double_module();
+        let seq = sequent(
+            vec![], vec![], vec![],
+            equation(call("double", vec![intlit(5)]), intlit(10)),
+        );
+        let pf = steps(vec![reduce(side_lhs())], refl());
+        let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
+        // Was True under the old conflated semantics; now False.
+        assert_eq!(r, false_v());
+    }
+
+    /// Headline: IH-consuming inductive proof.
+    ///   ∀ n : Nat. (id_match n) = n
+    /// where id_match is defined with an explicit recursive Match.
+    ///
+    /// id_match body:
+    ///   (match n (Z Z) ((S k) (S (id_match k))))
+    ///
+    /// Z case:  Unfold id_match Lhs -> (Match Z [Z->Z; (S k)->...])
+    ///          Reduce Lhs (ι-only): fires Z arm -> Z. Refl on Z = Z.
+    /// S case:  IH at Hyp 0: (id_match _f) = _f
+    ///          Unfold id_match Lhs -> (Match (S _f) [...])
+    ///          Reduce Lhs (ι-only): fires S arm -> (S (id_match _f)).
+    ///            CRUCIALLY: Reduce stops here. Under the old full-δ+ι
+    ///            Reduce, it would have unfolded (id_match _f) and
+    ///            ended at (S (Match (FVar _f) [...])) — a stuck Match
+    ///            that no Rewrite against the IH could repair.
+    ///          Rewrite (Hyp 0) Lr Lhs all=True: replaces
+    ///            (id_match _f) -> _f inside (S _). Lhs becomes (S _f).
+    ///          Refl on (S _f) = (S _f).
+    ///
+    /// This is the first proof where the inductive hypothesis is
+    /// CONSUMED — the kernel reasoning chain ties off via the IH
+    /// rather than via direct reduction.
+    #[test]
+    fn check_seq_induct_consumes_ih_via_rewrite() {
+        let m = load_kernel();
+        let nat_td = type_def("Nat", vec![], vec![
+            ctor_def("Z", vec![]),
+            ctor_def("S", vec![tcon("Nat", vec![])]),
+        ]);
+        // (fn id_match ((n Nat)) Nat
+        //   (match n
+        //     (Z Z)
+        //     ((S k) (S (id_match k)))))
+        //
+        // BVar indices: in the outer body, n = BVar 0. In the (S k)
+        // arm body, k = BVar 0 (innermost, pattern-introduced).
+        let body = nmatch(bvar(0), vec![
+            narm(pctor("Z", vec![]),
+                 ctor_app("Z", vec![])),
+            narm(pctor("S", vec![pvar()]),
+                 ctor_app("S", vec![call("id_match", vec![bvar(0)])])),
+        ]);
+        let id_match_fn = fn_def("id_match",
+            vec![tcon("Nat", vec![])],
+            tcon("Nat", vec![]),
+            body,
+        );
+        let mod_v = module(vec![nat_td], vec![id_match_fn], vec![]);
+        let seq = sequent(
+            vec![param("n", tcon("Nat", vec![]))],
+            vec![], vec![],
+            equation(call("id_match", vec![fvar("n")]), fvar("n")),
+        );
+
+        let z_case = steps(
+            vec![
+                unfold("id_match", side_lhs()),
+                reduce(side_lhs()),
+            ],
+            refl(),
+        );
+        let s_case = steps(
+            vec![
+                unfold("id_match", side_lhs()),
+                reduce(side_lhs()),
+                rewrite(er_hyp(0), dir_lr(), side_lhs(), bool_true(), vec![]),
+            ],
+            refl(),
+        );
+        let pf = induct("n", vec![
+            case_arm("Z", z_case),
+            case_arm("S", s_case),
         ]);
         let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
         assert_eq!(r, true_v());

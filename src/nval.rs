@@ -58,6 +58,25 @@ pub fn if_expr(c: Expr, t: Expr, e: Expr) -> Expr {
     ctor("If", vec![c, t, e])
 }
 
+/// (Match scrut [arm…]) as an Expr-value. Named `nmatch` because
+/// `match` is a Rust keyword.
+pub fn nmatch(scrut: Expr, arms: Vec<Expr>) -> Expr {
+    ctor("Match", vec![scrut, list(arms)])
+}
+
+/// (Arm pat body) — one Match arm as a value.
+pub fn narm(pat: Expr, body: Expr) -> Expr {
+    ctor("Arm", vec![pat, body])
+}
+
+// Pat values (narrow type Pat).
+pub fn pvar() -> Expr { ctor("PVar", vec![]) }
+pub fn pctor(name: &str, sub_pats: Vec<Expr>) -> Expr {
+    ctor("PCtor", vec![Expr::SymLit(name.into()), list(sub_pats)])
+}
+pub fn pint(n: i64) -> Expr { ctor("PInt", vec![Expr::IntLit(n)]) }
+pub fn psym(s: &str) -> Expr { ctor("PSym", vec![Expr::SymLit(s.into())]) }
+
 // -----------------------------------------------------------------
 // Narrow Type values.
 // -----------------------------------------------------------------
