@@ -239,7 +239,7 @@
           False))
     (_ False)))                                      ; payload not a 2-list
 
-;; Goal is (int_eq a b) = True?
+;; Goal is (int_eq a b) = True?  (→ two-sided equality on a, b)
 (fn farkas_is_eq_true_goal ((f Symbol) (rhs Expr)) Bool
   (if (sym_eq f (quote int_eq))
       (match rhs
@@ -247,11 +247,26 @@
         (_ False))
       False))
 
+;; Goal is single-sided?  (lt|le a b)=True (order) or (int_eq a b)=False
+;; (disequality). These go through neg_goal_poly / farkas_check_single.
+(fn farkas_is_single_goal ((f Symbol) (rhs Expr)) Bool
+  (match rhs
+    ((Ctor tn _)
+      (if (sym_eq tn (quote True))
+          (if (sym_eq f (quote lt)) True (sym_eq f (quote le)))
+          (if (sym_eq tn (quote False))
+              (sym_eq f (quote int_eq))
+              False)))
+    (_ False)))
+
 ;; ---------------------------------------------------------------------------
-;; Entry point. Dispatch on the goal shape: an (int_eq a b)=True
-;; conclusion takes the two-sided equality path (payload = two
-;; multiplier lists); everything else is single-sided (payload =
-;; one list (G M0 M1 ...)).
+;; Entry point. Dispatch on the goal shape:
+;;   (int_eq a b)=True         → two-sided equality on (a, b)
+;;   (lt|le a b)=True / (int_eq a b)=False → single-sided
+;;   any other Equation L = R  → PLAIN term equality, two-sided on (L, R)
+;; The plain-equality case lets farkas prove integer term-equations
+;; like (i+j-p) = p by entailment — needed to rewrite read indices in
+;; the M3 mirror proof. (Non-linear L/R just fail to cancel → reject.)
 ;; ---------------------------------------------------------------------------
 
 (fn farkas_check ((premises (List Equation)) (goal Equation) (cert Cert)) Bool
@@ -265,6 +280,8 @@
                 ((Cons a (Cons b Nil))
                   (if (farkas_is_eq_true_goal f rhs)
                       (farkas_check_eq premises a b payload)
-                      (farkas_check_single premises goal payload)))
-                (_ (farkas_check_single premises goal payload))))
-            (_ (farkas_check_single premises goal payload))))))))
+                      (if (farkas_is_single_goal f rhs)
+                          (farkas_check_single premises goal payload)
+                          (farkas_check_eq premises lhs rhs payload))))  ; plain L=R
+                (_ (farkas_check_eq premises lhs rhs payload))))          ; non-binary call L
+            (_ (farkas_check_eq premises lhs rhs payload))))))))          ; L not a call

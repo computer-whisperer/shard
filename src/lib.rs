@@ -2820,6 +2820,28 @@ mod tests {
         assert_eq!(r, false_v());
     }
 
+    /// Positive (slice 42 — PLAIN term-equality goal): ⊢ (a+b) = (b+a).
+    /// A raw Equation goal (not an int_eq reflection) routes to the
+    /// two-sided equality path; here it's a tautology (no premises), so
+    /// each direction refutes with goal multiplier 1 alone.
+    #[test]
+    fn check_seq_farkas_plain_eq_commute() {
+        let m = load_kernel();
+        let int = tcon("Int", vec![]);
+        let seq = sequent(
+            vec![param("a", int.clone()), param("b", int)],
+            vec![], vec![],
+            equation(
+                call("+", vec![fvar("a"), fvar("b")]),
+                call("+", vec![fvar("b"), fvar("a")]),
+            ),
+        );
+        let r = run_check_sequent(&m,
+            module(vec![], vec![], vec![]),
+            theory_empty(), seq, farkas_pf_eq(vec![1], vec![1]));
+        assert_eq!(r, true_v());
+    }
+
     // ------------------------------------------------------------------
     // Slice 21: commutativity of add_nat by lemma composition.
     //

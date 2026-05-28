@@ -227,6 +227,21 @@
       (Ctor 'False (list))))
   (ByTheory 'farkas (Cert 'farkas (list 1 1 1))))
 
+;; idx_collapse: (le i p)=True, (le p j)=True, (le j i)=True ⊢
+;;   ((i + j) - p) = p.   (a squeezed index collapses — the center case)
+;; A PLAIN term-equality proven by two-sided farkas; used to rewrite the
+;; mirror read index when i = j = p. Cert: two multiplier lists.
+(claim idx_collapse
+  (Goal
+    (list (Param 'i (ty Int)) (Param 'j (ty Int)) (Param 'p (ty Int)))
+    (list (Equation (Call 'le (list (FVar 'i) (FVar 'p))) (Ctor 'True (list)))
+          (Equation (Call 'le (list (FVar 'p) (FVar 'j))) (Ctor 'True (list)))
+          (Equation (Call 'le (list (FVar 'j) (FVar 'i))) (Ctor 'True (list))))
+    (Equation
+      (Call '- (list (Call '+ (list (FVar 'i) (FVar 'j))) (FVar 'p)))
+      (FVar 'p)))
+  (ByTheory 'farkas (Cert 'farkas (list (list 1 2 0 1) (list 1 0 2 1)))))
+
 ;; ---------------------------------------------------------------------------
 ;; read_swap_below: ∀ m i j p. (lt p i)=True, (lt i j)=True ⊢
 ;;   (read (swap m i j) p) = (read m p).
