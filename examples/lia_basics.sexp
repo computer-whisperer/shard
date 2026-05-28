@@ -7,56 +7,41 @@
 ;;; (Lemma NAME) — though these LIA examples don't yet use that.
 ;;;
 ;;; Surface syntax notes:
-;;;   - Bare symbols are FVars by default; (quote x) makes a SymLit.
-;;;     `Param`, `TCon`, `Equation`, etc. are ctors so they resolve
-;;;     correctly without quoting.
-;;;   - Lists are written as explicit Cons-Nil chains. A `list`
-;;;     helper would help; that's a follow-up.
-;;;   - (IntLit 5) is the narrow Expr value for the literal 5;
-;;;     the outer IntLit is a ctor of the kernel's Expr ADT.
+;;;   - 'foo is reader sugar for (quote foo) → SymLit foo (via lexpr).
+;;;   - (list a b c) expands at parse time to (Cons a (Cons b (Cons c Nil))).
+;;;   - Ctor names like Param, TCon, Equation, FVar, IntLit resolve
+;;;     against the kernel's ctor set automatically.
 
 ;; ∀ x y : Int. x + y = y + x   (commutativity of +)
 (claim plus_comm
   (Goal
-    (Cons (Param (quote x) (TCon (quote Int) Nil))
-      (Cons (Param (quote y) (TCon (quote Int) Nil))
-        Nil))
-    Nil
+    (list (Param 'x (TCon 'Int (list)))
+          (Param 'y (TCon 'Int (list))))
+    (list)
     (Equation
-      (Call (quote +)
-        (Cons (FVar (quote x))
-          (Cons (FVar (quote y)) Nil)))
-      (Call (quote +)
-        (Cons (FVar (quote y))
-          (Cons (FVar (quote x)) Nil)))))
-  (ByTheory (quote lia) (Cert (quote lia) Nil)))
+      (Call '+ (list (FVar 'x) (FVar 'y)))
+      (Call '+ (list (FVar 'y) (FVar 'x)))))
+  (ByTheory 'lia (Cert 'lia (list))))
 
 ;; 1 + (2 + 3) = 6   (closed arithmetic constant)
 (claim sums_constants
   (Goal
-    Nil
-    Nil
+    (list)
+    (list)
     (Equation
-      (Call (quote +)
-        (Cons (IntLit 1)
-          (Cons (Call (quote +)
-                  (Cons (IntLit 2)
-                    (Cons (IntLit 3) Nil)))
-            Nil)))
+      (Call '+ (list (IntLit 1)
+                     (Call '+ (list (IntLit 2) (IntLit 3)))))
       (IntLit 6)))
-  (ByTheory (quote lia) (Cert (quote lia) Nil)))
+  (ByTheory 'lia (Cert 'lia (list))))
 
 ;; ∀ x : Int. (x + 1) - x = 1   (mixed atom + constant cancellation)
 (claim plus_one_minus_self
   (Goal
-    (Cons (Param (quote x) (TCon (quote Int) Nil)) Nil)
-    Nil
+    (list (Param 'x (TCon 'Int (list))))
+    (list)
     (Equation
-      (Call (quote -)
-        (Cons (Call (quote +)
-                (Cons (FVar (quote x))
-                  (Cons (IntLit 1) Nil)))
-          (Cons (FVar (quote x)) Nil)))
+      (Call '-
+        (list (Call '+ (list (FVar 'x) (IntLit 1)))
+              (FVar 'x)))
       (IntLit 1)))
-  (ByTheory (quote lia) (Cert (quote lia) Nil)))
-
+  (ByTheory 'lia (Cert 'lia (list))))

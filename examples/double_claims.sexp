@@ -10,17 +10,17 @@
 ;; closes 10 = 10. Mirrors the Rust test
 ;; check_seq_proves_double_5_equals_10.
 (claim double_5_is_10
-  (Goal Nil Nil
+  (Goal (list) (list)
     (Equation
-      (Call (quote double) (Cons (IntLit 5) Nil))
+      (Call 'double (list (IntLit 5)))
       (IntLit 10)))
-  (Steps (Cons (Simp (Lhs)) Nil) (Refl)))
+  (Steps (list (Simp (Lhs))) (Refl)))
 
 ;; (double 4) = (+ 3 5). Simp Both reduces lhs (double 4 → 8) and
 ;; rhs (3 + 5 → 8); Refl closes 8 = 8.
 (claim double_4_meets_3_plus_5
-  (Goal Nil Nil
+  (Goal (list) (list)
     (Equation
-      (Call (quote double) (Cons (IntLit 4) Nil))
-      (Call (quote +) (Cons (IntLit 3) (Cons (IntLit 5) Nil)))))
-  (Steps (Cons (Simp (Both)) Nil) (Refl)))
+      (Call 'double (list (IntLit 4)))
+      (Call '+ (list (IntLit 3) (IntLit 5)))))
+  (Steps (list (Simp (Both))) (Refl)))

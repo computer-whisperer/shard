@@ -14,6 +14,14 @@
 //!   3. Anything else at the head of a list → Call
 //!   4. Anything else as a bare identifier → FVar
 //!
+//! Reserved special forms (override the head-symbol lookup):
+//!   if, match, let, quote, list
+//!
+//! `list` expands at parse time to a Cons/Nil chain — `(list a b c)`
+//! becomes `(Cons a (Cons b (Cons c Nil)))`. `(list)` is `Nil`.
+//! Sexp reader macro `'foo` is handled by lexpr itself as a rewrite
+//! to `(quote foo)`.
+//!
 //! Module loading is two-pass: first scan to collect type/ctor names,
 //! then load bodies with that knowledge. Lets us recognize `Nil`,
 //! `Cons`, etc. uniformly regardless of declaration order.
@@ -327,6 +335,7 @@ fn load_expr(v: &Value, ctx: &mut LoadCtx, ctors: &HashSet<Symbol>) -> Result<Ex
         "match" => load_match(&parts[1..], ctx, ctors),
         "let" => load_let(&parts[1..], ctx, ctors),
         "quote" => load_quote(&parts[1..]),
+        "list" => load_list(&parts[1..], ctx, ctors),
         _ => {
             let mut args = Vec::with_capacity(parts.len() - 1);
             for a in &parts[1..] {
@@ -468,6 +477,23 @@ fn load_let(
     let body = load_expr(parts[1], ctx, ctors)?;
     ctx.truncate(saved);
     Ok(Expr::Let(rhss, Box::new(body)))
+}
+
+/// `(list E1 E2 …)` → `(Cons E1 (Cons E2 (… Nil)))`. Empty list
+/// produces `Nil`. The `Cons` / `Nil` ctor names are hardcoded;
+/// callers don't need them to appear in the module's ctor set
+/// (though stdlib.sexp declares them so they normally do).
+fn load_list(
+    parts: &[&Value],
+    ctx: &mut LoadCtx,
+    ctors: &HashSet<Symbol>,
+) -> Result<Expr, LoadError> {
+    let mut acc = Expr::Ctor("Nil".into(), Vec::new());
+    for p in parts.iter().rev() {
+        let head = load_expr(p, ctx, ctors)?;
+        acc = Expr::Ctor("Cons".into(), vec![head, acc]);
+    }
+    Ok(acc)
 }
 
 /// `(quote SYM)` → `SymLit`

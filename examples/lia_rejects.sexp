@@ -7,15 +7,10 @@
 
 (claim plus_x_y_equals_plus_x_1
   (Goal
-    (Cons (Param (quote x) (TCon (quote Int) Nil))
-      (Cons (Param (quote y) (TCon (quote Int) Nil))
-        Nil))
-    Nil
+    (list (Param 'x (TCon 'Int (list)))
+          (Param 'y (TCon 'Int (list))))
+    (list)
     (Equation
-      (Call (quote +)
-        (Cons (FVar (quote x))
-          (Cons (FVar (quote y)) Nil)))
-      (Call (quote +)
-        (Cons (FVar (quote x))
-          (Cons (IntLit 1) Nil)))))
-  (ByTheory (quote lia) (Cert (quote lia) Nil)))
+      (Call '+ (list (FVar 'x) (FVar 'y)))
+      (Call '+ (list (FVar 'x) (IntLit 1)))))
+  (ByTheory 'lia (Cert 'lia (list))))

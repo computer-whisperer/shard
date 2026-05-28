@@ -290,24 +290,29 @@ is where to start when planning v3.
 
 ## CLI / Tooling
 
-### Proof-file surface syntax is value-construction sexp, no sugar
-- **Chose (slice 23):** `(claim NAME GOAL PROOF)` where GOAL and PROOF
-  are narrow expressions parsed against the kernel's ctor set and
-  evaluated. No quote shorthand, no `list` helper — list literals
-  are explicit Cons-Nil chains and symbol literals are spelled
-  `(quote x)`.
+### Proof-file surface syntax: light sugar on value-construction sexp
+- **Chose (slice 23, sugared slice 25):** `(claim NAME GOAL PROOF)`
+  where GOAL and PROOF are narrow expressions parsed against the
+  kernel's ctor set and evaluated. Surface sugar:
+    - `'foo` → `(quote foo)` → `SymLit foo` (lexpr's reader handles
+      `'` automatically).
+    - `(list a b c)` → `(Cons a (Cons b (Cons c Nil)))` (new
+      special form in `load_expr`, slice 25; reserves `list` as
+      a name).
 - **Why now:** reuses `load::expr_from_value` plus the existing
-  evaluator. Zero new converter code; the kernel's ctor application
-  IS the value-construction syntax. Ships the CLI without inventing
-  a parallel surface.
-- **Cost:** verbose. A two-parameter goal with two FVar references
-  is ~10 lines of Cons/Nil scaffolding. Manageable for hand-written
-  smoke tests; painful at any scale beyond that.
-- **Revisit when:** real proof scripts start getting authored.
-  Cheap mitigations: a `list` form expanded at parse time to
-  Cons-Nil, a `'foo` reader macro for `(quote foo)` (lexpr may
-  already grant this — needs verification). Heavier: a separate
-  proof-script surface syntax that lowers to canonical claim sexp.
+  evaluator. The kernel's ctor application IS the value-construction
+  syntax. The two sugars cut a typical claim by ~50% of LOC and
+  bring authoring close to a "math content" / "syntactic noise"
+  ratio that's acceptable for hand-writing.
+- **What's still verbose:** `(TCon 'Int (list))` for base types
+  (the `(list)` for empty type args is unavoidable without further
+  sugar); the `Cons` / `Nil` / `Some` / `None` Pair chain in
+  more-elaborate proofs.
+- **Revisit when:** real proof authoring surfaces specific pain
+  points. Cheap next steps if needed: a unary type ctor shorthand
+  (e.g., `Int` as a bare symbol meaning `(TCon 'Int (list))`), or
+  a `(pair a b)` form. Heavier: a separate proof-script surface
+  syntax that lowers to canonical claim sexp.
 
 ### Proof-file module syntax: parse-but-error
 - **Chose (slice 23):** `(module NAME)` is recognized as a top-level
