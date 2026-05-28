@@ -2836,4 +2836,63 @@ mod tests {
         let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
         assert_eq!(r, true_v());
     }
+
+    /// Slice 31 regression: `append_nil_right` stated over POLYMORPHIC
+    /// (List T) — Goal param is `(TCon List [TVar T])` rather than
+    /// `(TCon List [TCon Int []])`. Hand-built with nval helpers to
+    /// guard the kernel side of polymorphism — the loader's job
+    /// (parsing `(fn (NAME T) …)` and `(tv T)`) is exercised by the
+    /// sexp examples.
+    #[test]
+    fn check_seq_polymorphic_append_nil_right_rust_mirror() {
+        let m = load_kernel();
+        let list_td = type_def("List", vec!["T"], vec![
+            ctor_def("Nil",  vec![]),
+            ctor_def("Cons", vec![tvar("T"), tcon("List", vec![tvar("T")])]),
+        ]);
+        // append: still defined at (List Int) for the fn body (the
+        // evaluator doesn't care about types; the goal's TVar will
+        // get matched against the fn's Int via pattern matching).
+        // Actually for fairness, let's make the fn also polymorphic
+        // by using TVar in its sig — the evaluator ignores types.
+        let list_t = tcon("List", vec![tvar("T")]);
+        let body = nmatch(
+            bvar(1),
+            vec![
+                narm(pctor("Nil", vec![]), bvar(0)),
+                narm(pctor("Cons", vec![pvar(), pvar()]),
+                     ctor_app("Cons", vec![
+                        bvar(1),
+                        call("append", vec![bvar(0), bvar(2)]),
+                     ])),
+            ],
+        );
+        let append_fn = fn_def("append",
+            vec![list_t.clone(), list_t.clone()],
+            list_t.clone(), body);
+        let mod_v = module(vec![list_td], vec![append_fn], vec![]);
+
+        // Goal: ∀ xs : (List T). (append xs Nil) = xs
+        // where T is a TVar (declared somewhere — the kernel doesn't
+        // care if it's lexically tied to anything).
+        let seq = sequent(
+            vec![param("xs", list_t)],
+            vec![], vec![],
+            equation(
+                call("append", vec![fvar("xs"), ctor_app("Nil", vec![])]),
+                fvar("xs"),
+            ),
+        );
+        let pf = induct("xs", vec![
+            case_arm("Nil",
+                steps(vec![simp(side_lhs())], refl())),
+            case_arm("Cons",
+                steps(vec![
+                    simp(side_lhs()),
+                    rewrite(er_hyp(0), dir_lr(), side_lhs(), bool_true(), vec![]),
+                ], refl())),
+        ]);
+        let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
+        assert_eq!(r, true_v());
+    }
 }

@@ -234,17 +234,42 @@ fn load_type_def(parts: &[&Value]) -> Result<TypeDef, LoadError> {
     })
 }
 
-/// `fn NAME ((P TY) …) RET BODY`
+/// `(fn NAME PARAMS RET BODY)` — monomorphic.
+/// `(fn (NAME T1 T2 …) PARAMS RET BODY)` — polymorphic. T1, T2… are
+/// type parameters in scope of PARAMS, RET, and the body's type
+/// positions. The parameterized-head form mirrors `(type (NAME P…) …)`.
+///
+/// The body itself doesn't carry type annotations, so tparams only
+/// affect how PARAMS and RET are loaded — bare T inside a param/ret
+/// type becomes `TVar T` rather than `TCon T []`. This is what the
+/// kernel's `type_subst` needs to substitute correctly when the fn's
+/// signature is referenced by a polymorphic Goal (see do_induct).
 fn load_fn_def(parts: &[&Value], ctors: &HashSet<Symbol>) -> Result<FnDef, LoadError> {
     if parts.len() != 4 {
         return Err(LoadError::BadShape(format!(
-            "fn: expected (fn NAME PARAMS RET BODY), got {} parts after `fn`",
+            "fn: expected (fn NAME PARAMS RET BODY) or \
+             (fn (NAME T1…) PARAMS RET BODY), got {} parts after `fn`",
             parts.len()
         )));
     }
-    let name = as_symbol(parts[0])?.to_string();
-    let (param_names, param_types) = load_params(parts[1])?;
-    let ret = load_type(parts[2])?;
+    let (name, tparams) = if let Some(sym) = parts[0].as_symbol() {
+        (sym.to_string(), Vec::new())
+    } else {
+        let head = as_list(parts[0])?;
+        if head.is_empty() {
+            return Err(LoadError::BadShape(
+                "fn: empty parameterized head ()".into(),
+            ));
+        }
+        let n = as_symbol(head[0])?.to_string();
+        let mut ts = Vec::with_capacity(head.len() - 1);
+        for t in &head[1..] {
+            ts.push(as_symbol(t)?.to_string());
+        }
+        (n, ts)
+    };
+    let (param_names, param_types) = load_params_in_scope(parts[1], &tparams)?;
+    let ret = load_type_in_scope(parts[2], &tparams)?;
 
     let mut ctx = LoadCtx::new();
     for n in &param_names {
@@ -260,17 +285,35 @@ fn load_fn_def(parts: &[&Value], ctors: &HashSet<Symbol>) -> Result<FnDef, LoadE
     })
 }
 
-/// `extern NAME ((P TY) …) RET`
+/// `(extern NAME PARAMS RET)` — monomorphic.
+/// `(extern (NAME T1…) PARAMS RET)` — polymorphic. Same parameterized-
+/// head convention as `fn` and `type`.
 fn load_extern_def(parts: &[&Value]) -> Result<ExternDef, LoadError> {
     if parts.len() != 3 {
         return Err(LoadError::BadShape(format!(
-            "extern: expected (extern NAME PARAMS RET), got {} parts after `extern`",
+            "extern: expected (extern NAME PARAMS RET) or \
+             (extern (NAME T1…) PARAMS RET), got {} parts after `extern`",
             parts.len()
         )));
     }
-    let name = as_symbol(parts[0])?.to_string();
-    let (_, param_types) = load_params(parts[1])?;
-    let ret = load_type(parts[2])?;
+    let (name, tparams) = if let Some(sym) = parts[0].as_symbol() {
+        (sym.to_string(), Vec::new())
+    } else {
+        let head = as_list(parts[0])?;
+        if head.is_empty() {
+            return Err(LoadError::BadShape(
+                "extern: empty parameterized head ()".into(),
+            ));
+        }
+        let n = as_symbol(head[0])?.to_string();
+        let mut ts = Vec::with_capacity(head.len() - 1);
+        for t in &head[1..] {
+            ts.push(as_symbol(t)?.to_string());
+        }
+        (n, ts)
+    };
+    let (_, param_types) = load_params_in_scope(parts[1], &tparams)?;
+    let ret = load_type_in_scope(parts[2], &tparams)?;
     Ok(ExternDef {
         name,
         params: param_types,
@@ -278,8 +321,12 @@ fn load_extern_def(parts: &[&Value]) -> Result<ExternDef, LoadError> {
     })
 }
 
-/// `((P1 T1) (P2 T2) …)` → (names, types) in introduction order.
-fn load_params(v: &Value) -> Result<(Vec<Symbol>, Vec<Type>), LoadError> {
+/// `((P1 T1) (P2 T2) …)` → (names, types). Each type is parsed against
+/// the given tparams; bare symbols matching a tparam become `TVar`.
+fn load_params_in_scope(
+    v: &Value,
+    tparams: &[Symbol],
+) -> Result<(Vec<Symbol>, Vec<Type>), LoadError> {
     let items = as_list(v)?;
     let mut names = Vec::with_capacity(items.len());
     let mut types = Vec::with_capacity(items.len());
@@ -291,7 +338,7 @@ fn load_params(v: &Value) -> Result<(Vec<Symbol>, Vec<Type>), LoadError> {
             )));
         }
         names.push(as_symbol(pair[0])?.to_string());
-        types.push(load_type(pair[1])?);
+        types.push(load_type_in_scope(pair[1], tparams)?);
     }
     Ok((names, types))
 }
@@ -300,14 +347,11 @@ fn load_params(v: &Value) -> Result<(Vec<Symbol>, Vec<Type>), LoadError> {
 /// `(T A B …)` → `(TCon T (A B …))`. `TVar` is not produced here —
 /// callers that have type parameters in scope should use
 /// `load_type_in_scope` instead.
-fn load_type(v: &Value) -> Result<Type, LoadError> {
-    load_type_in_scope(v, &[])
-}
-
-/// Like `load_type` but treats bare symbols matching one of
-/// `tparams` as `TVar`s. Used when parsing the field types of a
-/// `(type (NAME PARAMS…) …)` declaration — the kernel's
-/// `type_subst` only fires on `TVar`, so the param/TVar
+///
+/// Treats bare symbols matching one of `tparams` as `TVar`s. Used
+/// when parsing the field types of a `(type (NAME PARAMS…) …)` or
+/// the param/return types of a `(fn (NAME T…) …)` declaration —
+/// the kernel's `type_subst` only fires on `TVar`, so the param/TVar
 /// correspondence is what makes generic ctors substitute correctly
 /// at induction time.
 fn load_type_in_scope(v: &Value, tparams: &[Symbol]) -> Result<Type, LoadError> {
@@ -392,6 +436,7 @@ fn load_expr(v: &Value, ctx: &mut LoadCtx, ctors: &HashSet<Symbol>) -> Result<Ex
         "quote" => load_quote(&parts[1..]),
         "list" => load_list(&parts[1..], ctx, ctors),
         "ty" => load_ty(&parts[1..], ctx, ctors),
+        "tv" => load_tv(&parts[1..]),
         _ => {
             let mut args = Vec::with_capacity(parts.len() - 1);
             for a in &parts[1..] {
@@ -603,6 +648,28 @@ fn load_ty_arg(
         ));
     }
     load_expr(v, ctx, ctors)
+}
+
+/// `(tv NAME)` builds a Type *value* `(TVar 'NAME)` — a type variable.
+/// Drop-in companion to `(ty …)` for polymorphic claim bodies; lets
+/// authors write `(ty List (tv T))` instead of the verbose explicit
+/// `(TCon 'List (list (TVar 'T)))`. Reserves `tv` as a special form.
+///
+/// Whether `NAME` is "in scope" as a tparam is a meta-language
+/// question — the kernel just sees a TVar value and uses it for
+/// type_subst (in do_induct) and structural Equality (in
+/// type_eq, which never fires on TVar = TVar since type_subst always
+/// substitutes them first). Authoring discipline keeps tparams
+/// consistent across a polymorphic claim's Params.
+fn load_tv(parts: &[&Value]) -> Result<Expr, LoadError> {
+    if parts.len() != 1 {
+        return Err(LoadError::BadShape(format!(
+            "tv: expected (tv NAME), got {} args",
+            parts.len()
+        )));
+    }
+    let name = as_symbol(parts[0])?.to_string();
+    Ok(Expr::Ctor("TVar".into(), vec![Expr::SymLit(name)]))
 }
 
 /// `(quote SYM)` → `SymLit`

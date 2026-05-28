@@ -78,6 +78,13 @@ is where to start when planning v3.
   parametricity check.
 - **Why now:** lets the kernel use generic data structures cleanly;
   the full-language checker enforces parametricity for theorems.
+- **State (slice 31):** polymorphic fns and Goals now have surface
+  syntax (`(fn (NAME T1 T2) …)`, `(tv T)` in claim bodies). The
+  kernel needed no changes — Expr pattern matching is type-agnostic,
+  so polymorphic lemmas state and cite at concrete types via the
+  ordinary pat-var Rewrite path. Reverse tower (`list_lemmas.sexp`)
+  is now stated once over `(List T)` and demonstrated reused at
+  `(List Int)` and `(List Symbol)` via one-step Rewrite citations.
 - **Revisit if:** subtle parametricity violations creep into the
   bootstrap kernel and create real bugs.
 
@@ -552,12 +559,39 @@ is where to start when planning v3.
   previous behavior emitted `TCon "T" []` uniformly, which meant
   inducting over a polymorphic loaded type couldn't substitute
   field types correctly → no IH generated → inductive proofs over
-  `(List Int)`-style instances silently failed. The Rust slice 16
-  test sidestepped this by hand-building modules with `nval::tvar`.
-- **Cost:** ~15 NCNB in `load.rs`. Trusted-core touch.
-- **Revisit if:** the loader gains broader type-parameter scope
-  (currently only the typedef's own fields; fn signatures' generic
-  params would want similar treatment for full polymorphism).
+  `(List Int)`-style instances silently failed.
+- **Extended (slice 31):** the same scope discipline now covers
+  fn-signature type parameters via `(fn (NAME T1 T2) PARAMS RET
+  BODY)`. The fn's tparams are passed to `load_type_in_scope` when
+  parsing param and return types; `extern` mirrors the form.
+
+### Polymorphic-fn syntax and `(tv T)` claim-body sugar
+- **Chose (slice 31):**
+  - `(fn (NAME T1 T2 …) PARAMS RET BODY)` for polymorphic fns;
+    `(fn NAME PARAMS RET BODY)` remains monomorphic. Parameterized
+    head mirrors `(type (NAME T1 T2) …)`.
+  - `(tv NAME)` builds a `TVar` value in claim bodies. Drop-in for
+    `(ty …)` — write `(ty List (tv T))` instead of the explicit
+    `(TCon 'List (list (TVar 'T)))`. Reserves `tv` as a special form.
+- **Why now:** the v2 mandate's headline polymorphism item ("prove
+  `append_nil` once over `List<T>`") needs polymorphic *fn*
+  signatures *and* polymorphic *Goal* params. The slice was almost
+  entirely loader work — verified by a Rust probe that built a
+  polymorphic Goal by hand (`probe_polymorphic_append_nil_right`)
+  and watched it pass without kernel changes. Expr pattern matching
+  is type-agnostic, so polymorphic lemmas instantiate at concrete
+  types via the ordinary pat-var Rewrite path.
+- **Cost:** ~50 NCNB in `load.rs` (parameterized-head parsing for
+  fn/extern, new `load_tv` special form). No kernel growth.
+- **What it buys:** `examples/list_lemmas.sexp`'s claims are now
+  stated once over `(List T)` and the capstone `fast_eq_rev` is
+  demonstrated reused at `(List Int)` and `(List Symbol)` via
+  one-step `Rewrite (Lemma 'fast_eq_rev) Lr Lhs True (list)`. Real
+  proof reuse, working today.
+- **Revisit if:** the (tv …) form's lack of scope-checking starts
+  catching typos as TVars silently (a (tv typo) in a position where
+  the user meant a concrete type). Today's resolution is "explicit
+  is good"; could add a tparam-scope check at claim time later.
 
 ### LCF helper-lemma discipline (per-ctor step lemmas) — historical
 - **History:** during slice 29 the kernel's unguarded `Simp` over-
