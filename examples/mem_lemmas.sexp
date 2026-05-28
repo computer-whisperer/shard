@@ -233,9 +233,9 @@
 ;; premise comes out with the literal segment arithmetic
 ;; ((j-1)-(i+1))+1, NOT pre-normalized — so the conclusion's LHS must be
 ;; that same tree (lemma application matches by AST, not by polynomial).
-;;   P (Q0): (j-i)+1 <= 2*int_of_nat(S n)        [outer completion bound]
+;;   P (Q0): (j-i) <= 2*int_of_nat(S n)          [outer completion bound]
 ;;   L (Q1): int_of_nat(S n) = 1 + int_of_nat(n) [the definitional link]
-;;   ⊢ ((j-1)-(i+1))+1 <= 2*int_of_nat(n)        [IH's completion bound]
+;;   ⊢ (j-1)-(i+1) <= 2*int_of_nat(n)            [IH's completion bound]
 ;; farkas can't unfold int_of_nat in a premise, so the successor link L
 ;; is supplied as a premise (discharged by Simp at the cite site, where
 ;; (S n) is a constructor) and consumed here as an equality constraint.
@@ -246,7 +246,7 @@
     (list (Param 'i (ty Int)) (Param 'j (ty Int)) (Param 'n (ty Nat)))
     (list
       (Equation
-        (Call 'le (list (Call '+ (list (Call '- (list (FVar 'j) (FVar 'i))) (IntLit 1)))
+        (Call 'le (list (Call '- (list (FVar 'j) (FVar 'i)))
                         (Call '* (list (IntLit 2)
                                        (Call 'int_of_nat (list (Ctor 'S (list (FVar 'n)))))))))
         (Ctor 'True (list)))
@@ -254,9 +254,8 @@
         (Call 'int_of_nat (list (Ctor 'S (list (FVar 'n)))))
         (Call '+ (list (IntLit 1) (Call 'int_of_nat (list (FVar 'n)))))))
     (Equation
-      (Call 'le (list (Call '+ (list (Call '- (list (Call '- (list (FVar 'j) (IntLit 1)))
-                                                    (Call '+ (list (FVar 'i) (IntLit 1)))))
-                                     (IntLit 1)))
+      (Call 'le (list (Call '- (list (Call '- (list (FVar 'j) (IntLit 1)))
+                                     (Call '+ (list (FVar 'i) (IntLit 1)))))
                       (Call '* (list (IntLit 2) (Call 'int_of_nat (list (FVar 'n)))))))
       (Ctor 'True (list))))
   (ByTheory 'farkas (Cert 'farkas (list 1 1 -2))))
@@ -525,12 +524,16 @@
 ;; the loop runs far enough.
 ;;
 ;;   ∀ m i j p k.
-;;     [ i <= p,  p <= j,  (j-i)+1 <= 2*int_of_nat k ]
+;;     [ i <= p,  p <= j,  (j-i) <= 2*int_of_nat k ]
 ;;     ⊢ (read (rev_loop m i j k) p) = (read m (i+j-p))
 ;;
+;; The bound (j-i) <= 2k is exactly "k is at least ceil((j-i)/2) swaps" —
+;; tight for BOTH parities of the segment length (at i=0,j=n-1,k=half n
+;; it is n-1 <= 2*floor(n/2), true for even and odd n alike).
+;;
 ;; The proof's spine:
-;;   Z   : the bound forces (j-i)+1 <= 0 while i<=p<=j forces (j-i)>=0 —
-;;         contradictory, so the index collapses (mirror_idx_z, link
+;;   Z   : the bound forces (j-i) <= 0 while i<=p<=j forces (j-i)>=0, so
+;;         i=j=p and the index collapses (mirror_idx_z, link
 ;;         int_of_nat Z = 0 discharged by Simp).
 ;;   S k2: CaseOn the guard (lt i j):
 ;;     False: pointers crossed ⟹ i=j=p, loop=identity, index collapses
@@ -553,9 +556,9 @@
 
 ;; --- index collapses (plain term-equalities, two-sided farkas) -------------
 
-;; Z base: from a contradictory premise set (the link int_of_nat Z = 0
-;; makes the completion bound impossible), the mirror index is anything;
-;; we collapse it to p. G=0 (premises alone refute); -2 on the link.
+;; Z base: int_of_nat Z = 0 turns the bound (j-i) <= 2*int_of_nat Z into
+;; j <= i; with i<=p<=j that squeezes i=j=p, so the mirror index i+j-p
+;; collapses to p. Two-sided; -2 on the (any-sign) link constraint.
 (claim mirror_idx_z
   (Goal
     (list (Param 'i (ty Int)) (Param 'j (ty Int)) (Param 'p (ty Int)))
@@ -563,7 +566,7 @@
       (Equation (Call 'le (list (FVar 'i) (FVar 'p))) (Ctor 'True (list)))
       (Equation (Call 'le (list (FVar 'p) (FVar 'j))) (Ctor 'True (list)))
       (Equation
-        (Call 'le (list (Call '+ (list (Call '- (list (FVar 'j) (FVar 'i))) (IntLit 1)))
+        (Call 'le (list (Call '- (list (FVar 'j) (FVar 'i)))
                         (Call '* (list (IntLit 2)
                                        (Call 'int_of_nat (list (Ctor 'Z (list))))))))
         (Ctor 'True (list)))
@@ -571,7 +574,7 @@
     (Equation
       (Call '- (list (Call '+ (list (FVar 'i) (FVar 'j))) (FVar 'p)))
       (FVar 'p)))
-  (ByTheory 'farkas (Cert 'farkas (list (list 0 1 1 1 -2) (list 0 1 1 1 -2)))))
+  (ByTheory 'farkas (Cert 'farkas (list (list 1 2 0 1 -2) (list 1 0 2 1 -2)))))
 
 ;; guard-false: i<=p, p<=j, and (lt i j)=False (i>=j) squeeze p=i=j, so
 ;; the mirror index collapses to p. Same polynomial as idx_collapse, but
@@ -737,7 +740,7 @@
       (Equation (Call 'le (list (FVar 'i) (FVar 'p))) (Ctor 'True (list)))
       (Equation (Call 'le (list (FVar 'p) (FVar 'j))) (Ctor 'True (list)))
       (Equation
-        (Call 'le (list (Call '+ (list (Call '- (list (FVar 'j) (FVar 'i))) (IntLit 1)))
+        (Call 'le (list (Call '- (list (FVar 'j) (FVar 'i)))
                         (Call '* (list (IntLit 2) (Call 'int_of_nat (list (FVar 'k)))))))
         (Ctor 'True (list))))
     (Equation
