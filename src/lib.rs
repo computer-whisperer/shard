@@ -886,4 +886,89 @@ mod tests {
         let r = run_check_sequent(&m, module(vec![], vec![], vec![]), theory_empty(), seq, pf);
         assert_eq!(r, false_v());
     }
+
+    // ------------------------------------------------------------------
+    // Slice 10: Unfold — single δ-step on a named user fn.
+    //
+    // Unlike Reduce, Unfold preserves intermediate structure: after
+    //   (double 5) -[Unfold double]-> (+ 5 5)
+    // the (+ 5 5) is NOT further simplified. This is the proof
+    // language's "expose definition" knob.
+    // ------------------------------------------------------------------
+
+    /// (double 5) = (+ 5 5). They're not syntactically equal at the
+    /// surface, but ONE Unfold of double turns lhs into (+ 5 5). Refl
+    /// then closes. No Reduce involved.
+    #[test]
+    fn check_seq_proves_unfold_then_refl() {
+        let m = load_kernel();
+        let mod_v = double_module();
+        let seq = sequent(
+            vec![], vec![], vec![],
+            equation(
+                call("double", vec![intlit(5)]),
+                call("+", vec![intlit(5), intlit(5)]),
+            ),
+        );
+        let pf = steps(vec![unfold("double", side_lhs())], refl());
+        let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
+        assert_eq!(r, true_v());
+    }
+
+    /// Cite a fn that doesn't exist in the module. unfold_one returns
+    /// None (lookup_fn fails); apply_step returns None; Steps arm
+    /// returns False.
+    #[test]
+    fn check_seq_rejects_unfold_nonexistent_fn() {
+        let m = load_kernel();
+        let mod_v = double_module();
+        let seq = sequent(
+            vec![], vec![], vec![],
+            equation(call("double", vec![intlit(5)]), intlit(10)),
+        );
+        let pf = steps(vec![unfold("nonexistent_fn", side_lhs())], refl());
+        let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
+        assert_eq!(r, false_v());
+    }
+
+    /// Cite a real fn but the chosen side has no call to it. lhs is
+    /// just (IntLit 5) — no double call. unfold_one returns None.
+    #[test]
+    fn check_seq_rejects_unfold_when_fn_absent_from_side() {
+        let m = load_kernel();
+        let mod_v = double_module();
+        let seq = sequent(
+            vec![], vec![], vec![],
+            equation(intlit(5), call("double", vec![intlit(2)])),  // double on RHS only
+        );
+        let pf = steps(vec![unfold("double", side_lhs())], refl());
+        let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
+        assert_eq!(r, false_v());
+    }
+
+    /// Unfold + Reduce composition. Goal: (double (double 3)) = 12.
+    /// Unfold the outer call -> (+ (double 3) (double 3)). Then
+    /// Reduce simps to 12. Refl closes. Same answer as Reduce alone
+    /// would give, but demonstrates that Unfold and Reduce compose.
+    #[test]
+    fn check_seq_proves_unfold_then_reduce() {
+        let m = load_kernel();
+        let mod_v = double_module();
+        let seq = sequent(
+            vec![], vec![], vec![],
+            equation(
+                call("double", vec![call("double", vec![intlit(3)])]),
+                intlit(12),
+            ),
+        );
+        let pf = steps(
+            vec![
+                unfold("double", side_lhs()),
+                reduce(side_lhs()),
+            ],
+            refl(),
+        );
+        let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
+        assert_eq!(r, true_v());
+    }
 }

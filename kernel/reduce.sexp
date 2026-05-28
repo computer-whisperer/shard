@@ -207,6 +207,57 @@
         ((Some s2) (Some (Match s2 arms)))
         (None      None)))))
 
+;; unfold_one: find the leftmost-outermost Call to `fname` in `e` and
+;; replace it with `fname`'s body opened with the call's args. Returns
+;; None if fname isn't a user fn in m, or if no matching call is found,
+;; or if the matching call has arity mismatch.
+;;
+;; Limitation: does NOT descend under binders (Match arm bodies, Let
+;; bodies). For unfolding inside a binder, simp_expr handles it
+;; transitively, or the user can extract the term first via Reduce.
+(fn unfold_one ((m Module) (fname Symbol) (e Expr)) (Option Expr)
+  (match m
+    ((Module _ fns _)
+      (match (lookup_fn fname fns)
+        (None      None)                        ; fn doesn't exist
+        ((Some fd) (unfold_one_in fd fname e))))))
+
+(fn unfold_one_in ((fd FnDef) (fname Symbol) (e Expr)) (Option Expr)
+  (match e
+    ((Call f args)
+      (if (sym_eq f fname)
+          (apply_fn fd args)                    ; hit
+          (match (unfold_one_in_list fd fname args)
+            ((Some args2) (Some (Call f args2)))
+            (None         None))))
+    ((Ctor c args)
+      (match (unfold_one_in_list fd fname args)
+        ((Some args2) (Some (Ctor c args2)))
+        (None         None)))
+    ((If c t el)
+      (match (unfold_one_in fd fname c)
+        ((Some c2) (Some (If c2 t el)))
+        (None
+          (match (unfold_one_in fd fname t)
+            ((Some t2) (Some (If c t2 el)))
+            (None
+              (match (unfold_one_in fd fname el)
+                ((Some el2) (Some (If c t el2)))
+                (None       None)))))))
+    (_ None)))                                  ; FVar/BVar/IntLit/SymLit/Match/Let
+
+(fn unfold_one_in_list ((fd FnDef) (fname Symbol) (es (List Expr)))
+                        (Option (List Expr))
+  (match es
+    (Nil None)
+    ((Cons h t)
+      (match (unfold_one_in fd fname h)
+        ((Some h2) (Some (Cons h2 t)))
+        (None
+          (match (unfold_one_in_list fd fname t)
+            ((Some t2) (Some (Cons h t2)))
+            (None      None)))))))
+
 ;; simp_expr: drive `step` to fixed point. Returns the normal form of
 ;; e under m. Termination depends on the kernel's user-fn bodies; the
 ;; trusted Rust runtime will diverge if step does. See REVISIT.md —

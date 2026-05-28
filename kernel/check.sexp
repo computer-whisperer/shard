@@ -176,9 +176,15 @@
 (fn apply_step ((m Module) (th Theory) (seq Sequent) (s Step)) (Option Sequent)
   (match s
     ((Unfold fname side)
-      ;; TODO: unfold_one (in reduce.sexp) — replace one Call to
-      ;; fname with its body opened.
-      None)
+      ;; Replace ONE occurrence of (Call fname …) with fname's body
+      ;; opened. Distinct from Reduce: preserves the surface form of
+      ;; everything else (primitive calls, other user fns), so the
+      ;; proof can expose structure without driving to NF.
+      (match seq
+        ((Sequent params hyps premises eq)
+          (match (unfold_one_side_eq m fname side eq)
+            ((Some eq2) (Some (Sequent params hyps premises eq2)))
+            (None       None)))))
     ((Reduce side)
       ;; Reduce: drive simp_expr on the chosen side(s) of the
       ;; current equation. In v2 this is full δ+ι (see REVISIT —
@@ -204,6 +210,33 @@
         ((Lhs)  (Equation (simp_expr m l) r))
         ((Rhs)  (Equation l               (simp_expr m r)))
         ((Both) (Equation (simp_expr m l) (simp_expr m r)))))))
+
+;; Unfold one occurrence on the chosen side(s) of an equation.
+;; For Both: succeed if at least one side has a matching occurrence.
+;; For Lhs/Rhs: fail (None) if no occurrence on that side.
+(fn unfold_one_side_eq ((m Module) (fname Symbol) (side Side) (eq Equation))
+                       (Option Equation)
+  (match eq
+    ((Equation l r)
+      (match side
+        ((Lhs)
+          (match (unfold_one m fname l)
+            ((Some l2) (Some (Equation l2 r)))
+            (None      None)))
+        ((Rhs)
+          (match (unfold_one m fname r)
+            ((Some r2) (Some (Equation l r2)))
+            (None      None)))
+        ((Both)
+          (match (unfold_one m fname l)
+            ((Some l2)
+              (match (unfold_one m fname r)
+                ((Some r2) (Some (Equation l2 r2)))
+                (None      (Some (Equation l2 r)))))
+            (None
+              (match (unfold_one m fname r)
+                ((Some r2) (Some (Equation l r2)))
+                (None      None)))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Equation / Goal substitution. FVar-based; the hyp's own bound vars
