@@ -1,0 +1,48 @@
+;;; ∀ n : Nat. (add_nat n Z) = n   — right identity of add_nat.
+;;;
+;;; Direct port of the Rust test `check_seq_induct_add_nat_zero_right`
+;;; (lib.rs ~slice 15). Validates that a non-trivial inductive proof
+;;; written in sexp goes through the CLI driver with the same outcome
+;;; as the hand-built Rust version.
+;;;
+;;; Proof shape:
+;;;
+;;;   Z case: (add_nat Z Z) = Z.
+;;;     Unfold add_nat → opens the body with [Z, Z]. After Reduce
+;;;     ι-fires the Z arm, lhs is Z. Refl closes Z = Z.
+;;;
+;;;   S case: (add_nat (S _f) Z) = (S _f).
+;;;     IH at Hyp 0:  (add_nat _f Z) = _f.
+;;;     Unfold + Reduce → lhs becomes (S (add_nat _f Z)) (ι doesn't
+;;;     unfold the inner recursive call, just fires the outer match).
+;;;     Rewrite Hyp 0 Lr Lhs all=True replaces (add_nat _f Z) → _f.
+;;;     lhs is now (S _f). Refl closes.
+;;;
+;;; Notation note: (Ctor 'Z (list)) is the Expr VALUE representing
+;;; the source-term Z. Source-level Z (the Nat ctor) cannot be
+;;; written directly in claim bodies because the claim language
+;;; talks about Expr values, not source terms — see docs/REVISIT,
+;;; "Proof-file surface syntax".
+
+(use-module "nat_lib.sexp")
+
+(claim add_nat_n_zero
+  (Goal
+    (list (Param 'n (TCon 'Nat (list))))
+    (list)
+    (Equation
+      (Call 'add_nat (list (FVar 'n) (Ctor 'Z (list))))
+      (FVar 'n)))
+  (Induct 'n
+    (list
+      (Case 'Z
+        (Steps
+          (list (Unfold 'add_nat Lhs)
+                (Reduce Lhs))
+          Refl))
+      (Case 'S
+        (Steps
+          (list (Unfold 'add_nat Lhs)
+                (Reduce Lhs)
+                (Rewrite (Hyp 0) Lr Lhs True (list)))
+          Refl)))))

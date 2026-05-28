@@ -308,11 +308,38 @@ is where to start when planning v3.
   (the `(list)` for empty type args is unavoidable without further
   sugar); the `Cons` / `Nil` / `Some` / `None` Pair chain in
   more-elaborate proofs.
+- **Slice 26 stress test:** ported `(add_nat n Z) = n` from Rust
+  test to sexp. 95-LOC Rust test (with BVar-index comments) →
+  21-LOC sexp claim content + 13-LOC user module. The sexp version
+  drops the manual BVar reasoning the Rust test needed (the loader
+  does it). No new sugar needs surfaced — the slice 25 sugars
+  carried a full Induct + Case + Unfold + Reduce + Rewrite + IH
+  proof without further friction.
 - **Revisit when:** real proof authoring surfaces specific pain
   points. Cheap next steps if needed: a unary type ctor shorthand
   (e.g., `Int` as a bare symbol meaning `(TCon 'Int (list))`), or
   a `(pair a b)` form. Heavier: a separate proof-script surface
   syntax that lowers to canonical claim sexp.
+
+### Expr-value vs. source-Expr distinction in claim bodies
+- **State (slice 26):** claim bodies talk about *Expr values* — the
+  Ctor-tree representation of source terms — not source-level
+  terms directly. So the source-Z (a Nat ctor application) is
+  written as `(Ctor 'Z (list))` in a claim body, not bare `Z`.
+  Same for Calls: `(double 5)` is the SOURCE, but inside a claim
+  body it's `(Call 'double (list (IntLit 5)))` (an Expr value).
+  This caught implementation correctly on the first inductive
+  port but is the most likely surface-syntax footgun for
+  newcomers.
+- **Why:** the claim language is a meta-language *about* user
+  source. The kernel's Expr ADT has `Ctor`, `Call`, `FVar`, etc.
+  as ctors of Expr; claim bodies build *those*, not the user's
+  ctors directly. Conflating the two would require a layered
+  parser that knows when it's parsing meta vs object.
+- **Revisit when:** newcomer confusion is a real pattern, or once
+  a higher-level proof-script surface lowers source-form to
+  Expr-form automatically (e.g., a `(:source Z)` form expanding
+  to `(Ctor 'Z (list))`).
 
 ### Proof-file module syntax: parse-but-error
 - **Chose (slice 23):** `(module NAME)` is recognized as a top-level
