@@ -227,6 +227,32 @@
       (Ctor 'False (list))))
   (ByTheory 'farkas (Cert 'farkas (list 1 1 1))))
 
+;; precond_shrink: the Nat/Int bridge for the mirror induction.
+;;   P: (j-i)+1 <= 2*int_of_nat(S n)          [outer completion bound]
+;;   L: int_of_nat(S n) = 1 + int_of_nat(n)   [the definitional link]
+;;   ⊢ (j-i)-1 <= 2*int_of_nat(n)             [IH's completion bound]
+;; farkas can't unfold int_of_nat in a premise, so the successor link L
+;; is supplied as a premise (discharged by Simp at the cite site, where
+;; (S n) is a constructor) and consumed here as an equality constraint.
+;; cert: G=1 on ¬goal, +1 on P (inequality), -2 on L (equality, any sign).
+(claim precond_shrink
+  (Goal
+    (list (Param 'i (ty Int)) (Param 'j (ty Int)) (Param 'n (ty Nat)))
+    (list
+      (Equation
+        (Call 'le (list (Call '+ (list (Call '- (list (FVar 'j) (FVar 'i))) (IntLit 1)))
+                        (Call '* (list (IntLit 2)
+                                       (Call 'int_of_nat (list (Ctor 'S (list (FVar 'n)))))))))
+        (Ctor 'True (list)))
+      (Equation
+        (Call 'int_of_nat (list (Ctor 'S (list (FVar 'n)))))
+        (Call '+ (list (IntLit 1) (Call 'int_of_nat (list (FVar 'n)))))))
+    (Equation
+      (Call 'le (list (Call '- (list (Call '- (list (FVar 'j) (FVar 'i))) (IntLit 1)))
+                      (Call '* (list (IntLit 2) (Call 'int_of_nat (list (FVar 'n)))))))
+      (Ctor 'True (list))))
+  (ByTheory 'farkas (Cert 'farkas (list 1 1 -2))))
+
 ;; idx_collapse: (le i p)=True, (le p j)=True, (le j i)=True ⊢
 ;;   ((i + j) - p) = p.   (a squeezed index collapses — the center case)
 ;; A PLAIN term-equality proven by two-sided farkas; used to rewrite the

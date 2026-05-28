@@ -39,7 +39,7 @@ PASS  plus_comm
 …
 PASS  lt_implies_neq
 
-49 passed, 0 failed
+50 passed, 0 failed
 ```
 
 The `check` binary loads the bundled kernel, then walks each
