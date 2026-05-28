@@ -1600,6 +1600,124 @@ mod tests {
         assert_eq!(r, true_v());
     }
 
+    // ------------------------------------------------------------------
+    // Slice 16: polymorphic-type Induct.
+    //
+    // First runtime exercise of:
+    //   - type_subst_list / type_subst / assoc_sym_type with a
+    //     non-empty type_env (substituting T -> Int in Cons's field
+    //     types when inducting on (List Int)).
+    //   - build_ihs identifying ONLY the recursive field for IH
+    //     generation (Cons has fields [T, List T]; only the second
+    //     gets an IH, since type_eq (List T) T is false).
+    //
+    // These code paths exist in check.sexp since slice 4 but have
+    // never run with a non-Nil type_env.
+    // ------------------------------------------------------------------
+
+    /// `∀ xs : (List Int). (id_list xs) = xs` by induction.
+    ///
+    /// id_list is the structural identity on lists:
+    ///   (fn id_list ((xs (List Int))) (List Int)
+    ///     (match xs
+    ///       (Nil Nil)
+    ///       ((Cons h t) (Cons h (id_list t)))))
+    ///
+    /// Nil case:  Unfold + Reduce + Refl.
+    /// Cons case: Unfold + Reduce + Rewrite (IH on the tail) + Refl.
+    ///
+    /// Polymorphic-typedef plumbing exercised:
+    ///   - In do_induct, type_head (TCon "List" [Int]) yields
+    ///     (Pair "List" [Int]); zip_pairs ["T"] [Int] builds
+    ///     [(Pair "T" Int)] as type_env.
+    ///   - For the Cons ctor in check_induct_cases, type_subst_list
+    ///     on field_types [TVar "T", TCon "List" [TVar "T"]] under
+    ///     that env produces [TCon "Int" [], TCon "List" [TCon "Int" []]]
+    ///     — i.e. fully-instantiated Int and (List Int) field types.
+    ///   - build_ihs walks the resulting field_params and emits ONE
+    ///     IH (for _f2 : List Int), not two — _f1 : Int isn't the
+    ///     inductive type.
+    #[test]
+    fn check_seq_induct_polymorphic_list_id() {
+        let m = load_kernel();
+
+        // (type (List T) (Nil) (Cons T (List T)))
+        let list_td = type_def("List", vec!["T"], vec![
+            ctor_def("Nil",  vec![]),
+            ctor_def("Cons", vec![tvar("T"), tcon("List", vec![tvar("T")])]),
+        ]);
+
+        // (fn id_list ((xs (List Int))) (List Int)
+        //   (match xs (Nil Nil) ((Cons h t) (Cons h (id_list t)))))
+        //
+        // Static body BVar conventions:
+        //   outer: BVar 0 = xs (only param)
+        //   Cons arm (pat_arity=2, source-order h then t):
+        //     BVar 0 = t (innermost, last source-order PVar)
+        //     BVar 1 = h
+        //     BVar 2+ = outer-shifted (no outer refs in our body)
+        let body = nmatch(
+            bvar(0),                                   // scrutinee: xs
+            vec![
+                // Nil arm: returns Nil
+                narm(pctor("Nil", vec![]),
+                     ctor_app("Nil", vec![])),
+                // Cons arm: returns (Cons h (id_list t))
+                narm(pctor("Cons", vec![pvar(), pvar()]),
+                     ctor_app("Cons", vec![
+                        bvar(1),                       // h
+                        call("id_list", vec![bvar(0)]),// (id_list t)
+                     ])),
+            ],
+        );
+        let list_int = tcon("List", vec![tcon("Int", vec![])]);
+        let id_list_fn = fn_def("id_list",
+            vec![list_int.clone()],
+            list_int.clone(),
+            body,
+        );
+        let mod_v = module(vec![list_td], vec![id_list_fn], vec![]);
+
+        let seq = sequent(
+            vec![param("xs", list_int)],
+            vec![], vec![],
+            equation(call("id_list", vec![fvar("xs")]), fvar("xs")),
+        );
+
+        // Nil case after subst (xs := Nil): (id_list Nil) = Nil
+        //   Unfold + Reduce → Nil. Refl.
+        let nil_case = steps(
+            vec![
+                unfold("id_list", side_lhs()),
+                reduce(side_lhs()),
+            ],
+            refl(),
+        );
+
+        // Cons case after subst (xs := (Cons _f1 _f2)):
+        //   (id_list (Cons _f1 _f2)) = (Cons _f1 _f2)
+        //   IH at Hyp 0: (id_list _f2) = _f2.
+        //   Unfold + Reduce ι → (Cons _f1 (id_list _f2)) (stops at
+        //   the recursive call by ι semantics).
+        //   Rewrite Hyp 0 Lr Lhs replaces (id_list _f2) → _f2 inside
+        //   the Cons args. Lhs becomes (Cons _f1 _f2). Refl.
+        let cons_case = steps(
+            vec![
+                unfold("id_list", side_lhs()),
+                reduce(side_lhs()),
+                rewrite(er_hyp(0), dir_lr(), side_lhs(), bool_true(), vec![]),
+            ],
+            refl(),
+        );
+
+        let pf = induct("xs", vec![
+            case_arm("Nil",  nil_case),
+            case_arm("Cons", cons_case),
+        ]);
+        let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
+        assert_eq!(r, true_v());
+    }
+
     /// Missing case for one ctor. check_induct_cases reaches the S
     /// ctor, find_case returns None, returns False.
     #[test]

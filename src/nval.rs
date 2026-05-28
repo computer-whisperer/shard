@@ -87,6 +87,13 @@ pub fn tcon(name: &str, args: Vec<Expr>) -> Expr {
 pub fn ty_int() -> Expr { tcon("Int", vec![]) }
 pub fn ty_sym() -> Expr { tcon("Symbol", vec![]) }
 
+/// (TVar name) — a type variable. Erased at runtime in narrow, but
+/// still required for declaring parametric typedefs and for the
+/// type_subst path that do_induct walks for polymorphic types.
+pub fn tvar(name: &str) -> Expr {
+    ctor("TVar", vec![Expr::SymLit(name.into())])
+}
+
 // -----------------------------------------------------------------
 // Module pieces.
 // -----------------------------------------------------------------
