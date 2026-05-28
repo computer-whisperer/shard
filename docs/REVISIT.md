@@ -336,14 +336,16 @@ is where to start when planning v3.
 ## CLI / Tooling
 
 ### Proof-file surface syntax: light sugar on value-construction sexp
-- **Chose (slice 23, sugared slice 25):** `(claim NAME GOAL PROOF)`
+- **Chose (slice 23, sugared slices 25 + 28):** `(claim NAME GOAL PROOF)`
   where GOAL and PROOF are narrow expressions parsed against the
   kernel's ctor set and evaluated. Surface sugar:
     - `'foo` → `(quote foo)` → `SymLit foo` (lexpr's reader handles
       `'` automatically).
-    - `(list a b c)` → `(Cons a (Cons b (Cons c Nil)))` (new
-      special form in `load_expr`, slice 25; reserves `list` as
-      a name).
+    - `(list a b c)` → `(Cons a (Cons b (Cons c Nil)))` (slice 25;
+      reserves `list` as a name).
+    - `(ty NAME a1 a2 …)` → `(TCon 'NAME (list a1 a2 …))`, with
+      bare symbols inside `ty` treated as 0-ary type names; e.g.
+      `(ty List Int)` → nested TCons (slice 28; reserves `ty`).
 - **Why now:** reuses `load::expr_from_value` plus the existing
   evaluator. The kernel's ctor application IS the value-construction
   syntax. The two sugars cut a typical claim by ~50% of LOC and

@@ -15,12 +15,18 @@
 //!   4. Anything else as a bare identifier → FVar
 //!
 //! Reserved special forms (override the head-symbol lookup):
-//!   if, match, let, quote, list
+//!   if, match, let, quote, list, ty
 //!
 //! `list` expands at parse time to a Cons/Nil chain — `(list a b c)`
 //! becomes `(Cons a (Cons b (Cons c Nil)))`. `(list)` is `Nil`.
 //! Sexp reader macro `'foo` is handled by lexpr itself as a rewrite
 //! to `(quote foo)`.
+//!
+//! `ty` builds a Type *value* (the `(TCon Symbol (List Type))` shape):
+//! `(ty Int)` → `(TCon 'Int (list))`; `(ty List Int)` → nested TCons;
+//! bare symbols inside `ty` are interpreted as 0-ary type names, not
+//! as FVars. Outside `ty`, types are written via explicit `TCon` /
+//! `TVar` ctor applications.
 //!
 //! Module loading is two-pass: first scan to collect type/ctor names,
 //! then load bodies with that knowledge. Lets us recognize `Nil`,
@@ -336,6 +342,7 @@ fn load_expr(v: &Value, ctx: &mut LoadCtx, ctors: &HashSet<Symbol>) -> Result<Ex
         "let" => load_let(&parts[1..], ctx, ctors),
         "quote" => load_quote(&parts[1..]),
         "list" => load_list(&parts[1..], ctx, ctors),
+        "ty" => load_ty(&parts[1..], ctx, ctors),
         _ => {
             let mut args = Vec::with_capacity(parts.len() - 1);
             for a in &parts[1..] {
@@ -494,6 +501,59 @@ fn load_list(
         acc = Expr::Ctor("Cons".into(), vec![head, acc]);
     }
     Ok(acc)
+}
+
+/// `(ty NAME a1 a2 …)` builds a Type *value* `(TCon 'NAME (list a1 a2 …))`.
+/// Each `ai` is recursively interpreted as a Type — a bare symbol is
+/// treated as a 0-ary type name `(TCon 'Foo (list))`, and a list form
+/// `(ty …)` recurses. Other list forms (e.g., explicit `(TVar 'A)`)
+/// fall through to the normal expression loader.
+///
+/// Avoids the verbosity of `(TCon 'List (list (TCon 'Int (list))))`
+/// vs. the compact `(ty List Int)`. Reserves `ty` as a special form.
+fn load_ty(
+    parts: &[&Value],
+    ctx: &mut LoadCtx,
+    ctors: &HashSet<Symbol>,
+) -> Result<Expr, LoadError> {
+    if parts.is_empty() {
+        return Err(LoadError::BadShape(
+            "(ty NAME args…) requires a name".into(),
+        ));
+    }
+    let name = as_symbol(parts[0])?.to_string();
+    let mut args = Vec::with_capacity(parts.len() - 1);
+    for a in &parts[1..] {
+        args.push(load_ty_arg(a, ctx, ctors)?);
+    }
+    let mut args_chain = Expr::Ctor("Nil".into(), Vec::new());
+    for it in args.into_iter().rev() {
+        args_chain = Expr::Ctor("Cons".into(), vec![it, args_chain]);
+    }
+    Ok(Expr::Ctor(
+        "TCon".into(),
+        vec![Expr::SymLit(name), args_chain],
+    ))
+}
+
+/// One Type argument inside `(ty …)`. Bare symbol → 0-ary TCon;
+/// anything else → normal load_expr (which dispatches to `ty` /
+/// handles explicit `TCon` / `TVar` ctor applications).
+fn load_ty_arg(
+    v: &Value,
+    ctx: &mut LoadCtx,
+    ctors: &HashSet<Symbol>,
+) -> Result<Expr, LoadError> {
+    if let Some(sym) = v.as_symbol() {
+        return Ok(Expr::Ctor(
+            "TCon".into(),
+            vec![
+                Expr::SymLit(sym.to_string()),
+                Expr::Ctor("Nil".into(), Vec::new()),
+            ],
+        ));
+    }
+    load_expr(v, ctx, ctors)
 }
 
 /// `(quote SYM)` → `SymLit`

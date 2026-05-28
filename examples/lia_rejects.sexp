@@ -7,8 +7,8 @@
 
 (claim plus_x_y_equals_plus_x_1
   (Goal
-    (list (Param 'x (TCon 'Int (list)))
-          (Param 'y (TCon 'Int (list))))
+    (list (Param 'x (ty Int))
+          (Param 'y (ty Int)))
     (list)
     (Equation
       (Call '+ (list (FVar 'x) (FVar 'y)))

@@ -15,8 +15,8 @@
 ;; ∀ x y : Int. x + y = y + x   (commutativity of +)
 (claim plus_comm
   (Goal
-    (list (Param 'x (TCon 'Int (list)))
-          (Param 'y (TCon 'Int (list))))
+    (list (Param 'x (ty Int))
+          (Param 'y (ty Int)))
     (list)
     (Equation
       (Call '+ (list (FVar 'x) (FVar 'y)))
@@ -37,7 +37,7 @@
 ;; ∀ x : Int. (x + 1) - x = 1   (mixed atom + constant cancellation)
 (claim plus_one_minus_self
   (Goal
-    (list (Param 'x (TCon 'Int (list))))
+    (list (Param 'x (ty Int)))
     (list)
     (Equation
       (Call '-

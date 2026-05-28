@@ -28,7 +28,7 @@
 
 (claim add_nat_n_zero
   (Goal
-    (list (Param 'n (TCon 'Nat (list))))
+    (list (Param 'n (ty Nat)))
     (list)
     (Equation
       (Call 'add_nat (list (FVar 'n) (Ctor 'Z (list))))

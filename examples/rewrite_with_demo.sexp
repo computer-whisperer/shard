@@ -18,7 +18,7 @@
 
 (claim trivial_lemma
   (Goal
-    (list (Param 'a (TCon 'Nat (list))))
+    (list (Param 'a (ty Nat)))
     (list (Equation (FVar 'a) (Ctor 'Z (list))))    ; premise: a = Z
     (Equation                                       ; conclusion:
       (Call 'add_nat (list (FVar 'a) (Ctor 'Z (list))))    ;   (add_nat a Z)
