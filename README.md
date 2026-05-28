@@ -26,7 +26,8 @@ cargo run --bin check -- examples/lia_basics.sexp \
                          examples/add_nat_zero.sexp \
                          examples/rewrite_with_demo.sexp \
                          examples/list_lemmas.sexp \
-                         examples/map_lemmas.sexp
+                         examples/map_lemmas.sexp \
+                         examples/mem_lemmas.sexp
 ```
 
 Expected output:
@@ -34,9 +35,9 @@ Expected output:
 ```
 PASS  plus_comm
 …
-PASS  insert_shadow
+PASS  rev_loop_zero
 
-21 passed, 0 failed
+26 passed, 0 failed
 ```
 
 The `check` binary loads the bundled kernel, then walks each
@@ -95,6 +96,9 @@ examples/              ; user modules + proof-script claim files
   map_lib.sexp         ;   finite (Map V) over Int keys — lookup / insert
   map_lemmas.sexp      ;   extensional map lemmas (slice 33): lookup_insert_eq,
                        ;     lookup_insert_neq, insert_shadow + int_eq_refl
+  mem_lib.sexp         ;   M3 linear memory = (Map Int): read/write/swap/rev_loop
+  mem_lemmas.sexp      ;   M3 array framing (slice 34): read_write_eq/_neq,
+                       ;     read_swap_j + capstone statement (proof = WIP)
   …
 
 tools/
@@ -136,6 +140,10 @@ Feature checklist (✓ = shipped in v2; → = next):
 | Polymorphism in fn sigs + `(tv T)`      | ✓        | 31     |
 | Insts pre-instantiation                 | ✓        | 32     |
 | Finite maps (Int keys) + extensional lemmas | ✓    | 33     |
+| Cross-module composition (`use-module` deps) | ✓   | 34     |
+| M3 linear-memory model + array framing  | ✓        | 34     |
+| M3 capstone (`rev_loop ⊑ rev`, loop invariant) | →  |        |
+| Order / inequality decision procedure   | →        |        |
 | Polymorphic-key maps `(Map K V)`        | →        |        |
 | Defunctionalized higher-order           | →        |        |
 | Measure / well-founded recursion        | →        |        |

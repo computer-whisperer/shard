@@ -140,12 +140,16 @@ fn main() -> ExitCode {
                         Some(d) => d.join(&rel_path),
                         None    => PathBuf::from(&rel_path),
                     };
-                    // Load the user module with the kernel as a ctor
-                    // base, so user fns can reference stdlib types
-                    // (List / Cons / Nil, Option / Some / None, …)
-                    // without re-declaring them.
+                    // Load the user module against the ACCUMULATED user
+                    // module as the ctor base (it is seeded with the
+                    // kernel's types and grows with each use-module). So
+                    // a file sees stdlib types (List/Option/…) AND types
+                    // from earlier use-module files — letting user
+                    // modules compose (e.g. mem_lib's `read` matching on
+                    // map_lib's `MCons`). Monotonic: the base only grows,
+                    // so single-module files are unaffected.
                     match load::module_from_paths_with_base(
-                        &[&resolved], Some(&kernel),
+                        &[&resolved], Some(&user_module),
                     ) {
                         Ok(loaded) => {
                             merge_module(&mut user_module, loaded);
