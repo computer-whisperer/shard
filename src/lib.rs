@@ -40,6 +40,7 @@ pub fn load_kernel_from<P: AsRef<std::path::Path>>(
         p("lia.sexp"),
         p("eqdec.sexp"),
         p("ord.sexp"),
+        p("farkas.sexp"),
     ])
 }
 
@@ -2604,6 +2605,132 @@ mod tests {
         let r = run_check_sequent(&m,
             module(vec![], vec![], vec![]),
             theory_empty(), seq, ord_pf());
+        assert_eq!(r, false_v());
+    }
+
+    // ------------------------------------------------------------------
+    // Slice 37: farkas ByTheory backend (kernel/farkas.sexp).
+    //
+    // Linear-integer ENTAILMENT: premises ⊢ (lt|le a b) = True, via a
+    // cert-supplied Farkas combination. The mirrors guard the two
+    // soundness-critical properties:
+    //   GUARD 1 — an inequality premise may only take a NONNEGATIVE
+    //     multiplier (equalities take any sign). check_seq_farkas_
+    //     rejects_neg_mult_on_ineq vs _allows_neg_mult_on_eq is the
+    //     crux pair: the SAME negative multiplier is rejected on an
+    //     inequality but accepted on an equality.
+    //   GUARD 2 — a wrong witness (variables don't cancel) is rejected.
+    // ------------------------------------------------------------------
+
+    /// Build a farkas proof citing multipliers [G, M0, M1, ...]. The
+    /// multipliers are RAW narrow Ints (Expr::IntLit), as a bare `1` in
+    /// a cert `(list 1 1)` parses to — NOT the Expr-ADT `IntLit` ctor
+    /// that nval's `intlit` builds.
+    fn farkas_pf(mults: Vec<i64>) -> ast::Expr {
+        let ms: Vec<ast::Expr> = mults.into_iter().map(ast::Expr::IntLit).collect();
+        by_theory("farkas", cert("farkas", list(ms)))
+    }
+
+    /// Positive: ∀ p i. (lt p i)=True ⊢ (lt p (i+1))=True. cert [1,1].
+    /// THE M3 loop-invariant obligation.
+    #[test]
+    fn check_seq_farkas_lt_succ_from_lt() {
+        let m = load_kernel();
+        let int = tcon("Int", vec![]);
+        let seq = sequent(
+            vec![param("p", int.clone()), param("i", int)],
+            vec![],
+            vec![equation(call("lt", vec![fvar("p"), fvar("i")]), ctor_app("True", vec![]))],
+            equation(
+                call("lt", vec![fvar("p"), call("+", vec![fvar("i"), intlit(1)])]),
+                ctor_app("True", vec![]),
+            ),
+        );
+        let r = run_check_sequent(&m,
+            module(vec![], vec![], vec![]),
+            theory_empty(), seq, farkas_pf(vec![1, 1]));
+        assert_eq!(r, true_v());
+    }
+
+    /// Positive: transitivity. (le a b),(le b c) ⊢ (le a c). cert [1,1,1].
+    #[test]
+    fn check_seq_farkas_le_trans() {
+        let m = load_kernel();
+        let int = tcon("Int", vec![]);
+        let seq = sequent(
+            vec![param("a", int.clone()), param("b", int.clone()), param("c", int)],
+            vec![],
+            vec![
+                equation(call("le", vec![fvar("a"), fvar("b")]), ctor_app("True", vec![])),
+                equation(call("le", vec![fvar("b"), fvar("c")]), ctor_app("True", vec![])),
+            ],
+            equation(call("le", vec![fvar("a"), fvar("c")]), ctor_app("True", vec![])),
+        );
+        let r = run_check_sequent(&m,
+            module(vec![], vec![], vec![]),
+            theory_empty(), seq, farkas_pf(vec![1, 1, 1]));
+        assert_eq!(r, true_v());
+    }
+
+    /// Negative (GUARD 1): (le a b) ⊬ (le b a). The only multipliers
+    /// that cancel the variables put -1 on the INEQUALITY premise, which
+    /// is rejected. cert [1,-1] must be REJECTED — without the
+    /// nonneg guard this would falsely "prove" le is symmetric.
+    #[test]
+    fn check_seq_farkas_rejects_neg_mult_on_ineq() {
+        let m = load_kernel();
+        let int = tcon("Int", vec![]);
+        let seq = sequent(
+            vec![param("a", int.clone()), param("b", int)],
+            vec![],
+            vec![equation(call("le", vec![fvar("a"), fvar("b")]), ctor_app("True", vec![]))],
+            equation(call("le", vec![fvar("b"), fvar("a")]), ctor_app("True", vec![])),
+        );
+        let r = run_check_sequent(&m,
+            module(vec![], vec![], vec![]),
+            theory_empty(), seq, farkas_pf(vec![1, -1]));
+        assert_eq!(r, false_v());
+    }
+
+    /// Positive (complement to GUARD 1): a negative multiplier on an
+    /// EQUALITY premise is allowed. (int_eq a b)=True ⊢ (le a b)=True
+    /// with cert [1,-1] — the SAME negative multiplier the previous test
+    /// rejects, here accepted because the premise is an equality.
+    #[test]
+    fn check_seq_farkas_allows_neg_mult_on_eq() {
+        let m = load_kernel();
+        let int = tcon("Int", vec![]);
+        let seq = sequent(
+            vec![param("a", int.clone()), param("b", int)],
+            vec![],
+            vec![equation(call("int_eq", vec![fvar("a"), fvar("b")]), ctor_app("True", vec![]))],
+            equation(call("le", vec![fvar("a"), fvar("b")]), ctor_app("True", vec![])),
+        );
+        let r = run_check_sequent(&m,
+            module(vec![], vec![], vec![]),
+            theory_empty(), seq, farkas_pf(vec![1, -1]));
+        assert_eq!(r, true_v());
+    }
+
+    /// Negative (GUARD 2): a wrong witness is rejected. The goal IS
+    /// entailed (lt p i ⊢ lt p (i+1)) but cert [1,0] leaves the premise
+    /// unused, so variables don't cancel → rejected.
+    #[test]
+    fn check_seq_farkas_rejects_wrong_witness() {
+        let m = load_kernel();
+        let int = tcon("Int", vec![]);
+        let seq = sequent(
+            vec![param("p", int.clone()), param("i", int)],
+            vec![],
+            vec![equation(call("lt", vec![fvar("p"), fvar("i")]), ctor_app("True", vec![]))],
+            equation(
+                call("lt", vec![fvar("p"), call("+", vec![fvar("i"), intlit(1)])]),
+                ctor_app("True", vec![]),
+            ),
+        );
+        let r = run_check_sequent(&m,
+            module(vec![], vec![], vec![]),
+            theory_empty(), seq, farkas_pf(vec![1, 0]));
         assert_eq!(r, false_v());
     }
 

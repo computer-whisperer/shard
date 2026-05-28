@@ -206,6 +206,10 @@
       ;;   ord   — order-reflection: decides `(lt a b) = True` and
       ;;           `(le a b) = True` when (b - a) canonicalizes to a
       ;;           constant of the right sign. See ord.sexp.
+      ;;   farkas— linear-integer ENTAILMENT: premises ⊢ (lt|le a b)=True
+      ;;           via a cert-supplied Farkas combination. The first
+      ;;           backend that reads the sequent's PREMISES and the
+      ;;           Cert payload. See farkas.sexp.
       (if (sym_eq theory_name (quote lia))
           (match seq
             ((Sequent _ _ _ (Equation lhs rhs))
@@ -218,7 +222,11 @@
                   (match seq
                     ((Sequent _ _ _ (Equation lhs rhs))
                       (ord_decide lhs rhs)))
-                  False))))))                         ; unknown theory
+                  (if (sym_eq theory_name (quote farkas))
+                      (match seq
+                        ((Sequent _ _ premises goal_eq)
+                          (farkas_check premises goal_eq cert)))
+                      False)))))))                    ; unknown theory
 
 ;; ---------------------------------------------------------------------------
 ;; apply_steps / apply_step: run non-branching steps, threading the

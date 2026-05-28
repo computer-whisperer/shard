@@ -331,6 +331,42 @@ is where to start when planning v3.
   place to add strict/non-strict mixing or `(lt a b) = False` ⟺
   `(le b a) = True` if a proof needs the negated form.
 
+### `farkas` — linear-integer entailment via certificate (slice 37)
+- **Chose:** a fourth `ByTheory` backend that decides
+  `premises ⊢ (lt|le a b) = True` by CHECKING a Farkas combination:
+  the cert payload `(list G M0 M1 …)` supplies nonnegative multipliers
+  (G on the negated goal, Mk on premise k), and the kernel verifies
+  `G·¬goal + Σ Mk·premise_k` canonicalizes to a constant `< 0`. The
+  search for multipliers is the untrusted proposer's job; the kernel
+  only checks. First real user of the `Cert` payload (lia/eqdec/ord
+  ignore it — tautologies need no witness).
+- **Why now:** the M3 loop invariant needs conditional inequality
+  reasoning (`p < i ⊢ p < i+1`) that the tautology backends can't do
+  (they ignore premises). This is exactly TRANSFER's "SMT-as-
+  certificate, small per-theory checker, don't trust the solver's
+  bare unsat" — induction stays in the kernel, the decidable leaf is
+  a checked Farkas witness.
+- **Two soundness-critical guards (verified by the slice-37 review):**
+  (1) inequality-derived constraints (lt/le and the negated goal) take
+  only NONNEGATIVE multipliers; equality-derived constraints
+  (int_eq=True, plain equations) take any sign. (2) the combination
+  must canonicalize to a lone constant strictly `< 0`. A sign error in
+  either would be unsound; both are covered by Rust mirrors incl. the
+  crux pair (neg multiplier rejected on an inequality, accepted on an
+  equality).
+- **Caveats:** conclusions are order facts only (equality conclusions
+  stay with lia, or need a future two-sided combination); opaque atoms
+  assumed integer-typed (inherited from lia_collect); a non-linear
+  premise is usable only with multiplier 0. **i64 overflow:** the
+  multiplier arithmetic uses the host `+`/`*` (i64, like lia/ord) — the
+  kernel trusts these don't overflow. Not farkas-specific and not a
+  clean exploit path (variable cancellation uses the same wrapping
+  arithmetic), but if `Int` is meant to be mathematical integers, the
+  primitives should eventually be checked/bignum.
+- **Revisit if:** a proof needs equality conclusions by entailment
+  (add the two-sided refutation), or the overflow caveat becomes
+  load-bearing (move arithmetic primitives to checked/bignum).
+
 ### RewriteWith — single-match only (Insts shipped slice 32)
 - **Chose (slice 27):** the conditional rewrite proof step landed
   with two restrictions:
