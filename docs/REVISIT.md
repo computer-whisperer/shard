@@ -440,3 +440,75 @@ is where to start when planning v3.
   kernel to a module-tree layout is a separable slice.
 - **Revisit when:** the directory-tree loader lands. Migrating the
   kernel to `kernel/mod.sexp` becomes a consistency cleanup.
+
+### User modules see the kernel's ctors during parsing
+- **Chose (slice 29):** `module_from_paths_with_base(paths, Some(&kernel))`
+  passes the kernel as a parsing base, so user-module fn bodies
+  and patterns can reference stdlib ctors (Nil, Cons, Some, None,
+  True, False, Pair) without redeclaring those types.
+- **Why now:** surfaced as soon as the first user module
+  (`examples/list_lib.sexp`) tried to pattern-match on `Cons`. The
+  alternative — forcing every user module to copy stdlib's type
+  decls — fights every layer of UX.
+- **Revisit if:** name clashes between kernel and user ctors
+  become an authoring concern. Today's resolution is "first
+  declaration wins"; could move to explicit imports later.
+
+### `check` binary seeds the user-module value with kernel types
+- **Chose (slice 29):** when constructing the user-module value
+  passed as the `m` arg to `check_sequent`, the binary starts the
+  accumulator with `kernel.types.clone()` (all kernel-internal
+  typedefs, including stdlib + AST types like Expr/Pat/Goal).
+  Subsequent (use-module …) directives extend this.
+- **Why now:** without the seed, `do_induct`'s `lookup_typedef`
+  on the user-module value can't find `List` when inducting on
+  `(List Int)`. Top-level claims that talk about polymorphic types
+  declared in stdlib (the common case) would fail.
+- **Cost:** the runtime user-module value is bigger by ~25
+  typedefs. None of them block lookup or interfere structurally;
+  the kernel walks types until matching the requested name.
+- **Revisit if:** the seed creates ambiguities (e.g., a user
+  declares a type with the same name as a kernel type) or grows
+  large enough to matter for lookup performance.
+
+### Type-parameter symbols become TVar at load time
+- **Chose (slice 29):** `load_type_in_scope` accepts a list of
+  declared type-parameter names and emits `TVar` (not `TCon`) for
+  matching bare symbols inside that typedef's ctor field types.
+  E.g., `(type (List T) (Cons T (List T)))` produces
+  `CtorDef Cons [TVar "T", TCon "List" [TVar "T"]]`.
+- **Why now:** the kernel's `type_subst` only fires on `TVar`. The
+  previous behavior emitted `TCon "T" []` uniformly, which meant
+  inducting over a polymorphic loaded type couldn't substitute
+  field types correctly → no IH generated → inductive proofs over
+  `(List Int)`-style instances silently failed. The Rust slice 16
+  test sidestepped this by hand-building modules with `nval::tvar`.
+- **Cost:** ~15 NCNB in `load.rs`. Trusted-core touch.
+- **Revisit if:** the loader gains broader type-parameter scope
+  (currently only the typedef's own fields; fn signatures' generic
+  params would want similar treatment for full polymorphism).
+
+### LCF helper-lemma discipline (per-ctor step lemmas)
+- **State (slice 29):** the kernel's reducer can't always do the
+  targeted reduction a proof wants: `Unfold` is greedy on the
+  outermost matching Call, and `Reduce` (ι-only) doesn't step
+  Calls. A proof with nested `(append (append _ _) _)` shape
+  exposes this — the outer unfold blocks before the inner Call
+  becomes value-headed.
+- **Resolution:** for each user-defined recursive fn, prove
+  one helper lemma per ctor arm:
+    - `f_nil_step:  (f Nil <other args>) = <Nil-arm body>`
+    - `f_cons_step: (f (Cons h t) <other args>) = <Cons-arm body>`
+  Each is a direct `Unfold + Reduce + Refl` proof. Then any proof
+  that needs to reduce `(f <ctor-headed term> …)` at arbitrary
+  depth cites the appropriate step lemma via Rewrite. This is the
+  LCF discipline TRANSFER.md references: when the kernel can't
+  reduce, prove a helper lemma. The reverse tower
+  (`examples/list_lemmas.sexp`) uses 6 such helpers (2 per fn) to
+  reach `(fast xs Nil) = (rev xs)`.
+- **Cost:** each recursive fn → 2 helper-lemma claims. ~5 LOC
+  each. Mechanical.
+- **Revisit if:** Simp guarding (the long-deferred liability)
+  lands and makes the helpers unnecessary for typical cases — at
+  that point the kernel can reduce safely past stuck arguments.
+  Until then, helper lemmas are the right pattern.

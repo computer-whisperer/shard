@@ -54,9 +54,23 @@ fn main() -> ExitCode {
         }
     };
 
-    // Running user module: starts empty, grows as (use-module …)
-    // forms are processed. Re-rendered to a value after each merge.
-    let mut user_module = ast::Module::default();
+    // Running user module: starts with the kernel's type declarations
+    // (stdlib List/Option/Bool/Pair + the kernel's own internal types
+    // like Expr/Pat/Goal/Proof — which user proofs may reason about
+    // meta-theoretically). Grows as (use-module …) forms are
+    // processed.
+    //
+    // Seeding with the kernel's types is what lets do_induct's
+    // `lookup_typedef` find List in (Induct 'xs …) on a user fn
+    // over (List Int). Without this seed, only types declared in
+    // (use-module …) files would be visible to the kernel — forcing
+    // each user module to redeclare stdlib types just to induct over
+    // them.
+    let mut user_module = ast::Module {
+        types: kernel.types.clone(),
+        fns: Vec::new(),
+        externs: Vec::new(),
+    };
     let mut user_module_value = module_to_value(&user_module);
 
     let mut theory = ctor("TheoryEmpty", vec![]);
@@ -126,7 +140,13 @@ fn main() -> ExitCode {
                         Some(d) => d.join(&rel_path),
                         None    => PathBuf::from(&rel_path),
                     };
-                    match load::module_from_paths(&[&resolved]) {
+                    // Load the user module with the kernel as a ctor
+                    // base, so user fns can reference stdlib types
+                    // (List / Cons / Nil, Option / Some / None, …)
+                    // without re-declaring them.
+                    match load::module_from_paths_with_base(
+                        &[&resolved], Some(&kernel),
+                    ) {
                         Ok(loaded) => {
                             merge_module(&mut user_module, loaded);
                             user_module_value = module_to_value(&user_module);

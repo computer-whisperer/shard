@@ -2690,6 +2690,62 @@ mod tests {
         assert_eq!(r, false_v());
     }
 
+    /// Slice 29 isolation test — Rust mirror of examples/list_lemmas.sexp's
+    /// append_nil_right. Built with nval helpers, runs the SAME proof
+    /// the binary submits. Lets us tell whether a binary FAIL is a
+    /// sexp-loading bug or a real proof problem.
+    #[test]
+    fn check_seq_append_nil_right_rust_mirror() {
+        let m = load_kernel();
+        // (type (List T) (Nil) (Cons T (List T)))
+        let list_td = type_def("List", vec!["T"], vec![
+            ctor_def("Nil",  vec![]),
+            ctor_def("Cons", vec![tvar("T"), tcon("List", vec![tvar("T")])]),
+        ]);
+        // (fn append ((xs (List Int)) (ys (List Int))) (List Int)
+        //   (match xs (Nil ys) ((Cons h t) (Cons h (append t ys)))))
+        let list_int = tcon("List", vec![tcon("Int", vec![])]);
+        let body = nmatch(
+            bvar(1),                                   // scrutinee: xs
+            vec![
+                narm(pctor("Nil", vec![]), bvar(0)),   // -> ys
+                narm(pctor("Cons", vec![pvar(), pvar()]),
+                     ctor_app("Cons", vec![
+                        bvar(1),                       // h
+                        call("append", vec![bvar(0), bvar(2)]),
+                     ])),
+            ],
+        );
+        let append_fn = fn_def("append",
+            vec![list_int.clone(), list_int.clone()],
+            list_int.clone(), body);
+        let mod_v = module(vec![list_td], vec![append_fn], vec![]);
+
+        let seq = sequent(
+            vec![param("xs", list_int)],
+            vec![], vec![],
+            equation(
+                call("append", vec![fvar("xs"), ctor_app("Nil", vec![])]),
+                fvar("xs"),
+            ),
+        );
+        let pf = induct("xs", vec![
+            case_arm("Nil",
+                steps(vec![
+                    unfold("append", side_lhs()),
+                    reduce(side_lhs()),
+                ], refl())),
+            case_arm("Cons",
+                steps(vec![
+                    unfold("append", side_lhs()),
+                    reduce(side_lhs()),
+                    rewrite(er_hyp(0), dir_lr(), side_lhs(), bool_true(), vec![]),
+                ], refl())),
+        ]);
+        let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
+        assert_eq!(r, true_v());
+    }
+
     /// Axiom citation works the same as Proven. Both lookup_lemma
     /// arms match on a sym_eq of the name and return the carried
     /// Goal — the tag is just an audit marker (see BOUNDARIES.md).

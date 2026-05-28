@@ -69,6 +69,21 @@ impl std::error::Error for LoadError {}
 /// but file order is preserved in any later iteration over `fns`,
 /// `types`, etc.
 pub fn module_from_paths<P: AsRef<std::path::Path>>(paths: &[P]) -> Result<Module, LoadError> {
+    module_from_paths_with_base(paths, None)
+}
+
+/// Like `module_from_paths` but additionally treats `base`'s ctor
+/// names as in-scope when parsing the loaded module's fn bodies and
+/// patterns. Used by the `check` binary to let user modules reference
+/// kernel stdlib types (List / Cons / Nil, Option / Some / None, …)
+/// without redeclaring them.
+///
+/// The loaded module's own types are still produced as declared; the
+/// base is consulted only for ctor *name resolution* during parsing.
+pub fn module_from_paths_with_base<P: AsRef<std::path::Path>>(
+    paths: &[P],
+    base: Option<&Module>,
+) -> Result<Module, LoadError> {
     let mut combined = String::new();
     for p in paths {
         let p = p.as_ref();
@@ -77,12 +92,21 @@ pub fn module_from_paths<P: AsRef<std::path::Path>>(paths: &[P]) -> Result<Modul
         combined.push_str(&contents);
         combined.push('\n');
     }
-    module_from_str(&combined)
+    module_from_str_with_base(&combined, base)
 }
 
 /// Parse and load a module from sexp source text. Multiple top-level
 /// forms are accepted (any mix of `type` / `fn` / `extern`).
 pub fn module_from_str(src: &str) -> Result<Module, LoadError> {
+    module_from_str_with_base(src, None)
+}
+
+/// Same as `module_from_str` with an optional `base` module whose
+/// ctor names augment the in-scope ctor set during parsing.
+pub fn module_from_str_with_base(
+    src: &str,
+    base: Option<&Module>,
+) -> Result<Module, LoadError> {
     // Parse all top-level forms once; load in two passes so types are
     // known before bodies reference their ctors.
     let values = parse_all(src)?;
@@ -100,7 +124,10 @@ pub fn module_from_str(src: &str) -> Result<Module, LoadError> {
         }
     }
 
-    let ctors = ctor_set(&module);
+    let mut ctors = ctor_set(&module);
+    if let Some(b) = base {
+        ctors.extend(ctor_set(b));
+    }
 
     // Pass 2: fns and externs. Skip types (already loaded).
     for v in &values {
@@ -187,7 +214,13 @@ fn load_type_def(parts: &[&Value]) -> Result<TypeDef, LoadError> {
         let cname = as_symbol(cp[0])?.to_string();
         let mut fields = Vec::with_capacity(cp.len() - 1);
         for f in &cp[1..] {
-            fields.push(load_type(f)?);
+            // Field types are parsed in the scope of the typedef's
+            // params — bare `T` in `(Cons T (List T))` for `(type
+            // (List T) …)` is a TVar, not a TCon "T". The kernel's
+            // `type_subst` only fires on TVar, so getting this
+            // distinction right is what lets `do_induct` produce
+            // proper IHs for recursive fields.
+            fields.push(load_type_in_scope(f, &params)?);
         }
         ctors.push(CtorDef {
             name: cname,
@@ -264,17 +297,33 @@ fn load_params(v: &Value) -> Result<(Vec<Symbol>, Vec<Type>), LoadError> {
 }
 
 /// Type expression. Bare symbol `T` → `(TCon T ())`; applied form
-/// `(T A B …)` → `(TCon T (A B …))`. `TVar` is not produced here at
-/// load time — the full-language pass will later split.
+/// `(T A B …)` → `(TCon T (A B …))`. `TVar` is not produced here —
+/// callers that have type parameters in scope should use
+/// `load_type_in_scope` instead.
 fn load_type(v: &Value) -> Result<Type, LoadError> {
+    load_type_in_scope(v, &[])
+}
+
+/// Like `load_type` but treats bare symbols matching one of
+/// `tparams` as `TVar`s. Used when parsing the field types of a
+/// `(type (NAME PARAMS…) …)` declaration — the kernel's
+/// `type_subst` only fires on `TVar`, so the param/TVar
+/// correspondence is what makes generic ctors substitute correctly
+/// at induction time.
+fn load_type_in_scope(v: &Value, tparams: &[Symbol]) -> Result<Type, LoadError> {
     if let Some(sym) = v.as_symbol() {
+        if tparams.iter().any(|p| p == sym) {
+            return Ok(Type::TVar(sym.to_string()));
+        }
         return Ok(Type::TCon(sym.to_string(), Vec::new()));
     }
     let parts = as_list(v)?;
     let head_sym = as_symbol(parts[0])?;
+    // Head of an applied form is a type constructor name, never a
+    // type variable (variables aren't applicable).
     let mut args = Vec::with_capacity(parts.len() - 1);
     for a in &parts[1..] {
-        args.push(load_type(a)?);
+        args.push(load_type_in_scope(a, tparams)?);
     }
     Ok(Type::TCon(head_sym.to_string(), args))
 }
