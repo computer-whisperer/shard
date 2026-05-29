@@ -66,115 +66,166 @@ fn main() -> ExitCode {
     // (use-module …) files would be visible to the kernel — forcing
     // each user module to redeclare stdlib types just to induct over
     // them.
-    let mut user_module = ast::Module {
+    let user_module = ast::Module {
         types: kernel.types.clone(),
         fns: Vec::new(),
         externs: Vec::new(),
     };
-    let mut user_module_value = module_to_value(&user_module);
-
-    let mut theory = ctor("TheoryEmpty", vec![]);
-    let mut passed = 0usize;
-    let mut failed = 0usize;
+    let mut ctx = Ctx {
+        user_module_value: module_to_value(&user_module),
+        user_module,
+        theory: ctor("TheoryEmpty", vec![]),
+        passed: 0,
+        failed: 0,
+        loaded: std::collections::HashSet::new(),
+        in_progress: Vec::new(),
+    };
 
     for path_str in &args {
-        let path = PathBuf::from(path_str);
-        let src = match std::fs::read_to_string(&path) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("error reading {}: {}", path.display(), e);
-                return ExitCode::from(2);
-            }
-        };
-
-        let forms = match parse_top_level(&src) {
-            Ok(fs) => fs,
-            Err(e) => {
-                eprintln!("error parsing {}: {}", path.display(), e);
-                return ExitCode::from(2);
-            }
-        };
-
-        for form in &forms {
-            match process_form(
-                form, &kernel, &user_module_value, &theory, &path,
-            ) {
-                Outcome::Pass { name, goal } => {
-                    println!("PASS  {}", name);
-                    // Close param-name FVars in eq + premises to BVars
-                    // so the stored Goal matches the kernel's
-                    // convention for citation (resolve_eq + the
-                    // Rewrite / RewriteWith arms open BVars to fresh
-                    // FVars). Authors write FVar form in claim
-                    // bodies because it's friendlier; the binary
-                    // does the close. See REVISIT, "Open-vs-closed
-                    // Goal forms".
-                    let close_call = ast::Expr::Call(
-                        "close_goal_for_storage".into(),
-                        vec![goal],
-                    );
-                    let closed_goal = match eval::eval(&kernel, &close_call) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            eprintln!(
-                                "error closing goal for `{}`: {:?}",
-                                name, e,
-                            );
-                            return ExitCode::from(2);
-                        }
-                    };
-                    let entry = ctor(
-                        "Proven",
-                        vec![ast::Expr::SymLit(name), closed_goal],
-                    );
-                    theory = ctor("TheoryCons", vec![entry, theory]);
-                    passed += 1;
-                }
-                Outcome::Fail { name } => {
-                    println!("FAIL  {}", name);
-                    failed += 1;
-                }
-                Outcome::UseModule(rel_path) => {
-                    // Resolve relative to the proof file's dir.
-                    let resolved = match path.parent() {
-                        Some(d) => d.join(&rel_path),
-                        None    => PathBuf::from(&rel_path),
-                    };
-                    // Load the user module against the ACCUMULATED user
-                    // module as the ctor base (it is seeded with the
-                    // kernel's types and grows with each use-module). So
-                    // a file sees stdlib types (List/Option/…) AND types
-                    // from earlier use-module files — letting user
-                    // modules compose (e.g. mem_lib's `read` matching on
-                    // map_lib's `MCons`). Monotonic: the base only grows,
-                    // so single-module files are unaffected.
-                    match load::module_from_paths_with_base(
-                        &[&resolved], Some(&user_module),
-                    ) {
-                        Ok(loaded) => {
-                            merge_module(&mut user_module, loaded);
-                            user_module_value = module_to_value(&user_module);
-                        }
-                        Err(e) => {
-                            eprintln!(
-                                "error: {}: use-module {}: {}",
-                                path.display(), resolved.display(), e,
-                            );
-                            return ExitCode::from(2);
-                        }
-                    }
-                }
-                Outcome::Fatal(msg) => {
-                    eprintln!("error: {}", msg);
-                    return ExitCode::from(2);
-                }
-            }
+        if let Err(code) = process_file(&PathBuf::from(path_str), &mut ctx, &kernel) {
+            return code;
         }
     }
 
     println!();
-    println!("{} passed, {} failed", passed, failed);
-    if failed > 0 { ExitCode::from(1) } else { ExitCode::SUCCESS }
+    println!("{} passed, {} failed", ctx.passed, ctx.failed);
+    if ctx.failed > 0 { ExitCode::from(1) } else { ExitCode::SUCCESS }
+}
+
+// ----------------------------------------------------------------------
+// Recursive file loader with transitive imports.
+//
+// A .sexp file may mix object-level code (`type`/`fn`/`extern`),
+// dependency directives (`import` / its legacy alias `use-module`), and
+// proofs (`claim`). One file = one topic. Each file is processed in
+// three passes so dependencies are in scope before use:
+//   A. imports — recurse into each dependency FIRST (depth-first), so its
+//      code + proven claims land in the shared module/theory.
+//   B. code — load THIS file's types/fns/externs (now that imports are
+//      visible as the ctor/fn base).
+//   C. claims — check each, threading the growing theory.
+// Dedup + cycle detection are by CANONICAL path: a file imported by
+// several others is loaded once; an import cycle is a hard error.
+// `import` re-checks the dependency's claims (the project's "decided not
+// assumed" stance); memoization keeps that to once per invocation.
+// ----------------------------------------------------------------------
+
+struct Ctx {
+    user_module: ast::Module,
+    user_module_value: ast::Expr,
+    theory: ast::Expr,
+    passed: usize,
+    failed: usize,
+    loaded: std::collections::HashSet<PathBuf>,
+    in_progress: Vec<PathBuf>,
+}
+
+fn process_file(path: &PathBuf, ctx: &mut Ctx, kernel: &ast::Module) -> Result<(), ExitCode> {
+    let canon = path.canonicalize().unwrap_or_else(|_| path.clone());
+    if ctx.loaded.contains(&canon) {
+        return Ok(()); // already loaded this invocation — dedup
+    }
+    if ctx.in_progress.iter().any(|p| p == &canon) {
+        eprintln!(
+            "error: import cycle — {} is already being loaded",
+            canon.display(),
+        );
+        return Err(ExitCode::from(2));
+    }
+    let src = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error reading {}: {}", path.display(), e);
+            return Err(ExitCode::from(2));
+        }
+    };
+    let forms = match parse_top_level(&src) {
+        Ok(fs) => fs,
+        Err(e) => {
+            eprintln!("error parsing {}: {}", path.display(), e);
+            return Err(ExitCode::from(2));
+        }
+    };
+
+    ctx.in_progress.push(canon.clone());
+
+    // Pass A: imports (and the use-module alias) — recurse first.
+    for form in &forms {
+        if let Some(dep) = import_path(form) {
+            let resolved = match path.parent() {
+                Some(d) => d.join(&dep),
+                None    => PathBuf::from(&dep),
+            };
+            process_file(&resolved, ctx, kernel)?;
+        }
+    }
+
+    // Pass B: load this file's code against the (now import-augmented)
+    // accumulated module as the ctor/fn base, so a local fn can see
+    // imported ctors. The loader skips claim/import/use-module forms.
+    match load::module_from_str_with_base(&src, Some(&ctx.user_module)) {
+        Ok(loaded) => {
+            merge_module(&mut ctx.user_module, loaded);
+            ctx.user_module_value = module_to_value(&ctx.user_module);
+        }
+        Err(e) => {
+            eprintln!("error: {}: loading module: {}", path.display(), e);
+            return Err(ExitCode::from(2));
+        }
+    }
+
+    // Pass C: claims, in order.
+    for form in &forms {
+        match process_form(form, kernel, &ctx.user_module_value, &ctx.theory, path) {
+            Outcome::Pass { name, goal } => {
+                println!("PASS  {}", name);
+                // Close param-name FVars in eq + premises to BVars so the
+                // stored Goal matches the kernel's citation convention
+                // (resolve_eq opens BVars to fresh FVars). See REVISIT,
+                // "Open-vs-closed Goal forms".
+                let close_call = ast::Expr::Call(
+                    "close_goal_for_storage".into(),
+                    vec![goal],
+                );
+                let closed_goal = match eval::eval(kernel, &close_call) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        eprintln!("error closing goal for `{}`: {:?}", name, e);
+                        return Err(ExitCode::from(2));
+                    }
+                };
+                let entry = ctor("Proven", vec![ast::Expr::SymLit(name), closed_goal]);
+                ctx.theory = ctor("TheoryCons", vec![entry, ctx.theory.clone()]);
+                ctx.passed += 1;
+            }
+            Outcome::Fail { name } => {
+                println!("FAIL  {}", name);
+                ctx.failed += 1;
+            }
+            Outcome::Skip => {}
+            Outcome::Fatal(msg) => {
+                eprintln!("error: {}", msg);
+                return Err(ExitCode::from(2));
+            }
+        }
+    }
+
+    ctx.in_progress.pop();
+    ctx.loaded.insert(canon);
+    Ok(())
+}
+
+/// If `form` is `(import "PATH")` or the legacy `(use-module "PATH")`,
+/// return the path string; else None.
+fn import_path(form: &Value) -> Option<String> {
+    let items: Vec<&Value> = form.list_iter()?.collect();
+    if items.len() != 2 {
+        return None;
+    }
+    match items[0].as_symbol()? {
+        "import" | "use-module" => items[1].as_str().map(|s| s.to_string()),
+        _ => None,
+    }
 }
 
 // ----------------------------------------------------------------------
@@ -184,8 +235,9 @@ fn main() -> ExitCode {
 enum Outcome {
     Pass { name: String, goal: ast::Expr },
     Fail { name: String },
-    /// `(use-module "rel/path.sexp")` — caller resolves and loads.
-    UseModule(String),
+    /// A non-claim form handled by an earlier pass (import / use-module
+    /// in pass A; type / fn / extern in pass B). Ignored in pass C.
+    Skip,
     Fatal(String),
 }
 
@@ -213,21 +265,8 @@ fn process_form(
     };
     match head {
         "claim" => process_claim(&items, kernel, user_module, theory, path),
-        "use-module" => {
-            if items.len() != 2 {
-                return Outcome::Fatal(format!(
-                    "{}: use-module expects (use-module \"PATH\"), got {} arg(s)",
-                    path.display(), items.len() - 1,
-                ));
-            }
-            match items[1].as_str() {
-                Some(s) => Outcome::UseModule(s.to_string()),
-                None => Outcome::Fatal(format!(
-                    "{}: use-module PATH must be a string literal, got {}",
-                    path.display(), items[1],
-                )),
-            }
-        }
+        // Handled in earlier passes: imports/aliases (A), code defs (B).
+        "import" | "use-module" | "type" | "fn" | "extern" => Outcome::Skip,
         "module" => {
             let name = items.get(1).and_then(|v| v.as_symbol()).unwrap_or("?");
             Outcome::Fatal(format!(
@@ -238,7 +277,8 @@ fn process_form(
             ))
         }
         other => Outcome::Fatal(format!(
-            "{}: unknown top-level form `{}` (expected `claim`, `use-module`, or `module`)",
+            "{}: unknown top-level form `{}` \
+             (expected `claim`, `import`, `type`, `fn`, `extern`, or `use-module`)",
             path.display(), other,
         )),
     }

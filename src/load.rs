@@ -129,7 +129,13 @@ pub fn module_from_str_with_base(
         ctors.extend(ctor_set(b));
     }
 
-    // Pass 2: fns and externs. Skip types (already loaded).
+    // Pass 2: fns and externs. Skip types (already loaded). The proof-
+    // script forms (`claim`, `import`, `use-module`) are the check
+    // binary's concern, not the module loader's — a co-located topic
+    // file mixes code (type/fn/extern) and proofs (claim) plus
+    // dependency directives (import); here we load only the CODE part
+    // and skip the rest. The check binary processes the same file's
+    // imports + claims separately (see bin/check.rs process_file).
     for v in &values {
         let parts = as_list(v)?;
         let head_sym = as_symbol(parts[0])?;
@@ -137,6 +143,7 @@ pub fn module_from_str_with_base(
             "type" => {}
             "fn" => module.fns.push(load_fn_def(&parts[1..], &ctors)?),
             "extern" => module.externs.push(load_extern_def(&parts[1..])?),
+            "claim" | "import" | "use-module" => {}
             other => return Err(LoadError::UnknownForm(other.into())),
         }
     }
