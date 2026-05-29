@@ -120,3 +120,121 @@
       (Call 'int_eq (list (FVar 'a) (FVar 'b)))
       (Ctor 'True (list))))
   (ByTheory 'farkas (Cert 'farkas (list (list 1 1 0) (list 1 0 1)))))
+
+
+;; ===== hoisted from std/mem (slice 53): more order/diseq facts =====
+
+;; ---------------------------------------------------------------------------
+;; Arithmetic helpers for the loop invariant, proven by the farkas
+;; entailment backend (each a linear consequence of its premises).
+;; lt_succ_from_lt and lt_implies_neq are imported from std/order; the
+;; mirror-shaped ones below are M3-specific and stay here.
+;; ---------------------------------------------------------------------------
+
+;; (lt p i)=True, (lt i j)=True ⊢ (int_eq p j)=False.   (p < i < j ⟹ p ≠ j)
+(claim lt_trans_to_neq
+  (Goal
+    (list (Param 'p (ty Int)) (Param 'i (ty Int)) (Param 'j (ty Int)))
+    (list (Equation (Call 'lt (list (FVar 'p) (FVar 'i))) (Ctor 'True (list)))
+          (Equation (Call 'lt (list (FVar 'i) (FVar 'j))) (Ctor 'True (list))))
+    (Equation
+      (Call 'int_eq (list (FVar 'p) (FVar 'j)))
+      (Ctor 'False (list))))
+  (ByTheory 'farkas (Cert 'farkas (list 1 1 1))))
+
+;; ---------------------------------------------------------------------------
+;; Above-the-range case. Flipped-orientation arithmetic helpers (the
+;; bounds now read (lt j p) — p above j — so the disequalities come out
+;; with p on the other side from the below case).
+;; ---------------------------------------------------------------------------
+
+;; (lt j p)=True ⊢ (lt (- j 1) p)=True.   (feed the IH at the shrunk j-1)
+(claim lt_pred_from_lt
+  (Goal
+    (list (Param 'j (ty Int)) (Param 'p (ty Int)))
+    (list (Equation (Call 'lt (list (FVar 'j) (FVar 'p))) (Ctor 'True (list))))
+    (Equation
+      (Call 'lt (list (Call '- (list (FVar 'j) (IntLit 1))) (FVar 'p)))
+      (Ctor 'True (list))))
+  (ByTheory 'farkas (Cert 'farkas (list 1 1))))
+
+;; (lt a b)=True ⊢ (int_eq b a)=False.   (flipped: ≠ with the larger first)
+;; The negated goal is the equality b=a; cancelling it against the
+;; premise needs goal multiplier -1 — allowed because the goal is a
+;; disequality (equality negation), not an inequality.
+(claim lt_implies_neq_flip
+  (Goal
+    (list (Param 'a (ty Int)) (Param 'b (ty Int)))
+    (list (Equation (Call 'lt (list (FVar 'a) (FVar 'b))) (Ctor 'True (list))))
+    (Equation
+      (Call 'int_eq (list (FVar 'b) (FVar 'a)))
+      (Ctor 'False (list))))
+  (ByTheory 'farkas (Cert 'farkas (list -1 1))))
+
+;; (lt i j)=True, (lt j p)=True ⊢ (int_eq p i)=False.   (i < j < p ⟹ p ≠ i)
+(claim lt_trans_to_neq_flip
+  (Goal
+    (list (Param 'i (ty Int)) (Param 'j (ty Int)) (Param 'p (ty Int)))
+    (list (Equation (Call 'lt (list (FVar 'i) (FVar 'j))) (Ctor 'True (list)))
+          (Equation (Call 'lt (list (FVar 'j) (FVar 'p))) (Ctor 'True (list))))
+    (Equation
+      (Call 'int_eq (list (FVar 'p) (FVar 'i)))
+      (Ctor 'False (list))))
+  (ByTheory 'farkas (Cert 'farkas (list -1 1 1))))
+
+;; i+1<=p from i<p (the interior IH's lower-bound premise).
+(claim le_succ_from_lt
+  (Goal
+    (list (Param 'i (ty Int)) (Param 'p (ty Int)))
+    (list (Equation (Call 'lt (list (FVar 'i) (FVar 'p))) (Ctor 'True (list))))
+    (Equation
+      (Call 'le (list (Call '+ (list (FVar 'i) (IntLit 1))) (FVar 'p)))
+      (Ctor 'True (list))))
+  (ByTheory 'farkas (Cert 'farkas (list 1 1))))
+
+;; p<=j-1 from p<j (the interior IH's upper-bound premise).
+(claim le_pred_from_lt
+  (Goal
+    (list (Param 'p (ty Int)) (Param 'j (ty Int)))
+    (list (Equation (Call 'lt (list (FVar 'p) (FVar 'j))) (Ctor 'True (list))))
+    (Equation
+      (Call 'le (list (FVar 'p) (Call '- (list (FVar 'j) (IntLit 1)))))
+      (Ctor 'True (list))))
+  (ByTheory 'farkas (Cert 'farkas (list 1 1))))
+
+;; ===========================================================================
+;; The list <-> linear-memory bridge. load writes a list into memory at
+;; base..base+len-1; dump reads len cells back out. We prove the round
+;; trip (dump . load = id), which together with the mirror gives the
+;; capstone. (These are the "representation alignment" lemmas TRANSFER.md
+;; flagged — each is an induction on the list/counter with index side-
+;; conditions discharged by the order/farkas backends.)
+;; ===========================================================================
+
+;; q < x+1 is a tautology helper used to step a load/dump index past its
+;; own base (no premises).
+(claim lt_self_succ
+  (Goal
+    (list (Param 'x (ty Int)))
+    (list)
+    (Equation (Call 'lt (list (FVar 'x) (Call '+ (list (FVar 'x) (IntLit 1)))))
+              (Ctor 'True (list))))
+  (ByTheory 'farkas (Cert 'farkas (list 1))))
+
+;; --- dump of the reversed memory = rdump of the original (the mirror) ---
+
+;; 0 <= x ⊢ 0 <= x+1  (step the nonneg witness; farkas).
+(claim le0_succ
+  (Goal (list (Param 'x (ty Int)))
+    (list (Equation (Call 'le (list (IntLit 0) (FVar 'x))) (Ctor 'True (list))))
+    (Equation (Call 'le (list (IntLit 0) (Call '+ (list (IntLit 1) (FVar 'x)))))
+              (Ctor 'True (list))))
+  (ByTheory 'farkas (Cert 'farkas (list 1 1))))
+
+;; i <= base ⊢ i <= base+1  (step the IH's lower bound; farkas).
+(claim le_succ_r
+  (Goal (list (Param 'i (ty Int)) (Param 'base (ty Int)))
+    (list (Equation (Call 'le (list (FVar 'i) (FVar 'base))) (Ctor 'True (list))))
+    (Equation (Call 'le (list (FVar 'i) (Call '+ (list (FVar 'base) (IntLit 1)))))
+              (Ctor 'True (list))))
+  (ByTheory 'farkas (Cert 'farkas (list 1 1))))

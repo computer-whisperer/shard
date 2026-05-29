@@ -94,10 +94,12 @@ src/                   ; the trusted-by-review Rust component
 std/                   ; the standard library — reusable code + theorems,
                        ;   each a topic file (code + its lemmas, co-located),
                        ;   wired together with (import …) (slice 51)
-  nat.sexp             ;   Nat type + add_nat
-  order.sexp           ;   Int order / disequality entailment lemmas
-                       ;     (ord + farkas backends): lt_succ_from_lt,
-                       ;     le_trans, lt_implies_neq, eq_from_le_both, …
+  arith.sexp           ;   pure lia index identities (sub_zero, idx_cancel, …)
+  order.sexp           ;   Int order / disequality entailment (ord + farkas):
+                       ;     lt_succ_from_lt, le_trans, lt_implies_neq,
+                       ;     eq_from_le_both, lt_trans_to_neq, … (19 lemmas)
+  nat.sexp             ;   Nat + add_nat / int_of_nat / half_nat + nonneg /
+                       ;     half_bound (the Induct2 showcase). imports order.
   list.sexp            ;   (List T) append/rev/fast + the reverse tower
   map.sexp             ;   (Map V) lookup/insert + extensional lemmas + int_eq_refl
   mem.sexp             ;   M3 linear memory = (Map Int): read/write/swap/rev_loop/
