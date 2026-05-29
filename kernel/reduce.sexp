@@ -9,49 +9,68 @@
 ;;; scans arms left-to-right and returns the first arm's body opened
 ;;; with its bindings, or None if no arm fires.
 
-(fn match_pat ((p Pat) (v Expr) (acc (List Expr))) (Option (List Expr))
+;; match_pat: three-valued (see MatchResult). A constructor/literal pattern
+;; meeting a value of a clashing constructor/literal is MNo; meeting a
+;; non-value (Call/Match/If/Let — reducible — or FVar/BVar — symbolic) at a
+;; position the pattern needs to inspect is MStuck (UNDECIDED), never MNo.
+;; PVar is non-forcing: it binds whatever is there, value or not.
+(fn match_pat ((p Pat) (v Expr) (acc (List Expr))) MatchResult
   (match p
     ((PVar)                              ; binds next BVar — capture v as innermost
-      (Some (Cons v acc)))
+      (MOk (Cons v acc)))
     ((PInt n)
       (match v
-        ((IntLit m)
-          (if (int_eq n m) (Some acc) None))
-        (_ None)))
+        ((IntLit m) (if (int_eq n m) (MOk acc) (MNo)))
+        ((Ctor _ _) (MNo))
+        ((SymLit _) (MNo))
+        (_          (MStuck))))          ; Call/Match/If/Let/FVar/BVar — undecided
     ((PSym s)
       (match v
-        ((SymLit t)
-          (if (sym_eq s t) (Some acc) None))
-        (_ None)))
+        ((SymLit t) (if (sym_eq s t) (MOk acc) (MNo)))
+        ((Ctor _ _) (MNo))
+        ((IntLit _) (MNo))
+        (_          (MStuck))))
     ((PCtor pc pats)
       (match v
         ((Ctor vc vargs)
-          (if (sym_eq pc vc)
-              (match_pats pats vargs acc)
-              None))
-        (_ None)))))
+          (if (sym_eq pc vc) (match_pats pats vargs acc False) (MNo)))
+        ((IntLit _) (MNo))
+        ((SymLit _) (MNo))
+        (_          (MStuck))))))        ; Call/Match/If/Let/FVar/BVar — undecided
 
-(fn match_pats ((ps (List Pat)) (vs (List Expr)) (acc (List Expr))) (Option (List Expr))
+;; match_pats: match positionally, left to right. The combined verdict is
+;; MNo if ANY position definitely clashes (short-circuit), else MStuck if
+;; any position is undecided, else MOk with the accumulated bindings. The
+;; `stuck` flag rides along so a later MNo still wins over an earlier MStuck
+;; (an arm whose 2nd field clashes cannot match, even if its 1st is undecided).
+(fn match_pats ((ps (List Pat)) (vs (List Expr)) (acc (List Expr)) (stuck Bool)) MatchResult
   (match ps
     (Nil
       (match vs
-        (Nil (Some acc))
-        (_   None)))
+        (Nil (if stuck (MStuck) (MOk acc)))
+        (_   (MNo))))                                ; arity: extra values
     ((Cons p prest)
       (match vs
-        (Nil None)
+        (Nil (MNo))                                  ; arity: extra patterns
         ((Cons v vrest)
           (match (match_pat p v acc)
-            ((Some acc2) (match_pats prest vrest acc2))
-            (None        None)))))))
+            ((MNo)      (MNo))                        ; definite clash — short-circuit
+            ((MStuck)   (match_pats prest vrest acc True))
+            ((MOk acc2) (match_pats prest vrest acc2 stuck))))))))
 
-(fn try_match_arms ((arms (List Arm)) (v Expr)) (Option Expr)
+;; try_match_arms: scan arms in order. Fire the first that definitely
+;; matches (MOk). On the first UNDECIDED arm (MStuck) stop and report
+;; ArmStuck — the caller must reduce the scrutinee and retry, NOT fall
+;; through to a later arm (that fall-through was the soundness bug). Skip
+;; arms that definitely clash (MNo). All clash ⇒ ArmNone.
+(fn try_match_arms ((arms (List Arm)) (v Expr)) ArmResult
   (match arms
-    (Nil None)
+    (Nil (ArmNone))
     ((Cons (Arm p body) rest)
       (match (match_pat p v Nil)
-        ((Some bindings) (Some (open_many bindings body)))
-        (None            (try_match_arms rest v))))))
+        ((MOk bindings) (ArmFired (open_many bindings body)))
+        ((MStuck)       (ArmStuck))
+        ((MNo)          (try_match_arms rest v))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Function-table lookup. Names are unique within a module.
@@ -197,15 +216,27 @@
           None))))
 
 ;; step_match: if scrut is value-headed, try arms; otherwise step scrut.
+;; ArmStuck (a deep pattern needs a not-yet-reduced position) means reduce
+;; the scrutinee further and retry — NOT fall through to a later arm.
 (fn step_match ((m Module) (s Expr) (arms (List Arm))) (Option Expr)
   (match s
-    ((Ctor _ _)  (try_match_arms arms s))
-    ((IntLit _)  (try_match_arms arms s))
-    ((SymLit _)  (try_match_arms arms s))
+    ((Ctor _ _)  (resolve_arms m s arms))
+    ((IntLit _)  (resolve_arms m s arms))
+    ((SymLit _)  (resolve_arms m s arms))
     (_
       (match (step m s)
         ((Some s2) (Some (Match s2 arms)))
         (None      None)))))
+
+;; Resolve a value-headed match for the full reducer `step`.
+(fn resolve_arms ((m Module) (s Expr) (arms (List Arm))) (Option Expr)
+  (match (try_match_arms arms s)
+    ((ArmFired e2) (Some e2))
+    ((ArmNone)     None)                 ; all arms clash — stuck (non-exhaustive)
+    ((ArmStuck)
+      (match (step m s)                  ; reduce a sub-position deeper, then retry
+        ((Some s2) (Some (Match s2 arms)))
+        (None      None)))))             ; symbolic — leave the match unreduced
 
 ;; unfold_one: find the leftmost-outermost Call to `fname` in `e` and
 ;; replace it with `fname`'s body opened with the call's args. Returns
@@ -302,10 +333,23 @@
 
 (fn step_match_iota ((m Module) (s Expr) (arms (List Arm))) (Option Expr)
   (match s
-    ((Ctor _ _)  (try_match_arms arms s))
-    ((IntLit _)  (try_match_arms arms s))
-    ((SymLit _)  (try_match_arms arms s))
+    ((Ctor _ _)  (resolve_arms_iota m s arms))
+    ((IntLit _)  (resolve_arms_iota m s arms))
+    ((SymLit _)  (resolve_arms_iota m s arms))
     (_
+      (match (step_iota m s)
+        ((Some s2) (Some (Match s2 arms)))
+        (None      None)))))
+
+;; Resolve a value-headed match for the ι-only reducer. On ArmStuck it
+;; tries ι-reduction of the scrutinee (which does NOT unfold user calls),
+;; so a deep pattern blocked on a user-fn sub-call simply stays put — the
+;; documented ι-only limitation — but a wrong arm is never fired.
+(fn resolve_arms_iota ((m Module) (s Expr) (arms (List Arm))) (Option Expr)
+  (match (try_match_arms arms s)
+    ((ArmFired e2) (Some e2))
+    ((ArmNone)     None)
+    ((ArmStuck)
       (match (step_iota m s)
         ((Some s2) (Some (Match s2 arms)))
         (None      None)))))
@@ -368,12 +412,23 @@
     ((Call f args) (try_step_prim f args))
     (_ None)))
 
+;; head_match: the gate's one-step lookahead. The match fires AT THE HEAD
+;; only if an arm definitely matches now (ArmFired). ArmStuck (a deep
+;; pattern still needs a sub-position reduced) does NOT fire at the head —
+;; the body would need further reduction first — so the gate sees None and
+;; declines to unfold, exactly as for a non-value scrutinee.
 (fn head_match ((s Expr) (arms (List Arm))) (Option Expr)
   (match s
-    ((Ctor _ _)  (try_match_arms arms s))
-    ((IntLit _)  (try_match_arms arms s))
-    ((SymLit _)  (try_match_arms arms s))
+    ((Ctor _ _)  (arm_fired_or_none (try_match_arms arms s)))
+    ((IntLit _)  (arm_fired_or_none (try_match_arms arms s)))
+    ((SymLit _)  (arm_fired_or_none (try_match_arms arms s)))
     (_           None)))
+
+(fn arm_fired_or_none ((r ArmResult)) (Option Expr)
+  (match r
+    ((ArmFired e2) (Some e2))
+    ((ArmStuck)    None)
+    ((ArmNone)     None)))
 
 ;; ---------------------------------------------------------------------------
 ;; step_smart: ι plus *gated* δ. Wired into `simp_expr` so the kernel's
@@ -452,10 +507,23 @@
 
 (fn step_smart_match ((m Module) (s Expr) (arms (List Arm))) (Option Expr)
   (match s
-    ((Ctor _ _)  (try_match_arms arms s))
-    ((IntLit _)  (try_match_arms arms s))
-    ((SymLit _)  (try_match_arms arms s))
+    ((Ctor _ _)  (resolve_arms_smart m s arms))
+    ((IntLit _)  (resolve_arms_smart m s arms))
+    ((SymLit _)  (resolve_arms_smart m s arms))
     (_
+      (match (step_smart m s)
+        ((Some s2) (Some (Match s2 arms)))
+        (None      None)))))
+
+;; Resolve a value-headed match for the gated reducer. On ArmStuck it
+;; reduces the scrutinee with step_smart (gated), so a symbolic sub-
+;; position stays put (step_smart returns None) while a forceable one
+;; reduces — and no wrong arm is ever fired.
+(fn resolve_arms_smart ((m Module) (s Expr) (arms (List Arm))) (Option Expr)
+  (match (try_match_arms arms s)
+    ((ArmFired e2) (Some e2))
+    ((ArmNone)     None)
+    ((ArmStuck)
       (match (step_smart m s)
         ((Some s2) (Some (Match s2 arms)))
         (None      None)))))
@@ -524,4 +592,45 @@
 ;; non-termination.
 (fn simp_expr ((m Module) (e Expr)) Expr
   (match (simp_expr_loop m Nil e)
+    ((Pair e_nf _) e_nf)))
+
+;; ---------------------------------------------------------------------------
+;; Compute: drive the UNGATED `step` to a fixed point.
+;;
+;; simp_expr uses the gated step_smart, which refuses to unfold a user-fn
+;; call unless its body would fire at the head — that keeps SYMBOLIC
+;; recursion from diverging, but it also means a ground term whose control
+;; flow is guarded by a user predicate (e.g. `is_digit 49`, whose body is
+;; an `if` over a not-yet-reduced primitive) never evaluates: the one-step
+;; lookahead sees a non-firing head and gives up. compute_expr removes the
+;; gate, so such ground terms reduce to a value.
+;;
+;; On a GROUND (variable-free) term over total functions this is exactly
+;; evaluation and always terminates. On an open/symbolic term it may unfold
+;; further than simp_expr and, in the worst case, not terminate — so the
+;; `Compute` tactic is intended for closed terms (validating a spec on a
+;; concrete input; normalizing a ground subterm of a goal).
+;;
+;; SOUNDNESS is identical to Simp's: every `step` is a definitional-equality
+;; reduction (it is the operational semantics that step_smart is a gated
+;; subset of), so the normal form is equal to the input. The gate was only
+;; ever a termination heuristic, never a soundness condition. Memoization
+;; mirrors simp_expr_loop (shared subterms / LHS-RHS sharing).
+;; ---------------------------------------------------------------------------
+(fn compute_expr_loop ((m Module) (memo (List (Pair Expr Expr))) (e Expr))
+                       (Pair Expr (List (Pair Expr Expr)))
+  (match (memo_lookup memo e)
+    ((Some e_nf) (Pair e_nf memo))
+    (None
+      (match (step m e)
+        (None
+          ;; e is already normal — record it as its own NF.
+          (Pair e (Cons (Pair e e) memo)))
+        ((Some e2)
+          (match (compute_expr_loop m memo e2)
+            ((Pair e_nf memo2)
+              (Pair e_nf (Cons (Pair e e_nf) memo2)))))))))
+
+(fn compute_expr ((m Module) (e Expr)) Expr
+  (match (compute_expr_loop m Nil e)
     ((Pair e_nf _) e_nf)))

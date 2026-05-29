@@ -41,6 +41,24 @@
   (PInt  Int)
   (PSym  Symbol))
 
+;; Three-valued result of matching a pattern against a (possibly not yet
+;; fully reduced) value. The distinction between MNo and MStuck is what
+;; keeps the reducer sound: a deep pattern position that meets a
+;; non-constructor (an unreduced Call, or a symbolic FVar/BVar) is NOT a
+;; mismatch — it is UNDECIDED. Treating it as a mismatch (the old two-
+;; valued None) let first-match semantics fall through to a later arm and
+;; fire it on an under-reduced scrutinee.
+(type MatchResult
+  (MOk (List Expr))                    ; matched, bindings (innermost-first)
+  (MNo)                                ; definite mismatch (ctor/literal clash)
+  (MStuck))                            ; undecided — a needed position is not yet a value
+
+;; Result of scanning a match's arms in order.
+(type ArmResult
+  (ArmFired Expr)                      ; an arm matched; its opened body
+  (ArmStuck)                           ; first undecided arm reached — reduce scrutinee & retry
+  (ArmNone))                           ; all arms definitely mismatched (non-exhaustive / stuck)
+
 ;; ---------------------------------------------------------------------------
 ;; Environments: FVar -> Expr, association list.
 ;; ---------------------------------------------------------------------------

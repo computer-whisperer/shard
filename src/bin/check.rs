@@ -636,7 +636,7 @@ fn trace_proof(
                     trace_proof(kernel, m, theory, &seq2, &pa[1], depth, lines);
                 }
                 Ok(ref s) if ctor_fields(s, "None", 0).is_some() =>
-                    lines.push(format!("{}a step failed to apply (Unfold/Reduce/Rewrite found no match)", ind)),
+                    lines.push(format!("{}a step failed to apply (Unfold/Reduce/Compute/Rewrite found no match)", ind)),
                 _ => lines.push(format!("{}steps: could not replay", ind)),
             }
         }

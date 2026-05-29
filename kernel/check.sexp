@@ -277,6 +277,16 @@
         ((Sequent params hyps premises eq)
           (Some (Sequent params hyps premises
                   (simp_side_eq m side eq))))))
+    ((Compute side)
+      ;; UNGATED δ+ι to normal form: like Simp but unfolds user fns
+      ;; unconditionally, so a ground term whose control flow is guarded
+      ;; by a user predicate evaluates to a value. Intended for closed
+      ;; terms (may not terminate on symbolic input). Sound for the same
+      ;; reason Simp is — every step is a definitional-equality reduction.
+      (match seq
+        ((Sequent params hyps premises eq)
+          (Some (Sequent params hyps premises
+                  (compute_side_eq m side eq))))))
     ((Rewrite er dir side all insts)
       ;; Pattern-variable Rewrite. The cited Goal's ∀-binders become
       ;; capture variables (fresh FVars listed in pat_vars) unless
@@ -313,6 +323,16 @@
         ((Lhs)  (Equation (simp_expr m l) r))
         ((Rhs)  (Equation l               (simp_expr m r)))
         ((Both) (Equation (simp_expr m l) (simp_expr m r)))))))
+
+;; Drive compute_expr (ungated δ+ι to NF) on the chosen side(s).
+;; Used by apply_step's `Compute` arm.
+(fn compute_side_eq ((m Module) (side Side) (eq Equation)) Equation
+  (match eq
+    ((Equation l r)
+      (match side
+        ((Lhs)  (Equation (compute_expr m l) r))
+        ((Rhs)  (Equation l                 (compute_expr m r)))
+        ((Both) (Equation (compute_expr m l) (compute_expr m r)))))))
 
 ;; Drive simp_iota_expr (ι-only) on the chosen side(s) of an equation.
 ;; Used by apply_step's `Reduce` arm.

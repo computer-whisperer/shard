@@ -562,9 +562,9 @@ mod tests {
         let call = "(match_pat (PVar) (IntLit 7) (Nil))";
         let e = load::expr_from_str(call, &m).expect("parses");
         let r = eval::eval(&m, &e).expect("evals");
-        // Some (Cons (IntLit 7) Nil)
+        // MOk (Cons (IntLit 7) Nil)
         let intlit_7 = nctor("IntLit", vec![ast::Expr::IntLit(7)]);
-        let expected = nctor("Some",
+        let expected = nctor("MOk",
             vec![nctor("Cons", vec![intlit_7, nctor("Nil", vec![])])]);
         assert_eq!(r, expected);
     }
@@ -579,12 +579,12 @@ mod tests {
         let hit = load::expr_from_str(
             "(match_pat (PInt 5) (IntLit 5) (Nil))", &m).expect("parses");
         assert_eq!(eval::eval(&m, &hit).unwrap(),
-            nctor("Some", vec![nctor("Nil", vec![])]));
+            nctor("MOk", vec![nctor("Nil", vec![])]));
         // Miss.
         let miss = load::expr_from_str(
             "(match_pat (PInt 5) (IntLit 6) (Nil))", &m).expect("parses");
         assert_eq!(eval::eval(&m, &miss).unwrap(),
-            nctor("None", vec![]));
+            nctor("MNo", vec![]));
     }
 
     /// `match_pat` over `(PCtor Cons [PVar PVar])` against a list value
@@ -612,7 +612,7 @@ mod tests {
         ]);
         // After two PVar captures (head, then tail), insert-at-front
         // gives: acc = [tail, head] = (Cons nil_v (Cons intlit_1 Nil)).
-        let expected = nctor("Some", vec![
+        let expected = nctor("MOk", vec![
             nctor("Cons", vec![
                 nil_v,
                 nctor("Cons", vec![intlit_1, nctor("Nil", vec![])]),

@@ -66,6 +66,7 @@
   (Unfold Symbol Side)                    ; δ: unfold one layer of calls to fn
   (Reduce Side)                           ; ι: fire all ctor-headed matches
   (Simp Side)                             ; guarded δ+ι (the workhorse)
+  (Compute Side)                          ; UNGATED δ+ι to NF — ground evaluation
   (Rewrite                                ; replace by equals (unconditional)
     EqRef                                 ;   which equation
     Dir                                   ;   direction
