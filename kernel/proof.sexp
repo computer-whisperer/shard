@@ -105,7 +105,11 @@
   (ByTheory Symbol Cert))                 ; close via decidable-theory certificate
 
 (type Case
-  (Case Symbol Proof))                    ; ctor name + sub-proof
+  (Case  Symbol Proof)                    ; ctor name + sub-proof (fields gen_fresh)
+  (CaseB Symbol (List Symbol) Proof))     ; ctor + author-named fields + sub-proof
+                                          ;   names must match the ctor's arity, be
+                                          ;   pairwise distinct, and not clash with
+                                          ;   the surviving sequent params (capture).
 
 ;; ---------------------------------------------------------------------------
 ;; Decidable-theory certificate. The kernel has a tiny per-theory

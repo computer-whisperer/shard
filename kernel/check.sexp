@@ -961,13 +961,69 @@
 ;; find_case: look up the Proof for a given ctor branch.
 ;; ---------------------------------------------------------------------------
 
-(fn find_case ((ctor_name Symbol) (cases (List Case))) (Option Proof)
+;; Returns the matching case's (author field-names, sub-proof). For a plain
+;; (Case …) the names list is Nil, meaning "generate fresh field names".
+(fn find_case ((ctor_name Symbol) (cases (List Case)))
+              (Option (Pair (List Symbol) Proof))
   (match cases
     (Nil None)
     ((Cons c rest)
       (match c
         ((Case cn pf)
-          (if (sym_eq cn ctor_name) (Some pf) (find_case ctor_name rest)))))))
+          (if (sym_eq cn ctor_name) (Some (Pair Nil pf)) (find_case ctor_name rest)))
+        ((CaseB cn names pf)
+          (if (sym_eq cn ctor_name) (Some (Pair names pf)) (find_case ctor_name rest)))))))
+
+;; ---------------------------------------------------------------------------
+;; Named-field destructuring (Induct / CaseOn). When a CaseB supplies field
+;; names, build the field Params from them instead of gen_fresh — so the
+;; author can reference (and case-split on) a constructor field, e.g. the
+;; head of an inducted list. Soundness rests on `field_names_ok`: the names
+;; must match the ctor's arity, be pairwise distinct, and avoid capturing any
+;; surviving sequent param.
+;; ---------------------------------------------------------------------------
+
+;; Field Params from names (one per type). Nil names ⇒ all gen_fresh.
+(fn mk_field_params ((names (List Symbol)) (types (List Type))) (List Param)
+  (match names
+    (Nil (mk_fresh_params types))
+    ((Cons _ _) (zip_field_params names types))))
+
+(fn zip_field_params ((names (List Symbol)) (types (List Type))) (List Param)
+  (match names
+    (Nil Nil)
+    ((Cons n nrest)
+      (match types
+        (Nil Nil)                                   ; length guarded by field_names_ok
+        ((Cons t trest) (Cons (Param n t) (zip_field_params nrest trest)))))))
+
+(fn same_length_st ((names (List Symbol)) (types (List Type))) Bool
+  (match names
+    (Nil  (match types (Nil True) (_ False)))
+    ((Cons _ nr) (match types (Nil False) ((Cons _ tr) (same_length_st nr tr))))))
+
+(fn distinct_syms ((names (List Symbol))) Bool
+  (match names
+    (Nil True)
+    ((Cons n rest) (if (sym_member n rest) False (distinct_syms rest)))))
+
+(fn disjoint_syms ((names (List Symbol)) (taken (List Symbol))) Bool
+  (match names
+    (Nil True)
+    ((Cons n rest) (if (sym_member n taken) False (disjoint_syms rest taken)))))
+
+;; Validate author-provided field names. Nil ⇒ no names supplied ⇒ OK (fresh).
+;; Otherwise: arity match, pairwise distinct, and disjoint from `taken` (the
+;; surviving param names) so the new field FVars cannot capture an in-scope var.
+(fn field_names_ok ((names (List Symbol)) (types (List Type)) (taken (List Symbol))) Bool
+  (match names
+    (Nil True)
+    ((Cons _ _)
+      (if (same_length_st names types)
+          (if (distinct_syms names)
+              (disjoint_syms names taken)
+              False)
+          False))))
 
 ;; ---------------------------------------------------------------------------
 ;; do_case_on: per-ctor sub-sequents with an added hypothesis that
@@ -998,20 +1054,26 @@
     ((Cons (CtorDef cname field_types) rest)
       (match (find_case cname cases)
         (None False)                          ; user didn't supply a sub-proof
-        ((Some case_pf)
-          (let ((subgoal (build_case_on_subgoal seq scrut cname field_types)))
-            (if (check_sequent m th subgoal case_pf)
-                (check_case_on_cases m th seq scrut rest cases)
-                False)))))))
+        ((Some (Pair names case_pf))
+          ;; CaseOn keeps all params, so the field names must avoid every one.
+          (if (field_names_ok names field_types (param_names (seq_params seq)))
+              (let ((subgoal (build_case_on_subgoal seq scrut cname names field_types)))
+                (if (check_sequent m th subgoal case_pf)
+                    (check_case_on_cases m th seq scrut rest cases)
+                    False))
+              False))))))                     ; bad field names — reject
 
-;; Build the per-ctor sub-sequent: fresh field Params, an added
-;; hypothesis `scrut = (Ctor cname <fresh-fvars>)`. The hypothesis is
+(fn seq_params ((seq Sequent)) (List Param)
+  (match seq ((Sequent params _ _ _) params)))
+
+;; Build the per-ctor sub-sequent: field Params (named or fresh), an added
+;; hypothesis `scrut = (Ctor cname <field-fvars>)`. The hypothesis is
 ;; prepended to hyps, so the sub-proof cites it as (Hyp 0).
 (fn build_case_on_subgoal ((seq Sequent) (scrut Expr)
-                           (cname Symbol) (field_types (List Type))) Sequent
+                           (cname Symbol) (names (List Symbol)) (field_types (List Type))) Sequent
   (match seq
     ((Sequent params hyps premises eq)
-      (let ((field_params (mk_fresh_params field_types)))
+      (let ((field_params (mk_field_params names field_types)))
         (let ((ctor_expr (Ctor cname (params_to_fvar_exprs field_params))))
           (let ((case_hyp (Goal Nil Nil (Equation scrut ctor_expr))))
             (Sequent
@@ -1062,19 +1124,23 @@
       (let ((concrete_fields (type_subst_list type_env field_types)))
         (match (find_case cname cases)
           (None False)                                ; missing case for this ctor
-          ((Some case_pf)
-            (let ((subgoal (build_induct_subgoal
-                              seq var var_type cname concrete_fields)))
-              (if (check_sequent m th subgoal case_pf)
-                  (check_induct_cases m th seq var var_type type_env rest cases)
-                  False))))))))
+          ((Some (Pair names case_pf))
+            ;; Induct removes `var`; field names must avoid the SURVIVING params.
+            (if (field_names_ok names concrete_fields
+                                 (param_names (remove_param var (seq_params seq))))
+                (let ((subgoal (build_induct_subgoal
+                                  seq var var_type cname names concrete_fields)))
+                  (if (check_sequent m th subgoal case_pf)
+                      (check_induct_cases m th seq var var_type type_env rest cases)
+                      False))
+                False)))))))                          ; bad field names — reject
 
 (fn build_induct_subgoal
     ((seq Sequent) (var Symbol) (var_type Type)
-     (cname Symbol) (field_types (List Type))) Sequent
+     (cname Symbol) (names (List Symbol)) (field_types (List Type))) Sequent
   (match seq
     ((Sequent params hyps premises eq)
-      (let ((field_params (mk_fresh_params field_types))
+      (let ((field_params (mk_field_params names field_types))
             (rest_params  (remove_param var params)))
         (let ((ctor_expr (Ctor cname (params_to_fvar_exprs field_params))))
           (let ((env (Bind var ctor_expr Empty))
@@ -1261,15 +1327,17 @@
 (fn induct2_run ((m Module) (th Theory) (seq Sequent)
                  (var Symbol) (var_type Type) (zero_c Symbol) (succ_c Symbol)
                  (cases (List Case))) Bool
+  ;; Induct2's field binding (the k in S(S k)) is handled by build_ss_subgoal,
+  ;; not by author names, so any CaseB names here are ignored.
   (match (find_case (quote Z) cases)
     (None False)
-    ((Some pf_z)
+    ((Some (Pair _ pf_z))
       (match (find_case (quote SZ) cases)
         (None False)
-        ((Some pf_sz)
+        ((Some (Pair _ pf_sz))
           (match (find_case (quote SS) cases)
             (None False)
-            ((Some pf_ss)
+            ((Some (Pair _ pf_ss))
               (if (check_sequent m th
                     (build_subst_subgoal seq var (Ctor zero_c Nil)) pf_z)
                   (if (check_sequent m th

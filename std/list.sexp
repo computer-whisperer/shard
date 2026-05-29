@@ -9,11 +9,37 @@
 ;;; All three fns are structurally recursive on their first list arg,
 ;;; so they're total in the kernel's accepted fragment.
 
+(import "order.sexp")   ; len_nonneg cites le0_succ
+
 ;; append: (append xs ys) is xs ++ ys.
 (fn (append T) ((xs (List T)) (ys (List T))) (List T)
   (match xs
     (Nil          ys)
     ((Cons h t)   (Cons h (append t ys)))))
+
+;; len: Int-valued list length. Int (not Nat) so it can serve directly as a
+;; WfInduct measure (μ : params → Int). Structural on the spine — total.
+(fn (len T) ((xs (List T))) Int
+  (match xs
+    (Nil          0)
+    ((Cons h t)   (+ 1 (len t)))))
+
+;; 0 <= len xs — discharges WfInduct's measure>=0 obligation. Induction on the
+;; spine; the step bumps the IH's lower bound by one (le0_succ, farkas).
+(claim len_nonneg
+  (Goal
+    (list (Param 'xs (ty List (tv T))))
+    (list)
+    (Equation (Call 'le (list (IntLit 0) (Call 'len (list (FVar 'xs)))))
+              (Ctor 'True (list))))
+  (Induct 'xs
+    (list
+      (Case 'Nil  (Steps (list (Simp Lhs)) Refl))
+      (Case 'Cons
+        (Steps (list (Simp Lhs))
+          (RewriteWith (Lemma 'le0_succ) Lr Lhs (list)
+            (list (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+            Refl))))))
 
 ;; rev: naive O(n^2) reverse. Each Cons re-appends a singleton.
 (fn (rev T) ((xs (List T))) (List T)
