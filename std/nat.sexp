@@ -1,4 +1,6 @@
-;;; Unary natural numbers. Standard Z / S encoding, with structural
+;;; std/nat — the Nat type and basic Nat arithmetic.
+;;; Foundational: imports nothing.
+
 ;;; addition recursing on the first argument.
 ;;;
 ;;; Loaded as a user module by add_nat_zero.sexp.

@@ -14,7 +14,7 @@
 ;;; the premise to (Z = Z), discharges it with Refl, applies the
 ;;; rewrite (lhs becomes Z), and continues with Refl on Z = Z.
 
-(use-module "nat_lib.sexp")
+(import "../std/nat.sexp")
 
 (claim trivial_lemma
   (Goal

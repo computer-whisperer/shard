@@ -1,18 +1,55 @@
-;;; Linear-entailment examples — the `farkas` ByTheory backend (slice 37).
-;;;
-;;; Unlike ord (tautologies), farkas decides `premises ⊢ conclusion`:
-;;; the goal's conditional premises imply a linear order fact. The Cert
-;;; payload carries the Farkas multipliers (list G M0 M1 ...): G scales
-;;; the negated goal, Mk scales premise k. The kernel CHECKS that the
-;;; combination cancels to a negative constant (a manifest 0 >= 1);
-;;; finding the multipliers is this comment's job, not the kernel's.
-;;;
-;;; lt_succ_from_lt is THE obligation the M3 loop invariant generates
-;;; (feeding the IH at the shrunk segment i+1). The others are the
-;;; staple order-entailment shapes the invariant will lean on.
+;;; std/order — Int order & disequality entailment lemmas, decided by the
+;;; ord / farkas backends. The reusable arithmetic vocabulary for proofs
+;;; about indices, bounds, and comparisons. Imports nothing.
 
-;; ∀ p i. (lt p i) = True ⊢ (lt p (+ i 1)) = True.
-;; ¬goal: p-i-1 >= 0;  premise: i-p-1 >= 0;  1·¬goal + 1·prem = -2 < 0.
+;; ===== order tautologies (ord backend) =====
+(claim lt_succ
+  (Goal
+    (list (Param 'a (ty Int)))
+    (list)
+    (Equation
+      (Call 'lt (list (FVar 'a) (Call '+ (list (FVar 'a) (IntLit 1)))))
+      (Ctor 'True (list))))
+  (ByTheory 'ord (Cert 'ord (list))))
+
+;; ∀ a : Int. (le a a) = True.          (reflexivity of ≤; diff = 0)
+(claim le_refl
+  (Goal
+    (list (Param 'a (ty Int)))
+    (list)
+    (Equation
+      (Call 'le (list (FVar 'a) (FVar 'a)))
+      (Ctor 'True (list))))
+  (ByTheory 'ord (Cert 'ord (list))))
+
+;; ∀ a : Int. (le a (+ a 1)) = True.    (non-strict successor; diff = 1 ≥ 0)
+(claim le_succ
+  (Goal
+    (list (Param 'a (ty Int)))
+    (list)
+    (Equation
+      (Call 'le (list (FVar 'a) (Call '+ (list (FVar 'a) (IntLit 1)))))
+      (Ctor 'True (list))))
+  (ByTheory 'ord (Cert 'ord (list))))
+
+;; ∀ a b : Int. (le a (+ b (+ a (- 1 b)))) = True.
+;; A less-trivial case: the RHS is (b + a + (1 - b)) = a + 1, so
+;; diff = (a+1) - a = 1 ≥ 0 — the b's cancel under canonicalization.
+;; Demonstrates ord seeing through linear rearrangement (it reuses LIA).
+(claim le_linear_cancel
+  (Goal
+    (list (Param 'a (ty Int)) (Param 'b (ty Int)))
+    (list)
+    (Equation
+      (Call 'le
+        (list (FVar 'a)
+              (Call '+ (list (FVar 'b)
+                             (Call '+ (list (FVar 'a)
+                                            (Call '- (list (IntLit 1) (FVar 'b)))))))))
+      (Ctor 'True (list))))
+  (ByTheory 'ord (Cert 'ord (list))))
+
+;; ===== conditional entailment (farkas backend) =====
 (claim lt_succ_from_lt
   (Goal
     (list (Param 'p (ty Int)) (Param 'i (ty Int)))

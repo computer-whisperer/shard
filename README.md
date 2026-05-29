@@ -21,34 +21,33 @@ The product asymmetry, restated:
 ## Quick start
 
 ```sh
-cargo run --bin check -- examples/lia_basics.sexp \
-                         examples/double_claims.sexp \
-                         examples/add_nat_zero.sexp \
-                         examples/rewrite_with_demo.sexp \
-                         examples/list_lemmas.sexp \
-                         examples/map_lemmas.sexp \
-                         examples/mem_lemmas.sexp \
-                         examples/ord_basics.sexp \
-                         examples/farkas_basics.sexp
+cargo run --bin check -- std/*.sexp          # the standard library
 ```
 
 Expected output:
 
 ```
-PASS  plus_comm
+PASS  append_nil_right
 …
-PASS  lt_implies_neq
+PASS  mem_reverses
 
-85 passed, 0 failed
+72 passed, 0 failed
 ```
 
-The `check` binary loads the bundled kernel, then walks each
-`.sexp` file. Three top-level forms:
+`std/mem.sexp` `(import …)`s the rest of `std/`, so checking any one file
+pulls its dependencies transitively; checking `std/*.sexp` checks the
+whole library (each file loaded once). The demos live in `examples/`
+(`cargo run --bin check -- examples/lia_basics.sexp …`);
+`examples/lia_rejects.sexp` is a deliberate negative test (it FAILs).
+
+The `check` binary loads the bundled kernel, then walks each `.sexp`
+file. A file may mix code, dependencies, and proofs:
 
 ```
-(claim NAME GOAL PROOF)             ; check a theorem; cite later via Lemma
-(use-module "path/file.sexp")        ; load a user module (types/fns/externs)
-(module NAME)                        ; parsed-but-error placeholder (slice 23)
+(claim NAME GOAL PROOF)   ; check a theorem; cite later via (Lemma NAME)
+(import "path/file.sexp") ; load another file's code AND proven claims,
+                          ;   transitively, de-duplicated (use-module = alias)
+(type …) (fn …) (extern …); object-level definitions the proofs reason about
 ```
 
 Run the Rust test suite (loader, evaluator, kernel-from-rust mirrors):
@@ -92,23 +91,25 @@ src/                   ; the trusted-by-review Rust component
   lib.rs               ;   loader entrypoint + Rust test suite (109 tests)
   bin/check.rs         ;   the `check` proof-script driver binary
 
-examples/              ; user modules + proof-script claim files
-  list_lib.sexp        ;   polymorphic (List T) — append / rev / fast
-  list_lemmas.sexp     ;   reverse tower over (List T) + concrete-type
-                       ;     reuse demos (fast_eq_rev_at_int / _at_sym)
+std/                   ; the standard library — reusable code + theorems,
+                       ;   each a topic file (code + its lemmas, co-located),
+                       ;   wired together with (import …) (slice 51)
+  nat.sexp             ;   Nat type + add_nat
+  order.sexp           ;   Int order / disequality entailment lemmas
+                       ;     (ord + farkas backends): lt_succ_from_lt,
+                       ;     le_trans, lt_implies_neq, eq_from_le_both, …
+  list.sexp            ;   (List T) append/rev/fast + the reverse tower
+  map.sexp             ;   (Map V) lookup/insert + extensional lemmas + int_eq_refl
+  mem.sexp             ;   M3 linear memory = (Map Int): read/write/swap/rev_loop/
+                       ;     load/dump/rdump + framing + rev_loop_mirror + bridge
+                       ;     + mem_reverses (the PROVEN capstone). imports the rest.
+
+examples/              ; demonstrations (not the library)
   lia_basics.sexp      ;   LIA examples incl. the Insts demo (slice 32)
-  map_lib.sexp         ;   finite (Map V) over Int keys — lookup / insert
-  map_lemmas.sexp      ;   extensional map lemmas (slice 33): lookup_insert_eq,
-                       ;     lookup_insert_neq, insert_shadow + int_eq_refl
-  mem_lib.sexp         ;   M3 linear memory = (Map Int): read/write/swap/rev_loop
-  mem_lemmas.sexp      ;   M3 array framing (slice 34): read_write_eq/_neq,
-                       ;     read_swap framing + rev_loop_untouched (39,40)
-                       ;     + rev_loop_mirror (44) + the bridge (45-49)
-                       ;     + mem_reverses (slice 50 — the PROVEN capstone)
-  ord_basics.sexp      ;   order-reflection examples (slice 35): lt_succ, le_refl
-  farkas_basics.sexp   ;   linear-entailment examples (slice 37): lt_succ_from_lt,
-                       ;     le_trans, le_from_eq (premises ⊢ order conclusion)
-  …
+  rewrite_with_demo /  ;   RewriteWith + Induct demos (import std/nat)
+  add_nat_zero.sexp    ;
+  double_claims.sexp   ;   Simp-unfold of a user fn (double_lib.sexp)
+  lia_rejects.sexp     ;   NEGATIVE test — the kernel correctly REJECTs it
 
 tools/
   zed-narrow/          ;   Zed editor syntax-highlighting extension
@@ -157,6 +158,7 @@ Feature checklist (✓ = shipped in v2; → = next):
 | M3 loop invariant — mirror (`rev_loop` reverses) | ✓  | 44     |
 | M3 capstone (`rev_loop ⊑ rev`: full list↔mem refinement) | ✓ | 45-50 |
 | Two-step induction (`Induct2`, Nat-shaped)   | ✓  | 50     |
+| `(import …)` — transitive, deduped deps + `std/` library | ✓ | 51 |
 | Polymorphic-key maps `(Map K V)`        | →        |        |
 | Defunctionalized higher-order           | →        |        |
 | Measure / well-founded recursion        | →        |        |

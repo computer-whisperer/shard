@@ -24,7 +24,7 @@
 ;;; talks about Expr values, not source terms — see docs/REVISIT,
 ;;; "Proof-file surface syntax".
 
-(use-module "nat_lib.sexp")
+(import "../std/nat.sexp")
 
 (claim add_nat_n_zero
   (Goal
