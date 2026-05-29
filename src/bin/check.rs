@@ -457,30 +457,137 @@ fn build_failure_detail(
             lines.push(format!("goal:   {}", render_term(&sa[3])));
         }
     }
-    // Steps-headed proof: replay via apply_steps to show the stuck eq.
-    if let ast::Expr::Ctor(n, pa) = proof {
-        if n == "Steps" && pa.len() == 2 {
-            let call = ast::Expr::Call(
-                "apply_steps".into(),
-                vec![m.clone(), theory.clone(), sequent.clone(), pa[0].clone()],
-            );
-            match eval::eval(kernel, &call) {
-                Ok(ast::Expr::Ctor(sn, sa)) if sn == "Some" && sa.len() == 1 => {
-                    if let ast::Expr::Ctor(sqn, sqa) = &sa[0] {
-                        if sqn == "Sequent" && sqa.len() == 4 {
-                            lines.push(format!("after steps:  {}", render_term(&sqa[3])));
-                        }
-                    }
-                }
-                Ok(ast::Expr::Ctor(sn, _)) if sn == "None" =>
-                    lines.push("a step failed to apply (Unfold/Rewrite found no match)".into()),
-                _ => {}
-            }
-        } else {
-            lines.push(format!("proof head: {}", n));
-        }
-    }
+    // Walk the proof spine, replaying each level via the kernel's own
+    // fns, to show the equation at every nesting depth and pinpoint
+    // where it diverges. Branching proofs (Induct/CaseOn) stop the walk.
+    trace_proof(kernel, m, theory, sequent, proof, 0, &mut lines);
     lines.iter().map(|l| format!("      {}", l)).collect::<Vec<_>>().join("\n")
+}
+
+// --- proof-spine tracer (UNTRUSTED diagnostics) ----------------------
+// Descends the non-branching spine of a Proof — Steps and RewriteWith —
+// replaying each via the kernel's own fns and rendering the equation at
+// each level, so a deep nested failure is visible (not just the
+// outermost finisher's entry state). Refl reports whether it closes;
+// branching/decision proofs stop the walk. Adds NO trusted code: only
+// orchestrates existing kernel fns and renders values.
+
+fn ctor_fields<'a>(v: &'a ast::Expr, name: &str, n: usize) -> Option<&'a [ast::Expr]> {
+    match v {
+        ast::Expr::Ctor(cn, a) if cn == name && a.len() == n => Some(a),
+        _ => None,
+    }
+}
+
+fn sequent_eq(v: &ast::Expr) -> Option<&ast::Expr> {
+    ctor_fields(v, "Sequent", 4).map(|a| &a[3])
+}
+
+fn render_eqref(v: &ast::Expr) -> String {
+    match v {
+        ast::Expr::Ctor(n, a) if a.len() == 1 => match n.as_str() {
+            "Lemma" => format!("lemma {}", sym_of(&a[0])),
+            "Premise" => format!("premise {}", render_term(&a[0])),
+            "Hyp" => format!("hyp {}", render_term(&a[0])),
+            _ => render_term(v),
+        },
+        _ => render_term(v),
+    }
+}
+
+/// Replay one RewriteWith's rewrite (ignoring premise sub-proofs) to get
+/// the resulting sequent, mirroring check_sequent's RewriteWith arm by
+/// chaining the same kernel fns. None if any link fails (unresolved
+/// lemma, no match, …).
+fn apply_rewrite_step(
+    kernel: &ast::Module, theory: &ast::Expr, sequent: &ast::Expr,
+    eqref: &ast::Expr, dir: &ast::Expr, side: &ast::Expr, insts: &ast::Expr,
+) -> Option<ast::Expr> {
+    let k = |name: &str, args: Vec<ast::Expr>| {
+        eval::eval(kernel, &ast::Expr::Call(name.into(), args)).ok()
+    };
+    let some_inner = |v: &ast::Expr| ctor_fields(v, "Some", 1).map(|a| a[0].clone());
+
+    let g = some_inner(&k("resolve_eq", vec![eqref.clone(), sequent.clone(), theory.clone()])?)?;
+    let gf = ctor_fields(&g, "Goal", 3)?;            // Goal params premises eq
+    let (cited_params, cited_eq) = (gf[0].clone(), gf[2].clone());
+
+    let pair = k("split_params_by_insts", vec![cited_params, insts.clone()])?;
+    let pf = ctor_fields(&pair, "Pair", 2)?;          // Pair openings pat_var_names
+    let (openings, patvars) = (pf[0].clone(), pf[1].clone());
+
+    let ofvars = k("reverse_exprs", vec![openings])?;
+    let opened_eq = k("open_eq_with", vec![ofvars, cited_eq])?;
+
+    let sf = ctor_fields(sequent, "Sequent", 4)?;     // Sequent params hyps premises eq
+    let (params, hyps, premises, goal_eq) =
+        (sf[0].clone(), sf[1].clone(), sf[2].clone(), sf[3].clone());
+
+    let r = k("apply_rewrite_with_env",
+        vec![patvars, opened_eq, dir.clone(), side.clone(), goal_eq])?;
+    let r = some_inner(&r)?;                           // Pair env new_eq
+    let new_eq = ctor_fields(&r, "Pair", 2)?[1].clone();
+
+    Some(ctor("Sequent", vec![params, hyps, premises, new_eq]))
+}
+
+fn trace_proof(
+    kernel: &ast::Module, m: &ast::Expr, theory: &ast::Expr,
+    sequent: &ast::Expr, proof: &ast::Expr, depth: usize, lines: &mut Vec<String>,
+) {
+    let ind = "  ".repeat(depth);
+    let (head, pa) = match proof {
+        ast::Expr::Ctor(n, a) => (n.as_str(), a),
+        _ => { lines.push(format!("{}proof: {}", ind, render_term(proof))); return; }
+    };
+    match head {
+        "Steps" if pa.len() == 2 => {
+            let call = ast::Expr::Call("apply_steps".into(),
+                vec![m.clone(), theory.clone(), sequent.clone(), pa[0].clone()]);
+            match eval::eval(kernel, &call) {
+                Ok(ref s) if ctor_fields(s, "Some", 1).is_some() => {
+                    let seq2 = ctor_fields(s, "Some", 1).unwrap()[0].clone();
+                    if let Some(eq) = sequent_eq(&seq2) {
+                        lines.push(format!("{}after steps:  {}", ind, render_term(eq)));
+                    }
+                    trace_proof(kernel, m, theory, &seq2, &pa[1], depth, lines);
+                }
+                Ok(ref s) if ctor_fields(s, "None", 0).is_some() =>
+                    lines.push(format!("{}a step failed to apply (Unfold/Reduce/Rewrite found no match)", ind)),
+                _ => lines.push(format!("{}steps: could not replay", ind)),
+            }
+        }
+        "RewriteWith" if pa.len() == 6 => {
+            match apply_rewrite_step(kernel, theory, sequent, &pa[0], &pa[1], &pa[2], &pa[3]) {
+                Some(seq2) => {
+                    if let Some(eq) = sequent_eq(&seq2) {
+                        lines.push(format!("{}after rewrite ({}):  {}", ind, render_eqref(&pa[0]), render_term(eq)));
+                    }
+                    trace_proof(kernel, m, theory, &seq2, &pa[5], depth + 1, lines);
+                }
+                None => lines.push(format!(
+                    "{}rewrite ({}) did NOT apply (unresolved lemma, no match, or premise mismatch)",
+                    ind, render_eqref(&pa[0]))),
+            }
+        }
+        "Refl" => match sequent_eq(sequent) {
+            Some(ast::Expr::Ctor(en, ea)) if en == "Equation" && ea.len() == 2 => {
+                if ea[0] == ea[1] {
+                    lines.push(format!("{}Refl: closes (lhs = rhs)", ind));
+                } else {
+                    lines.push(format!("{}Refl: does NOT close — lhs ≠ rhs:", ind));
+                    lines.push(format!("{}  lhs  {}", ind, render_term(&ea[0])));
+                    lines.push(format!("{}  rhs  {}", ind, render_term(&ea[1])));
+                }
+            }
+            _ => lines.push(format!("{}Refl", ind)),
+        },
+        "ByTheory" => lines.push(format!("{}ByTheory {} — decision procedure (not replayed)",
+            ind, pa.get(0).map(render_term).unwrap_or_default())),
+        "Induct" | "Induct2" | "CaseOn" =>
+            lines.push(format!("{}{} — branching proof; trace stops here", ind, head)),
+        other => lines.push(format!("{}{} — not replayed", ind, other)),
+    }
 }
 
 /// Parse a sexp `Value` as a narrow expression against the kernel's
