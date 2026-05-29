@@ -75,3 +75,80 @@
     (list (Equation (Call 'lt (list (FVar 'n) (IntLit 10))) (Ctor 'True (list))))
     (Equation (Call 'le (list (FVar 'n) (IntLit 9))) (Ctor 'True (list))))
   (ByTheory 'farkas (Cert 'farkas (list 1 1))))
+
+;; show's guarded defining equations, as rewrite lemmas — controlled
+;; reduction of `show n` without Simp unfolding the surrounding lex_go.
+(claim show_lt
+  (Goal (list (Param 'n (ty Int)))
+    (list (Equation (Call 'lt (list (FVar 'n) (IntLit 10))) (Ctor 'True (list))))
+    (Equation (Call 'show (list (FVar 'n))) (Ctor 'Cons (list (FVar 'n) (Ctor 'Nil (list))))))
+  (Steps (list (Unfold 'show Lhs) (Rewrite (Premise 0) Lr Lhs True (list)) (Reduce Lhs)) Refl))
+
+(claim show_ge
+  (Goal (list (Param 'n (ty Int)))
+    (list (Equation (Call 'lt (list (FVar 'n) (IntLit 10))) (Ctor 'False (list))))
+    (Equation (Call 'show (list (FVar 'n)))
+      (Call 'append (list
+        (Call 'show (list (Call '/ (list (FVar 'n) (IntLit 10)))))
+        (Ctor 'Cons (list (Call 'mod (list (FVar 'n) (IntLit 10))) (Ctor 'Nil (list))))))))
+  (Steps (list (Unfold 'show Lhs) (Rewrite (Premise 0) Lr Lhs True (list)) (Reduce Lhs)) Refl))
+
+;; THE LEXER, CORRECT FOR show n (WfInduct on n; recursion in named terms,
+;; no Induct fresh names). Lexing the codepoints of show n, starting from
+;; accumulator (Some acc) and followed by `rest`, folds the whole number
+;; into the accumulator (Horner) and continues at `rest`.
+(claim lex_show_run
+  (Goal (list (Param 'n (ty Int)) (Param 'rest (ty List Int)) (Param 'acc (ty Int)))
+    (list (Equation (Call 'le (list (IntLit 0) (FVar 'n))) (Ctor 'True (list))))
+    (Equation
+      (Call 'lex_go (list (Call 'append (list (Call 'codes (list (Call 'show (list (FVar 'n))))) (FVar 'rest))) (Ctor 'Some (list (FVar 'acc)))))
+      (Call 'lex_go (list (FVar 'rest) (Ctor 'Some (list (Call 'valI_go (list (Call 'show (list (FVar 'n))) (FVar 'acc)))))))))
+  (WfInduct (FVar 'n)
+    (CaseOn (Call 'lt (list (FVar 'n) (IntLit 10))) 'Bool
+      (list
+        ;; ---- base: n < 10 ----
+        (Case 'True
+          (RewriteWith (Lemma 'show_lt) Lr Lhs (list)
+            (list (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+          (RewriteWith (Lemma 'show_lt) Lr Rhs (list)
+            (list (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+          (Steps
+            (list (Rewrite (Lemma 'codes_cons) Lr Lhs True (list))
+                  (Rewrite (Lemma 'append_int_cons) Lr Lhs True (list)))
+          (RewriteWith (Lemma 'lex_go_digit) Lr Lhs (list)
+            (list
+              (RewriteWith (Lemma 'is_digit_of_digit) Lr Lhs (list)
+                (list
+                  (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl)
+                  (RewriteWith (Lemma 'lt10_le9) Lr Lhs (list)
+                    (list (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl)) Refl))
+                Refl))
+          (Steps (list (Simp Lhs) (Simp Rhs)) Refl))))))
+        ;; ---- step: n >= 10 ----
+        (Case 'False
+          (RewriteWith (Lemma 'show_ge) Lr Lhs (list)
+            (list (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+          (RewriteWith (Lemma 'show_ge) Lr Rhs (list)
+            (list (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+          (Steps
+            (list (Rewrite (Lemma 'codes_append) Lr Lhs True (list))
+                  (Rewrite (Lemma 'append_assoc) Lr Lhs True (list)))
+          (RewriteWith (Hyp 1) Lr Lhs (list)
+            (list
+              (RewriteWith (Lemma 'div_nonneg) Lr Lhs (list) (list (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl)) Refl)
+              (RewriteWith (Lemma 'div_nonneg) Lr Lhs (list) (list (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl)) Refl)
+              (RewriteWith (Lemma 'div_lt) Lr Lhs (list)
+                (list (RewriteWith (Lemma 'lt10f_pos) Lr Lhs (list)
+                        (list (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl)) Refl))
+                Refl))
+          (Steps
+            (list (Rewrite (Lemma 'codes_cons) Lr Lhs True (list))
+                  (Rewrite (Lemma 'append_int_cons) Lr Lhs True (list)))
+          (RewriteWith (Lemma 'lex_go_digit) Lr Lhs (list)
+            (list
+              (RewriteWith (Lemma 'is_digit_of_digit) Lr Lhs (list)
+                (list
+                  (RewriteWith (Lemma 'mod_10_lo) Lr Lhs (list) (list (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl)) Refl)
+                  (RewriteWith (Lemma 'mod_10_hi) Lr Lhs (list) (list (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl)) Refl))
+                Refl))
+          (Steps (list (Simp Lhs) (Rewrite (Lemma 'valI_go_snoc) Lr Rhs True (list))) Refl))))))))))))
