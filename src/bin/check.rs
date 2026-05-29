@@ -198,8 +198,11 @@ fn process_file(path: &PathBuf, ctx: &mut Ctx, kernel: &ast::Module) -> Result<(
                 ctx.theory = ctor("TheoryCons", vec![entry, ctx.theory.clone()]);
                 ctx.passed += 1;
             }
-            Outcome::Fail { name } => {
+            Outcome::Fail { name, detail } => {
                 println!("FAIL  {}", name);
+                if !detail.is_empty() {
+                    println!("{}", detail);
+                }
                 ctx.failed += 1;
             }
             Outcome::Skip => {}
@@ -234,7 +237,7 @@ fn import_path(form: &Value) -> Option<String> {
 
 enum Outcome {
     Pass { name: String, goal: ast::Expr },
-    Fail { name: String },
+    Fail { name: String, detail: String },
     /// A non-claim form handled by an earlier pass (import / use-module
     /// in pass A; type / fn / extern in pass B). Ignored in pass C.
     Skip,
@@ -339,10 +342,11 @@ fn process_claim(
         )),
     };
 
-    // Invoke check_sequent in the kernel module.
+    // Invoke check_sequent in the kernel module. (clone the sequent /
+    // proof so a FAIL can replay them for diagnostics.)
     let call = ast::Expr::Call(
         "check_sequent".into(),
-        vec![user_module.clone(), theory.clone(), sequent_val, proof_val],
+        vec![user_module.clone(), theory.clone(), sequent_val.clone(), proof_val.clone()],
     );
     let result = match eval::eval(kernel, &call) {
         Ok(v) => v,
@@ -355,13 +359,128 @@ fn process_claim(
     match result {
         ast::Expr::Ctor(ref n, ref a) if n == "True" && a.is_empty() =>
             Outcome::Pass { name, goal: goal_val },
-        ast::Expr::Ctor(ref n, ref a) if n == "False" && a.is_empty() =>
-            Outcome::Fail { name },
+        ast::Expr::Ctor(ref n, ref a) if n == "False" && a.is_empty() => {
+            let detail = build_failure_detail(
+                kernel, user_module, theory, &sequent_val, &proof_val,
+            );
+            Outcome::Fail { name, detail }
+        }
         other => Outcome::Fatal(format!(
             "{}: claim `{}`: check_sequent returned non-Bool value: {:?}",
             path.display(), name, other,
         )),
     }
+}
+
+// ----------------------------------------------------------------------
+// Failure diagnostics (UNTRUSTED, off the check path). On a FAIL we
+// re-read the goal and — for a `Steps`-headed proof — replay the steps
+// via the kernel's own `apply_steps` to show the equation as the final
+// `Refl` saw it. No new trusted code: this only renders values and
+// calls existing kernel fns, purely for the author's benefit.
+// ----------------------------------------------------------------------
+
+/// Render an Expr-ADT VALUE (`Ctor("Call",[SymLit "read", <list>])` …)
+/// back to readable surface syntax (`(read m p)`).
+fn render_term(v: &ast::Expr) -> String {
+    use ast::Expr::*;
+    match v {
+        Ctor(name, a) => match name.as_str() {
+            "FVar" if a.len() == 1 => sym_of(&a[0]),
+            "BVar" if a.len() == 1 => format!("@{}", render_term(&a[0])),
+            "IntLit" if a.len() == 1 => render_term(&a[0]),
+            "SymLit" if a.len() == 1 => format!("'{}", sym_of(&a[0])),
+            "Call" | "Ctor" if a.len() == 2 => {
+                let head = sym_of(&a[0]);
+                let items = decode_list(&a[1]);
+                if items.is_empty() {
+                    head
+                } else {
+                    let rs: Vec<String> = items.iter().map(|x| render_term(x)).collect();
+                    format!("({} {})", head, rs.join(" "))
+                }
+            }
+            "If" if a.len() == 3 => format!(
+                "(if {} {} {})",
+                render_term(&a[0]), render_term(&a[1]), render_term(&a[2]),
+            ),
+            "Equation" if a.len() == 2 =>
+                format!("{}  =  {}", render_term(&a[0]), render_term(&a[1])),
+            other => format!("<{}>", other),
+        },
+        SymLit(s) => s.clone(),
+        IntLit(n) => n.to_string(),
+        other => format!("{:?}", other),
+    }
+}
+
+fn sym_of(v: &ast::Expr) -> String {
+    match v {
+        ast::Expr::SymLit(s) => s.clone(),
+        other => render_term(other),
+    }
+}
+
+/// Walk a narrow `(Cons h t)` / `Nil` value into a Vec of elements.
+fn decode_list(v: &ast::Expr) -> Vec<&ast::Expr> {
+    let mut out = Vec::new();
+    let mut cur = v;
+    while let ast::Expr::Ctor(n, a) = cur {
+        if n == "Cons" && a.len() == 2 {
+            out.push(&a[0]);
+            cur = &a[1];
+        } else {
+            break;
+        }
+    }
+    out
+}
+
+/// Build the indented multi-line diagnostic for a failed claim: the goal
+/// (with any premises), and — if the proof is `Steps` — the equation
+/// after the steps ran (what the trailing proof / `Refl` had to close).
+fn build_failure_detail(
+    kernel: &ast::Module,
+    m: &ast::Expr,
+    theory: &ast::Expr,
+    sequent: &ast::Expr,
+    proof: &ast::Expr,
+) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    // Sequent = (Sequent params hyps premises eq)
+    if let ast::Expr::Ctor(n, sa) = sequent {
+        if n == "Sequent" && sa.len() == 4 {
+            let premises = decode_list(&sa[2]);
+            for p in &premises {
+                lines.push(format!("given:  {}", render_term(p)));
+            }
+            lines.push(format!("goal:   {}", render_term(&sa[3])));
+        }
+    }
+    // Steps-headed proof: replay via apply_steps to show the stuck eq.
+    if let ast::Expr::Ctor(n, pa) = proof {
+        if n == "Steps" && pa.len() == 2 {
+            let call = ast::Expr::Call(
+                "apply_steps".into(),
+                vec![m.clone(), theory.clone(), sequent.clone(), pa[0].clone()],
+            );
+            match eval::eval(kernel, &call) {
+                Ok(ast::Expr::Ctor(sn, sa)) if sn == "Some" && sa.len() == 1 => {
+                    if let ast::Expr::Ctor(sqn, sqa) = &sa[0] {
+                        if sqn == "Sequent" && sqa.len() == 4 {
+                            lines.push(format!("after steps:  {}", render_term(&sqa[3])));
+                        }
+                    }
+                }
+                Ok(ast::Expr::Ctor(sn, _)) if sn == "None" =>
+                    lines.push("a step failed to apply (Unfold/Rewrite found no match)".into()),
+                _ => {}
+            }
+        } else {
+            lines.push(format!("proof head: {}", n));
+        }
+    }
+    lines.iter().map(|l| format!("      {}", l)).collect::<Vec<_>>().join("\n")
 }
 
 /// Parse a sexp `Value` as a narrow expression against the kernel's

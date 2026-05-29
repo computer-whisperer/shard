@@ -770,3 +770,23 @@ is where to start when planning v3.
   m < n) or k-step for k>2 — `Induct2` is deliberately the minimal
   Nat-specific form. A general well-founded induction is the bigger,
   later addition (it needs the order predicate in the IH goal).
+
+### Failure diagnostics — untrusted, off the check path (slice 54)
+- **What:** on a `FAIL`, `check` prints the goal (with premises) and, for a
+  `Steps`-headed proof, replays the steps through the kernel's own
+  `apply_steps` to show the equation as the trailing `Refl` saw it
+  (`after steps:  10  =  11`). Other proof heads print the goal + the head
+  constructor.
+- **Why this shape:** it is the cheapest thing that localizes the most
+  common failure (a rewrite/Simp chain that didn't make the two sides
+  equal). It lives entirely in the `check` binary: a value renderer
+  (Expr-ADT value → surface syntax) plus a call to the EXISTING
+  `apply_steps`. No new trusted code, and it runs ONLY after a claim has
+  already failed — so it adds nothing to the checking path and cannot
+  affect any accept/reject decision. Deliberately not a kernel feature:
+  per the search-discipline note, check-time compute stays minimal and the
+  trusted/untrusted boundary stays sharp.
+- **Revisit if:** we want localization inside branching proofs
+  (Induct/CaseOn/RewriteWith sub-goals) — that needs the kernel to surface
+  *where* it failed (a richer return than Bool), which is a real TCB change
+  to weigh, not a free binary-side add.
