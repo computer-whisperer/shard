@@ -74,23 +74,79 @@
           Refl)))))
 
 ;;; --------------------------------------------------------------------
-;;; The headline theorem (PENDING — blocked on a kernel reducer gap):
+;;; The headline theorem (single-digit) is PROVEN below as run_xy_adds:
 ;;;
 ;;;   ∀ x y.  0<=x<=9, 0<=y<=9  ⊢
-;;;     run (list (+ 48 x) 43 (+ 48 y))  =  Some (+ x y)
+;;;     run "x+y" (digits as (+ 48 x)/(+ 48 y))  =  Some (+ x y)
 ;;;
-;;; The lemmas above prove the interesting technique — collapsing a
-;;; data-dependent guard (is_digit on a symbolic codepoint) via theory
-;;; entailment. But driving `run` end-to-end requires REDUCING through
-;;; the lexer, and both Simp and Reduce CRASH (EvalError::NoMatchArm)
-;;; when reduction reaches a primitive applied to a symbolic argument
-;;; like (+ 48 x) inside lex_go. try_step_prim itself is total (returns
-;;; None when args don't fit — reduce.sexp:144), so this is a partiality
-;;; elsewhere in the reducer's stuck-term path: a trusted-core
-;;; robustness gap, not a usage error. is_digit_of_digit only succeeds
-;;; because it rewrites the guard BEFORE reduction touches it.
+;;; Built bottom-up: the foundation lemmas above isolate the key
+;;; technique (collapse a data-dependent is_digit guard via farkas/lia
+;;; entailment); lex_xy proves the lexer correct through the real lexer;
+;;; run_xy_adds composes lex_xy + parse + eval. No kernel change needed.
 ;;;
-;;; Unblocking it (make the reducer leave stuck terms stuck instead of
-;;; crashing) is a kernel fix tracked separately; the theorem lands once
-;;; that's in.
+;;; Two lessons baked in:
+;;;  - object data in a claim must be Expr-encoded ((Ctor 'None (list)),
+;;;    not bare None) — see [[calc-expr-encoding]]. (The earlier "kernel
+;;;    crash" was this, not a kernel bug.)
+;;;  - `run` is factored as (eval_opt (parse (lex cs))), not an inline
+;;;    match, because the rewriter descends into Call args but not into a
+;;;    match scrutinee — so lex_xy can be cited through it.
+;;;
+;;; NEXT: bounded multi-digit (fixed N) — same shape, plus acc_digit's
+;;; Some-arm (Horner step) and a larger final lia.
 ;;; --------------------------------------------------------------------
+
+;; Single-digit lexer correctness: lex "x+y" through the REAL lexer.
+;; Drive lex_go with Simp, collapse the symbolic is_digit guards via
+;; is_digit_of_digit; the concrete '+' guard (is_digit 43) needs an
+;; explicit Unfold+Simp since Simp's gate won't reduce it on its own.
+(claim lex_xy
+  (Goal
+    (list (Param 'x (ty Int)) (Param 'y (ty Int)))
+    (list (Equation (Call 'le (list (IntLit 0) (FVar 'x))) (Ctor 'True (list)))
+          (Equation (Call 'le (list (FVar 'x) (IntLit 9))) (Ctor 'True (list)))
+          (Equation (Call 'le (list (IntLit 0) (FVar 'y))) (Ctor 'True (list)))
+          (Equation (Call 'le (list (FVar 'y) (IntLit 9))) (Ctor 'True (list))))
+    (Equation
+      (Call 'lex (list (Ctor 'Cons (list (Call '+ (list (IntLit 48) (FVar 'x)))
+        (Ctor 'Cons (list (IntLit 43) (Ctor 'Cons (list (Call '+ (list (IntLit 48) (FVar 'y))) (Ctor 'Nil (list))))))))))
+      (Ctor 'Cons (list
+        (Ctor 'TNum (list (Call 'digit_val (list (Call '+ (list (IntLit 48) (FVar 'x)))))))
+        (Ctor 'Cons (list (Ctor 'TPlus (list))
+          (Ctor 'Cons (list
+            (Ctor 'TNum (list (Call 'digit_val (list (Call '+ (list (IntLit 48) (FVar 'y)))))))
+            (Ctor 'Nil (list))))))))))
+  (Steps (list (Unfold 'lex Lhs) (Simp Lhs))
+    (RewriteWith (Lemma 'is_digit_of_digit) Lr Lhs (list)
+      (list (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl)
+            (Steps (list (Rewrite (Premise 1) Lr Lhs True (list))) Refl))
+      (Steps (list (Simp Lhs) (Unfold 'is_digit Lhs) (Simp Lhs))
+        (RewriteWith (Lemma 'is_digit_of_digit) Lr Lhs (list)
+          (list (Steps (list (Rewrite (Premise 2) Lr Lhs True (list))) Refl)
+                (Steps (list (Rewrite (Premise 3) Lr Lhs True (list))) Refl))
+          (Steps (list (Simp Lhs)) Refl))))))
+
+;; THE HEADLINE THEOREM (single digit): for digits x, y, the calculator
+;; evaluates the text "x+y" to x+y — through the real lex -> parse ->
+;; eval pipeline. Unfold run to expose (eval_opt (parse (lex <list>))),
+;; rewrite lex to its token list via lex_xy (discharging the 4 digit
+;; bounds from our premises), Simp to drive parse+eval, then fold
+;; digit_val (48+x) -> x / (48+y) -> y via digit_val_of_digit and close.
+(claim run_xy_adds
+  (Goal
+    (list (Param 'x (ty Int)) (Param 'y (ty Int)))
+    (list (Equation (Call 'le (list (IntLit 0) (FVar 'x))) (Ctor 'True (list)))
+          (Equation (Call 'le (list (FVar 'x) (IntLit 9))) (Ctor 'True (list)))
+          (Equation (Call 'le (list (IntLit 0) (FVar 'y))) (Ctor 'True (list)))
+          (Equation (Call 'le (list (FVar 'y) (IntLit 9))) (Ctor 'True (list))))
+    (Equation
+      (Call 'run (list (Ctor 'Cons (list (Call '+ (list (IntLit 48) (FVar 'x)))
+        (Ctor 'Cons (list (IntLit 43) (Ctor 'Cons (list (Call '+ (list (IntLit 48) (FVar 'y))) (Ctor 'Nil (list))))))))))
+      (Ctor 'Some (list (Call '+ (list (FVar 'x) (FVar 'y)))))))
+  (Steps (list (Unfold 'run Lhs))
+    (RewriteWith (Lemma 'lex_xy) Lr Lhs (list)
+      (list (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl)
+            (Steps (list (Rewrite (Premise 1) Lr Lhs True (list))) Refl)
+            (Steps (list (Rewrite (Premise 2) Lr Lhs True (list))) Refl)
+            (Steps (list (Rewrite (Premise 3) Lr Lhs True (list))) Refl))
+      (Steps (list (Simp Lhs) (Rewrite (Lemma 'digit_val_of_digit) Lr Lhs True (list))) Refl))))

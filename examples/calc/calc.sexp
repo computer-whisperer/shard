@@ -96,9 +96,16 @@
     ((Cons _ _) None)
     (Nil        None)))
 
+;; Evaluate an optional parse result. Factored out of `run` (rather than
+;; inlined as a match there) so proofs can rewrite the `(parse (lex …))`
+;; argument — the kernel rewriter descends into Call args but not into a
+;; match scrutinee.
+(fn eval_opt ((oe (Option Exp))) (Option Int)
+  (match oe
+    (None     None)
+    ((Some e) (Some (eval e)))))
+
 ;; The whole pipeline: text → tokens → AST → value. None on any failure
 ;; to parse (the lexer never fails; the parser is the only gate).
 (fn run ((cs (List Int))) (Option Int)
-  (match (parse (lex cs))
-    (None     None)
-    ((Some e) (Some (eval e)))))
+  (eval_opt (parse (lex cs))))
