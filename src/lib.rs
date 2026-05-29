@@ -84,6 +84,42 @@ mod tests {
         ast::Expr::Ctor(name.into(), args)
     }
 
+    /// Build the `(List Int)` runtime value `(Cons x0 (Cons x1 … Nil))`.
+    /// Expected-result builder for string-literal / list tests.
+    fn int_list(xs: &[i64]) -> ast::Expr {
+        let mut acc = nctor("Nil", Vec::new());
+        for &x in xs.iter().rev() {
+            acc = nctor("Cons", vec![ast::Expr::IntLit(x), acc]);
+        }
+        acc
+    }
+
+    // ------------------------------------------------------------------
+    // Stage-0 slice 1: string literals — "abc" ≡ (List Int) of codepoints.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn string_literal_is_codepoint_list() {
+        let m = "(fn id ((x Int)) Int x)";
+        // 'x'=120, '+'=43, 'y'=121.
+        assert_eq!(eval_str(m, "\"x+y\""), int_list(&[120, 43, 121]));
+        // Empty string is Nil.
+        assert_eq!(eval_str(m, "\"\""), int_list(&[]));
+        // Digits are their ASCII codepoints, not their numeric value.
+        assert_eq!(eval_str(m, "\"0\""), int_list(&[48]));
+    }
+
+    /// A string is an ordinary `(List Int)`, so list-shaped fns and
+    /// pattern matching work on string literals with no new machinery.
+    #[test]
+    fn string_reuses_list_ops() {
+        let m = "(type (List T) (Nil) (Cons T (List T)))\
+                 (fn len ((xs (List Int))) Int \
+                   (match xs (Nil 0) ((Cons _ r) (+ 1 (len r)))))";
+        assert_eq!(eval_str(m, "(len \"hello\")"), ast::Expr::IntLit(5));
+        assert_eq!(eval_str(m, "(len \"\")"), ast::Expr::IntLit(0));
+    }
+
     // ------------------------------------------------------------------
     // Slice 1: arithmetic MVP — user fn + primitive.
     // ------------------------------------------------------------------

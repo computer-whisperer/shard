@@ -132,6 +132,11 @@ in normal form). The evaluator is call-by-value.
 - **Integer literal**: `42`, `-7`, `0`. Parses to `IntLit`.
 - **Symbol literal**: `(quote foo)`. Parses to `SymLit`. The unquoted
   form `foo` is treated as a variable reference, not a symbol value.
+- **String literal**: `"x+y"`. Sugar for the `(List Int)` of its
+  Unicode-scalar codepoints — `(Cons 120 (Cons 43 (Cons 121 Nil)))`.
+  `String ≡ (List Int)`; there is no distinct string type, so the
+  `std/list` lemma library applies to strings unchanged. Valid only in
+  expression position (match against strings by destructuring Cons/Nil).
 
 ### 4.2 Variables
 
@@ -330,6 +335,7 @@ REVISIT, *Expr-value vs source-Expr distinction*).
 |-------------------|---------------------------------------------|-------|
 | `'foo`            | `(quote foo)` → `SymLit foo`                 | 25    |
 | `(list a b c)`    | `(Cons a (Cons b (Cons c Nil)))`             | 25    |
+| `"x+y"`           | `(list 120 43 121)` — codepoints; `String ≡ (List Int)` | 55 |
 | `(ty NAME a1 a2)` | `(TCon 'NAME (list a1 a2))`; bare symbols inside become 0-ary TCons | 28 |
 | `(tv T)`          | `(TVar 'T)` — type variable               | 31    |
 
@@ -390,7 +396,8 @@ docs/BOUNDARIES.md for the broader picture.
   component").
 - No imports / namespaces; all definitions live in a flat module.
 - No mutability of any kind.
-- No string literals (use Symbol via `quote`).
+- No *distinct* string type: string literals `"…"` exist as sugar for
+  `(List Int)` of codepoints (§4.1, §10), not as an opaque primitive.
 - No floats.
 
 These are constraints the narrow form imposes; the full language

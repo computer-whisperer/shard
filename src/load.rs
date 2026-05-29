@@ -19,6 +19,8 @@
 //!
 //! `list` expands at parse time to a Cons/Nil chain — `(list a b c)`
 //! becomes `(Cons a (Cons b (Cons c Nil)))`. `(list)` is `Nil`.
+//! A string literal `"x+y"` is the same Cons/Nil chain over its
+//! Unicode-scalar codepoints — `String ≡ (List Int)`.
 //! Sexp reader macro `'foo` is handled by lexpr itself as a rewrite
 //! to `(quote foo)`.
 //!
@@ -429,6 +431,18 @@ fn load_expr(v: &Value, ctx: &mut LoadCtx, ctors: &HashSet<Symbol>) -> Result<Ex
             return Ok(Expr::Ctor(sym.to_string(), Vec::new()));
         }
         return Ok(Expr::FVar(sym.to_string()));
+    }
+    // String literal: "x+y" → (Cons 120 (Cons 43 (Cons 121 Nil))), a list
+    // of Unicode-scalar codepoints. String ≡ (List Int) (docs/LANGUAGE.md),
+    // so the std/list lemma library applies to strings unchanged. Checked
+    // after symbols so it cannot shadow identifier resolution; valid only
+    // in expression position (patterns over strings destructure Cons/Nil).
+    if let Some(s) = v.as_str() {
+        let mut acc = Expr::Ctor("Nil".into(), Vec::new());
+        for c in s.chars().rev() {
+            acc = Expr::Ctor("Cons".into(), vec![Expr::IntLit(c as i64), acc]);
+        }
+        return Ok(acc);
     }
     // List form: special form, ctor application, or call
     let parts = as_list(v)?;
