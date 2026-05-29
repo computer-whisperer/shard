@@ -669,6 +669,8 @@ fn trace_proof(
             ind, pa.get(0).map(render_term).unwrap_or_default())),
         "Induct" | "Induct2" | "CaseOn" =>
             lines.push(format!("{}{} — branching proof; trace stops here", ind, head)),
+        "WfInduct" =>
+            lines.push(format!("{}WfInduct — adds the IH (Hyp 0) then proves one subgoal; trace stops here", ind)),
         other => lines.push(format!("{}{} — not replayed", ind, other)),
     }
 }

@@ -133,6 +133,9 @@
     ((CaseOn scrut ty cases)
       (do_case_on m th seq scrut ty cases))
 
+    ((WfInduct measure pf)
+      (do_wf_induct m th seq measure pf))
+
     ((RewriteWith er dir side insts premise_proofs rest)
       ;; Conditional rewrite. Cited equation may have ∀-binders AND
       ;; non-empty premises:
@@ -823,6 +826,11 @@
     (Nil ys)
     ((Cons h t) (Cons h (append_goals t ys)))))
 
+(fn append_eqs ((xs (List Equation)) (ys (List Equation))) (List Equation)
+  (match xs
+    (Nil ys)
+    ((Cons h t) (Cons h (append_eqs t ys)))))
+
 (fn reverse_syms ((xs (List Symbol))) (List Symbol)
   (reverse_syms_acc xs Nil))
 
@@ -1080,6 +1088,80 @@
         rest_params
         (close_eqs innermost_first ih_premises)
         (close_eq innermost_first ih_eq)))))
+
+;; ---------------------------------------------------------------------------
+;; do_wf_induct: well-founded induction on a user-supplied MEASURE (an
+;; Int-valued Expr over the goal's params). Unlike Induct (structural, on a
+;; datatype var) this needs no constructors — it works for Int and any type,
+;; because the well-foundedness comes from the measure's image in ℤ, not the
+;; term's shape.
+;;
+;; ONE subgoal: the original sequent with a strong induction hypothesis
+;; prepended at Hyp 0. For a goal  premises(P) |- eq(P)  with measure μ(P),
+;; the IH is the closed Goal
+;;
+;;   ∀ P'. premises(P') -> 0 <= μ(P') -> μ(P') < μ(P) -> eq(P')
+;;
+;; (P' a fresh copy of ALL params; μ(P) keeps the current params, free).
+;;
+;; SOUNDNESS (why an arbitrary Int measure is OK, not only a Nat one).
+;; Suppose the subgoal holds but the conclusion fails on a nonempty set S of
+;; param-tuples. Let Sp = { x in S : μ(x) >= 0 }.
+;;   - Sp nonempty: its measures are >= 0, so they have a LEAST element μ(x*)
+;;     (the non-negative integers are well-ordered). The IH at x* is then
+;;     dischargeable — any y with 0 <= μ(y) < μ(x*) is not in S by
+;;     minimality, so eq(y) holds — forcing eq(x*), contradicting x* in S.
+;;   - Sp empty: every x in S has μ(x) < 0, so the IH antecedent
+;;     0 <= μ(y) < μ(x) is unsatisfiable — the subgoal proves eq(x) with no
+;;     IH help, contradicting x in S.
+;; The `0 <= μ(P')` guard makes the negative part of μ's range harmless:
+;; below 0 the IH gives nothing, so the subgoal closes those cases without
+;; it. This is ordinary well-founded induction along  y ≺ x == 0<=μ(y)<μ(x).
+;;
+;; Citing the IH (as Hyp 0, via RewriteWith with insts for the fresh P')
+;; thus carries three classes of premise to discharge: the goal's own
+;; premises at P', then 0 <= μ(P'), then μ(P') < μ(P) — the latter two are
+;; the termination obligations (for `/`-recursion: std/div's div_nonneg and
+;; div_lt).
+;; ---------------------------------------------------------------------------
+
+;; Fresh-rename every param: the fresh Param list (same types, new names)
+;; paired with an Env mapping each old name to its fresh FVar.
+(fn wf_rename ((ps (List Param))) (Pair (List Param) Env)
+  (match ps
+    (Nil (Pair Nil Empty))
+    ((Cons (Param x ty) rest)
+      (match (wf_rename rest)
+        ((Pair fresh_rest env_rest)
+          (let ((fx (gen_fresh)))
+            (Pair (Cons (Param fx ty) fresh_rest)
+                  (Bind x (FVar fx) env_rest))))))))
+
+(fn do_wf_induct ((m Module) (th Theory) (seq Sequent)
+                  (measure Expr) (pf Proof)) Bool
+  (match seq
+    ((Sequent params hyps premises eq)
+      (match (wf_rename params)
+        ((Pair fresh_params env)
+          (let ((measure_fresh (subst env measure))
+                (close_names   (reverse_syms (param_names fresh_params))))
+            (let ((wf_premises
+                    (Cons (Equation
+                            (Call (quote le) (list (IntLit 0) measure_fresh))
+                            (Ctor (quote True) Nil))
+                      (Cons (Equation
+                              (Call (quote lt) (list measure_fresh measure))
+                              (Ctor (quote True) Nil))
+                        Nil)))
+                  (ih_eq (subst_eq env eq)))
+              (let ((ih (Goal
+                          fresh_params
+                          (close_eqs close_names
+                            (append_eqs (subst_eqs env premises) wf_premises))
+                          (close_eq close_names ih_eq))))
+                (check_sequent m th
+                  (Sequent params (Cons ih hyps) premises eq)
+                  pf)))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; do_induct2: TWO-STEP induction on a Nat-shaped var. Sound because every

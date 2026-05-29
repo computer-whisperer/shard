@@ -87,6 +87,14 @@
                                           ;   time (half_nat) where single-step Induct
                                           ;   can't reach the IH. See do_induct2.
   (CaseOn Expr Symbol (List Case))        ; case-split an expr of named type
+  (WfInduct Expr Proof)                   ; well-founded induction on a measure
+                                          ;   (an Int-valued Expr over the goal's
+                                          ;   params). One subgoal, with a strong
+                                          ;   IH added at Hyp 0: the goal holds for
+                                          ;   any fresh params whose premises hold,
+                                          ;   whose measure is >= 0, and whose
+                                          ;   measure is < the current measure. See
+                                          ;   do_wf_induct for the soundness note.
   (RewriteWith                            ; rewrite with a conditional equation
     EqRef Dir Side
     (List Inst)

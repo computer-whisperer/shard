@@ -1,0 +1,55 @@
+;;; First exercise of the WfInduct tactic (well-founded induction on a
+;;; general Int measure) — recursion on n/10, the show-style shape.
+;;;
+;;; f loops dividing by 10 until n <= 0, always returning 0. It recurses
+;;; on n/10, which is NOT a structural subterm of n — so it is exactly the
+;;; kind of function ordinary Induct cannot reason about. We prove
+;;;   0 <= n  |-  f n = 0
+;;; by WfInduct with measure n: the step gets the strong IH at Hyp 0, and
+;;; in the recursive case discharges its two termination obligations
+;;;   0 <= n/10   (std/div div_nonneg)   and   n/10 < n   (std/div div_lt)
+;;; — which is the whole point of building those lemmas first.
+
+(import "../std/div.sexp")   ; div_lt, div_nonneg (+ the div/mod axioms)
+
+(fn f ((n Int)) Int
+  (if (lt 0 n) (f (/ n 10)) 0))
+
+(claim f_is_zero
+  (Goal
+    (list (Param 'n (ty Int)))
+    (list (Equation (Call 'le (list (IntLit 0) (FVar 'n))) (Ctor 'True (list))))
+    (Equation (Call 'f (list (FVar 'n))) (IntLit 0)))
+  (WfInduct (FVar 'n)
+    ;; one subgoal: 0<=n |- f n = 0, with IH at Hyp 0 (becomes Hyp 1 once
+    ;; CaseOn prepends its own hyp). Split on the loop guard.
+    (CaseOn (Call 'lt (list (IntLit 0) (FVar 'n))) 'Bool
+      (list
+        ;; Recursive case: 0 < n. f n = f (n/10); close via the IH.
+        (Case 'True
+          (Steps
+            (list (Unfold 'f Lhs)
+                  (Rewrite (Hyp 0) Lr Lhs True (list))   ; lt 0 n -> True
+                  (Reduce Lhs))                          ; if True .. -> f (n/10)
+            (RewriteWith (Hyp 1) Lr Lhs (list)           ; IH at n' := n/10 (matched)
+              (list
+                ;; IH premise 1: 0 <= n/10   (the goal's own premise, at n')
+                (RewriteWith (Lemma 'div_nonneg) Lr Lhs (list)
+                  (list (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl))
+                  Refl)
+                ;; IH premise 2: 0 <= n/10   (the measure >= 0 obligation)
+                (RewriteWith (Lemma 'div_nonneg) Lr Lhs (list)
+                  (list (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl))
+                  Refl)
+                ;; IH premise 3: n/10 < n    (the measure-decrease obligation)
+                (RewriteWith (Lemma 'div_lt) Lr Lhs (list)
+                  (list (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+                  Refl))
+              Refl)))
+        ;; Base case: not (0 < n). f n = 0 directly.
+        (Case 'False
+          (Steps
+            (list (Unfold 'f Lhs)
+                  (Rewrite (Hyp 0) Lr Lhs True (list))   ; lt 0 n -> False
+                  (Reduce Lhs))                          ; if False .. -> 0
+            Refl))))))
