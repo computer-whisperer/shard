@@ -742,3 +742,31 @@ is where to start when planning v3.
 - **What remains true:** when the kernel still can't reduce
   (Simp's gate is conservative, won't push past stuck heads), the
   helper-lemma pattern remains available — just rarely needed.
+
+### Two-step Nat induction (`Induct2`) — kernel addition (slice 50)
+- **What:** a fourth branching Proof, `(Induct2 var (list (Case 'Z …)
+  (Case 'SZ …) (Case 'SS …)))`. Splits a Nat-shaped var into Z, (S Z),
+  and (S (S k)) — the SS arm carrying the IH at k. Needed for functions
+  that recurse two-at-a-time (`half_nat`: `half (S (S k)) = S (half k)`),
+  where single-step `Induct` only ever yields the IH at k, so the S(S k)
+  case can never reach P(k). First user: `half_bound` (n-1 ≤ 2·⌊n/2⌋),
+  the loop-completion bound for the M3 capstone.
+- **Why a kernel change (TCB cost) rather than an encoding:** two-step
+  induction can be hand-encoded with a `(Pair (P n) (P (S n)))` carrier
+  + projection lemmas, but it's ~8 fragile lemmas per use (the proofs
+  must match Simp's exact output shapes). `Induct2` is ~90 NCNB once,
+  reusable for any floor/ceil/parity proof. The user chose the kernel
+  addition over the per-use encoding.
+- **Soundness:** every Nat is Z, (S Z), or (S (S k)), so the three arms
+  cover all values — PROVIDED the type is exactly a nullary ctor + a
+  unary recursive ctor. A THIRD ctor would leave values uncovered, so
+  `do_induct2` REJECTS unless `is_two_ctors` holds (exactly two ctors;
+  one nullary "zero" + one unary-recursive "succ", found generically).
+  The SS arm's IH is P(k) only (built by the same `build_ih` as
+  single-step Induct). Guarded by Rust tests `check_seq_induct2_*`
+  (accepts a true claim; rejects a false arm, a missing arm, and a
+  three-ctor type).
+- **Revisit if:** we need strong/course-of-values induction (IH for all
+  m < n) or k-step for k>2 — `Induct2` is deliberately the minimal
+  Nat-specific form. A general well-founded induction is the bigger,
+  later addition (it needs the order predicate in the IH goal).

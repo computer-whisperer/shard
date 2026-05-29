@@ -1334,6 +1334,103 @@ mod tests {
         assert_eq!(r, true_v());
     }
 
+    // ------------------------------------------------------------------
+    // Two-step induction (Induct2). Soundness of this TCB addition rests
+    // on: (a) all three arms (Z, SZ, SS) required; (b) a FALSE arm fails;
+    // (c) the type must be EXACTLY nullary+unary-recursive (else some
+    // values are uncovered). These tests pin each.
+    // ------------------------------------------------------------------
+
+    /// `∀ n : Nat. n = n` by Induct2. Z: (Z=Z); SZ: ((S Z)=(S Z)); SS:
+    /// ((S (S _f))=(S (S _f))) — all close by Refl (IH unused).
+    #[test]
+    fn check_seq_induct2_trivial_refl() {
+        let m = load_kernel();
+        let mod_v = nat_module();
+        let seq = sequent(
+            vec![param("n", tcon("Nat", vec![]))],
+            vec![], vec![],
+            equation(fvar("n"), fvar("n")),
+        );
+        let pf = induct2("n", vec![
+            case_arm("Z", refl()),
+            case_arm("SZ", refl()),
+            case_arm("SS", refl()),
+        ]);
+        let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
+        assert_eq!(r, true_v());
+    }
+
+    /// Induct2 must reject a FALSE claim: `∀ n : Nat. n = Z` with all
+    /// arms Refl. The SZ arm's goal is (S Z) = Z — Refl fails — so the
+    /// whole induction is rejected. (Soundness: a bogus arm sinks it.)
+    #[test]
+    fn check_seq_induct2_rejects_false_claim() {
+        let m = load_kernel();
+        let mod_v = nat_module();
+        let seq = sequent(
+            vec![param("n", tcon("Nat", vec![]))],
+            vec![], vec![],
+            equation(fvar("n"), ctor_app("Z", vec![])),
+        );
+        let pf = induct2("n", vec![
+            case_arm("Z", refl()),
+            case_arm("SZ", refl()),
+            case_arm("SS", refl()),
+        ]);
+        let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
+        assert_eq!(r, false_v());
+    }
+
+    /// Induct2 must reject when an arm is missing (here SS): every value
+    /// class must be discharged or coverage is incomplete.
+    #[test]
+    fn check_seq_induct2_rejects_missing_arm() {
+        let m = load_kernel();
+        let mod_v = nat_module();
+        let seq = sequent(
+            vec![param("n", tcon("Nat", vec![]))],
+            vec![], vec![],
+            equation(fvar("n"), fvar("n")),
+        );
+        let pf = induct2("n", vec![
+            case_arm("Z", refl()),
+            case_arm("SZ", refl()),
+        ]);
+        let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
+        assert_eq!(r, false_v());
+    }
+
+    /// SOUNDNESS GUARD: Induct2 must reject a type with a THIRD ctor —
+    /// Z/SZ/SS only cover succ-towers over zero, so a third constructor's
+    /// values would be left unproven. Here `Tri = A | B Tri | C` is a
+    /// valid type and `∀ x : Tri. x = x` is TRUE, but Induct2 must still
+    /// reject it (is_two_ctors fails), forcing the honest single-step
+    /// Induct instead. Without this guard, Induct2 would be UNSOUND.
+    #[test]
+    fn check_seq_induct2_rejects_three_ctor_type() {
+        let m = load_kernel();
+        let tri_td = type_def("Tri", vec![], vec![
+            ctor_def("A", vec![]),
+            ctor_def("B", vec![tcon("Tri", vec![])]),
+            ctor_def("C", vec![]),
+        ]);
+        let mod_v = module(vec![tri_td], vec![], vec![]);
+        let seq = sequent(
+            vec![param("x", tcon("Tri", vec![]))],
+            vec![], vec![],
+            equation(fvar("x"), fvar("x")),
+        );
+        // Even with a well-formed-looking proof, the 3-ctor type is rejected.
+        let pf = induct2("x", vec![
+            case_arm("Z", refl()),
+            case_arm("SZ", refl()),
+            case_arm("SS", refl()),
+        ]);
+        let r = run_check_sequent(&m, mod_v, theory_empty(), seq, pf);
+        assert_eq!(r, false_v());
+    }
+
     /// Inducting on a name that isn't in scope. find_param returns
     /// None; do_induct returns False.
     #[test]

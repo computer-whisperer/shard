@@ -1,6 +1,7 @@
-;;; M3 — linear-memory reverse: foundation lemmas + the capstone
-;;; statement. Slice 34 stands up the model and the array framing; the
-;;; loop-invariant induction (the capstone proof) is the next slice.
+;;; M3 — linear-memory reverse: the full refinement, foundation lemmas
+;;; through the proven capstone `mem_reverses` (slice 50). Slice 34 stood
+;;; up the model + array framing; slices 39-44 the loop invariant (mirror
+;;; + untouched); slices 45-50 the list<->memory bridge and the capstone.
 ;;;
 ;;; Layering:
 ;;;   - read_write_eq / read_write_neq : the array framing
@@ -14,9 +15,9 @@
 ;;;     demonstration that the framing layer is reusable.
 ;;;   - rev_loop_zero : the loop base case (zero swaps = identity).
 ;;;
-;;; The capstone (`mem_reverses`, stated at the bottom) is NOT yet a
-;;; claim — it needs the loop-invariant induction. See the reassess
-;;; note there.
+;;; The capstone `mem_reverses` (at the bottom) is PROVEN: loading a list
+;;; into memory, running the in-place two-pointer swap loop floor(n/2)
+;;; times, and dumping the cells back yields `rev xs`, for universal n.
 
 (use-module "nat_lib.sexp")
 (use-module "map_lib.sexp")
@@ -1134,6 +1135,14 @@
       (Ctor 'True (list))))
   (ByTheory 'farkas (Cert 'farkas (list 1 1 1))))
 
+;; lia: (0+(x-1))-0 = (0+x)-1  (reconcile dump_R_rdump's top with flip's).
+(claim cap_idx
+  (Goal (list (Param 'x (ty Int))) (list)
+    (Equation
+      (Call '- (list (Call '+ (list (IntLit 0) (Call '- (list (FVar 'x) (IntLit 1))))) (IntLit 0)))
+      (Call '- (list (Call '+ (list (IntLit 0) (FVar 'x))) (IntLit 1)))))
+  (ByTheory 'lia (Cert 'lia (list))))
+
 ;; lia: s-(base+1) = (s-base)-1  (reconcile the rdump recursion index).
 (claim idx_pred
   (Goal (list (Param 's (ty Int)) (Param 'base (ty Int))) (list)
@@ -1243,8 +1252,54 @@
               Refl))
           Refl)))))
 
-;; ---------------------------------------------------------------------------
-;; CAPSTONE (stated, not yet proven) — mem_reverses:
+;; --- the loop runs far enough: n-1 <= 2*floor(n/2) -----------------------
+
+;; half_step: the two-step inductive step for half_bound, with the IH's
+;; inequality supplied as a premise (farkas can't read the Induct2 hyp
+;; directly). X = int_of_nat k, Y = int_of_nat (half_nat k); the goal is
+;; the Simp-normalized half_bound at S (S k).
+(claim half_step
+  (Goal
+    (list (Param 'X (ty Int)) (Param 'Y (ty Int)))
+    (list
+      (Equation (Call 'le (list (Call '- (list (FVar 'X) (IntLit 1)))
+                                (Call '* (list (IntLit 2) (FVar 'Y)))))
+                (Ctor 'True (list))))
+    (Equation
+      (Call 'le (list (Call '- (list (Call '+ (list (IntLit 1)
+                                                    (Call '+ (list (IntLit 1) (FVar 'X)))))
+                                     (IntLit 1)))
+                      (Call '* (list (IntLit 2) (Call '+ (list (IntLit 1) (FVar 'Y)))))))
+      (Ctor 'True (list))))
+  (ByTheory 'farkas (Cert 'farkas (list 1 1))))
+
+;; half_bound: int_of_nat m - 1 <= 2 * int_of_nat (half_nat m), for ALL m.
+;; This is "the loop's floor(m/2) swaps cover the segment of length m"
+;; (tight at both parities). half_nat recurses two-at-a-time, so this is
+;; the first user of the kernel's two-step induction (Induct2): the Z and
+;; (S Z) arms close by Simp; the (S (S k)) arm Simp-normalizes and hands
+;; the IH (at k) to half_step.
+(claim half_bound
+  (Goal
+    (list (Param 'm (ty Nat)))
+    (list)
+    (Equation
+      (Call 'le (list (Call '- (list (Call 'int_of_nat (list (FVar 'm))) (IntLit 1)))
+                      (Call '* (list (IntLit 2)
+                                     (Call 'int_of_nat (list (Call 'half_nat (list (FVar 'm)))))))))
+      (Ctor 'True (list))))
+  (Induct2 'm
+    (list
+      (Case 'Z  (Steps (list (Simp Lhs)) Refl))
+      (Case 'SZ (Steps (list (Simp Lhs)) Refl))
+      (Case 'SS
+        (Steps (list (Simp Lhs))
+          (RewriteWith (Lemma 'half_step) Lr Lhs (list)
+            (list (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+            Refl))))))
+
+;; ===========================================================================
+;; CAPSTONE — mem_reverses (PROVEN). The M3 data-refinement dragon:
 ;;
 ;;   ∀ xs : (List Int).
 ;;     (dump 0 (length_nat xs)
@@ -1254,42 +1309,48 @@
 ;;                     (half_nat (length_nat xs))))
 ;;     = (rev xs)
 ;;
-;; "Load xs into fresh memory at 0…n-1, run the in-place swap loop
-;; floor(n/2) times, dump the n cells back out — you get rev xs." This
-;; is the M3 data-refinement: list ↔ linear memory, proven for
-;; universal n. Cites list_lib's `rev`.
+;; "Load xs into fresh memory at 0…n-1, run the in-place two-pointer swap
+;; loop floor(n/2) times, dump the n cells back out — you get rev xs",
+;; for UNIVERSAL n. list ↔ linear memory, the imperative array-reverse
+;; refined against the functional spec, all decided not assumed.
 ;;
-;; WHY IT'S NOT A CLAIM YET: the proof is an induction maintaining a
-;; loop invariant ("after k swaps, position p holds the cell originally
-;; at its mirror image"), discharged with the swap framing lemmas.
-;; Progress against the gaps surfaced when standing it up:
-;;   1. [DONE, slice 36] read_swap at all three position classes
-;;      (read_swap_j / read_swap_i / read_swap_other) — the full per-
-;;      position swap framing, via RewriteWith + read_write_neq with
-;;      disequality-premise discharge.
-;;   2. [BACKEND READY, slice 35] the loop guard / invariant arithmetic
-;;      is INEQUALITY reasoning (i < j, p between bounds, i + j = n - 1).
-;;      The `ord` backend now decides `lt`/`le` tautologies; conditional
-;;      bounds come in as premises. The invariant induction (below) is
-;;      where these get consumed — the remaining work.
-;;   3. The list↔memory bridge (load/dump) carries a plumbing tax
-;;      (length_nat / half_nat / int_of_nat conversions) — TRANSFER's
-;;      "representation alignment is death by a thousand lemmas". The
-;;      open design question: how much of it the ord backend erases.
-;;
-;; PROGRESS:
-;;   [DONE, slice 39/40] rev_loop_untouched_below / _above — a cell
-;;     outside the swap range is unchanged by the whole loop.
-;;   [DONE, slice 44] rev_loop_mirror — a position p in [i,j] ends up
-;;     holding (read m (i+j-p)); the center i+j is recursion-invariant.
-;;     Induction on k with a completion bound P2 = (j-i)+1 <= 2k; the
-;;     S-case splits p three ways (the two swap ends via untouched +
-;;     read_swap_i/j, the interior via the IH + read_swap_other), the
-;;     Nat/Int bound threading goes through precond_shrink, and the Z
-;;     base is closed by contradiction (mirror_idx_z). This is the
-;;     in-place-reverse correctness statement — the M3 "dragon".
-;; REMAINING for the capstone:
-;;   - the list↔memory bridge: dump∘load = id, and dump-of-mirror = rev,
-;;     then instantiate rev_loop_mirror at i=0, j=n-1, k=half(n) and
-;;     discharge the bound arithmetic via farkas.
-;; ---------------------------------------------------------------------------
+;; The proof is the four-lemma chain, no new reasoning — just composition:
+;;   dump 0 n R
+;;     = rdump (0+(n-1)-0) n M0           [dump_R_rdump: the mirror, with
+;;                                          premises 0<=0, range bound (ord),
+;;                                          loop bound (sub_zero + half_bound)]
+;;     = rdump ((0+n)-1) n M0             [cap_idx: lia index reconcile]
+;;     = rev (dump 0 n M0)               [rev_dump_rdump (flip), reversed]
+;;     = rev xs                          [dump_load_id: the load round trip]
+;; where n = length_nat xs, M0 = load xs 0 MEmpty, R = rev_loop M0 0 (n-1)
+;; (half n). Cites list_lib's `rev`.
+;; ===========================================================================
+
+(claim mem_reverses
+  (Goal
+    (list (Param 'xs (ty List Int)))
+    (list)
+    (Equation
+      (Call 'dump
+        (list (IntLit 0)
+              (Call 'length_nat (list (FVar 'xs)))
+              (Call 'rev_loop
+                (list (Call 'load (list (FVar 'xs) (IntLit 0) (Ctor 'MEmpty (list))))
+                      (IntLit 0)
+                      (Call '- (list (Call 'int_of_nat
+                                           (list (Call 'length_nat (list (FVar 'xs)))))
+                                     (IntLit 1)))
+                      (Call 'half_nat (list (Call 'length_nat (list (FVar 'xs)))))))))
+      (Call 'rev (list (FVar 'xs)))))
+  ;; dump 0 n R → rdump (0+(n-1)-0) n M0.
+  (RewriteWith (Lemma 'dump_R_rdump) Lr Lhs (list)
+    (list
+      (Steps (list (Simp Lhs)) Refl)                                 ; 0 <= 0
+      (ByTheory 'ord (Cert 'ord (list)))                             ; 0+n <= (n-1)+1
+      (Steps (list (Rewrite (Lemma 'sub_zero) Lr Lhs True (list)))   ; (n-1)-0 → n-1
+        (RewriteWith (Lemma 'half_bound) Lr Lhs (list) (list) Refl)));  n-1 <= 2*half n
+    ;; rdump (0+(n-1)-0) … → reconcile index → flip back to rev(dump) → round trip.
+    (Steps (list (Rewrite (Lemma 'cap_idx) Lr Lhs True (list)))      ; (0+(n-1))-0 → (0+n)-1
+      (RewriteWith (Lemma 'rev_dump_rdump) Rl Lhs (list) (list)      ; rdump ((0+n)-1)… → rev(dump 0 n M0)
+        (RewriteWith (Lemma 'dump_load_id) Lr Lhs (list) (list)      ; dump 0 n (load xs 0 ∅) → xs
+          Refl)))))

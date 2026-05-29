@@ -127,6 +127,9 @@
     ((Induct var cases)
       (do_induct m th seq var cases))
 
+    ((Induct2 var cases)
+      (do_induct2 m th seq var cases))
+
     ((CaseOn scrut ty cases)
       (do_case_on m th seq scrut ty cases))
 
@@ -1077,3 +1080,121 @@
         rest_params
         (close_eqs innermost_first ih_premises)
         (close_eq innermost_first ih_eq)))))
+
+;; ---------------------------------------------------------------------------
+;; do_induct2: TWO-STEP induction on a Nat-shaped var. Sound because every
+;; Nat is Z, (S Z), or (S (S k)) — so proving the goal at Z and (S Z), plus
+;; the step ∀k. P(k) ⟹ P(S (S k)), covers all n. This is what functions
+;; recurring two-at-a-time (half_nat: half (S (S k)) = S (half k)) need:
+;; single-step Induct only ever yields the IH at k, never k-1, so the
+;; S(S k) arm can't reach P(k). The cases are named 'Z, 'SZ, 'SS; the SS
+;; arm gets one IH = P(k) (the goal with var:=k, other vars closed as ∀,
+;; exactly like single-step Induct's build_ih).
+;;
+;; The var's type must have a nullary ctor (the "zero") and a one-field
+;; recursive ctor (the "succ", field type = var's type). Found generically
+;; below, so this works for any such two-ctor type, not just the literal
+;; Nat declaration.
+;; ---------------------------------------------------------------------------
+
+;; SOUNDNESS GUARD: two-step induction's three arms (Z, S Z, S (S k))
+;; cover every value of a type IFF that type is EXACTLY a nullary ctor +
+;; a unary recursive ctor (so all values are succ-towers over zero). A
+;; THIRD ctor would leave values uncovered — so require exactly two.
+(fn is_two_ctors ((ctors (List CtorDef))) Bool
+  (match ctors
+    ((Cons _ (Cons _ Nil)) True)
+    (_ False)))
+
+(fn find_zero_ctor ((ctors (List CtorDef))) (Option Symbol)
+  (match ctors
+    (Nil None)
+    ((Cons (CtorDef cn fts) rest)
+      (match fts
+        (Nil (Some cn))
+        (_   (find_zero_ctor rest))))))
+
+(fn find_succ_ctor ((ctors (List CtorDef)) (var_type Type)) (Option Symbol)
+  (match ctors
+    (Nil None)
+    ((Cons (CtorDef cn fts) rest)
+      (match fts
+        ((Cons ft Nil)
+          (if (type_eq ft var_type) (Some cn) (find_succ_ctor rest var_type)))
+        (_ (find_succ_ctor rest var_type))))))
+
+;; Substitute var := val (a closed Expr) throughout the sequent and drop
+;; var from the params. Used for the Z and (S Z) base arms (no IH).
+(fn build_subst_subgoal ((seq Sequent) (var Symbol) (val Expr)) Sequent
+  (match seq
+    ((Sequent params hyps premises eq)
+      (let ((rest_params (remove_param var params))
+            (env (Bind var val Empty)))
+        (Sequent rest_params
+                 (subst_goals env hyps)
+                 (subst_eqs env premises)
+                 (subst_eq env eq))))))
+
+;; The (S (S k)) arm: fresh k, substitute var := (succ (succ k)), and add
+;; the single IH P(k) (built exactly as single-step Induct builds it).
+(fn build_ss_subgoal ((seq Sequent) (var Symbol) (var_type Type)
+                      (succ_c Symbol)) Sequent
+  (match seq
+    ((Sequent params hyps premises eq)
+      (let ((kfresh (gen_fresh)))
+        (let ((rest_params (remove_param var params))
+              (ss_val (Ctor succ_c (list (Ctor succ_c (list (FVar kfresh)))))))
+          (let ((env_ss (Bind var ss_val Empty))
+                (ih (build_ih var kfresh rest_params premises eq)))
+            (Sequent
+              (append_params rest_params (list (Param kfresh var_type)))
+              (append_goals (subst_goals env_ss hyps) (list ih))
+              (subst_eqs env_ss premises)
+              (subst_eq env_ss eq))))))))
+
+;; Given the resolved zero/succ ctors, check the three arms. Z and (S Z)
+;; substitute and prove directly; (S (S k)) gets the IH at k.
+(fn induct2_run ((m Module) (th Theory) (seq Sequent)
+                 (var Symbol) (var_type Type) (zero_c Symbol) (succ_c Symbol)
+                 (cases (List Case))) Bool
+  (match (find_case (quote Z) cases)
+    (None False)
+    ((Some pf_z)
+      (match (find_case (quote SZ) cases)
+        (None False)
+        ((Some pf_sz)
+          (match (find_case (quote SS) cases)
+            (None False)
+            ((Some pf_ss)
+              (if (check_sequent m th
+                    (build_subst_subgoal seq var (Ctor zero_c Nil)) pf_z)
+                  (if (check_sequent m th
+                        (build_subst_subgoal seq var
+                          (Ctor succ_c (list (Ctor zero_c Nil)))) pf_sz)
+                      (check_sequent m th
+                        (build_ss_subgoal seq var var_type succ_c) pf_ss)
+                      False)
+                  False))))))))
+
+(fn do_induct2 ((m Module) (th Theory) (seq Sequent)
+                (var Symbol) (cases (List Case))) Bool
+  (match seq
+    ((Sequent params _ _ _)
+      (match (find_param var params)
+        (None False)
+        ((Some (Param _ var_type))
+          (match (type_head var_type)
+            (None False)                              ; TVar — can't induct
+            ((Some (Pair tname _))
+              (match (lookup_typedef tname m)
+                (None False)
+                ((Some (TypeDef _ _ ctors))
+                  (if (is_two_ctors ctors)            ; SOUNDNESS GUARD: exactly zero+succ
+                      (match (find_zero_ctor ctors)
+                        (None False)
+                        ((Some zero_c)
+                          (match (find_succ_ctor ctors var_type)
+                            (None False)
+                            ((Some succ_c)
+                              (induct2_run m th seq var var_type zero_c succ_c cases)))))
+                      False))))))))))

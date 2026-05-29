@@ -39,7 +39,7 @@ PASS  plus_comm
 …
 PASS  lt_implies_neq
 
-64 passed, 0 failed
+85 passed, 0 failed
 ```
 
 The `check` binary loads the bundled kernel, then walks each
@@ -57,7 +57,7 @@ Run the Rust test suite (loader, evaluator, kernel-from-rust mirrors):
 cargo test --release
 ```
 
-105 tests as of slice 42.
+109 tests as of slice 50.
 
 ## Repository layout
 
@@ -71,7 +71,7 @@ docs/
   REVISIT.md           ; design-decision ledger — every choice + when to
                        ;   revisit. The "why" lives here.
 
-kernel/                ; the trusted kernel, written in narrow (1,735 NCNB)
+kernel/                ; the trusted kernel, written in narrow (1,823 NCNB)
   stdlib.sexp          ;   List / Option / Pair / Bool
   term.sexp            ;   Expr / Pat / shift / subst / open_many / close_many
   reduce.sexp          ;   step / step_iota / step_smart (gated δ) / memo
@@ -89,7 +89,7 @@ src/                   ; the trusted-by-review Rust component
   eval.rs              ;   CBV evaluator; stuck-and-intercept for primitives
   prim.rs              ;   primitive table (+ - * mod, int_eq, gen_fresh, …)
   nval.rs              ;   narrow-value builders for tests
-  lib.rs               ;   loader entrypoint + Rust test suite (105 tests)
+  lib.rs               ;   loader entrypoint + Rust test suite (109 tests)
   bin/check.rs         ;   the `check` proof-script driver binary
 
 examples/              ; user modules + proof-script claim files
@@ -103,7 +103,8 @@ examples/              ; user modules + proof-script claim files
   mem_lib.sexp         ;   M3 linear memory = (Map Int): read/write/swap/rev_loop
   mem_lemmas.sexp      ;   M3 array framing (slice 34): read_write_eq/_neq,
                        ;     read_swap framing + rev_loop_untouched (39,40)
-                       ;     + rev_loop_mirror (slice 44 — the loop reverses)
+                       ;     + rev_loop_mirror (44) + the bridge (45-49)
+                       ;     + mem_reverses (slice 50 — the PROVEN capstone)
   ord_basics.sexp      ;   order-reflection examples (slice 35): lt_succ, le_refl
   farkas_basics.sexp   ;   linear-entailment examples (slice 37): lt_succ_from_lt,
                        ;     le_trans, le_from_eq (premises ⊢ order conclusion)
@@ -154,7 +155,8 @@ Feature checklist (✓ = shipped in v2; → = next):
 | `farkas` theory (entailment ≤/</≠/=, +plain eq) | ✓ | 37-42 |
 | M3 loop invariant — untouched (below + above) | ✓     | 39,40  |
 | M3 loop invariant — mirror (`rev_loop` reverses) | ✓  | 44     |
-| M3 capstone (`rev_loop ⊑ rev`: list↔mem bridge) | →  |        |
+| M3 capstone (`rev_loop ⊑ rev`: full list↔mem refinement) | ✓ | 45-50 |
+| Two-step induction (`Induct2`, Nat-shaped)   | ✓  | 50     |
 | Polymorphic-key maps `(Map K V)`        | →        |        |
 | Defunctionalized higher-order           | →        |        |
 | Measure / well-founded recursion        | →        |        |
@@ -285,7 +287,7 @@ the audit boundary visible at the kernel layer.
   guarding, ByTheory (LIA + eqdec + ord + farkas), Insts, finite maps (Int
   keys), and the M3 linear-memory model + array framing.
 - **Trusted core size:**
-  - Kernel narrow code: **1,735 NCNB** across 10 `kernel/*.sexp`.
+  - Kernel narrow code: **1,823 NCNB** across 10 `kernel/*.sexp`.
   - Rust trusted-by-review: **1,136 NCNB** across
     `ast.rs` + `eval.rs` + `load.rs` + `prim.rs` + `bin/check.rs`.
   - (Plus ~2,000 NCNB of Rust tests + builders in `lib.rs` + `nval.rs`

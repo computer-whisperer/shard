@@ -164,6 +164,13 @@ pub fn induct(var: &str, cases: Vec<Expr>) -> Expr {
     ctor("Induct", vec![Expr::SymLit(var.into()), list(cases)])
 }
 
+/// (Induct2 var cases). Two-step (Nat-shaped) induction: cases named
+/// 'Z, 'SZ, 'SS, with the IH at k in the 'SS arm. Only sound on types
+/// with exactly a nullary + a unary-recursive ctor (kernel-enforced).
+pub fn induct2(var: &str, cases: Vec<Expr>) -> Expr {
+    ctor("Induct2", vec![Expr::SymLit(var.into()), list(cases)])
+}
+
 /// (ByTheory theory_name cert) — top-level Proof.
 pub fn by_theory(theory_name: &str, cert: Expr) -> Expr {
     ctor("ByTheory", vec![Expr::SymLit(theory_name.into()), cert])

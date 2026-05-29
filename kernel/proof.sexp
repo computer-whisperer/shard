@@ -81,6 +81,11 @@
   (Refl)                                  ; close: both sides syntactically equal
   (Steps (List Step) Proof)               ; flat sequence of non-branching steps
   (Induct Symbol (List Case))             ; induct on a named ∀-var of the goal
+  (Induct2 Symbol (List Case))            ; two-step induction (Nat-shaped): cases
+                                          ;   'Z, 'SZ (= S Z), 'SS (= S (S k)) with
+                                          ;   the IH at k. For fns recurring two at a
+                                          ;   time (half_nat) where single-step Induct
+                                          ;   can't reach the IH. See do_induct2.
   (CaseOn Expr Symbol (List Case))        ; case-split an expr of named type
   (RewriteWith                            ; rewrite with a conditional equation
     EqRef Dir Side
