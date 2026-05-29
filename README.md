@@ -1,20 +1,37 @@
 # proving-bootstrap-v2
 
-A tiny trusted Rust kernel that loads a self-hosting proof checker
-written in a deliberately narrow object language ("narrow"). The
-checker reasons equationally about pure first-order programs in the
-same narrow form: same data type, same evaluator, same reduction rules.
+A new way to build software, in which **requirements — formal and
+informal — cascade through layers of proven refinement into a running
+application.** The end state is the kind of program you'd otherwise
+write in Rust, except its structure and behavior are *formally
+guaranteed* to meet the requirements it was derived from, top to
+bottom. This is a development methodology, **not** a math/logic proof
+library — the proof machinery below is the means, not the point.
 
-This is the *substrate* for a refinement pipeline — `spec ⊑ … ⊑ code`,
-every link a separately proven equational claim. The v1 pilot
-([TRANSFER.md](TRANSFER.md)) validated the architecture end to end
-(naive `rev` ⊑ accumulator-passing `fast` ⊑ in-place memory reverse
-⊑ wasm) at toy scale. v2 rebuilds the substrate with the lessons
-applied — see TRANSFER.md for the *premises* and the changes from v1.
+The mechanism is a single, transitive **refinement** relation
+`spec ⊑ … ⊑ code`: start from a high-level requirement, refine it into
+a clear (probably inefficient) implementation, then into an efficient
+one (eventually machine-code-like), with each link a *separately
+proven* artifact rather than a tested one. Requirements→design,
+design→code, and code→machine-code become the **same operation at
+different altitudes**. Verified compilers (CompCert, CakeML) do the
+bottom half this way; the goal here is general-purpose software, top to
+bottom. See [TRANSFER.md](docs/archive/TRANSFER.md) for the full premise — including
+the economic inversion (code is cheap; *coherent, proven requirements*
+are scarce) that makes this timely now.
+
+The substrate that makes each link *checkable* is a tiny trusted Rust
+kernel loading a self-hosting proof checker written in a deliberately
+narrow object language ("narrow"); the checker reasons equationally
+about pure first-order programs in the same narrow form (same data
+type, same evaluator, same reduction rules). The v1 pilot validated the
+architecture end to end (naive `rev` ⊑ accumulator-passing `fast` ⊑
+in-place memory reverse ⊑ wasm) at toy scale; v2 rebuilds the substrate
+with the lessons applied — see TRANSFER.md for the changes from v1.
 
 The product asymmetry, restated:
 - **Generation is cheap and untrusted.** An LLM (or, later, an SMT
-  solver) proposes proofs.
+  solver) proposes the refinements and their proofs.
 - **Checking is small and trusted.** A few hundred lines of audited
   Rust evaluator running a small kernel written in narrow.
 
@@ -61,14 +78,15 @@ cargo test --release
 ## Repository layout
 
 ```
-TRANSFER.md            ; v1→v2 handoff: premise, lessons, mandate. Read FIRST.
-
 docs/
   LANGUAGE.md          ; narrow object language reference (syntax, semantics)
   BOUNDARIES.md        ; modeling external systems (extern + axiom, modellable
                        ;   externs, audit ledger pattern)
   REVISIT.md           ; design-decision ledger — every choice + when to
                        ;   revisit. The "why" lives here.
+  archive/
+    TRANSFER.md        ; v1→v2 handoff (archived): premise, lessons, mandate.
+                       ;   Bootstrapped v2 from the v1 pilot; kept for rationale.
 
 kernel/                ; the trusted kernel, written in narrow (1,823 NCNB)
   stdlib.sexp          ;   List / Option / Pair / Bool
