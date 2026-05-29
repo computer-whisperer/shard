@@ -50,11 +50,9 @@
 (type NumRes (NumR Int (List Int)))   ; a parsed number value + the rest
 (type ExpRes (ExpR Exp (List Int)))   ; a parsed expression  + the rest
 
-;; whitespace: space / tab / newline.
-(fn is_ws ((c Int)) Bool
-  (if (int_eq c 32) True
-    (if (int_eq c 9) True
-      (if (int_eq c 10) True False))))
+;; `is_ws` (whitespace = space/tab/newline) is shared vocabulary, defined
+;; in calc.sexp alongside is_digit — the lexer and this spec agree on
+;; exactly which bytes are skippable separators.
 
 ;; drop a leading run of whitespace (structural on the tail — total).
 (fn skip_ws ((cs (List Int))) (List Int)

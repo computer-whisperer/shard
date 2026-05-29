@@ -13,7 +13,8 @@
 (type Token
   (TNum Int)     ; a literal number, already folded from its digits
   (TPlus)        ; '+'
-  (TMinus))      ; '-'
+  (TMinus)       ; '-'
+  (TBad))        ; a lexically illegal byte — poisons the stream so parse rejects
 
 ;; '0'..'9' are codepoints 48..57; `is_digit` is "48 <= c AND c <= 57".
 (fn is_digit ((c Int)) Bool
@@ -21,6 +22,14 @@
 
 (fn digit_val ((c Int)) Int
   (- c 48))
+
+;; Whitespace: space (32), tab (9), newline (10). Shared vocabulary with
+;; the spec (calc_spec.sexp) — the lexer skips exactly these between
+;; tokens; every OTHER non-digit/non-operator byte is illegal.
+(fn is_ws ((c Int)) Bool
+  (if (int_eq c 32) True
+    (if (int_eq c 9) True
+      (if (int_eq c 10) True False))))
 
 ;; Fold one digit codepoint into the number being built (None = start fresh).
 (fn acc_digit ((acc (Option Int)) (c Int)) Int
@@ -36,10 +45,11 @@
 
 ;; A single structural pass over the input, threading `acc` = the number
 ;; currently being built (None when not inside a number). Digits extend
-;; acc; '+' (43) / '-' (45) flush acc then emit the operator; any other
-;; char (e.g. space, 32) flushes and is skipped. Recursing only on the
-;; tail `rest` keeps this structurally recursive — hence total, and
-;; amenable to `Induct` for the universal proofs to come.
+;; acc; '+' (43) / '-' (45) flush acc then emit the operator; whitespace
+;; flushes and is skipped; any OTHER byte flushes and emits a TBad (which
+;; makes the parser reject — the lexer no longer silently drops junk).
+;; Recursing only on the tail `rest` keeps this structurally recursive —
+;; hence total, and amenable to `Induct` for the universal proofs.
 (fn lex_go ((cs (List Int)) (acc (Option Int))) (List Token)
   (match cs
     (Nil  (flush acc Nil))
@@ -51,7 +61,9 @@
                 (Cons TPlus  (lex_go rest None))
                 (if (int_eq c 45)
                     (Cons TMinus (lex_go rest None))
-                    (lex_go rest None))))))))
+                    (if (is_ws c)
+                        (lex_go rest None)                 ; whitespace separator: skip
+                        (Cons TBad (lex_go rest None)))))))))) ; illegal byte: poison
 
 (fn lex ((cs (List Int))) (List Token)
   (lex_go cs None))

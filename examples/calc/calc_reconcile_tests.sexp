@@ -1,0 +1,67 @@
+;;; Reconciliation validation: after teaching the lexer to reject illegal
+;;; bytes (TBad), the implementation `run` should AGREE with the reference
+;;; `spec_run` on every input. Each claim proves  run cs = spec_run cs
+;;; directly by Compute Both on a concrete cs (no expected value hardcoded
+;;; — Refl closes iff the two sides compute to the same Option Int). This
+;;; is the per-example evidence; the universal  ∀cs. run cs = spec_run cs
+;;; is the next (proof) milestone.
+
+(import "calc_spec.sexp")   ; brings in calc.sexp (run, lex) + spec_run
+
+;; --- accepted inputs (both sides Some v) ---
+;; "1+2"
+(claim r_1plus2 (Goal (list) (list)
+    (Equation (Call 'run (list (Ctor 'Cons (list (IntLit 49) (Ctor 'Cons (list (IntLit 43) (Ctor 'Cons (list (IntLit 50) (Ctor 'Nil (list))))))))))
+              (Call 'spec_run (list (Ctor 'Cons (list (IntLit 49) (Ctor 'Cons (list (IntLit 43) (Ctor 'Cons (list (IntLit 50) (Ctor 'Nil (list)))))))))) ))
+  (Steps (list (Compute Both)) Refl))
+;; "1 + 2" (whitespace)
+(claim r_ws (Goal (list) (list)
+    (Equation (Call 'run (list (Ctor 'Cons (list (IntLit 49) (Ctor 'Cons (list (IntLit 32) (Ctor 'Cons (list (IntLit 43) (Ctor 'Cons (list (IntLit 32) (Ctor 'Cons (list (IntLit 50) (Ctor 'Nil (list))))))))))))))
+              (Call 'spec_run (list (Ctor 'Cons (list (IntLit 49) (Ctor 'Cons (list (IntLit 32) (Ctor 'Cons (list (IntLit 43) (Ctor 'Cons (list (IntLit 32) (Ctor 'Cons (list (IntLit 50) (Ctor 'Nil (list)))))))))))))) ))
+  (Steps (list (Compute Both)) Refl))
+;; "12-3"
+(claim r_sub (Goal (list) (list)
+    (Equation (Call 'run (list (Ctor 'Cons (list (IntLit 49) (Ctor 'Cons (list (IntLit 50) (Ctor 'Cons (list (IntLit 45) (Ctor 'Cons (list (IntLit 51) (Ctor 'Nil (list))))))))))))
+              (Call 'spec_run (list (Ctor 'Cons (list (IntLit 49) (Ctor 'Cons (list (IntLit 50) (Ctor 'Cons (list (IntLit 45) (Ctor 'Cons (list (IntLit 51) (Ctor 'Nil (list)))))))))))) ))
+  (Steps (list (Compute Both)) Refl))
+;; "1+2-3" (chain)
+(claim r_chain (Goal (list) (list)
+    (Equation (Call 'run (list (Ctor 'Cons (list (IntLit 49) (Ctor 'Cons (list (IntLit 43) (Ctor 'Cons (list (IntLit 50) (Ctor 'Cons (list (IntLit 45) (Ctor 'Cons (list (IntLit 51) (Ctor 'Nil (list))))))))))))))
+              (Call 'spec_run (list (Ctor 'Cons (list (IntLit 49) (Ctor 'Cons (list (IntLit 43) (Ctor 'Cons (list (IntLit 50) (Ctor 'Cons (list (IntLit 45) (Ctor 'Cons (list (IntLit 51) (Ctor 'Nil (list)))))))))))))) ))
+  (Steps (list (Compute Both)) Refl))
+
+;; --- rejected inputs (both sides None) ---
+;; "1@+2" — THE formerly-divergent case: old run = Some 3, spec = None. Now both None.
+(claim r_garbage (Goal (list) (list)
+    (Equation (Call 'run (list (Ctor 'Cons (list (IntLit 49) (Ctor 'Cons (list (IntLit 64) (Ctor 'Cons (list (IntLit 43) (Ctor 'Cons (list (IntLit 50) (Ctor 'Nil (list))))))))))))
+              (Call 'spec_run (list (Ctor 'Cons (list (IntLit 49) (Ctor 'Cons (list (IntLit 64) (Ctor 'Cons (list (IntLit 43) (Ctor 'Cons (list (IntLit 50) (Ctor 'Nil (list)))))))))))) ))
+  (Steps (list (Compute Both)) Refl))
+;; "1@2"
+(claim r_garbage2 (Goal (list) (list)
+    (Equation (Call 'run (list (Ctor 'Cons (list (IntLit 49) (Ctor 'Cons (list (IntLit 64) (Ctor 'Cons (list (IntLit 50) (Ctor 'Nil (list))))))))))
+              (Call 'spec_run (list (Ctor 'Cons (list (IntLit 49) (Ctor 'Cons (list (IntLit 64) (Ctor 'Cons (list (IntLit 50) (Ctor 'Nil (list)))))))))) ))
+  (Steps (list (Compute Both)) Refl))
+;; "+1"
+(claim r_leadop (Goal (list) (list)
+    (Equation (Call 'run (list (Ctor 'Cons (list (IntLit 43) (Ctor 'Cons (list (IntLit 49) (Ctor 'Nil (list))))))))
+              (Call 'spec_run (list (Ctor 'Cons (list (IntLit 43) (Ctor 'Cons (list (IntLit 49) (Ctor 'Nil (list)))))))) ))
+  (Steps (list (Compute Both)) Refl))
+;; ""
+(claim r_empty (Goal (list) (list)
+    (Equation (Call 'run (list (Ctor 'Nil (list)))) (Call 'spec_run (list (Ctor 'Nil (list)))))
+  ) (Steps (list (Compute Both)) Refl))
+;; "1+"
+(claim r_trailop (Goal (list) (list)
+    (Equation (Call 'run (list (Ctor 'Cons (list (IntLit 49) (Ctor 'Cons (list (IntLit 43) (Ctor 'Nil (list))))))))
+              (Call 'spec_run (list (Ctor 'Cons (list (IntLit 49) (Ctor 'Cons (list (IntLit 43) (Ctor 'Nil (list)))))))) ))
+  (Steps (list (Compute Both)) Refl))
+;; "1 2" (two numbers, no op)
+(claim r_twonum (Goal (list) (list)
+    (Equation (Call 'run (list (Ctor 'Cons (list (IntLit 49) (Ctor 'Cons (list (IntLit 32) (Ctor 'Cons (list (IntLit 50) (Ctor 'Nil (list))))))))))
+              (Call 'spec_run (list (Ctor 'Cons (list (IntLit 49) (Ctor 'Cons (list (IntLit 32) (Ctor 'Cons (list (IntLit 50) (Ctor 'Nil (list)))))))))) ))
+  (Steps (list (Compute Both)) Refl))
+;; tab/newline whitespace "1\t-\n2" = [49 9 45 10 50]
+(claim r_tabnl (Goal (list) (list)
+    (Equation (Call 'run (list (Ctor 'Cons (list (IntLit 49) (Ctor 'Cons (list (IntLit 9) (Ctor 'Cons (list (IntLit 45) (Ctor 'Cons (list (IntLit 10) (Ctor 'Cons (list (IntLit 50) (Ctor 'Nil (list))))))))))))))
+              (Call 'spec_run (list (Ctor 'Cons (list (IntLit 49) (Ctor 'Cons (list (IntLit 9) (Ctor 'Cons (list (IntLit 45) (Ctor 'Cons (list (IntLit 10) (Ctor 'Cons (list (IntLit 50) (Ctor 'Nil (list)))))))))))))) ))
+  (Steps (list (Compute Both)) Refl))
