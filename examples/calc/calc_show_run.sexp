@@ -152,3 +152,150 @@
                   (RewriteWith (Lemma 'mod_10_hi) Lr Lhs (list) (list (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl)) Refl))
                 Refl))
           (Steps (list (Simp Lhs) (Rewrite (Lemma 'valI_go_snoc) Lr Rhs True (list))) Refl))))))))))))
+
+(claim add_zero
+  (Goal (list (Param 'a (ty Int))) (list)
+    (Equation (Call '+ (list (IntLit 0) (FVar 'a))) (FVar 'a)))
+  (ByTheory 'lia (Cert 'lia (list))))
+
+;; First digit of a number (acc = None): acc_digit None c = digit_val c.
+(claim lex_go_digit_none
+  (Goal (list (Param 'd (ty Int)) (Param 'cs (ty List Int)))
+    (list (Equation (Call 'is_digit (list (Call '+ (list (IntLit 48) (FVar 'd))))) (Ctor 'True (list))))
+    (Equation
+      (Call 'lex_go (list (Ctor 'Cons (list (Call '+ (list (IntLit 48) (FVar 'd))) (FVar 'cs))) (Ctor 'None (list))))
+      (Call 'lex_go (list (FVar 'cs) (Ctor 'Some (list (FVar 'd)))))))
+  (Steps
+    (list (Unfold 'lex_go Lhs) (Reduce Lhs)
+          (Rewrite (Premise 0) Lr Lhs True (list))
+          (Reduce Lhs)
+          (Unfold 'acc_digit Lhs) (Reduce Lhs)
+          (Rewrite (Lemma 'digit_val_id) Lr Lhs True (list)))
+    Refl))
+
+;; lex_show_run from a fresh accumulator (None), as `run` invokes the lexer.
+(claim lex_show_run_none
+  (Goal (list (Param 'n (ty Int)) (Param 'rest (ty List Int)))
+    (list (Equation (Call 'le (list (IntLit 0) (FVar 'n))) (Ctor 'True (list))))
+    (Equation
+      (Call 'lex_go (list (Call 'append (list (Call 'codes (list (Call 'show (list (FVar 'n))))) (FVar 'rest))) (Ctor 'None (list))))
+      (Call 'lex_go (list (FVar 'rest) (Ctor 'Some (list (Call 'valI (list (Call 'show (list (FVar 'n)))))))))))
+  (WfInduct (FVar 'n)
+    (CaseOn (Call 'lt (list (FVar 'n) (IntLit 10))) 'Bool
+      (list
+        (Case 'True
+          (RewriteWith (Lemma 'show_lt) Lr Lhs (list)
+            (list (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+          (RewriteWith (Lemma 'show_lt) Lr Rhs (list)
+            (list (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+          (Steps
+            (list (Rewrite (Lemma 'codes_cons) Lr Lhs True (list))
+                  (Rewrite (Lemma 'append_int_cons) Lr Lhs True (list))
+                  (Unfold 'valI Rhs)
+                  (Simp Rhs)
+                  (Rewrite (Lemma 'add_zero) Lr Rhs True (list)))
+          (RewriteWith (Lemma 'lex_go_digit_none) Lr Lhs (list)
+            (list
+              (RewriteWith (Lemma 'is_digit_of_digit) Lr Lhs (list)
+                (list
+                  (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl)
+                  (RewriteWith (Lemma 'lt10_le9) Lr Lhs (list)
+                    (list (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl)) Refl))
+                Refl))
+          (Steps (list (Simp Lhs)) Refl))))))
+        (Case 'False
+          (RewriteWith (Lemma 'show_ge) Lr Lhs (list)
+            (list (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+          (RewriteWith (Lemma 'show_ge) Lr Rhs (list)
+            (list (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+          (Steps
+            (list (Rewrite (Lemma 'codes_append) Lr Lhs True (list))
+                  (Rewrite (Lemma 'append_assoc) Lr Lhs True (list)))
+          (RewriteWith (Hyp 1) Lr Lhs (list)
+            (list
+              (RewriteWith (Lemma 'div_nonneg) Lr Lhs (list) (list (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl)) Refl)
+              (RewriteWith (Lemma 'div_nonneg) Lr Lhs (list) (list (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl)) Refl)
+              (RewriteWith (Lemma 'div_lt) Lr Lhs (list)
+                (list (RewriteWith (Lemma 'lt10f_pos) Lr Lhs (list)
+                        (list (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl)) Refl))
+                Refl))
+          (Steps
+            (list (Rewrite (Lemma 'codes_cons) Lr Lhs True (list))
+                  (Rewrite (Lemma 'append_int_cons) Lr Lhs True (list)))
+          (RewriteWith (Lemma 'lex_go_digit) Lr Lhs (list)
+            (list
+              (RewriteWith (Lemma 'is_digit_of_digit) Lr Lhs (list)
+                (list
+                  (RewriteWith (Lemma 'mod_10_lo) Lr Lhs (list) (list (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl)) Refl)
+                  (RewriteWith (Lemma 'mod_10_hi) Lr Lhs (list) (list (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl)) Refl))
+                Refl))
+          (Steps (list (Simp Lhs) (Rewrite (Lemma 'valI_snoc) Lr Rhs True (list))) Refl))))))))))))
+
+;; The '+' separator (representation-agnostic): emit the accumulated number,
+;; then TPlus, and restart at None.
+(claim lex_plus
+  (Goal (list (Param 'v (ty Int)) (Param 'cs (ty List Int))) (list)
+    (Equation
+      (Call 'lex_go (list (Ctor 'Cons (list (IntLit 43) (FVar 'cs))) (Ctor 'Some (list (FVar 'v)))))
+      (Ctor 'Cons (list (Ctor 'TNum (list (FVar 'v)))
+        (Ctor 'Cons (list (Ctor 'TPlus (list)) (Call 'lex_go (list (FVar 'cs) (Ctor 'None (list))))))))))
+  (Steps (list (Unfold 'lex_go Lhs) (Reduce Lhs) (Unfold 'is_digit Lhs) (Simp Lhs)) Refl))
+
+;; End of input: flush the accumulated number.
+(claim lex_nil
+  (Goal (list (Param 'v (ty Int))) (list)
+    (Equation
+      (Call 'lex_go (list (Ctor 'Nil (list)) (Ctor 'Some (list (FVar 'v)))))
+      (Ctor 'Cons (list (Ctor 'TNum (list (FVar 'v))) (Ctor 'Nil (list))))))
+  (Steps (list (Simp Lhs)) Refl))
+
+;; FULL LEXER for "show n + show m":
+;;   lex (codes(show n) ++ 43 :: codes(show m))
+;;     = [ TNum (valI (show n)) , TPlus , TNum (valI (show m)) ].
+(claim lex_two
+  (Goal (list (Param 'n (ty Int)) (Param 'm (ty Int)))
+    (list (Equation (Call 'le (list (IntLit 0) (FVar 'n))) (Ctor 'True (list)))
+          (Equation (Call 'le (list (IntLit 0) (FVar 'm))) (Ctor 'True (list))))
+    (Equation
+      (Call 'lex (list (Call 'append (list
+        (Call 'codes (list (Call 'show (list (FVar 'n)))))
+        (Ctor 'Cons (list (IntLit 43) (Call 'codes (list (Call 'show (list (FVar 'm)))))))))))
+      (Ctor 'Cons (list (Ctor 'TNum (list (Call 'valI (list (Call 'show (list (FVar 'n)))))))
+        (Ctor 'Cons (list (Ctor 'TPlus (list))
+          (Ctor 'Cons (list (Ctor 'TNum (list (Call 'valI (list (Call 'show (list (FVar 'm)))))))
+            (Ctor 'Nil (list))))))))))
+  (Steps (list (Unfold 'lex Lhs))
+  (RewriteWith (Lemma 'lex_show_run_none) Lr Lhs (list)
+    (list (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl))
+  (Steps
+    (list (Rewrite (Lemma 'lex_plus) Lr Lhs True (list))
+          (Rewrite (Lemma 'append_nil_right) Rl Lhs False
+            (list (Inst 'xs (Call 'codes (list (Call 'show (list (FVar 'm)))))))))
+  (RewriteWith (Lemma 'lex_show_run_none) Lr Lhs (list)
+    (list (Steps (list (Rewrite (Premise 1) Lr Lhs True (list))) Refl))
+  (Steps (list (Rewrite (Lemma 'lex_nil) Lr Lhs True (list))) Refl))))))
+
+;; THE HEADLINE — arbitrary-integer calculator correctness, end to end:
+;;   for all n, m >= 0,  run (codes(show n) ++ "+" ++ codes(show m)) = Some (n + m),
+;; through the REAL show -> lex -> parse -> eval pipeline. Unfold run,
+;; rewrite lex to its three tokens (lex_two), Simp to drive parse+eval to
+;; Some (valI(show n) + valI(show m)), then fold valI(show .)=. (show_correct).
+(claim run_show_adds
+  (Goal (list (Param 'n (ty Int)) (Param 'm (ty Int)))
+    (list (Equation (Call 'le (list (IntLit 0) (FVar 'n))) (Ctor 'True (list)))
+          (Equation (Call 'le (list (IntLit 0) (FVar 'm))) (Ctor 'True (list))))
+    (Equation
+      (Call 'run (list (Call 'append (list
+        (Call 'codes (list (Call 'show (list (FVar 'n)))))
+        (Ctor 'Cons (list (IntLit 43) (Call 'codes (list (Call 'show (list (FVar 'm)))))))))))
+      (Ctor 'Some (list (Call '+ (list (FVar 'n) (FVar 'm)))))))
+  (Steps (list (Unfold 'run Lhs))
+  (RewriteWith (Lemma 'lex_two) Lr Lhs (list)     ; lex_two is conditional (0<=n, 0<=m)
+    (list (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl)
+          (Steps (list (Rewrite (Premise 1) Lr Lhs True (list))) Refl))
+  (Steps (list (Simp Lhs))                        ; parse+eval -> Some (valI(show n) + valI(show m))
+  (RewriteWith (Lemma 'show_correct) Lr Lhs (list)
+    (list (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl))
+  (RewriteWith (Lemma 'show_correct) Lr Lhs (list)
+    (list (Steps (list (Rewrite (Premise 1) Lr Lhs True (list))) Refl))
+  Refl))))))
