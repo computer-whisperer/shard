@@ -192,6 +192,56 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
+    // Stage-0 slice 3: AST + parser + evaluator (the naive impl).
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn calc_eval_ast() {
+        // (1 + 2) evaluates to 3; nesting works.
+        assert_eq!(
+            calc_eval("(eval (Add (Num 1) (Num 2)))"),
+            ast::Expr::IntLit(3)
+        );
+        assert_eq!(
+            calc_eval("(eval (Sub (Add (Num 10) (Num 3)) (Num 2)))"),
+            ast::Expr::IntLit(11) // 10+3-2
+        );
+    }
+
+    #[test]
+    fn calc_parse_builds_left_assoc_tree() {
+        let num = |n| nctor("Num", vec![ast::Expr::IntLit(n)]);
+        let some = |e| nctor("Some", vec![e]);
+        // a bare number
+        assert_eq!(calc_eval("(parse (lex \"5\"))"), some(num(5)));
+        // "10-3-2" parses left-associatively as (10-3)-2
+        let expect = nctor(
+            "Sub",
+            vec![nctor("Sub", vec![num(10), num(3)]), num(2)],
+        );
+        assert_eq!(calc_eval("(parse (lex \"10-3-2\"))"), some(expect));
+    }
+
+    #[test]
+    fn calc_run_end_to_end() {
+        let some = |n| nctor("Some", vec![ast::Expr::IntLit(n)]);
+        let none = || nctor("None", Vec::new());
+        // well-formed
+        assert_eq!(calc_eval("(run \"1+2\")"), some(3));
+        assert_eq!(calc_eval("(run \"12+34\")"), some(46));
+        assert_eq!(calc_eval("(run \"9-4\")"), some(5));
+        assert_eq!(calc_eval("(run \"10-3-2\")"), some(5)); // left-assoc
+        assert_eq!(calc_eval("(run \"1+2-3+4\")"), some(4));
+        assert_eq!(calc_eval("(run \" 7 \")"), some(7));
+        assert_eq!(calc_eval("(run \"2-5\")"), some(-3)); // negatives
+        // malformed → None (total: no panic, an explicit failure value)
+        assert_eq!(calc_eval("(run \"1+\")"), none()); // trailing op
+        assert_eq!(calc_eval("(run \"+1\")"), none()); // leading op
+        assert_eq!(calc_eval("(run \"\")"), none()); // empty
+        assert_eq!(calc_eval("(run \"1 2\")"), none()); // two nums, no op
+    }
+
+    // ------------------------------------------------------------------
     // Slice 1: arithmetic MVP — user fn + primitive.
     // ------------------------------------------------------------------
 
