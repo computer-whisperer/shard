@@ -9,6 +9,14 @@
 //!     Theory as `(Proven NAME GOAL)`, available to subsequent
 //!     claims via `(Lemma NAME)` citations.
 //!
+//!   (axiom NAME GOAL)
+//!     Admit GOAL into the Theory as `(Axiom NAME GOAL)` WITHOUT a
+//!     proof — citable as `(Lemma NAME)` exactly like a proven claim.
+//!     A trusted audit boundary (docs/BOUNDARIES.md): use only for
+//!     facts about the runtime primitives that cannot be derived
+//!     in-kernel (e.g. the Euclidean identity of `div`/`mod`).
+//!     Reported as `AXIOM <name>` and tallied separately.
+//!
 //!   (use-module "path/to/file.sexp")
 //!     Load the named .sexp file as a user-defined module (types,
 //!     fns, externs) and merge it into the running user module. The
@@ -77,6 +85,7 @@ fn main() -> ExitCode {
         theory: ctor("TheoryEmpty", vec![]),
         passed: 0,
         failed: 0,
+        axioms: 0,
         loaded: std::collections::HashSet::new(),
         in_progress: Vec::new(),
     };
@@ -88,7 +97,12 @@ fn main() -> ExitCode {
     }
 
     println!();
-    println!("{} passed, {} failed", ctx.passed, ctx.failed);
+    if ctx.axioms > 0 {
+        println!("{} passed, {} failed, {} axiom(s) admitted without proof",
+            ctx.passed, ctx.failed, ctx.axioms);
+    } else {
+        println!("{} passed, {} failed", ctx.passed, ctx.failed);
+    }
     if ctx.failed > 0 { ExitCode::from(1) } else { ExitCode::SUCCESS }
 }
 
@@ -116,6 +130,7 @@ struct Ctx {
     theory: ast::Expr,
     passed: usize,
     failed: usize,
+    axioms: usize,
     loaded: std::collections::HashSet<PathBuf>,
     in_progress: Vec<PathBuf>,
 }
@@ -198,6 +213,26 @@ fn process_file(path: &PathBuf, ctx: &mut Ctx, kernel: &ast::Module) -> Result<(
                 ctx.theory = ctor("TheoryCons", vec![entry, ctx.theory.clone()]);
                 ctx.passed += 1;
             }
+            Outcome::Axiom { name, goal } => {
+                // Admitted without proof — added to the theory as an
+                // `(Axiom NAME GOAL)` entry, citable exactly like a proven
+                // lemma. Same goal-closing as a claim so citations resolve.
+                println!("AXIOM {}  (admitted without proof)", name);
+                let close_call = ast::Expr::Call(
+                    "close_goal_for_storage".into(),
+                    vec![goal],
+                );
+                let closed_goal = match eval::eval(kernel, &close_call) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        eprintln!("error closing axiom goal for `{}`: {:?}", name, e);
+                        return Err(ExitCode::from(2));
+                    }
+                };
+                let entry = ctor("Axiom", vec![ast::Expr::SymLit(name), closed_goal]);
+                ctx.theory = ctor("TheoryCons", vec![entry, ctx.theory.clone()]);
+                ctx.axioms += 1;
+            }
             Outcome::Fail { name, detail } => {
                 println!("FAIL  {}", name);
                 if !detail.is_empty() {
@@ -237,6 +272,11 @@ fn import_path(form: &Value) -> Option<String> {
 
 enum Outcome {
     Pass { name: String, goal: ast::Expr },
+    /// An `(axiom NAME GOAL)` — admitted into the theory WITHOUT a proof.
+    /// This is a trusted audit boundary (see docs/BOUNDARIES.md): the
+    /// GOAL becomes a citable `(Lemma NAME)` on the author's word alone.
+    /// Reported loudly and counted separately so axioms are never silent.
+    Axiom { name: String, goal: ast::Expr },
     Fail { name: String, detail: String },
     /// A non-claim form handled by an earlier pass (import / use-module
     /// in pass A; type / fn / extern in pass B). Ignored in pass C.
@@ -268,6 +308,7 @@ fn process_form(
     };
     match head {
         "claim" => process_claim(&items, kernel, user_module, theory, path),
+        "axiom" => process_axiom(&items, kernel, path),
         // Handled in earlier passes: imports/aliases (A), code defs (B).
         "import" | "use-module" | "type" | "fn" | "extern" => Outcome::Skip,
         "module" => {
@@ -281,10 +322,52 @@ fn process_form(
         }
         other => Outcome::Fatal(format!(
             "{}: unknown top-level form `{}` \
-             (expected `claim`, `import`, `type`, `fn`, `extern`, or `use-module`)",
+             (expected `claim`, `axiom`, `import`, `type`, `fn`, `extern`, or `use-module`)",
             path.display(), other,
         )),
     }
+}
+
+/// `(axiom NAME GOAL)` — admit GOAL into the theory WITHOUT a proof. The
+/// GOAL is parsed/evaluated exactly like a claim's (so it must be a valid
+/// `(Goal …)` value and resolves identically under `(Lemma NAME)`), but no
+/// `check_sequent` runs. This is the project's trusted audit boundary for
+/// facts that hold of the runtime primitives but can't be derived in-kernel
+/// (e.g. the Euclidean identity of `div`/`mod`). Kept deliberately small and
+/// loud: the only thing that distinguishes it from `(claim …)` is the absent
+/// proof and the `Axiom` (vs `Proven`) theory tag.
+fn process_axiom(
+    items: &[&Value],
+    kernel: &ast::Module,
+    path: &PathBuf,
+) -> Outcome {
+    if items.len() != 3 {
+        return Outcome::Fatal(format!(
+            "{}: axiom expects (axiom NAME GOAL), got {} arg(s) after `axiom`",
+            path.display(), items.len() - 1,
+        ));
+    }
+    let name = match items[1].as_symbol() {
+        Some(s) => s.to_string(),
+        None => return Outcome::Fatal(format!(
+            "{}: axiom NAME must be a symbol", path.display(),
+        )),
+    };
+    let goal_val = match build_value(items[2], kernel) {
+        Ok(v) => v,
+        Err(e) => return Outcome::Fatal(format!(
+            "{}: axiom `{}` goal: {}", path.display(), name, e,
+        )),
+    };
+    // Sanity: it must actually evaluate to a (Goal params premises eq).
+    match &goal_val {
+        ast::Expr::Ctor(n, args) if n == "Goal" && args.len() == 3 => {}
+        other => return Outcome::Fatal(format!(
+            "{}: axiom `{}` did not evaluate to a Goal value: {:?}",
+            path.display(), name, other,
+        )),
+    }
+    Outcome::Axiom { name, goal: goal_val }
 }
 
 fn process_claim(

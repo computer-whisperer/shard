@@ -145,7 +145,7 @@ pub fn module_from_str_with_base(
             "type" => {}
             "fn" => module.fns.push(load_fn_def(&parts[1..], &ctors)?),
             "extern" => module.externs.push(load_extern_def(&parts[1..])?),
-            "claim" | "import" | "use-module" => {}
+            "claim" | "axiom" | "import" | "use-module" => {}
             other => return Err(LoadError::UnknownForm(other.into())),
         }
     }
