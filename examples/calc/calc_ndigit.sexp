@@ -1,0 +1,304 @@
+;;; Stage-0 calculator demo — the n-DIGIT theorem (independent lengths).
+;;;
+;;; The single-digit headline (run_xy_adds, in calc_proof.sexp) proved
+;;;   ∀ x y in [0,9].  run "x+y" = Some (x+y)
+;;; through the real lexer. This file proves the *general* version:
+;;;
+;;;   ∀ (ds es : non-empty digit sequences).
+;;;     run (codes ds ++ "+" ++ codes es) = Some (value ds + value es)
+;;;
+;;; with ds and es of INDEPENDENT, ARBITRARY length. This is the first
+;;; genuinely INDUCTIVE theorem about the calculator: the lexer's
+;;; accumulator (Horner) is driven by structural induction over the
+;;; digit list — no measure recursion needed (that is only required for
+;;; the integer->string `show` direction, a separate future milestone).
+;;;
+;;; Representation choice: a "digit" is a value of the Digit type (D0..D9),
+;;; so "this character is a digit" is structural (no range predicate). A
+;;; digit's codepoint is (code d) = 48 + (dval d); a digit *sequence* is a
+;;; (List Digit), mapped to input codepoints by `codes`. This keeps the
+;;; precondition ("the number-parts are digit characters") honest and at
+;;; the type level. The Int + all_digits-predicate variant is a follow-up
+;;; (it additionally needs boolean-premise inversion lemmas).
+
+(import "calc_proof.sexp")    ; brings in calc.sexp (lex/parse/eval/run, Token, Exp)
+(import "../../std/list.sexp") ; append (+ append_nil_right, for the trailing number)
+
+;;; --------------------------------------------------------------------
+;;; Spec vocabulary: digits, codepoints, and the numeric value.
+;;; --------------------------------------------------------------------
+
+(type Digit (D0)(D1)(D2)(D3)(D4)(D5)(D6)(D7)(D8)(D9))
+
+;; A digit's numeric value, 0..9.
+(fn dval ((d Digit)) Int
+  (match d (D0 0)(D1 1)(D2 2)(D3 3)(D4 4)(D5 5)(D6 6)(D7 7)(D8 8)(D9 9)))
+
+;; A digit's ASCII codepoint ('0' = 48). Plain body so digit_val_code is lia.
+(fn code ((d Digit)) Int (+ 48 (dval d)))
+
+;; Map a digit sequence to its codepoint string.
+(fn codes ((ds (List Digit))) (List Int)
+  (match ds
+    (Nil Nil)
+    ((Cons d rest) (Cons (code d) (codes rest)))))
+
+;; Horner accumulator, MSD-first: the numeric value of `ds` given the
+;; partial value `acc` already accumulated to its left. Mirrors exactly
+;; what lex_go does to its `acc` over a run of digits.
+(fn value_go ((ds (List Digit)) (acc Int)) Int
+  (match ds
+    (Nil acc)
+    ((Cons d rest) (value_go rest (+ (* acc 10) (dval d))))))
+
+;; The numeric value of a non-empty digit sequence. The first digit seeds
+;; the accumulator directly (matching the lexer's None -> Some transition),
+;; so value (Cons d0 tail) = value_go tail (dval d0) with no spurious *10.
+(fn value ((ds (List Digit))) Int
+  (match ds
+    (Nil 0)
+    ((Cons d rest) (value_go rest (dval d)))))
+
+;;; --------------------------------------------------------------------
+;;; Structural rewrite lemmas (controlled one-step unfolding).
+;;;
+;;; In the inductive step we must NOT Simp: Simp would delta-unfold `code`
+;;; and destroy the `(code d)` pattern that lex_go_digit / digit_val_code
+;;; key on. So we expose one constructor at a time via these head-position
+;;; rewrite rules (each: Unfold + Reduce at the head, then Refl).
+;;; --------------------------------------------------------------------
+
+(claim codes_cons
+  (Goal
+    (list (Param 'd (ty Digit)) (Param 'ds (ty List Digit)))
+    (list)
+    (Equation
+      (Call 'codes (list (Ctor 'Cons (list (FVar 'd) (FVar 'ds)))))
+      (Ctor 'Cons (list (Call 'code (list (FVar 'd))) (Call 'codes (list (FVar 'ds)))))))
+  (Steps (list (Unfold 'codes Lhs) (Reduce Lhs)) Refl))
+
+(claim append_int_cons
+  (Goal
+    (list (Param 'h (ty Int)) (Param 't (ty List Int)) (Param 'ys (ty List Int)))
+    (list)
+    (Equation
+      (Call 'append (list (Ctor 'Cons (list (FVar 'h) (FVar 't))) (FVar 'ys)))
+      (Ctor 'Cons (list (FVar 'h) (Call 'append (list (FVar 't) (FVar 'ys)))))))
+  (Steps (list (Simp Lhs)) Refl))
+
+(claim value_go_cons
+  (Goal
+    (list (Param 'd (ty Digit)) (Param 'ds (ty List Digit)) (Param 'acc (ty Int)))
+    (list)
+    (Equation
+      (Call 'value_go (list (Ctor 'Cons (list (FVar 'd) (FVar 'ds))) (FVar 'acc)))
+      (Call 'value_go (list (FVar 'ds) (Call '+ (list (Call '* (list (FVar 'acc) (IntLit 10))) (Call 'dval (list (FVar 'd)))))))))
+  (Steps (list (Unfold 'value_go Lhs) (Reduce Lhs)) Refl))
+
+;;; --------------------------------------------------------------------
+;;; Digit-character facts.
+;;; --------------------------------------------------------------------
+
+;; digit_val recovers a digit's value from its codepoint: lia, no case split
+;; (code d = 48 + dval d, so (48 + dval d) - 48 = dval d for any dval d).
+(claim digit_val_code
+  (Goal
+    (list (Param 'd (ty Digit)))
+    (list)
+    (Equation
+      (Call 'digit_val (list (Call 'code (list (FVar 'd)))))
+      (Call 'dval (list (FVar 'd)))))
+  (Steps (list (Unfold 'code Lhs) (Unfold 'digit_val Lhs)) (ByTheory 'lia (Cert 'lia (list)))))
+
+;; Every digit's codepoint IS a digit character: is_digit (code d) = True.
+;; CaseOn d splits into D0..D9 (each adds hyp `d = Dk` at Hyp 0); rewrite
+;; d -> Dk, then the codepoint is concrete and Simp/Unfold closes it.
+(claim is_digit_code
+  (Goal
+    (list (Param 'd (ty Digit)))
+    (list)
+    (Equation
+      (Call 'is_digit (list (Call 'code (list (FVar 'd)))))
+      (Ctor 'True (list))))
+  (CaseOn (FVar 'd) 'Digit
+    (list
+      (Case 'D0 (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list)) (Unfold 'code Lhs) (Unfold 'dval Lhs) (Simp Lhs) (Unfold 'is_digit Lhs) (Simp Lhs)) Refl))
+      (Case 'D1 (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list)) (Unfold 'code Lhs) (Unfold 'dval Lhs) (Simp Lhs) (Unfold 'is_digit Lhs) (Simp Lhs)) Refl))
+      (Case 'D2 (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list)) (Unfold 'code Lhs) (Unfold 'dval Lhs) (Simp Lhs) (Unfold 'is_digit Lhs) (Simp Lhs)) Refl))
+      (Case 'D3 (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list)) (Unfold 'code Lhs) (Unfold 'dval Lhs) (Simp Lhs) (Unfold 'is_digit Lhs) (Simp Lhs)) Refl))
+      (Case 'D4 (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list)) (Unfold 'code Lhs) (Unfold 'dval Lhs) (Simp Lhs) (Unfold 'is_digit Lhs) (Simp Lhs)) Refl))
+      (Case 'D5 (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list)) (Unfold 'code Lhs) (Unfold 'dval Lhs) (Simp Lhs) (Unfold 'is_digit Lhs) (Simp Lhs)) Refl))
+      (Case 'D6 (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list)) (Unfold 'code Lhs) (Unfold 'dval Lhs) (Simp Lhs) (Unfold 'is_digit Lhs) (Simp Lhs)) Refl))
+      (Case 'D7 (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list)) (Unfold 'code Lhs) (Unfold 'dval Lhs) (Simp Lhs) (Unfold 'is_digit Lhs) (Simp Lhs)) Refl))
+      (Case 'D8 (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list)) (Unfold 'code Lhs) (Unfold 'dval Lhs) (Simp Lhs) (Unfold 'is_digit Lhs) (Simp Lhs)) Refl))
+      (Case 'D9 (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list)) (Unfold 'code Lhs) (Unfold 'dval Lhs) (Simp Lhs) (Unfold 'is_digit Lhs) (Simp Lhs)) Refl)))))
+
+;;; --------------------------------------------------------------------
+;;; Single-digit lexer steps (the per-digit transition, proved once).
+;;; --------------------------------------------------------------------
+
+;; Consume one digit while already inside a number (acc = Some n):
+;;   lex_go (code d :: cs) (Some n) = lex_go cs (Some (n*10 + dval d)).
+(claim lex_go_digit
+  (Goal
+    (list (Param 'd (ty Digit)) (Param 'cs (ty List Int)) (Param 'n (ty Int)))
+    (list)
+    (Equation
+      (Call 'lex_go (list (Ctor 'Cons (list (Call 'code (list (FVar 'd))) (FVar 'cs))) (Ctor 'Some (list (FVar 'n)))))
+      (Call 'lex_go (list (FVar 'cs) (Ctor 'Some (list (Call '+ (list (Call '* (list (FVar 'n) (IntLit 10))) (Call 'dval (list (FVar 'd)))))))))))
+  (Steps (list (Unfold 'lex_go Lhs) (Reduce Lhs))
+    (RewriteWith (Lemma 'is_digit_code) Lr Lhs (list) (list)
+      (Steps (list (Reduce Lhs) (Unfold 'acc_digit Lhs) (Reduce Lhs)
+                   (Rewrite (Lemma 'digit_val_code) Lr Lhs True (list)))
+        Refl))))
+
+;; Consume the FIRST digit of a number (acc = None):
+;;   lex_go (code d :: cs) None = lex_go cs (Some (dval d)).
+(claim lex_go_digit0
+  (Goal
+    (list (Param 'd (ty Digit)) (Param 'cs (ty List Int)))
+    (list)
+    (Equation
+      (Call 'lex_go (list (Ctor 'Cons (list (Call 'code (list (FVar 'd))) (FVar 'cs))) (Ctor 'None (list))))
+      (Call 'lex_go (list (FVar 'cs) (Ctor 'Some (list (Call 'dval (list (FVar 'd)))))))))
+  (Steps (list (Unfold 'lex_go Lhs) (Reduce Lhs))
+    (RewriteWith (Lemma 'is_digit_code) Lr Lhs (list) (list)
+      (Steps (list (Reduce Lhs) (Unfold 'acc_digit Lhs) (Reduce Lhs)
+                   (Rewrite (Lemma 'digit_val_code) Lr Lhs True (list)))
+        Refl))))
+
+;;; --------------------------------------------------------------------
+;;; THE CRUX: the digit-run accumulation lemma, by induction on ds.
+;;;
+;;;   ∀ ds n rest.
+;;;     lex_go (codes ds ++ rest) (Some n) = lex_go rest (Some (value_go ds n))
+;;;
+;;; Lexing a run of digits (codes ds) followed by anything (rest), starting
+;;; from accumulator (Some n), folds the whole run into the accumulator via
+;;; Horner and continues at `rest`. `n` and `rest` are generalized in the IH
+;;; (rest_params), so the step instantiates the IH at the larger accumulator
+;;; n*10 + dval d — purely by pattern-matching, as in fast_acc_lemma.
+;;; --------------------------------------------------------------------
+
+(claim lex_digit_run
+  (Goal
+    (list (Param 'ds (ty List Digit)) (Param 'n (ty Int)) (Param 'rest (ty List Int)))
+    (list)
+    (Equation
+      (Call 'lex_go (list (Call 'append (list (Call 'codes (list (FVar 'ds))) (FVar 'rest))) (Ctor 'Some (list (FVar 'n)))))
+      (Call 'lex_go (list (FVar 'rest) (Ctor 'Some (list (Call 'value_go (list (FVar 'ds) (FVar 'n)))))))))
+  (Induct 'ds
+    (list
+      (Case 'Nil
+        ;; codes Nil = Nil, append Nil rest = rest, value_go Nil n = n.
+        (Steps (list (Simp Both)) Refl))
+      (Case 'Cons
+        (Steps
+          (list
+            (Rewrite (Lemma 'codes_cons)      Lr Lhs True (list))   ; codes (d::ds') = code d :: codes ds'
+            (Rewrite (Lemma 'append_int_cons) Lr Lhs True (list))   ; (code d :: codes ds') ++ rest = code d :: (codes ds' ++ rest)
+            (Rewrite (Lemma 'lex_go_digit)    Lr Lhs True (list))   ; lex one digit -> acc becomes n*10 + dval d
+            (Rewrite (Hyp 0)                  Lr Lhs True (list))   ; IH at acc := n*10 + dval d
+            (Rewrite (Lemma 'value_go_cons)   Lr Rhs True (list)))  ; value_go (d::ds') n = value_go ds' (n*10 + dval d)
+          Refl)))))
+
+;;; --------------------------------------------------------------------
+;;; Composition: full lexer correctness, then the headline theorem.
+;;; --------------------------------------------------------------------
+
+;; Peel the first digit of a value: value (d::ds) = value_go ds (dval d).
+(claim value_cons
+  (Goal
+    (list (Param 'd (ty Digit)) (Param 'ds (ty List Digit)))
+    (list)
+    (Equation
+      (Call 'value (list (Ctor 'Cons (list (FVar 'd) (FVar 'ds)))))
+      (Call 'value_go (list (FVar 'ds) (Call 'dval (list (FVar 'd)))))))
+  (Steps (list (Unfold 'value Lhs) (Reduce Lhs)) Refl))
+
+;; Step the '+' separator: with a number already accumulated (Some V) and a
+;; symbolic tail cs, lex_go emits the number then TPlus and restarts (None):
+;;   lex_go (43 :: cs) (Some V) = TNum V :: TPlus :: lex_go cs None.
+;; cs is symbolic, so Simp reduces the concrete '+' guard / flush WITHOUT
+;; cascading into `lex_go cs None` (that stays gated) — a clean rewrite rule.
+(claim lex_plus
+  (Goal
+    (list (Param 'v (ty Int)) (Param 'cs (ty List Int)))
+    (list)
+    (Equation
+      (Call 'lex_go (list (Ctor 'Cons (list (IntLit 43) (FVar 'cs))) (Ctor 'Some (list (FVar 'v)))))
+      (Ctor 'Cons (list (Ctor 'TNum (list (FVar 'v)))
+        (Ctor 'Cons (list (Ctor 'TPlus (list))
+          (Call 'lex_go (list (FVar 'cs) (Ctor 'None (list))))))))))
+  (Steps (list (Unfold 'lex_go Lhs) (Reduce Lhs) (Unfold 'is_digit Lhs) (Simp Lhs)) Refl))
+
+;; FULL LEXER CORRECTNESS for two non-empty digit sequences separated by '+':
+;;   lex (codes (d0::dtail) ++ 43 :: codes (e0::etail))
+;;     = [ TNum (value (d0::dtail)) , TPlus , TNum (value (e0::etail)) ]
+;; through the REAL lexer. Drives lex_go forward: peel d0, run dtail
+;; (lex_digit_run), step the '+', peel e0, run etail (append_nil_right to
+;; expose the trailing Nil), flush at end; then fold value on the RHS.
+(claim lex_ndigit
+  (Goal
+    (list (Param 'd0 (ty Digit)) (Param 'dtail (ty List Digit))
+          (Param 'e0 (ty Digit)) (Param 'etail (ty List Digit)))
+    (list)
+    (Equation
+      (Call 'lex (list
+        (Call 'append (list
+          (Call 'codes (list (Ctor 'Cons (list (FVar 'd0) (FVar 'dtail)))))
+          (Ctor 'Cons (list (IntLit 43)
+            (Call 'codes (list (Ctor 'Cons (list (FVar 'e0) (FVar 'etail)))))))))))
+      (Ctor 'Cons (list
+        (Ctor 'TNum (list (Call 'value (list (Ctor 'Cons (list (FVar 'd0) (FVar 'dtail)))))))
+        (Ctor 'Cons (list (Ctor 'TPlus (list))
+          (Ctor 'Cons (list
+            (Ctor 'TNum (list (Call 'value (list (Ctor 'Cons (list (FVar 'e0) (FVar 'etail)))))))
+            (Ctor 'Nil (list))))))))))
+  (Steps
+    (list
+      (Unfold 'lex Lhs)
+      ;; first number: peel d0, run dtail (rest = the "+..." remainder)
+      (Rewrite (Lemma 'codes_cons)       Lr Lhs False (list))
+      (Rewrite (Lemma 'append_int_cons)  Lr Lhs False (list))
+      (Rewrite (Lemma 'lex_go_digit0)    Lr Lhs True  (list))
+      (Rewrite (Lemma 'lex_digit_run)    Lr Lhs True  (list))
+      ;; the '+' separator: emit TNum (value ds), TPlus, restart at None
+      (Rewrite (Lemma 'lex_plus)         Lr Lhs True  (list))
+      ;; second number: peel e0, expose trailing Nil, run etail
+      (Rewrite (Lemma 'codes_cons)       Lr Lhs True  (list))
+      (Rewrite (Lemma 'lex_go_digit0)    Lr Lhs True  (list))
+      (Rewrite (Lemma 'append_nil_right) Rl Lhs False (list (Inst 'xs (Call 'codes (list (FVar 'etail))))))
+      (Rewrite (Lemma 'lex_digit_run)    Lr Lhs True  (list))
+      ;; flush at end of input (lex_go Nil (Some V2) -> TNum V2 :: Nil)
+      (Simp Lhs)
+      ;; fold value on the RHS to match (value (d0::dtail) = value_go dtail (dval d0))
+      (Rewrite (Lemma 'value_cons)       Lr Rhs True  (list)))
+    Refl))
+
+;; THE HEADLINE n-DIGIT THEOREM: for any two non-empty digit sequences of
+;; INDEPENDENT length, the calculator evaluates "ds+es" to value ds + value es,
+;; through the REAL lex -> parse -> eval pipeline. Unfold run, rewrite lex to
+;; its three-token output via lex_ndigit, Simp to drive parse+eval, then fold
+;; value on the RHS.
+(claim run_ndigit_adds
+  (Goal
+    (list (Param 'd0 (ty Digit)) (Param 'dtail (ty List Digit))
+          (Param 'e0 (ty Digit)) (Param 'etail (ty List Digit)))
+    (list)
+    (Equation
+      (Call 'run (list
+        (Call 'append (list
+          (Call 'codes (list (Ctor 'Cons (list (FVar 'd0) (FVar 'dtail)))))
+          (Ctor 'Cons (list (IntLit 43)
+            (Call 'codes (list (Ctor 'Cons (list (FVar 'e0) (FVar 'etail)))))))))))
+      (Ctor 'Some (list (Call '+ (list
+        (Call 'value (list (Ctor 'Cons (list (FVar 'd0) (FVar 'dtail)))))
+        (Call 'value (list (Ctor 'Cons (list (FVar 'e0) (FVar 'etail)))))))))))
+  (Steps
+    (list
+      (Unfold 'run Lhs)
+      (Rewrite (Lemma 'lex_ndigit) Lr Lhs True (list))
+      (Simp Lhs)
+      (Rewrite (Lemma 'value_cons) Lr Rhs True (list)))
+    Refl))
