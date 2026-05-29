@@ -121,6 +121,77 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
+    // Stage-0 slice 2: the lexer — String (List Int) → (List Token).
+    // ------------------------------------------------------------------
+
+    /// Load the calc demo atop the kernel (whose ctor names — Cons/Nil/
+    /// Some/None — the calc fn bodies reference) and evaluate `call`.
+    /// Mirrors how the `calc` binary will run `lex` on a real (List Int):
+    /// the string sugar yields raw codepoints, the evaluator runs the
+    /// actual fns. Reads the on-disk file so test and shipped demo stay
+    /// one source of truth.
+    fn calc_eval(call: &str) -> ast::Expr {
+        let kernel = load_kernel();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("examples/calc/calc.sexp");
+        let src = std::fs::read_to_string(&path).expect("read calc.sexp");
+        let m = load::module_from_str_with_base(&src, Some(&kernel))
+            .expect("calc module loads");
+        let e = load::expr_from_str(call, &m).expect("call parses");
+        eval::eval(&m, &e).expect("eval succeeds")
+    }
+
+    fn tnum(n: i64) -> ast::Expr {
+        nctor("TNum", vec![ast::Expr::IntLit(n)])
+    }
+
+    /// `(List Token)` runtime value from a Vec of Token Exprs.
+    fn tok_list(toks: Vec<ast::Expr>) -> ast::Expr {
+        let mut acc = nctor("Nil", Vec::new());
+        for t in toks.into_iter().rev() {
+            acc = nctor("Cons", vec![t, acc]);
+        }
+        acc
+    }
+
+    #[test]
+    fn lex_basic() {
+        let plus = nctor("TPlus", Vec::new());
+        let minus = nctor("TMinus", Vec::new());
+        assert_eq!(calc_eval("(lex \"7\")"), tok_list(vec![tnum(7)]));
+        assert_eq!(
+            calc_eval("(lex \"1+2\")"),
+            tok_list(vec![tnum(1), plus, tnum(2)])
+        );
+        assert_eq!(
+            calc_eval("(lex \"9-4\")"),
+            tok_list(vec![tnum(9), minus, tnum(4)])
+        );
+        assert_eq!(calc_eval("(lex \"\")"), tok_list(vec![])); // no tokens
+    }
+
+    #[test]
+    fn lex_multidigit_and_spaces() {
+        let plus = || nctor("TPlus", Vec::new());
+        let minus = nctor("TMinus", Vec::new());
+        // multi-digit numbers fold from their digit codepoints
+        assert_eq!(
+            calc_eval("(lex \"12+34\")"),
+            tok_list(vec![tnum(12), plus(), tnum(34)])
+        );
+        // leading / interior / trailing whitespace is skipped
+        assert_eq!(
+            calc_eval("(lex \" 12 + 34 \")"),
+            tok_list(vec![tnum(12), plus(), tnum(34)])
+        );
+        // a longer chain
+        assert_eq!(
+            calc_eval("(lex \"1+20-300\")"),
+            tok_list(vec![tnum(1), plus(), tnum(20), minus, tnum(300)])
+        );
+    }
+
+    // ------------------------------------------------------------------
     // Slice 1: arithmetic MVP — user fn + primitive.
     // ------------------------------------------------------------------
 
