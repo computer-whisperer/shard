@@ -1094,7 +1094,9 @@
 ;; The var's type must have a nullary ctor (the "zero") and a one-field
 ;; recursive ctor (the "succ", field type = var's type). Found generically
 ;; below, so this works for any such two-ctor type, not just the literal
-;; Nat declaration.
+;; Nat declaration. (For PARAMETRIC recursive types find_succ_ctor's
+;; type_eq compares the declared field type against the instantiated
+;; var_type, so it can over-reject — a false NEGATIVE, never unsound.)
 ;; ---------------------------------------------------------------------------
 
 ;; SOUNDNESS GUARD: two-step induction's three arms (Z, S Z, S (S k))
