@@ -406,6 +406,15 @@ fn process_claim(
         )),
     };
 
+    // Structural validation of the proof tree BEFORE check_sequent, so a
+    // malformed shape (e.g. a RewriteWith dropped into a Steps step-list)
+    // is reported with a path instead of an opaque runtime failure.
+    if let Err(e) = validate_proof(&proof_val, &format!("claim '{}'", name)) {
+        return Outcome::Fatal(format!(
+            "{}: claim `{}` — malformed proof: {}", path.display(), name, e,
+        ));
+    }
+
     // Lift Goal → Sequent (hyps = Nil).
     let sequent_val = match goal_val.clone() {
         ast::Expr::Ctor(n, args) if n == "Goal" && args.len() == 3 => {
@@ -453,6 +462,109 @@ fn process_claim(
             path.display(), name, other,
         )),
     }
+}
+
+// ----------------------------------------------------------------------
+// Load-time proof-structure validation (UNTRUSTED, off the check path).
+// Walks the Proof / Step / Case grammar (arities mirror kernel/proof.sexp)
+// and returns the first structural error with a path into the tree. This
+// turns class-of-bug authoring mistakes — a Proof node used where a Step
+// is expected, or a wrong field count — into a clear load-time message
+// rather than a deep, opaque runtime "could not replay".
+// ----------------------------------------------------------------------
+
+/// Field count for each Proof constructor, or None if `n` isn't one.
+fn proof_arity(n: &str) -> Option<usize> {
+    Some(match n {
+        "Refl" => 0, "Steps" => 2, "Induct" => 2, "Induct2" => 2,
+        "CaseOn" => 3, "WfInduct" => 2, "RewriteWith" => 6,
+        "Absurd" => 1, "ByTheory" => 2,
+        _ => return None,
+    })
+}
+
+/// Field count for each Step constructor, or None if `n` isn't one.
+fn step_arity(n: &str) -> Option<usize> {
+    Some(match n {
+        "Unfold" => 2, "Reduce" => 1, "Simp" => 1, "Compute" => 1, "Rewrite" => 5,
+        _ => return None,
+    })
+}
+
+fn validate_proof(p: &ast::Expr, path: &str) -> Result<(), String> {
+    let (n, a) = match p {
+        ast::Expr::Ctor(n, a) => (n.as_str(), a),
+        other => return Err(format!("at {}: expected a Proof, found {}", path, render_term(other))),
+    };
+    let arity = match proof_arity(n) {
+        Some(k) => k,
+        None => {
+            let hint = if step_arity(n).is_some() {
+                format!(" — `{}` is a Step, not a Proof", n)
+            } else { String::new() };
+            return Err(format!("at {}: `{}` is not a Proof constructor{}", path, n, hint));
+        }
+    };
+    if a.len() != arity {
+        return Err(format!("at {}: `{}` takes {} field(s), got {}", path, n, arity, a.len()));
+    }
+    match n {
+        "Steps" => {
+            for (i, s) in decode_list(&a[0]).iter().enumerate() {
+                validate_step(s, &format!("{} → Steps step #{}", path, i))?;
+            }
+            validate_proof(&a[1], &format!("{} → Steps tail", path))
+        }
+        "Induct" | "Induct2" => validate_cases(&a[1], &format!("{} → {}", path, n)),
+        "CaseOn" => validate_cases(&a[2], &format!("{} → CaseOn", path)),
+        "WfInduct" => validate_proof(&a[1], &format!("{} → WfInduct", path)),
+        "RewriteWith" => {
+            for (i, pp) in decode_list(&a[4]).iter().enumerate() {
+                validate_proof(pp, &format!("{} → RewriteWith premise-proof #{}", path, i))?;
+            }
+            validate_proof(&a[5], &format!("{} → RewriteWith tail", path))
+        }
+        _ => Ok(()), // Refl / Absurd / ByTheory: no sub-proofs to walk
+    }
+}
+
+fn validate_step(s: &ast::Expr, path: &str) -> Result<(), String> {
+    let (n, a) = match s {
+        ast::Expr::Ctor(n, a) => (n.as_str(), a),
+        other => return Err(format!("at {}: expected a Step, found {}", path, render_term(other))),
+    };
+    match step_arity(n) {
+        Some(k) if a.len() == k => Ok(()),
+        Some(k) => Err(format!("at {}: step `{}` takes {} field(s), got {}", path, n, k, a.len())),
+        None => {
+            let hint = if proof_arity(n).is_some() {
+                format!(" — `{}` is a Proof, not a Step; nest it as the Steps' tail (2nd field), \
+                         not as an element of the step-list", n)
+            } else { String::new() };
+            Err(format!("at {}: `{}` is not a Step constructor{}", path, n, hint))
+        }
+    }
+}
+
+fn validate_cases(cases: &ast::Expr, path: &str) -> Result<(), String> {
+    for (i, c) in decode_list(cases).iter().enumerate() {
+        let (n, a) = match c {
+            ast::Expr::Ctor(n, a) => (n.as_str(), a),
+            other => return Err(format!("at {} (case #{}): expected Case/CaseB, found {}",
+                path, i, render_term(other))),
+        };
+        let proof = match (n, a.len()) {
+            ("Case", 2) => &a[1],
+            ("CaseB", 3) => &a[2],
+            ("Case", k) | ("CaseB", k) =>
+                return Err(format!("at {} (case #{}): `{}` takes {} field(s), got {}",
+                    path, i, n, if n == "Case" { 2 } else { 3 }, k)),
+            _ => return Err(format!("at {} (case #{}): `{}` is not Case/CaseB", path, i, n)),
+        };
+        let label = sym_of(&a[0]);
+        validate_proof(proof, &format!("{} (case '{})", path, label))?;
+    }
+    Ok(())
 }
 
 // ----------------------------------------------------------------------
