@@ -1,0 +1,181 @@
+;;; snake.sexp — the FULFILLMENT of snake_game.req: the pure game core
+;;; `step` plus the proofs of the surface lemmas R1–R4.
+;;;
+;;; Shape that makes the proofs cheap (and why):
+;;;   - `step` dispatches on (status_of g) at the very top, so R1 (death is
+;;;     absorbing) is a one-rewrite proof against the status premise.
+;;;   - `live_step` returns a SINGLE (GS …) constructor with the branching
+;;;     pushed INSIDE each field, and the new head factored to the FRONT of
+;;;     the snake field. Accessors then reduce straight through the symbolic
+;;;     if-branches (dir_of (GS .. d ..) = d regardless of the other fields),
+;;;     which is what R3/R4 lean on.
+
+(import "snake_game.req.sexp")   ; Heading/Status/Pos/GameState, delta, opposite, accessors
+(import "../../std/list.sexp")   ; len (used by R2)
+
+;; ---- small total helpers ---------------------------------------------------
+
+(fn or  ((a Bool) (b Bool)) Bool (match a (True True) (False b)))
+(fn and ((a Bool) (b Bool)) Bool (match a (True b)    (False False)))
+
+(fn seed_of ((g GameState)) Int (match g ((GS sn d fd sc st sd) sd)))
+
+(fn addpos ((a Pos) (b Pos)) Pos
+  (match a ((Pos ax ay)
+    (match b ((Pos bx by) (Pos (+ ax bx) (+ ay by)))))))
+
+(fn pos_eq ((a Pos) (b Pos)) Bool
+  (match a ((Pos ax ay)
+    (match b ((Pos bx by) (and (int_eq ax bx) (int_eq ay by)))))))
+
+;; Direct 4×4 equality on headings (keeps dir_eq_refl self-contained).
+(fn dir_eq ((a Heading) (b Heading)) Bool
+  (match a
+    (Up    (match b (Up True)  (Down False) (Left False) (Right False)))
+    (Down  (match b (Up False) (Down True)  (Left False) (Right False)))
+    (Left  (match b (Up False) (Down False) (Left True)  (Right False)))
+    (Right (match b (Up False) (Down False) (Left False) (Right True)))))
+
+;; snake head with a dummy default for the empty list (never observed under
+;; the nonempty precondition R2/R3 will carry).
+(fn snake_head ((xs (List Pos))) Pos
+  (match xs (Nil (Pos 0 0)) ((Cons h t) h)))
+
+;; all-but-last cell (the tail dropped on a non-eating move).
+(fn but_last ((xs (List Pos))) (List Pos)
+  (match xs
+    (Nil Nil)
+    ((Cons h t)
+      (match t
+        (Nil Nil)
+        ((Cons h2 t2) (Cons h (but_last t)))))))
+
+;; out-of-bounds on a fixed 20×20 board (0..19); board geometry — informal I3.
+(fn oob ((p Pos)) Bool
+  (match p ((Pos x y)
+    (or (or (lt x 0) (lt 19 x)) (or (lt y 0) (lt 19 y))))))
+
+(fn mem ((p Pos) (xs (List Pos))) Bool
+  (match xs
+    (Nil False)
+    ((Cons h t) (if (pos_eq p h) True (mem p t)))))
+
+;; deterministic food placement (pure in the seed). Correctness = informal I2.
+(fn next_seed ((s Int)) Int (mod (+ (* s 1103515245) 12345) 2147483648))
+(fn new_food  ((s Int)) Pos (Pos (mod (next_seed s) 20) (mod (next_seed (next_seed s)) 20)))
+
+;; the heading actually used this tick: the input, unless it reverses.
+(fn steer ((cur Heading) (i Heading)) Heading
+  (if (dir_eq i (opposite cur)) cur i))
+
+;; ---- per-tick derived quantities (named so proofs can case-split them) -----
+
+(fn game_newhead ((g GameState) (i Heading)) Pos
+  (addpos (snake_head (snake_of g)) (delta (steer (dir_of g) i))))
+
+(fn game_ate ((g GameState) (i Heading)) Bool
+  (pos_eq (game_newhead g i) (food_of g)))
+
+(fn game_dies ((g GameState) (i Heading)) Bool
+  (or (oob (game_newhead g i)) (mem (game_newhead g i) (snake_of g))))
+
+;; ---- the core --------------------------------------------------------------
+
+;; Model choice: the snake field ALWAYS advances (new head prepended; tail
+;; kept on eat, dropped on move) and is INDEPENDENT of game_dies — death is
+;; recorded only in the status field. (On the death tick the head advances
+;; into the wall/itself and the game marks Dead, which is a fine model and
+;; decouples the body lemmas R2/R3 from the collision flag.)
+(fn live_step ((g GameState) (i Heading)) GameState
+  (GS
+    (Cons (game_newhead g i)                           ; head factored to FRONT, always
+          (if (game_ate g i)
+              (snake_of g)                             ; grow: keep the tail
+              (but_last (snake_of g))))                ; move: drop the last cell
+    (steer (dir_of g) i)                               ; dir — always the steered heading
+    (if (game_ate g i) (new_food (seed_of g)) (food_of g))
+    (if (game_ate g i) (+ (score_of g) 1) (score_of g))
+    (if (game_dies g i) Dead Alive)                    ; status — the only death-dependent field
+    (if (game_ate g i) (next_seed (seed_of g)) (seed_of g))))
+
+(fn step ((g GameState) (i Heading)) GameState
+  (match (status_of g)
+    (Dead  g)                                          ; absorbing — R1
+    (Alive (live_step g i))))
+
+;; ===========================================================================
+;; Surface lemmas
+;; ===========================================================================
+
+;; helper: dir_eq is reflexive (used by R4 to collapse the reversal guard).
+(claim dir_eq_refl
+  (Goal (list (Param 'x (ty Heading))) (list)
+    (Equation (Call 'dir_eq (list (FVar 'x) (FVar 'x))) (Ctor 'True (list))))
+  (CaseOn (FVar 'x) 'Heading
+    (list
+      (Case 'Up    (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list)) (Compute Lhs)) Refl))
+      (Case 'Down  (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list)) (Compute Lhs)) Refl))
+      (Case 'Left  (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list)) (Compute Lhs)) Refl))
+      (Case 'Right (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list)) (Compute Lhs)) Refl)))))
+
+;; R1 — DEATH IS ABSORBING.  status_of g = Dead ⟹ step g i = g.
+(claim snake_R1_death_absorbing
+  (Goal
+    (list (Param 'g (ty GameState)) (Param 'i (ty Heading)))
+    (list (Equation (Call 'status_of (list (FVar 'g))) (Ctor 'Dead (list))))
+    (Equation (Call 'step (list (FVar 'g) (FVar 'i))) (FVar 'g)))
+  (Steps (list (Unfold 'step Lhs)
+               (Rewrite (Premise 0) Lr Lhs True (list))   ; status_of g -> Dead
+               (Simp Lhs))                                ; match Dead -> g
+    Refl))
+
+;; R4 — NO 180° REVERSAL.  i = opposite (dir_of g) ⟹ dir_of (step g i) = dir_of g.
+(claim snake_R4_no_reversal
+  (Goal
+    (list (Param 'g (ty GameState)) (Param 'i (ty Heading)))
+    (list (Equation (FVar 'i) (Call 'opposite (list (Call 'dir_of (list (FVar 'g)))))))
+    (Equation (Call 'dir_of (list (Call 'step (list (FVar 'g) (FVar 'i)))))
+              (Call 'dir_of (list (FVar 'g)))))
+  (CaseOn (Call 'status_of (list (FVar 'g))) 'Status
+    (list
+      ;; dead: step g i = g, so dir_of is unchanged.
+      (Case 'Dead
+        (Steps (list (Unfold 'step Lhs)
+                     (Rewrite (Hyp 0) Lr Lhs True (list))   ; status_of g -> Dead
+                     (Simp Lhs))
+               Refl))
+      ;; alive: dir field = steer (dir_of g) i; the reversal guard fires.
+      (Case 'Alive
+        (Steps (list (Unfold 'step Lhs)
+                     (Rewrite (Hyp 0) Lr Lhs True (list))   ; status_of g -> Alive
+                     (Simp Lhs)                             ; match Alive -> dir_of (live_step g i)
+                     (Unfold 'live_step Lhs)                ; -> dir_of (GS .. (steer (dir_of g) i) ..)
+                     (Simp Lhs)                             ; -> steer (dir_of g) i  (2nd field)
+                     (Unfold 'steer Lhs)                    ; -> if (dir_eq i (opposite (dir_of g))) (dir_of g) i
+                     (Rewrite (Premise 0) Lr Lhs True (list))           ; i -> opposite (dir_of g)
+                     (Rewrite (Lemma 'dir_eq_refl) Lr Lhs True (list))  ; dir_eq (opp..)(opp..) -> True
+                     (Simp Lhs))                            ; if True (dir_of g) _ -> dir_of g
+               Refl)))))
+
+;; R3 — HEAD ADVANCES BY THE HEADING.  status_of g = Alive ⟹
+;;   snake_head (snake_of (step g i)) = addpos (snake_head (snake_of g))
+;;                                             (delta (steer (dir_of g) i)).
+;; The new head is prepended unconditionally, so the LHS reduces to
+;; game_newhead g i, which IS the RHS by definition. No dies/ate casing,
+;; no nonempty precondition.
+(claim snake_R3_head_advances
+  (Goal
+    (list (Param 'g (ty GameState)) (Param 'i (ty Heading)))
+    (list (Equation (Call 'status_of (list (FVar 'g))) (Ctor 'Alive (list))))
+    (Equation
+      (Call 'snake_head (list (Call 'snake_of (list (Call 'step (list (FVar 'g) (FVar 'i)))))))
+      (Call 'addpos
+        (list (Call 'snake_head (list (Call 'snake_of (list (FVar 'g)))))
+              (Call 'delta (list (Call 'steer (list (Call 'dir_of (list (FVar 'g))) (FVar 'i)))))))))
+  (Steps (list (Unfold 'step Lhs)
+               (Rewrite (Premise 0) Lr Lhs True (list))   ; status_of g -> Alive
+               (Simp Lhs)                                 ; -> snake_head (snake_of (live_step g i))
+               (Unfold 'live_step Lhs)                    ; expose the GS
+               (Simp Lhs)                                 ; -> game_newhead g i
+               (Unfold 'game_newhead Lhs))                ; -> addpos (snake_head (snake_of g)) (delta (steer ..))
+    Refl))

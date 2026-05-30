@@ -1,0 +1,134 @@
+;;; snake_game.req — the CONTRACT (surface) for the snake game.
+;;;
+;;; FROZEN by convention: this file declares the public vocabulary (the
+;;; nouns) and the behavioural surface (the lemmas the implementation must
+;;; satisfy). Its git history should read "created, then stable"; an edit
+;;; without a recorded reason is the smell. Implementations import this
+;;; file, define `step`, and discharge R1–R4 as proofs (see the fulfillment
+;;; file). The contract never names its fulfillers — that is what lets more
+;;; than one implementation satisfy it.
+;;;
+;;; SCOPE NOTE. The game core is a PURE function
+;;;     step : GameState -> Heading -> GameState
+;;; (state in, state out — no effects). Rendering and input parsing are an
+;;; (app …) shell layered on top in a separate file; R1–R4 are about the
+;;; pure core, so the proofs never touch IO.
+;;;
+;;; COVERAGE NOTE. Unlike the calculator, we are NOT after full formal
+;;; coverage. We pin four behavioural cross-checks (R1–R4) and sketch the
+;;; harder invariants (I1–I3) informally. The gap between them is deliberate:
+;;; it is the surface a later adversarial fulfillment is meant to probe.
+
+;; ===========================================================================
+;; Public vocabulary (the stable nouns)
+;;
+;; FRICTION NOTE. With no abstract-type feature yet, the contract exposes the
+;; GameState REPRESENTATION (the GS fields), so an implementation cannot churn
+;; the layout without editing this frozen file. The honest surface would
+;; export GameState opaquely + the accessors below. This is the first place a
+;; language feature (opaque type export) would earn its keep — recorded, not
+;; yet acted on.
+;; ===========================================================================
+
+(type Heading    (Up) (Down) (Left) (Right))
+(type Status (Alive) (Dead))
+(type Pos    (Pos Int Int))                 ; (Pos x y) — a board cell
+
+(type GameState
+  (GS (List Pos)   ; snake body, head first
+      Heading          ; current heading
+      Pos          ; food cell
+      Int          ; score
+      Status       ; Alive | Dead
+      Int))        ; rng seed (food placement is a pure function of this)
+
+;; Input to one tick is a steer. (The app shell turns a keypress/line into
+;; a Heading; the core never sees raw input.)
+;; step : GameState -> Heading -> GameState        [signature — provided by impl]
+
+;; ---- spec-level helpers (part of the contract's language) -----------------
+;; These define the SPEC's notion of movement and reversal, so R3/R4 cross-
+;; check the implementation against the contract — not against itself.
+
+(fn delta ((d Heading)) Pos                      ; unit step in a heading; +y = up
+  (match d
+    (Up    (Pos 0 1))
+    (Down  (Pos 0 (- 0 1)))
+    (Left  (Pos (- 0 1) 0))
+    (Right (Pos 1 0))))
+
+(fn opposite ((d Heading)) Heading                   ; the 180° reversal of a heading
+  (match d
+    (Up    Down)
+    (Down  Up)
+    (Left  Right)
+    (Right Left)))
+
+;; ---- accessors (read the surface without naming the representation) -------
+
+(fn snake_of  ((g GameState)) (List Pos) (match g ((GS sn d fd sc st sd) sn)))
+(fn dir_of    ((g GameState)) Heading        (match g ((GS sn d fd sc st sd) d)))
+(fn food_of   ((g GameState)) Pos        (match g ((GS sn d fd sc st sd) fd)))
+(fn score_of  ((g GameState)) Int        (match g ((GS sn d fd sc st sd) sc)))
+(fn status_of ((g GameState)) Status     (match g ((GS sn d fd sc st sd) st)))
+
+;; ===========================================================================
+;; FORMAL surface lemmas — the four cross-checks (R1–R4).
+;;
+;; Stated here as the contract (∀-prose + the load-bearing equation). The
+;; exact (Goal …) encoding and proof live in the fulfillment file; the
+;; precise sexp form is pinned there when we actually prove it. The fact that
+;; the contract holds the statement in PROSE while the proof restates it as a
+;; (claim …) — with nothing checking the two agree — is exactly the friction
+;; that would later justify a machine-checked `requirement`/`fulfills` edge.
+;; ===========================================================================
+
+;; R1 — DEATH IS ABSORBING (safety).
+;;   ∀ g i.  status_of g = Dead  ⟹  step g i = g
+;; Once dead, a tick is a no-op: the whole state is unchanged. Catches "the
+;; game keeps playing after you die."
+
+;; R2 — LENGTH BOOKKEEPING (growth is tied to eating).
+;;   ∀ g i.  status_of g = Alive  ∧  status_of (step g i) = Alive  ⟹
+;;     len (snake_of (step g i))
+;;       = len (snake_of g) + (if ATE g i then 1 else 0)
+;;   where ATE g i  ≜  the new head lands on food_of g.
+;; A surviving tick grows the snake by exactly one cell when it eats and by
+;; zero otherwise. Conditioning on "still Alive after" keeps board geometry
+;; out of the formal statement. Catches mis-growth / phantom growth.
+
+;; R3 — HEAD ADVANCES BY THE HEADING (functional correctness of movement).
+;;   ∀ g i.  status_of g = Alive  ∧  status_of (step g i) = Alive  ⟹
+;;     head (snake_of (step g i))
+;;       = addpos (head (snake_of g)) (delta (STEER g i))
+;;   where STEER g i  ≜  the heading actually used this tick (the input i
+;;   unless it reverses, see R4), and addpos is componentwise +.
+;; The snake moves exactly one cell in the heading direction. Catches
+;; teleporting / wrong-direction / multi-cell jumps.
+
+;; R4 — NO 180° REVERSAL (input safety).
+;;   ∀ g i.  i = opposite (dir_of g)  ⟹  dir_of (step g i) = dir_of g
+;; A reversing steer is ignored: you cannot turn straight back into your own
+;; neck. Catches instant self-collision via reversal.
+
+;; ===========================================================================
+;; INFORMAL invariants (I1–I3) — sketched, NOT proven.
+;;
+;; These are the characteristic "it's really a snake" properties. They are
+;; harder (distinctness preservation, placement totality, collision geometry)
+;; and are left as prose on purpose. R1–R4 do NOT pin them down: an
+;; implementation can satisfy all four formal lemmas and still violate these
+;; — which is precisely what an adversarial fulfillment is meant to expose.
+;; A violation here that no R-lemma catches is a finding: a formal
+;; requirement we should promote.
+;; ===========================================================================
+
+;; I1 — DISTINCTNESS. While Alive, snake_of g has no repeated cell. (The
+;;      hard invariant: must be preserved through both move and grow.)
+;;
+;; I2 — FOOD OFF-SNAKE. food_of g is never a cell of snake_of g; after eating,
+;;      the replacement food is placed on an empty cell.
+;;
+;; I3 — COLLISION SOUNDNESS. status_of (step g i) = Dead  iff  the new head is
+;;      out of bounds or lands on the snake's body. (This is where board
+;;      geometry lives — deliberately outside R1–R4.)
