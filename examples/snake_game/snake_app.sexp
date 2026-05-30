@@ -47,4 +47,5 @@
   (init   (GS (Cons (Pos 8 10) (Cons (Pos 7 10) (Cons (Pos 6 10) Nil)))
               Right (Pos 10 10) 0 Alive 7))
   (view   render)
+  (input  raw)        ; interactive: one keypress per tick (no Enter)
   (update step_app))

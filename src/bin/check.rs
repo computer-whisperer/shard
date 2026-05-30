@@ -1243,7 +1243,7 @@ fn run_eval(args: &[String]) -> ExitCode {
 // ----------------------------------------------------------------------
 
 fn run_app(args: &[String]) -> ExitCode {
-    use std::io::BufRead;
+    use std::io::{BufRead, IsTerminal};
 
     let mut script: Option<String> = None;
     let mut bootstrap = true;
@@ -1337,6 +1337,11 @@ fn run_app(args: &[String]) -> ExitCode {
     // the update's Action is reserved for effects (Exit/Nop).
     let view_fn: Option<String> = app_subform(&app, "view")
         .and_then(|p| p.get(1).and_then(|s| s.as_symbol()).map(|s| s.to_string()));
+    // Optional (input raw): on a live terminal, read one keypress at a time
+    // (no Enter) so an interactive game feels real-time. Default is line input.
+    let raw_input = app_subform(&app, "input")
+        .and_then(|p| p.get(1).and_then(|s| s.as_symbol()).map(|s| s == "raw"))
+        .unwrap_or(false);
 
     // Reduce the init expression to the initial state datum.
     let init_native = match load::expr_from_value(&init_val, &ctx.user_module) {
@@ -1367,9 +1372,17 @@ fn run_app(args: &[String]) -> ExitCode {
         }
     }
 
-    // Drive one step per input line. --script reads lines from a file (or
-    // stdin via "-"); the default is an interactive stdin REPL. Both feed
-    // each raw line to `step` as a codepoint-list event.
+    // Interactive raw-key mode: app asked for (input raw) and we're on a live
+    // terminal with no --script — read one keypress at a time (no Enter).
+    if raw_input && script.is_none() && std::io::stdin().is_terminal() {
+        return run_raw_loop(
+            bootstrap, &kernel, &ctx.user_module_value, &ctx.user_module,
+            &update_fn, &view_fn, state,
+        );
+    }
+
+    // Otherwise: one event per input LINE. --script reads lines from a file (or
+    // stdin via "-"); default reads stdin line-by-line.
     let lines: Box<dyn Iterator<Item = std::io::Result<String>>> = match &script {
         Some(path) if path != "-" => match std::fs::read_to_string(path) {
             Ok(src) => Box::new(src.lines().map(|s| Ok(s.to_string())).collect::<Vec<_>>().into_iter()),
@@ -1389,63 +1402,129 @@ fn run_app(args: &[String]) -> ExitCode {
                 return ExitCode::from(2);
             }
         };
-        // Both engines keep `state` as reflected Expr-data and return the
-        // step result reflected; only the evaluation in between differs.
-        let step_result = if bootstrap {
-            let event = expr_to_value(&line_to_event_native(&line));
-            let call = reflected_call(&update_fn, vec![state.clone(), event]);
-            eval_bootstrap(&kernel, &ctx.user_module_value, &call)
-        } else {
-            match value_to_native_expr(&state) {
-                Ok(state_native) => {
-                    let call = ast::Expr::Call(
-                        update_fn.clone(),
-                        vec![state_native, line_to_event_native(&line)],
-                    );
-                    eval_raw(&ctx.user_module, &call)
-                }
-                Err(e) => Err(e),
-            }
-        };
-        let result = match step_result {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("error in step: {}", e);
-                return ExitCode::from(2);
-            }
-        };
-        // Expect (Step state' action).
-        let (sname, fields) = match as_obj_ctor(&result) {
-            Some(x) => x,
-            None => {
-                eprintln!("error: `{}` did not return a value (stuck term): {}", update_fn, show_reflected(&result));
-                return ExitCode::from(2);
-            }
-        };
-        if sname != "Step" || fields.len() != 2 {
-            eprintln!("error: `{}` must return (Step state action), got: {}", update_fn, show_reflected(&result));
-            return ExitCode::from(2);
-        }
-        let next_state = fields[0].clone();
-        let action = fields[1];
-        match interpret_action(action) {
-            Ok(ActionOutcome::Continue) => {}
-            Ok(ActionOutcome::Exit(code)) => return ExitCode::from(code),
-            Err(e) => {
-                eprintln!("error: {}", e);
-                return ExitCode::from(2);
-            }
-        }
-        state = next_state;
-        // Frame after the tick (if the app declares a view).
-        if let Some(vf) = &view_fn {
-            if let Err(e) = render_view(bootstrap, &kernel, &ctx.user_module_value, &ctx.user_module, vf, &state) {
-                eprintln!("error rendering view: {}", e);
-                return ExitCode::from(2);
-            }
+        match run_tick(bootstrap, &kernel, &ctx.user_module_value, &ctx.user_module,
+                       &update_fn, &view_fn, &mut state, &line) {
+            Tick::Continue => {}
+            Tick::Exit(code) => return ExitCode::from(code),
+            Tick::Fatal => return ExitCode::from(2),
         }
     }
     ExitCode::SUCCESS
+}
+
+enum Tick { Continue, Exit(u8), Fatal }
+
+/// Run one update tick: feed `event_text` to the update fn, interpret the
+/// returned Action, advance `state`, and render the view (if any). Shared by
+/// the line-input and raw-key loops.
+fn run_tick(
+    bootstrap: bool,
+    kernel: &ast::Module,
+    user_module_value: &ast::Expr,
+    user_module: &ast::Module,
+    update_fn: &str,
+    view_fn: &Option<String>,
+    state: &mut ast::Expr,
+    event_text: &str,
+) -> Tick {
+    let step_result = if bootstrap {
+        let event = expr_to_value(&line_to_event_native(event_text));
+        eval_bootstrap(kernel, user_module_value, &reflected_call(update_fn, vec![state.clone(), event]))
+    } else {
+        match value_to_native_expr(state) {
+            Ok(state_native) => {
+                let call = ast::Expr::Call(update_fn.into(), vec![state_native, line_to_event_native(event_text)]);
+                eval_raw(user_module, &call)
+            }
+            Err(e) => Err(e),
+        }
+    };
+    let result = match step_result {
+        Ok(r) => r,
+        Err(e) => { eprintln!("error in step: {}", e); return Tick::Fatal; }
+    };
+    let (sname, fields) = match as_obj_ctor(&result) {
+        Some(x) => x,
+        None => {
+            eprintln!("error: `{}` did not return a value (stuck term): {}", update_fn, show_reflected(&result));
+            return Tick::Fatal;
+        }
+    };
+    if sname != "Step" || fields.len() != 2 {
+        eprintln!("error: `{}` must return (Step state action), got: {}", update_fn, show_reflected(&result));
+        return Tick::Fatal;
+    }
+    let next_state = fields[0].clone();
+    let action = fields[1];
+    match interpret_action(action) {
+        Ok(ActionOutcome::Continue) => {}
+        Ok(ActionOutcome::Exit(code)) => return Tick::Exit(code),
+        Err(e) => { eprintln!("error: {}", e); return Tick::Fatal; }
+    }
+    *state = next_state;
+    if let Some(vf) = view_fn {
+        if let Err(e) = render_view(bootstrap, kernel, user_module_value, user_module, vf, state) {
+            eprintln!("error rendering view: {}", e);
+            return Tick::Fatal;
+        }
+    }
+    Tick::Continue
+}
+
+/// Interactive single-keypress loop. Puts the terminal in non-canonical,
+/// no-echo mode via `stty` (no extra dependency), feeds each byte as a
+/// one-character event, and restores the terminal on exit. q / Ctrl-C /
+/// Ctrl-D / EOF quit.
+fn run_raw_loop(
+    bootstrap: bool,
+    kernel: &ast::Module,
+    user_module_value: &ast::Expr,
+    user_module: &ast::Module,
+    update_fn: &str,
+    view_fn: &Option<String>,
+    mut state: ast::Expr,
+) -> ExitCode {
+    use std::io::Read;
+    let saved = stty_capture(&["-g"]);
+    stty_apply(&["-icanon", "-echo", "-isig", "min", "1", "time", "0"]);
+    let mut stdin = std::io::stdin();
+    let mut buf = [0u8; 1];
+    let code = loop {
+        match stdin.read(&mut buf) {
+            Ok(0) => break 0u8,                                   // EOF
+            Ok(_) => {
+                let b = buf[0];
+                if b == b'q' || b == 3 || b == 4 { break 0; }     // q / Ctrl-C / Ctrl-D
+                let ev = (b as char).to_string();
+                match run_tick(bootstrap, kernel, user_module_value, user_module,
+                               update_fn, view_fn, &mut state, &ev) {
+                    Tick::Continue => {}
+                    Tick::Exit(c) => break c,
+                    Tick::Fatal => break 2,
+                }
+            }
+            Err(_) => break 2,
+        }
+    };
+    // restore the terminal (to the saved settings, else a sane default).
+    match &saved {
+        Some(s) => stty_apply(&[s.as_str()]),
+        None => stty_apply(&["sane"]),
+    }
+    ExitCode::from(code)
+}
+
+fn stty_capture(args: &[&str]) -> Option<String> {
+    let out = std::process::Command::new("stty").args(args)
+        .stdin(std::process::Stdio::inherit()).output().ok()?;
+    if out.status.success() {
+        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    } else { None }
+}
+
+fn stty_apply(args: &[&str]) {
+    let _ = std::process::Command::new("stty").args(args)
+        .stdin(std::process::Stdio::inherit()).status();
 }
 
 /// Render one frame: evaluate `view(state)` (bootstrap or native), decode the
