@@ -132,7 +132,7 @@ and shard stands alone. The eventual compile story is full shard straight to a
 machine target (§3).
 
 **Self-hosting status.** The front-end has moved into shard: the s-expression
-reader and module parser (`tools/reader.shard`) are validated byte-for-byte
+reader and module parser (`kernel/reader.shard`) are validated byte-for-byte
 against the Rust loader, and an environment-machine evaluator makes them fast
 enough to use. `eval` now exists as a standalone shard CLI app
 (`examples/cli/eval_app.shard`, driven by `check cli`) that reads files and

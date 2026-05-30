@@ -95,7 +95,7 @@ fn run() -> ExitCode {
     }
 
     // `parse-check` subcommand: differential validation of the shard
-    // reader (tools/reader.shard's `parse_expr`) against the Rust parser
+    // reader (kernel/reader.shard's `parse_expr`) against the Rust parser
     // (load::expr_from_str). For each expression in a corpus file, parse
     // it both ways and compare the resulting Expr ASTs structurally.
     if args[0] == "parse-check" {
@@ -103,14 +103,14 @@ fn run() -> ExitCode {
     }
 
     // `module-check` subcommand: differential validation of the shard
-    // module parser (tools/reader.shard's `parse_module`) against
+    // module parser (kernel/reader.shard's `parse_module`) against
     // load::module_from_str_with_base over a whole .shard file.
     if args[0] == "module-check" {
         return run_module_check(&args[1..]);
     }
 
     // `claims-check` subcommand: differential validation of the shard claim
-    // collector (tools/reader.shard's `parse_claims`) against the Rust loader.
+    // collector (kernel/reader.shard's `parse_claims`) against the Rust loader.
     // For each `(claim NAME GOAL PROOF)` form in a file, compare the raw
     // (pre-desugar) goal and proof construction Exprs parsed both ways.
     if args[0] == "claims-check" {
@@ -1361,7 +1361,7 @@ fn run_eval(args: &[String]) -> ExitCode {
 //   reference : load::expr_from_str (the Rust parser) → reflect via
 //               expr_to_value to the object Expr datum.
 //   shard     : eval `parse_expr <line-as-(List Int)> <ctor-set>` (the
-//               reader in tools/reader.shard) on the NATIVE engine.
+//               reader in kernel/reader.shard) on the NATIVE engine.
 // and compare the two Expr data structurally. This is the same
 // differential discipline that keeps reduce.shard honest (`eval --both`).
 // ----------------------------------------------------------------------

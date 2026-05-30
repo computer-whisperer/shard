@@ -127,6 +127,10 @@ kernel/                ; the trusted kernel, written in narrow (1,823 NCNB)
   eqdec.shard           ;   equality-reflection backend (int_eq/sym_eq = True)
   ord.shard             ;   order-reflection backend (lt/le = True via LIA diff)
   farkas.shard          ;   linear-integer entailment (premises ⊢ lt/le, cert-checked)
+  reader.shard          ;   the self-hosted front-end: s-expr reader + module +
+                       ;     claim parser (parse_expr/parse_module/parse_claims),
+                       ;     validated byte-for-byte vs load.rs (parse/module/claims-check)
+  reader_corpus.txt    ;   parse-check differential corpus
 
 rust_bootstrap/        ; the DISPOSABLE Rust bootstrap — host + parser + eval
   Cargo.toml           ;   until shard self-compiles; then this whole dir goes
@@ -164,8 +168,6 @@ examples/              ; demonstrations (not the library)
                        ;     self-hosted `eval`, run via `check cli`)
 
 tools/
-  reader.shard         ;   the s-expression reader + module parser, in shard
-                       ;     (the self-hosted front-end; see check parse-check)
   zed-narrow/          ;   Zed editor syntax-highlighting extension
                        ;     for .shard files
 ```
@@ -214,7 +216,7 @@ Feature checklist (✓ = shipped in v2; → = next):
 | Two-step induction (`Induct2`, Nat-shaped)   | ✓  | 50     |
 | `(import …)` — transitive, deduped deps + `std/` library | ✓ | 51 |
 | Char↔symbol primitives (`sym_of_chars`/`chars_of_sym`) | ✓ | self-host |
-| S-expr reader + module parser **in shard** (`tools/reader.shard`) | ✓ | self-host |
+| S-expr reader + module parser **in shard** (`kernel/reader.shard`) | ✓ | self-host |
 | Environment-machine evaluator (Rc values; ~700× faster) | ✓ | self-host |
 | `check cli` request/response effect loop (args/file/write) | ✓ | self-host |
 | `eval` as a standalone shard CLI app (`examples/cli/`) | ✓ | self-host |

@@ -355,7 +355,7 @@ recognized by `src/bin/check.rs`, not by the kernel.
 
 - **Narrow shard** is what the Rust bootstrap parses and evaluates — the
   minimal subset described above. It is the **bootstrap floor**: the
-  kernel, the evaluator, the parser/front-end (`tools/reader.shard`),
+  kernel, the evaluator, the parser/front-end (`kernel/reader.shard`),
   and the tools are all written in it, so the small trusted Rust host
   can run them. Narrow grows **reluctantly** — a feature is added to the
   Rust backend only when the engine itself genuinely needs it expressed
