@@ -1,0 +1,637 @@
+;;; reader.sexp — the s-expression reader, in shard.
+;;;
+;;; `parse_expr : String -> (List Symbol) -> (Option Expr)` turns source
+;;; text (a (List Int) of codepoints) into the kernel's object `Expr`
+;;; AST — the same value `src/load.rs::expr_from_str` produces in Rust,
+;;; which is how this reader is validated (differential equivalence).
+;;;
+;;; Two stages:
+;;;   read_top   : text  -> (Option SExpr)   pure syntax (paren tree)
+;;;   elaborate  : SExpr -> (Option Expr)    ctor-vs-call, sugar, forms
+;;;
+;;; SCOPE (slice 1): the applicative core + `if` / `list` / `quote` /
+;;; string-literal sugar. The binder forms `match` / `let` (and the
+;;; type-builder forms `ty` / `tv`) are recognized but deferred — they
+;;; need a binding context to resolve BVars, which top-level eval
+;;; expressions don't exercise. They return None for now.
+;;;
+;;; Needs the char↔symbol bridge primitives (src/prim.rs):
+;;;   sym_of_chars : (List Int) -> Symbol
+;;; Runs under NATIVE eval (it is a tool, not proof-faithful machinery);
+;;; its OUTPUT AST is what gets evaluated under the bootstrapped reducer.
+
+;; ---- syntax tree + reader results -----------------------------------------
+(type SExpr
+  (SInt  Int)
+  (SSym  Symbol)
+  (SStr  (List Int))
+  (SList (List SExpr)))
+
+;; read_expr's result: one SExpr + the unconsumed input, or an error.
+(type RExpr
+  (REOk SExpr (List Int))
+  (REErr))
+
+;; read_items' result: a sequence of SExprs (a list's contents) + rest.
+(type RItems
+  (RIOk (List SExpr) (List Int))
+  (RIErr))
+
+;; ---- small list/char helpers ----------------------------------------------
+(fn rev_i ((xs (List Int)) (acc (List Int))) (List Int)
+  (match xs
+    (Nil acc)
+    ((Cons h t) (rev_i t (Cons h acc)))))
+
+(fn sym_mem ((x Symbol) (xs (List Symbol))) Bool
+  (match xs
+    (Nil False)
+    ((Cons h t) (if (sym_eq x h) True (sym_mem x t)))))
+
+(fn is_ws ((c Int)) Bool
+  (if (int_eq c 32) True          ; space
+  (if (int_eq c 9)  True          ; tab
+  (if (int_eq c 10) True          ; newline
+  (if (int_eq c 13) True          ; carriage return
+  False)))))
+
+;; A delimiter ends an atom: whitespace, parens, quote, comment, or EOF.
+(fn is_delim ((c Int)) Bool
+  (if (is_ws c)      True
+  (if (int_eq c 40)  True         ; (
+  (if (int_eq c 41)  True         ; )
+  (if (int_eq c 34)  True         ; "
+  (if (int_eq c 59)  True         ; ;
+  False))))))
+
+(fn is_digit ((c Int)) Bool
+  (if (le 48 c) (le c 57) False)) ; '0'..'9'
+
+;; ---- whitespace / comments ------------------------------------------------
+(fn skip_line ((cs (List Int))) (List Int)
+  (match cs
+    (Nil Nil)
+    ((Cons c rest) (if (int_eq c 10) rest (skip_line rest)))))
+
+(fn skip_ws ((cs (List Int))) (List Int)
+  (match cs
+    (Nil Nil)
+    ((Cons c rest)
+      (if (is_ws c)     (skip_ws rest)
+      (if (int_eq c 59) (skip_ws (skip_line rest))   ; ';' comment to EOL
+      cs)))))
+
+;; ---- atoms ----------------------------------------------------------------
+;; Collect characters up to (not including) the next delimiter.
+(fn take_atom ((cs (List Int))) (Pair (List Int) (List Int))
+  (match cs
+    (Nil (Pair Nil Nil))
+    ((Cons c rest)
+      (if (is_delim c)
+          (Pair Nil cs)
+          (match (take_atom rest)
+            ((Pair atom rest2) (Pair (Cons c atom) rest2)))))))
+
+(fn digits_val ((cs (List Int)) (acc Int)) Int
+  (match cs
+    (Nil acc)
+    ((Cons c rest) (digits_val rest (+ (* acc 10) (- c 48))))))
+
+;; True iff the list is nonempty and every char is a digit.
+(fn all_digits_ne ((cs (List Int))) Bool
+  (match cs
+    (Nil False)
+    ((Cons c rest) (if (is_digit c) (all_digits_tail rest) False))))
+
+(fn all_digits_tail ((cs (List Int))) Bool   ; empty ok
+  (match cs
+    (Nil True)
+    ((Cons c rest) (if (is_digit c) (all_digits_tail rest) False))))
+
+;; Classify a nonempty atom: an integer (optional leading '-') or a symbol.
+(fn classify_atom ((cs (List Int))) SExpr
+  (match cs
+    (Nil (SSym (sym_of_chars Nil)))      ; unreachable (atom is nonempty)
+    ((Cons c rest)
+      (if (int_eq c 45)                  ; '-'
+          (if (all_digits_ne rest)
+              (SInt (- 0 (digits_val rest 0)))
+              (SSym (sym_of_chars cs)))
+          (if (all_digits_ne cs)
+              (SInt (digits_val cs 0))
+              (SSym (sym_of_chars cs)))))))
+
+;; ---- the reader proper ----------------------------------------------------
+;; Read exactly one s-expression, returning it and the unconsumed input.
+(fn read_expr ((cs0 (List Int))) RExpr
+  (match (skip_ws cs0)
+    (Nil REErr)
+    ((Cons c rest)
+      (if (int_eq c 40)                  ; '(' → list
+          (match (read_items rest)
+            (RIErr REErr)
+            ((RIOk items rest2) (REOk (SList items) rest2)))
+      (if (int_eq c 41)                  ; ')' → unbalanced
+          REErr
+      (if (int_eq c 34)                  ; '"' → string
+          (read_string rest Nil)
+      ;; else: an atom. Re-attach c by classifying from (Cons c rest).
+      (match (take_atom (Cons c rest))
+        ((Pair atom rest2) (REOk (classify_atom atom) rest2)))))))))
+
+;; Read s-expressions until the matching ')'.
+(fn read_items ((cs0 (List Int))) RItems
+  (match (skip_ws cs0)
+    (Nil RIErr)                          ; unterminated list
+    ((Cons c rest)
+      (if (int_eq c 41)                  ; ')' → done
+          (RIOk Nil rest)
+          (match (read_expr (Cons c rest))
+            (REErr RIErr)
+            ((REOk head rest2)
+              (match (read_items rest2)
+                (RIErr RIErr)
+                ((RIOk tail rest3) (RIOk (Cons head tail) rest3)))))))))
+
+;; Read a string body (the opening '"' already consumed). `acc` holds the
+;; decoded characters in reverse.
+(fn read_string ((cs (List Int)) (acc (List Int))) RExpr
+  (match cs
+    (Nil REErr)                          ; unterminated string
+    ((Cons c rest)
+      (if (int_eq c 34)                  ; closing '"'
+          (REOk (SStr (rev_i acc Nil)) rest)
+      (if (int_eq c 92)                  ; '\' escape
+          (match rest
+            (Nil REErr)
+            ((Cons e rest2) (read_string rest2 (Cons (unescape e) acc))))
+          (read_string rest (Cons c acc)))))))
+
+(fn unescape ((c Int)) Int
+  (if (int_eq c 110) 10                  ; \n
+  (if (int_eq c 116) 9                   ; \t
+  (if (int_eq c 114) 13                  ; \r
+  c))))                                  ; \" \\ … → the literal char
+
+;; Read one expression and require the rest to be whitespace/comments only.
+(fn read_top ((src (List Int))) (Option SExpr)
+  (match (read_expr src)
+    (REErr None)
+    ((REOk s rest)
+      (match (skip_ws rest)
+        (Nil (Some s))
+        (_   None)))))                   ; trailing junk → reject
+
+;; ---- elaboration: SExpr → object Expr -------------------------------------
+;; `elaborate` threads `scope : (List Symbol)`, the binder stack with the
+;; INNERMOST binder at the FRONT (= BVar 0) — mirroring src/load.rs's
+;; LoadCtx so the de Bruijn indices match the Rust loader exactly.
+
+;; "abc" → (Cons 97 (Cons 98 (Cons 99 Nil))) — the String≡(List Int) sugar.
+(fn str_sugar ((cs (List Int))) Expr
+  (match cs
+    (Nil (Ctor (quote Nil) Nil))
+    ((Cons c rest)
+      (Ctor (quote Cons) (Cons (IntLit c) (Cons (str_sugar rest) Nil))))))
+
+;; (list E1 E2 …) → (Cons E1 (Cons E2 … Nil)).
+(fn list_sugar ((es (List Expr))) Expr
+  (match es
+    (Nil (Ctor (quote Nil) Nil))
+    ((Cons h t)
+      (Ctor (quote Cons) (Cons h (Cons (list_sugar t) Nil))))))
+
+;; Index of `x` in the scope (0 = front = innermost), or None.
+(fn find_idx ((x Symbol) (xs (List Symbol)) (k Int)) (Option Int)
+  (match xs
+    (Nil None)
+    ((Cons h t) (if (sym_eq x h) (Some k) (find_idx x t (+ k 1))))))
+
+(fn append_sym ((xs (List Symbol)) (ys (List Symbol))) (List Symbol)
+  (match xs (Nil ys) ((Cons h t) (Cons h (append_sym t ys)))))
+
+;; Push binder names (in source order) onto the scope: the LAST name ends
+;; up at the front, so it becomes BVar 0 (cf. LANGUAGE.md §7).
+(fn push_scope ((names (List Symbol)) (scope (List Symbol))) (List Symbol)
+  (match names
+    (Nil scope)
+    ((Cons n rest) (push_scope rest (Cons n scope)))))
+
+;; ---- patterns ----
+;; Returns the kernel Pat plus the variable names it binds, in source
+;; (left-to-right) order — the order push_scope expects.
+(fn elab_pat ((s SExpr) (ctors (List Symbol))) (Option (Pair Pat (List Symbol)))
+  (match s
+    ((SInt n)  (Some (Pair (PInt n) Nil)))
+    ((SStr _)  None)                         ; strings aren't narrow patterns
+    ((SSym name)
+      (if (sym_mem name ctors)
+          (Some (Pair (PCtor name Nil) Nil)) ; bare 0-ary ctor pattern
+          (Some (Pair (PVar) (Cons name Nil))))) ; PVar binds `name` (incl. _)
+    ((SList items)
+      (match items
+        (Nil None)
+        ((Cons head rest)
+          (match head
+            ((SSym h)
+              (if (sym_eq h (quote quote))
+                  (elab_psym rest)             ; (quote SYM) → PSym
+                  (if (sym_mem h ctors)
+                      (match (elab_pats rest ctors)
+                        (None None)
+                        ((Some (Pair ps names)) (Some (Pair (PCtor h ps) names))))
+                      None)))                  ; unknown ctor in pattern → reject
+            (_ None)))))))
+
+(fn elab_psym ((rest (List SExpr))) (Option (Pair Pat (List Symbol)))
+  (match rest
+    ((Cons (SSym s) Nil) (Some (Pair (PSym s) Nil)))
+    (_ None)))
+
+(fn elab_pats ((ss (List SExpr)) (ctors (List Symbol)))
+              (Option (Pair (List Pat) (List Symbol)))
+  (match ss
+    (Nil (Some (Pair Nil Nil)))
+    ((Cons h t)
+      (match (elab_pat h ctors)
+        (None None)
+        ((Some (Pair p pn))
+          (match (elab_pats t ctors)
+            (None None)
+            ((Some (Pair ps tn)) (Some (Pair (Cons p ps) (append_sym pn tn))))))))))
+
+;; ---- compound expression forms ----
+(fn elaborate_list ((xs (List SExpr)) (ctors (List Symbol)) (scope (List Symbol)))
+                   (Option (List Expr))
+  (match xs
+    (Nil (Some Nil))
+    ((Cons h t)
+      (match (elaborate h ctors scope)
+        (None None)
+        ((Some e)
+          (match (elaborate_list t ctors scope)
+            (None None)
+            ((Some es) (Some (Cons e es)))))))))
+
+(fn elab_if ((args (List SExpr)) (ctors (List Symbol)) (scope (List Symbol))) (Option Expr)
+  (match args
+    ((Cons c (Cons t (Cons e Nil)))
+      (match (elaborate c ctors scope) (None None) ((Some ce)
+       (match (elaborate t ctors scope) (None None) ((Some te)
+        (match (elaborate e ctors scope) (None None) ((Some ee)
+          (Some (If ce te ee)))))))))
+    (_ None)))
+
+(fn elab_list ((args (List SExpr)) (ctors (List Symbol)) (scope (List Symbol))) (Option Expr)
+  (match (elaborate_list args ctors scope)
+    (None None)
+    ((Some es) (Some (list_sugar es)))))
+
+(fn elab_quote ((args (List SExpr))) (Option Expr)
+  (match args
+    ((Cons (SSym s) Nil) (Some (SymLit s)))
+    (_ None)))
+
+(fn elab_arm ((s SExpr) (ctors (List Symbol)) (scope (List Symbol))) (Option Arm)
+  (match s
+    ((SList (Cons patS (Cons bodyS Nil)))
+      (match (elab_pat patS ctors)
+        (None None)
+        ((Some (Pair pat names))
+          (match (elaborate bodyS ctors (push_scope names scope))
+            (None None)
+            ((Some body) (Some (Arm pat body)))))))
+    (_ None)))
+
+(fn elab_arms ((ss (List SExpr)) (ctors (List Symbol)) (scope (List Symbol))) (Option (List Arm))
+  (match ss
+    (Nil (Some Nil))
+    ((Cons h t)
+      (match (elab_arm h ctors scope)
+        (None None)
+        ((Some a)
+          (match (elab_arms t ctors scope)
+            (None None)
+            ((Some rest) (Some (Cons a rest)))))))))
+
+(fn elab_match ((args (List SExpr)) (ctors (List Symbol)) (scope (List Symbol))) (Option Expr)
+  (match args
+    (Nil None)
+    ((Cons scrutS arms)
+      (match (elaborate scrutS ctors scope)
+        (None None)
+        ((Some scrut)
+          (match (elab_arms arms ctors scope)
+            (None None)
+            ((Some arms2) (Some (Match scrut arms2)))))))))
+
+;; let bindings: RHSs elaborated in the OUTER scope (parallel let), names
+;; collected in source order.
+(fn elab_binds ((ss (List SExpr)) (ctors (List Symbol)) (scope (List Symbol)))
+               (Option (Pair (List Expr) (List Symbol)))
+  (match ss
+    (Nil (Some (Pair Nil Nil)))
+    ((Cons b rest)
+      (match b
+        ((SList (Cons (SSym name) (Cons rhsS Nil)))
+          (match (elaborate rhsS ctors scope)
+            (None None)
+            ((Some rhs)
+              (match (elab_binds rest ctors scope)
+                (None None)
+                ((Some (Pair rhss names))
+                  (Some (Pair (Cons rhs rhss) (Cons name names))))))))
+        (_ None)))))
+
+(fn elab_let ((args (List SExpr)) (ctors (List Symbol)) (scope (List Symbol))) (Option Expr)
+  (match args
+    ((Cons (SList binds) (Cons bodyS Nil))
+      (match (elab_binds binds ctors scope)
+        (None None)
+        ((Some (Pair rhss names))
+          (match (elaborate bodyS ctors (push_scope names scope))
+            (None None)
+            ((Some body) (Some (Let rhss body)))))))
+    (_ None)))
+
+;; The head of a list expression: a special form, or ctor/call application.
+(fn elaborate_form ((h Symbol) (args (List SExpr)) (ctors (List Symbol)) (scope (List Symbol)))
+                   (Option Expr)
+  (if (sym_eq h (quote if))    (elab_if args ctors scope)
+  (if (sym_eq h (quote match)) (elab_match args ctors scope)
+  (if (sym_eq h (quote let))   (elab_let args ctors scope)
+  (if (sym_eq h (quote list))  (elab_list args ctors scope)
+  (if (sym_eq h (quote quote)) (elab_quote args)
+  (if (sym_eq h (quote ty))    None       ; type-builder sugars — deferred
+  (if (sym_eq h (quote tv))    None
+  (match (elaborate_list args ctors scope)
+    (None None)
+    ((Some eargs)
+      (if (sym_mem h ctors)
+          (Some (Ctor h eargs))
+          (Some (Call h eargs))))))))))))) ; ctor set decides Ctor vs Call
+
+(fn elaborate ((s SExpr) (ctors (List Symbol)) (scope (List Symbol))) (Option Expr)
+  (match s
+    ((SInt n)  (Some (IntLit n)))
+    ((SStr cs) (Some (str_sugar cs)))
+    ((SSym name)
+      (match (find_idx name scope 0)
+        ((Some i) (Some (BVar i)))           ; local binding → de Bruijn index
+        (None
+          (if (sym_mem name ctors)
+              (Some (Ctor name Nil))         ; bare nullary ctor
+              (Some (FVar name))))))         ; free variable
+    ((SList items)
+      (match items
+        (Nil None)                            ; () is not a valid expression
+        ((Cons head rest)
+          (match head
+            ((SSym h) (elaborate_form h rest ctors scope))
+            (_ None)))))))                    ; non-symbol head → reject
+
+;; ---- expression entry point -----------------------------------------------
+(fn parse_expr ((src (List Int)) (ctors (List Symbol))) (Option Expr)
+  (match (read_top src)
+    (None None)
+    ((Some s) (elaborate s ctors Nil))))      ; top-level: empty binder scope
+
+;; ===========================================================================
+;; Module parsing: a whole file → kernel Module. Mirrors
+;; src/load.rs::module_from_str_with_base — two passes (types first so
+;; ctor names are known for bodies), `base_ctors` are the ambient ctors
+;; (kernel stdlib) so a file can use Cons/Some/… without redeclaring them.
+;; ===========================================================================
+
+;; Read every top-level s-expression in the source.
+(fn read_all ((src (List Int))) (Option (List SExpr))
+  (match (skip_ws src)
+    (Nil (Some Nil))
+    ((Cons c rest0)
+      (match (read_expr (Cons c rest0))
+        (REErr None)
+        ((REOk s rest)
+          (match (read_all rest)
+            (None None)
+            ((Some ss) (Some (Cons s ss)))))))))
+
+;; ---- types ----
+(fn parse_type ((s SExpr) (tparams (List Symbol))) (Option Type)
+  (match s
+    ((SSym name)
+      (if (sym_mem name tparams)
+          (Some (TVar name))                  ; a type parameter in scope
+          (Some (TCon name Nil))))            ; 0-ary type constructor
+    ((SList items)
+      (match items
+        (Nil None)
+        ((Cons head rest)
+          (match head
+            ((SSym hname)                     ; (HEAD a1 a2 …) — applied type
+              (match (parse_types rest tparams)
+                (None None)
+                ((Some args) (Some (TCon hname args)))))
+            (_ None)))))
+    (_ None)))                                ; SInt/SStr aren't types
+
+(fn parse_types ((ss (List SExpr)) (tparams (List Symbol))) (Option (List Type))
+  (match ss
+    (Nil (Some Nil))
+    ((Cons h t)
+      (match (parse_type h tparams)
+        (None None)
+        ((Some ty)
+          (match (parse_types t tparams)
+            (None None)
+            ((Some tys) (Some (Cons ty tys)))))))))
+
+;; A name-or-parameterized head: `NAME` or `(NAME P1 P2 …)`. Shared by
+;; `type`, `fn`, and `extern`.
+(fn parse_head ((s SExpr)) (Option (Pair Symbol (List Symbol)))
+  (match s
+    ((SSym name) (Some (Pair name Nil)))
+    ((SList (Cons (SSym name) ps))
+      (match (sym_names ps)
+        (None None)
+        ((Some params) (Some (Pair name params)))))
+    (_ None)))
+
+(fn sym_names ((ss (List SExpr))) (Option (List Symbol))
+  (match ss
+    (Nil (Some Nil))
+    ((Cons (SSym n) t)
+      (match (sym_names t) (None None) ((Some ns) (Some (Cons n ns)))))
+    (_ None)))
+
+;; ---- (type …) ----
+(fn parse_typedef ((parts (List SExpr))) (Option TypeDef)
+  (match parts
+    (Nil None)
+    ((Cons nameForm ctorForms)
+      (match (parse_head nameForm)
+        (None None)
+        ((Some (Pair name params))
+          (match (parse_ctordefs ctorForms params)
+            (None None)
+            ((Some ctors) (Some (TypeDef name params ctors)))))))))
+
+(fn parse_ctordefs ((ss (List SExpr)) (params (List Symbol))) (Option (List CtorDef))
+  (match ss
+    (Nil (Some Nil))
+    ((Cons c rest)
+      (match (parse_ctordef c params)
+        (None None)
+        ((Some cd)
+          (match (parse_ctordefs rest params)
+            (None None)
+            ((Some cds) (Some (Cons cd cds)))))))))
+
+(fn parse_ctordef ((s SExpr) (params (List Symbol))) (Option CtorDef)
+  (match s
+    ((SList (Cons (SSym cname) fieldForms))
+      (match (parse_types fieldForms params)
+        (None None)
+        ((Some ftypes) (Some (CtorDef cname ftypes)))))
+    (_ None)))
+
+;; ---- (fn …) / (extern …) parameter lists ----
+(fn parse_params ((s SExpr) (tparams (List Symbol)))
+                 (Option (Pair (List Symbol) (List Type)))
+  (match s
+    ((SList items) (parse_param_items items tparams))
+    (_ None)))
+
+(fn parse_param_items ((ss (List SExpr)) (tparams (List Symbol)))
+                      (Option (Pair (List Symbol) (List Type)))
+  (match ss
+    (Nil (Some (Pair Nil Nil)))
+    ((Cons item rest)
+      (match item
+        ((SList (Cons (SSym pname) (Cons typeForm Nil)))
+          (match (parse_type typeForm tparams)
+            (None None)
+            ((Some ty)
+              (match (parse_param_items rest tparams)
+                (None None)
+                ((Some (Pair ns tys))
+                  (Some (Pair (Cons pname ns) (Cons ty tys))))))))
+        (_ None)))))
+
+;; ---- (fn …) ----
+(fn parse_fndef ((parts (List SExpr)) (ctors (List Symbol))) (Option FnDef)
+  (match parts
+    ((Cons nameForm (Cons paramsForm (Cons retForm (Cons bodyForm Nil))))
+      (match (parse_head nameForm)
+        (None None)
+        ((Some (Pair name tparams))
+          (match (parse_params paramsForm tparams)
+            (None None)
+            ((Some (Pair pnames ptypes))
+              (match (parse_type retForm tparams)
+                (None None)
+                ((Some ret)
+                  ;; body sees params as BVars — push names in source order
+                  ;; (last param = BVar 0), exactly as load_fn_def does.
+                  (match (elaborate bodyForm ctors (push_scope pnames Nil))
+                    (None None)
+                    ((Some body) (Some (FnDef name ptypes ret body)))))))))))
+    (_ None)))
+
+;; ---- (extern …) ----
+(fn parse_externdef ((parts (List SExpr))) (Option ExternDef)
+  (match parts
+    ((Cons nameForm (Cons paramsForm (Cons retForm Nil)))
+      (match (parse_head nameForm)
+        (None None)
+        ((Some (Pair name tparams))
+          (match (parse_params paramsForm tparams)
+            (None None)
+            ((Some (Pair _ ptypes))
+              (match (parse_type retForm tparams)
+                (None None)
+                ((Some ret) (Some (ExternDef name ptypes ret)))))))))
+    (_ None)))
+
+;; ---- top-level form helpers ----
+(fn form_head ((s SExpr)) (Option Symbol)
+  (match s ((SList (Cons (SSym h) _)) (Some h)) (_ None)))
+
+(fn form_tail ((s SExpr)) (List SExpr)
+  (match s ((SList (Cons _ t)) t) (_ Nil)))
+
+;; Forms the module loader ignores (consumed elsewhere or proof-level).
+(fn skip_form ((h Symbol)) Bool
+  (if (sym_eq h (quote type))       True
+  (if (sym_eq h (quote claim))      True
+  (if (sym_eq h (quote axiom))      True
+  (if (sym_eq h (quote import))     True
+  (if (sym_eq h (quote use-module)) True
+  (if (sym_eq h (quote app))        True
+  False)))))))
+
+;; Pass 1: collect all (type …) definitions, in source order.
+(fn collect_types ((forms (List SExpr))) (Option (List TypeDef))
+  (match forms
+    (Nil (Some Nil))
+    ((Cons f rest)
+      (match (form_head f)
+        (None None)
+        ((Some hname)
+          (if (sym_eq hname (quote type))
+              (match (parse_typedef (form_tail f))
+                (None None)
+                ((Some td)
+                  (match (collect_types rest)
+                    (None None)
+                    ((Some tds) (Some (Cons td tds))))))
+              (collect_types rest)))))))
+
+(fn typedef_ctors ((tds (List TypeDef))) (List Symbol)
+  (match tds
+    (Nil Nil)
+    ((Cons (TypeDef _ _ cds) rest)
+      (append_sym (ctordef_names cds) (typedef_ctors rest)))))
+
+(fn ctordef_names ((cds (List CtorDef))) (List Symbol)
+  (match cds
+    (Nil Nil)
+    ((Cons (CtorDef n _) rest) (Cons n (ctordef_names rest)))))
+
+;; Pass 2: fns and externs, in source order, using the full ctor set.
+(fn collect_fns_externs ((forms (List SExpr)) (ctors (List Symbol)))
+                        (Option (Pair (List FnDef) (List ExternDef)))
+  (match forms
+    (Nil (Some (Pair Nil Nil)))
+    ((Cons f rest)
+      (match (form_head f)
+        (None None)
+        ((Some hname)
+          (if (sym_eq hname (quote fn))
+              (match (parse_fndef (form_tail f) ctors)
+                (None None)
+                ((Some fd)
+                  (match (collect_fns_externs rest ctors)
+                    (None None)
+                    ((Some (Pair fns externs)) (Some (Pair (Cons fd fns) externs))))))
+          (if (sym_eq hname (quote extern))
+              (match (parse_externdef (form_tail f))
+                (None None)
+                ((Some ed)
+                  (match (collect_fns_externs rest ctors)
+                    (None None)
+                    ((Some (Pair fns externs)) (Some (Pair fns (Cons ed externs)))))))
+          (if (skip_form hname)
+              (collect_fns_externs rest ctors)
+              None))))))))                       ; unknown form → reject (cf. load.rs)
+
+;; ---- module entry point ---------------------------------------------------
+(fn parse_module ((src (List Int)) (base_ctors (List Symbol))) (Option Module)
+  (match (read_all src)
+    (None None)
+    ((Some forms)
+      (match (collect_types forms)
+        (None None)
+        ((Some tds)
+          (match (collect_fns_externs forms (append_sym (typedef_ctors tds) base_ctors))
+            (None None)
+            ((Some (Pair fns externs)) (Some (Module tds fns externs)))))))))

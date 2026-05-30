@@ -47,6 +47,19 @@ use lexpr::parse::Parser;
 use proving_bootstrap_v2::{ast, default_kernel_dir, eval, load, load_kernel_from};
 
 fn main() -> ExitCode {
+    // The bootstrap host runs shard via a recursive tree-walker (eval.rs);
+    // the self-hosted reader's recursion depth scales with input size, so
+    // the default 8 MiB main-thread stack overflows on large files. Give
+    // the work a generous stack. (A compiled shard runtime won't need this.)
+    std::thread::Builder::new()
+        .stack_size(1024 * 1024 * 1024)
+        .spawn(run)
+        .expect("spawn worker thread")
+        .join()
+        .expect("worker thread panicked")
+}
+
+fn run() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
         eprintln!("usage: check [--trace <claim>|all] <proof_file.sexp>...");
@@ -69,6 +82,31 @@ fn main() -> ExitCode {
     // live here in the untrusted driver. See run_app.
     if args[0] == "app" {
         return run_app(&args[1..]);
+    }
+
+    // `cli` subcommand: run a shard program as a command-line app via the
+    // request/response effect loop. The app emits a request Action
+    // (GetArgs / ReadFile / Write / Exit); the driver services it and feeds
+    // the result back as the next Event. This is the externalized-
+    // continuation form of effect-as-data (BOUNDARIES mechanism C) — it
+    // lets a pure shard program take args, read files, and emit output.
+    if args[0] == "cli" {
+        return run_cli(&args[1..]);
+    }
+
+    // `parse-check` subcommand: differential validation of the shard
+    // reader (tools/reader.sexp's `parse_expr`) against the Rust parser
+    // (load::expr_from_str). For each expression in a corpus file, parse
+    // it both ways and compare the resulting Expr ASTs structurally.
+    if args[0] == "parse-check" {
+        return run_parse_check(&args[1..]);
+    }
+
+    // `module-check` subcommand: differential validation of the shard
+    // module parser (tools/reader.sexp's `parse_module`) against
+    // load::module_from_str_with_base over a whole .sexp file.
+    if args[0] == "module-check" {
+        return run_module_check(&args[1..]);
     }
 
     let kernel = match load_kernel_from(default_kernel_dir()) {
@@ -375,7 +413,7 @@ fn process_form(
         // Handled in earlier passes: imports/aliases (A), code defs (B).
         // `app` is the `check app` entrypoint declaration — inert to the
         // proof checker, like a code def.
-        "import" | "use-module" | "type" | "fn" | "extern" | "app" => Outcome::Skip,
+        "import" | "use-module" | "type" | "fn" | "extern" | "app" | "cli" => Outcome::Skip,
         "module" => {
             let name = items.get(1).and_then(|v| v.as_symbol()).unwrap_or("?");
             Outcome::Fatal(format!(
@@ -1309,6 +1347,294 @@ fn run_eval(args: &[String]) -> ExitCode {
 }
 
 // ----------------------------------------------------------------------
+// `parse-check` subcommand — differential validation of the shard reader.
+//
+// For each expression line in a corpus file, parse it two ways:
+//   reference : load::expr_from_str (the Rust parser) → reflect via
+//               expr_to_value to the object Expr datum.
+//   shard     : eval `parse_expr <line-as-(List Int)> <ctor-set>` (the
+//               reader in tools/reader.sexp) on the NATIVE engine.
+// and compare the two Expr data structurally. This is the same
+// differential discipline that keeps reduce.sexp honest (`eval --both`).
+// ----------------------------------------------------------------------
+
+fn sym_list_native(names: &[String]) -> ast::Expr {
+    let mut acc = nil();
+    for n in names.iter().rev() {
+        acc = ctor("Cons", vec![ast::Expr::SymLit(n.clone()), acc]);
+    }
+    acc
+}
+
+fn run_parse_check(args: &[String]) -> ExitCode {
+    let mut positional: Vec<&String> = Vec::new();
+    for a in args {
+        if a.starts_with("--") {
+            eprintln!("error: unknown flag {}", a);
+            return ExitCode::from(2);
+        }
+        positional.push(a);
+    }
+    if positional.len() < 2 {
+        eprintln!("usage: check parse-check <file.sexp>... <corpus.txt>");
+        return ExitCode::from(2);
+    }
+    let corpus_path = positional.last().unwrap().as_str();
+    let files = &positional[..positional.len() - 1];
+
+    let kernel = match load_kernel_from(default_kernel_dir()) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error loading kernel from {}: {}", default_kernel_dir().display(), e);
+            return ExitCode::from(2);
+        }
+    };
+    let user_module = ast::Module {
+        types: kernel.types.clone(),
+        fns: Vec::new(),
+        externs: Vec::new(),
+    };
+    let mut ctx = Ctx {
+        user_module_value: module_to_value(&user_module),
+        user_module,
+        theory: ctor("TheoryEmpty", vec![]),
+        passed: 0,
+        failed: 0,
+        axioms: 0,
+        loaded: std::collections::HashSet::new(),
+        in_progress: Vec::new(),
+        load_only: true,
+        trace_target: None,
+    };
+    for f in files {
+        if let Err(code) = process_file(&PathBuf::from(f.as_str()), &mut ctx, &kernel) {
+            return code;
+        }
+    }
+
+    // The reader must classify Ctor-vs-Call using the SAME ctor set the
+    // Rust parser sees — so it's built from the loaded module's types.
+    let ctor_names: Vec<String> = ctx.user_module.types.iter()
+        .flat_map(|td| td.ctors.iter().map(|cd| cd.name.clone()))
+        .collect();
+    let ctorset = sym_list_native(&ctor_names);
+
+    let corpus = match std::fs::read_to_string(corpus_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error reading corpus {}: {}", corpus_path, e);
+            return ExitCode::from(2);
+        }
+    };
+
+    let mut passed = 0usize;
+    let mut failed = 0usize;
+    for (i, raw) in corpus.lines().enumerate() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with(';') {
+            continue;
+        }
+        // Reference: the Rust parser.
+        let reference = match load::expr_from_str(line, &ctx.user_module) {
+            Ok(e) => expr_to_value(&e),
+            Err(e) => {
+                println!("L{}: rust-parse error ({}) — skipped: {}", i + 1, e, line);
+                continue;
+            }
+        };
+        // Shard: parse_expr on the native engine.
+        let call = ast::Expr::Call(
+            "parse_expr".into(),
+            vec![line_to_event_native(line), ctorset.clone()],
+        );
+        // eval_raw re-reflects its result (expr_to_value), so un-reflect
+        // one layer to expose the (Some Expr) / (None) wrapper; the Expr
+        // inside is then in the same representation as `reference`.
+        let shard = match eval_raw(&ctx.user_module, &call)
+            .and_then(|v| value_to_native_expr(&v))
+        {
+            Ok(v) => v,
+            Err(e) => {
+                failed += 1;
+                println!("L{}: shard eval error ({}): {}", i + 1, e, line);
+                continue;
+            }
+        };
+        match &shard {
+            ast::Expr::Ctor(n, a) if n == "Some" && a.len() == 1 => {
+                if a[0] == reference {
+                    passed += 1;
+                } else {
+                    failed += 1;
+                    println!("L{}: DIFFER  {}", i + 1, line);
+                    println!("    rust : {}", show_reflected(&reference));
+                    println!("    shard: {}", show_reflected(&a[0]));
+                }
+            }
+            ast::Expr::Ctor(n, _) if n == "None" => {
+                failed += 1;
+                println!("L{}: shard REJECTED (None), rust accepted: {}", i + 1, line);
+            }
+            other => {
+                failed += 1;
+                println!("L{}: shard returned non-Option: {}", i + 1, show_reflected(other));
+            }
+        }
+    }
+    println!();
+    println!("{} passed, {} failed", passed, failed);
+    if failed == 0 { ExitCode::SUCCESS } else { ExitCode::from(1) }
+}
+
+// ----------------------------------------------------------------------
+// `module-check` subcommand — differential validation of the shard module
+// parser. Parses a whole file two ways (load::module_from_str_with_base
+// vs. the shard `parse_module`, both with the kernel's ctors as the
+// ambient base) and compares the resulting Module data structurally.
+// ----------------------------------------------------------------------
+
+/// Localize a Module mismatch to the first differing type/fn/extern.
+fn report_module_diff(shard: &ast::Expr, reference: &ast::Expr) {
+    let unwrap = |e: &ast::Expr| -> Option<[ast::Expr; 3]> {
+        if let ast::Expr::Ctor(n, a) = e {
+            if n == "Module" && a.len() == 3 {
+                return Some([a[0].clone(), a[1].clone(), a[2].clone()]);
+            }
+        }
+        None
+    };
+    let (s, r) = match (unwrap(shard), unwrap(reference)) {
+        (Some(s), Some(r)) => (s, r),
+        _ => {
+            println!("  shard module is malformed: {}", show_reflected(shard));
+            return;
+        }
+    };
+    let labels = ["type", "fn", "extern"];
+    for i in 0..3 {
+        let se = decode_list(&s[i]);
+        let re = decode_list(&r[i]);
+        if se.len() != re.len() {
+            println!("  {} count: shard {} vs rust {}", labels[i], se.len(), re.len());
+        }
+        for (j, (a, b)) in se.iter().zip(re.iter()).enumerate() {
+            if a != b {
+                println!("  first differing {} (#{}):", labels[i], j);
+                println!("    shard: {}", show_reflected(a));
+                println!("    rust : {}", show_reflected(b));
+                return;
+            }
+        }
+    }
+}
+
+fn run_module_check(args: &[String]) -> ExitCode {
+    let mut positional: Vec<&String> = Vec::new();
+    for a in args {
+        if a.starts_with("--") {
+            eprintln!("error: unknown flag {}", a);
+            return ExitCode::from(2);
+        }
+        positional.push(a);
+    }
+    if positional.len() < 2 {
+        eprintln!("usage: check module-check <reader.sexp>... <target.sexp>");
+        return ExitCode::from(2);
+    }
+    let target_path = positional.last().unwrap().as_str();
+    let files = &positional[..positional.len() - 1];
+
+    let kernel = match load_kernel_from(default_kernel_dir()) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error loading kernel from {}: {}", default_kernel_dir().display(), e);
+            return ExitCode::from(2);
+        }
+    };
+    let user_module = ast::Module {
+        types: kernel.types.clone(),
+        fns: Vec::new(),
+        externs: Vec::new(),
+    };
+    let mut ctx = Ctx {
+        user_module_value: module_to_value(&user_module),
+        user_module,
+        theory: ctor("TheoryEmpty", vec![]),
+        passed: 0,
+        failed: 0,
+        axioms: 0,
+        loaded: std::collections::HashSet::new(),
+        in_progress: Vec::new(),
+        load_only: true,
+        trace_target: None,
+    };
+    for f in files {
+        if let Err(code) = process_file(&PathBuf::from(f.as_str()), &mut ctx, &kernel) {
+            return code;
+        }
+    }
+
+    let target_src = match std::fs::read_to_string(target_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error reading {}: {}", target_path, e);
+            return ExitCode::from(2);
+        }
+    };
+
+    // Reference: the Rust loader, with the full loaded module (kernel +
+    // any dependency files passed before the target) as the ambient base —
+    // so a target using ctors declared in a sibling file resolves them.
+    let module_rust = match load::module_from_str_with_base(&target_src, Some(&ctx.user_module)) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("rust load error: {:?}", e);
+            return ExitCode::from(2);
+        }
+    };
+    let reference = module_to_value(&module_rust);
+
+    // Shard: parse_module on the native engine, same ambient ctor base.
+    let ctor_names: Vec<String> = ctx.user_module.types.iter()
+        .flat_map(|td| td.ctors.iter().map(|cd| cd.name.clone()))
+        .collect();
+    let base_ctors = sym_list_native(&ctor_names);
+    let call = ast::Expr::Call(
+        "parse_module".into(),
+        vec![line_to_event_native(&target_src), base_ctors],
+    );
+    let shard = match eval_raw(&ctx.user_module, &call).and_then(|v| value_to_native_expr(&v)) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("shard eval error: {}", e);
+            return ExitCode::from(2);
+        }
+    };
+    match &shard {
+        ast::Expr::Ctor(n, a) if n == "Some" && a.len() == 1 => {
+            if a[0] == reference {
+                println!("MATCH  {}  ({} types, {} fns, {} externs)",
+                    target_path, module_rust.types.len(),
+                    module_rust.fns.len(), module_rust.externs.len());
+                ExitCode::SUCCESS
+            } else {
+                println!("DIFFER  {}", target_path);
+                report_module_diff(&a[0], &reference);
+                ExitCode::from(1)
+            }
+        }
+        ast::Expr::Ctor(n, _) if n == "None" => {
+            println!("shard REJECTED {} (None), rust accepted", target_path);
+            ExitCode::from(1)
+        }
+        other => {
+            println!("shard returned non-Option: {}", show_reflected(other));
+            ExitCode::from(1)
+        }
+    }
+}
+
+// ----------------------------------------------------------------------
 // `app` subcommand — drive a stateful (Model-View-Update) application.
 //
 // The file declares an entrypoint:
@@ -1391,7 +1717,7 @@ fn run_app(args: &[String]) -> ExitCode {
     }
 
     // Locate the (app …) declaration among the named files.
-    let app = match find_app_decl(&positional) {
+    let app = match find_app_decl(&positional, "app") {
         Ok(Some(a)) => a,
         Ok(None) => {
             eprintln!("error: no (app …) declaration found in {}", positional.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "));
@@ -1495,6 +1821,181 @@ fn run_app(args: &[String]) -> ExitCode {
         }
     }
     ExitCode::SUCCESS
+}
+
+// ----------------------------------------------------------------------
+// `cli` subcommand — run a shard program through the request/response
+// effect loop. `check cli <file.sexp>... [-- <app-args>...]`.
+//
+// The entrypoint is `(cli (state S) (init INIT) (update FN))` where
+//   FN : S -> Event -> (Step S Action)
+// The app is a state machine over a closed effect protocol: it emits a
+// request Action, the driver performs it and feeds the result back as
+// the next Event. The cycle starts with the `(Started)` event.
+//
+//   Action            driver does                  next Event
+//   ----------------- ---------------------------- ----------------------
+//   (GetArgs)         collect argv (after `--`)    (Args (List (List Int)))
+//   (ReadFile path)   read the file at `path`      (FileOk bytes) | (FileErr)
+//   (Write bytes)     write bytes to stdout        (Wrote)
+//   (Exit code)       terminate with `code`        —
+//
+// This is BOUNDARIES mechanism (C): effect-as-data with the continuation
+// externalized into the loop, so no HOF is needed — it runs in narrow
+// shard today. The interpretable Action/Event set is the trusted edge.
+// ----------------------------------------------------------------------
+
+fn run_cli(args: &[String]) -> ExitCode {
+    use std::io::Write as _;
+
+    // `--` separates the app's SOURCE files from its runtime ARGUMENTS.
+    let dash = args.iter().position(|a| a == "--");
+    let src_args: &[String] = match dash { Some(i) => &args[..i], None => args };
+    let app_args: &[String] = match dash { Some(i) => &args[i + 1..], None => &[] };
+
+    let mut positional: Vec<&String> = Vec::new();
+    for a in src_args {
+        if a.starts_with("--") {
+            eprintln!("error: unknown flag {} (runtime args go after `--`)", a);
+            return ExitCode::from(2);
+        }
+        positional.push(a);
+    }
+    if positional.is_empty() {
+        eprintln!("usage: check cli <file.sexp>... [-- <app-args>...]");
+        return ExitCode::from(2);
+    }
+
+    let kernel = match load_kernel_from(default_kernel_dir()) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error loading kernel from {}: {}", default_kernel_dir().display(), e);
+            return ExitCode::from(2);
+        }
+    };
+    // Seed with the FULL kernel (types AND fns/externs): a cli app may call
+    // kernel functions — the eval app calls `compute_expr` — so they must be
+    // resolvable in the running module, not just the kernel's type decls.
+    let user_module = ast::Module {
+        types: kernel.types.clone(),
+        fns: kernel.fns.clone(),
+        externs: kernel.externs.clone(),
+    };
+    let mut ctx = Ctx {
+        user_module_value: module_to_value(&user_module),
+        user_module,
+        theory: ctor("TheoryEmpty", vec![]),
+        passed: 0,
+        failed: 0,
+        axioms: 0,
+        loaded: std::collections::HashSet::new(),
+        in_progress: Vec::new(),
+        load_only: true,
+        trace_target: None,
+    };
+    for f in &positional {
+        if let Err(code) = process_file(&PathBuf::from(f.as_str()), &mut ctx, &kernel) {
+            return code;
+        }
+    }
+
+    let cli = match find_app_decl(&positional, "cli") {
+        Ok(Some(c)) => c,
+        Ok(None) => { eprintln!("error: no (cli …) declaration found"); return ExitCode::from(2); }
+        Err(e) => { eprintln!("error: {}", e); return ExitCode::from(2); }
+    };
+    let update_fn = match app_subform(&cli, "update").and_then(|p| p.get(1).and_then(|s| s.as_symbol()).map(|s| s.to_string())) {
+        Some(n) => n,
+        None => { eprintln!("error: (cli …) is missing an (update FN) field"); return ExitCode::from(2); }
+    };
+    let init_val = match app_subform(&cli, "init").and_then(|p| p.get(1).cloned()) {
+        Some(v) => v,
+        None => { eprintln!("error: (cli …) is missing an (init EXPR) field"); return ExitCode::from(2); }
+    };
+
+    let init_native = match load::expr_from_value(&init_val, &ctx.user_module) {
+        Ok(e) => e,
+        Err(e) => { eprintln!("error in (init …): {}", e); return ExitCode::from(2); }
+    };
+    // State flows as REFLECTED Expr-data between ticks (eval_raw returns it);
+    // it is un-reflected to native just before each update call.
+    let mut state = match eval_raw(&ctx.user_module, &init_native) {
+        Ok(s) => s,
+        Err(e) => { eprintln!("error evaluating (init …): {}", e); return ExitCode::from(2); }
+    };
+
+    let mut event = ctor("Started", vec![]); // native Event value
+    let mut stdout = std::io::stdout();
+    let cap = 50_000_000usize; // runaway-loop backstop
+    for _ in 0..cap {
+        let state_native = match value_to_native_expr(&state) {
+            Ok(e) => e,
+            Err(e) => { eprintln!("error: bad state datum: {}", e); return ExitCode::from(2); }
+        };
+        let call = ast::Expr::Call(update_fn.clone(), vec![state_native, event.clone()]);
+        let result = match eval_raw(&ctx.user_module, &call) {
+            Ok(r) => r,
+            Err(e) => { eprintln!("error in {}: {}", update_fn, e); return ExitCode::from(2); }
+        };
+        let (sname, fields) = match as_obj_ctor(&result) {
+            Some(x) => x,
+            None => {
+                eprintln!("error: `{}` returned a stuck term: {}", update_fn, show_reflected(&result));
+                return ExitCode::from(2);
+            }
+        };
+        if sname != "Step" || fields.len() != 2 {
+            eprintln!("error: `{}` must return (Step state action), got: {}", update_fn, show_reflected(&result));
+            return ExitCode::from(2);
+        }
+        let next_state = fields[0].clone();
+        let (aname, afields) = match as_obj_ctor(fields[1]) {
+            Some(x) => x,
+            None => { eprintln!("error: action is not a constructor: {}", show_reflected(fields[1])); return ExitCode::from(2); }
+        };
+        // Service the request → the next Event (or terminate).
+        event = match (aname, afields.as_slice()) {
+            ("GetArgs", []) => {
+                let items: Vec<ast::Expr> = app_args.iter().map(|a| line_to_event_native(a)).collect();
+                ctor("Args", vec![list_of(items)])
+            }
+            ("ReadFile", [path]) => {
+                let p = match decode_codepoints(path) {
+                    Ok(s) => s,
+                    Err(e) => { eprintln!("error: ReadFile path not a (List Int): {}", e); return ExitCode::from(2); }
+                };
+                match std::fs::read_to_string(&p) {
+                    Ok(contents) => ctor("FileOk", vec![line_to_event_native(&contents)]),
+                    Err(_) => ctor("FileErr", vec![]),
+                }
+            }
+            ("Write", [payload]) => {
+                let bytes = match decode_codepoints(payload) {
+                    Ok(s) => s,
+                    Err(e) => { eprintln!("error: Write payload not a (List Int): {}", e); return ExitCode::from(2); }
+                };
+                if write!(stdout, "{}", bytes).is_err() {
+                    return ExitCode::from(2);
+                }
+                ctor("Wrote", vec![])
+            }
+            ("Exit", [code]) => {
+                let _ = stdout.flush();
+                let n = match value_to_native_expr(code) {
+                    Ok(ast::Expr::IntLit(n)) => n,
+                    _ => 0,
+                };
+                return ExitCode::from(n as u8);
+            }
+            (other, _) => {
+                eprintln!("error: unknown cli Action `{}` (expected GetArgs/ReadFile/Write/Exit)", other);
+                return ExitCode::from(2);
+            }
+        };
+        state = next_state;
+    }
+    eprintln!("error: cli step cap ({}) exceeded — update never emitted Exit", cap);
+    ExitCode::from(2)
 }
 
 enum Tick { Continue, Exit(u8), Fatal }
@@ -1662,16 +2163,16 @@ fn interpret_action(action: &ast::Expr) -> Result<ActionOutcome, String> {
 
 /// Find the single `(app …)` form among the named files. Errors if more
 /// than one file declares an app.
-fn find_app_decl(files: &[&String]) -> Result<Option<Value>, String> {
+fn find_app_decl(files: &[&String], head: &str) -> Result<Option<Value>, String> {
     let mut found: Option<Value> = None;
     for f in files {
         let src = std::fs::read_to_string(f.as_str())
             .map_err(|e| format!("reading {}: {}", f, e))?;
         let forms = parse_top_level(&src).map_err(|e| format!("parsing {}: {}", f, e))?;
         for form in forms {
-            if form.list_iter().and_then(|mut it| it.next().and_then(|h| h.as_symbol()).map(|s| s == "app")).unwrap_or(false) {
+            if form.list_iter().and_then(|mut it| it.next().and_then(|h| h.as_symbol()).map(|s| s == head)).unwrap_or(false) {
                 if found.is_some() {
-                    return Err("multiple (app …) declarations found".into());
+                    return Err(format!("multiple ({head} …) declarations found"));
                 }
                 found = Some(form);
             }

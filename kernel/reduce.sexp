@@ -183,6 +183,12 @@
       (if (sym_eq f (quote sym_eq))
           (Some (bool_as_expr (sym_eq a b)))
           None))
+    ;; NOTE: sym_of_chars / chars_of_sym (src/prim.rs) are deliberately
+    ;; NOT dispatched here. They are parser primitives; the reader runs
+    ;; under native eval (not the bootstrapped reducer), and its OUTPUT
+    ;; AST never contains them — so compute_expr never needs them. If a
+    ;; bootstrap-run program ever calls them, decode must additionally
+    ;; unwrap the object (IntLit …) element form.
     (_ None)))
 
 ;; Convert a Bool VALUE to the corresponding narrow Expr VALUE

@@ -1,19 +1,30 @@
-//! Evaluator over the narrow object language.
+//! Evaluator over the narrow object language — an ENVIRONMENT MACHINE.
 //!
-//! Strategy: call-by-value. Reduce each argument before opening a
-//! user-fn's body with them or handing them to a native primitive.
-//! `match` evaluates its scrutinee, walks arms left-to-right looking
-//! for the first that fits, and opens the chosen arm's body with the
-//! captured bindings. `let` evaluates RHSs in the outer scope
-//! (parallel let), then opens the body with the resulting values.
-//! `if` reduces its condition to a `True`/`False` ctor and dispatches.
+//! Call-by-value. Rather than substituting argument values into a fn
+//! body (the old `open_many`, which deep-copied the body *and* every
+//! captured value on each call → O(n²) on programs that thread a long
+//! list, like the self-hosted parser), we evaluate the body in place
+//! against an environment of values. Values are reference-counted
+//! (`Rc`), so capturing a list tail in a pattern or looking up a
+//! variable is O(1) — no structural copying on the hot path.
 //!
-//! The locally-nameless discipline: `open_many` puts values into the
-//! body wherever it had `BVar k` references. Bindings are passed
-//! *innermost-first* (BVar 0 first), matching the term-language
-//! convention.
+//! Binding convention (unchanged, locally-nameless / de Bruijn): the
+//! environment is innermost-first, `env[0]` = `BVar 0`. Entering a
+//! binder PREPENDS its freshly-bound values; this reproduces the de
+//! Bruijn shift (existing indices move up by the number of new
+//! binders) without any renumbering. A user fn's body is closed except
+//! for its parameters, so a call evaluates the body in a FRESH
+//! environment of just the (reversed) argument values.
+//!
+//! There are no lambdas in the narrow language (calls are saturated,
+//! functions are top-level), so no closures are needed: a `Val` is
+//! always a fully-evaluated, CLOSED term — note it has no `BVar`
+//! variant, so a value structurally cannot carry a free index. That is
+//! exactly the invariant the substitution machine relied on by hand.
 
-use crate::ast::{Arm, Expr, Module, Pat};
+use std::rc::Rc;
+
+use crate::ast::{Expr, Module, Pat};
 use crate::prim;
 
 #[derive(Debug)]
@@ -47,58 +58,82 @@ impl std::fmt::Display for EvalError {
 
 impl std::error::Error for EvalError {}
 
+/// A fully-evaluated, closed value. Recursive children are `Rc`-shared
+/// so cloning a value (variable lookup, pattern capture) is O(1) — the
+/// shared-structure that makes this an environment machine rather than
+/// a substitution machine.
+#[derive(Clone)]
+enum Val {
+    Int(i64),
+    Sym(Rc<str>),
+    FVar(Rc<str>),
+    Ctor(Rc<str>, Rc<[Val]>),
+}
+
 /// Reduce `e` to normal form within the context of `m`'s definitions.
 pub fn eval(m: &Module, e: &Expr) -> Result<Expr, EvalError> {
+    let v = eval_env(m, &[], e)?;
+    Ok(val_to_expr(&v))
+}
+
+fn eval_env(m: &Module, env: &[Val], e: &Expr) -> Result<Val, EvalError> {
     match e {
-        Expr::IntLit(_) | Expr::SymLit(_) | Expr::FVar(_) => Ok(e.clone()),
+        Expr::IntLit(n) => Ok(Val::Int(*n)),
+        Expr::SymLit(s) => Ok(Val::Sym(Rc::from(s.as_str()))),
+        Expr::FVar(s) => Ok(Val::FVar(Rc::from(s.as_str()))),
+
+        // A bound variable indexes into the environment (innermost-first).
+        Expr::BVar(k) => env
+            .get(*k as usize)
+            .cloned()
+            .ok_or(EvalError::UnboundBVar(*k)),
 
         Expr::Ctor(name, args) => {
-            let evaled: Vec<Expr> = args.iter().map(|a| eval(m, a)).collect::<Result<_, _>>()?;
-            Ok(Expr::Ctor(name.clone(), evaled))
+            let vals = eval_args(m, env, args)?;
+            Ok(Val::Ctor(Rc::from(name.as_str()), vals.into()))
         }
 
         Expr::Call(name, args) => {
-            let evaled: Vec<Expr> = args.iter().map(|a| eval(m, a)).collect::<Result<_, _>>()?;
-            apply_call(m, name, &evaled)
+            let vals = eval_args(m, env, args)?;
+            apply_call(m, name, vals)
         }
 
-        Expr::If(c, t, e) => {
-            let c_val = eval(m, c)?;
-            if is_true_ctor(&c_val) {
-                eval(m, t)
-            } else if is_false_ctor(&c_val) {
-                eval(m, e)
-            } else {
-                Err(EvalError::IfNonBool(format!("{c_val:?}")))
-            }
-        }
+        Expr::If(c, t, e2) => match eval_env(m, env, c)? {
+            Val::Ctor(ref n, ref a) if a.is_empty() && &**n == "True" => eval_env(m, env, t),
+            Val::Ctor(ref n, ref a) if a.is_empty() && &**n == "False" => eval_env(m, env, e2),
+            other => Err(EvalError::IfNonBool(format!("{:?}", val_to_expr(&other)))),
+        },
 
         Expr::Match(scrut, arms) => {
-            let v = eval(m, scrut)?;
+            let v = eval_env(m, env, scrut)?;
             for arm in arms {
-                if let Some(bindings) = match_pat(&arm.pat, &v) {
-                    let opened = open_many(&bindings, &arm.body);
-                    return eval(m, &opened);
+                let mut binds: Vec<Val> = Vec::new();
+                if match_pat(&arm.pat, &v, &mut binds) {
+                    // env' = bindings (innermost-first) ++ outer env.
+                    binds.extend_from_slice(env);
+                    return eval_env(m, &binds, &arm.body);
                 }
             }
-            Err(EvalError::NoMatchArm(format!("{v:?}")))
+            Err(EvalError::NoMatchArm(format!("{:?}", val_to_expr(&v))))
         }
 
         Expr::Let(rhss, body) => {
-            // Parallel let: RHSs evaluated in outer scope.
-            let evaled: Vec<Expr> = rhss.iter().map(|e| eval(m, e)).collect::<Result<_, _>>()?;
-            // Innermost-first: last declaration is BVar 0.
-            let bindings: Vec<Expr> = evaled.into_iter().rev().collect();
-            let opened = open_many(&bindings, body);
-            eval(m, &opened)
+            // Parallel let: RHSs evaluated in the outer scope.
+            let mut vals = eval_args(m, env, rhss)?;
+            vals.reverse(); // innermost-first: last binding becomes BVar 0
+            vals.extend_from_slice(env);
+            eval_env(m, &vals, body)
         }
-
-        Expr::BVar(k) => Err(EvalError::UnboundBVar(*k)),
     }
 }
 
-fn apply_call(m: &Module, name: &str, args: &[Expr]) -> Result<Expr, EvalError> {
-    // User-defined fn? Open its body with the args, then keep going.
+fn eval_args(m: &Module, env: &[Val], args: &[Expr]) -> Result<Vec<Val>, EvalError> {
+    args.iter().map(|a| eval_env(m, env, a)).collect()
+}
+
+fn apply_call(m: &Module, name: &str, mut args: Vec<Val>) -> Result<Val, EvalError> {
+    // User-defined fn? Evaluate its body in a fresh environment of the
+    // (reversed) arguments — the body is closed except for its params.
     if let Some(fd) = m.lookup_fn(name) {
         if fd.params.len() != args.len() {
             return Err(EvalError::ArityMismatch {
@@ -107,23 +142,17 @@ fn apply_call(m: &Module, name: &str, args: &[Expr]) -> Result<Expr, EvalError> 
                 got: args.len(),
             });
         }
-        // Reverse so bindings[0] fills BVar 0 (the LAST parameter).
-        let bindings: Vec<Expr> = args.iter().rev().cloned().collect();
-        let opened = open_many(&bindings, &fd.body);
-        return eval(m, &opened);
+        args.reverse(); // env[0] = BVar 0 = LAST parameter
+        return eval_env(m, &args, &fd.body);
     }
-    if let Some(out) = prim::try_apply(name, args) {
-        return Ok(out);
+    // Primitive: cross to the `Expr`-typed primitive table at the
+    // boundary (primitive arguments are small — ints, syms, or the
+    // occasional char list, all O(arg)).
+    let arg_exprs: Vec<Expr> = args.iter().map(val_to_expr).collect();
+    if let Some(out) = prim::try_apply(name, &arg_exprs) {
+        return Ok(val_of_value_expr(&out));
     }
     Err(EvalError::UnknownCall(name.into()))
-}
-
-fn is_true_ctor(e: &Expr) -> bool {
-    matches!(e, Expr::Ctor(n, a) if a.is_empty() && n == "True")
-}
-
-fn is_false_ctor(e: &Expr) -> bool {
-    matches!(e, Expr::Ctor(n, a) if a.is_empty() && n == "False")
 }
 
 // -----------------------------------------------------------------------------
@@ -134,30 +163,20 @@ fn is_false_ctor(e: &Expr) -> bool {
 // body; earlier PVars get higher indices.
 // -----------------------------------------------------------------------------
 
-fn match_pat(p: &Pat, v: &Expr) -> Option<Vec<Expr>> {
-    let mut acc = Vec::new();
-    if match_pat_acc(p, v, &mut acc) {
-        Some(acc)
-    } else {
-        None
-    }
-}
-
-fn match_pat_acc(p: &Pat, v: &Expr, acc: &mut Vec<Expr>) -> bool {
+fn match_pat(p: &Pat, v: &Val, acc: &mut Vec<Val>) -> bool {
     match p {
         Pat::PVar => {
-            // Prepend so acc[0] is always the most recently captured
-            // (= innermost binder = BVar 0).
+            // Prepend so acc[0] is the most recently captured (= BVar 0).
             acc.insert(0, v.clone());
             true
         }
-        Pat::PInt(n) => matches!(v, Expr::IntLit(m) if m == n),
-        Pat::PSym(s) => matches!(v, Expr::SymLit(t) if t == s),
+        Pat::PInt(n) => matches!(v, Val::Int(m) if m == n),
+        Pat::PSym(s) => matches!(v, Val::Sym(t) if &**t == s.as_str()),
         Pat::PCtor(cn, sub_pats) => {
-            if let Expr::Ctor(vc, vargs) = v {
-                if cn == vc && sub_pats.len() == vargs.len() {
+            if let Val::Ctor(vc, vargs) = v {
+                if &**vc == cn.as_str() && sub_pats.len() == vargs.len() {
                     for (sp, sv) in sub_pats.iter().zip(vargs.iter()) {
-                        if !match_pat_acc(sp, sv, acc) {
+                        if !match_pat(sp, sv, acc) {
                             return false;
                         }
                     }
@@ -169,72 +188,34 @@ fn match_pat_acc(p: &Pat, v: &Expr, acc: &mut Vec<Expr>) -> bool {
     }
 }
 
-fn pat_arity(p: &Pat) -> u32 {
-    match p {
-        Pat::PVar => 1,
-        Pat::PCtor(_, sub_pats) => sub_pats.iter().map(pat_arity).sum(),
-        Pat::PInt(_) | Pat::PSym(_) => 0,
+// -----------------------------------------------------------------------------
+// Value ⇄ Expr at the boundaries (final result; primitive table).
+// -----------------------------------------------------------------------------
+
+fn val_to_expr(v: &Val) -> Expr {
+    match v {
+        Val::Int(n) => Expr::IntLit(*n),
+        Val::Sym(s) => Expr::SymLit(s.to_string()),
+        Val::FVar(s) => Expr::FVar(s.to_string()),
+        Val::Ctor(n, args) => {
+            Expr::Ctor(n.to_string(), args.iter().map(val_to_expr).collect())
+        }
     }
 }
 
-// -----------------------------------------------------------------------------
-// Binder opening (locally-nameless). Mirrors kernel/term.sexp:open_many_at.
-//
-// `bindings[k]` fills BVar k for k in [0, len). Outer BVars
-// (k >= len) shift down by len. Recursion under inner binders bumps
-// `depth` by the count of binders introduced.
-// -----------------------------------------------------------------------------
-
-fn open_many(bindings: &[Expr], e: &Expr) -> Expr {
-    open_many_at(0, bindings, e)
-}
-
-fn open_many_at(depth: u32, bindings: &[Expr], e: &Expr) -> Expr {
+/// Convert a closed VALUE expr (as produced by `prim::try_apply`:
+/// IntLit / SymLit / FVar / Ctor over values) into a `Val`.
+fn val_of_value_expr(e: &Expr) -> Val {
     match e {
-        Expr::BVar(k) => {
-            if *k < depth {
-                e.clone()
-            } else {
-                let idx = (k - depth) as usize;
-                if idx < bindings.len() {
-                    // The value moves under `depth` more binders. For
-                    // bindings without their own free BVars (true of
-                    // every evaluated value the evaluator produces),
-                    // shifting is a no-op. We rely on that invariant
-                    // here; if it ever breaks we'll need a Rust
-                    // `shift` mirroring kernel/term.sexp.
-                    bindings[idx].clone()
-                } else {
-                    Expr::BVar(k - bindings.len() as u32)
-                }
-            }
-        }
-        Expr::FVar(_) | Expr::IntLit(_) | Expr::SymLit(_) => e.clone(),
-        Expr::Call(name, args) => Expr::Call(
-            name.clone(),
-            args.iter().map(|a| open_many_at(depth, bindings, a)).collect(),
+        Expr::IntLit(n) => Val::Int(*n),
+        Expr::SymLit(s) => Val::Sym(Rc::from(s.as_str())),
+        Expr::FVar(s) => Val::FVar(Rc::from(s.as_str())),
+        Expr::Ctor(n, args) => Val::Ctor(
+            Rc::from(n.as_str()),
+            args.iter().map(val_of_value_expr).collect::<Vec<_>>().into(),
         ),
-        Expr::Ctor(name, args) => Expr::Ctor(
-            name.clone(),
-            args.iter().map(|a| open_many_at(depth, bindings, a)).collect(),
-        ),
-        Expr::If(c, t, e2) => Expr::If(
-            Box::new(open_many_at(depth, bindings, c)),
-            Box::new(open_many_at(depth, bindings, t)),
-            Box::new(open_many_at(depth, bindings, e2)),
-        ),
-        Expr::Match(scrut, arms) => Expr::Match(
-            Box::new(open_many_at(depth, bindings, scrut)),
-            arms.iter()
-                .map(|a| Arm {
-                    pat: a.pat.clone(),
-                    body: open_many_at(depth + pat_arity(&a.pat), bindings, &a.body),
-                })
-                .collect(),
-        ),
-        Expr::Let(rhss, body) => Expr::Let(
-            rhss.iter().map(|e| open_many_at(depth, bindings, e)).collect(),
-            Box::new(open_many_at(depth + rhss.len() as u32, bindings, body)),
-        ),
+        // Primitives only ever return values; any other shape is a bug
+        // in the primitive table, not reachable input.
+        other => unreachable!("primitive returned a non-value expr: {other:?}"),
     }
 }

@@ -148,7 +148,7 @@ pub fn module_from_str_with_base(
             // `app` is the entrypoint declaration consumed by the
             // `check app` driver (state + init + update), not the module
             // loader — skip it here exactly like claim/import.
-            "claim" | "axiom" | "import" | "use-module" | "app" => {}
+            "claim" | "axiom" | "import" | "use-module" | "app" | "cli" => {}
             other => return Err(LoadError::UnknownForm(other.into())),
         }
     }
