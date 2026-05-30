@@ -1057,15 +1057,18 @@ fn build_value(v: &Value, kernel: &ast::Module) -> Result<ast::Expr, String> {
 // ----------------------------------------------------------------------
 // `eval` subcommand — run an object program, not check a proof.
 //
-//   check eval [--no-bootstrap|--both] <file.sexp>... <EXPR>
+//   check eval [--no-bootstrap|--both] [--reflected] <file.sexp>... <EXPR>
 //
-// EXPR is given in REFLECTED Expr-data form — exactly as it would appear
-// inside a claim goal, e.g.
-//   (Call 'spec_run (list (IntLit 49) (IntLit 43) (IntLit 50)))
+// By default EXPR is SURFACE syntax — a normal object-language expression
+// against the loaded module, including string-literal sugar:
+//   (run "12-2")
+// With `--reflected`, EXPR is instead the raw Expr datum as it appears in
+// a claim goal (an escape hatch for hand-built terms):
+//   (Call 'run (list (Ctor 'Cons (list (IntLit 49) … (Ctor 'Nil (list))))))
 //
-// Default path is the BOOTSTRAP: feed the reflected expr to the narrow
-// reducer compute_expr (kernel/reduce.sexp), executed by the Rust
-// substrate. This is the self-hosted evaluator running the full-language
+// The default evaluation path is the BOOTSTRAP: the expr is reflected and
+// fed to the narrow reducer compute_expr (kernel/reduce.sexp), executed by
+// the Rust substrate — the self-hosted evaluator running the full-language
 // program. `--no-bootstrap` runs the native Rust eval::eval directly;
 // `--both` runs each and reports whether they agree (a differential test
 // of reduce.sexp against the native engine).
@@ -1074,11 +1077,13 @@ fn build_value(v: &Value, kernel: &ast::Module) -> Result<ast::Expr, String> {
 fn run_eval(args: &[String]) -> ExitCode {
     let mut raw = false;
     let mut both = false;
+    let mut reflected_input = false;
     let mut positional: Vec<&String> = Vec::new();
     for a in args {
         match a.as_str() {
             "--no-bootstrap" | "--raw" | "--native" => raw = true,
             "--both" | "--compare" => both = true,
+            "--reflected" => reflected_input = true,
             s if s.starts_with("--") => {
                 eprintln!("error: unknown flag {}", s);
                 return ExitCode::from(2);
@@ -1087,7 +1092,7 @@ fn run_eval(args: &[String]) -> ExitCode {
         }
     }
     if positional.is_empty() {
-        eprintln!("usage: check eval [--no-bootstrap|--both] <file.sexp>... <expr>");
+        eprintln!("usage: check eval [--no-bootstrap|--both] [--reflected] <file.sexp>... <expr>");
         return ExitCode::from(2);
     }
     let expr_src = positional.last().unwrap().as_str();
@@ -1122,32 +1127,52 @@ fn run_eval(args: &[String]) -> ExitCode {
         }
     }
 
-    // Parse the reflected expression and build it into the kernel's Expr
-    // datum (the same path claim goals take).
-    let forms = match parse_top_level(expr_src) {
-        Ok(fs) => fs,
-        Err(e) => {
-            eprintln!("error parsing expression: {}", e);
+    // Build the program in BOTH representations: `native` (executable, for
+    // the Rust engine) and `reflected` (the Expr datum, for compute_expr).
+    //   - surface input  (default): parse to native via expr_from_str, then
+    //                               reflect for the bootstrap path.
+    //   - reflected input (--reflected): build the datum, then un-reflect for
+    //                               the native path (may fail on Match/Let).
+    let (reflected, native): (ast::Expr, Result<ast::Expr, String>) = if reflected_input {
+        let forms = match parse_top_level(expr_src) {
+            Ok(fs) => fs,
+            Err(e) => {
+                eprintln!("error parsing expression: {}", e);
+                return ExitCode::from(2);
+            }
+        };
+        if forms.len() != 1 {
+            eprintln!("error: expected exactly one expression, got {}", forms.len());
             return ExitCode::from(2);
         }
-    };
-    if forms.len() != 1 {
-        eprintln!("error: expected exactly one expression, got {}", forms.len());
-        return ExitCode::from(2);
-    }
-    let reflected = match build_value(&forms[0], &kernel) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("error building expression: {}", e);
-            return ExitCode::from(2);
-        }
+        let datum = match build_value(&forms[0], &kernel) {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("error building expression: {}", e);
+                return ExitCode::from(2);
+            }
+        };
+        let nat = value_to_native_expr(&datum);
+        (datum, nat)
+    } else {
+        let nat = match load::expr_from_str(expr_src, &ctx.user_module) {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("error parsing expression: {}", e);
+                return ExitCode::from(2);
+            }
+        };
+        (expr_to_value(&nat), Ok(nat))
     };
 
     // Both results are returned in REFLECTED form so they can be compared
     // and printed uniformly.
     if both {
         let b = eval_bootstrap(&kernel, &ctx.user_module_value, &reflected);
-        let r = eval_raw(&ctx.user_module, &reflected);
+        let r = match &native {
+            Ok(n) => eval_raw(&ctx.user_module, n),
+            Err(e) => Err(e.clone()),
+        };
         match (&b, &r) {
             (Ok(bv), Ok(rv)) => {
                 println!("bootstrap : {}", show_reflected(bv));
@@ -1168,7 +1193,10 @@ fn run_eval(args: &[String]) -> ExitCode {
         }
     } else {
         let result = if raw {
-            eval_raw(&ctx.user_module, &reflected)
+            match &native {
+                Ok(n) => eval_raw(&ctx.user_module, n),
+                Err(e) => Err(e.clone()),
+            }
         } else {
             eval_bootstrap(&kernel, &ctx.user_module_value, &reflected)
         };
@@ -1199,12 +1227,11 @@ fn eval_bootstrap(
     eval::eval(kernel, &call).map_err(|e| format!("{:?}", e))
 }
 
-/// Native evaluation: un-reflect the expr into an executable program and
-/// run the Rust engine over the user module. Re-reflects the result so it
-/// matches the bootstrap representation.
-fn eval_raw(user_module: &ast::Module, reflected: &ast::Expr) -> Result<ast::Expr, String> {
-    let native = value_to_native_expr(reflected)?;
-    let out = eval::eval(user_module, &native).map_err(|e| format!("{:?}", e))?;
+/// Native evaluation: run the Rust engine over the user module on the
+/// executable program. Re-reflects the result so it matches the bootstrap
+/// representation for uniform printing/comparison.
+fn eval_raw(user_module: &ast::Module, native: &ast::Expr) -> Result<ast::Expr, String> {
+    let out = eval::eval(user_module, native).map_err(|e| format!("{:?}", e))?;
     Ok(expr_to_value(&out))
 }
 
