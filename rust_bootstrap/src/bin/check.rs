@@ -1815,17 +1815,16 @@ fn run_claims_check(args: &[String]) -> ExitCode {
         }
     };
     compare("goal", &shard_goals, &ref_goals, &ref_names, &mut ok);
-    // Proof comparison only in raw mode — the proof un-reflector is a later slice.
-    if ok && !unreflect {
-        let shard_proofs = match project("claims_proofs", true) {
+    if ok {
+        let proof_proj = if unreflect { "claims_proofs_native" } else { "claims_proofs" };
+        let shard_proofs = match project(proof_proj, !unreflect) {
             Ok(v) => v,
-            Err(e) => { eprintln!("shard claims_proofs error: {}", e); return ExitCode::from(2); }
+            Err(e) => { eprintln!("shard {} error: {}", proof_proj, e); return ExitCode::from(2); }
         };
         compare("proof", &shard_proofs, &ref_proofs, &ref_names, &mut ok);
     }
-    let _ = &ref_proofs;
     if ok {
-        let what = if unreflect { "goals un-reflected" } else { "claims" };
+        let what = if unreflect { "claims un-reflected (goal+proof)" } else { "claims" };
         println!("MATCH  {}  ({} {})", target_path, ref_goals.len(), what);
         ExitCode::SUCCESS
     } else {

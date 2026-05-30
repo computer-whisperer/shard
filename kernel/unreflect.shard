@@ -212,3 +212,267 @@
 
 (fn claims_goals_native ((co (Option (List Claim)))) (List Goal)
   (match co (None Nil) ((Some cs) (goals_native cs))))
+
+;; ===========================================================================
+;; Proof hierarchy: Side / Dir / Bool / EqRef / Inst / Step / Proof / Case /
+;; Cert. Mutually recursive (Steps→Proof, Induct→Case→Proof, RewriteWith→Proof).
+;; Embedded Exprs go through unreflect_expr. EqRef's Hyp/Premise accept an
+;; IntLit (positional) OR a SymLit (the named-hyp `(Hyp 'ih)` form, pre-desugar)
+;; — faithfully reproducing the raw loader output.
+;; ===========================================================================
+
+(fn unreflect_side ((e Expr)) (Option Side)
+  (match e
+    ((Ctor cn args)
+      (if (sym_eq cn (quote Lhs))  (Some Lhs)
+      (if (sym_eq cn (quote Rhs))  (Some Rhs)
+      (if (sym_eq cn (quote Both)) (Some Both)
+          None))))
+    (_ None)))
+
+(fn unreflect_dir ((e Expr)) (Option Dir)
+  (match e
+    ((Ctor cn args)
+      (if (sym_eq cn (quote Lr)) (Some Lr)
+      (if (sym_eq cn (quote Rl)) (Some Rl)
+          None)))
+    (_ None)))
+
+(fn unreflect_bool ((e Expr)) (Option Bool)
+  (match e
+    ((Ctor cn args)
+      (if (sym_eq cn (quote True))  (Some True)
+      (if (sym_eq cn (quote False)) (Some False)
+          None)))
+    (_ None)))
+
+(fn unreflect_eqref ((e Expr)) (Option EqRef)
+  (match e
+    ((Ctor cn args)
+      (if (sym_eq cn (quote Hyp))
+          (match args
+            ((Cons (IntLit k) Nil) (Some (Hyp k)))
+            ((Cons (SymLit s) Nil) (Some (Hyp s)))
+            (_ None))
+      (if (sym_eq cn (quote Premise))
+          (match args
+            ((Cons (IntLit k) Nil) (Some (Premise k)))
+            ((Cons (SymLit s) Nil) (Some (Premise s)))
+            (_ None))
+      (if (sym_eq cn (quote Lemma))
+          (match args ((Cons (SymLit s) Nil) (Some (Lemma s))) (_ None))
+          None))))
+    (_ None)))
+
+(fn unreflect_inst ((e Expr)) (Option Inst)
+  (match e
+    ((Ctor cn args)
+      (if (sym_eq cn (quote Inst))
+          (match args
+            ((Cons (SymLit s) (Cons exprE Nil))
+              (match (unreflect_expr exprE) (None None) ((Some ex) (Some (Inst s ex)))))
+            (_ None))
+          None))
+    (_ None)))
+
+(fn unreflect_insts ((e Expr)) (Option (List Inst))
+  (match e
+    ((Ctor cn args)
+      (if (sym_eq cn (quote Nil)) (Some Nil)
+      (if (sym_eq cn (quote Cons))
+          (match args
+            ((Cons h (Cons t Nil))
+              (match (unreflect_inst h) (None None) ((Some h2)
+               (match (unreflect_insts t) (None None) ((Some t2) (Some (Cons h2 t2)))))))
+            (_ None))
+          None)))
+    (_ None)))
+
+(fn unreflect_data ((e Expr)) Expr
+  (match e
+    ((IntLit n) n)
+    ((Ctor cn args)
+      (if (sym_eq cn (quote Nil)) Nil
+      (if (sym_eq cn (quote Cons))
+          (match args
+            ((Cons h (Cons t Nil)) (Cons (unreflect_data h) (unreflect_data t)))
+            (_ Nil))
+          Nil)))
+    (_ Nil)))
+
+(fn unreflect_cert ((e Expr)) (Option Cert)
+  (match e
+    ((Ctor cn args)
+      (if (sym_eq cn (quote Cert))
+          (match args
+            ((Cons (SymLit s) (Cons payloadE Nil))
+              (Some (Cert s (unreflect_data payloadE))))
+            (_ None))
+          None))
+    (_ None)))
+
+(fn unreflect_syms ((e Expr)) (Option (List Symbol))
+  (match e
+    ((Ctor cn args)
+      (if (sym_eq cn (quote Nil)) (Some Nil)
+      (if (sym_eq cn (quote Cons))
+          (match args
+            ((Cons (SymLit s) (Cons t Nil))
+              (match (unreflect_syms t) (None None) ((Some t2) (Some (Cons s t2)))))
+            (_ None))
+          None)))
+    (_ None)))
+
+(fn unreflect_step ((e Expr)) (Option Step)
+  (match e
+    ((Ctor cn args)
+      (if (sym_eq cn (quote Unfold))
+          (match args
+            ((Cons (SymLit f) (Cons sideE Nil))
+              (match (unreflect_side sideE) (None None) ((Some sd) (Some (Unfold f sd)))))
+            (_ None))
+      (if (sym_eq cn (quote Reduce))
+          (match args ((Cons sideE Nil)
+            (match (unreflect_side sideE) (None None) ((Some sd) (Some (Reduce sd))))) (_ None))
+      (if (sym_eq cn (quote Simp))
+          (match args ((Cons sideE Nil)
+            (match (unreflect_side sideE) (None None) ((Some sd) (Some (Simp sd))))) (_ None))
+      (if (sym_eq cn (quote Compute))
+          (match args ((Cons sideE Nil)
+            (match (unreflect_side sideE) (None None) ((Some sd) (Some (Compute sd))))) (_ None))
+      (if (sym_eq cn (quote Rewrite))
+          (match args
+            ((Cons refE (Cons dirE (Cons sideE (Cons allE (Cons instsE Nil)))))
+              (match (unreflect_eqref refE) (None None) ((Some rf)
+               (match (unreflect_dir dirE) (None None) ((Some dr)
+                (match (unreflect_side sideE) (None None) ((Some sd)
+                 (match (unreflect_bool allE) (None None) ((Some al)
+                  (match (unreflect_insts instsE) (None None) ((Some is)
+                    (Some (Rewrite rf dr sd al is)))))))))))))
+            (_ None))
+          None))))))
+    (_ None)))
+
+(fn unreflect_steps ((e Expr)) (Option (List Step))
+  (match e
+    ((Ctor cn args)
+      (if (sym_eq cn (quote Nil)) (Some Nil)
+      (if (sym_eq cn (quote Cons))
+          (match args
+            ((Cons h (Cons t Nil))
+              (match (unreflect_step h) (None None) ((Some h2)
+               (match (unreflect_steps t) (None None) ((Some t2) (Some (Cons h2 t2)))))))
+            (_ None))
+          None)))
+    (_ None)))
+
+(fn unreflect_proof ((e Expr)) (Option Proof)
+  (match e
+    ((Ctor cn args)
+      (if (sym_eq cn (quote Refl)) (Some Refl)
+      (if (sym_eq cn (quote Steps))
+          (match args
+            ((Cons stepsE (Cons pE Nil))
+              (match (unreflect_steps stepsE) (None None) ((Some st)
+               (match (unreflect_proof pE) (None None) ((Some p) (Some (Steps st p)))))))
+            (_ None))
+      (if (sym_eq cn (quote Induct))
+          (match args
+            ((Cons (SymLit v) (Cons casesE Nil))
+              (match (unreflect_cases casesE) (None None) ((Some cs) (Some (Induct v cs)))))
+            (_ None))
+      (if (sym_eq cn (quote Induct2))
+          (match args
+            ((Cons (SymLit v) (Cons casesE Nil))
+              (match (unreflect_cases casesE) (None None) ((Some cs) (Some (Induct2 v cs)))))
+            (_ None))
+      (if (sym_eq cn (quote CaseOn))
+          (match args
+            ((Cons exprE (Cons (SymLit ty) (Cons casesE Nil)))
+              (match (unreflect_expr exprE) (None None) ((Some ex)
+               (match (unreflect_cases casesE) (None None) ((Some cs) (Some (CaseOn ex ty cs)))))))
+            (_ None))
+      (if (sym_eq cn (quote WfInduct))
+          (match args
+            ((Cons mE (Cons pE Nil))
+              (match (unreflect_expr mE) (None None) ((Some m)
+               (match (unreflect_proof pE) (None None) ((Some p) (Some (WfInduct m p)))))))
+            (_ None))
+      (if (sym_eq cn (quote RewriteWith))
+          (match args
+            ((Cons refE (Cons dirE (Cons sideE (Cons instsE (Cons subsE (Cons contE Nil))))))
+              (match (unreflect_eqref refE) (None None) ((Some rf)
+               (match (unreflect_dir dirE) (None None) ((Some dr)
+                (match (unreflect_side sideE) (None None) ((Some sd)
+                 (match (unreflect_insts instsE) (None None) ((Some is)
+                  (match (unreflect_proofs subsE) (None None) ((Some sbs)
+                   (match (unreflect_proof contE) (None None) ((Some ct)
+                     (Some (RewriteWith rf dr sd is sbs ct)))))))))))))))
+            (_ None))
+      (if (sym_eq cn (quote Absurd))
+          (match args
+            ((Cons refE Nil)
+              (match (unreflect_eqref refE) (None None) ((Some rf) (Some (Absurd rf)))))
+            (_ None))
+      (if (sym_eq cn (quote ByTheory))
+          (match args
+            ((Cons (SymLit th) (Cons certE Nil))
+              (match (unreflect_cert certE) (None None) ((Some ct) (Some (ByTheory th ct)))))
+            (_ None))
+          None)))))))))) 
+    (_ None)))
+
+(fn unreflect_proofs ((e Expr)) (Option (List Proof))
+  (match e
+    ((Ctor cn args)
+      (if (sym_eq cn (quote Nil)) (Some Nil)
+      (if (sym_eq cn (quote Cons))
+          (match args
+            ((Cons h (Cons t Nil))
+              (match (unreflect_proof h) (None None) ((Some h2)
+               (match (unreflect_proofs t) (None None) ((Some t2) (Some (Cons h2 t2)))))))
+            (_ None))
+          None)))
+    (_ None)))
+
+(fn unreflect_case ((e Expr)) (Option Case)
+  (match e
+    ((Ctor cn args)
+      (if (sym_eq cn (quote Case))
+          (match args
+            ((Cons (SymLit c) (Cons pE Nil))
+              (match (unreflect_proof pE) (None None) ((Some p) (Some (Case c p)))))
+            (_ None))
+      (if (sym_eq cn (quote CaseB))
+          (match args
+            ((Cons (SymLit c) (Cons namesE (Cons pE Nil)))
+              (match (unreflect_syms namesE) (None None) ((Some nms)
+               (match (unreflect_proof pE) (None None) ((Some p) (Some (CaseB c nms p)))))))
+            (_ None))
+          None)))
+    (_ None)))
+
+(fn unreflect_cases ((e Expr)) (Option (List Case))
+  (match e
+    ((Ctor cn args)
+      (if (sym_eq cn (quote Nil)) (Some Nil)
+      (if (sym_eq cn (quote Cons))
+          (match args
+            ((Cons h (Cons t Nil))
+              (match (unreflect_case h) (None None) ((Some h2)
+               (match (unreflect_cases t) (None None) ((Some t2) (Some (Cons h2 t2)))))))
+            (_ None))
+          None)))
+    (_ None)))
+
+;; Differential probe: un-reflect each claim's proof to a native Proof.
+(fn proofs_native ((cs (List Claim))) (List Proof)
+  (match cs
+    (Nil Nil)
+    ((Cons c rest)
+      (match (unreflect_proof (claim_proof c))
+        (None (proofs_native rest))
+        ((Some p) (Cons p (proofs_native rest)))))))
+
+(fn claims_proofs_native ((co (Option (List Claim)))) (List Proof)
+  (match co (None Nil) ((Some cs) (proofs_native cs))))
