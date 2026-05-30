@@ -50,7 +50,16 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
         eprintln!("usage: check <proof_file.sexp>...");
+        eprintln!("       check eval [--no-bootstrap|--both] <file.sexp>... <expr>");
         return ExitCode::from(2);
+    }
+
+    // `eval` subcommand: run an object-language expression rather than
+    // check proofs. By default it runs through the BOOTSTRAPPED narrow
+    // reducer (kernel/reduce.sexp's compute_expr) — the self-hosted
+    // evaluator; `--no-bootstrap` uses the native Rust eval::eval instead.
+    if args[0] == "eval" {
+        return run_eval(&args[1..]);
     }
 
     let kernel = match load_kernel_from(default_kernel_dir()) {
@@ -88,6 +97,7 @@ fn main() -> ExitCode {
         axioms: 0,
         loaded: std::collections::HashSet::new(),
         in_progress: Vec::new(),
+        load_only: false,
     };
 
     for path_str in &args {
@@ -133,6 +143,10 @@ struct Ctx {
     axioms: usize,
     loaded: std::collections::HashSet<PathBuf>,
     in_progress: Vec<PathBuf>,
+    /// When set, `process_file` loads code + imports but skips claim/axiom
+    /// checking (Pass C). Used by the `eval` subcommand: it needs the
+    /// module's fns in scope but not the (potentially slow) proof replay.
+    load_only: bool,
 }
 
 fn process_file(path: &PathBuf, ctx: &mut Ctx, kernel: &ast::Module) -> Result<(), ExitCode> {
@@ -187,6 +201,14 @@ fn process_file(path: &PathBuf, ctx: &mut Ctx, kernel: &ast::Module) -> Result<(
             eprintln!("error: {}: loading module: {}", path.display(), e);
             return Err(ExitCode::from(2));
         }
+    }
+
+    // load-only (eval subcommand): code + imports are now in scope; skip
+    // claim/axiom checking entirely.
+    if ctx.load_only {
+        ctx.in_progress.pop();
+        ctx.loaded.insert(canon);
+        return Ok(());
     }
 
     // Pass C: claims, in order.
@@ -1030,6 +1052,231 @@ fn build_value(v: &Value, kernel: &ast::Module) -> Result<ast::Expr, String> {
     let ast = load::expr_from_value(v, kernel)
         .map_err(|e| format!("load: {}", e))?;
     eval::eval(kernel, &ast).map_err(|e| format!("eval: {:?}", e))
+}
+
+// ----------------------------------------------------------------------
+// `eval` subcommand — run an object program, not check a proof.
+//
+//   check eval [--no-bootstrap|--both] <file.sexp>... <EXPR>
+//
+// EXPR is given in REFLECTED Expr-data form — exactly as it would appear
+// inside a claim goal, e.g.
+//   (Call 'spec_run (list (IntLit 49) (IntLit 43) (IntLit 50)))
+//
+// Default path is the BOOTSTRAP: feed the reflected expr to the narrow
+// reducer compute_expr (kernel/reduce.sexp), executed by the Rust
+// substrate. This is the self-hosted evaluator running the full-language
+// program. `--no-bootstrap` runs the native Rust eval::eval directly;
+// `--both` runs each and reports whether they agree (a differential test
+// of reduce.sexp against the native engine).
+// ----------------------------------------------------------------------
+
+fn run_eval(args: &[String]) -> ExitCode {
+    let mut raw = false;
+    let mut both = false;
+    let mut positional: Vec<&String> = Vec::new();
+    for a in args {
+        match a.as_str() {
+            "--no-bootstrap" | "--raw" | "--native" => raw = true,
+            "--both" | "--compare" => both = true,
+            s if s.starts_with("--") => {
+                eprintln!("error: unknown flag {}", s);
+                return ExitCode::from(2);
+            }
+            _ => positional.push(a),
+        }
+    }
+    if positional.is_empty() {
+        eprintln!("usage: check eval [--no-bootstrap|--both] <file.sexp>... <expr>");
+        return ExitCode::from(2);
+    }
+    let expr_src = positional.last().unwrap().as_str();
+    let files = &positional[..positional.len() - 1];
+
+    let kernel = match load_kernel_from(default_kernel_dir()) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error loading kernel from {}: {}", default_kernel_dir().display(), e);
+            return ExitCode::from(2);
+        }
+    };
+    let user_module = ast::Module {
+        types: kernel.types.clone(),
+        fns: Vec::new(),
+        externs: Vec::new(),
+    };
+    let mut ctx = Ctx {
+        user_module_value: module_to_value(&user_module),
+        user_module,
+        theory: ctor("TheoryEmpty", vec![]),
+        passed: 0,
+        failed: 0,
+        axioms: 0,
+        loaded: std::collections::HashSet::new(),
+        in_progress: Vec::new(),
+        load_only: true,
+    };
+    for f in files {
+        if let Err(code) = process_file(&PathBuf::from(f.as_str()), &mut ctx, &kernel) {
+            return code;
+        }
+    }
+
+    // Parse the reflected expression and build it into the kernel's Expr
+    // datum (the same path claim goals take).
+    let forms = match parse_top_level(expr_src) {
+        Ok(fs) => fs,
+        Err(e) => {
+            eprintln!("error parsing expression: {}", e);
+            return ExitCode::from(2);
+        }
+    };
+    if forms.len() != 1 {
+        eprintln!("error: expected exactly one expression, got {}", forms.len());
+        return ExitCode::from(2);
+    }
+    let reflected = match build_value(&forms[0], &kernel) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("error building expression: {}", e);
+            return ExitCode::from(2);
+        }
+    };
+
+    // Both results are returned in REFLECTED form so they can be compared
+    // and printed uniformly.
+    if both {
+        let b = eval_bootstrap(&kernel, &ctx.user_module_value, &reflected);
+        let r = eval_raw(&ctx.user_module, &reflected);
+        match (&b, &r) {
+            (Ok(bv), Ok(rv)) => {
+                println!("bootstrap : {}", show_reflected(bv));
+                println!("native    : {}", show_reflected(rv));
+                if bv == rv {
+                    println!("agree     : yes");
+                    ExitCode::SUCCESS
+                } else {
+                    println!("agree     : NO — reduce.sexp disagrees with the native engine");
+                    ExitCode::from(1)
+                }
+            }
+            _ => {
+                if let Err(e) = &b { eprintln!("bootstrap error: {}", e); }
+                if let Err(e) = &r { eprintln!("native error: {}", e); }
+                ExitCode::from(2)
+            }
+        }
+    } else {
+        let result = if raw {
+            eval_raw(&ctx.user_module, &reflected)
+        } else {
+            eval_bootstrap(&kernel, &ctx.user_module_value, &reflected)
+        };
+        match result {
+            Ok(v) => {
+                println!("{}", show_reflected(&v));
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("eval error: {}", e);
+                ExitCode::from(2)
+            }
+        }
+    }
+}
+
+/// Bootstrap evaluation: run the narrow `compute_expr` over the reflected
+/// expr, with the user module reflected as data. Returns reflected Expr.
+fn eval_bootstrap(
+    kernel: &ast::Module,
+    user_module_value: &ast::Expr,
+    reflected: &ast::Expr,
+) -> Result<ast::Expr, String> {
+    let call = ast::Expr::Call(
+        "compute_expr".into(),
+        vec![user_module_value.clone(), reflected.clone()],
+    );
+    eval::eval(kernel, &call).map_err(|e| format!("{:?}", e))
+}
+
+/// Native evaluation: un-reflect the expr into an executable program and
+/// run the Rust engine over the user module. Re-reflects the result so it
+/// matches the bootstrap representation.
+fn eval_raw(user_module: &ast::Module, reflected: &ast::Expr) -> Result<ast::Expr, String> {
+    let native = value_to_native_expr(reflected)?;
+    let out = eval::eval(user_module, &native).map_err(|e| format!("{:?}", e))?;
+    Ok(expr_to_value(&out))
+}
+
+/// Inverse of `expr_to_value`: turn a reflected Expr datum (a `Ctor`
+/// tree over the kernel's Expr type) back into an executable native
+/// `ast::Expr`. Handles the forms that appear in eval inputs and in
+/// fully-reduced result values; control forms (Match/Let/If) in INPUT
+/// are uncommon and rejected with a clear error.
+fn value_to_native_expr(e: &ast::Expr) -> Result<ast::Expr, String> {
+    let (name, args) = match e {
+        ast::Expr::Ctor(n, a) => (n.as_str(), a.as_slice()),
+        other => return Err(format!("cannot un-reflect non-Ctor node: {:?}", other)),
+    };
+    match (name, args) {
+        ("IntLit", [ast::Expr::IntLit(n)]) => Ok(ast::Expr::IntLit(*n)),
+        ("SymLit", [ast::Expr::SymLit(s)]) => Ok(ast::Expr::SymLit(s.clone())),
+        ("FVar", [ast::Expr::SymLit(s)]) => Ok(ast::Expr::FVar(s.clone())),
+        ("BVar", [ast::Expr::IntLit(k)]) => Ok(ast::Expr::BVar(*k as u32)),
+        ("Ctor", [ast::Expr::SymLit(n), l]) =>
+            Ok(ast::Expr::Ctor(n.clone(), unreflect_list(l)?)),
+        ("Call", [ast::Expr::SymLit(n), l]) =>
+            Ok(ast::Expr::Call(n.clone(), unreflect_list(l)?)),
+        ("If", [c, t, el]) => Ok(ast::Expr::If(
+            Box::new(value_to_native_expr(c)?),
+            Box::new(value_to_native_expr(t)?),
+            Box::new(value_to_native_expr(el)?),
+        )),
+        ("Match", _) | ("Let", _) =>
+            Err(format!("un-reflection of {} in eval input is not supported", name)),
+        _ => Err(format!("cannot un-reflect Expr node: {:?}", e)),
+    }
+}
+
+/// Walk a reflected `(Cons h t)` / `Nil` spine, un-reflecting each element.
+fn unreflect_list(e: &ast::Expr) -> Result<Vec<ast::Expr>, String> {
+    let mut out = Vec::new();
+    let mut cur = e;
+    loop {
+        match cur {
+            ast::Expr::Ctor(n, args) if n == "Nil" && args.is_empty() => return Ok(out),
+            ast::Expr::Ctor(n, args) if n == "Cons" && args.len() == 2 => {
+                out.push(value_to_native_expr(&args[0])?);
+                cur = &args[1];
+            }
+            other => return Err(format!("expected a reflected list spine, got: {:?}", other)),
+        }
+    }
+}
+
+/// Pretty-print a reflected Expr datum as readable object-level surface
+/// syntax: (Some 3), None, (Cons 49 (Cons 43 Nil)). Falls back to native
+/// rendering for any node that doesn't un-reflect.
+fn show_reflected(e: &ast::Expr) -> String {
+    match value_to_native_expr(e) {
+        Ok(native) => fmt_native_expr(&native),
+        Err(_) => format!("{:?}", e),
+    }
+}
+
+fn fmt_native_expr(e: &ast::Expr) -> String {
+    match e {
+        ast::Expr::IntLit(n) => n.to_string(),
+        ast::Expr::SymLit(s) => format!("'{}", s),
+        ast::Expr::FVar(s) => s.clone(),
+        ast::Expr::BVar(k) => format!("${}", k),
+        ast::Expr::Ctor(n, args) | ast::Expr::Call(n, args) if args.is_empty() => n.clone(),
+        ast::Expr::Ctor(n, args) | ast::Expr::Call(n, args) => {
+            let inner: Vec<String> = args.iter().map(fmt_native_expr).collect();
+            format!("({} {})", n, inner.join(" "))
+        }
+        other => format!("{:?}", other),
+    }
 }
 
 // ----------------------------------------------------------------------
