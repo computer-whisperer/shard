@@ -139,6 +139,93 @@
       (list (Steps (list (Rewrite (Lemma 'len_takedigits_le) Lr Lhs True (list))) Refl))
       Refl)))
 
+;; ---------------------------------------------------------------------------
+;; char-class disjointness — a whitespace byte (c <= 32, the unfolded is_ws)
+;; is not a digit and not an operator. All one-step farkas now (le=False and
+;; int_eq=False goals), since is_ws is a range. These let the lexer/parser
+;; reduce past their guards when the head is whitespace.
+;; ---------------------------------------------------------------------------
+(claim le32_le48_false        ; c <= 32  ⊢  ¬(48 <= c)
+  (Goal (list (Param 'c (ty Int)))
+    (list (Equation (Call 'le (list (FVar 'c) (IntLit 32))) (Ctor 'True (list))))
+    (Equation (Call 'le (list (IntLit 48) (FVar 'c))) (Ctor 'False (list))))
+  (ByTheory 'farkas (Cert 'farkas (list 1 1))))
+
+(claim le32_not_43           ; c <= 32  ⊢  c ≠ 43
+  (Goal (list (Param 'c (ty Int)))
+    (list (Equation (Call 'le (list (FVar 'c) (IntLit 32))) (Ctor 'True (list))))
+    (Equation (Call 'int_eq (list (FVar 'c) (IntLit 43))) (Ctor 'False (list))))
+  (ByTheory 'farkas (Cert 'farkas (list 1 1))))
+
+(claim le32_not_45           ; c <= 32  ⊢  c ≠ 45
+  (Goal (list (Param 'c (ty Int)))
+    (list (Equation (Call 'le (list (FVar 'c) (IntLit 32))) (Ctor 'True (list))))
+    (Equation (Call 'int_eq (list (FVar 'c) (IntLit 45))) (Ctor 'False (list))))
+  (ByTheory 'farkas (Cert 'farkas (list 1 1))))
+
+(claim le32_not_digit        ; c <= 32  ⊢  is_digit c = False
+  (Goal (list (Param 'c (ty Int)))
+    (list (Equation (Call 'le (list (FVar 'c) (IntLit 32))) (Ctor 'True (list))))
+    (Equation (Call 'is_digit (list (FVar 'c))) (Ctor 'False (list))))
+  (Steps (list (Unfold 'is_digit Lhs))
+    (RewriteWith (Lemma 'le32_le48_false) Lr Lhs (list)
+      (list (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl))
+    (Steps (list (Simp Lhs)) Refl))))
+
+;; Lexing from None over a whitespace head skips it (the lexer's else-chain
+;; falls through is_digit/+/- to the is_ws branch). Uses the disjointness
+;; lemmas to drive past each guard.
+(claim lex_ws_none
+  (Goal (list (Param 'c (ty Int)) (Param 'rest (ty List Int)))
+    (list (Equation (Call 'le (list (FVar 'c) (IntLit 32))) (Ctor 'True (list))))
+    (Equation
+      (Call 'lex_go (list (Ctor 'Cons (list (FVar 'c) (FVar 'rest))) (Ctor 'None (list))))
+      (Call 'lex_go (list (FVar 'rest) (Ctor 'None (list))))))
+  (Steps (list (Unfold 'lex_go Lhs) (Simp Lhs))
+    (RewriteWith (Lemma 'le32_not_digit) Lr Lhs (list)
+      (list (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl))
+    (Steps (list (Simp Lhs))
+    (RewriteWith (Lemma 'le32_not_43) Lr Lhs (list)
+      (list (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl))
+    (Steps (list (Simp Lhs))
+    (RewriteWith (Lemma 'le32_not_45) Lr Lhs (list)
+      (list (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl))
+    (Steps (list (Simp Lhs) (Unfold 'is_ws Lhs)
+                 (Rewrite (Premise 0) Lr Lhs True (list)) (Simp Lhs))
+    Refl))))))))
+
+;; ws_lex: leading whitespace doesn't affect lexing from the None state.
+;;   lex_go cs None = lex_go (skip_ws cs) None
+;; Induct cs, CaseOn (le c 32) (= the unfolded is_ws guard). The whitespace
+;; case rewrites both sides to lex_go rest None / lex_go (skip_ws rest) None
+;; (lex_ws_none on the left, skip_ws reduction on the right) — that's the IH.
+(claim ws_lex
+  (Goal (list (Param 'cs (ty List Int))) (list)
+    (Equation
+      (Call 'lex_go (list (FVar 'cs) (Ctor 'None (list))))
+      (Call 'lex_go (list (Call 'skip_ws (list (FVar 'cs))) (Ctor 'None (list))))))
+  (Induct 'cs
+    (list
+      (Case 'Nil (Steps (list (Simp Both)) Refl))
+      (CaseB 'Cons (list 'c 'rest)
+        (CaseOn (Call 'le (list (FVar 'c) (IntLit 32))) 'Bool
+          (list
+            ;; whitespace: skip_ws drops c; lex_ws_none drops c on the left; IH closes.
+            (Case 'True
+              (RewriteWith (Lemma 'lex_ws_none) Lr Lhs (list)
+                (list (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+              (Steps (list (Unfold 'skip_ws Rhs) (Simp Rhs) (Unfold 'is_ws Rhs)
+                           (Rewrite (Hyp 0) Lr Rhs True (list)) (Simp Rhs)
+                           (Rewrite (Hyp 1) Lr Lhs True (list)))
+                Refl)))
+            ;; non-whitespace: skip_ws returns the list unchanged; both sides identical.
+            ;; Reduce (ι-only) so the recovered lex_go (Cons c rest) None stays FOLDED
+            ;; (matching the LHS) rather than being unfolded into its if-chain.
+            (Case 'False
+              (Steps (list (Unfold 'skip_ws Rhs) (Reduce Rhs) (Unfold 'is_ws Rhs)
+                           (Rewrite (Hyp 0) Lr Rhs True (list)) (Reduce Rhs))
+                Refl))))))))
+
 ;; quick Compute validation: lex_go [50 43] (Some 1) = [TNum 12, TPlus]
 ;; and the RHS computes the same.
 (claim lex_num_check

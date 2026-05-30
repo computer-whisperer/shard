@@ -23,13 +23,15 @@
 (fn digit_val ((c Int)) Int
   (- c 48))
 
-;; Whitespace: space (32), tab (9), newline (10). Shared vocabulary with
-;; the spec (calc_spec.sexp) — the lexer skips exactly these between
-;; tokens; every OTHER non-digit/non-operator byte is illegal.
+;; Whitespace: every control byte and space, i.e. c <= 32 (covers space 32,
+;; tab 9, newline 10, and the other C0 controls). A RANGE rather than an
+;; enumerated set so it is farkas-native — char-class disjointness with the
+;; digit/operator codes (all >= 43 > 32) is then a one-step linear fact, with
+;; no boolean-disjunction inversion. Shared vocabulary with the spec; the
+;; lexer skips these between tokens, every other byte (>= 33, non-digit,
+;; non-operator) is illegal.
 (fn is_ws ((c Int)) Bool
-  (if (int_eq c 32) True
-    (if (int_eq c 9) True
-      (if (int_eq c 10) True False))))
+  (le c 32))
 
 ;; Fold one digit codepoint into the number being built (None = start fresh).
 (fn acc_digit ((acc (Option Int)) (c Int)) Int
