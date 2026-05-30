@@ -62,7 +62,8 @@
   (if (int_eq c 41)  True         ; )
   (if (int_eq c 34)  True         ; "
   (if (int_eq c 59)  True         ; ;
-  False))))))
+  (if (int_eq c 39)  True         ; ' (quote — a delimiter, and a reader macro)
+  False)))))))
 
 (fn is_digit ((c Int)) Bool
   (if (le 48 c) (le c 57) False)) ; '0'..'9'
@@ -135,9 +136,14 @@
           REErr
       (if (int_eq c 34)                  ; '"' → string
           (read_string rest Nil)
+      (if (int_eq c 39)                  ; '\'' → quote reader macro: 'X ≡ (quote X)
+          (match (read_expr rest)
+            (REErr REErr)
+            ((REOk s rest2)
+              (REOk (SList (Cons (SSym (quote quote)) (Cons s Nil))) rest2)))
       ;; else: an atom. Re-attach c by classifying from (Cons c rest).
       (match (take_atom (Cons c rest))
-        ((Pair atom rest2) (REOk (classify_atom atom) rest2)))))))))
+        ((Pair atom rest2) (REOk (classify_atom atom) rest2))))))))))
 
 ;; Read s-expressions until the matching ')'.
 (fn read_items ((cs0 (List Int))) RItems
@@ -292,6 +298,45 @@
     ((Cons (SSym s) Nil) (Some (SymLit s)))
     (_ None)))
 
+;; type-builder sugars: (ty NAME args…) and (tv NAME) construct Type VALUES
+;; (TCon / TVar) — used in claim-body Goal Params. Mirrors load.rs
+;; load_ty / load_ty_arg / load_tv. (ty …)'s args-chain is exactly a
+;; list_sugar of the elaborated args; a BARE-SYMBOL arg is a 0-ary TCon
+;; (so `(ty List Int)` makes Int a `(TCon 'Int Nil)`, not an FVar).
+(fn elab_ty_arg ((a SExpr) (ctors (List Symbol)) (scope (List Symbol))) (Option Expr)
+  (match a
+    ((SSym sym)
+      (Some (Ctor (quote TCon)
+                  (Cons (SymLit sym) (Cons (Ctor (quote Nil) Nil) Nil)))))
+    (_ (elaborate a ctors scope))))            ; (tv T), nested (ty …), explicit ctor app
+
+(fn elab_ty_args ((args (List SExpr)) (ctors (List Symbol)) (scope (List Symbol)))
+                 (Option (List Expr))
+  (match args
+    (Nil (Some Nil))
+    ((Cons a rest)
+      (match (elab_ty_arg a ctors scope)
+        (None None)
+        ((Some ea)
+          (match (elab_ty_args rest ctors scope)
+            (None None)
+            ((Some erest) (Some (Cons ea erest)))))))))
+
+(fn elab_ty ((args (List SExpr)) (ctors (List Symbol)) (scope (List Symbol))) (Option Expr)
+  (match args
+    ((Cons (SSym name) rest)
+      (match (elab_ty_args rest ctors scope)
+        (None None)
+        ((Some eargs)
+          (Some (Ctor (quote TCon)
+                      (Cons (SymLit name) (Cons (list_sugar eargs) Nil)))))))
+    (_ None)))                                  ; (ty) with no name, or non-symbol name
+
+(fn elab_tv ((args (List SExpr))) (Option Expr)
+  (match args
+    ((Cons (SSym name) Nil) (Some (Ctor (quote TVar) (Cons (SymLit name) Nil))))
+    (_ None)))
+
 (fn elab_arm ((s SExpr) (ctors (List Symbol)) (scope (List Symbol))) (Option Arm)
   (match s
     ((SList (Cons patS (Cons bodyS Nil)))
@@ -362,8 +407,8 @@
   (if (sym_eq h (quote let))   (elab_let args ctors scope)
   (if (sym_eq h (quote list))  (elab_list args ctors scope)
   (if (sym_eq h (quote quote)) (elab_quote args)
-  (if (sym_eq h (quote ty))    None       ; type-builder sugars — deferred
-  (if (sym_eq h (quote tv))    None
+  (if (sym_eq h (quote ty))    (elab_ty args ctors scope)
+  (if (sym_eq h (quote tv))    (elab_tv args)
   (match (elaborate_list args ctors scope)
     (None None)
     ((Some eargs)
