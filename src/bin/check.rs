@@ -398,12 +398,21 @@ fn process_claim(
         )),
     };
 
-    // Parse and evaluate PROOF.
-    let proof_val = match build_value(items[3], kernel) {
+    // Desugar named hypotheses — (Hyp 'label) → (Hyp k) — and strip case-hyp
+    // name annotations, mirroring the kernel's hyp-prepend order. Pure loader
+    // sugar: the kernel only ever sees positional, name-free proofs.
+    let desugared = {
+        let ctx = HCtx { stack: Vec::new(), params: goal_params(items[2]) };
+        match desugar_hyps(items[3], &ctx, kernel, user_module) {
+            Ok(v) => v,
+            Err(e) => return Outcome::Fatal(format!(
+                "{}: claim `{}` — hypothesis name: {}", path.display(), name, e)),
+        }
+    };
+    let proof_val = match build_value(&desugared, kernel) {
         Ok(v) => v,
         Err(e) => return Outcome::Fatal(format!(
-            "{}: claim `{}` proof: {}", path.display(), name, e,
-        )),
+            "{}: claim `{}` proof (after hyp desugar): {}", path.display(), name, e)),
     };
 
     // Structural validation of the proof tree BEFORE check_sequent, so a
@@ -462,6 +471,192 @@ fn process_claim(
             path.display(), name, other,
         )),
     }
+}
+
+// ----------------------------------------------------------------------
+// Named-hypothesis desugaring (UNTRUSTED, loader sugar — runs before the
+// proof ever reaches the kernel). Rewrites `(Hyp 'label)` → `(Hyp k)` and
+// strips case-hyp name annotations, by simulating the kernel's hyp stack:
+//   CaseOn case   : prepends 1 hyp, named via `(Case C 'h …)` / `(CaseB C (fs) 'h …)`
+//   WfInduct      : prepends 1 IH, auto-named `ih`
+//   Induct/Induct2: APPENDS one IH per recursive field (do_induct order),
+//                   auto-named `ih`, `ih1`, …
+// Positional `(Hyp k)` is untouched; names are opt-in. The kernel only ever
+// sees positional, name-free proofs, so the trusted core is unchanged.
+// ----------------------------------------------------------------------
+
+#[derive(Clone)]
+struct HCtx {
+    /// Hyp names by position; index 0 = front = `(Hyp 0)`. None = unnamed.
+    stack: Vec<Option<String>>,
+    /// Induct-able vars → their `(ty …)` value, for IH counting.
+    params: std::collections::HashMap<String, Value>,
+}
+
+/// A bare symbol or `(quote sym)` → the symbol text. (lexpr reads `'x` as
+/// `(quote x)`.)
+fn read_sym(v: &Value) -> Option<String> {
+    if let Some(s) = v.as_symbol() {
+        return Some(s.to_string());
+    }
+    let items: Vec<&Value> = v.list_iter()?.collect();
+    if items.len() == 2 && items[0].as_symbol() == Some("quote") {
+        return items[1].as_symbol().map(|s| s.to_string());
+    }
+    None
+}
+
+/// Elements of a `(list …)` form (without the leading `list`).
+fn list_elems<'a>(v: &'a Value) -> Result<Vec<&'a Value>, String> {
+    let items: Vec<&Value> = v.list_iter().ok_or("expected a (list …)")?.collect();
+    match items.split_first() {
+        Some((h, rest)) if h.as_symbol() == Some("list") => Ok(rest.to_vec()),
+        _ => Err("expected a (list …)".into()),
+    }
+}
+
+fn goal_params(goal: &Value) -> std::collections::HashMap<String, Value> {
+    let mut m = std::collections::HashMap::new();
+    let items: Vec<&Value> = match goal.list_iter() { Some(i) => i.collect(), None => return m };
+    if items.len() < 2 || items[0].as_symbol() != Some("Goal") { return m; }
+    if let Ok(params) = list_elems(items[1]) {
+        for p in params {
+            let pit: Vec<&Value> = match p.list_iter() { Some(i) => i.collect(), None => continue };
+            if pit.len() == 3 && pit[0].as_symbol() == Some("Param") {
+                if let Some(nm) = read_sym(pit[1]) {
+                    m.insert(nm, pit[2].clone());
+                }
+            }
+        }
+    }
+    m
+}
+
+fn in_scope_names(ctx: &HCtx) -> String {
+    let ns: Vec<&str> = ctx.stack.iter().filter_map(|x| x.as_deref()).collect();
+    if ns.is_empty() { "(none)".into() } else { ns.join(", ") }
+}
+
+/// How many IHs `do_induct` appends for ctor `cname` when inducting on `var`.
+fn ih_count(ctx: &HCtx, var: &str, cname: &str,
+            kernel: &ast::Module, module_val: &ast::Expr) -> usize {
+    let ty_val = match ctx.params.get(var) { Some(t) => t, None => return 0 };
+    let ty_expr = match build_value(ty_val, kernel) { Ok(e) => e, Err(_) => return 0 };
+    let call = ast::Expr::Call("dbg_ih_count".into(),
+        vec![ty_expr, ast::Expr::SymLit(cname.to_string()), module_val.clone()]);
+    match eval::eval(kernel, &call) {
+        Ok(ast::Expr::IntLit(n)) if n >= 0 => n as usize,
+        _ => 0,
+    }
+}
+
+fn ih_names(n: usize) -> Vec<Option<String>> {
+    (0..n).map(|i| Some(if i == 0 { "ih".into() } else { format!("ih{}", i) })).collect()
+}
+
+fn desugar_hyps(v: &Value, ctx: &HCtx,
+                kernel: &ast::Module, module_val: &ast::Expr) -> Result<Value, String> {
+    let items: Vec<&Value> = match v.list_iter() {
+        Some(it) => it.collect(),
+        None => return Ok(v.clone()), // atom
+    };
+    let head = match items.first().and_then(|h| h.as_symbol()) {
+        Some(h) => h,
+        None => return rebuild(&items, ctx, kernel, module_val),
+    };
+    match head {
+        "Hyp" if items.len() == 2 => {
+            if let Some(name) = read_sym(items[1]) {
+                match ctx.stack.iter().position(|x| x.as_deref() == Some(name.as_str())) {
+                    Some(k) => Ok(Value::list(vec![Value::symbol("Hyp"), Value::from(k as i64)])),
+                    None => Err(format!("unbound name '{}' in (Hyp '{}) — in scope: {}",
+                        name, name, in_scope_names(ctx))),
+                }
+            } else {
+                Ok(v.clone()) // positional (Hyp k)
+            }
+        }
+        "WfInduct" if items.len() == 3 => {
+            let measure = desugar_hyps(items[1], ctx, kernel, module_val)?;
+            let mut c2 = ctx.clone();
+            c2.stack.insert(0, Some("ih".into()));
+            let proof = desugar_hyps(items[2], &c2, kernel, module_val)?;
+            Ok(Value::list(vec![Value::symbol("WfInduct"), measure, proof]))
+        }
+        "CaseOn" if items.len() == 4 => {
+            let scrut = desugar_hyps(items[1], ctx, kernel, module_val)?;
+            let mut out = vec![Value::symbol("list")];
+            for c in list_elems(items[3])? {
+                out.push(desugar_case(c, ctx, None, kernel, module_val)?);
+            }
+            Ok(Value::list(vec![Value::symbol("CaseOn"), scrut, items[2].clone(), Value::list(out)]))
+        }
+        "Induct" | "Induct2" if items.len() == 3 => {
+            let var = read_sym(items[1]).unwrap_or_default();
+            let is2 = head == "Induct2";
+            let mut out = vec![Value::symbol("list")];
+            for c in list_elems(items[2])? {
+                out.push(desugar_case(c, ctx, Some((&var, is2)), kernel, module_val)?);
+            }
+            Ok(Value::list(vec![Value::symbol(head), items[1].clone(), Value::list(out)]))
+        }
+        // Everything else (Steps, RewriteWith, Rewrite, Goal, Call, …) leaves
+        // the hyp stack unchanged; recurse uniformly so nested (Hyp 'x) and
+        // nested binders are still handled.
+        _ => rebuild(&items, ctx, kernel, module_val),
+    }
+}
+
+fn rebuild(items: &[&Value], ctx: &HCtx,
+           kernel: &ast::Module, module_val: &ast::Expr) -> Result<Value, String> {
+    let mut out = Vec::with_capacity(items.len());
+    for it in items {
+        out.push(desugar_hyps(it, ctx, kernel, module_val)?);
+    }
+    Ok(Value::list(out))
+}
+
+/// Desugar one `Case`/`CaseB`. `induct` is `Some((var, is_induct2))` when the
+/// case is under Induct/Induct2 (IH-appending, no case-hyp), else `None`
+/// (under CaseOn — prepends one optionally-named case hyp). Strips any name
+/// annotation from the rebuilt case.
+fn desugar_case(c: &Value, ctx: &HCtx, induct: Option<(&str, bool)>,
+                kernel: &ast::Module, module_val: &ast::Expr) -> Result<Value, String> {
+    let items: Vec<&Value> = c.list_iter().ok_or("expected a Case/CaseB")?.collect();
+    let head = items.first().and_then(|h| h.as_symbol()).ok_or("malformed case")?;
+    // Parse: (Case C [name] proof) | (CaseB C (fs) [name] proof). `prefix` is
+    // the rebuilt case head sans name; `name` is the optional case-hyp label.
+    let (prefix, name, proof): (Vec<Value>, Option<String>, &Value) = match head {
+        "Case" if items.len() == 3 =>
+            (vec![Value::symbol("Case"), items[1].clone()], None, items[2]),
+        "Case" if items.len() == 4 && read_sym(items[2]).is_some() =>
+            (vec![Value::symbol("Case"), items[1].clone()], read_sym(items[2]), items[3]),
+        "CaseB" if items.len() == 4 =>
+            (vec![Value::symbol("CaseB"), items[1].clone(), items[2].clone()], None, items[3]),
+        "CaseB" if items.len() == 5 && read_sym(items[3]).is_some() =>
+            (vec![Value::symbol("CaseB"), items[1].clone(), items[2].clone()], read_sym(items[3]), items[4]),
+        _ => return Err(format!("malformed `{}` case (wrong arity / annotation)", head)),
+    };
+    let mut c2 = ctx.clone();
+    match induct {
+        None => {
+            // CaseOn: one prepended case hyp (named or anonymous).
+            c2.stack.insert(0, name);
+        }
+        Some((var, is2)) => {
+            if name.is_some() {
+                return Err("Induct/Induct2 cases take no hyp name (they bind `ih`, not a case hyp)".into());
+            }
+            let ctor = read_sym(items[1]).unwrap_or_default();
+            let n = if is2 { if ctor == "SS" { 1 } else { 0 } }
+                    else { ih_count(ctx, var, &ctor, kernel, module_val) };
+            for nm in ih_names(n) { c2.stack.push(nm); } // appended (do_induct order)
+        }
+    }
+    let proof2 = desugar_hyps(proof, &c2, kernel, module_val)?;
+    let mut out = prefix;
+    out.push(proof2);
+    Ok(Value::list(out))
 }
 
 // ----------------------------------------------------------------------

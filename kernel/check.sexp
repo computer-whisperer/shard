@@ -1424,3 +1424,26 @@
       (match (dbg_ctor_fields cname ctors)
         (None None)
         ((Some fts) (Some (build_case_on_subgoal seq scrut cname names fts)))))))
+
+;; Recursive-field count for an Induct ctor: how many IHs do_induct appends
+;; (one per field whose CONCRETE type equals the inducting var's type).
+;; UNTRUSTED — only the loader's named-hyp desugarer calls these.
+(fn dbg_count_rec ((var_type Type) (fields (List Type))) Int
+  (match fields
+    (Nil 0)
+    ((Cons f rest)
+      (if (type_eq var_type f)
+          (+ 1 (dbg_count_rec var_type rest))
+          (dbg_count_rec var_type rest)))))
+
+(fn dbg_ih_count ((var_type Type) (cname Symbol) (m Module)) Int
+  (match (type_head var_type)
+    (None 0)
+    ((Some (Pair tname targs))
+      (match (lookup_typedef tname m)
+        (None 0)
+        ((Some (TypeDef _ tparams ctors))
+          (match (dbg_ctor_fields cname ctors)
+            (None 0)
+            ((Some fts)
+              (dbg_count_rec var_type (type_subst_list (zip_pairs tparams targs) fts)))))))))
