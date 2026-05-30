@@ -41,14 +41,20 @@
 (fn snake_head ((xs (List Pos))) Pos
   (match xs (Nil (Pos 0 0)) ((Cons h t) h)))
 
-;; all-but-last cell (the tail dropped on a non-eating move).
-(fn but_last ((xs (List Pos))) (List Pos)
-  (match xs
-    (Nil Nil)
-    ((Cons h t)
-      (match t
-        (Nil Nil)
-        ((Cons h2 t2) (Cons h (but_last t)))))))
+;; tail (drop the head) — a single match, so len_tl needs no inductive step.
+(fn tl ((xs (List Pos))) (List Pos)
+  (match xs (Nil Nil) ((Cons h t) t)))
+
+;; non-emptiness predicate.
+(fn nonempty ((xs (List Pos))) Bool
+  (match xs (Nil False) ((Cons h t) True)))
+
+;; all-but-last cell (the tail dropped on a non-eating move), via rev/tl/rev.
+;; This formulation keeps len_but_last cheap: a DIRECT but_last would recurse
+;; with a CHANGING head, which the induction hypothesis can't match; routing
+;; through tl (whose recursion-free length law is trivial) and the existing
+;; len_rev sidesteps that entirely.
+(fn but_last ((xs (List Pos))) (List Pos) (rev (tl (rev xs))))
 
 ;; out-of-bounds on a fixed 20×20 board (0..19); board geometry — informal I3.
 (fn oob ((p Pos)) Bool
@@ -179,3 +185,98 @@
                (Simp Lhs)                                 ; -> game_newhead g i
                (Unfold 'game_newhead Lhs))                ; -> addpos (snake_head (snake_of g)) (delta (steer ..))
     Refl))
+
+;; ---- R2 support lemmas -----------------------------------------------------
+
+;; tail length: 1 + len (tl xs) = len xs, for nonempty xs. tl is non-recursive
+;; so the Cons case closes with no IH.
+(claim len_tl
+  (Goal (list (Param 'xs (ty List Pos)))
+        (list (Equation (Call 'nonempty (list (FVar 'xs))) (Ctor 'True (list))))
+    (Equation (Call '+ (list (IntLit 1) (Call 'len (list (Call 'tl (list (FVar 'xs)))))))
+              (Call 'len (list (FVar 'xs)))))
+  (Induct 'xs
+    (list
+      (Case 'Nil  (Absurd (Premise 0)))
+      (Case 'Cons (Steps (list (Simp Both)) (ByTheory 'lia (Cert 'lia (list))))))))
+
+;; appending a singleton is never empty (no IH — both cases yield a Cons).
+(claim nonempty_snoc
+  (Goal (list (Param 'ys (ty List Pos)) (Param 'h (ty Pos))) (list)
+    (Equation
+      (Call 'nonempty (list (Call 'append (list (FVar 'ys)
+                                                (Ctor 'Cons (list (FVar 'h) (Ctor 'Nil (list))))))))
+      (Ctor 'True (list))))
+  (Induct 'ys
+    (list
+      (Case 'Nil  (Steps (list (Simp Lhs)) Refl))
+      (Case 'Cons (Steps (list (Simp Lhs)) Refl)))))
+
+;; rev preserves non-emptiness.
+(claim nonempty_rev
+  (Goal (list (Param 'xs (ty List Pos)))
+        (list (Equation (Call 'nonempty (list (FVar 'xs))) (Ctor 'True (list))))
+    (Equation (Call 'nonempty (list (Call 'rev (list (FVar 'xs))))) (Ctor 'True (list))))
+  (Induct 'xs
+    (list
+      (Case 'Nil (Absurd (Premise 0)))
+      (CaseB 'Cons (list 'h 't)
+        (Steps (list (Simp Lhs)                                       ; -> nonempty (append (rev t) (Cons h Nil))
+                     (Rewrite (Lemma 'nonempty_snoc) Lr Lhs True (list)))
+               Refl)))))
+
+;; drop-last length: 1 + len (but_last xs) = len xs, for nonempty xs.
+;; len (rev (tl (rev xs))) = len (tl (rev xs)) [len_rev] = len (rev xs) - 1
+;; [len_tl, needs nonempty (rev xs)] = len xs - 1 [len_rev].
+(claim len_but_last
+  (Goal (list (Param 'xs (ty List Pos)))
+        (list (Equation (Call 'nonempty (list (FVar 'xs))) (Ctor 'True (list))))
+    (Equation (Call '+ (list (IntLit 1) (Call 'len (list (Call 'but_last (list (FVar 'xs)))))))
+              (Call 'len (list (FVar 'xs)))))
+  (Steps (list (Unfold 'but_last Lhs)                              ; (+ 1 (len (rev (tl (rev xs)))))
+               (Rewrite (Lemma 'len_rev) Lr Lhs True (list)))      ; -> (+ 1 (len (tl (rev xs))))
+    (RewriteWith (Lemma 'len_tl) Lr Lhs (list)
+      ;; premise of len_tl: nonempty (rev xs) = True — via the (conditional)
+      ;; nonempty_rev, whose own premise (nonempty xs) is our Premise 0.
+      (list (RewriteWith (Lemma 'nonempty_rev) Lr Lhs (list)
+              (list (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl))
+              Refl))
+      ;; continue: (len (rev xs)) = (len xs)
+      (Steps (list (Rewrite (Lemma 'len_rev) Lr Lhs True (list))) Refl))))
+
+;; R2 — LENGTH BOOKKEEPING.  status_of g = Alive ∧ nonempty (snake_of g) ⟹
+;;   len (snake_of (step g i)) = len (snake_of g) + (if game_ate g i then 1 else 0).
+;; NOTE (contract refinement discovered while proving): R2 carries a
+;; snake-nonempty precondition, absent from the prose contract — the move
+;; (non-eat) case is false for an empty snake. Alive games always have a
+;; nonempty snake, so this holds on all reachable states.
+(claim snake_R2_length_bookkeeping
+  (Goal
+    (list (Param 'g (ty GameState)) (Param 'i (ty Heading)))
+    (list (Equation (Call 'status_of (list (FVar 'g))) (Ctor 'Alive (list)))
+          (Equation (Call 'nonempty (list (Call 'snake_of (list (FVar 'g))))) (Ctor 'True (list))))
+    (Equation
+      (Call 'len (list (Call 'snake_of (list (Call 'step (list (FVar 'g) (FVar 'i)))))))
+      (Call '+ (list (Call 'len (list (Call 'snake_of (list (FVar 'g)))))
+                     (If (Call 'game_ate (list (FVar 'g) (FVar 'i))) (IntLit 1) (IntLit 0))))))
+  (Steps (list (Unfold 'step Lhs)
+               (Rewrite (Premise 0) Lr Lhs True (list))   ; status_of g -> Alive
+               (Simp Lhs)                                 ; -> len (snake_of (live_step g i))
+               (Unfold 'live_step Lhs)
+               (Simp Lhs))                                ; -> (+ 1 (len (if (game_ate g i) (snake_of g) (but_last (snake_of g)))))
+    (CaseOn (Call 'game_ate (list (FVar 'g) (FVar 'i))) 'Bool
+      (list
+        ;; ate: grow. (+ 1 (len snake)) = (len snake + 1).
+        (Case 'True
+          (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))   ; game_ate -> True (lhs if)
+                       (Rewrite (Hyp 0) Lr Rhs True (list))   ; game_ate -> True (rhs If)
+                       (Simp Both))
+                 (ByTheory 'lia (Cert 'lia (list)))))
+        ;; not ate: move. (+ 1 (len (but_last snake))) = (len snake + 0).
+        (Case 'False
+          (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))   ; game_ate -> False (lhs if)
+                       (Rewrite (Hyp 0) Lr Rhs True (list))   ; game_ate -> False (rhs If)
+                       (Simp Both))                           ; lhs (+ 1 (len (but_last snake))); rhs (+ (len snake) 0)
+            (RewriteWith (Lemma 'len_but_last) Lr Lhs (list)
+              (list (Steps (list (Rewrite (Premise 1) Lr Lhs True (list))) Refl))  ; nonempty (snake_of g)
+              (ByTheory 'lia (Cert 'lia (list))))))))))
