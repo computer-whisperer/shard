@@ -9,11 +9,13 @@
 ;;;   read_top   : text  -> (Option SExpr)   pure syntax (paren tree)
 ;;;   elaborate  : SExpr -> (Option Expr)    ctor-vs-call, sugar, forms
 ;;;
-;;; SCOPE (slice 1): the applicative core + `if` / `list` / `quote` /
-;;; string-literal sugar. The binder forms `match` / `let` (and the
-;;; type-builder forms `ty` / `tv`) are recognized but deferred — they
-;;; need a binding context to resolve BVars, which top-level eval
-;;; expressions don't exercise. They return None for now.
+;;; SCOPE: full proof-file front-end. Expressions: the applicative core +
+;;; `if` / `match` / `let` (scope-threaded de Bruijn) / `list` / `quote`
+;;; (incl. the `'X` reader macro) / string-literal sugar / the `ty` / `tv`
+;;; type-builder sugars. Files: `parse_module` (types/fns/externs) and
+;;; `parse_claims` (the `(claim NAME GOAL PROOF)` forms). All validated
+;;; byte-for-byte against src/load.rs via `check parse-check` / `module-check`
+;;; / `claims-check`. Remaining: assembling these into the checker driver.
 ;;;
 ;;; Needs the char↔symbol bridge primitives (src/prim.rs):
 ;;;   sym_of_chars : (List Int) -> Symbol
@@ -680,3 +682,61 @@
           (match (collect_fns_externs forms (append_sym (typedef_ctors tds) base_ctors))
             (None None)
             ((Some (Pair fns externs)) (Some (Module tds fns externs)))))))))
+
+;; ===========================================================================
+;; Claim collection: pull every (claim NAME GOAL PROOF) form out of a file as
+;; raw goal/proof construction Exprs — the same data load.rs builds, PRE the
+;; named-hyp desugar / goal-eval the driver applies downstream. This is the
+;; parsing the self-hosted checker driver needs that parse_module skips.
+;; ===========================================================================
+
+(type Claim (Claim Symbol Expr Expr))      ; name, goal-expr, proof-expr
+
+(fn is_claim_form ((f SExpr)) Bool
+  (match f
+    ((SList (Cons (SSym h) _)) (sym_eq h (quote claim)))
+    (_ False)))
+
+;; (claim NAME GOAL PROOF) → Claim. None on a malformed shape.
+(fn claim_of_form ((f SExpr) (ctors (List Symbol))) (Option Claim)
+  (match f
+    ((SList (Cons _ (Cons (SSym name) (Cons goalS (Cons proofS Nil)))))
+      (match (elaborate goalS ctors Nil)
+        (None None)
+        ((Some g)
+          (match (elaborate proofS ctors Nil)
+            (None None)
+            ((Some p) (Some (Claim name g p)))))))
+    (_ None)))
+
+(fn collect_claims ((forms (List SExpr)) (ctors (List Symbol))) (Option (List Claim))
+  (match forms
+    (Nil (Some Nil))
+    ((Cons f rest)
+      (if (is_claim_form f)
+          (match (claim_of_form f ctors)
+            (None None)
+            ((Some c)
+              (match (collect_claims rest ctors)
+                (None None)
+                ((Some cs) (Some (Cons c cs))))))
+          (collect_claims rest ctors)))))
+
+(fn parse_claims ((src (List Int)) (ctors (List Symbol))) (Option (List Claim))
+  (match (read_all src)
+    (None None)
+    ((Some forms) (collect_claims forms ctors))))
+
+;; --- Claim accessors (the driver's iteration API; also the differential probe) ---
+(fn claim_goal  ((c Claim)) Expr (match c ((Claim n g p) g)))
+(fn claim_proof ((c Claim)) Expr (match c ((Claim n g p) p)))
+
+(fn goals_of  ((cs (List Claim))) (List Expr)
+  (match cs (Nil Nil) ((Cons c rest) (Cons (claim_goal  c) (goals_of  rest)))))
+(fn proofs_of ((cs (List Claim))) (List Expr)
+  (match cs (Nil Nil) ((Cons c rest) (Cons (claim_proof c) (proofs_of rest)))))
+
+(fn claims_goals  ((co (Option (List Claim)))) (List Expr)
+  (match co (None Nil) ((Some cs) (goals_of  cs))))
+(fn claims_proofs ((co (Option (List Claim)))) (List Expr)
+  (match co (None Nil) ((Some cs) (proofs_of cs))))

@@ -109,6 +109,14 @@ fn run() -> ExitCode {
         return run_module_check(&args[1..]);
     }
 
+    // `claims-check` subcommand: differential validation of the shard claim
+    // collector (tools/reader.shard's `parse_claims`) against the Rust loader.
+    // For each `(claim NAME GOAL PROOF)` form in a file, compare the raw
+    // (pre-desugar) goal and proof construction Exprs parsed both ways.
+    if args[0] == "claims-check" {
+        return run_claims_check(&args[1..]);
+    }
+
     let kernel = match load_kernel_from(default_kernel_dir()) {
         Ok(m) => m,
         Err(e) => {
@@ -1631,6 +1639,175 @@ fn run_module_check(args: &[String]) -> ExitCode {
             println!("shard returned non-Option: {}", show_reflected(other));
             ExitCode::from(1)
         }
+    }
+}
+
+// ----------------------------------------------------------------------
+// `claims-check` subcommand — differential validation of `parse_claims`.
+//
+// Reference: the Rust reader pulls each `(claim NAME GOAL PROOF)` form and
+// parses GOAL/PROOF raw via `load::expr_from_value` (pre the named-hyp
+// desugar / goal-eval the checker applies downstream).
+// Shard: `parse_claims` collects the same claims; `claims_goals` /
+// `claims_proofs` project the goal/proof Expr lists, which we un-reflect and
+// compare structurally — same discipline as module-check / parse-check.
+// ----------------------------------------------------------------------
+
+fn run_claims_check(args: &[String]) -> ExitCode {
+    let mut positional: Vec<&String> = Vec::new();
+    for a in args {
+        if a.starts_with("--") {
+            eprintln!("error: unknown flag {}", a);
+            return ExitCode::from(2);
+        }
+        positional.push(a);
+    }
+    if positional.len() < 2 {
+        eprintln!("usage: check claims-check <reader.shard>... <target.shard>");
+        return ExitCode::from(2);
+    }
+    let target_path = positional.last().unwrap().as_str();
+    let files = &positional[..positional.len() - 1];
+
+    let kernel = match load_kernel_from(default_kernel_dir()) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error loading kernel from {}: {}", default_kernel_dir().display(), e);
+            return ExitCode::from(2);
+        }
+    };
+    let user_module = ast::Module {
+        types: kernel.types.clone(),
+        fns: Vec::new(),
+        externs: Vec::new(),
+    };
+    let mut ctx = Ctx {
+        user_module_value: module_to_value(&user_module),
+        user_module,
+        theory: ctor("TheoryEmpty", vec![]),
+        passed: 0,
+        failed: 0,
+        axioms: 0,
+        loaded: std::collections::HashSet::new(),
+        in_progress: Vec::new(),
+        load_only: true,
+        trace_target: None,
+    };
+    for f in files {
+        if let Err(code) = process_file(&PathBuf::from(f.as_str()), &mut ctx, &kernel) {
+            return code;
+        }
+    }
+
+    let target_src = match std::fs::read_to_string(target_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error reading {}: {}", target_path, e);
+            return ExitCode::from(2);
+        }
+    };
+
+    // Reference: pull claim forms via the Rust reader; goal/proof raw.
+    let forms = match parse_top_level(&target_src) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("rust parse error: {}", e);
+            return ExitCode::from(2);
+        }
+    };
+    let mut ref_names: Vec<String> = Vec::new();
+    let mut ref_goals: Vec<ast::Expr> = Vec::new();
+    let mut ref_proofs: Vec<ast::Expr> = Vec::new();
+    for form in &forms {
+        let items: Vec<&Value> = match form.list_iter() {
+            Some(it) => it.collect(),
+            None => continue,
+        };
+        if items.len() != 4 || items[0].as_symbol() != Some("claim") {
+            continue;
+        }
+        let name = match items[1].as_symbol() {
+            Some(s) => s.to_string(),
+            None => {
+                eprintln!("claim NAME not a symbol");
+                return ExitCode::from(2);
+            }
+        };
+        let goal = match load::expr_from_value(items[2], &ctx.user_module) {
+            Ok(e) => e,
+            Err(e) => { eprintln!("rust goal parse ({}): {:?}", name, e); return ExitCode::from(2); }
+        };
+        let proof = match load::expr_from_value(items[3], &ctx.user_module) {
+            Ok(e) => e,
+            Err(e) => { eprintln!("rust proof parse ({}): {:?}", name, e); return ExitCode::from(2); }
+        };
+        ref_names.push(name);
+        ref_goals.push(goal);
+        ref_proofs.push(proof);
+    }
+
+    // Shard: parse_claims, then project + un-reflect the goal/proof lists.
+    let ctor_names: Vec<String> = ctx.user_module.types.iter()
+        .flat_map(|td| td.ctors.iter().map(|cd| cd.name.clone()))
+        .collect();
+    let base_ctors = sym_list_native(&ctor_names);
+    let project = |proj: &str| -> Result<Vec<ast::Expr>, String> {
+        let call = ast::Expr::Call(
+            proj.into(),
+            vec![ast::Expr::Call(
+                "parse_claims".into(),
+                vec![line_to_event_native(&target_src), base_ctors.clone()],
+            )],
+        );
+        // claims_goals/proofs return a (List Expr) — a list whose elements are
+        // object values of type Expr (so already in reflected form). eval_raw
+        // reflects the whole result once more; un-reflect once to recover the
+        // native list spine, then un-reflect EACH element once more to drop it
+        // from reflected-Expr down to the native goal/proof Expr the Rust
+        // `expr_from_value` reference produces.
+        let native_list = value_to_native_expr(&eval_raw(&ctx.user_module, &call)?)?;
+        decode_list(&native_list)
+            .into_iter()
+            .map(value_to_native_expr)
+            .collect::<Result<Vec<_>, String>>()
+    };
+    let shard_goals = match project("claims_goals") {
+        Ok(v) => v,
+        Err(e) => { eprintln!("shard claims_goals error: {}", e); return ExitCode::from(2); }
+    };
+    let shard_proofs = match project("claims_proofs") {
+        Ok(v) => v,
+        Err(e) => { eprintln!("shard claims_proofs error: {}", e); return ExitCode::from(2); }
+    };
+
+    // Compare structurally.
+    let mut ok = true;
+    let compare = |label: &str, s: &[ast::Expr], r: &[ast::Expr], names: &[String], ok: &mut bool| {
+        if s.len() != r.len() {
+            println!("DIFFER  {}  {} count: shard {} vs rust {}", target_path, label, s.len(), r.len());
+            *ok = false;
+            return;
+        }
+        for (i, (a, b)) in s.iter().zip(r.iter()).enumerate() {
+            if a != b {
+                let nm = names.get(i).map(|x| x.as_str()).unwrap_or("?");
+                println!("DIFFER  {}  claim '{}' {}:", target_path, nm, label);
+                println!("    shard: {}", show_reflected(&expr_to_value(a)));
+                println!("    rust : {}", show_reflected(&expr_to_value(b)));
+                *ok = false;
+                return;
+            }
+        }
+    };
+    compare("goal", &shard_goals, &ref_goals, &ref_names, &mut ok);
+    if ok {
+        compare("proof", &shard_proofs, &ref_proofs, &ref_names, &mut ok);
+    }
+    if ok {
+        println!("MATCH  {}  ({} claims)", target_path, ref_goals.len());
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
     }
 }
 
