@@ -11,15 +11,16 @@
 ;;; check_sequent stays exactly as fast as native `check` — only the
 ;;; orchestration moved into shard.
 ;;;
-;;; SCOPE (this slice): positional-hyp proofs. Named hypotheses `(Hyp 'ih)`
-;;; need a desugar pass `check_sequent` doesn't perform (the next slice); the
-;;; raw un-reflected proof carries them through unchanged.
+;;; Named hypotheses `(Hyp 'ih)` are desugared to positional form
+;;; (desugar.shard) before un-reflection; the theory still starts empty, so
+;;; claims citing IMPORTED lemmas are the remaining gap.
 
 ;; Goal → Sequent: a top-level claim has no in-scope hypotheses (hyps = Nil).
 (fn lift_sequent ((g Goal)) Sequent
   (match g ((Goal params premises eq) (Sequent params Nil premises eq))))
 
 (fn claim_name ((c Claim)) Symbol (match c ((Claim n g p) n)))
+(fn goal_params ((g Goal)) (List Param) (match g ((Goal ps prems eq) ps)))
 
 ;; Running tally over a file's claims.
 (type DriverResult (DriverResult Int Int))     ; passed, failed
@@ -34,11 +35,15 @@
       (match (unreflect_goal (claim_goal c))
         (None (run_claims_loop m th rest passed (+ failed 1)))
         ((Some g)
-          (match (unreflect_proof (claim_proof c))
+          ;; desugar named hyps (named → positional) on the reflected proof
+          ;; against this goal's params, THEN un-reflect to a native Proof.
+          (match (unreflect_proof (desugar_hyps m (goal_params g) Nil (claim_proof c)))
             (None (run_claims_loop m th rest passed (+ failed 1)))
             ((Some p)
               (if (check_sequent m th (lift_sequent g) p)
-                  (run_claims_loop m (TheoryCons (Proven (claim_name c) g) th)
+                  ;; store the CLOSED goal (param FVars → BVars) so later
+                  ;; (Lemma name) citations resolve, mirroring native check.
+                  (run_claims_loop m (TheoryCons (Proven (claim_name c) (close_goal_for_storage g)) th)
                                    rest (+ passed 1) failed)
                   (run_claims_loop m th rest passed (+ failed 1))))))))))
 

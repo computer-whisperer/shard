@@ -1,0 +1,132 @@
+;;; desugar.shard — named-hypothesis desugaring, in shard.
+;;;
+;;; The kernel only understands POSITIONAL hypotheses `(Hyp k)`. Proof authors
+;;; may instead name them — `(Hyp 'ih)` — for readability. This pass rewrites
+;;; named hyps to positional by simulating the kernel's hyp stack, mirroring
+;;; bin/check.rs's HCtx/desugar_hyps. It runs on the REFLECTED proof Expr
+;;; (where `(Ctor 'Hyp (Cons (SymLit s) Nil))` named is distinguishable from
+;;; `(Ctor 'Hyp (Cons (IntLit k) Nil))` positional), BEFORE unreflect_proof.
+;;;
+;;; Stack discipline (front = index 0 = `(Hyp 0)`):
+;;;   WfInduct        : PREPEND one IH, named 'ih
+;;;   Induct/Induct2  : per case, APPEND one IH per recursive ctor field
+;;;                     (do_induct order), named 'ih, 'ih1, … (count via the
+;;;                     kernel's dbg_ih_count; Induct2: 'SS→1 else 0)
+;;; Everything else leaves the stack unchanged (generic rebuild). Positional
+;;; `(Hyp k)` is untouched. Named CaseOn case-hyps (a rarer sugar) are not
+;;; handled here — none occur in the corpus.
+
+(fn stack_pos ((s Symbol) (stk (List (Option Symbol))) (k Int)) (Option Int)
+  (match stk
+    (Nil None)
+    ((Cons mh t)
+      (match mh
+        ((Some h) (if (sym_eq s h) (Some k) (stack_pos s t (+ k 1))))
+        (None     (stack_pos s t (+ k 1)))))))
+
+(fn param_type ((v Symbol) (ps (List Param))) (Option Type)
+  (match ps
+    (Nil None)
+    ((Cons (Param nm ty) rest)
+      (if (sym_eq v nm) (Some ty) (param_type v rest)))))
+
+;; "ih", "ih1", "ih2", … (the auto-IH naming; i=0 → 'ih).
+(fn ih_name ((i Int)) Symbol
+  (if (int_eq i 0)
+      (quote ih)
+      (sym_of_chars (Cons 105 (Cons 104 (Cons (+ 48 i) Nil))))))   ; 'i' 'h' digit
+
+(fn ih_entries ((i Int) (n Int)) (List (Option Symbol))
+  (if (lt i n)
+      (Cons (Some (ih_name i)) (ih_entries (+ i 1) n))
+      Nil))
+
+(fn append_ms ((a (List (Option Symbol))) (b (List (Option Symbol)))) (List (Option Symbol))
+  (match a (Nil b) ((Cons h t) (Cons h (append_ms t b)))))
+
+;; How many IHs do_induct appends for ctor `cname` when inducting on `var`.
+(fn case_ih_count ((m Module) (ps (List Param)) (head Symbol) (var Symbol) (cname Symbol)) Int
+  (if (sym_eq head (quote Induct2))
+      (if (sym_eq cname (quote SS)) 1 0)
+      (match (param_type var ps)
+        (None 0)
+        ((Some ty) (dbg_ih_count ty cname m)))))
+
+;; --- the traversal --------------------------------------------------------
+
+(fn desugar_hyps ((m Module) (ps (List Param)) (stk (List (Option Symbol))) (e Expr)) Expr
+  (match e
+    ((Ctor cn args)
+      (if (sym_eq cn (quote Hyp))      (desug_hyp stk args)
+      (if (sym_eq cn (quote Induct))   (desug_induct m ps stk (quote Induct) args)
+      (if (sym_eq cn (quote Induct2))  (desug_induct m ps stk (quote Induct2) args)
+      (if (sym_eq cn (quote WfInduct)) (desug_wfinduct m ps stk args)
+          (Ctor cn (desug_list m ps stk args)))))))
+    (_ e)))
+
+(fn desug_list ((m Module) (ps (List Param)) (stk (List (Option Symbol))) (es (List Expr))) (List Expr)
+  (match es
+    (Nil Nil)
+    ((Cons h t) (Cons (desugar_hyps m ps stk h) (desug_list m ps stk t)))))
+
+(fn desug_hyp ((stk (List (Option Symbol))) (args (List Expr))) Expr
+  (match args
+    ((Cons (SymLit s) Nil)
+      (match (stack_pos s stk 0)
+        ((Some k) (Ctor (quote Hyp) (Cons (IntLit k) Nil)))
+        (None     (Ctor (quote Hyp) (Cons (SymLit s) Nil)))))   ; unbound — leave (fails later)
+    (_ (Ctor (quote Hyp) args))))                               ; positional (IntLit) — unchanged
+
+(fn desug_wfinduct ((m Module) (ps (List Param)) (stk (List (Option Symbol))) (args (List Expr))) Expr
+  (match args
+    ((Cons measureE (Cons proofE Nil))
+      (Ctor (quote WfInduct)
+            (Cons (desugar_hyps m ps stk measureE)
+                  (Cons (desugar_hyps m ps (Cons (Some (quote ih)) stk) proofE) Nil))))
+    (_ (Ctor (quote WfInduct) args))))
+
+(fn desug_induct ((m Module) (ps (List Param)) (stk (List (Option Symbol))) (head Symbol) (args (List Expr))) Expr
+  (match args
+    ((Cons (SymLit var) (Cons casesE Nil))
+      (Ctor head (Cons (SymLit var) (Cons (desug_cases m ps stk head var casesE) Nil))))
+    (_ (Ctor head args))))
+
+(fn desug_cases ((m Module) (ps (List Param)) (stk (List (Option Symbol))) (head Symbol) (var Symbol) (casesE Expr)) Expr
+  (match casesE
+    ((Ctor cn args)
+      (if (sym_eq cn (quote Cons))
+          (match args
+            ((Cons caseE (Cons restE Nil))
+              (Ctor (quote Cons)
+                    (Cons (desug_case  m ps stk head var caseE)
+                          (Cons (desug_cases m ps stk head var restE) Nil))))
+            (_ casesE))
+          casesE))
+    (_ casesE)))
+
+(fn desug_case ((m Module) (ps (List Param)) (stk (List (Option Symbol))) (head Symbol) (var Symbol) (caseE Expr)) Expr
+  (match caseE
+    ((Ctor cn args)
+      (if (sym_eq cn (quote Case))
+          (match args
+            ((Cons (SymLit cname) (Cons proofE Nil))
+              (Ctor (quote Case)
+                    (Cons (SymLit cname)
+                          (Cons (desugar_hyps m ps
+                                  (append_ms stk (ih_entries 0 (case_ih_count m ps head var cname)))
+                                  proofE)
+                                Nil))))
+            (_ caseE))
+      (if (sym_eq cn (quote CaseB))
+          (match args
+            ((Cons (SymLit cname) (Cons fieldsE (Cons proofE Nil)))
+              (Ctor (quote CaseB)
+                    (Cons (SymLit cname)
+                          (Cons fieldsE
+                                (Cons (desugar_hyps m ps
+                                        (append_ms stk (ih_entries 0 (case_ih_count m ps head var cname)))
+                                        proofE)
+                                      Nil)))))
+            (_ caseE))
+          caseE)))
+    (_ caseE)))
