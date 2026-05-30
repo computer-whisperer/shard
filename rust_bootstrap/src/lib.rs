@@ -44,11 +44,12 @@ pub fn load_kernel_from<P: AsRef<std::path::Path>>(
     ])
 }
 
-/// The kernel directory that ships with this crate (compile-time
-/// `CARGO_MANIFEST_DIR/kernel`). Convenience for callers that don't
-/// need to point at a different tree.
+/// The kernel directory at the repo root (compile-time
+/// `CARGO_MANIFEST_DIR/../kernel` — the Rust bootstrap lives in
+/// `rust_bootstrap/`, the shard sources one level up). Convenience for
+/// callers that don't need to point at a different tree.
 pub fn default_kernel_dir() -> std::path::PathBuf {
-    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("kernel")
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../kernel")
 }
 
 #[cfg(test)]
@@ -133,7 +134,7 @@ mod tests {
     fn calc_eval(call: &str) -> ast::Expr {
         let kernel = load_kernel();
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("examples/calc/calc.shard");
+            .join("../examples/calc/calc.shard");
         let src = std::fs::read_to_string(&path).expect("read calc.shard");
         let m = load::module_from_str_with_base(&src, Some(&kernel))
             .expect("calc module loads");

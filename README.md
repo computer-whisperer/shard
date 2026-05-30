@@ -37,8 +37,12 @@ The product asymmetry, restated:
 
 ## Quick start
 
+The Rust bootstrap lives in `rust_bootstrap/`; build it once, then run the
+`check` binary from the repo root (it locates the kernel by a baked path):
+
 ```sh
-cargo run --bin check -- std/*.shard          # the standard library
+cargo build --release --manifest-path rust_bootstrap/Cargo.toml
+rust_bootstrap/target/release/check std/*.shard   # the standard library
 ```
 
 Expected output:
@@ -54,7 +58,7 @@ PASS  mem_reverses
 `std/mem.shard` `(import …)`s the rest of `std/`, so checking any one file
 pulls its dependencies transitively; checking `std/*.shard` checks the
 whole library (each file loaded once). The demos live in `examples/`
-(`cargo run --bin check -- examples/lia_basics.shard …`);
+(`rust_bootstrap/target/release/check examples/lia_basics.shard …`);
 `examples/lia_rejects.shard` is a deliberate negative test (it FAILs).
 
 The `check` binary loads the bundled kernel, then walks each `.shard`
@@ -70,7 +74,7 @@ file. A file may mix code, dependencies, and proofs:
 Run the Rust test suite (loader, evaluator, kernel-from-rust mirrors):
 
 ```sh
-cargo test --release
+cargo test --release --manifest-path rust_bootstrap/Cargo.toml
 ```
 
 109 tests as of slice 50.
@@ -100,14 +104,16 @@ kernel/                ; the trusted kernel, written in narrow (1,823 NCNB)
   ord.shard             ;   order-reflection backend (lt/le = True via LIA diff)
   farkas.shard          ;   linear-integer entailment (premises ⊢ lt/le, cert-checked)
 
-src/                   ; the trusted-by-review Rust component
-  ast.rs               ;   Expr / Pat / Type / Module ADTs the loader produces
-  load.rs              ;   sexp → ast::Module; (ty …) and (tv T) sugars
-  eval.rs              ;   CBV evaluator; stuck-and-intercept for primitives
-  prim.rs              ;   primitive table (+ - * mod, int_eq, gen_fresh, …)
-  nval.rs              ;   narrow-value builders for tests
-  lib.rs               ;   loader entrypoint + Rust test suite (109 tests)
-  bin/check.rs         ;   the `check` proof-script driver binary
+rust_bootstrap/        ; the DISPOSABLE Rust bootstrap — host + parser + eval
+  Cargo.toml           ;   until shard self-compiles; then this whole dir goes
+  src/                 ;   the trusted-by-review Rust component
+    ast.rs             ;     Expr / Pat / Type / Module ADTs the loader produces
+    load.rs            ;     surface → ast::Module; (ty …) and (tv T) sugars
+    eval.rs            ;     environment-machine evaluator; Rc-shared values
+    prim.rs            ;     primitive table (+ - * mod, int_eq, sym_of_chars, …)
+    nval.rs            ;     narrow-value builders for tests
+    lib.rs             ;     loader entrypoint + Rust test suite
+    bin/check.rs       ;     the `check` driver: proofs, eval, app, cli, *-check
 
 std/                   ; the standard library — reusable code + theorems,
                        ;   each a topic file (code + its lemmas, co-located),
@@ -130,8 +136,12 @@ examples/              ; demonstrations (not the library)
   add_nat_zero.shard    ;
   double_claims.shard   ;   Simp-unfold of a user fn (double_lib.shard)
   lia_rejects.shard     ;   NEGATIVE test — the kernel correctly REJECTs it
+  cli/                 ;   shard CLI apps: cat.shard + eval_app.shard (the
+                       ;     self-hosted `eval`, run via `check cli`)
 
 tools/
+  reader.shard         ;   the s-expression reader + module parser, in shard
+                       ;     (the self-hosted front-end; see check parse-check)
   zed-narrow/          ;   Zed editor syntax-highlighting extension
                        ;     for .shard files
 ```
