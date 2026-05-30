@@ -1663,16 +1663,24 @@ fn run_module_check(args: &[String]) -> ExitCode {
 // ----------------------------------------------------------------------
 
 fn run_claims_check(args: &[String]) -> ExitCode {
+    // --unreflect: validate the shard un-reflectors. The shard side projects
+    // each claim's goal through `unreflect_goal` (→ native Goal), so we compare
+    // GOALS ONLY (the proof un-reflector lands in a later slice) and skip the
+    // extra per-element un-reflect the raw mode needs.
+    let mut unreflect = false;
     let mut positional: Vec<&String> = Vec::new();
     for a in args {
-        if a.starts_with("--") {
-            eprintln!("error: unknown flag {}", a);
-            return ExitCode::from(2);
+        match a.as_str() {
+            "--unreflect" => unreflect = true,
+            s if s.starts_with("--") => {
+                eprintln!("error: unknown flag {}", a);
+                return ExitCode::from(2);
+            }
+            _ => positional.push(a),
         }
-        positional.push(a);
     }
     if positional.len() < 2 {
-        eprintln!("usage: check claims-check <reader.shard>... <target.shard>");
+        eprintln!("usage: check claims-check [--unreflect] <reader.shard>... <target.shard>");
         return ExitCode::from(2);
     }
     let target_path = positional.last().unwrap().as_str();
@@ -1760,7 +1768,12 @@ fn run_claims_check(args: &[String]) -> ExitCode {
         .flat_map(|td| td.ctors.iter().map(|cd| cd.name.clone()))
         .collect();
     let base_ctors = sym_list_native(&ctor_names);
-    let project = |proj: &str| -> Result<Vec<ast::Expr>, String> {
+    // `extra`: in raw mode the accessor returns a (List Expr) whose elements are
+    // object Exprs (reflected) — eval_raw reflects the list once more, so we
+    // un-reflect once for the spine and once more per element. In --unreflect
+    // mode the accessor already un-reflected each element to a native Goal, so
+    // only the spine un-reflect is needed.
+    let project = |proj: &str, extra: bool| -> Result<Vec<ast::Expr>, String> {
         let call = ast::Expr::Call(
             proj.into(),
             vec![ast::Expr::Call(
@@ -1768,25 +1781,18 @@ fn run_claims_check(args: &[String]) -> ExitCode {
                 vec![line_to_event_native(&target_src), base_ctors.clone()],
             )],
         );
-        // claims_goals/proofs return a (List Expr) — a list whose elements are
-        // object values of type Expr (so already in reflected form). eval_raw
-        // reflects the whole result once more; un-reflect once to recover the
-        // native list spine, then un-reflect EACH element once more to drop it
-        // from reflected-Expr down to the native goal/proof Expr the Rust
-        // `expr_from_value` reference produces.
         let native_list = value_to_native_expr(&eval_raw(&ctx.user_module, &call)?)?;
-        decode_list(&native_list)
-            .into_iter()
-            .map(value_to_native_expr)
-            .collect::<Result<Vec<_>, String>>()
+        let elems = decode_list(&native_list);
+        if extra {
+            elems.into_iter().map(value_to_native_expr).collect::<Result<Vec<_>, String>>()
+        } else {
+            Ok(elems.into_iter().cloned().collect())
+        }
     };
-    let shard_goals = match project("claims_goals") {
+    let goal_proj = if unreflect { "claims_goals_native" } else { "claims_goals" };
+    let shard_goals = match project(goal_proj, !unreflect) {
         Ok(v) => v,
-        Err(e) => { eprintln!("shard claims_goals error: {}", e); return ExitCode::from(2); }
-    };
-    let shard_proofs = match project("claims_proofs") {
-        Ok(v) => v,
-        Err(e) => { eprintln!("shard claims_proofs error: {}", e); return ExitCode::from(2); }
+        Err(e) => { eprintln!("shard {} error: {}", goal_proj, e); return ExitCode::from(2); }
     };
 
     // Compare structurally.
@@ -1809,11 +1815,18 @@ fn run_claims_check(args: &[String]) -> ExitCode {
         }
     };
     compare("goal", &shard_goals, &ref_goals, &ref_names, &mut ok);
-    if ok {
+    // Proof comparison only in raw mode — the proof un-reflector is a later slice.
+    if ok && !unreflect {
+        let shard_proofs = match project("claims_proofs", true) {
+            Ok(v) => v,
+            Err(e) => { eprintln!("shard claims_proofs error: {}", e); return ExitCode::from(2); }
+        };
         compare("proof", &shard_proofs, &ref_proofs, &ref_names, &mut ok);
     }
+    let _ = &ref_proofs;
     if ok {
-        println!("MATCH  {}  ({} claims)", target_path, ref_goals.len());
+        let what = if unreflect { "goals un-reflected" } else { "claims" };
+        println!("MATCH  {}  ({} {})", target_path, ref_goals.len(), what);
         ExitCode::SUCCESS
     } else {
         ExitCode::from(1)

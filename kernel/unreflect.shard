@@ -76,3 +76,139 @@
   (match (parse_expr src ctors)
     (None None)
     ((Some e) (unreflect_expr e))))
+
+;; ===========================================================================
+;; Goal hierarchy: Type / Param / Equation / Goal. Each mirrors a proof.shard
+;; type; embedded Exprs go through unreflect_expr. (List _) walkers follow the
+;; same Cons/Nil shape as unreflect_expr_list.
+;; ===========================================================================
+
+(fn unreflect_type ((e Expr)) (Option Type)
+  (match e
+    ((Ctor cn args)
+      (if (sym_eq cn (quote TCon))
+          (match args
+            ((Cons (SymLit n) (Cons argsE Nil))
+              (match (unreflect_types argsE)
+                (None None)
+                ((Some ts) (Some (TCon n ts)))))
+            (_ None))
+      (if (sym_eq cn (quote TVar))
+          (match args ((Cons (SymLit n) Nil) (Some (TVar n))) (_ None))
+          None)))
+    (_ None)))
+
+(fn unreflect_types ((e Expr)) (Option (List Type))
+  (match e
+    ((Ctor cn args)
+      (if (sym_eq cn (quote Nil))
+          (Some Nil)
+      (if (sym_eq cn (quote Cons))
+          (match args
+            ((Cons h (Cons t Nil))
+              (match (unreflect_type h)
+                (None None)
+                ((Some h2)
+                  (match (unreflect_types t)
+                    (None None)
+                    ((Some t2) (Some (Cons h2 t2)))))))
+            (_ None))
+          None)))
+    (_ None)))
+
+(fn unreflect_param ((e Expr)) (Option Param)
+  (match e
+    ((Ctor cn args)
+      (if (sym_eq cn (quote Param))
+          (match args
+            ((Cons (SymLit nm) (Cons tyE Nil))
+              (match (unreflect_type tyE)
+                (None None)
+                ((Some ty) (Some (Param nm ty)))))
+            (_ None))
+          None))
+    (_ None)))
+
+(fn unreflect_params ((e Expr)) (Option (List Param))
+  (match e
+    ((Ctor cn args)
+      (if (sym_eq cn (quote Nil))
+          (Some Nil)
+      (if (sym_eq cn (quote Cons))
+          (match args
+            ((Cons h (Cons t Nil))
+              (match (unreflect_param h)
+                (None None)
+                ((Some h2)
+                  (match (unreflect_params t)
+                    (None None)
+                    ((Some t2) (Some (Cons h2 t2)))))))
+            (_ None))
+          None)))
+    (_ None)))
+
+(fn unreflect_equation ((e Expr)) (Option Equation)
+  (match e
+    ((Ctor cn args)
+      (if (sym_eq cn (quote Equation))
+          (match args
+            ((Cons lhsE (Cons rhsE Nil))
+              (match (unreflect_expr lhsE)
+                (None None)
+                ((Some l)
+                  (match (unreflect_expr rhsE)
+                    (None None)
+                    ((Some r) (Some (Equation l r)))))))
+            (_ None))
+          None))
+    (_ None)))
+
+(fn unreflect_equations ((e Expr)) (Option (List Equation))
+  (match e
+    ((Ctor cn args)
+      (if (sym_eq cn (quote Nil))
+          (Some Nil)
+      (if (sym_eq cn (quote Cons))
+          (match args
+            ((Cons h (Cons t Nil))
+              (match (unreflect_equation h)
+                (None None)
+                ((Some h2)
+                  (match (unreflect_equations t)
+                    (None None)
+                    ((Some t2) (Some (Cons h2 t2)))))))
+            (_ None))
+          None)))
+    (_ None)))
+
+(fn unreflect_goal ((e Expr)) (Option Goal)
+  (match e
+    ((Ctor cn args)
+      (if (sym_eq cn (quote Goal))
+          (match args
+            ((Cons psE (Cons premsE (Cons eqE Nil)))
+              (match (unreflect_params psE)
+                (None None)
+                ((Some ps)
+                  (match (unreflect_equations premsE)
+                    (None None)
+                    ((Some prems)
+                      (match (unreflect_equation eqE)
+                        (None None)
+                        ((Some eq) (Some (Goal ps prems eq)))))))))
+            (_ None))
+          None))
+    (_ None)))
+
+;; Differential probe: un-reflect each claim's goal to a native Goal.
+;; Drops un-reflect failures so a bug surfaces as a count mismatch.
+(fn goals_native ((cs (List Claim))) (List Goal)
+  (match cs
+    (Nil Nil)
+    ((Cons c rest)
+      (match (unreflect_goal (claim_goal c))
+        (None (goals_native rest))
+        ((Some g) (Cons g (goals_native rest)))))))
+
+(fn claims_goals_native ((co (Option (List Claim)))) (List Goal)
+  (match co (None Nil) ((Some cs) (goals_native cs))))
