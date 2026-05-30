@@ -1,0 +1,146 @@
+;;; snake_view — the VIEW layer + lemmas at the OBSERVABLE boundary.
+;;;
+;;; Motivation: R1-R4 (snake.sexp) are about INTERNAL state — accessors like
+;;; snake_of/dir_of/len. The player never sees the state; they see the BYTES
+;;; that `render` emits. A proof is worth as much as it is close to what is
+;;; observed, so here we prove properties of the rendered output, with the
+;;; internal R-lemmas demoted to building blocks.
+;;;
+;;;   render  : GameState -> (List Int)   — the frame the player sees
+;;;   cell_char : GameState -> x -> y -> Int  — the glyph at one board cell
+;;;
+;;; Observable lemmas:
+;;;   view_frozen_on_death  — a dead game renders an unchanged frame
+;;;   view_new_head_drawn   — after a surviving tick the new head shows as 'O'
+;;;                           at exactly head+delta(steer)
+
+(import "snake.sexp")   ; step, accessors, mem, pos_eq, snake_head, game_newhead, R1-R4
+
+;; ---- Pos coordinate accessors ---------------------------------------------
+(fn px ((p Pos)) Int (match p ((Pos x y) x)))
+(fn py ((p Pos)) Int (match p ((Pos x y) y)))
+
+;; ---- rendering (board 20x20, 0..19; must match snake.sexp's oob) ----------
+(fn show_nat ((n Int)) (List Int)
+  (if (lt n 10)
+      (Cons (+ 48 n) Nil)
+      (append (show_nat (/ n 10)) (Cons (+ 48 (mod n 10)) Nil))))
+
+;; one cell: 'O' head, '#' body, '*' food, '.' empty.
+(fn cell_char ((g GameState) (x Int) (y Int)) Int
+  (if (pos_eq (Pos x y) (snake_head (snake_of g))) 79
+    (if (mem (Pos x y) (snake_of g)) 35
+      (if (pos_eq (Pos x y) (food_of g)) 42
+        46))))
+
+;; counting recursions — total at runtime (no totality proof; not inducted on).
+(fn render_row ((g GameState) (y Int) (x Int)) (List Int)
+  (if (lt x 20)
+      (Cons (cell_char g x y) (render_row g y (+ x 1)))
+      (Cons 10 Nil)))
+
+(fn render_rows ((g GameState) (y Int)) (List Int)
+  (if (lt y 0) Nil (append (render_row g y 0) (render_rows g (- y 1)))))
+
+(fn banner ((st Status)) (List Int)
+  (match st (Alive Nil) (Dead (append "GAME OVER" (Cons 10 Nil)))))
+
+;; render ends WITHOUT a trailing newline — the driver owns frame separation.
+(fn render ((g GameState)) (List Int)
+  (append (render_rows g 19)
+    (append (banner (status_of g))
+      (append "Score: " (show_nat (score_of g))))))
+
+;; ===========================================================================
+;; Coordinate / equality helpers
+;; ===========================================================================
+
+(claim int_eq_refl
+  (Goal (list (Param 'k (ty Int))) (list)
+    (Equation (Call 'int_eq (list (FVar 'k) (FVar 'k))) (Ctor 'True (list))))
+  (ByTheory 'eqdec (Cert 'eqdec (list))))
+
+;; (Pos (px p) (py p)) = p — Pos has a single ctor, so one case rebuilds it.
+(claim pos_eta
+  (Goal (list (Param 'p (ty Pos))) (list)
+    (Equation (Ctor 'Pos (list (Call 'px (list (FVar 'p))) (Call 'py (list (FVar 'p)))))
+              (FVar 'p)))
+  (CaseOn (FVar 'p) 'Pos
+    (list (CaseB 'Pos (list 'a 'b)
+      (Steps (list (Rewrite (Hyp 0) Lr Both True (list)) (Simp Lhs)) Refl)))))
+
+;; pos_eq is reflexive (via int_eq_refl on each coordinate).
+(claim pos_eq_refl
+  (Goal (list (Param 'p (ty Pos))) (list)
+    (Equation (Call 'pos_eq (list (FVar 'p) (FVar 'p))) (Ctor 'True (list))))
+  (CaseOn (FVar 'p) 'Pos
+    (list (CaseB 'Pos (list 'a 'b)
+      (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))
+                   (Simp Lhs)                                       ; -> and (int_eq a a) (int_eq b b)
+                   (Rewrite (Lemma 'int_eq_refl) Lr Lhs True (list)); -> and True True
+                   (Simp Lhs))
+             Refl)))))
+
+;; internal: the head after a surviving tick is game_newhead (R3, unexpanded).
+(claim head_after_step
+  (Goal (list (Param 'g (ty GameState)) (Param 'i (ty Heading)))
+        (list (Equation (Call 'status_of (list (FVar 'g))) (Ctor 'Alive (list))))
+    (Equation
+      (Call 'snake_head (list (Call 'snake_of (list (Call 'step (list (FVar 'g) (FVar 'i)))))))
+      (Call 'game_newhead (list (FVar 'g) (FVar 'i)))))
+  (Steps (list (Unfold 'step Lhs)
+               (Rewrite (Premise 0) Lr Lhs True (list))
+               (Simp Lhs)
+               (Unfold 'live_step Lhs)
+               (Simp Lhs))
+    Refl))
+
+;; ===========================================================================
+;; OBSERVABLE lemmas — properties of the bytes the player sees.
+;; ===========================================================================
+
+;; V1 — DEATH FREEZES THE SCREEN.  status_of g = Dead ⟹
+;;   render (step g i) = render g.
+;; Pure corollary of R1 (step is the identity on a dead state) — render is a
+;; function, so the frame is byte-for-byte identical.
+(claim view_frozen_on_death
+  (Goal (list (Param 'g (ty GameState)) (Param 'i (ty Heading)))
+        (list (Equation (Call 'status_of (list (FVar 'g))) (Ctor 'Dead (list))))
+    (Equation (Call 'render (list (Call 'step (list (FVar 'g) (FVar 'i)))))
+              (Call 'render (list (FVar 'g)))))
+  (RewriteWith (Lemma 'snake_R1_death_absorbing) Lr Lhs (list)
+    (list (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl))
+    Refl))
+
+;; helper: the head cell of any game renders as 'O'.
+(claim view_head_is_O
+  (Goal (list (Param 'g (ty GameState))) (list)
+    (Equation
+      (Call 'cell_char (list (FVar 'g)
+        (Call 'px (list (Call 'snake_head (list (Call 'snake_of (list (FVar 'g)))))))
+        (Call 'py (list (Call 'snake_head (list (Call 'snake_of (list (FVar 'g)))))))))
+      (IntLit 79)))
+  (Steps (list (Unfold 'cell_char Lhs)
+               (Rewrite (Lemma 'pos_eta)     Lr Lhs True (list))   ; (Pos (px H) (py H)) -> H
+               (Rewrite (Lemma 'pos_eq_refl) Lr Lhs True (list))   ; pos_eq H H -> True
+               (Simp Lhs))
+    Refl))
+
+;; V3 — THE NEW HEAD IS DRAWN.  status_of g = Alive ⟹ the cell at
+;;   head+delta(steer) renders as 'O'. The observable form of R3: not just
+;;   "the internal head moved", but "the player sees the head there".
+(claim view_new_head_drawn
+  (Goal (list (Param 'g (ty GameState)) (Param 'i (ty Heading)))
+        (list (Equation (Call 'status_of (list (FVar 'g))) (Ctor 'Alive (list))))
+    (Equation
+      (Call 'cell_char (list (Call 'step (list (FVar 'g) (FVar 'i)))
+        (Call 'px (list (Call 'game_newhead (list (FVar 'g) (FVar 'i)))))
+        (Call 'py (list (Call 'game_newhead (list (FVar 'g) (FVar 'i)))))))
+      (IntLit 79)))
+  (Steps (list (Unfold 'cell_char Lhs)
+               (Rewrite (Lemma 'pos_eta) Lr Lhs True (list)))      ; (Pos (px nh) (py nh)) -> nh
+    (RewriteWith (Lemma 'head_after_step) Lr Lhs (list)            ; snake_head(snake_of(step g i)) -> nh
+      (list (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl))
+      (Steps (list (Rewrite (Lemma 'pos_eq_refl) Lr Lhs True (list))  ; pos_eq nh nh -> True
+                   (Simp Lhs))
+        Refl))))

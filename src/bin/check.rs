@@ -51,7 +51,7 @@ fn main() -> ExitCode {
     if args.is_empty() {
         eprintln!("usage: check <proof_file.sexp>...");
         eprintln!("       check eval [--no-bootstrap|--both] <file.sexp>... <expr>");
-        eprintln!("       check app [--repl|--script <events>] <file.sexp>...");
+        eprintln!("       check app [--repl|--script <events>] [--no-bootstrap] <file.sexp>...");
         return ExitCode::from(2);
     }
 
@@ -1246,11 +1246,17 @@ fn run_app(args: &[String]) -> ExitCode {
     use std::io::BufRead;
 
     let mut script: Option<String> = None;
+    let mut bootstrap = true;
     let mut positional: Vec<&String> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--repl" => script = None,
+            // Default engine is the bootstrapped reducer (faithful to the
+            // proof story but a double-interpreter — slow for heavy output
+            // like a rendered board). --no-bootstrap runs the native Rust
+            // engine instead, which an interactive app generally wants.
+            "--no-bootstrap" | "--native" => bootstrap = false,
             "--script" => match it.next() {
                 Some(f) => script = Some(f.clone()),
                 None => {
@@ -1266,7 +1272,7 @@ fn run_app(args: &[String]) -> ExitCode {
         }
     }
     if positional.is_empty() {
-        eprintln!("usage: check app [--repl|--script <events>] <file.sexp>...");
+        eprintln!("usage: check app [--repl|--script <events>] [--no-bootstrap] <file.sexp>...");
         return ExitCode::from(2);
     }
 
@@ -1325,6 +1331,12 @@ fn run_app(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // Optional (view FN): FN : State -> (List Int) renders the state to bytes.
+    // When present the driver shows view(state) after init and after each tick
+    // (so a REPL displays an initial frame); display is then the view's job and
+    // the update's Action is reserved for effects (Exit/Nop).
+    let view_fn: Option<String> = app_subform(&app, "view")
+        .and_then(|p| p.get(1).and_then(|s| s.as_symbol()).map(|s| s.to_string()));
 
     // Reduce the init expression to the initial state datum.
     let init_native = match load::expr_from_value(&init_val, &ctx.user_module) {
@@ -1334,13 +1346,26 @@ fn run_app(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let mut state = match eval_bootstrap(&kernel, &ctx.user_module_value, &expr_to_value(&init_native)) {
+    let init_result = if bootstrap {
+        eval_bootstrap(&kernel, &ctx.user_module_value, &expr_to_value(&init_native))
+    } else {
+        eval_raw(&ctx.user_module, &init_native)
+    };
+    let mut state = match init_result {
         Ok(s) => s,
         Err(e) => {
             eprintln!("error evaluating (init …): {}", e);
             return ExitCode::from(2);
         }
     };
+
+    // Initial frame (if the app declares a view).
+    if let Some(vf) = &view_fn {
+        if let Err(e) = render_view(bootstrap, &kernel, &ctx.user_module_value, &ctx.user_module, vf, &state) {
+            eprintln!("error rendering view: {}", e);
+            return ExitCode::from(2);
+        }
+    }
 
     // Drive one step per input line. --script reads lines from a file (or
     // stdin via "-"); the default is an interactive stdin REPL. Both feed
@@ -1364,9 +1389,25 @@ fn run_app(args: &[String]) -> ExitCode {
                 return ExitCode::from(2);
             }
         };
-        let event = expr_to_value(&line_to_event_native(&line));
-        let call = reflected_call(&update_fn, vec![state.clone(), event]);
-        let result = match eval_bootstrap(&kernel, &ctx.user_module_value, &call) {
+        // Both engines keep `state` as reflected Expr-data and return the
+        // step result reflected; only the evaluation in between differs.
+        let step_result = if bootstrap {
+            let event = expr_to_value(&line_to_event_native(&line));
+            let call = reflected_call(&update_fn, vec![state.clone(), event]);
+            eval_bootstrap(&kernel, &ctx.user_module_value, &call)
+        } else {
+            match value_to_native_expr(&state) {
+                Ok(state_native) => {
+                    let call = ast::Expr::Call(
+                        update_fn.clone(),
+                        vec![state_native, line_to_event_native(&line)],
+                    );
+                    eval_raw(&ctx.user_module, &call)
+                }
+                Err(e) => Err(e),
+            }
+        };
+        let result = match step_result {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("error in step: {}", e);
@@ -1396,8 +1437,36 @@ fn run_app(args: &[String]) -> ExitCode {
             }
         }
         state = next_state;
+        // Frame after the tick (if the app declares a view).
+        if let Some(vf) = &view_fn {
+            if let Err(e) = render_view(bootstrap, &kernel, &ctx.user_module_value, &ctx.user_module, vf, &state) {
+                eprintln!("error rendering view: {}", e);
+                return ExitCode::from(2);
+            }
+        }
     }
     ExitCode::SUCCESS
+}
+
+/// Render one frame: evaluate `view(state)` (bootstrap or native), decode the
+/// resulting (List Int) to text, and print it followed by a single newline
+/// (the driver owns frame separation; the view's bytes are exact).
+fn render_view(
+    bootstrap: bool,
+    kernel: &ast::Module,
+    user_module_value: &ast::Expr,
+    user_module: &ast::Module,
+    view_fn: &str,
+    state: &ast::Expr,
+) -> Result<(), String> {
+    let result = if bootstrap {
+        eval_bootstrap(kernel, user_module_value, &reflected_call(view_fn, vec![state.clone()]))?
+    } else {
+        let call = ast::Expr::Call(view_fn.into(), vec![value_to_native_expr(state)?]);
+        eval_raw(user_module, &call)?
+    };
+    println!("{}", decode_codepoints(&result)?);
+    Ok(())
 }
 
 /// Effect interpretation — the trusted edge of the proof. Each arm
