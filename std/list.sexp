@@ -1,13 +1,16 @@
-;;; std/list — polymorphic (List T): append/rev/fast + the reverse tower.
+;;; std/list — polymorphic (List T): append / len / rev + their algebra.
 
-;;; List operations over polymorphic (List T). Definitions for the
-;;; reverse proof tower (rev = fast). Slice 31 moved these from
-;;; monomorphic (List Int) to (List T) — the proofs hold for any
-;;; element type and the kernel handles polymorphic Goals natively
-;;; (the loader change is what surfaces the capability).
+;;; List operations over polymorphic (List T). Slice 31 moved these from
+;;; monomorphic (List Int) to (List T) — the proofs hold for any element
+;;; type and the kernel handles polymorphic Goals natively (the loader
+;;; change is what surfaces the capability).
 ;;;
-;;; All three fns are structurally recursive on their first list arg,
-;;; so they're total in the kernel's accepted fragment.
+;;; Each fn is structurally recursive on its first list arg, so they are
+;;; total in the kernel's accepted fragment.
+;;;
+;;; The accumulator-reverse correctness proof (fast = rev) that these
+;;; lemmas were originally built for now lives in examples/reverse_proof.sexp
+;;; — nothing in the library depends on `fast`, so it ships as an example.
 
 (import "order.sexp")   ; len_nonneg cites le0_succ
 
@@ -47,42 +50,16 @@
     (Nil          Nil)
     ((Cons h t)   (append (rev t) (Cons h Nil)))))
 
-;; fast: accumulator-passing O(n) reverse.
-(fn (fast T) ((xs (List T)) (acc (List T))) (List T)
-  (match xs
-    (Nil          acc)
-    ((Cons h t)   (fast t (Cons h acc)))))
-
-;; ---- lemmas ----
-;;; The reverse proof tower: prove (fast xs Nil) = (rev xs) by chaining
-;;; auxiliary lemmas. Direct port of v1's capstone result (TRANSFER.md,
-;;; "Optimized — linear reverse. Proven fast = rev for all lists").
-;;;
-;;; Slice 31 update — polymorphic over (List T). Each claim is stated
-;;; once over a type variable T (written `(tv T)` in claim bodies);
-;;; the kernel's pattern matching is type-agnostic so a single proof
-;;; serves all element types. The `_at_int` and `_at_sym` claims at
-;;; the bottom demonstrate citation at concrete instantiations — the
-;;; v2 mandate's headline polymorphism use case.
-;;;
-;;; Slice 30 update — Simp guarding. The original tower needed per-
-;;; ctor helper lemmas (append_nil_step, fast_cons_step, etc.) to
-;;; route around the kernel's unguarded reducer. With gated δ in
-;;; Simp, those helpers collapse into single Simp steps.
-;;;
-;;; Lemma chain:
-;;;   1. append_nil_right
-;;;   2. append_assoc
-;;;   3. fast_acc_lemma  (the key — induction with IH used at
-;;;                       non-Nil acc, citing append_assoc)
-;;;   4. fast_eq_rev     (capstone — no induction, just chain
-;;;                       fast_acc_lemma + append_nil_right)
-;;;   5. fast_eq_rev_at_int   (reuse demo — cite (4) at (List Int))
-;;;   6. fast_eq_rev_at_sym   (reuse demo — cite (4) at (List Symbol))
-
+;; ---- append algebra ----
+;;; The structural lemmas about append (identity, associativity) plus the
+;;; length/reverse interaction tower below. Slice 31: each claim is stated
+;;; once over a type variable T (written `(tv T)`); the kernel's pattern
+;;; matching is type-agnostic, so a single proof serves all element types.
+;;; Slice 30: gated δ in Simp collapsed the old per-ctor helper lemmas
+;;; (append_nil_step, etc.) into single Simp steps.
 
 ;; ---------------------------------------------------------------------------
-;; Lemma 1: ∀ xs : List T. (append xs Nil) = xs.
+;; append_nil_right: ∀ xs : List T. (append xs Nil) = xs.
 ;; ---------------------------------------------------------------------------
 
 (claim append_nil_right
@@ -106,7 +83,7 @@
           Refl)))))
 
 ;; ---------------------------------------------------------------------------
-;; Lemma 2: ∀ xs ys zs : List T.
+;; append_assoc: ∀ xs ys zs : List T.
 ;;   (append (append xs ys) zs) = (append xs (append ys zs)).
 ;; ---------------------------------------------------------------------------
 
@@ -132,73 +109,111 @@
                      (Rewrite (Hyp 0) Lr Lhs True (list)))
                Refl)))))
 
+;; ===========================================================================
+;; Length / reverse interaction tower.
+;;
+;; The keystone is len_append: len distributes over append as integer
+;; addition. From it len_rev follows; rev_append + rev_rev complete the
+;; reverse algebra. These are the generic structural-recursion lemmas any
+;; list-shaped proof reuses (e.g. a parser that recurses on len) — the
+;; calc proof had to route around their absence with bespoke farkas
+;; decreases.  Authored with named hypotheses ((Hyp 'ih) — the Induct IH)
+;; rather than positional indices.
+;; ===========================================================================
+
 ;; ---------------------------------------------------------------------------
-;; Lemma 3 (key): ∀ xs acc : List T. (fast xs acc) = (append (rev xs) acc).
+;; len_append: ∀ xs ys. (len (append xs ys)) = (len xs) + (len ys).
+;; Induct on xs; the Cons step rewrites by the IH then reassociates the
+;; leading +1 with lia (len t, len ys are opaque atoms to the theory).
 ;; ---------------------------------------------------------------------------
 
-(claim fast_acc_lemma
+(claim len_append
   (Goal
-    (list (Param 'xs  (ty List (tv T)))
-          (Param 'acc (ty List (tv T))))
+    (list (Param 'xs (ty List (tv T)))
+          (Param 'ys (ty List (tv T))))
     (list)
     (Equation
-      (Call 'fast (list (FVar 'xs) (FVar 'acc)))
-      (Call 'append (list (Call 'rev (list (FVar 'xs))) (FVar 'acc)))))
+      (Call 'len (list (Call 'append (list (FVar 'xs) (FVar 'ys)))))
+      (Call '+ (list (Call 'len (list (FVar 'xs)))
+                     (Call 'len (list (FVar 'ys)))))))
   (Induct 'xs
     (list
       (Case 'Nil
-        (Steps (list (Simp Both)) Refl))
+        (Steps (list (Simp Both)) (ByTheory 'lia (Cert 'lia (list)))))
       (Case 'Cons
-        (Steps (list (Simp Lhs)
-                     (Rewrite (Hyp 0)                Lr Lhs True (list))
-                     (Simp Rhs)
-                     (Rewrite (Lemma 'append_assoc) Lr Rhs True (list))
-                     (Simp Rhs))
-               Refl)))))
+        (Steps (list (Simp Both)
+                     (Rewrite (Hyp 'ih) Lr Lhs True (list)))
+               (ByTheory 'lia (Cert 'lia (list))))))))
 
 ;; ---------------------------------------------------------------------------
-;; Lemma 4 (CAPSTONE): ∀ xs : List T. (fast xs Nil) = (rev xs).
-;;
-;; Polymorphic port of v1's headline result. Chain fast_acc_lemma at
-;; acc := Nil + append_nil_right; Refl. No element-type assumption.
+;; len_rev: ∀ xs. (len (rev xs)) = (len xs). The Cons step distributes len
+;; over the singleton re-append (len_append), folds the IH, and reassociates.
 ;; ---------------------------------------------------------------------------
 
-(claim fast_eq_rev
+(claim len_rev
   (Goal
     (list (Param 'xs (ty List (tv T))))
     (list)
     (Equation
-      (Call 'fast (list (FVar 'xs) (Ctor 'Nil (list))))
-      (Call 'rev (list (FVar 'xs)))))
-  (Steps (list (Rewrite (Lemma 'fast_acc_lemma)    Lr Lhs True (list))
-               (Rewrite (Lemma 'append_nil_right) Lr Lhs True (list)))
-         Refl))
+      (Call 'len (list (Call 'rev (list (FVar 'xs)))))
+      (Call 'len (list (FVar 'xs)))))
+  (Induct 'xs
+    (list
+      (Case 'Nil (Steps (list (Simp Both)) Refl))
+      (Case 'Cons
+        (Steps (list (Simp Lhs)
+                     (Rewrite (Lemma 'len_append) Lr Lhs True (list))
+                     (Rewrite (Hyp 'ih)           Lr Lhs True (list))
+                     (Simp Both))
+               (ByTheory 'lia (Cert 'lia (list))))))))
 
 ;; ---------------------------------------------------------------------------
-;; Reuse demos: cite the polymorphic capstone at concrete element
-;; types. Each is a one-step Rewrite — pat-var Rewrite matches the
-;; polymorphic LHS pattern (fast a Nil) against the concrete-typed
-;; goal lhs (the rewriter is type-agnostic) and substitutes the RHS.
-;; This is the proof-reuse story TRANSFER mandates: one proof, many
-;; element types.
+;; rev_append: ∀ xs ys. (rev (append xs ys)) = (append (rev ys) (rev xs)).
+;; rev distributes over append, flipping order. Nil uses append_nil_right;
+;; the Cons step folds the IH then reassociates with append_assoc.
 ;; ---------------------------------------------------------------------------
 
-(claim fast_eq_rev_at_int
+(claim rev_append
   (Goal
-    (list (Param 'xs (ty List Int)))
+    (list (Param 'xs (ty List (tv T)))
+          (Param 'ys (ty List (tv T))))
     (list)
     (Equation
-      (Call 'fast (list (FVar 'xs) (Ctor 'Nil (list))))
-      (Call 'rev (list (FVar 'xs)))))
-  (Steps (list (Rewrite (Lemma 'fast_eq_rev) Lr Lhs True (list)))
-         Refl))
+      (Call 'rev (list (Call 'append (list (FVar 'xs) (FVar 'ys)))))
+      (Call 'append (list (Call 'rev (list (FVar 'ys)))
+                          (Call 'rev (list (FVar 'xs)))))))
+  (Induct 'xs
+    (list
+      (Case 'Nil
+        (Steps (list (Simp Both)
+                     (Rewrite (Lemma 'append_nil_right) Lr Rhs True (list)))
+               Refl))
+      (Case 'Cons
+        (Steps (list (Simp Lhs)
+                     (Rewrite (Hyp 'ih)             Lr Lhs True (list))
+                     (Rewrite (Lemma 'append_assoc) Lr Lhs True (list))
+                     (Simp Rhs))
+               Refl)))))
 
-(claim fast_eq_rev_at_sym
+;; ---------------------------------------------------------------------------
+;; rev_rev: ∀ xs. (rev (rev xs)) = xs — reverse is an involution. The Cons
+;; step turns the nested rev into an append via rev_append, folds the IH,
+;; then Simp collapses the singleton append back to (Cons h t).
+;; ---------------------------------------------------------------------------
+
+(claim rev_rev
   (Goal
-    (list (Param 'xs (ty List Symbol)))
+    (list (Param 'xs (ty List (tv T))))
     (list)
     (Equation
-      (Call 'fast (list (FVar 'xs) (Ctor 'Nil (list))))
-      (Call 'rev (list (FVar 'xs)))))
-  (Steps (list (Rewrite (Lemma 'fast_eq_rev) Lr Lhs True (list)))
-         Refl))
+      (Call 'rev (list (Call 'rev (list (FVar 'xs)))))
+      (FVar 'xs)))
+  (Induct 'xs
+    (list
+      (Case 'Nil (Steps (list (Simp Both)) Refl))
+      (Case 'Cons
+        (Steps (list (Simp Lhs)
+                     (Rewrite (Lemma 'rev_append) Lr Lhs True (list))
+                     (Rewrite (Hyp 'ih)           Lr Lhs True (list))
+                     (Simp Lhs))
+               Refl)))))
