@@ -5,8 +5,8 @@
 //! are the obvious replacement for writing nested `(Ctor (quote Foo)
 //! (Cons … (Cons … (Nil))))` by hand in sexp source.
 //!
-//! See `docs/LANGUAGE.md` for the language; see `kernel/term.sexp`
-//! and `kernel/proof.sexp` for the narrow ADT declarations these
+//! See `docs/LANGUAGE.md` for the language; see `kernel/term.shard`
+//! and `kernel/proof.shard` for the narrow ADT declarations these
 //! builders mirror.
 //!
 //! Naming: a builder is named after the *narrow* ctor it constructs.
@@ -15,7 +15,7 @@
 //! `IntLit` is the literal Int field; the outer `Ctor("IntLit", …)`
 //! is the narrow IntLit constructor value. The same level-distinction
 //! shows up throughout — see the comment at the top of
-//! `kernel/term.sexp`'s Expr declaration if it's confusing.
+//! `kernel/term.shard`'s Expr declaration if it's confusing.
 //!
 //! Only used from tests. Marked `#[cfg(test)]` at the parent's
 //! declaration in `lib.rs`.

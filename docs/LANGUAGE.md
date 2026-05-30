@@ -311,7 +311,7 @@ generation as an effectful primitive].
 
 ## 9. Stdlib types
 
-Defined in `kernel/stdlib.sexp`:
+Defined in `kernel/stdlib.shard`:
 
 ```sexp
 (type (List T)   (Nil) (Cons T (List T)))

@@ -20,7 +20,7 @@ pub mod prim;
 #[cfg(test)]
 mod nval;
 
-/// Load the kernel from a directory of `.sexp` files. The file list
+/// Load the kernel from a directory of `.shard` files. The file list
 /// is fixed (the kernel itself is not yet a module tree — see
 /// docs/REVISIT.md, "Kernel loader is a flat path list"); this helper
 /// is shared by tests and the `check` binary so the list is in one
@@ -31,16 +31,16 @@ pub fn load_kernel_from<P: AsRef<std::path::Path>>(
     let dir = kernel_dir.as_ref();
     let p = |n: &str| dir.join(n);
     load::module_from_paths(&[
-        p("stdlib.sexp"),
-        p("module.sexp"),
-        p("proof.sexp"),
-        p("term.sexp"),
-        p("reduce.sexp"),
-        p("check.sexp"),
-        p("lia.sexp"),
-        p("eqdec.sexp"),
-        p("ord.sexp"),
-        p("farkas.sexp"),
+        p("stdlib.shard"),
+        p("module.shard"),
+        p("proof.shard"),
+        p("term.shard"),
+        p("reduce.shard"),
+        p("check.shard"),
+        p("lia.shard"),
+        p("eqdec.shard"),
+        p("ord.shard"),
+        p("farkas.shard"),
     ])
 }
 
@@ -133,8 +133,8 @@ mod tests {
     fn calc_eval(call: &str) -> ast::Expr {
         let kernel = load_kernel();
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("examples/calc/calc.sexp");
-        let src = std::fs::read_to_string(&path).expect("read calc.sexp");
+            .join("examples/calc/calc.shard");
+        let src = std::fs::read_to_string(&path).expect("read calc.shard");
         let m = load::module_from_str_with_base(&src, Some(&kernel))
             .expect("calc module loads");
         let e = load::expr_from_str(call, &m).expect("call parses");
@@ -434,7 +434,7 @@ mod tests {
     // Slice 4: load the real narrow kernel from disk.
     // ------------------------------------------------------------------
 
-    /// First time the actual kernel/*.sexp files meet the loader.
+    /// First time the actual kernel/*.shard files meet the loader.
     /// Expected to expose any latent gaps; it's worth running just to
     /// see what falls over.
     #[test]
@@ -1889,7 +1889,7 @@ mod tests {
     //     generation (Cons has fields [T, List T]; only the second
     //     gets an IH, since type_eq (List T) T is false).
     //
-    // These code paths exist in check.sexp since slice 4 but have
+    // These code paths exist in check.shard since slice 4 but have
     // never run with a non-Nil type_env.
     // ------------------------------------------------------------------
 
@@ -2019,7 +2019,7 @@ mod tests {
     // Slice 17: lemma citation via (Lemma name) EqRef.
     //
     // First runtime exercise of:
-    //   - lookup_lemma (in check.sexp) — walks a TheoryCons-shaped
+    //   - lookup_lemma (in check.shard) — walks a TheoryCons-shaped
     //     accumulator looking for a named Proven or Axiom entry.
     //   - resolve_eq's Lemma arm — returns the cited Goal.
     //   - Building a non-empty Theory value (theory_cons + proven /
@@ -2672,7 +2672,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Slice 33: eqdec ByTheory backend (kernel/eqdec.sexp).
+    // Slice 33: eqdec ByTheory backend (kernel/eqdec.shard).
     //
     // Second decidable-theory backend. Decides equality-reflection
     // goals `(int_eq a b) = True` (via lia_decide) and
@@ -2760,7 +2760,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Slice 35: ord ByTheory backend (kernel/ord.sexp).
+    // Slice 35: ord ByTheory backend (kernel/ord.shard).
     //
     // Decides order-reflection goals (lt a b) = True / (le a b) = True
     // by canonicalizing (b - a) via LIA and checking it's a constant of
@@ -2863,7 +2863,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Slice 37: farkas ByTheory backend (kernel/farkas.sexp).
+    // Slice 37: farkas ByTheory backend (kernel/farkas.shard).
     //
     // Linear-integer ENTAILMENT: premises ⊢ (lt|le a b) = True, via a
     // cert-supplied Farkas combination. The mirrors guard the two
@@ -3380,7 +3380,7 @@ mod tests {
         assert_eq!(r, true_v());
     }
 
-    /// Slice 29 isolation test — Rust mirror of examples/list_lemmas.sexp's
+    /// Slice 29 isolation test — Rust mirror of examples/list_lemmas.shard's
     /// append_nil_right. Built with nval helpers, runs the SAME proof
     /// the binary submits. Lets us tell whether a binary FAIL is a
     /// sexp-loading bug or a real proof problem.
@@ -3466,7 +3466,7 @@ mod tests {
 
     /// Slice 30 regression: the reverse tower's append_assoc, built
     /// in Rust against the new smart simp_expr. Mirror of the sexp
-    /// claim in examples/list_lemmas.sexp; safety net for the kernel
+    /// claim in examples/list_lemmas.shard; safety net for the kernel
     /// reducer changes (gated δ + head-only lookahead).
     ///
     /// Both Nil and Cons cases close with `(Simp Both) [...]; Refl` —

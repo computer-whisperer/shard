@@ -156,7 +156,7 @@ fn apply_call(m: &Module, name: &str, mut args: Vec<Val>) -> Result<Val, EvalErr
 }
 
 // -----------------------------------------------------------------------------
-// Pattern matching. Mirrors kernel/reduce.sexp:match_pat.
+// Pattern matching. Mirrors kernel/reduce.shard:match_pat.
 //
 // Convention: bindings collected innermost-first. The LAST PVar
 // encountered (rightmost in the pattern) becomes `BVar 0` in the arm

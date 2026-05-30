@@ -11,7 +11,7 @@ is where to start when planning v3.
 
 ### Locally-nameless term representation
 - **Chose:** hybrid `FVar Symbol` + `BVar Int` (de Bruijn). See
-  `kernel/term.sexp`.
+  `kernel/term.shard`.
 - **Why now:** `subst` (the hot path) stays simple; free vars keep
   names in intermediate goals (matters for LLM-in-the-loop authoring);
   capture-free by construction for the common substitution operation.
@@ -40,7 +40,7 @@ is where to start when planning v3.
 
 ### sexp file format
 - **Chose:** s-expressions for all source and artifact files
-  (placeholder extension `.sexp`).
+  (placeholder extension `.shard`).
 - **Why now:** off-the-shelf parsers, hand-writable, LLM-fluent,
   zero parser TCB beyond the sexp library itself.
 - **Revisit if:** paren density makes large kernel files unreadable.
@@ -82,7 +82,7 @@ is where to start when planning v3.
   syntax (`(fn (NAME T1 T2) …)`, `(tv T)` in claim bodies). The
   kernel needed no changes — Expr pattern matching is type-agnostic,
   so polymorphic lemmas state and cite at concrete types via the
-  ordinary pat-var Rewrite path. Reverse tower (`list_lemmas.sexp`)
+  ordinary pat-var Rewrite path. Reverse tower (`list_lemmas.shard`)
   is now stated once over `(List T)` and demonstrated reused at
   `(List Int)` and `(List Symbol)` via one-step Rewrite citations.
 - **Revisit if:** subtle parametricity violations creep into the
@@ -274,7 +274,7 @@ is where to start when planning v3.
   the payload to a more general carrier.
 
 ### `eqdec` — equality-reflection backend (slice 33)
-- **Chose:** a second `ByTheory` backend (`kernel/eqdec.sexp`) that
+- **Chose:** a second `ByTheory` backend (`kernel/eqdec.shard`) that
   decides `(int_eq a b) = True` via `lia_decide a b` and
   `(sym_eq a b) = True` via `expr_eq a b`. Fixed orientation
   (comparison on LHS, `True` on RHS); only the `= True` direction;
@@ -306,7 +306,7 @@ is where to start when planning v3.
   reflected primitives (`lt`/`le` reflected into Bool, etc.).
 
 ### `ord` — order-reflection backend (slice 35)
-- **Chose:** a third `ByTheory` backend (`kernel/ord.sexp`) that
+- **Chose:** a third `ByTheory` backend (`kernel/ord.shard`) that
   decides `(lt a b) = True` and `(le a b) = True` by reusing LIA's
   canonicalizer on `(b - a)`: accept iff the difference reduces to a
   lone constant `c` with `c >= 1` (strict) or `c >= 0` (non-strict).
@@ -411,7 +411,7 @@ is where to start when planning v3.
   substitute the cited equation with fresh FVars that never
   appeared in the goal. Concrete blocker: lemmas with a "pivot"
   binder appearing only on the RHS (e.g., the LIA identity
-  `∀ pivot a. a = (a - pivot) + pivot` in `examples/lia_basics.sexp`
+  `∀ pivot a. a = (a - pivot) + pivot` in `examples/lia_basics.shard`
   — `pivot` is invisible to the LHS pattern, so the user must
   pin it). Unblocks the natural transitivity-shaped lemma
   pattern that was on the v2 deferred list.
@@ -420,7 +420,7 @@ is where to start when planning v3.
   within Insts are first-match-wins via `find_inst` — later
   duplicates are silently ignored. Could tighten to "reject
   duplicates" if it becomes an authoring footgun.
-- **Cost:** ~40 NCNB in `check.sexp` (three helpers + reworked
+- **Cost:** ~40 NCNB in `check.shard` (three helpers + reworked
   Rewrite / RewriteWith arms). Kernel growth.
 - **Revisit if:** Insts ergonomics need more polish (e.g.,
   positional Insts instead of by-name; or scope-checking against
@@ -541,7 +541,7 @@ is where to start when planning v3.
 - **Revisit if:** iterated substitution becomes the common case.
 
 ### Language and project not yet named
-- **Chose:** placeholder `.sexp` extension; project remains
+- **Chose:** placeholder `.shard` extension; project remains
   "proving_bootstrap_test_v2".
 - **Revisit:** once the kernel takes shape and a name suggests itself.
 
@@ -613,7 +613,7 @@ is where to start when planning v3.
   nothing produces or relies on hierarchical Symbol contents yet).
 
 ### `(use-module "path")` accumulates, does not replace
-- **Chose (slice 24):** each `(use-module "path/to/file.sexp")`
+- **Chose (slice 24):** each `(use-module "path/to/file.shard")`
   directive loads that file as a Rust `ast::Module` and *merges*
   its types / fns / externs into a running user-module accumulator.
   All subsequent claims (until end-of-run) see the merged module
@@ -644,14 +644,14 @@ is where to start when planning v3.
   `pub module_value::to_value` API.
 
 ### Kernel loader is a flat path list
-- **Chose:** the kernel's seven `.sexp` files are loaded by a
+- **Chose:** the kernel's seven `.shard` files are loaded by a
   hardcoded list in `lib.rs::load_kernel_from`. Tests and the
   `check` binary share that list.
 - **Why now:** the kernel itself doesn't yet use the (module …)
   directive (and `module` isn't implemented anyway). Migrating the
   kernel to a module-tree layout is a separable slice.
 - **Revisit when:** the directory-tree loader lands. Migrating the
-  kernel to `kernel/mod.sexp` becomes a consistency cleanup.
+  kernel to `kernel/mod.shard` becomes a consistency cleanup.
 
 ### User modules see the kernel's ctors during parsing
 - **Chose (slice 29):** `module_from_paths_with_base(paths, Some(&kernel))`
@@ -659,7 +659,7 @@ is where to start when planning v3.
   and patterns can reference stdlib ctors (Nil, Cons, Some, None,
   True, False, Pair) without redeclaring those types.
 - **Why now:** surfaced as soon as the first user module
-  (`examples/list_lib.sexp`) tried to pattern-match on `Cons`. The
+  (`examples/list_lib.shard`) tried to pattern-match on `Cons`. The
   alternative — forcing every user module to copy stdlib's type
   decls — fights every layer of UX.
 - **Revisit if:** name clashes between kernel and user ctors
@@ -717,7 +717,7 @@ is where to start when planning v3.
   types via the ordinary pat-var Rewrite path.
 - **Cost:** ~50 NCNB in `load.rs` (parameterized-head parsing for
   fn/extern, new `load_tv` special form). No kernel growth.
-- **What it buys:** `examples/list_lemmas.sexp`'s claims are now
+- **What it buys:** `examples/list_lemmas.shard`'s claims are now
   stated once over `(List T)` and the capstone `fast_eq_rev` is
   demonstrated reused at `(List Int)` and `(List Symbol)` via
   one-step `Rewrite (Lemma 'fast_eq_rev) Lr Lhs True (list)`. Real
@@ -736,7 +736,7 @@ is where to start when planning v3.
   per-arm reductions. The reverse tower used 6 such helpers.
 - **Resolved (slice 30):** the new head-only-gated Simp does the
   per-arm reduction directly. See "Reduce and Simp are now split"
-  above. The reverse tower (`examples/list_lemmas.sexp`) now uses
+  above. The reverse tower (`examples/list_lemmas.shard`) now uses
   4 lemmas (down from 10) and drives ctor-case reductions with
   `(Simp Both)` instead of `Unfold + Reduce + per-arm-lemma cites`.
 - **What remains true:** when the kernel still can't reduce

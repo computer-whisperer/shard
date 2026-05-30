@@ -2,7 +2,7 @@
 
 Syntax highlighting for the v2 proving-bootstrap narrow object
 language, as documented in `docs/LANGUAGE.md`. Targets the
-`.sexp` extension.
+`.shard` extension.
 
 ## Install as a dev extension
 
@@ -31,11 +31,11 @@ from `languages/narrow/`.
 
 ## Caveats
 
-- **`.sexp` is a generic extension.** This extension will apply to
-  every `.sexp` file open in Zed, not just files in this project.
+- **`.shard` is a generic extension.** This extension will apply to
+  every `.shard` file open in Zed, not just files in this project.
   If that's a problem, change `path_suffixes` in
   `languages/narrow/config.toml` to something project-specific
-  (e.g. `.narrow.sexp`) and rename the kernel files to match.
+  (e.g. `.narrow.shard`) and rename the kernel files to match.
 
 - **Uppercase = type is a heuristic.** Free variables that happen to
   start with a capital letter will also get the type color. The

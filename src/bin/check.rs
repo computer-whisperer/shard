@@ -1,7 +1,7 @@
 //! `check` — proof-script driver for the narrow kernel.
 //!
 //! Loads the bundled kernel, then walks one or more user-provided
-//! `.sexp` proof files. Top-level forms in those files:
+//! `.shard` proof files. Top-level forms in those files:
 //!
 //!   (claim NAME GOAL PROOF)
 //!     Run `check_sequent` on a fresh Sequent lifted from GOAL
@@ -17,8 +17,8 @@
 //!     in-kernel (e.g. the Euclidean identity of `div`/`mod`).
 //!     Reported as `AXIOM <name>` and tallied separately.
 //!
-//!   (use-module "path/to/file.sexp")
-//!     Load the named .sexp file as a user-defined module (types,
+//!   (use-module "path/to/file.shard")
+//!     Load the named .shard file as a user-defined module (types,
 //!     fns, externs) and merge it into the running user module. The
 //!     `m` arg to subsequent check_sequent calls is the merged
 //!     value, so claims can reason about user fns (e.g., a Simp
@@ -62,15 +62,15 @@ fn main() -> ExitCode {
 fn run() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
-        eprintln!("usage: check [--trace <claim>|all] <proof_file.sexp>...");
-        eprintln!("       check eval [--no-bootstrap|--both] <file.sexp>... <expr>");
-        eprintln!("       check app [--repl|--script <events>] [--no-bootstrap] <file.sexp>...");
+        eprintln!("usage: check [--trace <claim>|all] <proof_file.shard>...");
+        eprintln!("       check eval [--no-bootstrap|--both] <file.shard>... <expr>");
+        eprintln!("       check app [--repl|--script <events>] [--no-bootstrap] <file.shard>...");
         return ExitCode::from(2);
     }
 
     // `eval` subcommand: run an object-language expression rather than
     // check proofs. By default it runs through the BOOTSTRAPPED narrow
-    // reducer (kernel/reduce.sexp's compute_expr) — the self-hosted
+    // reducer (kernel/reduce.shard's compute_expr) — the self-hosted
     // evaluator; `--no-bootstrap` uses the native Rust eval::eval instead.
     if args[0] == "eval" {
         return run_eval(&args[1..]);
@@ -95,7 +95,7 @@ fn run() -> ExitCode {
     }
 
     // `parse-check` subcommand: differential validation of the shard
-    // reader (tools/reader.sexp's `parse_expr`) against the Rust parser
+    // reader (tools/reader.shard's `parse_expr`) against the Rust parser
     // (load::expr_from_str). For each expression in a corpus file, parse
     // it both ways and compare the resulting Expr ASTs structurally.
     if args[0] == "parse-check" {
@@ -103,8 +103,8 @@ fn run() -> ExitCode {
     }
 
     // `module-check` subcommand: differential validation of the shard
-    // module parser (tools/reader.sexp's `parse_module`) against
-    // load::module_from_str_with_base over a whole .sexp file.
+    // module parser (tools/reader.shard's `parse_module`) against
+    // load::module_from_str_with_base over a whole .shard file.
     if args[0] == "module-check" {
         return run_module_check(&args[1..]);
     }
@@ -183,7 +183,7 @@ fn run() -> ExitCode {
 // ----------------------------------------------------------------------
 // Recursive file loader with transitive imports.
 //
-// A .sexp file may mix object-level code (`type`/`fn`/`extern`),
+// A .shard file may mix object-level code (`type`/`fn`/`extern`),
 // dependency directives (`import` / its legacy alias `use-module`), and
 // proofs (`claim`). One file = one topic. Each file is processed in
 // three passes so dependencies are in scope before use:
@@ -778,7 +778,7 @@ fn desugar_case(c: &Value, ctx: &HCtx, induct: Option<(&str, bool)>,
 
 // ----------------------------------------------------------------------
 // Load-time proof-structure validation (UNTRUSTED, off the check path).
-// Walks the Proof / Step / Case grammar (arities mirror kernel/proof.sexp)
+// Walks the Proof / Step / Case grammar (arities mirror kernel/proof.shard)
 // and returns the first structural error with a path into the tree. This
 // turns class-of-bug authoring mistakes — a Proof node used where a Step
 // is expected, or a wrong field count — into a clear load-time message
@@ -1189,7 +1189,7 @@ fn build_value(v: &Value, kernel: &ast::Module) -> Result<ast::Expr, String> {
 // ----------------------------------------------------------------------
 // `eval` subcommand — run an object program, not check a proof.
 //
-//   check eval [--no-bootstrap|--both] [--reflected] <file.sexp>... <EXPR>
+//   check eval [--no-bootstrap|--both] [--reflected] <file.shard>... <EXPR>
 //
 // By default EXPR is SURFACE syntax — a normal object-language expression
 // against the loaded module, including string-literal sugar:
@@ -1199,11 +1199,11 @@ fn build_value(v: &Value, kernel: &ast::Module) -> Result<ast::Expr, String> {
 //   (Call 'run (list (Ctor 'Cons (list (IntLit 49) … (Ctor 'Nil (list))))))
 //
 // The default evaluation path is the BOOTSTRAP: the expr is reflected and
-// fed to the narrow reducer compute_expr (kernel/reduce.sexp), executed by
+// fed to the narrow reducer compute_expr (kernel/reduce.shard), executed by
 // the Rust substrate — the self-hosted evaluator running the full-language
 // program. `--no-bootstrap` runs the native Rust eval::eval directly;
 // `--both` runs each and reports whether they agree (a differential test
-// of reduce.sexp against the native engine).
+// of reduce.shard against the native engine).
 // ----------------------------------------------------------------------
 
 fn run_eval(args: &[String]) -> ExitCode {
@@ -1224,7 +1224,7 @@ fn run_eval(args: &[String]) -> ExitCode {
         }
     }
     if positional.is_empty() {
-        eprintln!("usage: check eval [--no-bootstrap|--both] [--reflected] <file.sexp>... <expr>");
+        eprintln!("usage: check eval [--no-bootstrap|--both] [--reflected] <file.shard>... <expr>");
         return ExitCode::from(2);
     }
     let expr_src = positional.last().unwrap().as_str();
@@ -1314,7 +1314,7 @@ fn run_eval(args: &[String]) -> ExitCode {
                     println!("agree     : yes");
                     ExitCode::SUCCESS
                 } else {
-                    println!("agree     : NO — reduce.sexp disagrees with the native engine");
+                    println!("agree     : NO — reduce.shard disagrees with the native engine");
                     ExitCode::from(1)
                 }
             }
@@ -1353,9 +1353,9 @@ fn run_eval(args: &[String]) -> ExitCode {
 //   reference : load::expr_from_str (the Rust parser) → reflect via
 //               expr_to_value to the object Expr datum.
 //   shard     : eval `parse_expr <line-as-(List Int)> <ctor-set>` (the
-//               reader in tools/reader.sexp) on the NATIVE engine.
+//               reader in tools/reader.shard) on the NATIVE engine.
 // and compare the two Expr data structurally. This is the same
-// differential discipline that keeps reduce.sexp honest (`eval --both`).
+// differential discipline that keeps reduce.shard honest (`eval --both`).
 // ----------------------------------------------------------------------
 
 fn sym_list_native(names: &[String]) -> ast::Expr {
@@ -1376,7 +1376,7 @@ fn run_parse_check(args: &[String]) -> ExitCode {
         positional.push(a);
     }
     if positional.len() < 2 {
-        eprintln!("usage: check parse-check <file.sexp>... <corpus.txt>");
+        eprintln!("usage: check parse-check <file.shard>... <corpus.txt>");
         return ExitCode::from(2);
     }
     let corpus_path = positional.last().unwrap().as_str();
@@ -1538,7 +1538,7 @@ fn run_module_check(args: &[String]) -> ExitCode {
         positional.push(a);
     }
     if positional.len() < 2 {
-        eprintln!("usage: check module-check <reader.sexp>... <target.sexp>");
+        eprintln!("usage: check module-check <reader.shard>... <target.shard>");
         return ExitCode::from(2);
     }
     let target_path = positional.last().unwrap().as_str();
@@ -1682,7 +1682,7 @@ fn run_app(args: &[String]) -> ExitCode {
         }
     }
     if positional.is_empty() {
-        eprintln!("usage: check app [--repl|--script <events>] [--no-bootstrap] <file.sexp>...");
+        eprintln!("usage: check app [--repl|--script <events>] [--no-bootstrap] <file.shard>...");
         return ExitCode::from(2);
     }
 
@@ -1825,7 +1825,7 @@ fn run_app(args: &[String]) -> ExitCode {
 
 // ----------------------------------------------------------------------
 // `cli` subcommand — run a shard program through the request/response
-// effect loop. `check cli <file.sexp>... [-- <app-args>...]`.
+// effect loop. `check cli <file.shard>... [-- <app-args>...]`.
 //
 // The entrypoint is `(cli (state S) (init INIT) (update FN))` where
 //   FN : S -> Event -> (Step S Action)
@@ -1862,7 +1862,7 @@ fn run_cli(args: &[String]) -> ExitCode {
         positional.push(a);
     }
     if positional.is_empty() {
-        eprintln!("usage: check cli <file.sexp>... [-- <app-args>...]");
+        eprintln!("usage: check cli <file.shard>... [-- <app-args>...]");
         return ExitCode::from(2);
     }
 
@@ -2410,8 +2410,8 @@ fn merge_module(dst: &mut ast::Module, incoming: ast::Module) {
 // kernel `ast::Module`; what we need here is to reify the user's
 // `ast::Module` as data the kernel can read.
 //
-// The conversion is mechanical 1:1 with kernel/term.sexp's Expr/Pat
-// and kernel/module.sexp's TypeDef/CtorDef/FnDef/ExternDef/Module
+// The conversion is mechanical 1:1 with kernel/term.shard's Expr/Pat
+// and kernel/module.shard's TypeDef/CtorDef/FnDef/ExternDef/Module
 // declarations. If those evolve, this file follows.
 // ----------------------------------------------------------------------
 

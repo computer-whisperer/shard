@@ -133,7 +133,7 @@ Proofs reason about *what `step` produces*: invariants
 (an implementation `step` agrees with a spec `step` — the stateful
 sequel to `run = spec_run`). This is the first non-oneshot application
 shape that ships in narrow; the continuation-carrying (A) form still
-waits on `apply$`. The worked example is `examples/calc/calc_app.sexp`.
+waits on `apply$`. The worked example is `examples/calc/calc_app.shard`.
 
 ## Modellable externs: the good pattern
 
@@ -203,7 +203,7 @@ tag on the axiom entry.
 - **Continuation-carrying effect-as-data (mechanism A).** The
   `(ReadFile p k)` tree form needs `apply$`; lands with the full
   language. (The continuation-free MVU variant, mechanism (C), ships
-  now — see `check app` / `examples/calc/calc_app.sexp`.)
+  now — see `check app` / `examples/calc/calc_app.shard`.)
 - **Runtime linkage** between extern names and native Rust
   functions. Out of the kernel; a deployment-time concern.
 - **Audit ledger tool.** Easy once the data shapes are stable; just

@@ -38,7 +38,7 @@ The product asymmetry, restated:
 ## Quick start
 
 ```sh
-cargo run --bin check -- std/*.sexp          # the standard library
+cargo run --bin check -- std/*.shard          # the standard library
 ```
 
 Expected output:
@@ -51,18 +51,18 @@ PASS  mem_reverses
 72 passed, 0 failed
 ```
 
-`std/mem.sexp` `(import …)`s the rest of `std/`, so checking any one file
-pulls its dependencies transitively; checking `std/*.sexp` checks the
+`std/mem.shard` `(import …)`s the rest of `std/`, so checking any one file
+pulls its dependencies transitively; checking `std/*.shard` checks the
 whole library (each file loaded once). The demos live in `examples/`
-(`cargo run --bin check -- examples/lia_basics.sexp …`);
-`examples/lia_rejects.sexp` is a deliberate negative test (it FAILs).
+(`cargo run --bin check -- examples/lia_basics.shard …`);
+`examples/lia_rejects.shard` is a deliberate negative test (it FAILs).
 
-The `check` binary loads the bundled kernel, then walks each `.sexp`
+The `check` binary loads the bundled kernel, then walks each `.shard`
 file. A file may mix code, dependencies, and proofs:
 
 ```
 (claim NAME GOAL PROOF)   ; check a theorem; cite later via (Lemma NAME)
-(import "path/file.sexp") ; load another file's code AND proven claims,
+(import "path/file.shard") ; load another file's code AND proven claims,
                           ;   transitively, de-duplicated (use-module = alias)
 (type …) (fn …) (extern …); object-level definitions the proofs reason about
 ```
@@ -89,16 +89,16 @@ docs/
                        ;   Bootstrapped v2 from the v1 pilot; kept for rationale.
 
 kernel/                ; the trusted kernel, written in narrow (1,823 NCNB)
-  stdlib.sexp          ;   List / Option / Pair / Bool
-  term.sexp            ;   Expr / Pat / shift / subst / open_many / close_many
-  reduce.sexp          ;   step / step_iota / step_smart (gated δ) / memo
-  proof.sexp           ;   Equation / Goal / Step / Proof / Theory / Cert
-  module.sexp          ;   Module / FnDef / TypeDef / ExternDef
-  check.sexp           ;   check_sequent — the entry point
-  lia.sexp             ;   LIA decision procedure (ByTheory backend)
-  eqdec.sexp           ;   equality-reflection backend (int_eq/sym_eq = True)
-  ord.sexp             ;   order-reflection backend (lt/le = True via LIA diff)
-  farkas.sexp          ;   linear-integer entailment (premises ⊢ lt/le, cert-checked)
+  stdlib.shard          ;   List / Option / Pair / Bool
+  term.shard            ;   Expr / Pat / shift / subst / open_many / close_many
+  reduce.shard          ;   step / step_iota / step_smart (gated δ) / memo
+  proof.shard           ;   Equation / Goal / Step / Proof / Theory / Cert
+  module.shard          ;   Module / FnDef / TypeDef / ExternDef
+  check.shard           ;   check_sequent — the entry point
+  lia.shard             ;   LIA decision procedure (ByTheory backend)
+  eqdec.shard           ;   equality-reflection backend (int_eq/sym_eq = True)
+  ord.shard             ;   order-reflection backend (lt/le = True via LIA diff)
+  farkas.shard          ;   linear-integer entailment (premises ⊢ lt/le, cert-checked)
 
 src/                   ; the trusted-by-review Rust component
   ast.rs               ;   Expr / Pat / Type / Module ADTs the loader produces
@@ -112,28 +112,28 @@ src/                   ; the trusted-by-review Rust component
 std/                   ; the standard library — reusable code + theorems,
                        ;   each a topic file (code + its lemmas, co-located),
                        ;   wired together with (import …) (slice 51)
-  arith.sexp           ;   pure lia index identities (sub_zero, idx_cancel, …)
-  order.sexp           ;   Int order / disequality entailment (ord + farkas):
+  arith.shard           ;   pure lia index identities (sub_zero, idx_cancel, …)
+  order.shard           ;   Int order / disequality entailment (ord + farkas):
                        ;     lt_succ_from_lt, le_trans, lt_implies_neq,
                        ;     eq_from_le_both, lt_trans_to_neq, … (19 lemmas)
-  nat.sexp             ;   Nat + add_nat / int_of_nat / half_nat + nonneg /
+  nat.shard             ;   Nat + add_nat / int_of_nat / half_nat + nonneg /
                        ;     half_bound (the Induct2 showcase). imports order.
-  list.sexp            ;   (List T) append/rev/fast + the reverse tower
-  map.sexp             ;   (Map V) lookup/insert + extensional lemmas + int_eq_refl
-  mem.sexp             ;   M3 linear memory = (Map Int): read/write/swap/rev_loop/
+  list.shard            ;   (List T) append/rev/fast + the reverse tower
+  map.shard             ;   (Map V) lookup/insert + extensional lemmas + int_eq_refl
+  mem.shard             ;   M3 linear memory = (Map Int): read/write/swap/rev_loop/
                        ;     load/dump/rdump + framing + rev_loop_mirror + bridge
                        ;     + mem_reverses (the PROVEN capstone). imports the rest.
 
 examples/              ; demonstrations (not the library)
-  lia_basics.sexp      ;   LIA examples incl. the Insts demo (slice 32)
+  lia_basics.shard      ;   LIA examples incl. the Insts demo (slice 32)
   rewrite_with_demo /  ;   RewriteWith + Induct demos (import std/nat)
-  add_nat_zero.sexp    ;
-  double_claims.sexp   ;   Simp-unfold of a user fn (double_lib.sexp)
-  lia_rejects.sexp     ;   NEGATIVE test — the kernel correctly REJECTs it
+  add_nat_zero.shard    ;
+  double_claims.shard   ;   Simp-unfold of a user fn (double_lib.shard)
+  lia_rejects.shard     ;   NEGATIVE test — the kernel correctly REJECTs it
 
 tools/
   zed-narrow/          ;   Zed editor syntax-highlighting extension
-                       ;     for .sexp files
+                       ;     for .shard files
 ```
 
 ## Current state
@@ -252,7 +252,7 @@ premises"). Each item links to its REVISIT entry if one exists.
   outer fixed-point loop only. Inner `step_smart` recursion does
   not thread the memo (narrow has no monadic bind). Both this and
   hash-cons/sharing of Expr are flagged `TODO[v3]` in
-  `kernel/reduce.sexp:493`.
+  `kernel/reduce.shard:493`.
 
 ### Tooling
 
@@ -266,7 +266,7 @@ premises"). Each item links to its REVISIT entry if one exists.
   now Rust mirrors guard kernel-side behavior; sexp claims exercise
   end-to-end including loader paths.
 - **Module-tree loader for the kernel itself** — once `(module …)`
-  works, migrate `kernel/*.sexp` to `kernel/mod.sexp`-style tree.
+  works, migrate `kernel/*.shard` to `kernel/mod.shard`-style tree.
   Cosmetic but consistency-tightening.
 
 ## Architecture in two paragraphs
@@ -295,8 +295,8 @@ the audit boundary visible at the kernel layer.
   commit message starts `slice N: …` and includes test/claim counts
   before and after. Read `git log --oneline` for the slice history.
 - **Trusted core touch is called out explicitly.** Changes to
-  `kernel/*.sexp` or `src/*.rs` mean the audited surface grew or
-  shifted. Changes to `examples/*.sexp` or `tests` do not.
+  `kernel/*.shard` or `src/*.rs` mean the audited surface grew or
+  shifted. Changes to `examples/*.shard` or `tests` do not.
 - **REVISIT entries are first-class.** Every design decision under
   uncertainty has an entry with the "what was chosen", "why now",
   and "revisit when" triad. The README's roadmap section is a
@@ -309,7 +309,7 @@ the audit boundary visible at the kernel layer.
   guarding, ByTheory (LIA + eqdec + ord + farkas), Insts, finite maps (Int
   keys), and the M3 linear-memory model + array framing.
 - **Trusted core size:**
-  - Kernel narrow code: **1,823 NCNB** across 10 `kernel/*.sexp`.
+  - Kernel narrow code: **1,823 NCNB** across 10 `kernel/*.shard`.
   - Rust trusted-by-review: **1,136 NCNB** across
     `ast.rs` + `eval.rs` + `load.rs` + `prim.rs` + `bin/check.rs`.
   - (Plus ~2,000 NCNB of Rust tests + builders in `lib.rs` + `nval.rs`

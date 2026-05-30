@@ -607,7 +607,7 @@ fn load_let(
 /// `(list E1 E2 …)` → `(Cons E1 (Cons E2 (… Nil)))`. Empty list
 /// produces `Nil`. The `Cons` / `Nil` ctor names are hardcoded;
 /// callers don't need them to appear in the module's ctor set
-/// (though stdlib.sexp declares them so they normally do).
+/// (though stdlib.shard declares them so they normally do).
 fn load_list(
     parts: &[&Value],
     ctx: &mut LoadCtx,

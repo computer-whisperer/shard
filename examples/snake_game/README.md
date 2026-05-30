@@ -45,7 +45,7 @@ Three consequences we are trying to exploit:
 
 **Fulfillment reuses the calc pattern.** The implementation discharges the
 contract by proving it: a reference-spec anchor (`step = spec_step`, exactly
-as `calc_app_spec.sexp` proves `step = step_spec` from `run = spec_run`) plus
+as `calc_app_spec.shard` proves `step = step_spec` from `run = spec_run`) plus
 any named invariant that is awkward to phrase as an equivalence (e.g. "score
 equals food eaten", "the snake never occupies a wall cell"). Snake, unlike the
 memoryless calculator, carries state across events — so at least one real
@@ -53,14 +53,14 @@ invariant proof is part of the point.
 
 ## File / naming convention (provisional)
 
-- `*.req.sexp` — the **contract**: public types, public signatures, the
+- `*.req.shard` — the **contract**: public types, public signatures, the
   promised surface lemmas, and informal requirements as prose right alongside
   the formal ones. **Frozen by observation, not by mechanism** — integrity is
-  just git. The history of a `.req.sexp` file should read "created, then
+  just git. The history of a `.req.shard` file should read "created, then
   stable"; an edit without a recorded reason is the smell.
-- plain `*.sexp` — the **fulfillment**: implementation functions and the
+- plain `*.shard` — the **fulfillment**: implementation functions and the
   proofs that discharge the contract. Free to churn.
-- `*.app.sexp` — the `(app …)` entrypoint driven by `check app`.
+- `*.app.shard` — the `(app …)` entrypoint driven by `check app`.
 
 One module may be fulfilled by **more than one implementation** (a naive one,
 an efficient one): each implementation cites the same contract and carries its
@@ -91,6 +91,6 @@ not guessed in advance:
 
 ## Status
 
-Empty scaffold. Next: lay down the first `.req.sexp` contract and a fulfillment
+Empty scaffold. Next: lay down the first `.req.shard` contract and a fulfillment
 against it, and let the rough edges tell us which earmarked feature to build
 first.

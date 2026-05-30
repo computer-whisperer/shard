@@ -1,5 +1,5 @@
 //! Rust mirror of the narrow object-language ADTs. Kept in lockstep
-//! with kernel/{term,module,proof}.sexp.
+//! with kernel/{term,module,proof}.shard.
 //!
 //! Locally-nameless: `FVar(name)` is a free variable by name;
 //! `BVar(idx)` is a bound variable as a 0-based de Bruijn index,
