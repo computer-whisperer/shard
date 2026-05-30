@@ -20,20 +20,44 @@ bottom. See [TRANSFER.md](docs/archive/TRANSFER.md) for the full premise — inc
 the economic inversion (code is cheap; *coherent, proven requirements*
 are scarce) that makes this timely now.
 
-The substrate that makes each link *checkable* is a tiny trusted Rust
-kernel loading a self-hosting proof checker written in a deliberately
-narrow object language ("narrow"); the checker reasons equationally
-about pure first-order programs in the same narrow form (same data
-type, same evaluator, same reduction rules). The v1 pilot validated the
-architecture end to end (naive `rev` ⊑ accumulator-passing `fast` ⊑
-in-place memory reverse ⊑ wasm) at toy scale; v2 rebuilds the substrate
-with the lessons applied — see TRANSFER.md for the changes from v1.
+The language is **shard**, and its defining choice is that **programs
+are data**: functions, data structures, whole applications are
+in-memory compute structures the tooling can inspect, transform, and
+prove about. That is what makes each refinement link *checkable* — the
+proof checker, itself written *in shard*, reasons equationally about
+other shard programs (same data type, same evaluator, same reduction
+rules). Crucially this is a **build-time** power, not a runtime one. A
+serious shard application is **compiled** to a bare binary — no
+interpreter, no GC, no reflection, no kernel sidecar — so the snake
+demo reduces to a standalone x86 executable that is just its `step`
+function plus IO. The language is kept compilable to the metal by
+design: features that would smuggle in a runtime (first-class closures,
+runtime `eval`) are admitted only if they fully compile away.
+
+Underneath, a deliberately tiny **Rust bootstrap** understands only
+*narrow* shard — a minimal subset — and hosts the rest until shard can
+compile itself. The engine, kernel, checker, and parser are all written
+in narrow shard; new language features grow in *full* shard, in the
+shard engine, and are pushed down into the Rust narrow backend only when
+genuinely needed. There is no full→narrow lowering — narrow is just the
+bootstrap floor, and the compile story is full shard straight to a
+machine target. When that compiler exists, `rust_bootstrap/` is deleted
+and shard stands on its own.
+
+The v1 pilot validated the whole arc end to end at toy scale: a
+hand-written **wasm** reverse, run on a wasm interpreter *written in
+shard*, proven equal to functional `rev` for all inputs as the composed
+chain `wasm ⊑ rev_loop ⊑ rev`. Verification reached all the way to the
+machine code, because the machine is modeled in the same provable
+language. v2 rebuilds the substrate with the lessons applied — see
+[docs/OVERVIEW.md](docs/OVERVIEW.md) for the full design intent and
+TRANSFER.md for the v1→v2 changes.
 
 The product asymmetry, restated:
 - **Generation is cheap and untrusted.** An LLM (or, later, an SMT
   solver) proposes the refinements and their proofs.
-- **Checking is small and trusted.** A few hundred lines of audited
-  Rust evaluator running a small kernel written in narrow.
+- **Checking is small and trusted.** A small kernel written in shard,
+  run today on a disposable Rust bootstrap that will be compiled away.
 
 ## Quick start
 
@@ -189,14 +213,19 @@ Feature checklist (✓ = shipped in v2; → = next):
 | M3 capstone (`rev_loop ⊑ rev`: full list↔mem refinement) | ✓ | 45-50 |
 | Two-step induction (`Induct2`, Nat-shaped)   | ✓  | 50     |
 | `(import …)` — transitive, deduped deps + `std/` library | ✓ | 51 |
-| Polymorphic-key maps `(Map K V)`        | →        |        |
-| Defunctionalized higher-order           | →        |        |
+| Char↔symbol primitives (`sym_of_chars`/`chars_of_sym`) | ✓ | self-host |
+| S-expr reader + module parser **in shard** (`tools/reader.shard`) | ✓ | self-host |
+| Environment-machine evaluator (Rc values; ~700× faster) | ✓ | self-host |
+| `check cli` request/response effect loop (args/file/write) | ✓ | self-host |
+| `eval` as a standalone shard CLI app (`examples/cli/`) | ✓ | self-host |
+| `.shard` rename + `rust_bootstrap/` split | ✓ | self-host |
+| Module-elaborator (file→Module) into shard | →    |        |
+| Defunctionalized higher-order (compiles away) | →     |        |
 | Measure / well-founded recursion        | →        |        |
 | Mutual recursion + mutual induction     | →        |        |
-| `let` in term language (sub-term sharing) | →      |        |
 | Module-tree loader (`(module …)`)       | →        |        |
 | Audit ledger tool                       | →        |        |
-| Self-hosting kernel tests in sexp       | →        |        |
+| **shard → wasm/x86 compiler** (retires `rust_bootstrap/`) | → |   |
 
 Each `→` row is also captured in [docs/REVISIT.md](docs/REVISIT.md)
 under its corresponding "Revisit when:" hook — the README is the

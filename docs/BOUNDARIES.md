@@ -127,6 +127,30 @@ declared, audited, minimized, per the principle above. Everything the
 program decides remains a pure value; the driver only translates
 `(Print cs)` into bytes on a descriptor.
 
+**Request/response variant (`check cli`).** The MVU loop above is
+output-only; a command-line tool also needs *input* effects. The
+`(cli (state S) (init INIT) (update FN))` entrypoint
+(`bin/check.rs::run_cli`) generalizes (C) into a request/response
+protocol: the program emits a request Action and the driver feeds the
+*result* back as the next Event — still one pure `step` call per turn,
+still no continuation in the data.
+
+```
+Action emitted     driver performs            next Event
+(GetArgs)          collect argv (after `--`)   (Args (List (List Int)))
+(ReadFile path)    read that file              (FileOk bytes) | (FileErr)
+(Write bytes)      write to stdout             (Wrote)
+(Exit code)        terminate                   —
+```
+
+This is what lets a pure shard program "fetch args, read files, return
+chars" — the standalone-CLI shape. `examples/cli/cat.shard` is the
+minimal demo; `examples/cli/eval_app.shard` is `eval` itself written as
+one of these apps (read a module file, parse + evaluate it in shard,
+write the result). The trust boundary is still exactly the enumerable
+Action set; `ReadFile`/`Write` are the file/byte arms, audited like any
+other.
+
 Proofs reason about *what `step` produces*: invariants
 (`∀ s e. inv s ⟹ inv (state_of (step s e))`), safety
 (`∀ s e. action_of (step s e) ≠ (Exit 1)`), and spec-equivalence

@@ -1,10 +1,16 @@
-# The Narrow Language
+# Narrow shard
 
-Concentrated reference for the v2 object language as currently
-implemented. The "narrow" form is a deliberately restricted subset of
-the eventual "full" language — restricted enough to host a small,
-trusted Rust evaluator over it, expressive enough that the proof
-checker kernel is written *in* this form (see TRANSFER.md).
+> The language is **shard**. This document specifies **narrow shard** —
+> the deliberately restricted subset that the disposable Rust bootstrap
+> parses and evaluates, and the form the kernel, engine, parser, and
+> tools are themselves written in. The richer **full shard** (where
+> language features actually grow) is implemented *by* the shard engine
+> on top of this floor; see §11 for the relationship.
+
+Concentrated reference for narrow shard as currently implemented —
+restricted enough to host a small, trusted Rust evaluator over it,
+expressive enough that the proof checker kernel is written *in* this
+form (see TRANSFER.md).
 
 This document describes only what the v2 loader and evaluator
 actually accept and run today. Things planned but not implemented are
@@ -345,23 +351,46 @@ recognized by `src/bin/check.rs`, not by the kernel.
 
 ## 11. The narrow / full distinction
 
-The "narrow" language described above is what the v2 loader and
-evaluator accept. The "full" language — the eventual surface for
-users writing proofs and refinements — will add:
+`narrow` and `full` are two forms of the same language, **shard**.
 
-- Higher-order: lambdas, partial application, `apply$` defunctionalization
-- Effect-as-data: `Action` trees built from `Pure` / `Bind` / `Yield`
-- Bridging axioms tying externs to in-language models
-- Finite maps / collections with their lemma library
-- Measure / well-founded recursion (termination as discharged obligation)
-- Mutual recursion and mutual induction
-- (Possibly) sequential `let*` and pattern syntax sugar
-- (Possibly) module imports / visibility
+- **Narrow shard** is what the Rust bootstrap parses and evaluates — the
+  minimal subset described above. It is the **bootstrap floor**: the
+  kernel, the evaluator, the parser/front-end (`tools/reader.shard`),
+  and the tools are all written in it, so the small trusted Rust host
+  can run them. Narrow grows **reluctantly** — a feature is added to the
+  Rust backend only when the engine itself genuinely needs it expressed
+  at that level.
+- **Full shard** is the richer language, *implemented by the shard
+  engine* (which is itself written in narrow). This is where features
+  actually accrue — a new sugar or construct is added to the shard
+  front-end first. Candidate additions: effect-as-data trees, bridging
+  axioms, richer collections, measure / well-founded recursion, mutual
+  recursion, `let*` and pattern sugar, module visibility.
 
-The full language will be **compiled down to the narrow language**.
-The narrow kernel will load and check certificates produced by that
-compilation, never the full language directly. See TRANSFER.md and
-docs/BOUNDARIES.md for the broader picture.
+**There is no full→narrow lowering, and no certificate scheme.** Narrow
+is not a compilation target; it is the floor the system is bootstrapped
+from. The engine interprets full shard directly today, and the eventual
+compile story is **full shard straight to a machine target** (wasm,
+x86) — see `docs/OVERVIEW.md`.
+
+### Two constraints that govern what `full` may add
+
+1. **Compile-to-bare-metal.** A serious shard application is *compiled*
+   to a standalone binary with **no runtime, no GC, no interpreter, no
+   kernel sidecar** (the snake demo reduces to a bare x86 executable —
+   just its `step` function plus IO). "Programs are data" is a
+   *build-time* power used by the prover and compiler; it is **not** a
+   runtime capability an application gets. So a feature is admissible
+   only if it compiles fully away. **Lambdas / first-class closures are
+   the cautionary case**: a closure is a heap environment + indirect
+   call — a runtime — so they may be added only if they
+   defunctionalize / inline / monomorphize away completely (hence the
+   `apply$` defunctionalization note in the roadmap, not closures as
+   runtime values).
+2. **Provable lowering.** Each step from full toward the metal is an
+   explicit, separately *proven* refinement (`spec ⊑ … ⊑ machine`), not
+   a "sufficiently smart compiler." See TRANSFER.md and
+   `docs/OVERVIEW.md` for the broader picture.
 
 
 ## 12. Worked example: a fragment
