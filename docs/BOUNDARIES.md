@@ -87,6 +87,54 @@ facts in the theory, just admitted rather than derived.
 
 This works in narrow today and is what v2 ships.
 
+### (C) Effect-as-data without continuations: the update loop (MVU)
+
+Mechanism (A) returns the *whole* effect tree from one pure run, with
+the rest-of-program embedded as a defunctionalized continuation
+(`Symbol` + `apply$`). That needs HOF — hence deferred to the full
+language.
+
+There is a narrow-compatible variant that drops the continuation. Split
+the program into a **pure step** plus an **external loop**:
+
+```
+(type CalcState (CalcState (Option Int)))
+(type Action (Print (List Int)) (Exit Int) (Nop))   ; ONE action, no continuation
+(type (Step S A) (Step S A))                         ; next-state + action
+
+(fn step ((s CalcState) (line (List Int))) (Step CalcState Action) …)
+
+(app (state CalcState) (init (CalcState None)) (update step))
+```
+
+`step : State -> Event -> (Step State Action)` is an ordinary pure,
+total function — no HOF, accepted by the narrow kernel as-is. The
+**continuation is externalized into the driver's loop** instead of
+reified in the Action: the runtime holds the current state, reads an
+event, calls `step`, performs the one returned Action, and recurses
+with the new state. Where (A) does one pure run that yields the entire
+effect tree, (C) does one pure call per event.
+
+The event loop and the Action interpreter live in the untrusted driver
+(`check app`, `bin/check.rs::run_app`) — the same trust status as
+`eval::eval`, which is already the substrate that runs the narrow
+kernel. Non-termination is the loop's, never the object program's.
+
+The **trust boundary is the Action interpreter**: the fixed, enumerable
+set of actions the driver knows how to perform (today `Print` / `Exit`
+/ `Nop`). Adding an action expands this boundary by exactly one arm —
+declared, audited, minimized, per the principle above. Everything the
+program decides remains a pure value; the driver only translates
+`(Print cs)` into bytes on a descriptor.
+
+Proofs reason about *what `step` produces*: invariants
+(`∀ s e. inv s ⟹ inv (state_of (step s e))`), safety
+(`∀ s e. action_of (step s e) ≠ (Exit 1)`), and spec-equivalence
+(an implementation `step` agrees with a spec `step` — the stateful
+sequel to `run = spec_run`). This is the first non-oneshot application
+shape that ships in narrow; the continuation-carrying (A) form still
+waits on `apply$`. The worked example is `examples/calc/calc_app.sexp`.
+
 ## Modellable externs: the good pattern
 
 Bare extern+axiom is the operational story — "we trust these symbols
@@ -152,8 +200,10 @@ tag on the axiom entry.
 
 ## What v2 defers
 
-- **Effect-as-data Action types and their interpreter.** Needs
-  `apply$`; lands with the full language.
+- **Continuation-carrying effect-as-data (mechanism A).** The
+  `(ReadFile p k)` tree form needs `apply$`; lands with the full
+  language. (The continuation-free MVU variant, mechanism (C), ships
+  now — see `check app` / `examples/calc/calc_app.sexp`.)
 - **Runtime linkage** between extern names and native Rust
   functions. Out of the kernel; a deployment-time concern.
 - **Audit ledger tool.** Easy once the data shapes are stable; just

@@ -51,6 +51,7 @@ fn main() -> ExitCode {
     if args.is_empty() {
         eprintln!("usage: check <proof_file.sexp>...");
         eprintln!("       check eval [--no-bootstrap|--both] <file.sexp>... <expr>");
+        eprintln!("       check app [--repl|--script <events>] <file.sexp>...");
         return ExitCode::from(2);
     }
 
@@ -60,6 +61,14 @@ fn main() -> ExitCode {
     // evaluator; `--no-bootstrap` uses the native Rust eval::eval instead.
     if args[0] == "eval" {
         return run_eval(&args[1..]);
+    }
+
+    // `app` subcommand: drive a stateful application (the MVU entrypoint
+    // declared via `(app …)`) through the bootstrapped reducer. The pure
+    // `step` fn runs in the kernel; the event loop + effect interpretation
+    // live here in the untrusted driver. See run_app.
+    if args[0] == "app" {
+        return run_app(&args[1..]);
     }
 
     let kernel = match load_kernel_from(default_kernel_dir()) {
@@ -332,7 +341,9 @@ fn process_form(
         "claim" => process_claim(&items, kernel, user_module, theory, path),
         "axiom" => process_axiom(&items, kernel, path),
         // Handled in earlier passes: imports/aliases (A), code defs (B).
-        "import" | "use-module" | "type" | "fn" | "extern" => Outcome::Skip,
+        // `app` is the `check app` entrypoint declaration — inert to the
+        // proof checker, like a code def.
+        "import" | "use-module" | "type" | "fn" | "extern" | "app" => Outcome::Skip,
         "module" => {
             let name = items.get(1).and_then(|v| v.as_symbol()).unwrap_or("?");
             Outcome::Fatal(format!(
@@ -1209,6 +1220,320 @@ fn run_eval(args: &[String]) -> ExitCode {
                 eprintln!("eval error: {}", e);
                 ExitCode::from(2)
             }
+        }
+    }
+}
+
+// ----------------------------------------------------------------------
+// `app` subcommand — drive a stateful (Model-View-Update) application.
+//
+// The file declares an entrypoint:
+//     (app (state S) (init INIT-EXPR) (update STEP-FN))
+// where STEP-FN : S -> Event -> (Step S Action), Event = (List Int) (the
+// input line as codepoints), and Action is inert effect DATA. The pure
+// STEP-FN runs in the bootstrapped reducer (compute_expr); the loop and
+// the effect interpretation live HERE, in the untrusted driver. The set
+// of interpretable Actions (Print / Exit / Nop) is the one new trusted
+// boundary — see docs/BOUNDARIES.md.
+//
+// State flows as REFLECTED Expr-data the whole time: init reduces to a
+// state datum, and each step embeds the current state datum + the event
+// datum into a reflected `(step state event)` call, reduces it, and reads
+// the resulting `(Step state' action)` datum back out.
+// ----------------------------------------------------------------------
+
+fn run_app(args: &[String]) -> ExitCode {
+    use std::io::BufRead;
+
+    let mut script: Option<String> = None;
+    let mut positional: Vec<&String> = Vec::new();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--repl" => script = None,
+            "--script" => match it.next() {
+                Some(f) => script = Some(f.clone()),
+                None => {
+                    eprintln!("error: --script requires a file argument (use - for stdin)");
+                    return ExitCode::from(2);
+                }
+            },
+            s if s.starts_with("--") => {
+                eprintln!("error: unknown flag {}", s);
+                return ExitCode::from(2);
+            }
+            _ => positional.push(a),
+        }
+    }
+    if positional.is_empty() {
+        eprintln!("usage: check app [--repl|--script <events>] <file.sexp>...");
+        return ExitCode::from(2);
+    }
+
+    let kernel = match load_kernel_from(default_kernel_dir()) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error loading kernel from {}: {}", default_kernel_dir().display(), e);
+            return ExitCode::from(2);
+        }
+    };
+    let user_module = ast::Module {
+        types: kernel.types.clone(),
+        fns: Vec::new(),
+        externs: Vec::new(),
+    };
+    let mut ctx = Ctx {
+        user_module_value: module_to_value(&user_module),
+        user_module,
+        theory: ctor("TheoryEmpty", vec![]),
+        passed: 0,
+        failed: 0,
+        axioms: 0,
+        loaded: std::collections::HashSet::new(),
+        in_progress: Vec::new(),
+        load_only: true,
+    };
+    for f in &positional {
+        if let Err(code) = process_file(&PathBuf::from(f.as_str()), &mut ctx, &kernel) {
+            return code;
+        }
+    }
+
+    // Locate the (app …) declaration among the named files.
+    let app = match find_app_decl(&positional) {
+        Ok(Some(a)) => a,
+        Ok(None) => {
+            eprintln!("error: no (app …) declaration found in {}", positional.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "));
+            return ExitCode::from(2);
+        }
+        Err(e) => {
+            eprintln!("error: {}", e);
+            return ExitCode::from(2);
+        }
+    };
+    let update_fn = match app_subform(&app, "update").and_then(|p| p.get(1).and_then(|s| s.as_symbol()).map(|s| s.to_string())) {
+        Some(n) => n,
+        None => {
+            eprintln!("error: (app …) is missing an (update FN) field");
+            return ExitCode::from(2);
+        }
+    };
+    let init_val = match app_subform(&app, "init").and_then(|p| p.get(1).cloned()) {
+        Some(v) => v,
+        None => {
+            eprintln!("error: (app …) is missing an (init EXPR) field");
+            return ExitCode::from(2);
+        }
+    };
+
+    // Reduce the init expression to the initial state datum.
+    let init_native = match load::expr_from_value(&init_val, &ctx.user_module) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("error in (init …): {}", e);
+            return ExitCode::from(2);
+        }
+    };
+    let mut state = match eval_bootstrap(&kernel, &ctx.user_module_value, &expr_to_value(&init_native)) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error evaluating (init …): {}", e);
+            return ExitCode::from(2);
+        }
+    };
+
+    // Drive one step per input line. --script reads lines from a file (or
+    // stdin via "-"); the default is an interactive stdin REPL. Both feed
+    // each raw line to `step` as a codepoint-list event.
+    let lines: Box<dyn Iterator<Item = std::io::Result<String>>> = match &script {
+        Some(path) if path != "-" => match std::fs::read_to_string(path) {
+            Ok(src) => Box::new(src.lines().map(|s| Ok(s.to_string())).collect::<Vec<_>>().into_iter()),
+            Err(e) => {
+                eprintln!("error reading events file {}: {}", path, e);
+                return ExitCode::from(2);
+            }
+        },
+        _ => Box::new(std::io::stdin().lock().lines()),
+    };
+
+    for line in lines {
+        let line = match line {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("error reading input: {}", e);
+                return ExitCode::from(2);
+            }
+        };
+        let event = expr_to_value(&line_to_event_native(&line));
+        let call = reflected_call(&update_fn, vec![state.clone(), event]);
+        let result = match eval_bootstrap(&kernel, &ctx.user_module_value, &call) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("error in step: {}", e);
+                return ExitCode::from(2);
+            }
+        };
+        // Expect (Step state' action).
+        let (sname, fields) = match as_obj_ctor(&result) {
+            Some(x) => x,
+            None => {
+                eprintln!("error: `{}` did not return a value (stuck term): {}", update_fn, show_reflected(&result));
+                return ExitCode::from(2);
+            }
+        };
+        if sname != "Step" || fields.len() != 2 {
+            eprintln!("error: `{}` must return (Step state action), got: {}", update_fn, show_reflected(&result));
+            return ExitCode::from(2);
+        }
+        let next_state = fields[0].clone();
+        let action = fields[1];
+        match interpret_action(action) {
+            Ok(ActionOutcome::Continue) => {}
+            Ok(ActionOutcome::Exit(code)) => return ExitCode::from(code),
+            Err(e) => {
+                eprintln!("error: {}", e);
+                return ExitCode::from(2);
+            }
+        }
+        state = next_state;
+    }
+    ExitCode::SUCCESS
+}
+
+/// Effect interpretation — the trusted edge of the proof. Each arm
+/// performs the real-world effect named by an Action datum.
+enum ActionOutcome {
+    Continue,
+    Exit(u8),
+}
+
+fn interpret_action(action: &ast::Expr) -> Result<ActionOutcome, String> {
+    let (name, fields) = as_obj_ctor(action)
+        .ok_or_else(|| format!("action is not a constructor: {}", show_reflected(action)))?;
+    match (name, fields.as_slice()) {
+        ("Print", [payload]) => {
+            println!("{}", decode_codepoints(payload)?);
+            Ok(ActionOutcome::Continue)
+        }
+        ("Exit", [code]) => {
+            let n = match value_to_native_expr(code)? {
+                ast::Expr::IntLit(n) => n,
+                other => return Err(format!("Exit code is not an Int: {:?}", other)),
+            };
+            Ok(ActionOutcome::Exit(n as u8))
+        }
+        ("Nop", []) => Ok(ActionOutcome::Continue),
+        _ => Err(format!("unknown Action `{}` — the driver interprets only Print/Exit/Nop", name)),
+    }
+}
+
+/// Find the single `(app …)` form among the named files. Errors if more
+/// than one file declares an app.
+fn find_app_decl(files: &[&String]) -> Result<Option<Value>, String> {
+    let mut found: Option<Value> = None;
+    for f in files {
+        let src = std::fs::read_to_string(f.as_str())
+            .map_err(|e| format!("reading {}: {}", f, e))?;
+        let forms = parse_top_level(&src).map_err(|e| format!("parsing {}: {}", f, e))?;
+        for form in forms {
+            if form.list_iter().and_then(|mut it| it.next().and_then(|h| h.as_symbol()).map(|s| s == "app")).unwrap_or(false) {
+                if found.is_some() {
+                    return Err("multiple (app …) declarations found".into());
+                }
+                found = Some(form);
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// Return the parts of the `(KEY …)` sub-form inside an `(app …)` form,
+/// e.g. `app_subform(app, "update")` → `[update, step]`.
+fn app_subform(app: &Value, key: &str) -> Option<Vec<Value>> {
+    for item in app.list_iter()? {
+        if let Some(sub) = item.list_iter() {
+            let parts: Vec<Value> = sub.cloned().collect();
+            if parts.first().and_then(|h| h.as_symbol()) == Some(key) {
+                return Some(parts);
+            }
+        }
+    }
+    None
+}
+
+/// An input line → the reflected-NOTHING native `(List Int)` of its
+/// codepoints (the Event). Reflected to Expr-data by the caller.
+fn line_to_event_native(line: &str) -> ast::Expr {
+    let mut e = nil();
+    for ch in line.chars().rev() {
+        e = ctor("Cons", vec![ast::Expr::IntLit(ch as u32 as i64), e]);
+    }
+    e
+}
+
+/// Build the reflected Expr-data for `(Call 'fn (list arg…))`, where each
+/// `arg` is already an Expr-datum (so it embeds as an in-NF argument).
+fn reflected_call(fn_name: &str, arg_data: Vec<ast::Expr>) -> ast::Expr {
+    let mut spine = nil();
+    for a in arg_data.into_iter().rev() {
+        spine = ctor("Cons", vec![a, spine]);
+    }
+    ctor("Call", vec![ast::Expr::SymLit(fn_name.into()), spine])
+}
+
+/// View a reflected Expr-datum that encodes an OBJECT constructor value
+/// `(C f1 … fn)` — i.e. `Ctor("Ctor", [SymLit C, <field spine>])` — as its
+/// ctor name plus the field data (each field is itself Expr-data). Returns
+/// None for any other (e.g. stuck/partially-reduced) shape.
+fn as_obj_ctor(e: &ast::Expr) -> Option<(&str, Vec<&ast::Expr>)> {
+    if let ast::Expr::Ctor(c, a) = e {
+        if c == "Ctor" && a.len() == 2 {
+            if let ast::Expr::SymLit(name) = &a[0] {
+                return Some((name.as_str(), datum_spine_refs(&a[1])?));
+            }
+        }
+    }
+    None
+}
+
+/// Walk a NATIVE `(Cons h t)` / `Nil` spine (the representation of a
+/// reflected ctor's field list), returning references to each element
+/// WITHOUT un-reflecting them.
+fn datum_spine_refs(e: &ast::Expr) -> Option<Vec<&ast::Expr>> {
+    let mut out = Vec::new();
+    let mut cur = e;
+    loop {
+        match cur {
+            ast::Expr::Ctor(n, a) if n == "Nil" && a.is_empty() => return Some(out),
+            ast::Expr::Ctor(n, a) if n == "Cons" && a.len() == 2 => {
+                out.push(&a[0]);
+                cur = &a[1];
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// Decode a reflected `(List Int)` datum (an Action's Print payload) into a
+/// String of its codepoints.
+fn decode_codepoints(data: &ast::Expr) -> Result<String, String> {
+    let native = value_to_native_expr(data)?;
+    let mut s = String::new();
+    let mut cur = &native;
+    loop {
+        match cur {
+            ast::Expr::Ctor(n, a) if n == "Nil" && a.is_empty() => return Ok(s),
+            ast::Expr::Ctor(n, a) if n == "Cons" && a.len() == 2 => {
+                match &a[0] {
+                    ast::Expr::IntLit(cp) => match char::from_u32(*cp as u32) {
+                        Some(c) => s.push(c),
+                        None => return Err(format!("Print payload has non-codepoint {}", cp)),
+                    },
+                    other => return Err(format!("Print payload element is not an Int: {:?}", other)),
+                }
+                cur = &a[1];
+            }
+            _ => return Err(format!("Print payload is not a (List Int): {}", fmt_native_expr(&native))),
         }
     }
 }

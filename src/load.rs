@@ -145,7 +145,10 @@ pub fn module_from_str_with_base(
             "type" => {}
             "fn" => module.fns.push(load_fn_def(&parts[1..], &ctors)?),
             "extern" => module.externs.push(load_extern_def(&parts[1..])?),
-            "claim" | "axiom" | "import" | "use-module" => {}
+            // `app` is the entrypoint declaration consumed by the
+            // `check app` driver (state + init + update), not the module
+            // loader — skip it here exactly like claim/import.
+            "claim" | "axiom" | "import" | "use-module" | "app" => {}
             other => return Err(LoadError::UnknownForm(other.into())),
         }
     }

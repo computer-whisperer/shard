@@ -1,0 +1,66 @@
+;;; calc_app — a STATEFUL calculator, the first non-oneshot application on
+;;; the bootstrapped reducer. It demonstrates the Model-View-Update shape:
+;;; a pure, total `step : State -> Event -> (Step State Action)` whose
+;;; effects are returned as inert DATA (Action), driven by an untrusted
+;;; event loop in `check app`.
+;;;
+;;;   State : the last computed result (None before any successful eval)
+;;;   Event : the raw input line, as a codepoint list (List Int)
+;;;   Action: Print <codepoints> | Exit <code> | Nop   — interpreted by
+;;;           the driver; this is the ONE new trusted boundary (BOUNDARIES.md)
+;;;
+;;; `step` reuses the calculator's proven `run`; nothing here is effectful
+;;; or non-terminating — the loop lives entirely in the Rust driver, exactly
+;;; as `eval::eval` is the untrusted substrate under the narrow kernel.
+
+(import "calc.sexp")            ; run : (List Int) -> (Option Int)
+(import "../../std/list.sexp")  ; append (used by show_ascii)
+
+;; --- application types ------------------------------------------------------
+
+;; State: the most recently computed result.
+(type CalcState (CalcState (Option Int)))
+
+;; Action: inert effect data the driver interprets. ONE action per step.
+(type Action
+  (Print (List Int))
+  (Exit  Int)
+  (Nop))
+
+;; Step S A: the state+action pair update returns (a named Pair).
+(type (Step S A) (Step S A))
+
+;; --- rendering --------------------------------------------------------------
+;; show_ascii n: decimal ASCII codepoints for n (with a leading '-' when
+;; negative). Distinct from calc_show's `show`, which yields digit VALUES
+;; 0..9; here we want printable bytes. lt / + / - / / / mod are reducer
+;; primitives, so this needs no proof to RUN (it is not a claim).
+
+(fn show_nat ((n Int)) (List Int)
+  (if (lt n 10)
+      (Cons (+ 48 n) Nil)                                   ; '0' = 48
+      (append (show_nat (/ n 10)) (Cons (+ 48 (mod n 10)) Nil))))
+
+(fn show_ascii ((n Int)) (List Int)
+  (if (lt n 0)
+      (Cons 45 (show_nat (- 0 n)))                          ; '-' = 45
+      (show_nat n)))
+
+;; --- update -----------------------------------------------------------------
+;; step s line: evaluate the line; on success update state to the result and
+;; print it, on parse/eval failure keep state and print "?" (codepoint 63).
+;; `s` is intentionally unused on success — the calculator is memoryless;
+;; that very fact is what slice B will prove against the spec.
+
+(fn step ((s CalcState) (line (List Int))) (Step CalcState Action)
+  (match (run line)
+    (None       (Step s                  (Print (Cons 63 Nil))))
+    ((Some n)   (Step (CalcState (Some n)) (Print (show_ascii n))))))
+
+;; --- entrypoint -------------------------------------------------------------
+;; Consumed by `check app`, not the kernel: initial state + the update fn.
+
+(app
+  (state  CalcState)
+  (init   (CalcState None))
+  (update step))
