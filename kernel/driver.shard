@@ -1,0 +1,50 @@
+;;; driver.shard — the checker driver, in shard.
+;;;
+;;; Ties the self-hosted front-end together: parse a file's claims
+;;; (reader.shard), un-reflect each goal/proof to native kernel values
+;;; (unreflect.shard), lift Goal→Sequent, run the kernel's `check_sequent`,
+;;; and thread the theory (a passing claim is admitted as `(Proven name goal)`
+;;; so later claims can cite it). This is the loop that, in the Rust bootstrap,
+;;; lived in `bin/check.rs::process_file`.
+;;;
+;;; Run via the NATIVE eval::eval (like the Rust checker itself), so
+;;; check_sequent stays exactly as fast as native `check` — only the
+;;; orchestration moved into shard.
+;;;
+;;; SCOPE (this slice): positional-hyp proofs. Named hypotheses `(Hyp 'ih)`
+;;; need a desugar pass `check_sequent` doesn't perform (the next slice); the
+;;; raw un-reflected proof carries them through unchanged.
+
+;; Goal → Sequent: a top-level claim has no in-scope hypotheses (hyps = Nil).
+(fn lift_sequent ((g Goal)) Sequent
+  (match g ((Goal params premises eq) (Sequent params Nil premises eq))))
+
+(fn claim_name ((c Claim)) Symbol (match c ((Claim n g p) n)))
+
+;; Running tally over a file's claims.
+(type DriverResult (DriverResult Int Int))     ; passed, failed
+
+;; Check each claim against module m, threading the theory. A passing claim is
+;; admitted as (Proven name goal); a failing or un-reflectable one bumps failed
+;; and leaves the theory untouched.
+(fn run_claims_loop ((m Module) (th Theory) (cs (List Claim)) (passed Int) (failed Int)) DriverResult
+  (match cs
+    (Nil (DriverResult passed failed))
+    ((Cons c rest)
+      (match (unreflect_goal (claim_goal c))
+        (None (run_claims_loop m th rest passed (+ failed 1)))
+        ((Some g)
+          (match (unreflect_proof (claim_proof c))
+            (None (run_claims_loop m th rest passed (+ failed 1)))
+            ((Some p)
+              (if (check_sequent m th (lift_sequent g) p)
+                  (run_claims_loop m (TheoryCons (Proven (claim_name c) g) th)
+                                   rest (+ passed 1) failed)
+                  (run_claims_loop m th rest passed (+ failed 1))))))))))
+
+;; Entry point: parse the claims out of `src` and check them all against `m`,
+;; starting from the empty theory.
+(fn check_file ((m Module) (src (List Int)) (ctors (List Symbol))) DriverResult
+  (match (parse_claims src ctors)
+    (None (DriverResult 0 (- 0 1)))            ; -1 failed = parse failure
+    ((Some cs) (run_claims_loop m TheoryEmpty cs 0 0))))

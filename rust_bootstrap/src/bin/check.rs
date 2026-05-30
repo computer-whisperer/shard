@@ -117,6 +117,14 @@ fn run() -> ExitCode {
         return run_claims_check(&args[1..]);
     }
 
+    // `self-check` subcommand: run the shard checker DRIVER (driver.shard's
+    // check_file) over a target file's claims — parse + un-reflect + run
+    // check_sequent + thread the theory, all in shard — and report passed/
+    // failed. The end-to-end self-hosting test: compare to native `check`.
+    if args[0] == "self-check" {
+        return run_self_check(&args[1..]);
+    }
+
     let kernel = match load_kernel_from(default_kernel_dir()) {
         Ok(m) => m,
         Err(e) => {
@@ -1829,6 +1837,115 @@ fn run_claims_check(args: &[String]) -> ExitCode {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(1)
+    }
+}
+
+// ----------------------------------------------------------------------
+// `self-check` subcommand — run the shard checker driver end-to-end.
+//
+// Loads the kernel (types+fns), the shard toolchain (reader/unreflect/driver),
+// and the target file's CODE into one module, then evaluates
+// `(check_file <module> <src> <ctors>)` — driver.shard's loop, which parses
+// the claims, un-reflects each, runs check_sequent, and threads the theory.
+// Reports passed/failed for comparison with native `check`.
+//
+// SCOPE: theory starts empty, so this validates files whose claims cite only
+// EARLIER same-file claims (no imported lemmas) and use positional hyps.
+// ----------------------------------------------------------------------
+
+fn run_self_check(args: &[String]) -> ExitCode {
+    let mut positional: Vec<&String> = Vec::new();
+    for a in args {
+        if a.starts_with("--") {
+            eprintln!("error: unknown flag {}", a);
+            return ExitCode::from(2);
+        }
+        positional.push(a);
+    }
+    if positional.len() < 2 {
+        eprintln!("usage: check self-check <reader.shard> <unreflect.shard> <driver.shard>... <target.shard>");
+        return ExitCode::from(2);
+    }
+    let target_path = positional.last().unwrap().as_str();
+    let tool_files = &positional[..positional.len() - 1];
+
+    let kernel = match load_kernel_from(default_kernel_dir()) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error loading kernel from {}: {}", default_kernel_dir().display(), e);
+            return ExitCode::from(2);
+        }
+    };
+    // Two modules, mirroring native check:
+    //   eval_module = kernel (types+fns) + the shard toolchain — what runs the
+    //     driver (parse_claims / unreflect / check_sequent / the reducer).
+    //   M          = kernel.types + the TARGET's code only — the module the
+    //     proofs reduce against (passed to check_sequent). Keeping kernel.fns
+    //     OUT of M avoids fn-name collisions (e.g. term.shard's `len` vs
+    //     std/list's `len`) that would mis-reduce the proof.
+    let mk_ctx = |seed: ast::Module| Ctx {
+        user_module_value: module_to_value(&seed),
+        user_module: seed,
+        theory: ctor("TheoryEmpty", vec![]),
+        passed: 0, failed: 0, axioms: 0,
+        loaded: std::collections::HashSet::new(),
+        in_progress: Vec::new(),
+        load_only: true,
+        trace_target: None,
+    };
+    // eval module: kernel + toolchain.
+    let mut eval_ctx = mk_ctx(ast::Module {
+        types: kernel.types.clone(),
+        fns: kernel.fns.clone(),
+        externs: kernel.externs.clone(),
+    });
+    for f in tool_files {
+        if let Err(code) = process_file(&PathBuf::from(f.as_str()), &mut eval_ctx, &kernel) {
+            return code;
+        }
+    }
+    // M module: kernel types + target code (+ its imports' code).
+    let mut m_ctx = mk_ctx(ast::Module {
+        types: kernel.types.clone(),
+        fns: Vec::new(),
+        externs: Vec::new(),
+    });
+    if let Err(code) = process_file(&PathBuf::from(target_path), &mut m_ctx, &kernel) {
+        return code;
+    }
+
+    let target_src = match std::fs::read_to_string(target_path) {
+        Ok(s) => s,
+        Err(e) => { eprintln!("error reading {}: {}", target_path, e); return ExitCode::from(2); }
+    };
+    let ctor_names: Vec<String> = eval_ctx.user_module.types.iter()
+        .flat_map(|td| td.ctors.iter().map(|cd| cd.name.clone()))
+        .collect();
+    let ctorset = sym_list_native(&ctor_names);
+
+    // (check_file <M> <src> <ctors>) → (DriverResult passed failed).
+    let call = ast::Expr::Call(
+        "check_file".into(),
+        vec![m_ctx.user_module_value.clone(), line_to_event_native(&target_src), ctorset],
+    );
+    let result = match eval_raw(&eval_ctx.user_module, &call).and_then(|v| value_to_native_expr(&v)) {
+        Ok(v) => v,
+        Err(e) => { eprintln!("shard check_file error: {}", e); return ExitCode::from(2); }
+    };
+    match &result {
+        ast::Expr::Ctor(n, a) if n == "DriverResult" && a.len() == 2 => {
+            let geti = |e: &ast::Expr| -> Option<i64> {
+                if let ast::Expr::IntLit(k) = e { Some(*k) } else { None }
+            };
+            match (geti(&a[0]), geti(&a[1])) {
+                (Some(p), Some(f)) => {
+                    println!("{}  shard driver: {} passed, {} failed", target_path, p, f);
+                    if f == 0 { ExitCode::SUCCESS } else { ExitCode::from(1) }
+                }
+                _ => { println!("DriverResult fields not ints: {}", show_reflected(&result)); ExitCode::from(2) }
+            }
+        }
+        other => { println!("check_file returned non-DriverResult: {}", show_reflected(other)); ExitCode::from(2) }
     }
 }
 
