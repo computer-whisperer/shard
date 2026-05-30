@@ -36,8 +36,10 @@
 ;;;   2. The combination must canonicalize to a lone CONSTANT (all
 ;;;      variables cancel) that is strictly < 0.
 ;;;
-;;; Conclusions handled:
+;;; Conclusions handled (the full le/lt/int_eq × {True,False} matrix):
 ;;;   - order      `(lt|le a b) = True`  — single refutation of ¬goal.
+;;;   - neg-order  `(lt|le a b) = False` — refute the ASSUMED positive
+;;;     order (an inequality, so G >= 0): e.g. (le c 32)=True ⊢ (le 48 c)=False.
 ;;;   - disequality `(int_eq a b) = False` — refute the assumed equality
 ;;;     a = b (an any-sign constraint); e.g. (lt a b)=True ⊢ a ≠ b.
 ;;;   - equality   `(int_eq a b) = True`  — TWO-SIDED: prove a <= b AND
@@ -148,8 +150,12 @@
                               None))
                       (if (sym_eq tn (quote False))
                           (if (sym_eq f (quote int_eq))
-                              (Some (Pair (poly_sub a b) False))
-                              None)
+                              (Some (Pair (poly_sub a b) False))            ; int_eq=False: assume a=b (any sign)
+                              (if (sym_eq f (quote le))
+                                  (Some (Pair (poly_sub b a) True))          ; le=False: assume a<=b → b-a>=0
+                                  (if (sym_eq f (quote lt))
+                                      (Some (Pair (poly_minus1 (poly_sub b a)) True)) ; lt=False: assume a<b → b-a-1>=0
+                                      None)))
                           None)))
                 (_ None)))
             (_ None)))
@@ -255,7 +261,8 @@
       (if (sym_eq tn (quote True))
           (if (sym_eq f (quote lt)) True (sym_eq f (quote le)))
           (if (sym_eq tn (quote False))
-              (sym_eq f (quote int_eq))
+              (if (sym_eq f (quote int_eq)) True
+                  (if (sym_eq f (quote lt)) True (sym_eq f (quote le))))
               False)))
     (_ False)))
 
