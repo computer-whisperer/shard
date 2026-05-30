@@ -49,7 +49,7 @@ use proving_bootstrap_v2::{ast, default_kernel_dir, eval, load, load_kernel_from
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
-        eprintln!("usage: check <proof_file.sexp>...");
+        eprintln!("usage: check [--trace <claim>|all] <proof_file.sexp>...");
         eprintln!("       check eval [--no-bootstrap|--both] <file.sexp>... <expr>");
         eprintln!("       check app [--repl|--script <events>] [--no-bootstrap] <file.sexp>...");
         return ExitCode::from(2);
@@ -97,6 +97,22 @@ fn main() -> ExitCode {
         fns: Vec::new(),
         externs: Vec::new(),
     };
+    // Pull out `--trace <claim>` (or `--trace all`); the rest are files.
+    let mut trace_target: Option<String> = None;
+    let mut files: Vec<String> = Vec::new();
+    let mut ai = 0;
+    while ai < args.len() {
+        if args[ai] == "--trace" {
+            match args.get(ai + 1) {
+                Some(n) => { trace_target = Some(n.clone()); ai += 2; }
+                None => { eprintln!("--trace requires a claim name (or 'all')"); return ExitCode::from(2); }
+            }
+        } else {
+            files.push(args[ai].clone());
+            ai += 1;
+        }
+    }
+
     let mut ctx = Ctx {
         user_module_value: module_to_value(&user_module),
         user_module,
@@ -107,9 +123,10 @@ fn main() -> ExitCode {
         loaded: std::collections::HashSet::new(),
         in_progress: Vec::new(),
         load_only: false,
+        trace_target,
     };
 
-    for path_str in &args {
+    for path_str in &files {
         if let Err(code) = process_file(&PathBuf::from(path_str), &mut ctx, &kernel) {
             return code;
         }
@@ -156,6 +173,9 @@ struct Ctx {
     /// checking (Pass C). Used by the `eval` subcommand: it needs the
     /// module's fns in scope but not the (potentially slow) proof replay.
     load_only: bool,
+    /// `--trace <name>`: print the per-step sequent trace for the claim of
+    /// this name (or "all"), regardless of pass/fail. None = no tracing.
+    trace_target: Option<String>,
 }
 
 fn process_file(path: &PathBuf, ctx: &mut Ctx, kernel: &ast::Module) -> Result<(), ExitCode> {
@@ -203,6 +223,17 @@ fn process_file(path: &PathBuf, ctx: &mut Ctx, kernel: &ast::Module) -> Result<(
     // imported ctors. The loader skips claim/import/use-module forms.
     match load::module_from_str_with_base(&src, Some(&ctx.user_module)) {
         Ok(loaded) => {
+            // Warn on type names that shadow a built-in kernel type (e.g. the
+            // reserved `Dir` rewrite-direction type): CaseOn/Induct look the
+            // type up by name and would resolve the kernel's definition, with
+            // a confusing "could not rebuild subgoal" failure.
+            for td in &loaded.types {
+                if kernel.types.iter().any(|kt| kt.name == td.name) {
+                    eprintln!("warning: {}: type `{}` shadows a built-in kernel type — \
+                               CaseOn/Induct may resolve the wrong one; consider renaming",
+                              path.display(), td.name);
+                }
+            }
             merge_module(&mut ctx.user_module, loaded);
             ctx.user_module_value = module_to_value(&ctx.user_module);
         }
@@ -222,7 +253,7 @@ fn process_file(path: &PathBuf, ctx: &mut Ctx, kernel: &ast::Module) -> Result<(
 
     // Pass C: claims, in order.
     for form in &forms {
-        match process_form(form, kernel, &ctx.user_module_value, &ctx.theory, path) {
+        match process_form(form, kernel, &ctx.user_module_value, &ctx.theory, path, ctx.trace_target.as_deref()) {
             Outcome::Pass { name, goal } => {
                 println!("PASS  {}", name);
                 // Close param-name FVars in eq + premises to BVars so the
@@ -321,6 +352,7 @@ fn process_form(
     user_module: &ast::Expr,
     theory: &ast::Expr,
     path: &PathBuf,
+    trace: Option<&str>,
 ) -> Outcome {
     let items: Vec<&Value> = match form.list_iter() {
         Some(it) => it.collect(),
@@ -338,7 +370,7 @@ fn process_form(
         )),
     };
     match head {
-        "claim" => process_claim(&items, kernel, user_module, theory, path),
+        "claim" => process_claim(&items, kernel, user_module, theory, path, trace),
         "axiom" => process_axiom(&items, kernel, path),
         // Handled in earlier passes: imports/aliases (A), code defs (B).
         // `app` is the `check app` entrypoint declaration — inert to the
@@ -409,6 +441,7 @@ fn process_claim(
     user_module: &ast::Expr,
     theory: &ast::Expr,
     path: &PathBuf,
+    trace: Option<&str>,
 ) -> Outcome {
     if items.len() != 4 {
         return Outcome::Fatal(format!(
@@ -475,6 +508,19 @@ fn process_claim(
             path.display(), name, other,
         )),
     };
+
+    // --trace: print the per-step sequent evolution for this claim (pass or
+    // fail), so the author can watch the goal transform instead of guessing.
+    if matches!(trace, Some(t) if t == name || t == "all") {
+        let mut tlines = Vec::new();
+        trace_proof(kernel, user_module, theory, &sequent_val, &proof_val, 0, true, &mut tlines);
+        println!("── trace: {} ──", name);
+        if let Some(eq) = sequent_eq(&sequent_val) {
+            println!("  goal      {}", render_term(eq));
+        }
+        for l in &tlines { println!("{}", l); }
+        println!("──");
+    }
 
     // Invoke check_sequent in the kernel module. (clone the sequent /
     // proof so a FAIL can replay them for diagnostics.)
@@ -883,7 +929,7 @@ fn build_failure_detail(
     // Walk the proof spine, replaying each level via the kernel's own
     // fns, to show the equation at every nesting depth and pinpoint
     // where it diverges. Branching proofs (Induct/CaseOn) stop the walk.
-    trace_proof(kernel, m, theory, sequent, proof, 0, &mut lines);
+    trace_proof(kernel, m, theory, sequent, proof, 0, false, &mut lines);
     lines.iter().map(|l| format!("      {}", l)).collect::<Vec<_>>().join("\n")
 }
 
@@ -915,6 +961,26 @@ fn render_eqref(v: &ast::Expr) -> String {
             _ => render_term(v),
         },
         _ => render_term(v),
+    }
+}
+
+/// A short human label for one Step (for the per-step trace).
+fn step_label(s: &ast::Expr) -> String {
+    let side = |v: &ast::Expr| match v {
+        ast::Expr::Ctor(n, _) => n.clone(),
+        _ => render_term(v),
+    };
+    match s {
+        ast::Expr::Ctor(n, a) => match (n.as_str(), a.as_slice()) {
+            ("Unfold", [sym, sd]) => format!("Unfold {} {}", render_term(sym), side(sd)),
+            ("Simp", [sd]) => format!("Simp {}", side(sd)),
+            ("Reduce", [sd]) => format!("Reduce {}", side(sd)),
+            ("Compute", [sd]) => format!("Compute {}", side(sd)),
+            ("Rewrite", [er, dir, sd, ..]) =>
+                format!("Rewrite {} {} {}", render_eqref(er), side(dir), side(sd)),
+            _ => n.clone(),
+        },
+        _ => render_term(s),
     }
 }
 
@@ -956,7 +1022,7 @@ fn apply_rewrite_step(
 
 fn trace_proof(
     kernel: &ast::Module, m: &ast::Expr, theory: &ast::Expr,
-    sequent: &ast::Expr, proof: &ast::Expr, depth: usize, lines: &mut Vec<String>,
+    sequent: &ast::Expr, proof: &ast::Expr, depth: usize, verbose: bool, lines: &mut Vec<String>,
 ) {
     let ind = "  ".repeat(depth);
     let (head, pa) = match proof {
@@ -965,19 +1031,35 @@ fn trace_proof(
     };
     match head {
         "Steps" if pa.len() == 2 => {
-            let call = ast::Expr::Call("apply_steps".into(),
-                vec![m.clone(), theory.clone(), sequent.clone(), pa[0].clone()]);
-            match eval::eval(kernel, &call) {
-                Ok(ref s) if ctor_fields(s, "Some", 1).is_some() => {
-                    let seq2 = ctor_fields(s, "Some", 1).unwrap()[0].clone();
-                    if let Some(eq) = sequent_eq(&seq2) {
-                        lines.push(format!("{}after steps:  {}", ind, render_term(eq)));
+            // Apply steps ONE at a time so the trace shows the sequent after
+            // each — and a failure pinpoints exactly which step broke.
+            let steps = decode_list(&pa[0]);
+            let mut cur = sequent.clone();
+            let mut ok = true;
+            for (i, step) in steps.iter().enumerate() {
+                let call = ast::Expr::Call("apply_step".into(),
+                    vec![m.clone(), theory.clone(), cur.clone(), (*step).clone()]);
+                match eval::eval(kernel, &call) {
+                    Ok(ref s) if ctor_fields(s, "Some", 1).is_some() => {
+                        cur = ctor_fields(s, "Some", 1).unwrap()[0].clone();
+                        if let Some(eq) = sequent_eq(&cur) {
+                            lines.push(format!("{}step {} [{}]  {}", ind, i + 1, step_label(step), render_term(eq)));
+                        }
                     }
-                    trace_proof(kernel, m, theory, &seq2, &pa[1], depth, lines);
+                    Ok(ref s) if ctor_fields(s, "None", 0).is_some() => {
+                        lines.push(format!("{}step {} [{}]  FAILED to apply (no match)", ind, i + 1, step_label(step)));
+                        ok = false;
+                        break;
+                    }
+                    _ => {
+                        lines.push(format!("{}step {} [{}]  could not replay", ind, i + 1, step_label(step)));
+                        ok = false;
+                        break;
+                    }
                 }
-                Ok(ref s) if ctor_fields(s, "None", 0).is_some() =>
-                    lines.push(format!("{}a step failed to apply (Unfold/Reduce/Compute/Rewrite found no match)", ind)),
-                _ => lines.push(format!("{}steps: could not replay", ind)),
+            }
+            if ok {
+                trace_proof(kernel, m, theory, &cur, &pa[1], depth, verbose, lines);
             }
         }
         "RewriteWith" if pa.len() == 6 => {
@@ -986,7 +1068,7 @@ fn trace_proof(
                     if let Some(eq) = sequent_eq(&seq2) {
                         lines.push(format!("{}after rewrite ({}):  {}", ind, render_eqref(&pa[0]), render_term(eq)));
                     }
-                    trace_proof(kernel, m, theory, &seq2, &pa[5], depth + 1, lines);
+                    trace_proof(kernel, m, theory, &seq2, &pa[5], depth + 1, verbose, lines);
                 }
                 None => lines.push(format!(
                     "{}rewrite ({}) did NOT apply (unresolved lemma, no match, or premise mismatch)",
@@ -1013,7 +1095,7 @@ fn trace_proof(
             match eval::eval(kernel, &call) {
                 Ok(subgoal) => {
                     lines.push(format!("{}WfInduct subgoal (IH at Hyp 0):", ind));
-                    trace_proof(kernel, m, theory, &subgoal, &pa[1], depth + 1, lines);
+                    trace_proof(kernel, m, theory, &subgoal, &pa[1], depth + 1, verbose, lines);
                 }
                 _ => lines.push(format!("{}WfInduct — could not rebuild subgoal", ind)),
             }
@@ -1039,13 +1121,14 @@ fn trace_proof(
                     vec![m.clone(), theory.clone(), subgoal.clone(), sub.clone()]);
                 let passes = matches!(eval::eval(kernel, &chk),
                     Ok(ast::Expr::Ctor(ref n, ref a)) if n == "True" && a.is_empty());
-                if passes {
+                if passes && !verbose {
                     lines.push(format!("{}case {} = {}: ok", ind,
                         render_term(&pa[0]), render_term(&cname)));
                 } else {
-                    lines.push(format!("{}case {} = {}: FAILS  v v v", ind,
-                        render_term(&pa[0]), render_term(&cname)));
-                    trace_proof(kernel, m, theory, &subgoal, sub, depth + 1, lines);
+                    let tag = if passes { "" } else { "  FAILS  v v v" };
+                    lines.push(format!("{}case {} = {}:{}", ind,
+                        render_term(&pa[0]), render_term(&cname), tag));
+                    trace_proof(kernel, m, theory, &subgoal, sub, depth + 1, verbose, lines);
                 }
             }
         }
@@ -1131,6 +1214,7 @@ fn run_eval(args: &[String]) -> ExitCode {
         loaded: std::collections::HashSet::new(),
         in_progress: Vec::new(),
         load_only: true,
+        trace_target: None,
     };
     for f in files {
         if let Err(code) = process_file(&PathBuf::from(f.as_str()), &mut ctx, &kernel) {
@@ -1298,6 +1382,7 @@ fn run_app(args: &[String]) -> ExitCode {
         loaded: std::collections::HashSet::new(),
         in_progress: Vec::new(),
         load_only: true,
+        trace_target: None,
     };
     for f in &positional {
         if let Err(code) = process_file(&PathBuf::from(f.as_str()), &mut ctx, &kernel) {
