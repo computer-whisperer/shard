@@ -1,0 +1,90 @@
+;;; calc_app_world — the loop CLOSED against a world datum, with the Action
+;;; interpreter brought into shard, and end-to-end output spec-correctness.
+;;;
+;;; Slice 64 (calc_app_trace) modeled the loop as a fold producing an abstract
+;;; Action TRACE. This slice takes the next step: INTERPRET that trace into a
+;;; concrete world. The Action interpreter — which until now lived only in the
+;;; Rust driver (`interpret_action`) — becomes an ordinary shard function
+;;; `apply_action`, and the whole run becomes a pure, total fold
+;;;
+;;;   run_world : World -> State -> (List Event) -> World
+;;;
+;;; that threads the world through, applying each step's emitted Action. The
+;;; observable result is the final world (stdout); we prove it spec-correct:
+;;;
+;;;   ∀ w s events.  (run w s events) = (run_world_spec w s events)
+;;;
+;;; i.e. the impl app and the spec app produce IDENTICAL output from any
+;;; starting world and any input sequence. The trust boundary shifts
+;;; accordingly: it is now the in-shard `apply_action` (the model the Rust
+;;; driver must match — the bridging axiom of BOUNDARIES' modellable-extern
+;;; pattern), not opaque Rust effect code.
+;;;
+;;; SCOPE: the WORLD here is the OUTPUT side (stdout). Input is still an
+;;; explicit (List Event) — calc is push-driven, it never REQUESTS input. The
+;;; request/response shape, where a stdin/file read is itself an Action whose
+;;; RESULT the world feeds back as the next event, is the next slice and wants
+;;; a cli-shaped app (eval_app/cat) rather than calc.
+
+(import "calc_app_trace.shard")   ; next_state/emitted (+ _spec) and their eq lemmas; CalcState, Action
+
+;; --- the world, as data -----------------------------------------------------
+;; CalcWorld: stdout as a list of printed lines (each a codepoint list). The
+;; first datum-modeled world; later worlds grow fields (stdin, filesystem,
+;; args) without changing this shape.
+
+(type CalcWorld (CalcWorld (List (List Int))))
+
+;; apply_action: the Action interpreter, as SHARD DATA. Print appends its
+;; codepoints as a new stdout line; Exit/Nop leave stdout unchanged. This is
+;; the trusted boundary — now legible and provable, rather than Rust.
+(fn apply_action ((w CalcWorld) (a Action)) CalcWorld
+  (match w
+    ((CalcWorld out)
+      (match a
+        ((Print cs) (CalcWorld (append out (Cons cs Nil))))
+        ((Exit n)   (CalcWorld out))
+        ((Nop)      (CalcWorld out))))))
+
+;; --- the closed loop --------------------------------------------------------
+;; run: thread the world through the fold, applying each emitted Action and
+;; advancing state, over the input events. Structural on events (total);
+;; recursion sits in argument position so the IH reaches it.
+
+(fn run_world ((w CalcWorld) (s CalcState) (events (List (List Int)))) CalcWorld
+  (match events
+    (Nil w)
+    ((Cons e rest)
+      (run_world (apply_action w (emitted s e)) (next_state s e) rest))))
+
+(fn run_world_spec ((w CalcWorld) (s CalcState) (events (List (List Int)))) CalcWorld
+  (match events
+    (Nil w)
+    ((Cons e rest)
+      (run_world_spec (apply_action w (emitted_spec s e)) (next_state_spec s e) rest))))
+
+;; --- end-to-end: identical output -------------------------------------------
+;; Induct on the event list. The Cons step rewrites the emitted Action and the
+;; advanced state to their spec forms (so the same Action is applied and the
+;; same state carried forward), then fires the IH at the advanced (world,state)
+;; — both sibling params generalized, the fast_acc_lemma pattern at two args.
+
+(claim run_eq_spec_world
+  (Goal
+    (list (Param 'w      (ty CalcWorld))
+          (Param 's      (ty CalcState))
+          (Param 'events (ty List (ty List Int))))
+    (list)
+    (Equation
+      (Call 'run_world      (list (FVar 'w) (FVar 's) (FVar 'events)))
+      (Call 'run_world_spec (list (FVar 'w) (FVar 's) (FVar 'events)))))
+  (Induct 'events
+    (list
+      (Case 'Nil
+        (Steps (list (Simp Both)) Refl))
+      (Case 'Cons
+        (Steps (list (Simp Both)
+                     (Rewrite (Lemma 'emitted_eq_spec)    Lr Lhs True (list))
+                     (Rewrite (Lemma 'next_state_eq_spec) Lr Lhs True (list))
+                     (Rewrite (Hyp 'ih)                   Lr Lhs True (list)))
+               Refl)))))
