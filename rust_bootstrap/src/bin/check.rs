@@ -1375,16 +1375,23 @@ fn sym_list_native(names: &[String]) -> ast::Expr {
 }
 
 fn run_parse_check(args: &[String]) -> ExitCode {
+    // --unreflect: validate `parse_unreflect` (parse_expr then unreflect_expr)
+    // against the native expr_from_str. The shard side then produces the
+    // un-reflected native Expr, so the reference is NOT expr_to_value'd.
+    let mut unreflect = false;
     let mut positional: Vec<&String> = Vec::new();
     for a in args {
-        if a.starts_with("--") {
-            eprintln!("error: unknown flag {}", a);
-            return ExitCode::from(2);
+        match a.as_str() {
+            "--unreflect" => unreflect = true,
+            s if s.starts_with("--") => {
+                eprintln!("error: unknown flag {}", a);
+                return ExitCode::from(2);
+            }
+            _ => positional.push(a),
         }
-        positional.push(a);
     }
     if positional.len() < 2 {
-        eprintln!("usage: check parse-check <file.shard>... <corpus.txt>");
+        eprintln!("usage: check parse-check [--unreflect] <file.shard>... <corpus.txt>");
         return ExitCode::from(2);
     }
     let corpus_path = positional.last().unwrap().as_str();
@@ -1442,17 +1449,19 @@ fn run_parse_check(args: &[String]) -> ExitCode {
         if line.is_empty() || line.starts_with(';') {
             continue;
         }
-        // Reference: the Rust parser.
+        // Reference: the Rust parser. In --unreflect mode the shard side
+        // produces the native Expr, so compare against the native ast directly;
+        // otherwise compare reflected datums (shard returns an object Expr).
         let reference = match load::expr_from_str(line, &ctx.user_module) {
-            Ok(e) => expr_to_value(&e),
+            Ok(e) => if unreflect { e } else { expr_to_value(&e) },
             Err(e) => {
                 println!("L{}: rust-parse error ({}) — skipped: {}", i + 1, e, line);
                 continue;
             }
         };
-        // Shard: parse_expr on the native engine.
+        // Shard: parse_expr (or parse_unreflect) on the native engine.
         let call = ast::Expr::Call(
-            "parse_expr".into(),
+            if unreflect { "parse_unreflect" } else { "parse_expr" }.into(),
             vec![line_to_event_native(line), ctorset.clone()],
         );
         // eval_raw re-reflects its result (expr_to_value), so un-reflect

@@ -1,0 +1,78 @@
+;;; unreflect.shard — the inverse of the reader's Expr construction.
+;;;
+;;; The reader produces goals/proofs as object values of TYPE Expr — i.e. one
+;;; reflection level ABOVE what the kernel consumes. A reflected Expr like
+;;; `(Ctor 'Call (Cons (SymLit 'le) …))` denotes the native Expr value
+;;; `(Call 'le …)`; `unreflect_expr` strips that one layer. This is the
+;;; keystone of the self-hosted checker driver (the goal/proof un-reflectors
+;;; build on it), and the shard mirror of src/bin/check.rs's
+;;; `value_to_native_expr`. Validated via `check parse-check --unreflect`.
+;;;
+;;; Returns Option (None on a malformed shape, or on Match/Let — which the
+;;; kernel's value_to_native_expr also rejects, and which goal/proof
+;;; construction terms never contain).
+
+(fn unreflect_expr ((e Expr)) (Option Expr)
+  (match e
+    ((Ctor cn args)
+      (if (sym_eq cn (quote FVar))
+          (match args ((Cons (SymLit s) Nil) (Some (FVar s))) (_ None))
+      (if (sym_eq cn (quote BVar))
+          (match args ((Cons (IntLit k) Nil) (Some (BVar k))) (_ None))
+      (if (sym_eq cn (quote IntLit))
+          (match args ((Cons (IntLit k) Nil) (Some (IntLit k))) (_ None))
+      (if (sym_eq cn (quote SymLit))
+          (match args ((Cons (SymLit s) Nil) (Some (SymLit s))) (_ None))
+      (if (sym_eq cn (quote Ctor))
+          (match args
+            ((Cons (SymLit n) (Cons argsE Nil))
+              (match (unreflect_expr_list argsE)
+                (None None)
+                ((Some es) (Some (Ctor n es)))))
+            (_ None))
+      (if (sym_eq cn (quote Call))
+          (match args
+            ((Cons (SymLit n) (Cons argsE Nil))
+              (match (unreflect_expr_list argsE)
+                (None None)
+                ((Some es) (Some (Call n es)))))
+            (_ None))
+      (if (sym_eq cn (quote If))
+          (match args
+            ((Cons c (Cons t (Cons el Nil)))
+              (match (unreflect_expr c)
+                (None None)
+                ((Some c2)
+                  (match (unreflect_expr t)
+                    (None None)
+                    ((Some t2)
+                      (match (unreflect_expr el)
+                        (None None)
+                        ((Some el2) (Some (If c2 t2 el2)))))))))
+            (_ None))
+          None)))))))) ; Match / Let / unknown ctor name → None
+    (_ None)))         ; non-Ctor reflected node → None
+
+(fn unreflect_expr_list ((e Expr)) (Option (List Expr))
+  (match e
+    ((Ctor cn args)
+      (if (sym_eq cn (quote Nil))
+          (Some Nil)
+      (if (sym_eq cn (quote Cons))
+          (match args
+            ((Cons h (Cons t Nil))
+              (match (unreflect_expr h)
+                (None None)
+                ((Some h2)
+                  (match (unreflect_expr_list t)
+                    (None None)
+                    ((Some t2) (Some (Cons h2 t2)))))))
+            (_ None))
+          None)))
+    (_ None)))
+
+;; Probe for the differential harness: parse a source expr, then un-reflect it.
+(fn parse_unreflect ((src (List Int)) (ctors (List Symbol))) (Option Expr)
+  (match (parse_expr src ctors)
+    (None None)
+    ((Some e) (unreflect_expr e))))
