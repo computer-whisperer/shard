@@ -467,6 +467,13 @@
                   (match (rewrite_first pat_vars pat repl el)
                     ((Some el2) (Some (If c t el2)))
                     (None       None)))))))
+        ;; Descend into a Match SCRUTINEE only — it shares the enclosing
+        ;; binder scope (no shift), so rewriting it is plain congruence.
+        ;; Arm bodies bind pattern vars (de Bruijn) and are NOT entered.
+        ((Match scrut arms)
+          (match (rewrite_first pat_vars pat repl scrut)
+            ((Some scrut2) (Some (Match scrut2 arms)))
+            (None          None)))
         (_ None)))))
 
 (fn rewrite_first_list ((pat_vars (List Symbol)) (pat Expr) (repl Expr) (es (List Expr)))
@@ -497,6 +504,11 @@
             (None         None)))
         ((If c t el)
           (rewrite_all_if pat_vars pat repl c t el))
+        ;; Match scrutinee only (same scope, no shift); arm bodies skipped.
+        ((Match scrut arms)
+          (match (rewrite_all pat_vars pat repl scrut)
+            ((Some scrut2) (Some (Match scrut2 arms)))
+            (None          None)))
         (_ None)))))
 
 (fn rewrite_all_list ((pat_vars (List Symbol)) (pat Expr) (repl Expr) (es (List Expr)))
@@ -576,6 +588,11 @@
                   (match (rewrite_first_with_env pat_vars pat repl el)
                     ((Some (Pair env el2)) (Some (Pair env (If c t el2))))
                     (None None)))))))
+        ;; Match scrutinee only (same scope, no shift); arm bodies skipped.
+        ((Match scrut arms)
+          (match (rewrite_first_with_env pat_vars pat repl scrut)
+            ((Some (Pair env scrut2)) (Some (Pair env (Match scrut2 arms))))
+            (None None)))
         (_ None)))))
 
 (fn rewrite_first_list_with_env
@@ -1370,3 +1387,40 @@
                             ((Some succ_c)
                               (induct2_run m th seq var var_type zero_c succ_c cases)))))
                       False))))))))))
+
+;; ---------------------------------------------------------------------------
+;; UNTRUSTED diagnostics support (only ever called by the FAIL tracer in
+;; src/bin/check.rs — never on the check path). They rebuild the subgoal a
+;; branching proof would face, so the tracer can descend past WfInduct/CaseOn.
+;; ---------------------------------------------------------------------------
+(fn dbg_wf_subgoal ((seq Sequent) (measure Expr)) Sequent
+  (match seq
+    ((Sequent params hyps premises eq)
+      (match (wf_rename params)
+        ((Pair fresh_params env)
+          (let ((measure_fresh (subst env measure))
+                (close_names   (reverse_syms (param_names fresh_params))))
+            (let ((wf_premises
+                    (Cons (Equation (Call (quote le) (list (IntLit 0) measure_fresh)) (Ctor (quote True) Nil))
+                      (Cons (Equation (Call (quote lt) (list measure_fresh measure)) (Ctor (quote True) Nil))
+                        Nil)))
+                  (ih_eq (subst_eq env eq)))
+              (let ((ih (Goal fresh_params
+                          (close_eqs close_names (append_eqs (subst_eqs env premises) wf_premises))
+                          (close_eq close_names ih_eq))))
+                (Sequent params (Cons ih hyps) premises eq)))))))))
+
+(fn dbg_ctor_fields ((cname Symbol) (ctors (List CtorDef))) (Option (List Type))
+  (match ctors
+    (Nil None)
+    ((Cons (CtorDef nm fts) rest)
+      (if (sym_eq nm cname) (Some fts) (dbg_ctor_fields cname rest)))))
+
+(fn dbg_caseon_subgoal ((m Module) (seq Sequent) (scrut Expr) (ty Symbol)
+                        (cname Symbol) (names (List Symbol))) (Option Sequent)
+  (match (lookup_typedef ty m)
+    (None None)
+    ((Some (TypeDef _ _ ctors))
+      (match (dbg_ctor_fields cname ctors)
+        (None None)
+        ((Some fts) (Some (build_case_on_subgoal seq scrut cname names fts)))))))

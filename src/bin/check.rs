@@ -667,10 +667,50 @@ fn trace_proof(
         },
         "ByTheory" => lines.push(format!("{}ByTheory {} — decision procedure (not replayed)",
             ind, pa.get(0).map(render_term).unwrap_or_default())),
-        "Induct" | "Induct2" | "CaseOn" =>
+        "WfInduct" if pa.len() == 2 => {
+            let call = ast::Expr::Call("dbg_wf_subgoal".into(),
+                vec![sequent.clone(), pa[0].clone()]);
+            match eval::eval(kernel, &call) {
+                Ok(subgoal) => {
+                    lines.push(format!("{}WfInduct subgoal (IH at Hyp 0):", ind));
+                    trace_proof(kernel, m, theory, &subgoal, &pa[1], depth + 1, lines);
+                }
+                _ => lines.push(format!("{}WfInduct — could not rebuild subgoal", ind)),
+            }
+        }
+        "CaseOn" if pa.len() == 3 => {
+            for case in decode_list(&pa[2]) {
+                let (cname, names, sub): (ast::Expr, ast::Expr, &ast::Expr) =
+                    if let Some(a) = ctor_fields(case, "Case", 2) {
+                        (a[0].clone(), nil(), &a[1])
+                    } else if let Some(a) = ctor_fields(case, "CaseB", 3) {
+                        (a[0].clone(), a[1].clone(), &a[2])
+                    } else { continue; };
+                let sg = ast::Expr::Call("dbg_caseon_subgoal".into(), vec![
+                    m.clone(), sequent.clone(), pa[0].clone(), pa[1].clone(),
+                    cname.clone(), names.clone()]);
+                let subgoal = match eval::eval(kernel, &sg) {
+                    Ok(ref s) if ctor_fields(s, "Some", 1).is_some() =>
+                        ctor_fields(s, "Some", 1).unwrap()[0].clone(),
+                    _ => { lines.push(format!("{}case {}: could not rebuild subgoal",
+                            ind, render_term(&cname))); continue; }
+                };
+                let chk = ast::Expr::Call("check_sequent".into(),
+                    vec![m.clone(), theory.clone(), subgoal.clone(), sub.clone()]);
+                let passes = matches!(eval::eval(kernel, &chk),
+                    Ok(ast::Expr::Ctor(ref n, ref a)) if n == "True" && a.is_empty());
+                if passes {
+                    lines.push(format!("{}case {} = {}: ok", ind,
+                        render_term(&pa[0]), render_term(&cname)));
+                } else {
+                    lines.push(format!("{}case {} = {}: FAILS  v v v", ind,
+                        render_term(&pa[0]), render_term(&cname)));
+                    trace_proof(kernel, m, theory, &subgoal, sub, depth + 1, lines);
+                }
+            }
+        }
+        "Induct" | "Induct2" | "CaseOn" | "WfInduct" =>
             lines.push(format!("{}{} — branching proof; trace stops here", ind, head)),
-        "WfInduct" =>
-            lines.push(format!("{}WfInduct — adds the IH (Hyp 0) then proves one subgoal; trace stops here", ind)),
         other => lines.push(format!("{}{} — not replayed", ind, other)),
     }
 }

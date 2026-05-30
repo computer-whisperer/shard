@@ -1,13 +1,18 @@
-;;; Toward the universal equivalence  ∀ cs. run cs = spec_run cs.
-;;; This file builds the bridge + structural lemmas bottom-up; the heart
-;;; (loop_eq, by WfInduct on len) and the top assembly (CORE, run_eq_spec)
-;;; land in the next slice.
+;;; The universal equivalence  ∀ cs. run cs = spec_run cs — PROVEN.
+;;; Built bottom-up: the bridge + structural lemmas, then the heart
+;;; (loop_eq, by WfInduct on len) and the top assembly (CORE, run_eq_spec).
+;;; The single equation `run = spec_run` pins the implementation on EVERY
+;;; input — valid (evaluates) and invalid (returns None) — against the
+;;; spec-first requirement, with no change to that requirement.
 ;;;
 ;;; Dependency order:
 ;;;   numr_val/numr_rest      — project NumRes
 ;;;   lex_num                 — the digit-run bridge (workhorse)
-;;;   skipws_idem, ws_lex     — whitespace alignment
-;;;   [next] loop_eq, CORE, run_eq_spec
+;;;   skip_ws_idem, ws_lex    — whitespace alignment
+;;;   lex_skipnum / loop_decrease / head_is_ws … — the loop_eq helper layer
+;;;   loop_eq                 — parse_rest∘lex = strip∘parse_tail (the mountain)
+;;;   CORE                    — parse (lex cs) = parse_expr cs
+;;;   run_eq_spec             — the headline corollary
 
 (import "calc_spec.sexp")   ; brings calc.sexp (lex_go/flush/acc_digit/is_ws/Token)
                             ; + spec (take_digits/NumRes/skip_ws/parse_num)
@@ -236,3 +241,574 @@
         (Ctor 'TNum (list (Call 'numr_val (list (Call 'take_digits (list (Ctor 'Cons (list (IntLit 50) (Ctor 'Cons (list (IntLit 43) (Ctor 'Nil (list)))))) (IntLit 1)))))))
         (Call 'lex_go (list (Call 'numr_rest (list (Call 'take_digits (list (Ctor 'Cons (list (IntLit 50) (Ctor 'Cons (list (IntLit 43) (Ctor 'Nil (list)))))) (IntLit 1))))) (Ctor 'None (list))))))))
   (Steps (list (Compute Both)) Refl))
+
+;;; ======================================================================
+;;; The universal proof, completed (slice 75): the digit-run/operator helper
+;;; layer, the measure-decrease infrastructure, loop_eq (WfInduct on len),
+;;; CORE, and the headline run_eq_spec.  No spec change; relies on the new
+;;; match-scrutinee rewrite descent in the kernel.
+;;; ======================================================================
+
+;; numr_eta: a NumRes is its own projections. Lets us expose a stuck
+;; (take_digits ..) as (NumR (numr_val ..) (numr_rest ..)) so a spec-side
+;; match on (Some (NumR n rest2)) can fire.
+(claim numr_eta
+  (Goal (list (Param 'r (ty NumRes))) (list)
+    (Equation (FVar 'r)
+      (Ctor 'NumR (list (Call 'numr_val (list (FVar 'r)))
+                        (Call 'numr_rest (list (FVar 'r)))))))
+  (CaseOn (FVar 'r) 'NumRes
+    (list
+      (CaseB 'NumR (list 'v 'rst)
+        (Steps (list (Rewrite (Hyp 0) Lr Both True (list)) (Simp Rhs)) Refl)))))
+
+;; lex_digit_head: lexing from None over a digit head reads the whole digit
+;; run (take_digits) as one TNum, then lexes the leftover from None.
+(claim lex_digit_head
+  (Goal (list (Param 'd (ty Int)) (Param 'rrr (ty List Int)))
+    (list (Equation (Call 'is_digit (list (FVar 'd))) (Ctor 'True (list))))
+    (Equation
+      (Call 'lex_go (list (Ctor 'Cons (list (FVar 'd) (FVar 'rrr))) (Ctor 'None (list))))
+      (Ctor 'Cons (list
+        (Ctor 'TNum (list (Call 'numr_val (list (Call 'take_digits (list (FVar 'rrr) (Call 'digit_val (list (FVar 'd)))))))))
+        (Call 'lex_go (list
+          (Call 'numr_rest (list (Call 'take_digits (list (FVar 'rrr) (Call 'digit_val (list (FVar 'd)))))))
+          (Ctor 'None (list))))))))
+  (Steps
+    (list (Simp Lhs)
+          (Rewrite (Premise 0) Lr Lhs True (list))
+          (Simp Lhs)
+          (Rewrite (Lemma 'lex_num) Lr Lhs True (list)))
+    Refl))
+
+;; ---- loop_eq helper layer: digit/operator-head lexing, char-class disjointness ----
+
+;; strip: parse_expr's post-parse_tail handling (require EOF). Unfolds to
+;; exactly the inner match of parse_expr, so CORE folds with no spec change.
+(fn strip ((oe (Option ExpRes))) (Option Exp)
+  (match oe
+    (None None)
+    ((Some (ExpR e rest))
+      (match rest (Nil (Some e)) ((Cons _ _) None)))))
+
+;; skip_ws is idempotent. Pure forward reduction on both sides per is_ws a
+;; — no Cons injectivity needed.
+(claim skip_ws_idem
+  (Goal (list (Param 'cs (ty List Int))) (list)
+    (Equation (Call 'skip_ws (list (Call 'skip_ws (list (FVar 'cs)))))
+              (Call 'skip_ws (list (FVar 'cs)))))
+  (Induct 'cs
+    (list
+      (Case 'Nil (Steps (list (Simp Both)) Refl))
+      (CaseB 'Cons (list 'a 'tl)
+        (CaseOn (Call 'is_ws (list (FVar 'a))) 'Bool
+          (list
+            (Case 'True
+              (Steps (list (Simp Both)
+                           (Rewrite (Hyp 0) Lr Both True (list))
+                           (Reduce Both)
+                           (Rewrite (Hyp 1) Lr Lhs True (list)))
+                Refl))
+            (Case 'False
+              (Steps (list (Simp Both)
+                           (Rewrite (Hyp 0) Lr Both True (list))
+                           (Reduce Both)
+                           (Simp Lhs)
+                           (Rewrite (Hyp 0) Lr Lhs True (list))
+                           (Reduce Lhs))
+                Refl))))))))
+
+;; forward: 48 > c  =>  not a digit.
+(claim is_digit_false_lo
+  (Goal (list (Param 'c (ty Int)))
+    (list (Equation (Call 'le (list (IntLit 48) (FVar 'c))) (Ctor 'False (list))))
+    (Equation (Call 'is_digit (list (FVar 'c))) (Ctor 'False (list))))
+  (Steps (list (Unfold 'is_digit Lhs)
+               (Rewrite (Premise 0) Lr Lhs True (list))
+               (Simp Lhs))
+    Refl))
+
+;; is_digit c = True  =>  48 <= c   (inversion of the lower guard).
+(claim digit_lo
+  (Goal (list (Param 'c (ty Int)))
+    (list (Equation (Call 'is_digit (list (FVar 'c))) (Ctor 'True (list))))
+    (Equation (Call 'le (list (IntLit 48) (FVar 'c))) (Ctor 'True (list))))
+  (CaseOn (Call 'le (list (IntLit 48) (FVar 'c))) 'Bool
+    (list
+      (Case 'True (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+      (Case 'False
+        ;; le 48 c = False contradicts is_digit c = True; route False=True to
+        ;; False=False through is_digit_false_lo (no Cons injectivity / Absurd-on-hyp).
+        (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))       ; le 48 c -> False : False = True
+                     (Rewrite (Premise 0) Rl Rhs True (list)))  ; True -> is_digit c : False = is_digit c
+          (RewriteWith (Lemma 'is_digit_false_lo) Lr Rhs (list)
+            (list (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+            Refl))))))
+
+;; pure-farkas: a lower bound of 48 rules out '+' (43) / '-' (45). Lower bound
+;; flips the goal-multiplier sign vs le32_not_43 (upper bound) → (list -1 1).
+(claim ge48_not_43
+  (Goal (list (Param 'c (ty Int)))
+    (list (Equation (Call 'le (list (IntLit 48) (FVar 'c))) (Ctor 'True (list))))
+    (Equation (Call 'int_eq (list (FVar 'c) (IntLit 43))) (Ctor 'False (list))))
+  (ByTheory 'farkas (Cert 'farkas (list -1 1))))
+
+(claim ge48_not_45
+  (Goal (list (Param 'c (ty Int)))
+    (list (Equation (Call 'le (list (IntLit 48) (FVar 'c))) (Ctor 'True (list))))
+    (Equation (Call 'int_eq (list (FVar 'c) (IntLit 45))) (Ctor 'False (list))))
+  (ByTheory 'farkas (Cert 'farkas (list -1 1))))
+
+;; digit head is not '+' / '-': invert is_digit to 48<=c (digit_lo), then farkas.
+(claim digit_not_43
+  (Goal (list (Param 'c (ty Int)))
+    (list (Equation (Call 'is_digit (list (FVar 'c))) (Ctor 'True (list))))
+    (Equation (Call 'int_eq (list (FVar 'c) (IntLit 43))) (Ctor 'False (list))))
+  (RewriteWith (Lemma 'ge48_not_43) Lr Lhs (list)
+    (list (RewriteWith (Lemma 'digit_lo) Lr Lhs (list)
+            (list (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl))
+            Refl))
+    Refl))
+
+(claim digit_not_45
+  (Goal (list (Param 'c (ty Int)))
+    (list (Equation (Call 'is_digit (list (FVar 'c))) (Ctor 'True (list))))
+    (Equation (Call 'int_eq (list (FVar 'c) (IntLit 45))) (Ctor 'False (list))))
+  (RewriteWith (Lemma 'ge48_not_45) Lr Lhs (list)
+    (list (RewriteWith (Lemma 'digit_lo) Lr Lhs (list)
+            (list (Steps (list (Rewrite (Premise 0) Lr Lhs True (list))) Refl))
+            Refl))
+    Refl))
+
+;; lex a '+' head from None: flush nothing, emit TPlus, continue from None.
+(claim lex_plus_head
+  (Goal (list (Param 'c (ty Int)) (Param 'rst (ty List Int)))
+    (list (Equation (Call 'is_digit (list (FVar 'c))) (Ctor 'False (list)))
+          (Equation (Call 'int_eq (list (FVar 'c) (IntLit 43))) (Ctor 'True (list))))
+    (Equation
+      (Call 'lex_go (list (Ctor 'Cons (list (FVar 'c) (FVar 'rst))) (Ctor 'None (list))))
+      (Ctor 'Cons (list (Ctor 'TPlus (list)) (Call 'lex_go (list (FVar 'rst) (Ctor 'None (list))))))))
+  (Steps (list (Simp Lhs)
+               (Rewrite (Premise 0) Lr Lhs True (list))
+               (Simp Lhs)
+               (Rewrite (Premise 1) Lr Lhs True (list))
+               (Simp Lhs))
+    Refl))
+
+;; lex a '-' head from None.
+(claim lex_minus_head
+  (Goal (list (Param 'c (ty Int)) (Param 'rst (ty List Int)))
+    (list (Equation (Call 'is_digit (list (FVar 'c))) (Ctor 'False (list)))
+          (Equation (Call 'int_eq (list (FVar 'c) (IntLit 43))) (Ctor 'False (list)))
+          (Equation (Call 'int_eq (list (FVar 'c) (IntLit 45))) (Ctor 'True (list))))
+    (Equation
+      (Call 'lex_go (list (Ctor 'Cons (list (FVar 'c) (FVar 'rst))) (Ctor 'None (list))))
+      (Ctor 'Cons (list (Ctor 'TMinus (list)) (Call 'lex_go (list (FVar 'rst) (Ctor 'None (list))))))))
+  (Steps (list (Simp Lhs)
+               (Rewrite (Premise 0) Lr Lhs True (list))
+               (Simp Lhs)
+               (Rewrite (Premise 1) Lr Lhs True (list))
+               (Simp Lhs)
+               (Rewrite (Premise 2) Lr Lhs True (list))
+               (Simp Lhs))
+    Refl))
+
+;; ---- skip_ws head is non-ws, via a projection (no constructor injectivity needed) ----
+
+;; project "is the head whitespace?" (Nil -> False, so it composes cleanly).
+(fn head_is_ws ((xs (List Int))) Bool
+  (match xs (Nil False) ((Cons d rest) (is_ws d))))
+
+;; the head of skip_ws is never whitespace. Pure forward reduction per is_ws a
+;; — the False case reduces head_is_ws (Cons a tl) directly to is_ws a (= hyp),
+;; so NO constructor injectivity is needed.
+(claim head_skipws_false
+  (Goal (list (Param 'cs (ty List Int))) (list)
+    (Equation (Call 'head_is_ws (list (Call 'skip_ws (list (FVar 'cs)))))
+              (Ctor 'False (list))))
+  (Induct 'cs
+    (list
+      (Case 'Nil (Steps (list (Simp Both)) Refl))
+      (CaseB 'Cons (list 'a 'tl)
+        (CaseOn (Call 'is_ws (list (FVar 'a))) 'Bool
+          (list
+            (Case 'True
+              (Steps (list (Simp Lhs)
+                           (Rewrite (Hyp 0) Lr Lhs True (list))
+                           (Reduce Lhs)
+                           (Rewrite (Hyp 1) Lr Lhs True (list)))
+                Refl))
+            (Case 'False
+              (Steps (list (Simp Lhs)
+                           (Rewrite (Hyp 0) Lr Lhs True (list))
+                           (Reduce Lhs)
+                           (Simp Lhs)
+                           (Rewrite (Hyp 0) Lr Lhs True (list)))
+                Refl))))))))
+
+;; the lemma loop_eq actually consumes: skip_ws cs = Cons d rrr  =>  is_ws d = False.
+;; Routes through head_skipws_false; the free head `d` is recovered by reducing
+;; head_is_ws (Cons d rrr) -> is_ws d. No injectivity, no length argument.
+(claim skipws_head_nonws
+  (Goal (list (Param 'cs (ty List Int)) (Param 'd (ty Int)) (Param 'rrr (ty List Int)))
+    (list (Equation (Call 'skip_ws (list (FVar 'cs)))
+                    (Ctor 'Cons (list (FVar 'd) (FVar 'rrr)))))
+    (Equation (Call 'is_ws (list (FVar 'd))) (Ctor 'False (list))))
+  (Steps (list (Rewrite (Lemma 'head_skipws_false) Rl Rhs True (list (Inst 'cs (FVar 'cs)))) ; False -> head_is_ws(skip_ws cs)
+               (Rewrite (Premise 0) Lr Rhs True (list))                 ; skip_ws cs -> Cons d rrr
+               (Simp Rhs))                                              ; head_is_ws(Cons d rrr) -> is_ws d
+    Refl))
+
+;; ---- capability check: rewrite INTO a match scrutinee (new kernel feature) ----
+;; Previously blocked (rewriter wouldn't enter a Match); the premise rewrites
+;; skip_ws cs -> Nil in parse_tail's scrutinee, then Simp fires the match.
+(claim parse_tail_nil_test
+  (Goal (list (Param 'e (ty Exp)) (Param 'cs (ty List Int)))
+    (list (Equation (Call 'skip_ws (list (FVar 'cs))) (Ctor 'Nil (list))))
+    (Equation (Call 'parse_tail (list (FVar 'e) (FVar 'cs)))
+              (Ctor 'Some (list (Ctor 'ExpR (list (FVar 'e) (Ctor 'Nil (list))))))))
+  (Steps (list (Unfold 'parse_tail Lhs)
+               (Rewrite (Premise 0) Lr Lhs True (list))   ; skip_ws cs -> Nil IN scrutinee
+               (Simp Lhs))
+    Refl))
+
+;; ---- operator-tail lexing + measure decrease (loop_eq's IH termination obligation) ----
+
+;; lex an illegal byte (non-digit, non-+/-, non-ws) from None: emit TBad.
+(claim lex_bad_head
+  (Goal (list (Param 'c (ty Int)) (Param 'rst (ty List Int)))
+    (list (Equation (Call 'is_digit (list (FVar 'c))) (Ctor 'False (list)))
+          (Equation (Call 'int_eq (list (FVar 'c) (IntLit 43))) (Ctor 'False (list)))
+          (Equation (Call 'int_eq (list (FVar 'c) (IntLit 45))) (Ctor 'False (list)))
+          (Equation (Call 'is_ws (list (FVar 'c))) (Ctor 'False (list))))
+    (Equation
+      (Call 'lex_go (list (Ctor 'Cons (list (FVar 'c) (FVar 'rst))) (Ctor 'None (list))))
+      (Ctor 'Cons (list (Ctor 'TBad (list)) (Call 'lex_go (list (FVar 'rst) (Ctor 'None (list))))))))
+  (Steps (list (Simp Lhs)
+               (Rewrite (Premise 0) Lr Lhs True (list)) (Simp Lhs)
+               (Rewrite (Premise 1) Lr Lhs True (list)) (Simp Lhs)
+               (Rewrite (Premise 2) Lr Lhs True (list)) (Simp Lhs)
+               (Rewrite (Premise 3) Lr Lhs True (list)) (Simp Lhs))
+    Refl))
+
+;; lex a number out of rst (modulo leading ws): bundles ws_lex + the digit step.
+(claim lex_skipnum
+  (Goal (list (Param 'rst (ty List Int)) (Param 'd (ty Int)) (Param 'rrr (ty List Int)))
+    (list (Equation (Call 'skip_ws (list (FVar 'rst))) (Ctor 'Cons (list (FVar 'd) (FVar 'rrr))))
+          (Equation (Call 'is_digit (list (FVar 'd))) (Ctor 'True (list))))
+    (Equation (Call 'lex_go (list (FVar 'rst) (Ctor 'None (list))))
+      (Ctor 'Cons (list
+        (Ctor 'TNum (list (Call 'numr_val (list (Call 'take_digits (list (FVar 'rrr) (Call 'digit_val (list (FVar 'd)))))))))
+        (Call 'lex_go (list
+          (Call 'numr_rest (list (Call 'take_digits (list (FVar 'rrr) (Call 'digit_val (list (FVar 'd)))))))
+          (Ctor 'None (list))))))))
+  (Steps (list (Rewrite (Lemma 'ws_lex) Lr Lhs True (list))
+               (Rewrite (Premise 0) Lr Lhs True (list)))
+    (RewriteWith (Lemma 'lex_digit_head) Lr Lhs (list)
+      (list (Steps (list (Rewrite (Premise 1) Lr Lhs True (list))) Refl))
+      Refl)))
+
+;; skip_ws cs = Cons h t  =>  1 + len t <= len cs  (the reduced-linear form farkas needs).
+(claim skipcons_len_le
+  (Goal (list (Param 'cs (ty List Int)) (Param 'h (ty Int)) (Param 't (ty List Int)))
+    (list (Equation (Call 'skip_ws (list (FVar 'cs))) (Ctor 'Cons (list (FVar 'h) (FVar 't)))))
+    (Equation (Call 'le (list (Call '+ (list (IntLit 1) (Call 'len (list (FVar 't)))))
+                              (Call 'len (list (FVar 'cs))))) (Ctor 'True (list))))
+  (RewriteWith (Lemma 'len_skipws_le) Rl Rhs (list (Inst 'cs (FVar 'cs)))
+    (list)
+    (Steps (list (Rewrite (Premise 0) Lr Rhs True (list)) (Simp Rhs)) Refl)))
+
+;; the IH measure decrease: number after an operator leaves a strictly shorter
+;; suffix than the whole input. Pure farkas over the three reduced-linear facts.
+(claim loop_decrease
+  (Goal (list (Param 'rrr (ty List Int)) (Param 'd (ty Int))
+              (Param 'rst (ty List Int)) (Param 'rest (ty List Int)))
+    (list (Equation (Call 'le (list (Call '+ (list (IntLit 1) (Call 'len (list (FVar 'rrr)))))
+                                    (Call 'len (list (FVar 'rst))))) (Ctor 'True (list)))
+          (Equation (Call 'le (list (Call '+ (list (IntLit 1) (Call 'len (list (FVar 'rst)))))
+                                    (Call 'len (list (FVar 'rest))))) (Ctor 'True (list)))
+          (Equation (Call 'le (list (Call 'len (list (Call 'numr_rest (list (Call 'take_digits (list (FVar 'rrr) (Call 'digit_val (list (FVar 'd)))))))))
+                                    (Call 'len (list (FVar 'rrr))))) (Ctor 'True (list))))
+    (Equation (Call 'lt (list (Call 'len (list (Call 'numr_rest (list (Call 'take_digits (list (FVar 'rrr) (Call 'digit_val (list (FVar 'd)))))))))
+                              (Call 'len (list (FVar 'rest))))) (Ctor 'True (list))))
+  (ByTheory 'farkas (Cert 'farkas (list 1 1 1 1))))
+
+
+;; ===========================================================================
+;; loop_eq — THE mountain. parse_rest over the lexed tail = strip . parse_tail.
+;; WfInduct on len rest; case skip_ws rest (Nil / Cons c rst); on Cons split
+;; is_digit c / int_eq c 43 / int_eq c 45; operator cases recurse via the IH
+;; on the post-number suffix (loop_decrease gives the measure drop).
+;; ===========================================================================
+(claim loop_eq
+  (Goal (list (Param 'rest (ty List Int)) (Param 'e (ty Exp))) (list)
+    (Equation
+      (Call 'parse_rest (list (Call 'lex_go (list (FVar 'rest) (Ctor 'None (list)))) (FVar 'e)))
+      (Call 'strip (list (Call 'parse_tail (list (FVar 'e) (FVar 'rest)))))))
+  (WfInduct (Call 'len (list (FVar 'rest)))
+    (Steps (list (Rewrite (Lemma 'ws_lex) Lr Lhs True (list))
+                 (Unfold 'parse_tail Rhs))
+      (CaseOn (Call 'skip_ws (list (FVar 'rest))) 'List
+        (list
+          ;; ---- A. skip_ws rest = Nil : both = Some e ----
+          (Case 'Nil
+            (Steps (list (Rewrite (Hyp 0) Lr Both True (list)) (Simp Both)) Refl))
+          ;; ---- B. skip_ws rest = Cons c rst ----
+          (CaseB 'Cons (list 'c 'rst)
+            (Steps (list (Rewrite (Hyp 0) Lr Both True (list)) (Reduce Rhs))
+              (CaseOn (Call 'is_digit (list (FVar 'c))) 'Bool
+                (list
+                  ;; -- B1. digit head : leading number, no operator -> both None --
+                  (Case 'True
+                    (RewriteWith (Lemma 'lex_digit_head) Lr Lhs (list)
+                      (list (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+                      (Steps (list (Simp Lhs))
+                        (RewriteWith (Lemma 'digit_not_43) Lr Rhs (list)
+                          (list (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+                          (Steps (list (Reduce Rhs))
+                            (RewriteWith (Lemma 'digit_not_45) Lr Rhs (list)
+                              (list (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+                              (Steps (list (Reduce Rhs) (Simp Rhs)) Refl)))))))
+                  ;; -- B2. non-digit head --
+                  (Case 'False
+                    (CaseOn (Call 'int_eq (list (FVar 'c) (IntLit 43))) 'Bool
+                      (list
+                        ;; ======== B2a. c = '+' ========
+                        (Case 'True
+                          (RewriteWith (Lemma 'lex_plus_head) Lr Lhs (list)
+                            (list (Steps (list (Rewrite (Hyp 1) Lr Lhs True (list))) Refl)
+                                  (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+                            (Steps (list (Rewrite (Hyp 0) Lr Rhs True (list)) (Reduce Rhs))
+                              (CaseOn (Call 'skip_ws (list (FVar 'rst))) 'List
+                                (list
+                                  (Case 'Nil
+                                    (Steps (list (Rewrite (Lemma 'ws_lex) Lr Lhs True (list))
+                                                 (Rewrite (Hyp 0) Lr Both True (list)) (Simp Both)) Refl))
+                                  (CaseB 'Cons (list 'd 'rrr)
+                                    (CaseOn (Call 'is_digit (list (FVar 'd))) 'Bool
+                                      (list
+                                        ;; + number -> recurse (IH = Hyp 5, skip_ws rest = Hyp 4)
+                                        (Case 'True
+                                          (RewriteWith (Lemma 'lex_skipnum) Lr Lhs (list (Inst 'd (FVar 'd)) (Inst 'rrr (FVar 'rrr)))
+                                            (list (Steps (list (Rewrite (Hyp 1) Lr Lhs True (list))) Refl)
+                                                  (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+                                            (Steps (list (Simp Lhs)
+                                                         (Rewrite (Hyp 1) Lr Rhs True (list)) (Simp Rhs)
+                                                         (Rewrite (Hyp 0) Lr Rhs True (list)) (Reduce Rhs))
+                                              (RewriteWith (Lemma 'numr_eta) Lr Rhs
+                                                (list (Inst 'r (Call 'take_digits (list (FVar 'rrr) (Call 'digit_val (list (FVar 'd)))))))
+                                                (list)
+                                                (Steps (list (Reduce Rhs) (Simp Rhs))
+                                                  (RewriteWith (Hyp 5) Lr Lhs (list)
+                                                    (list
+                                                      (Steps (list (Rewrite (Lemma 'len_nonneg) Lr Lhs True (list))) Refl)
+                                                      (RewriteWith (Lemma 'loop_decrease) Lr Lhs (list (Inst 'rst (FVar 'rst)))
+                                                        (list
+                                                          (RewriteWith (Lemma 'skipcons_len_le) Lr Lhs
+                                                            (list (Inst 'cs (FVar 'rst)) (Inst 'h (FVar 'd)) (Inst 't (FVar 'rrr)))
+                                                            (list (Steps (list (Rewrite (Hyp 1) Lr Lhs True (list))) Refl)) Refl)
+                                                          (RewriteWith (Lemma 'skipcons_len_le) Lr Lhs
+                                                            (list (Inst 'cs (FVar 'rest)) (Inst 'h (FVar 'c)) (Inst 't (FVar 'rst)))
+                                                            (list (Steps (list (Rewrite (Hyp 4) Lr Lhs True (list))) Refl)) Refl)
+                                                          (Steps (list (Rewrite (Lemma 'len_takedigits_le) Lr Lhs True (list))) Refl))
+                                                        Refl))
+                                                    Refl))))))
+                                        ;; + then non-digit -> reject. Reduce RHS to None once, then split LHS.
+                                        (Case 'False
+                                          (Steps (list (Rewrite (Lemma 'ws_lex) Lr Lhs True (list))
+                                                       (Rewrite (Hyp 1) Lr Both True (list))
+                                                       (Simp Rhs)
+                                                       (Rewrite (Hyp 0) Lr Rhs True (list))
+                                                       (Simp Rhs))
+                                            (CaseOn (Call 'int_eq (list (FVar 'd) (IntLit 43))) 'Bool
+                                              (list
+                                                (Case 'True
+                                                  (RewriteWith (Lemma 'lex_plus_head) Lr Lhs (list)
+                                                    (list (Steps (list (Rewrite (Hyp 1) Lr Lhs True (list))) Refl)
+                                                          (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+                                                    (Steps (list (Simp Lhs)) Refl)))
+                                                (Case 'False
+                                                  (CaseOn (Call 'int_eq (list (FVar 'd) (IntLit 45))) 'Bool
+                                                    (list
+                                                      (Case 'True
+                                                        (RewriteWith (Lemma 'lex_minus_head) Lr Lhs (list)
+                                                          (list (Steps (list (Rewrite (Hyp 2) Lr Lhs True (list))) Refl)
+                                                                (Steps (list (Rewrite (Hyp 1) Lr Lhs True (list))) Refl)
+                                                                (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+                                                          (Steps (list (Simp Lhs)) Refl)))
+                                                      (Case 'False
+                                                        (RewriteWith (Lemma 'lex_bad_head) Lr Lhs (list)
+                                                          (list (Steps (list (Rewrite (Hyp 2) Lr Lhs True (list))) Refl)
+                                                                (Steps (list (Rewrite (Hyp 1) Lr Lhs True (list))) Refl)
+                                                                (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl)
+                                                                (RewriteWith (Lemma 'skipws_head_nonws) Lr Lhs
+                                                                  (list (Inst 'cs (FVar 'rst)) (Inst 'd (FVar 'd)) (Inst 'rrr (FVar 'rrr)))
+                                                                  (list (Steps (list (Rewrite (Hyp 3) Lr Lhs True (list))) Refl)) Refl))
+                                                          (Steps (list (Simp Lhs)) Refl))))))))))))))))))
+                        ;; ======== B2b. c != '+' ========
+                        (Case 'False
+                          (CaseOn (Call 'int_eq (list (FVar 'c) (IntLit 45))) 'Bool
+                            (list
+                              ;; ---- B2b-i. c = '-' (mirror of B2a; recursive leaf IH = Hyp 6, skip_ws rest = Hyp 5) ----
+                              (Case 'True
+                                (RewriteWith (Lemma 'lex_minus_head) Lr Lhs (list)
+                                  (list (Steps (list (Rewrite (Hyp 2) Lr Lhs True (list))) Refl)
+                                        (Steps (list (Rewrite (Hyp 1) Lr Lhs True (list))) Refl)
+                                        (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+                                  (Steps (list (Rewrite (Hyp 1) Lr Rhs True (list)) (Reduce Rhs)
+                                               (Rewrite (Hyp 0) Lr Rhs True (list)) (Reduce Rhs))
+                                    (CaseOn (Call 'skip_ws (list (FVar 'rst))) 'List
+                                      (list
+                                        (Case 'Nil
+                                          (Steps (list (Rewrite (Lemma 'ws_lex) Lr Lhs True (list))
+                                                       (Rewrite (Hyp 0) Lr Both True (list)) (Simp Both)) Refl))
+                                        (CaseB 'Cons (list 'd 'rrr)
+                                          (CaseOn (Call 'is_digit (list (FVar 'd))) 'Bool
+                                            (list
+                                              (Case 'True
+                                                (RewriteWith (Lemma 'lex_skipnum) Lr Lhs (list (Inst 'd (FVar 'd)) (Inst 'rrr (FVar 'rrr)))
+                                                  (list (Steps (list (Rewrite (Hyp 1) Lr Lhs True (list))) Refl)
+                                                        (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+                                                  (Steps (list (Simp Lhs)
+                                                               (Rewrite (Hyp 1) Lr Rhs True (list)) (Simp Rhs)
+                                                               (Rewrite (Hyp 0) Lr Rhs True (list)) (Reduce Rhs))
+                                                    (RewriteWith (Lemma 'numr_eta) Lr Rhs
+                                                      (list (Inst 'r (Call 'take_digits (list (FVar 'rrr) (Call 'digit_val (list (FVar 'd)))))))
+                                                      (list)
+                                                      (Steps (list (Reduce Rhs) (Simp Rhs))
+                                                        (RewriteWith (Hyp 6) Lr Lhs (list)
+                                                          (list
+                                                            (Steps (list (Rewrite (Lemma 'len_nonneg) Lr Lhs True (list))) Refl)
+                                                            (RewriteWith (Lemma 'loop_decrease) Lr Lhs (list (Inst 'rst (FVar 'rst)))
+                                                              (list
+                                                                (RewriteWith (Lemma 'skipcons_len_le) Lr Lhs
+                                                                  (list (Inst 'cs (FVar 'rst)) (Inst 'h (FVar 'd)) (Inst 't (FVar 'rrr)))
+                                                                  (list (Steps (list (Rewrite (Hyp 1) Lr Lhs True (list))) Refl)) Refl)
+                                                                (RewriteWith (Lemma 'skipcons_len_le) Lr Lhs
+                                                                  (list (Inst 'cs (FVar 'rest)) (Inst 'h (FVar 'c)) (Inst 't (FVar 'rst)))
+                                                                  (list (Steps (list (Rewrite (Hyp 5) Lr Lhs True (list))) Refl)) Refl)
+                                                                (Steps (list (Rewrite (Lemma 'len_takedigits_le) Lr Lhs True (list))) Refl))
+                                                              Refl))
+                                                          Refl))))))
+                                              (Case 'False
+                                                (Steps (list (Rewrite (Lemma 'ws_lex) Lr Lhs True (list))
+                                                             (Rewrite (Hyp 1) Lr Both True (list))
+                                                             (Simp Rhs)
+                                                             (Rewrite (Hyp 0) Lr Rhs True (list))
+                                                             (Simp Rhs))
+                                                  (CaseOn (Call 'int_eq (list (FVar 'd) (IntLit 43))) 'Bool
+                                                    (list
+                                                      (Case 'True
+                                                        (RewriteWith (Lemma 'lex_plus_head) Lr Lhs (list)
+                                                          (list (Steps (list (Rewrite (Hyp 1) Lr Lhs True (list))) Refl)
+                                                                (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+                                                          (Steps (list (Simp Lhs)) Refl)))
+                                                      (Case 'False
+                                                        (CaseOn (Call 'int_eq (list (FVar 'd) (IntLit 45))) 'Bool
+                                                          (list
+                                                            (Case 'True
+                                                              (RewriteWith (Lemma 'lex_minus_head) Lr Lhs (list)
+                                                                (list (Steps (list (Rewrite (Hyp 2) Lr Lhs True (list))) Refl)
+                                                                      (Steps (list (Rewrite (Hyp 1) Lr Lhs True (list))) Refl)
+                                                                      (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+                                                                (Steps (list (Simp Lhs)) Refl)))
+                                                            (Case 'False
+                                                              (RewriteWith (Lemma 'lex_bad_head) Lr Lhs (list)
+                                                                (list (Steps (list (Rewrite (Hyp 2) Lr Lhs True (list))) Refl)
+                                                                      (Steps (list (Rewrite (Hyp 1) Lr Lhs True (list))) Refl)
+                                                                      (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl)
+                                                                      (RewriteWith (Lemma 'skipws_head_nonws) Lr Lhs
+                                                                        (list (Inst 'cs (FVar 'rst)) (Inst 'd (FVar 'd)) (Inst 'rrr (FVar 'rrr)))
+                                                                        (list (Steps (list (Rewrite (Hyp 3) Lr Lhs True (list))) Refl)) Refl))
+                                                                (Steps (list (Simp Lhs)) Refl))))))))))))))))))
+                              ;; ---- B2b-ii. c illegal -> both None ----
+                              (Case 'False
+                                (RewriteWith (Lemma 'lex_bad_head) Lr Lhs (list)
+                                  (list (Steps (list (Rewrite (Hyp 2) Lr Lhs True (list))) Refl)
+                                        (Steps (list (Rewrite (Hyp 1) Lr Lhs True (list))) Refl)
+                                        (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl)
+                                        (RewriteWith (Lemma 'skipws_head_nonws) Lr Lhs
+                                          (list (Inst 'cs (FVar 'rest)) (Inst 'd (FVar 'c)) (Inst 'rrr (FVar 'rst)))
+                                          (list (Steps (list (Rewrite (Hyp 3) Lr Lhs True (list))) Refl)) Refl))
+                                  (Steps (list (Simp Lhs)
+                                               (Rewrite (Hyp 1) Lr Rhs True (list)) (Reduce Rhs)
+                                               (Rewrite (Hyp 0) Lr Rhs True (list)) (Reduce Rhs) (Simp Rhs)) Refl))))))))))))))))
+))
+
+;; ===========================================================================
+;; CORE — parse (lex cs) = parse_expr cs.  Same shape as loop_eq's outer cases
+;; (lex/skip_ws align via ws_lex; first token decides), but `parse` only
+;; consumes the leading number, then loop_eq bridges the tail.
+;; ===========================================================================
+(claim CORE
+  (Goal (list (Param 'cs (ty List Int))) (list)
+    (Equation (Call 'parse (list (Call 'lex (list (FVar 'cs)))))
+              (Call 'parse_expr (list (FVar 'cs)))))
+  (Steps (list (Unfold 'lex Lhs)
+               (Rewrite (Lemma 'ws_lex) Lr Lhs True (list))
+               (Unfold 'parse_expr Rhs))
+    (CaseOn (Call 'skip_ws (list (FVar 'cs))) 'List
+      (list
+        (Case 'Nil
+          (Steps (list (Rewrite (Hyp 0) Lr Both True (list)) (Simp Both)) Refl))
+        (CaseB 'Cons (list 'c 'rst)
+          (CaseOn (Call 'is_digit (list (FVar 'c))) 'Bool
+            (list
+              ;; leading number: parse it, loop_eq bridges the tail
+              (Case 'True
+                (Steps (list (Rewrite (Hyp 1) Lr Lhs True (list)))
+                  (RewriteWith (Lemma 'lex_digit_head) Lr Lhs (list)
+                    (list (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+                    (Steps (list (Simp Lhs)
+                                 (Rewrite (Lemma 'loop_eq) Lr Lhs True (list))
+                                 (Unfold 'strip Lhs)
+                                 (Rewrite (Hyp 1) Lr Rhs True (list))
+                                 (Simp Rhs)
+                                 (Rewrite (Hyp 0) Lr Rhs True (list)))
+                      (RewriteWith (Lemma 'numr_eta) Lr Rhs
+                        (list (Inst 'r (Call 'take_digits (list (FVar 'rst) (Call 'digit_val (list (FVar 'c)))))))
+                        (list)
+                        (Steps (list (Reduce Rhs)) Refl))))))
+              ;; non-digit head: reject (both None). Reduce RHS to None, split LHS.
+              (Case 'False
+                (Steps (list (Rewrite (Hyp 1) Lr Both True (list))
+                             (Simp Rhs)
+                             (Rewrite (Hyp 0) Lr Rhs True (list))
+                             (Simp Rhs))
+                  (CaseOn (Call 'int_eq (list (FVar 'c) (IntLit 43))) 'Bool
+                    (list
+                      (Case 'True
+                        (RewriteWith (Lemma 'lex_plus_head) Lr Lhs (list)
+                          (list (Steps (list (Rewrite (Hyp 1) Lr Lhs True (list))) Refl)
+                                (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+                          (Steps (list (Simp Lhs)) Refl)))
+                      (Case 'False
+                        (CaseOn (Call 'int_eq (list (FVar 'c) (IntLit 45))) 'Bool
+                          (list
+                            (Case 'True
+                              (RewriteWith (Lemma 'lex_minus_head) Lr Lhs (list)
+                                (list (Steps (list (Rewrite (Hyp 2) Lr Lhs True (list))) Refl)
+                                      (Steps (list (Rewrite (Hyp 1) Lr Lhs True (list))) Refl)
+                                      (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+                                (Steps (list (Simp Lhs)) Refl)))
+                            (Case 'False
+                              (RewriteWith (Lemma 'lex_bad_head) Lr Lhs (list)
+                                (list (Steps (list (Rewrite (Hyp 2) Lr Lhs True (list))) Refl)
+                                      (Steps (list (Rewrite (Hyp 1) Lr Lhs True (list))) Refl)
+                                      (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl)
+                                      (RewriteWith (Lemma 'skipws_head_nonws) Lr Lhs
+                                        (list (Inst 'cs (FVar 'cs)) (Inst 'd (FVar 'c)) (Inst 'rrr (FVar 'rst)))
+                                        (list (Steps (list (Rewrite (Hyp 3) Lr Lhs True (list))) Refl)) Refl))
+                                (Steps (list (Simp Lhs)) Refl)))))))))))))))))
+
+;; ===========================================================================
+;; run_eq_spec — THE HEADLINE.  run cs = spec_run cs, for ALL inputs.
+;; eval_opt congruence over CORE.
+;; ===========================================================================
+(claim run_eq_spec
+  (Goal (list (Param 'cs (ty List Int))) (list)
+    (Equation (Call 'run (list (FVar 'cs))) (Call 'spec_run (list (FVar 'cs)))))
+  (Steps (list (Unfold 'run Lhs)
+               (Rewrite (Lemma 'CORE) Lr Lhs True (list))
+               (Unfold 'spec_run Rhs))
+    Refl))
