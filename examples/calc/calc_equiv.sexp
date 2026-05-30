@@ -73,6 +73,72 @@
                       (Simp Rhs))
                 Refl))))))))
 
+;; ---------------------------------------------------------------------------
+;; len-decrease lemmas — the termination obligations for loop_eq's WfInduct.
+;; Each function (skip_ws, take_digits) branches on ONE predicate, which we
+;; CaseOn directly (via CaseB-named head c) — no char-class disjointness here.
+;; ---------------------------------------------------------------------------
+
+;; skip_ws never grows the list.
+(claim len_skipws_le
+  (Goal (list (Param 'cs (ty List Int))) (list)
+    (Equation (Call 'le (list (Call 'len (list (Call 'skip_ws (list (FVar 'cs)))))
+                              (Call 'len (list (FVar 'cs)))))
+              (Ctor 'True (list))))
+  (Induct 'cs
+    (list
+      (Case 'Nil (Steps (list (Simp Lhs)) Refl))
+      (CaseB 'Cons (list 'c 'rest)
+        (CaseOn (Call 'is_ws (list (FVar 'c))) 'Bool
+          (list
+            (Case 'True
+              (Steps (list (Simp Lhs) (Rewrite (Hyp 0) Lr Lhs True (list)) (Simp Lhs))
+                (RewriteWith (Lemma 'le_succ_l) Lr Lhs (list)
+                  (list (Steps (list (Rewrite (Hyp 1) Lr Lhs True (list))) Refl))
+                  Refl)))
+            (Case 'False
+              (Steps (list (Simp Lhs) (Rewrite (Hyp 0) Lr Lhs True (list)) (Simp Lhs)
+                          (Rewrite (Lemma 'le_refl) Lr Lhs True (list)))
+                Refl))))))))
+
+;; take_digits' leftover never grows the list.
+(claim len_takedigits_le
+  (Goal (list (Param 'cs (ty List Int)) (Param 'acc (ty Int))) (list)
+    (Equation (Call 'le (list
+                (Call 'len (list (Call 'numr_rest (list (Call 'take_digits (list (FVar 'cs) (FVar 'acc)))))))
+                (Call 'len (list (FVar 'cs)))))
+              (Ctor 'True (list))))
+  (Induct 'cs
+    (list
+      (Case 'Nil (Steps (list (Simp Lhs)) Refl))
+      (CaseB 'Cons (list 'c 'rest)
+        (CaseOn (Call 'is_digit (list (FVar 'c))) 'Bool
+          (list
+            (Case 'True
+              (Steps (list (Simp Lhs) (Rewrite (Hyp 0) Lr Lhs True (list)) (Simp Lhs))
+                (RewriteWith (Lemma 'le_succ_l) Lr Lhs (list)
+                  (list (Steps (list (Rewrite (Hyp 1) Lr Lhs True (list))) Refl))
+                  Refl)))
+            (Case 'False
+              (Steps (list (Simp Lhs) (Rewrite (Hyp 0) Lr Lhs True (list)) (Simp Lhs)
+                          (Rewrite (Lemma 'le_refl) Lr Lhs True (list)))
+                Refl))))))))
+
+;; The strict decrease loop_eq needs: a number starting with a digit leaves a
+;; strictly shorter suffix. len_takedigits_le bound + lt_from_le_succ.
+(claim len_takedigits_lt
+  (Goal (list (Param 'c (ty Int)) (Param 'rest (ty List Int)))
+    (list (Equation (Call 'is_digit (list (FVar 'c))) (Ctor 'True (list))))
+    (Equation (Call 'lt (list
+                (Call 'len (list (Call 'numr_rest (list (Call 'take_digits
+                  (list (FVar 'rest) (Call 'digit_val (list (FVar 'c)))))))))
+                (Call 'len (list (Ctor 'Cons (list (FVar 'c) (FVar 'rest)))))))
+              (Ctor 'True (list))))
+  (Steps (list (Simp Lhs))
+    (RewriteWith (Lemma 'lt_from_le_succ) Lr Lhs (list)
+      (list (Steps (list (Rewrite (Lemma 'len_takedigits_le) Lr Lhs True (list))) Refl))
+      Refl)))
+
 ;; quick Compute validation: lex_go [50 43] (Some 1) = [TNum 12, TPlus]
 ;; and the RHS computes the same.
 (claim lex_num_check

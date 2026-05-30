@@ -238,3 +238,19 @@
     (Equation (Call 'le (list (FVar 'i) (Call '+ (list (FVar 'base) (IntLit 1)))))
               (Ctor 'True (list))))
   (ByTheory 'farkas (Cert 'farkas (list 1 1))))
+
+;; i <= b ⊢ i <= 1+b  (le_succ_r with the (+ 1 b) ordering that `len` produces).
+(claim le_succ_l
+  (Goal (list (Param 'i (ty Int)) (Param 'b (ty Int)))
+    (list (Equation (Call 'le (list (FVar 'i) (FVar 'b))) (Ctor 'True (list))))
+    (Equation (Call 'le (list (FVar 'i) (Call '+ (list (IntLit 1) (FVar 'b)))))
+              (Ctor 'True (list))))
+  (ByTheory 'farkas (Cert 'farkas (list 1 1))))
+
+;; a <= b ⊢ a < 1+b  (strict decrease from a non-strict bound; farkas).
+(claim lt_from_le_succ
+  (Goal (list (Param 'a (ty Int)) (Param 'b (ty Int)))
+    (list (Equation (Call 'le (list (FVar 'a) (FVar 'b))) (Ctor 'True (list))))
+    (Equation (Call 'lt (list (FVar 'a) (Call '+ (list (IntLit 1) (FVar 'b)))))
+              (Ctor 'True (list))))
+  (ByTheory 'farkas (Cert 'farkas (list 1 1))))
