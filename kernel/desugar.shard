@@ -137,3 +137,87 @@
             (_ caseE))
           caseE)))
     (_ caseE)))
+
+;; ===========================================================================
+;; Native named-hyp desugaring — the proof-DSL counterpart of desugar_hyps.
+;; proof_reader emits a native Proof in which a named hypothesis is (HypName
+;; 'ih); the kernel only resolves (Hyp k). This pass simulates the SAME hyp
+;; stack over the NATIVE Proof — WfInduct prepends 'ih; each Induct/Induct2 case
+;; appends one IH per recursive ctor field (do_induct order) — and rewrites
+;; every (HypName s) to (Hyp k). It reuses stack_pos / ih_entries /
+;; case_ih_count / append_ms above. An unbound name is left as (HypName s) and
+;; fails cleanly at resolve_eq (checker.shard). CaseOn cases push no IH, so
+;; their sub-proofs keep the parent stack (mirroring the generic reflected
+;; path, which leaves CaseOn's stack unchanged).
+;; ===========================================================================
+
+(fn dsn_ref ((stk (List (Option Symbol))) (er EqRef)) EqRef
+  (match er
+    ((HypName s)
+      (match (stack_pos s stk 0)
+        ((Some k) (Hyp k))
+        (None     (HypName s))))
+    (_ er)))
+
+(fn dsn_step ((stk (List (Option Symbol))) (st Step)) Step
+  (match st
+    ((Rewrite ref dir side all insts) (Rewrite (dsn_ref stk ref) dir side all insts))
+    (_ st)))
+
+(fn dsn_steps ((stk (List (Option Symbol))) (sts (List Step))) (List Step)
+  (match sts
+    (Nil Nil)
+    ((Cons h t) (Cons (dsn_step stk h) (dsn_steps stk t)))))
+
+(fn desugar_proof_named ((m Module) (ps (List Param)) (stk (List (Option Symbol))) (p Proof)) Proof
+  (match p
+    (Refl Refl)
+    ((Steps steps cont)
+      (Steps (dsn_steps stk steps) (desugar_proof_named m ps stk cont)))
+    ((Induct var cases)
+      (Induct var (dsn_cases m ps stk (quote Induct) var cases)))
+    ((Induct2 var cases)
+      (Induct2 var (dsn_cases m ps stk (quote Induct2) var cases)))
+    ((CaseOn e var cases)
+      (CaseOn e var (dsn_caseon_cases m ps stk cases)))
+    ((WfInduct measure sub)
+      (WfInduct measure (desugar_proof_named m ps (Cons (Some (quote ih)) stk) sub)))
+    ((RewriteWith ref dir side insts subs cont)
+      (RewriteWith (dsn_ref stk ref) dir side insts
+                   (dsn_proofs m ps stk subs)
+                   (desugar_proof_named m ps stk cont)))
+    ((Absurd ref) (Absurd (dsn_ref stk ref)))
+    (_ p)))                                   ; ByTheory — no hyp refs
+
+(fn dsn_proofs ((m Module) (ps (List Param)) (stk (List (Option Symbol))) (subs (List Proof))) (List Proof)
+  (match subs
+    (Nil Nil)
+    ((Cons h t) (Cons (desugar_proof_named m ps stk h) (dsn_proofs m ps stk t)))))
+
+;; Induct/Induct2 cases: each appends its IH entries before the sub-proof.
+(fn dsn_cases ((m Module) (ps (List Param)) (stk (List (Option Symbol))) (head Symbol) (var Symbol) (cases (List Case))) (List Case)
+  (match cases
+    (Nil Nil)
+    ((Cons c rest) (Cons (dsn_case m ps stk head var c) (dsn_cases m ps stk head var rest)))))
+
+(fn dsn_case ((m Module) (ps (List Param)) (stk (List (Option Symbol))) (head Symbol) (var Symbol) (c Case)) Case
+  (match c
+    ((Case cname sub)
+      (Case cname
+            (desugar_proof_named m ps
+              (append_ms stk (ih_entries 0 (case_ih_count m ps head var cname))) sub)))
+    ((CaseB cname fields sub)
+      (CaseB cname fields
+             (desugar_proof_named m ps
+               (append_ms stk (ih_entries 0 (case_ih_count m ps head var cname))) sub)))))
+
+;; CaseOn cases: no IH pushed; sub-proofs keep the parent stack.
+(fn dsn_caseon_cases ((m Module) (ps (List Param)) (stk (List (Option Symbol))) (cases (List Case))) (List Case)
+  (match cases
+    (Nil Nil)
+    ((Cons c rest) (Cons (dsn_caseon_case m ps stk c) (dsn_caseon_cases m ps stk rest)))))
+
+(fn dsn_caseon_case ((m Module) (ps (List Param)) (stk (List (Option Symbol))) (c Case)) Case
+  (match c
+    ((Case cname sub) (Case cname (desugar_proof_named m ps stk sub)))
+    ((CaseB cname fields sub) (CaseB cname fields (desugar_proof_named m ps stk sub)))))
