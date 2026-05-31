@@ -167,6 +167,14 @@ fn run() -> ExitCode {
         }
     }
 
+    // Default path: route checking through the SELF-HOSTED shard driver
+    // (kernel/driver.shard's check_production). The Rust process_file loop is
+    // kept only for `--trace`, whose per-step diagnostic tracer still lives in
+    // Rust. See run_shard_check.
+    if trace_target.is_none() {
+        return run_shard_check(&files, &kernel);
+    }
+
     let mut ctx = Ctx {
         user_module_value: module_to_value(&user_module),
         user_module,
@@ -305,7 +313,9 @@ fn process_file(path: &PathBuf, ctx: &mut Ctx, kernel: &ast::Module) -> Result<(
         return Ok(());
     }
 
-    // Pass C: claims, in order.
+    // Pass C: claims, in order. The DEFAULT `check` now routes through the
+    // self-hosted shard driver (run_shard_check); this Rust loop runs only for
+    // `--trace`, whose per-step diagnostic tracer is not yet ported to shard.
     for form in &forms {
         match process_form(form, kernel, &ctx.user_module_value, &ctx.theory, path, ctx.trace_target.as_deref()) {
             Outcome::Pass { name, goal } => {
@@ -423,6 +433,49 @@ fn import_closure(target: &PathBuf) -> Result<Vec<PathBuf>, ExitCode> {
     let mut order = Vec::new();
     let mut seen = std::collections::HashSet::new();
     visit(target, true, &mut order, &mut seen)?;
+    Ok(order)
+}
+
+/// The full ordered, deduplicated file list to check: for each target (in CLI
+/// order) its transitive imports come first (deps before dependents), then the
+/// target itself. A file imported (or named) more than once appears once.
+/// Post-order DFS; this is the order the production shard driver threads the
+/// theory through, so a citation always sees its dependency already admitted.
+fn ordered_closure(targets: &[PathBuf]) -> Result<Vec<PathBuf>, ExitCode> {
+    fn visit(
+        path: &PathBuf,
+        order: &mut Vec<PathBuf>,
+        seen: &mut std::collections::HashSet<PathBuf>,
+    ) -> Result<(), ExitCode> {
+        let canon = path.canonicalize().unwrap_or_else(|_| path.clone());
+        if !seen.insert(canon) {
+            return Ok(());
+        }
+        let src = std::fs::read_to_string(path).map_err(|e| {
+            eprintln!("error reading {}: {}", path.display(), e);
+            ExitCode::from(2)
+        })?;
+        let forms = parse_top_level(&src).map_err(|e| {
+            eprintln!("error parsing {}: {}", path.display(), e);
+            ExitCode::from(2)
+        })?;
+        for form in &forms {
+            if let Some(dep) = import_path(form) {
+                let resolved = match path.parent() {
+                    Some(d) => d.join(&dep),
+                    None => PathBuf::from(&dep),
+                };
+                visit(&resolved, order, seen)?;
+            }
+        }
+        order.push(path.clone());
+        Ok(())
+    }
+    let mut order = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for t in targets {
+        visit(t, &mut order, &mut seen)?;
+    }
     Ok(order)
 }
 
@@ -2012,6 +2065,128 @@ fn run_self_check(args: &[String]) -> ExitCode {
         }
         other => { println!("check_file returned non-DriverResult: {}", show_reflected(other)); ExitCode::from(2) }
     }
+}
+
+// ----------------------------------------------------------------------
+// Production checking through the self-hosted shard driver.
+//
+// This is the default `check <file>…` path (when `--trace` is not set). The
+// claim-checking LOOP — parse claims/axioms, desugar named hyps, un-reflect
+// goals/proofs, run check_sequent, thread the theory, admit axioms — runs in
+// shard (kernel/driver.shard's check_production), via the native VM exactly
+// like the kernel's own check_sequent. Rust's role here is reduced to:
+//   - resolving the file list (imports first, then targets) and reading bytes,
+//   - building the two modules (eval = kernel + toolchain; M = kernel.types +
+//     all loaded code), the same split native checking already used,
+//   - decoding the returned (List ClaimOutcome) into PASS/FAIL/AXIOM lines.
+// The Rust process_claim/process_form loop survives only for `--trace`, whose
+// per-step diagnostic tracer is not yet ported to shard.
+// ----------------------------------------------------------------------
+
+fn run_shard_check(files: &[String], kernel: &ast::Module) -> ExitCode {
+    if files.is_empty() {
+        eprintln!("usage: check [--trace <claim>|all] <proof_file.shard>...");
+        return ExitCode::from(2);
+    }
+    let targets: Vec<PathBuf> = files.iter().map(PathBuf::from).collect();
+
+    let mk_ctx = |seed: ast::Module| Ctx {
+        user_module_value: module_to_value(&seed),
+        user_module: seed,
+        theory: ctor("TheoryEmpty", vec![]),
+        passed: 0, failed: 0, axioms: 0,
+        loaded: std::collections::HashSet::new(),
+        in_progress: Vec::new(),
+        load_only: true,
+        trace_target: None,
+    };
+
+    // eval module = kernel (types + fns) + the shard toolchain that runs the
+    // driver. The toolchain now lives in the kernel dir.
+    let mut eval_ctx = mk_ctx(ast::Module {
+        types: kernel.types.clone(),
+        fns: kernel.fns.clone(),
+        externs: kernel.externs.clone(),
+    });
+    let kdir = default_kernel_dir();
+    for tool in &["reader.shard", "unreflect.shard", "desugar.shard", "driver.shard"] {
+        if let Err(code) = process_file(&kdir.join(tool), &mut eval_ctx, kernel) {
+            return code;
+        }
+    }
+
+    // M module = kernel.types + all the user code (targets + their imports).
+    // kernel.fns are kept OUT so the proofs reduce against the user's fns, not
+    // the kernel's internals (e.g. term.shard's `len` vs std/list's `len`).
+    let mut m_ctx = mk_ctx(ast::Module {
+        types: kernel.types.clone(),
+        fns: Vec::new(),
+        externs: Vec::new(),
+    });
+    for t in &targets {
+        if let Err(code) = process_file(t, &mut m_ctx, kernel) {
+            return code;
+        }
+    }
+
+    // Ordered file list (imports first, then targets), and their sources.
+    let order = match ordered_closure(&targets) {
+        Ok(o) => o,
+        Err(code) => return code,
+    };
+    let mut srcs_list = nil();
+    for p in order.iter().rev() {
+        match std::fs::read_to_string(p) {
+            Ok(s) => { srcs_list = ctor("Cons", vec![line_to_event_native(&s), srcs_list]); }
+            Err(e) => { eprintln!("error reading {}: {}", p.display(), e); return ExitCode::from(2); }
+        }
+    }
+
+    let ctor_names: Vec<String> = m_ctx.user_module.types.iter()
+        .flat_map(|td| td.ctors.iter().map(|cd| cd.name.clone()))
+        .collect();
+    let ctorset = sym_list_native(&ctor_names);
+
+    // (check_production <M> <srcs> <ctors>) → (List ClaimOutcome).
+    let call = ast::Expr::Call(
+        "check_production".into(),
+        vec![m_ctx.user_module_value.clone(), srcs_list, ctorset],
+    );
+    let result = match eval_raw(&eval_ctx.user_module, &call).and_then(|v| value_to_native_expr(&v)) {
+        Ok(v) => v,
+        Err(e) => { eprintln!("shard check_production error: {}", e); return ExitCode::from(2); }
+    };
+
+    let (mut passed, mut failed, mut axioms) = (0usize, 0usize, 0usize);
+    let mut fail_names: Vec<String> = Vec::new();
+    for item in decode_list(&result) {
+        match item {
+            ast::Expr::Ctor(tag, a) if a.len() == 1 => {
+                let name = match &a[0] {
+                    ast::Expr::SymLit(s) => s.clone(),
+                    other => format!("{:?}", other),
+                };
+                match tag.as_str() {
+                    "COPass"  => { println!("PASS  {}", name); passed += 1; }
+                    "COAxiom" => { println!("AXIOM {}  (admitted without proof)", name); axioms += 1; }
+                    "COFail"  => { println!("FAIL  {}", name); failed += 1; fail_names.push(name); }
+                    other => { eprintln!("unknown outcome tag {}", other); return ExitCode::from(2); }
+                }
+            }
+            other => { eprintln!("malformed ClaimOutcome: {}", show_reflected(other)); return ExitCode::from(2); }
+        }
+    }
+
+    println!();
+    if axioms > 0 {
+        println!("{} passed, {} failed, {} axiom(s) admitted without proof", passed, failed, axioms);
+    } else {
+        println!("{} passed, {} failed", passed, failed);
+    }
+    if !fail_names.is_empty() {
+        println!("re-run with `--trace {}` for a per-step diagnostic", fail_names[0]);
+    }
+    if failed > 0 { ExitCode::from(1) } else { ExitCode::SUCCESS }
 }
 
 // ----------------------------------------------------------------------

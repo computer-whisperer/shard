@@ -16,6 +16,12 @@
 ;;; handled via `check_with_imports`: the harness supplies the target's
 ;;; transitive import closure (deps first), `seed_theory` checks those to
 ;;; admit their proven claims, and the target is checked against that theory.
+;;;
+;;; `check_production` is the entry the DEFAULT `check` routes through: it
+;;; takes the whole file list (imports first, then targets), processes each
+;;; file's claims+axioms in source order, threads the theory across all of
+;;; them, and returns a (List ClaimOutcome) the Rust harness renders as
+;;; PASS/FAIL/AXIOM lines.
 
 ;; Goal → Sequent: a top-level claim has no in-scope hypotheses (hyps = Nil).
 (fn lift_sequent ((g Goal)) Sequent
@@ -106,3 +112,73 @@
 ;; supplies the target's transitive import closure as `imports`.
 (fn check_with_imports ((m Module) (imports (List (List Int))) (src (List Int)) (ctors (List Symbol))) DriverResult
   (check_file_seeded m (seed_theory m imports ctors TheoryEmpty) src ctors))
+
+;; ===========================================================================
+;; Production entry: per-claim outcomes in source order. This is the loop the
+;; default `check` routes through (the Rust harness reports each outcome as a
+;; PASS/FAIL/AXIOM line). Claims and axioms are processed interleaved as
+;; written (parse_decls), threading the theory across the WHOLE file list
+;; (imports first, then targets) so every citation — same-file, imported, or
+;; axiom — resolves.
+;; ===========================================================================
+
+(type ClaimOutcome
+  (COPass  Symbol)                              ; a claim whose proof checked
+  (COFail  Symbol)                              ; a claim that failed / wouldn't un-reflect
+  (COAxiom Symbol))                             ; an axiom admitted without proof
+
+;; theory threaded + outcomes accumulated in REVERSE (prepended; caller reverses)
+(type RunState (RunState Theory (List ClaimOutcome)))
+
+(fn rev_outcomes ((xs (List ClaimOutcome)) (acc (List ClaimOutcome))) (List ClaimOutcome)
+  (match xs
+    (Nil acc)
+    ((Cons h t) (rev_outcomes t (Cons h acc)))))
+
+;; Process one file's decls in source order, threading the theory and
+;; accumulating outcomes. A claim that passes is admitted as (Proven …); an
+;; axiom is admitted as (Axiom …); both with the goal closed for citation.
+(fn run_decls ((m Module) (st RunState) (ds (List Decl))) RunState
+  (match ds
+    (Nil st)
+    ((Cons d rest)
+      (match st
+        ((RunState th acc)
+          (match d
+            ((DAxiom a)
+              (match (unreflect_goal (axdecl_goal a))
+                (None (run_decls m (RunState th (Cons (COFail (axdecl_name a)) acc)) rest))
+                ((Some g)
+                  (run_decls m
+                    (RunState (TheoryCons (Axiom (axdecl_name a) (close_goal_for_storage g)) th)
+                              (Cons (COAxiom (axdecl_name a)) acc))
+                    rest))))
+            ((DClaim c)
+              (match (unreflect_goal (claim_goal c))
+                (None (run_decls m (RunState th (Cons (COFail (claim_name c)) acc)) rest))
+                ((Some g)
+                  (match (unreflect_proof (desugar_hyps m (goal_params g) Nil (claim_proof c)))
+                    (None (run_decls m (RunState th (Cons (COFail (claim_name c)) acc)) rest))
+                    ((Some p)
+                      (if (check_sequent m th (lift_sequent g) p)
+                          (run_decls m
+                            (RunState (TheoryCons (Proven (claim_name c) (close_goal_for_storage g)) th)
+                                      (Cons (COPass (claim_name c)) acc))
+                            rest)
+                          (run_decls m (RunState th (Cons (COFail (claim_name c)) acc)) rest)))))))))))))
+
+;; Run a whole file list (imports first, then targets), threading theory.
+;; An unparseable file is skipped (the Rust harness pre-validates parsing).
+(fn run_srcs ((m Module) (srcs (List (List Int))) (ctors (List Symbol)) (st RunState)) RunState
+  (match srcs
+    (Nil st)
+    ((Cons src rest)
+      (match (parse_decls src ctors)
+        (None (run_srcs m rest ctors st))
+        ((Some ds) (run_srcs m rest ctors (run_decls m st ds)))))))
+
+;; Production entry point: returns the per-claim/axiom outcomes (source order)
+;; for the whole file list, checked against m from the empty theory.
+(fn check_production ((m Module) (srcs (List (List Int))) (ctors (List Symbol))) (List ClaimOutcome)
+  (match (run_srcs m srcs ctors (RunState TheoryEmpty Nil))
+    ((RunState th acc) (rev_outcomes acc Nil))))
