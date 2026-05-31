@@ -159,8 +159,10 @@ fn run() -> ExitCode {
         fns: Vec::new(),
         externs: Vec::new(),
     };
-    // Pull out `--trace <claim>` (or `--trace all`); the rest are files.
+    // Pull out `--trace <claim>` (or `--trace all`) and `--native`; the rest
+    // are files.
     let mut trace_target: Option<String> = None;
+    let mut native = false;
     let mut files: Vec<String> = Vec::new();
     let mut ai = 0;
     while ai < args.len() {
@@ -169,18 +171,21 @@ fn run() -> ExitCode {
                 Some(n) => { trace_target = Some(n.clone()); ai += 2; }
                 None => { eprintln!("--trace requires a claim name (or 'all')"); return ExitCode::from(2); }
             }
+        } else if args[ai] == "--native" {
+            native = true;
+            ai += 1;
         } else {
             files.push(args[ai].clone());
             ai += 1;
         }
     }
 
-    // Default path: route checking through the SELF-HOSTED shard driver
-    // (kernel/driver.shard's check_production). The Rust process_file loop is
-    // kept only for `--trace`, whose per-step diagnostic tracer still lives in
-    // Rust. See run_shard_check.
-    if trace_target.is_none() {
-        return run_shard_check(&files, &kernel);
+    // Default path (incl. --trace): route checking through the SELF-HOSTED
+    // shard driver (kernel/driver.shard's check_production + kernel/trace.shard).
+    // `--native` falls back to the Rust process_file loop, kept as the
+    // differential oracle and a fast escape hatch. See run_shard_check.
+    if !native {
+        return run_shard_check(&files, &kernel, trace_target.as_deref());
     }
 
     let mut ctx = Ctx {
@@ -2091,12 +2096,15 @@ fn run_self_check(args: &[String]) -> ExitCode {
 // per-step diagnostic tracer is not yet ported to shard.
 // ----------------------------------------------------------------------
 
-fn run_shard_check(files: &[String], kernel: &ast::Module) -> ExitCode {
+fn run_shard_check(files: &[String], kernel: &ast::Module, trace: Option<&str>) -> ExitCode {
     if files.is_empty() {
         eprintln!("usage: check [--trace <claim>|all] <proof_file.shard>...");
         return ExitCode::from(2);
     }
     let targets: Vec<PathBuf> = files.iter().map(PathBuf::from).collect();
+    // The trace target as a Symbol: the claim name, "all", or a sentinel that
+    // matches nothing when no --trace was given.
+    let trace_target = trace.unwrap_or("__no_trace__").to_string();
 
     let mk_ctx = |seed: ast::Module| Ctx {
         user_module_value: module_to_value(&seed),
@@ -2155,10 +2163,10 @@ fn run_shard_check(files: &[String], kernel: &ast::Module) -> ExitCode {
         .collect();
     let ctorset = sym_list_native(&ctor_names);
 
-    // (check_production <M> <srcs> <ctors>) → (List ClaimOutcome).
+    // (check_production <M> <srcs> <ctors> <trace-target>) → (List ClaimOutcome).
     let call = ast::Expr::Call(
         "check_production".into(),
-        vec![m_ctx.user_module_value.clone(), srcs_list, ctorset],
+        vec![m_ctx.user_module_value.clone(), srcs_list, ctorset, ast::Expr::SymLit(trace_target)],
     );
     let result = match eval_raw(&eval_ctx.user_module, &call).and_then(|v| value_to_native_expr(&v)) {
         Ok(v) => v,
@@ -2171,22 +2179,29 @@ fn run_shard_check(files: &[String], kernel: &ast::Module) -> ExitCode {
             other => format!("{:?}", other),
         }
     };
+    // an already-native (List Int) of codepoints → String.
+    let text = |e: &ast::Expr| -> String {
+        decode_list(e).iter().filter_map(|x| match x {
+            ast::Expr::IntLit(c) => char::from_u32(*c as u32),
+            _ => None,
+        }).collect()
+    };
     let (mut passed, mut failed, mut axioms) = (0usize, 0usize, 0usize);
     for item in decode_list(&result) {
         match item {
-            ast::Expr::Ctor(tag, a) if tag == "COPass" && a.len() == 1 => {
+            ast::Expr::Ctor(tag, a) if tag == "COPass" && a.len() == 2 => {
+                let block = text(&a[1]);
+                if !block.is_empty() { println!("{}", block); }   // --trace block, if any
                 println!("PASS  {}", sym_at(a)); passed += 1;
             }
             ast::Expr::Ctor(tag, a) if tag == "COAxiom" && a.len() == 1 => {
                 println!("AXIOM {}  (admitted without proof)", sym_at(a)); axioms += 1;
             }
-            ast::Expr::Ctor(tag, a) if tag == "COFail" && a.len() == 2 => {
+            ast::Expr::Ctor(tag, a) if tag == "COFail" && a.len() == 3 => {
+                let block = text(&a[2]);
+                if !block.is_empty() { println!("{}", block); }   // --trace block, if any
                 println!("FAIL  {}", sym_at(a));
-                // a[1] is the diagnostic, an already-native (List Int) of codepoints.
-                let detail: String = decode_list(&a[1]).iter().filter_map(|e| match e {
-                    ast::Expr::IntLit(c) => char::from_u32(*c as u32),
-                    _ => None,
-                }).collect();
+                let detail = text(&a[1]);
                 if !detail.is_empty() { println!("{}", detail); }
                 failed += 1;
             }

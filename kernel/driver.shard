@@ -122,13 +122,20 @@
 ;; axiom — resolves.
 ;; ===========================================================================
 
+;; Each outcome carries a `trace` field: the `--trace` block for the claim, or
+;; empty (Nil) when this claim isn't the trace target. The Rust harness prints
+;; the block (if any) before the PASS/FAIL line.
 (type ClaimOutcome
-  (COPass  Symbol)                              ; a claim whose proof checked
-  (COFail  Symbol (List Int))                   ; a claim that failed — name + diagnostic detail
+  (COPass  Symbol (List Int))                   ; name, trace-block
+  (COFail  Symbol (List Int) (List Int))        ; name, diagnostic detail, trace-block
   (COAxiom Symbol))                             ; an axiom admitted without proof
 
 ;; theory threaded + outcomes accumulated in REVERSE (prepended; caller reverses)
 (type RunState (RunState Theory (List ClaimOutcome)))
+
+;; Does `--trace target` want this claim traced? ('all matches everything.)
+(fn want_trace ((name Symbol) (target Symbol)) Bool
+  (if (sym_eq target (quote all)) True (sym_eq name target)))
 
 (fn rev_outcomes ((xs (List ClaimOutcome)) (acc (List ClaimOutcome))) (List ClaimOutcome)
   (match xs
@@ -138,7 +145,11 @@
 ;; Process one file's decls in source order, threading the theory and
 ;; accumulating outcomes. A claim that passes is admitted as (Proven …); an
 ;; axiom is admitted as (Axiom …); both with the goal closed for citation.
-(fn run_decls ((m Module) (st RunState) (ds (List Decl))) RunState
+;; the `--trace` block for claim `c` if it's the target, else Nil.
+(fn claim_trace ((m Module) (th Theory) (g Goal) (p Proof) (name Symbol) (target Symbol)) (List Int)
+  (if (want_trace name target) (trace_block m th (lift_sequent g) p name) Nil))
+
+(fn run_decls ((m Module) (st RunState) (ds (List Decl)) (target Symbol)) RunState
   (match ds
     (Nil st)
     ((Cons d rest)
@@ -147,43 +158,46 @@
           (match d
             ((DAxiom a)
               (match (unreflect_goal (axdecl_goal a))
-                (None (run_decls m (RunState th (Cons (COFail (axdecl_name a)) acc)) rest))
+                (None (run_decls m (RunState th (Cons (COFail (axdecl_name a) "could not un-reflect axiom goal" Nil) acc)) rest target))
                 ((Some g)
                   (run_decls m
                     (RunState (TheoryCons (Axiom (axdecl_name a) (close_goal_for_storage g)) th)
                               (Cons (COAxiom (axdecl_name a)) acc))
-                    rest))))
+                    rest target))))
             ((DClaim c)
               (match (unreflect_goal (claim_goal c))
-                (None (run_decls m (RunState th (Cons (COFail (claim_name c) "could not un-reflect goal") acc)) rest))
+                (None (run_decls m (RunState th (Cons (COFail (claim_name c) "could not un-reflect goal" Nil) acc)) rest target))
                 ((Some g)
                   (match (unreflect_proof (desugar_hyps m (goal_params g) Nil (claim_proof c)))
-                    (None (run_decls m (RunState th (Cons (COFail (claim_name c) "could not un-reflect proof") acc)) rest))
+                    (None (run_decls m (RunState th (Cons (COFail (claim_name c) "could not un-reflect proof" Nil) acc)) rest target))
                     ((Some p)
                       (if (check_sequent m th (lift_sequent g) p)
                           (run_decls m
                             (RunState (TheoryCons (Proven (claim_name c) (close_goal_for_storage g)) th)
-                                      (Cons (COPass (claim_name c)) acc))
-                            rest)
+                                      (Cons (COPass (claim_name c) (claim_trace m th g p (claim_name c) target)) acc))
+                            rest target)
                           ;; FAILED: render the proof-spine diagnostic (in shard).
                           (run_decls m
                             (RunState th
                                       (Cons (COFail (claim_name c)
-                                                    (failure_detail m th (lift_sequent g) p)) acc))
-                            rest)))))))))))))
+                                                    (failure_detail m th (lift_sequent g) p)
+                                                    (claim_trace m th g p (claim_name c) target)) acc))
+                            rest target)))))))))))))
 
 ;; Run a whole file list (imports first, then targets), threading theory.
 ;; An unparseable file is skipped (the Rust harness pre-validates parsing).
-(fn run_srcs ((m Module) (srcs (List (List Int))) (ctors (List Symbol)) (st RunState)) RunState
+(fn run_srcs ((m Module) (srcs (List (List Int))) (ctors (List Symbol)) (st RunState) (target Symbol)) RunState
   (match srcs
     (Nil st)
     ((Cons src rest)
       (match (parse_decls src ctors)
-        (None (run_srcs m rest ctors st))
-        ((Some ds) (run_srcs m rest ctors (run_decls m st ds)))))))
+        (None (run_srcs m rest ctors st target))
+        ((Some ds) (run_srcs m rest ctors (run_decls m st ds target) target))))))
 
 ;; Production entry point: returns the per-claim/axiom outcomes (source order)
-;; for the whole file list, checked against m from the empty theory.
-(fn check_production ((m Module) (srcs (List (List Int))) (ctors (List Symbol))) (List ClaimOutcome)
-  (match (run_srcs m srcs ctors (RunState TheoryEmpty Nil))
+;; for the whole file list, checked against m from the empty theory. `target`
+;; is the `--trace` claim name ('all for every claim, or a non-matching
+;; sentinel for no tracing).
+(fn check_production ((m Module) (srcs (List (List Int))) (ctors (List Symbol)) (target Symbol)) (List ClaimOutcome)
+  (match (run_srcs m srcs ctors (RunState TheoryEmpty Nil) target)
     ((RunState th acc) (rev_outcomes acc Nil))))
