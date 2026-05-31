@@ -22,9 +22,10 @@
 ;;;          behaviour for ALL inputs.
 ;;;
 ;;; This is the OUTPUT+batched-stdin slice (everything up-front knowable). The
-;;; lazy oracle (a read whose result depends on prior computation — true
-;;; mid-computation syscalls) and the monotonicity-as-theorem demo are the next
-;;; steps; the clock field is here as the sequencing token they will build on.
+;;; clock's sequencing discipline is now PROVEN (clock_counts_effects below:
+;;; clock = start + #effects, so every effect's clock is distinct + monotonic).
+;;; The remaining step is the lazy oracle — a read whose result depends on prior
+;;; computation (true mid-computation syscalls), not just batched-up-front input.
 
 (import "../../std/list.shard")   ; append (+ append_assoc, append_nil_right)
 
@@ -109,3 +110,31 @@
                      (Rewrite (Lemma 'append_assoc) Lr Lhs True (list))
                      (Simp Lhs))
                Refl)))))
+
+;; --- proof 3: THE CLOCK THEOREM (option C's discipline, proven) -------------
+;; ∀ i c o.  w_clock(echo_go i c o) = (+ c (len i))
+;; The clock equals its starting value plus the number of effects performed —
+;; so the N writes use clocks c, c+1, …, c+N-1: all DISTINCT and MONOTONIC. The
+;; sequencing discipline is a proven equation, not a typing rule. Induct on the
+;; input list; `lia` discharges the linear arithmetic (the running count's
+;; associativity), the IH supplies the recursive clock.
+(claim clock_counts_effects
+  (Goal
+    (list (Param 'i (ty List (ty List Int)))
+          (Param 'c (ty Int))
+          (Param 'o (ty List (ty List Int))))
+    (list)
+    (Equation
+      (Call 'w_clock (list (Call 'echo_go (list (FVar 'i) (FVar 'c) (FVar 'o)))))
+      (Call '+ (list (FVar 'c) (Call 'len (list (FVar 'i)))))))
+  (Induct 'i
+    (list
+      (Case 'Nil
+        ;; w_clock → c ; (+ c (len Nil)) → (+ c 0) ; lia closes c = c+0
+        (Steps (list (Simp Both)) (ByTheory 'lia (Cert 'lia (list)))))
+      (Case 'Cons
+        ;; LHS → w_clock(echo_go rest (c+1) …) →[IH] (+ (+ c 1) (len rest))
+        ;; RHS → (+ c (+ 1 (len rest))) ; lia closes (c+1)+L = c+(1+L)
+        (Steps (list (Simp Both)
+                     (Rewrite (Hyp 'ih) Lr Lhs True (list)))
+               (ByTheory 'lia (Cert 'lia (list))))))))
