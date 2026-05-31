@@ -134,11 +134,17 @@ machine target (§3).
 **Self-hosting status.** The front-end has moved into shard: the s-expression
 reader and module parser (`kernel/reader.shard`) are validated byte-for-byte
 against the Rust loader, and an environment-machine evaluator makes them fast
-enough to use. `eval` now exists as a standalone shard program
-(`examples/io/eval_app.shard`, run via `check run`) that reads files and
-evaluates them as a direct-style `World -> World` function — I/O is done by
-`extern` calls (uninterpreted in proofs, performed by the run driver), with Rust
-only ferrying bytes. The remaining cord-cutter is the shard→machine compiler.
+enough to use. Every driver — `check`, `run`, and `eval` — now parses
+user/target code through this shard reader (`build_module` / `parse_expr`); the
+Rust loader (`load.rs`) survives only as (a) the **bootstrap floor** — it parses
+the kernel and the reader toolchain itself into the VM, since the reader cannot
+parse itself — and (b) the **reference oracle** the parse/module/claims
+differential harnesses validate the shard reader against. `eval` also exists as
+a standalone shard program (`examples/io/eval_app.shard`, run via `check run`)
+that reads files and evaluates them as a direct-style `World -> World` function
+— I/O is done by `extern` calls (uninterpreted in proofs, performed by the run
+driver), with Rust only ferrying bytes. The remaining cord-cutter is the
+shard→machine compiler.
 
 
 ## 7. Why now: the generate / check asymmetry

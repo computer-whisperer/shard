@@ -30,11 +30,14 @@
 //!     loader (a later slice). Errors at this slice — see
 //!     docs/REVISIT.md, "Proof-file module syntax".
 //!
-//! GOAL and PROOF are parsed as narrow expressions against the
-//! kernel's ctor set (so `(Goal …)`, `(Refl)`, `(ByTheory …)` etc.
-//! resolve as `Ctor`s) and then evaluated to runtime values. This
-//! avoids inventing a new sexp-to-value protocol — the kernel's
-//! existing ctor application IS the value-construction syntax.
+//! Parsing is done by the SELF-HOSTED shard reader (kernel/reader.shard):
+//! the module (types/fns/externs) AND each claim's GOAL/PROOF are parsed in
+//! shard, against the kernel's ctor set, by the checker driver
+//! (kernel/driver.shard's `check_production_src`). The Rust loader
+//! (`load.rs`) is no longer on the target path — it survives only as the
+//! bootstrap floor (loading the kernel + reader toolchain into the VM, since
+//! the reader cannot parse itself) and as the reference oracle the
+//! parse/module/claims differential harnesses check the reader against.
 //!
 //! Exit codes: 0 = all claims passed, 1 = some claim failed, 2 =
 //! a load or eval error (no claim outcome could be determined).
@@ -311,16 +314,6 @@ fn decode_list(v: &ast::Expr) -> Vec<&ast::Expr> {
     out
 }
 
-/// Parse a sexp `Value` as a narrow expression against the kernel's
-/// ctor set, then evaluate it to a runtime value. The two steps
-/// together turn `(Goal (Cons (Param 'x …) …) Nil (Equation …))` into
-/// the corresponding Ctor value tree.
-fn build_value(v: &Value, kernel: &ast::Module) -> Result<ast::Expr, String> {
-    let ast = load::expr_from_value(v, kernel)
-        .map_err(|e| format!("load: {}", e))?;
-    eval::eval(kernel, &ast).map_err(|e| format!("eval: {:?}", e))
-}
-
 // ----------------------------------------------------------------------
 // `eval` subcommand — run an object program, not check a proof.
 //
@@ -344,13 +337,15 @@ fn build_value(v: &Value, kernel: &ast::Module) -> Result<ast::Expr, String> {
 fn run_eval(args: &[String]) -> ExitCode {
     let mut raw = false;
     let mut both = false;
-    let mut reflected_input = false;
     let mut positional: Vec<&String> = Vec::new();
     for a in args {
         match a.as_str() {
             "--no-bootstrap" | "--raw" | "--native" => raw = true,
             "--both" | "--compare" => both = true,
-            "--reflected" => reflected_input = true,
+            // `--reflected` (raw Expr-datum input) is now subsumed: parse_expr
+            // parses both surface syntax and raw Expr-ctor data. Accepted as a
+            // no-op for back-compat.
+            "--reflected" => {}
             s if s.starts_with("--") => {
                 eprintln!("error: unknown flag {}", s);
                 return ExitCode::from(2);
@@ -372,60 +367,50 @@ fn run_eval(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let user_module = ast::Module {
-        types: kernel.types.clone(),
-        fns: Vec::new(),
-        externs: Vec::new(),
+    let toolchain_vm = match load_toolchain_vm(&kernel) {
+        Ok(m) => m,
+        Err(code) => return code,
     };
-    let mut ctx = Ctx {
+    let user_module = match build_user_module_via_shard(&toolchain_vm, &kernel, files) {
+        Ok(m) => m,
+        Err(code) => return code,
+    };
+    let ctx = Ctx {
         user_module_value: module_to_value(&user_module),
         user_module,
         loaded: std::collections::HashSet::new(),
         in_progress: Vec::new(),
     };
-    for f in files {
-        if let Err(code) = process_file(&PathBuf::from(f.as_str()), &mut ctx, &kernel) {
-            return code;
-        }
-    }
 
-    // Build the program in BOTH representations: `native` (executable, for
-    // the Rust engine) and `reflected` (the Expr datum, for compute_expr).
-    //   - surface input  (default): parse to native via expr_from_str, then
-    //                               reflect for the bootstrap path.
-    //   - reflected input (--reflected): build the datum, then un-reflect for
-    //                               the native path (may fail on Match/Let).
-    let (reflected, native): (ast::Expr, Result<ast::Expr, String>) = if reflected_input {
-        let forms = match parse_top_level(expr_src) {
-            Ok(fs) => fs,
-            Err(e) => {
-                eprintln!("error parsing expression: {}", e);
-                return ExitCode::from(2);
-            }
-        };
-        if forms.len() != 1 {
-            eprintln!("error: expected exactly one expression, got {}", forms.len());
+    // Parse EXPR with the shard reader's `parse_expr`, using the kernel + user
+    // ctor set so the program's ctors resolve. It returns the program as a
+    // reflected Expr datum — that IS `reflected` (fed to compute_expr on the
+    // bootstrap path); `value_to_native_expr` gives the executable `native`
+    // form (for the Rust engine). Surface sugar (string literals, `'X`) and
+    // raw Expr-ctor data both parse here.
+    let ctor_names: Vec<String> = ctx.user_module.types.iter()
+        .flat_map(|td| td.ctors.iter().map(|cd| cd.name.clone()))
+        .collect();
+    let pe_call = ast::Expr::Call(
+        "parse_expr".into(),
+        vec![line_to_event_native(expr_src), sym_list_native(&ctor_names)],
+    );
+    let reflected: ast::Expr = match eval::eval(&toolchain_vm, &pe_call) {
+        Ok(ast::Expr::Ctor(n, a)) if n == "Some" && a.len() == 1 => a[0].clone(),
+        Ok(ast::Expr::Ctor(n, _)) if n == "None" => {
+            eprintln!("error: could not parse expression: {}", expr_src);
             return ExitCode::from(2);
         }
-        let datum = match build_value(&forms[0], &kernel) {
-            Ok(e) => e,
-            Err(e) => {
-                eprintln!("error building expression: {}", e);
-                return ExitCode::from(2);
-            }
-        };
-        let nat = value_to_native_expr(&datum);
-        (datum, nat)
-    } else {
-        let nat = match load::expr_from_str(expr_src, &ctx.user_module) {
-            Ok(e) => e,
-            Err(e) => {
-                eprintln!("error parsing expression: {}", e);
-                return ExitCode::from(2);
-            }
-        };
-        (expr_to_value(&nat), Ok(nat))
+        Ok(other) => {
+            eprintln!("error: parse_expr returned an unexpected value: {}", show_reflected(&other));
+            return ExitCode::from(2);
+        }
+        Err(e) => {
+            eprintln!("error parsing expression: {:?}", e);
+            return ExitCode::from(2);
+        }
     };
+    let native: Result<ast::Expr, String> = value_to_native_expr(&reflected);
 
     // Both results are returned in REFLECTED form so they can be compared
     // and printed uniformly.
@@ -962,26 +947,11 @@ fn run_shard_check(files: &[String], kernel: &ast::Module, trace: Option<&str>) 
     // matches nothing when no --trace was given.
     let trace_target = trace.unwrap_or("__no_trace__").to_string();
 
-    let mk_ctx = |seed: ast::Module| Ctx {
-        user_module_value: module_to_value(&seed),
-        user_module: seed,
-        loaded: std::collections::HashSet::new(),
-        in_progress: Vec::new(),
+    // The VM that runs the driver: kernel (types + fns) + the shard toolchain.
+    let toolchain_vm = match load_toolchain_vm(kernel) {
+        Ok(m) => m,
+        Err(code) => return code,
     };
-
-    // eval module = kernel (types + fns) + the shard toolchain that runs the
-    // driver. The toolchain now lives in the kernel dir.
-    let mut eval_ctx = mk_ctx(ast::Module {
-        types: kernel.types.clone(),
-        fns: kernel.fns.clone(),
-        externs: kernel.externs.clone(),
-    });
-    let kdir = default_kernel_dir();
-    for tool in &["reader.shard", "unreflect.shard", "desugar.shard", "trace.shard", "driver.shard"] {
-        if let Err(code) = process_file(&kdir.join(tool), &mut eval_ctx, kernel) {
-            return code;
-        }
-    }
 
     // Ordered file list (imports first, then targets), and their sources.
     let order = match ordered_closure(&targets) {
@@ -999,7 +969,7 @@ fn run_shard_check(files: &[String], kernel: &ast::Module, trace: Option<&str>) 
     // M (the module proofs reduce against) is built IN SHARD by check_production_src:
     // it folds the self-hosted reader's parse_module over `srcs` (dependency order)
     // and merges onto the kernel-types seed. load.rs no longer parses the targets —
-    // it only loaded the kernel + toolchain into the VM (eval_ctx) above.
+    // it only loaded the kernel + toolchain into the VM (toolchain_vm) above.
     let seed = module_to_value(&ast::Module {
         types: kernel.types.clone(),
         fns: Vec::new(),
@@ -1015,7 +985,7 @@ fn run_shard_check(files: &[String], kernel: &ast::Module, trace: Option<&str>) 
         "check_production_src".into(),
         vec![seed, base_ctors, srcs_list, ast::Expr::SymLit(trace_target)],
     );
-    let result = match eval_raw(&eval_ctx.user_module, &call).and_then(|v| value_to_native_expr(&v)) {
+    let result = match eval_raw(&toolchain_vm, &call).and_then(|v| value_to_native_expr(&v)) {
         Ok(v) => v,
         Err(e) => { eprintln!("shard check_production error: {}", e); return ExitCode::from(2); }
     };
@@ -1066,17 +1036,108 @@ fn run_shard_check(files: &[String], kernel: &ast::Module, trace: Option<&str>) 
 }
 
 // ----------------------------------------------------------------------
+// Loading user code through the SHARD reader.
+//
+// `check`, `run`, and `eval` all parse user/target `.shard` code with the
+// self-hosted reader (kernel/reader.shard) rather than the Rust loader.
+// load.rs survives only as (a) the bootstrap floor — it parses the kernel
+// and the reader toolchain itself into the VM, since the reader cannot
+// parse itself — and (b) the reference oracle the parse/module/claims
+// differential harnesses validate the shard reader against.
+// ----------------------------------------------------------------------
+
+/// Build a VM module with the kernel + the self-hosted reader toolchain
+/// (reader/unreflect/desugar/trace/driver) loaded, so the shard loader
+/// (`build_module`, `parse_expr`, `check_production_src`, …) can be
+/// evaluated on the native engine. This is the BOOTSTRAP parser load (the
+/// minimal Rust parsing needed to bring the shard front-end up).
+fn load_toolchain_vm(kernel: &ast::Module) -> Result<ast::Module, ExitCode> {
+    let mut ctx = Ctx {
+        user_module_value: module_to_value(kernel),
+        user_module: ast::Module {
+            types: kernel.types.clone(),
+            fns: kernel.fns.clone(),
+            externs: kernel.externs.clone(),
+        },
+        loaded: std::collections::HashSet::new(),
+        in_progress: Vec::new(),
+    };
+    let kdir = default_kernel_dir();
+    for tool in &["reader.shard", "unreflect.shard", "desugar.shard", "trace.shard", "driver.shard"] {
+        process_file(&kdir.join(tool), &mut ctx, kernel)?;
+    }
+    Ok(ctx.user_module)
+}
+
+/// Parse user `.shard` file(s) (with transitive imports) into a native
+/// `ast::Module` using the SHARD reader's `build_module` — not the Rust
+/// loader. `toolchain_vm` must have the reader loaded (load_toolchain_vm).
+/// The module is seeded with the kernel's types + ctor names so user fn
+/// bodies resolve kernel ctors, exactly as the Rust loader's kernel base
+/// did. The reader's reflected `Module` value is un-reflected to native so
+/// the program can run on the engine (where the lazy-I/O handler lives).
+fn build_user_module_via_shard(
+    toolchain_vm: &ast::Module,
+    kernel: &ast::Module,
+    files: &[&String],
+) -> Result<ast::Module, ExitCode> {
+    let targets: Vec<PathBuf> = files.iter().map(|f| PathBuf::from(f.as_str())).collect();
+    let order = ordered_closure(&targets)?;
+    // Sources in dependency order (imports first), as a (List (List Int)).
+    let mut srcs_list = nil();
+    for p in order.iter().rev() {
+        match std::fs::read_to_string(p) {
+            Ok(s) => { srcs_list = ctor("Cons", vec![line_to_event_native(&s), srcs_list]); }
+            Err(e) => { eprintln!("error reading {}: {}", p.display(), e); return Err(ExitCode::from(2)); }
+        }
+    }
+    let seed = module_to_value(&ast::Module {
+        types: kernel.types.clone(),
+        fns: Vec::new(),
+        externs: Vec::new(),
+    });
+    let kernel_ctor_names: Vec<String> = kernel.types.iter()
+        .flat_map(|td| td.ctors.iter().map(|cd| cd.name.clone()))
+        .collect();
+    let base_ctors = sym_list_native(&kernel_ctor_names);
+    // (build_module <srcs> <seed> <base_ctors>) → (Option Module).
+    let call = ast::Expr::Call("build_module".into(), vec![srcs_list, seed, base_ctors]);
+    let result = match eval::eval(toolchain_vm, &call) {
+        Ok(v) => v,
+        Err(e) => { eprintln!("shard build_module error: {:?}", e); return Err(ExitCode::from(2)); }
+    };
+    match &result {
+        ast::Expr::Ctor(n, a) if n == "Some" && a.len() == 1 =>
+            unreflect_module(&a[0]).map_err(|e| {
+                eprintln!("error un-reflecting module from the shard reader: {}", e);
+                ExitCode::from(2)
+            }),
+        ast::Expr::Ctor(n, _) if n == "None" => {
+            eprintln!("error: the shard reader could not parse the target module(s)");
+            Err(ExitCode::from(2))
+        }
+        other => {
+            eprintln!("error: build_module returned an unexpected value: {}", show_reflected(other));
+            Err(ExitCode::from(2))
+        }
+    }
+}
+
+// ----------------------------------------------------------------------
 // `run` subcommand — execute a direct-style world-threading program.
 //
-// `check run <file.shard>...` reduces `(main world0)` where
-//   World = (World <clock:Int> <input:(List (List Int))> <output:(List (List Int))>)
-// world0 carries clock 0, `input` = the real stdin (one (List Int) of
-// codepoints per line), and an empty `output`. `main : World -> World` is a
-// PURE function — it runs in the native reducer with NO effectful primitive;
-// the driver only FILLS the input field beforehand and DRAINS the output field
-// after. So a program that "does I/O" is a pure value the checker can prove
-// about (see examples/io/echo_world.shard). This is the batched-stdin slice;
-// a lazy oracle for mid-computation reads is the next step.
+// `check run <file.shard>...` parses the program through the SHARD reader
+// (build_user_module_via_shard) and reduces `(main world0)` where `main :
+// World -> World`. Two modes, by whether the program declares effectful
+// externs:
+//   - BATCHED (no externs): World = (World clock input output) carries I/O as
+//     DATA; the driver slurps stdin into `input` and drains `output`, and
+//     `main` is a PURE value the checker can prove about (echo_world.shard).
+//   - LAZY (externs): World is a bare clock token; a run-time effect handler
+//     performs the real I/O for each stuck extern mid-reduction (cat_lazy,
+//     cat_loop, filecat, calc_repl, snake_app).
+// Either way `main` runs on the NATIVE reducer — which is why the program is
+// un-reflected to a native module after the shard reader parses it.
 // ----------------------------------------------------------------------
 fn run_program(args: &[String]) -> ExitCode {
     // `--` separates the program's SOURCE files from its runtime ARGUMENTS
@@ -1106,31 +1167,28 @@ fn run_program(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    // Load the user program against a kernel.types-only base, THEN append the
-    // kernel's fns as a FALLBACK. lookup_fn returns the first match, so a user
-    // fn shadows a same-named kernel fn (e.g. calc's helpers vs term.shard's),
-    // while a program that calls a kernel fn it doesn't define (an eval app →
-    // `compute_expr`) still resolves it. Affects only `run`; proof-checking
-    // uses its own M.
-    let user_module = ast::Module {
-        types: kernel.types.clone(),
-        fns: Vec::new(),
-        externs: Vec::new(),
+    // Parse the user program through the SHARD reader (build_module), seeded
+    // with the kernel's types. THEN append the kernel's fns as a FALLBACK:
+    // lookup_fn returns the first match, so a user fn shadows a same-named
+    // kernel fn (e.g. calc's helpers vs term.shard's), while a program that
+    // calls a kernel fn it doesn't define (an eval app → `compute_expr`) still
+    // resolves it. Affects only `run`; proof-checking uses its own M.
+    let toolchain_vm = match load_toolchain_vm(&kernel) {
+        Ok(m) => m,
+        Err(code) => return code,
     };
-    let mut ctx = Ctx {
+    let mut user_module = match build_user_module_via_shard(&toolchain_vm, &kernel, &positional) {
+        Ok(m) => m,
+        Err(code) => return code,
+    };
+    user_module.fns.extend(kernel.fns.iter().cloned());
+    user_module.externs.extend(kernel.externs.iter().cloned());
+    let ctx = Ctx {
         user_module_value: module_to_value(&user_module),
         user_module,
         loaded: std::collections::HashSet::new(),
         in_progress: Vec::new(),
     };
-    for f in &positional {
-        if let Err(code) = process_file(&PathBuf::from(f.as_str()), &mut ctx, &kernel) {
-            return code;
-        }
-    }
-    ctx.user_module.fns.extend(kernel.fns.iter().cloned());
-    ctx.user_module.externs.extend(kernel.externs.iter().cloned());
-    ctx.user_module_value = module_to_value(&ctx.user_module);
 
     // Two run modes, chosen by whether the program declares effectful externs.
     if ctx.user_module.externs.is_empty() {
@@ -1374,9 +1432,132 @@ fn value_to_native_expr(e: &ast::Expr) -> Result<ast::Expr, String> {
             Box::new(value_to_native_expr(t)?),
             Box::new(value_to_native_expr(el)?),
         )),
-        ("Match", _) | ("Let", _) =>
-            Err(format!("un-reflection of {} in eval input is not supported", name)),
+        ("Match", [scrut, arms]) => Ok(ast::Expr::Match(
+            Box::new(value_to_native_expr(scrut)?),
+            decode_list(arms).iter().map(|a| unreflect_arm(a)).collect::<Result<_, _>>()?,
+        )),
+        ("Let", [rhss, body]) => Ok(ast::Expr::Let(
+            unreflect_list(rhss)?,
+            Box::new(value_to_native_expr(body)?),
+        )),
         _ => Err(format!("cannot un-reflect Expr node: {:?}", e)),
+    }
+}
+
+// ----------------------------------------------------------------------
+// Reflected datum → native AST un-reflectors.
+//
+// These are the structural inverse of the `*_to_value` reflectors below
+// (module_to_value / expr_to_value / …). They turn the Module VALUE the
+// self-hosted reader produces (a Ctor tree: `(Module (Cons (TypeDef …) …)
+// …)`) back into a native `ast::Module` the engine can execute. This is
+// the bridge that lets `run`/`eval` load user code through the shard
+// reader (`build_module`) yet still run `main` on the native VM — where
+// the lazy-I/O effect handler lives. Mechanical and 1:1 with
+// kernel/{term,module}.shard; if those evolve, this follows (the
+// `module-check` differential harness keeps the reader honest, and these
+// invert the same shapes module_to_value emits).
+// ----------------------------------------------------------------------
+
+fn unreflect_arm(e: &ast::Expr) -> Result<ast::Arm, String> {
+    match e {
+        ast::Expr::Ctor(n, a) if n == "Arm" && a.len() == 2 =>
+            Ok(ast::Arm { pat: unreflect_pat(&a[0])?, body: value_to_native_expr(&a[1])? }),
+        other => Err(format!("expected an Arm datum, got: {:?}", other)),
+    }
+}
+
+fn unreflect_pat(e: &ast::Expr) -> Result<ast::Pat, String> {
+    let (name, args) = match e {
+        ast::Expr::Ctor(n, a) => (n.as_str(), a.as_slice()),
+        other => return Err(format!("expected a Pat datum, got: {:?}", other)),
+    };
+    match (name, args) {
+        ("PVar", []) => Ok(ast::Pat::PVar),
+        ("PInt", [ast::Expr::IntLit(n)]) => Ok(ast::Pat::PInt(*n)),
+        ("PSym", [ast::Expr::SymLit(s)]) => Ok(ast::Pat::PSym(s.clone())),
+        ("PCtor", [ast::Expr::SymLit(n), sub]) => Ok(ast::Pat::PCtor(
+            n.clone(),
+            decode_list(sub).iter().map(|p| unreflect_pat(p)).collect::<Result<_, _>>()?,
+        )),
+        _ => Err(format!("cannot un-reflect Pat node: {:?}", e)),
+    }
+}
+
+fn unreflect_type(e: &ast::Expr) -> Result<ast::Type, String> {
+    let (name, args) = match e {
+        ast::Expr::Ctor(n, a) => (n.as_str(), a.as_slice()),
+        other => return Err(format!("expected a Type datum, got: {:?}", other)),
+    };
+    match (name, args) {
+        ("TVar", [ast::Expr::SymLit(s)]) => Ok(ast::Type::TVar(s.clone())),
+        ("TCon", [ast::Expr::SymLit(n), l]) => Ok(ast::Type::TCon(
+            n.clone(),
+            decode_list(l).iter().map(|t| unreflect_type(t)).collect::<Result<_, _>>()?,
+        )),
+        _ => Err(format!("cannot un-reflect Type node: {:?}", e)),
+    }
+}
+
+fn unreflect_sym(e: &ast::Expr) -> Result<ast::Symbol, String> {
+    match e {
+        ast::Expr::SymLit(s) => Ok(s.clone()),
+        other => Err(format!("expected a Symbol, got: {:?}", other)),
+    }
+}
+
+fn unreflect_ctordef(e: &ast::Expr) -> Result<ast::CtorDef, String> {
+    match e {
+        ast::Expr::Ctor(n, a) if n == "CtorDef" && a.len() == 2 => Ok(ast::CtorDef {
+            name: unreflect_sym(&a[0])?,
+            fields: decode_list(&a[1]).iter().map(|t| unreflect_type(t)).collect::<Result<_, _>>()?,
+        }),
+        other => Err(format!("expected a CtorDef datum, got: {:?}", other)),
+    }
+}
+
+fn unreflect_typedef(e: &ast::Expr) -> Result<ast::TypeDef, String> {
+    match e {
+        ast::Expr::Ctor(n, a) if n == "TypeDef" && a.len() == 3 => Ok(ast::TypeDef {
+            name: unreflect_sym(&a[0])?,
+            params: decode_list(&a[1]).iter().map(|s| unreflect_sym(s)).collect::<Result<_, _>>()?,
+            ctors: decode_list(&a[2]).iter().map(|c| unreflect_ctordef(c)).collect::<Result<_, _>>()?,
+        }),
+        other => Err(format!("expected a TypeDef datum, got: {:?}", other)),
+    }
+}
+
+fn unreflect_fndef(e: &ast::Expr) -> Result<ast::FnDef, String> {
+    match e {
+        ast::Expr::Ctor(n, a) if n == "FnDef" && a.len() == 4 => Ok(ast::FnDef {
+            name: unreflect_sym(&a[0])?,
+            params: decode_list(&a[1]).iter().map(|t| unreflect_type(t)).collect::<Result<_, _>>()?,
+            ret: unreflect_type(&a[2])?,
+            body: value_to_native_expr(&a[3])?,
+        }),
+        other => Err(format!("expected a FnDef datum, got: {:?}", other)),
+    }
+}
+
+fn unreflect_externdef(e: &ast::Expr) -> Result<ast::ExternDef, String> {
+    match e {
+        ast::Expr::Ctor(n, a) if n == "ExternDef" && a.len() == 3 => Ok(ast::ExternDef {
+            name: unreflect_sym(&a[0])?,
+            params: decode_list(&a[1]).iter().map(|t| unreflect_type(t)).collect::<Result<_, _>>()?,
+            ret: unreflect_type(&a[2])?,
+        }),
+        other => Err(format!("expected an ExternDef datum, got: {:?}", other)),
+    }
+}
+
+fn unreflect_module(e: &ast::Expr) -> Result<ast::Module, String> {
+    match e {
+        ast::Expr::Ctor(n, a) if n == "Module" && a.len() == 3 => Ok(ast::Module {
+            types: decode_list(&a[0]).iter().map(|t| unreflect_typedef(t)).collect::<Result<_, _>>()?,
+            fns: decode_list(&a[1]).iter().map(|f| unreflect_fndef(f)).collect::<Result<_, _>>()?,
+            externs: decode_list(&a[2]).iter().map(|x| unreflect_externdef(x)).collect::<Result<_, _>>()?,
+        }),
+        other => Err(format!("expected a Module datum, got: {:?}", other)),
     }
 }
 
