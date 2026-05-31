@@ -22,15 +22,9 @@
 ;; tick: advance the clock. DEFINED — so its clock law is a proven lemma.
 (fn tick ((w World)) World (match w ((World n) (World (+ n 1)))))
 
-(claim tick_clock                              ; w_clock(tick w) = w_clock(w) + 1
-  (Goal (list (Param 'w (ty World))) (list)
-    (Equation
-      (Call 'w_clock (list (Call 'tick (list (FVar 'w)))))
-      (Call '+ (list (Call 'w_clock (list (FVar 'w))) (IntLit 1)))))
-  (CaseOn (FVar 'w) 'World
-    (list (CaseB 'World (list 'n)
-      (Steps (list (Rewrite (Hyp 0) Lr Both True (list))    ; w -> (World n)
-                   (Simp Both)) Refl)))))
+(claim tick_clock
+  (goal ((w World)) () (= (w_clock (tick w)) (+ (w_clock w) 1)))
+  (case-on w World ((case World (n) (steps ((rewrite (hyp 0) lr both true ()) (simp both)) refl)))))
 
 ;; the I/O vocabulary -----------------------------------------------------------
 ;; oracle_line: read the next input line (None at EOF) — UNINTERPRETED, no clock.
@@ -38,11 +32,8 @@
 (extern oracle_line ((w World)) (Option (List Int)))
 (extern emit        ((line (List Int)) (w World)) World)
 
-(axiom emit_clock                              ; w_clock(emit line w) = w_clock(w) + 1
-  (Goal (list (Param 'line (ty List Int)) (Param 'w (ty World))) (list)
-    (Equation
-      (Call 'w_clock (list (Call 'emit (list (FVar 'line) (FVar 'w)))))
-      (Call '+ (list (Call 'w_clock (list (FVar 'w))) (IntLit 1))))))
+(axiom emit_clock
+  (goal ((line (List Int)) (w World)) () (= (w_clock (emit line w)) (+ (w_clock w) 1))))
 
 ;; the program ------------------------------------------------------------------
 ;; cat (unbounded): read a line; EOF → tick + done; else write (emit) it after a
@@ -71,44 +62,5 @@
 ;; CaseOn the oracle; the Some step chains the IH with the per-step advance via
 ;; le_trans (b = the post-write clock).
 (claim cat_mono
-  (Goal (list (Param 'n (ty Nat)) (Param 'w (ty World))) (list)
-    (Equation
-      (Call 'le (list (Call 'w_clock (list (FVar 'w)))
-                      (Call 'w_clock (list (Call 'cat_fuel (list (FVar 'n) (FVar 'w)))))))
-      (Ctor 'True (list))))
-  (Induct 'n
-    (list
-      ;; Z: cat_fuel Z w = w ; le (clock w)(clock w).
-      (Case 'Z
-        (Steps (list (Simp Lhs)) (ByTheory 'ord (Cert 'ord (list)))))
-      ;; S k: step once, split on the oracle.
-      (Case 'S
-        (Steps (list (Simp Lhs))
-          (CaseOn (Call 'oracle_line (list (FVar 'w))) 'Option
-            (list
-              ;; None: result = tick w ; le (clock w)(clock(tick w)) via tick_clock.
-              (Case 'None
-                (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))   ; oracle_line w -> None
-                             (Simp Lhs)                             ; reduce match -> tick w
-                             (Rewrite (Lemma 'tick_clock) Lr Lhs True (list)))
-                       (ByTheory 'ord (Cert 'ord (list)))))
-              ;; Some line: result = cat_fuel k (emit line (tick w)).
-              ;;   le (clock w) (clock(cat_fuel k (emit line (tick w))))
-              ;;   via le_trans at b = clock(emit line (tick w)):
-              ;;     prem1  le (clock w) b          — emit_clock + tick_clock + ord
-              ;;     prem2  le b (clock(cat_fuel k …)) — the IH (Hyp 1) at (emit line (tick w))
-              (CaseB 'Some (list 'line)
-                (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))   ; oracle_line w -> (Some line)
-                             (Simp Lhs))                            ; reduce match -> cat_fuel k (emit line (tick w))
-                  (RewriteWith (Lemma 'le_trans) Lr Lhs
-                    (list (Inst 'b (Call 'w_clock
-                                     (list (Call 'emit (list (FVar 'line)
-                                                             (Call 'tick (list (FVar 'w)))))))))
-                    (list
-                      ;; prem1: le (clock w) (clock(emit line (tick w)))
-                      (Steps (list (Rewrite (Lemma 'emit_clock) Lr Lhs True (list))
-                                   (Rewrite (Lemma 'tick_clock) Lr Lhs True (list)))
-                             (ByTheory 'ord (Cert 'ord (list))))
-                      ;; prem2: the IH at w := (emit line (tick w))
-                      (RewriteWith (Hyp 1) Lr Lhs (list) (list) Refl))
-                    Refl))))))))))
+  (goal ((n Nat) (w World)) () (= (le (w_clock w) (w_clock (cat_fuel n w))) True))
+  (induct n ((case Z (steps ((simp lhs)) (by ord (list)))) (case S (steps ((simp lhs)) (case-on (oracle_line w) Option ((case None (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs) (rewrite (lemma tick_clock) lr lhs true ())) (by ord (list)))) (case Some (line) (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) (rewrite-with (lemma le_trans) lr lhs ((inst b (w_clock (emit line (tick w))))) ((steps ((rewrite (lemma emit_clock) lr lhs true ()) (rewrite (lemma tick_clock) lr lhs true ())) (by ord (list))) (rewrite-with (hyp 1) lr lhs () () refl)) refl))))))))))
