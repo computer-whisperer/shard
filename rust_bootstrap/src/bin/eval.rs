@@ -1,11 +1,11 @@
 //! `eval` — the clean narrow-interpreter passthrough.
 //!
 //! The Rust side is *only* a host: it bootstraps the kernel + shard toolchain
-//! + the kernel's executable entrypoint (`kernel/kernel.shard`) into the VM,
+//! + the kernel's executable entrypoint (`kernel/eval.shard`) into the VM,
 //! installs the World file-I/O extern handlers, and runs `(main world0)`.
 //! Everything else — reading the referenced `.shard` files (and, in time,
 //! their imports / stdlib), parsing, reducing, rendering — happens IN SHARD,
-//! inside `kernel.shard`, via the externs. No eval logic lives here.
+//! inside `eval.shard`, via the externs. No eval logic lives here.
 //!
 //!   eval <module.shard> <expr>
 //!
@@ -13,30 +13,79 @@
 //! eval path; `check` remains (deprecated) until the proof-check entrypoint is
 //! likewise a shard app run on top of this executor.
 
-use std::path::PathBuf;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use lexpr::Value;
+use lexpr::parse::Parser;
 use proving_bootstrap_v2::{ast, default_kernel_dir, eval, load};
+
+/// Resolve the entrypoint's import closure: each `(import "X")` is followed
+/// relative to the importing file's directory, post-order (deps before
+/// dependents), deduped by canonical path, with the entrypoint itself last.
+/// The kernel files declare no imports today, so this is one level deep; it
+/// stays correct as they gain their own. This is host-side bootstrap (the VM
+/// doesn't exist yet) — the analogue of a linker resolving a binary's deps.
+fn resolve_closure(entry: &Path) -> Result<Vec<PathBuf>, String> {
+    fn import_of(form: &Value) -> Option<String> {
+        let items: Vec<&Value> = form.list_iter()?.collect();
+        if items.len() != 2 {
+            return None;
+        }
+        match items[0].as_symbol()? {
+            "import" | "use-module" => items[1].as_str().map(|s| s.to_string()),
+            _ => None,
+        }
+    }
+    fn visit(p: &Path, order: &mut Vec<PathBuf>, seen: &mut HashSet<PathBuf>) -> Result<(), String> {
+        let canon = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+        if !seen.insert(canon) {
+            return Ok(());
+        }
+        let src = std::fs::read_to_string(p).map_err(|e| format!("reading {}: {}", p.display(), e))?;
+        let mut parser = Parser::from_str(&src);
+        let dir = p.parent();
+        loop {
+            match parser.next_value() {
+                Ok(Some(form)) => {
+                    if let Some(dep) = import_of(&form) {
+                        let rp = match dir {
+                            Some(d) => d.join(&dep),
+                            None => PathBuf::from(&dep),
+                        };
+                        visit(&rp, order, seen)?;
+                    }
+                }
+                Ok(None) => break,
+                Err(e) => return Err(format!("parsing {}: {}", p.display(), e)),
+            }
+        }
+        order.push(p.to_path_buf());
+        Ok(())
+    }
+    let mut order = Vec::new();
+    let mut seen = HashSet::new();
+    visit(entry, &mut order, &mut seen)?;
+    Ok(order)
+}
 
 fn main() -> ExitCode {
     let prog_args: Vec<String> = std::env::args().skip(1).collect();
 
-    // --- bootstrap the VM: the eval entrypoint's true closure ---------------
-    // eval needs only the prelude + Expr/Module machinery + the reducer + the
-    // reader — NOT the proof checker (proof/check/lia/eqdec/ord/farkas) or the
-    // proof toolchain (unreflect/desugar/trace/driver), and NOT std/. (This
-    // closure is hand-listed for now; once kernel.shard declares its imports it
-    // will be resolved, not hardcoded.)
-    let kdir = default_kernel_dir();
-    let files = [
-        "stdlib.shard", // prelude: List/Option/Bool/Pair
-        "module.shard", // Module/FnDef/Type + lookups
-        "term.shard",   // Expr/Pat/Arm + subst/open
-        "reduce.shard", // compute_expr (the reducer)
-        "reader.shard", // parse_module / parse_expr
-        "kernel.shard", // the entrypoint: main
-    ];
-    let paths: Vec<PathBuf> = files.iter().map(|f| kdir.join(f)).collect();
+    // --- bootstrap the VM: resolve the entrypoint's import closure ----------
+    // `kernel/eval.shard` declares the files it needs; we follow its imports
+    // (deps first, entrypoint last) and load exactly that closure — no proof
+    // checker, no proof toolchain, no std/. The list lives in the entrypoint,
+    // not here.
+    let entry = default_kernel_dir().join("eval.shard");
+    let paths = match resolve_closure(&entry) {
+        Ok(ps) => ps,
+        Err(e) => {
+            eprintln!("error resolving entrypoint closure: {}", e);
+            return ExitCode::from(2);
+        }
+    };
     let vm = match load::module_from_paths_with_base(&paths, None) {
         Ok(m) => m,
         Err(e) => {

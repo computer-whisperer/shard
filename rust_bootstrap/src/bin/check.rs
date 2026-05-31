@@ -2,7 +2,7 @@
 //!
 //! DEPRECATED orchestrator. The clean architecture is a thin Rust passthrough
 //! (`eval` bin) running a shard entrypoint that does its own file I/O; the
-//! eval path already moved there (`kernel/kernel.shard`). This binary remains
+//! eval path already moved there (`kernel/eval.shard`). This binary remains
 //! the working proof-checker until the check entrypoint is likewise a shard
 //! app run on top of the executor — at which point its bespoke orchestration
 //! (run_shard_check, the Rust module gate, run/eval subcommands) retires.

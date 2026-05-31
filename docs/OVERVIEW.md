@@ -140,7 +140,7 @@ Rust loader (`load.rs`) survives only as (a) the **bootstrap floor** — it pars
 the kernel and the reader toolchain itself into the VM, since the reader cannot
 parse itself — and (b) the **reference oracle** the parse/module/claims
 differential harnesses validate the shard reader against. `eval` is now its own
-clean entrypoint: the kernel's executable `main` lives in `kernel/kernel.shard`
+clean entrypoint: the kernel's executable `main` lives in `kernel/eval.shard`
 (a direct-style `World -> World` program that reads the referenced files itself
 and evaluates them), and the `eval` binary is a pure passthrough — it bootstraps
 the toolchain + entrypoint and runs `(main world)`, with no eval logic in Rust.

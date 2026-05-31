@@ -167,7 +167,7 @@ examples/              ; demonstrations (not the library)
   io/                  ;   World/extern I/O programs, run via `check run`:
                        ;     filecat / calc_repl / snake_app,
                        ;     + echo_world / cat_lazy / cat_loop (clock theorems)
-                       ;   (self-hosted `eval` is now kernel/kernel.shard, run
+                       ;   (self-hosted `eval` is now kernel/eval.shard, run
                        ;    via the `eval` binary)
 
 tools/
