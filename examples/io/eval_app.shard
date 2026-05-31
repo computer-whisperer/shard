@@ -1,30 +1,16 @@
-;;; eval_app.shard — `eval` as a standalone shard CLI app.
-;;;
-;;;   check cli tools/reader.shard examples/cli/eval_app.shard -- <module.shard> <expr>
-;;;
-;;; Pipeline, entirely in shard: GetArgs → ReadFile(module) →
-;;; parse_module → parse_expr → compute_expr → show_expr → Write → Exit.
-;;; The Rust side only ferries bytes (read the file, write the result);
-;;; parsing and evaluation are the self-hosted reader + kernel reducer.
-;;;
-;;; Needs tools/reader.shard (parse_module / parse_expr / typedef_ctors /
-;;; append_sym) loaded alongside it, plus the kernel's compute_expr.
+;;; eval_app.shard — `eval` as a direct-style World program (retires the (cli …)
+;;; version examples/cli/eval_app.shard). The pure pipeline `eval_run`
+;;; (parse_module → parse_expr → compute_expr → show_expr) is unchanged; only
+;;; the request/response state machine is replaced by a plain World -> World
+;;; `main`. Run with the reader toolchain loaded alongside:
+;;;   check run kernel/reader.shard examples/io/eval_app.shard -- <module.shard> <expr>
 
-;; ---- effect protocol (shared shape with the cli driver) -------------------
-(type Action
-  (GetArgs)
-  (ReadFile (List Int))
-  (Write    (List Int))
-  (Exit     Int))
+(type World (World Int))
 
-(type Event
-  (Started)
-  (Args   (List (List Int)))
-  (FileOk (List Int))
-  (FileErr)
-  (Wrote))
-
-(type (Step S A) (Step S A))
+(extern get_args  ((w World)) (Pair (List (List Int)) World))
+(extern read_file ((path (List Int)) (w World)) (Pair (Option (List Int)) World))
+(extern write     ((bytes (List Int)) (w World)) World)
+(extern exit      ((code Int) (w World)) World)
 
 ;; ---- rendering: Expr → surface bytes --------------------------------------
 (fn append_int ((xs (List Int)) (ys (List Int))) (List Int)
@@ -84,34 +70,16 @@
         ((Some e)
           (append_int (show_expr (compute_expr m e)) (Cons 10 Nil)))))))
 
-;; ---- update: the protocol state machine -----------------------------------
-;; State carries the expression string between GetArgs and the file read.
-(type EvalState
-  (ESInit)
-  (ESHaveExpr (List Int))
-  (ESDone))
-
-(fn evalapp ((s EvalState) (e Event)) (Step EvalState Action)
-  (match s
-    (ESInit
-      (match e
-        (Started (Step ESInit (GetArgs)))
-        ((Args files)
-          (match files
-            ((Cons mfile (Cons expr rest)) (Step (ESHaveExpr expr) (ReadFile mfile)))
-            (_ (Step ESDone (Write "usage: <module.shard> <expr>\n")))))
-        (_ (Step ESDone (Exit 2)))))
-    ((ESHaveExpr expr)
-      (match e
-        ((FileOk bytes) (Step ESDone (Write (eval_run bytes expr))))
-        (FileErr        (Step ESDone (Write "error: cannot read module file\n")))
-        (_              (Step ESDone (Exit 2)))))
-    (ESDone
-      (match e
-        (Wrote (Step ESDone (Exit 0)))
-        (_     (Step ESDone (Exit 0)))))))
-
-(cli
-  (state  EvalState)
-  (init   ESInit)
-  (update evalapp))
+;; ---- the World wrapper: args[0] = module file, args[1] = expression ---------
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Pair args w1)
+      (match args
+        ((Cons module_path (Cons expr_str _))
+          (match (read_file module_path w1)
+            ((Pair mmod w2)
+              (match mmod
+                (None             (exit 1 w2))                       ; can't read module
+                ((Some module_src)
+                  (exit 0 (write (eval_run module_src expr_str) w2)))))))
+        (_ (exit 2 w1))))))                                          ; usage: need 2 args

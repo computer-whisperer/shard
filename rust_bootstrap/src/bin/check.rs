@@ -84,16 +84,6 @@ fn run() -> ExitCode {
         return run_app(&args[1..]);
     }
 
-    // `cli` subcommand: run a shard program as a command-line app via the
-    // request/response effect loop. The app emits a request Action
-    // (GetArgs / ReadFile / Write / Exit); the driver services it and feeds
-    // the result back as the next Event. This is the externalized-
-    // continuation form of effect-as-data (BOUNDARIES mechanism C) — it
-    // lets a pure shard program take args, read files, and emit output.
-    if args[0] == "cli" {
-        return run_cli(&args[1..]);
-    }
-
     // `run` subcommand: execute a direct-style world-threading program.
     // `main : World -> World` runs in the pure reducer; the driver fills the
     // World's input field from stdin and flushes its output field. See
@@ -1267,175 +1257,6 @@ fn run_app(args: &[String]) -> ExitCode {
 }
 
 // ----------------------------------------------------------------------
-// `cli` subcommand — run a shard program through the request/response
-// effect loop. `check cli <file.shard>... [-- <app-args>...]`.
-//
-// The entrypoint is `(cli (state S) (init INIT) (update FN))` where
-//   FN : S -> Event -> (Step S Action)
-// The app is a state machine over a closed effect protocol: it emits a
-// request Action, the driver performs it and feeds the result back as
-// the next Event. The cycle starts with the `(Started)` event.
-//
-//   Action            driver does                  next Event
-//   ----------------- ---------------------------- ----------------------
-//   (GetArgs)         collect argv (after `--`)    (Args (List (List Int)))
-//   (ReadFile path)   read the file at `path`      (FileOk bytes) | (FileErr)
-//   (Write bytes)     write bytes to stdout        (Wrote)
-//   (Exit code)       terminate with `code`        —
-//
-// This is BOUNDARIES mechanism (C): effect-as-data with the continuation
-// externalized into the loop, so no HOF is needed — it runs in narrow
-// shard today. The interpretable Action/Event set is the trusted edge.
-// ----------------------------------------------------------------------
-
-fn run_cli(args: &[String]) -> ExitCode {
-    use std::io::Write as _;
-
-    // `--` separates the app's SOURCE files from its runtime ARGUMENTS.
-    let dash = args.iter().position(|a| a == "--");
-    let src_args: &[String] = match dash { Some(i) => &args[..i], None => args };
-    let app_args: &[String] = match dash { Some(i) => &args[i + 1..], None => &[] };
-
-    let mut positional: Vec<&String> = Vec::new();
-    for a in src_args {
-        if a.starts_with("--") {
-            eprintln!("error: unknown flag {} (runtime args go after `--`)", a);
-            return ExitCode::from(2);
-        }
-        positional.push(a);
-    }
-    if positional.is_empty() {
-        eprintln!("usage: check cli <file.shard>... [-- <app-args>...]");
-        return ExitCode::from(2);
-    }
-
-    let kernel = match load_kernel_from(default_kernel_dir()) {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("error loading kernel from {}: {}", default_kernel_dir().display(), e);
-            return ExitCode::from(2);
-        }
-    };
-    // Seed with the FULL kernel (types AND fns/externs): a cli app may call
-    // kernel functions — the eval app calls `compute_expr` — so they must be
-    // resolvable in the running module, not just the kernel's type decls.
-    let user_module = ast::Module {
-        types: kernel.types.clone(),
-        fns: kernel.fns.clone(),
-        externs: kernel.externs.clone(),
-    };
-    let mut ctx = Ctx {
-        user_module_value: module_to_value(&user_module),
-        user_module,
-        loaded: std::collections::HashSet::new(),
-        in_progress: Vec::new(),
-    };
-    for f in &positional {
-        if let Err(code) = process_file(&PathBuf::from(f.as_str()), &mut ctx, &kernel) {
-            return code;
-        }
-    }
-
-    let cli = match find_app_decl(&positional, "cli") {
-        Ok(Some(c)) => c,
-        Ok(None) => { eprintln!("error: no (cli …) declaration found"); return ExitCode::from(2); }
-        Err(e) => { eprintln!("error: {}", e); return ExitCode::from(2); }
-    };
-    let update_fn = match app_subform(&cli, "update").and_then(|p| p.get(1).and_then(|s| s.as_symbol()).map(|s| s.to_string())) {
-        Some(n) => n,
-        None => { eprintln!("error: (cli …) is missing an (update FN) field"); return ExitCode::from(2); }
-    };
-    let init_val = match app_subform(&cli, "init").and_then(|p| p.get(1).cloned()) {
-        Some(v) => v,
-        None => { eprintln!("error: (cli …) is missing an (init EXPR) field"); return ExitCode::from(2); }
-    };
-
-    let init_native = match load::expr_from_value(&init_val, &ctx.user_module) {
-        Ok(e) => e,
-        Err(e) => { eprintln!("error in (init …): {}", e); return ExitCode::from(2); }
-    };
-    // State flows as REFLECTED Expr-data between ticks (eval_raw returns it);
-    // it is un-reflected to native just before each update call.
-    let mut state = match eval_raw(&ctx.user_module, &init_native) {
-        Ok(s) => s,
-        Err(e) => { eprintln!("error evaluating (init …): {}", e); return ExitCode::from(2); }
-    };
-
-    let mut event = ctor("Started", vec![]); // native Event value
-    let mut stdout = std::io::stdout();
-    let cap = 50_000_000usize; // runaway-loop backstop
-    for _ in 0..cap {
-        let state_native = match value_to_native_expr(&state) {
-            Ok(e) => e,
-            Err(e) => { eprintln!("error: bad state datum: {}", e); return ExitCode::from(2); }
-        };
-        let call = ast::Expr::Call(update_fn.clone(), vec![state_native, event.clone()]);
-        let result = match eval_raw(&ctx.user_module, &call) {
-            Ok(r) => r,
-            Err(e) => { eprintln!("error in {}: {}", update_fn, e); return ExitCode::from(2); }
-        };
-        let (sname, fields) = match as_obj_ctor(&result) {
-            Some(x) => x,
-            None => {
-                eprintln!("error: `{}` returned a stuck term: {}", update_fn, show_reflected(&result));
-                return ExitCode::from(2);
-            }
-        };
-        if sname != "Step" || fields.len() != 2 {
-            eprintln!("error: `{}` must return (Step state action), got: {}", update_fn, show_reflected(&result));
-            return ExitCode::from(2);
-        }
-        let next_state = fields[0].clone();
-        let (aname, afields) = match as_obj_ctor(fields[1]) {
-            Some(x) => x,
-            None => { eprintln!("error: action is not a constructor: {}", show_reflected(fields[1])); return ExitCode::from(2); }
-        };
-        // Service the request → the next Event (or terminate).
-        event = match (aname, afields.as_slice()) {
-            ("GetArgs", []) => {
-                let items: Vec<ast::Expr> = app_args.iter().map(|a| line_to_event_native(a)).collect();
-                ctor("Args", vec![list_of(items)])
-            }
-            ("ReadFile", [path]) => {
-                let p = match decode_codepoints(path) {
-                    Ok(s) => s,
-                    Err(e) => { eprintln!("error: ReadFile path not a (List Int): {}", e); return ExitCode::from(2); }
-                };
-                match std::fs::read_to_string(&p) {
-                    Ok(contents) => ctor("FileOk", vec![line_to_event_native(&contents)]),
-                    Err(_) => ctor("FileErr", vec![]),
-                }
-            }
-            ("Write", [payload]) => {
-                let bytes = match decode_codepoints(payload) {
-                    Ok(s) => s,
-                    Err(e) => { eprintln!("error: Write payload not a (List Int): {}", e); return ExitCode::from(2); }
-                };
-                if write!(stdout, "{}", bytes).is_err() {
-                    return ExitCode::from(2);
-                }
-                ctor("Wrote", vec![])
-            }
-            ("Exit", [code]) => {
-                let _ = stdout.flush();
-                let n = match value_to_native_expr(code) {
-                    Ok(ast::Expr::IntLit(n)) => n,
-                    _ => 0,
-                };
-                return ExitCode::from(n as u8);
-            }
-            (other, _) => {
-                eprintln!("error: unknown cli Action `{}` (expected GetArgs/ReadFile/Write/Exit)", other);
-                return ExitCode::from(2);
-            }
-        };
-        state = next_state;
-    }
-    eprintln!("error: cli step cap ({}) exceeded — update never emitted Exit", cap);
-    ExitCode::from(2)
-}
-
-// ----------------------------------------------------------------------
 // `run` subcommand — execute a direct-style world-threading program.
 //
 // `check run <file.shard>...` reduces `(main world0)` where
@@ -1476,10 +1297,13 @@ fn run_program(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // Seed with the FULL kernel (types AND fns/externs): a program may call
+    // kernel functions (e.g. an eval app calls `compute_expr`). This affects
+    // only `run` — proof-checking uses its own M (kernel.types + user code).
     let user_module = ast::Module {
         types: kernel.types.clone(),
-        fns: Vec::new(),
-        externs: Vec::new(),
+        fns: kernel.fns.clone(),
+        externs: kernel.externs.clone(),
     };
     let mut ctx = Ctx {
         user_module_value: module_to_value(&user_module),
