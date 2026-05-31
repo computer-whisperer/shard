@@ -1561,7 +1561,7 @@ fn run_lazy(ctx: &Ctx) -> ExitCode {
                     Err(e) => Err(format!("read_line: {}", e)),
                 }
             }
-            "write_line" => {
+            "write_line" | "emit" => {
                 let s: String = decode_list(&args[0]).iter().filter_map(|x| match x {
                     ast::Expr::IntLit(c) => char::from_u32(*c as u32),
                     _ => None,
@@ -1569,7 +1569,20 @@ fn run_lazy(ctx: &Ctx) -> ExitCode {
                 println!("{}", s);
                 Ok(world1)
             }
-            other => Err(format!("unknown extern `{}` (handler has read_line, write_line)", other)),
+            // oracle_line: the INPUT oracle — returns just the (Option line), no
+            // World (the program advances the clock itself via `tick`).
+            "oracle_line" => {
+                let mut buf = String::new();
+                match reader.read_line(&mut buf) {
+                    Ok(0) => Ok(ctor("None", vec![])),
+                    Ok(_) => {
+                        let line = buf.trim_end_matches(|c| c == '\n' || c == '\r');
+                        Ok(ctor("Some", vec![line_to_event_native(line)]))
+                    }
+                    Err(e) => Err(format!("oracle_line: {}", e)),
+                }
+            }
+            other => Err(format!("unknown extern `{}` (handler: read_line/write_line/oracle_line/emit)", other)),
         }
     };
     eval::set_effect_handler(Some(Box::new(handler)));

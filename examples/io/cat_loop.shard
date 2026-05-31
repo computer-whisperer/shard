@@ -1,0 +1,114 @@
+;;; cat_loop.shard — the ORACLE-DRIVEN LOOP, proven.
+;;;
+;;; cat_lazy showed a straight-line effectful program's clock theorem. The hard
+;;; case is a LOOP whose trip count is decided by the oracle (read until EOF),
+;;; not by a structural argument — so reduction gets stuck at the branch on the
+;;; oracle and there is no input list to induct on. Two moves crack it:
+;;;   1. Split the effect: `oracle_line` is the UNINTERPRETED input oracle (an
+;;;      Option, no clock); `tick`/`emit` advance the clock (tick is DEFINED →
+;;;      its clock law is a *lemma*; emit is the output extern → an *axiom*).
+;;;      So in a proof only the DATA is opaque; all clock arithmetic computes.
+;;;   2. Add a FUEL (a Nat) to get a structural measure to induct on. `cat`
+;;;      (unbounded) is what RUNS; `cat_fuel` is the same loop with fuel, and we
+;;;      prove the clock DISCIPLINE on it for ALL fuel — covering every finite
+;;;      run. The loop body case-splits on the oracle via CaseOn.
+
+(import "../../std/nat.shard")     ; Nat (Z/S)
+(import "../../std/order.shard")   ; le_refl / le_succ / le_trans
+
+(type World (World Int))                       ; the clock token
+(fn w_clock ((w World)) Int (match w ((World n) n)))
+
+;; tick: advance the clock. DEFINED — so its clock law is a proven lemma.
+(fn tick ((w World)) World (match w ((World n) (World (+ n 1)))))
+
+(claim tick_clock                              ; w_clock(tick w) = w_clock(w) + 1
+  (Goal (list (Param 'w (ty World))) (list)
+    (Equation
+      (Call 'w_clock (list (Call 'tick (list (FVar 'w)))))
+      (Call '+ (list (Call 'w_clock (list (FVar 'w))) (IntLit 1)))))
+  (CaseOn (FVar 'w) 'World
+    (list (CaseB 'World (list 'n)
+      (Steps (list (Rewrite (Hyp 0) Lr Both True (list))    ; w -> (World n)
+                   (Simp Both)) Refl)))))
+
+;; the I/O vocabulary -----------------------------------------------------------
+;; oracle_line: read the next input line (None at EOF) — UNINTERPRETED, no clock.
+;; emit: write a line — the output effect; its clock law is the bridging AXIOM.
+(extern oracle_line ((w World)) (Option (List Int)))
+(extern emit        ((line (List Int)) (w World)) World)
+
+(axiom emit_clock                              ; w_clock(emit line w) = w_clock(w) + 1
+  (Goal (list (Param 'line (ty List Int)) (Param 'w (ty World))) (list)
+    (Equation
+      (Call 'w_clock (list (Call 'emit (list (FVar 'line) (FVar 'w)))))
+      (Call '+ (list (Call 'w_clock (list (FVar 'w))) (IntLit 1))))))
+
+;; the program ------------------------------------------------------------------
+;; cat (unbounded): read a line; EOF → tick + done; else write (emit) it after a
+;; tick, and loop. This is what RUNS (the handler drives oracle_line/emit).
+(fn cat ((w World)) World
+  (match (oracle_line w)
+    (None        (tick w))
+    ((Some line) (cat (emit line (tick w))))))
+
+(fn main ((w World)) World (cat w))
+
+;; cat_fuel: the same loop with a Nat fuel — the structural measure we induct on.
+(fn cat_fuel ((n Nat) (w World)) World
+  (match n
+    (Z w)
+    ((S k)
+      (match (oracle_line w)
+        (None        (tick w))
+        ((Some line) (cat_fuel k (emit line (tick w))))))))
+
+;; THE CLOCK DISCIPLINE, for the oracle-driven loop --------------------------
+;; ∀ n w.  le (w_clock w) (w_clock (cat_fuel n w)) = True
+;; The clock NEVER decreases, no matter what the oracle does — every loop step
+;; only advances it. Whatever the (uninterpreted) trip count, the run's clocks
+;; are monotonic, so no effect ever reuses an earlier clock. Induct on the fuel;
+;; CaseOn the oracle; the Some step chains the IH with the per-step advance via
+;; le_trans (b = the post-write clock).
+(claim cat_mono
+  (Goal (list (Param 'n (ty Nat)) (Param 'w (ty World))) (list)
+    (Equation
+      (Call 'le (list (Call 'w_clock (list (FVar 'w)))
+                      (Call 'w_clock (list (Call 'cat_fuel (list (FVar 'n) (FVar 'w)))))))
+      (Ctor 'True (list))))
+  (Induct 'n
+    (list
+      ;; Z: cat_fuel Z w = w ; le (clock w)(clock w).
+      (Case 'Z
+        (Steps (list (Simp Lhs)) (ByTheory 'ord (Cert 'ord (list)))))
+      ;; S k: step once, split on the oracle.
+      (Case 'S
+        (Steps (list (Simp Lhs))
+          (CaseOn (Call 'oracle_line (list (FVar 'w))) 'Option
+            (list
+              ;; None: result = tick w ; le (clock w)(clock(tick w)) via tick_clock.
+              (Case 'None
+                (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))   ; oracle_line w -> None
+                             (Simp Lhs)                             ; reduce match -> tick w
+                             (Rewrite (Lemma 'tick_clock) Lr Lhs True (list)))
+                       (ByTheory 'ord (Cert 'ord (list)))))
+              ;; Some line: result = cat_fuel k (emit line (tick w)).
+              ;;   le (clock w) (clock(cat_fuel k (emit line (tick w))))
+              ;;   via le_trans at b = clock(emit line (tick w)):
+              ;;     prem1  le (clock w) b          — emit_clock + tick_clock + ord
+              ;;     prem2  le b (clock(cat_fuel k …)) — the IH (Hyp 1) at (emit line (tick w))
+              (CaseB 'Some (list 'line)
+                (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))   ; oracle_line w -> (Some line)
+                             (Simp Lhs))                            ; reduce match -> cat_fuel k (emit line (tick w))
+                  (RewriteWith (Lemma 'le_trans) Lr Lhs
+                    (list (Inst 'b (Call 'w_clock
+                                     (list (Call 'emit (list (FVar 'line)
+                                                             (Call 'tick (list (FVar 'w)))))))))
+                    (list
+                      ;; prem1: le (clock w) (clock(emit line (tick w)))
+                      (Steps (list (Rewrite (Lemma 'emit_clock) Lr Lhs True (list))
+                                   (Rewrite (Lemma 'tick_clock) Lr Lhs True (list)))
+                             (ByTheory 'ord (Cert 'ord (list))))
+                      ;; prem2: the IH at w := (emit line (tick w))
+                      (RewriteWith (Hyp 1) Lr Lhs (list) (list) Refl))
+                    Refl))))))))))
