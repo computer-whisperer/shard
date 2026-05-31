@@ -125,6 +125,14 @@ fn run() -> ExitCode {
         return run_self_check(&args[1..]);
     }
 
+    // `trace-check` subcommand: differential validation of the shard tracer
+    // (kernel/trace.shard's failure_detail) against the Rust build_failure_detail.
+    // For every claim in a file, build ONE native sequent/proof and render the
+    // failure diagnostic both ways, comparing the text byte-for-byte.
+    if args[0] == "trace-check" {
+        return run_trace_check(&args[1..]);
+    }
+
     let kernel = match load_kernel_from(default_kernel_dir()) {
         Ok(m) => m,
         Err(e) => {
@@ -2187,6 +2195,120 @@ fn run_shard_check(files: &[String], kernel: &ast::Module) -> ExitCode {
         println!("re-run with `--trace {}` for a per-step diagnostic", fail_names[0]);
     }
     if failed > 0 { ExitCode::from(1) } else { ExitCode::SUCCESS }
+}
+
+// ----------------------------------------------------------------------
+// `trace-check` — differential validation of the shard tracer.
+//
+// For every claim across the file list (threading the theory like production),
+// build ONE native sequent + proof (Rust desugar + build_value), then render
+// the failure diagnostic BOTH ways — Rust build_failure_detail vs shard
+// failure_detail — on that identical input, and compare byte-for-byte. This
+// isolates the renderer + proof-spine tracer (desugar/un-reflect are not under
+// test here, since both sides consume the same proof_val).
+// ----------------------------------------------------------------------
+
+fn run_trace_check(args: &[String]) -> ExitCode {
+    let files: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
+    if files.is_empty() {
+        eprintln!("usage: check trace-check <proof_file.shard>...");
+        return ExitCode::from(2);
+    }
+    let kernel = match load_kernel_from(default_kernel_dir()) {
+        Ok(m) => m,
+        Err(e) => { eprintln!("error loading kernel: {}", e); return ExitCode::from(2); }
+    };
+    let targets: Vec<PathBuf> = files.iter().map(|s| PathBuf::from(s.as_str())).collect();
+
+    let mk_ctx = |seed: ast::Module| Ctx {
+        user_module_value: module_to_value(&seed),
+        user_module: seed,
+        theory: ctor("TheoryEmpty", vec![]),
+        passed: 0, failed: 0, axioms: 0,
+        loaded: std::collections::HashSet::new(),
+        in_progress: Vec::new(),
+        load_only: true,
+        trace_target: None,
+    };
+    // eval module = kernel + toolchain (incl. trace.shard, which holds failure_detail).
+    let mut eval_ctx = mk_ctx(ast::Module {
+        types: kernel.types.clone(), fns: kernel.fns.clone(), externs: kernel.externs.clone(),
+    });
+    let kdir = default_kernel_dir();
+    for tool in &["reader.shard", "unreflect.shard", "desugar.shard", "driver.shard", "trace.shard"] {
+        if let Err(code) = process_file(&kdir.join(tool), &mut eval_ctx, &kernel) { return code; }
+    }
+    // M module = kernel.types + all user code.
+    let mut m_ctx = mk_ctx(ast::Module { types: kernel.types.clone(), fns: Vec::new(), externs: Vec::new() });
+    for t in &targets {
+        if let Err(code) = process_file(t, &mut m_ctx, &kernel) { return code; }
+    }
+    let m_value = m_ctx.user_module_value.clone();
+
+    let order = match ordered_closure(&targets) { Ok(o) => o, Err(code) => return code };
+
+    let mut theory = ctor("TheoryEmpty", vec![]);
+    let (mut total, mut mismatches) = (0usize, 0usize);
+    let close = |g: &ast::Expr| eval::eval(&kernel, &ast::Expr::Call("close_goal_for_storage".into(), vec![g.clone()]));
+
+    for path in &order {
+        let src = match std::fs::read_to_string(path) {
+            Ok(s) => s, Err(e) => { eprintln!("error reading {}: {}", path.display(), e); return ExitCode::from(2); }
+        };
+        let forms = match parse_top_level(&src) {
+            Ok(f) => f, Err(e) => { eprintln!("parse {}: {}", path.display(), e); return ExitCode::from(2); }
+        };
+        for form in &forms {
+            let items: Vec<&Value> = match form.list_iter() { Some(i) => i.collect(), None => continue };
+            let head = items.first().and_then(|v| v.as_symbol()).unwrap_or("");
+            if head == "axiom" && items.len() == 3 {
+                if let Ok(g) = build_value(items[2], &kernel) {
+                    if let (Some(nm), Ok(cg)) = (items[1].as_symbol(), close(&g)) {
+                        theory = ctor("TheoryCons", vec![ctor("Axiom", vec![ast::Expr::SymLit(nm.into()), cg]), theory]);
+                    }
+                }
+                continue;
+            }
+            if head != "claim" || items.len() != 4 { continue; }
+            let name = items[1].as_symbol().unwrap_or("?").to_string();
+            let goal_val = match build_value(items[2], &kernel) { Ok(v) => v, Err(_) => continue };
+            let hctx = HCtx { stack: Vec::new(), params: goal_params(items[2]) };
+            let desugared = match desugar_hyps(items[3], &hctx, &kernel, &m_value) { Ok(v) => v, Err(_) => continue };
+            let proof_val = match build_value(&desugared, &kernel) { Ok(v) => v, Err(_) => continue };
+            let sequent = match &goal_val {
+                ast::Expr::Ctor(n, a) if n == "Goal" && a.len() == 3 =>
+                    ctor("Sequent", vec![a[0].clone(), nil(), a[1].clone(), a[2].clone()]),
+                _ => continue,
+            };
+
+            let rust_text = build_failure_detail(&kernel, &m_value, &theory, &sequent, &proof_val);
+            let call = ast::Expr::Call("failure_detail".into(),
+                vec![m_value.clone(), theory.clone(), sequent.clone(), proof_val.clone()]);
+            let shard_text = match eval_raw(&eval_ctx.user_module, &call).and_then(|v| decode_codepoints(&v)) {
+                Ok(s) => s,
+                Err(e) => { println!("DIFFER {}: shard failure_detail error: {}", name, e); mismatches += 1; total += 1; continue; }
+            };
+            total += 1;
+            if rust_text != shard_text {
+                mismatches += 1;
+                println!("DIFFER  {}", name);
+                println!("--- rust ---\n{}\n--- shard ---\n{}\n---", rust_text, shard_text);
+            }
+
+            // thread theory: admit on pass (so later citations resolve).
+            let chk = ast::Expr::Call("check_sequent".into(),
+                vec![m_value.clone(), theory.clone(), sequent.clone(), proof_val.clone()]);
+            let passes = matches!(eval::eval(&kernel, &chk),
+                Ok(ast::Expr::Ctor(ref n, ref a)) if n == "True" && a.is_empty());
+            if passes {
+                if let Ok(cg) = close(&goal_val) {
+                    theory = ctor("TheoryCons", vec![ctor("Proven", vec![ast::Expr::SymLit(name), cg]), theory]);
+                }
+            }
+        }
+    }
+    println!("\n{} compared, {} mismatched", total, mismatches);
+    if mismatches > 0 { ExitCode::from(1) } else { ExitCode::SUCCESS }
 }
 
 // ----------------------------------------------------------------------
