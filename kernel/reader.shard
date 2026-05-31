@@ -608,14 +608,16 @@
 
 ;; Forms the module loader ignores (consumed elsewhere or proof-level).
 (fn skip_form ((h Symbol)) Bool
-  (if (sym_eq h (quote type))       True
-  (if (sym_eq h (quote claim))      True
-  (if (sym_eq h (quote axiom))      True
-  (if (sym_eq h (quote import))     True
-  (if (sym_eq h (quote use-module)) True
-  (if (sym_eq h (quote app))        True
-  (if (sym_eq h (quote cli))        True
-  False))))))))
+  (if (sym_eq h (quote type))        True
+  (if (sym_eq h (quote claim))       True
+  (if (sym_eq h (quote axiom))       True
+  (if (sym_eq h (quote requirement)) True
+  (if (sym_eq h (quote fulfills))    True
+  (if (sym_eq h (quote import))      True
+  (if (sym_eq h (quote use-module))  True
+  (if (sym_eq h (quote app))         True
+  (if (sym_eq h (quote cli))         True
+  False))))))))))
 
 ;; Pass 1: collect all (type …) definitions, in source order.
 (fn collect_types ((forms (List SExpr))) (Option (List TypeDef))
@@ -822,6 +824,50 @@
 (fn axdecl_name ((a AxDecl)) Symbol (match a ((AxDecl n g) n)))
 (fn axdecl_goal ((a AxDecl)) Expr   (match a ((AxDecl n g) g)))
 
+;; ---- requirement / fulfills: the contract↔implementation edge ---------------
+;; A (requirement NAME GOAL) states a named proof obligation in a contract,
+;; WITHOUT a proof (and unlike axiom, NOT admitted — it is a pending goal). A
+;; (fulfills NAME PROOF) elsewhere discharges it: the driver looks up NAME's
+;; goal from the requirement and checks PROOF against THAT goal — the goal is
+;; never restated, so the contract is the single source of truth. Both are
+;; 3-item forms (head + name + one expr), distinguished by head symbol.
+
+(type Req (Req Symbol Expr))               ; name, goal-expr   (a requirement)
+(type Ful (Ful Symbol Expr))               ; name, proof-expr  (a fulfillment)
+
+(fn is_requirement_form ((f SExpr)) Bool
+  (match f
+    ((SList (Cons (SSym h) _)) (sym_eq h (quote requirement)))
+    (_ False)))
+
+(fn is_fulfills_form ((f SExpr)) Bool
+  (match f
+    ((SList (Cons (SSym h) _)) (sym_eq h (quote fulfills)))
+    (_ False)))
+
+;; (requirement NAME GOAL) → Req. None on a malformed shape.
+(fn req_of_form ((f SExpr) (ctors (List Symbol))) (Option Req)
+  (match f
+    ((SList (Cons _ (Cons (SSym name) (Cons goalS Nil))))
+      (match (elaborate goalS ctors Nil)
+        (None None)
+        ((Some g) (Some (Req name g)))))
+    (_ None)))
+
+;; (fulfills NAME PROOF) → Ful. None on a malformed shape.
+(fn ful_of_form ((f SExpr) (ctors (List Symbol))) (Option Ful)
+  (match f
+    ((SList (Cons _ (Cons (SSym name) (Cons proofS Nil))))
+      (match (elaborate proofS ctors Nil)
+        (None None)
+        ((Some p) (Some (Ful name p)))))
+    (_ None)))
+
+(fn req_name ((r Req)) Symbol (match r ((Req n g) n)))
+(fn req_goal ((r Req)) Expr   (match r ((Req n g) g)))
+(fn ful_name ((f Ful)) Symbol (match f ((Ful n p) n)))
+(fn ful_proof ((f Ful)) Expr  (match f ((Ful n p) p)))
+
 ;; ===========================================================================
 ;; Unified declaration stream: claims and axioms in SOURCE ORDER. The
 ;; production driver processes a file's forms in order (axioms admitted,
@@ -831,7 +877,9 @@
 
 (type Decl
   (DClaim Claim)
-  (DAxiom AxDecl))
+  (DAxiom AxDecl)
+  (DReq Req)
+  (DFul Ful))
 
 (fn collect_decls ((forms (List SExpr)) (ctors (List Symbol))) (Option (List Decl))
   (match forms
@@ -851,7 +899,21 @@
               (match (collect_decls rest ctors)
                 (None None)
                 ((Some ds) (Some (Cons (DAxiom a) ds))))))
-          (collect_decls rest ctors))))))
+      (if (is_requirement_form f)
+          (match (req_of_form f ctors)
+            (None None)
+            ((Some r)
+              (match (collect_decls rest ctors)
+                (None None)
+                ((Some ds) (Some (Cons (DReq r) ds))))))
+      (if (is_fulfills_form f)
+          (match (ful_of_form f ctors)
+            (None None)
+            ((Some fu)
+              (match (collect_decls rest ctors)
+                (None None)
+                ((Some ds) (Some (Cons (DFul fu) ds))))))
+          (collect_decls rest ctors))))))))
 
 (fn parse_decls ((src (List Int)) (ctors (List Symbol))) (Option (List Decl))
   (match (read_all src)

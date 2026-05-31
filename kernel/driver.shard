@@ -130,8 +130,16 @@
   (COFail  Symbol (List Int) (List Int))        ; name, diagnostic detail, trace-block
   (COAxiom Symbol))                             ; an axiom admitted without proof
 
-;; theory threaded + outcomes accumulated in REVERSE (prepended; caller reverses)
-(type RunState (RunState Theory (List ClaimOutcome)))
+;; theory threaded + PENDING requirements (name→goal, seeded by `requirement`,
+;; consumed by `fulfills`) + outcomes accumulated in REVERSE (caller reverses).
+(type RunState (RunState Theory (List Req) (List ClaimOutcome)))
+
+;; Look up a pending requirement's goal-expr by name (most-recent-first).
+(fn lookup_req ((name Symbol) (pend (List Req))) (Option Expr)
+  (match pend
+    (Nil None)
+    ((Cons r rest)
+      (if (sym_eq (req_name r) name) (Some (req_goal r)) (lookup_req name rest)))))
 
 ;; Does `--trace target` want this claim traced? ('all matches everything.)
 (fn want_trace ((name Symbol) (target Symbol)) Bool
@@ -154,35 +162,65 @@
     (Nil st)
     ((Cons d rest)
       (match st
-        ((RunState th acc)
+        ((RunState th pend acc)
           (match d
             ((DAxiom a)
               (match (unreflect_goal (axdecl_goal a))
-                (None (run_decls m (RunState th (Cons (COFail (axdecl_name a) "could not un-reflect axiom goal" Nil) acc)) rest target))
+                (None (run_decls m (RunState th pend (Cons (COFail (axdecl_name a) "could not un-reflect axiom goal" Nil) acc)) rest target))
                 ((Some g)
                   (run_decls m
                     (RunState (TheoryCons (Axiom (axdecl_name a) (close_goal_for_storage g)) th)
+                              pend
                               (Cons (COAxiom (axdecl_name a)) acc))
                     rest target))))
             ((DClaim c)
               (match (unreflect_goal (claim_goal c))
-                (None (run_decls m (RunState th (Cons (COFail (claim_name c) "could not un-reflect goal" Nil) acc)) rest target))
+                (None (run_decls m (RunState th pend (Cons (COFail (claim_name c) "could not un-reflect goal" Nil) acc)) rest target))
                 ((Some g)
                   (match (unreflect_proof (desugar_hyps m (goal_params g) Nil (claim_proof c)))
-                    (None (run_decls m (RunState th (Cons (COFail (claim_name c) "could not un-reflect proof" Nil) acc)) rest target))
+                    (None (run_decls m (RunState th pend (Cons (COFail (claim_name c) "could not un-reflect proof" Nil) acc)) rest target))
                     ((Some p)
                       (if (check_sequent m th (lift_sequent g) p)
                           (run_decls m
                             (RunState (TheoryCons (Proven (claim_name c) (close_goal_for_storage g)) th)
+                                      pend
                                       (Cons (COPass (claim_name c) (claim_trace m th g p (claim_name c) target)) acc))
                             rest target)
                           ;; FAILED: render the proof-spine diagnostic (in shard).
                           (run_decls m
-                            (RunState th
+                            (RunState th pend
                                       (Cons (COFail (claim_name c)
                                                     (failure_detail m th (lift_sequent g) p)
                                                     (claim_trace m th g p (claim_name c) target)) acc))
-                            rest target)))))))))))))
+                            rest target)))))))
+            ;; (requirement NAME GOAL): seed a pending obligation; no outcome.
+            ((DReq r)
+              (run_decls m (RunState th (Cons r pend) acc) rest target))
+            ;; (fulfills NAME PROOF): look the goal up from the requirement and
+            ;; check PROOF against it — same machinery as a claim, but the goal
+            ;; comes from the contract (single source of truth), not inline.
+            ((DFul fu)
+              (match (lookup_req (ful_name fu) pend)
+                (None (run_decls m (RunState th pend (Cons (COFail (ful_name fu) "no requirement with this name in scope (is the contract imported?)" Nil) acc)) rest target))
+                ((Some goalS)
+                  (match (unreflect_goal goalS)
+                    (None (run_decls m (RunState th pend (Cons (COFail (ful_name fu) "could not un-reflect requirement goal" Nil) acc)) rest target))
+                    ((Some g)
+                      (match (unreflect_proof (desugar_hyps m (goal_params g) Nil (ful_proof fu)))
+                        (None (run_decls m (RunState th pend (Cons (COFail (ful_name fu) "could not un-reflect proof" Nil) acc)) rest target))
+                        ((Some p)
+                          (if (check_sequent m th (lift_sequent g) p)
+                              (run_decls m
+                                (RunState (TheoryCons (Proven (ful_name fu) (close_goal_for_storage g)) th)
+                                          pend
+                                          (Cons (COPass (ful_name fu) (claim_trace m th g p (ful_name fu) target)) acc))
+                                rest target)
+                              (run_decls m
+                                (RunState th pend
+                                          (Cons (COFail (ful_name fu)
+                                                        (failure_detail m th (lift_sequent g) p)
+                                                        (claim_trace m th g p (ful_name fu) target)) acc))
+                                rest target)))))))))))))))
 
 ;; Run a whole file list (imports first, then targets), threading theory.
 ;; An unparseable file is skipped (the Rust harness pre-validates parsing).
@@ -199,8 +237,8 @@
 ;; is the `--trace` claim name ('all for every claim, or a non-matching
 ;; sentinel for no tracing).
 (fn check_production ((m Module) (srcs (List (List Int))) (ctors (List Symbol)) (target Symbol)) (List ClaimOutcome)
-  (match (run_srcs m srcs ctors (RunState TheoryEmpty Nil) target)
-    ((RunState th acc) (rev_outcomes acc Nil))))
+  (match (run_srcs m srcs ctors (RunState TheoryEmpty Nil Nil) target)
+    ((RunState th pend acc) (rev_outcomes acc Nil))))
 
 ;; Production entry that builds M IN SHARD. `build_module` (reader.shard) parses
 ;; each source's types/fns via the self-hosted reader and merges them onto
