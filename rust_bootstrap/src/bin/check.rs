@@ -1290,6 +1290,17 @@ fn load_toolchain_vm(kernel: &ast::Module) -> Result<ast::Module, ExitCode> {
         in_progress: Vec::new(),
     };
     let kdir = default_kernel_dir();
+    // The kernel base is already in `user_module` (load_kernel_from). Seed the
+    // `loaded` set with those files so that now-declared kernel imports
+    // (reader.shard → module.shard, etc.) are recognized as already-loaded and
+    // not re-parsed/re-merged. (load_kernel_from uses module_from_paths, which
+    // skips imports, so it never populated `loaded`.)
+    for base in &["stdlib.shard", "module.shard", "proof.shard", "term.shard",
+                  "reduce.shard", "checker.shard", "lia.shard", "eqdec.shard",
+                  "ord.shard", "farkas.shard"] {
+        let p = kdir.join(base);
+        ctx.loaded.insert(p.canonicalize().unwrap_or(p));
+    }
     for tool in &["reader.shard", "unreflect.shard", "desugar.shard", "trace.shard", "driver.shard"] {
         process_file(&kdir.join(tool), &mut ctx, kernel)?;
     }

@@ -1,0 +1,110 @@
+;;; check.shard — the proof-checker APP: a direct-style World program that
+;;; points at a .shard file and checks its proofs. The shard sibling of
+;;; eval.shard — same shape (get_args → read the target closure via read_file →
+;;; compute → write → exit), run the standard way:
+;;;
+;;;   eval run check.shard <file.shard>
+;;;
+;;; BUILD-TIME: it (import …)s the whole kernel checker toolchain, so it knows
+;;; how to parse and reason about shard. (Listed flat because kernel files don't
+;;; declare their own imports yet — same as eval.shard.) RUN-TIME: it reads only
+;;; the checkee and ITS imports (incl. std) via read_file; it never reads kernel
+;;; files at run time. The pure core check_production_src (driver.shard) folds
+;;; build_module over the closure and returns a (List ClaimOutcome); this app
+;;; just renders them.
+
+;; Direct deps only — each kernel file now declares its own imports, so
+;; resolve_closure pulls the full checker toolchain (checker, reduce, reader,
+;; proof, the solvers, unreflect/desugar/trace) transitively, in dependency
+;; order. driver.shard is the production entry; loader the World/IO + resolver.
+(import "loader.shard")     ; World + I/O externs + resolve_closure + append_int
+(import "driver.shard")     ; check_production_src + ClaimOutcome (pulls the toolchain)
+(import "module.shard")     ; Module (the empty seed)
+(import "term.shard")       ; chars_of_sym rendering
+(import "stdlib.shard")     ; List / Option / Bool / Pair
+
+;; running tallies for the summary line.
+(type Counts (Counts Int Int Int))             ; passed failed axioms
+
+(fn nl () (List Int) (Cons 10 Nil))            ; "\n"
+
+(fn show_nat ((n Int)) (List Int)              ; n >= 0
+  (if (lt n 10)
+      (Cons (+ 48 n) Nil)
+      (append_int (show_nat (/ n 10)) (Cons (+ 48 (mod n 10)) Nil))))
+
+(fn is_nil ((xs (List Int))) Bool
+  (match xs (Nil True) (_ False)))
+
+;; a block (trace / failure detail) on its own line, or nothing if empty —
+;; matching the Rust harness's `if !block.is_empty() { println!(...) }`.
+(fn opt_block ((b (List Int))) (List Int)
+  (if (is_nil b) Nil (append_int b (nl))))
+
+;; ---- render one outcome, bumping the counts -------------------------------
+(fn render_one ((o ClaimOutcome) (c Counts)) (Pair (List Int) Counts)
+  (match c
+    ((Counts p f a)
+      (match o
+        ((COPass name trace)
+          (Pair (append_int (opt_block trace)
+                  (append_int "PASS  " (append_int (chars_of_sym name) (nl))))
+                (Counts (+ p 1) f a)))
+        ((COAxiom name)
+          (Pair (append_int "AXIOM " (append_int (chars_of_sym name)
+                  (append_int "  (admitted without proof)" (nl))))
+                (Counts p f (+ a 1))))
+        ((COFail name detail trace)
+          (Pair (append_int (opt_block trace)
+                  (append_int "FAIL  " (append_int (chars_of_sym name)
+                    (append_int (nl) (opt_block detail)))))
+                (Counts p (+ f 1) a)))))))
+
+(fn render_all ((os (List ClaimOutcome)) (c Counts)) (Pair (List Int) Counts)
+  (match os
+    (Nil (Pair Nil c))
+    ((Cons o rest)
+      (match (render_one o c)
+        ((Pair line c1)
+          (match (render_all rest c1)
+            ((Pair more c2) (Pair (append_int line more) c2))))))))
+
+(fn summary ((c Counts)) (List Int)
+  (match c
+    ((Counts p f a)
+      (if (lt 0 a)
+          (append_int (show_nat p) (append_int " passed, " (append_int (show_nat f)
+            (append_int " failed, " (append_int (show_nat a)
+              (append_int " axiom(s) admitted without proof" (nl)))))))
+          (append_int (show_nat p) (append_int " passed, "
+            (append_int (show_nat f) (append_int " failed" (nl))))))))))
+
+(fn exit_code ((c Counts)) Int
+  (match c ((Counts p f a) (if (lt 0 f) 1 0))))
+
+;; the bootstrap ctor prelude — exactly eval.shard's. build_module accumulates
+;; each closure file's own ctors as it folds, so this only needs the names a
+;; first parse can't yet know. The base TYPE DEFS come from the closure itself
+;; (the checkee imports the stdlib it needs), so the seed is the empty module.
+(fn prelude_ctors () (List Symbol)
+  (list (quote Cons) (quote Nil) (quote Some) (quote None)
+        (quote True) (quote False) (quote Pair)))
+
+;; ---- check one resolved closure, render the report ------------------------
+(fn run_and_report ((srcs (List (List Int))) (w World)) World
+  (match (render_all
+            (check_production_src (Module Nil Nil Nil) (prelude_ctors) srcs (quote __no_trace__))
+            (Counts 0 0 0))
+    ((Pair body c)
+      (exit (exit_code c)
+            (write (append_int body (append_int (nl) (summary c))) w)))))
+
+;; ---- the World wrapper: arg0 = the .shard file to check -------------------
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Pair args w1)
+      (match args
+        ((Cons target _)
+          (match (resolve_closure target w1)
+            ((Pair srcs w2) (run_and_report srcs w2))))
+        (_ (exit 2 (write "usage: check <file.shard>\n" w1)))))))
