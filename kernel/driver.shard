@@ -199,6 +199,17 @@
                               pend
                               (Cons (COAxiom (axdecl_name a)) acc))
                     rest target))))
+            ;; (axiom NAME (goal …)): proof-DSL axiom — parse goal to native,
+            ;; admit it without proof (same as DAxiom, no un-reflect).
+            ((DNAxiom a)
+              (match (parse_goal (nax_goal a) (module_ctors m) (module_type_names m))
+                (None (run_decls m (RunState th pend (Cons (COFail (nax_name a) "could not parse axiom goal (proof DSL)" Nil) acc)) rest target))
+                ((Some g)
+                  (run_decls m
+                    (RunState (TheoryCons (Axiom (nax_name a) (close_goal_for_storage g)) th)
+                              pend
+                              (Cons (COAxiom (nax_name a)) acc))
+                    rest target))))
             ((DClaim c)
               (match (unreflect_goal (claim_goal c))
                 (None (run_decls m (RunState th pend (Cons (COFail (claim_name c) "could not un-reflect goal" Nil) acc)) rest target))
@@ -253,6 +264,13 @@
                 (None (run_decls m (RunState th pend (Cons (COFail (req_name r) "malformed requirement goal — could not un-reflect (object lists must be (Ctor 'Cons ..), not (list ..))" Nil) acc)) rest target))
                 ((Some g)
                   (run_decls m (RunState th (Cons (PendReq (req_name r) g) pend) acc) rest target))))
+            ;; (requirement NAME (goal …)): proof-DSL requirement — parse the goal
+            ;; to native NOW (validating it at the contract), seed it as pending.
+            ((DNReq r)
+              (match (parse_goal (nreq_goal r) (module_ctors m) (module_type_names m))
+                (None (run_decls m (RunState th pend (Cons (COFail (nreq_name r) "could not parse requirement goal (proof DSL)" Nil) acc)) rest target))
+                ((Some g)
+                  (run_decls m (RunState th (Cons (PendReq (nreq_name r) g) pend) acc) rest target))))
             ;; (fulfills NAME PROOF): look the goal up from the requirement and
             ;; check PROOF against it — same machinery as a claim, but the goal
             ;; comes from the contract (single source of truth), not inline. The
@@ -275,7 +293,29 @@
                                       (Cons (COFail (ful_name fu)
                                                     (failure_detail m th (lift_sequent g) p)
                                                     (claim_trace m th g p (ful_name fu) target)) acc))
-                                rest target)))))))))))))
+                                rest target)))))))
+            ;; (fulfills NAME <proof-dsl>): proof-DSL fulfillment — look up the
+            ;; (native) goal from the requirement, parse the proof to native,
+            ;; check it. No desugar pass.
+            ((DNFul fu)
+              (match (lookup_req (nful_name fu) pend)
+                (None (run_decls m (RunState th pend (Cons (COFail (nful_name fu) "no requirement with this name in scope (is the contract imported?)" Nil) acc)) rest target))
+                ((Some g)
+                  (match (parse_proof (nful_proof fu) (module_ctors m) (module_type_names m))
+                    (None (run_decls m (RunState th pend (Cons (COFail (nful_name fu) "could not parse proof (proof DSL)" Nil) acc)) rest target))
+                    ((Some p)
+                      (if (check_sequent m th (lift_sequent g) p)
+                          (run_decls m
+                            (RunState (TheoryCons (Proven (nful_name fu) (close_goal_for_storage g)) th)
+                                      pend
+                                      (Cons (COPass (nful_name fu) (claim_trace m th g p (nful_name fu) target)) acc))
+                            rest target)
+                          (run_decls m
+                            (RunState th pend
+                                      (Cons (COFail (nful_name fu)
+                                                    (failure_detail m th (lift_sequent g) p)
+                                                    (claim_trace m th g p (nful_name fu) target)) acc))
+                            rest target)))))))))))))
 
 ;; Run a whole file list (imports first, then targets), threading theory.
 ;; An unparseable file is skipped (the Rust harness pre-validates parsing).

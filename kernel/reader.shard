@@ -918,12 +918,74 @@
       (Some (NClaim name goalS proofS)))
     (_ None)))
 
+;; ---- native axiom / requirement (goal-only decls) -------------------------
+;; (axiom NAME GOAL) / (requirement NAME GOAL): native iff GOAL head is `goal`.
+;; The 2nd element (index 1 after head) is the goal in both.
+(fn goalonly_goal_head ((f SExpr)) (Option Symbol)
+  (match f
+    ((SList (Cons _ (Cons (SSym name) (Cons goalS Nil))))
+      (match goalS ((SList (Cons (SSym gh) _)) (Some gh)) (_ None)))
+    (_ None)))
+
+(fn is_native_goalonly ((f SExpr)) Bool
+  (match (goalonly_goal_head f) ((Some gh) (sym_eq gh (quote goal))) (_ False)))
+
+(type NAx (NAx Symbol SExpr))              ; native axiom: name, goal-sexpr
+(fn nax_name ((a NAx)) Symbol (match a ((NAx n g) n)))
+(fn nax_goal ((a NAx)) SExpr  (match a ((NAx n g) g)))
+
+(type NReq (NReq Symbol SExpr))            ; native requirement: name, goal-sexpr
+(fn nreq_name ((r NReq)) Symbol (match r ((NReq n g) n)))
+(fn nreq_goal ((r NReq)) SExpr  (match r ((NReq n g) g)))
+
+;; (HEAD NAME GOAL) → (Some (Pair NAME GOAL)); shared by axiom + requirement.
+(fn goalonly_of_form ((f SExpr)) (Option (Pair Symbol SExpr))
+  (match f
+    ((SList (Cons _ (Cons (SSym name) (Cons goalS Nil)))) (Some (Pair name goalS)))
+    (_ None)))
+
+;; ---- native fulfills (proof-only decl) ------------------------------------
+;; (fulfills NAME PROOF) has no goal to dispatch on; it's native iff the PROOF
+;; is written in the proof DSL — i.e. its head is a proof-DSL keyword.
+(fn proof_head_sym ((s SExpr)) (Option Symbol)
+  (match s
+    ((SSym n) (Some n))
+    ((SList (Cons (SSym h) _)) (Some h))
+    (_ None)))
+
+(fn native_proof_keywords () (List Symbol)
+  (list (quote refl) (quote steps) (quote induct) (quote induct2)
+        (quote case-on) (quote wf-induct) (quote rewrite-with)
+        (quote absurd) (quote by)))
+
+(fn is_native_proof ((s SExpr)) Bool
+  (match (proof_head_sym s)
+    ((Some h) (sym_mem h (native_proof_keywords)))
+    (_ False)))
+
+(type NFul (NFul Symbol SExpr))            ; native fulfills: name, proof-sexpr
+(fn nful_name  ((fu NFul)) Symbol (match fu ((NFul n p) n)))
+(fn nful_proof ((fu NFul)) SExpr  (match fu ((NFul n p) p)))
+
+(fn is_native_fulfills ((f SExpr)) Bool
+  (match f
+    ((SList (Cons _ (Cons (SSym name) (Cons proofS Nil)))) (is_native_proof proofS))
+    (_ False)))
+
+(fn nful_of_form ((f SExpr)) (Option NFul)
+  (match f
+    ((SList (Cons _ (Cons (SSym name) (Cons proofS Nil)))) (Some (NFul name proofS)))
+    (_ None)))
+
 (type Decl
   (DClaim Claim)
   (DNClaim NClaim)
   (DAxiom AxDecl)
+  (DNAxiom NAx)
   (DReq Req)
-  (DFul Ful))
+  (DNReq NReq)
+  (DFul Ful)
+  (DNFul NFul))
 
 (fn collect_decls ((forms (List SExpr)) (ctors (List Symbol))) (Option (List Decl))
   (match forms
@@ -944,26 +1006,47 @@
                     (None None)
                     ((Some ds) (Some (Cons (DClaim c) ds)))))))
       (if (is_axiom_form f)
-          (match (axiom_of_form f ctors)
-            (None None)
-            ((Some a)
-              (match (collect_decls rest ctors)
+          (if (is_native_goalonly f)
+              (match (goalonly_of_form f)
                 (None None)
-                ((Some ds) (Some (Cons (DAxiom a) ds))))))
+                ((Some (Pair name goalS))
+                  (match (collect_decls rest ctors)
+                    (None None)
+                    ((Some ds) (Some (Cons (DNAxiom (NAx name goalS)) ds))))))
+              (match (axiom_of_form f ctors)
+                (None None)
+                ((Some a)
+                  (match (collect_decls rest ctors)
+                    (None None)
+                    ((Some ds) (Some (Cons (DAxiom a) ds)))))))
       (if (is_requirement_form f)
-          (match (req_of_form f ctors)
-            (None None)
-            ((Some r)
-              (match (collect_decls rest ctors)
+          (if (is_native_goalonly f)
+              (match (goalonly_of_form f)
                 (None None)
-                ((Some ds) (Some (Cons (DReq r) ds))))))
+                ((Some (Pair name goalS))
+                  (match (collect_decls rest ctors)
+                    (None None)
+                    ((Some ds) (Some (Cons (DNReq (NReq name goalS)) ds))))))
+              (match (req_of_form f ctors)
+                (None None)
+                ((Some r)
+                  (match (collect_decls rest ctors)
+                    (None None)
+                    ((Some ds) (Some (Cons (DReq r) ds)))))))
       (if (is_fulfills_form f)
-          (match (ful_of_form f ctors)
-            (None None)
-            ((Some fu)
-              (match (collect_decls rest ctors)
+          (if (is_native_fulfills f)
+              (match (nful_of_form f)
                 (None None)
-                ((Some ds) (Some (Cons (DFul fu) ds))))))
+                ((Some fu)
+                  (match (collect_decls rest ctors)
+                    (None None)
+                    ((Some ds) (Some (Cons (DNFul fu) ds))))))
+              (match (ful_of_form f ctors)
+                (None None)
+                ((Some fu)
+                  (match (collect_decls rest ctors)
+                    (None None)
+                    ((Some ds) (Some (Cons (DFul fu) ds)))))))
           (collect_decls rest ctors))))))))
 
 (fn parse_decls ((src (List Int)) (ctors (List Symbol))) (Option (List Decl))
