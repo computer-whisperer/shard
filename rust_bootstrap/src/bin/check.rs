@@ -2117,7 +2117,7 @@ fn run_shard_check(files: &[String], kernel: &ast::Module) -> ExitCode {
         externs: kernel.externs.clone(),
     });
     let kdir = default_kernel_dir();
-    for tool in &["reader.shard", "unreflect.shard", "desugar.shard", "driver.shard"] {
+    for tool in &["reader.shard", "unreflect.shard", "desugar.shard", "trace.shard", "driver.shard"] {
         if let Err(code) = process_file(&kdir.join(tool), &mut eval_ctx, kernel) {
             return code;
         }
@@ -2165,21 +2165,30 @@ fn run_shard_check(files: &[String], kernel: &ast::Module) -> ExitCode {
         Err(e) => { eprintln!("shard check_production error: {}", e); return ExitCode::from(2); }
     };
 
+    let sym_at = |a: &[ast::Expr]| -> String {
+        match a.first() {
+            Some(ast::Expr::SymLit(s)) => s.clone(),
+            other => format!("{:?}", other),
+        }
+    };
     let (mut passed, mut failed, mut axioms) = (0usize, 0usize, 0usize);
-    let mut fail_names: Vec<String> = Vec::new();
     for item in decode_list(&result) {
         match item {
-            ast::Expr::Ctor(tag, a) if a.len() == 1 => {
-                let name = match &a[0] {
-                    ast::Expr::SymLit(s) => s.clone(),
-                    other => format!("{:?}", other),
-                };
-                match tag.as_str() {
-                    "COPass"  => { println!("PASS  {}", name); passed += 1; }
-                    "COAxiom" => { println!("AXIOM {}  (admitted without proof)", name); axioms += 1; }
-                    "COFail"  => { println!("FAIL  {}", name); failed += 1; fail_names.push(name); }
-                    other => { eprintln!("unknown outcome tag {}", other); return ExitCode::from(2); }
-                }
+            ast::Expr::Ctor(tag, a) if tag == "COPass" && a.len() == 1 => {
+                println!("PASS  {}", sym_at(a)); passed += 1;
+            }
+            ast::Expr::Ctor(tag, a) if tag == "COAxiom" && a.len() == 1 => {
+                println!("AXIOM {}  (admitted without proof)", sym_at(a)); axioms += 1;
+            }
+            ast::Expr::Ctor(tag, a) if tag == "COFail" && a.len() == 2 => {
+                println!("FAIL  {}", sym_at(a));
+                // a[1] is the diagnostic, an already-native (List Int) of codepoints.
+                let detail: String = decode_list(&a[1]).iter().filter_map(|e| match e {
+                    ast::Expr::IntLit(c) => char::from_u32(*c as u32),
+                    _ => None,
+                }).collect();
+                if !detail.is_empty() { println!("{}", detail); }
+                failed += 1;
             }
             other => { eprintln!("malformed ClaimOutcome: {}", show_reflected(other)); return ExitCode::from(2); }
         }
@@ -2190,9 +2199,6 @@ fn run_shard_check(files: &[String], kernel: &ast::Module) -> ExitCode {
         println!("{} passed, {} failed, {} axiom(s) admitted without proof", passed, failed, axioms);
     } else {
         println!("{} passed, {} failed", passed, failed);
-    }
-    if !fail_names.is_empty() {
-        println!("re-run with `--trace {}` for a per-step diagnostic", fail_names[0]);
     }
     if failed > 0 { ExitCode::from(1) } else { ExitCode::SUCCESS }
 }
