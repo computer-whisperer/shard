@@ -66,9 +66,96 @@
     (Nil Nil)
     ((Cons a rest) (Cons 32 (append_int (show_expr a) (show_args rest))))))
 
+;; ===========================================================================
+;; IMPORT-CLOSURE RESOLUTION — done in shard, via the read_file extern.
+;; Given a target file, read it, follow its (import …) directives, and gather
+;; the whole closure as a source list in DEPENDENCY ORDER (deps before the
+;; files that import them), deduped — exactly what build_module folds over.
+;; ===========================================================================
+
+;; the dir prefix of a path: everything up to and including the last '/'
+;; (Nil if none). read_file hands the joined "<dir><relative>" to the OS,
+;; which resolves any ../ — so no path canonicalization is needed here.
+(fn drop_to_slash ((rp (List Int))) (List Int)   ; rp reversed; keep from last '/'
+  (match rp
+    (Nil Nil)
+    ((Cons c t) (if (int_eq c 47) rp (drop_to_slash t)))))
+
+(fn dir_of ((p (List Int))) (List Int)
+  (rev_i (drop_to_slash (rev_i p Nil)) Nil))
+
+(fn int_list_eq ((a (List Int)) (b (List Int))) Bool
+  (match a
+    (Nil (match b (Nil True) (_ False)))
+    ((Cons x xs)
+      (match b (Nil False) ((Cons y ys) (if (int_eq x y) (int_list_eq xs ys) False))))))
+
+(fn path_member ((p (List Int)) (ps (List (List Int)))) Bool
+  (match ps
+    (Nil False)
+    ((Cons q rest) (if (int_list_eq p q) True (path_member p rest)))))
+
+;; (import "X") / (use-module "X") → (Some X-bytes); any other form → None.
+(fn import_path_of ((f SExpr)) (Option (List Int))
+  (match f
+    ((SList (Cons (SSym h) (Cons (SStr path) Nil)))
+      (if (sym_eq h (quote import))
+          (Some path)
+          (if (sym_eq h (quote use-module)) (Some path) None)))
+    (_ None)))
+
+;; the import paths a source declares, each joined to the importer's dir.
+(fn import_paths ((dir (List Int)) (forms (List SExpr))) (List (List Int))
+  (match forms
+    (Nil Nil)
+    ((Cons f rest)
+      (match (import_path_of f)
+        (None       (import_paths dir rest))
+        ((Some rel) (Cons (append_int dir rel) (import_paths dir rest)))))))
+
+(fn imports_of ((dir (List Int)) (src (List Int))) (List (List Int))
+  (match (read_all src)
+    (None Nil)
+    ((Some forms) (import_paths dir forms))))
+
+;; append a source at the END of the accumulator — so a file lands AFTER the
+;; imports visited before it (post-order ⇒ deps first).
+(fn append_src ((acc (List (List Int))) (src (List Int))) (List (List Int))
+  (match acc
+    (Nil (Cons src Nil))
+    ((Cons h t) (Cons h (append_src t src)))))
+
+;; closure-resolution state: seen paths (cycle/dedup), sources so far, World.
+(type Closure (Closure (List (List Int)) (List (List Int)) World))
+
+(fn visit ((path (List Int)) (st Closure)) Closure
+  (match st
+    ((Closure seen acc w)
+      (if (path_member path seen)
+          st
+          (match (read_file path w)
+            ((Pair msrc w1)
+              (match msrc
+                (None (Closure (Cons path seen) acc w1))    ; unreadable — skip
+                ((Some src)
+                  (match (visit_imports (imports_of (dir_of path) src)
+                                        (Closure (Cons path seen) acc w1))
+                    ((Closure seen2 acc2 w2)
+                      (Closure seen2 (append_src acc2 src) w2)))))))))))
+
+(fn visit_imports ((paths (List (List Int))) (st Closure)) Closure
+  (match paths
+    (Nil st)
+    ((Cons p rest) (visit_imports rest (visit p st)))))
+
+(fn resolve_closure ((entry (List Int)) (w World)) (Pair (List (List Int)) World)
+  (match (visit entry (Closure Nil Nil w))
+    ((Closure _ acc w2) (Pair acc w2))))
+
 ;; ---- the eval pipeline ----------------------------------------------------
 ;; The ambient ctor base: stdlib ctors a user program may use without
-;; declaring (parse needs them to tell Ctor from Call).
+;; declaring (parse needs them to tell Ctor from Call). build_module then
+;; accumulates each file's own ctors as it folds the closure in order.
 (fn stdlib_ctors () (List Symbol)
   (list (quote Cons) (quote Nil) (quote Some) (quote None)
         (quote True) (quote False) (quote Pair)))
@@ -76,9 +163,9 @@
 (fn module_all_ctors ((m Module)) (List Symbol)
   (match m ((Module tds _ _) (append_sym (typedef_ctors tds) (stdlib_ctors)))))
 
-(fn eval_run ((module_src (List Int)) (expr_src (List Int))) (List Int)
-  (match (parse_module module_src (stdlib_ctors))
-    (None "error: could not parse module\n")
+(fn eval_run ((sources (List (List Int))) (expr_src (List Int))) (List Int)
+  (match (build_module sources (Module Nil Nil Nil) (stdlib_ctors))
+    (None "error: could not parse module(s)\n")
     ((Some m)
       (match (parse_expr expr_src (module_all_ctors m))
         (None "error: could not parse expression\n")
@@ -86,15 +173,14 @@
           (append_int (show_expr (compute_expr m e)) (Cons 10 Nil)))))))
 
 ;; ---- the World wrapper: args[0] = module file, args[1] = expression ---------
+;; Resolve the target's import closure (reading every file via read_file),
+;; then build + evaluate against the whole thing.
 (fn main ((w World)) World
   (match (get_args w)
     ((Pair args w1)
       (match args
         ((Cons module_path (Cons expr_str _))
-          (match (read_file module_path w1)
-            ((Pair mmod w2)
-              (match mmod
-                (None             (exit 1 w2))                       ; can't read module
-                ((Some module_src)
-                  (exit 0 (write (eval_run module_src expr_str) w2)))))))
+          (match (resolve_closure module_path w1)
+            ((Pair sources w2)
+              (exit 0 (write (eval_run sources expr_str) w2)))))
         (_ (exit 2 w1))))))                                          ; usage: need 2 args
