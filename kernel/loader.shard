@@ -1,0 +1,116 @@
+;;; loader.shard — the shared LOADING machinery for shard apps that read other
+;;; shard files: the World I/O externs and the import-closure resolver. Factored
+;;; out of eval.shard so both the evaluator (eval.shard) and the proof-checker
+;;; app (check.shard) build a target's source closure the same way.
+;;;
+;;; A shard app reads files at RUN time via these externs; the closure resolver
+;;; follows a target's (import …) directives and returns the whole closure as a
+;;; source list in DEPENDENCY ORDER (deps before importers), deduped — exactly
+;;; what build_module folds over. Resolution is itself a World program: each
+;;; read_file threads the World, so it runs under eval.shard's app runner.
+
+;; Direct deps: the prelude types and the reader (read_all / rev_i / SExpr).
+;; Their own transitive deps (term/module) come in via the entrypoint's flat
+;; import list — kernel files don't declare their imports yet (see eval.shard).
+(import "stdlib.shard")   ; List / Option / Bool / Pair
+(import "reader.shard")   ; read_all / rev_i / SExpr
+
+;; The World: a sequencing token (a clock). Every effect is an extern that
+;; threads it; the data dependency orders the effects. In a proof these are
+;; uninterpreted (stuck) and the run-time host performs them.
+(type World (World Int))
+
+(extern get_args   ((w World)) (Pair (List (List Int)) World))
+(extern read_file  ((path (List Int)) (w World)) (Pair (Option (List Int)) World))
+(extern write      ((bytes (List Int)) (w World)) World)
+(extern write_line ((bytes (List Int)) (w World)) World)
+(extern exit       ((code Int) (w World)) World)
+
+;; ===========================================================================
+;; IMPORT-CLOSURE RESOLUTION — via the read_file extern.
+;; Given a target file, read it, follow its (import …) directives, and gather
+;; the whole closure as a source list in DEPENDENCY ORDER, deduped.
+;; ===========================================================================
+
+;; the dir prefix of a path: everything up to and including the last '/'
+;; (Nil if none). read_file hands the joined "<dir><relative>" to the OS,
+;; which resolves any ../ — so no path canonicalization is needed here.
+(fn drop_to_slash ((rp (List Int))) (List Int)   ; rp reversed; keep from last '/'
+  (match rp
+    (Nil Nil)
+    ((Cons c t) (if (int_eq c 47) rp (drop_to_slash t)))))
+
+(fn dir_of ((p (List Int))) (List Int)
+  (rev_i (drop_to_slash (rev_i p Nil)) Nil))
+
+(fn int_list_eq ((a (List Int)) (b (List Int))) Bool
+  (match a
+    (Nil (match b (Nil True) (_ False)))
+    ((Cons x xs)
+      (match b (Nil False) ((Cons y ys) (if (int_eq x y) (int_list_eq xs ys) False))))))
+
+(fn path_member ((p (List Int)) (ps (List (List Int)))) Bool
+  (match ps
+    (Nil False)
+    ((Cons q rest) (if (int_list_eq p q) True (path_member p rest)))))
+
+;; the dir prefix joined onto a relative import path.
+(fn append_int ((xs (List Int)) (ys (List Int))) (List Int)
+  (match xs (Nil ys) ((Cons h t) (Cons h (append_int t ys)))))
+
+;; (import "X") / (use-module "X") → (Some X-bytes); any other form → None.
+(fn import_path_of ((f SExpr)) (Option (List Int))
+  (match f
+    ((SList (Cons (SSym h) (Cons (SStr path) Nil)))
+      (if (sym_eq h (quote import))
+          (Some path)
+          (if (sym_eq h (quote use-module)) (Some path) None)))
+    (_ None)))
+
+;; the import paths a source declares, each joined to the importer's dir.
+(fn import_paths ((dir (List Int)) (forms (List SExpr))) (List (List Int))
+  (match forms
+    (Nil Nil)
+    ((Cons f rest)
+      (match (import_path_of f)
+        (None       (import_paths dir rest))
+        ((Some rel) (Cons (append_int dir rel) (import_paths dir rest)))))))
+
+(fn imports_of ((dir (List Int)) (src (List Int))) (List (List Int))
+  (match (read_all src)
+    (None Nil)
+    ((Some forms) (import_paths dir forms))))
+
+;; append a source at the END of the accumulator — so a file lands AFTER the
+;; imports visited before it (post-order ⇒ deps first).
+(fn append_src ((acc (List (List Int))) (src (List Int))) (List (List Int))
+  (match acc
+    (Nil (Cons src Nil))
+    ((Cons h t) (Cons h (append_src t src)))))
+
+;; closure-resolution state: seen paths (cycle/dedup), sources so far, World.
+(type Closure (Closure (List (List Int)) (List (List Int)) World))
+
+(fn visit ((path (List Int)) (st Closure)) Closure
+  (match st
+    ((Closure seen acc w)
+      (if (path_member path seen)
+          st
+          (match (read_file path w)
+            ((Pair msrc w1)
+              (match msrc
+                (None (Closure (Cons path seen) acc w1))    ; unreadable — skip
+                ((Some src)
+                  (match (visit_imports (imports_of (dir_of path) src)
+                                        (Closure (Cons path seen) acc w1))
+                    ((Closure seen2 acc2 w2)
+                      (Closure seen2 (append_src acc2 src) w2)))))))))))
+
+(fn visit_imports ((paths (List (List Int))) (st Closure)) Closure
+  (match paths
+    (Nil st)
+    ((Cons p rest) (visit_imports rest (visit p st)))))
+
+(fn resolve_closure ((entry (List Int)) (w World)) (Pair (List (List Int)) World)
+  (match (visit entry (Closure Nil Nil w))
+    ((Closure _ acc w2) (Pair acc w2))))

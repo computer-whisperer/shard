@@ -36,7 +36,7 @@ pub fn load_kernel_from<P: AsRef<std::path::Path>>(
         p("proof.shard"),
         p("term.shard"),
         p("reduce.shard"),
-        p("check.shard"),
+        p("checker.shard"),
         p("lia.shard"),
         p("eqdec.shard"),
         p("ord.shard"),
