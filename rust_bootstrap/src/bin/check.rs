@@ -117,6 +117,14 @@ fn run() -> ExitCode {
         return run_claims_check(&args[1..]);
     }
 
+    // `dsl-print` subcommand: render a file's REFLECTED claims/axioms/
+    // requirements as proof-DSL surface text (kernel/dsl_print.shard). A
+    // migration aid — splice the output into the file, replacing the reflected
+    // forms, then `check` to confirm the rendering round-trips.
+    if args[0] == "dsl-print" {
+        return run_dsl_print(&args[1..]);
+    }
+
     let kernel = match load_kernel_from(default_kernel_dir()) {
         Ok(m) => m,
         Err(e) => {
@@ -1263,6 +1271,66 @@ fn run_shard_check(files: &[String], kernel: &ast::Module, trace: Option<&str>) 
 }
 
 // ----------------------------------------------------------------------
+// `dsl-print` — render a file's reflected claims/axioms/requirements as
+// proof-DSL surface text. Builds M from the target's import closure (so
+// desugar's IH counts resolve), then calls kernel/dsl_print.shard's
+// dsl_print_src, which un-reflects each decl to native and prints the DSL.
+// ----------------------------------------------------------------------
+fn run_dsl_print(args: &[String]) -> ExitCode {
+    if args.is_empty() {
+        eprintln!("usage: check dsl-print <file.shard>");
+        return ExitCode::from(2);
+    }
+    let kernel = match load_kernel_from(default_kernel_dir()) {
+        Ok(m) => m,
+        Err(e) => { eprintln!("error loading kernel: {}", e); return ExitCode::from(2); }
+    };
+    let toolchain_vm = match load_toolchain_vm(&kernel) {
+        Ok(m) => m,
+        Err(code) => return code,
+    };
+    let target_path = PathBuf::from(&args[0]);
+    let order = match ordered_closure(&[target_path.clone()]) {
+        Ok(o) => o,
+        Err(code) => return code,
+    };
+    let mut srcs_list = nil();
+    for p in order.iter().rev() {
+        match std::fs::read_to_string(p) {
+            Ok(s) => { srcs_list = ctor("Cons", vec![line_to_event_native(&s), srcs_list]); }
+            Err(e) => { eprintln!("error reading {}: {}", p.display(), e); return ExitCode::from(2); }
+        }
+    }
+    let target_src = match std::fs::read_to_string(&target_path) {
+        Ok(s) => line_to_event_native(&s),
+        Err(e) => { eprintln!("error reading {}: {}", target_path.display(), e); return ExitCode::from(2); }
+    };
+    let seed = module_to_value(&ast::Module {
+        types: kernel.types.clone(),
+        fns: Vec::new(),
+        externs: Vec::new(),
+    });
+    let kernel_ctor_names: Vec<String> = kernel.types.iter()
+        .flat_map(|td| td.ctors.iter().map(|cd| cd.name.clone()))
+        .collect();
+    let base_ctors = sym_list_native(&kernel_ctor_names);
+    let call = ast::Expr::Call(
+        "dsl_print_src".into(),
+        vec![seed, base_ctors, srcs_list, target_src],
+    );
+    let result = match eval_raw(&toolchain_vm, &call).and_then(|v| value_to_native_expr(&v)) {
+        Ok(v) => v,
+        Err(e) => { eprintln!("shard dsl_print error: {}", e); return ExitCode::from(2); }
+    };
+    let text: String = decode_list(&result).iter().filter_map(|x| match x {
+        ast::Expr::IntLit(c) => char::from_u32(*c as u32),
+        _ => None,
+    }).collect();
+    print!("{}", text);
+    ExitCode::SUCCESS
+}
+
+// ----------------------------------------------------------------------
 // Loading user code through the SHARD reader.
 //
 // `check`, `run`, and `eval` all parse user/target `.shard` code with the
@@ -1301,7 +1369,8 @@ fn load_toolchain_vm(kernel: &ast::Module) -> Result<ast::Module, ExitCode> {
         let p = kdir.join(base);
         ctx.loaded.insert(p.canonicalize().unwrap_or(p));
     }
-    for tool in &["reader.shard", "unreflect.shard", "desugar.shard", "trace.shard", "driver.shard"] {
+    for tool in &["reader.shard", "unreflect.shard", "desugar.shard", "trace.shard", "driver.shard",
+                  "dsl_print.shard"] {   // dsl_print: the `dsl-print` migration subcommand's renderer
         process_file(&kdir.join(tool), &mut ctx, kernel)?;
     }
     Ok(ctx.user_module)

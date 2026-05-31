@@ -1,0 +1,267 @@
+;;; dsl_print.shard — a native→proof-DSL pretty-printer, for corpus migration.
+;;;
+;;; One-shot tool: read a file's REFLECTED claims/axioms/requirements, run them
+;;; through the existing reflected→native pipeline (unreflect + desugar), and
+;;; render the resulting native Goal/Proof back out as proof-DSL surface text.
+;;; The output is the inverse of reader.shard's `elaborate` + proof_reader.shard
+;;; — what you splice into a file to replace its reflected forms. Correctness is
+;;; checked downstream: re-parse the printed DSL and `check` it; an identical
+;;; PASS set means the rendering round-trips.
+;;;
+;;; Named hypotheses are lost (the native Proof has positional (Hyp k) only,
+;;; since unreflect desugars names away) — printed as (hyp k). Fulfills decls
+;;; are not rendered (their goal lives in a separate requirement); handle the
+;;; snake_game_2 contracts by hand.
+
+(import "driver.shard")   ; the reflected→native pipeline + all kernel helpers
+
+(fn dnl () (List Int) (Cons 10 Nil))
+(fn dsp () (List Int) (Cons 32 Nil))               ; one space
+(fn paren ((x (List Int))) (List Int) (append_int "(" (append_int x ")")))
+
+;; ---- terms: inverse of elaborate -----------------------------------------
+;; A proper list value (Cons … (Cons … Nil)) → its element Exprs, for (list …)
+;; sugar. An improper tail (e.g. (Cons h acc) with acc a var) yields None.
+(fn as_list_elems ((e Expr)) (Option (List Expr))
+  (match e
+    ((Ctor n Nil) (if (sym_eq n (quote Nil)) (Some Nil) None))
+    ((Ctor n (Cons h (Cons t Nil)))
+      (if (sym_eq n (quote Cons))
+          (match (as_list_elems t)
+            (None None)
+            ((Some rest) (Some (Cons h rest))))
+          None))
+    (_ None)))
+
+;; " t1 t2 t3" — each term preceded by a space.
+(fn pp_terms_sp ((es (List Expr))) (List Int)
+  (match es
+    (Nil Nil)
+    ((Cons h t) (append_int (dsp) (append_int (pp_term h) (pp_terms_sp t))))))
+
+(fn pp_term ((e Expr)) (List Int)
+  (match e
+    ((IntLit n) (show_int n))
+    ((FVar s)   (chars_of_sym s))
+    ((SymLit s) (append_int "'" (chars_of_sym s)))
+    ((BVar i)   (append_int "<BVAR " (append_int (show_int i) ">")))   ; unexpected
+    ((Ctor name args)
+      (match (as_list_elems e)
+        ((Some elems) (paren (append_int "list" (pp_terms_sp elems))))  ; (list …)
+        (None
+          (match args
+            (Nil (chars_of_sym name))                                  ; nullary ctor
+            (_ (paren (append_int (chars_of_sym name) (pp_terms_sp args))))))))
+    ((Call name args) (paren (append_int (chars_of_sym name) (pp_terms_sp args))))
+    ((If c t el)
+      (paren (append_int "if" (append_int (dsp)
+        (append_int (pp_term c) (append_int (dsp)
+          (append_int (pp_term t) (append_int (dsp) (pp_term el)))))))))
+    (_ "<UNRENDERABLE-EXPR>")))                                         ; Match/Let
+
+;; ---- types ----------------------------------------------------------------
+(fn pp_types_sp ((ts (List Type))) (List Int)
+  (match ts
+    (Nil Nil)
+    ((Cons h t) (append_int (dsp) (append_int (pp_type h) (pp_types_sp t))))))
+
+(fn pp_type ((ty Type)) (List Int)
+  (match ty
+    ((TVar s) (chars_of_sym s))
+    ((TCon name args)
+      (match args
+        (Nil (chars_of_sym name))
+        (_ (paren (append_int (chars_of_sym name) (pp_types_sp args))))))))
+
+;; ---- params / equations / goal --------------------------------------------
+(fn pp_param ((p Param)) (List Int)
+  (match p ((Param name ty) (paren (append_int (chars_of_sym name) (append_int (dsp) (pp_type ty)))))))
+
+(fn pp_params_sp ((ps (List Param))) (List Int)
+  (match ps
+    (Nil Nil)
+    ((Cons (Param name ty) Nil) (pp_param (Param name ty)))     ; last — no trailing space
+    ((Cons h t) (append_int (pp_param h) (append_int (dsp) (pp_params_sp t))))))
+
+(fn pp_eq ((eq Equation)) (List Int)
+  (match eq ((Equation l r)
+    (paren (append_int "= " (append_int (pp_term l) (append_int (dsp) (pp_term r))))))))
+
+(fn pp_eqs_sp ((eqs (List Equation))) (List Int)
+  (match eqs
+    (Nil Nil)
+    ((Cons e Nil) (pp_eq e))
+    ((Cons h t) (append_int (pp_eq h) (append_int (dsp) (pp_eqs_sp t))))))
+
+(fn pp_goal ((g Goal)) (List Int)
+  (match g
+    ((Goal params prems concl)
+      (append_int "(goal "
+        (append_int (paren (pp_params_sp params))
+          (append_int (dsp)
+            (append_int (paren (pp_eqs_sp prems))
+              (append_int (dsp) (append_int (pp_eq concl) ")")))))))))
+
+;; ---- proof leaves ---------------------------------------------------------
+(fn pp_side ((sd Side)) (List Int)
+  (match sd (Lhs "lhs") (Rhs "rhs") (Both "both")))
+(fn pp_dir ((d Dir)) (List Int)
+  (match d (Lr "lr") (Rl "rl")))
+(fn pp_bool ((b Bool)) (List Int)
+  (match b (True "true") (False "false")))
+
+(fn pp_eqref ((er EqRef)) (List Int)
+  (match er
+    ((Hyp k)      (paren (append_int "hyp " (show_int k))))
+    ((HypName s)  (paren (append_int "hyp " (chars_of_sym s))))
+    ((Premise k)  (paren (append_int "premise " (show_int k))))
+    ((Lemma n)    (paren (append_int "lemma " (chars_of_sym n))))))
+
+(fn pp_inst ((i Inst)) (List Int)
+  (match i ((Inst nm t)
+    (paren (append_int "inst " (append_int (chars_of_sym nm) (append_int (dsp) (pp_term t))))))))
+
+(fn pp_insts_sp ((is (List Inst))) (List Int)
+  (match is
+    (Nil Nil)
+    ((Cons i Nil) (pp_inst i))
+    ((Cons h t) (append_int (pp_inst h) (append_int (dsp) (pp_insts_sp t))))))
+
+;; ---- steps ----------------------------------------------------------------
+(fn pp_step ((st Step)) (List Int)
+  (match st
+    ((Unfold fn sd) (paren (append_int "unfold " (append_int (chars_of_sym fn) (append_int (dsp) (pp_side sd))))))
+    ((Reduce sd)  (paren (append_int "reduce " (pp_side sd))))
+    ((Simp sd)    (paren (append_int "simp " (pp_side sd))))
+    ((Compute sd) (paren (append_int "compute " (pp_side sd))))
+    ((Rewrite ref dir sd all insts)
+      (paren (append_int "rewrite "
+        (append_int (pp_eqref ref) (append_int (dsp)
+          (append_int (pp_dir dir) (append_int (dsp)
+            (append_int (pp_side sd) (append_int (dsp)
+              (append_int (pp_bool all) (append_int (dsp)
+                (paren (pp_insts_sp insts)))))))))))))))
+
+(fn pp_steps_sp ((sts (List Step))) (List Int)
+  (match sts
+    (Nil Nil)
+    ((Cons s Nil) (pp_step s))
+    ((Cons h t) (append_int (pp_step h) (append_int (dsp) (pp_steps_sp t))))))
+
+;; ---- proofs / cases (mutually recursive) ----------------------------------
+(fn pp_proof ((p Proof)) (List Int)
+  (match p
+    (Refl "refl")
+    ((Steps steps cont)
+      (paren (append_int "steps "
+        (append_int (paren (pp_steps_sp steps)) (append_int (dsp) (pp_proof cont))))))
+    ((Induct var cases)
+      (paren (append_int "induct "
+        (append_int (chars_of_sym var) (append_int (dsp) (paren (pp_cases_sp cases)))))))
+    ((Induct2 var cases)
+      (paren (append_int "induct2 "
+        (append_int (chars_of_sym var) (append_int (dsp) (paren (pp_cases_sp cases)))))))
+    ((CaseOn e var cases)
+      (paren (append_int "case-on "
+        (append_int (pp_term e) (append_int (dsp)
+          (append_int (chars_of_sym var) (append_int (dsp) (paren (pp_cases_sp cases)))))))))
+    ((WfInduct measure sub)
+      (paren (append_int "wf-induct "
+        (append_int (pp_term measure) (append_int (dsp) (pp_proof sub))))))
+    ((RewriteWith ref dir sd insts subs cont)
+      (paren (append_int "rewrite-with "
+        (append_int (pp_eqref ref) (append_int (dsp)
+          (append_int (pp_dir dir) (append_int (dsp)
+            (append_int (pp_side sd) (append_int (dsp)
+              (append_int (paren (pp_insts_sp insts)) (append_int (dsp)
+                (append_int (paren (pp_proofs_sp subs)) (append_int (dsp) (pp_proof cont))))))))))))))
+    ((Absurd ref) (paren (append_int "absurd " (pp_eqref ref))))
+    ((ByTheory theory cert)
+      (match cert ((Cert _ payload)
+        (paren (append_int "by " (append_int (chars_of_sym theory) (append_int (dsp) (pp_term payload))))))))
+    (_ "<UNRENDERABLE-PROOF>")))
+
+(fn pp_proofs_sp ((ps (List Proof))) (List Int)
+  (match ps
+    (Nil Nil)
+    ((Cons p Nil) (pp_proof p))
+    ((Cons h t) (append_int (pp_proof h) (append_int (dsp) (pp_proofs_sp t))))))
+
+(fn pp_syms_sp ((ss (List Symbol))) (List Int)
+  (match ss
+    (Nil Nil)
+    ((Cons s Nil) (chars_of_sym s))
+    ((Cons h t) (append_int (chars_of_sym h) (append_int (dsp) (pp_syms_sp t))))))
+
+(fn pp_case ((c Case)) (List Int)
+  (match c
+    ((Case cname sub)
+      (paren (append_int "case " (append_int (chars_of_sym cname) (append_int (dsp) (pp_proof sub))))))
+    ((CaseB cname fields sub)
+      (paren (append_int "case "
+        (append_int (chars_of_sym cname) (append_int (dsp)
+          (append_int (paren (pp_syms_sp fields)) (append_int (dsp) (pp_proof sub))))))))))
+
+(fn pp_cases_sp ((cs (List Case))) (List Int)
+  (match cs
+    (Nil Nil)
+    ((Cons c Nil) (pp_case c))
+    ((Cons h t) (append_int (pp_case h) (append_int (dsp) (pp_cases_sp t))))))
+
+;; ---- whole decls ----------------------------------------------------------
+;; (claim NAME GOAL PROOF) — goal and proof on their own indented lines.
+(fn pp_claim_dsl ((name Symbol) (g Goal) (p Proof)) (List Int)
+  (append_int "(claim "
+    (append_int (chars_of_sym name)
+      (append_int (dnl)
+        (append_int "  " (append_int (pp_goal g)
+          (append_int (dnl)
+            (append_int "  " (append_int (pp_proof p) (append_int ")" (dnl)))))))))))
+
+(fn pp_axiom_dsl ((name Symbol) (g Goal)) (List Int)
+  (append_int "(axiom "
+    (append_int (chars_of_sym name)
+      (append_int (dnl)
+        (append_int "  " (append_int (pp_goal g) (append_int ")" (dnl))))))))
+
+(fn pp_req_dsl ((name Symbol) (g Goal)) (List Int)
+  (append_int "(requirement "
+    (append_int (chars_of_sym name)
+      (append_int (dnl)
+        (append_int "  " (append_int (pp_goal g) (append_int ")" (dnl))))))))
+
+;; ---- driver over a file's decls -------------------------------------------
+(fn pp_decl ((m Module) (d Decl)) (List Int)
+  (match d
+    ((DClaim c)
+      (match (unreflect_goal (claim_goal c))
+        (None (append_int ";; SKIP claim (un-reflect goal failed)" (dnl)))
+        ((Some g)
+          (match (unreflect_proof (desugar_hyps m (goal_params g) Nil (claim_proof c)))
+            (None (append_int ";; SKIP claim (un-reflect proof failed)" (dnl)))
+            ((Some p) (pp_claim_dsl (claim_name c) g p))))))
+    ((DAxiom a)
+      (match (unreflect_goal (axdecl_goal a))
+        (None (append_int ";; SKIP axiom (un-reflect goal failed)" (dnl)))
+        ((Some g) (pp_axiom_dsl (axdecl_name a) g))))
+    ((DReq r)
+      (match (unreflect_goal (req_goal r))
+        (None (append_int ";; SKIP requirement (un-reflect goal failed)" (dnl)))
+        ((Some g) (pp_req_dsl (req_name r) g))))
+    ((DFul fu) (append_int ";; FULFILLS — render by hand (goal is in the requirement)" (dnl)))
+    (_ (append_int ";; (already proof-DSL — left as is)" (dnl)))))
+
+(fn pp_decls ((m Module) (ds (List Decl))) (List Int)
+  (match ds
+    (Nil Nil)
+    ((Cons d rest) (append_int (pp_decl m d) (append_int (dnl) (pp_decls m rest))))))
+
+;; Entry: build M from the closure (as production check does), parse the target
+;; file's decls, render every reflected one. M is needed for desugar's IH counts.
+(fn dsl_print_src ((seed Module) (base_ctors (List Symbol)) (srcs (List (List Int))) (target (List Int))) (List Int)
+  (match (build_module srcs seed base_ctors)
+    (None (append_int "ERROR: could not parse closure" (dnl)))
+    ((Some m)
+      (match (parse_decls target (typedef_ctors (module_typedefs m)))
+        (None (append_int "ERROR: could not parse target decls" (dnl)))
+        ((Some ds) (pp_decls m ds))))))
