@@ -1,0 +1,111 @@
+;;; echo_world.shard — OPTION C PROTOTYPE: direct-style world-threading I/O.
+;;;
+;;; The goal: system I/O as ordinary first-order shard functions that thread a
+;;; `World`, so a program that does I/O is still a pure value — provable, and
+;;; with its effects stubbable by axioms.
+;;;
+;;; THE MODEL
+;;;   World = (clock, input, output). `clock` is a monotonic sequencing token
+;;;   bumped by every effect; `input` is the unread stdin (the oracle the
+;;;   runtime fills); `output` is the accumulated writes (the runtime flushes).
+;;;   read/write are PURE functions OF the world:
+;;;     - a read queries the input field (two distinct clocks ⇒ two distinct
+;;;       terms ⇒ may legitimately differ — referential transparency holds),
+;;;     - a write extends the output field.
+;;;
+;;; RUN vs PROVE
+;;;   RUN:   `check run echo_world.shard` builds world0 from the real stdin,
+;;;          reduces (main world0) PURELY (no effectful VM primitive — the whole
+;;;          program is a pure World→World function), and flushes output.
+;;;   PROVE: `check echo_world.shard` checks the claims below, which treat the
+;;;          input as an ARBITRARY list (the oracle) and prove the program's
+;;;          behaviour for ALL inputs.
+;;;
+;;; This is the OUTPUT+batched-stdin slice (everything up-front knowable). The
+;;; lazy oracle (a read whose result depends on prior computation — true
+;;; mid-computation syscalls) and the monotonicity-as-theorem demo are the next
+;;; steps; the clock field is here as the sequencing token they will build on.
+
+(import "../../std/list.shard")   ; append (+ append_assoc, append_nil_right)
+
+;; --- the world, as data -----------------------------------------------------
+(type World
+  (World
+    Int                  ; clock  — bumped by every effect (the sequencing token)
+    (List (List Int))    ; input  — unread stdin lines (runtime-supplied)
+    (List (List Int))))  ; output — accumulated writes (runtime-flushed)
+
+(fn w_clock  ((w World)) Int               (match w ((World c i o) c)))
+(fn w_input  ((w World)) (List (List Int)) (match w ((World c i o) i)))
+(fn w_output ((w World)) (List (List Int)) (match w ((World c i o) o)))
+
+;; --- the program: echo every input line to output ---------------------------
+;; echo_go recurses on the INPUT LIST directly (so a proof can Induct on it and
+;; the IH matches the recursive redex; if we matched the World wrapper first,
+;; the reducer would peel it and get stuck at the inner match, hiding the
+;; recursive call from the IH). Each step writes one line — append it to output
+;; and bump the clock — one effect per line, clock advancing monotonically.
+(fn echo_go ((i (List (List Int))) (c Int) (o (List (List Int)))) World
+  (match i
+    (Nil               (World c Nil o))
+    ((Cons line rest)  (echo_go rest (+ c 1) (append o (Cons line Nil))))))
+
+(fn echo_all ((w World)) World
+  (match w ((World c i o) (echo_go i c o))))
+
+;; the run entrypoint the `run` driver calls: World -> World.
+(fn main ((w World)) World (echo_all w))
+
+;; --- proof 1: concrete — echo "hi" (h=104, i=105) ---------------------------
+;; output(echo_all (World 0 (list (list 104 105)) (list))) = (list (list 104 105)).
+;; Pure computation: running the program inside the checker.
+(claim echo_hi
+  (Goal
+    (list)
+    (list)
+    (Equation
+      (Call 'w_output
+        (list (Call 'echo_all
+          (list (Ctor 'World
+            (list (IntLit 0)
+                  (Ctor 'Cons (list (Ctor 'Cons (list (IntLit 104)
+                                       (Ctor 'Cons (list (IntLit 105) (Ctor 'Nil (list))))))
+                                    (Ctor 'Nil (list))))
+                  (Ctor 'Nil (list))))))))
+      (Ctor 'Cons (list (Ctor 'Cons (list (IntLit 104)
+                           (Ctor 'Cons (list (IntLit 105) (Ctor 'Nil (list))))))
+                        (Ctor 'Nil (list))))))
+  (Steps (list (Compute Lhs)) Refl))
+
+;; --- proof 2: the real theorem — echo copies input to output ----------------
+;; ∀ i c o.  w_output(echo_go i c o) = append o i
+;; i.e. for ANY input oracle, the program's output is the old output followed by
+;; exactly the input it was given. Induct on the input list; the Cons step fires
+;; the IH at the advanced (clock, output) — both generalized as Params (the
+;; accumulator-generalization pattern, cf. calc_app_world's run_eq_spec_world).
+(claim echo_copies_input
+  (Goal
+    (list (Param 'i (ty List (ty List Int)))
+          (Param 'c (ty Int))
+          (Param 'o (ty List (ty List Int))))
+    (list)
+    (Equation
+      (Call 'w_output (list (Call 'echo_go (list (FVar 'i) (FVar 'c) (FVar 'o)))))
+      (Call 'append (list (FVar 'o) (FVar 'i)))))
+  (Induct 'i
+    (list
+      (Case 'Nil
+        ;; LHS → o ;  RHS append o Nil → o
+        (Steps (list (Simp Lhs)
+                     (Rewrite (Lemma 'append_nil_right) Lr Rhs True (list)))
+               Refl))
+      (Case 'Cons
+        ;; LHS → w_output(echo_go rest (c+1) (append o (Cons line Nil)))
+        ;;     → [IH]           append (append o (Cons line Nil)) rest
+        ;;     → [append_assoc] append o (append (Cons line Nil) rest)
+        ;;     → [Simp]         append o (Cons line rest)  = RHS
+        (Steps (list (Simp Lhs)
+                     (Rewrite (Hyp 'ih)             Lr Lhs True (list))
+                     (Rewrite (Lemma 'append_assoc) Lr Lhs True (list))
+                     (Simp Lhs))
+               Refl)))))

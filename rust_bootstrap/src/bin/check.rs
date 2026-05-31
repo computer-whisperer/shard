@@ -94,6 +94,14 @@ fn run() -> ExitCode {
         return run_cli(&args[1..]);
     }
 
+    // `run` subcommand: execute a direct-style world-threading program.
+    // `main : World -> World` runs in the pure reducer; the driver fills the
+    // World's input field from stdin and flushes its output field. See
+    // run_program and examples/io/echo_world.shard.
+    if args[0] == "run" {
+        return run_program(&args[1..]);
+    }
+
     // `parse-check` subcommand: differential validation of the shard
     // reader (kernel/reader.shard's `parse_expr`) against the Rust parser
     // (load::expr_from_str). For each expression in a corpus file, parse
@@ -1425,6 +1433,100 @@ fn run_cli(args: &[String]) -> ExitCode {
     }
     eprintln!("error: cli step cap ({}) exceeded — update never emitted Exit", cap);
     ExitCode::from(2)
+}
+
+// ----------------------------------------------------------------------
+// `run` subcommand — execute a direct-style world-threading program.
+//
+// `check run <file.shard>...` reduces `(main world0)` where
+//   World = (World <clock:Int> <input:(List (List Int))> <output:(List (List Int))>)
+// world0 carries clock 0, `input` = the real stdin (one (List Int) of
+// codepoints per line), and an empty `output`. `main : World -> World` is a
+// PURE function — it runs in the native reducer with NO effectful primitive;
+// the driver only FILLS the input field beforehand and DRAINS the output field
+// after. So a program that "does I/O" is a pure value the checker can prove
+// about (see examples/io/echo_world.shard). This is the batched-stdin slice;
+// a lazy oracle for mid-computation reads is the next step.
+// ----------------------------------------------------------------------
+fn run_program(args: &[String]) -> ExitCode {
+    use std::io::{Read, Write as _};
+    let mut positional: Vec<&String> = Vec::new();
+    for a in args {
+        if a.starts_with("--") {
+            eprintln!("error: unknown flag {}", a);
+            return ExitCode::from(2);
+        }
+        positional.push(a);
+    }
+    if positional.is_empty() {
+        eprintln!("usage: check run <file.shard>...   (entry: main : World -> World)");
+        return ExitCode::from(2);
+    }
+
+    let kernel = match load_kernel_from(default_kernel_dir()) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error loading kernel from {}: {}", default_kernel_dir().display(), e);
+            return ExitCode::from(2);
+        }
+    };
+    let user_module = ast::Module {
+        types: kernel.types.clone(),
+        fns: Vec::new(),
+        externs: Vec::new(),
+    };
+    let mut ctx = Ctx {
+        user_module_value: module_to_value(&user_module),
+        user_module,
+        loaded: std::collections::HashSet::new(),
+        in_progress: Vec::new(),
+    };
+    for f in &positional {
+        if let Err(code) = process_file(&PathBuf::from(f.as_str()), &mut ctx, &kernel) {
+            return code;
+        }
+    }
+
+    // Build world0: clock 0, input = stdin (a (List Int) per line), output Nil.
+    let mut stdin_src = String::new();
+    if std::io::stdin().read_to_string(&mut stdin_src).is_err() {
+        eprintln!("error reading stdin");
+        return ExitCode::from(2);
+    }
+    let input_lines: Vec<ast::Expr> = stdin_src.lines().map(line_to_event_native).collect();
+    let world0 = ctor("World", vec![ast::Expr::IntLit(0), list_of(input_lines), nil()]);
+
+    // Reduce (main world0) in the pure native reducer → a final World value.
+    let call = ast::Expr::Call("main".into(), vec![world0]);
+    let result = match eval::eval(&ctx.user_module, &call) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error running main: {:?}", e);
+            return ExitCode::from(2);
+        }
+    };
+
+    // Drain the output field (index 2 of the World): each element is a native
+    // (List Int) line → its codepoints.
+    let output = match &result {
+        ast::Expr::Ctor(n, a) if n == "World" && a.len() == 3 => &a[2],
+        other => {
+            eprintln!("error: main must return (World clock input output), got: {}",
+                      show_reflected(other));
+            return ExitCode::from(2);
+        }
+    };
+    let mut out = std::io::stdout();
+    for line in decode_list(output) {
+        let s: String = decode_list(line).iter().filter_map(|x| match x {
+            ast::Expr::IntLit(c) => char::from_u32(*c as u32),
+            _ => None,
+        }).collect();
+        if writeln!(out, "{}", s).is_err() {
+            return ExitCode::from(2);
+        }
+    }
+    ExitCode::SUCCESS
 }
 
 enum Tick { Continue, Exit(u8), Fatal }
