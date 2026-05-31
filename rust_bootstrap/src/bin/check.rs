@@ -1449,16 +1449,23 @@ fn run_cli(args: &[String]) -> ExitCode {
 // a lazy oracle for mid-computation reads is the next step.
 // ----------------------------------------------------------------------
 fn run_program(args: &[String]) -> ExitCode {
+    // `--` separates the program's SOURCE files from its runtime ARGUMENTS
+    // (the latter readable in-program via the `get_args` extern).
+    let dash = args.iter().position(|a| a == "--");
+    let (file_args, prog_args): (&[String], &[String]) = match dash {
+        Some(i) => (&args[..i], &args[i + 1..]),
+        None => (args, &[]),
+    };
     let mut positional: Vec<&String> = Vec::new();
-    for a in args {
+    for a in file_args {
         if a.starts_with("--") {
-            eprintln!("error: unknown flag {}", a);
+            eprintln!("error: unknown flag {} (runtime args go after `--`)", a);
             return ExitCode::from(2);
         }
         positional.push(a);
     }
     if positional.is_empty() {
-        eprintln!("usage: check run <file.shard>...   (entry: main : World -> World)");
+        eprintln!("usage: check run <file.shard>... [-- <args>...]   (entry: main : World -> World)");
         return ExitCode::from(2);
     }
 
@@ -1490,7 +1497,7 @@ fn run_program(args: &[String]) -> ExitCode {
     if ctx.user_module.externs.is_empty() {
         return run_batched(&ctx);
     }
-    run_lazy(&ctx)
+    run_lazy(&ctx, prog_args)
 }
 
 // BATCHED (pure) mode: no externs, so the World carries input/output as DATA.
@@ -1537,9 +1544,17 @@ fn run_batched(ctx: &Ctx) -> ExitCode {
 // The handler dispatches by extern name; the World (clock) is each call's LAST
 // argument and is returned bumped by 1, matching the `*_ticks` bridging axioms.
 // See examples/io/cat_lazy.shard and eval::set_effect_handler.
-fn run_lazy(ctx: &Ctx) -> ExitCode {
-    use std::io::BufRead;
+fn run_lazy(ctx: &Ctx, prog_args: &[String]) -> ExitCode {
+    use std::io::{BufRead, Write as _};
     let mut reader = std::io::BufReader::new(std::io::stdin());
+    let prog_args: Vec<String> = prog_args.to_vec();
+    // decode a (List Int) argument to a String.
+    let text = |e: &ast::Expr| -> String {
+        decode_list(e).iter().filter_map(|x| match x {
+            ast::Expr::IntLit(c) => char::from_u32(*c as u32),
+            _ => None,
+        }).collect()
+    };
     let handler = move |name: &str, args: &[ast::Expr]| -> Result<ast::Expr, String> {
         let clk = match args.last() {
             Some(ast::Expr::Ctor(n, a)) if n == "World" && a.len() == 1 => match &a[0] {
@@ -1550,6 +1565,7 @@ fn run_lazy(ctx: &Ctx) -> ExitCode {
         };
         let world1 = ctor("World", vec![ast::Expr::IntLit(clk + 1)]);
         match name {
+            // --- input ---------------------------------------------------------
             "read_line" => {
                 let mut buf = String::new();
                 match reader.read_line(&mut buf) {
@@ -1561,16 +1577,8 @@ fn run_lazy(ctx: &Ctx) -> ExitCode {
                     Err(e) => Err(format!("read_line: {}", e)),
                 }
             }
-            "write_line" | "emit" => {
-                let s: String = decode_list(&args[0]).iter().filter_map(|x| match x {
-                    ast::Expr::IntLit(c) => char::from_u32(*c as u32),
-                    _ => None,
-                }).collect();
-                println!("{}", s);
-                Ok(world1)
-            }
-            // oracle_line: the INPUT oracle — returns just the (Option line), no
-            // World (the program advances the clock itself via `tick`).
+            // oracle_line: input oracle returning just the (Option line), no World
+            // (the program advances the clock itself via `tick`).
             "oracle_line" => {
                 let mut buf = String::new();
                 match reader.read_line(&mut buf) {
@@ -1582,7 +1590,34 @@ fn run_lazy(ctx: &Ctx) -> ExitCode {
                     Err(e) => Err(format!("oracle_line: {}", e)),
                 }
             }
-            other => Err(format!("unknown extern `{}` (handler: read_line/write_line/oracle_line/emit)", other)),
+            // get_args: the runtime arguments (after `--`) as (List (List Int)).
+            "get_args" => {
+                let items: Vec<ast::Expr> = prog_args.iter().map(|a| line_to_event_native(a)).collect();
+                Ok(ctor("Pair", vec![list_of(items), world1]))
+            }
+            // read_file: file contents as (Some bytes), or None on any error.
+            "read_file" => {
+                match std::fs::read_to_string(text(&args[0])) {
+                    Ok(contents) => Ok(ctor("Pair",
+                        vec![ctor("Some", vec![line_to_event_native(&contents)]), world1])),
+                    Err(_) => Ok(ctor("Pair", vec![ctor("None", vec![]), world1])),
+                }
+            }
+            // --- output --------------------------------------------------------
+            "write_line" | "emit" => { println!("{}", text(&args[0])); Ok(world1) }
+            "write" => {
+                print!("{}", text(&args[0]));
+                let _ = std::io::stdout().flush();
+                Ok(world1)
+            }
+            // --- termination ---------------------------------------------------
+            "exit" => {
+                let _ = std::io::stdout().flush();
+                let code = match &args[0] { ast::Expr::IntLit(n) => *n, _ => 0 };
+                std::process::exit(code as i32);
+            }
+            other => Err(format!("unknown extern `{}` (handler: read_line/oracle_line/get_args/\
+                                  read_file/write_line/write/emit/exit)", other)),
         }
     };
     eval::set_effect_handler(Some(Box::new(handler)));
