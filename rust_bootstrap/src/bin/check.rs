@@ -1449,7 +1449,6 @@ fn run_cli(args: &[String]) -> ExitCode {
 // a lazy oracle for mid-computation reads is the next step.
 // ----------------------------------------------------------------------
 fn run_program(args: &[String]) -> ExitCode {
-    use std::io::{Read, Write as _};
     let mut positional: Vec<&String> = Vec::new();
     for a in args {
         if a.starts_with("--") {
@@ -1487,7 +1486,18 @@ fn run_program(args: &[String]) -> ExitCode {
         }
     }
 
-    // Build world0: clock 0, input = stdin (a (List Int) per line), output Nil.
+    // Two run modes, chosen by whether the program declares effectful externs.
+    if ctx.user_module.externs.is_empty() {
+        return run_batched(&ctx);
+    }
+    run_lazy(&ctx)
+}
+
+// BATCHED (pure) mode: no externs, so the World carries input/output as DATA.
+// Slurp stdin into the input field, reduce the pure `main`, drain the output
+// field. World = (World clock input output). See examples/io/echo_world.shard.
+fn run_batched(ctx: &Ctx) -> ExitCode {
+    use std::io::{Read, Write as _};
     let mut stdin_src = String::new();
     if std::io::stdin().read_to_string(&mut stdin_src).is_err() {
         eprintln!("error reading stdin");
@@ -1496,18 +1506,11 @@ fn run_program(args: &[String]) -> ExitCode {
     let input_lines: Vec<ast::Expr> = stdin_src.lines().map(line_to_event_native).collect();
     let world0 = ctor("World", vec![ast::Expr::IntLit(0), list_of(input_lines), nil()]);
 
-    // Reduce (main world0) in the pure native reducer → a final World value.
     let call = ast::Expr::Call("main".into(), vec![world0]);
     let result = match eval::eval(&ctx.user_module, &call) {
         Ok(r) => r,
-        Err(e) => {
-            eprintln!("error running main: {:?}", e);
-            return ExitCode::from(2);
-        }
+        Err(e) => { eprintln!("error running main: {:?}", e); return ExitCode::from(2); }
     };
-
-    // Drain the output field (index 2 of the World): each element is a native
-    // (List Int) line → its codepoints.
     let output = match &result {
         ast::Expr::Ctor(n, a) if n == "World" && a.len() == 3 => &a[2],
         other => {
@@ -1522,11 +1525,61 @@ fn run_program(args: &[String]) -> ExitCode {
             ast::Expr::IntLit(c) => char::from_u32(*c as u32),
             _ => None,
         }).collect();
-        if writeln!(out, "{}", s).is_err() {
-            return ExitCode::from(2);
-        }
+        if writeln!(out, "{}", s).is_err() { return ExitCode::from(2); }
     }
     ExitCode::SUCCESS
+}
+
+// LAZY (effectful) mode: the program declares externs and does I/O
+// mid-reduction. We install a run-time effect handler (the TRUSTED boundary —
+// it must satisfy the program's extern axioms) that performs the real read /
+// write for each stuck extern call; world0 is the bare clock token (World 0).
+// The handler dispatches by extern name; the World (clock) is each call's LAST
+// argument and is returned bumped by 1, matching the `*_ticks` bridging axioms.
+// See examples/io/cat_lazy.shard and eval::set_effect_handler.
+fn run_lazy(ctx: &Ctx) -> ExitCode {
+    use std::io::BufRead;
+    let mut reader = std::io::BufReader::new(std::io::stdin());
+    let handler = move |name: &str, args: &[ast::Expr]| -> Result<ast::Expr, String> {
+        let clk = match args.last() {
+            Some(ast::Expr::Ctor(n, a)) if n == "World" && a.len() == 1 => match &a[0] {
+                ast::Expr::IntLit(k) => *k,
+                other => return Err(format!("World clock is not an Int: {:?}", other)),
+            },
+            _ => return Err(format!("{}: expected a World as the last argument", name)),
+        };
+        let world1 = ctor("World", vec![ast::Expr::IntLit(clk + 1)]);
+        match name {
+            "read_line" => {
+                let mut buf = String::new();
+                match reader.read_line(&mut buf) {
+                    Ok(0) => Ok(ctor("Pair", vec![ctor("None", vec![]), world1])),
+                    Ok(_) => {
+                        let line = buf.trim_end_matches(|c| c == '\n' || c == '\r');
+                        Ok(ctor("Pair", vec![ctor("Some", vec![line_to_event_native(line)]), world1]))
+                    }
+                    Err(e) => Err(format!("read_line: {}", e)),
+                }
+            }
+            "write_line" => {
+                let s: String = decode_list(&args[0]).iter().filter_map(|x| match x {
+                    ast::Expr::IntLit(c) => char::from_u32(*c as u32),
+                    _ => None,
+                }).collect();
+                println!("{}", s);
+                Ok(world1)
+            }
+            other => Err(format!("unknown extern `{}` (handler has read_line, write_line)", other)),
+        }
+    };
+    eval::set_effect_handler(Some(Box::new(handler)));
+    let call = ast::Expr::Call("main".into(), vec![ctor("World", vec![ast::Expr::IntLit(0)])]);
+    let result = eval::eval(&ctx.user_module, &call);
+    eval::set_effect_handler(None);
+    match result {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(e) => { eprintln!("error running main: {:?}", e); ExitCode::from(2) }
+    }
 }
 
 enum Tick { Continue, Exit(u8), Fatal }

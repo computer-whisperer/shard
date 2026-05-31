@@ -22,6 +22,7 @@
 //! variant, so a value structurally cannot carry a free index. That is
 //! exactly the invariant the substitution machine relied on by hand.
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::ast::{Expr, Module, Pat};
@@ -38,7 +39,25 @@ pub enum EvalError {
     UnboundBVar(u32),
     NoMatchArm(String),
     IfNonBool(String),
+    Effect(String),
     Unimplemented(&'static str),
+}
+
+// A run-time EFFECT HANDLER: performs real I/O for a stuck call to a declared
+// `extern` symbol with no body. Installed ONLY while a program runs (see
+// eval::set_effect_handler / bin/check.rs run_program); proof-checking never
+// installs one, so during `check` an extern call falls through to UnknownCall
+// here and is never reached — the proof reducer treats it as data, leaving it
+// stuck/uninterpreted. So this hook is completely inert during checking and
+// cannot affect soundness. The handler is a trusted boundary (docs/BOUNDARIES.md).
+type EffectHandler = Box<dyn FnMut(&str, &[Expr]) -> Result<Expr, String>>;
+thread_local! {
+    static EFFECTS: RefCell<Option<EffectHandler>> = const { RefCell::new(None) };
+}
+
+/// Install (`Some`) or clear (`None`) the thread's run-time effect handler.
+pub fn set_effect_handler(handler: Option<EffectHandler>) {
+    EFFECTS.with(|e| *e.borrow_mut() = handler);
 }
 
 impl std::fmt::Display for EvalError {
@@ -51,6 +70,7 @@ impl std::fmt::Display for EvalError {
             EvalError::UnboundBVar(k) => write!(f, "unbound BVar({k}) — body not opened"),
             EvalError::NoMatchArm(v) => write!(f, "no match arm fired for value {v}"),
             EvalError::IfNonBool(v) => write!(f, "if condition not True/False: {v}"),
+            EvalError::Effect(msg) => write!(f, "effect error: {msg}"),
             EvalError::Unimplemented(what) => write!(f, "not yet implemented: {what}"),
         }
     }
@@ -151,6 +171,15 @@ fn apply_call(m: &Module, name: &str, mut args: Vec<Val>) -> Result<Val, EvalErr
     let arg_exprs: Vec<Expr> = args.iter().map(val_to_expr).collect();
     if let Some(out) = prim::try_apply(name, &arg_exprs) {
         return Ok(val_of_value_expr(&out));
+    }
+    // Effectful extern: a registered run-time handler performs the real I/O
+    // (read a line, write bytes, …) and returns the result value. Present only
+    // during `run`; absent during `check`, where this point isn't reached for
+    // externs (the proof reducer keeps them stuck as data). See EFFECTS above.
+    if let Some(result) = EFFECTS.with(|e| {
+        e.borrow_mut().as_mut().map(|h| h(name, &arg_exprs))
+    }) {
+        return result.map(|out| val_of_value_expr(&out)).map_err(EvalError::Effect);
     }
     Err(EvalError::UnknownCall(name.into()))
 }
