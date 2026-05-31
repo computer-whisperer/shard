@@ -1,84 +1,45 @@
-;;; Example proof file for the `check` binary.
+;;; lia_basics.shard — LIA theorems on the proof-DSL surface.
 ;;;
-;;; Each (claim NAME GOAL PROOF) form is a theorem with its proof.
-;;; The `check` binary loads the bundled kernel, lifts each Goal to a
-;;; Sequent (no hyps), and runs check_sequent. Successful claims are
-;;; consed onto a running Theory so later ones could cite them via
-;;; (Lemma NAME) — though these LIA examples don't yet use that.
-;;;
-;;; Surface syntax notes:
-;;;   - 'foo is reader sugar for (quote foo) → SymLit foo (via lexpr).
-;;;   - (list a b c) expands at parse time to (Cons a (Cons b (Cons c Nil))).
-;;;   - Ctor names like Param, TCon, Equation, FVar, IntLit resolve
-;;;     against the kernel's ctor set automatically.
+;;; Each (claim NAME GOAL PROOF) is a theorem with its proof. The goal is
+;;; `(goal BINDERS PREMISES CONCL)` with `(= L R)` equations whose terms are
+;;; ordinary object snippets — `(+ x y)`, not `(Call '+ (list (FVar 'x) …))`.
+;;; The proof language: `(by THEORY PAYLOAD)` for a decision procedure,
+;;; `(steps (STEP…) PROOF)` for a tactic chain. The `check` binary lifts each
+;;; goal to a Sequent (no hyps) and runs check_sequent; passing claims are
+;;; consed onto a Theory so later ones can cite them via `(lemma NAME)`.
 
 ;; ∀ x y : Int. x + y = y + x   (commutativity of +)
 (claim plus_comm
-  (Goal
-    (list (Param 'x (ty Int))
-          (Param 'y (ty Int)))
-    (list)
-    (Equation
-      (Call '+ (list (FVar 'x) (FVar 'y)))
-      (Call '+ (list (FVar 'y) (FVar 'x)))))
-  (ByTheory 'lia (Cert 'lia (list))))
+  (goal ((x Int) (y Int)) ()
+    (= (+ x y) (+ y x)))
+  (by lia (list)))
 
 ;; 1 + (2 + 3) = 6   (closed arithmetic constant)
 (claim sums_constants
-  (Goal
-    (list)
-    (list)
-    (Equation
-      (Call '+ (list (IntLit 1)
-                     (Call '+ (list (IntLit 2) (IntLit 3)))))
-      (IntLit 6)))
-  (ByTheory 'lia (Cert 'lia (list))))
+  (goal () ()
+    (= (+ 1 (+ 2 3)) 6))
+  (by lia (list)))
 
 ;; ∀ x : Int. (x + 1) - x = 1   (mixed atom + constant cancellation)
 (claim plus_one_minus_self
-  (Goal
-    (list (Param 'x (ty Int)))
-    (list)
-    (Equation
-      (Call '-
-        (list (Call '+ (list (FVar 'x) (IntLit 1)))
-              (FVar 'x)))
-      (IntLit 1)))
-  (ByTheory 'lia (Cert 'lia (list))))
+  (goal ((x Int)) ()
+    (= (- (+ x 1) x) 1))
+  (by lia (list)))
 
-;; ---------------------------------------------------------------------------
-;; Slice 32 demo — Insts pre-instantiation.
-;;
-;; The lemma `pad_with_pivot` states ∀ pivot a : Int. a = (a - pivot) + pivot.
-;; LIA decides it as a polynomial identity. Its LHS is just `a`, so the
-;; rewriter's conclusion-match path can pin `a` from any goal LHS but
-;; the `pivot` ∀-binder is invisible to the match. The only way to cite
-;; this lemma is with an Inst that pre-instantiates pivot.
-;; ---------------------------------------------------------------------------
-
+;; ∀ pivot a : Int. a = (a - pivot) + pivot
+;; LIA decides this polynomial identity. Its LHS is just `a`, so a citation of
+;; this lemma must pre-instantiate `pivot` with an Inst (the rewriter can pin
+;; `a` from the goal but never sees the `pivot` binder) — see pad_5_with_3.
 (claim pad_with_pivot
-  (Goal
-    (list (Param 'pivot (ty Int))
-          (Param 'a     (ty Int)))
-    (list)
-    (Equation
-      (FVar 'a)
-      (Call '+ (list (Call '- (list (FVar 'a) (FVar 'pivot)))
-                     (FVar 'pivot)))))
-  (ByTheory 'lia (Cert 'lia (list))))
+  (goal ((pivot Int) (a Int)) ()
+    (= a (+ (- a pivot) pivot)))
+  (by lia (list)))
 
-;; Cite pad_with_pivot Lr Lhs at goal 5 = (5 - 3) + 3, pinning pivot := 3.
-;; Without (Inst 'pivot (IntLit 3)) the rewriter would substitute `pivot`
-;; with an FVar that never appears in the goal, leaving the equation
-;; structurally non-equal. With the Inst, the substituted RHS exactly
-;; matches the goal's RHS, and Refl closes.
+;; 5 = (5 - 3) + 3, citing pad_with_pivot Lr Lhs and pinning pivot := 3. With
+;; the Inst the substituted RHS exactly matches the goal's RHS, and refl closes.
 (claim pad_5_with_3
-  (Goal (list) (list)
-    (Equation
-      (IntLit 5)
-      (Call '+ (list (Call '- (list (IntLit 5) (IntLit 3)))
-                     (IntLit 3)))))
-  (Steps
-    (list (Rewrite (Lemma 'pad_with_pivot) Lr Lhs True
-                   (list (Inst 'pivot (IntLit 3)))))
-    Refl))
+  (goal () ()
+    (= 5 (+ (- 5 3) 3)))
+  (steps
+    ((rewrite (lemma pad_with_pivot) lr lhs true ((inst pivot 3))))
+    refl))
