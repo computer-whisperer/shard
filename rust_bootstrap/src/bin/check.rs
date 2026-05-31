@@ -281,6 +281,184 @@ fn resolve_import(base_dir: Option<&Path>, dep: &str) -> Result<Vec<PathBuf>, Ex
     Ok(files)
 }
 
+/// Expand a check/run TARGET so a directory-module always loads as a unit,
+/// no matter how it is named. A target that is a module directory, or a file
+/// sitting inside one (a dir containing `mod.req.shard`), loads the whole
+/// module (interface last); any other file loads just itself. This makes
+/// `check std/nat`, `check std/nat/mod.req.shard`, and `check std/nat.shard`
+/// (the shim) all check the same complete module.
+fn expand_module_target(path: &Path) -> Result<Vec<PathBuf>, ExitCode> {
+    if path.is_dir() {
+        return resolve_import(None, &path.to_string_lossy());
+    }
+    if let Some(dir) = path.parent() {
+        if dir.join("mod.req.shard").is_file() {
+            return resolve_import(None, &dir.to_string_lossy());
+        }
+    }
+    Ok(vec![path.to_path_buf()])
+}
+
+// ----------------------------------------------------------------------
+// The module reference gate — a LOADING well-formedness check (sibling of
+// the import-cycle check), NOT proof-checking. It enforces the one rule the
+// directory-module system promises: a module may reference another module's
+// PUBLIC interface only — never a private member. A directory is a governed
+// module iff it contains `mod.req.shard`; that file is the public surface,
+// the dir's other files are private. References to non-module ("legacy")
+// code, and to a module's own members, are unrestricted.
+// ----------------------------------------------------------------------
+
+/// Every symbol token anywhere in `v` (recursively). Quoted citations like
+/// `(Lemma 'half_step)` parse to `(Lemma (quote half_step))`, so the cited
+/// name is collected too — that is exactly the cross-module reference we gate.
+fn collect_symbols(v: &Value, out: &mut std::collections::HashSet<String>) {
+    if let Some(s) = v.as_symbol() {
+        out.insert(s.to_string());
+        return;
+    }
+    if let Some(iter) = v.list_iter() {
+        for e in iter {
+            collect_symbols(e, out);
+        }
+    }
+}
+
+/// The top-level names a file DECLARES: fn/extern/claim/requirement names,
+/// plus type names and their constructor names.
+fn declared_names(forms: &[Value]) -> std::collections::HashSet<String> {
+    let mut names = std::collections::HashSet::new();
+    for form in forms {
+        let items: Vec<&Value> = match form.list_iter() {
+            Some(it) => it.collect(),
+            None => continue,
+        };
+        if items.len() < 2 {
+            continue;
+        }
+        let head = match items[0].as_symbol() {
+            Some(h) => h,
+            None => continue,
+        };
+        match head {
+            "fn" | "extern" | "claim" | "requirement" => {
+                if let Some(n) = items[1].as_symbol() {
+                    names.insert(n.to_string());
+                }
+            }
+            "type" => {
+                if let Some(n) = items[1].as_symbol() {
+                    names.insert(n.to_string());
+                }
+                // remaining items are constructor forms `(Ctor field-types...)`
+                for ctor in &items[2..] {
+                    if let Some(cn) = ctor.list_iter().and_then(|mut it| it.next()).and_then(|v| v.as_symbol()) {
+                        names.insert(cn.to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    names
+}
+
+/// Reject any file in the load closure that references a PRIVATE member of a
+/// module other than its own. Run after `ordered_closure`, before checking.
+fn check_module_boundaries(order: &[PathBuf]) -> Result<(), ExitCode> {
+    use std::collections::{HashMap, HashSet};
+    struct FileInfo {
+        dir: PathBuf,
+        decls: HashSet<String>,
+        symbols: HashSet<String>,
+        is_interface: bool,
+    }
+    let mut files: Vec<(PathBuf, FileInfo)> = Vec::new();
+    for p in order {
+        let src = match std::fs::read_to_string(p) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let forms = match parse_top_level(&src) {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
+        let mut symbols = HashSet::new();
+        for f in &forms {
+            collect_symbols(f, &mut symbols);
+        }
+        // Canonicalize the owning dir so module identity is path-normalized
+        // (e.g. `examples/../std/nat` and `std/nat` are the same module).
+        let raw_dir = p.parent().map(|d| d.to_path_buf()).unwrap_or_default();
+        let dir = raw_dir.canonicalize().unwrap_or(raw_dir);
+        let info = FileInfo {
+            dir,
+            decls: declared_names(&forms),
+            symbols,
+            is_interface: p.file_name().and_then(|s| s.to_str()) == Some("mod.req.shard"),
+        };
+        files.push((p.clone(), info));
+    }
+
+    // Governed modules: dirs with a mod.req.shard among the loaded files.
+    let governed: HashSet<PathBuf> =
+        files.iter().filter(|(_, fi)| fi.is_interface).map(|(_, fi)| fi.dir.clone()).collect();
+
+    // public(D) = names from D/mod.req.shard;  all(D) = names from any D file.
+    let mut public: HashMap<PathBuf, HashSet<String>> = HashMap::new();
+    let mut allnames: HashMap<PathBuf, HashSet<String>> = HashMap::new();
+    for (_, fi) in &files {
+        if !governed.contains(&fi.dir) {
+            continue;
+        }
+        allnames.entry(fi.dir.clone()).or_default().extend(fi.decls.iter().cloned());
+        if fi.is_interface {
+            public.entry(fi.dir.clone()).or_default().extend(fi.decls.iter().cloned());
+        }
+    }
+    // private(D) = all(D) − public(D).
+    let private: HashMap<PathBuf, HashSet<String>> = governed.iter().map(|d| {
+        let empty = HashSet::new();
+        let all = allnames.get(d).unwrap_or(&empty);
+        let pu = public.get(d).unwrap_or(&empty);
+        (d.clone(), all.difference(pu).cloned().collect())
+    }).collect();
+
+    // A file may not name another module's private member. Display module
+    // dirs relative to the working directory when possible.
+    let cwd = std::env::current_dir().ok();
+    let show = |d: &PathBuf| -> String {
+        match &cwd {
+            Some(c) => d.strip_prefix(c).unwrap_or(d).display().to_string(),
+            None => d.display().to_string(),
+        }
+    };
+    let mut violations: Vec<String> = Vec::new();
+    for (path, fi) in &files {
+        for (d, priv_set) in &private {
+            if d == &fi.dir {
+                continue; // own module — privates are in scope
+            }
+            for s in fi.symbols.intersection(priv_set) {
+                violations.push(format!(
+                    "  {}\n      references `{}`, a private member of module `{}` \
+                     (not exported by its mod.req.shard)",
+                    path.display(), s, show(d)));
+            }
+        }
+    }
+    if violations.is_empty() {
+        return Ok(());
+    }
+    violations.sort();
+    eprintln!("error: module boundary violation — a module may reference only the \
+               PUBLIC interface of another module:");
+    for v in &violations {
+        eprintln!("{}", v);
+    }
+    Err(ExitCode::from(1))
+}
+
 /// If `form` is `(import "PATH")` or the legacy `(use-module "PATH")`,
 /// return the path string; else None.
 fn import_path(form: &Value) -> Option<String> {
@@ -330,7 +508,9 @@ fn ordered_closure(targets: &[PathBuf]) -> Result<Vec<PathBuf>, ExitCode> {
     let mut order = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for t in targets {
-        visit(t, &mut order, &mut seen)?;
+        for f in expand_module_target(t)? {
+            visit(&f, &mut order, &mut seen)?;
+        }
     }
     Ok(order)
 }
@@ -994,6 +1174,10 @@ fn run_shard_check(files: &[String], kernel: &ast::Module, trace: Option<&str>) 
         Ok(o) => o,
         Err(code) => return code,
     };
+    // Loading well-formedness: no module reaches into another's privates.
+    if let Err(code) = check_module_boundaries(&order) {
+        return code;
+    }
     let mut srcs_list = nil();
     for p in order.iter().rev() {
         match std::fs::read_to_string(p) {

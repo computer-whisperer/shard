@@ -1,0 +1,76 @@
+;;; std/nat/mod.req.shard — the PUBLIC INTERFACE of the `nat` module.
+;;;
+;;; `nat` is a directory-module. This `mod.req.shard` is its public surface:
+;;; the `Nat` type, basic Nat arithmetic, and the two exported lemmas. The
+;;; dir-mate `nat.shard` holds the PRIVATE helper `half_step` (a farkas step
+;;; lemma that exists only to drive `half_bound`'s induction) — it is not part
+;;; of this interface, so no other module may cite it.
+
+(import "../order")    ; the order module — le0_succ (cited by int_of_nat_nonneg)
+
+(type Nat
+  (Z)
+  (S Nat))
+
+(fn add_nat ((a Nat) (b Nat)) Nat
+  (match a
+    (Z       b)
+    ((S k)   (S (add_nat k b)))))
+
+;; Nat → Int (structural on the Nat).
+(fn int_of_nat ((n Nat)) Int
+  (match n
+    (Z 0)
+    ((S k) (+ 1 (int_of_nat k)))))
+
+;; floor(n/2) as a Nat (structural, two S's at a time).
+(fn half_nat ((n Nat)) Nat
+  (match n
+    (Z Z)
+    ((S k)
+      (match k
+        (Z Z)
+        ((S k2) (S (half_nat k2)))))))
+
+;; ---- exported lemmas ----
+
+;; int_of_nat is nonnegative. Induction on n; S case steps le0_succ on
+;; the IH (which farkas can't see directly — it lives in the hyps, so we
+;; thread it through le0_succ's premise).
+(claim int_of_nat_nonneg
+  (Goal (list (Param 'n (ty Nat))) (list)
+    (Equation (Call 'le (list (IntLit 0) (Call 'int_of_nat (list (FVar 'n)))))
+              (Ctor 'True (list))))
+  (Induct 'n
+    (list
+      (Case 'Z (Steps (list (Simp Lhs)) Refl))
+      (Case 'S
+        (Steps (list (Simp Lhs))   ; (le 0 (+ 1 (int_of_nat k)))
+          (RewriteWith (Lemma 'le0_succ) Lr Lhs (list)
+            (list (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+            Refl))))))
+
+;; half_bound: int_of_nat m - 1 <= 2 * int_of_nat (half_nat m), for ALL m.
+;; This is "the loop's floor(m/2) swaps cover the segment of length m"
+;; (tight at both parities). half_nat recurses two-at-a-time, so this is
+;; the first user of the kernel's two-step induction (Induct2): the Z and
+;; (S Z) arms close by Simp; the (S (S k)) arm Simp-normalizes and hands
+;; the IH (at k) to the private `half_step`.
+(claim half_bound
+  (Goal
+    (list (Param 'm (ty Nat)))
+    (list)
+    (Equation
+      (Call 'le (list (Call '- (list (Call 'int_of_nat (list (FVar 'm))) (IntLit 1)))
+                      (Call '* (list (IntLit 2)
+                                     (Call 'int_of_nat (list (Call 'half_nat (list (FVar 'm)))))))))
+      (Ctor 'True (list))))
+  (Induct2 'm
+    (list
+      (Case 'Z  (Steps (list (Simp Lhs)) Refl))
+      (Case 'SZ (Steps (list (Simp Lhs)) Refl))
+      (Case 'SS
+        (Steps (list (Simp Lhs))
+          (RewriteWith (Lemma 'half_step) Lr Lhs (list)
+            (list (Steps (list (Rewrite (Hyp 0) Lr Lhs True (list))) Refl))
+            Refl))))))
