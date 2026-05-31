@@ -64,7 +64,7 @@ fn run() -> ExitCode {
     if args.is_empty() {
         eprintln!("usage: check [--trace <claim>|all] <proof_file.shard>...");
         eprintln!("       check eval [--no-bootstrap|--both] <file.shard>... <expr>");
-        eprintln!("       check app [--repl|--script <events>] [--no-bootstrap] <file.shard>...");
+        eprintln!("       check run <file.shard>... [-- <args>...]   (entry: main : World -> World)");
         return ExitCode::from(2);
     }
 
@@ -74,14 +74,6 @@ fn run() -> ExitCode {
     // evaluator; `--no-bootstrap` uses the native Rust eval::eval instead.
     if args[0] == "eval" {
         return run_eval(&args[1..]);
-    }
-
-    // `app` subcommand: drive a stateful application (the MVU entrypoint
-    // declared via `(app …)`) through the bootstrapped reducer. The pure
-    // `step` fn runs in the kernel; the event loop + effect interpretation
-    // live here in the untrusted driver. See run_app.
-    if args[0] == "app" {
-        return run_app(&args[1..]);
     }
 
     // `run` subcommand: execute a direct-style world-threading program.
@@ -1074,189 +1066,6 @@ fn run_shard_check(files: &[String], kernel: &ast::Module, trace: Option<&str>) 
 }
 
 // ----------------------------------------------------------------------
-// `app` subcommand — drive a stateful (Model-View-Update) application.
-//
-// The file declares an entrypoint:
-//     (app (state S) (init INIT-EXPR) (update STEP-FN))
-// where STEP-FN : S -> Event -> (Step S Action), Event = (List Int) (the
-// input line as codepoints), and Action is inert effect DATA. The pure
-// STEP-FN runs in the bootstrapped reducer (compute_expr); the loop and
-// the effect interpretation live HERE, in the untrusted driver. The set
-// of interpretable Actions (Print / Exit / Nop) is the one new trusted
-// boundary — see docs/BOUNDARIES.md.
-//
-// State flows as REFLECTED Expr-data the whole time: init reduces to a
-// state datum, and each step embeds the current state datum + the event
-// datum into a reflected `(step state event)` call, reduces it, and reads
-// the resulting `(Step state' action)` datum back out.
-// ----------------------------------------------------------------------
-
-fn run_app(args: &[String]) -> ExitCode {
-    use std::io::{BufRead, IsTerminal};
-
-    let mut script: Option<String> = None;
-    let mut bootstrap = true;
-    let mut positional: Vec<&String> = Vec::new();
-    let mut it = args.iter();
-    while let Some(a) = it.next() {
-        match a.as_str() {
-            "--repl" => script = None,
-            // Default engine is the bootstrapped reducer (faithful to the
-            // proof story but a double-interpreter — slow for heavy output
-            // like a rendered board). --no-bootstrap runs the native Rust
-            // engine instead, which an interactive app generally wants.
-            "--no-bootstrap" | "--native" => bootstrap = false,
-            "--script" => match it.next() {
-                Some(f) => script = Some(f.clone()),
-                None => {
-                    eprintln!("error: --script requires a file argument (use - for stdin)");
-                    return ExitCode::from(2);
-                }
-            },
-            s if s.starts_with("--") => {
-                eprintln!("error: unknown flag {}", s);
-                return ExitCode::from(2);
-            }
-            _ => positional.push(a),
-        }
-    }
-    if positional.is_empty() {
-        eprintln!("usage: check app [--repl|--script <events>] [--no-bootstrap] <file.shard>...");
-        return ExitCode::from(2);
-    }
-
-    let kernel = match load_kernel_from(default_kernel_dir()) {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("error loading kernel from {}: {}", default_kernel_dir().display(), e);
-            return ExitCode::from(2);
-        }
-    };
-    let user_module = ast::Module {
-        types: kernel.types.clone(),
-        fns: Vec::new(),
-        externs: Vec::new(),
-    };
-    let mut ctx = Ctx {
-        user_module_value: module_to_value(&user_module),
-        user_module,
-        loaded: std::collections::HashSet::new(),
-        in_progress: Vec::new(),
-    };
-    for f in &positional {
-        if let Err(code) = process_file(&PathBuf::from(f.as_str()), &mut ctx, &kernel) {
-            return code;
-        }
-    }
-
-    // Locate the (app …) declaration among the named files.
-    let app = match find_app_decl(&positional, "app") {
-        Ok(Some(a)) => a,
-        Ok(None) => {
-            eprintln!("error: no (app …) declaration found in {}", positional.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "));
-            return ExitCode::from(2);
-        }
-        Err(e) => {
-            eprintln!("error: {}", e);
-            return ExitCode::from(2);
-        }
-    };
-    let update_fn = match app_subform(&app, "update").and_then(|p| p.get(1).and_then(|s| s.as_symbol()).map(|s| s.to_string())) {
-        Some(n) => n,
-        None => {
-            eprintln!("error: (app …) is missing an (update FN) field");
-            return ExitCode::from(2);
-        }
-    };
-    let init_val = match app_subform(&app, "init").and_then(|p| p.get(1).cloned()) {
-        Some(v) => v,
-        None => {
-            eprintln!("error: (app …) is missing an (init EXPR) field");
-            return ExitCode::from(2);
-        }
-    };
-    // Optional (view FN): FN : State -> (List Int) renders the state to bytes.
-    // When present the driver shows view(state) after init and after each tick
-    // (so a REPL displays an initial frame); display is then the view's job and
-    // the update's Action is reserved for effects (Exit/Nop).
-    let view_fn: Option<String> = app_subform(&app, "view")
-        .and_then(|p| p.get(1).and_then(|s| s.as_symbol()).map(|s| s.to_string()));
-    // Optional (input raw): on a live terminal, read one keypress at a time
-    // (no Enter) so an interactive game feels real-time. Default is line input.
-    let raw_input = app_subform(&app, "input")
-        .and_then(|p| p.get(1).and_then(|s| s.as_symbol()).map(|s| s == "raw"))
-        .unwrap_or(false);
-
-    // Reduce the init expression to the initial state datum.
-    let init_native = match load::expr_from_value(&init_val, &ctx.user_module) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("error in (init …): {}", e);
-            return ExitCode::from(2);
-        }
-    };
-    let init_result = if bootstrap {
-        eval_bootstrap(&kernel, &ctx.user_module_value, &expr_to_value(&init_native))
-    } else {
-        eval_raw(&ctx.user_module, &init_native)
-    };
-    let mut state = match init_result {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("error evaluating (init …): {}", e);
-            return ExitCode::from(2);
-        }
-    };
-
-    // Initial frame (if the app declares a view).
-    if let Some(vf) = &view_fn {
-        if let Err(e) = render_view(bootstrap, &kernel, &ctx.user_module_value, &ctx.user_module, vf, &state) {
-            eprintln!("error rendering view: {}", e);
-            return ExitCode::from(2);
-        }
-    }
-
-    // Interactive raw-key mode: app asked for (input raw) and we're on a live
-    // terminal with no --script — read one keypress at a time (no Enter).
-    if raw_input && script.is_none() && std::io::stdin().is_terminal() {
-        return run_raw_loop(
-            bootstrap, &kernel, &ctx.user_module_value, &ctx.user_module,
-            &update_fn, &view_fn, state,
-        );
-    }
-
-    // Otherwise: one event per input LINE. --script reads lines from a file (or
-    // stdin via "-"); default reads stdin line-by-line.
-    let lines: Box<dyn Iterator<Item = std::io::Result<String>>> = match &script {
-        Some(path) if path != "-" => match std::fs::read_to_string(path) {
-            Ok(src) => Box::new(src.lines().map(|s| Ok(s.to_string())).collect::<Vec<_>>().into_iter()),
-            Err(e) => {
-                eprintln!("error reading events file {}: {}", path, e);
-                return ExitCode::from(2);
-            }
-        },
-        _ => Box::new(std::io::stdin().lock().lines()),
-    };
-
-    for line in lines {
-        let line = match line {
-            Ok(l) => l,
-            Err(e) => {
-                eprintln!("error reading input: {}", e);
-                return ExitCode::from(2);
-            }
-        };
-        match run_tick(bootstrap, &kernel, &ctx.user_module_value, &ctx.user_module,
-                       &update_fn, &view_fn, &mut state, &line) {
-            Tick::Continue => {}
-            Tick::Exit(code) => return ExitCode::from(code),
-            Tick::Fatal => return ExitCode::from(2),
-        }
-    }
-    ExitCode::SUCCESS
-}
-
-// ----------------------------------------------------------------------
 // `run` subcommand — execute a direct-style world-threading program.
 //
 // `check run <file.shard>...` reduces `(main world0)` where
@@ -1297,13 +1106,16 @@ fn run_program(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    // Seed with the FULL kernel (types AND fns/externs): a program may call
-    // kernel functions (e.g. an eval app calls `compute_expr`). This affects
-    // only `run` — proof-checking uses its own M (kernel.types + user code).
+    // Load the user program against a kernel.types-only base, THEN append the
+    // kernel's fns as a FALLBACK. lookup_fn returns the first match, so a user
+    // fn shadows a same-named kernel fn (e.g. calc's helpers vs term.shard's),
+    // while a program that calls a kernel fn it doesn't define (an eval app →
+    // `compute_expr`) still resolves it. Affects only `run`; proof-checking
+    // uses its own M.
     let user_module = ast::Module {
         types: kernel.types.clone(),
-        fns: kernel.fns.clone(),
-        externs: kernel.externs.clone(),
+        fns: Vec::new(),
+        externs: Vec::new(),
     };
     let mut ctx = Ctx {
         user_module_value: module_to_value(&user_module),
@@ -1316,6 +1128,9 @@ fn run_program(args: &[String]) -> ExitCode {
             return code;
         }
     }
+    ctx.user_module.fns.extend(kernel.fns.iter().cloned());
+    ctx.user_module.externs.extend(kernel.externs.iter().cloned());
+    ctx.user_module_value = module_to_value(&ctx.user_module);
 
     // Two run modes, chosen by whether the program declares effectful externs.
     if ctx.user_module.externs.is_empty() {
@@ -1369,9 +1184,21 @@ fn run_batched(ctx: &Ctx) -> ExitCode {
 // argument and is returned bumped by 1, matching the `*_ticks` bridging axioms.
 // See examples/io/cat_lazy.shard and eval::set_effect_handler.
 fn run_lazy(ctx: &Ctx, prog_args: &[String]) -> ExitCode {
-    use std::io::{BufRead, Write as _};
+    use std::io::{BufRead, Read, Write as _};
     let mut reader = std::io::BufReader::new(std::io::stdin());
     let prog_args: Vec<String> = prog_args.to_vec();
+    // Key-at-a-time programs (those declaring `read_key`) run with the terminal
+    // in raw mode (no line buffering / echo); we restore it on exit and on
+    // normal completion. Non-key programs leave the terminal alone.
+    let raw = ctx.user_module.externs.iter().any(|e| e.name == "read_key");
+    let saved: Option<String> = if raw {
+        let s = stty_capture(&["-g"]);
+        stty_apply(&["-icanon", "-echo", "-isig", "min", "1", "time", "0"]);
+        s
+    } else {
+        None
+    };
+    let saved_h = saved.clone();
     // decode a (List Int) argument to a String.
     let text = |e: &ast::Expr| -> String {
         decode_list(e).iter().filter_map(|x| match x {
@@ -1427,6 +1254,18 @@ fn run_lazy(ctx: &Ctx, prog_args: &[String]) -> ExitCode {
                     Err(_) => Ok(ctor("Pair", vec![ctor("None", vec![]), world1])),
                 }
             }
+            // read_key: one raw keypress as (Some byte), or None at EOF. The
+            // terminal is already in raw mode (see above), so this returns per
+            // key without Enter.
+            "read_key" => {
+                let mut b = [0u8; 1];
+                match reader.read(&mut b) {
+                    Ok(0) => Ok(ctor("Pair", vec![ctor("None", vec![]), world1])),
+                    Ok(_) => Ok(ctor("Pair",
+                        vec![ctor("Some", vec![ast::Expr::IntLit(b[0] as i64)]), world1])),
+                    Err(e) => Err(format!("read_key: {}", e)),
+                }
+            }
             // --- output --------------------------------------------------------
             "write_line" | "emit" => { println!("{}", text(&args[0])); Ok(world1) }
             "write" => {
@@ -1437,6 +1276,12 @@ fn run_lazy(ctx: &Ctx, prog_args: &[String]) -> ExitCode {
             // --- termination ---------------------------------------------------
             "exit" => {
                 let _ = std::io::stdout().flush();
+                if raw {
+                    match &saved_h {
+                        Some(g) => stty_apply(&[g.as_str()]),
+                        None => stty_apply(&["sane"]),
+                    }
+                }
                 let code = match &args[0] { ast::Expr::IntLit(n) => *n, _ => 0 };
                 std::process::exit(code as i32);
             }
@@ -1448,112 +1293,16 @@ fn run_lazy(ctx: &Ctx, prog_args: &[String]) -> ExitCode {
     let call = ast::Expr::Call("main".into(), vec![ctor("World", vec![ast::Expr::IntLit(0)])]);
     let result = eval::eval(&ctx.user_module, &call);
     eval::set_effect_handler(None);
+    if raw {
+        match &saved {
+            Some(g) => stty_apply(&[g.as_str()]),
+            None => stty_apply(&["sane"]),
+        }
+    }
     match result {
         Ok(_) => ExitCode::SUCCESS,
         Err(e) => { eprintln!("error running main: {:?}", e); ExitCode::from(2) }
     }
-}
-
-enum Tick { Continue, Exit(u8), Fatal }
-
-/// Run one update tick: feed `event_text` to the update fn, interpret the
-/// returned Action, advance `state`, and render the view (if any). Shared by
-/// the line-input and raw-key loops.
-fn run_tick(
-    bootstrap: bool,
-    kernel: &ast::Module,
-    user_module_value: &ast::Expr,
-    user_module: &ast::Module,
-    update_fn: &str,
-    view_fn: &Option<String>,
-    state: &mut ast::Expr,
-    event_text: &str,
-) -> Tick {
-    let step_result = if bootstrap {
-        let event = expr_to_value(&line_to_event_native(event_text));
-        eval_bootstrap(kernel, user_module_value, &reflected_call(update_fn, vec![state.clone(), event]))
-    } else {
-        match value_to_native_expr(state) {
-            Ok(state_native) => {
-                let call = ast::Expr::Call(update_fn.into(), vec![state_native, line_to_event_native(event_text)]);
-                eval_raw(user_module, &call)
-            }
-            Err(e) => Err(e),
-        }
-    };
-    let result = match step_result {
-        Ok(r) => r,
-        Err(e) => { eprintln!("error in step: {}", e); return Tick::Fatal; }
-    };
-    let (sname, fields) = match as_obj_ctor(&result) {
-        Some(x) => x,
-        None => {
-            eprintln!("error: `{}` did not return a value (stuck term): {}", update_fn, show_reflected(&result));
-            return Tick::Fatal;
-        }
-    };
-    if sname != "Step" || fields.len() != 2 {
-        eprintln!("error: `{}` must return (Step state action), got: {}", update_fn, show_reflected(&result));
-        return Tick::Fatal;
-    }
-    let next_state = fields[0].clone();
-    let action = fields[1];
-    match interpret_action(action) {
-        Ok(ActionOutcome::Continue) => {}
-        Ok(ActionOutcome::Exit(code)) => return Tick::Exit(code),
-        Err(e) => { eprintln!("error: {}", e); return Tick::Fatal; }
-    }
-    *state = next_state;
-    if let Some(vf) = view_fn {
-        if let Err(e) = render_view(bootstrap, kernel, user_module_value, user_module, vf, state) {
-            eprintln!("error rendering view: {}", e);
-            return Tick::Fatal;
-        }
-    }
-    Tick::Continue
-}
-
-/// Interactive single-keypress loop. Puts the terminal in non-canonical,
-/// no-echo mode via `stty` (no extra dependency), feeds each byte as a
-/// one-character event, and restores the terminal on exit. q / Ctrl-C /
-/// Ctrl-D / EOF quit.
-fn run_raw_loop(
-    bootstrap: bool,
-    kernel: &ast::Module,
-    user_module_value: &ast::Expr,
-    user_module: &ast::Module,
-    update_fn: &str,
-    view_fn: &Option<String>,
-    mut state: ast::Expr,
-) -> ExitCode {
-    use std::io::Read;
-    let saved = stty_capture(&["-g"]);
-    stty_apply(&["-icanon", "-echo", "-isig", "min", "1", "time", "0"]);
-    let mut stdin = std::io::stdin();
-    let mut buf = [0u8; 1];
-    let code = loop {
-        match stdin.read(&mut buf) {
-            Ok(0) => break 0u8,                                   // EOF
-            Ok(_) => {
-                let b = buf[0];
-                if b == b'q' || b == 3 || b == 4 { break 0; }     // q / Ctrl-C / Ctrl-D
-                let ev = (b as char).to_string();
-                match run_tick(bootstrap, kernel, user_module_value, user_module,
-                               update_fn, view_fn, &mut state, &ev) {
-                    Tick::Continue => {}
-                    Tick::Exit(c) => break c,
-                    Tick::Fatal => break 2,
-                }
-            }
-            Err(_) => break 2,
-        }
-    };
-    // restore the terminal (to the saved settings, else a sane default).
-    match &saved {
-        Some(s) => stty_apply(&[s.as_str()]),
-        None => stty_apply(&["sane"]),
-    }
-    ExitCode::from(code)
 }
 
 fn stty_capture(args: &[&str]) -> Option<String> {
@@ -1569,88 +1318,6 @@ fn stty_apply(args: &[&str]) {
         .stdin(std::process::Stdio::inherit()).status();
 }
 
-/// Render one frame: evaluate `view(state)` (bootstrap or native), decode the
-/// resulting (List Int) to text, and print it followed by a single newline
-/// (the driver owns frame separation; the view's bytes are exact).
-fn render_view(
-    bootstrap: bool,
-    kernel: &ast::Module,
-    user_module_value: &ast::Expr,
-    user_module: &ast::Module,
-    view_fn: &str,
-    state: &ast::Expr,
-) -> Result<(), String> {
-    let result = if bootstrap {
-        eval_bootstrap(kernel, user_module_value, &reflected_call(view_fn, vec![state.clone()]))?
-    } else {
-        let call = ast::Expr::Call(view_fn.into(), vec![value_to_native_expr(state)?]);
-        eval_raw(user_module, &call)?
-    };
-    println!("{}", decode_codepoints(&result)?);
-    Ok(())
-}
-
-/// Effect interpretation — the trusted edge of the proof. Each arm
-/// performs the real-world effect named by an Action datum.
-enum ActionOutcome {
-    Continue,
-    Exit(u8),
-}
-
-fn interpret_action(action: &ast::Expr) -> Result<ActionOutcome, String> {
-    let (name, fields) = as_obj_ctor(action)
-        .ok_or_else(|| format!("action is not a constructor: {}", show_reflected(action)))?;
-    match (name, fields.as_slice()) {
-        ("Print", [payload]) => {
-            println!("{}", decode_codepoints(payload)?);
-            Ok(ActionOutcome::Continue)
-        }
-        ("Exit", [code]) => {
-            let n = match value_to_native_expr(code)? {
-                ast::Expr::IntLit(n) => n,
-                other => return Err(format!("Exit code is not an Int: {:?}", other)),
-            };
-            Ok(ActionOutcome::Exit(n as u8))
-        }
-        ("Nop", []) => Ok(ActionOutcome::Continue),
-        _ => Err(format!("unknown Action `{}` — the driver interprets only Print/Exit/Nop", name)),
-    }
-}
-
-/// Find the single `(app …)` form among the named files. Errors if more
-/// than one file declares an app.
-fn find_app_decl(files: &[&String], head: &str) -> Result<Option<Value>, String> {
-    let mut found: Option<Value> = None;
-    for f in files {
-        let src = std::fs::read_to_string(f.as_str())
-            .map_err(|e| format!("reading {}: {}", f, e))?;
-        let forms = parse_top_level(&src).map_err(|e| format!("parsing {}: {}", f, e))?;
-        for form in forms {
-            if form.list_iter().and_then(|mut it| it.next().and_then(|h| h.as_symbol()).map(|s| s == head)).unwrap_or(false) {
-                if found.is_some() {
-                    return Err(format!("multiple ({head} …) declarations found"));
-                }
-                found = Some(form);
-            }
-        }
-    }
-    Ok(found)
-}
-
-/// Return the parts of the `(KEY …)` sub-form inside an `(app …)` form,
-/// e.g. `app_subform(app, "update")` → `[update, step]`.
-fn app_subform(app: &Value, key: &str) -> Option<Vec<Value>> {
-    for item in app.list_iter()? {
-        if let Some(sub) = item.list_iter() {
-            let parts: Vec<Value> = sub.cloned().collect();
-            if parts.first().and_then(|h| h.as_symbol()) == Some(key) {
-                return Some(parts);
-            }
-        }
-    }
-    None
-}
-
 /// An input line → the reflected-NOTHING native `(List Int)` of its
 /// codepoints (the Event). Reflected to Expr-data by the caller.
 fn line_to_event_native(line: &str) -> ast::Expr {
@@ -1659,73 +1326,6 @@ fn line_to_event_native(line: &str) -> ast::Expr {
         e = ctor("Cons", vec![ast::Expr::IntLit(ch as u32 as i64), e]);
     }
     e
-}
-
-/// Build the reflected Expr-data for `(Call 'fn (list arg…))`, where each
-/// `arg` is already an Expr-datum (so it embeds as an in-NF argument).
-fn reflected_call(fn_name: &str, arg_data: Vec<ast::Expr>) -> ast::Expr {
-    let mut spine = nil();
-    for a in arg_data.into_iter().rev() {
-        spine = ctor("Cons", vec![a, spine]);
-    }
-    ctor("Call", vec![ast::Expr::SymLit(fn_name.into()), spine])
-}
-
-/// View a reflected Expr-datum that encodes an OBJECT constructor value
-/// `(C f1 … fn)` — i.e. `Ctor("Ctor", [SymLit C, <field spine>])` — as its
-/// ctor name plus the field data (each field is itself Expr-data). Returns
-/// None for any other (e.g. stuck/partially-reduced) shape.
-fn as_obj_ctor(e: &ast::Expr) -> Option<(&str, Vec<&ast::Expr>)> {
-    if let ast::Expr::Ctor(c, a) = e {
-        if c == "Ctor" && a.len() == 2 {
-            if let ast::Expr::SymLit(name) = &a[0] {
-                return Some((name.as_str(), datum_spine_refs(&a[1])?));
-            }
-        }
-    }
-    None
-}
-
-/// Walk a NATIVE `(Cons h t)` / `Nil` spine (the representation of a
-/// reflected ctor's field list), returning references to each element
-/// WITHOUT un-reflecting them.
-fn datum_spine_refs(e: &ast::Expr) -> Option<Vec<&ast::Expr>> {
-    let mut out = Vec::new();
-    let mut cur = e;
-    loop {
-        match cur {
-            ast::Expr::Ctor(n, a) if n == "Nil" && a.is_empty() => return Some(out),
-            ast::Expr::Ctor(n, a) if n == "Cons" && a.len() == 2 => {
-                out.push(&a[0]);
-                cur = &a[1];
-            }
-            _ => return None,
-        }
-    }
-}
-
-/// Decode a reflected `(List Int)` datum (an Action's Print payload) into a
-/// String of its codepoints.
-fn decode_codepoints(data: &ast::Expr) -> Result<String, String> {
-    let native = value_to_native_expr(data)?;
-    let mut s = String::new();
-    let mut cur = &native;
-    loop {
-        match cur {
-            ast::Expr::Ctor(n, a) if n == "Nil" && a.is_empty() => return Ok(s),
-            ast::Expr::Ctor(n, a) if n == "Cons" && a.len() == 2 => {
-                match &a[0] {
-                    ast::Expr::IntLit(cp) => match char::from_u32(*cp as u32) {
-                        Some(c) => s.push(c),
-                        None => return Err(format!("Print payload has non-codepoint {}", cp)),
-                    },
-                    other => return Err(format!("Print payload element is not an Int: {:?}", other)),
-                }
-                cur = &a[1];
-            }
-            _ => return Err(format!("Print payload is not a (List Int): {}", fmt_native_expr(&native))),
-        }
-    }
 }
 
 /// Bootstrap evaluation: run the narrow `compute_expr` over the reflected

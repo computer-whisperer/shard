@@ -1,51 +1,40 @@
-;;; snake_app — the IO shell over the proven game core, in proper MVU form.
-;;;
-;;;   view   = render     (snake_view.shard)  — what the player sees; the
-;;;                                            OBSERVABLE we prove about.
-;;;   update = step_app                       — parse a key, advance the core.
-;;;
-;;; The driver shows view(state) after init and after each tick, so the
-;;; update's Action carries only EFFECTS (Exit on quit, else Nop). Run with:
-;;;
-;;;   check app --no-bootstrap examples/snake_game/snake_app.shard            (play)
-;;;   check app --no-bootstrap --script <moves> examples/snake_game/snake_app.shard
-;;;
-;;; One input line = one tick. Keys: w/a/s/d steer; q quits; anything else
-;;; (incl. an empty line) advances in the current heading. (--no-bootstrap
-;;; runs the native engine — the bootstrapped reducer is correct but far too
-;;; slow to render a board each tick.)
+;;; snake_app — the snake game as a direct-style World loop (read_key driven),
+;;; replacing the retired (app …) MVU driver. The proven game core (step in
+;;; snake.shard, render in snake_view.shard) is unchanged; this is the I/O
+;;; shell: show the board, read one raw key, advance, loop.
+;;;   check run examples/snake_game/snake_app.shard
+;;; Keys: w/a/s/d steer; q quits; any other key advances in the current heading.
+(import "snake_view.shard")   ; render + step + GameState/Heading/Pos/dir_of/Alive
 
-(import "snake_view.shard")   ; render (the view) + step + GameState/Heading
+(type World (World Int))
+(extern read_key ((w World)) (Pair (Option Int) World))
+(extern write    ((bytes (List Int)) (w World)) World)
 
-;; ---- app runtime types (the shape `check app` interprets) ------------------
-(type Action (Print (List Int)) (Exit Int) (Nop))
-(type (Step S A) (Step S A))
+(fn app_int ((xs (List Int)) (ys (List Int))) (List Int)   ; local append
+  (match xs (Nil ys) ((Cons h t) (Cons h (app_int t ys)))))
 
-;; ---- input ----------------------------------------------------------------
-(fn parse_heading ((line (List Int)) (cur Heading)) Heading
-  (match line
-    (Nil cur)
-    ((Cons c rest)
-      (if (int_eq c 119) Up                  ; 'w'
-        (if (int_eq c 115) Down              ; 's'
-          (if (int_eq c 97) Left             ; 'a'
-            (if (int_eq c 100) Right         ; 'd'
-              cur)))))))
+;; one raw key → a heading (unrecognized keys keep the current heading).
+(fn key_heading ((k Int) (cur Heading)) Heading
+  (if (int_eq k 119) Up
+    (if (int_eq k 115) Down
+      (if (int_eq k 97) Left
+        (if (int_eq k 100) Right cur)))))
 
-(fn is_quit ((line (List Int))) Bool
-  (match line (Nil False) ((Cons c rest) (int_eq c 113))))   ; 'q'
+;; a frame = clear screen (ANSI ESC[2J ESC[H) then the rendered board.
+(fn frame ((s GameState)) (List Int)
+  (app_int (list 27 91 50 74 27 91 72) (render s)))
 
-;; ---- update: advance the core; display is the view's job -------------------
-(fn step_app ((s GameState) (line (List Int))) (Step GameState Action)
-  (if (is_quit line)
-      (Step s (Exit 0))
-      (Step (step s (parse_heading line (dir_of s))) (Nop))))
+;; show the board, read a key, quit on 'q'/EOF, else advance and repeat.
+(fn play ((s GameState) (w World)) World
+  (match (read_key (write (frame s) w))
+    ((Pair mk w1)
+      (match mk
+        (None      w1)
+        ((Some k)
+          (if (int_eq k 113)
+              w1
+              (play (step s (key_heading k (dir_of s))) w1)))))))
 
-;; ---- entrypoint ------------------------------------------------------------
-(app
-  (state  GameState)
-  (init   (GS (Cons (Pos 8 10) (Cons (Pos 7 10) (Cons (Pos 6 10) Nil)))
-              Right (Pos 10 10) 0 Alive 7))
-  (view   render)
-  (input  raw)        ; interactive: one keypress per tick (no Enter)
-  (update step_app))
+(fn main ((w World)) World
+  (play (GS (Cons (Pos 8 10) (Cons (Pos 7 10) (Cons (Pos 6 10) Nil)))
+            Right (Pos 10 10) 0 Alive 7) w))
