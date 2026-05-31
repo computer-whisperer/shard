@@ -1,0 +1,388 @@
+;;; proof_reader.shard — the PROOF LANGUAGE reader.
+;;;
+;;; The proof language is a DISTINCT language from the object language. The
+;;; object language is total/pure/first-order so the kernel can reason about it;
+;;; the proof language carries none of those constraints and grows whatever
+;;; forms the checking task needs. It EMBEDS object-language snippets (the terms
+;;; an equation is about, a cert payload) — those are parsed by the object
+;;; reader's `elaborate`. Everything else is the proof DSL's own grammar.
+;;;
+;;; This parses a claim's goal/proof s-expression DIRECTLY into the native
+;;; Goal/Proof ADTs the checker consumes — no reflect-as-Expr-then-unreflect
+;;; roundtrip (that whole layer was the symptom of parsing the proof language
+;;; through the object reader). See docs/archive/TRANSFER.md ("two languages").
+
+(import "stdlib.shard")
+(import "term.shard")
+(import "module.shard")
+(import "proof.shard")
+(import "reader.shard")   ; elaborate / parse_type / SExpr / sym_mem
+
+;; ---- tiny SExpr destructuring helpers -------------------------------------
+(fn p_sym ((s SExpr)) (Option Symbol)
+  (match s ((SSym n) (Some n)) (_ None)))
+
+(fn p_items ((s SExpr)) (Option (List SExpr))
+  (match s ((SList xs) (Some xs)) (_ None)))
+
+;; a head-symbol form: (HEAD a1 a2 …) → (Some (Pair HEAD (a1 a2 …))).
+(fn p_form ((s SExpr)) (Option (Pair Symbol (List SExpr)))
+  (match s
+    ((SList (Cons (SSym h) rest)) (Some (Pair h rest)))
+    (_ None)))
+
+;; ---- object snippets: parse a TERM via the object reader ------------------
+;; Goal binders are free variables (FVar by name); elaborate with an empty
+;; binder scope turns any non-ctor symbol into an FVar — exactly the native
+;; form unreflect used to reconstruct.
+(fn p_term ((s SExpr) (ctors (List Symbol))) (Option Expr)
+  (elaborate s ctors Nil))
+
+;; ---- types ----------------------------------------------------------------
+;; A symbol in a binder type is a TYPE VARIABLE iff it is not a known type
+;; constructor; parse_type (reader.shard) already does this given the tparam
+;; list. We collect tparams by scanning the binder types for symbols that are
+;; not in `type_names` (the kernel + checkee type constructors).
+(fn ty_syms ((s SExpr) (acc (List Symbol))) (List Symbol)
+  (match s
+    ((SSym n) (Cons n acc))
+    ((SList xs) (ty_syms_list xs acc))
+    (_ acc)))
+
+(fn ty_syms_list ((xs (List SExpr)) (acc (List Symbol))) (List Symbol)
+  (match xs
+    (Nil acc)
+    ((Cons h t) (ty_syms_list t (ty_syms h acc)))))
+
+(fn not_in ((n Symbol) (names (List Symbol))) Bool
+  (if (sym_mem n names) False True))
+
+(fn keep_tvars ((cands (List Symbol)) (type_names (List Symbol))) (List Symbol)
+  (match cands
+    (Nil Nil)
+    ((Cons n t) (if (not_in n type_names) (Cons n (keep_tvars t type_names))
+                                          (keep_tvars t type_names)))))
+
+;; tparams for a goal: every symbol in any binder TYPE that isn't a known type
+;; constructor. (Binder = (name TYPE); we scan the TYPE part only.)
+(fn binder_type_syms ((binders (List SExpr)) (acc (List Symbol))) (List Symbol)
+  (match binders
+    (Nil acc)
+    ((Cons b rest)
+      (match (p_items b)
+        ((Some (Cons _name (Cons tyS Nil))) (binder_type_syms rest (ty_syms tyS acc)))
+        (_ (binder_type_syms rest acc))))))
+
+(fn goal_tparams ((binders (List SExpr)) (type_names (List Symbol))) (List Symbol)
+  (keep_tvars (binder_type_syms binders Nil) type_names))
+
+;; ---- params ---------------------------------------------------------------
+(fn p_param ((s SExpr) (tparams (List Symbol))) (Option Param)
+  (match (p_items s)
+    ((Some (Cons (SSym name) (Cons tyS Nil)))
+      (match (parse_type tyS tparams)
+        (None None)
+        ((Some ty) (Some (Param name ty)))))
+    (_ None)))
+
+(fn p_params ((ss (List SExpr)) (tparams (List Symbol))) (Option (List Param))
+  (match ss
+    (Nil (Some Nil))
+    ((Cons h t)
+      (match (p_param h tparams)
+        (None None)
+        ((Some pm)
+          (match (p_params t tparams)
+            (None None)
+            ((Some rest) (Some (Cons pm rest)))))))))
+
+;; ---- equations ------------------------------------------------------------
+(fn p_eq ((s SExpr) (ctors (List Symbol))) (Option Equation)
+  (match (p_form s)
+    ((Some (Pair h (Cons lS (Cons rS Nil))))
+      (if (sym_eq h (quote =))
+          (match (p_term lS ctors)
+            (None None)
+            ((Some l)
+              (match (p_term rS ctors)
+                (None None)
+                ((Some r) (Some (Equation l r))))))
+          None))
+    (_ None)))
+
+(fn p_eqs ((ss (List SExpr)) (ctors (List Symbol))) (Option (List Equation))
+  (match ss
+    (Nil (Some Nil))
+    ((Cons h t)
+      (match (p_eq h ctors)
+        (None None)
+        ((Some e)
+          (match (p_eqs t ctors)
+            (None None)
+            ((Some rest) (Some (Cons e rest)))))))))
+
+;; ---- goal -----------------------------------------------------------------
+;;   (goal (BINDER…) (PREMISE…) CONCL)
+(fn parse_goal ((s SExpr) (ctors (List Symbol)) (type_names (List Symbol))) (Option Goal)
+  (match (p_form s)
+    ((Some (Pair h (Cons bindersS (Cons premsS (Cons conclS Nil)))))
+      (if (sym_eq h (quote goal))
+          (match (p_items bindersS)
+            (None None)
+            ((Some binders)
+              (match (p_params binders (goal_tparams binders type_names))
+                (None None)
+                ((Some params)
+                  (match (p_items premsS)
+                    (None None)
+                    ((Some prems)
+                      (match (p_eqs prems ctors)
+                        (None None)
+                        ((Some premises)
+                          (match (p_eq conclS ctors)
+                            (None None)
+                            ((Some concl) (Some (Goal params premises concl))))))))))))
+          None))
+    (_ None)))
+
+;; ---- side / dir / bool ----------------------------------------------------
+(fn p_side ((s SExpr)) (Option Side)
+  (match (p_sym s)
+    ((Some n)
+      (if (sym_eq n (quote lhs))  (Some Lhs)
+      (if (sym_eq n (quote rhs))  (Some Rhs)
+      (if (sym_eq n (quote both)) (Some Both)
+          None))))
+    (_ None)))
+
+(fn p_dir ((s SExpr)) (Option Dir)
+  (match (p_sym s)
+    ((Some n)
+      (if (sym_eq n (quote lr)) (Some Lr)
+      (if (sym_eq n (quote rl)) (Some Rl)
+          None)))
+    (_ None)))
+
+(fn p_bool ((s SExpr)) (Option Bool)
+  (match (p_sym s)
+    ((Some n)
+      (if (sym_eq n (quote true))  (Some True)
+      (if (sym_eq n (quote false)) (Some False)
+          None)))
+    (_ None)))
+
+;; ---- eqref: (hyp N|name) | (premise N) | (lemma name) ---------------------
+;; Hyp accepts a name (the named-hyp form, e.g. (hyp ih)) — desugar.shard turns
+;; it into an index — or a literal int. We keep names as a SymLit-tagged Hyp via
+;; the same convention the old path produced (Hyp carries an Int natively, so a
+;; NAME is represented by stashing it; here we preserve the integer form and let
+;; the named form go through as-is for desugar). For now: int → Hyp Int,
+;; name → handled by emitting a sentinel the desugarer recognizes.
+(fn p_eqref ((s SExpr)) (Option EqRef)
+  (match (p_form s)
+    ((Some (Pair h (Cons argS Nil)))
+      (if (sym_eq h (quote hyp))
+          (match argS
+            ((SInt k)  (Some (Hyp k)))
+            (_ None))                       ; named hyp handled in p_eqref_named below
+      (if (sym_eq h (quote premise))
+          (match argS ((SInt k) (Some (Premise k))) (_ None))
+      (if (sym_eq h (quote lemma))
+          (match (p_sym argS) ((Some nm) (Some (Lemma nm))) (_ None))
+          None))))
+    (_ None)))
+
+;; ---- inst: (inst NAME TERM) -----------------------------------------------
+(fn p_inst ((s SExpr) (ctors (List Symbol))) (Option Inst)
+  (match (p_form s)
+    ((Some (Pair h (Cons (SSym nm) (Cons tS Nil))))
+      (if (sym_eq h (quote inst))
+          (match (p_term tS ctors) (None None) ((Some t) (Some (Inst nm t))))
+          None))
+    (_ None)))
+
+(fn p_insts ((ss (List SExpr)) (ctors (List Symbol))) (Option (List Inst))
+  (match ss
+    (Nil (Some Nil))
+    ((Cons h t)
+      (match (p_inst h ctors)
+        (None None)
+        ((Some i)
+          (match (p_insts t ctors) (None None) ((Some rest) (Some (Cons i rest)))))))))
+
+;; ---- step -----------------------------------------------------------------
+;; reduce/simp/compute share the shape (KEYWORD SIDE); dispatch by head.
+(fn p_simple_step ((h Symbol) (sd Side)) (Option Step)
+  (if (sym_eq h (quote reduce))  (Some (Reduce sd))
+  (if (sym_eq h (quote simp))    (Some (Simp sd))
+  (if (sym_eq h (quote compute)) (Some (Compute sd))
+      None))))
+
+;; (rewrite EQREF DIR SIDE ALL (INST…))
+(fn p_rewrite_step ((args (List SExpr)) (ctors (List Symbol))) (Option Step)
+  (match args
+    ((Cons refS (Cons dirS (Cons sideS (Cons allS (Cons instsS Nil)))))
+      (match (p_eqref refS)
+        (None None)
+        ((Some ref)
+          (match (p_dir dirS)
+            (None None)
+            ((Some dir)
+              (match (p_side sideS)
+                (None None)
+                ((Some sd)
+                  (match (p_bool allS)
+                    (None None)
+                    ((Some all)
+                      (match (p_items instsS)
+                        (None None)
+                        ((Some instList)
+                          (match (p_insts instList ctors)
+                            (None None)
+                            ((Some insts) (Some (Rewrite ref dir sd all insts))))))))))))))
+        )
+    (_ None)))
+
+(fn p_step_head ((h Symbol) (args (List SExpr)) (ctors (List Symbol))) (Option Step)
+  (if (sym_eq h (quote unfold))
+      (match args
+        ((Cons (SSym fn) (Cons sideS Nil))
+          (match (p_side sideS) (None None) ((Some sd) (Some (Unfold fn sd)))))
+        (_ None))
+  (if (sym_eq h (quote rewrite))
+      (p_rewrite_step args ctors)
+      (match args                               ; reduce / simp / compute: one SIDE arg
+        ((Cons sideS Nil)
+          (match (p_side sideS) (None None) ((Some sd) (p_simple_step h sd))))
+        (_ None)))))
+
+(fn p_step ((s SExpr) (ctors (List Symbol))) (Option Step)
+  (match (p_form s)
+    ((Some (Pair h args)) (p_step_head h args ctors))
+    (_ None)))
+
+(fn p_steps ((ss (List SExpr)) (ctors (List Symbol))) (Option (List Step))
+  (match ss
+    (Nil (Some Nil))
+    ((Cons h t)
+      (match (p_step h ctors)
+        (None None)
+        ((Some st)
+          (match (p_steps t ctors) (None None) ((Some rest) (Some (Cons st rest)))))))))
+
+;; ---- proof (mutually recursive with case) ---------------------------------
+(fn parse_proof ((s SExpr) (ctors (List Symbol)) (type_names (List Symbol))) (Option Proof)
+  (match s
+    ((SSym n) (if (sym_eq n (quote refl)) (Some Refl) None))
+    ((SList _)
+      (match (p_form s)
+        ((Some (Pair h args))
+          (if (sym_eq h (quote steps))
+              (match args
+                ((Cons stepsS (Cons contS Nil))
+                  (match (p_items stepsS) (None None) ((Some stepList)
+                   (match (p_steps stepList ctors) (None None) ((Some steps)
+                    (match (parse_proof contS ctors type_names) (None None) ((Some cont)
+                      (Some (Steps steps cont)))))))))
+                (_ None))
+          (if (sym_eq h (quote induct))
+              (match args
+                ((Cons (SSym var) (Cons casesS Nil))
+                  (match (p_items casesS) (None None) ((Some caseList)
+                   (match (p_cases caseList ctors type_names) (None None) ((Some cases)
+                     (Some (Induct var cases)))))))
+                (_ None))
+          (if (sym_eq h (quote induct2))
+              (match args
+                ((Cons (SSym var) (Cons casesS Nil))
+                  (match (p_items casesS) (None None) ((Some caseList)
+                   (match (p_cases caseList ctors type_names) (None None) ((Some cases)
+                     (Some (Induct2 var cases)))))))
+                (_ None))
+          (if (sym_eq h (quote case-on))
+              (match args
+                ((Cons termS (Cons (SSym tyName) (Cons casesS Nil)))
+                  (match (p_term termS ctors) (None None) ((Some term)
+                   (match (p_items casesS) (None None) ((Some caseList)
+                    (match (p_cases caseList ctors type_names) (None None) ((Some cases)
+                      (Some (CaseOn term tyName cases)))))))))
+                (_ None))
+          (if (sym_eq h (quote wf-induct))
+              (match args
+                ((Cons measureS (Cons subS Nil))
+                  (match (p_term measureS ctors) (None None) ((Some measure)
+                   (match (parse_proof subS ctors type_names) (None None) ((Some sub)
+                     (Some (WfInduct measure sub)))))))
+                (_ None))
+          (if (sym_eq h (quote absurd))
+              (match args ((Cons refS Nil)
+                            (match (p_eqref refS) (None None) ((Some ref) (Some (Absurd ref)))))
+                          (_ None))
+          (if (sym_eq h (quote by))
+              (match args
+                ((Cons (SSym theory) (Cons payloadS Nil))
+                  (match (p_term payloadS ctors) (None None) ((Some payload)
+                    (Some (ByTheory theory (Cert theory payload))))))
+                (_ None))
+          (if (sym_eq h (quote rewrite-with))
+              (p_rewrite_with args ctors type_names)
+              None)))))))))
+        (_ None)))
+    (_ None)))
+
+;; rewrite-with: (rewrite-with EQREF DIR SIDE (INST…) (PROOF…) PROOF)
+(fn p_rewrite_with ((args (List SExpr)) (ctors (List Symbol)) (type_names (List Symbol))) (Option Proof)
+  (match args
+    ((Cons refS (Cons dirS (Cons sideS (Cons instsS (Cons subsS (Cons contS Nil))))))
+      (match (p_eqref refS) (None None) ((Some ref)
+       (match (p_dir dirS) (None None) ((Some dir)
+        (match (p_side sideS) (None None) ((Some sd)
+         (match (p_items instsS) (None None) ((Some instList)
+          (match (p_insts instList ctors) (None None) ((Some insts)
+           (match (p_items subsS) (None None) ((Some subList)
+            (match (p_proofs subList ctors type_names) (None None) ((Some subs)
+             (match (parse_proof contS ctors type_names) (None None) ((Some cont)
+               (Some (RewriteWith ref dir sd insts subs cont)))))))))))))))))))
+    (_ None)))
+
+(fn p_proofs ((ss (List SExpr)) (ctors (List Symbol)) (type_names (List Symbol))) (Option (List Proof))
+  (match ss
+    (Nil (Some Nil))
+    ((Cons h t)
+      (match (parse_proof h ctors type_names) (None None) ((Some p)
+       (match (p_proofs t ctors type_names) (None None) ((Some rest) (Some (Cons p rest)))))))))
+
+;; ---- case: (case CTOR PROOF) | (case CTOR (FIELD…) PROOF) ------------------
+(fn p_case ((s SExpr) (ctors (List Symbol)) (type_names (List Symbol))) (Option Case)
+  (match (p_form s)
+    ((Some (Pair h args))
+      (if (sym_eq h (quote case))
+          (match args
+            ((Cons (SSym ctor) (Cons subS Nil))                 ; (case CTOR PROOF)
+              (match (parse_proof subS ctors type_names) (None None) ((Some sub)
+                (Some (Case ctor sub)))))
+            ((Cons (SSym ctor) (Cons fieldsS (Cons subS Nil)))  ; (case CTOR (FIELD…) PROOF)
+              (match (p_field_syms fieldsS) (None None) ((Some fields)
+               (match (parse_proof subS ctors type_names) (None None) ((Some sub)
+                 (Some (CaseB ctor fields sub)))))))
+            (_ None))
+          None))
+    (_ None)))
+
+(fn p_cases ((ss (List SExpr)) (ctors (List Symbol)) (type_names (List Symbol))) (Option (List Case))
+  (match ss
+    (Nil (Some Nil))
+    ((Cons h t)
+      (match (p_case h ctors type_names) (None None) ((Some c)
+       (match (p_cases t ctors type_names) (None None) ((Some rest) (Some (Cons c rest)))))))))
+
+(fn p_field_syms ((s SExpr)) (Option (List Symbol))
+  (match (p_items s)
+    (None None)
+    ((Some xs) (p_syms xs))))
+
+(fn p_syms ((xs (List SExpr))) (Option (List Symbol))
+  (match xs
+    (Nil (Some Nil))
+    ((Cons (SSym n) t) (match (p_syms t) (None None) ((Some rest) (Some (Cons n rest)))))
+    (_ None)))
