@@ -193,6 +193,28 @@
           None))))
     (_ None)))
 
+;; ---- cert payload: NATIVE DATA, not an object term ------------------------
+;; A ByTheory cert's payload is theory-specific DATA the checker reads
+;; directly (e.g. farkas multipliers — (lt goal_mult 0) compares a bare Int),
+;; NOT a reflected object Expr. So `(list 1 1 -2)` must become the native list
+;; (Cons 1 (Cons 1 (Cons -2 Nil))) with BARE Ints — exactly what unreflect_data
+;; produced on the reflected path — not (Cons (IntLit 1) …). Nested lists
+;; (the equality case's (list le_mults ge_mults)) recurse. lia/eqdec/ord use
+;; an empty (list) → Nil.
+(fn p_data ((s SExpr)) Expr
+  (match s
+    ((SInt n) n)
+    ((SList items)
+      (match items
+        ((Cons (SSym h) rest) (if (sym_eq h (quote list)) (p_data_list rest) Nil))
+        (_ Nil)))
+    (_ Nil)))
+
+(fn p_data_list ((items (List SExpr))) Expr
+  (match items
+    (Nil Nil)
+    ((Cons h t) (Cons (p_data h) (p_data_list t)))))
+
 ;; ---- inst: (inst NAME TERM) -----------------------------------------------
 (fn p_inst ((s SExpr) (ctors (List Symbol))) (Option Inst)
   (match (p_form s)
@@ -322,8 +344,7 @@
           (if (sym_eq h (quote by))
               (match args
                 ((Cons (SSym theory) (Cons payloadS Nil))
-                  (match (p_term payloadS ctors) (None None) ((Some payload)
-                    (Some (ByTheory theory (Cert theory payload))))))
+                  (Some (ByTheory theory (Cert theory (p_data payloadS)))))   ; payload = DATA
                 (_ None))
           (if (sym_eq h (quote rewrite-with))
               (p_rewrite_with args ctors type_names)
