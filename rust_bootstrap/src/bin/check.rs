@@ -949,14 +949,16 @@ fn run_claims_check(args: &[String]) -> ExitCode {
 // Production checking through the self-hosted shard driver.
 //
 // This is THE checking path for `check <file>…` (including `--trace`). The
-// entire claim-checking LOOP — parse claims/axioms, desugar named hyps,
-// un-reflect goals/proofs, run check_sequent, thread the theory, admit axioms,
-// and render the `--trace`/failure diagnostics — runs in shard
-// (kernel/driver.shard's check_production + kernel/trace.shard), via the native
-// VM exactly like the kernel's own check_sequent. Rust's role is reduced to:
+// entire pipeline — parse the target MODULE (types/fns) AND its claims/axioms,
+// desugar named hyps, un-reflect goals/proofs, run check_sequent, thread the
+// theory, admit axioms, and render the `--trace`/failure diagnostics — runs in
+// shard (kernel/{reader,driver,trace}.shard), via the native VM exactly like
+// the kernel's own check_sequent. The reduction module M is now built BY THE
+// SHARD READER (check_production_src folds parse_module over the sources); the
+// Rust loader no longer parses the targets. Rust's role is reduced to:
 //   - resolving the file list (imports first, then targets) and reading bytes,
-//   - building the two modules (eval = kernel + toolchain; M = kernel.types +
-//     all loaded code),
+//   - loading the kernel + shard toolchain into the VM (the bootstrap floor),
+//   - seeding M with the kernel's own types + ctor names,
 //   - decoding the returned (List ClaimOutcome) into PASS/FAIL/AXIOM lines.
 // ----------------------------------------------------------------------
 
@@ -991,20 +993,6 @@ fn run_shard_check(files: &[String], kernel: &ast::Module, trace: Option<&str>) 
         }
     }
 
-    // M module = kernel.types + all the user code (targets + their imports).
-    // kernel.fns are kept OUT so the proofs reduce against the user's fns, not
-    // the kernel's internals (e.g. term.shard's `len` vs std/list's `len`).
-    let mut m_ctx = mk_ctx(ast::Module {
-        types: kernel.types.clone(),
-        fns: Vec::new(),
-        externs: Vec::new(),
-    });
-    for t in &targets {
-        if let Err(code) = process_file(t, &mut m_ctx, kernel) {
-            return code;
-        }
-    }
-
     // Ordered file list (imports first, then targets), and their sources.
     let order = match ordered_closure(&targets) {
         Ok(o) => o,
@@ -1018,15 +1006,24 @@ fn run_shard_check(files: &[String], kernel: &ast::Module, trace: Option<&str>) 
         }
     }
 
-    let ctor_names: Vec<String> = m_ctx.user_module.types.iter()
+    // M (the module proofs reduce against) is built IN SHARD by check_production_src:
+    // it folds the self-hosted reader's parse_module over `srcs` (dependency order)
+    // and merges onto the kernel-types seed. load.rs no longer parses the targets —
+    // it only loaded the kernel + toolchain into the VM (eval_ctx) above.
+    let seed = module_to_value(&ast::Module {
+        types: kernel.types.clone(),
+        fns: Vec::new(),
+        externs: Vec::new(),
+    });
+    let kernel_ctor_names: Vec<String> = kernel.types.iter()
         .flat_map(|td| td.ctors.iter().map(|cd| cd.name.clone()))
         .collect();
-    let ctorset = sym_list_native(&ctor_names);
+    let base_ctors = sym_list_native(&kernel_ctor_names);
 
-    // (check_production <M> <srcs> <ctors> <trace-target>) → (List ClaimOutcome).
+    // (check_production_src <seed> <base_ctors> <srcs> <trace-target>) → (List ClaimOutcome).
     let call = ast::Expr::Call(
-        "check_production".into(),
-        vec![m_ctx.user_module_value.clone(), srcs_list, ctorset, ast::Expr::SymLit(trace_target)],
+        "check_production_src".into(),
+        vec![seed, base_ctors, srcs_list, ast::Expr::SymLit(trace_target)],
     );
     let result = match eval_raw(&eval_ctx.user_module, &call).and_then(|v| value_to_native_expr(&v)) {
         Ok(v) => v,

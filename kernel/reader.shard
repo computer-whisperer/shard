@@ -614,7 +614,8 @@
   (if (sym_eq h (quote import))     True
   (if (sym_eq h (quote use-module)) True
   (if (sym_eq h (quote app))        True
-  False)))))))
+  (if (sym_eq h (quote cli))        True
+  False))))))))
 
 ;; Pass 1: collect all (type …) definitions, in source order.
 (fn collect_types ((forms (List SExpr))) (Option (List TypeDef))
@@ -682,6 +683,42 @@
           (match (collect_fns_externs forms (append_sym (typedef_ctors tds) base_ctors))
             (None None)
             ((Some (Pair fns externs)) (Some (Module tds fns externs)))))))))
+
+;; ---- whole-program module assembly ----------------------------------------
+;; Build M (the module proofs reduce against) by folding `parse_module` over a
+;; list of sources in DEPENDENCY ORDER (a file's imports come before it),
+;; threading the accumulating ctor set so each file's fn bodies resolve ctors
+;; declared in its dependencies, and concatenating the decls onto `acc` (which
+;; the caller seeds with the kernel's own types). Mirrors the Rust loader's
+;; merge_module + dependency-order base — but parsed entirely by this reader.
+
+(fn app_typedefs ((a (List TypeDef)) (b (List TypeDef))) (List TypeDef)
+  (match a (Nil b) ((Cons h t) (Cons h (app_typedefs t b)))))
+(fn app_fndefs ((a (List FnDef)) (b (List FnDef))) (List FnDef)
+  (match a (Nil b) ((Cons h t) (Cons h (app_fndefs t b)))))
+(fn app_externdefs ((a (List ExternDef)) (b (List ExternDef))) (List ExternDef)
+  (match a (Nil b) ((Cons h t) (Cons h (app_externdefs t b)))))
+
+(fn merge_modules ((a Module) (b Module)) Module
+  (match a
+    ((Module at af ax)
+      (match b
+        ((Module bt bf bx)
+          (Module (app_typedefs at bt) (app_fndefs af bf) (app_externdefs ax bx)))))))
+
+(fn module_typedefs ((m Module)) (List TypeDef)
+  (match m ((Module tds _ _) tds)))
+
+(fn build_module ((srcs (List (List Int))) (acc Module) (ctors (List Symbol))) (Option Module)
+  (match srcs
+    (Nil (Some acc))
+    ((Cons src rest)
+      (match (parse_module src ctors)
+        (None None)
+        ((Some m)
+          (build_module rest
+                        (merge_modules acc m)
+                        (append_sym (typedef_ctors (module_typedefs m)) ctors)))))))
 
 ;; ===========================================================================
 ;; Claim collection: pull every (claim NAME GOAL PROOF) form out of a file as
