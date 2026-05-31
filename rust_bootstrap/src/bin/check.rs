@@ -42,7 +42,7 @@
 //! Exit codes: 0 = all claims passed, 1 = some claim failed, 2 =
 //! a load or eval error (no claim outcome could be determined).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use lexpr::Value;
@@ -197,14 +197,13 @@ fn process_file(path: &PathBuf, ctx: &mut Ctx, kernel: &ast::Module) -> Result<(
 
     ctx.in_progress.push(canon.clone());
 
-    // Pass A: imports (and the use-module alias) — recurse first.
+    // Pass A: imports (and the use-module alias) — recurse first. An import
+    // may resolve to several files when it names a directory-module.
     for form in &forms {
         if let Some(dep) = import_path(form) {
-            let resolved = match path.parent() {
-                Some(d) => d.join(&dep),
-                None    => PathBuf::from(&dep),
-            };
-            process_file(&resolved, ctx, kernel)?;
+            for resolved in resolve_import(path.parent(), &dep)? {
+                process_file(&resolved, ctx, kernel)?;
+            }
         }
     }
 
@@ -241,6 +240,45 @@ fn process_file(path: &PathBuf, ctx: &mut Ctx, kernel: &ast::Module) -> Result<(
     ctx.in_progress.pop();
     ctx.loaded.insert(canon);
     Ok(())
+}
+
+/// Resolve an import directive's path (relative to the importing file's
+/// directory) into the concrete list of `.shard` files to load.
+///
+/// A path that names a DIRECTORY is a directory-MODULE: every `*.shard` file
+/// in it is loaded as one unit, with `mod.req.shard` (the module's public
+/// interface) placed LAST so its public claims may cite dir-mate private
+/// members. A path that names a file (legacy `.shard` import) loads exactly
+/// that file. The two are disambiguated by the directive itself: `(import
+/// "order")` → the module dir `order/`, `(import "order.shard")` → the file.
+fn resolve_import(base_dir: Option<&Path>, dep: &str) -> Result<Vec<PathBuf>, ExitCode> {
+    let joined = match base_dir {
+        Some(d) => d.join(dep),
+        None => PathBuf::from(dep),
+    };
+    if !joined.is_dir() {
+        return Ok(vec![joined]); // legacy single-file import
+    }
+    let mut files: Vec<PathBuf> = Vec::new();
+    let entries = std::fs::read_dir(&joined).map_err(|e| {
+        eprintln!("error reading module dir {}: {}", joined.display(), e);
+        ExitCode::from(2)
+    })?;
+    for ent in entries {
+        let p = ent
+            .map_err(|e| { eprintln!("error reading module dir entry: {}", e); ExitCode::from(2) })?
+            .path();
+        if p.extension().and_then(|s| s.to_str()) == Some("shard") {
+            files.push(p);
+        }
+    }
+    // Deterministic: alphabetical, then a STABLE partition pushing
+    // `mod.req.shard` to the end (its public lemmas may cite private members).
+    files.sort();
+    files.sort_by_key(|p| {
+        p.file_name().and_then(|s| s.to_str()) == Some("mod.req.shard")
+    });
+    Ok(files)
 }
 
 /// If `form` is `(import "PATH")` or the legacy `(use-module "PATH")`,
@@ -281,11 +319,9 @@ fn ordered_closure(targets: &[PathBuf]) -> Result<Vec<PathBuf>, ExitCode> {
         })?;
         for form in &forms {
             if let Some(dep) = import_path(form) {
-                let resolved = match path.parent() {
-                    Some(d) => d.join(&dep),
-                    None => PathBuf::from(&dep),
-                };
-                visit(&resolved, order, seen)?;
+                for resolved in resolve_import(path.parent(), &dep)? {
+                    visit(&resolved, order, seen)?;
+                }
             }
         }
         order.push(path.clone());
