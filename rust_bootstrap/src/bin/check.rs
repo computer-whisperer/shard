@@ -382,6 +382,50 @@ fn import_path(form: &Value) -> Option<String> {
     }
 }
 
+/// The transitive import closure of `target`, in dependency order (deps before
+/// dependents), deduplicated, EXCLUDING `target` itself. Post-order DFS over
+/// `import`/`use-module` directives — the same traversal `process_file` uses to
+/// load code, but collecting the *paths* so the self-host driver can seed its
+/// theory from the imports' proven claims.
+fn import_closure(target: &PathBuf) -> Result<Vec<PathBuf>, ExitCode> {
+    fn visit(
+        path: &PathBuf,
+        is_root: bool,
+        order: &mut Vec<PathBuf>,
+        seen: &mut std::collections::HashSet<PathBuf>,
+    ) -> Result<(), ExitCode> {
+        let canon = path.canonicalize().unwrap_or_else(|_| path.clone());
+        if !seen.insert(canon) {
+            return Ok(()); // already visited (dedup / cycle-safe)
+        }
+        let src = std::fs::read_to_string(path).map_err(|e| {
+            eprintln!("error reading {}: {}", path.display(), e);
+            ExitCode::from(2)
+        })?;
+        let forms = parse_top_level(&src).map_err(|e| {
+            eprintln!("error parsing {}: {}", path.display(), e);
+            ExitCode::from(2)
+        })?;
+        for form in &forms {
+            if let Some(dep) = import_path(form) {
+                let resolved = match path.parent() {
+                    Some(d) => d.join(&dep),
+                    None => PathBuf::from(&dep),
+                };
+                visit(&resolved, false, order, seen)?;
+            }
+        }
+        if !is_root {
+            order.push(path.clone());
+        }
+        Ok(())
+    }
+    let mut order = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    visit(target, true, &mut order, &mut seen)?;
+    Ok(order)
+}
+
 // ----------------------------------------------------------------------
 // Form processing
 // ----------------------------------------------------------------------
@@ -1918,15 +1962,36 @@ fn run_self_check(args: &[String]) -> ExitCode {
         Ok(s) => s,
         Err(e) => { eprintln!("error reading {}: {}", target_path, e); return ExitCode::from(2); }
     };
-    let ctor_names: Vec<String> = eval_ctx.user_module.types.iter()
+    // Ctor set for the reader (ctor-vs-call disambiguation): kernel types plus
+    // the target's and its imports' own types (all merged into M).
+    let ctor_names: Vec<String> = m_ctx.user_module.types.iter()
         .flat_map(|td| td.ctors.iter().map(|cd| cd.name.clone()))
         .collect();
     let ctorset = sym_list_native(&ctor_names);
 
-    // (check_file <M> <src> <ctors>) → (DriverResult passed failed).
+    // Seed sources: the target's transitive import closure (deps first). Their
+    // proven claims are admitted into the theory so the target's (Lemma 'name)
+    // citations of imported lemmas resolve.
+    let imports = match import_closure(&PathBuf::from(target_path)) {
+        Ok(paths) => paths,
+        Err(code) => return code,
+    };
+    let mut import_srcs: Vec<ast::Expr> = Vec::new();
+    for p in &imports {
+        match std::fs::read_to_string(p) {
+            Ok(s) => import_srcs.push(line_to_event_native(&s)),
+            Err(e) => { eprintln!("error reading import {}: {}", p.display(), e); return ExitCode::from(2); }
+        }
+    }
+    let mut imports_list = nil();
+    for src in import_srcs.into_iter().rev() {
+        imports_list = ctor("Cons", vec![src, imports_list]);
+    }
+
+    // (check_with_imports <M> <imports> <src> <ctors>) → (DriverResult passed failed).
     let call = ast::Expr::Call(
-        "check_file".into(),
-        vec![m_ctx.user_module_value.clone(), line_to_event_native(&target_src), ctorset],
+        "check_with_imports".into(),
+        vec![m_ctx.user_module_value.clone(), imports_list, line_to_event_native(&target_src), ctorset],
     );
     let result = match eval_raw(&eval_ctx.user_module, &call).and_then(|v| value_to_native_expr(&v)) {
         Ok(v) => v,

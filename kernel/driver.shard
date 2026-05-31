@@ -12,8 +12,10 @@
 ;;; orchestration moved into shard.
 ;;;
 ;;; Named hypotheses `(Hyp 'ih)` are desugared to positional form
-;;; (desugar.shard) before un-reflection; the theory still starts empty, so
-;;; claims citing IMPORTED lemmas are the remaining gap.
+;;; (desugar.shard) before un-reflection. Claims citing IMPORTED lemmas are
+;;; handled via `check_with_imports`: the harness supplies the target's
+;;; transitive import closure (deps first), `seed_theory` checks those to
+;;; admit their proven claims, and the target is checked against that theory.
 
 ;; Goal → Sequent: a top-level claim has no in-scope hypotheses (hyps = Nil).
 (fn lift_sequent ((g Goal)) Sequent
@@ -25,31 +27,82 @@
 ;; Running tally over a file's claims.
 (type DriverResult (DriverResult Int Int))     ; passed, failed
 
-;; Check each claim against module m, threading the theory. A passing claim is
+;; The full state threaded through a file's claims: the theory (so later claims
+;; can cite earlier ones) plus the pass/fail tally.
+(type CheckState (CheckState Theory Int Int))  ; theory, passed, failed
+
+;; Check each claim against module m, threading CheckState. A passing claim is
 ;; admitted as (Proven name goal); a failing or un-reflectable one bumps failed
 ;; and leaves the theory untouched.
-(fn run_claims_loop ((m Module) (th Theory) (cs (List Claim)) (passed Int) (failed Int)) DriverResult
+(fn run_claims ((m Module) (st CheckState) (cs (List Claim))) CheckState
   (match cs
-    (Nil (DriverResult passed failed))
+    (Nil st)
     ((Cons c rest)
-      (match (unreflect_goal (claim_goal c))
-        (None (run_claims_loop m th rest passed (+ failed 1)))
+      (match st
+        ((CheckState th passed failed)
+          (match (unreflect_goal (claim_goal c))
+            (None (run_claims m (CheckState th passed (+ failed 1)) rest))
+            ((Some g)
+              ;; desugar named hyps (named → positional) on the reflected proof
+              ;; against this goal's params, THEN un-reflect to a native Proof.
+              (match (unreflect_proof (desugar_hyps m (goal_params g) Nil (claim_proof c)))
+                (None (run_claims m (CheckState th passed (+ failed 1)) rest))
+                ((Some p)
+                  (if (check_sequent m th (lift_sequent g) p)
+                      ;; store the CLOSED goal (param FVars → BVars) so later
+                      ;; (Lemma name) citations resolve, mirroring native check.
+                      (run_claims m (CheckState (TheoryCons (Proven (claim_name c) (close_goal_for_storage g)) th)
+                                                (+ passed 1) failed)
+                                  rest)
+                      (run_claims m (CheckState th passed (+ failed 1)) rest)))))))))))
+
+;; Admit a file's axioms (asserted true, no proof) into the theory, closing
+;; each goal for storage so citations resolve. A malformed axiom goal is
+;; skipped (it will resurface as a citation failure in a dependent claim).
+(fn seed_axioms ((m Module) (axs (List AxDecl)) (th Theory)) Theory
+  (match axs
+    (Nil th)
+    ((Cons a rest)
+      (match (unreflect_goal (axdecl_goal a))
+        (None (seed_axioms m rest th))
         ((Some g)
-          ;; desugar named hyps (named → positional) on the reflected proof
-          ;; against this goal's params, THEN un-reflect to a native Proof.
-          (match (unreflect_proof (desugar_hyps m (goal_params g) Nil (claim_proof c)))
-            (None (run_claims_loop m th rest passed (+ failed 1)))
-            ((Some p)
-              (if (check_sequent m th (lift_sequent g) p)
-                  ;; store the CLOSED goal (param FVars → BVars) so later
-                  ;; (Lemma name) citations resolve, mirroring native check.
-                  (run_claims_loop m (TheoryCons (Proven (claim_name c) (close_goal_for_storage g)) th)
-                                   rest (+ passed 1) failed)
-                  (run_claims_loop m th rest passed (+ failed 1))))))))))
+          (seed_axioms m rest (TheoryCons (Axiom (axdecl_name a) (close_goal_for_storage g)) th)))))))
+
+;; Process ONE source against `m` from theory `th`: admit the file's own axioms
+;; first (so its later claims can cite them), then run its claims, returning the
+;; resulting theory + this file's pass/fail tally.
+(fn process_src ((m Module) (th Theory) (src (List Int)) (ctors (List Symbol))) CheckState
+  (match (parse_axioms src ctors)
+    (None (CheckState th 0 (- 0 1)))           ; -1 failed = parse failure
+    ((Some axs)
+      (match (parse_claims src ctors)
+        (None (CheckState th 0 (- 0 1)))
+        ((Some cs) (run_claims m (CheckState (seed_axioms m axs th) 0 0) cs))))))
+
+;; Check `src` against `m`, starting from the SEEDED theory `th`.
+;; Reports only THIS file's pass/fail (seed claims already counted elsewhere).
+(fn check_file_seeded ((m Module) (th Theory) (src (List Int)) (ctors (List Symbol))) DriverResult
+  (match (process_src m th src ctors)
+    ((CheckState th2 p f) (DriverResult p f))))
+
+;; Seed a theory by processing a list of import sources in dependency order,
+;; threading the theory through all of them (each file's axioms + proven
+;; claims). Pass/fail counts are discarded — this exists only to admit the
+;; imports' theory entries so the target's (Lemma 'name) citations resolve.
+(fn seed_theory ((m Module) (srcs (List (List Int))) (ctors (List Symbol)) (th Theory)) Theory
+  (match srcs
+    (Nil th)
+    ((Cons src rest)
+      (match (process_src m th src ctors)
+        ((CheckState th2 p f) (seed_theory m rest ctors th2))))))
 
 ;; Entry point: parse the claims out of `src` and check them all against `m`,
-;; starting from the empty theory.
+;; starting from the empty theory. (No imports.)
 (fn check_file ((m Module) (src (List Int)) (ctors (List Symbol))) DriverResult
-  (match (parse_claims src ctors)
-    (None (DriverResult 0 (- 0 1)))            ; -1 failed = parse failure
-    ((Some cs) (run_claims_loop m TheoryEmpty cs 0 0))))
+  (check_file_seeded m TheoryEmpty src ctors))
+
+;; Entry point WITH imports: seed the theory from `imports` (dependency order,
+;; deps first), then check `src` against that seeded theory. The Rust harness
+;; supplies the target's transitive import closure as `imports`.
+(fn check_with_imports ((m Module) (imports (List (List Int))) (src (List Int)) (ctors (List Symbol))) DriverResult
+  (check_file_seeded m (seed_theory m imports ctors TheoryEmpty) src ctors))
