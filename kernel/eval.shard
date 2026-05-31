@@ -22,10 +22,11 @@
 
 (type World (World Int))
 
-(extern get_args  ((w World)) (Pair (List (List Int)) World))
-(extern read_file ((path (List Int)) (w World)) (Pair (Option (List Int)) World))
-(extern write     ((bytes (List Int)) (w World)) World)
-(extern exit      ((code Int) (w World)) World)
+(extern get_args   ((w World)) (Pair (List (List Int)) World))
+(extern read_file  ((path (List Int)) (w World)) (Pair (Option (List Int)) World))
+(extern write      ((bytes (List Int)) (w World)) World)
+(extern write_line ((bytes (List Int)) (w World)) World)
+(extern exit       ((code Int) (w World)) World)
 
 ;; ---- rendering: Expr → surface bytes --------------------------------------
 (fn append_int ((xs (List Int)) (ys (List Int))) (List Int)
@@ -172,15 +173,199 @@
         ((Some e)
           (append_int (show_expr (compute_expr m e)) (Cons 10 Nil)))))))
 
-;; ---- the World wrapper: args[0] = module file, args[1] = expression ---------
-;; Resolve the target's import closure (reading every file via read_file),
-;; then build + evaluate against the whole thing.
+;; ===========================================================================
+;; THE APP RUNNER — eval.shard actually RUNS a shard app (performs its effects).
+;;
+;; `compute_expr` reduces the app's `(main world0)` to a normal form: an
+;; effect-TREE of stuck extern Calls, held as Expr DATA (one meta-level up from
+;; eval.shard's own values). This driver is the shard port of eval.rs's run
+;; loop + handler: find the frontier extern (the innermost stuck extern Call,
+;; all args reduced), DECODE its Expr-encoded args into eval.shard's own values,
+;; PERFORM it via eval.shard's OWN externs (which the Rust host dispatches),
+;; ENCODE the result back into the tree, re-reduce, and loop. The app exits via
+;; its own `exit` extern (a real process exit), so the loop normally terminates
+;; there; if `main` returns a World instead, the loop ends with no frontier.
+;; ===========================================================================
+
+;; -- marshalling: eval.shard values <-> their kernel-Expr encodings ----------
+(fn intlist_to_expr ((xs (List Int))) Expr
+  (match xs
+    (Nil (Ctor (quote Nil) Nil))
+    ((Cons h t) (Ctor (quote Cons) (Cons (IntLit h) (Cons (intlist_to_expr t) Nil))))))
+
+;; an Expr that encodes a (List Int) -> the (List Int). Goes by SHAPE: empty
+;; ctor args -> Nil; (IntLit h . t) -> cons. Robust to the ctor name.
+(fn expr_to_intlist ((e Expr)) (List Int)
+  (match e
+    ((Ctor _ args)
+      (match args
+        (Nil Nil)
+        ((Cons (IntLit h) (Cons t Nil)) (Cons h (expr_to_intlist t)))
+        (_ Nil)))
+    (_ Nil)))
+
+(fn encode_world ((w World)) Expr
+  (match w ((World c) (Ctor (quote World) (Cons (IntLit c) Nil)))))
+
+(fn encode_opt_bytes ((o (Option (List Int)))) Expr
+  (match o
+    (None      (Ctor (quote None) Nil))
+    ((Some bs) (Ctor (quote Some) (Cons (intlist_to_expr bs) Nil)))))
+
+(fn encode_arglist ((xs (List (List Int)))) Expr
+  (match xs
+    (Nil (Ctor (quote Nil) Nil))
+    ((Cons h t) (Ctor (quote Cons) (Cons (intlist_to_expr h) (Cons (encode_arglist t) Nil))))))
+
+(fn encode_pair ((a Expr) (b Expr)) Expr
+  (Ctor (quote Pair) (Cons a (Cons b Nil))))
+
+;; -- the extern vocabulary the runner can perform ----------------------------
+(fn is_extern ((name Symbol)) Bool
+  (if (sym_eq name (quote get_args))   True
+  (if (sym_eq name (quote read_file))  True
+  (if (sym_eq name (quote write))      True
+  (if (sym_eq name (quote write_line)) True
+  (if (sym_eq name (quote exit))       True
+      False))))))
+
+;; -- find the frontier extern: the innermost stuck extern Call (post-order,
+;; so a Call's args — where the threaded World and any data dependencies live —
+;; are searched before the Call itself). Exactly one is ready at a time because
+;; the World threads linearly.
+(fn find_frontier ((e Expr)) (Option Expr)
+  (match e
+    ((Call name args)
+      (match (find_frontier_list args)
+        ((Some f) (Some f))
+        (None     (if (is_extern name) (Some e) None))))
+    ((Ctor _ args)  (find_frontier_list args))
+    ((Match s _)    (find_frontier s))
+    ((If c _ _)     (find_frontier c))
+    ((Let _ body)   (find_frontier body))
+    (_ None)))
+
+(fn find_frontier_list ((es (List Expr))) (Option Expr)
+  (match es
+    (Nil None)
+    ((Cons h t)
+      (match (find_frontier h)
+        ((Some f) (Some f))
+        (None     (find_frontier_list t))))))
+
+;; -- structurally replace the (unique) frontier Call with its performed result.
+(fn replace_expr ((e Expr) (tgt Expr) (rep Expr)) Expr
+  (if (expr_eq e tgt)
+      rep
+      (match e
+        ((Call n args)  (Call n (replace_list args tgt rep)))
+        ((Ctor n args)  (Ctor n (replace_list args tgt rep)))
+        ((Match s arms) (Match (replace_expr s tgt rep) arms))
+        ((If c t el)    (If (replace_expr c tgt rep) (replace_expr t tgt rep) (replace_expr el tgt rep)))
+        ((Let bs body)  (Let bs (replace_expr body tgt rep)))
+        (_ e))))
+
+(fn replace_list ((es (List Expr)) (tgt Expr) (rep Expr)) (List Expr)
+  (match es
+    (Nil Nil)
+    ((Cons h t) (Cons (replace_expr h tgt rep) (replace_list t tgt rep)))))
+
+;; -- perform one frontier extern. Threads eval.shard's REAL World; returns the
+;; app-facing result (Expr-encoded) paired with the advanced World. `app_args`
+;; serves the app's get_args (the real argv slice, computed once at startup).
+(fn perform_frontier ((call Expr) (app_args (List (List Int))) (w World)) (Pair Expr World)
+  (match call
+    ((Call name args)
+      (if (sym_eq name (quote get_args))   (perform_get_args app_args w)
+      (if (sym_eq name (quote read_file))  (perform_read_file args w)
+      (if (sym_eq name (quote write))      (perform_write args w)
+      (if (sym_eq name (quote write_line)) (perform_write_line args w)
+      (if (sym_eq name (quote exit))       (perform_exit args w)
+          (Pair (Ctor (quote Nil) Nil) w)))))))
+    (_ (Pair (Ctor (quote Nil) Nil) w))))
+
+;; get_args performs no real I/O — it just hands back the stored argv slice and
+;; bumps the clock by one (matching the extern's clock axiom).
+(fn perform_get_args ((app_args (List (List Int))) (w World)) (Pair Expr World)
+  (match w
+    ((World c)
+      (Pair (encode_pair (encode_arglist app_args) (Ctor (quote World) (Cons (IntLit (+ c 1)) Nil)))
+            (World (+ c 1))))))
+
+(fn perform_read_file ((args (List Expr)) (w World)) (Pair Expr World)
+  (match args
+    ((Cons path_e _)
+      (match (read_file (expr_to_intlist path_e) w)
+        ((Pair opt w1) (Pair (encode_pair (encode_opt_bytes opt) (encode_world w1)) w1))))
+    (_ (Pair (encode_pair (Ctor (quote None) Nil) (encode_world w)) w))))
+
+(fn perform_write ((args (List Expr)) (w World)) (Pair Expr World)
+  (match args
+    ((Cons bytes_e _)
+      (match (write (expr_to_intlist bytes_e) w)
+        ((World c) (Pair (Ctor (quote World) (Cons (IntLit c) Nil)) (World c)))))
+    (_ (Pair (encode_world w) w))))
+
+(fn perform_write_line ((args (List Expr)) (w World)) (Pair Expr World)
+  (match args
+    ((Cons bytes_e _)
+      (match (write_line (expr_to_intlist bytes_e) w)
+        ((World c) (Pair (Ctor (quote World) (Cons (IntLit c) Nil)) (World c)))))
+    (_ (Pair (encode_world w) w))))
+
+;; exit performs a real process exit (never returns); the (World c) arm only
+;; satisfies the type checker.
+(fn perform_exit ((args (List Expr)) (w World)) (Pair Expr World)
+  (match args
+    ((Cons (IntLit code) _)
+      (match (exit code w) ((World c) (Pair (encode_world (World c)) (World c)))))
+    (_ (match (exit 0 w) ((World c) (Pair (encode_world (World c)) (World c)))))))
+
+;; -- the drive loop: reduce to NF, perform the frontier effect, repeat.
+(fn run_app ((m Module) (expr Expr) (app_args (List (List Int))) (w World)) World
+  (run_app_nf m (compute_expr m expr) app_args w))
+
+(fn run_app_nf ((m Module) (nf Expr) (app_args (List (List Int))) (w World)) World
+  (match (find_frontier nf)
+    (None w)                                      ; no effect left — app done
+    ((Some call)
+      (match (perform_frontier call app_args w)
+        ((Pair result w1)
+          (run_app m (replace_expr nf call result) app_args w1))))))
+
+;; ---- the World wrapper -----------------------------------------------------
+;;   eval <module.shard> <expr>      — evaluate an expression against a module
+;;   eval run <app.shard> <args…>    — RUN a shard app (perform its effects)
 (fn main ((w World)) World
   (match (get_args w)
     ((Pair args w1)
       (match args
-        ((Cons module_path (Cons expr_str _))
-          (match (resolve_closure module_path w1)
-            ((Pair sources w2)
-              (exit 0 (write (eval_run sources expr_str) w2)))))
-        (_ (exit 2 w1))))))                                          ; usage: need 2 args
+        ((Cons a0 rest)
+          (if (int_list_eq a0 "run")
+              (run_main rest w1)
+              (eval_main args w1)))
+        (_ (exit 2 w1))))))                                          ; usage
+
+;; run an app: resolve its import closure, build it, drive its `main` with the
+;; remaining argv as the app's own arguments. This is THE standard path for
+;; running any shard app — check.shard included.
+(fn run_main ((rest (List (List Int))) (w World)) World
+  (match rest
+    ((Cons app_path app_args)
+      (match (resolve_closure app_path w)
+        ((Pair sources w2)
+          (match (build_module sources (Module Nil Nil Nil) (stdlib_ctors))
+            (None (exit 1 (write "error: could not parse app\n" w2)))
+            ((Some m)
+              (run_app m
+                       (Call (quote main) (Cons (Ctor (quote World) (Cons (IntLit 0) Nil)) Nil))
+                       app_args w2))))))
+    (_ (exit 2 w))))                                                 ; usage: need app path
+
+(fn eval_main ((args (List (List Int))) (w World)) World
+  (match args
+    ((Cons module_path (Cons expr_str _))
+      (match (resolve_closure module_path w)
+        ((Pair sources w2)
+          (exit 0 (write (eval_run sources expr_str) w2)))))
+    (_ (exit 2 w))))                                                 ; usage: need 2 args
