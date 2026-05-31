@@ -132,7 +132,8 @@ one arm.
 The I/O vocabulary today: `get_args` / `read_line` / `read_key` /
 `read_file` (input), `write` / `write_line` (output), `exit`. Worked
 examples in `examples/io/`: `filecat` (`get_args → read_file → write →
-exit`), `eval_app` (the self-hosted evaluator as a World program),
+exit`); the self-hosted evaluator (same World/extern shape) is now the
+kernel entrypoint `kernel/kernel.shard`, run via the `eval` binary;
 `calc_repl` and `snake_app` (interactive, line- and key-driven),
 `echo_world` (pure *batched* I/O — slurp/transform/flush, no externs),
 `cat_lazy` / `cat_loop` (the clock-discipline theorems).

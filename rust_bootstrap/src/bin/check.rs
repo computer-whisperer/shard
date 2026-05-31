@@ -1,5 +1,12 @@
 //! `check` — proof-script driver for the narrow kernel.
 //!
+//! DEPRECATED orchestrator. The clean architecture is a thin Rust passthrough
+//! (`eval` bin) running a shard entrypoint that does its own file I/O; the
+//! eval path already moved there (`kernel/kernel.shard`). This binary remains
+//! the working proof-checker until the check entrypoint is likewise a shard
+//! app run on top of the executor — at which point its bespoke orchestration
+//! (run_shard_check, the Rust module gate, run/eval subcommands) retires.
+//!
 //! Loads the bundled kernel, then walks one or more user-provided
 //! `.shard` proof files. Top-level forms in those files:
 //!

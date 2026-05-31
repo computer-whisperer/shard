@@ -139,12 +139,15 @@ user/target code through this shard reader (`build_module` / `parse_expr`); the
 Rust loader (`load.rs`) survives only as (a) the **bootstrap floor** — it parses
 the kernel and the reader toolchain itself into the VM, since the reader cannot
 parse itself — and (b) the **reference oracle** the parse/module/claims
-differential harnesses validate the shard reader against. `eval` also exists as
-a standalone shard program (`examples/io/eval_app.shard`, run via `check run`)
-that reads files and evaluates them as a direct-style `World -> World` function
-— I/O is done by `extern` calls (uninterpreted in proofs, performed by the run
-driver), with Rust only ferrying bytes. The remaining cord-cutter is the
-shard→machine compiler.
+differential harnesses validate the shard reader against. `eval` is now its own
+clean entrypoint: the kernel's executable `main` lives in `kernel/kernel.shard`
+(a direct-style `World -> World` program that reads the referenced files itself
+and evaluates them), and the `eval` binary is a pure passthrough — it bootstraps
+the toolchain + entrypoint and runs `(main world)`, with no eval logic in Rust.
+I/O is done by `extern` calls (uninterpreted in proofs, performed by the host
+handler), with Rust only ferrying bytes. The `check` binary is the legacy
+orchestrator, kept until proof-checking is likewise a shard app run on this
+executor. The remaining cord-cutter is the shard→machine compiler.
 
 
 ## 7. Why now: the generate / check asymmetry
