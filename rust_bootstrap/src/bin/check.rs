@@ -117,22 +117,6 @@ fn run() -> ExitCode {
         return run_claims_check(&args[1..]);
     }
 
-    // `self-check` subcommand: run the shard checker DRIVER (driver.shard's
-    // check_file) over a target file's claims — parse + un-reflect + run
-    // check_sequent + thread the theory, all in shard — and report passed/
-    // failed. The end-to-end self-hosting test: compare to native `check`.
-    if args[0] == "self-check" {
-        return run_self_check(&args[1..]);
-    }
-
-    // `trace-check` subcommand: differential validation of the shard tracer
-    // (kernel/trace.shard's failure_detail) against the Rust build_failure_detail.
-    // For every claim in a file, build ONE native sequent/proof and render the
-    // failure diagnostic both ways, comparing the text byte-for-byte.
-    if args[0] == "trace-check" {
-        return run_trace_check(&args[1..]);
-    }
-
     let kernel = match load_kernel_from(default_kernel_dir()) {
         Ok(m) => m,
         Err(e) => {
@@ -142,27 +126,8 @@ fn run() -> ExitCode {
         }
     };
 
-    // Running user module: starts with the kernel's type declarations
-    // (stdlib List/Option/Bool/Pair + the kernel's own internal types
-    // like Expr/Pat/Goal/Proof — which user proofs may reason about
-    // meta-theoretically). Grows as (use-module …) forms are
-    // processed.
-    //
-    // Seeding with the kernel's types is what lets do_induct's
-    // `lookup_typedef` find List in (Induct 'xs …) on a user fn
-    // over (List Int). Without this seed, only types declared in
-    // (use-module …) files would be visible to the kernel — forcing
-    // each user module to redeclare stdlib types just to induct over
-    // them.
-    let user_module = ast::Module {
-        types: kernel.types.clone(),
-        fns: Vec::new(),
-        externs: Vec::new(),
-    };
-    // Pull out `--trace <claim>` (or `--trace all`) and `--native`; the rest
-    // are files.
+    // Pull out `--trace <claim>` (or `--trace all`); the rest are files.
     let mut trace_target: Option<String> = None;
-    let mut native = false;
     let mut files: Vec<String> = Vec::new();
     let mut ai = 0;
     while ai < args.len() {
@@ -171,50 +136,15 @@ fn run() -> ExitCode {
                 Some(n) => { trace_target = Some(n.clone()); ai += 2; }
                 None => { eprintln!("--trace requires a claim name (or 'all')"); return ExitCode::from(2); }
             }
-        } else if args[ai] == "--native" {
-            native = true;
-            ai += 1;
         } else {
             files.push(args[ai].clone());
             ai += 1;
         }
     }
 
-    // Default path (incl. --trace): route checking through the SELF-HOSTED
-    // shard driver (kernel/driver.shard's check_production + kernel/trace.shard).
-    // `--native` falls back to the Rust process_file loop, kept as the
-    // differential oracle and a fast escape hatch. See run_shard_check.
-    if !native {
-        return run_shard_check(&files, &kernel, trace_target.as_deref());
-    }
-
-    let mut ctx = Ctx {
-        user_module_value: module_to_value(&user_module),
-        user_module,
-        theory: ctor("TheoryEmpty", vec![]),
-        passed: 0,
-        failed: 0,
-        axioms: 0,
-        loaded: std::collections::HashSet::new(),
-        in_progress: Vec::new(),
-        load_only: false,
-        trace_target,
-    };
-
-    for path_str in &files {
-        if let Err(code) = process_file(&PathBuf::from(path_str), &mut ctx, &kernel) {
-            return code;
-        }
-    }
-
-    println!();
-    if ctx.axioms > 0 {
-        println!("{} passed, {} failed, {} axiom(s) admitted without proof",
-            ctx.passed, ctx.failed, ctx.axioms);
-    } else {
-        println!("{} passed, {} failed", ctx.passed, ctx.failed);
-    }
-    if ctx.failed > 0 { ExitCode::from(1) } else { ExitCode::SUCCESS }
+    // Checking is routed through the SELF-HOSTED shard driver
+    // (kernel/driver.shard's check_production; kernel/trace.shard for --trace).
+    run_shard_check(&files, &kernel, trace_target.as_deref())
 }
 
 // ----------------------------------------------------------------------
@@ -222,35 +152,27 @@ fn run() -> ExitCode {
 //
 // A .shard file may mix object-level code (`type`/`fn`/`extern`),
 // dependency directives (`import` / its legacy alias `use-module`), and
-// proofs (`claim`). One file = one topic. Each file is processed in
-// three passes so dependencies are in scope before use:
+// proofs (`claim`). One file = one topic. `process_file` LOADS a file's
+// code into the module in two passes so dependencies are in scope before
+// use:
 //   A. imports — recurse into each dependency FIRST (depth-first), so its
-//      code + proven claims land in the shared module/theory.
+//      code lands in the shared module.
 //   B. code — load THIS file's types/fns/externs (now that imports are
 //      visible as the ctor/fn base).
-//   C. claims — check each, threading the growing theory.
-// Dedup + cycle detection are by CANONICAL path: a file imported by
-// several others is loaded once; an import cycle is a hard error.
-// `import` re-checks the dependency's claims (the project's "decided not
-// assumed" stance); memoization keeps that to once per invocation.
+// It does NOT check claims — that is the self-hosted shard driver's job
+// (run_shard_check → check_production), which parses the claims out of the
+// raw source itself. Dedup + cycle detection are by CANONICAL path: a file
+// imported by several others is loaded once; an import cycle is a hard error.
 // ----------------------------------------------------------------------
 
+/// The accumulator `process_file` loads a module into: the merged module (as
+/// native AST and as a reflected value), plus the dedup/cycle bookkeeping for
+/// transitive imports. Checking is NOT done here — see run_shard_check.
 struct Ctx {
     user_module: ast::Module,
     user_module_value: ast::Expr,
-    theory: ast::Expr,
-    passed: usize,
-    failed: usize,
-    axioms: usize,
     loaded: std::collections::HashSet<PathBuf>,
     in_progress: Vec<PathBuf>,
-    /// When set, `process_file` loads code + imports but skips claim/axiom
-    /// checking (Pass C). Used by the `eval` subcommand: it needs the
-    /// module's fns in scope but not the (potentially slow) proof replay.
-    load_only: bool,
-    /// `--trace <name>`: print the per-step sequent trace for the claim of
-    /// this name (or "all"), regardless of pass/fail. None = no tracing.
-    trace_target: Option<String>,
 }
 
 fn process_file(path: &PathBuf, ctx: &mut Ctx, kernel: &ast::Module) -> Result<(), ExitCode> {
@@ -318,75 +240,11 @@ fn process_file(path: &PathBuf, ctx: &mut Ctx, kernel: &ast::Module) -> Result<(
         }
     }
 
-    // load-only (eval subcommand): code + imports are now in scope; skip
-    // claim/axiom checking entirely.
-    if ctx.load_only {
-        ctx.in_progress.pop();
-        ctx.loaded.insert(canon);
-        return Ok(());
-    }
-
-    // Pass C: claims, in order. The DEFAULT `check` now routes through the
-    // self-hosted shard driver (run_shard_check); this Rust loop runs only for
-    // `--trace`, whose per-step diagnostic tracer is not yet ported to shard.
-    for form in &forms {
-        match process_form(form, kernel, &ctx.user_module_value, &ctx.theory, path, ctx.trace_target.as_deref()) {
-            Outcome::Pass { name, goal } => {
-                println!("PASS  {}", name);
-                // Close param-name FVars in eq + premises to BVars so the
-                // stored Goal matches the kernel's citation convention
-                // (resolve_eq opens BVars to fresh FVars). See REVISIT,
-                // "Open-vs-closed Goal forms".
-                let close_call = ast::Expr::Call(
-                    "close_goal_for_storage".into(),
-                    vec![goal],
-                );
-                let closed_goal = match eval::eval(kernel, &close_call) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        eprintln!("error closing goal for `{}`: {:?}", name, e);
-                        return Err(ExitCode::from(2));
-                    }
-                };
-                let entry = ctor("Proven", vec![ast::Expr::SymLit(name), closed_goal]);
-                ctx.theory = ctor("TheoryCons", vec![entry, ctx.theory.clone()]);
-                ctx.passed += 1;
-            }
-            Outcome::Axiom { name, goal } => {
-                // Admitted without proof — added to the theory as an
-                // `(Axiom NAME GOAL)` entry, citable exactly like a proven
-                // lemma. Same goal-closing as a claim so citations resolve.
-                println!("AXIOM {}  (admitted without proof)", name);
-                let close_call = ast::Expr::Call(
-                    "close_goal_for_storage".into(),
-                    vec![goal],
-                );
-                let closed_goal = match eval::eval(kernel, &close_call) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        eprintln!("error closing axiom goal for `{}`: {:?}", name, e);
-                        return Err(ExitCode::from(2));
-                    }
-                };
-                let entry = ctor("Axiom", vec![ast::Expr::SymLit(name), closed_goal]);
-                ctx.theory = ctor("TheoryCons", vec![entry, ctx.theory.clone()]);
-                ctx.axioms += 1;
-            }
-            Outcome::Fail { name, detail } => {
-                println!("FAIL  {}", name);
-                if !detail.is_empty() {
-                    println!("{}", detail);
-                }
-                ctx.failed += 1;
-            }
-            Outcome::Skip => {}
-            Outcome::Fatal(msg) => {
-                eprintln!("error: {}", msg);
-                return Err(ExitCode::from(2));
-            }
-        }
-    }
-
+    // Claims/axioms are NOT checked here: `process_file` only loads a file's
+    // code + imports into the module. All checking is done by the self-hosted
+    // shard driver (run_shard_check → check_production). This loader exists to
+    // build the module(s) the shard checker and the differential parser oracles
+    // run against.
     ctx.in_progress.pop();
     ctx.loaded.insert(canon);
     Ok(())
@@ -403,50 +261,6 @@ fn import_path(form: &Value) -> Option<String> {
         "import" | "use-module" => items[1].as_str().map(|s| s.to_string()),
         _ => None,
     }
-}
-
-/// The transitive import closure of `target`, in dependency order (deps before
-/// dependents), deduplicated, EXCLUDING `target` itself. Post-order DFS over
-/// `import`/`use-module` directives — the same traversal `process_file` uses to
-/// load code, but collecting the *paths* so the self-host driver can seed its
-/// theory from the imports' proven claims.
-fn import_closure(target: &PathBuf) -> Result<Vec<PathBuf>, ExitCode> {
-    fn visit(
-        path: &PathBuf,
-        is_root: bool,
-        order: &mut Vec<PathBuf>,
-        seen: &mut std::collections::HashSet<PathBuf>,
-    ) -> Result<(), ExitCode> {
-        let canon = path.canonicalize().unwrap_or_else(|_| path.clone());
-        if !seen.insert(canon) {
-            return Ok(()); // already visited (dedup / cycle-safe)
-        }
-        let src = std::fs::read_to_string(path).map_err(|e| {
-            eprintln!("error reading {}: {}", path.display(), e);
-            ExitCode::from(2)
-        })?;
-        let forms = parse_top_level(&src).map_err(|e| {
-            eprintln!("error parsing {}: {}", path.display(), e);
-            ExitCode::from(2)
-        })?;
-        for form in &forms {
-            if let Some(dep) = import_path(form) {
-                let resolved = match path.parent() {
-                    Some(d) => d.join(&dep),
-                    None => PathBuf::from(&dep),
-                };
-                visit(&resolved, false, order, seen)?;
-            }
-        }
-        if !is_root {
-            order.push(path.clone());
-        }
-        Ok(())
-    }
-    let mut order = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    visit(target, true, &mut order, &mut seen)?;
-    Ok(order)
 }
 
 /// The full ordered, deduplicated file list to check: for each target (in CLI
@@ -492,568 +306,6 @@ fn ordered_closure(targets: &[PathBuf]) -> Result<Vec<PathBuf>, ExitCode> {
     Ok(order)
 }
 
-// ----------------------------------------------------------------------
-// Form processing
-// ----------------------------------------------------------------------
-
-enum Outcome {
-    Pass { name: String, goal: ast::Expr },
-    /// An `(axiom NAME GOAL)` — admitted into the theory WITHOUT a proof.
-    /// This is a trusted audit boundary (see docs/BOUNDARIES.md): the
-    /// GOAL becomes a citable `(Lemma NAME)` on the author's word alone.
-    /// Reported loudly and counted separately so axioms are never silent.
-    Axiom { name: String, goal: ast::Expr },
-    Fail { name: String, detail: String },
-    /// A non-claim form handled by an earlier pass (import / use-module
-    /// in pass A; type / fn / extern in pass B). Ignored in pass C.
-    Skip,
-    Fatal(String),
-}
-
-fn process_form(
-    form: &Value,
-    kernel: &ast::Module,
-    user_module: &ast::Expr,
-    theory: &ast::Expr,
-    path: &PathBuf,
-    trace: Option<&str>,
-) -> Outcome {
-    let items: Vec<&Value> = match form.list_iter() {
-        Some(it) => it.collect(),
-        None => return Outcome::Fatal(format!(
-            "{}: top-level form must be a list, got {}", path.display(), form,
-        )),
-    };
-    if items.is_empty() {
-        return Outcome::Fatal(format!("{}: empty top-level form", path.display()));
-    }
-    let head = match items[0].as_symbol() {
-        Some(s) => s,
-        None => return Outcome::Fatal(format!(
-            "{}: top-level form head must be a symbol", path.display(),
-        )),
-    };
-    match head {
-        "claim" => process_claim(&items, kernel, user_module, theory, path, trace),
-        "axiom" => process_axiom(&items, kernel, path),
-        // Handled in earlier passes: imports/aliases (A), code defs (B).
-        // `app` is the `check app` entrypoint declaration — inert to the
-        // proof checker, like a code def.
-        "import" | "use-module" | "type" | "fn" | "extern" | "app" | "cli" => Outcome::Skip,
-        "module" => {
-            let name = items.get(1).and_then(|v| v.as_symbol()).unwrap_or("?");
-            Outcome::Fatal(format!(
-                "{}: (module {}) — not yet implemented in v1. \
-                 Module directives are reserved for the directory-tree \
-                 loader (a later slice); see docs/REVISIT.md.",
-                path.display(), name,
-            ))
-        }
-        other => Outcome::Fatal(format!(
-            "{}: unknown top-level form `{}` \
-             (expected `claim`, `axiom`, `import`, `type`, `fn`, `extern`, or `use-module`)",
-            path.display(), other,
-        )),
-    }
-}
-
-/// `(axiom NAME GOAL)` — admit GOAL into the theory WITHOUT a proof. The
-/// GOAL is parsed/evaluated exactly like a claim's (so it must be a valid
-/// `(Goal …)` value and resolves identically under `(Lemma NAME)`), but no
-/// `check_sequent` runs. This is the project's trusted audit boundary for
-/// facts that hold of the runtime primitives but can't be derived in-kernel
-/// (e.g. the Euclidean identity of `div`/`mod`). Kept deliberately small and
-/// loud: the only thing that distinguishes it from `(claim …)` is the absent
-/// proof and the `Axiom` (vs `Proven`) theory tag.
-fn process_axiom(
-    items: &[&Value],
-    kernel: &ast::Module,
-    path: &PathBuf,
-) -> Outcome {
-    if items.len() != 3 {
-        return Outcome::Fatal(format!(
-            "{}: axiom expects (axiom NAME GOAL), got {} arg(s) after `axiom`",
-            path.display(), items.len() - 1,
-        ));
-    }
-    let name = match items[1].as_symbol() {
-        Some(s) => s.to_string(),
-        None => return Outcome::Fatal(format!(
-            "{}: axiom NAME must be a symbol", path.display(),
-        )),
-    };
-    let goal_val = match build_value(items[2], kernel) {
-        Ok(v) => v,
-        Err(e) => return Outcome::Fatal(format!(
-            "{}: axiom `{}` goal: {}", path.display(), name, e,
-        )),
-    };
-    // Sanity: it must actually evaluate to a (Goal params premises eq).
-    match &goal_val {
-        ast::Expr::Ctor(n, args) if n == "Goal" && args.len() == 3 => {}
-        other => return Outcome::Fatal(format!(
-            "{}: axiom `{}` did not evaluate to a Goal value: {:?}",
-            path.display(), name, other,
-        )),
-    }
-    Outcome::Axiom { name, goal: goal_val }
-}
-
-fn process_claim(
-    items: &[&Value],
-    kernel: &ast::Module,
-    user_module: &ast::Expr,
-    theory: &ast::Expr,
-    path: &PathBuf,
-    trace: Option<&str>,
-) -> Outcome {
-    if items.len() != 4 {
-        return Outcome::Fatal(format!(
-            "{}: claim expects (claim NAME GOAL PROOF), got {} arg(s) after `claim`",
-            path.display(), items.len() - 1,
-        ));
-    }
-    let name = match items[1].as_symbol() {
-        Some(s) => s.to_string(),
-        None => return Outcome::Fatal(format!(
-            "{}: claim NAME must be a symbol", path.display(),
-        )),
-    };
-
-    // Parse and evaluate GOAL.
-    let goal_val = match build_value(items[2], kernel) {
-        Ok(v) => v,
-        Err(e) => return Outcome::Fatal(format!(
-            "{}: claim `{}` goal: {}", path.display(), name, e,
-        )),
-    };
-
-    // Desugar named hypotheses — (Hyp 'label) → (Hyp k) — and strip case-hyp
-    // name annotations, mirroring the kernel's hyp-prepend order. Pure loader
-    // sugar: the kernel only ever sees positional, name-free proofs.
-    let desugared = {
-        let ctx = HCtx { stack: Vec::new(), params: goal_params(items[2]) };
-        match desugar_hyps(items[3], &ctx, kernel, user_module) {
-            Ok(v) => v,
-            Err(e) => return Outcome::Fatal(format!(
-                "{}: claim `{}` — hypothesis name: {}", path.display(), name, e)),
-        }
-    };
-    let proof_val = match build_value(&desugared, kernel) {
-        Ok(v) => v,
-        Err(e) => return Outcome::Fatal(format!(
-            "{}: claim `{}` proof (after hyp desugar): {}", path.display(), name, e)),
-    };
-
-    // Structural validation of the proof tree BEFORE check_sequent, so a
-    // malformed shape (e.g. a RewriteWith dropped into a Steps step-list)
-    // is reported with a path instead of an opaque runtime failure.
-    if let Err(e) = validate_proof(&proof_val, &format!("claim '{}'", name)) {
-        return Outcome::Fatal(format!(
-            "{}: claim `{}` — malformed proof: {}", path.display(), name, e,
-        ));
-    }
-
-    // Lift Goal → Sequent (hyps = Nil).
-    let sequent_val = match goal_val.clone() {
-        ast::Expr::Ctor(n, args) if n == "Goal" && args.len() == 3 => {
-            ctor(
-                "Sequent",
-                vec![
-                    args[0].clone(), // params
-                    nil(),           // hyps (empty for top-level claims)
-                    args[1].clone(), // premises
-                    args[2].clone(), // equation
-                ],
-            )
-        }
-        other => return Outcome::Fatal(format!(
-            "{}: claim `{}` goal did not evaluate to a Goal value: {:?}",
-            path.display(), name, other,
-        )),
-    };
-
-    // --trace: print the per-step sequent evolution for this claim (pass or
-    // fail), so the author can watch the goal transform instead of guessing.
-    if matches!(trace, Some(t) if t == name || t == "all") {
-        let mut tlines = Vec::new();
-        trace_proof(kernel, user_module, theory, &sequent_val, &proof_val, 0, true, &mut tlines);
-        println!("── trace: {} ──", name);
-        if let Some(eq) = sequent_eq(&sequent_val) {
-            println!("  goal      {}", render_term(eq));
-        }
-        for l in &tlines { println!("{}", l); }
-        println!("──");
-    }
-
-    // Invoke check_sequent in the kernel module. (clone the sequent /
-    // proof so a FAIL can replay them for diagnostics.)
-    let call = ast::Expr::Call(
-        "check_sequent".into(),
-        vec![user_module.clone(), theory.clone(), sequent_val.clone(), proof_val.clone()],
-    );
-    let result = match eval::eval(kernel, &call) {
-        Ok(v) => v,
-        Err(e) => return Outcome::Fatal(format!(
-            "{}: claim `{}`: check_sequent crashed: {:?}",
-            path.display(), name, e,
-        )),
-    };
-
-    match result {
-        ast::Expr::Ctor(ref n, ref a) if n == "True" && a.is_empty() =>
-            Outcome::Pass { name, goal: goal_val },
-        ast::Expr::Ctor(ref n, ref a) if n == "False" && a.is_empty() => {
-            let detail = build_failure_detail(
-                kernel, user_module, theory, &sequent_val, &proof_val,
-            );
-            Outcome::Fail { name, detail }
-        }
-        other => Outcome::Fatal(format!(
-            "{}: claim `{}`: check_sequent returned non-Bool value: {:?}",
-            path.display(), name, other,
-        )),
-    }
-}
-
-// ----------------------------------------------------------------------
-// Named-hypothesis desugaring (UNTRUSTED, loader sugar — runs before the
-// proof ever reaches the kernel). Rewrites `(Hyp 'label)` → `(Hyp k)` and
-// strips case-hyp name annotations, by simulating the kernel's hyp stack:
-//   CaseOn case   : prepends 1 hyp, named via `(Case C 'h …)` / `(CaseB C (fs) 'h …)`
-//   WfInduct      : prepends 1 IH, auto-named `ih`
-//   Induct/Induct2: APPENDS one IH per recursive field (do_induct order),
-//                   auto-named `ih`, `ih1`, …
-// Positional `(Hyp k)` is untouched; names are opt-in. The kernel only ever
-// sees positional, name-free proofs, so the trusted core is unchanged.
-// ----------------------------------------------------------------------
-
-#[derive(Clone)]
-struct HCtx {
-    /// Hyp names by position; index 0 = front = `(Hyp 0)`. None = unnamed.
-    stack: Vec<Option<String>>,
-    /// Induct-able vars → their `(ty …)` value, for IH counting.
-    params: std::collections::HashMap<String, Value>,
-}
-
-/// A bare symbol or `(quote sym)` → the symbol text. (lexpr reads `'x` as
-/// `(quote x)`.)
-fn read_sym(v: &Value) -> Option<String> {
-    if let Some(s) = v.as_symbol() {
-        return Some(s.to_string());
-    }
-    let items: Vec<&Value> = v.list_iter()?.collect();
-    if items.len() == 2 && items[0].as_symbol() == Some("quote") {
-        return items[1].as_symbol().map(|s| s.to_string());
-    }
-    None
-}
-
-/// Elements of a `(list …)` form (without the leading `list`).
-fn list_elems<'a>(v: &'a Value) -> Result<Vec<&'a Value>, String> {
-    let items: Vec<&Value> = v.list_iter().ok_or("expected a (list …)")?.collect();
-    match items.split_first() {
-        Some((h, rest)) if h.as_symbol() == Some("list") => Ok(rest.to_vec()),
-        _ => Err("expected a (list …)".into()),
-    }
-}
-
-fn goal_params(goal: &Value) -> std::collections::HashMap<String, Value> {
-    let mut m = std::collections::HashMap::new();
-    let items: Vec<&Value> = match goal.list_iter() { Some(i) => i.collect(), None => return m };
-    if items.len() < 2 || items[0].as_symbol() != Some("Goal") { return m; }
-    if let Ok(params) = list_elems(items[1]) {
-        for p in params {
-            let pit: Vec<&Value> = match p.list_iter() { Some(i) => i.collect(), None => continue };
-            if pit.len() == 3 && pit[0].as_symbol() == Some("Param") {
-                if let Some(nm) = read_sym(pit[1]) {
-                    m.insert(nm, pit[2].clone());
-                }
-            }
-        }
-    }
-    m
-}
-
-fn in_scope_names(ctx: &HCtx) -> String {
-    let ns: Vec<&str> = ctx.stack.iter().filter_map(|x| x.as_deref()).collect();
-    if ns.is_empty() { "(none)".into() } else { ns.join(", ") }
-}
-
-/// How many IHs `do_induct` appends for ctor `cname` when inducting on `var`.
-fn ih_count(ctx: &HCtx, var: &str, cname: &str,
-            kernel: &ast::Module, module_val: &ast::Expr) -> usize {
-    let ty_val = match ctx.params.get(var) { Some(t) => t, None => return 0 };
-    let ty_expr = match build_value(ty_val, kernel) { Ok(e) => e, Err(_) => return 0 };
-    let call = ast::Expr::Call("dbg_ih_count".into(),
-        vec![ty_expr, ast::Expr::SymLit(cname.to_string()), module_val.clone()]);
-    match eval::eval(kernel, &call) {
-        Ok(ast::Expr::IntLit(n)) if n >= 0 => n as usize,
-        _ => 0,
-    }
-}
-
-fn ih_names(n: usize) -> Vec<Option<String>> {
-    (0..n).map(|i| Some(if i == 0 { "ih".into() } else { format!("ih{}", i) })).collect()
-}
-
-fn desugar_hyps(v: &Value, ctx: &HCtx,
-                kernel: &ast::Module, module_val: &ast::Expr) -> Result<Value, String> {
-    let items: Vec<&Value> = match v.list_iter() {
-        Some(it) => it.collect(),
-        None => return Ok(v.clone()), // atom
-    };
-    let head = match items.first().and_then(|h| h.as_symbol()) {
-        Some(h) => h,
-        None => return rebuild(&items, ctx, kernel, module_val),
-    };
-    match head {
-        "Hyp" if items.len() == 2 => {
-            if let Some(name) = read_sym(items[1]) {
-                match ctx.stack.iter().position(|x| x.as_deref() == Some(name.as_str())) {
-                    Some(k) => Ok(Value::list(vec![Value::symbol("Hyp"), Value::from(k as i64)])),
-                    None => Err(format!("unbound name '{}' in (Hyp '{}) — in scope: {}",
-                        name, name, in_scope_names(ctx))),
-                }
-            } else {
-                Ok(v.clone()) // positional (Hyp k)
-            }
-        }
-        "WfInduct" if items.len() == 3 => {
-            let measure = desugar_hyps(items[1], ctx, kernel, module_val)?;
-            let mut c2 = ctx.clone();
-            c2.stack.insert(0, Some("ih".into()));
-            let proof = desugar_hyps(items[2], &c2, kernel, module_val)?;
-            Ok(Value::list(vec![Value::symbol("WfInduct"), measure, proof]))
-        }
-        "CaseOn" if items.len() == 4 => {
-            let scrut = desugar_hyps(items[1], ctx, kernel, module_val)?;
-            let mut out = vec![Value::symbol("list")];
-            for c in list_elems(items[3])? {
-                out.push(desugar_case(c, ctx, None, kernel, module_val)?);
-            }
-            Ok(Value::list(vec![Value::symbol("CaseOn"), scrut, items[2].clone(), Value::list(out)]))
-        }
-        "Induct" | "Induct2" if items.len() == 3 => {
-            let var = read_sym(items[1]).unwrap_or_default();
-            let is2 = head == "Induct2";
-            let mut out = vec![Value::symbol("list")];
-            for c in list_elems(items[2])? {
-                out.push(desugar_case(c, ctx, Some((&var, is2)), kernel, module_val)?);
-            }
-            Ok(Value::list(vec![Value::symbol(head), items[1].clone(), Value::list(out)]))
-        }
-        // Everything else (Steps, RewriteWith, Rewrite, Goal, Call, …) leaves
-        // the hyp stack unchanged; recurse uniformly so nested (Hyp 'x) and
-        // nested binders are still handled.
-        _ => rebuild(&items, ctx, kernel, module_val),
-    }
-}
-
-fn rebuild(items: &[&Value], ctx: &HCtx,
-           kernel: &ast::Module, module_val: &ast::Expr) -> Result<Value, String> {
-    let mut out = Vec::with_capacity(items.len());
-    for it in items {
-        out.push(desugar_hyps(it, ctx, kernel, module_val)?);
-    }
-    Ok(Value::list(out))
-}
-
-/// Desugar one `Case`/`CaseB`. `induct` is `Some((var, is_induct2))` when the
-/// case is under Induct/Induct2 (IH-appending, no case-hyp), else `None`
-/// (under CaseOn — prepends one optionally-named case hyp). Strips any name
-/// annotation from the rebuilt case.
-fn desugar_case(c: &Value, ctx: &HCtx, induct: Option<(&str, bool)>,
-                kernel: &ast::Module, module_val: &ast::Expr) -> Result<Value, String> {
-    let items: Vec<&Value> = c.list_iter().ok_or("expected a Case/CaseB")?.collect();
-    let head = items.first().and_then(|h| h.as_symbol()).ok_or("malformed case")?;
-    // Parse: (Case C [name] proof) | (CaseB C (fs) [name] proof). `prefix` is
-    // the rebuilt case head sans name; `name` is the optional case-hyp label.
-    let (prefix, name, proof): (Vec<Value>, Option<String>, &Value) = match head {
-        "Case" if items.len() == 3 =>
-            (vec![Value::symbol("Case"), items[1].clone()], None, items[2]),
-        "Case" if items.len() == 4 && read_sym(items[2]).is_some() =>
-            (vec![Value::symbol("Case"), items[1].clone()], read_sym(items[2]), items[3]),
-        "CaseB" if items.len() == 4 =>
-            (vec![Value::symbol("CaseB"), items[1].clone(), items[2].clone()], None, items[3]),
-        "CaseB" if items.len() == 5 && read_sym(items[3]).is_some() =>
-            (vec![Value::symbol("CaseB"), items[1].clone(), items[2].clone()], read_sym(items[3]), items[4]),
-        _ => return Err(format!("malformed `{}` case (wrong arity / annotation)", head)),
-    };
-    let mut c2 = ctx.clone();
-    match induct {
-        None => {
-            // CaseOn: one prepended case hyp (named or anonymous).
-            c2.stack.insert(0, name);
-        }
-        Some((var, is2)) => {
-            if name.is_some() {
-                return Err("Induct/Induct2 cases take no hyp name (they bind `ih`, not a case hyp)".into());
-            }
-            let ctor = read_sym(items[1]).unwrap_or_default();
-            let n = if is2 { if ctor == "SS" { 1 } else { 0 } }
-                    else { ih_count(ctx, var, &ctor, kernel, module_val) };
-            for nm in ih_names(n) { c2.stack.push(nm); } // appended (do_induct order)
-        }
-    }
-    let proof2 = desugar_hyps(proof, &c2, kernel, module_val)?;
-    let mut out = prefix;
-    out.push(proof2);
-    Ok(Value::list(out))
-}
-
-// ----------------------------------------------------------------------
-// Load-time proof-structure validation (UNTRUSTED, off the check path).
-// Walks the Proof / Step / Case grammar (arities mirror kernel/proof.shard)
-// and returns the first structural error with a path into the tree. This
-// turns class-of-bug authoring mistakes — a Proof node used where a Step
-// is expected, or a wrong field count — into a clear load-time message
-// rather than a deep, opaque runtime "could not replay".
-// ----------------------------------------------------------------------
-
-/// Field count for each Proof constructor, or None if `n` isn't one.
-fn proof_arity(n: &str) -> Option<usize> {
-    Some(match n {
-        "Refl" => 0, "Steps" => 2, "Induct" => 2, "Induct2" => 2,
-        "CaseOn" => 3, "WfInduct" => 2, "RewriteWith" => 6,
-        "Absurd" => 1, "ByTheory" => 2,
-        _ => return None,
-    })
-}
-
-/// Field count for each Step constructor, or None if `n` isn't one.
-fn step_arity(n: &str) -> Option<usize> {
-    Some(match n {
-        "Unfold" => 2, "Reduce" => 1, "Simp" => 1, "Compute" => 1, "Rewrite" => 5,
-        _ => return None,
-    })
-}
-
-fn validate_proof(p: &ast::Expr, path: &str) -> Result<(), String> {
-    let (n, a) = match p {
-        ast::Expr::Ctor(n, a) => (n.as_str(), a),
-        other => return Err(format!("at {}: expected a Proof, found {}", path, render_term(other))),
-    };
-    let arity = match proof_arity(n) {
-        Some(k) => k,
-        None => {
-            let hint = if step_arity(n).is_some() {
-                format!(" — `{}` is a Step, not a Proof", n)
-            } else { String::new() };
-            return Err(format!("at {}: `{}` is not a Proof constructor{}", path, n, hint));
-        }
-    };
-    if a.len() != arity {
-        return Err(format!("at {}: `{}` takes {} field(s), got {}", path, n, arity, a.len()));
-    }
-    match n {
-        "Steps" => {
-            for (i, s) in decode_list(&a[0]).iter().enumerate() {
-                validate_step(s, &format!("{} → Steps step #{}", path, i))?;
-            }
-            validate_proof(&a[1], &format!("{} → Steps tail", path))
-        }
-        "Induct" | "Induct2" => validate_cases(&a[1], &format!("{} → {}", path, n)),
-        "CaseOn" => validate_cases(&a[2], &format!("{} → CaseOn", path)),
-        "WfInduct" => validate_proof(&a[1], &format!("{} → WfInduct", path)),
-        "RewriteWith" => {
-            for (i, pp) in decode_list(&a[4]).iter().enumerate() {
-                validate_proof(pp, &format!("{} → RewriteWith premise-proof #{}", path, i))?;
-            }
-            validate_proof(&a[5], &format!("{} → RewriteWith tail", path))
-        }
-        _ => Ok(()), // Refl / Absurd / ByTheory: no sub-proofs to walk
-    }
-}
-
-fn validate_step(s: &ast::Expr, path: &str) -> Result<(), String> {
-    let (n, a) = match s {
-        ast::Expr::Ctor(n, a) => (n.as_str(), a),
-        other => return Err(format!("at {}: expected a Step, found {}", path, render_term(other))),
-    };
-    match step_arity(n) {
-        Some(k) if a.len() == k => Ok(()),
-        Some(k) => Err(format!("at {}: step `{}` takes {} field(s), got {}", path, n, k, a.len())),
-        None => {
-            let hint = if proof_arity(n).is_some() {
-                format!(" — `{}` is a Proof, not a Step; nest it as the Steps' tail (2nd field), \
-                         not as an element of the step-list", n)
-            } else { String::new() };
-            Err(format!("at {}: `{}` is not a Step constructor{}", path, n, hint))
-        }
-    }
-}
-
-fn validate_cases(cases: &ast::Expr, path: &str) -> Result<(), String> {
-    for (i, c) in decode_list(cases).iter().enumerate() {
-        let (n, a) = match c {
-            ast::Expr::Ctor(n, a) => (n.as_str(), a),
-            other => return Err(format!("at {} (case #{}): expected Case/CaseB, found {}",
-                path, i, render_term(other))),
-        };
-        let proof = match (n, a.len()) {
-            ("Case", 2) => &a[1],
-            ("CaseB", 3) => &a[2],
-            ("Case", k) | ("CaseB", k) =>
-                return Err(format!("at {} (case #{}): `{}` takes {} field(s), got {}",
-                    path, i, n, if n == "Case" { 2 } else { 3 }, k)),
-            _ => return Err(format!("at {} (case #{}): `{}` is not Case/CaseB", path, i, n)),
-        };
-        let label = sym_of(&a[0]);
-        validate_proof(proof, &format!("{} (case '{})", path, label))?;
-    }
-    Ok(())
-}
-
-// ----------------------------------------------------------------------
-// Failure diagnostics (UNTRUSTED, off the check path). On a FAIL we
-// re-read the goal and — for a `Steps`-headed proof — replay the steps
-// via the kernel's own `apply_steps` to show the equation as the final
-// `Refl` saw it. No new trusted code: this only renders values and
-// calls existing kernel fns, purely for the author's benefit.
-// ----------------------------------------------------------------------
-
-/// Render an Expr-ADT VALUE (`Ctor("Call",[SymLit "read", <list>])` …)
-/// back to readable surface syntax (`(read m p)`).
-fn render_term(v: &ast::Expr) -> String {
-    use ast::Expr::*;
-    match v {
-        Ctor(name, a) => match name.as_str() {
-            "FVar" if a.len() == 1 => sym_of(&a[0]),
-            "BVar" if a.len() == 1 => format!("@{}", render_term(&a[0])),
-            "IntLit" if a.len() == 1 => render_term(&a[0]),
-            "SymLit" if a.len() == 1 => format!("'{}", sym_of(&a[0])),
-            "Call" | "Ctor" if a.len() == 2 => {
-                let head = sym_of(&a[0]);
-                let items = decode_list(&a[1]);
-                if items.is_empty() {
-                    head
-                } else {
-                    let rs: Vec<String> = items.iter().map(|x| render_term(x)).collect();
-                    format!("({} {})", head, rs.join(" "))
-                }
-            }
-            "If" if a.len() == 3 => format!(
-                "(if {} {} {})",
-                render_term(&a[0]), render_term(&a[1]), render_term(&a[2]),
-            ),
-            "Equation" if a.len() == 2 =>
-                format!("{}  =  {}", render_term(&a[0]), render_term(&a[1])),
-            other => format!("<{}>", other),
-        },
-        SymLit(s) => s.clone(),
-        IntLit(n) => n.to_string(),
-        other => format!("{:?}", other),
-    }
-}
-
-fn sym_of(v: &ast::Expr) -> String {
-    match v {
-        ast::Expr::SymLit(s) => s.clone(),
-        other => render_term(other),
-    }
-}
-
 /// Walk a narrow `(Cons h t)` / `Nil` value into a Vec of elements.
 fn decode_list(v: &ast::Expr) -> Vec<&ast::Expr> {
     let mut out = Vec::new();
@@ -1067,239 +319,6 @@ fn decode_list(v: &ast::Expr) -> Vec<&ast::Expr> {
         }
     }
     out
-}
-
-/// Build the indented multi-line diagnostic for a failed claim: the goal
-/// (with any premises), and — if the proof is `Steps` — the equation
-/// after the steps ran (what the trailing proof / `Refl` had to close).
-fn build_failure_detail(
-    kernel: &ast::Module,
-    m: &ast::Expr,
-    theory: &ast::Expr,
-    sequent: &ast::Expr,
-    proof: &ast::Expr,
-) -> String {
-    let mut lines: Vec<String> = Vec::new();
-    // Sequent = (Sequent params hyps premises eq)
-    if let ast::Expr::Ctor(n, sa) = sequent {
-        if n == "Sequent" && sa.len() == 4 {
-            let premises = decode_list(&sa[2]);
-            for p in &premises {
-                lines.push(format!("given:  {}", render_term(p)));
-            }
-            lines.push(format!("goal:   {}", render_term(&sa[3])));
-        }
-    }
-    // Walk the proof spine, replaying each level via the kernel's own
-    // fns, to show the equation at every nesting depth and pinpoint
-    // where it diverges. Branching proofs (Induct/CaseOn) stop the walk.
-    trace_proof(kernel, m, theory, sequent, proof, 0, false, &mut lines);
-    lines.iter().map(|l| format!("      {}", l)).collect::<Vec<_>>().join("\n")
-}
-
-// --- proof-spine tracer (UNTRUSTED diagnostics) ----------------------
-// Descends the non-branching spine of a Proof — Steps and RewriteWith —
-// replaying each via the kernel's own fns and rendering the equation at
-// each level, so a deep nested failure is visible (not just the
-// outermost finisher's entry state). Refl reports whether it closes;
-// branching/decision proofs stop the walk. Adds NO trusted code: only
-// orchestrates existing kernel fns and renders values.
-
-fn ctor_fields<'a>(v: &'a ast::Expr, name: &str, n: usize) -> Option<&'a [ast::Expr]> {
-    match v {
-        ast::Expr::Ctor(cn, a) if cn == name && a.len() == n => Some(a),
-        _ => None,
-    }
-}
-
-fn sequent_eq(v: &ast::Expr) -> Option<&ast::Expr> {
-    ctor_fields(v, "Sequent", 4).map(|a| &a[3])
-}
-
-fn render_eqref(v: &ast::Expr) -> String {
-    match v {
-        ast::Expr::Ctor(n, a) if a.len() == 1 => match n.as_str() {
-            "Lemma" => format!("lemma {}", sym_of(&a[0])),
-            "Premise" => format!("premise {}", render_term(&a[0])),
-            "Hyp" => format!("hyp {}", render_term(&a[0])),
-            _ => render_term(v),
-        },
-        _ => render_term(v),
-    }
-}
-
-/// A short human label for one Step (for the per-step trace).
-fn step_label(s: &ast::Expr) -> String {
-    let side = |v: &ast::Expr| match v {
-        ast::Expr::Ctor(n, _) => n.clone(),
-        _ => render_term(v),
-    };
-    match s {
-        ast::Expr::Ctor(n, a) => match (n.as_str(), a.as_slice()) {
-            ("Unfold", [sym, sd]) => format!("Unfold {} {}", render_term(sym), side(sd)),
-            ("Simp", [sd]) => format!("Simp {}", side(sd)),
-            ("Reduce", [sd]) => format!("Reduce {}", side(sd)),
-            ("Compute", [sd]) => format!("Compute {}", side(sd)),
-            ("Rewrite", [er, dir, sd, ..]) =>
-                format!("Rewrite {} {} {}", render_eqref(er), side(dir), side(sd)),
-            _ => n.clone(),
-        },
-        _ => render_term(s),
-    }
-}
-
-/// Replay one RewriteWith's rewrite (ignoring premise sub-proofs) to get
-/// the resulting sequent, mirroring check_sequent's RewriteWith arm by
-/// chaining the same kernel fns. None if any link fails (unresolved
-/// lemma, no match, …).
-fn apply_rewrite_step(
-    kernel: &ast::Module, theory: &ast::Expr, sequent: &ast::Expr,
-    eqref: &ast::Expr, dir: &ast::Expr, side: &ast::Expr, insts: &ast::Expr,
-) -> Option<ast::Expr> {
-    let k = |name: &str, args: Vec<ast::Expr>| {
-        eval::eval(kernel, &ast::Expr::Call(name.into(), args)).ok()
-    };
-    let some_inner = |v: &ast::Expr| ctor_fields(v, "Some", 1).map(|a| a[0].clone());
-
-    let g = some_inner(&k("resolve_eq", vec![eqref.clone(), sequent.clone(), theory.clone()])?)?;
-    let gf = ctor_fields(&g, "Goal", 3)?;            // Goal params premises eq
-    let (cited_params, cited_eq) = (gf[0].clone(), gf[2].clone());
-
-    let pair = k("split_params_by_insts", vec![cited_params, insts.clone()])?;
-    let pf = ctor_fields(&pair, "Pair", 2)?;          // Pair openings pat_var_names
-    let (openings, patvars) = (pf[0].clone(), pf[1].clone());
-
-    let ofvars = k("reverse_exprs", vec![openings])?;
-    let opened_eq = k("open_eq_with", vec![ofvars, cited_eq])?;
-
-    let sf = ctor_fields(sequent, "Sequent", 4)?;     // Sequent params hyps premises eq
-    let (params, hyps, premises, goal_eq) =
-        (sf[0].clone(), sf[1].clone(), sf[2].clone(), sf[3].clone());
-
-    let r = k("apply_rewrite_with_env",
-        vec![patvars, opened_eq, dir.clone(), side.clone(), goal_eq])?;
-    let r = some_inner(&r)?;                           // Pair env new_eq
-    let new_eq = ctor_fields(&r, "Pair", 2)?[1].clone();
-
-    Some(ctor("Sequent", vec![params, hyps, premises, new_eq]))
-}
-
-fn trace_proof(
-    kernel: &ast::Module, m: &ast::Expr, theory: &ast::Expr,
-    sequent: &ast::Expr, proof: &ast::Expr, depth: usize, verbose: bool, lines: &mut Vec<String>,
-) {
-    let ind = "  ".repeat(depth);
-    let (head, pa) = match proof {
-        ast::Expr::Ctor(n, a) => (n.as_str(), a),
-        _ => { lines.push(format!("{}proof: {}", ind, render_term(proof))); return; }
-    };
-    match head {
-        "Steps" if pa.len() == 2 => {
-            // Apply steps ONE at a time so the trace shows the sequent after
-            // each — and a failure pinpoints exactly which step broke.
-            let steps = decode_list(&pa[0]);
-            let mut cur = sequent.clone();
-            let mut ok = true;
-            for (i, step) in steps.iter().enumerate() {
-                let call = ast::Expr::Call("apply_step".into(),
-                    vec![m.clone(), theory.clone(), cur.clone(), (*step).clone()]);
-                match eval::eval(kernel, &call) {
-                    Ok(ref s) if ctor_fields(s, "Some", 1).is_some() => {
-                        cur = ctor_fields(s, "Some", 1).unwrap()[0].clone();
-                        if let Some(eq) = sequent_eq(&cur) {
-                            lines.push(format!("{}step {} [{}]  {}", ind, i + 1, step_label(step), render_term(eq)));
-                        }
-                    }
-                    Ok(ref s) if ctor_fields(s, "None", 0).is_some() => {
-                        lines.push(format!("{}step {} [{}]  FAILED to apply (no match)", ind, i + 1, step_label(step)));
-                        ok = false;
-                        break;
-                    }
-                    _ => {
-                        lines.push(format!("{}step {} [{}]  could not replay", ind, i + 1, step_label(step)));
-                        ok = false;
-                        break;
-                    }
-                }
-            }
-            if ok {
-                trace_proof(kernel, m, theory, &cur, &pa[1], depth, verbose, lines);
-            }
-        }
-        "RewriteWith" if pa.len() == 6 => {
-            match apply_rewrite_step(kernel, theory, sequent, &pa[0], &pa[1], &pa[2], &pa[3]) {
-                Some(seq2) => {
-                    if let Some(eq) = sequent_eq(&seq2) {
-                        lines.push(format!("{}after rewrite ({}):  {}", ind, render_eqref(&pa[0]), render_term(eq)));
-                    }
-                    trace_proof(kernel, m, theory, &seq2, &pa[5], depth + 1, verbose, lines);
-                }
-                None => lines.push(format!(
-                    "{}rewrite ({}) did NOT apply (unresolved lemma, no match, or premise mismatch)",
-                    ind, render_eqref(&pa[0]))),
-            }
-        }
-        "Refl" => match sequent_eq(sequent) {
-            Some(ast::Expr::Ctor(en, ea)) if en == "Equation" && ea.len() == 2 => {
-                if ea[0] == ea[1] {
-                    lines.push(format!("{}Refl: closes (lhs = rhs)", ind));
-                } else {
-                    lines.push(format!("{}Refl: does NOT close — lhs ≠ rhs:", ind));
-                    lines.push(format!("{}  lhs  {}", ind, render_term(&ea[0])));
-                    lines.push(format!("{}  rhs  {}", ind, render_term(&ea[1])));
-                }
-            }
-            _ => lines.push(format!("{}Refl", ind)),
-        },
-        "ByTheory" => lines.push(format!("{}ByTheory {} — decision procedure (not replayed)",
-            ind, pa.get(0).map(render_term).unwrap_or_default())),
-        "WfInduct" if pa.len() == 2 => {
-            let call = ast::Expr::Call("dbg_wf_subgoal".into(),
-                vec![sequent.clone(), pa[0].clone()]);
-            match eval::eval(kernel, &call) {
-                Ok(subgoal) => {
-                    lines.push(format!("{}WfInduct subgoal (IH at Hyp 0):", ind));
-                    trace_proof(kernel, m, theory, &subgoal, &pa[1], depth + 1, verbose, lines);
-                }
-                _ => lines.push(format!("{}WfInduct — could not rebuild subgoal", ind)),
-            }
-        }
-        "CaseOn" if pa.len() == 3 => {
-            for case in decode_list(&pa[2]) {
-                let (cname, names, sub): (ast::Expr, ast::Expr, &ast::Expr) =
-                    if let Some(a) = ctor_fields(case, "Case", 2) {
-                        (a[0].clone(), nil(), &a[1])
-                    } else if let Some(a) = ctor_fields(case, "CaseB", 3) {
-                        (a[0].clone(), a[1].clone(), &a[2])
-                    } else { continue; };
-                let sg = ast::Expr::Call("dbg_caseon_subgoal".into(), vec![
-                    m.clone(), sequent.clone(), pa[0].clone(), pa[1].clone(),
-                    cname.clone(), names.clone()]);
-                let subgoal = match eval::eval(kernel, &sg) {
-                    Ok(ref s) if ctor_fields(s, "Some", 1).is_some() =>
-                        ctor_fields(s, "Some", 1).unwrap()[0].clone(),
-                    _ => { lines.push(format!("{}case {}: could not rebuild subgoal",
-                            ind, render_term(&cname))); continue; }
-                };
-                let chk = ast::Expr::Call("check_sequent".into(),
-                    vec![m.clone(), theory.clone(), subgoal.clone(), sub.clone()]);
-                let passes = matches!(eval::eval(kernel, &chk),
-                    Ok(ast::Expr::Ctor(ref n, ref a)) if n == "True" && a.is_empty());
-                if passes && !verbose {
-                    lines.push(format!("{}case {} = {}: ok", ind,
-                        render_term(&pa[0]), render_term(&cname)));
-                } else {
-                    let tag = if passes { "" } else { "  FAILS  v v v" };
-                    lines.push(format!("{}case {} = {}:{}", ind,
-                        render_term(&pa[0]), render_term(&cname), tag));
-                    trace_proof(kernel, m, theory, &subgoal, sub, depth + 1, verbose, lines);
-                }
-            }
-        }
-        "Induct" | "Induct2" | "CaseOn" | "WfInduct" =>
-            lines.push(format!("{}{} — branching proof; trace stops here", ind, head)),
-        other => lines.push(format!("{}{} — not replayed", ind, other)),
-    }
 }
 
 /// Parse a sexp `Value` as a narrow expression against the kernel's
@@ -1371,14 +390,8 @@ fn run_eval(args: &[String]) -> ExitCode {
     let mut ctx = Ctx {
         user_module_value: module_to_value(&user_module),
         user_module,
-        theory: ctor("TheoryEmpty", vec![]),
-        passed: 0,
-        failed: 0,
-        axioms: 0,
         loaded: std::collections::HashSet::new(),
         in_progress: Vec::new(),
-        load_only: true,
-        trace_target: None,
     };
     for f in files {
         if let Err(code) = process_file(&PathBuf::from(f.as_str()), &mut ctx, &kernel) {
@@ -1530,14 +543,8 @@ fn run_parse_check(args: &[String]) -> ExitCode {
     let mut ctx = Ctx {
         user_module_value: module_to_value(&user_module),
         user_module,
-        theory: ctor("TheoryEmpty", vec![]),
-        passed: 0,
-        failed: 0,
-        axioms: 0,
         loaded: std::collections::HashSet::new(),
         in_progress: Vec::new(),
-        load_only: true,
-        trace_target: None,
     };
     for f in files {
         if let Err(code) = process_file(&PathBuf::from(f.as_str()), &mut ctx, &kernel) {
@@ -1694,14 +701,8 @@ fn run_module_check(args: &[String]) -> ExitCode {
     let mut ctx = Ctx {
         user_module_value: module_to_value(&user_module),
         user_module,
-        theory: ctor("TheoryEmpty", vec![]),
-        passed: 0,
-        failed: 0,
-        axioms: 0,
         loaded: std::collections::HashSet::new(),
         in_progress: Vec::new(),
-        load_only: true,
-        trace_target: None,
     };
     for f in files {
         if let Err(code) = process_file(&PathBuf::from(f.as_str()), &mut ctx, &kernel) {
@@ -1819,14 +820,8 @@ fn run_claims_check(args: &[String]) -> ExitCode {
     let mut ctx = Ctx {
         user_module_value: module_to_value(&user_module),
         user_module,
-        theory: ctor("TheoryEmpty", vec![]),
-        passed: 0,
-        failed: 0,
-        axioms: 0,
         loaded: std::collections::HashSet::new(),
         in_progress: Vec::new(),
-        load_only: true,
-        trace_target: None,
     };
     for f in files {
         if let Err(code) = process_file(&PathBuf::from(f.as_str()), &mut ctx, &kernel) {
@@ -1951,149 +946,18 @@ fn run_claims_check(args: &[String]) -> ExitCode {
 }
 
 // ----------------------------------------------------------------------
-// `self-check` subcommand — run the shard checker driver end-to-end.
-//
-// Loads the kernel (types+fns), the shard toolchain (reader/unreflect/driver),
-// and the target file's CODE into one module, then evaluates
-// `(check_file <module> <src> <ctors>)` — driver.shard's loop, which parses
-// the claims, un-reflects each, runs check_sequent, and threads the theory.
-// Reports passed/failed for comparison with native `check`.
-//
-// SCOPE: theory starts empty, so this validates files whose claims cite only
-// EARLIER same-file claims (no imported lemmas) and use positional hyps.
-// ----------------------------------------------------------------------
-
-fn run_self_check(args: &[String]) -> ExitCode {
-    let mut positional: Vec<&String> = Vec::new();
-    for a in args {
-        if a.starts_with("--") {
-            eprintln!("error: unknown flag {}", a);
-            return ExitCode::from(2);
-        }
-        positional.push(a);
-    }
-    if positional.len() < 2 {
-        eprintln!("usage: check self-check <reader.shard> <unreflect.shard> <driver.shard>... <target.shard>");
-        return ExitCode::from(2);
-    }
-    let target_path = positional.last().unwrap().as_str();
-    let tool_files = &positional[..positional.len() - 1];
-
-    let kernel = match load_kernel_from(default_kernel_dir()) {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("error loading kernel from {}: {}", default_kernel_dir().display(), e);
-            return ExitCode::from(2);
-        }
-    };
-    // Two modules, mirroring native check:
-    //   eval_module = kernel (types+fns) + the shard toolchain — what runs the
-    //     driver (parse_claims / unreflect / check_sequent / the reducer).
-    //   M          = kernel.types + the TARGET's code only — the module the
-    //     proofs reduce against (passed to check_sequent). Keeping kernel.fns
-    //     OUT of M avoids fn-name collisions (e.g. term.shard's `len` vs
-    //     std/list's `len`) that would mis-reduce the proof.
-    let mk_ctx = |seed: ast::Module| Ctx {
-        user_module_value: module_to_value(&seed),
-        user_module: seed,
-        theory: ctor("TheoryEmpty", vec![]),
-        passed: 0, failed: 0, axioms: 0,
-        loaded: std::collections::HashSet::new(),
-        in_progress: Vec::new(),
-        load_only: true,
-        trace_target: None,
-    };
-    // eval module: kernel + toolchain.
-    let mut eval_ctx = mk_ctx(ast::Module {
-        types: kernel.types.clone(),
-        fns: kernel.fns.clone(),
-        externs: kernel.externs.clone(),
-    });
-    for f in tool_files {
-        if let Err(code) = process_file(&PathBuf::from(f.as_str()), &mut eval_ctx, &kernel) {
-            return code;
-        }
-    }
-    // M module: kernel types + target code (+ its imports' code).
-    let mut m_ctx = mk_ctx(ast::Module {
-        types: kernel.types.clone(),
-        fns: Vec::new(),
-        externs: Vec::new(),
-    });
-    if let Err(code) = process_file(&PathBuf::from(target_path), &mut m_ctx, &kernel) {
-        return code;
-    }
-
-    let target_src = match std::fs::read_to_string(target_path) {
-        Ok(s) => s,
-        Err(e) => { eprintln!("error reading {}: {}", target_path, e); return ExitCode::from(2); }
-    };
-    // Ctor set for the reader (ctor-vs-call disambiguation): kernel types plus
-    // the target's and its imports' own types (all merged into M).
-    let ctor_names: Vec<String> = m_ctx.user_module.types.iter()
-        .flat_map(|td| td.ctors.iter().map(|cd| cd.name.clone()))
-        .collect();
-    let ctorset = sym_list_native(&ctor_names);
-
-    // Seed sources: the target's transitive import closure (deps first). Their
-    // proven claims are admitted into the theory so the target's (Lemma 'name)
-    // citations of imported lemmas resolve.
-    let imports = match import_closure(&PathBuf::from(target_path)) {
-        Ok(paths) => paths,
-        Err(code) => return code,
-    };
-    let mut import_srcs: Vec<ast::Expr> = Vec::new();
-    for p in &imports {
-        match std::fs::read_to_string(p) {
-            Ok(s) => import_srcs.push(line_to_event_native(&s)),
-            Err(e) => { eprintln!("error reading import {}: {}", p.display(), e); return ExitCode::from(2); }
-        }
-    }
-    let mut imports_list = nil();
-    for src in import_srcs.into_iter().rev() {
-        imports_list = ctor("Cons", vec![src, imports_list]);
-    }
-
-    // (check_with_imports <M> <imports> <src> <ctors>) → (DriverResult passed failed).
-    let call = ast::Expr::Call(
-        "check_with_imports".into(),
-        vec![m_ctx.user_module_value.clone(), imports_list, line_to_event_native(&target_src), ctorset],
-    );
-    let result = match eval_raw(&eval_ctx.user_module, &call).and_then(|v| value_to_native_expr(&v)) {
-        Ok(v) => v,
-        Err(e) => { eprintln!("shard check_file error: {}", e); return ExitCode::from(2); }
-    };
-    match &result {
-        ast::Expr::Ctor(n, a) if n == "DriverResult" && a.len() == 2 => {
-            let geti = |e: &ast::Expr| -> Option<i64> {
-                if let ast::Expr::IntLit(k) = e { Some(*k) } else { None }
-            };
-            match (geti(&a[0]), geti(&a[1])) {
-                (Some(p), Some(f)) => {
-                    println!("{}  shard driver: {} passed, {} failed", target_path, p, f);
-                    if f == 0 { ExitCode::SUCCESS } else { ExitCode::from(1) }
-                }
-                _ => { println!("DriverResult fields not ints: {}", show_reflected(&result)); ExitCode::from(2) }
-            }
-        }
-        other => { println!("check_file returned non-DriverResult: {}", show_reflected(other)); ExitCode::from(2) }
-    }
-}
-
-// ----------------------------------------------------------------------
 // Production checking through the self-hosted shard driver.
 //
-// This is the default `check <file>…` path (when `--trace` is not set). The
-// claim-checking LOOP — parse claims/axioms, desugar named hyps, un-reflect
-// goals/proofs, run check_sequent, thread the theory, admit axioms — runs in
-// shard (kernel/driver.shard's check_production), via the native VM exactly
-// like the kernel's own check_sequent. Rust's role here is reduced to:
+// This is THE checking path for `check <file>…` (including `--trace`). The
+// entire claim-checking LOOP — parse claims/axioms, desugar named hyps,
+// un-reflect goals/proofs, run check_sequent, thread the theory, admit axioms,
+// and render the `--trace`/failure diagnostics — runs in shard
+// (kernel/driver.shard's check_production + kernel/trace.shard), via the native
+// VM exactly like the kernel's own check_sequent. Rust's role is reduced to:
 //   - resolving the file list (imports first, then targets) and reading bytes,
 //   - building the two modules (eval = kernel + toolchain; M = kernel.types +
-//     all loaded code), the same split native checking already used,
+//     all loaded code),
 //   - decoding the returned (List ClaimOutcome) into PASS/FAIL/AXIOM lines.
-// The Rust process_claim/process_form loop survives only for `--trace`, whose
-// per-step diagnostic tracer is not yet ported to shard.
 // ----------------------------------------------------------------------
 
 fn run_shard_check(files: &[String], kernel: &ast::Module, trace: Option<&str>) -> ExitCode {
@@ -2109,12 +973,8 @@ fn run_shard_check(files: &[String], kernel: &ast::Module, trace: Option<&str>) 
     let mk_ctx = |seed: ast::Module| Ctx {
         user_module_value: module_to_value(&seed),
         user_module: seed,
-        theory: ctor("TheoryEmpty", vec![]),
-        passed: 0, failed: 0, axioms: 0,
         loaded: std::collections::HashSet::new(),
         in_progress: Vec::new(),
-        load_only: true,
-        trace_target: None,
     };
 
     // eval module = kernel (types + fns) + the shard toolchain that runs the
@@ -2219,120 +1079,6 @@ fn run_shard_check(files: &[String], kernel: &ast::Module, trace: Option<&str>) 
 }
 
 // ----------------------------------------------------------------------
-// `trace-check` — differential validation of the shard tracer.
-//
-// For every claim across the file list (threading the theory like production),
-// build ONE native sequent + proof (Rust desugar + build_value), then render
-// the failure diagnostic BOTH ways — Rust build_failure_detail vs shard
-// failure_detail — on that identical input, and compare byte-for-byte. This
-// isolates the renderer + proof-spine tracer (desugar/un-reflect are not under
-// test here, since both sides consume the same proof_val).
-// ----------------------------------------------------------------------
-
-fn run_trace_check(args: &[String]) -> ExitCode {
-    let files: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
-    if files.is_empty() {
-        eprintln!("usage: check trace-check <proof_file.shard>...");
-        return ExitCode::from(2);
-    }
-    let kernel = match load_kernel_from(default_kernel_dir()) {
-        Ok(m) => m,
-        Err(e) => { eprintln!("error loading kernel: {}", e); return ExitCode::from(2); }
-    };
-    let targets: Vec<PathBuf> = files.iter().map(|s| PathBuf::from(s.as_str())).collect();
-
-    let mk_ctx = |seed: ast::Module| Ctx {
-        user_module_value: module_to_value(&seed),
-        user_module: seed,
-        theory: ctor("TheoryEmpty", vec![]),
-        passed: 0, failed: 0, axioms: 0,
-        loaded: std::collections::HashSet::new(),
-        in_progress: Vec::new(),
-        load_only: true,
-        trace_target: None,
-    };
-    // eval module = kernel + toolchain (incl. trace.shard, which holds failure_detail).
-    let mut eval_ctx = mk_ctx(ast::Module {
-        types: kernel.types.clone(), fns: kernel.fns.clone(), externs: kernel.externs.clone(),
-    });
-    let kdir = default_kernel_dir();
-    for tool in &["reader.shard", "unreflect.shard", "desugar.shard", "driver.shard", "trace.shard"] {
-        if let Err(code) = process_file(&kdir.join(tool), &mut eval_ctx, &kernel) { return code; }
-    }
-    // M module = kernel.types + all user code.
-    let mut m_ctx = mk_ctx(ast::Module { types: kernel.types.clone(), fns: Vec::new(), externs: Vec::new() });
-    for t in &targets {
-        if let Err(code) = process_file(t, &mut m_ctx, &kernel) { return code; }
-    }
-    let m_value = m_ctx.user_module_value.clone();
-
-    let order = match ordered_closure(&targets) { Ok(o) => o, Err(code) => return code };
-
-    let mut theory = ctor("TheoryEmpty", vec![]);
-    let (mut total, mut mismatches) = (0usize, 0usize);
-    let close = |g: &ast::Expr| eval::eval(&kernel, &ast::Expr::Call("close_goal_for_storage".into(), vec![g.clone()]));
-
-    for path in &order {
-        let src = match std::fs::read_to_string(path) {
-            Ok(s) => s, Err(e) => { eprintln!("error reading {}: {}", path.display(), e); return ExitCode::from(2); }
-        };
-        let forms = match parse_top_level(&src) {
-            Ok(f) => f, Err(e) => { eprintln!("parse {}: {}", path.display(), e); return ExitCode::from(2); }
-        };
-        for form in &forms {
-            let items: Vec<&Value> = match form.list_iter() { Some(i) => i.collect(), None => continue };
-            let head = items.first().and_then(|v| v.as_symbol()).unwrap_or("");
-            if head == "axiom" && items.len() == 3 {
-                if let Ok(g) = build_value(items[2], &kernel) {
-                    if let (Some(nm), Ok(cg)) = (items[1].as_symbol(), close(&g)) {
-                        theory = ctor("TheoryCons", vec![ctor("Axiom", vec![ast::Expr::SymLit(nm.into()), cg]), theory]);
-                    }
-                }
-                continue;
-            }
-            if head != "claim" || items.len() != 4 { continue; }
-            let name = items[1].as_symbol().unwrap_or("?").to_string();
-            let goal_val = match build_value(items[2], &kernel) { Ok(v) => v, Err(_) => continue };
-            let hctx = HCtx { stack: Vec::new(), params: goal_params(items[2]) };
-            let desugared = match desugar_hyps(items[3], &hctx, &kernel, &m_value) { Ok(v) => v, Err(_) => continue };
-            let proof_val = match build_value(&desugared, &kernel) { Ok(v) => v, Err(_) => continue };
-            let sequent = match &goal_val {
-                ast::Expr::Ctor(n, a) if n == "Goal" && a.len() == 3 =>
-                    ctor("Sequent", vec![a[0].clone(), nil(), a[1].clone(), a[2].clone()]),
-                _ => continue,
-            };
-
-            let rust_text = build_failure_detail(&kernel, &m_value, &theory, &sequent, &proof_val);
-            let call = ast::Expr::Call("failure_detail".into(),
-                vec![m_value.clone(), theory.clone(), sequent.clone(), proof_val.clone()]);
-            let shard_text = match eval_raw(&eval_ctx.user_module, &call).and_then(|v| decode_codepoints(&v)) {
-                Ok(s) => s,
-                Err(e) => { println!("DIFFER {}: shard failure_detail error: {}", name, e); mismatches += 1; total += 1; continue; }
-            };
-            total += 1;
-            if rust_text != shard_text {
-                mismatches += 1;
-                println!("DIFFER  {}", name);
-                println!("--- rust ---\n{}\n--- shard ---\n{}\n---", rust_text, shard_text);
-            }
-
-            // thread theory: admit on pass (so later citations resolve).
-            let chk = ast::Expr::Call("check_sequent".into(),
-                vec![m_value.clone(), theory.clone(), sequent.clone(), proof_val.clone()]);
-            let passes = matches!(eval::eval(&kernel, &chk),
-                Ok(ast::Expr::Ctor(ref n, ref a)) if n == "True" && a.is_empty());
-            if passes {
-                if let Ok(cg) = close(&goal_val) {
-                    theory = ctor("TheoryCons", vec![ctor("Proven", vec![ast::Expr::SymLit(name), cg]), theory]);
-                }
-            }
-        }
-    }
-    println!("\n{} compared, {} mismatched", total, mismatches);
-    if mismatches > 0 { ExitCode::from(1) } else { ExitCode::SUCCESS }
-}
-
-// ----------------------------------------------------------------------
 // `app` subcommand — drive a stateful (Model-View-Update) application.
 //
 // The file declares an entrypoint:
@@ -2399,14 +1145,8 @@ fn run_app(args: &[String]) -> ExitCode {
     let mut ctx = Ctx {
         user_module_value: module_to_value(&user_module),
         user_module,
-        theory: ctor("TheoryEmpty", vec![]),
-        passed: 0,
-        failed: 0,
-        axioms: 0,
         loaded: std::collections::HashSet::new(),
         in_progress: Vec::new(),
-        load_only: true,
-        trace_target: None,
     };
     for f in &positional {
         if let Err(code) = process_file(&PathBuf::from(f.as_str()), &mut ctx, &kernel) {
@@ -2582,14 +1322,8 @@ fn run_cli(args: &[String]) -> ExitCode {
     let mut ctx = Ctx {
         user_module_value: module_to_value(&user_module),
         user_module,
-        theory: ctor("TheoryEmpty", vec![]),
-        passed: 0,
-        failed: 0,
-        axioms: 0,
         loaded: std::collections::HashSet::new(),
         in_progress: Vec::new(),
-        load_only: true,
-        trace_target: None,
     };
     for f in &positional {
         if let Err(code) = process_file(&PathBuf::from(f.as_str()), &mut ctx, &kernel) {
