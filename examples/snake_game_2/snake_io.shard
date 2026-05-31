@@ -1,0 +1,74 @@
+;;; snake_io — the FULFILLMENT of snake_io.req's I/O boundary contract.
+;;;
+;;; Defines the two pure boundary transforms (key_heading, frame) and
+;;; discharges the contract's six surface requirements via `fulfills`. The
+;;; goals are NOT restated here — each `fulfills` cites the requirement by
+;;; name and is checked against the contract's goal (single source of truth).
+;;;
+;;; `render` is a self-contained placeholder: the requirements deliberately do
+;;; not constrain the board's content (only that a frame CLEARS the screen
+;;; first), so the real grid renderer belongs with the runnable loop in a
+;;; later slice. The io_frame_clears proof treats `render s` as opaque — it
+;;; never reduces it.
+
+(import "snake_io.req.shard")   ; Heading, GameState, Pos, Status + the requirements
+
+;; ---- helpers --------------------------------------------------------------
+
+(fn app_int ((xs (List Int)) (ys (List Int))) (List Int)   ; list append
+  (match xs (Nil ys) ((Cons h t) (Cons h (app_int t ys)))))
+
+;; take the first n elements (n <= 0 -> empty). `if`-first so `take 0 = Nil`
+;; WITHOUT inspecting the list — that is what keeps the clear-prefix proof from
+;; ever forcing `render s`. The proof discharges it with `Compute` (ungated
+;; reduction), since the gated `Simp` won't unfold an `(if (le ..) ..)` head.
+(fn take ((n Int) (xs (List Int))) (List Int)
+  (if (le n 0) Nil
+    (match xs
+      (Nil Nil)
+      ((Cons h t) (Cons h (take (- n 1) t))))))
+
+(fn score_of ((g GameState)) Int (match g ((GS sn d fd sc st sd) sc)))
+
+;; ---- the I/O boundary transforms (the contract's subjects) ----------------
+
+;; INPUT: one raw key byte -> a heading. Unrecognized keys keep `cur`.
+;;   w=119 -> Up   s=115 -> Down   a=97 -> Left   d=100 -> Right
+(fn key_heading ((k Int) (cur Heading)) Heading
+  (if (int_eq k 119) Up
+    (if (int_eq k 115) Down
+      (if (int_eq k 97) Left
+        (if (int_eq k 100) Right cur)))))
+
+;; OUTPUT: a frame = clear screen (ANSI ESC[2J ESC[H), then the board.
+;; render is a placeholder (the requirements don't constrain board content).
+(fn render ((s GameState)) (List Int) (Cons (+ 48 (score_of s)) Nil))
+
+(fn frame ((s GameState)) (List Int)
+  (app_int (list 27 91 50 74 27 91 72) (render s)))
+
+;; ===========================================================================
+;; FULFILLMENTS — discharge the contract's requirements.
+;; ===========================================================================
+
+;; INPUT BOUNDARY — the documented keys decode to their headings.
+(fulfills io_key_w (Steps (list (Unfold 'key_heading Lhs) (Simp Lhs)) Refl))
+(fulfills io_key_a (Steps (list (Unfold 'key_heading Lhs) (Simp Lhs)) Refl))
+(fulfills io_key_s (Steps (list (Unfold 'key_heading Lhs) (Simp Lhs)) Refl))
+(fulfills io_key_d (Steps (list (Unfold 'key_heading Lhs) (Simp Lhs)) Refl))
+
+;; An unrecognized key is inert: collapse each guard via its disequality.
+(fulfills io_key_inert
+  (Steps (list (Unfold 'key_heading Lhs)
+               (Rewrite (Premise 0) Lr Lhs True (list))   ; int_eq k 119 -> False
+               (Rewrite (Premise 1) Lr Lhs True (list))   ; int_eq k 115 -> False
+               (Rewrite (Premise 2) Lr Lhs True (list))   ; int_eq k 97  -> False
+               (Rewrite (Premise 3) Lr Lhs True (list))   ; int_eq k 100 -> False
+               (Simp Lhs))                                ; if False .. -> cur
+    Refl))
+
+;; OUTPUT BOUNDARY — the first 7 bytes of any frame clear the screen.
+;; Compute (ungated) drives frame -> app_int -> take to NF; `take 0` returns
+;; Nil before touching `render s`, so the open `s` never blocks reduction.
+(fulfills io_frame_clears
+  (Steps (list (Compute Lhs)) Refl))
