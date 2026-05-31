@@ -132,14 +132,18 @@
 
 ;; theory threaded + PENDING requirements (name→goal, seeded by `requirement`,
 ;; consumed by `fulfills`) + outcomes accumulated in REVERSE (caller reverses).
-(type RunState (RunState Theory (List Req) (List ClaimOutcome)))
+;; A pending entry holds the requirement's NATIVE Goal — un-reflected once at
+;; seed time (so a malformed goal fails at the contract, not at the distant
+;; fulfillment), then reused directly by `fulfills`.
+(type PendReq (PendReq Symbol Goal))
+(type RunState (RunState Theory (List PendReq) (List ClaimOutcome)))
 
-;; Look up a pending requirement's goal-expr by name (most-recent-first).
-(fn lookup_req ((name Symbol) (pend (List Req))) (Option Expr)
+;; Look up a pending requirement's (already un-reflected) goal by name.
+(fn lookup_req ((name Symbol) (pend (List PendReq))) (Option Goal)
   (match pend
     (Nil None)
-    ((Cons r rest)
-      (if (sym_eq (req_name r) name) (Some (req_goal r)) (lookup_req name rest)))))
+    ((Cons (PendReq nm g) rest)
+      (if (sym_eq nm name) (Some g) (lookup_req name rest)))))
 
 ;; Does `--trace target` want this claim traced? ('all matches everything.)
 (fn want_trace ((name Symbol) (target Symbol)) Bool
@@ -194,33 +198,40 @@
                                                     (claim_trace m th g p (claim_name c) target)) acc))
                             rest target)))))))
             ;; (requirement NAME GOAL): seed a pending obligation; no outcome.
+            ;; (requirement NAME GOAL): un-reflect the goal NOW (validating it),
+            ;; seed it as a pending obligation. A goal that elaborates but does
+            ;; not denote a well-formed Goal (e.g. an object list written as
+            ;; `(list ..)` rather than the explicit (Ctor 'Cons ..) datum) fails
+            ;; HERE — at the contract — instead of silently passing until some
+            ;; fulfillment tries to discharge it.
             ((DReq r)
-              (run_decls m (RunState th (Cons r pend) acc) rest target))
+              (match (unreflect_goal (req_goal r))
+                (None (run_decls m (RunState th pend (Cons (COFail (req_name r) "malformed requirement goal — could not un-reflect (object lists must be (Ctor 'Cons ..), not (list ..))" Nil) acc)) rest target))
+                ((Some g)
+                  (run_decls m (RunState th (Cons (PendReq (req_name r) g) pend) acc) rest target))))
             ;; (fulfills NAME PROOF): look the goal up from the requirement and
             ;; check PROOF against it — same machinery as a claim, but the goal
-            ;; comes from the contract (single source of truth), not inline.
+            ;; comes from the contract (single source of truth), not inline. The
+            ;; goal was already un-reflected at seed time (DReq above).
             ((DFul fu)
               (match (lookup_req (ful_name fu) pend)
                 (None (run_decls m (RunState th pend (Cons (COFail (ful_name fu) "no requirement with this name in scope (is the contract imported?)" Nil) acc)) rest target))
-                ((Some goalS)
-                  (match (unreflect_goal goalS)
-                    (None (run_decls m (RunState th pend (Cons (COFail (ful_name fu) "could not un-reflect requirement goal" Nil) acc)) rest target))
-                    ((Some g)
-                      (match (unreflect_proof (desugar_hyps m (goal_params g) Nil (ful_proof fu)))
-                        (None (run_decls m (RunState th pend (Cons (COFail (ful_name fu) "could not un-reflect proof" Nil) acc)) rest target))
-                        ((Some p)
-                          (if (check_sequent m th (lift_sequent g) p)
-                              (run_decls m
-                                (RunState (TheoryCons (Proven (ful_name fu) (close_goal_for_storage g)) th)
-                                          pend
-                                          (Cons (COPass (ful_name fu) (claim_trace m th g p (ful_name fu) target)) acc))
-                                rest target)
-                              (run_decls m
-                                (RunState th pend
-                                          (Cons (COFail (ful_name fu)
-                                                        (failure_detail m th (lift_sequent g) p)
-                                                        (claim_trace m th g p (ful_name fu) target)) acc))
-                                rest target)))))))))))))))
+                ((Some g)
+                  (match (unreflect_proof (desugar_hyps m (goal_params g) Nil (ful_proof fu)))
+                    (None (run_decls m (RunState th pend (Cons (COFail (ful_name fu) "could not un-reflect proof" Nil) acc)) rest target))
+                    ((Some p)
+                      (if (check_sequent m th (lift_sequent g) p)
+                          (run_decls m
+                            (RunState (TheoryCons (Proven (ful_name fu) (close_goal_for_storage g)) th)
+                                      pend
+                                      (Cons (COPass (ful_name fu) (claim_trace m th g p (ful_name fu) target)) acc))
+                            rest target)
+                          (run_decls m
+                            (RunState th pend
+                                      (Cons (COFail (ful_name fu)
+                                                    (failure_detail m th (lift_sequent g) p)
+                                                    (claim_trace m th g p (ful_name fu) target)) acc))
+                                rest target)))))))))))))
 
 ;; Run a whole file list (imports first, then targets), threading theory.
 ;; An unparseable file is skipped (the Rust harness pre-validates parsing).
