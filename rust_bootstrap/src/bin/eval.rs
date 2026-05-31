@@ -71,6 +71,21 @@ fn resolve_closure(entry: &Path) -> Result<Vec<PathBuf>, String> {
 }
 
 fn main() -> ExitCode {
+    // The bootstrap interpreter (eval.rs) and the shard reader it hosts are
+    // recursive tree-walkers; folding a large closure (e.g. an app whose
+    // imports pull in the whole kernel, like check.shard) recurses deep enough
+    // to blow the default 8 MiB main-thread stack. Run on a thread with a big
+    // stack. This is purely a host concern — once compiled, the depth is bounded
+    // by the program, not the interpreter.
+    std::thread::Builder::new()
+        .stack_size(1 << 30) // 1 GiB
+        .spawn(run)
+        .expect("spawn eval thread")
+        .join()
+        .unwrap_or(ExitCode::from(2))
+}
+
+fn run() -> ExitCode {
     let prog_args: Vec<String> = std::env::args().skip(1).collect();
 
     // --- bootstrap the VM: resolve the entrypoint's import closure ----------
