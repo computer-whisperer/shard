@@ -164,8 +164,9 @@ examples/              ; demonstrations (not the library)
   add_nat_zero.shard    ;
   double_claims.shard   ;   Simp-unfold of a user fn (double_lib.shard)
   lia_rejects.shard     ;   NEGATIVE test — the kernel correctly REJECTs it
-  cli/                 ;   shard CLI apps: cat.shard + eval_app.shard (the
-                       ;     self-hosted `eval`, run via `check cli`)
+  io/                  ;   World/extern I/O programs, run via `check run`:
+                       ;     filecat / eval_app (self-hosted `eval`) / calc_repl,
+                       ;     + echo_world / cat_lazy / cat_loop (clock theorems)
 
 tools/
   zed-narrow/          ;   Zed editor syntax-highlighting extension
@@ -218,8 +219,9 @@ Feature checklist (✓ = shipped in v2; → = next):
 | Char↔symbol primitives (`sym_of_chars`/`chars_of_sym`) | ✓ | self-host |
 | S-expr reader + module parser **in shard** (`kernel/reader.shard`) | ✓ | self-host |
 | Environment-machine evaluator (Rc values; ~700× faster) | ✓ | self-host |
-| `check cli` request/response effect loop (args/file/write) | ✓ | self-host |
-| `eval` as a standalone shard CLI app (`examples/cli/`) | ✓ | self-host |
+| `check run` World/extern I/O — direct-style, effects axiom-stubbed | ✓ | self-host |
+| extern dispatch + clock-discipline theorems (incl. oracle-driven loop) | ✓ | self-host |
+| `eval` as a standalone shard World program (`examples/io/`) | ✓ | self-host |
 | `.shard` rename + `rust_bootstrap/` split | ✓ | self-host |
 | Module-elaborator (file→Module) into shard | →    |        |
 | Defunctionalized higher-order (compiles away) | →     |        |

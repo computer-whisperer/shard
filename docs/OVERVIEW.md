@@ -134,10 +134,11 @@ machine target (§3).
 **Self-hosting status.** The front-end has moved into shard: the s-expression
 reader and module parser (`kernel/reader.shard`) are validated byte-for-byte
 against the Rust loader, and an environment-machine evaluator makes them fast
-enough to use. `eval` now exists as a standalone shard CLI app
-(`examples/cli/eval_app.shard`, driven by `check cli`) that reads files and
-evaluates them, with Rust only ferrying bytes. The remaining cord-cutter is the
-shard→machine compiler.
+enough to use. `eval` now exists as a standalone shard program
+(`examples/io/eval_app.shard`, run via `check run`) that reads files and
+evaluates them as a direct-style `World -> World` function — I/O is done by
+`extern` calls (uninterpreted in proofs, performed by the run driver), with Rust
+only ferrying bytes. The remaining cord-cutter is the shard→machine compiler.
 
 
 ## 7. Why now: the generate / check asymmetry
@@ -184,7 +185,7 @@ Flagged so we don't paint ourselves into a corner:
 - `../README.md` — front door, quick start, current feature checklist.
 - `LANGUAGE.md` — normative spec of narrow shard (syntax, semantics, the
   narrow/full distinction).
-- `BOUNDARIES.md` — modeling external systems (extern + axiom; the effect-as-
-  data mechanism the `check cli` loop realizes).
+- `BOUNDARIES.md` — modeling external systems (extern + axiom; the direct-style
+  World/extern I/O the `check run` driver realizes).
 - `REVISIT.md` — the design-decision ledger: every choice and when to revisit.
 - `archive/TRANSFER.md` — the v1→v2 handoff: premise, lessons, what changed.

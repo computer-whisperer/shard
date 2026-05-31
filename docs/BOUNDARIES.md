@@ -87,77 +87,70 @@ facts in the theory, just admitted rather than derived.
 
 This works in narrow today and is what v2 ships.
 
-### (C) Effect-as-data without continuations: the update loop (MVU)
+### (C) Effect-as-data without continuations: direct-style World threading
 
 Mechanism (A) returns the *whole* effect tree from one pure run, with
 the rest-of-program embedded as a defunctionalized continuation
 (`Symbol` + `apply$`). That needs HOF — hence deferred to the full
 language.
 
-There is a narrow-compatible variant that drops the continuation. Split
-the program into a **pure step** plus an **external loop**:
+The narrow-compatible mechanism that **ships** is *direct-style World
+threading*, built on (B). A program is an ordinary pure function
 
 ```
-(type CalcState (CalcState (Option Int)))
-(type Action (Print (List Int)) (Exit Int) (Nop))   ; ONE action, no continuation
-(type (Step S A) (Step S A))                         ; next-state + action
-
-(fn step ((s CalcState) (line (List Int))) (Step CalcState Action) …)
-
-(app (state CalcState) (init (CalcState None)) (update step))
+(fn main ((w World)) World …)
 ```
 
-`step : State -> Event -> (Step State Action)` is an ordinary pure,
-total function — no HOF, accepted by the narrow kernel as-is. The
-**continuation is externalized into the driver's loop** instead of
-reified in the Action: the runtime holds the current state, reads an
-event, calls `step`, performs the one returned Action, and recurses
-with the new state. Where (A) does one pure run that yields the entire
-effect tree, (C) does one pure call per event.
-
-The event loop and the Action interpreter live in the untrusted driver
-(`check app`, `bin/check.rs::run_app`) — the same trust status as
-`eval::eval`, which is already the substrate that runs the narrow
-kernel. Non-termination is the loop's, never the object program's.
-
-The **trust boundary is the Action interpreter**: the fixed, enumerable
-set of actions the driver knows how to perform (today `Print` / `Exit`
-/ `Nop`). Adding an action expands this boundary by exactly one arm —
-declared, audited, minimized, per the principle above. Everything the
-program decides remains a pure value; the driver only translates
-`(Print cs)` into bytes on a descriptor.
-
-**Request/response variant (`check cli`).** The MVU loop above is
-output-only; a command-line tool also needs *input* effects. The
-`(cli (state S) (init INIT) (update FN))` entrypoint
-(`bin/check.rs::run_cli`) generalizes (C) into a request/response
-protocol: the program emits a request Action and the driver feeds the
-*result* back as the next Event — still one pure `step` call per turn,
-still no continuation in the data.
+where `World` is a sequencing token (a clock). Each effect is an
+`extern` that threads the World:
 
 ```
-Action emitted     driver performs            next Event
-(GetArgs)          collect argv (after `--`)   (Args (List (List Int)))
-(ReadFile path)    read that file              (FileOk bytes) | (FileErr)
-(Write bytes)      write to stdout             (Wrote)
-(Exit code)        terminate                   —
+(extern read_file ((p (List Int)) (w World)) (Pair (Option (List Int)) World))
+(extern write     ((bytes (List Int)) (w World)) World)
+(extern read_key  ((w World)) (Pair (Option Int) World))
 ```
 
-This is what lets a pure shard program "fetch args, read files, return
-chars" — the standalone-CLI shape. `examples/cli/cat.shard` is the
-minimal demo; `examples/cli/eval_app.shard` is `eval` itself written as
-one of these apps (read a module file, parse + evaluate it in shard,
-write the result). The trust boundary is still exactly the enumerable
-Action set; `ReadFile`/`Write` are the file/byte arms, audited like any
-other.
+The data dependency on the threaded World *orders* the effects, so the
+program calls them in **direct style** wherever it needs them — no state
+machine, no request/response bouncing.
 
-Proofs reason about *what `step` produces*: invariants
-(`∀ s e. inv s ⟹ inv (state_of (step s e))`), safety
-(`∀ s e. action_of (step s e) ≠ (Exit 1)`), and spec-equivalence
-(an implementation `step` agrees with a spec `step` — the stateful
-sequel to `run = spec_run`). This is the first non-oneshot application
-shape that ships in narrow; the continuation-carrying (A) form still
-waits on `apply$`. The worked example is `examples/calc/calc_app.shard`.
+In a PROOF the externs are uninterpreted (mechanism B): a call is left
+stuck and its behaviour is given by axioms (the bridging axioms — e.g.
+"read advances the clock by 1"). Because the World threads through, the
+sequencing discipline is itself a theorem — e.g. `clock(main w) ≥ clock w`
+(monotonic ⇒ no effect reuses a clock), proven by ordinary induction even
+for an oracle-driven loop (`examples/io/cat_loop.shard`).
+
+At RUN time the Rust handler (`bin/check.rs::run_lazy`, installed *only*
+by `check run` and never during `check`) intercepts each stuck extern
+call and performs the real I/O. So checking never does I/O — the hook is
+inert there — and the **trust boundary is exactly the extern axioms** (the
+contract the handler must satisfy), explicit and auditable. Adding an
+operation is a declared extern + its axiom: the boundary grows by exactly
+one arm.
+
+The I/O vocabulary today: `get_args` / `read_line` / `read_key` /
+`read_file` (input), `write` / `write_line` (output), `exit`. Worked
+examples in `examples/io/`: `filecat` (`get_args → read_file → write →
+exit`), `eval_app` (the self-hosted evaluator as a World program),
+`calc_repl` and `snake_app` (interactive, line- and key-driven),
+`echo_world` (pure *batched* I/O — slurp/transform/flush, no externs),
+`cat_lazy` / `cat_loop` (the clock-discipline theorems).
+
+Proofs reason about *what the program produces*: invariants and
+spec-equivalence of the pure core (`examples/calc/calc_app.shard`'s
+`step`, the snake game core), plus the clock/sequencing discipline of the
+World loop itself.
+
+*Earlier form, now retired.* (C) first shipped as an **external loop** — a
+pure `step : State -> Event -> (Step State Action)` driven by a Rust MVU
+loop (`(app …)`) or a request/response loop (`(cli …)`), with the
+continuation externalized into the driver and the trust boundary an
+enumerable Action set (`Print`/`GetArgs`/`ReadFile`/`Write`/`Exit`).
+Direct-style World threading subsumes it — you call effects in place
+instead of bouncing Actions/Events through a driver — so `run_app` /
+`run_cli` and the `(app …)` / `(cli …)` entrypoints have been removed in
+favour of `check run`.
 
 ## Modellable externs: the good pattern
 
@@ -226,10 +219,12 @@ tag on the axiom entry.
 
 - **Continuation-carrying effect-as-data (mechanism A).** The
   `(ReadFile p k)` tree form needs `apply$`; lands with the full
-  language. (The continuation-free MVU variant, mechanism (C), ships
-  now — see `check app` / `examples/calc/calc_app.shard`.)
-- **Runtime linkage** between extern names and native Rust
-  functions. Out of the kernel; a deployment-time concern.
+  language. (The continuation-free form, mechanism (C), ships now as
+  direct-style World threading — see `check run` / `examples/io/`.)
+- **Runtime linkage** between extern names and native Rust functions —
+  *now ships* (out of the kernel, in the `check run` driver:
+  `bin/check.rs::run_lazy`'s effect handler, installed only at run, never
+  during proof-checking).
 - **Audit ledger tool.** Easy once the data shapes are stable; just
   hasn't been written.
 - **Bridging-axiom distinction.** Tag on `Axiom` entries; not needed
