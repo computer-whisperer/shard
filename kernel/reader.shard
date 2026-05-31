@@ -647,6 +647,13 @@
     ((Cons (TypeDef _ _ cds) rest)
       (append_sym (ctordef_names cds) (typedef_ctors rest)))))
 
+;; The TYPE names a module declares — the proof-DSL reader uses these to tell a
+;; concrete 0-ary type constructor (in `type_names`) from a goal type variable.
+(fn typedef_names ((tds (List TypeDef))) (List Symbol)
+  (match tds
+    (Nil Nil)
+    ((Cons (TypeDef n _ _) rest) (Cons n (typedef_names rest)))))
+
 (fn ctordef_names ((cds (List CtorDef))) (List Symbol)
   (match cds
     (Nil Nil)
@@ -880,8 +887,40 @@
 ;; rather than the two separate filtered lists above.
 ;; ===========================================================================
 
+;; ---- native proof-DSL claims ----------------------------------------------
+;; A claim whose GOAL is written in the proof DSL — head `goal` (lowercase),
+;; vs the reflected `Goal` ctor of the legacy surface. We keep the RAW goal/
+;; proof s-expressions and let the driver parse them straight to native
+;; Goal/Proof via proof_reader.shard (it needs the module's ctor + type-name
+;; sets, which the driver has and this collector does not). No elaborate, no
+;; un-reflect — the proof language parsed as its own language.
+(type NClaim (NClaim Symbol SExpr SExpr))  ; name, goal-sexpr, proof-sexpr
+
+(fn nclaim_name  ((c NClaim)) Symbol (match c ((NClaim n g p) n)))
+(fn nclaim_goal  ((c NClaim)) SExpr  (match c ((NClaim n g p) g)))
+(fn nclaim_proof ((c NClaim)) SExpr  (match c ((NClaim n g p) p)))
+
+;; The goal s-expr's head symbol, for a well-shaped (claim NAME GOAL PROOF).
+(fn claim_goal_head ((f SExpr)) (Option Symbol)
+  (match f
+    ((SList (Cons _ (Cons (SSym name) (Cons goalS (Cons proofS Nil)))))
+      (match goalS ((SList (Cons (SSym gh) _)) (Some gh)) (_ None)))
+    (_ None)))
+
+;; A claim is native (proof DSL) iff its goal head is the lowercase `goal`.
+(fn is_native_claim ((f SExpr)) Bool
+  (match (claim_goal_head f) ((Some gh) (sym_eq gh (quote goal))) (_ False)))
+
+;; (claim NAME GOAL PROOF) → NClaim, keeping GOAL/PROOF as raw s-exprs.
+(fn nclaim_of_form ((f SExpr)) (Option NClaim)
+  (match f
+    ((SList (Cons _ (Cons (SSym name) (Cons goalS (Cons proofS Nil)))))
+      (Some (NClaim name goalS proofS)))
+    (_ None)))
+
 (type Decl
   (DClaim Claim)
+  (DNClaim NClaim)
   (DAxiom AxDecl)
   (DReq Req)
   (DFul Ful))
@@ -891,12 +930,19 @@
     (Nil (Some Nil))
     ((Cons f rest)
       (if (is_claim_form f)
-          (match (claim_of_form f ctors)
-            (None None)
-            ((Some c)
-              (match (collect_decls rest ctors)
+          (if (is_native_claim f)
+              (match (nclaim_of_form f)
                 (None None)
-                ((Some ds) (Some (Cons (DClaim c) ds))))))
+                ((Some c)
+                  (match (collect_decls rest ctors)
+                    (None None)
+                    ((Some ds) (Some (Cons (DNClaim c) ds))))))
+              (match (claim_of_form f ctors)
+                (None None)
+                ((Some c)
+                  (match (collect_decls rest ctors)
+                    (None None)
+                    ((Some ds) (Some (Cons (DClaim c) ds)))))))
       (if (is_axiom_form f)
           (match (axiom_of_form f ctors)
             (None None)

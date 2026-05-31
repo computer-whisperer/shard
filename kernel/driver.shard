@@ -34,6 +34,17 @@
 (import "reader.shard")
 (import "trace.shard")
 (import "unreflect.shard")
+(import "proof_reader.shard")               ; native proof-DSL → Goal/Proof
+
+;; The ctor + type-name sets a proof-DSL claim is parsed against. ctors lets
+;; `elaborate` tell a value constructor from an FVar in an object snippet;
+;; type_names lets the goal reader tell a concrete 0-ary type from a type
+;; variable. Int and Symbol are primitive type constructors with no TypeDef, so
+;; they're prepended explicitly.
+(fn module_ctors ((m Module)) (List Symbol)
+  (typedef_ctors (module_typedefs m)))
+(fn module_type_names ((m Module)) (List Symbol)
+  (Cons (quote Int) (Cons (quote Symbol) (typedef_names (module_typedefs m)))))
 
 (fn lift_sequent ((g Goal)) Sequent
   (match g ((Goal params premises eq) (Sequent params Nil premises eq))))
@@ -207,6 +218,28 @@
                                       (Cons (COFail (claim_name c)
                                                     (failure_detail m th (lift_sequent g) p)
                                                     (claim_trace m th g p (claim_name c) target)) acc))
+                            rest target)))))))
+            ;; (claim NAME (goal …) PROOF): the proof-DSL surface. Parse goal and
+            ;; proof STRAIGHT to native via proof_reader — no reflect/un-reflect,
+            ;; no named-hyp desugar pass (the reader handles binders directly).
+            ((DNClaim nc)
+              (match (parse_goal (nclaim_goal nc) (module_ctors m) (module_type_names m))
+                (None (run_decls m (RunState th pend (Cons (COFail (nclaim_name nc) "could not parse goal (proof DSL)" Nil) acc)) rest target))
+                ((Some g)
+                  (match (parse_proof (nclaim_proof nc) (module_ctors m) (module_type_names m))
+                    (None (run_decls m (RunState th pend (Cons (COFail (nclaim_name nc) "could not parse proof (proof DSL)" Nil) acc)) rest target))
+                    ((Some p)
+                      (if (check_sequent m th (lift_sequent g) p)
+                          (run_decls m
+                            (RunState (TheoryCons (Proven (nclaim_name nc) (close_goal_for_storage g)) th)
+                                      pend
+                                      (Cons (COPass (nclaim_name nc) (claim_trace m th g p (nclaim_name nc) target)) acc))
+                            rest target)
+                          (run_decls m
+                            (RunState th pend
+                                      (Cons (COFail (nclaim_name nc)
+                                                    (failure_detail m th (lift_sequent g) p)
+                                                    (claim_trace m th g p (nclaim_name nc) target)) acc))
                             rest target)))))))
             ;; (requirement NAME GOAL): seed a pending obligation; no outcome.
             ;; (requirement NAME GOAL): un-reflect the goal NOW (validating it),
