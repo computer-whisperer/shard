@@ -16,46 +16,34 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use proving_bootstrap_v2::{ast, default_kernel_dir, eval, load, load_kernel_from};
-
-// The shard toolchain + entrypoint, loaded after the kernel. `kernel.shard`
-// (the `main` we run) comes last so it sees the reader/reducer it calls.
-const TOOLCHAIN: &[&str] = &[
-    "reader.shard",
-    "unreflect.shard",
-    "desugar.shard",
-    "trace.shard",
-    "driver.shard",
-    "kernel.shard",
-];
+use proving_bootstrap_v2::{ast, default_kernel_dir, eval, load};
 
 fn main() -> ExitCode {
     let prog_args: Vec<String> = std::env::args().skip(1).collect();
 
-    // --- bootstrap the VM: kernel + toolchain + entrypoint ------------------
-    let kernel = match load_kernel_from(default_kernel_dir()) {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("error loading kernel: {}", e);
-            return ExitCode::from(2);
-        }
-    };
+    // --- bootstrap the VM: the eval entrypoint's true closure ---------------
+    // eval needs only the prelude + Expr/Module machinery + the reducer + the
+    // reader — NOT the proof checker (proof/check/lia/eqdec/ord/farkas) or the
+    // proof toolchain (unreflect/desugar/trace/driver), and NOT std/. (This
+    // closure is hand-listed for now; once kernel.shard declares its imports it
+    // will be resolved, not hardcoded.)
     let kdir = default_kernel_dir();
-    let paths: Vec<PathBuf> = TOOLCHAIN.iter().map(|f| kdir.join(f)).collect();
-    // Resolve the toolchain + entrypoint against the kernel as base.
-    let mut vm = match load::module_from_paths_with_base(&paths, Some(&kernel)) {
+    let files = [
+        "stdlib.shard", // prelude: List/Option/Bool/Pair
+        "module.shard", // Module/FnDef/Type + lookups
+        "term.shard",   // Expr/Pat/Arm + subst/open
+        "reduce.shard", // compute_expr (the reducer)
+        "reader.shard", // parse_module / parse_expr
+        "kernel.shard", // the entrypoint: main
+    ];
+    let paths: Vec<PathBuf> = files.iter().map(|f| kdir.join(f)).collect();
+    let vm = match load::module_from_paths_with_base(&paths, None) {
         Ok(m) => m,
         Err(e) => {
-            eprintln!("error loading toolchain/entrypoint: {}", e);
+            eprintln!("error loading entrypoint closure: {}", e);
             return ExitCode::from(2);
         }
     };
-    // Append the kernel's defs as a FALLBACK (toolchain/entrypoint fns shadow
-    // same-named kernel fns; a call the app doesn't define — e.g. compute_expr
-    // — still resolves). Same discipline as the `check run` path.
-    vm.types.extend(kernel.types.iter().cloned());
-    vm.fns.extend(kernel.fns.iter().cloned());
-    vm.externs.extend(kernel.externs.iter().cloned());
 
     // --- run `(main (World 0))` under the file-I/O handler ------------------
     eval::set_effect_handler(Some(Box::new(make_handler(prog_args))));
