@@ -1,20 +1,18 @@
 ;;; desugar.shard — named-hypothesis desugaring, in shard.
 ;;;
 ;;; The kernel only understands POSITIONAL hypotheses `(Hyp k)`. Proof authors
-;;; may instead name them — `(Hyp 'ih)` — for readability. This pass rewrites
-;;; named hyps to positional by simulating the kernel's hyp stack, mirroring
-;;; bin/check.rs's HCtx/desugar_hyps. It runs on the REFLECTED proof Expr
-;;; (where `(Ctor 'Hyp (Cons (SymLit s) Nil))` named is distinguishable from
-;;; `(Ctor 'Hyp (Cons (IntLit k) Nil))` positional), BEFORE unreflect_proof.
+;;; may instead name them — `(hyp ih)` — for readability. proof_reader emits a
+;;; native `(HypName 'ih)`; this pass (desugar_proof_named) rewrites each to
+;;; positional by simulating the kernel's hyp stack over the native Proof.
 ;;;
 ;;; Stack discipline (front = index 0 = `(Hyp 0)`):
 ;;;   WfInduct        : PREPEND one IH, named 'ih
 ;;;   Induct/Induct2  : per case, APPEND one IH per recursive ctor field
 ;;;                     (do_induct order), named 'ih, 'ih1, … (count via the
 ;;;                     kernel's dbg_ih_count; Induct2: 'SS→1 else 0)
-;;; Everything else leaves the stack unchanged (generic rebuild). Positional
-;;; `(Hyp k)` is untouched. Named CaseOn case-hyps (a rarer sugar) are not
-;;; handled here — none occur in the corpus.
+;;; Everything else leaves the stack unchanged. Positional `(Hyp k)` is
+;;; untouched. Named CaseOn case-hyps (a rarer sugar) are not handled — none
+;;; occur in the corpus.
 
 ;; imports — the kernel files this module uses (dependency-tracked)
 (import "stdlib.shard")
@@ -59,87 +57,8 @@
         (None 0)
         ((Some ty) (dbg_ih_count ty cname m)))))
 
-;; --- the traversal --------------------------------------------------------
-
-(fn desugar_hyps ((m Module) (ps (List Param)) (stk (List (Option Symbol))) (e Expr)) Expr
-  (match e
-    ((Ctor cn args)
-      (if (sym_eq cn (quote Hyp))      (desug_hyp stk args)
-      (if (sym_eq cn (quote Induct))   (desug_induct m ps stk (quote Induct) args)
-      (if (sym_eq cn (quote Induct2))  (desug_induct m ps stk (quote Induct2) args)
-      (if (sym_eq cn (quote WfInduct)) (desug_wfinduct m ps stk args)
-          (Ctor cn (desug_list m ps stk args)))))))
-    (_ e)))
-
-(fn desug_list ((m Module) (ps (List Param)) (stk (List (Option Symbol))) (es (List Expr))) (List Expr)
-  (match es
-    (Nil Nil)
-    ((Cons h t) (Cons (desugar_hyps m ps stk h) (desug_list m ps stk t)))))
-
-(fn desug_hyp ((stk (List (Option Symbol))) (args (List Expr))) Expr
-  (match args
-    ((Cons (SymLit s) Nil)
-      (match (stack_pos s stk 0)
-        ((Some k) (Ctor (quote Hyp) (Cons (IntLit k) Nil)))
-        (None     (Ctor (quote Hyp) (Cons (SymLit s) Nil)))))   ; unbound — leave (fails later)
-    (_ (Ctor (quote Hyp) args))))                               ; positional (IntLit) — unchanged
-
-(fn desug_wfinduct ((m Module) (ps (List Param)) (stk (List (Option Symbol))) (args (List Expr))) Expr
-  (match args
-    ((Cons measureE (Cons proofE Nil))
-      (Ctor (quote WfInduct)
-            (Cons (desugar_hyps m ps stk measureE)
-                  (Cons (desugar_hyps m ps (Cons (Some (quote ih)) stk) proofE) Nil))))
-    (_ (Ctor (quote WfInduct) args))))
-
-(fn desug_induct ((m Module) (ps (List Param)) (stk (List (Option Symbol))) (head Symbol) (args (List Expr))) Expr
-  (match args
-    ((Cons (SymLit var) (Cons casesE Nil))
-      (Ctor head (Cons (SymLit var) (Cons (desug_cases m ps stk head var casesE) Nil))))
-    (_ (Ctor head args))))
-
-(fn desug_cases ((m Module) (ps (List Param)) (stk (List (Option Symbol))) (head Symbol) (var Symbol) (casesE Expr)) Expr
-  (match casesE
-    ((Ctor cn args)
-      (if (sym_eq cn (quote Cons))
-          (match args
-            ((Cons caseE (Cons restE Nil))
-              (Ctor (quote Cons)
-                    (Cons (desug_case  m ps stk head var caseE)
-                          (Cons (desug_cases m ps stk head var restE) Nil))))
-            (_ casesE))
-          casesE))
-    (_ casesE)))
-
-(fn desug_case ((m Module) (ps (List Param)) (stk (List (Option Symbol))) (head Symbol) (var Symbol) (caseE Expr)) Expr
-  (match caseE
-    ((Ctor cn args)
-      (if (sym_eq cn (quote Case))
-          (match args
-            ((Cons (SymLit cname) (Cons proofE Nil))
-              (Ctor (quote Case)
-                    (Cons (SymLit cname)
-                          (Cons (desugar_hyps m ps
-                                  (append_ms stk (ih_entries 0 (case_ih_count m ps head var cname)))
-                                  proofE)
-                                Nil))))
-            (_ caseE))
-      (if (sym_eq cn (quote CaseB))
-          (match args
-            ((Cons (SymLit cname) (Cons fieldsE (Cons proofE Nil)))
-              (Ctor (quote CaseB)
-                    (Cons (SymLit cname)
-                          (Cons fieldsE
-                                (Cons (desugar_hyps m ps
-                                        (append_ms stk (ih_entries 0 (case_ih_count m ps head var cname)))
-                                        proofE)
-                                      Nil)))))
-            (_ caseE))
-          caseE)))
-    (_ caseE)))
-
 ;; ===========================================================================
-;; Native named-hyp desugaring — the proof-DSL counterpart of desugar_hyps.
+;; Native named-hyp desugaring — over the native Proof.
 ;; proof_reader emits a native Proof in which a named hypothesis is (HypName
 ;; 'ih); the kernel only resolves (Hyp k). This pass simulates the SAME hyp
 ;; stack over the NATIVE Proof — WfInduct prepends 'ih; each Induct/Induct2 case

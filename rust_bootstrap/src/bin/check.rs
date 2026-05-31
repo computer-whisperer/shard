@@ -109,22 +109,6 @@ fn run() -> ExitCode {
         return run_module_check(&args[1..]);
     }
 
-    // `claims-check` subcommand: differential validation of the shard claim
-    // collector (kernel/reader.shard's `parse_claims`) against the Rust loader.
-    // For each `(claim NAME GOAL PROOF)` form in a file, compare the raw
-    // (pre-desugar) goal and proof construction Exprs parsed both ways.
-    if args[0] == "claims-check" {
-        return run_claims_check(&args[1..]);
-    }
-
-    // `dsl-print` subcommand: render a file's REFLECTED claims/axioms/
-    // requirements as proof-DSL surface text (kernel/dsl_print.shard). A
-    // migration aid — splice the output into the file, replacing the reflected
-    // forms, then `check` to confirm the rendering round-trips.
-    if args[0] == "dsl-print" {
-        return run_dsl_print(&args[1..]);
-    }
-
     let kernel = match load_kernel_from(default_kernel_dir()) {
         Ok(m) => m,
         Err(e) => {
@@ -712,14 +696,9 @@ fn sym_list_native(names: &[String]) -> ast::Expr {
 }
 
 fn run_parse_check(args: &[String]) -> ExitCode {
-    // --unreflect: validate `parse_unreflect` (parse_expr then unreflect_expr)
-    // against the native expr_from_str. The shard side then produces the
-    // un-reflected native Expr, so the reference is NOT expr_to_value'd.
-    let mut unreflect = false;
     let mut positional: Vec<&String> = Vec::new();
     for a in args {
         match a.as_str() {
-            "--unreflect" => unreflect = true,
             s if s.starts_with("--") => {
                 eprintln!("error: unknown flag {}", a);
                 return ExitCode::from(2);
@@ -728,7 +707,7 @@ fn run_parse_check(args: &[String]) -> ExitCode {
         }
     }
     if positional.len() < 2 {
-        eprintln!("usage: check parse-check [--unreflect] <file.shard>... <corpus.txt>");
+        eprintln!("usage: check parse-check <file.shard>... <corpus.txt>");
         return ExitCode::from(2);
     }
     let corpus_path = positional.last().unwrap().as_str();
@@ -780,19 +759,18 @@ fn run_parse_check(args: &[String]) -> ExitCode {
         if line.is_empty() || line.starts_with(';') {
             continue;
         }
-        // Reference: the Rust parser. In --unreflect mode the shard side
-        // produces the native Expr, so compare against the native ast directly;
-        // otherwise compare reflected datums (shard returns an object Expr).
+        // Reference: the Rust parser. Compare reflected datums (the shard
+        // reader returns an object Expr).
         let reference = match load::expr_from_str(line, &ctx.user_module) {
-            Ok(e) => if unreflect { e } else { expr_to_value(&e) },
+            Ok(e) => expr_to_value(&e),
             Err(e) => {
                 println!("L{}: rust-parse error ({}) — skipped: {}", i + 1, e, line);
                 continue;
             }
         };
-        // Shard: parse_expr (or parse_unreflect) on the native engine.
+        // Shard: parse_expr on the native engine.
         let call = ast::Expr::Call(
-            if unreflect { "parse_unreflect" } else { "parse_expr" }.into(),
+            "parse_expr".into(),
             vec![line_to_event_native(line), ctorset.clone()],
         );
         // eval_raw re-reflects its result (expr_to_value), so un-reflect
@@ -977,181 +955,6 @@ fn run_module_check(args: &[String]) -> ExitCode {
 }
 
 // ----------------------------------------------------------------------
-// `claims-check` subcommand — differential validation of `parse_claims`.
-//
-// Reference: the Rust reader pulls each `(claim NAME GOAL PROOF)` form and
-// parses GOAL/PROOF raw via `load::expr_from_value` (pre the named-hyp
-// desugar / goal-eval the checker applies downstream).
-// Shard: `parse_claims` collects the same claims; `claims_goals` /
-// `claims_proofs` project the goal/proof Expr lists, which we un-reflect and
-// compare structurally — same discipline as module-check / parse-check.
-// ----------------------------------------------------------------------
-
-fn run_claims_check(args: &[String]) -> ExitCode {
-    // --unreflect: validate the shard un-reflectors. The shard side projects
-    // each claim's goal through `unreflect_goal` (→ native Goal), so we compare
-    // GOALS ONLY (the proof un-reflector lands in a later slice) and skip the
-    // extra per-element un-reflect the raw mode needs.
-    let mut unreflect = false;
-    let mut positional: Vec<&String> = Vec::new();
-    for a in args {
-        match a.as_str() {
-            "--unreflect" => unreflect = true,
-            s if s.starts_with("--") => {
-                eprintln!("error: unknown flag {}", a);
-                return ExitCode::from(2);
-            }
-            _ => positional.push(a),
-        }
-    }
-    if positional.len() < 2 {
-        eprintln!("usage: check claims-check [--unreflect] <reader.shard>... <target.shard>");
-        return ExitCode::from(2);
-    }
-    let target_path = positional.last().unwrap().as_str();
-    let files = &positional[..positional.len() - 1];
-
-    let kernel = match load_kernel_from(default_kernel_dir()) {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("error loading kernel from {}: {}", default_kernel_dir().display(), e);
-            return ExitCode::from(2);
-        }
-    };
-    let user_module = ast::Module {
-        types: kernel.types.clone(),
-        fns: Vec::new(),
-        externs: Vec::new(),
-    };
-    let mut ctx = Ctx {
-        user_module_value: module_to_value(&user_module),
-        user_module,
-        loaded: std::collections::HashSet::new(),
-        in_progress: Vec::new(),
-    };
-    for f in files {
-        if let Err(code) = process_file(&PathBuf::from(f.as_str()), &mut ctx, &kernel) {
-            return code;
-        }
-    }
-
-    let target_src = match std::fs::read_to_string(target_path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("error reading {}: {}", target_path, e);
-            return ExitCode::from(2);
-        }
-    };
-
-    // Reference: pull claim forms via the Rust reader; goal/proof raw.
-    let forms = match parse_top_level(&target_src) {
-        Ok(f) => f,
-        Err(e) => {
-            eprintln!("rust parse error: {}", e);
-            return ExitCode::from(2);
-        }
-    };
-    let mut ref_names: Vec<String> = Vec::new();
-    let mut ref_goals: Vec<ast::Expr> = Vec::new();
-    let mut ref_proofs: Vec<ast::Expr> = Vec::new();
-    for form in &forms {
-        let items: Vec<&Value> = match form.list_iter() {
-            Some(it) => it.collect(),
-            None => continue,
-        };
-        if items.len() != 4 || items[0].as_symbol() != Some("claim") {
-            continue;
-        }
-        let name = match items[1].as_symbol() {
-            Some(s) => s.to_string(),
-            None => {
-                eprintln!("claim NAME not a symbol");
-                return ExitCode::from(2);
-            }
-        };
-        let goal = match load::expr_from_value(items[2], &ctx.user_module) {
-            Ok(e) => e,
-            Err(e) => { eprintln!("rust goal parse ({}): {:?}", name, e); return ExitCode::from(2); }
-        };
-        let proof = match load::expr_from_value(items[3], &ctx.user_module) {
-            Ok(e) => e,
-            Err(e) => { eprintln!("rust proof parse ({}): {:?}", name, e); return ExitCode::from(2); }
-        };
-        ref_names.push(name);
-        ref_goals.push(goal);
-        ref_proofs.push(proof);
-    }
-
-    // Shard: parse_claims, then project + un-reflect the goal/proof lists.
-    let ctor_names: Vec<String> = ctx.user_module.types.iter()
-        .flat_map(|td| td.ctors.iter().map(|cd| cd.name.clone()))
-        .collect();
-    let base_ctors = sym_list_native(&ctor_names);
-    // `extra`: in raw mode the accessor returns a (List Expr) whose elements are
-    // object Exprs (reflected) — eval_raw reflects the list once more, so we
-    // un-reflect once for the spine and once more per element. In --unreflect
-    // mode the accessor already un-reflected each element to a native Goal, so
-    // only the spine un-reflect is needed.
-    let project = |proj: &str, extra: bool| -> Result<Vec<ast::Expr>, String> {
-        let call = ast::Expr::Call(
-            proj.into(),
-            vec![ast::Expr::Call(
-                "parse_claims".into(),
-                vec![line_to_event_native(&target_src), base_ctors.clone()],
-            )],
-        );
-        let native_list = value_to_native_expr(&eval_raw(&ctx.user_module, &call)?)?;
-        let elems = decode_list(&native_list);
-        if extra {
-            elems.into_iter().map(value_to_native_expr).collect::<Result<Vec<_>, String>>()
-        } else {
-            Ok(elems.into_iter().cloned().collect())
-        }
-    };
-    let goal_proj = if unreflect { "claims_goals_native" } else { "claims_goals" };
-    let shard_goals = match project(goal_proj, !unreflect) {
-        Ok(v) => v,
-        Err(e) => { eprintln!("shard {} error: {}", goal_proj, e); return ExitCode::from(2); }
-    };
-
-    // Compare structurally.
-    let mut ok = true;
-    let compare = |label: &str, s: &[ast::Expr], r: &[ast::Expr], names: &[String], ok: &mut bool| {
-        if s.len() != r.len() {
-            println!("DIFFER  {}  {} count: shard {} vs rust {}", target_path, label, s.len(), r.len());
-            *ok = false;
-            return;
-        }
-        for (i, (a, b)) in s.iter().zip(r.iter()).enumerate() {
-            if a != b {
-                let nm = names.get(i).map(|x| x.as_str()).unwrap_or("?");
-                println!("DIFFER  {}  claim '{}' {}:", target_path, nm, label);
-                println!("    shard: {}", show_reflected(&expr_to_value(a)));
-                println!("    rust : {}", show_reflected(&expr_to_value(b)));
-                *ok = false;
-                return;
-            }
-        }
-    };
-    compare("goal", &shard_goals, &ref_goals, &ref_names, &mut ok);
-    if ok {
-        let proof_proj = if unreflect { "claims_proofs_native" } else { "claims_proofs" };
-        let shard_proofs = match project(proof_proj, !unreflect) {
-            Ok(v) => v,
-            Err(e) => { eprintln!("shard {} error: {}", proof_proj, e); return ExitCode::from(2); }
-        };
-        compare("proof", &shard_proofs, &ref_proofs, &ref_names, &mut ok);
-    }
-    if ok {
-        let what = if unreflect { "claims un-reflected (goal+proof)" } else { "claims" };
-        println!("MATCH  {}  ({} {})", target_path, ref_goals.len(), what);
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::from(1)
-    }
-}
-
-// ----------------------------------------------------------------------
 // Production checking through the self-hosted shard driver.
 //
 // This is THE checking path for `check <file>…` (including `--trace`). The
@@ -1271,66 +1074,6 @@ fn run_shard_check(files: &[String], kernel: &ast::Module, trace: Option<&str>) 
 }
 
 // ----------------------------------------------------------------------
-// `dsl-print` — render a file's reflected claims/axioms/requirements as
-// proof-DSL surface text. Builds M from the target's import closure (so
-// desugar's IH counts resolve), then calls kernel/dsl_print.shard's
-// dsl_print_src, which un-reflects each decl to native and prints the DSL.
-// ----------------------------------------------------------------------
-fn run_dsl_print(args: &[String]) -> ExitCode {
-    if args.is_empty() {
-        eprintln!("usage: check dsl-print <file.shard>");
-        return ExitCode::from(2);
-    }
-    let kernel = match load_kernel_from(default_kernel_dir()) {
-        Ok(m) => m,
-        Err(e) => { eprintln!("error loading kernel: {}", e); return ExitCode::from(2); }
-    };
-    let toolchain_vm = match load_toolchain_vm(&kernel) {
-        Ok(m) => m,
-        Err(code) => return code,
-    };
-    let target_path = PathBuf::from(&args[0]);
-    let order = match ordered_closure(&[target_path.clone()]) {
-        Ok(o) => o,
-        Err(code) => return code,
-    };
-    let mut srcs_list = nil();
-    for p in order.iter().rev() {
-        match std::fs::read_to_string(p) {
-            Ok(s) => { srcs_list = ctor("Cons", vec![line_to_event_native(&s), srcs_list]); }
-            Err(e) => { eprintln!("error reading {}: {}", p.display(), e); return ExitCode::from(2); }
-        }
-    }
-    let target_src = match std::fs::read_to_string(&target_path) {
-        Ok(s) => line_to_event_native(&s),
-        Err(e) => { eprintln!("error reading {}: {}", target_path.display(), e); return ExitCode::from(2); }
-    };
-    let seed = module_to_value(&ast::Module {
-        types: kernel.types.clone(),
-        fns: Vec::new(),
-        externs: Vec::new(),
-    });
-    let kernel_ctor_names: Vec<String> = kernel.types.iter()
-        .flat_map(|td| td.ctors.iter().map(|cd| cd.name.clone()))
-        .collect();
-    let base_ctors = sym_list_native(&kernel_ctor_names);
-    let call = ast::Expr::Call(
-        "dsl_print_src".into(),
-        vec![seed, base_ctors, srcs_list, target_src],
-    );
-    let result = match eval_raw(&toolchain_vm, &call).and_then(|v| value_to_native_expr(&v)) {
-        Ok(v) => v,
-        Err(e) => { eprintln!("shard dsl_print error: {}", e); return ExitCode::from(2); }
-    };
-    let text: String = decode_list(&result).iter().filter_map(|x| match x {
-        ast::Expr::IntLit(c) => char::from_u32(*c as u32),
-        _ => None,
-    }).collect();
-    print!("{}", text);
-    ExitCode::SUCCESS
-}
-
-// ----------------------------------------------------------------------
 // Loading user code through the SHARD reader.
 //
 // `check`, `run`, and `eval` all parse user/target `.shard` code with the
@@ -1369,8 +1112,7 @@ fn load_toolchain_vm(kernel: &ast::Module) -> Result<ast::Module, ExitCode> {
         let p = kdir.join(base);
         ctx.loaded.insert(p.canonicalize().unwrap_or(p));
     }
-    for tool in &["reader.shard", "unreflect.shard", "desugar.shard", "trace.shard", "driver.shard",
-                  "dsl_print.shard"] {   // dsl_print: the `dsl-print` migration subcommand's renderer
+    for tool in &["reader.shard", "desugar.shard", "trace.shard", "driver.shard"] {
         process_file(&kdir.join(tool), &mut ctx, kernel)?;
     }
     Ok(ctx.user_module)

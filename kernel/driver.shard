@@ -1,8 +1,8 @@
 ;;; driver.shard — the checker driver, in shard.
 ;;;
-;;; Ties the self-hosted front-end together: parse a file's claims
-;;; (reader.shard), un-reflect each goal/proof to native kernel values
-;;; (unreflect.shard), lift Goal→Sequent, run the kernel's `check_sequent`,
+;;; Ties the self-hosted front-end together: parse a file's decls
+;;; (reader.shard), parse each goal/proof STRAIGHT to native kernel values
+;;; (proof_reader.shard), lift Goal→Sequent, run the kernel's `check_sequent`,
 ;;; and thread the theory (a passing claim is admitted as `(Proven name goal)`
 ;;; so later claims can cite it). This is the loop that, in the Rust bootstrap,
 ;;; lived in `bin/check.rs::process_file`.
@@ -11,11 +11,8 @@
 ;;; check_sequent stays exactly as fast as native `check` — only the
 ;;; orchestration moved into shard.
 ;;;
-;;; Named hypotheses `(Hyp 'ih)` are desugared to positional form
-;;; (desugar.shard) before un-reflection. Claims citing IMPORTED lemmas are
-;;; handled via `check_with_imports`: the harness supplies the target's
-;;; transitive import closure (deps first), `seed_theory` checks those to
-;;; admit their proven claims, and the target is checked against that theory.
+;;; Named hypotheses `(hyp ih)` are resolved to positional form
+;;; (desugar_proof_named, desugar.shard) on the native Proof before checking.
 ;;;
 ;;; `check_production` is the entry the DEFAULT `check` routes through: it
 ;;; takes the whole file list (imports first, then targets), processes each
@@ -33,7 +30,6 @@
 (import "desugar.shard")
 (import "reader.shard")
 (import "trace.shard")
-(import "unreflect.shard")
 (import "proof_reader.shard")               ; native proof-DSL → Goal/Proof
 
 ;; The ctor + type-name sets a proof-DSL claim is parsed against. ctors lets
@@ -49,91 +45,7 @@
 (fn lift_sequent ((g Goal)) Sequent
   (match g ((Goal params premises eq) (Sequent params Nil premises eq))))
 
-(fn claim_name ((c Claim)) Symbol (match c ((Claim n g p) n)))
 (fn goal_params ((g Goal)) (List Param) (match g ((Goal ps prems eq) ps)))
-
-;; Running tally over a file's claims.
-(type DriverResult (DriverResult Int Int))     ; passed, failed
-
-;; The full state threaded through a file's claims: the theory (so later claims
-;; can cite earlier ones) plus the pass/fail tally.
-(type CheckState (CheckState Theory Int Int))  ; theory, passed, failed
-
-;; Check each claim against module m, threading CheckState. A passing claim is
-;; admitted as (Proven name goal); a failing or un-reflectable one bumps failed
-;; and leaves the theory untouched.
-(fn run_claims ((m Module) (st CheckState) (cs (List Claim))) CheckState
-  (match cs
-    (Nil st)
-    ((Cons c rest)
-      (match st
-        ((CheckState th passed failed)
-          (match (unreflect_goal (claim_goal c))
-            (None (run_claims m (CheckState th passed (+ failed 1)) rest))
-            ((Some g)
-              ;; desugar named hyps (named → positional) on the reflected proof
-              ;; against this goal's params, THEN un-reflect to a native Proof.
-              (match (unreflect_proof (desugar_hyps m (goal_params g) Nil (claim_proof c)))
-                (None (run_claims m (CheckState th passed (+ failed 1)) rest))
-                ((Some p)
-                  (if (check_sequent m th (lift_sequent g) p)
-                      ;; store the CLOSED goal (param FVars → BVars) so later
-                      ;; (Lemma name) citations resolve, mirroring native check.
-                      (run_claims m (CheckState (TheoryCons (Proven (claim_name c) (close_goal_for_storage g)) th)
-                                                (+ passed 1) failed)
-                                  rest)
-                      (run_claims m (CheckState th passed (+ failed 1)) rest)))))))))))
-
-;; Admit a file's axioms (asserted true, no proof) into the theory, closing
-;; each goal for storage so citations resolve. A malformed axiom goal is
-;; skipped (it will resurface as a citation failure in a dependent claim).
-(fn seed_axioms ((m Module) (axs (List AxDecl)) (th Theory)) Theory
-  (match axs
-    (Nil th)
-    ((Cons a rest)
-      (match (unreflect_goal (axdecl_goal a))
-        (None (seed_axioms m rest th))
-        ((Some g)
-          (seed_axioms m rest (TheoryCons (Axiom (axdecl_name a) (close_goal_for_storage g)) th)))))))
-
-;; Process ONE source against `m` from theory `th`: admit the file's own axioms
-;; first (so its later claims can cite them), then run its claims, returning the
-;; resulting theory + this file's pass/fail tally.
-(fn process_src ((m Module) (th Theory) (src (List Int)) (ctors (List Symbol))) CheckState
-  (match (parse_axioms src ctors)
-    (None (CheckState th 0 (- 0 1)))           ; -1 failed = parse failure
-    ((Some axs)
-      (match (parse_claims src ctors)
-        (None (CheckState th 0 (- 0 1)))
-        ((Some cs) (run_claims m (CheckState (seed_axioms m axs th) 0 0) cs))))))
-
-;; Check `src` against `m`, starting from the SEEDED theory `th`.
-;; Reports only THIS file's pass/fail (seed claims already counted elsewhere).
-(fn check_file_seeded ((m Module) (th Theory) (src (List Int)) (ctors (List Symbol))) DriverResult
-  (match (process_src m th src ctors)
-    ((CheckState th2 p f) (DriverResult p f))))
-
-;; Seed a theory by processing a list of import sources in dependency order,
-;; threading the theory through all of them (each file's axioms + proven
-;; claims). Pass/fail counts are discarded — this exists only to admit the
-;; imports' theory entries so the target's (Lemma 'name) citations resolve.
-(fn seed_theory ((m Module) (srcs (List (List Int))) (ctors (List Symbol)) (th Theory)) Theory
-  (match srcs
-    (Nil th)
-    ((Cons src rest)
-      (match (process_src m th src ctors)
-        ((CheckState th2 p f) (seed_theory m rest ctors th2))))))
-
-;; Entry point: parse the claims out of `src` and check them all against `m`,
-;; starting from the empty theory. (No imports.)
-(fn check_file ((m Module) (src (List Int)) (ctors (List Symbol))) DriverResult
-  (check_file_seeded m TheoryEmpty src ctors))
-
-;; Entry point WITH imports: seed the theory from `imports` (dependency order,
-;; deps first), then check `src` against that seeded theory. The Rust harness
-;; supplies the target's transitive import closure as `imports`.
-(fn check_with_imports ((m Module) (imports (List (List Int))) (src (List Int)) (ctors (List Symbol))) DriverResult
-  (check_file_seeded m (seed_theory m imports ctors TheoryEmpty) src ctors))
 
 ;; ===========================================================================
 ;; Production entry: per-claim outcomes in source order. This is the loop the
@@ -190,17 +102,7 @@
       (match st
         ((RunState th pend acc)
           (match d
-            ((DAxiom a)
-              (match (unreflect_goal (axdecl_goal a))
-                (None (run_decls m (RunState th pend (Cons (COFail (axdecl_name a) "could not un-reflect axiom goal" Nil) acc)) rest target))
-                ((Some g)
-                  (run_decls m
-                    (RunState (TheoryCons (Axiom (axdecl_name a) (close_goal_for_storage g)) th)
-                              pend
-                              (Cons (COAxiom (axdecl_name a)) acc))
-                    rest target))))
-            ;; (axiom NAME (goal …)): proof-DSL axiom — parse goal to native,
-            ;; admit it without proof (same as DAxiom, no un-reflect).
+            ;; (axiom NAME (goal …)): parse goal to native, admit without proof.
             ((DNAxiom a)
               (match (parse_goal (nax_goal a) (module_ctors m) (module_type_names m))
                 (None (run_decls m (RunState th pend (Cons (COFail (nax_name a) "could not parse axiom goal (proof DSL)" Nil) acc)) rest target))
@@ -210,29 +112,9 @@
                               pend
                               (Cons (COAxiom (nax_name a)) acc))
                     rest target))))
-            ((DClaim c)
-              (match (unreflect_goal (claim_goal c))
-                (None (run_decls m (RunState th pend (Cons (COFail (claim_name c) "could not un-reflect goal" Nil) acc)) rest target))
-                ((Some g)
-                  (match (unreflect_proof (desugar_hyps m (goal_params g) Nil (claim_proof c)))
-                    (None (run_decls m (RunState th pend (Cons (COFail (claim_name c) "could not un-reflect proof" Nil) acc)) rest target))
-                    ((Some p)
-                      (if (check_sequent m th (lift_sequent g) p)
-                          (run_decls m
-                            (RunState (TheoryCons (Proven (claim_name c) (close_goal_for_storage g)) th)
-                                      pend
-                                      (Cons (COPass (claim_name c) (claim_trace m th g p (claim_name c) target)) acc))
-                            rest target)
-                          ;; FAILED: render the proof-spine diagnostic (in shard).
-                          (run_decls m
-                            (RunState th pend
-                                      (Cons (COFail (claim_name c)
-                                                    (failure_detail m th (lift_sequent g) p)
-                                                    (claim_trace m th g p (claim_name c) target)) acc))
-                            rest target)))))))
-            ;; (claim NAME (goal …) PROOF): the proof-DSL surface. Parse goal and
-            ;; proof STRAIGHT to native via proof_reader (no reflect/un-reflect),
-            ;; then resolve named hyps to positional with desugar_proof_named.
+            ;; (claim NAME (goal …) PROOF): parse goal and proof STRAIGHT to
+            ;; native via proof_reader, then resolve named hyps to positional
+            ;; with desugar_proof_named, and check.
             ((DNClaim nc)
               (match (parse_goal (nclaim_goal nc) (module_ctors m) (module_type_names m))
                 (None (run_decls m (RunState th pend (Cons (COFail (nclaim_name nc) "could not parse goal (proof DSL)" Nil) acc)) rest target))
@@ -254,51 +136,16 @@
                                                     (failure_detail m th (lift_sequent g) p)
                                                     (claim_trace m th g p (nclaim_name nc) target)) acc))
                             rest target)))))))))
-            ;; (requirement NAME GOAL): seed a pending obligation; no outcome.
-            ;; (requirement NAME GOAL): un-reflect the goal NOW (validating it),
-            ;; seed it as a pending obligation. A goal that elaborates but does
-            ;; not denote a well-formed Goal (e.g. an object list written as
-            ;; `(list ..)` rather than the explicit (Ctor 'Cons ..) datum) fails
-            ;; HERE — at the contract — instead of silently passing until some
-            ;; fulfillment tries to discharge it.
-            ((DReq r)
-              (match (unreflect_goal (req_goal r))
-                (None (run_decls m (RunState th pend (Cons (COFail (req_name r) "malformed requirement goal — could not un-reflect (object lists must be (Ctor 'Cons ..), not (list ..))" Nil) acc)) rest target))
-                ((Some g)
-                  (run_decls m (RunState th (Cons (PendReq (req_name r) g) pend) acc) rest target))))
-            ;; (requirement NAME (goal …)): proof-DSL requirement — parse the goal
-            ;; to native NOW (validating it at the contract), seed it as pending.
+            ;; (requirement NAME (goal …)): parse the goal to native NOW
+            ;; (validating it at the contract), seed it as a pending obligation.
             ((DNReq r)
               (match (parse_goal (nreq_goal r) (module_ctors m) (module_type_names m))
                 (None (run_decls m (RunState th pend (Cons (COFail (nreq_name r) "could not parse requirement goal (proof DSL)" Nil) acc)) rest target))
                 ((Some g)
                   (run_decls m (RunState th (Cons (PendReq (nreq_name r) g) pend) acc) rest target))))
-            ;; (fulfills NAME PROOF): look the goal up from the requirement and
-            ;; check PROOF against it — same machinery as a claim, but the goal
-            ;; comes from the contract (single source of truth), not inline. The
-            ;; goal was already un-reflected at seed time (DReq above).
-            ((DFul fu)
-              (match (lookup_req (ful_name fu) pend)
-                (None (run_decls m (RunState th pend (Cons (COFail (ful_name fu) "no requirement with this name in scope (is the contract imported?)" Nil) acc)) rest target))
-                ((Some g)
-                  (match (unreflect_proof (desugar_hyps m (goal_params g) Nil (ful_proof fu)))
-                    (None (run_decls m (RunState th pend (Cons (COFail (ful_name fu) "could not un-reflect proof" Nil) acc)) rest target))
-                    ((Some p)
-                      (if (check_sequent m th (lift_sequent g) p)
-                          (run_decls m
-                            (RunState (TheoryCons (Proven (ful_name fu) (close_goal_for_storage g)) th)
-                                      pend
-                                      (Cons (COPass (ful_name fu) (claim_trace m th g p (ful_name fu) target)) acc))
-                            rest target)
-                          (run_decls m
-                            (RunState th pend
-                                      (Cons (COFail (ful_name fu)
-                                                    (failure_detail m th (lift_sequent g) p)
-                                                    (claim_trace m th g p (ful_name fu) target)) acc))
-                                rest target)))))))
-            ;; (fulfills NAME <proof-dsl>): proof-DSL fulfillment — look up the
-            ;; (native) goal from the requirement, parse the proof to native,
-            ;; resolve named hyps (desugar_proof_named), check it.
+            ;; (fulfills NAME PROOF): look the goal up from the requirement (the
+            ;; single source of truth — never restated here), parse the proof to
+            ;; native, resolve named hyps (desugar_proof_named), check it.
             ((DNFul fu)
               (match (lookup_req (nful_name fu) pend)
                 (None (run_decls m (RunState th pend (Cons (COFail (nful_name fu) "no requirement with this name in scope (is the contract imported?)" Nil) acc)) rest target))

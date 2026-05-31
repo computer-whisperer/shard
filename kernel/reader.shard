@@ -735,117 +735,20 @@
                         (append_sym (typedef_ctors (module_typedefs m)) ctors)))))))
 
 ;; ===========================================================================
-;; Claim collection: pull every (claim NAME GOAL PROOF) form out of a file as
-;; raw goal/proof construction Exprs — the same data load.rs builds, PRE the
-;; named-hyp desugar / goal-eval the driver applies downstream. This is the
-;; parsing the self-hosted checker driver needs that parse_module skips.
+;; Decl head detectors: classify a top-level form by its head symbol. The
+;; bodies are parsed straight to native by the driver (proof_reader); these
+;; only pick which decl kind a form is.
 ;; ===========================================================================
-
-(type Claim (Claim Symbol Expr Expr))      ; name, goal-expr, proof-expr
 
 (fn is_claim_form ((f SExpr)) Bool
   (match f
     ((SList (Cons (SSym h) _)) (sym_eq h (quote claim)))
     (_ False)))
 
-;; (claim NAME GOAL PROOF) → Claim. None on a malformed shape.
-(fn claim_of_form ((f SExpr) (ctors (List Symbol))) (Option Claim)
-  (match f
-    ((SList (Cons _ (Cons (SSym name) (Cons goalS (Cons proofS Nil)))))
-      (match (elaborate goalS ctors Nil)
-        (None None)
-        ((Some g)
-          (match (elaborate proofS ctors Nil)
-            (None None)
-            ((Some p) (Some (Claim name g p)))))))
-    (_ None)))
-
-(fn collect_claims ((forms (List SExpr)) (ctors (List Symbol))) (Option (List Claim))
-  (match forms
-    (Nil (Some Nil))
-    ((Cons f rest)
-      (if (is_claim_form f)
-          (match (claim_of_form f ctors)
-            (None None)
-            ((Some c)
-              (match (collect_claims rest ctors)
-                (None None)
-                ((Some cs) (Some (Cons c cs))))))
-          (collect_claims rest ctors)))))
-
-(fn parse_claims ((src (List Int)) (ctors (List Symbol))) (Option (List Claim))
-  (match (read_all src)
-    (None None)
-    ((Some forms) (collect_claims forms ctors))))
-
-;; --- Claim accessors (the driver's iteration API; also the differential probe) ---
-(fn claim_goal  ((c Claim)) Expr (match c ((Claim n g p) g)))
-(fn claim_proof ((c Claim)) Expr (match c ((Claim n g p) p)))
-
-(fn goals_of  ((cs (List Claim))) (List Expr)
-  (match cs (Nil Nil) ((Cons c rest) (Cons (claim_goal  c) (goals_of  rest)))))
-(fn proofs_of ((cs (List Claim))) (List Expr)
-  (match cs (Nil Nil) ((Cons c rest) (Cons (claim_proof c) (proofs_of rest)))))
-
-(fn claims_goals  ((co (Option (List Claim)))) (List Expr)
-  (match co (None Nil) ((Some cs) (goals_of  cs))))
-(fn claims_proofs ((co (Option (List Claim)))) (List Expr)
-  (match co (None Nil) ((Some cs) (proofs_of cs))))
-
-;; ===========================================================================
-;; Axiom collection: pull every (axiom NAME GOAL) form out of a file. Axioms
-;; are admitted into the theory WITHOUT a proof — they carry only a name and a
-;; goal (no proof Expr). The driver seeds these before a file's claims so that
-;; claims citing an axiom resolve, mirroring the native loader's Pass C.
-;; ===========================================================================
-
-(type AxDecl (AxDecl Symbol Expr))         ; name, goal-expr
-
 (fn is_axiom_form ((f SExpr)) Bool
   (match f
     ((SList (Cons (SSym h) _)) (sym_eq h (quote axiom)))
     (_ False)))
-
-;; (axiom NAME GOAL) → AxDecl. None on a malformed shape.
-(fn axiom_of_form ((f SExpr) (ctors (List Symbol))) (Option AxDecl)
-  (match f
-    ((SList (Cons _ (Cons (SSym name) (Cons goalS Nil))))
-      (match (elaborate goalS ctors Nil)
-        (None None)
-        ((Some g) (Some (AxDecl name g)))))
-    (_ None)))
-
-(fn collect_axioms ((forms (List SExpr)) (ctors (List Symbol))) (Option (List AxDecl))
-  (match forms
-    (Nil (Some Nil))
-    ((Cons f rest)
-      (if (is_axiom_form f)
-          (match (axiom_of_form f ctors)
-            (None None)
-            ((Some a)
-              (match (collect_axioms rest ctors)
-                (None None)
-                ((Some as) (Some (Cons a as))))))
-          (collect_axioms rest ctors)))))
-
-(fn parse_axioms ((src (List Int)) (ctors (List Symbol))) (Option (List AxDecl))
-  (match (read_all src)
-    (None None)
-    ((Some forms) (collect_axioms forms ctors))))
-
-(fn axdecl_name ((a AxDecl)) Symbol (match a ((AxDecl n g) n)))
-(fn axdecl_goal ((a AxDecl)) Expr   (match a ((AxDecl n g) g)))
-
-;; ---- requirement / fulfills: the contract↔implementation edge ---------------
-;; A (requirement NAME GOAL) states a named proof obligation in a contract,
-;; WITHOUT a proof (and unlike axiom, NOT admitted — it is a pending goal). A
-;; (fulfills NAME PROOF) elsewhere discharges it: the driver looks up NAME's
-;; goal from the requirement and checks PROOF against THAT goal — the goal is
-;; never restated, so the contract is the single source of truth. Both are
-;; 3-item forms (head + name + one expr), distinguished by head symbol.
-
-(type Req (Req Symbol Expr))               ; name, goal-expr   (a requirement)
-(type Ful (Ful Symbol Expr))               ; name, proof-expr  (a fulfillment)
 
 (fn is_requirement_form ((f SExpr)) Bool
   (match f
@@ -856,29 +759,6 @@
   (match f
     ((SList (Cons (SSym h) _)) (sym_eq h (quote fulfills)))
     (_ False)))
-
-;; (requirement NAME GOAL) → Req. None on a malformed shape.
-(fn req_of_form ((f SExpr) (ctors (List Symbol))) (Option Req)
-  (match f
-    ((SList (Cons _ (Cons (SSym name) (Cons goalS Nil))))
-      (match (elaborate goalS ctors Nil)
-        (None None)
-        ((Some g) (Some (Req name g)))))
-    (_ None)))
-
-;; (fulfills NAME PROOF) → Ful. None on a malformed shape.
-(fn ful_of_form ((f SExpr) (ctors (List Symbol))) (Option Ful)
-  (match f
-    ((SList (Cons _ (Cons (SSym name) (Cons proofS Nil))))
-      (match (elaborate proofS ctors Nil)
-        (None None)
-        ((Some p) (Some (Ful name p)))))
-    (_ None)))
-
-(fn req_name ((r Req)) Symbol (match r ((Req n g) n)))
-(fn req_goal ((r Req)) Expr   (match r ((Req n g) g)))
-(fn ful_name ((f Ful)) Symbol (match f ((Ful n p) n)))
-(fn ful_proof ((f Ful)) Expr  (match f ((Ful n p) p)))
 
 ;; ===========================================================================
 ;; Unified declaration stream: claims and axioms in SOURCE ORDER. The
@@ -900,17 +780,6 @@
 (fn nclaim_goal  ((c NClaim)) SExpr  (match c ((NClaim n g p) g)))
 (fn nclaim_proof ((c NClaim)) SExpr  (match c ((NClaim n g p) p)))
 
-;; The goal s-expr's head symbol, for a well-shaped (claim NAME GOAL PROOF).
-(fn claim_goal_head ((f SExpr)) (Option Symbol)
-  (match f
-    ((SList (Cons _ (Cons (SSym name) (Cons goalS (Cons proofS Nil)))))
-      (match goalS ((SList (Cons (SSym gh) _)) (Some gh)) (_ None)))
-    (_ None)))
-
-;; A claim is native (proof DSL) iff its goal head is the lowercase `goal`.
-(fn is_native_claim ((f SExpr)) Bool
-  (match (claim_goal_head f) ((Some gh) (sym_eq gh (quote goal))) (_ False)))
-
 ;; (claim NAME GOAL PROOF) → NClaim, keeping GOAL/PROOF as raw s-exprs.
 (fn nclaim_of_form ((f SExpr)) (Option NClaim)
   (match f
@@ -919,17 +788,6 @@
     (_ None)))
 
 ;; ---- native axiom / requirement (goal-only decls) -------------------------
-;; (axiom NAME GOAL) / (requirement NAME GOAL): native iff GOAL head is `goal`.
-;; The 2nd element (index 1 after head) is the goal in both.
-(fn goalonly_goal_head ((f SExpr)) (Option Symbol)
-  (match f
-    ((SList (Cons _ (Cons (SSym name) (Cons goalS Nil))))
-      (match goalS ((SList (Cons (SSym gh) _)) (Some gh)) (_ None)))
-    (_ None)))
-
-(fn is_native_goalonly ((f SExpr)) Bool
-  (match (goalonly_goal_head f) ((Some gh) (sym_eq gh (quote goal))) (_ False)))
-
 (type NAx (NAx Symbol SExpr))              ; native axiom: name, goal-sexpr
 (fn nax_name ((a NAx)) Symbol (match a ((NAx n g) n)))
 (fn nax_goal ((a NAx)) SExpr  (match a ((NAx n g) g)))
@@ -945,32 +803,9 @@
     (_ None)))
 
 ;; ---- native fulfills (proof-only decl) ------------------------------------
-;; (fulfills NAME PROOF) has no goal to dispatch on; it's native iff the PROOF
-;; is written in the proof DSL — i.e. its head is a proof-DSL keyword.
-(fn proof_head_sym ((s SExpr)) (Option Symbol)
-  (match s
-    ((SSym n) (Some n))
-    ((SList (Cons (SSym h) _)) (Some h))
-    (_ None)))
-
-(fn native_proof_keywords () (List Symbol)
-  (list (quote refl) (quote steps) (quote induct) (quote induct2)
-        (quote case-on) (quote wf-induct) (quote rewrite-with)
-        (quote absurd) (quote by)))
-
-(fn is_native_proof ((s SExpr)) Bool
-  (match (proof_head_sym s)
-    ((Some h) (sym_mem h (native_proof_keywords)))
-    (_ False)))
-
 (type NFul (NFul Symbol SExpr))            ; native fulfills: name, proof-sexpr
 (fn nful_name  ((fu NFul)) Symbol (match fu ((NFul n p) n)))
 (fn nful_proof ((fu NFul)) SExpr  (match fu ((NFul n p) p)))
-
-(fn is_native_fulfills ((f SExpr)) Bool
-  (match f
-    ((SList (Cons _ (Cons (SSym name) (Cons proofS Nil)))) (is_native_proof proofS))
-    (_ False)))
 
 (fn nful_of_form ((f SExpr)) (Option NFul)
   (match f
@@ -978,13 +813,9 @@
     (_ None)))
 
 (type Decl
-  (DClaim Claim)
   (DNClaim NClaim)
-  (DAxiom AxDecl)
   (DNAxiom NAx)
-  (DReq Req)
   (DNReq NReq)
-  (DFul Ful)
   (DNFul NFul))
 
 (fn collect_decls ((forms (List SExpr)) (ctors (List Symbol))) (Option (List Decl))
@@ -992,61 +823,33 @@
     (Nil (Some Nil))
     ((Cons f rest)
       (if (is_claim_form f)
-          (if (is_native_claim f)
-              (match (nclaim_of_form f)
+          (match (nclaim_of_form f)
+            (None None)
+            ((Some c)
+              (match (collect_decls rest ctors)
                 (None None)
-                ((Some c)
-                  (match (collect_decls rest ctors)
-                    (None None)
-                    ((Some ds) (Some (Cons (DNClaim c) ds))))))
-              (match (claim_of_form f ctors)
-                (None None)
-                ((Some c)
-                  (match (collect_decls rest ctors)
-                    (None None)
-                    ((Some ds) (Some (Cons (DClaim c) ds)))))))
+                ((Some ds) (Some (Cons (DNClaim c) ds))))))
       (if (is_axiom_form f)
-          (if (is_native_goalonly f)
-              (match (goalonly_of_form f)
+          (match (goalonly_of_form f)
+            (None None)
+            ((Some (Pair name goalS))
+              (match (collect_decls rest ctors)
                 (None None)
-                ((Some (Pair name goalS))
-                  (match (collect_decls rest ctors)
-                    (None None)
-                    ((Some ds) (Some (Cons (DNAxiom (NAx name goalS)) ds))))))
-              (match (axiom_of_form f ctors)
-                (None None)
-                ((Some a)
-                  (match (collect_decls rest ctors)
-                    (None None)
-                    ((Some ds) (Some (Cons (DAxiom a) ds)))))))
+                ((Some ds) (Some (Cons (DNAxiom (NAx name goalS)) ds))))))
       (if (is_requirement_form f)
-          (if (is_native_goalonly f)
-              (match (goalonly_of_form f)
+          (match (goalonly_of_form f)
+            (None None)
+            ((Some (Pair name goalS))
+              (match (collect_decls rest ctors)
                 (None None)
-                ((Some (Pair name goalS))
-                  (match (collect_decls rest ctors)
-                    (None None)
-                    ((Some ds) (Some (Cons (DNReq (NReq name goalS)) ds))))))
-              (match (req_of_form f ctors)
-                (None None)
-                ((Some r)
-                  (match (collect_decls rest ctors)
-                    (None None)
-                    ((Some ds) (Some (Cons (DReq r) ds)))))))
+                ((Some ds) (Some (Cons (DNReq (NReq name goalS)) ds))))))
       (if (is_fulfills_form f)
-          (if (is_native_fulfills f)
-              (match (nful_of_form f)
+          (match (nful_of_form f)
+            (None None)
+            ((Some fu)
+              (match (collect_decls rest ctors)
                 (None None)
-                ((Some fu)
-                  (match (collect_decls rest ctors)
-                    (None None)
-                    ((Some ds) (Some (Cons (DNFul fu) ds))))))
-              (match (ful_of_form f ctors)
-                (None None)
-                ((Some fu)
-                  (match (collect_decls rest ctors)
-                    (None None)
-                    ((Some ds) (Some (Cons (DFul fu) ds)))))))
+                ((Some ds) (Some (Cons (DNFul fu) ds))))))
           (collect_decls rest ctors))))))))
 
 (fn parse_decls ((src (List Int)) (ctors (List Symbol))) (Option (List Decl))
