@@ -4,20 +4,20 @@
 ;;; World file-I/O externs. Promoted from the bootstrap scaffolding
 ;;; `examples/io/eval_app.shard` once the shard runtime was solid.
 ;;;
-;;; The pure pipeline `eval_run` (parse_module → parse_expr → compute_expr →
+;;; The pure pipeline `eval_run` (parse_module → parse_expr → run_expr →
 ;;; show_expr) reads args[0] = target module file, args[1] = expression.
 ;;;   eval <module.shard> <expr>
 
 ;; The entrypoint declares the closure it needs to run; the `eval` executor
 ;; resolves these and loads them (deps first, this file last) — no hardcoded
-;; file list on the Rust side. eval's true direct deps are reduce (compute_expr)
+;; file list on the Rust side. eval's true direct deps are reduce (run_expr)
 ;; and reader (parse_*); the rest are their transitive deps, listed flat here
 ;; only because the kernel files don't yet declare their own imports (kernel-as-
 ;; a-module is deferred). When they do, this collapses to reduce + reader.
 (import "loader.shard")   ; World + I/O externs + resolve_closure + append_int
 (import "term.shard")     ; Expr / Pat / Arm + open_many / subst
 (import "module.shard")   ; Module / FnDef / Type + lookups
-(import "reduce.shard")   ; compute_expr — the reducer
+(import "reduce.shard")   ; run_expr — the ground-execution reducer
 (import "reader.shard")   ; parse_module / parse_expr
 
 ;; ---- rendering: Expr → surface bytes --------------------------------------
@@ -78,12 +78,12 @@
       (match (parse_expr expr_src (module_all_ctors m))
         (None "error: could not parse expression\n")
         ((Some e)
-          (append_int (show_expr (compute_expr m e)) (Cons 10 Nil)))))))
+          (append_int (show_expr (run_expr m e)) (Cons 10 Nil)))))))
 
 ;; ===========================================================================
 ;; THE APP RUNNER — eval.shard actually RUNS a shard app (performs its effects).
 ;;
-;; `compute_expr` reduces the app's `(main world0)` to a normal form: an
+;; `run_expr` reduces the app's `(main world0)` to a normal form: an
 ;; effect-TREE of stuck extern Calls, held as Expr DATA (one meta-level up from
 ;; eval.shard's own values). This driver is the shard port of eval.rs's run
 ;; loop + handler: find the frontier extern (the innermost stuck extern Call,
@@ -134,46 +134,137 @@
   (if (sym_eq name (quote exit))       True
       False))))))
 
-;; -- find the frontier extern: the innermost stuck extern Call (post-order,
-;; so a Call's args — where the threaded World and any data dependencies live —
-;; are searched before the Call itself). Exactly one is ready at a time because
-;; the World threads linearly.
-(fn find_frontier ((e Expr)) (Option Expr)
-  (match e
-    ((Call name args)
-      (match (find_frontier_list args)
-        ((Some f) (Some f))
-        (None     (if (is_extern name) (Some e) None))))
-    ((Ctor _ args)  (find_frontier_list args))
-    ((Match s _)    (find_frontier s))
-    ((If c _ _)     (find_frontier c))
-    ((Let _ body)   (find_frontier body))
-    (_ None)))
+;; ===========================================================================
+;; THE ENV-MACHINE — `ev` runs a CLOSED, TOTAL shard app by call-by-value
+;; reduction against a de Bruijn ENVIRONMENT, performing extern effects INLINE.
+;;
+;; This is the shard port of eval.rs's `eval_env` (the narrow host's own
+;; evaluator), and exists for the same reason eval.rs gives: a SUBSTITUTION
+;; reducer (reduce.shard's `step`/`open_many`) deep-copies the body and every
+;; captured value on each call, so running the whole self-hosted checker
+;; through it is O(n²)+ in time and space. An environment machine looks up a
+;; BVar in O(1) and never copies a captured value — and because the host
+;; represents shard values with Rc, that sharing is inherited for free.
+;;
+;; Unlike the old reduce-to-NF + find_frontier + replace_expr loop (which
+;; re-reduced the WHOLE program tree once per effect), `ev` threads the real
+;; World and performs each extern the instant its args are values, exactly
+;; where eval.rs dispatches via its effect handler. So there is no effect-tree,
+;; no frontier search, no whole-tree replacement, and no re-reduction.
+;;
+;; SCOPE: closed, total programs (which is precisely what `run` executes —
+;; check.shard, eval apps, …). Every `If` condition reduces to a Bool and every
+;; `Match` scrutinee to a constructor; the only irreducible calls are externs,
+;; performed here. A genuinely stuck `If`/`Match` (open/symbolic input) would
+;; leave an unclosed residual — that path is the symbolic reducer's job
+;; (`run_expr`/`step`), not this one. CBV is sound for these apps: the native
+;; host ran the same programs CBV, so `ev` reproduces those results.
+;; ===========================================================================
 
-(fn find_frontier_list ((es (List Expr))) (Option Expr)
-  (match es
+;; Two-valued matcher over a VALUE (a fully-reduced Expr). No MStuck: the
+;; scrutinee is already a value, so every position is decided. Bindings are
+;; collected innermost-first (rightmost PVar = BVar 0), matching match_pat.
+(fn match_val ((p Pat) (v Expr) (acc (List Expr))) (Option (List Expr))
+  (match p
+    ((PVar)          (Some (Cons v acc)))
+    ((PInt n)        (match v ((IntLit m) (if (int_eq n m) (Some acc) None)) (_ None)))
+    ((PSym s)        (match v ((SymLit t) (if (sym_eq s t) (Some acc) None)) (_ None)))
+    ((PCtor pc pats) (match v ((Ctor vc vargs)
+                                (if (sym_eq pc vc) (match_vals pats vargs acc) None))
+                              (_ None)))))
+
+(fn match_vals ((ps (List Pat)) (vs (List Expr)) (acc (List Expr))) (Option (List Expr))
+  (match ps
+    (Nil (match vs (Nil (Some acc)) (_ None)))
+    ((Cons p pr)
+      (match vs
+        (Nil None)
+        ((Cons v vr)
+          (match (match_val p v acc)
+            (None         None)
+            ((Some acc2)  (match_vals pr vr acc2))))))))
+
+;; Fire the first arm whose pattern matches value `v`; return its body + the
+;; captured bindings (innermost-first). None ⇒ no arm matched (non-exhaustive).
+(fn fire_arm ((arms (List Arm)) (v Expr)) (Option (Pair Expr (List Expr)))
+  (match arms
     (Nil None)
-    ((Cons h t)
-      (match (find_frontier h)
-        ((Some f) (Some f))
-        (None     (find_frontier_list t))))))
+    ((Cons (Arm p body) rest)
+      (match (match_val p v Nil)
+        ((Some binds) (Some (Pair body binds)))
+        (None         (fire_arm rest v))))))
 
-;; -- structurally replace the (unique) frontier Call with its performed result.
-(fn replace_expr ((e Expr) (tgt Expr) (rep Expr)) Expr
-  (if (expr_eq e tgt)
-      rep
-      (match e
-        ((Call n args)  (Call n (replace_list args tgt rep)))
-        ((Ctor n args)  (Ctor n (replace_list args tgt rep)))
-        ((Match s arms) (Match (replace_expr s tgt rep) arms))
-        ((If c t el)    (If (replace_expr c tgt rep) (replace_expr t tgt rep) (replace_expr el tgt rep)))
-        ((Let bs body)  (Let bs (replace_expr body tgt rep)))
-        (_ e))))
+;; Environment lookup: BVar k → env[k]. A correct closed evaluation always
+;; finds it; the BVar fallback only guards against an impossible miss.
+(fn env_get ((env (List Expr)) (k Int)) Expr
+  (match (nth_opt env k) ((Some v) v) (None (BVar k))))
 
-(fn replace_list ((es (List Expr)) (tgt Expr) (rep Expr)) (List Expr)
+(fn append_exprs ((xs (List Expr)) (ys (List Expr))) (List Expr)
+  (match xs (Nil ys) ((Cons h t) (Cons h (append_exprs t ys)))))
+
+;; ev: evaluate `e` (whose free BVars index into `env`) to a value, threading
+;; the World `w` through inline effects. Returns (value, advanced World).
+(fn ev ((m Module) (env (List Expr)) (e Expr) (app_args (List (List Int))) (w World)) (Pair Expr World)
+  (match e
+    ((IntLit _) (Pair e w))
+    ((SymLit _) (Pair e w))
+    ((FVar _)   (Pair e w))
+    ((BVar k)   (Pair (env_get env k) w))
+    ((Ctor c args)
+      (match (ev_list m env args app_args w)
+        ((Pair vs w1) (Pair (Ctor c vs) w1))))
+    ((Let bs body)
+      (match (ev_list m env bs app_args w)              ; parallel let: RHSs in outer env
+        ((Pair vs w1)
+          (ev m (append_exprs (reverse_exprs vs) env) body app_args w1))))  ; last RHS = BVar 0
+    ((If c t el)
+      (match (ev m env c app_args w)
+        ((Pair cv w1)
+          (match cv
+            ((Ctor (quote True)  Nil) (ev m env t  app_args w1))
+            ((Ctor (quote False) Nil) (ev m env el app_args w1))
+            (_ (Pair (If cv t el) w1))))))               ; stuck cond — out of scope (see header)
+    ((Match s arms)
+      (match (ev m env s app_args w)
+        ((Pair sv w1)
+          (match (fire_arm arms sv)
+            ((Some (Pair body binds)) (ev m (append_exprs binds env) body app_args w1))
+            (None (Pair (Match sv arms) w1))))))         ; stuck scrut — out of scope (see header)
+    ((Call f args)
+      (match (ev_list m env args app_args w)
+        ((Pair vs w1) (ev_call m f vs app_args w1))))))
+
+;; Evaluate a list of args left-to-right, threading the World (so nested
+;; effects sequence in source order — the linear World forces it anyway).
+(fn ev_list ((m Module) (env (List Expr)) (es (List Expr)) (app_args (List (List Int))) (w World)) (Pair (List Expr) World)
   (match es
-    (Nil Nil)
-    ((Cons h t) (Cons (replace_expr h tgt rep) (replace_list t tgt rep)))))
+    (Nil (Pair Nil w))
+    ((Cons h t)
+      (match (ev m env h app_args w)
+        ((Pair v w1)
+          (match (ev_list m env t app_args w1)
+            ((Pair vs w2) (Pair (Cons v vs) w2))))))))
+
+;; Apply a head `f` to already-evaluated value args `vs`:
+;;   user fn  → tail-recurse into its body in a fresh env of the reversed args
+;;   primitive→ dispatch on the value args (reuses the reducer's prim table)
+;;   extern   → perform the effect inline (threads the World)
+;;   else     → leave the call stuck (unknown head; not expected for a real app)
+(fn ev_call ((m Module) (f Symbol) (vs (List Expr)) (app_args (List (List Int))) (w World)) (Pair Expr World)
+  (match m
+    ((Module _ fns _)
+      (match (lookup_fn f fns)
+        ((Some (FnDef _ ptypes _ body))
+          (if (int_eq (len vs) (len_t ptypes))
+              (ev m (reverse_exprs vs) body app_args w)   ; env[0] = BVar 0 = LAST param
+              (Pair (Call f vs) w)))
+        (None
+          (match (try_step_prim f vs)
+            ((Some r) (Pair r w))
+            (None
+              (if (is_extern f)
+                  (perform_frontier (Call f vs) app_args w)
+                  (Pair (Call f vs) w)))))))))
 
 ;; -- perform one frontier extern. Threads eval.shard's REAL World; returns the
 ;; app-facing result (Expr-encoded) paired with the advanced World. `app_args`
@@ -226,17 +317,15 @@
       (match (exit code w) ((World c) (Pair (encode_world (World c)) (World c)))))
     (_ (match (exit 0 w) ((World c) (Pair (encode_world (World c)) (World c)))))))
 
-;; -- the drive loop: reduce to NF, perform the frontier effect, repeat.
+;; -- run an app: evaluate `expr` (its `(main world0)`) with the env-machine,
+;; which performs every effect inline and threads the real World. The app exits
+;; via its own `exit` extern (a real process exit), so this normally never
+;; returns there; if `main` instead yields a World, that final World is the
+;; result. `expr`'s only free variables are its `(main …)`'s — none — so the
+;; initial env is empty.
 (fn run_app ((m Module) (expr Expr) (app_args (List (List Int))) (w World)) World
-  (run_app_nf m (compute_expr m expr) app_args w))
-
-(fn run_app_nf ((m Module) (nf Expr) (app_args (List (List Int))) (w World)) World
-  (match (find_frontier nf)
-    (None w)                                      ; no effect left — app done
-    ((Some call)
-      (match (perform_frontier call app_args w)
-        ((Pair result w1)
-          (run_app m (replace_expr nf call result) app_args w1))))))
+  (match (ev m Nil expr app_args w)
+    ((Pair _ wf) wf)))
 
 ;; ---- the World wrapper -----------------------------------------------------
 ;;   eval <module.shard> <expr>      — evaluate an expression against a module

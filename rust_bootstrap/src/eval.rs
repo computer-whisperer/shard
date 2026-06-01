@@ -96,53 +96,93 @@ pub fn eval(m: &Module, e: &Expr) -> Result<Expr, EvalError> {
     Ok(val_to_expr(&v))
 }
 
-fn eval_env(m: &Module, env: &[Val], e: &Expr) -> Result<Val, EvalError> {
-    match e {
-        Expr::IntLit(n) => Ok(Val::Int(*n)),
-        Expr::SymLit(s) => Ok(Val::Sym(Rc::from(s.as_str()))),
-        Expr::FVar(s) => Ok(Val::FVar(Rc::from(s.as_str()))),
+// Tail-call optimized: the iteration of a tail-recursive shard fn (e.g. the
+// app reducer's `compute_expr` loop, or any direct-style loop) reduces to a
+// `continue` here, NOT a Rust recursive call. Without this, a long shard
+// reduction chain keeps one Rust stack frame per step alive — and each frame
+// pins its `env`, so every intermediate term stays reachable → O(steps) stack
+// AND heap. Sub-evaluations that are NOT in tail position (a Call's args, an
+// If condition, a Match scrutinee, a Let's RHSs) still recurse, bounded by
+// term depth. The four tail positions — user-fn body, taken If branch, fired
+// Match arm, Let body — loop instead, freeing the prior frame (and its env, so
+// the old term is dropped) before the next step.
+fn eval_env<'a>(m: &'a Module, env0: &[Val], e0: &'a Expr) -> Result<Val, EvalError> {
+    let mut env: Vec<Val> = env0.to_vec();
+    let mut e: &'a Expr = e0;
+    loop {
+        match e {
+            Expr::IntLit(n) => return Ok(Val::Int(*n)),
+            Expr::SymLit(s) => return Ok(Val::Sym(Rc::from(s.as_str()))),
+            Expr::FVar(s) => return Ok(Val::FVar(Rc::from(s.as_str()))),
 
-        // A bound variable indexes into the environment (innermost-first).
-        Expr::BVar(k) => env
-            .get(*k as usize)
-            .cloned()
-            .ok_or(EvalError::UnboundBVar(*k)),
+            // A bound variable indexes into the environment (innermost-first).
+            Expr::BVar(k) => {
+                return env
+                    .get(*k as usize)
+                    .cloned()
+                    .ok_or(EvalError::UnboundBVar(*k))
+            }
 
-        Expr::Ctor(name, args) => {
-            let vals = eval_args(m, env, args)?;
-            Ok(Val::Ctor(Rc::from(name.as_str()), vals.into()))
-        }
+            Expr::Ctor(name, args) => {
+                let vals = eval_args(m, &env, args)?;
+                return Ok(Val::Ctor(Rc::from(name.as_str()), vals.into()));
+            }
 
-        Expr::Call(name, args) => {
-            let vals = eval_args(m, env, args)?;
-            apply_call(m, name, vals)
-        }
+            Expr::Call(name, args) => {
+                let vals = eval_args(m, &env, args)?;
+                // User-defined fn? TAIL-LOOP into its body in a fresh env of the
+                // (reversed) argument values — the body is closed but for its
+                // params. Primitives / externs are leaf operations: return.
+                if let Some(fd) = m.lookup_fn(name) {
+                    if fd.params.len() != vals.len() {
+                        return Err(EvalError::ArityMismatch {
+                            name: name.clone(),
+                            expected: fd.params.len(),
+                            got: vals.len(),
+                        });
+                    }
+                    let mut next = vals;
+                    next.reverse(); // env[0] = BVar 0 = LAST parameter
+                    env = next;
+                    e = &fd.body;
+                    continue;
+                }
+                return apply_builtin(name, vals);
+            }
 
-        Expr::If(c, t, e2) => match eval_env(m, env, c)? {
-            Val::Ctor(ref n, ref a) if a.is_empty() && &**n == "True" => eval_env(m, env, t),
-            Val::Ctor(ref n, ref a) if a.is_empty() && &**n == "False" => eval_env(m, env, e2),
-            other => Err(EvalError::IfNonBool(format!("{:?}", val_to_expr(&other)))),
-        },
+            Expr::If(c, t, el) => match eval_env(m, &env, c)? {
+                Val::Ctor(ref n, ref a) if a.is_empty() && &**n == "True" => e = t,
+                Val::Ctor(ref n, ref a) if a.is_empty() && &**n == "False" => e = el,
+                other => return Err(EvalError::IfNonBool(format!("{:?}", val_to_expr(&other)))),
+            },
 
-        Expr::Match(scrut, arms) => {
-            let v = eval_env(m, env, scrut)?;
-            for arm in arms {
-                let mut binds: Vec<Val> = Vec::new();
-                if match_pat(&arm.pat, &v, &mut binds) {
-                    // env' = bindings (innermost-first) ++ outer env.
-                    binds.extend_from_slice(env);
-                    return eval_env(m, &binds, &arm.body);
+            Expr::Match(scrut, arms) => {
+                let v = eval_env(m, &env, scrut)?;
+                let mut next: Option<&'a Expr> = None;
+                for arm in arms {
+                    let mut binds: Vec<Val> = Vec::new();
+                    if match_pat(&arm.pat, &v, &mut binds) {
+                        // env' = bindings (innermost-first) ++ outer env.
+                        binds.extend_from_slice(&env);
+                        env = binds;
+                        next = Some(&arm.body);
+                        break;
+                    }
+                }
+                match next {
+                    Some(body) => e = body,
+                    None => return Err(EvalError::NoMatchArm(format!("{:?}", val_to_expr(&v)))),
                 }
             }
-            Err(EvalError::NoMatchArm(format!("{:?}", val_to_expr(&v))))
-        }
 
-        Expr::Let(rhss, body) => {
-            // Parallel let: RHSs evaluated in the outer scope.
-            let mut vals = eval_args(m, env, rhss)?;
-            vals.reverse(); // innermost-first: last binding becomes BVar 0
-            vals.extend_from_slice(env);
-            eval_env(m, &vals, body)
+            Expr::Let(rhss, body) => {
+                // Parallel let: RHSs evaluated in the outer scope.
+                let mut vals = eval_args(m, &env, rhss)?;
+                vals.reverse(); // innermost-first: last binding becomes BVar 0
+                vals.extend_from_slice(&env);
+                env = vals;
+                e = body;
+            }
         }
     }
 }
@@ -151,20 +191,11 @@ fn eval_args(m: &Module, env: &[Val], args: &[Expr]) -> Result<Vec<Val>, EvalErr
     args.iter().map(|a| eval_env(m, env, a)).collect()
 }
 
-fn apply_call(m: &Module, name: &str, mut args: Vec<Val>) -> Result<Val, EvalError> {
-    // User-defined fn? Evaluate its body in a fresh environment of the
-    // (reversed) arguments — the body is closed except for its params.
-    if let Some(fd) = m.lookup_fn(name) {
-        if fd.params.len() != args.len() {
-            return Err(EvalError::ArityMismatch {
-                name: name.into(),
-                expected: fd.params.len(),
-                got: args.len(),
-            });
-        }
-        args.reverse(); // env[0] = BVar 0 = LAST parameter
-        return eval_env(m, &args, &fd.body);
-    }
+// A Call whose head is NOT a user fn: a primitive, an effectful extern, or an
+// unknown. Leaf operation (no tail position), so the eval loop returns its
+// result directly. The user-fn case is handled inline in `eval_env` so it can
+// tail-loop into the body.
+fn apply_builtin(name: &str, args: Vec<Val>) -> Result<Val, EvalError> {
     // Primitive: cross to the `Expr`-typed primitive table at the
     // boundary (primitive arguments are small — ints, syms, or the
     // occasional char list, all O(arg)).
