@@ -1,4 +1,7 @@
-# proving-bootstrap-v2
+# Shard
+<p align="center">
+  <img src="assets/shard.png" alt="shard" width="128" height="128">
+</p>
 
 A new way to build software, in which **requirements — formal and
 informal — cascade through layers of proven refinement into a running
