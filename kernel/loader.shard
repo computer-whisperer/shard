@@ -43,6 +43,17 @@
 (fn dir_of ((p (List Int))) (List Int)
   (rev_i (drop_to_slash (rev_i p Nil)) Nil))
 
+;; the LAST path component (basename): the suffix after the last '/', or the
+;; whole path if none. Used in RUN mode to find a module's impl file
+;; `<name>/<name>.shard` (e.g. bare import "list" → "list/list.shard").
+(fn take_to_slash ((rp (List Int))) (List Int)   ; rp reversed; take until (excl) last '/'
+  (match rp
+    (Nil Nil)
+    ((Cons c t) (if (int_eq c 47) Nil (Cons c (take_to_slash t))))))
+
+(fn base_of ((p (List Int))) (List Int)
+  (rev_i (take_to_slash (rev_i p Nil)) Nil))
+
 (fn int_list_eq ((a (List Int)) (b (List Int))) Bool
   (match a
     (Nil (match b (Nil True) (_ False)))
@@ -86,26 +97,41 @@
 ;; "/mod.req.shard" — appended to a bare module name to reach its interface.
 (fn mod_req_suffix () (List Int) "/mod.req.shard")
 
+;; A module's IMPL file `<dir><rel>/<base>.shard` (e.g. "std/list" →
+;; "std/list/list.shard"). RUN mode loads this (bodies) instead of the
+;; interface, so apps that call the module's functions execute against real
+;; definitions. The impl imports its own interface, so types/ctors still load.
+(fn impl_path ((dir (List Int)) (rel (List Int))) (List Int)
+  (append_int (append_int dir rel)
+              (append_int "/" (append_int (base_of rel) ".shard"))))
+
 ;; The import paths a source declares, each joined to the importer's dir and
-;; TAGGED `(Pair granted path)`: a bare module name resolves to its interface
-;; file, granted; an explicit `.shard` file resolves as-is, ungranted.
-(fn import_paths ((dir (List Int)) (forms (List SExpr))) (List (Pair Bool (List Int)))
+;; TAGGED `(Pair granted path)`. An explicit `.shard` file resolves as-is,
+;; ungranted. A bare module name resolves MODE-DEPENDENTLY: in CHECK mode
+;; (run=False) to its interface `<mod>/mod.req.shard`, granted (requirements
+;; become axioms; bodies stay opaque → proofs reason via lemmas); in RUN mode
+;; (run=True) to its impl `<mod>/<mod>.shard`, ungranted (real bodies so the
+;; app can execute). The interpreter-time body-resolution path.
+(fn import_paths ((dir (List Int)) (forms (List SExpr)) (run Bool)) (List (Pair Bool (List Int)))
   (match forms
     (Nil Nil)
     ((Cons f rest)
       (match (import_path_of f)
-        (None       (import_paths dir rest))
+        (None       (import_paths dir rest run))
         ((Some rel)
           (if (ends_with_shard rel)
               (Cons (Pair False (append_int dir rel))
-                    (import_paths dir rest))
-              (Cons (Pair True (append_int (append_int dir rel) (mod_req_suffix)))
-                    (import_paths dir rest))))))))
+                    (import_paths dir rest run))
+              (if run
+                  (Cons (Pair False (impl_path dir rel))
+                        (import_paths dir rest run))
+                  (Cons (Pair True (append_int (append_int dir rel) (mod_req_suffix)))
+                        (import_paths dir rest run)))))))))
 
-(fn imports_of ((dir (List Int)) (src (List Int))) (List (Pair Bool (List Int)))
+(fn imports_of ((dir (List Int)) (src (List Int)) (run Bool)) (List (Pair Bool (List Int)))
   (match (read_all src)
     (None Nil)
-    ((Some forms) (import_paths dir forms))))
+    ((Some forms) (import_paths dir forms run))))
 
 ;; append a tagged source at the END of the accumulator — so a file lands AFTER
 ;; the imports visited before it (post-order ⇒ deps first). With a module's
@@ -123,7 +149,7 @@
 ;; dependency interface.
 (type Closure (Closure (List (List Int)) (List (Pair Bool (List Int))) World))
 
-(fn visit ((path (List Int)) (granted Bool) (st Closure)) Closure
+(fn visit ((path (List Int)) (granted Bool) (run Bool) (st Closure)) Closure
   (match st
     ((Closure seen acc w)
       (if (path_member path seen)
@@ -133,19 +159,21 @@
               (match msrc
                 (None (Closure (Cons path seen) acc w1))    ; unreadable — skip
                 ((Some src)
-                  (match (visit_imports (imports_of (dir_of path) src)
+                  (match (visit_imports (imports_of (dir_of path) src run) run
                                         (Closure (Cons path seen) acc w1))
                     ((Closure seen2 acc2 w2)
                       (Closure seen2 (append_src acc2 (Pair granted src)) w2)))))))))))
 
-(fn visit_imports ((paths (List (Pair Bool (List Int)))) (st Closure)) Closure
+(fn visit_imports ((paths (List (Pair Bool (List Int)))) (run Bool) (st Closure)) Closure
   (match paths
     (Nil st)
-    ((Cons (Pair g p) rest) (visit_imports rest (visit p g st)))))
+    ((Cons (Pair g p) rest) (visit_imports rest run (visit p g run st)))))
 
 ;; The entry target itself is ungranted (its own claims are checked normally).
-(fn resolve_closure ((entry (List Int)) (w World)) (Pair (List (Pair Bool (List Int))) World)
-  (match (visit entry False (Closure Nil Nil w))
+;; `run` selects how bare module imports resolve: False = CHECK (opaque
+;; interfaces), True = RUN (impl bodies). See import_paths.
+(fn resolve_closure ((entry (List Int)) (run Bool) (w World)) (Pair (List (Pair Bool (List Int))) World)
+  (match (visit entry False run (Closure Nil Nil w))
     ((Closure _ acc w2) (Pair acc w2))))
 
 ;; Drop the granted tags — for callers (the eval app) that don't distinguish.
