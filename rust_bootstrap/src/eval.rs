@@ -23,9 +23,10 @@
 //! exactly the invariant the substitution machine relied on by hand.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::ast::{Expr, Module, Pat};
+use crate::ast::{Expr, FnDef, Module, Pat};
 use crate::prim;
 
 #[derive(Debug)]
@@ -92,8 +93,22 @@ enum Val {
 
 /// Reduce `e` to normal form within the context of `m`'s definitions.
 pub fn eval(m: &Module, e: &Expr) -> Result<Expr, EvalError> {
-    let v = eval_env(m, &[], e)?;
+    // Build a name → FnDef index ONCE. The bootstrapped kernel module has
+    // hundreds of fns and every shard Call used to do a linear `lookup_fn`
+    // scan over all of them — a fixed O(#fns) tax on every reduction step.
+    // O(1) lookup makes the whole double-interpretation dramatically faster.
+    let idx = build_fn_index(m);
+    let v = eval_env(m, &idx, &[], e)?;
     Ok(val_to_expr(&v))
+}
+
+/// name → FnDef, first definition wins (matches `Module::lookup_fn`'s `.find`).
+fn build_fn_index(m: &Module) -> HashMap<&str, &FnDef> {
+    let mut idx: HashMap<&str, &FnDef> = HashMap::with_capacity(m.fns.len());
+    for f in &m.fns {
+        idx.entry(f.name.as_str()).or_insert(f);
+    }
+    idx
 }
 
 // Tail-call optimized: the iteration of a tail-recursive shard fn (e.g. the
@@ -106,7 +121,12 @@ pub fn eval(m: &Module, e: &Expr) -> Result<Expr, EvalError> {
 // term depth. The four tail positions — user-fn body, taken If branch, fired
 // Match arm, Let body — loop instead, freeing the prior frame (and its env, so
 // the old term is dropped) before the next step.
-fn eval_env<'a>(m: &'a Module, env0: &[Val], e0: &'a Expr) -> Result<Val, EvalError> {
+fn eval_env<'a>(
+    m: &'a Module,
+    idx: &HashMap<&'a str, &'a FnDef>,
+    env0: &[Val],
+    e0: &'a Expr,
+) -> Result<Val, EvalError> {
     let mut env: Vec<Val> = env0.to_vec();
     let mut e: &'a Expr = e0;
     loop {
@@ -124,16 +144,16 @@ fn eval_env<'a>(m: &'a Module, env0: &[Val], e0: &'a Expr) -> Result<Val, EvalEr
             }
 
             Expr::Ctor(name, args) => {
-                let vals = eval_args(m, &env, args)?;
+                let vals = eval_args(m, idx, &env, args)?;
                 return Ok(Val::Ctor(Rc::from(name.as_str()), vals.into()));
             }
 
             Expr::Call(name, args) => {
-                let vals = eval_args(m, &env, args)?;
+                let vals = eval_args(m, idx, &env, args)?;
                 // User-defined fn? TAIL-LOOP into its body in a fresh env of the
                 // (reversed) argument values — the body is closed but for its
                 // params. Primitives / externs are leaf operations: return.
-                if let Some(fd) = m.lookup_fn(name) {
+                if let Some(fd) = idx.get(name.as_str()).copied() {
                     if fd.params.len() != vals.len() {
                         return Err(EvalError::ArityMismatch {
                             name: name.clone(),
@@ -150,14 +170,14 @@ fn eval_env<'a>(m: &'a Module, env0: &[Val], e0: &'a Expr) -> Result<Val, EvalEr
                 return apply_builtin(name, vals);
             }
 
-            Expr::If(c, t, el) => match eval_env(m, &env, c)? {
+            Expr::If(c, t, el) => match eval_env(m, idx, &env, c)? {
                 Val::Ctor(ref n, ref a) if a.is_empty() && &**n == "True" => e = t,
                 Val::Ctor(ref n, ref a) if a.is_empty() && &**n == "False" => e = el,
                 other => return Err(EvalError::IfNonBool(format!("{:?}", val_to_expr(&other)))),
             },
 
             Expr::Match(scrut, arms) => {
-                let v = eval_env(m, &env, scrut)?;
+                let v = eval_env(m, idx, &env, scrut)?;
                 let mut next: Option<&'a Expr> = None;
                 for arm in arms {
                     let mut binds: Vec<Val> = Vec::new();
@@ -177,7 +197,7 @@ fn eval_env<'a>(m: &'a Module, env0: &[Val], e0: &'a Expr) -> Result<Val, EvalEr
 
             Expr::Let(rhss, body) => {
                 // Parallel let: RHSs evaluated in the outer scope.
-                let mut vals = eval_args(m, &env, rhss)?;
+                let mut vals = eval_args(m, idx, &env, rhss)?;
                 vals.reverse(); // innermost-first: last binding becomes BVar 0
                 vals.extend_from_slice(&env);
                 env = vals;
@@ -187,8 +207,13 @@ fn eval_env<'a>(m: &'a Module, env0: &[Val], e0: &'a Expr) -> Result<Val, EvalEr
     }
 }
 
-fn eval_args(m: &Module, env: &[Val], args: &[Expr]) -> Result<Vec<Val>, EvalError> {
-    args.iter().map(|a| eval_env(m, env, a)).collect()
+fn eval_args<'a>(
+    m: &'a Module,
+    idx: &HashMap<&'a str, &'a FnDef>,
+    env: &[Val],
+    args: &'a [Expr],
+) -> Result<Vec<Val>, EvalError> {
+    args.iter().map(|a| eval_env(m, idx, env, a)).collect()
 }
 
 // A Call whose head is NOT a user fn: a primitive, an effectful extern, or an
