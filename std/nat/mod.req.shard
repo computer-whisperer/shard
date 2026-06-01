@@ -1,68 +1,40 @@
-;;; std/nat/mod.req.shard — the PUBLIC INTERFACE of the `nat` module.
+;;; std/nat/mod.req.shard — the PUBLIC INTERFACE of the `nat` module (its ".h").
 ;;;
-;;; `nat` is a directory-module. This `mod.req.shard` is its public surface:
-;;; the `Nat` type, basic Nat arithmetic, and the two exported lemmas. The
-;;; dir-mate `nat.shard` holds the PRIVATE helper `half_step` (a farkas step
-;;; lemma that exists only to drive `half_bound`'s induction) — it is not part
-;;; of this interface, so no other module may cite it.
+;;; BODYLESS by design. The public surface is: the `Nat` type, OPAQUE function
+;;; signatures (`sig fn` — consumers reason about these ONLY through the lemmas
+;;; below, never by unfolding a body), and the promised lemmas as
+;;; `requirement`s. The dir-mate `nat.shard` supplies the bodies, the private
+;;; `half_step`, and the `fulfills` proofs. A consumer that imports `nat` sees
+;;; exactly this file; it cannot cite a private nor unfold an implementation.
 
-(import "../../kernel/stdlib.shard")   ; stdlib types (List/Option/Bool/Pair)
-(import "../order")    ; the order module — le0_succ (cited by int_of_nat_nonneg)
+(import "../../kernel/stdlib.shard")   ; Int/Bool/True for the lemma goals
 
 (type Nat
   (Z)
   (S Nat))
 
-(fn add_nat ((a Nat) (b Nat)) Nat
-  (match a
-    (Z       b)
-    ((S k)   (S (add_nat k b)))))
+;; Opaque signatures — bodies live in nat.shard, hidden from consumers. A
+;; consumer reasons about `add_nat`/`int_of_nat`/`half_nat` only via the lemmas.
+(sig fn add_nat    ((a Nat) (b Nat)) Nat)
+(sig fn int_of_nat ((n Nat))         Int)
+(sig fn half_nat   ((n Nat))         Nat)
 
-;; Nat → Int (structural on the Nat).
-(fn int_of_nat ((n Nat)) Int
-  (match n
-    (Z 0)
-    ((S k) (+ 1 (int_of_nat k)))))
+;; ---- promised lemmas (the SPEC consumers reason against; proven in nat.shard) ----
 
-;; floor(n/2) as a Nat (structural, two S's at a time).
-(fn half_nat ((n Nat)) Nat
-  (match n
-    (Z Z)
-    ((S k)
-      (match k
-        (Z Z)
-        ((S k2) (S (half_nat k2)))))))
-
-;; ---- exported lemmas ----
-
-;; int_of_nat is nonnegative. Induction on n; S case steps le0_succ on
-;; the IH (which farkas can't see directly — it lives in the hyps, so we
-;; thread it through le0_succ's premise).
-(claim int_of_nat_nonneg
+;; int_of_nat is nonnegative.
+(requirement int_of_nat_nonneg
   (goal ((n Nat)) ()
-    (= (le 0 (int_of_nat n)) True))
-  (induct n
-    ((case Z (steps ((simp lhs)) refl))
-     (case S
-       (steps ((simp lhs))                          ; (le 0 (+ 1 (int_of_nat k)))
-         (rewrite-with (lemma le0_succ) lr lhs ()
-           ((steps ((rewrite (hyp 0) lr lhs true ())) refl))
-           refl))))))
+    (= (le 0 (int_of_nat n)) True)))
 
-;; half_bound: int_of_nat m - 1 <= 2 * int_of_nat (half_nat m), for ALL m.
-;; This is "the loop's floor(m/2) swaps cover the segment of length m"
-;; (tight at both parities). half_nat recurses two-at-a-time, so this is
-;; the first user of the kernel's two-step induction (induct2): the Z and
-;; (S Z) arms close by simp; the (S (S k)) arm simp-normalizes and hands
-;; the IH (at k) to the private `half_step`.
-(claim half_bound
+;; int_of_nat advances over a successor — the definitional step, exported so a
+;; consumer can rewrite `int_of_nat (S k)` → `1 + int_of_nat k` WITHOUT unfolding
+;; the opaque body (wanted by std/mem's dump/rdump index arithmetic).
+(requirement int_of_nat_succ
+  (goal ((k Nat)) ()
+    (= (int_of_nat (S k)) (+ 1 (int_of_nat k)))))
+
+;; int_of_nat m - 1 <= 2 * int_of_nat (half_nat m), for all m (tight at both
+;; parities) — the loop's floor(m/2) swaps cover a segment of length m.
+(requirement half_bound
   (goal ((m Nat)) ()
-    (= (le (- (int_of_nat m) 1) (* 2 (int_of_nat (half_nat m)))) True))
-  (induct2 m
-    ((case Z  (steps ((simp lhs)) refl))
-     (case SZ (steps ((simp lhs)) refl))
-     (case SS
-       (steps ((simp lhs))
-         (rewrite-with (lemma half_step) lr lhs ()
-           ((steps ((rewrite (hyp 0) lr lhs true ())) refl))
-           refl))))))
+    (= (le (- (int_of_nat m) 1) (* 2 (int_of_nat (half_nat m)))) True)))
