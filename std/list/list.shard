@@ -1,0 +1,125 @@
+;;; std/list/list.shard — the `list` module IMPLEMENTATION (private).
+;;;
+;;; Supplies the bodies behind the interface's opaque `sig fn`s and the
+;;; `fulfills` proofs discharging its requirements. It imports its own interface
+;;; (ungranted) so the requirements load FIRST as obligations and the bodies
+;;; shadow the sigs — the proofs here MAY unfold/simp them (sound: the module
+;;; reasons about its OWN implementation). Consumer PROOFS never load this file
+;;; (they get only mod.req.shard); a consumer that RUNS loads it for the bodies.
+;;;
+;;; Each fn is structurally recursive on its first list arg → total in the
+;;; kernel's accepted fragment. Proofs authored with named hyps ((hyp ih)).
+
+(import "../../kernel/stdlib.shard")   ; List / Option / Bool / Pair
+(import "../order")                    ; le0_succ (cited by len_nonneg)
+(import "mod.req.shard")               ; our interface — sig fns + the requirements
+
+;; ---- bodies (behind the interface's opaque sig fns) ----
+
+;; append: (append xs ys) is xs ++ ys.
+(fn (append T) ((xs (List T)) (ys (List T))) (List T)
+  (match xs
+    (Nil          ys)
+    ((Cons h t)   (Cons h (append t ys)))))
+
+;; len: Int-valued list length (so it can serve directly as a WfInduct measure).
+(fn (len T) ((xs (List T))) Int
+  (match xs
+    (Nil          0)
+    ((Cons h t)   (+ 1 (len t)))))
+
+;; rev: naive O(n^2) reverse. Each Cons re-appends a singleton.
+(fn (rev T) ((xs (List T))) (List T)
+  (match xs
+    (Nil          Nil)
+    ((Cons h t)   (append (rev t) (Cons h Nil)))))
+
+;; ---- discharge the interface's requirements (proofs may use the bodies) ----
+
+;; defining equations — one structural unfold each (the module reasons about
+;; its own bodies; consumers cite these instead of unfolding the opaque sigs).
+(fulfills append_nil_left (steps ((simp lhs)) refl))
+(fulfills append_cons     (steps ((simp lhs)) refl))
+(fulfills rev_nil         (steps ((simp lhs)) refl))
+(fulfills rev_cons        (steps ((simp lhs)) refl))
+(fulfills len_nil         (steps ((simp lhs)) refl))
+(fulfills len_cons        (steps ((simp lhs)) refl))
+
+;; 0 <= len xs. Induction on the spine; the step bumps the IH's lower bound by
+;; one (le0_succ, farkas).
+(fulfills len_nonneg
+  (induct xs
+    ((case Nil  (steps ((simp lhs)) refl))
+     (case Cons
+       (steps ((simp lhs))
+         (rewrite-with (lemma le0_succ) lr lhs ()
+           ((steps ((rewrite (hyp 0) lr lhs true ())) refl))
+           refl))))))
+
+;; (append xs Nil) = xs.
+(fulfills append_nil_right
+  (induct xs
+    ((case Nil (steps ((simp lhs)) refl))
+     (case Cons
+       (steps ((simp lhs)
+               (rewrite (hyp 0) lr lhs true ()))
+              refl)))))
+
+;; (append (append xs ys) zs) = (append xs (append ys zs)).
+(fulfills append_assoc
+  (induct xs
+    ((case Nil (steps ((simp both)) refl))
+     (case Cons
+       (steps ((simp both)
+               (rewrite (hyp 0) lr lhs true ()))
+              refl)))))
+
+;; (len (append xs ys)) = (len xs) + (len ys). The Cons step folds the IH then
+;; reassociates the leading +1 with lia (len t, len ys opaque atoms to lia).
+(fulfills len_append
+  (induct xs
+    ((case Nil
+       (steps ((simp both)) (by lia (list))))
+     (case Cons
+       (steps ((simp both)
+               (rewrite (hyp ih) lr lhs true ()))
+              (by lia (list)))))))
+
+;; (len (rev xs)) = (len xs). The Cons step distributes len over the singleton
+;; re-append (len_append), folds the IH, and reassociates.
+(fulfills len_rev
+  (induct xs
+    ((case Nil (steps ((simp both)) refl))
+     (case Cons
+       (steps ((simp lhs)
+               (rewrite (lemma len_append) lr lhs true ())
+               (rewrite (hyp ih)           lr lhs true ())
+               (simp both))
+              (by lia (list)))))))
+
+;; (rev (append xs ys)) = (append (rev ys) (rev xs)). Nil uses append_nil_right;
+;; the Cons step folds the IH then reassociates with append_assoc.
+(fulfills rev_append
+  (induct xs
+    ((case Nil
+       (steps ((simp both)
+               (rewrite (lemma append_nil_right) lr rhs true ()))
+              refl))
+     (case Cons
+       (steps ((simp lhs)
+               (rewrite (hyp ih)             lr lhs true ())
+               (rewrite (lemma append_assoc) lr lhs true ())
+               (simp rhs))
+              refl)))))
+
+;; (rev (rev xs)) = xs. The Cons step turns the nested rev into an append via
+;; rev_append, folds the IH, then Simp collapses the singleton append.
+(fulfills rev_rev
+  (induct xs
+    ((case Nil (steps ((simp both)) refl))
+     (case Cons
+       (steps ((simp lhs)
+               (rewrite (lemma rev_append) lr lhs true ())
+               (rewrite (hyp ih)           lr lhs true ())
+               (simp lhs))
+              refl)))))
