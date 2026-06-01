@@ -95,7 +95,21 @@
 (fn claim_trace ((m Module) (th Theory) (g Goal) (p Proof) (name Symbol) (target Symbol)) (List Int)
   (if (want_trace name target) (trace_block m th (lift_sequent g) p name) Nil))
 
-(fn run_decls ((m Module) (st RunState) (ds (List Decl)) (target Symbol)) RunState
+;; FOCUS MODE (dev aid). When `focus` is a specific claim name (not the
+;; `__all__` sentinel), every OTHER claim/fulfills is admitted as `Proven`
+;; WITHOUT running check_sequent — its goal is parsed and threaded into the
+;; theory (so citations still resolve) but its proof is trusted, and it emits
+;; no outcome line. Only the focus claim is really checked (and traced, since
+;; check.shard sets target = focus). This turns a heavy whole-file run into
+;; "parse everything + check one claim" — seconds instead of minutes — for
+;; iterating on a single proof. It is intentionally UNSOUND (it admits the
+;; skipped proofs); the real validation runs with focus = __all__.
+(fn focus_skip ((focus Symbol) (name Symbol)) Bool
+  (if (sym_eq focus (quote __all__)) False
+  (if (sym_eq focus name)           False
+                                    True)))
+
+(fn run_decls ((m Module) (st RunState) (ds (List Decl)) (target Symbol) (focus Symbol)) RunState
   (match ds
     (Nil st)
     ((Cons d rest)
@@ -105,22 +119,25 @@
             ;; (axiom NAME (goal …)): parse goal to native, admit without proof.
             ((DAxiom a)
               (match (parse_goal (ax_goal a) (module_ctors m) (module_type_names m))
-                (None (run_decls m (RunState th pend (Cons (COFail (ax_name a) "could not parse axiom goal (proof DSL)" Nil) acc)) rest target))
+                (None (run_decls m (RunState th pend (Cons (COFail (ax_name a) "could not parse axiom goal (proof DSL)" Nil) acc)) rest target focus))
                 ((Some g)
                   (run_decls m
                     (RunState (TheoryCons (Axiom (ax_name a) (close_goal_for_storage g)) th)
                               pend
                               (Cons (COAxiom (ax_name a)) acc))
-                    rest target))))
+                    rest target focus))))
             ;; (claim NAME (goal …) PROOF): parse goal and proof STRAIGHT to
             ;; native via proof_reader, then resolve named hyps to positional
             ;; with desugar_proof_named, and check.
             ((DClaim nc)
               (match (parse_goal (claim_goal nc) (module_ctors m) (module_type_names m))
-                (None (run_decls m (RunState th pend (Cons (COFail (claim_name nc) "could not parse goal (proof DSL)" Nil) acc)) rest target))
+                (None (run_decls m (RunState th pend (Cons (COFail (claim_name nc) "could not parse goal (proof DSL)" Nil) acc)) rest target focus))
                 ((Some g)
+                  (if (focus_skip focus (claim_name nc))
+                      ;; not the focus claim — admit its goal, skip the proof.
+                      (run_decls m (RunState (TheoryCons (Proven (claim_name nc) (close_goal_for_storage g)) th) pend acc) rest target focus)
                   (match (parse_proof (claim_proof nc) (module_ctors m) (module_type_names m))
-                    (None (run_decls m (RunState th pend (Cons (COFail (claim_name nc) "could not parse proof (proof DSL)" Nil) acc)) rest target))
+                    (None (run_decls m (RunState th pend (Cons (COFail (claim_name nc) "could not parse proof (proof DSL)" Nil) acc)) rest target focus))
                     ((Some p0)
                       (match (desugar_proof_named m (goal_params g) Nil p0)
                         (p
@@ -129,29 +146,32 @@
                             (RunState (TheoryCons (Proven (claim_name nc) (close_goal_for_storage g)) th)
                                       pend
                                       (Cons (COPass (claim_name nc) (claim_trace m th g p (claim_name nc) target)) acc))
-                            rest target)
+                            rest target focus)
                           (run_decls m
                             (RunState th pend
                                       (Cons (COFail (claim_name nc)
                                                     (failure_detail m th (lift_sequent g) p)
                                                     (claim_trace m th g p (claim_name nc) target)) acc))
-                            rest target)))))))))
+                            rest target focus))))))))))
             ;; (requirement NAME (goal …)): parse the goal to native NOW
             ;; (validating it at the contract), seed it as a pending obligation.
             ((DReq r)
               (match (parse_goal (req_goal r) (module_ctors m) (module_type_names m))
-                (None (run_decls m (RunState th pend (Cons (COFail (req_name r) "could not parse requirement goal (proof DSL)" Nil) acc)) rest target))
+                (None (run_decls m (RunState th pend (Cons (COFail (req_name r) "could not parse requirement goal (proof DSL)" Nil) acc)) rest target focus))
                 ((Some g)
-                  (run_decls m (RunState th (Cons (PendReq (req_name r) g) pend) acc) rest target))))
+                  (run_decls m (RunState th (Cons (PendReq (req_name r) g) pend) acc) rest target focus))))
             ;; (fulfills NAME PROOF): look the goal up from the requirement (the
             ;; single source of truth — never restated here), parse the proof to
             ;; native, resolve named hyps (desugar_proof_named), check it.
             ((DFul fu)
               (match (lookup_req (ful_name fu) pend)
-                (None (run_decls m (RunState th pend (Cons (COFail (ful_name fu) "no requirement with this name in scope (is the contract imported?)" Nil) acc)) rest target))
+                (None (run_decls m (RunState th pend (Cons (COFail (ful_name fu) "no requirement with this name in scope (is the contract imported?)" Nil) acc)) rest target focus))
                 ((Some g)
+                  (if (focus_skip focus (ful_name fu))
+                      ;; not the focus claim — admit the requirement's goal, skip the proof.
+                      (run_decls m (RunState (TheoryCons (Proven (ful_name fu) (close_goal_for_storage g)) th) pend acc) rest target focus)
                   (match (parse_proof (ful_proof fu) (module_ctors m) (module_type_names m))
-                    (None (run_decls m (RunState th pend (Cons (COFail (ful_name fu) "could not parse proof (proof DSL)" Nil) acc)) rest target))
+                    (None (run_decls m (RunState th pend (Cons (COFail (ful_name fu) "could not parse proof (proof DSL)" Nil) acc)) rest target focus))
                     ((Some p0)
                       (match (desugar_proof_named m (goal_params g) Nil p0)
                         (p
@@ -160,33 +180,33 @@
                             (RunState (TheoryCons (Proven (ful_name fu) (close_goal_for_storage g)) th)
                                       pend
                                       (Cons (COPass (ful_name fu) (claim_trace m th g p (ful_name fu) target)) acc))
-                            rest target)
+                            rest target focus)
                           (run_decls m
                             (RunState th pend
                                       (Cons (COFail (ful_name fu)
                                                     (failure_detail m th (lift_sequent g) p)
                                                     (claim_trace m th g p (ful_name fu) target)) acc))
-                            rest target)))))))))))))))
+                            rest target focus))))))))))))))))
 
 ;; Run a whole file list (imports first, then targets), threading theory.
 ;; An unparseable file is skipped (the Rust harness pre-validates parsing).
 ;; Each source is tagged `(Pair granted src)`: `granted` marks a dependency
 ;; module's INTERFACE (its requirements are admitted as axioms, not re-imposed
 ;; as obligations — see collect_decls, reader.shard).
-(fn run_srcs ((m Module) (srcs (List (Pair Bool (List Int)))) (ctors (List Symbol)) (st RunState) (target Symbol)) RunState
+(fn run_srcs ((m Module) (srcs (List (Pair Bool (List Int)))) (ctors (List Symbol)) (st RunState) (target Symbol) (focus Symbol)) RunState
   (match srcs
     (Nil st)
     ((Cons (Pair granted src) rest)
       (match (parse_decls src ctors granted)
-        (None (run_srcs m rest ctors st target))
-        ((Some ds) (run_srcs m rest ctors (run_decls m st ds target) target))))))
+        (None (run_srcs m rest ctors st target focus))
+        ((Some ds) (run_srcs m rest ctors (run_decls m st ds target focus) target focus))))))
 
 ;; Production entry point: returns the per-claim/axiom outcomes (source order)
 ;; for the whole file list, checked against m from the empty theory. `target`
 ;; is the `--trace` claim name ('all for every claim, or a non-matching
 ;; sentinel for no tracing).
-(fn check_production ((m Module) (srcs (List (Pair Bool (List Int)))) (ctors (List Symbol)) (target Symbol)) (List ClaimOutcome)
-  (match (run_srcs m srcs ctors (RunState TheoryEmpty Nil Nil) target)
+(fn check_production ((m Module) (srcs (List (Pair Bool (List Int)))) (ctors (List Symbol)) (target Symbol) (focus Symbol)) (List ClaimOutcome)
+  (match (run_srcs m srcs ctors (RunState TheoryEmpty Nil Nil) target focus)
     ((RunState th pend acc) (rev_outcomes acc Nil))))
 
 ;; build_module only reads types/fns/externs (it skips claim/requirement/…), so
@@ -202,8 +222,8 @@
 ;; ctor names). The full ctor set for claim parsing is then derived from M
 ;; itself. This is the default `check` entry — M is no longer built by the Rust
 ;; loader; load.rs only parses the kernel + toolchain into the VM.
-(fn check_production_src ((seed Module) (base_ctors (List Symbol)) (srcs (List (Pair Bool (List Int)))) (target Symbol)) (List ClaimOutcome)
+(fn check_production_src ((seed Module) (base_ctors (List Symbol)) (srcs (List (Pair Bool (List Int)))) (target Symbol) (focus Symbol)) (List ClaimOutcome)
   (match (build_module (strip_granted srcs) seed base_ctors)
     (None (Cons (COFail (quote __module__) "could not parse target module(s)" Nil) Nil))
     ((Some m)
-      (check_production m srcs (typedef_ctors (module_typedefs m)) target))))
+      (check_production m srcs (typedef_ctors (module_typedefs m)) target focus))))
