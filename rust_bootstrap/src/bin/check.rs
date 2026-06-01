@@ -1006,17 +1006,24 @@ fn run_shard_check(files: &[String], kernel: &ast::Module, trace: Option<&str>) 
 
     // M (the module proofs reduce against) is built IN SHARD by check_production_src:
     // it folds the self-hosted reader's parse_module over `srcs` (dependency order)
-    // and merges onto the kernel-types seed. load.rs no longer parses the targets —
-    // it only loaded the kernel + toolchain into the VM (toolchain_vm) above.
+    // and merges onto the seed. load.rs no longer parses the targets — it only
+    // loaded the kernel + toolchain into the VM (toolchain_vm) above.
+    //
+    // The seed is the EMPTY module + a tiny prelude of universal ctor NAMES —
+    // EXACTLY what the self-hosted check.shard seeds (prelude_ctors). Checkees do
+    // not get the kernel's types ambiently; a checkee imports the types it uses
+    // (e.g. `(import "…/stdlib.shard")` for List/Option/Bool/Pair). This keeps the
+    // native and self-hosted entry points seed-IDENTICAL, so `check run check.shard`
+    // reproduces native `check` rather than diverging on ambient typedefs.
     let seed = module_to_value(&ast::Module {
-        types: kernel.types.clone(),
+        types: Vec::new(),
         fns: Vec::new(),
         externs: Vec::new(),
     });
-    let kernel_ctor_names: Vec<String> = kernel.types.iter()
-        .flat_map(|td| td.ctors.iter().map(|cd| cd.name.clone()))
-        .collect();
-    let base_ctors = sym_list_native(&kernel_ctor_names);
+    let prelude_ctors: Vec<String> =
+        ["Cons", "Nil", "Some", "None", "True", "False", "Pair"]
+            .iter().map(|s| s.to_string()).collect();
+    let base_ctors = sym_list_native(&prelude_ctors);
 
     // (check_production_src <seed> <base_ctors> <srcs> <trace-target>) → (List ClaimOutcome).
     let call = ast::Expr::Call(
