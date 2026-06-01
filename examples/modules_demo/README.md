@@ -15,21 +15,28 @@ The interface is a single source of truth read **two ways**, by context:
 
 | interface form (`mod.req.shard`) | impl provides (`bump.shard`)      | a CONSUMER sees                    |
 |----------------------------------|-----------------------------------|------------------------------------|
-| `(extern bump (x) Int)`          | `(fn bump (x) Int …)` — the body  | opaque `extern bump` (stuck)       |
+| `(sig fn bump (x) Int)`          | `(fn bump (x) Int …)` — the body  | opaque `(sig fn bump …)` (stuck)   |
 | `(requirement bump_grows …)`     | `(fulfills bump_grows …)` — proof | `(axiom bump_grows …)` — granted   |
 | `(type …)`                       | (uses it)                         | the type (transparent, for now)    |
 
 That symmetry is the whole design: a module promises signatures + lemmas; the
 impl fulfills them; a consumer reasons against the promises **without** the
-bodies. It reuses `extern` / `requirement` / `fulfills`, which already exist —
-the opacity falls out of `extern` being stuck-in-proofs (the same mechanism the
-io contracts use at the world boundary, turned inward).
+bodies. It reuses `requirement` / `fulfills` (already in the language) plus a new
+bodyless signature form `(sig fn …)`; the opacity falls out of a bodyless symbol
+being stuck-in-proofs — the same mechanism the io contracts use at the world
+boundary, turned inward.
+
+`(sig fn NAME (params) RET)` (added to `reader.shard`) loads as a bodyless entry:
+stuck in proofs like an `extern`, but distinct from one — the impl supplies a
+real body (which shadows the sig when the module is checked/run), whereas an
+extern has no body anywhere and the runtime dispatches it. That distinction is
+why it's `sig fn`, not `extern`: it matters at run/link time, not at proof time.
 
 ## Files
 
 ```
 bump/
-  mod.req.shard   INTERFACE  — extern bump + requirement bump_grows
+  mod.req.shard   INTERFACE  — sig fn bump + requirement bump_grows
   bump.shard      IMPL       — fn bump (= x+3) + fulfills bump_grows
 consumer.shard    TARGET consumer — (import "bump"); reasons about bump opaquely
 views/            FLATTENED views that prove the SEMANTICS work TODAY:
@@ -43,8 +50,8 @@ views/            FLATTENED views that prove the SEMANTICS work TODAY:
 Run the three `views/` files through `check` today:
 
 - `module_view` **passes** — `fulfills` discharges `requirement`, and the impl's
-  `fn` body wins over the interface `extern` so `unfold bump` works.
-- `consumer_view` **passes** — an opaque `extern bump` + the lemma as an `axiom`
+  `fn` body wins over the interface `sig fn` so `unfold bump` works.
+- `consumer_view` **passes** — an opaque `sig fn bump` + the lemma as an `axiom`
   lets the consumer prove its goal through `bump_grows`, no body in sight.
 - `necessity` **fails** — drop the lemma and the opaque `bump` is unreasonable
   (`ord` can't see the body). The lemma is load-bearing: opacity is real, not
@@ -59,7 +66,7 @@ So the proof-time semantics are settled. The missing piece is purely the
 set of files. Concretely, three things — each discovered by building this demo:
 
 1. **Selective loading.** Checking a *consumer* loads bump's **interface only**
-   (extern + lemmas), never `bump.shard`'s bodies. Checking the *module itself*
+   (sig + lemmas), never `bump.shard`'s bodies. Checking the *module itself*
    loads interface + impl together.
 2. **`requirement` is context-dependent.** For the module's own check it's an
    *obligation* (must be `fulfills`-ed). For a consumer it's a granted *axiom*
@@ -76,12 +83,14 @@ Per the slice-94 correction, this loader belongs in **shard** (`loader.shard`),
 which also closes the directory-resolution self-hosting gap — it needs a new
 directory-listing extern (the loader only has `read_file`).
 
+## Decided
+
+- **`(sig fn …)` for fn signatures** (not `extern`). Distinguishes "opaque for
+  reasoning" from "no body anywhere / runtime-dispatched." Implemented in
+  `reader.shard` (loads as a bodyless entry).
+
 ## Open forks (deliberately unresolved)
 
-- **`sig` vs `extern` for the signature.** `extern` gives the right *proof-time*
-  semantics, but it also means "the runtime host dispatches this" — wrong for a
-  module fn that *does* have a body at run/link time. A dedicated bodyless-sig
-  form (`(sig bump (x) Int)`?) would separate "opaque for reasoning" from "no
-  body anywhere." Using `extern` here only to validate checking.
 - **Transparent vs opaque types.** Types are transparent for now (consumers see
-  the ctors). Abstract types (name only, ctors hidden) is a later step.
+  the ctors). Abstract types (name only, ctors hidden) — perhaps a `(sig type …)`
+  companion — is a later step.
