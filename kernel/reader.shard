@@ -639,6 +639,25 @@
   False))))))))))
 
 ;; Pass 1: collect all (type …) definitions, in source order.
+;; `(sig type (Map V))` → an ABSTRACT (opaque) type: a TypeDef with the name and
+;; params but NO ctors. The name exports (signatures `(Map Int)` parse), but the
+;; ctors stay private — a consumer granted this interface cannot construct or
+;; pattern-match the type (its `find_typedef` yields no cases; its ctors are
+;; absent from `typedef_ctors`). The impl supplies the FULL `(type …)` with
+;; ctors for its own bodies. Mirrors `sig fn` (signature here, definition in the
+;; impl). Any non-`(sig type …)` form (incl. `sig fn`) → None.
+(fn sig_type_of ((f SExpr)) (Option TypeDef)
+  (match f
+    ((SList (Cons (SSym h) (Cons (SSym kind) (Cons headForm Nil))))
+      (if (sym_eq h (quote sig))
+          (if (sym_eq kind (quote type))
+              (match (parse_head headForm)
+                (None None)
+                ((Some (Pair name params)) (Some (TypeDef name params Nil))))
+              None)
+          None))
+    (_ None)))
+
 (fn collect_types ((forms (List SExpr))) (Option (List TypeDef))
   (match forms
     (Nil (Some Nil))
@@ -653,7 +672,12 @@
                   (match (collect_types rest)
                     (None None)
                     ((Some tds) (Some (Cons td tds))))))
-              (collect_types rest)))))))
+          (match (sig_type_of f)
+            ((Some td)                                   ; (sig type …) → abstract type
+              (match (collect_types rest)
+                (None None)
+                ((Some tds) (Some (Cons td tds)))))
+            (None (collect_types rest)))))))))           ; other forms → not a type here
 
 (fn typedef_ctors ((tds (List TypeDef))) (List Symbol)
   (match tds
@@ -697,12 +721,15 @@
                     (None None)
                     ((Some (Pair fns externs)) (Some (Pair fns (Cons ed externs)))))))
           (if (sym_eq hname (quote sig))         ; (sig fn …) → bodyless signature
-              (match (parse_sigdef (form_tail f))
-                (None None)
-                ((Some ed)
-                  (match (collect_fns_externs rest ctors)
+              (match (sig_type_of f)
+                ((Some _) (collect_fns_externs rest ctors))   ; (sig type …) → a TYPE (pass 1); skip here
+                (None
+                  (match (parse_sigdef (form_tail f))
                     (None None)
-                    ((Some (Pair fns externs)) (Some (Pair fns (Cons ed externs)))))))
+                    ((Some ed)
+                      (match (collect_fns_externs rest ctors)
+                        (None None)
+                        ((Some (Pair fns externs)) (Some (Pair fns (Cons ed externs)))))))))
           (if (skip_form hname)
               (collect_fns_externs rest ctors)
               None)))))))))                       ; unknown form → reject (cf. load.rs)
