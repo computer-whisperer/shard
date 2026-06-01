@@ -26,8 +26,16 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use smallvec::SmallVec;
+
 use crate::ast::{Expr, FnDef, Module, Pat};
 use crate::prim;
+
+// Most environments and argument lists are tiny (1–5 entries), but each one
+// used to be a heap-allocated Vec built and freed per reduction step — ~28% of
+// runtime was that alloc/free churn (see profile). SmallVec keeps the common
+// small case on the stack; it spills to the heap only for larger lists.
+type Vals = SmallVec<[Val; 8]>;
 
 #[derive(Debug)]
 pub enum EvalError {
@@ -127,7 +135,7 @@ fn eval_env<'a>(
     env0: &[Val],
     e0: &'a Expr,
 ) -> Result<Val, EvalError> {
-    let mut env: Vec<Val> = env0.to_vec();
+    let mut env: Vals = env0.iter().cloned().collect();
     let mut e: &'a Expr = e0;
     loop {
         match e {
@@ -145,7 +153,7 @@ fn eval_env<'a>(
 
             Expr::Ctor(name, args) => {
                 let vals = eval_args(m, idx, &env, args)?;
-                return Ok(Val::Ctor(Rc::from(name.as_str()), vals.into()));
+                return Ok(Val::Ctor(Rc::from(name.as_str()), Rc::from(vals.as_slice())));
             }
 
             Expr::Call(name, args) => {
@@ -180,10 +188,10 @@ fn eval_env<'a>(
                 let v = eval_env(m, idx, &env, scrut)?;
                 let mut next: Option<&'a Expr> = None;
                 for arm in arms {
-                    let mut binds: Vec<Val> = Vec::new();
+                    let mut binds: Vals = SmallVec::new();
                     if match_pat(&arm.pat, &v, &mut binds) {
                         // env' = bindings (innermost-first) ++ outer env.
-                        binds.extend_from_slice(&env);
+                        binds.extend(env.iter().cloned());
                         env = binds;
                         next = Some(&arm.body);
                         break;
@@ -199,7 +207,7 @@ fn eval_env<'a>(
                 // Parallel let: RHSs evaluated in the outer scope.
                 let mut vals = eval_args(m, idx, &env, rhss)?;
                 vals.reverse(); // innermost-first: last binding becomes BVar 0
-                vals.extend_from_slice(&env);
+                vals.extend(env.iter().cloned());
                 env = vals;
                 e = body;
             }
@@ -212,7 +220,7 @@ fn eval_args<'a>(
     idx: &HashMap<&'a str, &'a FnDef>,
     env: &[Val],
     args: &'a [Expr],
-) -> Result<Vec<Val>, EvalError> {
+) -> Result<Vals, EvalError> {
     args.iter().map(|a| eval_env(m, idx, env, a)).collect()
 }
 
@@ -220,7 +228,7 @@ fn eval_args<'a>(
 // unknown. Leaf operation (no tail position), so the eval loop returns its
 // result directly. The user-fn case is handled inline in `eval_env` so it can
 // tail-loop into the body.
-fn apply_builtin(name: &str, args: Vec<Val>) -> Result<Val, EvalError> {
+fn apply_builtin(name: &str, args: Vals) -> Result<Val, EvalError> {
     // Primitive: cross to the `Expr`-typed primitive table at the
     // boundary (primitive arguments are small — ints, syms, or the
     // occasional char list, all O(arg)).
@@ -248,7 +256,7 @@ fn apply_builtin(name: &str, args: Vec<Val>) -> Result<Val, EvalError> {
 // body; earlier PVars get higher indices.
 // -----------------------------------------------------------------------------
 
-fn match_pat(p: &Pat, v: &Val, acc: &mut Vec<Val>) -> bool {
+fn match_pat(p: &Pat, v: &Val, acc: &mut Vals) -> bool {
     match p {
         Pat::PVar => {
             // Prepend so acc[0] is the most recently captured (= BVar 0).
