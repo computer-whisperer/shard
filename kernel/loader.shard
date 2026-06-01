@@ -67,31 +67,63 @@
           (if (sym_eq h (quote use-module)) (Some path) None)))
     (_ None)))
 
-;; the import paths a source declares, each joined to the importer's dir.
-(fn import_paths ((dir (List Int)) (forms (List SExpr))) (List (List Int))
+(fn starts_with ((pre (List Int)) (xs (List Int))) Bool
+  (match pre
+    (Nil True)
+    ((Cons p pr)
+      (match xs
+        (Nil False)
+        ((Cons x xr) (if (int_eq p x) (starts_with pr xr) False))))))
+
+;; Does the import path end in ".shard"? That disambiguates the two import
+;; forms: `(import "order.shard")` names a FILE (load it as-is); `(import
+;; "order")` names a directory MODULE (load its interface `order/mod.req.shard`,
+;; granted — its requirements become axioms for the importer). ".shard" reversed
+;; is "drahs." = [100 114 97 104 115 46].
+(fn ends_with_shard ((rel (List Int))) Bool
+  (starts_with (list 100 114 97 104 115 46) (rev_i rel Nil)))
+
+;; "/mod.req.shard" — appended to a bare module name to reach its interface.
+(fn mod_req_suffix () (List Int) "/mod.req.shard")
+
+;; The import paths a source declares, each joined to the importer's dir and
+;; TAGGED `(Pair granted path)`: a bare module name resolves to its interface
+;; file, granted; an explicit `.shard` file resolves as-is, ungranted.
+(fn import_paths ((dir (List Int)) (forms (List SExpr))) (List (Pair Bool (List Int)))
   (match forms
     (Nil Nil)
     ((Cons f rest)
       (match (import_path_of f)
         (None       (import_paths dir rest))
-        ((Some rel) (Cons (append_int dir rel) (import_paths dir rest)))))))
+        ((Some rel)
+          (if (ends_with_shard rel)
+              (Cons (Pair False (append_int dir rel))
+                    (import_paths dir rest))
+              (Cons (Pair True (append_int (append_int dir rel) (mod_req_suffix)))
+                    (import_paths dir rest))))))))
 
-(fn imports_of ((dir (List Int)) (src (List Int))) (List (List Int))
+(fn imports_of ((dir (List Int)) (src (List Int))) (List (Pair Bool (List Int)))
   (match (read_all src)
     (None Nil)
     ((Some forms) (import_paths dir forms))))
 
-;; append a source at the END of the accumulator — so a file lands AFTER the
-;; imports visited before it (post-order ⇒ deps first).
-(fn append_src ((acc (List (List Int))) (src (List Int))) (List (List Int))
+;; append a tagged source at the END of the accumulator — so a file lands AFTER
+;; the imports visited before it (post-order ⇒ deps first). With a module's
+;; interface imported as a dependency, the impl that imports its own interface
+;; (`(import "mod.req.shard")`) makes the interface a dep of the impl, so the
+;; interface lands FIRST — its requirements seed before the impl's fulfills.
+(fn append_src ((acc (List (Pair Bool (List Int)))) (elt (Pair Bool (List Int))))
+              (List (Pair Bool (List Int)))
   (match acc
-    (Nil (Cons src Nil))
-    ((Cons h t) (Cons h (append_src t src)))))
+    (Nil (Cons elt Nil))
+    ((Cons h t) (Cons h (append_src t elt)))))
 
-;; closure-resolution state: seen paths (cycle/dedup), sources so far, World.
-(type Closure (Closure (List (List Int)) (List (List Int)) World))
+;; closure-resolution state: seen paths (cycle/dedup), TAGGED sources so far,
+;; World. Each accumulated source carries whether it was reached as a granted
+;; dependency interface.
+(type Closure (Closure (List (List Int)) (List (Pair Bool (List Int))) World))
 
-(fn visit ((path (List Int)) (st Closure)) Closure
+(fn visit ((path (List Int)) (granted Bool) (st Closure)) Closure
   (match st
     ((Closure seen acc w)
       (if (path_member path seen)
@@ -104,13 +136,20 @@
                   (match (visit_imports (imports_of (dir_of path) src)
                                         (Closure (Cons path seen) acc w1))
                     ((Closure seen2 acc2 w2)
-                      (Closure seen2 (append_src acc2 src) w2)))))))))))
+                      (Closure seen2 (append_src acc2 (Pair granted src)) w2)))))))))))
 
-(fn visit_imports ((paths (List (List Int))) (st Closure)) Closure
+(fn visit_imports ((paths (List (Pair Bool (List Int)))) (st Closure)) Closure
   (match paths
     (Nil st)
-    ((Cons p rest) (visit_imports rest (visit p st)))))
+    ((Cons (Pair g p) rest) (visit_imports rest (visit p g st)))))
 
-(fn resolve_closure ((entry (List Int)) (w World)) (Pair (List (List Int)) World)
-  (match (visit entry (Closure Nil Nil w))
+;; The entry target itself is ungranted (its own claims are checked normally).
+(fn resolve_closure ((entry (List Int)) (w World)) (Pair (List (Pair Bool (List Int))) World)
+  (match (visit entry False (Closure Nil Nil w))
     ((Closure _ acc w2) (Pair acc w2))))
+
+;; Drop the granted tags — for callers (the eval app) that don't distinguish.
+(fn untag_sources ((srcs (List (Pair Bool (List Int))))) (List (List Int))
+  (match srcs
+    (Nil Nil)
+    ((Cons (Pair _ s) rest) (Cons s (untag_sources rest)))))

@@ -170,11 +170,14 @@
 
 ;; Run a whole file list (imports first, then targets), threading theory.
 ;; An unparseable file is skipped (the Rust harness pre-validates parsing).
-(fn run_srcs ((m Module) (srcs (List (List Int))) (ctors (List Symbol)) (st RunState) (target Symbol)) RunState
+;; Each source is tagged `(Pair granted src)`: `granted` marks a dependency
+;; module's INTERFACE (its requirements are admitted as axioms, not re-imposed
+;; as obligations — see collect_decls, reader.shard).
+(fn run_srcs ((m Module) (srcs (List (Pair Bool (List Int)))) (ctors (List Symbol)) (st RunState) (target Symbol)) RunState
   (match srcs
     (Nil st)
-    ((Cons src rest)
-      (match (parse_decls src ctors)
+    ((Cons (Pair granted src) rest)
+      (match (parse_decls src ctors granted)
         (None (run_srcs m rest ctors st target))
         ((Some ds) (run_srcs m rest ctors (run_decls m st ds target) target))))))
 
@@ -182,9 +185,16 @@
 ;; for the whole file list, checked against m from the empty theory. `target`
 ;; is the `--trace` claim name ('all for every claim, or a non-matching
 ;; sentinel for no tracing).
-(fn check_production ((m Module) (srcs (List (List Int))) (ctors (List Symbol)) (target Symbol)) (List ClaimOutcome)
+(fn check_production ((m Module) (srcs (List (Pair Bool (List Int)))) (ctors (List Symbol)) (target Symbol)) (List ClaimOutcome)
   (match (run_srcs m srcs ctors (RunState TheoryEmpty Nil Nil) target)
     ((RunState th pend acc) (rev_outcomes acc Nil))))
+
+;; build_module only reads types/fns/externs (it skips claim/requirement/…), so
+;; it neither needs nor sees the granted tag — strip to raw bytes for it.
+(fn strip_granted ((srcs (List (Pair Bool (List Int))))) (List (List Int))
+  (match srcs
+    (Nil Nil)
+    ((Cons (Pair _ s) rest) (Cons s (strip_granted rest)))))
 
 ;; Production entry that builds M IN SHARD. `build_module` (reader.shard) parses
 ;; each source's types/fns via the self-hosted reader and merges them onto
@@ -192,8 +202,8 @@
 ;; ctor names). The full ctor set for claim parsing is then derived from M
 ;; itself. This is the default `check` entry — M is no longer built by the Rust
 ;; loader; load.rs only parses the kernel + toolchain into the VM.
-(fn check_production_src ((seed Module) (base_ctors (List Symbol)) (srcs (List (List Int))) (target Symbol)) (List ClaimOutcome)
-  (match (build_module srcs seed base_ctors)
+(fn check_production_src ((seed Module) (base_ctors (List Symbol)) (srcs (List (Pair Bool (List Int)))) (target Symbol)) (List ClaimOutcome)
+  (match (build_module (strip_granted srcs) seed base_ctors)
     (None (Cons (COFail (quote __module__) "could not parse target module(s)" Nil) Nil))
     ((Some m)
       (check_production m srcs (typedef_ctors (module_typedefs m)) target))))

@@ -996,10 +996,18 @@ fn run_shard_check(files: &[String], kernel: &ast::Module, trace: Option<&str>) 
     if let Err(code) = check_module_boundaries(&order) {
         return code;
     }
+    // Sources are tagged `(Pair granted bytes)` for check_production_src. The
+    // native loader does not (yet) do selective interface loading — it loads
+    // every module file whole — so every source is ungranted (False). The
+    // self-hosted check.shard loader is where `granted` is set (a dependency
+    // interface's requirements become axioms). See driver.shard / loader.shard.
     let mut srcs_list = nil();
     for p in order.iter().rev() {
         match std::fs::read_to_string(p) {
-            Ok(s) => { srcs_list = ctor("Cons", vec![line_to_event_native(&s), srcs_list]); }
+            Ok(s) => {
+                let tagged = ctor("Pair", vec![ctor("False", vec![]), line_to_event_native(&s)]);
+                srcs_list = ctor("Cons", vec![tagged, srcs_list]);
+            }
             Err(e) => { eprintln!("error reading {}: {}", p.display(), e); return ExitCode::from(2); }
         }
     }

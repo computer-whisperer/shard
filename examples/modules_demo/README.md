@@ -57,31 +57,42 @@ Run the three `views/` files through `check` today:
   (`ord` can't see the body). The lemma is load-bearing: opacity is real, not
   cosmetic. (This is the demo's `lia_rejects`/`module_gate_rejects` analogue.)
 
-So the proof-time semantics are settled. The missing piece is purely the
-**loader**.
+So the proof-time semantics are settled with zero new proof machinery.
 
-## What the loader must do (the spec this demo pins down)
+## The selective loader (BUILT — self-hosted path)
 
-`(import "bump")` and `check bump` must produce the two views above from the one
-set of files. Concretely, three things — each discovered by building this demo:
+The whole thing now works end-to-end through the self-hosted checker:
 
-1. **Selective loading.** Checking a *consumer* loads bump's **interface only**
-   (sig + lemmas), never `bump.shard`'s bodies. Checking the *module itself*
-   loads interface + impl together.
-2. **`requirement` is context-dependent.** For the module's own check it's an
-   *obligation* (must be `fulfills`-ed). For a consumer it's a granted *axiom*
-   (the module already proved it; the consumer doesn't re-run the proof).
-   `consumer.shard` is broken today precisely because the current loader re-runs
-   bump's `fulfills` in the consumer's run instead of granting the lemma.
-3. **Interface loads FIRST.** The current dir-module rule puts `mod.req.shard`
-   *last* (so old-style public *claims* could cite dir-mate privates). With
-   bodyless interfaces that inverts: `requirement`s must precede the impl's
-   `fulfills`, so the interface loads **first**. (`check bump` fails today with
-   "no requirement … in scope" for exactly this reason.)
+```
+check run kernel/check.shard -- examples/modules_demo/consumer.shard   → consumer_grows PASS (bump opaque)
+check run kernel/check.shard -- examples/modules_demo/bump/bump.shard  → bump_grows PASS (fulfilled)
+```
 
-Per the slice-94 correction, this loader belongs in **shard** (`loader.shard`),
-which also closes the directory-resolution self-hosting gap — it needs a new
-directory-listing extern (the loader only has `read_file`).
+`loader.shard`'s `resolve_closure` (the shard import resolver, per slice-94)
+implements three things the demo pinned down:
+
+1. **Bare-name imports resolve to the interface.** `(import "bump")` (no
+   `.shard`) → `bump/mod.req.shard`, tagged **granted**; `(import "x.shard")` →
+   that file, ungranted. So a consumer loads bump's **interface only** — never
+   `bump.shard`'s bodies. (No directory-listing was needed: the interface sits
+   at a deterministic path.)
+2. **`requirement` is context-dependent** (`collect_decls`, reader.shard). In a
+   granted source it is admitted as an **axiom** (the module already proved it;
+   the consumer doesn't re-run the proof). In an ungranted source — the module's
+   own check — it stays an **obligation** that `fulfills` must discharge.
+3. **Interface loads FIRST**, without a special rule: the impl imports its own
+   interface (`(import "mod.req.shard")`), making the interface a dependency, so
+   deps-first ordering puts the requirement before the impl's `fulfills`.
+
+Threaded as a per-source `granted` tag from `resolve_closure` → `check_production_src`
+→ `run_srcs` → `parse_decls` → `collect_decls`. **Bonus:** because bare-name
+imports now resolve (the shard loader used to skip them), this also closed the
+self-hosting directory-resolution gap — e.g. `std/list.shard` went 6/7 → 28/28
+self-hosted.
+
+The native `check` path keeps loading whole modules (no selective loading) — it
+is transitional per slice-94; it still passes the demo, just without enforcing
+opacity.
 
 ## Decided
 
