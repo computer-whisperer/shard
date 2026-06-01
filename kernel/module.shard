@@ -42,11 +42,84 @@
     (List Type)                     ; parameter types
     Type))                          ; return type
 
+;; Function-dispatch index: a character trie over function names, mapping a
+;; name (its `chars_of_sym`) to its FnDef. Built once when a module is parsed/
+;; merged so the reducer resolves a Call in O(name length) instead of scanning
+;; the whole fn list per step (the old `lookup_fn`). A node holds the FnDef
+;; whose name ENDS here (if any) plus child edges keyed by the next char code.
+(type FnTrie
+  (FnTrie
+    (Option FnDef)                  ; fn whose name ends at this node
+    (List (Pair Int FnTrie))))      ; children, keyed by next char code
+
 (type Module
   (Module
     (List TypeDef)
     (List FnDef)
-    (List ExternDef)))              ; extern signatures (may be Nil)
+    (List ExternDef)                ; extern signatures (may be Nil)
+    FnTrie))                        ; fn-dispatch index over `fns` (built at parse/merge)
+
+;; ---------------------------------------------------------------------------
+;; FnTrie: build / insert / lookup. Callees precede callers (no forward refs).
+;; ---------------------------------------------------------------------------
+
+;; find the child subtrie reached by char `c`, if any.
+(fn trie_child ((c Int) (cs (List (Pair Int FnTrie)))) (Option FnTrie)
+  (match cs
+    (Nil None)
+    ((Cons (Pair k t) rest)
+      (if (int_eq k c) (Some t) (trie_child c rest)))))
+
+;; replace (or append) the child keyed by `c` with `sub`.
+(fn child_set ((c Int) (sub FnTrie) (cs (List (Pair Int FnTrie)))) (List (Pair Int FnTrie))
+  (match cs
+    (Nil (Cons (Pair c sub) Nil))
+    ((Cons (Pair k t) rest)
+      (if (int_eq k c)
+          (Cons (Pair c sub) rest)
+          (Cons (Pair k t) (child_set c sub rest))))))
+
+;; walk the trie by the remaining chars; at the end return this node's payload.
+(fn trie_lookup_chars ((cs (List Int)) (t FnTrie)) (Option FnDef)
+  (match t
+    ((FnTrie here children)
+      (match cs
+        (Nil here)
+        ((Cons c rest)
+          (match (trie_child c children)
+            (None       None)
+            ((Some sub) (trie_lookup_chars rest sub))))))))
+
+;; resolve a function name to its FnDef, O(name length). The reducer's hot path.
+(fn trie_lookup ((name Symbol) (t FnTrie)) (Option FnDef)
+  (trie_lookup_chars (chars_of_sym name) t))
+
+;; insert fd under the remaining chars; KEEP-FIRST on a name clash (mirrors the
+;; old list-scan lookup_fn, which returned the first matching def).
+(fn trie_insert_chars ((cs (List Int)) (fd FnDef) (t FnTrie)) FnTrie
+  (match t
+    ((FnTrie here children)
+      (match cs
+        (Nil
+          (match here
+            (None     (FnTrie (Some fd) children))
+            ((Some _) t)))
+        ((Cons c rest)
+          (let ((sub (match (trie_child c children)
+                       (None     (FnTrie None Nil))
+                       ((Some s) s))))
+            (FnTrie here (child_set c (trie_insert_chars rest fd sub) children))))))))
+
+(fn trie_insert ((fd FnDef) (t FnTrie)) FnTrie
+  (match fd ((FnDef name _ _ _) (trie_insert_chars (chars_of_sym name) fd t))))
+
+(fn trie_insert_many ((fds (List FnDef)) (t FnTrie)) FnTrie
+  (match fds
+    (Nil t)
+    ((Cons fd rest) (trie_insert_many rest (trie_insert fd t)))))
+
+(fn build_fn_trie ((fds (List FnDef))) FnTrie
+  (trie_insert_many fds (FnTrie None Nil)))
 
 ;; ---------------------------------------------------------------------------
 ;; Type-level helpers.
@@ -54,14 +127,14 @@
 
 (fn lookup_typedef ((name Symbol) (m Module)) (Option TypeDef)
   (match m
-    ((Module tds _ _) (find_typedef name tds))))
+    ((Module tds _ _ _) (find_typedef name tds))))
 
 ;; Lookup an extern declaration by name. The runtime uses this when
 ;; intercepting stuck calls to extern symbols; not needed by the
 ;; reducer (which treats all unknown calls as stuck regardless).
 (fn lookup_extern ((name Symbol) (m Module)) (Option ExternDef)
   (match m
-    ((Module _ _ exts) (find_extern name exts))))
+    ((Module _ _ exts _) (find_extern name exts))))
 
 (fn find_extern ((name Symbol) (exts (List ExternDef))) (Option ExternDef)
   (match exts

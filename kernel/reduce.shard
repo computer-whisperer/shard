@@ -78,18 +78,11 @@
         ((MNo)          (try_match_arms rest v))))))
 
 ;; ---------------------------------------------------------------------------
-;; Function-table lookup. Names are unique within a module.
+;; Function dispatch is now via the module's FnTrie (module.shard `trie_lookup`,
+;; O(name length)), built once at parse/merge. The old linear `lookup_fn` scan
+;; over the whole fn list per reduction step is gone — it was the dominant cost
+;; (every primitive call paid a full failed scan before the prim table).
 ;; ---------------------------------------------------------------------------
-
-(fn lookup_fn ((name Symbol) (fns (List FnDef))) (Option FnDef)
-  (match fns
-    (Nil None)
-    ((Cons fd rest)
-      (match fd
-        ((FnDef fname _ _ _)
-          (if (sym_eq name fname)
-              (Some fd)
-              (lookup_fn name rest)))))))
 
 ;; len_t: list-of-Type length. Yet another monomorphic helper.
 (fn len_t ((ts (List Type))) Int
@@ -146,8 +139,8 @@
 ;; "Primitives reachable from the kernel's reducer".
 (fn step_call ((m Module) (f Symbol) (args (List Expr))) (Option Expr)
   (match m
-    ((Module _ fns _)
-      (match (lookup_fn f fns)
+    ((Module _ _ _ trie)
+      (match (trie_lookup f trie)
         ((Some fd)
           (match (apply_fn fd args)
             ((Some e2) (Some e2))
@@ -277,8 +270,8 @@
 ;; transitively, or the user can extract the term first via Reduce.
 (fn unfold_one ((m Module) (fname Symbol) (e Expr)) (Option Expr)
   (match m
-    ((Module _ fns _)
-      (match (lookup_fn fname fns)
+    ((Module _ _ _ trie)
+      (match (trie_lookup fname trie)
         (None      None)                        ; fn doesn't exist
         ((Some fd) (unfold_one_in fd fname e))))))
 
@@ -509,8 +502,8 @@
 
 (fn step_smart_call ((m Module) (f Symbol) (args (List Expr))) (Option Expr)
   (match m
-    ((Module _ fns _)
-      (match (lookup_fn f fns)
+    ((Module _ _ _ trie)
+      (match (trie_lookup f trie)
         ((Some fd)
           ;; User fn — apply with gate.
           (match (apply_fn fd args)
