@@ -42,7 +42,15 @@ order; the loader does two passes (type and ctor names first, bodies
 second), so forward references across files are fine. Cross-file
 loading concatenates the file list in load order.
 
-Three top-level forms:
+A file may also carry `(import "path")` declarations naming the files it
+depends on; these drive dependency tracking and load order — the loader
+itself ignores them when collecting types/fns, since the assembled set is
+still concatenated as above. A directory-based module system with
+interface/visibility rules is layered on top of this floor (`mod.req`
+interface files, a Rust loader gate that rejects reaching past another
+module's interface); that system is beyond the scope of this document.
+
+Three top-level definitional forms:
 
 ```
 (type        NAME-OR-PARAMETERIZED  CTORDEF …)
@@ -330,24 +338,196 @@ Used throughout the kernel; no privileged status — just user types
 that happen to be ubiquitous.
 
 
-## 10. Proof-file surface sugars
+## 10. The proof language
 
-Beyond the narrow source forms above, the loader recognizes a small
-set of sugars used inside `(claim …)` bodies — most of them produce
-runtime Expr/Goal *values* rather than source-level terms (see
-REVISIT, *Expr-value vs source-Expr distinction*).
+> **A distinct language.** Everything above specifies the *object*
+> language — the total, pure, first-order form the kernel reasons
+> *about*. The **proof language** is a separate language with its own
+> grammar; it carries none of the object language's constraints (it is
+> not total, not the thing being compiled) and grows whatever forms the
+> checking task needs. It is documented here, in the same file, only for
+> convenience. The two-languages split is the central design point — see
+> `docs/archive/TRANSFER.md`.
+>
+> A proof s-expression is parsed **straight to the native
+> `Goal`/`Proof`/`Step` ADTs** the kernel consumes
+> (`kernel/proof_reader.shard`) — there is no reflect-as-Expr-then-
+> un-reflect roundtrip. The proof language *embeds* object-language
+> snippets (the terms an equation relates, a rewrite's instantiation
+> terms, a measure); those snippets — and only those — are parsed by the
+> object reader's `elaborate`, against the module's constructor set, so a
+> binder name that isn't a constructor becomes a free variable (`FVar`).
 
-| Form              | Expands to                                  | Slice |
-|-------------------|---------------------------------------------|-------|
-| `'foo`            | `(quote foo)` → `SymLit foo`                 | 25    |
-| `(list a b c)`    | `(Cons a (Cons b (Cons c Nil)))`             | 25    |
-| `"x+y"`           | `(list 120 43 121)` — codepoints; `String ≡ (List Int)` | 55 |
-| `(ty NAME a1 a2)` | `(TCon 'NAME (list a1 a2))`; bare symbols inside become 0-ary TCons | 28 |
-| `(tv T)`          | `(TVar 'T)` — type variable               | 31    |
+### 10.1 Top-level proof declarations
 
-`'foo` is handled by `lexpr`'s reader; the rest are recognized in
-`src/load.rs::load_expr`. The (claim NAME GOAL PROOF) form is itself
-recognized by `src/bin/check.rs`, not by the kernel.
+These four forms are recognized in source order by
+`kernel/reader.shard::collect_decls` (the front-end, in-language — *not*
+by the Rust harness). The driver (`kernel/driver.shard`) threads a
+growing theory across the whole file list: a passing claim, an admitted
+axiom, and a discharged requirement are each added so later proofs can
+cite them.
+
+```sexp
+(claim       NAME GOAL PROOF)   ; prove GOAL by PROOF; admitted as NAME if it checks
+(axiom       NAME GOAL)         ; admit GOAL without proof (a trusted boundary)
+(requirement NAME GOAL)         ; state an obligation; pending until fulfilled
+(fulfills    NAME PROOF)        ; discharge requirement NAME — its goal is looked
+                                ;   up from the contract, never restated here
+```
+
+`requirement`/`fulfills` split a contract from its proof (single source
+of truth for the goal); see `docs/BOUNDARIES.md`. An axiom or a passing
+claim/fulfillment is stored closed for citation as a `(lemma NAME)`.
+
+### 10.2 Goals and equations
+
+```sexp
+(goal (BINDER…) (PREMISE…) CONCLUSION)
+```
+
+- **`BINDER`** is `(name TYPE)`, e.g. `(x Int)` or `(xs (List T))`. The
+  binders are the goal's universally-quantified variables.
+- **Type parameters are inferred**: any symbol appearing in a binder
+  *type* that is not a known type constructor (e.g. the `T` in
+  `(List T)`) is collected as a type variable. There is no separate
+  `(tv …)` form.
+- **`PREMISE…`** is a (possibly empty) list of equations assumed as
+  hypotheses; **`CONCLUSION`** is the single equation to prove.
+- An **equation** is `(= L R)`, where `L` and `R` are object-language
+  term snippets (parsed by `elaborate`).
+
+```sexp
+;; ∀ x : Int.  x - 0 = x      (no premises)
+(goal ((x Int)) () (= (- x 0) x))
+
+;; ∀ n : Nat.  (add_nat n Z) = n
+(goal ((n Nat)) () (= (add_nat n Z) n))
+```
+
+### 10.3 Proofs
+
+| Form                                         | Native      | Meaning                                                        |
+|----------------------------------------------|-------------|----------------------------------------------------------------|
+| `refl`                                       | `Refl`      | the two sides are already syntactically equal                  |
+| `(steps (STEP…) PROOF)`                      | `Steps`     | apply rewriting STEPs to the sequent, then continue with PROOF |
+| `(induct VAR (CASE…))`                       | `Induct`    | structural induction on `VAR` (one IH per recursive field)     |
+| `(induct2 VAR (CASE…))`                      | `Induct2`   | two-step (parity) induction; `SS` case carries one IH          |
+| `(case-on TERM TYPE (CASE…))`                | `CaseOn`    | split on the constructor of `TERM` (of named `TYPE`); no IH    |
+| `(wf-induct MEASURE PROOF)`                  | `WfInduct`  | well-founded induction on the Int `MEASURE`; prepends IH `ih`  |
+| `(rewrite-with EQREF DIR SIDE (INST…) (PROOF…) PROOF)` | `RewriteWith` | rewrite by a cited equation whose own premises are discharged by the sub-`PROOF`s, then continue |
+| `(absurd EQREF)`                             | `Absurd`    | close the goal from a contradictory hypothesis                 |
+| `(by THEORY PAYLOAD)`                         | `ByTheory`  | discharge via a decision procedure (§10.7)                     |
+
+### 10.4 Cases
+
+A `CASE` (under `induct`/`induct2`/`case-on`) names a constructor and
+gives the sub-proof for that arm:
+
+```sexp
+(case CTOR PROOF)              ; constructor with no field binders needed
+(case CTOR (FIELD…) PROOF)     ; bind the constructor's fields by name
+```
+
+### 10.5 Steps
+
+A `STEP` (inside `(steps …)`) transforms the current sequent. Each takes
+a **side** — `lhs`, `rhs`, or `both`:
+
+| Form                                  | Native    | Meaning                                                 |
+|---------------------------------------|-----------|---------------------------------------------------------|
+| `(reduce SIDE)`                       | `Reduce`  | run the evaluator on SIDE                               |
+| `(simp SIDE)`                         | `Simp`    | simplify SIDE (reduce + congruence)                     |
+| `(compute SIDE)`                      | `Compute` | fully evaluate a closed SIDE to a value                 |
+| `(unfold FN SIDE)`                    | `Unfold`  | unfold one application of function `FN` on SIDE         |
+| `(rewrite EQREF DIR SIDE ALL (INST…))`| `Rewrite` | rewrite SIDE by the cited equation (§10.6)              |
+
+In `rewrite`: **`DIR`** is `lr` (left-to-right) or `rl`; **`ALL`** is
+`true`/`false` (rewrite every match vs. the first); **`INST`** is
+`(inst NAME TERM)`, instantiating a variable of the cited equation to an
+object-term snippet.
+
+### 10.6 Equation references (`EQREF`)
+
+What a `rewrite`/`rewrite-with`/`absurd` cites:
+
+| Form           | Native          | Refers to                                              |
+|----------------|-----------------|--------------------------------------------------------|
+| `(hyp K)`      | `(Hyp K)`       | hypothesis at positional index `K` (innermost = 0)     |
+| `(hyp NAME)`   | `(HypName NAME)`| a hypothesis by name — desugared to positional (below) |
+| `(premise K)`  | `(Premise K)`   | the goal's `K`-th premise                              |
+| `(lemma NAME)` | `(Lemma NAME)`  | an admitted axiom or previously-proven claim           |
+
+**Named hypotheses** are a parse-time convenience. The reader emits
+`(HypName NAME)`; a separate pass (`kernel/desugar.shard`,
+`desugar_proof_named`) simulates the kernel's hyp stack and rewrites each
+to its positional `(Hyp K)`. The induction hypotheses are auto-named
+`ih`, `ih1`, `ih2`, …: `wf-induct` prepends one `ih`; each
+`induct`/`induct2` case appends one IH per recursive constructor field
+(in `do_induct` order). An unbound name is left as `(HypName NAME)` and
+fails cleanly at resolution. The reader stays a pure parser — it does not
+know induction semantics — which is why naming is resolved in a later
+pass, not during parsing.
+
+### 10.7 Theories (`by`)
+
+`(by THEORY PAYLOAD)` discharges the current sequent with a decision
+procedure. Four are registered (`kernel/checker.shard`):
+
+| THEORY   | Decides                                                            | Payload          |
+|----------|-------------------------------------------------------------------|------------------|
+| `lia`    | linear-integer identities (normalize both sides; lhs−rhs ≡ 0)     | `(list)` — unused |
+| `eqdec`  | `(int_eq a b) = True` / `(sym_eq a b) = True` reflexivity facts   | `(list)` — unused |
+| `ord`    | `(lt a b) = True` / `(le a b) = True` when `b−a` is a constant    | `(list)` — unused |
+| `farkas` | linear-integer **entailment**: premises ⊢ `(lt|le a b) = True`    | Farkas cert (below) |
+
+Only `farkas` reads its payload. The payload is **native data** read
+directly by the checker, *not* an object-term snippet: `(list 1 1 -2)`
+becomes the native list of bare `Int`s `(Cons 1 (Cons 1 (Cons -2 Nil)))`
+(the equality case nests two lists, `(list le_mults ge_mults)`). The
+other three take an empty `(list)`.
+
+### 10.8 Object-snippet sugars
+
+Inside the object-term snippets a proof embeds (equation sides, `inst`
+terms, measures), the ordinary object-language literal sugars apply:
+
+| Form           | Expands to                                  |
+|----------------|---------------------------------------------|
+| `'foo`         | `(quote foo)` → `SymLit foo`                 |
+| `(list a b c)` | `(Cons a (Cons b (Cons c Nil)))`             |
+| `"x+y"`        | `(list 120 43 121)` — codepoints; `String ≡ (List Int)` |
+
+The retired reflected surface had additional `(ty …)`/`(tv …)` sugars
+for building reflected `Type` *values*; the proof language no longer
+needs them — binder types are written as ordinary object types (§3) and
+type variables are inferred (§10.2).
+
+### 10.9 Worked example
+
+The axiom / requirement / fulfills triple, exercising `induct`, `case`,
+`steps`, `unfold`, `reduce`, and a `rewrite` citing the induction
+hypothesis (`examples/contract_demo.shard`):
+
+```sexp
+(import "../std/nat.shard")
+
+;; admitted without proof, available to later citations:
+(axiom add_zero_left (goal ((n Nat)) () (= (add_nat Z n) n)))
+
+;; the obligation, stated once:
+(requirement add_zero_right (goal ((n Nat)) () (= (add_nat n Z) n)))
+
+;; its fulfillment — the goal is looked up from the contract:
+(fulfills add_zero_right
+  (induct n
+    ((case Z
+       (steps ((unfold add_nat lhs) (reduce lhs)) refl))
+     (case S
+       (steps ((unfold add_nat lhs)
+               (reduce lhs)
+               (rewrite (hyp 0) lr lhs true ()))   ; (hyp 0) = the IH
+              refl)))))
+```
 
 ## 11. The narrow / full distinction
 
@@ -423,7 +603,11 @@ x86) — see `docs/OVERVIEW.md`.
 - No type checking at load or eval time (Trust comes from review of
   the trusted Rust component — see REVISIT, "Trusted-by-review Rust
   component").
-- No imports / namespaces; all definitions live in a flat module.
+- No first-class namespaces *within* the evaluator — once a file set is
+  assembled it loads into one flat module. Files do, however, declare
+  their dependencies with `(import "path")`, and a directory-based module
+  system with interface/visibility rules is layered on top (see §2); that
+  system is not specified in this doc.
 - No mutability of any kind.
 - No *distinct* string type: string literals `"…"` exist as sugar for
   `(List Int)` of codepoints (§4.1, §10), not as an opaque primitive.
