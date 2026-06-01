@@ -1,0 +1,73 @@
+;;; std/map/map.shard — the `map` module IMPLEMENTATION (private).
+;;;
+;;; Supplies the full type (with the PRIVATE ctors MEmpty/MCons), the bodies
+;;; behind the interface's opaque sig fns, and the `fulfills` proofs. It imports
+;;; its own interface (ungranted) so the requirements load as obligations; the
+;;; full `(type …)` here shadows the interface's abstract `(sig type …)` so the
+;;; impl's own bodies/proofs may construct and match the representation (sound:
+;;; the module reasons about itself). Consumer PROOFS never see the ctors.
+;;;
+;;; Representation: association list, PREPEND insert + FIRST-MATCH lookup —
+;;; insert may leave shadowed entries, so map facts are stated EXTENSIONALLY
+;;; (under lookup over a probe key), the honest first-order treatment.
+
+(import "../../kernel/stdlib.shard")
+(import "mod.req.shard")        ; our interface — the abstract type + sig fns + reqs
+
+(type (Map V)
+  (MEmpty)
+  (MCons Int V (Map V)))
+
+(fn (empty V) () (Map V) MEmpty)
+
+;; lookup: first entry whose key int_eq's k, else None.
+(fn (lookup V) ((k Int) (m (Map V))) (Option V)
+  (match m
+    (MEmpty None)
+    ((MCons k2 v rest)
+      (if (int_eq k k2) (Some v) (lookup k rest)))))
+
+;; insert: prepend a fresh (k, v) binding. Shadows any prior k.
+(fn (insert V) ((k Int) (v V) (m (Map V))) (Map V)
+  (MCons k v m))
+
+;; ---- discharge the interface's requirements ----
+
+(fulfills int_eq_refl (by eqdec (list)))
+
+;; empty has no bindings: unfold empty to MEmpty, fire the MEmpty arm.
+(fulfills lookup_empty
+  (steps ((unfold empty lhs) (simp lhs)) refl))
+
+;; read-back: peel insert, expose (if (int_eq k k) …), int_eq_refl, fire.
+(fulfills lookup_insert_eq
+  (steps
+    ((unfold insert lhs)
+     (simp lhs)
+     (rewrite (lemma int_eq_refl) lr lhs true ())
+     (simp lhs))
+    refl))
+
+;; different key: the disequality premise collapses the if's else-branch.
+(fulfills lookup_insert_neq
+  (steps
+    ((unfold insert lhs)
+     (simp lhs)
+     (rewrite (premise 0) lr lhs true ())
+     (simp lhs))
+    refl))
+
+;; shadow (extensional): case-split on whether the probe key j hits k.
+(fulfills insert_shadow
+  (case-on (int_eq j k) Bool
+    ((case True
+       (steps
+         ((unfold insert lhs) (simp lhs) (rewrite (hyp 0) lr lhs true ()) (simp lhs)
+          (unfold insert rhs) (simp rhs) (rewrite (hyp 0) lr rhs true ()) (simp rhs))
+         refl))
+     (case False
+       (steps
+         ((unfold insert lhs) (simp lhs) (rewrite (hyp 0) lr lhs true ()) (simp lhs)
+          (unfold insert lhs) (simp lhs) (rewrite (hyp 0) lr lhs true ()) (simp lhs)
+          (unfold insert rhs) (simp rhs) (rewrite (hyp 0) lr rhs true ()) (simp rhs))
+         refl)))))

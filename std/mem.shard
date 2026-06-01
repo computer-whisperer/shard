@@ -41,11 +41,13 @@
 
 ;; read: total cell read. Recurses over the map; default 0 if absent.
 ;; Structurally recursive on the map.
+;; read: total Int-valued read (missing key reads 0). Built on map's PUBLIC
+;; `lookup` — std/map's representation (MEmpty/MCons) is opaque to us, so we
+;; observe only through the interface and reason via its extensional lemmas.
 (fn read ((m (Map Int)) (a Int)) Int
-  (match m
-    (MEmpty 0)
-    ((MCons k2 v rest)
-      (if (int_eq a k2) v (read rest a)))))
+  (match (lookup a m)
+    (None     0)
+    ((Some v) v)))
 
 ;; write: store v at address a. A write IS an insert (prepend).
 (fn write ((m (Map Int)) (a Int) (v Int)) (Map Int)
@@ -121,7 +123,9 @@
 
 (claim read_write_eq
   (goal ((m (Map Int)) (a Int) (v Int)) () (= (read (write m a v) a) v))
-  (steps ((unfold write lhs) (unfold insert lhs) (simp lhs) (rewrite (lemma int_eq_refl) lr lhs true ()) (simp lhs)) refl))
+  ;; write→insert (reachable as read's arg), then unfold read, then map's
+  ;; read-back lemma (no peeking at MCons).
+  (steps ((unfold write lhs) (unfold read lhs) (rewrite (lemma lookup_insert_eq) lr lhs true ()) (simp lhs)) refl))
 
 ;; ---------------------------------------------------------------------------
 ;; read_write_neq: ∀ m a b v. (int_eq b a) = False ⊢
@@ -136,7 +140,13 @@
 
 (claim read_write_neq
   (goal ((m (Map Int)) (a Int) (b Int) (v Int)) ((= (int_eq b a) False)) (= (read (write m a v) b) (read m b)))
-  (steps ((unfold write lhs) (unfold insert lhs) (simp lhs) (rewrite (premise 0) lr lhs true ()) (simp lhs)) refl))
+  ;; write→insert (reachable as read's arg), unfold read, then map's
+  ;; lookup_insert_neq (premise: b≠a); unfold read on the rhs so both sides
+  ;; are (match (lookup b m) …).
+  (steps ((unfold write lhs) (unfold read lhs))
+    (rewrite-with (lemma lookup_insert_neq) lr lhs ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+      (steps ((unfold read rhs)) refl))))
 
 ;; ---------------------------------------------------------------------------
 ;; read_swap_j: ∀ m i j. (read (swap m i j) j) = (read m i).
@@ -497,5 +507,5 @@
 ;; ===========================================================================
 
 (claim mem_reverses
-  (goal ((xs (List Int))) () (= (dump 0 (length_nat xs) (rev_loop (load xs 0 MEmpty) 0 (- (int_of_nat (length_nat xs)) 1) (half_nat (length_nat xs)))) (rev xs)))
+  (goal ((xs (List Int))) () (= (dump 0 (length_nat xs) (rev_loop (load xs 0 (empty)) 0 (- (int_of_nat (length_nat xs)) 1) (half_nat (length_nat xs)))) (rev xs)))
   (rewrite-with (lemma dump_R_rdump) lr lhs () ((steps ((simp lhs)) refl) (by ord (list)) (steps ((rewrite (lemma sub_zero) lr lhs true ())) (rewrite-with (lemma half_bound) lr lhs () () refl))) (steps ((rewrite (lemma cap_idx) lr lhs true ())) (rewrite-with (lemma rev_dump_rdump) rl lhs () () (rewrite-with (lemma dump_load_id) lr lhs () () refl)))))
