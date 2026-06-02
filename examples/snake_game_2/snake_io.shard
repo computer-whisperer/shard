@@ -50,23 +50,24 @@
 ;; ---- the world / play loop ------------------------------------------------
 (fn w_clock ((w World)) Int (match w ((World n) n)))
 
-;; The bounded play loop: read a key (oracle); idle -> stop; else WRITE a frame
-;; and recurse. `write` is the sole clock effect per tick. State is held fixed
-;; (real `step` deferred) — the clock theorem does not depend on it.
-(fn play_fuel ((n Nat) (s GameState) (w World)) World
-  (match n
-    (Z w)
-    ((S k)
+;; The bounded play loop on an INT fuel: while fuel > 0, read a key (oracle);
+;; idle -> stop; else WRITE a frame and recurse on (f - 1). `write` is the sole
+;; clock effect per tick. State is held fixed (real `step` deferred) — the clock
+;; theorem does not depend on it. Int fuel (not unary Nat) so the runtime budget
+;; can be countably large; the proof uses WfInduct on the fuel measure.
+(fn play_fuel ((f Int) (s GameState) (w World)) World
+  (if (lt 0 f)
       (match (key_oracle w)
         (None w)
-        ((Some key) (play_fuel k s (write (frame s) w)))))))
+        ((Some key) (play_fuel (- f 1) s (write (frame s) w))))
+      w))
 
 ;; ---- the executable -------------------------------------------------------
-;; `fuel` is the opaque global step budget (Nat here to reuse the proven
-;; structural induction; an Int + WfInduct swap makes it countably large at RUN
-;; without changing the proof). `main` is the entry the contract is about — it
-;; just runs the private `play_fuel` worker from `init` for `fuel` steps.
-(fn fuel () Nat (S (S (S Z))))                          ; placeholder budget (opaque in proofs)
+;; `fuel` is the opaque global step budget — a large Int at RUN, abstract in
+;; CHECK (the proof cites the ∀-fuel lemma at it, never reducing it). `main` is
+;; the entry the contract is about — it runs the private `play_fuel` worker from
+;; `init` for `fuel` steps.
+(fn fuel () Int 1000000000)                             ; large budget (opaque in proofs)
 (fn init () GameState (GS (Cons (Pos 2 2) Nil) Up (Pos 3 3) 0 Alive 0))
 (fn main ((w World)) World (play_fuel (fuel) (init) w))
 
@@ -98,27 +99,43 @@
 
 ;; RUN BOUNDARY — clock monotonicity, now stated over MAIN.
 ;;
-;; The private ∀-fuel WORKER lemma: monotone for EVERY fuel, by induction on it
-;; (the cat_mono pattern — CaseOn the oracle; Some advances the clock by one
-;; write, chained with the IH via le_trans). This is the once-proven, fuel-
-;; uniform fact.
+;; WfInduct's termination obligation for the (- f 1) recursion: from 0 < f the
+;; predecessor is non-negative. farkas reads goal PREMISES, so this is a lemma
+;; (its premise `lt 0 f` is then discharged from the case hypothesis).
+(claim step_nonneg
+  (goal ((x Int)) ((= (lt 0 x) True)) (= (le 0 (- x 1)) True))
+  (by farkas (list 1 1)))
+
+;; The private ∀-fuel WORKER lemma: monotone for EVERY Int fuel, by WELL-FOUNDED
+;; induction on the fuel measure `f`. case-on (lt 0 f): the base (f<=0) returns
+;; w; the step writes once (write_clock) and recurses on (f-1), chaining the IH
+;; (Hyp 2) via le_trans. Citing the IH discharges 0<=f-1 (step_nonneg, premise
+;; from the lt-hyp at Hyp 1) and f-1<f (ord). The once-proven, fuel-uniform fact.
 (claim play_clock_mono
-  (goal ((n Nat) (s GameState) (w World)) ()
-    (= (le (w_clock w) (w_clock (play_fuel n s w))) True))
-  (induct n
-    ((case Z (steps ((simp lhs)) (by ord (list))))
-     (case S
-       (steps ((simp lhs))
-         (case-on (key_oracle w) Option
-           ((case None
-              (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) (by ord (list))))
-            (case Some (key)
-              (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
-                (rewrite-with (lemma le_trans) lr lhs
-                  ((inst b (w_clock (write (frame s) w))))
-                  ((steps ((rewrite (lemma write_clock) lr lhs true ())) (by ord (list)))
-                   (rewrite-with (hyp 1) lr lhs () () refl))
-                  refl))))))))))
+  (goal ((f Int) (s GameState) (w World)) ()
+    (= (le (w_clock w) (w_clock (play_fuel f s w))) True))
+  (wf-induct f
+    (case-on (lt 0 f) Bool
+      ((case False
+         (steps ((unfold play_fuel lhs) (rewrite (hyp 0) lr lhs true ()) (simp lhs))
+           (by ord (list))))
+       (case True
+         (steps ((unfold play_fuel lhs) (rewrite (hyp 0) lr lhs true ()) (simp lhs))
+           (case-on (key_oracle w) Option
+             ((case None
+                (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) (by ord (list))))
+              (case Some (key)
+                (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
+                  (rewrite-with (lemma le_trans) lr lhs
+                    ((inst b (w_clock (write (frame s) w))))
+                    ((steps ((rewrite (lemma write_clock) lr lhs true ())) (by ord (list)))
+                     (rewrite-with (hyp 2) lr lhs ()
+                       ((rewrite-with (lemma step_nonneg) lr lhs ((inst x f))
+                          ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
+                          refl)
+                        (by ord (list)))
+                       refl))
+                    refl)))))))))))
 
 ;; THE CONTRACT REQUIREMENT, over main: unfold `main` to expose
 ;; `play_fuel (fuel) (init) w`, then cite the worker lemma INSTANTIATED at the
