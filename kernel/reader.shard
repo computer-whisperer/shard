@@ -632,11 +632,12 @@
   (if (sym_eq h (quote axiom))       True
   (if (sym_eq h (quote requirement)) True
   (if (sym_eq h (quote fulfills))    True
+  (if (sym_eq h (quote bin))         True
   (if (sym_eq h (quote import))      True
   (if (sym_eq h (quote use-module))  True
   (if (sym_eq h (quote app))         True
   (if (sym_eq h (quote cli))         True
-  False))))))))))
+  False)))))))))))
 
 ;; Pass 1: collect all (type …) definitions, in source order.
 ;; `(sig type (Map V))` → an ABSTRACT (opaque) type: a TypeDef with the name and
@@ -811,6 +812,11 @@
     ((SList (Cons (SSym h) _)) (sym_eq h (quote fulfills)))
     (_ False)))
 
+(fn is_bin_form ((f SExpr)) Bool
+  (match f
+    ((SList (Cons (SSym h) _)) (sym_eq h (quote bin)))
+    (_ False)))
+
 ;; ===========================================================================
 ;; Unified declaration stream: claims and axioms in SOURCE ORDER. The
 ;; production driver processes a file's forms in order (axioms admitted,
@@ -859,6 +865,45 @@
 (fn ful_of_form ((f SExpr)) (Option Ful)
   (match f
     ((SList (Cons _ (Cons (SSym name) (Cons proofS Nil)))) (Some (Ful name proofS)))
+    (_ None)))
+
+;; ---- bin (executable-artifact decl) ---------------------------------------
+;; (bin NAME (entry E) (externs …) (trusts …) (requires …)) groups a binary's
+;; acceptance contract: the entry fn, the permitted I/O boundary, the trusted
+;; bolt axioms, and the requirement names it must discharge. The driver reports
+;; each required name MET/UNMET against the final theory — so a pending
+;; obligation is surfaced (and fails the run), not silently dropped.
+(type Bin (Bin Symbol Symbol (List Symbol) (List Symbol) (List Symbol)))
+  ; name, entry, externs, trusts, requires
+(fn bin_name     ((b Bin)) Symbol         (match b ((Bin n e x t r) n)))
+(fn bin_requires ((b Bin)) (List Symbol)  (match b ((Bin n e x t r) r)))
+
+;; bare symbols out of an sexpr arg list (non-symbols skipped).
+(fn syms_of_sexprs ((xs (List SExpr))) (List Symbol)
+  (match xs
+    (Nil Nil)
+    ((Cons (SSym s) rest) (Cons s (syms_of_sexprs rest)))
+    ((Cons _ rest) (syms_of_sexprs rest))))
+
+(fn head_sym_or ((d Symbol) (xs (List Symbol))) Symbol
+  (match xs (Nil d) ((Cons h _) h)))
+
+;; the args of the clause (KEY arg …) among a bin's clauses (Nil if absent).
+(fn bin_clause ((key Symbol) (clauses (List SExpr))) (List Symbol)
+  (match clauses
+    (Nil Nil)
+    ((Cons (SList (Cons (SSym h) args)) rest)
+      (if (sym_eq h key) (syms_of_sexprs args) (bin_clause key rest)))
+    ((Cons _ rest) (bin_clause key rest))))
+
+(fn bin_of_form ((f SExpr)) (Option Bin)
+  (match f
+    ((SList (Cons (SSym h) (Cons (SSym name) clauses)))
+      (Some (Bin name
+                 (head_sym_or name (bin_clause (quote entry) clauses))
+                 (bin_clause (quote externs)  clauses)
+                 (bin_clause (quote trusts)   clauses)
+                 (bin_clause (quote requires) clauses))))
     (_ None)))
 
 (type Decl

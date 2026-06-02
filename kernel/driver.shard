@@ -62,7 +62,8 @@
 (type ClaimOutcome
   (COPass  Symbol (List Int))                   ; name, trace-block
   (COFail  Symbol (List Int) (List Int))        ; name, diagnostic detail, trace-block
-  (COAxiom Symbol))                             ; an axiom admitted without proof
+  (COAxiom Symbol)                              ; an axiom admitted without proof
+  (COBin   Symbol Int Int))                     ; a bin acceptance summary: name, required, met
 
 ;; theory threaded + PENDING requirements (name→goal, seeded by `requirement`,
 ;; consumed by `fulfills`) + outcomes accumulated in REVERSE (caller reverses).
@@ -201,13 +202,75 @@
         (None (run_srcs m rest ctors st target focus))
         ((Some ds) (run_srcs m rest ctors (run_decls m st ds target focus) target focus))))))
 
+;; ---- bin acceptance reporting ---------------------------------------------
+;; A `(bin …)` groups requirement names into an artifact's acceptance contract.
+;; After the whole closure is checked, each required name is looked up in the
+;; final theory: present (a fulfilled requirement / proven claim / admitted
+;; axiom) = MET; absent (still a pending obligation) = UNMET. UNMET names become
+;; COFail outcomes, so a pending requirement is SURFACED and fails the run —
+;; closing the "pending is silent" gap. Bins are scanned from the raw forms
+;; (they never enter the decl/theory stream).
+(fn req_met ((name Symbol) (th Theory)) Bool
+  (match (lookup_lemma name th) (None False) ((Some _) True)))
+
+(fn count_met ((names (List Symbol)) (th Theory)) Int
+  (match names (Nil 0) ((Cons n rest) (+ (if (req_met n th) 1 0) (count_met rest th)))))
+
+(fn len_syms ((names (List Symbol))) Int
+  (match names (Nil 0) ((Cons _ rest) (+ 1 (len_syms rest)))))
+
+(fn unmet_fails ((names (List Symbol)) (th Theory)) (List ClaimOutcome)
+  (match names
+    (Nil Nil)
+    ((Cons n rest)
+      (if (req_met n th)
+          (unmet_fails rest th)
+          (Cons (COFail n "UNMET: listed in a (bin requires) but never fulfilled" Nil)
+                (unmet_fails rest th))))))
+
+(fn oc_concat ((a (List ClaimOutcome)) (b (List ClaimOutcome))) (List ClaimOutcome)
+  (match a (Nil b) ((Cons h t) (Cons h (oc_concat t b)))))
+
+(fn bin_report ((b Bin) (th Theory)) (List ClaimOutcome)
+  (match b
+    ((Bin name entry externs trusts requires)
+      (Cons (COBin name (len_syms requires) (count_met requires th))
+            (unmet_fails requires th)))))
+
+(fn bin_reports ((bins (List Bin)) (th Theory)) (List ClaimOutcome)
+  (match bins
+    (Nil Nil)
+    ((Cons b rest) (oc_concat (bin_report b th) (bin_reports rest th)))))
+
+(fn bin_concat ((a (List Bin)) (b (List Bin))) (List Bin)
+  (match a (Nil b) ((Cons h t) (Cons h (bin_concat t b)))))
+
+(fn bins_of_forms ((forms (List SExpr))) (List Bin)
+  (match forms
+    (Nil Nil)
+    ((Cons f rest)
+      (if (is_bin_form f)
+          (match (bin_of_form f)
+            (None (bins_of_forms rest))
+            ((Some b) (Cons b (bins_of_forms rest))))
+          (bins_of_forms rest)))))
+
+(fn bins_of_srcs ((srcs (List (Pair Bool (List Int))))) (List Bin)
+  (match srcs
+    (Nil Nil)
+    ((Cons (Pair _ src) rest)
+      (match (read_all src)
+        (None (bins_of_srcs rest))
+        ((Some forms) (bin_concat (bins_of_forms forms) (bins_of_srcs rest)))))))
+
 ;; Production entry point: returns the per-claim/axiom outcomes (source order)
-;; for the whole file list, checked against m from the empty theory. `target`
-;; is the `--trace` claim name ('all for every claim, or a non-matching
-;; sentinel for no tracing).
+;; for the whole file list, checked against m from the empty theory, followed
+;; by each bin's acceptance report. `target` is the `--trace` claim name ('all
+;; for every claim, or a non-matching sentinel for no tracing).
 (fn check_production ((m Module) (srcs (List (Pair Bool (List Int)))) (ctors (List Symbol)) (target Symbol) (focus Symbol)) (List ClaimOutcome)
   (match (run_srcs m srcs ctors (RunState TheoryEmpty Nil Nil) target focus)
-    ((RunState th pend acc) (rev_outcomes acc Nil))))
+    ((RunState th pend acc)
+      (oc_concat (rev_outcomes acc Nil) (bin_reports (bins_of_srcs srcs) th)))))
 
 ;; build_module only reads types/fns/externs (it skips claim/requirement/…), so
 ;; it neither needs nor sees the granted tag — strip to raw bytes for it.
