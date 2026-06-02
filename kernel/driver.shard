@@ -231,16 +231,139 @@
 (fn oc_concat ((a (List ClaimOutcome)) (b (List ClaimOutcome))) (List ClaimOutcome)
   (match a (Nil b) ((Cons h t) (Cons h (oc_concat t b)))))
 
-(fn bin_report ((b Bin) (th Theory)) (List ClaimOutcome)
+(fn sym_in ((x Symbol) (xs (List Symbol))) Bool
+  (match xs (Nil False) ((Cons h t) (if (sym_eq x h) True (sym_in x t)))))
+
+(fn sym_concat ((a (List Symbol)) (b (List Symbol))) (List Symbol)
+  (match a (Nil b) ((Cons h t) (Cons h (sym_concat t b)))))
+
+;; ---- entry: the named fn must exist (with a body) and be (World) -> World ---
+(fn is_world ((t Type)) Bool (type_eq t (TCon (quote World) Nil)))
+
+(fn entry_ok ((fd FnDef)) Bool
+  (match fd
+    ((FnDef _ params ret _)
+      (if (is_world ret)
+          (match params ((Cons p Nil) (is_world p)) (_ False))
+          False))))
+
+(fn entry_check ((entry Symbol) (m Module)) (List ClaimOutcome)
+  (match m
+    ((Module _ _ _ trie)
+      (match (trie_lookup entry trie)
+        (None (Cons (COFail entry "entry: no implemented fn of this name (bodyless sig only?)" Nil) Nil))
+        ((Some fd)
+          (if (entry_ok fd) Nil
+              (Cons (COFail entry "entry: must have type (World) -> World" Nil) Nil)))))))
+
+;; ---- trusts: must EQUAL the module's own (axiom) decls (its real TCB) -------
+;; Every module-declared axiom must be listed (no hidden trust); every listed
+;; name must be one of them (no phantom / proven-listed-as-trusted).
+(fn missing_trust ((own (List Symbol)) (trusts (List Symbol))) (List ClaimOutcome)
+  (match own
+    (Nil Nil)
+    ((Cons a rest)
+      (if (sym_in a trusts)
+          (missing_trust rest trusts)
+          (Cons (COFail a "untrusted: a module (axiom) is not listed in (bin trusts)" Nil)
+                (missing_trust rest trusts))))))
+
+(fn phantom_trust ((trusts (List Symbol)) (own (List Symbol))) (List ClaimOutcome)
+  (match trusts
+    (Nil Nil)
+    ((Cons t rest)
+      (if (sym_in t own)
+          (phantom_trust rest own)
+          (Cons (COFail t "trusts: not a module-declared axiom (only own (axiom)s are TCB)" Nil)
+                (phantom_trust rest own))))))
+
+(fn trusts_check ((trusts (List Symbol)) (own (List Symbol))) (List ClaimOutcome)
+  (oc_concat (missing_trust own trusts) (phantom_trust trusts own)))
+
+;; ---- externs: must EQUAL the module's declared extern surface --------------
+;; Real externs come from `(extern …)` forms — NOT the Module's ExternDef list,
+;; which also holds every `(sig fn …)` signature (both parse to ExternDef).
+(fn missing_extern ((decl (List Symbol)) (listed (List Symbol))) (List ClaimOutcome)
+  (match decl
+    (Nil Nil)
+    ((Cons e rest)
+      (if (sym_in e listed)
+          (missing_extern rest listed)
+          (Cons (COFail e "boundary: a declared extern is not listed in (bin externs)" Nil)
+                (missing_extern rest listed))))))
+
+(fn phantom_extern ((listed (List Symbol)) (decl (List Symbol))) (List ClaimOutcome)
+  (match listed
+    (Nil Nil)
+    ((Cons e rest)
+      (if (sym_in e decl)
+          (phantom_extern rest decl)
+          (Cons (COFail e "externs: not a declared extern of this module" Nil)
+                (phantom_extern rest decl))))))
+
+(fn externs_check ((listed (List Symbol)) (decl (List Symbol))) (List ClaimOutcome)
+  (oc_concat (missing_extern decl listed) (phantom_extern listed decl)))
+
+;; the module's OWN extern decls = `(extern …)` in its ungranted sources.
+(fn extern_decl_name ((f SExpr)) (Option Symbol)
+  (match f
+    ((SList (Cons (SSym h) (Cons (SSym name) _)))
+      (if (sym_eq h (quote extern)) (Some name) None))
+    (_ None)))
+
+(fn extern_names_of_forms ((forms (List SExpr))) (List Symbol)
+  (match forms
+    (Nil Nil)
+    ((Cons f rest)
+      (match (extern_decl_name f)
+        (None (extern_names_of_forms rest))
+        ((Some n) (Cons n (extern_names_of_forms rest)))))))
+
+(fn own_externs_of_srcs ((srcs (List (Pair Bool (List Int))))) (List Symbol)
+  (match srcs
+    (Nil Nil)
+    ((Cons (Pair granted src) rest)
+      (if granted
+          (own_externs_of_srcs rest)
+          (match (read_all src)
+            (None (own_externs_of_srcs rest))
+            ((Some forms) (sym_concat (extern_names_of_forms forms) (own_externs_of_srcs rest))))))))
+
+;; the module's OWN axiom decls = `(axiom …)` in its ungranted sources (a granted
+;; dependency interface's axioms are proven upstream, not this binary's TCB).
+(fn axiom_names_of_forms ((forms (List SExpr))) (List Symbol)
+  (match forms
+    (Nil Nil)
+    ((Cons f rest)
+      (if (is_axiom_form f)
+          (match (goalonly_of_form f)
+            (None (axiom_names_of_forms rest))
+            ((Some (Pair name _)) (Cons name (axiom_names_of_forms rest))))
+          (axiom_names_of_forms rest)))))
+
+(fn own_axioms_of_srcs ((srcs (List (Pair Bool (List Int))))) (List Symbol)
+  (match srcs
+    (Nil Nil)
+    ((Cons (Pair granted src) rest)
+      (if granted
+          (own_axioms_of_srcs rest)
+          (match (read_all src)
+            (None (own_axioms_of_srcs rest))
+            ((Some forms) (sym_concat (axiom_names_of_forms forms) (own_axioms_of_srcs rest))))))))
+
+(fn bin_report ((b Bin) (th Theory) (m Module) (own_ax (List Symbol)) (own_ext (List Symbol))) (List ClaimOutcome)
   (match b
     ((Bin name entry externs trusts requires)
-      (Cons (COBin name (len_syms requires) (count_met requires th))
-            (unmet_fails requires th)))))
+      (oc_concat (Cons (COBin name (len_syms requires) (count_met requires th)) Nil)
+        (oc_concat (entry_check entry m)
+          (oc_concat (trusts_check trusts own_ax)
+            (oc_concat (externs_check externs own_ext)
+              (unmet_fails requires th))))))))
 
-(fn bin_reports ((bins (List Bin)) (th Theory)) (List ClaimOutcome)
+(fn bin_reports ((bins (List Bin)) (th Theory) (m Module) (own_ax (List Symbol)) (own_ext (List Symbol))) (List ClaimOutcome)
   (match bins
     (Nil Nil)
-    ((Cons b rest) (oc_concat (bin_report b th) (bin_reports rest th)))))
+    ((Cons b rest) (oc_concat (bin_report b th m own_ax own_ext) (bin_reports rest th m own_ax own_ext)))))
 
 (fn bin_concat ((a (List Bin)) (b (List Bin))) (List Bin)
   (match a (Nil b) ((Cons h t) (Cons h (bin_concat t b)))))
@@ -270,7 +393,9 @@
 (fn check_production ((m Module) (srcs (List (Pair Bool (List Int)))) (ctors (List Symbol)) (target Symbol) (focus Symbol)) (List ClaimOutcome)
   (match (run_srcs m srcs ctors (RunState TheoryEmpty Nil Nil) target focus)
     ((RunState th pend acc)
-      (oc_concat (rev_outcomes acc Nil) (bin_reports (bins_of_srcs srcs) th)))))
+      (oc_concat (rev_outcomes acc Nil)
+                 (bin_reports (bins_of_srcs srcs) th m
+                              (own_axioms_of_srcs srcs) (own_externs_of_srcs srcs))))))
 
 ;; build_module only reads types/fns/externs (it skips claim/requirement/…), so
 ;; it neither needs nor sees the granted tag — strip to raw bytes for it.
