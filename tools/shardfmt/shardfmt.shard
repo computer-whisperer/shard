@@ -182,15 +182,34 @@
 (fn sp ((n Int)) (List Int)
   (if (le n 0) Nil (Cons 32 (sp (- n 1)))))
 
+;; a match form with at least two items after the head NEVER prints flat —
+;; arms belong on their own lines (the corpus idiom, pinned by scenario).
+(fn cl_match ((items (List CNode))) Bool
+  (match items
+    ((Cons h t)
+      (match h
+        ((CAtom a)
+          (if (bytes_eq a "match")
+              (match t
+                ((Cons x r)
+                  (match r
+                    ((Cons y s) True)
+                    (_ False)))
+                (_ False))
+              False))
+        (_ False)))
+    (_ False)))
+
 ;; ---- the width probe: remaining budget after a flat render, or negative ----
-;; (negative also encodes "cannot flatten": comments/blanks have no flat form)
+;; (negative also encodes "cannot flatten": comments/blanks have no flat form,
+;; and match forms refuse by policy)
 (fn flat_w ((n CNode) (b Int)) Int
   (if (lt b 0) -1
   (match n
     ((CAtom a)  (- b (blen a)))
     ((CStr s)   (- b (+ 2 (blen s))))
     ((CQuote m) (flat_w m (- b 1)))
-    ((CList items) (flat_items_w items (- b 2)))
+    ((CList items) (if (cl_match items) -1 (flat_items_w items (- b 2))))
     (_ -1))))
 
 (fn flat_items_w ((ns (List CNode)) (b Int)) Int
@@ -350,17 +369,89 @@
         (Nil (Cons 41 acc2))
         (_ (em_kids (prep rest) (+ col 2) col acc2))))))
 
+;; if-CASCADE: guard chains print else-at-the-same-column (the corpus's
+;; dominant idiom), with closers packing at the end:
+;;   (if (int_eq c 32) True  ; space
+;;   (if (int_eq c 9) True
+;;   False))
+;; Applies when "(if cond then" fits the head line; the else (chained if or
+;; terminal) renders at the SAME column. Other shapes fall back to generic.
+(fn em_if ((cnd CNode) (thn CNode) (tr (Option (List Int)))
+           (els CNode) (col Int) (acc (List Int))) (List Int)
+  (let ((bc (flat_w cnd (- (- 80 col) 4))))
+    (if (lt bc 0)
+        (em_if_generic cnd thn tr els col acc)
+        (let ((bt (flat_w thn (- bc 1))))
+          (if (lt bt 0)
+              (em_if_generic cnd thn tr els col acc)
+              (let ((acc1 (em_flat thn (Cons 32 (em_flat cnd (em "(if " acc))))))
+                (let ((acc2 (match tr
+                              (None acc1)
+                              ((Some txt) (em txt (Cons 32 (Cons 32 acc1)))))))
+                  (Cons 41 (em_chain els col (em (sp col) (Cons 10 acc2)))))))))))
+
+;; a broken cascade breaks EVERY link: a chained if in else position skips
+;; the flat check; anything else falls back to fit-or-break.
+(fn em_chain ((els CNode) (col Int) (acc (List Int))) (List Int)
+  (match els
+    ((CList items)
+      (match items
+        ((Cons h t)
+          (match h
+            ((CAtom hb)
+              (if (bytes_eq hb "if")
+                  (em_if_try hb t col acc)
+                  (em_pp els col acc)))
+            (_ (em_pp els col acc))))
+        (_ (em_pp els col acc))))
+    (_ (em_pp els col acc))))
+
+(fn em_if_generic ((cnd CNode) (thn CNode) (tr (Option (List Int)))
+                   (els CNode) (col Int) (acc (List Int))) (List Int)
+  (match tr
+    (None (em_head "if" (Cons cnd (Cons thn (Cons els Nil))) col acc))
+    ((Some txt)
+      (em_head "if"
+        (Cons cnd (Cons thn (Cons (CTrail txt) (Cons els Nil)))) col acc))))
+
+;; recognize (if c t e) / (if c t <trail> e) and dispatch to the cascade.
+(fn em_if_try ((hb (List Int)) (t (List CNode)) (col Int) (acc (List Int))) (List Int)
+  (match t
+    ((Cons cnd r1)
+      (match r1
+        ((Cons thn r2)
+          (match r2
+            ((Cons x r3)
+              (match x
+                ((CTrail txt)
+                  (match r3
+                    ((Cons els r4)
+                      (match r4
+                        (Nil (em_if cnd thn (Some txt) els col acc))
+                        (_ (em_head hb t col acc))))
+                    (_ (em_head hb t col acc))))
+                (_
+                  (match r3
+                    (Nil (em_if cnd thn None x col acc))
+                    (_ (em_head hb t col acc))))))
+            (_ (em_head hb t col acc))))
+        (_ (em_head hb t col acc))))
+    (_ (em_head hb t col acc))))
+
 (fn em_list ((items (List CNode)) (col Int) (acc (List Int))) (List Int)
   (match items
     (Nil (Cons 41 (Cons 40 acc)))
     ((Cons h t)
-      (if (all_atoms items)
-          (em_fill items col acc)
-          (match h
-            ((CAtom hb) (em_head hb t col acc))
-            (_                               ; headless: align under the first
-              (let ((acc1 (em_pp h (+ col 1) (Cons 40 acc))))
-                (em_kids (prep t) (+ col 1) col acc1))))))))
+      (match h
+        ((CAtom hb)
+          (if (bytes_eq hb "if")
+              (em_if_try hb t col acc)
+              (if (all_atoms items)
+                  (em_fill items col acc)
+                  (em_head hb t col acc))))
+        (_                                   ; headless: align under the first
+          (let ((acc1 (em_pp h (+ col 1) (Cons 40 acc))))
+            (em_kids (prep t) (+ col 1) col acc1)))))))
 
 ;; fit-or-break entry point for one node at column `col`.
 (fn em_pp ((n CNode) (col Int) (acc (List Int))) (List Int)
@@ -478,6 +569,8 @@
 (fulfills fmt_scenario_blanks   (steps ((compute both)) refl))
 (fulfills fmt_scenario_sugar    (steps ((compute both)) refl))
 (fulfills fmt_scenario_idem     (steps ((compute both)) refl))
+(fulfills fmt_scenario_match    (steps ((compute both)) refl))
+(fulfills fmt_scenario_ifchain  (steps ((compute both)) refl))
 
 ;; R-GATE — by construction: fmt ENDS in the gate_check guard, so the proof is
 ;; a case split on the comparison; no printer internals enter the argument.
