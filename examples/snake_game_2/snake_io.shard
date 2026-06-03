@@ -371,18 +371,18 @@
 (fn w_clock ((w World)) Int (match w ((World n) n)))
 
 ;; The bounded play loop on an INT fuel: while fuel > 0, read a key (oracle,
-;; which now THREADS the world — clock + input trace); idle -> stop; else WRITE
-;; the current frame and recurse on (f - 1) with the STEPPED state `(step key s)`.
-;; key_oracle and write are BOTH clock effects per tick now. (NOTE: this still
-;; renders `frame s` — the PRE-step state — i.e. the one-frame-lag bug; it is
-;; fixed in the slice that adds the input-response requirement that forbids it.)
-;; Int fuel (not unary Nat) so the runtime budget can be countably large; the
-;; proofs use WfInduct on the fuel measure.
+;; which THREADS the world — clock + input trace); idle -> stop; else STEP on the
+;; key and WRITE the POST-step frame `(frame (step key s))`, recursing on (f - 1)
+;; with `(step key s)`. Rendering the post-step state (not the pre-step `s`) is
+;; what makes each frame the RESPONSE to the key just read — forced by the
+;; io_input_moves requirement. key_oracle and write are both clock effects per
+;; tick. Int fuel so the runtime budget can be countably large; the proofs use
+;; WfInduct on the fuel measure.
 (fn play_fuel ((f Int) (s GameState) (w World)) World
   (if (lt 0 f)
       (match (key_oracle w)
         ((Pair None w1)       w1)
-        ((Pair (Some key) w1) (play_fuel (- f 1) (step key s) (write (frame s) w1))))
+        ((Pair (Some key) w1) (play_fuel (- f 1) (step key s) (write (frame (step key s)) w1))))
       w))
 
 ;; ---- the executable -------------------------------------------------------
@@ -458,7 +458,7 @@
                      (case Some (key)
                        (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
                          (rewrite-with (lemma le_trans) lr lhs
-                           ((inst b (w_clock (write (frame s) w1))))
+                           ((inst b (w_clock (write (frame (step key s)) w1))))
                            ;; prem1: w_clock w <= w_clock(write (frame s) w1) = (w_clock w +1)+1
                            ((steps ((rewrite (lemma write_clock) lr lhs true ()))
                               (rewrite-with (lemma key_clock) lr lhs ((inst w w) (inst o o) (inst w1 w1))
@@ -579,9 +579,9 @@
                                     (rewrite (lemma all_arena_snoc)  lr lhs true ()))
                               (rewrite-with (lemma key_output) lr lhs ((inst w w) (inst o o) (inst w1 w1))
                                 ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
-                                (steps ((rewrite (premise 1) lr lhs true ())
-                                        (rewrite (premise 0) lr lhs true ())
-                                        (simp lhs)) refl)))
+                                ;; written frame is now frame(step key s); is_arena of it
+                                ;; computes structurally (border only). if True … False -> True.
+                                (steps ((rewrite (premise 1) lr lhs true ()) (compute lhs)) refl)))
                             (rewrite-with (lemma step_nonneg) lr lhs ((inst x f))
                               ((steps ((rewrite (hyp 2) lr lhs true ())) refl)) refl)
                             (by ord (list)))
@@ -631,10 +631,14 @@
                                     (rewrite (lemma all_board_snoc) lr lhs true ()))
                               (rewrite-with (lemma key_output) lr lhs ((inst w w) (inst o o) (inst w1 w1))
                                 ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
+                                ;; written frame is now frame(step key s); board_ok applies
+                                ;; THERE (inv & game_food carried across the step).
                                 (steps ((rewrite (premise 2) lr lhs true ()))
-                                  (rewrite-with (lemma board_ok) lr lhs ((inst s s))
-                                    ((steps ((rewrite (premise 0) lr lhs true ())) refl)
-                                     (steps ((rewrite (premise 1) lr lhs true ())) refl))
+                                  (rewrite-with (lemma board_ok) lr lhs ((inst s (step key s)))
+                                    ((rewrite-with (lemma inv_step) lr lhs ((inst k key) (inst s s))
+                                       ((steps ((rewrite (premise 0) lr lhs true ())) refl)) refl)
+                                     (steps ((rewrite (lemma food_step) lr lhs true ())
+                                             (rewrite (premise 1) lr lhs true ())) refl))
                                     (steps ((simp lhs)) refl)))))
                             ;; 0 <= f-1 ; f-1 < f  (termination)
                             (rewrite-with (lemma step_nonneg) lr lhs ((inst x f))
