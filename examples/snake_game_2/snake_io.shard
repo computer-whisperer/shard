@@ -118,6 +118,13 @@
       ((Cons h Nil) (andb (head_ok h) (pos_eq food (Pos 4 2))))
       (_ False)))))
 
+;; The food field, as a structural projection. The board worker threads the
+;; food's fixed value (Pos 4 2) as a RAW equation `game_food s = (Pos 4 2)`
+;; (directly rewritable) — sidestepping the int_eq inversion that pulling food
+;; out of inv's Bool `pos_eq` conjunct would otherwise require. `step` never
+;; touches food, so this rides the loop unchanged (food_step).
+(fn game_food ((s GameState)) Pos (match s ((GS body hd food sc st sd) food)))
+
 ;; ---- Bool-conjunction inversion (induct-on-Bool: the false branch's premise
 ;; ---- reduces to a literal clash, closed by absurd) -------------------------
 (claim andb_tl (goal ((a Bool) (b Bool)) ((= (andb a b) True)) (= a True))
@@ -159,6 +166,148 @@
                       (case False
                         (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)
                                 (rewrite (premise 0) rl rhs true ()) (simp rhs)) refl)))))))))))))))
+
+;; CONTAINMENT (food) — step never moves the food; it rides every transition
+;; unchanged. Same shape as inv_step: the only live branch is the length-1 body,
+;; where the head moves or freezes but food is copied verbatim either way.
+(claim food_step
+  (goal ((k Int) (s GameState)) () (= (game_food (step k s)) (game_food s)))
+  (induct s
+    ((case GS (body hd food sc st sd)
+       (induct body
+         ((case Nil (steps ((compute both)) refl))
+          (case Cons (h tl)
+            (induct tl
+              ((case Cons (h2 tl2) (steps ((compute both)) refl))
+               (case Nil
+                 (steps ((unfold step lhs) (simp lhs))
+                   (case-on (head_ok (move_head h (key_heading k hd))) Bool
+                     ((case True  (steps ((rewrite (hyp 0) lr lhs true ()) (compute both)) refl))
+                      (case False (steps ((rewrite (hyp 0) lr lhs true ()) (compute both)) refl)))))))))))))))
+
+;; ===========================================================================
+;; RENDERER FAITHFULNESS (the dynamic-half foundation, via fin-split + have).
+;;
+;; board_from_inv: a length-1 snake whose head is interior and clear of the
+;; (fixed) food renders a complete BOARD. The detectors locate an entity by
+;; scanning interior cells — which does NOT compute at an ABSTRACT head, so we
+;; enumerate the head over its concrete range (cols 1..4 × rows 1..2 = 8 leaves)
+;; with fin-split; each leaf is a concrete frame that computes. Generalized over
+;; the head-irrelevant fields (hd/sc/st/sd) and over an abstract food pinned to
+;; (Pos 4 2) by a raw-equation premise, rewritten in first so every leaf has a
+;; concrete food. The (4,2) head leaf lands on the food, contradicting head≠food
+;; (premise 4), closed by absurd.
+;; ===========================================================================
+(claim board_from_inv
+  (goal ((hcol Int) (hrow Int) (food Pos)
+         (hd Heading) (sc Int) (st Status) (sd Int))
+        ((= (le 1 hcol) True) (= (le hcol 4) True)
+         (= (le 1 hrow) True) (= (le hrow 2) True)
+         (= (pos_eq (Pos hcol hrow) (Pos 4 2)) False)
+         (= food (Pos 4 2)))
+    (= (is_board (frame
+         (GS (Cons (Pos hcol hrow) Nil) hd food sc st sd))) True))
+  (steps ((rewrite (premise 5) lr lhs true ()))
+    (fin-split hcol (premise 0) (premise 1)
+      ((case 1 (fin-split hrow (premise 2) (premise 3)
+                 ((case 1 (steps ((compute lhs)) refl))
+                  (case 2 (steps ((compute lhs)) refl)))))
+       (case 2 (fin-split hrow (premise 2) (premise 3)
+                 ((case 1 (steps ((compute lhs)) refl))
+                  (case 2 (steps ((compute lhs)) refl)))))
+       (case 3 (fin-split hrow (premise 2) (premise 3)
+                 ((case 1 (steps ((compute lhs)) refl))
+                  (case 2 (steps ((compute lhs)) refl)))))
+       (case 4 (fin-split hrow (premise 2) (premise 3)
+                 ((case 1 (steps ((compute lhs)) refl))
+                  (case 2 (absurd (premise 4))))))))))
+
+;; board_ok: inv(s) -> is_board(frame s). THE bridge the moving-snake worker
+;; cites. Destructure s to its length-1 head (Pos hcol hrow) (non-length-1
+;; bodies contradict inv, closed by absurd), then INVERT the Bool invariant with
+;; chained cuts: each `have` peels one andb layer off inv/head_ok/in_range into
+;; a clean premise. The food's fixed value comes from the threaded raw equation
+;; game_food s = (Pos 4 2) (premise 1), not from inv's pos_eq conjunct — so no
+;; int_eq inversion is needed. Finally cite board_from_inv with the six extracted
+;; facts. Premises grow 0,1 (given) then 2..12 (the cuts, in order below).
+(claim board_ok
+  (goal ((s GameState))
+        ((= (inv s) True) (= (game_food s) (Pos 4 2)))
+    (= (is_board (frame s)) True))
+  (induct s
+    ((case GS (body hd food sc st sd)
+       (induct body
+         ((case Nil (absurd (premise 0)))
+          (case Cons (h tl)
+            (induct tl
+              ((case Cons (h2 tl2) (absurd (premise 0)))
+               (case Nil
+                 (induct h
+                   ((case Pos (hcol hrow)
+       (have (= (head_ok (Pos hcol hrow)) True)                                  ; premise 2
+         (rewrite-with (lemma andb_tl) lr lhs
+           ((inst a (head_ok (Pos hcol hrow))) (inst b (pos_eq food (Pos 4 2))))
+           ((steps ((rewrite (premise 0) rl rhs true ()) (compute both)) refl))
+           refl)
+       (have (= (in_range hcol hrow) True)                                       ; premise 3
+         (rewrite-with (lemma andb_tl) lr lhs
+           ((inst a (in_range hcol hrow))
+            (inst b (notb (pos_eq (Pos hcol hrow) (Pos 4 2)))))
+           ((steps ((rewrite (premise 2) rl rhs true ()) (compute both)) refl))
+           refl)
+       (have (= (notb (pos_eq (Pos hcol hrow) (Pos 4 2))) True)                  ; premise 4
+         (rewrite-with (lemma andb_tr) lr lhs
+           ((inst a (in_range hcol hrow))
+            (inst b (notb (pos_eq (Pos hcol hrow) (Pos 4 2)))))
+           ((steps ((rewrite (premise 2) rl rhs true ()) (compute both)) refl))
+           refl)
+       (have (= (pos_eq (Pos hcol hrow) (Pos 4 2)) False)                        ; premise 5
+         (rewrite-with (lemma notb_t) lr lhs
+           ((inst b (pos_eq (Pos hcol hrow) (Pos 4 2))))
+           ((steps ((rewrite (premise 4) lr lhs true ())) refl))
+           refl)
+       (have (= food (Pos 4 2))                                                  ; premise 6
+         (steps ((rewrite (premise 1) rl rhs true ()) (compute rhs)) refl)
+       (have (= (le 1 hcol) True)                                                ; premise 7
+         (rewrite-with (lemma andb_tl) lr lhs
+           ((inst a (le 1 hcol))
+            (inst b (andb (le hcol 4) (andb (le 1 hrow) (le hrow 2)))))
+           ((steps ((rewrite (premise 3) rl rhs true ()) (compute both)) refl))
+           refl)
+       (have (= (andb (le hcol 4) (andb (le 1 hrow) (le hrow 2))) True)          ; premise 8
+         (rewrite-with (lemma andb_tr) lr lhs
+           ((inst a (le 1 hcol))
+            (inst b (andb (le hcol 4) (andb (le 1 hrow) (le hrow 2)))))
+           ((steps ((rewrite (premise 3) rl rhs true ()) (compute both)) refl))
+           refl)
+       (have (= (le hcol 4) True)                                               ; premise 9
+         (rewrite-with (lemma andb_tl) lr lhs
+           ((inst a (le hcol 4)) (inst b (andb (le 1 hrow) (le hrow 2))))
+           ((steps ((rewrite (premise 8) lr lhs true ())) refl))
+           refl)
+       (have (= (andb (le 1 hrow) (le hrow 2)) True)                            ; premise 10
+         (rewrite-with (lemma andb_tr) lr lhs
+           ((inst a (le hcol 4)) (inst b (andb (le 1 hrow) (le hrow 2))))
+           ((steps ((rewrite (premise 8) lr lhs true ())) refl))
+           refl)
+       (have (= (le 1 hrow) True)                                              ; premise 11
+         (rewrite-with (lemma andb_tl) lr lhs
+           ((inst a (le 1 hrow)) (inst b (le hrow 2)))
+           ((steps ((rewrite (premise 10) lr lhs true ())) refl))
+           refl)
+       (have (= (le hrow 2) True)                                              ; premise 12
+         (rewrite-with (lemma andb_tr) lr lhs
+           ((inst a (le 1 hrow)) (inst b (le hrow 2)))
+           ((steps ((rewrite (premise 10) lr lhs true ())) refl))
+           refl)
+       (rewrite-with (lemma board_from_inv) lr lhs ()
+         ((steps ((rewrite (premise 7)  lr lhs true ())) refl)     ; le 1 hcol
+          (steps ((rewrite (premise 9)  lr lhs true ())) refl)     ; le hcol 4
+          (steps ((rewrite (premise 11) lr lhs true ())) refl)     ; le 1 hrow
+          (steps ((rewrite (premise 12) lr lhs true ())) refl)     ; le hrow 2
+          (steps ((rewrite (premise 5)  lr lhs true ())) refl)     ; pos_eq = False
+          (steps ((rewrite (premise 6)  lr lhs true ())) refl))    ; food = (Pos 4 2)
+         refl)))))))))))))))))))))))))
 
 ;; ---- the world / play loop ------------------------------------------------
 (fn w_clock ((w World)) Int (match w ((World n) n)))
@@ -400,38 +549,3 @@
        (steps ((rewrite (premise 0) lr lhs true ())) refl))
       refl)))
 
-;; ===========================================================================
-;; RENDERER FAITHFULNESS (the dynamic-half foundation, via fin-split).
-;;
-;; The detectors locate an entity by scanning the interior cells — which does
-;; not `compute` when the entity's position is ABSTRACT (a moving snake). The
-;; fix: enumerate the position over its concrete interior range with fin-split,
-;; so each leaf is a concrete frame that computes. The head column ranges 1..4,
-;; the row 1..2 — eight leaves. Food is fixed (concrete) so every cell reduces.
-;; ===========================================================================
-
-;; FULL FAITHFULNESS — a length-1 snake whose head is in the interior and clear
-;; of the (fixed) food renders a complete BOARD. is_board at each concrete leaf
-;; computes (arena + head 'O' + food '*' all reduce); the one leaf where the head
-;; lands ON the food (4,2) contradicts the head≠food premise, closed by absurd.
-;; THIS is what the moving-snake worker cites: inv(s) -> is_board (frame s).
-(claim board_from_inv
-  (goal ((hcol Int) (hrow Int))
-        ((= (le 1 hcol) True) (= (le hcol 4) True)
-         (= (le 1 hrow) True) (= (le hrow 2) True)
-         (= (pos_eq (Pos hcol hrow) (Pos 4 2)) False))
-    (= (is_board (frame
-         (GS (Cons (Pos hcol hrow) Nil) Up (Pos 4 2) 0 Alive 0))) True))
-  (fin-split hcol (premise 0) (premise 1)
-    ((case 1 (fin-split hrow (premise 2) (premise 3)
-               ((case 1 (steps ((compute lhs)) refl))
-                (case 2 (steps ((compute lhs)) refl)))))
-     (case 2 (fin-split hrow (premise 2) (premise 3)
-               ((case 1 (steps ((compute lhs)) refl))
-                (case 2 (steps ((compute lhs)) refl)))))
-     (case 3 (fin-split hrow (premise 2) (premise 3)
-               ((case 1 (steps ((compute lhs)) refl))
-                (case 2 (steps ((compute lhs)) refl)))))
-     (case 4 (fin-split hrow (premise 2) (premise 3)
-               ((case 1 (steps ((compute lhs)) refl))
-                (case 2 (absurd (premise 4)))))))))
