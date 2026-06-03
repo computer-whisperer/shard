@@ -527,12 +527,74 @@
             (None         None)))
         ((If c t el)
           (rewrite_all_if pat_vars pat repl c t el))
-        ;; Match scrutinee only (same scope, no shift); arm bodies skipped.
+        ;; Match: scrutinee, and — when pattern AND replacement are BVar-free —
+        ;; the arm BODIES too. Cited goal equations bind via FVars (a sequent
+        ;; equation never contains a loose BVar), so this guard is satisfied by
+        ;; every premise/hyp/lemma citation; it is belt-and-braces against any
+        ;; future caller. SOUNDNESS: a BVar-free pattern mentions no de Bruijn
+        ;; index, so crossing an arm's pattern binders needs no shift; a
+        ;; pat_var-matched piece (which MAY contain arm-bound BVars) is placed
+        ;; back at its own position — same depth, no capture. Without this,
+        ;; guards reified INTO arm bodies (ceval's open_many_arms residuals —
+        ;; e.g. a stuck if-chain inside an opt_pair_eq arm) are unreachable by
+        ;; rewriting, which blocks compute/rewrite alternation on stuck terms.
         ((Match scrut arms)
-          (match (rewrite_all pat_vars pat repl scrut)
-            ((Some scrut2) (Some (Match scrut2 arms)))
-            (None          None)))
+          (let ((s2 (rewrite_all pat_vars pat repl scrut))
+                (a2 (if (no_bvars pat)
+                        (if (no_bvars repl)
+                            (rewrite_all_arms pat_vars pat repl arms)
+                            None)
+                        None)))
+            (match s2
+              ((Some scrut2)
+                (match a2
+                  ((Some arms2) (Some (Match scrut2 arms2)))
+                  (None         (Some (Match scrut2 arms)))))
+              (None
+                (match a2
+                  ((Some arms2) (Some (Match scrut arms2)))
+                  (None         None))))))
         (_ None)))))
+
+;; No loose-or-bound de Bruijn variable anywhere in the term. Guards the
+;; arm-descent above: BVar-freeness is what makes the descent shift-free.
+(fn no_bvars ((e Expr)) Bool
+  (match e
+    ((BVar k)       False)
+    ((IntLit _)     True)
+    ((SymLit _)     True)
+    ((FVar _)       True)
+    ((Ctor _ args)  (no_bvars_list args))
+    ((Call _ args)  (no_bvars_list args))
+    ((If c t el)    (if (no_bvars c) (if (no_bvars t) (no_bvars el) False) False))
+    ((Let bs body)  (if (no_bvars_list bs) (no_bvars body) False))
+    ((Match s arms) (if (no_bvars s) (no_bvars_arms arms) False))))
+
+(fn no_bvars_list ((es (List Expr))) Bool
+  (match es
+    (Nil True)
+    ((Cons h t) (if (no_bvars h) (no_bvars_list t) False))))
+
+(fn no_bvars_arms ((arms (List Arm))) Bool
+  (match arms
+    (Nil True)
+    ((Cons (Arm p b) t) (if (no_bvars b) (no_bvars_arms t) False))))
+
+;; rewrite_all over arm bodies (patterns untouched). Some iff ANY arm changed.
+(fn rewrite_all_arms ((pat_vars (List Symbol)) (pat Expr) (repl Expr)
+                      (arms (List Arm))) (Option (List Arm))
+  (match arms
+    (Nil None)
+    ((Cons (Arm p b) t)
+      (match (rewrite_all pat_vars pat repl b)
+        ((Some b2)
+          (match (rewrite_all_arms pat_vars pat repl t)
+            ((Some t2) (Some (Cons (Arm p b2) t2)))
+            (None      (Some (Cons (Arm p b2) t)))))
+        (None
+          (match (rewrite_all_arms pat_vars pat repl t)
+            ((Some t2) (Some (Cons (Arm p b) t2)))
+            (None      None)))))))
 
 (fn rewrite_all_list ((pat_vars (List Symbol)) (pat Expr) (repl Expr) (es (List Expr)))
                       (Option (List Expr))
