@@ -131,3 +131,78 @@
 
 (fn all_board ((fs (List (List Int)))) Bool
   (match fs (Nil True) ((Cons f t) (if (is_board f) (all_board t) False))))
+
+;; ===========================================================================
+;; INPUT-RESPONSE VOCABULARY — relating consecutive frames to the input keys.
+;;
+;; The next reviewed-vocab chunk: a frame is not just a valid board, it is the
+;; RESPONSE to the key the player pressed. These predicates pin that purely over
+;; the boundary bytes — a key in, two frames out — naming no game state. Glyph
+;; geometry: head positions are (row, col) as `head_at` reports them; w/a/s/d
+;; displace the head by one cell (w/s on the row, a/d on the column).
+;; ===========================================================================
+
+(fn orb ((a Bool) (b Bool)) Bool (match a (True True) (False b)))
+
+;; the four steer keys; any other byte imposes no displacement constraint.
+(fn is_wasd ((k Int)) Bool
+  (if (int_eq k 119) True (if (int_eq k 115) True
+   (if (int_eq k 97) True (if (int_eq k 100) True False)))))
+
+;; displace an observed (row, col) head one cell in the key's direction
+;; (w=119 up, s=115 down, a=97 left, d=100 right); a non-wasd key holds it.
+(fn move_cell ((p (Pair Int Int)) (k Int)) (Pair Int Int)
+  (match p ((Pair row col)
+    (if (int_eq k 119) (Pair (- row 1) col)
+    (if (int_eq k 115) (Pair (+ row 1) col)
+    (if (int_eq k 97)  (Pair row (- col 1))
+    (if (int_eq k 100) (Pair row (+ col 1))
+        (Pair row col))))))))
+
+(fn pair_eq ((a (Pair Int Int)) (b (Pair Int Int))) Bool
+  (match a ((Pair a1 a2) (match b ((Pair b1 b2) (andb (int_eq a1 b1) (int_eq a2 b2)))))))
+
+(fn opt_pair_eq ((a (Option (Pair Int Int))) (b (Option (Pair Int Int)))) Bool
+  (match a
+    (None     (match b (None True) ((Some q) False)))
+    ((Some p) (match b (None False) ((Some q) (pair_eq p q))))))
+
+(fn move_opt ((o (Option (Pair Int Int))) (k Int)) (Option (Pair Int Int))
+  (match o (None None) ((Some p) (Some (move_cell p k)))))
+
+;; the per-tick check: across two consecutive frames keyed by a WASD byte, the
+;; detected head either advanced one cell in that key's direction or held in
+;; place (a blocked move — wall/food). Non-wasd keys assert nothing here (their
+;; "continue current heading" movement is history-dependent, not key-determined;
+;; inert steering is pinned separately by io_key_inert).
+(fn step_shows ((prev (List Int)) (cur (List Int)) (k Int)) Bool
+  (if (is_wasd k)
+      (orb (opt_pair_eq (head_at cur) (move_opt (head_at prev) k))
+           (opt_pair_eq (head_at cur) (head_at prev)))
+      True))
+
+;; THE PREDICATE: every consecutive pair of emitted frames is the proper
+;; response to the key recorded for it. `prev` is the previous frame (None
+;; before the first — which has no predecessor to check); each input keys the
+;; transition INTO the frame appended alongside it. A trailing/short input list
+;; is harmless (the walk stops when the frames run out).
+(fn moves_go ((prev (Option (List Int)))
+              (outs (List (List Int))) (ins (List (Option Int)))) Bool
+  (match outs
+    (Nil True)
+    ((Cons f frest)
+      (match ins
+        (Nil False)
+        ((Cons mk irest)
+          (match prev
+            (None (moves_go (Some f) frest irest))
+            ((Some pf)
+              (match mk
+                (None (moves_go (Some f) frest irest))
+                ((Some k)
+                  (if (step_shows pf f k)
+                      (moves_go (Some f) frest irest)
+                      False))))))))))
+
+(fn moves_ok ((outs (List (List Int))) (ins (List (Option Int)))) Bool
+  (moves_go None outs ins))
