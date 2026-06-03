@@ -11,8 +11,8 @@
 ;;; `render` is a real W=6 x H=4 grid renderer — it draws the bordered arena
 ;;; with the snake head and food in the interior, so `is_board (frame s)` holds
 ;;; for every state the loop reaches. `play_fuel` runs a real `step` (head-only
-;;; motion; die+freeze on wall OR food): each tick reads a key, renders the
-;;; current state, then advances. The loop stays board-valid forever because the
+;;; motion; die+freeze on wall OR food): each tick reads a key, advances, then
+;;; renders the POST-step state. The loop stays board-valid forever because the
 ;;; CONTAINMENT invariant `inv` (length-1 head, interior, clear of the fixed
 ;;; food) is preserved by `step` (inv_step) and bridges to a rendered board
 ;;; (board_ok). Eating/growth (variable-length body) is the deferred next slice.
@@ -24,8 +24,9 @@
 ;;;   1..4, rows 1..2); the head dies+freezes on a wall OR on the food at (4,2).
 ;;;   The host backs `key_oracle` with the `read_key` stdin extern (eval.shard /
 ;;;   eval.rs); the proofs treat key_oracle as uninterpreted, so they hold for
-;;;   THIS handler (or any other). NOTE: the displayed frame is the pre-step
-;;;   state (the proven loop renders s, then steps) — feedback lags by one key.
+;;;   THIS handler (or any other). Each displayed frame is the POST-step state —
+;;;   the immediate response to the key just typed (move_shown is the proven
+;;;   per-tick form of that).
 
 (import "../../kernel/stdlib.shard")   ; List / Option / Bool / Pair
 (import "../../std/nat.shard")     ; Nat (Z/S)
@@ -318,6 +319,150 @@
   (steps ((compute both) (rewrite (premise 0) lr both true ())
           (rewrite (premise 1) lr both true ()) (rewrite (premise 2) lr both true ())
           (rewrite (premise 3) lr both true ()) (compute both)) refl))
+
+;; THE PER-TICK INPUT-RESPONSE FACT: across one loop tick, the rendered head
+;; obeys the key — the post-step frame shows the head either displaced one cell
+;; in the pressed wasd direction or held in place (a blocked move freezes).
+;; Proven by FULL ENUMERATION: extract the head bounds from inv (board_ok's
+;; have-chain), pin the food, case the four key guards (a non-wasd key makes
+;; step_shows vacuously True), then fin-split the head over the 4x2 interior —
+;; each leaf is a CONCRETE step between two concrete frames, where head_ok
+;; decides move-vs-freeze by itself and step_shows computes outright. (The
+;; enumeration sidesteps the stuck pair_eq an abstract-head proof would hit:
+;; opt_pair_eq of an abstract head with itself never reduces.) In each leaf the
+;; key guards are still abstract ifs; the case-on hypotheses collapse them —
+;; later directions rewrite the PRECEDING guards False first (in-order tests).
+(claim move_shown
+  (goal ((key Int) (s GameState))
+        ((= (inv s) True) (= (game_food s) (Pos 4 2)))
+    (= (step_shows (frame s) (frame (step key s)) key) True))
+  (induct s
+    ((case GS (body hd food sc st sd)
+       (induct body
+         ((case Nil (absurd (premise 0)))
+          (case Cons (h tl)
+            (induct tl
+              ((case Cons (h2 tl2) (absurd (premise 0)))
+               (case Nil
+                 (induct h
+                   ((case Pos (hcol hrow)
+       (have (= (head_ok (Pos hcol hrow)) True)                                 ; premise 2
+         (rewrite-with (lemma andb_tl) lr lhs
+           ((inst a (head_ok (Pos hcol hrow))) (inst b (pos_eq food (Pos 4 2))))
+           ((steps ((rewrite (premise 0) rl rhs true ()) (compute both)) refl))
+           refl)
+       (have (= (in_range hcol hrow) True)                                      ; premise 3
+         (rewrite-with (lemma andb_tl) lr lhs
+           ((inst a (in_range hcol hrow))
+            (inst b (notb (pos_eq (Pos hcol hrow) (Pos 4 2)))))
+           ((steps ((rewrite (premise 2) rl rhs true ()) (compute both)) refl))
+           refl)
+       (have (= food (Pos 4 2))                                                 ; premise 4
+         (steps ((rewrite (premise 1) rl rhs true ()) (compute rhs)) refl)
+       (have (= (le 1 hcol) True)                                               ; premise 5
+         (rewrite-with (lemma andb_tl) lr lhs
+           ((inst a (le 1 hcol))
+            (inst b (andb (le hcol 4) (andb (le 1 hrow) (le hrow 2)))))
+           ((steps ((rewrite (premise 3) rl rhs true ()) (compute both)) refl))
+           refl)
+       (have (= (andb (le hcol 4) (andb (le 1 hrow) (le hrow 2))) True)         ; premise 6
+         (rewrite-with (lemma andb_tr) lr lhs
+           ((inst a (le 1 hcol))
+            (inst b (andb (le hcol 4) (andb (le 1 hrow) (le hrow 2)))))
+           ((steps ((rewrite (premise 3) rl rhs true ()) (compute both)) refl))
+           refl)
+       (have (= (le hcol 4) True)                                               ; premise 7
+         (rewrite-with (lemma andb_tl) lr lhs
+           ((inst a (le hcol 4)) (inst b (andb (le 1 hrow) (le hrow 2))))
+           ((steps ((rewrite (premise 6) lr lhs true ())) refl))
+           refl)
+       (have (= (andb (le 1 hrow) (le hrow 2)) True)                            ; premise 8
+         (rewrite-with (lemma andb_tr) lr lhs
+           ((inst a (le hcol 4)) (inst b (andb (le 1 hrow) (le hrow 2))))
+           ((steps ((rewrite (premise 6) lr lhs true ())) refl))
+           refl)
+       (have (= (le 1 hrow) True)                                               ; premise 9
+         (rewrite-with (lemma andb_tl) lr lhs
+           ((inst a (le 1 hrow)) (inst b (le hrow 2)))
+           ((steps ((rewrite (premise 8) lr lhs true ())) refl))
+           refl)
+       (have (= (le hrow 2) True)                                               ; premise 10
+         (rewrite-with (lemma andb_tr) lr lhs
+           ((inst a (le 1 hrow)) (inst b (le hrow 2)))
+           ((steps ((rewrite (premise 8) lr lhs true ())) refl))
+           refl)
+       (steps ((rewrite (premise 4) lr lhs true ()))
+         (case-on (int_eq key 119) Bool
+           ((case True    ; 'w' — hyp 0 fires the first guard everywhere
+              (fin-split hcol (premise 5) (premise 7)
+                ((case 1 (fin-split hrow (premise 9) (premise 10)
+                   ((case 1 (steps ((compute both) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))
+                    (case 2 (steps ((compute both) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl)))))
+                 (case 2 (fin-split hrow (premise 9) (premise 10)
+                   ((case 1 (steps ((compute both) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))
+                    (case 2 (steps ((compute both) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl)))))
+                 (case 3 (fin-split hrow (premise 9) (premise 10)
+                   ((case 1 (steps ((compute both) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))
+                    (case 2 (steps ((compute both) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl)))))
+                 (case 4 (fin-split hrow (premise 9) (premise 10)
+                   ((case 1 (steps ((compute both) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))
+                    (case 2 (steps ((compute both) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))))))))
+            (case False
+              (case-on (int_eq key 115) Bool
+                ((case True    ; 's' — hyp 1: 119 False, hyp 0: 115 True
+                   (fin-split hcol (premise 5) (premise 7)
+                     ((case 1 (fin-split hrow (premise 9) (premise 10)
+                        ((case 1 (steps ((compute both) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))
+                         (case 2 (steps ((compute both) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl)))))
+                      (case 2 (fin-split hrow (premise 9) (premise 10)
+                        ((case 1 (steps ((compute both) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))
+                         (case 2 (steps ((compute both) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl)))))
+                      (case 3 (fin-split hrow (premise 9) (premise 10)
+                        ((case 1 (steps ((compute both) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))
+                         (case 2 (steps ((compute both) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl)))))
+                      (case 4 (fin-split hrow (premise 9) (premise 10)
+                        ((case 1 (steps ((compute both) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))
+                         (case 2 (steps ((compute both) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))))))))
+                 (case False
+                   (case-on (int_eq key 97) Bool
+                     ((case True    ; 'a' — hyps 2/1: 119/115 False, hyp 0: 97 True
+                        (fin-split hcol (premise 5) (premise 7)
+                          ((case 1 (fin-split hrow (premise 9) (premise 10)
+                             ((case 1 (steps ((compute both) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))
+                              (case 2 (steps ((compute both) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl)))))
+                           (case 2 (fin-split hrow (premise 9) (premise 10)
+                             ((case 1 (steps ((compute both) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))
+                              (case 2 (steps ((compute both) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl)))))
+                           (case 3 (fin-split hrow (premise 9) (premise 10)
+                             ((case 1 (steps ((compute both) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))
+                              (case 2 (steps ((compute both) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl)))))
+                           (case 4 (fin-split hrow (premise 9) (premise 10)
+                             ((case 1 (steps ((compute both) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))
+                              (case 2 (steps ((compute both) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))))))))
+                      (case False
+                        (case-on (int_eq key 100) Bool
+                          ((case True    ; 'd' — hyps 3/2/1: 119/115/97 False, hyp 0: 100 True
+                             (fin-split hcol (premise 5) (premise 7)
+                               ((case 1 (fin-split hrow (premise 9) (premise 10)
+                                  ((case 1 (steps ((compute both) (rewrite (hyp 3) lr lhs true ()) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 3) lr lhs true ()) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))
+                                   (case 2 (steps ((compute both) (rewrite (hyp 3) lr lhs true ()) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 3) lr lhs true ()) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl)))))
+                                (case 2 (fin-split hrow (premise 9) (premise 10)
+                                  ((case 1 (steps ((compute both) (rewrite (hyp 3) lr lhs true ()) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 3) lr lhs true ()) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))
+                                   (case 2 (steps ((compute both) (rewrite (hyp 3) lr lhs true ()) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 3) lr lhs true ()) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl)))))
+                                (case 3 (fin-split hrow (premise 9) (premise 10)
+                                  ((case 1 (steps ((compute both) (rewrite (hyp 3) lr lhs true ()) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 3) lr lhs true ()) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))
+                                   (case 2 (steps ((compute both) (rewrite (hyp 3) lr lhs true ()) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 3) lr lhs true ()) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl)))))
+                                (case 4 (fin-split hrow (premise 9) (premise 10)
+                                  ((case 1 (steps ((compute both) (rewrite (hyp 3) lr lhs true ()) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 3) lr lhs true ()) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))
+                                   (case 2 (steps ((compute both) (rewrite (hyp 3) lr lhs true ()) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 3) lr lhs true ()) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))))))))
+                           (case False    ; non-wasd — all four guards False; step_shows is vacuous
+                             (steps ((compute both)
+                                     (rewrite (hyp 3) lr lhs true ())
+                                     (rewrite (hyp 2) lr lhs true ())
+                                     (rewrite (hyp 1) lr lhs true ())
+                                     (rewrite (hyp 0) lr lhs true ())
+                                     (compute both)) refl)))))))))))))
+       )))))))))))))))))))))))
 
 ;; board_ok: inv(s) -> is_board(frame s). THE bridge the moving-snake worker
 ;; cites. Destructure s to its length-1 head (Pos hcol hrow) (non-length-1
