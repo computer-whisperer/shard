@@ -9,12 +9,13 @@
 ;;; the checker guarantees this file conforms to it.
 ;;;
 ;;; `render` is a real W=6 x H=4 grid renderer — it draws the bordered arena
-;;; with the snake head and food in the interior, so `is_board (frame init)`
-;;; genuinely holds (the board requirements force this). `play_fuel` still keeps
-;;; the state fixed across ticks: every frame renders `init`, so the loop emits
-;;; the same valid board forever. Wiring a real `step` (motion) — and the
-;;; containment invariant that keeps every stepped state a board — is the next
-;;; slice and is orthogonal to the loop-preservation proofs here.
+;;; with the snake head and food in the interior, so `is_board (frame s)` holds
+;;; for every state the loop reaches. `play_fuel` runs a real `step` (head-only
+;;; motion; die+freeze on wall OR food): each tick reads a key, renders the
+;;; current state, then advances. The loop stays board-valid forever because the
+;;; CONTAINMENT invariant `inv` (length-1 head, interior, clear of the fixed
+;;; food) is preserved by `step` (inv_step) and bridges to a rendered board
+;;; (board_ok). Eating/growth (variable-length body) is the deferred next slice.
 
 (import "../../kernel/stdlib.shard")   ; List / Option / Bool / Pair
 (import "../../std/nat.shard")     ; Nat (Z/S)
@@ -313,15 +314,16 @@
 (fn w_clock ((w World)) Int (match w ((World n) n)))
 
 ;; The bounded play loop on an INT fuel: while fuel > 0, read a key (oracle);
-;; idle -> stop; else WRITE a frame and recurse on (f - 1). `write` is the sole
-;; clock effect per tick. State is held fixed (real `step` deferred) — the clock
-;; theorem does not depend on it. Int fuel (not unary Nat) so the runtime budget
-;; can be countably large; the proof uses WfInduct on the fuel measure.
+;; idle -> stop; else WRITE the current frame and recurse on (f - 1) with the
+;; STEPPED state `(step key s)`. `write` is the sole clock effect per tick. Int
+;; fuel (not unary Nat) so the runtime budget can be countably large; the proofs
+;; use WfInduct on the fuel measure (clock-mono is state-agnostic; the board
+;; worker threads the containment invariant through `step key s`).
 (fn play_fuel ((f Int) (s GameState) (w World)) World
   (if (lt 0 f)
       (match (key_oracle w)
         (None w)
-        ((Some key) (play_fuel (- f 1) s (write (frame s) w))))
+        ((Some key) (play_fuel (- f 1) (step key s) (write (frame s) w))))
       w))
 
 ;; ---- the executable -------------------------------------------------------
@@ -490,7 +492,10 @@
               (case Some (key)
                 (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
                   (rewrite-with (hyp 2) lr lhs ()
-                    ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                    ;; IH premise 0': is_arena (frame (step key s)) — structural
+                    ;; (is_arena reads only the border, independent of the body),
+                    ;; so it computes for ANY state, stepped or not.
+                    ((steps ((compute lhs)) refl)
                      (steps ((rewrite (lemma write_output)    lr lhs true ())
                              (rewrite (lemma all_arena_snoc)  lr lhs true ())
                              (rewrite (premise 1) lr lhs true ())
@@ -501,30 +506,48 @@
                      (by ord (list)))
                     refl)))))))))))
 
+;; The MOVING-snake board worker. Threads TWO state invariants — inv s (the
+;; length-1 head stays interior & clear of food) and game_food s = (Pos 4 2)
+;; (the food never moves) — both preserved across the step by inv_step/food_step,
+;; and bridged to the per-frame board fact by board_ok. wf-induct on fuel; the
+;; Some case writes frame s, steps to (step key s), and cites the IH there.
 (claim play_board_preserve
   (goal ((f Int) (s GameState) (w World))
-        ((= (is_board (frame s)) True) (= (all_board (w_output w)) True))
+        ((= (inv s) True) (= (game_food s) (Pos 4 2))
+         (= (all_board (w_output w)) True))
     (= (all_board (w_output (play_fuel f s w))) True))
   (wf-induct f
     (case-on (lt 0 f) Bool
       ((case False
          (steps ((unfold play_fuel lhs) (rewrite (hyp 0) lr lhs true ()) (simp lhs)
-                 (rewrite (premise 1) lr lhs true ())) refl))
+                 (rewrite (premise 2) lr lhs true ())) refl))
        (case True
          (steps ((unfold play_fuel lhs) (rewrite (hyp 0) lr lhs true ()) (simp lhs))
            (case-on (key_oracle w) Option
              ((case None
                 (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)
-                        (rewrite (premise 1) lr lhs true ())) refl))
+                        (rewrite (premise 2) lr lhs true ())) refl))
               (case Some (key)
                 (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
                   (rewrite-with (hyp 2) lr lhs ()
-                    ((steps ((rewrite (premise 0) lr lhs true ())) refl)
-                     (steps ((rewrite (lemma write_output)    lr lhs true ())
-                             (rewrite (lemma all_board_snoc)  lr lhs true ())
-                             (rewrite (premise 1) lr lhs true ())
-                             (rewrite (premise 0) lr lhs true ())
-                             (simp lhs)) refl)
+                    ;; IH premise 0': inv (step key s) = True   (inv_step ∘ premise 0)
+                    ((rewrite-with (lemma inv_step) lr lhs ((inst k key) (inst s s))
+                       ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                       refl)
+                     ;; IH premise 1': game_food (step key s) = (Pos 4 2)  (food_step ∘ premise 1)
+                     (steps ((rewrite (lemma food_step) lr lhs true ())
+                             (rewrite (premise 1) lr lhs true ())) refl)
+                     ;; IH premise 2': the log stays all_board after writing frame s
+                     ;;   — write_output + snoc, then premise 2 (old log) and
+                     ;;   board_ok s (the new frame is a board, from inv + game_food).
+                     (steps ((rewrite (lemma write_output)   lr lhs true ())
+                             (rewrite (lemma all_board_snoc) lr lhs true ())
+                             (rewrite (premise 2) lr lhs true ()))
+                       (rewrite-with (lemma board_ok) lr lhs ((inst s s))
+                         ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                          (steps ((rewrite (premise 1) lr lhs true ())) refl))
+                         (steps ((simp lhs)) refl)))
+                     ;; 0 <= f-1 ; f-1 < f  (termination)
                      (rewrite-with (lemma step_nonneg) lr lhs ((inst x f))
                        ((steps ((rewrite (hyp 1) lr lhs true ())) refl)) refl)
                      (by ord (list)))
@@ -542,10 +565,14 @@
        (steps ((rewrite (premise 0) lr lhs true ())) refl))
       refl)))
 
+;; Now three worker premises at s=init: inv(init) and game_food(init)=(Pos 4 2)
+;; (both compute at the concrete init, after unfolding the nullary fn), and the
+;; log invariant (the requirement's own premise).
 (fulfills frames_are_boards
   (steps ((unfold main lhs))
     (rewrite-with (lemma play_board_preserve) lr lhs ()
       ((steps ((unfold init lhs) (compute lhs)) refl)
+       (steps ((unfold init lhs) (compute lhs)) refl)
        (steps ((rewrite (premise 0) lr lhs true ())) refl))
       refl)))
 
