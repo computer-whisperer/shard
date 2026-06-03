@@ -1,0 +1,109 @@
+;;; gate — the REVIEWED specification vocabulary for the shardfmt module.
+;;;
+;;; shardfmt's whole value proposition is a single sentence: THE FORMATTER MAY
+;;; NEVER CHANGE WHAT A FILE MEANS. "What a file means" is pinned by the
+;;; PRODUCTION reader (kernel/reader.shard `read_all` — the same code that
+;;; feeds the checker), and "never change" is structural equality of the
+;;; resulting SExpr forms. This file defines exactly that vocabulary:
+;;;
+;;;   sexpr_eq / sexprs_eq — structural equality on parse trees
+;;;   parses_eq            — both byte strings parse, to equal forms
+;;;   gate_holds           — fmt's result, if any, parses identically (total
+;;;                          predicate: no output is vacuously fine)
+;;;   fmt_run_ok           — the whole-binary I/O contract over the run
+;;;                          observables (reads trace / output log / exit code)
+;;;
+;;; Review attention belongs HERE and on mod.req.shard. The formatter itself
+;;; (the CST reader and the printer) is fungible impl: the contract never
+;;; mentions how it lays anything out, only that a successful run's output is
+;;; byte-for-byte fmt's answer and that fmt's answer re-parses to the same
+;;; forms. Layout INTENT is pinned separately, by the ground scenario
+;;; requirements in mod.req.shard (worked input/output examples).
+;;;
+;;; `fmt` is declared opaque here (this file is imported by mod.req.shard, so
+;;; the sig cannot live there — the board_w precedent from snake_game_2); the
+;;; impl supplies the body and discharges the requirements.
+
+(import "../../kernel/stdlib.shard")   ; List / Option / Bool / Pair
+(import "../../kernel/reader.shard")   ; SExpr + read_all — THE production parser
+
+;; THE SUBJECT: the pure formatter. bytes -> formatted bytes, or None (input
+;; does not parse, or the self-check refused the output — see gate_holds).
+(sig fn fmt ((src (List Int))) (Option (List Int)))
+
+;; ---- structural equality ---------------------------------------------------
+(fn bytes_eq ((a (List Int)) (b (List Int))) Bool
+  (match a
+    (Nil (match b (Nil True) (_ False)))
+    ((Cons x xs)
+      (match b
+        (Nil False)
+        ((Cons y ys) (if (int_eq x y) (bytes_eq xs ys) False))))))
+
+(fn sexpr_eq ((a SExpr) (b SExpr)) Bool
+  (match a
+    ((SInt i)   (match b ((SInt j)   (int_eq i j))    (_ False)))
+    ((SSym s)   (match b ((SSym t)   (sym_eq s t))    (_ False)))
+    ((SStr s)   (match b ((SStr t)   (bytes_eq s t))  (_ False)))
+    ((SList xs) (match b ((SList ys) (sexprs_eq xs ys)) (_ False)))))
+
+(fn sexprs_eq ((xs (List SExpr)) (ys (List SExpr))) Bool
+  (match xs
+    (Nil (match ys (Nil True) (_ False)))
+    ((Cons x xt)
+      (match ys
+        (Nil False)
+        ((Cons y yt) (if (sexpr_eq x y) (sexprs_eq xt yt) False))))))
+
+;; ---- the gate ---------------------------------------------------------------
+;; Both inputs parse, and to structurally equal form lists. Stated against
+;; read_all so the contract means "the checker sees the identical program".
+(fn parses_eq ((a (List Int)) (b (List Int))) Bool
+  (match (read_all a)
+    (None False)
+    ((Some xs)
+      (match (read_all b)
+        (None False)
+        ((Some ys) (sexprs_eq xs ys))))))
+
+;; Total form of the gate: whenever fmt produces output, that output parses
+;; to the same forms as the input. (None — a refusal — is always acceptable;
+;; usefulness is pinned by the ground scenarios, not by this predicate.)
+(fn gate_holds ((r (Option (List Int))) (src (List Int))) Bool
+  (match r
+    (None True)
+    ((Some out) (parses_eq src out))))
+
+;; ---- the whole-binary run contract ------------------------------------------
+;; Over the three run observables: the read_file results trace, the output
+;; log, and the exit code. Exit 0 PROMISES: exactly one file was read (and it
+;; was readable), exactly one chunk was written, and that chunk is exactly
+;; (fmt src) — which gate_holds (requirement fmt_gate) separately promises
+;; re-parses to the input's forms. Any nonzero exit promises nothing further
+;; here; "the binary must exit" is the only unconditional clause.
+(fn fmt_run_ok ((reads (List (Option (List Int))))
+                (outs  (List (List Int)))
+                (ex    (Option Int))) Bool
+  (match ex
+    (None False)                       ; the run must end in an exit
+    ((Some c)
+      (if (int_eq c 0)
+          (match reads
+            (Nil False)
+            ((Cons r rrest)
+              (match rrest
+                ((Cons r2 rr2) False)  ; success reads exactly one file
+                (Nil
+                  (match r
+                    (None False)       ; ... and the read succeeded
+                    ((Some src)
+                      (match (fmt src)
+                        (None False)   ; ... and fmt accepted it
+                        ((Some out)
+                          (match outs
+                            (Nil False)
+                            ((Cons o orest)
+                              (match orest
+                                ((Cons o2 oo2) False)   ; exactly one write
+                                (Nil (bytes_eq o out))))))))))))) ; = fmt's bytes
+          True))))

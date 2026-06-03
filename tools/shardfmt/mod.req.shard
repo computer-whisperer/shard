@@ -1,0 +1,185 @@
+;;; shardfmt — the module INTERFACE: the reviewed CONTRACT for the canonical
+;;; .shard formatter. The FIRST CORE TOOL under the requirement pattern: the
+;;; same bin/requires/fulfills pipeline the snake probe developed, now carrying
+;;; a tool the toolchain itself will rely on (the whole tree gets reformatted
+;;; through this binary).
+;;;
+;;; The contract's center of gravity is NOT "the printer is correct" — that is
+;;; unprovable in any useful sense and we do not attempt it. It is:
+;;;
+;;;   THE BINARY REFUSES TO EMIT OUTPUT THAT PARSES DIFFERENTLY. fmt re-parses
+;;;   its own output with the production reader and compares forms BEFORE
+;;;   returning it; the requirement (fmt_gate) is about that guard, so the
+;;;   proof is a case split on the comparison — certificate-checking applied
+;;;   to a tool. A formatter bug can make shardfmt UGLY or make it REFUSE;
+;;;   it cannot make it corrupt a file's meaning.
+;;;
+;;; Three layers of requirement:
+;;;   - fmt_gate           — the guard above (pure, over the exported fmt)
+;;;;    - fmt_main_contract — the binary honors fmt at its I/O boundary: exit 0
+;;;                          means "read one file, wrote exactly (fmt src)",
+;;;                          anchored by the extern bolt axioms below
+;;;   - fmt_scenario_*     — ground worked examples pinning layout INTENT
+;;;                          (collapse, fit, break-after-head, comments,
+;;;                          blank caps, sugar, idempotence-at-a-point)
+(import "../../kernel/stdlib.shard")   ; List / Option / Bool / Pair
+(import "../../std/list.shard")        ; append — the trace accumulators in the bolts
+(import "gate.shard")                  ; the reviewed vocabulary + the fmt sig
+
+;; ---- THE ARTIFACT -----------------------------------------------------------
+(bin shardfmt
+  (entry   main)
+  (externs get_args read_file write exit)
+  (trusts  args_reads args_output args_exit
+           read_reads read_output read_exit
+           write_reads write_output write_exit
+           exit_reads exit_output exit_code)
+  (requires fmt_gate fmt_main_contract
+            fmt_scenario_collapse fmt_scenario_fit fmt_scenario_break
+            fmt_scenario_comments fmt_scenario_blanks fmt_scenario_sugar
+            fmt_scenario_idem))
+
+;; ---- the I/O boundary --------------------------------------------------------
+;; Same World discipline as snake_game_2: a sequencing token, observables as
+;; opaque sigs, and one dumb bolt equation per (effect x observable) pair —
+;; the whole trust surface tying the proofs to the real I/O primitives.
+(type World (World Int))
+(sig fn w_reads  ((w World)) (List (Option (List Int))))  ; read_file results so far
+(sig fn w_output ((w World)) (List (List Int)))           ; chunks written so far
+(sig fn w_exit   ((w World)) (Option Int))                ; exit code, once called
+
+(sig fn main ((w World)) World)        ; THE EXECUTABLE — subject of the contract
+
+(extern get_args  ((w World)) (Pair (List (List Int)) World))
+(extern read_file ((path (List Int)) (w World)) (Pair (Option (List Int)) World))
+(extern write     ((bytes (List Int)) (w World)) World)
+(extern exit      ((code Int) (w World)) World)
+
+;; -- get_args: touches nothing we observe.
+(axiom args_reads
+  (goal ((w World) (aa (List (List Int))) (w1 World))
+        ((= (get_args w) (Pair aa w1)))
+    (= (w_reads w1) (w_reads w))))
+(axiom args_output
+  (goal ((w World) (aa (List (List Int))) (w1 World))
+        ((= (get_args w) (Pair aa w1)))
+    (= (w_output w1) (w_output w))))
+(axiom args_exit
+  (goal ((w World) (aa (List (List Int))) (w1 World))
+        ((= (get_args w) (Pair aa w1)))
+    (= (w_exit w1) (w_exit w))))
+
+;; -- read_file: APPENDS its result to the reads trace; preserves the rest.
+(axiom read_reads
+  (goal ((p (List Int)) (w World) (r (Option (List Int))) (w1 World))
+        ((= (read_file p w) (Pair r w1)))
+    (= (w_reads w1) (append (w_reads w) (Cons r Nil)))))
+(axiom read_output
+  (goal ((p (List Int)) (w World) (r (Option (List Int))) (w1 World))
+        ((= (read_file p w) (Pair r w1)))
+    (= (w_output w1) (w_output w))))
+(axiom read_exit
+  (goal ((p (List Int)) (w World) (r (Option (List Int))) (w1 World))
+        ((= (read_file p w) (Pair r w1)))
+    (= (w_exit w1) (w_exit w))))
+
+;; -- write: APPENDS its bytes to the output log; preserves the rest.
+(axiom write_reads
+  (goal ((bytes (List Int)) (w World)) ()
+    (= (w_reads (write bytes w)) (w_reads w))))
+(axiom write_output
+  (goal ((bytes (List Int)) (w World)) ()
+    (= (w_output (write bytes w)) (append (w_output w) (Cons bytes Nil)))))
+(axiom write_exit
+  (goal ((bytes (List Int)) (w World)) ()
+    (= (w_exit (write bytes w)) (w_exit w))))
+
+;; -- exit: SETS the exit code; preserves the rest.
+(axiom exit_reads
+  (goal ((c Int) (w World)) ()
+    (= (w_reads (exit c w)) (w_reads w))))
+(axiom exit_output
+  (goal ((c Int) (w World)) ()
+    (= (w_output (exit c w)) (w_output w))))
+(axiom exit_code
+  (goal ((c Int) (w World)) ()
+    (= (w_exit (exit c w)) (Some c))))
+
+;; ===========================================================================
+;; THE GATE (R-GATE) — fmt never changes what a file means.
+;; Total-predicate form: whenever fmt returns output, that output re-parses
+;; (production read_all) to forms structurally equal to the input's. The impl
+;; discharges this by construction: fmt's body ENDS in exactly this comparison
+;; and returns None when it fails, so the proof is a case split on the guard —
+;; no printer internals enter the argument.
+;; ===========================================================================
+(requirement fmt_gate
+  (goal ((src (List Int))) ()
+    (= (gate_holds (fmt src) src) True)))
+
+;; ===========================================================================
+;; THE BINARY (R-RUN) — main honors fmt at the I/O boundary.
+;; From a fresh world: the run exits, and exit 0 means exactly one (successful)
+;; read, exactly one write, and the written chunk is byte-for-byte (fmt src).
+;; Together with fmt_gate: a 0-exit shardfmt run wrote a reformatting of the
+;; file it read, and that reformatting means the same program. Nonzero exits
+;; (usage / unreadable / unparseable / gate refusal) promise nothing more.
+;; ===========================================================================
+(requirement fmt_main_contract
+  (goal ((w World))
+        ((= (w_reads w) Nil) (= (w_output w) Nil))
+    (= (fmt_run_ok (w_reads (main w)) (w_output (main w)) (w_exit (main w)))
+       True)))
+
+;; ===========================================================================
+;; LAYOUT INTENT (R-STYLE) — ground worked examples. The gate guarantees
+;; meaning-preservation but would be satisfied by `fmt = refuse-everything`;
+;; these pin down that fmt ACCEPTS and what its style IS: 2-space indent,
+;; 80 columns, break-after-head, comments and blank structure preserved.
+;; Each is one concrete input/output pair, checked by computation. NOTE the
+;; expected outputs are part of the REVIEWED surface: changing the style means
+;; editing these strings, here, in review.
+;; ===========================================================================
+
+;; whitespace collapses; a small form prints flat
+(requirement fmt_scenario_collapse
+  (goal () ()
+    (= (fmt "( fn   f ((x Int))\n   Int x )")
+       (Some "(fn f ((x Int)) Int x)\n"))))
+
+;; already-canonical input is untouched
+(requirement fmt_scenario_fit
+  (goal () ()
+    (= (fmt "(fn f ((x Int)) Int x)\n")
+       (Some "(fn f ((x Int)) Int x)\n"))))
+
+;; an over-wide form breaks after the head; `fn` keeps name/params/ret on the
+;; head line; the body indents 2
+(requirement fmt_scenario_break
+  (goal () ()
+    (= (fmt "(fn really_long_function_name ((first_argument Int) (second_argument Int) (third_argument Int)) Int (+ first_argument (+ second_argument third_argument)))")
+       (Some "(fn really_long_function_name\n  ((first_argument Int) (second_argument Int) (third_argument Int))\n  Int\n  (+ first_argument (+ second_argument third_argument)))\n"))))
+
+;; comments survive: own-line comments stay own-line, trailing stay trailing
+(requirement fmt_scenario_comments
+  (goal () ()
+    (= (fmt ";; header comment\n(fn f ((x Int)) Int\n  x) ; trailing\n")
+       (Some ";; header comment\n(fn f ((x Int)) Int x)  ; trailing\n"))))
+
+;; blank-line runs cap at 2 between top-level forms
+(requirement fmt_scenario_blanks
+  (goal () ()
+    (= (fmt "(fn f () Int 1)\n\n\n\n\n(fn g () Int 2)\n")
+       (Some "(fn f () Int 1)\n\n\n(fn g () Int 2)\n"))))
+
+;; reader sugar is preserved: 'x stays 'x, strings keep their escapes
+(requirement fmt_scenario_sugar
+  (goal () ()
+    (= (fmt "(fn f () Symbol  'hello)\n(fn g () (List Int) \"a\\n(b\")\n")
+       (Some "(fn f () Symbol 'hello)\n(fn g () (List Int) \"a\\n(b\")\n"))))
+
+;; idempotence at a point: canonical output is a fixed point
+(requirement fmt_scenario_idem
+  (goal () ()
+    (= (fmt "(fn f ((x Int)) Int (+ x 1))\n")
+       (Some "(fn f ((x Int)) Int (+ x 1))\n"))))
