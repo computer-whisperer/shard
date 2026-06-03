@@ -286,6 +286,497 @@
           (rewrite (premise 1) lr both true ()) (rewrite (premise 2) lr both true ())
           (rewrite (premise 3) lr both true ()) (compute both)) refl))
 
+;; ===========================================================================
+;; RENDERER FAITHFULNESS, SYMBOLIC (fin-split-free; dimensions stay opaque).
+;;
+;; The chain: defining-equation lemmas (guard-premise style — the caller
+;; discharges each recursion guard by have+farkas+rewrite, nothing is ever
+;; computed through a dimension-bearing term) -> per-row inductions (wf-induct
+;; on column/row remainder measures) -> split_rows/render alignment (take_rr /
+;; drop_rr / split_render) -> arena_frame: EVERY rendered frame is a complete
+;; arena, for any state, at any conforming board size.
+;;
+;; board_w_lo/board_h_lo are the licensed bound facts (the one unfold of the
+;; concrete constants outside board_min_size/the demos); every other lemma
+;; treats the dimensions as opaque atoms in farkas arithmetic.
+;; ===========================================================================
+
+(claim board_w_lo (goal () () (= (le 6 (board_w)) True))
+  (steps ((unfold board_w lhs)) (by ord (list))))
+(claim board_h_lo (goal () () (= (le 4 (board_h)) True))
+  (steps ((unfold board_h lhs)) (by ord (list))))
+
+(claim rr_stop
+  (goal ((s GameState) (r Int) (c Int)) ((= (lt (- (board_w) 1) c) True))
+    (= (render_row s r c) (Cons 10 Nil)))
+  (steps ((unfold render_row lhs) (rewrite (premise 0) lr lhs true ()) (reduce lhs)) refl))
+
+(claim rr_step
+  (goal ((s GameState) (r Int) (c Int)) ((= (lt (- (board_w) 1) c) False))
+    (= (render_row s r c) (Cons (glyph s r c) (render_row s r (+ c 1)))))
+  (steps ((unfold render_row lhs) (rewrite (premise 0) lr lhs true ()) (reduce lhs)) refl))
+
+(claim rows_stop
+  (goal ((s GameState) (r Int)) ((= (lt (- (board_h) 1) r) True))
+    (= (render_rows s r) Nil))
+  (steps ((unfold render_rows lhs) (rewrite (premise 0) lr lhs true ()) (reduce lhs)) refl))
+
+(claim rows_step
+  (goal ((s GameState) (r Int)) ((= (lt (- (board_h) 1) r) False))
+    (= (render_rows s r) (app_int (render_row s r 0) (render_rows s (+ r 1)))))
+  (steps ((unfold render_rows lhs) (rewrite (premise 0) lr lhs true ()) (reduce lhs)) refl))
+
+(claim app_nil (goal ((ys (List Int))) () (= (app_int Nil ys) ys))
+  (steps ((unfold app_int lhs) (reduce lhs)) refl))
+
+(claim app_cons
+  (goal ((h Int) (t (List Int)) (ys (List Int))) ()
+    (= (app_int (Cons h t) ys) (Cons h (app_int t ys))))
+  (steps ((unfold app_int lhs) (reduce lhs)) refl))
+
+;; glyph at a border cell is the wall byte.
+(claim glyph_wall
+  (goal ((s GameState) (r Int) (c Int)) ((= (on_border r c) True))
+    (= (glyph s r c) 35))
+  (steps ((unfold glyph lhs) (rewrite (premise 0) lr lhs true ()) (reduce lhs)) refl))
+
+;; a top/bottom row is wall at EVERY column (the orb premise covers both).
+(claim glyph_wall_row
+  (goal ((s GameState) (r Int) (c Int))
+        ((= (orb (int_eq r 0) (int_eq r (- (board_h) 1))) True))
+    (= (glyph s r c) 35))
+  (case-on (int_eq r 0) Bool
+    ((case True
+       (have (= (on_border r c) True)
+         (steps ((unfold on_border lhs) (rewrite (hyp 0) lr lhs true ()) (reduce lhs)) refl)
+         (rewrite-with (lemma glyph_wall) lr lhs ()
+           ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+           refl)))
+     (case False
+       (have (= (int_eq r (- (board_h) 1)) True)
+         (steps ((rewrite (premise 0) rl rhs true ())
+                 (rewrite (hyp 0) lr rhs true ())
+                 (unfold orb rhs) (reduce rhs)) refl)
+         (have (= (on_border r c) True)
+           (steps ((unfold on_border lhs)
+                   (rewrite (hyp 0) lr lhs true ()) (reduce lhs)
+                   (rewrite (premise 1) lr lhs true ()) (reduce lhs)) refl)
+           (rewrite-with (lemma glyph_wall) lr lhs ()
+             ((steps ((rewrite (premise 2) lr lhs true ())) refl))
+             refl)))))))
+
+;; a wall row (top or bottom): from column c on, the rendered row is exactly
+;; the remaining (board_w - c) wall cells and the newline.
+(claim wall_cells_row
+  (goal ((s GameState) (r Int) (c Int))
+        ((= (orb (int_eq r 0) (int_eq r (- (board_h) 1))) True)
+         (= (le 0 c) True)
+         (= (le c (board_w)) True))
+    (= (wall_cells (- (board_w) c) (render_row s r c)) True))
+  (wf-induct (- (board_w) c)
+    (case-on (le (- (board_w) c) 0) Bool
+      ((case True
+         ;; c = board_w: the row is just the newline; wall_cells 0 accepts it.
+         (have (= (le (- (board_w) c) 0) True)
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+           (steps ((unfold wall_cells lhs)
+                   (rewrite (premise 3) lr lhs true ())
+                   (reduce lhs))
+             (rewrite-with (lemma rr_stop) lr lhs ()
+               ((by farkas (list 1 0 0 0 1)))
+               (steps ((reduce lhs) (unfold nl lhs))
+                 (by eqdec (list)))))))
+       (case False
+         ;; c < board_w: peel one wall cell and recurse.
+         (have (= (le (- (board_w) c) 0) False)
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+           (steps ((unfold wall_cells lhs)
+                   (rewrite (premise 3) lr lhs true ())
+                   (reduce lhs))
+             (rewrite-with (lemma rr_step) lr lhs ()
+               ((by farkas (list 1 0 0 0 1)))
+               (steps ((reduce lhs))
+                 (rewrite-with (lemma glyph_wall_row) lr lhs ()
+                   ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                   (have (= (int_eq 35 (wall)) True)
+                     (steps ((unfold wall lhs)) (by eqdec (list)))
+                     (have (= (- (- (board_w) c) 1) (- (board_w) (+ c 1)))
+                       (by lia (list))
+                       (steps ((rewrite (premise 4) lr lhs true ())
+                               (reduce lhs)
+                               (rewrite (premise 5) lr lhs true ()))
+                         (rewrite-with (hyp 1) lr lhs ()
+                           ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                            (by farkas (list 1 0 1 0 0 0 0))
+                            (by farkas (list 1 0 0 0 1 0 0))
+                            (by farkas (list 1 0 0 0 1 0 0))
+                            (by farkas (list 1 0 0 0 0 0 0)))
+                           refl))))))))))))))
+
+;; an interior row's middle: from column c (1 <= c <= board_w - 1) on, the
+;; rendered row is (board_w - 1 - c) unconstrained cells, then wall, newline.
+(claim free_cells_row
+  (goal ((s GameState) (r Int) (c Int))
+        ((= (int_eq r 0) False)
+         (= (int_eq r (- (board_h) 1)) False)
+         (= (le 1 c) True)
+         (= (le c (- (board_w) 1)) True))
+    (= (free_cells (- (- (board_w) 1) c) (render_row s r c)) True))
+  (wf-induct (- (- (board_w) 1) c)
+    (case-on (le (- (- (board_w) 1) c) 0) Bool
+      ((case True
+         ;; c = board_w - 1: the closing wall cell, then the newline.
+         (have (= (le (- (- (board_w) 1) c) 0) True)
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+           (have (= (int_eq c 0) False)
+             (by farkas (list -1 0 0 1 0 0))
+             (have (= (int_eq c (- (board_w) 1)) True)
+               (by farkas (list (list 1 0 0 0 1 0 0) (list 1 0 0 0 0 1 0)))
+               (have (= (on_border r c) True)
+                 (steps ((unfold on_border lhs)
+                         (rewrite (premise 0) lr lhs true ()) (reduce lhs)
+                         (rewrite (premise 1) lr lhs true ()) (reduce lhs)
+                         (rewrite (premise 5) lr lhs true ()) (reduce lhs)
+                         (rewrite (premise 6) lr lhs true ())) refl)
+                 (steps ((unfold free_cells lhs)
+                         (rewrite (premise 4) lr lhs true ())
+                         (reduce lhs))
+                   (rewrite-with (lemma rr_step) lr lhs ()
+                     ((by farkas (list 1 0 0 0 1 0 0 0 0)))
+                     (rewrite-with (lemma rr_stop) lr lhs ()
+                       ((by farkas (list 1 0 0 0 0 1 0 0 0)))
+                       (steps ((reduce lhs))
+                         (rewrite-with (lemma glyph_wall) lr lhs ()
+                           ((steps ((rewrite (premise 7) lr lhs true ())) refl))
+                           (have (= (int_eq 35 (wall)) True)
+                             (steps ((unfold wall lhs)) (by eqdec (list)))
+                             (have (= (int_eq 10 (nl)) True)
+                               (steps ((unfold nl lhs)) (by eqdec (list)))
+                               (steps ((rewrite (premise 8) lr lhs true ())
+                                       (rewrite (premise 9) lr lhs true ())
+                                       (unfold andb lhs)
+                                       (reduce lhs))
+                                 refl)))))))))))))
+       (case False
+         ;; c < board_w - 1: skip one unconstrained cell and recurse.
+         (have (= (le (- (- (board_w) 1) c) 0) False)
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+           (steps ((unfold free_cells lhs)
+                   (rewrite (premise 4) lr lhs true ())
+                   (reduce lhs))
+             (rewrite-with (lemma rr_step) lr lhs ()
+               ((by farkas (list 1 0 0 0 0 1)))
+               (steps ((reduce lhs))
+                 (have (= (- (- (- (board_w) 1) c) 1) (- (- (board_w) 1) (+ c 1)))
+                   (by lia (list))
+                   (steps ((rewrite (premise 5) lr lhs true ()))
+                     (rewrite-with (hyp 1) lr lhs ()
+                       ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                        (steps ((rewrite (premise 1) lr lhs true ())) refl)
+                        (by farkas (list 1 0 0 1 0 0 0))
+                        (by farkas (list 1 0 0 0 0 1 0))
+                        (by farkas (list 1 0 0 0 0 1 0))
+                        (by farkas (list 1 0 0 0 0 0 0)))
+                       refl))))))))))))
+
+;; take/drop with count (board_w - c) + 1 consume EXACTLY one rendered row
+;; (from column c) off an app_int; split_render is the corollary at c = 0
+;; that split_rows peels whole rendered rows.
+(claim take_rr
+  (goal ((s GameState) (r Int) (c Int) (Y (List Int)))
+        ((= (le 0 c) True) (= (le c (board_w)) True))
+    (= (take (+ (- (board_w) c) 1) (app_int (render_row s r c) Y))
+       (render_row s r c)))
+  (wf-induct (- (board_w) c)
+    (case-on (le (- (board_w) c) 0) Bool
+      ((case True
+         (have (= (le (- (board_w) c) 0) True)
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+           (rewrite-with (lemma rr_stop) lr lhs ()
+             ((by farkas (list 1 0 0 1)))
+             (rewrite-with (lemma rr_stop) lr rhs ()
+               ((by farkas (list 1 0 0 1)))
+               (have (= (le (+ (- (board_w) c) 1) 0) False)
+                 (by farkas (list 1 0 1 0))
+                 (have (= (- (+ (- (board_w) c) 1) 1) (- (board_w) c))
+                   (by lia (list))
+                   (steps ((rewrite (lemma app_cons) lr lhs true ())
+                           (rewrite (lemma app_nil) lr lhs true ())
+                           (unfold take lhs)
+                           (rewrite (premise 3) lr lhs true ())
+                           (reduce lhs)
+                           (rewrite (premise 4) lr lhs true ())
+                           (unfold take lhs)
+                           (rewrite (premise 2) lr lhs true ())
+                           (reduce lhs))
+                     refl)))))))
+       (case False
+         (have (= (le (- (board_w) c) 0) False)
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+           (rewrite-with (lemma rr_step) lr lhs ()
+             ((by farkas (list 1 0 0 1)))
+             (rewrite-with (lemma rr_step) lr rhs ()
+               ((by farkas (list 1 0 0 1)))
+               (have (= (le (+ (- (board_w) c) 1) 0) False)
+                 (by farkas (list 1 0 0 1))
+                 (have (= (- (+ (- (board_w) c) 1) 1) (+ (- (board_w) (+ c 1)) 1))
+                   (by lia (list))
+                   (steps ((rewrite (lemma app_cons) lr lhs true ())
+                           (unfold take lhs)
+                           (rewrite (premise 3) lr lhs true ())
+                           (reduce lhs)
+                           (rewrite (premise 4) lr lhs true ()))
+                     (rewrite-with (hyp 1) lr lhs ()
+                       ((by farkas (list 1 1 0 0 0 0))
+                        (by farkas (list 1 0 0 1 0 0))
+                        (by farkas (list 1 0 0 1 0 0))
+                        (by farkas (list 1 0 0 0 0 0)))
+                       refl))))))))))))
+
+(claim drop_rr
+  (goal ((s GameState) (r Int) (c Int) (Y (List Int)))
+        ((= (le 0 c) True) (= (le c (board_w)) True))
+    (= (drop (+ (- (board_w) c) 1) (app_int (render_row s r c) Y)) Y))
+  (wf-induct (- (board_w) c)
+    (case-on (le (- (board_w) c) 0) Bool
+      ((case True
+         (have (= (le (- (board_w) c) 0) True)
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+           (rewrite-with (lemma rr_stop) lr lhs ()
+             ((by farkas (list 1 0 0 1)))
+             (have (= (le (+ (- (board_w) c) 1) 0) False)
+               (by farkas (list 1 0 1 0))
+               (have (= (- (+ (- (board_w) c) 1) 1) (- (board_w) c))
+                 (by lia (list))
+                 (steps ((rewrite (lemma app_cons) lr lhs true ())
+                         (rewrite (lemma app_nil) lr lhs true ())
+                         (unfold drop lhs)
+                         (rewrite (premise 3) lr lhs true ())
+                         (reduce lhs)
+                         (rewrite (premise 4) lr lhs true ())
+                         (unfold drop lhs)
+                         (rewrite (premise 2) lr lhs true ())
+                         (reduce lhs))
+                   refl))))))
+       (case False
+         (have (= (le (- (board_w) c) 0) False)
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+           (rewrite-with (lemma rr_step) lr lhs ()
+             ((by farkas (list 1 0 0 1)))
+             (have (= (le (+ (- (board_w) c) 1) 0) False)
+               (by farkas (list 1 0 0 1))
+               (have (= (- (+ (- (board_w) c) 1) 1) (+ (- (board_w) (+ c 1)) 1))
+                 (by lia (list))
+                 (steps ((rewrite (lemma app_cons) lr lhs true ())
+                         (unfold drop lhs)
+                         (rewrite (premise 3) lr lhs true ())
+                         (reduce lhs)
+                         (rewrite (premise 4) lr lhs true ()))
+                   (rewrite-with (hyp 1) lr lhs ()
+                     ((by farkas (list 1 1 0 0 0 0))
+                      (by farkas (list 1 0 0 1 0 0))
+                      (by farkas (list 1 0 0 1 0 0))
+                      (by farkas (list 1 0 0 0 0 0)))
+                     refl)))))))))))
+
+;; split_rows peels exactly one rendered row off render_rows (r <= board_h-1).
+(claim split_render
+  (goal ((s GameState) (r Int))
+        ((= (le 0 r) True) (= (le r (- (board_h) 1)) True))
+    (= (split_rows (render_rows s r))
+       (Cons (render_row s r 0) (split_rows (render_rows s (+ r 1))))))
+  (rewrite-with (lemma rows_step) lr lhs ()
+    ((by farkas (list 1 0 1)))
+    (have (= (le 6 (board_w)) True)
+      (steps ((rewrite (lemma board_w_lo) lr lhs true ())) refl)
+      (rewrite-with (lemma rr_step) lr lhs ()
+        ((by farkas (list 1 0 0 1)))
+        (have (= (+ (board_w) 1) (+ (- (board_w) 0) 1))
+          (by lia (list))
+          (steps ((rewrite (lemma app_cons) lr lhs true ())
+                  (unfold split_rows lhs)
+                  (reduce lhs)
+                  (rewrite (lemma app_cons) rl lhs true ()))
+            (rewrite-with (lemma rr_step) rl lhs ()
+              ((by farkas (list 1 0 0 1 0)))
+              (rewrite-with (lemma rr_step) rl lhs ()
+                ((by farkas (list 1 0 0 1 0)))
+                (steps ((rewrite (premise 3) lr lhs true ()))
+                  (rewrite-with (lemma take_rr) lr lhs ()
+                    ((by ord (list))
+                     (by farkas (list 1 0 0 1 0)))
+                    (rewrite-with (lemma drop_rr) lr lhs ()
+                      ((by ord (list))
+                       (by farkas (list 1 0 0 1 0)))
+                      refl)))))))))))
+
+;; split_rows of an empty body is no rows (the defining Nil equation —
+;; needed as a REWRITE because unfold cannot reach inside a Match).
+(claim split_nil (goal () () (= (split_rows Nil) Nil))
+  (steps ((unfold split_rows lhs) (reduce lhs)) refl))
+
+;; a top/bottom rendered row passes wall_row.
+(claim wall_row_render
+  (goal ((s GameState) (r Int))
+        ((= (orb (int_eq r 0) (int_eq r (- (board_h) 1))) True))
+    (= (wall_row (render_row s r 0)) True))
+  (have (= (le 6 (board_w)) True)
+    (steps ((rewrite (lemma board_w_lo) lr lhs true ())) refl)
+    (have (= (board_w) (- (board_w) 0))
+      (by lia (list))
+      (steps ((unfold wall_row lhs)
+              (rewrite (premise 2) lr lhs true ()))
+        (rewrite-with (lemma wall_cells_row) lr lhs ()
+          ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+           (by ord (list))
+           (by farkas (list 1 0 1 0)))
+          refl)))))
+
+;; an interior rendered row passes ends_row.
+(claim ends_row_render
+  (goal ((s GameState) (r Int))
+        ((= (int_eq r 0) False)
+         (= (int_eq r (- (board_h) 1)) False))
+    (= (ends_row (render_row s r 0)) True))
+  (have (= (le 6 (board_w)) True)
+    (steps ((rewrite (lemma board_w_lo) lr lhs true ())) refl)
+    (have (= (int_eq 0 0) True)
+      (by eqdec (list))
+      (have (= (on_border r 0) True)
+        (steps ((unfold on_border lhs)
+                (rewrite (premise 0) lr lhs true ()) (reduce lhs)
+                (rewrite (premise 1) lr lhs true ()) (reduce lhs)
+                (rewrite (premise 3) lr lhs true ()) (reduce lhs)) refl)
+        (rewrite-with (lemma rr_step) lr lhs ()
+          ((by farkas (list 1 0 0 1 0 0)))
+          (steps ((unfold ends_row lhs) (reduce lhs))
+            (rewrite-with (lemma glyph_wall) lr lhs ()
+              ((steps ((rewrite (premise 4) lr lhs true ())) refl))
+              (have (= (int_eq 35 (wall)) True)
+                (steps ((unfold wall lhs)) (by eqdec (list)))
+                (have (= (- (board_w) 2) (- (- (board_w) 1) 1))
+                  (by lia (list))
+                  (have (= (+ 0 1) 1)
+                    (by lia (list))
+                    (steps ((rewrite (premise 5) lr lhs true ())
+                            (unfold andb lhs)
+                            (reduce lhs)
+                            (rewrite (premise 6) lr lhs true ())
+                            (rewrite (premise 7) lr lhs true ()))
+                      (rewrite-with (lemma free_cells_row) lr lhs ()
+                        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                         (steps ((rewrite (premise 1) lr lhs true ())) refl)
+                         (by ord (list))
+                         (by farkas (list 1 0 0 1 0 0 0 0)))
+                        refl))))))))))))
+
+;; from row r (1 <= r <= board_h-1) down, the split rendered rows pass
+;; mid_rows with the remaining count.
+(claim mid_rows_render
+  (goal ((s GameState) (r Int))
+        ((= (le 1 r) True) (= (le r (- (board_h) 1)) True))
+    (= (mid_rows (- (- (board_h) 1) r) (split_rows (render_rows s r))) True))
+  (wf-induct (- (- (board_h) 1) r)
+    (case-on (le (- (- (board_h) 1) r) 0) Bool
+      ((case True
+         ;; r = board_h - 1: exactly the bottom wall row remains.
+         (have (= (le (- (- (board_h) 1) r) 0) True)
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+           (have (= (int_eq r (- (board_h) 1)) True)
+             (by farkas (list (list 1 0 1 0) (list 1 0 0 1)))
+             (have (= (orb (int_eq r 0) (int_eq r (- (board_h) 1))) True)
+               (steps ((rewrite (premise 3) lr lhs true ())
+                       (rewrite (lemma orb_tr) lr lhs true ())) refl)
+               (steps ((unfold mid_rows lhs)
+                       (rewrite (premise 2) lr lhs true ())
+                       (reduce lhs))
+                 (rewrite-with (lemma split_render) lr lhs ()
+                   ((by farkas (list 1 1 0 0 0 0))
+                    (steps ((rewrite (premise 1) lr lhs true ())) refl))
+                   (rewrite-with (lemma rows_stop) lr lhs ()
+                     ((by farkas (list 1 0 0 1 0 0)))
+                     (steps ((rewrite (lemma split_nil) lr lhs true ())
+                             (reduce lhs))
+                       (rewrite-with (lemma wall_row_render) lr lhs ()
+                         ((steps ((rewrite (premise 4) lr lhs true ())) refl))
+                         refl)))))))))
+       (case False
+         ;; r < board_h - 1: one interior row, then recurse.
+         (have (= (le (- (- (board_h) 1) r) 0) False)
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+           (steps ((unfold mid_rows lhs)
+                   (rewrite (premise 2) lr lhs true ())
+                   (reduce lhs))
+             (rewrite-with (lemma split_render) lr lhs ()
+               ((by farkas (list 1 1 0 0))
+                (steps ((rewrite (premise 1) lr lhs true ())) refl))
+               (steps ((reduce lhs))
+                 (rewrite-with (lemma ends_row_render) lr lhs ()
+                   ((by farkas (list -1 1 0 0))
+                    (by farkas (list 1 0 0 1)))
+                   (have (= (- (- (- (board_h) 1) r) 1) (- (- (board_h) 1) (+ r 1)))
+                     (by lia (list))
+                     (steps ((unfold andb lhs)
+                             (reduce lhs)
+                             (rewrite (premise 3) lr lhs true ()))
+                       (rewrite-with (hyp 1) lr lhs ()
+                         ((by farkas (list 1 1 0 0 0))
+                          (by farkas (list 1 0 0 1 0))
+                          (by farkas (list 1 0 0 1 0))
+                          (by farkas (list 1 0 0 0 0)))
+                         refl))))))))))))) 
+
+;; the clear prefix: structural over the concrete 7-byte spine (X stays stuck,
+;; no dimension fn is reachable — a LICENSED compute).
+(claim sc_clear
+  (goal ((X (List Int))) ()
+    (= (starts_clear (app_int (list 27 91 50 74 27 91 72) X)) True))
+  (steps ((compute lhs)) refl))
+
+(claim drop7_clear
+  (goal ((X (List Int))) ()
+    (= (drop 7 (app_int (list 27 91 50 74 27 91 72) X)) X))
+  (steps ((compute lhs)) refl))
+
+;; THE PER-FRAME FACT: every rendered frame is a complete arena — for ANY
+;; state, at ANY conforming board size. Fin-split-free and size-symbolic.
+(claim arena_frame
+  (goal ((s GameState)) () (= (is_arena (frame s)) True))
+  (have (= (le 4 (board_h)) True)
+    (steps ((rewrite (lemma board_h_lo) lr lhs true ())) refl)
+    (have (= (int_eq 0 0) True)
+      (by eqdec (list))
+      (have (= (orb (int_eq 0 0) (int_eq 0 (- (board_h) 1))) True)
+        (steps ((rewrite (premise 1) lr lhs true ())
+                (unfold orb lhs) (reduce lhs)) refl)
+        (have (= (+ 0 1) 1)
+          (by lia (list))
+          (have (= (- (board_h) 2) (- (- (board_h) 1) 1))
+            (by lia (list))
+            (steps ((unfold is_arena lhs)
+                    (unfold frame lhs)
+                    (unfold frame lhs)
+                    (rewrite (lemma sc_clear) lr lhs true ())
+                    (rewrite (lemma drop7_clear) lr lhs true ())
+                    (unfold andb lhs)
+                    (reduce lhs)
+                    (unfold render lhs)
+                    (unfold is_body lhs))
+              (rewrite-with (lemma split_render) lr lhs ()
+                ((by ord (list))
+                 (by farkas (list 1 1 0 0 0 0)))
+                (steps ((reduce lhs))
+                  (rewrite-with (lemma wall_row_render) lr lhs ()
+                    ((steps ((rewrite (premise 2) lr lhs true ())) refl))
+                    (steps ((unfold andb lhs)
+                            (reduce lhs)
+                            (rewrite (premise 3) lr lhs true ())
+                            (rewrite (premise 4) lr lhs true ()))
+                      (rewrite-with (lemma mid_rows_render) lr lhs ()
+                        ((by ord (list))
+                         (by farkas (list 1 1 0 0 0 0)))
+                        refl))))))))))))
+
 ;; ---- the world / play loop ------------------------------------------------
 (fn w_clock ((w World)) Int (match w ((World n) n)))
 
@@ -462,17 +953,70 @@
 
 
 ;; ===========================================================================
-;; PENDING REBUILD — frames_are_arenas / frames_are_boards.
+;; PENDING REBUILD — frames_are_boards.
 ;;
 ;; The fin-split enumeration proofs (board_from_inv / head_at_finds / board_ok
-;; / move_shown) and the ∀-fuel preservation workers that cited them were
-;; REMOVED when the board went parametric: fin-split needs literal bounds, and
-;; enumerating a 30×30 interior was never the right shape anyway. The symbolic
-;; (induction + farkas) faithfulness chain is the in-progress rebuild; until it
-;; lands, frames_are_arenas and frames_are_boards are honest UNMET obligations
-;; in the bin report. The snoc lemmas above and inv_step/food_step/align_* are
-;; the surviving size-independent pieces it will reassemble.
+;; / move_shown) were REMOVED when the board went parametric: fin-split needs
+;; literal bounds, and enumerating a 30×30 interior was never the right shape.
+;; frames_are_arenas is re-proven below on the symbolic arena_frame chain;
+;; frames_are_boards (the entity detectors) is the in-progress remainder and
+;; stays an honest UNMET obligation in the bin report until it lands.
 ;; ===========================================================================
+
+
+;; ---- the ∀-fuel arena worker: every written frame is an arena --------------
+;; The play loop only ever appends `frame (step key s)` to the output log, and
+;; arena_frame says ANY rendered frame is an arena — so the all_arena invariant
+;; rides the loop with no per-state premise at all. WfInduct on fuel; the
+;; ι-only `reduce` replaces the old `simp` so nothing ever δ-unfolds the frame
+;; inside write's arguments (at 32×32 that would concretize ~1k stuck cells).
+(claim play_arena_preserve
+  (goal ((f Int) (s GameState) (w World))
+        ((= (all_arena (w_output w)) True))
+    (= (all_arena (w_output (play_fuel f s w))) True))
+  (wf-induct f
+    (case-on (lt 0 f) Bool
+      ((case False
+         (steps ((unfold play_fuel lhs) (rewrite (hyp 0) lr lhs true ()) (reduce lhs)
+                 (rewrite (premise 0) lr lhs true ())) refl))
+       (case True
+         (steps ((unfold play_fuel lhs) (rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+           (case-on (key_oracle w) Pair
+             ((case Pair (o w1)
+                (steps ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                  (case-on o Option
+                    ;; hyps: 0 o-eq, 1 pair-eq, 2 lt-fact, 3 IH
+                    ((case None
+                       (steps ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                         (rewrite-with (lemma key_output) lr lhs ((inst w w) (inst o o) (inst w1 w1))
+                           ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
+                           (steps ((rewrite (premise 0) lr lhs true ())) refl))))
+                     (case Some (key)
+                       (steps ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                         (rewrite-with (hyp 3) lr lhs ()
+                           ;; IH premise: the log stays all_arena after the write —
+                           ;; write_output + snoc; key_output folds w1's log to w's;
+                           ;; the appended frame is an arena by arena_frame.
+                           ((steps ((rewrite (lemma write_output)   lr lhs true ())
+                                    (rewrite (lemma all_arena_snoc) lr lhs true ()))
+                              (rewrite-with (lemma key_output) lr lhs ((inst w w) (inst o o) (inst w1 w1))
+                                ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
+                                (steps ((rewrite (premise 0) lr lhs true ())
+                                        (rewrite (lemma arena_frame) lr lhs true ())
+                                        (reduce lhs)) refl)))
+                            (rewrite-with (lemma step_nonneg) lr lhs ((inst x f))
+                              ((steps ((rewrite (hyp 2) lr lhs true ())) refl)) refl)
+                            (by ord (list)))
+                           refl)))))))))))))))
+
+;; R-ARENA, over main: cite the worker at s=init with the requirement's own
+;; log premise. fuel stays opaque (cited, never reduced); the per-frame fact
+;; needs NO init-specific reasoning — arena_frame covers every state.
+(fulfills frames_are_arenas
+  (steps ((unfold main lhs))
+    (rewrite-with (lemma play_arena_preserve) lr lhs ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+      refl)))
 
 ;; ---- design-constant bound: the ONE fulfillment licensed to reduce the 32s --
 (fulfills board_min_size
