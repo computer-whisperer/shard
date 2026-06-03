@@ -245,7 +245,10 @@
                       (match seq
                         ((Sequent _ _ premises goal_eq)
                           (farkas_check premises goal_eq cert)))
-                      False)))))))                    ; unknown theory
+                      False)))))                       ; unknown theory
+
+    ((FinSplit var lo hi cases)
+      (do_fin_split m th seq var lo hi cases))))
 
 ;; ---------------------------------------------------------------------------
 ;; apply_steps / apply_step: run non-branching steps, threading the
@@ -1106,6 +1109,101 @@
               (Cons case_hyp hyps)
               premises
               eq)))))))
+
+;; ---------------------------------------------------------------------------
+;; do_fin_split: bounded-integer case analysis (finite enumeration). The one
+;; integer-specific elimination the linear theories cannot do — an Int var known
+;; to lie in a CONCRETE range [L,U] equals one of L, L+1, …, U, so a goal that
+;; holds for each of those literals holds for the var. (Farkas reasons over ℚ,
+;; where `1<=x<=3 ∧ x∉{1,2,3}` is satisfiable; this is the missing ℤ step.)
+;;
+;; SOUNDNESS. The bounds are NOT assumed — they are CITED in-scope facts
+;; (resolved via resolve_eq), each required to be literally `(le L var)=True` /
+;; `(le var U)=True` with L,U integer literals and `var` the split variable. The
+;; cases must be exactly the consecutive run L, L+1, …, U (checked by
+;; fin_check_cases), so the enumeration is provably exhaustive over [L,U]. Each
+;; case sub-proof discharges the whole sequent with `var` replaced by that
+;; literal. `var` must be Int-typed. The author supplies the witness (which two
+;; facts bound the var, one proof per value); the kernel only CHECKS coverage —
+;; no search. Certificate-style, like farkas.
+;; ---------------------------------------------------------------------------
+
+(fn fin_le ((a Int) (b Int)) Bool (if (lt b a) False True))   ; a <= b
+
+(fn fin_is_true ((e Expr)) Bool
+  (match e ((Ctor n _) (sym_eq n (quote True))) (_ False)))
+
+;; (fin_pick lit_slot var_slot var): require lit_slot=(IntLit n), var_slot=
+;; (FVar var); return n. Used to read a literal bound off a cited `le` fact.
+(fn fin_pick ((lit_e Expr) (var_e Expr) (var Symbol)) (Option Int)
+  (match lit_e
+    ((IntLit n)
+      (match var_e
+        ((FVar v) (if (sym_eq v var) (Some n) None))
+        (_ None)))
+    (_ None)))
+
+;; Resolve `er`; require a ground `(le A B) = True`. lo_side True ⇒ expect
+;; (le LIT var) and return LIT; lo_side False ⇒ expect (le var LIT), return LIT.
+(fn fin_bound ((er EqRef) (seq Sequent) (th Theory) (var Symbol) (lo_side Bool))
+              (Option Int)
+  (match (resolve_eq er seq th)
+    (None None)
+    ((Some g)
+      (match g
+        ((Goal Nil Nil (Equation lhs rhs))
+          (if (fin_is_true rhs)
+              (match lhs
+                ((Call f (Cons a (Cons b Nil)))
+                  (if (sym_eq f (quote le))
+                      (if lo_side (fin_pick a b var) (fin_pick b a var))
+                      None))
+                (_ None))
+              None))
+        (_ None)))))
+
+;; Subgoal for value v: substitute var := (IntLit v) throughout the sequent.
+(fn fin_subgoal ((seq Sequent) (var Symbol) (v Int)) Sequent
+  (match seq
+    ((Sequent params hyps premises eq)
+      (let ((env (Bind var (IntLit v) Empty)))
+        (Sequent params (subst_goals env hyps) (subst_eqs env premises)
+                 (subst_eq env eq))))))
+
+;; Require the cases to be exactly cur, cur+1, …, hi (each <= hi), checking each
+;; case sub-proof against its substituted subgoal. Exhausting the list is OK iff
+;; we covered through hi (cur = hi+1) — no gap left uncovered.
+(fn fin_check_cases ((m Module) (th Theory) (seq Sequent) (var Symbol)
+                     (cur Int) (hi Int) (cases (List FinCase))) Bool
+  (match cases
+    (Nil (int_eq cur (+ hi 1)))                    ; covered L..hi exactly
+    ((Cons (FinCase v sub) rest)
+      (if (int_eq v cur)
+          (if (fin_le cur hi)
+              (if (check_sequent m th (fin_subgoal seq var v) sub)
+                  (fin_check_cases m th seq var (+ cur 1) hi rest)
+                  False)
+              False)                               ; value past the upper bound
+          False))))                                ; gap / out-of-order / duplicate
+
+(fn do_fin_split ((m Module) (th Theory) (seq Sequent)
+                  (var Symbol) (lo EqRef) (hi EqRef) (cases (List FinCase))) Bool
+  (match seq
+    ((Sequent params hyps premises eq)
+      (match (find_param var params)
+        (None False)                               ; split var not in scope
+        ((Some (Param _ vty))
+          (if (type_eq vty (TCon (quote Int) Nil))
+              (match (fin_bound lo seq th var True)
+                (None False)
+                ((Some lo_val)
+                  (match (fin_bound hi seq th var False)
+                    (None False)
+                    ((Some hi_val)
+                      (if (fin_le lo_val hi_val)
+                          (fin_check_cases m th seq var lo_val hi_val cases)
+                          False)))))               ; empty / inverted range
+              False))))))                          ; var not Int-typed
 
 ;; ---------------------------------------------------------------------------
 ;; do_induct: per-ctor sub-sequents with fresh FVars and IHs.
