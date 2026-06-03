@@ -683,3 +683,96 @@
   (match (step m e)
     (None      e)
     ((Some e2) (run_expr m e2))))
+
+;; ---------------------------------------------------------------------------
+;; ceval — BIG-STEP environment-machine normalizer for the `Compute` tactic.
+;;
+;; compute_expr/run_expr drive the leftmost-outermost small-step `step` to a
+;; fixed point: each step RE-TRAVERSES the whole term to find the next redex and
+;; SUBSTITUTES args into fn bodies (open_many copies them). On a large ground
+;; term (is_board over a rendered 35-byte frame) that is O(steps × term-size)
+;; with no sharing — minutes under the self-hosted interpreter.
+;;
+;; ceval is CBV over a de Bruijn ENVIRONMENT (like eval.shard's `ev`, which runs
+;; apps fast): a BVar is an O(1) env index, fn application and match-firing EXTEND
+;; the env instead of copying the body. No re-traversal, args shared via the env.
+;;
+;; SOUNDNESS — ceval agrees with `step`'s normal form (same definitional
+;; equality the kernel already trusts):
+;;   - SAME primitive table (try_step_prim) and SAME three-valued matcher
+;;     (match_pat / MStuck) as `step` — so a stuck scrutinee with an undecided
+;;     ctor-arm stays stuck (it does NOT fall through to a later `_`, the
+;;     two-valued bug `ev` is allowed because it only runs closed apps).
+;;   - de Bruijn conventions mirror `step` EXACTLY: Call opens
+;;     `(reverse args) ⊢ body` (apply_fn), Let opens `bs ⊢ body` (no reverse),
+;;     a fired arm prepends match_pat's innermost-first binds.
+;;   - The language is total/pure/confluent, so CBV reaches the same NF as
+;;     leftmost-outermost for terminating terms.
+;;   - STUCK terms (open subterms — the Compute tactic is used on a few, e.g.
+;;     `take 7 (frame s)`): when an If condition or a Match is stuck, ceval
+;;     REIFIES the un-entered branches/arms by `open_many env` (substituting the
+;;     current env back), yielding a closed residual in the outer context — the
+;;     SAME stuck NF `step` leaves (which had already substituted enclosing args
+;;     via open_many at the call). open_many_arms accounts for each arm's
+;;     pat_arity, so pattern-bound BVars are preserved and only outer BVars are
+;;     resolved.
+;; The whole existing proof suite is the regression oracle for this agreement.
+;; ---------------------------------------------------------------------------
+
+(fn cenv_get ((env (List Expr)) (k Int)) Expr
+  (match (nth_opt env k) ((Some v) v) (None (BVar k))))
+
+(fn cappend ((xs (List Expr)) (ys (List Expr))) (List Expr)
+  (match xs (Nil ys) ((Cons h t) (Cons h (cappend t ys)))))
+
+;; Three-valued arm firing over a VALUE/stuck-NF `v`. Some(body,binds) fires;
+;; None = stuck (first MStuck stops the scan; all-MNo falls through to Nil).
+(fn ceval_arms ((arms (List Arm)) (v Expr)) (Option (Pair Expr (List Expr)))
+  (match arms
+    (Nil None)
+    ((Cons (Arm p body) rest)
+      (match (match_pat p v Nil)
+        ((MOk binds) (Some (Pair body binds)))
+        ((MStuck)    None)
+        ((MNo)       (ceval_arms rest v))))))
+
+(fn ceval ((m Module) (env (List Expr)) (e Expr)) Expr
+  (match e
+    ((IntLit _) e)
+    ((SymLit _) e)
+    ((FVar _)   e)
+    ((BVar k)   (cenv_get env k))
+    ((Ctor c args) (Ctor c (ceval_list m env args)))
+    ((Let bs body)
+      (ceval m (cappend (ceval_list m env bs) env) body))     ; bs ⊢ body (no reverse)
+    ((If c t el)
+      (match (ceval m env c)
+        ((Ctor (quote True)  Nil) (ceval m env t))
+        ((Ctor (quote False) Nil) (ceval m env el))
+        (cv (If cv (open_many env t) (open_many env el)))))    ; stuck cond → reify branches
+    ((Match s arms)
+      (match (ceval m env s)
+        (sv (match (ceval_arms arms sv)
+              ((Some (Pair body binds)) (ceval m (cappend binds env) body))
+              (None (Match sv (open_many_arms 0 env arms)))))))  ; stuck → reify arms
+    ((Call f args) (ceval_call m f (ceval_list m env args)))))
+
+(fn ceval_list ((m Module) (env (List Expr)) (es (List Expr))) (List Expr)
+  (match es
+    (Nil Nil)
+    ((Cons h t) (Cons (ceval m env h) (ceval_list m env t)))))
+
+(fn ceval_call ((m Module) (f Symbol) (vs (List Expr))) Expr
+  (match m
+    ((Module _ _ _ trie)
+      (match (trie_lookup f trie)
+        ((Some (FnDef _ ptypes _ body))
+          (if (int_eq (len vs) (len_t ptypes))
+              (ceval m (reverse_exprs vs) body)               ; (reverse args) ⊢ body
+              (Call f vs)))                                    ; partial app → stuck
+        (None
+          (match (try_step_prim f vs)
+            ((Some r) r)
+            (None (Call f vs))))))))                           ; prim-miss / extern → stuck
+
+(fn compute_eval ((m Module) (e Expr)) Expr (ceval m Nil e))
