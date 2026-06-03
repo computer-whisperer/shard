@@ -156,6 +156,25 @@ fn make_handler(prog_args: Vec<String>) -> impl FnMut(&str, &[ast::Expr]) -> Res
                 let _ = std::io::stdout().flush();
                 Ok(w1)
             }
+            // Blocking line-read from stdin: first byte as (Some b). A bare 'q',
+            // an empty line typed as "q", or EOF ends the session as (None).
+            // Returns (Pair (Option Int) World). Line-buffered (REPL-style): the
+            // player types a key and presses Enter; any non-w/a/s/d byte is an
+            // inert "advance in the current heading" tick.
+            "read_key" => {
+                let _ = std::io::stdout().flush();
+                let mut line = String::new();
+                let opt = match std::io::stdin().read_line(&mut line) {
+                    Ok(0) => ctor("None", vec![]), // EOF
+                    Ok(_) => match line.bytes().next() {
+                        Some(b'q') => ctor("None", vec![]), // quit key
+                        Some(b) => ctor("Some", vec![ast::Expr::IntLit(b as i64)]),
+                        None => ctor("None", vec![]),
+                    },
+                    Err(_) => ctor("None", vec![]),
+                };
+                Ok(ctor("Pair", vec![opt, w1]))
+            }
             "write_line" | "emit" => {
                 println!("{}", decode_str(&args[0]));
                 Ok(w1)
@@ -169,7 +188,7 @@ fn make_handler(prog_args: Vec<String>) -> impl FnMut(&str, &[ast::Expr]) -> Res
                 std::process::exit(code as i32);
             }
             other => Err(format!(
-                "unknown extern `{}` (eval handler: get_args/read_file/write/write_line/emit/exit)",
+                "unknown extern `{}` (eval handler: get_args/read_file/write/write_line/emit/read_key/exit)",
                 other
             )),
         }
