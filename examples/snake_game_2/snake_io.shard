@@ -8,22 +8,23 @@
 ;;; mod.req.shard (the signatures, the write_clock axiom, the requirements) —
 ;;; the checker guarantees this file conforms to it.
 ;;;
-;;; `render` is a placeholder: the contract constrains only that a frame CLEARS
-;;; first, not the board content, so the real grid renderer waits for the
-;;; runnable-loop slice. Likewise `play_fuel` keeps the state fixed across ticks
-;;; — the clock discipline is state-AGNOSTIC, so wiring a real `step` is
-;;; orthogonal (and deferred).
+;;; `render` is a real W=6 x H=4 grid renderer — it draws the bordered arena
+;;; with the snake head and food in the interior, so `is_board (frame init)`
+;;; genuinely holds (the board requirements force this). `play_fuel` still keeps
+;;; the state fixed across ticks: every frame renders `init`, so the loop emits
+;;; the same valid board forever. Wiring a real `step` (motion) — and the
+;;; containment invariant that keeps every stepped state a board — is the next
+;;; slice and is orthogonal to the loop-preservation proofs here.
 
 (import "../../kernel/stdlib.shard")   ; List / Option / Bool / Pair
 (import "../../std/nat.shard")     ; Nat (Z/S)
 (import "../../std/order.shard")   ; le_refl / le_trans / `by ord`
 (import "mod.req.shard")       ; the interface (ungranted) — requirements as obligations
+(import "arena.shard")         ; is_board / all_board / is_arena — the spec vocab the proofs cite
 
 ;; ---- private helpers ------------------------------------------------------
 (fn app_int ((xs (List Int)) (ys (List Int))) (List Int)   ; list append
   (match xs (Nil ys) ((Cons h t) (Cons h (app_int t ys)))))
-
-(fn score_of ((g GameState)) Int (match g ((GS sn d fd sc st sd) sc)))
 
 ;; ---- boundary transform bodies (shadow the interface sigs on self-check) ---
 
@@ -43,7 +44,38 @@
       ((Cons h t) (Cons h (take (- n 1) t))))))
 
 ;; OUTPUT: a frame = clear screen (ANSI ESC[2J ESC[H), then the board.
-(fn render ((s GameState)) (List Int) (Cons (+ 48 (score_of s)) Nil))   ; placeholder
+;;
+;; The board is a real W=6 x H=4 grid drawn row-major. A `Pos` is `(Pos col row)`.
+;; The perimeter (row 0/3, col 0/5) is wall '#'(35); an interior cell holds the
+;; snake head 'O'(79) if any body cell sits there, else the food '*'(42), else
+;; space(32). `render s` yields the 28-byte body; `frame` prepends the 7-byte
+;; clear. This is the genuine renderer the board requirements force — `is_board
+;; (frame s)` holds exactly because every perimeter cell is wall and the head &
+;; food are drawn inside.
+(fn on_border ((r Int) (c Int)) Bool
+  (if (int_eq r 0) True (if (int_eq r 3) True (if (int_eq c 0) True (int_eq c 5)))))
+
+(fn pos_is ((p Pos) (r Int) (c Int)) Bool
+  (match p ((Pos x y) (if (int_eq x c) (int_eq y r) False))))
+
+(fn body_has ((body (List Pos)) (r Int) (c Int)) Bool
+  (match body (Nil False) ((Cons p t) (if (pos_is p r c) True (body_has t r c)))))
+
+(fn glyph ((s GameState) (r Int) (c Int)) Int
+  (if (on_border r c) 35
+    (match s ((GS body hd food sc st sd)
+      (if (body_has body r c) 79
+        (if (pos_is food r c) 42 32))))))
+
+(fn render_row ((s GameState) (r Int) (c Int)) (List Int)
+  (if (lt 5 c) (Cons 10 Nil)
+    (Cons (glyph s r c) (render_row s r (+ c 1)))))
+
+(fn render_rows ((s GameState) (r Int)) (List Int)
+  (if (lt 3 r) Nil
+    (app_int (render_row s r 0) (render_rows s (+ r 1)))))
+
+(fn render ((s GameState)) (List Int) (render_rows s 0))
 (fn frame ((s GameState)) (List Int)
   (app_int (list 27 91 50 74 27 91 72) (render s)))
 
@@ -68,7 +100,7 @@
 ;; the entry the contract is about — it runs the private `play_fuel` worker from
 ;; `init` for `fuel` steps.
 (fn fuel () Int 1000000000)                             ; large budget (opaque in proofs)
-(fn init () GameState (GS (Cons (Pos 2 2) Nil) Up (Pos 3 3) 0 Alive 0))
+(fn init () GameState (GS (Cons (Pos 2 2) Nil) Up (Pos 4 2) 0 Alive 0))   ; head (col2,row2), food (col4,row2) — both interior
 (fn main ((w World)) World (play_fuel (fuel) (init) w))
 
 ;; ===========================================================================
@@ -146,3 +178,143 @@
   (steps ((unfold main lhs)
           (rewrite (lemma play_clock_mono) lr lhs true ()))
     refl))
+
+;; ===========================================================================
+;; OUTPUT-CONTENT BOUNDARY — a complete arena / board every update.
+;;
+;; The shape (shared by arena and board): each tick the loop WRITES one frame,
+;; which `write_output` appends to the log. So the log only ever grows by a
+;; snoc, and the spec predicate over the log (`all_arena`/`all_board`) is
+;; preserved iff the appended frame satisfies the per-frame predicate. Two
+;; ingredients:
+;;   1. a SNOC lemma — folding the predicate over `append xs (Cons y Nil)`;
+;;   2. a per-frame fact — `is_arena (frame s)` / `is_board (frame s)`, threaded
+;;      as a worker premise and discharged at the concrete `init` (compute).
+;; The worker then mirrors play_clock_mono: WfInduct on fuel, cite the IH after
+;; the write — here with NO transitivity, since the goal IS the IH conclusion.
+;; ===========================================================================
+
+;; ---- snoc lemmas: fold the spec predicate over a one-element append ---------
+;; `append` is opaque (std/list) so it is peeled by its defining equations;
+;; the per-element guard `is_arena h` / `is_board h` is abstract, so each step
+;; case-splits it — both branches then close by refl (no Absurd, no premises,
+;; so the IH is a plain equation).
+(claim all_arena_snoc
+  (goal ((xs (List (List Int))) (y (List Int))) ()
+    (= (all_arena (append xs (Cons y Nil)))
+       (if (all_arena xs) (is_arena y) False)))
+  (induct xs
+    ((case Nil
+       (steps ((rewrite (lemma append_nil_left) lr lhs true ()) (simp both))
+         (case-on (is_arena y) Bool
+           ((case True  (steps ((rewrite (hyp 0) lr both true ()) (simp lhs)) refl))
+            (case False (steps ((rewrite (hyp 0) lr both true ()) (simp lhs)) refl))))))
+     (case Cons (h t)
+       (steps ((rewrite (lemma append_cons) lr lhs true ())
+               (simp lhs)
+               (rewrite (hyp 0) lr lhs true ())
+               (simp rhs))
+         (case-on (is_arena h) Bool
+           ((case True  (steps ((rewrite (hyp 0) lr both true ()) (simp both)) refl))
+            (case False (steps ((rewrite (hyp 0) lr both true ()) (simp both)) refl)))))))))
+
+(claim all_board_snoc
+  (goal ((xs (List (List Int))) (y (List Int))) ()
+    (= (all_board (append xs (Cons y Nil)))
+       (if (all_board xs) (is_board y) False)))
+  (induct xs
+    ((case Nil
+       (steps ((rewrite (lemma append_nil_left) lr lhs true ()) (simp both))
+         (case-on (is_board y) Bool
+           ((case True  (steps ((rewrite (hyp 0) lr both true ()) (simp lhs)) refl))
+            (case False (steps ((rewrite (hyp 0) lr both true ()) (simp lhs)) refl))))))
+     (case Cons (h t)
+       (steps ((rewrite (lemma append_cons) lr lhs true ())
+               (simp lhs)
+               (rewrite (hyp 0) lr lhs true ())
+               (simp rhs))
+         (case-on (is_board h) Bool
+           ((case True  (steps ((rewrite (hyp 0) lr both true ()) (simp both)) refl))
+            (case False (steps ((rewrite (hyp 0) lr both true ()) (simp both)) refl)))))))))
+
+;; ---- the ∀-fuel workers: the spec predicate is preserved across the loop ----
+;; Identical to play_clock_mono's WfInduct skeleton; the Some-case writes one
+;; frame and cites the IH at (f-1, s, write (frame s) w). The IH's four premises
+;; (in order): the threaded per-frame fact, the log invariant after the write
+;; (write_output + snoc + the two facts), 0<=f-1 (step_nonneg), f-1<f (ord).
+(claim play_arena_preserve
+  (goal ((f Int) (s GameState) (w World))
+        ((= (is_arena (frame s)) True) (= (all_arena (w_output w)) True))
+    (= (all_arena (w_output (play_fuel f s w))) True))
+  (wf-induct f
+    (case-on (lt 0 f) Bool
+      ((case False
+         (steps ((unfold play_fuel lhs) (rewrite (hyp 0) lr lhs true ()) (simp lhs)
+                 (rewrite (premise 1) lr lhs true ())) refl))
+       (case True
+         (steps ((unfold play_fuel lhs) (rewrite (hyp 0) lr lhs true ()) (simp lhs))
+           (case-on (key_oracle w) Option
+             ((case None
+                (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)
+                        (rewrite (premise 1) lr lhs true ())) refl))
+              (case Some (key)
+                (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
+                  (rewrite-with (hyp 2) lr lhs ()
+                    ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                     (steps ((rewrite (lemma write_output)    lr lhs true ())
+                             (rewrite (lemma all_arena_snoc)  lr lhs true ())
+                             (rewrite (premise 1) lr lhs true ())
+                             (rewrite (premise 0) lr lhs true ())
+                             (simp lhs)) refl)
+                     (rewrite-with (lemma step_nonneg) lr lhs ((inst x f))
+                       ((steps ((rewrite (hyp 1) lr lhs true ())) refl)) refl)
+                     (by ord (list)))
+                    refl)))))))))))
+
+(claim play_board_preserve
+  (goal ((f Int) (s GameState) (w World))
+        ((= (is_board (frame s)) True) (= (all_board (w_output w)) True))
+    (= (all_board (w_output (play_fuel f s w))) True))
+  (wf-induct f
+    (case-on (lt 0 f) Bool
+      ((case False
+         (steps ((unfold play_fuel lhs) (rewrite (hyp 0) lr lhs true ()) (simp lhs)
+                 (rewrite (premise 1) lr lhs true ())) refl))
+       (case True
+         (steps ((unfold play_fuel lhs) (rewrite (hyp 0) lr lhs true ()) (simp lhs))
+           (case-on (key_oracle w) Option
+             ((case None
+                (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)
+                        (rewrite (premise 1) lr lhs true ())) refl))
+              (case Some (key)
+                (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
+                  (rewrite-with (hyp 2) lr lhs ()
+                    ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                     (steps ((rewrite (lemma write_output)    lr lhs true ())
+                             (rewrite (lemma all_board_snoc)  lr lhs true ())
+                             (rewrite (premise 1) lr lhs true ())
+                             (rewrite (premise 0) lr lhs true ())
+                             (simp lhs)) refl)
+                     (rewrite-with (lemma step_nonneg) lr lhs ((inst x f))
+                       ((steps ((rewrite (hyp 1) lr lhs true ())) refl)) refl)
+                     (by ord (list)))
+                    refl)))))))))))
+
+;; ---- discharge the two pending requirements, over main ----------------------
+;; main w = play_fuel (fuel) (init) w. Cite the worker at s=init; the per-frame
+;; premise is proven at the concrete init (compute — for board, unfold the
+;; nullary (init) first, which compute won't), the log premise is the
+;; requirement's own premise. fuel stays opaque throughout (cited, never reduced).
+(fulfills frames_are_arenas
+  (steps ((unfold main lhs))
+    (rewrite-with (lemma play_arena_preserve) lr lhs ()
+      ((steps ((compute lhs)) refl)
+       (steps ((rewrite (premise 0) lr lhs true ())) refl))
+      refl)))
+
+(fulfills frames_are_boards
+  (steps ((unfold main lhs))
+    (rewrite-with (lemma play_board_preserve) lr lhs ()
+      ((steps ((unfold init lhs) (compute lhs)) refl)
+       (steps ((rewrite (premise 0) lr lhs true ())) refl))
+      refl)))
