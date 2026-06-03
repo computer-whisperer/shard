@@ -959,3 +959,183 @@
   (match (read_all src)
     (None None)
     ((Some forms) (collect_decls forms ctors granted))))
+
+;; ===========================================================================
+;; PARSE-FAILURE DIAGNOSIS (failure path ONLY — costs nothing on success).
+;; build_module collapses every reader/decl failure to None; build_module_d
+;; re-scans the offending source to say WHERE:
+;;   - a lexical line-tracking scan (string- and comment-aware) pinpoints a
+;;     stray ')', an unclosed form (with its head, name, start line, and how
+;;     many ')' it is missing), or an unterminated string;
+;;   - if the source is lexically balanced, a per-form re-parse mirrors the
+;;     two collector passes and names the first malformed declaration.
+;; The source ordinal (position in the import closure) stands in for the
+;; filename until paths are threaded through resolve_closure.
+;; ===========================================================================
+
+(fn pd_app ((a (List Int)) (b (List Int))) (List Int)
+  (match a (Nil b) ((Cons h t) (Cons h (pd_app t b)))))
+
+(fn pd_nat ((n Int)) (List Int)
+  (if (lt n 10)
+      (Cons (+ 48 n) Nil)
+      (pd_app (pd_nat (/ n 10)) (Cons (+ 48 (mod n 10)) Nil))))
+
+(type PDiag
+  (PDOk)                                ; lexically balanced
+  (PDStray Int)                         ; ')' at top level, at line N
+  (PDUnclosed Int (List Int) Int)       ; form at line N (suffix at its '('), missing K ')'
+  (PDBadStr Int))                       ; unterminated string opened at line N
+
+;; the scan: line-tracking, comment- and string-aware. fline/fsuf remember the
+;; current TOP-LEVEL form's start line and the suffix at its '('.
+(fn pd_scan ((cs (List Int)) (line Int) (depth Int) (fline Int) (fsuf (List Int))) PDiag
+  (match cs
+    (Nil (if (int_eq depth 0) PDOk (PDUnclosed fline fsuf depth)))
+    ((Cons c rest)
+      (if (int_eq c 10) (pd_scan rest (+ line 1) depth fline fsuf)
+      (if (int_eq c 59) (pd_scan_comment rest line depth fline fsuf)
+      (if (int_eq c 34) (pd_scan_str rest line line depth fline fsuf)
+      (if (int_eq c 40)
+          (if (int_eq depth 0)
+              (pd_scan rest line 1 line (Cons c rest))
+              (pd_scan rest line (+ depth 1) fline fsuf))
+      (if (int_eq c 41)
+          (if (int_eq depth 0)
+              (PDStray line)
+              (pd_scan rest line (- depth 1) fline fsuf))
+          (pd_scan rest line depth fline fsuf)))))))))
+
+(fn pd_scan_comment ((cs (List Int)) (line Int) (depth Int) (fline Int) (fsuf (List Int))) PDiag
+  (match cs
+    (Nil (if (int_eq depth 0) PDOk (PDUnclosed fline fsuf depth)))
+    ((Cons c rest)
+      (if (int_eq c 10)
+          (pd_scan rest (+ line 1) depth fline fsuf)
+          (pd_scan_comment rest line depth fline fsuf)))))
+
+(fn pd_scan_str ((cs (List Int)) (sline Int) (line Int) (depth Int) (fline Int) (fsuf (List Int))) PDiag
+  (match cs
+    (Nil (PDBadStr sline))
+    ((Cons c rest)
+      (if (int_eq c 34) (pd_scan rest line depth fline fsuf)
+      (if (int_eq c 92)
+          (match rest
+            (Nil (PDBadStr sline))
+            ((Cons e r2) (pd_scan_str r2 sline line depth fline fsuf)))
+      (if (int_eq c 10) (pd_scan_str rest sline (+ line 1) depth fline fsuf)
+          (pd_scan_str rest sline line depth fline fsuf)))))))
+
+;; "(head name ..." rendered from the suffix captured at a form's '('.
+(fn pd_head ((fsuf (List Int))) (List Int)
+  (match fsuf
+    (Nil "<form>")
+    ((Cons c rest)
+      (match (take_atom (skip_ws rest))
+        ((Pair h r2)
+          (match (skip_ws r2)
+            (Nil (pd_app "(" (pd_app h " ...)")))
+            ((Cons c2 r3)
+              (if (int_eq c2 40)
+                  (pd_app "(" (pd_app h " ...)"))
+                  (match (take_atom (Cons c2 r3))
+                    ((Pair nm _)
+                      (pd_app "(" (pd_app h (pd_app " " (pd_app nm " ...)"))))))))))))))
+
+;; the types of a file that DO parse — the best-available ctor set for
+;; diagnosing fn bodies even when some other declaration is broken.
+(fn pd_types_ok ((forms (List SExpr))) (List TypeDef)
+  (match forms
+    (Nil Nil)
+    ((Cons f rest)
+      (match (form_head f)
+        (None (pd_types_ok rest))
+        ((Some h)
+          (if (sym_eq h (quote type))
+              (match (parse_typedef (form_tail f))
+                (None (pd_types_ok rest))
+                ((Some td) (Cons td (pd_types_ok rest))))
+              (match (sig_type_of f)
+                ((Some td) (Cons td (pd_types_ok rest)))
+                (None (pd_types_ok rest)))))))))
+
+;; the first form the module collectors would reject (mirrors collect_types +
+;; collect_fns_externs dispatch, including the unknown-head rejection).
+(fn pd_bad_decl ((forms (List SExpr)) (ctors (List Symbol))) (Option SExpr)
+  (match forms
+    (Nil None)
+    ((Cons f rest)
+      (match (form_head f)
+        (None (Some f))
+        ((Some h)
+          (if (sym_eq h (quote type))
+              (match (parse_typedef (form_tail f))
+                (None (Some f)) ((Some _) (pd_bad_decl rest ctors)))
+          (if (sym_eq h (quote fn))
+              (match (parse_fndef (form_tail f) ctors)
+                (None (Some f)) ((Some _) (pd_bad_decl rest ctors)))
+          (if (sym_eq h (quote extern))
+              (match (parse_externdef (form_tail f))
+                (None (Some f)) ((Some _) (pd_bad_decl rest ctors)))
+          (if (sym_eq h (quote sig))
+              (match (sig_type_of f)
+                ((Some _) (pd_bad_decl rest ctors))
+                (None
+                  (match (parse_sigdef (form_tail f))
+                    (None (Some f)) ((Some _) (pd_bad_decl rest ctors)))))
+          (if (skip_form h)
+              (pd_bad_decl rest ctors)
+              (Some f)))))))))))      ; unknown head — the collectors reject it
+
+(fn pd_render_form ((f SExpr)) (List Int)
+  (match f
+    ((SList (Cons (SSym h) (Cons (SSym nm) _)))
+      (pd_app "(" (pd_app (chars_of_sym h)
+        (pd_app " " (pd_app (chars_of_sym nm) " ...)")))))
+    ((SList (Cons (SSym h) _))
+      (pd_app "(" (pd_app (chars_of_sym h) " ...)")))
+    (_ "<non-list form>")))
+
+(fn pd_src_tag ((k Int)) (List Int)
+  (pd_app " [source " (pd_app (pd_nat k) " of the import closure]")))
+
+(fn parse_diag ((src (List Int)) (base_ctors (List Symbol)) (k Int)) (List Int)
+  (match (pd_scan src 1 0 0 Nil)
+    ((PDStray line)
+      (pd_app "unexpected ')' at line " (pd_app (pd_nat line) (pd_src_tag k))))
+    ((PDUnclosed fline fsuf missing)
+      (pd_app "unclosed form " (pd_app (pd_head fsuf)
+        (pd_app " at line " (pd_app (pd_nat fline)
+          (pd_app " -- missing " (pd_app (pd_nat missing)
+            (pd_app " ')'" (pd_src_tag k)))))))))
+    ((PDBadStr line)
+      (pd_app "unterminated string opened at line "
+        (pd_app (pd_nat line) (pd_src_tag k))))
+    (PDOk
+      (match (read_all src)
+        (None (pd_app "unreadable source" (pd_src_tag k)))
+        ((Some forms)
+          (match (pd_bad_decl forms
+                   (append_sym (typedef_ctors (pd_types_ok forms)) base_ctors))
+            ((Some f)
+              (pd_app "malformed declaration "
+                (pd_app (pd_render_form f) (pd_src_tag k))))
+            (None
+              (pd_app "module assembly failed (unknown cause)"
+                (pd_src_tag k)))))))))
+
+;; build_module with diagnosis: same fold, but a failing source is re-scanned
+;; for a precise message instead of collapsing to None.
+(type BMRes (BMOk Module) (BMFail (List Int)))
+
+(fn build_module_d ((srcs (List (List Int))) (acc Module) (ctors (List Symbol)) (k Int)) BMRes
+  (match srcs
+    (Nil (BMOk acc))
+    ((Cons src rest)
+      (match (parse_module src ctors)
+        (None (BMFail (parse_diag src ctors k)))
+        ((Some m)
+          (build_module_d rest
+                          (merge_modules acc m)
+                          (append_sym (typedef_ctors (module_typedefs m)) ctors)
+                          (+ k 1)))))))
