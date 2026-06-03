@@ -8,31 +8,49 @@
 ;;; mod.req.shard (the signatures, the write_clock axiom, the requirements) —
 ;;; the checker guarantees this file conforms to it.
 ;;;
-;;; `render` is a real W=6 x H=4 grid renderer — it draws the bordered arena
-;;; with the snake head and food in the interior, so `is_board (frame s)` holds
-;;; for every state the loop reaches. `play_fuel` runs a real `step` (head-only
-;;; motion; die+freeze on wall OR food): each tick reads a key, advances, then
-;;; renders the POST-step state. The loop stays board-valid forever because the
-;;; CONTAINMENT invariant `inv` (length-1 head, interior, clear of the fixed
-;;; food) is preserved by `step` (inv_step) and bridges to a rendered board
-;;; (board_ok). Eating/growth (variable-length body) is the deferred next slice.
+;;; `render` is a real board_w x board_h grid renderer — it draws the bordered
+;;; arena with the snake head and food in the interior. The dimensions are the
+;;; module's DESIGN CONSTANTS: opaque sigs in arena.shard, concrete bodies
+;;; (32 x 32) below. They are opaque BY DISCIPLINE, not mechanism (compute will
+;;; happily reduce a nullary body): every lemma treats the size symbolically,
+;;; citing the board_min_size bounds and never computing a dimension-bearing
+;;; term — only the board_min_size fulfillment and the ground demos reduce the
+;;; 32s. The discipline is auditable by re-checking at a different (asymmetric)
+;;; size: nothing but those licensed spots may notice. `play_fuel` runs a real
+;;; `step` (head-only motion; die+freeze on wall OR food): each tick reads a
+;;; key, advances, then renders the POST-step state. The loop stays board-valid
+;;; forever because the CONTAINMENT invariant `inv` (length-1 head, interior,
+;;; clear of the fixed food) is preserved by `step` (inv_step). The symbolic
+;;; (fin-split-free) faithfulness bridge inv -> is_board (frame s) is the
+;;; in-progress rebuild; until it lands, frames_are_arenas / frames_are_boards
+;;; are honest UNMET obligations in the bin report. Eating/growth
+;;; (variable-length body) is the deferred next slice.
 ;;;
 ;;; PLAY IT (REPL-style, line-buffered — a key then Enter):
 ;;;     ./rust_bootstrap/target/release/eval run examples/snake_game_2/snake_io.shard
 ;;;   w/a/s/d + Enter move the head; any other key + Enter advances in the current
-;;;   heading; `q` (or Ctrl-D) quits. The interior is a tiny 4×2 sandbox (cols
-;;;   1..4, rows 1..2); the head dies+freezes on a wall OR on the food at (4,2).
-;;;   The host backs `key_oracle` with the `read_key` stdin extern (eval.shard /
-;;;   eval.rs); the proofs treat key_oracle as uninterpreted, so they hold for
-;;;   THIS handler (or any other). Each displayed frame is the POST-step state —
-;;;   the immediate response to the key just typed (move_shown is the proven
-;;;   per-tick form of that).
+;;;   heading; `q` (or Ctrl-D) quits. The interior is a 30×30 field (cols
+;;;   1..30, rows 1..30); the head dies+freezes on a wall OR on the food at
+;;;   (4,2). The host backs `key_oracle` with the `read_key` stdin extern
+;;;   (eval.shard / eval.rs); the proofs treat key_oracle as uninterpreted, so
+;;;   they hold for THIS handler (or any other). Each displayed frame is the
+;;;   POST-step state — the immediate response to the key just typed.
 
 (import "../../kernel/stdlib.shard")   ; List / Option / Bool / Pair
 (import "../../std/nat.shard")     ; Nat (Z/S)
 (import "../../std/order.shard")   ; le_refl / le_trans / `by ord`
 (import "mod.req.shard")       ; the interface (ungranted) — requirements as obligations
 (import "arena.shard")         ; is_board / all_board / is_arena — the spec vocab the proofs cite
+
+;; ---- design constants -------------------------------------------------------
+;; The concrete board size, discharging arena.shard's opaque sigs. OPAQUE IN
+;; PROOFS BY DISCIPLINE (like `fuel`): every lemma cites the board_min_size
+;; bounds and otherwise treats (board_w)/(board_h) as symbols — no proof may
+;; compute or unfold a dimension-bearing term outside the licensed ground spots
+;; (board_min_size, the step demos). Changing the size here must re-check the
+;; whole contract unchanged; that recheck IS the enforcement.
+(fn board_w () Int 32)
+(fn board_h () Int 32)
 
 ;; ---- private helpers ------------------------------------------------------
 (fn app_int ((xs (List Int)) (ys (List Int))) (List Int)   ; list append
@@ -57,15 +75,18 @@
 
 ;; OUTPUT: a frame = clear screen (ANSI ESC[2J ESC[H), then the board.
 ;;
-;; The board is a real W=6 x H=4 grid drawn row-major. A `Pos` is `(Pos col row)`.
-;; The perimeter (row 0/3, col 0/5) is wall '#'(35); an interior cell holds the
-;; snake head 'O'(79) if any body cell sits there, else the food '*'(42), else
-;; space(32). `render s` yields the 28-byte body; `frame` prepends the 7-byte
-;; clear. This is the genuine renderer the board requirements force — `is_board
-;; (frame s)` holds exactly because every perimeter cell is wall and the head &
-;; food are drawn inside.
+;; The board is a real board_w x board_h grid drawn row-major. A `Pos` is
+;; `(Pos col row)`. The perimeter (row 0/board_h-1, col 0/board_w-1) is wall
+;; '#'(35); an interior cell holds the snake head 'O'(79) if any body cell sits
+;; there, else the food '*'(42), else space(32). `render s` yields the
+;; board_h x (board_w + 1)-byte body; `frame` prepends the 7-byte clear. This
+;; is the genuine renderer the board requirements force — `is_board (frame s)`
+;; holds exactly because every perimeter cell is wall and the head & food are
+;; drawn inside.
 (fn on_border ((r Int) (c Int)) Bool
-  (if (int_eq r 0) True (if (int_eq r 3) True (if (int_eq c 0) True (int_eq c 5)))))
+  (if (int_eq r 0) True
+    (if (int_eq r (- (board_h) 1)) True
+      (if (int_eq c 0) True (int_eq c (- (board_w) 1))))))
 
 (fn pos_is ((p Pos) (r Int) (c Int)) Bool
   (match p ((Pos x y) (if (int_eq x c) (int_eq y r) False))))
@@ -80,11 +101,11 @@
         (if (pos_is food r c) 42 32))))))
 
 (fn render_row ((s GameState) (r Int) (c Int)) (List Int)
-  (if (lt 5 c) (Cons 10 Nil)
+  (if (lt (- (board_w) 1) c) (Cons 10 Nil)
     (Cons (glyph s r c) (render_row s r (+ c 1)))))
 
 (fn render_rows ((s GameState) (r Int)) (List Int)
-  (if (lt 3 r) Nil
+  (if (lt (- (board_h) 1) r) Nil
     (app_int (render_row s r 0) (render_rows s (+ r 1)))))
 
 (fn render ((s GameState)) (List Int) (render_rows s 0))
@@ -92,17 +113,20 @@
   (app_int (list 27 91 50 74 27 91 72) (render s)))
 
 ;; ---- the game step (head-only motion; die+freeze on wall OR food) ----------
-;; A Pos is (Pos col row). Interior = cols 1..4, rows 1..2. The head advances one
-;; cell in its key-decoded heading; if the target is a wall OR the food cell it
-;; FREEZES (head stays, status Dead) — so the head is never drawn on a wall or
-;; over the food. `head_ok` is exactly the board invariant: head interior AND
-;; head != food. Eating/growth are deferred (food is an obstacle for now), so the
-;; snake stays length-1 and `inv` is preserved by construction.
+;; A Pos is (Pos col row). Interior = cols 1..board_w-2, rows 1..board_h-2. The
+;; head advances one cell in its key-decoded heading; if the target is a wall
+;; OR the food cell it FREEZES (head stays, status Dead) — so the head is never
+;; drawn on a wall or over the food. `head_ok` is exactly the board invariant:
+;; head interior AND head != food. Eating/growth are deferred (food is an
+;; obstacle for now), so the snake stays length-1 and `inv` is preserved by
+;; construction.
 (fn notb ((b Bool)) Bool (match b (True False) (False True)))
 (fn pos_eq ((p Pos) (q Pos)) Bool
   (match p ((Pos a b) (match q ((Pos c d) (andb (int_eq a c) (int_eq b d)))))))
 (fn in_range ((c Int) (r Int)) Bool
-  (andb (le 1 c) (andb (le c 4) (andb (le 1 r) (le r 2)))))
+  (andb (le 1 c)
+    (andb (le c (- (board_w) 2))
+      (andb (le 1 r) (le r (- (board_h) 2))))))
 (fn head_ok ((p Pos)) Bool
   (match p ((Pos c r) (andb (in_range c r) (notb (pos_eq (Pos c r) (Pos 4 2)))))))
 (fn move_head ((p Pos) (hd Heading)) Pos
@@ -199,6 +223,9 @@
 
 ;; ---- step behaviour, by example (ground compute — an executable spec, and
 ;; ---- the runtime evidence that `step` genuinely MOVES the head) -------------
+;; These GROUND demos are a licensed exception to dimension-opacity: their
+;; computes reduce the concrete 32s inside in_range (ground examples are
+;; exactly where that is the point).
 ;; 'w' (119 → Up): the head climbs one row, stays Alive.
 (claim step_up_demo
   (goal () () (= (step 119 (init)) (GS (Cons (Pos 2 1) Nil) Up (Pos 4 2) 0 Alive 0)))
@@ -207,84 +234,23 @@
 (claim step_right_demo
   (goal () () (= (step 100 (init)) (GS (Cons (Pos 3 2) Nil) Right (Pos 4 2) 0 Alive 0)))
   (steps ((unfold init lhs) (compute lhs)) refl))
-;; 's' (115 → Down) from init aims at row 3 — the bottom wall — so the head
-;; FREEZES in place and the status flips to Dead (die+freeze on wall).
+;; 'a' (97 → Left) from col 1 aims at col 0 — the left wall — so the head
+;; FREEZES in place and the status flips to Dead (die+freeze on wall). The
+;; `le 1 0` conjunct kills in_range before the symbolic bounds are consulted,
+;; so this one computes without touching the constants at all.
 (claim step_wall_death_demo
-  (goal () () (= (step 115 (init)) (GS (Cons (Pos 2 2) Nil) Down (Pos 4 2) 0 Dead 0)))
-  (steps ((unfold init lhs) (compute lhs)) refl))
-
-;; ===========================================================================
-;; RENDERER FAITHFULNESS (the dynamic-half foundation, via fin-split + have).
-;;
-;; board_from_inv: a length-1 snake whose head is interior and clear of the
-;; (fixed) food renders a complete BOARD. The detectors locate an entity by
-;; scanning interior cells — which does NOT compute at an ABSTRACT head, so we
-;; enumerate the head over its concrete range (cols 1..4 × rows 1..2 = 8 leaves)
-;; with fin-split; each leaf is a concrete frame that computes. Generalized over
-;; the head-irrelevant fields (hd/sc/st/sd) and over an abstract food pinned to
-;; (Pos 4 2) by a raw-equation premise, rewritten in first so every leaf has a
-;; concrete food. The (4,2) head leaf lands on the food, contradicting head≠food
-;; (premise 4), closed by absurd.
-;; ===========================================================================
-(claim board_from_inv
-  (goal ((hcol Int) (hrow Int) (food Pos)
-         (hd Heading) (sc Int) (st Status) (sd Int))
-        ((= (le 1 hcol) True) (= (le hcol 4) True)
-         (= (le 1 hrow) True) (= (le hrow 2) True)
-         (= (pos_eq (Pos hcol hrow) (Pos 4 2)) False)
-         (= food (Pos 4 2)))
-    (= (is_board (frame
-         (GS (Cons (Pos hcol hrow) Nil) hd food sc st sd))) True))
-  (steps ((rewrite (premise 5) lr lhs true ()))
-    (fin-split hcol (premise 0) (premise 1)
-      ((case 1 (fin-split hrow (premise 2) (premise 3)
-                 ((case 1 (steps ((compute lhs)) refl))
-                  (case 2 (steps ((compute lhs)) refl)))))
-       (case 2 (fin-split hrow (premise 2) (premise 3)
-                 ((case 1 (steps ((compute lhs)) refl))
-                  (case 2 (steps ((compute lhs)) refl)))))
-       (case 3 (fin-split hrow (premise 2) (premise 3)
-                 ((case 1 (steps ((compute lhs)) refl))
-                  (case 2 (steps ((compute lhs)) refl)))))
-       (case 4 (fin-split hrow (premise 2) (premise 3)
-                 ((case 1 (steps ((compute lhs)) refl))
-                  (case 2 (absurd (premise 4))))))))))
-
-;; HEAD-DETECTOR FAITHFULNESS — head_at finds the head at its (row, col) cell.
-;; Same fin-split enumeration as board_from_inv (8 interior leaves, food pinned
-;; to (Pos 4 2) so the non-head cells compute); each leaf computes head_at of a
-;; concrete frame to the concrete (Pair row col). NO head≠food premise needed:
-;; the head glyph 'O' takes render precedence, so the detector finds it even on
-;; the food cell. This bridges an abstract head position to the OBSERVED head
-;; cell — the input-response requirement reasons about head_at, this says what it
-;; returns. (head_at reports (row, col); the head Pos is (col, row) — the swap.)
-(claim head_at_finds
-  (goal ((hcol Int) (hrow Int) (food Pos)
-         (hd Heading) (sc Int) (st Status) (sd Int))
-        ((= (le 1 hcol) True) (= (le hcol 4) True)
-         (= (le 1 hrow) True) (= (le hrow 2) True)
-         (= food (Pos 4 2)))
-    (= (head_at (frame (GS (Cons (Pos hcol hrow) Nil) hd food sc st sd)))
-       (Some (Pair hrow hcol))))
-  (steps ((rewrite (premise 4) lr lhs true ()))
-    (fin-split hcol (premise 0) (premise 1)
-      ((case 1 (fin-split hrow (premise 2) (premise 3)
-                 ((case 1 (steps ((compute both)) refl))
-                  (case 2 (steps ((compute both)) refl)))))
-       (case 2 (fin-split hrow (premise 2) (premise 3)
-                 ((case 1 (steps ((compute both)) refl))
-                  (case 2 (steps ((compute both)) refl)))))
-       (case 3 (fin-split hrow (premise 2) (premise 3)
-                 ((case 1 (steps ((compute both)) refl))
-                  (case 2 (steps ((compute both)) refl)))))
-       (case 4 (fin-split hrow (premise 2) (premise 3)
-                 ((case 1 (steps ((compute both)) refl))
-                  (case 2 (steps ((compute both)) refl)))))))))
+  (goal () ()
+    (= (step 97 (GS (Cons (Pos 1 1) Nil) Up (Pos 4 2) 0 Alive 0))
+       (GS (Cons (Pos 1 1) Nil) Left (Pos 4 2) 0 Dead 0)))
+  (steps ((compute lhs)) refl))
 
 ;; ---- input-response: head displacement matches the key --------------------
 ;; pos_cell bridges a head Pos (col,row) to the observed (row,col) cell that
 ;; head_at reports. orb_tr closes the "held in place" disjunct (orb scrutinizes
-;; its LEFT operand, so a True on the right needs the case-split).
+;; its LEFT operand, so a True on the right needs the case-split). These are
+;; the SIZE-INDEPENDENT pieces of the input-response story — they survived the
+;; fin-split purge verbatim and become load-bearing again in the symbolic
+;; move_shown rebuild.
 (fn pos_cell ((p Pos)) (Pair Int Int) (match p ((Pos c r) (Pair r c))))
 
 (claim orb_tr (goal ((a Bool)) () (= (orb a True) True))
@@ -300,7 +266,7 @@
   (steps ((compute both) (rewrite (premise 0) lr both true ()) (compute both)) refl))
 ;; (later directions carry the PRECEDING guards as False — key_heading/move_cell
 ;; test the keys in order, so the earlier ifs must collapse before the matching
-;; one fires. move_shown's nested case-on supplies exactly these facts.)
+;; one fires. move_shown's per-key case split supplies exactly these facts.)
 (claim align_s (goal ((key Int) (c Int) (r Int) (hd Heading))
       ((= (int_eq key 119) False) (= (int_eq key 115) True))
     (= (pos_cell (move_head (Pos c r) (key_heading key hd))) (move_cell (Pair r c) key)))
@@ -319,237 +285,6 @@
   (steps ((compute both) (rewrite (premise 0) lr both true ())
           (rewrite (premise 1) lr both true ()) (rewrite (premise 2) lr both true ())
           (rewrite (premise 3) lr both true ()) (compute both)) refl))
-
-;; THE PER-TICK INPUT-RESPONSE FACT: across one loop tick, the rendered head
-;; obeys the key — the post-step frame shows the head either displaced one cell
-;; in the pressed wasd direction or held in place (a blocked move freezes).
-;; Proven by FULL ENUMERATION: extract the head bounds from inv (board_ok's
-;; have-chain), pin the food, case the four key guards (a non-wasd key makes
-;; step_shows vacuously True), then fin-split the head over the 4x2 interior —
-;; each leaf is a CONCRETE step between two concrete frames, where head_ok
-;; decides move-vs-freeze by itself and step_shows computes outright. (The
-;; enumeration sidesteps the stuck pair_eq an abstract-head proof would hit:
-;; opt_pair_eq of an abstract head with itself never reduces.) In each leaf the
-;; key guards are still abstract ifs; the case-on hypotheses collapse them —
-;; later directions rewrite the PRECEDING guards False first (in-order tests).
-(claim move_shown
-  (goal ((key Int) (s GameState))
-        ((= (inv s) True) (= (game_food s) (Pos 4 2)))
-    (= (step_shows (frame s) (frame (step key s)) key) True))
-  (induct s
-    ((case GS (body hd food sc st sd)
-       (induct body
-         ((case Nil (absurd (premise 0)))
-          (case Cons (h tl)
-            (induct tl
-              ((case Cons (h2 tl2) (absurd (premise 0)))
-               (case Nil
-                 (induct h
-                   ((case Pos (hcol hrow)
-       (have (= (head_ok (Pos hcol hrow)) True)                                 ; premise 2
-         (rewrite-with (lemma andb_tl) lr lhs
-           ((inst a (head_ok (Pos hcol hrow))) (inst b (pos_eq food (Pos 4 2))))
-           ((steps ((rewrite (premise 0) rl rhs true ()) (compute both)) refl))
-           refl)
-       (have (= (in_range hcol hrow) True)                                      ; premise 3
-         (rewrite-with (lemma andb_tl) lr lhs
-           ((inst a (in_range hcol hrow))
-            (inst b (notb (pos_eq (Pos hcol hrow) (Pos 4 2)))))
-           ((steps ((rewrite (premise 2) rl rhs true ()) (compute both)) refl))
-           refl)
-       (have (= food (Pos 4 2))                                                 ; premise 4
-         (steps ((rewrite (premise 1) rl rhs true ()) (compute rhs)) refl)
-       (have (= (le 1 hcol) True)                                               ; premise 5
-         (rewrite-with (lemma andb_tl) lr lhs
-           ((inst a (le 1 hcol))
-            (inst b (andb (le hcol 4) (andb (le 1 hrow) (le hrow 2)))))
-           ((steps ((rewrite (premise 3) rl rhs true ()) (compute both)) refl))
-           refl)
-       (have (= (andb (le hcol 4) (andb (le 1 hrow) (le hrow 2))) True)         ; premise 6
-         (rewrite-with (lemma andb_tr) lr lhs
-           ((inst a (le 1 hcol))
-            (inst b (andb (le hcol 4) (andb (le 1 hrow) (le hrow 2)))))
-           ((steps ((rewrite (premise 3) rl rhs true ()) (compute both)) refl))
-           refl)
-       (have (= (le hcol 4) True)                                               ; premise 7
-         (rewrite-with (lemma andb_tl) lr lhs
-           ((inst a (le hcol 4)) (inst b (andb (le 1 hrow) (le hrow 2))))
-           ((steps ((rewrite (premise 6) lr lhs true ())) refl))
-           refl)
-       (have (= (andb (le 1 hrow) (le hrow 2)) True)                            ; premise 8
-         (rewrite-with (lemma andb_tr) lr lhs
-           ((inst a (le hcol 4)) (inst b (andb (le 1 hrow) (le hrow 2))))
-           ((steps ((rewrite (premise 6) lr lhs true ())) refl))
-           refl)
-       (have (= (le 1 hrow) True)                                               ; premise 9
-         (rewrite-with (lemma andb_tl) lr lhs
-           ((inst a (le 1 hrow)) (inst b (le hrow 2)))
-           ((steps ((rewrite (premise 8) lr lhs true ())) refl))
-           refl)
-       (have (= (le hrow 2) True)                                               ; premise 10
-         (rewrite-with (lemma andb_tr) lr lhs
-           ((inst a (le 1 hrow)) (inst b (le hrow 2)))
-           ((steps ((rewrite (premise 8) lr lhs true ())) refl))
-           refl)
-       (steps ((rewrite (premise 4) lr lhs true ()))
-         (case-on (int_eq key 119) Bool
-           ((case True    ; 'w' — hyp 0 fires the first guard everywhere
-              (fin-split hcol (premise 5) (premise 7)
-                ((case 1 (fin-split hrow (premise 9) (premise 10)
-                   ((case 1 (steps ((compute both) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))
-                    (case 2 (steps ((compute both) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl)))))
-                 (case 2 (fin-split hrow (premise 9) (premise 10)
-                   ((case 1 (steps ((compute both) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))
-                    (case 2 (steps ((compute both) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl)))))
-                 (case 3 (fin-split hrow (premise 9) (premise 10)
-                   ((case 1 (steps ((compute both) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))
-                    (case 2 (steps ((compute both) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl)))))
-                 (case 4 (fin-split hrow (premise 9) (premise 10)
-                   ((case 1 (steps ((compute both) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))
-                    (case 2 (steps ((compute both) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))))))))
-            (case False
-              (case-on (int_eq key 115) Bool
-                ((case True    ; 's' — hyp 1: 119 False, hyp 0: 115 True
-                   (fin-split hcol (premise 5) (premise 7)
-                     ((case 1 (fin-split hrow (premise 9) (premise 10)
-                        ((case 1 (steps ((compute both) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))
-                         (case 2 (steps ((compute both) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl)))))
-                      (case 2 (fin-split hrow (premise 9) (premise 10)
-                        ((case 1 (steps ((compute both) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))
-                         (case 2 (steps ((compute both) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl)))))
-                      (case 3 (fin-split hrow (premise 9) (premise 10)
-                        ((case 1 (steps ((compute both) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))
-                         (case 2 (steps ((compute both) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl)))))
-                      (case 4 (fin-split hrow (premise 9) (premise 10)
-                        ((case 1 (steps ((compute both) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))
-                         (case 2 (steps ((compute both) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))))))))
-                 (case False
-                   (case-on (int_eq key 97) Bool
-                     ((case True    ; 'a' — hyps 2/1: 119/115 False, hyp 0: 97 True
-                        (fin-split hcol (premise 5) (premise 7)
-                          ((case 1 (fin-split hrow (premise 9) (premise 10)
-                             ((case 1 (steps ((compute both) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))
-                              (case 2 (steps ((compute both) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl)))))
-                           (case 2 (fin-split hrow (premise 9) (premise 10)
-                             ((case 1 (steps ((compute both) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))
-                              (case 2 (steps ((compute both) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl)))))
-                           (case 3 (fin-split hrow (premise 9) (premise 10)
-                             ((case 1 (steps ((compute both) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))
-                              (case 2 (steps ((compute both) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl)))))
-                           (case 4 (fin-split hrow (premise 9) (premise 10)
-                             ((case 1 (steps ((compute both) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))
-                              (case 2 (steps ((compute both) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))))))))
-                      (case False
-                        (case-on (int_eq key 100) Bool
-                          ((case True    ; 'd' — hyps 3/2/1: 119/115/97 False, hyp 0: 100 True
-                             (fin-split hcol (premise 5) (premise 7)
-                               ((case 1 (fin-split hrow (premise 9) (premise 10)
-                                  ((case 1 (steps ((compute both) (rewrite (hyp 3) lr lhs true ()) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 3) lr lhs true ()) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))
-                                   (case 2 (steps ((compute both) (rewrite (hyp 3) lr lhs true ()) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 3) lr lhs true ()) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl)))))
-                                (case 2 (fin-split hrow (premise 9) (premise 10)
-                                  ((case 1 (steps ((compute both) (rewrite (hyp 3) lr lhs true ()) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 3) lr lhs true ()) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))
-                                   (case 2 (steps ((compute both) (rewrite (hyp 3) lr lhs true ()) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 3) lr lhs true ()) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl)))))
-                                (case 3 (fin-split hrow (premise 9) (premise 10)
-                                  ((case 1 (steps ((compute both) (rewrite (hyp 3) lr lhs true ()) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 3) lr lhs true ()) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))
-                                   (case 2 (steps ((compute both) (rewrite (hyp 3) lr lhs true ()) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 3) lr lhs true ()) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl)))))
-                                (case 4 (fin-split hrow (premise 9) (premise 10)
-                                  ((case 1 (steps ((compute both) (rewrite (hyp 3) lr lhs true ()) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 3) lr lhs true ()) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))
-                                   (case 2 (steps ((compute both) (rewrite (hyp 3) lr lhs true ()) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both) (rewrite (hyp 3) lr lhs true ()) (rewrite (hyp 2) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (compute both)) refl))))))))
-                           (case False    ; non-wasd — all four guards False; step_shows is vacuous
-                             (steps ((compute both)
-                                     (rewrite (hyp 3) lr lhs true ())
-                                     (rewrite (hyp 2) lr lhs true ())
-                                     (rewrite (hyp 1) lr lhs true ())
-                                     (rewrite (hyp 0) lr lhs true ())
-                                     (compute both)) refl)))))))))))))
-       )))))))))))))))))))))))
-
-;; board_ok: inv(s) -> is_board(frame s). THE bridge the moving-snake worker
-;; cites. Destructure s to its length-1 head (Pos hcol hrow) (non-length-1
-;; bodies contradict inv, closed by absurd), then INVERT the Bool invariant with
-;; chained cuts: each `have` peels one andb layer off inv/head_ok/in_range into
-;; a clean premise. The food's fixed value comes from the threaded raw equation
-;; game_food s = (Pos 4 2) (premise 1), not from inv's pos_eq conjunct — so no
-;; int_eq inversion is needed. Finally cite board_from_inv with the six extracted
-;; facts. Premises grow 0,1 (given) then 2..12 (the cuts, in order below).
-(claim board_ok
-  (goal ((s GameState))
-        ((= (inv s) True) (= (game_food s) (Pos 4 2)))
-    (= (is_board (frame s)) True))
-  (induct s
-    ((case GS (body hd food sc st sd)
-       (induct body
-         ((case Nil (absurd (premise 0)))
-          (case Cons (h tl)
-            (induct tl
-              ((case Cons (h2 tl2) (absurd (premise 0)))
-               (case Nil
-                 (induct h
-                   ((case Pos (hcol hrow)
-       (have (= (head_ok (Pos hcol hrow)) True)                                  ; premise 2
-         (rewrite-with (lemma andb_tl) lr lhs
-           ((inst a (head_ok (Pos hcol hrow))) (inst b (pos_eq food (Pos 4 2))))
-           ((steps ((rewrite (premise 0) rl rhs true ()) (compute both)) refl))
-           refl)
-       (have (= (in_range hcol hrow) True)                                       ; premise 3
-         (rewrite-with (lemma andb_tl) lr lhs
-           ((inst a (in_range hcol hrow))
-            (inst b (notb (pos_eq (Pos hcol hrow) (Pos 4 2)))))
-           ((steps ((rewrite (premise 2) rl rhs true ()) (compute both)) refl))
-           refl)
-       (have (= (notb (pos_eq (Pos hcol hrow) (Pos 4 2))) True)                  ; premise 4
-         (rewrite-with (lemma andb_tr) lr lhs
-           ((inst a (in_range hcol hrow))
-            (inst b (notb (pos_eq (Pos hcol hrow) (Pos 4 2)))))
-           ((steps ((rewrite (premise 2) rl rhs true ()) (compute both)) refl))
-           refl)
-       (have (= (pos_eq (Pos hcol hrow) (Pos 4 2)) False)                        ; premise 5
-         (rewrite-with (lemma notb_t) lr lhs
-           ((inst b (pos_eq (Pos hcol hrow) (Pos 4 2))))
-           ((steps ((rewrite (premise 4) lr lhs true ())) refl))
-           refl)
-       (have (= food (Pos 4 2))                                                  ; premise 6
-         (steps ((rewrite (premise 1) rl rhs true ()) (compute rhs)) refl)
-       (have (= (le 1 hcol) True)                                                ; premise 7
-         (rewrite-with (lemma andb_tl) lr lhs
-           ((inst a (le 1 hcol))
-            (inst b (andb (le hcol 4) (andb (le 1 hrow) (le hrow 2)))))
-           ((steps ((rewrite (premise 3) rl rhs true ()) (compute both)) refl))
-           refl)
-       (have (= (andb (le hcol 4) (andb (le 1 hrow) (le hrow 2))) True)          ; premise 8
-         (rewrite-with (lemma andb_tr) lr lhs
-           ((inst a (le 1 hcol))
-            (inst b (andb (le hcol 4) (andb (le 1 hrow) (le hrow 2)))))
-           ((steps ((rewrite (premise 3) rl rhs true ()) (compute both)) refl))
-           refl)
-       (have (= (le hcol 4) True)                                               ; premise 9
-         (rewrite-with (lemma andb_tl) lr lhs
-           ((inst a (le hcol 4)) (inst b (andb (le 1 hrow) (le hrow 2))))
-           ((steps ((rewrite (premise 8) lr lhs true ())) refl))
-           refl)
-       (have (= (andb (le 1 hrow) (le hrow 2)) True)                            ; premise 10
-         (rewrite-with (lemma andb_tr) lr lhs
-           ((inst a (le hcol 4)) (inst b (andb (le 1 hrow) (le hrow 2))))
-           ((steps ((rewrite (premise 8) lr lhs true ())) refl))
-           refl)
-       (have (= (le 1 hrow) True)                                              ; premise 11
-         (rewrite-with (lemma andb_tl) lr lhs
-           ((inst a (le 1 hrow)) (inst b (le hrow 2)))
-           ((steps ((rewrite (premise 10) lr lhs true ())) refl))
-           refl)
-       (have (= (le hrow 2) True)                                              ; premise 12
-         (rewrite-with (lemma andb_tr) lr lhs
-           ((inst a (le 1 hrow)) (inst b (le hrow 2)))
-           ((steps ((rewrite (premise 10) lr lhs true ())) refl))
-           refl)
-       (rewrite-with (lemma board_from_inv) lr lhs ()
-         ((steps ((rewrite (premise 7)  lr lhs true ())) refl)     ; le 1 hcol
-          (steps ((rewrite (premise 9)  lr lhs true ())) refl)     ; le hcol 4
-          (steps ((rewrite (premise 11) lr lhs true ())) refl)     ; le 1 hrow
-          (steps ((rewrite (premise 12) lr lhs true ())) refl)     ; le hrow 2
-          (steps ((rewrite (premise 5)  lr lhs true ())) refl)     ; pos_eq = False
-          (steps ((rewrite (premise 6)  lr lhs true ())) refl))    ; food = (Pos 4 2)
-         refl)))))))))))))))))))))))))
 
 ;; ---- the world / play loop ------------------------------------------------
 (fn w_clock ((w World)) Int (match w ((World n) n)))
@@ -725,131 +460,20 @@
            ((case True  (steps ((rewrite (hyp 0) lr both true ()) (simp both)) refl))
             (case False (steps ((rewrite (hyp 0) lr both true ()) (simp both)) refl)))))))))
 
-;; ---- the ∀-fuel workers: the spec predicate is preserved across the loop ----
-;; Identical to play_clock_mono's WfInduct skeleton; the Some-case writes one
-;; frame and cites the IH at (f-1, s, write (frame s) w). The IH's four premises
-;; (in order): the threaded per-frame fact, the log invariant after the write
-;; (write_output + snoc + the two facts), 0<=f-1 (step_nonneg), f-1<f (ord).
-(claim play_arena_preserve
-  (goal ((f Int) (s GameState) (w World))
-        ((= (is_arena (frame s)) True) (= (all_arena (w_output w)) True))
-    (= (all_arena (w_output (play_fuel f s w))) True))
-  (wf-induct f
-    (case-on (lt 0 f) Bool
-      ((case False
-         (steps ((unfold play_fuel lhs) (rewrite (hyp 0) lr lhs true ()) (simp lhs)
-                 (rewrite (premise 1) lr lhs true ())) refl))
-       (case True
-         (steps ((unfold play_fuel lhs) (rewrite (hyp 0) lr lhs true ()) (simp lhs))
-           (case-on (key_oracle w) Pair
-             ((case Pair (o w1)
-                (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
-                  (case-on o Option
-                    ;; hyps: 0 o-eq, 1 pair-eq, 2 lt-fact, 3 IH
-                    ((case None
-                       ;; loop returns w1; key_oracle PRESERVES the log (key_output)
-                       (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
-                         (rewrite-with (lemma key_output) lr lhs ((inst w w) (inst o o) (inst w1 w1))
-                           ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
-                           (steps ((rewrite (premise 1) lr lhs true ())) refl))))
-                     (case Some (key)
-                       (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
-                         (rewrite-with (hyp 3) lr lhs ()
-                           ;; IH premise 0': is_arena (frame (step key s)) — structural
-                           ((steps ((compute lhs)) refl)
-                            ;; IH premise 1': log stays all_arena after the write.
-                            ;; w_output(write … w1); key_output folds w1's log back to w's.
-                            (steps ((rewrite (lemma write_output)    lr lhs true ())
-                                    (rewrite (lemma all_arena_snoc)  lr lhs true ()))
-                              (rewrite-with (lemma key_output) lr lhs ((inst w w) (inst o o) (inst w1 w1))
-                                ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
-                                ;; written frame is now frame(step key s); is_arena of it
-                                ;; computes structurally (border only). if True … False -> True.
-                                (steps ((rewrite (premise 1) lr lhs true ()) (compute lhs)) refl)))
-                            (rewrite-with (lemma step_nonneg) lr lhs ((inst x f))
-                              ((steps ((rewrite (hyp 2) lr lhs true ())) refl)) refl)
-                            (by ord (list)))
-                           refl)))))))))))))))
 
-;; The MOVING-snake board worker. Threads TWO state invariants — inv s (the
-;; length-1 head stays interior & clear of food) and game_food s = (Pos 4 2)
-;; (the food never moves) — both preserved across the step by inv_step/food_step,
-;; and bridged to the per-frame board fact by board_ok. wf-induct on fuel; the
-;; Some case writes frame s, steps to (step key s), and cites the IH there.
-(claim play_board_preserve
-  (goal ((f Int) (s GameState) (w World))
-        ((= (inv s) True) (= (game_food s) (Pos 4 2))
-         (= (all_board (w_output w)) True))
-    (= (all_board (w_output (play_fuel f s w))) True))
-  (wf-induct f
-    (case-on (lt 0 f) Bool
-      ((case False
-         (steps ((unfold play_fuel lhs) (rewrite (hyp 0) lr lhs true ()) (simp lhs)
-                 (rewrite (premise 2) lr lhs true ())) refl))
-       (case True
-         (steps ((unfold play_fuel lhs) (rewrite (hyp 0) lr lhs true ()) (simp lhs))
-           (case-on (key_oracle w) Pair
-             ((case Pair (o w1)
-                (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
-                  (case-on o Option
-                    ;; hyps: 0 o-eq, 1 pair-eq, 2 lt-fact, 3 IH
-                    ((case None
-                       (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
-                         (rewrite-with (lemma key_output) lr lhs ((inst w w) (inst o o) (inst w1 w1))
-                           ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
-                           (steps ((rewrite (premise 2) lr lhs true ())) refl))))
-                     (case Some (key)
-                       (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
-                         (rewrite-with (hyp 3) lr lhs ()
-                           ;; IH premise 0': inv (step key s) = True   (inv_step ∘ premise 0)
-                           ((rewrite-with (lemma inv_step) lr lhs ((inst k key) (inst s s))
-                              ((steps ((rewrite (premise 0) lr lhs true ())) refl))
-                              refl)
-                            ;; IH premise 1': game_food (step key s) = (Pos 4 2)  (food_step ∘ premise 1)
-                            (steps ((rewrite (lemma food_step) lr lhs true ())
-                                    (rewrite (premise 1) lr lhs true ())) refl)
-                            ;; IH premise 2': log stays all_board after writing frame s.
-                            ;;   write_output + snoc; key_output folds w1's log to w's;
-                            ;;   premise 2 (old log) + board_ok s (the new frame is a board).
-                            (steps ((rewrite (lemma write_output)   lr lhs true ())
-                                    (rewrite (lemma all_board_snoc) lr lhs true ()))
-                              (rewrite-with (lemma key_output) lr lhs ((inst w w) (inst o o) (inst w1 w1))
-                                ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
-                                ;; written frame is now frame(step key s); board_ok applies
-                                ;; THERE (inv & game_food carried across the step).
-                                (steps ((rewrite (premise 2) lr lhs true ()))
-                                  (rewrite-with (lemma board_ok) lr lhs ((inst s (step key s)))
-                                    ((rewrite-with (lemma inv_step) lr lhs ((inst k key) (inst s s))
-                                       ((steps ((rewrite (premise 0) lr lhs true ())) refl)) refl)
-                                     (steps ((rewrite (lemma food_step) lr lhs true ())
-                                             (rewrite (premise 1) lr lhs true ())) refl))
-                                    (steps ((simp lhs)) refl)))))
-                            ;; 0 <= f-1 ; f-1 < f  (termination)
-                            (rewrite-with (lemma step_nonneg) lr lhs ((inst x f))
-                              ((steps ((rewrite (hyp 2) lr lhs true ())) refl)) refl)
-                            (by ord (list)))
-                           refl)))))))))))))))
+;; ===========================================================================
+;; PENDING REBUILD — frames_are_arenas / frames_are_boards.
+;;
+;; The fin-split enumeration proofs (board_from_inv / head_at_finds / board_ok
+;; / move_shown) and the ∀-fuel preservation workers that cited them were
+;; REMOVED when the board went parametric: fin-split needs literal bounds, and
+;; enumerating a 30×30 interior was never the right shape anyway. The symbolic
+;; (induction + farkas) faithfulness chain is the in-progress rebuild; until it
+;; lands, frames_are_arenas and frames_are_boards are honest UNMET obligations
+;; in the bin report. The snoc lemmas above and inv_step/food_step/align_* are
+;; the surviving size-independent pieces it will reassemble.
+;; ===========================================================================
 
-;; ---- discharge the two pending requirements, over main ----------------------
-;; main w = play_fuel (fuel) (init) w. Cite the worker at s=init; the per-frame
-;; premise is proven at the concrete init (compute — for board, unfold the
-;; nullary (init) first, which compute won't), the log premise is the
-;; requirement's own premise. fuel stays opaque throughout (cited, never reduced).
-(fulfills frames_are_arenas
-  (steps ((unfold main lhs))
-    (rewrite-with (lemma play_arena_preserve) lr lhs ()
-      ((steps ((compute lhs)) refl)
-       (steps ((rewrite (premise 0) lr lhs true ())) refl))
-      refl)))
-
-;; Now three worker premises at s=init: inv(init) and game_food(init)=(Pos 4 2)
-;; (both compute at the concrete init, after unfolding the nullary fn), and the
-;; log invariant (the requirement's own premise).
-(fulfills frames_are_boards
-  (steps ((unfold main lhs))
-    (rewrite-with (lemma play_board_preserve) lr lhs ()
-      ((steps ((unfold init lhs) (compute lhs)) refl)
-       (steps ((unfold init lhs) (compute lhs)) refl)
-       (steps ((rewrite (premise 0) lr lhs true ())) refl))
-      refl)))
-
+;; ---- design-constant bound: the ONE fulfillment licensed to reduce the 32s --
+(fulfills board_min_size
+  (steps ((unfold board_w lhs) (unfold board_h lhs) (compute lhs)) refl))

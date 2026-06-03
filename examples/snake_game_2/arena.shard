@@ -3,28 +3,38 @@
 ;;; This is the part nothing proves: it DEFINES what "a complete arena frame"
 ;;; means as a predicate over the raw output bytes, and its fidelity to "what a
 ;;; player sees" rests on human inspection, not a theorem. So it is written to
-;;; be dumb and obvious — fixed dimensions, structural row checks, no cleverness.
+;;; be dumb and obvious — counted structural row checks, no cleverness.
 ;;;
 ;;; An arena is a W x H grid, serialized as the ANSI clear prefix followed by H
 ;;; rows of W cell-bytes each terminated by a newline. The border is the
 ;;; perimeter: the top and bottom rows are ALL wall; every interior row begins
 ;;; and ends with a wall. Interior cells are unconstrained (snake/food/empty).
 ;;;
-;;; Dimensions are tiny and concrete so the predicate is eval-checkable and the
-;;; eventual per-frame proof stays small. W=6, H=4.
+;;; W and H are DESIGN CONSTANTS — board_w / board_h below: opaque signatures
+;;; here, concrete bodies in the impl (32 x 32). Every predicate recurses on
+;;; counted runs instead of fixed offsets, so nothing in this file depends on
+;;; the concrete size; the PROOFS treat the dimensions symbolically too — by
+;;; discipline (only the contract's board_min_size fulfillment and the ground
+;;; demos may reduce them), auditable by re-checking at a different size.
+;;; Exact frame size is still pinned, just structurally: wall_cells/free_cells
+;;; demand an exact cell run ending at the newline AND the row end, and
+;;; is_body counts exactly board_h rows off the (board_w + 1)-wide split.
 
 (import "../../kernel/stdlib.shard")   ; List / Option / Bool / Pair
 
-;; ---- dimensions & glyphs --------------------------------------------------
+;; ---- design constants & glyphs --------------------------------------------
+;; Declared HERE rather than in mod.req.shard only because mod.req.shard
+;; imports this file; their CONTRACT (the minimum size) is mod.req.shard's
+;; board_min_size requirement, discharged by the impl's concrete bodies.
+(sig fn board_w () Int)   ; cells per row   (>= 6 — board_min_size)
+(sig fn board_h () Int)   ; rows per frame  (>= 4 — board_min_size)
+
 (fn wall () Int 35)     ; '#'
 (fn nl   () Int 10)     ; '\n'
 ;; clear = ANSI ESC[2J ESC[H = 27 91 50 74 27 91 72  (7 bytes)
-;; row   = 6 cells + newline = 7 bytes ; body = 4 rows = 28 ; frame = 7 + 28 = 35
+;; row   = board_w cells + newline ; body = board_h rows ; frame = 7 + body
 
 ;; ---- tiny list helpers (self-contained for inspection) --------------------
-(fn leni ((xs (List Int))) Int
-  (match xs (Nil 0) ((Cons h t) (+ 1 (leni t)))))
-
 (fn take ((n Int) (xs (List Int))) (List Int)
   (if (le n 0) Nil
     (match xs (Nil Nil) ((Cons h t) (Cons h (take (- n 1) t))))))
@@ -38,35 +48,51 @@
 
 (fn andb ((a Bool) (b Bool)) Bool (match a (True b) (False False)))
 
-;; every byte of xs equals v
-(fn all_eq ((v Int) (xs (List Int))) Bool
-  (match xs (Nil True) ((Cons h t) (if (int_eq h v) (all_eq v t) False))))
+;; ---- row checks (counted runs — each row's exact length is pinned here) ---
+;; a full wall row: exactly n more wall cells, then the newline, then the END
+;; of the row. Any other byte, a short row, or trailing bytes -> False.
+(fn wall_cells ((n Int) (r (List Int))) Bool
+  (if (le n 0)
+      (match r ((Cons b Nil) (int_eq b (nl))) (_ False))
+      (match r
+        ((Cons b rest) (if (int_eq b (wall)) (wall_cells (- n 1) rest) False))
+        (_ False))))
+(fn wall_row ((r (List Int))) Bool (wall_cells (board_w) r))
+
+;; an interior row: a wall cell, n unconstrained interior cells (snake/food/
+;; empty live there), then wall, newline, END.
+(fn free_cells ((n Int) (r (List Int))) Bool
+  (if (le n 0)
+      (match r
+        ((Cons b (Cons b2 Nil)) (andb (int_eq b (wall)) (int_eq b2 (nl))))
+        (_ False))
+      (match r ((Cons b rest) (free_cells (- n 1) rest)) (_ False))))
+(fn ends_row ((r (List Int))) Bool
+  (match r
+    ((Cons b rest) (andb (int_eq b (wall)) (free_cells (- (board_w) 2) rest)))
+    (_ False)))
 
 ;; ---- row decomposition ----------------------------------------------------
-;; split fixed-width 7-byte rows off the body (a malformed short body yields a
-;; short final row, which the row checks below reject).
+;; split fixed-width (board_w + 1)-byte rows off the body (a malformed short
+;; body yields a short final row, which the row checks above reject).
 (fn split_rows ((bs (List Int))) (List (List Int))
   (match bs
     (Nil Nil)
-    (_ (Cons (take 7 bs) (split_rows (drop 7 bs))))))
+    (_ (Cons (take (+ (board_w) 1) bs)
+             (split_rows (drop (+ (board_w) 1) bs))))))
 
-;; a full wall row: 6 wall cells then newline.
-(fn wall_row ((r (List Int))) Bool
-  (andb (all_eq (wall) (take 6 r)) (int_eq (nth 6 r) (nl))))
-
-;; an interior row: left & right cells are wall, terminated by newline.
-;; (interior cells nth 1..4 are unconstrained — snake/food/empty live there.)
-(fn ends_row ((r (List Int))) Bool
-  (andb (int_eq (nth 0 r) (wall))
-    (andb (int_eq (nth 5 r) (wall)) (int_eq (nth 6 r) (nl)))))
-
-;; the body must be EXACTLY: wall / interior / interior / wall (H=4). Any other
-;; row count -> not an arena (this is what makes a partial frame fail).
+;; the body must be EXACTLY: a wall row, board_h - 2 interior rows, a wall
+;; row. The count is the recursion fuel; any other row count -> not an arena
+;; (this is what makes a partial or oversized frame fail).
+(fn mid_rows ((n Int) (rs (List (List Int)))) Bool
+  (if (le n 0)
+      (match rs ((Cons r Nil) (wall_row r)) (_ False))
+      (match rs
+        ((Cons r rest) (andb (ends_row r) (mid_rows (- n 1) rest)))
+        (_ False))))
 (fn is_body ((rs (List (List Int)))) Bool
   (match rs
-    ((Cons r0 (Cons r1 (Cons r2 (Cons r3 Nil))))
-      (andb (wall_row r0)
-        (andb (ends_row r1) (andb (ends_row r2) (wall_row r3)))))
+    ((Cons r0 rest) (andb (wall_row r0) (mid_rows (- (board_h) 2) rest)))
     (_ False)))
 
 ;; the clear prefix is present?
@@ -76,13 +102,12 @@
       (andb (int_eq (nth 4 bs) 27) (andb (int_eq (nth 5 bs) 91)
         (int_eq (nth 6 bs) 72))))))))
 
-;; THE PREDICATE: a complete arena frame = full size, clears the screen, and a
-;; well-formed bordered body. A short/partial/placeholder frame fails on size
-;; AND on body shape.
+;; THE PREDICATE: a complete arena frame = clears the screen, then a
+;; well-formed bordered body. A short/partial/placeholder frame fails on the
+;; body shape (short rows, wrong row count).
 (fn is_arena ((bs (List Int))) Bool
-  (andb (int_eq (leni bs) 35)
-    (andb (starts_clear bs)
-      (is_body (split_rows (drop 7 bs))))))
+  (andb (starts_clear bs)
+    (is_body (split_rows (drop 7 bs)))))
 
 ;; every frame in an output log is a complete arena.
 (fn all_arena ((fs (List (List Int)))) Bool
@@ -91,29 +116,39 @@
 ;; ===========================================================================
 ;; ENTITY DETECTORS — finding the snake & food in a rendered frame.
 ;;
-;; The next design chunk: a frame is not just a bordered arena, it shows the
-;; game ENTITIES, contained inside the walls. These detectors locate a glyph in
-;; the interior by grid coordinate, so requirements can talk about WHERE the
-;; snake is on screen — over the output bytes, never an internal GS field.
+;; A frame is not just a bordered arena, it shows the game ENTITIES, contained
+;; inside the walls. These detectors locate a glyph by grid coordinate, so
+;; requirements can talk about WHERE the snake is on screen — over the output
+;; bytes, never an internal GS field.
 ;; Glyphs: head 'O' = 79, food '*' = 42 (empty ' ' = 32, wall '#' = 35).
 ;; ===========================================================================
 
-;; the byte at interior grid cell (r,c): clear prefix (7) + r full rows (7 each)
-;; + c into the row.
-(fn cell_at ((r Int) (c Int) (f (List Int))) Int (nth (+ 7 (+ (* r 7) c)) f))
+;; the first cell in a row holding glyph g, as its column index (counting from
+;; c at the row head). The newline terminator never equals an entity glyph, so
+;; the scan self-limits at the end of the row.
+(fn row_find ((g Int) (c Int) (r (List Int))) (Option Int)
+  (match r
+    (Nil None)
+    ((Cons b rest) (if (int_eq b g) (Some c) (row_find g (+ c 1) rest)))))
 
-;; first interior cell (rows 1..2, cols 1..4, row-major) holding glyph g, else
-;; None. Spelled out cell-by-cell so the search space is obvious on inspection.
+;; the first cell (row-major over the split rows, counting rows from rw)
+;; holding glyph g, as (Pair row col).
+(fn rows_find ((g Int) (rw Int) (rs (List (List Int)))) (Option (Pair Int Int))
+  (match rs
+    (Nil None)
+    ((Cons r rest)
+      (match (row_find g 0 r)
+        (None (rows_find g (+ rw 1) rest))
+        ((Some c) (Some (Pair rw c)))))))
+
+;; Where the old fixed-size vocabulary spelled out the interior cells one by
+;; one, the parametric form scans EVERY cell of the body, row-major; row 0 is
+;; the top wall row, so reported coordinates live on the same grid the border
+;; occupies. On a frame is_arena accepts, no border or terminator byte can
+;; equal an entity glyph (walls are '#', terminators '\n'), so a found glyph
+;; is necessarily INTERIOR — the containment reading is unchanged.
 (fn find_glyph ((g Int) (f (List Int))) (Option (Pair Int Int))
-  (if (int_eq (cell_at 1 1 f) g) (Some (Pair 1 1))
-   (if (int_eq (cell_at 1 2 f) g) (Some (Pair 1 2))
-    (if (int_eq (cell_at 1 3 f) g) (Some (Pair 1 3))
-     (if (int_eq (cell_at 1 4 f) g) (Some (Pair 1 4))
-      (if (int_eq (cell_at 2 1 f) g) (Some (Pair 2 1))
-       (if (int_eq (cell_at 2 2 f) g) (Some (Pair 2 2))
-        (if (int_eq (cell_at 2 3 f) g) (Some (Pair 2 3))
-         (if (int_eq (cell_at 2 4 f) g) (Some (Pair 2 4))
-          None)))))))))
+  (rows_find g 0 (split_rows (drop 7 f))))
 
 (fn head_at ((f (List Int))) (Option (Pair Int Int)) (find_glyph 79 f))   ; the snake head 'O'
 (fn food_at ((f (List Int))) (Option (Pair Int Int)) (find_glyph 42 f))   ; the food '*'
@@ -122,8 +157,7 @@
   (match o (None False) ((Some p) True)))
 
 ;; a well-formed BOARD: an intact arena with BOTH the snake head and the food
-;; drawn in the interior. is_arena already forbids any non-wall byte on the
-;; border, so "head/food in the interior" means the entities are CONTAINED —
+;; drawn in it — and by the containment reading above, drawn in the INTERIOR:
 ;; the snake can never be rendered on or through a wall.
 (fn is_board ((f (List Int))) Bool
   (andb (is_arena f)
@@ -135,11 +169,11 @@
 ;; ===========================================================================
 ;; INPUT-RESPONSE VOCABULARY — relating consecutive frames to the input keys.
 ;;
-;; The next reviewed-vocab chunk: a frame is not just a valid board, it is the
-;; RESPONSE to the key the player pressed. These predicates pin that purely over
-;; the boundary bytes — a key in, two frames out — naming no game state. Glyph
-;; geometry: head positions are (row, col) as `head_at` reports them; w/a/s/d
-;; displace the head by one cell (w/s on the row, a/d on the column).
+;; A frame is not just a valid board, it is the RESPONSE to the key the player
+;; pressed. These predicates pin that purely over the boundary bytes — a key
+;; in, two frames out — naming no game state. Glyph geometry: head positions
+;; are (row, col) as `head_at` reports them; w/a/s/d displace the head by one
+;; cell (w/s on the row, a/d on the column).
 ;; ===========================================================================
 
 (fn orb ((a Bool) (b Bool)) Bool (match a (True True) (False b)))
