@@ -339,17 +339,19 @@
 ;; ---- the world / play loop ------------------------------------------------
 (fn w_clock ((w World)) Int (match w ((World n) n)))
 
-;; The bounded play loop on an INT fuel: while fuel > 0, read a key (oracle);
-;; idle -> stop; else WRITE the current frame and recurse on (f - 1) with the
-;; STEPPED state `(step key s)`. `write` is the sole clock effect per tick. Int
-;; fuel (not unary Nat) so the runtime budget can be countably large; the proofs
-;; use WfInduct on the fuel measure (clock-mono is state-agnostic; the board
-;; worker threads the containment invariant through `step key s`).
+;; The bounded play loop on an INT fuel: while fuel > 0, read a key (oracle,
+;; which now THREADS the world — clock + input trace); idle -> stop; else WRITE
+;; the current frame and recurse on (f - 1) with the STEPPED state `(step key s)`.
+;; key_oracle and write are BOTH clock effects per tick now. (NOTE: this still
+;; renders `frame s` — the PRE-step state — i.e. the one-frame-lag bug; it is
+;; fixed in the slice that adds the input-response requirement that forbids it.)
+;; Int fuel (not unary Nat) so the runtime budget can be countably large; the
+;; proofs use WfInduct on the fuel measure.
 (fn play_fuel ((f Int) (s GameState) (w World)) World
   (if (lt 0 f)
       (match (key_oracle w)
-        (None w)
-        ((Some key) (play_fuel (- f 1) (step key s) (write (frame s) w))))
+        ((Pair None w1)       w1)
+        ((Pair (Some key) w1) (play_fuel (- f 1) (step key s) (write (frame s) w1))))
       w))
 
 ;; ---- the executable -------------------------------------------------------
@@ -411,21 +413,34 @@
            (by ord (list))))
        (case True
          (steps ((unfold play_fuel lhs) (rewrite (hyp 0) lr lhs true ()) (simp lhs))
-           (case-on (key_oracle w) Option
-             ((case None
-                (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) (by ord (list))))
-              (case Some (key)
+           (case-on (key_oracle w) Pair
+             ((case Pair (o w1)
                 (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
-                  (rewrite-with (lemma le_trans) lr lhs
-                    ((inst b (w_clock (write (frame s) w))))
-                    ((steps ((rewrite (lemma write_clock) lr lhs true ())) (by ord (list)))
-                     (rewrite-with (hyp 2) lr lhs ()
-                       ((rewrite-with (lemma step_nonneg) lr lhs ((inst x f))
-                          ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
-                          refl)
-                        (by ord (list)))
-                       refl))
-                    refl)))))))))))
+                  (case-on o Option
+                    ;; hyps now: 0 o-eq, 1 pair-eq, 2 lt-fact, 3 IH
+                    ((case None
+                       ;; loop returns w1; w_clock w1 = w_clock w + 1 (key_clock)
+                       (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
+                         (rewrite-with (lemma key_clock) lr lhs ((inst w w) (inst o o) (inst w1 w1))
+                           ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
+                           (by ord (list)))))
+                     (case Some (key)
+                       (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
+                         (rewrite-with (lemma le_trans) lr lhs
+                           ((inst b (w_clock (write (frame s) w1))))
+                           ;; prem1: w_clock w <= w_clock(write (frame s) w1) = (w_clock w +1)+1
+                           ((steps ((rewrite (lemma write_clock) lr lhs true ()))
+                              (rewrite-with (lemma key_clock) lr lhs ((inst w w) (inst o o) (inst w1 w1))
+                                ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
+                                (by ord (list))))
+                            ;; prem2: the IH at (f-1, step key s, write (frame s) w1)
+                            (rewrite-with (hyp 3) lr lhs ()
+                              ((rewrite-with (lemma step_nonneg) lr lhs ((inst x f))
+                                 ((steps ((rewrite (hyp 2) lr lhs true ())) refl))
+                                 refl)
+                               (by ord (list)))
+                              refl))
+                           refl)))))))))))))))
 
 ;; THE CONTRACT REQUIREMENT, over main: unfold `main` to expose
 ;; `play_fuel (fuel) (init) w`, then cite the worker lemma INSTANTIATED at the
@@ -511,26 +526,35 @@
                  (rewrite (premise 1) lr lhs true ())) refl))
        (case True
          (steps ((unfold play_fuel lhs) (rewrite (hyp 0) lr lhs true ()) (simp lhs))
-           (case-on (key_oracle w) Option
-             ((case None
-                (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)
-                        (rewrite (premise 1) lr lhs true ())) refl))
-              (case Some (key)
+           (case-on (key_oracle w) Pair
+             ((case Pair (o w1)
                 (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
-                  (rewrite-with (hyp 2) lr lhs ()
-                    ;; IH premise 0': is_arena (frame (step key s)) — structural
-                    ;; (is_arena reads only the border, independent of the body),
-                    ;; so it computes for ANY state, stepped or not.
-                    ((steps ((compute lhs)) refl)
-                     (steps ((rewrite (lemma write_output)    lr lhs true ())
-                             (rewrite (lemma all_arena_snoc)  lr lhs true ())
-                             (rewrite (premise 1) lr lhs true ())
-                             (rewrite (premise 0) lr lhs true ())
-                             (simp lhs)) refl)
-                     (rewrite-with (lemma step_nonneg) lr lhs ((inst x f))
-                       ((steps ((rewrite (hyp 1) lr lhs true ())) refl)) refl)
-                     (by ord (list)))
-                    refl)))))))))))
+                  (case-on o Option
+                    ;; hyps: 0 o-eq, 1 pair-eq, 2 lt-fact, 3 IH
+                    ((case None
+                       ;; loop returns w1; key_oracle PRESERVES the log (key_output)
+                       (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
+                         (rewrite-with (lemma key_output) lr lhs ((inst w w) (inst o o) (inst w1 w1))
+                           ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
+                           (steps ((rewrite (premise 1) lr lhs true ())) refl))))
+                     (case Some (key)
+                       (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
+                         (rewrite-with (hyp 3) lr lhs ()
+                           ;; IH premise 0': is_arena (frame (step key s)) — structural
+                           ((steps ((compute lhs)) refl)
+                            ;; IH premise 1': log stays all_arena after the write.
+                            ;; w_output(write … w1); key_output folds w1's log back to w's.
+                            (steps ((rewrite (lemma write_output)    lr lhs true ())
+                                    (rewrite (lemma all_arena_snoc)  lr lhs true ()))
+                              (rewrite-with (lemma key_output) lr lhs ((inst w w) (inst o o) (inst w1 w1))
+                                ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
+                                (steps ((rewrite (premise 1) lr lhs true ())
+                                        (rewrite (premise 0) lr lhs true ())
+                                        (simp lhs)) refl)))
+                            (rewrite-with (lemma step_nonneg) lr lhs ((inst x f))
+                              ((steps ((rewrite (hyp 2) lr lhs true ())) refl)) refl)
+                            (by ord (list)))
+                           refl)))))))))))))))
 
 ;; The MOVING-snake board worker. Threads TWO state invariants — inv s (the
 ;; length-1 head stays interior & clear of food) and game_food s = (Pos 4 2)
@@ -549,35 +573,43 @@
                  (rewrite (premise 2) lr lhs true ())) refl))
        (case True
          (steps ((unfold play_fuel lhs) (rewrite (hyp 0) lr lhs true ()) (simp lhs))
-           (case-on (key_oracle w) Option
-             ((case None
-                (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)
-                        (rewrite (premise 2) lr lhs true ())) refl))
-              (case Some (key)
+           (case-on (key_oracle w) Pair
+             ((case Pair (o w1)
                 (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
-                  (rewrite-with (hyp 2) lr lhs ()
-                    ;; IH premise 0': inv (step key s) = True   (inv_step ∘ premise 0)
-                    ((rewrite-with (lemma inv_step) lr lhs ((inst k key) (inst s s))
-                       ((steps ((rewrite (premise 0) lr lhs true ())) refl))
-                       refl)
-                     ;; IH premise 1': game_food (step key s) = (Pos 4 2)  (food_step ∘ premise 1)
-                     (steps ((rewrite (lemma food_step) lr lhs true ())
-                             (rewrite (premise 1) lr lhs true ())) refl)
-                     ;; IH premise 2': the log stays all_board after writing frame s
-                     ;;   — write_output + snoc, then premise 2 (old log) and
-                     ;;   board_ok s (the new frame is a board, from inv + game_food).
-                     (steps ((rewrite (lemma write_output)   lr lhs true ())
-                             (rewrite (lemma all_board_snoc) lr lhs true ())
-                             (rewrite (premise 2) lr lhs true ()))
-                       (rewrite-with (lemma board_ok) lr lhs ((inst s s))
-                         ((steps ((rewrite (premise 0) lr lhs true ())) refl)
-                          (steps ((rewrite (premise 1) lr lhs true ())) refl))
-                         (steps ((simp lhs)) refl)))
-                     ;; 0 <= f-1 ; f-1 < f  (termination)
-                     (rewrite-with (lemma step_nonneg) lr lhs ((inst x f))
-                       ((steps ((rewrite (hyp 1) lr lhs true ())) refl)) refl)
-                     (by ord (list)))
-                    refl)))))))))))
+                  (case-on o Option
+                    ;; hyps: 0 o-eq, 1 pair-eq, 2 lt-fact, 3 IH
+                    ((case None
+                       (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
+                         (rewrite-with (lemma key_output) lr lhs ((inst w w) (inst o o) (inst w1 w1))
+                           ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
+                           (steps ((rewrite (premise 2) lr lhs true ())) refl))))
+                     (case Some (key)
+                       (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
+                         (rewrite-with (hyp 3) lr lhs ()
+                           ;; IH premise 0': inv (step key s) = True   (inv_step ∘ premise 0)
+                           ((rewrite-with (lemma inv_step) lr lhs ((inst k key) (inst s s))
+                              ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                              refl)
+                            ;; IH premise 1': game_food (step key s) = (Pos 4 2)  (food_step ∘ premise 1)
+                            (steps ((rewrite (lemma food_step) lr lhs true ())
+                                    (rewrite (premise 1) lr lhs true ())) refl)
+                            ;; IH premise 2': log stays all_board after writing frame s.
+                            ;;   write_output + snoc; key_output folds w1's log to w's;
+                            ;;   premise 2 (old log) + board_ok s (the new frame is a board).
+                            (steps ((rewrite (lemma write_output)   lr lhs true ())
+                                    (rewrite (lemma all_board_snoc) lr lhs true ()))
+                              (rewrite-with (lemma key_output) lr lhs ((inst w w) (inst o o) (inst w1 w1))
+                                ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
+                                (steps ((rewrite (premise 2) lr lhs true ()))
+                                  (rewrite-with (lemma board_ok) lr lhs ((inst s s))
+                                    ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                                     (steps ((rewrite (premise 1) lr lhs true ())) refl))
+                                    (steps ((simp lhs)) refl)))))
+                            ;; 0 <= f-1 ; f-1 < f  (termination)
+                            (rewrite-with (lemma step_nonneg) lr lhs ((inst x f))
+                              ((steps ((rewrite (hyp 2) lr lhs true ())) refl)) refl)
+                            (by ord (list)))
+                           refl)))))))))))))))
 
 ;; ---- discharge the two pending requirements, over main ----------------------
 ;; main w = play_fuel (fuel) (init) w. Cite the worker at s=init; the per-frame

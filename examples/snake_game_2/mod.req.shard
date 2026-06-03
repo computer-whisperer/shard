@@ -36,7 +36,7 @@
 (bin snake
   (entry   main)
   (externs key_oracle write)
-  (trusts  write_clock write_output)
+  (trusts  write_clock write_output write_input key_clock key_output key_input)
   (requires io_key_w io_key_a io_key_s io_key_d io_key_inert io_frame_clears
             main_clock_mono frames_are_arenas frames_are_boards))
 
@@ -99,6 +99,7 @@
 
 (type World (World Int))                      ; the sequencing-clock token
 (sig fn w_clock ((w World)) Int)              ; the observable: the world's clock
+(sig fn w_input ((w World)) (List (Option Int)))  ; the observable: keys consumed so far
 
 ;; THE EXECUTABLE and its hidden scaffolding. `main` is the SUBJECT of every
 ;; requirement below — no requirement names anything but `main` + the I/O
@@ -112,14 +113,35 @@
 (sig fn main ((w World)) World)               ; THE EXECUTABLE — what every requirement is about
 (sig fn fuel () Int)                          ; opaque global step budget (large Int at RUN, abstract in CHECK)
 
-(extern key_oracle ((w World)) (Option Int))             ; next key (None = idle); no clock
-(extern write      ((bytes (List Int)) (w World)) World)  ; emit a frame; the clock effect
+;; key_oracle now THREADS the World: it is a clocked, sequenced effect that
+;; records the key it yielded onto the input trace `w_input` — the symmetric
+;; twin of `write`/`w_output`. Making the consumed input an OBSERVABLE is what
+;; lets a requirement relate output frames to the keys that drove them (without
+;; it, the contract is structurally blind to input — see io_input_moves below).
+(extern key_oracle ((w World)) (Pair (Option Int) World))  ; next key; clocked + traced
+(extern write      ((bytes (List Int)) (w World)) World)    ; emit a frame; clock + output effect
 
-;; THE BOLT — `write` advances the clock by exactly one. This axiom is the
-;; whole trust surface that connects the proof to the real output primitive.
+;; THE BOLTS — the whole trust surface tying the proofs to the real I/O
+;; primitives. Each effect (write, key_oracle) pins its action on each
+;; observable (clock, output log, input trace); the cross-terms are PRESERVATION
+;; (an effect leaves the other observable untouched). Dumb one-line equations,
+;; auditable by inspection.
+;;
+;; -- clock: both effects advance the sequencing clock by exactly one.
 (axiom write_clock
   (goal ((bytes (List Int)) (w World)) ()
     (= (w_clock (write bytes w)) (+ (w_clock w) 1))))
+(axiom key_clock
+  (goal ((w World) (o (Option Int)) (w1 World)) ((= (key_oracle w) (Pair o w1)))
+    (= (w_clock w1) (+ (w_clock w) 1))))
+
+;; -- input trace: key_oracle APPENDS the key it returned; write PRESERVES it.
+(axiom key_input
+  (goal ((w World) (o (Option Int)) (w1 World)) ((= (key_oracle w) (Pair o w1)))
+    (= (w_input w1) (append (w_input w) (Cons o Nil)))))
+(axiom write_input
+  (goal ((bytes (List Int)) (w World)) ()
+    (= (w_input (write bytes w)) (w_input w))))
 
 ;; R-LOOP, stated over MAIN: the running binary only ever advances its
 ;; sequencing clock — no effect reuses a token. Proven via an internal
@@ -154,10 +176,13 @@
 
 (sig fn w_output ((w World)) (List (List Int)))   ; the observable: frames written so far
 
-;; THE SECOND BOLT — `write` appends its frame to the output log.
+;; -- output log: `write` APPENDS its frame; key_oracle PRESERVES it.
 (axiom write_output
   (goal ((bytes (List Int)) (w World)) ()
     (= (w_output (write bytes w)) (append (w_output w) (Cons bytes Nil)))))
+(axiom key_output
+  (goal ((w World) (o (Option Int)) (w1 World)) ((= (key_oracle w) (Pair o w1)))
+    (= (w_output w1) (w_output w))))
 
 ;; DISCHARGED (snake_io.shard) — a real grid renderer makes every frame an
 ;; arena, preserved across the loop by `play_arena_preserve` (WfInduct on fuel +
