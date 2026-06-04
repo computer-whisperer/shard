@@ -64,31 +64,35 @@ The product asymmetry, restated:
 
 ## Quick start
 
-The Rust bootstrap lives in `rust_bootstrap/`; build it once, then run the
-`check` binary from the repo root (it locates the kernel by a baked path):
+The Rust bootstrap lives in `rust_bootstrap/`; build it once. Everything runs
+through the `eval` binary — it executes a World-threading shard program, and
+the proof checker IS such a program (`kernel/check.shard`), so checking a
+file means running the self-hosted checker on it:
 
 ```sh
 cargo build --release --manifest-path rust_bootstrap/Cargo.toml
-rust_bootstrap/target/release/check std/*.shard   # the standard library
+rust_bootstrap/target/release/eval run kernel/check.shard std/mem.shard
 ```
 
-Expected output:
+Expected output (tail):
 
 ```
-PASS  append_nil_right
-…
+PASS  …
 PASS  mem_reverses
 
-72 passed, 0 failed
+53 passed, 0 failed, 29 axiom(s) admitted without proof
 ```
 
-`std/mem.shard` `(import …)`s the rest of `std/`, so checking any one file
-pulls its dependencies transitively; checking `std/*.shard` checks the
-whole library (each file loaded once). The demos live in `examples/`
-(`rust_bootstrap/target/release/check examples/lia_basics.shard …`);
+`std/mem.shard` `(import …)`s the rest of `std/`, so this one file checks the
+whole library (dependencies load transitively, de-duplicated). An optional
+trailing argument focuses a single claim and traces it
+(`… kernel/check.shard std/mem.shard mem_reverses`). The demos live in
+`examples/` (`… eval run kernel/check.shard examples/lia_basics.shard`);
 `examples/lia_rejects.shard` is a deliberate negative test (it FAILs).
+Sources are kept in canonical form by the proven formatter:
+`rust_bootstrap/target/release/eval run tools/shardfmt/shardfmt.shard FILE`.
 
-The `check` binary loads the bundled kernel, then walks each `.shard`
+The checker loads the target's import closure, then walks each `.shard`
 file. A file may mix code, dependencies, and proofs:
 
 ```
@@ -144,7 +148,8 @@ rust_bootstrap/        ; the DISPOSABLE Rust bootstrap — host + parser + eval
     prim.rs            ;     primitive table (+ - * mod, int_eq, sym_of_chars, …)
     nval.rs            ;     narrow-value builders for tests
     lib.rs             ;     loader entrypoint + Rust test suite
-    bin/check.rs       ;     the `check` driver: proofs, eval, app, cli, *-check
+    bin/eval.rs        ;     the `eval` driver: runs World programs (the
+                       ;       checker, apps, tools) + the World extern handlers
 
 std/                   ; the standard library — reusable code + theorems,
                        ;   each a topic file (code + its lemmas, co-located),
@@ -167,7 +172,7 @@ examples/              ; demonstrations (not the library)
   add_nat_zero.shard    ;
   double_claims.shard   ;   Simp-unfold of a user fn (double_lib.shard)
   lia_rejects.shard     ;   NEGATIVE test — the kernel correctly REJECTs it
-  io/                  ;   World/extern I/O programs, run via `check run`:
+  io/                  ;   World/extern I/O programs, run via `eval run`:
                        ;     filecat / calc_repl / snake_app,
                        ;     + echo_world / cat_lazy / cat_loop (clock theorems)
                        ;   (self-hosted `eval` is now kernel/eval.shard, run
@@ -358,8 +363,9 @@ the audit boundary visible at the kernel layer.
   keys), and the M3 linear-memory model + array framing.
 - **Trusted core size:**
   - Kernel narrow code: **1,823 NCNB** across 10 `kernel/*.shard`.
-  - Rust trusted-by-review: **1,136 NCNB** across
-    `ast.rs` + `eval.rs` + `load.rs` + `prim.rs` + `bin/check.rs`.
+  - Rust trusted-by-review: **1,013 NCNB** across
+    `ast.rs` + `eval.rs` + `load.rs` + `prim.rs` + `bin/eval.rs`
+    (check.rs deleted — the checker is self-hosted, `eval` just runs it).
   - (Plus ~2,000 NCNB of Rust tests + builders in `lib.rs` + `nval.rs`
     that are not part of the trusted surface.)
 - **Next:** see Roadmap above. The "Big-ticket mandate items" list
