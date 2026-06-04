@@ -305,24 +305,40 @@
 ;; Lift a (List Int) of codepoints into the Expr VALUE that denotes it —
 ;; (Ctor 'Cons (IntLit c) … 'Nil). Used by the reducer's chars_of_sym prim
 ;; case (prim.rs::encode_char_list returns the codepoints; this wraps them
-;; back into a reduced object-list Expr) and mirrored in the eval runner.
-(fn intlist_to_expr ((xs (List Int))) Expr
+;; back into a reduced object-list Expr) and by the eval runner's extern
+;; boundary, where the list is a whole FILE (read_file/write payloads) —
+;; so both directions are ACCUMULATOR-STYLE: the naive (Cons h (recurse t))
+;; shape costs one host-interpreter frame group per element, and at file
+;; scale that overflowed the stack (the parse-path O(bytes) ceiling).
+(fn intlist_rev ((xs (List Int)) (acc (List Int))) (List Int)
   (match xs
-    (Nil (Ctor (quote Nil) Nil))
+    (Nil acc)
+    ((Cons h t) (intlist_rev t (Cons h acc)))))
+
+;; fold the REVERSED codepoints innermost-first; every call is a tail call.
+(fn intlist_wrap ((rxs (List Int)) (acc Expr)) Expr
+  (match rxs
+    (Nil acc)
     ((Cons h t)
-     (Ctor (quote Cons) (Cons (IntLit h) (Cons (intlist_to_expr t) Nil))))))
+     (intlist_wrap t (Ctor (quote Cons) (Cons (IntLit h) (Cons acc Nil)))))))
+
+(fn intlist_to_expr ((xs (List Int))) Expr
+  (intlist_wrap (intlist_rev xs Nil) (Ctor (quote Nil) Nil)))
 
 ;; Inverse: an object-list Expr (Ctor 'Cons (IntLit c) … 'Nil) back to its
 ;; (List Int) of codepoints. Used by the reducer's sym_of_chars prim case to
-;; decode the argument before handing it to the native primitive.
-(fn expr_to_intlist ((e Expr)) (List Int)
+;; decode the argument before handing it to the native primitive. A malformed
+;; tail truncates the list there, exactly like the pre-accumulator version.
+(fn expr_to_intlist_go ((e Expr) (acc (List Int))) (List Int)
   (match e
     ((Ctor _ args)
      (match args
-       (Nil Nil)
-       ((Cons (IntLit h) (Cons t Nil)) (Cons h (expr_to_intlist t)))
-       (_ Nil)))
-    (_ Nil)))
+       (Nil (intlist_rev acc Nil))
+       ((Cons (IntLit h) (Cons t Nil)) (expr_to_intlist_go t (Cons h acc)))
+       (_ (intlist_rev acc Nil))))
+    (_ (intlist_rev acc Nil))))
+
+(fn expr_to_intlist ((e Expr)) (List Int) (expr_to_intlist_go e Nil))
 
 (fn expr_eq ((a Expr) (b Expr)) Bool
   (match a

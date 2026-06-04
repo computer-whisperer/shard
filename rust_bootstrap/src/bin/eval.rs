@@ -77,11 +77,17 @@ fn main() -> ExitCode {
     // to blow the default 8 MiB main-thread stack. Run on a thread with a big
     // stack. This is purely a host concern — once compiled, the depth is bounded
     // by the program, not the interpreter. (The reserve is virtual memory; only
-    // touched pages commit. Some in-shard recursion is O(input bytes) deep —
-    // at 1 GiB the parse path topped out near ~150 KiB source files; see the
-    // O(N) recursion-depth note in README's roadmap.)
+    // touched pages commit. The parse path's once-O(input-bytes) recursion is
+    // fixed — the kernel's list-builders are accumulator-style now — so depth
+    // scales with STRUCTURE (nesting, single-literal size), not file size.
+    // SHARD_STACK_MIB overrides the reserve — used to probe depth ceilings.)
+    let stack = std::env::var("SHARD_STACK_MIB")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .map(|mib| mib << 20)
+        .unwrap_or(4 << 30); // default 4 GiB
     std::thread::Builder::new()
-        .stack_size(4 << 30) // 4 GiB
+        .stack_size(stack)
         .spawn(run)
         .expect("spawn eval thread")
         .join()

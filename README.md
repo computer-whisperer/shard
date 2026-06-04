@@ -348,12 +348,18 @@ the memo/hash-cons bullet below.)
   is the long-term fix (`TODO[v3]` in `kernel/reduce.shard`).
 - **Checker theory threading is O(N²)** — the residual perf lever
   after the FnTrie work: each claim re-threads the growing Theory.
-- **Parse-path recursion is O(input bytes) deep** — somewhere in the
-  in-shard read pipeline the host stack grows with file size, not
-  nesting depth: at a 1 GiB stack, `check` topped out near ~150 KiB
-  source files and shardfmt near ~120 KiB (snake_io.shard crossed
-  both). Stopgap: `bin/eval.rs` reserves 4 GiB. Real fix: find the
-  non-tail byte/list walk and make it iterative or an accumulator.
+- **Parse-path recursion was O(input bytes) deep — FIXED** — the
+  `(Cons h (recurse t))` list-builders cost one host-frame group per
+  element; on file-sized lists that overflowed the stack (`check`
+  topped out near ~150 KiB sources, shardfmt ~120 KiB). The hot pair
+  was the extern-boundary conversions (`intlist_to_expr` /
+  `expr_to_intlist` on read_file/write payloads); those plus the
+  reader's builders (`take_atom`/`read_items`/`read_all`/`str_sugar`/
+  `list_sugar`) are now accumulator-style — a 186 KiB file checks in
+  64 MiB of stack. Residual (accepted): a single ~50 KiB atom or a
+  single multi-thousand-element literal still recurses with its OWN
+  size (structural walks over deep object-list values are inherent);
+  `SHARD_STACK_MIB` overrides the 4 GiB default reserve for probing.
 
 ### Tooling
 

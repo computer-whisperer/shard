@@ -81,14 +81,19 @@
      cs)))))
 
 ;; ---- atoms ----------------------------------------------------------------
-;; Collect characters up to (not including) the next delimiter.
-(fn take_atom ((cs (List Int))) (Pair (List Int) (List Int))
+;; Collect characters up to (not including) the next delimiter. Accumulator
+;; style (reversed + rev_i) so the host stack stays flat on long atoms — the
+;; reader's list-builders are all written this way; see the term.shard
+;; conversion comment for why the (Cons c (recurse …)) shape is a stack bomb.
+(fn take_atom_go ((cs (List Int)) (acc (List Int))) (Pair (List Int) (List Int))
   (match cs
-    (Nil (Pair Nil Nil))
+    (Nil (Pair (rev_i acc Nil) Nil))
     ((Cons c rest)
-     (if (is_delim c) (Pair Nil cs)
-     (match (take_atom rest)
-       ((Pair atom rest2) (Pair (Cons c atom) rest2)))))))
+     (if (is_delim c) (Pair (rev_i acc Nil) cs)
+     (take_atom_go rest (Cons c acc))))))
+
+(fn take_atom ((cs (List Int))) (Pair (List Int) (List Int))
+  (take_atom_go cs Nil))
 
 (fn digits_val ((cs (List Int)) (acc Int)) Int
   (match cs
@@ -140,19 +145,24 @@
        (match (take_atom (Cons c rest))
          ((Pair atom rest2) (REOk (classify_atom atom) rest2))))))))))
 
-;; Read s-expressions until the matching ')'.
-(fn read_items ((cs0 (List Int))) RItems
+(fn rev_sexpr ((xs (List SExpr)) (acc (List SExpr))) (List SExpr)
+  (match xs
+    (Nil acc)
+    ((Cons h t) (rev_sexpr t (Cons h acc)))))
+
+;; Read s-expressions until the matching ')'. Accumulator style: the host
+;; stack depth is the NESTING depth (via read_expr), never the sibling count.
+(fn read_items_go ((cs0 (List Int)) (acc (List SExpr))) RItems
   (match (skip_ws cs0)
     (Nil RIErr)  ; unterminated list
     ((Cons c rest)
      (if (int_eq c 41)  ; ')' → done
-       (RIOk Nil rest)
+       (RIOk (rev_sexpr acc Nil) rest)
        (match (read_expr (Cons c rest))
          (REErr RIErr)
-         ((REOk head rest2)
-          (match (read_items rest2)
-            (RIErr RIErr)
-            ((RIOk tail rest3) (RIOk (Cons head tail) rest3)))))))))
+         ((REOk head rest2) (read_items_go rest2 (Cons head acc))))))))
+
+(fn read_items ((cs0 (List Int))) RItems (read_items_go cs0 Nil))
 
 ;; Read a string body (the opening '"' already consumed). `acc` holds the
 ;; decoded characters in reverse.
@@ -189,17 +199,23 @@
 ;; LoadCtx so the de Bruijn indices match the Rust loader exactly.
 
 ;; "abc" → (Cons 97 (Cons 98 (Cons 99 Nil))) — the String≡(List Int) sugar.
-(fn str_sugar ((cs (List Int))) Expr
-  (match cs
-    (Nil (Ctor (quote Nil) Nil))
-    ((Cons c rest)
-     (Ctor (quote Cons) (Cons (IntLit c) (Cons (str_sugar rest) Nil))))))
+;; Exactly term.shard's accumulator-style conversion.
+(fn str_sugar ((cs (List Int))) Expr (intlist_to_expr cs))
 
-;; (list E1 E2 …) → (Cons E1 (Cons E2 … Nil)).
+;; (list E1 E2 …) → (Cons E1 (Cons E2 … Nil)). Accumulator style: reverse,
+;; then fold the object list innermost-first — every call a tail call.
+(fn rev_expr_l ((xs (List Expr)) (acc (List Expr))) (List Expr)
+  (match xs
+    (Nil acc)
+    ((Cons h t) (rev_expr_l t (Cons h acc)))))
+
+(fn list_sugar_go ((res (List Expr)) (acc Expr)) Expr
+  (match res
+    (Nil acc)
+    ((Cons h t) (list_sugar_go t (Ctor (quote Cons) (Cons h (Cons acc Nil)))))))
+
 (fn list_sugar ((es (List Expr))) Expr
-  (match es
-    (Nil (Ctor (quote Nil) Nil))
-    ((Cons h t) (Ctor (quote Cons) (Cons h (Cons (list_sugar t) Nil))))))
+  (list_sugar_go (rev_expr_l es Nil) (Ctor (quote Nil) Nil)))
 
 ;; Index of `x` in the scope (0 = front = innermost), or None.
 (fn find_idx ((x Symbol) (xs (List Symbol)) (k Int)) (Option Int)
@@ -456,17 +472,17 @@
 ;; (kernel stdlib) so a file can use Cons/Some/… without redeclaring them.
 ;; ===========================================================================
 
-;; Read every top-level s-expression in the source.
-(fn read_all ((src (List Int))) (Option (List SExpr))
+;; Read every top-level s-expression in the source. Accumulator style — the
+;; host stack must not grow with the number of toplevel forms.
+(fn read_all_go ((src (List Int)) (acc (List SExpr))) (Option (List SExpr))
   (match (skip_ws src)
-    (Nil (Some Nil))
+    (Nil (Some (rev_sexpr acc Nil)))
     ((Cons c rest0)
      (match (read_expr (Cons c rest0))
        (REErr None)
-       ((REOk s rest)
-        (match (read_all rest)
-          (None None)
-          ((Some ss) (Some (Cons s ss)))))))))
+       ((REOk s rest) (read_all_go rest (Cons s acc)))))))
+
+(fn read_all ((src (List Int))) (Option (List SExpr)) (read_all_go src Nil))
 
 ;; ---- types ----
 (fn parse_type ((s SExpr) (tparams (List Symbol))) (Option Type)
