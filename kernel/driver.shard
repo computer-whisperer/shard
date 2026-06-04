@@ -30,22 +30,24 @@
 (import "desugar.shard")
 (import "reader.shard")
 (import "trace.shard")
-(import "proof_reader.shard")               ; native proof-DSL → Goal/Proof
+(import "proof_reader.shard")  ; native proof-DSL → Goal/Proof
 
 ;; The ctor + type-name sets a proof-DSL claim is parsed against. ctors lets
 ;; `elaborate` tell a value constructor from an FVar in an object snippet;
 ;; type_names lets the goal reader tell a concrete 0-ary type from a type
 ;; variable. Int and Symbol are primitive type constructors with no TypeDef, so
 ;; they're prepended explicitly.
-(fn module_ctors ((m Module)) (List Symbol)
-  (typedef_ctors (module_typedefs m)))
+(fn module_ctors ((m Module)) (List Symbol) (typedef_ctors (module_typedefs m)))
 (fn module_type_names ((m Module)) (List Symbol)
   (Cons (quote Int) (Cons (quote Symbol) (typedef_names (module_typedefs m)))))
 
 (fn lift_sequent ((g Goal)) Sequent
-  (match g ((Goal params premises eq) (Sequent params Nil premises eq))))
+  (match g
+    ((Goal params premises eq) (Sequent params Nil premises eq))))
 
-(fn goal_params ((g Goal)) (List Param) (match g ((Goal ps prems eq) ps)))
+(fn goal_params ((g Goal)) (List Param)
+  (match g
+    ((Goal ps prems eq) ps)))
 
 ;; ===========================================================================
 ;; Production entry: per-claim outcomes in source order. This is the loop the
@@ -60,10 +62,10 @@
 ;; empty (Nil) when this claim isn't the trace target. The Rust harness prints
 ;; the block (if any) before the PASS/FAIL line.
 (type ClaimOutcome
-  (COPass  Symbol (List Int))                   ; name, trace-block
-  (COFail  Symbol (List Int) (List Int))        ; name, diagnostic detail, trace-block
-  (COAxiom Symbol)                              ; an axiom admitted without proof
-  (COBin   Symbol Int Int))                     ; a bin acceptance summary: name, required, met
+  (COPass Symbol (List Int))  ; name, trace-block
+  (COFail Symbol (List Int) (List Int))  ; name, diagnostic detail, trace-block
+  (COAxiom Symbol)  ; an axiom admitted without proof
+  (COBin Symbol Int Int))  ; a bin acceptance summary: name, required, met
 
 ;; theory threaded + PENDING requirements (name→goal, seeded by `requirement`,
 ;; consumed by `fulfills`) + outcomes accumulated in REVERSE (caller reverses).
@@ -78,13 +80,14 @@
   (match pend
     (Nil None)
     ((Cons (PendReq nm g) rest)
-      (if (sym_eq nm name) (Some g) (lookup_req name rest)))))
+     (if (sym_eq nm name) (Some g) (lookup_req name rest)))))
 
 ;; Does `--trace target` want this claim traced? ('all matches everything.)
 (fn want_trace ((name Symbol) (target Symbol)) Bool
   (if (sym_eq target (quote all)) True (sym_eq name target)))
 
-(fn rev_outcomes ((xs (List ClaimOutcome)) (acc (List ClaimOutcome))) (List ClaimOutcome)
+(fn rev_outcomes ((xs (List ClaimOutcome)) (acc (List ClaimOutcome)))
+  (List ClaimOutcome)
   (match xs
     (Nil acc)
     ((Cons h t) (rev_outcomes t (Cons h acc)))))
@@ -93,7 +96,9 @@
 ;; accumulating outcomes. A claim that passes is admitted as (Proven …); an
 ;; axiom is admitted as (Axiom …); both with the goal closed for citation.
 ;; the `--trace` block for claim `c` if it's the target, else Nil.
-(fn claim_trace ((m Module) (th Theory) (g Goal) (p Proof) (name Symbol) (target Symbol)) (List Int)
+(fn claim_trace
+  ((m Module) (th Theory) (g Goal) (p Proof) (name Symbol) (target Symbol))
+  (List Int)
   (if (want_trace name target) (trace_block m th (lift_sequent g) p name) Nil))
 
 ;; FOCUS MODE (dev aid). When `focus` is a specific claim name (not the
@@ -106,101 +111,271 @@
 ;; iterating on a single proof. It is intentionally UNSOUND (it admits the
 ;; skipped proofs); the real validation runs with focus = __all__.
 (fn focus_skip ((focus Symbol) (name Symbol)) Bool
-  (if (sym_eq focus (quote __all__)) False
-  (if (sym_eq focus name)           False
-                                    True)))
+  (if (sym_eq focus (quote __all__)) False (if (sym_eq focus name) False True)))
 
-(fn run_decls ((m Module) (st RunState) (ds (List Decl)) (target Symbol) (focus Symbol)) RunState
+(fn run_decls
+  ((m Module) (st RunState) (ds (List Decl)) (target Symbol) (focus Symbol))
+  RunState
   (match ds
     (Nil st)
     ((Cons d rest)
-      (match st
-        ((RunState th pend acc)
-          (match d
-            ;; (axiom NAME (goal …)): parse goal to native, admit without proof.
-            ((DAxiom a)
-              (match (parse_goal (ax_goal a) (module_ctors m) (module_type_names m))
-                (None (run_decls m (RunState th pend (Cons (COFail (ax_name a) "could not parse axiom goal (proof DSL)" Nil) acc)) rest target focus))
-                ((Some g)
-                  (run_decls m
-                    (RunState (TheoryCons (Axiom (ax_name a) (close_goal_for_storage g)) th)
-                              pend
-                              (Cons (COAxiom (ax_name a)) acc))
-                    rest target focus))))
-            ;; (claim NAME (goal …) PROOF): parse goal and proof STRAIGHT to
-            ;; native via proof_reader, then resolve named hyps to positional
-            ;; with desugar_proof_named, and check.
-            ((DClaim nc)
-              (match (parse_goal (claim_goal nc) (module_ctors m) (module_type_names m))
-                (None (run_decls m (RunState th pend (Cons (COFail (claim_name nc) "could not parse goal (proof DSL)" Nil) acc)) rest target focus))
-                ((Some g)
-                  (if (focus_skip focus (claim_name nc))
-                      ;; not the focus claim — admit its goal, skip the proof.
-                      (run_decls m (RunState (TheoryCons (Proven (claim_name nc) (close_goal_for_storage g)) th) pend acc) rest target focus)
-                  (match (parse_proof (claim_proof nc) (module_ctors m) (module_type_names m))
-                    (None (run_decls m (RunState th pend (Cons (COFail (claim_name nc) "could not parse proof (proof DSL)" Nil) acc)) rest target focus))
-                    ((Some p0)
-                      (match (desugar_proof_named m (goal_params g) Nil p0)
-                        (p
-                      (if (check_sequent m th (lift_sequent g) p)
-                          (run_decls m
-                            (RunState (TheoryCons (Proven (claim_name nc) (close_goal_for_storage g)) th)
-                                      pend
-                                      (Cons (COPass (claim_name nc) (claim_trace m th g p (claim_name nc) target)) acc))
-                            rest target focus)
-                          (run_decls m
-                            (RunState th pend
-                                      (Cons (COFail (claim_name nc)
-                                                    (failure_detail m th (lift_sequent g) p)
-                                                    (claim_trace m th g p (claim_name nc) target)) acc))
-                            rest target focus))))))))))
-            ;; (requirement NAME (goal …)): parse the goal to native NOW
-            ;; (validating it at the contract), seed it as a pending obligation.
-            ((DReq r)
-              (match (parse_goal (req_goal r) (module_ctors m) (module_type_names m))
-                (None (run_decls m (RunState th pend (Cons (COFail (req_name r) "could not parse requirement goal (proof DSL)" Nil) acc)) rest target focus))
-                ((Some g)
-                  (run_decls m (RunState th (Cons (PendReq (req_name r) g) pend) acc) rest target focus))))
-            ;; (fulfills NAME PROOF): look the goal up from the requirement (the
-            ;; single source of truth — never restated here), parse the proof to
-            ;; native, resolve named hyps (desugar_proof_named), check it.
-            ((DFul fu)
-              (match (lookup_req (ful_name fu) pend)
-                (None (run_decls m (RunState th pend (Cons (COFail (ful_name fu) "no requirement with this name in scope (is the contract imported?)" Nil) acc)) rest target focus))
-                ((Some g)
-                  (if (focus_skip focus (ful_name fu))
-                      ;; not the focus claim — admit the requirement's goal, skip the proof.
-                      (run_decls m (RunState (TheoryCons (Proven (ful_name fu) (close_goal_for_storage g)) th) pend acc) rest target focus)
-                  (match (parse_proof (ful_proof fu) (module_ctors m) (module_type_names m))
-                    (None (run_decls m (RunState th pend (Cons (COFail (ful_name fu) "could not parse proof (proof DSL)" Nil) acc)) rest target focus))
-                    ((Some p0)
-                      (match (desugar_proof_named m (goal_params g) Nil p0)
-                        (p
-                      (if (check_sequent m th (lift_sequent g) p)
-                          (run_decls m
-                            (RunState (TheoryCons (Proven (ful_name fu) (close_goal_for_storage g)) th)
-                                      pend
-                                      (Cons (COPass (ful_name fu) (claim_trace m th g p (ful_name fu) target)) acc))
-                            rest target focus)
-                          (run_decls m
-                            (RunState th pend
-                                      (Cons (COFail (ful_name fu)
-                                                    (failure_detail m th (lift_sequent g) p)
-                                                    (claim_trace m th g p (ful_name fu) target)) acc))
-                            rest target focus))))))))))))))))
+     (match st
+       ((RunState th pend acc)
+        (match d
+          ;; (axiom NAME (goal …)): parse goal to native, admit without proof.
+          ((DAxiom a)
+           (match
+             (parse_goal (ax_goal a) (module_ctors m) (module_type_names m))
+             (None
+               (run_decls
+                 m
+                 (RunState
+                   th
+                   pend
+                   (Cons
+                     (COFail
+                       (ax_name a)
+                       "could not parse axiom goal (proof DSL)"
+                       Nil)
+                     acc))
+                 rest
+                 target
+                 focus))
+             ((Some g)
+              (run_decls
+                m
+                (RunState
+                  (TheoryCons (Axiom (ax_name a) (close_goal_for_storage g)) th)
+                  pend
+                  (Cons (COAxiom (ax_name a)) acc))
+                rest
+                target
+                focus))))
+          ;; (claim NAME (goal …) PROOF): parse goal and proof STRAIGHT to
+          ;; native via proof_reader, then resolve named hyps to positional
+          ;; with desugar_proof_named, and check.
+          ((DClaim nc)
+           (match
+             (parse_goal (claim_goal nc) (module_ctors m) (module_type_names m))
+             (None
+               (run_decls
+                 m
+                 (RunState
+                   th
+                   pend
+                   (Cons
+                     (COFail
+                       (claim_name nc)
+                       "could not parse goal (proof DSL)"
+                       Nil)
+                     acc))
+                 rest
+                 target
+                 focus))
+             ((Some g)
+              (if (focus_skip focus (claim_name nc))
+                ;; not the focus claim — admit its goal, skip the proof.
+                (run_decls
+                  m
+                  (RunState
+                    (TheoryCons
+                      (Proven (claim_name nc) (close_goal_for_storage g))
+                      th)
+                    pend
+                    acc)
+                  rest
+                  target
+                  focus)
+                (match
+                  (parse_proof
+                    (claim_proof nc)
+                    (module_ctors m)
+                    (module_type_names m))
+                  (None
+                    (run_decls
+                      m
+                      (RunState
+                        th
+                        pend
+                        (Cons
+                          (COFail
+                            (claim_name nc)
+                            "could not parse proof (proof DSL)"
+                            Nil)
+                          acc))
+                      rest
+                      target
+                      focus))
+                  ((Some p0)
+                   (match (desugar_proof_named m (goal_params g) Nil p0)
+                     (p
+                       (if (check_sequent m th (lift_sequent g) p)
+                         (run_decls
+                           m
+                           (RunState
+                             (TheoryCons
+                               (Proven
+                                 (claim_name nc)
+                                 (close_goal_for_storage g))
+                               th)
+                             pend
+                             (Cons
+                               (COPass
+                                 (claim_name nc)
+                                 (claim_trace m th g p (claim_name nc) target))
+                               acc))
+                           rest
+                           target
+                           focus)
+                         (run_decls
+                           m
+                           (RunState
+                             th
+                             pend
+                             (Cons
+                               (COFail
+                                 (claim_name nc)
+                                 (failure_detail m th (lift_sequent g) p)
+                                 (claim_trace m th g p (claim_name nc) target))
+                               acc))
+                           rest
+                           target
+                           focus))))))))))
+          ;; (requirement NAME (goal …)): parse the goal to native NOW
+          ;; (validating it at the contract), seed it as a pending obligation.
+          ((DReq r)
+           (match
+             (parse_goal (req_goal r) (module_ctors m) (module_type_names m))
+             (None
+               (run_decls
+                 m
+                 (RunState
+                   th
+                   pend
+                   (Cons
+                     (COFail
+                       (req_name r)
+                       "could not parse requirement goal (proof DSL)"
+                       Nil)
+                     acc))
+                 rest
+                 target
+                 focus))
+             ((Some g)
+              (run_decls
+                m
+                (RunState th (Cons (PendReq (req_name r) g) pend) acc)
+                rest
+                target
+                focus))))
+          ;; (fulfills NAME PROOF): look the goal up from the requirement (the
+          ;; single source of truth — never restated here), parse the proof to
+          ;; native, resolve named hyps (desugar_proof_named), check it.
+          ((DFul fu)
+           (match (lookup_req (ful_name fu) pend)
+             (None
+               (run_decls
+                 m
+                 (RunState
+                   th
+                   pend
+                   (Cons
+                     (COFail
+                       (ful_name fu)
+                       "no requirement with this name in scope (is the contract imported?)"
+                       Nil)
+                     acc))
+                 rest
+                 target
+                 focus))
+             ((Some g)
+              (if (focus_skip focus (ful_name fu))
+                ;; not the focus claim — admit the requirement's goal, skip the proof.
+                (run_decls
+                  m
+                  (RunState
+                    (TheoryCons
+                      (Proven (ful_name fu) (close_goal_for_storage g))
+                      th)
+                    pend
+                    acc)
+                  rest
+                  target
+                  focus)
+                (match
+                  (parse_proof
+                    (ful_proof fu)
+                    (module_ctors m)
+                    (module_type_names m))
+                  (None
+                    (run_decls
+                      m
+                      (RunState
+                        th
+                        pend
+                        (Cons
+                          (COFail
+                            (ful_name fu)
+                            "could not parse proof (proof DSL)"
+                            Nil)
+                          acc))
+                      rest
+                      target
+                      focus))
+                  ((Some p0)
+                   (match (desugar_proof_named m (goal_params g) Nil p0)
+                     (p
+                       (if (check_sequent m th (lift_sequent g) p)
+                         (run_decls
+                           m
+                           (RunState
+                             (TheoryCons
+                               (Proven (ful_name fu) (close_goal_for_storage g))
+                               th)
+                             pend
+                             (Cons
+                               (COPass
+                                 (ful_name fu)
+                                 (claim_trace m th g p (ful_name fu) target))
+                               acc))
+                           rest
+                           target
+                           focus)
+                         (run_decls
+                           m
+                           (RunState
+                             th
+                             pend
+                             (Cons
+                               (COFail
+                                 (ful_name fu)
+                                 (failure_detail m th (lift_sequent g) p)
+                                 (claim_trace m th g p (ful_name fu) target))
+                               acc))
+                           rest
+                           target
+                           focus))))))))))))))))
 
 ;; Run a whole file list (imports first, then targets), threading theory.
 ;; An unparseable file is skipped (the Rust harness pre-validates parsing).
 ;; Each source is tagged `(Pair granted src)`: `granted` marks a dependency
 ;; module's INTERFACE (its requirements are admitted as axioms, not re-imposed
 ;; as obligations — see collect_decls, reader.shard).
-(fn run_srcs ((m Module) (srcs (List (Pair Bool (List Int)))) (ctors (List Symbol)) (st RunState) (target Symbol) (focus Symbol)) RunState
+(fn run_srcs
+  ((m Module)
+   (srcs (List (Pair Bool (List Int))))
+   (ctors (List Symbol))
+   (st RunState)
+   (target Symbol)
+   (focus Symbol))
+  RunState
   (match srcs
     (Nil st)
     ((Cons (Pair granted src) rest)
-      (match (parse_decls src ctors granted)
-        (None (run_srcs m rest ctors st target focus))
-        ((Some ds) (run_srcs m rest ctors (run_decls m st ds target focus) target focus))))))
+     (match (parse_decls src ctors granted)
+       (None (run_srcs m rest ctors st target focus))
+       ((Some ds)
+        (run_srcs m rest ctors (run_decls m st ds target focus) target focus))))))
 
 ;; ---- bin acceptance reporting ---------------------------------------------
 ;; A `(bin …)` groups requirement names into an artifact's acceptance contract.
@@ -211,31 +386,44 @@
 ;; closing the "pending is silent" gap. Bins are scanned from the raw forms
 ;; (they never enter the decl/theory stream).
 (fn req_met ((name Symbol) (th Theory)) Bool
-  (match (lookup_lemma name th) (None False) ((Some _) True)))
+  (match (lookup_lemma name th)
+    (None False)
+    ((Some _) True)))
 
 (fn count_met ((names (List Symbol)) (th Theory)) Int
-  (match names (Nil 0) ((Cons n rest) (+ (if (req_met n th) 1 0) (count_met rest th)))))
+  (match names
+    (Nil 0)
+    ((Cons n rest) (+ (if (req_met n th) 1 0) (count_met rest th)))))
 
 (fn len_syms ((names (List Symbol))) Int
-  (match names (Nil 0) ((Cons _ rest) (+ 1 (len_syms rest)))))
+  (match names
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (len_syms rest)))))
 
 (fn unmet_fails ((names (List Symbol)) (th Theory)) (List ClaimOutcome)
   (match names
     (Nil Nil)
     ((Cons n rest)
-      (if (req_met n th)
-          (unmet_fails rest th)
-          (Cons (COFail n "UNMET: listed in a (bin requires) but never fulfilled" Nil)
-                (unmet_fails rest th))))))
+     (if (req_met n th) (unmet_fails rest th)
+     (Cons
+       (COFail n "UNMET: listed in a (bin requires) but never fulfilled" Nil)
+       (unmet_fails rest th))))))
 
-(fn oc_concat ((a (List ClaimOutcome)) (b (List ClaimOutcome))) (List ClaimOutcome)
-  (match a (Nil b) ((Cons h t) (Cons h (oc_concat t b)))))
+(fn oc_concat ((a (List ClaimOutcome)) (b (List ClaimOutcome)))
+  (List ClaimOutcome)
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (oc_concat t b)))))
 
 (fn sym_in ((x Symbol) (xs (List Symbol))) Bool
-  (match xs (Nil False) ((Cons h t) (if (sym_eq x h) True (sym_in x t)))))
+  (match xs
+    (Nil False)
+    ((Cons h t) (if (sym_eq x h) True (sym_in x t)))))
 
 (fn sym_concat ((a (List Symbol)) (b (List Symbol))) (List Symbol)
-  (match a (Nil b) ((Cons h t) (Cons h (sym_concat t b)))))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (sym_concat t b)))))
 
 ;; ---- entry: the named fn must exist (with a body) and be (World) -> World ---
 (fn is_world ((t Type)) Bool (type_eq t (TCon (quote World) Nil)))
@@ -243,91 +431,114 @@
 (fn entry_ok ((fd FnDef)) Bool
   (match fd
     ((FnDef _ params ret _)
-      (if (is_world ret)
-          (match params ((Cons p Nil) (is_world p)) (_ False))
-          False))))
+     (if (is_world ret)
+       (match params
+         ((Cons p Nil) (is_world p))
+         (_ False))
+       False))))
 
 (fn entry_check ((entry Symbol) (m Module)) (List ClaimOutcome)
   (match m
     ((Module _ _ _ trie)
-      (match (trie_lookup entry trie)
-        (None (Cons (COFail entry "entry: no implemented fn of this name (bodyless sig only?)" Nil) Nil))
-        ((Some fd)
-          (if (entry_ok fd) Nil
-              (Cons (COFail entry "entry: must have type (World) -> World" Nil) Nil)))))))
+     (match (trie_lookup entry trie)
+       (None
+         (Cons
+           (COFail
+             entry
+             "entry: no implemented fn of this name (bodyless sig only?)"
+             Nil)
+           Nil))
+       ((Some fd)
+        (if (entry_ok fd) Nil
+        (Cons (COFail entry "entry: must have type (World) -> World" Nil) Nil)))))))
 
 ;; ---- trusts: must EQUAL the module's own (axiom) decls (its real TCB) -------
 ;; Every module-declared axiom must be listed (no hidden trust); every listed
 ;; name must be one of them (no phantom / proven-listed-as-trusted).
-(fn missing_trust ((own (List Symbol)) (trusts (List Symbol))) (List ClaimOutcome)
+(fn missing_trust ((own (List Symbol)) (trusts (List Symbol)))
+  (List ClaimOutcome)
   (match own
     (Nil Nil)
     ((Cons a rest)
-      (if (sym_in a trusts)
-          (missing_trust rest trusts)
-          (Cons (COFail a "untrusted: a module (axiom) is not listed in (bin trusts)" Nil)
-                (missing_trust rest trusts))))))
+     (if (sym_in a trusts) (missing_trust rest trusts)
+     (Cons
+       (COFail
+         a
+         "untrusted: a module (axiom) is not listed in (bin trusts)"
+         Nil)
+       (missing_trust rest trusts))))))
 
-(fn phantom_trust ((trusts (List Symbol)) (own (List Symbol))) (List ClaimOutcome)
+(fn phantom_trust ((trusts (List Symbol)) (own (List Symbol)))
+  (List ClaimOutcome)
   (match trusts
     (Nil Nil)
     ((Cons t rest)
-      (if (sym_in t own)
-          (phantom_trust rest own)
-          (Cons (COFail t "trusts: not a module-declared axiom (only own (axiom)s are TCB)" Nil)
-                (phantom_trust rest own))))))
+     (if (sym_in t own) (phantom_trust rest own)
+     (Cons
+       (COFail
+         t
+         "trusts: not a module-declared axiom (only own (axiom)s are TCB)"
+         Nil)
+       (phantom_trust rest own))))))
 
-(fn trusts_check ((trusts (List Symbol)) (own (List Symbol))) (List ClaimOutcome)
+(fn trusts_check ((trusts (List Symbol)) (own (List Symbol)))
+  (List ClaimOutcome)
   (oc_concat (missing_trust own trusts) (phantom_trust trusts own)))
 
 ;; ---- externs: must EQUAL the module's declared extern surface --------------
 ;; Real externs come from `(extern …)` forms — NOT the Module's ExternDef list,
 ;; which also holds every `(sig fn …)` signature (both parse to ExternDef).
-(fn missing_extern ((decl (List Symbol)) (listed (List Symbol))) (List ClaimOutcome)
+(fn missing_extern ((decl (List Symbol)) (listed (List Symbol)))
+  (List ClaimOutcome)
   (match decl
     (Nil Nil)
     ((Cons e rest)
-      (if (sym_in e listed)
-          (missing_extern rest listed)
-          (Cons (COFail e "boundary: a declared extern is not listed in (bin externs)" Nil)
-                (missing_extern rest listed))))))
+     (if (sym_in e listed) (missing_extern rest listed)
+     (Cons
+       (COFail
+         e
+         "boundary: a declared extern is not listed in (bin externs)"
+         Nil)
+       (missing_extern rest listed))))))
 
-(fn phantom_extern ((listed (List Symbol)) (decl (List Symbol))) (List ClaimOutcome)
+(fn phantom_extern ((listed (List Symbol)) (decl (List Symbol)))
+  (List ClaimOutcome)
   (match listed
     (Nil Nil)
     ((Cons e rest)
-      (if (sym_in e decl)
-          (phantom_extern rest decl)
-          (Cons (COFail e "externs: not a declared extern of this module" Nil)
-                (phantom_extern rest decl))))))
+     (if (sym_in e decl) (phantom_extern rest decl)
+     (Cons
+       (COFail e "externs: not a declared extern of this module" Nil)
+       (phantom_extern rest decl))))))
 
-(fn externs_check ((listed (List Symbol)) (decl (List Symbol))) (List ClaimOutcome)
+(fn externs_check ((listed (List Symbol)) (decl (List Symbol)))
+  (List ClaimOutcome)
   (oc_concat (missing_extern decl listed) (phantom_extern listed decl)))
 
 ;; the module's OWN extern decls = `(extern …)` in its ungranted sources.
 (fn extern_decl_name ((f SExpr)) (Option Symbol)
   (match f
     ((SList (Cons (SSym h) (Cons (SSym name) _)))
-      (if (sym_eq h (quote extern)) (Some name) None))
+     (if (sym_eq h (quote extern)) (Some name) None))
     (_ None)))
 
 (fn extern_names_of_forms ((forms (List SExpr))) (List Symbol)
   (match forms
     (Nil Nil)
     ((Cons f rest)
-      (match (extern_decl_name f)
-        (None (extern_names_of_forms rest))
-        ((Some n) (Cons n (extern_names_of_forms rest)))))))
+     (match (extern_decl_name f)
+       (None (extern_names_of_forms rest))
+       ((Some n) (Cons n (extern_names_of_forms rest)))))))
 
 (fn own_externs_of_srcs ((srcs (List (Pair Bool (List Int))))) (List Symbol)
   (match srcs
     (Nil Nil)
     ((Cons (Pair granted src) rest)
-      (if granted
-          (own_externs_of_srcs rest)
-          (match (read_all src)
-            (None (own_externs_of_srcs rest))
-            ((Some forms) (sym_concat (extern_names_of_forms forms) (own_externs_of_srcs rest))))))))
+     (if granted (own_externs_of_srcs rest)
+     (match (read_all src)
+       (None (own_externs_of_srcs rest))
+       ((Some forms)
+        (sym_concat (extern_names_of_forms forms) (own_externs_of_srcs rest))))))))
 
 ;; the module's OWN axiom decls = `(axiom …)` in its ungranted sources (a granted
 ;; dependency interface's axioms are proven upstream, not this binary's TCB).
@@ -335,67 +546,97 @@
   (match forms
     (Nil Nil)
     ((Cons f rest)
-      (if (is_axiom_form f)
-          (match (goalonly_of_form f)
-            (None (axiom_names_of_forms rest))
-            ((Some (Pair name _)) (Cons name (axiom_names_of_forms rest))))
-          (axiom_names_of_forms rest)))))
+     (if (is_axiom_form f)
+       (match (goalonly_of_form f)
+         (None (axiom_names_of_forms rest))
+         ((Some (Pair name _)) (Cons name (axiom_names_of_forms rest))))
+       (axiom_names_of_forms rest)))))
 
 (fn own_axioms_of_srcs ((srcs (List (Pair Bool (List Int))))) (List Symbol)
   (match srcs
     (Nil Nil)
     ((Cons (Pair granted src) rest)
-      (if granted
-          (own_axioms_of_srcs rest)
-          (match (read_all src)
-            (None (own_axioms_of_srcs rest))
-            ((Some forms) (sym_concat (axiom_names_of_forms forms) (own_axioms_of_srcs rest))))))))
+     (if granted (own_axioms_of_srcs rest)
+     (match (read_all src)
+       (None (own_axioms_of_srcs rest))
+       ((Some forms)
+        (sym_concat (axiom_names_of_forms forms) (own_axioms_of_srcs rest))))))))
 
-(fn bin_report ((b Bin) (th Theory) (m Module) (own_ax (List Symbol)) (own_ext (List Symbol))) (List ClaimOutcome)
+(fn bin_report
+  ((b Bin)
+   (th Theory)
+   (m Module)
+   (own_ax (List Symbol))
+   (own_ext (List Symbol)))
+  (List ClaimOutcome)
   (match b
     ((Bin name entry externs trusts requires)
-      (oc_concat (Cons (COBin name (len_syms requires) (count_met requires th)) Nil)
-        (oc_concat (entry_check entry m)
-          (oc_concat (trusts_check trusts own_ax)
-            (oc_concat (externs_check externs own_ext)
-              (unmet_fails requires th))))))))
+     (oc_concat
+       (Cons (COBin name (len_syms requires) (count_met requires th)) Nil)
+       (oc_concat
+         (entry_check entry m)
+         (oc_concat
+           (trusts_check trusts own_ax)
+           (oc_concat (externs_check externs own_ext) (unmet_fails requires th))))))))
 
-(fn bin_reports ((bins (List Bin)) (th Theory) (m Module) (own_ax (List Symbol)) (own_ext (List Symbol))) (List ClaimOutcome)
+(fn bin_reports
+  ((bins (List Bin))
+   (th Theory)
+   (m Module)
+   (own_ax (List Symbol))
+   (own_ext (List Symbol)))
+  (List ClaimOutcome)
   (match bins
     (Nil Nil)
-    ((Cons b rest) (oc_concat (bin_report b th m own_ax own_ext) (bin_reports rest th m own_ax own_ext)))))
+    ((Cons b rest)
+     (oc_concat
+       (bin_report b th m own_ax own_ext)
+       (bin_reports rest th m own_ax own_ext)))))
 
 (fn bin_concat ((a (List Bin)) (b (List Bin))) (List Bin)
-  (match a (Nil b) ((Cons h t) (Cons h (bin_concat t b)))))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (bin_concat t b)))))
 
 (fn bins_of_forms ((forms (List SExpr))) (List Bin)
   (match forms
     (Nil Nil)
     ((Cons f rest)
-      (if (is_bin_form f)
-          (match (bin_of_form f)
-            (None (bins_of_forms rest))
-            ((Some b) (Cons b (bins_of_forms rest))))
-          (bins_of_forms rest)))))
+     (if (is_bin_form f)
+       (match (bin_of_form f)
+         (None (bins_of_forms rest))
+         ((Some b) (Cons b (bins_of_forms rest))))
+       (bins_of_forms rest)))))
 
 (fn bins_of_srcs ((srcs (List (Pair Bool (List Int))))) (List Bin)
   (match srcs
     (Nil Nil)
     ((Cons (Pair _ src) rest)
-      (match (read_all src)
-        (None (bins_of_srcs rest))
-        ((Some forms) (bin_concat (bins_of_forms forms) (bins_of_srcs rest)))))))
+     (match (read_all src)
+       (None (bins_of_srcs rest))
+       ((Some forms) (bin_concat (bins_of_forms forms) (bins_of_srcs rest)))))))
 
 ;; Production entry point: returns the per-claim/axiom outcomes (source order)
 ;; for the whole file list, checked against m from the empty theory, followed
 ;; by each bin's acceptance report. `target` is the `--trace` claim name ('all
 ;; for every claim, or a non-matching sentinel for no tracing).
-(fn check_production ((m Module) (srcs (List (Pair Bool (List Int)))) (ctors (List Symbol)) (target Symbol) (focus Symbol)) (List ClaimOutcome)
+(fn check_production
+  ((m Module)
+   (srcs (List (Pair Bool (List Int))))
+   (ctors (List Symbol))
+   (target Symbol)
+   (focus Symbol))
+  (List ClaimOutcome)
   (match (run_srcs m srcs ctors (RunState TheoryEmpty Nil Nil) target focus)
     ((RunState th pend acc)
-      (oc_concat (rev_outcomes acc Nil)
-                 (bin_reports (bins_of_srcs srcs) th m
-                              (own_axioms_of_srcs srcs) (own_externs_of_srcs srcs))))))
+     (oc_concat
+       (rev_outcomes acc Nil)
+       (bin_reports
+         (bins_of_srcs srcs)
+         th
+         m
+         (own_axioms_of_srcs srcs)
+         (own_externs_of_srcs srcs))))))
 
 ;; build_module only reads types/fns/externs (it skips claim/requirement/…), so
 ;; it neither needs nor sees the granted tag — strip to raw bytes for it.
@@ -410,8 +651,14 @@
 ;; ctor names). The full ctor set for claim parsing is then derived from M
 ;; itself. This is the default `check` entry — M is no longer built by the Rust
 ;; loader; load.rs only parses the kernel + toolchain into the VM.
-(fn check_production_src ((seed Module) (base_ctors (List Symbol)) (srcs (List (Pair Bool (List Int)))) (target Symbol) (focus Symbol)) (List ClaimOutcome)
+(fn check_production_src
+  ((seed Module)
+   (base_ctors (List Symbol))
+   (srcs (List (Pair Bool (List Int))))
+   (target Symbol)
+   (focus Symbol))
+  (List ClaimOutcome)
   (match (build_module_d (strip_granted srcs) seed base_ctors 1)
     ((BMFail diag) (Cons (COFail (quote __module__) diag Nil) Nil))
     ((BMOk m)
-      (check_production m srcs (typedef_ctors (module_typedefs m)) target focus))))
+     (check_production m srcs (typedef_ctors (module_typedefs m)) target focus))))

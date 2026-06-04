@@ -13,24 +13,23 @@
 (import "term.shard")
 
 (type Type
-  (TCon Symbol (List Type))         ; type application: Nat, (List Nat), (Map K V)
-  (TVar Symbol))                    ; type variable (erased at runtime in narrow)
+  (TCon Symbol (List Type))  ; type application: Nat, (List Nat), (Map K V)
+  (TVar Symbol))  ; type variable (erased at runtime in narrow)
 
-(type CtorDef
-  (CtorDef Symbol (List Type)))     ; ctor name, field types
+(type CtorDef (CtorDef Symbol (List Type)))  ; ctor name, field types
 
 (type TypeDef
   (TypeDef
-    Symbol                          ; type name
-    (List Symbol)                   ; type parameters (e.g., 'T for List)
-    (List CtorDef)))                ; constructors
+    Symbol  ; type name
+    (List Symbol)  ; type parameters (e.g., 'T for List)
+    (List CtorDef)))  ; constructors
 
 (type FnDef
   (FnDef
-    Symbol                          ; function name
-    (List Type)                     ; parameter types (length = arity)
-    Type                            ; return type
-    Expr))                          ; body — BVars 0..arity-1 are parameters
+    Symbol  ; function name
+    (List Type)  ; parameter types (length = arity)
+    Type  ; return type
+    Expr))  ; body — BVars 0..arity-1 are parameters
 
 ;; Extern function: signature only, no body. Opaque to the reducer;
 ;; calls remain stuck (same protocol as native primitives), and the
@@ -38,9 +37,9 @@
 ;; implementation. See docs/BOUNDARIES.md.
 (type ExternDef
   (ExternDef
-    Symbol                          ; function name
-    (List Type)                     ; parameter types
-    Type))                          ; return type
+    Symbol  ; function name
+    (List Type)  ; parameter types
+    Type))  ; return type
 
 ;; Function-dispatch index: a character trie over function names, mapping a
 ;; name (its `chars_of_sym`) to its FnDef. Built once when a module is parsed/
@@ -49,15 +48,15 @@
 ;; whose name ENDS here (if any) plus child edges keyed by the next char code.
 (type FnTrie
   (FnTrie
-    (Option FnDef)                  ; fn whose name ends at this node
-    (List (Pair Int FnTrie))))      ; children, keyed by next char code
+    (Option FnDef)  ; fn whose name ends at this node
+    (List (Pair Int FnTrie))))  ; children, keyed by next char code
 
 (type Module
   (Module
     (List TypeDef)
     (List FnDef)
-    (List ExternDef)                ; extern signatures (may be Nil)
-    FnTrie))                        ; fn-dispatch index over `fns` (built at parse/merge)
+    (List ExternDef)  ; extern signatures (may be Nil)
+    FnTrie))  ; fn-dispatch index over `fns` (built at parse/merge)
 
 ;; ---------------------------------------------------------------------------
 ;; FnTrie: build / insert / lookup. Callees precede callers (no forward refs).
@@ -67,28 +66,27 @@
 (fn trie_child ((c Int) (cs (List (Pair Int FnTrie)))) (Option FnTrie)
   (match cs
     (Nil None)
-    ((Cons (Pair k t) rest)
-      (if (int_eq k c) (Some t) (trie_child c rest)))))
+    ((Cons (Pair k t) rest) (if (int_eq k c) (Some t) (trie_child c rest)))))
 
 ;; replace (or append) the child keyed by `c` with `sub`.
-(fn child_set ((c Int) (sub FnTrie) (cs (List (Pair Int FnTrie)))) (List (Pair Int FnTrie))
+(fn child_set ((c Int) (sub FnTrie) (cs (List (Pair Int FnTrie))))
+  (List (Pair Int FnTrie))
   (match cs
     (Nil (Cons (Pair c sub) Nil))
     ((Cons (Pair k t) rest)
-      (if (int_eq k c)
-          (Cons (Pair c sub) rest)
-          (Cons (Pair k t) (child_set c sub rest))))))
+     (if (int_eq k c) (Cons (Pair c sub) rest)
+     (Cons (Pair k t) (child_set c sub rest))))))
 
 ;; walk the trie by the remaining chars; at the end return this node's payload.
 (fn trie_lookup_chars ((cs (List Int)) (t FnTrie)) (Option FnDef)
   (match t
     ((FnTrie here children)
-      (match cs
-        (Nil here)
-        ((Cons c rest)
-          (match (trie_child c children)
-            (None       None)
-            ((Some sub) (trie_lookup_chars rest sub))))))))
+     (match cs
+       (Nil here)
+       ((Cons c rest)
+        (match (trie_child c children)
+          (None None)
+          ((Some sub) (trie_lookup_chars rest sub))))))))
 
 ;; resolve a function name to its FnDef, O(name length). The reducer's hot path.
 (fn trie_lookup ((name Symbol) (t FnTrie)) (Option FnDef)
@@ -99,19 +97,22 @@
 (fn trie_insert_chars ((cs (List Int)) (fd FnDef) (t FnTrie)) FnTrie
   (match t
     ((FnTrie here children)
-      (match cs
-        (Nil
-          (match here
-            (None     (FnTrie (Some fd) children))
-            ((Some _) t)))
-        ((Cons c rest)
-          (let ((sub (match (trie_child c children)
-                       (None     (FnTrie None Nil))
-                       ((Some s) s))))
-            (FnTrie here (child_set c (trie_insert_chars rest fd sub) children))))))))
+     (match cs
+       (Nil
+         (match here
+           (None (FnTrie (Some fd) children))
+           ((Some _) t)))
+       ((Cons c rest)
+        (let
+          ((sub
+             (match (trie_child c children)
+               (None (FnTrie None Nil))
+               ((Some s) s))))
+          (FnTrie here (child_set c (trie_insert_chars rest fd sub) children))))))))
 
 (fn trie_insert ((fd FnDef) (t FnTrie)) FnTrie
-  (match fd ((FnDef name _ _ _) (trie_insert_chars (chars_of_sym name) fd t))))
+  (match fd
+    ((FnDef name _ _ _) (trie_insert_chars (chars_of_sym name) fd t))))
 
 (fn trie_insert_many ((fds (List FnDef)) (t FnTrie)) FnTrie
   (match fds
@@ -140,52 +141,59 @@
   (match exts
     (Nil None)
     ((Cons ed rest)
-      (match ed
-        ((ExternDef ename _ _)
-          (if (sym_eq name ename) (Some ed) (find_extern name rest)))))))
+     (match ed
+       ((ExternDef ename _ _)
+        (if (sym_eq name ename) (Some ed) (find_extern name rest)))))))
 
 (fn find_typedef ((name Symbol) (tds (List TypeDef))) (Option TypeDef)
   (match tds
     (Nil None)
     ((Cons td rest)
-      (match td
-        ((TypeDef tname _ _)
-          (if (sym_eq name tname) (Some td) (find_typedef name rest)))))))
+     (match td
+       ((TypeDef tname _ _)
+        (if (sym_eq name tname) (Some td) (find_typedef name rest)))))))
 
 ;; type_head: extract (ctor_name, args) from a TCon; None for TVar.
 (fn type_head ((t Type)) (Option (Pair Symbol (List Type)))
   (match t
     ((TCon c args) (Some (Pair c args)))
-    ((TVar _)      None)))
+    ((TVar _) None)))
 
 ;; Structural equality on Type.
 (fn type_eq ((a Type) (b Type)) Bool
   (match a
-    ((TVar xa) (match b ((TVar xb) (sym_eq xa xb)) (_ False)))
+    ((TVar xa)
+     (match b
+       ((TVar xb) (sym_eq xa xb))
+       (_ False)))
     ((TCon ca aa)
-      (match b
-        ((TCon cb ab) (if (sym_eq ca cb) (type_eq_list aa ab) False))
-        (_ False)))))
+     (match b
+       ((TCon cb ab) (if (sym_eq ca cb) (type_eq_list aa ab) False))
+       (_ False)))))
 
 (fn type_eq_list ((xs (List Type)) (ys (List Type))) Bool
   (match xs
-    (Nil (match ys (Nil True) (_ False)))
-    ((Cons x xr)
+    (Nil
       (match ys
-        (Nil False)
-        ((Cons y yr) (if (type_eq x y) (type_eq_list xr yr) False))))))
+        (Nil True)
+        (_ False)))
+    ((Cons x xr)
+     (match ys
+       (Nil False)
+       ((Cons y yr) (if (type_eq x y) (type_eq_list xr yr) False))))))
 
 ;; type_subst: substitute TVars in t per the assoc list. Used to
 ;; instantiate a TypeDef's parameters when inducting on a generic type.
 (fn type_subst ((env (List (Pair Symbol Type))) (t Type)) Type
   (match t
     ((TVar x)
-      (match (assoc_sym_type x env)
-        ((Some t2) t2)
-        (None      t)))
+     (match (assoc_sym_type x env)
+       ((Some t2) t2)
+       (None t)))
     ((TCon c args) (TCon c (type_subst_list env args)))))
 
-(fn type_subst_list ((env (List (Pair Symbol Type))) (ts (List Type))) (List Type)
+(fn type_subst_list ((env (List (Pair Symbol Type))) (ts (List Type)))
+  (List Type)
   (match ts
     (Nil Nil)
     ((Cons h t) (Cons (type_subst env h) (type_subst_list env t)))))
@@ -193,13 +201,12 @@
 (fn assoc_sym_type ((x Symbol) (env (List (Pair Symbol Type)))) (Option Type)
   (match env
     (Nil None)
-    ((Cons (Pair k v) rest)
-      (if (sym_eq x k) (Some v) (assoc_sym_type x rest)))))
+    ((Cons (Pair k v) rest) (if (sym_eq x k) (Some v) (assoc_sym_type x rest)))))
 
 (fn zip_pairs ((xs (List Symbol)) (ys (List Type))) (List (Pair Symbol Type))
   (match xs
     (Nil Nil)
     ((Cons x xrest)
-      (match ys
-        (Nil Nil)
-        ((Cons y yrest) (Cons (Pair x y) (zip_pairs xrest yrest)))))))
+     (match ys
+       (Nil Nil)
+       ((Cons y yrest) (Cons (Pair x y) (zip_pairs xrest yrest)))))))

@@ -4,9 +4,9 @@
 ;;; named, so no Induct fresh-field-name pinning). Builds toward
 ;;;   run (codes (show n) ++ "+" ++ codes (show m)) = Some (n + m).
 
-(import "../../kernel/stdlib.shard")   ; stdlib types (List/Option/Bool/Pair)
-(import "calc_show.shard")    ; show, valI, valI_go, valI_go_snoc, show_correct
-(import "calc_proof.shard")   ; is_digit_of_digit (0<=d,d<=9 |- is_digit(48+d)) + calc.shard
+(import "../../kernel/stdlib.shard")  ; stdlib types (List/Option/Bool/Pair)
+(import "calc_show.shard")  ; show, valI, valI_go, valI_go_snoc, show_correct
+(import "calc_proof.shard")  ; is_digit_of_digit (0<=d,d<=9 |- is_digit(48+d)) + calc.shard
 (import "../../std/div.shard")
 (import "../../std/list.shard")
 
@@ -17,24 +17,37 @@
     ((Cons d rest) (Cons (+ 48 d) (codes rest)))))
 
 (claim codes_cons
-  (goal ((d Int) (ds (List Int))) () (= (codes (Cons d ds)) (Cons (+ 48 d) (codes ds))))
+  (goal ((d Int) (ds (List Int))) ()
+    (= (codes (Cons d ds)) (Cons (+ 48 d) (codes ds))))
   (steps ((unfold codes lhs) (reduce lhs)) refl))
 
 ;; append's cons step at Int — std/list exports append_cons; re-cite it (append
 ;; is opaque here), don't unfold.
 (claim append_int_cons
-  (goal ((h Int) (t (List Int)) (ys (List Int))) () (= (append (Cons h t) ys) (Cons h (append t ys))))
+  (goal ((h Int) (t (List Int)) (ys (List Int))) ()
+    (= (append (Cons h t) ys) (Cons h (append t ys))))
   (steps ((rewrite (lemma append_cons) lr lhs true ())) refl))
 
 ;; codes distributes over append (structural induction on xs; matched IH).
 ;; append is OPAQUE (std/list) — peel it via the exported defining equations.
 (claim codes_append
-  (goal ((xs (List Int)) (ys (List Int))) () (= (codes (append xs ys)) (append (codes xs) (codes ys))))
-  (induct xs ((case Nil (steps ((simp both) (rewrite (lemma append_nil_left) lr both true ())) refl)) (case Cons (steps ((rewrite (lemma append_cons) lr lhs true ()) (simp lhs) (rewrite (hyp 0) lr lhs true ()) (simp rhs) (rewrite (lemma append_cons) lr rhs true ())) refl)))))
+  (goal ((xs (List Int)) (ys (List Int))) ()
+    (= (codes (append xs ys)) (append (codes xs) (codes ys))))
+  (induct xs
+    ((case Nil
+       (steps
+         ((simp both) (rewrite (lemma append_nil_left) lr both true ()))
+         refl))
+     (case Cons
+       (steps
+         ((rewrite (lemma append_cons) lr lhs true ())
+          (simp lhs)
+          (rewrite (hyp 0) lr lhs true ())
+          (simp rhs)
+          (rewrite (lemma append_cons) lr rhs true ()))
+         refl)))))
 
-(claim mul_comm10
-  (goal ((a Int)) () (= (* a 10) (* 10 a)))
-  (by lia (list)))
+(claim mul_comm10 (goal ((a Int)) () (= (* a 10) (* 10 a))) (by lia (list)))
 
 (claim digit_val_id
   (goal ((d Int)) () (= (digit_val (+ 48 d)) d))
@@ -44,8 +57,20 @@
 ;; Produces (* 10 acc) order (matching valI_go) by bridging acc_digit's
 ;; (* acc 10) via mul_comm10 inside the still-open Some argument.
 (claim lex_go_digit
-  (goal ((d Int) (cs (List Int)) (acc Int)) ((= (is_digit (+ 48 d)) True)) (= (lex_go (Cons (+ 48 d) cs) (Some acc)) (lex_go cs (Some (+ (* 10 acc) d)))))
-  (steps ((unfold lex_go lhs) (reduce lhs) (rewrite (premise 0) lr lhs true ()) (reduce lhs) (unfold acc_digit lhs) (reduce lhs) (rewrite (lemma digit_val_id) lr lhs true ()) (rewrite (lemma mul_comm10) lr lhs true ())) refl))
+  (goal ((d Int) (cs (List Int)) (acc Int)) ((= (is_digit (+ 48 d)) True))
+    (=
+      (lex_go (Cons (+ 48 d) cs) (Some acc))
+      (lex_go cs (Some (+ (* 10 acc) d)))))
+  (steps
+    ((unfold lex_go lhs)
+     (reduce lhs)
+     (rewrite (premise 0) lr lhs true ())
+     (reduce lhs)
+     (unfold acc_digit lhs)
+     (reduce lhs)
+     (rewrite (lemma digit_val_id) lr lhs true ())
+     (rewrite (lemma mul_comm10) lr lhs true ()))
+    refl))
 
 ;; n < 10 (loop-guard hyp) gives n <= 9, for is_digit_of_digit's upper bound.
 (claim lt10_le9
@@ -56,39 +81,307 @@
 ;; reduction of `show n` without Simp unfolding the surrounding lex_go.
 (claim show_lt
   (goal ((n Int)) ((= (lt n 10) True)) (= (show n) (list n)))
-  (steps ((unfold show lhs) (rewrite (premise 0) lr lhs true ()) (reduce lhs)) refl))
+  (steps
+    ((unfold show lhs) (rewrite (premise 0) lr lhs true ()) (reduce lhs))
+    refl))
 
 (claim show_ge
-  (goal ((n Int)) ((= (lt n 10) False)) (= (show n) (append (show (/ n 10)) (list (mod n 10)))))
-  (steps ((unfold show lhs) (rewrite (premise 0) lr lhs true ()) (reduce lhs)) refl))
+  (goal ((n Int)) ((= (lt n 10) False))
+    (= (show n) (append (show (/ n 10)) (list (mod n 10)))))
+  (steps
+    ((unfold show lhs) (rewrite (premise 0) lr lhs true ()) (reduce lhs))
+    refl))
 
 ;; THE LEXER, CORRECT FOR show n (WfInduct on n; recursion in named terms,
 ;; no Induct fresh names). Lexing the codepoints of show n, starting from
 ;; accumulator (Some acc) and followed by `rest`, folds the whole number
 ;; into the accumulator (Horner) and continues at `rest`.
 (claim lex_show_run
-  (goal ((n Int) (rest (List Int)) (acc Int)) ((= (le 0 n) True)) (= (lex_go (append (codes (show n)) rest) (Some acc)) (lex_go rest (Some (valI_go (show n) acc)))))
-  (wf-induct n (case-on (lt n 10) Bool ((case True (rewrite-with (lemma show_lt) lr lhs () ((steps ((rewrite (hyp 0) lr lhs true ())) refl)) (rewrite-with (lemma show_lt) lr rhs () ((steps ((rewrite (hyp 0) lr lhs true ())) refl)) (steps ((rewrite (lemma codes_cons) lr lhs true ()) (rewrite (lemma append_int_cons) lr lhs true ())) (rewrite-with (lemma lex_go_digit) lr lhs () ((rewrite-with (lemma is_digit_of_digit) lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl) (rewrite-with (lemma lt10_le9) lr lhs () ((steps ((rewrite (hyp 0) lr lhs true ())) refl)) refl)) refl)) (steps ((simp lhs) (rewrite (lemma append_nil_left) lr lhs true ()) (simp rhs)) refl)))))) (case False (rewrite-with (lemma show_ge) lr lhs () ((steps ((rewrite (hyp 0) lr lhs true ())) refl)) (rewrite-with (lemma show_ge) lr rhs () ((steps ((rewrite (hyp 0) lr lhs true ())) refl)) (steps ((rewrite (lemma codes_append) lr lhs true ()) (rewrite (lemma append_assoc) lr lhs true ())) (rewrite-with (hyp 1) lr lhs () ((rewrite-with (lemma div_nonneg) lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl)) refl) (rewrite-with (lemma div_nonneg) lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl)) refl) (rewrite-with (lemma div_lt) lr lhs () ((rewrite-with (lemma lt10f_pos) lr lhs () ((steps ((rewrite (hyp 0) lr lhs true ())) refl)) refl)) refl)) (steps ((rewrite (lemma codes_cons) lr lhs true ()) (rewrite (lemma append_int_cons) lr lhs true ())) (rewrite-with (lemma lex_go_digit) lr lhs () ((rewrite-with (lemma is_digit_of_digit) lr lhs () ((rewrite-with (lemma mod_10_lo) lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl)) refl) (rewrite-with (lemma mod_10_hi) lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl)) refl)) refl)) (steps ((simp lhs) (rewrite (lemma append_nil_left) lr lhs true ()) (rewrite (lemma valI_go_snoc) lr rhs true ())) refl))))))))))))
+  (goal ((n Int) (rest (List Int)) (acc Int)) ((= (le 0 n) True))
+    (=
+      (lex_go (append (codes (show n)) rest) (Some acc))
+      (lex_go rest (Some (valI_go (show n) acc)))))
+  (wf-induct n
+    (case-on (lt n 10) Bool
+      ((case True
+         (rewrite-with
+           (lemma show_lt)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (hyp 0) lr lhs true ())) refl))
+           (rewrite-with
+             (lemma show_lt)
+             lr
+             rhs
+             ()
+             ((steps ((rewrite (hyp 0) lr lhs true ())) refl))
+             (steps
+               ((rewrite (lemma codes_cons) lr lhs true ())
+                (rewrite (lemma append_int_cons) lr lhs true ()))
+               (rewrite-with
+                 (lemma lex_go_digit)
+                 lr
+                 lhs
+                 ()
+                 ((rewrite-with
+                    (lemma is_digit_of_digit)
+                    lr
+                    lhs
+                    ()
+                    ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                     (rewrite-with
+                       (lemma lt10_le9)
+                       lr
+                       lhs
+                       ()
+                       ((steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                       refl))
+                    refl))
+                 (steps
+                   ((simp lhs)
+                    (rewrite (lemma append_nil_left) lr lhs true ())
+                    (simp rhs))
+                   refl))))))
+       (case False
+         (rewrite-with
+           (lemma show_ge)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (hyp 0) lr lhs true ())) refl))
+           (rewrite-with
+             (lemma show_ge)
+             lr
+             rhs
+             ()
+             ((steps ((rewrite (hyp 0) lr lhs true ())) refl))
+             (steps
+               ((rewrite (lemma codes_append) lr lhs true ())
+                (rewrite (lemma append_assoc) lr lhs true ()))
+               (rewrite-with
+                 (hyp 1)
+                 lr
+                 lhs
+                 ()
+                 ((rewrite-with
+                    (lemma div_nonneg)
+                    lr
+                    lhs
+                    ()
+                    ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                    refl)
+                  (rewrite-with
+                    (lemma div_nonneg)
+                    lr
+                    lhs
+                    ()
+                    ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                    refl)
+                  (rewrite-with
+                    (lemma div_lt)
+                    lr
+                    lhs
+                    ()
+                    ((rewrite-with
+                       (lemma lt10f_pos)
+                       lr
+                       lhs
+                       ()
+                       ((steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                       refl))
+                    refl))
+                 (steps
+                   ((rewrite (lemma codes_cons) lr lhs true ())
+                    (rewrite (lemma append_int_cons) lr lhs true ()))
+                   (rewrite-with
+                     (lemma lex_go_digit)
+                     lr
+                     lhs
+                     ()
+                     ((rewrite-with
+                        (lemma is_digit_of_digit)
+                        lr
+                        lhs
+                        ()
+                        ((rewrite-with
+                           (lemma mod_10_lo)
+                           lr
+                           lhs
+                           ()
+                           ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                           refl)
+                         (rewrite-with
+                           (lemma mod_10_hi)
+                           lr
+                           lhs
+                           ()
+                           ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                           refl))
+                        refl))
+                     (steps
+                       ((simp lhs)
+                        (rewrite (lemma append_nil_left) lr lhs true ())
+                        (rewrite (lemma valI_go_snoc) lr rhs true ()))
+                       refl))))))))))))
 
-(claim add_zero
-  (goal ((a Int)) () (= (+ 0 a) a))
-  (by lia (list)))
+(claim add_zero (goal ((a Int)) () (= (+ 0 a) a)) (by lia (list)))
 
 ;; First digit of a number (acc = None): acc_digit None c = digit_val c.
 (claim lex_go_digit_none
-  (goal ((d Int) (cs (List Int))) ((= (is_digit (+ 48 d)) True)) (= (lex_go (Cons (+ 48 d) cs) None) (lex_go cs (Some d))))
-  (steps ((unfold lex_go lhs) (reduce lhs) (rewrite (premise 0) lr lhs true ()) (reduce lhs) (unfold acc_digit lhs) (reduce lhs) (rewrite (lemma digit_val_id) lr lhs true ())) refl))
+  (goal ((d Int) (cs (List Int))) ((= (is_digit (+ 48 d)) True))
+    (= (lex_go (Cons (+ 48 d) cs) None) (lex_go cs (Some d))))
+  (steps
+    ((unfold lex_go lhs)
+     (reduce lhs)
+     (rewrite (premise 0) lr lhs true ())
+     (reduce lhs)
+     (unfold acc_digit lhs)
+     (reduce lhs)
+     (rewrite (lemma digit_val_id) lr lhs true ()))
+    refl))
 
 ;; lex_show_run from a fresh accumulator (None), as `run` invokes the lexer.
 (claim lex_show_run_none
-  (goal ((n Int) (rest (List Int))) ((= (le 0 n) True)) (= (lex_go (append (codes (show n)) rest) None) (lex_go rest (Some (valI (show n))))))
-  (wf-induct n (case-on (lt n 10) Bool ((case True (rewrite-with (lemma show_lt) lr lhs () ((steps ((rewrite (hyp 0) lr lhs true ())) refl)) (rewrite-with (lemma show_lt) lr rhs () ((steps ((rewrite (hyp 0) lr lhs true ())) refl)) (steps ((rewrite (lemma codes_cons) lr lhs true ()) (rewrite (lemma append_int_cons) lr lhs true ()) (unfold valI rhs) (simp rhs) (rewrite (lemma add_zero) lr rhs true ())) (rewrite-with (lemma lex_go_digit_none) lr lhs () ((rewrite-with (lemma is_digit_of_digit) lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl) (rewrite-with (lemma lt10_le9) lr lhs () ((steps ((rewrite (hyp 0) lr lhs true ())) refl)) refl)) refl)) (steps ((simp lhs) (rewrite (lemma append_nil_left) lr lhs true ())) refl)))))) (case False (rewrite-with (lemma show_ge) lr lhs () ((steps ((rewrite (hyp 0) lr lhs true ())) refl)) (rewrite-with (lemma show_ge) lr rhs () ((steps ((rewrite (hyp 0) lr lhs true ())) refl)) (steps ((rewrite (lemma codes_append) lr lhs true ()) (rewrite (lemma append_assoc) lr lhs true ())) (rewrite-with (hyp 1) lr lhs () ((rewrite-with (lemma div_nonneg) lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl)) refl) (rewrite-with (lemma div_nonneg) lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl)) refl) (rewrite-with (lemma div_lt) lr lhs () ((rewrite-with (lemma lt10f_pos) lr lhs () ((steps ((rewrite (hyp 0) lr lhs true ())) refl)) refl)) refl)) (steps ((rewrite (lemma codes_cons) lr lhs true ()) (rewrite (lemma append_int_cons) lr lhs true ())) (rewrite-with (lemma lex_go_digit) lr lhs () ((rewrite-with (lemma is_digit_of_digit) lr lhs () ((rewrite-with (lemma mod_10_lo) lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl)) refl) (rewrite-with (lemma mod_10_hi) lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl)) refl)) refl)) (steps ((simp lhs) (rewrite (lemma append_nil_left) lr lhs true ()) (rewrite (lemma valI_snoc) lr rhs true ())) refl))))))))))))
+  (goal ((n Int) (rest (List Int))) ((= (le 0 n) True))
+    (=
+      (lex_go (append (codes (show n)) rest) None)
+      (lex_go rest (Some (valI (show n))))))
+  (wf-induct n
+    (case-on (lt n 10) Bool
+      ((case True
+         (rewrite-with
+           (lemma show_lt)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (hyp 0) lr lhs true ())) refl))
+           (rewrite-with
+             (lemma show_lt)
+             lr
+             rhs
+             ()
+             ((steps ((rewrite (hyp 0) lr lhs true ())) refl))
+             (steps
+               ((rewrite (lemma codes_cons) lr lhs true ())
+                (rewrite (lemma append_int_cons) lr lhs true ())
+                (unfold valI rhs)
+                (simp rhs)
+                (rewrite (lemma add_zero) lr rhs true ()))
+               (rewrite-with
+                 (lemma lex_go_digit_none)
+                 lr
+                 lhs
+                 ()
+                 ((rewrite-with
+                    (lemma is_digit_of_digit)
+                    lr
+                    lhs
+                    ()
+                    ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                     (rewrite-with
+                       (lemma lt10_le9)
+                       lr
+                       lhs
+                       ()
+                       ((steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                       refl))
+                    refl))
+                 (steps
+                   ((simp lhs) (rewrite (lemma append_nil_left) lr lhs true ()))
+                   refl))))))
+       (case False
+         (rewrite-with
+           (lemma show_ge)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (hyp 0) lr lhs true ())) refl))
+           (rewrite-with
+             (lemma show_ge)
+             lr
+             rhs
+             ()
+             ((steps ((rewrite (hyp 0) lr lhs true ())) refl))
+             (steps
+               ((rewrite (lemma codes_append) lr lhs true ())
+                (rewrite (lemma append_assoc) lr lhs true ()))
+               (rewrite-with
+                 (hyp 1)
+                 lr
+                 lhs
+                 ()
+                 ((rewrite-with
+                    (lemma div_nonneg)
+                    lr
+                    lhs
+                    ()
+                    ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                    refl)
+                  (rewrite-with
+                    (lemma div_nonneg)
+                    lr
+                    lhs
+                    ()
+                    ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                    refl)
+                  (rewrite-with
+                    (lemma div_lt)
+                    lr
+                    lhs
+                    ()
+                    ((rewrite-with
+                       (lemma lt10f_pos)
+                       lr
+                       lhs
+                       ()
+                       ((steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                       refl))
+                    refl))
+                 (steps
+                   ((rewrite (lemma codes_cons) lr lhs true ())
+                    (rewrite (lemma append_int_cons) lr lhs true ()))
+                   (rewrite-with
+                     (lemma lex_go_digit)
+                     lr
+                     lhs
+                     ()
+                     ((rewrite-with
+                        (lemma is_digit_of_digit)
+                        lr
+                        lhs
+                        ()
+                        ((rewrite-with
+                           (lemma mod_10_lo)
+                           lr
+                           lhs
+                           ()
+                           ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                           refl)
+                         (rewrite-with
+                           (lemma mod_10_hi)
+                           lr
+                           lhs
+                           ()
+                           ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                           refl))
+                        refl))
+                     (steps
+                       ((simp lhs)
+                        (rewrite (lemma append_nil_left) lr lhs true ())
+                        (rewrite (lemma valI_snoc) lr rhs true ()))
+                       refl))))))))))))
 
 ;; The '+' separator (representation-agnostic): emit the accumulated number,
 ;; then TPlus, and restart at None.
 (claim lex_plus
-  (goal ((v Int) (cs (List Int))) () (= (lex_go (Cons 43 cs) (Some v)) (Cons (TNum v) (Cons TPlus (lex_go cs None)))))
-  (steps ((unfold lex_go lhs) (reduce lhs) (unfold is_digit lhs) (simp lhs)) refl))
+  (goal ((v Int) (cs (List Int))) ()
+    (=
+      (lex_go (Cons 43 cs) (Some v))
+      (Cons (TNum v) (Cons TPlus (lex_go cs None)))))
+  (steps
+    ((unfold lex_go lhs) (reduce lhs) (unfold is_digit lhs) (simp lhs))
+    refl))
 
 ;; End of input: flush the accumulated number.
 (claim lex_nil
@@ -99,8 +392,33 @@
 ;;   lex (codes(show n) ++ 43 :: codes(show m))
 ;;     = [ TNum (valI (show n)) , TPlus , TNum (valI (show m)) ].
 (claim lex_two
-  (goal ((n Int) (m Int)) ((= (le 0 n) True) (= (le 0 m) True)) (= (lex (append (codes (show n)) (Cons 43 (codes (show m))))) (list (TNum (valI (show n))) TPlus (TNum (valI (show m))))))
-  (steps ((unfold lex lhs)) (rewrite-with (lemma lex_show_run_none) lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl)) (steps ((rewrite (lemma lex_plus) lr lhs true ()) (rewrite (lemma append_nil_right) rl lhs false ((inst xs (codes (show m)))))) (rewrite-with (lemma lex_show_run_none) lr lhs () ((steps ((rewrite (premise 1) lr lhs true ())) refl)) (steps ((rewrite (lemma lex_nil) lr lhs true ())) refl))))))
+  (goal ((n Int) (m Int)) ((= (le 0 n) True) (= (le 0 m) True))
+    (=
+      (lex (append (codes (show n)) (Cons 43 (codes (show m)))))
+      (list (TNum (valI (show n))) TPlus (TNum (valI (show m))))))
+  (steps
+    ((unfold lex lhs))
+    (rewrite-with
+      (lemma lex_show_run_none)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+      (steps
+        ((rewrite (lemma lex_plus) lr lhs true ())
+         (rewrite
+           (lemma append_nil_right)
+           rl
+           lhs
+           false
+           ((inst xs (codes (show m))))))
+        (rewrite-with
+          (lemma lex_show_run_none)
+          lr
+          lhs
+          ()
+          ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+          (steps ((rewrite (lemma lex_nil) lr lhs true ())) refl))))))
 
 ;; THE HEADLINE — arbitrary-integer calculator correctness, end to end:
 ;;   for all n, m >= 0,  run (codes(show n) ++ "+" ++ codes(show m)) = Some (n + m),
@@ -108,5 +426,31 @@
 ;; rewrite lex to its three tokens (lex_two), Simp to drive parse+eval to
 ;; Some (valI(show n) + valI(show m)), then fold valI(show .)=. (show_correct).
 (claim run_show_adds
-  (goal ((n Int) (m Int)) ((= (le 0 n) True) (= (le 0 m) True)) (= (run (append (codes (show n)) (Cons 43 (codes (show m))))) (Some (+ n m))))
-  (steps ((unfold run lhs)) (rewrite-with (lemma lex_two) lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((rewrite (premise 1) lr lhs true ())) refl)) (steps ((simp lhs)) (rewrite-with (lemma show_correct) lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl)) (rewrite-with (lemma show_correct) lr lhs () ((steps ((rewrite (premise 1) lr lhs true ())) refl)) refl))))))
+  (goal ((n Int) (m Int)) ((= (le 0 n) True) (= (le 0 m) True))
+    (=
+      (run (append (codes (show n)) (Cons 43 (codes (show m)))))
+      (Some (+ n m))))
+  (steps
+    ((unfold run lhs))
+    (rewrite-with
+      (lemma lex_two)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl))
+      (steps
+        ((simp lhs))
+        (rewrite-with
+          (lemma show_correct)
+          lr
+          lhs
+          ()
+          ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+          (rewrite-with
+            (lemma show_correct)
+            lr
+            lhs
+            ()
+            ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+            refl))))))

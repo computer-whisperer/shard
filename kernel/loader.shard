@@ -12,23 +12,23 @@
 ;; Direct deps: the prelude types and the reader (read_all / rev_i / SExpr).
 ;; Their own transitive deps (term/module) come in via the entrypoint's flat
 ;; import list — kernel files don't declare their imports yet (see eval.shard).
-(import "stdlib.shard")   ; List / Option / Bool / Pair
-(import "reader.shard")   ; read_all / rev_i / SExpr
+(import "stdlib.shard")  ; List / Option / Bool / Pair
+(import "reader.shard")  ; read_all / rev_i / SExpr
 
 ;; The World: a sequencing token (a clock). Every effect is an extern that
 ;; threads it; the data dependency orders the effects. In a proof these are
 ;; uninterpreted (stuck) and the run-time host performs them.
 (type World (World Int))
 
-(extern get_args   ((w World)) (Pair (List (List Int)) World))
-(extern read_file  ((path (List Int)) (w World)) (Pair (Option (List Int)) World))
-(extern write      ((bytes (List Int)) (w World)) World)
+(extern get_args ((w World)) (Pair (List (List Int)) World))
+(extern read_file ((path (List Int)) (w World)) (Pair (Option (List Int)) World))
+(extern write ((bytes (List Int)) (w World)) World)
 (extern write_line ((bytes (List Int)) (w World)) World)
-(extern exit       ((code Int) (w World)) World)
+(extern exit ((code Int) (w World)) World)
 ;; read_key: blocking line-read from stdin; first byte as (Some b), or (None) on
 ;; a quit ('q') or EOF. The host effect that backs an interactive app's key
 ;; input (e.g. snake's `key_oracle`); meaningful only with a live-terminal stdin.
-(extern read_key   ((w World)) (Pair (Option Int) World))
+(extern read_key ((w World)) (Pair (Option Int) World))
 
 ;; ===========================================================================
 ;; IMPORT-CLOSURE RESOLUTION — via the read_file extern.
@@ -39,7 +39,7 @@
 ;; the dir prefix of a path: everything up to and including the last '/'
 ;; (Nil if none). read_file hands the joined "<dir><relative>" to the OS,
 ;; which resolves any ../ — so no path canonicalization is needed here.
-(fn drop_to_slash ((rp (List Int))) (List Int)   ; rp reversed; keep from last '/'
+(fn drop_to_slash ((rp (List Int))) (List Int)  ; rp reversed; keep from last '/'
   (match rp
     (Nil Nil)
     ((Cons c t) (if (int_eq c 47) rp (drop_to_slash t)))))
@@ -50,7 +50,7 @@
 ;; the LAST path component (basename): the suffix after the last '/', or the
 ;; whole path if none. Used in RUN mode to find a module's impl file
 ;; `<name>/<name>.shard` (e.g. bare import "list" → "list/list.shard").
-(fn take_to_slash ((rp (List Int))) (List Int)   ; rp reversed; take until (excl) last '/'
+(fn take_to_slash ((rp (List Int))) (List Int)  ; rp reversed; take until (excl) last '/'
   (match rp
     (Nil Nil)
     ((Cons c t) (if (int_eq c 47) Nil (Cons c (take_to_slash t))))))
@@ -60,9 +60,14 @@
 
 (fn int_list_eq ((a (List Int)) (b (List Int))) Bool
   (match a
-    (Nil (match b (Nil True) (_ False)))
+    (Nil
+      (match b
+        (Nil True)
+        (_ False)))
     ((Cons x xs)
-      (match b (Nil False) ((Cons y ys) (if (int_eq x y) (int_list_eq xs ys) False))))))
+     (match b
+       (Nil False)
+       ((Cons y ys) (if (int_eq x y) (int_list_eq xs ys) False))))))
 
 (fn path_member ((p (List Int)) (ps (List (List Int)))) Bool
   (match ps
@@ -71,24 +76,26 @@
 
 ;; the dir prefix joined onto a relative import path.
 (fn append_int ((xs (List Int)) (ys (List Int))) (List Int)
-  (match xs (Nil ys) ((Cons h t) (Cons h (append_int t ys)))))
+  (match xs
+    (Nil ys)
+    ((Cons h t) (Cons h (append_int t ys)))))
 
 ;; (import "X") / (use-module "X") → (Some X-bytes); any other form → None.
 (fn import_path_of ((f SExpr)) (Option (List Int))
   (match f
     ((SList (Cons (SSym h) (Cons (SStr path) Nil)))
-      (if (sym_eq h (quote import))
-          (Some path)
-          (if (sym_eq h (quote use-module)) (Some path) None)))
+     (if (sym_eq h (quote import)) (Some path)
+     (if (sym_eq h (quote use-module)) (Some path)
+     None)))
     (_ None)))
 
 (fn starts_with ((pre (List Int)) (xs (List Int))) Bool
   (match pre
     (Nil True)
     ((Cons p pr)
-      (match xs
-        (Nil False)
-        ((Cons x xr) (if (int_eq p x) (starts_with pr xr) False))))))
+     (match xs
+       (Nil False)
+       ((Cons x xr) (if (int_eq p x) (starts_with pr xr) False))))))
 
 ;; Does the import path end in ".shard"? That disambiguates the two import
 ;; forms: `(import "order.shard")` names a FILE (load it as-is); `(import
@@ -106,8 +113,9 @@
 ;; interface, so apps that call the module's functions execute against real
 ;; definitions. The impl imports its own interface, so types/ctors still load.
 (fn impl_path ((dir (List Int)) (rel (List Int))) (List Int)
-  (append_int (append_int dir rel)
-              (append_int "/" (append_int (base_of rel) ".shard"))))
+  (append_int
+    (append_int dir rel)
+    (append_int "/" (append_int (base_of rel) ".shard"))))
 
 ;; The import paths a source declares, each joined to the importer's dir and
 ;; TAGGED `(Pair granted path)`. An explicit `.shard` file resolves as-is,
@@ -116,23 +124,24 @@
 ;; become axioms; bodies stay opaque → proofs reason via lemmas); in RUN mode
 ;; (run=True) to its impl `<mod>/<mod>.shard`, ungranted (real bodies so the
 ;; app can execute). The interpreter-time body-resolution path.
-(fn import_paths ((dir (List Int)) (forms (List SExpr)) (run Bool)) (List (Pair Bool (List Int)))
+(fn import_paths ((dir (List Int)) (forms (List SExpr)) (run Bool))
+  (List (Pair Bool (List Int)))
   (match forms
     (Nil Nil)
     ((Cons f rest)
-      (match (import_path_of f)
-        (None       (import_paths dir rest run))
-        ((Some rel)
-          (if (ends_with_shard rel)
-              (Cons (Pair False (append_int dir rel))
-                    (import_paths dir rest run))
-              (if run
-                  (Cons (Pair False (impl_path dir rel))
-                        (import_paths dir rest run))
-                  (Cons (Pair True (append_int (append_int dir rel) (mod_req_suffix)))
-                        (import_paths dir rest run)))))))))
+     (match (import_path_of f)
+       (None (import_paths dir rest run))
+       ((Some rel)
+        (if (ends_with_shard rel)
+          (Cons (Pair False (append_int dir rel)) (import_paths dir rest run))
+        (if run
+          (Cons (Pair False (impl_path dir rel)) (import_paths dir rest run))
+          (Cons
+            (Pair True (append_int (append_int dir rel) (mod_req_suffix)))
+            (import_paths dir rest run)))))))))
 
-(fn imports_of ((dir (List Int)) (src (List Int)) (run Bool)) (List (Pair Bool (List Int)))
+(fn imports_of ((dir (List Int)) (src (List Int)) (run Bool))
+  (List (Pair Bool (List Int)))
   (match (read_all src)
     (None Nil)
     ((Some forms) (import_paths dir forms run))))
@@ -142,8 +151,9 @@
 ;; interface imported as a dependency, the impl that imports its own interface
 ;; (`(import "mod.req.shard")`) makes the interface a dep of the impl, so the
 ;; interface lands FIRST — its requirements seed before the impl's fulfills.
-(fn append_src ((acc (List (Pair Bool (List Int)))) (elt (Pair Bool (List Int))))
-              (List (Pair Bool (List Int)))
+(fn append_src
+  ((acc (List (Pair Bool (List Int)))) (elt (Pair Bool (List Int))))
+  (List (Pair Bool (List Int)))
   (match acc
     (Nil (Cons elt Nil))
     ((Cons h t) (Cons h (append_src t elt)))))
@@ -156,19 +166,23 @@
 (fn visit ((path (List Int)) (granted Bool) (run Bool) (st Closure)) Closure
   (match st
     ((Closure seen acc w)
-      (if (path_member path seen)
-          st
-          (match (read_file path w)
-            ((Pair msrc w1)
-              (match msrc
-                (None (Closure (Cons path seen) acc w1))    ; unreadable — skip
-                ((Some src)
-                  (match (visit_imports (imports_of (dir_of path) src run) run
-                                        (Closure (Cons path seen) acc w1))
-                    ((Closure seen2 acc2 w2)
-                      (Closure seen2 (append_src acc2 (Pair granted src)) w2)))))))))))
+     (if (path_member path seen) st
+     (match (read_file path w)
+       ((Pair msrc w1)
+        (match msrc
+          (None (Closure (Cons path seen) acc w1))  ; unreadable — skip
+          ((Some src)
+           (match
+             (visit_imports
+               (imports_of (dir_of path) src run)
+               run
+               (Closure (Cons path seen) acc w1))
+             ((Closure seen2 acc2 w2)
+              (Closure seen2 (append_src acc2 (Pair granted src)) w2)))))))))))
 
-(fn visit_imports ((paths (List (Pair Bool (List Int)))) (run Bool) (st Closure)) Closure
+(fn visit_imports
+  ((paths (List (Pair Bool (List Int)))) (run Bool) (st Closure))
+  Closure
   (match paths
     (Nil st)
     ((Cons (Pair g p) rest) (visit_imports rest run (visit p g run st)))))
@@ -176,7 +190,8 @@
 ;; The entry target itself is ungranted (its own claims are checked normally).
 ;; `run` selects how bare module imports resolve: False = CHECK (opaque
 ;; interfaces), True = RUN (impl bodies). See import_paths.
-(fn resolve_closure ((entry (List Int)) (run Bool) (w World)) (Pair (List (Pair Bool (List Int))) World)
+(fn resolve_closure ((entry (List Int)) (run Bool) (w World))
+  (Pair (List (Pair Bool (List Int))) World)
   (match (visit entry False run (Closure Nil Nil w))
     ((Closure _ acc w2) (Pair acc w2))))
 

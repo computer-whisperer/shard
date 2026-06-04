@@ -32,26 +32,26 @@
 ;;; (formatted source on stdout; exit 0 gate-passed, 2 bad input, 3 gate refusal)
 ;;; CHECK IT: ./rust_bootstrap/target/release/eval run kernel/check.shard tools/shardfmt/shardfmt.shard
 
-(import "../../kernel/stdlib.shard")   ; List / Option / Bool / Pair
-(import "../../std/list.shard")        ; append (bolt vocabulary)
-(import "mod.req.shard")               ; own interface: obligations + World/externs
+(import "../../kernel/stdlib.shard")  ; List / Option / Bool / Pair
+(import "../../std/list.shard")  ; append (bolt vocabulary)
+(import "mod.req.shard")  ; own interface: obligations + World/externs
 
 ;; ===========================================================================
 ;; THE CST — a concrete syntax tree: SExpr structure plus everything layout.
 ;; ===========================================================================
 (type CNode
-  (CAtom (List Int))      ; atom — RAW bytes, exactly as written
-  (CStr  (List Int))      ; string — RAW inner bytes, escapes untouched
-  (CQuote CNode)          ; 'X (the reader macro, preserved as sugar)
-  (CList (List CNode))    ; ( ... ) — items include the layout nodes below
-  (CComment (List Int))   ; own-line comment (incl. leading ';'s, no newline)
-  (CTrail (List Int))     ; trailing comment (same line as the prior node)
-  (CBlank))               ; one blank line
+  (CAtom (List Int))  ; atom — RAW bytes, exactly as written
+  (CStr (List Int))  ; string — RAW inner bytes, escapes untouched
+  (CQuote CNode)  ; 'X (the reader macro, preserved as sugar)
+  (CList (List CNode))  ; ( ... ) — items include the layout nodes below
+  (CComment (List Int))  ; own-line comment (incl. leading ';'s, no newline)
+  (CTrail (List Int))  ; trailing comment (same line as the prior node)
+  (CBlank))  ; one blank line
 
-(type CR   (CROk CNode (List Int)) (CRErr))            ; one node + rest
-(type CIR  (CIROk (List CNode) (List Int)) (CIRErr))   ; list items, rest after ')'
-(type CTR  (CTROk (List CNode)) (CTRErr))              ; the whole top level
-(type SR   (SROk (List Int) (List Int)) (SRErr))       ; raw string body + rest
+(type CR (CROk CNode (List Int)) (CRErr))  ; one node + rest
+(type CIR (CIROk (List CNode) (List Int)) (CIRErr))  ; list items, rest after ')'
+(type CTR (CTROk (List CNode)) (CTRErr))  ; the whole top level
+(type SR (SROk (List Int) (List Int)) (SRErr))  ; raw string body + rest
 
 (fn rev_n ((xs (List CNode)) (acc (List CNode))) (List CNode)
   (match xs
@@ -68,48 +68,46 @@
   (match cs
     (Nil (Pair (rev_i acc Nil) Nil))
     ((Cons c rest)
-      (if (int_eq c 10)
-          (Pair (rev_i acc Nil) cs)
-          (cst_comment rest (Cons c acc))))))
+     (if (int_eq c 10) (Pair (rev_i acc Nil) cs)
+     (cst_comment rest (Cons c acc))))))
 
 ;; raw string body after the opening '"': copy verbatim (escape pairs kept
 ;; whole) up to the closing unescaped '"'.
 (fn cst_str ((cs (List Int)) (acc (List Int))) SR
   (match cs
-    (Nil SRErr)                              ; unterminated string
+    (Nil SRErr)  ; unterminated string
     ((Cons c rest)
-      (if (int_eq c 34)
-          (SROk (rev_i acc Nil) rest)
-      (if (int_eq c 92)                      ; '\' — keep it AND the next byte
-          (match rest
-            (Nil SRErr)
-            ((Cons e rest2) (cst_str rest2 (Cons e (Cons c acc)))))
-          (cst_str rest (Cons c acc)))))))
+     (if (int_eq c 34) (SROk (rev_i acc Nil) rest)
+     (if (int_eq c 92)  ; '\' — keep it AND the next byte
+       (match rest
+         (Nil SRErr)
+         ((Cons e rest2) (cst_str rest2 (Cons e (Cons c acc)))))
+       (cst_str rest (Cons c acc)))))))
 
 ;; read ONE node; cs starts at its first byte (caller has handled layout).
 (fn cst_node ((cs (List Int))) CR
   (match cs
     (Nil CRErr)
     ((Cons c rest)
-      (if (int_eq c 40)                      ; '(' → list
-          (match (cst_items rest 0 Nil)
-            (CIRErr CRErr)
-            ((CIROk items rest2) (CROk (CList items) rest2)))
-      (if (int_eq c 34)                      ; '"' → string
-          (match (cst_str rest Nil)
-            (SRErr CRErr)
-            ((SROk s rest2) (CROk (CStr s) rest2)))
-      (if (int_eq c 39)                      ; '\'' → quote sugar
-          (match (cst_node (skip_ws rest))   ; (pathological ws after ' tolerated)
-            (CRErr CRErr)
-            ((CROk n rest2) (CROk (CQuote n) rest2)))
-      (if (int_eq c 41) CRErr                ; stray ')'
-      (if (int_eq c 59) CRErr                ; defensive: callers eat comments
-          (match (take_atom cs)
-            ((Pair atom rest2)
-              (match atom
-                (Nil CRErr)                  ; defensive: delimiter byte
-                (_ (CROk (CAtom atom) rest2)))))))))))))
+     (if (int_eq c 40)  ; '(' → list
+       (match (cst_items rest 0 Nil)
+         (CIRErr CRErr)
+         ((CIROk items rest2) (CROk (CList items) rest2)))
+     (if (int_eq c 34)  ; '"' → string
+       (match (cst_str rest Nil)
+         (SRErr CRErr)
+         ((SROk s rest2) (CROk (CStr s) rest2)))
+     (if (int_eq c 39)  ; '\'' → quote sugar
+       (match (cst_node (skip_ws rest))  ; (pathological ws after ' tolerated)
+         (CRErr CRErr)
+         ((CROk n rest2) (CROk (CQuote n) rest2)))
+     (if (int_eq c 41) CRErr  ; stray ')'
+     (if (int_eq c 59) CRErr  ; defensive: callers eat comments
+     (match (take_atom cs)
+       ((Pair atom rest2)
+        (match atom
+          (Nil CRErr)  ; defensive: delimiter byte
+          (_ (CROk (CAtom atom) rest2)))))))))))))
 
 ;; items of a list, up to the matching ')'. `nl` counts newlines since the
 ;; last emitted node (any kind): 0 → still on its line (a ';' here is a
@@ -117,47 +115,41 @@
 ;; newline in a row is a BLANK line).
 (fn cst_items ((cs (List Int)) (nl Int) (acc (List CNode))) CIR
   (match cs
-    (Nil CIRErr)                             ; unterminated list
+    (Nil CIRErr)  ; unterminated list
     ((Cons c rest)
-      (if (int_eq c 41)
-          (CIROk (rev_n acc Nil) rest)
-      (if (int_eq c 10)
-          (if (le 1 nl)
-              (cst_items rest 1 (Cons CBlank acc))
-              (cst_items rest 1 acc))
-      (if (is_ws c)
-          (cst_items rest nl acc)
-      (if (int_eq c 59)
-          (match (cst_comment cs Nil)
-            ((Pair txt rest2)
-              (if (if (int_eq nl 0) (cst_ne acc) False)
-                  (cst_items rest2 0 (Cons (CTrail txt) acc))
-                  (cst_items rest2 0 (Cons (CComment txt) acc)))))
-          (match (cst_node cs)
-            (CRErr CIRErr)
-            ((CROk n rest2) (cst_items rest2 0 (Cons n acc)))))))))))
+     (if (int_eq c 41) (CIROk (rev_n acc Nil) rest)
+     (if (int_eq c 10)
+       (if (le 1 nl) (cst_items rest 1 (Cons CBlank acc))
+       (cst_items rest 1 acc))
+     (if (is_ws c) (cst_items rest nl acc)
+     (if (int_eq c 59)
+       (match (cst_comment cs Nil)
+         ((Pair txt rest2)
+          (if (if (int_eq nl 0) (cst_ne acc) False)
+            (cst_items rest2 0 (Cons (CTrail txt) acc))
+            (cst_items rest2 0 (Cons (CComment txt) acc)))))
+       (match (cst_node cs)
+         (CRErr CIRErr)
+         ((CROk n rest2) (cst_items rest2 0 (Cons n acc)))))))))))
 
 ;; the top level: same walk, ends at EOF; a bare ')' is an error.
 (fn cst_tops ((cs (List Int)) (nl Int) (acc (List CNode))) CTR
   (match cs
     (Nil (CTROk (rev_n acc Nil)))
     ((Cons c rest)
-      (if (int_eq c 41) CTRErr
-      (if (int_eq c 10)
-          (if (le 1 nl)
-              (cst_tops rest 1 (Cons CBlank acc))
-              (cst_tops rest 1 acc))
-      (if (is_ws c)
-          (cst_tops rest nl acc)
-      (if (int_eq c 59)
-          (match (cst_comment cs Nil)
-            ((Pair txt rest2)
-              (if (if (int_eq nl 0) (cst_ne acc) False)
-                  (cst_tops rest2 0 (Cons (CTrail txt) acc))
-                  (cst_tops rest2 0 (Cons (CComment txt) acc)))))
-          (match (cst_node cs)
-            (CRErr CTRErr)
-            ((CROk n rest2) (cst_tops rest2 0 (Cons n acc)))))))))))
+     (if (int_eq c 41) CTRErr
+     (if (int_eq c 10)
+       (if (le 1 nl) (cst_tops rest 1 (Cons CBlank acc)) (cst_tops rest 1 acc))
+     (if (is_ws c) (cst_tops rest nl acc)
+     (if (int_eq c 59)
+       (match (cst_comment cs Nil)
+         ((Pair txt rest2)
+          (if (if (int_eq nl 0) (cst_ne acc) False)
+            (cst_tops rest2 0 (Cons (CTrail txt) acc))
+            (cst_tops rest2 0 (Cons (CComment txt) acc)))))
+       (match (cst_node cs)
+         (CRErr CTRErr)
+         ((CROk n rest2) (cst_tops rest2 0 (Cons n acc)))))))))))
 
 (fn cst_read ((src (List Int))) (Option (List CNode))
   (match (cst_tops src 1 Nil)
@@ -179,25 +171,24 @@
     (Nil 0)
     ((Cons h t) (+ 1 (blen t)))))
 
-(fn sp ((n Int)) (List Int)
-  (if (le n 0) Nil (Cons 32 (sp (- n 1)))))
+(fn sp ((n Int)) (List Int) (if (le n 0) Nil (Cons 32 (sp (- n 1)))))
 
 ;; a match form with at least two items after the head NEVER prints flat —
 ;; arms belong on their own lines (the corpus idiom, pinned by scenario).
 (fn cl_match ((items (List CNode))) Bool
   (match items
     ((Cons h t)
-      (match h
-        ((CAtom a)
-          (if (bytes_eq a "match")
-              (match t
-                ((Cons x r)
-                  (match r
-                    ((Cons y s) True)
-                    (_ False)))
-                (_ False))
-              False))
-        (_ False)))
+     (match h
+       ((CAtom a)
+        (if (bytes_eq a "match")
+          (match t
+            ((Cons x r)
+             (match r
+               ((Cons y s) True)
+               (_ False)))
+            (_ False))
+          False))
+       (_ False)))
     (_ False)))
 
 ;; ---- the width probe: remaining budget after a flat render, or negative ----
@@ -206,8 +197,8 @@
 (fn flat_w ((n CNode) (b Int)) Int
   (if (lt b 0) -1
   (match n
-    ((CAtom a)  (- b (blen a)))
-    ((CStr s)   (- b (+ 2 (blen s))))
+    ((CAtom a) (- b (blen a)))
+    ((CStr s) (- b (+ 2 (blen s))))
     ((CQuote m) (flat_w m (- b 1)))
     ((CList items) (if (cl_match items) -1 (flat_items_w items (- b 2))))
     (_ -1))))
@@ -216,51 +207,50 @@
   (match ns
     (Nil b)
     ((Cons h t)
-      (let ((b1 (flat_w h b)))
-        (if (lt b1 0)
-            -1
-            (match t
-              (Nil b1)
-              (_ (flat_items_w t (- b1 1)))))))))   ; the separating space
+     (let ((b1 (flat_w h b)))
+       (if (lt b1 0) -1
+       (match t
+         (Nil b1)
+         (_ (flat_items_w t (- b1 1)))))))))  ; the separating space
 
 ;; ---- flat emission (only called when flat_w said it fits) ------------------
 (fn em_flat ((n CNode) (acc (List Int))) (List Int)
   (match n
-    ((CAtom a)  (em a acc))
-    ((CStr s)   (Cons 34 (em s (Cons 34 acc))))
+    ((CAtom a) (em a acc))
+    ((CStr s) (Cons 34 (em s (Cons 34 acc))))
     ((CQuote m) (em_flat m (Cons 39 acc)))
     ((CList items)
-      (match items
-        (Nil (Cons 41 (Cons 40 acc)))
-        (_ (Cons 41 (em_flat_items items (Cons 40 acc))))))
-    ((CComment t) (em t acc))                ; unreachable on the flat path
-    ((CTrail t)   (em t acc))
+     (match items
+       (Nil (Cons 41 (Cons 40 acc)))
+       (_ (Cons 41 (em_flat_items items (Cons 40 acc))))))
+    ((CComment t) (em t acc))  ; unreachable on the flat path
+    ((CTrail t) (em t acc))
     (CBlank acc)))
 
 (fn em_flat_items ((ns (List CNode)) (acc (List Int))) (List Int)
   (match ns
     (Nil acc)
     ((Cons h t)
-      (match t
-        (Nil (em_flat h acc))
-        (_ (em_flat_items t (Cons 32 (em_flat h acc))))))))
+     (match t
+       (Nil (em_flat h acc))
+       (_ (em_flat_items t (Cons 32 (em_flat h acc))))))))
 
 ;; ---- layout-node preprocessing for a broken list's children ----------------
 (fn drop_lead_blanks ((ns (List CNode))) (List CNode)
   (match ns
     (Nil Nil)
     ((Cons h t)
-      (match h
-        (CBlank (drop_lead_blanks t))
-        (_ ns)))))
+     (match h
+       (CBlank (drop_lead_blanks t))
+       (_ ns)))))
 
-(fn squash1 ((ns (List CNode))) (List CNode)      ; blank runs → one blank
+(fn squash1 ((ns (List CNode))) (List CNode)  ; blank runs → one blank
   (match ns
     (Nil Nil)
     ((Cons h t)
-      (match h
-        (CBlank (Cons CBlank (squash1 (drop_lead_blanks t))))
-        (_ (Cons h (squash1 t)))))))
+     (match h
+       (CBlank (Cons CBlank (squash1 (drop_lead_blanks t))))
+       (_ (Cons h (squash1 t)))))))
 
 (fn strip_tail_blanks ((ns (List CNode))) (List CNode)
   (rev_n (drop_lead_blanks (rev_n ns Nil)) Nil))
@@ -270,47 +260,45 @@
 
 ;; ---- per-head keep counts: how many args belong on the head line -----------
 (fn keep_n ((h (List Int))) Int
-  (if (bytes_eq h "fn") 3                    ; name params ret
-  (if (bytes_eq h "sig") 4                   ; fn name params ret
-  (if (bytes_eq h "extern") 3                ; name params ret
-  (if (bytes_eq h "claim") 1                 ; name
+  (if (bytes_eq h "fn") 3  ; name params ret
+  (if (bytes_eq h "sig") 4  ; fn name params ret
+  (if (bytes_eq h "extern") 3  ; name params ret
+  (if (bytes_eq h "claim") 1  ; name
   (if (bytes_eq h "requirement") 1
   (if (bytes_eq h "axiom") 1
   (if (bytes_eq h "fulfills") 1
-  (if (bytes_eq h "goal") 2                  ; binders premises
-  (if (bytes_eq h "match") 1                 ; scrutinee
-  (if (bytes_eq h "if") 1                    ; condition
-  (if (bytes_eq h "let") 1                   ; bindings
-  (if (bytes_eq h "type") 1                  ; name
-  (if (bytes_eq h "case-on") 2               ; scrutinee kind
-  (if (bytes_eq h "case") 1                  ; pattern
-  (if (bytes_eq h "wf-induct") 1             ; measure
+  (if (bytes_eq h "goal") 2  ; binders premises
+  (if (bytes_eq h "match") 1  ; scrutinee
+  (if (bytes_eq h "if") 1  ; condition
+  (if (bytes_eq h "let") 1  ; bindings
+  (if (bytes_eq h "type") 1  ; name
+  (if (bytes_eq h "case-on") 2  ; scrutinee kind
+  (if (bytes_eq h "case") 1  ; pattern
+  (if (bytes_eq h "wf-induct") 1  ; measure
   (if (bytes_eq h "induct") 1
-  (if (bytes_eq h "have") 2                  ; name equation
-  (if (bytes_eq h "bin") 1                   ; name
+  (if (bytes_eq h "have") 2  ; name equation
+  (if (bytes_eq h "bin") 1  ; name
   0)))))))))))))))))))
 
 (fn all_atoms ((ns (List CNode))) Bool
   (match ns
     (Nil True)
     ((Cons h t)
-      (match h
-        ((CAtom a) (all_atoms t))
-        (_ False)))))
+     (match h
+       ((CAtom a) (all_atoms t))
+       (_ False)))))
 
 ;; greedy head-line prefix: keep up to k flat children while they fit.
-(type EmK (EmK Int (List Int) (List CNode)))   ; col-after, acc, remaining
+(type EmK (EmK Int (List Int) (List CNode)))  ; col-after, acc, remaining
 
 (fn em_keep ((ns (List CNode)) (k Int) (cur Int) (acc (List Int))) EmK
-  (if (le k 0)
-      (EmK cur acc ns)
-      (match ns
-        (Nil (EmK cur acc Nil))
-        ((Cons h t)
-          (let ((b1 (flat_w h (- (- 80 cur) 1))))
-            (if (lt b1 0)
-                (EmK cur acc ns)
-                (em_keep t (- k 1) (- 80 b1) (em_flat h (Cons 32 acc)))))))))
+  (if (le k 0) (EmK cur acc ns)
+  (match ns
+    (Nil (EmK cur acc Nil))
+    ((Cons h t)
+     (let ((b1 (flat_w h (- (- 80 cur) 1))))
+       (if (lt b1 0) (EmK cur acc ns)
+       (em_keep t (- k 1) (- 80 b1) (em_flat h (Cons 32 acc)))))))))
 
 ;; ---- the break renderers ----------------------------------------------------
 ;; em_kids: each child on its own line at `ind`; CTrail attaches to the prior
@@ -320,180 +308,219 @@
   (match ns
     (Nil (Cons 41 acc))
     ((Cons h t)
-      (match h
-        ((CTrail txt)
-          (let ((acc1 (em txt (Cons 32 (Cons 32 acc)))))
-            (match t
-              (Nil (Cons 41 (em (sp pcol) (Cons 10 acc1))))
-              (_ (em_kids t ind pcol acc1)))))
-        ((CComment txt)
-          (let ((acc1 (em txt (em (sp ind) (Cons 10 acc)))))
-            (match t
-              (Nil (Cons 41 (em (sp pcol) (Cons 10 acc1))))
-              (_ (em_kids t ind pcol acc1)))))
-        (CBlank
-          (em_kids t ind pcol (Cons 10 acc)))
-        (_
-          (let ((acc1 (em_pp h ind (em (sp ind) (Cons 10 acc)))))
-            (match t
-              (Nil (Cons 41 acc1))
-              (_ (em_kids t ind pcol acc1)))))))))
+     (match h
+       ((CTrail txt)
+        (let ((acc1 (em txt (Cons 32 (Cons 32 acc)))))
+          (match t
+            (Nil (Cons 41 (em (sp pcol) (Cons 10 acc1))))
+            (_ (em_kids t ind pcol acc1)))))
+       ((CComment txt)
+        (let ((acc1 (em txt (em (sp ind) (Cons 10 acc)))))
+          (match t
+            (Nil (Cons 41 (em (sp pcol) (Cons 10 acc1))))
+            (_ (em_kids t ind pcol acc1)))))
+       (CBlank (em_kids t ind pcol (Cons 10 acc)))
+       (_
+         (let ((acc1 (em_pp h ind (em (sp ind) (Cons 10 acc)))))
+           (match t
+             (Nil (Cons 41 acc1))
+             (_ (em_kids t ind pcol acc1)))))))))
 
 ;; fill mode (all-atom lists): pack as many per line as fit, wrap at `ind`.
-(fn em_fill_go ((ns (List CNode)) (cur Int) (ind Int) (acc (List Int))) (List Int)
+(fn em_fill_go ((ns (List CNode)) (cur Int) (ind Int) (acc (List Int)))
+  (List Int)
   (match ns
     (Nil (Cons 41 acc))
     ((Cons h t)
-      (match h
-        ((CAtom a)
-          (let ((wd (blen a)))
-            (if (le (+ (+ cur 1) wd) 80)
-                (em_fill_go t (+ (+ cur 1) wd) ind (em a (Cons 32 acc)))
-                (em_fill_go t (+ ind wd) ind (em a (em (sp ind) (Cons 10 acc)))))))
-        (_ (Cons 41 acc))))))                ; unreachable: all_atoms guarded
+     (match h
+       ((CAtom a)
+        (let ((wd (blen a)))
+          (if (le (+ (+ cur 1) wd) 80)
+            (em_fill_go t (+ (+ cur 1) wd) ind (em a (Cons 32 acc)))
+            (em_fill_go t (+ ind wd) ind (em a (em (sp ind) (Cons 10 acc)))))))
+       (_ (Cons 41 acc))))))  ; unreachable: all_atoms guarded
 
 (fn em_fill ((ns (List CNode)) (col Int) (acc (List Int))) (List Int)
   (match ns
     (Nil (Cons 41 (Cons 40 acc)))
     ((Cons h t)
-      (match h
-        ((CAtom a)
-          (em_fill_go t (+ (+ col 1) (blen a)) (+ col 2) (em a (Cons 40 acc))))
-        (_ acc)))))                          ; unreachable
+     (match h
+       ((CAtom a)
+        (em_fill_go t (+ (+ col 1) (blen a)) (+ col 2) (em a (Cons 40 acc))))
+       (_ acc)))))  ; unreachable
 
 ;; head mode: "(head [kept...]" then the rest as kids at col+2.
-(fn em_head ((hb (List Int)) (t (List CNode)) (col Int) (acc (List Int))) (List Int)
+(fn em_head ((hb (List Int)) (t (List CNode)) (col Int) (acc (List Int)))
+  (List Int)
   (match (em_keep t (keep_n hb) (+ (+ col 1) (blen hb)) (em hb (Cons 40 acc)))
     ((EmK cur acc2 rest)
-      (match rest
-        (Nil (Cons 41 acc2))
-        (_ (em_kids (prep rest) (+ col 2) col acc2))))))
+     (match rest
+       (Nil (Cons 41 acc2))
+       (_ (em_kids (prep rest) (+ col 2) col acc2))))))
 
 ;; if-CASCADE: guard chains print else-at-the-same-column (the corpus's
 ;; dominant idiom), with closers packing at the end:
 ;;   (if (int_eq c 32) True  ; space
 ;;   (if (int_eq c 9) True
 ;;   False))
-;; Applies when "(if cond then" fits the head line; the else (chained if or
-;; terminal) renders at the SAME column. Other shapes fall back to generic.
-(fn em_if ((cnd CNode) (thn CNode) (tr (Option (List Int)))
-           (els CNode) (col Int) (acc (List Int))) (List Int)
+;; Recognized shape: (if c t e) with optional trailing comments after the
+;; cond and/or the then. When the cond fits the head line the chain column
+;; holds: then rides the head line if IT fits (else it breaks to col+2), and
+;; the else renders AT col — every chained if breaks (em_chain), a non-if
+;; terminal packs there too. A then-branch broken to col+2 keeps a non-if
+;; else at col+2 (the generic look). Anything else: generic break-after-head.
+(fn opt_trail ((ns (List CNode))) (Pair (Option (List Int)) (List CNode))
+  (match ns
+    ((Cons h t)
+     (match h
+       ((CTrail txt) (Pair (Some txt) t))
+       (_ (Pair None ns))))
+    (_ (Pair None ns))))
+
+(fn is_if ((n CNode)) Bool
+  (match n
+    ((CList items)
+     (match items
+       ((Cons h t)
+        (match h
+          ((CAtom a) (bytes_eq a "if"))
+          (_ False)))
+       (_ False)))
+    (_ False)))
+
+;; the then-on-its-own-line tail: then at col+2 (with its trail), else at the
+;; chain column when it is a chained if, else at col+2.
+(fn em_if_deep
+  ((thn CNode)
+   (ttr (Option (List Int)))
+   (els CNode)
+   (col Int)
+   (accH (List Int)))
+  (List Int)
+  (let ((acc2 (em_pp thn (+ col 2) (em (sp (+ col 2)) (Cons 10 accH)))))
+    (let
+      ((acc3
+         (match ttr
+           (None acc2)
+           ((Some txt) (em txt (Cons 32 (Cons 32 acc2)))))))
+      (if (is_if els) (Cons 41 (em_chain els col (em (sp col) (Cons 10 acc3))))
+      (Cons 41 (em_pp els (+ col 2) (em (sp (+ col 2)) (Cons 10 acc3))))))))
+
+(fn em_if5
+  ((t (List CNode))  ; the original items after the head, for the fallback
+   (cnd CNode)
+   (ctr (Option (List Int)))
+   (thn CNode)
+   (ttr (Option (List Int)))
+   (els CNode)
+   (col Int)
+   (acc (List Int)))
+  (List Int)
   (let ((bc (flat_w cnd (- (- 80 col) 4))))
-    (if (lt bc 0)
-        (em_if_generic cnd thn tr els col acc)
-        (let ((bt (flat_w thn (- bc 1))))
-          (if (lt bt 0)
-              (em_if_generic cnd thn tr els col acc)
-              (let ((acc1 (em_flat thn (Cons 32 (em_flat cnd (em "(if " acc))))))
-                (let ((acc2 (match tr
-                              (None acc1)
-                              ((Some txt) (em txt (Cons 32 (Cons 32 acc1)))))))
-                  (Cons 41 (em_chain els col (em (sp col) (Cons 10 acc2)))))))))))
+    (if (lt bc 0) (em_head "if" t col acc)
+    (let ((acc1 (em_flat cnd (em "(if " acc))))
+      (match ctr
+        ((Some ctxt)
+         (em_if_deep thn ttr els col (em ctxt (Cons 32 (Cons 32 acc1)))))
+        (None
+          (let ((bt (flat_w thn (- bc 1))))
+            (if (lt bt 0) (em_if_deep thn ttr els col acc1)
+            (let ((acc2 (em_flat thn (Cons 32 acc1))))
+              (let
+                ((acc3
+                   (match ttr
+                     (None acc2)
+                     ((Some txt) (em txt (Cons 32 (Cons 32 acc2)))))))
+                (Cons 41 (em_chain els col (em (sp col) (Cons 10 acc3))))))))))))))
 
 ;; a broken cascade breaks EVERY link: a chained if in else position skips
 ;; the flat check; anything else falls back to fit-or-break.
 (fn em_chain ((els CNode) (col Int) (acc (List Int))) (List Int)
   (match els
     ((CList items)
-      (match items
-        ((Cons h t)
-          (match h
-            ((CAtom hb)
-              (if (bytes_eq hb "if")
-                  (em_if_try hb t col acc)
-                  (em_pp els col acc)))
-            (_ (em_pp els col acc))))
-        (_ (em_pp els col acc))))
+     (match items
+       ((Cons h t)
+        (match h
+          ((CAtom hb)
+           (if (bytes_eq hb "if") (em_if_try hb t col acc) (em_pp els col acc)))
+          (_ (em_pp els col acc))))
+       (_ (em_pp els col acc))))
     (_ (em_pp els col acc))))
 
-(fn em_if_generic ((cnd CNode) (thn CNode) (tr (Option (List Int)))
-                   (els CNode) (col Int) (acc (List Int))) (List Int)
-  (match tr
-    (None (em_head "if" (Cons cnd (Cons thn (Cons els Nil))) col acc))
-    ((Some txt)
-      (em_head "if"
-        (Cons cnd (Cons thn (Cons (CTrail txt) (Cons els Nil)))) col acc))))
-
-;; recognize (if c t e) / (if c t <trail> e) and dispatch to the cascade.
-(fn em_if_try ((hb (List Int)) (t (List CNode)) (col Int) (acc (List Int))) (List Int)
+;; recognize (if c [tr] t [tr] e) and dispatch to the cascade.
+(fn em_if_try ((hb (List Int)) (t (List CNode)) (col Int) (acc (List Int)))
+  (List Int)
   (match t
     ((Cons cnd r1)
-      (match r1
-        ((Cons thn r2)
-          (match r2
-            ((Cons x r3)
-              (match x
-                ((CTrail txt)
-                  (match r3
-                    ((Cons els r4)
-                      (match r4
-                        (Nil (em_if cnd thn (Some txt) els col acc))
-                        (_ (em_head hb t col acc))))
-                    (_ (em_head hb t col acc))))
-                (_
-                  (match r3
-                    (Nil (em_if cnd thn None x col acc))
-                    (_ (em_head hb t col acc))))))
-            (_ (em_head hb t col acc))))
-        (_ (em_head hb t col acc))))
+     (match (opt_trail r1)
+       ((Pair ctr r2)
+        (match r2
+          ((Cons thn r3)
+           (match (opt_trail r3)
+             ((Pair ttr r4)
+              (match r4
+                ((Cons els r5)
+                 (match r5
+                   (Nil (em_if5 t cnd ctr thn ttr els col acc))
+                   (_ (em_head hb t col acc))))
+                (_ (em_head hb t col acc))))))
+          (_ (em_head hb t col acc))))))
     (_ (em_head hb t col acc))))
 
 (fn em_list ((items (List CNode)) (col Int) (acc (List Int))) (List Int)
   (match items
     (Nil (Cons 41 (Cons 40 acc)))
     ((Cons h t)
-      (match h
-        ((CAtom hb)
-          (if (bytes_eq hb "if")
-              (em_if_try hb t col acc)
-              (if (all_atoms items)
-                  (em_fill items col acc)
-                  (em_head hb t col acc))))
-        (_                                   ; headless: align under the first
-          (let ((acc1 (em_pp h (+ col 1) (Cons 40 acc))))
-            (em_kids (prep t) (+ col 1) col acc1)))))))
+     (match h
+       ((CAtom hb)
+        (if (bytes_eq hb "if") (em_if_try hb t col acc)
+        (if (all_atoms items) (em_fill items col acc)
+        (em_head hb t col acc))))
+       (_  ; headless: align under the first
+         (let ((acc1 (em_pp h (+ col 1) (Cons 40 acc))))
+           (em_kids (prep t) (+ col 1) col acc1)))))))
 
 ;; fit-or-break entry point for one node at column `col`.
 (fn em_pp ((n CNode) (col Int) (acc (List Int))) (List Int)
-  (if (le 0 (flat_w n (- 80 col)))
-      (em_flat n acc)
-      (match n
-        ((CList items) (em_list items col acc))
-        ((CQuote m) (em_pp m (+ col 1) (Cons 39 acc)))
-        (_ (em_flat n acc)))))               ; over-wide atom/string: emit as-is
+  (if (le 0 (flat_w n (- 80 col))) (em_flat n acc)
+  (match n
+    ((CList items) (em_list items col acc))
+    ((CQuote m) (em_pp m (+ col 1) (Cons 39 acc)))
+    (_ (em_flat n acc)))))  ; over-wide atom/string: emit as-is
 
 ;; ---- the top level ----------------------------------------------------------
-(fn squash2 ((ns (List CNode))) (List CNode)      ; blank runs → at most two
+(fn squash2 ((ns (List CNode))) (List CNode)  ; blank runs → at most two
   (match ns
     (Nil Nil)
     ((Cons h t)
-      (match h
-        (CBlank
-          (match t
-            (Nil (Cons CBlank Nil))
-            ((Cons h2 t2)
-              (match h2
-                (CBlank (Cons CBlank (Cons CBlank (squash2 (drop_lead_blanks t2)))))
-                (_ (Cons CBlank (squash2 t)))))))
-        (_ (Cons h (squash2 t)))))))
+     (match h
+       (CBlank
+         (match t
+           (Nil (Cons CBlank Nil))
+           ((Cons h2 t2)
+            (match h2
+              (CBlank
+                (Cons CBlank (Cons CBlank (squash2 (drop_lead_blanks t2)))))
+              (_ (Cons CBlank (squash2 t)))))))
+       (_ (Cons h (squash2 t)))))))
 
 (fn pp_tops ((ns (List CNode)) (acc (List Int))) (List Int)
   (match ns
     (Nil acc)
     ((Cons h t)
-      (match h
-        (CBlank (pp_tops t (Cons 10 acc)))
-        ((CComment txt) (pp_tops t (Cons 10 (em txt acc))))
-        ((CTrail txt) (pp_tops t (Cons 10 (em txt acc))))   ; orphan trail
-        (_
-          (let ((acc1 (em_pp h 0 acc)))
-            (match t
-              (Nil (Cons 10 acc1))
-              ((Cons h2 t2)
-                (match h2
-                  ((CTrail txt)
-                    (pp_tops t2 (Cons 10 (em txt (Cons 32 (Cons 32 acc1))))))
-                  (_ (pp_tops t (Cons 10 acc1))))))))))))
+     (match h
+       (CBlank (pp_tops t (Cons 10 acc)))
+       ((CComment txt) (pp_tops t (Cons 10 (em txt acc))))
+       ((CTrail txt) (pp_tops t (Cons 10 (em txt acc))))  ; orphan trail
+       (_
+         (let ((acc1 (em_pp h 0 acc)))
+           (match t
+             (Nil (Cons 10 acc1))
+             ((Cons h2 t2)
+              (match h2
+                ((CTrail txt)
+                 (pp_tops t2 (Cons 10 (em txt (Cons 32 (Cons 32 acc1))))))
+                (_ (pp_tops t (Cons 10 acc1))))))))))))
 
 (fn pp_top ((ns (List CNode))) (List Int)
   (rev_i (pp_tops (squash2 (drop_lead_blanks (strip_tail_blanks ns))) Nil) Nil))
@@ -523,20 +550,30 @@
 (fn main ((w World)) World
   (match (get_args w)
     ((Pair aa w1)
-      (match aa
-        (Nil (exit 2 (write "usage: shardfmt <file.shard>\n" w1)))
-        ((Cons path more)
-          (match (read_file path w1)
-            ((Pair r w2)
-              (match r
-                (None (exit 2 (write "shardfmt: cannot read file\n" w2)))
-                ((Some src)
-                  (match (fmt src)
-                    ((Some out) (exit 0 (write out w2)))
+     (match aa
+       (Nil (exit 2 (write "usage: shardfmt <file.shard>\n" w1)))
+       ((Cons path more)
+        (match (read_file path w1)
+          ((Pair r w2)
+           (match r
+             (None (exit 2 (write "shardfmt: cannot read file\n" w2)))
+             ((Some src)
+              (match (fmt src)
+                ((Some out) (exit 0 (write out w2)))
+                (None
+                  (match (cst_read src)
                     (None
-                      (match (cst_read src)
-                        (None (exit 2 (write (cat "shardfmt: " (cat (parse_diag src Nil 1) "\n")) w2)))
-                        (_ (exit 3 (write "shardfmt: reformat changed the parse; refusing to emit\n" w2)))))))))))))))
+                      (exit
+                        2
+                        (write
+                          (cat "shardfmt: " (cat (parse_diag src Nil 1) "\n"))
+                          w2)))
+                    (_
+                      (exit
+                        3
+                        (write
+                          "shardfmt: reformat changed the parse; refusing to emit\n"
+                          w2)))))))))))))))
 
 ;; ===========================================================================
 ;; DISCHARGE — the fulfills, smallest first.
@@ -545,65 +582,272 @@
 ;; eqdec closes int_eq a a abstractly; bytes_eq_refl lifts it over a list by
 ;; structural induction. These feed the success leaf of fmt_main_contract
 ;; (the written chunk IS fmt's answer, so the comparison is X == X).
-(claim int_eq_refl
-  (goal ((a Int)) () (= (int_eq a a) True))
-  (by eqdec (list)))
+(claim int_eq_refl (goal ((a Int)) () (= (int_eq a a) True)) (by eqdec (list)))
 
 (claim bytes_eq_refl
   (goal ((b (List Int))) () (= (bytes_eq b b) True))
   (induct b
     ((case Nil (steps ((unfold bytes_eq lhs) (reduce lhs)) refl))
      (case Cons
-       (steps ((unfold bytes_eq lhs)
-               (reduce lhs)
-               (rewrite (lemma int_eq_refl) lr lhs true ())
-               (reduce lhs)
-               (rewrite (hyp ih) lr lhs true ()))
+       (steps
+         ((unfold bytes_eq lhs)
+          (reduce lhs)
+          (rewrite (lemma int_eq_refl) lr lhs true ())
+          (reduce lhs)
+          (rewrite (hyp ih) lr lhs true ()))
          refl)))))
 
 ;; R-STYLE — the ground scenarios: one computation each.
 (fulfills fmt_scenario_collapse (steps ((compute both)) refl))
-(fulfills fmt_scenario_fit      (steps ((compute both)) refl))
-(fulfills fmt_scenario_break    (steps ((compute both)) refl))
+(fulfills fmt_scenario_fit (steps ((compute both)) refl))
+(fulfills fmt_scenario_break (steps ((compute both)) refl))
 (fulfills fmt_scenario_comments (steps ((compute both)) refl))
-(fulfills fmt_scenario_blanks   (steps ((compute both)) refl))
-(fulfills fmt_scenario_sugar    (steps ((compute both)) refl))
-(fulfills fmt_scenario_idem     (steps ((compute both)) refl))
-(fulfills fmt_scenario_match    (steps ((compute both)) refl))
-(fulfills fmt_scenario_ifchain  (steps ((compute both)) refl))
+(fulfills fmt_scenario_blanks (steps ((compute both)) refl))
+(fulfills fmt_scenario_sugar (steps ((compute both)) refl))
+(fulfills fmt_scenario_idem (steps ((compute both)) refl))
+(fulfills fmt_scenario_match (steps ((compute both)) refl))
+(fulfills fmt_scenario_ifchain (steps ((compute both)) refl))
 
 ;; R-GATE — by construction: fmt ENDS in the gate_check guard, so the proof is
 ;; a case split on the comparison; no printer internals enter the argument.
 (fulfills fmt_gate
-  (steps ((unfold fmt lhs))
+  (steps
+    ((unfold fmt lhs))
     (case-on (cst_read src) Option
       ((case None
-         (steps ((rewrite (hyp 0) lr lhs true ())
-                 (reduce lhs)
-                 (unfold gate_holds lhs)
-                 (reduce lhs))
+         (steps
+           ((rewrite (hyp 0) lr lhs true ())
+            (reduce lhs)
+            (unfold gate_holds lhs)
+            (reduce lhs))
            refl))
-       (case Some (ns)
-         (steps ((rewrite (hyp 0) lr lhs true ())
-                 (reduce lhs)
-                 (unfold gate_check lhs))
+       (case Some
+         (ns)
+         (steps
+           ((rewrite (hyp 0) lr lhs true ())
+            (reduce lhs)
+            (unfold gate_check lhs))
            (case-on (parses_eq src (pp_top ns)) Bool
              ((case True
-                (steps ((rewrite (hyp 0) lr lhs true ())
-                        (reduce lhs)
-                        (unfold gate_holds lhs)
-                        (reduce lhs)
-                        (rewrite (hyp 0) lr lhs true ()))
+                (steps
+                  ((rewrite (hyp 0) lr lhs true ())
+                   (reduce lhs)
+                   (unfold gate_holds lhs)
+                   (reduce lhs)
+                   (rewrite (hyp 0) lr lhs true ()))
                   refl))
               (case False
-                (steps ((rewrite (hyp 0) lr lhs true ())
-                        (reduce lhs)
-                        (unfold gate_holds lhs)
-                        (reduce lhs))
+                (steps
+                  ((rewrite (hyp 0) lr lhs true ())
+                   (reduce lhs)
+                   (unfold gate_holds lhs)
+                   (reduce lhs))
                   refl))))))))))
 
 ;; R-RUN — symbolic execution of main: case the four effects in program order,
 ;; thread each observable down to the fresh world through the bolts, then run
 ;; fmt_run_ok on the resulting ground traces. Error leaves never look past the
 ;; nonzero exit code; the success leaf ends in bytes_eq out out.
-(fulfills fmt_main_contract (steps ((unfold main lhs) (unfold main lhs) (unfold main lhs)) (case-on (get_args w) Pair ((case Pair (aa w1) (steps ((rewrite (hyp 0) lr lhs true ()) (reduce lhs)) (case-on aa List ((case Nil (steps ((rewrite (hyp 0) lr lhs true ()) (reduce lhs) (rewrite (lemma exit_code) lr lhs true ()) (compute lhs)) refl)) (case Cons (path more) (steps ((rewrite (hyp 0) lr lhs true ()) (reduce lhs)) (case-on (read_file path w1) Pair ((case Pair (r w2) (steps ((rewrite (hyp 0) lr lhs true ()) (reduce lhs)) (case-on r Option ((case None (steps ((rewrite (hyp 0) lr lhs true ()) (reduce lhs) (rewrite (lemma exit_code) lr lhs true ()) (compute lhs)) refl)) (case Some (src) (steps ((rewrite (hyp 0) lr lhs true ()) (reduce lhs)) (case-on (fmt src) Option ((case Some (out) (steps ((rewrite (hyp 0) lr lhs true ()) (reduce lhs) (rewrite (lemma exit_code) lr lhs true ()) (rewrite (lemma exit_reads) lr lhs true ()) (rewrite (lemma exit_output) lr lhs true ()) (rewrite (lemma write_reads) lr lhs true ()) (rewrite (lemma write_output) lr lhs true ())) (rewrite-with (lemma read_reads) lr lhs ((inst p path) (inst w w1) (inst r r) (inst w1 w2)) ((steps ((rewrite (hyp 2) lr lhs true ())) refl)) (rewrite-with (lemma read_output) lr lhs ((inst p path) (inst w w1) (inst r r) (inst w1 w2)) ((steps ((rewrite (hyp 2) lr lhs true ())) refl)) (rewrite-with (lemma args_reads) lr lhs ((inst w w) (inst aa aa) (inst w1 w1)) ((steps ((rewrite (hyp 4) lr lhs true ())) refl)) (rewrite-with (lemma args_output) lr lhs ((inst w w) (inst aa aa) (inst w1 w1)) ((steps ((rewrite (hyp 4) lr lhs true ())) refl)) (steps ((rewrite (premise 0) lr lhs true ()) (rewrite (premise 1) lr lhs true ()) (rewrite (hyp 1) lr lhs true ()) (rewrite (lemma append_nil_left) lr lhs true ()) (unfold fmt_run_ok lhs) (reduce lhs) (rewrite (lemma int_eq_refl) lr lhs true ()) (reduce lhs) (rewrite (hyp 0) lr lhs true ()) (reduce lhs) (rewrite (lemma bytes_eq_refl) lr lhs true ())) refl))))))) (case None (steps ((rewrite (hyp 0) lr lhs true ()) (reduce lhs)) (case-on (cst_read src) Option ((case None (steps ((rewrite (hyp 0) lr lhs true ()) (reduce lhs) (rewrite (lemma exit_code) lr lhs true ()) (compute lhs)) refl)) (case Some (ns2) (steps ((rewrite (hyp 0) lr lhs true ()) (reduce lhs) (rewrite (lemma exit_code) lr lhs true ()) (compute lhs)) refl))))))))))))))))))))))))))
+(fulfills fmt_main_contract
+  (steps
+    ((unfold main lhs) (unfold main lhs) (unfold main lhs))
+    (case-on (get_args w) Pair
+      ((case Pair
+         (aa w1)
+         (steps
+           ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+           (case-on aa List
+             ((case Nil
+                (steps
+                  ((rewrite (hyp 0) lr lhs true ())
+                   (reduce lhs)
+                   (rewrite (lemma exit_code) lr lhs true ())
+                   (compute lhs))
+                  refl))
+              (case Cons
+                (path more)
+                (steps
+                  ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                  (case-on (read_file path w1) Pair
+                    ((case Pair
+                       (r w2)
+                       (steps
+                         ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                         (case-on r Option
+                           ((case None
+                              (steps
+                                ((rewrite (hyp 0) lr lhs true ())
+                                 (reduce lhs)
+                                 (rewrite (lemma exit_code) lr lhs true ())
+                                 (compute lhs))
+                                refl))
+                            (case Some
+                              (src)
+                              (steps
+                                ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                                (case-on (fmt src) Option
+                                  ((case Some
+                                     (out)
+                                     (steps
+                                       ((rewrite (hyp 0) lr lhs true ())
+                                        (reduce lhs)
+                                        (rewrite
+                                          (lemma exit_code)
+                                          lr
+                                          lhs
+                                          true
+                                          ())
+                                        (rewrite
+                                          (lemma exit_reads)
+                                          lr
+                                          lhs
+                                          true
+                                          ())
+                                        (rewrite
+                                          (lemma exit_output)
+                                          lr
+                                          lhs
+                                          true
+                                          ())
+                                        (rewrite
+                                          (lemma write_reads)
+                                          lr
+                                          lhs
+                                          true
+                                          ())
+                                        (rewrite
+                                          (lemma write_output)
+                                          lr
+                                          lhs
+                                          true
+                                          ()))
+                                       (rewrite-with
+                                         (lemma read_reads)
+                                         lr
+                                         lhs
+                                         ((inst p path)
+                                          (inst w w1)
+                                          (inst r r)
+                                          (inst w1 w2))
+                                         ((steps
+                                            ((rewrite (hyp 2) lr lhs true ()))
+                                            refl))
+                                         (rewrite-with
+                                           (lemma read_output)
+                                           lr
+                                           lhs
+                                           ((inst p path)
+                                            (inst w w1)
+                                            (inst r r)
+                                            (inst w1 w2))
+                                           ((steps
+                                              ((rewrite (hyp 2) lr lhs true ()))
+                                              refl))
+                                           (rewrite-with
+                                             (lemma args_reads)
+                                             lr
+                                             lhs
+                                             ((inst w w)
+                                              (inst aa aa)
+                                              (inst w1 w1))
+                                             ((steps
+                                                ((rewrite
+                                                   (hyp 4)
+                                                   lr
+                                                   lhs
+                                                   true
+                                                   ()))
+                                                refl))
+                                             (rewrite-with
+                                               (lemma args_output)
+                                               lr
+                                               lhs
+                                               ((inst w w)
+                                                (inst aa aa)
+                                                (inst w1 w1))
+                                               ((steps
+                                                  ((rewrite
+                                                     (hyp 4)
+                                                     lr
+                                                     lhs
+                                                     true
+                                                     ()))
+                                                  refl))
+                                               (steps
+                                                 ((rewrite
+                                                    (premise 0)
+                                                    lr
+                                                    lhs
+                                                    true
+                                                    ())
+                                                  (rewrite
+                                                    (premise 1)
+                                                    lr
+                                                    lhs
+                                                    true
+                                                    ())
+                                                  (rewrite
+                                                    (hyp 1)
+                                                    lr
+                                                    lhs
+                                                    true
+                                                    ())
+                                                  (rewrite
+                                                    (lemma append_nil_left)
+                                                    lr
+                                                    lhs
+                                                    true
+                                                    ())
+                                                  (unfold fmt_run_ok lhs)
+                                                  (reduce lhs)
+                                                  (rewrite
+                                                    (lemma int_eq_refl)
+                                                    lr
+                                                    lhs
+                                                    true
+                                                    ())
+                                                  (reduce lhs)
+                                                  (rewrite
+                                                    (hyp 0)
+                                                    lr
+                                                    lhs
+                                                    true
+                                                    ())
+                                                  (reduce lhs)
+                                                  (rewrite
+                                                    (lemma bytes_eq_refl)
+                                                    lr
+                                                    lhs
+                                                    true
+                                                    ()))
+                                                 refl)))))))
+                                   (case None
+                                     (steps
+                                       ((rewrite (hyp 0) lr lhs true ())
+                                        (reduce lhs))
+                                       (case-on (cst_read src) Option
+                                         ((case None
+                                            (steps
+                                              ((rewrite (hyp 0) lr lhs true ())
+                                               (reduce lhs)
+                                               (rewrite
+                                                 (lemma exit_code)
+                                                 lr
+                                                 lhs
+                                                 true
+                                                 ())
+                                               (compute lhs))
+                                              refl))
+                                          (case Some
+                                            (ns2)
+                                            (steps
+                                              ((rewrite (hyp 0) lr lhs true ())
+                                               (reduce lhs)
+                                               (rewrite
+                                                 (lemma exit_code)
+                                                 lr
+                                                 lhs
+                                                 true
+                                                 ())
+                                               (compute lhs))
+                                              refl))))))))))))))))))))))))))
