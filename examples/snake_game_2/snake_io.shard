@@ -4075,6 +4075,845 @@
        (steps ((rewrite (premise 0) lr lhs true ())) refl))
       refl)))
 
+;; ---- private input-response helpers (proof scaffolding, not contract vocab) --
+;; positional lockstep: the logs have the same length (one input per frame).
+(fn same_shape ((outs (List (List Int))) (ins (List (Option Int)))) Bool
+  (match outs
+    (Nil
+      (match ins
+        (Nil True)
+        ((Cons i it) False)))
+    ((Cons o ot)
+     (match ins
+       (Nil False)
+       ((Cons i it) (same_shape ot it))))))
+
+;; the moves_go prev-carry after walking outs from prev p: the LAST frame.
+(fn mgo_last ((p (Option (List Int))) (outs (List (List Int))))
+  (Option (List Int))
+  (match outs
+    (Nil p)
+    ((Cons f rest) (mgo_last (Some f) rest))))
+
+;; the per-pair check moves_go applies, over an OPTIONAL previous frame.
+(fn shows_opt ((p (Option (List Int))) (cur (List Int)) (mk (Option Int))) Bool
+  (match p
+    (None True)
+    ((Some pf)
+     (match mk
+       (None True)
+       ((Some k) (step_shows pf cur k))))))
+
+;; ===========================================================================
+;; INPUT-RESPONSE OVER THE WHOLE RUN — the io_input_moves worker chain.
+;;
+;; moves_ok pairs every emitted frame with the input that drove it; the chain
+;; lifts the per-tick move_shown to the full run. Helpers: same_shape pins the
+;; logs to positional lockstep, mgo_last is moves_go's prev-carry (the LAST
+;; written frame), shows_opt the per-pair check over an optional previous.
+;; The snoc lemmas fold one appended (frame, key) pair; play_moves_preserve
+;; rides the loop (the carry `mgo_last = Some (frame s)` ties the log to the
+;; CURRENT state, so each tick's obligation IS move_shown); play_moves_start
+;; bridges from the empty logs (where the carry is None) by unrolling the
+;; first tick by hand.
+;; ===========================================================================
+
+(claim same_shape_snoc
+  (goal
+    ((outs (List (List Int)))
+     (ins (List (Option Int)))
+     (y (List Int))
+     (mk (Option Int)))
+    ((= (same_shape outs ins) True))
+    (= (same_shape (append outs (Cons y Nil)) (append ins (Cons mk Nil))) True))
+  (induct outs
+    ((case Nil
+       (induct ins
+         ((case Nil
+            (rewrite-with
+              (lemma append_nil_left)
+              lr
+              lhs
+              ((inst ys (Cons y Nil)))
+              ()
+              (rewrite-with
+                (lemma append_nil_left)
+                lr
+                lhs
+                ((inst ys (Cons mk Nil)))
+                ()
+                (steps
+                  ((unfold same_shape lhs)
+                   (reduce lhs)
+                   (unfold same_shape lhs)
+                   (reduce lhs))
+                  refl))))
+          (case Cons (i it) (absurd (premise 0))))))
+     (case Cons
+       (h t)
+       (induct ins
+         ((case Nil (absurd (premise 0)))
+          (case Cons
+            (i it)
+            (rewrite-with
+              (lemma append_cons)
+              lr
+              lhs
+              ((inst h h) (inst t t) (inst ys (Cons y Nil)))
+              ()
+              (rewrite-with
+                (lemma append_cons)
+                lr
+                lhs
+                ((inst h i) (inst t it) (inst ys (Cons mk Nil)))
+                ()
+                (steps
+                  ((unfold same_shape lhs) (reduce lhs))
+                  (rewrite-with
+                    (hyp ih)
+                    lr
+                    lhs
+                    ((inst ins it) (inst y y) (inst mk mk))
+                    ((steps
+                       ((rewrite (premise 0) rl rhs true ())
+                        (unfold same_shape rhs)
+                        (reduce rhs))
+                       refl))
+                    refl)))))))))))
+
+(claim mgo_last_snoc
+  (goal ((outs (List (List Int))) (p (Option (List Int))) (y (List Int))) ()
+    (= (mgo_last p (append outs (Cons y Nil))) (Some y)))
+  (induct outs
+    ((case Nil
+       (rewrite-with
+         (lemma append_nil_left)
+         lr
+         lhs
+         ((inst ys (Cons y Nil)))
+         ()
+         (steps
+           ((unfold mgo_last lhs)
+            (reduce lhs)
+            (unfold mgo_last lhs)
+            (reduce lhs))
+           refl)))
+     (case Cons
+       (h t)
+       (rewrite-with
+         (lemma append_cons)
+         lr
+         lhs
+         ((inst h h) (inst t t) (inst ys (Cons y Nil)))
+         ()
+         (steps
+           ((unfold mgo_last lhs) (reduce lhs))
+           (rewrite-with (hyp ih) lr lhs ((inst p (Some h)) (inst y y)) () refl)))))))
+
+(claim moves_snoc
+  (goal
+    ((outs (List (List Int)))
+     (ins (List (Option Int)))
+     (p (Option (List Int)))
+     (f2 (List Int))
+     (mk (Option Int)))
+    ((= (same_shape outs ins) True)
+     (= (moves_go p outs ins) True)
+     (= (shows_opt (mgo_last p outs) f2 mk) True))
+    (= (moves_go p (append outs (Cons f2 Nil)) (append ins (Cons mk Nil))) True))
+  (induct outs
+    ((case Nil
+       (induct ins
+         ((case Nil
+            (rewrite-with
+              (lemma append_nil_left)
+              lr
+              lhs
+              ((inst ys (Cons f2 Nil)))
+              ()
+              (rewrite-with
+                (lemma append_nil_left)
+                lr
+                lhs
+                ((inst ys (Cons mk Nil)))
+                ()
+                (steps
+                  ((unfold moves_go lhs) (reduce lhs))
+                  (case-on p Option
+                    ((case None
+                       (steps
+                         ((rewrite (hyp 0) lr lhs true ())
+                          (reduce lhs)
+                          (unfold moves_go lhs)
+                          (reduce lhs))
+                         refl))
+                     (case Some
+                       (pf)
+                       (steps
+                         ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                         (case-on mk Option
+                           ((case None
+                              (steps
+                                ((rewrite (hyp 0) lr lhs true ())
+                                 (reduce lhs)
+                                 (unfold moves_go lhs)
+                                 (reduce lhs))
+                                refl))
+                            (case Some
+                              (k)
+                              (have (= (step_shows pf f2 k) True)
+                                (steps
+                                  ((rewrite (premise 2) rl rhs true ())
+                                   (rewrite (hyp 1) lr rhs true ())
+                                   (rewrite (hyp 0) lr rhs true ())
+                                   (unfold mgo_last rhs)
+                                   (reduce rhs)
+                                   (unfold shows_opt rhs)
+                                   (reduce rhs))
+                                  refl)
+                                (steps
+                                  ((rewrite (hyp 0) lr lhs true ())
+                                   (reduce lhs)
+                                   (rewrite (premise 3) lr lhs true ())
+                                   (reduce lhs)
+                                   (unfold moves_go lhs)
+                                   (reduce lhs))
+                                  refl)))))))))))))
+          (case Cons (i it) (absurd (premise 0))))))
+     (case Cons
+       (h t)
+       (induct ins
+         ((case Nil (absurd (premise 0)))
+          (case Cons
+            (i it)
+            (rewrite-with
+              (lemma append_cons)
+              lr
+              lhs
+              ((inst h h) (inst t t) (inst ys (Cons f2 Nil)))
+              ()
+              (rewrite-with
+                (lemma append_cons)
+                lr
+                lhs
+                ((inst h i) (inst t it) (inst ys (Cons mk Nil)))
+                ()
+                (steps
+                  ((unfold moves_go lhs) (reduce lhs))
+                  (case-on p Option
+                    ((case None
+                       (steps
+                         ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                         (rewrite-with
+                           (hyp 1)
+                           lr
+                           lhs
+                           ((inst ins it)
+                            (inst p (Some h))
+                            (inst f2 f2)
+                            (inst mk mk))
+                           ((steps
+                              ((rewrite (premise 0) rl rhs true ())
+                               (unfold same_shape rhs)
+                               (reduce rhs))
+                              refl)
+                            (steps
+                              ((rewrite (premise 1) rl rhs true ())
+                               (rewrite (hyp 0) lr rhs true ())
+                               (unfold moves_go rhs)
+                               (reduce rhs))
+                              refl)
+                            (steps
+                              ((rewrite (premise 2) rl rhs true ())
+                               (rewrite (hyp 0) lr rhs true ())
+                               (unfold mgo_last rhs)
+                               (reduce rhs))
+                              refl))
+                           refl)))
+                     (case Some
+                       (pf)
+                       (steps
+                         ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                         (case-on i Option
+                           ((case None
+                              (steps
+                                ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                                (rewrite-with
+                                  (hyp 2)
+                                  lr
+                                  lhs
+                                  ((inst ins it)
+                                   (inst p (Some h))
+                                   (inst f2 f2)
+                                   (inst mk mk))
+                                  ((steps
+                                     ((rewrite (premise 0) rl rhs true ())
+                                      (unfold same_shape rhs)
+                                      (reduce rhs))
+                                     refl)
+                                   (steps
+                                     ((rewrite (premise 1) rl rhs true ())
+                                      (rewrite (hyp 1) lr rhs true ())
+                                      (rewrite (hyp 0) lr rhs true ())
+                                      (unfold moves_go rhs)
+                                      (reduce rhs))
+                                     refl)
+                                   (steps
+                                     ((rewrite (premise 2) rl rhs true ())
+                                      (rewrite (hyp 1) lr rhs true ())
+                                      (unfold mgo_last rhs)
+                                      (reduce rhs))
+                                     refl))
+                                  refl)))
+                            (case Some
+                              (k)
+                              (steps
+                                ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                                (case-on (step_shows pf h k) Bool
+                                  ((case True
+                                     (steps
+                                       ((rewrite (hyp 0) lr lhs true ())
+                                        (reduce lhs))
+                                       (rewrite-with
+                                         (hyp 3)
+                                         lr
+                                         lhs
+                                         ((inst ins it)
+                                          (inst p (Some h))
+                                          (inst f2 f2)
+                                          (inst mk mk))
+                                         ((steps
+                                            ((rewrite
+                                               (premise 0)
+                                               rl
+                                               rhs
+                                               true
+                                               ())
+                                             (unfold same_shape rhs)
+                                             (reduce rhs))
+                                            refl)
+                                          (steps
+                                            ((rewrite
+                                               (premise 1)
+                                               rl
+                                               rhs
+                                               true
+                                               ())
+                                             (rewrite (hyp 2) lr rhs true ())
+                                             (rewrite (hyp 1) lr rhs true ())
+                                             (unfold moves_go rhs)
+                                             (reduce rhs)
+                                             (rewrite (hyp 0) lr rhs true ())
+                                             (reduce rhs))
+                                            refl)
+                                          (steps
+                                            ((rewrite
+                                               (premise 2)
+                                               rl
+                                               rhs
+                                               true
+                                               ())
+                                             (rewrite (hyp 2) lr rhs true ())
+                                             (unfold mgo_last rhs)
+                                             (reduce rhs))
+                                            refl))
+                                         refl)))
+                                   (case False
+                                     (have (= True False)
+                                       (steps
+                                         ((rewrite (premise 1) rl lhs true ())
+                                          (rewrite (hyp 2) lr lhs true ())
+                                          (rewrite (hyp 1) lr lhs true ())
+                                          (unfold moves_go lhs)
+                                          (reduce lhs)
+                                          (rewrite (hyp 0) lr lhs true ())
+                                          (reduce lhs))
+                                         refl)
+                                       (absurd (premise 3))))))))))))))))))))))))
+
+(claim moves_ext
+  (goal
+    ((outs (List (List Int))) (ins (List (Option Int))) (p (Option (List Int))))
+    ((= (same_shape outs ins) True) (= (moves_go p outs ins) True))
+    (= (moves_go p outs (append ins (Cons None Nil))) True))
+  (induct outs
+    ((case Nil (steps ((unfold moves_go lhs) (reduce lhs)) refl))
+     (case Cons
+       (h t)
+       (induct ins
+         ((case Nil (absurd (premise 0)))
+          (case Cons
+            (i it)
+            (rewrite-with
+              (lemma append_cons)
+              lr
+              lhs
+              ((inst h i) (inst t it) (inst ys (Cons None Nil)))
+              ()
+              (steps
+                ((unfold moves_go lhs) (reduce lhs))
+                (case-on p Option
+                  ((case None
+                     (steps
+                       ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                       (rewrite-with
+                         (hyp 1)
+                         lr
+                         lhs
+                         ((inst ins it) (inst p (Some h)))
+                         ((steps
+                            ((rewrite (premise 0) rl rhs true ())
+                             (unfold same_shape rhs)
+                             (reduce rhs))
+                            refl)
+                          (steps
+                            ((rewrite (premise 1) rl rhs true ())
+                             (rewrite (hyp 0) lr rhs true ())
+                             (unfold moves_go rhs)
+                             (reduce rhs))
+                            refl))
+                         refl)))
+                   (case Some
+                     (pf)
+                     (steps
+                       ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                       (case-on i Option
+                         ((case None
+                            (steps
+                              ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                              (rewrite-with
+                                (hyp 2)
+                                lr
+                                lhs
+                                ((inst ins it) (inst p (Some h)))
+                                ((steps
+                                   ((rewrite (premise 0) rl rhs true ())
+                                    (unfold same_shape rhs)
+                                    (reduce rhs))
+                                   refl)
+                                 (steps
+                                   ((rewrite (premise 1) rl rhs true ())
+                                    (rewrite (hyp 1) lr rhs true ())
+                                    (rewrite (hyp 0) lr rhs true ())
+                                    (unfold moves_go rhs)
+                                    (reduce rhs))
+                                   refl))
+                                refl)))
+                          (case Some
+                            (k)
+                            (steps
+                              ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                              (case-on (step_shows pf h k) Bool
+                                ((case True
+                                   (steps
+                                     ((rewrite (hyp 0) lr lhs true ())
+                                      (reduce lhs))
+                                     (rewrite-with
+                                       (hyp 3)
+                                       lr
+                                       lhs
+                                       ((inst ins it) (inst p (Some h)))
+                                       ((steps
+                                          ((rewrite (premise 0) rl rhs true ())
+                                           (unfold same_shape rhs)
+                                           (reduce rhs))
+                                          refl)
+                                        (steps
+                                          ((rewrite (premise 1) rl rhs true ())
+                                           (rewrite (hyp 2) lr rhs true ())
+                                           (rewrite (hyp 1) lr rhs true ())
+                                           (unfold moves_go rhs)
+                                           (reduce rhs)
+                                           (rewrite (hyp 0) lr rhs true ())
+                                           (reduce rhs))
+                                          refl))
+                                       refl)))
+                                 (case False
+                                   (have (= True False)
+                                     (steps
+                                       ((rewrite (premise 1) rl lhs true ())
+                                        (rewrite (hyp 2) lr lhs true ())
+                                        (rewrite (hyp 1) lr lhs true ())
+                                        (unfold moves_go lhs)
+                                        (reduce lhs)
+                                        (rewrite (hyp 0) lr lhs true ())
+                                        (reduce lhs))
+                                       refl)
+                                     (absurd (premise 2)))))))))))))))))))))))
+
+(claim play_moves_preserve
+  (goal ((f Int) (s GameState) (w World))
+    ((= (inv s) True)
+     (= (same_shape (w_output w) (w_input w)) True)
+     (= (moves_go None (w_output w) (w_input w)) True)
+     (= (mgo_last None (w_output w)) (Some (frame s))))
+    (=
+      (moves_go None (w_output (play_fuel f s w)) (w_input (play_fuel f s w)))
+      True))
+  (wf-induct f
+    (case-on (lt 0 f) Bool
+      ((case False
+         (steps
+           ((unfold play_fuel lhs)
+            (unfold play_fuel lhs)
+            (rewrite (hyp 0) lr lhs true ())
+            (reduce lhs)
+            (rewrite (premise 2) lr lhs true ()))
+           refl))
+       (case True
+         (steps
+           ((unfold play_fuel lhs)
+            (unfold play_fuel lhs)
+            (rewrite (hyp 0) lr lhs true ())
+            (reduce lhs))
+           (case-on (key_oracle w) Pair
+             ((case Pair
+                (o w1)
+                (steps
+                  ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                  (case-on o Option
+                    ((case None
+                       (steps
+                         ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                         (rewrite-with
+                           (lemma key_output)
+                           lr
+                           lhs
+                           ((inst w w) (inst o o) (inst w1 w1))
+                           ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
+                           (rewrite-with
+                             (lemma key_input)
+                             lr
+                             lhs
+                             ((inst w w) (inst o o) (inst w1 w1))
+                             ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
+                             (steps
+                               ((rewrite (hyp 0) lr lhs true ()))
+                               (rewrite-with
+                                 (lemma moves_ext)
+                                 lr
+                                 lhs
+                                 ((inst outs (w_output w))
+                                  (inst ins (w_input w))
+                                  (inst p None))
+                                 ((steps
+                                    ((rewrite (premise 1) lr lhs true ()))
+                                    refl)
+                                  (steps
+                                    ((rewrite (premise 2) lr lhs true ()))
+                                    refl))
+                                 refl))))))
+                     (case Some
+                       (key)
+                       (steps
+                         ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                         (rewrite-with
+                           (hyp 3)
+                           lr
+                           lhs
+                           ()
+                           ((rewrite-with
+                              (lemma inv_step)
+                              lr
+                              lhs
+                              ((inst k key) (inst s s))
+                              ((steps
+                                 ((rewrite (premise 0) lr lhs true ()))
+                                 refl))
+                              refl)
+                            (steps
+                              ((rewrite (lemma write_output) lr lhs true ())
+                               (rewrite (lemma write_input) lr lhs true ()))
+                              (rewrite-with
+                                (lemma key_output)
+                                lr
+                                lhs
+                                ((inst w w) (inst o o) (inst w1 w1))
+                                ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
+                                (rewrite-with
+                                  (lemma key_input)
+                                  lr
+                                  lhs
+                                  ((inst w w) (inst o o) (inst w1 w1))
+                                  ((steps
+                                     ((rewrite (hyp 1) lr lhs true ()))
+                                     refl))
+                                  (steps
+                                    ((rewrite (hyp 0) lr lhs true ()))
+                                    (rewrite-with
+                                      (lemma same_shape_snoc)
+                                      lr
+                                      lhs
+                                      ((inst outs (w_output w))
+                                       (inst ins (w_input w))
+                                       (inst y (frame (step key s)))
+                                       (inst mk (Some key)))
+                                      ((steps
+                                         ((rewrite (premise 1) lr lhs true ()))
+                                         refl))
+                                      refl)))))
+                            (steps
+                              ((rewrite (lemma write_output) lr lhs true ())
+                               (rewrite (lemma write_input) lr lhs true ()))
+                              (rewrite-with
+                                (lemma key_output)
+                                lr
+                                lhs
+                                ((inst w w) (inst o o) (inst w1 w1))
+                                ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
+                                (rewrite-with
+                                  (lemma key_input)
+                                  lr
+                                  lhs
+                                  ((inst w w) (inst o o) (inst w1 w1))
+                                  ((steps
+                                     ((rewrite (hyp 1) lr lhs true ()))
+                                     refl))
+                                  (steps
+                                    ((rewrite (hyp 0) lr lhs true ()))
+                                    (rewrite-with
+                                      (lemma moves_snoc)
+                                      lr
+                                      lhs
+                                      ((inst outs (w_output w))
+                                       (inst ins (w_input w))
+                                       (inst p None)
+                                       (inst f2 (frame (step key s)))
+                                       (inst mk (Some key)))
+                                      ((steps
+                                         ((rewrite (premise 1) lr lhs true ()))
+                                         refl)
+                                       (steps
+                                         ((rewrite (premise 2) lr lhs true ()))
+                                         refl)
+                                       (steps
+                                         ((rewrite (premise 3) lr lhs true ())
+                                          (unfold shows_opt lhs)
+                                          (reduce lhs))
+                                         (rewrite-with
+                                           (lemma move_shown)
+                                           lr
+                                           lhs
+                                           ((inst k key) (inst s s))
+                                           ((steps
+                                              ((rewrite
+                                                 (premise 0)
+                                                 lr
+                                                 lhs
+                                                 true
+                                                 ()))
+                                              refl))
+                                           refl)))
+                                      refl)))))
+                            (steps
+                              ((rewrite (lemma write_output) lr lhs true ()))
+                              (rewrite-with
+                                (lemma key_output)
+                                lr
+                                lhs
+                                ((inst w w) (inst o o) (inst w1 w1))
+                                ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
+                                (rewrite-with
+                                  (lemma mgo_last_snoc)
+                                  lr
+                                  lhs
+                                  ((inst outs (w_output w))
+                                   (inst p None)
+                                   (inst y (frame (step key s))))
+                                  ()
+                                  refl)))
+                            (rewrite-with
+                              (lemma step_nonneg)
+                              lr
+                              lhs
+                              ((inst x f))
+                              ((steps ((rewrite (hyp 2) lr lhs true ())) refl))
+                              refl)
+                            (by ord (list)))
+                           refl)))))))))))))))
+
+(claim play_moves_start
+  (goal ((f Int) (s GameState) (w World))
+    ((= (inv s) True) (= (w_output w) Nil) (= (w_input w) Nil))
+    (=
+      (moves_go None (w_output (play_fuel f s w)) (w_input (play_fuel f s w)))
+      True))
+  (case-on (lt 0 f) Bool
+    ((case False
+       (steps
+         ((unfold play_fuel lhs)
+          (unfold play_fuel lhs)
+          (rewrite (hyp 0) lr lhs true ())
+          (reduce lhs)
+          (rewrite (premise 1) lr lhs true ())
+          (rewrite (premise 2) lr lhs true ())
+          (unfold moves_go lhs)
+          (reduce lhs))
+         refl))
+     (case True
+       (steps
+         ((unfold play_fuel lhs)
+          (unfold play_fuel lhs)
+          (rewrite (hyp 0) lr lhs true ())
+          (reduce lhs))
+         (case-on (key_oracle w) Pair
+           ((case Pair
+              (o w1)
+              (steps
+                ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                (case-on o Option
+                  ((case None
+                     (steps
+                       ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                       (rewrite-with
+                         (lemma key_output)
+                         lr
+                         lhs
+                         ((inst w w) (inst o o) (inst w1 w1))
+                         ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
+                         (rewrite-with
+                           (lemma key_input)
+                           lr
+                           lhs
+                           ((inst w w) (inst o o) (inst w1 w1))
+                           ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
+                           (steps
+                             ((rewrite (premise 1) lr lhs true ())
+                              (rewrite (premise 2) lr lhs true ())
+                              (rewrite (hyp 0) lr lhs true ())
+                              (unfold moves_go lhs)
+                              (reduce lhs))
+                             refl)))))
+                   (case Some
+                     (key)
+                     (steps
+                       ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                       (rewrite-with
+                         (lemma play_moves_preserve)
+                         lr
+                         lhs
+                         ()
+                         ((rewrite-with
+                            (lemma inv_step)
+                            lr
+                            lhs
+                            ((inst k key) (inst s s))
+                            ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                            refl)
+                          (steps
+                            ((rewrite (lemma write_output) lr lhs true ())
+                             (rewrite (lemma write_input) lr lhs true ()))
+                            (rewrite-with
+                              (lemma key_output)
+                              lr
+                              lhs
+                              ((inst w w) (inst o o) (inst w1 w1))
+                              ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
+                              (rewrite-with
+                                (lemma key_input)
+                                lr
+                                lhs
+                                ((inst w w) (inst o o) (inst w1 w1))
+                                ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
+                                (steps
+                                  ((rewrite (premise 1) lr lhs true ())
+                                   (rewrite (premise 2) lr lhs true ())
+                                   (rewrite (hyp 0) lr lhs true ()))
+                                  (rewrite-with
+                                    (lemma append_nil_left)
+                                    lr
+                                    lhs
+                                    ((inst ys (Cons (frame (step key s)) Nil)))
+                                    ()
+                                    (rewrite-with
+                                      (lemma append_nil_left)
+                                      lr
+                                      lhs
+                                      ((inst ys (Cons (Some key) Nil)))
+                                      ()
+                                      (steps
+                                        ((unfold same_shape lhs)
+                                         (reduce lhs)
+                                         (unfold same_shape lhs)
+                                         (reduce lhs))
+                                        refl)))))))
+                          (steps
+                            ((rewrite (lemma write_output) lr lhs true ())
+                             (rewrite (lemma write_input) lr lhs true ()))
+                            (rewrite-with
+                              (lemma key_output)
+                              lr
+                              lhs
+                              ((inst w w) (inst o o) (inst w1 w1))
+                              ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
+                              (rewrite-with
+                                (lemma key_input)
+                                lr
+                                lhs
+                                ((inst w w) (inst o o) (inst w1 w1))
+                                ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
+                                (steps
+                                  ((rewrite (premise 1) lr lhs true ())
+                                   (rewrite (premise 2) lr lhs true ())
+                                   (rewrite (hyp 0) lr lhs true ()))
+                                  (rewrite-with
+                                    (lemma append_nil_left)
+                                    lr
+                                    lhs
+                                    ((inst ys (Cons (frame (step key s)) Nil)))
+                                    ()
+                                    (rewrite-with
+                                      (lemma append_nil_left)
+                                      lr
+                                      lhs
+                                      ((inst ys (Cons (Some key) Nil)))
+                                      ()
+                                      (steps
+                                        ((unfold moves_go lhs)
+                                         (reduce lhs)
+                                         (unfold moves_go lhs)
+                                         (reduce lhs))
+                                        refl)))))))
+                          (steps
+                            ((rewrite (lemma write_output) lr lhs true ()))
+                            (rewrite-with
+                              (lemma key_output)
+                              lr
+                              lhs
+                              ((inst w w) (inst o o) (inst w1 w1))
+                              ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
+                              (steps
+                                ((rewrite (premise 1) lr lhs true ()))
+                                (rewrite-with
+                                  (lemma append_nil_left)
+                                  lr
+                                  lhs
+                                  ((inst ys (Cons (frame (step key s)) Nil)))
+                                  ()
+                                  (steps
+                                    ((unfold mgo_last lhs)
+                                     (reduce lhs)
+                                     (unfold mgo_last lhs)
+                                     (reduce lhs))
+                                    refl))))))
+                         refl))))))))))))))
+
+;; R-MOVES, over main: start lemma at s=init with the requirement's own empty-
+;; log premises; `inv (init)` is ground data (licensed compute), fuel stays
+;; opaque (the start lemma quantifies over it).
+(fulfills io_input_moves
+  (steps
+    ((unfold main lhs) (unfold main lhs) (unfold moves_ok lhs))
+    (rewrite-with
+      (lemma play_moves_start)
+      lr
+      lhs
+      ()
+      ((steps ((unfold init lhs) (compute lhs)) refl)
+       (steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl))
+      refl)))
+
 ;; ---- design-constant bound: the ONE fulfillment licensed to reduce the 32s --
 (fulfills board_min_size
   (steps ((unfold board_w lhs) (unfold board_h lhs) (compute lhs)) refl))
