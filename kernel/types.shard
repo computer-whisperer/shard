@@ -1,0 +1,740 @@
+;;; types.shard — object-language type checking (the typed-elaboration gate).
+;;;
+;;; WHY (soundness): the theory backends are only sound for well-typed
+;;; terms — lia/ord/farkas treat opaque atoms as integers, eqdec's
+;;; expr_eq is reflexivity at any type. Without a type pass, a goal
+;;; like (= (- b b) 0) with b : Bool is decided under integer semantics
+;;; that don't match the term's actual (stuck) behavior. This pass
+;;; makes "every term the kernel reasons about is well-typed" a checked
+;;; property instead of a reviewed convention. The complementary half
+;;; is SUBJECT REDUCTION: reduction preserves typing only if every fn
+;;; body matches its declared signature, so fn bodies are checked too,
+;;; not just goals.
+;;;
+;;; WHAT: a SYNTHESIZER (every binder in the language is annotated —
+;;; fn params, goal params, ctor fields) with metavariables + first-
+;;; order unification for the polymorphic gaps (a bare Nil is
+;;; (List ?n) until use pins it). No generalization — fn/ctor type
+;;; schemes are instantiated per use site, never inferred.
+;;;
+;;; Metavariables are TVars whose name starts with '?' (a character no
+;;; source symbol uses), numbered from a counter threaded through Tc.
+;;; Rigid TVars (a goal's (tv T), a polymorphic fn's sig vars) unify
+;;; only with themselves; metas bind (with an occurs check).
+;;;
+;;; Binder conventions follow the evaluator exactly (eval.rs / open_goal):
+;;; the type env is innermost-first — BVar 0 = LAST fn param = LAST let
+;;; binding = RIGHTMOST pattern var.
+;;;
+;;; Helpers are tc_-prefixed: module assembly keeps the FIRST fn of a
+;;; given name, so sharing names with trace/driver helpers would
+;;; silently shadow. All-new names make the file order-independent.
+
+;; imports — the kernel files this module uses (dependency-tracked)
+(import "stdlib.shard")
+(import "term.shard")
+(import "module.shard")
+(import "proof.shard")
+
+;; ---------------------------------------------------------------------------
+;; Results. Tc threads the meta counter + the substitution (meta name →
+;; Type, an assoc list; rigid TVars never appear as keys).
+;; ---------------------------------------------------------------------------
+
+(type Tc (Tc Int (List (Pair Symbol Type))))
+
+(type TcRes  ; infer: a type, or a diagnostic
+  (TcOk Tc Type)
+  (TcErr (List Int)))
+
+(type TcsRes  ; check: success, or a diagnostic
+  (TcsOk Tc)
+  (TcsErr (List Int)))
+
+(type TcBinds  ; pattern / let-rhs elaboration: new bindings (innermost-first)
+  (TBOk Tc (List Type))
+  (TBErr (List Int)))
+
+(type Freshened  ; an instantiated type scheme: tvar→meta env + metas in order
+  (Freshened (List (Pair Symbol Type)) (List Type) Tc))
+
+;; ---------------------------------------------------------------------------
+;; Small string / list helpers (tc_-prefixed; see header).
+;; ---------------------------------------------------------------------------
+
+(fn tc_app ((xs (List Int)) (ys (List Int))) (List Int)
+  (match xs
+    (Nil ys)
+    ((Cons h t) (Cons h (tc_app t ys)))))
+
+(fn tc_nat ((n Int)) (List Int)  ; n >= 0
+  (if (lt n 10) (Cons (+ 48 n) Nil)
+  (tc_app (tc_nat (/ n 10)) (Cons (+ 48 (mod n 10)) Nil))))
+
+(fn tc_sym_in ((x Symbol) (xs (List Symbol))) Bool
+  (match xs
+    (Nil False)
+    ((Cons h t) (if (sym_eq x h) True (tc_sym_in x t)))))
+
+(fn tc_nth_ty ((ts (List Type)) (k Int)) (Option Type)
+  (match ts
+    (Nil None)
+    ((Cons h t) (if (int_eq k 0) (Some h) (tc_nth_ty t (- k 1))))))
+
+(fn tc_app_tys ((xs (List Type)) (ys (List Type))) (List Type)
+  (match xs
+    (Nil ys)
+    ((Cons h t) (Cons h (tc_app_tys t ys)))))
+
+(fn tc_len_tys ((ts (List Type))) Int
+  (match ts
+    (Nil 0)
+    ((Cons _ t) (+ 1 (tc_len_tys t)))))
+
+(fn tc_len_syms ((xs (List Symbol))) Int
+  (match xs
+    (Nil 0)
+    ((Cons _ t) (+ 1 (tc_len_syms t)))))
+
+(fn tc_tds ((m Module)) (List TypeDef)
+  (match m
+    ((Module tds _ _ _) tds)))
+
+;; ---------------------------------------------------------------------------
+;; Type rendering for diagnostics.
+;; ---------------------------------------------------------------------------
+
+(fn tc_render_ty ((t Type)) (List Int)
+  (match t
+    ((TVar x) (chars_of_sym x))
+    ((TCon c args)
+     (match args
+       (Nil (chars_of_sym c))
+       (_
+         (tc_app
+           "("
+           (tc_app (chars_of_sym c) (tc_app (tc_render_tys args) ")"))))))))
+
+(fn tc_render_tys ((ts (List Type))) (List Int)  ; " a b c"
+  (match ts
+    (Nil Nil)
+    ((Cons h t) (tc_app " " (tc_app (tc_render_ty h) (tc_render_tys t))))))
+
+;; ---------------------------------------------------------------------------
+;; Metavariables + unification.
+;; ---------------------------------------------------------------------------
+
+(fn tc_meta_name ((n Int)) Symbol (sym_of_chars (Cons 63 (tc_nat n))))  ; "?N"
+
+(fn tc_is_meta ((x Symbol)) Bool
+  (match (chars_of_sym x)
+    ((Cons c _) (int_eq c 63))
+    (_ False)))
+
+(fn tc_fresh ((tc Tc)) (Pair Type Tc)
+  (match tc
+    ((Tc n s) (Pair (TVar (tc_meta_name n)) (Tc (+ n 1) s)))))
+
+;; head-walk: resolve a bound meta to its binding (recursively at the head).
+(fn tc_walk ((t Type) (s (List (Pair Symbol Type)))) Type
+  (match t
+    ((TVar x)
+     (match (assoc_sym_type x s)
+       ((Some t2) (tc_walk t2 s))
+       (None t)))
+    (_ t)))
+
+;; deep-resolve for diagnostics: walk the head, then resolve TCon args.
+(fn tc_resolve ((t Type) (s (List (Pair Symbol Type)))) Type
+  (match (tc_walk t s)
+    ((TCon c args) (TCon c (tc_resolve_list args s)))
+    (t2 t2)))
+
+(fn tc_resolve_list ((ts (List Type)) (s (List (Pair Symbol Type)))) (List Type)
+  (match ts
+    (Nil Nil)
+    ((Cons h t) (Cons (tc_resolve h s) (tc_resolve_list t s)))))
+
+(fn tc_occurs ((x Symbol) (t Type) (s (List (Pair Symbol Type)))) Bool
+  (match (tc_walk t s)
+    ((TVar y) (sym_eq x y))
+    ((TCon _ args) (tc_occurs_list x args s))))
+
+(fn tc_occurs_list ((x Symbol) (ts (List Type)) (s (List (Pair Symbol Type))))
+  Bool
+  (match ts
+    (Nil False)
+    ((Cons h t) (if (tc_occurs x h s) True (tc_occurs_list x t s)))))
+
+(fn tc_bind ((x Symbol) (t Type) (tc Tc)) (Option Tc)
+  (match tc
+    ((Tc n s) (if (tc_occurs x t s) None (Some (Tc n (Cons (Pair x t) s)))))))
+
+(fn tc_unify ((a Type) (b Type) (tc Tc)) (Option Tc)
+  (match tc
+    ((Tc _ s)
+     (match (tc_walk a s)
+       ((TVar xa)
+        (match (tc_walk b s)
+          ((TVar xb)
+           (if (sym_eq xa xb) (Some tc)
+           (if (tc_is_meta xa) (tc_bind xa (TVar xb) tc)
+           (if (tc_is_meta xb) (tc_bind xb (TVar xa) tc)
+           None))))
+          (wb (if (tc_is_meta xa) (tc_bind xa wb tc) None))))
+       ((TCon ca aa)
+        (match (tc_walk b s)
+          ((TVar xb) (if (tc_is_meta xb) (tc_bind xb (TCon ca aa) tc) None))
+          ((TCon cb ab) (if (sym_eq ca cb) (tc_unify_list aa ab tc) None))))))))
+
+(fn tc_unify_list ((xs (List Type)) (ys (List Type)) (tc Tc)) (Option Tc)
+  (match xs
+    (Nil
+      (match ys
+        (Nil (Some tc))
+        (_ None)))
+    ((Cons x xr)
+     (match ys
+       (Nil None)
+       ((Cons y yr)
+        (match (tc_unify x y tc)
+          (None None)
+          ((Some tc1) (tc_unify_list xr yr tc1))))))))
+
+;; "WHAT: A vs B" with both sides deep-resolved through the substitution.
+(fn tc_mismatch ((what (List Int)) (a Type) (b Type) (tc Tc)) (List Int)
+  (match tc
+    ((Tc _ s)
+     (tc_app
+       what
+       (tc_app
+         ": "
+         (tc_app
+           (tc_render_ty (tc_resolve a s))
+           (tc_app " vs " (tc_render_ty (tc_resolve b s)))))))))
+
+;; ---------------------------------------------------------------------------
+;; Type-scheme instantiation: each named tvar gets a fresh meta.
+;; ---------------------------------------------------------------------------
+
+(fn tc_freshen ((names (List Symbol)) (tc Tc)) Freshened
+  (match names
+    (Nil (Freshened Nil Nil tc))
+    ((Cons x rest)
+     (match (tc_fresh tc)
+       ((Pair mv tc1)
+        (match (tc_freshen rest tc1)
+          ((Freshened inst metas tc2)
+           (Freshened (Cons (Pair x mv) inst) (Cons mv metas) tc2))))))))
+
+;; the distinct TVar names in a list of types (sig collection, dedup'd).
+(fn tc_collect_tvars ((ts (List Type)) (acc (List Symbol))) (List Symbol)
+  (match ts
+    (Nil acc)
+    ((Cons h t) (tc_collect_tvars t (tc_collect_tvars1 h acc)))))
+
+(fn tc_collect_tvars1 ((t Type) (acc (List Symbol))) (List Symbol)
+  (match t
+    ((TVar x) (if (tc_sym_in x acc) acc (Cons x acc)))
+    ((TCon _ args) (tc_collect_tvars args acc))))
+
+;; ---------------------------------------------------------------------------
+;; Name resolution: ctor → its TypeDef + CtorDef; call head → signature.
+;; ---------------------------------------------------------------------------
+
+(fn tc_find_ctor ((c Symbol) (tds (List TypeDef)))
+  (Option (Pair TypeDef CtorDef))
+  (match tds
+    (Nil None)
+    ((Cons td rest)
+     (match td
+       ((TypeDef _ _ ctors)
+        (match (tc_find_ctor_in c ctors)
+          ((Some cd) (Some (Pair td cd)))
+          (None (tc_find_ctor c rest))))))))
+
+(fn tc_find_ctor_in ((c Symbol) (cds (List CtorDef))) (Option CtorDef)
+  (match cds
+    (Nil None)
+    ((Cons cd rest)
+     (match cd
+       ((CtorDef cname _)
+        (if (sym_eq c cname) (Some cd) (tc_find_ctor_in c rest)))))))
+
+(fn tc_t_int () Type (TCon (quote Int) Nil))
+(fn tc_t_sym () Type (TCon (quote Symbol) Nil))
+(fn tc_t_bool () Type (TCon (quote Bool) Nil))
+(fn tc_t_chars () Type (TCon (quote List) (Cons (tc_t_int) Nil)))
+
+;; the native primitive signatures (mirrors prim.rs / reduce.shard's table).
+(fn tc_builtin_sig ((f Symbol)) (Option (Pair (List Type) Type))
+  (if
+    (tc_sym_in
+      f
+      (list
+        (quote +)
+        (quote -)
+        (quote *)
+        (quote /)
+        (quote mod)
+        (quote band)
+        (quote bor)
+        (quote bxor)
+        (quote bshl)
+        (quote bshr)))
+    (Some (Pair (list (tc_t_int) (tc_t_int)) (tc_t_int)))
+    (if (tc_sym_in f (list (quote int_eq) (quote lt) (quote le)))
+      (Some (Pair (list (tc_t_int) (tc_t_int)) (tc_t_bool)))
+    (if (sym_eq f (quote sym_eq))
+      (Some (Pair (list (tc_t_sym) (tc_t_sym)) (tc_t_bool)))
+    (if (sym_eq f (quote gen_fresh)) (Some (Pair Nil (tc_t_sym)))
+    (if (sym_eq f (quote sym_of_chars))
+      (Some (Pair (Cons (tc_t_chars) Nil) (tc_t_sym)))
+    (if (sym_eq f (quote chars_of_sym))
+      (Some (Pair (Cons (tc_t_sym) Nil) (tc_t_chars)))
+      None)))))))
+
+;; a Call head's signature: user fn first (mirrors the evaluator's dispatch
+;; order), then extern/sig, then the native primitive table.
+(fn tc_fn_sig ((f Symbol) (m Module)) (Option (Pair (List Type) Type))
+  (match m
+    ((Module _ _ exts trie)
+     (match (trie_lookup f trie)
+       ((Some (FnDef _ ptypes ret _)) (Some (Pair ptypes ret)))
+       (None
+         (match (find_extern f exts)
+           ((Some (ExternDef _ ptypes ret)) (Some (Pair ptypes ret)))
+           (None (tc_builtin_sig f))))))))
+
+;; ---------------------------------------------------------------------------
+;; The synthesizer. env is the BVar type environment, innermost-first.
+;; ---------------------------------------------------------------------------
+
+(fn tc_infer ((m Module) (tc Tc) (fenv (List Param)) (env (List Type)) (e Expr))
+  TcRes
+  (match e
+    ((IntLit _) (TcOk tc (tc_t_int)))
+    ((SymLit _) (TcOk tc (tc_t_sym)))
+    ((BVar k)
+     (match (tc_nth_ty env k)
+       ((Some t) (TcOk tc t))
+       (None (TcErr "unbound BVar (binder structure bug)"))))
+    ;; a free variable: a goal's ∀-bound param (parse_goal leaves them as
+    ;; FVars by name; closing to BVars happens only at storage). Anything
+    ;; not in fenv is an unresolved name — usually a typo, since the loader
+    ;; turns unknown symbols into FVars.
+    ((FVar x)
+     (match (tc_find_fparam x fenv)
+       ((Some t) (TcOk tc t))
+       (None (TcErr (tc_app "unbound variable: " (chars_of_sym x))))))
+    ((Ctor c args)
+     (match (tc_find_ctor c (tc_tds m))
+       (None (TcErr (tc_app "unknown constructor: " (chars_of_sym c))))
+       ((Some (Pair (TypeDef tname tparams _) (CtorDef _ fields)))
+        (match (tc_freshen tparams tc)
+          ((Freshened inst metas tc1)
+           (match
+             (tc_check_args
+               m
+               tc1
+               fenv
+               env
+               args
+               (type_subst_list inst fields)
+               c
+               1)
+             ((TcsErr msg) (TcErr msg))
+             ((TcsOk tc2) (TcOk tc2 (TCon tname metas)))))))))
+    ((Call f args)
+     (match (tc_fn_sig f m)
+       (None (TcErr (tc_app "unknown function: " (chars_of_sym f))))
+       ((Some (Pair ptypes ret))
+        (match (tc_freshen (tc_collect_tvars (Cons ret ptypes) Nil) tc)
+          ((Freshened inst _ tc1)
+           (match
+             (tc_check_args
+               m
+               tc1
+               fenv
+               env
+               args
+               (type_subst_list inst ptypes)
+               f
+               1)
+             ((TcsErr msg) (TcErr msg))
+             ((TcsOk tc2) (TcOk tc2 (type_subst inst ret)))))))))
+    ((If c t e2)
+     (match (tc_infer m tc fenv env c)
+       ((TcErr msg) (TcErr msg))
+       ((TcOk tc1 ct)
+        (match (tc_unify ct (tc_t_bool) tc1)
+          (None (TcErr (tc_mismatch "if condition" ct (tc_t_bool) tc1)))
+          ((Some tc2)
+           (match (tc_infer m tc2 fenv env t)
+             ((TcErr msg) (TcErr msg))
+             ((TcOk tc3 tt)
+              (match (tc_infer m tc3 fenv env e2)
+                ((TcErr msg) (TcErr msg))
+                ((TcOk tc4 et)
+                 (match (tc_unify tt et tc4)
+                   (None (TcErr (tc_mismatch "if branches" tt et tc4)))
+                   ((Some tc5) (TcOk tc5 tt))))))))))))
+    ((Match s arms)
+     (match (tc_infer m tc fenv env s)
+       ((TcErr msg) (TcErr msg))
+       ((TcOk tc1 st)
+        (match (tc_fresh tc1)
+          ((Pair rty tc2)
+           (match (tc_arms m tc2 fenv env st arms rty)
+             ((TcsErr msg) (TcErr msg))
+             ((TcsOk tc3) (TcOk tc3 rty))))))))
+    ((Let bs body)
+     (match (tc_infer_rhss m tc fenv env bs Nil)
+       ((TBErr msg) (TcErr msg))
+       ;; rhss collected with prepend → innermost-first (BVar 0 = last binding)
+       ((TBOk tc1 binds) (tc_infer m tc1 fenv (tc_app_tys binds env) body))))))
+
+;; check each arg against its expected (instantiated) param type.
+(fn tc_check_args
+  ((m Module)
+   (tc Tc)
+   (fenv (List Param))
+   (env (List Type))
+   (args (List Expr))
+   (ptypes (List Type))
+   (site Symbol)
+   (i Int))
+  TcsRes
+  (match args
+    (Nil
+      (match ptypes
+        (Nil (TcsOk tc))
+        (_ (TcsErr (tc_app "too few arguments to: " (chars_of_sym site))))))
+    ((Cons a arest)
+     (match ptypes
+       (Nil (TcsErr (tc_app "too many arguments to: " (chars_of_sym site))))
+       ((Cons p prest)
+        (match (tc_infer m tc fenv env a)
+          ((TcErr msg) (TcsErr msg))
+          ((TcOk tc1 at)
+           (match (tc_unify at p tc1)
+             (None
+               (TcsErr
+                 (tc_mismatch
+                   (tc_app (chars_of_sym site) (tc_app " arg " (tc_nat i)))
+                   at
+                   p
+                   tc1)))
+             ((Some tc2)
+              (tc_check_args m tc2 fenv env arest prest site (+ i 1)))))))))))
+
+;; let RHSs: types collected with PREPEND, so the result is innermost-first.
+(fn tc_infer_rhss
+  ((m Module) (tc Tc) (env (List Type)) (es (List Expr)) (acc (List Type)))
+  TcBinds
+  (match es
+    (Nil (TBOk tc acc))
+    ((Cons e rest)
+     (match (tc_infer m tc fenv env e)
+       ((TcErr msg) (TBErr msg))
+       ((TcOk tc1 t) (tc_infer_rhss m tc1 fenv env rest (Cons t acc)))))))
+
+;; one match arm: elaborate the pattern against the scrutinee type (producing
+;; the new bindings), then the body under them; all arm bodies unify with rty.
+(fn tc_arms
+  ((m Module)
+   (tc Tc)
+   (fenv (List Param))
+   (env (List Type))
+   (st Type)
+   (arms (List Arm))
+   (rty Type))
+  TcsRes
+  (match arms
+    (Nil (TcsOk tc))
+    ((Cons (Arm p body) rest)
+     (match (tc_pat m tc st p Nil)
+       ((TBErr msg) (TcsErr msg))
+       ((TBOk tc1 binds)
+        (match (tc_infer m tc1 fenv (tc_app_tys binds env) body)
+          ((TcErr msg) (TcsErr msg))
+          ((TcOk tc2 bt)
+           (match (tc_unify bt rty tc2)
+             (None (TcsErr (tc_mismatch "match arms" bt rty tc2)))
+             ((Some tc3) (tc_arms m tc3 fenv env st rest rty))))))))))
+
+;; pattern elaboration. Bindings are PREPENDED as encountered left-to-right,
+;; mirroring the evaluator's match_pat — the result is innermost-first
+;; (rightmost PVar at the head = BVar 0).
+(fn tc_pat ((m Module) (tc Tc) (t Type) (p Pat) (acc (List Type))) TcBinds
+  (match p
+    ((PVar) (TBOk tc (Cons t acc)))
+    ((PInt _)
+     (match (tc_unify t (tc_t_int) tc)
+       (None (TBErr (tc_mismatch "int pattern" t (tc_t_int) tc)))
+       ((Some tc1) (TBOk tc1 acc))))
+    ((PSym _)
+     (match (tc_unify t (tc_t_sym) tc)
+       (None (TBErr (tc_mismatch "symbol pattern" t (tc_t_sym) tc)))
+       ((Some tc1) (TBOk tc1 acc))))
+    ((PCtor c ps)
+     (match (tc_find_ctor c (tc_tds m))
+       (None
+         (TBErr (tc_app "unknown constructor in pattern: " (chars_of_sym c))))
+       ((Some (Pair (TypeDef tname tparams _) (CtorDef _ fields)))
+        (match (tc_freshen tparams tc)
+          ((Freshened inst metas tc1)
+           (match (tc_unify t (TCon tname metas) tc1)
+             (None
+               (TBErr
+                 (tc_mismatch
+                   (tc_app "pattern " (chars_of_sym c))
+                   t
+                   (TCon tname metas)
+                   tc1)))
+             ((Some tc2) (tc_pats m tc2 (type_subst_list inst fields) ps c acc))))))))))
+
+(fn tc_pats
+  ((m Module)
+   (tc Tc)
+   (ts (List Type))
+   (ps (List Pat))
+   (site Symbol)
+   (acc (List Type)))
+  TcBinds
+  (match ps
+    (Nil
+      (match ts
+        (Nil (TBOk tc acc))
+        (_ (TBErr (tc_app "too few fields in pattern: " (chars_of_sym site))))))
+    ((Cons p prest)
+     (match ts
+       (Nil (TBErr (tc_app "too many fields in pattern: " (chars_of_sym site))))
+       ((Cons t trest)
+        (match (tc_pat m tc t p acc)
+          ((TBErr msg) (TBErr msg))
+          ((TBOk tc1 acc1) (tc_pats m tc1 trest prest site acc1))))))))
+
+;; ---------------------------------------------------------------------------
+;; Type well-formedness: every TCon must be a declared type (or primitive
+;; Int/Symbol) applied at its declared arity. `anytv` allows free TVars
+;; (goal binders, polymorphic fn sigs); otherwise they must be in `allowed`
+;; (a typedef's declared params).
+;; ---------------------------------------------------------------------------
+
+(fn tc_is_prim_ty ((c Symbol)) Bool
+  (if (sym_eq c (quote Int)) True (sym_eq c (quote Symbol))))
+
+(fn tc_ty_wf ((m Module) (allowed (List Symbol)) (anytv Bool) (t Type))
+  (Option (List Int))
+  (match t
+    ((TVar x)
+     (if anytv None
+     (if (tc_sym_in x allowed) None
+     (Some (tc_app "unknown type variable: " (chars_of_sym x))))))
+    ((TCon c args)
+     (if (tc_is_prim_ty c)
+       (match args
+         (Nil None)
+         (_
+           (Some
+             (tc_app "primitive type takes no arguments: " (chars_of_sym c)))))
+       (match (find_typedef c (tc_tds m))
+         (None (Some (tc_app "unknown type: " (chars_of_sym c))))
+         ((Some (TypeDef _ tparams _))
+          (if (int_eq (tc_len_tys args) (tc_len_syms tparams))
+            (tc_tys_wf m allowed anytv args)
+            (Some (tc_app "wrong type arity: " (chars_of_sym c))))))))))
+
+(fn tc_tys_wf ((m Module) (allowed (List Symbol)) (anytv Bool) (ts (List Type)))
+  (Option (List Int))
+  (match ts
+    (Nil None)
+    ((Cons h t)
+     (match (tc_ty_wf m allowed anytv h)
+       ((Some msg) (Some msg))
+       (None (tc_tys_wf m allowed anytv t))))))
+
+;; ---------------------------------------------------------------------------
+;; Declaration checks. Each returns None (ok) or (Some diagnostic).
+;; ---------------------------------------------------------------------------
+
+(fn tc_label ((kind (List Int)) (name Symbol) (msg (List Int))) (List Int)
+  (tc_app kind (tc_app (chars_of_sym name) (tc_app ": " msg))))
+
+;; a typedef: every ctor field type is well-formed over the declared params.
+(fn tc_check_td ((m Module) (td TypeDef)) (Option (List Int))
+  (match td
+    ((TypeDef name tparams ctors)
+     (match (tc_check_ctors m tparams ctors)
+       ((Some msg) (Some (tc_label "type " name msg)))
+       (None None)))))
+
+(fn tc_check_ctors ((m Module) (tparams (List Symbol)) (cds (List CtorDef)))
+  (Option (List Int))
+  (match cds
+    (Nil None)
+    ((Cons (CtorDef _ fields) rest)
+     (match (tc_tys_wf m tparams False fields)
+       ((Some msg) (Some msg))
+       (None (tc_check_ctors m tparams rest))))))
+
+;; an extern / sig: param + return types well-formed (TVars are sig vars).
+(fn tc_check_ext ((m Module) (ed ExternDef)) (Option (List Int))
+  (match ed
+    ((ExternDef name ptypes ret)
+     (match (tc_tys_wf m Nil True (Cons ret ptypes))
+       ((Some msg) (Some (tc_label "extern " name msg)))
+       (None None)))))
+
+;; a fn: sig well-formed, body synthesizes, body type unifies with the
+;; declared return. env = reversed params (BVar 0 = last param).
+(fn tc_check_fn ((m Module) (fd FnDef)) (Option (List Int))
+  (match fd
+    ((FnDef name ptypes ret body)
+     (match (tc_tys_wf m Nil True (Cons ret ptypes))
+       ((Some msg) (Some (tc_label "fn " name msg)))
+       (None
+         (match (tc_infer m (Tc 0 Nil) Nil (tc_rev_tys ptypes Nil) body)
+           ((TcErr msg) (Some (tc_label "fn " name msg)))
+           ((TcOk tc bt)
+            (match (tc_unify bt ret tc)
+              (None
+                (Some
+                  (tc_label
+                    "fn "
+                    name
+                    (tc_mismatch "body vs declared return" bt ret tc))))
+              ((Some _) None)))))))))
+
+(fn tc_rev_tys ((ts (List Type)) (acc (List Type))) (List Type)
+  (match ts
+    (Nil acc)
+    ((Cons h t) (tc_rev_tys t (Cons h acc)))))
+
+;; a goal: binder types well-formed (free TVars allowed — they're the
+;; claim's rigid type variables), then premises and the equation each
+;; check with both sides at one type, under one shared meta state. The
+;; params ARE the FVar environment: parse_goal leaves ∀-bound vars as
+;; FVars by name (closing to BVars happens only at storage).
+(fn tc_check_goal ((m Module) (g Goal)) (Option (List Int))
+  (match g
+    ((Goal params premises eq)
+     (match (tc_params_wf m params)
+       ((Some msg) (Some msg))
+       (None
+         (match (tc_check_eqs m (Tc 0 Nil) params Nil premises 1)
+           ((TcsErr msg) (Some msg))
+           ((TcsOk tc)
+            (match (tc_check_eq m tc params Nil eq "goal")
+              ((TcsErr msg) (Some msg))
+              ((TcsOk _) None)))))))))
+
+(fn tc_params_wf ((m Module) (ps (List Param))) (Option (List Int))
+  (match ps
+    (Nil None)
+    ((Cons (Param name t) rest)
+     (match (tc_ty_wf m Nil True t)
+       ((Some msg) (Some (tc_label "binder " name msg)))
+       (None (tc_params_wf m rest))))))
+
+;; param types collected with prepend → innermost-first (BVar 0 = last param),
+;; matching open_goal's reversed opening order.
+(fn tc_find_fparam ((x Symbol) (ps (List Param))) (Option Type)
+  (match ps
+    (Nil None)
+    ((Cons (Param name t) rest)
+     (if (sym_eq x name) (Some t) (tc_find_fparam x rest)))))
+
+(fn tc_check_eq
+  ((m Module)
+   (tc Tc)
+   (fenv (List Param))
+   (env (List Type))
+   (eq Equation)
+   (what (List Int)))
+  TcsRes
+  (match eq
+    ((Equation l r)
+     (match (tc_infer m tc fenv env l)
+       ((TcErr msg) (TcsErr msg))
+       ((TcOk tc1 lt2)
+        (match (tc_infer m tc1 fenv env r)
+          ((TcErr msg) (TcsErr msg))
+          ((TcOk tc2 rt)
+           (match (tc_unify lt2 rt tc2)
+             (None
+               (TcsErr (tc_mismatch (tc_app what " lhs vs rhs") lt2 rt tc2)))
+             ((Some tc3) (TcsOk tc3))))))))))
+
+(fn tc_check_eqs
+  ((m Module)
+   (tc Tc)
+   (fenv (List Param))
+   (env (List Type))
+   (eqs (List Equation))
+   (i Int))
+  TcsRes
+  (match eqs
+    (Nil (TcsOk tc))
+    ((Cons eq rest)
+     (match (tc_check_eq m tc fenv env eq (tc_app "premise " (tc_nat i)))
+       ((TcsErr msg) (TcsErr msg))
+       ((TcsOk tc1) (tc_check_eqs m tc1 fenv env rest (+ i 1)))))))
+
+;; ---------------------------------------------------------------------------
+;; Module sweep: every typedef, extern/sig, and fn body in the module.
+;; Returns (name, diagnostic) pairs; the driver wraps them as outcomes.
+;; ---------------------------------------------------------------------------
+
+(fn tc_td_name ((td TypeDef)) Symbol
+  (match td
+    ((TypeDef n _ _) n)))
+
+(fn tc_ed_name ((ed ExternDef)) Symbol
+  (match ed
+    ((ExternDef n _ _) n)))
+
+(fn tc_fd_name ((fd FnDef)) Symbol
+  (match fd
+    ((FnDef n _ _ _) n)))
+
+(fn tc_sweep_tds ((m Module) (tds (List TypeDef)))
+  (List (Pair Symbol (List Int)))
+  (match tds
+    (Nil Nil)
+    ((Cons td rest)
+     (match (tc_check_td m td)
+       (None (tc_sweep_tds m rest))
+       ((Some msg) (Cons (Pair (tc_td_name td) msg) (tc_sweep_tds m rest)))))))
+
+(fn tc_sweep_exts ((m Module) (eds (List ExternDef)))
+  (List (Pair Symbol (List Int)))
+  (match eds
+    (Nil Nil)
+    ((Cons ed rest)
+     (match (tc_check_ext m ed)
+       (None (tc_sweep_exts m rest))
+       ((Some msg) (Cons (Pair (tc_ed_name ed) msg) (tc_sweep_exts m rest)))))))
+
+(fn tc_sweep_fns ((m Module) (fds (List FnDef))) (List (Pair Symbol (List Int)))
+  (match fds
+    (Nil Nil)
+    ((Cons fd rest)
+     (match (tc_check_fn m fd)
+       (None (tc_sweep_fns m rest))
+       ((Some msg) (Cons (Pair (tc_fd_name fd) msg) (tc_sweep_fns m rest)))))))
+
+(fn tc_warn_concat
+  ((a (List (Pair Symbol (List Int)))) (b (List (Pair Symbol (List Int)))))
+  (List (Pair Symbol (List Int)))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (tc_warn_concat t b)))))
+
+(fn type_report ((m Module)) (List (Pair Symbol (List Int)))
+  (match m
+    ((Module tds fns exts _)
+     (tc_warn_concat
+       (tc_sweep_tds m tds)
+       (tc_warn_concat (tc_sweep_exts m exts) (tc_sweep_fns m fns))))))

@@ -30,6 +30,7 @@
 (import "desugar.shard")
 (import "reader.shard")
 (import "trace.shard")
+(import "types.shard")  ; object-language type checking (report-only for now)
 (import "proof_reader.shard")  ; native proof-DSL → Goal/Proof
 
 ;; The ctor + type-name sets a proof-DSL claim is parsed against. ctors lets
@@ -65,7 +66,10 @@
   (COPass Symbol (List Int))  ; name, trace-block
   (COFail Symbol (List Int) (List Int))  ; name, diagnostic detail, trace-block
   (COAxiom Symbol)  ; an axiom admitted without proof
-  (COBin Symbol Int Int))  ; a bin acceptance summary: name, required, met
+  (COBin Symbol Int Int)  ; a bin acceptance summary: name, required, met
+  ;; COTypeWarn: a type error from types.shard. REPORT-ONLY while the corpus
+  ;; is brought clean; will become a hard COFail when the gate flips.
+  (COTypeWarn Symbol (List Int)))
 
 ;; theory threaded + PENDING requirements (name→goal, seeded by `requirement`,
 ;; consumed by `fulfills`) + outcomes accumulated in REVERSE (caller reverses).
@@ -91,6 +95,23 @@
   (match xs
     (Nil acc)
     ((Cons h t) (rev_outcomes t (Cons h acc)))))
+
+;; Type-check a goal (claim / axiom / requirement), prepending a REPORT-ONLY
+;; warning outcome on failure. Fulfills goals are not re-checked — they come
+;; from the requirement, which was checked when seeded.
+(fn warn_goal ((m Module) (name Symbol) (g Goal) (acc (List ClaimOutcome)))
+  (List ClaimOutcome)
+  (match (tc_check_goal m g)
+    (None acc)
+    ((Some msg) (Cons (COTypeWarn name msg) acc))))
+
+;; The whole-module sweep (typedefs, externs/sigs, fn bodies) as outcomes.
+(fn type_warn_outcomes ((ws (List (Pair Symbol (List Int)))))
+  (List ClaimOutcome)
+  (match ws
+    (Nil Nil)
+    ((Cons (Pair name msg) rest)
+     (Cons (COTypeWarn name msg) (type_warn_outcomes rest)))))
 
 ;; Process one file's decls in source order, threading the theory and
 ;; accumulating outcomes. A claim that passes is admitted as (Proven …); an
@@ -147,7 +168,7 @@
                 (RunState
                   (TheoryCons (Axiom (ax_name a) (close_goal_for_storage g)) th)
                   pend
-                  (Cons (COAxiom (ax_name a)) acc))
+                  (Cons (COAxiom (ax_name a)) (warn_goal m (ax_name a) g acc)))
                 rest
                 target
                 focus))))
@@ -173,74 +194,75 @@
                  target
                  focus))
              ((Some g)
-              (if (focus_skip focus (claim_name nc))
-                ;; not the focus claim — admit its goal, skip the proof.
-                (run_decls
-                  m
-                  (RunState
-                    (TheoryCons
-                      (Proven (claim_name nc) (close_goal_for_storage g))
-                      th)
-                    pend
-                    acc)
-                  rest
-                  target
-                  focus)
-                (match
-                  (parse_proof
-                    (claim_proof nc)
-                    (module_ctors m)
-                    (module_type_names m))
-                  (None
-                    (run_decls
-                      m
-                      (RunState
-                        th
-                        pend
-                        (Cons
-                          (COFail
-                            (claim_name nc)
-                            "could not parse proof (proof DSL)"
-                            Nil)
-                          acc))
-                      rest
-                      target
-                      focus))
-                  ((Some p0)
-                   (match (desugar_proof_named m (goal_params g) Nil p0)
-                     (p
-                       (if (check_sequent m th (lift_sequent g) p)
-                         (run_decls
-                           m
-                           (RunState
-                             (TheoryCons
-                               (Proven
-                                 (claim_name nc)
-                                 (close_goal_for_storage g))
-                               th)
-                             pend
-                             (Cons
-                               (COPass
-                                 (claim_name nc)
-                                 (claim_trace m th g p (claim_name nc) target))
-                               acc))
-                           rest
-                           target
-                           focus)
-                         (run_decls
-                           m
-                           (RunState
-                             th
-                             pend
-                             (Cons
-                               (COFail
-                                 (claim_name nc)
-                                 (failure_detail m th (lift_sequent g) p)
-                                 (claim_trace m th g p (claim_name nc) target))
-                               acc))
-                           rest
-                           target
-                           focus))))))))))
+              (let ((acc (warn_goal m (claim_name nc) g acc)))  ; shadows acc
+                (if (focus_skip focus (claim_name nc))
+                  ;; not the focus claim — admit its goal, skip the proof.
+                  (run_decls
+                    m
+                    (RunState
+                      (TheoryCons
+                        (Proven (claim_name nc) (close_goal_for_storage g))
+                        th)
+                      pend
+                      acc)
+                    rest
+                    target
+                    focus)
+                  (match
+                    (parse_proof
+                      (claim_proof nc)
+                      (module_ctors m)
+                      (module_type_names m))
+                    (None
+                      (run_decls
+                        m
+                        (RunState
+                          th
+                          pend
+                          (Cons
+                            (COFail
+                              (claim_name nc)
+                              "could not parse proof (proof DSL)"
+                              Nil)
+                            acc))
+                        rest
+                        target
+                        focus))
+                    ((Some p0)
+                     (match (desugar_proof_named m (goal_params g) Nil p0)
+                       (p
+                         (if (check_sequent m th (lift_sequent g) p)
+                           (run_decls
+                             m
+                             (RunState
+                               (TheoryCons
+                                 (Proven
+                                   (claim_name nc)
+                                   (close_goal_for_storage g))
+                                 th)
+                               pend
+                               (Cons
+                                 (COPass
+                                   (claim_name nc)
+                                   (claim_trace m th g p (claim_name nc) target))
+                                 acc))
+                             rest
+                             target
+                             focus)
+                           (run_decls
+                             m
+                             (RunState
+                               th
+                               pend
+                               (Cons
+                                 (COFail
+                                   (claim_name nc)
+                                   (failure_detail m th (lift_sequent g) p)
+                                   (claim_trace m th g p (claim_name nc) target))
+                                 acc))
+                             rest
+                             target
+                             focus)))))))))))
           ;; (requirement NAME (goal …)): parse the goal to native NOW
           ;; (validating it at the contract), seed it as a pending obligation.
           ((DReq r)
@@ -264,7 +286,10 @@
              ((Some g)
               (run_decls
                 m
-                (RunState th (Cons (PendReq (req_name r) g) pend) acc)
+                (RunState
+                  th
+                  (Cons (PendReq (req_name r) g) pend)
+                  (warn_goal m (req_name r) g acc))
                 rest
                 target
                 focus))))
@@ -661,4 +686,13 @@
   (match (build_module_d (strip_granted srcs) seed base_ctors 1)
     ((BMFail diag) (Cons (COFail (quote __module__) diag Nil) Nil))
     ((BMOk m)
-     (check_production m srcs (typedef_ctors (module_typedefs m)) target focus))))
+     ;; the type sweep over the assembled module (typedefs, externs/sigs, fn
+     ;; bodies) runs first; its findings are REPORT-ONLY COTypeWarn outcomes.
+     (oc_concat
+       (type_warn_outcomes (type_report m))
+       (check_production
+         m
+         srcs
+         (typedef_ctors (module_typedefs m))
+         target
+         focus)))))
