@@ -480,6 +480,8 @@ silent).
 | `(wf-induct MEASURE PROOF)`                  | `WfInduct`  | well-founded induction on the Int `MEASURE`; prepends IH `ih`  |
 | `(have EQ PROOF₁ PROOF₂)`                    | `Have`      | the CUT rule: prove `EQ` by `PROOF₁`, then continue with `PROOF₂` under `EQ` as a fresh premise |
 | `(fin-split VAR LO HI (CASE…))`              | `FinSplit`  | bounded-Int enumeration: `LO`/`HI` cite range premises for `VAR`; one `(case INT PROOF)` per value |
+| `(word-fact TERM PROOF)`                     | `WordFact`  | inject `TERM`'s word-semantic facts (defining equation over the Int image at the type-checked width, `uval` ranges) as premises; kernel-justified — no obligation. Unsigned, concrete width only |
+| `(div-facts TERM D Q PROOF)`                 | `DivFacts`  | inject the Euclidean triple for `TERM` at literal divisor `D` (`n = D·Q + mod n D`, mod ranges), with quotient `Q` a fresh ∀-param — `fin-split Q` then supplies the integrality step rational farkas cannot (see examples/word_facts.shard for the mod-elimination idiom) |
 | `(rewrite-with EQREF DIR SIDE (INST…) (PROOF…) PROOF)` | `RewriteWith` | rewrite by a cited equation whose own premises are discharged by the sub-`PROOF`s, then continue |
 | `(absurd EQREF)`                             | `Absurd`    | close the goal from a contradictory hypothesis                 |
 | `(by THEORY PAYLOAD)`                         | `ByTheory`  | discharge via a decision procedure (§10.7)                     |

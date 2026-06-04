@@ -1,0 +1,124 @@
+;;; word_facts.shard — the word PROOF SURFACE (slice 2 of the modular-int arc).
+;;;
+;;; Two kernel-justified premise-injection steps (checker.shard):
+;;;   (word-fact E CONT)       E's semantic facts over its Int image:
+;;;     defining equation (uval e = mod (...) 2^k, modulus a LITERAL —
+;;;     the width comes from the type checker) plus uval range facts.
+;;;   (div-facts N D Q CONT)   the Euclidean triple for N at literal D,
+;;;     with the quotient ∀-generalized as the fresh Int param Q.
+;;;
+;;; THE IDIOM (mod-elimination): farkas is rational, so it cannot
+;;; conclude integrality facts like "0 <= s < 256 ⊢ mod s 256 = s" on
+;;; its own. The quotient-as-param design closes the gap:
+;;;   1. word-fact the atoms and the op  (ranges + defining equation)
+;;;   2. div-facts the op's Int image at the modulus  (s = 256q + mod)
+;;;   3. have farkas-bounds on q  (rationally derivable)
+;;;   4. fin-split q over them   (the ℤ step)
+;;;   5. per case: rewrite the goal through the now-linear premises, lia
+;;; Expected: 4 passed, 2 failed.
+
+(import "../kernel/stdlib.shard")
+
+;; ---- no-overflow addition: below the modulus, wadd IS + -------------------
+;; Premise indices after the steps: p0 the no-overflow premise; p1-p4 the
+;; a/b ranges; p5 the wadd equation, p6-p7 its ranges; p8 the Euclidean
+;; identity (s = 256q + mod s 256), p9-p10 the mod ranges; p11-p12 the
+;; have'd q bounds.
+(claim u8_add_nowrap
+  (goal ((a u8) (b u8)) ((= (lt (+ (uval a) (uval b)) 256) True))
+    (= (uval (wadd a b)) (+ (uval a) (uval b))))
+  (word-fact
+    a
+    (word-fact
+      b
+      (word-fact
+        (wadd a b)
+        (div-facts
+          (+ (uval a) (uval b))
+          256
+          q
+          (have (= (le 0 q) True) (by farkas (list 256 0 1 0 1 0 0 0 0 -1 0 1))
+            (have (= (le q 0) True)
+              (by farkas (list 256 1 0 0 0 0 0 0 0 1 1 0 0))
+              (fin-split
+                q
+                (premise 11)
+                (premise 12)
+                ((case 0
+                   (steps
+                     ((rewrite (premise 8) lr rhs false ())
+                      (rewrite (premise 5) lr lhs false ()))
+                     (by lia (list)))))))))))))
+
+;; ---- wrapping addition: at or above the modulus, wadd is + minus 256 ------
+(claim u8_add_wraps
+  (goal ((a u8) (b u8)) ((= (le 256 (+ (uval a) (uval b))) True))
+    (= (uval (wadd a b)) (- (+ (uval a) (uval b)) 256)))
+  (word-fact
+    a
+    (word-fact
+      b
+      (word-fact
+        (wadd a b)
+        (div-facts
+          (+ (uval a) (uval b))
+          256
+          q
+          (have (= (le 1 q) True) (by farkas (list 256 1 0 0 0 0 0 0 0 -1 0 1))
+            (have (= (le q 1) True)
+              (by farkas (list 256 0 0 1 0 1 0 0 0 1 1 0 0))
+              (fin-split
+                q
+                (premise 11)
+                (premise 12)
+                ((case 1
+                   (steps
+                     ((rewrite (premise 8) lr rhs false ())
+                      (rewrite (premise 5) lr lhs false ()))
+                     (by lia (list)))))))))))))
+
+;; ---- uwrap below the modulus is the identity -------------------------------
+(claim u8_uwrap_small
+  (goal ((n Int)) ((= (le 0 n) True) (= (lt n 256) True))
+    (= (uval (uwrap 8 n)) n))
+  (word-fact
+    (uwrap 8 n)
+    (div-facts
+      n
+      256
+      q
+      (have (= (le 0 q) True) (by farkas (list 256 1 0 0 0 0 -1 0 1))
+        (have (= (le q 0) True) (by farkas (list 256 0 1 0 0 0 1 1 0 0))
+          (fin-split
+            q
+            (premise 8)
+            (premise 9)
+            ((case 0
+               (steps
+                 ((rewrite (premise 5) lr rhs false ())
+                  (rewrite (premise 2) lr lhs false ()))
+                 (by lia (list)))))))))))
+
+;; ---- the comparison image: ult is lt on the values -------------------------
+(claim u8_ult_image
+  (goal ((a u8) (b u8)) ((= (ult a b) True)) (= (lt (uval a) (uval b)) True))
+  (word-fact
+    (ult a b)
+    (steps
+      ((rewrite (premise 1) rl lhs false ())
+       (rewrite (premise 0) lr lhs false ()))
+      refl)))
+
+;; ---- rejections: the gate inside the step -----------------------------------
+
+;; word-fact on a SIGNED word must be rejected (uval reads unsigned; the
+;; signed surface comes later, via sval/wbits). Must FAIL.
+(claim wfact_signed_rejected
+  (goal ((x i8)) () (= x x))
+  (word-fact x (steps ((compute both)) refl)))
+
+;; word-fact at a GENERIC width must be rejected (the facts need the
+;; concrete 2^k literal). Must FAIL.
+(claim wfact_generic_rejected
+  (goal ((x (Word W Unsigned))) () (= x x))
+  (word-fact x (steps ((compute both)) refl)))

@@ -253,7 +253,11 @@
 
     ((FinSplit var lo hi cases) (do_fin_split m th seq var lo hi cases))
 
-    ((Have eq pe pr) (do_have m th seq eq pe pr))))
+    ((Have eq pe pr) (do_have m th seq eq pe pr))
+
+    ((WordFact e pr) (do_word_fact m th seq e pr))
+
+    ((DivFacts n d q pr) (do_div_facts m th seq n d q pr))))
 
 ;; ---------------------------------------------------------------------------
 ;; apply_steps / apply_step: run non-branching steps, threading the
@@ -1386,6 +1390,187 @@
              (Sequent params hyps (append_eqs premises (Cons eq Nil)) goal_eq)
              pr)
            False))))))
+
+;; ---------------------------------------------------------------------------
+;; do_word_fact / do_div_facts: kernel-justified premise injection. Like
+;; `have`, but the justification is the PRIM SEMANTICS itself rather than
+;; a sub-proof: every emitted equation mirrors the corresponding wp_* /
+;; ediv-mod implementation in reduce.shard, REVIEWED IN LOCKSTEP — these
+;; rules are in the same trust class as the primitive table they
+;; describe. The type checker supplies the width, so the facts mention
+;; the CONCRETE 2^k modulus as a literal and farkas/lia read them
+;; linearly. Every fact also passes the cut type gate (defense in depth;
+;; it is what rejects signed/generic-width misuse).
+;;
+;; word-fact facts by target shape (premise order as listed):
+;;   (wadd a b) etc.  uval e = mod ((+|-|*) (uval a) (uval b)) 2^k,
+;;                    0 <= uval e,  uval e <= 2^k - 1
+;;   (uwrap K n)      uval e = mod n 2^k,  and the two range facts
+;;   (weq|ult|ule a b)  e = (int_eq|lt|le) (uval a) (uval b)  [any width]
+;;   anything else word-typed at a concrete unsigned width: ranges only
+;;
+;; div-facts (n, literal d >= 1, fresh q): the Euclidean triple
+;;   n = d*q + mod n d,  0 <= mod n d,  mod n d <= d-1
+;; with the quotient ∀-GENERALIZED as the new Int param q — sound
+;; because instantiating q := ediv n d satisfies every emitted fact, so
+;; a goal proven for all q satisfying them holds in particular there.
+;; The remainder stays the structural TERM (mod n d) so it is the same
+;; farkas atom the word-fact equations mention; q being a VAR is what
+;; lets fin-split supply the integrality step farkas (rational) cannot.
+;; ---------------------------------------------------------------------------
+
+(fn wf_uval ((e Expr)) Expr (Call (quote uval) (Cons e Nil)))
+
+(fn wf_le ((a Expr) (b Expr)) Expr (Call (quote le) (Cons a (Cons b Nil))))
+
+(fn wf_mod ((a Expr) (d Int)) Expr
+  (Call (quote mod) (Cons a (Cons (IntLit d) Nil))))
+
+;; range of (uval e) at width k: 0 <= uval e <= 2^k - 1.
+(fn wf_ranges ((e Expr) (k Int)) (List Equation)
+  (Cons
+    (Equation (wf_le (IntLit 0) (wf_uval e)) (Ctor (quote True) Nil))
+    (Cons
+      (Equation
+        (wf_le (wf_uval e) (IntLit (- (tc_pow2 k) 1)))
+        (Ctor (quote True) Nil))
+      Nil)))
+
+;; uval e = mod ((op) (uval a) (uval b)) 2^k — the wrapping-binop image.
+(fn wf_binop_eq ((e Expr) (op Symbol) (a Expr) (b Expr) (k Int)) Equation
+  (Equation
+    (wf_uval e)
+    (wf_mod (Call op (Cons (wf_uval a) (Cons (wf_uval b) Nil))) (tc_pow2 k))))
+
+(fn wf_wrap_facts
+  ((m Module) (params (List Param)) (e Expr) (op Symbol) (args (List Expr)))
+  (Option (List Equation))
+  (match args
+    ((Cons a (Cons b Nil))
+     (match (tc_uword_width m params e)
+       (None None)
+       ((Some k) (Some (Cons (wf_binop_eq e op a b k) (wf_ranges e k))))))
+    (_ None)))
+
+;; e = (int_eq|lt|le) (uval a) (uval b) — true at EVERY width, so no
+;; concreteness needed; the cut gate enforces unsigned-word args.
+(fn wf_cmp_facts ((e Expr) (op Symbol) (args (List Expr)))
+  (Option (List Equation))
+  (match args
+    ((Cons a (Cons b Nil))
+     (Some
+       (Cons
+         (Equation e (Call op (Cons (wf_uval a) (Cons (wf_uval b) Nil))))
+         Nil)))
+    (_ None)))
+
+(fn wf_uwrap_facts
+  ((m Module) (params (List Param)) (e Expr) (args (List Expr)))
+  (Option (List Equation))
+  (match args
+    ((Cons _ (Cons n Nil))
+     (match (tc_uword_width m params e)
+       (None None)
+       ((Some k)
+        (Some
+          (Cons (Equation (wf_uval e) (wf_mod n (tc_pow2 k))) (wf_ranges e k))))))
+    (_ None)))
+
+(fn wf_range_facts ((m Module) (params (List Param)) (e Expr))
+  (Option (List Equation))
+  (match (tc_uword_width m params e)
+    (None None)
+    ((Some k) (Some (wf_ranges e k)))))
+
+(fn word_facts ((m Module) (params (List Param)) (e Expr))
+  (Option (List Equation))
+  (match e
+    ((Call f args)
+     (if (sym_eq f (quote wadd)) (wf_wrap_facts m params e (quote +) args)
+     (if (sym_eq f (quote wsub)) (wf_wrap_facts m params e (quote -) args)
+     (if (sym_eq f (quote wmul)) (wf_wrap_facts m params e (quote *) args)
+     (if (sym_eq f (quote weq)) (wf_cmp_facts e (quote int_eq) args)
+     (if (sym_eq f (quote ult)) (wf_cmp_facts e (quote lt) args)
+     (if (sym_eq f (quote ule)) (wf_cmp_facts e (quote le) args)
+     (if (sym_eq f (quote uwrap)) (wf_uwrap_facts m params e args)
+     (wf_range_facts m params e)))))))))
+    (_ (wf_range_facts m params e))))
+
+;; every emitted fact must pass the cut type gate.
+(fn wf_facts_ok ((m Module) (params (List Param)) (eqs (List Equation))) Bool
+  (match eqs
+    (Nil True)
+    ((Cons eq rest)
+     (match (tc_check_cut m params eq)
+       ((Some _) False)
+       (None (wf_facts_ok m params rest))))))
+
+;; validated word facts (construction + gate), or None. Shared with the
+;; tracer so its rendering can never diverge from what the checker adds.
+(fn word_facts_checked ((m Module) (params (List Param)) (e Expr))
+  (Option (List Equation))
+  (match (word_facts m params e)
+    (None None)
+    ((Some facts) (if (wf_facts_ok m params facts) (Some facts) None))))
+
+(fn do_word_fact ((m Module) (th Theory) (seq Sequent) (e Expr) (pr Proof)) Bool
+  (match seq
+    ((Sequent params hyps premises goal_eq)
+     (match (word_facts_checked m params e)
+       (None False)
+       ((Some facts)
+        (check_sequent
+          m
+          th
+          (Sequent params hyps (append_eqs premises facts) goal_eq)
+          pr))))))
+
+(fn div_facts_eqs ((n Expr) (d Int) (q Symbol)) (List Equation)
+  (let ((mterm (wf_mod n d)))
+    (Cons
+      (Equation
+        n
+        (Call
+          (quote +)
+          (Cons
+            (Call (quote *) (Cons (IntLit d) (Cons (FVar q) Nil)))
+            (Cons mterm Nil))))
+      (Cons
+        (Equation (wf_le (IntLit 0) mterm) (Ctor (quote True) Nil))
+        (Cons
+          (Equation (wf_le mterm (IntLit (- d 1))) (Ctor (quote True) Nil))
+          Nil)))))
+
+;; validated div facts: Some (params-with-q, facts) or None. d must be a
+;; positive literal, q fresh (no param capture), n an Int term.
+(fn div_facts_checked
+  ((m Module) (params (List Param)) (n Expr) (d Int) (q Symbol))
+  (Option (Pair (List Param) (List Equation)))
+  (if (lt d 1) None
+  (match (find_param q params)
+    ((Some _) None)
+    (None
+      (match (tc_check_int_expr m params n "div-facts dividend")
+        ((Some _) None)
+        (None
+          (let
+            ((params2 (Cons (Param q (TCon (quote Int) Nil)) params))
+             (facts (div_facts_eqs n d q)))
+            (if (wf_facts_ok m params2 facts) (Some (Pair params2 facts)) None))))))))
+
+(fn do_div_facts
+  ((m Module) (th Theory) (seq Sequent) (n Expr) (d Int) (q Symbol) (pr Proof))
+  Bool
+  (match seq
+    ((Sequent params hyps premises goal_eq)
+     (match (div_facts_checked m params n d q)
+       (None False)
+       ((Some (Pair params2 facts))
+        (check_sequent
+          m
+          th
+          (Sequent params2 hyps (append_eqs premises facts) goal_eq)
+          pr))))))
 
 ;; ---------------------------------------------------------------------------
 ;; do_induct: per-ctor sub-sequents with fresh FVars and IHs.
