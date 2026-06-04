@@ -103,10 +103,11 @@ file. A file may mix code, dependencies, and proofs:
 ```
 
 The Rust test suite (`cargo test --release --manifest-path
-rust_bootstrap/Cargo.toml`) covers the loader/evaluator/prims (83 tests
-passing). Its 33 `check_seq_*` kernel mirrors are STALE — they predate the
-FnTrie `Module` field and fail on construction; the live kernel regression is
-the self-hosted corpus above. See Roadmap (*Self-hosting kernel tests*).
+rust_bootstrap/Cargo.toml`, 32 tests) covers what Rust owns: the loader,
+the evaluator, and the primitives. Kernel behavior is regression-tested by
+the self-hosted corpus above, not by Rust mirrors (the legacy `check_seq_*`
+mirror suite was deleted once it went stale against the kernel's evolving
+data shapes — the corpus had long superseded it).
 
 ## Repository layout
 
@@ -158,8 +159,9 @@ rust_bootstrap/        ; the DISPOSABLE Rust bootstrap — host + parser + eval
     load.rs            ;     surface → ast::Module; (ty …) and (tv T) sugars
     eval.rs            ;     environment-machine evaluator; Rc-shared values
     prim.rs            ;     primitive table (+ - * mod, int_eq, sym_of_chars, …)
-    nval.rs            ;     narrow-value builders for tests
-    lib.rs             ;     loader entrypoint + Rust test suite
+    lib.rs             ;     loader entrypoint + the Rust-owned test suite
+                       ;       (loader/evaluator/prims — kernel behavior is
+                       ;        regression-tested by the self-hosted corpus)
     bin/eval.rs        ;     the `eval` driver: runs World programs (the
                        ;       checker, apps, tools) + the World extern handlers
 
@@ -352,11 +354,11 @@ the memo/hash-cons bullet below.)
 - **Audit ledger tool** — walk a proof DAG, collect every axiom and
   extern. The `(bin …)` trusts/requires met-unmet report is the
   first cut; the full-DAG walk remains. See BOUNDARIES.
-- **Self-hosting kernel tests in sexp** — the 33 `check_seq_*` Rust
-  mirrors in `src/lib.rs` are now STALE (pre-FnTrie `Module` shape)
-  and fail; the self-hosted corpus already covers their ground
-  end-to-end. Either port them to claims or delete them — the
-  passing 83 loader/evaluator/prim tests stay either way.
+- **Self-hosting kernel tests in sexp** — DONE by deletion: the
+  legacy `check_seq_*` Rust mirror suite went stale against the
+  kernel's evolving data shapes (pre-FnTrie `Module`) and the
+  self-hosted corpus had long superseded it, so it was removed.
+  Rust tests now cover only what Rust owns (loader/evaluator/prims).
 - **Proof-authoring QoL backlog** — farkas `auto` certificates
   (loader-side solving), dev-mode subset checking, sharper
   rewrite-with failure diagnostics, filenames (not closure ordinals)
@@ -443,8 +445,9 @@ fungible behind those surfaces.
   - Rust trusted-by-review: **1,013** across
     `ast.rs` + `eval.rs` + `load.rs` + `prim.rs` + `bin/eval.rs`
     (check.rs deleted — the checker is self-hosted, `eval` just runs it).
-  - (Plus ~2,500 NCNB of Rust tests + builders in `lib.rs` + `nval.rs`
-    that are not part of the trusted surface.)
+  - (Plus ~450 NCNB of Rust tests in `lib.rs` that are not part of the
+    trusted surface — the legacy kernel-mirror suite and its builders
+    were deleted in favour of the self-hosted corpus.)
 - **Next:** see Roadmap above. The "Big-ticket mandate items" list
   is the gating set for getting v2 to the TRANSFER north-star bar
   (schedule-refinement proofs over a partitioned compute graph).

@@ -9,9 +9,9 @@
 //!
 //!   eval <module.shard> <expr>
 //!
-//! This replaces the overloaded `check` binary's bespoke orchestration for the
-//! eval path; `check` remains (deprecated) until the proof-check entrypoint is
-//! likewise a shard app run on top of this executor.
+//! This replaced the overloaded `check` binary's bespoke orchestration; the
+//! proof-check entrypoint is now itself a shard app (`kernel/check.shard`)
+//! run on top of this executor, and check.rs is deleted.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
