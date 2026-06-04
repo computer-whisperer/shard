@@ -46,16 +46,23 @@ A file may also carry `(import "path")` declarations naming the files it
 depends on; these drive dependency tracking and load order — the loader
 itself ignores them when collecting types/fns, since the assembled set is
 still concatenated as above. A directory-based module system with
-interface/visibility rules is layered on top of this floor (`mod.req`
-interface files, a Rust loader gate that rejects reaching past another
-module's interface); that system is beyond the scope of this document.
+interface/visibility rules is layered on top of this floor
+(`mod.req.shard` interface files; MODE-AWARE resolution — proof checking
+sees a module's interface, running code gets the impl bodies; a loader
+gate that rejects reaching past another module's interface); that system
+is beyond the scope of this document.
 
-Three top-level definitional forms:
+Four top-level definitional forms:
 
 ```
 (type        NAME-OR-PARAMETERIZED  CTORDEF …)
 (fn          NAME ((P TYPE) …) RET-TYPE  BODY-EXPR)
 (extern      NAME ((P TYPE) …) RET-TYPE)
+(sig fn      NAME ((P TYPE) …) RET-TYPE)   ; bodyless signature — opaque in
+                                           ;   proofs (stuck like an extern);
+                                           ;   an impl body may shadow it.
+                                           ;   (sig type …) likewise declares
+                                           ;   an opaque type (private ctors).
 ```
 
 ### 2.1 `type` — algebraic data types
@@ -379,6 +386,18 @@ cite them.
 of truth for the goal); see `docs/BOUNDARIES.md`. An axiom or a passing
 claim/fulfillment is stored closed for citation as a `(lemma NAME)`.
 
+A fifth declaration ties contracts to an executable:
+
+```sexp
+(bin NAME (entry MAIN) (externs …) (trusts …) (requires …))
+```
+
+declares a binary artifact: `entry` its main function, `externs` the
+I/O boundary it may touch, `trusts` the bolt axioms that are its trust
+surface, and `requires` the requirement names forming its acceptance
+contract — `check` reports each one MET or UNMET (nothing pending is
+silent).
+
 ### 10.2 Goals and equations
 
 ```sexp
@@ -414,6 +433,8 @@ claim/fulfillment is stored closed for citation as a `(lemma NAME)`.
 | `(induct2 VAR (CASE…))`                      | `Induct2`   | two-step (parity) induction; `SS` case carries one IH          |
 | `(case-on TERM TYPE (CASE…))`                | `CaseOn`    | split on the constructor of `TERM` (of named `TYPE`); no IH    |
 | `(wf-induct MEASURE PROOF)`                  | `WfInduct`  | well-founded induction on the Int `MEASURE`; prepends IH `ih`  |
+| `(have EQ PROOF₁ PROOF₂)`                    | `Have`      | the CUT rule: prove `EQ` by `PROOF₁`, then continue with `PROOF₂` under `EQ` as a fresh premise |
+| `(fin-split VAR LO HI (CASE…))`              | `FinSplit`  | bounded-Int enumeration: `LO`/`HI` cite range premises for `VAR`; one `(case INT PROOF)` per value |
 | `(rewrite-with EQREF DIR SIDE (INST…) (PROOF…) PROOF)` | `RewriteWith` | rewrite by a cited equation whose own premises are discharged by the sub-`PROOF`s, then continue |
 | `(absurd EQREF)`                             | `Absurd`    | close the goal from a contradictory hypothesis                 |
 | `(by THEORY PAYLOAD)`                         | `ByTheory`  | discharge via a decision procedure (§10.7)                     |
@@ -435,16 +456,17 @@ a **side** — `lhs`, `rhs`, or `both`:
 
 | Form                                  | Native    | Meaning                                                 |
 |---------------------------------------|-----------|---------------------------------------------------------|
-| `(reduce SIDE)`                       | `Reduce`  | run the evaluator on SIDE                               |
-| `(simp SIDE)`                         | `Simp`    | simplify SIDE (reduce + congruence)                     |
-| `(compute SIDE)`                      | `Compute` | fully evaluate a closed SIDE to a value                 |
-| `(unfold FN SIDE)`                    | `Unfold`  | unfold one application of function `FN` on SIDE         |
+| `(reduce SIDE)`                       | `Reduce`  | ι-only: fire matches/ifs on constructor or literal scrutinees, descending everywhere — NEVER unfolds calls (not even ground primitives). The safe workhorse for symbolic proofs. |
+| `(simp SIDE)`                         | `Simp`    | full δ+ι small-step to fixpoint — unfolds user fns and fires primitives. Powerful but can concretize terms a symbolic proof wanted left abstract. |
+| `(compute SIDE)`                      | `Compute` | ungated big-step evaluation (CBV); unfolds everything incl. nullary fns, leaves genuinely stuck subterms stuck. The ground-fact closer. |
+| `(unfold FN SIDE)`                    | `Unfold`  | unfold ONE application of `FN`; does not descend into `match` (not even the scrutinee) — once in match-land, step via equation lemmas + `rewrite` instead. |
 | `(rewrite EQREF DIR SIDE ALL (INST…))`| `Rewrite` | rewrite SIDE by the cited equation (§10.6)              |
 
 In `rewrite`: **`DIR`** is `lr` (left-to-right) or `rl`; **`ALL`** is
 `true`/`false` (rewrite every match vs. the first); **`INST`** is
 `(inst NAME TERM)`, instantiating a variable of the cited equation to an
-object-term snippet.
+object-term snippet. When pattern and replacement are closed (no bound
+variables), `rewrite` also descends into `match` arm bodies.
 
 ### 10.6 Equation references (`EQREF`)
 

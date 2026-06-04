@@ -121,13 +121,15 @@ sequencing discipline is itself a theorem — e.g. `clock(main w) ≥ clock w`
 (monotonic ⇒ no effect reuses a clock), proven by ordinary induction even
 for an oracle-driven loop (`examples/io/cat_loop.shard`).
 
-At RUN time the Rust handler (`bin/check.rs::run_lazy`, installed *only*
-by `check run` and never during `check`) intercepts each stuck extern
-call and performs the real I/O. So checking never does I/O — the hook is
-inert there — and the **trust boundary is exactly the extern axioms** (the
-contract the handler must satisfy), explicit and auditable. Adding an
-operation is a declared extern + its axiom: the boundary grows by exactly
-one arm.
+At RUN time the Rust handler (the World effect handler in
+`rust_bootstrap/src/bin/eval.rs`) intercepts each stuck extern call and
+performs the real I/O. The proof layer never interprets externs — inside
+a proof they are permanently stuck symbols, so the **trust boundary is
+exactly the extern axioms** (the contract the handler must satisfy),
+explicit and auditable. (The checker itself is a World program and reads
+files through these same externs; that is harness I/O, not proof
+semantics.) Adding an operation is a declared extern + its axiom: the
+boundary grows by exactly one arm.
 
 The I/O vocabulary today: `get_args` / `read_line` / `read_key` /
 `read_file` (input), `write` / `write_line` (output), `exit`. Worked
@@ -151,7 +153,24 @@ enumerable Action set (`Print`/`GetArgs`/`ReadFile`/`Write`/`Exit`).
 Direct-style World threading subsumes it — you call effects in place
 instead of bouncing Actions/Events through a driver — so `run_app` /
 `run_cli` and the `(app …)` / `(cli …)` entrypoints have been removed in
-favour of `check run`.
+favour of direct-style World programs run by `eval`.
+
+## The bolt-axiom pattern (what shipped contracts actually use)
+
+The worked form of (B)+(C), established by `examples/snake_game_2` and
+`tools/shardfmt`: declare the run's **observables** as opaque `sig fn`s
+over the World (`w_output` — chunks written so far; `w_input`/`w_reads`
+— what the input effects yielded; `w_exit` — the exit code), then admit
+one dumb one-line **bolt axiom per (effect × observable) pair** — the
+effect's action on its own observable (`write` APPENDS to `w_output`),
+and PRESERVATION for every other (`write` leaves `w_reads` alone). The
+bolts are the binary's entire trust surface: each is auditable by
+inspection, and the `(bin …)` artifact names them in its `trusts` list
+so nothing is implicit. Requirements are then stated over `main`'s
+observables only — never an internal function or state field — and
+proven by symbolic execution through the bolts. See
+`examples/snake_game_2/mod.req.shard` and `tools/shardfmt/mod.req.shard`
+for the two reference contracts.
 
 ## Modellable externs: the good pattern
 
@@ -197,7 +216,10 @@ For any verified artifact, we want to enumerate its *trust dependencies*:
 
 This is a small tool, not part of the kernel: walk the proof DAG,
 collect every `Axiom`-tagged theory entry and every `ExternDef`
-referenced. The output is the trust ledger for a build.
+referenced. The output is the trust ledger for a build. The `(bin …)`
+artifact's report is the first cut: its `trusts` list names the bolt
+axioms and its `requires` list is checked MET/UNMET per build; the
+full transitive DAG walk remains to be written.
 
 Distinguishing **bridging axioms** ("the extern matches the model")
 from **operational axioms** ("the extern has these direct properties")
@@ -221,11 +243,10 @@ tag on the axiom entry.
 - **Continuation-carrying effect-as-data (mechanism A).** The
   `(ReadFile p k)` tree form needs `apply$`; lands with the full
   language. (The continuation-free form, mechanism (C), ships now as
-  direct-style World threading — see `check run` / `examples/io/`.)
+  direct-style World threading — see `eval run` / `examples/io/`.)
 - **Runtime linkage** between extern names and native Rust functions —
-  *now ships* (out of the kernel, in the `check run` driver:
-  `bin/check.rs::run_lazy`'s effect handler, installed only at run, never
-  during proof-checking).
+  *now ships* (out of the kernel: the World effect handler in
+  `bin/eval.rs`; proofs never interpret externs).
 - **Audit ledger tool.** Easy once the data shapes are stable; just
   hasn't been written.
 - **Bridging-axiom distinction.** Tag on `Axiom` entries; not needed

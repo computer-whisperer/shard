@@ -195,6 +195,6 @@ Flagged so we don't paint ourselves into a corner:
 - `LANGUAGE.md` — normative spec of narrow shard (syntax, semantics, the
   narrow/full distinction).
 - `BOUNDARIES.md` — modeling external systems (extern + axiom; the direct-style
-  World/extern I/O the `check run` driver realizes).
+  World/extern I/O the `eval` runner realizes).
 - `REVISIT.md` — the design-decision ledger: every choice and when to revisit.
 - `archive/TRANSFER.md` — the v1→v2 handoff: premise, lessons, what changed.
