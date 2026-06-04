@@ -102,41 +102,53 @@ file. A file may mix code, dependencies, and proofs:
 (type …) (fn …) (extern …); object-level definitions the proofs reason about
 ```
 
-Run the Rust test suite (loader, evaluator, kernel-from-rust mirrors):
-
-```sh
-cargo test --release --manifest-path rust_bootstrap/Cargo.toml
-```
-
-109 tests as of slice 50.
+The Rust test suite (`cargo test --release --manifest-path
+rust_bootstrap/Cargo.toml`) covers the loader/evaluator/prims (83 tests
+passing). Its 33 `check_seq_*` kernel mirrors are STALE — they predate the
+FnTrie `Module` field and fail on construction; the live kernel regression is
+the self-hosted corpus above. See Roadmap (*Self-hosting kernel tests*).
 
 ## Repository layout
 
 ```
 docs/
+  OVERVIEW.md          ; the v2 design intent — the why behind the architecture
   LANGUAGE.md          ; narrow object language reference (syntax, semantics)
   BOUNDARIES.md        ; modeling external systems (extern + axiom, modellable
                        ;   externs, audit ledger pattern)
   REVISIT.md           ; design-decision ledger — every choice + when to
                        ;   revisit. The "why" lives here.
+  M3-V1-VS-V2.md       ; the M3 memory capstone, v1 vs v2 compared
   archive/
     TRANSFER.md        ; v1→v2 handoff (archived): premise, lessons, mandate.
                        ;   Bootstrapped v2 from the v1 pilot; kept for rationale.
 
-kernel/                ; the trusted kernel, written in narrow (1,823 NCNB)
+kernel/                ; the kernel + its self-hosted toolchain, all narrow
+                       ;   (5,582 NCNB total; breakdown under Status)
+  ;; — the checking core —
   stdlib.shard          ;   List / Option / Pair / Bool
   term.shard            ;   Expr / Pat / shift / subst / open_many / close_many
   reduce.shard          ;   step / step_iota / step_smart (gated δ) / memo
   proof.shard           ;   Equation / Goal / Step / Proof / Theory / Cert
-  module.shard          ;   Module / FnDef / TypeDef / ExternDef
-  check.shard           ;   check_sequent — the entry point
+  module.shard          ;   Module / FnDef / TypeDef / ExternDef + FnTrie dispatch
+  checker.shard         ;   check_sequent + the step interpreters — the kernel proper
+  check.shard           ;   the checker ENTRYPOINT, itself a World app (main)
   lia.shard             ;   LIA decision procedure (ByTheory backend)
   eqdec.shard           ;   equality-reflection backend (int_eq/sym_eq = True)
   ord.shard             ;   order-reflection backend (lt/le = True via LIA diff)
-  farkas.shard          ;   linear-integer entailment (premises ⊢ lt/le, cert-checked)
-  reader.shard          ;   the self-hosted front-end: s-expr reader + module +
-                       ;     claim parser (parse_expr/parse_module/parse_claims),
-                       ;     validated byte-for-byte vs load.rs (parse/module/claims-check)
+  farkas.shard          ;   linear-integer entailment (premises ⊢ lt/le/≠/=, cert-checked)
+  ;; — the self-hosted front-end + engine —
+  reader.shard          ;   s-expr reader + module parser, validated byte-for-byte
+                       ;     vs load.rs; located parse-failure diagnostics
+  proof_reader.shard    ;   the proof DSL parsed DIRECTLY to native step structures
+  desugar.shard         ;   named-hypothesis desugaring (labels → positional Hyp k)
+  loader.shard          ;   the World I/O externs + import-closure resolver
+                       ;     (mode-aware module resolution: check vs run)
+  driver.shard          ;   the production pipeline: build modules, run claims,
+                       ;     requirement obligations, the (bin …) met/unmet report
+  eval.shard            ;   the engine: env-machine `ev` (CBV, Rc-shared host
+                       ;     values), FnTrie call dispatch, TCO, inlined externs
+  trace.shard           ;   UNTRUSTED diagnostics: the branch-aware FAIL tracer
   reader_corpus.txt    ;   parse-check differential corpus
 
 rust_bootstrap/        ; the DISPOSABLE Rust bootstrap — host + parser + eval
@@ -151,36 +163,48 @@ rust_bootstrap/        ; the DISPOSABLE Rust bootstrap — host + parser + eval
     bin/eval.rs        ;     the `eval` driver: runs World programs (the
                        ;       checker, apps, tools) + the World extern handlers
 
-std/                   ; the standard library — reusable code + theorems,
-                       ;   each a topic file (code + its lemmas, co-located),
-                       ;   wired together with (import …) (slice 51)
-  arith.shard           ;   pure lia index identities (sub_zero, idx_cancel, …)
-  order.shard           ;   Int order / disequality entailment (ord + farkas):
-                       ;     lt_succ_from_lt, le_trans, lt_implies_neq,
-                       ;     eq_from_le_both, lt_trans_to_neq, … (19 lemmas)
-  nat.shard             ;   Nat + add_nat / int_of_nat / half_nat + nonneg /
-                       ;     half_bound (the Induct2 showcase). imports order.
-  list.shard            ;   (List T) append/rev/fast + the reverse tower
-  map.shard             ;   (Map V) lookup/insert + extensional lemmas + int_eq_refl
-  mem.shard             ;   M3 linear memory = (Map Int): read/write/swap/rev_loop/
-                       ;     load/dump/rdump + framing + rev_loop_mirror + bridge
-                       ;     + mem_reverses (the PROVEN capstone). imports the rest.
+std/                   ; the standard library — DIRECTORY MODULES: each topic
+                       ;   is a dir whose mod.req.shard is the reviewed public
+                       ;   interface (opaque sig fns + requirement lemmas) and
+                       ;   whose impl file carries bodies + fulfills proofs.
+                       ;   Mode-aware: proofs see the opaque interface, running
+                       ;   code gets the bodies. Top-level X.shard files are
+                       ;   back-compat shims forwarding to the modules.
+  arith/                ;   pure lia index identities (sub_zero, idx_cancel, …)
+  div/                  ;   Euclidean div/mod foundation (WfInduct substrate)
+  order/                ;   Int order / disequality entailment (ord + farkas)
+  nat/                  ;   Nat + add_nat / int_of_nat / half_nat (+ Induct2)
+  list/                 ;   (List T) append/len/rev algebra behind an opaque surface
+  map/                  ;   (Map V) — an OPAQUE TYPE (private ctors) + extensional lemmas
+  mem.shard             ;   M3 linear memory = (Map Int): read/write/swap/rev_loop
+                       ;     + framing + mem_reverses (the PROVEN capstone);
+                       ;     imports the rest — checking it checks the library
 
 examples/              ; demonstrations (not the library)
-  lia_basics.shard      ;   LIA examples incl. the Insts demo (slice 32)
-  rewrite_with_demo /  ;   RewriteWith + Induct demos (import std/nat)
-  add_nat_zero.shard    ;
-  double_claims.shard   ;   Simp-unfold of a user fn (double_lib.shard)
-  lia_rejects.shard     ;   NEGATIVE test — the kernel correctly REJECTs it
-  io/                  ;   World/extern I/O programs, run via `eval run`:
-                       ;     filecat / calc_repl / snake_app,
-                       ;     + echo_world / cat_lazy / cat_loop (clock theorems)
-                       ;   (self-hosted `eval` is now kernel/eval.shard, run
-                       ;    via the `eval` binary)
+  calc/                ;   the stage-0 calculator: spec-first (calc_spec) +
+                       ;     run=spec equivalence + the MVU app + World/trace theorems
+  io/                  ;   direct-style World I/O programs (filecat, calc_repl,
+                       ;     echo_world, cat_lazy / cat_loop + clock theorems)
+  snake_game/          ;   first requirement-isolation probe (pure step, R1–R4)
+  snake_game_2/        ;   the full bin pipeline: mod.req.shard contract, arena
+                       ;     spec vocab, PROVEN interactive play loop (parametric
+                       ;     board, renderer faithfulness, no fin-split)
+  modules_demo/        ;   directory-module mechanics + surface-discipline views
+  lia_basics.shard      ;   LIA + Insts demos; wf_induct_demo / have_test /
+                       ;     finsplit_test / list_named_hyp / rewrite_arms_test /
+                       ;     rewrite_with_demo — one demo file per proof feature
+  reverse_proof.shard   ;   the polymorphic reverse tower on the proof-DSL surface
+  contract_demo.shard   ;   axiom + requirement/fulfills surface demo
+  lia_rejects.shard     ;   NEGATIVE tests — each must FAIL for the right reason:
+  module_gate_rejects.shard  ;   (kernel rejects a false LIA claim / a module-
+  parse_rejects.shard   ;     surface violation / an unparseable file — the
+                       ;     last exercises the located parse diagnostics)
 
 tools/
-  zed-narrow/          ;   Zed editor syntax-highlighting extension
-                       ;     for .shard files
+  shardfmt/            ;   the canonical formatter — itself a requirement-
+                       ;     contracted bin (the gate: it REFUSES output that
+                       ;     parses differently). The whole tree is formatted.
+  zed-narrow/          ;   Zed editor syntax-highlighting extension for .shard
 ```
 
 ## Current state
@@ -193,6 +217,18 @@ extended to polymorphism + proof reuse:
 ∀ xs : (List Int).    (fast xs Nil) = (rev xs)  ;; one Rewrite citation
 ∀ xs : (List Symbol). (fast xs Nil) = (rev xs)  ;; one Rewrite citation
 ```
+
+Since then the substrate has moved from "a kernel with demos" to "a
+toolchain that carries contracts": the whole front-end and checker are
+self-hosted (the Rust bootstrap only evaluates), the standard library
+lives behind reviewed module interfaces, and executables ship as
+`(bin …)` artifacts whose acceptance contract is a `requires` list of
+proven requirements over their I/O boundary. The flagship demos are
+**snake_game_2** — a playable, interactive binary whose renderer
+faithfulness, input response, and run discipline are proven against its
+`mod.req.shard` contract at a parametric board size — and **shardfmt**,
+the canonical formatter, contracted to refuse output that changes what
+a file parses to (the whole tree is formatted with it).
 
 Feature checklist (✓ = shipped in v2; → = next):
 
@@ -233,12 +269,22 @@ Feature checklist (✓ = shipped in v2; → = next):
 | extern dispatch + clock-discipline theorems (incl. oracle-driven loop) | ✓ | self-host |
 | `eval` as a standalone shard World program (`examples/io/`) | ✓ | self-host |
 | `.shard` rename + `rust_bootstrap/` split | ✓ | self-host |
-| Module-elaborator (file→Module) into shard | →    |        |
+| Module-elaborator (file→Module) **in shard** (`build_module`) | ✓ | self-host |
+| Whole checker as a World app: the eval.rs→eval.shard→check.shard tower | ✓ | self-host |
+| Engine perf: env-machine `ev` + TCO + FnTrie dispatch (mem 10-15min → 43s) | ✓ | self-host |
+| `wf-induct` — well-founded recursion/induction on Int measures | ✓ | proofs |
+| `have` (cut), `fin-split` (bounded-Int enumeration) | ✓ | proofs |
+| Named hypotheses + load-time proof validation + branch-aware FAIL tracer | ✓ | proofs |
+| `rewrite` descends into match arms (BVar-free patterns) | ✓ | proofs |
+| Directory modules: `mod.req.shard` interfaces, mode-aware resolution | ✓ | modules |
+| Opaque types (`(sig type …)` — private ctors, parse-enforced) | ✓ | modules |
+| `requirement`/`fulfills` + the `(bin …)` artifact (met/unmet report) | ✓ | contracts |
+| Proven interactive app — snake_game_2 (parametric board, 10 reqs met) | ✓ | apps |
+| Located parse-failure diagnostics (5 failure modes) | ✓ | tools |
+| `shardfmt` — gate-contracted formatter; whole tree canonical | ✓ | tools |
 | Defunctionalized higher-order (compiles away) | →     |        |
-| Measure / well-founded recursion        | →        |        |
 | Mutual recursion + mutual induction     | →        |        |
-| Module-tree loader (`(module …)`)       | →        |        |
-| Audit ledger tool                       | →        |        |
+| Audit ledger tool (the `(bin …)` trusts/requires report is the first cut) | → | |
 | **shard → wasm/x86 compiler** (retires `rust_bootstrap/`) | → |   |
 
 Each `→` row is also captured in [docs/REVISIT.md](docs/REVISIT.md)
@@ -259,7 +305,10 @@ premises"). Each item links to its REVISIT entry if one exists.
    enabled by the `eqdec` backend deciding `int_eq k k = True`. Map
    facts are stated EXTENSIONALLY — quantified over a probe key under
    `lookup` — because prepend-insert leaves structurally-distinct but
-   observationally-equal maps. *Remaining:* polymorphic keys
+   observationally-equal maps. *Since then:* `(Map V)` became an
+   OPAQUE TYPE behind `std/map`'s module interface (private ctors,
+   parse-enforced), so consumers can only reason extensionally.
+   *Remaining:* polymorphic keys
    `(Map K V)` (needs a key-equality mechanism — couples to the
    defunctionalized-HOF item below); a richer lemma library
    (`remove`, `keys`, domain reasoning); the gateway to declarative
@@ -272,26 +321,17 @@ premises"). Each item links to its REVISIT entry if one exists.
    [docs/BOUNDARIES.md](docs/BOUNDARIES.md), and for recovering
    `map`/`fold`/`filter` without reintroducing binders.
 
-3. **Measure / well-founded recursion** — TRANSFER mandate #5.
-   Real algorithms (divide-and-conquer, graph traversal) aren't
-   structurally recursive on a subterm. Costs the
-   syntactic-totality-for-free property — termination becomes a
-   discharged proof obligation.
-
-4. **Mutual recursion + mutual induction** — TRANSFER mandate #6.
+3. **Mutual recursion + mutual induction** — TRANSFER mandate #6.
    Needed for any mutually-inductive AST (expr/stmt, block/instr).
 
-5. **`let` in the term language** — TRANSFER gotcha #1; the v1
-   `simp` blowup root cause. Slice 30 partially mitigates with
-   the outer-loop memo, but proper sharing in the term
-   representation is the long-term fix.
+(TRANSFER mandate #5 — measure/well-founded recursion — SHIPPED as
+`wf-induct`: induction on any Int measure expression, termination as
+discharged farkas/ord obligations. `let` exists in the term language;
+what remains of TRANSFER gotcha #1 is sharing-aware reduction — see
+the memo/hash-cons bullet below.)
 
 ### Smaller kernel / loader gaps
 
-- **Module-tree loader** (`(module …)`) — slice 23 reserved the
-  syntax but rejects it. The current kernel loader is a hardcoded
-  flat path list in `src/lib.rs`. See REVISIT, *Proof-file module
-  syntax*.
 - **Bridging-axiom tag** — distinguish "the extern matches the
   model" from "the extern has these direct properties" at the
   `Axiom` entry. See BOUNDARIES.
@@ -301,55 +341,84 @@ premises"). Each item links to its REVISIT entry if one exists.
 - **`Insts` validation hardening** — duplicate-Inst names are
   silently first-match-wins (slice 32). Could tighten to reject
   duplicates if it becomes a footgun.
-- **Sub-tree memo in `simp_expr`** — slice 30's memo is at the
-  outer fixed-point loop only. Inner `step_smart` recursion does
-  not thread the memo (narrow has no monadic bind). Both this and
-  hash-cons/sharing of Expr are flagged `TODO[v3]` in
-  `kernel/reduce.shard:493`.
+- **Sub-tree memo in `simp_expr` / Expr sharing** — slice 30's memo
+  is at the outer fixed-point loop only; hash-cons/sharing of Expr
+  is the long-term fix (`TODO[v3]` in `kernel/reduce.shard`).
+- **Checker theory threading is O(N²)** — the residual perf lever
+  after the FnTrie work: each claim re-threads the growing Theory.
 
 ### Tooling
 
 - **Audit ledger tool** — walk a proof DAG, collect every axiom and
-  extern. Easy once the data shapes are stable; just hasn't been
-  written. See BOUNDARIES.
-- **Self-hosting kernel tests in sexp** — many Rust tests in
-  `src/lib.rs` are mirrors of what a sexp claim could state. Once
-  the loader is rich enough to express those tests as claims,
-  shrink the Rust test count and grow the sexp claim count. Right
-  now Rust mirrors guard kernel-side behavior; sexp claims exercise
-  end-to-end including loader paths.
-- **Module-tree loader for the kernel itself** — once `(module …)`
-  works, migrate `kernel/*.shard` to `kernel/mod.shard`-style tree.
-  Cosmetic but consistency-tightening.
+  extern. The `(bin …)` trusts/requires met-unmet report is the
+  first cut; the full-DAG walk remains. See BOUNDARIES.
+- **Self-hosting kernel tests in sexp** — the 33 `check_seq_*` Rust
+  mirrors in `src/lib.rs` are now STALE (pre-FnTrie `Module` shape)
+  and fail; the self-hosted corpus already covers their ground
+  end-to-end. Either port them to claims or delete them — the
+  passing 83 loader/evaluator/prim tests stay either way.
+- **Proof-authoring QoL backlog** — farkas `auto` certificates
+  (loader-side solving), dev-mode subset checking, sharper
+  rewrite-with failure diagnostics, filenames (not closure ordinals)
+  in parse/check diagnostics, a `write_file` extern so shardfmt
+  gains `--write`/`--check` in-place modes.
+- **Kernel as a directory module** — `kernel/*.shard` is still a
+  flat import list; migrating it to the `mod.req.shard` convention
+  the rest of the tree uses is cosmetic but consistency-tightening.
 
-## Architecture in two paragraphs
+## Architecture in three paragraphs
 
-The kernel is written in narrow. Narrow is a small total-pure
-first-order language whose grammar fits on one page (see
-[docs/LANGUAGE.md](docs/LANGUAGE.md)). The Rust runtime loads
-narrow source into runtime values and walks them with a
-straightforward CBV evaluator; primitive symbols (`+`, `int_eq`, …)
-are stuck-and-intercept — the narrow reducer treats them as
-unknown calls, and the Rust runtime recognizes them and applies
-the primitive table.
+Everything is written in narrow — a small total-pure first-order
+language whose grammar fits on one page (see
+[docs/LANGUAGE.md](docs/LANGUAGE.md)) — and runs as a tower. At the
+bottom, the Rust `eval` binary is a plain CBV environment-machine
+evaluator plus the primitive table (`+`, `int_eq`, `sym_of_chars`, …;
+stuck-and-intercept) and the World extern handlers (file I/O, args,
+stdin keys, exit). It evaluates `kernel/eval.shard` — the self-hosted
+engine: its own environment machine `ev` (Rc-sharing host values),
+FnTrie call dispatch, tail-call optimization, and inlined externs.
+That engine runs any World-threading shard program; the proof checker
+is simply one such program.
 
-Proofs are `(claim NAME (Goal …) (Proof …))` — the Goal is a
-`(List Param) (List Equation) Equation`-shaped value, the Proof
-is a `(Steps …)`/`(Induct …)`/`(Rewrite …)`/`(ByTheory …)` tree.
-`check_sequent` (defined in narrow) dispatches the Proof against
-the Goal. Successful claims are consed onto a running Theory,
-citable by name from later claims. The Theory is content-stored
-as `(Proven NAME GOAL)` or `(Axiom NAME GOAL)` — the latter making
-the audit boundary visible at the kernel layer.
+Checking a file means running `kernel/check.shard`: the loader resolves
+the import closure through the `read_file` extern (module imports
+resolve MODE-AWARE — proof checking sees a directory module's
+`mod.req.shard` interface, running code gets the impl bodies); the
+self-hosted reader parses sources to `Module` values (with located
+diagnostics on failure); the proof DSL is parsed directly to native
+step structures and validated at load time; and the driver walks the
+claims through `check_sequent`. Successful claims are consed onto a
+running Theory, citable by name from later claims. The Theory is
+content-stored as `(Proven NAME GOAL)` or `(Axiom NAME GOAL)` — the
+latter making the audit boundary visible at the kernel layer. Failed
+claims are explained by an UNTRUSTED tracer that replays the proof
+spine branch-aware.
+
+Above the proof layer sits the contract layer: a `(requirement NAME
+GOAL)` declares an obligation (typically in a reviewed `mod.req.shard`),
+a `(fulfills NAME PROOF)` in the implementation discharges it, and a
+`(bin NAME (entry …) (externs …) (trusts …) (requires …))` artifact
+declares an executable whose acceptance contract is its requires list —
+`check` reports each requirement MET or UNMET, and the `trusts` list
+names the extern bolt axioms that are that binary's trust surface.
+Review attention concentrates on the `mod.req.shard` files and the
+reviewed spec vocabulary they import; implementations and proofs are
+fungible behind those surfaces.
 
 ## Conventions
 
-- **Slice = one logical change set committed atomically.** Each
-  commit message starts `slice N: …` and includes test/claim counts
-  before and after. Read `git log --oneline` for the slice history.
+- **One logical change set per commit, topic-prefixed.** The kernel
+  build-out used `slice N: …` numbering (145 commits — read
+  `git log --oneline` for that history); current work prefixes the
+  subsystem instead (`snake_game_2: …`, `shardfmt: …`, `kernel: …`)
+  and states what is proven/checked before and after.
 - **Trusted core touch is called out explicitly.** Changes to
-  `kernel/*.shard` or `src/*.rs` mean the audited surface grew or
-  shifted. Changes to `examples/*.shard` or `tests` do not.
+  `kernel/*.shard`, `src/*.rs`, or any `mod.req.shard` / reviewed
+  spec-vocab file mean the audited surface grew or shifted. Changes
+  to impls, proofs, or `examples/` do not.
+- **Sources are canonical-format.** Run shardfmt on touched files;
+  the formatter's gate guarantees it cannot change what a file
+  parses to (`tools/shardfmt/mod.req.shard` is the contract).
 - **REVISIT entries are first-class.** Every design decision under
   uncertainty has an entry with the "what was chosen", "why now",
   and "revisit when" triad. The README's roadmap section is a
@@ -357,16 +426,24 @@ the audit boundary visible at the kernel layer.
 
 ## Status
 
-- **Substrate:** v2 kernel + loader + driver. Feature-complete for
-  the v1 reverse-tower headline; extended with polymorphism, Simp
-  guarding, ByTheory (LIA + eqdec + ord + farkas), Insts, finite maps (Int
-  keys), and the M3 linear-memory model + array framing.
-- **Trusted core size:**
-  - Kernel narrow code: **1,823 NCNB** across 10 `kernel/*.shard`.
-  - Rust trusted-by-review: **1,013 NCNB** across
+- **Substrate:** the self-hosted tower (eval.rs → eval.shard →
+  check.shard) running a proof system with structural + two-step +
+  well-founded induction, cut, bounded enumeration, four theory
+  backends (LIA, eqdec, ord, farkas), a mode-aware module system with
+  opaque interfaces/types, and the requirement/fulfills/bin contract
+  layer. Proven artifacts beyond the M3 capstone: snake_game_2
+  (interactive binary, 10 boundary requirements met) and shardfmt
+  (the formatter the tree is canonicalized with).
+- **Code size (NCNB):**
+  - `kernel/*.shard`: **5,582** across 18 files — the checking core
+    (term/reduce/proof/module/checker/check + the four theories +
+    stdlib) is **2,582**; the self-hosted front-end + engine
+    (reader/proof_reader/desugar/loader/driver/eval) is **2,478**;
+    untrusted failure diagnostics (trace) is **522**.
+  - Rust trusted-by-review: **1,013** across
     `ast.rs` + `eval.rs` + `load.rs` + `prim.rs` + `bin/eval.rs`
     (check.rs deleted — the checker is self-hosted, `eval` just runs it).
-  - (Plus ~2,000 NCNB of Rust tests + builders in `lib.rs` + `nval.rs`
+  - (Plus ~2,500 NCNB of Rust tests + builders in `lib.rs` + `nval.rs`
     that are not part of the trusted surface.)
 - **Next:** see Roadmap above. The "Big-ticket mandate items" list
   is the gating set for getting v2 to the TRANSFER north-star bar
