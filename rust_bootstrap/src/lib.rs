@@ -314,6 +314,38 @@ mod tests {
         );
     }
 
+    /// The paired division variants: `/`+`tmod` (truncating) and
+    /// `ediv`+`mod` (Euclidean) must each satisfy a = b*q + r across all
+    /// sign combinations, with their respective remainder ranges. The
+    /// mixed pair `/`+`mod` does NOT — that mismatch was a false axiom
+    /// in std/div until guarded.
+    #[test]
+    fn prim_division_pairs() {
+        let m = "(fn id ((x Int)) Int x)";
+        let int = |n: i64| ast::Expr::IntLit(n.into());
+        for (a, b) in [(7i64, 10i64), (-7, 10), (7, -10), (-7, -10), (23, 4), (-23, 4)] {
+            // truncating pair: q rounds toward zero, r follows the dividend.
+            let q = eval_str(m, &format!("(/ {a} {b})"));
+            let r = eval_str(m, &format!("(tmod {a} {b})"));
+            assert_eq!(q, int(a / b), "(/ {a} {b})");
+            assert_eq!(r, int(a % b), "(tmod {a} {b})");
+            // Euclidean pair: 0 <= r < |b|.
+            let eq = eval_str(m, &format!("(ediv {a} {b})"));
+            let er = eval_str(m, &format!("(mod {a} {b})"));
+            assert_eq!(er, int(a.rem_euclid(b)), "(mod {a} {b})");
+            let (ast::Expr::IntLit(eqv), ast::Expr::IntLit(erv)) = (&eq, &er) else {
+                panic!("non-int division result");
+            };
+            assert_eq!(
+                ast::IntLit::from(b) * eqv + erv,
+                a.into(),
+                "ediv/mod identity at ({a}, {b})"
+            );
+        }
+        // The historical falsity: 10*(-7/10) + (-7 mod 10) = 3, not -7.
+        assert_eq!(eval_str(m, "(+ (* 10 (/ -7 10)) (mod -7 10))"), int(3));
+    }
+
     /// Source literals beyond the host parser's integer range must be a
     /// LOAD ERROR, not silently degraded — lexpr falls back to lossy f64
     /// for them. (The self-hosted reader builds ints by arithmetic and

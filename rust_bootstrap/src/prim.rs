@@ -40,6 +40,14 @@ pub fn try_apply(name: &str, args: &[Expr]) -> Option<Expr> {
         ("/",   [IntLit(a), IntLit(b)]) if !b.is_zero()    => Some(IntLit(a / b)),
         ("mod", [IntLit(a), IntLit(b)]) if !b.is_zero()    => Some(IntLit(rem_euclid(a, b))),
 
+        // The explicitly-paired division variants (semantics in the operator
+        // NAME, never in context): `/`+`tmod` is the truncating pair (both
+        // round toward zero; tmod's sign follows the dividend — BigInt's `%`),
+        // `ediv`+`mod` the Euclidean pair (0 <= mod < |b|). The mixed pair
+        // `/`+`mod` is NOT an identity pair on negatives — see std/div.
+        ("tmod", [IntLit(a), IntLit(b)]) if !b.is_zero()   => Some(IntLit(a % b)),
+        ("ediv", [IntLit(a), IntLit(b)]) if !b.is_zero()   => Some(IntLit((a - rem_euclid(a, b)) / b)),
+
         // Bitwise on non-negative ints. Shifts by 64+ or negative amounts
         // are caller errors; we keep the i64-era guard (call stays stuck)
         // so the Rust table and kernel/reduce.shard's mirror agree.

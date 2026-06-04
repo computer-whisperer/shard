@@ -356,8 +356,10 @@ them ("stuck-and-intercept" — see REVISIT).
 
 | name         | signature                  | notes                       |
 |--------------|----------------------------|-----------------------------|
-| `+ - * /`    | `Int × Int → Int`          | `/` rejects div-by-zero     |
+| `+ - * /`    | `Int × Int → Int`          | `/` truncates toward zero; rejects div-by-zero |
 | `mod`        | `Int × Int → Int`          | Euclidean (result ≥ 0)      |
+| `tmod`       | `Int × Int → Int`          | truncating remainder — pairs with `/` |
+| `ediv`       | `Int × Int → Int`          | Euclidean quotient — pairs with `mod` |
 | `band`       | `Int × Int → Int`          | bitwise AND                 |
 | `bor`        | `Int × Int → Int`          | bitwise OR                  |
 | `bxor`       | `Int × Int → Int`          | bitwise XOR                 |
