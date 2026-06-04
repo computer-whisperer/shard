@@ -8,10 +8,14 @@
 ;;; deep nested failure is visible instead of just the outer finisher's entry
 ;;; state. It adds NO trusted code — only orchestration + rendering.
 ;;;
-;;; Mirrors (byte-for-byte) the Rust bin/check.rs functions render_term /
-;;; render_eqref / step_label / trace_proof / build_failure_detail, which this
-;;; replaces on the production path. Runs under NATIVE eval in the eval module
-;;; (kernel fns + toolchain), like the rest of the driver.
+;;; Originally mirrored the (now-deleted) Rust bin/check.rs diagnostics; it has
+;;; since grown past them: have JUSTIFICATIONS and RewriteWith OBLIGATIONS are
+;;; checked and the failing sub-proof descended into (they used to be invisible
+;;; — the spine traced green while a sub-proof was the failure), Absurd is
+;;; replayed, and every failure site dumps the in-scope premises and hyps with
+;;; their positional indices (see examples/tracer_demo.shard for the shapes).
+;;; Runs under NATIVE eval in the eval module (kernel fns + toolchain), like
+;;; the rest of the driver.
 
 ;; ---- byte/string helpers --------------------------------------------------
 ;; imports — the kernel files this module uses (dependency-tracked)
@@ -147,14 +151,89 @@
              (render_dir dir)
              (append_int (Cons 32 Nil) (render_side sd)))))))))
 
+;; ---- failure-site context (the premises + hyps in scope) -------------------
+;; Rendered ONLY at failure points (a failed step / rewrite / Refl / Absurd),
+;; so the trace NAMES every positional index instead of making the author
+;; probe for the stack shape. A ground hyp renders as its equation; an IH
+;; (∀-binders and/or premises) is tagged with its shape.
+(fn count_params ((ps (List Param))) Int
+  (match ps
+    (Nil 0)
+    ((Cons _ t) (+ 1 (count_params t)))))
+
+(fn count_eqs ((es (List Equation))) Int
+  (match es
+    (Nil 0)
+    ((Cons _ t) (+ 1 (count_eqs t)))))
+
+(fn render_hyp_goal ((g Goal)) (List Int)
+  (match g
+    ((Goal Nil Nil eq) (render_eq eq))
+    ((Goal ps prems eq)
+     (append_int
+       "[∀ "
+       (append_int
+         (show_int (count_params ps))
+         (append_int
+           ", "
+           (append_int
+             (show_int (count_eqs prems))
+             (append_int " prem]  " (render_eq eq)))))))))
+
+(fn context_premise_lines ((ps (List Equation)) (i Int) (ind (List Int)))
+  (List (List Int))
+  (match ps
+    (Nil Nil)
+    ((Cons p rest)
+     (Cons
+       (append_int
+         ind
+         (append_int
+           "premise "
+           (append_int (show_int i) (append_int ":  " (render_eq p)))))
+       (context_premise_lines rest (+ i 1) ind)))))
+
+(fn context_hyp_lines ((hs (List Goal)) (i Int) (ind (List Int)))
+  (List (List Int))
+  (match hs
+    (Nil Nil)
+    ((Cons h rest)
+     (Cons
+       (append_int
+         ind
+         (append_int
+           "hyp "
+           (append_int (show_int i) (append_int ":  " (render_hyp_goal h)))))
+       (context_hyp_lines rest (+ i 1) ind)))))
+
+(fn context_lines ((seq Sequent) (depth Int)) (List (List Int))
+  (match seq
+    ((Sequent params hyps premises eq)
+     (match
+       (append_lines
+         (context_premise_lines premises 0 (mk_ind (+ depth 1)))
+         (context_hyp_lines hyps 0 (mk_ind (+ depth 1))))
+       (Nil Nil)
+       ((Cons l ls)
+        (Cons
+          (append_int (mk_ind depth) "in scope at the failure:")
+          (Cons l ls)))))))
+
 ;; ---- the tracer ------------------------------------------------------------
 (fn seq_eq ((s Sequent)) Equation
   (match s
     ((Sequent params hyps premises eq) eq)))
 
-;; Replay one RewriteWith's rewrite (ignoring premise sub-proofs) to get the
-;; resulting sequent, mirroring check_sequent's RewriteWith arm by chaining the
-;; same kernel fns. None if any link fails (unresolved lemma, no match, …).
+;; What a replayed RewriteWith yields: the rewritten sequent, the match env
+;; (binding the cited equation's pattern vars), and the cited premises opened
+;; to the same FVar vocabulary — enough to rebuild every obligation subgoal
+;; exactly as check_premise_proofs does.
+(type RwTrace (RwTrace Sequent Env (List Equation)))
+
+;; Replay one RewriteWith's rewrite to get the resulting sequent PLUS the
+;; obligation ingredients, mirroring check_sequent's RewriteWith arm by
+;; chaining the same kernel fns. None if any link fails (unresolved lemma,
+;; no match, …).
 (fn apply_rewrite_step
   ((m Module)
    (th Theory)
@@ -163,19 +242,109 @@
    (dir Dir)
    (sd Side)
    (insts (List Inst)))
-  (Option Sequent)
+  (Option RwTrace)
   (match (resolve_eq er seq th)
     (None None)
     ((Some (Goal cited_params cited_premises cited_eq))
      (match (split_params_by_insts cited_params insts)
        ((Pair openings patvars)
-        (let ((opened_eq (open_eq_with (reverse_exprs openings) cited_eq)))
-          (match seq
-            ((Sequent params hyps premises goal_eq)
-             (match (apply_rewrite_with_env patvars opened_eq dir sd goal_eq)
-               (None None)
-               ((Some (Pair env new_eq))
-                (Some (Sequent params hyps premises new_eq))))))))))))
+        (let ((opening_fvars (reverse_exprs openings)))
+          (let
+            ((opened_eq (open_eq_with opening_fvars cited_eq))
+             (opened_premises (open_eqs_with opening_fvars cited_premises)))
+            (match seq
+              ((Sequent params hyps premises goal_eq)
+               (match (apply_rewrite_with_env patvars opened_eq dir sd goal_eq)
+                 (None None)
+                 ((Some (Pair env new_eq))
+                  (Some
+                    (RwTrace
+                      (Sequent params hyps premises new_eq)
+                      env
+                      opened_premises)))))))))))))
+
+;; Check each RewriteWith obligation (the cited equation's premises at the
+;; match instantiation) and DESCEND into the failing one — passing obligations
+;; stay silent (cites are dense; only failures matter). Arity mismatches,
+;; which the checker rejects without detail, are named too. Untrusted: only
+;; re-runs the trusted check_sequent + renders, like the branch tracers.
+(fn trace_obligations
+  ((m Module)
+   (th Theory)
+   (seq Sequent)
+   (env Env)
+   (cps (List Equation))
+   (proofs (List Proof))
+   (er EqRef)
+   (k Int)
+   (depth Int)
+   (verbose Bool))
+  (List (List Int))
+  (match cps
+    (Nil
+      (match proofs
+        (Nil Nil)
+        (_
+          (Cons
+            (append_int
+              (mk_ind depth)
+              (append_int
+                "rewrite ("
+                (append_int
+                  (render_eqref er)
+                  "): too many obligation sub-proofs")))
+            Nil))))
+    ((Cons cp cp_rest)
+     (match proofs
+       (Nil
+         (Cons
+           (append_int
+             (mk_ind depth)
+             (append_int
+               "rewrite ("
+               (append_int
+                 (render_eqref er)
+                 (append_int
+                   "): missing sub-proof for obligation "
+                   (append_int
+                     (show_int k)
+                     (append_int ":  " (render_eq (subst_eq env cp))))))))
+           Nil))
+       ((Cons pf pf_rest)
+        (match seq
+          ((Sequent s_params s_hyps s_premises _)
+           (let
+             ((sub_seq (Sequent s_params s_hyps s_premises (subst_eq env cp))))
+             (append_lines
+               (if (check_sequent m th sub_seq pf) Nil
+               (Cons
+                 (append_int
+                   (mk_ind depth)
+                   (append_int
+                     "obligation "
+                     (append_int
+                       (show_int k)
+                       (append_int
+                         " of rewrite ("
+                         (append_int
+                           (render_eqref er)
+                           (append_int
+                             "):  "
+                             (append_int
+                               (render_eq (seq_eq sub_seq))
+                               "  FAILS  v v v")))))))
+                 (trace_proof m th sub_seq pf (+ depth 1) verbose)))
+               (trace_obligations
+                 m
+                 th
+                 seq
+                 env
+                 cp_rest
+                 pf_rest
+                 er
+                 (+ k 1)
+                 depth
+                 verbose))))))))))
 
 ;; Apply Steps one at a time from `cur`, emitting a line per step and stopping
 ;; at the first that fails to apply. Returns the final sequent (Some if all
@@ -216,7 +385,7 @@
                    (append_int
                      " ["
                      (append_int (step_label s) "]  FAILED to apply (no match)")))))
-             Nil)))))))
+             (context_lines cur depth))))))))
 
 ;; Descend the proof spine, rendering the sequent equation at each level.
 ;; Branching proofs (Induct/Induct2) stop the walk; CaseOn/WfInduct recurse.
@@ -237,7 +406,7 @@
                 (append_int
                   (mk_ind depth)
                   (append_int "  rhs  " (render_term r)))
-                Nil)))))))
+                (context_lines seq depth))))))))
     ((Steps steps finisher)
      (match (trace_steps m th seq steps 0 depth)
        ((Pair (Some cur) ls)
@@ -245,7 +414,7 @@
        ((Pair None ls) ls)))
     ((RewriteWith er dir sd insts prems cont)
      (match (apply_rewrite_step m th seq er dir sd insts)
-       ((Some seq2)
+       ((Some (RwTrace seq2 env opened_premises))
         (Cons
           (append_int
             (mk_ind depth)
@@ -254,7 +423,19 @@
               (append_int
                 (render_eqref er)
                 (append_int "):  " (render_eq (seq_eq seq2))))))
-          (trace_proof m th seq2 cont (+ depth 1) verbose)))
+          (append_lines
+            (trace_obligations
+              m
+              th
+              seq
+              env
+              opened_premises
+              prems
+              er
+              0
+              (+ depth 1)
+              verbose)
+            (trace_proof m th seq2 cont (+ depth 1) verbose))))
        (None
          (Cons
            (append_int
@@ -263,8 +444,8 @@
                "rewrite ("
                (append_int
                  (render_eqref er)
-                 ") did NOT apply (unresolved lemma, no match, or premise mismatch)")))
-           Nil))))
+                 ") did NOT apply (unresolved lemma or no match)")))
+           (context_lines seq depth)))))
     ((ByTheory name cert)
      (Cons
        (append_int
@@ -286,7 +467,57 @@
      (Cons
        (append_int (mk_ind depth) "Induct2 — branching proof; trace stops here")
        Nil))
-    ((Absurd er) (Cons (append_int (mk_ind depth) "Absurd — not replayed") Nil))
+    ((Absurd er)
+     ;; Replay: resolve the cited fact, simp both sides, report. Mirrors
+     ;; check_sequent's Absurd arm (ground facts only).
+     (match (resolve_eq er seq th)
+       (None
+         (Cons
+           (append_int
+             (mk_ind depth)
+             (append_int
+               "Absurd ("
+               (append_int (render_eqref er) ") does not resolve")))
+           (context_lines seq depth)))
+       ((Some (Goal Nil Nil (Equation l r)))
+        (let ((sl (simp_expr m l)) (sr (simp_expr m r)))
+          (if (head_clash sl sr)
+            (Cons
+              (append_int
+                (mk_ind depth)
+                (append_int
+                  "Absurd ("
+                  (append_int
+                    (render_eqref er)
+                    "): closes (head clash after simp)")))
+              Nil)
+            (Cons
+              (append_int
+                (mk_ind depth)
+                (append_int
+                  "Absurd ("
+                  (append_int
+                    (render_eqref er)
+                    ") does NOT close — both sides simp to:")))
+              (Cons
+                (append_int
+                  (mk_ind depth)
+                  (append_int "  lhs  " (render_term sl)))
+                (Cons
+                  (append_int
+                    (mk_ind depth)
+                    (append_int "  rhs  " (render_term sr)))
+                  (context_lines seq depth)))))))
+       ((Some g)
+        (Cons
+          (append_int
+            (mk_ind depth)
+            (append_int
+              "Absurd ("
+              (append_int
+                (render_eqref er)
+                "): cited fact has binders/premises (unsupported)")))
+          Nil))))
     ((FinSplit var lo hi cases)
      (if verbose (trace_fin_split m th seq var cases depth verbose)
      (Cons
@@ -295,23 +526,40 @@
          "FinSplit — branching proof (focus this claim to trace its cases)")
        Nil)))
     ((Have eq pe pr)
+     ;; Check the JUSTIFICATION (same context, goal = the cut equation —
+     ;; exactly do_have's first obligation). A broken justification is traced
+     ;; in place; only a sound cut descends into the continuation.
      (match seq
        ((Sequent params hyps premises goal_eq)
-        (Cons
-          (append_int
-            (mk_ind depth)
+        (if (check_sequent m th (Sequent params hyps premises eq) pe)
+          (Cons
             (append_int
-              "have "
+              (mk_ind depth)
               (append_int
-                (render_eq eq)
-                " — cut; continuing with it as the last premise:")))
-          (trace_proof
-            m
-            th
-            (Sequent params hyps (append_eqs premises (Cons eq Nil)) goal_eq)
-            pr
-            (+ depth 1)
-            verbose)))))))
+                "have "
+                (append_int
+                  (render_eq eq)
+                  " — cut; continuing with it as the last premise:")))
+            (trace_proof
+              m
+              th
+              (Sequent params hyps (append_eqs premises (Cons eq Nil)) goal_eq)
+              pr
+              (+ depth 1)
+              verbose))
+          (Cons
+            (append_int
+              (mk_ind depth)
+              (append_int
+                "have "
+                (append_int (render_eq eq) "  JUSTIFICATION FAILS  v v v")))
+            (trace_proof
+              m
+              th
+              (Sequent params hyps premises eq)
+              pe
+              (+ depth 1)
+              verbose))))))))
 
 ;; Branch-aware fin-split tracing: rebuild each value's subgoal (subst var:=v,
 ;; as do_fin_split does) and descend into the failing one. Untrusted: only
