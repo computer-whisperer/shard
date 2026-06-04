@@ -34,6 +34,7 @@
 (import "eqdec.shard")
 (import "ord.shard")
 (import "farkas.shard")
+(import "types.shard")  ; mid-proof type gates (have / wf-measure / citations)
 
 (type Sequent
   (Sequent
@@ -179,14 +180,26 @@
                            side goal_eq)
                          (None False)
                          ((Some (Pair env new_eq))
+                          ;; TYPE GATE: the citation's bindings (insts +
+                          ;; captures) must have the cited binders' declared
+                          ;; types — see the Rewrite arm.
                           (if
-                            (check_premise_proofs m th s_params s_hyps
-                              s_premises env opened_premises premise_proofs)
-                            (check_sequent
+                            (tc_check_sites
                               m
-                              th
-                              (Sequent s_params s_hyps s_premises new_eq)
-                              rest)
+                              s_params
+                              cited_params
+                              pat_var_names
+                              openings
+                              (Cons env Nil))
+                            (if
+                              (check_premise_proofs m th s_params s_hyps
+                                s_premises env opened_premises premise_proofs)
+                              (check_sequent
+                                m
+                                th
+                                (Sequent s_params s_hyps s_premises new_eq)
+                                rest)
+                              False)
                             False)))))))))
              False))))))
 
@@ -314,8 +327,16 @@
                        (match
                          (apply_rewrite pat_var_names opened_eq dir side all
                            goal_eq)
-                         ((Some new_eq)
-                          (Some (Sequent s_params hyps premises new_eq)))
+                         ((Some (Pair envs new_eq))
+                          ;; TYPE GATE: every match site instantiates the
+                          ;; cited ∀-binders — each binding (inst or capture)
+                          ;; must have the binder's DECLARED type, else a
+                          ;; lemma proven over Int rewrites Bool terms.
+                          (if
+                            (tc_check_sites m s_params cited_params
+                              pat_var_names openings envs)
+                            (Some (Sequent s_params hyps premises new_eq))
+                            None))
                          (None None))))))))
              None))
           (_ None)))))))  ;; non-Nil premises
@@ -457,65 +478,32 @@
 ;; substitutes the captured env into the replacement.
 ;; ---------------------------------------------------------------------------
 
-(fn rewrite_first ((pat_vars (List Symbol)) (pat Expr) (repl Expr) (e Expr))
-  (Option Expr)
-  (match (expr_match pat_vars pat e Empty)
-    ((Some env) (Some (subst env repl)))
-    (None
-      (match e
-        ((Ctor c args)
-         (match (rewrite_first_list pat_vars pat repl args)
-           ((Some args2) (Some (Ctor c args2)))
-           (None None)))
-        ((Call f args)
-         (match (rewrite_first_list pat_vars pat repl args)
-           ((Some args2) (Some (Call f args2)))
-           (None None)))
-        ((If c t el)
-         (match (rewrite_first pat_vars pat repl c)
-           ((Some c2) (Some (If c2 t el)))
-           (None
-             (match (rewrite_first pat_vars pat repl t)
-               ((Some t2) (Some (If c t2 el)))
-               (None
-                 (match (rewrite_first pat_vars pat repl el)
-                   ((Some el2) (Some (If c t el2)))
-                   (None None)))))))
-        ;; Descend into a Match SCRUTINEE only — it shares the enclosing
-        ;; binder scope (no shift), so rewriting it is plain congruence.
-        ;; Arm bodies bind pattern vars (de Bruijn) and are NOT entered.
-        ((Match scrut arms)
-         (match (rewrite_first pat_vars pat repl scrut)
-           ((Some scrut2) (Some (Match scrut2 arms)))
-           (None None)))
-        (_ None)))))
+;; (rewrite_first / rewrite_first_list — the env-discarding first-match
+;; walkers — were DELETED when the citation type gate landed: every caller
+;; now needs the match env, so rewrite_first_with_env is the only
+;; first-match walker. rewrite_all carries the env of EVERY site for the
+;; same reason — each site is its own instantiation of the cited lemma.)
 
-(fn rewrite_first_list
-  ((pat_vars (List Symbol)) (pat Expr) (repl Expr) (es (List Expr)))
-  (Option (List Expr))
-  (match es
-    (Nil None)
-    ((Cons h t)
-     (match (rewrite_first pat_vars pat repl h)
-       ((Some h2) (Some (Cons h2 t)))
-       (None
-         (match (rewrite_first_list pat_vars pat repl t)
-           ((Some t2) (Some (Cons h t2)))
-           (None None)))))))
+;; (List Env) concat, for combining multi-site env collections.
+(fn envs_concat ((a (List Env)) (b (List Env))) (List Env)
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (envs_concat t b)))))
 
 (fn rewrite_all ((pat_vars (List Symbol)) (pat Expr) (repl Expr) (e Expr))
-  (Option Expr)
+  (Option (Pair (List Env) Expr))
   (match (expr_match pat_vars pat e Empty)
-    ((Some env) (Some (subst env repl)))  ; don't recurse into repl
+    ;; don't recurse into repl
+    ((Some env) (Some (Pair (Cons env Nil) (subst env repl))))
     (None
       (match e
         ((Ctor c args)
          (match (rewrite_all_list pat_vars pat repl args)
-           ((Some args2) (Some (Ctor c args2)))
+           ((Some (Pair envs args2)) (Some (Pair envs (Ctor c args2))))
            (None None)))
         ((Call f args)
          (match (rewrite_all_list pat_vars pat repl args)
-           ((Some args2) (Some (Call f args2)))
+           ((Some (Pair envs args2)) (Some (Pair envs (Call f args2))))
            (None None)))
         ((If c t el) (rewrite_all_if pat_vars pat repl c t el))
         ;; Match: scrutinee, and — when pattern AND replacement are BVar-free —
@@ -538,13 +526,14 @@
                 None)
                 None)))
            (match s2
-             ((Some scrut2)
+             ((Some (Pair es scrut2))
               (match a2
-                ((Some arms2) (Some (Match scrut2 arms2)))
-                (None (Some (Match scrut2 arms)))))
+                ((Some (Pair es2 arms2))
+                 (Some (Pair (envs_concat es es2) (Match scrut2 arms2))))
+                (None (Some (Pair es (Match scrut2 arms))))))
              (None
                (match a2
-                 ((Some arms2) (Some (Match scrut arms2)))
+                 ((Some (Pair es2 arms2)) (Some (Pair es2 (Match scrut arms2))))
                  (None None))))))
         (_ None)))))
 
@@ -575,59 +564,64 @@
 ;; rewrite_all over arm bodies (patterns untouched). Some iff ANY arm changed.
 (fn rewrite_all_arms
   ((pat_vars (List Symbol)) (pat Expr) (repl Expr) (arms (List Arm)))
-  (Option (List Arm))
+  (Option (Pair (List Env) (List Arm)))
   (match arms
     (Nil None)
     ((Cons (Arm p b) t)
      (match (rewrite_all pat_vars pat repl b)
-       ((Some b2)
+       ((Some (Pair es b2))
         (match (rewrite_all_arms pat_vars pat repl t)
-          ((Some t2) (Some (Cons (Arm p b2) t2)))
-          (None (Some (Cons (Arm p b2) t)))))
+          ((Some (Pair es2 t2))
+           (Some (Pair (envs_concat es es2) (Cons (Arm p b2) t2))))
+          (None (Some (Pair es (Cons (Arm p b2) t))))))
        (None
          (match (rewrite_all_arms pat_vars pat repl t)
-           ((Some t2) (Some (Cons (Arm p b) t2)))
+           ((Some (Pair es2 t2)) (Some (Pair es2 (Cons (Arm p b) t2))))
            (None None)))))))
 
 (fn rewrite_all_list
   ((pat_vars (List Symbol)) (pat Expr) (repl Expr) (es (List Expr)))
-  (Option (List Expr))
+  (Option (Pair (List Env) (List Expr)))
   (match es
     (Nil None)
     ((Cons h t)
      (match (rewrite_all pat_vars pat repl h)
-       ((Some h2)
+       ((Some (Pair envs h2))
         (match (rewrite_all_list pat_vars pat repl t)
-          ((Some t2) (Some (Cons h2 t2)))
-          (None (Some (Cons h2 t)))))
+          ((Some (Pair envs2 t2))
+           (Some (Pair (envs_concat envs envs2) (Cons h2 t2))))
+          (None (Some (Pair envs (Cons h2 t))))))
        (None
          (match (rewrite_all_list pat_vars pat repl t)
-           ((Some t2) (Some (Cons h t2)))
+           ((Some (Pair envs2 t2)) (Some (Pair envs2 (Cons h t2))))
            (None None)))))))
 
 (fn rewrite_all_if
   ((pat_vars (List Symbol)) (pat Expr) (repl Expr) (c Expr) (t Expr) (el Expr))
-  (Option Expr)
+  (Option (Pair (List Env) Expr))
   (match (rewrite_all pat_vars pat repl c)
-    ((Some c2)
+    ((Some (Pair ec c2))
      (match (rewrite_all pat_vars pat repl t)
-       ((Some t2)
+       ((Some (Pair et t2))
         (match (rewrite_all pat_vars pat repl el)
-          ((Some el2) (Some (If c2 t2 el2)))
-          (None (Some (If c2 t2 el)))))
+          ((Some (Pair ee el2))
+           (Some (Pair (envs_concat ec (envs_concat et ee)) (If c2 t2 el2))))
+          (None (Some (Pair (envs_concat ec et) (If c2 t2 el))))))
        (None
          (match (rewrite_all pat_vars pat repl el)
-           ((Some el2) (Some (If c2 t el2)))
-           (None (Some (If c2 t el)))))))
+           ((Some (Pair ee el2))
+            (Some (Pair (envs_concat ec ee) (If c2 t el2))))
+           (None (Some (Pair ec (If c2 t el))))))))
     (None
       (match (rewrite_all pat_vars pat repl t)
-        ((Some t2)
+        ((Some (Pair et t2))
          (match (rewrite_all pat_vars pat repl el)
-           ((Some el2) (Some (If c t2 el2)))
-           (None (Some (If c t2 el)))))
+           ((Some (Pair ee el2))
+            (Some (Pair (envs_concat et ee) (If c t2 el2))))
+           (None (Some (Pair et (If c t2 el))))))
         (None
           (match (rewrite_all pat_vars pat repl el)
-            ((Some el2) (Some (If c t el2)))
+            ((Some (Pair ee el2)) (Some (Pair ee (If c t el2))))
             (None None)))))))
 
 ;; ---------------------------------------------------------------------------
@@ -701,7 +695,7 @@
    (side Side)
    (all_occ Bool)
    (goal_eq Equation))
-  (Option Equation)
+  (Option (Pair (List Env) Equation))
   (match cited
     ((Equation cl cr)
      (match dir
@@ -715,34 +709,37 @@
    (side Side)
    (all_occ Bool)
    (goal_eq Equation))
-  (Option Equation)
+  (Option (Pair (List Env) Equation))
   (match goal_eq
     ((Equation gl gr)
      (match side
        ((Lhs)
         (match (rewrite_one_or_all pat_vars all_occ pat repl gl)
-          ((Some gl2) (Some (Equation gl2 gr)))
+          ((Some (Pair envs gl2)) (Some (Pair envs (Equation gl2 gr))))
           (None None)))
        ((Rhs)
         (match (rewrite_one_or_all pat_vars all_occ pat repl gr)
-          ((Some gr2) (Some (Equation gl gr2)))
+          ((Some (Pair envs gr2)) (Some (Pair envs (Equation gl gr2))))
           (None None)))
        ((Both)
         (match (rewrite_one_or_all pat_vars all_occ pat repl gl)
-          ((Some gl2)
+          ((Some (Pair el gl2))
            (match (rewrite_one_or_all pat_vars all_occ pat repl gr)
-             ((Some gr2) (Some (Equation gl2 gr2)))
-             (None (Some (Equation gl2 gr)))))
+             ((Some (Pair er gr2))
+              (Some (Pair (envs_concat el er) (Equation gl2 gr2))))
+             (None (Some (Pair el (Equation gl2 gr))))))
           (None
             (match (rewrite_one_or_all pat_vars all_occ pat repl gr)
-              ((Some gr2) (Some (Equation gl gr2)))
+              ((Some (Pair er gr2)) (Some (Pair er (Equation gl gr2))))
               (None None)))))))))
 
 (fn rewrite_one_or_all
   ((pat_vars (List Symbol)) (all_occ Bool) (pat Expr) (repl Expr) (e Expr))
-  (Option Expr)
+  (Option (Pair (List Env) Expr))
   (if all_occ (rewrite_all pat_vars pat repl e)
-  (rewrite_first pat_vars pat repl e)))
+  (match (rewrite_first_with_env pat_vars pat repl e)
+    ((Some (Pair env e2)) (Some (Pair (Cons env Nil) e2)))
+    (None None))))
 
 ;; ---------------------------------------------------------------------------
 ;; apply_rewrite_with_env: like apply_rewrite, but for RewriteWith. Uses
@@ -1167,8 +1164,32 @@
   Bool
   (match (lookup_typedef ty m)
     (None False)  ; unknown type
-    ((Some (TypeDef _ _ ctors))
-     (check_case_on_cases m th seq scrut ctors cases))))
+    ((Some (TypeDef _ tparams ctors))
+     ;; TYPE GATE: covering ty's ctors is exhaustive only if scrut IS a
+     ;; ty value. Splitting (say) an Int over Bool hands every branch an
+     ;; absurd case-hyp, and Absurd closes them all — proving anything.
+     ;; The gate also yields scrut's RESOLVED type args, which instantiate
+     ;; the per-ctor field types (an (Option Pos) split binds its payload
+     ;; param at Pos, not at the typedef's raw T) — same substitution
+     ;; do_induct has always applied.
+     (match (tc_scrut_targs m (seq_params seq) scrut ty tparams)
+       (None False)  ; scrut not a ty value / ambiguous instantiation
+       ((Some targs)
+        (check_case_on_cases
+          m
+          th
+          seq
+          scrut
+          (inst_ctor_fields (zip_pairs tparams targs) ctors)
+          cases))))))
+
+;; substitute a type-arg instantiation into every ctor's field types.
+(fn inst_ctor_fields ((env (List (Pair Symbol Type))) (cds (List CtorDef)))
+  (List CtorDef)
+  (match cds
+    (Nil Nil)
+    ((Cons (CtorDef n fs) rest)
+     (Cons (CtorDef n (type_subst_list env fs)) (inst_ctor_fields env rest)))))
 
 (fn check_case_on_cases
   ((m Module)
@@ -1352,13 +1373,19 @@
   Bool
   (match seq
     ((Sequent params hyps premises goal_eq)
-     (if (check_sequent m th (Sequent params hyps premises eq) pe)
-       (check_sequent
-         m
-         th
-         (Sequent params hyps (append_eqs premises (Cons eq Nil)) goal_eq)
-         pr)
-       False))))
+     ;; TYPE GATE: the cut equation is an INTRODUCED term — it never passed
+     ;; the decl-level gate. An ill-typed fact (e.g. Bool fed to arithmetic)
+     ;; can be trivially provable yet poison farkas/lia once it's a premise.
+     (match (tc_check_cut m params eq)
+       ((Some _) False)  ; ill-typed cut — step rejected
+       (None
+         (if (check_sequent m th (Sequent params hyps premises eq) pe)
+           (check_sequent
+             m
+             th
+             (Sequent params hyps (append_eqs premises (Cons eq Nil)) goal_eq)
+             pr)
+           False))))))
 
 ;; ---------------------------------------------------------------------------
 ;; do_induct: per-ctor sub-sequents with fresh FVars and IHs.
@@ -1538,36 +1565,42 @@
   Bool
   (match seq
     ((Sequent params hyps premises eq)
-     (match (wf_rename params)
-       ((Pair fresh_params env)
-        (let
-          ((measure_fresh (subst env measure))
-           (close_names (reverse_syms (param_names fresh_params))))
-          (let
-            ((wf_premises
-               (Cons
-                 (Equation
-                   (Call (quote le) (list (IntLit 0) measure_fresh))
-                   (Ctor (quote True) Nil))
-                 (Cons
-                   (Equation
-                     (Call (quote lt) (list measure_fresh measure))
-                     (Ctor (quote True) Nil))
-                   Nil)))
-             (ih_eq (subst_eq env eq)))
+     ;; TYPE GATE: the measure is an INTRODUCED term that flows into the
+     ;; le/lt well-foundedness premises — farkas reads those as integer
+     ;; arithmetic, so a non-Int measure breaks the ordering argument.
+     (match (tc_check_int_expr m params measure "wf-induct measure")
+       ((Some _) False)  ; ill-typed measure — step rejected
+       (None
+         (match (wf_rename params)
+           ((Pair fresh_params env)
             (let
-              ((ih
-                 (Goal
-                   fresh_params
-                   (close_eqs
-                     close_names
-                     (append_eqs (subst_eqs env premises) wf_premises))
-                   (close_eq close_names ih_eq))))
-              (check_sequent
-                m
-                th
-                (Sequent params (Cons ih hyps) premises eq)
-                pf)))))))))
+              ((measure_fresh (subst env measure))
+               (close_names (reverse_syms (param_names fresh_params))))
+              (let
+                ((wf_premises
+                   (Cons
+                     (Equation
+                       (Call (quote le) (list (IntLit 0) measure_fresh))
+                       (Ctor (quote True) Nil))
+                     (Cons
+                       (Equation
+                         (Call (quote lt) (list measure_fresh measure))
+                         (Ctor (quote True) Nil))
+                       Nil)))
+                 (ih_eq (subst_eq env eq)))
+                (let
+                  ((ih
+                     (Goal
+                       fresh_params
+                       (close_eqs
+                         close_names
+                         (append_eqs (subst_eqs env premises) wf_premises))
+                       (close_eq close_names ih_eq))))
+                  (check_sequent
+                    m
+                    th
+                    (Sequent params (Cons ih hyps) premises eq)
+                    pf)))))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; do_induct2: TWO-STEP induction on a Nat-shaped var. Sound because every

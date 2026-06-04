@@ -738,3 +738,173 @@
      (tc_warn_concat
        (tc_sweep_tds m tds)
        (tc_warn_concat (tc_sweep_exts m exts) (tc_sweep_fns m fns))))))
+
+;; ---------------------------------------------------------------------------
+;; Mid-proof entries. Proof steps that INTRODUCE terms (a have's cut
+;; equation, a WfInduct measure, citation instantiations) bypass the
+;; decl-level gate above — these are the checks the step handlers call,
+;; in the open sequent's FVar-by-name context (its params).
+;; ---------------------------------------------------------------------------
+
+;; a cut equation (have): both sides at one type, in the sequent's context.
+(fn tc_check_cut ((m Module) (params (List Param)) (eq Equation))
+  (Option (List Int))
+  (match (tc_check_eq m (Tc 0 Nil) params Nil eq "have")
+    ((TcsErr msg) (Some msg))
+    ((TcsOk _) None)))
+
+;; an introduced expr that must be Int (a WfInduct measure: it flows into
+;; the le/lt well-foundedness premises, which farkas reads as integer
+;; arithmetic).
+(fn tc_check_int_expr
+  ((m Module) (params (List Param)) (e Expr) (what (List Int)))
+  (Option (List Int))
+  (match (tc_infer m (Tc 0 Nil) params Nil e)
+    ((TcErr msg) (Some msg))
+    ((TcOk tc t)
+     (match (tc_unify t (tc_t_int) tc)
+       (None (Some (tc_mismatch what t (tc_t_int) tc)))
+       ((Some _) None)))))
+
+;; ---------------------------------------------------------------------------
+;; Citation instantiation. Rewrite/RewriteWith instantiate a cited Goal's
+;; ∀-binders — by user-supplied Insts and by capture-matching (env). Each
+;; bound term must have the binder's DECLARED type: a lemma proven
+;; ∀ x : Int may have used Int-ness (lia), so instantiating x at a Bool
+;; term is unjustified even when the rewritten goal happens to stay
+;; well-typed. The lemma's own type variables are freshened to metas ONCE
+;; per match site, so ∀ (x T) (y T) instantiates both at one type; sites
+;; of an all-occurrences rewrite check independently (each is its own
+;; instantiation of the lemma).
+;; ---------------------------------------------------------------------------
+
+(type TcTerm  ; a citation binding resolved to the term it binds
+  (TTOk Expr)
+  (TTErr (List Int)))
+
+;; openings[i] (intro order, from split_params_by_insts) is either an Inst
+;; expr — check it directly — or (FVar f) with f in pat_vars: a capture,
+;; resolved through the match env. A pat_var the match never bound is a
+;; DANGLING PIVOT: the rewrite would inject the bare fresh FVar into the
+;; goal. Reject — pin it with an inst.
+(fn tc_site_term ((o Expr) (pat_vars (List Symbol)) (env Env)) TcTerm
+  (match o
+    ((FVar f)
+     (if (tc_sym_in f pat_vars)
+       (match (lookup f env)
+         ((Some v) (TTOk v))
+         (None
+           (TTErr
+             "citation: pattern variable unbound by the match (dangling pivot - pin it with an inst)")))
+       (TTOk o)))
+    (_ (TTOk o))))
+
+;; the distinct TVar names across the cited binders' declared types.
+(fn tc_site_tvars ((ps (List Param)) (acc (List Symbol))) (List Symbol)
+  (match ps
+    (Nil acc)
+    ((Cons (Param _ t) rest) (tc_site_tvars rest (tc_collect_tvars1 t acc)))))
+
+;; check ONE match site's bindings against the cited binders' types.
+(fn tc_check_site
+  ((m Module)
+   (sparams (List Param))
+   (cited_params (List Param))
+   (pat_vars (List Symbol))
+   (openings (List Expr))
+   (env Env))
+  (Option (List Int))
+  (match (tc_freshen (tc_site_tvars cited_params Nil) (Tc 0 Nil))
+    ((Freshened inst _ tc)
+     (tc_check_bindings m sparams inst tc cited_params pat_vars openings env))))
+
+(fn tc_check_bindings
+  ((m Module)
+   (sparams (List Param))
+   (inst (List (Pair Symbol Type)))
+   (tc Tc)
+   (cps (List Param))
+   (pat_vars (List Symbol))
+   (openings (List Expr))
+   (env Env))
+  (Option (List Int))
+  (match cps
+    (Nil None)
+    ((Cons (Param pname pty) prest)
+     (match openings
+       (Nil None)  ; shape mismatch unreachable (built pairwise upstream)
+       ((Cons o orest)
+        (match (tc_site_term o pat_vars env)
+          ((TTErr msg) (Some msg))
+          ((TTOk term)
+           (match (tc_infer m tc sparams Nil term)
+             ((TcErr msg) (Some msg))
+             ((TcOk tc1 t)
+              (match (tc_unify t (type_subst inst pty) tc1)
+                (None
+                  (Some
+                    (tc_mismatch
+                      (tc_app "citation binder " (chars_of_sym pname))
+                      t
+                      (type_subst inst pty)
+                      tc1)))
+                ((Some tc2)
+                 (tc_check_bindings m sparams inst tc2 prest pat_vars orest env))))))))))))
+
+;; every site of a multi-site rewrite (all-occurrences / Both) checks
+;; independently. True = all sites well-typed.
+(fn tc_check_sites
+  ((m Module)
+   (sparams (List Param))
+   (cited_params (List Param))
+   (pat_vars (List Symbol))
+   (openings (List Expr))
+   (envs (List Env)))
+  Bool
+  (match envs
+    (Nil True)
+    ((Cons env rest)
+     (match (tc_check_site m sparams cited_params pat_vars openings env)
+       ((Some _) False)
+       (None (tc_check_sites m sparams cited_params pat_vars openings rest))))))
+
+;; a case-on scrutinee must HAVE the named split type (at some
+;; instantiation — metas for the type's params). Coverage of ty's ctors
+;; only makes the split exhaustive if scrut is a ty value: splitting an
+;; Int over Bool hands every branch an absurd case-hyp, and Absurd then
+;; closes them all — the (= 0 1) exploit.
+;;
+;; Returns the RESOLVED type arguments of scrut at the split type — the
+;; instantiation the per-ctor field types must be substituted with (the
+;; field params would otherwise carry the typedef's raw TVars, e.g. an
+;; (Option Pos) split binding its payload at T instead of Pos). None if
+;; scrut doesn't have the type, or if the instantiation doesn't fully
+;; resolve (an ambiguous split — e.g. on a bare None — is rejected rather
+;; than letting an unresolved meta pose as a field type).
+(fn tc_scrut_targs
+  ((m Module)
+   (params (List Param))
+   (scrut Expr)
+   (ty Symbol)
+   (tparams (List Symbol)))
+  (Option (List Type))
+  (match (tc_freshen tparams (Tc 0 Nil))
+    ((Freshened _ metas tc)
+     (match (tc_infer m tc params Nil scrut)
+       ((TcErr _) None)
+       ((TcOk tc1 t)
+        (match (tc_unify t (TCon ty metas) tc1)
+          (None None)
+          ((Some (Tc _ s))
+           (let ((res (tc_resolve_list metas s)))
+             (if (tc_no_metas_list res) (Some res) None)))))))))
+
+(fn tc_no_metas ((t Type)) Bool
+  (match t
+    ((TVar x) (if (tc_is_meta x) False True))
+    ((TCon _ args) (tc_no_metas_list args))))
+
+(fn tc_no_metas_list ((ts (List Type))) Bool
+  (match ts
+    (Nil True)
+    ((Cons h t) (if (tc_no_metas h) (tc_no_metas_list t) False))))

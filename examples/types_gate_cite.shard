@@ -1,0 +1,62 @@
+;;; types_gate_cite.shard — the CITATION type-gate regression battery.
+;;;
+;;; Instantiating a cited lemma's ∀-binders (by capture-match or inst)
+;;; must respect the binders' DECLARED types: a lemma proven over Int may
+;;; have used Int-ness (lia), so binding a Bool term is unjustified. The
+;;; rejected claims fail AT THE REWRITE STEP (the gate runs per match
+;;; site, with the lemma's own type variables freshened per site so
+;;; polymorphic lemmas instantiate freely). Also rejected: a DANGLING
+;;; PIVOT (a pattern var the match never binds — it used to inject a
+;;; bare fresh FVar into the goal; pin it with an inst instead).
+;;; Expected: 5 passed, 4 failed.
+
+(type Bool (False) (True))
+(type (List T) (Nil) (Cons T (List T)))
+
+(fn (id2 T) ((x T)) T x)
+
+;; Int-proven lemmas to cite.
+(claim times_one (goal ((x Int)) () (= (* 1 x) x)) (by lia (list)))
+(claim minus_self (goal ((x Int)) () (= (- x x) 0)) (by lia (list)))
+
+;; polymorphic lemma (auto-generalized binder).
+(claim id2_id (goal ((x T)) () (= (id2 x) x)) (steps ((compute lhs)) refl))
+
+;; CAPTURE at the wrong type: rl flips times_one to pattern x — a bare
+;; pattern var that matches the Bool lhs. Captured b : Bool vs declared
+;; Int. The rewrite step must be REJECTED.
+(claim capture_bool
+  (goal ((b Bool)) () (= b b))
+  (steps ((rewrite (lemma times_one) rl lhs false ())) refl))
+
+;; INST at the wrong type: pin x to a Bool. Must be REJECTED.
+(claim inst_bool
+  (goal ((b Bool)) () (= 0 0))
+  (steps ((rewrite (lemma minus_self) rl lhs false ((inst x b)))) refl))
+
+;; DANGLING PIVOT: rl minus_self with no inst — pattern 0 binds nothing,
+;; x dangles. Previously admitted (injected a bare fresh FVar into the
+;; goal); now REJECTED.
+(claim dangling_pivot
+  (goal () () (= 0 0))
+  (steps ((rewrite (lemma minus_self) rl lhs false ())) refl))
+
+;; CONTROL: polymorphic lemma instantiated at Int — the lemma's T
+;; freshens to a meta and unifies with Int. Must PASS.
+(claim poly_at_int
+  (goal ((n Int)) () (= (id2 n) n))
+  (steps ((rewrite (lemma id2_id) lr lhs false ())) refl))
+
+;; CONTROL: Int lemma cited at Int. Must PASS.
+(claim int_at_int
+  (goal ((n Int)) () (= (* 1 n) n))
+  (steps ((rewrite (lemma times_one) lr lhs false ())) refl))
+
+;; CASE-ON SCRUTINEE: the (= 0 1) exploit this gate closed. Splitting the
+;; Int literal 5 over Bool gave every branch an absurd case-hyp
+;; ((= 5 True) / (= 5 False)) — IntLit-vs-Ctor head clash — so Absurd
+;; closed both branches and the kernel PROVED 0 = 1. The scrutinee must
+;; HAVE the named split type. Must be REJECTED.
+(claim caseon_wrong_type
+  (goal () () (= 0 1))
+  (case-on 5 Bool ((case True (absurd (hyp 0))) (case False (absurd (hyp 0))))))
