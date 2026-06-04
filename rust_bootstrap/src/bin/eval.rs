@@ -76,9 +76,12 @@ fn main() -> ExitCode {
     // imports pull in the whole kernel, like check.shard) recurses deep enough
     // to blow the default 8 MiB main-thread stack. Run on a thread with a big
     // stack. This is purely a host concern — once compiled, the depth is bounded
-    // by the program, not the interpreter.
+    // by the program, not the interpreter. (The reserve is virtual memory; only
+    // touched pages commit. Some in-shard recursion is O(input bytes) deep —
+    // at 1 GiB the parse path topped out near ~150 KiB source files; see the
+    // O(N) recursion-depth note in README's roadmap.)
     std::thread::Builder::new()
-        .stack_size(1 << 30) // 1 GiB
+        .stack_size(4 << 30) // 4 GiB
         .spawn(run)
         .expect("spawn eval thread")
         .join()

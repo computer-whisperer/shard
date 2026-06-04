@@ -348,6 +348,12 @@ the memo/hash-cons bullet below.)
   is the long-term fix (`TODO[v3]` in `kernel/reduce.shard`).
 - **Checker theory threading is O(N²)** — the residual perf lever
   after the FnTrie work: each claim re-threads the growing Theory.
+- **Parse-path recursion is O(input bytes) deep** — somewhere in the
+  in-shard read pipeline the host stack grows with file size, not
+  nesting depth: at a 1 GiB stack, `check` topped out near ~150 KiB
+  source files and shardfmt near ~120 KiB (snake_io.shard crossed
+  both). Stopgap: `bin/eval.rs` reserves 4 GiB. Real fix: find the
+  non-tail byte/list walk and make it iterative or an accumulator.
 
 ### Tooling
 
