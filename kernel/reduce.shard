@@ -158,7 +158,9 @@
 ;; ARE narrow calls — the Rust runtime intercepts them via the same
 ;; mechanism that powers ordinary in-language arithmetic.
 ;;
-;; KEEP IN SYNC with src/prim.rs.
+;; KEEP IN SYNC with src/prim.rs. (The word primitives below exist ONLY
+;; here — the native table doesn't know them, so a native-path call
+;; fail-stops as UnknownCall rather than diverging from this table.)
 (fn try_step_prim ((f Symbol) (args (List Expr))) (Option Expr)
   (match args
     ;; Two-Int primitives.
@@ -176,7 +178,27 @@
      (if (sym_eq f (quote int_eq)) (Some (bool_as_expr (int_eq a b)))
      (if (sym_eq f (quote lt)) (Some (bool_as_expr (lt a b)))
      (if (sym_eq f (quote le)) (Some (bool_as_expr (le a b)))
-     None))))))))))))))
+     (if (sym_eq f (quote uwrap)) (wp_wrap a b)
+     (if (sym_eq f (quote swrap)) (wp_wrap a b)
+     None))))))))))))))))
+    ;; Two-Word primitives — fixed-width modular ints. A word VALUE is
+    ;; (Ctor 'Word (w raw)), canonical: 1 <= w <= 64, 0 <= raw < 2^w.
+    ;; Only these primitives produce the ctor (no typedef; the type
+    ;; checker enforces canonicity on any literal that reaches a goal).
+    ;; Width mismatch → None (stuck): unreachable for type-checked
+    ;; source, defensive for raw data.
+    ((Cons
+       (Ctor (quote Word) (Cons (IntLit wa) (Cons (IntLit ra) Nil)))
+       (Cons (Ctor (quote Word) (Cons (IntLit wb) (Cons (IntLit rb) Nil))) Nil))
+     (if (int_eq wa wb) (wp_binop f wa ra rb) None))
+    ;; Word-and-Int primitives: shifts (amount is a plain Int).
+    ((Cons
+       (Ctor (quote Word) (Cons (IntLit w) (Cons (IntLit r) Nil)))
+       (Cons (IntLit k) Nil))
+     (wp_shift f w r k))
+    ;; One-Word primitives.
+    ((Cons (Ctor (quote Word) (Cons (IntLit w) (Cons (IntLit r) Nil))) Nil)
+     (wp_unop f w r))
     ;; Two-Symbol primitives.
     ((Cons (SymLit a) (Cons (SymLit b) Nil))
      (if (sym_eq f (quote sym_eq)) (Some (bool_as_expr (sym_eq a b))) None))
@@ -208,6 +230,98 @@
 ;; comparison cases.
 (fn bool_as_expr ((b Bool)) Expr
   (if b (Ctor (quote True) Nil) (Ctor (quote False) Nil)))
+
+;; ---------------------------------------------------------------------------
+;; Word primitives (wp_*): fixed-width modular integers over the
+;; canonical value (Ctor 'Word (w raw)), raw the unsigned residue.
+;; Signedness is NOT stored — it lives in the op names (uval/sval,
+;; udiv/sdiv, …) and the (Word W S) type index; the type gate keeps
+;; signed ops off unsigned terms, these bodies just compute on bits.
+;; Every result is masked, so canonicity is preserved by construction.
+;;
+;; SPEC CONVENTIONS (all ops TOTAL — docs/LANGUAGE.md "Words"):
+;;   wadd/wsub/wmul/wneg  value mod 2^w
+;;   udiv a 0 = 2^w-1, urem a 0 = a; sdiv a 0 = -1 (all ones),
+;;   srem a 0 = a; sdiv INT_MIN -1 = INT_MIN, srem INT_MIN -1 = 0
+;;     (the RISC-V M / SMT-LIB profile; signed division TRUNCATES)
+;;   shifts: amount k outside [0, w) saturates — wshl/ushr give 0,
+;;   sshr gives the sign fill (all ones / 0); sshr rounds toward -inf
+;; ---------------------------------------------------------------------------
+
+(fn wp_pow2 ((k Int)) Int  ; k >= 0
+  (if (le k 0) 1 (* 2 (wp_pow2 (- k 1)))))
+
+(fn wp_mask ((w Int) (n Int)) Int (mod n (wp_pow2 w)))  ; euclidean → in [0, 2^w)
+
+(fn wp_make ((w Int) (n Int)) (Option Expr)
+  (Some (Ctor (quote Word) (Cons (IntLit w) (Cons (IntLit (wp_mask w n)) Nil)))))
+
+;; the two's-complement (signed) reading of a canonical raw.
+(fn wp_sgn ((w Int) (r Int)) Int
+  (if (lt r (wp_pow2 (- w 1))) r (- r (wp_pow2 w))))
+
+;; truncating quotient/remainder on Int views (BigInt `/` truncates
+;; toward zero; pair the remainder with THAT, not the euclidean mod).
+(fn wp_trem ((a Int) (b Int)) Int (- a (* b (/ a b))))
+
+;; (uwrap k n) / (swrap k n): same computation — the raw is the
+;; signedness-free residue; only the result TYPE differs (types.shard).
+(fn wp_wrap ((k Int) (n Int)) (Option Expr)
+  (if (le 1 k) (if (le k 64) (wp_make k n) None) None))
+
+(fn wp_binop ((f Symbol) (w Int) (ra Int) (rb Int)) (Option Expr)
+  (if (sym_eq f (quote wadd)) (wp_make w (+ ra rb))
+  (if (sym_eq f (quote wsub)) (wp_make w (- ra rb))
+  (if (sym_eq f (quote wmul)) (wp_make w (* ra rb))
+  (if (sym_eq f (quote wand)) (wp_make w (band ra rb))
+  (if (sym_eq f (quote wor)) (wp_make w (bor ra rb))
+  (if (sym_eq f (quote wxor)) (wp_make w (bxor ra rb))
+  (if (sym_eq f (quote udiv))
+    (if (int_eq rb 0) (wp_make w (- 0 1)) (wp_make w (/ ra rb)))
+  (if (sym_eq f (quote urem))
+    (if (int_eq rb 0) (wp_make w ra) (wp_make w (mod ra rb)))
+  (if (sym_eq f (quote sdiv))
+    (if (int_eq rb 0) (wp_make w (- 0 1))
+    (wp_make w (/ (wp_sgn w ra) (wp_sgn w rb))))
+  (if (sym_eq f (quote srem))
+    (if (int_eq rb 0) (wp_make w ra)
+    (wp_make w (wp_trem (wp_sgn w ra) (wp_sgn w rb))))
+  (if (sym_eq f (quote weq)) (Some (bool_as_expr (int_eq ra rb)))
+  (if (sym_eq f (quote ult)) (Some (bool_as_expr (lt ra rb)))
+  (if (sym_eq f (quote ule)) (Some (bool_as_expr (le ra rb)))
+  (if (sym_eq f (quote slt))
+    (Some (bool_as_expr (lt (wp_sgn w ra) (wp_sgn w rb))))
+  (if (sym_eq f (quote sle))
+    (Some (bool_as_expr (le (wp_sgn w ra) (wp_sgn w rb))))
+    None))))))))))))))))
+
+(fn wp_shift ((f Symbol) (w Int) (r Int) (k Int)) (Option Expr)
+  (if (sym_eq f (quote wshl))
+    (if (le 0 k) (if (lt k w) (wp_make w (* r (wp_pow2 k))) (wp_make w 0))
+    (wp_make w 0))
+  (if (sym_eq f (quote ushr))
+    (if (le 0 k) (if (lt k w) (wp_make w (/ r (wp_pow2 k))) (wp_make w 0))
+    (wp_make w 0))
+  (if (sym_eq f (quote sshr))
+    (let ((s (wp_sgn w r)))
+      (if (le 0 k)
+        (if (lt k w)
+          ;; floor division by 2^k (rounds toward -inf, the arithmetic
+          ;; shift): subtract the euclidean remainder, divide exactly.
+          (let ((p (wp_pow2 k))) (wp_make w (/ (- s (mod s p)) p)))
+          (if (lt s 0) (wp_make w (- 0 1)) (wp_make w 0)))
+      (if (lt s 0) (wp_make w (- 0 1))
+      (wp_make w 0))))
+    None))))
+
+(fn wp_unop ((f Symbol) (w Int) (r Int)) (Option Expr)
+  (if (sym_eq f (quote wneg)) (wp_make w (- 0 r))
+  (if (sym_eq f (quote wnot)) (wp_make w (- (- (wp_pow2 w) 1) r))
+  (if (sym_eq f (quote uval)) (Some (IntLit r))
+  (if (sym_eq f (quote sval)) (Some (IntLit (wp_sgn w r)))
+  (if (sym_eq f (quote wbits)) (Some (IntLit r))
+  (if (sym_eq f (quote wwidth)) (Some (IntLit w))
+  None)))))))
 
 (fn step_args_in_call ((m Module) (f Symbol) (args (List Expr))) (Option Expr)
   (match (step_list m args)

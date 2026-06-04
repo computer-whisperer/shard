@@ -1,0 +1,109 @@
+;;; types_gate_word.shard — the WORD (fixed-width modular int) battery.
+;;;
+;;; Slice 1 of the modular-int arc: values + primitives + the type
+;;; rules. (Word W S) is the built-in former — W a literal width type
+;;; (1..64), S a signedness marker; u8/…/i64 are reader aliases for it.
+;;; Words are bare bit patterns: signedness lives in the op NAMES
+;;; (uval/sval, udiv/sdiv, ult/slt) and the type index, never in the
+;;; value, and the type gate keeps signed ops off unsigned terms. All
+;;; ops are total (RISC-V M / SMT-LIB division profile; saturating
+;;; shift amounts; see docs/LANGUAGE.md "Words").
+;;;
+;;; The passing claims pin the COMPUTATIONAL semantics (each reduces a
+;;; closed word expression); the rejected ones pin the gate: width
+;;; mixing, signedness mixing, raw-Int leakage, non-literal wrap
+;;; widths, out-of-range width indices, and Word-value forgery are all
+;;; TYPE errors, rejected at the declaration.
+;;; Expected: 11 passed, 6 failed.
+
+(import "../kernel/stdlib.shard")
+
+;; aliases work in fn signatures; wrap-around is the semantics.
+(fn (incr_byte) ((b u8)) u8 (wadd b (uwrap 8 1)))
+
+;; width/signedness-generic fn: the prim sigs freshen per use like any
+;; polymorphic fn's.
+(fn (wdouble W S) ((a (Word W S))) (Word W S) (wadd a a))
+
+;; ---- passing: computational semantics --------------------------------------
+
+(claim w_add_wraps
+  (goal () () (= (uval (wadd (uwrap 8 200) (uwrap 8 100))) 44))
+  (steps ((compute both)) refl))
+
+(claim w_mul_wraps
+  (goal () () (= (uval (wmul (uwrap 8 16) (uwrap 8 16))) 0))
+  (steps ((compute both)) refl))
+
+(claim w_sval_two_complement
+  (goal () () (= (sval (swrap 8 255)) -1))
+  (steps ((compute both)) refl))
+
+(claim w_not
+  (goal () () (= (uval (wnot (uwrap 8 0))) 255))
+  (steps ((compute both)) refl))
+
+(claim w_ushr
+  (goal () () (= (uval (ushr (uwrap 8 129) 4)) 8))
+  (steps ((compute both)) refl))
+
+;; arithmetic shift rounds toward -inf: -127 >> 4 = -8.
+(claim w_sshr_floor
+  (goal () () (= (sval (sshr (swrap 8 129) 4)) -8))
+  (steps ((compute both)) refl))
+
+;; signed division TRUNCATES toward zero: -6 / 4 = -1 (floor would be -2).
+(claim w_sdiv_truncates
+  (goal () () (= (sval (sdiv (swrap 8 250) (swrap 8 4))) -1))
+  (steps ((compute both)) refl))
+
+;; division by zero is DEFINED (RISC-V M profile): all-ones quotient.
+(claim w_udiv_zero
+  (goal () () (= (uval (udiv (uwrap 8 7) (uwrap 8 0))) 255))
+  (steps ((compute both)) refl))
+
+(claim w_ult
+  (goal () () (= (ult (uwrap 8 3) (uwrap 8 200)) True))
+  (steps ((compute both)) refl))
+
+(claim w_incr_wraps_around
+  (goal () () (= (uval (incr_byte (uwrap 8 255))) 0))
+  (steps ((compute both)) refl))
+
+(claim w_generic_double
+  (goal () () (= (uval (wdouble (uwrap 16 40000))) 14464))
+  (steps ((compute both)) refl))
+
+;; ---- rejected: the gate -----------------------------------------------------
+
+;; widths don't mix: (Word 8 _) + (Word 16 _) is a TYPE error.
+(claim w_mixed_widths
+  (goal () () (= (uval (wadd (uwrap 8 1) (uwrap 16 1))) 2))
+  (steps ((compute both)) refl))
+
+;; signedness doesn't mix: sval reads (Word W Signed), uwrap makes Unsigned.
+(claim w_sval_of_unsigned
+  (goal () () (= (sval (uwrap 8 5)) 5))
+  (steps ((compute both)) refl))
+
+;; a raw Int is not a word: no implicit wrap.
+(claim w_raw_int_operand
+  (goal () () (= (uval (wadd (uwrap 8 1) 1)) 2))
+  (steps ((compute both)) refl))
+
+;; the wrap width must be an integer LITERAL — it becomes the type index.
+(claim w_computed_width
+  (goal () () (= (uval (uwrap (+ 4 4) 3)) 3))
+  (steps ((compute both)) refl))
+
+;; width indices are 1..64.
+(claim w_width_99
+  (goal ((x (Word 99 Unsigned))) () (= x x))
+  (steps ((compute both)) refl))
+
+;; Word values can't be forged from source: no typedef, so `Word` here
+;; is an unknown call head, and only the primitives build canonical
+;; values.
+(claim w_forged_value
+  (goal () () (= (uval (Word 8 5)) 5))
+  (steps ((compute both)) refl))

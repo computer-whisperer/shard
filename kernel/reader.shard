@@ -485,11 +485,49 @@
 (fn read_all ((src (List Int))) (Option (List SExpr)) (read_all_go src Nil))
 
 ;; ---- types ----
+
+;; The decimal digits of a non-negative int, as codepoints. Inverse of
+;; digits_val; renders the CANONICAL numeric symbol (no leading zeros),
+;; so two mentions of the same width are the same TCon name.
+(fn nat_chars ((n Int)) (List Int)
+  (if (lt n 10) (Cons (+ 48 n) Nil)
+  (append_int (nat_chars (/ n 10)) (Cons (+ 48 (mod n 10)) Nil))))
+
+;; Built-in type aliases: the fixed-width integer spellings. Expanded at
+;; parse so the kernel only ever sees the (Word W S) former — the corpus
+;; writes u8/i32, and if the former's shape changes as the type system
+;; matures, the switch is an edit here, not a corpus migration. A
+;; user-declared alias form can generalize this table later.
+(fn type_alias_expand ((n Symbol)) (Option Type)
+  (let ((u (quote Unsigned)) (s (quote Signed)))
+    (if (sym_eq n (quote u8)) (Some (word_ty 8 u))
+    (if (sym_eq n (quote u16)) (Some (word_ty 16 u))
+    (if (sym_eq n (quote u32)) (Some (word_ty 32 u))
+    (if (sym_eq n (quote u64)) (Some (word_ty 64 u))
+    (if (sym_eq n (quote i8)) (Some (word_ty 8 s))
+    (if (sym_eq n (quote i16)) (Some (word_ty 16 s))
+    (if (sym_eq n (quote i32)) (Some (word_ty 32 s))
+    (if (sym_eq n (quote i64)) (Some (word_ty 64 s))
+    None))))))))))
+
+(fn word_ty ((w Int) (sgn Symbol)) Type
+  (TCon
+    (quote Word)
+    (Cons (TCon (sym_of_chars (nat_chars w)) Nil) (Cons (TCon sgn Nil) Nil))))
+
 (fn parse_type ((s SExpr) (tparams (List Symbol))) (Option Type)
   (match s
     ((SSym name)
      (if (sym_mem name tparams) (Some (TVar name))  ; a type parameter in scope
-     (Some (TCon name Nil))))  ; 0-ary type constructor
+     (match (type_alias_expand name)
+       ((Some ty) (Some ty))  ; u8/…/i64 → (Word W S)
+       (None (Some (TCon name Nil))))))  ; 0-ary type constructor
+    ;; A numeric LITERAL TYPE — the width index of (Word W S). Encoded as
+    ;; a TCon whose name is the canonical decimal symbol: unification and
+    ;; substitution treat it like any 0-ary constructor (literals unify
+    ;; only with themselves), and tc_ty_wf rejects it anywhere other than
+    ;; Word's width slot (no typedef exists for it).
+    ((SInt k) (if (lt k 0) None (Some (TCon (sym_of_chars (nat_chars k)) Nil))))
     ((SList items)
      (match items
        (Nil None)
@@ -500,7 +538,7 @@
              (None None)
              ((Some args) (Some (TCon hname args)))))
           (_ None)))))
-    (_ None)))  ; SInt/SStr aren't types
+    (_ None)))  ; SStr isn't a type
 
 (fn parse_types ((ss (List SExpr)) (tparams (List Symbol))) (Option (List Type))
   (match ss

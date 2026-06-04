@@ -266,7 +266,107 @@
 (fn tc_t_bool () Type (TCon (quote Bool) Nil))
 (fn tc_t_chars () Type (TCon (quote List) (Cons (tc_t_int) Nil)))
 
-;; the native primitive signatures (mirrors prim.rs / reduce.shard's table).
+;; ---------------------------------------------------------------------------
+;; The built-in word former (Word W S) — fixed-width modular integers.
+;; W is a LITERAL TYPE: a TCon whose name is the canonical decimal of a
+;; width in 1..=64 (parse_type builds it from a numeric token; it
+;; unifies only with itself, like any 0-ary TCon). S is a signedness
+;; marker (Unsigned/Signed, ordinary empty stdlib types as phantom
+;; indices). Word has NO typedef: values are made only by the word
+;; primitives (reduce.shard), so induction/case-on over it is
+;; structurally impossible, and the ctor rule below makes canonicity
+;; (0 <= raw < 2^width) a CHECKED property of any Word literal that
+;; appears in a goal.
+;; ---------------------------------------------------------------------------
+
+(fn tc_pow2 ((k Int)) Int  ; k >= 0
+  (if (le k 0) 1 (* 2 (tc_pow2 (- k 1)))))
+
+(fn tc_digits_val ((cs (List Int)) (acc Int)) (Option Int)
+  (match cs
+    (Nil (Some acc))
+    ((Cons c rest)
+     (if (lt c 48) None
+     (if (lt 57 c) None
+     (tc_digits_val rest (+ (* acc 10) (- c 48))))))))
+
+;; the width VALUE of a numeric-name TCon: all decimal digits, no
+;; leading zero, in 1..=64. None for any other symbol.
+(fn tc_width_of ((c Symbol)) (Option Int)
+  (match (chars_of_sym c)
+    (Nil None)
+    ((Cons c0 rest)
+     (if (int_eq c0 48) None  ; leading zero / bare "0" — not a width
+     (match (tc_digits_val (Cons c0 rest) 0)
+       (None None)
+       ((Some v) (if (le 1 v) (if (le v 64) (Some v) None) None)))))))
+
+(fn tc_width_ty ((w Int)) Type (TCon (sym_of_chars (tc_nat w)) Nil))
+(fn tc_t_unsigned () Type (TCon (quote Unsigned) Nil))
+(fn tc_t_signed () Type (TCon (quote Signed) Nil))
+(fn tc_t_word ((w Type) (s Type)) Type
+  (TCon (quote Word) (Cons w (Cons s Nil))))
+
+;; the word-prim signature shapes: S-generic, unsigned-only, signed-only.
+;; Sig TVars (W, S) ride the Call arm's per-use freshening, exactly like
+;; a user polymorphic fn's.
+(fn tc_wv () Type (tc_t_word (TVar (quote W)) (TVar (quote S))))
+(fn tc_wu () Type (tc_t_word (TVar (quote W)) (tc_t_unsigned)))
+(fn tc_ws () Type (tc_t_word (TVar (quote W)) (tc_t_signed)))
+
+;; A Word VALUE (Ctor 'Word (w r)) — produced only by the word
+;; primitives / reducer, never parseable from source (no typedef, so
+;; the loader reads `Word` as a Call head). Well-typed IFF CANONICAL:
+;; literal fields, 1 <= w <= 64, 0 <= r < 2^w — so a non-canonical
+;; word smuggled into a goal is a TYPE error, and the range facts the
+;; proof surface will state about wbits are facts about every typeable
+;; value. The signedness index is a fresh meta: bits are bits, context
+;; pins the interpretation.
+(fn tc_word_lit ((tc Tc) (args (List Expr))) TcRes
+  (match args
+    ((Cons (IntLit w) (Cons (IntLit r) Nil))
+     (if (le 1 w)
+       (if (le w 64)
+         (if (le 0 r)
+           (if (lt r (tc_pow2 w))
+             (match (tc_fresh tc)
+               ((Pair sv tc1) (TcOk tc1 (tc_t_word (tc_width_ty w) sv))))
+             (TcErr "non-canonical Word literal (raw out of range)"))
+           (TcErr "non-canonical Word literal (raw out of range)"))
+         (TcErr "Word literal width out of range (1..64)"))
+       (TcErr "Word literal width out of range (1..64)")))
+    (_ (TcErr "non-canonical Word literal (fields must be int literals)"))))
+
+;; (uwrap K e) / (swrap K e): the only term-level bridge from a width
+;; to the type index — K must BE an integer literal (a contained
+;; dependent-typing rule), giving (Word K Unsigned/Signed).
+(fn tc_wrap_call
+  ((m Module)
+   (tc Tc)
+   (fenv (List Param))
+   (env (List Type))
+   (args (List Expr))
+   (sgn Type))
+  TcRes
+  (match args
+    ((Cons (IntLit k) (Cons e Nil))
+     (if (le 1 k)
+       (if (le k 64)
+         (match (tc_infer m tc fenv env e)
+           ((TcErr msg) (TcErr msg))
+           ((TcOk tc1 t)
+            (match (tc_unify t (tc_t_int) tc1)
+              (None (TcErr (tc_mismatch "wrap argument" t (tc_t_int) tc1)))
+              ((Some tc2) (TcOk tc2 (tc_t_word (tc_width_ty k) sgn))))))
+         (TcErr "wrap width must be an integer literal in 1..64"))
+       (TcErr "wrap width must be an integer literal in 1..64")))
+    (_ (TcErr "wrap expects (uwrap WIDTH-LITERAL e) / (swrap WIDTH-LITERAL e)"))))
+
+;; the native primitive signatures (mirrors prim.rs / reduce.shard's
+;; table; the word primitives live in reduce.shard only — a native-path
+;; call to one fail-stops as UnknownCall, never wrong-answers).
+;; uwrap/swrap are NOT here: their width argument must be an integer
+;; literal that becomes the result's type index — see the Call arm.
 (fn tc_builtin_sig ((f Symbol)) (Option (Pair (List Type) Type))
   (if
     (tc_sym_in
@@ -292,7 +392,43 @@
       (Some (Pair (Cons (tc_t_chars) Nil) (tc_t_sym)))
     (if (sym_eq f (quote chars_of_sym))
       (Some (Pair (Cons (tc_t_sym) Nil) (tc_t_chars)))
-      None)))))))
+      ;; word primitives. Signedness is in the NAME where semantics
+      ;; differ (u*/s*), in the S index where they coincide (bits are
+      ;; bits): wadd on (Word 8 Signed) IS i8 addition.
+      (if
+        (tc_sym_in
+          f
+          (list
+            (quote wadd)
+            (quote wsub)
+            (quote wmul)
+            (quote wand)
+            (quote wor)
+            (quote wxor)))
+        (Some (Pair (list (tc_wv) (tc_wv)) (tc_wv)))
+        (if (tc_sym_in f (list (quote wneg) (quote wnot)))
+          (Some (Pair (Cons (tc_wv) Nil) (tc_wv)))
+        (if (sym_eq f (quote wshl))
+          (Some (Pair (list (tc_wv) (tc_t_int)) (tc_wv)))
+        (if (sym_eq f (quote ushr))
+          (Some (Pair (list (tc_wu) (tc_t_int)) (tc_wu)))
+        (if (sym_eq f (quote sshr))
+          (Some (Pair (list (tc_ws) (tc_t_int)) (tc_ws)))
+        (if (tc_sym_in f (list (quote udiv) (quote urem)))
+          (Some (Pair (list (tc_wu) (tc_wu)) (tc_wu)))
+        (if (tc_sym_in f (list (quote sdiv) (quote srem)))
+          (Some (Pair (list (tc_ws) (tc_ws)) (tc_ws)))
+        (if (sym_eq f (quote weq))
+          (Some (Pair (list (tc_wv) (tc_wv)) (tc_t_bool)))
+        (if (tc_sym_in f (list (quote ult) (quote ule)))
+          (Some (Pair (list (tc_wu) (tc_wu)) (tc_t_bool)))
+        (if (tc_sym_in f (list (quote slt) (quote sle)))
+          (Some (Pair (list (tc_ws) (tc_ws)) (tc_t_bool)))
+        (if (sym_eq f (quote uval)) (Some (Pair (Cons (tc_wu) Nil) (tc_t_int)))
+        (if (sym_eq f (quote sval)) (Some (Pair (Cons (tc_ws) Nil) (tc_t_int)))
+        (if (tc_sym_in f (list (quote wbits) (quote wwidth)))
+          (Some (Pair (Cons (tc_wv) Nil) (tc_t_int)))
+          None))))))))))))))))))))
 
 ;; a Call head's signature: user fn first (mirrors the evaluator's dispatch
 ;; order), then extern/sig, then the native primitive table.
@@ -328,6 +464,7 @@
        ((Some t) (TcOk tc t))
        (None (TcErr (tc_app "unbound variable: " (chars_of_sym x))))))
     ((Ctor c args)
+     (if (sym_eq c (quote Word)) (tc_word_lit tc args)
      (match (tc_find_ctor c (tc_tds m))
        (None (TcErr (tc_app "unknown constructor: " (chars_of_sym c))))
        ((Some (Pair (TypeDef tname tparams _) (CtorDef _ fields)))
@@ -344,10 +481,18 @@
                c
                1)
              ((TcsErr msg) (TcErr msg))
-             ((TcsOk tc2) (TcOk tc2 (TCon tname metas)))))))))
+             ((TcsOk tc2) (TcOk tc2 (TCon tname metas))))))))))
     ((Call f args)
      (match (tc_fn_sig f m)
-       (None (TcErr (tc_app "unknown function: " (chars_of_sym f))))
+       ;; not a fn/extern/prim: the wrap rules (width literal → type
+       ;; index) get a shot — a user fn of the same name shadows them
+       ;; here exactly as it shadows at runtime (trie-first dispatch).
+       (None
+         (if (sym_eq f (quote uwrap))
+           (tc_wrap_call m tc fenv env args (tc_t_unsigned))
+         (if (sym_eq f (quote swrap))
+           (tc_wrap_call m tc fenv env args (tc_t_signed))
+           (TcErr (tc_app "unknown function: " (chars_of_sym f))))))
        ((Some (Pair ptypes ret))
         (match (tc_freshen (tc_collect_tvars (Cons ret ptypes) Nil) tc)
           ((Freshened inst _ tc1)
@@ -539,12 +684,62 @@
          (_
            (Some
              (tc_app "primitive type takes no arguments: " (chars_of_sym c)))))
-       (match (find_typedef c (tc_tds m))
-         (None (Some (tc_app "unknown type: " (chars_of_sym c))))
-         ((Some (TypeDef _ tparams _))
-          (if (int_eq (tc_len_tys args) (tc_len_syms tparams))
-            (tc_tys_wf m allowed anytv args)
-            (Some (tc_app "wrong type arity: " (chars_of_sym c))))))))))
+     (if (sym_eq c (quote Word)) (tc_word_args_wf allowed anytv args)
+     (match (find_typedef c (tc_tds m))
+       (None (Some (tc_app "unknown type: " (chars_of_sym c))))
+       ((Some (TypeDef _ tparams _))
+        (if (int_eq (tc_len_tys args) (tc_len_syms tparams))
+          (tc_tys_wf m allowed anytv args)
+          (Some (tc_app "wrong type arity: " (chars_of_sym c)))))))))))
+
+;; (Word W S) well-formedness: W a numeric literal type (1..64) or a
+;; type variable, S a signedness marker (Unsigned/Signed) or a type
+;; variable. Numeric-name TCons are legal ONLY in the width slot —
+;; anywhere else the typedef lookup above rejects them ("unknown type").
+(fn tc_word_args_wf ((allowed (List Symbol)) (anytv Bool) (args (List Type)))
+  (Option (List Int))
+  (match args
+    ((Cons w (Cons s Nil))
+     (match (tc_word_index_wf allowed anytv w (tc_word_width_ok w))
+       ((Some msg) (Some msg))
+       (None (tc_word_index_wf allowed anytv s (tc_word_sign_ok s)))))
+    (_ (Some "Word expects exactly (Word WIDTH SIGNEDNESS)"))))
+
+;; shared index rule: a TVar follows the normal tvar scoping (anytv /
+;; allowed); a concrete index must satisfy its slot's predicate.
+(fn tc_word_index_wf
+  ((allowed (List Symbol)) (anytv Bool) (t Type) (concrete_ok Bool))
+  (Option (List Int))
+  (match t
+    ((TVar x)
+     (if anytv None
+     (if (tc_sym_in x allowed) None
+     (Some (tc_app "unknown type variable: " (chars_of_sym x))))))
+    ((TCon c _)
+     (if concrete_ok None
+     (Some
+       (tc_app
+         "bad Word index (width: literal 1..64; signedness: Unsigned/Signed): "
+         (chars_of_sym c)))))))
+
+(fn tc_word_width_ok ((t Type)) Bool
+  (match t
+    ((TCon c args)
+     (match args
+       (Nil
+         (match (tc_width_of c)
+           ((Some _) True)
+           (None False)))
+       (_ False)))
+    (_ True)))  ; TVar — judged by the scoping rule, not here
+
+(fn tc_word_sign_ok ((t Type)) Bool
+  (match t
+    ((TCon c args)
+     (match args
+       (Nil (if (sym_eq c (quote Unsigned)) True (sym_eq c (quote Signed))))
+       (_ False)))
+    (_ True)))
 
 (fn tc_tys_wf ((m Module) (allowed (List Symbol)) (anytv Bool) (ts (List Type)))
   (Option (List Int))

@@ -136,11 +136,54 @@ parameter/return positions):
 | `Bool`              | user-defined (in stdlib), `True`/`False` ctor |
 | `BareName`          | reference to a declared `type`       |
 | `(TyCon T1 T2 …)`   | type application                     |
+| `(Word W S)`        | fixed-width modular integer (see "Words" below) |
+| `u8 … u64, i8 … i64` | reader aliases for `(Word 8 Unsigned)` etc. |
 
 Examples: `(List Int)`, `(Option (Pair Symbol Expr))`,
-`(Map Symbol Type)`.
+`(Map Symbol Type)`, `(List u8)`.
 
 `Int` and `Symbol` are primitive; `Bool` is part of the stdlib.
+
+### Words — fixed-width modular integers
+
+`(Word W S)` is a built-in type former: `W` a **literal type** — a
+numeric token in type position, width 1..64 — or a type variable; `S`
+a signedness marker (`Unsigned`/`Signed`, ordinary empty stdlib types
+used as phantom indices) or a type variable. Prefer the aliases
+(`u8`, `i32`, …); they expand in the reader, so the kernel only ever
+sees the former.
+
+A word value is a bare bit pattern (width + unsigned residue,
+canonical: `0 ≤ raw < 2^W`). Signedness is **not** stored in the
+value — it lives in the op names where semantics differ (`uval`/
+`sval`, `udiv`/`sdiv`, `ult`/`slt`, `ushr`/`sshr`) and in the type
+index, which keeps signed ops off unsigned terms. `Word` has no
+typedef: values are produced only by the word primitives, the type
+checker enforces canonicity on any literal reaching a goal, and
+induction/case-on over it is impossible. Construction is
+`(uwrap K e)` / `(swrap K e)` where `K` **must be an integer
+literal** — it becomes the type index.
+
+All word ops are **total**, with explicit conventions (semantics live
+in the operator name, never in context):
+
+- `wadd wsub wmul wneg` — value mod `2^W` (wrapping; hardware
+  semantics, reasoned about rather than guarded).
+- `udiv/urem`, `sdiv/srem` — the RISC-V M / SMT-LIB profile:
+  `x/0 = all-ones`, `x rem 0 = x`, `INT_MIN/-1 = INT_MIN` (wraps),
+  `INT_MIN rem -1 = 0`. Signed division **truncates** toward zero.
+- `wshl ushr sshr` — shift amount is an `Int`; amounts outside
+  `[0, W)` saturate (`wshl`/`ushr` → 0, `sshr` → sign fill). `sshr`
+  rounds toward −∞.
+- `wand wor wxor wnot` — bitwise.
+- `weq`, `ult ule`, `slt sle` — comparisons, returning `Bool`.
+- `uval sval` — the value as an `Int` (unsigned residue / two's
+  complement); `wbits` — the raw residue of any word (explicit
+  reinterpretation); `wwidth` — the width as an `Int`.
+
+These primitives are implemented once, in `kernel/reduce.shard`'s
+table (not natively), so the proof reducer and the hosted evaluator
+share one definition by construction.
 
 
 ## 4. Expressions

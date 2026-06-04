@@ -105,8 +105,20 @@ is where to start when planning v3.
   reader builds ints by arithmetic and has no ceiling. Shift amounts
   keep the i64-era `0..64` guard so the Rust table and
   `kernel/reduce.shard`'s mirror agree.
+- **SUPERSEDED in part (Word former):** "fixed-width as a library
+  wrapper" did not survive the requirements — genericity over
+  width/signedness needs type-level indices, and a compiler/interpreter
+  hook needs a former the toolchain can trust structurally. Fixed-width
+  modular ints are now the BUILT-IN former `(Word W S)` (literal width
+  type 1..64, signedness markers, reader aliases `u8`…`i64`), with the
+  primitives implemented once in `kernel/reduce.shard`'s table and a
+  dedicated canonicity-checking type rule (see docs/LANGUAGE.md,
+  "Words"). `Int` itself remains the only UNBOUNDED primitive; word
+  semantics are defined by their `Int` images (`uval`/`sval`/`wbits`),
+  which is where the proof surface will live.
 - **Revisit if:** SMT integration is cleaner with BitVec primitives,
-  or modular-heavy targets push library performance unacceptably.
+  or W > 64 (u128) targets appear (lift the width cap — the value rep
+  is width+residue, nothing else assumes 64).
 
 ### Primitive comparisons return user `Bool`
 - **Chose:** `int_eq` / `sym_eq` return the user-defined `Bool` ADT.
