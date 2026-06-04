@@ -96,6 +96,15 @@ is where to start when planning v3.
   library wrapper around `Int` (`mod`, bitwise ops as primitives).
 - **Why now:** simpler semantics, fewer reasoning rules, decidable
   BitVec theory available via SMT later.
+- **State (BigInt swap):** the bootstrap's `IntLit` is now
+  `num_bigint::BigInt` — the i64 interim (and its silent release-mode
+  wrapping) is gone. Cost: ~2× on the self-hosted tower (`mem`
+  43s→85s), to be clawed back in the shard-side kernel. One residual
+  ceiling: lexpr parses source literals beyond i64/u64 as lossy f64,
+  so the loader REJECTS those (loud, not corrupted); the self-hosted
+  reader builds ints by arithmetic and has no ceiling. Shift amounts
+  keep the i64-era `0..64` guard so the Rust table and
+  `kernel/reduce.shard`'s mirror agree.
 - **Revisit if:** SMT integration is cleaner with BitVec primitives,
   or modular-heavy targets push library performance unacceptably.
 
@@ -371,15 +380,12 @@ is where to start when planning v3.
 - **Caveats:** conclusions are order facts only (equality conclusions
   stay with lia, or need a future two-sided combination); opaque atoms
   assumed integer-typed (inherited from lia_collect); a non-linear
-  premise is usable only with multiplier 0. **i64 overflow:** the
-  multiplier arithmetic uses the host `+`/`*` (i64, like lia/ord) — the
-  kernel trusts these don't overflow. Not farkas-specific and not a
-  clean exploit path (variable cancellation uses the same wrapping
-  arithmetic), but if `Int` is meant to be mathematical integers, the
-  primitives should eventually be checked/bignum.
+  premise is usable only with multiplier 0. **Overflow: RESOLVED** —
+  the multiplier arithmetic uses the host `+`/`*`, which are now
+  arbitrary-precision (`BigInt`; see "Native Int (bignum)" below), so
+  the old i64 wrapping caveat is gone.
 - **Revisit if:** a proof needs equality conclusions by entailment
-  (add the two-sided refutation), or the overflow caveat becomes
-  load-bearing (move arithmetic primitives to checked/bignum).
+  (add the two-sided refutation).
 
 ### RewriteWith — single-match only (Insts shipped slice 32)
 - **Chose (slice 27):** the conditional rewrite proof step landed

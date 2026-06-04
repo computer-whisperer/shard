@@ -17,7 +17,9 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::ast::{Expr, Symbol};
+use num_traits::{Signed, ToPrimitive, Zero};
+
+use crate::ast::{Expr, IntLit as Int, Symbol};
 
 /// Try to apply a primitive to fully-reduced args. Returns `Some(e)`
 /// if `name` is a known primitive and the args fit the expected
@@ -27,24 +29,25 @@ pub fn try_apply(name: &str, args: &[Expr]) -> Option<Expr> {
     use Expr::{IntLit, SymLit};
 
     match (name, args) {
-        // Integer arithmetic. `mod` uses Euclidean remainder so the
-        // result is always non-negative for a positive modulus,
-        // matching the convention the modular-arithmetic library
-        // wrappers will rely on.
-        ("+",   [IntLit(a), IntLit(b)])                  => Some(IntLit(a + b)),
-        ("-",   [IntLit(a), IntLit(b)])                  => Some(IntLit(a - b)),
-        ("*",   [IntLit(a), IntLit(b)])                  => Some(IntLit(a * b)),
-        ("/",   [IntLit(a), IntLit(b)]) if *b != 0       => Some(IntLit(a / b)),
-        ("mod", [IntLit(a), IntLit(b)]) if *b != 0       => Some(IntLit(a.rem_euclid(*b))),
+        // Integer arithmetic — arbitrary precision (BigInt), matching the
+        // documented mathematical `Int`. `/` truncates toward zero (as the
+        // old i64 `/` did); `mod` uses Euclidean remainder so the result is
+        // always non-negative for a positive modulus, matching the
+        // convention the modular-arithmetic library wrappers will rely on.
+        ("+",   [IntLit(a), IntLit(b)])                    => Some(IntLit(a + b)),
+        ("-",   [IntLit(a), IntLit(b)])                    => Some(IntLit(a - b)),
+        ("*",   [IntLit(a), IntLit(b)])                    => Some(IntLit(a * b)),
+        ("/",   [IntLit(a), IntLit(b)]) if !b.is_zero()    => Some(IntLit(a / b)),
+        ("mod", [IntLit(a), IntLit(b)]) if !b.is_zero()    => Some(IntLit(rem_euclid(a, b))),
 
-        // Bitwise on non-negative ints. Shifts by 64+ or negative
-        // amounts are caller errors; we leave the call stuck so the
-        // bug surfaces rather than wrapping silently.
+        // Bitwise on non-negative ints. Shifts by 64+ or negative amounts
+        // are caller errors; we keep the i64-era guard (call stays stuck)
+        // so the Rust table and kernel/reduce.shard's mirror agree.
         ("band", [IntLit(a), IntLit(b)])                              => Some(IntLit(a & b)),
         ("bor",  [IntLit(a), IntLit(b)])                              => Some(IntLit(a | b)),
         ("bxor", [IntLit(a), IntLit(b)])                              => Some(IntLit(a ^ b)),
-        ("bshl", [IntLit(a), IntLit(b)]) if (0..64).contains(b)       => Some(IntLit(a << b)),
-        ("bshr", [IntLit(a), IntLit(b)]) if (0..64).contains(b)       => Some(IntLit(a >> b)),
+        ("bshl", [IntLit(a), IntLit(b)]) if shift_amount(b).is_some() => Some(IntLit(a << shift_amount(b)?)),
+        ("bshr", [IntLit(a), IntLit(b)]) if shift_amount(b).is_some() => Some(IntLit(a >> shift_amount(b)?)),
 
         // Equality / comparison — return user-defined `Bool` ctor.
         ("int_eq", [IntLit(a), IntLit(b)]) => Some(bool_ctor(a == b)),
@@ -68,6 +71,19 @@ pub fn try_apply(name: &str, args: &[Expr]) -> Option<Expr> {
     }
 }
 
+/// Euclidean remainder: in `[0, |b|)`, like `i64::rem_euclid`. BigInt's
+/// `%` truncates (sign follows the dividend), so fix up negatives.
+fn rem_euclid(a: &Int, b: &Int) -> Int {
+    let r = a % b;
+    if r.is_negative() { r + b.abs() } else { r }
+}
+
+/// The i64-era shift guard: a shift amount must be in `0..64`.
+/// None outside that range (the call stays stuck).
+fn shift_amount(b: &Int) -> Option<u64> {
+    b.to_u64().filter(|k| *k < 64)
+}
+
 /// Decode an object `(List Int)` value — a `Cons`/`Nil` spine of
 /// `IntLit` codepoints — into a String. None if the spine is malformed
 /// or a codepoint is not a valid Unicode scalar.
@@ -79,7 +95,7 @@ fn decode_char_list(e: &Expr) -> Option<String> {
             Expr::Ctor(n, a) if n == "Nil" && a.is_empty() => return Some(s),
             Expr::Ctor(n, a) if n == "Cons" && a.len() == 2 => {
                 match &a[0] {
-                    Expr::IntLit(cp) => s.push(char::from_u32(*cp as u32)?),
+                    Expr::IntLit(cp) => s.push(char::from_u32(cp.to_u32()?)?),
                     _ => return None,
                 }
                 cur = &a[1];
@@ -94,7 +110,7 @@ fn decode_char_list(e: &Expr) -> Option<String> {
 fn encode_char_list(s: &str) -> Expr {
     let mut acc = Expr::Ctor("Nil".into(), Vec::new());
     for c in s.chars().rev() {
-        acc = Expr::Ctor("Cons".into(), vec![Expr::IntLit(c as i64), acc]);
+        acc = Expr::Ctor("Cons".into(), vec![Expr::IntLit((c as u32).into()), acc]);
     }
     acc
 }

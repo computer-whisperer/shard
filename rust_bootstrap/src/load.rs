@@ -421,7 +421,7 @@ impl LoadCtx {
 
 fn load_expr(v: &Value, ctx: &mut LoadCtx, ctors: &HashSet<Symbol>) -> Result<Expr, LoadError> {
     // Integer literal
-    if let Some(n) = v.as_i64() {
+    if let Some(n) = int_lit_of(v)? {
         return Ok(Expr::IntLit(n));
     }
     // Bare identifier
@@ -443,7 +443,7 @@ fn load_expr(v: &Value, ctx: &mut LoadCtx, ctors: &HashSet<Symbol>) -> Result<Ex
     if let Some(s) = v.as_str() {
         let mut acc = Expr::Ctor("Nil".into(), Vec::new());
         for c in s.chars().rev() {
-            acc = Expr::Ctor("Cons".into(), vec![Expr::IntLit(c as i64), acc]);
+            acc = Expr::Ctor("Cons".into(), vec![Expr::IntLit((c as u32).into()), acc]);
         }
         return Ok(acc);
     }
@@ -531,7 +531,7 @@ fn load_pat(
     ctx: &mut LoadCtx,
     ctors: &HashSet<Symbol>,
 ) -> Result<Pat, LoadError> {
-    if let Some(n) = v.as_i64() {
+    if let Some(n) = int_lit_of(v)? {
         return Ok(Pat::PInt(n));
     }
     if let Some(sym) = v.as_symbol() {
@@ -715,6 +715,26 @@ fn load_quote(parts: &[&Value]) -> Result<Expr, LoadError> {
 fn as_symbol(v: &Value) -> Result<&str, LoadError> {
     v.as_symbol()
         .ok_or_else(|| LoadError::BadShape(format!("expected symbol, got {v}")))
+}
+
+/// Integer literal, if `v` is a number. `Int` is arbitrary-precision, but
+/// lexpr parses literals beyond u64/i64 range as lossy f64 — reject those
+/// loudly rather than load a corrupted value. (The self-hosted reader
+/// builds ints by arithmetic, so it has no such ceiling.)
+fn int_lit_of(v: &Value) -> Result<Option<crate::ast::IntLit>, LoadError> {
+    if let Some(n) = v.as_i64() {
+        return Ok(Some(n.into()));
+    }
+    if let Some(n) = v.as_u64() {
+        return Ok(Some(n.into()));
+    }
+    if v.is_number() {
+        return Err(LoadError::BadShape(format!(
+            "integer literal {v} exceeds the bootstrap parser's range (i64/u64); \
+             non-integer numerics are not in the language"
+        )));
+    }
+    Ok(None)
 }
 
 fn as_list(v: &Value) -> Result<Vec<&Value>, LoadError> {

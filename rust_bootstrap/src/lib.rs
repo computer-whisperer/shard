@@ -87,7 +87,7 @@ mod tests {
     fn int_list(xs: &[i64]) -> ast::Expr {
         let mut acc = nctor("Nil", Vec::new());
         for &x in xs.iter().rev() {
-            acc = nctor("Cons", vec![ast::Expr::IntLit(x), acc]);
+            acc = nctor("Cons", vec![ast::Expr::IntLit(x.into()), acc]);
         }
         acc
     }
@@ -114,8 +114,8 @@ mod tests {
         let m = "(type (List T) (Nil) (Cons T (List T)))\
                  (fn len ((xs (List Int))) Int \
                    (match xs (Nil 0) ((Cons _ r) (+ 1 (len r)))))";
-        assert_eq!(eval_str(m, "(len \"hello\")"), ast::Expr::IntLit(5));
-        assert_eq!(eval_str(m, "(len \"\")"), ast::Expr::IntLit(0));
+        assert_eq!(eval_str(m, "(len \"hello\")"), ast::Expr::IntLit(5.into()));
+        assert_eq!(eval_str(m, "(len \"\")"), ast::Expr::IntLit(0.into()));
     }
 
     // ------------------------------------------------------------------
@@ -140,7 +140,7 @@ mod tests {
     }
 
     fn tnum(n: i64) -> ast::Expr {
-        nctor("TNum", vec![ast::Expr::IntLit(n)])
+        nctor("TNum", vec![ast::Expr::IntLit(n.into())])
     }
 
     /// `(List Token)` runtime value from a Vec of Token Exprs.
@@ -198,17 +198,17 @@ mod tests {
         // (1 + 2) evaluates to 3; nesting works.
         assert_eq!(
             calc_eval("(eval (Add (Num 1) (Num 2)))"),
-            ast::Expr::IntLit(3)
+            ast::Expr::IntLit(3.into())
         );
         assert_eq!(
             calc_eval("(eval (Sub (Add (Num 10) (Num 3)) (Num 2)))"),
-            ast::Expr::IntLit(11) // 10+3-2
+            ast::Expr::IntLit(11.into()) // 10+3-2
         );
     }
 
     #[test]
     fn calc_parse_builds_left_assoc_tree() {
-        let num = |n| nctor("Num", vec![ast::Expr::IntLit(n)]);
+        let num = |n: i64| nctor("Num", vec![ast::Expr::IntLit(n.into())]);
         let some = |e| nctor("Some", vec![e]);
         // a bare number
         assert_eq!(calc_eval("(parse (lex \"5\"))"), some(num(5)));
@@ -222,7 +222,7 @@ mod tests {
 
     #[test]
     fn calc_run_end_to_end() {
-        let some = |n| nctor("Some", vec![ast::Expr::IntLit(n)]);
+        let some = |n: i64| nctor("Some", vec![ast::Expr::IntLit(n.into())]);
         let none = || nctor("None", Vec::new());
         // well-formed
         assert_eq!(calc_eval("(run \"1+2\")"), some(3));
@@ -247,7 +247,7 @@ mod tests {
     fn mvp_add_two_three() {
         assert_eq!(
             eval_str("(fn add ((a Int) (b Int)) Int (+ a b))", "(add 2 3)"),
-            ast::Expr::IntLit(5)
+            ast::Expr::IntLit(5.into())
         );
     }
 
@@ -256,7 +256,7 @@ mod tests {
     fn mvp_first_arg() {
         assert_eq!(
             eval_str("(fn first ((a Int) (b Int)) Int a)", "(first 7 9)"),
-            ast::Expr::IntLit(7)
+            ast::Expr::IntLit(7.into())
         );
     }
 
@@ -267,21 +267,71 @@ mod tests {
     #[test]
     fn prim_arithmetic() {
         let m = "(fn id ((x Int)) Int x)";
-        assert_eq!(eval_str(m, "(- 10 3)"),     ast::Expr::IntLit(7));
-        assert_eq!(eval_str(m, "(* 6 7)"),      ast::Expr::IntLit(42));
-        assert_eq!(eval_str(m, "(/ 17 5)"),     ast::Expr::IntLit(3));
-        assert_eq!(eval_str(m, "(mod 17 5)"),   ast::Expr::IntLit(2));
-        assert_eq!(eval_str(m, "(mod -3 5)"),   ast::Expr::IntLit(2));
+        assert_eq!(eval_str(m, "(- 10 3)"),     ast::Expr::IntLit(7.into()));
+        assert_eq!(eval_str(m, "(* 6 7)"),      ast::Expr::IntLit(42.into()));
+        assert_eq!(eval_str(m, "(/ 17 5)"),     ast::Expr::IntLit(3.into()));
+        assert_eq!(eval_str(m, "(mod 17 5)"),   ast::Expr::IntLit(2.into()));
+        assert_eq!(eval_str(m, "(mod -3 5)"),   ast::Expr::IntLit(2.into()));
+    }
+
+    /// Arbitrary precision: arithmetic past i64 range must be exact, not
+    /// wrap. Guards the BigInt swap — under the old i64 primitives these
+    /// silently wrapped in release mode (a soundness hole for the LIA /
+    /// Farkas multiplier arithmetic that runs through these primitives
+    /// at proof-check time).
+    #[test]
+    fn prim_arithmetic_is_arbitrary_precision() {
+        use std::str::FromStr;
+        let m = "(fn id ((x Int)) Int x)";
+        let big = |s: &str| ast::Expr::IntLit(ast::IntLit::from_str(s).expect("int"));
+        // i64::MAX + 1 — the classic wrap.
+        assert_eq!(
+            eval_str(m, "(+ 9223372036854775807 1)"),
+            big("9223372036854775808")
+        );
+        // i64::MAX² — multiplier-product overflow, the Farkas risk shape.
+        assert_eq!(
+            eval_str(m, "(* 9223372036854775807 9223372036854775807)"),
+            big("85070591730234615847396907784232501249")
+        );
+        // i64::MIN has no i64 negation; -(MIN) must come out exact.
+        assert_eq!(
+            eval_str(m, "(- 0 -9223372036854775808)"),
+            big("9223372036854775808")
+        );
+        // Round-trip: the huge product divided back down is exact.
+        assert_eq!(
+            eval_str(
+                m,
+                "(/ (* 9223372036854775807 9223372036854775807) 9223372036854775807)"
+            ),
+            big("9223372036854775807")
+        );
+        // Comparisons see magnitude, not truncated bits.
+        assert_eq!(
+            eval_str(m, "(lt 9223372036854775807 (+ 9223372036854775807 1))"),
+            true_v()
+        );
+    }
+
+    /// Source literals beyond the host parser's integer range must be a
+    /// LOAD ERROR, not silently degraded — lexpr falls back to lossy f64
+    /// for them. (The self-hosted reader builds ints by arithmetic and
+    /// has no such ceiling.)
+    #[test]
+    fn oversized_literal_is_rejected_at_load() {
+        let src = "(fn big (()) Int 99999999999999999999999999999999)";
+        assert!(load::module_from_str(src).is_err());
     }
 
     #[test]
     fn prim_bitwise() {
         let m = "(fn id ((x Int)) Int x)";
-        assert_eq!(eval_str(m, "(band 12 10)"), ast::Expr::IntLit(8));
-        assert_eq!(eval_str(m, "(bor 12 10)"),  ast::Expr::IntLit(14));
-        assert_eq!(eval_str(m, "(bxor 12 10)"), ast::Expr::IntLit(6));
-        assert_eq!(eval_str(m, "(bshl 1 4)"),   ast::Expr::IntLit(16));
-        assert_eq!(eval_str(m, "(bshr 16 2)"),  ast::Expr::IntLit(4));
+        assert_eq!(eval_str(m, "(band 12 10)"), ast::Expr::IntLit(8.into()));
+        assert_eq!(eval_str(m, "(bor 12 10)"),  ast::Expr::IntLit(14.into()));
+        assert_eq!(eval_str(m, "(bxor 12 10)"), ast::Expr::IntLit(6.into()));
+        assert_eq!(eval_str(m, "(bshl 1 4)"),   ast::Expr::IntLit(16.into()));
+        assert_eq!(eval_str(m, "(bshr 16 2)"),  ast::Expr::IntLit(4.into()));
     }
 
     #[test]
@@ -299,7 +349,7 @@ mod tests {
     fn prim_in_user_fn() {
         assert_eq!(
             eval_str("(fn square ((x Int)) Int (* x x))", "(square 9)"),
-            ast::Expr::IntLit(81)
+            ast::Expr::IntLit(81.into())
         );
     }
 
@@ -327,7 +377,7 @@ mod tests {
         let m = load::module_from_str(src).expect("loads");
         for (input, expected) in [("(abs -5)", 5), ("(abs 7)", 7), ("(abs 0)", 0)] {
             let e = load::expr_from_str(input, &m).expect("parses");
-            assert_eq!(eval::eval(&m, &e).unwrap(), ast::Expr::IntLit(expected));
+            assert_eq!(eval::eval(&m, &e).unwrap(), ast::Expr::IntLit(expected.into()));
         }
     }
 
@@ -345,7 +395,7 @@ mod tests {
             result,
             ast::Expr::Ctor(
                 "Pair".into(),
-                vec![ast::Expr::IntLit(3), ast::Expr::IntLit(7)]
+                vec![ast::Expr::IntLit(3.into()), ast::Expr::IntLit(7.into())]
             )
         );
     }
@@ -366,7 +416,7 @@ mod tests {
         let m = load::module_from_str(src).expect("loads");
         let call = "(len (Cons 10 (Cons 20 (Cons 30 Nil))))";
         let e = load::expr_from_str(call, &m).expect("parses");
-        assert_eq!(eval::eval(&m, &e).unwrap(), ast::Expr::IntLit(3));
+        assert_eq!(eval::eval(&m, &e).unwrap(), ast::Expr::IntLit(3.into()));
     }
 
     /// Nested pattern: `(Cons a (Cons b _))` binds two PVars at
@@ -389,9 +439,9 @@ mod tests {
         let e1 = load::expr_from_str(two_plus, &m).expect("parses");
         let e2 = load::expr_from_str(too_short, &m).expect("parses");
         let e3 = load::expr_from_str(empty, &m).expect("parses");
-        assert_eq!(eval::eval(&m, &e1).unwrap(), ast::Expr::IntLit(30));
-        assert_eq!(eval::eval(&m, &e2).unwrap(), ast::Expr::IntLit(0));
-        assert_eq!(eval::eval(&m, &e3).unwrap(), ast::Expr::IntLit(0));
+        assert_eq!(eval::eval(&m, &e1).unwrap(), ast::Expr::IntLit(30.into()));
+        assert_eq!(eval::eval(&m, &e2).unwrap(), ast::Expr::IntLit(0.into()));
+        assert_eq!(eval::eval(&m, &e3).unwrap(), ast::Expr::IntLit(0.into()));
     }
 
     /// Parallel `let`: RHSs evaluated in outer scope; body sees both
@@ -407,7 +457,7 @@ mod tests {
 "#;
         let m = load::module_from_str(src).expect("loads");
         let e = load::expr_from_str("(add_squares 3 4)", &m).expect("parses");
-        assert_eq!(eval::eval(&m, &e).unwrap(), ast::Expr::IntLit(25));
+        assert_eq!(eval::eval(&m, &e).unwrap(), ast::Expr::IntLit(25.into()));
     }
 
     /// `match` on an `Option`-shaped value — bare zero-arg ctors AND
@@ -424,8 +474,8 @@ mod tests {
         let m = load::module_from_str(src).expect("loads");
         let e1 = load::expr_from_str("(unwrap_or (Some 42) 0)", &m).unwrap();
         let e2 = load::expr_from_str("(unwrap_or None 99)", &m).unwrap();
-        assert_eq!(eval::eval(&m, &e1).unwrap(), ast::Expr::IntLit(42));
-        assert_eq!(eval::eval(&m, &e2).unwrap(), ast::Expr::IntLit(99));
+        assert_eq!(eval::eval(&m, &e1).unwrap(), ast::Expr::IntLit(42.into()));
+        assert_eq!(eval::eval(&m, &e2).unwrap(), ast::Expr::IntLit(99.into()));
     }
 
     // ------------------------------------------------------------------
@@ -483,7 +533,7 @@ mod tests {
         ] {
             let e = load::expr_from_str(call, &module).expect("parses");
             let r = eval::eval(&module, &e).expect("evals");
-            assert_eq!(r, ast::Expr::IntLit(expected), "{call}");
+            assert_eq!(r, ast::Expr::IntLit(expected.into()), "{call}");
         }
     }
 
@@ -512,7 +562,7 @@ mod tests {
         let e = load::expr_from_str(call, &m).expect("parses");
         let r = eval::eval(&m, &e).expect("evals");
         // Expected runtime Expr value: `Ctor("IntLit", [IntLit 42])`.
-        assert_eq!(r, nctor("IntLit", vec![ast::Expr::IntLit(42)]));
+        assert_eq!(r, nctor("IntLit", vec![ast::Expr::IntLit(42.into())]));
     }
 
     /// `subst` leaves an FVar untouched when the env doesn't bind it.
@@ -537,7 +587,7 @@ mod tests {
         let call = "(open_many (Cons (IntLit 99) (Nil)) (BVar 0))";
         let e = load::expr_from_str(call, &m).expect("parses");
         let r = eval::eval(&m, &e).expect("evals");
-        assert_eq!(r, nctor("IntLit", vec![ast::Expr::IntLit(99)]));
+        assert_eq!(r, nctor("IntLit", vec![ast::Expr::IntLit(99.into())]));
     }
 
     /// `open_many` shifts an outer BVar down by `len bindings`.
@@ -549,7 +599,7 @@ mod tests {
         let call = "(open_many (Cons (IntLit 99) (Nil)) (BVar 5))";
         let e = load::expr_from_str(call, &m).expect("parses");
         let r = eval::eval(&m, &e).expect("evals");
-        assert_eq!(r, nctor("BVar", vec![ast::Expr::IntLit(4)]));
+        assert_eq!(r, nctor("BVar", vec![ast::Expr::IntLit(4.into())]));
     }
 
     /// `match_pat` against a PVar: captures the value at the front of
@@ -561,7 +611,7 @@ mod tests {
         let e = load::expr_from_str(call, &m).expect("parses");
         let r = eval::eval(&m, &e).expect("evals");
         // MOk (Cons (IntLit 7) Nil)
-        let intlit_7 = nctor("IntLit", vec![ast::Expr::IntLit(7)]);
+        let intlit_7 = nctor("IntLit", vec![ast::Expr::IntLit(7.into())]);
         let expected = nctor("MOk",
             vec![nctor("Cons", vec![intlit_7, nctor("Nil", vec![])])]);
         assert_eq!(r, expected);
@@ -603,7 +653,7 @@ mod tests {
                       (Nil))";
         let e = load::expr_from_str(call, &m).expect("parses");
         let r = eval::eval(&m, &e).expect("evals");
-        let intlit_1 = nctor("IntLit", vec![ast::Expr::IntLit(1)]);
+        let intlit_1 = nctor("IntLit", vec![ast::Expr::IntLit(1.into())]);
         let nil_v = nctor("Ctor", vec![
             ast::Expr::SymLit("Nil".into()),
             nctor("Nil", vec![]),
@@ -652,7 +702,7 @@ mod tests {
                           (If (Ctor (quote True) (Nil)) (IntLit 1) (IntLit 2)))";
         let e = load::expr_from_str(call, &m).expect("parses");
         let r = eval::eval(&m, &e).expect("evals");
-        assert_eq!(r, nctor("Some", vec![nctor("IntLit", vec![ast::Expr::IntLit(1)])]));
+        assert_eq!(r, nctor("Some", vec![nctor("IntLit", vec![ast::Expr::IntLit(1.into())])]));
     }
 
     /// step over (if False a b) -> Some b
@@ -663,7 +713,7 @@ mod tests {
                           (If (Ctor (quote False) (Nil)) (IntLit 1) (IntLit 2)))";
         let e = load::expr_from_str(call, &m).expect("parses");
         let r = eval::eval(&m, &e).expect("evals");
-        assert_eq!(r, nctor("Some", vec![nctor("IntLit", vec![ast::Expr::IntLit(2)])]));
+        assert_eq!(r, nctor("Some", vec![nctor("IntLit", vec![ast::Expr::IntLit(2.into())])]));
     }
 
     /// step over (if <FVar> a b) -> None — condition is irreducible,

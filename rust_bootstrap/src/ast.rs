@@ -12,10 +12,11 @@
 
 pub type Symbol = String;
 
-/// Integer values. MVP uses `i64`; we'll swap to arbitrary-precision
-/// (`num_bigint::BigInt`) before the narrow code starts relying on
-/// `mod`/bitwise semantics. Tracked in REVISIT (Native Int + Symbol).
-pub type IntLit = i64;
+/// Integer values: arbitrary-precision, matching the documented
+/// mathematical `Int` semantics. The earlier `i64` MVP could silently
+/// wrap in release mode — a soundness hole for LIA/Farkas multiplier
+/// arithmetic, which runs through these primitives at proof-check time.
+pub type IntLit = num_bigint::BigInt;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Expr {

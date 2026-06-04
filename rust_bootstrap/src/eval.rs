@@ -93,7 +93,8 @@ impl std::error::Error for EvalError {}
 /// a substitution machine.
 #[derive(Clone)]
 enum Val {
-    Int(i64),
+    // BigInt clones are O(digits); Rc keeps Val's clone O(1) like the others.
+    Int(Rc<crate::ast::IntLit>),
     Sym(Rc<str>),
     FVar(Rc<str>),
     Ctor(Rc<str>, Rc<[Val]>),
@@ -139,7 +140,7 @@ fn eval_env<'a>(
     let mut e: &'a Expr = e0;
     loop {
         match e {
-            Expr::IntLit(n) => return Ok(Val::Int(*n)),
+            Expr::IntLit(n) => return Ok(Val::Int(Rc::new(n.clone()))),
             Expr::SymLit(s) => return Ok(Val::Sym(Rc::from(s.as_str()))),
             Expr::FVar(s) => return Ok(Val::FVar(Rc::from(s.as_str()))),
 
@@ -263,7 +264,7 @@ fn match_pat(p: &Pat, v: &Val, acc: &mut Vals) -> bool {
             acc.insert(0, v.clone());
             true
         }
-        Pat::PInt(n) => matches!(v, Val::Int(m) if m == n),
+        Pat::PInt(n) => matches!(v, Val::Int(m) if &**m == n),
         Pat::PSym(s) => matches!(v, Val::Sym(t) if &**t == s.as_str()),
         Pat::PCtor(cn, sub_pats) => {
             if let Val::Ctor(vc, vargs) = v {
@@ -287,7 +288,7 @@ fn match_pat(p: &Pat, v: &Val, acc: &mut Vals) -> bool {
 
 fn val_to_expr(v: &Val) -> Expr {
     match v {
-        Val::Int(n) => Expr::IntLit(*n),
+        Val::Int(n) => Expr::IntLit((**n).clone()),
         Val::Sym(s) => Expr::SymLit(s.to_string()),
         Val::FVar(s) => Expr::FVar(s.to_string()),
         Val::Ctor(n, args) => {
@@ -300,7 +301,7 @@ fn val_to_expr(v: &Val) -> Expr {
 /// IntLit / SymLit / FVar / Ctor over values) into a `Val`.
 fn val_of_value_expr(e: &Expr) -> Val {
     match e {
-        Expr::IntLit(n) => Val::Int(*n),
+        Expr::IntLit(n) => Val::Int(Rc::new(n.clone())),
         Expr::SymLit(s) => Val::Sym(Rc::from(s.as_str())),
         Expr::FVar(s) => Val::FVar(Rc::from(s.as_str())),
         Expr::Ctor(n, args) => Val::Ctor(

@@ -19,6 +19,7 @@ use std::process::ExitCode;
 
 use lexpr::Value;
 use lexpr::parse::Parser;
+use num_traits::ToPrimitive;
 use proving_bootstrap_v2::{ast, default_kernel_dir, eval, load};
 
 /// Resolve the entrypoint's import closure: each `(import "X")` is followed
@@ -120,7 +121,7 @@ fn run() -> ExitCode {
 
     // --- run `(main (World 0))` under the file-I/O handler ------------------
     eval::set_effect_handler(Some(Box::new(make_handler(prog_args))));
-    let call = ast::Expr::Call("main".into(), vec![world(0)]);
+    let call = ast::Expr::Call("main".into(), vec![world(0.into())]);
     let result = eval::eval(&vm, &call);
     eval::set_effect_handler(None);
     match result {
@@ -143,7 +144,7 @@ fn make_handler(prog_args: Vec<String>) -> impl FnMut(&str, &[ast::Expr]) -> Res
     move |name: &str, args: &[ast::Expr]| -> Result<ast::Expr, String> {
         let clk = match args.last() {
             Some(ast::Expr::Ctor(n, a)) if n == "World" && a.len() == 1 => match &a[0] {
-                ast::Expr::IntLit(k) => *k,
+                ast::Expr::IntLit(k) => k.clone(),
                 other => return Err(format!("World clock is not an Int: {:?}", other)),
             },
             _ => return Err(format!("{}: expected a World as the last argument", name)),
@@ -177,7 +178,7 @@ fn make_handler(prog_args: Vec<String>) -> impl FnMut(&str, &[ast::Expr]) -> Res
                     Ok(0) => ctor("None", vec![]), // EOF
                     Ok(_) => match line.bytes().next() {
                         Some(b'q') => ctor("None", vec![]), // quit key
-                        Some(b) => ctor("Some", vec![ast::Expr::IntLit(b as i64)]),
+                        Some(b) => ctor("Some", vec![ast::Expr::IntLit(b.into())]),
                         None => ctor("None", vec![]),
                     },
                     Err(_) => ctor("None", vec![]),
@@ -191,10 +192,10 @@ fn make_handler(prog_args: Vec<String>) -> impl FnMut(&str, &[ast::Expr]) -> Res
             "exit" => {
                 let _ = std::io::stdout().flush();
                 let code = match &args[0] {
-                    ast::Expr::IntLit(n) => *n,
+                    ast::Expr::IntLit(n) => n.to_i32().unwrap_or(2),
                     _ => 0,
                 };
-                std::process::exit(code as i32);
+                std::process::exit(code);
             }
             other => Err(format!(
                 "unknown extern `{}` (eval handler: get_args/read_file/write/write_line/emit/read_key/exit)",
@@ -206,7 +207,7 @@ fn make_handler(prog_args: Vec<String>) -> impl FnMut(&str, &[ast::Expr]) -> Res
 
 // --- small value helpers (build/decode narrow Exprs) -----------------------
 
-fn world(clk: i64) -> ast::Expr {
+fn world(clk: ast::IntLit) -> ast::Expr {
     ctor("World", vec![ast::Expr::IntLit(clk)])
 }
 
@@ -218,7 +219,7 @@ fn ctor(name: &str, args: Vec<ast::Expr>) -> ast::Expr {
 fn str_bytes(s: &str) -> ast::Expr {
     let mut acc = ctor("Nil", vec![]);
     for ch in s.chars().rev() {
-        acc = ctor("Cons", vec![ast::Expr::IntLit(ch as i64), acc]);
+        acc = ctor("Cons", vec![ast::Expr::IntLit((ch as u32).into()), acc]);
     }
     acc
 }
@@ -230,7 +231,7 @@ fn decode_str(e: &ast::Expr) -> String {
     while let ast::Expr::Ctor(n, a) = cur {
         if n == "Cons" && a.len() == 2 {
             if let ast::Expr::IntLit(c) = &a[0] {
-                if let Some(ch) = char::from_u32(*c as u32) {
+                if let Some(ch) = c.to_u32().and_then(char::from_u32) {
                     out.push(ch);
                 }
             }

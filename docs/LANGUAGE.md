@@ -131,7 +131,7 @@ parameter/return positions):
 
 | form                | meaning                              |
 |---------------------|--------------------------------------|
-| `Int`               | arbitrary-precision integer [REVISIT — currently i64] |
+| `Int`               | arbitrary-precision integer (`BigInt` in the bootstrap) |
 | `Symbol`            | interned identifier                  |
 | `Bool`              | user-defined (in stdlib), `True`/`False` ctor |
 | `BareName`          | reference to a declared `type`       |
