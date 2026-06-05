@@ -760,4 +760,244 @@ mod tests {
         let r = eval::eval(&m, &e).expect("evals");
         assert_eq!(r, nctor("None", vec![]));
     }
+
+    // ------------------------------------------------------------------
+    // Primitive conformance: prim.rs::try_apply vs reduce.shard's
+    // try_step_prim, swept over a value matrix.
+    //
+    // These are the TWO primitive tables (eval.shard's interpreter
+    // reuses try_step_prim, so there is no third): the native one the
+    // host applies to stuck calls, and the shard one the object reducer
+    // (proof-side compute/simp) and the hosted interpreter dispatch.
+    // Their "KEEP IN SYNC" contract was only a comment until now; this
+    // sweep makes drift a test failure (ARCHITECTURE_REVIEW finding 5).
+    //
+    // Method: for each (name, args), the native answer is
+    // `prim::try_apply` directly; the object answer is the kernel's
+    // `try_step_prim` evaluated in the VM over the REFLECTED args (the
+    // object-Expr encoding of the values). Both must agree as Options:
+    // Some(reflected value) ↔ (Some <object value>), None ↔ None. An
+    // eval ERROR on the object side means try_step_prim delegated to a
+    // host prim outside its domain (crash where native is stuck) — the
+    // exact divergence class the `/`-on-zero and shift-range bugs were.
+    //
+    // The name lists below are the SPEC. Adding a primitive to either
+    // table without updating them is the drift this test exists to
+    // catch — both tables carry a pointer here.
+    // ------------------------------------------------------------------
+
+    /// The shared two-Int primitives (in both tables, delegating arms).
+    const SHARED_INT2: &[&str] = &[
+        "+", "-", "*", "/", "mod", "tmod", "ediv",
+        "band", "bor", "bxor", "bshl", "bshr",
+        "int_eq", "lt", "le",
+    ];
+
+    /// Object-table-only names (native MUST stay ignorant — a word-prim
+    /// call reaching the native table is a fail-stop UnknownCall, never
+    /// a second implementation). Shapes: two-Int (uwrap/swrap), two-Word,
+    /// Word-and-Int (shifts), one-Word.
+    const OBJECT_ONLY_INT2: &[&str] = &["uwrap", "swrap"];
+    const OBJECT_ONLY_WORD2: &[&str] = &[
+        "wadd", "wsub", "wmul", "wand", "wor", "wxor",
+        "udiv", "urem", "sdiv", "srem",
+        "weq", "ult", "ule", "slt", "sle",
+    ];
+    const OBJECT_ONLY_WORD_INT: &[&str] = &["wshl", "ushr", "sshr"];
+    const OBJECT_ONLY_WORD1: &[&str] = &["wneg", "wnot", "uval", "sval", "wbits", "wwidth"];
+
+    /// The Int value matrix: zero, units, small values, sign mixes,
+    /// shift-range edges (63/64/65, negative), i64 boundaries, and
+    /// past-i64 BigInts (the Farkas-multiplier shape).
+    fn int_matrix() -> Vec<ast::IntLit> {
+        use std::str::FromStr;
+        let mut v: Vec<ast::IntLit> = [0i64, 1, -1, 2, -7, 10, -10, 63, 64, 65, -64]
+            .iter()
+            .map(|&n| ast::IntLit::from(n))
+            .collect();
+        v.push(ast::IntLit::from(i64::MAX));
+        v.push(ast::IntLit::from(i64::MIN));
+        v.push(ast::IntLit::from_str("18446744073709551616").unwrap()); // 2^64
+        v.push(ast::IntLit::from_str("-100000000000000000000000000000007").unwrap());
+        v
+    }
+
+    /// Reflect a native runtime VALUE into the object-Expr encoding the
+    /// kernel reducer matches on: IntLit n ↔ (IntLit n), SymLit s ↔
+    /// (SymLit s), Ctor name args ↔ (Ctor 'name (list …)).
+    fn reflect(e: &ast::Expr) -> ast::Expr {
+        match e {
+            ast::Expr::IntLit(n) => nctor("IntLit", vec![ast::Expr::IntLit(n.clone())]),
+            ast::Expr::SymLit(s) => nctor("SymLit", vec![ast::Expr::SymLit(s.clone())]),
+            ast::Expr::Ctor(name, args) => nctor(
+                "Ctor",
+                vec![
+                    ast::Expr::SymLit(name.clone()),
+                    expr_spine(args.iter().map(reflect).collect()),
+                ],
+            ),
+            other => panic!("reflect: not a value: {other:?}"),
+        }
+    }
+
+    /// A runtime (List X) value from element values.
+    fn expr_spine(items: Vec<ast::Expr>) -> ast::Expr {
+        let mut acc = nctor("Nil", Vec::new());
+        for it in items.into_iter().rev() {
+            acc = nctor("Cons", vec![it, acc]);
+        }
+        acc
+    }
+
+    /// The native answer, lifted to the object encoding for comparison:
+    /// None ↔ (None), Some v ↔ (Some <reflect v>).
+    fn reflect_opt(o: Option<ast::Expr>) -> ast::Expr {
+        match o {
+            None => nctor("None", vec![]),
+            Some(v) => nctor("Some", vec![reflect(&v)]),
+        }
+    }
+
+    /// The object-table answer: `(try_step_prim 'name (list <reflected args>))`
+    /// evaluated in the VM. Err means the reducer itself got stuck on a
+    /// host prim outside its domain — a would-be crash at check time.
+    fn object_apply(
+        m: &ast::Module,
+        name: &str,
+        args: &[ast::Expr],
+    ) -> Result<ast::Expr, String> {
+        let call = ast::Expr::Call(
+            "try_step_prim".into(),
+            vec![
+                ast::Expr::SymLit(name.into()),
+                expr_spine(args.iter().map(reflect).collect()),
+            ],
+        );
+        eval::eval(m, &call).map_err(|e| format!("{e:?}"))
+    }
+
+    /// Sweep one (name, args) point through both tables and demand
+    /// agreement.
+    fn conform(m: &ast::Module, name: &str, args: &[ast::Expr]) {
+        let native = reflect_opt(prim::try_apply(name, args));
+        match object_apply(m, name, args) {
+            Ok(object) => assert_eq!(
+                object, native,
+                "table drift at ({name} {args:?}): object ≠ native"
+            ),
+            Err(e) => panic!(
+                "object reducer CRASHED at ({name} {args:?}) where native is {native:?}: {e}"
+            ),
+        }
+    }
+
+    /// Every shared two-Int primitive agrees across the full pair matrix
+    /// — values AND domains (b=0 divisions, out-of-range shift amounts
+    /// must be None/stuck on BOTH sides, not a crash on one).
+    #[test]
+    fn prim_conformance_shared_int2() {
+        let m = load_kernel();
+        let vals = int_matrix();
+        for name in SHARED_INT2 {
+            for a in &vals {
+                for b in &vals {
+                    let args = [
+                        ast::Expr::IntLit(a.clone()),
+                        ast::Expr::IntLit(b.clone()),
+                    ];
+                    conform(&m, name, &args);
+                }
+            }
+        }
+    }
+
+    /// The shared Symbol primitives agree (sym_eq pairs; the
+    /// chars_of_sym/sym_of_chars round-trip bridge).
+    #[test]
+    fn prim_conformance_shared_sym() {
+        let m = load_kernel();
+        let syms = ["x", "y", "wadd", "_fresh0", "λ→"];
+        for a in syms {
+            for b in syms {
+                let args = [
+                    ast::Expr::SymLit(a.into()),
+                    ast::Expr::SymLit(b.into()),
+                ];
+                conform(&m, "sym_eq", &args);
+            }
+            conform(&m, "chars_of_sym", &[ast::Expr::SymLit(a.into())]);
+            // sym_of_chars over the symbol's own codepoints (round-trip)
+            // and a couple of fixed lists.
+            let cps: Vec<ast::Expr> = a
+                .chars()
+                .map(|c| ast::Expr::IntLit((c as u32).into()))
+                .collect();
+            conform(&m, "sym_of_chars", &[expr_spine(cps)]);
+        }
+        conform(&m, "sym_of_chars", &[expr_spine(vec![])]);
+    }
+
+    /// gen_fresh is in both tables (the hosted checker opens binders
+    /// with it) but is EFFECTFUL — a process-global counter — so only
+    /// Some-ness conforms, never the value.
+    #[test]
+    fn prim_conformance_gen_fresh_someness() {
+        let m = load_kernel();
+        let native = prim::try_apply("gen_fresh", &[]);
+        assert!(matches!(native, Some(ast::Expr::SymLit(_))));
+        let object = object_apply(&m, "gen_fresh", &[]).expect("object gen_fresh evals");
+        match object {
+            ast::Expr::Ctor(some, args) if some == "Some" && args.len() == 1 => {
+                assert!(
+                    matches!(&args[0], ast::Expr::Ctor(n, a) if n == "SymLit" && a.len() == 1),
+                    "object gen_fresh: not a SymLit: {args:?}"
+                );
+            }
+            other => panic!("object gen_fresh: {other:?}"),
+        }
+    }
+
+    /// The deliberate asymmetry: word primitives exist ONLY in the
+    /// object table. Native must return None for every one (fail-stop
+    /// UnknownCall at run time — never a second implementation), while
+    /// the object table reduces them. A name appearing in prim.rs
+    /// breaks this pin on purpose.
+    #[test]
+    fn prim_conformance_word_prims_native_ignorant() {
+        let m = load_kernel();
+        let word = |w: i64, r: i64| {
+            nctor(
+                "Word",
+                vec![ast::Expr::IntLit(w.into()), ast::Expr::IntLit(r.into())],
+            )
+        };
+        let int = |n: i64| ast::Expr::IntLit(n.into());
+        let assert_object_only = |name: &str, args: &[ast::Expr]| {
+            assert_eq!(
+                prim::try_apply(name, args),
+                None,
+                "native table learned the object-only prim {name}"
+            );
+            let object = object_apply(&m, name, args)
+                .unwrap_or_else(|e| panic!("object {name} crashed: {e}"));
+            assert!(
+                matches!(&object, ast::Expr::Ctor(n, _) if n == "Some"),
+                "object table dropped {name}: {object:?}"
+            );
+        };
+        for name in OBJECT_ONLY_INT2 {
+            assert_object_only(name, &[int(8), int(300)]);
+        }
+        for name in OBJECT_ONLY_WORD2 {
+            assert_object_only(name, &[word(8, 200), word(8, 3)]);
+            assert_object_only(name, &[word(8, 200), word(8, 0)]); // division-by-zero profile is TOTAL
+        }
+        for name in OBJECT_ONLY_WORD_INT {
+            assert_object_only(name, &[word(8, 200), int(3)]);
+            assert_object_only(name, &[word(8, 200), int(99)]); // saturating, still total
+        }
+        for name in OBJECT_ONLY_WORD1 {
+            assert_object_only(name, &[word(8, 200)]);
+        }
+    }
 }

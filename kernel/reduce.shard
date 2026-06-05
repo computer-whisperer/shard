@@ -158,9 +158,14 @@
 ;; ARE narrow calls — the Rust runtime intercepts them via the same
 ;; mechanism that powers ordinary in-language arithmetic.
 ;;
-;; KEEP IN SYNC with src/prim.rs. (The word primitives below exist ONLY
-;; here — the native table doesn't know them, so a native-path call
-;; fail-stops as UnknownCall rather than diverging from this table.)
+;; KEEP IN SYNC with src/prim.rs — enforced by the prim conformance
+;; sweep (rust_bootstrap/src/lib.rs, prim_conformance_*): both tables
+;; are swept over a value matrix, so value drift, domain drift (a guard
+;; on one side only), and coverage drift all fail `cargo test`. When
+;; adding a primitive, update the spec lists there too. (The word
+;; primitives below exist ONLY here — the native table doesn't know
+;; them, so a native-path call fail-stops as UnknownCall rather than
+;; diverging from this table; the sweep pins that asymmetry.)
 (fn try_step_prim ((f Symbol) (args (List Expr))) (Option Expr)
   (match args
     ;; Two-Int primitives.
@@ -181,15 +186,22 @@
          (if (int_eq b 0) None (Some (IntLit (ediv a b))))
        (if (sym_eq f (quote band)) (Some (IntLit (band a b)))
        (if (sym_eq f (quote bor)) (Some (IntLit (bor a b)))
-       (if (sym_eq f (quote bxor)) (Some (IntLit (bxor a b)))
-       (if (sym_eq f (quote bshl)) (Some (IntLit (bshl a b)))
-       (if (sym_eq f (quote bshr)) (Some (IntLit (bshr a b)))
-       (if (sym_eq f (quote int_eq)) (Some (bool_as_expr (int_eq a b)))
-       (if (sym_eq f (quote lt)) (Some (bool_as_expr (lt a b)))
-       (if (sym_eq f (quote le)) (Some (bool_as_expr (le a b)))
-       (if (sym_eq f (quote uwrap)) (wp_wrap a b)
-       (if (sym_eq f (quote swrap)) (wp_wrap a b)
-       None))))))))))))))))))
+       (if (sym_eq f (quote bxor))
+         (Some (IntLit (bxor a b)))
+         ;; shift amounts are guarded to [0, 64) — STUCK outside, like
+         ;; the native table's shift_amount guard (prim.rs). Found by
+         ;; the prim conformance sweep (lib.rs): the unguarded arms
+         ;; crashed the reducer where native stays stuck.
+         (if (sym_eq f (quote bshl))
+           (if (le 0 b) (if (lt b 64) (Some (IntLit (bshl a b))) None) None)
+         (if (sym_eq f (quote bshr))
+           (if (le 0 b) (if (lt b 64) (Some (IntLit (bshr a b))) None) None)
+         (if (sym_eq f (quote int_eq)) (Some (bool_as_expr (int_eq a b)))
+         (if (sym_eq f (quote lt)) (Some (bool_as_expr (lt a b)))
+         (if (sym_eq f (quote le)) (Some (bool_as_expr (le a b)))
+         (if (sym_eq f (quote uwrap)) (wp_wrap a b)
+         (if (sym_eq f (quote swrap)) (wp_wrap a b)
+         None))))))))))))))))))
     ;; Two-Word primitives — fixed-width modular ints. A word VALUE is
     ;; (Ctor 'Word (w raw)), canonical: 1 <= w <= 64, 0 <= raw < 2^w.
     ;; Only these primitives produce the ctor (no typedef; the type

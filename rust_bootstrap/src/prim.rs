@@ -25,6 +25,12 @@ use crate::ast::{Expr, IntLit as Int, Symbol};
 /// if `name` is a known primitive and the args fit the expected
 /// shape; `None` otherwise (the call stays stuck, which the
 /// evaluator surfaces as `UnknownCall`).
+///
+/// CONFORMANCE: this table and kernel/reduce.shard's `try_step_prim`
+/// are the two primitive tables (eval.shard's interpreter reuses the
+/// latter). The `prim_conformance_*` tests in lib.rs sweep both over a
+/// value matrix — when adding/removing a name here, update the spec
+/// lists there (SHARED_INT2 / OBJECT_ONLY_*) or the sweep fails.
 pub fn try_apply(name: &str, args: &[Expr]) -> Option<Expr> {
     use Expr::{IntLit, SymLit};
 
