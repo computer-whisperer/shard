@@ -1,0 +1,433 @@
+;;; utf8_classify.shard — slice 3 probe: the word surface on a real program.
+;;;
+;;; A UTF-8 byte classifier written the way a real program would be —
+;;; word comparisons against (uwrap 8 N) constants — with its SPEC
+;;; stated over the Int images (uval ranges) and proven faithful.
+;;;
+;;; Layers:
+;;;   1. BRIDGE LEMMAS: (ult x (uwrap 8 n)) at a known uval range is
+;;;      True/False. Each is word-fact's comparison image + the
+;;;      uwrap8_small identity (the word_facts.shard idiom) + farkas
+;;;      (whose goal matrix covers (lt|le …)=False directly).
+;;;   2. THE MATRIX: one range-faithfulness lemma per byte class —
+;;;      unfold the classifier, rewrite each condition via a bridge
+;;;      lemma (obligations: ground bounds by compute, the range fact
+;;;      by premise/farkas), compute the selected branch.
+;;;   3. COMPOSITION: seq_len rides on the class lemmas.
+;;;   4. LIST LEVEL: all_ascii over (List u8) — induction with words as
+;;;      the element type, case-on a byte test, IH citation.
+;;;
+;;; Ergonomic note: all_ascii tests (lt (uval h) 128) rather than
+;;; (ult h (uwrap 8 128)) — in a RECURSIVE fn the case-hyp is stated
+;;; over the source spelling while simp normalizes (uwrap 8 128) to its
+;;; value, so the hyp rewrite cannot match. utf8_class can use the word
+;;; ops because its conditions are rewritten via lemmas BEFORE any
+;;; reduction touches the constants.
+;;; Expected: 19 passed, 0 failed.
+
+(import "../kernel/stdlib.shard")
+
+;; ============================ the program ====================================
+
+(type ByteClass (BAscii) (BCont) (BLead2) (BLead3) (BLead4) (BInvalid))
+
+;; lead/continuation classification by the standard ranges:
+;;   00..7F ascii, 80..BF continuation, C0..DF 2-byte lead,
+;;   E0..EF 3-byte lead, F0..F7 4-byte lead, F8..FF invalid.
+(fn (utf8_class) ((b u8)) ByteClass
+  (if (ult b (uwrap 8 128)) (BAscii)
+  (if (ule b (uwrap 8 191)) (BCont)
+  (if (ule b (uwrap 8 223)) (BLead2)
+  (if (ule b (uwrap 8 239)) (BLead3)
+  (if (ule b (uwrap 8 247)) (BLead4)
+  (BInvalid)))))))
+
+;; the sequence length a byte announces as a lead (0: not a lead).
+(fn (utf8_seq_len) ((b u8)) Int
+  (match (utf8_class b)
+    ((BAscii) 1)
+    ((BCont) 0)
+    ((BLead2) 2)
+    ((BLead3) 3)
+    ((BLead4) 4)
+    ((BInvalid) 0)))
+
+;; local append (self-contained probe; same shape as std/list's).
+(fn (lapp T) ((xs (List T)) (ys (List T))) (List T)
+  (match xs
+    (Nil ys)
+    ((Cons h t) (Cons h (lapp t ys)))))
+
+(fn (all_ascii) ((xs (List u8))) Bool
+  (match xs
+    (Nil True)
+    ((Cons h t) (if (lt (uval h) 128) (all_ascii t) False))))
+
+;; ============================ bridge lemmas ==================================
+
+;; uval (uwrap 8 n) = n below the modulus — the word_facts.shard idiom.
+(claim uwrap8_small
+  (goal ((n Int)) ((= (le 0 n) True) (= (lt n 256) True))
+    (= (uval (uwrap 8 n)) n))
+  (word-fact
+    (uwrap 8 n)
+    (div-facts
+      n
+      256
+      q
+      (have (= (le 0 q) True) (by farkas (list 256 1 0 0 0 0 -1 0 1))
+        (have (= (le q 0) True) (by farkas (list 256 0 1 0 0 0 1 1 0 0))
+          (fin-split
+            q
+            (premise 8)
+            (premise 9)
+            ((case 0
+               (steps
+                 ((rewrite (premise 5) lr rhs false ())
+                  (rewrite (premise 2) lr lhs false ()))
+                 (by lia (list)))))))))))
+
+;; (ult x (uwrap 8 n)) is True when uval x < n  (n in range).
+(claim u8_ult_const_true
+  (goal ((x u8) (n Int))
+    ((= (le 0 n) True) (= (lt n 256) True) (= (lt (uval x) n) True))
+    (= (ult x (uwrap 8 n)) True))
+  (word-fact
+    (ult x (uwrap 8 n))
+    (steps
+      ((rewrite (premise 3) lr lhs false ()))
+      (rewrite-with
+        (lemma uwrap8_small)
+        lr
+        lhs
+        ((inst n n))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        (steps ((rewrite (premise 2) lr lhs true ())) refl)))))
+
+;; (ult x (uwrap 8 n)) is False when n <= uval x.
+(claim u8_ult_const_false
+  (goal ((x u8) (n Int))
+    ((= (le 0 n) True) (= (lt n 256) True) (= (le n (uval x)) True))
+    (= (ult x (uwrap 8 n)) False))
+  (word-fact
+    (ult x (uwrap 8 n))
+    (steps
+      ((rewrite (premise 3) lr lhs false ()))
+      (rewrite-with
+        (lemma uwrap8_small)
+        lr
+        lhs
+        ((inst n n))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        (by farkas (list 1 0 0 1 0))))))
+
+;; (ule x (uwrap 8 n)) is True when uval x <= n.
+(claim u8_ule_const_true
+  (goal ((x u8) (n Int))
+    ((= (le 0 n) True) (= (lt n 256) True) (= (le (uval x) n) True))
+    (= (ule x (uwrap 8 n)) True))
+  (word-fact
+    (ule x (uwrap 8 n))
+    (steps
+      ((rewrite (premise 3) lr lhs false ()))
+      (rewrite-with
+        (lemma uwrap8_small)
+        lr
+        lhs
+        ((inst n n))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        (steps ((rewrite (premise 2) lr lhs true ())) refl)))))
+
+;; (ule x (uwrap 8 n)) is False when n < uval x.
+(claim u8_ule_const_false
+  (goal ((x u8) (n Int))
+    ((= (le 0 n) True) (= (lt n 256) True) (= (lt n (uval x)) True))
+    (= (ule x (uwrap 8 n)) False))
+  (word-fact
+    (ule x (uwrap 8 n))
+    (steps
+      ((rewrite (premise 3) lr lhs false ()))
+      (rewrite-with
+        (lemma uwrap8_small)
+        lr
+        lhs
+        ((inst n n))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        (by farkas (list 1 0 0 1 0))))))
+
+;; ============================ the matrix =====================================
+
+;; 00..7F → ascii.
+(claim class_ascii
+  (goal ((b u8)) ((= (le (uval b) 127) True)) (= (utf8_class b) (BAscii)))
+  (steps
+    ((unfold utf8_class lhs))
+    (rewrite-with
+      (lemma u8_ult_const_true)
+      lr
+      lhs
+      ((inst x b) (inst n 128))
+      ((steps ((compute lhs)) refl)
+       (steps ((compute lhs)) refl)
+       (by farkas (list 1 1)))
+      (steps ((compute lhs)) refl))))
+
+;; 80..BF → continuation.
+(claim class_cont
+  (goal ((b u8)) ((= (le 128 (uval b)) True) (= (le (uval b) 191) True))
+    (= (utf8_class b) (BCont)))
+  (steps
+    ((unfold utf8_class lhs))
+    (rewrite-with
+      (lemma u8_ult_const_false)
+      lr
+      lhs
+      ((inst x b) (inst n 128))
+      ((steps ((compute lhs)) refl)
+       (steps ((compute lhs)) refl)
+       (steps ((rewrite (premise 0) lr lhs true ())) refl))
+      (rewrite-with
+        (lemma u8_ule_const_true)
+        lr
+        lhs
+        ((inst x b) (inst n 191))
+        ((steps ((compute lhs)) refl)
+         (steps ((compute lhs)) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        (steps ((compute lhs)) refl)))))
+
+;; C0..DF → 2-byte lead.
+(claim class_lead2
+  (goal ((b u8)) ((= (le 192 (uval b)) True) (= (le (uval b) 223) True))
+    (= (utf8_class b) (BLead2)))
+  (steps
+    ((unfold utf8_class lhs))
+    (rewrite-with
+      (lemma u8_ult_const_false)
+      lr
+      lhs
+      ((inst x b) (inst n 128))
+      ((steps ((compute lhs)) refl)
+       (steps ((compute lhs)) refl)
+       (by farkas (list 1 1 0)))
+      (rewrite-with
+        (lemma u8_ule_const_false)
+        lr
+        lhs
+        ((inst x b) (inst n 191))
+        ((steps ((compute lhs)) refl)
+         (steps ((compute lhs)) refl)
+         (by farkas (list 1 1 0)))
+        (rewrite-with
+          (lemma u8_ule_const_true)
+          lr
+          lhs
+          ((inst x b) (inst n 223))
+          ((steps ((compute lhs)) refl)
+           (steps ((compute lhs)) refl)
+           (steps ((rewrite (premise 1) lr lhs true ())) refl))
+          (steps ((compute lhs)) refl))))))
+
+;; E0..EF → 3-byte lead.
+(claim class_lead3
+  (goal ((b u8)) ((= (le 224 (uval b)) True) (= (le (uval b) 239) True))
+    (= (utf8_class b) (BLead3)))
+  (steps
+    ((unfold utf8_class lhs))
+    (rewrite-with
+      (lemma u8_ult_const_false)
+      lr
+      lhs
+      ((inst x b) (inst n 128))
+      ((steps ((compute lhs)) refl)
+       (steps ((compute lhs)) refl)
+       (by farkas (list 1 1 0)))
+      (rewrite-with
+        (lemma u8_ule_const_false)
+        lr
+        lhs
+        ((inst x b) (inst n 191))
+        ((steps ((compute lhs)) refl)
+         (steps ((compute lhs)) refl)
+         (by farkas (list 1 1 0)))
+        (rewrite-with
+          (lemma u8_ule_const_false)
+          lr
+          lhs
+          ((inst x b) (inst n 223))
+          ((steps ((compute lhs)) refl)
+           (steps ((compute lhs)) refl)
+           (by farkas (list 1 1 0)))
+          (rewrite-with
+            (lemma u8_ule_const_true)
+            lr
+            lhs
+            ((inst x b) (inst n 239))
+            ((steps ((compute lhs)) refl)
+             (steps ((compute lhs)) refl)
+             (steps ((rewrite (premise 1) lr lhs true ())) refl))
+            (steps ((compute lhs)) refl)))))))
+
+;; F0..F7 → 4-byte lead.
+(claim class_lead4
+  (goal ((b u8)) ((= (le 240 (uval b)) True) (= (le (uval b) 247) True))
+    (= (utf8_class b) (BLead4)))
+  (steps
+    ((unfold utf8_class lhs))
+    (rewrite-with
+      (lemma u8_ult_const_false)
+      lr
+      lhs
+      ((inst x b) (inst n 128))
+      ((steps ((compute lhs)) refl)
+       (steps ((compute lhs)) refl)
+       (by farkas (list 1 1 0)))
+      (rewrite-with
+        (lemma u8_ule_const_false)
+        lr
+        lhs
+        ((inst x b) (inst n 191))
+        ((steps ((compute lhs)) refl)
+         (steps ((compute lhs)) refl)
+         (by farkas (list 1 1 0)))
+        (rewrite-with
+          (lemma u8_ule_const_false)
+          lr
+          lhs
+          ((inst x b) (inst n 223))
+          ((steps ((compute lhs)) refl)
+           (steps ((compute lhs)) refl)
+           (by farkas (list 1 1 0)))
+          (rewrite-with
+            (lemma u8_ule_const_false)
+            lr
+            lhs
+            ((inst x b) (inst n 239))
+            ((steps ((compute lhs)) refl)
+             (steps ((compute lhs)) refl)
+             (by farkas (list 1 1 0)))
+            (rewrite-with
+              (lemma u8_ule_const_true)
+              lr
+              lhs
+              ((inst x b) (inst n 247))
+              ((steps ((compute lhs)) refl)
+               (steps ((compute lhs)) refl)
+               (steps ((rewrite (premise 1) lr lhs true ())) refl))
+              (steps ((compute lhs)) refl))))))))
+
+;; F8..FF → invalid. The upper end needs no premise: a u8 can't exceed 255.
+(claim class_invalid
+  (goal ((b u8)) ((= (le 248 (uval b)) True)) (= (utf8_class b) (BInvalid)))
+  (steps
+    ((unfold utf8_class lhs))
+    (rewrite-with
+      (lemma u8_ult_const_false)
+      lr
+      lhs
+      ((inst x b) (inst n 128))
+      ((steps ((compute lhs)) refl)
+       (steps ((compute lhs)) refl)
+       (by farkas (list 1 1)))
+      (rewrite-with
+        (lemma u8_ule_const_false)
+        lr
+        lhs
+        ((inst x b) (inst n 191))
+        ((steps ((compute lhs)) refl)
+         (steps ((compute lhs)) refl)
+         (by farkas (list 1 1)))
+        (rewrite-with
+          (lemma u8_ule_const_false)
+          lr
+          lhs
+          ((inst x b) (inst n 223))
+          ((steps ((compute lhs)) refl)
+           (steps ((compute lhs)) refl)
+           (by farkas (list 1 1)))
+          (rewrite-with
+            (lemma u8_ule_const_false)
+            lr
+            lhs
+            ((inst x b) (inst n 239))
+            ((steps ((compute lhs)) refl)
+             (steps ((compute lhs)) refl)
+             (by farkas (list 1 1)))
+            (rewrite-with
+              (lemma u8_ule_const_false)
+              lr
+              lhs
+              ((inst x b) (inst n 247))
+              ((steps ((compute lhs)) refl)
+               (steps ((compute lhs)) refl)
+               (by farkas (list 1 1)))
+              (steps ((compute lhs)) refl))))))))
+
+;; ============================ composition ====================================
+
+;; an ascii byte announces a 1-byte sequence — rides on class_ascii.
+(claim seq_len_ascii
+  (goal ((b u8)) ((= (le (uval b) 127) True)) (= (utf8_seq_len b) 1))
+  (steps
+    ((unfold utf8_seq_len lhs))
+    (rewrite-with
+      (lemma class_ascii)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+      (steps ((compute lhs)) refl))))
+
+;; ============================ ground sanity ==================================
+
+(claim g_ascii
+  (goal () () (= (utf8_class (uwrap 8 65)) (BAscii)))
+  (steps ((compute lhs)) refl))
+
+(claim g_cont
+  (goal () () (= (utf8_class (uwrap 8 160)) (BCont)))
+  (steps ((compute lhs)) refl))
+
+(claim g_lead2
+  (goal () () (= (utf8_class (uwrap 8 200)) (BLead2)))
+  (steps ((compute lhs)) refl))
+
+(claim g_lead3
+  (goal () () (= (utf8_class (uwrap 8 230)) (BLead3)))
+  (steps ((compute lhs)) refl))
+
+(claim g_lead4
+  (goal () () (= (utf8_class (uwrap 8 244)) (BLead4)))
+  (steps ((compute lhs)) refl))
+
+(claim g_invalid
+  (goal () () (= (utf8_class (uwrap 8 250)) (BInvalid)))
+  (steps ((compute lhs)) refl))
+
+;; ============================ list level =====================================
+
+;; all_ascii distributes over append: induction over (List u8) — words
+;; as the element type — with a Bool case split on the byte test and an
+;; IH citation.
+(claim all_ascii_append
+  (goal ((xs (List u8)) (ys (List u8))) ()
+    (= (all_ascii (lapp xs ys)) (if (all_ascii xs) (all_ascii ys) False)))
+  (induct xs
+    ((case Nil (steps ((simp both)) refl))
+     (case Cons
+       (h t)
+       (steps
+         ((simp both))
+         (case-on (lt (uval h) 128) Bool
+           ((case True
+              (steps
+                ((rewrite (hyp 0) lr both true ())
+                 (simp both)
+                 (rewrite (hyp 1) lr lhs true ()))
+                refl))
+            (case False
+              (steps ((rewrite (hyp 0) lr both true ()) (simp both)) refl)))))))))
