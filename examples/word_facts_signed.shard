@@ -1,0 +1,172 @@
+;;; word_facts_signed.shard — the SIGNED + BITWISE word proof surface (slice 4).
+;;;
+;;; word-fact now serves signed words and the bit-level ops:
+;;;   signed atoms      sval ranges (-2^(k-1) <= sval e <= 2^(k-1)-1)
+;;;   signed arith      the shifted-mod image:
+;;;                       sval e = mod ((op …) + H) M - H
+;;;                     (congruent mod M to the raw computation,
+;;;                     range-exact — the two's-complement wrap formula);
+;;;                     mod-elimination works exactly as in the unsigned
+;;;                     idiom (word_facts.shard), just shifted by H.
+;;;   wnot              exact and LINEAR both ways:
+;;;                       uval: (M-1) - uval a    sval: -(sval a) - 1
+;;;   wand/wor/wxor     uval e = (band|bor|bxor) (uval a) (uval b)
+;;;   wshl at literal J uval e = mod (* (uval a) 2^J) M
+;;;   ushr/sshr at J    the floor-division triple with the RESULT as
+;;;                     quotient: v a = 2^J * (v e) + mod (v a) 2^J —
+;;;                     farkas-linear, no fin-split needed for bounds
+;;;   slt/sle, weq      comparison images over sval (weq falls back to
+;;;                     sval when the unsigned image is ill-typed)
+;;; Expected: 13 passed, 0 failed.
+
+(import "../kernel/stdlib.shard")
+
+;; ---- signed ranges (the flipped slice-2 rejection) --------------------------
+
+(claim i8_sval_max
+  (goal ((x i8)) () (= (le (sval x) 127) True))
+  (word-fact x (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+
+;; ---- wnot: exact linear images ----------------------------------------------
+
+(claim i8_wnot_image
+  (goal ((x i8)) () (= (sval (wnot x)) (- (- 0 (sval x)) 1)))
+  (word-fact (wnot x) (steps ((rewrite (premise 0) lr lhs false ())) refl)))
+
+(claim u8_wnot_image
+  (goal ((x u8)) () (= (uval (wnot x)) (- 255 (uval x))))
+  (word-fact (wnot x) (steps ((rewrite (premise 0) lr lhs false ())) refl)))
+
+;; ---- comparison images --------------------------------------------------------
+
+(claim i8_slt_image
+  (goal ((a i8) (b i8)) ((= (slt a b) True)) (= (lt (sval a) (sval b)) True))
+  (word-fact
+    (slt a b)
+    (steps
+      ((rewrite (premise 1) rl lhs false ())
+       (rewrite (premise 0) lr lhs false ()))
+      refl)))
+
+;; weq's image falls back to sval for signed operands.
+(claim i8_weq_image
+  (goal ((a i8) (b i8)) () (= (weq a b) (int_eq (sval a) (sval b))))
+  (word-fact (weq a b) (steps ((rewrite (premise 0) lr lhs false ())) refl)))
+
+;; ---- signed wrap arithmetic: the shifted-mod idiom ---------------------------
+;; Premise layout: p0-p1 the no-overflow premises, p2-p5 a/b sval
+;; ranges, p6 the wadd image + p7-p8 its ranges, p9-p11 the Euclidean
+;; triple at the shifted sum, p12-p13 the have'd q bounds, p14 the
+;; mod-elimination bridge.
+(claim i8_add_nowrap
+  (goal ((a i8) (b i8))
+    ((= (le -128 (+ (sval a) (sval b))) True)
+     (= (le (+ (sval a) (sval b)) 127) True))
+    (= (sval (wadd a b)) (+ (sval a) (sval b))))
+  (word-fact
+    a
+    (word-fact
+      b
+      (word-fact
+        (wadd a b)
+        (div-facts
+          (+ (+ (sval a) (sval b)) 128)
+          256
+          q
+          (have (= (le 0 q) True)
+            (by farkas (list 256 1 0 0 0 0 0 0 0 0 -1 0 1))
+            (have (= (le q 0) True)
+              (by farkas (list 256 0 1 0 0 0 0 0 0 0 1 1 0 0))
+              (fin-split
+                q
+                (premise 12)
+                (premise 13)
+                ((case 0
+                   (have
+                     (=
+                       (mod (+ (+ (sval a) (sval b)) 128) 256)
+                       (+ (+ (sval a) (sval b)) 128))
+                     (steps
+                       ((rewrite (premise 9) lr rhs false ()))
+                       (by lia (list)))
+                     (steps
+                       ((rewrite (premise 6) lr lhs false ())
+                        (rewrite (premise 14) lr lhs false ()))
+                       (by lia (list))))))))))))))
+
+;; ---- swrap below the signed bounds is the identity ---------------------------
+(claim i8_swrap_small
+  (goal ((n Int)) ((= (le -128 n) True) (= (le n 127) True))
+    (= (sval (swrap 8 n)) n))
+  (word-fact
+    (swrap 8 n)
+    (div-facts
+      (+ n 128)
+      256
+      q
+      (have (= (le 0 q) True) (by farkas (list 256 1 0 0 0 0 -1 0 1))
+        (have (= (le q 0) True) (by farkas (list 256 0 1 0 0 0 1 1 0 0))
+          (fin-split
+            q
+            (premise 8)
+            (premise 9)
+            ((case 0
+               (have (= (mod (+ n 128) 256) (+ n 128))
+                 (steps ((rewrite (premise 5) lr rhs false ())) (by lia (list)))
+                 (steps
+                   ((rewrite (premise 2) lr lhs false ())
+                    (rewrite (premise 10) lr lhs false ()))
+                   (by lia (list))))))))))))
+
+;; ---- the signed-neg image shape ----------------------------------------------
+(claim i8_wneg_image
+  (goal ((x i8)) ()
+    (= (sval (wneg x)) (- (mod (+ (- 0 (sval x)) 128) 256) 128)))
+  (word-fact (wneg x) (steps ((rewrite (premise 0) lr lhs false ())) refl)))
+
+;; ---- bitwise images -----------------------------------------------------------
+
+(claim u8_and_image
+  (goal ((a u8) (b u8)) () (= (uval (wand a b)) (band (uval a) (uval b))))
+  (word-fact (wand a b) (steps ((rewrite (premise 0) lr lhs false ())) refl)))
+
+(claim g_bitwise
+  (goal () () (= (uval (wxor (wand (uwrap 8 12) (uwrap 8 10)) (uwrap 8 5))) 13))
+  (steps ((compute lhs)) refl))
+
+;; ---- shifts -------------------------------------------------------------------
+
+;; below 2^4, a left shift by 4 IS multiplication by 16.
+(claim u8_shl_mul
+  (goal ((x u8)) ((= (le (uval x) 15) True))
+    (= (uval (wshl x 4)) (* (uval x) 16)))
+  (word-fact
+    x
+    (word-fact
+      (wshl x 4)
+      (div-facts
+        (* (uval x) 16)
+        256
+        q
+        (have (= (le 0 q) True) (by farkas (list 256 0 16 0 0 0 0 -1 0 1))
+          (have (= (le q 0) True) (by farkas (list 256 16 0 0 0 0 0 1 1 0 0))
+            (fin-split
+              q
+              (premise 9)
+              (premise 10)
+              ((case 0
+                 (steps
+                   ((rewrite (premise 6) lr rhs false ())
+                    (rewrite (premise 3) lr lhs false ()))
+                   (by lia (list))))))))))))
+
+;; a right shift by 4 of a byte is bounded by 15 — the floor-division
+;; triple is farkas-linear, so NO fin-split is needed.
+(claim u8_ushr_bound
+  (goal ((x u8)) () (= (le (uval (ushr x 4)) 15) True))
+  (word-fact x (word-fact (ushr x 4) (by farkas (list 16 0 1 1 1 0 0 0)))))
+
+;; the sshr triple: floor division toward -inf over sval.
+(claim i8_sshr_floor
+  (goal ((x i8)) () (= (sval x) (+ (* 4 (sval (sshr x 2))) (mod (sval x) 4))))
+  (word-fact (sshr x 2) (steps ((rewrite (premise 0) lr lhs false ())) refl)))

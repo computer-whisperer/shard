@@ -1402,12 +1402,36 @@
 ;; linearly. Every fact also passes the cut type gate (defense in depth;
 ;; it is what rejects signed/generic-width misuse).
 ;;
-;; word-fact facts by target shape (premise order as listed):
-;;   (wadd a b) etc.  uval e = mod ((+|-|*) (uval a) (uval b)) 2^k,
-;;                    0 <= uval e,  uval e <= 2^k - 1
-;;   (uwrap K n)      uval e = mod n 2^k,  and the two range facts
-;;   (weq|ult|ule a b)  e = (int_eq|lt|le) (uval a) (uval b)  [any width]
-;;   anything else word-typed at a concrete unsigned width: ranges only
+;; word-fact facts by target shape (premise order as listed; M = 2^k,
+;; H = 2^(k-1); the signed image is `sval`, ranges -H <= sval e <= H-1).
+;; UNSIGNED (e at a concrete (Word k Unsigned)):
+;;   (wadd a b) etc.  uval e = mod ((+|-|*) (uval a) (uval b)) M + ranges
+;;   (wneg a)         uval e = mod (- 0 (uval a)) M            + ranges
+;;   (wnot a)         uval e = (M-1) - (uval a)                + ranges
+;;   (wand|wor|wxor)  uval e = (band|bor|bxor) (uval a) (uval b) + ranges
+;;   (uwrap K n)      uval e = mod n M                         + ranges
+;;   (wshl a J)       J a literal in [0,k): uval e = mod (* (uval a) 2^J) M
+;;                    + ranges  (other J: ranges only)
+;;   (ushr a J)       J a literal in [0,k): the Euclidean triple with the
+;;                    RESULT as quotient — uval a = 2^J*(uval e) + mod (uval a) 2^J,
+;;                    mod ranges, then uval e ranges  (5 facts)
+;; SIGNED (e at a concrete (Word k Signed)) — the shifted-mod image
+;; (congruent mod M to the raw computation, range-exact):
+;;   (wadd a b) etc.  sval e = mod ((+|-|*) (sval a) (sval b) + H) M - H + ranges
+;;   (wneg a)         sval e = mod ((- 0 (sval a)) + H) M - H  + ranges
+;;   (wnot a)         sval e = (- 0 (sval a)) - 1   [exact, linear] + ranges
+;;   (swrap K n)      sval e = mod (n + H) M - H               + ranges
+;;   (sshr a J)       J a literal in [0,k): the floor-division triple —
+;;                    sval a = 2^J*(sval e) + mod (sval a) 2^J, mod ranges,
+;;                    sval e ranges  (5 facts)
+;; COMPARISONS (width-generic — true at every width):
+;;   (ult|ule a b)    e = (lt|le) (uval a) (uval b)
+;;   (slt|sle a b)    e = (lt|le) (sval a) (sval b)
+;;   (weq a b)        e = int_eq over uval (unsigned args) or sval (signed)
+;; anything else word-typed at a concrete width: ranges only (uval or
+;; sval per the signedness). sdiv/srem facts are NOT emitted (their
+;; RISC-V edge cases make the unconditional images non-linear); use
+;; ground compute or future conditional facts.
 ;;
 ;; div-facts (n, literal d >= 1, fresh q): the Euclidean triple
 ;;   n = d*q + mod n d,  0 <= mod n d,  mod n d <= d-1
@@ -1436,32 +1460,158 @@
         (Ctor (quote True) Nil))
       Nil)))
 
+(fn wf_sval ((e Expr)) Expr (Call (quote sval) (Cons e Nil)))
+
+;; range of (sval e) at width k: -2^(k-1) <= sval e <= 2^(k-1) - 1.
+(fn wf_sranges ((e Expr) (k Int)) (List Equation)
+  (let ((h (tc_pow2 (- k 1))))
+    (Cons
+      (Equation (wf_le (IntLit (- 0 h)) (wf_sval e)) (Ctor (quote True) Nil))
+      (Cons
+        (Equation (wf_le (wf_sval e) (IntLit (- h 1))) (Ctor (quote True) Nil))
+        Nil))))
+
 ;; uval e = mod ((op) (uval a) (uval b)) 2^k — the wrapping-binop image.
 (fn wf_binop_eq ((e Expr) (op Symbol) (a Expr) (b Expr) (k Int)) Equation
   (Equation
     (wf_uval e)
     (wf_mod (Call op (Cons (wf_uval a) (Cons (wf_uval b) Nil))) (tc_pow2 k))))
 
+;; the SIGNED image of a wrapped Int result: mod (inner + H) M - H.
+;; Congruent mod M to the raw computation, and lands in [-H, H-1] —
+;; the standard two's-complement wrap formula.
+(fn wf_signed_wrap ((inner Expr) (k Int)) Expr
+  (let ((h (tc_pow2 (- k 1))))
+    (Call
+      (quote -)
+      (Cons
+        (wf_mod (Call (quote +) (Cons inner (Cons (IntLit h) Nil))) (tc_pow2 k))
+        (Cons (IntLit h) Nil)))))
+
+(fn wf_sbinop_eq ((e Expr) (op Symbol) (a Expr) (b Expr) (k Int)) Equation
+  (Equation
+    (wf_sval e)
+    (wf_signed_wrap (Call op (Cons (wf_sval a) (Cons (wf_sval b) Nil))) k)))
+
+;; the wrapping binops are S-generic: emit the uval image at an
+;; unsigned width, else the shifted-mod sval image at a signed width.
 (fn wf_wrap_facts
   ((m Module) (params (List Param)) (e Expr) (op Symbol) (args (List Expr)))
   (Option (List Equation))
   (match args
     ((Cons a (Cons b Nil))
      (match (tc_uword_width m params e)
-       (None None)
-       ((Some k) (Some (Cons (wf_binop_eq e op a b k) (wf_ranges e k))))))
+       ((Some k) (Some (Cons (wf_binop_eq e op a b k) (wf_ranges e k))))
+       (None
+         (match (tc_sword_width m params e)
+           (None None)
+           ((Some k) (Some (Cons (wf_sbinop_eq e op a b k) (wf_sranges e k))))))))
     (_ None)))
 
-;; e = (int_eq|lt|le) (uval a) (uval b) — true at EVERY width, so no
-;; concreteness needed; the cut gate enforces unsigned-word args.
-(fn wf_cmp_facts ((e Expr) (op Symbol) (args (List Expr)))
+;; wneg: uval e = mod (- 0 (uval a)) M  /  sval e = shifted-mod image.
+(fn wf_neg_facts ((m Module) (params (List Param)) (e Expr) (args (List Expr)))
+  (Option (List Equation))
+  (match args
+    ((Cons a Nil)
+     (match (tc_uword_width m params e)
+       ((Some k)
+        (Some
+          (Cons
+            (Equation
+              (wf_uval e)
+              (wf_mod
+                (Call (quote -) (Cons (IntLit 0) (Cons (wf_uval a) Nil)))
+                (tc_pow2 k)))
+            (wf_ranges e k))))
+       (None
+         (match (tc_sword_width m params e)
+           (None None)
+           ((Some k)
+            (Some
+              (Cons
+                (Equation
+                  (wf_sval e)
+                  (wf_signed_wrap
+                    (Call (quote -) (Cons (IntLit 0) (Cons (wf_sval a) Nil)))
+                    k))
+                (wf_sranges e k))))))))
+    (_ None)))
+
+;; wnot is EXACT AND LINEAR in both readings:
+;;   unsigned: uval e = (M-1) - uval a       (wp: raw' = (M-1) - raw)
+;;   signed:   sval e = (- 0 (sval a)) - 1   (two's complement ¬x = -x-1)
+(fn wf_not_facts ((m Module) (params (List Param)) (e Expr) (args (List Expr)))
+  (Option (List Equation))
+  (match args
+    ((Cons a Nil)
+     (match (tc_uword_width m params e)
+       ((Some k)
+        (Some
+          (Cons
+            (Equation
+              (wf_uval e)
+              (Call
+                (quote -)
+                (Cons (IntLit (- (tc_pow2 k) 1)) (Cons (wf_uval a) Nil))))
+            (wf_ranges e k))))
+       (None
+         (match (tc_sword_width m params e)
+           (None None)
+           ((Some k)
+            (Some
+              (Cons
+                (Equation
+                  (wf_sval e)
+                  (Call
+                    (quote -)
+                    (Cons
+                      (Call (quote -) (Cons (IntLit 0) (Cons (wf_sval a) Nil)))
+                      (Cons (IntLit 1) Nil))))
+                (wf_sranges e k))))))))
+    (_ None)))
+
+;; wand/wor/wxor: the raw IS the unsigned value, so the Int bitwise
+;; prims are the exact image. Unsigned only (the signed bitwise image
+;; needs the wbits bridge — deferred); signed targets fall to ranges.
+(fn wf_bit_facts
+  ((m Module) (params (List Param)) (e Expr) (op Symbol) (args (List Expr)))
   (Option (List Equation))
   (match args
     ((Cons a (Cons b Nil))
-     (Some
-       (Cons
-         (Equation e (Call op (Cons (wf_uval a) (Cons (wf_uval b) Nil))))
-         Nil)))
+     (match (tc_uword_width m params e)
+       (None (wf_range_facts m params e))
+       ((Some k)
+        (Some
+          (Cons
+            (Equation
+              (wf_uval e)
+              (Call op (Cons (wf_uval a) (Cons (wf_uval b) Nil))))
+            (wf_ranges e k))))))
+    (_ None)))
+
+;; comparison image over the given value reader — width-generic.
+(fn wf_cmp_eq ((e Expr) (op Symbol) (rd Symbol) (a Expr) (b Expr)) Equation
+  (Equation
+    e
+    (Call op (Cons (Call rd (Cons a Nil)) (Cons (Call rd (Cons b Nil)) Nil)))))
+
+;; ult/ule: uval image. slt/sle: sval image. The cut gate enforces the
+;; matching signedness via the op sigs.
+(fn wf_cmp_facts ((e Expr) (op Symbol) (rd Symbol) (args (List Expr)))
+  (Option (List Equation))
+  (match args
+    ((Cons a (Cons b Nil)) (Some (Cons (wf_cmp_eq e op rd a b) Nil)))
+    (_ None)))
+
+;; weq is S-generic: try the uval image; if the gate rejects it (signed
+;; operands), the sval image.
+(fn wf_weq_facts ((m Module) (params (List Param)) (e Expr) (args (List Expr)))
+  (Option (List Equation))
+  (match args
+    ((Cons a (Cons b Nil))
+     (let ((uf (Cons (wf_cmp_eq e (quote int_eq) (quote uval) a b) Nil)))
+       (if (wf_facts_ok m params uf) (Some uf)
+       (Some (Cons (wf_cmp_eq e (quote int_eq) (quote sval) a b) Nil)))))
     (_ None)))
 
 (fn wf_uwrap_facts
@@ -1476,11 +1626,107 @@
           (Cons (Equation (wf_uval e) (wf_mod n (tc_pow2 k))) (wf_ranges e k))))))
     (_ None)))
 
+(fn wf_swrap_facts
+  ((m Module) (params (List Param)) (e Expr) (args (List Expr)))
+  (Option (List Equation))
+  (match args
+    ((Cons _ (Cons n Nil))
+     (match (tc_sword_width m params e)
+       (None None)
+       ((Some k)
+        (Some
+          (Cons (Equation (wf_sval e) (wf_signed_wrap n k)) (wf_sranges e k))))))
+    (_ None)))
+
+;; wshl at a LITERAL amount in [0, k): uval e = mod (* (uval a) 2^J) M.
+;; Any other shape (symbolic / out-of-range / signed) → ranges only.
+(fn wf_shl_facts ((m Module) (params (List Param)) (e Expr) (args (List Expr)))
+  (Option (List Equation))
+  (match args
+    ((Cons a (Cons (IntLit j) Nil))
+     (match (tc_uword_width m params e)
+       (None (wf_range_facts m params e))
+       ((Some k)
+        (if (le 0 j)
+          (if (lt j k)
+            (Some
+              (Cons
+                (Equation
+                  (wf_uval e)
+                  (wf_mod
+                    (Call
+                      (quote *)
+                      (Cons (wf_uval a) (Cons (IntLit (tc_pow2 j)) Nil)))
+                    (tc_pow2 k)))
+                (wf_ranges e k)))
+            (Some (wf_ranges e k)))
+          (Some (wf_ranges e k))))))
+    (_ (wf_range_facts m params e))))
+
+;; the Euclidean/floor-division triple for a right shift at literal J in
+;; [0, k): the RESULT is the quotient —
+;;   (rd a) = 2^J * (rd e) + mod (rd a) 2^J, plus the mod range facts,
+;; then the result's own ranges. rd = uval (ushr) or sval (sshr; floor
+;; division and the Euclidean remainder agree — that is what wp_* does).
+(fn wf_shr_triple
+  ((e Expr) (a Expr) (j Int) (rd Symbol) (ranges (List Equation)))
+  (List Equation)
+  (let ((p (tc_pow2 j)) (va (Call rd (Cons a Nil))) (ve (Call rd (Cons e Nil))))
+    (Cons
+      (Equation
+        va
+        (Call
+          (quote +)
+          (Cons
+            (Call (quote *) (Cons (IntLit p) (Cons ve Nil)))
+            (Cons (wf_mod va p) Nil))))
+      (Cons
+        (Equation (wf_le (IntLit 0) (wf_mod va p)) (Ctor (quote True) Nil))
+        (Cons
+          (Equation
+            (wf_le (wf_mod va p) (IntLit (- p 1)))
+            (Ctor (quote True) Nil))
+          ranges)))))
+
+(fn wf_ushr_facts ((m Module) (params (List Param)) (e Expr) (args (List Expr)))
+  (Option (List Equation))
+  (match args
+    ((Cons a (Cons (IntLit j) Nil))
+     (match (tc_uword_width m params e)
+       (None None)
+       ((Some k)
+        (if (le 0 j)
+          (if (lt j k) (Some (wf_shr_triple e a j (quote uval) (wf_ranges e k)))
+          (Some (wf_ranges e k)))
+          (Some (wf_ranges e k))))))
+    (_ (wf_range_facts m params e))))
+
+(fn wf_sshr_facts ((m Module) (params (List Param)) (e Expr) (args (List Expr)))
+  (Option (List Equation))
+  (match args
+    ((Cons a (Cons (IntLit j) Nil))
+     (match (tc_sword_width m params e)
+       (None None)
+       ((Some k)
+        (if (le 0 j)
+          (if (lt j k)
+            (Some (wf_shr_triple e a j (quote sval) (wf_sranges e k)))
+            (Some (wf_sranges e k)))
+          (Some (wf_sranges e k))))))
+    (_ (wf_srange_facts m params e))))
+
+;; default: ranges at the term's signedness (uval or sval).
 (fn wf_range_facts ((m Module) (params (List Param)) (e Expr))
   (Option (List Equation))
   (match (tc_uword_width m params e)
+    ((Some k) (Some (wf_ranges e k)))
+    (None (wf_srange_facts m params e))))
+
+(fn wf_srange_facts ((m Module) (params (List Param)) (e Expr))
+  (Option (List Equation))
+  (match (tc_sword_width m params e)
     (None None)
-    ((Some k) (Some (wf_ranges e k)))))
+    ((Some k) (Some (wf_sranges e k)))))
 
 (fn word_facts ((m Module) (params (List Param)) (e Expr))
   (Option (List Equation))
@@ -1489,11 +1735,22 @@
      (if (sym_eq f (quote wadd)) (wf_wrap_facts m params e (quote +) args)
      (if (sym_eq f (quote wsub)) (wf_wrap_facts m params e (quote -) args)
      (if (sym_eq f (quote wmul)) (wf_wrap_facts m params e (quote *) args)
-     (if (sym_eq f (quote weq)) (wf_cmp_facts e (quote int_eq) args)
-     (if (sym_eq f (quote ult)) (wf_cmp_facts e (quote lt) args)
-     (if (sym_eq f (quote ule)) (wf_cmp_facts e (quote le) args)
+     (if (sym_eq f (quote wneg)) (wf_neg_facts m params e args)
+     (if (sym_eq f (quote wnot)) (wf_not_facts m params e args)
+     (if (sym_eq f (quote wand)) (wf_bit_facts m params e (quote band) args)
+     (if (sym_eq f (quote wor)) (wf_bit_facts m params e (quote bor) args)
+     (if (sym_eq f (quote wxor)) (wf_bit_facts m params e (quote bxor) args)
+     (if (sym_eq f (quote weq)) (wf_weq_facts m params e args)
+     (if (sym_eq f (quote ult)) (wf_cmp_facts e (quote lt) (quote uval) args)
+     (if (sym_eq f (quote ule)) (wf_cmp_facts e (quote le) (quote uval) args)
+     (if (sym_eq f (quote slt)) (wf_cmp_facts e (quote lt) (quote sval) args)
+     (if (sym_eq f (quote sle)) (wf_cmp_facts e (quote le) (quote sval) args)
      (if (sym_eq f (quote uwrap)) (wf_uwrap_facts m params e args)
-     (wf_range_facts m params e)))))))))
+     (if (sym_eq f (quote swrap)) (wf_swrap_facts m params e args)
+     (if (sym_eq f (quote wshl)) (wf_shl_facts m params e args)
+     (if (sym_eq f (quote ushr)) (wf_ushr_facts m params e args)
+     (if (sym_eq f (quote sshr)) (wf_sshr_facts m params e args)
+     (wf_range_facts m params e))))))))))))))))))))
     (_ (wf_range_facts m params e))))
 
 ;; every emitted fact must pass the cut type gate.
