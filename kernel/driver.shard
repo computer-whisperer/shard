@@ -94,7 +94,11 @@
   ;; rejected: an ill-typed axiom is not admitted, an ill-typed requirement is
   ;; not seeded, an ill-typed claim is not proof-checked. (The theory backends
   ;; are only sound for well-typed terms; see types.shard's header.)
-  (COTypeFail Symbol (List Int)))
+  (COTypeFail Symbol (List Int))
+  ;; COLedger: a bin's trust-ledger block, pre-rendered. Informative — it
+  ;; bumps no counts; the acceptance-failing checks (trusts/externs/unmet)
+  ;; stay separate COFail outcomes.
+  (COLedger (List Int)))
 
 ;; theory threaded + PENDING requirements (name→goal, seeded by `requirement`,
 ;; consumed by `fulfills`) + outcomes accumulated in REVERSE (caller reverses).
@@ -102,7 +106,77 @@
 ;; seed time (so a malformed goal fails at the contract, not at the distant
 ;; fulfillment), then reused directly by `fulfills`.
 (type PendReq (PendReq Symbol Goal))
-(type RunState (RunState Theory (List PendReq) (List ClaimOutcome)))
+
+;; ---------------------------------------------------------------------------
+;; Trust ledger — who cites whom. `(Lemma name)` is the ONLY cross-claim
+;; citation form in the proof AST (Hyp/HypName/Premise are sequent-local and
+;; no ByTheory backend reads the theory), so the citation set of an ACCEPTED
+;; proof is exactly its syntactic Lemma mentions: every step of an accepted
+;; proof ran, so every mention was resolved and used. cites_of_proof walks
+;; the same desugared Proof value check_sequent verified.
+;;
+;; Entry kinds: 'claim | 'fulfills — interior, proven in this run;
+;; 'operational | 'bridging | 'untagged — own axioms (this run's TCB);
+;; 'granted — a granted interface's requirement (upstream-PROVEN);
+;; 'upstream — a granted interface's axiom (upstream-TRUSTED).
+;; Focus-skipped decls record EMPTY cites — focus runs are unsound and
+;; banner-marked anyway; the ledger is only meaningful on acceptance runs.
+;; ---------------------------------------------------------------------------
+(type LedgerEntry (LedgerEntry Symbol Symbol (List Symbol)))
+; name, kind, direct cites
+
+(fn cop_er ((er EqRef)) (List Symbol)
+  (match er
+    ((Lemma s) (Cons s Nil))
+    (_ Nil)))
+
+(fn cop_step ((s Step)) (List Symbol)
+  (match s
+    ((Rewrite er _ _ _ _) (cop_er er))
+    (_ Nil)))
+
+(fn cop_steps ((ss (List Step))) (List Symbol)
+  (match ss
+    (Nil Nil)
+    ((Cons s rest) (sym_concat (cop_step s) (cop_steps rest)))))
+
+(fn cites_of_proof ((p Proof)) (List Symbol)
+  (match p
+    ((Refl) Nil)
+    ((Steps ss k) (sym_concat (cop_steps ss) (cites_of_proof k)))
+    ((Induct _ cs) (cop_cases cs))
+    ((Induct2 _ cs) (cop_cases cs))
+    ((CaseOn _ _ cs) (cop_cases cs))
+    ((WfInduct _ k) (cites_of_proof k))
+    ((RewriteWith er _ _ _ subs k)
+     (sym_concat (cop_er er) (sym_concat (cop_proofs subs) (cites_of_proof k))))
+    ((Absurd er) (cop_er er))
+    ((ByTheory _ _) Nil)
+    ((FinSplit _ lo hi fcs)
+     (sym_concat (cop_er lo) (sym_concat (cop_er hi) (cop_fincases fcs))))
+    ((Have _ pf k) (sym_concat (cites_of_proof pf) (cites_of_proof k)))
+    ((WordFact _ k) (cites_of_proof k))
+    ((DivFacts _ _ _ k) (cites_of_proof k))))
+
+(fn cop_proofs ((ps (List Proof))) (List Symbol)
+  (match ps
+    (Nil Nil)
+    ((Cons p rest) (sym_concat (cites_of_proof p) (cop_proofs rest)))))
+
+(fn cop_cases ((cs (List Case))) (List Symbol)
+  (match cs
+    (Nil Nil)
+    ((Cons (Case _ p) rest) (sym_concat (cites_of_proof p) (cop_cases rest)))
+    ((Cons (CaseB _ _ p) rest) (sym_concat (cites_of_proof p) (cop_cases rest)))))
+
+(fn cop_fincases ((fcs (List FinCase))) (List Symbol)
+  (match fcs
+    (Nil Nil)
+    ((Cons (FinCase _ p) rest)
+     (sym_concat (cites_of_proof p) (cop_fincases rest)))))
+
+(type RunState
+  (RunState Theory (List PendReq) (List ClaimOutcome) (List LedgerEntry)))
 
 ;; Look up a pending requirement's (already un-reflected) goal by name.
 (fn lookup_req ((name Symbol) (pend (List PendReq))) (Option Goal)
@@ -157,7 +231,7 @@
     (Nil st)
     ((Cons d rest)
      (match st
-       ((RunState th pend acc)
+       ((RunState th pend acc led)
         (match d
           ;; (axiom NAME (goal …)): parse goal to native, admit without proof.
           ((DAxiom a)
@@ -174,7 +248,8 @@
                        (ax_name a)
                        "could not parse axiom goal (proof DSL)"
                        Nil)
-                     acc))
+                     acc)
+                   led)
                  rest
                  target
                  focus))
@@ -184,7 +259,11 @@
                 ((Some msg)
                  (run_decls
                    m
-                   (RunState th pend (Cons (COTypeFail (ax_name a) msg) acc))
+                   (RunState
+                     th
+                     pend
+                     (Cons (COTypeFail (ax_name a) msg) acc)
+                     led)
                    rest
                    target
                    focus))
@@ -196,7 +275,10 @@
                         (Axiom (ax_name a) (close_goal_for_storage g))
                         th)
                       pend
-                      (Cons (COAxiom (ax_name a)) acc))
+                      (Cons (COAxiom (ax_name a)) acc)
+                      ;; leaf entry: kind set by the reader ('granted /
+                      ;; 'upstream for granted sources, else the surface tag).
+                      (Cons (LedgerEntry (ax_name a) (ax_kind a) Nil) led))
                     rest
                     target
                     focus))))))
@@ -217,7 +299,8 @@
                        (claim_name nc)
                        "could not parse goal (proof DSL)"
                        Nil)
-                     acc))
+                     acc)
+                   led)
                  rest
                  target
                  focus))
@@ -232,7 +315,8 @@
                    (RunState
                      th
                      pend
-                     (Cons (COTypeFail (claim_name nc) msg) acc))
+                     (Cons (COTypeFail (claim_name nc) msg) acc)
+                     led)
                    rest
                    target
                    focus))
@@ -246,7 +330,10 @@
                           (Proven (claim_name nc) (close_goal_for_storage g))
                           th)
                         pend
-                        acc)
+                        acc
+                        (Cons
+                          (LedgerEntry (claim_name nc) (quote claim) Nil)
+                          led))
                       rest
                       target
                       focus)
@@ -266,7 +353,8 @@
                                 (claim_name nc)
                                 "could not parse proof (proof DSL)"
                                 Nil)
-                              acc))
+                              acc)
+                            led)
                           rest
                           target
                           focus))
@@ -293,7 +381,13 @@
                                        p
                                        (claim_name nc)
                                        target))
-                                   acc))
+                                   acc)
+                                 (Cons
+                                   (LedgerEntry
+                                     (claim_name nc)
+                                     (quote claim)
+                                     (cites_of_proof p))
+                                   led))
                                rest
                                target
                                focus)
@@ -313,7 +407,8 @@
                                        p
                                        (claim_name nc)
                                        target))
-                                   acc))
+                                   acc)
+                                 led)
                                rest
                                target
                                focus))))))))))))
@@ -333,7 +428,8 @@
                        (req_name r)
                        "could not parse requirement goal (proof DSL)"
                        Nil)
-                     acc))
+                     acc)
+                   led)
                  rest
                  target
                  focus))
@@ -345,14 +441,18 @@
                 ((Some msg)
                  (run_decls
                    m
-                   (RunState th pend (Cons (COTypeFail (req_name r) msg) acc))
+                   (RunState
+                     th
+                     pend
+                     (Cons (COTypeFail (req_name r) msg) acc)
+                     led)
                    rest
                    target
                    focus))
                 (None
                   (run_decls
                     m
-                    (RunState th (Cons (PendReq (req_name r) g) pend) acc)
+                    (RunState th (Cons (PendReq (req_name r) g) pend) acc led)
                     rest
                     target
                     focus))))))
@@ -372,7 +472,8 @@
                        (ful_name fu)
                        "no requirement with this name in scope (is the contract imported?)"
                        Nil)
-                     acc))
+                     acc)
+                   led)
                  rest
                  target
                  focus))
@@ -386,7 +487,8 @@
                       (Proven (ful_name fu) (close_goal_for_storage g))
                       th)
                     pend
-                    acc)
+                    acc
+                    (Cons (LedgerEntry (ful_name fu) (quote fulfills) Nil) led))
                   rest
                   target
                   focus)
@@ -406,7 +508,8 @@
                             (ful_name fu)
                             "could not parse proof (proof DSL)"
                             Nil)
-                          acc))
+                          acc)
+                        led)
                       rest
                       target
                       focus))
@@ -425,7 +528,13 @@
                                (COPass
                                  (ful_name fu)
                                  (claim_trace m th g p (ful_name fu) target))
-                               acc))
+                               acc)
+                             (Cons
+                               (LedgerEntry
+                                 (ful_name fu)
+                                 (quote fulfills)
+                                 (cites_of_proof p))
+                               led))
                            rest
                            target
                            focus)
@@ -439,7 +548,8 @@
                                  (ful_name fu)
                                  (failure_detail m th (lift_sequent g) p)
                                  (claim_trace m th g p (ful_name fu) target))
-                               acc))
+                               acc)
+                             led)
                            rest
                            target
                            focus))))))))))))))))
@@ -469,7 +579,7 @@
      (match (parse_decls src ctors granted)
        (None
          (match st
-           ((RunState th pend acc)
+           ((RunState th pend acc led)
             (run_srcs
               m
               rest
@@ -479,7 +589,8 @@
                 pend
                 (Cons
                   (COFail (quote __decls__) (parse_diag src ctors k) Nil)
-                  acc))
+                  acc)
+                led)
               target
               focus
               (+ k 1)))))
@@ -570,7 +681,10 @@
 
 ;; ---- trusts: must EQUAL the module's own (axiom) decls (its real TCB) -------
 ;; Every module-declared axiom must be listed (no hidden trust); every listed
-;; name must be one of them (no phantom / proven-listed-as-trusted).
+;; name must be one of them (no phantom / proven-listed-as-trusted). The own-
+;; axiom set comes from the trust ledger (kinds operational/bridging/untagged),
+;; i.e. exactly the own axioms ADMITTED this run; the ledger block additionally
+;; reports which of them the bin's requirements transitively cite.
 (fn missing_trust ((own (List Symbol)) (trusts (List Symbol)))
   (List ClaimOutcome)
   (match own
@@ -656,33 +770,204 @@
        ((Some forms)
         (sym_concat (extern_names_of_forms forms) (own_externs_of_srcs rest))))))))
 
-;; the module's OWN axiom decls = `(axiom …)` in its ungranted sources (a granted
-;; dependency interface's axioms are proven upstream, not this binary's TCB).
-(fn axiom_names_of_forms ((forms (List SExpr))) (List Symbol)
-  (match forms
-    (Nil Nil)
-    ((Cons f rest)
-     (if (is_axiom_form f)
-       (match (goalonly_of_form f)
-         (None (axiom_names_of_forms rest))
-         ((Some (Pair name _)) (Cons name (axiom_names_of_forms rest))))
-       (axiom_names_of_forms rest)))))
+;; ---- the trust ledger: citation closure, call graph, rendered block --------
+;; The driver accumulated a LedgerEntry per ADMITTED decl (see RunState).
+;; Here each bin closes its `requires` over the citation DAG and its entry fn
+;; over the run-mode call graph, and renders the result. The own-axiom set the
+;; trusts check consumes is derived from the SAME ledger (kind = operational /
+;; bridging / untagged) — the old raw-form text re-scan is gone.
 
-(fn own_axioms_of_srcs ((srcs (List (Pair Bool (List Int))))) (List Symbol)
-  (match srcs
+(fn led_lookup ((name Symbol) (led (List LedgerEntry))) (Option LedgerEntry)
+  (match led
+    (Nil None)
+    ((Cons (LedgerEntry n k cs) rest)
+     (if (sym_eq n name) (Some (LedgerEntry n k cs)) (led_lookup name rest)))))
+
+;; transitive closure over the citation DAG: every name reachable from `work`.
+;; A name with no ledger entry (an unmet requirement — the run already fails)
+;; stays in `visited` as a leaf.
+(fn led_close
+  ((work (List Symbol)) (visited (List Symbol)) (led (List LedgerEntry)))
+  (List Symbol)
+  (match work
+    (Nil visited)
+    ((Cons n rest)
+     (if (sym_in n visited) (led_close rest visited led)
+     (match (led_lookup n led)
+       (None (led_close rest (Cons n visited) led))
+       ((Some (LedgerEntry _ _ cs))
+        (led_close (sym_concat cs rest) (Cons n visited) led)))))))
+
+;; the names among `names` whose ledger kind is one of `kinds`.
+(fn led_filter
+  ((names (List Symbol)) (led (List LedgerEntry)) (kinds (List Symbol)))
+  (List Symbol)
+  (match names
     (Nil Nil)
-    ((Cons (Pair granted src) rest)
-     (if granted (own_axioms_of_srcs rest)
-     (match (read_all src)
-       (None (own_axioms_of_srcs rest))
-       ((Some forms)
-        (sym_concat (axiom_names_of_forms forms) (own_axioms_of_srcs rest))))))))
+    ((Cons n rest)
+     (match (led_lookup n led)
+       (None (led_filter rest led kinds))
+       ((Some (LedgerEntry _ k _))
+        (if (sym_in k kinds) (Cons n (led_filter rest led kinds))
+        (led_filter rest led kinds)))))))
+
+(fn own_ax_kinds () (List Symbol)
+  (list (quote operational) (quote bridging) (quote untagged)))
+
+;; every OWN axiom this run admitted (granted/upstream kinds excluded) —
+;; the set (bin trusts) must equal.
+(fn led_own_axioms ((led (List LedgerEntry))) (List Symbol)
+  (match led
+    (Nil Nil)
+    ((Cons (LedgerEntry n k _) rest)
+     (if (sym_in k (own_ax_kinds)) (Cons n (led_own_axioms rest))
+     (led_own_axioms rest)))))
+
+;; ---- run-mode call-graph closure. Narrow is FIRST-ORDER (no fn values; a
+;; callee is always a Call by name), so reachability from the entry fn over
+;; the module's bodies is exact, not an approximation. Externs have no body —
+;; they are leaves; the reachable extern surface is closure ∩ declared.
+(fn calls_of_expr ((e Expr)) (List Symbol)
+  (match e
+    ((Call f args) (Cons f (calls_of_list args)))
+    ((Ctor _ args) (calls_of_list args))
+    ((Match s arms) (sym_concat (calls_of_expr s) (calls_of_arms arms)))
+    ((Let bs body) (sym_concat (calls_of_list bs) (calls_of_expr body)))
+    ((If c t e2)
+     (sym_concat
+       (calls_of_expr c)
+       (sym_concat (calls_of_expr t) (calls_of_expr e2))))
+    (_ Nil)))
+
+(fn calls_of_list ((es (List Expr))) (List Symbol)
+  (match es
+    (Nil Nil)
+    ((Cons h t) (sym_concat (calls_of_expr h) (calls_of_list t)))))
+
+(fn calls_of_arms ((arms (List Arm))) (List Symbol)
+  (match arms
+    (Nil Nil)
+    ((Cons (Arm _ body) rest)
+     (sym_concat (calls_of_expr body) (calls_of_arms rest)))))
+
+(fn call_close ((work (List Symbol)) (visited (List Symbol)) (m Module))
+  (List Symbol)
+  (match work
+    (Nil visited)
+    ((Cons n rest)
+     (if (sym_in n visited) (call_close rest visited m)
+     (match m
+       ((Module _ _ _ trie)
+        (match (trie_lookup n trie)
+          (None (call_close rest (Cons n visited) m))  ; prim / extern / sig
+          ((Some (FnDef _ _ _ body))
+           (call_close
+             (sym_concat (calls_of_expr body) rest)
+             (Cons n visited)
+             m)))))))))
+
+(fn syms_inter ((xs (List Symbol)) (ys (List Symbol))) (List Symbol)
+  (match xs
+    (Nil Nil)
+    ((Cons h t) (if (sym_in h ys) (Cons h (syms_inter t ys)) (syms_inter t ys)))))
+
+(fn syms_minus ((xs (List Symbol)) (ys (List Symbol))) (List Symbol)
+  (match xs
+    (Nil Nil)
+    ((Cons h t) (if (sym_in h ys) (syms_minus t ys) (Cons h (syms_minus t ys))))))
+
+;; ---- ledger rendering -------------------------------------------------------
+(fn led_nl () (List Int) (Cons 10 Nil))
+
+;; "name [kind]" — the kind tag, for axiom leaves.
+(fn led_ax_item ((n Symbol) (led (List LedgerEntry))) (List Int)
+  (match (led_lookup n led)
+    (None (chars_of_sym n))
+    ((Some (LedgerEntry _ k _))
+     (append_int
+       (chars_of_sym n)
+       (append_int " [" (append_int (chars_of_sym k) "]"))))))
+
+(fn led_ax_items ((ns (List Symbol)) (led (List LedgerEntry))) (List Int)
+  (match ns
+    (Nil "(none)")
+    ((Cons n Nil) (led_ax_item n led))
+    ((Cons n rest)
+     (append_int (led_ax_item n led) (append_int ", " (led_ax_items rest led))))))
+
+(fn led_names ((ns (List Symbol))) (List Int)
+  (match ns
+    (Nil "(none)")
+    ((Cons n Nil) (chars_of_sym n))
+    ((Cons n rest)
+     (append_int (chars_of_sym n) (append_int ", " (led_names rest))))))
+
+(fn led_line ((label (List Int)) (body (List Int))) (List Int)
+  (append_int
+    "  "
+    (append_int label (append_int ": " (append_int body (led_nl))))))
+
+;; a flag line — rendered only when non-empty.
+(fn led_line_opt ((label (List Int)) (ns (List Symbol))) (List Int)
+  (match ns
+    (Nil Nil)
+    (_ (led_line label (led_names ns)))))
+
+;; the trust-ledger block for one bin: what this artifact's acceptance
+;; transitively rests on. `reach` = citation closure of its requirements;
+;; `calls` = run-mode call closure of its entry fn. Informative only — the
+;; acceptance-failing checks (trusts/externs/unmet) stay separate.
+(fn ledger_block
+  ((b Bin) (led (List LedgerEntry)) (own_ext (List Symbol)) (m Module))
+  (List Int)
+  (match b
+    ((Bin name entry externs trusts requires)
+     (let ((reach (led_close requires Nil led)))
+       (let ((calls (call_close (Cons entry Nil) Nil m)))
+         (append_int
+           "LEDGER "
+           (append_int
+             (chars_of_sym name)
+             (append_int
+               (led_nl)
+               (append_int
+                 (led_line
+                   "axioms (transitively cited)"
+                   (led_ax_items (led_filter reach led (own_ax_kinds)) led))
+                 (append_int
+                   (led_line
+                     "upstream axioms (granted-source, trusted)"
+                     (led_names (led_filter reach led (list (quote upstream)))))
+                   (append_int
+                     (led_line
+                       "granted (upstream-proven)"
+                       (led_names (led_filter reach led (list (quote granted)))))
+                     (append_int
+                       (led_line
+                         "lemmas (proven, interior)"
+                         (show_nat
+                           (len_syms
+                             (led_filter
+                               reach
+                               led
+                               (list (quote claim) (quote fulfills))))))
+                       (append_int
+                         (led_line
+                           "externs (reachable from entry)"
+                           (led_names (syms_inter own_ext calls)))
+                         (append_int
+                           (led_line_opt
+                             "externs (declared, unreachable)"
+                             (syms_minus own_ext calls))
+                           (led_line_opt
+                             "own axioms uncited by this bin"
+                             (syms_minus (led_own_axioms led) reach))))))))))))))))
 
 (fn bin_report
   ((b Bin)
    (th Theory)
    (m Module)
-   (own_ax (List Symbol))
+   (led (List LedgerEntry))
    (own_ext (List Symbol)))
   (List ClaimOutcome)
   (match b
@@ -690,24 +975,28 @@
      (oc_concat
        (Cons (COBin name (len_syms requires) (count_met requires th)) Nil)
        (oc_concat
-         (entry_check entry m)
+         (Cons (COLedger (ledger_block b led own_ext m)) Nil)
          (oc_concat
-           (trusts_check trusts own_ax)
-           (oc_concat (externs_check externs own_ext) (unmet_fails requires th))))))))
+           (entry_check entry m)
+           (oc_concat
+             (trusts_check trusts (led_own_axioms led))
+             (oc_concat
+               (externs_check externs own_ext)
+               (unmet_fails requires th)))))))))
 
 (fn bin_reports
   ((bins (List Bin))
    (th Theory)
    (m Module)
-   (own_ax (List Symbol))
+   (led (List LedgerEntry))
    (own_ext (List Symbol)))
   (List ClaimOutcome)
   (match bins
     (Nil Nil)
     ((Cons b rest)
      (oc_concat
-       (bin_report b th m own_ax own_ext)
-       (bin_reports rest th m own_ax own_ext)))))
+       (bin_report b th m led own_ext)
+       (bin_reports rest th m led own_ext)))))
 
 (fn bin_concat ((a (List Bin)) (b (List Bin))) (List Bin)
   (match a
@@ -743,16 +1032,12 @@
    (target Symbol)
    (focus Symbol))
   (List ClaimOutcome)
-  (match (run_srcs m srcs ctors (RunState TheoryEmpty Nil Nil) target focus 1)
-    ((RunState th pend acc)
+  (match
+    (run_srcs m srcs ctors (RunState TheoryEmpty Nil Nil Nil) target focus 1)
+    ((RunState th pend acc led)
      (oc_concat
        (rev_outcomes acc Nil)
-       (bin_reports
-         (bins_of_srcs srcs)
-         th
-         m
-         (own_axioms_of_srcs srcs)
-         (own_externs_of_srcs srcs))))))
+       (bin_reports (bins_of_srcs srcs) th m led (own_externs_of_srcs srcs))))))
 
 ;; build_module only reads types/fns/externs (it skips claim/requirement/…), so
 ;; it neither needs nor sees the granted tag — strip to raw bytes for it.

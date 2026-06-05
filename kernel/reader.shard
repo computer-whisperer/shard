@@ -925,13 +925,49 @@
     (_ None)))
 
 ;; ---- axiom / requirement (goal-only decls) --------------------------------
-(type Ax (Ax Symbol SExpr))  ; axiom decl: name, goal-sexpr
+;; An axiom carries a trust-ledger KIND alongside its goal:
+;;   'operational | 'bridging — author-tagged via (axiom NAME (kind K) (goal …))
+;;   'untagged                — own axiom with no (kind …) clause yet
+;;   'granted                 — a granted interface's requirement (upstream-PROVEN)
+;;   'upstream                — a granted interface's axiom (upstream-TRUSTED)
+;; The last two are set by collect_decls, never written in surface syntax.
+(type Ax (Ax Symbol Symbol SExpr))  ; axiom decl: name, kind, goal-sexpr
 (fn ax_name ((a Ax)) Symbol
   (match a
-    ((Ax n g) n)))
+    ((Ax n k g) n)))
+(fn ax_kind ((a Ax)) Symbol
+  (match a
+    ((Ax n k g) k)))
 (fn ax_goal ((a Ax)) SExpr
   (match a
-    ((Ax n g) g)))
+    ((Ax n k g) g)))
+
+;; the author-taggable kinds (ledger-internal kinds are not surface syntax).
+(fn ax_kind_ok ((k Symbol)) Bool
+  (if (sym_eq k (quote operational)) True (sym_eq k (quote bridging))))
+
+;; (axiom NAME GOAL) | (axiom NAME (kind operational|bridging) GOAL) → Ax.
+;; An unrecognized kind clause is a MALFORMED decl (hard stream failure).
+(fn ax_of_form ((f SExpr)) (Option Ax)
+  (match f
+    ((SList (Cons _ (Cons (SSym name) (Cons goalS Nil))))
+     (Some (Ax name (quote untagged) goalS)))
+    ((SList
+       (Cons
+         _
+         (Cons
+           (SSym name)
+           (Cons (SList (Cons (SSym kw) (Cons (SSym k) Nil))) (Cons goalS Nil)))))
+     (if (sym_eq kw (quote kind))
+       (if (ax_kind_ok k) (Some (Ax name k goalS)) None)
+       None))
+    (_ None)))
+
+;; re-kind a granted source's axiom: whatever the upstream author tagged, the
+;; CONSUMER inherits it as an upstream trust (the upstream module's TCB).
+(fn ax_as_upstream ((a Ax)) Ax
+  (match a
+    ((Ax n _ g) (Ax n (quote upstream) g))))
 
 (type Req (Req Symbol SExpr))  ; requirement decl: name, goal-sexpr
 (fn req_name ((r Req)) Symbol
@@ -1031,12 +1067,14 @@
             (None None)
             ((Some ds) (Some (Cons (DClaim c) ds))))))
      (if (is_axiom_form f)
-       (match (goalonly_of_form f)
+       (match (ax_of_form f)
          (None None)
-         ((Some (Pair name goalS))
+         ((Some a)
           (match (collect_decls rest ctors granted)
             (None None)
-            ((Some ds) (Some (Cons (DAxiom (Ax name goalS)) ds))))))
+            ((Some ds)
+             (if granted (Some (Cons (DAxiom (ax_as_upstream a)) ds))  ; upstream-trusted
+             (Some (Cons (DAxiom a) ds)))))))
      (if (is_requirement_form f)
        (match (goalonly_of_form f)
          (None None)
@@ -1044,8 +1082,10 @@
           (match (collect_decls rest ctors granted)
             (None None)
             ((Some ds)
-             (if granted (Some (Cons (DAxiom (Ax name goalS)) ds))  ; granted interface → axiom
-             (Some (Cons (DReq (Req name goalS)) ds)))))))
+             (if granted
+               ;; granted interface → axiom, upstream-PROVEN (kind 'granted)
+               (Some (Cons (DAxiom (Ax name (quote granted) goalS)) ds))
+               (Some (Cons (DReq (Req name goalS)) ds)))))))
      (if (is_fulfills_form f)
        (match (ful_of_form f)
          (None None)
@@ -1203,7 +1243,7 @@
             (None (Some f))
             ((Some _) (pd_bad_decl rest ctors)))
         (if (sym_eq h (quote axiom))
-          (match (goalonly_of_form f)
+          (match (ax_of_form f)
             (None (Some f))
             ((Some _) (pd_bad_decl rest ctors)))
         (if (sym_eq h (quote requirement))

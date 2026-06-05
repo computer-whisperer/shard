@@ -289,7 +289,7 @@ Feature checklist (✓ = shipped in v2; → = next):
 | `shardfmt` — gate-contracted formatter; whole tree canonical | ✓ | tools |
 | Defunctionalized higher-order (compiles away) | →     |        |
 | Mutual recursion + mutual induction     | →        |        |
-| Audit ledger tool (the `(bin …)` trusts/requires report is the first cut) | → | |
+| Transitive trust ledger (per-bin: cited axioms by kind, granted facts, reachable externs) | ✓ | contracts |
 | **shard → wasm/x86 compiler** (retires `rust_bootstrap/`) | → |   |
 
 Each `→` row is also captured in [docs/REVISIT.md](docs/REVISIT.md)
@@ -418,6 +418,13 @@ a `(fulfills NAME PROOF)` in the implementation discharges it, and a
 declares an executable whose acceptance contract is its requires list —
 `check` reports each requirement MET or UNMET, and the `trusts` list
 names the extern bolt axioms that are that binary's trust surface.
+Each bin also gets a transitive TRUST LEDGER block: the axioms its
+requirements' proofs transitively cite (tagged `(kind operational)` /
+`(kind bridging)` on the axiom, else `[untagged]`), the upstream-trusted
+and upstream-proven facts pulled in through granted interfaces, and the
+externs actually reachable from its entry fn (exact — narrow is
+first-order), with flag lines for dead trust and unreachable declared
+externs. See `examples/trust_ledger.shard` for the pinned shape.
 Review attention concentrates on the `mod.req.shard` files and the
 reviewed spec vocabulary they import; implementations and proofs are
 fungible behind those surfaces.
