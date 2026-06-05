@@ -445,7 +445,12 @@
                            focus))))))))))))))))
 
 ;; Run a whole file list (imports first, then targets), threading theory.
-;; An unparseable file is skipped (the Rust harness pre-validates parsing).
+;; A source whose decl stream fails to parse (e.g. a claim missing its proof)
+;; is a HARD failure: every decl in that source would otherwise vanish
+;; outcome-less — accepted-by-absence. The source is re-scanned by parse_diag
+;; (reader.shard) to name the malformed declaration; `k` is the source ordinal
+;; for that message. (The Rust harness pre-validates only LEXICAL parsing —
+;; decl shape is checked nowhere else.)
 ;; Each source is tagged `(Pair granted src)`: `granted` marks a dependency
 ;; module's INTERFACE (its requirements are admitted as axioms, not re-imposed
 ;; as obligations — see collect_decls, reader.shard).
@@ -455,15 +460,38 @@
    (ctors (List Symbol))
    (st RunState)
    (target Symbol)
-   (focus Symbol))
+   (focus Symbol)
+   (k Int))
   RunState
   (match srcs
     (Nil st)
     ((Cons (Pair granted src) rest)
      (match (parse_decls src ctors granted)
-       (None (run_srcs m rest ctors st target focus))
+       (None
+         (match st
+           ((RunState th pend acc)
+            (run_srcs
+              m
+              rest
+              ctors
+              (RunState
+                th
+                pend
+                (Cons
+                  (COFail (quote __decls__) (parse_diag src ctors k) Nil)
+                  acc))
+              target
+              focus
+              (+ k 1)))))
        ((Some ds)
-        (run_srcs m rest ctors (run_decls m st ds target focus) target focus))))))
+        (run_srcs
+          m
+          rest
+          ctors
+          (run_decls m st ds target focus)
+          target
+          focus
+          (+ k 1)))))))
 
 ;; ---- bin acceptance reporting ---------------------------------------------
 ;; A `(bin …)` groups requirement names into an artifact's acceptance contract.
@@ -715,7 +743,7 @@
    (target Symbol)
    (focus Symbol))
   (List ClaimOutcome)
-  (match (run_srcs m srcs ctors (RunState TheoryEmpty Nil Nil) target focus)
+  (match (run_srcs m srcs ctors (RunState TheoryEmpty Nil Nil) target focus 1)
     ((RunState th pend acc)
      (oc_concat
        (rev_outcomes acc Nil)

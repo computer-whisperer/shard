@@ -263,6 +263,99 @@
                       env
                       opened_premises)))))))))))))
 
+;; ---- type-gate diagnosis (failure path ONLY) --------------------------------
+;; The kernel collapses every step failure to None/False; these re-run the
+;; checker's own gate fns to NAME the reason — same pattern as the word-fact
+;; arm (shared checks, so the diagnosis cannot diverge from the verdict).
+
+;; the first failing site's gate message across a multi-site rewrite.
+(fn site_gate_msg
+  ((m Module)
+   (sparams (List Param))
+   (cited_params (List Param))
+   (pat_vars (List Symbol))
+   (openings (List Expr))
+   (envs (List Env)))
+  (Option (List Int))
+  (match envs
+    (Nil None)
+    ((Cons env rest)
+     (match (tc_check_site m sparams cited_params pat_vars openings env)
+       ((Some msg) (Some msg))
+       (None (site_gate_msg m sparams cited_params pat_vars openings rest))))))
+
+;; why a (Rewrite …) STEP failed — mirrors apply_step's Rewrite arm link by
+;; link: unresolved citation / conditional lemma / bad inst name / no match /
+;; the citation TYPE GATE (tc_check_sites), whose message is recovered here.
+(fn rewrite_fail_reason
+  ((m Module)
+   (th Theory)
+   (seq Sequent)
+   (er EqRef)
+   (dir Dir)
+   (side Side)
+   (all Bool)
+   (insts (List Inst)))
+  (List Int)
+  (match (resolve_eq er seq th)
+    (None "unresolved citation")
+    ((Some (Goal cited_params cited_premises cited_eq))
+     (match cited_premises
+       ((Cons _ _) "cited goal has premises — use rewrite-with")
+       (Nil
+         (if (all_insts_named insts cited_params)
+           (match (split_params_by_insts cited_params insts)
+             ((Pair openings pat_vars)
+              (match
+                (apply_rewrite
+                  pat_vars
+                  (open_eq_with (reverse_exprs openings) cited_eq)
+                  dir
+                  side
+                  all
+                  (seq_eq seq))
+                (None "no match")
+                ((Some (Pair envs _))
+                 (match
+                   (site_gate_msg
+                     m
+                     (seq_params seq)
+                     cited_params
+                     pat_vars
+                     openings
+                     envs)
+                   ((Some msg) (append_int "TYPE GATE: " msg))
+                   (None "no match"))))))
+           "citation: an inst names a binder the cited goal does not have"))))))
+
+(fn step_fail_reason ((m Module) (th Theory) (seq Sequent) (s Step)) (List Int)
+  (match s
+    ((Rewrite er dir side all insts)
+     (rewrite_fail_reason m th seq er dir side all insts))
+    (_ "no match")))
+
+;; the checker's RewriteWith citation gates, re-run on a SUCCESSFUL replay
+;; (apply_rewrite_step doesn't gate): Some msg = check_sequent rejects this
+;; rewrite even though the match itself succeeded.
+(fn rw_cite_gate
+  ((m Module)
+   (th Theory)
+   (seq Sequent)
+   (er EqRef)
+   (insts (List Inst))
+   (env Env))
+  (Option (List Int))
+  (match (resolve_eq er seq th)
+    (None None)  ; unreachable: the replay resolved it
+    ((Some (Goal cited_params _ _))
+     (if (all_insts_named insts cited_params)
+       (match (split_params_by_insts cited_params insts)
+         ((Pair openings pat_vars)
+          (match seq
+            ((Sequent s_params _ _ _)
+             (tc_check_site m s_params cited_params pat_vars openings env)))))
+       (Some "citation: an inst names a binder the cited goal does not have")))))
+
 ;; Check each RewriteWith obligation (the cited equation's premises at the
 ;; match instantiation) and DESCEND into the failing one — passing obligations
 ;; stay silent (cites are dense; only failures matter). Arity mismatches,
@@ -384,7 +477,11 @@
                    (show_int (+ i 1))
                    (append_int
                      " ["
-                     (append_int (step_label s) "]  FAILED to apply (no match)")))))
+                     (append_int
+                       (step_label s)
+                       (append_int
+                         "]  FAILED to apply ("
+                         (append_int (step_fail_reason m th cur s) ")")))))))
              (context_lines cur depth))))))))
 
 ;; Descend the proof spine, rendering the sequent equation at each level.
@@ -415,27 +512,42 @@
     ((RewriteWith er dir sd insts prems cont)
      (match (apply_rewrite_step m th seq er dir sd insts)
        ((Some (RwTrace seq2 env opened_premises))
-        (Cons
-          (append_int
-            (mk_ind depth)
-            (append_int
-              "after rewrite ("
+        ;; the replay matched — but the checker still gates the citation's
+        ;; bindings (insts + captures) by type. A gated rewrite must trace
+        ;; as the REJECTION it is, not as a successful rewrite.
+        (match (rw_cite_gate m th seq er insts env)
+          ((Some msg)
+           (Cons
+             (append_int
+               (mk_ind depth)
+               (append_int
+                 "rewrite ("
+                 (append_int
+                   (render_eqref er)
+                   (append_int ") REJECTED by the TYPE GATE: " msg))))
+             (context_lines seq depth)))
+          (None
+            (Cons
               (append_int
-                (render_eqref er)
-                (append_int "):  " (render_eq (seq_eq seq2))))))
-          (append_lines
-            (trace_obligations
-              m
-              th
-              seq
-              env
-              opened_premises
-              prems
-              er
-              0
-              (+ depth 1)
-              verbose)
-            (trace_proof m th seq2 cont (+ depth 1) verbose))))
+                (mk_ind depth)
+                (append_int
+                  "after rewrite ("
+                  (append_int
+                    (render_eqref er)
+                    (append_int "):  " (render_eq (seq_eq seq2))))))
+              (append_lines
+                (trace_obligations
+                  m
+                  th
+                  seq
+                  env
+                  opened_premises
+                  prems
+                  er
+                  0
+                  (+ depth 1)
+                  verbose)
+                (trace_proof m th seq2 cont (+ depth 1) verbose))))))
        (None
          (Cons
            (append_int
@@ -457,11 +569,48 @@
              " — decision procedure (not replayed)")))
        Nil))
     ((WfInduct measure sub)
-     (Cons
-       (append_int (mk_ind depth) "WfInduct subgoal (IH at Hyp 0):")
-       (trace_proof m th (dbg_wf_subgoal seq measure) sub (+ depth 1) verbose)))
+     ;; do_wf_induct's gate first: a non-Int measure is a REJECTION.
+     (match (tc_check_int_expr m (seq_params seq) measure "wf-induct measure")
+       ((Some msg)
+        (Cons
+          (append_int
+            (mk_ind depth)
+            (append_int "wf-induct — REJECTED by the TYPE GATE: " msg))
+          (context_lines seq depth)))
+       (None
+         (Cons
+           (append_int (mk_ind depth) "WfInduct subgoal (IH at Hyp 0):")
+           (trace_proof
+             m
+             th
+             (dbg_wf_subgoal seq measure)
+             sub
+             (+ depth 1)
+             verbose)))))
     ((CaseOn scrut ty cases)
-     (trace_cases m th seq scrut ty cases depth verbose))
+     ;; do_case_on's gates first: an unknown type, or a scrutinee that is
+     ;; not a ty value, is a REJECTION (every case-hyp would be absurd) —
+     ;; not a per-case rebuild failure.
+     (match (lookup_typedef ty m)
+       (None
+         (Cons
+           (append_int
+             (mk_ind depth)
+             (append_int
+               "case-on — REJECTED (unknown type "
+               (append_int (chars_of_sym ty) ")")))
+           (context_lines seq depth)))
+       ((Some (TypeDef _ tparams _))
+        (match (tc_scrut_targs m (seq_params seq) scrut ty tparams)
+          (None
+            (Cons
+              (append_int
+                (mk_ind depth)
+                (append_int
+                  "case-on — REJECTED by the TYPE GATE (scrutinee is not a "
+                  (append_int (chars_of_sym ty) " value)")))
+              (context_lines seq depth)))
+          ((Some _) (trace_cases m th seq scrut ty cases depth verbose))))))
     ((Induct var cases) (trace_induct m th seq var cases depth verbose))
     ((Induct2 var cases)
      (Cons
@@ -526,40 +675,58 @@
          "FinSplit — branching proof (focus this claim to trace its cases)")
        Nil)))
     ((Have eq pe pr)
-     ;; Check the JUSTIFICATION (same context, goal = the cut equation —
-     ;; exactly do_have's first obligation). A broken justification is traced
-     ;; in place; only a sound cut descends into the continuation.
+     ;; do_have's TYPE GATE first (an ill-typed cut is rejected before its
+     ;; justification is even looked at), then check the JUSTIFICATION (same
+     ;; context, goal = the cut equation — exactly do_have's first
+     ;; obligation). A broken justification is traced in place; only a sound
+     ;; cut descends into the continuation.
      (match seq
        ((Sequent params hyps premises goal_eq)
-        (if (check_sequent m th (Sequent params hyps premises eq) pe)
-          (Cons
-            (append_int
-              (mk_ind depth)
-              (append_int
-                "have "
+        (match (tc_check_cut m params eq)
+          ((Some msg)
+           (Cons
+             (append_int
+               (mk_ind depth)
+               (append_int
+                 "have "
+                 (append_int
+                   (render_eq eq)
+                   (append_int " — REJECTED by the TYPE GATE: " msg))))
+             (context_lines seq depth)))
+          (None
+            (if (check_sequent m th (Sequent params hyps premises eq) pe)
+              (Cons
                 (append_int
-                  (render_eq eq)
-                  " — cut; continuing with it as the last premise:")))
-            (trace_proof
-              m
-              th
-              (Sequent params hyps (append_eqs premises (Cons eq Nil)) goal_eq)
-              pr
-              (+ depth 1)
-              verbose))
-          (Cons
-            (append_int
-              (mk_ind depth)
-              (append_int
-                "have "
-                (append_int (render_eq eq) "  JUSTIFICATION FAILS  v v v")))
-            (trace_proof
-              m
-              th
-              (Sequent params hyps premises eq)
-              pe
-              (+ depth 1)
-              verbose))))))
+                  (mk_ind depth)
+                  (append_int
+                    "have "
+                    (append_int
+                      (render_eq eq)
+                      " — cut; continuing with it as the last premise:")))
+                (trace_proof
+                  m
+                  th
+                  (Sequent
+                    params
+                    hyps
+                    (append_eqs premises (Cons eq Nil))
+                    goal_eq)
+                  pr
+                  (+ depth 1)
+                  verbose))
+              (Cons
+                (append_int
+                  (mk_ind depth)
+                  (append_int
+                    "have "
+                    (append_int (render_eq eq) "  JUSTIFICATION FAILS  v v v")))
+                (trace_proof
+                  m
+                  th
+                  (Sequent params hyps premises eq)
+                  pe
+                  (+ depth 1)
+                  verbose))))))))
     ((WordFact e pr)
      ;; Rebuild the EXACT facts via the checker's own word_facts_checked
      ;; (shared, so rendering cannot diverge), then descend.

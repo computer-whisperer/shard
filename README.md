@@ -86,7 +86,10 @@ PASS  mem_reverses
 `std/mem.shard` `(import …)`s the rest of `std/`, so this one file checks the
 whole library (dependencies load transitively, de-duplicated). An optional
 trailing argument focuses a single claim and traces it
-(`… kernel/check.shard std/mem.shard mem_reverses`). The demos live in
+(`… kernel/check.shard std/mem.shard mem_reverses`) — focus runs are a dev
+aid that admits every OTHER proof unchecked, so they are banner-marked
+UNSOUND and exit 3 (never 0): automation gating on exit 0 cannot accept
+one. The demos live in
 `examples/` (`… eval run kernel/check.shard examples/lia_basics.shard`);
 `examples/lia_rejects.shard` is a deliberate negative test (it FAILs).
 Sources are kept in canonical form by the proven formatter:
