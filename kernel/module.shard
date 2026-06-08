@@ -13,20 +13,20 @@
 (import "term.shard")
 
 (type Type
-  (TCon Symbol (List Type))  ; type application: Nat, (List Nat), (Map K V)
-  (TVar Symbol))  ; type variable (erased at runtime in narrow)
+  (TCon QName (List Type))  ; type application: Nat, (List Nat), (Map K V)
+  (TVar Symbol))  ; type variable (erased at runtime in narrow; module-local)
 
-(type CtorDef (CtorDef Symbol (List Type)))  ; ctor name, field types
+(type CtorDef (CtorDef QName (List Type)))  ; ctor name, field types
 
 (type TypeDef
   (TypeDef
-    Symbol  ; type name
-    (List Symbol)  ; type parameters (e.g., 'T for List)
+    QName  ; type name
+    (List Symbol)  ; type parameters (e.g., 'T for List — module-local)
     (List CtorDef)))  ; constructors
 
 (type FnDef
   (FnDef
-    Symbol  ; function name
+    QName  ; function name
     (List Type)  ; parameter types (length = arity)
     Type  ; return type
     Expr))  ; body — BVars 0..arity-1 are parameters
@@ -37,7 +37,7 @@
 ;; implementation. See docs/BOUNDARIES.md.
 (type ExternDef
   (ExternDef
-    Symbol  ; function name
+    QName  ; function name
     (List Type)  ; parameter types
     Type))  ; return type
 
@@ -89,8 +89,8 @@
           ((Some sub) (trie_lookup_chars rest sub))))))))
 
 ;; resolve a function name to its FnDef, O(name length). The reducer's hot path.
-(fn trie_lookup ((name Symbol) (t FnTrie)) (Option FnDef)
-  (trie_lookup_chars (chars_of_sym name) t))
+(fn trie_lookup ((name QName) (t FnTrie)) (Option FnDef)
+  (trie_lookup_chars (chars_of_sym (qn_name name)) t))
 
 ;; insert fd under the remaining chars; KEEP-FIRST on a name clash (mirrors the
 ;; old list-scan lookup_fn, which returned the first matching def).
@@ -112,7 +112,7 @@
 
 (fn trie_insert ((fd FnDef) (t FnTrie)) FnTrie
   (match fd
-    ((FnDef name _ _ _) (trie_insert_chars (chars_of_sym name) fd t))))
+    ((FnDef name _ _ _) (trie_insert_chars (chars_of_sym (qn_name name)) fd t))))
 
 (fn trie_insert_many ((fds (List FnDef)) (t FnTrie)) FnTrie
   (match fds
@@ -126,35 +126,35 @@
 ;; Type-level helpers.
 ;; ---------------------------------------------------------------------------
 
-(fn lookup_typedef ((name Symbol) (m Module)) (Option TypeDef)
+(fn lookup_typedef ((name QName) (m Module)) (Option TypeDef)
   (match m
     ((Module tds _ _ _) (find_typedef name tds))))
 
 ;; Lookup an extern declaration by name. The runtime uses this when
 ;; intercepting stuck calls to extern symbols; not needed by the
 ;; reducer (which treats all unknown calls as stuck regardless).
-(fn lookup_extern ((name Symbol) (m Module)) (Option ExternDef)
+(fn lookup_extern ((name QName) (m Module)) (Option ExternDef)
   (match m
     ((Module _ _ exts _) (find_extern name exts))))
 
-(fn find_extern ((name Symbol) (exts (List ExternDef))) (Option ExternDef)
+(fn find_extern ((name QName) (exts (List ExternDef))) (Option ExternDef)
   (match exts
     (Nil None)
     ((Cons ed rest)
      (match ed
        ((ExternDef ename _ _)
-        (if (sym_eq name ename) (Some ed) (find_extern name rest)))))))
+        (if (qname_eq name ename) (Some ed) (find_extern name rest)))))))
 
-(fn find_typedef ((name Symbol) (tds (List TypeDef))) (Option TypeDef)
+(fn find_typedef ((name QName) (tds (List TypeDef))) (Option TypeDef)
   (match tds
     (Nil None)
     ((Cons td rest)
      (match td
        ((TypeDef tname _ _)
-        (if (sym_eq name tname) (Some td) (find_typedef name rest)))))))
+        (if (qname_eq name tname) (Some td) (find_typedef name rest)))))))
 
 ;; type_head: extract (ctor_name, args) from a TCon; None for TVar.
-(fn type_head ((t Type)) (Option (Pair Symbol (List Type)))
+(fn type_head ((t Type)) (Option (Pair QName (List Type)))
   (match t
     ((TCon c args) (Some (Pair c args)))
     ((TVar _) None)))
@@ -168,7 +168,7 @@
        (_ False)))
     ((TCon ca aa)
      (match b
-       ((TCon cb ab) (if (sym_eq ca cb) (type_eq_list aa ab) False))
+       ((TCon cb ab) (if (qname_eq ca cb) (type_eq_list aa ab) False))
        (_ False)))))
 
 (fn type_eq_list ((xs (List Type)) (ys (List Type))) Bool

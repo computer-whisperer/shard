@@ -680,14 +680,14 @@ mod tests {
         //   — note narrow Cons is a 2-arg ctor (head, tail),
         //   so its runtime layout matches the pattern's arity.
         let call = "(match_pat \
-                      (PCtor (quote Cons) (Cons (PVar) (Cons (PVar) (Nil)))) \
-                      (Ctor (quote Cons) (Cons (IntLit 1) (Cons (Ctor (quote Nil) (Nil)) (Nil)))) \
+                      (PCtor (QName (quote core) (quote Cons)) (Cons (PVar) (Cons (PVar) (Nil)))) \
+                      (Ctor (QName (quote core) (quote Cons)) (Cons (IntLit 1) (Cons (Ctor (QName (quote core) (quote Nil)) (Nil)) (Nil)))) \
                       (Nil))";
         let e = load::expr_from_str(call, &m).expect("parses");
         let r = eval::eval(&m, &e).expect("evals");
         let intlit_1 = nctor("IntLit", vec![ast::Expr::IntLit(1.into())]);
         let nil_v = nctor("Ctor", vec![
-            ast::Expr::SymLit("Nil".into()),
+            obj_qname("Nil"),
             nctor("Nil", vec![]),
         ]);
         // After two PVar captures (head, then tail), insert-at-front
@@ -731,7 +731,7 @@ mod tests {
     fn step_if_true_fires() {
         let m = load_kernel();
         let call = "(step (Module (Nil) (Nil) (Nil)) \
-                          (If (Ctor (quote True) (Nil)) (IntLit 1) (IntLit 2)))";
+                          (If (Ctor (QName (quote core) (quote True)) (Nil)) (IntLit 1) (IntLit 2)))";
         let e = load::expr_from_str(call, &m).expect("parses");
         let r = eval::eval(&m, &e).expect("evals");
         assert_eq!(r, nctor("Some", vec![nctor("IntLit", vec![ast::Expr::IntLit(1.into())])]));
@@ -742,7 +742,7 @@ mod tests {
     fn step_if_false_fires() {
         let m = load_kernel();
         let call = "(step (Module (Nil) (Nil) (Nil)) \
-                          (If (Ctor (quote False) (Nil)) (IntLit 1) (IntLit 2)))";
+                          (If (Ctor (QName (quote core) (quote False)) (Nil)) (IntLit 1) (IntLit 2)))";
         let e = load::expr_from_str(call, &m).expect("parses");
         let r = eval::eval(&m, &e).expect("evals");
         assert_eq!(r, nctor("Some", vec![nctor("IntLit", vec![ast::Expr::IntLit(2.into())])]));
@@ -829,15 +829,26 @@ mod tests {
         match e {
             ast::Expr::IntLit(n) => nctor("IntLit", vec![ast::Expr::IntLit(n.clone())]),
             ast::Expr::SymLit(s) => nctor("SymLit", vec![ast::Expr::SymLit(s.clone())]),
+            // Object Ctor heads are now (QName module-id local-name), not a bare
+            // Symbol; a native-origin value reflects to the `core`-qualified form
+            // (see kernel/term.shard QName). The shard reducer produces the same.
             ast::Expr::Ctor(name, args) => nctor(
                 "Ctor",
                 vec![
-                    ast::Expr::SymLit(name.clone()),
+                    obj_qname(name),
                     expr_spine(args.iter().map(reflect).collect()),
                 ],
             ),
             other => panic!("reflect: not a value: {other:?}"),
         }
+    }
+
+    /// The object-encoded `(QName 'core 'name)` identity for a reflected head.
+    fn obj_qname(name: &str) -> ast::Expr {
+        nctor("QName", vec![
+            ast::Expr::SymLit("core".into()),
+            ast::Expr::SymLit(name.into()),
+        ])
     }
 
     /// A runtime (List X) value from element values.

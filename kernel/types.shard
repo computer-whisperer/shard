@@ -109,11 +109,11 @@
     ((TVar x) (chars_of_sym x))
     ((TCon c args)
      (match args
-       (Nil (chars_of_sym c))
+       (Nil (chars_of_sym (qn_name c)))
        (_
          (tc_app
            "("
-           (tc_app (chars_of_sym c) (tc_app (tc_render_tys args) ")"))))))))
+           (tc_app (chars_of_sym (qn_name c)) (tc_app (tc_render_tys args) ")"))))))))
 
 (fn tc_render_tys ((ts (List Type))) (List Int)  ; " a b c"
   (match ts
@@ -185,7 +185,7 @@
        ((TCon ca aa)
         (match (tc_walk b s)
           ((TVar xb) (if (tc_is_meta xb) (tc_bind xb (TCon ca aa) tc) None))
-          ((TCon cb ab) (if (sym_eq ca cb) (tc_unify_list aa ab tc) None))))))))
+          ((TCon cb ab) (if (qname_eq ca cb) (tc_unify_list aa ab tc) None))))))))
 
 (fn tc_unify_list ((xs (List Type)) (ys (List Type)) (tc Tc)) (Option Tc)
   (match xs
@@ -242,7 +242,7 @@
 ;; Name resolution: ctor → its TypeDef + CtorDef; call head → signature.
 ;; ---------------------------------------------------------------------------
 
-(fn tc_find_ctor ((c Symbol) (tds (List TypeDef)))
+(fn tc_find_ctor ((c QName) (tds (List TypeDef)))
   (Option (Pair TypeDef CtorDef))
   (match tds
     (Nil None)
@@ -253,18 +253,18 @@
           ((Some cd) (Some (Pair td cd)))
           (None (tc_find_ctor c rest))))))))
 
-(fn tc_find_ctor_in ((c Symbol) (cds (List CtorDef))) (Option CtorDef)
+(fn tc_find_ctor_in ((c QName) (cds (List CtorDef))) (Option CtorDef)
   (match cds
     (Nil None)
     ((Cons cd rest)
      (match cd
        ((CtorDef cname _)
-        (if (sym_eq c cname) (Some cd) (tc_find_ctor_in c rest)))))))
+        (if (qname_eq c cname) (Some cd) (tc_find_ctor_in c rest)))))))
 
-(fn tc_t_int () Type (TCon (quote Int) Nil))
-(fn tc_t_sym () Type (TCon (quote Symbol) Nil))
-(fn tc_t_bool () Type (TCon (quote Bool) Nil))
-(fn tc_t_chars () Type (TCon (quote List) (Cons (tc_t_int) Nil)))
+(fn tc_t_int () Type (TCon (qn (quote Int)) Nil))
+(fn tc_t_sym () Type (TCon (qn (quote Symbol)) Nil))
+(fn tc_t_bool () Type (TCon (qn (quote Bool)) Nil))
+(fn tc_t_chars () Type (TCon (qn (quote List)) (Cons (tc_t_int) Nil)))
 
 ;; ---------------------------------------------------------------------------
 ;; The built-in word former (Word W S) — fixed-width modular integers.
@@ -301,11 +301,11 @@
        (None None)
        ((Some v) (if (le 1 v) (if (le v 64) (Some v) None) None)))))))
 
-(fn tc_width_ty ((w Int)) Type (TCon (sym_of_chars (tc_nat w)) Nil))
-(fn tc_t_unsigned () Type (TCon (quote Unsigned) Nil))
-(fn tc_t_signed () Type (TCon (quote Signed) Nil))
+(fn tc_width_ty ((w Int)) Type (TCon (qn (sym_of_chars (tc_nat w))) Nil))
+(fn tc_t_unsigned () Type (TCon (qn (quote Unsigned)) Nil))
+(fn tc_t_signed () Type (TCon (qn (quote Signed)) Nil))
 (fn tc_t_word ((w Type) (s Type)) Type
-  (TCon (quote Word) (Cons w (Cons s Nil))))
+  (TCon (qn (quote Word)) (Cons w (Cons s Nil))))
 
 ;; the word-prim signature shapes: S-generic, unsigned-only, signed-only.
 ;; Sig TVars (W, S) ride the Call arm's per-use freshening, exactly like
@@ -434,7 +434,7 @@
 
 ;; a Call head's signature: user fn first (mirrors the evaluator's dispatch
 ;; order), then extern/sig, then the native primitive table.
-(fn tc_fn_sig ((f Symbol) (m Module)) (Option (Pair (List Type) Type))
+(fn tc_fn_sig ((f QName) (m Module)) (Option (Pair (List Type) Type))
   (match m
     ((Module _ _ exts trie)
      (match (trie_lookup f trie)
@@ -442,7 +442,7 @@
        (None
          (match (find_extern f exts)
            ((Some (ExternDef _ ptypes ret)) (Some (Pair ptypes ret)))
-           (None (tc_builtin_sig f))))))))
+           (None (tc_builtin_sig (qn_name f)))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; The synthesizer. env is the BVar type environment, innermost-first.
@@ -466,9 +466,9 @@
        ((Some t) (TcOk tc t))
        (None (TcErr (tc_app "unbound variable: " (chars_of_sym x))))))
     ((Ctor c args)
-     (if (sym_eq c (quote Word)) (tc_word_lit tc args)
+     (if (sym_eq (qn_name c) (quote Word)) (tc_word_lit tc args)
      (match (tc_find_ctor c (tc_tds m))
-       (None (TcErr (tc_app "unknown constructor: " (chars_of_sym c))))
+       (None (TcErr (tc_app "unknown constructor: " (chars_of_sym (qn_name c)))))
        ((Some (Pair (TypeDef tname tparams _) (CtorDef _ fields)))
         (match (tc_freshen tparams tc)
           ((Freshened inst metas tc1)
@@ -490,11 +490,11 @@
        ;; index) get a shot — a user fn of the same name shadows them
        ;; here exactly as it shadows at runtime (trie-first dispatch).
        (None
-         (if (sym_eq f (quote uwrap))
+         (if (sym_eq (qn_name f) (quote uwrap))
            (tc_wrap_call m tc fenv env args (tc_t_unsigned))
-         (if (sym_eq f (quote swrap))
+         (if (sym_eq (qn_name f) (quote swrap))
            (tc_wrap_call m tc fenv env args (tc_t_signed))
-           (TcErr (tc_app "unknown function: " (chars_of_sym f))))))
+           (TcErr (tc_app "unknown function: " (chars_of_sym (qn_name f)))))))
        ((Some (Pair ptypes ret))
         (match (tc_freshen (tc_collect_tvars (Cons ret ptypes) Nil) tc)
           ((Freshened inst _ tc1)
@@ -549,17 +549,17 @@
    (env (List Type))
    (args (List Expr))
    (ptypes (List Type))
-   (site Symbol)
+   (site QName)
    (i Int))
   TcsRes
   (match args
     (Nil
       (match ptypes
         (Nil (TcsOk tc))
-        (_ (TcsErr (tc_app "too few arguments to: " (chars_of_sym site))))))
+        (_ (TcsErr (tc_app "too few arguments to: " (chars_of_sym (qn_name site)))))))
     ((Cons a arest)
      (match ptypes
-       (Nil (TcsErr (tc_app "too many arguments to: " (chars_of_sym site))))
+       (Nil (TcsErr (tc_app "too many arguments to: " (chars_of_sym (qn_name site)))))
        ((Cons p prest)
         (match (tc_infer m tc fenv env a)
           ((TcErr msg) (TcsErr msg))
@@ -568,7 +568,7 @@
              (None
                (TcsErr
                  (tc_mismatch
-                   (tc_app (chars_of_sym site) (tc_app " arg " (tc_nat i)))
+                   (tc_app (chars_of_sym (qn_name site)) (tc_app " arg " (tc_nat i)))
                    at
                    p
                    tc1)))
@@ -627,7 +627,7 @@
     ((PCtor c ps)
      (match (tc_find_ctor c (tc_tds m))
        (None
-         (TBErr (tc_app "unknown constructor in pattern: " (chars_of_sym c))))
+         (TBErr (tc_app "unknown constructor in pattern: " (chars_of_sym (qn_name c)))))
        ((Some (Pair (TypeDef tname tparams _) (CtorDef _ fields)))
         (match (tc_freshen tparams tc)
           ((Freshened inst metas tc1)
@@ -635,7 +635,7 @@
              (None
                (TBErr
                  (tc_mismatch
-                   (tc_app "pattern " (chars_of_sym c))
+                   (tc_app "pattern " (chars_of_sym (qn_name c)))
                    t
                    (TCon tname metas)
                    tc1)))
@@ -646,17 +646,17 @@
    (tc Tc)
    (ts (List Type))
    (ps (List Pat))
-   (site Symbol)
+   (site QName)
    (acc (List Type)))
   TcBinds
   (match ps
     (Nil
       (match ts
         (Nil (TBOk tc acc))
-        (_ (TBErr (tc_app "too few fields in pattern: " (chars_of_sym site))))))
+        (_ (TBErr (tc_app "too few fields in pattern: " (chars_of_sym (qn_name site)))))))
     ((Cons p prest)
      (match ts
-       (Nil (TBErr (tc_app "too many fields in pattern: " (chars_of_sym site))))
+       (Nil (TBErr (tc_app "too many fields in pattern: " (chars_of_sym (qn_name site)))))
        ((Cons t trest)
         (match (tc_pat m tc t p acc)
           ((TBErr msg) (TBErr msg))
@@ -669,8 +669,8 @@
 ;; (a typedef's declared params).
 ;; ---------------------------------------------------------------------------
 
-(fn tc_is_prim_ty ((c Symbol)) Bool
-  (if (sym_eq c (quote Int)) True (sym_eq c (quote Symbol))))
+(fn tc_is_prim_ty ((c QName)) Bool
+  (if (sym_eq (qn_name c) (quote Int)) True (sym_eq (qn_name c) (quote Symbol))))
 
 (fn tc_ty_wf ((m Module) (allowed (List Symbol)) (anytv Bool) (t Type))
   (Option (List Int))
@@ -685,14 +685,14 @@
          (Nil None)
          (_
            (Some
-             (tc_app "primitive type takes no arguments: " (chars_of_sym c)))))
-     (if (sym_eq c (quote Word)) (tc_word_args_wf allowed anytv args)
+             (tc_app "primitive type takes no arguments: " (chars_of_sym (qn_name c))))))
+     (if (sym_eq (qn_name c) (quote Word)) (tc_word_args_wf allowed anytv args)
      (match (find_typedef c (tc_tds m))
-       (None (Some (tc_app "unknown type: " (chars_of_sym c))))
+       (None (Some (tc_app "unknown type: " (chars_of_sym (qn_name c)))))
        ((Some (TypeDef _ tparams _))
         (if (int_eq (tc_len_tys args) (tc_len_syms tparams))
           (tc_tys_wf m allowed anytv args)
-          (Some (tc_app "wrong type arity: " (chars_of_sym c)))))))))))
+          (Some (tc_app "wrong type arity: " (chars_of_sym (qn_name c))))))))))))
 
 ;; (Word W S) well-formedness: W a numeric literal type (1..64) or a
 ;; type variable, S a signedness marker (Unsigned/Signed) or a type
@@ -722,14 +722,14 @@
      (Some
        (tc_app
          "bad Word index (width: literal 1..64; signedness: Unsigned/Signed): "
-         (chars_of_sym c)))))))
+         (chars_of_sym (qn_name c))))))))
 
 (fn tc_word_width_ok ((t Type)) Bool
   (match t
     ((TCon c args)
      (match args
        (Nil
-         (match (tc_width_of c)
+         (match (tc_width_of (qn_name c))
            ((Some _) True)
            (None False)))
        (_ False)))
@@ -739,7 +739,7 @@
   (match t
     ((TCon c args)
      (match args
-       (Nil (if (sym_eq c (quote Unsigned)) True (sym_eq c (quote Signed))))
+       (Nil (if (sym_eq (qn_name c) (quote Unsigned)) True (sym_eq (qn_name c) (quote Signed))))
        (_ False)))
     (_ True)))
 
@@ -756,6 +756,8 @@
 ;; Declaration checks. Each returns None (ok) or (Some diagnostic).
 ;; ---------------------------------------------------------------------------
 
+;; `name` is a display name (Symbol): a binder name, or a decl's local name
+;; (decl callers pass (qn_name …)). Kept Symbol so both caller classes share it.
 (fn tc_label ((kind (List Int)) (name Symbol) (msg (List Int))) (List Int)
   (tc_app kind (tc_app (chars_of_sym name) (tc_app ": " msg))))
 
@@ -764,7 +766,7 @@
   (match td
     ((TypeDef name tparams ctors)
      (match (tc_check_ctors m tparams ctors)
-       ((Some msg) (Some (tc_label "type " name msg)))
+       ((Some msg) (Some (tc_label "type " (qn_name name) msg)))
        (None None)))))
 
 (fn tc_check_ctors ((m Module) (tparams (List Symbol)) (cds (List CtorDef)))
@@ -781,7 +783,7 @@
   (match ed
     ((ExternDef name ptypes ret)
      (match (tc_tys_wf m Nil True (Cons ret ptypes))
-       ((Some msg) (Some (tc_label "extern " name msg)))
+       ((Some msg) (Some (tc_label "extern " (qn_name name) msg)))
        (None None)))))
 
 ;; a fn: sig well-formed, body synthesizes, body type unifies with the
@@ -790,17 +792,17 @@
   (match fd
     ((FnDef name ptypes ret body)
      (match (tc_tys_wf m Nil True (Cons ret ptypes))
-       ((Some msg) (Some (tc_label "fn " name msg)))
+       ((Some msg) (Some (tc_label "fn " (qn_name name) msg)))
        (None
          (match (tc_infer m (Tc 0 Nil) Nil (tc_rev_tys ptypes Nil) body)
-           ((TcErr msg) (Some (tc_label "fn " name msg)))
+           ((TcErr msg) (Some (tc_label "fn " (qn_name name) msg)))
            ((TcOk tc bt)
             (match (tc_unify bt ret tc)
               (None
                 (Some
                   (tc_label
                     "fn "
-                    name
+                    (qn_name name)
                     (tc_mismatch "body vs declared return" bt ret tc))))
               ((Some _) None)))))))))
 
@@ -884,17 +886,19 @@
 ;; Returns (name, diagnostic) pairs; the driver wraps them as outcomes.
 ;; ---------------------------------------------------------------------------
 
+;; diagnostic display names: the LOCAL name (the report stays Symbol-keyed —
+;; these are shown to the user, not used as identities).
 (fn tc_td_name ((td TypeDef)) Symbol
   (match td
-    ((TypeDef n _ _) n)))
+    ((TypeDef n _ _) (qn_name n))))
 
 (fn tc_ed_name ((ed ExternDef)) Symbol
   (match ed
-    ((ExternDef n _ _) n)))
+    ((ExternDef n _ _) (qn_name n))))
 
 (fn tc_fd_name ((fd FnDef)) Symbol
   (match fd
-    ((FnDef n _ _ _) n)))
+    ((FnDef n _ _ _) (qn_name n))))
 
 (fn tc_sweep_tds ((m Module) (tds (List TypeDef)))
   (List (Pair Symbol (List Int)))
@@ -1083,7 +1087,7 @@
            (match (tc_resolve wmeta s)
              ((TCon c args)
               (match args
-                (Nil (tc_width_of c))
+                (Nil (tc_width_of (qn_name c)))
                 (_ None)))
              (_ None)))))))))
 
@@ -1110,7 +1114,7 @@
   ((m Module)
    (params (List Param))
    (scrut Expr)
-   (ty Symbol)
+   (ty QName)
    (tparams (List Symbol)))
   (Option (List Type))
   (match (tc_freshen tparams (Tc 0 Nil))

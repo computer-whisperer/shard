@@ -38,7 +38,7 @@
     ((PCtor pc pats)
      (match v
        ((Ctor vc vargs)
-        (if (sym_eq pc vc) (match_pats pats vargs acc False) (MNo)))
+        (if (qname_eq pc vc) (match_pats pats vargs acc False) (MNo)))
        ((IntLit _) (MNo))
        ((SymLit _) (MNo))
        (_ (MStuck))))))  ; Call/Match/If/Let/FVar/BVar — undecided
@@ -116,8 +116,8 @@
     ;; "Primitive comparisons return user Bool").
     ((If c t el)
      (match c
-       ((Ctor (quote True) Nil) (Some t))
-       ((Ctor (quote False) Nil) (Some el))
+       ((Ctor (QName _ (quote True)) Nil) (Some t))
+       ((Ctor (QName _ (quote False)) Nil) (Some el))
        (_
          (match (step m c)
            ((Some c2) (Some (If c2 t el)))
@@ -138,7 +138,7 @@
 ;; The primitive dispatch happens at the data level — the kernel is
 ;; reducing a Call VALUE, not invoking a function. See REVISIT —
 ;; "Primitives reachable from the kernel's reducer".
-(fn step_call ((m Module) (f Symbol) (args (List Expr))) (Option Expr)
+(fn step_call ((m Module) (f QName) (args (List Expr))) (Option Expr)
   (match m
     ((Module _ _ _ trie)
      (match (trie_lookup f trie)
@@ -147,7 +147,7 @@
           ((Some e2) (Some e2))
           (None (step_args_in_call m f args))))
        (None
-         (match (try_step_prim f args)
+         (match (try_step_prim (qn_name f) args)
            ((Some e2) (Some e2))
            (None (step_args_in_call m f args))))))))
 
@@ -209,16 +209,16 @@
     ;; Width mismatch → None (stuck): unreachable for type-checked
     ;; source, defensive for raw data.
     ((Cons
-       (Ctor (quote Word) (Cons (IntLit wa) (Cons (IntLit ra) Nil)))
-       (Cons (Ctor (quote Word) (Cons (IntLit wb) (Cons (IntLit rb) Nil))) Nil))
+       (Ctor (QName _ (quote Word)) (Cons (IntLit wa) (Cons (IntLit ra) Nil)))
+       (Cons (Ctor (QName _ (quote Word)) (Cons (IntLit wb) (Cons (IntLit rb) Nil))) Nil))
      (if (int_eq wa wb) (wp_binop f wa ra rb) None))
     ;; Word-and-Int primitives: shifts (amount is a plain Int).
     ((Cons
-       (Ctor (quote Word) (Cons (IntLit w) (Cons (IntLit r) Nil)))
+       (Ctor (QName _ (quote Word)) (Cons (IntLit w) (Cons (IntLit r) Nil)))
        (Cons (IntLit k) Nil))
      (wp_shift f w r k))
     ;; One-Word primitives.
-    ((Cons (Ctor (quote Word) (Cons (IntLit w) (Cons (IntLit r) Nil))) Nil)
+    ((Cons (Ctor (QName _ (quote Word)) (Cons (IntLit w) (Cons (IntLit r) Nil))) Nil)
      (wp_unop f w r))
     ;; Two-Symbol primitives.
     ((Cons (SymLit a) (Cons (SymLit b) Nil))
@@ -250,7 +250,7 @@
 ;; (Ctor "True" Nil) / (Ctor "False" Nil). Used by try_step_prim's
 ;; comparison cases.
 (fn bool_as_expr ((b Bool)) Expr
-  (if b (Ctor (quote True) Nil) (Ctor (quote False) Nil)))
+  (if b (Ctor (qn (quote True)) Nil) (Ctor (qn (quote False)) Nil)))
 
 ;; ---------------------------------------------------------------------------
 ;; Word primitives (wp_*): fixed-width modular integers over the
@@ -275,7 +275,7 @@
 (fn wp_mask ((w Int) (n Int)) Int (mod n (wp_pow2 w)))  ; euclidean → in [0, 2^w)
 
 (fn wp_make ((w Int) (n Int)) (Option Expr)
-  (Some (Ctor (quote Word) (Cons (IntLit w) (Cons (IntLit (wp_mask w n)) Nil)))))
+  (Some (Ctor (qn (quote Word)) (Cons (IntLit w) (Cons (IntLit (wp_mask w n)) Nil)))))
 
 ;; the two's-complement (signed) reading of a canonical raw.
 (fn wp_sgn ((w Int) (r Int)) Int
@@ -343,7 +343,7 @@
   (if (sym_eq f (quote wwidth)) (Some (IntLit w))
   None)))))))
 
-(fn step_args_in_call ((m Module) (f Symbol) (args (List Expr))) (Option Expr)
+(fn step_args_in_call ((m Module) (f QName) (args (List Expr))) (Option Expr)
   (match (step_list m args)
     ((Some args2) (Some (Call f args2)))
     (None None)))
@@ -396,17 +396,17 @@
 ;; Limitation: does NOT descend under binders (Match arm bodies, Let
 ;; bodies). For unfolding inside a binder, simp_expr handles it
 ;; transitively, or the user can extract the term first via Reduce.
-(fn unfold_one ((m Module) (fname Symbol) (e Expr)) (Option Expr)
+(fn unfold_one ((m Module) (fname QName) (e Expr)) (Option Expr)
   (match m
     ((Module _ _ _ trie)
      (match (trie_lookup fname trie)
        (None None)  ; fn doesn't exist
        ((Some fd) (unfold_one_in fd fname e))))))
 
-(fn unfold_one_in ((fd FnDef) (fname Symbol) (e Expr)) (Option Expr)
+(fn unfold_one_in ((fd FnDef) (fname QName) (e Expr)) (Option Expr)
   (match e
     ((Call f args)
-     (if (sym_eq f fname) (apply_fn fd args)  ; hit
+     (if (qname_eq f fname) (apply_fn fd args)  ; hit
      (match (unfold_one_in_list fd fname args)
        ((Some args2) (Some (Call f args2)))
        (None None))))
@@ -426,7 +426,7 @@
                (None None)))))))
     (_ None)))  ; FVar/BVar/IntLit/SymLit/Match/Let
 
-(fn unfold_one_in_list ((fd FnDef) (fname Symbol) (es (List Expr)))
+(fn unfold_one_in_list ((fd FnDef) (fname QName) (es (List Expr)))
   (Option (List Expr))
   (match es
     (Nil None)
@@ -460,8 +460,8 @@
     ((Let bs body) (Some (open_many bs body)))  ; ζ
     ((If c t el)
      (match c
-       ((Ctor (quote True) Nil) (Some t))
-       ((Ctor (quote False) Nil) (Some el))
+       ((Ctor (QName _ (quote True)) Nil) (Some t))
+       ((Ctor (QName _ (quote False)) Nil) (Some el))
        (_
          (match (step_iota m c)
            ((Some c2) (Some (If c2 t el)))
@@ -555,10 +555,10 @@
     ((Let bs body) (Some (open_many bs body)))
     ((If c t el)
      (match c
-       ((Ctor (quote True) Nil) (Some t))
-       ((Ctor (quote False) Nil) (Some el))
+       ((Ctor (QName _ (quote True)) Nil) (Some t))
+       ((Ctor (QName _ (quote False)) Nil) (Some el))
        (_ None)))
-    ((Call f args) (try_step_prim f args))
+    ((Call f args) (try_step_prim (qn_name f) args))
     (_ None)))
 
 ;; head_match: the gate's one-step lookahead. The match fires AT THE HEAD
@@ -612,8 +612,8 @@
     ((Let bs body) (Some (open_many bs body)))
     ((If c t el)
      (match c
-       ((Ctor (quote True) Nil) (Some t))
-       ((Ctor (quote False) Nil) (Some el))
+       ((Ctor (QName _ (quote True)) Nil) (Some t))
+       ((Ctor (QName _ (quote False)) Nil) (Some el))
        (_
          (match (step_smart m c)
            ((Some c2) (Some (If c2 t el)))
@@ -627,7 +627,7 @@
     ((IntLit _) None)
     ((SymLit _) None)))
 
-(fn step_smart_call ((m Module) (f Symbol) (args (List Expr))) (Option Expr)
+(fn step_smart_call ((m Module) (f QName) (args (List Expr))) (Option Expr)
   (match m
     ((Module _ _ _ trie)
      (match (trie_lookup f trie)
@@ -643,11 +643,11 @@
        (None
          ;; Not a user fn — try primitive table; primitives have no
          ;; gate (they always reduce when arg shapes match).
-         (match (try_step_prim f args)
+         (match (try_step_prim (qn_name f) args)
            ((Some e2) (Some e2))
            (None (step_smart_args_in_call m f args))))))))
 
-(fn step_smart_args_in_call ((m Module) (f Symbol) (args (List Expr)))
+(fn step_smart_args_in_call ((m Module) (f QName) (args (List Expr)))
   (Option Expr)
   (match (step_smart_list m args)
     ((Some args2) (Some (Call f args2)))
@@ -873,8 +873,8 @@
     ((Let bs body) (ceval m (cappend (ceval_list m env bs) env) body))  ; bs ⊢ body (no reverse)
     ((If c t el)
      (match (ceval m env c)
-       ((Ctor (quote True) Nil) (ceval m env t))
-       ((Ctor (quote False) Nil) (ceval m env el))
+       ((Ctor (QName _ (quote True)) Nil) (ceval m env t))
+       ((Ctor (QName _ (quote False)) Nil) (ceval m env el))
        (cv (If cv (open_many env t) (open_many env el)))))  ; stuck cond → reify branches
     ((Match s arms)
      (match (ceval m env s)
@@ -889,7 +889,7 @@
     (Nil Nil)
     ((Cons h t) (Cons (ceval m env h) (ceval_list m env t)))))
 
-(fn ceval_call ((m Module) (f Symbol) (vs (List Expr))) Expr
+(fn ceval_call ((m Module) (f QName) (vs (List Expr))) Expr
   (match m
     ((Module _ _ _ trie)
      (match (trie_lookup f trie)
@@ -897,7 +897,7 @@
         (if (int_eq (len vs) (len_t ptypes)) (ceval m (reverse_exprs vs) body)  ; (reverse args) ⊢ body
         (Call f vs)))  ; partial app → stuck
        (None
-         (match (try_step_prim f vs)
+         (match (try_step_prim (qn_name f) vs)
            ((Some r) r)
            (None (Call f vs))))))))  ; prim-miss / extern → stuck
 

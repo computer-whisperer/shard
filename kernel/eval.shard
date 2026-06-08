@@ -38,18 +38,18 @@
     ((BVar k) (Cons 36 (show_int k)))  ; $k (not expected in NF)
     ((Ctor name args)
      (match args
-       (Nil (chars_of_sym name))
+       (Nil (chars_of_sym (qn_name name)))
        (_
          (Cons
            40
            (append_int
-             (chars_of_sym name)
+             (chars_of_sym (qn_name name))
              (append_int (show_args args) (Cons 41 Nil)))))))
     ((Call name args)  ; a stuck call, if any
      (Cons
        40
        (append_int
-         (chars_of_sym name)
+         (chars_of_sym (qn_name name))
          (append_int (show_args args) (Cons 41 Nil)))))
     ((Match _ _) "<match>")
     ((Let _ _) "<let>")
@@ -113,28 +113,28 @@
 
 (fn encode_world ((w World)) Expr
   (match w
-    ((World c) (Ctor (quote World) (Cons (IntLit c) Nil)))))
+    ((World c) (Ctor (qn (quote World)) (Cons (IntLit c) Nil)))))
 
 (fn encode_opt_bytes ((o (Option (List Int)))) Expr
   (match o
-    (None (Ctor (quote None) Nil))
-    ((Some bs) (Ctor (quote Some) (Cons (intlist_to_expr bs) Nil)))))
+    (None (Ctor (qn (quote None)) Nil))
+    ((Some bs) (Ctor (qn (quote Some)) (Cons (intlist_to_expr bs) Nil)))))
 
 (fn encode_opt_int ((o (Option Int))) Expr
   (match o
-    (None (Ctor (quote None) Nil))
-    ((Some n) (Ctor (quote Some) (Cons (IntLit n) Nil)))))
+    (None (Ctor (qn (quote None)) Nil))
+    ((Some n) (Ctor (qn (quote Some)) (Cons (IntLit n) Nil)))))
 
 (fn encode_arglist ((xs (List (List Int)))) Expr
   (match xs
-    (Nil (Ctor (quote Nil) Nil))
+    (Nil (Ctor (qn (quote Nil)) Nil))
     ((Cons h t)
      (Ctor
-       (quote Cons)
+       (qn (quote Cons))
        (Cons (intlist_to_expr h) (Cons (encode_arglist t) Nil))))))
 
 (fn encode_pair ((a Expr) (b Expr)) Expr
-  (Ctor (quote Pair) (Cons a (Cons b Nil))))
+  (Ctor (qn (quote Pair)) (Cons a (Cons b Nil))))
 
 ;; -- the extern vocabulary the runner can perform ----------------------------
 (fn is_extern ((name Symbol)) Bool
@@ -189,7 +189,7 @@
        (_ None)))
     ((PCtor pc pats)
      (match v
-       ((Ctor vc vargs) (if (sym_eq pc vc) (match_vals pats vargs acc) None))
+       ((Ctor vc vargs) (if (qname_eq pc vc) (match_vals pats vargs acc) None))
        (_ None)))))
 
 (fn match_vals ((ps (List Pat)) (vs (List Expr)) (acc (List Expr)))
@@ -250,8 +250,8 @@
      (match (ev m env c app_args w)
        ((Pair cv w1)
         (match cv
-          ((Ctor (quote True) Nil) (ev m env t app_args w1))
-          ((Ctor (quote False) Nil) (ev m env el app_args w1))
+          ((Ctor (QName _ (quote True)) Nil) (ev m env t app_args w1))
+          ((Ctor (QName _ (quote False)) Nil) (ev m env el app_args w1))
           (_ (Pair (If cv t el) w1))))))  ; stuck cond — out of scope (see header)
     ((Match s arms)
      (match (ev m env s app_args w)
@@ -288,7 +288,7 @@
 ;;   else     → leave the call stuck (unknown head; not expected for a real app)
 (fn ev_call
   ((m Module)
-   (f Symbol)
+   (f QName)
    (vs (List Expr))
    (app_args (List (List Int)))
    (w World))
@@ -301,10 +301,10 @@
           (ev m (reverse_exprs vs) body app_args w)  ; env[0] = BVar 0 = LAST param
           (Pair (Call f vs) w)))
        (None
-         (match (try_step_prim f vs)
+         (match (try_step_prim (qn_name f) vs)
            ((Some r) (Pair r w))
            (None
-             (if (is_extern f) (perform_frontier (Call f vs) app_args w)
+             (if (is_extern (qn_name f)) (perform_frontier (Call f vs) app_args w)
              (Pair (Call f vs) w)))))))))
 
 ;; -- perform one frontier extern. Threads eval.shard's REAL World; returns the
@@ -314,14 +314,14 @@
   (Pair Expr World)
   (match call
     ((Call name args)
-     (if (sym_eq name (quote get_args)) (perform_get_args app_args w)
-     (if (sym_eq name (quote read_file)) (perform_read_file args w)
-     (if (sym_eq name (quote write)) (perform_write args w)
-     (if (sym_eq name (quote write_line)) (perform_write_line args w)
-     (if (sym_eq name (quote exit)) (perform_exit args w)
-     (if (sym_eq name (quote key_oracle)) (perform_key_oracle w)
-     (Pair (Ctor (quote Nil) Nil) w))))))))
-    (_ (Pair (Ctor (quote Nil) Nil) w))))
+     (if (sym_eq (qn_name name) (quote get_args)) (perform_get_args app_args w)
+     (if (sym_eq (qn_name name) (quote read_file)) (perform_read_file args w)
+     (if (sym_eq (qn_name name) (quote write)) (perform_write args w)
+     (if (sym_eq (qn_name name) (quote write_line)) (perform_write_line args w)
+     (if (sym_eq (qn_name name) (quote exit)) (perform_exit args w)
+     (if (sym_eq (qn_name name) (quote key_oracle)) (perform_key_oracle w)
+     (Pair (Ctor (qn (quote Nil)) Nil) w))))))))
+    (_ (Pair (Ctor (qn (quote Nil)) Nil) w))))
 
 ;; get_args performs no real I/O — it just hands back the stored argv slice and
 ;; bumps the clock by one (matching the extern's clock axiom).
@@ -331,7 +331,7 @@
      (Pair
        (encode_pair
          (encode_arglist app_args)
-         (Ctor (quote World) (Cons (IntLit (+ c 1)) Nil)))
+         (Ctor (qn (quote World)) (Cons (IntLit (+ c 1)) Nil)))
        (World (+ c 1))))))
 
 ;; key_oracle now THREADS the World (clock-locked, input-traced in the contract):
@@ -349,20 +349,20 @@
      (match (read_file (expr_to_intlist path_e) w)
        ((Pair opt w1)
         (Pair (encode_pair (encode_opt_bytes opt) (encode_world w1)) w1))))
-    (_ (Pair (encode_pair (Ctor (quote None) Nil) (encode_world w)) w))))
+    (_ (Pair (encode_pair (Ctor (qn (quote None)) Nil) (encode_world w)) w))))
 
 (fn perform_write ((args (List Expr)) (w World)) (Pair Expr World)
   (match args
     ((Cons bytes_e _)
      (match (write (expr_to_intlist bytes_e) w)
-       ((World c) (Pair (Ctor (quote World) (Cons (IntLit c) Nil)) (World c)))))
+       ((World c) (Pair (Ctor (qn (quote World)) (Cons (IntLit c) Nil)) (World c)))))
     (_ (Pair (encode_world w) w))))
 
 (fn perform_write_line ((args (List Expr)) (w World)) (Pair Expr World)
   (match args
     ((Cons bytes_e _)
      (match (write_line (expr_to_intlist bytes_e) w)
-       ((World c) (Pair (Ctor (quote World) (Cons (IntLit c) Nil)) (World c)))))
+       ((World c) (Pair (Ctor (qn (quote World)) (Cons (IntLit c) Nil)) (World c)))))
     (_ (Pair (encode_world w) w))))
 
 ;; exit performs a real process exit (never returns); the (World c) arm only
@@ -416,8 +416,8 @@
            (run_app
              m
              (Call
-               (quote main)
-               (Cons (Ctor (quote World) (Cons (IntLit 0) Nil)) Nil))
+               (qn (quote main))
+               (Cons (Ctor (qn (quote World)) (Cons (IntLit 0) Nil)) Nil))
              app_args
              w2))))))
     (_ (exit 2 w))))  ; usage: need app path
