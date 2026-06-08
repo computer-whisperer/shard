@@ -152,16 +152,103 @@
 ;; (`(import "mod.req.shard")`) makes the interface a dep of the impl, so the
 ;; interface lands FIRST — its requirements seed before the impl's fulfills.
 (fn append_src
-  ((acc (List (Pair Bool (List Int)))) (elt (Pair Bool (List Int))))
-  (List (Pair Bool (List Int)))
+  ((acc (List SrcEntry)) (elt SrcEntry))
+  (List SrcEntry)
   (match acc
     (Nil (Cons elt Nil))
     ((Cons h t) (Cons h (append_src t elt)))))
 
-;; closure-resolution state: seen paths (cycle/dedup), TAGGED sources so far,
-;; World. Each accumulated source carries whether it was reached as a granted
-;; dependency interface.
-(type Closure (Closure (List (List Int)) (List (Pair Bool (List Int))) World))
+;; ===========================================================================
+;; MODULE-PATH derivation — the loader-assigned, source-unforgeable identity
+;; behind every QName module-path (a `(List Symbol)`, mirroring Rust's module
+;; tree). A source's path becomes its hierarchical id: strip the file suffix (a
+;; `…/mod.req.shard` interface collapses to its module DIRECTORY; a bare
+;; `…/x.shard` file keeps its name), split on '/', and canonicalize `.`/`..`
+;; so the same file reached by different relative paths gets the SAME id. Used
+;; by build_module_d (reader.shard) to qualify each definition and reference.
+;; ===========================================================================
+
+(fn strip_prefix ((pre (List Int)) (xs (List Int))) (Option (List Int))
+  (match pre
+    (Nil (Some xs))
+    ((Cons p pr)
+     (match xs
+       (Nil None)
+       ((Cons x xr) (if (int_eq p x) (strip_prefix pr xr) None))))))
+
+;; rp is the path REVERSED; drop the interface or .shard suffix, still reversed.
+(fn strip_path_suffix ((rp (List Int))) (List Int)
+  (match (strip_prefix (rev_i (mod_req_suffix) Nil) rp)
+    ((Some d) d)
+    (None
+      (match (strip_prefix (rev_i ".shard" Nil) rp)
+        ((Some f) f)
+        (None rp)))))
+
+;; split forward bytes on '/' (47) into segments (cur is the current seg reversed).
+(fn path_segs ((xs (List Int)) (cur (List Int))) (List (List Int))
+  (match xs
+    (Nil (Cons (rev_i cur Nil) Nil))
+    ((Cons c t)
+     (if (int_eq c 47)
+       (Cons (rev_i cur Nil) (path_segs t Nil))
+       (path_segs t (Cons c cur))))))
+
+(fn segs_to_syms ((ss (List (List Int)))) (List Symbol)
+  (match ss
+    (Nil Nil)
+    ((Cons s rest) (Cons (sym_of_chars s) (segs_to_syms rest)))))
+
+(fn rev_sym ((xs (List Symbol)) (acc (List Symbol))) (List Symbol)
+  (match xs
+    (Nil acc)
+    ((Cons h t) (rev_sym t (Cons h acc)))))
+
+;; the `.` and `..` path segments (built from char 46 — `(quote .)` is not a
+;; lexable symbol token).
+(fn dot_sym () Symbol (sym_of_chars (Cons 46 Nil)))
+(fn dotdot_sym () Symbol (sym_of_chars (Cons 46 (Cons 46 Nil))))
+
+;; canonicalize a segment path: `.` drops, `..` pops the previous segment.
+;; acc is newest-first; result is restored to source order.
+(fn canon_push ((seg Symbol) (acc (List Symbol))) (List Symbol)
+  (if (sym_eq seg (dotdot_sym))
+    (match acc (Nil acc) ((Cons _ t) t))
+    (if (sym_eq seg (dot_sym)) acc (Cons seg acc))))
+
+(fn canon_go ((ss (List Symbol)) (acc (List Symbol))) (List Symbol)
+  (match ss
+    (Nil (rev_sym acc Nil))
+    ((Cons s t) (canon_go t (canon_push s acc)))))
+
+;; kernel/stdlib.shard is the SOURCE of the `core` crate — the builtin prelude
+;; types (List/Option/Bool/Pair) and ctors. Like Rust's `core`, its items ARE
+;; core, so its module-path collapses to `core` regardless of the relative
+;; import used to reach it. (The type checker and reducer hardcode `core` for
+;; these builtins; this keeps the module's prelude defs matching them.)
+(fn is_core_path ((segs (List Symbol))) Bool
+  (match segs
+    ((Cons a (Cons b Nil))
+     (if (sym_eq a (quote kernel)) (sym_eq b (quote stdlib)) False))
+    (_ False)))
+
+(fn module_path_of ((path (List Int))) (List Symbol)
+  (let
+    ((segs
+       (canon_go
+         (segs_to_syms
+           (path_segs (rev_i (strip_path_suffix (rev_i path Nil)) Nil) Nil))
+         Nil)))
+    (if (is_core_path segs) (qn_core) segs)))
+
+;; (SrcEntry — a resolved source's path + granted tag + bytes — is defined in
+;; reader.shard, a dependency of this file, so it is in scope here AND is parsed
+;; before loader/driver in the self-hosted reader's dependency-ordered ctor
+;; accumulation. See reader.shard.)
+
+;; closure-resolution state: seen paths (cycle/dedup), accumulated SrcEntries
+;; (in dependency order), World.
+(type Closure (Closure (List (List Int)) (List SrcEntry) World))
 
 (fn visit ((path (List Int)) (granted Bool) (run Bool) (st Closure)) Closure
   (match st
@@ -178,7 +265,7 @@
                run
                (Closure (Cons path seen) acc w1))
              ((Closure seen2 acc2 w2)
-              (Closure seen2 (append_src acc2 (Pair granted src)) w2)))))))))))
+              (Closure seen2 (append_src acc2 (SrcEntry path granted src)) w2)))))))))))
 
 (fn visit_imports
   ((paths (List (Pair Bool (List Int)))) (run Bool) (st Closure))
@@ -191,12 +278,12 @@
 ;; `run` selects how bare module imports resolve: False = CHECK (opaque
 ;; interfaces), True = RUN (impl bodies). See import_paths.
 (fn resolve_closure ((entry (List Int)) (run Bool) (w World))
-  (Pair (List (Pair Bool (List Int))) World)
+  (Pair (List SrcEntry) World)
   (match (visit entry False run (Closure Nil Nil w))
     ((Closure _ acc w2) (Pair acc w2))))
 
-;; Drop the granted tags — for callers (the eval app) that don't distinguish.
-(fn untag_sources ((srcs (List (Pair Bool (List Int))))) (List (List Int))
+;; Drop path/granted tags — for callers (the eval app) that want only bytes.
+(fn untag_sources ((srcs (List SrcEntry))) (List (List Int))
   (match srcs
     (Nil Nil)
-    ((Cons (Pair _ s) rest) (Cons s (untag_sources rest)))))
+    ((Cons (SrcEntry _ _ s) rest) (Cons s (untag_sources rest)))))

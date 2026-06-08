@@ -33,31 +33,50 @@
 ;; NOT writable from source, so a user definition can never forge a core
 ;; identity (the shadowing-unsoundness fix lives here). Compared component-wise.
 ;;
-;; STAGE 1 (this slice): every identity is tagged `core`, so qname_eq reduces to
-;; local-name equality and behavior is unchanged — a structural no-op that lets
-;; the whole kernel migrate off bare-Symbol identities. STAGE 2 assigns real
-;; per-module ids to user/library names (prims/prelude stay `core`); STAGE 3
-;; points the kernel's hardcoded tags (True/False/le/lt/…) at the `core` id,
-;; at which point a shadowed user `lt` is a distinct identity and farkas can no
-;; longer misread it.
-(type QName (QName Symbol Symbol))  ; module-id, local-name
+;; The module-id is a HIERARCHICAL PATH (a `(List Symbol)`), mirroring Rust's
+;; module tree: `std::list` is `(list std list)`, the builtin crate is `core`
+;; = `(list core)`. A path is the defining module's canonical position in the
+;; import tree, derived by the loader from the file system (1 dir = 1 module) —
+;; not writable from source, so a user definition can never forge a core
+;; identity (the shadowing-unsoundness fix lives here). Compared component-wise:
+;; path-prefix relations (Rust's `super`/`crate`) are list operations.
+;;
+;; STAGE 2 (this slice): the loader assigns real per-module paths to
+;; user/library names; prims and prelude ctors stay `core`. The Theory/citation
+;; namespace still keys at `core` (qualified citations are Stage 4). STAGE 3
+;; points the kernel's hardcoded tags (True/False/le/lt/…) at the `core` path
+;; and makes the theory backends REQUIRE it, at which point a shadowed user `lt`
+;; is a distinct identity and farkas can no longer misread it.
+(type QName (QName (List Symbol) Symbol))  ; module-path, local-name
+
+;; component-wise equality of two module paths.
+(fn sym_path_eq ((a (List Symbol)) (b (List Symbol))) Bool
+  (match a
+    (Nil (match b (Nil True) (_ False)))
+    ((Cons x xs)
+     (match b
+       (Nil False)
+       ((Cons y ys) (if (sym_eq x y) (sym_path_eq xs ys) False))))))
 
 (fn qname_eq ((a QName) (b QName)) Bool
   (match a
     ((QName am an)
      (match b
-       ((QName bm bn) (if (sym_eq am bm) (sym_eq an bn) False))))))
+       ((QName bm bn) (if (sym_path_eq am bm) (sym_eq an bn) False))))))
 
-;; the built-in module-id (also the Stage-1 universal sentinel).
-(fn qn_core () Symbol (quote core))
+;; the built-in module-path: the `core` crate. Built-in primitives and prelude
+;; ctors live here; the theory backends will (Stage 3) admit only this path.
+(fn qn_core () (List Symbol) (Cons (quote core) Nil))
 
-;; wrap a bare source name as a core-tagged identity. STAGE-1 BRIDGE: every
-;; construction site uses this, so all identities are `core`-tagged; it is also
-;; the genuine identity of a built-in. STAGE 2 replaces non-builtin uses with
-;; the resolver's per-module qualification.
+;; wrap a bare source name as a core-tagged identity — the genuine identity of a
+;; built-in primitive/prelude ctor. The resolver uses `qn_at` for everything it
+;; can place in a real module; `qn` remains for names that ARE core.
 (fn qn ((name Symbol)) QName (QName (qn_core) name))
 
-(fn qn_mod ((q QName)) Symbol (match q ((QName m _) m)))
+;; wrap a bare source name at an explicit module-path — the resolver's qualifier.
+(fn qn_at ((path (List Symbol)) (name Symbol)) QName (QName path name))
+
+(fn qn_mod ((q QName)) (List Symbol) (match q ((QName m _) m)))
 
 (fn qn_name ((q QName)) Symbol (match q ((QName _ n) n)))
 

@@ -74,6 +74,143 @@
     ((Goal ps prems eq) ps)))
 
 ;; ===========================================================================
+;; QUALIFIED-IDENTITY RESOLUTION for proof-DSL goals/proofs (Stage 2).
+;;
+;; proof_reader parses goals/proofs with everything tagged `core` (`qn`). The
+;; module M they reason about now carries real module-paths (build_module_d's
+;; resolver), so a goal's `Nat` / `True` / `int_of_nat` must be re-qualified to
+;; MATCH M, or every find_typedef/find_ctor/fn-sig lookup (which compares by
+;; qname_eq) fails. We resolve the embedded Expr/Type/Pat references (and the
+;; module entities a proof STEP names — the fn it Unfolds, the type it CaseOns,
+;; the ctor of each Case) against `module_resolve_env m`, reusing the reader's
+;; tree-walkers. EqRef CITATIONS (Lemma names) are deliberately left at `core`:
+;; the Theory keys claim names there too, so they still match — qualified
+;; citations are Stage 4. (resolve_expr/_type/_pat/rhead live in reader.shard;
+;; these proof-structure walkers live here, where proof.shard's types exist.)
+;; ===========================================================================
+
+(fn resolve_param
+  ((env (List (Pair Symbol (List Symbol)))) (p Param)) Param
+  (match p ((Param n t) (Param n (resolve_type env t)))))
+
+(fn resolve_params
+  ((env (List (Pair Symbol (List Symbol)))) (ps (List Param))) (List Param)
+  (match ps
+    (Nil Nil)
+    ((Cons h t) (Cons (resolve_param env h) (resolve_params env t)))))
+
+(fn resolve_equation
+  ((env (List (Pair Symbol (List Symbol)))) (eq Equation)) Equation
+  (match eq
+    ((Equation a b) (Equation (resolve_expr env a) (resolve_expr env b)))))
+
+(fn resolve_equations
+  ((env (List (Pair Symbol (List Symbol)))) (eqs (List Equation)))
+  (List Equation)
+  (match eqs
+    (Nil Nil)
+    ((Cons h t) (Cons (resolve_equation env h) (resolve_equations env t)))))
+
+(fn resolve_goal ((env (List (Pair Symbol (List Symbol)))) (g Goal)) Goal
+  (match g
+    ((Goal ps prems concl)
+     (Goal
+       (resolve_params env ps)
+       (resolve_equations env prems)
+       (resolve_equation env concl)))))
+
+(fn resolve_inst ((env (List (Pair Symbol (List Symbol)))) (i Inst)) Inst
+  (match i ((Inst n e) (Inst n (resolve_expr env e)))))
+
+(fn resolve_insts
+  ((env (List (Pair Symbol (List Symbol)))) (is (List Inst))) (List Inst)
+  (match is
+    (Nil Nil)
+    ((Cons h t) (Cons (resolve_inst env h) (resolve_insts env t)))))
+
+(fn resolve_step ((env (List (Pair Symbol (List Symbol)))) (st Step)) Step
+  (match st
+    ((Unfold f side) (Unfold (rhead f env) side))
+    ((Reduce side) st)
+    ((Simp side) st)
+    ((Compute side) st)
+    ((Rewrite eqref dir side allq insts)
+     (Rewrite eqref dir side allq (resolve_insts env insts)))))
+
+(fn resolve_steps
+  ((env (List (Pair Symbol (List Symbol)))) (sts (List Step))) (List Step)
+  (match sts
+    (Nil Nil)
+    ((Cons h t) (Cons (resolve_step env h) (resolve_steps env t)))))
+
+(fn resolve_proof ((env (List (Pair Symbol (List Symbol)))) (p Proof)) Proof
+  (match p
+    ((Refl) p)
+    ((Steps steps pf) (Steps (resolve_steps env steps) (resolve_proof env pf)))
+    ((Induct v cases) (Induct v (resolve_cases env cases)))
+    ((Induct2 v cases) (Induct2 v (resolve_cases env cases)))
+    ((CaseOn e ty cases)
+     (CaseOn (resolve_expr env e) (rhead ty env) (resolve_cases env cases)))
+    ((WfInduct measure pf)
+     (WfInduct (resolve_expr env measure) (resolve_proof env pf)))
+    ((RewriteWith eqref dir side insts subs pf)
+     (RewriteWith
+       eqref dir side
+       (resolve_insts env insts)
+       (resolve_proofs env subs)
+       (resolve_proof env pf)))
+    ((Absurd eqref) p)
+    ;; ByTheory's Cert payload is theory-PRIVATE narrow data (e.g. farkas's
+    ;; (List Int) multipliers), not object terms with module references — it is
+    ;; matched as a narrow list by the backends, so resolving it as an Expr
+    ;; would corrupt it. Leave it untouched.
+    ((ByTheory th cert) p)
+    ((FinSplit v lo hi fcs) (FinSplit v lo hi (resolve_fincases env fcs)))
+    ((Have eq pf cont)
+     (Have (resolve_equation env eq) (resolve_proof env pf) (resolve_proof env cont)))
+    ((WordFact e pf) (WordFact (resolve_expr env e) (resolve_proof env pf)))
+    ((DivFacts e d q pf) (DivFacts (resolve_expr env e) d q (resolve_proof env pf)))))
+
+(fn resolve_proofs
+  ((env (List (Pair Symbol (List Symbol)))) (ps (List Proof))) (List Proof)
+  (match ps
+    (Nil Nil)
+    ((Cons h t) (Cons (resolve_proof env h) (resolve_proofs env t)))))
+
+(fn resolve_case ((env (List (Pair Symbol (List Symbol)))) (c Case)) Case
+  (match c
+    ((Case ctor pf) (Case (rhead ctor env) (resolve_proof env pf)))
+    ((CaseB ctor names pf) (CaseB (rhead ctor env) names (resolve_proof env pf)))))
+
+(fn resolve_cases
+  ((env (List (Pair Symbol (List Symbol)))) (cs (List Case))) (List Case)
+  (match cs
+    (Nil Nil)
+    ((Cons h t) (Cons (resolve_case env h) (resolve_cases env t)))))
+
+(fn resolve_fincase ((env (List (Pair Symbol (List Symbol)))) (fc FinCase)) FinCase
+  (match fc ((FinCase k pf) (FinCase k (resolve_proof env pf)))))
+
+(fn resolve_fincases
+  ((env (List (Pair Symbol (List Symbol)))) (fcs (List FinCase))) (List FinCase)
+  (match fcs
+    (Nil Nil)
+    ((Cons h t) (Cons (resolve_fincase env h) (resolve_fincases env t)))))
+
+;; parse-then-resolve: parse a goal/proof against M's ctor+type sets, then
+;; re-qualify its module references to match M. The single seam every claim,
+;; axiom, and requirement flows through.
+(fn parse_goal_r ((m Module) (s SExpr)) (Option Goal)
+  (match (parse_goal s (module_ctors m) (module_type_names m))
+    (None None)
+    ((Some g) (Some (resolve_goal (module_resolve_env m) g)))))
+
+(fn parse_proof_r ((m Module) (s SExpr)) (Option Proof)
+  (match (parse_proof s (module_ctors m) (module_type_names m))
+    (None None)
+    ((Some p) (Some (resolve_proof (module_resolve_env m) p)))))
+
+;; ===========================================================================
 ;; Production entry: per-claim outcomes in source order. This is the loop the
 ;; default `check` routes through (the Rust harness reports each outcome as a
 ;; PASS/FAIL/AXIOM line). Claims and axioms are processed interleaved as
@@ -236,7 +373,7 @@
           ;; (axiom NAME (goal …)): parse goal to native, admit without proof.
           ((DAxiom a)
            (match
-             (parse_goal (ax_goal a) (module_ctors m) (module_type_names m))
+             (parse_goal_r m (ax_goal a))
              (None
                (run_decls
                  m
@@ -287,7 +424,7 @@
           ;; with desugar_proof_named, and check.
           ((DClaim nc)
            (match
-             (parse_goal (claim_goal nc) (module_ctors m) (module_type_names m))
+             (parse_goal_r m (claim_goal nc))
              (None
                (run_decls
                  m
@@ -338,10 +475,7 @@
                       target
                       focus)
                     (match
-                      (parse_proof
-                        (claim_proof nc)
-                        (module_ctors m)
-                        (module_type_names m))
+                      (parse_proof_r m (claim_proof nc))
                       (None
                         (run_decls
                           m
@@ -416,7 +550,7 @@
           ;; (validating it at the contract), seed it as a pending obligation.
           ((DReq r)
            (match
-             (parse_goal (req_goal r) (module_ctors m) (module_type_names m))
+             (parse_goal_r m (req_goal r))
              (None
                (run_decls
                  m
@@ -493,10 +627,7 @@
                   target
                   focus)
                 (match
-                  (parse_proof
-                    (ful_proof fu)
-                    (module_ctors m)
-                    (module_type_names m))
+                  (parse_proof_r m (ful_proof fu))
                   (None
                     (run_decls
                       m
@@ -566,7 +697,7 @@
 ;; as obligations — see collect_decls, reader.shard).
 (fn run_srcs
   ((m Module)
-   (srcs (List (Pair Bool (List Int))))
+   (srcs (List SrcEntry))
    (ctors (List Symbol))
    (st RunState)
    (target Symbol)
@@ -575,7 +706,7 @@
   RunState
   (match srcs
     (Nil st)
-    ((Cons (Pair granted src) rest)
+    ((Cons (SrcEntry _ granted src) rest)
      (match (parse_decls src ctors granted)
        (None
          (match st
@@ -653,7 +784,18 @@
     ((Cons h t) (Cons h (sym_concat t b)))))
 
 ;; ---- entry: the named fn must exist (with a body) and be (World) -> World ---
-(fn is_world ((t Type)) Bool (type_eq t (TCon (qn (quote World)) Nil)))
+;; The entry contract: main : (World) -> World. `World` is the I/O token type;
+;; a runnable program defines its own `(type World (World Int))` (its module-path
+;; differs from the kernel's), so this is a module-AGNOSTIC structural check on
+;; the type NAME (it gates main's calling convention, not a soundness-interpreted
+;; symbol). Cf. the Stage-1 convention for hardcoded tags.
+(fn is_world ((t Type)) Bool
+  (match t
+    ((TCon q args)
+     (match args
+       (Nil (sym_eq (qn_name q) (quote World)))
+       (_ False)))
+    (_ False)))
 
 (fn entry_ok ((fd FnDef)) Bool
   (match fd
@@ -760,10 +902,10 @@
        (None (extern_names_of_forms rest))
        ((Some n) (Cons n (extern_names_of_forms rest)))))))
 
-(fn own_externs_of_srcs ((srcs (List (Pair Bool (List Int))))) (List Symbol)
+(fn own_externs_of_srcs ((srcs (List SrcEntry))) (List Symbol)
   (match srcs
     (Nil Nil)
-    ((Cons (Pair granted src) rest)
+    ((Cons (SrcEntry _ granted src) rest)
      (if granted (own_externs_of_srcs rest)
      (match (read_all src)
        (None (own_externs_of_srcs rest))
@@ -1013,10 +1155,10 @@
          ((Some b) (Cons b (bins_of_forms rest))))
        (bins_of_forms rest)))))
 
-(fn bins_of_srcs ((srcs (List (Pair Bool (List Int))))) (List Bin)
+(fn bins_of_srcs ((srcs (List SrcEntry))) (List Bin)
   (match srcs
     (Nil Nil)
-    ((Cons (Pair _ src) rest)
+    ((Cons (SrcEntry _ _ src) rest)
      (match (read_all src)
        (None (bins_of_srcs rest))
        ((Some forms) (bin_concat (bins_of_forms forms) (bins_of_srcs rest)))))))
@@ -1027,7 +1169,7 @@
 ;; for every claim, or a non-matching sentinel for no tracing).
 (fn check_production
   ((m Module)
-   (srcs (List (Pair Bool (List Int))))
+   (srcs (List SrcEntry))
    (ctors (List Symbol))
    (target Symbol)
    (focus Symbol))
@@ -1039,14 +1181,7 @@
        (rev_outcomes acc Nil)
        (bin_reports (bins_of_srcs srcs) th m led (own_externs_of_srcs srcs))))))
 
-;; build_module only reads types/fns/externs (it skips claim/requirement/…), so
-;; it neither needs nor sees the granted tag — strip to raw bytes for it.
-(fn strip_granted ((srcs (List (Pair Bool (List Int))))) (List (List Int))
-  (match srcs
-    (Nil Nil)
-    ((Cons (Pair _ s) rest) (Cons s (strip_granted rest)))))
-
-;; Production entry that builds M IN SHARD. `build_module` (reader.shard) parses
+;; Production entry that builds M IN SHARD. `build_module_d` (reader.shard) parses
 ;; each source's types/fns via the self-hosted reader and merges them onto
 ;; `seed` (the kernel's types), threading ctors from `base_ctors` (the kernel's
 ;; ctor names). The full ctor set for claim parsing is then derived from M
@@ -1055,11 +1190,11 @@
 (fn check_production_src
   ((seed Module)
    (base_ctors (List Symbol))
-   (srcs (List (Pair Bool (List Int))))
+   (srcs (List SrcEntry))
    (target Symbol)
    (focus Symbol))
   (List ClaimOutcome)
-  (match (build_module_d (strip_granted srcs) seed base_ctors 1)
+  (match (build_module_d srcs seed base_ctors 1)
     ((BMFail diag) (Cons (COFail (quote __module__) diag Nil) Nil))
     ((BMOk m)
      ;; the type sweep over the assembled module (typedefs, externs/sigs, fn

@@ -680,8 +680,8 @@ mod tests {
         //   — note narrow Cons is a 2-arg ctor (head, tail),
         //   so its runtime layout matches the pattern's arity.
         let call = "(match_pat \
-                      (PCtor (QName (quote core) (quote Cons)) (Cons (PVar) (Cons (PVar) (Nil)))) \
-                      (Ctor (QName (quote core) (quote Cons)) (Cons (IntLit 1) (Cons (Ctor (QName (quote core) (quote Nil)) (Nil)) (Nil)))) \
+                      (PCtor (QName (Cons (quote core) (Nil)) (quote Cons)) (Cons (PVar) (Cons (PVar) (Nil)))) \
+                      (Ctor (QName (Cons (quote core) (Nil)) (quote Cons)) (Cons (IntLit 1) (Cons (Ctor (QName (Cons (quote core) (Nil)) (quote Nil)) (Nil)) (Nil)))) \
                       (Nil))";
         let e = load::expr_from_str(call, &m).expect("parses");
         let r = eval::eval(&m, &e).expect("evals");
@@ -731,7 +731,7 @@ mod tests {
     fn step_if_true_fires() {
         let m = load_kernel();
         let call = "(step (Module (Nil) (Nil) (Nil)) \
-                          (If (Ctor (QName (quote core) (quote True)) (Nil)) (IntLit 1) (IntLit 2)))";
+                          (If (Ctor (QName (Cons (quote core) (Nil)) (quote True)) (Nil)) (IntLit 1) (IntLit 2)))";
         let e = load::expr_from_str(call, &m).expect("parses");
         let r = eval::eval(&m, &e).expect("evals");
         assert_eq!(r, nctor("Some", vec![nctor("IntLit", vec![ast::Expr::IntLit(1.into())])]));
@@ -742,7 +742,7 @@ mod tests {
     fn step_if_false_fires() {
         let m = load_kernel();
         let call = "(step (Module (Nil) (Nil) (Nil)) \
-                          (If (Ctor (QName (quote core) (quote False)) (Nil)) (IntLit 1) (IntLit 2)))";
+                          (If (Ctor (QName (Cons (quote core) (Nil)) (quote False)) (Nil)) (IntLit 1) (IntLit 2)))";
         let e = load::expr_from_str(call, &m).expect("parses");
         let r = eval::eval(&m, &e).expect("evals");
         assert_eq!(r, nctor("Some", vec![nctor("IntLit", vec![ast::Expr::IntLit(2.into())])]));
@@ -843,10 +843,11 @@ mod tests {
         }
     }
 
-    /// The object-encoded `(QName 'core 'name)` identity for a reflected head.
+    /// The object-encoded `(QName (core) 'name)` identity for a reflected head.
+    /// The module-id is a `(List Symbol)` path (Stage 2); builtins live at `core`.
     fn obj_qname(name: &str) -> ast::Expr {
         nctor("QName", vec![
-            ast::Expr::SymLit("core".into()),
+            expr_spine(vec![ast::Expr::SymLit("core".into())]),
             ast::Expr::SymLit(name.into()),
         ])
     }
