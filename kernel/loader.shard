@@ -287,3 +287,36 @@
   (match srcs
     (Nil Nil)
     ((Cons (SrcEntry _ _ s) rest) (Cons s (untag_sources rest)))))
+
+;; ===========================================================================
+;; PROOF SIDECARS — `<file>.auto.shard`. A claim/fulfills whose proof is
+;; `auto` takes its real proof from a (proof-for NAME PROOF) entry in its
+;; file's sidecar, generated OFFLINE by proof-search tooling; the checker only
+;; ever REPLAYS a sidecar proof (check time never searches — the splice is in
+;; driver.shard). Reading sidecars is World I/O, so it happens here after
+;; closure resolution; the pure driver receives the bytes as data.
+;; ===========================================================================
+
+;; "<base>.shard" → "<base>.auto.shard" (a path without the .shard suffix
+;; gets ".auto.shard" appended; nothing produces one today).
+(fn auto_path_of ((p (List Int))) (List Int)
+  (match (strip_prefix (rev_i ".shard" Nil) (rev_i p Nil))
+    ((Some rbase) (append_int (rev_i rbase Nil) ".auto.shard"))
+    (None (append_int p ".auto.shard"))))
+
+;; Try each closure source's sidecar; collect entries for the ones that exist.
+;; Keyed by sym_of_chars of the SrcEntry's path, so the driver can assoc a
+;; source to its sidecar with sym_eq (it has no byte-list equality of its own).
+(fn read_sidecars ((srcs (List SrcEntry)) (w World))
+  (Pair (List (Pair Symbol (List Int))) World)
+  (match srcs
+    (Nil (Pair Nil w))
+    ((Cons (SrcEntry path _ _) rest)
+     (match (read_file (auto_path_of path) w)
+       ((Pair msc w1)
+        (match (read_sidecars rest w1)
+          ((Pair tail w2)
+           (match msc
+             (None (Pair tail w2))
+             ((Some bytes)
+              (Pair (Cons (Pair (sym_of_chars path) bytes) tail) w2))))))))))

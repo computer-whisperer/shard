@@ -361,11 +361,81 @@
 (fn focus_skip ((focus Symbol) (name Symbol)) Bool
   (if (sym_eq focus (quote __all__)) False (if (sym_eq focus name) False True)))
 
+;; ---------------------------------------------------------------------------
+;; `auto` proof indirection. A claim/fulfills whose proof is the bare symbol
+;; `auto` — or `(auto …)`, the tail reserved as SOLVER hints, ignored here —
+;; takes its real proof from the file's sidecar `<file>.auto.shard`:
+;; (proof-for NAME PROOF) forms generated offline by proof-search tooling
+;; (read_sidecars, loader.shard). The checker only ever REPLAYS a sidecar
+;; proof deterministically; it NEVER searches. A sidecar is untrusted input:
+;; the spliced s-expr goes through the same parse / desugar / check_sequent
+;; path as an inline proof, so a wrong or stale entry simply fails.
+;; ---------------------------------------------------------------------------
+(fn is_auto_proof ((s SExpr)) Bool
+  (match s
+    ((SSym h) (sym_eq h (quote auto)))
+    ((SList (Cons (SSym h) _)) (sym_eq h (quote auto)))
+    (_ False)))
+
+;; (proof-for NAME PROOF) forms → (name → proof-sexpr); other forms are
+;; ignored (a malformed entry surfaces as its claim's missing-entry failure).
+(fn autos_of_forms ((forms (List SExpr))) (List (Pair Symbol SExpr))
+  (match forms
+    (Nil Nil)
+    ((Cons f rest)
+     (match f
+       ((SList (Cons (SSym h) (Cons (SSym name) (Cons proofS Nil))))
+        (if (sym_eq h (quote proof-for))
+          (Cons (Pair name proofS) (autos_of_forms rest))
+          (autos_of_forms rest)))
+       (_ (autos_of_forms rest))))))
+
+;; this source's sidecar entries: find its path key, lex the sidecar bytes.
+(fn autos_of_src ((pathkey Symbol) (sidecars (List (Pair Symbol (List Int)))))
+  (List (Pair Symbol SExpr))
+  (match sidecars
+    (Nil Nil)
+    ((Cons (Pair k bytes) rest)
+     (if (sym_eq k pathkey)
+       (match (read_all bytes)
+         (None Nil)
+         ((Some forms) (autos_of_forms forms)))
+       (autos_of_src pathkey rest)))))
+
+(fn auto_lookup ((n Symbol) (autos (List (Pair Symbol SExpr)))) (Option SExpr)
+  (match autos
+    (Nil None)
+    ((Cons (Pair k p) rest) (if (sym_eq k n) (Some p) (auto_lookup n rest)))))
+
+(fn auto_missing_msg ((name Symbol)) (List Int)
+  (append_int
+    "auto proof: no (proof-for "
+    (append_int
+      (chars_of_sym name)
+      " ...) entry in this file's .auto.shard sidecar (generate it with the proof solver)")))
+
+;; Parse a decl's EFFECTIVE proof — inline as written, or spliced from the
+;; sidecar for `auto`. The two failure modes carry distinct messages.
+(type PrfRes (PrfOk Proof) (PrfErr (List Int)))
+
+(fn parse_proof_auto
+  ((m Module) (gctx RCtx) (name Symbol) (raw SExpr)
+   (autos (List (Pair Symbol SExpr))))
+  PrfRes
+  (match
+    (if (is_auto_proof raw) (auto_lookup name autos) (Some raw))
+    (None (PrfErr (auto_missing_msg name)))
+    ((Some prfS)
+     (match (parse_proof_r m gctx prfS)
+       (None (PrfErr "could not parse proof (proof DSL)"))
+       ((Some p) (PrfOk p))))))
+
 ;; `gctx` is the file's resolution context (curmod + use-scope, with the glob
 ;; folded in as the additive base) — used to resolve each goal/proof against the
 ;; module it was authored in. Constant per file; threaded unchanged.
 (fn run_decls
   ((gctx RCtx)
+   (autos (List (Pair Symbol SExpr)))  ; the file's sidecar entries (auto splice)
    (m Module) (st RunState) (ds (List Decl)) (target Symbol) (focus Symbol))
   RunState
   (match ds
@@ -379,7 +449,7 @@
            (match
              (parse_goal_r m gctx (ax_goal a))
              (None
-               (run_decls gctx
+               (run_decls gctx autos
                  m
                  (RunState
                    th
@@ -398,7 +468,7 @@
               (match (tc_check_goal m g)
                 ;; ill-typed axiom: REJECTED, not admitted to the theory.
                 ((Some msg)
-                 (run_decls gctx
+                 (run_decls gctx autos
                    m
                    (RunState
                      th
@@ -409,7 +479,7 @@
                    target
                    focus))
                 (None
-                  (run_decls gctx
+                  (run_decls gctx autos
                     m
                     (RunState
                       (TheoryCons
@@ -430,7 +500,7 @@
            (match
              (parse_goal_r m gctx (claim_goal nc))
              (None
-               (run_decls gctx
+               (run_decls gctx autos
                  m
                  (RunState
                    th
@@ -451,7 +521,7 @@
                 ;; in focus mode — an ill-typed goal must not enter the
                 ;; theory, where a focus-admitted citation would use it).
                 ((Some msg)
-                 (run_decls gctx
+                 (run_decls gctx autos
                    m
                    (RunState
                      th
@@ -464,7 +534,7 @@
                 (None
                   (if (focus_skip focus (claim_name nc))
                     ;; not the focus claim — admit its goal, skip the proof.
-                    (run_decls gctx
+                    (run_decls gctx autos
                       m
                       (RunState
                         (TheoryCons
@@ -479,28 +549,24 @@
                       target
                       focus)
                     (match
-                      (parse_proof_r m gctx (claim_proof nc))
-                      (None
-                        (run_decls gctx
+                      (parse_proof_auto
+                        m gctx (claim_name nc) (claim_proof nc) autos)
+                      ((PrfErr emsg)
+                        (run_decls gctx autos
                           m
                           (RunState
                             th
                             pend
-                            (Cons
-                              (COFail
-                                (claim_name nc)
-                                "could not parse proof (proof DSL)"
-                                Nil)
-                              acc)
+                            (Cons (COFail (claim_name nc) emsg Nil) acc)
                             led)
                           rest
                           target
                           focus))
-                      ((Some p0)
+                      ((PrfOk p0)
                        (match (desugar_proof_named m (goal_params g) Nil p0)
                          (p
                            (if (check_sequent m th (lift_sequent g) p)
-                             (run_decls gctx
+                             (run_decls gctx autos
                                m
                                (RunState
                                  (TheoryCons
@@ -529,7 +595,7 @@
                                rest
                                target
                                focus)
-                             (run_decls gctx
+                             (run_decls gctx autos
                                m
                                (RunState
                                  th
@@ -556,7 +622,7 @@
            (match
              (parse_goal_r m gctx (req_goal r))
              (None
-               (run_decls gctx
+               (run_decls gctx autos
                  m
                  (RunState
                    th
@@ -577,7 +643,7 @@
                 ;; not be fulfillable. (The later (fulfills) then fails with
                 ;; "no requirement in scope".)
                 ((Some msg)
-                 (run_decls gctx
+                 (run_decls gctx autos
                    m
                    (RunState
                      th
@@ -588,7 +654,7 @@
                    target
                    focus))
                 (None
-                  (run_decls gctx
+                  (run_decls gctx autos
                     m
                     (RunState th (Cons (PendReq (req_name r) g) pend) acc led)
                     rest
@@ -600,7 +666,7 @@
           ((DFul fu)
            (match (lookup_req (ful_name fu) pend)
              (None
-               (run_decls gctx
+               (run_decls gctx autos
                  m
                  (RunState
                    th
@@ -618,7 +684,7 @@
              ((Some g)
               (if (focus_skip focus (ful_name fu))
                 ;; not the focus claim — admit the requirement's goal, skip the proof.
-                (run_decls gctx
+                (run_decls gctx autos
                   m
                   (RunState
                     (TheoryCons
@@ -631,28 +697,24 @@
                   target
                   focus)
                 (match
-                  (parse_proof_r m gctx (ful_proof fu))
-                  (None
-                    (run_decls gctx
+                  (parse_proof_auto
+                    m gctx (ful_name fu) (ful_proof fu) autos)
+                  ((PrfErr emsg)
+                    (run_decls gctx autos
                       m
                       (RunState
                         th
                         pend
-                        (Cons
-                          (COFail
-                            (ful_name fu)
-                            "could not parse proof (proof DSL)"
-                            Nil)
-                          acc)
+                        (Cons (COFail (ful_name fu) emsg Nil) acc)
                         led)
                       rest
                       target
                       focus))
-                  ((Some p0)
+                  ((PrfOk p0)
                    (match (desugar_proof_named m (goal_params g) Nil p0)
                      (p
                        (if (check_sequent m th (lift_sequent g) p)
-                         (run_decls gctx
+                         (run_decls gctx autos
                            m
                            (RunState
                              (TheoryCons
@@ -673,7 +735,7 @@
                            rest
                            target
                            focus)
-                         (run_decls gctx
+                         (run_decls gctx autos
                            m
                            (RunState
                              th
@@ -703,6 +765,7 @@
   ((m Module)
    (srcs (List SrcEntry))
    (ctors (List Symbol))
+   (sidecars (List (Pair Symbol (List Int))))  ; path-key → .auto.shard bytes
    (st RunState)
    (target Symbol)
    (focus Symbol)
@@ -719,6 +782,7 @@
               m
               rest
               ctors
+              sidecars
               (RunState
                 th
                 pend
@@ -740,11 +804,13 @@
                m
                rest
                ctors
+               sidecars
                (run_decls
                  (RCtx
                    curmod
                    (app_env (filter_modpath (module_resolve_env m) curmod) uitems)
                    ualiases)
+                 (autos_of_src (sym_of_chars path) sidecars)
                  m st ds target focus)
                target
                focus
@@ -1186,11 +1252,13 @@
   ((m Module)
    (srcs (List SrcEntry))
    (ctors (List Symbol))
+   (sidecars (List (Pair Symbol (List Int))))
    (target Symbol)
    (focus Symbol))
   (List ClaimOutcome)
   (match
-    (run_srcs m srcs ctors (RunState TheoryEmpty Nil Nil Nil) target focus 1)
+    (run_srcs
+      m srcs ctors sidecars (RunState TheoryEmpty Nil Nil Nil) target focus 1)
     ((RunState th pend acc led)
      (oc_concat
        (rev_outcomes acc Nil)
@@ -1206,6 +1274,7 @@
   ((seed Module)
    (base_ctors (List Symbol))
    (srcs (List SrcEntry))
+   (sidecars (List (Pair Symbol (List Int))))  ; from read_sidecars (loader)
    (target Symbol)
    (focus Symbol))
   (List ClaimOutcome)
@@ -1220,5 +1289,6 @@
          m
          srcs
          (typedef_ctors (module_typedefs m))
+         sidecars
          target
          focus)))))

@@ -443,6 +443,19 @@ surface, and `requires` the requirement names forming its acceptance
 contract — `check` reports each one MET or UNMET (nothing pending is
 silent).
 
+**`auto` — sidecar proofs.** In a `claim` or `fulfills`, the PROOF
+position may be the symbol `auto` (or `(auto HINT…)` — the tail is
+reserved for proof-solver hints and ignored by the checker). The real
+proof then comes from the file's *sidecar* `<file>.auto.shard`, a list
+of `(proof-for NAME PROOF)` forms generated offline by proof-search
+tooling and committed alongside the source. The checker only ever
+**replays** a sidecar entry — it is spliced in and goes through the
+same parse/desugar/check path as an inline proof, so checking stays
+deterministic (check time never searches) and the sidecar is untrusted
+input: a wrong or stale entry simply fails. A missing entry is a hard
+failure (`examples/auto_missing_rejects.shard` pins this; the demo is
+`examples/auto_demo.shard`).
+
 ### 10.2 Goals and equations
 
 ```sexp
