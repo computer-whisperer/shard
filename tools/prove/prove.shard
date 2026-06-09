@@ -1,0 +1,146 @@
+;;; prove — the proof-solver app, v0 SKELETON: in-process candidate replay.
+;;;
+;;; The first consumer of the kernel-as-library surface: it imports the
+;;; checker toolchain as ordinary modules and drives it IN-PROCESS — no
+;;; subprocess, no re-parse per attempt. Given a target file and a claim
+;;; whose proof is `auto`, it injects a CANDIDATE proof as a synthetic
+;;; sidecar entry (the slice-1 splice point) and re-runs the checker driver
+;;; in focus mode (only the target claim is actually checked; everything
+;;; else is admitted). A candidate that closes the claim is reported as the
+;;; (proof-for …) entry to put in the file's real `.auto.shard` sidecar.
+;;;
+;;; v0 carries a single candidate — `(by lia (list))` — to pin the loop
+;;; end-to-end; the candidate LADDER (more theories, steps forms, sidecar
+;;; emission via the write extern) is the next slice. Check time never
+;;; searches: this tool searches OFFLINE and persists; `check` only replays.
+;;;
+;;; CAVEAT: if the claim's proof is INLINE (not `auto`), the injected
+;;; candidate is ignored and the inline proof is what gets re-checked —
+;;; point this tool only at `auto` claims.
+;;;
+;;; RUN IT:   ./rust_bootstrap/target/release/eval run tools/prove/prove.shard FILE CLAIM
+;;;           (or `eval direct` — the closure is flat-file imports)
+;;; exit 0 = a candidate closed the claim (entry printed)
+;;;      1 = no candidate closed it / the claim failed
+;;;      2 = bad usage, unreadable target, or no such claim
+
+(import "../../kernel/stdlib.shard")  ; List / Option / Bool / Pair
+(import "../../kernel/loader.shard")  ; World + I/O externs + resolve_closure
+(import "../../kernel/driver.shard")  ; check_production_src + prelude_ctors + ClaimOutcome
+(import "../../kernel/module.shard")  ; Module / FnTrie (the empty seed)
+(import "../../kernel/term.shard")  ; chars_of_sym
+
+;; the explicit library surface this app consumes (STRICT-mode scoping).
+(use (:: kernel loader resolve_closure))
+(use (:: kernel loader append_int))
+(use (:: kernel loader World))
+(use (:: kernel loader get_args))
+(use (:: kernel loader write))
+(use (:: kernel loader exit))
+(use (:: kernel reader SrcEntry))
+(use (:: kernel driver check_production_src))
+(use (:: kernel driver prelude_ctors))
+(use (:: kernel driver ClaimOutcome))
+(use (:: kernel driver COPass))
+(use (:: kernel driver COFail))
+(use (:: kernel driver COTypeFail))
+(use (:: kernel module Module))
+(use (:: kernel module FnTrie))
+(use (:: kernel term chars_of_sym))
+
+(fn nl () (List Int) (Cons 10 Nil))  ; "\n"
+
+;; ---- the candidate (v0: exactly one) ---------------------------------------
+(fn candidate () (List Int) "(by lia (list))")
+
+;; the synthetic sidecar: one (proof-for CLAIM CANDIDATE) entry, as bytes —
+;; the same splice path a real .auto.shard file takes (driver.shard).
+(fn sidecar_for ((claim (List Int)) (cand (List Int))) (List Int)
+  (append_int
+    "(proof-for "
+    (append_int claim (append_int " " (append_int cand ")")))))
+
+;; ---- outcome scan ----------------------------------------------------------
+;; The target claim's outcome: Some True = passed, Some False = failed (either
+;; way it WAS processed); None = no outcome carries its name (wrong name, or
+;; the file didn't reach it).
+(fn outcome_of ((cn Symbol) (os (List ClaimOutcome))) (Option Bool)
+  (match os
+    (Nil None)
+    ((Cons o rest)
+     (match o
+       ((COPass n _) (if (sym_eq n cn) (Some True) (outcome_of cn rest)))
+       ((COFail n _ _) (if (sym_eq n cn) (Some False) (outcome_of cn rest)))
+       ((COTypeFail n _) (if (sym_eq n cn) (Some False) (outcome_of cn rest)))
+       (_ (outcome_of cn rest))))))
+
+;; ---- one in-process attempt ------------------------------------------------
+;; Focus-mode driver run with the candidate spliced in for the target claim.
+(fn attempt
+  ((target (List Int)) (claim (List Int)) (srcs (List SrcEntry)))
+  (Option Bool)
+  (outcome_of
+    (sym_of_chars claim)
+    (check_production_src
+      (Module Nil Nil Nil (FnTrie None Nil))
+      (prelude_ctors)
+      srcs
+      (Cons
+        (Pair (sym_of_chars target) (sidecar_for claim (candidate)))
+        Nil)
+      (quote __no_trace__)
+      (sym_of_chars claim))))
+
+;; ---- report ----------------------------------------------------------------
+(fn report ((claim (List Int)) (r (Option Bool)) (w World)) World
+  (match r
+    ((Some True)
+     (exit
+       0
+       (write
+         (append_int
+           "PROVED "
+           (append_int
+             claim
+             (append_int
+               (nl)
+               (append_int (sidecar_for claim (candidate)) (nl)))))
+         w)))
+    ((Some False)
+     (exit
+       1
+       (write
+         (append_int
+           "UNSOLVED "
+           (append_int
+             claim
+             (append_int
+               ": candidate did not close it: "
+               (append_int (candidate) (nl)))))
+         w)))
+    (None
+      (exit
+        2
+        (write
+          (append_int
+            "error: no outcome for claim "
+            (append_int claim (append_int " (wrong name?)" (nl))))
+          w)))))
+
+;; ---- the World wrapper: arg0 = target file, arg1 = claim name --------------
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Pair args w1)
+     (match args
+       ((Cons target (Cons claim Nil))
+        (match (resolve_closure target False w1)  ; False = CHECK-mode closure
+          ((Pair srcs w2)
+           (match srcs
+             (Nil
+               (exit
+                 2
+                 (write
+                   (append_int "error: cannot read " (append_int target (nl)))
+                   w2)))
+             (_ (report claim (attempt target claim srcs) w2))))))
+       (_ (exit 2 (write "usage: prove <file.shard> <claim>\n" w1)))))))

@@ -148,7 +148,14 @@ pub fn module_from_str_with_base(
             // `app` is the entrypoint declaration consumed by the
             // `check app` driver (state + init + update), not the module
             // loader — skip it here exactly like claim/import.
-            "claim" | "axiom" | "import" | "use-module" | "app" | "cli" => {}
+            // `use`/`sig`/`requirement`/`fulfills`/`bin` are likewise
+            // check-layer declarations with no runtime semantics: `use`
+            // scoping matters only to STRICT check-time resolution (host
+            // dispatch is name-keyed), and the contract forms are the
+            // checker driver's concern. Skipping them lets `eval direct`
+            // run apps that carry them (e.g. tools/prove).
+            "claim" | "axiom" | "import" | "use-module" | "app" | "cli" | "use"
+            | "sig" | "requirement" | "fulfills" | "bin" => {}
             other => return Err(LoadError::UnknownForm(other.into())),
         }
     }
