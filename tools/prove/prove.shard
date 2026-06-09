@@ -7,18 +7,18 @@
 ;;; claim/fulfills in the target file it searches for a proof and persists
 ;;; the winners into the file's `<file>.auto.shard` via write_file.
 ;;;
-;;; TWO SEARCH MODES:
-;;;   flat ladder    closed-form candidates, cheapest closer first
-;;;                  (refl / compute / simp / eqdec / ord / lia)
-;;;   (auto (induct VAR))  HINTED structural search: parse the goal, build
-;;;                  each constructor case's SUBGOAL via the checker's own
-;;;                  build_induct_subgoal, solve each case independently
-;;;                  with a case ladder (the flat closers plus unfold/
-;;;                  reduce/IH-rewrite templates over the goal's own fn
-;;;                  heads — a file may only unfold fns it owns, which is
-;;;                  exactly what a goal's heads are), assemble the
-;;;                  (induct …) proof, and verify the WHOLE assembly
-;;;                  through the standard driver pass before persisting.
+;;; THE SEARCH: every decl tries the flat ladder first — closed-form
+;;; candidates, cheapest closer first (refl / compute / simp / eqdec / ord /
+;;; lia). If that fails, structural induction: on the hinted variable for
+;;; (auto (induct VAR)), else on each goal parameter in turn (a hint is an
+;;; accelerator, not a requirement). Induction synthesis builds each
+;;; constructor case's SUBGOAL via the checker's own build_induct_subgoal
+;;; and solves each case independently with a case ladder: per-side
+;;; unfold/reduce chains over that side's own fn heads (a file may only
+;;; unfold fns it owns, which is exactly what a goal's heads are), optional
+;;; IH-rewrite tails ((hyp 0)/(hyp 1), lhs or rhs), closed by refl or a
+;;; theory backend. The assembled (induct …) proof is verified WHOLE
+;;; through the standard driver pass before persisting.
 ;;;
 ;;; THE CONTRACT: search happens HERE, offline; `check` only ever REPLAYS
 ;;; the persisted entries. A solver bug can cost coverage, never soundness —
@@ -319,42 +319,21 @@
   (match m
     ((Module _ _ _ t) t)))
 
-(fn goal_heads ((g Goal) (m Module)) (List QName)
+;; per-side heads, as fn-name bytes: each side's own heads are its unfold
+;; vocabulary (Unfold replaces ONE occurrence, so chains with repeats reach
+;; nested calls of the same fn).
+(fn head_names ((qs (List QName))) (List (List Int))
+  (match qs
+    (Nil Nil)
+    ((Cons q rest) (Cons (chars_of_sym (qn_name q)) (head_names rest)))))
+
+(fn side_heads ((g Goal) (m Module))
+  (Pair (List (List Int)) (List (List Int)))
   (match g
     ((Goal _ _ (Equation l r))
-     (heads_of l (fn_trie_of m) (heads_of r (fn_trie_of m) Nil)))))
-
-;; unfold/reduce(/IH-rewrite) templates for one fn head, one side. The IH is
-;; (hyp 0): a top-level goal lifts with NO hypotheses, so the first appended
-;; IH always lands at index 0.
-(fn unfold_cands_for ((fname (List Int)) (side (List Int))) (List (List Int))
-  (list
-    (append_int
-      "(steps ((unfold "
-      (append_int
-        fname
-        (append_int
-          " "
-          (append_int
-            side
-            (append_int
-              ") (reduce "
-              (append_int side ")) refl)"))))))
-    (append_int
-      "(steps ((unfold "
-      (append_int
-        fname
-        (append_int
-          " "
-          (append_int
-            side
-            (append_int
-              ") (reduce "
-              (append_int
-                side
-                (append_int
-                  ") (rewrite (hyp 0) lr "
-                  (append_int side " true ())) refl)"))))))))))
+     (Pair
+       (head_names (heads_of l (fn_trie_of m) Nil))
+       (head_names (heads_of r (fn_trie_of m) Nil))))))
 
 (fn append_cands ((a (List (List Int))) (b (List (List Int))))
   (List (List Int))
@@ -362,27 +341,140 @@
     (Nil b)
     ((Cons h t) (Cons h (append_cands t b)))))
 
-(fn unfold_cands ((heads (List QName))) (List (List Int))
-  (match heads
-    (Nil Nil)
-    ((Cons q rest)
-     (append_cands
-       (unfold_cands_for (chars_of_sym (qn_name q)) "lhs")
-       (append_cands
-         (unfold_cands_for (chars_of_sym (qn_name q)) "rhs")
-         (unfold_cands rest))))))
+;; ---- case-candidate generation ----------------------------------------------
+;; A case candidate is (steps PREFIX TERMINAL). PREFIX = an unfold/reduce
+;; chain per side (length <= 2, over that side's own heads) plus an optional
+;; IH-rewrite tail; TERMINAL = refl or a theory closer. A candidate whose
+;; first step doesn't apply fails immediately, so the breadth stays cheap.
 
-;; the per-case ladder: cheap closers, then the unfold templates, then the
-;; theory backends.
-(fn case_ladder ((heads (List QName))) (List (List Int))
-  (append_cands
+(fn st_unfold ((f (List Int)) (side (List Int))) (List Int)
+  (append_int "(unfold " (append_int f (append_int " " (append_int side ")")))))
+
+(fn st_reduce ((side (List Int))) (List Int)
+  (append_int "(reduce " (append_int side ")")))
+
+;; (rewrite (hyp I) lr SIDE true ()) — the IH-consumption step. The IHs are
+;; (hyp 0)/(hyp 1): a top-level goal lifts with NO hypotheses, so appended
+;; IHs land at 0 upward ((hyp 1) exists only for two-recursive-field ctors;
+;; elsewhere the candidate just fails).
+(fn st_rw_hyp ((i Int) (side (List Int))) (List Int)
+  (append_int
+    "(rewrite (hyp "
+    (append_int
+      (show_int_p i)
+      (append_int ") lr " (append_int side " true ())")))))
+
+(fn join_sp ((xs (List (List Int)))) (List Int)
+  (match xs
+    (Nil Nil)
+    ((Cons x Nil) x)
+    ((Cons x rest) (append_int x (Cons 32 (join_sp rest))))))
+
+(fn steps_cand ((stps (List (List Int))) (terminal (List Int))) (List Int)
+  (append_int
+    "(steps ("
+    (append_int (join_sp stps) (append_int ") " (append_int terminal ")")))))
+
+;; ordered unfold chains over one side's heads: empty, every single, every
+;; ordered pair (repeats allowed — nested recursion unfolds one fn twice).
+(fn append_chains
+  ((a (List (List (List Int)))) (b (List (List (List Int)))))
+  (List (List (List Int)))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (append_chains t b)))))
+
+(fn chain_singles ((hs (List (List Int)))) (List (List (List Int)))
+  (match hs
+    (Nil Nil)
+    ((Cons f rest) (Cons (Cons f Nil) (chain_singles rest)))))
+
+(fn chain_pairs_with ((f (List Int)) (hs (List (List Int))))
+  (List (List (List Int)))
+  (match hs
+    (Nil Nil)
+    ((Cons g rest) (Cons (Cons f (Cons g Nil)) (chain_pairs_with f rest)))))
+
+(fn chain_pairs ((hs (List (List Int))) (all (List (List Int))))
+  (List (List (List Int)))
+  (match hs
+    (Nil Nil)
+    ((Cons f rest)
+     (append_chains (chain_pairs_with f all) (chain_pairs rest all)))))
+
+(fn chains2 ((hs (List (List Int)))) (List (List (List Int)))
+  (Cons Nil (append_chains (chain_singles hs) (chain_pairs hs hs))))
+
+;; one side's chain as steps: (unfold F side) (reduce side) per link.
+(fn chain_steps ((names (List (List Int))) (side (List Int)))
+  (List (List Int))
+  (match names
+    (Nil Nil)
+    ((Cons f rest)
+     (Cons (st_unfold f side) (Cons (st_reduce side) (chain_steps rest side))))))
+
+;; IH-rewrite tails on a base prefix: none / (hyp 0) into lhs / into rhs /
+;; (hyp 0)+(hyp 1) into lhs. An empty base keeps only the rewrite variants
+;; (the plain closers already cover it).
+(fn ih_variants ((base (List (List Int)))) (List (List (List Int)))
+  (append_chains
+    (match base
+      (Nil Nil)
+      (_ (Cons base Nil)))
     (list
-      "refl"
-      "(steps ((compute both)) refl)"
-      "(steps ((simp both)) refl)")
+      (append_cands base (list (st_rw_hyp 0 "lhs")))
+      (append_cands base (list (st_rw_hyp 0 "rhs")))
+      (append_cands base (list (st_rw_hyp 0 "lhs") (st_rw_hyp 1 "lhs"))))))
+
+(fn prefixes_loop_r
+  ((lc (List (List Int))) (rcs (List (List (List Int)))))
+  (List (List (List Int)))
+  (match rcs
+    (Nil Nil)
+    ((Cons rc rest)
+     (append_chains
+       (ih_variants
+         (append_cands (chain_steps lc "lhs") (chain_steps rc "rhs")))
+       (prefixes_loop_r lc rest)))))
+
+(fn prefixes_loop
+  ((lcs (List (List (List Int)))) (rcs (List (List (List Int)))))
+  (List (List (List Int)))
+  (match lcs
+    (Nil Nil)
+    ((Cons lc rest)
+     (append_chains (prefixes_loop_r lc rcs) (prefixes_loop rest rcs)))))
+
+;; every prefix: the chain cross-product plus simp-based bases (simp is the
+;; gated full normalizer — sometimes it exposes the IH redex in one step).
+(fn all_prefixes ((lheads (List (List Int))) (rheads (List (List Int))))
+  (List (List (List Int)))
+  (append_chains
+    (prefixes_loop (chains2 lheads) (chains2 rheads))
+    (ih_variants (list "(simp both)"))))
+
+(fn with_terminal ((pfxs (List (List (List Int)))) (terminal (List Int)))
+  (List (List Int))
+  (match pfxs
+    (Nil Nil)
+    ((Cons p rest) (Cons (steps_cand p terminal) (with_terminal rest terminal)))))
+
+;; the per-case ladder: cheap closers, then every prefix closed by refl, then
+;; the bare theory backends, then every prefix closed by lia (an unfolded /
+;; IH-rewritten residual is often linear arithmetic).
+(fn case_ladder ((lheads (List (List Int))) (rheads (List (List Int))))
+  (List (List Int))
+  (let ((pfxs (all_prefixes lheads rheads)))
     (append_cands
-      (unfold_cands heads)
-      (list "(by eqdec (list))" "(by ord (list))" "(by lia (list))"))))
+      (list
+        "refl"
+        "(steps ((compute both)) refl)"
+        "(steps ((simp both)) refl)")
+      (append_cands
+        (with_terminal pfxs "refl")
+        (append_cands
+          (list "(by eqdec (list))" "(by ord (list))" "(by lia (list))")
+          (with_terminal pfxs "(by lia (list))"))))))
 
 ;; parse one candidate's bytes to a native Proof (against the file's scope).
 (fn parse_cand ((m Module) (rctx RCtx) (bytes (List Int))) (Option Proof)
@@ -475,42 +567,79 @@
                (match (lookup_typedef tname (slv_m s))
                  (None None)
                  ((Some (TypeDef _ tparams tctors))
-                  (match
-                    (solve_cases
-                      s
-                      seq
-                      v
-                      vt
-                      (zip_pairs tparams targs)
-                      tctors
-                      (case_ladder (goal_heads g (slv_m s))))
-                    (None None)
-                    ((Some cs)
-                     (let ((cand (assemble_induct v cs)))
-                       (if (attempt s name cand) (Some cand) None)))))))))))))))
+                  (match (side_heads g (slv_m s))
+                    ((Pair lh rh)
+                     (match
+                       (solve_cases
+                         s
+                         seq
+                         v
+                         vt
+                         (zip_pairs tparams targs)
+                         tctors
+                         (case_ladder lh rh))
+                       (None None)
+                       ((Some cs)
+                        (let ((cand (assemble_induct v cs)))
+                          (if (attempt s name cand) (Some cand) None)))))))))))))))))
 
 ;; ---- solve loop --------------------------------------------------------------
 (type Solved
   (SolvedY Symbol (List Int))  ; claim closed by this candidate
   (SolvedN Symbol))  ; search exhausted
 
-;; hinted decls run their structural search first, then fall back to the
-;; flat ladder; bare decls go straight to the flat ladder.
+;; unhinted induction: try each goal parameter in turn (try_induct skips
+;; non-datatype params on its own).
+(fn param_syms ((ps (List Param))) (List Symbol)
+  (match ps
+    (Nil Nil)
+    ((Cons (Param n _) rest) (Cons n (param_syms rest)))))
+
+(fn goal_param_names ((g Goal)) (List Symbol)
+  (match g
+    ((Goal ps _ _) (param_syms ps))))
+
+(fn try_induct_vars
+  ((s Slv) (name Symbol) (vs (List Symbol)) (goalS SExpr))
+  (Option (List Int))
+  (match vs
+    (Nil None)
+    ((Cons v rest)
+     (match (try_induct s name v goalS)
+       ((Some c) (Some c))
+       (None (try_induct_vars s name rest goalS))))))
+
+;; the unhinted strategy: flat ladder first (cheap, catches the theory-closable
+;; goals), then a structural induction on each goal parameter — a hint is an
+;; accelerator, not a requirement.
+(fn solve_unhinted ((s Slv) (name Symbol) (mgoal (Option SExpr))) Solved
+  (match (try_ladder s name (ladder))
+    ((Some c) (SolvedY name c))
+    (None
+      (match mgoal
+        (None (SolvedN name))
+        ((Some goalS)
+         (match (parse_goal_r (slv_m s) (slv_rctx s) goalS)
+           (None (SolvedN name))
+           ((Some g)
+            (match (try_induct_vars s name (goal_param_names g) goalS)
+              ((Some c) (SolvedY name c))
+              (None (SolvedN name))))))))))
+
+;; hinted decls run their structural search first; on failure they fall back
+;; to the full unhinted strategy (the hinted var is retried there — harmless).
 (fn solve_one ((s Slv) (d AutoDecl)) Solved
   (match d
     ((AutoDecl name hint mgoal)
-     (match
-       (match hint
-         ((HInduct v)
+     (match hint
+       ((HInduct v)
+        (match
           (match mgoal
             ((Some goalS) (try_induct s name v goalS))
-            (None None)))
-         ((HNone) None))
-       ((Some cand) (SolvedY name cand))
-       (None
-         (match (try_ladder s name (ladder))
-           ((Some c) (SolvedY name c))
-           (None (SolvedN name))))))))
+            (None None))
+          ((Some cand) (SolvedY name cand))
+          (None (solve_unhinted s name mgoal))))
+       ((HNone) (solve_unhinted s name mgoal))))))
 
 (fn solve_all ((s Slv) (ds (List AutoDecl))) (List Solved)
   (match ds
