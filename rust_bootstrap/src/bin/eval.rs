@@ -96,14 +96,34 @@ fn main() -> ExitCode {
 }
 
 fn run() -> ExitCode {
-    let prog_args: Vec<String> = std::env::args().skip(1).collect();
+    let mut prog_args: Vec<String> = std::env::args().skip(1).collect();
 
     // --- bootstrap the VM: resolve the entrypoint's import closure ----------
     // `kernel/eval.shard` declares the files it needs; we follow its imports
     // (deps first, entrypoint last) and load exactly that closure — no proof
     // checker, no proof toolchain, no std/. The list lives in the entrypoint,
     // not here.
-    let entry = default_kernel_dir().join("eval.shard");
+    //
+    // `eval direct <app.shard> [args…]` instead loads the APP's closure and
+    // runs its `main` on this bootstrap evaluator — one interpretation layer
+    // instead of two (the tower `eval run` pays ~100× to interpret the app
+    // through eval.shard's `ev`). Host-side verb only: eval.shard never sees
+    // it. The app must be narrow (load.rs is the parser) with a FLAT import
+    // closure (this host resolver does not understand directory modules —
+    // that logic lives in loader.shard and stays there; check.shard
+    // qualifies, shardfmt does not). Semantics are identical — the tower
+    // remains the self-hosting cross-check.
+    let entry = if prog_args.first().map(String::as_str) == Some("direct") {
+        if prog_args.len() < 2 {
+            eprintln!("usage: eval direct <app.shard> [args…]");
+            return ExitCode::from(2);
+        }
+        let app = PathBuf::from(prog_args[1].clone());
+        prog_args.drain(..2);
+        app
+    } else {
+        default_kernel_dir().join("eval.shard")
+    };
     let paths = match resolve_closure(&entry) {
         Ok(ps) => ps,
         Err(e) => {
@@ -191,6 +211,7 @@ fn make_handler(prog_args: Vec<String>) -> impl FnMut(&str, &[ast::Expr]) -> Res
             }
             "exit" => {
                 let _ = std::io::stdout().flush();
+                eval::prof_dump(); // no-op unless SHARD_PROF is set
                 let code = match &args[0] {
                     ast::Expr::IntLit(n) => n.to_i32().unwrap_or(2),
                     _ => 0,
