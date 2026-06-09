@@ -889,17 +889,25 @@
 ;; citations are Stage 4; lemma/claim names still key at `core`.
 ;; ===========================================================================
 
+;; The resolution CONTEXT threaded through every resolve_* walker: the module
+;; being resolved (`curmod`, for self/super/crate re-rooting — Stage 2.5) plus
+;; the name→module-path env (locals ++ imports). rhead is the only consumer that
+;; inspects either; the walkers just pass it through.
+(type RCtx (RCtx (List Symbol) (List (Pair Symbol (List Symbol)))))
+(fn rc_mod ((c RCtx)) (List Symbol) (match c ((RCtx m _) m)))
+(fn rc_env ((c RCtx)) (List (Pair Symbol (List Symbol))) (match c ((RCtx _ e) e)))
+
 ;; name -> module-path env (assoc list, first match wins → local precedence).
 (fn env_lookup
-  ((name Symbol) (env (List (Pair Symbol (List Symbol))))) (List Symbol)
-  (match env
+  ((name Symbol) (tbl (List (Pair Symbol (List Symbol))))) (List Symbol)
+  (match tbl
     (Nil (qn_core))  ; unresolved → a builtin/prim/prelude name: core
     ((Cons (Pair n p) rest)
      (if (sym_eq name n) p (env_lookup name rest)))))
 
 ;; re-qualify a (core-tagged) head by looking its local name up in the env.
-(fn rhead ((q QName) (env (List (Pair Symbol (List Symbol))))) QName
-  (qn_at (env_lookup (qn_name q) env) (qn_name q)))
+(fn rhead ((q QName) (env RCtx)) QName
+  (qn_at (env_lookup (qn_name q) (rc_env env)) (qn_name q)))
 
 (fn app_env
   ((a (List (Pair Symbol (List Symbol)))) (b (List (Pair Symbol (List Symbol)))))
@@ -965,18 +973,18 @@
        modpath))))
 
 ;; --- the tree-walk rewriters ------------------------------------------------
-(fn resolve_type ((env (List (Pair Symbol (List Symbol)))) (t Type)) Type
+(fn resolve_type ((env RCtx) (t Type)) Type
   (match t
     ((TVar _) t)
     ((TCon c args) (TCon (rhead c env) (resolve_type_list env args)))))
 
 (fn resolve_type_list
-  ((env (List (Pair Symbol (List Symbol)))) (ts (List Type))) (List Type)
+  ((env RCtx) (ts (List Type))) (List Type)
   (match ts
     (Nil Nil)
     ((Cons h t) (Cons (resolve_type env h) (resolve_type_list env t)))))
 
-(fn resolve_expr ((env (List (Pair Symbol (List Symbol)))) (e Expr)) Expr
+(fn resolve_expr ((env RCtx) (e Expr)) Expr
   (match e
     ((FVar _) e)
     ((BVar _) e)
@@ -990,20 +998,20 @@
     ((SymLit _) e)))
 
 (fn resolve_expr_list
-  ((env (List (Pair Symbol (List Symbol)))) (es (List Expr))) (List Expr)
+  ((env RCtx) (es (List Expr))) (List Expr)
   (match es
     (Nil Nil)
     ((Cons h t) (Cons (resolve_expr env h) (resolve_expr_list env t)))))
 
 (fn resolve_arms
-  ((env (List (Pair Symbol (List Symbol)))) (arms (List Arm))) (List Arm)
+  ((env RCtx) (arms (List Arm))) (List Arm)
   (match arms
     (Nil Nil)
     ((Cons (Arm p body) r)
      (Cons (Arm (resolve_pat env p) (resolve_expr env body))
        (resolve_arms env r)))))
 
-(fn resolve_pat ((env (List (Pair Symbol (List Symbol)))) (p Pat)) Pat
+(fn resolve_pat ((env RCtx) (p Pat)) Pat
   (match p
     ((PVar) p)
     ((PCtor c ps) (PCtor (rhead c env) (resolve_pat_list env ps)))
@@ -1011,37 +1019,37 @@
     ((PSym _) p)))
 
 (fn resolve_pat_list
-  ((env (List (Pair Symbol (List Symbol)))) (ps (List Pat))) (List Pat)
+  ((env RCtx) (ps (List Pat))) (List Pat)
   (match ps
     (Nil Nil)
     ((Cons h t) (Cons (resolve_pat env h) (resolve_pat_list env t)))))
 
 (fn resolve_ctordef
-  ((env (List (Pair Symbol (List Symbol)))) (cd CtorDef)) CtorDef
+  ((env RCtx) (cd CtorDef)) CtorDef
   (match cd
     ((CtorDef n fts) (CtorDef (rhead n env) (resolve_type_list env fts)))))
 
 (fn resolve_ctordefs
-  ((env (List (Pair Symbol (List Symbol)))) (cds (List CtorDef)))
+  ((env RCtx) (cds (List CtorDef)))
   (List CtorDef)
   (match cds
     (Nil Nil)
     ((Cons h t) (Cons (resolve_ctordef env h) (resolve_ctordefs env t)))))
 
 (fn resolve_typedef
-  ((env (List (Pair Symbol (List Symbol)))) (td TypeDef)) TypeDef
+  ((env RCtx) (td TypeDef)) TypeDef
   (match td
     ((TypeDef n ps cds)
      (TypeDef (rhead n env) ps (resolve_ctordefs env cds)))))
 
 (fn resolve_typedefs
-  ((env (List (Pair Symbol (List Symbol)))) (tds (List TypeDef)))
+  ((env RCtx) (tds (List TypeDef)))
   (List TypeDef)
   (match tds
     (Nil Nil)
     ((Cons h t) (Cons (resolve_typedef env h) (resolve_typedefs env t)))))
 
-(fn resolve_fndef ((env (List (Pair Symbol (List Symbol)))) (fd FnDef)) FnDef
+(fn resolve_fndef ((env RCtx) (fd FnDef)) FnDef
   (match fd
     ((FnDef n pts ret body)
      (FnDef
@@ -1051,19 +1059,19 @@
        (resolve_expr env body)))))
 
 (fn resolve_fndefs
-  ((env (List (Pair Symbol (List Symbol)))) (fds (List FnDef))) (List FnDef)
+  ((env RCtx) (fds (List FnDef))) (List FnDef)
   (match fds
     (Nil Nil)
     ((Cons h t) (Cons (resolve_fndef env h) (resolve_fndefs env t)))))
 
 (fn resolve_externdef
-  ((env (List (Pair Symbol (List Symbol)))) (ed ExternDef)) ExternDef
+  ((env RCtx) (ed ExternDef)) ExternDef
   (match ed
     ((ExternDef n pts ret)
      (ExternDef (rhead n env) (resolve_type_list env pts) (resolve_type env ret)))))
 
 (fn resolve_externdefs
-  ((env (List (Pair Symbol (List Symbol)))) (es (List ExternDef)))
+  ((env RCtx) (es (List ExternDef)))
   (List ExternDef)
   (match es
     (Nil Nil)
@@ -1079,7 +1087,7 @@
   Module
   (match m
     ((Module tds fns exts _)
-     (let ((env (app_env (local_env m modpath) ie)))
+     (let ((env (RCtx modpath (app_env (local_env m modpath) ie))))
        (let ((rfns (resolve_fndefs env fns)))
          (Module
            (resolve_typedefs env tds)
