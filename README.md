@@ -283,6 +283,8 @@ Feature checklist (✓ = shipped in v2; → = next):
 | `rewrite` descends into match arms (BVar-free patterns) | ✓ | proofs |
 | Directory modules: `mod.req.shard` interfaces, mode-aware resolution | ✓ | modules |
 | Opaque types (`(sig type …)` — private ctors, parse-enforced) | ✓ | modules |
+| Qualified identity — `QName` paths, `use`/`(:: …)`, strict per-module resolution | ✓ | modules |
+| Theory backends require `core` identity (closes name-shadowing soundness bug) | ✓ | modules |
 | `requirement`/`fulfills` + the `(bin …)` artifact (met/unmet report) | ✓ | contracts |
 | Proven interactive app — snake_game_2 (parametric board, 10 reqs met) | ✓ | apps |
 | Located parse-failure diagnostics (5 failure modes) | ✓ | tools |

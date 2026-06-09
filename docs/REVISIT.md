@@ -642,13 +642,22 @@ is where to start when planning v3.
   multiple lib files cumulatively without manual concatenation.
   Last-replaces would force any claim file using lib A and lib B
   to manually concat them upstream.
-- **Cost:** name conflicts across modules are silent — first
-  declaration wins on lookup_fn / lookup_typedef. A real scaling
-  story wants explicit imports / namespacing; for v2 this likely
-  unifies with `(module …)` and hierarchical names.
-- **Revisit when:** any of: real conflicts arise; per-file isolation
-  becomes desirable (e.g., for parallel checking); or the (module …)
-  loader lands and subsumes use-module's role.
+- **Cost (at the time):** name conflicts across modules were silent —
+  first declaration won on lookup_fn / lookup_typedef. A real scaling
+  story wants explicit imports / namespacing.
+- **RESOLVED (qualified-identity arc, stages 1–3, branch
+  `qname-identity`):** the namespacing this entry anticipated has
+  landed. Names are now `QName`s — `(module-path, local-name)`, the
+  module-path a hierarchical list assigned by the loader from the import
+  graph (Rust's module tree; built-ins at `core`). Resolution is strict
+  per-module scope built from `use` declarations (local > use > core),
+  not silent first-wins; `(:: seg … name)` is the explicit path form and
+  `use … as` / `use … ::*` the import ergonomics. Crucially, the theory
+  backends now require the `core` identity for interpreted symbols,
+  closing a name-shadowing **soundness bug** the old first-wins policy
+  exposed (a user `le` shadowing the built-in let farkas prove `0 = 1`).
+  See OVERVIEW.md §7. `(use-module …)` still loads-and-merges as
+  described; what changed is how merged names are *resolved*.
 
 ### ast::Module → runtime-value conversion in the binary
 - **Chose (slice 24):** the mechanical Rust-AST → runtime-Ctor-value
@@ -683,6 +692,12 @@ is where to start when planning v3.
 - **Revisit if:** name clashes between kernel and user ctors
   become an authoring concern. Today's resolution is "first
   declaration wins"; could move to explicit imports later.
+- **Update (qualified-identity arc):** for the proof CHECK path this is
+  now resolved — names are `QName`s and resolution is strict per-module
+  scope (a user ctor that shadows a `core` prelude ctor is a distinct
+  identity, not a silent clash). See the `(use-module …)` entry above
+  and OVERVIEW.md §7. The kernel-as-parsing-base convention itself is
+  unchanged.
 
 ### `check` binary seeds the user-module value with kernel types
 - **Chose (slice 29):** when constructing the user-module value

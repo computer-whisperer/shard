@@ -150,7 +150,39 @@ orchestrator, kept until proof-checking is likewise a shard app run on this
 executor. The remaining cord-cutter is the shard→machine compiler.
 
 
-## 7. Why now: the generate / check asymmetry
+## 7. Identity is structural, and soundness depends on it
+
+The kernel is a recursive checker in the LCF lineage (§1): a proof step is
+sound only if every name in it denotes what the checker thinks it does. Two
+layers read the same program — the **reducer**, which unfolds function calls,
+and the **theory backends** (farkas/lia/ord/eqdec), which recognize interpreted
+symbols (`le`, `lt`, `int_eq`, `+`, `True`, …) and reason about them as
+arithmetic. If those two layers can disagree about what a name means, the
+checker is unsound.
+
+They could, while names were bare strings. A user definition named `le`
+shadowed the built-in: the reducer dispatched the *user's* function, while a
+backend still matched the string `le` and read the call as the linear relation
+`≤`. A constant-`True` user `le` makes the premise `(le 5 3) = True`
+reducer-true while farkas reads it as the false fact `3 − 5 ≥ 0` — and from a
+contradiction, anything follows (`0 = 1`).
+
+The fix is to make a name an **identity, not a string**. Every function / type
+/ constructor name is a `QName` = `(module-path, local-name)`, where the
+module-path is a hierarchical list (Rust's module tree: `std::list` is
+`(std list)`, the built-in crate is `core`) assigned by the **loader** from the
+import graph. A source file cannot write a module-path, so a user definition can
+never forge a `core` identity. The backends admit an interpreted symbol only at
+its `core` identity; a user's same-named definition resolves to its own
+module-path and is, to a backend, an opaque atom. The reducer and the backends
+can no longer be driven to disagree.
+
+This is **object-language only**. The trusted Rust bootstrap (§6) is untouched —
+identity is a property the kernel, itself written in shard, enforces on the
+programs it checks.
+
+
+## 8. Why now: the generate / check asymmetry
 
 The refinement-derivation programs of the 1980s–2000s (Specware/Kestrel)
 stalled because a *human* writing every refinement and every proof was brutally
@@ -167,7 +199,7 @@ product thesis, not just hygiene — proof *search* is swappable, the *checker*
 is not.
 
 
-## 8. Known hard parts (dragons)
+## 9. Known hard parts (dragons)
 
 Flagged so we don't paint ourselves into a corner:
 
