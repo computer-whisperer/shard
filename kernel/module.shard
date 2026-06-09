@@ -49,7 +49,12 @@
 (type FnTrie
   (FnTrie
     (Option FnDef)  ; fn whose name ends at this node
-    (List (Pair Int FnTrie))))  ; children, keyed by next char code
+    (List (Pair Int FnTrie)))  ; children, keyed by next char code
+  (FnLeaf
+    (List Int)  ; the UNIQUE remaining suffix (path compression: once a
+    FnDef))  ;   name's prefix is unshared, store the tail + def directly —
+            ;   a lookup compares the suffix in one cheap list walk instead
+            ;   of one branch node (+ child-list scan) PER CHARACTER
 
 (type Module
   (Module
@@ -77,9 +82,22 @@
      (if (int_eq k c) (Cons (Pair c sub) rest)
      (Cons (Pair k t) (child_set c sub rest))))))
 
+;; suffix equality for the FnLeaf arm — a plain simultaneous walk.
+(fn trie_suffix_eq ((a (List Int)) (b (List Int))) Bool
+  (match a
+    (Nil
+      (match b
+        (Nil True)
+        (_ False)))
+    ((Cons x xs)
+     (match b
+       (Nil False)
+       ((Cons y ys) (if (int_eq x y) (trie_suffix_eq xs ys) False))))))
+
 ;; walk the trie by the remaining chars; at the end return this node's payload.
 (fn trie_lookup_chars ((cs (List Int)) (t FnTrie)) (Option FnDef)
   (match t
+    ((FnLeaf suffix fd) (if (trie_suffix_eq cs suffix) (Some fd) None))
     ((FnTrie here children)
      (match cs
        (Nil here)
@@ -92,10 +110,21 @@
 (fn trie_lookup ((name QName) (t FnTrie)) (Option FnDef)
   (trie_lookup_chars (chars_of_sym (qn_name name)) t))
 
+;; explode a leaf one level into a branch node so an insert can proceed past it.
+(fn trie_leaf_split ((suffix (List Int)) (fd FnDef)) FnTrie
+  (match suffix
+    (Nil (FnTrie (Some fd) Nil))
+    ((Cons c rest) (FnTrie None (Cons (Pair c (FnLeaf rest fd)) Nil)))))
+
 ;; insert fd under the remaining chars; KEEP-FIRST on a name clash (mirrors the
-;; old list-scan lookup_fn, which returned the first matching def).
+;; old list-scan lookup_fn, which returned the first matching def). A fresh
+;; unshared tail is stored as a compressed FnLeaf; inserting THROUGH a leaf
+;; first explodes it one level (recursively, while the two names share chars).
 (fn trie_insert_chars ((cs (List Int)) (fd FnDef) (t FnTrie)) FnTrie
   (match t
+    ((FnLeaf suffix old)
+     (if (trie_suffix_eq cs suffix) t  ; same name → KEEP-FIRST
+       (trie_insert_chars cs fd (trie_leaf_split suffix old))))
     ((FnTrie here children)
      (match cs
        (Nil
@@ -103,12 +132,10 @@
            (None (FnTrie (Some fd) children))
            ((Some _) t)))
        ((Cons c rest)
-        (let
-          ((sub
-             (match (trie_child c children)
-               (None (FnTrie None Nil))
-               ((Some s) s))))
-          (FnTrie here (child_set c (trie_insert_chars rest fd sub) children))))))))
+        (match (trie_child c children)
+          (None (FnTrie here (child_set c (FnLeaf rest fd) children)))
+          ((Some sub)
+           (FnTrie here (child_set c (trie_insert_chars rest fd sub) children)))))))))
 
 (fn trie_insert ((fd FnDef) (t FnTrie)) FnTrie
   (match fd
