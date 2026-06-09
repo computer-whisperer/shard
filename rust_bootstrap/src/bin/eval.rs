@@ -186,6 +186,17 @@ fn make_handler(prog_args: Vec<String>) -> impl FnMut(&str, &[ast::Expr]) -> Res
                 let _ = std::io::stdout().flush();
                 Ok(w1)
             }
+            // persist bytes at a path — the dual of read_file. (Pair True World)
+            // on success, (Pair False World) on any I/O error. Backs tools that
+            // emit artifacts (tools/prove writes proof sidecars).
+            "write_file" => {
+                let ok =
+                    std::fs::write(decode_str(&args[0]), decode_str(&args[1])).is_ok();
+                Ok(ctor(
+                    "Pair",
+                    vec![ctor(if ok { "True" } else { "False" }, vec![]), w1],
+                ))
+            }
             // Blocking line-read from stdin: first byte as (Some b). A bare 'q',
             // an empty line typed as "q", or EOF ends the session as (None).
             // Returns (Pair (Option Int) World). Line-buffered (REPL-style): the
@@ -219,7 +230,7 @@ fn make_handler(prog_args: Vec<String>) -> impl FnMut(&str, &[ast::Expr]) -> Res
                 std::process::exit(code);
             }
             other => Err(format!(
-                "unknown extern `{}` (eval handler: get_args/read_file/write/write_line/emit/read_key/exit)",
+                "unknown extern `{}` (eval handler: get_args/read_file/write/write_file/write_line/emit/read_key/exit)",
                 other
             )),
         }

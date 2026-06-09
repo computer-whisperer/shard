@@ -141,10 +141,11 @@
   (if (sym_eq name (quote get_args)) True
   (if (sym_eq name (quote read_file)) True
   (if (sym_eq name (quote write)) True
+  (if (sym_eq name (quote write_file)) True
   (if (sym_eq name (quote write_line)) True
   (if (sym_eq name (quote exit)) True
   (if (sym_eq name (quote key_oracle)) True  ; interactive apps' key input
-  False)))))))
+  False))))))))
 
 ;; ===========================================================================
 ;; THE ENV-MACHINE — `ev` runs a CLOSED, TOTAL shard app by call-by-value
@@ -369,10 +370,11 @@
      (if (sym_eq (qn_name name) (quote get_args)) (perform_get_args app_args w)
      (if (sym_eq (qn_name name) (quote read_file)) (perform_read_file args w)
      (if (sym_eq (qn_name name) (quote write)) (perform_write args w)
+     (if (sym_eq (qn_name name) (quote write_file)) (perform_write_file args w)
      (if (sym_eq (qn_name name) (quote write_line)) (perform_write_line args w)
      (if (sym_eq (qn_name name) (quote exit)) (perform_exit args w)
      (if (sym_eq (qn_name name) (quote key_oracle)) (perform_key_oracle w)
-     (Pair (Ctor (qn (quote Nil)) Nil) w))))))))
+     (Pair (Ctor (qn (quote Nil)) Nil) w)))))))))
     (_ (Pair (Ctor (qn (quote Nil)) Nil) w))))
 
 ;; get_args performs no real I/O — it just hands back the stored argv slice and
@@ -402,6 +404,18 @@
        ((Pair opt w1)
         (Pair (encode_pair (encode_opt_bytes opt) (encode_world w1)) w1))))
     (_ (Pair (encode_pair (Ctor (qn (quote None)) Nil) (encode_world w)) w))))
+
+(fn encode_bool ((b Bool)) Expr
+  (if b (Ctor (qn (quote True)) Nil) (Ctor (qn (quote False)) Nil)))
+
+;; write_file: app-facing (Pair Bool World) — True = persisted.
+(fn perform_write_file ((args (List Expr)) (w World)) (Pair Expr World)
+  (match args
+    ((Cons path_e (Cons bytes_e _))
+     (match (write_file (expr_to_intlist path_e) (expr_to_intlist bytes_e) w)
+       ((Pair ok w1)
+        (Pair (encode_pair (encode_bool ok) (encode_world w1)) w1))))
+    (_ (Pair (encode_pair (encode_bool False) (encode_world w)) w))))
 
 (fn perform_write ((args (List Expr)) (w World)) (Pair Expr World)
   (match args
@@ -434,10 +448,26 @@
 ;; returns there; if `main` instead yields a World, that final World is the
 ;; result. `expr`'s only free variables are its `(main …)`'s — none — so the
 ;; initial env is empty.
+;; A run that RETURNS here must have yielded a World (apps normally never
+;; return — they exit via their own `exit` extern). Anything else is a stuck
+;; residual — e.g. a call to an extern outside `is_extern`'s vocabulary —
+;; and used to fall out as a SILENT exit 0: automation read "success" where
+;; nothing ran. Fail loudly instead.
 (fn run_app ((m Module) (expr Expr) (app_args (List (List Int))) (w World))
   World
   (match (ev m Nil expr app_args w)
-    ((Pair _ wf) wf)))
+    ((Pair r wf)
+     (match r
+       ((Ctor c _)
+        (if (sym_eq (qn_name c) (quote World)) wf (run_app_stuck wf)))
+       (_ (run_app_stuck wf))))))
+
+(fn run_app_stuck ((w World)) World
+  (exit
+    4
+    (write
+      "error: app did not reduce to a World (stuck call — unknown extern?)\n"
+      w)))
 
 ;; ---- the World wrapper -----------------------------------------------------
 ;;   eval <module.shard> <expr>      — evaluate an expression against a module
