@@ -228,6 +228,90 @@
     (Nil ys)
     ((Cons h t) (Cons h (append_sym t ys)))))
 
+;; ===========================================================================
+;; QUALIFIED-PATH FORM  (Stage 2.5)  —  `(:: SEG … NAME)`
+;;
+;; A reference whose module is named explicitly: the last segment is the entity,
+;; the preceding segments are its module PATH, rooted at `self`/`super`/`crate`
+;; (relative to the current module) or a crate name (absolute) — mirroring Rust.
+;; PARSING produces a QName carrying the RAW path (keywords intact); the resolver
+;; (resolve_qpath, below rhead) re-roots it against the current module. A bare
+;; name keeps the `core` placeholder and is resolved by env lookup instead — so
+;; the two are told apart by whether the parsed module-path is `core`.
+;; `::` is built from char 58 (`(quote ::)` is not writable under the bootstrap
+;; lexer, cf. dot_sym).
+;; ===========================================================================
+(fn coloncolon_sym () Symbol (sym_of_chars (Cons 58 (Cons 58 Nil))))
+
+;; every segment SExpr must be a bare symbol
+(fn seg_syms ((segs (List SExpr))) (Option (List Symbol))
+  (match segs
+    (Nil (Some Nil))
+    ((Cons (SSym s) rest)
+     (match (seg_syms rest) (None None) ((Some r) (Some (Cons s r)))))
+    (_ None)))
+
+;; (init, last) — splits the segment names into the module path + entity name.
+(fn split_last ((xs (List Symbol))) (Option (Pair (List Symbol) Symbol))
+  (match xs
+    (Nil None)
+    ((Cons s Nil) (Some (Pair Nil s)))
+    ((Cons s rest)
+     (match (split_last rest)
+       (None None)
+       ((Some (Pair init last)) (Some (Pair (Cons s init) last)))))))
+
+;; A qualified-path head → the RAW (pre-rooting) QName: `(QName path name)` with
+;; a NON-empty path (≥2 segments: at least one module/root segment + the name).
+(fn qpath_qname ((segs (List SExpr))) (Option QName)
+  (match (seg_syms segs)
+    (None None)
+    ((Some syms)
+     (match (split_last syms)
+       (None None)
+       ((Some (Pair init last))
+        (match init
+          (Nil None)  ; `(:: x)` — no module segment — rejected
+          (_ (Some (QName init last)))))))))
+
+;; --- path re-rooting (used by rhead) ---------------------------------------
+(fn first_seg ((p (List Symbol))) (List Symbol)
+  (match p (Nil Nil) ((Cons s _) (Cons s Nil))))
+
+(fn drop_last_sym ((p (List Symbol))) (List Symbol)
+  (match p (Nil Nil) ((Cons _ Nil) Nil) ((Cons h t) (Cons h (drop_last_sym t)))))
+
+(fn drop_last_n ((p (List Symbol)) (n Int)) (List Symbol)
+  (if (le n 0) p (drop_last_n (drop_last_sym p) (- n 1))))
+
+(fn count_supers ((segs (List Symbol)) (k Int)) Int
+  (match segs
+    (Nil k)
+    ((Cons s t) (if (sym_eq s (quote super)) (count_supers t (+ k 1)) k))))
+
+(fn drop_supers ((segs (List Symbol))) (List Symbol)
+  (match segs
+    (Nil Nil)
+    ((Cons s t) (if (sym_eq s (quote super)) (drop_supers t) segs))))
+
+;; Re-root a raw qualified path against `curmod`:
+;;   self  → curmod                       (then append the rest)
+;;   crate → curmod's first segment       (the crate root)
+;;   super → curmod's parent, one per super (then append the rest)
+;;   else  → absolute: the path IS the module path (first segment = crate name)
+(fn resolve_qpath
+  ((rawpath (List Symbol)) (name Symbol) (curmod (List Symbol))) QName
+  (match rawpath
+    (Nil (QName Nil name))  ; unreachable (qpath_qname guarantees ≥1 segment)
+    ((Cons s0 rest)
+     (if (sym_eq s0 (quote self)) (QName (append_sym curmod rest) name)
+     (if (sym_eq s0 (quote crate)) (QName (append_sym (first_seg curmod) rest) name)
+     (if (sym_eq s0 (quote super))
+       (QName
+         (append_sym (drop_last_n curmod (count_supers rawpath 0)) (drop_supers rawpath))
+         name)
+     (QName rawpath name)))))))  ; absolute crate-rooted
+
 ;; Push binder names (in source order) onto the scope: the LAST name ends
 ;; up at the front, so it becomes BVar 0 (cf. LANGUAGE.md §7).
 (fn push_scope ((names (List Symbol)) (scope (List Symbol))) (List Symbol)
@@ -251,13 +335,31 @@
        ((Cons head rest)
         (match head
           ((SSym h)
+           (if (sym_eq h (coloncolon_sym)) (elab_qpat rest Nil ctors)  ; (:: … Ctor)
            (if (sym_eq h (quote quote)) (elab_psym rest)  ; (quote SYM) → PSym
            (if (sym_mem h ctors)
              (match (elab_pats rest ctors)
                (None None)
                ((Some (Pair ps names)) (Some (Pair (PCtor (qn h) ps) names))))
-             None)))  ; unknown ctor in pattern → reject
+             None))))  ; unknown ctor in pattern → reject
+          ;; `((:: … Ctor) p1 …)` — applied qualified-path ctor pattern
+          ((SList (Cons (SSym hh) hsegs))
+           (if (sym_eq hh (coloncolon_sym)) (elab_qpat hsegs rest ctors) None))
           (_ None)))))))
+
+;; A qualified-path constructor pattern: `segs` the path, `subs` the field
+;; sub-patterns. The last segment must name a known constructor.
+(fn elab_qpat
+  ((segs (List SExpr)) (subs (List SExpr)) (ctors (List Symbol)))
+  (Option (Pair Pat (List Symbol)))
+  (match (qpath_qname segs)
+    (None None)
+    ((Some q)
+     (if (sym_mem (qn_name q) ctors)
+       (match (elab_pats subs ctors)
+         (None None)
+         ((Some (Pair ps names)) (Some (Pair (PCtor q ps) names))))
+       None))))
 
 (fn elab_psym ((rest (List SExpr))) (Option (Pair Pat (List Symbol)))
   (match rest
@@ -425,9 +527,24 @@
     (_ None)))
 
 ;; The head of a list expression: a special form, or ctor/call application.
+;; A qualified-path reference/application: `(:: SEG … NAME)` (segs, no value args)
+;; or `((:: SEG … NAME) a1 …)` (valargs the applied arguments). The ctor set
+;; (keyed by local name) decides Ctor vs Call, exactly as for a bare head.
+(fn elab_qpath
+  ((segs (List SExpr)) (valargs (List SExpr)) (ctors (List Symbol)) (scope (List Symbol)))
+  (Option Expr)
+  (match (qpath_qname segs)
+    (None None)
+    ((Some q)
+     (match (elaborate_list valargs ctors scope)
+       (None None)
+       ((Some eargs)
+        (if (sym_mem (qn_name q) ctors) (Some (Ctor q eargs)) (Some (Call q eargs))))))))
+
 (fn elaborate_form
   ((h Symbol) (args (List SExpr)) (ctors (List Symbol)) (scope (List Symbol)))
   (Option Expr)
+  (if (sym_eq h (coloncolon_sym)) (elab_qpath args Nil ctors scope)
   (if (sym_eq h (quote if)) (elab_if args ctors scope)
   (if (sym_eq h (quote match)) (elab_match args ctors scope)
   (if (sym_eq h (quote let)) (elab_let args ctors scope)
@@ -438,7 +555,7 @@
   (match (elaborate_list args ctors scope)
     (None None)
     ((Some eargs)
-     (if (sym_mem h ctors) (Some (Ctor (qn h) eargs)) (Some (Call (qn h) eargs)))))))))))))  ; ctor set decides Ctor vs Call
+     (if (sym_mem h ctors) (Some (Ctor (qn h) eargs)) (Some (Call (qn h) eargs))))))))))))))  ; ctor set decides Ctor vs Call
 
 (fn elaborate ((s SExpr) (ctors (List Symbol)) (scope (List Symbol)))
   (Option Expr)
@@ -457,7 +574,10 @@
        ((Cons head rest)
         (match head
           ((SSym h) (elaborate_form h rest ctors scope))
-          (_ None)))))))  ; non-symbol head → reject
+          ;; `((:: SEG … NAME) a1 …)` — applied qualified-path head
+          ((SList (Cons (SSym hh) hsegs))
+           (if (sym_eq hh (coloncolon_sym)) (elab_qpath hsegs rest ctors scope) None))
+          (_ None)))))))  ; other non-symbol head → reject
 
 ;; ---- expression entry point -----------------------------------------------
 (fn parse_expr ((src (List Int)) (ctors (List Symbol))) (Option Expr)
@@ -515,6 +635,17 @@
     (qn (quote Word))
     (Cons (TCon (qn (sym_of_chars (nat_chars w))) Nil) (Cons (TCon (qn sgn) Nil) Nil))))
 
+;; A qualified-path type: `(:: SEG … NAME)` (0-ary; `segs` is the path, no type
+;; args) or applied `((:: SEG … NAME) A1 …)` (`argforms` the type arguments).
+(fn qtype ((segs (List SExpr)) (argforms (List SExpr)) (tparams (List Symbol)))
+  (Option Type)
+  (match (qpath_qname segs)
+    (None None)
+    ((Some q)
+     (match (parse_types argforms tparams)
+       (None None)
+       ((Some args) (Some (TCon q args)))))))
+
 (fn parse_type ((s SExpr) (tparams (List Symbol))) (Option Type)
   (match s
     ((SSym name)
@@ -533,10 +664,14 @@
        (Nil None)
        ((Cons head rest)
         (match head
-          ((SSym hname)  ; (HEAD a1 a2 …) — applied type
+          ((SSym hname)  ; (HEAD a1 a2 …) — applied type, or (:: …) standalone
+           (if (sym_eq hname (coloncolon_sym)) (qtype rest Nil tparams)
            (match (parse_types rest tparams)
              (None None)
-             ((Some args) (Some (TCon (qn hname) args)))))
+             ((Some args) (Some (TCon (qn hname) args))))))
+          ;; `((:: SEG … NAME) A1 …)` — applied qualified-path type
+          ((SList (Cons (SSym hh) hsegs))
+           (if (sym_eq hh (coloncolon_sym)) (qtype hsegs rest tparams) None))
           (_ None)))))
     (_ None)))  ; SStr isn't a type
 
@@ -905,9 +1040,14 @@
     ((Cons (Pair n p) rest)
      (if (sym_eq name n) p (env_lookup name rest)))))
 
-;; re-qualify a (core-tagged) head by looking its local name up in the env.
+;; re-qualify a parsed head. A BARE name carries the `core` placeholder → resolve
+;; it by env lookup (local > import > core). A `(:: …)` head carries an explicit
+;; raw path → re-root it against the current module (resolve_qpath); env lookup
+;; is bypassed, so an explicit path is the unambiguous escape hatch.
 (fn rhead ((q QName) (env RCtx)) QName
-  (qn_at (env_lookup (qn_name q) (rc_env env)) (qn_name q)))
+  (if (sym_path_eq (qn_mod q) (qn_core))
+    (qn_at (env_lookup (qn_name q) (rc_env env)) (qn_name q))
+    (resolve_qpath (qn_mod q) (qn_name q) (rc_mod env))))
 
 (fn app_env
   ((a (List (Pair Symbol (List Symbol)))) (b (List (Pair Symbol (List Symbol)))))
