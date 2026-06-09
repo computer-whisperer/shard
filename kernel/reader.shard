@@ -242,6 +242,8 @@
 ;; lexer, cf. dot_sym).
 ;; ===========================================================================
 (fn coloncolon_sym () Symbol (sym_of_chars (Cons 58 (Cons 58 Nil))))
+;; the glob marker `*` (char 42) — `(use (:: MOD *))` brings all of MOD's items.
+(fn star_sym () Symbol (sym_of_chars (Cons 42 Nil)))
 
 ;; every segment SExpr must be a bare symbol
 (fn seg_syms ((segs (List SExpr))) (Option (List Symbol))
@@ -301,28 +303,32 @@
     (Nil None)
     ((Cons (Pair n p) rest) (if (sym_eq k n) (Some p) (assoc_sym k rest)))))
 
-;; Re-root a raw qualified path against `curmod` and the use-bound module
-;; `aliases` (Stage 2.5b):
+;; Re-root a raw segment list (the WHOLE list is a module path — no trailing
+;; item name) against `curmod` and the use-bound module `aliases` (Stage 2.5b):
 ;;   self  → curmod                       (then append the rest)
 ;;   crate → curmod's first segment       (the crate root)
 ;;   super → curmod's parent, one per super (then append the rest)
 ;;   a use-bound module alias → the aliased module path (then append the rest)
 ;;   else  → absolute: the path IS the module path (first segment = crate name)
+(fn resolve_full_modpath
+  ((segs (List Symbol)) (curmod (List Symbol))
+   (aliases (List (Pair Symbol (List Symbol))))) (List Symbol)
+  (match segs
+    (Nil curmod)  ; `(:: *)` alone → glob the current module
+    ((Cons s0 rest)
+     (if (sym_eq s0 (quote self)) (append_sym curmod rest)
+     (if (sym_eq s0 (quote crate)) (append_sym (first_seg curmod) rest)
+     (if (sym_eq s0 (quote super))
+       (append_sym (drop_last_n curmod (count_supers segs 0)) (drop_supers segs))
+     (match (assoc_sym s0 aliases)
+       ((Some base) (append_sym base rest))  ; use-bound module alias
+       (None segs))))))))  ; absolute crate-rooted
+
+;; A `(:: MOD … NAME)` head: re-root the MOD path, keep NAME as the local name.
 (fn resolve_qpath
   ((rawpath (List Symbol)) (name Symbol) (curmod (List Symbol))
    (aliases (List (Pair Symbol (List Symbol))))) QName
-  (match rawpath
-    (Nil (QName Nil name))  ; unreachable (qpath_qname guarantees ≥1 segment)
-    ((Cons s0 rest)
-     (if (sym_eq s0 (quote self)) (QName (append_sym curmod rest) name)
-     (if (sym_eq s0 (quote crate)) (QName (append_sym (first_seg curmod) rest) name)
-     (if (sym_eq s0 (quote super))
-       (QName
-         (append_sym (drop_last_n curmod (count_supers rawpath 0)) (drop_supers rawpath))
-         name)
-     (match (assoc_sym s0 aliases)
-       ((Some base) (QName (append_sym base rest) name))  ; use-bound module alias
-       (None (QName rawpath name)))))))))  ; absolute crate-rooted
+  (QName (resolve_full_modpath rawpath curmod aliases) name))
 
 ;; Push binder names (in source order) onto the scope: the LAST name ends
 ;; up at the front, so it becomes BVar 0 (cf. LANGUAGE.md §7).
@@ -1113,6 +1119,20 @@
     ((Module tds fns exts _)
      (app_env (td_env tds) (app_env (fn_env fns) (ext_env exts))))))
 
+;; Keep only the entries whose module-path is `p` — used to recover ONE file's
+;; local env from the merged module (defs at `p`), for strict goal resolution
+;; (Stage 2.5c): the merged `m` has every module's defs, so filtering by the
+;; file's curmod yields exactly that file's own locals (no re-parse needed).
+(fn filter_modpath
+  ((env (List (Pair Symbol (List Symbol)))) (p (List Symbol)))
+  (List (Pair Symbol (List Symbol)))
+  (match env
+    (Nil Nil)
+    ((Cons (Pair n mp) rest)
+     (if (sym_path_eq mp p)
+       (Cons (Pair n mp) (filter_modpath rest p))
+       (filter_modpath rest p)))))
+
 ;; --- the local env: every name THIS module defines → this module's path -----
 (fn names_to_env
   ((ns (List Symbol)) (path (List Symbol))) (List (Pair Symbol (List Symbol)))
@@ -1237,15 +1257,16 @@
     (Nil Nil)
     ((Cons h t) (Cons (resolve_externdef env h) (resolve_externdefs env t)))))
 
-;; Qualify a freshly-parsed (all-`core`) module at `modpath`. Bare-name
-;; resolution precedence: local defs > the module's `use` items > `ie` (the
-;; flat import env from the accumulated module — Stage 2's glob, kept as the
-;; additive fallback until Stage 2.5c). `use_aliases` are the use-bound module
-;; aliases, consumed by resolve_qpath for `(:: alias …)` references. The fn-trie
-;; is rebuilt from the resolved fns (keyed by local name, so unchanged in shape).
+;; Qualify a freshly-parsed (all-`core`) module at `modpath`. STRICT bare-name
+;; resolution (Stage 2.5c): local defs > the module's `use` items > core (the
+;; env_lookup default — prims + the `core` prelude). The Stage-2 flat glob is
+;; GONE: a cross-module name must be `use`d or written as a `(:: …)` path. (Fn
+;; references still dispatch by local name in the trie, so a missing `use` on a
+;; fn is silently tolerated until Stage 3; types/ctors fail loudly here.)
+;; `use_aliases` are the use-bound module aliases, consumed by resolve_qpath for
+;; `(:: alias …)` references. The fn-trie is rebuilt from the resolved fns.
 (fn resolve_module
   ((modpath (List Symbol))
-   (ie (List (Pair Symbol (List Symbol))))
    (use_items (List (Pair Symbol (List Symbol))))
    (use_aliases (List (Pair Symbol (List Symbol))))
    (m Module))
@@ -1256,7 +1277,7 @@
        ((env
           (RCtx
             modpath
-            (app_env (local_env m modpath) (app_env use_items ie))
+            (app_env (local_env m modpath) use_items)
             use_aliases)))
        (let ((rfns (resolve_fndefs env fns)))
          (Module
@@ -1708,78 +1729,84 @@
              (pd_app "module assembly failed (unknown cause)" (pd_src_tag k)))))))))
 
 ;; ===========================================================================
-;; USE-DECLARATION SCOPE (Stage 2.5b). `(use (:: SEG … NAME))` brings a name
-;; into THIS module's scope: an ITEM (bare-name → its module path) or a MODULE
-;; ALIAS (alias → that module path, for `(:: alias …)`). Which one is decided by
-;; resolution: if the path's full tail is a LOADED module identity it's a module
-;; alias, else an item. `as ALIAS` renames a module alias (item rename needs a
-;; name remap — deferred). This is ADDITIVE: the flat glob import env is still
-;; the fallback, so a file with no `use` resolves exactly as before.
+;; USE-DECLARATION SCOPE (Stage 2.5b/c). `use` brings names into THIS module's
+;; scope (STRICT resolution: no glob fallback — see resolve_module). Three forms:
+;;   (use (:: SEG … NAME))        an ITEM (bare NAME → its module) OR a MODULE
+;;                                ALIAS (alias → that module, for `(:: alias …)`)
+;;   (use (:: SEG … NAME) as A)   the same, bound under A
+;;   (use (:: SEG … *))           GLOB: every item of module SEG… into scope
+;; Item-vs-module-alias is decided by resolution: if the path's full tail is a
+;; LOADED module identity it's a module alias, else an item. `as` on an item is
+;; not yet a rename (needs a name→QName env) — deferred; module `as` works.
 ;; ===========================================================================
 
-;; the distinct-ish set of module-paths some def in `m` carries (its module tree)
-(fn td_mods ((tds (List TypeDef))) (List (List Symbol))
-  (match tds (Nil Nil) ((Cons (TypeDef n _ _) r) (Cons (qn_mod n) (td_mods r)))))
-(fn fn_mods ((fns (List FnDef))) (List (List Symbol))
-  (match fns (Nil Nil) ((Cons (FnDef n _ _ _) r) (Cons (qn_mod n) (fn_mods r)))))
-(fn ext_mods ((es (List ExternDef))) (List (List Symbol))
-  (match es (Nil Nil) ((Cons (ExternDef n _ _) r) (Cons (qn_mod n) (ext_mods r)))))
-(fn append_paths
-  ((a (List (List Symbol))) (b (List (List Symbol)))) (List (List Symbol))
-  (match a (Nil b) ((Cons h t) (Cons h (append_paths t b)))))
-(fn loaded_modpaths ((m Module)) (List (List Symbol))
-  (match m
-    ((Module tds fns exts _)
-     (append_paths (td_mods tds) (append_paths (fn_mods fns) (ext_mods exts))))))
-(fn modpath_member ((p (List Symbol)) (ps (List (List Symbol)))) Bool
-  (match ps
-    (Nil False)
-    ((Cons q r) (if (sym_path_eq p q) True (modpath_member p r)))))
+(type UseSpec
+  (UseItem QName Symbol)     ; raw (pre-rooting) QName + bound name (NAME or alias)
+  (UseGlob (List Symbol)))   ; raw (pre-rooting) module path to glob
 
-;; `(use (:: SEG … NAME))` / `(use (:: SEG … NAME) as ALIAS)` → (rawQName,
-;; boundName). boundName = ALIAS, or the path's last segment. Any other form → None.
-(fn parse_use_form ((f SExpr)) (Option (Pair QName Symbol))
+;; Is `p` the module-path of some loaded def? (env = name→path of all loaded defs.)
+(fn modpath_in_env
+  ((p (List Symbol)) (env (List (Pair Symbol (List Symbol))))) Bool
+  (match env
+    (Nil False)
+    ((Cons (Pair _ mp) r) (if (sym_path_eq p mp) True (modpath_in_env p r)))))
+
+;; Classify a `(:: …)` use-path's segments → an item or a glob.
+(fn parse_use_path ((segs (List SExpr)) (bound Symbol) (rebound Bool)) (Option UseSpec)
+  (match (seg_syms segs)
+    (None None)
+    ((Some syms)
+     (match (split_last syms)
+       (None None)
+       ((Some (Pair init last))
+        (if (sym_eq last (star_sym))
+          (if rebound None (Some (UseGlob init)))  ; `* as A` is meaningless
+          (match init
+            (Nil None)  ; `(:: x)` — no module segment
+            (_ (Some (UseItem (QName init last) (if rebound bound last)))))))))))
+
+;; `(use (:: …))` / `(use (:: …) as A)` → a UseSpec. Any other form → None.
+(fn parse_use_form ((f SExpr)) (Option UseSpec)
   (match f
     ((SList (Cons (SSym h) tail))
      (if (sym_eq h (quote use))
        (match tail
          ((Cons (SList (Cons (SSym cc) segs)) Nil)
-          (if (sym_eq cc (coloncolon_sym))
-            (match (qpath_qname segs)
-              (None None)
-              ((Some q) (Some (Pair q (qn_name q)))))
-            None))
+          (if (sym_eq cc (coloncolon_sym)) (parse_use_path segs (quote _) False) None))
          ((Cons (SList (Cons (SSym cc) segs)) (Cons (SSym asKw) (Cons (SSym alias) Nil)))
           (if (sym_eq cc (coloncolon_sym))
-            (if (sym_eq asKw (quote as))
-              (match (qpath_qname segs)
-                (None None)
-                ((Some q) (Some (Pair q alias))))
-              None)
+            (if (sym_eq asKw (quote as)) (parse_use_path segs alias True) None)
             None))
          (_ None))
        None))
     (_ None)))
 
 ;; Fold a module's top-level forms into (item-env, alias-env). `curmod` roots
-;; relative use-paths; `loaded` decides module-vs-item. Use-paths do NOT chain
-;; through other use-aliases (resolve_qpath given an empty alias env).
+;; relative use-paths; `env` (name→path of all loaded defs) decides module-vs-item
+;; and supplies a globbed module's item names. Use-paths do NOT chain through
+;; other use-aliases (resolve_* given an empty alias env).
 (fn use_scope_of
-  ((forms (List SExpr)) (curmod (List Symbol)) (loaded (List (List Symbol))))
+  ((forms (List SExpr)) (curmod (List Symbol))
+   (env (List (Pair Symbol (List Symbol)))))
   (Pair (List (Pair Symbol (List Symbol))) (List (Pair Symbol (List Symbol))))
   (match forms
     (Nil (Pair Nil Nil))
     ((Cons f rest)
      (match (parse_use_form f)
-       (None (use_scope_of rest curmod loaded))
-       ((Some (Pair rawq bound))
+       (None (use_scope_of rest curmod env))
+       ((Some (UseGlob segs))
+        (let ((globmod (resolve_full_modpath segs curmod Nil)))
+          (match (use_scope_of rest curmod env)
+            ((Pair items aliases)
+             (Pair (app_env (filter_modpath env globmod) items) aliases)))))
+       ((Some (UseItem rawq bound))
         (let
           ((resolved (resolve_qpath (qn_mod rawq) (qn_name rawq) curmod Nil)))
           (let
             ((modid (append_sym (qn_mod resolved) (Cons (qn_name resolved) Nil))))
-            (match (use_scope_of rest curmod loaded)
+            (match (use_scope_of rest curmod env)
               ((Pair items aliases)
-               (if (modpath_member modid loaded)
+               (if (modpath_in_env modid env)
                  (Pair items (Cons (Pair bound modid) aliases))
                  (Pair (Cons (Pair bound (qn_mod resolved)) items) aliases)))))))))))
 
@@ -1800,10 +1827,10 @@
        (None (BMFail (parse_diag src ctors k)))
        ((Some m)
         (let ((mp (module_path_of path)))
-        (match (use_scope_of (use_forms src) mp (loaded_modpaths acc))
+        (match (use_scope_of (use_forms src) mp (module_resolve_env acc))
           ((Pair uitems ualiases)
            (let
-             ((rm (resolve_module mp (module_resolve_env acc) uitems ualiases m)))
+             ((rm (resolve_module mp uitems ualiases m)))
              (build_module_d
                rest
                (merge_modules acc rm)
