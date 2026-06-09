@@ -1,45 +1,64 @@
-;;; prove — the proof-solver app, v0 SKELETON: in-process candidate replay.
+;;; prove — the proof solver: offline candidate search, persisted as sidecars.
 ;;;
 ;;; The first consumer of the kernel-as-library surface: it imports the
 ;;; checker toolchain as ordinary modules and drives it IN-PROCESS — no
-;;; subprocess, no re-parse per attempt. Given a target file and a claim
-;;; whose proof is `auto`, it injects a CANDIDATE proof as a synthetic
-;;; sidecar entry (the slice-1 splice point) and re-runs the checker driver
-;;; in focus mode (only the target claim is actually checked; everything
-;;; else is admitted). A candidate that closes the claim is reported as the
-;;; (proof-for …) entry to put in the file's real `.auto.shard` sidecar.
+;;; subprocess, no re-parse per attempt (the target module is built ONCE;
+;;; each attempt is a focused driver run against it). For every `auto`
+;;; claim/fulfills in the target file it walks the candidate LADDER —
+;;; cheapest closer first — by injecting each candidate as a synthetic
+;;; sidecar entry (the same splice path a real sidecar takes), and persists
+;;; the winners into the file's `<file>.auto.shard` via write_file.
 ;;;
-;;; v0 carries a single candidate — `(by lia (list))` — to pin the loop
-;;; end-to-end; the candidate LADDER (more theories, steps forms, sidecar
-;;; emission via the write extern) is the next slice. Check time never
-;;; searches: this tool searches OFFLINE and persists; `check` only replays.
+;;; THE CONTRACT: search happens HERE, offline; `check` only ever REPLAYS
+;;; the persisted entries. A solver bug can cost coverage, never soundness —
+;;; the sidecar goes through the full untrusted-proof path at check time.
 ;;;
-;;; CAVEAT: if the claim's proof is INLINE (not `auto`), the injected
-;;; candidate is ignored and the inline proof is what gets re-checked —
-;;; point this tool only at `auto` claims.
+;;; The sidecar file is MACHINE-OWNED: a rewrite re-renders kept entries
+;;; from their parsed form (comments in it are not preserved). An existing
+;;; sidecar that does not lex is refused, never clobbered.
 ;;;
-;;; RUN IT:   ./rust_bootstrap/target/release/eval run tools/prove/prove.shard FILE CLAIM
+;;; RUN IT:   ./rust_bootstrap/target/release/eval run tools/prove/prove.shard FILE [CLAIM]
 ;;;           (or `eval direct` — the closure is flat-file imports)
-;;; exit 0 = a candidate closed the claim (entry printed)
-;;;      1 = no candidate closed it / the claim failed
-;;;      2 = bad usage, unreadable target, or no such claim
+;;;   FILE alone   solve every auto decl that LACKS a sidecar entry
+;;;   FILE CLAIM   (re-)solve exactly CLAIM (must be an auto decl in FILE)
+;;; exit 0 = nothing left unsolved   1 = some claim resisted the ladder
+;;;      2 = bad usage / unreadable target / unlexable sidecar / module error
 
 (import "../../kernel/stdlib.shard")  ; List / Option / Bool / Pair
 (import "../../kernel/loader.shard")  ; World + I/O externs + resolve_closure
-(import "../../kernel/driver.shard")  ; check_production_src + prelude_ctors + ClaimOutcome
+(import "../../kernel/driver.shard")  ; check_production + auto helpers + ClaimOutcome
 (import "../../kernel/module.shard")  ; Module / FnTrie (the empty seed)
 (import "../../kernel/term.shard")  ; chars_of_sym
+(import "../../kernel/reader.shard")  ; read_all / SExpr / build_module_d
 
 ;; the explicit library surface this app consumes (STRICT-mode scoping).
 (use (:: kernel loader resolve_closure))
+(use (:: kernel loader auto_path_of))
 (use (:: kernel loader append_int))
+(use (:: kernel loader int_list_eq))
 (use (:: kernel loader World))
 (use (:: kernel loader get_args))
+(use (:: kernel loader read_file))
 (use (:: kernel loader write))
+(use (:: kernel loader write_file))
 (use (:: kernel loader exit))
 (use (:: kernel reader SrcEntry))
-(use (:: kernel driver check_production_src))
+(use (:: kernel reader SExpr))
+(use (:: kernel reader SInt))
+(use (:: kernel reader SSym))
+(use (:: kernel reader SStr))
+(use (:: kernel reader SList))
+(use (:: kernel reader read_all))
+(use (:: kernel reader build_module_d))
+(use (:: kernel reader BMOk))
+(use (:: kernel reader BMFail))
+(use (:: kernel reader typedef_ctors))
+(use (:: kernel reader module_typedefs))
+(use (:: kernel driver check_production))
 (use (:: kernel driver prelude_ctors))
+(use (:: kernel driver is_auto_proof))
+(use (:: kernel driver autos_of_forms))
+(use (:: kernel driver auto_lookup))
 (use (:: kernel driver ClaimOutcome))
 (use (:: kernel driver COPass))
 (use (:: kernel driver COFail))
@@ -50,20 +69,94 @@
 
 (fn nl () (List Int) (Cons 10 Nil))  ; "\n"
 
-;; ---- the candidate (v0: exactly one) ---------------------------------------
-(fn candidate () (List Int) "(by lia (list))")
+;; ---- the candidate ladder --------------------------------------------------
+;; Closed-form candidates only (no goal-specific payload), cheapest first.
+;; farkas is deliberately absent: it needs coefficient witnesses — that is
+;; SEARCH WITH STRUCTURE, a later slice. Induction likewise (subgoal-driven).
+(fn ladder () (List (List Int))
+  (list
+    "refl"
+    "(steps ((compute both)) refl)"
+    "(steps ((simp both)) refl)"
+    "(by eqdec (list))"
+    "(by ord (list))"
+    "(by lia (list))"))
 
-;; the synthetic sidecar: one (proof-for CLAIM CANDIDATE) entry, as bytes —
-;; the same splice path a real .auto.shard file takes (driver.shard).
+;; one (proof-for NAME PROOF) entry, as bytes.
 (fn sidecar_for ((claim (List Int)) (cand (List Int))) (List Int)
   (append_int
     "(proof-for "
     (append_int claim (append_int " " (append_int cand ")")))))
 
-;; ---- outcome scan ----------------------------------------------------------
-;; The target claim's outcome: Some True = passed, Some False = failed (either
-;; way it WAS processed); None = no outcome carries its name (wrong name, or
-;; the file didn't reach it).
+;; ---- s-expression printer (re-render KEPT sidecar entries on merge) --------
+(fn show_nat_p ((n Int)) (List Int)  ; n >= 0
+  (if (lt n 10)
+    (Cons (+ 48 n) Nil)
+    (append_int (show_nat_p (/ n 10)) (Cons (+ 48 (mod n 10)) Nil))))
+
+(fn show_int_p ((n Int)) (List Int)
+  (if (lt n 0) (Cons 45 (show_nat_p (- 0 n))) (show_nat_p n)))
+
+;; escape exactly what the reader's lexer unescapes: \" \\ \n \t \r.
+(fn esc_str ((bs (List Int))) (List Int)
+  (match bs
+    (Nil Nil)
+    ((Cons c rest)
+     (if (int_eq c 34) (Cons 92 (Cons 34 (esc_str rest)))
+     (if (int_eq c 92) (Cons 92 (Cons 92 (esc_str rest)))
+     (if (int_eq c 10) (Cons 92 (Cons 110 (esc_str rest)))
+     (if (int_eq c 9) (Cons 92 (Cons 116 (esc_str rest)))
+     (if (int_eq c 13) (Cons 92 (Cons 114 (esc_str rest)))
+     (Cons c (esc_str rest))))))))))
+
+(fn sx_print ((s SExpr)) (List Int)
+  (match s
+    ((SInt n) (show_int_p n))
+    ((SSym y) (chars_of_sym y))
+    ((SStr bs) (Cons 34 (append_int (esc_str bs) (Cons 34 Nil))))
+    ((SList items) (Cons 40 (append_int (sx_items items) (Cons 41 Nil))))))
+
+(fn sx_items ((xs (List SExpr))) (List Int)
+  (match xs
+    (Nil Nil)
+    ((Cons x Nil) (sx_print x))
+    ((Cons x rest) (append_int (sx_print x) (Cons 32 (sx_items rest))))))
+
+;; ---- target scan: the auto decls, in source order --------------------------
+;; (claim NAME GOAL auto…) and (fulfills NAME auto…) are the solvable decls.
+(fn auto_name_of ((f SExpr)) (Option Symbol)
+  (match f
+    ((SList (Cons (SSym h) (Cons (SSym name) (Cons _ (Cons proofS Nil)))))
+     (if (sym_eq h (quote claim))
+       (if (is_auto_proof proofS) (Some name) None)
+       None))
+    ((SList (Cons (SSym h) (Cons (SSym name) (Cons proofS Nil))))
+     (if (sym_eq h (quote fulfills))
+       (if (is_auto_proof proofS) (Some name) None)
+       None))
+    (_ None)))
+
+(fn auto_names ((forms (List SExpr))) (List Symbol)
+  (match forms
+    (Nil Nil)
+    ((Cons f rest)
+     (match (auto_name_of f)
+       (None (auto_names rest))
+       ((Some n) (Cons n (auto_names rest)))))))
+
+(fn sym_member ((n Symbol) (ns (List Symbol))) Bool
+  (match ns
+    (Nil False)
+    ((Cons x rest) (if (sym_eq x n) True (sym_member n rest)))))
+
+;; the target's own source bytes within the resolved closure.
+(fn src_of ((path (List Int)) (srcs (List SrcEntry))) (Option (List Int))
+  (match srcs
+    (Nil None)
+    ((Cons (SrcEntry p _ s) rest)
+     (if (int_list_eq path p) (Some s) (src_of path rest)))))
+
+;; ---- one focused in-process attempt ----------------------------------------
 (fn outcome_of ((cn Symbol) (os (List ClaimOutcome))) (Option Bool)
   (match os
     (Nil None)
@@ -74,73 +167,267 @@
        ((COTypeFail n _) (if (sym_eq n cn) (Some False) (outcome_of cn rest)))
        (_ (outcome_of cn rest))))))
 
-;; ---- one in-process attempt ------------------------------------------------
-;; Focus-mode driver run with the candidate spliced in for the target claim.
-(fn attempt
-  ((target (List Int)) (claim (List Int)) (srcs (List SrcEntry)))
-  (Option Bool)
-  (outcome_of
-    (sym_of_chars claim)
-    (check_production_src
-      (Module Nil Nil Nil (FnTrie None Nil))
-      (prelude_ctors)
-      srcs
-      (Cons
-        (Pair (sym_of_chars target) (sidecar_for claim (candidate)))
-        Nil)
-      (quote __no_trace__)
-      (sym_of_chars claim))))
+;; walk the ladder for one claim; the module is prebuilt, so an attempt is
+;; one focus-mode driver pass (only this claim's proof is checked).
+(fn try_ladder
+  ((m Module)
+   (srcs (List SrcEntry))
+   (ctors (List Symbol))
+   (pathkey Symbol)
+   (name Symbol)
+   (cands (List (List Int))))
+  (Option (List Int))
+  (match cands
+    (Nil None)
+    ((Cons c rest)
+     (match
+       (outcome_of
+         name
+         (check_production
+           m
+           srcs
+           ctors
+           (Cons (Pair pathkey (sidecar_for (chars_of_sym name) c)) Nil)
+           (quote __no_trace__)
+           name))
+       ((Some True) (Some c))
+       (_ (try_ladder m srcs ctors pathkey name rest))))))
 
-;; ---- report ----------------------------------------------------------------
-(fn report ((claim (List Int)) (r (Option Bool)) (w World)) World
-  (match r
-    ((Some True)
-     (exit
-       0
-       (write
+;; ---- solve loop -------------------------------------------------------------
+(type Solved
+  (SolvedY Symbol (List Int))  ; claim closed by this candidate
+  (SolvedN Symbol))  ; ladder exhausted
+
+(fn solve_names
+  ((m Module)
+   (srcs (List SrcEntry))
+   (ctors (List Symbol))
+   (pathkey Symbol)
+   (names (List Symbol)))
+  (List Solved)
+  (match names
+    (Nil Nil)
+    ((Cons n rest)
+     (Cons
+       (match (try_ladder m srcs ctors pathkey n (ladder))
+         ((Some c) (SolvedY n c))
+         (None (SolvedN n)))
+       (solve_names m srcs ctors pathkey rest)))))
+
+(fn won_names ((rs (List Solved))) (List Symbol)
+  (match rs
+    (Nil Nil)
+    ((Cons r rest)
+     (match r
+       ((SolvedY n _) (Cons n (won_names rest)))
+       ((SolvedN _) (won_names rest))))))
+
+(fn any_unsolved ((rs (List Solved))) Bool
+  (match rs
+    (Nil False)
+    ((Cons r rest)
+     (match r
+       ((SolvedN _) True)
+       (_ (any_unsolved rest))))))
+
+;; ---- sidecar merge + render --------------------------------------------------
+;; kept = existing entries whose claim was NOT re-solved this run.
+(fn keep_entries
+  ((es (List (Pair Symbol SExpr))) (solved (List Symbol)))
+  (List (Pair Symbol SExpr))
+  (match es
+    (Nil Nil)
+    ((Cons (Pair n p) rest)
+     (if (sym_member n solved)
+       (keep_entries rest solved)
+       (Cons (Pair n p) (keep_entries rest solved))))))
+
+(fn render_kept ((es (List (Pair Symbol SExpr)))) (List Int)
+  (match es
+    (Nil Nil)
+    ((Cons (Pair n p) rest)
+     (append_int
+       (append_int
+         "(proof-for "
          (append_int
-           "PROVED "
-           (append_int
-             claim
-             (append_int
-               (nl)
-               (append_int (sidecar_for claim (candidate)) (nl)))))
-         w)))
-    ((Some False)
-     (exit
-       1
-       (write
-         (append_int
-           "UNSOLVED "
-           (append_int
-             claim
-             (append_int
-               ": candidate did not close it: "
-               (append_int (candidate) (nl)))))
-         w)))
-    (None
-      (exit
-        2
-        (write
+           (chars_of_sym n)
+           (append_int " " (append_int (sx_print p) ")"))))
+       (append_int (nl) (render_kept rest))))))
+
+(fn render_wins ((rs (List Solved))) (List Int)
+  (match rs
+    (Nil Nil)
+    ((Cons r rest)
+     (match r
+       ((SolvedY n c)
+        (append_int
+          (sidecar_for (chars_of_sym n) c)
+          (append_int (nl) (render_wins rest))))
+       ((SolvedN _) (render_wins rest))))))
+
+(fn sidecar_header () (List Int)
+  (append_int
+    ";;; proof sidecar — MACHINE-OWNED, written by tools/prove (comments are"
+    (append_int
+      (nl)
+      (append_int
+        ";;; not preserved). check REPLAYS these entries; it never searches."
+        (append_int (nl) (nl))))))
+
+(fn render_sidecar
+  ((kept (List (Pair Symbol SExpr))) (rs (List Solved)))
+  (List Int)
+  (append_int (sidecar_header) (append_int (render_kept kept) (render_wins rs))))
+
+;; ---- report ------------------------------------------------------------------
+(fn report_lines ((rs (List Solved))) (List Int)
+  (match rs
+    (Nil Nil)
+    ((Cons r rest)
+     (append_int
+       (match r
+         ((SolvedY n c)
           (append_int
-            "error: no outcome for claim "
-            (append_int claim (append_int " (wrong name?)" (nl))))
-          w)))))
+            "PROVED   "
+            (append_int
+              (chars_of_sym n)
+              (append_int "  " (append_int c (nl))))))
+         ((SolvedN n)
+          (append_int
+            "UNSOLVED "
+            (append_int (chars_of_sym n) (append_int "  (ladder exhausted)" (nl))))))
+       (report_lines rest)))))
 
-;; ---- the World wrapper: arg0 = target file, arg1 = claim name --------------
+(fn fail2 ((msg (List Int)) (w World)) World
+  (exit 2 (write (append_int "error: " (append_int msg (nl))) w)))
+
+;; ---- the run ----------------------------------------------------------------
+;; Solve `names`, persist winners (merged over the kept existing entries),
+;; report, exit. No write when nothing was solved.
+(fn solve_run
+  ((target (List Int))
+   (names (List Symbol))
+   (existing (List (Pair Symbol SExpr)))
+   (srcs (List SrcEntry))
+   (w World))
+  World
+  (match (build_module_d srcs (Module Nil Nil Nil (FnTrie None Nil)) (prelude_ctors) 1)
+    ((BMFail diag) (fail2 diag w))
+    ((BMOk m)
+     (match
+       (solve_names
+         m
+         srcs
+         (typedef_ctors (module_typedefs m))
+         (sym_of_chars target)
+         names)
+       (rs
+         (match (won_names rs)
+           (Nil
+             (exit
+               (if (any_unsolved rs) 1 0)
+               (write (report_lines rs) w)))
+           (solved
+             (match
+               (write_file
+                 (auto_path_of target)
+                 (render_sidecar (keep_entries existing solved) rs)
+                 w)
+               ((Pair ok w1)
+                (if ok
+                  (exit
+                    (if (any_unsolved rs) 1 0)
+                    (write
+                      (append_int
+                        (report_lines rs)
+                        (append_int
+                          "wrote "
+                          (append_int (auto_path_of target) (nl))))
+                      w1))
+                  (fail2
+                    (append_int "cannot write " (auto_path_of target))
+                    w1)))))))))))
+
+;; names to solve for a whole-file run: auto decls LACKING a sidecar entry.
+(fn missing_names
+  ((ns (List Symbol)) (existing (List (Pair Symbol SExpr))))
+  (List Symbol)
+  (match ns
+    (Nil Nil)
+    ((Cons n rest)
+     (match (auto_lookup n existing)
+       ((Some _) (missing_names rest existing))
+       (None (Cons n (missing_names rest existing)))))))
+
+;; dispatch once args / closure / sidecar / target-forms are in hand.
+(fn run_with
+  ((target (List Int))
+   (mclaim (Option (List Int)))
+   (existing (List (Pair Symbol SExpr)))
+   (srcs (List SrcEntry))
+   (forms (List SExpr))
+   (w World))
+  World
+  (match (auto_names forms)
+    (autos
+      (match mclaim
+        ((Some cb)
+         (if (sym_member (sym_of_chars cb) autos)
+           (solve_run target (Cons (sym_of_chars cb) Nil) existing srcs w)
+           (fail2
+             (append_int
+               "claim "
+               (append_int cb " is not an `auto` decl in the target"))
+             w)))
+        (None
+          (match (missing_names autos existing)
+            (Nil
+              (exit
+                0
+                (write
+                  "nothing to solve (every auto decl has a sidecar entry)\n"
+                  w)))
+            (todo (solve_run target todo existing srcs w))))))))
+
+;; ---- the World wrapper: arg0 = target file, arg1 (optional) = claim --------
 (fn main ((w World)) World
   (match (get_args w)
     ((Pair args w1)
      (match args
-       ((Cons target (Cons claim Nil))
-        (match (resolve_closure target False w1)  ; False = CHECK-mode closure
-          ((Pair srcs w2)
-           (match srcs
-             (Nil
-               (exit
-                 2
-                 (write
-                   (append_int "error: cannot read " (append_int target (nl)))
-                   w2)))
-             (_ (report claim (attempt target claim srcs) w2))))))
-       (_ (exit 2 (write "usage: prove <file.shard> <claim>\n" w1)))))))
+       ((Cons target rest)
+        (match
+          (match rest
+            (Nil (Some None))
+            ((Cons cb Nil) (Some (Some cb)))
+            (_ None))
+          (None (exit 2 (write "usage: prove <file.shard> [claim]\n" w1)))
+          ((Some mclaim)
+           (match (resolve_closure target False w1)  ; False = CHECK-mode closure
+             ((Pair srcs w2)
+              (match (src_of target srcs)
+                (None (fail2 (append_int "cannot read " target) w2))
+                ((Some tsrc)
+                 (match (read_all tsrc)
+                   (None (fail2 "target does not lex" w2))
+                   ((Some forms)
+                    (match (read_file (auto_path_of target) w2)
+                      ((Pair msc w3)
+                       (match msc
+                         (None (run_with target mclaim Nil srcs forms w3))
+                         ((Some sbytes)
+                          (match (read_all sbytes)
+                            (None
+                              (fail2
+                                (append_int
+                                  (auto_path_of target)
+                                  " exists but does not lex — refusing to rewrite it")
+                                w3))
+                            ((Some sforms)
+                             (run_with
+                               target
+                               mclaim
+                               (autos_of_forms sforms)
+                               srcs
+                               forms
+                               w3))))))))))))))))
+       (_ (exit 2 (write "usage: prove <file.shard> [claim]\n" w1)))))))
