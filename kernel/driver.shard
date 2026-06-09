@@ -200,15 +200,15 @@
 ;; parse-then-resolve: parse a goal/proof against M's ctor+type sets, then
 ;; re-qualify its module references to match M. The single seam every claim,
 ;; axiom, and requirement flows through.
-(fn parse_goal_r ((m Module) (s SExpr)) (Option Goal)
+(fn parse_goal_r ((m Module) (gctx RCtx) (s SExpr)) (Option Goal)
   (match (parse_goal s (module_ctors m) (module_type_names m))
     (None None)
-    ((Some g) (Some (resolve_goal (RCtx (qn_core) (module_resolve_env m) Nil) g)))))
+    ((Some g) (Some (resolve_goal gctx g)))))
 
-(fn parse_proof_r ((m Module) (s SExpr)) (Option Proof)
+(fn parse_proof_r ((m Module) (gctx RCtx) (s SExpr)) (Option Proof)
   (match (parse_proof s (module_ctors m) (module_type_names m))
     (None None)
-    ((Some p) (Some (resolve_proof (RCtx (qn_core) (module_resolve_env m) Nil) p)))))
+    ((Some p) (Some (resolve_proof gctx p)))))
 
 ;; ===========================================================================
 ;; Production entry: per-claim outcomes in source order. This is the loop the
@@ -361,8 +361,12 @@
 (fn focus_skip ((focus Symbol) (name Symbol)) Bool
   (if (sym_eq focus (quote __all__)) False (if (sym_eq focus name) False True)))
 
+;; `gctx` is the file's resolution context (curmod + use-scope, with the glob
+;; folded in as the additive base) — used to resolve each goal/proof against the
+;; module it was authored in. Constant per file; threaded unchanged.
 (fn run_decls
-  ((m Module) (st RunState) (ds (List Decl)) (target Symbol) (focus Symbol))
+  ((gctx RCtx)
+   (m Module) (st RunState) (ds (List Decl)) (target Symbol) (focus Symbol))
   RunState
   (match ds
     (Nil st)
@@ -373,9 +377,9 @@
           ;; (axiom NAME (goal …)): parse goal to native, admit without proof.
           ((DAxiom a)
            (match
-             (parse_goal_r m (ax_goal a))
+             (parse_goal_r m gctx (ax_goal a))
              (None
-               (run_decls
+               (run_decls gctx
                  m
                  (RunState
                    th
@@ -394,7 +398,7 @@
               (match (tc_check_goal m g)
                 ;; ill-typed axiom: REJECTED, not admitted to the theory.
                 ((Some msg)
-                 (run_decls
+                 (run_decls gctx
                    m
                    (RunState
                      th
@@ -405,7 +409,7 @@
                    target
                    focus))
                 (None
-                  (run_decls
+                  (run_decls gctx
                     m
                     (RunState
                       (TheoryCons
@@ -424,9 +428,9 @@
           ;; with desugar_proof_named, and check.
           ((DClaim nc)
            (match
-             (parse_goal_r m (claim_goal nc))
+             (parse_goal_r m gctx (claim_goal nc))
              (None
-               (run_decls
+               (run_decls gctx
                  m
                  (RunState
                    th
@@ -447,7 +451,7 @@
                 ;; in focus mode — an ill-typed goal must not enter the
                 ;; theory, where a focus-admitted citation would use it).
                 ((Some msg)
-                 (run_decls
+                 (run_decls gctx
                    m
                    (RunState
                      th
@@ -460,7 +464,7 @@
                 (None
                   (if (focus_skip focus (claim_name nc))
                     ;; not the focus claim — admit its goal, skip the proof.
-                    (run_decls
+                    (run_decls gctx
                       m
                       (RunState
                         (TheoryCons
@@ -475,9 +479,9 @@
                       target
                       focus)
                     (match
-                      (parse_proof_r m (claim_proof nc))
+                      (parse_proof_r m gctx (claim_proof nc))
                       (None
-                        (run_decls
+                        (run_decls gctx
                           m
                           (RunState
                             th
@@ -496,7 +500,7 @@
                        (match (desugar_proof_named m (goal_params g) Nil p0)
                          (p
                            (if (check_sequent m th (lift_sequent g) p)
-                             (run_decls
+                             (run_decls gctx
                                m
                                (RunState
                                  (TheoryCons
@@ -525,7 +529,7 @@
                                rest
                                target
                                focus)
-                             (run_decls
+                             (run_decls gctx
                                m
                                (RunState
                                  th
@@ -550,9 +554,9 @@
           ;; (validating it at the contract), seed it as a pending obligation.
           ((DReq r)
            (match
-             (parse_goal_r m (req_goal r))
+             (parse_goal_r m gctx (req_goal r))
              (None
-               (run_decls
+               (run_decls gctx
                  m
                  (RunState
                    th
@@ -573,7 +577,7 @@
                 ;; not be fulfillable. (The later (fulfills) then fails with
                 ;; "no requirement in scope".)
                 ((Some msg)
-                 (run_decls
+                 (run_decls gctx
                    m
                    (RunState
                      th
@@ -584,7 +588,7 @@
                    target
                    focus))
                 (None
-                  (run_decls
+                  (run_decls gctx
                     m
                     (RunState th (Cons (PendReq (req_name r) g) pend) acc led)
                     rest
@@ -596,7 +600,7 @@
           ((DFul fu)
            (match (lookup_req (ful_name fu) pend)
              (None
-               (run_decls
+               (run_decls gctx
                  m
                  (RunState
                    th
@@ -614,7 +618,7 @@
              ((Some g)
               (if (focus_skip focus (ful_name fu))
                 ;; not the focus claim — admit the requirement's goal, skip the proof.
-                (run_decls
+                (run_decls gctx
                   m
                   (RunState
                     (TheoryCons
@@ -627,9 +631,9 @@
                   target
                   focus)
                 (match
-                  (parse_proof_r m (ful_proof fu))
+                  (parse_proof_r m gctx (ful_proof fu))
                   (None
-                    (run_decls
+                    (run_decls gctx
                       m
                       (RunState
                         th
@@ -648,7 +652,7 @@
                    (match (desugar_proof_named m (goal_params g) Nil p0)
                      (p
                        (if (check_sequent m th (lift_sequent g) p)
-                         (run_decls
+                         (run_decls gctx
                            m
                            (RunState
                              (TheoryCons
@@ -669,7 +673,7 @@
                            rest
                            target
                            focus)
-                         (run_decls
+                         (run_decls gctx
                            m
                            (RunState
                              th
@@ -706,7 +710,7 @@
   RunState
   (match srcs
     (Nil st)
-    ((Cons (SrcEntry _ granted src) rest)
+    ((Cons (SrcEntry path granted src) rest)
      (match (parse_decls src ctors granted)
        (None
          (match st
@@ -726,14 +730,21 @@
               focus
               (+ k 1)))))
        ((Some ds)
-        (run_srcs
-          m
-          rest
-          ctors
-          (run_decls m st ds target focus)
-          target
-          focus
-          (+ k 1)))))))
+        ;; the file's resolution context: real curmod + its use-scope, with the
+        ;; glob import env folded in as the additive fallback (Stage 2.5c-i).
+        (let ((curmod (module_path_of path)))
+          (match (use_scope_of (use_forms src) curmod (loaded_modpaths m))
+            ((Pair uitems ualiases)
+             (run_srcs
+               m
+               rest
+               ctors
+               (run_decls
+                 (RCtx curmod (app_env uitems (module_resolve_env m)) ualiases)
+                 m st ds target focus)
+               target
+               focus
+               (+ k 1))))))))))
 
 ;; ---- bin acceptance reporting ---------------------------------------------
 ;; A `(bin …)` groups requirement names into an artifact's acceptance contract.
