@@ -4,10 +4,21 @@
 ;;; checker toolchain as ordinary modules and drives it IN-PROCESS — no
 ;;; subprocess, no re-parse per attempt (the target module is built ONCE;
 ;;; each attempt is a focused driver run against it). For every `auto`
-;;; claim/fulfills in the target file it walks the candidate LADDER —
-;;; cheapest closer first — by injecting each candidate as a synthetic
-;;; sidecar entry (the same splice path a real sidecar takes), and persists
+;;; claim/fulfills in the target file it searches for a proof and persists
 ;;; the winners into the file's `<file>.auto.shard` via write_file.
+;;;
+;;; TWO SEARCH MODES:
+;;;   flat ladder    closed-form candidates, cheapest closer first
+;;;                  (refl / compute / simp / eqdec / ord / lia)
+;;;   (auto (induct VAR))  HINTED structural search: parse the goal, build
+;;;                  each constructor case's SUBGOAL via the checker's own
+;;;                  build_induct_subgoal, solve each case independently
+;;;                  with a case ladder (the flat closers plus unfold/
+;;;                  reduce/IH-rewrite templates over the goal's own fn
+;;;                  heads — a file may only unfold fns it owns, which is
+;;;                  exactly what a goal's heads are), assemble the
+;;;                  (induct …) proof, and verify the WHOLE assembly
+;;;                  through the standard driver pass before persisting.
 ;;;
 ;;; THE CONTRACT: search happens HERE, offline; `check` only ever REPLAYS
 ;;; the persisted entries. A solver bug can cost coverage, never soundness —
@@ -21,15 +32,17 @@
 ;;;           (or `eval direct` — the closure is flat-file imports)
 ;;;   FILE alone   solve every auto decl that LACKS a sidecar entry
 ;;;   FILE CLAIM   (re-)solve exactly CLAIM (must be an auto decl in FILE)
-;;; exit 0 = nothing left unsolved   1 = some claim resisted the ladder
+;;; exit 0 = nothing left unsolved   1 = some claim resisted the search
 ;;;      2 = bad usage / unreadable target / unlexable sidecar / module error
 
 (import "../../kernel/stdlib.shard")  ; List / Option / Bool / Pair
 (import "../../kernel/loader.shard")  ; World + I/O externs + resolve_closure
 (import "../../kernel/driver.shard")  ; check_production + auto helpers + ClaimOutcome
-(import "../../kernel/module.shard")  ; Module / FnTrie (the empty seed)
-(import "../../kernel/term.shard")  ; chars_of_sym
-(import "../../kernel/reader.shard")  ; read_all / SExpr / build_module_d
+(import "../../kernel/module.shard")  ; Module / TypeDef / type helpers
+(import "../../kernel/term.shard")  ; Expr / QName / chars_of_sym
+(import "../../kernel/proof.shard")  ; Goal / Equation / Param
+(import "../../kernel/checker.shard")  ; check_sequent / build_induct_subgoal
+(import "../../kernel/reader.shard")  ; read_all / SExpr / RCtx / build_module_d
 
 ;; the explicit library surface this app consumes (STRICT-mode scoping).
 (use (:: kernel loader resolve_closure))
@@ -48,6 +61,7 @@
 (use (:: kernel reader SSym))
 (use (:: kernel reader SStr))
 (use (:: kernel reader SList))
+(use (:: kernel reader RCtx))
 (use (:: kernel reader read_all))
 (use (:: kernel reader build_module_d))
 (use (:: kernel reader BMOk))
@@ -59,20 +73,46 @@
 (use (:: kernel driver is_auto_proof))
 (use (:: kernel driver autos_of_forms))
 (use (:: kernel driver auto_lookup))
+(use (:: kernel driver file_rctx))
+(use (:: kernel driver parse_goal_r))
+(use (:: kernel driver parse_proof_r))
+(use (:: kernel driver lift_sequent))
 (use (:: kernel driver ClaimOutcome))
 (use (:: kernel driver COPass))
 (use (:: kernel driver COFail))
 (use (:: kernel driver COTypeFail))
+(use (:: kernel checker Sequent))
+(use (:: kernel checker check_sequent))
+(use (:: kernel checker build_induct_subgoal))
+(use (:: kernel checker find_param))
+(use (:: kernel checker seq_params))
+(use (:: kernel checker TheoryEmpty))
 (use (:: kernel module Module))
 (use (:: kernel module FnTrie))
+(use (:: kernel module TypeDef))
+(use (:: kernel module CtorDef))
+(use (:: kernel module Type))
+(use (:: kernel module type_head))
+(use (:: kernel module lookup_typedef))
+(use (:: kernel module type_subst_list))
+(use (:: kernel module zip_pairs))
+(use (:: kernel module trie_lookup))
+(use (:: kernel proof Goal))
+(use (:: kernel proof Equation))
+(use (:: kernel proof Param))
+(use (:: kernel proof Proof))
+(use (:: kernel term Expr))
+(use (:: kernel term QName))
+(use (:: kernel term qname_eq))
+(use (:: kernel term qn_name))
 (use (:: kernel term chars_of_sym))
 
 (fn nl () (List Int) (Cons 10 Nil))  ; "\n"
 
-;; ---- the candidate ladder --------------------------------------------------
+;; ---- the flat candidate ladder ---------------------------------------------
 ;; Closed-form candidates only (no goal-specific payload), cheapest first.
 ;; farkas is deliberately absent: it needs coefficient witnesses — that is
-;; SEARCH WITH STRUCTURE, a later slice. Induction likewise (subgoal-driven).
+;; search with structure, like the induction synthesis below but unbuilt.
 (fn ladder () (List (List Int))
   (list
     "refl"
@@ -122,32 +162,67 @@
     ((Cons x Nil) (sx_print x))
     ((Cons x rest) (append_int (sx_print x) (Cons 32 (sx_items rest))))))
 
-;; ---- target scan: the auto decls, in source order --------------------------
-;; (claim NAME GOAL auto…) and (fulfills NAME auto…) are the solvable decls.
-(fn auto_name_of ((f SExpr)) (Option Symbol)
+;; ---- target scan: the auto decls, with hint + goal --------------------------
+;; (auto HINT…): the tail is solver-directed. Recognized today:
+;;   (induct VAR) — synthesize a structural induction on VAR.
+(type Hint (HNone) (HInduct Symbol))
+
+;; name, hint, and the goal s-expr when recoverable (a claim carries its own;
+;; a fulfills' goal is looked up from a same-file (requirement NAME GOAL)).
+(type AutoDecl (AutoDecl Symbol Hint (Option SExpr)))
+
+(fn hint_of ((proofS SExpr)) Hint
+  (match proofS
+    ((SList (Cons _ hints))
+     (match hints
+       ((Cons (SList (Cons (SSym hh) (Cons (SSym v) Nil))) _)
+        (if (sym_eq hh (quote induct)) (HInduct v) (HNone)))
+       (_ (HNone))))
+    (_ (HNone))))
+
+(fn req_goal_of ((name Symbol) (forms (List SExpr))) (Option SExpr)
+  (match forms
+    (Nil None)
+    ((Cons f rest)
+     (match f
+       ((SList (Cons (SSym h) (Cons (SSym n) (Cons goalS Nil))))
+        (if (sym_eq h (quote requirement))
+          (if (sym_eq n name) (Some goalS) (req_goal_of name rest))
+          (req_goal_of name rest)))
+       (_ (req_goal_of name rest))))))
+
+(fn auto_decl_of ((f SExpr) (forms (List SExpr))) (Option AutoDecl)
   (match f
-    ((SList (Cons (SSym h) (Cons (SSym name) (Cons _ (Cons proofS Nil)))))
+    ((SList (Cons (SSym h) (Cons (SSym name) (Cons goalS (Cons proofS Nil)))))
      (if (sym_eq h (quote claim))
-       (if (is_auto_proof proofS) (Some name) None)
+       (if (is_auto_proof proofS)
+         (Some (AutoDecl name (hint_of proofS) (Some goalS)))
+         None)
        None))
     ((SList (Cons (SSym h) (Cons (SSym name) (Cons proofS Nil))))
      (if (sym_eq h (quote fulfills))
-       (if (is_auto_proof proofS) (Some name) None)
+       (if (is_auto_proof proofS)
+         (Some (AutoDecl name (hint_of proofS) (req_goal_of name forms)))
+         None)
        None))
     (_ None)))
 
-(fn auto_names ((forms (List SExpr))) (List Symbol)
-  (match forms
+(fn auto_decls ((fs (List SExpr)) (forms (List SExpr))) (List AutoDecl)
+  (match fs
     (Nil Nil)
     ((Cons f rest)
-     (match (auto_name_of f)
-       (None (auto_names rest))
-       ((Some n) (Cons n (auto_names rest)))))))
+     (match (auto_decl_of f forms)
+       (None (auto_decls rest forms))
+       ((Some d) (Cons d (auto_decls rest forms)))))))
 
-(fn sym_member ((n Symbol) (ns (List Symbol))) Bool
-  (match ns
-    (Nil False)
-    ((Cons x rest) (if (sym_eq x n) True (sym_member n rest)))))
+(fn decl_name ((d AutoDecl)) Symbol
+  (match d
+    ((AutoDecl n _ _) n)))
+
+(fn find_decl ((n Symbol) (ds (List AutoDecl))) (Option AutoDecl)
+  (match ds
+    (Nil None)
+    ((Cons d rest) (if (sym_eq (decl_name d) n) (Some d) (find_decl n rest)))))
 
 ;; the target's own source bytes within the resolved closure.
 (fn src_of ((path (List Int)) (srcs (List SrcEntry))) (Option (List Int))
@@ -156,7 +231,7 @@
     ((Cons (SrcEntry p _ s) rest)
      (if (int_list_eq path p) (Some s) (src_of path rest)))))
 
-;; ---- one focused in-process attempt ----------------------------------------
+;; ---- one focused in-process attempt (whole-file driver pass) ---------------
 (fn outcome_of ((cn Symbol) (os (List ClaimOutcome))) (Option Bool)
   (match os
     (Nil None)
@@ -167,19 +242,28 @@
        ((COTypeFail n _) (if (sym_eq n cn) (Some False) (outcome_of cn rest)))
        (_ (outcome_of cn rest))))))
 
-;; walk the ladder for one claim; the module is prebuilt, so an attempt is
-;; one focus-mode driver pass (only this claim's proof is checked).
-(fn try_ladder
-  ((m Module)
-   (srcs (List SrcEntry))
-   (ctors (List Symbol))
-   (pathkey Symbol)
-   (name Symbol)
-   (cands (List (List Int))))
-  (Option (List Int))
-  (match cands
-    (Nil None)
-    ((Cons c rest)
+;; solver context: everything one attempt needs, bundled once per run.
+(type Slv
+  (Slv
+    Module  ; the target's module, built once
+    (List SrcEntry)  ; the resolved closure
+    (List Symbol)  ; its ctor set
+    Symbol  ; pathkey — the target's sidecar key
+    RCtx))  ; the target file's resolution context
+
+(fn slv_m ((s Slv)) Module
+  (match s
+    ((Slv m _ _ _ _) m)))
+(fn slv_rctx ((s Slv)) RCtx
+  (match s
+    ((Slv _ _ _ _ r) r)))
+
+;; does CANDIDATE close NAME? One focus-mode driver pass with the candidate
+;; spliced in as a synthetic sidecar entry — the full real pipeline (theory,
+;; desugar, tc), so a True here is exactly "check would accept it".
+(fn attempt ((s Slv) (name Symbol) (cand (List Int))) Bool
+  (match s
+    ((Slv m srcs ctors pathkey _)
      (match
        (outcome_of
          name
@@ -187,32 +271,251 @@
            m
            srcs
            ctors
-           (Cons (Pair pathkey (sidecar_for (chars_of_sym name) c)) Nil)
+           (Cons (Pair pathkey (sidecar_for (chars_of_sym name) cand)) Nil)
            (quote __no_trace__)
            name))
-       ((Some True) (Some c))
-       (_ (try_ladder m srcs ctors pathkey name rest))))))
+       ((Some True) True)
+       (_ False)))))
 
-;; ---- solve loop -------------------------------------------------------------
+(fn try_ladder ((s Slv) (name Symbol) (cands (List (List Int))))
+  (Option (List Int))
+  (match cands
+    (Nil None)
+    ((Cons c rest) (if (attempt s name c) (Some c) (try_ladder s name rest)))))
+
+;; ---- induction synthesis (the (induct VAR) hint) ----------------------------
+;; Per-case solving goes through the checker's OWN subgoal builder, so what we
+;; solve is exactly what the checker will re-derive at replay time. Cases are
+;; checked against the EMPTY theory: the case ladder cites no lemmas, and the
+;; assembled whole proof is verified through the real driver pass afterward.
+
+;; fn heads reachable in a goal expr that resolve in the module's fn trie —
+;; the unfold candidates (a goal's own heads are exactly the fns this file
+;; may unfold under the surface discipline).
+(fn qn_member ((q QName) (qs (List QName))) Bool
+  (match qs
+    (Nil False)
+    ((Cons x rest) (if (qname_eq x q) True (qn_member q rest)))))
+
+(fn heads_of ((e Expr) (trie FnTrie) (acc (List QName))) (List QName)
+  (match e
+    ((Call q args)
+     (match (trie_lookup q trie)
+       (None (heads_of_list args trie acc))
+       ((Some _)
+        (heads_of_list args trie (if (qn_member q acc) acc (Cons q acc))))))
+    ((Ctor _ args) (heads_of_list args trie acc))
+    ((If c t e2) (heads_of c trie (heads_of t trie (heads_of e2 trie acc))))
+    ((Let bs body) (heads_of body trie (heads_of_list bs trie acc)))
+    (_ acc)))
+
+(fn heads_of_list ((es (List Expr)) (trie FnTrie) (acc (List QName)))
+  (List QName)
+  (match es
+    (Nil acc)
+    ((Cons e rest) (heads_of_list rest trie (heads_of e trie acc)))))
+
+(fn fn_trie_of ((m Module)) FnTrie
+  (match m
+    ((Module _ _ _ t) t)))
+
+(fn goal_heads ((g Goal) (m Module)) (List QName)
+  (match g
+    ((Goal _ _ (Equation l r))
+     (heads_of l (fn_trie_of m) (heads_of r (fn_trie_of m) Nil)))))
+
+;; unfold/reduce(/IH-rewrite) templates for one fn head, one side. The IH is
+;; (hyp 0): a top-level goal lifts with NO hypotheses, so the first appended
+;; IH always lands at index 0.
+(fn unfold_cands_for ((fname (List Int)) (side (List Int))) (List (List Int))
+  (list
+    (append_int
+      "(steps ((unfold "
+      (append_int
+        fname
+        (append_int
+          " "
+          (append_int
+            side
+            (append_int
+              ") (reduce "
+              (append_int side ")) refl)"))))))
+    (append_int
+      "(steps ((unfold "
+      (append_int
+        fname
+        (append_int
+          " "
+          (append_int
+            side
+            (append_int
+              ") (reduce "
+              (append_int
+                side
+                (append_int
+                  ") (rewrite (hyp 0) lr "
+                  (append_int side " true ())) refl)"))))))))))
+
+(fn append_cands ((a (List (List Int))) (b (List (List Int))))
+  (List (List Int))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (append_cands t b)))))
+
+(fn unfold_cands ((heads (List QName))) (List (List Int))
+  (match heads
+    (Nil Nil)
+    ((Cons q rest)
+     (append_cands
+       (unfold_cands_for (chars_of_sym (qn_name q)) "lhs")
+       (append_cands
+         (unfold_cands_for (chars_of_sym (qn_name q)) "rhs")
+         (unfold_cands rest))))))
+
+;; the per-case ladder: cheap closers, then the unfold templates, then the
+;; theory backends.
+(fn case_ladder ((heads (List QName))) (List (List Int))
+  (append_cands
+    (list
+      "refl"
+      "(steps ((compute both)) refl)"
+      "(steps ((simp both)) refl)")
+    (append_cands
+      (unfold_cands heads)
+      (list "(by eqdec (list))" "(by ord (list))" "(by lia (list))"))))
+
+;; parse one candidate's bytes to a native Proof (against the file's scope).
+(fn parse_cand ((m Module) (rctx RCtx) (bytes (List Int))) (Option Proof)
+  (match (read_all bytes)
+    ((Some (Cons f Nil)) (parse_proof_r m rctx f))
+    (_ None)))
+
+;; close one case subgoal with the first candidate that checks.
+(fn solve_case
+  ((s Slv) (subgoal Sequent) (cands (List (List Int))))
+  (Option (List Int))
+  (match cands
+    (Nil None)
+    ((Cons c rest)
+     (match (parse_cand (slv_m s) (slv_rctx s) c)
+       (None (solve_case s subgoal rest))
+       ((Some p)
+        (if (check_sequent (slv_m s) TheoryEmpty subgoal p)
+          (Some c)
+          (solve_case s subgoal rest)))))))
+
+;; one (ctor-name, case-proof) per constructor — names = Nil makes
+;; build_induct_subgoal gen-fresh the field params, exactly what the checker
+;; does for a surface (case CTOR PROOF) at replay.
+(fn solve_cases
+  ((s Slv)
+   (seq Sequent)
+   (v Symbol)
+   (vt Type)
+   (tenv (List (Pair Symbol Type)))
+   (ctors (List CtorDef))
+   (cands (List (List Int))))
+  (Option (List (Pair (List Int) (List Int))))
+  (match ctors
+    (Nil (Some Nil))
+    ((Cons (CtorDef cname ftypes) rest)
+     (match
+       (solve_case
+         s
+         (build_induct_subgoal seq v vt cname Nil (type_subst_list tenv ftypes))
+         cands)
+       (None None)
+       ((Some c)
+        (match (solve_cases s seq v vt tenv rest cands)
+          (None None)
+          ((Some more)
+           (Some (Cons (Pair (chars_of_sym (qn_name cname)) c) more)))))))))
+
+(fn render_cases ((cs (List (Pair (List Int) (List Int))))) (List Int)
+  (match cs
+    (Nil Nil)
+    ((Cons (Pair cn pf) rest)
+     (append_int
+       "(case "
+       (append_int
+         cn
+         (append_int
+           " "
+           (append_int
+             pf
+             (append_int
+               ")"
+               (match rest
+                 (Nil Nil)
+                 (_ (Cons 32 (render_cases rest))))))))))))
+
+(fn assemble_induct ((v Symbol) (cs (List (Pair (List Int) (List Int)))))
+  (List Int)
+  (append_int
+    "(induct "
+    (append_int
+      (chars_of_sym v)
+      (append_int " (" (append_int (render_cases cs) "))")))))
+
+;; the hinted search: goal → per-ctor subgoals → case ladder each → assemble →
+;; verify the WHOLE proof through the real driver pass.
+(fn try_induct ((s Slv) (name Symbol) (v Symbol) (goalS SExpr))
+  (Option (List Int))
+  (match (parse_goal_r (slv_m s) (slv_rctx s) goalS)
+    (None None)
+    ((Some g)
+     (match (lift_sequent g)
+       (seq
+         (match (find_param v (seq_params seq))
+           (None None)
+           ((Some (Param _ vt))
+            (match (type_head vt)
+              (None None)  ; TVar — can't induct
+              ((Some (Pair tname targs))
+               (match (lookup_typedef tname (slv_m s))
+                 (None None)
+                 ((Some (TypeDef _ tparams tctors))
+                  (match
+                    (solve_cases
+                      s
+                      seq
+                      v
+                      vt
+                      (zip_pairs tparams targs)
+                      tctors
+                      (case_ladder (goal_heads g (slv_m s))))
+                    (None None)
+                    ((Some cs)
+                     (let ((cand (assemble_induct v cs)))
+                       (if (attempt s name cand) (Some cand) None)))))))))))))))
+
+;; ---- solve loop --------------------------------------------------------------
 (type Solved
   (SolvedY Symbol (List Int))  ; claim closed by this candidate
-  (SolvedN Symbol))  ; ladder exhausted
+  (SolvedN Symbol))  ; search exhausted
 
-(fn solve_names
-  ((m Module)
-   (srcs (List SrcEntry))
-   (ctors (List Symbol))
-   (pathkey Symbol)
-   (names (List Symbol)))
-  (List Solved)
-  (match names
+;; hinted decls run their structural search first, then fall back to the
+;; flat ladder; bare decls go straight to the flat ladder.
+(fn solve_one ((s Slv) (d AutoDecl)) Solved
+  (match d
+    ((AutoDecl name hint mgoal)
+     (match
+       (match hint
+         ((HInduct v)
+          (match mgoal
+            ((Some goalS) (try_induct s name v goalS))
+            (None None)))
+         ((HNone) None))
+       ((Some cand) (SolvedY name cand))
+       (None
+         (match (try_ladder s name (ladder))
+           ((Some c) (SolvedY name c))
+           (None (SolvedN name))))))))
+
+(fn solve_all ((s Slv) (ds (List AutoDecl))) (List Solved)
+  (match ds
     (Nil Nil)
-    ((Cons n rest)
-     (Cons
-       (match (try_ladder m srcs ctors pathkey n (ladder))
-         ((Some c) (SolvedY n c))
-         (None (SolvedN n)))
-       (solve_names m srcs ctors pathkey rest)))))
+    ((Cons d rest) (Cons (solve_one s d) (solve_all s rest)))))
 
 (fn won_names ((rs (List Solved))) (List Symbol)
   (match rs
@@ -230,7 +533,12 @@
        ((SolvedN _) True)
        (_ (any_unsolved rest))))))
 
-;; ---- sidecar merge + render --------------------------------------------------
+(fn sym_member ((n Symbol) (ns (List Symbol))) Bool
+  (match ns
+    (Nil False)
+    ((Cons x rest) (if (sym_eq x n) True (sym_member n rest)))))
+
+;; ---- sidecar merge + render ---------------------------------------------------
 ;; kept = existing entries whose claim was NOT re-solved this run.
 (fn keep_entries
   ((es (List (Pair Symbol SExpr))) (solved (List Symbol)))
@@ -279,7 +587,7 @@
   (List Int)
   (append_int (sidecar_header) (append_int (render_kept kept) (render_wins rs))))
 
-;; ---- report ------------------------------------------------------------------
+;; ---- report -------------------------------------------------------------------
 (fn report_lines ((rs (List Solved))) (List Int)
   (match rs
     (Nil Nil)
@@ -295,18 +603,19 @@
          ((SolvedN n)
           (append_int
             "UNSOLVED "
-            (append_int (chars_of_sym n) (append_int "  (ladder exhausted)" (nl))))))
+            (append_int (chars_of_sym n) (append_int "  (search exhausted)" (nl))))))
        (report_lines rest)))))
 
 (fn fail2 ((msg (List Int)) (w World)) World
   (exit 2 (write (append_int "error: " (append_int msg (nl))) w)))
 
-;; ---- the run ----------------------------------------------------------------
-;; Solve `names`, persist winners (merged over the kept existing entries),
+;; ---- the run -------------------------------------------------------------------
+;; Solve `todo`, persist winners (merged over the kept existing entries),
 ;; report, exit. No write when nothing was solved.
 (fn solve_run
   ((target (List Int))
-   (names (List Symbol))
+   (tsrc (List Int))
+   (todo (List AutoDecl))
    (existing (List (Pair Symbol SExpr)))
    (srcs (List SrcEntry))
    (w World))
@@ -315,12 +624,14 @@
     ((BMFail diag) (fail2 diag w))
     ((BMOk m)
      (match
-       (solve_names
-         m
-         srcs
-         (typedef_ctors (module_typedefs m))
-         (sym_of_chars target)
-         names)
+       (solve_all
+         (Slv
+           m
+           srcs
+           (typedef_ctors (module_typedefs m))
+           (sym_of_chars target)
+           (file_rctx m target tsrc))
+         todo)
        (rs
          (match (won_names rs)
            (Nil
@@ -348,46 +659,48 @@
                     (append_int "cannot write " (auto_path_of target))
                     w1)))))))))))
 
-;; names to solve for a whole-file run: auto decls LACKING a sidecar entry.
-(fn missing_names
-  ((ns (List Symbol)) (existing (List (Pair Symbol SExpr))))
-  (List Symbol)
-  (match ns
+;; decls to solve for a whole-file run: auto decls LACKING a sidecar entry.
+(fn missing_decls
+  ((ds (List AutoDecl)) (existing (List (Pair Symbol SExpr))))
+  (List AutoDecl)
+  (match ds
     (Nil Nil)
-    ((Cons n rest)
-     (match (auto_lookup n existing)
-       ((Some _) (missing_names rest existing))
-       (None (Cons n (missing_names rest existing)))))))
+    ((Cons d rest)
+     (match (auto_lookup (decl_name d) existing)
+       ((Some _) (missing_decls rest existing))
+       (None (Cons d (missing_decls rest existing)))))))
 
 ;; dispatch once args / closure / sidecar / target-forms are in hand.
 (fn run_with
   ((target (List Int))
+   (tsrc (List Int))
    (mclaim (Option (List Int)))
    (existing (List (Pair Symbol SExpr)))
    (srcs (List SrcEntry))
    (forms (List SExpr))
    (w World))
   World
-  (match (auto_names forms)
-    (autos
+  (match (auto_decls forms forms)
+    (ds
       (match mclaim
         ((Some cb)
-         (if (sym_member (sym_of_chars cb) autos)
-           (solve_run target (Cons (sym_of_chars cb) Nil) existing srcs w)
-           (fail2
-             (append_int
-               "claim "
-               (append_int cb " is not an `auto` decl in the target"))
-             w)))
+         (match (find_decl (sym_of_chars cb) ds)
+           ((Some d) (solve_run target tsrc (Cons d Nil) existing srcs w))
+           (None
+             (fail2
+               (append_int
+                 "claim "
+                 (append_int cb " is not an `auto` decl in the target"))
+               w))))
         (None
-          (match (missing_names autos existing)
+          (match (missing_decls ds existing)
             (Nil
               (exit
                 0
                 (write
                   "nothing to solve (every auto decl has a sidecar entry)\n"
                   w)))
-            (todo (solve_run target todo existing srcs w))))))))
+            (todo (solve_run target tsrc todo existing srcs w))))))))
 
 ;; ---- the World wrapper: arg0 = target file, arg1 (optional) = claim --------
 (fn main ((w World)) World
@@ -413,7 +726,7 @@
                     (match (read_file (auto_path_of target) w2)
                       ((Pair msc w3)
                        (match msc
-                         (None (run_with target mclaim Nil srcs forms w3))
+                         (None (run_with target tsrc mclaim Nil srcs forms w3))
                          ((Some sbytes)
                           (match (read_all sbytes)
                             (None
@@ -425,6 +738,7 @@
                             ((Some sforms)
                              (run_with
                                target
+                               tsrc
                                mclaim
                                (autos_of_forms sforms)
                                srcs
