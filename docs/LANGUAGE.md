@@ -456,6 +456,19 @@ input: a wrong or stale entry simply fails. A missing entry is a hard
 failure (`examples/auto_missing_rejects.shard` pins this; the demo is
 `examples/auto_demo.shard`).
 
+The solver (`tools/prove`) understands these hints, all optional
+accelerators — bare `auto` searches unhinted (flat closers, theory
+backends, farkas certificate enumeration for premised goals, lemma
+rewrites over earlier theory entries, structural induction on each goal
+parameter):
+
+- `(induct VAR)` — synthesize a structural induction on VAR.
+- `(case-on TERM TYPE)` — synthesize a case split on a computed term
+  (e.g. the `(lt a b)` an `If` is stuck on).
+- Hints chain: `(auto (induct n) (induct m))` nests — a case of the
+  first synthesis that resists its ladder gets the next hint
+  synthesized on its own subgoal.
+
 ### 10.2 Goals and equations
 
 ```sexp
