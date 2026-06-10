@@ -180,9 +180,9 @@
 ;;   (case-on TERM TYPE) — synthesize a case split on a computed term.
 (type Hint (HNone) (HInduct Symbol) (HCaseOn SExpr SExpr))
 
-;; name, hint, and the goal s-expr when recoverable (a claim carries its own;
-;; a fulfills' goal is looked up from a same-file (requirement NAME GOAL)).
-(type AutoDecl (AutoDecl Symbol Hint (Option SExpr)))
+;; name, hints, and the goal s-expr when recoverable (a claim carries its
+;; own; a fulfills' goal is looked up from a same-file (requirement NAME GOAL)).
+(type AutoDecl (AutoDecl Symbol (List Hint) (Option SExpr)))
 
 (fn hint1 ((h SExpr)) Hint
   (match h
@@ -198,13 +198,21 @@
        (HNone))))
     (_ (HNone))))
 
-(fn hint_of ((proofS SExpr)) Hint
+;; ALL hints, in order — (auto (induct n) (induct m)) nests: when a case of
+;; the first synthesis resists its ladder, the next hint's structure is
+;; synthesized on that case's subgoal. Unrecognized hints are skipped.
+(fn hint_list ((hs (List SExpr))) (List Hint)
+  (match hs
+    (Nil Nil)
+    ((Cons h rest)
+     (match (hint1 h)
+       ((HNone) (hint_list rest))
+       (hh (Cons hh (hint_list rest)))))))
+
+(fn hints_of ((proofS SExpr)) (List Hint)
   (match proofS
-    ((SList (Cons _ hints))
-     (match hints
-       ((Cons h _) (hint1 h))
-       (_ (HNone))))
-    (_ (HNone))))
+    ((SList (Cons _ hints)) (hint_list hints))
+    (_ Nil)))
 
 (fn req_goal_of ((name Symbol) (forms (List SExpr))) (Option SExpr)
   (match forms
@@ -222,13 +230,13 @@
     ((SList (Cons (SSym h) (Cons (SSym name) (Cons goalS (Cons proofS Nil)))))
      (if (sym_eq h (quote claim))
        (if (is_auto_proof proofS)
-         (Some (AutoDecl name (hint_of proofS) (Some goalS)))
+         (Some (AutoDecl name (hints_of proofS) (Some goalS)))
          None)
        None))
     ((SList (Cons (SSym h) (Cons (SSym name) (Cons proofS Nil))))
      (if (sym_eq h (quote fulfills))
        (if (is_auto_proof proofS)
-         (Some (AutoDecl name (hint_of proofS) (req_goal_of name forms)))
+         (Some (AutoDecl name (hints_of proofS) (req_goal_of name forms)))
          None)
        None))
     (_ None)))
@@ -381,16 +389,22 @@
     (Nil Nil)
     ((Cons q rest) (Cons (chars_of_sym (qn_name q)) (head_names rest)))))
 
+;; heads are read off the SEQUENT under solve (not the surface goal), so
+;; nested levels generate from their own case subgoal.
+(fn seq_equation ((seq Sequent)) Equation
+  (match seq
+    ((Sequent _ _ _ e) e)))
+
 ;; both sides' heads together — the relevance key for lemma selection.
-(fn goal_qheads ((g Goal) (m Module)) (List QName)
-  (match g
-    ((Goal _ _ (Equation l r))
+(fn seq_qheads ((seq Sequent) (m Module)) (List QName)
+  (match (seq_equation seq)
+    ((Equation l r)
      (heads_of l (fn_trie_of m) (heads_of r (fn_trie_of m) Nil)))))
 
-(fn side_heads ((g Goal) (m Module))
+(fn seq_side_heads ((seq Sequent) (m Module))
   (Pair (List (List Int)) (List (List Int)))
-  (match g
-    ((Goal _ _ (Equation l r))
+  (match (seq_equation seq)
+    ((Equation l r)
      (Pair
        (head_names (heads_of l (fn_trie_of m) Nil))
        (head_names (heads_of r (fn_trie_of m) Nil))))))
@@ -540,10 +554,14 @@
 ;; / an IH-rewrite THEN a lemma-rewrite (add_comm's S case: chain + IH +
 ;; add_n_succ). An empty base keeps only the rewritten variants (the plain
 ;; closers already cover it).
+;; the (hyp 1) singles serve inner IHs: under one outer hypothesis a nested
+;; induction's IH lands at index 1.
 (fn ih_tails () (List (List (List Int)))
   (list
     (list (st_rw_hyp 0 "lhs"))
     (list (st_rw_hyp 0 "rhs"))
+    (list (st_rw_hyp 1 "lhs"))
+    (list (st_rw_hyp 1 "rhs"))
     (list (st_rw_hyp 0 "lhs") (st_rw_hyp 1 "lhs"))))
 
 (fn singleton_tails ((stps (List (List Int)))) (List (List (List Int)))
@@ -652,21 +670,26 @@
     ((Some (Cons f Nil)) (parse_proof_r m rctx f))
     (_ None)))
 
-;; close one case subgoal with the first candidate that checks. The theory is
-;; the decl's prebuilt citation vocabulary (lemma-citing case candidates
-;; resolve against it; the whole assembly still passes final verify).
+;; close one case subgoal with the first candidate that checks; a ladder
+;; exhausted with hints REMAINING synthesizes the next hint's structure on
+;; this very subgoal (nested hints, one level per hint). The theory is the
+;; decl's prebuilt citation vocabulary.
 (fn solve_case
-  ((s Slv) (th Theory) (subgoal Sequent) (cands (List (List Int))))
+  ((s Slv) (th Theory) (subgoal Sequent) (cands (List (List Int)))
+   (hrest (List Hint)))
   (Option (List Int))
   (match cands
-    (Nil None)
-    ((Cons c rest)
+    (Nil
+      (match hrest
+        ((Cons h more) (synth_one s th subgoal h more))
+        (Nil None)))
+    ((Cons c crest)
      (match (parse_cand (slv_m s) (slv_rctx s) c)
-       (None (solve_case s th subgoal rest))
+       (None (solve_case s th subgoal crest hrest))
        ((Some p)
         (if (check_sequent (slv_m s) th subgoal p)
           (Some c)
-          (solve_case s th subgoal rest)))))))
+          (solve_case s th subgoal crest hrest)))))))
 
 ;; one (ctor-name, case-proof) per constructor — names = Nil makes
 ;; build_induct_subgoal gen-fresh the field params, exactly what the checker
@@ -679,7 +702,8 @@
    (vt Type)
    (tenv (List (Pair Symbol Type)))
    (ctors (List CtorDef))
-   (cands (List (List Int))))
+   (cands (List (List Int)))
+   (hrest (List Hint)))
   (Option (List (Pair (List Int) (List Int))))
   (match ctors
     (Nil (Some Nil))
@@ -689,10 +713,11 @@
          s
          th
          (build_induct_subgoal seq v vt cname Nil (type_subst_list tenv ftypes))
-         cands)
+         cands
+         hrest)
        (None None)
        ((Some c)
-        (match (solve_cases s th seq v vt tenv rest cands)
+        (match (solve_cases s th seq v vt tenv rest cands hrest)
           (None None)
           ((Some more)
            (Some (Cons (Pair (chars_of_sym (qn_name cname)) c) more)))))))))
@@ -723,11 +748,28 @@
       (chars_of_sym v)
       (append_int " (" (append_int (render_cases cs) "))")))))
 
-;; structural induction on V: per-ctor subgoals → case ladder each →
-;; assemble → verify the WHOLE proof through the real driver pass (so a
-;; failed assembly falls through to the caller's next variable).
-(fn try_induct
-  ((s Slv) (th Theory) (name Symbol) (seq Sequent) (g Goal) (v Symbol))
+;; the case ladder an induction case gets: chains over the SUBGOAL's own
+;; heads, IH tails, lemma steps, farkas certs (premise counts survive the
+;; case substitution).
+(fn induct_case_cands ((s Slv) (th Theory) (seq Sequent))
+  (List (List Int))
+  (match (seq_side_heads seq (slv_m s))
+    ((Pair lh rh)
+     (append_cands
+       (case_ladder
+         lh
+         rh
+         (ih_tails)
+         (lemma_steps
+           (lemma_names th (seq_qheads seq (slv_m s)) (slv_m s) 8)))
+       (farkas_cands seq)))))
+
+;; structural induction on V over SEQ: per-ctor subgoals → case ladder each
+;; (a stuck case falls back to the NEXT hint's structure) → assemble →
+;; self-check the assembly against SEQ (the decl-level driver verify happens
+;; once, in solve_seq).
+(fn inner_induct
+  ((s Slv) (th Theory) (seq Sequent) (v Symbol) (hrest (List Hint)))
   (Option (List Int))
   (match (find_param v (seq_params seq))
     (None None)
@@ -738,63 +780,66 @@
         (match (lookup_typedef tname (slv_m s))
           (None None)
           ((Some (TypeDef _ tparams tctors))
-           (match (side_heads g (slv_m s))
-             ((Pair lh rh)
-              (match
-                (solve_cases
-                  s
-                  th
-                  seq
-                  v
-                  vt
-                  (zip_pairs tparams targs)
-                  tctors
-                  (append_cands
-                    (case_ladder
-                      lh
-                      rh
-                      (ih_tails)
-                      (lemma_steps
-                        (lemma_names
-                          th
-                          (goal_qheads g (slv_m s))
-                          (slv_m s)
-                          8)))
-                    ;; premise counts survive the case substitution, so the
-                    ;; top sequent's farkas certs fit every case subgoal.
-                    (farkas_cands seq)))
-                (None None)
-                ((Some cs)
-                 (let ((cand (assemble_induct v cs)))
-                   (if (attempt s name cand) (Some cand) None)))))))))))))
+           (match
+             (solve_cases
+               s
+               th
+               seq
+               v
+               vt
+               (zip_pairs tparams targs)
+               tctors
+               (induct_case_cands s th seq)
+               hrest)
+             (None None)
+             ((Some cs)
+              (let ((cand (assemble_induct v cs)))
+                (if (try_cand s th seq cand) (Some cand) None)))))))))))
 
 ;; ---- solve loop --------------------------------------------------------------
 (type Solved
   (SolvedY Symbol (List Int))  ; claim closed by this candidate
   (SolvedN Symbol))  ; search exhausted
 
-;; unhinted induction: try each sequent parameter in turn (try_induct skips
-;; non-datatype params on its own).
+;; unhinted induction: try each sequent parameter in turn (inner_induct
+;; skips non-datatype params on its own); each self-checked winner still
+;; passes the decl-level driver verify before being accepted.
 (fn param_syms ((ps (List Param))) (List Symbol)
   (match ps
     (Nil Nil)
     ((Cons (Param n _) rest) (Cons n (param_syms rest)))))
 
 (fn try_induct_each
-  ((s Slv) (th Theory) (name Symbol) (seq Sequent) (g Goal)
-   (vs (List Symbol)))
+  ((s Slv) (th Theory) (name Symbol) (seq Sequent) (vs (List Symbol)))
   (Option (List Int))
   (match vs
     (Nil None)
     ((Cons v rest)
-     (match (try_induct s th name seq g v)
+     (match (verify_or s name (inner_induct s th seq v Nil))
        ((Some c) (Some c))
-       (None (try_induct_each s th name seq g rest))))))
+       (None (try_induct_each s th name seq rest))))))
 
 (fn try_induct_vars
-  ((s Slv) (th Theory) (name Symbol) (seq Sequent) (g Goal))
+  ((s Slv) (th Theory) (name Symbol) (seq Sequent))
   (Option (List Int))
-  (try_induct_each s th name seq g (param_syms (seq_params seq))))
+  (try_induct_each s th name seq (param_syms (seq_params seq))))
+
+;; gate a synthesized candidate through the full driver pass.
+(fn verify_or ((s Slv) (name Symbol) (mc (Option (List Int))))
+  (Option (List Int))
+  (match mc
+    (None None)
+    ((Some c) (if (attempt s name c) (Some c) None))))
+
+;; one hint's structure, synthesized on SEQ — the shared dispatcher for the
+;; top level and for nested fallback inside a stuck case.
+(fn synth_one
+  ((s Slv) (th Theory) (seq Sequent) (h Hint) (hrest (List Hint)))
+  (Option (List Int))
+  (match h
+    ((HInduct v) (inner_induct s th seq v hrest))
+    ((HCaseOn termS tyS) (inner_caseon s th seq termS tyS hrest))
+    ((HNone) None)))
 
 ;; ---- case-on synthesis (the (case-on TERM TYPE) hint) ------------------------
 ;; A case split on a COMPUTED term (the gap induction can't reach: branching
@@ -837,7 +882,7 @@
 
 (fn solve_con_cases
   ((s Slv) (th Theory) (seq Sequent) (scrut Expr) (ctors (List CtorDef))
-   (cands (List (List Int))))
+   (cands (List (List Int))) (hrest (List Hint)))
   (Option (List (Pair (List Int) (List Int))))
   (match ctors
     (Nil (Some Nil))
@@ -847,17 +892,18 @@
          s
          th
          (build_case_on_subgoal seq scrut cname Nil ftypes)
-         cands)
+         cands
+         hrest)
        (None None)
        ((Some c)
-        (match (solve_con_cases s th seq scrut rest cands)
+        (match (solve_con_cases s th seq scrut rest cands hrest)
           (None None)
           ((Some more)
            (Some (Cons (Pair (chars_of_sym (qn_name cname)) c) more)))))))))
 
-(fn try_caseon
-  ((s Slv) (th Theory) (name Symbol) (seq Sequent) (g Goal)
-   (termS SExpr) (tyS SExpr))
+(fn inner_caseon
+  ((s Slv) (th Theory) (seq Sequent) (termS SExpr) (tyS SExpr)
+   (hrest (List Hint)))
   (Option (List Int))
   (match
     (parse_cand
@@ -882,20 +928,21 @@
                   seq
                   scrut
                   (inst_ctor_fields (zip_pairs tparams targs) ctors)
-                  (caseon_cands s th seq g))
+                  (caseon_cands s th seq)
+                  hrest)
                 (None None)
                 ((Some cs)
                  (let
                    ((cand
                       (assemble_caseon (sx_print termS) (sx_print tyS) cs)))
-                   (if (attempt s name cand) (Some cand) None)))))))))
+                   (if (try_cand s th seq cand) (Some cand) None)))))))))
        (_ None)))))
 
 ;; the case ladder a case-on branch gets: same generated breadth, with the
 ;; rewrite-then-re-reduce tails in the IH slot, plus the farkas certs.
-(fn caseon_cands ((s Slv) (th Theory) (seq Sequent) (g Goal))
+(fn caseon_cands ((s Slv) (th Theory) (seq Sequent))
   (List (List Int))
-  (match (side_heads g (slv_m s))
+  (match (seq_side_heads seq (slv_m s))
     ((Pair lh rh)
      (append_cands
        (case_ladder
@@ -903,7 +950,7 @@
          rh
          (caseon_tails)
          (lemma_steps
-           (lemma_names th (goal_qheads g (slv_m s)) (slv_m s) 8)))
+           (lemma_names th (seq_qheads seq (slv_m s)) (slv_m s) 8)))
        (farkas_cands seq)))))
 
 ;; ---- farkas certificate enumeration ------------------------------------------
@@ -958,28 +1005,27 @@
 ;; the flat (no-induction) candidate set for a goal: the same generated
 ;; ladder a case gets — unfold chains over the goal's own heads plus lemma
 ;; rewrite tails — minus the IH tails (no hypotheses at top level).
-(fn flat_cands ((s Slv) (th Theory) (g Goal)) (List (List Int))
-  (match (side_heads g (slv_m s))
+(fn flat_cands ((s Slv) (th Theory) (seq Sequent)) (List (List Int))
+  (match (seq_side_heads seq (slv_m s))
     ((Pair lh rh)
      (case_ladder
        lh
        rh
        Nil
        (lemma_steps
-         (lemma_names th (goal_qheads g (slv_m s)) (slv_m s) 8))))))
+         (lemma_names th (seq_qheads seq (slv_m s)) (slv_m s) 8))))))
 
-;; the search over one decl's sequent: hinted induction first (it was hinted
-;; for a reason), then the flat ladder, then induction on each parameter.
-;; Flat winners verify HERE (one driver pass); induction winners verified
-;; inside try_induct, where a failure falls through to the next variable.
+;; the search over one decl's sequent: the hint chain first (it was hinted
+;; for a reason; later hints nest inside earlier ones), then the flat
+;; ladder, then unhinted induction on each parameter. Every winner passes
+;; the decl-level driver verify.
 (fn solve_seq
-  ((s Slv) (th Theory) (name Symbol) (seq Sequent) (g Goal) (hint Hint))
+  ((s Slv) (th Theory) (name Symbol) (seq Sequent) (hints (List Hint)))
   (Option (List Int))
   (match
-    (match hint
-      ((HInduct v) (try_induct s th name seq g v))
-      ((HCaseOn termS tyS) (try_caseon s th name seq g termS tyS))
-      ((HNone) None))
+    (match hints
+      ((Cons h hrest) (verify_or s name (synth_one s th seq h hrest)))
+      (Nil None))
     ((Some c) (Some c))
     (None
       (match
@@ -987,14 +1033,14 @@
           s
           th
           seq
-          (append_cands (flat_cands s th g) (farkas_cands seq)))
+          (append_cands (flat_cands s th seq) (farkas_cands seq)))
         ((Some c)
-         (if (attempt s name c) (Some c) (try_induct_vars s th name seq g)))
-        (None (try_induct_vars s th name seq g))))))
+         (if (attempt s name c) (Some c) (try_induct_vars s th name seq)))
+        (None (try_induct_vars s th name seq))))))
 
 (fn solve_one ((s Slv) (d AutoDecl)) Solved
   (match d
-    ((AutoDecl name hint mgoal)
+    ((AutoDecl name hints mgoal)
      (match mgoal
        (None
          ;; goal unrecoverable (a fulfills whose requirement lives in an
@@ -1007,7 +1053,7 @@
         (match (parse_goal_r (slv_m s) (slv_rctx s) goalS)
           (None (SolvedN name))  ; malformed goal — the real pass reports it
           ((Some g)
-           (match (solve_seq s (theory_at s name) name (lift_sequent g) g hint)
+           (match (solve_seq s (theory_at s name) name (lift_sequent g) hints)
              ((Some c) (SolvedY name c))
              (None (SolvedN name))))))))))
 
