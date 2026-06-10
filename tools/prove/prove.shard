@@ -43,6 +43,7 @@
 (import "../../kernel/module.shard")  ; Module / TypeDef / type helpers
 (import "../../kernel/term.shard")  ; Expr / QName / chars_of_sym
 (import "../../kernel/proof.shard")  ; Goal / Equation / Param
+(import "../../kernel/types.shard")  ; tc_scrut_targs (the case-on type gate)
 (import "../../kernel/checker.shard")  ; check_sequent / build_induct_subgoal
 (import "../../kernel/reader.shard")  ; read_all / SExpr / RCtx / build_module_d
 
@@ -87,6 +88,9 @@
 (use (:: kernel checker Sequent))
 (use (:: kernel checker check_sequent))
 (use (:: kernel checker build_induct_subgoal))
+(use (:: kernel checker build_case_on_subgoal))
+(use (:: kernel checker inst_ctor_fields))
+(use (:: kernel types tc_scrut_targs))
 (use (:: kernel checker find_param))
 (use (:: kernel checker seq_params))
 (use (:: kernel proof Theory))
@@ -108,6 +112,7 @@
 (use (:: kernel proof Equation))
 (use (:: kernel proof Param))
 (use (:: kernel proof Proof))
+(use (:: kernel proof CaseOn))
 (use (:: kernel term Expr))
 (use (:: kernel term QName))
 (use (:: kernel term qname_eq))
@@ -171,19 +176,33 @@
 
 ;; ---- target scan: the auto decls, with hint + goal --------------------------
 ;; (auto HINT…): the tail is solver-directed. Recognized today:
-;;   (induct VAR) — synthesize a structural induction on VAR.
-(type Hint (HNone) (HInduct Symbol))
+;;   (induct VAR)        — synthesize a structural induction on VAR.
+;;   (case-on TERM TYPE) — synthesize a case split on a computed term.
+(type Hint (HNone) (HInduct Symbol) (HCaseOn SExpr SExpr))
 
 ;; name, hint, and the goal s-expr when recoverable (a claim carries its own;
 ;; a fulfills' goal is looked up from a same-file (requirement NAME GOAL)).
 (type AutoDecl (AutoDecl Symbol Hint (Option SExpr)))
 
+(fn hint1 ((h SExpr)) Hint
+  (match h
+    ((SList (Cons (SSym hh) args))
+     (if (sym_eq hh (quote induct))
+       (match args
+         ((Cons (SSym v) Nil) (HInduct v))
+         (_ (HNone)))
+     (if (sym_eq hh (quote case-on))
+       (match args
+         ((Cons termS (Cons tyS Nil)) (HCaseOn termS tyS))
+         (_ (HNone)))
+       (HNone))))
+    (_ (HNone))))
+
 (fn hint_of ((proofS SExpr)) Hint
   (match proofS
     ((SList (Cons _ hints))
      (match hints
-       ((Cons (SList (Cons (SSym hh) (Cons (SSym v) Nil))) _)
-        (if (sym_eq hh (quote induct)) (HInduct v) (HNone)))
+       ((Cons h _) (hint1 h))
        (_ (HNone))))
     (_ (HNone))))
 
@@ -777,6 +796,116 @@
   (Option (List Int))
   (try_induct_each s th name seq g (param_syms (seq_params seq))))
 
+;; ---- case-on synthesis (the (case-on TERM TYPE) hint) ------------------------
+;; A case split on a COMPUTED term (the gap induction can't reach: branching
+;; fns whose If is stuck on e.g. (lt a b)). The probe candidate is parsed
+;; through the real proof seam, so scrut and type arrive RESOLVED exactly as
+;; replay will resolve them; the gate and per-ctor subgoals are the checker's
+;; own (tc_scrut_targs / inst_ctor_fields / build_case_on_subgoal).
+
+;; case-on tails: the case hypothesis scrut=(Ctor …) lands at (hyp 0) —
+;; rewrite it into a side, then RE-reduce to fire the If/match it was
+;; blocking.
+(fn caseon_tails () (List (List (List Int)))
+  (list
+    (list (st_rw_hyp 0 "lhs") (st_reduce "lhs"))
+    (list (st_rw_hyp 0 "rhs") (st_reduce "rhs"))
+    (list
+      (st_rw_hyp 0 "lhs")
+      (st_reduce "lhs")
+      (st_rw_hyp 0 "rhs")
+      (st_reduce "rhs"))))
+
+(fn caseon_probe ((termtxt (List Int)) (tytxt (List Int))) (List Int)
+  (append_int
+    "(case-on "
+    (append_int termtxt (append_int " " (append_int tytxt " ())")))))
+
+(fn assemble_caseon
+  ((termtxt (List Int)) (tytxt (List Int))
+   (cs (List (Pair (List Int) (List Int)))))
+  (List Int)
+  (append_int
+    "(case-on "
+    (append_int
+      termtxt
+      (append_int
+        " "
+        (append_int
+          tytxt
+          (append_int " (" (append_int (render_cases cs) "))")))))))
+
+(fn solve_con_cases
+  ((s Slv) (th Theory) (seq Sequent) (scrut Expr) (ctors (List CtorDef))
+   (cands (List (List Int))))
+  (Option (List (Pair (List Int) (List Int))))
+  (match ctors
+    (Nil (Some Nil))
+    ((Cons (CtorDef cname ftypes) rest)
+     (match
+       (solve_case
+         s
+         th
+         (build_case_on_subgoal seq scrut cname Nil ftypes)
+         cands)
+       (None None)
+       ((Some c)
+        (match (solve_con_cases s th seq scrut rest cands)
+          (None None)
+          ((Some more)
+           (Some (Cons (Pair (chars_of_sym (qn_name cname)) c) more)))))))))
+
+(fn try_caseon
+  ((s Slv) (th Theory) (name Symbol) (seq Sequent) (g Goal)
+   (termS SExpr) (tyS SExpr))
+  (Option (List Int))
+  (match
+    (parse_cand
+      (slv_m s)
+      (slv_rctx s)
+      (caseon_probe (sx_print termS) (sx_print tyS)))
+    (None None)
+    ((Some p)
+     (match p
+       ((CaseOn scrut ty _)
+        (match (lookup_typedef ty (slv_m s))
+          (None None)
+          ((Some (TypeDef _ tparams ctors))
+           (match
+             (tc_scrut_targs (slv_m s) (seq_params seq) scrut ty tparams)
+             (None None)
+             ((Some targs)
+              (match
+                (solve_con_cases
+                  s
+                  th
+                  seq
+                  scrut
+                  (inst_ctor_fields (zip_pairs tparams targs) ctors)
+                  (caseon_cands s th seq g))
+                (None None)
+                ((Some cs)
+                 (let
+                   ((cand
+                      (assemble_caseon (sx_print termS) (sx_print tyS) cs)))
+                   (if (attempt s name cand) (Some cand) None)))))))))
+       (_ None)))))
+
+;; the case ladder a case-on branch gets: same generated breadth, with the
+;; rewrite-then-re-reduce tails in the IH slot, plus the farkas certs.
+(fn caseon_cands ((s Slv) (th Theory) (seq Sequent) (g Goal))
+  (List (List Int))
+  (match (side_heads g (slv_m s))
+    ((Pair lh rh)
+     (append_cands
+       (case_ladder
+         lh
+         rh
+         (caseon_tails)
+         (lemma_steps
+           (lemma_names th (goal_qheads g (slv_m s)) (slv_m s) 8)))
+       (farkas_cands seq)))))
+
 ;; ---- farkas certificate enumeration ------------------------------------------
 ;; (by farkas (list G M0 … Mk)): G multiplies the negated goal, Mk premise k.
 ;; FINDING multipliers is exactly the untrusted proposer's job, and the
@@ -849,6 +978,7 @@
   (match
     (match hint
       ((HInduct v) (try_induct s th name seq g v))
+      ((HCaseOn termS tyS) (try_caseon s th name seq g termS tyS))
       ((HNone) None))
     ((Some c) (Some c))
     (None
