@@ -1002,6 +1002,10 @@
   (match m
     ((Module tds _ _ _) tds)))
 
+(fn module_externdefs ((m Module)) (List ExternDef)
+  (match m
+    ((Module _ _ exts _) exts)))
+
 (fn build_module ((srcs (List (List Int))) (acc Module) (ctors (List Symbol)))
   (Option Module)
   (match srcs
@@ -1256,6 +1260,90 @@
     (Nil Nil)
     ((Cons h t) (Cons (resolve_externdef env h) (resolve_externdefs env t)))))
 
+;; ---- sig→def rebinding (one function, one qname) ---------------------------
+;; A `(sig fn …)` in a module interface and the impl's `(fn NAME …)` body are
+;; ONE function: the sig declares it, the def supplies it (the C header/.c
+;; discipline). Under qualified identity they would otherwise get two QNames
+;; (the interface file's path and the impl file's), splitting the function in
+;; two: obligations and consumers reference the sig's qname, the body and the
+;; impl's own calls the def's. The rebind: when a file DEFINES a fn whose name
+;; its `use` items map to a path holding a loaded sig, AND that path is within
+;; the file's own directory module, the local binding is DROPPED — the def's
+;; name and every bare reference in the file then resolve THROUGH the use item
+;; to the sig's qname. Explicit `use` + same-directory keeps this intentional:
+;; a file can never graft a body onto another module's interface (surface
+;; discipline), and a private helper never rebinds without a use line.
+(fn path_prefix_sym ((a (List Symbol)) (b (List Symbol))) Bool
+  (match a
+    (Nil True)
+    ((Cons x xs)
+     (match b
+       (Nil False)
+       ((Cons y ys) (if (sym_eq x y) (path_prefix_sym xs ys) False))))))
+
+(fn path_init_sym ((p (List Symbol))) (List Symbol)
+  (match p
+    (Nil Nil)
+    ((Cons _ Nil) Nil)
+    ((Cons h t) (Cons h (path_init_sym t)))))
+
+;; P (the sig's module) is within the dir module of MODPATH (the def's file):
+;; P is the directory interface (a prefix — the mod.req case) or a sibling
+;; file of the same directory.
+(fn supplies_scope_ok ((p (List Symbol)) (modpath (List Symbol))) Bool
+  (if (path_prefix_sym p modpath)
+    True
+    (sym_path_eq (path_init_sym p) (path_init_sym modpath))))
+
+(fn uitem_path
+  ((n Symbol) (items (List (Pair Symbol (List Symbol)))))
+  (Option (List Symbol))
+  (match items
+    (Nil None)
+    ((Cons (Pair in p) rest) (if (sym_eq n in) (Some p) (uitem_path n rest)))))
+
+(fn sig_at ((n Symbol) (p (List Symbol)) (exts (List ExternDef))) Bool
+  (match exts
+    (Nil False)
+    ((Cons (ExternDef q _ _) rest)
+     (if (sym_eq (qn_name q) n)
+       (if (sym_path_eq (qn_mod q) p) True (sig_at n p rest))
+       (sig_at n p rest)))))
+
+;; the fn-def names of this file that SUPPLY a previously-loaded sig.
+(fn rebind_names
+  ((fnames (List Symbol))
+   (uitems (List (Pair Symbol (List Symbol))))
+   (sig_exts (List ExternDef))
+   (modpath (List Symbol)))
+  (List Symbol)
+  (match fnames
+    (Nil Nil)
+    ((Cons n rest)
+     (match (uitem_path n uitems)
+       (None (rebind_names rest uitems sig_exts modpath))
+       ((Some p)
+        (if (sig_at n p sig_exts)
+          (if (supplies_scope_ok p modpath)
+            (Cons n (rebind_names rest uitems sig_exts modpath))
+            (rebind_names rest uitems sig_exts modpath))
+          (rebind_names rest uitems sig_exts modpath)))))))
+
+(fn sym_in_list ((n Symbol) (ns (List Symbol))) Bool
+  (match ns
+    (Nil False)
+    ((Cons h t) (if (sym_eq n h) True (sym_in_list n t)))))
+
+(fn env_drop_names
+  ((env (List (Pair Symbol (List Symbol)))) (ns (List Symbol)))
+  (List (Pair Symbol (List Symbol)))
+  (match env
+    (Nil Nil)
+    ((Cons (Pair n p) rest)
+     (if (sym_in_list n ns)
+       (env_drop_names rest ns)
+       (Cons (Pair n p) (env_drop_names rest ns))))))
+
 ;; Qualify a freshly-parsed (all-`core`) module at `modpath`. STRICT bare-name
 ;; resolution (Stage 2.5c): local defs > the module's `use` items > core (the
 ;; env_lookup default — prims + the `core` prelude). The Stage-2 flat glob is
@@ -1264,26 +1352,32 @@
 ;; fn is silently tolerated until Stage 3; types/ctors fail loudly here.)
 ;; `use_aliases` are the use-bound module aliases, consumed by resolve_qpath for
 ;; `(:: alias …)` references. The fn-trie is rebuilt from the resolved fns.
+;; `sig_exts` (the already-loaded externs/sigs) drive the sig→def rebind above.
 (fn resolve_module
   ((modpath (List Symbol))
    (use_items (List (Pair Symbol (List Symbol))))
    (use_aliases (List (Pair Symbol (List Symbol))))
+   (sig_exts (List ExternDef))
    (m Module))
   Module
   (match m
     ((Module tds fns exts _)
      (let
-       ((env
-          (RCtx
-            modpath
-            (app_env (local_env m modpath) use_items)
-            use_aliases)))
-       (let ((rfns (resolve_fndefs env fns)))
-         (Module
-           (resolve_typedefs env tds)
-           rfns
-           (resolve_externdefs env exts)
-           (build_fn_trie rfns)))))))
+       ((rb (rebind_names (fndef_names fns) use_items sig_exts modpath)))
+       (let
+         ((env
+            (RCtx
+              modpath
+              (app_env
+                (env_drop_names (local_env m modpath) rb)
+                use_items)
+              use_aliases)))
+         (let ((rfns (resolve_fndefs env fns)))
+           (Module
+             (resolve_typedefs env tds)
+             rfns
+             (resolve_externdefs env exts)
+             (build_fn_trie rfns))))))))
 
 ;; ===========================================================================
 ;; Decl head detectors: classify a top-level form by its head symbol. The
@@ -1915,7 +2009,7 @@
         (match (use_scope_of (use_forms src) mp (module_resolve_env acc))
           ((Pair uitems ualiases)
            (let
-             ((rm (resolve_module mp uitems ualiases m)))
+             ((rm (resolve_module mp uitems ualiases (module_externdefs acc) m)))
              (build_module_d
                rest
                (merge_modules acc rm)
