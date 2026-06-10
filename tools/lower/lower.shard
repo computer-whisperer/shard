@@ -12,10 +12,12 @@
 ;;; differential gate runs original vs lowered on the direct engine and
 ;;; demands byte-identical stdout.
 ;;;
-;;; v0 LIMITS (next slice: join-point lifting removes all three):
-;;;   - match arms must be FLAT patterns ((C x1 .. xn) | INT | 'SYM | x)
-;;;   - if/match may not appear in named (let-rhs / argument) position
-;;;   - match scrutinee lowered to a var; arm bodies recurse
+;;; Join-point lifting (pass JP) handles the general shapes: if/match in
+;;; named position lifts whole to a fresh top-level fn over its free vars;
+;;; nested match patterns compile to per-arm chained flat matches with the
+;;; fallthrough continuation lifted once per arm. Lifted fns carry the
+;;; opaque JV type — the artifact is a RUN artifact (typed lowering is a
+;;; later, checker-assisted slice).
 ;;;
 ;;; RUN IT:  ./rust_bootstrap/target/release/eval run tools/lower/lower.shard FILE [OUT]
 ;;;          OUT defaults to FILE with .shard -> .low.shard
@@ -263,7 +265,253 @@
              ((AErr m) (AErr m))
              ((AOk rrest k3) (AOk (Cons (NArm rp rb) rrest) k3))))))))))
 
-;; ---- pass B/C: ANF with v0 refusals ------------------------------------------
+;; ---- pass JP: join-point lifting + nested-match compilation -------------------
+;; Removes the two shapes ANF cannot express: if/match in NAMED position
+;; (lifted whole to a fresh top-level fn over its free vars — a call is a
+;; legal named rhs) and NESTED match patterns (compiled per-arm into chained
+;; flat matches; the fallthrough continuation is lifted once per arm so no
+;; duplication blowup). Lifted fns carry the opaque type JV — the artifact
+;; is a RUN artifact (typed lowering is a later, checker-assisted slice).
+
+(type Lifted (Lifted Symbol (List Symbol) NExpr))  ; name, params, TAIL body
+
+(fn sym_mem_l ((n Symbol) (ns (List Symbol))) Bool
+  (match ns
+    (Nil False)
+    ((Cons x rest) (if (sym_eq x n) True (sym_mem_l n rest)))))
+
+;; free vars, first-occurrence order
+(fn fv ((e NExpr) (bound (List Symbol)) (acc (List Symbol))) (List Symbol)
+  (match e
+    ((NVar s)
+     (if (sym_mem_l s bound) acc (if (sym_mem_l s acc) acc (append_syms acc (Cons s Nil)))))
+    ((NInt _) acc)
+    ((NSym _) acc)
+    ((NCtor _ args) (fv_list args bound acc))
+    ((NCall _ args) (fv_list args bound acc))
+    ((NIf c t f) (fv f bound (fv t bound (fv c bound acc))))
+    ((NMatch s arms) (fv_arms arms bound (fv s bound acc)))
+    ((NLet n r body) (fv body (Cons n bound) (fv r bound acc)))))
+
+(fn fv_list ((es (List NExpr)) (bound (List Symbol)) (acc (List Symbol))) (List Symbol)
+  (match es
+    (Nil acc)
+    ((Cons e rest) (fv_list rest bound (fv e bound acc)))))
+
+(fn pat_vars ((p NPat) (acc (List Symbol))) (List Symbol)
+  (match p
+    ((NPVar s) (Cons s acc))
+    ((NPCtor _ ps) (pats_vars ps acc))
+    (_ acc)))
+
+(fn pats_vars ((ps (List NPat)) (acc (List Symbol))) (List Symbol)
+  (match ps
+    (Nil acc)
+    ((Cons p rest) (pats_vars rest (pat_vars p acc)))))
+
+(fn fv_arms ((arms (List NArm)) (bound (List Symbol)) (acc (List Symbol))) (List Symbol)
+  (match arms
+    (Nil acc)
+    ((Cons (NArm p body) rest)
+     (fv_arms rest bound (fv body (pat_vars p bound) acc)))))
+
+(fn vars_of ((ns (List Symbol))) (List NExpr)
+  (match ns
+    (Nil Nil)
+    ((Cons n rest) (Cons (NVar n) (vars_of rest)))))
+
+(type JPR (JPR NExpr (List Lifted) Int))
+(type JPRS (JPRS (List NExpr) (List Lifted) Int))
+(type JPAS (JPAS (List NArm) (List Lifted) Int))
+
+(fn append_lifted ((a (List Lifted)) (b (List Lifted))) (List Lifted)
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (append_lifted t b)))))
+
+;; lift a processed TAIL expr to a fresh top-level fn; the residue is a call.
+(fn jp_lift ((owner Symbol) (e NExpr) (k Int)) JPR
+  (match (fv e Nil Nil)
+    (fvs
+      (match (mk_name (append_int (chars_of_sym owner) "__j") k)
+        (jn
+          (JPR (NCall jn (vars_of fvs)) (Cons (Lifted jn fvs e) Nil) (+ k 1)))))))
+
+(fn jp_named ((owner Symbol) (e NExpr) (k Int)) JPR
+  (match e
+    ((NIf _ _ _)
+     (match (jp_tail owner e k)
+       ((JPR pe ls k1)
+        (match (jp_lift owner pe k1)
+          ((JPR call ls2 k2) (JPR call (append_lifted ls ls2) k2))))))
+    ((NMatch _ _)
+     (match (jp_tail owner e k)
+       ((JPR pe ls k1)
+        (match (jp_lift owner pe k1)
+          ((JPR call ls2 k2) (JPR call (append_lifted ls ls2) k2))))))
+    ((NLet n r body)
+     (match (jp_named owner r k)
+       ((JPR rr ls1 k1)
+        (match (jp_named owner body k1)
+          ((JPR rb ls2 k2) (JPR (NLet n rr rb) (append_lifted ls1 ls2) k2))))))
+    ((NCtor c args)
+     (match (jp_list owner args k)
+       ((JPRS rs ls k1) (JPR (NCtor c rs) ls k1))))
+    ((NCall f args)
+     (match (jp_list owner args k)
+       ((JPRS rs ls k1) (JPR (NCall f rs) ls k1))))
+    (_ (JPR e Nil k))))
+
+(fn jp_list ((owner Symbol) (es (List NExpr)) (k Int)) JPRS
+  (match es
+    (Nil (JPRS Nil Nil k))
+    ((Cons e rest)
+     (match (jp_named owner e k)
+       ((JPR r ls1 k1)
+        (match (jp_list owner rest k1)
+          ((JPRS rs ls2 k2) (JPRS (Cons r rs) (append_lifted ls1 ls2) k2))))))))
+
+(fn jp_tail ((owner Symbol) (e NExpr) (k Int)) JPR
+  (match e
+    ((NIf c t f)
+     (match (jp_named owner c k)
+       ((JPR rc ls1 k1)
+        (match (jp_tail owner t k1)
+          ((JPR rt ls2 k2)
+           (match (jp_tail owner f k2)
+             ((JPR rf ls3 k3)
+              (JPR (NIf rc rt rf)
+                   (append_lifted ls1 (append_lifted ls2 ls3)) k3))))))))
+    ((NMatch s arms)
+     (match (jp_named owner s k)
+       ((JPR rs ls1 k1)
+        (match (jp_arms owner arms k1)
+          ((JPAS rarms ls2 k2)
+           (if (arms_flat rarms)
+             (JPR (NMatch rs rarms) (append_lifted ls1 ls2) k2)
+             (match (scrut_var owner rs rarms k2)
+               ((JPR mce ls3 k3)
+                (JPR mce (append_lifted ls1 (append_lifted ls2 ls3)) k3)))))))))
+    ((NLet n r body)
+     (match (jp_named owner r k)
+       ((JPR rr ls1 k1)
+        (match (jp_tail owner body k1)
+          ((JPR rb ls2 k2) (JPR (NLet n rr rb) (append_lifted ls1 ls2) k2))))))
+    (_ (jp_named owner e k))))
+
+(fn jp_arms ((owner Symbol) (arms (List NArm)) (k Int)) JPAS
+  (match arms
+    (Nil (JPAS Nil Nil k))
+    ((Cons (NArm p body) rest)
+     (match (jp_tail owner body k)
+       ((JPR rb ls1 k1)
+        (match (jp_arms owner rest k1)
+          ((JPAS rrest ls2 k2)
+           (JPAS (Cons (NArm p rb) rrest) (append_lifted ls1 ls2) k2))))))))
+
+(fn arms_flat ((arms (List NArm))) Bool
+  (match arms
+    (Nil True)
+    ((Cons (NArm p _) rest) (if (flat_pat p) (arms_flat rest) False))))
+
+;; ensure the scrutinee is a VAR, then chain-compile the nested arms
+(fn scrut_var ((owner Symbol) (s NExpr) (arms (List NArm)) (k Int)) JPR
+  (match s
+    ((NVar sv) (mc owner sv arms k))
+    (_
+      (match (temp_name k)
+        (t
+          (match (mc owner t arms (+ k 1))
+            ((JPR e ls k1) (JPR (NLet t s e) ls k1))))))))
+
+;; per-arm chain: try arm 1; on no-match call the lifted rest-of-chain.
+(fn mc ((owner Symbol) (sv Symbol) (arms (List NArm)) (k Int)) JPR
+  (match arms
+    (Nil (JPR (NCall (quote low_no_match) Nil) Nil k))
+    ((Cons (NArm p body) rest)
+     (match (mc owner sv rest k)
+       ((JPR fail ls1 k1)
+        (match (jp_lift_fail owner fail k1)
+          ((JPR failc ls2 k2)
+           (match (cp owner sv p body failc k2)
+             ((JPR e ls3 k3)
+              (JPR e (append_lifted ls1 (append_lifted ls2 ls3)) k3))))))))))
+
+;; lift a fail continuation unless it is already a bare call (the base case)
+(fn jp_lift_fail ((owner Symbol) (e NExpr) (k Int)) JPR
+  (match e
+    ((NCall _ args)
+     (match args
+       (Nil (JPR e Nil k))
+       (_ (jp_lift owner e k))))
+    (_ (jp_lift owner e k))))
+
+;; compile one pattern test on var SV: success = BODY, failure = FAILC (a call)
+(fn cp ((owner Symbol) (sv Symbol) (p NPat) (body NExpr) (failc NExpr) (k Int)) JPR
+  (match p
+    ((NPVar x) (JPR (NLet x (NVar sv) body) Nil k))
+    ((NPInt n)
+     (match (bind_name k)
+       (b (JPR (NMatch (NVar sv)
+                 (Cons (NArm (NPInt n) body)
+                   (Cons (NArm (NPVar b) failc) Nil)))
+               Nil (+ k 1)))))
+    ((NPSym s)
+     (match (bind_name k)
+       (b (JPR (NMatch (NVar sv)
+                 (Cons (NArm (NPSym s) body)
+                   (Cons (NArm (NPVar b) failc) Nil)))
+               Nil (+ k 1)))))
+    ((NPCtor c ps)
+     (match (field_names ps k)
+       ((Pair fs k1)
+        (match (cps owner fs ps body failc k1)
+          ((JPR inner ls k2)
+           (match (bind_name k2)
+             (b (JPR (NMatch (NVar sv)
+                       (Cons (NArm (NPCtor c (pvars_of fs)) inner)
+                         (Cons (NArm (NPVar b) failc) Nil)))
+                     ls (+ k2 1)))))))))))
+
+;; field binders: reuse the resolver's name when the subpattern IS a var
+(fn field_names ((ps (List NPat)) (k Int)) (Pair (List Symbol) Int)
+  (match ps
+    (Nil (Pair Nil k))
+    ((Cons (NPVar x) rest)
+     (match (field_names rest k)
+       ((Pair ns k1) (Pair (Cons x ns) k1))))
+    ((Cons _ rest)
+     (match (temp_name k)
+       (t
+         (match (field_names rest (+ k 1))
+           ((Pair ns k1) (Pair (Cons t ns) k1))))))))
+
+(fn pvars_of ((ns (List Symbol))) (List NPat)
+  (match ns
+    (Nil Nil)
+    ((Cons n rest) (Cons (NPVar n) (pvars_of rest)))))
+
+;; sequential field tests; success of the last = the arm body
+(fn cps
+  ((owner Symbol) (fs (List Symbol)) (ps (List NPat))
+   (body NExpr) (failc NExpr) (k Int))
+  JPR
+  (match ps
+    (Nil (JPR body Nil k))
+    ((Cons p prest)
+     (match fs
+       (Nil (JPR body Nil k))  ; arity mismatch cannot happen post-parse
+       ((Cons f frest)
+        (match p
+          ((NPVar _) (cps owner frest prest body failc k))  ; bound by the flat arm
+          (_
+            (match (cps owner frest prest body failc k)
+              ((JPR inner ls1 k1)
+               (match (cp owner f p inner failc k1)
+                 ((JPR e ls2 k2)
+                  (JPR e (append_lifted ls1 ls2) k2))))))))))))
+
+;; ---- pass B/C: ANF (jp has removed all named-position control flow) -----------
 ;; anf_tail: lower to RS tail form. anf_name: lower to an ATOM, emitting
 ;; (name, rhs) bindings outward (returned innermost-last, wrapped by caller).
 
@@ -316,8 +564,8 @@
           ((NErr m) (NErr m))
           ((NOk binds2 atom k2)
            (NOk (append_binds binds1 (Cons (Pair n r) binds2)) atom k2))))))
-    ((NIf _ _ _) (NErr "v0: if in named position (join points: next slice)"))
-    ((NMatch _ _) (NErr "v0: match in named position (join points: next slice)"))))
+    ((NIf _ _ _) (NErr "internal: jp missed a named if"))
+    ((NMatch _ _) (NErr "internal: jp missed a named match"))))
 
 ;; like anf_name but allows a CALL/CTOR rhs to stay un-bound (it becomes the
 ;; let's own rhs) — used for let-rhs and tail positions.
@@ -408,7 +656,7 @@
           (match (anf_arms rest k1)
             ((TAErr m) (TAErr m))
             ((TAOk rrest k2) (TAOk (Cons (NArm p rb) rrest) k2)))))
-       (TAErr "v0: nested pattern (match flattening: next slice)")))))
+       (TAErr "internal: jp missed a nested pattern")))))
 
 ;; ---- print: NExpr / Type / decls -> Doc ---------------------------------------
 (fn pr_atoms ((es (List NExpr))) Doc
@@ -559,6 +807,33 @@
 
 (type FRes (FOk Doc) (FErr (List Int)))
 
+;; named JV params for a lifted join fn
+(fn pr_jparams ((ns (List Symbol))) Doc
+  (match ns
+    (Nil (DStr ""))
+    ((Cons n rest)
+     (dcat3 (dcat3 (DCat (sp) (DStr "(")) (dsym n) (DStr " JV"))
+            (DStr ")")
+            (pr_jparams rest)))))
+
+(fn emit_lifted ((ls (List Lifted)) (k Int)) FRes
+  (match ls
+    (Nil (FOk (DStr "")))
+    ((Cons (Lifted jn params body) rest)
+     (match (anf_tail body k)
+       ((TErr m) (FErr (append_int (chars_of_sym jn) (append_int ": " m))))
+       ((TOk rb k1)
+        (match (emit_lifted rest k1)
+          ((FErr m) (FErr m))
+          ((FOk drest)
+           (FOk
+             (DCat
+               (dcat3
+                 (dcat3 (DStr "(fn ") (dsym jn) (DCat (DStr " (") (pr_jparams params)))
+                 (dcat3 (DStr ") JV") (DCat (DStr (nl)) (DStr "  ")) (pr_nexpr rb))
+                 (DStr (append_int ")" (append_int (nl) (nl)))))
+               drest)))))))))
+
 (fn lower_fn ((f FnDef)) FRes
   (match f
     ((FnDef q ptys rty body)
@@ -567,19 +842,36 @@
          (match (resolve body (rev_env (param_env n Nil) Nil) 0)
            ((RErr m)
             (FErr (append_int (chars_of_sym (qn_name q)) (append_int ": " m))))
-           ((ROk ne k)
-            (match (anf_tail ne k)
-              ((TErr m)
-               (FErr (append_int (chars_of_sym (qn_name q)) (append_int ": " m))))
-              ((TOk rs _)
-               (FOk
-                 (dcat3
-                   (dcat3
-                     (dcat3 (DStr "(fn ") (dsym (qn_name q)) (DCat (DStr " (") (pr_params ptys 0)))
-                     (dcat3 (DStr ") ") (pr_type rty) (DCat (DStr (nl)) (DStr "  ")))
-                     (pr_nexpr rs))
-                   (DStr ")")
-                   (DStr (append_int (nl) (nl))))))))))))))
+           ((ROk ne0 k0)
+            (match (jp_tail (qn_name q) ne0 k0)
+              ((JPR ne lifted k)
+               (match (emit_lifted lifted k)
+                 ((FErr m) (FErr m))
+                 ((FOk dlift)
+                  (match (anf_lower_emit q ptys rty ne k dlift)
+                    ((FErr m) (FErr m))
+                    ((FOk d) (FOk d))))))))))))))
+
+;; counter restart note: lifted bodies were ANF'd from k upward inside
+;; emit_lifted; the main body reuses k too — temp names may repeat across
+;; the SEPARATE top-level fns, which is fine (scopes are disjoint).
+(fn anf_lower_emit
+  ((q QName) (ptys (List Type)) (rty Type) (ne NExpr) (k Int) (dlift Doc))
+  FRes
+  (match (anf_tail ne k)
+    ((TErr m)
+     (FErr (append_int (chars_of_sym (qn_name q)) (append_int ": " m))))
+    ((TOk rs _)
+     (FOk
+       (DCat
+         (dcat3
+           (dcat3
+             (dcat3 (DStr "(fn ") (dsym (qn_name q)) (DCat (DStr " (") (pr_params ptys 0)))
+             (dcat3 (DStr ") ") (pr_type rty) (DCat (DStr (nl)) (DStr "  ")))
+             (pr_nexpr rs))
+           (DStr ")")
+           (DStr (append_int (nl) (nl))))
+         dlift)))))
 
 ;; collect every refusal (don't stop at the first — the report is the point)
 (type LRes (LOk Doc) (LErr (List Int)))
@@ -603,7 +895,19 @@
     ";;; RS-shard — MACHINE-LOWERED by tools/lower (see tools/lower/DESIGN.md)."
     (append_int
       (nl)
-      (append_int ";;; Self-contained run artifact; do not edit." (append_int (nl) (nl))))))
+      (append_int
+        ";;; Self-contained run artifact; do not edit."
+        (append_int
+          (nl)
+          (append_int
+            (nl)
+            (append_int
+              "(type JV)"  ; opaque carrier type for lifted join fns
+              (append_int
+                (nl)
+                (append_int
+                  "(fn low_no_match () JV (low_no_match))"  ; inexhaustive-match sink
+                  (append_int (nl) (nl)))))))))))
 
 (fn low_path_of ((path (List Int))) (List Int)
   (append_int path ".low.shard"))
