@@ -1,0 +1,809 @@
+;;; codegen — RS-shard -> C (see tools/lower/DESIGN.md). Input is the
+;;; OUTPUT OF tools/lower: ANF bodies, flat match arms, atomic operands —
+;;; this file does NO semantic work, only transcription onto rt.h.
+;;;
+;;; Same contract as lower: kernel front end by library import; refuse,
+;;; don't guess (unknown call head / non-RS shape = loud error, exit 1).
+;;; Self-tail calls become goto loops; other recursion uses the C stack
+;;; (rt_init raises the rlimit). Ctor tags are numbered from the
+;;; artifact's typedefs in order; the core tags rt.h needs are #defined
+;;; first (synthetic reserved numbers when a core type is absent).
+;;;
+;;; RUN IT:  eval run tools/codegen/codegen.shard RS-FILE [OUT.c]
+;;; BUILD:   cc -O2 -o BIN OUT.c -I tools/codegen
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/loader.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/reader.shard")
+
+(use (:: kernel loader resolve_closure))
+(use (:: kernel loader World))
+(use (:: kernel loader get_args))
+(use (:: kernel loader write))
+(use (:: kernel loader write_file))
+(use (:: kernel loader exit))
+(use (:: kernel term Expr))
+(use (:: kernel term FVar))
+(use (:: kernel term BVar))
+(use (:: kernel term Ctor))
+(use (:: kernel term Call))
+(use (:: kernel term Match))
+(use (:: kernel term Let))
+(use (:: kernel term If))
+(use (:: kernel term IntLit))
+(use (:: kernel term SymLit))
+(use (:: kernel term Arm))
+(use (:: kernel term Pat))
+(use (:: kernel term PVar))
+(use (:: kernel term PCtor))
+(use (:: kernel term PInt))
+(use (:: kernel term PSym))
+(use (:: kernel term QName))
+(use (:: kernel term qn_name))
+(use (:: kernel term append_int))
+(use (:: kernel term show_int))
+(use (:: kernel module Module))
+(use (:: kernel module FnDef))
+(use (:: kernel module ExternDef))
+(use (:: kernel module TypeDef))
+(use (:: kernel module CtorDef))
+(use (:: kernel module Type))
+(use (:: kernel module FnTrie))
+(use (:: kernel reader SrcEntry))
+(use (:: kernel reader build_module_d))
+(use (:: kernel reader BMOk))
+(use (:: kernel reader BMFail))
+
+;; ---- Doc (same shape as lower's) -------------------------------------------
+(type Doc
+  (DStr (List Int))
+  (DCat Doc Doc))
+
+(fn dcat3 ((a Doc) (b Doc) (c Doc)) Doc (DCat a (DCat b c)))
+(fn dcat4 ((a Doc) (b Doc) (c Doc) (d Doc)) Doc (DCat a (DCat b (DCat c d))))
+
+(fn doc_flat ((d Doc) (tail (List Int))) (List Int)
+  (match d
+    ((DStr s) (append_int s tail))
+    ((DCat a b) (doc_flat a (doc_flat b tail)))))
+
+(fn nl () (List Int) (Cons 10 Nil))
+(fn dnl () Doc (DStr (nl)))
+(fn dsym_c ((s Symbol)) Doc (DStr (cmangle (chars_of_sym s))))
+(fn dint ((n Int)) Doc (DStr (show_int n)))
+
+;; ---- C name mangling: alnum + _ pass; everything else -> _xHH ---------------
+(fn hexd ((n Int)) Int (if (lt n 10) (+ 48 n) (+ 87 n)))
+
+(fn is_cok ((c Int)) Bool
+  (if (if (le 48 c) (le c 57) False)
+    True
+    (if (if (le 97 c) (le c 122) False)
+      True
+      (if (if (le 65 c) (le c 90) False) True (int_eq c 95)))))
+
+(fn cmangle ((cs (List Int))) (List Int)
+  (match cs
+    (Nil Nil)
+    ((Cons c rest)
+     (if (is_cok c)
+       (Cons c (cmangle rest))
+       (Cons 95 (Cons 120 (Cons (hexd (/ c 16)) (Cons (hexd (mod c 16)) (cmangle rest)))))))))
+
+;; ---- ctor tag table ----------------------------------------------------------
+;; (name -> (Pair tag arity)); numbered in typedef order from 1000 upward
+;; (0xfffffffe = int, 0x7fffffff = symbol are runtime-reserved).
+(type Tags (Tags (List (Pair Symbol (Pair Int Int))) Int))
+
+(fn len_l ((xs (List Type))) Int
+  (match xs
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (len_l rest)))))
+
+(fn tags_of_ctors ((cs (List CtorDef)) (t Tags)) Tags
+  (match cs
+    (Nil t)
+    ((Cons (CtorDef q fields) rest)
+     (match t
+       ((Tags assoc next)
+        (tags_of_ctors
+          rest
+          (Tags (Cons (Pair (qn_name q) (Pair next (len_l fields))) assoc) (+ next 1))))))))
+
+(fn tags_of_tds ((tds (List TypeDef)) (t Tags)) Tags
+  (match tds
+    (Nil t)
+    ((Cons (TypeDef _ _ cs) rest) (tags_of_tds rest (tags_of_ctors cs t)))))
+
+(fn tag_lookup ((n Symbol) (assoc (List (Pair Symbol (Pair Int Int))))) (Option (Pair Int Int))
+  (match assoc
+    (Nil None)
+    ((Cons (Pair m v) rest) (if (sym_eq m n) (Some v) (tag_lookup n rest)))))
+
+;; ---- static symbol literals ---------------------------------------------------
+(fn sym_idx ((s Symbol) (syms (List Symbol)) (i Int)) (Option Int)
+  (match syms
+    (Nil None)
+    ((Cons x rest) (if (sym_eq x s) (Some i) (sym_idx s rest (+ i 1))))))
+
+(fn add_sym ((s Symbol) (syms (List Symbol))) (List Symbol)
+  (match (sym_idx s syms 0)
+    ((Some _) syms)
+    (None (append_sy syms (Cons s Nil)))))
+
+(fn append_sy ((a (List Symbol)) (b (List Symbol))) (List Symbol)
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (append_sy t b)))))
+
+(fn collect_syms ((e Expr) (syms (List Symbol))) (List Symbol)
+  (match e
+    ((SymLit s) (add_sym s syms))
+    ((Ctor _ args) (collect_syms_l args syms))
+    ((Call _ args) (collect_syms_l args syms))
+    ((If c t f) (collect_syms f (collect_syms t (collect_syms c syms))))
+    ((Let rhss body) (collect_syms body (collect_syms_l rhss syms)))
+    ((Match s arms) (collect_syms_arms arms (collect_syms s syms)))
+    (_ syms)))
+
+(fn collect_syms_l ((es (List Expr)) (syms (List Symbol))) (List Symbol)
+  (match es
+    (Nil syms)
+    ((Cons e rest) (collect_syms_l rest (collect_syms e syms)))))
+
+(fn collect_syms_arms ((arms (List Arm)) (syms (List Symbol))) (List Symbol)
+  (match arms
+    (Nil syms)
+    ((Cons (Arm p body) rest)
+     (collect_syms_arms rest (collect_syms body (collect_syms_pat p syms))))))
+
+(fn collect_syms_pat ((p Pat) (syms (List Symbol))) (List Symbol)
+  (match p
+    ((PSym s) (add_sym s syms))
+    (_ syms)))
+
+(fn collect_syms_fns ((fs (List FnDef)) (syms (List Symbol))) (List Symbol)
+  (match fs
+    (Nil syms)
+    ((Cons (FnDef _ _ _ body) rest) (collect_syms_fns rest (collect_syms body syms)))))
+
+;; ---- the compile context -------------------------------------------------------
+(type Cx
+  (Cx
+    (List (Pair Symbol (Pair Int Int)))  ; ctor tags
+    (List (Pair Symbol Int))  ; fn name -> arity (module fns)
+    (List Symbol)  ; static symbol literals (index = emitted id)
+    Symbol  ; current fn (self-tail detection + diagnostics)
+    Int))  ; current fn arity
+
+(fn cx_tags ((c Cx)) (List (Pair Symbol (Pair Int Int)))
+  (match c ((Cx t _ _ _ _) t)))
+(fn cx_fns ((c Cx)) (List (Pair Symbol Int))
+  (match c ((Cx _ f _ _ _) f)))
+(fn cx_syms ((c Cx)) (List Symbol)
+  (match c ((Cx _ _ s _ _) s)))
+(fn cx_self ((c Cx)) Symbol
+  (match c ((Cx _ _ _ n _) n)))
+(fn cx_arity ((c Cx)) Int
+  (match c ((Cx _ _ _ _ a) a)))
+
+(fn fn_arity ((n Symbol) (fs (List (Pair Symbol Int)))) (Option Int)
+  (match fs
+    (Nil None)
+    ((Cons (Pair m a) rest) (if (sym_eq m n) (Some a) (fn_arity n rest)))))
+
+;; ---- prim/extern dispatch table --------------------------------------------------
+;; (shard head -> rt fn). Word ops all map to the trap stub.
+(fn prim_c ((n Symbol)) (Option (List Int))
+  (if (sym_eq n (quote +)) (Some "rt_add")
+  (if (sym_eq n (quote -)) (Some "rt_sub")
+  (if (sym_eq n (quote *)) (Some "rt_mul")
+  (if (sym_eq n (quote /)) (Some "rt_div")
+  (if (sym_eq n (quote mod)) (Some "rt_mod")
+  (if (sym_eq n (quote tmod)) (Some "rt_tmod")
+  (if (sym_eq n (quote ediv)) (Some "rt_ediv")
+  (if (sym_eq n (quote lt)) (Some "rt_lt")
+  (if (sym_eq n (quote le)) (Some "rt_le")
+  (if (sym_eq n (quote int_eq)) (Some "rt_int_eq")
+  (if (sym_eq n (quote sym_eq)) (Some "rt_sym_eq")
+  (if (sym_eq n (quote band)) (Some "rt_band")
+  (if (sym_eq n (quote bor)) (Some "rt_bor")
+  (if (sym_eq n (quote bxor)) (Some "rt_bxor")
+  (if (sym_eq n (quote bshl)) (Some "rt_bshl")
+  (if (sym_eq n (quote bshr)) (Some "rt_bshr")
+  (if (sym_eq n (quote chars_of_sym)) (Some "rt_chars_of_sym")
+  (if (sym_eq n (quote sym_of_chars)) (Some "rt_sym_of_chars")
+  (if (sym_eq n (quote get_args)) (Some "rt_get_args")
+  (if (sym_eq n (quote read_file)) (Some "rt_read_file")
+  (if (sym_eq n (quote write)) (Some "rt_write")
+  (if (sym_eq n (quote write_line)) (Some "rt_write_line")
+  (if (sym_eq n (quote write_file)) (Some "rt_write_file")
+  (if (sym_eq n (quote exit)) (Some "rt_exit")
+  (if (sym_eq n (quote read_key)) (Some "rt_read_key")
+  None))))))))))))))))))))))))))
+
+(fn prim_z ((n Symbol)) (Option (List Int))
+  (if (sym_eq n (quote gen_fresh)) (Some "rt_gen_fresh")
+  None))
+
+(fn is_word_prim ((n Symbol)) Bool
+  (if (sym_eq n (quote wadd)) True (if (sym_eq n (quote wsub)) True
+  (if (sym_eq n (quote wmul)) True (if (sym_eq n (quote wand)) True
+  (if (sym_eq n (quote wor)) True (if (sym_eq n (quote wxor)) True
+  (if (sym_eq n (quote udiv)) True (if (sym_eq n (quote urem)) True
+  (if (sym_eq n (quote sdiv)) True (if (sym_eq n (quote srem)) True
+  (if (sym_eq n (quote weq)) True (if (sym_eq n (quote ult)) True
+  (if (sym_eq n (quote ule)) True (if (sym_eq n (quote slt)) True
+  (if (sym_eq n (quote sle)) True (if (sym_eq n (quote wshl)) True
+  (if (sym_eq n (quote ushr)) True (if (sym_eq n (quote sshr)) True
+  (if (sym_eq n (quote wneg)) True (if (sym_eq n (quote wnot)) True
+  (if (sym_eq n (quote uval)) True (if (sym_eq n (quote sval)) True
+  (if (sym_eq n (quote wbits)) True (if (sym_eq n (quote wwidth)) True
+  False)))))))))))))))))))))))))
+
+;; ---- expression emission (atoms + rhs) -------------------------------------------
+;; env: innermost-first C local names (BVar i -> nth i)
+(fn nth_c ((env (List (List Int))) (i Int)) (Option (List Int))
+  (match env
+    (Nil None)
+    ((Cons n rest) (if (int_eq i 0) (Some n) (nth_c rest (- i 1))))))
+
+(type CR (COk Doc) (CErr (List Int)))
+(type CRS (CsOk (List Doc)) (CsErr (List Int)))
+
+(fn em_atom ((e Expr) (env (List (List Int))) (cx Cx)) CR
+  (match e
+    ((BVar i)
+     (match (nth_c env i)
+       (None (CErr "BVar out of range"))
+       ((Some n) (COk (DStr n)))))
+    ((IntLit n)
+     (COk (dcat3 (DStr "rt_tag_int(") (dint n) (DStr "LL)"))))
+    ((SymLit s)
+     (match (sym_idx s (cx_syms cx) 0)
+       (None (CErr "unknown sym literal"))
+       ((Some i) (COk (dcat3 (DStr "sl_") (dint i) (DStr ""))))))
+    ((Ctor q args) (em_ctor (qn_name q) args env cx))
+    ((FVar s)
+     (CErr (append_int "free variable (stuck on engines): " (chars_of_sym s))))
+    (_ (CErr "non-atomic operand (input is not RS-shard?)"))))
+
+(fn em_atoms ((es (List Expr)) (env (List (List Int))) (cx Cx)) CRS
+  (match es
+    (Nil (CsOk Nil))
+    ((Cons e rest)
+     (match (em_atom e env cx)
+       ((CErr m) (CsErr m))
+       ((COk d)
+        (match (em_atoms rest env cx)
+          ((CsErr m) (CsErr m))
+          ((CsOk ds) (CsOk (Cons d ds)))))))))
+
+(fn em_commas ((ds (List Doc))) Doc
+  (match ds
+    (Nil (DStr ""))
+    ((Cons d Nil) d)
+    ((Cons d rest) (dcat3 d (DStr ", ") (em_commas rest)))))
+
+;; ctor allocation as a GNU statement-expression
+(fn em_ctor ((n Symbol) (args (List Expr)) (env (List (List Int))) (cx Cx)) CR
+  (match (tag_lookup n (cx_tags cx))
+    (None (CErr (append_int "unknown ctor: " (chars_of_sym n))))
+    ((Some (Pair tag arity))
+     (match args
+       (Nil
+         (if (sym_eq n (quote True)) (COk (DStr "rt_true_"))
+         (if (sym_eq n (quote False)) (COk (DStr "rt_false_"))
+         (if (sym_eq n (quote Nil)) (COk (DStr "rt_nil_"))
+         (if (sym_eq n (quote None)) (COk (DStr "rt_none_"))
+         (COk (dcat3 (DStr "rt_alloc(") (dint tag) (DStr ", 0)"))))))))
+       (_
+         (match (em_atoms args env cx)
+           ((CsErr m) (CErr m))
+           ((CsOk ds)
+            (COk
+              (dcat4
+                (dcat3 (DStr "({ value_t c_ = rt_alloc(") (dint tag) (DStr ", "))
+                (dcat3 (dint arity) (DStr "); ") (em_stores ds 0))
+                (DStr " c_; })")
+                (DStr ""))))))))))
+
+(fn em_stores ((ds (List Doc)) (i Int)) Doc
+  (match ds
+    (Nil (DStr ""))
+    ((Cons d rest)
+     (dcat4
+       (dcat3 (DStr "rt_cellof(c_)->fields[") (dint i) (DStr "] = "))
+       d
+       (DStr "; ")
+       (em_stores rest (+ i 1))))))
+
+;; a CALL as a C expression (fn / prim / extern dispatch, engine order)
+(fn em_call ((n Symbol) (args (List Expr)) (env (List (List Int))) (cx Cx)) CR
+  (match (em_atoms args env cx)
+    ((CsErr m) (CErr m))
+    ((CsOk ds)
+     (match (fn_arity n (cx_fns cx))
+       ((Some _)
+        (COk (dcat4 (DStr "s_") (dsym_c n) (dcat3 (DStr "(") (em_commas ds) (DStr ")")) (DStr ""))))
+       (None
+         (match (prim_c n)
+           ((Some rt)
+            (COk (dcat4 (DStr rt) (DStr "(") (em_commas ds) (DStr ")"))))
+           (None
+             (match (prim_z n)
+               ((Some rt) (COk (dcat3 (DStr rt) (DStr "()") (DStr ""))))
+               (None
+                 (if (is_word_prim n)
+                   (COk (DStr "rt_word_stub()"))
+                   (CErr (append_int "unknown call head: " (chars_of_sym n)))))))))))))
+
+(fn em_rhs ((e Expr) (env (List (List Int))) (cx Cx)) CR
+  (match e
+    ((Call q args) (em_call (qn_name q) args env cx))
+    ((Ctor q args) (em_ctor (qn_name q) args env cx))
+    (_ (em_atom e env cx))))
+
+;; ---- statement emission -------------------------------------------------------
+;; ind = two-space indent depth; every tail ends in return / goto / trap.
+
+(fn ind_d ((n Int)) Doc
+  (if (int_eq n 0) (DStr "") (DCat (DStr "  ") (ind_d (- n 1)))))
+
+;; self-tail call: assign args to shadow temps, copy to params, goto start
+(fn em_selftail
+  ((args (List Expr)) (env (List (List Int))) (cx Cx) (ind Int))
+  CR
+  (match (em_atoms args env cx)
+    ((CsErr m) (CErr m))
+    ((CsOk ds)
+     (COk
+       (dcat4
+         (DCat (ind_d ind) (DStr "{ "))
+         (em_shadow ds 0)
+         (em_rebind ds 0)
+         (DStr "goto start_; }\n"))))))
+
+(fn em_shadow ((ds (List Doc)) (i Int)) Doc
+  (match ds
+    (Nil (DStr ""))
+    ((Cons d rest)
+     (dcat4 (dcat3 (DStr "value_t n_") (dint i) (DStr " = ")) d (DStr "; ") (em_shadow rest (+ i 1))))))
+
+(fn em_rebind ((ds (List Doc)) (i Int)) Doc
+  (match ds
+    (Nil (DStr ""))
+    ((Cons _ rest)
+     (dcat4 (dcat3 (DStr "p_") (dint i) (DStr " = n_")) (dint i) (DStr "; ") (em_rebind rest (+ i 1))))))
+
+(fn args_len ((es (List Expr))) Int
+  (match es
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (args_len rest)))))
+
+(fn em_tail ((e Expr) (env (List (List Int))) (cx Cx) (ind Int)) CR
+  (match e
+    ((Let rhss body)
+     (match rhss
+       ((Cons r Nil)
+        (match (em_rhs r env cx)
+          ((CErr m) (CErr m))
+          ((COk rd)
+           (match (em_tail body (Cons (lname env) env) cx ind)
+             ((CErr m) (CErr m))
+             ((COk bd)
+              (COk
+                (dcat4
+                  (dcat4 (ind_d ind) (DStr "value_t ") (DStr (lname env)) (DStr " = "))
+                  rd
+                  (DStr ";\n")
+                  bd)))))))
+       (_ (CErr "multi-binding let (input is not RS-shard?)"))))
+    ((If c t f)
+     (match (em_atom c env cx)
+       ((CErr m) (CErr m))
+       ((COk cd)
+        (match (em_tail t env cx (+ ind 1))
+          ((CErr m) (CErr m))
+          ((COk td)
+           (match (em_tail f env cx (+ ind 1))
+             ((CErr m) (CErr m))
+             ((COk fd)
+              (COk
+                (dcat4
+                  (dcat4 (ind_d ind) (DStr "if (rt_truthy(") cd (DStr "))" ))
+                  (dcat3 (DStr " {\n") td (DCat (ind_d ind) (DStr "} else {\n")))
+                  fd
+                  (DCat (ind_d ind) (DStr "}\n")))))))))))
+    ((Match scrut arms) (em_match scrut arms env cx ind))
+    ((Call q args)
+     (if (sym_eq (qn_name q) (cx_self cx))
+       (if (int_eq (args_len args) (cx_arity cx))
+         (em_selftail args env cx ind)
+         (em_ret e env cx ind))
+       (em_ret e env cx ind)))
+    (_ (em_ret e env cx ind))))
+
+;; deterministic let-name: scope depth makes it unique within the C fn
+(fn lname ((env (List (List Int)))) (List Int)
+  (append_int "v_" (show_int (env_len env))))
+
+(fn env_len ((env (List (List Int)))) Int
+  (match env
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (env_len rest)))))
+
+(fn em_ret ((e Expr) (env (List (List Int))) (cx Cx) (ind Int)) CR
+  (match (em_rhs e env cx)
+    ((CErr m) (CErr m))
+    ((COk d) (COk (dcat4 (ind_d ind) (DStr "return ") d (DStr ";\n"))))))
+
+;; ---- match: switch on tag / int / sym ----------------------------------------
+(type AK (AKCtor) (AKInt) (AKSym) (AKVarOnly))
+
+(fn arm_kind ((arms (List Arm))) AK
+  (match arms
+    (Nil (AKVarOnly))
+    ((Cons (Arm p _) rest)
+     (match p
+       ((PCtor _ _) (AKCtor))
+       ((PInt _) (AKInt))
+       ((PSym _) (AKSym))
+       ((PVar) (arm_kind rest))))))
+
+(fn em_match
+  ((scrut Expr) (arms (List Arm)) (env (List (List Int))) (cx Cx) (ind Int))
+  CR
+  (match (em_atom scrut env cx)
+    ((CErr m) (CErr m))
+    ((COk sd)
+     (match (lname env)
+       (sn
+         (match (em_arms arms (Cons sn env) sn cx (+ ind 1) (arm_kind arms))
+           ((CErr m) (CErr m))
+           ((COk ad)
+            (COk
+              (dcat4
+                (dcat4 (ind_d ind) (DStr "{ value_t ") (DStr sn) (DStr " = "))
+                (dcat3 sd (DStr ";\n") (em_switch_open sn cx ind (arm_kind arms)))
+                ad
+                (em_switch_close cx ind (arm_kind arms) (has_var_arm arms)))))))))))
+
+;; NOTE: the scrutinee var is pushed on env so lname stays globally fresh,
+;; but arm bodies' BVars never reference it (lower guarantees scrutinee is
+;; already a var/atom) — wait: pushing would SHIFT arm-body BVar indexing.
+;; Arm bodies resolve against env + their OWN binders only, so the
+;; scrutinee var must NOT be on the env the bodies see. em_arms receives
+;; the ORIGINAL env; the (Cons sn env) above only feeds lname freshness.
+
+(fn em_switch_open ((sn (List Int)) (cx Cx) (ind Int) (k AK)) Doc
+  (match k
+    ((AKCtor) (dcat4 (ind_d ind) (DStr "switch (rt_tag(") (DStr sn) (DStr ")) {\n")))
+    ((AKInt) (dcat4 (ind_d ind) (DStr "switch ((int64_t)rt_untag(") (DStr sn) (DStr ")) {\n")))
+    ((AKSym) (DCat (ind_d ind) (DStr "do {\n")))
+    ((AKVarOnly) (DStr ""))))
+
+(fn em_switch_close ((cx Cx) (ind Int) (k AK) (hasdef Bool)) Doc
+  (match k
+    ((AKCtor)
+     (if hasdef
+       (DCat (ind_d ind) (DStr "} }\n"))
+       (dcat4 (ind_d (+ ind 1))
+              (dcat3 (DStr "default: rt_no_match(\"") (dsym_c (cx_self cx)) (DStr "\");\n"))
+              (DCat (ind_d ind) (DStr "} }\n"))
+              (DStr ""))))
+    ((AKInt)
+     (if hasdef
+       (DCat (ind_d ind) (DStr "} }\n"))
+       (dcat4 (ind_d (+ ind 1))
+              (dcat3 (DStr "default: rt_no_match(\"") (dsym_c (cx_self cx)) (DStr "\");\n"))
+              (DCat (ind_d ind) (DStr "} }\n"))
+              (DStr ""))))
+    ((AKSym)
+     (if hasdef
+       (DCat (ind_d ind) (DStr "} while(0); }\n"))
+       (dcat4 (ind_d (+ ind 1))
+              (dcat3 (DStr "rt_no_match(\"") (dsym_c (cx_self cx)) (DStr "\");\n"))
+              (DCat (ind_d ind) (DStr "} while(0); }\n"))
+              (DStr ""))))
+    ((AKVarOnly) (DCat (ind_d ind) (DStr "}\n")))))
+
+(fn has_var_arm ((arms (List Arm))) Bool
+  (match arms
+    (Nil False)
+    ((Cons (Arm p _) rest)
+     (match p
+       ((PVar) True)
+       (_ (has_var_arm rest))))))
+
+(fn em_arms
+  ((arms (List Arm)) (envs (List (List Int))) (sn (List Int)) (cx Cx) (ind Int) (k AK))
+  CR
+  (match arms
+    (Nil (COk (DStr "")))
+    ((Cons (Arm p body) rest)
+     (match envs
+       ((Cons _ env)  ; envs = (Cons sn env): peel back the real env
+        (match (em_arm p body env sn cx ind k)
+          ((CErr m) (CErr m))
+          ((COk d)
+           (match (em_arms rest envs sn cx ind k)
+             ((CErr m) (CErr m))
+             ((COk drest) (COk (DCat d drest)))))))
+       (Nil (CErr "internal: empty envs"))))))
+
+;; one arm. Field binders (flat PVars) extend env innermost-first
+;; (reverse field order — the kernel convention).
+(fn em_arm
+  ((p Pat) (body Expr) (env (List (List Int))) (sn (List Int)) (cx Cx) (ind Int) (k AK))
+  CR
+  (match p
+    ((PCtor q ps)
+     (match (tag_lookup (qn_name q) (cx_tags cx))
+       (None (CErr (append_int "unknown ctor in pattern: " (chars_of_sym (qn_name q)))))
+       ((Some (Pair tag arity))
+        (match (em_tail body (field_env ps sn env 0 Nil) cx (+ ind 1))
+          ((CErr m) (CErr m))
+          ((COk bd)
+           (COk
+             (dcat4
+               (dcat4 (ind_d ind) (DStr "case ") (dint tag) (DStr ": {\n"))
+               (field_decls ps sn (+ ind 1) 0)
+               bd
+               (DCat (ind_d ind) (DStr "}\n")))))))))
+    ((PInt n)
+     (match (em_tail body env cx (+ ind 1))
+       ((CErr m) (CErr m))
+       ((COk bd)
+        (COk
+          (dcat4
+            (dcat4 (ind_d ind) (DStr "case ") (dint n) (DStr "LL: {\n"))
+            bd
+            (DCat (ind_d ind) (DStr "}\n"))
+            (DStr ""))))))
+    ((PSym s)
+     (match (sym_idx s (cx_syms cx) 0)
+       (None (CErr "unknown sym in pattern"))
+       ((Some si)
+        (match (em_tail body env cx (+ ind 1))
+          ((CErr m) (CErr m))
+          ((COk bd)
+           (COk
+             (dcat4
+               (dcat3 (ind_d ind)
+                      (dcat3 (DStr "if (rt_symid(") (DStr sn) (DStr ")"))
+                      (dcat3 (DStr " == rt_symid(sl_") (dint si) (DStr ")) {\n")))
+               bd
+               (DCat (ind_d ind) (DStr "}\n"))
+               (DStr ""))))))))
+    ((PVar)
+     (match (em_tail body (Cons sn env) cx (+ ind 1))
+       ((CErr m) (CErr m))
+       ((COk bd)
+        (match k
+          ((AKVarOnly) (COk bd))
+          ((AKSym) (COk bd))
+          (_
+            (COk
+              (dcat4
+                (DCat (ind_d ind) (DStr "default: {\n"))
+                bd
+                (DCat (ind_d ind) (DStr "}\n"))
+                (DStr ""))))))))))
+
+;; field binder names f<sn>_<i>; env extension reversed (innermost-first)
+(fn fld_name ((sn (List Int)) (i Int)) (List Int)
+  (append_int sn (append_int "f" (show_int i))))
+
+(fn field_env
+  ((ps (List Pat)) (sn (List Int)) (env (List (List Int))) (i Int) (acc (List (List Int))))
+  (List (List Int))
+  (match ps
+    (Nil (push_all acc env))
+    ((Cons _ rest) (field_env rest sn env (+ i 1) (Cons (fld_name sn i) acc)))))
+
+(fn push_all ((acc (List (List Int))) (env (List (List Int)))) (List (List Int))
+  (match acc
+    (Nil env)
+    ((Cons h t) (Cons h (push_all t env)))))
+
+(fn field_decls ((ps (List Pat)) (sn (List Int)) (ind Int) (i Int)) Doc
+  (match ps
+    (Nil (DStr ""))
+    ((Cons _ rest)
+     (dcat4
+       (dcat4 (ind_d ind) (DStr "value_t ") (DStr (fld_name sn i)) (DStr " = "))
+       (dcat3 (DStr "rt_field(") (DStr sn) (DStr ", "))
+       (dcat3 (dint i) (DStr ");\n") (field_decls rest sn ind (+ i 1)))
+       (DStr "")))))
+
+;; ---- per-fn -------------------------------------------------------------------
+(fn param_list ((n Int) (i Int)) Doc
+  (if (int_eq i n)
+    (DStr "")
+    (dcat4
+      (if (int_eq i 0) (DStr "") (DStr ", "))
+      (DStr "value_t p_")
+      (dint i)
+      (param_list n (+ i 1)))))
+
+(fn param_env ((n Int) (acc (List (List Int)))) (List (List Int))
+  (if (int_eq n 0)
+    acc
+    (param_env (- n 1) (Cons (append_int "p_" (show_int (- n 1))) acc))))
+
+;; innermost-first: BVar 0 = LAST param -> env = [p_{n-1} ... p_0]
+(fn rev_e ((xs (List (List Int))) (acc (List (List Int)))) (List (List Int))
+  (match xs
+    (Nil acc)
+    ((Cons h t) (rev_e t (Cons h acc)))))
+
+(fn em_fndecl ((f FnDef)) Doc
+  (match f
+    ((FnDef q ptys _ _)
+     (dcat4
+       (dcat3 (DStr "static value_t s_") (dsym_c (qn_name q)) (DStr "("))
+       (param_list (len_l ptys) 0)
+       (DStr ");\n")
+       (DStr "")))))
+
+(fn em_fn ((f FnDef) (cx0 Cx)) CR
+  (match f
+    ((FnDef q ptys _ body)
+     (match (len_l ptys)
+       (n
+         (match cx0
+           ((Cx tags fns syms _ _)
+            (match (em_tail body (rev_e (param_env n Nil) Nil) (Cx tags fns syms (qn_name q) n) 1)
+              ((CErr m)
+               (CErr (append_int (chars_of_sym (qn_name q)) (append_int ": " m))))
+              ((COk bd)
+               (COk
+                 (dcat4
+                   (dcat3 (dcat3 (DStr "static value_t s_") (dsym_c (qn_name q)) (DStr "("))
+                          (param_list n 0)
+                          (DStr ") {\nstart_:;\n"))
+                   bd
+                   (DStr "}\n\n")
+                   (DStr ""))))))))))))
+
+(fn em_fns ((fs (List FnDef)) (cx Cx) (acc Doc) (errs (List Int))) CR
+  (match fs
+    (Nil
+      (match errs
+        (Nil (COk acc))
+        (_ (CErr errs))))
+    ((Cons f rest)
+     (match (em_fn f cx)
+       ((COk d) (em_fns rest cx (DCat acc d) errs))
+       ((CErr m)
+        (em_fns rest cx acc
+          (append_int errs (append_int "REFUSED " (append_int m (nl))))))))))
+
+(fn em_fndecls ((fs (List FnDef))) Doc
+  (match fs
+    (Nil (DStr ""))
+    ((Cons f rest) (DCat (em_fndecl f) (em_fndecls rest)))))
+
+(fn fnlist ((fs (List FnDef))) (List (Pair Symbol Int))
+  (match fs
+    (Nil Nil)
+    ((Cons (FnDef q ptys _ _) rest) (Cons (Pair (qn_name q) (len_l ptys)) (fnlist rest)))))
+
+;; ---- core tag defines (synthetic reserved numbers when absent) ----------------
+(fn core_tag_def ((n Symbol) (assoc (List (Pair Symbol (Pair Int Int)))) (synth Int)) Doc
+  (match (tag_lookup n assoc)
+    ((Some (Pair tag _))
+     (dcat4 (DStr "#define RT_TAG_") (DStr (chars_of_sym n)) (dcat3 (DStr " ") (dint tag) (DStr "\n")) (DStr "")))
+    (None
+      (dcat4 (DStr "#define RT_TAG_") (DStr (chars_of_sym n)) (dcat3 (DStr " ") (dint synth) (DStr "\n")) (DStr "")))))
+
+(fn core_tag_defs ((assoc (List (Pair Symbol (Pair Int Int))))) Doc
+  (dcat4
+    (DCat (core_tag_def (quote True) assoc 900) (core_tag_def (quote False) assoc 901))
+    (DCat (core_tag_def (quote Nil) assoc 902) (core_tag_def (quote Cons) assoc 903))
+    (DCat (core_tag_def (quote None) assoc 904) (core_tag_def (quote Some) assoc 905))
+    (DCat (core_tag_def (quote Pair) assoc 906) (core_tag_def (quote World) assoc 907))))
+
+;; ---- static symbol emission -----------------------------------------------------
+(fn em_sym_decls ((syms (List Symbol)) (i Int)) Doc
+  (match syms
+    (Nil (DStr ""))
+    ((Cons _ rest)
+     (dcat4 (DStr "static value_t sl_") (dint i) (DStr ";\n") (em_sym_decls rest (+ i 1))))))
+
+(fn cstr_escape ((cs (List Int))) (List Int)
+  (match cs
+    (Nil Nil)
+    ((Cons c rest)
+     (if (int_eq c 34) (Cons 92 (Cons 34 (cstr_escape rest)))
+     (if (int_eq c 92) (Cons 92 (Cons 92 (cstr_escape rest)))
+     (if (int_eq c 10) (Cons 92 (Cons 110 (cstr_escape rest)))
+     (Cons c (cstr_escape rest))))))))
+
+(fn len_i ((cs (List Int))) Int
+  (match cs
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (len_i rest)))))
+
+(fn em_sym_inits ((syms (List Symbol)) (i Int)) Doc
+  (match syms
+    (Nil (DStr ""))
+    ((Cons s rest)
+     (dcat4
+       (dcat3 (DStr "  sl_") (dint i) (DStr " = rt_sym(rt_intern(\""))
+       (dcat3 (DStr (cstr_escape (chars_of_sym s))) (DStr "\", ") (dint (len_i (chars_of_sym s))))
+       (DStr "));\n")
+       (em_sym_inits rest (+ i 1))))))
+
+;; ---- main emission ---------------------------------------------------------------
+(fn em_cmain ((assoc (List (Pair Symbol (Pair Int Int)))) (syms (List Symbol))) Doc
+  (dcat4
+    (DStr "int main(int argc, char **argv) {\n  rt_init(argc, argv);\n")
+    (em_sym_inits syms 0)
+    (match (tag_lookup (quote World) assoc)
+      ((Some (Pair tag arity))
+       (if (int_eq arity 0)
+         (dcat3 (DStr "  s_main(rt_alloc(") (dint tag) (DStr ", 0));\n"))
+         (dcat4 (DStr "  { value_t w = rt_alloc(") (dint tag) (DStr ", 1); rt_cellof(w)->fields[0] = rt_tag_int(0); s_main(w); }\n") (DStr ""))))
+      (None (DStr "  s_main(rt_unit_world);\n")))
+    (DStr "  return 0;\n}\n")))
+
+;; ---- the run ----------------------------------------------------------------------
+(fn fail2 ((msg (List Int)) (w World)) World
+  (exit 2 (write (append_int "error: " (append_int msg (nl))) w)))
+
+(fn prelude_ctors_c () (List Symbol)
+  (list
+    (quote Cons)
+    (quote Nil)
+    (quote Some)
+    (quote None)
+    (quote True)
+    (quote False)
+    (quote Pair)))
+
+(fn cg_run ((target (List Int)) (out (List Int)) (w World)) World
+  (match (resolve_closure target True w)
+    ((Pair Nil w1) (fail2 (append_int "cannot read " target) w1))
+    ((Pair srcs w1)
+     (match (build_module_d srcs (Module Nil Nil Nil (FnTrie None Nil)) (prelude_ctors_c) 1)
+       ((BMFail diag) (fail2 diag w1))
+       ((BMOk m)
+        (match m
+          ((Module tds fns _ _)
+           (match (tags_of_tds tds (Tags Nil 1000))
+             ((Tags assoc _)
+              (match (collect_syms_fns fns Nil)
+                (syms
+                  (match (em_fns fns (Cx assoc (fnlist fns) syms (quote __top__) 0) (DStr "") Nil)
+                    ((CErr errs) (exit 1 (write errs w1)))
+                    ((COk fdocs)
+                     (match
+                       (write_file
+                         out
+                         (doc_flat
+                           (dcat4
+                             (dcat3
+                               (DStr "/* GENERATED by tools/codegen — do not edit. */\n")
+                               (core_tag_defs assoc)
+                               (DStr "#include \"rt.h\"\n\n"))
+                             (DCat (em_sym_decls syms 0) (DStr "\n"))
+                             (DCat (em_fndecls fns) (DStr "\n"))
+                             (DCat fdocs (em_cmain assoc syms)))
+                           Nil)
+                         w1)
+                       ((Pair ok w2)
+                        (if ok
+                          (exit 0 (write (append_int "wrote " (append_int out (nl))) w2))
+                          (fail2 (append_int "cannot write " out) w2)))))))))))))))))
+
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Pair args w1)
+     (match args
+       ((Cons target Nil) (cg_run target (append_int target ".c") w1))
+       ((Cons target (Cons out Nil)) (cg_run target out w1))
+       (_ (fail2 "usage: codegen RS-FILE [OUT.c]" w1))))))
