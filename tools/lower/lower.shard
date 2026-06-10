@@ -1,0 +1,660 @@
+;;; lower — shard -> RS-shard (the restricted ANF subset; see DESIGN.md).
+;;;
+;;; Front end is the KERNEL'S, by library import: resolve_closure +
+;;; build_module_d give the merged Module; bodies arrive binding-resolved
+;;; (locally-nameless). lower never re-reads source text, so there is no
+;;; second parser and no second scope discipline.
+;;;
+;;; THE CONTRACT: refuse, don't guess. Any body shape outside the v0
+;;; subset is a loud per-fn error and exit 1 — never an approximation.
+;;; The output is a RUN artifact: one self-contained file holding every
+;;; typedef + extern of the closure and every fn body in RS form. The
+;;; differential gate runs original vs lowered on the direct engine and
+;;; demands byte-identical stdout.
+;;;
+;;; v0 LIMITS (next slice: join-point lifting removes all three):
+;;;   - match arms must be FLAT patterns ((C x1 .. xn) | INT | 'SYM | x)
+;;;   - if/match may not appear in named (let-rhs / argument) position
+;;;   - match scrutinee lowered to a var; arm bodies recurse
+;;;
+;;; RUN IT:  ./rust_bootstrap/target/release/eval run tools/lower/lower.shard FILE [OUT]
+;;;          OUT defaults to FILE with .shard -> .low.shard
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/loader.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/reader.shard")
+
+(use (:: kernel loader resolve_closure))
+(use (:: kernel loader World))
+(use (:: kernel loader get_args))
+(use (:: kernel loader write))
+(use (:: kernel loader write_file))
+(use (:: kernel loader exit))
+(use (:: kernel term Expr))
+(use (:: kernel term FVar))
+(use (:: kernel term BVar))
+(use (:: kernel term Ctor))
+(use (:: kernel term Call))
+(use (:: kernel term Match))
+(use (:: kernel term Let))
+(use (:: kernel term If))
+(use (:: kernel term IntLit))
+(use (:: kernel term SymLit))
+(use (:: kernel term Arm))
+(use (:: kernel term Pat))
+(use (:: kernel term PVar))
+(use (:: kernel term PCtor))
+(use (:: kernel term PInt))
+(use (:: kernel term PSym))
+(use (:: kernel term QName))
+(use (:: kernel term qn_name))
+(use (:: kernel term append_int))
+(use (:: kernel term show_int))
+(use (:: kernel module Module))
+(use (:: kernel module FnDef))
+(use (:: kernel module ExternDef))
+(use (:: kernel module TypeDef))
+(use (:: kernel module CtorDef))
+(use (:: kernel module Type))
+(use (:: kernel module TCon))
+(use (:: kernel module TVar))
+(use (:: kernel module FnTrie))
+(use (:: kernel reader SrcEntry))
+(use (:: kernel reader build_module_d))
+(use (:: kernel reader BMOk))
+(use (:: kernel reader BMFail))
+
+;; ---- output document: fragment tree, flattened once -------------------------
+(type Doc
+  (DStr (List Int))
+  (DCat Doc Doc))
+
+(fn dcat3 ((a Doc) (b Doc) (c Doc)) Doc (DCat a (DCat b c)))
+
+(fn doc_flat ((d Doc) (tail (List Int))) (List Int)
+  (match d
+    ((DStr s) (append_int s tail))
+    ((DCat a b) (doc_flat a (doc_flat b tail)))))
+
+(fn nl () (List Int) (Cons 10 Nil))
+(fn sp () Doc (DStr " "))
+(fn dsym ((s Symbol)) Doc (DStr (chars_of_sym s)))
+
+;; ---- deterministic temp names -----------------------------------------------
+(fn mk_name ((prefix (List Int)) (k Int)) Symbol
+  (sym_of_chars (append_int prefix (show_int k))))
+
+(fn param_name ((i Int)) Symbol (mk_name "p__" i))
+(fn temp_name ((k Int)) Symbol (mk_name "t__" k))
+(fn bind_name ((k Int)) Symbol (mk_name "x__" k))
+
+;; ---- named IR (locally-nameless -> named, then ANF, then print) --------------
+(type NExpr
+  (NVar Symbol)
+  (NInt Int)
+  (NSym Symbol)
+  (NCtor Symbol (List NExpr))
+  (NCall Symbol (List NExpr))
+  (NIf NExpr NExpr NExpr)
+  (NMatch NExpr (List NArm))
+  (NLet Symbol NExpr NExpr))
+
+(type NArm (NArm NPat NExpr))
+
+(type NPat
+  (NPVar Symbol)
+  (NPInt Int)
+  (NPSym Symbol)
+  (NPCtor Symbol (List NPat)))
+
+;; result-or-refusal; every pass threads the fresh-name counter
+(type RRes
+  (ROk NExpr Int)
+  (RErr (List Int)))
+
+(type RAs
+  (RAOk (List NExpr) Int)
+  (RAErr (List Int)))
+
+;; ---- pass A: resolve de Bruijn against a name stack --------------------------
+;; env is innermost-first: (BVar i) is the i-th name. Pattern/let/param
+;; binders all follow the kernel's innermost-first convention (last binder
+;; textually = BVar 0), so an extension is reverse(textual names) ++ env.
+
+(fn nth_name ((env (List Symbol)) (i Int)) (Option Symbol)
+  (match env
+    (Nil None)
+    ((Cons n rest) (if (int_eq i 0) (Some n) (nth_name rest (- i 1))))))
+
+;; collect fresh names for a pattern's PVars, textual (left-to-right) order;
+;; returns the renamed pattern + names + advanced counter.
+(type PRes (POk NPat (List Symbol) Int) (PErr (List Int)))
+
+(fn rev_syms ((xs (List Symbol)) (acc (List Symbol))) (List Symbol)
+  (match xs
+    (Nil acc)
+    ((Cons h t) (rev_syms t (Cons h acc)))))
+
+(fn append_syms ((a (List Symbol)) (b (List Symbol))) (List Symbol)
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (append_syms t b)))))
+
+(fn pat_resolve ((p Pat) (k Int)) PRes
+  (match p
+    ((PVar) (match (bind_name k) (n (POk (NPVar n) (Cons n Nil) (+ k 1)))))
+    ((PInt n) (POk (NPInt n) Nil k))
+    ((PSym s) (POk (NPSym s) Nil k))
+    ((PCtor q ps)
+     (match (pats_resolve ps k)
+       ((PErr m) (PErr m))
+       ((POk dummy names k1)
+        (match dummy
+          ((NPCtor _ rps) (POk (NPCtor (qn_name q) rps) names k1))
+          (_ (PErr "pat_resolve: internal"))))))))
+
+;; helper: resolve a pattern LIST, packaging as a synthetic NPCtor carrier
+(fn pats_resolve ((ps (List Pat)) (k Int)) PRes
+  (match ps
+    (Nil (POk (NPCtor (quote __ps__) Nil) Nil k))
+    ((Cons p rest)
+     (match (pat_resolve p k)
+       ((PErr m) (PErr m))
+       ((POk rp names1 k1)
+        (match (pats_resolve rest k1)
+          ((PErr m) (PErr m))
+          ((POk carrier names2 k2)
+           (match carrier
+             ((NPCtor c rps)
+              (POk (NPCtor c (Cons rp rps)) (append_syms names1 names2) k2))
+             (_ (PErr "pats_resolve: internal"))))))))))
+
+(fn resolve_list ((es (List Expr)) (env (List Symbol)) (k Int)) RAs
+  (match es
+    (Nil (RAOk Nil k))
+    ((Cons e rest)
+     (match (resolve e env k)
+       ((RErr m) (RAErr m))
+       ((ROk r k1)
+        (match (resolve_list rest env k1)
+          ((RAErr m) (RAErr m))
+          ((RAOk rs k2) (RAOk (Cons r rs) k2))))))))
+
+(fn resolve ((e Expr) (env (List Symbol)) (k Int)) RRes
+  (match e
+    ((FVar s) (ROk (NVar s) k))
+    ((BVar i)
+     (match (nth_name env i)
+       (None (RErr "resolve: BVar out of range"))
+       ((Some n) (ROk (NVar n) k))))
+    ((IntLit n) (ROk (NInt n) k))
+    ((SymLit s) (ROk (NSym s) k))
+    ((Ctor q args)
+     (match (resolve_list args env k)
+       ((RAErr m) (RErr m))
+       ((RAOk rs k1) (ROk (NCtor (qn_name q) rs) k1))))
+    ((Call q args)
+     (match (resolve_list args env k)
+       ((RAErr m) (RErr m))
+       ((RAOk rs k1) (ROk (NCall (qn_name q) rs) k1))))
+    ((If c t f)
+     (match (resolve c env k)
+       ((RErr m) (RErr m))
+       ((ROk rc k1)
+        (match (resolve t env k1)
+          ((RErr m) (RErr m))
+          ((ROk rt k2)
+           (match (resolve f env k2)
+             ((RErr m) (RErr m))
+             ((ROk rf k3) (ROk (NIf rc rt rf) k3))))))))
+    ((Let rhss body)
+     (resolve_let rhss body env env Nil k))
+    ((Match scrut arms)
+     (match (resolve scrut env k)
+       ((RErr m) (RErr m))
+       ((ROk rs k1)
+        (match (resolve_arms_n arms env k1)
+          ((AErr m) (RErr m))
+          ((AOk rarms k2) (ROk (NMatch rs rarms) k2))))))))
+
+;; parallel let: every rhs resolves in the OUTER env; body env extends by
+;; reverse(binder names).
+(fn resolve_let
+  ((rhss (List Expr)) (body Expr)
+   (outer (List Symbol)) (env (List Symbol)) (names (List Symbol)) (k Int))
+  RRes
+  (match rhss
+    (Nil
+      (match (resolve body (rev_syms names env) k)
+        ((RErr m) (RErr m))
+        ((ROk rb k1) (ROk (wrap_lets (rev_syms names Nil) Nil rb) k1))))
+    ((Cons r rest)
+     (match (resolve r outer k)
+       ((RErr m) (RErr m))
+       ((ROk rr k1)
+        (match (mk_name "l__" k1)
+          (n
+            (match (resolve_let rest body outer env (Cons n names) (+ k1 1))
+              ((RErr m) (RErr m))
+              ((ROk inner k2) (ROk (NLet n rr inner) k2))))))))))
+
+;; resolve_let emits (NLet n1 r1 (NLet n2 r2 ... bodyR)) directly; wrap_lets
+;; is the no-op shim that keeps the body in place (names already threaded).
+(fn wrap_lets ((names (List Symbol)) (unused (List Symbol)) (body NExpr)) NExpr
+  body)
+
+(type ARes
+  (AOk (List NArm) Int)
+  (AErr (List Int)))
+
+(fn resolve_arms_n ((arms (List Arm)) (env (List Symbol)) (k Int)) ARes
+  (match arms
+    (Nil (AOk Nil k))
+    ((Cons (Arm p body) rest)
+     (match (pat_resolve p k)
+       ((PErr m) (AErr m))
+       ((POk rp names k1)
+        (match (resolve body (rev_syms names env) k1)
+          ((RErr m) (AErr m))
+          ((ROk rb k2)
+           (match (resolve_arms_n rest env k2)
+             ((AErr m) (AErr m))
+             ((AOk rrest k3) (AOk (Cons (NArm rp rb) rrest) k3))))))))))
+
+;; ---- pass B/C: ANF with v0 refusals ------------------------------------------
+;; anf_tail: lower to RS tail form. anf_name: lower to an ATOM, emitting
+;; (name, rhs) bindings outward (returned innermost-last, wrapped by caller).
+
+(fn is_atom ((e NExpr)) Bool
+  (match e
+    ((NVar _) True)
+    ((NInt _) True)
+    ((NSym _) True)
+    (_ False)))
+
+(type NRes
+  (NOk (List (Pair Symbol NExpr)) NExpr Int)  ; binds, atom, counter
+  (NErr (List Int)))
+
+(type NsRes
+  (NsOk (List (Pair Symbol NExpr)) (List NExpr) Int)
+  (NsErr (List Int)))
+
+(fn append_binds
+  ((a (List (Pair Symbol NExpr))) (b (List (Pair Symbol NExpr))))
+  (List (Pair Symbol NExpr))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (append_binds t b)))))
+
+(fn anf_name ((e NExpr) (k Int)) NRes
+  (match e
+    ((NVar s) (NOk Nil (NVar s) k))
+    ((NInt n) (NOk Nil (NInt n) k))
+    ((NSym s) (NOk Nil (NSym s) k))
+    ((NCtor c args)
+     (match (anf_names args k)
+       ((NsErr m) (NErr m))
+       ((NsOk binds atoms k1)
+        (match (temp_name k1)
+          (t (NOk (append_binds binds (Cons (Pair t (NCtor c atoms)) Nil))
+                  (NVar t) (+ k1 1)))))))
+    ((NCall f args)
+     (match (anf_names args k)
+       ((NsErr m) (NErr m))
+       ((NsOk binds atoms k1)
+        (match (temp_name k1)
+          (t (NOk (append_binds binds (Cons (Pair t (NCall f atoms)) Nil))
+                  (NVar t) (+ k1 1)))))))
+    ((NLet n rhs body)
+     (match (anf_rhs rhs k)
+       ((NErr m) (NErr m))
+       ((NOk binds1 r k1)
+        (match (anf_name body k1)
+          ((NErr m) (NErr m))
+          ((NOk binds2 atom k2)
+           (NOk (append_binds binds1 (Cons (Pair n r) binds2)) atom k2))))))
+    ((NIf _ _ _) (NErr "v0: if in named position (join points: next slice)"))
+    ((NMatch _ _) (NErr "v0: match in named position (join points: next slice)"))))
+
+;; like anf_name but allows a CALL/CTOR rhs to stay un-bound (it becomes the
+;; let's own rhs) — used for let-rhs and tail positions.
+(fn anf_rhs ((e NExpr) (k Int)) NRes
+  (match e
+    ((NCtor c args)
+     (match (anf_names args k)
+       ((NsErr m) (NErr m))
+       ((NsOk binds atoms k1) (NOk binds (NCtor c atoms) k1))))
+    ((NCall f args)
+     (match (anf_names args k)
+       ((NsErr m) (NErr m))
+       ((NsOk binds atoms k1) (NOk binds (NCall f atoms) k1))))
+    (_ (anf_name e k))))
+
+(fn anf_names ((es (List NExpr)) (k Int)) NsRes
+  (match es
+    (Nil (NsOk Nil Nil k))
+    ((Cons e rest)
+     (match (anf_name e k)
+       ((NErr m) (NsErr m))
+       ((NOk binds a k1)
+        (match (anf_names rest k1)
+          ((NsErr m) (NsErr m))
+          ((NsOk binds2 atoms k2)
+           (NsOk (append_binds binds binds2) (Cons a atoms) k2))))))))
+
+(fn wrap_binds ((binds (List (Pair Symbol NExpr))) (tail NExpr)) NExpr
+  (match binds
+    (Nil tail)
+    ((Cons (Pair n r) rest) (NLet n r (wrap_binds rest tail)))))
+
+(fn flat_pat ((p NPat)) Bool
+  (match p
+    ((NPCtor _ ps) (all_pvars ps))
+    (_ True)))
+
+(fn all_pvars ((ps (List NPat))) Bool
+  (match ps
+    (Nil True)
+    ((Cons (NPVar _) rest) (all_pvars rest))
+    (_ False)))
+
+(type TRes (TOk NExpr Int) (TErr (List Int)))
+
+(fn anf_tail ((e NExpr) (k Int)) TRes
+  (match e
+    ((NIf c t f)
+     (match (anf_name c k)
+       ((NErr m) (TErr m))
+       ((NOk binds ca k1)
+        (match (anf_tail t k1)
+          ((TErr m) (TErr m))
+          ((TOk rt k2)
+           (match (anf_tail f k2)
+             ((TErr m) (TErr m))
+             ((TOk rf k3) (TOk (wrap_binds binds (NIf ca rt rf)) k3))))))))
+    ((NMatch scrut arms)
+     (match (anf_name scrut k)
+       ((NErr m) (TErr m))
+       ((NOk binds sa k1)
+        (match (anf_arms arms k1)
+          ((TAErr m) (TErr m))
+          ((TAOk rarms k2) (TOk (wrap_binds binds (NMatch sa rarms)) k2))))))
+    ((NLet n rhs body)
+     (match (anf_rhs rhs k)
+       ((NErr m) (TErr m))
+       ((NOk binds r k1)
+        (match (anf_tail body k1)
+          ((TErr m) (TErr m))
+          ((TOk rb k2)
+           (TOk (wrap_binds binds (NLet n r rb)) k2))))))
+    (_
+      (match (anf_rhs e k)
+        ((NErr m) (TErr m))
+        ((NOk binds r k1) (TOk (wrap_binds binds r) k1))))))
+
+(type TARes (TAOk (List NArm) Int) (TAErr (List Int)))
+
+(fn anf_arms ((arms (List NArm)) (k Int)) TARes
+  (match arms
+    (Nil (TAOk Nil k))
+    ((Cons (NArm p body) rest)
+     (if (flat_pat p)
+       (match (anf_tail body k)
+         ((TErr m) (TAErr m))
+         ((TOk rb k1)
+          (match (anf_arms rest k1)
+            ((TAErr m) (TAErr m))
+            ((TAOk rrest k2) (TAOk (Cons (NArm p rb) rrest) k2)))))
+       (TAErr "v0: nested pattern (match flattening: next slice)")))))
+
+;; ---- print: NExpr / Type / decls -> Doc ---------------------------------------
+(fn pr_atoms ((es (List NExpr))) Doc
+  (match es
+    (Nil (DStr ""))
+    ((Cons e rest) (DCat (sp) (DCat (pr_nexpr e) (pr_atoms rest))))))
+
+(fn pr_nexpr ((e NExpr)) Doc
+  (match e
+    ((NVar s) (dsym s))
+    ((NInt n) (DStr (show_int n)))
+    ((NSym s) (dcat3 (DStr "(quote ") (dsym s) (DStr ")")))
+    ((NCtor c args)
+     (match args
+       (Nil (dsym c))
+       (_ (dcat3 (DCat (DStr "(") (dsym c)) (pr_atoms args) (DStr ")")))))
+    ((NCall f args)
+     (dcat3 (DCat (DStr "(") (dsym f)) (pr_atoms args) (DStr ")")))
+    ((NIf c t f)
+     (dcat3
+       (dcat3 (DStr "(if ") (pr_nexpr c) (DCat (sp) (pr_nexpr t)))
+       (DCat (sp) (pr_nexpr f))
+       (DStr ")")))
+    ((NMatch s arms)
+     (dcat3
+       (dcat3 (DStr "(match ") (pr_nexpr s) (pr_narms arms))
+       (DStr ")")
+       (DStr "")))
+    ((NLet n r body)
+     (dcat3
+       (dcat3 (DStr "(let ((") (dsym n) (DCat (sp) (pr_nexpr r)))
+       (dcat3 (DStr ")) ") (pr_nexpr body) (DStr ")"))
+       (DStr "")))))
+
+(fn pr_narms ((arms (List NArm))) Doc
+  (match arms
+    (Nil (DStr ""))
+    ((Cons (NArm p body) rest)
+     (dcat3
+       (dcat3 (DStr " (") (pr_npat p) (DCat (sp) (pr_nexpr body)))
+       (DStr ")")
+       (pr_narms rest)))))
+
+(fn pr_npat ((p NPat)) Doc
+  (match p
+    ((NPVar s) (dsym s))
+    ((NPInt n) (DStr (show_int n)))
+    ((NPSym s) (dcat3 (DStr "(quote ") (dsym s) (DStr ")")))
+    ((NPCtor c ps)
+     (match ps
+       (Nil (dsym c))
+       (_ (dcat3 (DCat (DStr "(") (dsym c)) (pr_npats ps) (DStr ")")))))))
+
+(fn pr_npats ((ps (List NPat))) Doc
+  (match ps
+    (Nil (DStr ""))
+    ((Cons p rest) (DCat (sp) (DCat (pr_npat p) (pr_npats rest))))))
+
+(fn pr_type ((t Type)) Doc
+  (match t
+    ((TVar s) (dsym s))
+    ((TCon q args)
+     (match args
+       (Nil (dsym (qn_name q)))
+       (_ (dcat3 (DCat (DStr "(") (dsym (qn_name q))) (pr_types args) (DStr ")")))))))
+
+(fn pr_types ((ts (List Type))) Doc
+  (match ts
+    (Nil (DStr ""))
+    ((Cons t rest) (DCat (sp) (DCat (pr_type t) (pr_types rest))))))
+
+(fn pr_params ((ts (List Type)) (i Int)) Doc
+  (match ts
+    (Nil (DStr ""))
+    ((Cons t rest)
+     (dcat3
+       (dcat3 (DCat (sp) (DStr "(")) (dsym (param_name i)) (DCat (sp) (pr_type t)))
+       (DStr ")")
+       (pr_params rest (+ i 1))))))
+
+(fn pr_ctordef ((c CtorDef)) Doc
+  (match c
+    ((CtorDef q fields)
+     (dcat3 (DCat (DStr " (") (dsym (qn_name q))) (pr_types fields) (DStr ")")))))
+
+(fn pr_ctordefs ((cs (List CtorDef))) Doc
+  (match cs
+    (Nil (DStr ""))
+    ((Cons c rest) (DCat (pr_ctordef c) (pr_ctordefs rest)))))
+
+(fn pr_tparams ((ps (List Symbol))) Doc
+  (match ps
+    (Nil (DStr ""))
+    ((Cons p rest) (DCat (sp) (DCat (dsym p) (pr_tparams rest))))))
+
+(fn pr_typedef ((td TypeDef)) Doc
+  (match td
+    ((TypeDef q tps ctors)
+     (match tps
+       (Nil
+         (dcat3
+           (dcat3 (DStr "(type ") (dsym (qn_name q)) (pr_ctordefs ctors))
+           (DStr ")")
+           (DStr (nl))))
+       (_
+         (dcat3
+           (dcat3
+             (dcat3 (DStr "(type (") (dsym (qn_name q)) (pr_tparams tps))
+             (DStr ")")
+             (pr_ctordefs ctors))
+           (DStr ")")
+           (DStr (nl))))))))
+
+(fn pr_typedefs ((tds (List TypeDef))) Doc
+  (match tds
+    (Nil (DStr ""))
+    ((Cons td rest) (DCat (pr_typedef td) (pr_typedefs rest)))))
+
+(fn pr_externdef ((x ExternDef)) Doc
+  (match x
+    ((ExternDef q ptys rty)
+     (dcat3
+       (dcat3 (DStr "(extern ") (dsym (qn_name q)) (DCat (DStr " (") (pr_params ptys 0)))
+       (dcat3 (DStr ") ") (pr_type rty) (DStr ")"))
+       (DStr (nl))))))
+
+(fn pr_externdefs ((xs (List ExternDef))) Doc
+  (match xs
+    (Nil (DStr ""))
+    ((Cons x rest) (DCat (pr_externdef x) (pr_externdefs rest)))))
+
+;; ---- per-fn lowering ----------------------------------------------------------
+;; params: source order p__0..p__{n-1}; innermost-first env = reversed.
+(fn param_env ((n Int) (acc (List Symbol))) (List Symbol)
+  (if (int_eq n 0)
+    acc
+    (param_env (- n 1) (Cons (param_name (- n 1)) acc))))
+
+(fn len_types ((ts (List Type))) Int
+  (match ts
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (len_types rest)))))
+
+(fn rev_env ((xs (List Symbol)) (acc (List Symbol))) (List Symbol)
+  (match xs
+    (Nil acc)
+    ((Cons h t) (rev_env t (Cons h acc)))))
+
+(type FRes (FOk Doc) (FErr (List Int)))
+
+(fn lower_fn ((f FnDef)) FRes
+  (match f
+    ((FnDef q ptys rty body)
+     (match (len_types ptys)
+       (n
+         (match (resolve body (rev_env (param_env n Nil) Nil) 0)
+           ((RErr m)
+            (FErr (append_int (chars_of_sym (qn_name q)) (append_int ": " m))))
+           ((ROk ne k)
+            (match (anf_tail ne k)
+              ((TErr m)
+               (FErr (append_int (chars_of_sym (qn_name q)) (append_int ": " m))))
+              ((TOk rs _)
+               (FOk
+                 (dcat3
+                   (dcat3
+                     (dcat3 (DStr "(fn ") (dsym (qn_name q)) (DCat (DStr " (") (pr_params ptys 0)))
+                     (dcat3 (DStr ") ") (pr_type rty) (DCat (DStr (nl)) (DStr "  ")))
+                     (pr_nexpr rs))
+                   (DStr ")")
+                   (DStr (append_int (nl) (nl))))))))))))))
+
+;; collect every refusal (don't stop at the first — the report is the point)
+(type LRes (LOk Doc) (LErr (List Int)))
+
+(fn lower_fns ((fs (List FnDef)) (acc Doc) (errs (List Int))) LRes
+  (match fs
+    (Nil
+      (match errs
+        (Nil (LOk acc))
+        (_ (LErr errs))))
+    ((Cons f rest)
+     (match (lower_fn f)
+       ((FOk d) (lower_fns rest (DCat acc d) errs))
+       ((FErr m)
+        (lower_fns rest acc
+          (append_int errs (append_int "REFUSED " (append_int m (nl))))))))))
+
+;; ---- the run --------------------------------------------------------------------
+(fn header () (List Int)
+  (append_int
+    ";;; RS-shard — MACHINE-LOWERED by tools/lower (see tools/lower/DESIGN.md)."
+    (append_int
+      (nl)
+      (append_int ";;; Self-contained run artifact; do not edit." (append_int (nl) (nl))))))
+
+(fn low_path_of ((path (List Int))) (List Int)
+  (append_int path ".low.shard"))
+
+(fn fail2 ((msg (List Int)) (w World)) World
+  (exit 2 (write (append_int "error: " (append_int msg (nl))) w)))
+
+(fn lower_run ((target (List Int)) (out (List Int)) (w World)) World
+  (match (resolve_closure target True w)  ; True = RUN mode (impl bodies)
+    ((Pair Nil w1) (fail2 (append_int "cannot read closure of " target) w1))
+    ((Pair srcs w1)
+     (match (build_module_d srcs (Module Nil Nil Nil (FnTrie None Nil)) (prelude_ctors_l) 1)
+       ((BMFail diag) (fail2 diag w1))
+       ((BMOk m)
+        (match m
+          ((Module tds fns exts _)
+           (match (lower_fns fns (DStr "") Nil)
+             ((LErr errs)
+              (exit 1 (write errs w1)))
+             ((LOk fdocs)
+              (match
+                (write_file
+                  out
+                  (doc_flat
+                    (dcat3
+                      (DCat (DStr (header)) (pr_typedefs tds))
+                      (DCat (DStr (nl)) (pr_externdefs exts))
+                      (DCat (DStr (nl)) fdocs))
+                    Nil)
+                  w1)
+                ((Pair ok w2)
+                 (if ok
+                   (exit 0 (write (append_int "wrote " (append_int out (nl))) w2))
+                   (fail2 (append_int "cannot write " out) w2)))))))))))))
+
+;; local copy of the bootstrap ctor prelude (driver owns the shared one, but
+;; lower does not need the driver; keep the import surface minimal).
+(fn prelude_ctors_l () (List Symbol)
+  (list
+    (quote Cons)
+    (quote Nil)
+    (quote Some)
+    (quote None)
+    (quote True)
+    (quote False)
+    (quote Pair)))
+
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Pair args w1)
+     (match args
+       ((Cons target Nil) (lower_run target (low_path_of target) w1))
+       ((Cons target (Cons out Nil)) (lower_run target out w1))
+       (_ (fail2 "usage: lower FILE [OUT]" w1))))))
