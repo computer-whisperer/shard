@@ -107,9 +107,22 @@
           (None None)
           ((Some sub) (trie_lookup_chars rest sub))))))))
 
+;; trie key: the FULL qualified name — module path segments then the bare
+;; name, '/'-separated. Same-named fns in different modules are DIFFERENT
+;; functions (the path is identity); a bare-name key would conflate them and
+;; keep-first would silently hand the loser's calls the winner's def.
+(fn qn_key_go ((segs (List Symbol)) (name Symbol)) (List Int)
+  (match segs
+    (Nil (chars_of_sym name))
+    ((Cons s rest)
+     (append_int (chars_of_sym s) (Cons 47 (qn_key_go rest name))))))
+
+(fn qn_key_chars ((q QName)) (List Int)
+  (qn_key_go (qn_mod q) (qn_name q)))
+
 ;; resolve a function name to its FnDef, O(name length). The reducer's hot path.
 (fn trie_lookup ((name QName) (t FnTrie)) (Option FnDef)
-  (trie_lookup_chars (chars_of_sym (qn_name name)) t))
+  (trie_lookup_chars (qn_key_chars name) t))
 
 ;; explode a leaf one level into a branch node so an insert can proceed past it.
 (fn trie_leaf_split ((suffix (List Int)) (fd FnDef)) FnTrie
@@ -140,7 +153,18 @@
 
 (fn trie_insert ((fd FnDef) (t FnTrie)) FnTrie
   (match fd
-    ((FnDef name _ _ _) (trie_insert_chars (chars_of_sym (qn_name name)) fd t))))
+    ((FnDef name _ _ _) (trie_insert_chars (qn_key_chars name) fd t))))
+
+;; first fn with this BARE name, in load order (the old name-keyed trie
+;; semantics) — for walks whose names come from OUTSIDE resolution (a bin
+;; form's entry symbol, the ledger's bare-symbol call closure).
+(fn find_fn_named ((n Symbol) (fds (List FnDef))) (Option FnDef)
+  (match fds
+    (Nil None)
+    ((Cons fd rest)
+     (match fd
+       ((FnDef q _ _ _)
+        (if (sym_eq (qn_name q) n) (Some fd) (find_fn_named n rest)))))))
 
 (fn trie_insert_many ((fds (List FnDef)) (t FnTrie)) FnTrie
   (match fds
