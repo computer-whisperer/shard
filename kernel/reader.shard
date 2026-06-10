@@ -27,6 +27,8 @@
 (import "stdlib.shard")
 (import "term.shard")
 (import "module.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
 
 (type SExpr (SInt Int) (SSym Symbol) (SStr (List Int)) (SList (List SExpr)))
 
@@ -625,11 +627,8 @@
 ;; ---- types ----
 
 ;; The decimal digits of a non-negative int, as codepoints. Inverse of
-;; digits_val; renders the CANONICAL numeric symbol (no leading zeros),
-;; so two mentions of the same width are the same TCon name.
-(fn nat_chars ((n Int)) (List Int)
-  (if (lt n 10) (Cons (+ 48 n) Nil)
-  (append_int (nat_chars (/ n 10)) (Cons (+ 48 (mod n 10)) Nil))))
+;; digits_val; show_nat (term.shard) renders the CANONICAL numeric symbol
+;; (no leading zeros), so two mentions of the same width are the same TCon name.
 
 ;; Built-in type aliases: the fixed-width integer spellings. Expanded at
 ;; parse so the kernel only ever sees the (Word W S) former — the corpus
@@ -651,7 +650,7 @@
 (fn word_ty ((w Int) (sgn Symbol)) Type
   (TCon
     (qn (quote Word))
-    (Cons (TCon (qn (sym_of_chars (nat_chars w))) Nil) (Cons (TCon (qn sgn) Nil) Nil))))
+    (Cons (TCon (qn (sym_of_chars (show_nat w))) Nil) (Cons (TCon (qn sgn) Nil) Nil))))
 
 ;; A qualified-path type: `(:: SEG … NAME)` (0-ary; `segs` is the path, no type
 ;; args) or applied `((:: SEG … NAME) A1 …)` (`argforms` the type arguments).
@@ -676,7 +675,7 @@
     ;; substitution treat it like any 0-ary constructor (literals unify
     ;; only with themselves), and tc_ty_wf rejects it anywhere other than
     ;; Word's width slot (no typedef exists for it).
-    ((SInt k) (if (lt k 0) None (Some (TCon (qn (sym_of_chars (nat_chars k))) Nil))))
+    ((SInt k) (if (lt k 0) None (Some (TCon (qn (sym_of_chars (show_nat k))) Nil))))
     ((SList items)
      (match items
        (Nil None)
@@ -1170,7 +1169,7 @@
     ((BVar _) e)
     ((Ctor c args) (Ctor (rhead c env) (resolve_expr_list env args)))
     ((Call f args) (Call (rhead f env) (resolve_expr_list env args)))
-    ((Match s arms) (Match (resolve_expr env s) (resolve_arms env arms)))
+    ((Match s arms) (Match (resolve_expr env s) (resolve_arms_rc env arms)))
     ((Let bs body) (Let (resolve_expr_list env bs) (resolve_expr env body)))
     ((If c th el)
      (If (resolve_expr env c) (resolve_expr env th) (resolve_expr env el)))
@@ -1183,13 +1182,13 @@
     (Nil Nil)
     ((Cons h t) (Cons (resolve_expr env h) (resolve_expr_list env t)))))
 
-(fn resolve_arms
+(fn resolve_arms_rc
   ((env RCtx) (arms (List Arm))) (List Arm)
   (match arms
     (Nil Nil)
     ((Cons (Arm p body) r)
      (Cons (Arm (resolve_pat env p) (resolve_expr env body))
-       (resolve_arms env r)))))
+       (resolve_arms_rc env r)))))
 
 (fn resolve_pat ((env RCtx) (p Pat)) Pat
   (match p
@@ -1812,6 +1811,92 @@
 
 (fn use_forms ((src (List Int))) (List SExpr)
   (match (read_all src) (None Nil) ((Some forms) forms)))
+
+;; ===========================================================================
+;; MODULE-PATH derivation — the loader-assigned, source-unforgeable identity
+;; behind every QName module-path (a `(List Symbol)`, mirroring Rust's module
+;; tree). A source's path becomes its hierarchical id: strip the file suffix (a
+;; `…/mod.req.shard` interface collapses to its module DIRECTORY; a bare
+;; `…/x.shard` file keeps its name), split on '/', and canonicalize `.`/`..`
+;; so the same file reached by different relative paths gets the SAME id. Used
+;; by build_module_d (below) to qualify each definition and reference.
+;; ===========================================================================
+
+;; "/mod.req.shard" — appended to a bare module name to reach its interface.
+(fn mod_req_suffix () (List Int) "/mod.req.shard")
+
+(fn strip_prefix ((pre (List Int)) (xs (List Int))) (Option (List Int))
+  (match pre
+    (Nil (Some xs))
+    ((Cons p pr)
+     (match xs
+       (Nil None)
+       ((Cons x xr) (if (int_eq p x) (strip_prefix pr xr) None))))))
+
+;; rp is the path REVERSED; drop the interface or .shard suffix, still reversed.
+(fn strip_path_suffix ((rp (List Int))) (List Int)
+  (match (strip_prefix (rev_i (mod_req_suffix) Nil) rp)
+    ((Some d) d)
+    (None
+      (match (strip_prefix (rev_i ".shard" Nil) rp)
+        ((Some f) f)
+        (None rp)))))
+
+;; split forward bytes on '/' (47) into segments (cur is the current seg reversed).
+(fn path_segs ((xs (List Int)) (cur (List Int))) (List (List Int))
+  (match xs
+    (Nil (Cons (rev_i cur Nil) Nil))
+    ((Cons c t)
+     (if (int_eq c 47)
+       (Cons (rev_i cur Nil) (path_segs t Nil))
+       (path_segs t (Cons c cur))))))
+
+(fn segs_to_syms ((ss (List (List Int)))) (List Symbol)
+  (match ss
+    (Nil Nil)
+    ((Cons s rest) (Cons (sym_of_chars s) (segs_to_syms rest)))))
+
+(fn rev_sym ((xs (List Symbol)) (acc (List Symbol))) (List Symbol)
+  (match xs
+    (Nil acc)
+    ((Cons h t) (rev_sym t (Cons h acc)))))
+
+;; the `.` and `..` path segments (built from char 46 — `(quote .)` is not a
+;; lexable symbol token).
+(fn dot_sym () Symbol (sym_of_chars (Cons 46 Nil)))
+(fn dotdot_sym () Symbol (sym_of_chars (Cons 46 (Cons 46 Nil))))
+
+;; canonicalize a segment path: `.` drops, `..` pops the previous segment.
+;; acc is newest-first; result is restored to source order.
+(fn canon_push ((seg Symbol) (acc (List Symbol))) (List Symbol)
+  (if (sym_eq seg (dotdot_sym))
+    (match acc (Nil acc) ((Cons _ t) t))
+    (if (sym_eq seg (dot_sym)) acc (Cons seg acc))))
+
+(fn canon_go ((ss (List Symbol)) (acc (List Symbol))) (List Symbol)
+  (match ss
+    (Nil (rev_sym acc Nil))
+    ((Cons s t) (canon_go t (canon_push s acc)))))
+
+;; kernel/stdlib.shard is the SOURCE of the `core` crate — the builtin prelude
+;; types (List/Option/Bool/Pair) and ctors. Like Rust's `core`, its items ARE
+;; core, so its module-path collapses to `core` regardless of the relative
+;; import used to reach it. (The type checker and reducer hardcode `core` for
+;; these builtins; this keeps the module's prelude defs matching them.)
+(fn is_core_path ((segs (List Symbol))) Bool
+  (match segs
+    ((Cons a (Cons b Nil))
+     (if (sym_eq a (quote kernel)) (sym_eq b (quote stdlib)) False))
+    (_ False)))
+
+(fn module_path_of ((path (List Int))) (List Symbol)
+  (let
+    ((segs
+       (canon_go
+         (segs_to_syms
+           (path_segs (rev_i (strip_path_suffix (rev_i path Nil)) Nil) Nil))
+         Nil)))
+    (if (is_core_path segs) (qn_core) segs)))
 
 ;; build_module with diagnosis: same fold, but a failing source is re-scanned
 ;; for a precise message instead of collapsing to None.

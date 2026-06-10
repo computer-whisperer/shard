@@ -65,6 +65,10 @@
 (import "proof.shard")
 (import "lia.shard")
 (import "ord.shard")
+(use (:: kernel term *))
+(use (:: kernel proof *))
+(use (:: kernel lia *))
+(use (:: kernel ord *))
 
 (fn poly_sub ((b Expr) (a Expr)) (List (Pair Int (Option Expr)))
   (lia_concat (lia_collect b 1) (lia_collect a (- 0 1))))
@@ -220,35 +224,56 @@
      (farkas_finish premises prem_mults ng goal_mult)))
     (_ False)))
 
+;; Decode a flat (CInt …) list into native multipliers; any non-int
+;; element rejects the cert.
+(fn cd_ints ((xs (List CData))) (Option (List Int))
+  (match xs
+    (Nil (Some Nil))
+    ((Cons (CInt n) rest)
+     (match (cd_ints rest)
+       ((Some t) (Some (Cons n t)))
+       (None None)))
+    (_ None)))
+
 ;; Single-sided goals — order (lt/le = True) or disequality
 ;; (int_eq = False). Here the negated goal may be an inequality (G
 ;; nonneg) or an equality (G any sign), so the guard is conditional.
+;; payload = (list G M0 M1 …).
 (fn farkas_check_single
-  ((premises (List Equation)) (goal Equation) (payload Expr))
+  ((premises (List Equation)) (goal Equation) (payload CData))
   Bool
   (match payload
-    ((Cons goal_mult prem_mults)
-     (match (neg_goal_poly goal)
-       (None False)  ; not an order/diseq conclusion
-       ((Some (Pair ng goal_needs_nonneg))
-        (if goal_needs_nonneg
-          (if (lt goal_mult 0) False  ; GUARD 1 (inequality negation)
-          (farkas_finish premises prem_mults ng goal_mult))
-          (farkas_finish premises prem_mults ng goal_mult)))))
+    ((CList (Cons (CInt goal_mult) prem_rest))
+     (match (cd_ints prem_rest)
+       (None False)  ; non-int multiplier
+       ((Some prem_mults)
+        (match (neg_goal_poly goal)
+          (None False)  ; not an order/diseq conclusion
+          ((Some (Pair ng goal_needs_nonneg))
+           (if goal_needs_nonneg
+             (if (lt goal_mult 0) False  ; GUARD 1 (inequality negation)
+             (farkas_finish premises prem_mults ng goal_mult))
+             (farkas_finish premises prem_mults ng goal_mult)))))))
     (_ False)))
 
 ;; Equality conclusion (int_eq a b) = True: prove a <= b AND b <= a,
 ;; each a Farkas refutation (¬(a<=b) = a-b-1 >= 0; ¬(b<=a) = b-a-1 >= 0).
 ;; Both holding gives a = b over ℤ. payload = (list le_mults ge_mults).
 (fn farkas_check_eq
-  ((premises (List Equation)) (a Expr) (b Expr) (payload Expr))
+  ((premises (List Equation)) (a Expr) (b Expr) (payload CData))
   Bool
   (match payload
-    ((Cons le_mults (Cons ge_mults _))
-     (if (farkas_refute premises le_mults (poly_minus1 (poly_sub a b)))
-       (farkas_refute premises ge_mults (poly_minus1 (poly_sub b a)))
-       False))
-    (_ False)))  ; payload not a 2-list
+    ((CList (Cons (CList leD) (Cons (CList geD) _)))
+     (match (cd_ints leD)
+       (None False)
+       ((Some le_mults)
+        (match (cd_ints geD)
+          (None False)
+          ((Some ge_mults)
+           (if (farkas_refute premises le_mults (poly_minus1 (poly_sub a b)))
+             (farkas_refute premises ge_mults (poly_minus1 (poly_sub b a)))
+             False))))))
+    (_ False)))  ; payload not a 2-list of lists
 
 ;; Goal is (int_eq a b) = True?  (→ two-sided equality on a, b)
 (fn farkas_is_eq_true_goal ((f QName) (rhs Expr)) Bool

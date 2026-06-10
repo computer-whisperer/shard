@@ -17,6 +17,10 @@
 (import "module.shard")
 (import "proof.shard")
 (import "reader.shard")  ; elaborate / parse_type / SExpr / sym_mem
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel proof *))
+(use (:: kernel reader *))
 
 ;; ---- tiny SExpr destructuring helpers -------------------------------------
 (fn p_sym ((s SExpr)) (Option Symbol)
@@ -207,23 +211,22 @@
 
 ;; ---- cert payload: NATIVE DATA, not an object term ------------------------
 ;; A ByTheory cert's payload is theory-specific DATA the checker reads
-;; directly (e.g. farkas multipliers — (lt goal_mult 0) compares a bare Int),
-;; NOT a reflected object Expr. So `(list 1 1 -2)` must become the native list
-;; (Cons 1 (Cons 1 (Cons -2 Nil))) with BARE Ints — exactly what unreflect_data
-;; produced on the reflected path — not (Cons (IntLit 1) …). Nested lists
-;; (the equality case's (list le_mults ge_mults)) recurse. lia/eqdec/ord use
-;; an empty (list) → Nil.
-(fn p_data ((s SExpr)) Expr
+;; directly (e.g. farkas multipliers), so `(list 1 1 -2)` becomes typed CData:
+;; (CList ((CInt 1) (CInt 1) (CInt -2))). Nested lists (the equality case's
+;; (list le_mults ge_mults)) recurse. lia/eqdec/ord use an empty (list) →
+;; (CList Nil). Anything unrecognized also collapses to (CList Nil) — the
+;; theory decoder rejects wrong shapes.
+(fn p_data ((s SExpr)) CData
   (match s
-    ((SInt n) n)
+    ((SInt n) (CInt n))
     ((SList items)
      (match items
        ((Cons (SSym h) rest)
-        (if (sym_eq h (quote list)) (p_data_list rest) Nil))
-       (_ Nil)))
-    (_ Nil)))
+        (if (sym_eq h (quote list)) (CList (p_data_list rest)) (CList Nil)))
+       (_ (CList Nil))))
+    (_ (CList Nil))))
 
-(fn p_data_list ((items (List SExpr))) Expr
+(fn p_data_list ((items (List SExpr))) (List CData)
   (match items
     (Nil Nil)
     ((Cons h t) (Cons (p_data h) (p_data_list t)))))
