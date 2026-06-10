@@ -187,19 +187,69 @@ static value_t rt_sym_of_chars(value_t l) {
 /* ---- externs (World = preallocated unit cell, threaded for order) -------- */
 static int rt_argc; static char **rt_argv;
 
+/* Strings are (List Int) of Unicode CODEPOINTS, not bytes — the contract set
+   by the Rust engine (eval.rs str_bytes/decode_str): read decodes UTF-8,
+   write re-encodes. Truncating to bytes here mangles any non-ASCII char. */
+static int rt_utf8_decode(const unsigned char *s, size_t n, size_t *i, uint32_t *cp) {
+  /* strict decoder, rejects overlong/surrogate/out-of-range; 0 = malformed */
+  unsigned char b = s[*i]; uint32_t c; int len;
+  if (b < 0x80) { c = b; len = 1; }
+  else if ((b & 0xE0) == 0xC0) { c = b & 0x1F; len = 2; }
+  else if ((b & 0xF0) == 0xE0) { c = b & 0x0F; len = 3; }
+  else if ((b & 0xF8) == 0xF0) { c = b & 0x07; len = 4; }
+  else return 0;
+  if (*i + (size_t)len > n) return 0;
+  for (int k = 1; k < len; k++) {
+    unsigned char cb = s[*i + (size_t)k];
+    if ((cb & 0xC0) != 0x80) return 0;
+    c = (c << 6) | (uint32_t)(cb & 0x3F);
+  }
+  if (len == 2 && c < 0x80) return 0;
+  if (len == 3 && c < 0x800) return 0;
+  if (len == 4 && c < 0x10000) return 0;
+  if (c >= 0xD800 && c <= 0xDFFF) return 0;
+  if (c > 0x10FFFF) return 0;
+  *i += (size_t)len; *cp = c; return 1;
+}
+static size_t rt_utf8_encode(uint32_t c, char *out) {
+  if (c < 0x80) { out[0] = (char)c; return 1; }
+  if (c < 0x800) {
+    out[0] = (char)(0xC0 | (c >> 6)); out[1] = (char)(0x80 | (c & 0x3F)); return 2;
+  }
+  if (c < 0x10000) {
+    if (c >= 0xD800 && c <= 0xDFFF) return 0;
+    out[0] = (char)(0xE0 | (c >> 12)); out[1] = (char)(0x80 | ((c >> 6) & 0x3F));
+    out[2] = (char)(0x80 | (c & 0x3F)); return 3;
+  }
+  if (c <= 0x10FFFF) {
+    out[0] = (char)(0xF0 | (c >> 18)); out[1] = (char)(0x80 | ((c >> 12) & 0x3F));
+    out[2] = (char)(0x80 | ((c >> 6) & 0x3F)); out[3] = (char)(0x80 | (c & 0x3F)); return 4;
+  }
+  return 0; /* invalid codepoint: skipped, like decode_str's from_u32 filter */
+}
 static value_t rt_str_list(const char *s) {
-  size_t len = strlen(s); value_t acc = rt_nil_;
-  for (int64_t i = (int64_t)len - 1; i >= 0; i--)
-    acc = rt_cons(rt_tag_int((unsigned char)s[i]), acc);
+  /* argv -> codepoints; a malformed byte passes through raw (argv is ASCII
+     in practice; the Rust engine would have refused the process args). */
+  size_t len = strlen(s); const unsigned char *us = (const unsigned char *)s;
+  /* collect codepoints forward, then build the list backward */
+  uint32_t *cps = malloc(len * sizeof(uint32_t)); size_t ncp = 0, i = 0;
+  while (i < len) {
+    uint32_t cp;
+    if (rt_utf8_decode(us, len, &i, &cp)) cps[ncp++] = cp;
+    else cps[ncp++] = us[i++];
+  }
+  value_t acc = rt_nil_;
+  for (size_t k = ncp; k > 0; k--) acc = rt_cons(rt_tag_int(cps[k-1]), acc);
+  free(cps);
   return acc;
 }
 static char *rt_cstr(value_t l, size_t *lenp) {
   size_t n = 0;
   for (value_t p = l; rt_tag(p) == RT_TAG_Cons; p = rt_field(p, 1)) n++;
-  char *buf = malloc(n + 1); size_t i = 0;
+  char *buf = malloc(4 * n + 1); size_t i = 0;
   for (value_t p = l; rt_tag(p) == RT_TAG_Cons; p = rt_field(p, 1))
-    buf[i++] = (char)rt_untag(rt_field(p, 0));
-  buf[n] = 0; if (lenp) *lenp = n;
+    i += rt_utf8_encode((uint32_t)rt_untag(rt_field(p, 0)), buf + i);
+  buf[i] = 0; if (lenp) *lenp = i;
   return buf;
 }
 static value_t rt_pair(value_t a, value_t b) {
@@ -226,9 +276,20 @@ static value_t rt_read_file(value_t path, value_t w) {
   char *buf = malloc((size_t)sz);
   if (sz > 0 && fread(buf, 1, (size_t)sz, f) != (size_t)sz) { fclose(f); free(buf); return rt_pair(rt_none_, w); }
   fclose(f);
-  value_t acc = rt_nil_;
-  for (long i = sz - 1; i >= 0; i--) acc = rt_cons(rt_tag_int((unsigned char)buf[i]), acc);
+  /* decode UTF-8 -> codepoints; malformed input is None, mirroring the Rust
+     engine's read_to_string (which errors on invalid UTF-8). */
+  uint32_t *cps = malloc((size_t)sz * sizeof(uint32_t)); size_t ncp = 0, i = 0;
+  while (i < (size_t)sz) {
+    uint32_t cp;
+    if (!rt_utf8_decode((const unsigned char *)buf, (size_t)sz, &i, &cp)) {
+      free(buf); free(cps); return rt_pair(rt_none_, w);
+    }
+    cps[ncp++] = cp;
+  }
   free(buf);
+  value_t acc = rt_nil_;
+  for (size_t k = ncp; k > 0; k--) acc = rt_cons(rt_tag_int(cps[k-1]), acc);
+  free(cps);
   return rt_pair(rt_some(acc), w);
 }
 static value_t rt_write(value_t s, value_t w) {
