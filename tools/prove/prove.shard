@@ -2,10 +2,11 @@
 ;;;
 ;;; The first consumer of the kernel-as-library surface: it imports the
 ;;; checker toolchain as ordinary modules and drives it IN-PROCESS — no
-;;; subprocess. The target module is built ONCE; per decl the theory is
-;;; prebuilt once (theory_upto); each candidate is then a direct
-;;; check_sequent, and only a WINNER pays a full focused driver pass (the
-;;; verification). For every `auto` claim/fulfills in the target file it
+;;; subprocess. The target module is built ONCE; ONE RunState is threaded
+;;; through the run in file order (theory_base_st + theory_step), so the
+;;; theory each decl searches against costs only the decls since the
+;;; previous one; each candidate is then a direct check_sequent, and only a
+;;; WINNER pays a full focused driver pass (the verification). For every `auto` claim/fulfills in the target file it
 ;;; searches for a proof and persists the winners into the file's
 ;;; `<file>.auto.shard` via write_file.
 ;;;
@@ -66,13 +67,19 @@
 (use (:: kernel reader SList))
 (use (:: kernel reader RCtx))
 (use (:: kernel reader read_all))
+(use (:: kernel reader parse_decls))
+(use (:: kernel reader Decl))
 (use (:: kernel reader build_module_d))
 (use (:: kernel reader BMOk))
 (use (:: kernel reader BMFail))
 (use (:: kernel reader typedef_ctors))
 (use (:: kernel reader module_typedefs))
 (use (:: kernel driver check_production))
-(use (:: kernel driver theory_upto))
+(use (:: kernel driver theory_base_st))
+(use (:: kernel driver theory_step))
+(use (:: kernel driver decls_split))
+(use (:: kernel driver rs_theory))
+(use (:: kernel driver RunState))
 (use (:: kernel driver prelude_ctors))
 (use (:: kernel driver is_auto_proof))
 (use (:: kernel driver autos_of_forms))
@@ -272,6 +279,13 @@
     ((Cons (SrcEntry p _ s) rest)
      (if (int_list_eq path p) (Some s) (src_of path rest)))))
 
+;; … and its granted-trust flag (parse_decls needs it).
+(fn granted_of ((path (List Int)) (srcs (List SrcEntry))) Bool
+  (match srcs
+    (Nil False)
+    ((Cons (SrcEntry p g _) rest)
+     (if (int_list_eq path p) g (granted_of path rest)))))
+
 ;; ---- one focused in-process attempt (whole-file driver pass) ---------------
 (fn outcome_of ((cn Symbol) (os (List ClaimOutcome))) (Option Bool)
   (match os
@@ -298,13 +312,6 @@
 (fn slv_rctx ((s Slv)) RCtx
   (match s
     ((Slv _ _ _ _ r) r)))
-
-;; the theory as a real check pass would have it just before NAME — the
-;; citation vocabulary for candidates, prebuilt ONCE per decl (no proof on
-;; the way is checked; a candidate citing a broken lemma fails verify).
-(fn theory_at ((s Slv) (name Symbol)) Theory
-  (match s
-    ((Slv m srcs ctors pathkey _) (theory_upto m srcs ctors pathkey name))))
 
 ;; does CANDIDATE close NAME? One focus-mode driver pass with the candidate
 ;; spliced in as a synthetic sidecar entry — the full real pipeline (theory,
@@ -495,8 +502,8 @@
      (Cons (st_unfold f side) (Cons (st_reduce side) (chain_steps rest side))))))
 
 ;; lemma-rewrite step: (rewrite (lemma L) DIR SIDE true ()) — citations into
-;; the decl's prebuilt theory (theory_at), by display name (Stage 4 will
-;; qualify them).
+;; the theory as it stands before the decl (the threaded RunState), by
+;; display name (Stage 4 will qualify them).
 (fn st_rw_lemma ((lname (List Int)) (dir (List Int)) (side (List Int)))
   (List Int)
   (append_int
@@ -1196,7 +1203,9 @@
          (if (attempt s name c) (Some c) (try_induct_vars s th name seq)))
         (None (try_induct_vars s th name seq))))))
 
-(fn solve_one ((s Slv) (d AutoDecl)) Solved
+;; `th` is the theory as it stands just before the decl — handed down from
+;; the RunState solve_all threads through the run.
+(fn solve_one ((s Slv) (th Theory) (d AutoDecl)) Solved
   (match d
     ((AutoDecl name hints mgoal)
      (match mgoal
@@ -1211,14 +1220,28 @@
         (match (parse_goal_r (slv_m s) (slv_rctx s) goalS)
           (None (SolvedN name))  ; malformed goal — the real pass reports it
           ((Some g)
-           (match (solve_seq s (theory_at s name) name (lift_sequent g) hints)
+           (match (solve_seq s th name (lift_sequent g) hints)
              ((Some c) (SolvedY name c))
              (None (SolvedN name))))))))))
 
-(fn solve_all ((s Slv) (ds (List AutoDecl))) (List Solved)
+;; ONE RunState threaded through the run in file order (`pend` = target
+;; decls not yet admitted): before each decl the state advances (proofs
+;; skipped) over the decls since the previous one, so solving N decls is a
+;; single O(N) walk instead of N prefix rebuilds. `ds` is in file order
+;; (auto_decls / missing_decls preserve it).
+(fn solve_all
+  ((s Slv) (st RunState) (pend (List Decl)) (ds (List AutoDecl)))
+  (List Solved)
   (match ds
     (Nil Nil)
-    ((Cons d rest) (Cons (solve_one s d) (solve_all s rest)))))
+    ((Cons d rest)
+     (match (decls_split pend (decl_name d))
+       ((Pair before after)
+        (match (theory_step (slv_rctx s) (slv_m s) st before)
+          (st1
+            (Cons
+              (solve_one s (rs_theory st1) d)
+              (solve_all s st1 after rest)))))))))
 
 (fn won_names ((rs (List Solved))) (List Symbol)
   (match rs
@@ -1326,14 +1349,18 @@
   (match (build_module_d srcs (Module Nil Nil Nil (FnTrie None Nil)) (prelude_ctors) 1)
     ((BMFail diag) (fail2 diag w))
     ((BMOk m)
+     (match (typedef_ctors (module_typedefs m))
+       (ctors
+     (match (sym_of_chars target)
+       (tkey
+     (match (parse_decls tsrc ctors (granted_of target srcs))
+       (None (fail2 "target does not parse (decl phase)" w))
+       ((Some tds)
      (match
        (solve_all
-         (Slv
-           m
-           srcs
-           (typedef_ctors (module_typedefs m))
-           (sym_of_chars target)
-           (file_rctx m target tsrc))
+         (Slv m srcs ctors tkey (file_rctx m target tsrc))
+         (theory_base_st m srcs ctors tkey)
+         tds
          todo)
        (rs
          (match (won_names rs)
@@ -1360,7 +1387,7 @@
                       w1))
                   (fail2
                     (append_int "cannot write " (auto_path_of target))
-                    w1)))))))))))
+                    w1)))))))))))))))))
 
 ;; decls to solve for a whole-file run: auto decls LACKING a sidecar entry.
 (fn missing_decls

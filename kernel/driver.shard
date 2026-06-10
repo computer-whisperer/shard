@@ -831,73 +831,71 @@
           (+ k 1)))))))
 
 ;; ---------------------------------------------------------------------------
-;; theory_upto — the theory as it stands just BEFORE decl NAME in the source
+;; solver theory walk — the theory as a real check pass would have it, built
+;; INCREMENTALLY: theory_base_st admits the whole closure BEFORE the file
 ;; keyed `tkey` (sym_of_chars of its path — the driver compares paths as
-;; symbols). The walk is run_decls itself with an always-skipping focus, so
-;; every goal on the way is admitted exactly as focus mode would admit it and
-;; NO proof is checked. This is an offline SOLVER aid (tools/prove): it bounds
-;; the citation vocabulary a candidate may use to what a real check pass would
-;; resolve at that point. check never calls it — a candidate citing an
-;; admitted-but-broken lemma still fails the real pass.
+;; symbols); theory_step then advances the state over decl slices of that
+;; file in order. A caller solving N decls threads ONE RunState through its
+;; loop — one O(N) walk, not N prefix rebuilds. The walk is run_decls itself
+;; with an always-skipping focus, so every goal on the way is admitted
+;; exactly as focus mode would admit it and NO proof is checked. This is an
+;; offline SOLVER aid (tools/prove): it bounds the citation vocabulary a
+;; candidate may use to what a real check pass would resolve at that point.
+;; check never calls it — a candidate citing an admitted-but-broken lemma
+;; still fails the real pass.
 ;; ---------------------------------------------------------------------------
-(fn decls_before ((ds (List Decl)) (name Symbol)) (List Decl)
+(fn decl_named ((d Decl) (name Symbol)) Bool
+  (match d
+    ((DClaim nc) (sym_eq (claim_name nc) name))
+    ((DFul fu) (sym_eq (ful_name fu) name))
+    (_ False)))
+
+;; split DS at the decl named NAME: (Pair before from-NAME-on).
+;; NAME absent → (Pair ds Nil).
+(fn decls_split
+  ((ds (List Decl)) (name Symbol))
+  (Pair (List Decl) (List Decl))
   (match ds
-    (Nil Nil)
+    (Nil (Pair Nil Nil))
     ((Cons d rest)
-     (match d
-       ((DClaim nc)
-        (if (sym_eq (claim_name nc) name)
-          Nil
-          (Cons d (decls_before rest name))))
-       ((DFul fu)
-        (if (sym_eq (ful_name fu) name)
-          Nil
-          (Cons d (decls_before rest name))))
-       (_ (Cons d (decls_before rest name)))))))
+     (if (decl_named d name)
+       (Pair Nil (Cons d rest))
+       (match (decls_split rest name)
+         ((Pair before after) (Pair (Cons d before) after)))))))
 
 (fn rs_theory ((st RunState)) Theory
   (match st
     ((RunState th _ _ _) th)))
 
-(fn theory_upto_st
+;; advance ST over decl slice DS of the file whose resolution context is
+;; `gctx`, proofs skipped.
+(fn theory_step ((gctx RCtx) (m Module) (st RunState) (ds (List Decl)))
+  RunState
+  (run_decls gctx Nil m st ds (quote __no_trace__) (quote __theory_walk__)))
+
+(fn theory_base_go
   ((m Module)
    (srcs (List SrcEntry))
    (ctors (List Symbol))
    (tkey Symbol)
-   (name Symbol)
    (st RunState))
   RunState
   (match srcs
     (Nil st)
     ((Cons (SrcEntry path granted src) rest)
-     (match (parse_decls src ctors granted)
-       (None st)  ; malformed source: stop — the real pass reports it loudly
-       ((Some ds)
-        (if (sym_eq (sym_of_chars path) tkey)
-          (run_decls
-            (file_rctx m path src)
-            Nil
-            m st (decls_before ds name)
-            (quote __no_trace__)
-            (quote __theory_upto__))
-          (theory_upto_st
-            m rest ctors tkey name
-            (run_decls
-              (file_rctx m path src)
-              Nil
-              m st ds
-              (quote __no_trace__)
-              (quote __theory_upto__)))))))))
+     (if (sym_eq (sym_of_chars path) tkey)
+       st
+       (match (parse_decls src ctors granted)
+         (None st)  ; malformed source: stop — the real pass reports it loudly
+         ((Some ds)
+          (theory_base_go
+            m rest ctors tkey
+            (theory_step (file_rctx m path src) m st ds))))))))
 
-(fn theory_upto
-  ((m Module)
-   (srcs (List SrcEntry))
-   (ctors (List Symbol))
-   (tkey Symbol)
-   (name Symbol))
-  Theory
-  (rs_theory
-    (theory_upto_st m srcs ctors tkey name (RunState TheoryEmpty Nil Nil Nil))))
+(fn theory_base_st
+  ((m Module) (srcs (List SrcEntry)) (ctors (List Symbol)) (tkey Symbol))
+  RunState
+  (theory_base_go m srcs ctors tkey (RunState TheoryEmpty Nil Nil Nil)))
 
 ;; ---- bin acceptance reporting ---------------------------------------------
 ;; A `(bin …)` groups requirement names into an artifact's acceptance contract.
