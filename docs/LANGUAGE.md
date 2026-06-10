@@ -458,7 +458,8 @@ failure (`examples/auto_missing_rejects.shard` pins this; the demo is
 
 The solver (`tools/prove`) understands these hints, all optional
 accelerators — bare `auto` searches unhinted (flat closers, theory
-backends, farkas certificate enumeration for premised goals, lemma
+backends, farkas certificate search for premised goals (single- and
+two-sided, weight-ordered so the first hit is a minimal cert), lemma
 rewrites over earlier theory entries, structural induction on each goal
 parameter):
 
@@ -573,13 +574,17 @@ procedure. Four are registered (`kernel/checker.shard`):
 | `lia`    | linear-integer identities (normalize both sides; lhs−rhs ≡ 0)     | `(list)` — unused |
 | `eqdec`  | `(int_eq a b) = True` / `(sym_eq a b) = True` reflexivity facts   | `(list)` — unused |
 | `ord`    | `(lt a b) = True` / `(le a b) = True` when `b−a` is a constant    | `(list)` — unused |
-| `farkas` | linear-integer **entailment**: premises ⊢ `(lt|le a b) = True`    | Farkas cert (below) |
+| `farkas` | linear-integer **entailment**: premises ⊢ `(lt|le a b) = True`, `(int_eq a b) = True/False`, or a plain `L = R` | Farkas cert (below) |
 
-Only `farkas` reads its payload. The payload is **native data** read
-directly by the checker, *not* an object-term snippet: `(list 1 1 -2)`
-becomes the native list of bare `Int`s `(Cons 1 (Cons 1 (Cons -2 Nil)))`
-(the equality case nests two lists, `(list le_mults ge_mults)`). The
-other three take an empty `(list)`.
+Only `farkas` reads its payload. The payload is **checker data**, *not*
+an object-term snippet: `(list 1 1 -2)` parses into the kernel's small
+cert grammar (`CData` — ints and nested lists), and each theory decodes
+the shape it expects. A single-sided cert is `(list G M0 M1 …)` — `G`
+multiplies the negated goal, `Mk` premise `k`; an equality conclusion
+(`int_eq…=True` or plain `L = R`) takes the two-sided
+`(list le_mults ge_mults)`, two independent refutations. Inequality
+premises take nonnegative multipliers; equality premises take either
+sign. The other three theories take an empty `(list)`.
 
 ### 10.8 Object-snippet sugars
 

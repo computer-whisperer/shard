@@ -44,6 +44,7 @@
 (import "../../kernel/term.shard")  ; Expr / QName / chars_of_sym
 (import "../../kernel/proof.shard")  ; Goal / Equation / Param
 (import "../../kernel/types.shard")  ; tc_scrut_targs (the case-on type gate)
+(import "../../kernel/farkas.shard")  ; farkas_finish / neg_goal_poly (cert search)
 (import "../../kernel/checker.shard")  ; check_sequent / build_induct_subgoal
 (import "../../kernel/reader.shard")  ; read_all / SExpr / RCtx / build_module_d
 
@@ -91,6 +92,14 @@
 (use (:: kernel checker inst_ctor_fields))
 (use (:: kernel types tc_scrut_targs))
 (use (:: kernel checker find_param))
+(use (:: kernel farkas farkas_finish))
+(use (:: kernel farkas farkas_refute))
+(use (:: kernel farkas neg_goal_poly))
+(use (:: kernel farkas premise_to_constraint))
+(use (:: kernel farkas poly_sub))
+(use (:: kernel farkas poly_minus1))
+(use (:: kernel farkas farkas_is_eq_true_goal))
+(use (:: kernel farkas farkas_is_single_goal))
 (use (:: kernel checker seq_params))
 (use (:: kernel proof Theory))
 (use (:: kernel proof TheoryEmpty))
@@ -951,54 +960,205 @@
            (lemma_names th (seq_qheads seq (slv_m s)) (slv_m s) 8)))
        (farkas_cands seq)))))
 
-;; ---- farkas certificate enumeration ------------------------------------------
-;; (by farkas (list G M0 … Mk)): G multiplies the negated goal, Mk premise k.
-;; FINDING multipliers is exactly the untrusted proposer's job, and the
-;; simple entailments (loop invariants: p<i ⊢ p<i+1) need only small ones —
-;; enumerate G in {1,2}, Mk in {0,1,2}. Only emitted when the sequent HAS
-;; premises (the tautology backends already cover premise-free goals) and at
-;; most 5 of them (3^k certs). int_eq=True conclusions (two-sided certs) are
-;; not yet attempted.
-(fn fk3 ((rests (List (List Int)))) (List (List Int))
-  (match rests
+;; ---- farkas certificate search ---------------------------------------------
+;; (by farkas …) closes ENTAILMENTS (premised linear-int goals). FINDING the
+;; multipliers is exactly the untrusted proposer's job: the solver tests
+;; candidate vectors DIRECTLY against the kernel's own farkas math
+;; (farkas_finish / farkas_refute — coverage only, never soundness; a winner
+;; still replays through the full untrusted parse/check path), enumerated in
+;; order of total |weight| so the first hit is a minimal certificate. The
+;; sign discipline comes from the kernel's own constraint classes: an
+;; inequality premise takes nonneg multipliers only, an equality premise
+;; either sign, an uninterpretable premise only 0 — so the signed space
+;; stays small. Goal shapes (mirroring farkas_check's dispatch):
+;;   (lt|le)=True / int_eq=False  → single-sided  (list G M0 … Mk)
+;;   int_eq=True / plain L = R    → two-sided     (list (list …) (list …))
+;;     — two INDEPENDENT refutations (¬(a<=b), ¬(b<=a)), searched separately.
+
+;; slot sign-class: 1 = nonneg-only, 2 = any-sign, 0 = zero-only.
+(fn fkv_pclasses ((prems (List Equation))) (List Int)
+  (match prems
     (Nil Nil)
-    ((Cons r more)
-     (Cons (append_int " 0" r)
-     (Cons (append_int " 1" r)
-     (Cons (append_int " 2" r)
-       (fk3 more)))))))
+    ((Cons p rest)
+     (Cons
+       (match (premise_to_constraint p)
+         (None 0)
+         ((Some (Pair _ needs_nonneg)) (if needs_nonneg 1 2)))
+       (fkv_pclasses rest)))))
 
-(fn fk_tails ((p Int)) (List (List Int))
-  (if (lt p 1)
-    (Cons "" Nil)
-    (fk3 (fk_tails (- p 1)))))
+;; the signed values of magnitude m a slot of class c may take.
+(fn fkv_vals ((c Int) (m Int)) (List Int)
+  (if (int_eq m 0) (Cons 0 Nil)
+  (if (int_eq c 0) Nil
+  (if (int_eq c 1) (Cons m Nil)
+  (Cons m (Cons (- 0 m) Nil))))))
 
-(fn fk_wrap ((g (List Int)) (tails (List (List Int)))) (List (List Int))
+(fn fkv_cons_each ((v Int) (tails (List (List Int)))) (List (List Int))
   (match tails
     (Nil Nil)
-    ((Cons t rest)
-     (Cons
-       (append_int "(by farkas (list " (append_int g (append_int t "))")))
-       (fk_wrap g rest)))))
+    ((Cons t rest) (Cons (Cons v t) (fkv_cons_each v rest)))))
+
+(fn fkv_cross ((vs (List Int)) (tails (List (List Int)))) (List (List Int))
+  (match vs
+    (Nil Nil)
+    ((Cons v more)
+     (append_cands (fkv_cons_each v tails) (fkv_cross more tails)))))
+
+;; all multiplier vectors over `slots` with total magnitude EXACTLY s
+;; (mutually recursive with fkv_slot, which walks one slot's magnitudes).
+(fn fkv_enum ((slots (List Int)) (s Int)) (List (List Int))
+  (match slots
+    (Nil (if (int_eq s 0) (Cons Nil Nil) Nil))
+    ((Cons c rest) (fkv_slot c 0 s rest))))
+
+(fn fkv_slot ((c Int) (m Int) (s Int) (rest (List Int))) (List (List Int))
+  (if (lt s m)
+    Nil
+    (append_cands
+      (fkv_cross (fkv_vals c m) (fkv_enum rest (- s m)))
+      (fkv_slot c (+ m 1) s rest))))
+
+;; first vector whose single-sided combination contradicts (v = (G M0 …)).
+(fn fk_hit_single
+  ((prems (List Equation))
+   (ng (List (Pair Int (Option Expr))))
+   (vecs (List (List Int))))
+  (Option (List Int))
+  (match vecs
+    (Nil None)
+    ((Cons v rest)
+     (match v
+       ((Cons g ms)
+        (if (farkas_finish prems ms ng g) (Some v) (fk_hit_single prems ng rest)))
+       (_ (fk_hit_single prems ng rest))))))
+
+;; first vector farkas_refute accepts (a two-sided cert's half).
+(fn fk_hit_refute
+  ((prems (List Equation))
+   (ng (List (Pair Int (Option Expr))))
+   (vecs (List (List Int))))
+  (Option (List Int))
+  (match vecs
+    (Nil None)
+    ((Cons v rest)
+     (if (farkas_refute prems v ng) (Some v) (fk_hit_refute prems ng rest)))))
+
+(fn fk_scan_single
+  ((prems (List Equation))
+   (ng (List (Pair Int (Option Expr))))
+   (slots (List Int))
+   (s Int)
+   (smax Int))
+  (Option (List Int))
+  (if (lt smax s)
+    None
+    (match (fk_hit_single prems ng (fkv_enum slots s))
+      ((Some v) (Some v))
+      (None (fk_scan_single prems ng slots (+ s 1) smax)))))
+
+(fn fk_scan_refute
+  ((prems (List Equation))
+   (ng (List (Pair Int (Option Expr))))
+   (slots (List Int))
+   (s Int)
+   (smax Int))
+  (Option (List Int))
+  (if (lt smax s)
+    None
+    (match (fk_hit_refute prems ng (fkv_enum slots s))
+      ((Some v) (Some v))
+      (None (fk_scan_refute prems ng slots (+ s 1) smax)))))
+
+;; weight cap, scaled down as premises (slots) grow — the vector count at a
+;; given total weight is combinatorial in the slot count.
+(fn fk_smax ((p Int)) Int
+  (if (lt p 3) 8 (if (lt p 5) 6 4)))
+
+(fn fk_show_vec ((v (List Int))) (List Int)  ; "1 -1 2"
+  (match v
+    (Nil Nil)
+    ((Cons x rest)
+     (match rest
+       (Nil (show_int x))
+       (_ (append_int (show_int x) (Cons 32 (fk_show_vec rest))))))))
+
+;; single-sided: G's sign regime comes from the negated goal's class.
+(fn fk_single
+  ((prems (List Equation)) (goal Equation) (slots_p (List Int)) (p Int))
+  (Option (List Int))
+  (match (neg_goal_poly goal)
+    (None None)
+    ((Some (Pair ng needs_nonneg))
+     (match
+       (fk_scan_single
+         prems ng (Cons (if needs_nonneg 1 2) slots_p) 1 (fk_smax p))
+       (None None)
+       ((Some v)
+        (Some
+          (append_int
+            "(by farkas (list "
+            (append_int (fk_show_vec v) "))"))))))))
+
+;; two-sided: refute ¬(a<=b) and ¬(b<=a) independently; both must close.
+(fn fk_two_sided
+  ((prems (List Equation)) (a Expr) (b Expr) (slots_p (List Int)) (p Int))
+  (Option (List Int))
+  (match
+    (fk_scan_refute
+      prems (poly_minus1 (poly_sub a b)) (Cons 1 slots_p) 1 (fk_smax p))
+    (None None)
+    ((Some le_v)
+     (match
+       (fk_scan_refute
+         prems (poly_minus1 (poly_sub b a)) (Cons 1 slots_p) 1 (fk_smax p))
+       (None None)
+       ((Some ge_v)
+        (Some
+          (append_int
+            "(by farkas (list (list "
+            (append_int
+              (fk_show_vec le_v)
+              (append_int
+                ") (list "
+                (append_int (fk_show_vec ge_v) ")))"))))))))))
 
 (fn eq_count ((es (List Equation))) Int
   (match es
     (Nil 0)
     ((Cons _ rest) (+ 1 (eq_count rest)))))
 
-(fn seq_prem_count ((seq Sequent)) Int
+(fn seq_premises ((seq Sequent)) (List Equation)
   (match seq
-    ((Sequent _ _ prems _) (eq_count prems))))
+    ((Sequent _ _ prems _) prems)))
+
+;; goal-shape dispatch (mirrors farkas_check): pick single- or two-sided
+;; search. Only premised sequents (the tautology backends cover the rest).
+(fn farkas_solve ((seq Sequent)) (Option (List Int))
+  (let ((prems (seq_premises seq)))
+    (let ((p (eq_count prems)))
+      (if (lt p 1)
+        None
+      (if (lt 6 p)
+        None
+        (match (seq_equation seq)
+          ((Equation lhs rhs)
+           (let ((slots_p (fkv_pclasses prems)))
+             (match lhs
+               ((Call f args)
+                (match args
+                  ((Cons a (Cons b Nil))
+                   (if (farkas_is_eq_true_goal f rhs)
+                     (fk_two_sided prems a b slots_p p)
+                   (if (farkas_is_single_goal f rhs)
+                     (fk_single prems (Equation lhs rhs) slots_p p)
+                     (fk_two_sided prems lhs rhs slots_p p))))
+                  (_ (fk_two_sided prems lhs rhs slots_p p))))
+               (_ (fk_two_sided prems lhs rhs slots_p p)))))))))))
 
 (fn farkas_cands ((seq Sequent)) (List (List Int))
-  (let ((p (seq_prem_count seq)))
-    (if (lt p 1)
-      Nil
-      (if (lt 5 p)
-        Nil
-        (match (fk_tails p)
-          (tails
-            (append_cands (fk_wrap "1" tails) (fk_wrap "2" tails))))))))
+  (match (farkas_solve seq)
+    (None Nil)
+    ((Some c) (Cons c Nil))))
 
 ;; the flat (no-induction) candidate set for a goal: the same generated
 ;; ladder a case gets — unfold chains over the goal's own heads plus lemma
