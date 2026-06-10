@@ -730,16 +730,20 @@
                   vt
                   (zip_pairs tparams targs)
                   tctors
-                  (case_ladder
-                    lh
-                    rh
-                    (ih_tails)
-                    (lemma_steps
-                      (lemma_names
-                        th
-                        (goal_qheads g (slv_m s))
-                        (slv_m s)
-                        8))))
+                  (append_cands
+                    (case_ladder
+                      lh
+                      rh
+                      (ih_tails)
+                      (lemma_steps
+                        (lemma_names
+                          th
+                          (goal_qheads g (slv_m s))
+                          (slv_m s)
+                          8)))
+                    ;; premise counts survive the case substitution, so the
+                    ;; top sequent's farkas certs fit every case subgoal.
+                    (farkas_cands seq)))
                 (None None)
                 ((Some cs)
                  (let ((cand (assemble_induct v cs)))
@@ -773,6 +777,55 @@
   (Option (List Int))
   (try_induct_each s th name seq g (param_syms (seq_params seq))))
 
+;; ---- farkas certificate enumeration ------------------------------------------
+;; (by farkas (list G M0 … Mk)): G multiplies the negated goal, Mk premise k.
+;; FINDING multipliers is exactly the untrusted proposer's job, and the
+;; simple entailments (loop invariants: p<i ⊢ p<i+1) need only small ones —
+;; enumerate G in {1,2}, Mk in {0,1,2}. Only emitted when the sequent HAS
+;; premises (the tautology backends already cover premise-free goals) and at
+;; most 5 of them (3^k certs). int_eq=True conclusions (two-sided certs) are
+;; not yet attempted.
+(fn fk3 ((rests (List (List Int)))) (List (List Int))
+  (match rests
+    (Nil Nil)
+    ((Cons r more)
+     (Cons (append_int " 0" r)
+     (Cons (append_int " 1" r)
+     (Cons (append_int " 2" r)
+       (fk3 more)))))))
+
+(fn fk_tails ((p Int)) (List (List Int))
+  (if (lt p 1)
+    (Cons "" Nil)
+    (fk3 (fk_tails (- p 1)))))
+
+(fn fk_wrap ((g (List Int)) (tails (List (List Int)))) (List (List Int))
+  (match tails
+    (Nil Nil)
+    ((Cons t rest)
+     (Cons
+       (append_int "(by farkas (list " (append_int g (append_int t "))")))
+       (fk_wrap g rest)))))
+
+(fn eq_count ((es (List Equation))) Int
+  (match es
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (eq_count rest)))))
+
+(fn seq_prem_count ((seq Sequent)) Int
+  (match seq
+    ((Sequent _ _ prems _) (eq_count prems))))
+
+(fn farkas_cands ((seq Sequent)) (List (List Int))
+  (let ((p (seq_prem_count seq)))
+    (if (lt p 1)
+      Nil
+      (if (lt 5 p)
+        Nil
+        (match (fk_tails p)
+          (tails
+            (append_cands (fk_wrap "1" tails) (fk_wrap "2" tails))))))))
+
 ;; the flat (no-induction) candidate set for a goal: the same generated
 ;; ladder a case gets — unfold chains over the goal's own heads plus lemma
 ;; rewrite tails — minus the IH tails (no hypotheses at top level).
@@ -799,7 +852,12 @@
       ((HNone) None))
     ((Some c) (Some c))
     (None
-      (match (try_ladder s th seq (flat_cands s th g))
+      (match
+        (try_ladder
+          s
+          th
+          seq
+          (append_cands (flat_cands s th g) (farkas_cands seq)))
         ((Some c)
          (if (attempt s name c) (Some c) (try_induct_vars s th name seq g)))
         (None (try_induct_vars s th name seq g))))))
