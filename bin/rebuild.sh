@@ -28,3 +28,12 @@ build() {
 build kernel/eval.shard bin/shard_eval
 bin/engine_stamp.sh > bin/shard_eval.stamp
 echo "OK: bin/shard_eval (stamp $(cat bin/shard_eval.stamp | cut -c1-12))"
+
+# `bin/rebuild.sh check` additionally builds the DIRECT-compiled checker
+# (gate_sweep's fastest engine: ~0.2s/155MB vs ~minutes/40GB interpreting).
+# check.shard's closure is much bigger than eval.shard's: ~1h total.
+if [ "${1:-}" = check ]; then
+  build kernel/check.shard bin/shard_check
+  bin/engine_stamp.sh > bin/shard_check.stamp
+  echo "OK: bin/shard_check (stamp $(cat bin/shard_check.stamp | cut -c1-12))"
+fi

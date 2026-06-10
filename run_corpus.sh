@@ -5,12 +5,18 @@
 # buffered and emitted in list order, so output stays byte-diffable with any
 # serial run.
 set -u
-# Engine selection: native binary (bin/rebuild.sh) when present, else the Rust
-# interpreter. EVAL env overrides. The native engine is the DEV loop only --
+# Engine selection, fastest fresh option first (see gate_sweep.sh):
+# direct-compiled bin/shard_check (stamp-fresh only) > bin/shard_eval
+# interpreting kernel/check.shard > Rust interpreter. EVAL env overrides with
+# the interpreter command shape. The native chain is the DEV loop only --
 # soundness-authority runs (pre-commit corpus diff, ledger, sidecar replay)
 # use EVAL=./rust_bootstrap/target/release/eval explicitly.
+CHECK_CMD=()
 if [ -z "${EVAL:-}" ]; then
-  if [ -x bin/shard_eval ]; then
+  if [ -x bin/shard_check ] && [ "$(bin/engine_stamp.sh)" = "$(cat bin/shard_check.stamp 2>/dev/null)" ]; then
+    CHECK_CMD=(bin/shard_check)
+  elif [ -x bin/shard_eval ]; then
+    [ -x bin/shard_check ] && echo "NOTE: bin/shard_check is STALE -- bin/rebuild.sh check (~1h) re-enables the fast sweep" >&2
     EVAL=bin/shard_eval
     if [ "$(bin/engine_stamp.sh)" != "$(cat bin/shard_eval.stamp 2>/dev/null)" ]; then
       echo "WARNING: bin/shard_eval is STALE vs kernel/compiler sources -- run bin/rebuild.sh" >&2
@@ -19,6 +25,7 @@ if [ -z "${EVAL:-}" ]; then
     EVAL=./rust_bootstrap/target/release/eval
   fi
 fi
+[ ${#CHECK_CMD[@]} -eq 0 ] && CHECK_CMD=("$EVAL" run kernel/check.shard)
 JOBS="${JOBS:-$(nproc)}"
 TARGETS=(
   examples/add_nat_zero.shard
@@ -73,7 +80,7 @@ for i in "${!TARGETS[@]}"; do
   while (( $(jobs -rp | wc -l) >= JOBS )); do wait -n; done
   {
     echo "=== ${TARGETS[$i]} ==="
-    $EVAL run kernel/check.shard "${TARGETS[$i]}" 2>&1
+    "${CHECK_CMD[@]}" "${TARGETS[$i]}" 2>&1
   } > "$TMP/$i" &
 done
 wait
