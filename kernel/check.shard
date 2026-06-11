@@ -30,7 +30,7 @@
 (use (:: kernel reader *))
 
 ;; running tallies for the summary line.
-(type Counts (Counts Int Int Int))  ; passed failed axioms
+(type Counts (Counts Int Int Int Int Int))  ; passed failed axioms admitted pending
 
 (fn nl () (List Int) (Cons 10 Nil))  ; "\n"
 
@@ -47,14 +47,14 @@
 ;; ---- render one outcome, bumping the counts -------------------------------
 (fn render_one ((o ClaimOutcome) (c Counts)) (Pair (List Int) Counts)
   (match c
-    ((Counts p f a)
+    ((Counts p f a ad pn)
      (match o
        ((COPass name trace)
         (Pair
           (append_int
             (opt_block trace)
             (append_int "PASS  " (append_int (chars_of_sym name) (nl))))
-          (Counts (+ p 1) f a)))
+          (Counts (+ p 1) f a ad pn)))
        ((COAxiom name)
         (Pair
           (append_int
@@ -62,7 +62,25 @@
             (append_int
               (chars_of_sym name)
               (append_int "  (admitted without proof)" (nl))))
-          (Counts p f (+ a 1))))
+          (Counts p f (+ a 1) ad pn)))
+       ((COAdmit name)
+        (Pair
+          (append_int
+            "ADMIT "
+            (append_int
+              (chars_of_sym name)
+              (append_int "  (proof contains admit — UNSOUND)" (nl))))
+          (Counts p f a (+ ad 1) pn)))
+       ((COPending name)
+        (Pair
+          (append_int
+            "PEND  "
+            (append_int
+              (chars_of_sym name)
+              (append_int
+                "  (requirement stated, never fulfilled in this closure)"
+                (nl))))
+          (Counts p f a ad (+ pn 1))))
        ((COFail name detail trace)
         (Pair
           (append_int
@@ -72,7 +90,7 @@
               (append_int
                 (chars_of_sym name)
                 (append_int (nl) (opt_block detail)))))
-          (Counts p (+ f 1) a)))
+          (Counts p (+ f 1) a ad pn)))
        ((COBin name total met)
         (Pair
           (append_int
@@ -99,7 +117,7 @@
             (append_int
               (chars_of_sym name)
               (append_int (nl) (opt_block detail))))
-          (Counts p (+ f 1) a)))))))
+          (Counts p (+ f 1) a ad pn)))))))
 
 (fn render_all ((os (List ClaimOutcome)) (c Counts)) (Pair (List Int) Counts)
   (match os
@@ -110,30 +128,39 @@
         (match (render_all rest c1)
           ((Pair more c2) (Pair (append_int line more) c2))))))))
 
+(fn opt_count ((n Int) (label (List Int))) (List Int)
+  (if (lt 0 n) (append_int (show_nat n) (append_int label (nl))) Nil))
+
 (fn summary ((c Counts)) (List Int)
   (match c
-    ((Counts p f a)
-     (if (lt 0 a)
+    ((Counts p f a ad pn)
+     (append_int
+       (show_nat p)
        (append_int
-         (show_nat p)
+         " passed, "
          (append_int
-           " passed, "
+           (show_nat f)
            (append_int
-             (show_nat f)
+             (if (lt 0 a) " failed, " " failed")
              (append_int
-               " failed, "
+               (if (lt 0 a)
+                 (append_int (show_nat a) " axiom(s) admitted without proof")
+                 Nil)
                (append_int
-                 (show_nat a)
-                 (append_int " axiom(s) admitted without proof" (nl)))))))
-       (append_int
-         (show_nat p)
-         (append_int
-           " passed, "
-           (append_int (show_nat f) (append_int " failed" (nl)))))))))
+                 (nl)
+                 (append_int
+                   (opt_count
+                     ad
+                     " ADMITTED WITHOUT PROOF (admit) — UNSOUND, not an acceptance run")
+                   (opt_count
+                     pn
+                     " requirement(s) PENDING (stated, never fulfilled)")))))))))))
 
+;; failures exit 1; a clean run with admits exits 3 (the focus-mode rule:
+;; an unsound run is never mistakable for an acceptance run).
 (fn exit_code ((c Counts)) Int
   (match c
-    ((Counts p f a) (if (lt 0 f) 1 0))))
+    ((Counts p f a ad pn) (if (lt 0 f) 1 (if (lt 0 ad) 3 0)))))
 
 ;; FOCUS arg (optional). `__all__` = check every claim (the normal run); a
 ;; specific name = FOCUS MODE — check only that claim (others admitted), and
@@ -186,7 +213,7 @@
         sidecars
         (trace_target focus)
         focus)
-      (Counts 0 0 0))
+      (Counts 0 0 0 0 0))
     ((Pair body c)
      (exit
        (focus_exit focus (exit_code c))

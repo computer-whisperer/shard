@@ -98,24 +98,20 @@
 ;; these proof-structure walkers live here, where proof.shard's types exist.)
 ;; ===========================================================================
 
-(fn resolve_param
-  ((env RCtx) (p Param)) Param
-  (match p ((Param n t) (Param n (resolve_type env t)))))
+(fn resolve_param ((env RCtx) (p Param)) Param
+  (match p
+    ((Param n t) (Param n (resolve_type env t)))))
 
-(fn resolve_params
-  ((env RCtx) (ps (List Param))) (List Param)
+(fn resolve_params ((env RCtx) (ps (List Param))) (List Param)
   (match ps
     (Nil Nil)
     ((Cons h t) (Cons (resolve_param env h) (resolve_params env t)))))
 
-(fn resolve_equation
-  ((env RCtx) (eq Equation)) Equation
+(fn resolve_equation ((env RCtx) (eq Equation)) Equation
   (match eq
     ((Equation a b) (Equation (resolve_expr env a) (resolve_expr env b)))))
 
-(fn resolve_equations
-  ((env RCtx) (eqs (List Equation)))
-  (List Equation)
+(fn resolve_equations ((env RCtx) (eqs (List Equation))) (List Equation)
   (match eqs
     (Nil Nil)
     ((Cons h t) (Cons (resolve_equation env h) (resolve_equations env t)))))
@@ -129,10 +125,10 @@
        (resolve_equation env concl)))))
 
 (fn resolve_inst ((env RCtx) (i Inst)) Inst
-  (match i ((Inst n e) (Inst n (resolve_expr env e)))))
+  (match i
+    ((Inst n e) (Inst n (resolve_expr env e)))))
 
-(fn resolve_insts
-  ((env RCtx) (is (List Inst))) (List Inst)
+(fn resolve_insts ((env RCtx) (is (List Inst))) (List Inst)
   (match is
     (Nil Nil)
     ((Cons h t) (Cons (resolve_inst env h) (resolve_insts env t)))))
@@ -155,8 +151,7 @@
     ((Rewrite eqref dir side allq insts)
      (Rewrite (resolve_eqref env eqref) dir side allq (resolve_insts env insts)))))
 
-(fn resolve_steps
-  ((env RCtx) (sts (List Step))) (List Step)
+(fn resolve_steps ((env RCtx) (sts (List Step))) (List Step)
   (match sts
     (Nil Nil)
     ((Cons h t) (Cons (resolve_step env h) (resolve_steps env t)))))
@@ -164,6 +159,7 @@
 (fn resolve_proof ((env RCtx) (p Proof)) Proof
   (match p
     ((Refl) p)
+    ((Admit) p)
     ((Steps steps pf) (Steps (resolve_steps env steps) (resolve_proof env pf)))
     ((Induct v cases) (Induct v (resolve_cases env cases)))
     ((Induct2 v cases) (Induct2 v (resolve_cases env cases)))
@@ -173,7 +169,9 @@
      (WfInduct (resolve_expr env measure) (resolve_proof env pf)))
     ((RewriteWith eqref dir side insts subs pf)
      (RewriteWith
-       (resolve_eqref env eqref) dir side
+       (resolve_eqref env eqref)
+       dir
+       side
        (resolve_insts env insts)
        (resolve_proofs env subs)
        (resolve_proof env pf)))
@@ -185,12 +183,15 @@
     ((ByTheory th cert) p)
     ((FinSplit v lo hi fcs) (FinSplit v lo hi (resolve_fincases env fcs)))
     ((Have eq pf cont)
-     (Have (resolve_equation env eq) (resolve_proof env pf) (resolve_proof env cont)))
+     (Have
+       (resolve_equation env eq)
+       (resolve_proof env pf)
+       (resolve_proof env cont)))
     ((WordFact e pf) (WordFact (resolve_expr env e) (resolve_proof env pf)))
-    ((DivFacts e d q pf) (DivFacts (resolve_expr env e) d q (resolve_proof env pf)))))
+    ((DivFacts e d q pf)
+     (DivFacts (resolve_expr env e) d q (resolve_proof env pf)))))
 
-(fn resolve_proofs
-  ((env RCtx) (ps (List Proof))) (List Proof)
+(fn resolve_proofs ((env RCtx) (ps (List Proof))) (List Proof)
   (match ps
     (Nil Nil)
     ((Cons h t) (Cons (resolve_proof env h) (resolve_proofs env t)))))
@@ -198,19 +199,19 @@
 (fn resolve_case ((env RCtx) (c Case)) Case
   (match c
     ((Case ctor pf) (Case (rhead ctor env) (resolve_proof env pf)))
-    ((CaseB ctor names pf) (CaseB (rhead ctor env) names (resolve_proof env pf)))))
+    ((CaseB ctor names pf)
+     (CaseB (rhead ctor env) names (resolve_proof env pf)))))
 
-(fn resolve_cases
-  ((env RCtx) (cs (List Case))) (List Case)
+(fn resolve_cases ((env RCtx) (cs (List Case))) (List Case)
   (match cs
     (Nil Nil)
     ((Cons h t) (Cons (resolve_case env h) (resolve_cases env t)))))
 
 (fn resolve_fincase ((env RCtx) (fc FinCase)) FinCase
-  (match fc ((FinCase k pf) (FinCase k (resolve_proof env pf)))))
+  (match fc
+    ((FinCase k pf) (FinCase k (resolve_proof env pf)))))
 
-(fn resolve_fincases
-  ((env RCtx) (fcs (List FinCase))) (List FinCase)
+(fn resolve_fincases ((env RCtx) (fcs (List FinCase))) (List FinCase)
   (match fcs
     (Nil Nil)
     ((Cons h t) (Cons (resolve_fincase env h) (resolve_fincases env t)))))
@@ -244,6 +245,8 @@
   (COPass Symbol (List Int))  ; name, trace-block
   (COFail Symbol (List Int) (List Int))  ; name, diagnostic detail, trace-block
   (COAxiom Symbol)  ; an axiom admitted without proof
+  (COAdmit Symbol)  ; a decl whose proof contains (admit) — UNSOUND, exit 3
+  (COPending Symbol)  ; a requirement stated but never fulfilled in this closure
   (COBin Symbol Int Int)  ; a bin acceptance summary: name, required, met
   ;; COTypeFail: a type error from types.shard — a HARD failure. The decl is
   ;; rejected: an ill-typed axiom is not admitted, an ill-typed requirement is
@@ -298,6 +301,7 @@
 (fn cites_of_proof ((p Proof)) (List Symbol)
   (match p
     ((Refl) Nil)
+    ((Admit) Nil)
     ((Steps ss k) (sym_concat (cop_steps ss) (cites_of_proof k)))
     ((Induct _ cs) (cop_cases cs))
     ((Induct2 _ cs) (cop_cases cs))
@@ -330,6 +334,48 @@
     ((Cons (FinCase _ p) rest)
      (sym_concat (cites_of_proof p) (cop_fincases rest)))))
 
+;; Does the (desugared) proof contain an (admit) anywhere? Decides ADMIT-vs-
+;; PASS reporting: an admitted proof is ACCEPTED by check_sequent but must
+;; never render as proven.
+(fn proof_has_admit ((p Proof)) Bool
+  (match p
+    ((Refl) False)
+    ((Admit) True)
+    ((Steps _ k) (proof_has_admit k))
+    ((Induct _ cs) (pha_cases cs))
+    ((Induct2 _ cs) (pha_cases cs))
+    ((CaseOn _ _ cs) (pha_cases cs))
+    ((WfInduct _ k) (proof_has_admit k))
+    ((RewriteWith _ _ _ _ subs k)
+     (if (pha_proofs subs) True (proof_has_admit k)))
+    ((Absurd _) False)
+    ((ByTheory _ _) False)
+    ((FinSplit _ _ _ fcs) (pha_fincases fcs))
+    ((Have _ pe k) (if (proof_has_admit pe) True (proof_has_admit k)))
+    ((WordFact _ k) (proof_has_admit k))
+    ((DivFacts _ _ _ k) (proof_has_admit k))))
+
+(fn pha_proofs ((ps (List Proof))) Bool
+  (match ps
+    (Nil False)
+    ((Cons p rest) (if (proof_has_admit p) True (pha_proofs rest)))))
+
+(fn pha_cases ((cs (List Case))) Bool
+  (match cs
+    (Nil False)
+    ((Cons (Case _ p) rest) (if (proof_has_admit p) True (pha_cases rest)))
+    ((Cons (CaseB _ _ p) rest) (if (proof_has_admit p) True (pha_cases rest)))))
+
+(fn pha_fincases ((fcs (List FinCase))) Bool
+  (match fcs
+    (Nil False)
+    ((Cons (FinCase _ p) rest)
+     (if (proof_has_admit p) True (pha_fincases rest)))))
+
+;; PASS, unless the accepted proof leans on (admit) — then ADMIT, loudly.
+(fn pass_or_admit ((name Symbol) (trace (List Int)) (p Proof)) ClaimOutcome
+  (if (proof_has_admit p) (COAdmit name) (COPass name trace)))
+
 (type RunState
   (RunState Theory (List PendReq) (List ClaimOutcome) (List LedgerEntry)))
 
@@ -345,6 +391,18 @@
      (if (if (sym_eq (qn_name q) name) (supplies_scope_ok (qn_mod q) cur) False)
        (Some (Pair q g))
        (lookup_req name cur rest)))))
+
+;; Drop the entry lookup_req matched: a requirement with a fulfills decl is
+;; no longer PENDING — even when the fulfills FAILS (the FAIL line is the
+;; louder report there). What is left at end of run had NO fulfills at all.
+(fn remove_req ((name Symbol) (cur (List Symbol)) (pend (List PendReq)))
+  (List PendReq)
+  (match pend
+    (Nil Nil)
+    ((Cons (PendReq q g) rest)
+     (if (if (sym_eq (qn_name q) name) (supplies_scope_ok (qn_mod q) cur) False)
+       rest
+       (Cons (PendReq q g) (remove_req name cur rest))))))
 
 ;; Does `--trace target` want this claim traced? ('all matches everything.)
 (fn want_trace ((name Symbol) (target Symbol)) Bool
@@ -443,11 +501,13 @@
 (type PrfRes (PrfOk Proof) (PrfErr (List Int)))
 
 (fn parse_proof_auto
-  ((m Module) (gctx RCtx) (name Symbol) (raw SExpr)
+  ((m Module)
+   (gctx RCtx)
+   (name Symbol)
+   (raw SExpr)
    (autos (List (Pair Symbol SExpr))))
   PrfRes
-  (match
-    (if (is_auto_proof raw) (auto_lookup name autos) (Some raw))
+  (match (if (is_auto_proof raw) (auto_lookup name autos) (Some raw))
     (None (PrfErr (auto_missing_msg name)))
     ((Some prfS)
      (match (parse_proof_r m gctx prfS)
@@ -460,7 +520,11 @@
 (fn run_decls
   ((gctx RCtx)
    (autos (List (Pair Symbol SExpr)))  ; the file's sidecar entries (auto splice)
-   (m Module) (st RunState) (ds (List Decl)) (target Symbol) (focus Symbol))
+   (m Module)
+   (st RunState)
+   (ds (List Decl))
+   (target Symbol)
+   (focus Symbol))
   RunState
   (match ds
     (Nil st)
@@ -470,10 +534,11 @@
         (match d
           ;; (axiom NAME (goal …)): parse goal to native, admit without proof.
           ((DAxiom a)
-           (match
-             (parse_goal_r m gctx (ax_goal a))
+           (match (parse_goal_r m gctx (ax_goal a))
              (None
-               (run_decls gctx autos
+               (run_decls
+                 gctx
+                 autos
                  m
                  (RunState
                    th
@@ -492,7 +557,9 @@
               (match (tc_check_goal m g)
                 ;; ill-typed axiom: REJECTED, not admitted to the theory.
                 ((Some msg)
-                 (run_decls gctx autos
+                 (run_decls
+                   gctx
+                   autos
                    m
                    (RunState
                      th
@@ -503,11 +570,15 @@
                    target
                    focus))
                 (None
-                  (run_decls gctx autos
+                  (run_decls
+                    gctx
+                    autos
                     m
                     (RunState
                       (TheoryCons
-                        (Axiom (QName (rc_mod gctx) (ax_name a)) (close_goal_for_storage g))
+                        (Axiom
+                          (QName (rc_mod gctx) (ax_name a))
+                          (close_goal_for_storage g))
                         th)
                       pend
                       (Cons (COAxiom (ax_name a)) acc)
@@ -521,10 +592,11 @@
           ;; native via proof_reader, then resolve named hyps to positional
           ;; with desugar_proof_named, and check.
           ((DClaim nc)
-           (match
-             (parse_goal_r m gctx (claim_goal nc))
+           (match (parse_goal_r m gctx (claim_goal nc))
              (None
-               (run_decls gctx autos
+               (run_decls
+                 gctx
+                 autos
                  m
                  (RunState
                    th
@@ -545,7 +617,9 @@
                 ;; in focus mode — an ill-typed goal must not enter the
                 ;; theory, where a focus-admitted citation would use it).
                 ((Some msg)
-                 (run_decls gctx autos
+                 (run_decls
+                   gctx
+                   autos
                    m
                    (RunState
                      th
@@ -558,11 +632,15 @@
                 (None
                   (if (focus_skip focus (claim_name nc))
                     ;; not the focus claim — admit its goal, skip the proof.
-                    (run_decls gctx autos
+                    (run_decls
+                      gctx
+                      autos
                       m
                       (RunState
                         (TheoryCons
-                          (Proven (QName (rc_mod gctx) (claim_name nc)) (close_goal_for_storage g))
+                          (Proven
+                            (QName (rc_mod gctx) (claim_name nc))
+                            (close_goal_for_storage g))
                           th)
                         pend
                         acc
@@ -574,23 +652,31 @@
                       focus)
                     (match
                       (parse_proof_auto
-                        m gctx (claim_name nc) (claim_proof nc) autos)
+                        m
+                        gctx
+                        (claim_name nc)
+                        (claim_proof nc)
+                        autos)
                       ((PrfErr emsg)
-                        (run_decls gctx autos
-                          m
-                          (RunState
-                            th
-                            pend
-                            (Cons (COFail (claim_name nc) emsg Nil) acc)
-                            led)
-                          rest
-                          target
-                          focus))
+                       (run_decls
+                         gctx
+                         autos
+                         m
+                         (RunState
+                           th
+                           pend
+                           (Cons (COFail (claim_name nc) emsg Nil) acc)
+                           led)
+                         rest
+                         target
+                         focus))
                       ((PrfOk p0)
                        (match (desugar_proof_named m (goal_params g) Nil p0)
                          (p
                            (if (check_sequent m th (lift_sequent g) p)
-                             (run_decls gctx autos
+                             (run_decls
+                               gctx
+                               autos
                                m
                                (RunState
                                  (TheoryCons
@@ -600,7 +686,7 @@
                                    th)
                                  pend
                                  (Cons
-                                   (COPass
+                                   (pass_or_admit
                                      (claim_name nc)
                                      (claim_trace
                                        m
@@ -608,7 +694,8 @@
                                        g
                                        p
                                        (claim_name nc)
-                                       target))
+                                       target)
+                                     p)
                                    acc)
                                  (Cons
                                    (LedgerEntry
@@ -619,7 +706,9 @@
                                rest
                                target
                                focus)
-                             (run_decls gctx autos
+                             (run_decls
+                               gctx
+                               autos
                                m
                                (RunState
                                  th
@@ -643,10 +732,11 @@
           ;; (requirement NAME (goal …)): parse the goal to native NOW
           ;; (validating it at the contract), seed it as a pending obligation.
           ((DReq r)
-           (match
-             (parse_goal_r m gctx (req_goal r))
+           (match (parse_goal_r m gctx (req_goal r))
              (None
-               (run_decls gctx autos
+               (run_decls
+                 gctx
+                 autos
                  m
                  (RunState
                    th
@@ -667,7 +757,9 @@
                 ;; not be fulfillable. (The later (fulfills) then fails with
                 ;; "no requirement in scope".)
                 ((Some msg)
-                 (run_decls gctx autos
+                 (run_decls
+                   gctx
+                   autos
                    m
                    (RunState
                      th
@@ -678,9 +770,15 @@
                    target
                    focus))
                 (None
-                  (run_decls gctx autos
+                  (run_decls
+                    gctx
+                    autos
                     m
-                    (RunState th (Cons (PendReq (QName (rc_mod gctx) (req_name r)) g) pend) acc led)
+                    (RunState
+                      th
+                      (Cons (PendReq (QName (rc_mod gctx) (req_name r)) g) pend)
+                      acc
+                      led)
                     rest
                     target
                     focus))))))
@@ -690,7 +788,9 @@
           ((DFul fu)
            (match (lookup_req (ful_name fu) (rc_mod gctx) pend)
              (None
-               (run_decls gctx autos
+               (run_decls
+                 gctx
+                 autos
                  m
                  (RunState
                    th
@@ -708,47 +808,51 @@
              ((Some (Pair rq g))
               (if (focus_skip focus (ful_name fu))
                 ;; not the focus claim — admit the requirement's goal, skip the proof.
-                (run_decls gctx autos
+                (run_decls
+                  gctx
+                  autos
                   m
                   (RunState
-                    (TheoryCons
-                      (Proven rq (close_goal_for_storage g))
-                      th)
-                    pend
+                    (TheoryCons (Proven rq (close_goal_for_storage g)) th)
+                    (remove_req (ful_name fu) (rc_mod gctx) pend)
                     acc
                     (Cons (LedgerEntry (ful_name fu) (quote fulfills) Nil) led))
                   rest
                   target
                   focus)
                 (match
-                  (parse_proof_auto
-                    m gctx (ful_name fu) (ful_proof fu) autos)
+                  (parse_proof_auto m gctx (ful_name fu) (ful_proof fu) autos)
                   ((PrfErr emsg)
-                    (run_decls gctx autos
-                      m
-                      (RunState
-                        th
-                        pend
-                        (Cons (COFail (ful_name fu) emsg Nil) acc)
-                        led)
-                      rest
-                      target
-                      focus))
+                   (run_decls
+                     gctx
+                     autos
+                     m
+                     (RunState
+                       th
+                       (remove_req (ful_name fu) (rc_mod gctx) pend)
+                       (Cons (COFail (ful_name fu) emsg Nil) acc)
+                       led)
+                     rest
+                     target
+                     focus))
                   ((PrfOk p0)
                    (match (desugar_proof_named m (goal_params g) Nil p0)
                      (p
                        (if (check_sequent m th (lift_sequent g) p)
-                         (run_decls gctx autos
+                         (run_decls
+                           gctx
+                           autos
                            m
                            (RunState
                              (TheoryCons
                                (Proven rq (close_goal_for_storage g))
                                th)
-                             pend
+                             (remove_req (ful_name fu) (rc_mod gctx) pend)
                              (Cons
-                               (COPass
+                               (pass_or_admit
                                  (ful_name fu)
-                                 (claim_trace m th g p (ful_name fu) target))
+                                 (claim_trace m th g p (ful_name fu) target)
+                                 p)
                                acc)
                              (Cons
                                (LedgerEntry
@@ -759,11 +863,13 @@
                            rest
                            target
                            focus)
-                         (run_decls gctx autos
+                         (run_decls
+                           gctx
+                           autos
                            m
                            (RunState
                              th
-                             pend
+                             (remove_req (ful_name fu) (rc_mod gctx) pend)
                              (Cons
                                (COFail
                                  (ful_name fu)
@@ -840,7 +946,11 @@
           (run_decls
             (file_rctx m path src)
             (autos_of_src (sym_of_chars path) sidecars)
-            m st ds target focus)
+            m
+            st
+            ds
+            target
+            focus)
           target
           focus
           (+ k 1)))))))
@@ -867,16 +977,13 @@
 
 ;; split DS at the decl named NAME: (Pair before from-NAME-on).
 ;; NAME absent → (Pair ds Nil).
-(fn decls_split
-  ((ds (List Decl)) (name Symbol))
-  (Pair (List Decl) (List Decl))
+(fn decls_split ((ds (List Decl)) (name Symbol)) (Pair (List Decl) (List Decl))
   (match ds
     (Nil (Pair Nil Nil))
     ((Cons d rest)
-     (if (decl_named d name)
-       (Pair Nil (Cons d rest))
-       (match (decls_split rest name)
-         ((Pair before after) (Pair (Cons d before) after)))))))
+     (if (decl_named d name) (Pair Nil (Cons d rest))
+     (match (decls_split rest name)
+       ((Pair before after) (Pair (Cons d before) after)))))))
 
 (fn rs_theory ((st RunState)) Theory
   (match st
@@ -884,8 +991,7 @@
 
 ;; advance ST over decl slice DS of the file whose resolution context is
 ;; `gctx`, proofs skipped.
-(fn theory_step ((gctx RCtx) (m Module) (st RunState) (ds (List Decl)))
-  RunState
+(fn theory_step ((gctx RCtx) (m Module) (st RunState) (ds (List Decl))) RunState
   (run_decls gctx Nil m st ds (quote __no_trace__) (quote __theory_walk__)))
 
 (fn theory_base_go
@@ -898,14 +1004,16 @@
   (match srcs
     (Nil st)
     ((Cons (SrcEntry path granted src) rest)
-     (if (sym_eq (sym_of_chars path) tkey)
-       st
-       (match (parse_decls src ctors granted)
-         (None st)  ; malformed source: stop — the real pass reports it loudly
-         ((Some ds)
-          (theory_base_go
-            m rest ctors tkey
-            (theory_step (file_rctx m path src) m st ds))))))))
+     (if (sym_eq (sym_of_chars path) tkey) st
+     (match (parse_decls src ctors granted)
+       (None st)  ; malformed source: stop — the real pass reports it loudly
+       ((Some ds)
+        (theory_base_go
+          m
+          rest
+          ctors
+          tkey
+          (theory_step (file_rctx m path src) m st ds))))))))
 
 (fn theory_base_st
   ((m Module) (srcs (List SrcEntry)) (ctors (List Symbol)) (tkey Symbol))
@@ -930,11 +1038,15 @@
     ((TheoryCons entry rest)
      (match entry
        ((Proven q _)
-        (if (if (sym_eq (qn_name q) name) (supplies_scope_ok (qn_mod q) binmp) False)
+        (if
+          (if (sym_eq (qn_name q) name) (supplies_scope_ok (qn_mod q) binmp)
+          False)
           True
           (req_met_walk name binmp rest)))
        ((Axiom q _)
-        (if (if (sym_eq (qn_name q) name) (supplies_scope_ok (qn_mod q) binmp) False)
+        (if
+          (if (sym_eq (qn_name q) name) (supplies_scope_ok (qn_mod q) binmp)
+          False)
           True
           (req_met_walk name binmp rest)))))))
 
@@ -1373,6 +1485,20 @@
 ;; for the whole file list, checked against m from the empty theory, followed
 ;; by each bin's acceptance report. `target` is the `--trace` claim name ('all
 ;; for every claim, or a non-matching sentinel for no tracing).
+;; Every requirement still pending at end of run was stated but never
+;; fulfilled in this closure — surface each one (the silent-pending hole,
+;; closed at check level; the bin form closes it at artifact level).
+(fn pending_outcomes ((pend (List PendReq))) (List ClaimOutcome)
+  (match pend
+    (Nil Nil)
+    ((Cons (PendReq q _) rest)
+     (Cons (COPending (qn_name q)) (pending_outcomes rest)))))
+
+(fn rev_pend ((xs (List PendReq)) (acc (List PendReq))) (List PendReq)
+  (match xs
+    (Nil acc)
+    ((Cons h t) (rev_pend t (Cons h acc)))))
+
 (fn check_production
   ((m Module)
    (srcs (List SrcEntry))
@@ -1383,11 +1509,20 @@
   (List ClaimOutcome)
   (match
     (run_srcs
-      m srcs ctors sidecars (RunState TheoryEmpty Nil Nil Nil) target focus 1)
+      m
+      srcs
+      ctors
+      sidecars
+      (RunState TheoryEmpty Nil Nil Nil)
+      target
+      focus
+      1)
     ((RunState th pend acc led)
      (oc_concat
        (rev_outcomes acc Nil)
-       (bin_reports (bins_of_srcs srcs) th m led (own_externs_of_srcs srcs))))))
+       (oc_concat
+         (pending_outcomes (rev_pend pend Nil))
+         (bin_reports (bins_of_srcs srcs) th m led (own_externs_of_srcs srcs)))))))
 
 ;; Production entry that builds M IN SHARD. `build_module_d` (reader.shard) parses
 ;; each source's types/fns via the self-hosted reader and merges them onto

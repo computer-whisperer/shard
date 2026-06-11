@@ -32,6 +32,7 @@ TARGETS=(
   examples/axiom_kind_rejects.shard
   examples/auto_demo.shard
   examples/auto_missing_rejects.shard
+  examples/admit_demo.shard
   examples/contract_demo.shard
   examples/decl_rejects.shard
   examples/div_pairs.shard
@@ -52,6 +53,7 @@ TARGETS=(
   examples/list_named_hyp.shard
   examples/module_gate_rejects.shard
   examples/parse_rejects.shard
+  examples/pending_demo.shard
   examples/reverse_proof.shard
   examples/rewrite_arms_test.shard
   examples/rewrite_with_demo.shard
