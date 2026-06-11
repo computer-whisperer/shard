@@ -74,6 +74,7 @@ TARGETS=(
   examples/snake_game_2/mod.req/arena.shard
   examples/snake_game_3/game/game.shard
   examples/snake_game_3/render/render.shard
+  examples/snake_game_3/snake.shard
   std/mem.shard
   std/list.shard
   std/map.shard

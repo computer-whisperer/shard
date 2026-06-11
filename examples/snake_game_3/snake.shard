@@ -1,0 +1,110 @@
+;;; snake — the EXECUTABLE of snake_game_3: key decoding, the fuel-bounded
+;;; play loop, and `main`. This is the io slice's IMPL HALF; the tier-1
+;;; contract (../mod.req/) still carries the promise in prose — formal
+;;; requirements + the (bin …) form land with the contract slice, and this
+;;; file will then discharge them.
+;;;
+;;; The game and render modules are consumed through their PUBLIC surfaces
+;;; (bare module imports): GameState stays opaque; the loop sees init / step
+;;; / status_of / dir_of and `render`. At RUN the mode-aware loader swaps in
+;;; the impl bodies and the same file plays.
+;;;
+;;; PLAY IT (REPL-style, line-buffered — a key then Enter):
+;;;     ./rust_bootstrap/target/release/eval run examples/snake_game_3/snake.shard [SEED]
+;;;   w/a/s/d + Enter steer; any other key + Enter advances in the current
+;;;   heading; `q` (or Ctrl-D / EOF) quits. The PRNG seed is argv[0] (decimal;
+;;;   default when absent) — a run is a pure function of (args, keys): P6.
+;;;
+;;; Loop discipline (the eventual contract's shape, v2-proven):
+;;;   - one frame per consumed key, written AFTER the step — each frame is
+;;;     the response to the key just typed;
+;;;   - death ends play: the collision frame is written, then the loop stops
+;;;     reading input and main exits 0 (P4);
+;;;   - every write is preceded by the ANSI clear (io owns screen control —
+;;;     the renderer is pure board→bytes).
+(import "../../kernel/stdlib.shard")  ; List / Option / Bool / Pair
+(import "game")  ; the game module interface: init / step / accessors
+(import "render")  ; the render module interface: render
+(use (:: examples snake_game_3 game *))
+(use (:: examples snake_game_3 game geom *))
+(use (:: examples snake_game_3 render *))
+
+;; ---- the I/O boundary -------------------------------------------------------
+
+(type World (World Int))  ; the sequencing-clock token
+
+(extern get_args ((w World)) (Pair (List (List Int)) World))  ; argv slice
+(extern key_oracle ((w World)) (Pair (Option Int) World))  ; next key byte
+(extern write ((bytes (List Int)) (w World)) World)  ; emit bytes
+(extern exit ((code Int) (w World)) World)  ; end the process
+
+;; ---- input boundary: the steer decoder --------------------------------------
+;;   w 119 → Up    a 97 → Left    s 115 → Down    d 100 → Right
+;; Unrecognized keys are inert (return the current heading — the step then
+;; advances straight). The no-reversal rule is the game module's business.
+
+(fn key_heading ((k Int) (cur Heading)) Heading
+  (if (int_eq k 119) Up
+  (if (int_eq k 115) Down
+  (if (int_eq k 97) Left
+  (if (int_eq k 100) Right
+  cur)))))
+
+;; ---- output boundary: one frame per tick -------------------------------------
+;; ANSI clear ESC[2J ESC[H, then the rendered board. Local monomorphic
+;; append (the dangling-type-pivot rule: keep proof-facing citations pinned).
+
+(fn io_app ((xs (List Int)) (ys (List Int))) (List Int)
+  (match xs
+    (Nil ys)
+    ((Cons h t) (Cons h (io_app t ys)))))
+
+(fn clear_seq () (List Int)
+  (Cons 27 (Cons 91 (Cons 50 (Cons 74 (Cons 27 (Cons 91 (Cons 72 Nil))))))))
+
+(fn write_frame ((g GameState) (w World)) World
+  (write (io_app (clear_seq) (render g)) w))
+
+;; ---- the play loop ------------------------------------------------------------
+;; One tick = read a key (None/EOF or `q` stops), steer + step, write the
+;; post-step frame, recurse — unless the step died: the collision frame is
+;; still written, then play ENDS (P4). Int fuel bounds the loop for the
+;; coming ∀-fuel proofs (WfInduct on the fuel measure); proof-facing body,
+;; so it stays let-free (tick names the stepped state instead).
+
+(fn tick ((g GameState) (k Int)) GameState (step g (key_heading k (dir_of g))))
+
+(fn play ((f Int) (g GameState) (w World)) World
+  (if (lt 0 f)
+    (match (key_oracle w)
+      ((Pair None w1) w1)
+      ((Pair (Some k) w1)
+       (if (int_eq k 113) w1
+       (match (status_of (tick g k))
+         (Dead (write_frame (tick g k) w1))
+         (Alive (play (- f 1) (tick g k) (write_frame (tick g k) w1)))))))
+    w))
+
+;; ---- the executable -------------------------------------------------------------
+;; The seed is argv[0] parsed as decimal (leading digits; default constant
+;; when absent or non-numeric) — no entropy extern, replayable runs (P6).
+;; `fuel` is the opaque global step budget: large at RUN, abstract in the
+;; coming proofs (cited through the ∀-fuel worker, never reduced).
+
+(fn seed_digits ((bs (List Int)) (acc Int)) Int
+  (match bs
+    (Nil acc)
+    ((Cons b t)
+     (if (le 48 b) (if (le b 57) (seed_digits t (+ (* acc 10) (- b 48))) acc)
+     acc))))
+
+(fn seed_of ((args (List (List Int)))) Int
+  (match args
+    (Nil 20260611)
+    ((Cons a _) (seed_digits a 0))))
+
+(fn fuel () Int 1000000000)
+
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Pair args w1) (exit 0 (play (fuel) (init (seed_of args)) w1)))))
