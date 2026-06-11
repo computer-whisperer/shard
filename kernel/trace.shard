@@ -26,12 +26,16 @@
 (import "checker.shard")
 (import "types.shard")
 (import "reduce.shard")
+(import "lia.shard")
+(import "farkas.shard")
 (use (:: kernel term *))
 (use (:: kernel module *))
 (use (:: kernel proof *))
 (use (:: kernel checker *))
 (use (:: kernel types *))
 (use (:: kernel reduce *))
+(use (:: kernel lia *))
+(use (:: kernel farkas *))
 
 ;; (append_int / show_nat / show_int — the shared char helpers — live in
 ;; term.shard.)
@@ -163,6 +167,134 @@
     (Nil 0)
     ((Cons _ t) (+ 1 (count_eqs t)))))
 
+;; ---------------------------------------------------------------------------
+;; farkas slot table (QoL): a failing (by farkas CERT) renders the full
+;; slot layout — the negated-goal constraint (slot 0 = G, whose SIGN picks
+;; the refutation direction when the assumed constraint is an equality),
+;; each premise's linear reading (or NOT LINEAR), and the supplied cert —
+;; so a wrong vector is a table lookup, not a guessing loop.
+;; ---------------------------------------------------------------------------
+
+(fn fk_poly_term ((c Int) (a (Option Expr))) (List Int)
+  (match a
+    (None (show_int c))
+    ((Some e) (append_int (show_int c) (append_int "*" (render_term e))))))
+
+(fn fk_poly_run ((p (List (Pair Int (Option Expr)))) (first Bool)) (List Int)
+  (match p
+    (Nil (if first "0" ""))
+    ((Cons (Pair c a) rest)
+     (append_int
+       (if first "" " + ")
+       (append_int (fk_poly_term c a) (fk_poly_run rest False))))))
+
+(fn fk_poly ((p (List (Pair Int (Option Expr))))) (List Int)
+  (fk_poly_run (lia_canonical p) True))
+
+(fn fk_constraint ((eq Equation)) (List Int)
+  (match (premise_to_constraint eq)
+    (None "NOT LINEAR (multiplier must be 0)")
+    ((Some (Pair p needs_nonneg))
+     (if needs_nonneg
+       (append_int (fk_poly p) " >= 0   (mult >= 0)")
+       (append_int (fk_poly p) " = 0   (mult any sign)")))))
+
+(fn fk_slot_lines ((premises (List Equation)) (k Int) (depth Int))
+  (List (List Int))
+  (match premises
+    (Nil Nil)
+    ((Cons eq rest)
+     (Cons
+       (append_int
+         (mk_ind depth)
+         (append_int
+           "["
+           (append_int
+             (show_int (+ k 1))
+             (append_int
+               "] premise "
+               (append_int
+                 (show_int k)
+                 (append_int
+                   ":  "
+                   (append_int
+                     (fk_constraint eq)
+                     (append_int "   — " (render_eq eq)))))))))
+       (fk_slot_lines rest (+ k 1) depth)))))
+
+(fn fk_goal_line ((goal Equation) (depth Int)) (List Int)
+  (match (neg_goal_poly goal)
+    ((Some (Pair np needs_nonneg))
+     (append_int
+       (mk_ind depth)
+       (append_int
+         "[0] G (negated goal):  "
+         (append_int
+           (fk_poly np)
+           (if needs_nonneg
+             " >= 0   (G must be >= 0)"
+             " = 0   (G any sign — its SIGN picks the refutation direction)")))))
+    (None
+      (append_int
+        (mk_ind depth)
+        "[0] goal reads as a TWO-SIDED equality (int_eq = True, or no core order head) — cert = (list (G M0 …) (G M0 …)); list 1 refutes ¬(L<=R), list 2 refutes ¬(R<=L)"))))
+
+(fn fk_ints ((xs (List Int))) (List Int)
+  (match xs
+    (Nil "")
+    ((Cons n rest)
+     (append_int
+       (show_int n)
+       (append_int
+         (match rest
+           (Nil "")
+           (_ " "))
+         (fk_ints rest))))))
+
+(fn fk_int_count ((xs (List Int))) Int
+  (match xs
+    (Nil 0)
+    ((Cons _ t) (+ 1 (fk_int_count t)))))
+
+(fn fk_cert_line ((cert Cert) (nprem Int) (depth Int)) (List Int)
+  (match cert
+    ((Cert _ (CList items))
+     (match (cd_ints items)
+       ((Some ms)
+        (append_int
+          (mk_ind depth)
+          (append_int
+            "supplied cert: ("
+            (append_int
+              (fk_ints ms)
+              (append_int
+                ")  — "
+                (append_int
+                  (show_int (fk_int_count ms))
+                  (append_int
+                    " value(s) for "
+                    (append_int (show_int (+ nprem 1)) " slot(s)"))))))))
+       (None
+         (append_int
+           (mk_ind depth)
+           "supplied cert: not a flat int list (only the two-sided eq goal takes (list LE GE))"))))
+    (_ (append_int (mk_ind depth) "supplied cert: malformed payload"))))
+
+(fn fk_fail_lines ((seq Sequent) (cert Cert) (depth Int)) (List (List Int))
+  (match seq
+    ((Sequent _ _ premises goal_eq)
+     (Cons
+       (append_int
+         (mk_ind depth)
+         "by farkas REJECTED — slot table (cert = (G M0 … Mk), slots in premise order):")
+       (Cons
+         (append_int (mk_ind depth) (append_int "goal:  " (render_eq goal_eq)))
+         (Cons
+           (fk_goal_line goal_eq depth)
+           (append_lines
+             (fk_slot_lines premises 0 depth)
+             (Cons (fk_cert_line cert (count_eqs premises) depth) Nil))))))))
+
 (fn render_hyp_goal ((g Goal)) (List Int)
   (match g
     ((Goal Nil Nil eq) (render_eq eq))
@@ -225,7 +357,16 @@
 ;; (binding the cited equation's pattern vars), and the cited premises opened
 ;; to the same FVar vocabulary — enough to rebuild every obligation subgoal
 ;; exactly as check_premise_proofs does.
-(type RwTrace (RwTrace Sequent Env (List Equation)))
+;; RwTrace carries the REPLAY's own citation state (cited params, the
+;; fresh pattern-var names, the openings) so the type-gate diagnosis can
+;; reuse it. gen_fresh is unique per call — a gate that re-split the
+;; cited params would mint NEW fresh names, find none of them in the
+;; replay's match env, and report every captured binder as a dangling
+;; pivot (the bogus blanket REJECTED that used to stop every trace at
+;; the chain's first lemma rewrite-with).
+(type RwTrace
+  (RwTrace Sequent Env (List Equation) (List Param) (List Symbol)
+    (List Expr)))
 
 ;; Replay one RewriteWith's rewrite to get the resulting sequent PLUS the
 ;; obligation ingredients, mirroring check_sequent's RewriteWith arm by
@@ -258,7 +399,10 @@
                     (RwTrace
                       (Sequent params hyps premises new_eq)
                       env
-                      opened_premises)))))))))))))
+                      opened_premises
+                      cited_params
+                      patvars
+                      openings)))))))))))))
 
 ;; ---- type-gate diagnosis (failure path ONLY) --------------------------------
 ;; The kernel collapses every step failure to None/False; these re-run the
@@ -414,22 +558,18 @@
 ;; rewrite even though the match itself succeeded.
 (fn rw_cite_gate
   ((m Module)
-   (th Theory)
    (seq Sequent)
-   (er EqRef)
    (insts (List Inst))
+   (cited_params (List Param))
+   (pat_vars (List Symbol))
+   (openings (List Expr))
    (env Env))
   (Option (List Int))
-  (match (resolve_eq er seq th)
-    (None None)  ; unreachable: the replay resolved it
-    ((Some (Goal cited_params _ _))
-     (if (all_insts_named insts cited_params)
-       (match (split_params_by_insts cited_params insts)
-         ((Pair openings pat_vars)
-          (match seq
-            ((Sequent s_params _ _ _)
-             (tc_check_site m s_params cited_params pat_vars openings env)))))
-       (Some "citation: an inst names a binder the cited goal does not have")))))
+  (if (all_insts_named insts cited_params)
+    (match seq
+      ((Sequent s_params _ _ _)
+       (tc_check_site m s_params cited_params pat_vars openings env)))
+    (Some "citation: an inst names a binder the cited goal does not have")))
 
 ;; Check each RewriteWith obligation (the cited equation's premises at the
 ;; match instantiation) and DESCEND into the failing one — passing obligations
@@ -590,11 +730,11 @@
        ((Pair None ls) ls)))
     ((RewriteWith er dir sd insts prems cont)
      (match (apply_rewrite_step m th seq er dir sd insts)
-       ((Some (RwTrace seq2 env opened_premises))
+       ((Some (RwTrace seq2 env opened_premises cited_params pat_vars openings))
         ;; the replay matched — but the checker still gates the citation's
         ;; bindings (insts + captures) by type. A gated rewrite must trace
         ;; as the REJECTION it is, not as a successful rewrite.
-        (match (rw_cite_gate m th seq er insts env)
+        (match (rw_cite_gate m seq insts cited_params pat_vars openings env)
           ((Some msg)
            (Cons
              (append_int
@@ -638,15 +778,26 @@
                  ") did NOT apply (unresolved lemma or no match)")))
            (context_lines seq depth)))))
     ((ByTheory name cert)
-     (Cons
-       (append_int
-         (mk_ind depth)
+     ;; replay the decision procedure (untrusted, like every re-check
+     ;; here). A failing farkas renders its slot table; other theories
+     ;; at least say REJECTED instead of going silent.
+     (if (check_sequent m th seq (ByTheory name cert))
+       (Cons
          (append_int
-           "ByTheory "
+           (mk_ind depth)
+           (append_int "by " (append_int (chars_of_sym name) " — ok")))
+         Nil)
+       (if (sym_eq name (quote farkas))
+         (fk_fail_lines seq cert depth)
+         (Cons
            (append_int
-             (chars_of_sym name)
-             " — decision procedure (not replayed)")))
-       Nil))
+             (mk_ind depth)
+             (append_int
+               "by "
+               (append_int
+                 (chars_of_sym name)
+                 " — REJECTED (decision procedure says no)")))
+           (context_lines seq depth)))))
     ((WfInduct measure sub)
      ;; do_wf_induct's gate first: a non-Int measure is a REJECTION.
      (match (tc_check_int_expr m (seq_params seq) measure "wf-induct measure")
