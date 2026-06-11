@@ -24,6 +24,7 @@
 (use (:: examples snake_game_3 game *))
 (use (:: examples snake_game_3 game geom *))
 (use (:: examples snake_game_3 render frame *))
+(use (:: examples snake_game_3 render entity *))
 (use (:: examples snake_game_3 render render))
 
 ;; ---- the grid walker ---------------------------------------------------------
@@ -693,6 +694,1134 @@
                           (by farkas (list 1 0 0 1 0))
                           (by farkas (list 1 0 0 0 0)))
                          refl)))))))))))))
+
+;; ---- entity bridges --------------------------------------------------------------
+;; GameState is opaque, so the entity lemmas speak in ACCESSOR TERMS: the
+;; head cell is (snake_head (snake_of g)), its coordinates (pos_x/pos_y of
+;; it). Stating bounds and misses on those terms (rather than on equated
+;; fresh binders) keeps every lemma binder inside the goal equation — a
+;; binder that rides only in premises is invisible to the citation match,
+;; and the wf-induct IH's binders cannot be inst-pinned (they are fresh).
+
+(fn pos_x ((p Pos)) Int
+  (match p
+    ((Pos x y) x)))
+
+(fn pos_y ((p Pos)) Int
+  (match p
+    ((Pos x y) y)))
+
+(claim pos_eta
+  (goal ((p Pos)) () (= (Pos (pos_x p) (pos_y p)) p))
+  (case-on p Pos
+    ((case Pos
+       (a b)
+       (steps
+         ((rewrite (hyp 0) lr both true ())
+          (unfold pos_x lhs)
+          (reduce lhs)
+          (unfold pos_y lhs)
+          (reduce lhs))
+         refl)))))
+
+(claim pos_eq_refl
+  (goal ((p Pos)) () (= (pos_eq p p) True))
+  (case-on p Pos
+    ((case Pos
+       (a b)
+       (have (= (int_eq a a) True) (by eqdec (list))
+         (have (= (int_eq b b) True) (by eqdec (list))
+           (steps
+             ((rewrite (hyp 0) lr lhs true ())
+              (unfold pos_eq lhs)
+              (reduce lhs)
+              (rewrite (premise 0) lr lhs true ())
+              (unfold andb lhs)
+              (reduce lhs)
+              (rewrite (premise 1) lr lhs true ()))
+             refl)))))))
+
+;; a displayed cell whose COLUMN differs from a target cell's misses it.
+(claim cell_off_col
+  (goal ((q Pos) (r Int) (c Int)) ((= (int_eq (- c 1) (pos_x q)) False))
+    (= (pos_eq (Pos (- c 1) (- r 1)) q) False))
+  (case-on q Pos
+    ((case Pos
+       (a b)
+       (have (= (pos_x q) a)
+         (steps
+           ((rewrite (hyp 0) lr lhs true ()) (unfold pos_x lhs) (reduce lhs))
+           refl)
+         (steps
+           ((rewrite (hyp 0) lr lhs true ())
+            (unfold pos_eq lhs)
+            (reduce lhs)
+            (rewrite (premise 1) rl lhs true ())
+            (rewrite (premise 0) lr lhs true ())
+            (unfold andb lhs)
+            (reduce lhs))
+           refl))))))
+
+;; a displayed cell whose ROW differs from a target cell's misses it.
+(claim cell_off_row
+  (goal ((q Pos) (r Int) (c Int)) ((= (int_eq (- r 1) (pos_y q)) False))
+    (= (pos_eq (Pos (- c 1) (- r 1)) q) False))
+  (case-on q Pos
+    ((case Pos
+       (a b)
+       (have (= (pos_y q) b)
+         (steps
+           ((rewrite (hyp 0) lr lhs true ()) (unfold pos_y lhs) (reduce lhs))
+           refl)
+         (steps
+           ((rewrite (hyp 0) lr lhs true ()) (unfold pos_eq lhs) (reduce lhs))
+           (case-on (int_eq (- c 1) a) Bool
+             ((case True
+                (steps
+                  ((rewrite (hyp 0) lr lhs true ())
+                   (unfold andb lhs)
+                   (reduce lhs)
+                   (rewrite (premise 1) rl lhs true ())
+                   (rewrite (premise 0) lr lhs true ()))
+                  refl))
+              (case False
+                (steps
+                  ((rewrite (hyp 0) lr lhs true ())
+                   (unfold andb lhs)
+                   (reduce lhs))
+                  refl))))))))))
+
+;; a cell not on a (nonempty) snake is not its head — turns the I2 freeness
+;; premise into the head-test miss cell_glyph wants, without pos_eq symmetry.
+(claim mem_head_miss
+  (goal ((p Pos) (xs (List Pos)))
+    ((= (nonempty xs) True) (= (pos_mem p xs) False))
+    (= (pos_eq p (snake_head xs)) False))
+  (induct xs
+    ((case Nil
+       (have (= True False)
+         (steps
+           ((rewrite (premise 0) rl lhs true ())
+            (unfold nonempty lhs)
+            (reduce lhs))
+           refl)
+         (absurd (premise 2))))
+     (case Cons
+       (h t)
+       (case-on (pos_eq p h) Bool
+         ((case True
+            (have (= True False)
+              (steps
+                ((rewrite (premise 1) rl rhs true ())
+                 (unfold pos_mem rhs)
+                 (reduce rhs)
+                 (rewrite (hyp 0) lr rhs true ())
+                 (reduce rhs))
+                refl)
+              (absurd (premise 2))))
+          (case False
+            (steps
+              ((unfold snake_head lhs)
+               (reduce lhs)
+               (rewrite (hyp 0) lr lhs true ()))
+              refl))))))))
+
+;; in_bounds projections: the requirement premises arrive in the game
+;; contract's andb vocabulary; the scan lemmas want the atomic bounds.
+
+(claim ib_x_lo
+  (goal ((x Int) (y Int)) ((= (in_bounds (Pos x y)) True)) (= (le 0 x) True))
+  (rewrite-with
+    (lemma andb_tl)
+    lr
+    lhs
+    ((inst a (le 0 x)) (inst b (lt x (board_w))))
+    ((rewrite-with
+       (lemma andb_tl)
+       lr
+       lhs
+       ((inst a (andb (le 0 x) (lt x (board_w))))
+        (inst b (andb (le 0 y) (lt y (board_h)))))
+       ((steps
+          ((rewrite (premise 0) rl rhs true ())
+           (unfold in_bounds rhs)
+           (reduce rhs))
+          refl))
+       refl))
+    refl))
+
+(claim ib_x_hi
+  (goal ((x Int) (y Int)) ((= (in_bounds (Pos x y)) True))
+    (= (lt x (board_w)) True))
+  (rewrite-with
+    (lemma andb_tr)
+    lr
+    lhs
+    ((inst a (le 0 x)) (inst b (lt x (board_w))))
+    ((rewrite-with
+       (lemma andb_tl)
+       lr
+       lhs
+       ((inst a (andb (le 0 x) (lt x (board_w))))
+        (inst b (andb (le 0 y) (lt y (board_h)))))
+       ((steps
+          ((rewrite (premise 0) rl rhs true ())
+           (unfold in_bounds rhs)
+           (reduce rhs))
+          refl))
+       refl))
+    refl))
+
+(claim ib_y_lo
+  (goal ((x Int) (y Int)) ((= (in_bounds (Pos x y)) True)) (= (le 0 y) True))
+  (rewrite-with
+    (lemma andb_tl)
+    lr
+    lhs
+    ((inst a (le 0 y)) (inst b (lt y (board_h))))
+    ((rewrite-with
+       (lemma andb_tr)
+       lr
+       lhs
+       ((inst a (andb (le 0 x) (lt x (board_w))))
+        (inst b (andb (le 0 y) (lt y (board_h)))))
+       ((steps
+          ((rewrite (premise 0) rl rhs true ())
+           (unfold in_bounds rhs)
+           (reduce rhs))
+          refl))
+       refl))
+    refl))
+
+(claim ib_y_hi
+  (goal ((x Int) (y Int)) ((= (in_bounds (Pos x y)) True))
+    (= (lt y (board_h)) True))
+  (rewrite-with
+    (lemma andb_tr)
+    lr
+    lhs
+    ((inst a (le 0 y)) (inst b (lt y (board_h))))
+    ((rewrite-with
+       (lemma andb_tr)
+       lr
+       lhs
+       ((inst a (andb (le 0 x) (lt x (board_w))))
+        (inst b (andb (le 0 y) (lt y (board_h)))))
+       ((steps
+          ((rewrite (premise 0) rl rhs true ())
+           (unfold in_bounds rhs)
+           (reduce rhs))
+          refl))
+       refl))
+    refl))
+
+;; ---- glyph facts at the entities --------------------------------------------------
+
+;; the head's screen cell renders '@' — head test fires first, no body/food
+;; facts needed.
+(claim glyph_head
+  (goal ((g GameState))
+    ((= (le 0 (pos_x (snake_head (snake_of g)))) True)
+     (= (lt (pos_x (snake_head (snake_of g))) (board_w)) True)
+     (= (le 0 (pos_y (snake_head (snake_of g)))) True)
+     (= (lt (pos_y (snake_head (snake_of g))) (board_h)) True))
+    (=
+      (glyph
+        g
+        (+ (pos_y (snake_head (snake_of g))) 1)
+        (+ (pos_x (snake_head (snake_of g))) 1))
+      64))
+  (have (= (int_eq (+ (pos_y (snake_head (snake_of g))) 1) 0) False)
+    (by farkas (list -1 0 0 1 0))
+    (have
+      (= (int_eq (+ (pos_y (snake_head (snake_of g))) 1) (+ (board_h) 1)) False)
+      (by farkas (list 1 0 0 0 1 0))
+      (have (= (int_eq (+ (pos_x (snake_head (snake_of g))) 1) 0) False)
+        (by farkas (list -1 1 0 0 0 0 0))
+        (have
+          (=
+            (int_eq (+ (pos_x (snake_head (snake_of g))) 1) (+ (board_w) 1))
+            False)
+          (by farkas (list 1 0 1 0 0 0 0 0))
+          (have
+            (=
+              (- (+ (pos_x (snake_head (snake_of g))) 1) 1)
+              (pos_x (snake_head (snake_of g))))
+            (by lia (list))
+            (have
+              (=
+                (- (+ (pos_y (snake_head (snake_of g))) 1) 1)
+                (pos_y (snake_head (snake_of g))))
+              (by lia (list))
+              (steps
+                ((unfold glyph lhs)
+                 (unfold on_border lhs)
+                 (rewrite (premise 4) lr lhs true ())
+                 (reduce lhs)
+                 (rewrite (premise 5) lr lhs true ())
+                 (reduce lhs)
+                 (rewrite (premise 6) lr lhs true ())
+                 (reduce lhs)
+                 (rewrite (premise 7) lr lhs true ())
+                 (reduce lhs)
+                 (unfold cell_glyph lhs)
+                 (rewrite (premise 8) lr lhs true ())
+                 (rewrite (premise 9) lr lhs true ())
+                 (rewrite (lemma pos_eta) lr lhs true ())
+                 (rewrite (lemma pos_eq_refl) lr lhs true ())
+                 (reduce lhs))
+                refl))))))))
+
+;; a cell that misses the head never renders '@' — body 79, food 42, blank
+;; 32, wall 35: all != 64, with NO facts about the body or food. The miss
+;; premise is spelled on cell_glyph's own head test.
+(claim glyph_no_head
+  (goal ((g GameState) (r Int) (c Int))
+    ((= (pos_eq (Pos (- c 1) (- r 1)) (snake_head (snake_of g))) False))
+    (= (int_eq (glyph g r c) 64) False))
+  (case-on (on_border r c) Bool
+    ((case True
+       (have (= (int_eq 35 64) False) (by farkas (list 1 0))
+         (steps
+           ((unfold glyph lhs)
+            (rewrite (hyp 0) lr lhs true ())
+            (reduce lhs)
+            (rewrite (premise 1) lr lhs true ()))
+           refl)))
+     (case False
+       (steps
+         ((unfold glyph lhs)
+          (rewrite (hyp 0) lr lhs true ())
+          (reduce lhs)
+          (unfold cell_glyph lhs)
+          (rewrite (premise 0) lr lhs true ())
+          (reduce lhs))
+         (case-on (pos_mem (Pos (- c 1) (- r 1)) (snake_of g)) Bool
+           ((case True
+              (have (= (int_eq 79 64) False) (by farkas (list -1 0))
+                (steps
+                  ((rewrite (hyp 0) lr lhs true ())
+                   (reduce lhs)
+                   (rewrite (premise 1) lr lhs true ()))
+                  refl)))
+            (case False
+              (steps
+                ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                (case-on (pos_eq (Pos (- c 1) (- r 1)) (food_of g)) Bool
+                  ((case True
+                     (have (= (int_eq 42 64) False) (by farkas (list 1 0))
+                       (steps
+                         ((rewrite (hyp 0) lr lhs true ())
+                          (reduce lhs)
+                          (rewrite (premise 1) lr lhs true ()))
+                         refl)))
+                   (case False
+                     (have (= (int_eq 32 64) False) (by farkas (list 1 0))
+                       (steps
+                         ((rewrite (hyp 0) lr lhs true ())
+                          (reduce lhs)
+                          (rewrite (premise 1) lr lhs true ()))
+                         refl))))))))))))))
+
+;; the food's screen cell renders '*' when the snake is elsewhere — the head
+;; and body misses arrive as premises in the accessors' own spelling (the
+;; fulfills derives them from the I2 freeness vocabulary via mem_head_miss).
+(claim glyph_food
+  (goal ((g GameState))
+    ((= (le 0 (pos_x (food_of g))) True)
+     (= (lt (pos_x (food_of g)) (board_w)) True)
+     (= (le 0 (pos_y (food_of g))) True)
+     (= (lt (pos_y (food_of g)) (board_h)) True)
+     (= (pos_eq (food_of g) (snake_head (snake_of g))) False)
+     (= (pos_mem (food_of g) (snake_of g)) False))
+    (= (glyph g (+ (pos_y (food_of g)) 1) (+ (pos_x (food_of g)) 1)) 42))
+  (have (= (int_eq (+ (pos_y (food_of g)) 1) 0) False)
+    (by farkas (list -1 0 0 1 0 0 0))
+    (have (= (int_eq (+ (pos_y (food_of g)) 1) (+ (board_h) 1)) False)
+      (by farkas (list 1 0 0 0 1 0 0 0))
+      (have (= (int_eq (+ (pos_x (food_of g)) 1) 0) False)
+        (by farkas (list -1 1 0 0 0 0 0 0 0))
+        (have (= (int_eq (+ (pos_x (food_of g)) 1) (+ (board_w) 1)) False)
+          (by farkas (list 1 0 1 0 0 0 0 0 0 0))
+          (have (= (- (+ (pos_x (food_of g)) 1) 1) (pos_x (food_of g)))
+            (by lia (list))
+            (have (= (- (+ (pos_y (food_of g)) 1) 1) (pos_y (food_of g)))
+              (by lia (list))
+              (steps
+                ((unfold glyph lhs)
+                 (unfold on_border lhs)
+                 (rewrite (premise 6) lr lhs true ())
+                 (reduce lhs)
+                 (rewrite (premise 7) lr lhs true ())
+                 (reduce lhs)
+                 (rewrite (premise 8) lr lhs true ())
+                 (reduce lhs)
+                 (rewrite (premise 9) lr lhs true ())
+                 (reduce lhs)
+                 (unfold cell_glyph lhs)
+                 (rewrite (premise 10) lr lhs true ())
+                 (rewrite (premise 11) lr lhs true ())
+                 (rewrite (lemma pos_eta) lr lhs true ())
+                 (rewrite (premise 4) lr lhs true ())
+                 (reduce lhs)
+                 (rewrite (premise 5) lr lhs true ())
+                 (reduce lhs)
+                 (rewrite (lemma pos_eq_refl) lr lhs true ())
+                 (reduce lhs))
+                refl))))))))
+
+;; a cell that misses the food never renders '*' — head 64, body 79, blank
+;; 32, wall 35: all != 42, with NO facts about the snake.
+(claim glyph_no_food
+  (goal ((g GameState) (r Int) (c Int))
+    ((= (pos_eq (Pos (- c 1) (- r 1)) (food_of g)) False))
+    (= (int_eq (glyph g r c) 42) False))
+  (case-on (on_border r c) Bool
+    ((case True
+       (have (= (int_eq 35 42) False) (by farkas (list 1 0))
+         (steps
+           ((unfold glyph lhs)
+            (rewrite (hyp 0) lr lhs true ())
+            (reduce lhs)
+            (rewrite (premise 1) lr lhs true ()))
+           refl)))
+     (case False
+       (steps
+         ((unfold glyph lhs)
+          (rewrite (hyp 0) lr lhs true ())
+          (reduce lhs)
+          (unfold cell_glyph lhs))
+         (case-on (pos_eq (Pos (- c 1) (- r 1)) (snake_head (snake_of g))) Bool
+           ((case True
+              (have (= (int_eq 64 42) False) (by farkas (list -1 0))
+                (steps
+                  ((rewrite (hyp 0) lr lhs true ())
+                   (reduce lhs)
+                   (rewrite (premise 1) lr lhs true ()))
+                  refl)))
+            (case False
+              (steps
+                ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                (case-on (pos_mem (Pos (- c 1) (- r 1)) (snake_of g)) Bool
+                  ((case True
+                     (have (= (int_eq 79 42) False) (by farkas (list -1 0))
+                       (steps
+                         ((rewrite (hyp 0) lr lhs true ())
+                          (reduce lhs)
+                          (rewrite (premise 1) lr lhs true ()))
+                         refl)))
+                   (case False
+                     (have (= (int_eq 32 42) False) (by farkas (list 1 0))
+                       (steps
+                         ((rewrite (hyp 0) lr lhs true ())
+                          (reduce lhs)
+                          (rewrite (premise 0) lr lhs true ())
+                          (reduce lhs)
+                          (rewrite (premise 1) lr lhs true ()))
+                         refl))))))))))))))
+
+;; ---- the head scan (row_miss → row_find → rows_find) ------------------------------
+
+;; a row whose displayed game row misses the head's has no '@' anywhere —
+;; through the closing wall and the newline.
+(claim row_miss_head
+  (goal ((g GameState) (r Int) (c Int))
+    ((= (int_eq (- r 1) (pos_y (snake_head (snake_of g)))) False)
+     (= (le 0 c) True)
+     (= (le c (+ (board_w) 2)) True))
+    (= (row_find 64 c (render_row g r c)) None))
+  (wf-induct (- (+ (board_w) 2) c)
+    (case-on (le (- (+ (board_w) 2) c) 0) Bool
+      ((case True
+         (have (= (le (- (+ (board_w) 2) c) 0) True)
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+           (have (= (int_eq 10 64) False) (by farkas (list 1 0 0 0 0))
+             (rewrite-with
+               (lemma rr_stop)
+               lr
+               lhs
+               ()
+               ((by farkas (list 1 0 0 0 1 0)))
+               (steps
+                 ((unfold row_find lhs)
+                  (reduce lhs)
+                  (rewrite (premise 4) lr lhs true ())
+                  (reduce lhs)
+                  (unfold row_find lhs)
+                  (reduce lhs))
+                 refl)))))
+       (case False
+         (have (= (le (- (+ (board_w) 2) c) 0) False)
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+           (rewrite-with
+             (lemma rr_step)
+             lr
+             lhs
+             ()
+             ((by farkas (list 1 0 0 0 1)))
+             (have
+               (=
+                 (pos_eq (Pos (- c 1) (- r 1)) (snake_head (snake_of g)))
+                 False)
+               (rewrite-with
+                 (lemma cell_off_row)
+                 lr
+                 lhs
+                 ()
+                 ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                 refl)
+               (steps
+                 ((unfold row_find lhs) (reduce lhs))
+                 (rewrite-with
+                   (lemma glyph_no_head)
+                   lr
+                   lhs
+                   ()
+                   ((steps ((rewrite (premise 4) lr lhs true ())) refl))
+                   (steps
+                     ((reduce lhs))
+                     (rewrite-with
+                       (hyp 1)
+                       lr
+                       lhs
+                       ()
+                       ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                        (by farkas (list 1 0 1 0 0 0))
+                        (by farkas (list 1 0 0 0 1 0))
+                        (by farkas (list 1 0 0 0 1 0))
+                        (by farkas (list 1 0 0 0 0 0)))
+                       refl))))))))))))
+
+;; in the head's own row, scanning from any c <= head_col finds the '@'
+;; exactly at the head's screen column.
+(claim row_find_head
+  (goal ((g GameState) (c Int))
+    ((= (le 0 (pos_x (snake_head (snake_of g)))) True)
+     (= (lt (pos_x (snake_head (snake_of g))) (board_w)) True)
+     (= (le 0 (pos_y (snake_head (snake_of g)))) True)
+     (= (lt (pos_y (snake_head (snake_of g))) (board_h)) True)
+     (= (le 0 c) True)
+     (= (le c (+ (pos_x (snake_head (snake_of g))) 1)) True))
+    (=
+      (row_find 64 c (render_row g (+ (pos_y (snake_head (snake_of g))) 1) c))
+      (Some (+ (pos_x (snake_head (snake_of g))) 1))))
+  (wf-induct (- (+ (pos_x (snake_head (snake_of g))) 1) c)
+    (case-on (le (- (+ (pos_x (snake_head (snake_of g))) 1) c) 0) Bool
+      ((case True
+         (have (= (le (- (+ (pos_x (snake_head (snake_of g))) 1) c) 0) True)
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+           (have (= c (+ (pos_x (snake_head (snake_of g))) 1))
+             (by farkas (list (list 1 0 0 0 0 0 1 0) (list 1 0 0 0 0 0 0 1)))
+             (steps
+               ((rewrite (premise 7) lr lhs true ()))
+               (rewrite-with
+                 (lemma rr_step)
+                 lr
+                 lhs
+                 ()
+                 ((by farkas (list 1 0 1 0 0 0 0 0 0)))
+                 (steps
+                   ((unfold row_find lhs) (reduce lhs))
+                   (rewrite-with
+                     (lemma glyph_head)
+                     lr
+                     lhs
+                     ()
+                     ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 1) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 2) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 3) lr lhs true ())) refl))
+                     (have (= (int_eq 64 64) True) (by eqdec (list))
+                       (steps
+                         ((rewrite (premise 8) lr lhs true ()) (reduce lhs))
+                         refl)))))))))
+       (case False
+         (have (= (le (- (+ (pos_x (snake_head (snake_of g))) 1) c) 0) False)
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+           (rewrite-with
+             (lemma rr_step)
+             lr
+             lhs
+             ()
+             ((by farkas (list 1 0 1 0 0 0 1 0)))
+             (have
+               (=
+                 (pos_eq
+                   (Pos (- c 1) (- (+ (pos_y (snake_head (snake_of g))) 1) 1))
+                   (snake_head (snake_of g)))
+                 False)
+               (rewrite-with
+                 (lemma cell_off_col)
+                 lr
+                 lhs
+                 ()
+                 ((by farkas (list 1 0 0 0 0 0 0 1)))
+                 refl)
+               (steps
+                 ((unfold row_find lhs) (reduce lhs))
+                 (rewrite-with
+                   (lemma glyph_no_head)
+                   lr
+                   lhs
+                   ()
+                   ((steps ((rewrite (premise 7) lr lhs true ())) refl))
+                   (steps
+                     ((reduce lhs))
+                     (rewrite-with
+                       (hyp 1)
+                       lr
+                       lhs
+                       ()
+                       ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                        (steps ((rewrite (premise 1) lr lhs true ())) refl)
+                        (steps ((rewrite (premise 2) lr lhs true ())) refl)
+                        (steps ((rewrite (premise 3) lr lhs true ())) refl)
+                        (by farkas (list 1 0 0 0 0 1 0 0 0))
+                        (by farkas (list 1 0 0 0 0 0 0 1 0))
+                        (by farkas (list 1 0 0 0 0 0 0 1 0))
+                        (by farkas (list 1 0 0 0 0 0 0 0 0)))
+                       refl))))))))))))
+
+;; walking the split rows from any r <= head_row, the detector reports the
+;; head's screen cell.
+(claim rows_find_head
+  (goal ((g GameState) (r Int))
+    ((= (le 0 (pos_x (snake_head (snake_of g)))) True)
+     (= (lt (pos_x (snake_head (snake_of g))) (board_w)) True)
+     (= (le 0 (pos_y (snake_head (snake_of g)))) True)
+     (= (lt (pos_y (snake_head (snake_of g))) (board_h)) True)
+     (= (le 0 r) True)
+     (= (le r (+ (pos_y (snake_head (snake_of g))) 1)) True))
+    (=
+      (rows_find 64 r (split_rows (render_rows g r)))
+      (Some
+        (Pair
+          (+ (pos_y (snake_head (snake_of g))) 1)
+          (+ (pos_x (snake_head (snake_of g))) 1)))))
+  (wf-induct (- (+ (pos_y (snake_head (snake_of g))) 1) r)
+    (case-on (le (- (+ (pos_y (snake_head (snake_of g))) 1) r) 0) Bool
+      ((case True
+         (have (= (le (- (+ (pos_y (snake_head (snake_of g))) 1) r) 0) True)
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+           (have (= r (+ (pos_y (snake_head (snake_of g))) 1))
+             (by farkas (list (list 1 0 0 0 0 0 1 0) (list 1 0 0 0 0 0 0 1)))
+             (steps
+               ((rewrite (premise 7) lr lhs true ()))
+               (rewrite-with
+                 (lemma split_render)
+                 lr
+                 lhs
+                 ()
+                 ((by farkas (list 1 0 0 1 0 0 0 0 0))
+                  (by farkas (list 1 0 0 0 1 0 0 0 0)))
+                 (steps
+                   ((unfold rows_find lhs) (reduce lhs))
+                   (rewrite-with
+                     (lemma row_find_head)
+                     lr
+                     lhs
+                     ()
+                     ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 1) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 2) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 3) lr lhs true ())) refl)
+                      (by ord (list))
+                      (by farkas (list 1 1 0 0 0 0 0 0 0)))
+                     (steps ((reduce lhs)) refl))))))))
+       (case False
+         (have (= (le (- (+ (pos_y (snake_head (snake_of g))) 1) r) 0) False)
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+           (have (= (lt 0 (board_w)) True)
+             (steps ((rewrite (lemma board_w_pos) lr lhs true ())) refl)
+             (rewrite-with
+               (lemma split_render)
+               lr
+               lhs
+               ()
+               ((steps ((rewrite (premise 4) lr lhs true ())) refl)
+                (by farkas (list 1 0 0 0 1 0 0 1 0)))
+               (steps
+                 ((unfold rows_find lhs) (reduce lhs))
+                 (rewrite-with
+                   (lemma row_miss_head)
+                   lr
+                   lhs
+                   ()
+                   ((by farkas (list 1 0 0 0 0 0 0 1 0))
+                    (by ord (list))
+                    (by farkas (list 1 0 0 0 0 0 0 0 1)))
+                   (steps
+                     ((reduce lhs))
+                     (rewrite-with
+                       (hyp 1)
+                       lr
+                       lhs
+                       ()
+                       ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                        (steps ((rewrite (premise 1) lr lhs true ())) refl)
+                        (steps ((rewrite (premise 2) lr lhs true ())) refl)
+                        (steps ((rewrite (premise 3) lr lhs true ())) refl)
+                        (by farkas (list 1 0 0 0 0 1 0 0 0))
+                        (by farkas (list 1 0 0 0 0 0 0 1 0))
+                        (by farkas (list 1 0 0 0 0 0 0 1 0))
+                        (by farkas (list 1 0 0 0 0 0 0 0 0)))
+                       refl))))))))))))
+
+;; ---- the food scan (row_miss → row_find → rows_find) ------------------------------
+
+;; a row whose displayed game row misses the food's has no '*' anywhere.
+(claim row_miss_food
+  (goal ((g GameState) (r Int) (c Int))
+    ((= (int_eq (- r 1) (pos_y (food_of g))) False)
+     (= (le 0 c) True)
+     (= (le c (+ (board_w) 2)) True))
+    (= (row_find 42 c (render_row g r c)) None))
+  (wf-induct (- (+ (board_w) 2) c)
+    (case-on (le (- (+ (board_w) 2) c) 0) Bool
+      ((case True
+         (have (= (le (- (+ (board_w) 2) c) 0) True)
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+           (have (= (int_eq 10 42) False) (by farkas (list 1 0 0 0 0))
+             (rewrite-with
+               (lemma rr_stop)
+               lr
+               lhs
+               ()
+               ((by farkas (list 1 0 0 0 1 0)))
+               (steps
+                 ((unfold row_find lhs)
+                  (reduce lhs)
+                  (rewrite (premise 4) lr lhs true ())
+                  (reduce lhs)
+                  (unfold row_find lhs)
+                  (reduce lhs))
+                 refl)))))
+       (case False
+         (have (= (le (- (+ (board_w) 2) c) 0) False)
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+           (rewrite-with
+             (lemma rr_step)
+             lr
+             lhs
+             ()
+             ((by farkas (list 1 0 0 0 1)))
+             (have (= (pos_eq (Pos (- c 1) (- r 1)) (food_of g)) False)
+               (rewrite-with
+                 (lemma cell_off_row)
+                 lr
+                 lhs
+                 ()
+                 ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                 refl)
+               (steps
+                 ((unfold row_find lhs) (reduce lhs))
+                 (rewrite-with
+                   (lemma glyph_no_food)
+                   lr
+                   lhs
+                   ()
+                   ((steps ((rewrite (premise 4) lr lhs true ())) refl))
+                   (steps
+                     ((reduce lhs))
+                     (rewrite-with
+                       (hyp 1)
+                       lr
+                       lhs
+                       ()
+                       ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                        (by farkas (list 1 0 1 0 0 0))
+                        (by farkas (list 1 0 0 0 1 0))
+                        (by farkas (list 1 0 0 0 1 0))
+                        (by farkas (list 1 0 0 0 0 0)))
+                       refl))))))))))))
+
+;; in the food's own row, scanning from any c <= food_col finds the '*'
+;; exactly at the food's screen column (the snake is elsewhere by premise).
+(claim row_find_food
+  (goal ((g GameState) (c Int))
+    ((= (le 0 (pos_x (food_of g))) True)
+     (= (lt (pos_x (food_of g)) (board_w)) True)
+     (= (le 0 (pos_y (food_of g))) True)
+     (= (lt (pos_y (food_of g)) (board_h)) True)
+     (= (pos_eq (food_of g) (snake_head (snake_of g))) False)
+     (= (pos_mem (food_of g) (snake_of g)) False)
+     (= (le 0 c) True)
+     (= (le c (+ (pos_x (food_of g)) 1)) True))
+    (=
+      (row_find 42 c (render_row g (+ (pos_y (food_of g)) 1) c))
+      (Some (+ (pos_x (food_of g)) 1))))
+  (wf-induct (- (+ (pos_x (food_of g)) 1) c)
+    (case-on (le (- (+ (pos_x (food_of g)) 1) c) 0) Bool
+      ((case True
+         (have (= (le (- (+ (pos_x (food_of g)) 1) c) 0) True)
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+           (have (= c (+ (pos_x (food_of g)) 1))
+             (by
+               farkas
+               (list (list 1 0 0 0 0 0 0 0 1 0) (list 1 0 0 0 0 0 0 0 0 1)))
+             (steps
+               ((rewrite (premise 9) lr lhs true ()))
+               (rewrite-with
+                 (lemma rr_step)
+                 lr
+                 lhs
+                 ()
+                 ((by farkas (list 1 0 1 0 0 0 0 0 0 0 0)))
+                 (steps
+                   ((unfold row_find lhs) (reduce lhs))
+                   (rewrite-with
+                     (lemma glyph_food)
+                     lr
+                     lhs
+                     ()
+                     ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 1) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 2) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 3) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 4) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 5) lr lhs true ())) refl))
+                     (have (= (int_eq 42 42) True) (by eqdec (list))
+                       (steps
+                         ((rewrite (premise 10) lr lhs true ()) (reduce lhs))
+                         refl)))))))))
+       (case False
+         (have (= (le (- (+ (pos_x (food_of g)) 1) c) 0) False)
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+           (rewrite-with
+             (lemma rr_step)
+             lr
+             lhs
+             ()
+             ((by farkas (list 1 0 1 0 0 0 0 0 1 0)))
+             (have
+               (=
+                 (pos_eq
+                   (Pos (- c 1) (- (+ (pos_y (food_of g)) 1) 1))
+                   (food_of g))
+                 False)
+               (rewrite-with
+                 (lemma cell_off_col)
+                 lr
+                 lhs
+                 ()
+                 ((by farkas (list 1 0 0 0 0 0 0 0 0 1)))
+                 refl)
+               (steps
+                 ((unfold row_find lhs) (reduce lhs))
+                 (rewrite-with
+                   (lemma glyph_no_food)
+                   lr
+                   lhs
+                   ()
+                   ((steps ((rewrite (premise 9) lr lhs true ())) refl))
+                   (steps
+                     ((reduce lhs))
+                     (rewrite-with
+                       (hyp 1)
+                       lr
+                       lhs
+                       ()
+                       ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                        (steps ((rewrite (premise 1) lr lhs true ())) refl)
+                        (steps ((rewrite (premise 2) lr lhs true ())) refl)
+                        (steps ((rewrite (premise 3) lr lhs true ())) refl)
+                        (steps ((rewrite (premise 4) lr lhs true ())) refl)
+                        (steps ((rewrite (premise 5) lr lhs true ())) refl)
+                        (by farkas (list 1 0 0 0 0 0 0 1 0 0 0))
+                        (by farkas (list 1 0 0 0 0 0 0 0 0 1 0))
+                        (by farkas (list 1 0 0 0 0 0 0 0 0 1 0))
+                        (by farkas (list 1 0 0 0 0 0 0 0 0 0 0)))
+                       refl))))))))))))
+
+;; walking the split rows from any r <= food_row, the detector reports the
+;; food's screen cell.
+(claim rows_find_food
+  (goal ((g GameState) (r Int))
+    ((= (le 0 (pos_x (food_of g))) True)
+     (= (lt (pos_x (food_of g)) (board_w)) True)
+     (= (le 0 (pos_y (food_of g))) True)
+     (= (lt (pos_y (food_of g)) (board_h)) True)
+     (= (pos_eq (food_of g) (snake_head (snake_of g))) False)
+     (= (pos_mem (food_of g) (snake_of g)) False)
+     (= (le 0 r) True)
+     (= (le r (+ (pos_y (food_of g)) 1)) True))
+    (=
+      (rows_find 42 r (split_rows (render_rows g r)))
+      (Some (Pair (+ (pos_y (food_of g)) 1) (+ (pos_x (food_of g)) 1)))))
+  (wf-induct (- (+ (pos_y (food_of g)) 1) r)
+    (case-on (le (- (+ (pos_y (food_of g)) 1) r) 0) Bool
+      ((case True
+         (have (= (le (- (+ (pos_y (food_of g)) 1) r) 0) True)
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+           (have (= r (+ (pos_y (food_of g)) 1))
+             (by
+               farkas
+               (list (list 1 0 0 0 0 0 0 0 1 0) (list 1 0 0 0 0 0 0 0 0 1)))
+             (steps
+               ((rewrite (premise 9) lr lhs true ()))
+               (rewrite-with
+                 (lemma split_render)
+                 lr
+                 lhs
+                 ()
+                 ((by farkas (list 1 0 0 1 0 0 0 0 0 0 0))
+                  (by farkas (list 1 0 0 0 1 0 0 0 0 0 0)))
+                 (steps
+                   ((unfold rows_find lhs) (reduce lhs))
+                   (rewrite-with
+                     (lemma row_find_food)
+                     lr
+                     lhs
+                     ()
+                     ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 1) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 2) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 3) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 4) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 5) lr lhs true ())) refl)
+                      (by ord (list))
+                      (by farkas (list 1 1 0 0 0 0 0 0 0 0 0)))
+                     (steps ((reduce lhs)) refl))))))))
+       (case False
+         (have (= (le (- (+ (pos_y (food_of g)) 1) r) 0) False)
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+           (have (= (lt 0 (board_w)) True)
+             (steps ((rewrite (lemma board_w_pos) lr lhs true ())) refl)
+             (rewrite-with
+               (lemma split_render)
+               lr
+               lhs
+               ()
+               ((steps ((rewrite (premise 6) lr lhs true ())) refl)
+                (by farkas (list 1 0 0 0 1 0 0 0 0 1 0)))
+               (steps
+                 ((unfold rows_find lhs) (reduce lhs))
+                 (rewrite-with
+                   (lemma row_miss_food)
+                   lr
+                   lhs
+                   ()
+                   ((by farkas (list 1 0 0 0 0 0 0 0 0 1 0))
+                    (by ord (list))
+                    (by farkas (list 1 0 0 0 0 0 0 0 0 0 1)))
+                   (steps
+                     ((reduce lhs))
+                     (rewrite-with
+                       (hyp 1)
+                       lr
+                       lhs
+                       ()
+                       ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                        (steps ((rewrite (premise 1) lr lhs true ())) refl)
+                        (steps ((rewrite (premise 2) lr lhs true ())) refl)
+                        (steps ((rewrite (premise 3) lr lhs true ())) refl)
+                        (steps ((rewrite (premise 4) lr lhs true ())) refl)
+                        (steps ((rewrite (premise 5) lr lhs true ())) refl)
+                        (by farkas (list 1 0 0 0 0 0 0 1 0 0 0))
+                        (by farkas (list 1 0 0 0 0 0 0 0 0 1 0))
+                        (by farkas (list 1 0 0 0 0 0 0 0 0 1 0))
+                        (by farkas (list 1 0 0 0 0 0 0 0 0 0 0)))
+                       refl))))))))))))
+
+;; ---- THE ENTITY FACTS -------------------------------------------------------------
+
+(fulfills head_shown
+  (have (= (pos_x (snake_head (snake_of g))) x)
+    (steps
+      ((rewrite (premise 0) lr lhs true ()) (unfold pos_x lhs) (reduce lhs))
+      refl)
+    (have (= (pos_y (snake_head (snake_of g))) y)
+      (steps
+        ((rewrite (premise 0) lr lhs true ()) (unfold pos_y lhs) (reduce lhs))
+        refl)
+      (have (= (le 0 x) True)
+        (rewrite-with
+          (lemma ib_x_lo)
+          lr
+          lhs
+          ((inst y y))
+          ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+          refl)
+        (have (= (lt x (board_w)) True)
+          (rewrite-with
+            (lemma ib_x_hi)
+            lr
+            lhs
+            ((inst y y))
+            ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+            refl)
+          (have (= (le 0 y) True)
+            (rewrite-with
+              (lemma ib_y_lo)
+              lr
+              lhs
+              ((inst x x))
+              ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+              refl)
+            (have (= (lt y (board_h)) True)
+              (rewrite-with
+                (lemma ib_y_hi)
+                lr
+                lhs
+                ((inst x x))
+                ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+                refl)
+              (have (= (le 0 (pos_x (snake_head (snake_of g)))) True)
+                (steps
+                  ((rewrite (premise 2) lr lhs true ())
+                   (rewrite (premise 4) lr lhs true ()))
+                  refl)
+                (have (= (lt (pos_x (snake_head (snake_of g))) (board_w)) True)
+                  (steps
+                    ((rewrite (premise 2) lr lhs true ())
+                     (rewrite (premise 5) lr lhs true ()))
+                    refl)
+                  (have (= (le 0 (pos_y (snake_head (snake_of g)))) True)
+                    (steps
+                      ((rewrite (premise 3) lr lhs true ())
+                       (rewrite (premise 6) lr lhs true ()))
+                      refl)
+                    (have
+                      (= (lt (pos_y (snake_head (snake_of g))) (board_h)) True)
+                      (steps
+                        ((rewrite (premise 3) lr lhs true ())
+                         (rewrite (premise 7) lr lhs true ()))
+                        refl)
+                      (steps
+                        ((unfold head_at lhs)
+                         (unfold find_glyph lhs)
+                         (unfold render lhs))
+                        (rewrite-with
+                          (lemma rows_find_head)
+                          lr
+                          lhs
+                          ()
+                          ((steps ((rewrite (premise 8) lr lhs true ())) refl)
+                           (steps ((rewrite (premise 9) lr lhs true ())) refl)
+                           (steps ((rewrite (premise 10) lr lhs true ())) refl)
+                           (steps ((rewrite (premise 11) lr lhs true ())) refl)
+                           (by ord (list))
+                           (by farkas (list 1 0 0 0 0 0 0 0 0 0 0 1 0)))
+                          (steps
+                            ((rewrite (premise 2) lr lhs true ())
+                             (rewrite (premise 3) lr lhs true ()))
+                            refl))))))))))))))
+
+(fulfills food_shown
+  (have (= (pos_x (food_of g)) x)
+    (steps
+      ((rewrite (premise 0) lr lhs true ()) (unfold pos_x lhs) (reduce lhs))
+      refl)
+    (have (= (pos_y (food_of g)) y)
+      (steps
+        ((rewrite (premise 0) lr lhs true ()) (unfold pos_y lhs) (reduce lhs))
+        refl)
+      (have (= (le 0 x) True)
+        (rewrite-with
+          (lemma ib_x_lo)
+          lr
+          lhs
+          ((inst y y))
+          ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+          refl)
+        (have (= (lt x (board_w)) True)
+          (rewrite-with
+            (lemma ib_x_hi)
+            lr
+            lhs
+            ((inst y y))
+            ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+            refl)
+          (have (= (le 0 y) True)
+            (rewrite-with
+              (lemma ib_y_lo)
+              lr
+              lhs
+              ((inst x x))
+              ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+              refl)
+            (have (= (lt y (board_h)) True)
+              (rewrite-with
+                (lemma ib_y_hi)
+                lr
+                lhs
+                ((inst x x))
+                ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+                refl)
+              (have (= (le 0 (pos_x (food_of g))) True)
+                (steps
+                  ((rewrite (premise 4) lr lhs true ())
+                   (rewrite (premise 6) lr lhs true ()))
+                  refl)
+                (have (= (lt (pos_x (food_of g)) (board_w)) True)
+                  (steps
+                    ((rewrite (premise 4) lr lhs true ())
+                     (rewrite (premise 7) lr lhs true ()))
+                    refl)
+                  (have (= (le 0 (pos_y (food_of g))) True)
+                    (steps
+                      ((rewrite (premise 5) lr lhs true ())
+                       (rewrite (premise 8) lr lhs true ()))
+                      refl)
+                    (have (= (lt (pos_y (food_of g)) (board_h)) True)
+                      (steps
+                        ((rewrite (premise 5) lr lhs true ())
+                         (rewrite (premise 9) lr lhs true ()))
+                        refl)
+                      (have (= (pos_mem (food_of g) (snake_of g)) False)
+                        (steps
+                          ((rewrite (premise 0) lr lhs true ())
+                           (rewrite (premise 3) lr lhs true ()))
+                          refl)
+                        (have
+                          (=
+                            (pos_eq (food_of g) (snake_head (snake_of g)))
+                            False)
+                          (rewrite-with
+                            (lemma mem_head_miss)
+                            lr
+                            lhs
+                            ()
+                            ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+                             (steps
+                               ((rewrite (premise 14) lr lhs true ()))
+                               refl))
+                            refl)
+                          (steps
+                            ((unfold food_at lhs)
+                             (unfold find_glyph lhs)
+                             (unfold render lhs))
+                            (rewrite-with
+                              (lemma rows_find_food)
+                              lr
+                              lhs
+                              ()
+                              ((steps
+                                 ((rewrite (premise 10) lr lhs true ()))
+                                 refl)
+                               (steps
+                                 ((rewrite (premise 11) lr lhs true ()))
+                                 refl)
+                               (steps
+                                 ((rewrite (premise 12) lr lhs true ()))
+                                 refl)
+                               (steps
+                                 ((rewrite (premise 13) lr lhs true ()))
+                                 refl)
+                               (steps
+                                 ((rewrite (premise 15) lr lhs true ()))
+                                 refl)
+                               (steps
+                                 ((rewrite (premise 14) lr lhs true ()))
+                                 refl)
+                               (by ord (list))
+                               (by
+                                 farkas
+                                 (list 1 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0)))
+                              (steps
+                                ((rewrite (premise 4) lr lhs true ())
+                                 (rewrite (premise 5) lr lhs true ()))
+                                refl))))))))))))))))
 
 ;; ---- THE FRAME-SHAPE FACT --------------------------------------------------------
 
