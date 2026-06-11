@@ -42,6 +42,8 @@ TARGETS=(
   examples/finsplit_test.shard
   examples/have_test.shard
   examples/homonym_dispatch.shard
+  examples/cite_resolves.shard
+  examples/cite_rejects.shard
   examples/lia_basics.shard
   examples/lia_rejects.shard
   examples/list_named_hyp.shard

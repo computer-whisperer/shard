@@ -137,6 +137,15 @@
     (Nil Nil)
     ((Cons h t) (Cons (resolve_inst env h) (resolve_insts env t)))))
 
+;; Stage 4: a bare (lemma n) cite resolves through the SAME env discipline as
+;; every other name (local > use-items; claims are module items), and the
+;; (:: ...) form re-roots like any head. Unresolved stays core -> nothing is
+;; admitted at core anymore, so a dangling cite fails its claim LOUDLY.
+(fn resolve_eqref ((env RCtx) (er EqRef)) EqRef
+  (match er
+    ((Lemma q) (Lemma (rhead q env)))
+    (_ er)))
+
 (fn resolve_step ((env RCtx) (st Step)) Step
   (match st
     ((Unfold f side) (Unfold (rhead f env) side))
@@ -144,7 +153,7 @@
     ((Simp side) st)
     ((Compute side) st)
     ((Rewrite eqref dir side allq insts)
-     (Rewrite eqref dir side allq (resolve_insts env insts)))))
+     (Rewrite (resolve_eqref env eqref) dir side allq (resolve_insts env insts)))))
 
 (fn resolve_steps
   ((env RCtx) (sts (List Step))) (List Step)
@@ -164,11 +173,11 @@
      (WfInduct (resolve_expr env measure) (resolve_proof env pf)))
     ((RewriteWith eqref dir side insts subs pf)
      (RewriteWith
-       eqref dir side
+       (resolve_eqref env eqref) dir side
        (resolve_insts env insts)
        (resolve_proofs env subs)
        (resolve_proof env pf)))
-    ((Absurd eqref) p)
+    ((Absurd eqref) (Absurd (resolve_eqref env eqref)))
     ;; ByTheory's Cert payload is theory-PRIVATE narrow data (e.g. farkas's
     ;; (List Int) multipliers), not object terms with module references — it is
     ;; matched as a narrow list by the backends, so resolving it as an Expr
@@ -251,7 +260,7 @@
 ;; A pending entry holds the requirement's NATIVE Goal — un-reflected once at
 ;; seed time (so a malformed goal fails at the contract, not at the distant
 ;; fulfillment), then reused directly by `fulfills`.
-(type PendReq (PendReq Symbol Goal))
+(type PendReq (PendReq QName Goal))
 
 ;; ---------------------------------------------------------------------------
 ;; Trust ledger — who cites whom. `(Lemma name)` is the ONLY cross-claim
@@ -325,11 +334,17 @@
   (RunState Theory (List PendReq) (List ClaimOutcome) (List LedgerEntry)))
 
 ;; Look up a pending requirement's (already un-reflected) goal by name.
-(fn lookup_req ((name Symbol) (pend (List PendReq))) (Option Goal)
+;; Stage 4: a fulfills matches a requirement by bare name WITHIN ITS OWN
+;; directory module (supplies_scope_ok -- the sig->def rule): the interface
+;; declares, the impl supplies, both are ONE qname (the interface's).
+(fn lookup_req ((name Symbol) (cur (List Symbol)) (pend (List PendReq)))
+  (Option (Pair QName Goal))
   (match pend
     (Nil None)
-    ((Cons (PendReq nm g) rest)
-     (if (sym_eq nm name) (Some g) (lookup_req name rest)))))
+    ((Cons (PendReq q g) rest)
+     (if (if (sym_eq (qn_name q) name) (supplies_scope_ok (qn_mod q) cur) False)
+       (Some (Pair q g))
+       (lookup_req name cur rest)))))
 
 ;; Does `--trace target` want this claim traced? ('all matches everything.)
 (fn want_trace ((name Symbol) (target Symbol)) Bool
@@ -492,7 +507,7 @@
                     m
                     (RunState
                       (TheoryCons
-                        (Axiom (qn (ax_name a)) (close_goal_for_storage g))
+                        (Axiom (QName (rc_mod gctx) (ax_name a)) (close_goal_for_storage g))
                         th)
                       pend
                       (Cons (COAxiom (ax_name a)) acc)
@@ -547,7 +562,7 @@
                       m
                       (RunState
                         (TheoryCons
-                          (Proven (qn (claim_name nc)) (close_goal_for_storage g))
+                          (Proven (QName (rc_mod gctx) (claim_name nc)) (close_goal_for_storage g))
                           th)
                         pend
                         acc
@@ -580,7 +595,7 @@
                                (RunState
                                  (TheoryCons
                                    (Proven
-                                     (qn (claim_name nc))
+                                     (QName (rc_mod gctx) (claim_name nc))
                                      (close_goal_for_storage g))
                                    th)
                                  pend
@@ -665,7 +680,7 @@
                 (None
                   (run_decls gctx autos
                     m
-                    (RunState th (Cons (PendReq (req_name r) g) pend) acc led)
+                    (RunState th (Cons (PendReq (QName (rc_mod gctx) (req_name r)) g) pend) acc led)
                     rest
                     target
                     focus))))))
@@ -673,7 +688,7 @@
           ;; single source of truth — never restated here), parse the proof to
           ;; native, resolve named hyps (desugar_proof_named), check it.
           ((DFul fu)
-           (match (lookup_req (ful_name fu) pend)
+           (match (lookup_req (ful_name fu) (rc_mod gctx) pend)
              (None
                (run_decls gctx autos
                  m
@@ -690,14 +705,14 @@
                  rest
                  target
                  focus))
-             ((Some g)
+             ((Some (Pair rq g))
               (if (focus_skip focus (ful_name fu))
                 ;; not the focus claim — admit the requirement's goal, skip the proof.
                 (run_decls gctx autos
                   m
                   (RunState
                     (TheoryCons
-                      (Proven (qn (ful_name fu)) (close_goal_for_storage g))
+                      (Proven rq (close_goal_for_storage g))
                       th)
                     pend
                     acc
@@ -727,7 +742,7 @@
                            m
                            (RunState
                              (TheoryCons
-                               (Proven (qn (ful_name fu)) (close_goal_for_storage g))
+                               (Proven rq (close_goal_for_storage g))
                                th)
                              pend
                              (Cons
@@ -905,29 +920,46 @@
 ;; COFail outcomes, so a pending requirement is SURFACED and fails the run —
 ;; closing the "pending is silent" gap. Bins are scanned from the raw forms
 ;; (they never enter the decl/theory stream).
-(fn req_met ((name Symbol) (th Theory)) Bool
-  (match (lookup_lemma (qn name) th)  ; bin require name is a raw symbol → core-qualify to match the admitted (Proven (qn …)) entry
-    (None False)
-    ((Some _) True)))
+;; Stage 4: a bin's requires are about ITS OWN app — the name must be met by
+;; an entry admitted within the bin file's directory module (supplies_scope_ok,
+;; the same rule fulfills follows). A same-named claim elsewhere in the
+;; closure no longer satisfies a require.
+(fn req_met_walk ((name Symbol) (binmp (List Symbol)) (th Theory)) Bool
+  (match th
+    ((TheoryEmpty) False)
+    ((TheoryCons entry rest)
+     (match entry
+       ((Proven q _)
+        (if (if (sym_eq (qn_name q) name) (supplies_scope_ok (qn_mod q) binmp) False)
+          True
+          (req_met_walk name binmp rest)))
+       ((Axiom q _)
+        (if (if (sym_eq (qn_name q) name) (supplies_scope_ok (qn_mod q) binmp) False)
+          True
+          (req_met_walk name binmp rest)))))))
 
-(fn count_met ((names (List Symbol)) (th Theory)) Int
+(fn req_met ((name Symbol) (binmp (List Symbol)) (th Theory)) Bool
+  (req_met_walk name binmp th))
+
+(fn count_met ((names (List Symbol)) (binmp (List Symbol)) (th Theory)) Int
   (match names
     (Nil 0)
-    ((Cons n rest) (+ (if (req_met n th) 1 0) (count_met rest th)))))
+    ((Cons n rest) (+ (if (req_met n binmp th) 1 0) (count_met rest binmp th)))))
 
 (fn len_syms ((names (List Symbol))) Int
   (match names
     (Nil 0)
     ((Cons _ rest) (+ 1 (len_syms rest)))))
 
-(fn unmet_fails ((names (List Symbol)) (th Theory)) (List ClaimOutcome)
+(fn unmet_fails ((names (List Symbol)) (binmp (List Symbol)) (th Theory))
+  (List ClaimOutcome)
   (match names
     (Nil Nil)
     ((Cons n rest)
-     (if (req_met n th) (unmet_fails rest th)
+     (if (req_met n binmp th) (unmet_fails rest binmp th)
      (Cons
        (COFail n "UNMET: listed in a (bin requires) but never fulfilled" Nil)
-       (unmet_fails rest th))))))
+       (unmet_fails rest binmp th))))))
 
 (fn oc_concat ((a (List ClaimOutcome)) (b (List ClaimOutcome)))
   (List ClaimOutcome)
@@ -1269,6 +1301,7 @@
 
 (fn bin_report
   ((b Bin)
+   (binmp (List Symbol))
    (th Theory)
    (m Module)
    (led (List LedgerEntry))
@@ -1277,7 +1310,7 @@
   (match b
     ((Bin name entry externs trusts requires)
      (oc_concat
-       (Cons (COBin name (len_syms requires) (count_met requires th)) Nil)
+       (Cons (COBin name (len_syms requires) (count_met requires binmp th)) Nil)
        (oc_concat
          (Cons (COLedger (ledger_block b led own_ext m)) Nil)
          (oc_concat
@@ -1286,10 +1319,10 @@
              (trusts_check trusts (led_own_axioms led))
              (oc_concat
                (externs_check externs own_ext)
-               (unmet_fails requires th)))))))))
+               (unmet_fails requires binmp th)))))))))
 
 (fn bin_reports
-  ((bins (List Bin))
+  ((bins (List (Pair (List Symbol) Bin)))
    (th Theory)
    (m Module)
    (led (List LedgerEntry))
@@ -1297,15 +1330,23 @@
   (List ClaimOutcome)
   (match bins
     (Nil Nil)
-    ((Cons b rest)
+    ((Cons (Pair mp b) rest)
      (oc_concat
-       (bin_report b th m led own_ext)
+       (bin_report b mp th m led own_ext)
        (bin_reports rest th m led own_ext)))))
 
-(fn bin_concat ((a (List Bin)) (b (List Bin))) (List Bin)
+(fn bin_concat
+  ((a (List (Pair (List Symbol) Bin))) (b (List (Pair (List Symbol) Bin))))
+  (List (Pair (List Symbol) Bin))
   (match a
     (Nil b)
     ((Cons h t) (Cons h (bin_concat t b)))))
+
+(fn bins_with_mp ((mp (List Symbol)) (bs (List Bin)))
+  (List (Pair (List Symbol) Bin))
+  (match bs
+    (Nil Nil)
+    ((Cons b rest) (Cons (Pair mp b) (bins_with_mp mp rest)))))
 
 (fn bins_of_forms ((forms (List SExpr))) (List Bin)
   (match forms
@@ -1317,13 +1358,16 @@
          ((Some b) (Cons b (bins_of_forms rest))))
        (bins_of_forms rest)))))
 
-(fn bins_of_srcs ((srcs (List SrcEntry))) (List Bin)
+(fn bins_of_srcs ((srcs (List SrcEntry))) (List (Pair (List Symbol) Bin))
   (match srcs
     (Nil Nil)
-    ((Cons (SrcEntry _ _ src) rest)
+    ((Cons (SrcEntry path _ src) rest)
      (match (read_all src)
        (None (bins_of_srcs rest))
-       ((Some forms) (bin_concat (bins_of_forms forms) (bins_of_srcs rest)))))))
+       ((Some forms)
+        (bin_concat
+          (bins_with_mp (module_path_of path) (bins_of_forms forms))
+          (bins_of_srcs rest)))))))
 
 ;; Production entry point: returns the per-claim/axiom outcomes (source order)
 ;; for the whole file list, checked against m from the empty theory, followed
