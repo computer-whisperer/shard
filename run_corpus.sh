@@ -70,7 +70,7 @@ TARGETS=(
   examples/calc/calc_reconcile_tests.shard
   examples/snake_game/snake.shard
   examples/snake_game_2/mod.req/arena.shard
-  examples/snake_game_3/game.shard
+  examples/snake_game_3/game/game.shard
   std/mem.shard
   std/list.shard
   std/map.shard

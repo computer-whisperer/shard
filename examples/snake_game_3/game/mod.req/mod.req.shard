@@ -1,0 +1,97 @@
+;;; game — the PURE-CORE submodule's interface (dir form). TIER 2: this is
+;;; implementation-owned SCAFFOLDING under the bin's apex contract
+;;; (../../mod.req/ — the reviewed artifact promise). Nothing here may appear
+;;; in a (bin … requires) list; these requirements exist to be CITED by the
+;;; io layer's proofs of the tier-1 requirements, and may churn as the
+;;; implementation discovers what it needs to assert about itself.
+;;;
+;;; GameState is OPAQUE (`sig type` — v1's friction note acted on): consumers
+;;; and requirements reason only through the accessor sigs, so the
+;;; representation (including the PRNG state inside it) is invisible and free
+;;; to change. The spec vocabulary lives in the req-scope sibling geom.shard.
+;;;
+;;; The requirement set GROWS PER SLICE — this file states exactly what the
+;;; present impl discharges, so every commit's corpus is clean. Slice 1 =
+;;; v1's R1–R4 as machine requirements (v1 stated them in prose comments and
+;;; proved them as claims; the requirement/fulfills edge postdates it) plus
+;;; init facts. Coming: food placement (I2: food lands on a free cell — the
+;;; std/rng draw-range citation), distinctness (I1), collision soundness (I3).
+(import "../../../../kernel/stdlib.shard")  ; List / Option / Bool / Pair
+(import "../../../../std/list")  ; len — the length requirements' vocabulary
+(import "geom.shard")  ; req-scope sibling: nouns + movement/board algebra
+(use (:: examples snake_game_3 game geom *))
+(use (:: std list len))
+
+;; ---- the opaque state + its surface ----------------------------------------
+
+(sig type GameState)
+
+(sig fn init ((seed Int)) GameState)  ; a fresh game from a caller seed
+(sig fn step ((g GameState) (i Heading)) GameState)  ; one tick: steer + move
+
+(sig fn snake_of ((g GameState)) (List Pos))  ; body, head first
+(sig fn dir_of ((g GameState)) Heading)
+(sig fn food_of ((g GameState)) Pos)
+(sig fn score_of ((g GameState)) Int)
+(sig fn status_of ((g GameState)) Status)
+
+;; ---- init facts -------------------------------------------------------------
+
+(requirement init_alive
+  (goal ((seed Int)) () (= (status_of (init seed)) Alive)))
+
+(requirement init_nonempty
+  (goal ((seed Int)) () (= (nonempty (snake_of (init seed))) True)))
+
+;; ---- R1 — DEATH IS ABSORBING (safety) ---------------------------------------
+;; Once dead, a tick is a no-op: the whole state is unchanged.
+
+(requirement death_absorbing
+  (goal ((g GameState) (i Heading)) ((= (status_of g) Dead)) (= (step g i) g)))
+
+;; ---- R4 — NO 180° REVERSAL (input safety) -----------------------------------
+;; A reversing steer is ignored: you cannot turn straight back into your own
+;; neck. Unconditional — the dead case is a step-is-identity corollary.
+
+(requirement no_reversal
+  (goal ((g GameState) (i Heading)) ((= i (opposite (dir_of g))))
+    (= (dir_of (step g i)) (dir_of g))))
+
+;; ---- R3 — HEAD ADVANCES BY THE STEERED HEADING ------------------------------
+;; The snake moves exactly one cell in the steered direction. The body field
+;; advances on EVERY live tick (death is recorded only in status), so this
+;; needs no collision casing.
+
+(requirement head_advances
+  (goal ((g GameState) (i Heading)) ((= (status_of g) Alive))
+    (=
+      (snake_head (snake_of (step g i)))
+      (addpos (snake_head (snake_of g)) (delta (steer (dir_of g) i))))))
+
+;; ---- R2 — LENGTH BOOKKEEPING (growth is tied to eating) ---------------------
+;; A live tick grows the snake by exactly one cell when the steered head
+;; lands on food, by zero otherwise. The nonempty precondition is v1's
+;; contract refinement: the move case is false for an empty snake, and every
+;; reachable Alive state has one (init_nonempty seeds the invariant).
+
+(requirement length_eat
+  (goal ((g GameState) (i Heading))
+    ((= (status_of g) Alive)
+     (= (nonempty (snake_of g)) True)
+     (=
+       (pos_eq
+         (addpos (snake_head (snake_of g)) (delta (steer (dir_of g) i)))
+         (food_of g))
+       True))
+    (= (len (snake_of (step g i))) (+ (len (snake_of g)) 1))))
+
+(requirement length_move
+  (goal ((g GameState) (i Heading))
+    ((= (status_of g) Alive)
+     (= (nonempty (snake_of g)) True)
+     (=
+       (pos_eq
+         (addpos (snake_head (snake_of g)) (delta (steer (dir_of g) i)))
+         (food_of g))
+       False))
+    (= (len (snake_of (step g i))) (len (snake_of g)))))
