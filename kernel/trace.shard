@@ -325,10 +325,88 @@
                    (None "no match"))))))
            "citation: an inst names a binder the cited goal does not have"))))))
 
+;; render a qualified name: "(:: seg … name)".
+(fn render_qn_segs ((segs (List Symbol))) (List Int)
+  (match segs
+    (Nil Nil)
+    ((Cons x rest)
+     (append_int " " (append_int (chars_of_sym x) (render_qn_segs rest))))))
+
+(fn render_qn ((q QName)) (List Int)
+  (append_int
+    "(::"
+    (append_int
+      (render_qn_segs (qn_mod q))
+      (append_int " " (append_int (chars_of_sym (qn_name q)) ")")))))
+
+;; collect heads in `e` whose NAME matches but whose qname differs — the
+;; near-miss set for an unfold/rewrite that found "no match": two same-named
+;; fns from different modules display identically as bare names, so without
+;; this note the mismatch is invisible.
+(fn near_miss_e ((target QName) (e Expr) (acc (List QName))) (List QName)
+  (match e
+    ((Call f args)
+     (near_miss_list
+       target
+       args
+       (if (sym_eq (qn_name f) (qn_name target))
+         (if (qname_eq f target) acc (Cons f acc))
+         acc)))
+    ((Ctor c args) (near_miss_list target args acc))
+    ((If c t el)
+     (near_miss_e target el (near_miss_e target t (near_miss_e target c acc))))
+    (_ acc)))
+
+(fn near_miss_list ((target QName) (es (List Expr)) (acc (List QName)))
+  (List QName)
+  (match es
+    (Nil acc)
+    ((Cons h rest) (near_miss_list target rest (near_miss_e target h acc)))))
+
+(fn render_near_misses ((qs (List QName))) (List Int)
+  (match qs
+    (Nil Nil)
+    ((Cons q rest)
+     (append_int
+       "; NOTE: the goal contains same-named "
+       (append_int (render_qn q) " — a DIFFERENT identity")))))
+
+(fn unfold_side_expr ((side Side) (eq Equation)) Expr
+  (match eq
+    ((Equation l r)
+     (match side
+       ((Rhs) r)
+       (_ l)))))
+
+(fn unfold_fail_reason ((m Module) (seq Sequent) (fname QName) (side Side))
+  (List Int)
+  (match m
+    ((Module _ _ _ trie _)
+     (match (trie_lookup fname trie)
+       (None
+         (append_int
+           "target "
+           (append_int
+             (render_qn fname)
+             (append_int
+               " is not a defined fn (a sig without a body, or resolution picked another identity)"
+               (render_near_misses
+                 (near_miss_e fname (unfold_side_expr side (seq_eq seq)) Nil))))))
+       ((Some _)
+        (append_int
+          "no "
+          (append_int
+            (render_qn fname)
+            (append_int
+              " call on that side"
+              (render_near_misses
+                (near_miss_e fname (unfold_side_expr side (seq_eq seq)) Nil))))))))))
+
 (fn step_fail_reason ((m Module) (th Theory) (seq Sequent) (s Step)) (List Int)
   (match s
     ((Rewrite er dir side all insts)
      (rewrite_fail_reason m th seq er dir side all insts))
+    ((Unfold fname side) (unfold_fail_reason m seq fname side))
     (_ "no match")))
 
 ;; the checker's RewriteWith citation gates, re-run on a SUCCESSFUL replay

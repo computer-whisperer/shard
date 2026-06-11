@@ -97,6 +97,12 @@ wait
 
 for i in "${!TARGETS[@]}"; do cat "$TMP/$i"; done
 
+# Scope-mode pin: the resolver-decision report (use-line classification +
+# rebind verdicts) for the snake v3 impl — the item-vs-alias and rebind
+# machinery's regression surface.
+echo "=== scope: snake_game_3/game ==="
+"${CHECK_CMD[@]}" scope examples/snake_game_3/game/game.shard 2>&1
+
 # Invocation-shape pin: an ABSOLUTE target must be refused (exit 2) — module
 # identity is only sound for repo-root-relative paths; a silent acceptance
 # here would strip kernel/stdlib's core identity and quietly disable the

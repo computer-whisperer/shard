@@ -1546,6 +1546,261 @@
     (quote False)
     (quote Pair)))
 
+;; ===========================================================================
+;; SCOPE REPORT (check.shard's `scope` mode): for a target file, say what the
+;; resolver DECIDED — how each use line classified (item / module alias /
+;; glob), and which sig→def rebinds fired (with the reason when a candidate
+;; did NOT fire) — in the exact closure a normal check builds. The debugging
+;; counterpart to silent scope machinery: a misclassified use line or an
+;; unfired rebind otherwise surfaces only as a confusing downstream failure
+;; (unresolved citation; unfold no-match on a bare name that LOOKS right).
+;; ===========================================================================
+
+(fn sr_init ((srcs (List SrcEntry))) (List SrcEntry)
+  (match srcs
+    (Nil Nil)
+    ((Cons _ Nil) Nil)
+    ((Cons h t) (Cons h (sr_init t)))))
+
+(fn sr_last ((srcs (List SrcEntry))) (Option SrcEntry)
+  (match srcs
+    (Nil None)
+    ((Cons e Nil) (Some e))
+    ((Cons _ t) (sr_last t))))
+
+(fn sr_nl () (List Int) (Cons 10 Nil))
+
+(fn render_modpath ((segs (List Symbol))) (List Int)
+  (append_int "(::" (append_int (render_qn_segs segs) ")")))
+
+(fn sr_count ((env (List (Pair Symbol (List Symbol))))) Int
+  (match env
+    (Nil 0)
+    ((Cons _ t) (+ 1 (sr_count t)))))
+
+(fn sr_or_none ((b (List Int))) (List Int)
+  (match b
+    (Nil (append_int "  (none)" (sr_nl)))
+    (_ b)))
+
+;; one use line's classification, mirroring use_scope_of's decision exactly.
+(fn sr_use_line
+  ((f SExpr) (curmod (List Symbol)) (env (List (Pair Symbol (List Symbol)))))
+  (List Int)
+  (match (parse_use_form f)
+    (None Nil)
+    ((Some (UseGlob segs))
+     (let ((globmod (resolve_full_modpath segs curmod Nil)))
+       (append_int
+         "  GLOB   "
+         (append_int
+           (render_modpath globmod)
+           (append_int
+             " *  ->  "
+             (append_int
+               (show_nat (sr_count (filter_modpath env globmod)))
+               (append_int " item(s)" (sr_nl))))))))
+    ((Some (UseItem rawq bound))
+     (let ((resolved (resolve_qpath (qn_mod rawq) (qn_name rawq) curmod Nil)))
+       (let
+         ((modid (append_sym (qn_mod resolved) (Cons (qn_name resolved) Nil))))
+         (if (item_in_env (qn_name resolved) (qn_mod resolved) env)
+           (append_int
+             "  ITEM   "
+             (append_int
+               (chars_of_sym bound)
+               (append_int "  ->  " (append_int (render_qn resolved) (sr_nl)))))
+         (if (modpath_in_env modid env)
+           (append_int
+             "  ALIAS  "
+             (append_int
+               (chars_of_sym bound)
+               (append_int
+                 "  ->  module "
+                 (append_int (render_modpath modid) (sr_nl)))))
+           (append_int
+             "  ITEM   "
+             (append_int
+               (chars_of_sym bound)
+               (append_int
+                 "  ->  "
+                 (append_int
+                   (render_qn resolved)
+                   (append_int
+                     "   [WARN: no loaded def at this name+path]"
+                     (sr_nl)))))))))))))
+
+(fn sr_use_lines
+  ((fs (List SExpr))
+   (curmod (List Symbol))
+   (env (List (Pair Symbol (List Symbol)))))
+  (List Int)
+  (match fs
+    (Nil Nil)
+    ((Cons f rest)
+     (append_int (sr_use_line f curmod env) (sr_use_lines rest curmod env)))))
+
+;; per-name rebind verdicts. A name with a use item is a CANDIDATE; it fires
+;; only when a loaded sig sits at the mapped path AND the path is within this
+;; file's own directory module — the unfired cases name the failed condition.
+(fn sr_rebind_fns
+  ((fnames (List Symbol))
+   (uitems (List (Pair Symbol (List Symbol))))
+   (exts (List ExternDef))
+   (curmod (List Symbol)))
+  (List Int)
+  (match fnames
+    (Nil Nil)
+    ((Cons n rest)
+     (append_int
+       (match (uitem_path n uitems)
+         (None Nil)
+         ((Some pp)
+          (if (sig_at n pp exts)
+            (if (supplies_scope_ok pp curmod)
+              (append_int
+                "  REBIND fn "
+                (append_int
+                  (chars_of_sym n)
+                  (append_int
+                    "  ->  supplies sig "
+                    (append_int (render_qn (QName pp n)) (sr_nl)))))
+              (append_int
+                "  NO-REBIND fn "
+                (append_int
+                  (chars_of_sym n)
+                  (append_int
+                    "  ->  use maps to "
+                    (append_int
+                      (render_qn (QName pp n))
+                      (append_int
+                        " but it is outside this file's directory module"
+                        (sr_nl)))))))
+            (append_int
+              "  NO-REBIND fn "
+              (append_int
+                (chars_of_sym n)
+                (append_int
+                  "  ->  use maps to "
+                  (append_int
+                    (render_qn (QName pp n))
+                    (append_int " but no loaded (sig fn) is there" (sr_nl)))))))))
+       (sr_rebind_fns rest uitems exts curmod)))))
+
+(fn sr_rebind_types
+  ((tnames (List Symbol))
+   (uitems (List (Pair Symbol (List Symbol))))
+   (tds (List TypeDef))
+   (curmod (List Symbol)))
+  (List Int)
+  (match tnames
+    (Nil Nil)
+    ((Cons n rest)
+     (append_int
+       (match (uitem_path n uitems)
+         (None Nil)
+         ((Some pp)
+          (if (sig_type_at n pp tds)
+            (if (supplies_scope_ok pp curmod)
+              (append_int
+                "  REBIND type "
+                (append_int
+                  (chars_of_sym n)
+                  (append_int
+                    "  ->  supplies sig type "
+                    (append_int (render_qn (QName pp n)) (sr_nl)))))
+              (append_int
+                "  NO-REBIND type "
+                (append_int
+                  (chars_of_sym n)
+                  (append_int
+                    "  ->  use maps to "
+                    (append_int
+                      (render_qn (QName pp n))
+                      (append_int
+                        " but it is outside this file's directory module"
+                        (sr_nl)))))))
+            (append_int
+              "  NO-REBIND type "
+              (append_int
+                (chars_of_sym n)
+                (append_int
+                  "  ->  use maps to "
+                  (append_int
+                    (render_qn (QName pp n))
+                    (append_int " but no loaded (sig type) is there" (sr_nl)))))))))
+       (sr_rebind_types rest uitems tds curmod)))))
+
+(fn scope_report ((srcs (List SrcEntry))) (List Int)
+  (match (sr_last srcs)
+    (None (append_int "scope: empty closure" (sr_nl)))
+    ((Some (SrcEntry path _ src))
+     (match
+       (build_module_d
+         (sr_init srcs)
+         (Module Nil Nil Nil (FnTrie None Nil) Nil)
+         (prelude_ctors)
+         1)
+       ((BMFail diag)
+        (append_int
+          "scope: a dependency failed to load:"
+          (append_int (sr_nl) diag)))
+       ((BMOk macc)
+        (let ((curmod (module_path_of path)))
+          (let ((env (module_resolve_env macc)))
+            (let ((forms (use_forms src)))
+              (match
+                (parse_module
+                  src
+                  (append_sym
+                    (typedef_ctors (module_typedefs macc))
+                    (prelude_ctors)))
+                (None (append_int "scope: target failed to parse" (sr_nl)))
+                ((Some pm)
+                 (match pm
+                   ((Module ptds pfns pexts _ _)
+                    (match (use_scope_of forms curmod env)
+                      ((Pair uitems _)
+                       (append_int
+                         "SCOPE  "
+                         (append_int
+                           path
+                           (append_int
+                             (sr_nl)
+                             (append_int
+                               "module: "
+                               (append_int
+                                 (render_modpath curmod)
+                                 (append_int
+                                   (sr_nl)
+                                   (append_int
+                                     (sr_nl)
+                                     (append_int
+                                       "use lines:"
+                                       (append_int
+                                         (sr_nl)
+                                         (append_int
+                                           (sr_or_none
+                                             (sr_use_lines forms curmod env))
+                                           (append_int
+                                             (sr_nl)
+                                             (append_int
+                                               "rebinds:"
+                                               (append_int
+                                                 (sr_nl)
+                                                 (sr_or_none
+                                                   (append_int
+                                                     (sr_rebind_fns
+                                                       (fndef_names pfns)
+                                                       uitems
+                                                       (module_externdefs macc)
+                                                       curmod)
+                                                     (sr_rebind_types
+                                                       (typedef_names ptds)
+                                                       uitems
+                                                       (module_typedefs macc)
+                                                       curmod))))))))))))))))))))))))))))))
+
 (fn check_production_src
   ((seed Module)
    (base_ctors (List Symbol))
