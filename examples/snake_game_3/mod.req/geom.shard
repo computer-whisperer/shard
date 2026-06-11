@@ -1,0 +1,140 @@
+;;; geom.shard — req-scope SPEC VOCABULARY for snake v3: the concrete nouns
+;;; (Heading/Status/Pos), the movement algebra (delta/opposite/steer/addpos),
+;;; and the board/collision geometry the contract's requirements are stated
+;;; in. Lives INSIDE mod.req/ — interface surface by construction (the
+;;; req-scope gate forbids the v2 arrangement where the interface reached
+;;; into impl space for this file).
+;;;
+;;; board_w/board_h are OPAQUE sigs: every requirement is proven at a
+;;; parametric board size; the impl discharges them at concrete dims, and
+;;; board_min_size is the only fact proofs may use about them.
+(import "../../../kernel/stdlib.shard")  ; List / Option / Bool / Pair
+
+(type Heading (Up) (Down) (Left) (Right))
+(type Status (Alive) (Dead))
+(type Pos (Pos Int Int))  ; (Pos x y) — a board cell
+
+;; ---- boolean vocabulary ----------------------------------------------------
+
+(fn andb ((a Bool) (b Bool)) Bool
+  (match a
+    (True b)
+    (False False)))
+
+(fn orb ((a Bool) (b Bool)) Bool
+  (match a
+    (True True)
+    (False b)))
+
+(fn notb ((a Bool)) Bool
+  (match a
+    (True False)
+    (False True)))
+
+;; ---- movement algebra ------------------------------------------------------
+
+(fn addpos ((a Pos) (b Pos)) Pos
+  (match a
+    ((Pos ax ay)
+     (match b
+       ((Pos bx by) (Pos (+ ax bx) (+ ay by)))))))
+
+(fn pos_eq ((a Pos) (b Pos)) Bool
+  (match a
+    ((Pos ax ay)
+     (match b
+       ((Pos bx by) (andb (int_eq ax bx) (int_eq ay by)))))))
+
+;; Direct 4×4 equality on headings (keeps dir_eq_refl self-contained).
+(fn dir_eq ((a Heading) (b Heading)) Bool
+  (match a
+    (Up
+      (match b
+        (Up True)
+        (Down False)
+        (Left False)
+        (Right False)))
+    (Down
+      (match b
+        (Up False)
+        (Down True)
+        (Left False)
+        (Right False)))
+    (Left
+      (match b
+        (Up False)
+        (Down False)
+        (Left True)
+        (Right False)))
+    (Right
+      (match b
+        (Up False)
+        (Down False)
+        (Left False)
+        (Right True)))))
+
+(fn delta ((d Heading)) Pos  ; unit step in a heading; +y = down (screen rows)
+  (match d
+    (Up (Pos 0 (- 0 1)))
+    (Down (Pos 0 1))
+    (Left (Pos (- 0 1) 0))
+    (Right (Pos 1 0))))
+
+(fn opposite ((d Heading)) Heading  ; the 180° reversal of a heading
+  (match d
+    (Up Down)
+    (Down Up)
+    (Left Right)
+    (Right Left)))
+
+;; the heading actually used on a tick: the input, unless it reverses.
+(fn steer ((cur Heading) (i Heading)) Heading
+  (if (dir_eq i (opposite cur)) cur i))
+
+;; ---- snake vocabulary ------------------------------------------------------
+
+;; snake head with a dummy default for the empty list (never observed under
+;; the nonempty precondition the length requirements carry).
+(fn snake_head ((xs (List Pos))) Pos
+  (match xs
+    (Nil (Pos 0 0))
+    ((Cons h t) h)))
+
+(fn nonempty ((xs (List Pos))) Bool
+  (match xs
+    (Nil False)
+    ((Cons h t) True)))
+
+(fn pos_mem ((p Pos) (xs (List Pos))) Bool
+  (match xs
+    (Nil False)
+    ((Cons h t) (if (pos_eq p h) True (pos_mem p t)))))
+
+;; ---- board geometry (parametric — the impl discharges the dims) -----------
+
+(sig fn board_w () Int)
+(sig fn board_h () Int)
+
+;; the one fact proofs may use about the opaque dims.
+(requirement board_min_size
+  (goal () () (= (andb (le 4 (board_w)) (le 4 (board_h))) True)))
+
+(fn in_bounds ((p Pos)) Bool
+  (match p
+    ((Pos x y)
+     (andb (andb (le 0 x) (lt x (board_w))) (andb (le 0 y) (lt y (board_h)))))))
+
+;; collision: out of bounds, or on the body. The I3 vocabulary.
+(fn collides ((h Pos) (body (List Pos))) Bool
+  (orb (notb (in_bounds h)) (pos_mem h body)))
+
+;; ---- spec-level lemmas -----------------------------------------------------
+
+;; dir_eq is reflexive (collapses the reversal guard in no_reversal proofs).
+(claim dir_eq_refl
+  (goal ((x Heading)) () (= (dir_eq x x) True))
+  (case-on x Heading
+    ((case Up (steps ((rewrite (hyp 0) lr lhs true ()) (compute lhs)) refl))
+     (case Down (steps ((rewrite (hyp 0) lr lhs true ()) (compute lhs)) refl))
+     (case Left (steps ((rewrite (hyp 0) lr lhs true ()) (compute lhs)) refl))
+     (case Right (steps ((rewrite (hyp 0) lr lhs true ()) (compute lhs)) refl)))))

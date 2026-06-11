@@ -1,0 +1,293 @@
+;;; game.shard — the PURE GAME CORE of snake v3, and the impl of the module
+;;; interface: supplies GameState's representation, init/step/accessor
+;;; bodies, and DISCHARGES the slice-1 requirements.
+;;;
+;;; Proof-shape choices (v1's lessons, kept):
+;;;   - `step` dispatches on (status_of g) at the very top, so
+;;;     death_absorbing is a one-rewrite proof against the status premise.
+;;;   - `live_step` returns a SINGLE (GS …) constructor with the branching
+;;;     pushed INSIDE each field, and the new head factored to the FRONT of
+;;;     the snake field: accessors reduce straight through the symbolic
+;;;     branches, which head_advances / no_reversal lean on.
+;;;   - the snake field advances on EVERY live tick, independent of
+;;;     game_dies — death is recorded only in the status field. That keeps
+;;;     the length/head requirements free of collision casing.
+;;;   - game_newhead/game_ate spell out EXACTLY the contract's premise terms
+;;;     when unfolded, so the length proofs branch by premise rewrite.
+;;; New in v3: the PRNG state (std/rng, opaque u32) rides INSIDE GameState —
+;;; food placement is a pure function of it, two draws per meal. The
+;;; representation is invisible outside: the interface exports GameState as
+;;; a `sig type`.
+(import "../../kernel/stdlib.shard")  ; List / Option / Bool / Pair
+(import "../../std/list")  ; len / rev / append + their defining equations
+(import "../../std/rng")  ; rng_seed / rng_step / rng_val (opaque in proofs)
+(import "mod.req/mod.req.shard")  ; own interface (ungranted): obligations
+(import "mod.req/geom.shard")  ; the spec vocabulary (nouns + geometry)
+(use (:: examples snake_game_3 geom *))
+(use (:: examples snake_game_3 GameState))  ; type rebind: our full type supplies the sig type
+(use (:: examples snake_game_3 init))
+(use (:: examples snake_game_3 step))
+(use (:: examples snake_game_3 snake_of))
+(use (:: examples snake_game_3 dir_of))
+(use (:: examples snake_game_3 food_of))
+(use (:: examples snake_game_3 score_of))
+(use (:: examples snake_game_3 status_of))
+(use (:: std list *))
+(use (:: std rng rng_seed))
+(use (:: std rng rng_step))
+(use (:: std rng rng_val))
+
+;; ---- the representation (private — the interface exports a sig type) ------
+
+(type GameState
+  (GS
+    (List Pos)  ; snake body, head first
+    Heading  ; current heading
+    Pos  ; food cell
+    Int  ; score
+    Status  ; Alive | Dead
+    u32))  ; PRNG state (std/rng; food placement is a pure function of it)
+
+(fn snake_of ((g GameState)) (List Pos)
+  (match g
+    ((GS sn d fd sc st r) sn)))
+
+(fn dir_of ((g GameState)) Heading
+  (match g
+    ((GS sn d fd sc st r) d)))
+
+(fn food_of ((g GameState)) Pos
+  (match g
+    ((GS sn d fd sc st r) fd)))
+
+(fn score_of ((g GameState)) Int
+  (match g
+    ((GS sn d fd sc st r) sc)))
+
+(fn status_of ((g GameState)) Status
+  (match g
+    ((GS sn d fd sc st r) st)))
+
+;; private — the PRNG state never crosses the interface.
+(fn rng_of ((g GameState)) u32
+  (match g
+    ((GS sn d fd sc st r) r)))
+
+;; ---- board dims (discharging geom's opaque sigs) ---------------------------
+
+(fn board_w () Int 16)
+
+(fn board_h () Int 12)
+
+(fulfills board_min_size (steps ((compute lhs)) refl))
+
+;; ---- list helpers -----------------------------------------------------------
+
+;; tail (drop the head) — a single match, so len_tl needs no inductive step.
+(fn tl ((xs (List Pos))) (List Pos)
+  (match xs
+    (Nil Nil)
+    ((Cons h t) t)))
+
+;; all-but-last cell (the tail dropped on a non-eating move), via rev/tl/rev.
+;; This formulation keeps len_but_last cheap: a DIRECT but_last would recurse
+;; with a CHANGING head, which the induction hypothesis can't match; routing
+;; through tl (whose recursion-free length law is trivial) and the existing
+;; len_rev sidesteps that entirely.
+(fn but_last ((xs (List Pos))) (List Pos) (rev (tl (rev xs))))
+
+;; ---- food placement ---------------------------------------------------------
+
+;; a fresh cell from two PRNG draws — in bounds by rng's draw-range pair
+;; (the I2 free-cell refinement comes in a later slice).
+(fn new_food ((r u32)) Pos
+  (Pos (rng_val r (board_w)) (rng_val (rng_step r) (board_h))))
+
+;; ---- per-tick derived quantities (named so proofs can branch on them) ------
+
+(fn game_newhead ((g GameState) (i Heading)) Pos
+  (addpos (snake_head (snake_of g)) (delta (steer (dir_of g) i))))
+
+(fn game_ate ((g GameState) (i Heading)) Bool
+  (pos_eq (game_newhead g i) (food_of g)))
+
+(fn game_dies ((g GameState) (i Heading)) Bool
+  (collides (game_newhead g i) (snake_of g)))
+
+;; ---- the core ---------------------------------------------------------------
+
+(fn live_step ((g GameState) (i Heading)) GameState
+  (GS
+    (Cons
+      (game_newhead g i)  ; head factored to FRONT, always
+      (if (game_ate g i) (snake_of g)  ; grow: keep the tail
+      (but_last (snake_of g))))  ; move: drop the last cell
+    (steer (dir_of g) i)  ; dir — always the steered heading
+    (if (game_ate g i) (new_food (rng_of g)) (food_of g))
+    (if (game_ate g i) (+ (score_of g) 1) (score_of g))
+    (if (game_dies g i) Dead Alive)  ; status — the only death-dependent field
+    (if (game_ate g i) (rng_step (rng_step (rng_of g))) (rng_of g))))
+
+(fn step ((g GameState) (i Heading)) GameState
+  (match (status_of g)
+    (Dead g)  ; absorbing
+    (Alive (live_step g i))))
+
+;; a 2-cell snake heading Right; food from the first two draws.
+(fn init ((seed Int)) GameState
+  (let ((r (rng_seed seed)))
+    (let ((r1 (rng_step r)))
+      (GS
+        (list (Pos 2 2) (Pos 1 2))
+        Right
+        (Pos (rng_val r (board_w)) (rng_val r1 (board_h)))
+        0
+        Alive
+        (rng_step r1)))))
+
+;; ---- init facts -------------------------------------------------------------
+
+(fulfills init_alive (steps ((unfold init lhs) (simp lhs)) refl))
+
+(fulfills init_nonempty (steps ((unfold init lhs) (simp lhs)) refl))
+
+;; ---- R1 / R4 / R3 -----------------------------------------------------------
+
+(fulfills death_absorbing
+  (steps
+    ((unfold step lhs) (rewrite (premise 0) lr lhs true ()) (simp lhs))
+    refl))
+
+(fulfills no_reversal
+  (case-on (status_of g) Status
+    ((case Dead
+       (steps
+         ((unfold step lhs) (rewrite (hyp 0) lr lhs true ()) (simp lhs))
+         refl))
+     (case Alive
+       (steps
+         ((unfold step lhs)
+          (rewrite (hyp 0) lr lhs true ())
+          (simp lhs)
+          (unfold live_step lhs)
+          (simp lhs)
+          (unfold steer lhs)
+          (rewrite (premise 0) lr lhs true ())
+          (rewrite (lemma dir_eq_refl) lr lhs true ())
+          (simp lhs))
+         refl)))))
+
+(fulfills head_advances
+  (steps
+    ((unfold step lhs)
+     (rewrite (premise 0) lr lhs true ())
+     (simp lhs)
+     (unfold live_step lhs)
+     (simp lhs)
+     (unfold game_newhead lhs))
+    refl))
+
+;; ---- R2 support lemmas ------------------------------------------------------
+
+;; tail length: 1 + len (tl xs) = len xs, for nonempty xs. tl is non-recursive
+;; so the Cons case closes with no IH.
+(claim len_tl
+  (goal ((xs (List Pos))) ((= (nonempty xs) True))
+    (= (+ 1 (len (tl xs))) (len xs)))
+  ;; len is OPAQUE (std/list): step (len (Cons ..)) via len_cons, not unfold.
+  (induct xs
+    ((case Nil (absurd (premise 0)))
+     (case Cons
+       (steps
+         ((simp both) (rewrite (lemma len_cons) lr rhs true ()))
+         (by lia (list)))))))
+
+;; appending a singleton is never empty (no IH — both cases yield a Cons).
+(claim nonempty_snoc
+  (goal ((ys (List Pos)) (h Pos)) () (= (nonempty (append ys (list h))) True))
+  ;; append is OPAQUE (std/list): peel it via the defining equations so
+  ;; `nonempty` (geom's fn) sees a Cons.
+  (induct ys
+    ((case Nil
+       (steps
+         ((rewrite (lemma append_nil_left) lr lhs true ()) (simp lhs))
+         refl))
+     (case Cons
+       (steps ((rewrite (lemma append_cons) lr lhs true ()) (simp lhs)) refl)))))
+
+;; rev preserves non-emptiness.
+(claim nonempty_rev
+  (goal ((xs (List Pos))) ((= (nonempty xs) True)) (= (nonempty (rev xs)) True))
+  ;; rev is OPAQUE (std/list): expose the snoc via rev_cons, then nonempty_snoc.
+  (induct xs
+    ((case Nil (absurd (premise 0)))
+     (case Cons
+       (h t)
+       (steps
+         ((rewrite (lemma rev_cons) lr lhs true ())
+          (rewrite (lemma nonempty_snoc) lr lhs true ()))
+         refl)))))
+
+;; drop-last length: 1 + len (but_last xs) = len xs, for nonempty xs.
+;; len (rev (tl (rev xs))) = len (tl (rev xs)) [len_rev] = len (rev xs) - 1
+;; [len_tl, needs nonempty (rev xs)] = len xs - 1 [len_rev].
+(claim len_but_last
+  (goal ((xs (List Pos))) ((= (nonempty xs) True))
+    (= (+ 1 (len (but_last xs))) (len xs)))
+  (steps
+    ((unfold but_last lhs) (rewrite (lemma len_rev) lr lhs true ()))
+    (rewrite-with
+      (lemma len_tl)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma nonempty_rev)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+         refl))
+      (steps ((rewrite (lemma len_rev) lr lhs true ())) refl))))
+
+;; ---- R2 ----------------------------------------------------------------------
+;; The eat/move branch is selected by PREMISE REWRITE: game_ate unfolds to
+;; exactly the contract premise's term (game_newhead twice — once for the
+;; Cons head, once inside the condition — so the condition's occurrence
+;; matches the premise spelling).
+
+(fulfills length_eat
+  (steps
+    ((unfold step lhs)
+     (rewrite (premise 0) lr lhs true ())
+     (simp lhs)
+     (unfold live_step lhs)
+     (simp lhs)
+     (unfold game_ate lhs)
+     (unfold game_newhead lhs)
+     (unfold game_newhead lhs)
+     (rewrite (premise 2) lr lhs true ())
+     (simp lhs)
+     (rewrite (lemma len_cons) lr lhs true ()))
+    (by lia (list))))
+
+(fulfills length_move
+  (steps
+    ((unfold step lhs)
+     (rewrite (premise 0) lr lhs true ())
+     (simp lhs)
+     (unfold live_step lhs)
+     (simp lhs)
+     (unfold game_ate lhs)
+     (unfold game_newhead lhs)
+     (unfold game_newhead lhs)
+     (rewrite (premise 2) lr lhs true ())
+     (simp lhs)
+     (rewrite (lemma len_cons) lr lhs true ()))
+    (rewrite-with
+      (lemma len_but_last)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+      (by lia (list)))))

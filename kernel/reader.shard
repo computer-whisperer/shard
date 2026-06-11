@@ -1353,6 +1353,46 @@
             (rebind_names rest uitems sig_exts modpath))
           (rebind_names rest uitems sig_exts modpath)))))))
 
+;; a SIG TYPE (ctorless typedef — the `(sig type …)` form) named n at path p.
+(fn sig_type_at ((n Symbol) (p (List Symbol)) (tds (List TypeDef))) Bool
+  (match tds
+    (Nil False)
+    ((Cons (TypeDef q _ cds) rest)
+     (if (sym_eq (qn_name q) n)
+       (if (sym_path_eq (qn_mod q) p)
+         (match cds
+           (Nil True)
+           (_ (sig_type_at n p rest)))
+         (sig_type_at n p rest))
+       (sig_type_at n p rest)))))
+
+;; the TYPE names of this file that SUPPLY a previously-loaded sig type —
+;; the type-level mirror of rebind_names: when a use-item maps a local full
+;; `(type …)`'s name to a same-dir-module `(sig type …)`, the local binding
+;; is dropped so the name (and every annotation in this file) resolves to
+;; the INTERFACE's qname. Sig type + full type = ONE TCon identity; without
+;; this, an interface obligation (binders at the sig type) can never
+;; type-check against rebound defs (params at the local type). The ctors
+;; stay locally-qualified (privacy is unchanged — consumers granted the
+;; interface still get only the ctorless typedef).
+(fn rebind_type_names
+  ((tnames (List Symbol))
+   (uitems (List (Pair Symbol (List Symbol))))
+   (sig_tds (List TypeDef))
+   (modpath (List Symbol)))
+  (List Symbol)
+  (match tnames
+    (Nil Nil)
+    ((Cons n rest)
+     (match (uitem_path n uitems)
+       (None (rebind_type_names rest uitems sig_tds modpath))
+       ((Some p)
+        (if (sig_type_at n p sig_tds)
+          (if (supplies_scope_ok p modpath)
+            (Cons n (rebind_type_names rest uitems sig_tds modpath))
+            (rebind_type_names rest uitems sig_tds modpath))
+          (rebind_type_names rest uitems sig_tds modpath)))))))
+
 (fn sym_in_list ((n Symbol) (ns (List Symbol))) Bool
   (match ns
     (Nil False)
@@ -1376,18 +1416,23 @@
 ;; fn is silently tolerated until Stage 3; types/ctors fail loudly here.)
 ;; `use_aliases` are the use-bound module aliases, consumed by resolve_qpath for
 ;; `(:: alias …)` references. The fn-trie is rebuilt from the resolved fns.
-;; `sig_exts` (the already-loaded externs/sigs) drive the sig→def rebind above.
+;; `sig_exts` (the already-loaded externs/sigs) drive the sig→def rebind above;
+;; `sig_tds` (the already-loaded typedefs) drive the type-level rebind.
 (fn resolve_module
   ((modpath (List Symbol))
    (use_items (List (Pair Symbol (List Symbol))))
    (use_aliases (List (Pair Symbol (List Symbol))))
    (sig_exts (List ExternDef))
+   (sig_tds (List TypeDef))
    (m Module))
   Module
   (match m
     ((Module tds fns exts _ _)
      (let
-       ((rb (rebind_names (fndef_names fns) use_items sig_exts modpath)))
+       ((rb
+          (append_sym
+            (rebind_names (fndef_names fns) use_items sig_exts modpath)
+            (rebind_type_names (typedef_names tds) use_items sig_tds modpath))))
        (let
          ((env
             (RCtx
@@ -2155,7 +2200,13 @@
           ((Pair uitems ualiases)
            (let
              ((rm (module_with_claims
-                    (resolve_module mp uitems ualiases (module_externdefs acc) m)
+                    (resolve_module
+                      mp
+                      uitems
+                      ualiases
+                      (module_externdefs acc)
+                      (module_typedefs acc)
+                      m)
                     (claim_items_go (use_forms src) mp))))
              (build_module_d
                rest
