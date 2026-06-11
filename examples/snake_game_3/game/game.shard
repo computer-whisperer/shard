@@ -19,7 +19,7 @@
 ;;; representation is invisible outside: the interface exports GameState as
 ;;; a `sig type`.
 (import "../../../kernel/stdlib.shard")  ; List / Option / Bool / Pair
-(import "../../../std/list")  ; len / rev / append + their defining equations
+(import "../../../std/list")  ; len + its defining equations
 (import "../../../std/rng")  ; rng_seed / rng_step / rng_val (opaque in proofs)
 (import "mod.req/mod.req.shard")  ; own interface (ungranted): obligations
 (import "mod.req/geom.shard")  ; the spec vocabulary (nouns + geometry)
@@ -85,18 +85,21 @@
 
 ;; ---- list helpers -----------------------------------------------------------
 
-;; tail (drop the head) — a single match, so len_tl needs no inductive step.
-(fn tl ((xs (List Pos))) (List Pos)
+;; all-but-last cell (the tail dropped on a non-eating move). DIRECT two-level
+;; recursion (v2's drop_last shape): every but_last lemma below pairs an OUTER
+;; induction — whose IH speaks about the tail — with an INNER ctor split that
+;; only exposes the second cell, so the changing head never has to match the
+;; IH. v1's rev∘tl∘rev formulation bought a cheap length law but would force
+;; the I1 membership/distinctness laws through the whole snoc/rev permutation
+;; stack; the nested-induct idiom proves all three laws against this one
+;; definition.
+(fn but_last ((xs (List Pos))) (List Pos)
   (match xs
     (Nil Nil)
-    ((Cons h t) t)))
-
-;; all-but-last cell (the tail dropped on a non-eating move), via rev/tl/rev.
-;; This formulation keeps len_but_last cheap: a DIRECT but_last would recurse
-;; with a CHANGING head, which the induction hypothesis can't match; routing
-;; through tl (whose recursion-free length law is trivial) and the existing
-;; len_rev sidesteps that entirely.
-(fn but_last ((xs (List Pos))) (List Pos) (rev (tl (rev xs))))
+    ((Cons h t)
+     (match t
+       (Nil Nil)
+       ((Cons h2 t2) (Cons h (but_last t)))))))
 
 ;; ---- food placement ---------------------------------------------------------
 
@@ -189,68 +192,144 @@
      (unfold game_newhead lhs))
     refl))
 
-;; ---- R2 support lemmas ------------------------------------------------------
-
-;; tail length: 1 + len (tl xs) = len xs, for nonempty xs. tl is non-recursive
-;; so the Cons case closes with no IH.
-(claim len_tl
-  (goal ((xs (List Pos))) ((= (nonempty xs) True))
-    (= (+ 1 (len (tl xs))) (len xs)))
-  ;; len is OPAQUE (std/list): step (len (Cons ..)) via len_cons, not unfold.
-  (induct xs
-    ((case Nil (absurd (premise 0)))
-     (case Cons
-       (steps
-         ((simp both) (rewrite (lemma len_cons) lr rhs true ()))
-         (by lia (list)))))))
-
-;; appending a singleton is never empty (no IH — both cases yield a Cons).
-(claim nonempty_snoc
-  (goal ((ys (List Pos)) (h Pos)) () (= (nonempty (append ys (list h))) True))
-  ;; append is OPAQUE (std/list): peel it via the defining equations so
-  ;; `nonempty` (geom's fn) sees a Cons.
-  (induct ys
-    ((case Nil
-       (steps
-         ((rewrite (lemma append_nil_left) lr lhs true ()) (simp lhs))
-         refl))
-     (case Cons
-       (steps ((rewrite (lemma append_cons) lr lhs true ()) (simp lhs)) refl)))))
-
-;; rev preserves non-emptiness.
-(claim nonempty_rev
-  (goal ((xs (List Pos))) ((= (nonempty xs) True)) (= (nonempty (rev xs)) True))
-  ;; rev is OPAQUE (std/list): expose the snoc via rev_cons, then nonempty_snoc.
-  (induct xs
-    ((case Nil (absurd (premise 0)))
-     (case Cons
-       (h t)
-       (steps
-         ((rewrite (lemma rev_cons) lr lhs true ())
-          (rewrite (lemma nonempty_snoc) lr lhs true ()))
-         refl)))))
+;; ---- but_last laws (the nested-induct family) --------------------------------
+;; Shared shape: induct xs (outer — its IH is the claim AT THE TAIL), then
+;; induct t purely as a ctor split (its own IH goes unused), so the recursive
+;; arm (Cons h (but_last t)) steps with the OUTER hypothesis. len is OPAQUE
+;; (std/list): step (len (Cons ..)) via len_cons, never unfold.
 
 ;; drop-last length: 1 + len (but_last xs) = len xs, for nonempty xs.
-;; len (rev (tl (rev xs))) = len (tl (rev xs)) [len_rev] = len (rev xs) - 1
-;; [len_tl, needs nonempty (rev xs)] = len xs - 1 [len_rev].
 (claim len_but_last
   (goal ((xs (List Pos))) ((= (nonempty xs) True))
     (= (+ 1 (len (but_last xs))) (len xs)))
-  (steps
-    ((unfold but_last lhs) (rewrite (lemma len_rev) lr lhs true ()))
-    (rewrite-with
-      (lemma len_tl)
-      lr
-      lhs
-      ()
-      ((rewrite-with
-         (lemma nonempty_rev)
-         lr
-         lhs
-         ()
-         ((steps ((rewrite (premise 0) lr lhs true ())) refl))
-         refl))
-      (steps ((rewrite (lemma len_rev) lr lhs true ())) refl))))
+  (induct xs
+    ((case Nil (absurd (premise 0)))
+     (case Cons
+       (q t)
+       (induct t
+         ((case Nil
+            (steps
+              ((unfold but_last lhs)
+               (reduce lhs)
+               (rewrite (lemma len_cons) lr rhs true ()))
+              refl))
+          (case Cons
+            (q2 t2)
+            (steps
+              ((unfold but_last lhs)
+               (reduce lhs)
+               (rewrite (lemma len_cons) lr lhs true ())
+               (rewrite (lemma len_cons) lr rhs true ()))
+              (rewrite-with
+                (hyp 1)
+                lr
+                lhs
+                ()
+                ((steps ((compute lhs)) refl))
+                refl)))))))))
+
+;; membership-miss survives but_last (a sublist can't gain a cell). The
+;; case-on splits the head test; its True arm contradicts the premise — the
+;; (have (= True False) … (absurd …)) discharge — and its False arm cuts the
+;; tail miss as a clean premise for the outer IH (hyp 2).
+(claim mem_but_last_false
+  (goal ((p Pos) (xs (List Pos))) ((= (pos_mem p xs) False))
+    (= (pos_mem p (but_last xs)) False))
+  (induct xs
+    ((case Nil (steps ((compute lhs)) refl))
+     (case Cons
+       (q t)
+       (induct t
+         ((case Nil (steps ((compute lhs)) refl))
+          (case Cons
+            (q2 t2)
+            (case-on (pos_eq p q) Bool
+              ((case True
+                 (have (= True False)
+                   (steps
+                     ((rewrite (premise 0) rl rhs true ())
+                      (unfold pos_mem rhs)
+                      (reduce rhs)
+                      (rewrite (hyp 0) lr rhs true ())
+                      (reduce rhs))
+                     refl)
+                   (absurd (premise 1))))
+               (case False
+                 (have (= (pos_mem p (Cons q2 t2)) False)
+                   (steps
+                     ((rewrite (premise 0) rl rhs true ())
+                      (unfold pos_mem rhs)
+                      (reduce rhs)
+                      (rewrite (hyp 0) lr rhs true ())
+                      (reduce rhs))
+                     refl)
+                   (steps
+                     ((unfold but_last lhs)
+                      (reduce lhs)
+                      (unfold pos_mem lhs)
+                      (reduce lhs)
+                      (rewrite (hyp 0) lr lhs true ())
+                      (reduce lhs))
+                     (rewrite-with
+                       (hyp 2)
+                       lr
+                       lhs
+                       ()
+                       ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+                       refl)))))))))))))
+
+;; distinctness survives but_last (via mem_but_last_false on the head's miss).
+(claim distinct_but_last
+  (goal ((xs (List Pos))) ((= (distinct xs) True))
+    (= (distinct (but_last xs)) True))
+  (induct xs
+    ((case Nil (steps ((compute lhs)) refl))
+     (case Cons
+       (q t)
+       (induct t
+         ((case Nil (steps ((compute lhs)) refl))
+          (case Cons
+            (q2 t2)
+            (case-on (pos_mem q (Cons q2 t2)) Bool
+              ((case True
+                 (have (= True False)
+                   (steps
+                     ((rewrite (premise 0) rl lhs true ())
+                      (unfold distinct lhs)
+                      (reduce lhs)
+                      (rewrite (hyp 0) lr lhs true ())
+                      (reduce lhs))
+                     refl)
+                   (absurd (premise 1))))
+               (case False
+                 (have (= (distinct (Cons q2 t2)) True)
+                   (steps
+                     ((rewrite (premise 0) rl rhs true ())
+                      (unfold distinct rhs)
+                      (reduce rhs)
+                      (rewrite (hyp 0) lr rhs true ())
+                      (reduce rhs))
+                     refl)
+                   (steps
+                     ((unfold but_last lhs)
+                      (reduce lhs)
+                      (unfold distinct lhs)
+                      (reduce lhs))
+                     (rewrite-with
+                       (lemma mem_but_last_false)
+                       lr
+                       lhs
+                       ((inst p q) (inst xs (Cons q2 t2)))
+                       ((steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                       (steps
+                         ((reduce lhs))
+                         (rewrite-with
+                           (hyp 2)
+                           lr
+                           lhs
+                           ()
+                           ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+                           refl)))))))))))))))
 
 ;; ---- R2 ----------------------------------------------------------------------
 ;; The eat/move branch is selected by PREMISE REWRITE: game_ate unfolds to
@@ -411,3 +490,77 @@
      (rewrite (premise 1) lr lhs true ())
      (simp lhs))
     refl))
+
+;; ---- I1 — body distinctness (slice 4) -----------------------------------------
+;; The clear premise speaks collides; distinct needs the pos_mem miss inside
+;; it, and orb matches on its LEFT arm, so the right one is cut out via
+;; orb_false_r (geom) into a clean premise BEFORE the eat/move split. Each
+;; branch then reduces to the miss + the distinctness premise (eat keeps the
+;; whole tail) or their transport through but_last (move drops the last cell).
+
+(fulfills init_distinct (steps ((unfold init lhs) (simp lhs)) refl))
+
+(fulfills step_distinct
+  (steps
+    ((unfold step lhs)
+     (rewrite (premise 0) lr lhs true ())
+     (simp lhs)
+     (unfold live_step lhs)
+     (simp lhs)
+     (unfold game_newhead lhs))
+    (have
+      (=
+        (pos_mem
+          (addpos (snake_head (snake_of g)) (delta (steer (dir_of g) i)))
+          (snake_of g))
+        False)
+      (rewrite-with
+        (lemma orb_false_r)
+        lr
+        lhs
+        ((inst
+           a
+           (notb
+             (in_bounds
+               (addpos (snake_head (snake_of g)) (delta (steer (dir_of g) i))))))
+         (inst
+           b
+           (pos_mem
+             (addpos (snake_head (snake_of g)) (delta (steer (dir_of g) i)))
+             (snake_of g))))
+        ((steps
+           ((rewrite (premise 2) rl rhs true ()) (unfold collides rhs))
+           refl))
+        refl)
+      (case-on (game_ate g i) Bool
+        ((case True
+           (steps
+             ((rewrite (hyp 0) lr lhs true ())
+              (reduce lhs)
+              (rewrite (premise 3) lr lhs true ())
+              (reduce lhs)
+              (rewrite (premise 1) lr lhs true ()))
+             refl))
+         (case False
+           (steps
+             ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+             (rewrite-with
+               (lemma mem_but_last_false)
+               lr
+               lhs
+               ((inst
+                  p
+                  (addpos
+                    (snake_head (snake_of g))
+                    (delta (steer (dir_of g) i))))
+                (inst xs (snake_of g)))
+               ((steps ((rewrite (premise 3) lr lhs true ())) refl))
+               (steps
+                 ((reduce lhs))
+                 (rewrite-with
+                   (lemma distinct_but_last)
+                   lr
+                   lhs
+                   ((inst xs (snake_of g)))
+                   ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+                   refl))))))))))
