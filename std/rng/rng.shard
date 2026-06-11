@@ -1,0 +1,73 @@
+;;; std/rng/rng.shard — the IMPL (private) of the `rng` module: xorshift32
+;;; (Marsaglia's 13/17/5 round) over the bare-u32 state. Supplies the real
+;;; bodies and DISCHARGES the interface's draw-range requirements via the
+;;; general mod axioms (std/div mod_lo/mod_hi) plus word-fact's uval range.
+;;; The ground claims at the bottom pin concrete draws (computed externally)
+;;; so an algorithm change can never slip through as a silent reseed.
+(import "../../kernel/stdlib.shard")  ; Int / Bool / Pair / True
+(import "../div")  ; mod_lo / mod_hi — the variable-divisor range axioms
+(import "mod.req.shard")  ; own interface (ungranted): requirements as obligations
+(use (:: std rng rng_seed))  ; sig→def rebind: our defs supply the sigs
+(use (:: std rng rng_step))
+(use (:: std rng rng_val))
+(use (:: std div *))  ; the mod axioms for citation
+
+;; one xorshift32 round. 0 is the round's fixed point — rng_seed remaps the
+;; zero state away, so a seeded generator never degenerates.
+(fn rng_mix ((w u32)) u32
+  (let ((a (wxor w (wshl w 13))))
+    (let ((b (wxor a (ushr a 17)))) (wxor b (wshl b 5)))))
+
+;; seed → state: wrap to u32, remap 0, pre-mix twice so adjacent small seeds
+;; do not give adjacent first draws.
+(fn rng_seed ((seed Int)) u32
+  (let ((w (uwrap 32 seed)))
+    (rng_mix (rng_mix (if (int_eq (uval w) 0) (uwrap 32 2463534242) w)))))
+
+(fn rng_step ((s u32)) u32 (rng_mix s))
+
+;; the state's draw in [0, n): the Int image reduced mod n. Range is exactly
+;; mod_lo/mod_hi (uval is non-negative by word-fact).
+(fn rng_val ((s u32) (n Int)) Int (mod (uval s) n))
+
+(fulfills rng_val_lo
+  (word-fact
+    s
+    (steps
+      ((unfold rng_val lhs))
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ((inst n (uval s)) (inst d n))
+        ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+         (steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))))
+
+(fulfills rng_val_hi
+  (word-fact
+    s
+    (steps
+      ((unfold rng_val lhs))
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ((inst n (uval s)) (inst d n))
+        ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+         (steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))))
+
+;; ---- ground pins (values computed by an external xorshift32 oracle) -------
+
+(claim rng_seed_42_draw
+  (goal () () (= (rng_val (rng_seed 42) 100) 48))
+  (steps ((compute lhs)) refl))
+
+(claim rng_step_advances
+  (goal () () (= (rng_val (rng_step (rng_seed 42)) 100) 59))
+  (steps ((compute lhs)) refl))
+
+(claim rng_seed_zero_remapped
+  (goal () () (= (rng_val (rng_seed 0) 10) 6))
+  (steps ((compute lhs)) refl))

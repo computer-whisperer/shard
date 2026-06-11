@@ -77,6 +77,7 @@ TARGETS=(
   std/div.shard
   std/nat.shard
   std/order.shard
+  std/rng/rng.shard
 )
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
