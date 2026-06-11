@@ -15,9 +15,9 @@
 ;;;   - game_newhead/game_ate spell out EXACTLY the contract's premise terms
 ;;;     when unfolded, so the length proofs branch by premise rewrite.
 ;;; New in v3: the PRNG state (std/rng, opaque u32) rides INSIDE GameState —
-;;; food placement is a pure function of it, two draws per meal. The
-;;; representation is invisible outside: the interface exports GameState as
-;;; a `sig type`.
+;;; food placement is a pure function of it: one draw per meal seeds the
+;;; free-cell scan. The representation is invisible outside: the interface
+;;; exports GameState as a `sig type`.
 (import "../../../kernel/stdlib.shard")  ; List / Option / Bool / Pair
 (import "../../../std/list")  ; len + its defining equations
 (import "../../../std/rng")  ; rng_seed / rng_step / rng_val (opaque in proofs)
@@ -101,23 +101,67 @@
        (Nil Nil)
        ((Cons h2 t2) (Cons h (but_last t)))))))
 
-;; ---- food placement ---------------------------------------------------------
+;; ---- food placement (the free-cell scan, slice 5) ---------------------------
+;; One PRNG draw picks a start cell; the scan walks the board from there
+;; (wrapping via mod) and returns the first cell that passes cell_free —
+;; in bounds AND off the body. Soundness is BY CONSTRUCTION (the returned
+;; cell passed the check; check-anyway principle), so no div/mod range or
+;; rng draw-range facts are ever needed. A full board exhausts the count
+;; and yields None — the option escape; callers decide what that means.
 
-;; a fresh cell from two PRNG draws — in bounds by rng's draw-range pair
-;; (the I2 free-cell refinement comes in a later slice).
-(fn new_food ((r u32)) Pos
-  (Pos (rng_val r (board_w)) (rng_val (rng_step r) (board_h))))
+(fn cell_at ((j Int)) Pos
+  (Pos
+    (mod (mod j (* (board_w) (board_h))) (board_w))
+    (ediv (mod j (* (board_w) (board_h))) (board_w))))
+
+(fn cell_free ((c Pos) (body (List Pos))) Bool
+  (andb (in_bounds c) (notb (pos_mem c body))))
+
+(fn scan_free ((j Int) (count Int) (body (List Pos))) (Option Pos)
+  (if (le count 0) None
+  (if (cell_free (cell_at j) body) (Some (cell_at j))
+  (scan_free (+ j 1) (- count 1) body))))
+
+;; soundness carrier (v2's free_ok trick): one Bool over the Option, so the
+;; scan lemma needs no constructor injectivity anywhere.
+(fn free_ok ((o (Option Pos)) (body (List Pos))) Bool
+  (match o
+    (None True)
+    ((Some p) (cell_free p body))))
+
+(fn food_pick ((o (Option Pos)) (fb Pos)) Pos
+  (match o
+    ((Some p) p)
+    (None fb)))
+
+(fn opt_none ((o (Option Pos))) Bool
+  (match o
+    (None True)
+    ((Some p) False)))
+
+(fn new_food ((r u32) (body (List Pos))) (Option Pos)
+  (scan_free (rng_val r (* (board_w) (board_h))) (* (board_w) (board_h)) body))
 
 ;; ---- per-tick derived quantities (named so proofs can branch on them) ------
 
 (fn game_newhead ((g GameState) (i Heading)) Pos
   (addpos (snake_head (snake_of g)) (delta (steer (dir_of g) i))))
 
+;; food-first, matching the contract premise spelling AND pos_mem's head
+;; test order — the food-freeness proofs consume it directly.
 (fn game_ate ((g GameState) (i Heading)) Bool
-  (pos_eq (game_newhead g i) (food_of g)))
+  (pos_eq (food_of g) (game_newhead g i)))
 
 (fn game_dies ((g GameState) (i Heading)) Bool
   (collides (game_newhead g i) (snake_of g)))
+
+;; the respawn scan for this tick: avoids the POST-eat body (new head kept).
+(fn scan_of ((g GameState) (i Heading)) (Option Pos)
+  (new_food (rng_of g) (Cons (game_newhead g i) (snake_of g))))
+
+;; this meal exhausted the board — the scan found no free cell.
+(fn game_full ((g GameState) (i Heading)) Bool
+  (andb (game_ate g i) (opt_none (scan_of g i))))
 
 ;; ---- the core ---------------------------------------------------------------
 
@@ -128,27 +172,33 @@
       (if (game_ate g i) (snake_of g)  ; grow: keep the tail
       (but_last (snake_of g))))  ; move: drop the last cell
     (steer (dir_of g) i)  ; dir — always the steered heading
-    (if (game_ate g i) (new_food (rng_of g)) (food_of g))
+    (if (game_ate g i) (food_pick (scan_of g i) (food_of g)) (food_of g))
     (if (game_ate g i) (+ (score_of g) 1) (score_of g))
-    (if (game_dies g i) Dead Alive)  ; status — the only death-dependent field
-    (if (game_ate g i) (rng_step (rng_step (rng_of g))) (rng_of g))))
+    ;; collision dies; so does a meal with no free cell left (board full =
+    ;; end of play — the option escape's landing). Dies-first keeps the I3
+    ;; collision proofs one-rewrite.
+    (if (game_dies g i) Dead (if (game_full g i) Dead Alive))
+    (if (game_ate g i) (rng_step (rng_of g)) (rng_of g))))
 
 (fn step ((g GameState) (i Heading)) GameState
   (match (status_of g)
     (Dead g)  ; absorbing
     (Alive (live_step g i))))
 
-;; a 2-cell snake heading Right; food from the first two draws.
+;; a 2-cell snake heading Right; food from the free-cell scan over it. The
+;; None fallback (Pos 0 0) is ground-checkable: off the start snake and in
+;; bounds (and unreachable — 190 free cells — though no proof needs that).
+;; No let-binding: the proofs case-on the scan term, and a let would hide
+;; its (rng_seed seed) spelling until simp substitutes — after simp has
+;; already exploded pos_mem over the ground snake literal.
 (fn init ((seed Int)) GameState
-  (let ((r (rng_seed seed)))
-    (let ((r1 (rng_step r)))
-      (GS
-        (list (Pos 2 2) (Pos 1 2))
-        Right
-        (Pos (rng_val r (board_w)) (rng_val r1 (board_h)))
-        0
-        Alive
-        (rng_step r1)))))
+  (GS
+    (list (Pos 2 2) (Pos 1 2))
+    Right
+    (food_pick (new_food (rng_seed seed) (list (Pos 2 2) (Pos 1 2))) (Pos 0 0))
+    0
+    Alive
+    (rng_step (rng_seed seed))))
 
 ;; ---- init facts -------------------------------------------------------------
 
@@ -331,6 +381,64 @@
                            ((steps ((rewrite (premise 1) lr lhs true ())) refl))
                            refl)))))))))))))))
 
+;; ---- scan soundness (slice 5) -------------------------------------------------
+;; wf-induct on the walk budget. Whatever scan_free returns passed cell_free —
+;; the whole point of checking in the scan (soundness needs zero facts about
+;; cell_at's arithmetic or the rng draw). free_ok makes it one Bool over the
+;; Option (None is vacuously fine).
+
+(claim count_pred_nonneg
+  (goal ((c Int)) ((= (le c 0) False)) (= (le 0 (- c 1)) True))
+  (by farkas (list 1 1)))
+
+(claim scan_free_sound
+  (goal ((j Int) (count Int) (body (List Pos))) ()
+    (= (free_ok (scan_free j count body) body) True))
+  (wf-induct count
+    (case-on (le count 0) Bool
+      ((case True
+         (steps
+           ((unfold scan_free lhs)
+            (rewrite (hyp 0) lr lhs true ())
+            (reduce lhs)
+            (unfold free_ok lhs)
+            (reduce lhs))
+           refl))
+       (case False
+         (case-on (cell_free (cell_at j) body) Bool
+           ((case True
+              (steps
+                ((unfold scan_free lhs)
+                 (rewrite (hyp 1) lr lhs true ())
+                 (reduce lhs)
+                 (rewrite (hyp 0) lr lhs true ())
+                 (reduce lhs)
+                 (unfold free_ok lhs)
+                 (reduce lhs)
+                 (rewrite (hyp 0) lr lhs true ()))
+                refl))
+            (case False
+              (steps
+                ((unfold scan_free lhs)
+                 (rewrite (hyp 1) lr lhs true ())
+                 (reduce lhs)
+                 (rewrite (hyp 0) lr lhs true ())
+                 (reduce lhs))
+                (rewrite-with
+                  (hyp 2)
+                  lr
+                  lhs
+                  ()
+                  ((rewrite-with
+                     (lemma count_pred_nonneg)
+                     lr
+                     lhs
+                     ((inst c count))
+                     ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
+                     refl)
+                   (by ord (list)))
+                  refl))))))))))
+
 ;; ---- R2 ----------------------------------------------------------------------
 ;; The eat/move branch is selected by PREMISE REWRITE: game_ate unfolds to
 ;; exactly the contract premise's term (game_newhead twice — once for the
@@ -373,10 +481,11 @@
       ((steps ((rewrite (premise 1) lr lhs true ())) refl))
       (by lia (list)))))
 
-;; ---- food placement (slice 2) ------------------------------------------------
-;; The branch is selected by premise rewrite (as in R2); then each of the four
-;; in_bounds conjuncts is exactly one rng draw-range citation, whose 0 < n
-;; premise is board_w_pos/board_h_pos.
+;; ---- food placement (slice 2, re-discharged via the scan in slice 5) ---------
+;; The branch is selected by premise rewrite (as in R2). On the Some arm both
+;; food facts project out of ONE scan_free_sound citation (free_ok = in-bounds
+;; AND off-body) via geom's andb/notb inversions; the None arm contradicts the
+;; alive-after premise — the scan miss is what killed the tick.
 
 (fulfills food_preserved_move
   (steps
@@ -401,64 +510,280 @@
      (unfold game_ate lhs)
      (unfold game_newhead lhs)
      (rewrite (premise 1) lr lhs true ())
-     (simp lhs)
-     (unfold new_food lhs)
-     (unfold in_bounds lhs)
      (simp lhs))
-    (rewrite-with
-      (lemma rng_val_lo)
-      lr
-      lhs
-      ((inst s (rng_of g)) (inst n (board_w)))
-      ((steps ((rewrite (lemma board_w_pos) lr lhs true ())) refl))
-      (rewrite-with
-        (lemma rng_val_hi)
-        lr
-        lhs
-        ((inst s (rng_of g)) (inst n (board_w)))
-        ((steps ((rewrite (lemma board_w_pos) lr lhs true ())) refl))
-        (rewrite-with
-          (lemma rng_val_lo)
-          lr
-          lhs
-          ((inst s (rng_step (rng_of g))) (inst n (board_h)))
-          ((steps ((rewrite (lemma board_h_pos) lr lhs true ())) refl))
-          (rewrite-with
-            (lemma rng_val_hi)
-            lr
-            lhs
-            ((inst s (rng_step (rng_of g))) (inst n (board_h)))
-            ((steps ((rewrite (lemma board_h_pos) lr lhs true ())) refl))
-            (steps ((simp lhs)) refl)))))))
+    (case-on (scan_of g i) Option
+      ((case Some
+         (p)
+         (steps
+           ((rewrite (hyp 0) lr lhs true ())
+            (unfold food_pick lhs)
+            (reduce lhs))
+           (have
+             (= (free_ok (Some p) (Cons (game_newhead g i) (snake_of g))) True)
+             (steps
+               ((rewrite (hyp 0) rl lhs true ())
+                (unfold scan_of lhs)
+                (unfold new_food lhs)
+                (rewrite (lemma scan_free_sound) lr lhs true ()))
+               refl)
+             (rewrite-with
+               (lemma andb_tl)
+               lr
+               lhs
+               ((inst a (in_bounds p))
+                (inst
+                  b
+                  (notb (pos_mem p (Cons (game_newhead g i) (snake_of g))))))
+               ((steps
+                  ((rewrite (premise 3) rl rhs true ())
+                   (unfold free_ok rhs)
+                   (reduce rhs)
+                   (unfold cell_free rhs))
+                  refl))
+               refl))))
+       (case None
+         (case-on (game_dies g i) Bool
+           ((case True
+              (have (= Alive Dead)
+                (steps
+                  ((rewrite (premise 2) rl lhs true ())
+                   (unfold step lhs)
+                   (rewrite (premise 0) lr lhs true ())
+                   (reduce lhs)
+                   (unfold live_step lhs)
+                   (unfold status_of lhs)
+                   (reduce lhs)
+                   (rewrite (hyp 0) lr lhs true ())
+                   (reduce lhs))
+                  refl)
+                (absurd (premise 3))))
+            (case False
+              (have (= Alive Dead)
+                (steps
+                  ((rewrite (premise 2) rl lhs true ())
+                   (unfold step lhs)
+                   (rewrite (premise 0) lr lhs true ())
+                   (reduce lhs)
+                   (unfold live_step lhs)
+                   (unfold status_of lhs)
+                   (reduce lhs)
+                   (rewrite (hyp 0) lr lhs true ())
+                   (reduce lhs)
+                   (unfold game_full lhs)
+                   (unfold game_ate lhs)
+                   (unfold game_newhead lhs)
+                   (rewrite (premise 1) lr lhs true ())
+                   (unfold andb lhs)
+                   (reduce lhs)
+                   (rewrite (hyp 1) lr lhs true ())
+                   (unfold opt_none lhs)
+                   (reduce lhs))
+                  refl)
+                (absurd (premise 3)))))))))))
 
 (fulfills init_food_in_bounds
   (steps
     ((unfold init lhs) (simp lhs))
-    (rewrite-with
-      (lemma rng_val_lo)
-      lr
-      lhs
-      ((inst s (rng_seed seed)) (inst n (board_w)))
-      ((steps ((rewrite (lemma board_w_pos) lr lhs true ())) refl))
-      (rewrite-with
-        (lemma rng_val_hi)
-        lr
-        lhs
-        ((inst s (rng_seed seed)) (inst n (board_w)))
-        ((steps ((rewrite (lemma board_w_pos) lr lhs true ())) refl))
-        (rewrite-with
-          (lemma rng_val_lo)
-          lr
-          lhs
-          ((inst s (rng_step (rng_seed seed))) (inst n (board_h)))
-          ((steps ((rewrite (lemma board_h_pos) lr lhs true ())) refl))
-          (rewrite-with
-            (lemma rng_val_hi)
-            lr
-            lhs
-            ((inst s (rng_step (rng_seed seed))) (inst n (board_h)))
-            ((steps ((rewrite (lemma board_h_pos) lr lhs true ())) refl))
-            (steps ((simp lhs)) refl)))))))
+    (case-on (new_food (rng_seed seed) (list (Pos 2 2) (Pos 1 2))) Option
+      ((case Some
+         (p)
+         (steps
+           ((rewrite (hyp 0) lr lhs true ())
+            (unfold food_pick lhs)
+            (reduce lhs))
+           (have (= (free_ok (Some p) (list (Pos 2 2) (Pos 1 2))) True)
+             (steps
+               ((rewrite (hyp 0) rl lhs true ())
+                (unfold new_food lhs)
+                (rewrite (lemma scan_free_sound) lr lhs true ()))
+               refl)
+             (rewrite-with
+               (lemma andb_tl)
+               lr
+               lhs
+               ((inst a (in_bounds p))
+                (inst b (notb (pos_mem p (list (Pos 2 2) (Pos 1 2))))))
+               ((steps
+                  ((rewrite (premise 0) rl rhs true ())
+                   (unfold free_ok rhs)
+                   (reduce rhs)
+                   (unfold cell_free rhs))
+                  refl))
+               refl))))
+       (case None
+         (steps
+           ((rewrite (hyp 0) lr lhs true ())
+            (unfold food_pick lhs)
+            (reduce lhs)
+            (compute lhs))
+           refl))))))
+
+;; ---- I2 — food on a free cell (slice 5) ----------------------------------------
+
+(fulfills init_food_free
+  (steps
+    ;; targeted projection — NO simp, so pos_mem stays FOLDED (simp would
+    ;; explode it over the ground snake before the scan hyp can be applied).
+    ((unfold init lhs)
+     (unfold init lhs)
+     (unfold food_of lhs)
+     (reduce lhs)
+     (unfold snake_of lhs)
+     (reduce lhs))
+    (case-on (new_food (rng_seed seed) (list (Pos 2 2) (Pos 1 2))) Option
+      ((case Some
+         (p)
+         (steps
+           ((rewrite (hyp 0) lr lhs true ())
+            (unfold food_pick lhs)
+            (reduce lhs))
+           (have (= (free_ok (Some p) (list (Pos 2 2) (Pos 1 2))) True)
+             (steps
+               ((rewrite (hyp 0) rl lhs true ())
+                (unfold new_food lhs)
+                (rewrite (lemma scan_free_sound) lr lhs true ()))
+               refl)
+             (rewrite-with
+               (lemma notb_t)
+               lr
+               lhs
+               ((inst b (pos_mem p (list (Pos 2 2) (Pos 1 2)))))
+               ((rewrite-with
+                  (lemma andb_tr)
+                  lr
+                  lhs
+                  ((inst a (in_bounds p))
+                   (inst b (notb (pos_mem p (list (Pos 2 2) (Pos 1 2))))))
+                  ((steps
+                     ((rewrite (premise 0) rl rhs true ())
+                      (unfold free_ok rhs)
+                      (reduce rhs)
+                      (unfold cell_free rhs))
+                     refl))
+                  refl))
+               refl))))
+       (case None
+         (steps
+           ((rewrite (hyp 0) lr lhs true ())
+            (unfold food_pick lhs)
+            (reduce lhs)
+            (compute lhs))
+           refl))))))
+
+(fulfills step_food_free
+  (steps
+    ;; targeted projection — NO simp (it would explode pos_mem over the
+    ;; Cons-headed snake field before the ate/scan hyps can be applied, and
+    ;; reduce never descends into a stuck if's arms to clean up after it).
+    ((unfold step lhs)
+     (unfold step lhs)
+     (rewrite (premise 0) lr lhs true ())
+     (reduce lhs)
+     (unfold live_step lhs)
+     (unfold live_step lhs)
+     (unfold food_of lhs)
+     (reduce lhs)
+     (unfold snake_of lhs)
+     (reduce lhs))
+    (case-on (game_ate g i) Bool
+      ((case False
+         (steps
+           ((rewrite (hyp 0) lr lhs true ())
+            (reduce lhs)
+            (unfold pos_mem lhs)
+            (reduce lhs))
+           (have (= (pos_eq (food_of g) (game_newhead g i)) False)
+             (steps
+               ((rewrite (hyp 0) rl rhs true ()) (unfold game_ate rhs))
+               refl)
+             (steps
+               ((rewrite (premise 3) lr lhs true ()) (reduce lhs))
+               (rewrite-with
+                 (lemma mem_but_last_false)
+                 lr
+                 lhs
+                 ((inst p (food_of g)) (inst xs (snake_of g)))
+                 ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+                 refl)))))
+       (case True
+         (case-on (scan_of g i) Option
+           ((case Some
+              (p)
+              (steps
+                ((rewrite (hyp 1) lr lhs true ())
+                 (reduce lhs)
+                 (rewrite (hyp 0) lr lhs true ())
+                 (unfold food_pick lhs)
+                 (reduce lhs))
+                (have
+                  (=
+                    (free_ok (Some p) (Cons (game_newhead g i) (snake_of g)))
+                    True)
+                  (steps
+                    ((rewrite (hyp 0) rl lhs true ())
+                     (unfold scan_of lhs)
+                     (unfold new_food lhs)
+                     (rewrite (lemma scan_free_sound) lr lhs true ()))
+                    refl)
+                  (rewrite-with
+                    (lemma notb_t)
+                    lr
+                    lhs
+                    ((inst b (pos_mem p (Cons (game_newhead g i) (snake_of g)))))
+                    ((rewrite-with
+                       (lemma andb_tr)
+                       lr
+                       lhs
+                       ((inst a (in_bounds p))
+                        (inst
+                          b
+                          (notb
+                            (pos_mem p (Cons (game_newhead g i) (snake_of g))))))
+                       ((steps
+                          ((rewrite (premise 3) rl rhs true ())
+                           (unfold free_ok rhs)
+                           (reduce rhs)
+                           (unfold cell_free rhs))
+                          refl))
+                       refl))
+                    refl))))
+            (case None
+              (case-on (game_dies g i) Bool
+                ((case True
+                   (have (= Alive Dead)
+                     (steps
+                       ((rewrite (premise 2) rl lhs true ())
+                        (unfold step lhs)
+                        (rewrite (premise 0) lr lhs true ())
+                        (reduce lhs)
+                        (unfold live_step lhs)
+                        (unfold status_of lhs)
+                        (reduce lhs)
+                        (rewrite (hyp 0) lr lhs true ())
+                        (reduce lhs))
+                       refl)
+                     (absurd (premise 3))))
+                 (case False
+                   (have (= Alive Dead)
+                     (steps
+                       ((rewrite (premise 2) rl lhs true ())
+                        (unfold step lhs)
+                        (rewrite (premise 0) lr lhs true ())
+                        (reduce lhs)
+                        (unfold live_step lhs)
+                        (unfold status_of lhs)
+                        (reduce lhs)
+                        (rewrite (hyp 0) lr lhs true ())
+                        (reduce lhs)
+                        (unfold game_full lhs)
+                        (rewrite (hyp 2) lr lhs true ())
+                        (unfold andb lhs)
+                        (reduce lhs)
+                        (rewrite (hyp 1) lr lhs true ())
+                        (unfold opt_none lhs)
+                        (reduce lhs))
+                       refl)
+                     (absurd (premise 3))))))))))))))
 
 ;; ---- I3 — collision soundness (slice 3) ---------------------------------------
 ;; game_dies unfolds to exactly the contract premise's collides term; the
@@ -488,6 +813,12 @@
      (unfold game_dies lhs)
      (unfold game_newhead lhs)
      (rewrite (premise 1) lr lhs true ())
+     (simp lhs)
+     (unfold game_full lhs)
+     (unfold game_ate lhs)
+     (unfold game_newhead lhs)
+     (rewrite (premise 2) lr lhs true ())
+     (unfold andb lhs)
      (simp lhs))
     refl))
 

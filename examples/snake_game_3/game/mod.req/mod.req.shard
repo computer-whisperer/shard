@@ -12,10 +12,10 @@
 ;;;
 ;;; The requirement set GROWS PER SLICE — this file states exactly what the
 ;;; present impl discharges, so every commit's corpus is clean. Slice 1 =
-;;; v1's R1–R4 as machine requirements (v1 stated them in prose comments and
-;;; proved them as claims; the requirement/fulfills edge postdates it) plus
-;;; init facts. Coming: food placement (I2: food lands on a free cell — the
-;;; std/rng draw-range citation), distinctness (I1), collision soundness (I3).
+;;; v1's R1–R4 as machine requirements plus init facts; slice 2 = food on
+;;; the board; slice 3 = I3 collision soundness; slice 4 = I1 body
+;;; distinctness; slice 5 = I2 food on a FREE cell (and the board-full
+;;; refinements to food_in_bounds_eat / step_survives_clear).
 (import "../../../../kernel/stdlib.shard")  ; List / Option / Bool / Pair
 (import "../../../../std/list")  ; len — the length requirements' vocabulary
 (import "geom.shard")  ; req-scope sibling: nouns + movement/board algebra
@@ -73,6 +73,9 @@
 ;; lands on food, by zero otherwise. The nonempty precondition is v1's
 ;; contract refinement: the move case is false for an empty snake, and every
 ;; reachable Alive state has one (init_nonempty seeds the invariant).
+;; The eating test is spelled FOOD-FIRST — (pos_eq (food_of g) NEWHEAD) —
+;; the same argument order as pos_mem's head test, so the food-freeness
+;; proofs consume these premises directly (pos_eq is not known symmetric).
 
 (requirement length_eat
   (goal ((g GameState) (i Heading))
@@ -80,8 +83,8 @@
      (= (nonempty (snake_of g)) True)
      (=
        (pos_eq
-         (addpos (snake_head (snake_of g)) (delta (steer (dir_of g) i)))
-         (food_of g))
+         (food_of g)
+         (addpos (snake_head (snake_of g)) (delta (steer (dir_of g) i))))
        True))
     (= (len (snake_of (step g i))) (+ (len (snake_of g)) 1))))
 
@@ -91,15 +94,15 @@
      (= (nonempty (snake_of g)) True)
      (=
        (pos_eq
-         (addpos (snake_head (snake_of g)) (delta (steer (dir_of g) i)))
-         (food_of g))
+         (food_of g)
+         (addpos (snake_head (snake_of g)) (delta (steer (dir_of g) i))))
        False))
     (= (len (snake_of (step g i))) (len (snake_of g)))))
 
-;; ---- FOOD PLACEMENT (slice 2) -----------------------------------------------
-;; Fresh food is always ON THE BOARD — the std/rng draw-range citation: both
-;; coordinates come from rng_val draws bounded by the opaque dims. (The I2
-;; free-cell refinement — food never ON the snake — is a later slice.)
+;; ---- FOOD PLACEMENT (slice 2, refined by slice 5) ---------------------------
+;; Fresh food is always ON THE BOARD. The eat-tick fact is conditioned on the
+;; tick SURVIVING (an eating tick may end the run — see I3 below): on a dying
+;; tick the food cell is dead-frame furniture and nothing is promised.
 
 (requirement init_food_in_bounds
   (goal ((seed Int)) () (= (in_bounds (food_of (init seed))) True)))
@@ -109,9 +112,10 @@
     ((= (status_of g) Alive)
      (=
        (pos_eq
-         (addpos (snake_head (snake_of g)) (delta (steer (dir_of g) i)))
-         (food_of g))
-       True))
+         (food_of g)
+         (addpos (snake_head (snake_of g)) (delta (steer (dir_of g) i))))
+       True)
+     (= (status_of (step g i)) Alive))
     (= (in_bounds (food_of (step g i))) True)))
 
 ;; a non-eating live tick leaves the food where it was.
@@ -120,15 +124,18 @@
     ((= (status_of g) Alive)
      (=
        (pos_eq
-         (addpos (snake_head (snake_of g)) (delta (steer (dir_of g) i)))
-         (food_of g))
+         (food_of g)
+         (addpos (snake_head (snake_of g)) (delta (steer (dir_of g) i))))
        False))
     (= (food_of (step g i)) (food_of g))))
 
-;; ---- I3 — COLLISION SOUNDNESS (slice 3) -------------------------------------
-;; Death is exactly collision: a live tick dies iff the steered head lands
-;; out of bounds or on the body (collides — geom's I3 vocabulary). Both
-;; directions, so an impl can neither kill early nor play through a crash.
+;; ---- I3 — COLLISION SOUNDNESS (slice 3, weakened by slice 5) ----------------
+;; A live tick that collides — steered head out of bounds or on the body —
+;; dies, unconditionally. The converse survival promise covers NON-EATING
+;; ticks: an eating tick that exhausts the board (no free cell left for the
+;; respawn scan) also ends the run, and ruling that out for a roomy board
+;; would take a counting argument (pigeonhole) this contract deliberately
+;; avoids — the check-anyway-freeze principle. Board-full is end-of-play.
 
 (requirement step_dies_on_collision
   (goal ((g GameState) (i Heading))
@@ -147,6 +154,11 @@
        (collides
          (addpos (snake_head (snake_of g)) (delta (steer (dir_of g) i)))
          (snake_of g))
+       False)
+     (=
+       (pos_eq
+         (food_of g)
+         (addpos (snake_head (snake_of g)) (delta (steer (dir_of g) i))))
        False))
     (= (status_of (step g i)) Alive)))
 
@@ -170,3 +182,23 @@
          (snake_of g))
        False))
     (= (distinct (snake_of (step g i))) True)))
+
+;; ---- I2 — FOOD ON A FREE CELL (slice 5) --------------------------------------
+;; The food never sits on the snake: true at init, and preserved by every
+;; tick the game SURVIVES (alive-after conditioning, like food_in_bounds_eat:
+;; a move tick can't step onto food — that would be an eating tick — and an
+;; eating tick that survives found a fresh free cell; a tick that dies makes
+;; no food promise, and death freezes the state). Together with I1 this is
+;; what makes a frame's food glyph mean something: a live frame's food cell
+;; is exactly one cell, on the board, and not under the snake.
+
+(requirement init_food_free
+  (goal ((seed Int)) ()
+    (= (pos_mem (food_of (init seed)) (snake_of (init seed))) False)))
+
+(requirement step_food_free
+  (goal ((g GameState) (i Heading))
+    ((= (status_of g) Alive)
+     (= (pos_mem (food_of g) (snake_of g)) False)
+     (= (status_of (step g i)) Alive))
+    (= (pos_mem (food_of (step g i)) (snake_of (step g i))) False)))
