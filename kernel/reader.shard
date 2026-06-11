@@ -962,7 +962,7 @@
             (append_sym (typedef_ctors tds) base_ctors))
           (None None)
           ((Some (Pair fns externs))
-           (Some (Module tds fns externs (build_fn_trie fns))))))))))
+           (Some (Module tds fns externs (build_fn_trie fns) Nil)))))))))
 
 ;; ---- whole-program module assembly ----------------------------------------
 ;; Build M (the module proofs reduce against) by folding `parse_module` over a
@@ -987,24 +987,48 @@
 
 (fn merge_modules ((a Module) (b Module)) Module
   (match a
-    ((Module at af ax atr)
+    ((Module at af ax atr _)
      (match b
-       ((Module bt bf bx _)
+       ((Module bt bf bx _ _)
         ;; insert b's fns into a's trie (O(|bf|), no full rebuild); af keeps
         ;; priority on a name clash, matching app_fndefs af bf + keep-first.
         (Module
           (app_typedefs at bt)
           (app_fndefs af bf)
           (app_externdefs ax bx)
-          (trie_insert_many bf atr)))))))
+          (trie_insert_many bf atr)
+          (app_env (module_claims a) (module_claims b))))))))
 
 (fn module_typedefs ((m Module)) (List TypeDef)
   (match m
-    ((Module tds _ _ _) tds)))
+    ((Module tds _ _ _ _) tds)))
+
+(fn module_claims ((m Module)) (List (Pair Symbol (List Symbol)))
+  (match m ((Module _ _ _ _ cs) cs)))
+
+(fn module_with_claims ((m Module) (cs (List (Pair Symbol (List Symbol))))) Module
+  (match m ((Module tds fns exts trie _) (Module tds fns exts trie cs))))
+
+;; claim/requirement/axiom names of a file's raw forms — Stage 4: claims are
+;; module ITEMS, resolvable via use/glob-use exactly like fns and types.
+;; (fulfills is NOT an item: its identity is the interface requirement's.)
+(fn claim_items_go ((fs (List SExpr)) (mp (List Symbol)))
+  (List (Pair Symbol (List Symbol)))
+  (match fs
+    (Nil Nil)
+    ((Cons f rest)
+     (match f
+       ((SList (Cons (SSym h) (Cons (SSym nm) _)))
+        (if (if (sym_eq h (quote claim))
+              True
+              (if (sym_eq h (quote requirement)) True (sym_eq h (quote axiom))))
+          (Cons (Pair nm mp) (claim_items_go rest mp))
+          (claim_items_go rest mp)))
+       (_ (claim_items_go rest mp))))))
 
 (fn module_externdefs ((m Module)) (List ExternDef)
   (match m
-    ((Module _ _ exts _) exts)))
+    ((Module _ _ exts _ _) exts)))
 
 (fn build_module ((srcs (List (List Int))) (acc Module) (ctors (List Symbol)))
   (Option Module)
@@ -1119,8 +1143,8 @@
 
 (fn module_resolve_env ((m Module)) (List (Pair Symbol (List Symbol)))
   (match m
-    ((Module tds fns exts _)
-     (app_env (td_env tds) (app_env (fn_env fns) (ext_env exts))))))
+    ((Module tds fns exts _ cs)
+     (app_env (td_env tds) (app_env (fn_env fns) (app_env (ext_env exts) cs))))))
 
 ;; Keep only the entries whose module-path is `p` — used to recover ONE file's
 ;; local env from the merged module (defs at `p`), for strict goal resolution
@@ -1146,7 +1170,7 @@
 (fn local_env
   ((m Module) (modpath (List Symbol))) (List (Pair Symbol (List Symbol)))
   (match m
-    ((Module tds fns exts _)
+    ((Module tds fns exts _ _)
      (names_to_env
        (append_sym
          (typedef_names tds)
@@ -1361,7 +1385,7 @@
    (m Module))
   Module
   (match m
-    ((Module tds fns exts _)
+    ((Module tds fns exts _ _)
      (let
        ((rb (rebind_names (fndef_names fns) use_items sig_exts modpath)))
        (let
@@ -1377,7 +1401,8 @@
              (resolve_typedefs env tds)
              rfns
              (resolve_externdefs env exts)
-             (build_fn_trie rfns))))))))
+             (build_fn_trie rfns)
+             Nil)))))))  ; claims attached by build_module_d (module_with_claims)
 
 ;; ===========================================================================
 ;; Decl head detectors: classify a top-level form by its head symbol. The
@@ -2009,7 +2034,9 @@
         (match (use_scope_of (use_forms src) mp (module_resolve_env acc))
           ((Pair uitems ualiases)
            (let
-             ((rm (resolve_module mp uitems ualiases (module_externdefs acc) m)))
+             ((rm (module_with_claims
+                    (resolve_module mp uitems ualiases (module_externdefs acc) m)
+                    (claim_items_go (use_forms src) mp))))
              (build_module_d
                rest
                (merge_modules acc rm)
