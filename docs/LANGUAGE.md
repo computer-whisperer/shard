@@ -47,10 +47,13 @@ depends on; these drive dependency tracking and load order — the loader
 itself ignores them when collecting types/fns, since the assembled set is
 still concatenated as above. A directory-based module system with
 interface/visibility rules is layered on top of this floor
-(`mod.req.shard` interface files; MODE-AWARE resolution — proof checking
-sees a module's interface, running code gets the impl bodies; a loader
-gate that rejects reaching past another module's interface); that system
-is beyond the scope of this document.
+(`mod.req.shard` interface files, expandable Rust-style into a
+`mod.req/` directory whose entry keeps the name; MODE-AWARE resolution —
+proof checking sees a module's interface, running code gets the impl
+bodies; a loader gate that rejects reaching past another module's
+interface; and a req-scope gate — an interface file may import only
+other req-scope files, bare module interfaces, and the kernel, never an
+implementation file); that system is beyond the scope of this document.
 
 Four top-level definitional forms:
 

@@ -1944,6 +1944,14 @@
 ;; "/mod.req.shard" — appended to a bare module name to reach its interface.
 (fn mod_req_suffix () (List Int) "/mod.req.shard")
 
+;; "/mod.req/mod.req.shard" — the DIRECTORY form of a module interface. When a
+;; module's req surface outgrows one file, `mod.req.shard` expands Rust-style
+;; (foo.rs ⟷ foo/mod.rs) into a `mod.req/` directory whose entry keeps the
+;; name; sibling req files (spec vocabulary etc.) live beside it. A bare module
+;; import probes this form first and falls back to the flat file (see visit in
+;; loader.shard).
+(fn mod_req_dir_suffix () (List Int) "/mod.req/mod.req.shard")
+
 (fn strip_prefix ((pre (List Int)) (xs (List Int))) (Option (List Int))
   (match pre
     (Nil (Some xs))
@@ -2034,6 +2042,80 @@
     ((Cons c _)
      (if (int_eq c 47) True (segs_escape (path_segs path Nil) 0)))))
 
+;; canonicalize PATH BYTES: drop `.` and empty segments, fold `..` against the
+;; previous segment. The string-identity companion to module_path_of's
+;; symbol-level canon: the loader dedups its closure on canonical bytes, so
+;; two relative spellings of one file are ONE visit (a raw-string seen-list
+;; would load the file twice and duplicate every decl in it). CHECK mode only
+;; — an absolute RUN path would lose its leading '/'. A `..` with nothing to
+;; pop is dropped, but the loader refuses escaping paths before canon ever
+;; sees one (path_escapes above).
+(fn rev_segs ((ss (List (List Int))) (acc (List (List Int)))) (List (List Int))
+  (match ss
+    (Nil acc)
+    ((Cons h t) (rev_segs t (Cons h acc)))))
+
+(fn canon_segs ((ss (List (List Int))) (acc (List (List Int)))) (List (List Int))
+  (match ss
+    (Nil (rev_segs acc Nil))
+    ((Cons s rest)
+     (match s
+       (Nil (canon_segs rest acc))
+       (_
+        (if (seg_dot s)
+          (canon_segs rest acc)
+          (if (seg_dotdot s)
+            (match acc
+              (Nil (canon_segs rest acc))
+              ((Cons _ t) (canon_segs rest t)))
+            (canon_segs rest (Cons s acc)))))))))
+
+(fn join_segs ((ss (List (List Int)))) (List Int)
+  (match ss
+    (Nil Nil)
+    ((Cons s Nil) s)
+    ((Cons s rest) (append_int s (Cons 47 (join_segs rest))))))
+
+(fn canon_path_bytes ((path (List Int))) (List Int)
+  (join_segs (canon_segs (path_segs path Nil) Nil)))
+
+;; ---------------------------------------------------------------------------
+;; REQUIREMENT SCOPE. A file is REQ-SCOPE iff it is a `mod.req.shard` or lives
+;; under a `mod.req/` directory — the module's interface surface, structurally.
+;; The loader forbids a req-scope file from importing an implementation file
+;; (see visit in loader.shard): the interface may reach only req-scope files,
+;; bare module interfaces, and core stdlib. Classified on CANONICAL segments so
+;; a `../` detour cannot dodge the gate.
+(fn mod_req_dir_sym () Symbol (sym_of_chars "mod.req"))
+(fn mod_req_file_sym () Symbol (sym_of_chars "mod.req.shard"))
+
+(fn segs_req_scope ((ss (List Symbol))) Bool
+  (match ss
+    (Nil False)
+    ((Cons s Nil) (sym_eq s (mod_req_file_sym)))
+    ((Cons s rest) (if (sym_eq s (mod_req_dir_sym)) True (segs_req_scope rest)))))
+
+(fn is_req_path ((path (List Int))) Bool
+  (segs_req_scope (canon_go (segs_to_syms (path_segs path Nil)) Nil)))
+
+;; drop `mod.req` segments from a module path: a file under a module's
+;; `mod.req/` directory belongs to the MODULE's namespace, exactly as if it
+;; sat in the module root. This makes the file→dir interface expansion
+;; identity-neutral (qnames, use forms, and the Stage-4 scope rules are
+;; unchanged by the move), and keeps sibling req files source-citable —
+;; `mod.req` itself is not a lexable symbol, so an uncollapsed path could
+;; never appear in a (:: …) form. It also collapses the dir-form entry
+;; mod.req/mod.req.shard to the module root after suffix-strip. Corollary:
+;; mod.req/foo.shard and foo.shard in the same module would COLLIDE in qname
+;; space — don't keep both.
+(fn drop_req_dir_segs ((ss (List Symbol))) (List Symbol)
+  (match ss
+    (Nil Nil)
+    ((Cons s rest)
+     (if (sym_eq s (mod_req_dir_sym))
+       (drop_req_dir_segs rest)
+       (Cons s (drop_req_dir_segs rest))))))
+
 ;; kernel/stdlib.shard is the SOURCE of the `core` crate — the builtin prelude
 ;; types (List/Option/Bool/Pair) and ctors. Like Rust's `core`, its items ARE
 ;; core, so its module-path collapses to `core` regardless of the relative
@@ -2048,10 +2130,11 @@
 (fn module_path_of ((path (List Int))) (List Symbol)
   (let
     ((segs
-       (canon_go
-         (segs_to_syms
-           (path_segs (rev_i (strip_path_suffix (rev_i path Nil)) Nil) Nil))
-         Nil)))
+       (drop_req_dir_segs
+         (canon_go
+           (segs_to_syms
+             (path_segs (rev_i (strip_path_suffix (rev_i path Nil)) Nil) Nil))
+           Nil))))
     (if (is_core_path segs) (qn_core) segs)))
 
 ;; build_module with diagnosis: same fold, but a failing source is re-scanned

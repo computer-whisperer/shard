@@ -444,7 +444,7 @@ fungible behind those surfaces.
   to impls, proofs, or `examples/` do not.
 - **Sources are canonical-format.** Run shardfmt on touched files;
   the formatter's gate guarantees it cannot change what a file
-  parses to (`tools/shardfmt/mod.req.shard` is the contract).
+  parses to (`tools/shardfmt/mod.req/mod.req.shard` is the contract).
 - **REVISIT entries are first-class.** Every design decision under
   uncertainty has an entry with the "what was chosen", "why now",
   and "revisit when" triad. The README's roadmap section is a

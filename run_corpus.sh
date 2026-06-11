@@ -44,6 +44,9 @@ TARGETS=(
   examples/homonym_dispatch.shard
   examples/cite_resolves.shard
   examples/cite_rejects.shard
+  examples/req_dir_demo/consumer.shard
+  examples/req_dir_demo/demo/demo.shard
+  examples/req_gate_rejects/mod.req.shard
   examples/lia_basics.shard
   examples/lia_rejects.shard
   examples/list_named_hyp.shard
@@ -66,7 +69,7 @@ TARGETS=(
   examples/calc/calc_spec_tests.shard
   examples/calc/calc_reconcile_tests.shard
   examples/snake_game/snake.shard
-  examples/snake_game_2/arena.shard
+  examples/snake_game_2/mod.req/arena.shard
   std/mem.shard
   std/list.shard
   std/map.shard
@@ -88,3 +91,17 @@ done
 wait
 
 for i in "${!TARGETS[@]}"; do cat "$TMP/$i"; done
+
+# Invocation-shape pin: an ABSOLUTE target must be refused (exit 2) — module
+# identity is only sound for repo-root-relative paths; a silent acceptance
+# here would strip kernel/stdlib's core identity and quietly disable the
+# theory backends (the false "purity bug" of 2026-06-10). See loader.shard
+# visit / reader.shard path_escapes.
+echo "=== guard: absolute path ==="
+out=$("${CHECK_CMD[@]}" "$PWD/examples/auto_demo.shard" 2>&1); code=$?
+if [ "$code" -eq 2 ] && grep -q "escapes the repo root" <<<"$out"; then
+  echo "REFUSED (exit 2)"
+else
+  echo "GUARD FAILED: exit $code"
+  printf '%s\n' "$out" | head -3
+fi

@@ -169,8 +169,8 @@ inspection, and the `(bin …)` artifact names them in its `trusts` list
 so nothing is implicit. Requirements are then stated over `main`'s
 observables only — never an internal function or state field — and
 proven by symbolic execution through the bolts. See
-`examples/snake_game_2/mod.req.shard` and `tools/shardfmt/mod.req.shard`
-for the two reference contracts.
+`examples/snake_game_2/mod.req/mod.req.shard` and
+`tools/shardfmt/mod.req/mod.req.shard` for the two reference contracts.
 
 ## Modellable externs: the good pattern
 
