@@ -1997,6 +1997,43 @@
     (Nil (rev_sym acc Nil))
     ((Cons s t) (canon_go t (canon_push s acc)))))
 
+;; Does the path climb ABOVE the invocation root? Module identity
+;; (module_path_of) is only meaningful for paths under the repo root:
+;; canon_push silently DROPS a `..` that pops past the top, so an escaping
+;; path gets a wrong identity — worst case a foreign kernel/stdlib.shard
+;; collapsing to core. Walk raw byte segments with a depth counter: empty/`.`
+;; keeps it, `..` pops (a pop at depth 0 = escape), anything else pushes.
+;; Absolute paths (leading '/') escape by definition. The loader refuses
+;; escaping paths in CHECK mode (see visit in loader.shard).
+(fn seg_dot ((s (List Int))) Bool
+  (match s
+    ((Cons c Nil) (int_eq c 46))
+    (_ False)))
+
+(fn seg_dotdot ((s (List Int))) Bool
+  (match s
+    ((Cons a (Cons b Nil)) (if (int_eq a 46) (int_eq b 46) False))
+    (_ False)))
+
+(fn segs_escape ((ss (List (List Int))) (depth Int)) Bool
+  (match ss
+    (Nil False)
+    ((Cons s rest)
+     (match s
+       (Nil (segs_escape rest depth))
+       (_
+        (if (seg_dot s)
+          (segs_escape rest depth)
+          (if (seg_dotdot s)
+            (if (int_eq depth 0) True (segs_escape rest (- depth 1)))
+            (segs_escape rest (+ depth 1)))))))))
+
+(fn path_escapes ((path (List Int))) Bool
+  (match path
+    (Nil False)
+    ((Cons c _)
+     (if (int_eq c 47) True (segs_escape (path_segs path Nil) 0)))))
+
 ;; kernel/stdlib.shard is the SOURCE of the `core` crate — the builtin prelude
 ;; types (List/Option/Bool/Pair) and ctors. Like Rust's `core`, its items ARE
 ;; core, so its module-path collapses to `core` regardless of the relative
