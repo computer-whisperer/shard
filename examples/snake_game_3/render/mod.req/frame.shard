@@ -1,0 +1,98 @@
+;;; frame.shard — req-scope SPEC VOCABULARY for snake v3's renderer: the
+;;; byte-level FRAME SHAPE predicate (v2's reviewed arena.shard, adapted).
+;;; A frame is the board drawn row-major over the game's playable grid plus
+;;; a one-cell wall border: (board_h + 2) rows, each (board_w + 2) glyph
+;;; bytes and a newline. No screen-control bytes here — clearing the
+;;; terminal is the io layer's business; the renderer is pure board→bytes.
+;;;
+;;; Counted-run style (v2's lesson): every check pins an EXACT run length
+;;; ending at the newline and the row end, so short rows, long rows, wrong
+;;; row counts, or trailing bytes all fail. The interior cells are
+;;; unconstrained HERE — which glyph sits where is the (coming) entity
+;;; faithfulness vocabulary's business, not the shape's.
+;;;
+;;; List helpers (take/drop) are self-contained for inspection: this file is
+;;; reviewed surface, and its meaning should not depend on chasing imports.
+(import "../../../../kernel/stdlib.shard")  ; List / Option / Bool / Pair
+(import "../../game")  ; the game module interface: board dims + geom vocab
+(use (:: examples snake_game_3 game geom *))
+
+;; ---- glyph constants --------------------------------------------------------
+
+(fn wall () Int 35)  ; '#'
+
+(fn nl () Int 10)  ; '\n'
+
+;; ---- list helpers -----------------------------------------------------------
+
+(fn take ((n Int) (xs (List Int))) (List Int)
+  (if (le n 0) Nil
+  (match xs
+    (Nil Nil)
+    ((Cons h t) (Cons h (take (- n 1) t))))))
+
+(fn drop ((n Int) (xs (List Int))) (List Int)
+  (if (le n 0) xs
+  (match xs
+    (Nil Nil)
+    ((Cons h t) (drop (- n 1) t)))))
+
+;; ---- row checks (counted runs) ----------------------------------------------
+
+;; a full wall row tail: exactly n wall bytes, then the newline, then the END.
+(fn wall_cells ((n Int) (r (List Int))) Bool
+  (if (le n 0)
+    (match r
+      ((Cons b Nil) (int_eq b (nl)))
+      (_ False))
+    (match r
+      ((Cons b rest) (if (int_eq b (wall)) (wall_cells (- n 1) rest) False))
+      (_ False))))
+
+;; the top/bottom border row: board_w + 2 wall bytes, newline, end.
+(fn wall_row ((r (List Int))) Bool (wall_cells (+ (board_w) 2) r))
+
+;; an interior row tail: n unconstrained cell bytes (the entities live
+;; there), then the closing wall, the newline, the END.
+(fn free_cells ((n Int) (r (List Int))) Bool
+  (if (le n 0)
+    (match r
+      ((Cons b (Cons b2 Nil)) (andb (int_eq b (wall)) (int_eq b2 (nl))))
+      (_ False))
+    (match r
+      ((Cons b rest) (free_cells (- n 1) rest))
+      (_ False))))
+
+;; an interior row: opening wall, board_w cells, closing wall, newline, end.
+(fn mid_row ((r (List Int))) Bool
+  (match r
+    ((Cons b rest) (andb (int_eq b (wall)) (free_cells (board_w) rest)))
+    (_ False)))
+
+;; ---- row decomposition --------------------------------------------------------
+
+;; split fixed-width (board_w + 3)-byte rows off the body (a malformed short
+;; body yields a short final row, which the row checks above reject).
+(fn split_rows ((bs (List Int))) (List (List Int))
+  (match bs
+    (Nil Nil)
+    (_ (Cons (take (+ (board_w) 3) bs) (split_rows (drop (+ (board_w) 3) bs))))))
+
+;; n interior rows, then the bottom border row, then NO further rows.
+(fn mid_rows ((n Int) (rs (List (List Int)))) Bool
+  (if (le n 0)
+    (match rs
+      ((Cons r Nil) (wall_row r))
+      (_ False))
+    (match rs
+      ((Cons r rest) (andb (mid_row r) (mid_rows (- n 1) rest)))
+      (_ False))))
+
+;; the full grid: top border row, board_h interior rows, bottom border row.
+(fn is_rows ((rs (List (List Int)))) Bool
+  (match rs
+    ((Cons r0 rest) (andb (wall_row r0) (mid_rows (board_h) rest)))
+    (_ False)))
+
+;; THE PREDICATE: a complete bordered frame of the board, and nothing else.
+(fn is_frame ((bs (List Int))) Bool (is_rows (split_rows bs)))

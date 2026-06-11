@@ -26,7 +26,8 @@
 (extern read_file ((path (List Int)) (w World)) (Pair (Option (List Int)) World))
 (extern write ((bytes (List Int)) (w World)) World)
 ;; write_file: persist bytes at path — the dual of read_file. True = written.
-(extern write_file ((path (List Int)) (bytes (List Int)) (w World)) (Pair Bool World))
+(extern write_file ((path (List Int)) (bytes (List Int)) (w World))
+  (Pair Bool World))
 (extern write_line ((bytes (List Int)) (w World)) World)
 (extern exit ((code Int) (w World)) World)
 ;; read_key: blocking line-read from stdin; first byte as (Some b), or (None) on
@@ -149,9 +150,7 @@
 ;; interface imported as a dependency, the impl that imports its own interface
 ;; (`(import "mod.req.shard")`) makes the interface a dep of the impl, so the
 ;; interface lands FIRST — its requirements seed before the impl's fulfills.
-(fn append_src
-  ((acc (List SrcEntry)) (elt SrcEntry))
-  (List SrcEntry)
+(fn append_src ((acc (List SrcEntry)) (elt SrcEntry)) (List SrcEntry)
   (match acc
     (Nil (Cons elt Nil))
     ((Cons h t) (Cons h (append_src t elt)))))
@@ -176,7 +175,8 @@
 ;; does not resolve by module identity, and absolute app paths are legitimate
 ;; there.
 (fn refuse_escaping_path ((path (List Int)) (w World)) World
-  (exit 2
+  (exit
+    2
     (write
       (append_int
         "error: "
@@ -199,7 +199,8 @@
       ((Some rbase) (Some (append_int (rev_i rbase Nil) (mod_req_suffix))))
       (None
         (match (strip_prefix (rev_i (mod_req_suffix) Nil) rp)
-          ((Some rbase) (Some (append_int (rev_i rbase Nil) (mod_req_dir_suffix))))
+          ((Some rbase)
+           (Some (append_int (rev_i rbase Nil) (mod_req_dir_suffix))))
           (None None))))))
 
 ;; ---------------------------------------------------------------------------
@@ -216,30 +217,29 @@
 ;; may state its contract in kernel vocabulary (shardfmt's gate cites the
 ;; production reader for parse-equivalence), never in unreviewed impl files.
 (fn req_target_ok ((t (List Int))) Bool
-  (if (is_req_path t)
-    True
-    (match (module_path_of t)
-      (Nil False)
-      ((Cons h _)
-       (if (sym_eq h (quote core)) True (sym_eq h (quote kernel)))))))
+  (if (is_req_path t) True
+  (match (module_path_of t)
+    (Nil False)
+    ((Cons h _) (if (sym_eq h (quote core)) True (sym_eq h (quote kernel)))))))
 
-(fn first_bad_req_import ((ps (List (Pair Bool (List Int))))) (Option (List Int))
+(fn first_bad_req_import ((ps (List (Pair Bool (List Int)))))
+  (Option (List Int))
   (match ps
     (Nil None)
     ((Cons (Pair g t) rest)
-     (if g
-       (first_bad_req_import rest)
-       (if (req_target_ok t) (first_bad_req_import rest) (Some t))))))
+     (if g (first_bad_req_import rest)
+     (if (req_target_ok t) (first_bad_req_import rest)
+     (Some t))))))
 
 ;; the first gate-violating import of PATH, or None (incl. RUN mode — flat
 ;; core, no module identity — and non-req importers, which are unrestricted).
-(fn req_gate
-  ((path (List Int)) (run Bool) (imps (List (Pair Bool (List Int)))))
+(fn req_gate ((path (List Int)) (run Bool) (imps (List (Pair Bool (List Int)))))
   (Option (List Int))
   (if run None (if (is_req_path path) (first_bad_req_import imps) None)))
 
 (fn refuse_req_import ((from (List Int)) (to (List Int)) (w World)) World
-  (exit 2
+  (exit
+    2
     (write
       (append_int
         "error: interface file "
@@ -264,37 +264,55 @@
     ((Closure seen acc w)
      (if (if run False (path_escapes path0))
        (Closure seen acc (refuse_escaping_path path0 w))
-     (let ((path (if run path0 (canon_path_bytes path0))))
-     (if (path_member path seen) st
-     (match (read_file path w)
-       ((Pair msrc w1)
-        (match msrc
-          (None
-            ;; unreadable: an interface path falls back to its other spelling
-            ;; (dir form ⟷ file form); anything else is skipped as before.
-            (match (alt_req_path path)
-              ((Some p2) (visit p2 granted run (Closure (Cons path seen) acc w1)))
-              (None (Closure (Cons path seen) acc w1))))
-          ((Some src)
-           (let ((imps (imports_of (dir_of path) src run)))
-             (match (req_gate path run imps)
-               ((Some bad)
-                (Closure (Cons path seen) acc (refuse_req_import path bad w1)))
-               (None
-                (match
-                  (visit_imports imps run (Closure (Cons path seen) acc w1))
-                  ((Closure seen2 acc2 w2)
-                   (Closure
-                     seen2
-                     (append_src acc2 (SrcEntry path granted src))
-                     w2))))))))))))))))
+       (let ((path (if run path0 (canon_path_bytes path0))))
+         (if (path_member path seen) st
+         (match (read_file path w)
+           ((Pair msrc w1)
+            (match msrc
+              (None
+                ;; unreadable: an interface path falls back to its other spelling
+                ;; (dir form ⟷ file form); anything else is skipped as before.
+                (match (alt_req_path path)
+                  ((Some p2)
+                   (visit p2 granted run (Closure (Cons path seen) acc w1)))
+                  (None (Closure (Cons path seen) acc w1))))
+              ((Some src)
+               (let ((imps (imports_of (dir_of path) src run)))
+                 (match (req_gate path run imps)
+                   ((Some bad)
+                    (Closure
+                      (Cons path seen)
+                      acc
+                      (refuse_req_import path bad w1)))
+                   (None
+                     (match
+                       (visit_imports
+                         imps
+                         granted
+                         run
+                         (Closure (Cons path seen) acc w1))
+                       ((Closure seen2 acc2 w2)
+                        (Closure
+                          seen2
+                          (append_src acc2 (SrcEntry path granted src))
+                          w2))))))))))))))))
 
+;; A GRANTED file's imports load granted too (the inherited flag): a module
+;; interface is trusted as a UNIT, and the req-scope files it pulls in
+;; (spec-vocabulary siblings under mod.req/) carry requirements its consumers
+;; must be able to cite — they are fulfilled by the same impl target that
+;; fulfills the interface, and the req-scope gate already pins such imports
+;; to spec surface. Without inheritance those siblings load ungranted in a
+;; CONSUMER's closure: their requirements sit silently pending and every
+;; citation of them is unresolved. File imports from UNGRANTED files keep
+;; their own tags (an impl importing its own interface stays obligated).
 (fn visit_imports
-  ((paths (List (Pair Bool (List Int)))) (run Bool) (st Closure))
+  ((paths (List (Pair Bool (List Int)))) (granted Bool) (run Bool) (st Closure))
   Closure
   (match paths
     (Nil st)
-    ((Cons (Pair g p) rest) (visit_imports rest run (visit p g run st)))))
+    ((Cons (Pair g p) rest)
+     (visit_imports rest granted run (visit p (if granted True g) run st)))))
 
 ;; The entry target itself is ungranted (its own claims are checked normally).
 ;; `run` selects how bare module imports resolve: False = CHECK (opaque
