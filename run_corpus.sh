@@ -35,6 +35,7 @@ TARGETS=(
   examples/admit_demo.shard
   examples/bytes_basics.shard
   examples/bytes_facts.shard
+  examples/bytes_bridge.shard
   examples/contract_demo.shard
   examples/decl_rejects.shard
   examples/div_pairs.shard
@@ -89,6 +90,7 @@ TARGETS=(
   std/nat.shard
   std/order.shard
   std/rng/rng.shard
+  std/bytes/bytes.shard
 )
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT

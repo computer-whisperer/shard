@@ -218,7 +218,9 @@ These also live only in `kernel/reduce.shard`'s table — one
 definition for the proof reducer and the hosted evaluator. Ground
 calls reduce (so `compute` works); symbolic arguments are reasoned
 about via the list model and the `(bytes-fact …)` premise step
-(§10.3), which injects prim-level `blen`/`bidx` facts.
+(§10.3), which injects prim-level `blen`/`bidx` facts; the
+list-model bridge laws (`len`/`append` homomorphisms, the guarded
+round trip, the exact slice length) are `std/bytes`'s tagged axioms.
 
 
 ## 4. Expressions
