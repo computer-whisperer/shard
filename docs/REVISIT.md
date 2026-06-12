@@ -35,6 +35,71 @@ is where to start when planning v3.
   tangles with mutual recursion and adds trusted Rust code.
 - **Revisit if:** we burn debugging time on bootstrap-kernel loops a
   cheap syntactic check would have caught.
+- **Note (2026-06-12):** the *object-language* admissibility gate this
+  entry deferred is now a ratified design — see the next entry. This
+  entry remains only about the Rust narrow floor.
+
+### Definitional admissibility: nonneg-Int measure descent, no partiality (2026-06-12)
+- **Chose:** every `fn` is total; a recursive definition is admitted to
+  the logic only by **nonnegative-Int measure descent**. Two
+  recognitions of the one primitive: syntactic structural subterm
+  descent (incl. mutual SCCs) auto-recognized with zero annotation
+  (term size is the measure, justified meta-level), and explicit
+  `(measure E)` with kernel-emitted decrease/nonnegativity obligations
+  per call site under path conditions, discharged in the untrusted
+  regime. **No `partial-fn` caste, no codata**: genuinely unbounded
+  processes (interpreter `ev`, reducer fixpoint loops, World event
+  loops) take an Int fuel/budget parameter — clocked big-step
+  semantics, CakeML-style; exhaustion is loud refusal; unfueled `ev`
+  is eliminated rather than escape-hatched.
+- **Why now:** issue #1 is a live `0 = 1` exploit (`unfold` mints a
+  non-terminating definition's equation as a theorem; farkas does the
+  rest). The 2026-06-12 repo audit: 1597 hand-written fns — 628
+  single-position structural, 268 in 79 mutual SCCs (walker pattern),
+  62 non-structural (≈30 Int-counter loops *that existing proofs
+  unfold* — snake v3's `scan_free`/`render_row` families — ≈15
+  helper-returned-suffix, ≈10 genuinely partial). Structural-only
+  would invalidate the proved corpus and push runtime loops onto
+  unary Peano fuel; Int-measure admission matches both the corpus
+  idiom (Int counters + WfInduct) and the v2 trust floor (Int over
+  Peano). Lean kept a `partial def` escape hatch and bought a
+  permanent ergonomic seam; Agda/CakeML went total-with-fuel.
+- **Revisit if:** the obligation emitter (path-condition collection —
+  soundness-critical trusted code) proves bug-prone, or fuel
+  threading through the `ev`/reducer chains costs more than the
+  caste system it replaced. Must-fail pins: `liar` (`examples/`
+  nonterm reject) + a measure-cheat (false decrease on one path).
+
+### Trusted-core contraction: Word/Bytes formers revoked (2026-06-12)
+- **Chose:** the kernel's assumable base is a **closed list** —
+  inductive datatypes, `Int` + linear arithmetic, nonneg-Int descent,
+  extern World axioms at the bin ledger. Axioms require **external
+  pedigree**. The `Word` and `Bytes` kernel formers (+ their fact
+  steps, + std/div's quotient axioms) are revoked as base citizens:
+  slated for demotion to `std` constructions (opaque `sig type` over
+  `Int`/`(List Int)`+validity predicate) whose law families are
+  proven, turning the ten current std axioms into theorems. End
+  state: std is axiom-free; `(axiom …)` outside the base becomes a
+  corpus-gate violation.
+- **Why now:** axiom scope was growing faster than intended ("Int got
+  admitted" became a precedent template instead of a one-time floor
+  decision), and our hand-written-axiom error rate is demonstrably
+  nonzero: the Word `/`+`mod` mixed-pair axiom shipped false; std/bytes
+  `of_list_id` was caught false-unless-guarded in review. Facts about
+  opaque primitives are unauditable inside the system; facts about
+  defined constructions are theorems waiting to be proven. `Bytes`
+  was built model-inside (canonical payload IS the byte list), so its
+  demotion is cheap and pattern-setting; `Word` rides on proven
+  div; div's quotient laws are provable about a defined `ediv`/`tmod`
+  via WfInduct. Evaluation-speed loss is confined to the interpreted
+  tower (waived: compiled binaries use proven refinements, issue #14);
+  fact-step ergonomics are replaced by citable lemma families + the
+  prover.
+- **Revisit if:** proving the demoted law families stalls (the
+  Lean-style "prim accelerates, definition is the meaning,
+  conformance ties them" fallback keeps prims for *evaluation* without
+  re-admitting their facts), or checking-time regression on the
+  corpus becomes the bottleneck.
 
 ## Language Surface
 

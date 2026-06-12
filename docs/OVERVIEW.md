@@ -203,6 +203,35 @@ This is **object-language only**. The trusted Rust bootstrap (§6) is untouched 
 identity is a property the kernel, itself written in shard, enforces on the
 programs it checks.
 
+**Definitions are admitted, not assumed — the totality decision (2026-06-12).**
+The same bug class has a second instance: `unfold` treats every `fn` body as a
+total function's defining equation, so the `fn` form is the largest axiom
+generator in the language — and with no admissibility check, a non-terminating
+definition like `(fn liar ((n Int)) Int (+ (liar n) 1))` mints the inconsistent
+theorem `liar 0 = liar 0 + 1`, from which farkas derives `0 = 1` (issue #1, a
+live exploit until the gate lands). The ratified design:
+
+- **One primitive: admission by nonnegative-Int measure descent.** A recursive
+  definition enters the logic only if every recursive call, under its path
+  condition, strictly decreases an Int measure that stays ≥ 0. This is the
+  same trust floor as admitting `Int` itself was — well-foundedness of
+  bounded integer descent has the external pedigree we demand of axioms —
+  and unlike a structural-only gate it does not push executable loops onto
+  unary Peano fuel.
+- **Two recognitions.** Syntactic structural subterm descent (including
+  mutual SCCs) is the auto-recognized, zero-annotation instance — term size
+  is the measure, justified once at the meta level. Everything else declares
+  an explicit `(measure E)`; the kernel emits the decrease/nonnegativity
+  facts per call site as ordinary claims, discharged in the untrusted regime
+  (the prover already enumerates farkas certificates for exactly this shape).
+- **No partiality, anywhere.** There is no `partial-fn` caste and no codata.
+  Genuinely unbounded processes — the interpreter, reducer fixpoint loops,
+  event loops — take an Int fuel/budget parameter and are measure-admitted
+  on it; the reference semantics is a *clocked* big-step semantics (CakeML
+  precedent), exhaustion is loud refusal (the sound direction for a
+  checker), and the unfueled "ideal" meaning is recoverable as ∃-fuel
+  theorems. Every defining equation in the system is a theorem.
+
 
 ## 8. Why now: the generate / check asymmetry
 
@@ -224,12 +253,28 @@ The boundary is worth drawing precisely. The trusted core's charter is
 **exactly three things**: how to parse shard, *one* reference way to execute
 the resulting ASTs, and the logic for establishing formal proofs relating
 shard expressions to each other. Hardware is not in the charter — the kernel
-never cares how a program is executed efficiently, only what it means. (This
-is why `Word` and `Bytes` live in the kernel as *logic vocabulary* — canonical
-values and fact steps that let refinements be stated and checked — and not as
-performance features.) Everything else — the prover, the formatter, the
-compiler (§3), and the refinement passes to come — is one untrusted tier,
-whose outputs are either kernel-checked or differentially gated.
+never cares how a program is executed efficiently, only what it means.
+Everything else — the prover, the formatter, the compiler (§3), and the
+refinement passes to come — is one untrusted tier, whose outputs are either
+kernel-checked or differentially gated.
+
+**The assumable base is a closed list — the contraction decision
+(2026-06-12).** What loading a file lets you *assume* is exactly: inductive
+datatypes, `Int` with linear arithmetic (the deliberate v2 layer-up from
+Peano), nonnegative-Int well-founded descent (§7), and extern `World` axioms
+surfaced at the bin ledger. Axioms are reserved for facts with **external
+pedigree** — centuries of vetting back integer arithmetic; nothing backs a
+hand-written axiom about a data structure we invented last week, and we have
+shipped or nearly shipped false ones twice (the Word `/`+`mod` mixed-pair
+axiom; std/bytes `of_list_id` unguarded). Consequently the `Word` and `Bytes`
+kernel formers are **revoked**: both are conservative constructions over the
+base (`Bytes` already carries its byte-list model inside its canonical value)
+and are slated for demotion to ordinary `std` modules — opaque `sig type`s
+over `Int`/`(List Int)` whose law families are *proven*, turning today's ten
+std axioms into theorems. Facts about defined things are auditable inside the
+system; facts about opaque primitives are pure trust. The end state: `std`
+is axiom-free, layered proof snowballing on the closed base, and `(axiom …)`
+outside the base is a corpus-gate violation rather than a convention.
 
 
 ## 9. Known hard parts (dragons)
