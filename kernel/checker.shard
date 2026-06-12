@@ -2053,37 +2053,7 @@
      ;; arithmetic, so a non-Int measure breaks the ordering argument.
      (match (tc_check_int_expr m params measure "wf-induct measure")
        ((Some _) False)  ; ill-typed measure — step rejected
-       (None
-         (match (wf_rename params)
-           ((Pair fresh_params env)
-            (let
-              ((measure_fresh (subst env measure))
-               (close_names (reverse_syms (param_names fresh_params))))
-              (let
-                ((wf_premises
-                   (Cons
-                     (Equation
-                       (Call (qn (quote le)) (list (IntLit 0) measure_fresh))
-                       (Ctor (qn (quote True)) Nil))
-                     (Cons
-                       (Equation
-                         (Call (qn (quote lt)) (list measure_fresh measure))
-                         (Ctor (qn (quote True)) Nil))
-                       Nil)))
-                 (ih_eq (subst_eq env eq)))
-                (let
-                  ((ih
-                     (Goal
-                       fresh_params
-                       (close_eqs
-                         close_names
-                         (append_eqs (subst_eqs env premises) wf_premises))
-                       (close_eq close_names ih_eq))))
-                  (check_sequent
-                    m
-                    th
-                    (Sequent params (Cons ih hyps) premises eq)
-                    pf)))))))))))
+       (None (check_sequent m th (build_wf_subgoal seq measure) pf))))))
 
 ;; ---------------------------------------------------------------------------
 ;; do_induct2: TWO-STEP induction on a Nat-shaped var. Sound because every
@@ -2232,11 +2202,13 @@
                 False))))))))))
 
 ;; ---------------------------------------------------------------------------
-;; UNTRUSTED diagnostics support (only ever called by the FAIL tracer in
-;; src/bin/check.rs — never on the check path). They rebuild the subgoal a
-;; branching proof would face, so the tracer can descend past WfInduct/CaseOn.
+;; Shared subgoal builders + UNTRUSTED diagnostics support. build_wf_subgoal
+;; is the ONE wf-induct subgoal constructor — do_wf_induct checks against it
+;; and the FAIL tracer descends through it, so the trace replays the
+;; checker's exact subgoal by construction. The dbg_* helpers below are
+;; tracer/loader-only glue over the same shared pieces.
 ;; ---------------------------------------------------------------------------
-(fn dbg_wf_subgoal ((seq Sequent) (measure Expr)) Sequent
+(fn build_wf_subgoal ((seq Sequent) (measure Expr)) Sequent
   (match seq
     ((Sequent params hyps premises eq)
      (match (wf_rename params)
@@ -2272,6 +2244,12 @@
     ((Cons (CtorDef nm fts) rest)
      (if (qname_eq nm cname) (Some fts) (dbg_ctor_fields cname rest)))))
 
+;; The SAME pipeline as do_case_on — gate via tc_scrut_targs, instantiate
+;; the ctor field types with the scrutinee's resolved type args, build via
+;; build_case_on_subgoal — so the tracer's rebuilt subgoal is the checker's
+;; subgoal. (The raw-field shortcut this replaced handed parametric splits
+;; TVar-typed field params, and every type gate BELOW the arm then
+;; spuriously rejected — the bogus "REJECTED by the TYPE GATE" verdicts.)
 (fn dbg_caseon_subgoal
   ((m Module)
    (seq Sequent)
@@ -2282,10 +2260,17 @@
   (Option Sequent)
   (match (lookup_typedef ty m)
     (None None)
-    ((Some (TypeDef _ _ ctors))
-     (match (dbg_ctor_fields cname ctors)
+    ((Some (TypeDef _ tparams ctors))
+     (match (tc_scrut_targs m (seq_params seq) scrut ty tparams)
        (None None)
-       ((Some fts) (Some (build_case_on_subgoal seq scrut cname names fts)))))))
+       ((Some targs)
+        (match
+          (dbg_ctor_fields
+            cname
+            (inst_ctor_fields (zip_pairs tparams targs) ctors))
+          (None None)
+          ((Some fts)
+           (Some (build_case_on_subgoal seq scrut cname names fts)))))))))
 
 ;; Recursive-field count for an Induct ctor: how many IHs do_induct appends
 ;; (one per field whose CONCRETE type equals the inducting var's type).
