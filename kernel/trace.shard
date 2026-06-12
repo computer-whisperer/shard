@@ -499,6 +499,10 @@
     ((Ctor c args) (near_miss_list target args acc))
     ((If c t el)
      (near_miss_e target el (near_miss_e target t (near_miss_e target c acc))))
+    ((Match scrut arms)
+     (near_miss_arms target arms (near_miss_e target scrut acc)))
+    ((Let binds body)
+     (near_miss_e target body (near_miss_list target binds acc)))
     (_ acc)))
 
 (fn near_miss_list ((target QName) (es (List Expr)) (acc (List QName)))
@@ -506,6 +510,42 @@
   (match es
     (Nil acc)
     ((Cons h rest) (near_miss_list target rest (near_miss_e target h acc)))))
+
+(fn near_miss_arms ((target QName) (arms (List Arm)) (acc (List QName)))
+  (List QName)
+  (match arms
+    (Nil acc)
+    ((Cons (Arm _ b) rest) (near_miss_arms target rest (near_miss_e target b acc)))))
+
+;; Does a Call to `target` occur ANYWHERE in `e` — including the positions
+;; unfold cannot reach (Match arm bodies, Let). Consulted only after
+;; unfold_one already failed, so a hit means the call sits where unfold
+;; cannot fire it (or an arity-mismatched call site).
+(fn has_call_e ((target QName) (e Expr)) Bool
+  (match e
+    ((Call f args)
+     (if (qname_eq f target) True (has_call_list target args)))
+    ((Ctor c args) (has_call_list target args))
+    ((If c t el)
+     (if (has_call_e target c)
+       True
+       (if (has_call_e target t) True (has_call_e target el))))
+    ((Match scrut arms)
+     (if (has_call_e target scrut) True (has_call_arms target arms)))
+    ((Let binds body)
+     (if (has_call_list target binds) True (has_call_e target body)))
+    (_ False)))
+
+(fn has_call_list ((target QName) (es (List Expr))) Bool
+  (match es
+    (Nil False)
+    ((Cons h t) (if (has_call_e target h) True (has_call_list target t)))))
+
+(fn has_call_arms ((target QName) (arms (List Arm))) Bool
+  (match arms
+    (Nil False)
+    ((Cons (Arm _ b) rest)
+     (if (has_call_e target b) True (has_call_arms target rest)))))
 
 (fn render_near_misses ((qs (List QName))) (List Int)
   (match qs
@@ -537,14 +577,18 @@
                (render_near_misses
                  (near_miss_e fname (unfold_side_expr side (seq_eq seq)) Nil))))))
        ((Some _)
-        (append_int
-          "no "
+        (if (has_call_e fname (unfold_side_expr side (seq_eq seq)))
           (append_int
             (render_qn fname)
+            " IS called on that side, but only where unfold cannot reach (a match ARM body or let — scrutinees are reachable; or an arity-mismatched call site) — rewrite with a have-equation instead")
+          (append_int
+            "no "
             (append_int
-              " call on that side"
-              (render_near_misses
-                (near_miss_e fname (unfold_side_expr side (seq_eq seq)) Nil))))))))))
+              (render_qn fname)
+              (append_int
+                " call on that side"
+                (render_near_misses
+                  (near_miss_e fname (unfold_side_expr side (seq_eq seq)) Nil)))))))))))
 
 (fn step_fail_reason ((m Module) (th Theory) (seq Sequent) (s Step)) (List Int)
   (match s

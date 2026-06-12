@@ -59,6 +59,7 @@ TARGETS=(
   examples/rewrite_arms_test.shard
   examples/rewrite_with_demo.shard
   examples/tracer_demo.shard
+  examples/unfold_scrutinee.shard
   examples/trust_ledger.shard
   examples/types_gate.shard
   examples/types_gate_cite.shard
