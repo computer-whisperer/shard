@@ -807,23 +807,45 @@
        (_ None)))))
 
 ;; ---- (fn …) ----
+(fn parse_fndef_core
+  ((nameForm SExpr)
+   (paramsForm SExpr)
+   (retForm SExpr)
+   (bodyForm SExpr)
+   (ctors (List Symbol)))
+  (Option FnDef)
+  (match (parse_head nameForm)
+    (None None)
+    ((Some (Pair name tparams))
+     (match (parse_params paramsForm tparams)
+       (None None)
+       ((Some (Pair pnames ptypes))
+        (match (parse_type retForm tparams)
+          (None None)
+          ((Some ret)
+           ;; body sees params as BVars — push names in source order
+           ;; (last param = BVar 0), exactly as load_fn_def does.
+           (match (elaborate bodyForm ctors (push_scope pnames Nil))
+             (None None)
+             ((Some body) (Some (FnDef (qn name) ptypes ret body)))))))))))
+
 (fn parse_fndef ((parts (List SExpr)) (ctors (List Symbol))) (Option FnDef)
   (match parts
     ((Cons nameForm (Cons paramsForm (Cons retForm (Cons bodyForm Nil))))
-     (match (parse_head nameForm)
+     (parse_fndef_core nameForm paramsForm retForm bodyForm ctors))
+    ;; (fn NAME PARAMS RET (measure E PROOF…) BODY) — the admissibility
+    ;; clause (issue #1 Phase B). The FnDef carries the body only; the
+    ;; admit gate reads the clause back from SOURCE (driver mc_section),
+    ;; so nothing here stores it. Body stays the LAST element.
+    ((Cons
+       nameForm
+       (Cons paramsForm (Cons retForm (Cons clauseForm (Cons bodyForm Nil)))))
+     (match (form_head clauseForm)
        (None None)
-       ((Some (Pair name tparams))
-        (match (parse_params paramsForm tparams)
-          (None None)
-          ((Some (Pair pnames ptypes))
-           (match (parse_type retForm tparams)
-             (None None)
-             ((Some ret)
-              ;; body sees params as BVars — push names in source order
-              ;; (last param = BVar 0), exactly as load_fn_def does.
-              (match (elaborate bodyForm ctors (push_scope pnames Nil))
-                (None None)
-                ((Some body) (Some (FnDef (qn name) ptypes ret body)))))))))))
+       ((Some ch)
+        (if (sym_eq ch (quote measure))
+          (parse_fndef_core nameForm paramsForm retForm bodyForm ctors)
+          None))))
     (_ None)))
 
 ;; ---- (extern …) ----
