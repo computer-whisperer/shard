@@ -51,8 +51,10 @@
 (import "board.shard")  ; tier-1 vocabulary: the opaque board dims
 (import "frame.shard")  ; tier-1 vocabulary: the byte-level frame shape
 (import "entity.shard")  ; tier-1 vocabulary: the head/food detectors
+(import "moves.shard")  ; tier-1 vocabulary: the input-response walk
 (use (:: examples snake_game_3 board *))
 (use (:: examples snake_game_3 frame *))
+(use (:: examples snake_game_3 moves *))
 (use (:: std list append))
 
 ;; ===========================================================================
@@ -83,6 +85,8 @@
 (sig fn w_clock ((w World)) Int)  ; observable: the sequencing clock
 
 (sig fn w_output ((w World)) (List (List Int)))  ; observable: frames written
+
+(sig fn w_input ((w World)) (List (Option Int)))  ; observable: keys consumed
 
 ;; ---- the I/O boundary main may touch ----------------------------------------
 
@@ -142,6 +146,33 @@
   (kind operational)
   (goal ((code Int) (w World)) () (= (w_output (exit code w)) (w_output w))))
 
+;; ---- THE BOLTS (input family — P2/P3's trust surface) --------------------------
+;; `key_oracle` APPENDS the key it yielded to the input trace — the
+;; symmetric twin of write/w_output. Making consumed input an OBSERVABLE is
+;; what lets a requirement relate frames to the keys that drove them;
+;; without it the contract is structurally blind to input. Every other
+;; effect PRESERVES the trace (exit: the same proof fiction).
+
+(axiom key_input
+  (kind operational)
+  (goal ((w World) (o (Option Int)) (w1 World)) ((= (key_oracle w) (Pair o w1)))
+    (= (w_input w1) (append (w_input w) (Cons o Nil)))))
+
+(axiom write_input
+  (kind operational)
+  (goal ((bytes (List Int)) (w World)) ()
+    (= (w_input (write bytes w)) (w_input w))))
+
+(axiom args_input
+  (kind operational)
+  (goal ((w World) (args (List (List Int))) (w1 World))
+    ((= (get_args w) (Pair args w1)))
+    (= (w_input w1) (w_input w))))
+
+(axiom exit_input
+  (kind operational)
+  (goal ((code Int) (w World)) () (= (w_input (exit code w)) (w_input w))))
+
 ;; ---- the executable -----------------------------------------------------------
 ;; `main` is the SUBJECT of every requirement; `fuel` is the opaque global
 ;; step budget (large at RUN, abstract in CHECK — proofs cite the ∀-fuel
@@ -167,3 +198,17 @@
 (requirement frames_are_screens
   (goal ((w World)) ((= (all_screens (w_output w)) True))
     (= (all_screens (w_output (main w))) True)))
+
+;; ---- P2/P3 — INPUT RESPONSE ------------------------------------------------------
+;; The screen tracks the keys, whole-run: pair every written frame with the
+;; key consumed for it (one key per frame, in order — both logs are
+;; observables); each keyed frame shows the head EXACTLY one cell from the
+;; previous frame's head, in the heading the input trace determines (wasd
+;; steering from the documented start heading RIGHT, the no-reversal rule,
+;; inert otherwise) — whenever that response cell is on the board (the
+;; off-board case is the wall-death frame, and P4 ends play there). The
+;; premises pin the binary's start: nothing written, nothing consumed.
+
+(requirement io_input_moves
+  (goal ((w World)) ((= (w_output w) Nil) (= (w_input w) Nil))
+    (= (moves_ok (w_output (main w)) (w_input (main w))) True)))

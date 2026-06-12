@@ -1,0 +1,122 @@
+;;; moves.shard — TIER-1 spec vocabulary, part 3: INPUT RESPONSE. frame.shard
+;;; pins what one write looks like, entity.shard where the entities sit; this
+;;; file pins how the head MOVES across consecutive writes in response to the
+;;; key trace — the P2/P3 vocabulary, stated over the two I/O logs alone.
+;;;
+;;; THE MODEL IS DETERMINISTIC: the heading is a pure fold of the input trace
+;;; (wasd vectors, the no-reversal rule, everything else inert) from the
+;;; documented start heading — RIGHT (+x). Each keyed frame must then show
+;;; the head EXACTLY one cell from the previous frame's head, in the folded
+;;; heading — strictly stronger than a per-key disjunction: a frame that
+;;; ignores a legal steer, moves two cells, or drifts on an inert key fails.
+;;;
+;;; The one escape is the BOUNDS GATE: when the expected response cell is
+;;; off the board (the head ran into the wall — a death frame, and P4 ends
+;;; play right there), the pair asserts nothing. On-board responses —
+;;; including a self-collision death frame — are pinned exactly.
+;;;
+;;; Headings are (Pair dx dy) in GAME orientation (+y = down); screen cells
+;;; are entity.shard's (Pair row col), so a heading shifts a screen cell by
+;;; (row + dy, col + dx).
+(import "../../../kernel/stdlib.shard")  ; List / Option / Bool / Pair
+(import "board.shard")  ; tier-1 sibling: the opaque board dims
+(import "frame.shard")  ; tier-1 sibling: clear_bytes / after_prefix
+(import "entity.shard")  ; tier-1 sibling: the head detector
+(use (:: examples snake_game_3 board *))
+(use (:: examples snake_game_3 frame *))
+(use (:: examples snake_game_3 entity *))
+
+;; ---- heading vectors ---------------------------------------------------------
+
+(fn vec_eq ((a (Pair Int Int)) (b (Pair Int Int))) Bool
+  (match a
+    ((Pair ax ay)
+     (match b
+       ((Pair bx by) (if (int_eq ax bx) (int_eq ay by) False))))))
+
+(fn vec_neg ((v (Pair Int Int))) (Pair Int Int)
+  (match v
+    ((Pair x y) (Pair (- 0 x) (- 0 y)))))
+
+;; a steer attempt: take the asked heading unless it reverses the current
+;; one (the no-reversal rule, observable form).
+(fn steer_to ((h (Pair Int Int)) (d (Pair Int Int))) (Pair Int Int)
+  (if (vec_eq d (vec_neg h)) h d))
+
+;; the documented key bindings: w/s/a/d steer to the four unit headings
+;; (same test order as the binary's decoder), anything else holds.
+(fn steer_key ((h (Pair Int Int)) (k Int)) (Pair Int Int)
+  (if (int_eq k 119) (steer_to h (Pair 0 (- 0 1)))
+  (if (int_eq k 115) (steer_to h (Pair 0 1))
+  (if (int_eq k 97) (steer_to h (Pair (- 0 1) 0))
+  (if (int_eq k 100) (steer_to h (Pair 1 0))
+  h)))))
+
+;; one fold step of the trace heading; None (EOF) holds.
+(fn steer_vec ((h (Pair Int Int)) (mk (Option Int))) (Pair Int Int)
+  (match mk
+    (None h)
+    ((Some k) (steer_key h k))))
+
+;; ---- the per-pair check --------------------------------------------------------
+
+;; a logged write's frame payload: what follows the ANSI clear. (P1 already
+;; forces the prefix to BE the clear; the fallback keeps this total.)
+(fn payload ((u (List Int))) (List Int)
+  (match (after_prefix (clear_bytes) u)
+    (None u)
+    ((Some f) f)))
+
+;; the bounds gate, in screen coordinates: interior rows are 1..board_h,
+;; interior columns 1..board_w (row 0 / col 0 are the wall).
+(fn cell_on ((r Int) (c Int)) Bool
+  (if (le 1 r) (if (le r (board_h)) (if (le 1 c) (le c (board_w)) False) False)
+  False))
+
+;; ACROSS ONE PAIR: with h the heading folded THROUGH this pair's key, the
+;; frame must show the head exactly one h-step from the previous frame's
+;; head — whenever that response cell is on the board. Off the board the
+;; pair asserts nothing (the wall-death frame; see the header). A previous
+;; frame with no head pins nothing (only a death frame, which P4 makes
+;; final, shows no head).
+(fn shows_move ((p (Option (List Int))) (f (List Int)) (h (Pair Int Int))) Bool
+  (match p
+    (None True)
+    ((Some pf)
+     (match (head_at (payload pf))
+       (None True)
+       ((Some pc)
+        (match pc
+          ((Pair pr pcl)
+           (match h
+             ((Pair dx dy)
+              (if (cell_on (+ pr dy) (+ pcl dx))
+                (match (head_at (payload f))
+                  (None False)
+                  ((Some q) (vec_eq q (Pair (+ pr dy) (+ pcl dx)))))
+                True))))))))))
+
+;; ---- THE PREDICATE -------------------------------------------------------------
+;; Walk both logs in lockstep — one consumed key per written frame, in
+;; order — folding the heading and carrying the previous frame; every pair
+;; must pass shows_move. Frames may not outrun the keys; a trailing key
+;; with no frame (the quit/EOF tick) is harmless.
+
+(fn moves_go
+  ((h (Pair Int Int))
+   (p (Option (List Int)))
+   (outs (List (List Int)))
+   (ins (List (Option Int))))
+  Bool
+  (match outs
+    (Nil True)
+    ((Cons f frest)
+     (match ins
+       (Nil False)
+       ((Cons mk irest)
+        (if (shows_move p f (steer_vec h mk))
+          (moves_go (steer_vec h mk) (Some f) frest irest)
+          False))))))
+
+(fn moves_ok ((outs (List (List Int))) (ins (List (Option Int)))) Bool
+  (moves_go (Pair 1 0) None outs ins))
