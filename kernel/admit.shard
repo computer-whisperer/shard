@@ -1,0 +1,717 @@
+;;; admit.shard — definitional-admissibility analysis (issue #1, Phase A:
+;;; report-only). Walks every FnDef in the assembled module, computes the
+;;; call-graph SCCs (QName identity — full path, never bare names), and
+;;; classifies each recursive group's descent:
+;;;
+;;;   AdNonRec      — no recursive call sites
+;;;   AdStruct j    — self-recursive; every self-call passes a strict
+;;;                   structural subterm of parameter j in position j
+;;;   AdMutual des  — mutual SCC; a designated position per member such
+;;;                   that every intra-SCC call passes, at the callee's
+;;;                   designated position, a strict subterm of the
+;;;                   CALLER's designated parameter (a single descending
+;;;                   track — plainly well-founded; the deliberately
+;;;                   conservative v1 criterion, NOT general size-change)
+;;;   AdFlag        — self-recursive, no structurally descending position
+;;;   AdUnresolved  — mutual SCC, no consistent designation found
+;;;
+;;; Phase A emits a report; nothing is refused. The enforcing gate
+;;; (refusal + (measure E) obligations) is Phase B/D — see issue #1.
+;;; Tarjan emits SCCs callees-first, which is exactly the admission
+;;; order Phase B needs (obligation proofs may only use already-
+;;; admitted definitions).
+;;;
+;;; Binder conventions (must mirror the reducer EXACTLY — module.shard
+;;; header + reduce.shard match_pat): fn bodies are locally nameless,
+;;; the LAST source parameter is BVar 0 (apply opens with reversed
+;;; args); match-arm bindings are consed innermost-first, so the last
+;;; PVar encountered in a left-to-right pattern walk is BVar 0.
+
+;; imports — the kernel files this analysis reads
+(import "stdlib.shard")
+(import "term.shard")
+(import "module.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+
+;; ---------------------------------------------------------------------------
+;; ITrie: QName-keyed Int map (char trie over qn_key_chars). The SCC
+;; pass's visited / index / lowlink / on-stack maps — O(key length)
+;; instead of O(fns) per probe.
+;; ---------------------------------------------------------------------------
+
+(type ITrie (ITrie (Option Int) (List (Pair Int ITrie))))
+
+(fn it_child ((c Int) (cs (List (Pair Int ITrie)))) (Option ITrie)
+  (match cs
+    (Nil None)
+    ((Cons (Pair k t) rest) (if (int_eq k c) (Some t) (it_child c rest)))))
+
+(fn it_child_set ((c Int) (sub ITrie) (cs (List (Pair Int ITrie))))
+  (List (Pair Int ITrie))
+  (match cs
+    (Nil (Cons (Pair c sub) Nil))
+    ((Cons (Pair k t) rest)
+     (if (int_eq k c) (Cons (Pair c sub) rest)
+     (Cons (Pair k t) (it_child_set c sub rest))))))
+
+(fn it_get_chars ((cs (List Int)) (t ITrie)) (Option Int)
+  (match t
+    ((ITrie here children)
+     (match cs
+       (Nil here)
+       ((Cons c rest)
+        (match (it_child c children)
+          (None None)
+          ((Some sub) (it_get_chars rest sub))))))))
+
+(fn it_put_chars ((cs (List Int)) (v Int) (t ITrie)) ITrie
+  (match t
+    ((ITrie here children)
+     (match cs
+       (Nil (ITrie (Some v) children))
+       ((Cons c rest)
+        (match (it_child c children)
+          (None
+            (ITrie
+              here
+              (it_child_set c (it_put_chars rest v (ITrie None Nil)) children)))
+          ((Some sub)
+           (ITrie here (it_child_set c (it_put_chars rest v sub) children)))))))))
+
+(fn it_get ((q QName) (t ITrie)) (Option Int) (it_get_chars (qn_key_chars q) t))
+
+(fn it_put ((q QName) (v Int) (t ITrie)) ITrie
+  (it_put_chars (qn_key_chars q) v t))
+
+;; ---------------------------------------------------------------------------
+;; small helpers
+;; ---------------------------------------------------------------------------
+
+(fn ad_min ((a Int) (b Int)) Int (if (lt a b) a b))
+
+(fn ad_qn_member ((q QName) (qs (List QName))) Bool
+  (match qs
+    (Nil False)
+    ((Cons h t) (if (qname_eq h q) True (ad_qn_member q t)))))
+
+(fn ad_int_member ((n Int) (ns (List Int))) Bool
+  (match ns
+    (Nil False)
+    ((Cons h t) (if (int_eq h n) True (ad_int_member n t)))))
+
+;; ---------------------------------------------------------------------------
+;; call targets: QNames of Calls in a body that resolve to a fn in the
+;; module trie. Identity-correct (full-path lookup); prims and externs
+;; don't resolve and are excluded. No dedup — the SCC pass's visited
+;; probes make duplicates harmless.
+;; ---------------------------------------------------------------------------
+
+(fn ad_calls_e ((tr FnTrie) (e Expr) (acc (List QName))) (List QName)
+  (match e
+    ((Call f args)
+     (match (trie_lookup f tr)
+       ((Some _) (Cons f (ad_calls_list tr args acc)))
+       (None (ad_calls_list tr args acc))))
+    ((Ctor _ args) (ad_calls_list tr args acc))
+    ((Match s arms) (ad_calls_e tr s (ad_calls_arms tr arms acc)))
+    ((Let bs body) (ad_calls_list tr bs (ad_calls_e tr body acc)))
+    ((If c t e2) (ad_calls_e tr c (ad_calls_e tr t (ad_calls_e tr e2 acc))))
+    (_ acc)))
+
+(fn ad_calls_list ((tr FnTrie) (es (List Expr)) (acc (List QName))) (List QName)
+  (match es
+    (Nil acc)
+    ((Cons h t) (ad_calls_e tr h (ad_calls_list tr t acc)))))
+
+(fn ad_calls_arms ((tr FnTrie) (arms (List Arm)) (acc (List QName)))
+  (List QName)
+  (match arms
+    (Nil acc)
+    ((Cons (Arm _ body) rest) (ad_calls_e tr body (ad_calls_arms tr rest acc)))))
+
+;; ---------------------------------------------------------------------------
+;; Tarjan SCC over the call graph. One DFS; SCCs are emitted callees-
+;; first (each component only calls into components already emitted).
+;; ---------------------------------------------------------------------------
+
+(type TjSt
+  (TjSt
+    Int  ; next DFS index
+    ITrie  ; QName -> DFS index (presence = visited)
+    ITrie  ; QName -> lowlink
+    (List QName)  ; Tarjan stack (head = top)
+    ITrie  ; QName -> 1 while on the stack, 0 once popped
+    (List (List QName))))  ; emitted SCCs (callees-first)
+
+(type TjPop (TjPop (List QName) ITrie (List QName)))  ; rest-stack, on-stack', members
+
+(fn tj_idx ((q QName) (st TjSt)) (Option Int)
+  (match st
+    ((TjSt _ idx _ _ _ _) (it_get q idx))))
+
+(fn tj_low ((q QName) (st TjSt)) Int
+  (match st
+    ((TjSt _ _ low _ _ _)
+     (match (it_get q low)
+       ((Some v) v)
+       (None 0)))))
+
+(fn tj_on ((q QName) (st TjSt)) Bool
+  (match st
+    ((TjSt _ _ _ _ ons _)
+     (match (it_get q ons)
+       ((Some v) (int_eq v 1))
+       (None False)))))
+
+(fn tj_set_low ((q QName) (v Int) (st TjSt)) TjSt
+  (match st
+    ((TjSt n idx low stk ons sccs) (TjSt n idx (it_put q v low) stk ons sccs))))
+
+;; pop the stack down to v inclusive, clearing on-stack flags.
+(fn tj_pop ((v QName) (stk (List QName)) (ons ITrie) (acc (List QName))) TjPop
+  (match stk
+    (Nil (TjPop Nil ons acc))  ; unreachable: v is on the stack by invariant
+    ((Cons h rest)
+     (if (qname_eq h v) (TjPop rest (it_put h 0 ons) (Cons h acc))
+     (tj_pop v rest (it_put h 0 ons) (Cons h acc))))))
+
+(fn tj_emit ((v QName) (st TjSt)) TjSt
+  (match st
+    ((TjSt n idx low stk ons sccs)
+     (match (tj_pop v stk ons Nil)
+       ((TjPop stk2 ons2 comp) (TjSt n idx low stk2 ons2 (Cons comp sccs)))))))
+
+(fn tj_visit ((tr FnTrie) (v QName) (st TjSt)) TjSt
+  (match st
+    ((TjSt n idx low stk ons sccs)
+     (let
+       ((st1
+          (TjSt
+            (+ n 1)
+            (it_put v n idx)
+            (it_put v n low)
+            (Cons v stk)
+            (it_put v 1 ons)
+            sccs)))
+       (match (trie_lookup v tr)
+         (None st1)  ; unreachable: v came from the module's own fn list
+         ((Some fd)
+          (match fd
+            ((FnDef _ _ _ body)
+             (let ((st2 (tj_neis tr (ad_calls_e tr body Nil) v st1)))
+               (if (int_eq (tj_low v st2) n) (tj_emit v st2) st2))))))))))
+
+(fn tj_neis ((tr FnTrie) (ws (List QName)) (v QName) (st TjSt)) TjSt
+  (match ws
+    (Nil st)
+    ((Cons w rest)
+     (match (tj_idx w st)
+       (None
+         (let ((st2 (tj_visit tr w st)))
+           (tj_neis
+             tr
+             rest
+             v
+             (tj_set_low v (ad_min (tj_low v st2) (tj_low w st2)) st2))))
+       ((Some wi)
+        (if (tj_on w st)
+          (tj_neis tr rest v (tj_set_low v (ad_min (tj_low v st) wi) st))
+          (tj_neis tr rest v st)))))))
+
+(fn tj_all ((tr FnTrie) (fns (List FnDef)) (st TjSt)) TjSt
+  (match fns
+    (Nil st)
+    ((Cons fd rest)
+     (match fd
+       ((FnDef q _ _ _)
+        (match (tj_idx q st)
+          (None (tj_all tr rest (tj_visit tr q st)))
+          ((Some _) (tj_all tr rest st))))))))
+
+(fn ad_sccs ((m Module)) (List (List QName))
+  (match m
+    ((Module _ fns _ tr _)
+     (match
+       (tj_all
+         tr
+         fns
+         (TjSt 0 (ITrie None Nil) (ITrie None Nil) Nil (ITrie None Nil) Nil))
+       ((TjSt _ _ _ _ _ sccs) sccs)))))
+
+;; ---------------------------------------------------------------------------
+;; subterm walker. env maps BVar index -> status relative to the fn's
+;; parameters: (SubOf p d) = subterm of source parameter p at depth d
+;; (d = 0 is the parameter itself; d > 0 is strict). Let-bound slots are
+;; SubUnknown (conservative — a flagged fn is a report line, never a
+;; refusal, in Phase A).
+;; ---------------------------------------------------------------------------
+
+(type SubSt (SubOf Int Int) (SubUnknown))
+(type ArgCls (AStrict Int) (ASame Int) (AOther))
+(type MSite (MSite QName QName (List ArgCls)))  ; caller, callee, per-position classes
+
+(fn ad_env_at ((env (List SubSt)) (k Int)) SubSt
+  (match env
+    (Nil (SubUnknown))
+    ((Cons h t) (if (lt k 1) h (ad_env_at t (- k 1))))))
+
+(fn ad_cls ((env (List SubSt)) (e Expr)) ArgCls
+  (match e
+    ((BVar k)
+     (match (ad_env_at env k)
+       ((SubOf p d) (if (lt 0 d) (AStrict p) (ASame p)))
+       ((SubUnknown) (AOther))))
+    (_ (AOther))))
+
+(fn ad_cls_list ((env (List SubSt)) (es (List Expr))) (List ArgCls)
+  (match es
+    (Nil Nil)
+    ((Cons h t) (Cons (ad_cls env h) (ad_cls_list env t)))))
+
+;; pattern-binder statuses, consed onto `acc` in match_pat's exact
+;; traversal order (left-to-right, each PVar prepends) — passing the
+;; enclosing env as `acc` yields the arm body's env directly.
+(fn ad_pat_sts ((p Pat) (pd Int) (root SubSt) (acc (List SubSt))) (List SubSt)
+  (match p
+    ((PVar)
+     (Cons
+       (match root
+         ((SubOf rp rd) (SubOf rp (+ rd pd)))
+         ((SubUnknown) (SubUnknown)))
+       acc))
+    ((PCtor _ ps) (ad_pats_sts ps (+ pd 1) root acc))
+    ((PInt _) acc)
+    ((PSym _) acc)))
+
+(fn ad_pats_sts ((ps (List Pat)) (pd Int) (root SubSt) (acc (List SubSt)))
+  (List SubSt)
+  (match ps
+    (Nil acc)
+    ((Cons p rest) (ad_pats_sts rest pd root (ad_pat_sts p pd root acc)))))
+
+(fn ad_unks ((bs (List Expr)) (env (List SubSt))) (List SubSt)
+  (match bs
+    (Nil env)
+    ((Cons _ t) (Cons (SubUnknown) (ad_unks t env)))))
+
+(fn ad_sites_e
+  ((self QName)
+   (set (List QName))
+   (env (List SubSt))
+   (e Expr)
+   (acc (List MSite)))
+  (List MSite)
+  (match e
+    ((Call f args)
+     (let ((acc2 (ad_sites_list self set env args acc)))
+       (if (ad_qn_member f set)
+         (Cons (MSite self f (ad_cls_list env args)) acc2)
+         acc2)))
+    ((Ctor _ args) (ad_sites_list self set env args acc))
+    ((Match s arms)
+     (ad_sites_e
+       self
+       set
+       env
+       s
+       (ad_sites_arms
+         self
+         set
+         env
+         (match s
+           ((BVar k) (ad_env_at env k))
+           (_ (SubUnknown)))
+         arms
+         acc)))
+    ((Let bs body)
+     (ad_sites_list
+       self
+       set
+       env
+       bs
+       (ad_sites_e self set (ad_unks bs env) body acc)))
+    ((If c t e2)
+     (ad_sites_e
+       self
+       set
+       env
+       c
+       (ad_sites_e self set env t (ad_sites_e self set env e2 acc))))
+    (_ acc)))
+
+(fn ad_sites_list
+  ((self QName)
+   (set (List QName))
+   (env (List SubSt))
+   (es (List Expr))
+   (acc (List MSite)))
+  (List MSite)
+  (match es
+    (Nil acc)
+    ((Cons h t) (ad_sites_e self set env h (ad_sites_list self set env t acc)))))
+
+(fn ad_sites_arms
+  ((self QName)
+   (set (List QName))
+   (env (List SubSt))
+   (root SubSt)
+   (arms (List Arm))
+   (acc (List MSite)))
+  (List MSite)
+  (match arms
+    (Nil acc)
+    ((Cons (Arm p body) rest)
+     (ad_sites_arms
+       self
+       set
+       env
+       root
+       rest
+       (ad_sites_e self set (ad_pat_sts p 0 root env) body acc)))))
+
+;; initial env: source parameter i lands at BVar (arity-1-i) — the
+;; loader's innermost-first convention (last parameter is BVar 0).
+(fn ad_env0 ((ptys (List Type)) (env (List SubSt)) (i Int)) (List SubSt)
+  (match ptys
+    (Nil env)
+    ((Cons _ rest) (ad_env0 rest (Cons (SubOf i 0) env) (+ i 1)))))
+
+(fn ad_fn_sites ((set (List QName)) (fd FnDef)) (List MSite)
+  (match fd
+    ((FnDef q ptys _ body) (ad_sites_e q set (ad_env0 ptys Nil 0) body Nil))))
+
+;; ---------------------------------------------------------------------------
+;; verdicts
+;; ---------------------------------------------------------------------------
+
+(type AdVerdict
+  (AdNonRec)
+  (AdStruct Int)  ; self-recursive, descending position
+  (AdMutual (List (Pair QName Int)))  ; designated position per member
+  (AdFlag (List MSite))  ; self-recursive, no descending position
+  (AdUnresolved (List QName) (List MSite)))  ; mutual, no designation found
+
+(fn ad_cls_at ((args (List ArgCls)) (j Int)) ArgCls
+  (match args
+    (Nil (AOther))
+    ((Cons h t) (if (lt j 1) h (ad_cls_at t (- j 1))))))
+
+;; self verdict: position j works iff every self-call passes a strict
+;; subterm of parameter j in position j.
+(fn ad_self_ok_j ((sites (List MSite)) (j Int)) Bool
+  (match sites
+    (Nil True)
+    ((Cons (MSite _ _ args) rest)
+     (match (ad_cls_at args j)
+       ((AStrict p) (if (int_eq p j) (ad_self_ok_j rest j) False))
+       (_ False)))))
+
+(fn ad_self_find ((ptys (List Type)) (j Int) (sites (List MSite))) (Option Int)
+  (match ptys
+    (Nil None)
+    ((Cons _ rest)
+     (if (ad_self_ok_j sites j) (Some j) (ad_self_find rest (+ j 1) sites)))))
+
+;; --- mutual designation: monotone pruning, then greedy pick + verify ---
+
+(fn ad_sites_into ((g QName) (sites (List MSite)) (acc (List MSite)))
+  (List MSite)
+  (match sites
+    (Nil acc)
+    ((Cons s rest)
+     (match s
+       ((MSite _ callee _)
+        (if (qname_eq callee g) (ad_sites_into g rest (Cons s acc))
+        (ad_sites_into g rest acc)))))))
+
+(fn ad_viable_of ((f QName) (vs (List (Pair QName (List Int))))) (List Int)
+  (match vs
+    (Nil Nil)
+    ((Cons (Pair q poss) rest) (if (qname_eq q f) poss (ad_viable_of f rest)))))
+
+;; position j of g survives a prune round iff every call into g passes,
+;; at j, a strict subterm rooted at a still-viable caller position.
+(fn ad_pos_ok
+  ((gsites (List MSite)) (j Int) (vs (List (Pair QName (List Int)))))
+  Bool
+  (match gsites
+    (Nil True)
+    ((Cons (MSite caller _ args) rest)
+     (match (ad_cls_at args j)
+       ((AStrict p)
+        (if (ad_int_member p (ad_viable_of caller vs)) (ad_pos_ok rest j vs)
+        False))
+       (_ False)))))
+
+(fn ad_keep_pos
+  ((poss (List Int)) (gsites (List MSite)) (vs (List (Pair QName (List Int)))))
+  (List Int)
+  (match poss
+    (Nil Nil)
+    ((Cons j rest)
+     (if (ad_pos_ok gsites j vs) (Cons j (ad_keep_pos rest gsites vs))
+     (ad_keep_pos rest gsites vs)))))
+
+(fn ad_prune_all
+  ((vs (List (Pair QName (List Int))))
+   (allvs (List (Pair QName (List Int))))
+   (allsites (List MSite)))
+  (List (Pair QName (List Int)))
+  (match vs
+    (Nil Nil)
+    ((Cons (Pair g poss) rest)
+     (Cons
+       (Pair g (ad_keep_pos poss (ad_sites_into g allsites Nil) allvs))
+       (ad_prune_all rest allvs allsites)))))
+
+(fn ad_vs_count ((vs (List (Pair QName (List Int))))) Int
+  (match vs
+    (Nil 0)
+    ((Cons (Pair _ poss) rest) (+ (ad_count_int poss) (ad_vs_count rest)))))
+
+(fn ad_count_int ((ns (List Int))) Int
+  (match ns
+    (Nil 0)
+    ((Cons _ t) (+ 1 (ad_count_int t)))))
+
+;; fixpoint: each round either shrinks the viable count or we stop.
+;; fuel = initial count + 1; the count strictly decreases on every
+;; recursing round, so the fuel never actually runs out.
+(fn ad_fix
+  ((vs (List (Pair QName (List Int)))) (allsites (List MSite)) (fuel Int))
+  (List (Pair QName (List Int)))
+  (if (lt fuel 1) vs
+  (let ((vs2 (ad_prune_all vs vs allsites)))
+    (if (int_eq (ad_vs_count vs2) (ad_vs_count vs)) vs2
+    (ad_fix vs2 allsites (- fuel 1))))))
+
+(fn ad_all_pos ((ptys (List Type)) (j Int)) (List Int)
+  (match ptys
+    (Nil Nil)
+    ((Cons _ rest) (Cons j (ad_all_pos rest (+ j 1))))))
+
+(fn ad_pick ((vs (List (Pair QName (List Int)))))
+  (Option (List (Pair QName Int)))
+  (match vs
+    (Nil (Some Nil))
+    ((Cons (Pair g poss) rest)
+     (match poss
+       (Nil None)
+       ((Cons j _)
+        (match (ad_pick rest)
+          (None None)
+          ((Some des) (Some (Cons (Pair g j) des)))))))))
+
+(fn ad_des_of ((f QName) (des (List (Pair QName Int)))) Int
+  (match des
+    (Nil 0)  ; unreachable: every SCC member has a designation by construction
+    ((Cons (Pair q j) rest) (if (qname_eq q f) j (ad_des_of f rest)))))
+
+(fn ad_verify ((allsites (List MSite)) (des (List (Pair QName Int)))) Bool
+  (match allsites
+    (Nil True)
+    ((Cons (MSite caller callee args) rest)
+     (match (ad_cls_at args (ad_des_of callee des))
+       ((AStrict p)
+        (if (int_eq p (ad_des_of caller des)) (ad_verify rest des) False))
+       (_ False)))))
+
+;; ---------------------------------------------------------------------------
+;; per-SCC analysis
+;; ---------------------------------------------------------------------------
+
+(fn ad_member_sites
+  ((tr FnTrie) (scc (List QName)) (qs (List QName)) (acc (List MSite)))
+  (List MSite)
+  (match qs
+    (Nil acc)
+    ((Cons q rest)
+     (match (trie_lookup q tr)
+       (None (ad_member_sites tr scc rest acc))
+       ((Some fd)
+        (ad_member_sites tr scc rest (ad_sites_acc (ad_fn_sites scc fd) acc)))))))
+
+(fn ad_sites_acc ((xs (List MSite)) (acc (List MSite))) (List MSite)
+  (match xs
+    (Nil acc)
+    ((Cons h t) (ad_sites_acc t (Cons h acc)))))
+
+(fn ad_init_vs ((tr FnTrie) (qs (List QName))) (List (Pair QName (List Int)))
+  (match qs
+    (Nil Nil)
+    ((Cons q rest)
+     (match (trie_lookup q tr)
+       (None (Cons (Pair q Nil) (ad_init_vs tr rest)))
+       ((Some fd)
+        (match fd
+          ((FnDef _ ptys _ _)
+           (Cons (Pair q (ad_all_pos ptys 0)) (ad_init_vs tr rest)))))))))
+
+(fn ad_scc_verdict ((tr FnTrie) (scc (List QName))) AdVerdict
+  (match scc
+    (Nil (AdNonRec))  ; unreachable: Tarjan never emits an empty component
+    ((Cons q qrest)
+     (match qrest
+       (Nil
+         ;; singleton: self-analysis (a self-loop shows up as sites)
+         (match (trie_lookup q tr)
+           (None (AdNonRec))
+           ((Some fd)
+            (match fd
+              ((FnDef _ ptys _ _)
+               (let ((sites (ad_fn_sites scc fd)))
+                 (match sites
+                   (Nil (AdNonRec))
+                   (_
+                     (match (ad_self_find ptys 0 sites)
+                       ((Some j) (AdStruct j))
+                       (None (AdFlag sites)))))))))))
+       (_
+         (let ((allsites (ad_member_sites tr scc scc Nil)))
+           (let ((vs0 (ad_init_vs tr scc)))
+             (let ((vsf (ad_fix vs0 allsites (+ (ad_vs_count vs0) 1))))
+               (match (ad_pick vsf)
+                 (None (AdUnresolved scc allsites))
+                 ((Some des)
+                  (if (ad_verify allsites des) (AdMutual des)
+                  (AdUnresolved scc allsites))))))))))))
+
+;; ---------------------------------------------------------------------------
+;; report rendering
+;; ---------------------------------------------------------------------------
+
+(fn ad_nl () (List Int) (Cons 10 Nil))
+
+(fn ad_render_cls ((c ArgCls)) (List Int)
+  (match c
+    ((AStrict p) (Cons 83 (show_nat p)))  ; S<p>
+    ((ASame p) (Cons 61 (show_nat p)))  ; =<p>
+    ((AOther) (Cons 45 Nil))))  ; -
+
+(fn ad_render_clss ((cs (List ArgCls))) (List Int)
+  (match cs
+    (Nil Nil)
+    ((Cons h t)
+     (match t
+       (Nil (ad_render_cls h))
+       (_ (append_int (ad_render_cls h) (Cons 32 (ad_render_clss t))))))))
+
+(fn ad_render_site ((s MSite)) (List Int)
+  (match s
+    ((MSite _ callee args)
+     (append_int
+       "    -> "
+       (append_int
+         (qn_key_chars callee)
+         (append_int
+           " ["
+           (append_int (ad_render_clss args) (append_int "]" (ad_nl)))))))))
+
+(fn ad_render_sites ((ss (List MSite))) (List Int)
+  (match ss
+    (Nil Nil)
+    ((Cons h t) (append_int (ad_render_site h) (ad_render_sites t)))))
+
+(fn ad_render_names ((qs (List QName))) (List Int)
+  (match qs
+    (Nil Nil)
+    ((Cons q t)
+     (match t
+       (Nil (qn_key_chars q))
+       (_ (append_int (qn_key_chars q) (Cons 32 (ad_render_names t))))))))
+
+(fn ad_count_q ((qs (List QName))) Int
+  (match qs
+    (Nil 0)
+    ((Cons _ t) (+ 1 (ad_count_q t)))))
+
+;; running counters for the summary line
+(type AdCounts (AdCounts Int Int Int Int Int Int))  ; fns nonrec struct mutual flag unresolved
+
+(fn ad_scan_go
+  ((tr FnTrie) (sccs (List (List QName))) (k AdCounts) (lines (List Int)))
+  (List Int)
+  (match sccs
+    (Nil
+      (match k
+        ((AdCounts fns nr st mu fl un)
+         (append_int
+           "ADMIT fns "
+           (append_int
+             (show_nat fns)
+             (append_int
+               " | nonrec "
+               (append_int
+                 (show_nat nr)
+                 (append_int
+                   " | struct "
+                   (append_int
+                     (show_nat st)
+                     (append_int
+                       " | mutual "
+                       (append_int
+                         (show_nat mu)
+                         (append_int
+                           " | FLAG "
+                           (append_int
+                             (show_nat fl)
+                             (append_int
+                               " | unresolved "
+                               (append_int
+                                 (show_nat un)
+                                 (append_int (ad_nl) lines))))))))))))))))
+    ((Cons scc rest)
+     (match k
+       ((AdCounts fns nr st mu fl un)
+        (let ((n (ad_count_q scc)))
+          (match (ad_scc_verdict tr scc)
+            ((AdNonRec)
+             (ad_scan_go
+               tr
+               rest
+               (AdCounts (+ fns n) (+ nr n) st mu fl un)
+               lines))
+            ((AdStruct _)
+             (ad_scan_go
+               tr
+               rest
+               (AdCounts (+ fns n) nr (+ st n) mu fl un)
+               lines))
+            ((AdMutual _)
+             (ad_scan_go
+               tr
+               rest
+               (AdCounts (+ fns n) nr st (+ mu n) fl un)
+               lines))
+            ((AdFlag sites)
+             (ad_scan_go
+               tr
+               rest
+               (AdCounts (+ fns n) nr st mu (+ fl n) un)
+               (append_int
+                 lines
+                 (append_int
+                   "FLAG "
+                   (append_int
+                     (match scc
+                       (Nil Nil)
+                       ((Cons q _) (qn_key_chars q)))
+                     (append_int (ad_nl) (ad_render_sites sites)))))))
+            ((AdUnresolved members sites)
+             (ad_scan_go
+               tr
+               rest
+               (AdCounts (+ fns n) nr st mu fl (+ un n))
+               (append_int
+                 lines
+                 (append_int
+                   "SCC-UNRESOLVED "
+                   (append_int
+                     (ad_render_names members)
+                     (append_int (ad_nl) (ad_render_sites sites))))))))))))))
+
+;; entry: full-module admissibility report.
+(fn admit_scan ((m Module)) (List Int)
+  (match m
+    ((Module _ _ _ tr _) (ad_scan_go tr (ad_sccs m) (AdCounts 0 0 0 0 0 0) Nil))))
