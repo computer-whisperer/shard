@@ -43,6 +43,7 @@ TARGETS=(
   examples/finsplit_test.shard
   examples/have_test.shard
   examples/homonym_dispatch.shard
+  examples/inspect_demo.shard
   examples/cite_resolves.shard
   examples/cite_rejects.shard
   examples/req_dir_demo/consumer.shard

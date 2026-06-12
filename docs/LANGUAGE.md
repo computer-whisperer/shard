@@ -536,8 +536,9 @@ a **side** — `lhs`, `rhs`, or `both`:
 | `(reduce SIDE)`                       | `Reduce`  | ι-only: fire matches/ifs on constructor or literal scrutinees, descending everywhere — NEVER unfolds calls (not even ground primitives). The safe workhorse for symbolic proofs. |
 | `(simp SIDE)`                         | `Simp`    | full δ+ι small-step to fixpoint — unfolds user fns and fires primitives. Powerful but can concretize terms a symbolic proof wanted left abstract. |
 | `(compute SIDE)`                      | `Compute` | ungated big-step evaluation (CBV); unfolds everything incl. nullary fns, leaves genuinely stuck subterms stuck. The ground-fact closer. |
-| `(unfold FN SIDE)`                    | `Unfold`  | unfold ONE application of `FN`; does not descend into `match` (not even the scrutinee) — once in match-land, step via equation lemmas + `rewrite` instead. |
+| `(unfold FN SIDE)`                    | `Unfold`  | unfold ONE application of `FN` (leftmost-outermost). Descends into `match` **scrutinees** (binder-free) but never into arm bodies or `let` — for those, step via equation lemmas + `rewrite` instead (the failure trace says which case you're in). |
 | `(rewrite EQREF DIR SIDE ALL (INST…))`| `Rewrite` | rewrite SIDE by the cited equation (§10.6)              |
+| `(inspect)`                           | `Inspect` | identity — dev aid. Forces the claim's trace block and dumps the in-scope premises/hyps (with citation indices) at this point, even when the claim passes or is `(admit)`-truncated. The authoring idiom: drop it where you are blind, read the dump, finish, delete. |
 
 In `rewrite`: **`DIR`** is `lr` (left-to-right) or `rl`; **`ALL`** is
 `true`/`false` (rewrite every match vs. the first); **`INST`** is
@@ -562,7 +563,11 @@ What a `rewrite`/`rewrite-with`/`absurd` cites:
 to its positional `(Hyp K)`. The induction hypotheses are auto-named
 `ih`, `ih1`, `ih2`, …: `wf-induct` prepends one `ih`; each
 `induct`/`induct2` case appends one IH per recursive constructor field
-(in `do_induct` order). An unbound name is left as `(HypName NAME)` and
+(in `do_induct` order). Each `case-on` arm prepends its case equation at
+`Hyp 0`, auto-named after the arm's **constructor** — `(hyp Alive)`,
+`(hyp True)`, `(hyp Some)` — with inner arms shadowing outer; named
+citations of outer hyps stay valid inside arms because the desugarer's
+simulated stack tracks the prepend. An unbound name is left as `(HypName NAME)` and
 fails cleanly at resolution. The reader stays a pure parser — it does not
 know induction semantics — which is why naming is resolved in a later
 pass, not during parsing.

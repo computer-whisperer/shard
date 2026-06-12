@@ -148,6 +148,7 @@
     ((Reduce side) st)
     ((Simp side) st)
     ((Compute side) st)
+    ((Inspect) st)
     ((Rewrite eqref dir side allq insts)
      (Rewrite (resolve_eqref env eqref) dir side allq (resolve_insts env insts)))))
 
@@ -245,7 +246,7 @@
   (COPass Symbol (List Int))  ; name, trace-block
   (COFail Symbol (List Int) (List Int))  ; name, diagnostic detail, trace-block
   (COAxiom Symbol)  ; an axiom admitted without proof
-  (COAdmit Symbol)  ; a decl whose proof contains (admit) — UNSOUND, exit 3
+  (COAdmit Symbol (List Int))  ; (admit) in proof — UNSOUND, exit 3; + trace-block
   (COPending Symbol)  ; a requirement stated but never fulfilled in this closure
   (COBin Symbol Int Int)  ; a bin acceptance summary: name, required, met
   ;; COTypeFail: a type error from types.shard — a HARD failure. The decl is
@@ -372,9 +373,54 @@
     ((Cons (FinCase _ p) rest)
      (if (proof_has_admit p) True (pha_fincases rest)))))
 
+;; Does the proof contain an (inspect) step anywhere? Such a proof gets its
+;; trace block rendered REGARDLESS of trace mode (claim_trace), so the
+;; tracer's at-the-inspect-point context dump always reaches the author —
+;; and a committed (inspect) is loud in every corpus run.
+(fn proof_has_inspect ((p Proof)) Bool
+  (match p
+    ((Refl) False)
+    ((Admit) False)
+    ((Steps ss k) (if (steps_have_inspect ss) True (proof_has_inspect k)))
+    ((Induct _ cs) (phi_cases cs))
+    ((Induct2 _ cs) (phi_cases cs))
+    ((CaseOn _ _ cs) (phi_cases cs))
+    ((WfInduct _ k) (proof_has_inspect k))
+    ((RewriteWith _ _ _ _ subs k)
+     (if (phi_proofs subs) True (proof_has_inspect k)))
+    ((Absurd _) False)
+    ((ByTheory _ _) False)
+    ((FinSplit _ _ _ fcs) (phi_fincases fcs))
+    ((Have _ pe k) (if (proof_has_inspect pe) True (proof_has_inspect k)))
+    ((WordFact _ k) (proof_has_inspect k))
+    ((DivFacts _ _ _ k) (proof_has_inspect k))))
+
+(fn steps_have_inspect ((ss (List Step))) Bool
+  (match ss
+    (Nil False)
+    ((Cons (Inspect) _) True)
+    ((Cons _ rest) (steps_have_inspect rest))))
+
+(fn phi_proofs ((ps (List Proof))) Bool
+  (match ps
+    (Nil False)
+    ((Cons p rest) (if (proof_has_inspect p) True (phi_proofs rest)))))
+
+(fn phi_cases ((cs (List Case))) Bool
+  (match cs
+    (Nil False)
+    ((Cons (Case _ p) rest) (if (proof_has_inspect p) True (phi_cases rest)))
+    ((Cons (CaseB _ _ p) rest) (if (proof_has_inspect p) True (phi_cases rest)))))
+
+(fn phi_fincases ((fcs (List FinCase))) Bool
+  (match fcs
+    (Nil False)
+    ((Cons (FinCase _ p) rest)
+     (if (proof_has_inspect p) True (phi_fincases rest)))))
+
 ;; PASS, unless the accepted proof leans on (admit) — then ADMIT, loudly.
 (fn pass_or_admit ((name Symbol) (trace (List Int)) (p Proof)) ClaimOutcome
-  (if (proof_has_admit p) (COAdmit name) (COPass name trace)))
+  (if (proof_has_admit p) (COAdmit name trace) (COPass name trace)))
 
 (type RunState
   (RunState Theory (List PendReq) (List ClaimOutcome) (List LedgerEntry)))
@@ -429,7 +475,11 @@
 (fn claim_trace
   ((m Module) (th Theory) (g Goal) (p Proof) (name Symbol) (target Symbol))
   (List Int)
-  (if (want_trace name target) (trace_block m th (lift_sequent g) p name) Nil))
+  (if (want_trace name target) (trace_block m th (lift_sequent g) p name)
+  ;; an (inspect) in the proof forces the trace block — that's how the
+  ;; tracer's at-the-inspect-point sequent dump reaches the author.
+  (if (proof_has_inspect p) (trace_block m th (lift_sequent g) p name)
+  Nil)))
 
 ;; FOCUS MODE (dev aid). When `focus` is a specific claim name (not the
 ;; `__all__` sentinel), every OTHER claim/fulfills is admitted as `Proven`
