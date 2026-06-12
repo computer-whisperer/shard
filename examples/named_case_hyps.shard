@@ -1,0 +1,70 @@
+;;; named_case_hyps.shard — named-hypothesis citations THROUGH case-on arms.
+;;;
+;;; Two sugars under regression here (desugar.shard):
+;;;   1. The case-on STACK SLOT: the checker prepends the case equation at
+;;;      Hyp 0 (build_case_on_subgoal), so every named hyp cited INSIDE a
+;;;      case-on arm shifts by one. count_some_append cites the induction's
+;;;      `(hyp ih)` from within a case-on arm — under the old desugarer
+;;;      (which left the stack unchanged through case-on) that resolved to
+;;;      the case equation and the proof failed.
+;;;   2. CTOR-NAMED case hyps: each case-on arm's equation is auto-named
+;;;      after its ctor — `(hyp None)`, `(hyp Some)`, `(hyp True)` — inner
+;;;      arms shadowing outer.
+
+(import "../kernel/stdlib.shard")  ; stdlib types (List/Option/Bool/Pair)
+(import "../std/list.shard")
+(use (:: std list append))
+(use (:: std list *))  ; interface lemmas for citations
+
+(fn is_none ((o (Option Int))) Bool
+  (match o
+    (None True)
+    ((Some x) False)))
+
+(fn opt_or ((o (Option Int)) (d Int)) Int
+  (match o
+    (None d)
+    ((Some x) x)))
+
+(fn count_some ((xs (List (Option Int)))) Int
+  (match xs
+    (Nil 0)
+    ((Cons o t) (if (is_none o) (count_some t) (+ 1 (count_some t))))))
+
+;; Ctor-named case hyps: both arms cite their case equation by ctor name.
+(claim opt_or_cases
+  (goal ((o (Option Int))) () (= (opt_or o 7) (if (is_none o) 7 (opt_or o 0))))
+  (case-on o Option
+    ((case None (steps ((rewrite (hyp None) lr both true ()) (simp both)) refl))
+     (case Some
+       (x)
+       (steps ((rewrite (hyp Some) lr both true ()) (simp both)) refl)))))
+
+;; The named IH cited INSIDE a case-on arm — the off-by-one regression. The
+;; Bool arms also cite their own equation by ctor name ((hyp True)/(hyp
+;; False)) to rewrite the stuck if-condition.
+(claim count_some_append
+  (goal ((xs (List (Option Int))) (ys (List (Option Int)))) ()
+    (= (count_some (append xs ys)) (+ (count_some xs) (count_some ys))))
+  (induct xs
+    ((case Nil
+       (steps
+         ((rewrite (lemma append_nil_left) lr lhs true ()) (simp rhs))
+         (by lia (list))))
+     (case Cons
+       (o t)
+       (steps
+         ((rewrite (lemma append_cons) lr lhs true ()) (simp both))
+         (case-on (is_none o) Bool
+           ((case True
+              (steps
+                ((rewrite (hyp True) lr both true ())
+                 (reduce both)
+                 (rewrite (hyp ih) lr lhs true ()))
+                refl))
+            (case False
+              (steps
+                ((rewrite (hyp False) lr both true ())
+                 (reduce both)
+                 (rewrite (hyp ih) lr lhs true ()))
+                (by lia (list)))))))))))

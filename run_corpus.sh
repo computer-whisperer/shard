@@ -51,6 +51,7 @@ TARGETS=(
   examples/lia_basics.shard
   examples/lia_rejects.shard
   examples/list_named_hyp.shard
+  examples/named_case_hyps.shard
   examples/module_gate_rejects.shard
   examples/parse_rejects.shard
   examples/pending_demo.shard

@@ -10,9 +10,13 @@
 ;;;   Induct/Induct2  : per case, APPEND one IH per recursive ctor field
 ;;;                     (do_induct order), named 'ih, 'ih1, … (count via the
 ;;;                     kernel's dbg_ih_count; Induct2: 'SS→1 else 0)
+;;;   CaseOn          : per case, PREPEND the case equation (the checker's
+;;;                     build_case_on_subgoal puts it at Hyp 0), auto-named
+;;;                     after the ctor — `(hyp Alive)` cites the enclosing
+;;;                     Alive arm's equation; inner arms shadow outer (the
+;;;                     front-first stack_pos search)
 ;;; Everything else leaves the stack unchanged. Positional `(Hyp k)` is
-;;; untouched. Named CaseOn case-hyps (a rarer sugar) are not handled — none
-;;; occur in the corpus.
+;;; untouched.
 
 ;; imports — the kernel files this module uses (dependency-tracked)
 (import "stdlib.shard")
@@ -69,9 +73,9 @@
 ;; appends one IH per recursive ctor field (do_induct order) — and rewrites
 ;; every (HypName s) to (Hyp k). It reuses stack_pos / ih_entries /
 ;; case_ih_count / append_ms above. An unbound name is left as (HypName s) and
-;; fails cleanly at resolve_eq (checker.shard). CaseOn cases push no IH, so
-;; their sub-proofs keep the parent stack (mirroring the generic reflected
-;; path, which leaves CaseOn's stack unchanged).
+;; fails cleanly at resolve_eq (checker.shard). CaseOn cases push no IH, but
+;; the checker PREPENDS the case equation at Hyp 0 (build_case_on_subgoal), so
+;; each arm prepends one stack slot — auto-named after the arm's ctor.
 ;; ===========================================================================
 
 (fn dsn_ref ((stk (List (Option Symbol))) (er EqRef)) EqRef
@@ -196,7 +200,10 @@
          (append_ms stk (ih_entries 0 (case_ih_count m ps head var cname)))
          sub)))))
 
-;; CaseOn cases: no IH pushed; sub-proofs keep the parent stack.
+;; CaseOn cases: no IH, but the checker prepends the case equation at Hyp 0
+;; (build_case_on_subgoal) — so each arm prepends one stack slot, auto-named
+;; after the arm's ctor: `(hyp Alive)` cites the enclosing Alive arm's
+;; equation. Inner arms shadow outer (front-first stack_pos search).
 (fn dsn_caseon_cases
   ((m Module)
    (ps (List Param))
@@ -212,6 +219,12 @@
   ((m Module) (ps (List Param)) (stk (List (Option Symbol))) (c Case))
   Case
   (match c
-    ((Case cname sub) (Case cname (desugar_proof_named m ps stk sub)))
+    ((Case cname sub)
+     (Case
+       cname
+       (desugar_proof_named m ps (Cons (Some (qn_name cname)) stk) sub)))
     ((CaseB cname fields sub)
-     (CaseB cname fields (desugar_proof_named m ps stk sub)))))
+     (CaseB
+       cname
+       fields
+       (desugar_proof_named m ps (Cons (Some (qn_name cname)) stk) sub)))))
