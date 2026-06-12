@@ -68,6 +68,28 @@ not to C — and then translate that form 1:1 to the actual target. The hard,
 creative, untrusted work (choosing an efficient lowering) is done by a human or
 an LLM; the *correctness* of each lowering is a proof the kernel checks.
 
+Two consequences worth stating outright:
+
+- **The compiler is outside the trusted core.** It belongs to the same regime
+  as `tools/prove` and `tools/shardfmt`: untrusted machinery that makes
+  development palatable. Today's chain (`tools/lower` → `tools/codegen` → C)
+  is *functionally* inside only because it does not yet emit refinement
+  proofs — its correctness is attested differentially (loud-error gates,
+  byte-identical corpus runs, and the standing rule that the compiled chain
+  is never the soundness authority). The graduation path is
+  **differentially-gated accelerator → proof-emitting transformer**: the
+  compiler hands back the artifact *plus* a checked refinement tying it to
+  the source, and the only residual trust leaf is that the hardware conforms
+  to the modeled target semantics (§4).
+- **Performant representations need zero kernel or compiler features.**
+  A packed string, an in-place buffer algorithm, an arena: each is a
+  *lower-level shard program* (over the `Word`/`Bytes`/`Mem` vocabulary —
+  see `std/mem.shard` for the in-place seed), proven to refine its
+  high-level form, then lowered 1:1. Lining up the refinement that runs
+  efficiently on the available machine is **app-level work in the untrusted
+  regime** — never a kernel representation, never a smart-compiler guess.
+  (Optional surface sugar is the lone exception, and it is sugar only.)
+
 
 ## 4. The machine is modeled in shard
 
@@ -197,6 +219,17 @@ So the architecture is split on purpose: **generation is cheap and untrusted**
 **checking is small and trusted** (the kernel). The kernel/search split is the
 product thesis, not just hygiene — proof *search* is swappable, the *checker*
 is not.
+
+The boundary is worth drawing precisely. The trusted core's charter is
+**exactly three things**: how to parse shard, *one* reference way to execute
+the resulting ASTs, and the logic for establishing formal proofs relating
+shard expressions to each other. Hardware is not in the charter — the kernel
+never cares how a program is executed efficiently, only what it means. (This
+is why `Word` and `Bytes` live in the kernel as *logic vocabulary* — canonical
+values and fact steps that let refinements be stated and checked — and not as
+performance features.) Everything else — the prover, the formatter, the
+compiler (§3), and the refinement passes to come — is one untrusted tier,
+whose outputs are either kernel-checked or differentially gated.
 
 
 ## 9. Known hard parts (dragons)
