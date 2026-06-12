@@ -23,7 +23,8 @@
 ;;;   - every write is preceded by the ANSI clear (io owns screen control —
 ;;;     the renderer is pure board→bytes).
 (import "../../kernel/stdlib.shard")  ; List / Option / Bool / Pair
-(import "mod.req/mod.req.shard")  ; OWN interface FIRST (ungranted): the
+(import "../../std/order")  ; le_trans — the clock-chaining vocabulary
+(import "mod.req/bin.shard")  ; OWN interface FIRST (ungranted): the
 ; tier-1 contract loads as obligations — board dims discharged below
 (import "game")  ; the game module interface: init / step / accessors
 (import "render")  ; the render module interface: render
@@ -32,6 +33,8 @@
 (use (:: examples snake_game_3 render *))
 (use (:: examples snake_game_3 board board_w))
 (use (:: examples snake_game_3 board board_h))
+(use (:: examples snake_game_3 *))
+(use (:: std order *))
 
 ;; ---- board dims (discharging the tier-1 opaque sigs) -------------------------
 ;; The artifact's concrete size. The ONLY place licensed to reduce the dims;
@@ -49,14 +52,13 @@
 
 (fulfills board_h_min (steps ((compute lhs)) refl))
 
-;; ---- the I/O boundary -------------------------------------------------------
+;; ---- the World observable (discharging the tier-1 sig) -----------------------
+;; The World type and externs now live in the contract; the clock observable
+;; gets its body here (proofs never unfold it — the bolts are the bridge).
 
-(type World (World Int))  ; the sequencing-clock token
-
-(extern get_args ((w World)) (Pair (List (List Int)) World))  ; argv slice
-(extern key_oracle ((w World)) (Pair (Option Int) World))  ; next key byte
-(extern write ((bytes (List Int)) (w World)) World)  ; emit bytes
-(extern exit ((code Int) (w World)) World)  ; end the process
+(fn w_clock ((w World)) Int
+  (match w
+    ((World n) n)))
 
 ;; ---- input boundary: the steer decoder --------------------------------------
 ;;   w 119 → Up    a 97 → Left    s 115 → Down    d 100 → Right
@@ -128,3 +130,150 @@
 (fn main ((w World)) World
   (match (get_args w)
     ((Pair args w1) (exit 0 (play (fuel) (init (seed_of args)) w1)))))
+
+;; ===========================================================================
+;; P5 — CLOCK DISCIPLINE.
+;; ===========================================================================
+
+;; The private ∀-fuel WORKER: the clock is monotone across the play loop for
+;; EVERY Int fuel, by well-founded induction on the fuel measure. Each tick's
+;; arms chain the clock bolts (key_clock, write_clock); the Alive arm chains
+;; the IH through le_trans at the post-write world.
+(claim play_clock_mono
+  (goal ((f Int) (g GameState) (w World)) ()
+    (= (le (w_clock w) (w_clock (play f g w))) True))
+  (wf-induct f
+    (case-on (lt 0 f) Bool
+      ((case True
+         (have (= (lt 0 f) True) (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+           (case-on (key_oracle w) Pair
+             ((case Pair
+                (o w1)
+                (have (= (w_clock w1) (+ (w_clock w) 1))
+                  (rewrite-with
+                    (lemma key_clock)
+                    lr
+                    lhs
+                    ((inst w w) (inst o o))
+                    ((steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                    refl)
+                  (case-on o Option
+                    ((case None
+                       (steps
+                         ((unfold play lhs)
+                          (rewrite (premise 0) lr lhs true ())
+                          (reduce lhs)
+                          (rewrite (hyp 1) lr lhs true ())
+                          (rewrite (hyp 0) lr lhs true ())
+                          (reduce lhs)
+                          (rewrite (premise 1) lr lhs true ()))
+                         (by farkas (list 1 0 0))))
+                     (case Some
+                       (k)
+                       (case-on (int_eq k 113) Bool
+                         ((case True
+                            (steps
+                              ((unfold play lhs)
+                               (rewrite (premise 0) lr lhs true ())
+                               (reduce lhs)
+                               (rewrite (hyp 2) lr lhs true ())
+                               (rewrite (hyp 1) lr lhs true ())
+                               (reduce lhs)
+                               (rewrite (hyp 0) lr lhs true ())
+                               (reduce lhs)
+                               (rewrite (premise 1) lr lhs true ()))
+                              (by farkas (list 1 0 0))))
+                          (case False
+                            (case-on (status_of (tick g k)) Status
+                              ((case Dead
+                                 (steps
+                                   ((unfold play lhs)
+                                    (rewrite (premise 0) lr lhs true ())
+                                    (reduce lhs)
+                                    (rewrite (hyp 3) lr lhs true ())
+                                    (rewrite (hyp 2) lr lhs true ())
+                                    (reduce lhs)
+                                    (rewrite (hyp 1) lr lhs true ())
+                                    (reduce lhs)
+                                    (rewrite (hyp 0) lr lhs true ())
+                                    (reduce lhs)
+                                    (unfold write_frame lhs)
+                                    (rewrite (lemma write_clock) lr lhs true ())
+                                    (rewrite (premise 1) lr lhs true ()))
+                                   (by farkas (list 1 0 0))))
+                               (case Alive
+                                 (steps
+                                   ((unfold play lhs)
+                                    (rewrite (premise 0) lr lhs true ())
+                                    (reduce lhs)
+                                    (rewrite (hyp 3) lr lhs true ())
+                                    (rewrite (hyp 2) lr lhs true ())
+                                    (reduce lhs)
+                                    (rewrite (hyp 1) lr lhs true ())
+                                    (reduce lhs)
+                                    (rewrite (hyp 0) lr lhs true ())
+                                    (reduce lhs))
+                                   (rewrite-with
+                                     (lemma le_trans)
+                                     lr
+                                     lhs
+                                     ((inst
+                                        b
+                                        (w_clock (write_frame (tick g k) w1))))
+                                     ((steps
+                                        ((unfold write_frame lhs)
+                                         (rewrite
+                                           (lemma write_clock)
+                                           lr
+                                           lhs
+                                           true
+                                           ())
+                                         (rewrite (premise 1) lr lhs true ()))
+                                        (by farkas (list 1 0 0)))
+                                      (rewrite-with
+                                        (hyp 5)
+                                        lr
+                                        lhs
+                                        ()
+                                        ((by farkas (list 1 1 0))
+                                         (by farkas (list 1 0 0)))
+                                        refl))
+                                     refl)))))))))))))))))
+       (case False
+         (have (= (lt 0 f) False)
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+           (steps
+             ((unfold play lhs)
+              (rewrite (premise 0) lr lhs true ())
+              (reduce lhs))
+             (by ord (list)))))))))
+
+;; P5 over MAIN: one get_args effect (args_clock), then the worker at the
+;; opaque fuel, then exit (clock-preserving fiction) — chained by le_trans.
+(fulfills main_clock_mono
+  (case-on (get_args w) Pair
+    ((case Pair
+       (args w1)
+       (have (= (w_clock w1) (+ (w_clock w) 1))
+         (rewrite-with
+           (lemma args_clock)
+           lr
+           lhs
+           ((inst w w) (inst args args))
+           ((steps ((rewrite (hyp 0) lr lhs true ())) refl))
+           refl)
+         (steps
+           ((unfold main lhs)
+            (rewrite (hyp 0) lr lhs true ())
+            (reduce lhs)
+            (rewrite (lemma exit_clock) lr lhs true ()))
+           (rewrite-with
+             (lemma le_trans)
+             lr
+             lhs
+             ((inst b (w_clock w1)))
+             ((steps
+                ((rewrite (premise 0) lr lhs true ()))
+                (by farkas (list 1 0)))
+              (steps ((rewrite (lemma play_clock_mono) lr lhs true ())) refl))
+             refl)))))))

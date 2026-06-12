@@ -50,3 +50,80 @@
 (import "board.shard")  ; tier-1 vocabulary: the opaque board dims
 (import "frame.shard")  ; tier-1 vocabulary: the byte-level frame shape
 (import "entity.shard")  ; tier-1 vocabulary: the head/food detectors
+(use (:: examples snake_game_3 board *))
+
+;; ===========================================================================
+;; THE FORMAL CONTRACT — grows per slice. Landed: the run boundary (P5).
+;; Every requirement is about `main`'s observables bridged by the bolt
+;; axioms below; no requirement names an internal function, type, or
+;; module surface.
+;; ===========================================================================
+
+;; ---- the board dims (vocabulary: board.shard; the bin impl discharges) ------
+;; Stated ATOMICALLY (no conjunctions): each fact is exactly the premise
+;; shape a citation wants — positivity is the spelling the renderer's
+;; alignment proofs consume; the minimums keep a bordered interior with
+;; room to play.
+
+(requirement board_w_pos (goal () () (= (lt 0 (board_w)) True)))
+
+(requirement board_h_pos (goal () () (= (lt 0 (board_h)) True)))
+
+(requirement board_w_min (goal () () (= (le 4 (board_w)) True)))
+
+(requirement board_h_min (goal () () (= (le 4 (board_h)) True)))
+
+;; ---- the World and its observables -----------------------------------------
+
+(type World (World Int))  ; the sequencing-clock token
+
+(sig fn w_clock ((w World)) Int)  ; observable: the sequencing clock
+
+;; ---- the I/O boundary main may touch ----------------------------------------
+
+(extern get_args ((w World)) (Pair (List (List Int)) World))  ; argv slice
+(extern key_oracle ((w World)) (Pair (Option Int) World))  ; next key byte
+(extern write ((bytes (List Int)) (w World)) World)  ; emit bytes
+(extern exit ((code Int) (w World)) World)  ; end the process
+
+;; ---- THE BOLTS (clock family — P5's trust surface) ----------------------------
+;; Each clocked effect advances the sequencing clock by exactly one; exit
+;; ends the process, so its returned World is proof fiction — it preserves
+;; the clock. Dumb one-line equations, auditable by inspection; the (bin
+;; trusts) list below names exactly these.
+
+(axiom write_clock
+  (kind operational)
+  (goal ((bytes (List Int)) (w World)) ()
+    (= (w_clock (write bytes w)) (+ (w_clock w) 1))))
+
+(axiom key_clock
+  (kind operational)
+  (goal ((w World) (o (Option Int)) (w1 World)) ((= (key_oracle w) (Pair o w1)))
+    (= (w_clock w1) (+ (w_clock w) 1))))
+
+(axiom args_clock
+  (kind operational)
+  (goal ((w World) (args (List (List Int))) (w1 World))
+    ((= (get_args w) (Pair args w1)))
+    (= (w_clock w1) (+ (w_clock w) 1))))
+
+(axiom exit_clock
+  (kind operational)
+  (goal ((code Int) (w World)) () (= (w_clock (exit code w)) (w_clock w))))
+
+;; ---- the executable -----------------------------------------------------------
+;; `main` is the SUBJECT of every requirement; `fuel` is the opaque global
+;; step budget (large at RUN, abstract in CHECK — proofs cite the ∀-fuel
+;; worker at it, never reducing it; opacity ENFORCES fuel-uniformity).
+
+(sig fn main ((w World)) World)
+
+(sig fn fuel () Int)
+
+;; ---- P5 — CLOCK DISCIPLINE ------------------------------------------------------
+;; The running binary only ever advances its sequencing clock — every
+;; effect is accounted for, none reused.
+
+(requirement main_clock_mono
+  (goal ((w World)) () (= (le (w_clock w) (w_clock (main w))) True)))
