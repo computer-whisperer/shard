@@ -1,44 +1,78 @@
 ;;; measure_clause.shard — the (measure E P…) admissibility clause (issue #1,
-;;; Phase B). Exercised by `check admit examples/measure_clause.shard`:
+;;; Phase B/B2). Exercised by `check admit examples/measure_clause.shard`:
 ;;;   cdown    MEASURED OK    — if-polarity path condition, one site
 ;;;   cdown2   MEASURED OK    — closed match arm + if as TWO premises
 ;;;   liar2    MEASURED FAIL  — the measure CHEAT: claims measure n but
 ;;;                            recurses on (+ n 1); the decrease obligation
 ;;;                            is false and its proof must be rejected
-;;;   sumlist  UNSUPPORTED    — site under a binder-ful match arm (v1 limit;
-;;;                            Phase B2's case instantiation lifts this)
+;;;   sumlist  MEASURED OK    — B2: site under a binder-ful arm; the
+;;;                            param-pure guard hyp is KEPT, the binder-
+;;;                            mentioning arm equation is DROPPED (sound)
+;;;   sumbad   MEASURED FAIL  — B2 over-admission pin: same shape but NO
+;;;                            lower-bound guard — nonneg is unprovable
+;;;                            (hyp-dropping must never manufacture facts)
+;;;   lensum   UNSUPPORTED    — the measure ARGUMENT references a pattern
+;;;                            binder ((len t)); binder-typed goals arrive
+;;;                            with lemma/theory support (Phase C)
+;;;   dropper  MEASURED FAIL  — drop-note pin: a binder-mentioning if-guard
+;;;                            is dropped and the failure names the count
 ;;; Inline proof order: per site (pre-order body walk), decrease then
-;;; nonnegativity. farkas cert layout: (list GOAL_MULT M_premise…).
+;;; nonnegativity. farkas cert layout: (list GOAL_MULT M_premise…) — one
+;;; slot per KEPT premise.
 ;;; Under plain `check` this file is 0 claims / 0 failures — the clause is
 ;;; report-only until the Phase D enforcement flip.
 
 (import "../kernel/stdlib.shard")
-;; Int countdown with a declared measure + inline obligation proofs:
-;; one site, (cdown (- n 1)) under (= (lt n 1) False).
+
 (fn cdown ((n Int)) Int
   (measure n (by farkas (list 1 0)) (by farkas (list 1 1)))
   (if (lt n 1) 0 (cdown (- n 1))))
 
-;; a MEASURE CHEAT: claims measure n but recurses on (+ n 1) — the
-;; decrease obligation is FALSE; its proof must be rejected.
 (fn liar2 ((n Int)) Int
   (measure n (by farkas (list 1 0)) (by farkas (list 1 1)))
   (if (lt n 1) 0 (liar2 (+ n 1))))
 
-;; ground use so the file means something in run mode too
 (fn probe_main ((x Int)) Int (cdown x))
 
-;; closed-pattern match arm as a path condition: recursion guarded by a
-;; Bool match instead of `if` — the (= b True/False) hyps come from arms.
 (fn cdown2 ((n Int) (go Bool)) Int
   (measure n (by farkas (list 1 0 0)) (by farkas (list 1 0 1)))
   (match go
     (False 0)
     (True (if (lt n 1) 0 (cdown2 (- n 1) go)))))
 
-;; site under a binder-ful arm — must report UNSUPPORTED in v1.
+;; B2: the site sits under (Cons h t) — the arm equation (= xs (Cons h t))
+;; is dropped (mentions binders) but the param-pure k-guard is kept, so
+;; both obligations discharge: k decreases and stays >= 0.
 (fn sumlist ((xs (List Int)) (k Int)) Int
   (measure k (by farkas (list 1 0)) (by farkas (list 1 1)))
+  (if (le k 0) 0
   (match xs
     (Nil 0)
-    ((Cons h t) (+ h (sumlist t (- k 1))))))
+    ((Cons h t) (+ h (sumlist t (- k 1)))))))
+
+;; B2 over-admission pin: NO k-guard — after the arm equation is dropped
+;; there is no premise at all, and (le 0 (- k 1)) is simply false at k=0.
+;; The nonneg obligation must FAIL no matter the cert.
+(fn sumbad ((xs (List Int)) (k Int)) Int
+  (measure k (by farkas (list 1)) (by farkas (list 1)))
+  (match xs
+    (Nil 0)
+    ((Cons h t) (+ h (sumbad t (- k 1))))))
+
+;; the B2 frontier: the measure argument itself descends through the
+;; data — (len t) references the arm binder t. Needs binder-typed goals
+;; plus the len lemmas (Phase C).
+(fn lensum ((xs (List Int))) Int
+  (measure (len xs) (by farkas (list 1)) (by farkas (list 1)))
+  (match xs
+    (Nil 0)
+    ((Cons h t) (+ h (lensum t)))))
+
+;; drop-note pin: the if-guard mentions binder h, so it is DROPPED from
+;; the obligation (ndrop = 1) — and with no param-pure guard left, nonneg
+;; fails WITH the diagnostic note naming the dropped premise count.
+(fn dropper ((xs (List Int)) (k Int)) Int
+  (measure k (by farkas (list 1)) (by farkas (list 1)))
+  (match xs
+    (Nil 0)
+    ((Cons h t) (if (lt h 5) (dropper t (- k 1)) 0))))

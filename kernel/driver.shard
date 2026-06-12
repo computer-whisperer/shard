@@ -1972,9 +1972,97 @@
 
 ;; ---- the site walker (SOURCE level) ---------------------------------------
 
-;; one recursive call site: index, supported? (not under binders),
-;; path-condition hyps (OUTERMOST FIRST), args.
-(type MSiteS (MSiteS Int Bool (List SExpr) (List SExpr)))
+;; one recursive call site: index, pattern/let binders in scope at the
+;; site, path-condition hyps (OUTERMOST FIRST), args.
+;;
+;; B2: a site under binders is no longer wholesale-unsupported. At
+;; obligation time the substituted measure must be PARAM-PURE (every
+;; variable a param, none shadowed by a binder) — else the site is
+;; UNSUPPORTED — and binder-mentioning hyps are DROPPED (sound: fewer
+;; premises only strengthens the obligation; the drop count is reported
+;; on failures so a missing premise is diagnosable). Binder-typed goals
+;; (for measures that descend through the data itself, e.g. (len t))
+;; arrive with the lemma/theory support they need — Phase C.
+(type MSiteS (MSiteS Int (List Symbol) (List SExpr) (List SExpr)))
+
+(fn mc_sym_member ((s Symbol) (xs (List Symbol))) Bool
+  (match xs
+    (Nil False)
+    ((Cons h t) (if (sym_eq h s) True (mc_sym_member s t)))))
+
+(fn mc_is_lower ((s Symbol)) Bool
+  (match (chars_of_sym s)
+    (Nil False)
+    ((Cons c _) (if (le 97 c) (le c 122) False))))
+
+;; variables of a pattern: lowercase atoms (wildcard `_` binds nothing).
+(fn mc_pat_binders ((p SExpr) (acc (List Symbol))) (List Symbol)
+  (match p
+    ((SSym s) (if (mc_is_lower s) (Cons s acc) acc))
+    ((SList items) (mc_pats_binders items acc))
+    (_ acc)))
+
+(fn mc_pats_binders ((ps (List SExpr)) (acc (List Symbol))) (List Symbol)
+  (match ps
+    (Nil acc)
+    ((Cons p rest) (mc_pats_binders rest (mc_pat_binders p acc)))))
+
+;; let-bound names from a ((x e) …) bindings form.
+(fn mc_let_binders ((binds SExpr) (acc (List Symbol))) (List Symbol)
+  (match binds
+    ((SList bs) (mc_let_binders_go bs acc))
+    (_ acc)))
+
+(fn mc_let_binders_go ((bs (List SExpr)) (acc (List Symbol))) (List Symbol)
+  (match bs
+    (Nil acc)
+    ((Cons (SList (Cons (SSym x) _)) rest)
+     (mc_let_binders_go rest (Cons x acc)))
+    ((Cons _ rest) (mc_let_binders_go rest acc))))
+
+;; param-purity: every VARIABLE (lowercase atom outside head position)
+;; is a param and not shadowed by an in-scope binder. (:: …) qualified
+;; names and (quote …) literals are pure as wholes; an inner match/let
+;; inside an argument shows its binders as unknown atoms and is refused
+;; conservatively.
+(fn mc_pure_atom ((s Symbol) (pnames (List Symbol)) (bnds (List Symbol))) Bool
+  (if (mc_is_lower s) (if (mc_sym_member s bnds) False (mc_sym_member s pnames))
+  True))
+
+(fn mc_pure ((e SExpr) (pnames (List Symbol)) (bnds (List Symbol))) Bool
+  (match e
+    ((SSym s) (mc_pure_atom s pnames bnds))
+    ((SList items)
+     (match items
+       (Nil True)
+       ((Cons h rest)
+        (match h
+          ((SSym hs)
+           (if (sym_eq hs (quote ::)) True
+           (if (sym_eq hs (quote quote)) True
+           (mc_pure_list rest pnames bnds))))
+          ((SList _)
+           (if (mc_pure h pnames bnds) (mc_pure_list rest pnames bnds) False))
+          (_ (mc_pure_list rest pnames bnds))))))
+    (_ True)))
+
+(fn mc_pure_list ((es (List SExpr)) (pnames (List Symbol)) (bnds (List Symbol)))
+  Bool
+  (match es
+    (Nil True)
+    ((Cons e rest)
+     (if (mc_pure e pnames bnds) (mc_pure_list rest pnames bnds) False))))
+
+;; split hyps into (kept, dropped-count): binder-dependent hyps go.
+(fn mc_keep_hyps
+  ((hyps (List SExpr)) (pnames (List Symbol)) (bnds (List Symbol)))
+  (Pair (List SExpr) Int)
+  (match hyps
+    (Nil (Pair Nil 0))
+    ((Cons h rest)
+     (match (mc_keep_hyps rest pnames bnds)
+       ((Pair ks n)
+        (if (mc_pure h pnames bnds) (Pair (Cons h ks) n) (Pair ks (+ n 1))))))))
 
 ;; pattern scan: 0 = closed (usable as an expression), 1 = wildcards only
 ;; (no hyp, but no capture either), 2 = binds names.
@@ -2023,18 +2111,18 @@
 
 (fn mc_walk_list
   ((f Symbol)
-   (bound Bool)
+   (bnds (List Symbol))
    (hyps (List SExpr))
    (es (List SExpr))
    (st (Pair Int (List MSiteS))))
   (Pair Int (List MSiteS))
   (match es
     (Nil st)
-    ((Cons e rest) (mc_walk_list f bound hyps rest (mc_walk f bound hyps e st)))))
+    ((Cons e rest) (mc_walk_list f bnds hyps rest (mc_walk f bnds hyps e st)))))
 
 (fn mc_walk_arms
   ((f Symbol)
-   (bound Bool)
+   (bnds (List Symbol))
    (hyps (List SExpr))
    (scrut SExpr)
    (arms (List SExpr))
@@ -2048,30 +2136,30 @@
         (let ((sc (mc_pat_scan pat)))
           (mc_walk_arms
             f
-            bound
+            bnds
             hyps
             scrut
             rest
             (if (int_eq sc 0)
-              (mc_walk f bound (Cons (mc_eq_s scrut pat) hyps) body st)
-            (if (int_eq sc 1) (mc_walk f bound hyps body st)
-            (mc_walk f True hyps body st))))))
-       (_ (mc_walk_arms f bound hyps scrut rest st))))))
+              (mc_walk f bnds (Cons (mc_eq_s scrut pat) hyps) body st)
+            (if (int_eq sc 1) (mc_walk f bnds hyps body st)
+            (mc_walk f (mc_pat_binders pat bnds) hyps body st))))))
+       (_ (mc_walk_arms f bnds hyps scrut rest st))))))
 
 (fn mc_let_rhss
   ((f Symbol)
-   (bound Bool)
+   (bnds (List Symbol))
    (hyps (List SExpr))
    (binds SExpr)
    (st (Pair Int (List MSiteS))))
   (Pair Int (List MSiteS))
   (match binds
-    ((SList bs) (mc_let_rhss_go f bound hyps bs st))
+    ((SList bs) (mc_let_rhss_go f bnds hyps bs st))
     (_ st)))
 
 (fn mc_let_rhss_go
   ((f Symbol)
-   (bound Bool)
+   (bnds (List Symbol))
    (hyps (List SExpr))
    (bs (List SExpr))
    (st (Pair Int (List MSiteS))))
@@ -2081,12 +2169,12 @@
     ((Cons b rest)
      (match b
        ((SList (Cons _ (Cons rhs Nil)))
-        (mc_let_rhss_go f bound hyps rest (mc_walk f bound hyps rhs st)))
-       (_ (mc_let_rhss_go f bound hyps rest st))))))
+        (mc_let_rhss_go f bnds hyps rest (mc_walk f bnds hyps rhs st)))
+       (_ (mc_let_rhss_go f bnds hyps rest st))))))
 
 (fn mc_walk
   ((f Symbol)
-   (bound Bool)
+   (bnds (List Symbol))
    (hyps (List SExpr))
    (e SExpr)
    (st (Pair Int (List MSiteS))))
@@ -2101,12 +2189,10 @@
             ((Pair i acc)
              (mc_walk_list
                f
-               bound
+               bnds
                hyps
                rest
-               (Pair
-                 (+ i 1)
-                 (Cons (MSiteS i (if bound False True) hyps rest) acc)))))
+               (Pair (+ i 1) (Cons (MSiteS i bnds hyps rest) acc)))))
           (match h
             ((SSym hs)
              (if (sym_eq hs (quote if))
@@ -2114,39 +2200,39 @@
                  ((Cons c (Cons t (Cons el Nil)))
                   (mc_walk
                     f
-                    bound
+                    bnds
                     (Cons (mc_hyp c (quote False)) hyps)
                     el
                     (mc_walk
                       f
-                      bound
+                      bnds
                       (Cons (mc_hyp c (quote True)) hyps)
                       t
-                      (mc_walk f bound hyps c st))))
-                 (_ (mc_walk_list f bound hyps rest st)))
+                      (mc_walk f bnds hyps c st))))
+                 (_ (mc_walk_list f bnds hyps rest st)))
              (if (sym_eq hs (quote match))
                (match rest
                  ((Cons scrut arms)
                   (mc_walk_arms
                     f
-                    bound
+                    bnds
                     hyps
                     scrut
                     arms
-                    (mc_walk f bound hyps scrut st)))
+                    (mc_walk f bnds hyps scrut st)))
                  (_ st))
              (if (sym_eq hs (quote let))
                (match rest
                  ((Cons binds bodyrest)
                   (mc_walk_list
                     f
-                    True
+                    (mc_let_binders binds bnds)
                     hyps
                     bodyrest
-                    (mc_let_rhss f bound hyps binds st)))
+                    (mc_let_rhss f bnds hyps binds st)))
                  (_ st))
-               (mc_walk_list f bound hyps rest st)))))
-            (_ (mc_walk_list f bound hyps items st)))))
+               (mc_walk_list f bnds hyps rest st)))))
+            (_ (mc_walk_list f bnds hyps items st)))))
        (Nil st)))
     (_ st)))
 
@@ -2168,8 +2254,9 @@
     (_ None)))
 
 ;; capture-naive substitution: every (SSym x) with x in sub is replaced.
-;; Sound here because v1 sites carry no binders (bound sites are never
-;; checked) and measures are param-vocabulary expressions.
+;; Sound here because the substituted result must then pass mc_pure —
+;; any captured/binder-referencing occurrence makes the site UNSUPPORTED
+;; before an obligation is ever stated.
 (fn mc_subst ((sub (List (Pair Symbol SExpr))) (e SExpr)) SExpr
   (match e
     ((SSym s) (mc_subst_lookup sub s e))
@@ -2286,6 +2373,19 @@
     "MEASURED "
     (append_int key (append_int " " (append_int msg (sr_nl))))))
 
+;; appended to a site's failure when binder-dependent hyps were dropped —
+;; the missing premise may be exactly the dropped one.
+(fn mc_drop_note ((key (List Int)) (ndrop Int)) (List Int)
+  (if (lt 0 ndrop)
+    (append_int
+      "    note: "
+      (append_int
+        (mc_show_i ndrop)
+        (append_int
+          " binder-dependent hyp(s) were dropped from this obligation"
+          (sr_nl))))
+    Nil))
+
 ;; a failed obligation: the MEASURED line plus the indented reason.
 (fn mc_fail_line ((key (List Int)) (i Int) (kind (List Int)) (why (List Int)))
   (List Int)
@@ -2345,69 +2445,63 @@
             key
             (append_int "OK (" (append_int (mc_show_i nok) " site(s))"))))
         (_ (mc_line key "FAIL: leftover proofs after the last site"))))
-    ((Cons (MSiteS i sup hyps args) rest)
-     (if sup
-       (match (mc_zip pnames args)
-         (None
-           (mc_line
-             key
-             (append_int
-               "FAIL site "
-               (append_int (mc_show_i i) ": arity mismatch at the call"))))
-         ((Some sub)
-          (match proofs
-            (Nil
-              (mc_line
-                key
-                (append_int
-                  "FAIL site "
-                  (append_int
-                    (mc_show_i i)
-                    ": no proofs left (need decrease + nonneg)"))))
-            ((Cons p1 prest1)
-             (match prest1
-               (Nil
-                 (mc_line
-                   key
-                   (append_int
-                     "FAIL site "
+    ((Cons (MSiteS i bnds hyps args) rest)
+     (match (mc_zip pnames args)
+       (None
+         (mc_line
+           key
+           (append_int
+             "FAIL site "
+             (append_int (mc_show_i i) ": arity mismatch at the call"))))
+       ((Some sub)
+        (let ((msr2 (mc_subst sub msr)))
+          (if (mc_pure msr2 pnames bnds)
+            (match (mc_keep_hyps hyps pnames bnds)
+              ((Pair khyps ndrop)
+               (match proofs
+                 (Nil
+                   (mc_line
+                     key
                      (append_int
-                       (mc_show_i i)
-                       ": only one proof left (need decrease + nonneg)"))))
-               ((Cons p2 prest)
-                (match
-                  (mc_site_pair
-                    m
-                    m2
-                    gctx
-                    fname
-                    key
-                    pForm
-                    hyps
-                    (mc_subst sub msr)
-                    msr
-                    i
-                    p1
-                    p2)
-                  ((Some bad) bad)
-                  (None
-                    (mc_check_sites
-                      m
-                      m2
-                      gctx
-                      fname
-                      key
-                      pForm
-                      pnames
-                      msr
-                      rest
-                      prest
-                      (+ nok 1))))))))))
-       (mc_line
-         key
-         (append_int
-           "UNSUPPORTED site "
-           (append_int (mc_show_i i) " (under pattern/let binders — v1)")))))))
+                       "FAIL site "
+                       (append_int
+                         (mc_show_i i)
+                         ": no proofs left (need decrease + nonneg)"))))
+                 ((Cons p1 prest1)
+                  (match prest1
+                    (Nil
+                      (mc_line
+                        key
+                        (append_int
+                          "FAIL site "
+                          (append_int
+                            (mc_show_i i)
+                            ": only one proof left (need decrease + nonneg)"))))
+                    ((Cons p2 prest)
+                     (match
+                       (mc_site_pair m m2 gctx fname key pForm khyps msr2 msr i
+                         p1 p2)
+                       ((Some bad) (append_int bad (mc_drop_note key ndrop)))
+                       (None
+                         (mc_check_sites
+                           m
+                           m2
+                           gctx
+                           fname
+                           key
+                           pForm
+                           pnames
+                           msr
+                           rest
+                           prest
+                           (+ nok 1))))))))))
+            (mc_line
+              key
+              (append_int
+                "UNSUPPORTED site "
+                (append_int
+                  (mc_show_i i)
+                  " (measure argument references pattern/let binders)"))))))))))
 
 (fn mc_check_fn
   ((m Module)
@@ -2437,7 +2531,7 @@
                    (match (mc_pnames pForm)
                      (None (mc_line key "SKIP (could not read param names)"))
                      ((Some pnames)
-                      (match (mc_walk name False Nil body (Pair 0 Nil))
+                      (match (mc_walk name Nil Nil body (Pair 0 Nil))
                         ((Pair _ rsites)
                          (let ((sites (mc_rev_sites rsites Nil)))
                            (match sites
