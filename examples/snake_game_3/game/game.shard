@@ -27,6 +27,8 @@
 (use (:: examples snake_game_3 board *))
 (use (:: examples snake_game_3 board_w_pos))
 (use (:: examples snake_game_3 board_h_pos))
+(use (:: examples snake_game_3 board_w_min))
+(use (:: examples snake_game_3 board_h_min))
 (use (:: examples snake_game_3 game GameState))  ; type rebind: our full type supplies the sig type
 (use (:: examples snake_game_3 game init))
 (use (:: examples snake_game_3 game step))
@@ -197,6 +199,27 @@
 
 (fulfills init_nonempty (steps ((unfold init lhs) (simp lhs)) refl))
 
+(fulfills init_dir (steps ((unfold init lhs) (simp lhs)) refl))
+
+;; the start head is the ground (Pos 2 2); its bounds come from the TIER-1
+;; minimum-size facts (the dims are opaque here — only the bin reduces them).
+(fulfills init_head_in_bounds
+  (have (= (le 4 (board_w)) True)
+    (steps ((rewrite (lemma board_w_min) lr lhs true ())) refl)
+    (have (= (lt 2 (board_w)) True) (by farkas (list 1 1))
+      (have (= (le 4 (board_h)) True)
+        (steps ((rewrite (lemma board_h_min) lr lhs true ())) refl)
+        (have (= (lt 2 (board_h)) True) (by farkas (list 1 0 0 1))
+          (steps
+            ((unfold init lhs)
+             (unfold snake_of lhs)
+             (reduce lhs)
+             (compute lhs)
+             (rewrite (premise 1) lr lhs true ())
+             (rewrite (premise 3) lr lhs true ())
+             (compute lhs))
+            refl))))))
+
 ;; ---- R1 / R4 / R3 -----------------------------------------------------------
 
 (fulfills death_absorbing
@@ -232,6 +255,81 @@
      (simp lhs)
      (unfold game_newhead lhs))
     refl))
+
+(fulfills dir_follows_steer
+  (steps
+    ((unfold step lhs)
+     (rewrite (premise 0) lr lhs true ())
+     (simp lhs)
+     (unfold live_step lhs)
+     (simp lhs))
+    refl))
+
+(fulfills step_nonempty
+  (steps
+    ((unfold step lhs)
+     (rewrite (premise 0) lr lhs true ())
+     (simp lhs)
+     (unfold live_step lhs)
+     (simp lhs))
+    refl))
+
+;; survival means the steered head didn't collide; collides' LEFT disjunct
+;; is the bounds test, so the dies=False fact inverts to in_bounds = True by
+;; a case split (orb matches on its left arm).
+(fulfills step_alive_in_bounds
+  (steps
+    ((unfold step lhs)
+     (rewrite (premise 0) lr lhs true ())
+     (simp lhs)
+     (unfold live_step lhs)
+     (simp lhs)
+     (unfold game_newhead lhs))
+    (case-on (game_dies g i) Bool
+      ((case True
+         (have (= Alive Dead)
+           (steps
+             ((rewrite (premise 1) rl lhs true ())
+              (unfold step lhs)
+              (rewrite (premise 0) lr lhs true ())
+              (reduce lhs)
+              (unfold live_step lhs)
+              (unfold status_of lhs)
+              (reduce lhs)
+              (rewrite (hyp 0) lr lhs true ())
+              (reduce lhs))
+             refl)
+           (absurd (premise 2))))
+       (case False
+         (have
+           (=
+             (collides
+               (addpos (snake_head (snake_of g)) (delta (steer (dir_of g) i)))
+               (snake_of g))
+             False)
+           (steps
+             ((rewrite (hyp 0) rl rhs true ())
+              (unfold game_dies rhs)
+              (unfold game_newhead rhs))
+             refl)
+           (case-on
+             (in_bounds
+               (addpos (snake_head (snake_of g)) (delta (steer (dir_of g) i))))
+             Bool
+             ((case True
+                (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+              (case False
+                (have (= True False)
+                  (steps
+                    ((rewrite (premise 2) rl rhs true ())
+                     (unfold collides rhs)
+                     (rewrite (hyp 0) lr rhs true ())
+                     (unfold notb rhs)
+                     (reduce rhs)
+                     (unfold orb rhs)
+                     (reduce rhs))
+                    refl)
+                  (absurd (premise 3))))))))))))
 
 ;; ---- but_last laws (the nested-induct family) --------------------------------
 ;; Shared shape: induct xs (outer — its IH is the claim AT THE TAIL), then
