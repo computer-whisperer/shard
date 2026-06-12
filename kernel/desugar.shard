@@ -1,11 +1,14 @@
-;;; desugar.shard — named-hypothesis desugaring, in shard.
+;;; desugar.shard — named-hypothesis & named-premise desugaring, in shard.
 ;;;
-;;; The kernel only understands POSITIONAL hypotheses `(Hyp k)`. Proof authors
-;;; may instead name them — `(hyp ih)` — for readability. proof_reader emits a
-;;; native `(HypName 'ih)`; this pass (desugar_proof_named) rewrites each to
-;;; positional by simulating the kernel's hyp stack over the native Proof.
+;;; The kernel only understands POSITIONAL citations `(Hyp k)` / `(Premise
+;;; k)`. Proof authors may instead name them — `(hyp ih)`, `(premise
+;;; lo_bound)` — for readability. proof_reader emits native `(HypName s)` /
+;;; `(PremiseName s)` (and the named-cut form `(HaveN s eq pe k)`); this
+;;; pass (desugar_proof_named) rewrites each to positional by simulating
+;;; the kernel's hyp stack AND premise list over the native Proof, and
+;;; strips HaveN to a plain Have — the checker never sees a name.
 ;;;
-;;; Stack discipline (front = index 0 = `(Hyp 0)`):
+;;; Hyp stack discipline (front = index 0 = `(Hyp 0)`):
 ;;;   WfInduct        : PREPEND one IH, named 'ih
 ;;;   Induct/Induct2  : per case, APPEND one IH per recursive ctor field
 ;;;                     (do_induct order), named 'ih, 'ih1, … (count via the
@@ -17,6 +20,20 @@
 ;;;                     front-first stack_pos search)
 ;;; Everything else leaves the stack unchanged. Positional `(Hyp k)` is
 ;;; untouched.
+;;;
+;;; Premise discipline (APPEND-at-end, so indices are stable once assigned;
+;;; base = the goal's own premise count, threaded in by the driver):
+;;;   Have/HaveN      : the fact lands at index pc; continuation at pc+1.
+;;;                     HaveN records NAME→pc (newest shadows).
+;;;   WordFact        : continuation at pc + |facts| — counted via the
+;;;                     checker's OWN word_facts_checked (never duplicated).
+;;;   DivFacts        : likewise via div_facts_checked; its fresh quotient
+;;;                     param also extends ps for the continuation.
+;;; CAVEAT: word/div fact counting type-checks the term against `ps`, which
+;;; here lacks induction/case field params — a word-fact on a case-bound
+;;; field under-counts (0) and a named premise BELOW it then resolves to a
+;;; lower index. Never unsound (the checker verifies whatever is cited);
+;;; fails loudly at the citation. Spell those rare chains positionally.
 
 ;; imports — the kernel files this module uses (dependency-tracked)
 (import "stdlib.shard")
@@ -37,6 +54,13 @@
        ((Some h) (if (sym_eq s h) (Some k) (stack_pos s t (+ k 1))))
        (None (stack_pos s t (+ k 1)))))))
 
+;; named-premise registry: name → absolute premise index; newest CONSED on
+;; front, so re-using a name shadows the older fact.
+(fn pn_pos ((s Symbol) (pn (List (Pair Symbol Int)))) (Option Int)
+  (match pn
+    (Nil None)
+    ((Cons (Pair nm k) t) (if (sym_eq s nm) (Some k) (pn_pos s t)))))
+
 (fn param_type ((v Symbol) (ps (List Param))) (Option Type)
   (match ps
     (Nil None)
@@ -56,6 +80,11 @@
     (Nil b)
     ((Cons h t) (Cons h (append_ms t b)))))
 
+(fn dsn_eqs_len ((es (List Equation))) Int
+  (match es
+    (Nil 0)
+    ((Cons _ t) (+ 1 (dsn_eqs_len t)))))
+
 ;; How many IHs do_induct appends for ctor `cname` when inducting on `var`.
 (fn case_ih_count
   ((m Module) (ps (List Param)) (head Symbol) (var Symbol) (cname QName))
@@ -66,104 +95,148 @@
     ((Some ty) (dbg_ih_count ty cname m)))))
 
 ;; ===========================================================================
-;; Native named-hyp desugaring — over the native Proof.
-;; proof_reader emits a native Proof in which a named hypothesis is (HypName
-;; 'ih); the kernel only resolves (Hyp k). This pass simulates the SAME hyp
-;; stack over the NATIVE Proof — WfInduct prepends 'ih; each Induct/Induct2 case
-;; appends one IH per recursive ctor field (do_induct order) — and rewrites
-;; every (HypName s) to (Hyp k). It reuses stack_pos / ih_entries /
-;; case_ih_count / append_ms above. An unbound name is left as (HypName s) and
-;; fails cleanly at resolve_eq (checker.shard). CaseOn cases push no IH, but
-;; the checker PREPENDS the case equation at Hyp 0 (build_case_on_subgoal), so
-;; each arm prepends one stack slot — auto-named after the arm's ctor.
+;; Native named-citation desugaring — over the native Proof. Simulates the
+;; SAME hyp stack and premise list the checker builds (see the header) and
+;; rewrites every (HypName s) → (Hyp k), (PremiseName s) → (Premise k),
+;; (HaveN s …) → (Have …). An unbound name is left as-is and fails cleanly
+;; at resolve_eq (checker.shard).
 ;; ===========================================================================
 
-(fn dsn_ref ((stk (List (Option Symbol))) (er EqRef)) EqRef
+(fn dsn_ref
+  ((stk (List (Option Symbol))) (pn (List (Pair Symbol Int))) (er EqRef))
+  EqRef
   (match er
     ((HypName s)
      (match (stack_pos s stk 0)
        ((Some k) (Hyp k))
        (None (HypName s))))
+    ((PremiseName s)
+     (match (pn_pos s pn)
+       ((Some k) (Premise k))
+       (None (PremiseName s))))
     (_ er)))
 
-(fn dsn_step ((stk (List (Option Symbol))) (st Step)) Step
+(fn dsn_step
+  ((stk (List (Option Symbol))) (pn (List (Pair Symbol Int))) (st Step))
+  Step
   (match st
     ((Rewrite ref dir side all insts)
-     (Rewrite (dsn_ref stk ref) dir side all insts))
+     (Rewrite (dsn_ref stk pn ref) dir side all insts))
     (_ st)))
 
-(fn dsn_steps ((stk (List (Option Symbol))) (sts (List Step))) (List Step)
+(fn dsn_steps
+  ((stk (List (Option Symbol))) (pn (List (Pair Symbol Int))) (sts (List Step)))
+  (List Step)
   (match sts
     (Nil Nil)
-    ((Cons h t) (Cons (dsn_step stk h) (dsn_steps stk t)))))
+    ((Cons h t) (Cons (dsn_step stk pn h) (dsn_steps stk pn t)))))
 
 (fn desugar_proof_named
-  ((m Module) (ps (List Param)) (stk (List (Option Symbol))) (p Proof))
+  ((m Module)
+   (ps (List Param))
+   (stk (List (Option Symbol)))
+   (pc Int)
+   (pn (List (Pair Symbol Int)))
+   (p Proof))
   Proof
   (match p
     (Refl Refl)
     (Admit Admit)
     ((Steps steps cont)
-     (Steps (dsn_steps stk steps) (desugar_proof_named m ps stk cont)))
+     (Steps (dsn_steps stk pn steps) (desugar_proof_named m ps stk pc pn cont)))
     ((Induct var cases)
-     (Induct var (dsn_cases m ps stk (quote Induct) var cases)))
+     (Induct var (dsn_cases m ps stk pc pn (quote Induct) var cases)))
     ((Induct2 var cases)
-     (Induct2 var (dsn_cases m ps stk (quote Induct2) var cases)))
-    ((CaseOn e var cases) (CaseOn e var (dsn_caseon_cases m ps stk cases)))
+     (Induct2 var (dsn_cases m ps stk pc pn (quote Induct2) var cases)))
+    ((CaseOn e var cases) (CaseOn e var (dsn_caseon_cases m ps stk pc pn cases)))
     ((WfInduct measure sub)
      (WfInduct
        measure
-       (desugar_proof_named m ps (Cons (Some (quote ih)) stk) sub)))
+       (desugar_proof_named m ps (Cons (Some (quote ih)) stk) pc pn sub)))
     ((RewriteWith ref dir side insts subs cont)
      (RewriteWith
-       (dsn_ref stk ref)
+       (dsn_ref stk pn ref)
        dir
        side
        insts
-       (dsn_proofs m ps stk subs)
-       (desugar_proof_named m ps stk cont)))
-    ((Absurd ref) (Absurd (dsn_ref stk ref)))
+       (dsn_proofs m ps stk pc pn subs)
+       (desugar_proof_named m ps stk pc pn cont)))
+    ((Absurd ref) (Absurd (dsn_ref stk pn ref)))
     ((FinSplit var lo hi cases)  ; no IH pushed; bounds + cases keep the stack
      (FinSplit
        var
-       (dsn_ref stk lo)
-       (dsn_ref stk hi)
-       (dsn_fincases m ps stk cases)))
-    ((Have eq pe pr)  ; cut pushes a PREMISE, not a hyp; stack unchanged
+       (dsn_ref stk pn lo)
+       (dsn_ref stk pn hi)
+       (dsn_fincases m ps stk pc pn cases)))
+    ((Have eq pe pr)  ; cut: the fact lands at premise pc; continuation +1
      (Have
        eq
-       (desugar_proof_named m ps stk pe)
-       (desugar_proof_named m ps stk pr)))
+       (desugar_proof_named m ps stk pc pn pe)
+       (desugar_proof_named m ps stk (+ pc 1) pn pr)))
+    ((HaveN nm eq pe pr)  ; named cut: record nm → pc, strip to Have
+     (Have
+       eq
+       (desugar_proof_named m ps stk pc pn pe)
+       (desugar_proof_named m ps stk (+ pc 1) (Cons (Pair nm pc) pn) pr)))
+    ((WordFact e pr)  ; facts appended — count via the checker's own builder
+     (WordFact
+       e
+       (desugar_proof_named
+         m
+         ps
+         stk
+         (+ pc
+           (match (word_facts_checked m ps e)
+             (None 0)
+             ((Some fs) (dsn_eqs_len fs))))
+         pn
+         pr)))
+    ((DivFacts n d q pr)  ; facts appended + the fresh quotient param
+     (DivFacts
+       n
+       d
+       q
+       (match (div_facts_checked m ps n d q)
+         (None (desugar_proof_named m ps stk pc pn pr))
+         ((Some (Pair ps2 fs))
+          (desugar_proof_named m ps2 stk (+ pc (dsn_eqs_len fs)) pn pr)))))
     (_ p)))  ; ByTheory — no hyp refs
 
 (fn dsn_fincases
   ((m Module)
    (ps (List Param))
    (stk (List (Option Symbol)))
+   (pc Int)
+   (pn (List (Pair Symbol Int)))
    (cases (List FinCase)))
   (List FinCase)
   (match cases
     (Nil Nil)
     ((Cons (FinCase v sub) rest)
      (Cons
-       (FinCase v (desugar_proof_named m ps stk sub))
-       (dsn_fincases m ps stk rest)))))
+       (FinCase v (desugar_proof_named m ps stk pc pn sub))
+       (dsn_fincases m ps stk pc pn rest)))))
 
 (fn dsn_proofs
   ((m Module)
    (ps (List Param))
    (stk (List (Option Symbol)))
+   (pc Int)
+   (pn (List (Pair Symbol Int)))
    (subs (List Proof)))
   (List Proof)
   (match subs
     (Nil Nil)
-    ((Cons h t) (Cons (desugar_proof_named m ps stk h) (dsn_proofs m ps stk t)))))
+    ((Cons h t)
+     (Cons (desugar_proof_named m ps stk pc pn h) (dsn_proofs m ps stk pc pn t)))))
 
 ;; Induct/Induct2 cases: each appends its IH entries before the sub-proof.
 (fn dsn_cases
   ((m Module)
    (ps (List Param))
    (stk (List (Option Symbol)))
+   (pc Int)
+   (pn (List (Pair Symbol Int)))
    (head Symbol)
    (var Symbol)
    (cases (List Case)))
@@ -171,12 +244,16 @@
   (match cases
     (Nil Nil)
     ((Cons c rest)
-     (Cons (dsn_case m ps stk head var c) (dsn_cases m ps stk head var rest)))))
+     (Cons
+       (dsn_case m ps stk pc pn head var c)
+       (dsn_cases m ps stk pc pn head var rest)))))
 
 (fn dsn_case
   ((m Module)
    (ps (List Param))
    (stk (List (Option Symbol)))
+   (pc Int)
+   (pn (List (Pair Symbol Int)))
    (head Symbol)
    (var Symbol)
    (c Case))
@@ -189,6 +266,8 @@
          m
          ps
          (append_ms stk (ih_entries 0 (case_ih_count m ps head var cname)))
+         pc
+         pn
          sub)))
     ((CaseB cname fields sub)
      (CaseB
@@ -198,6 +277,8 @@
          m
          ps
          (append_ms stk (ih_entries 0 (case_ih_count m ps head var cname)))
+         pc
+         pn
          sub)))))
 
 ;; CaseOn cases: no IH, but the checker prepends the case equation at Hyp 0
@@ -208,23 +289,30 @@
   ((m Module)
    (ps (List Param))
    (stk (List (Option Symbol)))
+   (pc Int)
+   (pn (List (Pair Symbol Int)))
    (cases (List Case)))
   (List Case)
   (match cases
     (Nil Nil)
     ((Cons c rest)
-     (Cons (dsn_caseon_case m ps stk c) (dsn_caseon_cases m ps stk rest)))))
+     (Cons (dsn_caseon_case m ps stk pc pn c) (dsn_caseon_cases m ps stk pc pn rest)))))
 
 (fn dsn_caseon_case
-  ((m Module) (ps (List Param)) (stk (List (Option Symbol))) (c Case))
+  ((m Module)
+   (ps (List Param))
+   (stk (List (Option Symbol)))
+   (pc Int)
+   (pn (List (Pair Symbol Int)))
+   (c Case))
   Case
   (match c
     ((Case cname sub)
      (Case
        cname
-       (desugar_proof_named m ps (Cons (Some (qn_name cname)) stk) sub)))
+       (desugar_proof_named m ps (Cons (Some (qn_name cname)) stk) pc pn sub)))
     ((CaseB cname fields sub)
      (CaseB
        cname
        fields
-       (desugar_proof_named m ps (Cons (Some (qn_name cname)) stk) sub)))))
+       (desugar_proof_named m ps (Cons (Some (qn_name cname)) stk) pc pn sub)))))

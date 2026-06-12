@@ -509,6 +509,7 @@ parameter):
 | `(case-on TERM TYPE (CASE…))`                | `CaseOn`    | split on the constructor of `TERM` (of named `TYPE`); no IH    |
 | `(wf-induct MEASURE PROOF)`                  | `WfInduct`  | well-founded induction on the Int `MEASURE`; prepends IH `ih`  |
 | `(have EQ PROOF₁ PROOF₂)`                    | `Have`      | the CUT rule: prove `EQ` by `PROOF₁`, then continue with `PROOF₂` under `EQ` as a fresh premise |
+| `(have NAME EQ PROOF₁ PROOF₂)`               | `HaveN`     | named cut: as above, and `PROOF₂` may cite the fact as `(premise NAME)` — resolved to positional at load time, so inserting earlier haves can't break later citations |
 | `(fin-split VAR LO HI (CASE…))`              | `FinSplit`  | bounded-Int enumeration: `LO`/`HI` cite range premises for `VAR`; one `(case INT PROOF)` per value |
 | `(word-fact TERM PROOF)`                     | `WordFact`  | inject `TERM`'s word-semantic facts (defining equation over the Int image at the type-checked width, plus value ranges) as premises; kernel-justified — no obligation. Unsigned terms read via `uval`, signed via `sval` (shifted-mod images for wrap arith; `wnot` linear; bitwise/shift images at literal amounts); concrete width required except for the comparison images |
 | `(div-facts TERM D Q PROOF)`                 | `DivFacts`  | inject the Euclidean triple for `TERM` at literal divisor `D` (`n = D·Q + mod n D`, mod ranges), with quotient `Q` a fresh ∀-param — `fin-split Q` then supplies the integrality step rational farkas cannot (see examples/word_facts.shard for the mod-elimination idiom) |
@@ -555,6 +556,7 @@ What a `rewrite`/`rewrite-with`/`absurd` cites:
 | `(hyp K)`      | `(Hyp K)`       | hypothesis at positional index `K` (innermost = 0)     |
 | `(hyp NAME)`   | `(HypName NAME)`| a hypothesis by name — desugared to positional (below) |
 | `(premise K)`  | `(Premise K)`   | the goal's `K`-th premise                              |
+| `(premise NAME)`| `(PremiseName NAME)` | a named have's fact — desugared to positional (below) |
 | `(lemma NAME)` | `(Lemma NAME)`  | an admitted axiom or previously-proven claim           |
 
 **Named hypotheses** are a parse-time convenience. The reader emits
