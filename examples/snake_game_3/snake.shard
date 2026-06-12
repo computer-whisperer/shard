@@ -34,7 +34,11 @@
 (use (:: examples snake_game_3 board board_w))
 (use (:: examples snake_game_3 board board_h))
 (use (:: examples snake_game_3 *))
+(use (:: examples snake_game_3 frame *))
 (use (:: std order *))
+(use (:: std list append))
+(use (:: std list append_nil_left))
+(use (:: std list append_cons))
 
 ;; ---- board dims (discharging the tier-1 opaque sigs) -------------------------
 ;; The artifact's concrete size. The ONLY place licensed to reduce the dims;
@@ -73,7 +77,7 @@
   cur)))))
 
 ;; ---- output boundary: one frame per tick -------------------------------------
-;; ANSI clear ESC[2J ESC[H, then the rendered board. Local monomorphic
+;; The tier-1 clear (clear_bytes), then the rendered board. Local monomorphic
 ;; append (the dangling-type-pivot rule: keep proof-facing citations pinned).
 
 (fn io_app ((xs (List Int)) (ys (List Int))) (List Int)
@@ -81,11 +85,8 @@
     (Nil ys)
     ((Cons h t) (Cons h (io_app t ys)))))
 
-(fn clear_seq () (List Int)
-  (Cons 27 (Cons 91 (Cons 50 (Cons 74 (Cons 27 (Cons 91 (Cons 72 Nil))))))))
-
 (fn write_frame ((g GameState) (w World)) World
-  (write (io_app (clear_seq) (render g)) w))
+  (write (io_app (clear_bytes) (render g)) w))
 
 ;; ---- the play loop ------------------------------------------------------------
 ;; One tick = read a key (None/EOF or `q` stops), steer + step, write the
@@ -277,3 +278,253 @@
                 (by farkas (list 1 0)))
               (steps ((rewrite (lemma play_clock_mono) lr lhs true ())) refl))
              refl)))))))
+
+;; ===========================================================================
+;; P1 — COMPLETE FRAMES.
+;; ===========================================================================
+
+;; every emitted byte string is one screen update: the clear computes off
+;; the front, and the rest is a frame by the render module's granted
+;; render_is_frame — unconditional in the state, so the preservation worker
+;; needs no per-state invariant.
+(claim screen_ok
+  (goal ((g GameState)) ()
+    (= (is_screen (io_app (clear_bytes) (render g))) True))
+  (have
+    (=
+      (io_app (clear_bytes) (render g))
+      (Cons
+        27
+        (Cons 91 (Cons 50 (Cons 74 (Cons 27 (Cons 91 (Cons 72 (render g)))))))))
+    (steps ((compute lhs)) refl)
+    (have
+      (=
+        (after_prefix
+          (clear_bytes)
+          (Cons
+            27
+            (Cons
+              91
+              (Cons 50 (Cons 74 (Cons 27 (Cons 91 (Cons 72 (render g)))))))))
+        (Some (render g)))
+      (steps ((compute lhs)) refl)
+      (steps
+        ((rewrite (premise 0) lr lhs true ())
+         (unfold is_screen lhs)
+         (rewrite (premise 1) lr lhs true ())
+         (reduce lhs)
+         (rewrite (lemma render_is_frame) lr lhs true ()))
+        refl))))
+
+;; fold the screen predicate over a one-element append (v2's all_arena_snoc).
+(claim all_screens_snoc
+  (goal ((xs (List (List Int))) (y (List Int))) ()
+    (=
+      (all_screens (append xs (Cons y Nil)))
+      (if (all_screens xs) (is_screen y) False)))
+  (induct xs
+    ((case Nil
+       (steps
+         ((rewrite (lemma append_nil_left) lr lhs true ()) (simp both))
+         (case-on (is_screen y) Bool
+           ((case True
+              (steps ((rewrite (hyp 0) lr both true ()) (simp lhs)) refl))
+            (case False
+              (steps ((rewrite (hyp 0) lr both true ()) (simp lhs)) refl))))))
+     (case Cons
+       (h t)
+       (steps
+         ((rewrite (lemma append_cons) lr lhs true ())
+          (simp lhs)
+          (rewrite (hyp 0) lr lhs true ())
+          (simp rhs))
+         (case-on (is_screen h) Bool
+           ((case True
+              (steps ((rewrite (hyp 0) lr both true ()) (simp both)) refl))
+            (case False
+              (steps ((rewrite (hyp 0) lr both true ()) (simp both)) refl)))))))))
+
+;; WfInduct's termination obligation, as a lemma (farkas reads premises).
+(claim step_nonneg
+  (goal ((x Int)) ((= (lt 0 x) True)) (= (le 0 (- x 1)) True))
+  (by farkas (list 1 1)))
+
+;; the ∀-fuel worker: the all-screens invariant rides the loop — every arm
+;; either preserves the log (key_output) or appends one screen_ok frame
+;; (write_output + the snoc fold).
+(claim play_screens_preserve
+  (goal ((f Int) (g GameState) (w World)) ((= (all_screens (w_output w)) True))
+    (= (all_screens (w_output (play f g w))) True))
+  (wf-induct f
+    (case-on (lt 0 f) Bool
+      ((case False
+         (steps
+           ((unfold play lhs)
+            (rewrite (hyp 0) lr lhs true ())
+            (reduce lhs)
+            (rewrite (premise 0) lr lhs true ()))
+           refl))
+       (case True
+         (steps
+           ((unfold play lhs) (rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+           (case-on (key_oracle w) Pair
+             ((case Pair
+                (o w1)
+                (steps
+                  ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                  (case-on o Option
+                    ((case None
+                       (steps
+                         ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                         (rewrite-with
+                           (lemma key_output)
+                           lr
+                           lhs
+                           ((inst w w) (inst o o))
+                           ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
+                           (steps ((rewrite (premise 0) lr lhs true ())) refl))))
+                     (case Some
+                       (k)
+                       (steps
+                         ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                         (case-on (int_eq k 113) Bool
+                           ((case True
+                              (steps
+                                ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                                (rewrite-with
+                                  (lemma key_output)
+                                  lr
+                                  lhs
+                                  ((inst w w) (inst o o))
+                                  ((steps
+                                     ((rewrite (hyp 2) lr lhs true ()))
+                                     refl))
+                                  (steps
+                                    ((rewrite (premise 0) lr lhs true ()))
+                                    refl))))
+                            (case False
+                              (steps
+                                ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                                (case-on (status_of (tick g k)) Status
+                                  ((case Dead
+                                     (steps
+                                       ((rewrite (hyp 0) lr lhs true ())
+                                        (reduce lhs)
+                                        (unfold write_frame lhs)
+                                        (rewrite
+                                          (lemma write_output)
+                                          lr
+                                          lhs
+                                          true
+                                          ())
+                                        (rewrite
+                                          (lemma all_screens_snoc)
+                                          lr
+                                          lhs
+                                          true
+                                          ()))
+                                       (rewrite-with
+                                         (lemma key_output)
+                                         lr
+                                         lhs
+                                         ((inst w w) (inst o o))
+                                         ((steps
+                                            ((rewrite (hyp 3) lr lhs true ()))
+                                            refl))
+                                         (steps
+                                           ((rewrite (premise 0) lr lhs true ())
+                                            (rewrite
+                                              (lemma screen_ok)
+                                              lr
+                                              lhs
+                                              true
+                                              ())
+                                            (reduce lhs))
+                                           refl))))
+                                   (case Alive
+                                     (steps
+                                       ((rewrite (hyp 0) lr lhs true ())
+                                        (reduce lhs))
+                                       (rewrite-with
+                                         (hyp 5)
+                                         lr
+                                         lhs
+                                         ()
+                                         ((steps
+                                            ((unfold write_frame lhs)
+                                             (rewrite
+                                               (lemma write_output)
+                                               lr
+                                               lhs
+                                               true
+                                               ())
+                                             (rewrite
+                                               (lemma all_screens_snoc)
+                                               lr
+                                               lhs
+                                               true
+                                               ()))
+                                            (rewrite-with
+                                              (lemma key_output)
+                                              lr
+                                              lhs
+                                              ((inst w w) (inst o o))
+                                              ((steps
+                                                 ((rewrite
+                                                    (hyp 3)
+                                                    lr
+                                                    lhs
+                                                    true
+                                                    ()))
+                                                 refl))
+                                              (steps
+                                                ((rewrite
+                                                   (premise 0)
+                                                   lr
+                                                   lhs
+                                                   true
+                                                   ())
+                                                 (rewrite
+                                                   (lemma screen_ok)
+                                                   lr
+                                                   lhs
+                                                   true
+                                                   ())
+                                                 (reduce lhs))
+                                                refl)))
+                                          (rewrite-with
+                                            (lemma step_nonneg)
+                                            lr
+                                            lhs
+                                            ((inst x f))
+                                            ((steps
+                                               ((rewrite (hyp 4) lr lhs true ()))
+                                               refl))
+                                            refl)
+                                          (by ord (list)))
+                                         refl)))))))))))))))))))))))
+
+;; P1 over MAIN: one get_args effect (args_output preserves the log), the
+;; worker at the opaque fuel, exit preserves.
+(fulfills frames_are_screens
+  (case-on (get_args w) Pair
+    ((case Pair
+       (args w1)
+       (steps
+         ((unfold main lhs)
+          (rewrite (hyp 0) lr lhs true ())
+          (reduce lhs)
+          (rewrite (lemma exit_output) lr lhs true ()))
+         (rewrite-with
+           (lemma play_screens_preserve)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma args_output)
+              lr
+              lhs
+              ((inst w w) (inst args args))
+              ((steps ((rewrite (hyp 0) lr lhs true ())) refl))
+              (steps ((rewrite (premise 0) lr lhs true ())) refl)))
+           refl))))))

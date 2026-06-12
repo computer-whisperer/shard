@@ -47,10 +47,13 @@
 ;;; which P2's faithfulness needs to mean anything; the renderer's
 ;;; frame-shape and cell-faithfulness lemmas.
 (import "../../../kernel/stdlib.shard")  ; List / Option / Bool / Pair
+(import "../../../std/list")  ; append — the output-log accumulator
 (import "board.shard")  ; tier-1 vocabulary: the opaque board dims
 (import "frame.shard")  ; tier-1 vocabulary: the byte-level frame shape
 (import "entity.shard")  ; tier-1 vocabulary: the head/food detectors
 (use (:: examples snake_game_3 board *))
+(use (:: examples snake_game_3 frame *))
+(use (:: std list append))
 
 ;; ===========================================================================
 ;; THE FORMAL CONTRACT — grows per slice. Landed: the run boundary (P5).
@@ -78,6 +81,8 @@
 (type World (World Int))  ; the sequencing-clock token
 
 (sig fn w_clock ((w World)) Int)  ; observable: the sequencing clock
+
+(sig fn w_output ((w World)) (List (List Int)))  ; observable: frames written
 
 ;; ---- the I/O boundary main may touch ----------------------------------------
 
@@ -112,6 +117,31 @@
   (kind operational)
   (goal ((code Int) (w World)) () (= (w_clock (exit code w)) (w_clock w))))
 
+;; ---- THE BOLTS (output family — P1's trust surface) ---------------------------
+;; `write` APPENDS its bytes to the output log; every other effect
+;; PRESERVES the log (exit's returned World is the same proof fiction as
+;; its clock line).
+
+(axiom write_output
+  (kind operational)
+  (goal ((bytes (List Int)) (w World)) ()
+    (= (w_output (write bytes w)) (append (w_output w) (Cons bytes Nil)))))
+
+(axiom key_output
+  (kind operational)
+  (goal ((w World) (o (Option Int)) (w1 World)) ((= (key_oracle w) (Pair o w1)))
+    (= (w_output w1) (w_output w))))
+
+(axiom args_output
+  (kind operational)
+  (goal ((w World) (args (List (List Int))) (w1 World))
+    ((= (get_args w) (Pair args w1)))
+    (= (w_output w1) (w_output w))))
+
+(axiom exit_output
+  (kind operational)
+  (goal ((code Int) (w World)) () (= (w_output (exit code w)) (w_output w))))
+
 ;; ---- the executable -----------------------------------------------------------
 ;; `main` is the SUBJECT of every requirement; `fuel` is the opaque global
 ;; step budget (large at RUN, abstract in CHECK — proofs cite the ∀-fuel
@@ -127,3 +157,13 @@
 
 (requirement main_clock_mono
   (goal ((w World)) () (= (le (w_clock w) (w_clock (main w))) True)))
+
+;; ---- P1 — COMPLETE FRAMES -------------------------------------------------------
+;; Every byte string the binary writes is one SCREEN UPDATE: the ANSI clear,
+;; then a complete bordered frame — nothing else ever reaches w_output.
+;; Preservation form: the running binary starts with an empty log
+;; (all_screens Nil = True), so its entire output is screen updates.
+
+(requirement frames_are_screens
+  (goal ((w World)) ((= (all_screens (w_output w)) True))
+    (= (all_screens (w_output (main w))) True)))
