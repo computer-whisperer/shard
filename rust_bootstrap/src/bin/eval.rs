@@ -159,6 +159,11 @@ fn run() -> ExitCode {
 /// World = (World clock); it is each extern's LAST argument, returned bumped by
 /// one (matching the `*_ticks` clock axioms). Covers the eval app's surface —
 /// get_args / read_file / write / exit.
+///
+/// The extern boundary speaks RAW BYTES (issue #2 Phase 3): every `(List Int)`
+/// payload is a byte sequence (each element 0..256), not Unicode codepoints.
+/// The host performs no encoding or decoding — reads are binary-safe, writes
+/// emit the list verbatim (elements masked mod 256, mirroring `bytes_of_list`).
 fn make_handler(prog_args: Vec<String>) -> impl FnMut(&str, &[ast::Expr]) -> Result<ast::Expr, String> {
     use std::io::Write as _;
     move |name: &str, args: &[ast::Expr]| -> Result<ast::Expr, String> {
@@ -171,31 +176,31 @@ fn make_handler(prog_args: Vec<String>) -> impl FnMut(&str, &[ast::Expr]) -> Res
         };
         let w1 = world(clk + 1);
         match name {
-            // the CLI arguments (after the binary name), as (List (List Int)) of
-            // Unicode CODEPOINTS (not bytes — see str_codepoints).
+            // the CLI arguments (after the binary name), as (List (List Int))
+            // of their UTF-8 bytes.
             "get_args" => {
-                let items: Vec<ast::Expr> = prog_args.iter().map(|a| str_codepoints(a)).collect();
+                let items: Vec<ast::Expr> = prog_args.iter().map(|a| byte_list(a.as_bytes())).collect();
                 Ok(ctor("Pair", vec![list_of(items), w1]))
             }
-            // file contents as (Some codepoints), or None on any read error.
-            // UTF-8 is decoded HERE (read_to_string): a non-UTF-8 file is
-            // unreadable (None) by design until the Bytes former lands (#2).
-            "read_file" => match std::fs::read_to_string(string_of_codepoints(&args[0])) {
-                Ok(contents) => Ok(ctor("Pair", vec![ctor("Some", vec![str_codepoints(&contents)]), w1])),
+            // file contents as (Some bytes), or None on any read error.
+            // Binary-safe: the raw bytes, whatever they are — no UTF-8 gate.
+            "read_file" => match std::fs::read(path_of_bytes(&args[0])) {
+                Ok(contents) => Ok(ctor("Pair", vec![ctor("Some", vec![byte_list(&contents)]), w1])),
                 Err(_) => Ok(ctor("Pair", vec![ctor("None", vec![]), w1])),
             },
             "write" => {
-                print!("{}", string_of_codepoints(&args[0]));
-                let _ = std::io::stdout().flush();
+                let out = list_bytes(&args[0]);
+                let mut stdout = std::io::stdout();
+                let _ = stdout.write_all(&out);
+                let _ = stdout.flush();
                 Ok(w1)
             }
-            // persist a codepoint list at a path (encoded back to UTF-8) — the
-            // dual of read_file. (Pair True World)
-            // on success, (Pair False World) on any I/O error. Backs tools that
-            // emit artifacts (tools/prove writes proof sidecars).
+            // persist bytes at a path, verbatim — the dual of read_file.
+            // (Pair True World) on success, (Pair False World) on any I/O
+            // error. Backs tools that emit artifacts (tools/prove writes
+            // proof sidecars).
             "write_file" => {
-                let ok =
-                    std::fs::write(string_of_codepoints(&args[0]), string_of_codepoints(&args[1])).is_ok();
+                let ok = std::fs::write(path_of_bytes(&args[0]), list_bytes(&args[1])).is_ok();
                 Ok(ctor(
                     "Pair",
                     vec![ctor(if ok { "True" } else { "False" }, vec![]), w1],
@@ -221,7 +226,11 @@ fn make_handler(prog_args: Vec<String>) -> impl FnMut(&str, &[ast::Expr]) -> Res
                 Ok(ctor("Pair", vec![opt, w1]))
             }
             "write_line" | "emit" => {
-                println!("{}", string_of_codepoints(&args[0]));
+                let mut out = list_bytes(&args[0]);
+                out.push(b'\n');
+                let mut stdout = std::io::stdout();
+                let _ = stdout.write_all(&out);
+                let _ = stdout.flush();
                 Ok(w1)
             }
             "exit" => {
@@ -251,25 +260,25 @@ fn ctor(name: &str, args: Vec<ast::Expr>) -> ast::Expr {
     ast::Expr::Ctor(name.into(), args)
 }
 
-/// A Rust string as the narrow `(List Int)` of its char codepoints.
-fn str_codepoints(s: &str) -> ast::Expr {
+/// A byte slice as the narrow `(List Int)` of its bytes.
+fn byte_list(bytes: &[u8]) -> ast::Expr {
     let mut acc = ctor("Nil", vec![]);
-    for ch in s.chars().rev() {
-        acc = ctor("Cons", vec![ast::Expr::IntLit((ch as u32).into()), acc]);
+    for b in bytes.iter().rev() {
+        acc = ctor("Cons", vec![ast::Expr::IntLit((*b).into()), acc]);
     }
     acc
 }
 
-/// A narrow `(List Int)` of codepoints back to a Rust string.
-fn string_of_codepoints(e: &ast::Expr) -> String {
-    let mut out = String::new();
+/// A narrow `(List Int)` back to raw bytes; elements are masked mod 256
+/// (`bytes_of_list` semantics — the wire never widens past a byte).
+fn list_bytes(e: &ast::Expr) -> Vec<u8> {
+    let mut out = Vec::new();
     let mut cur = e;
     while let ast::Expr::Ctor(n, a) = cur {
         if n == "Cons" && a.len() == 2 {
             if let ast::Expr::IntLit(c) = &a[0] {
-                if let Some(ch) = c.to_u32().and_then(char::from_u32) {
-                    out.push(ch);
-                }
+                // two's-complement BitAnd == mod 256 for negatives as well
+                out.push((c & &ast::IntLit::from(255)).to_u8().unwrap_or(0));
             }
             cur = &a[1];
         } else {
@@ -277,6 +286,12 @@ fn string_of_codepoints(e: &ast::Expr) -> String {
         }
     }
     out
+}
+
+/// A byte-list path as an OS path (raw bytes on unix — binary-safe).
+fn path_of_bytes(e: &ast::Expr) -> std::path::PathBuf {
+    use std::os::unix::ffi::OsStrExt as _;
+    std::ffi::OsStr::from_bytes(&list_bytes(e)).into()
 }
 
 /// Build the narrow list `(Cons x0 (Cons x1 … Nil))` from items.

@@ -234,20 +234,24 @@ in normal form). The evaluator is call-by-value.
 - **Symbol literal**: `(quote foo)`. Parses to `SymLit`. The unquoted
   form `foo` is treated as a variable reference, not a symbol value.
 - **String literal**: `"x+y"`. Sugar for the `(List Int)` of its
-  Unicode-scalar codepoints — `(Cons 120 (Cons 43 (Cons 121 Nil)))`.
-  `String ≡ (List Int)`; there is no distinct string type, so the
-  `std/list` lemma library applies to strings unchanged. Valid only in
-  expression position (match against strings by destructuring Cons/Nil).
+  **UTF-8 bytes** — `(Cons 120 (Cons 43 (Cons 121 Nil)))` (for ASCII,
+  bytes and codepoints coincide). `String ≡ (List Int)`; there is no
+  distinct string type, so the `std/list` lemma library applies to
+  strings unchanged. Valid only in expression position (match against
+  strings by destructuring Cons/Nil).
 
-  **CAVEAT — `(List Int)` is three different things today.** String
-  literals and the text externs (`get_args`/`read_file`/`write`/
-  `write_file`/`write_line`) speak Unicode **codepoints** (the host
-  UTF-8-decodes on read and re-encodes on write; a non-UTF-8 file reads
-  as `None`); `read_key` returns a raw **byte**; and the compiled
-  chain's `rt.h` carries **octets**. Nothing in the types distinguishes
-  them. The `Bytes` former (issue #2) is the typed fix; until the
-  extern flip lands there, assume codepoints everywhere except
-  `read_key`.
+  **One meaning end to end (issue #2 Phase 3).** Text-shaped
+  `(List Int)` values are **byte sequences** everywhere: string
+  literals, the extern wire (`get_args`/`read_file`/`write`/
+  `write_file`/`write_line` — the host performs no encoding or
+  decoding; reads are binary-safe, writes emit the list verbatim with
+  elements masked mod 256 like `bytes_of_list`), `read_key`'s single
+  byte, the `sym_of_chars`/`chars_of_sym` bridge (a symbol's name as
+  its UTF-8 bytes), and the compiled chain's `rt.h`. Per-character
+  work on non-ASCII text needs an explicit UTF-8 decode in-language;
+  the packed `Bytes` former (§3) is the typed companion, and the
+  type-level extern signatures move to `Bytes` with the
+  compiled-chain slice.
 
 ### 4.2 Variables
 
@@ -657,7 +661,7 @@ terms, measures), the ordinary object-language literal sugars apply:
 |----------------|---------------------------------------------|
 | `'foo`         | `(quote foo)` → `SymLit foo`                 |
 | `(list a b c)` | `(Cons a (Cons b (Cons c Nil)))`             |
-| `"x+y"`        | `(list 120 43 121)` — codepoints; `String ≡ (List Int)` |
+| `"x+y"`        | `(list 120 43 121)` — UTF-8 bytes; `String ≡ (List Int)` |
 
 The retired reflected surface had additional `(ty …)`/`(tv …)` sugars
 for building reflected `Type` *values*; the proof language no longer
@@ -772,7 +776,8 @@ x86) — see `docs/OVERVIEW.md`.
   system is not specified in this doc.
 - No mutability of any kind.
 - No *distinct* string type: string literals `"…"` exist as sugar for
-  `(List Int)` of codepoints (§4.1, §10), not as an opaque primitive.
+  the `(List Int)` of their UTF-8 bytes (§4.1, §10), not as an opaque
+  primitive.
   (The `Bytes` former (§3) is the packed *byte*-sequence type — the
   text type over it is future work; issue #2.)
 - No floats.

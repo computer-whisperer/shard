@@ -948,15 +948,22 @@ mod tests {
                 conform(&m, "sym_eq", &args);
             }
             conform(&m, "chars_of_sym", &[ast::Expr::SymLit(a.into())]);
-            // sym_of_chars over the symbol's own codepoints (round-trip)
-            // and a couple of fixed lists.
-            let cps: Vec<ast::Expr> = a
-                .chars()
-                .map(|c| ast::Expr::IntLit((c as u32).into()))
+            // sym_of_chars over the symbol's own UTF-8 bytes (round-trip).
+            let bs: Vec<ast::Expr> = a
+                .bytes()
+                .map(|b| ast::Expr::IntLit(b.into()))
                 .collect();
-            conform(&m, "sym_of_chars", &[expr_spine(cps)]);
+            conform(&m, "sym_of_chars", &[expr_spine(bs)]);
         }
         conform(&m, "sym_of_chars", &[expr_spine(vec![])]);
+        // out-of-domain points must be None/stuck on BOTH sides, not a
+        // crash on one: a non-byte element, a bare continuation byte, an
+        // encoded surrogate (ED A0 80 = U+D800), and a truncated lead.
+        for bad in [vec![955], vec![0xFF], vec![0xED, 0xA0, 0x80], vec![0xC2]] {
+            let es: Vec<ast::Expr> =
+                bad.into_iter().map(|b: i64| ast::Expr::IntLit(b.into())).collect();
+            conform(&m, "sym_of_chars", &[expr_spine(es)]);
+        }
     }
 
     /// gen_fresh is in both tables (the hosted checker opens binders

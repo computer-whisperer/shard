@@ -76,7 +76,10 @@ pub fn try_apply(name: &str, args: &[Expr]) -> Option<Expr> {
         // Symbol ↔ characters. The bridge a self-hosted parser needs:
         // text is made of symbols, but `Symbol` is otherwise opaque
         // (only `quote` literals and `sym_eq`). Both total and pure.
-        //   sym_of_chars : (List Int) -> Symbol   (decode codepoints)
+        // The char list is the name's UTF-8 BYTES (issue #2 Phase 3 —
+        // the same representation "…" literals and the extern wire use,
+        // and what rt.h's compiled bridge always spoke).
+        //   sym_of_chars : (List Int) -> Symbol   (UTF-8 bytes in)
         //   chars_of_sym : Symbol     -> (List Int) (the inverse)
         ("sym_of_chars", [list])     => decode_char_list(list).map(SymLit),
         ("chars_of_sym", [SymLit(s)]) => Some(encode_char_list(s)),
@@ -99,17 +102,20 @@ fn shift_amount(b: &Int) -> Option<u64> {
 }
 
 /// Decode an object `(List Int)` value — a `Cons`/`Nil` spine of
-/// `IntLit` codepoints — into a String. None if the spine is malformed
-/// or a codepoint is not a valid Unicode scalar.
+/// `IntLit` UTF-8 bytes — into a String. None if the spine is malformed,
+/// an element is outside 0..256, or the bytes are not valid UTF-8
+/// (symbol names stay valid host strings; the call stays stuck).
 fn decode_char_list(e: &Expr) -> Option<String> {
-    let mut s = String::new();
+    let mut bytes = Vec::new();
     let mut cur = e;
     loop {
         match cur {
-            Expr::Ctor(n, a) if n == "Nil" && a.is_empty() => return Some(s),
+            Expr::Ctor(n, a) if n == "Nil" && a.is_empty() => {
+                return String::from_utf8(bytes).ok();
+            }
             Expr::Ctor(n, a) if n == "Cons" && a.len() == 2 => {
                 match &a[0] {
-                    Expr::IntLit(cp) => s.push(char::from_u32(cp.to_u32()?)?),
+                    Expr::IntLit(cp) => bytes.push(cp.to_u8()?),
                     _ => return None,
                 }
                 cur = &a[1];
@@ -119,12 +125,12 @@ fn decode_char_list(e: &Expr) -> Option<String> {
     }
 }
 
-/// Encode a symbol name as the object `(List Int)` of its Unicode-scalar
-/// codepoints — the same representation a `"…"` string literal lowers to.
+/// Encode a symbol name as the object `(List Int)` of its UTF-8 bytes —
+/// the same representation a `"…"` string literal lowers to.
 fn encode_char_list(s: &str) -> Expr {
     let mut acc = Expr::Ctor("Nil".into(), Vec::new());
-    for c in s.chars().rev() {
-        acc = Expr::Ctor("Cons".into(), vec![Expr::IntLit((c as u32).into()), acc]);
+    for b in s.bytes().rev() {
+        acc = Expr::Ctor("Cons".into(), vec![Expr::IntLit(b.into()), acc]);
     }
     acc
 }

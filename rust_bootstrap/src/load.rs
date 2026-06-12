@@ -442,15 +442,17 @@ fn load_expr(v: &Value, ctx: &mut LoadCtx, ctors: &HashSet<Symbol>) -> Result<Ex
         }
         return Ok(Expr::FVar(sym.to_string()));
     }
-    // String literal: "x+y" → (Cons 120 (Cons 43 (Cons 121 Nil))), a list
-    // of Unicode-scalar codepoints. String ≡ (List Int) (docs/LANGUAGE.md),
-    // so the std/list lemma library applies to strings unchanged. Checked
+    // String literal: "x+y" → (Cons 120 (Cons 43 (Cons 121 Nil))), the list
+    // of the string's UTF-8 BYTES (issue #2 Phase 3 — one meaning end to
+    // end: literals, the extern wire, and Bytes payloads all speak bytes).
+    // String ≡ (List Int) (docs/LANGUAGE.md), so the std/list lemma library
+    // applies to strings unchanged; ASCII literals are unaffected. Checked
     // after symbols so it cannot shadow identifier resolution; valid only
     // in expression position (patterns over strings destructure Cons/Nil).
     if let Some(s) = v.as_str() {
         let mut acc = Expr::Ctor("Nil".into(), Vec::new());
-        for c in s.chars().rev() {
-            acc = Expr::Ctor("Cons".into(), vec![Expr::IntLit((c as u32).into()), acc]);
+        for b in s.bytes().rev() {
+            acc = Expr::Ctor("Cons".into(), vec![Expr::IntLit(b.into()), acc]);
         }
         return Ok(acc);
     }

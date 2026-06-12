@@ -265,7 +265,7 @@
     ;; Two-Symbol primitives.
     ((Cons (SymLit a) (Cons (SymLit b) Nil))
      (if (sym_eq f (quote sym_eq)) (Some (bool_as_expr (sym_eq a b))) None))
-    ;; One-Symbol primitive: chars_of_sym — the symbol's codepoints, lifted
+    ;; One-Symbol primitive: chars_of_sym — the name's UTF-8 bytes, lifted
     ;; back into a reduced object-list Expr. Needed so APPS run on this reducer
     ;; (eval run check.shard, …) can render Symbol names; the native reader's
     ;; own output never contains it (see the note below), but a hosted program
@@ -274,13 +274,17 @@
      (if (sym_eq f (quote chars_of_sym))
        (Some (intlist_to_expr (chars_of_sym s)))
        None))
-    ;; One general single-arg: sym_of_chars ((List Int) -> Symbol). Decode the
-    ;; object-list argument to a native (List Int), then the native primitive
-    ;; builds the Symbol. The reader uses this to intern identifiers, so a
-    ;; checker hosted on this reducer (check.shard) needs it dispatched.
+    ;; One general single-arg: sym_of_chars ((List Int) -> Symbol). VALIDATING
+    ;; decode (bp_read + utf8_ok): the name's UTF-8 bytes, ground and in byte
+    ;; range, else the call stays STUCK — matching the native prim's None
+    ;; domain exactly (an unguarded level-1 call would crash this reducer
+    ;; where the native side is merely stuck). The reader uses this to intern
+    ;; identifiers, so a checker hosted on this reducer needs it dispatched.
     ((Cons le Nil)
      (if (sym_eq f (quote sym_of_chars))
-       (Some (SymLit (sym_of_chars (expr_to_intlist le))))
+       (match (bp_read le)
+         (None None)
+         ((Some xs) (if (utf8_ok xs) (Some (SymLit (sym_of_chars xs))) None)))
      ;; bytes_of_list ((List Int) -> Bytes): the only Bytes maker. The
      ;; VALIDATING decode (bp_read_ints) is load-bearing — a symbolic
      ;; element must leave the call stuck, never truncate.
@@ -444,6 +448,46 @@
   (match (bp_read_ints e)
     (None None)
     ((Some xs) (if (bp_in_range xs) (Some xs) None))))
+
+;; UTF-8 validity over a byte list (RFC 3629: rejects overlong forms,
+;; surrogates, values past U+10FFFF — exactly the host's from_utf8).
+;; The sym_of_chars domain guard: the native prim refuses invalid UTF-8
+;; (symbol names stay valid host strings), so the object arm must refuse
+;; the SAME inputs — stuck, never a level-1 crash. Str (#2) will reuse it.
+(fn utf8_cont ((xs (List Int)) (n Int)) (Option (List Int))
+  (if (le n 0) (Some xs)
+    (match xs
+      (Nil None)
+      ((Cons b t)
+       (if (le 128 b) (if (le b 191) (utf8_cont t (- n 1)) None) None)))))
+
+;; a lead byte whose second byte has a NARROWED range (E0/ED/F0/F4):
+;; check the second byte's window, then n more plain continuations.
+(fn utf8_narrow ((xs (List Int)) (lo Int) (hi Int) (n Int))
+  (Option (List Int))
+  (match xs
+    (Nil None)
+    ((Cons c r)
+     (if (le lo c) (if (le c hi) (utf8_cont r n) None) None))))
+
+(fn utf8_ok ((xs (List Int))) Bool
+  (match xs
+    (Nil True)
+    ((Cons b t)
+     (match
+       (if (le b 127) (Some t)  ; ascii
+       (if (le b 193) None  ; bare continuation or overlong C0/C1
+       (if (le b 223) (utf8_cont t 1)  ; C2..DF
+       (if (int_eq b 224) (utf8_narrow t 160 191 1)  ; E0: no overlong
+       (if (le b 236) (utf8_cont t 2)  ; E1..EC
+       (if (int_eq b 237) (utf8_narrow t 128 159 1)  ; ED: no surrogates
+       (if (le b 239) (utf8_cont t 2)  ; EE..EF
+       (if (int_eq b 240) (utf8_narrow t 144 191 2)  ; F0: no overlong
+       (if (le b 243) (utf8_cont t 3)  ; F1..F3
+       (if (int_eq b 244) (utf8_narrow t 128 143 2)  ; F4: cap U+10FFFF
+       None))))))))))  ; F5..FF invalid
+       (None False)
+       ((Some r) (utf8_ok r))))))
 
 (fn bp_make ((xs (List Int))) (Option Expr)
   (Some (Ctor (qn (quote Bytes)) (Cons (intlist_to_expr xs) Nil))))
