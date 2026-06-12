@@ -205,6 +205,16 @@ in normal form). The evaluator is call-by-value.
   `std/list` lemma library applies to strings unchanged. Valid only in
   expression position (match against strings by destructuring Cons/Nil).
 
+  **CAVEAT — `(List Int)` is three different things today.** String
+  literals and the text externs (`get_args`/`read_file`/`write`/
+  `write_file`/`write_line`) speak Unicode **codepoints** (the host
+  UTF-8-decodes on read and re-encodes on write; a non-UTF-8 file reads
+  as `None`); `read_key` returns a raw **byte**; and the compiled
+  chain's `rt.h` carries **octets**. Nothing in the types distinguishes
+  them. The `Bytes` former (issue #2) is the typed fix; until the
+  extern flip lands there, assume codepoints everywhere except
+  `read_key`.
+
 ### 4.2 Variables
 
 A bare identifier resolves, in order:

@@ -171,27 +171,31 @@ fn make_handler(prog_args: Vec<String>) -> impl FnMut(&str, &[ast::Expr]) -> Res
         };
         let w1 = world(clk + 1);
         match name {
-            // the CLI arguments (after the binary name), as (List (List Int)).
+            // the CLI arguments (after the binary name), as (List (List Int)) of
+            // Unicode CODEPOINTS (not bytes — see str_codepoints).
             "get_args" => {
-                let items: Vec<ast::Expr> = prog_args.iter().map(|a| str_bytes(a)).collect();
+                let items: Vec<ast::Expr> = prog_args.iter().map(|a| str_codepoints(a)).collect();
                 Ok(ctor("Pair", vec![list_of(items), w1]))
             }
-            // file contents as (Some bytes), or None on any read error.
-            "read_file" => match std::fs::read_to_string(decode_str(&args[0])) {
-                Ok(contents) => Ok(ctor("Pair", vec![ctor("Some", vec![str_bytes(&contents)]), w1])),
+            // file contents as (Some codepoints), or None on any read error.
+            // UTF-8 is decoded HERE (read_to_string): a non-UTF-8 file is
+            // unreadable (None) by design until the Bytes former lands (#2).
+            "read_file" => match std::fs::read_to_string(string_of_codepoints(&args[0])) {
+                Ok(contents) => Ok(ctor("Pair", vec![ctor("Some", vec![str_codepoints(&contents)]), w1])),
                 Err(_) => Ok(ctor("Pair", vec![ctor("None", vec![]), w1])),
             },
             "write" => {
-                print!("{}", decode_str(&args[0]));
+                print!("{}", string_of_codepoints(&args[0]));
                 let _ = std::io::stdout().flush();
                 Ok(w1)
             }
-            // persist bytes at a path — the dual of read_file. (Pair True World)
+            // persist a codepoint list at a path (encoded back to UTF-8) — the
+            // dual of read_file. (Pair True World)
             // on success, (Pair False World) on any I/O error. Backs tools that
             // emit artifacts (tools/prove writes proof sidecars).
             "write_file" => {
                 let ok =
-                    std::fs::write(decode_str(&args[0]), decode_str(&args[1])).is_ok();
+                    std::fs::write(string_of_codepoints(&args[0]), string_of_codepoints(&args[1])).is_ok();
                 Ok(ctor(
                     "Pair",
                     vec![ctor(if ok { "True" } else { "False" }, vec![]), w1],
@@ -217,7 +221,7 @@ fn make_handler(prog_args: Vec<String>) -> impl FnMut(&str, &[ast::Expr]) -> Res
                 Ok(ctor("Pair", vec![opt, w1]))
             }
             "write_line" | "emit" => {
-                println!("{}", decode_str(&args[0]));
+                println!("{}", string_of_codepoints(&args[0]));
                 Ok(w1)
             }
             "exit" => {
@@ -248,7 +252,7 @@ fn ctor(name: &str, args: Vec<ast::Expr>) -> ast::Expr {
 }
 
 /// A Rust string as the narrow `(List Int)` of its char codepoints.
-fn str_bytes(s: &str) -> ast::Expr {
+fn str_codepoints(s: &str) -> ast::Expr {
     let mut acc = ctor("Nil", vec![]);
     for ch in s.chars().rev() {
         acc = ctor("Cons", vec![ast::Expr::IntLit((ch as u32).into()), acc]);
@@ -257,7 +261,7 @@ fn str_bytes(s: &str) -> ast::Expr {
 }
 
 /// A narrow `(List Int)` of codepoints back to a Rust string.
-fn decode_str(e: &ast::Expr) -> String {
+fn string_of_codepoints(e: &ast::Expr) -> String {
     let mut out = String::new();
     let mut cur = e;
     while let ast::Expr::Ctor(n, a) = cur {
