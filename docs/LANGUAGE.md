@@ -217,8 +217,8 @@ All bytes ops are **total**:
 These also live only in `kernel/reduce.shard`'s table — one
 definition for the proof reducer and the hosted evaluator. Ground
 calls reduce (so `compute` works); symbolic arguments are reasoned
-about via the list model (the `(bytes-fact …)` premise step is the
-planned proof surface — issue #2 phase 2).
+about via the list model and the `(bytes-fact …)` premise step
+(§10.3), which injects prim-level `blen`/`bidx` facts.
 
 
 ## 4. Expressions
@@ -561,6 +561,7 @@ parameter):
 | `(have NAME EQ PROOF₁ PROOF₂)`               | `HaveN`     | named cut: as above, and `PROOF₂` may cite the fact as `(premise NAME)` — resolved to positional at load time, so inserting earlier haves can't break later citations |
 | `(fin-split VAR LO HI (CASE…))`              | `FinSplit`  | bounded-Int enumeration: `LO`/`HI` cite range premises for `VAR`; one `(case INT PROOF)` per value |
 | `(word-fact TERM PROOF)`                     | `WordFact`  | inject `TERM`'s word-semantic facts (defining equation over the Int image at the type-checked width, plus value ranges) as premises; kernel-justified — no obligation. Unsigned terms read via `uval`, signed via `sval` (shifted-mod images for wrap arith; `wnot` linear; bitwise/shift images at literal amounts); concrete width required except for the comparison images |
+| `(bytes-fact TERM PROOF)`                    | `BytesFact` | inject `TERM`'s bytes-semantic facts as premises; kernel-justified — no obligation. By head shape: `(bcat a b)` the `blen` sum equation + non-negativity ranges; `(bslice b i j)` `0 ≤ blen e ≤ blen b`; `(bidx b i)` `0 ≤ e ≤ 255` (unconditional — out-of-range reads are 0); any other Bytes term `0 ≤ blen e`. Prim-level only; the list-model bridge is std territory |
 | `(div-facts TERM D Q PROOF)`                 | `DivFacts`  | inject the Euclidean triple for `TERM` at literal divisor `D` (`n = D·Q + mod n D`, mod ranges), with quotient `Q` a fresh ∀-param — `fin-split Q` then supplies the integrality step rational farkas cannot (see examples/word_facts.shard for the mod-elimination idiom) |
 | `(rewrite-with EQREF DIR SIDE (INST…) (PROOF…) PROOF)` | `RewriteWith` | rewrite by a cited equation whose own premises are discharged by the sub-`PROOF`s, then continue |
 | `(absurd EQREF)`                             | `Absurd`    | close the goal from a contradictory hypothesis                 |
