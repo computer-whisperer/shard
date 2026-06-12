@@ -188,6 +188,38 @@ These primitives are implemented once, in `kernel/reduce.shard`'s
 table (not natively), so the proof reducer and the hosted evaluator
 share one definition by construction.
 
+### Bytes — packed byte sequences
+
+`Bytes` is a built-in 0-ary type: a packed sequence of octets. Like
+`Word` it has **no typedef**: a value is `(Ctor 'Bytes (L))` with `L`
+the literal byte list (each element in `[0, 256)`), values are
+produced only by the bytes primitives, the type checker enforces
+canonicity on any literal reaching a goal, and induction/case-on over
+it is impossible. **The payload is the logical model**: proofs reason
+about `(list_of_bytes b)` with the ordinary `std/list` vocabulary;
+packing is an engine concern (the compiled chain may carry a flat
+buffer), never a semantic one.
+
+All bytes ops are **total**:
+
+- `(bytes_of_list L)` — the only maker: `(List Int) → Bytes`, each
+  element masked euclidean mod 256. A list with a symbolic element
+  stays **stuck** (the decode validates; it never truncates).
+- `(list_of_bytes b)` — the payload, exactly: `Bytes → (List Int)`.
+  `(list_of_bytes (bytes_of_list L))` = `L` element-wise mod 256.
+- `(blen b)` — the length, as an `Int`.
+- `(bidx b i)` — element `i`; **0 outside `[0, blen b)`** (the
+  `std/mem` total-read convention).
+- `(bcat a b)` — concatenation (append on the model).
+- `(bslice b i j)` — the elements in `[max 0 i, min (blen b) j)`;
+  the window clamps, an inverted window is empty.
+
+These also live only in `kernel/reduce.shard`'s table — one
+definition for the proof reducer and the hosted evaluator. Ground
+calls reduce (so `compute` works); symbolic arguments are reasoned
+about via the list model (the `(bytes-fact …)` premise step is the
+planned proof surface — issue #2 phase 2).
+
 
 ## 4. Expressions
 
@@ -386,6 +418,13 @@ them ("stuck-and-intercept" — see REVISIT).
 
 `gen_fresh` is the lone effectful primitive [REVISIT — Fresh-symbol
 generation as an effectful primitive].
+
+The word primitives (`wadd` …, §3 "Words") and the bytes primitives
+(`blen bidx bcat bslice bytes_of_list list_of_bytes`, §3 "Bytes")
+are **not** in the native table: they live only in
+`kernel/reduce.shard`'s object table (a native-path call fail-stops
+as UnknownCall, never a second implementation — the conformance
+sweep in `rust_bootstrap/src/lib.rs` pins this).
 
 
 ## 9. Stdlib types
@@ -731,6 +770,8 @@ x86) — see `docs/OVERVIEW.md`.
 - No mutability of any kind.
 - No *distinct* string type: string literals `"…"` exist as sugar for
   `(List Int)` of codepoints (§4.1, §10), not as an opaque primitive.
+  (The `Bytes` former (§3) is the packed *byte*-sequence type — the
+  text type over it is future work; issue #2.)
 - No floats.
 
 These are constraints the narrow form imposes; the full language

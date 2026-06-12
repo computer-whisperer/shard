@@ -806,6 +806,16 @@ mod tests {
     const OBJECT_ONLY_WORD_INT: &[&str] = &["wshl", "ushr", "sshr"];
     const OBJECT_ONLY_WORD1: &[&str] = &["wneg", "wnot", "uval", "sval", "wbits", "wwidth"];
 
+    /// The bytes primitives (same object-only discipline as words —
+    /// the canonical value is (Ctor 'Bytes (L)), reduce.shard bp_*).
+    /// Shapes: one-Bytes, two-Bytes, Bytes-and-Int, Bytes-Int-Int,
+    /// one-(List Int).
+    const OBJECT_ONLY_BYTES1: &[&str] = &["blen", "list_of_bytes"];
+    const OBJECT_ONLY_BYTES2: &[&str] = &["bcat"];
+    const OBJECT_ONLY_BYTES_INT: &[&str] = &["bidx"];
+    const OBJECT_ONLY_BYTES_INT_INT: &[&str] = &["bslice"];
+    const OBJECT_ONLY_INTLIST1: &[&str] = &["bytes_of_list"];
+
     /// The Int value matrix: zero, units, small values, sign mixes,
     /// shift-range edges (63/64/65, negative), i64 boundaries, and
     /// past-i64 BigInts (the Farkas-multiplier shape).
@@ -1010,6 +1020,52 @@ mod tests {
         }
         for name in OBJECT_ONLY_WORD1 {
             assert_object_only(name, &[word(8, 200)]);
+        }
+    }
+
+    /// Bytes primitives: same deliberate asymmetry as words — object
+    /// table only, native fail-stops. Also pins the TOTAL profiles
+    /// (out-of-range index, clamped slice window, masked maker).
+    #[test]
+    fn prim_conformance_bytes_prims_native_ignorant() {
+        let m = load_kernel();
+        let intlist = |xs: &[i64]| {
+            expr_spine(xs.iter().map(|&n| ast::Expr::IntLit(n.into())).collect())
+        };
+        let bytes = |xs: &[i64]| nctor("Bytes", vec![intlist(xs)]);
+        let int = |n: i64| ast::Expr::IntLit(n.into());
+        let assert_object_only = |name: &str, args: &[ast::Expr]| {
+            assert_eq!(
+                prim::try_apply(name, args),
+                None,
+                "native table learned the object-only prim {name}"
+            );
+            let object = object_apply(&m, name, args)
+                .unwrap_or_else(|e| panic!("object {name} crashed: {e}"));
+            assert!(
+                matches!(&object, ast::Expr::Ctor(n, _) if n == "Some"),
+                "object table dropped {name}: {object:?}"
+            );
+        };
+        for name in OBJECT_ONLY_BYTES1 {
+            assert_object_only(name, &[bytes(&[10, 20])]);
+            assert_object_only(name, &[bytes(&[])]); // empty is canonical too
+        }
+        for name in OBJECT_ONLY_BYTES2 {
+            assert_object_only(name, &[bytes(&[1]), bytes(&[2, 3])]);
+        }
+        for name in OBJECT_ONLY_BYTES_INT {
+            assert_object_only(name, &[bytes(&[10, 20]), int(1)]);
+            assert_object_only(name, &[bytes(&[10, 20]), int(99)]); // total: oob reads 0
+            assert_object_only(name, &[bytes(&[10, 20]), int(-2)]);
+        }
+        for name in OBJECT_ONLY_BYTES_INT_INT {
+            assert_object_only(name, &[bytes(&[7, 8, 9]), int(1), int(3)]);
+            assert_object_only(name, &[bytes(&[7, 8, 9]), int(-5), int(99)]); // clamped, total
+            assert_object_only(name, &[bytes(&[7, 8, 9]), int(2), int(1)]); // inverted → empty
+        }
+        for name in OBJECT_ONLY_INTLIST1 {
+            assert_object_only(name, &[intlist(&[300, -1])]); // masked euclidean mod 256, total
         }
     }
 }

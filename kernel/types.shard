@@ -340,6 +340,44 @@
        (TcErr "Word literal width out of range (1..64)")))
     (_ (TcErr "non-canonical Word literal (fields must be int literals)"))))
 
+;; ---------------------------------------------------------------------------
+;; The built-in Bytes type — packed byte sequences. Like Word it has NO
+;; typedef: values (Ctor 'Bytes (L)) are made only by the bytes
+;; primitives (reduce.shard bp_*), so induction/case-on over it is
+;; structurally impossible, and the ctor rule below makes canonicity
+;; (a literal byte list, each element in 0..255) a CHECKED property of
+;; any Bytes literal that appears in a goal. The payload IS the logical
+;; model: (list_of_bytes b) projects it. docs/LANGUAGE.md "Bytes".
+;; ---------------------------------------------------------------------------
+
+(fn tc_t_bytes () Type (TCon (qn (quote Bytes)) Nil))
+
+;; the payload must be a LITERAL canonical byte list: a ground Cons/Nil
+;; chain of IntLits, each in [0, 256).
+(fn tc_bytes_payload_ok ((e Expr)) Bool
+  (match e
+    ((Ctor c args)
+     (match args
+       (Nil (sym_eq (qn_name c) (quote Nil)))
+       ((Cons h (Cons t Nil))
+        (if (sym_eq (qn_name c) (quote Cons))
+          (match h
+            ((IntLit n)
+             (if (le 0 n) (if (lt n 256) (tc_bytes_payload_ok t) False) False))
+            (_ False))
+          False))
+       (_ False)))
+    (_ False)))
+
+(fn tc_bytes_lit ((tc Tc) (args (List Expr))) TcRes
+  (match args
+    ((Cons p Nil)
+     (if (tc_bytes_payload_ok p)
+       (TcOk tc (tc_t_bytes))
+       (TcErr
+         "non-canonical Bytes literal (payload must be a literal byte list, each element in 0..255)")))
+    (_ (TcErr "non-canonical Bytes literal (expects exactly one payload list)"))))
+
 ;; (uwrap K e) / (swrap K e): the only term-level bridge from a width
 ;; to the type index — K must BE an integer literal (a contained
 ;; dependent-typing rule), giving (Word K Unsigned/Signed).
@@ -397,6 +435,19 @@
       (Some (Pair (Cons (tc_t_chars) Nil) (tc_t_sym)))
     (if (sym_eq f (quote chars_of_sym))
       (Some (Pair (Cons (tc_t_sym) Nil) (tc_t_chars)))
+    ;; bytes primitives — the packed-sequence former. The list side of
+    ;; the bridge is (List Int) = tc_t_chars.
+    (if (sym_eq f (quote blen)) (Some (Pair (Cons (tc_t_bytes) Nil) (tc_t_int)))
+    (if (sym_eq f (quote bidx))
+      (Some (Pair (list (tc_t_bytes) (tc_t_int)) (tc_t_int)))
+    (if (sym_eq f (quote bcat))
+      (Some (Pair (list (tc_t_bytes) (tc_t_bytes)) (tc_t_bytes)))
+    (if (sym_eq f (quote bslice))
+      (Some (Pair (list (tc_t_bytes) (tc_t_int) (tc_t_int)) (tc_t_bytes)))
+    (if (sym_eq f (quote bytes_of_list))
+      (Some (Pair (Cons (tc_t_chars) Nil) (tc_t_bytes)))
+    (if (sym_eq f (quote list_of_bytes))
+      (Some (Pair (Cons (tc_t_bytes) Nil) (tc_t_chars)))
       ;; word primitives. Signedness is in the NAME where semantics
       ;; differ (u*/s*), in the S index where they coincide (bits are
       ;; bits): wadd on (Word 8 Signed) IS i8 addition.
@@ -433,7 +484,7 @@
         (if (sym_eq f (quote sval)) (Some (Pair (Cons (tc_ws) Nil) (tc_t_int)))
         (if (tc_sym_in f (list (quote wbits) (quote wwidth)))
           (Some (Pair (Cons (tc_wv) Nil) (tc_t_int)))
-          None))))))))))))))))))))
+          None))))))))))))))))))))))))))
 
 ;; a Call head's signature: user fn first (mirrors the evaluator's dispatch
 ;; order), then extern/sig, then the native primitive table.
@@ -470,6 +521,7 @@
        (None (TcErr (tc_app "unbound variable: " (chars_of_sym x))))))
     ((Ctor c args)
      (if (sym_eq (qn_name c) (quote Word)) (tc_word_lit tc args)
+     (if (sym_eq (qn_name c) (quote Bytes)) (tc_bytes_lit tc args)
      (match (tc_find_ctor c (tc_tds m))
        (None (TcErr (tc_app "unknown constructor: " (chars_of_sym (qn_name c)))))
        ((Some (Pair (TypeDef tname tparams _) (CtorDef _ fields)))
@@ -486,7 +538,7 @@
                c
                1)
              ((TcsErr msg) (TcErr msg))
-             ((TcsOk tc2) (TcOk tc2 (TCon tname metas))))))))))
+             ((TcsOk tc2) (TcOk tc2 (TCon tname metas)))))))))))
     ((Call f args)
      (match (tc_fn_sig f m)
        ;; not a fn/extern/prim: the wrap rules (width literal → type
@@ -678,7 +730,9 @@
 ;; ---------------------------------------------------------------------------
 
 (fn tc_is_prim_ty ((c QName)) Bool
-  (if (sym_eq (qn_name c) (quote Int)) True (sym_eq (qn_name c) (quote Symbol))))
+  (if (sym_eq (qn_name c) (quote Int)) True
+  (if (sym_eq (qn_name c) (quote Symbol)) True
+  (sym_eq (qn_name c) (quote Bytes)))))
 
 (fn tc_ty_wf ((m Module) (allowed (List Symbol)) (anytv Bool) (t Type))
   (Option (List Int))

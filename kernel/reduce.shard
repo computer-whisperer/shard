@@ -226,6 +226,42 @@
     ;; One-Word primitives.
     ((Cons (Ctor (QName _ (quote Word)) (Cons (IntLit w) (Cons (IntLit r) Nil))) Nil)
      (wp_unop f w r))
+    ;; Two-Bytes primitive: bcat. A non-canonical payload (symbolic
+    ;; element, malformed spine, out-of-range octet) leaves the call
+    ;; STUCK — unreachable for type-checked source, defensive for raw
+    ;; data (the Word width-mismatch posture).
+    ((Cons
+       (Ctor (QName _ (quote Bytes)) (Cons pa Nil))
+       (Cons (Ctor (QName _ (quote Bytes)) (Cons pb Nil)) Nil))
+     (if (sym_eq f (quote bcat))
+       (match (bp_read pa)
+         (None None)
+         ((Some xs)
+          (match (bp_read pb)
+            (None None)
+            ((Some ys) (bp_make (bp_app xs ys))))))
+       None))
+    ;; Bytes-and-Int primitive: bidx (TOTAL: 0 outside [0, blen)).
+    ((Cons (Ctor (QName _ (quote Bytes)) (Cons p Nil)) (Cons (IntLit i) Nil))
+     (if (sym_eq f (quote bidx))
+       (match (bp_read p)
+         (None None)
+         ((Some xs) (Some (IntLit (bp_nth xs i)))))
+       None))
+    ;; Bytes-Int-Int primitive: bslice (clamped window, TOTAL).
+    ((Cons
+       (Ctor (QName _ (quote Bytes)) (Cons p Nil))
+       (Cons (IntLit i) (Cons (IntLit j) Nil)))
+     (if (sym_eq f (quote bslice))
+       (match (bp_read p)
+         (None None)
+         ((Some xs) (bp_make (bp_slice xs i j))))
+       None))
+    ;; One-Bytes primitives: blen / list_of_bytes.
+    ((Cons (Ctor (QName _ (quote Bytes)) (Cons p Nil)) Nil)
+     (match (bp_read p)
+       (None None)
+       ((Some xs) (bp_unop f xs))))
     ;; Two-Symbol primitives.
     ((Cons (SymLit a) (Cons (SymLit b) Nil))
      (if (sym_eq f (quote sym_eq)) (Some (bool_as_expr (sym_eq a b))) None))
@@ -245,7 +281,14 @@
     ((Cons le Nil)
      (if (sym_eq f (quote sym_of_chars))
        (Some (SymLit (sym_of_chars (expr_to_intlist le))))
-       None))
+     ;; bytes_of_list ((List Int) -> Bytes): the only Bytes maker. The
+     ;; VALIDATING decode (bp_read_ints) is load-bearing — a symbolic
+     ;; element must leave the call stuck, never truncate.
+     (if (sym_eq f (quote bytes_of_list))
+       (match (bp_read_ints le)
+         (None None)
+         ((Some xs) (bp_make (bp_mask xs))))
+       None)))
     ;; No-arg: gen_fresh () -> Symbol (effectful — a process-global counter).
     ;; The checker calls it to open binders with fresh FVars (Induct/Cases/
     ;; sequent entry), so it too must be dispatched for a hosted checker.
@@ -348,6 +391,105 @@
   (if (sym_eq f (quote wbits)) (Some (IntLit r))
   (if (sym_eq f (quote wwidth)) (Some (IntLit w))
   None)))))))
+
+;; ---------------------------------------------------------------------------
+;; Bytes primitives (bp_*): packed byte sequences over the canonical
+;; value (Ctor 'Bytes (L)), L the object-level (List Int) of octets,
+;; each in [0, 256). The payload IS the logical model — list_of_bytes
+;; projects it, bytes_of_list masks into it — so canonicity is
+;; preserved by construction, exactly the Word pattern. Engines may
+;; pack the payload later (rt.h flat buffer); these bodies are the
+;; spec and never depend on the carrier.
+;;
+;; SPEC CONVENTIONS (all ops TOTAL — docs/LANGUAGE.md "Bytes"):
+;;   bytes_of_list L   each element masked: euclidean mod 256
+;;   list_of_bytes b   the payload, exactly
+;;   blen b            payload length
+;;   bidx b i          payload element i; 0 outside [0, blen)
+;;                     (the std/mem total-read convention)
+;;   bcat a b          payload append
+;;   bslice b i j      elements [max 0 i, min (blen b) j) — clamped;
+;;                     empty when the clamped window is empty
+;; ---------------------------------------------------------------------------
+
+;; decode a GROUND proper object list of IntLits to its (List Int).
+;; None on anything else — a stuck/symbolic element must leave the
+;; whole call stuck (expr_to_intlist TRUNCATES on malformed tails, so
+;; it must never gate a prim step; this validating walk does).
+(fn bp_ints_go ((e Expr) (acc (List Int))) (Option (List Int))
+  (match e
+    ((Ctor c args)
+     (match args
+       (Nil (if (sym_eq (qn_name c) (quote Nil)) (Some (intlist_rev acc Nil)) None))
+       ((Cons h (Cons t Nil))
+        (if (sym_eq (qn_name c) (quote Cons))
+          (match h
+            ((IntLit n) (bp_ints_go t (Cons n acc)))
+            (_ None))
+          None))
+       (_ None)))
+    (_ None)))
+
+(fn bp_read_ints ((e Expr)) (Option (List Int)) (bp_ints_go e Nil))
+
+(fn bp_in_range ((xs (List Int))) Bool
+  (match xs
+    (Nil True)
+    ((Cons h t) (if (le 0 h) (if (lt h 256) (bp_in_range t) False) False))))
+
+;; a CANONICAL payload: ground IntLit list, every element in [0, 256).
+;; Width-mismatch-style defense: None (stuck) on a non-canonical ctor —
+;; unreachable for type-checked source, defensive for raw data.
+(fn bp_read ((e Expr)) (Option (List Int))
+  (match (bp_read_ints e)
+    (None None)
+    ((Some xs) (if (bp_in_range xs) (Some xs) None))))
+
+(fn bp_make ((xs (List Int))) (Option Expr)
+  (Some (Ctor (qn (quote Bytes)) (Cons (intlist_to_expr xs) Nil))))
+
+(fn bp_mask ((xs (List Int))) (List Int)
+  (match xs
+    (Nil Nil)
+    ((Cons h t) (Cons (mod h 256) (bp_mask t)))))
+
+(fn bp_len ((xs (List Int))) Int
+  (match xs
+    (Nil 0)
+    ((Cons _ t) (+ 1 (bp_len t)))))
+
+(fn bp_nth ((xs (List Int)) (i Int)) Int
+  (if (lt i 0) 0
+  (match xs
+    (Nil 0)
+    ((Cons h t) (if (int_eq i 0) h (bp_nth t (- i 1)))))))
+
+(fn bp_app ((xs (List Int)) (ys (List Int))) (List Int)
+  (match xs
+    (Nil ys)
+    ((Cons h t) (Cons h (bp_app t ys)))))
+
+(fn bp_drop ((xs (List Int)) (k Int)) (List Int)
+  (if (le k 0) xs
+  (match xs
+    (Nil Nil)
+    ((Cons _ t) (bp_drop t (- k 1))))))
+
+(fn bp_take ((xs (List Int)) (k Int)) (List Int)
+  (if (le k 0) Nil
+  (match xs
+    (Nil Nil)
+    ((Cons h t) (Cons h (bp_take t (- k 1)))))))
+
+(fn bp_slice ((xs (List Int)) (i Int) (j Int)) (List Int)
+  (let ((i0 (if (lt i 0) 0 i)))
+    (bp_take (bp_drop xs i0) (- j i0))))
+
+;; one-Bytes primitives: blen / list_of_bytes.
+(fn bp_unop ((f Symbol) (xs (List Int))) (Option Expr)
+  (if (sym_eq f (quote blen)) (Some (IntLit (bp_len xs)))
+  (if (sym_eq f (quote list_of_bytes)) (Some (intlist_to_expr xs))
+  None)))
 
 (fn step_args_in_call ((m Module) (f QName) (args (List Expr))) (Option Expr)
   (match (step_list m args)

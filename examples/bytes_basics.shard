@@ -1,0 +1,91 @@
+;;; bytes_basics.shard — the Bytes former's GROUND semantics (slice 1 of
+;;; the packed-bytes arc, issue #2: Rust-model runtime, list-model logic).
+;;;
+;;; A Bytes VALUE is (Ctor 'Bytes (L)) with L the literal byte list —
+;;; the payload IS the logical model. Values are made only by
+;;; bytes_of_list (each element masked euclidean mod 256); the other
+;;; primitives are TOTAL: bidx is 0 outside [0, blen) (the std/mem
+;;; total-read convention), bslice clamps its window. Ground calls
+;;; reduce (compute); symbolic arguments stay STUCK — the two FAIL
+;;; pins at the bottom hold those lines (a regression that truncates a
+;;; symbolic list or loosens the type gate flips them to PASS and
+;;; trips the corpus diff).
+;;;
+;;; Expected: 11 passed, 2 failed.
+
+(import "../kernel/stdlib.shard")
+
+;; ---- construction + projection ---------------------------------------------
+
+(claim bytes_round_trip
+  (goal () () (= (list_of_bytes (bytes_of_list (list 104 105))) (list 104 105)))
+  (steps ((compute lhs)) refl))
+
+;; bytes_of_list masks each element: euclidean mod 256.
+(claim bytes_mask_wraps
+  (goal () () (= (list_of_bytes (bytes_of_list (list 300 -1))) (list 44 255)))
+  (steps ((compute lhs)) refl))
+
+;; a string literal is a codepoint list — ASCII text is in byte range,
+;; so the bridge takes it unchanged.
+(claim bytes_of_string_literal
+  (goal () () (= (blen (bytes_of_list "hello")) 5))
+  (steps ((compute lhs)) refl))
+
+;; ---- length / indexing ------------------------------------------------------
+
+(claim bytes_len
+  (goal () () (= (blen (bytes_of_list (list 10 20 30))) 3))
+  (steps ((compute lhs)) refl))
+
+(claim bytes_idx
+  (goal () () (= (bidx (bytes_of_list (list 10 20 30)) 1) 20))
+  (steps ((compute lhs)) refl))
+
+(claim bytes_idx_oob
+  (goal () () (= (bidx (bytes_of_list (list 10 20 30)) 7) 0))
+  (steps ((compute lhs)) refl))
+
+(claim bytes_idx_neg
+  (goal () () (= (bidx (bytes_of_list (list 10 20 30)) -2) 0))
+  (steps ((compute lhs)) refl))
+
+;; ---- concat / slice ---------------------------------------------------------
+
+;; bcat is append on the model.
+(claim bytes_cat
+  (goal () ()
+    (=
+      (list_of_bytes (bcat (bytes_of_list (list 1 2)) (bytes_of_list (list 3))))
+      (list 1 2 3)))
+  (steps ((compute lhs)) refl))
+
+(claim bytes_slice_mid
+  (goal () ()
+    (= (list_of_bytes (bslice (bytes_of_list (list 7 8 9 10)) 1 3)) (list 8 9)))
+  (steps ((compute lhs)) refl))
+
+;; the window clamps to [0, blen] on both ends.
+(claim bytes_slice_clamp
+  (goal () ()
+    (= (list_of_bytes (bslice (bytes_of_list (list 7 8 9)) -5 99)) (list 7 8 9)))
+  (steps ((compute lhs)) refl))
+
+;; an inverted window is empty, not an error.
+(claim bytes_slice_empty
+  (goal () () (= (blen (bslice (bytes_of_list (list 7 8 9)) 2 1)) 0))
+  (steps ((compute lhs)) refl))
+
+;; ---- FAIL pins --------------------------------------------------------------
+
+;; a list with a SYMBOLIC element must leave bytes_of_list stuck — the
+;; validating decode never truncates. compute makes no progress, refl
+;; fails: pinned as FAIL.
+(claim bytes_symbolic_stays_stuck
+  (goal ((x Int)) () (= (blen (bytes_of_list (Cons x Nil))) 1))
+  (steps ((compute lhs)) refl))
+
+;; the type gate: bidx takes Bytes, not Int — pinned as a TYPE failure.
+(claim bytes_type_gate_rejects
+  (goal () () (= (bidx 5 0) 0))
+  (steps ((compute lhs)) refl))
