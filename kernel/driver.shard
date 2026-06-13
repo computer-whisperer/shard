@@ -1930,8 +1930,10 @@
 ;; generator. Two deliberate restrictions keep the check circularity-free:
 ;; proofs are checked against M-MINUS-SCC (the fn's whole SCC removed from
 ;; the module, so the definitions under admission are OPAQUE to their own
-;; termination proofs) and the EMPTY theory (no same-file claims; the
-;; Phase D admission pass runs before any decl). Failure direction is
+;; termination proofs) and the GRANTED theory only (the axioms and
+;; requirements of granted sources — exactly what check mode itself
+;; assumes; never this run's own claims, which are still unchecked when
+;; the admission pass runs). Failure direction is
 ;; sound: a wrongly-generated obligation can only refuse, never admit.
 ;; ===========================================================================
 
@@ -2318,7 +2320,13 @@
 
 ;; None = passed; Some reason = failed.
 (fn mc_check_one
-  ((m Module) (m2 Module) (gctx RCtx) (gname Symbol) (gs SExpr) (ps SExpr))
+  ((m Module)
+   (m2 Module)
+   (th Theory)
+   (gctx RCtx)
+   (gname Symbol)
+   (gs SExpr)
+   (ps SExpr))
   (Option (List Int))
   (match (parse_goal_r m gctx gs)
     (None (Some "could not parse the generated obligation goal"))
@@ -2338,7 +2346,7 @@
                 Nil
                 p0)
               (p
-                (if (check_sequent m2 TheoryEmpty (lift_sequent g) p) None
+                (if (check_sequent m2 th (lift_sequent g) p) None
                 (Some "obligation proof rejected")))))))))))
 
 ;; M with an SCC made opaque: those fns are dropped from the fn list and
@@ -2397,6 +2405,7 @@
 (fn mc_site_pair
   ((m Module)
    (m2 Module)
+   (th Theory)
    (gctx RCtx)
    (fname Symbol)
    (key (List Int))
@@ -2409,13 +2418,21 @@
    (p2 SExpr))
   (Option (List Int))
   (match
-    (mc_check_one m m2 gctx fname (mc_goal_s pForm hyps (quote lt) msr2 msr) p1)
+    (mc_check_one
+      m
+      m2
+      th
+      gctx
+      fname
+      (mc_goal_s pForm hyps (quote lt) msr2 msr)
+      p1)
     ((Some why) (Some (mc_fail_line key i " decrease:" why)))
     (None
       (match
         (mc_check_one
           m
           m2
+          th
           gctx
           fname
           (mc_goal_s pForm hyps (quote le) (SInt 0) msr2)
@@ -2427,6 +2444,7 @@
 (fn mc_check_sites
   ((m Module)
    (m2 Module)
+   (th Theory)
    (gctx RCtx)
    (fname Symbol)
    (key (List Int))
@@ -2479,13 +2497,14 @@
                             ": only one proof left (need decrease + nonneg)"))))
                     ((Cons p2 prest)
                      (match
-                       (mc_site_pair m m2 gctx fname key pForm khyps msr2 msr i
-                         p1 p2)
+                       (mc_site_pair m m2 th gctx fname key pForm khyps msr2 msr
+                         i p1 p2)
                        ((Some bad) (append_int bad (mc_drop_note key ndrop)))
                        (None
                          (mc_check_sites
                            m
                            m2
+                           th
                            gctx
                            fname
                            key
@@ -2506,6 +2525,7 @@
 (fn mc_check_fn
   ((m Module)
    (sccs (List (List QName)))
+   (th Theory)
    (gctx RCtx)
    (modpath (List Symbol))
    (mcl MCl))
@@ -2540,6 +2560,7 @@
                                (mc_check_sites
                                  m
                                  (mc_opaque m (mc_scc_of q sccs))
+                                 th
                                  gctx
                                  name
                                  key
@@ -2555,11 +2576,59 @@
     (Nil acc)
     ((Cons h t) (mc_rev_sites t (Cons h acc)))))
 
+;; ---- granted theory for obligation proofs ----------------------------------
+;; Obligation proofs may cite exactly what check mode itself GRANTS: the
+;; axioms and requirements of GRANTED sources (collect_decls already turns a
+;; granted requirement into an upstream-proven axiom decl). Never this run's
+;; own claims — the admission pass runs before any claim is checked, and a
+;; same-file lemma may depend on the very fn under admission.
+
+(fn mc_gth_decls ((m Module) (gctx RCtx) (ds (List Decl)) (th Theory)) Theory
+  (match ds
+    (Nil th)
+    ((Cons d rest)
+     (match d
+       ((DAxiom a)
+        (match (parse_goal_r m gctx (ax_goal a))
+          (None (mc_gth_decls m gctx rest th))
+          ((Some g)
+           (match (tc_check_goal m g)
+             ((Some _) (mc_gth_decls m gctx rest th))
+             (None
+               (mc_gth_decls
+                 m
+                 gctx
+                 rest
+                 (TheoryCons
+                   (Axiom
+                     (QName (rc_mod gctx) (ax_name a))
+                     (close_goal_for_storage g))
+                   th)))))))
+       (_ (mc_gth_decls m gctx rest th))))))
+
+(fn mc_gth_srcs
+  ((m Module) (ctors (List Symbol)) (srcs (List SrcEntry)) (th Theory))
+  Theory
+  (match srcs
+    (Nil th)
+    ((Cons (SrcEntry path granted src) rest)
+     (if granted
+       (match (parse_decls src ctors True)
+         (None (mc_gth_srcs m ctors rest th))
+         ((Some ds)
+          (mc_gth_srcs
+            m
+            ctors
+            rest
+            (mc_gth_decls m (file_rctx m path src) ds th))))
+       (mc_gth_srcs m ctors rest th)))))
+
 ;; ---- the section entry ------------------------------------------------------
 
 (fn mc_mcls
   ((m Module)
    (sccs (List (List QName)))
+   (th Theory)
    (gctx RCtx)
    (modpath (List Symbol))
    (mcls (List MCl)))
@@ -2568,29 +2637,31 @@
     (Nil Nil)
     ((Cons mcl rest)
      (append_int
-       (mc_check_fn m sccs gctx modpath mcl)
-       (mc_mcls m sccs gctx modpath rest)))))
+       (mc_check_fn m sccs th gctx modpath mcl)
+       (mc_mcls m sccs th gctx modpath rest)))))
 
-(fn mc_files ((m Module) (sccs (List (List QName))) (srcs (List SrcEntry)))
+(fn mc_files
+  ((m Module) (sccs (List (List QName))) (th Theory) (srcs (List SrcEntry)))
   (List Int)
   (match srcs
     (Nil Nil)
     ((Cons (SrcEntry path granted src) rest)
      (match (read_all src)
-       (None (mc_files m sccs rest))
+       (None (mc_files m sccs th rest))
        ((Some forms)
         (let ((mcls (mc_of_forms forms Nil)))
           (match mcls
-            (Nil (mc_files m sccs rest))
+            (Nil (mc_files m sccs th rest))
             (_
               (append_int
                 (mc_mcls
                   m
                   sccs
+                  th
                   (file_rctx m path src)
                   (module_path_of path)
                   (mc_rev_mcls mcls Nil))
-                (mc_files m sccs rest))))))))))
+                (mc_files m sccs th rest))))))))))
 
 (fn mc_rev_mcls ((xs (List MCl)) (acc (List MCl))) (List MCl)
   (match xs
@@ -2600,7 +2671,11 @@
 ;; MEASURED section of the admit report: empty when the closure declares no
 ;; measure clauses (so measure-free reports are unchanged from Phase A).
 (fn mc_section ((m Module) (srcs (List SrcEntry))) (List Int)
-  (mc_files m (ad_sccs m) srcs))
+  (mc_files
+    m
+    (ad_sccs m)
+    (mc_gth_srcs m (typedef_ctors (module_typedefs m)) srcs TheoryEmpty)
+    srcs))
 
 (fn check_production_src
   ((seed Module)

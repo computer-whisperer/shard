@@ -264,7 +264,17 @@ fn load_type_def(parts: &[&Value]) -> Result<TypeDef, LoadError> {
 /// kernel's `type_subst` needs to substitute correctly when the fn's
 /// signature is referenced by a polymorphic Goal (see do_induct).
 fn load_fn_def(parts: &[&Value], ctors: &HashSet<Symbol>) -> Result<FnDef, LoadError> {
-    if parts.len() != 4 {
+    // `(fn NAME PARAMS RET (measure E P…) BODY)` — the optional totality
+    // clause (issue #1). Its obligations are generated and checked by the
+    // in-shard gate (`check admit` / the check-mode flip); the engine only
+    // has to step over it to reach the body.
+    let has_measure = parts.len() == 5
+        && parts[3]
+            .list_iter()
+            .and_then(|mut it| it.next())
+            .and_then(|h| h.as_symbol())
+            == Some("measure");
+    if parts.len() != 4 && !has_measure {
         return Err(LoadError::BadShape(format!(
             "fn: expected (fn NAME PARAMS RET BODY) or \
              (fn (NAME T1…) PARAMS RET BODY), got {} parts after `fn`",
@@ -294,7 +304,7 @@ fn load_fn_def(parts: &[&Value], ctors: &HashSet<Symbol>) -> Result<FnDef, LoadE
     for n in &param_names {
         ctx.push(n.clone());
     }
-    let body = load_expr(parts[3], &mut ctx, ctors)?;
+    let body = load_expr(parts[if has_measure { 4 } else { 3 }], &mut ctx, ctors)?;
 
     Ok(FnDef {
         name,
