@@ -1985,7 +1985,8 @@
 ;; on failures so a missing premise is diagnosable). Binder-typed goals
 ;; (for measures that descend through the data itself, e.g. (len t))
 ;; arrive with the lemma/theory support they need — Phase C.
-(type MSiteS (MSiteS Int (List Symbol) (List SExpr) (List SExpr)))
+(type MSiteS
+  (MSiteS Int (List Symbol) (List (Pair Symbol Type)) (List SExpr) (List SExpr)))
 
 (fn mc_sym_member ((s Symbol) (xs (List Symbol))) Bool
   (match xs
@@ -2111,20 +2112,206 @@
     ((Cons (SSym s) Nil) (sym_eq s f))
     ((Cons _ rest) (mc_last_is f rest))))
 
+;; ---- binder typing (Phase C case instantiation) -----------------------------
+;; A binder-ful arm whose scrutinee TYPE synthesizes lets its binders enter
+;; scope TYPED, and the arm equation (= SCRUT PAT) becomes a recorded path
+;; condition (PAT read as the ctor expression over its binders). Sites whose
+;; measure substitution references those binders then state their obligations
+;; over the fn params PLUS the typed binders. Synthesis v1 is deliberately
+;; small — a param/binder name or a bare same-module call with a ground
+;; return type; anything else leaves the arm untyped (the B2 behavior, which
+;; is refusal-only and therefore sound).
+
+(fn mc_app_tbs ((a (List (Pair Symbol Type))) (b (List (Pair Symbol Type))))
+  (List (Pair Symbol Type))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (mc_app_tbs t b)))))
+
+(fn mc_app_syms ((a (List Symbol)) (b (List Symbol))) (List Symbol)
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (mc_app_syms t b)))))
+
+(fn mc_pat_has_wild ((p SExpr)) Bool
+  (match p
+    ((SSym s)
+     (match (chars_of_sym s)
+       ((Cons c _) (int_eq c 95))
+       (Nil False)))
+    ((SList items) (mc_pats_have_wild items))
+    (_ False)))
+
+(fn mc_pats_have_wild ((ps (List SExpr))) Bool
+  (match ps
+    (Nil False)
+    ((Cons p rest) (if (mc_pat_has_wild p) True (mc_pats_have_wild rest)))))
+
+(fn mc_env_ty ((env (List (Pair Symbol Type))) (x Symbol)) (Option Type)
+  (match env
+    (Nil None)
+    ((Cons (Pair n ty) rest) (if (sym_eq n x) (Some ty) (mc_env_ty rest x)))))
+
+(fn mc_ty_ground ((t Type)) Bool
+  (match t
+    ((TVar _) False)
+    ((TCon _ args) (mc_tys_ground args))))
+
+(fn mc_tys_ground ((ts (List Type))) Bool
+  (match ts
+    (Nil True)
+    ((Cons h t) (if (mc_ty_ground h) (mc_tys_ground t) False))))
+
+(fn mc_synth
+  ((m Module) (modpath (List Symbol)) (env (List (Pair Symbol Type))) (e SExpr))
+  (Option Type)
+  (match e
+    ((SSym x) (mc_env_ty env x))
+    ((SList items)
+     (match items
+       ((Cons (SSym h) _)
+        (if (mc_is_lower h)
+          (match m
+            ((Module _ _ _ tr _)
+             (match (trie_lookup (QName modpath h) tr)
+               (None None)
+               ((Some fd)
+                (match fd
+                  ((FnDef _ _ ret _) (if (mc_ty_ground ret) (Some ret) None)))))))
+          None))
+       (_ None)))
+    (_ None)))
+
+(fn mc_td_find ((tds (List TypeDef)) (q QName)) (Option TypeDef)
+  (match tds
+    (Nil None)
+    ((Cons td rest)
+     (match td
+       ((TypeDef tq _ _) (if (qname_eq tq q) (Some td) (mc_td_find rest q)))))))
+
+(fn mc_ctor_find ((cds (List CtorDef)) (c Symbol)) (Option CtorDef)
+  (match cds
+    (Nil None)
+    ((Cons cd rest)
+     (match cd
+       ((CtorDef cq _)
+        (if (sym_eq (qn_name cq) c) (Some cd) (mc_ctor_find rest c)))))))
+
+(fn mc_tp_zip ((tps (List Symbol)) (targs (List Type)))
+  (Option (List (Pair Symbol Type)))
+  (match tps
+    (Nil
+      (match targs
+        (Nil (Some Nil))
+        (_ None)))
+    ((Cons p prest)
+     (match targs
+       (Nil None)
+       ((Cons a arest)
+        (match (mc_tp_zip prest arest)
+          (None None)
+          ((Some env) (Some (Cons (Pair p a) env)))))))))
+
+;; pattern binders with their types under scrutinee type TY.
+(fn mc_pat_tenv ((m Module) (pat SExpr) (ty Type))
+  (Option (List (Pair Symbol Type)))
+  (match pat
+    ((SSym s) (if (mc_is_lower s) (Some (Cons (Pair s ty) Nil)) (Some Nil)))
+    ((SInt _) (Some Nil))
+    ((SList (Cons (SSym c) ps))
+     (if (sym_eq c (quote quote)) (Some Nil)
+     (match ty
+       ((TVar _) None)
+       ((TCon q targs)
+        (match (mc_td_find (module_typedefs m) q)
+          (None None)
+          ((Some td)
+           (match td
+             ((TypeDef _ tps ctors)
+              (match (mc_ctor_find ctors c)
+                (None None)
+                ((Some cd)
+                 (match cd
+                   ((CtorDef _ ftys)
+                    (match (mc_tp_zip tps targs)
+                      (None None)
+                      ((Some tenv)
+                       (mc_pats_tenv m ps (type_subst_list tenv ftys))))))))))))))))
+    (_ None)))
+
+(fn mc_pats_tenv ((m Module) (ps (List SExpr)) (tys (List Type)))
+  (Option (List (Pair Symbol Type)))
+  (match ps
+    (Nil
+      (match tys
+        (Nil (Some Nil))
+        (_ None)))
+    ((Cons p prest)
+     (match tys
+       (Nil None)
+       ((Cons ty trest)
+        (match (mc_pat_tenv m p ty)
+          (None None)
+          ((Some a)
+           (match (mc_pats_tenv m prest trest)
+             (None None)
+             ((Some b) (Some (mc_app_tbs a b)))))))))))
+
+;; native Type → source form. Resolved (path-carrying) names render as the
+;; literal (:: …) path form, which parse_type reads back to the same QName —
+;; round-trip identity by construction, and a bad render can only REFUSE at
+;; the goal's parse/type gate.
+(fn mc_ty_form ((ty Type)) SExpr
+  (match ty
+    ((TVar s) (SSym s))
+    ((TCon q args)
+     (let ((head (mc_qn_form q)))
+       (match args
+         (Nil head)
+         (_ (SList (Cons head (mc_ty_forms args)))))))))
+
+(fn mc_ty_forms ((ts (List Type))) (List SExpr)
+  (match ts
+    (Nil Nil)
+    ((Cons h t) (Cons (mc_ty_form h) (mc_ty_forms t)))))
+
+(fn mc_qn_form ((q QName)) SExpr
+  (match q
+    ((QName path name)
+     (match path
+       (Nil (SSym name))
+       (_ (SList (Cons (SSym (quote ::)) (mc_seg_forms path name))))))))
+
+(fn mc_seg_forms ((path (List Symbol)) (name Symbol)) (List SExpr)
+  (match path
+    (Nil (Cons (SSym name) Nil))
+    ((Cons h t) (Cons (SSym h) (mc_seg_forms t name)))))
+
+;; walker context: the module + file module path (for scrutinee-type
+;; synthesis), the measured fn's name, and the param type env.
+(type MCtx (MCtx Module (List Symbol) Symbol (List (Pair Symbol Type))))
+
+(fn mcx_fname ((cx MCtx)) Symbol
+  (match cx
+    ((MCtx _ _ f _) f)))
+
 (fn mc_walk_list
-  ((f Symbol)
+  ((cx MCtx)
    (bnds (List Symbol))
+   (tbs (List (Pair Symbol Type)))
    (hyps (List SExpr))
    (es (List SExpr))
    (st (Pair Int (List MSiteS))))
   (Pair Int (List MSiteS))
   (match es
     (Nil st)
-    ((Cons e rest) (mc_walk_list f bnds hyps rest (mc_walk f bnds hyps e st)))))
+    ((Cons e rest)
+     (mc_walk_list cx bnds tbs hyps rest (mc_walk cx bnds tbs hyps e st)))))
 
 (fn mc_walk_arms
-  ((f Symbol)
+  ((cx MCtx)
    (bnds (List Symbol))
+   (tbs (List (Pair Symbol Type)))
    (hyps (List SExpr))
    (scrut SExpr)
    (arms (List SExpr))
@@ -2137,31 +2324,64 @@
        ((SList (Cons pat (Cons body Nil)))
         (let ((sc (mc_pat_scan pat)))
           (mc_walk_arms
-            f
+            cx
             bnds
+            tbs
             hyps
             scrut
             rest
             (if (int_eq sc 0)
-              (mc_walk f bnds (Cons (mc_eq_s scrut pat) hyps) body st)
-            (if (int_eq sc 1) (mc_walk f bnds hyps body st)
-            (mc_walk f (mc_pat_binders pat bnds) hyps body st))))))
-       (_ (mc_walk_arms f bnds hyps scrut rest st))))))
+              (mc_walk cx bnds tbs (Cons (mc_eq_s scrut pat) hyps) body st)
+            (if (int_eq sc 1) (mc_walk cx bnds tbs hyps body st)
+            (mc_binder_arm cx bnds tbs hyps scrut pat body st))))))
+       (_ (mc_walk_arms cx bnds tbs hyps scrut rest st))))))
+
+;; a binder-ful arm: typed when the scrutinee synthesizes, the pattern has
+;; no wildcards, and every binder gets a type — else the B2 untyped walk.
+(fn mc_binder_arm
+  ((cx MCtx)
+   (bnds (List Symbol))
+   (tbs (List (Pair Symbol Type)))
+   (hyps (List SExpr))
+   (scrut SExpr)
+   (pat SExpr)
+   (body SExpr)
+   (st (Pair Int (List MSiteS))))
+  (Pair Int (List MSiteS))
+  (let ((bnds2 (mc_pat_binders pat bnds)))
+    (if (mc_pat_has_wild pat) (mc_walk cx bnds2 tbs hyps body st)
+    (match cx
+      ((MCtx m modpath _ penv)
+       (match (mc_synth m modpath (mc_app_tbs tbs penv) scrut)
+         (None (mc_walk cx bnds2 tbs hyps body st))
+         ((Some sty)
+          (match (mc_pat_tenv m pat sty)
+            (None (mc_walk cx bnds2 tbs hyps body st))
+            ((Some newtbs)
+             (mc_walk
+               cx
+               bnds2
+               (mc_app_tbs newtbs tbs)
+               (Cons (mc_eq_s scrut pat) hyps)
+               body
+               st))))))))))
 
 (fn mc_let_rhss
-  ((f Symbol)
+  ((cx MCtx)
    (bnds (List Symbol))
+   (tbs (List (Pair Symbol Type)))
    (hyps (List SExpr))
    (binds SExpr)
    (st (Pair Int (List MSiteS))))
   (Pair Int (List MSiteS))
   (match binds
-    ((SList bs) (mc_let_rhss_go f bnds hyps bs st))
+    ((SList bs) (mc_let_rhss_go cx bnds tbs hyps bs st))
     (_ st)))
 
 (fn mc_let_rhss_go
-  ((f Symbol)
+  ((cx MCtx)
    (bnds (List Symbol))
+   (tbs (List (Pair Symbol Type)))
    (hyps (List SExpr))
    (bs (List SExpr))
    (st (Pair Int (List MSiteS))))
@@ -2171,12 +2391,13 @@
     ((Cons b rest)
      (match b
        ((SList (Cons _ (Cons rhs Nil)))
-        (mc_let_rhss_go f bnds hyps rest (mc_walk f bnds hyps rhs st)))
-       (_ (mc_let_rhss_go f bnds hyps rest st))))))
+        (mc_let_rhss_go cx bnds tbs hyps rest (mc_walk cx bnds tbs hyps rhs st)))
+       (_ (mc_let_rhss_go cx bnds tbs hyps rest st))))))
 
 (fn mc_walk
-  ((f Symbol)
+  ((cx MCtx)
    (bnds (List Symbol))
+   (tbs (List (Pair Symbol Type)))
    (hyps (List SExpr))
    (e SExpr)
    (st (Pair Int (List MSiteS))))
@@ -2185,56 +2406,61 @@
     ((SList items)
      (match items
        ((Cons h rest)
-        (if (mc_head_is f h)
+        (if (mc_head_is (mcx_fname cx) h)
           ;; a self-call: record (pre-order), then walk the args.
           (match st
             ((Pair i acc)
              (mc_walk_list
-               f
+               cx
                bnds
+               tbs
                hyps
                rest
-               (Pair (+ i 1) (Cons (MSiteS i bnds hyps rest) acc)))))
+               (Pair (+ i 1) (Cons (MSiteS i bnds tbs hyps rest) acc)))))
           (match h
             ((SSym hs)
              (if (sym_eq hs (quote if))
                (match rest
                  ((Cons c (Cons t (Cons el Nil)))
                   (mc_walk
-                    f
+                    cx
                     bnds
+                    tbs
                     (Cons (mc_hyp c (quote False)) hyps)
                     el
                     (mc_walk
-                      f
+                      cx
                       bnds
+                      tbs
                       (Cons (mc_hyp c (quote True)) hyps)
                       t
-                      (mc_walk f bnds hyps c st))))
-                 (_ (mc_walk_list f bnds hyps rest st)))
+                      (mc_walk cx bnds tbs hyps c st))))
+                 (_ (mc_walk_list cx bnds tbs hyps rest st)))
              (if (sym_eq hs (quote match))
                (match rest
                  ((Cons scrut arms)
                   (mc_walk_arms
-                    f
+                    cx
                     bnds
+                    tbs
                     hyps
                     scrut
                     arms
-                    (mc_walk f bnds hyps scrut st)))
+                    (mc_walk cx bnds tbs hyps scrut st)))
                  (_ st))
              (if (sym_eq hs (quote let))
                (match rest
                  ((Cons binds bodyrest)
                   (mc_walk_list
-                    f
+                    cx
                     (mc_let_binders binds bnds)
+                    tbs
                     hyps
                     bodyrest
-                    (mc_let_rhss f bnds hyps binds st)))
+                    (mc_let_rhss cx bnds tbs hyps binds st)))
                  (_ st))
-               (mc_walk_list f bnds hyps rest st)))))
-            (_ (mc_walk_list f bnds hyps items st)))))
+               (mc_walk_list cx bnds tbs hyps rest st)))))
+            (_ (mc_walk_list cx bnds tbs hyps items st)))))
        (Nil st)))
     (_ st)))
 
@@ -2463,7 +2689,7 @@
             key
             (append_int "OK (" (append_int (mc_show_i nok) " site(s))"))))
         (_ (mc_line key "FAIL: leftover proofs after the last site"))))
-    ((Cons (MSiteS i bnds hyps args) rest)
+    ((Cons (MSiteS i bnds tbs hyps args) rest)
      (match (mc_zip pnames args)
        (None
          (mc_line
@@ -2476,51 +2702,163 @@
           (if (mc_pure msr2 pnames bnds)
             (match (mc_keep_hyps hyps pnames bnds)
               ((Pair khyps ndrop)
-               (match proofs
-                 (Nil
-                   (mc_line
-                     key
-                     (append_int
-                       "FAIL site "
-                       (append_int
-                         (mc_show_i i)
-                         ": no proofs left (need decrease + nonneg)"))))
-                 ((Cons p1 prest1)
-                  (match prest1
-                    (Nil
-                      (mc_line
-                        key
-                        (append_int
-                          "FAIL site "
-                          (append_int
-                            (mc_show_i i)
-                            ": only one proof left (need decrease + nonneg)"))))
-                    ((Cons p2 prest)
-                     (match
-                       (mc_site_pair m m2 th gctx fname key pForm khyps msr2 msr
-                         i p1 p2)
-                       ((Some bad) (append_int bad (mc_drop_note key ndrop)))
-                       (None
-                         (mc_check_sites
-                           m
-                           m2
-                           th
-                           gctx
-                           fname
-                           key
-                           pForm
-                           pnames
-                           msr
-                           rest
-                           prest
-                           (+ nok 1))))))))))
-            (mc_line
-              key
+               (mc_site_go m m2 th gctx fname key pForm pnames msr rest proofs
+                 nok i pForm khyps ndrop msr2)))
+            (mc_typed_site m m2 th gctx fname key pForm pnames msr rest proofs
+              nok i tbs hyps msr2))))))))
+
+;; the typed-binder path: the measure substitution references pattern
+;; binders, so the obligation is stated over the fn params PLUS the typed
+;; binders in scope (hyps mentioning an UNTYPED binder still drop, with
+;; the note). Binder names must be fresh against the params — a shadowing
+;; pattern would alias two distinct values in one goal.
+(fn mc_typed_site
+  ((m Module)
+   (m2 Module)
+   (th Theory)
+   (gctx RCtx)
+   (fname Symbol)
+   (key (List Int))
+   (pForm SExpr)
+   (pnames (List Symbol))
+   (msr SExpr)
+   (rest (List MSiteS))
+   (proofs (List SExpr))
+   (nok Int)
+   (i Int)
+   (tbs (List (Pair Symbol Type)))
+   (hyps (List SExpr))
+   (msr2 SExpr))
+  (List Int)
+  (let ((tbn (mc_tb_names tbs Nil)))
+    (if (mc_tbs_fresh tbn pnames)
+      (let ((alln (mc_app_syms tbn pnames)))
+        (if (mc_pure msr2 alln Nil)
+          (match (mc_ext_pform pForm tbs)
+            (None (mc_line key "SKIP (could not read param names)"))
+            ((Some pForm2)
+             (match (mc_keep_hyps hyps alln Nil)
+               ((Pair khyps ndrop)
+                (mc_site_go m m2 th gctx fname key pForm pnames msr rest proofs
+                  nok i pForm2 khyps ndrop msr2)))))
+          (mc_line
+            key
+            (append_int
+              "UNSUPPORTED site "
               (append_int
-                "UNSUPPORTED site "
-                (append_int
-                  (mc_show_i i)
-                  " (measure argument references pattern/let binders)"))))))))))
+                (mc_show_i i)
+                " (measure argument references pattern/let binders)")))))
+      (mc_line
+        key
+        (append_int
+          "UNSUPPORTED site "
+          (append_int (mc_show_i i) " (a pattern binder shadows a parameter)"))))))
+
+;; pair the site's two inline proofs (decrease, nonneg) against pFormX —
+;; the fn's params, possibly extended with typed binders — then continue.
+(fn mc_site_go
+  ((m Module)
+   (m2 Module)
+   (th Theory)
+   (gctx RCtx)
+   (fname Symbol)
+   (key (List Int))
+   (pForm SExpr)
+   (pnames (List Symbol))
+   (msr SExpr)
+   (rest (List MSiteS))
+   (proofs (List SExpr))
+   (nok Int)
+   (i Int)
+   (pFormX SExpr)
+   (khyps (List SExpr))
+   (ndrop Int)
+   (msr2 SExpr))
+  (List Int)
+  (match proofs
+    (Nil
+      (mc_line
+        key
+        (append_int
+          "FAIL site "
+          (append_int (mc_show_i i) ": no proofs left (need decrease + nonneg)"))))
+    ((Cons p1 prest1)
+     (match prest1
+       (Nil
+         (mc_line
+           key
+           (append_int
+             "FAIL site "
+             (append_int
+               (mc_show_i i)
+               ": only one proof left (need decrease + nonneg)"))))
+       ((Cons p2 prest)
+        (match
+          (mc_site_pair m m2 th gctx fname key pFormX khyps msr2 msr i p1 p2)
+          ((Some bad) (append_int bad (mc_drop_note key ndrop)))
+          (None
+            (mc_check_sites
+              m
+              m2
+              th
+              gctx
+              fname
+              key
+              pForm
+              pnames
+              msr
+              rest
+              prest
+              (+ nok 1)))))))))
+
+;; typed-binder goal-param plumbing.
+(fn mc_tb_names ((tbs (List (Pair Symbol Type))) (acc (List Symbol)))
+  (List Symbol)
+  (match tbs
+    (Nil acc)
+    ((Cons (Pair n _) rest) (mc_tb_names rest (Cons n acc)))))
+
+(fn mc_tbs_fresh ((names (List Symbol)) (pnames (List Symbol))) Bool
+  (match names
+    (Nil True)
+    ((Cons n rest)
+     (if (mc_sym_member n pnames) False
+     (if (mc_sym_member n rest) False
+     (mc_tbs_fresh rest pnames))))))
+
+;; tbs is innermost-first; the fold reverses, so the appended binder params
+;; read outermost-first after the fn's own params.
+(fn mc_tb_param_forms ((tbs (List (Pair Symbol Type))) (acc (List SExpr)))
+  (List SExpr)
+  (match tbs
+    (Nil acc)
+    ((Cons (Pair n ty) rest)
+     (mc_tb_param_forms
+       rest
+       (Cons (SList (Cons (SSym n) (Cons (mc_ty_form ty) Nil))) acc)))))
+
+(fn mc_app_forms ((a (List SExpr)) (b (List SExpr))) (List SExpr)
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (mc_app_forms t b)))))
+
+(fn mc_ext_pform ((pForm SExpr) (tbs (List (Pair Symbol Type)))) (Option SExpr)
+  (match pForm
+    ((SList ps) (Some (SList (mc_app_forms ps (mc_tb_param_forms tbs Nil)))))
+    (_ None)))
+
+;; param name → type env from the looked-up FnDef (order matches pForm).
+(fn mc_fd_penv ((ns (List Symbol)) (fd FnDef)) (List (Pair Symbol Type))
+  (match fd
+    ((FnDef _ ptys _ _) (mc_penv_zip ns ptys))))
+
+(fn mc_penv_zip ((ns (List Symbol)) (tys (List Type))) (List (Pair Symbol Type))
+  (match ns
+    (Nil Nil)
+    ((Cons n nrest)
+     (match tys
+       (Nil Nil)
+       ((Cons ty trest) (Cons (Pair n ty) (mc_penv_zip nrest trest)))))))
 
 (fn mc_check_fn
   ((m Module)
@@ -2547,11 +2885,18 @@
                     (mc_line
                       key
                       "SKIP (fn not found at the file's module path — rebind?)"))
-                  ((Some _)
+                  ((Some fd)
                    (match (mc_pnames pForm)
                      (None (mc_line key "SKIP (could not read param names)"))
                      ((Some pnames)
-                      (match (mc_walk name Nil Nil body (Pair 0 Nil))
+                      (match
+                        (mc_walk
+                          (MCtx m modpath name (mc_fd_penv pnames fd))
+                          Nil
+                          Nil
+                          Nil
+                          body
+                          (Pair 0 Nil))
                         ((Pair _ rsites)
                          (let ((sites (mc_rev_sites rsites Nil)))
                            (match sites

@@ -10,12 +10,21 @@
 ;;;                            mentioning arm equation is DROPPED (sound)
 ;;;   sumbad   MEASURED FAIL  — B2 over-admission pin: same shape but NO
 ;;;                            lower-bound guard — nonneg is unprovable
-;;;                            (hyp-dropping must never manufacture facts)
-;;;   lensum   UNSUPPORTED    — the measure ARGUMENT references a pattern
-;;;                            binder ((len t)); binder-typed goals arrive
-;;;                            with lemma/theory support (Phase C)
+;;;                            (hyp-dropping must never manufacture facts;
+;;;                            since Phase C the typed arm equation is
+;;;                            recorded then dropped, so ndrop = 1)
+;;;   lensum   MEASURED OK    — Phase C case instantiation: the measure
+;;;                            argument references the arm binder ((len t)),
+;;;                            so the obligation is stated over the params
+;;;                            PLUS the typed binders ((h Int) (t (List
+;;;                            Int))), with the arm equation as a premise;
+;;;                            discharged citing GRANTED len_cons/len_nonneg
 ;;;   dropper  MEASURED FAIL  — drop-note pin: a binder-mentioning if-guard
 ;;;                            is dropped and the failure names the count
+;;;                            (ndrop = 2 since Phase C: + the arm equation)
+;;;   lencheat MEASURED FAIL  — typed-path cheat: recurses on (Cons h t)
+;;;                            itself, so decrease is lt of equal lengths —
+;;;                            no proof may close it
 ;;;   owncite  MEASURED FAIL  — circularity pin: obligation proofs see the
 ;;;                            GRANTED theory only; a same-file claim is not
 ;;;                            citable (it is unchecked when the admission
@@ -28,6 +37,8 @@
 ;;; report-only until the Phase D enforcement flip.
 
 (import "../kernel/stdlib.shard")
+(import "../std/list.shard")  ; len + the len_cons/len_nonneg lemmas (lensum)
+(use (:: std list *))
 
 (fn cdown ((n Int)) Int
   (measure n (by farkas (list 1 0)) (by farkas (list 1 1)))
@@ -64,11 +75,18 @@
     (Nil 0)
     ((Cons h t) (+ h (sumbad t (- k 1))))))
 
-;; the B2 frontier: the measure argument itself descends through the
-;; data — (len t) references the arm binder t. Needs binder-typed goals
-;; plus the len lemmas (Phase C).
+;; the measure descends through the data: (len t) references the arm
+;; binder t, so the goal gains typed binder params and the arm equation
+;; premise ((= xs (Cons h t)), premise 0). decrease rewrites xs to the
+;; ctor form, cites len_cons, and closes linearly; nonneg is len_nonneg.
 (fn lensum ((xs (List Int))) Int
-  (measure (len xs) (by farkas (list 1)) (by farkas (list 1)))
+  (measure
+    (len xs)
+    (steps
+      ((rewrite (premise 0) lr lhs true ())
+       (rewrite (lemma len_cons) lr lhs true ()))
+      (by farkas (list 1 0)))
+    (steps ((rewrite (lemma len_nonneg) lr lhs true ())) refl))
   (match xs
     (Nil 0)
     ((Cons h t) (+ h (lensum t)))))
@@ -100,3 +118,16 @@
       ((steps ((rewrite (premise 0) lr lhs true ())) refl))
       refl))
   (if (lt 0 n) (owncite (- n 1)) 0))
+
+;; typed-path cheat pin: the recursive call passes (Cons h t) — the very
+;; value xs is known to equal (premise 0) — so the decrease obligation is
+;; (lt (len (Cons h t)) (len xs)) with the two sides EQUAL. No cert closes
+;; lt a a; the gate must refuse however the proof is spelled.
+(fn lencheat ((xs (List Int))) Int
+  (measure
+    (len xs)
+    (steps ((rewrite (premise 0) rl lhs true ())) (by farkas (list 1 0)))
+    (steps ((rewrite (lemma len_nonneg) lr lhs true ())) refl))
+  (match xs
+    (Nil 0)
+    ((Cons h t) (+ h (lencheat (Cons h t))))))
