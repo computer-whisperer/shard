@@ -131,11 +131,59 @@
     (Nil (FnTrie (Some fd) Nil))
     ((Cons c rest) (FnTrie None (Cons (Pair c (FnLeaf rest fd)) Nil)))))
 
+;; --- termination measure for trie_insert_chars (lexicographic) -------------
+;; trie_insert_chars recurses two ways: (1) on the FnLeaf arm it re-inserts the
+;; SAME cs into a leaf exploded one level into a branch — cs is unchanged but
+;; the node goes leaf→branch; (2) on the FnTrie/Cons arm it descends with the
+;; tail of cs. Neither argument alone decreases at both sites, so the measure
+;; is the lexicographic combination  2*(len cs) + leafbit(t):  site (1) keeps
+;; len cs and drops leafbit 1→0 (−1); site (2) drops len cs by one (−2) while
+;; leafbit rises by at most one (net ≤ −1). Both helpers are kernel-local; the
+;; facts cited by the measure (below trie_insert_chars) reach neither
+;; trie_insert_chars in the call graph, so stratified citation admits them.
+(fn tic_len ((cs (List Int))) Int
+  (match cs (Nil 0) ((Cons _ t) (+ 1 (tic_len t)))))
+
+(fn tic_leafbit ((t FnTrie)) Int
+  (match t ((FnLeaf _ _) 1) ((FnTrie _ _) 0)))
+
 ;; insert fd under the remaining chars; KEEP-FIRST on a name clash (mirrors the
 ;; old list-scan lookup_fn, which returned the first matching def). A fresh
 ;; unshared tail is stored as a compressed FnLeaf; inserting THROUGH a leaf
 ;; first explodes it one level (recursively, while the two names share chars).
 (fn trie_insert_chars ((cs (List Int)) (fd FnDef) (t FnTrie)) FnTrie
+  (measure
+    (+ (* 2 (tic_len cs)) (tic_leafbit t))
+    ;; site 0 (FnLeaf arm): cs unchanged, t = (FnLeaf suffix old) → branch.
+    ;; decrease: leafbit(leaf_split …)=0 (tic_split_branch) < leafbit t =1.
+    (steps
+      ((rewrite (lemma tic_split_branch) lr lhs true ())
+       (rewrite (premise 0) lr lhs true ())
+       (rewrite (lemma tic_leafbit_fnleaf) lr lhs true ()))
+      (by farkas (list 1 0 0)))
+    ;; nonneg: 0 <= 2*(len cs) + 0.
+    (have (= (le 0 (tic_len cs)) True)
+      (rewrite-with (lemma tic_len_nonneg) lr lhs ((inst xs cs)) () refl)
+      (steps
+        ((rewrite (lemma tic_split_branch) lr lhs true ()))
+        (by farkas (list 1 0 0 2))))
+    ;; site 1 (FnTrie/Cons arm): cs = (Cons c rest), descend on rest.
+    ;; decrease: 2*len rest + leafbit sub  <  2*(1+len rest) + 0, given
+    ;; leafbit sub <= 1 (tic_leafbit_le1).
+    (have (= (le (tic_leafbit sub) 1) True)
+      (rewrite-with (lemma tic_leafbit_le1) lr lhs ((inst tt sub)) () refl)
+      (steps
+        ((rewrite (premise 0) lr lhs true ())
+         (rewrite (premise 1) lr lhs true ())
+         (rewrite (lemma tic_leafbit_fntrie) lr lhs true ())
+         (rewrite (lemma tic_len_cons) lr lhs true ()))
+        (by farkas (list 1 0 0 0 1))))
+    ;; nonneg: 0 <= 2*(len rest) + leafbit sub.
+    (have (= (le 0 (tic_len rest)) True)
+      (rewrite-with (lemma tic_len_nonneg) lr lhs ((inst xs rest)) () refl)
+      (have (= (le 0 (tic_leafbit sub)) True)
+        (rewrite-with (lemma tic_leafbit_ge0) lr lhs ((inst tt sub)) () refl)
+        (by farkas (list 1 0 0 0 2 1)))))
   (match t
     ((FnLeaf suffix old)
      (if (trie_suffix_eq cs suffix) t  ; same name → KEEP-FIRST
@@ -151,6 +199,71 @@
           (None (FnTrie here (child_set c (FnLeaf rest fd) children)))
           ((Some sub)
            (FnTrie here (child_set c (trie_insert_chars rest fd sub) children)))))))))
+
+;; ---- totality support for trie_insert_chars (cited by its measure) ---------
+;; None of these reaches trie_insert_chars in the call graph, so stratified
+;; citation admits them as same-closure facts.
+
+;; tic_len's defining equations.
+(claim tic_len_nil
+  (goal () () (= (tic_len Nil) 0))
+  (steps ((simp lhs)) refl))
+
+(claim tic_len_cons
+  (goal ((h Int) (t (List Int))) () (= (tic_len (Cons h t)) (+ 1 (tic_len t))))
+  (steps ((simp lhs)) refl))
+
+;; 0 <= tic_len xs. Induction; the step materializes the IH as a premise
+;; (farkas does not read induct IHs as slots), then bumps it past the +1.
+(claim tic_len_nonneg
+  (goal ((xs (List Int))) () (= (le 0 (tic_len xs)) True))
+  (induct xs
+    ((case Nil
+       (steps ((rewrite (lemma tic_len_nil) lr lhs true ())) (by farkas (list 1))))
+     (case Cons
+       (h t)
+       (have (= (le 0 (tic_len t)) True)
+         (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+         (steps
+           ((rewrite (lemma tic_len_cons) lr lhs true ()))
+           (by farkas (list 1 1))))))))
+
+;; tic_leafbit's defining equations.
+(claim tic_leafbit_fnleaf
+  (goal ((s (List Int)) (f FnDef)) () (= (tic_leafbit (FnLeaf s f)) 1))
+  (steps ((simp lhs)) refl))
+
+(claim tic_leafbit_fntrie
+  (goal
+    ((h (Option FnDef)) (c (List (Pair Int FnTrie))))
+    ()
+    (= (tic_leafbit (FnTrie h c)) 0))
+  (steps ((simp lhs)) refl))
+
+;; leafbit is the bit {0,1}: bound it both ways by a case split on the node.
+(claim tic_leafbit_ge0
+  (goal ((tt FnTrie)) () (= (le 0 (tic_leafbit tt)) True))
+  (case-on tt FnTrie
+    ((case FnTrie (h c) (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) refl))
+     (case FnLeaf (s f) (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) refl)))))
+
+(claim tic_leafbit_le1
+  (goal ((tt FnTrie)) () (= (le (tic_leafbit tt) 1) True))
+  (case-on tt FnTrie
+    ((case FnTrie (h c) (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) refl))
+     (case FnLeaf (s f) (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) refl)))))
+
+;; the leaf-split always yields a branch node, so its leafbit is 0.
+(claim tic_split_branch
+  (goal
+    ((suffix (List Int)) (fd FnDef))
+    ()
+    (= (tic_leafbit (trie_leaf_split suffix fd)) 0))
+  (case-on suffix List
+    ((case Nil (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) refl))
+     (case Cons
+       (c rest)
+       (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) refl)))))
 
 (fn trie_insert ((fd FnDef) (t FnTrie)) FnTrie
   (match fd
