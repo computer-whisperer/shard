@@ -1612,7 +1612,9 @@
        (rev_outcomes acc Nil)
        (oc_concat
          (pending_outcomes (rev_pend pend Nil))
-         (bin_reports (bins_of_srcs srcs) th m led (own_externs_of_srcs srcs)))))))
+         (oc_concat
+           (bin_reports (bins_of_srcs srcs) th m led (own_externs_of_srcs srcs))
+           (mc_outcome m srcs th focus)))))))
 
 ;; Production entry that builds M IN SHARD. `build_module_d` (reader.shard) parses
 ;; each source's types/fns via the self-hosted reader and merges them onto
@@ -1894,8 +1896,11 @@
 ;; admit mode: build the closure's module (same path as production check)
 ;; and run the definitional-admissibility analysis over it. Report-only —
 ;; Phase A of issue #1; nothing is refused. Phase B appends the MEASURED
-;; section: per (measure …)-clause fn, the termination obligations are
-;; generated and their inline proofs checked.
+;; admit mode = the totality CLASSIFICATION report only (nonrec / structural /
+;; mutual-resolved / FLAG / unresolved-SCC counts + the per-fn listing). The
+;; measure OBLIGATIONS themselves are now checked in the normal `check` pass
+;; (mc_outcome), where the run's accumulated theory exists to cite from under
+;; the stratified-citation rule — admit mode has no such theory.
 (fn admit_report ((srcs (List SrcEntry))) (List Int)
   (match
     (build_module_d
@@ -1907,9 +1912,7 @@
      (append_int
        "admit: a dependency failed to load:"
        (append_int (sr_nl) diag)))
-    ((BMOk m)
-     (let ((sccs (ad_sccs m)))
-       (append_int (admit_scan_s m sccs) (mc_section_s m sccs srcs))))))
+    ((BMOk m) (admit_scan_s m (ad_sccs m)))))
 
 ;; ===========================================================================
 ;; MEASURE CLAUSES (issue #1, Phase B — report-only). A 6-element fn form
@@ -2904,71 +2907,85 @@
                            (match sites
                              (Nil (mc_line key "OK (no recursive call sites)"))
                              (_
-                               (mc_check_sites
-                                 m
-                                 (mc_opaque m (mc_scc_of q sccs))
-                                 th
-                                 gctx
-                                 name
-                                 key
-                                 pForm
-                                 pnames
-                                 msr
-                                 sites
-                                 proofs
-                                 0)))))))))))))))))))
+                               (let ((scc (mc_scc_of q sccs)))
+                                 (mc_check_sites
+                                   m
+                                   (mc_opaque m scc)
+                                   (mc_theory_for_scc tr scc th)
+                                   gctx
+                                   name
+                                   key
+                                   pForm
+                                   pnames
+                                   msr
+                                   sites
+                                   proofs
+                                   0))))))))))))))))))))
 
 (fn mc_rev_sites ((xs (List MSiteS)) (acc (List MSiteS))) (List MSiteS)
   (match xs
     (Nil acc)
     ((Cons h t) (mc_rev_sites t (Cons h acc)))))
 
-;; ---- granted theory for obligation proofs ----------------------------------
-;; Obligation proofs may cite exactly what check mode itself GRANTS: the
-;; axioms and requirements of GRANTED sources (collect_decls already turns a
-;; granted requirement into an upstream-proven axiom decl). Never this run's
-;; own claims — the admission pass runs before any claim is checked, and a
-;; same-file lemma may depend on the very fn under admission.
+;; ---- citable theory for measure obligations (STRATIFIED CITATION) ----------
+;; A measure obligation proving fn F (its SCC = `scc`) total may cite a fact L
+;; iff L's STATEMENT cannot reach any member of `scc` through the call graph —
+;; i.e. L does not depend, directly or transitively, on the very fn(s) being
+;; shown total. That is the acyclicity rule: an unproven lemma may not prove
+;; itself, directly or indirectly.
+;;
+;; This unifies the two old citation sources. Granted-module requirements live
+;; upstream and structurally cannot reach F, so they pass automatically; same-
+;; closure claims pass exactly when they are downstream of F. The pool is the
+;; run's accumulated theory (granted axioms + this run's PASSED claims — run_decls
+;; folds both in as Axiom/Proven), filtered here per F. This supersedes the old
+;; granted-only filter AND the blanket same-closure ban: the call-graph test is
+;; the precise, order-independent statement of both.
 
-(fn mc_gth_decls ((m Module) (gctx RCtx) (ds (List Decl)) (th Theory)) Theory
-  (match ds
-    (Nil th)
-    ((Cons d rest)
-     (match d
-       ((DAxiom a)
-        (match (parse_goal_r m gctx (ax_goal a))
-          (None (mc_gth_decls m gctx rest th))
-          ((Some g)
-           (match (tc_check_goal m g)
-             ((Some _) (mc_gth_decls m gctx rest th))
-             (None
-               (mc_gth_decls
-                 m
-                 gctx
-                 rest
-                 (TheoryCons
-                   (Axiom
-                     (QName (rc_mod gctx) (ax_name a))
-                     (close_goal_for_storage g))
-                   th)))))))
-       (_ (mc_gth_decls m gctx rest th))))))
+;; the resolvable callee QNames mentioned in a stored goal's statement
+;; (premises + conclusion). Prims/externs don't resolve and are excluded.
+(fn mc_eq_calls ((tr FnTrie) (eq Equation) (acc (List QName))) (List QName)
+  (match eq ((Equation l r) (ad_calls_e tr l (ad_calls_e tr r acc)))))
 
-(fn mc_gth_srcs
-  ((m Module) (ctors (List Symbol)) (srcs (List SrcEntry)) (th Theory))
-  Theory
-  (match srcs
-    (Nil th)
-    ((Cons (SrcEntry path granted src) rest)
-     (if granted
-       (match (parse_decls src ctors True)
-         (None (mc_gth_srcs m ctors rest th))
-         ((Some ds)
-          (mc_gth_srcs
-            m
-            ctors
-            rest
-            (mc_gth_decls m (file_rctx m path src) ds th))))
-       (mc_gth_srcs m ctors rest th)))))
+(fn mc_eqs_calls ((tr FnTrie) (eqs (List Equation)) (acc (List QName)))
+  (List QName)
+  (match eqs
+    (Nil acc)
+    ((Cons e rest) (mc_eqs_calls tr rest (mc_eq_calls tr e acc)))))
+
+(fn mc_goal_calls ((tr FnTrie) (g Goal) (acc (List QName))) (List QName)
+  (match g
+    ((Goal _ prems concl) (mc_eqs_calls tr prems (mc_eq_calls tr concl acc)))))
+
+;; True iff some fn transitively reachable from `work` (following fn bodies via
+;; the full module trie) is a member of `scc`. `seen` bounds the walk to the
+;; finite call graph — each fn is expanded at most once.
+(fn mc_reaches
+  ((tr FnTrie) (work (List QName)) (seen (List QName)) (scc (List QName)))
+  Bool
+  (match work
+    (Nil False)
+    ((Cons q rest)
+     (if (ad_qn_member q scc) True
+     (if (ad_qn_member q seen) (mc_reaches tr rest seen scc)
+     (match (trie_lookup q tr)
+       (None (mc_reaches tr rest (Cons q seen) scc))
+       ((Some (FnDef _ _ _ body))
+        (mc_reaches tr (ad_calls_e tr body rest) (Cons q seen) scc))))))))
+
+;; a theory entry is citable for `scc` iff its statement can't reach `scc`.
+(fn mc_entry_safe ((tr FnTrie) (scc (List QName)) (entry TheoryEntry)) Bool
+  (match entry
+    ((Proven _ g) (if (mc_reaches tr (mc_goal_calls tr g Nil) Nil scc) False True))
+    ((Axiom _ g) (if (mc_reaches tr (mc_goal_calls tr g Nil) Nil scc) False True))))
+
+;; filter the run's full theory down to what F's SCC may soundly cite.
+(fn mc_theory_for_scc ((tr FnTrie) (scc (List QName)) (th Theory)) Theory
+  (match th
+    (TheoryEmpty TheoryEmpty)
+    ((TheoryCons entry rest)
+     (let ((kept (mc_theory_for_scc tr scc rest)))
+       (if (mc_entry_safe tr scc entry) (TheoryCons entry kept) kept)))))
 
 ;; ---- the section entry ------------------------------------------------------
 
@@ -3015,18 +3032,25 @@
     (Nil acc)
     ((Cons h t) (mc_rev_mcls t (Cons h acc)))))
 
-;; MEASURED section of the admit report: empty when the closure declares no
-;; measure clauses (so measure-free reports are unchanged from Phase A).
-(fn mc_section_s ((m Module) (sccs (List (List QName))) (srcs (List SrcEntry)))
-  (List Int)
-  (mc_files
-    m
-    sccs
-    (mc_gth_srcs m (typedef_ctors (module_typedefs m)) srcs TheoryEmpty)
-    srcs))
-
-(fn mc_section ((m Module) (srcs (List SrcEntry))) (List Int)
-  (mc_section_s m (ad_sccs m) srcs))
+;; MEASURE OBLIGATIONS in the normal check pass — one informative COLedger block
+;; (report-only: bumps no pass/fail counts). Empty when the closure declares no
+;; measure clauses, so measure-free reports are byte-unchanged. `th` is the run's
+;; accumulated theory (granted axioms + this run's passed claims); mc_check_fn
+;; filters it per fn under the stratified-citation rule. Skipped under focus mode
+;; (totality is a whole-closure property, and focus admits unproven claims that
+;; must not seed measure citations).
+(fn mc_outcome
+  ((m Module) (srcs (List SrcEntry)) (th Theory) (focus Symbol))
+  (List ClaimOutcome)
+  (if (sym_eq focus (quote __all__))
+    (match (mc_files m (ad_sccs m) th srcs)
+      (Nil Nil)
+      (lines
+        (Cons
+          (COLedger
+            (append_int "---- measure obligations ----" (append_int (sr_nl) lines)))
+          Nil)))
+    Nil))
 
 (fn check_production_src
   ((seed Module)

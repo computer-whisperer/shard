@@ -28,16 +28,22 @@
 ;;;   lencheat MEASURED FAIL  — typed-path cheat: recurses on (Cons h t)
 ;;;                            itself, so decrease is lt of equal lengths —
 ;;;                            no proof may close it
-;;;   owncite  MEASURED FAIL  — circularity pin: obligation proofs see the
-;;;                            GRANTED theory only; a same-file claim is not
-;;;                            citable (it is unchecked when the admission
-;;;                            pass runs). The granted-citing OK case is
-;;;                            pinned by wf_induct_demo.shard (div_lt).
+;;;   owncite  MEASURED OK    — stratified citation (downstream cite ACCEPTED):
+;;;                            own_lemma is pure arithmetic — its statement
+;;;                            reaches no fn, so it cannot depend on owncite.
+;;;                            The call-graph filter keeps it; the cite works.
+;;;   selfcite MEASURED FAIL  — stratified citation (reaches-F cite REFUSED):
+;;;                            self_fact's statement mentions circ (the fn under
+;;;                            admission), so it reaches circ's own SCC; the
+;;;                            filter drops it and the cite is unresolved. Same
+;;;                            proof shape as owncite, opposite outcome — that
+;;;                            difference IS the acyclicity rule.
 ;;; Inline proof order: per site (pre-order body walk), decrease then
 ;;; nonnegativity. farkas cert layout: (list GOAL_MULT M_premise…) — one
 ;;; slot per KEPT premise.
-;;; Under plain `check` this file is 0 claims / 0 failures — the clause is
-;;; report-only until the Phase D enforcement flip.
+;;; Under plain `check` the claims (own_lemma, self_fact) pass and the measure
+;;; obligations render in a report-only block (MEASURED OK/FAIL) — they bump no
+;;; pass/fail count until the Phase D enforcement flip.
 
 (import "../kernel/stdlib.shard")
 (import "../std/list.shard")  ; len + the len_cons/len_nonneg lemmas (lensum)
@@ -118,8 +124,10 @@
     (Nil 0)
     ((Cons h t) (if (lt h 5) (dropper t (- k 1)) 0))))
 
-;; circularity pin: own_lemma states the nonneg obligation EXACTLY, but the
-;; obligation theory contains granted sources only — the cite must fail.
+;; stratified citation — DOWNSTREAM CITE ACCEPTED. own_lemma states the nonneg
+;; obligation EXACTLY and is pure arithmetic: its statement names only primitives
+;; (lt/le/-), so it reaches NO fn and cannot depend on owncite. The call-graph
+;; filter keeps it, so owncite's nonneg cite resolves and the obligation closes.
 (claim own_lemma
   (goal ((n Int)) ((= (lt 0 n) True)) (= (le 0 (- n 1)) True))
   (by farkas (list 1 1)))
@@ -136,6 +144,24 @@
       ((steps ((rewrite (premise 0) lr lhs true ())) refl))
       refl))
   (if (lt 0 n) (owncite (- n 1)) 0))
+
+;; stratified citation — REACHES-F CITE REFUSED. self_fact is a true, checked
+;; claim (circ 0 = 0, so 0 <= circ 0), but its STATEMENT mentions circ — the very
+;; fn under admission — so it reaches circ's own SCC and the filter drops it from
+;; circ's obligation theory. The decrease proof uses self_fact as the LOAD-BEARING
+;; justification of a `have` (a goal self_fact would close if citable), so the
+;; failure is unambiguously the refused cite: were self_fact kept, the have would
+;; discharge and the decrease close. A lemma may not help prove the fn it rests on.
+(claim self_fact (goal () () (= (le 0 (circ 0)) True)) (steps ((compute lhs)) refl))
+
+(fn circ ((n Int)) Int
+  (measure
+    n
+    (have (= (le 0 (circ 0)) True)
+      (rewrite-with (lemma self_fact) lr lhs () () refl)
+      (by farkas (list 1 0 0)))
+    (by farkas (list 1 1)))
+  (if (lt 0 n) (circ (- n 1)) 0))
 
 ;; typed-path cheat pin: the recursive call passes (Cons h t) — the very
 ;; value xs is known to equal (premise 0) — so the decrease obligation is
