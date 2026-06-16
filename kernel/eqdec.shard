@@ -40,8 +40,10 @@
 ;; imports — the kernel files this module uses (dependency-tracked)
 (import "stdlib.shard")
 (import "term.shard")
+(import "proof.shard")
 (import "lia.shard")
 (use (:: kernel term *))
+(use (:: kernel proof *))
 (use (:: kernel lia *))
 
 (fn eqdec_decide ((lhs Expr) (rhs Expr)) Bool
@@ -59,3 +61,67 @@
          (_ False))  ; LHS not a Call
        False))  ; RHS ctor isn't True
     (_ False)))  ; RHS not a ctor
+
+;; ---- reflection-reverse: the inverse of eqdec_decide -------------------------
+;; eqdec_decide PROVES `(eqprim a b) = True`. Its inverse CONSUMES such a fact:
+;; from an in-scope hypothesis/premise `(eqprim x y) = True` (eqprim ∈ {int_eq,
+;; sym_eq}) it discharges the goal `(= a b)` whenever {x,y} = {a,b}. Same trust
+;; basis as eqdec — the primitive's spec, `(eqprim u v)=True` iff u,v equal, so
+;; NO new axiom and the audit ledger stays empty. The `reflect` ByTheory backend
+;; (checker.shard) calls this over the sequent's premises and ground hypotheses.
+;; This is what symbol-keyed lookup proofs need: the int-keyed case routes
+;; equality through lia, but symbols have no arithmetic (see std/map, which uses
+;; Int keys precisely to dodge this).
+
+;; goal sides a,b vs a candidate's args x,y — either pairing (the prims are
+;; symmetric, and the goal's orientation is free).
+(fn reflect_pair_ok ((a Expr) (b Expr) (x Expr) (y Expr)) Bool
+  (if (if (expr_eq a x) (expr_eq b y) False) True
+  (if (expr_eq a y) (expr_eq b x) False)))
+
+;; does `e` read as `(eqprim x y) = True` (eqprim a reflectable equality prim)
+;; with {x,y} = {a,b}?
+(fn reflect_eq_ok ((a Expr) (b Expr) (e Equation)) Bool
+  (match e
+    ((Equation l r)
+     (match r
+       ((Ctor tname _)
+        (if (core_named tname (quote True))
+          (match l
+            ((Call f args)
+             (match args
+               ((Cons x (Cons y Nil))
+                (if (if (core_named f (quote int_eq)) True
+                      (core_named f (quote sym_eq)))
+                  (reflect_pair_ok a b x y)
+                  False))
+               (_ False)))  ; not a binary call
+            (_ False))  ; LHS not a Call
+          False))  ; RHS ctor isn't True
+       (_ False)))))  ; RHS not a ctor
+
+(fn reflect_scan_eqs ((a Expr) (b Expr) (es (List Equation))) Bool
+  (match es
+    (Nil False)
+    ((Cons e rest) (if (reflect_eq_ok a b e) True (reflect_scan_eqs a b rest)))))
+
+;; ground hypotheses (no ∀-binders, no own premises) read as plain equations.
+(fn reflect_scan_hyps ((a Expr) (b Expr) (hyps (List Goal))) Bool
+  (match hyps
+    (Nil False)
+    ((Cons g rest)
+     (match g
+       ((Goal gb gp concl)
+        (match gb
+          (Nil
+            (match gp
+              (Nil
+                (if (reflect_eq_ok a b concl) True
+                  (reflect_scan_hyps a b rest)))
+              (_ (reflect_scan_hyps a b rest))))
+          (_ (reflect_scan_hyps a b rest))))))))
+
+(fn reflect_decide
+  ((a Expr) (b Expr) (hyps (List Goal)) (prems (List Equation)))
+  Bool
+  (if (reflect_scan_eqs a b prems) True (reflect_scan_hyps a b hyps)))

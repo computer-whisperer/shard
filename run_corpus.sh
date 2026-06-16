@@ -57,6 +57,8 @@ TARGETS=(
   examples/list_named_hyp.shard
   examples/named_haves.shard
   examples/named_case_hyps.shard
+  examples/reflect_demo.shard
+  examples/reflect_rejects.shard
   examples/module_gate_rejects.shard
   examples/parse_rejects.shard
   examples/pending_demo.shard
