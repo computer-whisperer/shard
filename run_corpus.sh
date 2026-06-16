@@ -91,6 +91,10 @@ TARGETS=(
   std/order.shard
   std/rng/rng.shard
   std/bytes/bytes.shard
+  std/list/list.shard
+  std/arith/arith.shard
+  std/div/div.shard
+  std/map/map.shard
 )
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
