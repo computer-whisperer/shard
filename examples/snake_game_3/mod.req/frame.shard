@@ -13,13 +13,16 @@
 ;;; unconstrained HERE — which glyph sits where is the (coming) entity
 ;;; faithfulness vocabulary's business, not the shape's.
 ;;;
-;;; SELF-CONTAINED (tier-1 discipline): list helpers (take/drop) are local,
-;;; the only import beyond the kernel is the sibling board dims, and the
-;;; row checks are IF-FORM (no Bool-algebra dependency; reduce fires ifs
-;;; directly — the slice-4 inversion lesson). Reviewed surface should not
-;;; depend on chasing imports — least of all into impl-owned modules.
+;;; The row checks are IF-FORM (no Bool-algebra dependency; reduce fires ifs
+;;; directly — the slice-4 inversion lesson). List helpers (take/drop/len) come
+;;; from std/list: split_rows recurses on a drop, and proving that terminates
+;;; wants the drop length algebra (drop_shortens/len_nonneg) — general list
+;;; reasoning that belongs in std, not duplicated here. std/list is the same
+;;; reviewed stdlib the apex already depends on.
 (import "../../../kernel/stdlib.shard")  ; List / Option / Bool / Pair
+(import "../../../std/list")  ; take/drop/len + drop_shortens/len_nonneg (measure)
 (import "board.shard")  ; tier-1 sibling: the opaque board dims
+(use (:: std list *))
 (use (:: examples snake_game_3 board *))
 
 ;; ---- glyph constants --------------------------------------------------------
@@ -27,20 +30,6 @@
 (fn wall () Int 35)  ; '#'
 
 (fn nl () Int 10)  ; '\n'
-
-;; ---- list helpers -----------------------------------------------------------
-
-(fn take ((n Int) (xs (List Int))) (List Int)
-  (if (le n 0) Nil
-  (match xs
-    (Nil Nil)
-    ((Cons h t) (Cons h (take (- n 1) t))))))
-
-(fn drop ((n Int) (xs (List Int))) (List Int)
-  (if (le n 0) xs
-  (match xs
-    (Nil Nil)
-    ((Cons h t) (drop (- n 1) t)))))
 
 ;; ---- row checks (counted runs) ----------------------------------------------
 
@@ -78,10 +67,54 @@
 
 ;; split fixed-width (board_w + 3)-byte rows off the body (a malformed short
 ;; body yields a short final row, which the row checks above reject).
+;; Recurses on (drop K (Cons h t)) (= drop K bs in this arm) where K=board_w+3.
+;; The (Cons h t) match + binder-referencing recursion arg is what lets the
+;; measure (len bs) descend (Phase C): the arm equation is kept, so len bs >= 1,
+;; and drop_shortens gives the strict drop. The (le K 0) guard supplies K >= 1
+;; (board_w is opaque here — its positivity lives in the apex, which imports
+;; this file; for board_w > 0 the guard is never taken, so is_frame is
+;; unchanged). decrease then nonneg; premises 0 = arm eq, 1 = guard.
 (fn split_rows ((bs (List Int))) (List (List Int))
+  (measure
+    (len bs)
+    (steps
+      ((rewrite (premise 0) lr lhs true ()))
+      (have (= (le 1 (+ (board_w) 3)) True) (by farkas (list 1 0 1))
+        (have (= (le 0 (len t)) True)
+          (rewrite-with (lemma len_nonneg) lr lhs ((inst xs t)) () refl)
+          (have (= (le 1 (len (Cons h t))) True)
+            (steps
+              ((rewrite (lemma len_cons) lr lhs true ()))
+              (by farkas (list 1 0 0 0 1)))
+            (have
+              (=
+                (le
+                  (+ (len (drop (+ (board_w) 3) (Cons h t))) 1)
+                  (len (Cons h t)))
+                True)
+              (rewrite-with
+                (lemma drop_shortens)
+                lr
+                lhs
+                ((inst n (+ (board_w) 3)) (inst xs (Cons h t)))
+                ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+                 (steps ((rewrite (premise 4) lr lhs true ())) refl))
+                refl)
+              (by farkas (list 1 0 0 0 0 0 1)))))))
+    (rewrite-with
+      (lemma len_nonneg)
+      lr
+      lhs
+      ((inst xs (drop (+ (board_w) 3) (Cons h t))))
+      ()
+      refl))
   (match bs
     (Nil Nil)
-    (_ (Cons (take (+ (board_w) 3) bs) (split_rows (drop (+ (board_w) 3) bs))))))
+    ((Cons h t)
+     (if (le (+ (board_w) 3) 0) Nil
+     (Cons
+       (take (+ (board_w) 3) bs)
+       (split_rows (drop (+ (board_w) 3) (Cons h t))))))))
 
 ;; n interior rows, then the bottom border row, then NO further rows.
 (fn mid_rows ((n Int) (rs (List (List Int)))) Bool
