@@ -471,22 +471,37 @@
     ((Cons c r)
      (if (le lo c) (if (le c hi) (utf8_cont r n) None) None))))
 
+;; classify a lead byte b and (given the rest t) return the bytes left after
+;; its continuation bytes are consumed — Some suffix, or None if invalid.
+;; Extracted from utf8_ok so the loop's scrutinee is a bare call whose result
+;; type synthesizes (the prerequisite for naming the suffix in a measure).
+(fn utf8_lead ((b Int) (t (List Int))) (Option (List Int))
+  (if (le b 127) (Some t)  ; ascii
+  (if (le b 193) None  ; bare continuation or overlong C0/C1
+  (if (le b 223) (utf8_cont t 1)  ; C2..DF
+  (if (int_eq b 224) (utf8_narrow t 160 191 1)  ; E0: no overlong
+  (if (le b 236) (utf8_cont t 2)  ; E1..EC
+  (if (int_eq b 237) (utf8_narrow t 128 159 1)  ; ED: no surrogates
+  (if (le b 239) (utf8_cont t 2)  ; EE..EF
+  (if (int_eq b 240) (utf8_narrow t 144 191 2)  ; F0: no overlong
+  (if (le b 243) (utf8_cont t 3)  ; F1..F3
+  (if (int_eq b 244) (utf8_narrow t 128 143 2)  ; F4: cap U+10FFFF
+  None)))))))))))  ; F5..FF invalid
+
+;; TODO(issue #1, totality): utf8_ok recurses on the suffix utf8_lead returns,
+;; so it is total by a (measure (bp_len xs)) — it terminates because every step
+;; consumes >=1 byte (<=4 per code point). It is left a FLAG for now: the proof
+;; needs suffix lemmas len(opt_rest(utf8_cont/utf8_narrow …)) <= len input plus a
+;; 10-way dispatch lemma over utf8_lead, and utf8 is a TEMPORARY kernel fixture
+;; (Str #2 demotes strings/utf8 out of the kernel), so the throwaway proof is
+;; deferred. The utf8_lead extraction above is the stateable-measure on-ramp;
+;; stratified citation (93907f0) is the mechanism to finish it. See lia_canonical
+;; for the worked pattern.
 (fn utf8_ok ((xs (List Int))) Bool
   (match xs
     (Nil True)
     ((Cons b t)
-     (match
-       (if (le b 127) (Some t)  ; ascii
-       (if (le b 193) None  ; bare continuation or overlong C0/C1
-       (if (le b 223) (utf8_cont t 1)  ; C2..DF
-       (if (int_eq b 224) (utf8_narrow t 160 191 1)  ; E0: no overlong
-       (if (le b 236) (utf8_cont t 2)  ; E1..EC
-       (if (int_eq b 237) (utf8_narrow t 128 159 1)  ; ED: no surrogates
-       (if (le b 239) (utf8_cont t 2)  ; EE..EF
-       (if (int_eq b 240) (utf8_narrow t 144 191 2)  ; F0: no overlong
-       (if (le b 243) (utf8_cont t 3)  ; F1..F3
-       (if (int_eq b 244) (utf8_narrow t 128 143 2)  ; F4: cap U+10FFFF
-       None))))))))))  ; F5..FF invalid
+     (match (utf8_lead b t)
        (None False)
        ((Some r) (utf8_ok r))))))
 
