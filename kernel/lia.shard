@@ -81,12 +81,53 @@
     (Nil b)
     ((Cons h t) (Cons h (lia_concat t b)))))
 
+;; length of a monomial list — the termination measure for lia_canonical
+;; (which recurses on the strictly-shorter suffix lia_split_atom returns).
+;; A kernel-local list facility: the kernel has no polymorphic len, and this
+;; list type (List (Pair Int (Option Expr))) has none yet.
+(fn lia_plen ((p (List (Pair Int (Option Expr))))) Int
+  (match p
+    (Nil 0)
+    ((Cons h t) (+ 1 (lia_plen t)))))
+
 ;; ---------------------------------------------------------------------------
 ;; Canonicalization: merge like terms, drop zero coefficients.
 ;; ---------------------------------------------------------------------------
 
+;; measure: lia_plen p. The recursion is on rest_no_a, the suffix the inner
+;; split returns; premise 0 = the outer arm eq (p = Cons (Pair c a) rest),
+;; premise 1 = the inner arm eq (lia_split_atom a rest = Pair total rest_no_a).
+;; decrease: bridge rest_no_a back to (lsa_rest (lia_split_atom a rest)) via
+;; premise 1, bound it by (lia_plen rest) with lia_split_atom_le, then p's
+;; length is 1 + that (lia_plen_cons) so the suffix is strictly shorter.
+;; nonneg: lia_plen_nonneg.
 (fn lia_canonical ((p (List (Pair Int (Option Expr)))))
   (List (Pair Int (Option Expr)))
+  (measure
+    (lia_plen p)
+    (have (= rest_no_a (lsa_rest (lia_split_atom a rest)))
+      (steps ((rewrite (premise 1) lr rhs true ()) (simp rhs)) refl)
+      (have (= (le (lia_plen rest_no_a) (lia_plen rest)) True)
+        (steps
+          ((rewrite (premise 2) lr lhs true ()))
+          (rewrite-with
+            (lemma lia_split_atom_le)
+            lr
+            lhs
+            ((inst a a) (inst q rest))
+            ()
+            refl))
+        (steps
+          ((rewrite (premise 0) lr lhs true ())
+           (rewrite (lemma lia_plen_cons) lr lhs true ()))
+          (by farkas (list 1 0 0 0 1)))))
+    (rewrite-with
+      (lemma lia_plen_nonneg)
+      lr
+      lhs
+      ((inst p rest_no_a))
+      ()
+      refl))
   (match p
     (Nil Nil)
     ((Cons (Pair c a) rest)
@@ -118,6 +159,92 @@
      (match b
        ((Some eb) (expr_eq ea eb))
        (_ False)))))
+
+;; ---- totality support for lia_canonical (cited by its measure) -------------
+;; lia_canonical recurses on the suffix lia_split_atom returns; these are the
+;; kernel-local facts its (measure (lia_plen p) …) cites. None of them reaches
+;; lia_canonical in the call graph, so stratified citation admits them.
+
+;; the suffix component of a split result.
+(fn lsa_rest ((pr (Pair Int (List (Pair Int (Option Expr))))))
+  (List (Pair Int (Option Expr)))
+  (match pr ((Pair _ r) r)))
+
+;; lia_plen's defining equations.
+(claim lia_plen_nil
+  (goal () () (= (lia_plen Nil) 0))
+  (steps ((simp lhs)) refl))
+
+(claim lia_plen_cons
+  (goal
+    ((h (Pair Int (Option Expr))) (t (List (Pair Int (Option Expr)))))
+    ()
+    (= (lia_plen (Cons h t)) (+ 1 (lia_plen t))))
+  (steps ((simp lhs)) refl))
+
+;; 0 <= lia_plen p. Induction; the step bumps the IH's lower bound (farkas).
+(claim lia_plen_nonneg
+  (goal ((p (List (Pair Int (Option Expr))))) () (= (le 0 (lia_plen p)) True))
+  (induct p
+    ((case Nil
+       (steps ((rewrite (lemma lia_plen_nil) lr lhs true ())) (by farkas (list 1))))
+     (case Cons
+       (h t)
+       ;; materialize the IH as a premise (farkas does not read induct IHs as
+       ;; slots), then bump it past the leading +1.
+       (have (= (le 0 (lia_plen t)) True)
+         (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+         (steps
+           ((rewrite (lemma lia_plen_cons) lr lhs true ()))
+           (by farkas (list 1 1))))))))
+
+;; lia_split_atom's leftover never grows the list: len (suffix) <= len input.
+;; Induction on q; the Cons step destructures the head pair, cases the inner
+;; recursive split, bridges the IH through the split equation, then cases the
+;; atom-eq guard (kept → drop the head; not kept → keep it). farkas finishes
+;; each branch from the bridged IH bound.
+(claim lia_split_atom_le
+  (goal
+    ((a (Option Expr)) (q (List (Pair Int (Option Expr)))))
+    ()
+    (= (le (lia_plen (lsa_rest (lia_split_atom a q))) (lia_plen q)) True))
+  (induct q
+    ((case Nil
+       (steps ((unfold lia_split_atom lhs) (simp lhs)) refl))
+     (case Cons
+       (hd rest)
+       (case-on hd Pair
+         ((case Pair
+            (c b)
+            ;; hyp 0 = (= hd (Pair c b)), hyp 1 = IH (forall a)
+            (case-on (lia_split_atom a rest) Pair
+              ((case Pair
+                 (total others)
+                 ;; hyp 0 = (= (lia_split_atom a rest) (Pair total others)),
+                 ;; hyp 1 = (= hd (Pair c b)), hyp 2 = IH
+                 (have (= others (lsa_rest (lia_split_atom a rest)))
+                   (steps ((rewrite (hyp 0) lr rhs true ()) (simp rhs)) refl)
+                   ;; premise 0 = the line above
+                   (have (= (le (lia_plen others) (lia_plen rest)) True)
+                     (steps
+                       ((rewrite (premise 0) lr lhs true ()))
+                       (rewrite-with (hyp 2) lr lhs ((inst a a)) () refl))
+                     ;; premise 1 = the IH bound, rephrased over `others`
+                     (steps
+                       ((rewrite (hyp 1) lr lhs true ())  ; hd -> (Pair c b)
+                        (unfold lia_split_atom lhs)
+                        (simp lhs)
+                        (rewrite (hyp 0) lr lhs true ())  ; (lia_split_atom a rest) -> (Pair total others)
+                        (simp lhs))
+                       (case-on (lia_atom_eq a b) Bool
+                         ((case True
+                            (steps
+                              ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
+                              (by farkas (list 1 0 1))))
+                          (case False
+                            (steps
+                              ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
+                              (by farkas (list 1 0 1)))))))))))))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Final test: are all coefficients zero?
