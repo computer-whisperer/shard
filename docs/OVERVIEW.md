@@ -218,12 +218,18 @@ live exploit until the gate lands). The ratified design:
   bounded integer descent has the external pedigree we demand of axioms —
   and unlike a structural-only gate it does not push executable loops onto
   unary Peano fuel.
-- **Two recognitions.** Syntactic structural subterm descent (including
-  mutual SCCs) is the auto-recognized, zero-annotation instance — term size
-  is the measure, justified once at the meta level. Everything else declares
-  an explicit `(measure E)`; the kernel emits the decrease/nonnegativity
-  facts per call site as ordinary claims, discharged in the untrusted regime
-  (the prover already enumerates farkas certificates for exactly this shape).
+- **Discover offline, verify at check time** (refined 2026-06-17). The
+  descent recognizer is kept *out of the trust path*: `admit` is the offline
+  classifier/suggester (the `tools/prove` of totality), and the check-time
+  gate only *verifies* an explicit `(measure …)` clause — it never searches
+  for a descent. Two forms: structural `(measure (struct ARG))`, where the
+  checker verifies the named argument is a strict subterm at each recursive
+  call (no proof needed); and numeric `(measure E proofs…)`, where the kernel
+  emits the decrease/nonnegativity facts per call site as ordinary claims,
+  discharged in the untrusted regime (the prover already enumerates farkas
+  certificates for exactly this shape). A recognizer *inside* the gate would
+  be TCB — its bugs would be soundness bugs — so discovery stays advisory.
+  See `TOTALITY.md` for the full system.
 - **No partiality, anywhere.** There is no `partial-fn` caste and no codata.
   Genuinely unbounded processes — the interpreter, reducer fixpoint loops,
   event loops — take an Int fuel/budget parameter and are measure-admitted
@@ -307,4 +313,6 @@ Flagged so we don't paint ourselves into a corner:
 - `BOUNDARIES.md` — modeling external systems (extern + axiom; the direct-style
   World/extern I/O the `eval` runner realizes).
 - `REVISIT.md` — the design-decision ledger: every choice and when to revisit.
+- `TOTALITY.md` — the measure-descent admissibility system: the verify-don't-search
+  architecture, the single-fn and mutual gates, cycle-readiness, the TCB.
 - `archive/TRANSFER.md` — the v1→v2 handoff: premise, lessons, what changed.

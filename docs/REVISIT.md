@@ -69,6 +69,40 @@ is where to start when planning v3.
   threading through the `ev`/reducer chains costs more than the
   caste system it replaced. Must-fail pins: `liar` (`examples/`
   nonterm reject) + a measure-cheat (false decrease on one path).
+- **Refined 2026-06-17:** the "structural subterm descent
+  auto-recognized with zero annotation" half is superseded — see the
+  next entry. The Int-measure primitive itself stands.
+
+### Totality: discover offline, verify at check time (2026-06-17)
+- **Chose:** the descent recognizer is **not** in the trust path.
+  `admit` becomes the offline classifier/suggester (the `tools/prove`
+  of totality); the check-time gate **verifies an explicit `(measure …)`
+  clause and never searches** for a descent. Two clause forms: structural
+  `(measure (struct ARG))` — checker verifies the named argument is a
+  strict subterm at each recursive call, no proof needed — and numeric
+  `(measure E proofs…)` (already built). Enforcement predicate (Phase D):
+  *every recursive SCC carries a verified measure clause*, with **no
+  auto-recognition exemption**. Full design in `TOTALITY.md`.
+- **Why now:** a recognizer inside the gate is TCB — a bug that accepts a
+  non-descending recursion is a soundness bug (re-opens `0=1`). An offline
+  suggester is not TCB: its bugs only mislead the author, who still commits
+  a clause the small stable verifier checks. Moving discovery out of the
+  gate **shrinks the TCB**. Also the author's standing principle: *if a
+  later update can change what an "auto-" finds, prefer explicit
+  bookkeeping* — the same reason the proof system uses sidecars over
+  check-time search. (The failure mode of an in-gate recognizer is *safe*
+  — a regression accepts fewer fns, a loud failure — so this is a
+  TCB-size + verdict-drift argument, not silent unsoundness.)
+- **Mutual SCCs:** per-member measures, every internal edge
+  `Eⱼ[args] < Eᵢ[caller params]` + nonneg; common-measure (AST size)
+  for v1. Built cycle-ready (QName resolution, QName-keyed siblings,
+  per-member scope) though import cycles stay forbidden for now.
+- **Revisit if:** the per-fn `(struct …)` annotation burden (~468 fns)
+  proves heavier than a frozen in-gate structural fast-path would cost in
+  TCB/drift; or the in-source clause volume warrants **sidecar files** for
+  measures (moving discovery results out-of-band, the next step on the
+  same principle); or lexicographic ranks become necessary for
+  heterogeneous (esp. accidental cross-module) SCCs.
 
 ### Trusted-core contraction: Word/Bytes formers revoked (2026-06-12)
 - **Chose:** the kernel's assumable base is a **closed list** —
