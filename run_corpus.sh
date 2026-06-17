@@ -78,6 +78,7 @@ TARGETS=(
   examples/mutual_toy.shard
   examples/subterm_induct.shard
   examples/subterm_induct_rejects.shard
+  examples/render_model.shard
   examples/word_facts.shard
   examples/word_facts_signed.shard
   examples/modules_demo/consumer.shard

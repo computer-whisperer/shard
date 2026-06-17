@@ -1,0 +1,318 @@
+;;; render_model.shard — a FAST standalone harness for the render_term measure
+;;; certs (issue #1). The four render fns (render_term / render_app /
+;;; render_args / render_if) are a 4-member MUTUAL SCC over the kernel Expr;
+;;; ad_sccs classifies them AdUnresolved (render_app passes its list param
+;;; UNCHANGED to render_args — no single descending structural track), so they
+;;; need explicit numeric (measure …) clauses. This file pins those clauses
+;;; against the REAL Expr (imported from term.shard) so the proofs port
+;;; VERBATIM into kernel/trace.shard — which checks ~11 min/run, while this
+;;; (term.shard only) checks in seconds.
+;;;
+;;; The measure is an additive AST size:
+;;;   size(leaf)         = 1
+;;;   size(Ctor/Call _ a)= 2 + size_list a
+;;;   size(If c t e)     = 2 + size c + size t + size e
+;;;   size_list (Cons a r) = 1 + size a + size_list r
+;;; Per-fn measures (chosen so every intra-SCC edge strictly descends):
+;;;   render_term : size e
+;;;   render_app  : size_list args + 1   (+1 so render_app > render_args at the
+;;;                                       same args — render_app passes it on)
+;;;   render_args : size_list args
+;;;   render_if   : 1 + size c + size t + size e
+;;;
+;;; size ⟷ size_list is itself mutual but STRUCTURAL (single descending track),
+;;; so ad_sccs auto-recognizes it (AdMutual) — no clause needed there. Its
+;;; nonneg lemmas are what the render obligations cite:
+;;;   size_nonneg       — by (subterm-induct), the only way to reach the nested
+;;;                       (List Expr) field; see examples/subterm_induct.shard
+;;;   size_list_nonneg  — ordinary spine induct, cites size_nonneg one-way
+
+(import "../kernel/term.shard")
+(use (:: kernel term *))
+
+;; ---- the measure (mutual, structural: AdMutual, no clause needed) ----------
+(fn size ((e Expr)) Int
+  (match e
+    ((FVar _) 1)
+    ((BVar _) 1)
+    ((Ctor _ args) (+ 2 (size_list args)))
+    ((Call _ args) (+ 2 (size_list args)))
+    ((Match _ _) 1)
+    ((Let _ _) 1)
+    ((If c t e2) (+ 2 (+ (size c) (+ (size t) (size e2)))))
+    ((IntLit _) 1)
+    ((SymLit _) 1)))
+
+(fn size_list ((xs (List Expr))) Int
+  (match xs
+    (Nil 0)
+    ((Cons a rest) (+ 1 (+ (size a) (size_list rest))))))
+
+;; ---- defining equations (one structural unfold each) -----------------------
+(claim size_ctor
+  (goal ((name QName) (args (List Expr))) ()
+    (= (size (Ctor name args)) (+ 2 (size_list args))))
+  (steps ((simp lhs)) refl))
+
+(claim size_call
+  (goal ((name QName) (args (List Expr))) ()
+    (= (size (Call name args)) (+ 2 (size_list args))))
+  (steps ((simp lhs)) refl))
+
+(claim size_if
+  (goal ((c Expr) (t Expr) (e Expr)) ()
+    (= (size (If c t e)) (+ 2 (+ (size c) (+ (size t) (size e))))))
+  (steps ((simp lhs)) refl))
+
+(claim size_list_nil
+  (goal () () (= (size_list Nil) 0))
+  (steps ((simp lhs)) refl))
+
+(claim size_list_cons
+  (goal ((a Expr) (rest (List Expr))) ()
+    (= (size_list (Cons a rest)) (+ 1 (+ (size a) (size_list rest)))))
+  (steps ((simp lhs)) refl))
+
+;; ---- the mutual nonneg pair (size_nonneg drives the render certs) -----------
+;; subterm-induction on e: the Ctor/Call cases prove 0 <= size_list args inline
+;; (ordinary induct on args, each head's bound from the strong IH via (below));
+;; the If case pulls 0 <= size of each child straight from the strong IH.
+(claim size_nonneg
+  (goal ((e Expr)) () (= (le 0 (size e)) True))
+  (subterm-induct
+    e
+    (case-on e Expr
+      ((case FVar
+         (s)
+         (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) refl))
+       (case BVar
+         (k)
+         (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) refl))
+       (case Ctor
+         (name args)
+         ;; hyp 0 = (= e (Ctor name args)); hyp 1 = subterm-IH 'ih
+         (have (= (le 0 (size_list args)) True)
+           (induct args
+             ((case Nil
+                (steps
+                  ((rewrite (lemma size_list_nil) lr lhs true ()))
+                  (by farkas (list 1))))
+              (case Cons
+                (a rest)
+                ;; after (induct args): hyp 0 = (= e (Ctor name (Cons a rest))),
+                ;; hyp 1 = subterm-IH 'ih, hyp 2 = list-IH (le 0 (size_list rest))
+                (have (= (le 0 (size a)) True)
+                  (rewrite-with (hyp ih) lr lhs () ((below)) refl)
+                  (have (= (le 0 (size_list rest)) True)
+                    ;; (induct args) generalized BOTH surviving outer vars (e and
+                    ;; the other Ctor field name) into the list-IH: pin both.
+                    (rewrite-with
+                      (hyp 2)
+                      lr
+                      lhs
+                      ((inst e e) (inst name name))
+                      ()
+                      refl)
+                    (steps
+                      ((rewrite (lemma size_list_cons) lr lhs true ()))
+                      (by farkas (list 1 1 1))))))))
+           (steps
+             ((rewrite (hyp 0) lr lhs true ())
+              (rewrite (lemma size_ctor) lr lhs true ()))
+             (by farkas (list 1 1)))))
+       (case Call
+         (name args)
+         (have (= (le 0 (size_list args)) True)
+           (induct args
+             ((case Nil
+                (steps
+                  ((rewrite (lemma size_list_nil) lr lhs true ()))
+                  (by farkas (list 1))))
+              (case Cons
+                (a rest)
+                (have (= (le 0 (size a)) True)
+                  (rewrite-with (hyp ih) lr lhs () ((below)) refl)
+                  (have (= (le 0 (size_list rest)) True)
+                    (rewrite-with
+                      (hyp 2)
+                      lr
+                      lhs
+                      ((inst e e) (inst name name))
+                      ()
+                      refl)
+                    (steps
+                      ((rewrite (lemma size_list_cons) lr lhs true ()))
+                      (by farkas (list 1 1 1))))))))
+           (steps
+             ((rewrite (hyp 0) lr lhs true ())
+              (rewrite (lemma size_call) lr lhs true ()))
+             (by farkas (list 1 1)))))
+       (case Match
+         (s arms)
+         (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) refl))
+       (case Let
+         (binds body)
+         (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) refl))
+       (case If
+         (c t e2)
+         ;; hyp 0 = (= e (If c t e2)); hyp 1 = subterm-IH 'ih. Each child is a
+         ;; direct subterm of e, so (below) discharges its ordering premise.
+         (have (= (le 0 (size c)) True)
+           (rewrite-with (hyp ih) lr lhs () ((below)) refl)
+           (have (= (le 0 (size t)) True)
+             (rewrite-with (hyp ih) lr lhs () ((below)) refl)
+             (have (= (le 0 (size e2)) True)
+               (rewrite-with (hyp ih) lr lhs () ((below)) refl)
+               (steps
+                 ((rewrite (hyp 0) lr lhs true ())
+                  (rewrite (lemma size_if) lr lhs true ()))
+                 (by farkas (list 1 1 1 1)))))))
+       (case IntLit
+         (n)
+         (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) refl))
+       (case SymLit
+         (s)
+         (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) refl))))))
+
+(claim size_list_nonneg
+  (goal ((ks (List Expr))) () (= (le 0 (size_list ks)) True))
+  (induct ks
+    ((case Nil
+       (steps
+         ((rewrite (lemma size_list_nil) lr lhs true ()))
+         (by farkas (list 1))))
+     (case Cons
+       (h t)
+       ;; hyp 0 = list-IH (le 0 (size_list t))
+       (have (= (le 0 (size h)) True)
+         (rewrite-with (lemma size_nonneg) lr lhs () () refl)
+         (have (= (le 0 (size_list t)) True)
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+           (steps
+             ((rewrite (lemma size_list_cons) lr lhs true ()))
+             (by farkas (list 1 1 1)))))))))
+
+;; ===========================================================================
+;; The four render fns — bodies copied VERBATIM from kernel/trace.shard, plus
+;; the measure clauses. Site order = pre-order body walk; per site the inline
+;; proof pair is (decrease, nonneg).
+;; ===========================================================================
+
+(fn render_term ((e Expr)) (List Int)
+  (measure
+    (size e)
+    ;; site 1 — Ctor arm: (render_app (qn_name name) args). msr2 = size_list args
+    ;; + 1 (render_app's measure), binder args, hyp0 = (= e (Ctor name args)).
+    (steps
+      ((rewrite (premise 0) lr lhs true ())
+       (rewrite (lemma size_ctor) lr lhs true ()))
+      (by farkas (list 1 0)))
+    (have (= (le 0 (size_list args)) True)
+      (rewrite-with (lemma size_list_nonneg) lr lhs () () refl)
+      (by farkas (list 1 0 1)))
+    ;; site 2 — Call arm: same shape, hyp0 = (= e (Call name args)).
+    (steps
+      ((rewrite (premise 0) lr lhs true ())
+       (rewrite (lemma size_call) lr lhs true ()))
+      (by farkas (list 1 0)))
+    (have (= (le 0 (size_list args)) True)
+      (rewrite-with (lemma size_list_nonneg) lr lhs () () refl)
+      (by farkas (list 1 0 1)))
+    ;; site 3 — If arm: (render_if c t e2). msr2 = 1 + size c + size t + size e2
+    ;; (render_if's measure), binders c t e2, hyp0 = (= e (If c t e2)).
+    (steps
+      ((rewrite (premise 0) lr lhs true ())
+       (rewrite (lemma size_if) lr lhs true ()))
+      (by farkas (list 1 0)))
+    (have (= (le 0 (size c)) True)
+      (rewrite-with (lemma size_nonneg) lr lhs () () refl)
+      (have (= (le 0 (size t)) True)
+        (rewrite-with (lemma size_nonneg) lr lhs () () refl)
+        (have (= (le 0 (size e2)) True)
+          (rewrite-with (lemma size_nonneg) lr lhs () () refl)
+          (by farkas (list 1 0 1 1 1))))))
+  (match e
+    ((FVar s) (chars_of_sym s))
+    ((BVar k) (Cons 64 (show_int k)))
+    ((IntLit n) (show_int n))
+    ((SymLit s) (Cons 39 (chars_of_sym s)))
+    ((Ctor name args) (render_app (qn_name name) args))
+    ((Call name args) (render_app (qn_name name) args))
+    ((If c t e2) (render_if c t e2))
+    ((Match _ _) "<Match>")
+    ((Let _ _) "<Let>")))
+
+(fn render_app ((name Symbol) (args (List Expr))) (List Int)
+  (measure
+    (+ (size_list args) 1)
+    ;; site 1 — (render_args args). msr2 = size_list args (render_args measure),
+    ;; args is render_app's PARAM (the _ arm binds nothing), so NO hyp.
+    (by farkas (list 1))
+    (steps ((rewrite (lemma size_list_nonneg) lr lhs true ())) refl))
+  (match args
+    (Nil (chars_of_sym name))
+    (_
+      (Cons
+        40
+        (append_int
+          (chars_of_sym name)
+          (append_int (render_args args) (Cons 41 Nil)))))))
+
+(fn render_args ((args (List Expr))) (List Int)
+  (measure
+    (size_list args)
+    ;; site 1 — (render_term a). msr2 = size a, binder a, hyp0 = (= args (Cons a
+    ;; rest)). decrease needs size_list rest >= 0.
+    (have (= (le 0 (size_list rest)) True)
+      (rewrite-with (lemma size_list_nonneg) lr lhs () () refl)
+      (steps
+        ((rewrite (premise 0) lr lhs true ())
+         (rewrite (lemma size_list_cons) lr lhs true ()))
+        (by farkas (list 1 0 1))))
+    (steps ((rewrite (lemma size_nonneg) lr lhs true ())) refl)
+    ;; site 2 — (render_args rest). msr2 = size_list rest, binder rest. decrease
+    ;; needs size a >= 0.
+    (have (= (le 0 (size a)) True)
+      (rewrite-with (lemma size_nonneg) lr lhs () () refl)
+      (steps
+        ((rewrite (premise 0) lr lhs true ())
+         (rewrite (lemma size_list_cons) lr lhs true ()))
+        (by farkas (list 1 0 1))))
+    (steps ((rewrite (lemma size_list_nonneg) lr lhs true ())) refl))
+  (match args
+    (Nil Nil)
+    ((Cons a rest) (Cons 32 (append_int (render_term a) (render_args rest))))))
+
+(fn render_if ((c Expr) (t Expr) (e Expr)) (List Int)
+  (measure
+    (+ 1 (+ (size c) (+ (size t) (size e))))
+    ;; site 1 — (render_term c). msr2 = size c. decrease needs size t,size e >=0.
+    (have (= (le 0 (size t)) True)
+      (rewrite-with (lemma size_nonneg) lr lhs () () refl)
+      (have (= (le 0 (size e)) True)
+        (rewrite-with (lemma size_nonneg) lr lhs () () refl)
+        (by farkas (list 1 1 1))))
+    (steps ((rewrite (lemma size_nonneg) lr lhs true ())) refl)
+    ;; site 2 — (render_term t). decrease needs size c,size e >= 0.
+    (have (= (le 0 (size c)) True)
+      (rewrite-with (lemma size_nonneg) lr lhs () () refl)
+      (have (= (le 0 (size e)) True)
+        (rewrite-with (lemma size_nonneg) lr lhs () () refl)
+        (by farkas (list 1 1 1))))
+    (steps ((rewrite (lemma size_nonneg) lr lhs true ())) refl)
+    ;; site 3 — (render_term e). decrease needs size c,size t >= 0.
+    (have (= (le 0 (size c)) True)
+      (rewrite-with (lemma size_nonneg) lr lhs () () refl)
+      (have (= (le 0 (size t)) True)
+        (rewrite-with (lemma size_nonneg) lr lhs () () refl)
+        (by farkas (list 1 1 1))))
+    (steps ((rewrite (lemma size_nonneg) lr lhs true ())) refl))
+  (append_int
+    "(if "
+    (append_int
+      (render_term c)
+      (append_int
+        (Cons 32 Nil)
+        (append_int
+          (render_term t)
+          (append_int (Cons 32 Nil) (append_int (render_term e) (Cons 41 Nil))))))))

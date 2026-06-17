@@ -135,12 +135,14 @@ Report-only today: a failure prints a `MEASURED … FAIL` line. The pins
 `examples/measure_clause.shard` carry intentional cheats (false decrease / false
 nonneg) that must FAIL.
 
-## 6. The mutual extension [DECIDED, not built]
+## 6. The mutual extension [BUILT, report-only]
 
 The single-fn gate already operates at SCC granularity (steps 3–4 drop and
-filter the *whole* SCC). The only gap: it checks **self-calls only**, ignoring
-calls to other SCC members. The extension closes that with **no new syntax** —
-each member keeps its own `(measure Eᵢ …)` clause.
+filter the *whole* SCC). The mutual extension closes the last gap — calls to
+*other* SCC members — with **no new syntax**: each member keeps its own
+`(measure Eᵢ …)` clause, and `mc_callee_measure` looks up the *callee's* clause
+to put its measure on the LHS of each cross-member obligation (`mc_check_sites`,
+keyed by the site's callee QName; the args zip against the callee's param names).
 
 For every SCC-internal call `Fᵢ → Fⱼ` at args `A` under path condition `P`:
 
@@ -161,6 +163,13 @@ AST-recursions (tc_unify, the elaborator, the checker core); each takes a natura
 subterm, so one shared Int drops. Lexicographic per-member ranks are a clean
 *additive* generalization of the same `callee < caller` shape, deferred to
 [FUTURE] (see §8).
+
+Pins: `examples/mutual_toy.shard` (the 2-member toy validation — `mu_a`/`mu_b`
+OK with *distinct* param letters so the callee-substitution is exercised;
+`bad_a`/`bad_b` the same-arg ping-pong cheat that must FAIL). First **kernel**
+mutual SCC carried through the gate: the `render_term` family in
+`kernel/trace.shard` (§6.1 below) — four members, an additive AST-size measure,
+all cross-member edges OK.
 
 ### 6.1 Discharging the measure's nonneg: subterm induction [BUILT]
 
@@ -208,6 +217,13 @@ Pins: `examples/subterm_induct.shard` (5/5 — `tsize_nonneg`/`tsize_list_nonneg
 over `Tm = Leaf | Node (List Tm)`); `examples/subterm_induct_rejects.shard`
 (`below` refuses reflexive `a ⊰ a`; the gate refuses a non-datatype var).
 
+The real consumer is the `render_term` family in `kernel/trace.shard`: `size` ⟷
+`size_list` over the kernel `Expr` are exactly this mutual pair, and their nonneg
+lemmas (`size_nonneg` by `subterm-induct`, `size_list_nonneg` one-directional)
+discharge the render obligations' nonneg side. `examples/render_model.shard`
+mirrors the whole thing against the real `Expr` (importing only `term.shard`) as
+a seconds-fast regression proxy for the ~11-min `trace.shard` gate run.
+
 ## 7. Cross-call resolution and cycle-readiness [DECIDED]
 
 shard forbids import cycles **today**, so all SCC members share one module. We
@@ -254,8 +270,9 @@ The flip from report-only to refusal. The predicate is:
 There is **no auto-recognition exemption** — `admit` stays advisory/offline
 (§3). A structural SCC satisfies the predicate via its verified `(struct …)`
 declarations (§4); a non-structural SCC via its numeric `(measure E proofs…)`.
-Phase-D prerequisites: the mutual extension (§6) and the `(struct …)` verifier
-(§4) must be built first.
+The mutual extension (§6) is built; the remaining Phase-D prerequisite is the
+`(struct …)` verifier (§4) — until it exists, structural SCCs have no verified
+clause to satisfy the predicate with, so the flip would reject them.
 
 ## 9. The trusted core (what to audit)
 
@@ -278,8 +295,8 @@ Phase-D prerequisites: the mutual extension (§6) and the `(struct …)` verifie
 
 ## 10. Open / deferred work
 
-- **[DECIDED, not built]** mutual extension (§6); `(struct …)` form + verifier
-  (§4); enforcement flip (§8).
+- **[DECIDED, not built]** `(struct …)` form + verifier (§4); enforcement flip
+  (§8). (The mutual extension (§6) is now BUILT, report-only.)
 - **[FUTURE]** lexicographic per-member ranks for large/heterogeneous SCCs
   (esp. accidental cross-module ones); **sidecar files** for measures, if the
   in-source clause burden warrants moving discovery results out-of-band; the
@@ -302,6 +319,13 @@ Phase-D prerequisites: the mutual extension (§6) and the `(struct …)` verifie
   (subterm induction, §6.1) and `do_below` / `expr_proper_subterm` (the ⊰
   discharge); the `Proof` ctors `SubtermInduct` / `Below` live in
   `kernel/proof.shard`, parsed in `kernel/proof_reader.shard`.
+- `kernel/trace.shard` — the first kernel mutual SCC carried through the gate:
+  `size`/`size_list` + their defining-equation and nonneg lemmas, and the
+  `(measure …)` clauses on the `render_term`/`render_app`/`render_args`/
+  `render_if` family.
 - `examples/measure_clause.shard` — must-fail cheat pins;
+  `examples/mutual_toy.shard` — mutual-gate toy validation (OK pair + cheat pair);
   `examples/measure_import_synth.shard` — imported-scrutinee binder-typing canary;
-  `examples/subterm_induct{,_rejects}.shard` — subterm-induction + soundness pins.
+  `examples/subterm_induct{,_rejects}.shard` — subterm-induction + soundness pins;
+  `examples/render_model.shard` — fast `Expr` proxy for the `trace.shard` render
+  measure certs.
