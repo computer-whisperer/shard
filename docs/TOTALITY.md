@@ -283,14 +283,29 @@ There is **no auto-recognition exemption** — `admit` stays advisory/offline
 (§3). A structural SCC satisfies the predicate via its verified `(struct …)`
 declarations (§4); a non-structural SCC via its numeric `(measure E proofs…)`.
 Both clause forms are now **built** (numeric §5/§6, structural §4), so the
-verifier prerequisites are met. The remaining Phase-D prerequisites are now
-operational, not infrastructural: (a) the **corpus-wide migration** — every
-recursive SCC actually *carrying* a clause (the ~468 currently-auto
-structural/mutual fns each gain a one-token `(struct …)`; the genuinely-partial
-loops gain fuel, §10), and (b) the **flip** itself (`mc_outcome`'s `COLedger`
-becomes a `COFail` when any recursive SCC is unannotated or any clause FAILs).
-Until every SCC carries a verified clause, the flip would reject the
-unannotated ones — so migration gates the flip.
+verifier prerequisites are met. Migration progress:
+
+- **Structural migration DONE** — `tools/structgen` (§11) generated and
+  committed `(measure (struct ARG))` on every monomorphic auto-structural fn
+  across the kernel + the prove/shardfmt tools (~510 clauses: driver 125,
+  reader 87, prove 50, checker 46, types 38, term 32, trace 24, reduce 18,
+  module 16, shardfmt 15, desugar 13, proof_reader 11, loader 10, lia 9, eval 8,
+  others ≤2). Verified: the gate sweep reports 0 MEASURED FAIL over all kernel
+  targets; the corpus's claim tallies are byte-identical to the pre-migration
+  baseline (the only FAILs are the intentional cheat pins).
+- **Remaining for the flip** — the *non-structural* recursive SCCs: the
+  genuinely-partial reducer loops (`run_expr`/`compute_expr_loop`/
+  `simp_expr_loop`/`simp_iota_expr`/`ceval`, need fuel — §10), `tc_walk`
+  (acyclicity), the AdUnresolved AST SCCs that lack a single descending track
+  (need a numeric common-AST-size measure, as `render_term` already does), and
+  **polymorphic** recursive fns (the gate's monomorphic-only v1 limit, §5 —
+  structgen and the gate both skip `(fn (f T) …)`; these need either polymorphic
+  measures or monomorphization).
+
+The **flip** itself (`mc_outcome`'s `COLedger` becomes a `COFail` when any
+recursive SCC is unannotated or any clause FAILs) lands once the remaining SCCs
+carry verified clauses — migration gates the flip. A `check admit <closure>`
+scan enumerates the residual AdFlag / AdUnresolved set.
 
 ## 9. The trusted core (what to audit)
 
@@ -342,6 +357,11 @@ unannotated ones — so migration gates the flip.
   Its subterm *classification* (`ad_cls` / `ad_pat_sts` / `ad_fn_sites` /
   `ad_cls_at`) is reused by the trusted `(struct …)` verifier; its *search*
   (`ad_fix` / `ad_pick` / `ad_self_find`) is advisory only.
+- `tools/structgen/structgen.shard` — the offline migration aid (NOT trusted):
+  runs admit over a file's closure and byte-splices `(measure (struct ARG))`
+  into each monomorphic structural fn it defines (skipping type-parametric and
+  already-measured fns; idempotent), to be piped through shardfmt. The committed
+  clauses are re-verified by the gate, so the tool's output is advisory.
 - `kernel/checker.shard` — `do_subterm_induct` / `build_subterm_subgoal`
   (subterm induction, §6.1) and `do_below` / `expr_proper_subterm` (the ⊰
   discharge); the `Proof` ctors `SubtermInduct` / `Below` live in
