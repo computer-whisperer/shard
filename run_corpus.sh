@@ -74,6 +74,7 @@ TARGETS=(
   examples/utf8_classify.shard
   examples/wf_induct_demo.shard
   examples/measure_clause.shard
+  examples/measure_import_synth.shard
   examples/word_facts.shard
   examples/word_facts_signed.shard
   examples/modules_demo/consumer.shard

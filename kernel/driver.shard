@@ -1671,21 +1671,264 @@
     ((Cons (Arm _ body) rest)
      (sym_concat (calls_of_expr body) (calls_of_arms rest)))))
 
-(fn call_close ((work (List Symbol)) (visited (List Symbol)) (m Module))
+;; ---- termination measure for call_close (data-weighted; issue #1) ----------
+;; call_close is the run-mode twin of led_close: a worklist fixpoint that pops a
+;; name and, on an unvisited FN, marks it AND pushes the calls in its body (so
+;; work can GROW). The measure is the SAME shape as led_close's,
+;;   call_pending(fns, visited) + sym_len(work),
+;; with call_pending weighting each UNVISITED fn by (1 + |calls in its body|) —
+;; the data weight that absorbs the work-growth at the Some arm (work gains the
+;; body's calls, pending drops by 1 + |those calls|). call_close now takes the
+;; fn LIST directly (it only ever destructured `fns` out of the Module); that
+;; keeps the measure a clean parallel to led_close's bare-list form. The cited
+;; facts live just below; none reaches call_close in the call graph, so
+;; stratified citation admits them as same-closure claims.
+(fn call_pending_fns ((fns (List FnDef)) (visited (List Symbol))) Int
+  (match fns
+    (Nil 0)
+    ((Cons (FnDef q _ _ body) rest)
+     (if (sym_in (qn_name q) visited)
+       (call_pending_fns rest visited)
+       (+ (+ 1 (sym_len (calls_of_expr body))) (call_pending_fns rest visited))))))
+
+;; the call list of a lookup result (Nil for a miss). Stating call_pending_drop
+;; over this accessor lets its proof reduce directly under the matched ctor — no
+;; constructor-injectivity step needed (cf. le_cites for led_close).
+(fn cl_calls ((e (Option FnDef))) (List Symbol)
+  (match e (None Nil) ((Some (FnDef _ _ _ body)) (calls_of_expr body))))
+
+(fn cl_is_some ((e (Option FnDef))) Bool
+  (match e (None False) ((Some _) True)))
+
+(fn call_close ((work (List Symbol)) (visited (List Symbol)) (fns (List FnDef)))
   (List Symbol)
+  (measure
+    (+ (call_pending_fns fns visited) (sym_len work))
+    ;; site 0: (sym_in n visited)=True, recurse (rest, visited, fns)
+    (steps
+      ((rewrite (premise 0) lr lhs true ())
+       (rewrite (lemma sym_len_cons) lr lhs true ()))
+      (by farkas (list 1 0 0)))
+    (have (= (le 0 (call_pending_fns fns visited)) True)
+      (rewrite-with (lemma call_pending_nonneg) lr lhs
+        ((inst fns fns) (inst visited visited)) () refl)
+      (have (= (le 0 (sym_len rest)) True)
+        (rewrite-with (lemma sym_len_nonneg) lr lhs ((inst xs rest)) () refl)
+        (by farkas (list 1 0 0 1 1))))
+    ;; site 1: None arm, recurse (rest, Cons n visited, fns)
+    (have (= (le (call_pending_fns fns (Cons n visited)) (call_pending_fns fns visited)) True)
+      (rewrite-with (lemma call_pending_mono) lr lhs
+        ((inst fns fns) (inst x n) (inst vis visited)) () refl)
+      (steps
+        ((rewrite (premise 0) lr lhs true ())
+         (rewrite (lemma sym_len_cons) lr lhs true ()))
+        (by farkas (list 1 0 0 0 1))))
+    (have (= (le 0 (call_pending_fns fns (Cons n visited))) True)
+      (rewrite-with (lemma call_pending_nonneg) lr lhs
+        ((inst fns fns) (inst visited (Cons n visited))) () refl)
+      (have (= (le 0 (sym_len rest)) True)
+        (rewrite-with (lemma sym_len_nonneg) lr lhs ((inst xs rest)) () refl)
+        (by farkas (list 1 0 0 0 1 1))))
+    ;; site 2: Some arm, recurse (sym_concat (calls_of_expr body) rest, Cons n visited, fns)
+    (have (= (cl_calls (find_fn_named n fns)) (calls_of_expr body))
+      (steps ((rewrite (premise 2) lr lhs true ()) (simp lhs)) refl)
+      (have (= (cl_is_some (find_fn_named n fns)) True)
+        (steps ((rewrite (premise 2) lr lhs true ()) (simp lhs)) refl)
+        (have (= (le (+ (+ 1 (sym_len (calls_of_expr body))) (call_pending_fns fns (Cons n visited)))
+                     (call_pending_fns fns visited)) True)
+          (steps
+            ((rewrite (premise 3) rl lhs true ()))
+            (rewrite-with (lemma call_pending_drop) lr lhs
+              ((inst n n) (inst visited visited) (inst fns fns))
+              ((steps ((rewrite (premise 4) lr lhs true ())) refl)
+               (steps ((rewrite (premise 1) lr lhs true ())) refl))
+              refl))
+          (steps
+            ((rewrite (premise 0) lr lhs true ())
+             (rewrite (lemma sym_len_cons) lr lhs true ())
+             (rewrite (lemma sym_len_concat) lr lhs true ()))
+            (by farkas (list 1 0 0 0 0 0 1))))))
+    (have (= (le 0 (call_pending_fns fns (Cons n visited))) True)
+      (rewrite-with (lemma call_pending_nonneg) lr lhs
+        ((inst fns fns) (inst visited (Cons n visited))) () refl)
+      (have (= (le 0 (sym_len (sym_concat (calls_of_expr body) rest))) True)
+        (rewrite-with (lemma sym_len_nonneg) lr lhs
+          ((inst xs (sym_concat (calls_of_expr body) rest))) () refl)
+        (by farkas (list 1 0 0 0 1 1)))))
   (match work
     (Nil visited)
     ((Cons n rest)
-     (if (sym_in n visited) (call_close rest visited m)
-     (match m
-       ((Module _ fns _ _ _)
-        (match (find_fn_named n fns)
-          (None (call_close rest (Cons n visited) m))  ; prim / extern / sig
-          ((Some (FnDef _ _ _ body))
-           (call_close
-             (sym_concat (calls_of_expr body) rest)
-             (Cons n visited)
-             m)))))))))
+     (if (sym_in n visited) (call_close rest visited fns)
+     (match (find_fn_named n fns)
+       (None (call_close rest (Cons n visited) fns))  ; prim / extern / sig
+       ((Some (FnDef fq fp fr body))
+        (call_close (sym_concat (calls_of_expr body) rest) (Cons n visited) fns)))))))
+
+;; ---- totality support for call_close (cited by its measure) ----------------
+;; Parallel to led_close's lemmas; sym_len + sym_len_{nil,cons,nonneg,concat}
+;; are shared (defined above for led_close). None reaches call_close in the
+;; call graph, so stratified citation admits them as same-closure facts.
+
+;; 0 <= call_pending_fns fns visited.
+(claim call_pending_nonneg
+  (goal ((fns (List FnDef)) (visited (List Symbol)))
+        ()
+        (= (le 0 (call_pending_fns fns visited)) True))
+  (induct fns
+    ((case Nil (steps ((simp lhs)) refl))
+     (case Cons
+       (hd rest)
+       (case-on hd FnDef
+         ((case FnDef
+            (q fp fr fb)
+            (case-on (sym_in (qn_name q) visited) Bool
+              ((case True
+                 (steps
+                   ((rewrite (hyp 1) lr lhs true ())
+                    (simp lhs)
+                    (rewrite (hyp 0) lr lhs true ())
+                    (simp lhs)
+                    (rewrite (hyp 2) lr lhs true ()))
+                   refl))
+               (case False
+                 (have (= (le 0 (call_pending_fns rest visited)) True)
+                   (steps ((rewrite (hyp 2) lr lhs true ())) refl)
+                   (have (= (le 0 (sym_len (calls_of_expr fb))) True)
+                     (rewrite-with (lemma sym_len_nonneg) lr lhs
+                       ((inst xs (calls_of_expr fb))) () refl)
+                     (steps
+                       ((rewrite (hyp 1) lr lhs true ())
+                        (simp lhs)
+                        (rewrite (hyp 0) lr lhs true ())
+                        (simp lhs))
+                       (by farkas (list 1 1 1)))))))))))))))
+
+;; adding x to visited never increases pending.
+(claim call_pending_mono
+  (goal ((fns (List FnDef)) (x Symbol) (vis (List Symbol)))
+        ()
+        (= (le (call_pending_fns fns (Cons x vis)) (call_pending_fns fns vis)) True))
+  (induct fns
+    ((case Nil (steps ((simp lhs)) refl))
+     (case Cons
+       (hd rest)
+       (case-on hd FnDef
+         ((case FnDef
+            (q fp fr fb)
+            (have (= (le (call_pending_fns rest (Cons x vis)) (call_pending_fns rest vis)) True)
+              (steps ((rewrite (hyp 1) lr lhs true ())) refl)
+              (have (= (le 0 (sym_len (calls_of_expr fb))) True)
+                (rewrite-with (lemma sym_len_nonneg) lr lhs
+                  ((inst xs (calls_of_expr fb))) () refl)
+                (case-on (sym_eq (qn_name q) x) Bool
+                  ((case True
+                     (case-on (sym_in (qn_name q) vis) Bool
+                       ((case True
+                          (steps
+                            ((rewrite (hyp 2) lr lhs true ())
+                             (simp lhs)
+                             (rewrite (hyp 1) lr lhs true ())
+                             (rewrite (hyp 0) lr lhs true ())
+                             (simp lhs))
+                            (by farkas (list 1 1 0))))
+                        (case False
+                          (steps
+                            ((rewrite (hyp 2) lr lhs true ())
+                             (simp lhs)
+                             (rewrite (hyp 1) lr lhs true ())
+                             (rewrite (hyp 0) lr lhs true ())
+                             (simp lhs))
+                            (by farkas (list 1 1 1)))))))
+                   (case False
+                     (case-on (sym_in (qn_name q) vis) Bool
+                       ((case True
+                          (steps
+                            ((rewrite (hyp 2) lr lhs true ())
+                             (simp lhs)
+                             (rewrite (hyp 1) lr lhs true ())
+                             (rewrite (hyp 0) lr lhs true ())
+                             (simp lhs))
+                            (by farkas (list 1 1 0))))
+                        (case False
+                          (steps
+                            ((rewrite (hyp 2) lr lhs true ())
+                             (simp lhs)
+                             (rewrite (hyp 1) lr lhs true ())
+                             (rewrite (hyp 0) lr lhs true ())
+                             (simp lhs))
+                            (by farkas (list 1 1 0))))))))))))))))))
+
+;; the productive step (n is an unvisited fn) drops pending by >= 1 + |calls|.
+(claim call_pending_drop
+  (goal ((n Symbol) (visited (List Symbol)) (fns (List FnDef)))
+        ((= (cl_is_some (find_fn_named n fns)) True) (= (sym_in n visited) False))
+        (= (le (+ (+ 1 (sym_len (cl_calls (find_fn_named n fns))))
+                  (call_pending_fns fns (Cons n visited)))
+               (call_pending_fns fns visited))
+           True))
+  (induct fns
+    ((case Nil (absurd (premise 0)))
+     (case Cons
+       (hd rest)
+       (case-on hd FnDef
+         ((case FnDef
+            (q fp fr fb)
+            (case-on (sym_eq (qn_name q) n) Bool
+              ((case True
+                 (have (= (qn_name q) n) (by reflect (list))
+                   (have (= (le (call_pending_fns rest (Cons n visited))
+                                (call_pending_fns rest visited)) True)
+                     (rewrite-with (lemma call_pending_mono) lr lhs
+                       ((inst fns rest) (inst x n) (inst vis visited)) () refl)
+                     (steps
+                       ((rewrite (hyp 1) lr lhs true ())
+                        (simp lhs)
+                        (rewrite (hyp 0) lr lhs true ())
+                        (simp lhs)
+                        (rewrite (premise 2) lr lhs true ())
+                        (rewrite (premise 1) lr lhs true ())
+                        (simp lhs))
+                       (by farkas (list 1 0 0 0 1))))))
+               (case False
+                 (have (= (find_fn_named n rest) (find_fn_named n (Cons hd rest)))
+                   (steps
+                     ((rewrite (hyp 1) lr rhs true ())
+                      (simp rhs)
+                      (rewrite (hyp 0) lr rhs true ())
+                      (simp rhs))
+                     refl)
+                   (have (= (cl_is_some (find_fn_named n rest)) True)
+                     (steps
+                       ((rewrite (premise 2) lr lhs true ())
+                        (rewrite (premise 0) lr lhs true ()))
+                       refl)
+                     (have (= (le (+ (+ 1 (sym_len (cl_calls (find_fn_named n rest))))
+                                     (call_pending_fns rest (Cons n visited)))
+                                  (call_pending_fns rest visited)) True)
+                       (rewrite-with (hyp 2) lr lhs
+                         ((inst n n) (inst visited visited))
+                         ((steps ((rewrite (premise 3) lr lhs true ())) refl)
+                          (steps ((rewrite (premise 1) lr lhs true ())) refl))
+                         refl)
+                       (case-on (sym_in (qn_name q) visited) Bool
+                         ((case True
+                            (steps
+                              ((rewrite (hyp 2) lr lhs true ())
+                               (simp lhs)
+                               (rewrite (hyp 1) lr lhs true ())
+                               (simp lhs)
+                               (rewrite (hyp 0) lr lhs true ())
+                               (simp lhs))
+                              (by farkas (list 1 0 0 0 0 1))))
+                          (case False
+                            (steps
+                              ((rewrite (hyp 2) lr lhs true ())
+                               (simp lhs)
+                               (rewrite (hyp 1) lr lhs true ())
+                               (simp lhs)
+                               (rewrite (hyp 0) lr lhs true ())
+                               (simp lhs))
+                              (by farkas (list 1 0 0 0 0 1)))))))))))))))))))
 
 (fn syms_inter ((xs (List Symbol)) (ys (List Symbol))) (List Symbol)
   (match xs
@@ -1744,7 +1987,7 @@
   (match b
     ((Bin name entry externs trusts requires)
      (let ((reach (led_close requires Nil led)))
-       (let ((calls (call_close (Cons entry Nil) Nil m)))
+       (let ((calls (match m ((Module _ fns _ _ _) (call_close (Cons entry Nil) Nil fns)))))
          (append_int
            "LEDGER "
            (append_int
@@ -2450,6 +2693,35 @@
     (Nil True)
     ((Cons h t) (if (mc_ty_ground h) (mc_tys_ground t) False))))
 
+;; a fn's return type, if it is GROUND (no type variables) — the only case the
+;; binder-typer can use, since an obligation goal must be fully typed.
+(fn mc_fd_ground_ret ((fd FnDef)) (Option Type)
+  (match fd ((FnDef _ _ ret _) (if (mc_ty_ground ret) (Some ret) None))))
+
+;; the fns in `fns` whose SHORT name is `h`. Homonyms across the merged import
+;; closure (build_module concatenates every file's fns) show here as more than
+;; one entry.
+(fn mc_short_matches ((fns (List FnDef)) (h Symbol)) (List FnDef)
+  (match fns
+    (Nil Nil)
+    ((Cons fd rest)
+     (match fd
+       ((FnDef q _ _ _)
+        (if (sym_eq (qn_name q) h)
+          (Cons fd (mc_short_matches rest h))
+          (mc_short_matches rest h)))))))
+
+;; the UNIQUE fn of short name `h`, if exactly one exists. Used by mc_synth to
+;; resolve an IMPORTED call scrutinee (whose qname is NOT modpath-local, so the
+;; trie lookup below misses). Soundness is fail-safe: if `h` is a homonym (≥2
+;; matches) or a miss, we return None and the arm stays untyped (the B2 refusal
+;; behavior). And a WRONG synthesis can never falsely admit — it would make the
+;; obligation goal ill-typed, so the site is rejected, not accepted.
+(fn mc_uniq_short ((fns (List FnDef)) (h Symbol)) (Option FnDef)
+  (match (mc_short_matches fns h)
+    ((Cons fd Nil) (Some fd))
+    (_ None)))
+
 (fn mc_synth
   ((m Module) (modpath (List Symbol)) (env (List (Pair Symbol Type))) (e SExpr))
   (Option Type)
@@ -2460,12 +2732,16 @@
        ((Cons (SSym h) _)
         (if (mc_is_lower h)
           (match m
-            ((Module _ _ _ tr _)
+            ((Module _ fns _ tr _)
+             ;; same-module fns resolve exactly via the modpath-keyed trie; an
+             ;; imported call misses there and falls back to a unique short-name
+             ;; scan over the merged fns list.
              (match (trie_lookup (QName modpath h) tr)
-               (None None)
-               ((Some fd)
-                (match fd
-                  ((FnDef _ _ ret _) (if (mc_ty_ground ret) (Some ret) None)))))))
+               ((Some fd) (mc_fd_ground_ret fd))
+               (None
+                 (match (mc_uniq_short fns h)
+                   ((Some fd) (mc_fd_ground_ret fd))
+                   (None None))))))
           None))
        (_ None)))
     (_ None)))
