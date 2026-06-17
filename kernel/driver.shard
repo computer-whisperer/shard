@@ -2516,8 +2516,13 @@
 ;; on failures so a missing premise is diagnosable). Binder-typed goals
 ;; (for measures that descend through the data itself, e.g. (len t))
 ;; arrive with the lemma/theory support they need — Phase C.
+;; a recursive (in-SCC) call site: pre-order index, in-scope binders, typed
+;; binders, accumulated path-condition hyps, the call's arg forms, and the
+;; CALLEE's QName (which SCC member is called — self or a sibling). The callee
+;; identity selects whose measure goes on the LHS of the decrease obligation.
 (type MSiteS
-  (MSiteS Int (List Symbol) (List (Pair Symbol Type)) (List SExpr) (List SExpr)))
+  (MSiteS Int (List Symbol) (List (Pair Symbol Type)) (List SExpr) (List SExpr)
+    QName))
 
 (fn mc_sym_member ((s Symbol) (xs (List Symbol))) Bool
   (match xs
@@ -2853,11 +2858,30 @@
 
 ;; walker context: the module + file module path (for scrutinee-type
 ;; synthesis), the measured fn's name, and the param type env.
-(type MCtx (MCtx Module (List Symbol) Symbol (List (Pair Symbol Type))))
+;; the walk context: module, the fn's module path, the fn's own name, its
+;; param type env, and the fn's SCC (the QNames of all mutual-recursion
+;; members — used to recognize in-SCC calls, self and sibling alike).
+(type MCtx
+  (MCtx Module (List Symbol) Symbol (List (Pair Symbol Type)) (List QName)))
 
 (fn mcx_fname ((cx MCtx)) Symbol
   (match cx
-    ((MCtx _ _ f _) f)))
+    ((MCtx _ _ f _ _) f)))
+
+(fn mcx_scc ((cx MCtx)) (List QName)
+  (match cx
+    ((MCtx _ _ _ _ scc) scc)))
+
+;; the SCC member whose short name heads `h`, if any (self or sibling). v1 is
+;; same-module: SCC members share one module, so their short names are unique
+;; and a short-name match is unambiguous. Cross-module SCCs (import cycles,
+;; forbidden today) will need use-scope QName resolution here — see
+;; docs/TOTALITY.md §7.
+(fn mc_head_member ((h SExpr) (scc (List QName))) (Option QName)
+  (match scc
+    (Nil None)
+    ((Cons q rest)
+     (if (mc_head_is (qn_name q) h) (Some q) (mc_head_member h rest)))))
 
 (fn mc_walk_list
   ((cx MCtx)
@@ -2915,7 +2939,7 @@
   (let ((bnds2 (mc_pat_binders pat bnds)))
     (if (mc_pat_has_wild pat) (mc_walk cx bnds2 tbs hyps body st)
     (match cx
-      ((MCtx m modpath _ penv)
+      ((MCtx m modpath _ penv _)
        (match (mc_synth m modpath (mc_app_tbs tbs penv) scrut)
          (None (mc_walk cx bnds2 tbs hyps body st))
          ((Some sty)
@@ -2970,17 +2994,20 @@
     ((SList items)
      (match items
        ((Cons h rest)
-        (if (mc_head_is (mcx_fname cx) h)
-          ;; a self-call: record (pre-order), then walk the args.
-          (match st
-            ((Pair i acc)
-             (mc_walk_list
-               cx
-               bnds
-               tbs
-               hyps
-               rest
-               (Pair (+ i 1) (Cons (MSiteS i bnds tbs hyps rest) acc)))))
+        (match (mc_head_member h (mcx_scc cx))
+          ;; an in-SCC call (self or sibling): record (pre-order) WITH the
+          ;; callee QName, then walk the args.
+          ((Some callee)
+           (match st
+             ((Pair i acc)
+              (mc_walk_list
+                cx
+                bnds
+                tbs
+                hyps
+                rest
+                (Pair (+ i 1) (Cons (MSiteS i bnds tbs hyps rest callee) acc))))))
+          (None
           (match h
             ((SSym hs)
              (if (sym_eq hs (quote if))
@@ -3024,7 +3051,7 @@
                     (mc_let_rhss cx bnds tbs hyps binds st)))
                  (_ st))
                (mc_walk_list cx bnds tbs hyps rest st)))))
-            (_ (mc_walk_list cx bnds tbs hyps items st)))))
+            (_ (mc_walk_list cx bnds tbs hyps items st))))))
        (Nil st)))
     (_ st)))
 
@@ -3230,6 +3257,30 @@
         ((Some why) (Some (mc_fail_line key i " nonneg:" why)))
         (None None)))))
 
+;; the MCl of the named fn among `mcls` (this file's measure clauses).
+(fn mc_mcl_find ((name Symbol) (mcls (List MCl))) (Option MCl)
+  (match mcls
+    (Nil None)
+    ((Cons mcl rest)
+     (match mcl
+       ((MCl n _ _ _ _ _)
+        (if (sym_eq n name) (Some mcl) (mc_mcl_find name rest)))))))
+
+;; the CALLEE's (param names, measure expr) for an in-SCC call. A site's
+;; decrease obligation is  callee_measure[args] < caller_measure[params]  —
+;; the LHS comes from here, so the args must zip against the callee's params
+;; and substitute into the callee's measure (self-calls fall out as callee =
+;; caller). None = the SCC member has no measure clause (incompletely
+;; annotated SCC — see docs/TOTALITY.md §8).
+(fn mc_callee_measure ((callee QName) (mcls (List MCl)))
+  (Option (Pair (List Symbol) SExpr))
+  (match (mc_mcl_find (qn_name callee) mcls)
+    (None None)
+    ((Some (MCl _ _ cpForm cmsr _ _))
+     (match (mc_pnames cpForm)
+       (None None)
+       ((Some cpnames) (Some (Pair cpnames cmsr)))))))
+
 ;; walk the sites pairing each SUPPORTED site with its proof pair.
 (fn mc_check_sites
   ((m Module)
@@ -3243,7 +3294,8 @@
    (msr SExpr)
    (sites (List MSiteS))
    (proofs (List SExpr))
-   (nok Int))
+   (nok Int)
+   (mcls (List MCl)))
   (List Int)
   (match sites
     (Nil
@@ -3253,23 +3305,37 @@
             key
             (append_int "OK (" (append_int (mc_show_i nok) " site(s))"))))
         (_ (mc_line key "FAIL: leftover proofs after the last site"))))
-    ((Cons (MSiteS i bnds tbs hyps args) rest)
-     (match (mc_zip pnames args)
+    ((Cons (MSiteS i bnds tbs hyps args callee) rest)
+     (match (mc_callee_measure callee mcls)
        (None
          (mc_line
            key
            (append_int
              "FAIL site "
-             (append_int (mc_show_i i) ": arity mismatch at the call"))))
-       ((Some sub)
-        (let ((msr2 (mc_subst sub msr)))
-          (if (mc_pure msr2 pnames bnds)
-            (match (mc_keep_hyps hyps pnames bnds)
-              ((Pair khyps ndrop)
-               (mc_site_go m m2 th gctx fname key pForm pnames msr rest proofs
-                 nok i pForm khyps ndrop msr2)))
-            (mc_typed_site m m2 th gctx fname key pForm pnames msr rest proofs
-              nok i tbs hyps msr2))))))))
+             (append_int
+               (mc_show_i i)
+               (append_int
+                 ": SCC member "
+                 (append_int
+                   (chars_of_sym (qn_name callee))
+                   " has no measure clause"))))))
+       ((Some (Pair cpnames cmsr))
+        (match (mc_zip cpnames args)
+          (None
+            (mc_line
+              key
+              (append_int
+                "FAIL site "
+                (append_int (mc_show_i i) ": arity mismatch at the call"))))
+          ((Some sub)
+           (let ((msr2 (mc_subst sub cmsr)))
+             (if (mc_pure msr2 pnames bnds)
+               (match (mc_keep_hyps hyps pnames bnds)
+                 ((Pair khyps ndrop)
+                  (mc_site_go m m2 th gctx fname key pForm pnames msr rest proofs
+                    nok i pForm khyps ndrop msr2 mcls)))
+               (mc_typed_site m m2 th gctx fname key pForm pnames msr rest proofs
+                 nok i tbs hyps msr2 mcls))))))))))
 
 ;; the typed-binder path: the measure substitution references pattern
 ;; binders, so the obligation is stated over the fn params PLUS the typed
@@ -3292,7 +3358,8 @@
    (i Int)
    (tbs (List (Pair Symbol Type)))
    (hyps (List SExpr))
-   (msr2 SExpr))
+   (msr2 SExpr)
+   (mcls (List MCl)))
   (List Int)
   (let ((tbn (mc_tb_names tbs Nil)))
     (if (mc_tbs_fresh tbn pnames)
@@ -3304,7 +3371,7 @@
              (match (mc_keep_hyps hyps alln Nil)
                ((Pair khyps ndrop)
                 (mc_site_go m m2 th gctx fname key pForm pnames msr rest proofs
-                  nok i pForm2 khyps ndrop msr2)))))
+                  nok i pForm2 khyps ndrop msr2 mcls)))))
           (mc_line
             key
             (append_int
@@ -3337,7 +3404,8 @@
    (pFormX SExpr)
    (khyps (List SExpr))
    (ndrop Int)
-   (msr2 SExpr))
+   (msr2 SExpr)
+   (mcls (List MCl)))
   (List Int)
   (match proofs
     (Nil
@@ -3373,7 +3441,8 @@
               msr
               rest
               prest
-              (+ nok 1)))))))))
+              (+ nok 1)
+              mcls))))))))
 
 ;; typed-binder goal-param plumbing.
 (fn mc_tb_names ((tbs (List (Pair Symbol Type))) (acc (List Symbol)))
@@ -3430,7 +3499,8 @@
    (th Theory)
    (gctx RCtx)
    (modpath (List Symbol))
-   (mcl MCl))
+   (mcl MCl)
+   (mcls (List MCl)))
   (List Int)
   (match mcl
     ((MCl name tparams pForm msr proofs body)
@@ -3453,9 +3523,12 @@
                    (match (mc_pnames pForm)
                      (None (mc_line key "SKIP (could not read param names)"))
                      ((Some pnames)
+                      ;; the SCC is needed by the walk (to recognize sibling
+                      ;; calls) AND by opacity/citation, so compute it first.
+                      (let ((scc (mc_scc_of q sccs)))
                       (match
                         (mc_walk
-                          (MCtx m modpath name (mc_fd_penv pnames fd))
+                          (MCtx m modpath name (mc_fd_penv pnames fd) scc)
                           Nil
                           Nil
                           Nil
@@ -3466,7 +3539,6 @@
                            (match sites
                              (Nil (mc_line key "OK (no recursive call sites)"))
                              (_
-                               (let ((scc (mc_scc_of q sccs)))
                                  (mc_check_sites
                                    m
                                    (mc_opaque m scc)
@@ -3479,7 +3551,8 @@
                                    msr
                                    sites
                                    proofs
-                                   0))))))))))))))))))))
+                                   0
+                                   mcls))))))))))))))))))))
 
 (fn mc_rev_sites ((xs (List MSiteS)) (acc (List MSiteS))) (List MSiteS)
   (match xs
@@ -3548,20 +3621,24 @@
 
 ;; ---- the section entry ------------------------------------------------------
 
+;; `todo` is the iteration cursor; `all` is the file's full clause list, passed
+;; unchanged to every fn as its SCC sibling table (a member's measure obligation
+;; needs its siblings' measures — see mc_callee_measure).
 (fn mc_mcls
   ((m Module)
    (sccs (List (List QName)))
    (th Theory)
    (gctx RCtx)
    (modpath (List Symbol))
-   (mcls (List MCl)))
+   (todo (List MCl))
+   (all (List MCl)))
   (List Int)
-  (match mcls
+  (match todo
     (Nil Nil)
     ((Cons mcl rest)
      (append_int
-       (mc_check_fn m sccs th gctx modpath mcl)
-       (mc_mcls m sccs th gctx modpath rest)))))
+       (mc_check_fn m sccs th gctx modpath mcl all)
+       (mc_mcls m sccs th gctx modpath rest all)))))
 
 (fn mc_files
   ((m Module) (sccs (List (List QName))) (th Theory) (srcs (List SrcEntry)))
@@ -3576,15 +3653,17 @@
           (match mcls
             (Nil (mc_files m sccs th rest))
             (_
-              (append_int
-                (mc_mcls
-                  m
-                  sccs
-                  th
-                  (file_rctx m path src)
-                  (module_path_of path)
-                  (mc_rev_mcls mcls Nil))
-                (mc_files m sccs th rest))))))))))
+              (let ((allmcls (mc_rev_mcls mcls Nil)))
+                (append_int
+                  (mc_mcls
+                    m
+                    sccs
+                    th
+                    (file_rctx m path src)
+                    (module_path_of path)
+                    allmcls
+                    allmcls)
+                  (mc_files m sccs th rest)))))))))))
 
 (fn mc_rev_mcls ((xs (List MCl)) (acc (List MCl))) (List MCl)
   (match xs
