@@ -3289,6 +3289,119 @@
        (None None)
        ((Some cpnames) (Some (Pair cpnames cmsr)))))))
 
+;; ---- structural measures: (measure (struct ARG)) --------------------------
+;; Verify-don't-search (docs/TOTALITY.md §4): the author DECLARES the descending
+;; parameter; the gate verifies that every recursive call passes, at the
+;; CALLEE's declared position, a strict subterm rooted at THIS member's declared
+;; position. No proof, no path conditions — a strict subterm is unconditionally
+;; smaller on every branch, and every site must pass, so the structural notion
+;; is path-insensitive (unlike the numeric gate's mc_walk, which must collect
+;; path conditions). Reuses admit.shard's subterm CLASSIFICATION
+;; (ad_fn_sites / ad_cls_at) over the elaborated body; the SEARCH admit uses to
+;; *discover* a designation (ad_fix / ad_pick / ad_self_find) stays advisory and
+;; out of the trust path.
+
+;; head test for the numeric-vs-structural dispatch in mc_check_fn.
+(fn mc_is_struct ((msr SExpr)) Bool
+  (match (form_head msr)
+    (None False)
+    ((Some h) (sym_eq h (quote struct)))))
+
+;; the 0-based index of NAME among the parameter names (source order, first = 0
+;; — the same convention ad_env0/ad_cls_at use for the subterm root index).
+(fn mc_name_index ((name Symbol) (names (List Symbol)) (i Int)) (Option Int)
+  (match names
+    (Nil None)
+    ((Cons h t) (if (sym_eq h name) (Some i) (mc_name_index name t (+ i 1))))))
+
+;; the declared descending index from a (struct ARG) clause, or None if msr is
+;; not a well-formed struct clause naming a parameter. The head re-check keeps a
+;; numeric measure like (size e) from being misread as (struct e).
+(fn mc_struct_pos ((msr SExpr) (pnames (List Symbol))) (Option Int)
+  (match (form_head msr)
+    (None None)
+    ((Some h)
+     (if (sym_eq h (quote struct))
+       (match (form_tail msr)
+         ((Cons (SSym arg) Nil) (mc_name_index arg pnames 0))
+         (_ None))
+       None))))
+
+;; the CALLEE's declared descending index, from its own (struct …) clause.
+;; None = the callee carries no struct clause (an incompletely / mixed-annotated
+;; SCC) — structural descent across the SCC is then unverifiable and the site
+;; must FAIL, never silently pass.
+(fn mc_callee_struct_pos ((callee QName) (mcls (List MCl))) (Option Int)
+  (match (mc_mcl_find (qn_name callee) mcls)
+    (None None)
+    ((Some (MCl _ _ cpForm cmsr _ _))
+     (match (mc_pnames cpForm)
+       (None None)
+       ((Some cpnames) (mc_struct_pos cmsr cpnames))))))
+
+(fn mc_struct_fail ((key (List Int)) (callee QName) (why (List Int)))
+  (List Int)
+  (mc_line
+    key
+    (append_int
+      "FAIL: call to "
+      (append_int (chars_of_sym (qn_name callee)) why))))
+
+;; verify each recursive site: at the callee's declared position the argument
+;; must be a strict subterm (AStrict) rooted at THIS member's declared index pi.
+(fn mc_struct_sites
+  ((key (List Int))
+   (sites (List MSite))
+   (pi Int)
+   (mcls (List MCl))
+   (nok Int))
+  (List Int)
+  (match sites
+    (Nil
+      (mc_line
+        key
+        (append_int "OK (" (append_int (mc_show_i nok) " site(s))"))))
+    ((Cons (MSite _ callee args) rest)
+     (match (mc_callee_struct_pos callee mcls)
+       (None (mc_struct_fail key callee " has no (struct …) clause"))
+       ((Some pj)
+        (match (ad_cls_at args pj)
+          ((AStrict p)
+           (if (int_eq p pi) (mc_struct_sites key rest pi mcls (+ nok 1))
+           (mc_struct_fail
+             key
+             callee
+             " — argument is a subterm of a parameter other than the one declared")))
+          ((ASame _)
+           (mc_struct_fail
+             key
+             callee
+             " — argument is the parameter itself, not a strict subterm"))
+          ((AOther)
+           (mc_struct_fail
+             key
+             callee
+             " — argument is not a subterm of the declared parameter"))))))))
+
+;; the structural verifier entry: resolve THIS member's declared index, gather
+;; its recursive sites (admit's elaborated-Expr walk), verify each.
+(fn mc_check_struct
+  ((key (List Int))
+   (fd FnDef)
+   (scc (List QName))
+   (pnames (List Symbol))
+   (msr SExpr)
+   (mcls (List MCl)))
+  (List Int)
+  (match (mc_struct_pos msr pnames)
+    (None
+      (mc_line key "FAIL: malformed (struct ARG) — ARG must name a parameter"))
+    ((Some pi)
+     (let ((sites (ad_fn_sites scc fd)))
+       (match sites
+         (Nil (mc_line key "OK (no recursive call sites)"))
+         (_ (mc_struct_sites key sites pi mcls 0)))))))
+
 ;; walk the sites pairing each SUPPORTED site with its proof pair.
 (fn mc_check_sites
   ((m Module)
@@ -3534,6 +3647,8 @@
                       ;; the SCC is needed by the walk (to recognize sibling
                       ;; calls) AND by opacity/citation, so compute it first.
                       (let ((scc (mc_scc_of q sccs)))
+                      (if (mc_is_struct msr)
+                        (mc_check_struct key fd scc pnames msr mcls)
                       (match
                         (mc_walk
                           (MCtx m modpath name (mc_fd_penv pnames fd) scc)
@@ -3560,7 +3675,7 @@
                                    sites
                                    proofs
                                    0
-                                   mcls))))))))))))))))))))
+                                   mcls)))))))))))))))))))))
 
 (fn mc_rev_sites ((xs (List MSiteS)) (acc (List MSiteS))) (List MSiteS)
   (match xs

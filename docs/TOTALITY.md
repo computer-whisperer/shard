@@ -80,14 +80,26 @@ against an in-gate recognizer is TCB size + verdict drift, not silent unsoundnes
 Every recursive fn carries an **explicit declaration** of its descent. The gate
 verifies the declaration; it never discovers one. Two clause forms:
 
-- **Structural** — `(measure (struct ARG))` *(form [DECIDED], not yet built)*.
-  The author names the descending parameter. The checker verifies, per recursive
-  call, that the argument in `ARG`'s position is a **strict subterm** of the
-  parameter — a small, decidable, *stable* check, **no proof required**. This is
-  the sidecar discipline at minimal cost: the *which-argument* is the stored
-  decision; the checker replays it. TCB shrinks to "is this term a subterm of
-  that one," far smaller and more auditable than "search all positions for a
-  consistent descending designation across a mutual SCC."
+- **Structural** — `(measure (struct ARG))` **[BUILT, report-only]**. The author
+  names the descending parameter. The checker verifies, per recursive call, that
+  the argument in the **callee's** declared position is a **strict subterm**
+  rooted at the **caller's** declared parameter — a small, decidable, *stable*
+  check, **no proof required** (and **path-condition-insensitive**: a strict
+  subterm is unconditionally smaller, and every site must pass, so the branch a
+  call sits under is irrelevant). This is the sidecar discipline at minimal cost:
+  the *which-argument* is the stored decision; the checker replays it. TCB shrinks
+  to "is this term a subterm of that one," far smaller and more auditable than
+  "search all positions for a consistent descending designation across a mutual
+  SCC." The verifier (`mc_check_struct` + the `mc_struct_*` family,
+  kernel/driver.shard) **reuses admit's subterm classification**
+  (`ad_fn_sites`/`ad_cls_at`) but supplies the *declared* designation instead of
+  searching for one — the search (`ad_fix`/`ad_pick`/`ad_self_find`) stays
+  advisory and out of the TCB. Mutual SCCs need no new syntax: each member
+  declares its own `(struct ARGᵢ)`, looked up per callee (`mc_callee_struct_pos`,
+  exactly mirroring the numeric `mc_callee_measure`); a callee lacking a struct
+  clause (a mixed/incomplete SCC) FAILs the site rather than passing. Pin:
+  `examples/struct_clause.shard` (OK self + OK mutual-tree pair; FAIL cheats for
+  the non-subterm, parameter-itself, and wrong-root cases).
 - **Numeric** — `(measure E proof0 proof1 …)` **[BUILT]**. The author gives an
   Int measure `E` and one proof per recursive call site (pre-order). The kernel
   emits the decrease + nonnegativity obligations and discharges them through the
@@ -270,9 +282,15 @@ The flip from report-only to refusal. The predicate is:
 There is **no auto-recognition exemption** — `admit` stays advisory/offline
 (§3). A structural SCC satisfies the predicate via its verified `(struct …)`
 declarations (§4); a non-structural SCC via its numeric `(measure E proofs…)`.
-The mutual extension (§6) is built; the remaining Phase-D prerequisite is the
-`(struct …)` verifier (§4) — until it exists, structural SCCs have no verified
-clause to satisfy the predicate with, so the flip would reject them.
+Both clause forms are now **built** (numeric §5/§6, structural §4), so the
+verifier prerequisites are met. The remaining Phase-D prerequisites are now
+operational, not infrastructural: (a) the **corpus-wide migration** — every
+recursive SCC actually *carrying* a clause (the ~468 currently-auto
+structural/mutual fns each gain a one-token `(struct …)`; the genuinely-partial
+loops gain fuel, §10), and (b) the **flip** itself (`mc_outcome`'s `COLedger`
+becomes a `COFail` when any recursive SCC is unannotated or any clause FAILs).
+Until every SCC carries a verified clause, the flip would reject the
+unannotated ones — so migration gates the flip.
 
 ## 9. The trusted core (what to audit)
 
@@ -280,7 +298,9 @@ clause to satisfy the predicate with, so the flip would reject them.
 
 - the obligation emitter — path-condition collection in `mc_walk`, arg
   substitution `mc_subst`, goal construction (`mc_goal_s`);
-- the `(struct …)` subterm verifier [DECIDED];
+- the `(struct …)` subterm verifier [BUILT] — `mc_check_struct` + the reused
+  classification `ad_cls`/`ad_pat_sts`/`ad_fn_sites`/`ad_cls_at` (admit's
+  *search* `ad_fix`/`ad_pick` stays untrusted);
 - the circularity guard `mc_opaque`;
 - stratified-citation reachability `mc_reaches` / `mc_theory_for_scc`;
 - cross-call QName resolution + `∈ scc` test [DECIDED] (a miss is unsound);
@@ -295,8 +315,10 @@ clause to satisfy the predicate with, so the flip would reject them.
 
 ## 10. Open / deferred work
 
-- **[DECIDED, not built]** `(struct …)` form + verifier (§4); enforcement flip
-  (§8). (The mutual extension (§6) is now BUILT, report-only.)
+- **[BUILT, report-only]** `(struct …)` form + verifier (§4); the mutual
+  extension (§6). **[DECIDED, not built]** the corpus-wide migration (annotate
+  every recursive SCC with a `(struct …)` or numeric clause) and the enforcement
+  flip (§8) — migration gates the flip.
 - **[FUTURE]** lexicographic per-member ranks for large/heterogeneous SCCs
   (esp. accidental cross-module ones); **sidecar files** for measures, if the
   in-source clause burden warrants moving discovery results out-of-band; the
@@ -312,9 +334,14 @@ clause to satisfy the predicate with, so the flip would reject them.
 
 - `kernel/driver.shard` — the gate: `mc_check_fn` and the `mc_*` family
   (site walk, obligation construction, stratified citation, `led_close` /
-  `call_close` data-weighted worklist measures).
+  `call_close` data-weighted worklist measures); the structural verifier
+  `mc_check_struct` + `mc_struct_*` (numeric-vs-struct dispatch on the measure
+  head in `mc_check_fn`).
 - `kernel/admit.shard` — the offline classifier: Tarjan (`ad_sccs`), the
   structural/mutual recognition (`ad_pick` / `ad_verify`), the report renderer.
+  Its subterm *classification* (`ad_cls` / `ad_pat_sts` / `ad_fn_sites` /
+  `ad_cls_at`) is reused by the trusted `(struct …)` verifier; its *search*
+  (`ad_fix` / `ad_pick` / `ad_self_find`) is advisory only.
 - `kernel/checker.shard` — `do_subterm_induct` / `build_subterm_subgoal`
   (subterm induction, §6.1) and `do_below` / `expr_proper_subterm` (the ⊰
   discharge); the `Proof` ctors `SubtermInduct` / `Below` live in
@@ -327,5 +354,7 @@ clause to satisfy the predicate with, so the flip would reject them.
   `examples/mutual_toy.shard` — mutual-gate toy validation (OK pair + cheat pair);
   `examples/measure_import_synth.shard` — imported-scrutinee binder-typing canary;
   `examples/subterm_induct{,_rejects}.shard` — subterm-induction + soundness pins;
+  `examples/struct_clause.shard` — the `(struct …)` structural verifier pin
+  (OK self + OK mutual-tree pair; FAIL cheats);
   `examples/render_model.shard` — fast `Expr` proxy for the `trace.shard` render
   measure certs.

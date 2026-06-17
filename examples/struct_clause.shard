@@ -1,0 +1,65 @@
+;;; struct_clause.shard — validation of the STRUCTURAL measure clause
+;;; `(measure (struct ARG))` (issue #1 / docs/TOTALITY.md §4).
+;;;
+;;; Verify-don't-search: the author names the descending PARAMETER; the gate
+;;; verifies that every recursive call passes, at the CALLEE's declared
+;;; position, a STRICT SUBTERM rooted at the caller's declared parameter. No
+;;; proof, no path conditions (a strict subterm is smaller on every branch).
+;;; The check reuses admit.shard's subterm classification (ad_fn_sites /
+;;; ad_cls_at); the SEARCH that admit uses to discover a designation stays
+;;; advisory and out of the trust path.
+;;;
+;;; Under `check` the obligations render report-only (MEASURED OK/FAIL):
+;;;   sum_list      OK    — self-recursion on a list tail (a strict subterm).
+;;;   tflip / tflop OK    — a 2-member structural SCC over a binary tree; every
+;;;                         cross-call passes a child (l or r), a strict subterm
+;;;                         of the matched node, at the callee's declared param.
+;;;   loop_same     FAIL  — passes the parameter itself (ASame), not a subterm.
+;;;   build_same    FAIL  — rebuilds an equal-size term (AOther), not a subterm.
+;;;   cross_a       FAIL  — the declared param is passed unchanged while the
+;;;                         actual descent is on the OTHER argument: the declared
+;;;                         track does not descend, so the clause is rejected.
+
+(import "../kernel/stdlib.shard")
+
+;; ---- OK: self-recursion on a list -----------------------------------------
+(fn sum_list ((xs (List Int))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons h t) (+ h (sum_list t)))))
+
+;; ---- OK: a 2-member structural SCC over a binary tree ----------------------
+(type Tree (Leaf Int) (Branch Tree Tree))
+
+(fn tflip ((t Tree)) Tree
+  (measure (struct t))
+  (match t
+    ((Leaf n) (Leaf n))
+    ((Branch l r) (Branch (tflop r) (tflop l)))))
+
+(fn tflop ((t Tree)) Tree
+  (measure (struct t))
+  (match t
+    ((Leaf n) (Leaf n))
+    ((Branch l r) (Branch (tflip l) (tflip r)))))
+
+;; ---- FAIL: argument is the parameter itself (ASame) ------------------------
+(fn loop_same ((xs (List Int))) Int (measure (struct xs)) (loop_same xs))
+
+;; ---- FAIL: argument is a freshly built term, not a subterm (AOther) --------
+(fn build_same ((xs (List Int))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons h t) (build_same (Cons h t)))))
+
+;; ---- FAIL: declared param passed unchanged; the descent is on the other arg.
+;; The real (swapped) descent might terminate, but NOT along the declared
+;; (struct xs) track — at xs's position the call passes a subterm of `ys`, so
+;; the root parameter disagrees with the declaration and the site is rejected.
+(fn cross_a ((xs (List Int)) (ys (List Int))) Int
+  (measure (struct xs))
+  (match ys
+    (Nil 0)
+    ((Cons h t) (cross_a t xs))))
