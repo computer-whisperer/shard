@@ -156,6 +156,10 @@
 
     ((WfInduct measure pf) (do_wf_induct m th seq measure pf))
 
+    ((SubtermInduct var pf) (do_subterm_induct m th seq var pf))
+
+    ((Below) (do_below m seq))
+
     ((RewriteWith er dir side insts premise_proofs rest)
      ;; Conditional rewrite. Cited equation may have ∀-binders AND
      ;; non-empty premises:
@@ -2358,6 +2362,147 @@
                      (append_eqs (subst_eqs env premises) wf_premises))
                    (close_eq close_names ih_eq))))
               (Sequent params (Cons ih hyps) premises eq)))))))))
+
+;; ---------------------------------------------------------------------------
+;; do_subterm_induct: well-founded induction along the canonical structural
+;; SUBTERM order on a named datatype param. The IH is built EXACTLY like
+;; do_wf_induct's (one strong IH at Hyp 0, all params freshened), except the
+;; well-foundedness premise is the structural `(subterm_below x' x)=True`
+;; instead of the two arithmetic `0<=μ(x') ∧ μ(x')<μ(x)`.
+;;
+;; SOUNDNESS. The order on param-tuples is "the chosen var's x-component is a
+;; strict structural sub-value": (P') < (P) iff x' ⊰ x. This is well-founded
+;; because ⊰ on an inductive datatype is well-founded — the SAME fact do_induct
+;; already trusts (structural induction = induction along ⊰). The other params
+;; are unconstrained but cannot create infinite descent on their own (the order
+;; only holds when x strictly decreases). Reaches NESTED occurrences (an Expr
+;; inside a (List Expr) field): in the term representation those are nested
+;; Ctor nodes, so the strict-subterm check (do_below) descends to them, and the
+;; IH applies to them directly — which shallow Induct's same-type-field IH
+;; cannot. The ordering premise `subterm_below` is INERT: it has no reduction
+;; rule and is discharged ONLY by the `below` step (do_below), so it carries no
+;; assumption beyond genuine structural descent.
+;; ---------------------------------------------------------------------------
+
+;; the declared type of a goal ∀-param, if `var` names one.
+(fn subterm_param_type ((var Symbol) (params (List Param))) (Option Type)
+  (match params
+    (Nil None)
+    ((Cons (Param x ty) rest)
+     (if (sym_eq x var) (Some ty) (subterm_param_type var rest)))))
+
+;; ⊰ is well-founded only on an inductive datatype value — gate it so a misuse
+;; (e.g. subterm-induct on an Int) is a clean rejection, not a vacuous IH.
+(fn subterm_is_datatype ((ty Type) (m Module)) Bool
+  (match ty
+    ((TCon tname _)
+     (match (lookup_typedef tname m) ((Some _) True) (None False)))
+    (_ False)))
+
+;; the IH-bearing subgoal: identical to build_wf_subgoal but the wf premise is
+;; (subterm_below x' x)=True, with x' the fresh copy of var and x the original.
+(fn build_subterm_subgoal ((seq Sequent) (var Symbol)) Sequent
+  (match seq
+    ((Sequent params hyps premises eq)
+     (match (wf_rename params)
+       ((Pair fresh_params env)
+        (let
+          ((var_fresh (subst env (FVar var)))
+           (close_names (reverse_syms (param_names fresh_params))))
+          (let
+            ((ord_premise
+               (Equation
+                 (Call (qn (quote subterm_below)) (list var_fresh (FVar var)))
+                 (Ctor (qn (quote True)) Nil)))
+             (ih_eq (subst_eq env eq)))
+            (let
+              ((ih
+                 (Goal
+                   fresh_params
+                   (close_eqs
+                     close_names
+                     (append_eqs (subst_eqs env premises) (Cons ord_premise Nil)))
+                   (close_eq close_names ih_eq))))
+              (Sequent params (Cons ih hyps) premises eq)))))))))
+
+(fn do_subterm_induct
+  ((m Module) (th Theory) (seq Sequent) (var Symbol) (pf Proof))
+  Bool
+  (match seq
+    ((Sequent params hyps premises eq)
+     (match (subterm_param_type var params)
+       (None False)  ; not a ∀-param of the goal
+       ((Some ty)
+        (if (subterm_is_datatype ty m)
+          (check_sequent m th (build_subterm_subgoal seq var) pf)
+          False))))))  ; subterm order only well-founded on a datatype
+
+;; ---------------------------------------------------------------------------
+;; do_below: discharge a goal `(subterm_below a x)=True` iff `a` is a strict
+;; structural sub-value of `x`. `x` is resolved to constructor form (it is
+;; already a Ctor when the proof reached here via Induct's substitution, or via
+;; an in-scope (= x CTORFORM) hyp when via CaseOn), then traversed: accept iff
+;; `a` equals some PROPER descendant. The resolving equation is a sound in-scope
+;; fact, and the descent only reports genuine structural sub-values, so an
+;; accepted `subterm_below` always denotes a true ⊰ edge.
+;; ---------------------------------------------------------------------------
+
+;; `a` equals a child of `x`, OR is a proper subterm of one — structural on x.
+(fn expr_proper_subterm ((a Expr) (x Expr)) Bool
+  (match x
+    ((Ctor _ args) (eps_list a args))
+    ((Call _ args) (eps_list a args))
+    ((If c t e)
+     (if (eps_child a c) True (if (eps_child a t) True (eps_child a e))))
+    ((Match s arms) (if (eps_child a s) True (eps_arms a arms)))
+    ((Let bs body) (if (eps_list a bs) True (eps_child a body)))
+    (_ False)))  ; FVar/BVar/IntLit/SymLit: leaves, no children
+
+(fn eps_child ((a Expr) (c Expr)) Bool
+  (if (expr_eq a c) True (expr_proper_subterm a c)))
+
+(fn eps_list ((a Expr) (xs (List Expr))) Bool
+  (match xs
+    (Nil False)
+    ((Cons h t) (if (eps_child a h) True (eps_list a t)))))
+
+(fn eps_arms ((a Expr) (arms (List Arm))) Bool
+  (match arms
+    (Nil False)
+    ((Cons (Arm _ body) rest) (if (eps_child a body) True (eps_arms a rest)))))
+
+;; resolve an FVar `x` to a constructor-form term via an in-scope hyp
+;; (= x form) (the CaseOn case-hyp shape: Goal Nil Nil (Equation x form)).
+(fn below_resolve ((x Expr) (hyps (List Goal))) (Option Expr)
+  (match hyps
+    (Nil None)
+    ((Cons (Goal _ _ (Equation l r)) rest)
+     (if (expr_eq l x) (Some r)
+     (if (expr_eq r x) (Some l)
+       (below_resolve x rest))))))
+
+(fn below_is_true ((e Expr)) Bool
+  (match e ((Ctor n _) (core_named n (quote True))) (_ False)))
+
+(fn do_below ((m Module) (seq Sequent)) Bool
+  (match seq
+    ((Sequent params hyps premises (Equation lhs rhs))
+     (if (below_is_true rhs)
+       (match lhs
+         ((Call op args)
+          (if (core_named op (quote subterm_below))
+            (match args
+              ((Cons a (Cons x Nil))
+               (match x
+                 ((Ctor _ _) (expr_proper_subterm a x))
+                 (_
+                   (match (below_resolve x hyps)
+                     (None False)
+                     ((Some form) (expr_proper_subterm a form))))))
+              (_ False))
+            False))
+         (_ False))
+       False))))
 
 (fn dbg_ctor_fields ((cname QName) (ctors (List CtorDef))) (Option (List Type))
   (match ctors

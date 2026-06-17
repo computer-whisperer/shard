@@ -162,6 +162,52 @@ subterm, so one shared Int drops. Lexicographic per-member ranks are a clean
 *additive* generalization of the same `callee < caller` shape, deferred to
 [FUTURE] (see §8).
 
+### 6.1 Discharging the measure's nonneg: subterm induction [BUILT]
+
+A common-measure = total AST size makes every *decrease* obligation trivial
+(`child < parent` by farkas), but the **nonneg** obligation `0 ≤ E` requires
+proving the size function is nonnegative — and for an AST whose constructor
+carries a *list of itself* (`Ctor QName (List Expr)`), `size` is mutually
+recursive with `size_list`, so `size_nonneg` and `size_list_nonneg` are mutually
+recursive *lemmas*. Shallow `induct` cannot prove them: inducting on an `Expr`
+yields an IH only for same-type fields (`build_ihs`), never for the `Expr`s
+nested inside a `(List Expr)` field; and a mutual lemma citation is a cycle that
+stratified citation rejects.
+
+The fix is **well-founded induction along the canonical structural subterm
+order**, exposed as two proof primitives:
+
+- `(subterm-induct VAR PF)` — like `wf-induct`, but the order is `y ⊰ x`
+  (`y` a strict structural sub-value of `x`) instead of an Int measure. One
+  subgoal, strong IH at Hyp 0: `∀P'. premises(P') → (subterm_below x' x) →
+  goal(P')`. Reaches nested occurrences the shallow IH cannot. Gated to datatype
+  vars (⊰ is only well-founded on an inductive type).
+- `(below)` — discharges the IH's ordering premise `(subterm_below a x) = True`
+  by checking `a` is a strict structural sub-term of `x` (resolved to ctor form
+  via substitution, or an in-scope `x = CTORFORM` hyp). The ONLY discharger of
+  `subterm_below`, which is otherwise inert (no reduction rule, unprovable by
+  farkas/simp/refl).
+
+`size_nonneg` then proves by `(subterm-induct e)`: its `Ctor`/`Call` case walks
+the child list by ordinary `(induct args)`, pulling each head's `0 ≤ size a` from
+the strong IH (head ⊰ node, via `below`); `size_list_nonneg` cites `size_nonneg`
+one-directionally. The cycle is gone — and totality itself stays the numeric
+size measure (no phase tags, no `struct_size` in the TCB).
+
+**Why this is the right generalization, not a gadget.** `⊰` is the *same*
+well-founded order shallow `induct` already trusts — `do_induct` is the special
+case "case-split + immediate same-type-field IHs." `wf-induct` (Int order) and
+`subterm-induct` (⊰ order) are one principle at two orders; an eventual roster
+audit should merge them (and recognize `do_induct` as an instance). It stays
+inside verify-don't-search: `below` *decides* a syntactic fact, it does not
+search. In the term representation, object containers (`List`/`Pair`/…) are
+themselves nested `Ctor` nodes, so the proper-subterm check is generic — no
+per-container logic.
+
+Pins: `examples/subterm_induct.shard` (5/5 — `tsize_nonneg`/`tsize_list_nonneg`
+over `Tm = Leaf | Node (List Tm)`); `examples/subterm_induct_rejects.shard`
+(`below` refuses reflexive `a ⊰ a`; the gate refuses a non-datatype var).
+
 ## 7. Cross-call resolution and cycle-readiness [DECIDED]
 
 shard forbids import cycles **today**, so all SCC members share one module. We
@@ -221,6 +267,10 @@ Phase-D prerequisites: the mutual extension (§6) and the `(struct …)` verifie
 - the circularity guard `mc_opaque`;
 - stratified-citation reachability `mc_reaches` / `mc_theory_for_scc`;
 - cross-call QName resolution + `∈ scc` test [DECIDED] (a miss is unsound);
+- the structural subterm order [BUILT, §6.1]: `subterm_below`'s
+  well-foundedness (the same ⊰ `do_induct` already trusts) and `do_below`'s
+  strict-subterm decision (`expr_proper_subterm`) — a `below` that accepted a
+  non-subterm would make `subterm-induct` unsound;
 - and everything `check_sequent` already is.
 
 **Not trusted** (advisory or untrusted-regime): `admit`'s classifier; the prover
@@ -248,5 +298,10 @@ Phase-D prerequisites: the mutual extension (§6) and the `(struct …)` verifie
   `call_close` data-weighted worklist measures).
 - `kernel/admit.shard` — the offline classifier: Tarjan (`ad_sccs`), the
   structural/mutual recognition (`ad_pick` / `ad_verify`), the report renderer.
+- `kernel/checker.shard` — `do_subterm_induct` / `build_subterm_subgoal`
+  (subterm induction, §6.1) and `do_below` / `expr_proper_subterm` (the ⊰
+  discharge); the `Proof` ctors `SubtermInduct` / `Below` live in
+  `kernel/proof.shard`, parsed in `kernel/proof_reader.shard`.
 - `examples/measure_clause.shard` — must-fail cheat pins;
-  `examples/measure_import_synth.shard` — imported-scrutinee binder-typing canary.
+  `examples/measure_import_synth.shard` — imported-scrutinee binder-typing canary;
+  `examples/subterm_induct{,_rejects}.shard` — subterm-induction + soundness pins.
