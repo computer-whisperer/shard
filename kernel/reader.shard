@@ -519,6 +519,18 @@
 (fn elaborate_list
   ((xs (List SExpr)) (ctors (List Symbol)) (scope (List Symbol)))
   (Option (List Expr))
+  (measure
+    (size_sexpr_list xs)
+    ;; site 1 — (elaborate h). premise 0 = (= xs (Cons h t)). needs t >= 0.
+    (have (= (le 0 (size_sexpr_list t)) True)
+      (rewrite-with (lemma size_sexpr_list_nonneg) lr lhs () () refl)
+      (steps ((rewrite (premise 0) lr lhs true ()) (simp lhs)) (by farkas (list 1 0 1))))
+    (steps ((rewrite (lemma size_sexpr_nonneg) lr lhs true ())) refl)
+    ;; site 2 — (elaborate_list t). premise 1 = (= (elaborate h ..) (Some e)).
+    (have (= (le 0 (size_sexpr h)) True)
+      (rewrite-with (lemma size_sexpr_nonneg) lr lhs () () refl)
+      (steps ((rewrite (premise 0) lr lhs true ()) (simp lhs)) (by farkas (list 1 0 0 1))))
+    (steps ((rewrite (lemma size_sexpr_list_nonneg) lr lhs true ())) refl))
   (match xs
     (Nil (Some Nil))
     ((Cons h t)
@@ -531,6 +543,31 @@
 
 (fn elab_if ((args (List SExpr)) (ctors (List Symbol)) (scope (List Symbol)))
   (Option Expr)
+  (measure
+    (+ 1 (size_sexpr_list args))
+    ;; args = (Cons c (Cons t (Cons e Nil))); premise 0 = that arm. Each site
+    ;; recurses on one element; the other two appear positively (need nonneg).
+    ;; site 1 — (elaborate c).
+    (have (= (le 0 (size_sexpr t)) True)
+      (rewrite-with (lemma size_sexpr_nonneg) lr lhs () () refl)
+      (have (= (le 0 (size_sexpr e)) True)
+        (rewrite-with (lemma size_sexpr_nonneg) lr lhs () () refl)
+        (steps ((rewrite (premise 0) lr lhs true ()) (simp lhs)) (by farkas (list 1 0 1 1)))))
+    (steps ((rewrite (lemma size_sexpr_nonneg) lr lhs true ())) refl)
+    ;; site 2 — (elaborate t). premise 1 = (= (elaborate c ..) (Some ce)).
+    (have (= (le 0 (size_sexpr c)) True)
+      (rewrite-with (lemma size_sexpr_nonneg) lr lhs () () refl)
+      (have (= (le 0 (size_sexpr e)) True)
+        (rewrite-with (lemma size_sexpr_nonneg) lr lhs () () refl)
+        (steps ((rewrite (premise 0) lr lhs true ()) (simp lhs)) (by farkas (list 1 0 0 1 1)))))
+    (steps ((rewrite (lemma size_sexpr_nonneg) lr lhs true ())) refl)
+    ;; site 3 — (elaborate e). premises 1,2 = (Some ce),(Some te).
+    (have (= (le 0 (size_sexpr c)) True)
+      (rewrite-with (lemma size_sexpr_nonneg) lr lhs () () refl)
+      (have (= (le 0 (size_sexpr t)) True)
+        (rewrite-with (lemma size_sexpr_nonneg) lr lhs () () refl)
+        (steps ((rewrite (premise 0) lr lhs true ()) (simp lhs)) (by farkas (list 1 0 0 0 1 1)))))
+    (steps ((rewrite (lemma size_sexpr_nonneg) lr lhs true ())) refl))
   (match args
     ((Cons c (Cons t (Cons e Nil)))
      (match (elaborate c ctors scope)
@@ -546,6 +583,11 @@
 
 (fn elab_list ((args (List SExpr)) (ctors (List Symbol)) (scope (List Symbol)))
   (Option Expr)
+  (measure
+    (+ 1 (size_sexpr_list args))
+    ;; site 1 — (elaborate_list args), scrutinee position (no premise). args same.
+    (by farkas (list 1))
+    (steps ((rewrite (lemma size_sexpr_list_nonneg) lr lhs true ())) refl))
   (match (elaborate_list args ctors scope)
     (None None)
     ((Some es) (Some (list_sugar es)))))
@@ -562,6 +604,11 @@
 ;; (so `(ty List Int)` makes Int a `(TCon 'Int Nil)`, not an FVar).
 (fn elab_ty_arg ((a SExpr) (ctors (List Symbol)) (scope (List Symbol)))
   (Option Expr)
+  (measure
+    (+ 1 (size_sexpr a))
+    ;; site 1 — (elaborate a) in the wildcard arm (no premise). a same.
+    (by farkas (list 1))
+    (steps ((rewrite (lemma size_sexpr_nonneg) lr lhs true ())) refl))
   (match a
     ((SSym sym)
      (Some
@@ -573,6 +620,23 @@
 (fn elab_ty_args
   ((args (List SExpr)) (ctors (List Symbol)) (scope (List Symbol)))
   (Option (List Expr))
+  (measure
+    (+ 1 (size_sexpr_list args))
+    ;; site 1 — (elab_ty_arg a). premise 0 = (= args (Cons a rest)). needs
+    ;; size_sexpr_list rest >= 0 (the +1 head-fn offset is absorbed by elab_ty_args's +1).
+    (have (= (le 0 (size_sexpr_list rest)) True)
+      (rewrite-with (lemma size_sexpr_list_nonneg) lr lhs () () refl)
+      (steps ((rewrite (premise 0) lr lhs true ()) (simp lhs)) (by farkas (list 1 0 1))))
+    (have (= (le 0 (size_sexpr a)) True)
+      (rewrite-with (lemma size_sexpr_nonneg) lr lhs () () refl)
+      (by farkas (list 1 0 1)))
+    ;; site 2 — (elab_ty_args rest). premise 1 = (= (elab_ty_arg a ..) (Some ea)).
+    (have (= (le 0 (size_sexpr a)) True)
+      (rewrite-with (lemma size_sexpr_nonneg) lr lhs () () refl)
+      (steps ((rewrite (premise 0) lr lhs true ()) (simp lhs)) (by farkas (list 1 0 0 1))))
+    (have (= (le 0 (size_sexpr_list rest)) True)
+      (rewrite-with (lemma size_sexpr_list_nonneg) lr lhs () () refl)
+      (by farkas (list 1 0 0 1))))
   (match args
     (Nil (Some Nil))
     ((Cons a rest)
@@ -585,6 +649,13 @@
 
 (fn elab_ty ((args (List SExpr)) (ctors (List Symbol)) (scope (List Symbol)))
   (Option Expr)
+  (measure
+    (+ 1 (size_sexpr_list args))
+    ;; site 1 — (elab_ty_args rest). premise 0 = (= args (Cons (SSym name) rest)).
+    (steps ((rewrite (premise 0) lr lhs true ()) (simp lhs)) (by farkas (list 1 0)))
+    (have (= (le 0 (size_sexpr_list rest)) True)
+      (rewrite-with (lemma size_sexpr_list_nonneg) lr lhs () () refl)
+      (by farkas (list 1 0 1))))
   (match args
     ((Cons (SSym name) rest)
      (match (elab_ty_args rest ctors scope)
@@ -604,6 +675,15 @@
 
 (fn elab_arm ((s SExpr) (ctors (List Symbol)) (scope (List Symbol)))
   (Option Arm)
+  (measure
+    (size_sexpr s)
+    ;; site 1 — (elaborate bodyS). premises 0,1 = (= s (SList (Cons patS (Cons
+    ;; bodyS Nil)))), (= (elab_pat patS ctors) (Some (Pair pat names))). bodyS is
+    ;; a strict subterm; patS appears positively.
+    (have (= (le 0 (size_sexpr patS)) True)
+      (rewrite-with (lemma size_sexpr_nonneg) lr lhs () () refl)
+      (steps ((rewrite (premise 0) lr lhs true ()) (simp lhs)) (by farkas (list 1 0 0 1))))
+    (steps ((rewrite (lemma size_sexpr_nonneg) lr lhs true ())) refl))
   (match s
     ((SList (Cons patS (Cons bodyS Nil)))
      (match (elab_pat patS ctors)
@@ -616,6 +696,18 @@
 
 (fn elab_arms ((ss (List SExpr)) (ctors (List Symbol)) (scope (List Symbol)))
   (Option (List Arm))
+  (measure
+    (size_sexpr_list ss)
+    ;; site 1 — (elab_arm h). premise 0 = (= ss (Cons h t)).
+    (have (= (le 0 (size_sexpr_list t)) True)
+      (rewrite-with (lemma size_sexpr_list_nonneg) lr lhs () () refl)
+      (steps ((rewrite (premise 0) lr lhs true ()) (simp lhs)) (by farkas (list 1 0 1))))
+    (steps ((rewrite (lemma size_sexpr_nonneg) lr lhs true ())) refl)
+    ;; site 2 — (elab_arms t). premise 1 = (= (elab_arm h ..) (Some a)).
+    (have (= (le 0 (size_sexpr h)) True)
+      (rewrite-with (lemma size_sexpr_nonneg) lr lhs () () refl)
+      (steps ((rewrite (premise 0) lr lhs true ()) (simp lhs)) (by farkas (list 1 0 0 1))))
+    (steps ((rewrite (lemma size_sexpr_list_nonneg) lr lhs true ())) refl))
   (match ss
     (Nil (Some Nil))
     ((Cons h t)
@@ -628,6 +720,18 @@
 
 (fn elab_match ((args (List SExpr)) (ctors (List Symbol)) (scope (List Symbol)))
   (Option Expr)
+  (measure
+    (+ 1 (size_sexpr_list args))
+    ;; site 1 — (elaborate scrutS). premise 0 = (= args (Cons scrutS arms)).
+    (have (= (le 0 (size_sexpr_list arms)) True)
+      (rewrite-with (lemma size_sexpr_list_nonneg) lr lhs () () refl)
+      (steps ((rewrite (premise 0) lr lhs true ()) (simp lhs)) (by farkas (list 1 0 1))))
+    (steps ((rewrite (lemma size_sexpr_nonneg) lr lhs true ())) refl)
+    ;; site 2 — (elab_arms arms). premise 1 = (= (elaborate scrutS ..) (Some scrut)).
+    (have (= (le 0 (size_sexpr scrutS)) True)
+      (rewrite-with (lemma size_sexpr_nonneg) lr lhs () () refl)
+      (steps ((rewrite (premise 0) lr lhs true ()) (simp lhs)) (by farkas (list 1 0 0 1))))
+    (steps ((rewrite (lemma size_sexpr_list_nonneg) lr lhs true ())) refl))
   (match args
     (Nil None)
     ((Cons scrutS arms)
@@ -642,6 +746,22 @@
 ;; collected in source order.
 (fn elab_binds ((ss (List SExpr)) (ctors (List Symbol)) (scope (List Symbol)))
   (Option (Pair (List Expr) (List Symbol)))
+  (measure
+    (size_sexpr_list ss)
+    ;; site 1 — (elaborate rhsS). premises 0,1 = (= ss (Cons b rest)),
+    ;; (= b (SList (Cons (SSym name) (Cons rhsS Nil)))). rhsS strict subterm.
+    (have (= (le 0 (size_sexpr_list rest)) True)
+      (rewrite-with (lemma size_sexpr_list_nonneg) lr lhs () () refl)
+      (steps
+        ((rewrite (premise 0) lr lhs true ()) (rewrite (premise 1) lr lhs true ()) (simp lhs))
+        (by farkas (list 1 0 0 1))))
+    (steps ((rewrite (lemma size_sexpr_nonneg) lr lhs true ())) refl)
+    ;; site 2 — (elab_binds rest). premise 2 = (= (elaborate rhsS ..) (Some rhs)).
+    ;; expand only ss (leave b); residual = 1 + size_sexpr b, cite b's nonneg.
+    (have (= (le 0 (size_sexpr b)) True)
+      (rewrite-with (lemma size_sexpr_nonneg) lr lhs () () refl)
+      (steps ((rewrite (premise 0) lr lhs true ()) (simp lhs)) (by farkas (list 1 0 0 0 1))))
+    (steps ((rewrite (lemma size_sexpr_list_nonneg) lr lhs true ())) refl))
   (match ss
     (Nil (Some (Pair Nil Nil)))
     ((Cons b rest)
@@ -658,6 +778,19 @@
 
 (fn elab_let ((args (List SExpr)) (ctors (List Symbol)) (scope (List Symbol)))
   (Option Expr)
+  (measure
+    (+ 1 (size_sexpr_list args))
+    ;; args = (Cons (SList binds) (Cons bodyS Nil)); premise 0 = that arm.
+    ;; site 1 — (elab_binds binds). binds is inside the head; bodyS positive.
+    (have (= (le 0 (size_sexpr bodyS)) True)
+      (rewrite-with (lemma size_sexpr_nonneg) lr lhs () () refl)
+      (steps ((rewrite (premise 0) lr lhs true ()) (simp lhs)) (by farkas (list 1 0 1))))
+    (steps ((rewrite (lemma size_sexpr_list_nonneg) lr lhs true ())) refl)
+    ;; site 2 — (elaborate bodyS). premise 1 = (= (elab_binds binds ..) (Some (Pair rhss names))).
+    (have (= (le 0 (size_sexpr_list binds)) True)
+      (rewrite-with (lemma size_sexpr_list_nonneg) lr lhs () () refl)
+      (steps ((rewrite (premise 0) lr lhs true ()) (simp lhs)) (by farkas (list 1 0 0 1))))
+    (steps ((rewrite (lemma size_sexpr_nonneg) lr lhs true ())) refl))
   (match args
     ((Cons (SList binds) (Cons bodyS Nil))
      (match (elab_binds binds ctors scope)
@@ -678,6 +811,14 @@
    (ctors (List Symbol))
    (scope (List Symbol)))
   (Option Expr)
+  (measure
+    (+ 1 (+ (size_sexpr_list segs) (size_sexpr_list valargs)))
+    ;; site 1 — (elaborate_list valargs). valargs a PARAM; both premises (qpath
+    ;; result, sym_mem guard) drop (q untyped). decrease needs segs >= 0.
+    (have (= (le 0 (size_sexpr_list segs)) True)
+      (rewrite-with (lemma size_sexpr_list_nonneg) lr lhs () () refl)
+      (by farkas (list 1 1)))
+    (steps ((rewrite (lemma size_sexpr_list_nonneg) lr lhs true ())) refl))
   (match (qpath_qname segs)
     (None None)
     ((Some q)
@@ -690,6 +831,43 @@
 (fn elaborate_form
   ((h Symbol) (args (List SExpr)) (ctors (List Symbol)) (scope (List Symbol)))
   (Option Expr)
+  (measure
+    (+ 2 (size_sexpr_list args))
+    ;; All 7 sites are DELEGATIONS — same `args` passed on — so each decrease is
+    ;; a constant gap (2 > callee offset); premises are the if-guards on `h`.
+    ;; site 1 — (elab_qpath args Nil): guard ::=T (1 premise); msr2 has size_sexpr_list Nil.
+    (steps ((simp lhs)) (by farkas (list 1 0)))
+    (have (= (le 0 (size_sexpr_list args)) True)
+      (rewrite-with (lemma size_sexpr_list_nonneg) lr lhs () () refl)
+      (steps ((simp lhs)) (by farkas (list 1 0 1))))
+    ;; site 2 — (elab_if args): 2 premises.
+    (by farkas (list 1 0 0))
+    (have (= (le 0 (size_sexpr_list args)) True)
+      (rewrite-with (lemma size_sexpr_list_nonneg) lr lhs () () refl)
+      (by farkas (list 1 0 0 1)))
+    ;; site 3 — (elab_match args): 3 premises.
+    (by farkas (list 1 0 0 0))
+    (have (= (le 0 (size_sexpr_list args)) True)
+      (rewrite-with (lemma size_sexpr_list_nonneg) lr lhs () () refl)
+      (by farkas (list 1 0 0 0 1)))
+    ;; site 4 — (elab_let args): 4 premises.
+    (by farkas (list 1 0 0 0 0))
+    (have (= (le 0 (size_sexpr_list args)) True)
+      (rewrite-with (lemma size_sexpr_list_nonneg) lr lhs () () refl)
+      (by farkas (list 1 0 0 0 0 1)))
+    ;; site 5 — (elab_list args): 5 premises.
+    (by farkas (list 1 0 0 0 0 0))
+    (have (= (le 0 (size_sexpr_list args)) True)
+      (rewrite-with (lemma size_sexpr_list_nonneg) lr lhs () () refl)
+      (by farkas (list 1 0 0 0 0 0 1)))
+    ;; site 6 — (elab_ty args): 7 premises (through the quote guard).
+    (by farkas (list 1 0 0 0 0 0 0 0))
+    (have (= (le 0 (size_sexpr_list args)) True)
+      (rewrite-with (lemma size_sexpr_list_nonneg) lr lhs () () refl)
+      (by farkas (list 1 0 0 0 0 0 0 0 1)))
+    ;; site 7 — (elaborate_list args): 8 premises; msr2 = size_sexpr_list args.
+    (by farkas (list 1 0 0 0 0 0 0 0 0))
+    (steps ((rewrite (lemma size_sexpr_list_nonneg) lr lhs true ())) refl))
   (if (sym_eq h (coloncolon_sym)) (elab_qpath args Nil ctors scope)
   (if (sym_eq h (quote if)) (elab_if args ctors scope)
   (if (sym_eq h (quote match)) (elab_match args ctors scope)
@@ -706,6 +884,29 @@
 
 (fn elaborate ((s SExpr) (ctors (List Symbol)) (scope (List Symbol)))
   (Option Expr)
+  (measure
+    (size_sexpr s)
+    ;; premises 0/1/2 = (= s (SList items)) / (= items (Cons head rest)) /
+    ;; (= head <ctor>); site 2 also the if-guard.
+    ;; site 1 — (elaborate_form h rest). msr2 = 2 + size_sexpr_list rest.
+    (steps
+      ((rewrite (premise 0) lr lhs true ()) (rewrite (premise 1) lr lhs true ())
+       (rewrite (premise 2) lr lhs true ()) (simp lhs))
+      (by farkas (list 1 0 0 0)))
+    (have (= (le 0 (size_sexpr_list rest)) True)
+      (rewrite-with (lemma size_sexpr_list_nonneg) lr lhs () () refl)
+      (by farkas (list 1 0 0 0 1)))
+    ;; site 2 — (elab_qpath hsegs rest). head = (SList (Cons (SSym hh) hsegs)),
+    ;; guard ::=True. msr2 = 1 + size_sexpr_list hsegs + size_sexpr_list rest.
+    (steps
+      ((rewrite (premise 0) lr lhs true ()) (rewrite (premise 1) lr lhs true ())
+       (rewrite (premise 2) lr lhs true ()) (simp lhs))
+      (by farkas (list 1 0 0 0 0)))
+    (have (= (le 0 (size_sexpr_list hsegs)) True)
+      (rewrite-with (lemma size_sexpr_list_nonneg) lr lhs () () refl)
+      (have (= (le 0 (size_sexpr_list rest)) True)
+        (rewrite-with (lemma size_sexpr_list_nonneg) lr lhs () () refl)
+        (by farkas (list 1 0 0 0 0 1 1)))))
   (match s
     ((SInt n) (Some (IntLit n)))
     ((SStr cs) (Some (str_sugar cs)))
