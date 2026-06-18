@@ -4076,6 +4076,175 @@
      (let ((kept (mc_theory_for_scc tr scc rest)))
        (if (mc_entry_safe tr scc entry) (TheoryCons entry kept) kept)))))
 
+;; ---- GENERATOR SUPPORT: emit measure obligations (NOT in the check path) ----
+;; tools/prove uses these to DISCOVER what a bare `(measure E)` clause must
+;; prove, so the offline solver can search each obligation and persist the cert
+;; keyed by mc_site_key. The derivation MIRRORS mc_check_fn / mc_check_sites /
+;; mc_typed_site exactly — same mc_walk sites, same callee-measure substitution,
+;; same mc_keep_hyps / typed-binder handling, same mc_goal_s — so a generated
+;; proof is searched against the IDENTICAL obligation the gate later checks. The
+;; checker never calls these, and a derivation mismatch could only make the gate
+;; REJECT the cert (never falsely accept it), so this stays out of the TCB.
+;; Each supported site yields two entries: <fn>#<i>#decrease and #nonneg.
+;; Unsupported / no-measure / arity-mismatch sites emit nothing (the gate
+;; reports them; there is no cert to generate).
+
+;; the two goal obligations for one site, consed onto `tail`.
+(fn mc_ob_emit
+  ((name Symbol)
+   (i Int)
+   (pFormX SExpr)
+   (khyps (List SExpr))
+   (msr2 SExpr)
+   (msr SExpr)
+   (tail (List (Pair Symbol SExpr))))
+  (List (Pair Symbol SExpr))
+  (Cons
+    (Pair
+      (mc_site_key name i "decrease")
+      (mc_goal_s pFormX khyps (quote lt) msr2 msr))
+    (Cons
+      (Pair
+        (mc_site_key name i "nonneg")
+        (mc_goal_s pFormX khyps (quote le) (SInt 0) msr2))
+      tail)))
+
+;; one site: derive (pFormX, khyps, msr2) the same two ways mc_check_sites does
+;; (simple param-pure path / typed-binder path), then emit; or pass `tail`
+;; through unchanged when the site is unsupported.
+(fn mc_ob_site_join
+  ((name Symbol)
+   (pForm SExpr)
+   (pnames (List Symbol))
+   (msr SExpr)
+   (i Int)
+   (bnds (List Symbol))
+   (tbs (List (Pair Symbol Type)))
+   (hyps (List SExpr))
+   (args (List SExpr))
+   (callee QName)
+   (mcls (List MCl))
+   (tail (List (Pair Symbol SExpr))))
+  (List (Pair Symbol SExpr))
+  (match (mc_callee_measure callee mcls)
+    (None tail)
+    ((Some (Pair cpnames cmsr))
+     (match (mc_zip cpnames args)
+       (None tail)
+       ((Some sub)
+        (let ((msr2 (mc_subst sub cmsr)))
+          (if (mc_pure msr2 pnames bnds)
+            (match (mc_keep_hyps hyps pnames bnds)
+              ((Pair khyps _) (mc_ob_emit name i pForm khyps msr2 msr tail)))
+            (let ((tbn (mc_tb_names tbs Nil)))
+              (if (mc_tbs_fresh tbn pnames)
+                (let ((alln (mc_app_syms tbn pnames)))
+                  (if (mc_pure msr2 alln Nil)
+                    (match (mc_ext_pform pForm tbs)
+                      (None tail)
+                      ((Some pForm2)
+                       (match (mc_keep_hyps hyps alln Nil)
+                         ((Pair khyps _)
+                          (mc_ob_emit name i pForm2 khyps msr2 msr tail)))))
+                    tail))
+                tail)))))))))
+
+(fn mc_ob_sites
+  ((name Symbol)
+   (pForm SExpr)
+   (pnames (List Symbol))
+   (msr SExpr)
+   (sites (List MSiteS))
+   (mcls (List MCl)))
+  (List (Pair Symbol SExpr))
+  (measure (struct sites))
+  (match sites
+    (Nil Nil)
+    ((Cons (MSiteS i bnds tbs hyps args callee) rest)
+     (mc_ob_site_join name pForm pnames msr i bnds tbs hyps args callee mcls
+       (mc_ob_sites name pForm pnames msr rest mcls)))))
+
+;; the obligations for one clause; Nil for struct / type-parametric / not-found
+;; / unreadable clauses (nothing to generate).
+(fn mc_obligations_for
+  ((m Module)
+   (sccs (List (List QName)))
+   (modpath (List Symbol))
+   (mcl MCl)
+   (mcls (List MCl)))
+  (List (Pair Symbol SExpr))
+  (match mcl
+    ((MCl name tparams pForm msr proofs body)
+     (match tparams
+       ((Cons _ _) Nil)
+       (Nil
+         (if (mc_is_struct msr) Nil
+         (match m
+           ((Module _ _ _ tr _)
+            (match (trie_lookup (QName modpath name) tr)
+              (None Nil)
+              ((Some fd)
+               (match (mc_pnames pForm)
+                 (None Nil)
+                 ((Some pnames)
+                  (let ((scc (mc_scc_of (QName modpath name) sccs)))
+                    (match
+                      (mc_walk
+                        (MCtx m modpath name (mc_fd_penv pnames fd) scc)
+                        Nil
+                        Nil
+                        Nil
+                        body
+                        (Pair 0 Nil))
+                      ((Pair _ rsites)
+                       (mc_ob_sites name pForm pnames msr
+                         (mc_rev_sites rsites Nil) mcls))))))))))))))))
+
+;; a clause whose proofs must be GENERATED: numeric (non-struct) and bare (no
+;; inline proofs). Inline-proof clauses are left alone (the gate uses their
+;; proofs, never the sidecar), and struct clauses carry no numeric proofs.
+(fn mc_is_bare_numeric ((mcl MCl)) Bool
+  (match mcl
+    ((MCl _ _ _ msr proofs _)
+     (match proofs
+       (Nil (if (mc_is_struct msr) False True))
+       (_ False)))))
+
+(fn mc_pair_app
+  ((a (List (Pair Symbol SExpr))) (b (List (Pair Symbol SExpr))))
+  (List (Pair Symbol SExpr))
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (mc_pair_app t b)))))
+
+(fn mc_file_obligations
+  ((m Module)
+   (sccs (List (List QName)))
+   (modpath (List Symbol))
+   (todo (List MCl))
+   (all (List MCl)))
+  (List (Pair Symbol SExpr))
+  (measure (struct todo))
+  (match todo
+    (Nil Nil)
+    ((Cons mcl rest)
+     (mc_pair_app
+       (if (mc_is_bare_numeric mcl)
+         (mc_obligations_for m sccs modpath mcl all)
+         Nil)
+       (mc_file_obligations m sccs modpath rest all)))))
+
+;; generator entry: every (site-key, goal) obligation a file's BARE numeric
+;; measure clauses must prove, given the file's already-built module `m`, its
+;; source forms, and its module path. tools/prove turns each into an AutoDecl
+;; and searches it; the cert is keyed by mc_site_key so the gate replays it.
+(fn mc_obligations_of_forms
+  ((m Module) (forms (List SExpr)) (modpath (List Symbol)))
+  (List (Pair Symbol SExpr))
+  (let ((all (mc_rev_mcls (mc_of_forms forms Nil) Nil)))
+    (mc_file_obligations m (ad_sccs m) modpath all all)))
+
 ;; ---- the section entry ------------------------------------------------------
 
 ;; `todo` is the iteration cursor; `all` is the file's full clause list, passed

@@ -74,6 +74,8 @@
 (use (:: kernel reader BMFail))
 (use (:: kernel reader typedef_ctors))
 (use (:: kernel reader module_typedefs))
+(use (:: kernel reader module_path_of))  ; target file → module path
+(use (:: kernel driver mc_obligations_of_forms))  ; measure-totality obligations
 (use (:: kernel driver check_production))
 (use (:: kernel driver theory_base_st))
 (use (:: kernel driver theory_step))
@@ -1451,6 +1453,38 @@
        ((Some _) (missing_decls rest existing))
        (None (Cons d (missing_decls rest existing)))))))
 
+;; ---- measure-totality obligations as auto decls -----------------------------
+;; The gate synthesizes a decrease + nonneg obligation per recursive call site
+;; of a BARE numeric `(measure E)` clause; mc_obligations_of_forms returns each
+;; as (site-key, goal-sexpr). We turn each into a goal-carrying AutoDecl (no
+;; hints), so it flows through the identical solve_all / render path as a claim,
+;; and its cert lands keyed by the site key the gate replays.
+(fn obs_to_decls ((obs (List (Pair Symbol SExpr)))) (List AutoDecl)
+  (measure (struct obs))
+  (match obs
+    (Nil Nil)
+    ((Cons (Pair k g) rest) (Cons (AutoDecl k Nil (Some g)) (obs_to_decls rest)))))
+
+(fn append_decls ((a (List AutoDecl)) (b (List AutoDecl))) (List AutoDecl)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (append_decls t b)))))
+
+;; build the target's module once, then enumerate its bare-measure obligations.
+(fn measure_decls
+  ((target (List Int)) (srcs (List SrcEntry)) (forms (List SExpr)))
+  (List AutoDecl)
+  (match
+    (build_module_d
+      srcs
+      (Module Nil Nil Nil (FnTrie None Nil) Nil)
+      (prelude_ctors)
+      1)
+    ((BMFail _) Nil)
+    ((BMOk m)
+     (obs_to_decls (mc_obligations_of_forms m forms (module_path_of target))))))
+
 ;; dispatch once args / closure / sidecar / target-forms are in hand.
 (fn run_with
   ((target (List Int))
@@ -1461,7 +1495,7 @@
    (forms (List SExpr))
    (w World))
   World
-  (match (auto_decls forms forms)
+  (match (append_decls (auto_decls forms forms) (measure_decls target srcs forms))
     (ds
       (match mclaim
         ((Some cb)
