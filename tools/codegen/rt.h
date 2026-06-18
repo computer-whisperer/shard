@@ -11,8 +11,20 @@
  *   even = pointer to cell { tag, arity, fields... }.
  * Symbols are cells with tag RT_TAG_SYM_ (runtime-reserved, not a ctor
  * tag) whose single field is the intern id (small int). Equality = id.
- * Bump allocator over a big MAP_NORESERVE region; NEVER frees (batch
- * processes; the box has 125 GB).
+ *
+ * Allocator: bump pointer over a big MAP_NORESERVE region, backed by a
+ * CONSERVATIVE mark-sweep collector (rt_gc). GC runs only inside rt_alloc,
+ * which is a function call, so the C ABI guarantees every value_t live
+ * across it is on the C stack or in a callee-saved register — setjmp +
+ * a word scan of [sp..stack_base] captures all roots. Marking is sound
+ * against false roots because a per-16B-slot START BITMAP (set on every
+ * fresh bump allocation) validates that a candidate points at a real cell
+ * head before any deref or mark; the mark itself is the top bit of the
+ * 32-bit tag, cleared by the sweep so the hot rt_tag path is untouched
+ * between collections. Reclaimed cells go to size-segregated free lists
+ * (non-moving — conservative roots can't be relocated). This is a dev-loop
+ * engine only; the Rust interpreter is the soundness authority and the
+ * byte-identical corpus cross-check catches any divergence.
  */
 #ifndef RT_H
 #define RT_H
@@ -26,6 +38,7 @@
 typedef intptr_t value_t;
 
 #define RT_TAG_SYM_ 0x7fffffffu
+#define RT_MARK_ 0x80000000u  /* GC mark = top bit of tag (free; tags < SYM_) */
 
 static void rt_trap(const char *msg) {
   fprintf(stderr, "rt trap: %s\n", msg);
@@ -46,15 +59,10 @@ static inline value_t rt_tag_int(int64_t i) {
 /* ---- heap -------------------------------------------------------------- */
 typedef struct { uint32_t tag; uint32_t arity; value_t fields[]; } rt_cell;
 
-static char *rt_heap, *rt_heap_end;
+static char *rt_heap, *rt_heap_base, *rt_heap_end;
 static inline rt_cell *rt_cellof(value_t v) { return (rt_cell *)v; }
-static inline value_t rt_alloc(uint32_t tag, uint32_t arity) {
-  size_t sz = (sizeof(rt_cell) + arity * sizeof(value_t) + 15) & ~15ul;
-  if (rt_heap + sz > rt_heap_end) rt_trap("heap exhausted");
-  rt_cell *c = (rt_cell *)rt_heap;
-  rt_heap += sz;
-  c->tag = tag; c->arity = arity;
-  return (value_t)c;
+static inline size_t rt_cellsz(uint32_t arity) {
+  return (sizeof(rt_cell) + arity * sizeof(value_t) + 15) & ~15ul;
 }
 static inline uint32_t rt_tag(value_t v) {
   return rt_is_int(v) ? 0xfffffffeu : rt_cellof(v)->tag;
@@ -63,8 +71,128 @@ static inline value_t rt_field(value_t v, uint32_t i) {
   return rt_cellof(v)->fields[i];
 }
 
+/* ---- conservative mark-sweep GC ---------------------------------------- */
+/* All cells are 16-aligned, so size classes index by (size >> 4). Arity is
+   small; 64 classes covers cell sizes up to 1 KiB. */
+#define RT_NCLASS 64
+static rt_cell *rt_free[RT_NCLASS];   /* size-segregated free lists */
+static uint8_t *rt_startmap;          /* 1 bit per 16B slot: is a cell head */
+static char *rt_stack_base;           /* high end of the C stack (set in init) */
+static int rt_gc_on = 0;              /* enabled at the end of rt_init */
+static char *rt_gc_trigger;           /* next GC when bump passes this */
+#define RT_GC_SPACING (8ul << 30)     /* bump this much between collections */
+
+static inline size_t rt_slot(char *p) { return (size_t)(p - rt_heap_base) >> 4; }
+static inline void rt_setstart(char *p) {
+  size_t s = rt_slot(p); rt_startmap[s >> 3] |= (uint8_t)(1u << (s & 7));
+}
+static inline int rt_isstart(char *p) {
+  size_t s = rt_slot(p); return (rt_startmap[s >> 3] >> (s & 7)) & 1;
+}
+
+/* mark stack: cells marked but not yet scanned. Grows by doubling. */
+static rt_cell **rt_mstk; static size_t rt_mtop, rt_mcap;
+static void rt_mgrow(void) {
+  rt_mcap = rt_mcap ? rt_mcap * 2 : (1ul << 20);
+  rt_mstk = (rt_cell **)realloc(rt_mstk, rt_mcap * sizeof(rt_cell *));
+  if (!rt_mstk) rt_trap("gc: mark stack realloc failed");
+}
+/* if v is an unmarked valid cell head, mark it and return it, else 0. */
+static inline rt_cell *rt_try_mark(value_t v) {
+  if (v & 1) return 0;                 /* small int */
+  char *p = (char *)v;
+  if (p < rt_heap_base || p >= rt_heap) return 0;   /* not in live heap */
+  if (((uintptr_t)p) & 15) return 0;   /* cells are 16-aligned */
+  if (!rt_isstart(p)) return 0;        /* not a real cell head (false root) */
+  rt_cell *c = (rt_cell *)p;
+  if (c->tag & RT_MARK_) return 0;     /* already marked */
+  c->tag |= RT_MARK_;
+  return c;
+}
+static inline void rt_mpush(value_t v) {
+  rt_cell *c = rt_try_mark(v);
+  if (c) { if (rt_mtop == rt_mcap) rt_mgrow(); rt_mstk[rt_mtop++] = c; }
+}
+/* scan a marked cell, tail-iterating the LAST field so a long Cons spine
+   costs O(1) mark-stack depth rather than O(length). */
+static void rt_scan(rt_cell *c) {
+  for (;;) {
+    uint32_t n = c->arity;
+    if (n == 0) return;
+    for (uint32_t i = 0; i + 1 < n; i++) rt_mpush(c->fields[i]);
+    rt_cell *nc = rt_try_mark(c->fields[n - 1]);
+    if (!nc) return;
+    c = nc;
+  }
+}
+static void rt_scan_range(char *lo, char *hi) {
+  lo = (char *)(((uintptr_t)lo + 7) & ~7ul);   /* word-align */
+  for (char *p = lo; p + sizeof(value_t) <= hi; p += sizeof(value_t))
+    rt_mpush(*(value_t *)p);
+}
 /* preallocated nullary cells, filled in rt_init from generated tag macros */
 static value_t rt_true_, rt_false_, rt_nil_, rt_none_, rt_unit_world;
+static void rt_gc(void) {
+  for (int i = 0; i < RT_NCLASS; i++) rt_free[i] = 0;
+  rt_mtop = 0;
+  /* roots: the preallocated singletons, callee-saved registers, the stack */
+  rt_mpush(rt_true_); rt_mpush(rt_false_); rt_mpush(rt_nil_);
+  rt_mpush(rt_none_); rt_mpush(rt_unit_world);
+  /* The codegen emits file-scope `static value_t sl_N` globals for interned
+     string/symbol literals (e.g. extern names) — roots not on any stack. Scan
+     the whole data+bss segment conservatively. Safe: rt_free[] was just
+     cleared (so the free lists can't keep dead cells alive), and rt.h's other
+     globals point to non-cell memory (mmap/malloc), which the start-bitmap
+     check in rt_try_mark rejects. */
+  { extern char __data_start[], _end[];
+    rt_scan_range(__data_start, _end); }
+  /* Spill ALL callee-saved registers onto this frame's stack so the scan
+     below catches roots the running computation keeps in registers. This is
+     the GC idiom (cf. Boehm's GC_with_callee_saves_pushed) — more reliable
+     than setjmp, whose jmp_buf mangles rbp/rsp (glibc PTR_MANGLE) and would
+     hide a register-resident root. The spilled words sit in rt_gc's frame,
+     which is between sp (taken after the spill) and rt_stack_base. */
+  __builtin_unwind_init();
+  /* Read the ACTUAL stack pointer after the spill: everything live is at an
+     address >= rsp, so [rsp, base] is guaranteed to cover the spilled
+     registers (a frame local like &probe might be placed above them). */
+  char *sp;
+#if defined(__x86_64__)
+  __asm__ volatile("mov %%rsp, %0" : "=r"(sp));
+#else
+  volatile char probe; sp = (char *)&probe;
+#endif
+  rt_scan_range(sp, rt_stack_base);
+  while (rt_mtop) rt_scan(rt_mstk[--rt_mtop]);
+  /* sweep: linear walk; live -> clear mark, dead -> size-class free list */
+  for (char *p = rt_heap_base; p < rt_heap; ) {
+    rt_cell *c = (rt_cell *)p;
+    size_t sz = rt_cellsz(c->arity);
+    if (c->tag & RT_MARK_) c->tag &= ~RT_MARK_;
+    else { unsigned cl = (unsigned)(sz >> 4);
+           c->fields[0] = (value_t)rt_free[cl]; rt_free[cl] = c; }
+    p += sz;
+  }
+}
+
+static value_t rt_alloc(uint32_t tag, uint32_t arity) {
+  size_t sz = rt_cellsz(arity);
+  unsigned cl = (unsigned)(sz >> 4);
+  for (;;) {
+    rt_cell *c = rt_free[cl];
+    if (c) { rt_free[cl] = (rt_cell *)c->fields[0];
+             c->tag = tag; c->arity = arity; return (value_t)c; }
+    if (rt_gc_on && rt_heap + sz > rt_gc_trigger) {
+      rt_gc();
+      rt_gc_trigger = rt_heap + RT_GC_SPACING;
+      if (rt_gc_trigger > rt_heap_end) rt_gc_trigger = rt_heap_end;
+      if (rt_free[cl]) continue;       /* sweep produced a cell of this class */
+    }
+    if (rt_heap + sz > rt_heap_end) rt_trap("heap exhausted");
+    rt_cell *nc = (rt_cell *)rt_heap; rt_heap += sz; rt_setstart((char *)nc);
+    nc->tag = tag; nc->arity = arity; return (value_t)nc;
+  }
+}
 
 static inline int rt_truthy(value_t v) { return rt_tag(v) == RT_TAG_True; }
 static inline value_t rt_bool(int b) { return b ? rt_true_ : rt_false_; }
@@ -270,19 +398,30 @@ static value_t rt_no_match(const char *fn) {
 }
 
 /* ---- init ---------------------------------------------------------------- */
+/* Called from main as `rt_init(argc, argv)`, so this frame sits just below
+   main's — &argc is a safe high boundary for the conservative stack scan
+   (all later computation frames are at lower addresses). */
 static void rt_init(int argc, char **argv) {
   rt_argc = argc; rt_argv = argv;
+  rt_stack_base = (char *)&argc;
   struct rlimit rl = { 2ul << 30, 2ul << 30 };
   setrlimit(RLIMIT_STACK, &rl);  /* best effort; deep non-self recursion */
   size_t cap = 64ul << 30;       /* 64 GB reserve, NORESERVE — pay as used */
   rt_heap = mmap(0, cap, PROT_READ | PROT_WRITE,
                  MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
   if (rt_heap == MAP_FAILED) rt_trap("mmap failed");
+  rt_heap_base = rt_heap;
   rt_heap_end = rt_heap + cap;
+  /* one start-bit per 16B slot, NORESERVE (touched pages only) */
+  rt_startmap = mmap(0, (cap >> 4) >> 3, PROT_READ | PROT_WRITE,
+                     MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+  if (rt_startmap == MAP_FAILED) rt_trap("startmap mmap failed");
+  rt_gc_trigger = rt_heap + RT_GC_SPACING;
   rt_true_  = rt_alloc(RT_TAG_True, 0);
   rt_false_ = rt_alloc(RT_TAG_False, 0);
   rt_nil_   = rt_alloc(RT_TAG_Nil, 0);
   rt_none_  = rt_alloc(RT_TAG_None, 0);
   rt_unit_world = rt_alloc(RT_TAG_World, 0);
+  rt_gc_on = 1;   /* singletons allocated; collector live from here */
 }
 #endif
