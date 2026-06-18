@@ -745,11 +745,26 @@
            ((Some t2) (Some (Cons h t2)))
            (None None)))))))
 
-;; Drive step_iota to fixed point.
-(fn simp_iota_expr ((m Module) (e Expr)) Expr
-  (match (step_iota m e)
-    (None e)
-    ((Some e2) (simp_iota_expr m e2))))
+;; Default step budget for the proof-side normalizers (simp_iota_expr,
+;; simp_expr). Like run_budget but for the checker: a Simp/ι step that needs
+;; more than this many reductions stops early, leaving a partially-reduced
+;; (still definitionally-equal) term — so the proof step fails to close rather
+;; than reducing unsoundly. Pragmatic bound, not a soundness condition: the
+;; loops' totality holds for any budget (see run_expr's note).
+(fn simp_budget () Int 1000000000)
+
+;; Drive step_iota to fixed point, fuelled (totality, issue #1): step_iota is
+;; structural/total but iterating it to a fixed point has no structural
+;; decrease, so the loop recurses on `(measure fuel)`. simp_iota_expr keeps its
+;; (m e) signature and supplies the default budget.
+(fn simp_iota_loop ((m Module) (e Expr) (fuel Int)) Expr
+  (measure fuel (by farkas (list 1 0)) (by farkas (list 1 1)))
+  (if (lt fuel 1) e
+    (match (step_iota m e)
+      (None e)
+      ((Some e2) (simp_iota_loop m e2 (- fuel 1))))))
+
+(fn simp_iota_expr ((m Module) (e Expr)) Expr (simp_iota_loop m e (simp_budget)))
 
 ;; step_list: try to step the first reducible expression in es, left to
 ;; right. Returns the new list if some step succeeded, else None.
@@ -949,76 +964,45 @@
     (Nil None)
     ((Cons (Pair k v) rest) (if (expr_eq k e) (Some v) (memo_lookup rest e)))))
 
-(fn simp_expr_loop ((m Module) (memo (List (Pair Expr Expr))) (e Expr))
+;; Fuelled (totality, issue #1): step_smart is structural/total but driving it
+;; to a fixed point has no structural decrease, so the loop recurses on
+;; `(measure fuel)`. The kept premises at the recursive site are the fuel guard
+;; (= (lt fuel 1) False) and the inert memo equation (= (memo_lookup memo e)
+;; None) — so the farkas vectors are ad_fix's with a trailing 0 for the memo
+;; premise (skipped, multiplier 0). Running out returns the current term/memo.
+(fn simp_expr_loop ((m Module) (memo (List (Pair Expr Expr))) (e Expr) (fuel Int))
   (Pair Expr (List (Pair Expr Expr)))
-  (match (memo_lookup memo e)
-    ((Some e_nf) (Pair e_nf memo))
-    (None
-      (match (step_smart m e)
-        (None
-          ;; e is already normal — record it as its own NF.
-          (Pair e (Cons (Pair e e) memo)))
-        ((Some e2)
-         (match (simp_expr_loop m memo e2)
-           ((Pair e_nf memo2) (Pair e_nf (Cons (Pair e e_nf) memo2)))))))))
+  (measure fuel (by farkas (list 1 0 0)) (by farkas (list 1 1 0)))
+  (if (lt fuel 1) (Pair e memo)
+    (match (memo_lookup memo e)
+      ((Some e_nf) (Pair e_nf memo))
+      (None
+        (match (step_smart m e)
+          (None
+            ;; e is already normal — record it as its own NF.
+            (Pair e (Cons (Pair e e) memo)))
+          ((Some e2)
+           (match (simp_expr_loop m memo e2 (- fuel 1))
+             ((Pair e_nf memo2) (Pair e_nf (Cons (Pair e e_nf) memo2))))))))))
 
 ;; simp_expr: drive `step_smart` to fixed point with memoization.
 ;; The public entry point — kernel callers (apply_step's Simp arm,
-;; head_clash in Absurd) hit this. Termination is bounded only by
-;; the underlying user fns' termination; the gate prevents
-;; immediately-stuck unfoldings but does not solve general
-;; non-termination.
+;; head_clash in Absurd) hit this. It keeps its (m e) signature and supplies
+;; the default budget; termination now follows from the fuel measure (the gate
+;; prevents immediately-stuck unfoldings; fuel bounds the rest).
 (fn simp_expr ((m Module) (e Expr)) Expr
-  (match (simp_expr_loop m Nil e)
-    ((Pair e_nf _) e_nf)))
-
-;; ---------------------------------------------------------------------------
-;; Compute: drive the UNGATED `step` to a fixed point.
-;;
-;; simp_expr uses the gated step_smart, which refuses to unfold a user-fn
-;; call unless its body would fire at the head — that keeps SYMBOLIC
-;; recursion from diverging, but it also means a ground term whose control
-;; flow is guarded by a user predicate (e.g. `is_digit 49`, whose body is
-;; an `if` over a not-yet-reduced primitive) never evaluates: the one-step
-;; lookahead sees a non-firing head and gives up. compute_expr removes the
-;; gate, so such ground terms reduce to a value.
-;;
-;; On a GROUND (variable-free) term over total functions this is exactly
-;; evaluation and always terminates. On an open/symbolic term it may unfold
-;; further than simp_expr and, in the worst case, not terminate — so the
-;; `Compute` tactic is intended for closed terms (validating a spec on a
-;; concrete input; normalizing a ground subterm of a goal).
-;;
-;; SOUNDNESS is identical to Simp's: every `step` is a definitional-equality
-;; reduction (it is the operational semantics that step_smart is a gated
-;; subset of), so the normal form is equal to the input. The gate was only
-;; ever a termination heuristic, never a soundness condition. Memoization
-;; mirrors simp_expr_loop (shared subterms / LHS-RHS sharing).
-;; ---------------------------------------------------------------------------
-(fn compute_expr_loop ((m Module) (memo (List (Pair Expr Expr))) (e Expr))
-  (Pair Expr (List (Pair Expr Expr)))
-  (match (memo_lookup memo e)
-    ((Some e_nf) (Pair e_nf memo))
-    (None
-      (match (step m e)
-        (None
-          ;; e is already normal — record it as its own NF.
-          (Pair e (Cons (Pair e e) memo)))
-        ((Some e2)
-         (match (compute_expr_loop m memo e2)
-           ((Pair e_nf memo2) (Pair e_nf (Cons (Pair e e_nf) memo2)))))))))
-
-(fn compute_expr ((m Module) (e Expr)) Expr
-  (match (compute_expr_loop m Nil e)
+  (match (simp_expr_loop m Nil e (simp_budget))
     ((Pair e_nf _) e_nf)))
 
 ;; ---------------------------------------------------------------------------
 ;; run_expr — the GROUND-EXECUTION reducer for running shard APPS (eval.shard's
-;; run_app / eval_run), as opposed to `compute_expr` which the Compute TACTIC
-;; uses to normalize goal subterms in a proof.
+;; run_app / eval_run), as opposed to the small-step simp_expr_loop (the Simp
+;; tactic) and ceval (the Compute tactic), which normalize goal subterms in a
+;; proof. run_expr drives the UNGATED `step` (not the gated step_smart), so a
+;; ground term whose control flow is guarded by a user predicate reduces fully.
 ;;
-;; Two differences from compute_expr, both deliberate:
-;;   - NO MEMO. compute_expr_loop memoizes every intermediate term in an
+;; Two differences from simp_expr_loop, both deliberate:
+;;   - NO MEMO. simp_expr_loop memoizes every intermediate term in an
 ;;     assoc-list keyed by structural `expr_eq`. For a proof obligation (a
 ;;     small term, shared LHS/RHS) that can pay off; for running a whole app
 ;;     it is pure cost — an app reduction is a long, essentially non-repeating
@@ -1028,7 +1012,7 @@
 ;;     and constant-extra-space.
 ;;   - TAIL-RECURSIVE. The loop is in tail position, so the host evaluator's
 ;;     TCO runs the whole chain in O(1) Rust stack and lets each spent state be
-;;     reclaimed before the next step (compute_expr_loop conses AFTER the
+;;     reclaimed before the next step (simp_expr_loop conses AFTER the
 ;;     recursive call, pinning the chain).
 ;;
 ;; FUEL (totality, issue #1). Iterating `step` to a fixed point has no
@@ -1044,8 +1028,10 @@
 ;; early, never reduce it unsoundly. The budget is a pragmatic bound, not a
 ;; soundness condition: run_expr's totality holds for ANY fuel.
 ;;
-;; Soundness/semantics are otherwise identical to compute_expr: same ungated
-;; `step`, same fixed point. Only the bookkeeping differs.
+;; SOUNDNESS is identical to Simp's: every `step` is a definitional-equality
+;; reduction (the operational semantics that step_smart is a gated subset of),
+;; so the normal form is equal to the input. The gate was only ever a
+;; termination heuristic, never a soundness condition.
 ;; ---------------------------------------------------------------------------
 (fn run_expr ((m Module) (e Expr) (fuel Int)) Expr
   (measure fuel (by farkas (list 1 0)) (by farkas (list 1 1)))
@@ -1057,7 +1043,7 @@
 ;; ---------------------------------------------------------------------------
 ;; ceval — BIG-STEP environment-machine normalizer for the `Compute` tactic.
 ;;
-;; compute_expr/run_expr drive the leftmost-outermost small-step `step` to a
+;; simp_expr/run_expr drive the leftmost-outermost small-step `step` to a
 ;; fixed point: each step RE-TRAVERSES the whole term to find the next redex and
 ;; SUBSTITUTES args into fn bodies (open_many copies them). On a large ground
 ;; term (is_board over a rendered 35-byte frame) that is O(steps × term-size)
