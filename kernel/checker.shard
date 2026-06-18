@@ -1149,6 +1149,15 @@
         (if (qname_eq cn ctor_name) (Some (Pair names pf))
         (find_case ctor_name rest)))))))
 
+;; Field types of a named ctor — the cases-iterating proof loops look the ctor
+;; up by the case's own name (structural on ctors).
+(fn find_ctor_fields ((cname QName) (ctors (List CtorDef))) (Option (List Type))
+  (measure (struct ctors))
+  (match ctors
+    (Nil None)
+    ((Cons (CtorDef cn fts) rest)
+     (if (qname_eq cn cname) (Some fts) (find_ctor_fields cname rest)))))
+
 ;; ---------------------------------------------------------------------------
 ;; Named-field destructuring (Induct / CaseOn). When a CaseB supplies field
 ;; names, build the field Params from them instead of gen_fresh — so the
@@ -1245,13 +1254,10 @@
      (match (tc_scrut_targs m (seq_params seq) scrut ty tparams)
        (None False)  ; scrut not a ty value / ambiguous instantiation
        ((Some targs)
-        (check_case_on_cases
-          m
-          th
-          seq
-          scrut
-          (inst_ctor_fields (zip_pairs tparams targs) ctors)
-          cases))))))
+        (let ((ictors (inst_ctor_fields (zip_pairs tparams targs) ctors)))
+          (if (check_caseon_exhaustive ictors cases)
+            (check_caseon_proofs m th seq scrut ictors cases)
+            False)))))))
 
 ;; substitute a type-arg instantiation into every ctor's field types.
 (fn inst_ctor_fields ((env (List (Pair Symbol Type))) (cds (List CtorDef)))
@@ -1262,7 +1268,45 @@
     ((Cons (CtorDef n fs) rest)
      (Cons (CtorDef n (type_subst_list env fs)) (inst_ctor_fields env rest)))))
 
-(fn check_case_on_cases
+;; CaseOn case checking is split in two so the proof-carrying recursion stays
+;; structural on the PROOF list (not the type's ctor list), which lets the
+;; check_sequent SCC carry an honest proof-size measure:
+;;   - check_caseon_exhaustive iterates ctors (structural, OUT of the SCC) and
+;;     only verifies every ctor has a case (coverage);
+;;   - check_caseon_proofs iterates CASES (IN the SCC); per case it validates
+;;     field names and checks the sub-proof against the built subgoal.
+;; A case whose ctor isn't in the type is ignored (coverage already passed) —
+;; matching the old ctor-driven loop, which never visited spurious cases.
+(fn check_caseon_exhaustive ((ctors (List CtorDef)) (cases (List Case))) Bool
+  (measure (struct ctors))
+  (match ctors
+    (Nil True)  ; every ctor covered
+    ((Cons (CtorDef cname _) rest)
+     (match (find_case cname cases)
+       (None False)  ; user didn't supply a sub-proof
+       ((Some _) (check_caseon_exhaustive rest cases))))))
+
+;; Check ONE CaseOn case (non-recursive; a pass-through into check_sequent).
+(fn check_caseon_one
+  ((m Module)
+   (th Theory)
+   (seq Sequent)
+   (scrut Expr)
+   (ctors (List CtorDef))
+   (cname QName)
+   (names (List Symbol))
+   (pf Proof))
+  Bool
+  (match (find_ctor_fields cname ctors)
+    (None True)  ; spurious case — ignore (coverage already checked)
+    ((Some field_types)
+     ;; CaseOn keeps all params, so the field names must avoid every one.
+     (if (field_names_ok names field_types (param_names (seq_params seq)))
+       (check_sequent m th
+         (build_case_on_subgoal seq scrut cname names field_types) pf)
+       False))))
+
+(fn check_caseon_proofs
   ((m Module)
    (th Theory)
    (seq Sequent)
@@ -1270,20 +1314,16 @@
    (ctors (List CtorDef))
    (cases (List Case)))
   Bool
-  (match ctors
-    (Nil True)  ; all branches checked
-    ((Cons (CtorDef cname field_types) rest)
-     (match (find_case cname cases)
-       (None False)  ; user didn't supply a sub-proof
-       ((Some (Pair names case_pf))
-        ;; CaseOn keeps all params, so the field names must avoid every one.
-        (if (field_names_ok names field_types (param_names (seq_params seq)))
-          (let
-            ((subgoal (build_case_on_subgoal seq scrut cname names field_types)))
-            (if (check_sequent m th subgoal case_pf)
-              (check_case_on_cases m th seq scrut rest cases)
-              False))
-          False))))))  ; bad field names — reject
+  (match cases
+    (Nil True)
+    ((Cons (Case cname pf) rest)
+     (if (check_caseon_one m th seq scrut ctors cname Nil pf)
+       (check_caseon_proofs m th seq scrut ctors rest)
+       False))
+    ((Cons (CaseB cname names pf) rest)
+     (if (check_caseon_one m th seq scrut ctors cname names pf)
+       (check_caseon_proofs m th seq scrut ctors rest)
+       False))))  ; bad field names — reject
 
 (fn seq_params ((seq Sequent)) (List Param)
   (match seq
@@ -2058,17 +2098,54 @@
            (match (lookup_typedef tname m)
              (None False)
              ((Some (TypeDef _ tparams ctors))
-              (check_induct_cases
-                m
-                th
-                seq
-                var
-                var_type
-                (zip_pairs tparams targs)
-                ctors
-                cases))))))))))
+              (let ((type_env (zip_pairs tparams targs)))
+                (if (check_induct_exhaustive ctors cases)
+                  (check_induct_proofs m th seq var var_type type_env ctors
+                    cases)
+                  False)))))))))))
 
-(fn check_induct_cases
+;; Induct case checking, split exactly like CaseOn (see check_caseon_* above)
+;; so the proof-carrying recursion is structural on the CASES list:
+;;   - check_induct_exhaustive iterates ctors (structural, OUT of the SCC):
+;;     every ctor has a case (coverage);
+;;   - check_induct_proofs iterates CASES (IN the SCC): per case, validate
+;;     field names and check the sub-proof against the built subgoal.
+(fn check_induct_exhaustive ((ctors (List CtorDef)) (cases (List Case))) Bool
+  (measure (struct ctors))
+  (match ctors
+    (Nil True)
+    ((Cons (CtorDef cname _) rest)
+     (match (find_case cname cases)
+       (None False)  ; missing case for this ctor
+       ((Some _) (check_induct_exhaustive rest cases))))))
+
+;; Check ONE Induct case (non-recursive; a pass-through into check_sequent).
+(fn check_induct_one
+  ((m Module)
+   (th Theory)
+   (seq Sequent)
+   (var Symbol)
+   (var_type Type)
+   (type_env (List (Pair Symbol Type)))
+   (ctors (List CtorDef))
+   (cname QName)
+   (names (List Symbol))
+   (pf Proof))
+  Bool
+  (match (find_ctor_fields cname ctors)
+    (None True)  ; spurious case — ignore (coverage already checked)
+    ((Some field_types)
+     (let ((concrete_fields (type_subst_list type_env field_types)))
+       ;; Induct removes `var`; field names must avoid the SURVIVING params.
+       (if
+         (field_names_ok names concrete_fields
+           (param_names (remove_param var (seq_params seq))))
+         (check_sequent m th
+           (build_induct_subgoal seq var var_type cname names concrete_fields)
+           pf)
+         False)))))
+
+(fn check_induct_proofs
   ((m Module)
    (th Theory)
    (seq Sequent)
@@ -2078,27 +2155,16 @@
    (ctors (List CtorDef))
    (cases (List Case)))
   Bool
-  (match ctors
+  (match cases
     (Nil True)
-    ((Cons (CtorDef cname field_types) rest)
-     (let ((concrete_fields (type_subst_list type_env field_types)))
-       (match (find_case cname cases)
-         (None False)  ; missing case for this ctor
-         ((Some (Pair names case_pf))
-          ;; Induct removes `var`; field names must avoid the SURVIVING params.
-          (if
-            (field_names_ok
-              names
-              concrete_fields
-              (param_names (remove_param var (seq_params seq))))
-            (let
-              ((subgoal
-                 (build_induct_subgoal seq var var_type cname names
-                   concrete_fields)))
-              (if (check_sequent m th subgoal case_pf)
-                (check_induct_cases m th seq var var_type type_env rest cases)
-                False))
-            False)))))))  ; bad field names — reject
+    ((Cons (Case cname pf) rest)
+     (if (check_induct_one m th seq var var_type type_env ctors cname Nil pf)
+       (check_induct_proofs m th seq var var_type type_env ctors rest)
+       False))
+    ((Cons (CaseB cname names pf) rest)
+     (if (check_induct_one m th seq var var_type type_env ctors cname names pf)
+       (check_induct_proofs m th seq var var_type type_env ctors rest)
+       False))))  ; bad field names — reject
 
 (fn build_induct_subgoal
   ((seq Sequent)
