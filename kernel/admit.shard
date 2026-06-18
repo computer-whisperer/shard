@@ -182,42 +182,69 @@
      (match (tj_pop v stk ons Nil)
        ((TjPop stk2 ons2 comp) (TjSt n idx low stk2 ons2 (Cons comp sccs)))))))
 
+;; Tarjan's DFS terminates because each node is indexed at most once (the index
+;; counter only rises), but the measure is NOT a clean data-weight: the
+;; post-state `st2 = (tj_visit … st)` is a recursive-CALL RESULT, so showing the
+;; measure drops across a tj_neis self-call needs a monotonicity lemma about
+;; tj_visit's EFFECT on the state — proven by induction on tj_visit, the very fn
+;; whose termination we're establishing. So we fuel it instead (issue #1).
+;; admit is the offline classifier (advisory, OUT of the TCB), so a give-up that
+;; returns the current state is harmless; the budget exceeds any real call graph.
+(fn tj_budget () Int 1000000000)
+
 (fn tj_visit ((tr FnTrie) (v QName) (st TjSt)) TjSt
-  (match st
-    ((TjSt n idx low stk ons sccs)
-     (let
-       ((st1
-          (TjSt
-            (+ n 1)
-            (it_put v n idx)
-            (it_put v n low)
-            (Cons v stk)
-            (it_put v 1 ons)
-            sccs)))
-       (match (trie_lookup v tr)
-         (None st1)  ; unreachable: v came from the module's own fn list
-         ((Some fd)
-          (match fd
-            ((FnDef _ _ _ body)
-             (let ((st2 (tj_neis tr (ad_calls_e tr body Nil) v st1)))
-               (if (int_eq (tj_low v st2) n) (tj_emit v st2) st2))))))))))
+  (tj_visit_go tr v st (tj_budget)))
+
+(fn tj_visit_go ((tr FnTrie) (v QName) (st TjSt) (fuel Int)) TjSt
+  (measure fuel (by farkas (list 1 0)) (by farkas (list 1 1)))
+  (if (lt fuel 1) st
+    (match st
+      ((TjSt n idx low stk ons sccs)
+       (let
+         ((st1
+            (TjSt
+              (+ n 1)
+              (it_put v n idx)
+              (it_put v n low)
+              (Cons v stk)
+              (it_put v 1 ons)
+              sccs)))
+         (match (trie_lookup v tr)
+           (None st1)  ; unreachable: v came from the module's own fn list
+           ((Some fd)
+            (match fd
+              ((FnDef _ _ _ body)
+               (let
+                 ((st2 (tj_neis_go tr (ad_calls_e tr body Nil) v st1 (- fuel 1))))
+                 (if (int_eq (tj_low v st2) n) (tj_emit v st2) st2)))))))))))
 
 (fn tj_neis ((tr FnTrie) (ws (List QName)) (v QName) (st TjSt)) TjSt
-  (match ws
-    (Nil st)
-    ((Cons w rest)
-     (match (tj_idx w st)
-       (None
-         (let ((st2 (tj_visit tr w st)))
-           (tj_neis
-             tr
-             rest
-             v
-             (tj_set_low v (ad_min (tj_low v st2) (tj_low w st2)) st2))))
-       ((Some wi)
-        (if (tj_on w st)
-          (tj_neis tr rest v (tj_set_low v (ad_min (tj_low v st) wi) st))
-          (tj_neis tr rest v st)))))))
+  (tj_neis_go tr ws v st (tj_budget)))
+
+(fn tj_neis_go ((tr FnTrie) (ws (List QName)) (v QName) (st TjSt) (fuel Int)) TjSt
+  (measure fuel
+    (by farkas (list 1 0)) (by farkas (list 1 1))
+    (by farkas (list 1 0)) (by farkas (list 1 1))
+    (by farkas (list 1 0)) (by farkas (list 1 1))
+    (by farkas (list 1 0)) (by farkas (list 1 1)))
+  (if (lt fuel 1) st
+    (match ws
+      (Nil st)
+      ((Cons w rest)
+       (match (tj_idx w st)
+         (None
+           (let ((st2 (tj_visit_go tr w st (- fuel 1))))
+             (tj_neis_go
+               tr
+               rest
+               v
+               (tj_set_low v (ad_min (tj_low v st2) (tj_low w st2)) st2)
+               (- fuel 1))))
+         ((Some wi)
+          (if (tj_on w st)
+            (tj_neis_go tr rest v (tj_set_low v (ad_min (tj_low v st) wi) st)
+              (- fuel 1))
+            (tj_neis_go tr rest v st (- fuel 1)))))))))
 
 (fn tj_all ((tr FnTrie) (fns (List FnDef)) (st TjSt)) TjSt
   (match fns

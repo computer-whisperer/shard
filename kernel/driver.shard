@@ -4045,19 +4045,42 @@
 
 ;; True iff some fn transitively reachable from `work` (following fn bodies via
 ;; the full module trie) is a member of `scc`. `seen` bounds the walk to the
-;; finite call graph — each fn is expanded at most once.
+;; finite call graph — each fn is expanded at most once, so the walk halts after
+;; at most |work| + (total call-graph edges) steps. That bound is data-weighted
+;; over the trie (its honest measure needs the trie<->fns consistency bridge —
+;; deferred); for totality (issue #1) we instead fuel the walk. The recursion is
+;; non-structural (the expand arm GROWS work with the body's calls). Public
+;; wrapper seeds a generous budget; the `_go` core carries (measure fuel).
+;; Give-up returns True (conservative: "reaches scc" => the theory entry is NOT
+;; citable for this scc => sound, just over-restrictive — a proof could fail to
+;; find a lemma and be rejected, never falsely admitted). The budget exceeds any
+;; real call graph, so give-up is dead on well-formed input.
+(fn mc_reach_budget () Int 1000000000)
+
 (fn mc_reaches
   ((tr FnTrie) (work (List QName)) (seen (List QName)) (scc (List QName)))
   Bool
-  (match work
-    (Nil False)
-    ((Cons q rest)
-     (if (ad_qn_member q scc) True
-     (if (ad_qn_member q seen) (mc_reaches tr rest seen scc)
-     (match (trie_lookup q tr)
-       (None (mc_reaches tr rest (Cons q seen) scc))
-       ((Some (FnDef _ _ _ body))
-        (mc_reaches tr (ad_calls_e tr body rest) (Cons q seen) scc))))))))
+  (mc_reaches_go tr work seen scc (mc_reach_budget)))
+
+(fn mc_reaches_go
+  ((tr FnTrie) (work (List QName)) (seen (List QName)) (scc (List QName))
+   (fuel Int))
+  Bool
+  (measure fuel
+    (by farkas (list 1 0)) (by farkas (list 1 1))
+    (by farkas (list 1 0)) (by farkas (list 1 1))
+    (by farkas (list 1 0)) (by farkas (list 1 1)))
+  (if (lt fuel 1) True
+    (match work
+      (Nil False)
+      ((Cons q rest)
+       (if (ad_qn_member q scc) True
+       (if (ad_qn_member q seen) (mc_reaches_go tr rest seen scc (- fuel 1))
+       (match (trie_lookup q tr)
+         (None (mc_reaches_go tr rest (Cons q seen) scc (- fuel 1)))
+         ((Some (FnDef _ _ _ body))
+          (mc_reaches_go tr (ad_calls_e tr body rest) (Cons q seen) scc
+            (- fuel 1))))))))))
 
 ;; a theory entry is citable for `scc` iff its statement can't reach `scc`.
 (fn mc_entry_safe ((tr FnTrie) (scc (List QName)) (entry TheoryEntry)) Bool

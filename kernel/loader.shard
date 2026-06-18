@@ -272,43 +272,68 @@
 ;; file must be one visit, or every decl in it loads twice. RUN mode keeps the
 ;; raw path (absolute app paths are legitimate there and canon would break
 ;; them).
+;; The closure walk reads files from the World (read_file / imports_of), so the
+;; reachable set depends on the actual file system — there is no measure on the
+;; pure arguments (like the reducer loops, the "input" is external). We fuel it
+;; (issue #1). `seen` already bounds real runs to the finite import closure; the
+;; budget exceeds it, so give-up (return the partial Closure) never fires on a
+;; well-formed project, and if it ever did the missing decls make downstream
+;; checks fail — sound-incomplete, never a false accept. Public wrappers seed the
+;; budget; the `_go` cores carry (measure fuel).
+(fn visit_budget () Int 1000000000)
+
 (fn visit ((path0 (List Int)) (granted Bool) (run Bool) (st Closure)) Closure
-  (match st
-    ((Closure seen acc w)
-     (if (if run False (path_escapes path0))
-       (Closure seen acc (refuse_escaping_path path0 w))
-       (let ((path (if run path0 (canon_path_bytes path0))))
-         (if (path_member path seen) st
-         (match (read_file path w)
-           ((Pair msrc w1)
-            (match msrc
-              (None
-                ;; unreadable: an interface path falls back to its other spelling
-                ;; (dir form ⟷ file form); anything else is skipped as before.
-                (match (alt_req_path path)
-                  ((Some p2)
-                   (visit p2 granted run (Closure (Cons path seen) acc w1)))
-                  (None (Closure (Cons path seen) acc w1))))
-              ((Some src)
-               (let ((imps (imports_of (dir_of path) src run)))
-                 (match (req_gate path run imps)
-                   ((Some bad)
-                    (Closure
-                      (Cons path seen)
-                      acc
-                      (refuse_req_import path bad w1)))
-                   (None
-                     (match
-                       (visit_imports
-                         imps
-                         granted
-                         run
-                         (Closure (Cons path seen) acc w1))
-                       ((Closure seen2 acc2 w2)
-                        (Closure
-                          seen2
-                          (append_src acc2 (SrcEntry path granted src))
-                          w2))))))))))))))))
+  (visit_go path0 granted run st (visit_budget)))
+
+(fn visit_imports
+  ((paths (List (Pair Bool (List Int)))) (granted Bool) (run Bool) (st Closure))
+  Closure
+  (visit_imports_go paths granted run st (visit_budget)))
+
+(fn visit_go
+  ((path0 (List Int)) (granted Bool) (run Bool) (st Closure) (fuel Int)) Closure
+  (measure fuel
+    (by farkas (list 1 0)) (by farkas (list 1 1))
+    (by farkas (list 1 0)) (by farkas (list 1 1)))
+  (if (lt fuel 1) st
+    (match st
+      ((Closure seen acc w)
+       (if (if run False (path_escapes path0))
+         (Closure seen acc (refuse_escaping_path path0 w))
+         (let ((path (if run path0 (canon_path_bytes path0))))
+           (if (path_member path seen) st
+           (match (read_file path w)
+             ((Pair msrc w1)
+              (match msrc
+                (None
+                  ;; unreadable: an interface path falls back to its other
+                  ;; spelling (dir form ⟷ file form); else skipped as before.
+                  (match (alt_req_path path)
+                    ((Some p2)
+                     (visit_go p2 granted run (Closure (Cons path seen) acc w1)
+                       (- fuel 1)))
+                    (None (Closure (Cons path seen) acc w1))))
+                ((Some src)
+                 (let ((imps (imports_of (dir_of path) src run)))
+                   (match (req_gate path run imps)
+                     ((Some bad)
+                      (Closure
+                        (Cons path seen)
+                        acc
+                        (refuse_req_import path bad w1)))
+                     (None
+                       (match
+                         (visit_imports_go
+                           imps
+                           granted
+                           run
+                           (Closure (Cons path seen) acc w1)
+                           (- fuel 1))
+                         ((Closure seen2 acc2 w2)
+                          (Closure
+                            seen2
+                            (append_src acc2 (SrcEntry path granted src))
+                            w2)))))))))))))))))
 
 ;; A GRANTED file's imports load granted too (the inherited flag): a module
 ;; interface is trusted as a UNIT, and the req-scope files it pulls in
@@ -319,13 +344,19 @@
 ;; CONSUMER's closure: their requirements sit silently pending and every
 ;; citation of them is unresolved. File imports from UNGRANTED files keep
 ;; their own tags (an impl importing its own interface stays obligated).
-(fn visit_imports
-  ((paths (List (Pair Bool (List Int)))) (granted Bool) (run Bool) (st Closure))
+(fn visit_imports_go
+  ((paths (List (Pair Bool (List Int)))) (granted Bool) (run Bool) (st Closure)
+   (fuel Int))
   Closure
-  (match paths
-    (Nil st)
-    ((Cons (Pair g p) rest)
-     (visit_imports rest granted run (visit p (if granted True g) run st)))))
+  (measure fuel
+    (by farkas (list 1 0)) (by farkas (list 1 1))
+    (by farkas (list 1 0)) (by farkas (list 1 1)))
+  (if (lt fuel 1) st
+    (match paths
+      (Nil st)
+      ((Cons (Pair g p) rest)
+       (visit_imports_go rest granted run
+         (visit_go p (if granted True g) run st (- fuel 1)) (- fuel 1))))))
 
 ;; The entry target itself is ungranted (its own claims are checked normally).
 ;; `run` selects how bare module imports resolve: False = CHECK (opaque
