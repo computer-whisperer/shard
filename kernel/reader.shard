@@ -141,26 +141,39 @@
 
 ;; ---- the reader proper ----------------------------------------------------
 ;; Read exactly one s-expression, returning it and the unconsumed input.
-(fn read_expr ((cs0 (List Int))) RExpr
-  (match (skip_ws cs0)
-    (Nil REErr)
-    ((Cons c rest)
-     (if (int_eq c 40)  ; '(' → list
-       (match (read_items rest)
-         (RIErr REErr)
-         ((RIOk items rest2) (REOk (SList items) rest2)))
-     (if (int_eq c 41)  ; ')' → unbalanced
-       REErr
-     (if (int_eq c 34)  ; '"' → string
-       (read_string rest Nil)
-     (if (int_eq c 39)  ; '\'' → quote reader macro: 'X ≡ (quote X)
-       (match (read_expr rest)
-         (REErr REErr)
-         ((REOk s rest2)
-          (REOk (SList (Cons (SSym (quote quote)) (Cons s Nil))) rest2)))
-       ;; else: an atom. Re-attach c by classifying from (Cons c rest).
-       (match (take_atom (Cons c rest))
-         ((Pair atom rest2) (REOk (classify_atom atom) rest2))))))))))
+;; Fuel for the input-consuming reader recursion. read_expr ⟷ read_items_go
+;; form a mutual SCC over the *unconsumed* input — the recursion is on the
+;; tail read_expr returns, not a structural subterm, so this is fuel rather
+;; than a structural measure (cf. tc_walk). A give-up on exhaustion yields a
+;; parse error (conservative/sound); the budget (1e9) dwarfs any real source,
+;; so the give-up is dead code on well-formed input.
+(fn read_budget () Int 1000000000)
+
+(fn read_expr ((cs0 (List Int))) RExpr (read_expr_go cs0 (read_budget)))
+
+(fn read_expr_go ((cs0 (List Int)) (fuel Int)) RExpr
+  (measure fuel (by farkas (list 1 0)) (by farkas (list 1 1))
+                (by farkas (list 1 0)) (by farkas (list 1 1)))
+  (if (lt fuel 1) REErr
+    (match (skip_ws cs0)
+      (Nil REErr)
+      ((Cons c rest)
+       (if (int_eq c 40)  ; '(' → list
+         (match (read_items_go rest Nil (- fuel 1))
+           (RIErr REErr)
+           ((RIOk items rest2) (REOk (SList items) rest2)))
+       (if (int_eq c 41)  ; ')' → unbalanced
+         REErr
+       (if (int_eq c 34)  ; '"' → string
+         (read_string rest Nil)
+       (if (int_eq c 39)  ; '\'' → quote reader macro: 'X ≡ (quote X)
+         (match (read_expr_go rest (- fuel 1))
+           (REErr REErr)
+           ((REOk s rest2)
+            (REOk (SList (Cons (SSym (quote quote)) (Cons s Nil))) rest2)))
+         ;; else: an atom. Re-attach c by classifying from (Cons c rest).
+         (match (take_atom (Cons c rest))
+           ((Pair atom rest2) (REOk (classify_atom atom) rest2)))))))))))
 
 (fn rev_sexpr ((xs (List SExpr)) (acc (List SExpr))) (List SExpr)
   (measure (struct xs))
@@ -170,17 +183,18 @@
 
 ;; Read s-expressions until the matching ')'. Accumulator style: the host
 ;; stack depth is the NESTING depth (via read_expr), never the sibling count.
-(fn read_items_go ((cs0 (List Int)) (acc (List SExpr))) RItems
-  (match (skip_ws cs0)
-    (Nil RIErr)  ; unterminated list
-    ((Cons c rest)
-     (if (int_eq c 41)  ; ')' → done
-       (RIOk (rev_sexpr acc Nil) rest)
-       (match (read_expr (Cons c rest))
-         (REErr RIErr)
-         ((REOk head rest2) (read_items_go rest2 (Cons head acc))))))))
-
-(fn read_items ((cs0 (List Int))) RItems (read_items_go cs0 Nil))
+(fn read_items_go ((cs0 (List Int)) (acc (List SExpr)) (fuel Int)) RItems
+  (measure fuel (by farkas (list 1 0)) (by farkas (list 1 1))
+                (by farkas (list 1 0)) (by farkas (list 1 1)))
+  (if (lt fuel 1) RIErr
+    (match (skip_ws cs0)
+      (Nil RIErr)  ; unterminated list
+      ((Cons c rest)
+       (if (int_eq c 41)  ; ')' → done
+         (RIOk (rev_sexpr acc Nil) rest)
+         (match (read_expr_go (Cons c rest) (- fuel 1))
+           (REErr RIErr)
+           ((REOk head rest2) (read_items_go rest2 (Cons head acc) (- fuel 1)))))))))
 
 ;; Read a string body (the opening '"' already consumed). `acc` holds the
 ;; decoded characters in reverse.
@@ -938,15 +952,17 @@
 
 ;; Read every top-level s-expression in the source. Accumulator style — the
 ;; host stack must not grow with the number of toplevel forms.
-(fn read_all_go ((src (List Int)) (acc (List SExpr))) (Option (List SExpr))
-  (match (skip_ws src)
-    (Nil (Some (rev_sexpr acc Nil)))
-    ((Cons c rest0)
-     (match (read_expr (Cons c rest0))
-       (REErr None)
-       ((REOk s rest) (read_all_go rest (Cons s acc)))))))
+(fn read_all_go ((src (List Int)) (acc (List SExpr)) (fuel Int)) (Option (List SExpr))
+  (measure fuel (by farkas (list 1 0)) (by farkas (list 1 1)))
+  (if (lt fuel 1) None
+    (match (skip_ws src)
+      (Nil (Some (rev_sexpr acc Nil)))
+      ((Cons c rest0)
+       (match (read_expr (Cons c rest0))
+         (REErr None)
+         ((REOk s rest) (read_all_go rest (Cons s acc) (- fuel 1))))))))
 
-(fn read_all ((src (List Int))) (Option (List SExpr)) (read_all_go src Nil))
+(fn read_all ((src (List Int))) (Option (List SExpr)) (read_all_go src Nil (read_budget)))
 
 ;; ---- types ----
 
