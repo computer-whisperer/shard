@@ -1336,12 +1336,14 @@
     (Nil Nil)
     ((Cons _ r) (append_int " 0" (ms_zeros r)))))
 
-;; one farkas slot per have (coeff 1).
-(fn ms_ones ((subset (List Symbol))) (List Int)
+;; one farkas slot per have, coeff = `cf` (the measure's multiplier M: 1 for a
+;; bare size measure, M for a lex measure M*base+offset — the have proves the
+;; subterm's base is nonneg and the cert scales it by M).
+(fn ms_ones ((subset (List Symbol)) (cf (List Int))) (List Int)
   (measure (struct subset))
   (match subset
     (Nil Nil)
-    ((Cons _ r) (append_int " 1" (ms_ones r)))))
+    ((Cons _ r) (append_int (append_int " " cf) (ms_ones r cf)))))
 
 ;; nested `have (le 0 (SIZE st)) … ` wrappers around the inner steps proof.
 (fn ms_haves
@@ -1371,7 +1373,8 @@
    (prems (List SExpr))
    (rewrites (List Int))
    (sizefn (List Int))
-   (nonneg (List Int)))
+   (nonneg (List Int))
+   (cf (List Int)))
   (List Int)
   (ms_haves
     subset
@@ -1383,7 +1386,28 @@
         rewrites
         (append_int
           "(simp lhs)) (by farkas (list 1"
-          (append_int (ms_zeros prems) (append_int (ms_ones subset) ")))")))))))
+          (append_int (ms_zeros prems) (append_int (ms_ones subset cf) ")))")))))))
+
+;; A NONNEG obligation  0 <= M*base(ARG)+off : `have` base(ARG)>=0 (citing its
+;; nonneg lemma), then farkas scales it by M. ARG is the measure's own argument
+;; (a param/binder symbol), not a path-premise subterm — so this is a separate
+;; one-have builder rather than the decrease subset enumeration.
+(fn ms_nonneg_build
+  ((arg Symbol)
+   (prems (List SExpr))
+   (sizefn (List Int))
+   (nonneg (List Int))
+   (cf (List Int)))
+  (List Int)
+  (ms_haves
+    (Cons arg Nil)
+    sizefn
+    nonneg
+    (append_int
+      "(steps ((simp lhs)) (by farkas (list 1"
+      (append_int
+        (ms_zeros prems)
+        (append_int " " (append_int cf ")))"))))))
 
 (fn ms_subsets ((xs (List Symbol))) (List (List Symbol))
   (measure (struct xs))
@@ -1411,18 +1435,19 @@
    (prems (List SExpr))
    (rewrites (List Int))
    (sizefn (List Int))
-   (nonneg (List Int)))
+   (nonneg (List Int))
+   (cf (List Int)))
   (List (List Int))
   (measure (struct subs))
   (match subs
     (Nil Nil)
     ((Cons subset rest)
      (match subset
-       (Nil (ms_cands_for rest prems rewrites sizefn nonneg))  ; skip empty subset
+       (Nil (ms_cands_for rest prems rewrites sizefn nonneg cf))  ; skip empty
        (_
          (Cons
-           (ms_build subset prems rewrites sizefn nonneg)
-           (ms_cands_for rest prems rewrites sizefn nonneg)))))))
+           (ms_build subset prems rewrites sizefn nonneg cf)
+           (ms_cands_for rest prems rewrites sizefn nonneg cf)))))))
 
 ;; the size fn's nonneg lemma: a premise-free theory fact of shape
 ;; (le 0 (SIZEFN _)) = True. Its name is cited in each have.
@@ -1452,17 +1477,78 @@
         (if (ms_nonneg_g sizefn lg) (Some (chars_of_sym (qn_name q)))
         (find_nonneg_lemma rest sizefn)))))))
 
-;; recipe candidates for a DECREASE obligation goalS (Nil for nonneg or any
-;; goal we don't recognize — those are covered by flat_cands / farkas_cands).
+;; The base size fn named in a measured side. Handles two shapes:
+;;   - bare:  (sizefn ARG…)                         → sizefn
+;;   - lex:   (+ (* M (base ARG…)) OFF)             → base
+;; The lex form is what a mutual SCC with pass-through members needs: a
+;; per-member measure M·base(component)+offset, where M dominates a real size
+;; drop and the offset orders the pass-through edges (see kernel/checker.shard's
+;; check_sequent SCC). Everything downstream of the base name is identical for
+;; both shapes — the recipe rewrites the path premises, simp unfolds the size
+;; (and lia normalizes the (* M …) scaling), then farkas.
+(fn ms_base_sizefn ((aSide SExpr)) (Option Symbol)
+  (match aSide
+    ((SList (Cons (SSym f) rest))
+     (if (sym_eq f (quote +))
+       (match rest
+         ((Cons mulS _)
+          (match mulS
+            ((SList (Cons (SSym star) (Cons _m (Cons baseCall Nil))))
+             (if (sym_eq star (quote *))
+               (match baseCall
+                 ((SList (Cons (SSym base) _)) (Some base))
+                 (_ None))
+               None))
+            (_ None)))
+         (_ None))
+       (Some f)))
+    (_ None)))
+
+;; The multiplier M of a measured side: M from (+ (* M base) off), else 1.
+(fn ms_mult ((m SExpr)) Int
+  (match m
+    ((SList (Cons (SSym f) (Cons mulS _)))
+     (if (sym_eq f (quote +))
+       (match mulS
+         ((SList (Cons (SSym star) (Cons (SInt k) _)))
+          (if (sym_eq star (quote *)) k 1))
+         (_ 1))
+       1))
+    (_ 1)))
+
+;; The base call (base ARG…) inside a measured side (peels the lex wrapper).
+(fn ms_base_call ((m SExpr)) (Option SExpr)
+  (match m
+    ((SList (Cons (SSym f) rest))
+     (if (sym_eq f (quote +))
+       (match rest
+         ((Cons (SList (Cons (SSym star) (Cons _k (Cons baseCall Nil)))) _)
+          (if (sym_eq star (quote *)) (Some baseCall) None))
+         (_ None))
+       (Some m)))  ; bare: m IS the base call
+    (_ None)))
+
+;; The (symbol) argument of a (base ARG …) call — the measure's own parameter.
+(fn ms_call_arg ((c SExpr)) (Option Symbol)
+  (match c
+    ((SList (Cons (SSym _base) (Cons (SSym arg) _))) (Some arg))
+    (_ None)))
+
+;; recipe candidates for a measure obligation goalS. Handles DECREASE
+;; (lt callee caller) and NONNEG (le 0 measure); both bare and lex measures.
+;; Anything else returns Nil (covered by flat_cands / farkas_cands).
 (fn measure_cands ((s Slv) (th Theory) (seq Sequent) (goalS SExpr))
   (List (List Int))
   (match goalS
     ((SList (Cons _g (Cons _pForm (Cons (SList prems) (Cons concl Nil)))))
      (match concl
-       ((SList (Cons _eq (Cons (SList (Cons (SSym rel) (Cons aSide _))) _)))
+       ((SList
+          (Cons _eq (Cons (SList (Cons (SSym rel) (Cons aSide (Cons bSide _)))) _)))
         (if (sym_eq rel (quote lt))
-          (match aSide
-            ((SList (Cons (SSym sizefn) _))
+          ;; DECREASE: aSide = callee measure; haves over path-premise subterms.
+          (match (ms_base_sizefn aSide)
+            (None Nil)
+            ((Some sizefn)
              (match (find_nonneg_lemma th sizefn)
                (None Nil)
                ((Some nonneg)
@@ -1471,9 +1557,30 @@
                   prems
                   (ms_rewrites prems 0)
                   (chars_of_sym sizefn)
-                  nonneg))))
+                  nonneg
+                  (show_int (ms_mult aSide)))))))
+        (if (sym_eq rel (quote le))
+          ;; NONNEG: (le 0 measure) — bSide = measure; one have over its own arg.
+          (match aSide
+            ((SInt 0)
+             (match (ms_base_call bSide)
+               (None Nil)
+               ((Some baseCall)
+                (match (ms_call_arg baseCall)
+                  (None Nil)
+                  ((Some arg)
+                   (match (ms_base_sizefn bSide)
+                     (None Nil)
+                     ((Some base)
+                      (match (find_nonneg_lemma th base)
+                        (None Nil)
+                        ((Some nonneg)
+                         (Cons
+                           (ms_nonneg_build arg prems (chars_of_sym base) nonneg
+                             (show_int (ms_mult bSide)))
+                           Nil))))))))))
             (_ Nil))
-          Nil))
+          Nil)))
        (_ Nil)))
     (_ Nil)))
 

@@ -75,6 +75,7 @@ TARGETS=(
   examples/wf_induct_demo.shard
   examples/measure_clause.shard
   examples/measure_import_synth.shard
+  examples/measure_lex_demo.shard
   examples/mutual_toy.shard
   examples/subterm_induct.shard
   examples/subterm_induct_rejects.shard
