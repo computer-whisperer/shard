@@ -708,10 +708,115 @@
       (TCon (qn (sym_of_chars (show_nat w))) Nil)
       (Cons (TCon (qn sgn) Nil) Nil))))
 
+;; ---- AST size over SExpr (issue #1; shared by the SExpr-walker measures) ----
+;; size_sexpr / size_sexpr_list are a structural mutual pair (AdMutual — no
+;; clause needed). They are the numeric measure driving the (measure …) clauses
+;; on qtype/parse_type/parse_types below (a 3-member AdUnresolved SCC: parse_type
+;; passes a sublist to qtype which passes it on to parse_types — no single
+;; descending structural track). One recursive ctor (SList), so the nonneg proof
+;; is one inline list-induction. Developed in examples/sexpr_measure.shard.
+(fn size_sexpr ((s SExpr)) Int
+  (match s
+    ((SInt _) 1)
+    ((SSym _) 1)
+    ((SStr _) 1)
+    ((SList items) (+ 1 (size_sexpr_list items)))))
+
+(fn size_sexpr_list ((ss (List SExpr))) Int
+  (match ss
+    (Nil 0)
+    ((Cons h t) (+ 1 (+ (size_sexpr h) (size_sexpr_list t))))))
+
+;; defining equations (one structural unfold each)
+(claim size_sexpr_slist
+  (goal ((items (List SExpr))) ()
+    (= (size_sexpr (SList items)) (+ 1 (size_sexpr_list items))))
+  (steps ((simp lhs)) refl))
+
+(claim size_sexpr_ssym
+  (goal ((y Symbol)) () (= (size_sexpr (SSym y)) 1))
+  (steps ((simp lhs)) refl))
+
+(claim size_sexpr_list_nil
+  (goal () () (= (size_sexpr_list Nil) 0))
+  (steps ((simp lhs)) refl))
+
+(claim size_sexpr_list_cons
+  (goal ((h SExpr) (t (List SExpr))) ()
+    (=
+      (size_sexpr_list (Cons h t))
+      (+ 1 (+ (size_sexpr h) (size_sexpr_list t)))))
+  (steps ((simp lhs)) refl))
+
+;; nonneg pair: size_sexpr_nonneg by subterm-induction (the SList case proves
+;; 0 <= size_sexpr_list items inline, each head's bound from the strong IH via
+;; (below)); size_sexpr_list_nonneg an ordinary spine induct citing it one-way.
+(claim size_sexpr_nonneg
+  (goal ((s SExpr)) () (= (le 0 (size_sexpr s)) True))
+  (subterm-induct
+    s
+    (case-on s SExpr
+      ((case SInt
+         (n)
+         (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) refl))
+       (case SSym
+         (y)
+         (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) refl))
+       (case SStr
+         (cs)
+         (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) refl))
+       (case SList
+         (items)
+         (have (= (le 0 (size_sexpr_list items)) True)
+           (induct items
+             ((case Nil
+                (steps
+                  ((rewrite (lemma size_sexpr_list_nil) lr lhs true ()))
+                  (by farkas (list 1))))
+              (case Cons
+                (a rest)
+                (have (= (le 0 (size_sexpr a)) True)
+                  (rewrite-with (hyp ih) lr lhs () ((below)) refl)
+                  (have (= (le 0 (size_sexpr_list rest)) True)
+                    (rewrite-with (hyp 2) lr lhs ((inst s s)) () refl)
+                    (steps
+                      ((rewrite (lemma size_sexpr_list_cons) lr lhs true ()))
+                      (by farkas (list 1 1 1))))))))
+           (steps
+             ((rewrite (hyp 0) lr lhs true ())
+              (rewrite (lemma size_sexpr_slist) lr lhs true ()))
+             (by farkas (list 1 1)))))))))
+
+(claim size_sexpr_list_nonneg
+  (goal ((ks (List SExpr))) () (= (le 0 (size_sexpr_list ks)) True))
+  (induct ks
+    ((case Nil
+       (steps
+         ((rewrite (lemma size_sexpr_list_nil) lr lhs true ()))
+         (by farkas (list 1))))
+     (case Cons
+       (h t)
+       (have (= (le 0 (size_sexpr h)) True)
+         (rewrite-with (lemma size_sexpr_nonneg) lr lhs () () refl)
+         (have (= (le 0 (size_sexpr_list t)) True)
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+           (steps
+             ((rewrite (lemma size_sexpr_list_cons) lr lhs true ()))
+             (by farkas (list 1 1 1)))))))))
+
 ;; A qualified-path type: `(:: SEG … NAME)` (0-ary; `segs` is the path, no type
 ;; args) or applied `((:: SEG … NAME) A1 …)` (`argforms` the type arguments).
 (fn qtype ((segs (List SExpr)) (argforms (List SExpr)) (tparams (List Symbol)))
   (Option Type)
+  (measure
+    (+ 1 (+ (size_sexpr_list segs) (size_sexpr_list argforms)))
+    ;; site 1 — (parse_types argforms tparams). argforms is a PARAM; premise 0
+    ;; (= (qpath_qname segs) (Some q)) is dropped (q untyped). decrease needs
+    ;; size_sexpr_list segs >= 0.
+    (have (= (le 0 (size_sexpr_list segs)) True)
+      (rewrite-with (lemma size_sexpr_list_nonneg) lr lhs () () refl)
+      (by farkas (list 1 1)))
+    (steps ((rewrite (lemma size_sexpr_list_nonneg) lr lhs true ())) refl))
   (match (qpath_qname segs)
     (None None)
     ((Some q)
@@ -720,6 +825,56 @@
        ((Some args) (Some (TCon q args)))))))
 
 (fn parse_type ((s SExpr) (tparams (List Symbol))) (Option Type)
+  (measure
+    (size_sexpr s)
+    ;; premises (all kept, all reference typed binders): 0 = (= s (SList items)),
+    ;; 1 = (= items (Cons head rest)), 2 = (= head <ctor>),
+    ;; 3 = if-guard (= (sym_eq … (coloncolon_sym)) <pol>).
+    ;; site 1 — (qtype rest Nil tparams), guard True. msr2 = 1 + size_sexpr_list
+    ;; rest + size_sexpr_list Nil; expand s to 3 + size_sexpr_list rest.
+    (steps
+      ((rewrite (premise 0) lr lhs true ())
+       (rewrite (lemma size_sexpr_slist) lr lhs true ())
+       (rewrite (premise 1) lr lhs true ())
+       (rewrite (lemma size_sexpr_list_cons) lr lhs true ())
+       (rewrite (premise 2) lr lhs true ())
+       (rewrite (lemma size_sexpr_ssym) lr lhs true ())
+       (rewrite (lemma size_sexpr_list_nil) lr lhs true ()))
+      (by farkas (list 1 0 0 0 0)))
+    (have (= (le 0 (size_sexpr_list rest)) True)
+      (rewrite-with (lemma size_sexpr_list_nonneg) lr lhs () () refl)
+      (steps
+        ((rewrite (lemma size_sexpr_list_nil) lr lhs true ()))
+        (by farkas (list 1 0 0 0 0 1))))
+    ;; site 2 — (parse_types rest tparams), guard False. msr2 = size_sexpr_list
+    ;; rest; expand s to 3 + size_sexpr_list rest.
+    (steps
+      ((rewrite (premise 0) lr lhs true ())
+       (rewrite (lemma size_sexpr_slist) lr lhs true ())
+       (rewrite (premise 1) lr lhs true ())
+       (rewrite (lemma size_sexpr_list_cons) lr lhs true ())
+       (rewrite (premise 2) lr lhs true ())
+       (rewrite (lemma size_sexpr_ssym) lr lhs true ()))
+      (by farkas (list 1 0 0 0 0)))
+    (steps ((rewrite (lemma size_sexpr_list_nonneg) lr lhs true ())) refl)
+    ;; site 3 — (qtype hsegs rest tparams). premise 2 = (= head (SList (Cons
+    ;; (SSym hh) hsegs))). msr2 = 1 + size_sexpr_list hsegs + size_sexpr_list
+    ;; rest; expand s to 5 + size_sexpr_list hsegs + size_sexpr_list rest.
+    (steps
+      ((rewrite (premise 0) lr lhs true ())
+       (rewrite (lemma size_sexpr_slist) lr lhs true ())
+       (rewrite (premise 1) lr lhs true ())
+       (rewrite (lemma size_sexpr_list_cons) lr lhs true ())
+       (rewrite (premise 2) lr lhs true ())
+       (rewrite (lemma size_sexpr_slist) lr lhs true ())
+       (rewrite (lemma size_sexpr_list_cons) lr lhs true ())
+       (rewrite (lemma size_sexpr_ssym) lr lhs true ()))
+      (by farkas (list 1 0 0 0 0)))
+    (have (= (le 0 (size_sexpr_list hsegs)) True)
+      (rewrite-with (lemma size_sexpr_list_nonneg) lr lhs () () refl)
+      (have (= (le 0 (size_sexpr_list rest)) True)
+        (rewrite-with (lemma size_sexpr_list_nonneg) lr lhs () () refl)
+        (by farkas (list 1 0 0 0 0 1 1)))))
   (match s
     ((SSym name)
      (if (sym_mem name tparams) (Some (TVar name))  ; a type parameter in scope
@@ -750,6 +905,27 @@
     (_ None)))  ; SStr isn't a type
 
 (fn parse_types ((ss (List SExpr)) (tparams (List Symbol))) (Option (List Type))
+  (measure
+    (size_sexpr_list ss)
+    ;; site 1 — (parse_type h tparams). premise 0 = (= ss (Cons h t)). decrease
+    ;; needs size_sexpr_list t >= 0.
+    (have (= (le 0 (size_sexpr_list t)) True)
+      (rewrite-with (lemma size_sexpr_list_nonneg) lr lhs () () refl)
+      (steps
+        ((rewrite (premise 0) lr lhs true ())
+         (rewrite (lemma size_sexpr_list_cons) lr lhs true ()))
+        (by farkas (list 1 0 1))))
+    (steps ((rewrite (lemma size_sexpr_nonneg) lr lhs true ())) refl)
+    ;; site 2 — (parse_types t tparams). premise 0 = (= ss (Cons h t)),
+    ;; premise 1 = (= (parse_type h tparams) (Some ty)). decrease needs
+    ;; size_sexpr h >= 0.
+    (have (= (le 0 (size_sexpr h)) True)
+      (rewrite-with (lemma size_sexpr_nonneg) lr lhs () () refl)
+      (steps
+        ((rewrite (premise 0) lr lhs true ())
+         (rewrite (lemma size_sexpr_list_cons) lr lhs true ()))
+        (by farkas (list 1 0 0 1))))
+    (steps ((rewrite (lemma size_sexpr_list_nonneg) lr lhs true ())) refl))
   (match ss
     (Nil (Some Nil))
     ((Cons h t)
