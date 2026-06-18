@@ -1247,6 +1247,24 @@
          (if (attempt s name c) (Some c) (try_induct_vars s th name seq)))
         (None (try_induct_vars s th name seq))))))
 
+;; a measure-totality obligation is keyed `<fn>#<site>#decrease|nonneg`; the
+;; '#' never occurs in a source decl name.
+(fn name_has_hash ((cs (List Int))) Bool
+  (measure (struct cs))
+  (match cs
+    (Nil False)
+    ((Cons c r) (if (int_eq c 35) True (name_has_hash r)))))
+
+(fn is_measure_name ((n Symbol)) Bool (name_has_hash (chars_of_sym n)))
+
+;; Measure obligations are verified by the cheap try_cand (direct check_sequent)
+;; only — the whole-file `attempt` can't see them (the gate reports sites as
+;; report-only COLedger lines, not COPass), and the GATE re-verifies every
+;; generated cert at check time anyway (that is the authoritative check). The
+;; candidate set is the claim ladder plus the measure recipe (measure_cands).
+(fn solve_measure ((s Slv) (th Theory) (seq Sequent)) (Option (List Int))
+  (try_ladder s th seq (append_cands (flat_cands s th seq) (farkas_cands seq))))
+
 ;; `th` is the theory as it stands just before the decl — handed down from
 ;; the RunState solve_all threads through the run.
 (fn solve_one ((s Slv) (th Theory) (d AutoDecl)) Solved
@@ -1264,9 +1282,13 @@
         (match (parse_goal_r (slv_m s) (slv_rctx s) goalS)
           (None (SolvedN name))  ; malformed goal — the real pass reports it
           ((Some g)
-           (match (solve_seq s th name (lift_sequent g) hints)
-             ((Some c) (SolvedY name c))
-             (None (SolvedN name))))))))))
+           (if (is_measure_name name)
+             (match (solve_measure s th (lift_sequent g))
+               ((Some c) (SolvedY name c))
+               (None (SolvedN name)))
+             (match (solve_seq s th name (lift_sequent g) hints)
+               ((Some c) (SolvedY name c))
+               (None (SolvedN name)))))))))))
 
 ;; ONE RunState threaded through the run in file order (`pend` = target
 ;; decls not yet admitted): before each decl the state advances (proofs
