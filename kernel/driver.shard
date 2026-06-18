@@ -2367,7 +2367,7 @@
          (pending_outcomes (rev_pend pend Nil))
          (oc_concat
            (bin_reports (bins_of_srcs srcs) th m led (own_externs_of_srcs srcs))
-           (mc_outcome m srcs th focus)))))))
+           (mc_outcome m srcs sidecars th focus)))))))
 
 ;; Production entry that builds M IN SHARD. `build_module_d` (reader.shard) parses
 ;; each source's types/fns via the self-hosted reader and merges them onto
@@ -3415,7 +3415,8 @@
    (gctx RCtx)
    (gname Symbol)
    (gs SExpr)
-   (ps SExpr))
+   (ps SExpr)
+   (autos (List (Pair Symbol SExpr))))
   (Option (List Int))
   (match (parse_goal_r m gctx gs)
     (None (Some "could not parse the generated obligation goal"))
@@ -3423,7 +3424,7 @@
      (match (tc_check_goal m g)
        ((Some msg) (Some msg))
        (None
-         (match (parse_proof_auto m gctx gname ps Nil)
+         (match (parse_proof_auto m gctx gname ps autos)
            ((PrfErr emsg) (Some emsg))
            ((PrfOk p0)
             (match
@@ -3492,7 +3493,21 @@
     (mc_line key (append_int "FAIL site " (append_int (mc_show_i i) kind)))
     (append_int "    " (append_int why (sr_nl)))))
 
-;; check one site's decrease + nonnegativity pair. None = both pass.
+;; the synthetic sidecar key for one site's proof: `<fn>#<site>#<kind>`, where
+;; kind is "decrease" or "nonneg". `#` is not a reader delimiter (is_delim), so
+;; this round-trips as a single symbol in a (proof-for NAME PROOF) sidecar
+;; entry — no change to the sidecar format, which is keyed by claim NAME. A bare
+;; `(measure E)` clause makes each site's proof the `auto` token; auto_lookup
+;; then matches this key against the file's <file>.auto.shard entries.
+(fn mc_site_key ((fname Symbol) (i Int) (kind (List Int))) Symbol
+  (sym_of_chars
+    (append_int
+      (chars_of_sym fname)
+      (append_int "#" (append_int (mc_show_i i) (append_int "#" kind))))))
+
+;; check one site's decrease + nonnegativity pair. None = both pass. `autos` is
+;; the file's sidecar entries: an `auto` proof on a bare measure clause resolves
+;; through it by the per-site synthetic key.
 (fn mc_site_pair
   ((m Module)
    (m2 Module)
@@ -3506,7 +3521,8 @@
    (msr SExpr)
    (i Int)
    (p1 SExpr)
-   (p2 SExpr))
+   (p2 SExpr)
+   (autos (List (Pair Symbol SExpr))))
   (Option (List Int))
   (match
     (mc_check_one
@@ -3514,9 +3530,10 @@
       m2
       th
       gctx
-      fname
+      (mc_site_key fname i "decrease")
       (mc_goal_s pForm hyps (quote lt) msr2 msr)
-      p1)
+      p1
+      autos)
     ((Some why) (Some (mc_fail_line key i " decrease:" why)))
     (None
       (match
@@ -3525,9 +3542,10 @@
           m2
           th
           gctx
-          fname
+          (mc_site_key fname i "nonneg")
           (mc_goal_s pForm hyps (quote le) (SInt 0) msr2)
-          p2)
+          p2
+          autos)
         ((Some why) (Some (mc_fail_line key i " nonneg:" why)))
         (None None)))))
 
@@ -3678,7 +3696,8 @@
    (sites (List MSiteS))
    (proofs (List SExpr))
    (nok Int)
-   (mcls (List MCl)))
+   (mcls (List MCl))
+   (autos (List (Pair Symbol SExpr))))
   (List Int)
   (match sites
     (Nil
@@ -3716,9 +3735,9 @@
                (match (mc_keep_hyps hyps pnames bnds)
                  ((Pair khyps ndrop)
                   (mc_site_go m m2 th gctx fname key pForm pnames msr rest
-                    proofs nok i pForm khyps ndrop msr2 mcls)))
+                    proofs nok i pForm khyps ndrop msr2 mcls autos)))
                (mc_typed_site m m2 th gctx fname key pForm pnames msr rest
-                 proofs nok i tbs hyps msr2 mcls))))))))))
+                 proofs nok i tbs hyps msr2 mcls autos))))))))))
 
 ;; the typed-binder path: the measure substitution references pattern
 ;; binders, so the obligation is stated over the fn params PLUS the typed
@@ -3742,7 +3761,8 @@
    (tbs (List (Pair Symbol Type)))
    (hyps (List SExpr))
    (msr2 SExpr)
-   (mcls (List MCl)))
+   (mcls (List MCl))
+   (autos (List (Pair Symbol SExpr))))
   (List Int)
   (let ((tbn (mc_tb_names tbs Nil)))
     (if (mc_tbs_fresh tbn pnames)
@@ -3754,7 +3774,7 @@
              (match (mc_keep_hyps hyps alln Nil)
                ((Pair khyps ndrop)
                 (mc_site_go m m2 th gctx fname key pForm pnames msr rest proofs
-                  nok i pForm2 khyps ndrop msr2 mcls)))))
+                  nok i pForm2 khyps ndrop msr2 mcls autos)))))
           (mc_line
             key
             (append_int
@@ -3788,7 +3808,8 @@
    (khyps (List SExpr))
    (ndrop Int)
    (msr2 SExpr)
-   (mcls (List MCl)))
+   (mcls (List MCl))
+   (autos (List (Pair Symbol SExpr))))
   (List Int)
   (match proofs
     (Nil
@@ -3809,7 +3830,8 @@
                ": only one proof left (need decrease + nonneg)"))))
        ((Cons p2 prest)
         (match
-          (mc_site_pair m m2 th gctx fname key pFormX khyps msr2 msr i p1 p2)
+          (mc_site_pair m m2 th gctx fname key pFormX khyps msr2 msr i p1 p2
+            autos)
           ;; CONTINUE past a failing site (collect every FAIL, not just the
           ;; first) — invisible when all sites pass (nok = total, output
           ;; byte-identical to before), but surfaces all slot/cert errors in a
@@ -3830,7 +3852,8 @@
                 rest
                 prest
                 nok
-                mcls)))
+                mcls
+                autos)))
           (None
             (mc_check_sites
               m
@@ -3845,7 +3868,8 @@
               rest
               prest
               (+ nok 1)
-              mcls))))))))
+              mcls
+              autos))))))))
 
 ;; typed-binder goal-param plumbing.
 (fn mc_tb_names ((tbs (List (Pair Symbol Type))) (acc (List Symbol)))
@@ -3901,6 +3925,18 @@
        (Nil Nil)
        ((Cons ty trest) (Cons (Pair n ty) (mc_penv_zip nrest trest)))))))
 
+;; a bare numeric `(measure E)` clause (no inline proofs) means every recursive
+;; site takes its decrease + nonneg proof from the sidecar: synthesize the `auto`
+;; token twice per site (decrease, nonneg), in site order. mc_site_pair then
+;; resolves each by its per-site synthetic key (mc_site_key). When the author
+;; DID write inline proofs, mc_check_fn keeps them verbatim — back-compatible.
+(fn mc_auto_proofs ((sites (List MSiteS))) (List SExpr)
+  (measure (struct sites))
+  (match sites
+    (Nil Nil)
+    ((Cons _ rest)
+     (Cons (SSym (quote auto)) (Cons (SSym (quote auto)) (mc_auto_proofs rest))))))
+
 (fn mc_check_fn
   ((m Module)
    (sccs (List (List QName)))
@@ -3908,7 +3944,8 @@
    (gctx RCtx)
    (modpath (List Symbol))
    (mcl MCl)
-   (mcls (List MCl)))
+   (mcls (List MCl))
+   (autos (List (Pair Symbol SExpr))))
   (List Int)
   (match mcl
     ((MCl name tparams pForm msr proofs body)
@@ -3961,9 +3998,12 @@
                                      pnames
                                      msr
                                      sites
-                                     proofs
+                                     (match proofs
+                                       (Nil (mc_auto_proofs sites))
+                                       (_ proofs))
                                      0
-                                     mcls)))))))))))))))))))))
+                                     mcls
+                                     autos)))))))))))))))))))))
 
 (fn mc_rev_sites ((xs (List MSiteS)) (acc (List MSiteS))) (List MSiteS)
   (measure (struct xs))
@@ -4048,29 +4088,34 @@
    (gctx RCtx)
    (modpath (List Symbol))
    (todo (List MCl))
-   (all (List MCl)))
+   (all (List MCl))
+   (autos (List (Pair Symbol SExpr))))
   (List Int)
   (measure (struct todo))
   (match todo
     (Nil Nil)
     ((Cons mcl rest)
      (append_int
-       (mc_check_fn m sccs th gctx modpath mcl all)
-       (mc_mcls m sccs th gctx modpath rest all)))))
+       (mc_check_fn m sccs th gctx modpath mcl all autos)
+       (mc_mcls m sccs th gctx modpath rest all autos)))))
 
 (fn mc_files
-  ((m Module) (sccs (List (List QName))) (th Theory) (srcs (List SrcEntry)))
+  ((m Module)
+   (sccs (List (List QName)))
+   (th Theory)
+   (srcs (List SrcEntry))
+   (sidecars (List (Pair Symbol (List Int)))))
   (List Int)
   (measure (struct srcs))
   (match srcs
     (Nil Nil)
     ((Cons (SrcEntry path granted src) rest)
      (match (read_all src)
-       (None (mc_files m sccs th rest))
+       (None (mc_files m sccs th rest sidecars))
        ((Some forms)
         (let ((mcls (mc_of_forms forms Nil)))
           (match mcls
-            (Nil (mc_files m sccs th rest))
+            (Nil (mc_files m sccs th rest sidecars))
             (_
               (let ((allmcls (mc_rev_mcls mcls Nil)))
                 (append_int
@@ -4081,8 +4126,9 @@
                     (file_rctx m path src)
                     (module_path_of path)
                     allmcls
-                    allmcls)
-                  (mc_files m sccs th rest)))))))))))
+                    allmcls
+                    (autos_of_src (sym_of_chars path) sidecars))
+                  (mc_files m sccs th rest sidecars)))))))))))
 
 (fn mc_rev_mcls ((xs (List MCl)) (acc (List MCl))) (List MCl)
   (measure (struct xs))
@@ -4097,10 +4143,15 @@
 ;; filters it per fn under the stratified-citation rule. Skipped under focus mode
 ;; (totality is a whole-closure property, and focus admits unproven claims that
 ;; must not seed measure citations).
-(fn mc_outcome ((m Module) (srcs (List SrcEntry)) (th Theory) (focus Symbol))
+(fn mc_outcome
+  ((m Module)
+   (srcs (List SrcEntry))
+   (sidecars (List (Pair Symbol (List Int))))
+   (th Theory)
+   (focus Symbol))
   (List ClaimOutcome)
   (if (sym_eq focus (quote __all__))
-    (match (mc_files m (ad_sccs m) th srcs)
+    (match (mc_files m (ad_sccs m) th srcs sidecars)
       (Nil Nil)
       (lines
         (Cons
