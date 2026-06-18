@@ -135,6 +135,7 @@
 (use (:: kernel term Ctor))
 (use (:: kernel term If))
 (use (:: kernel term Let))
+(use (:: kernel term IntLit))
 (use (:: kernel term QName))
 (use (:: kernel term qname_eq))
 (use (:: kernel term qn_name))
@@ -1247,6 +1248,235 @@
          (if (attempt s name c) (Some c) (try_induct_vars s th name seq)))
         (None (try_induct_vars s th name seq))))))
 
+;; ---- the AST-size measure recipe (decrease sites) ---------------------------
+;; A decrease obligation is  callee_size[args] < caller_size[params]  under the
+;; site's path-condition premises. For an AST-size measure the recipe is
+;; mechanical: rewrite each structural premise (var = ctor …) into the goal,
+;; `simp` to expand the size over the now-concrete spine, `have` the nonneg of
+;; each surviving subterm (citing the size fn's nonneg lemma), then `by farkas`.
+;; We don't compute which subterms survive — we enumerate every subset of the
+;; premises' ctor-binders and let check_sequent pick the candidate that closes.
+;; This reuses the gate's own verification: a generated cert is re-checked at
+;; check time, so a wrong recipe choice can only fail, never pass unsoundly.
+
+(fn ms_is_lower ((s Symbol)) Bool
+  (match (chars_of_sym s)
+    (Nil False)
+    ((Cons c _) (if (le 97 c) (le c 122) False))))
+
+;; lowercase atoms (binders) in argument positions of an SExpr; ctor heads are
+;; capitalized and excluded, so (Nd l r) → l r and (Cons patS (Cons bodyS Nil))
+;; → patS bodyS.
+(fn ms_vars ((e SExpr) (acc (List Symbol))) (List Symbol)
+  (measure (struct e))
+  (match e
+    ((SSym s) (if (ms_is_lower s) (Cons s acc) acc))
+    ((SList items) (ms_vars_list items acc))
+    (_ acc)))
+
+(fn ms_vars_list ((es (List SExpr)) (acc (List Symbol))) (List Symbol)
+  (measure (struct es))
+  (match es
+    (Nil acc)
+    ((Cons h t) (ms_vars_list t (ms_vars h acc)))))
+
+;; a structural premise: (= VAR (CTOR …)).
+(fn ms_is_struct_prem ((p SExpr)) Bool
+  (match p
+    ((SList (Cons (SSym _eq) (Cons (SSym _v) (Cons rhs Nil))))
+     (match rhs
+       ((SList (Cons (SSym _c) _)) True)
+       (_ False)))
+    (_ False)))
+
+;; the ctor-binder subterms across all structural premises' right-hand sides.
+(fn ms_subterms ((prems (List SExpr)) (acc (List Symbol))) (List Symbol)
+  (measure (struct prems))
+  (match prems
+    (Nil acc)
+    ((Cons p rest)
+     (ms_subterms rest
+       (match p
+         ((SList (Cons (SSym _eq) (Cons (SSym _v) (Cons rhs Nil))))
+          (if (ms_is_struct_prem p) (ms_vars rhs acc) acc))
+         (_ acc))))))
+
+(fn ms_sym_in ((x Symbol) (xs (List Symbol))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil False)
+    ((Cons h t) (if (sym_eq h x) True (ms_sym_in x t)))))
+
+(fn ms_dedup ((xs (List Symbol)) (seen (List Symbol))) (List Symbol)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons h t)
+     (if (ms_sym_in h seen) (ms_dedup t seen) (Cons h (ms_dedup t (Cons h seen)))))))
+
+;; the `(rewrite (premise K) lr lhs true ())` steps, one per structural premise,
+;; at its index K in the full premise list.
+(fn ms_rewrites ((prems (List SExpr)) (k Int)) (List Int)
+  (measure (struct prems))
+  (match prems
+    (Nil Nil)
+    ((Cons p rest)
+     (append_int
+       (if (ms_is_struct_prem p)
+         (append_int
+           "(rewrite (premise "
+           (append_int (show_int k) ") lr lhs true ()) "))
+         Nil)
+       (ms_rewrites rest (+ k 1))))))
+
+;; one farkas slot per premise (coeff 0 — equations are consumed by rewrite).
+(fn ms_zeros ((prems (List SExpr))) (List Int)
+  (measure (struct prems))
+  (match prems
+    (Nil Nil)
+    ((Cons _ r) (append_int " 0" (ms_zeros r)))))
+
+;; one farkas slot per have (coeff 1).
+(fn ms_ones ((subset (List Symbol))) (List Int)
+  (measure (struct subset))
+  (match subset
+    (Nil Nil)
+    ((Cons _ r) (append_int " 1" (ms_ones r)))))
+
+;; nested `have (le 0 (SIZE st)) … ` wrappers around the inner steps proof.
+(fn ms_haves
+  ((subset (List Symbol))
+   (sizefn (List Int))
+   (nonneg (List Int))
+   (inner (List Int)))
+  (List Int)
+  (measure (struct subset))
+  (match subset
+    (Nil inner)
+    ((Cons st rest)
+     (append_int
+       (append_int
+         "(have (= (le 0 ("
+         (append_int
+           sizefn
+           (append_int
+             " "
+             (append_int
+               (chars_of_sym st)
+               (append_int ")) True) (rewrite-with (lemma " (append_int nonneg ") lr lhs () () refl) "))))))
+       (append_int (ms_haves rest sizefn nonneg inner) ")")))))
+
+(fn ms_build
+  ((subset (List Symbol))
+   (prems (List SExpr))
+   (rewrites (List Int))
+   (sizefn (List Int))
+   (nonneg (List Int)))
+  (List Int)
+  (ms_haves
+    subset
+    sizefn
+    nonneg
+    (append_int
+      "(steps ("
+      (append_int
+        rewrites
+        (append_int
+          "(simp lhs)) (by farkas (list 1"
+          (append_int (ms_zeros prems) (append_int (ms_ones subset) ")))")))))))
+
+(fn ms_subsets ((xs (List Symbol))) (List (List Symbol))
+  (measure (struct xs))
+  (match xs
+    (Nil (Cons Nil Nil))
+    ((Cons h t)
+     (let ((ps (ms_subsets t))) (ms_append_lls ps (ms_prepend h ps))))))
+
+(fn ms_prepend ((h Symbol) (ps (List (List Symbol)))) (List (List Symbol))
+  (measure (struct ps))
+  (match ps
+    (Nil Nil)
+    ((Cons p r) (Cons (Cons h p) (ms_prepend h r)))))
+
+(fn ms_append_lls
+  ((a (List (List Symbol))) (b (List (List Symbol))))
+  (List (List Symbol))
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (ms_append_lls t b)))))
+
+(fn ms_cands_for
+  ((subs (List (List Symbol)))
+   (prems (List SExpr))
+   (rewrites (List Int))
+   (sizefn (List Int))
+   (nonneg (List Int)))
+  (List (List Int))
+  (measure (struct subs))
+  (match subs
+    (Nil Nil)
+    ((Cons subset rest)
+     (match subset
+       (Nil (ms_cands_for rest prems rewrites sizefn nonneg))  ; skip empty subset
+       (_
+         (Cons
+           (ms_build subset prems rewrites sizefn nonneg)
+           (ms_cands_for rest prems rewrites sizefn nonneg)))))))
+
+;; the size fn's nonneg lemma: a premise-free theory fact of shape
+;; (le 0 (SIZEFN _)) = True. Its name is cited in each have.
+(fn ms_nonneg_l ((sizefn Symbol) (l Expr)) Bool
+  (match l
+    ((Call _le (Cons (IntLit 0) (Cons (Call f _) Nil)))
+     (sym_eq (qn_name f) sizefn))
+    (_ False)))
+
+(fn ms_nonneg_g ((sizefn Symbol) (lg Goal)) Bool
+  (match lg
+    ((Goal _ prems (Equation l _r))
+     (match prems
+       (Nil (ms_nonneg_l sizefn l))
+       (_ False)))))
+
+(fn find_nonneg_lemma ((th Theory) (sizefn Symbol)) (Option (List Int))
+  (measure (struct th))
+  (match th
+    ((TheoryEmpty) None)
+    ((TheoryCons e rest)
+     (match e
+       ((Proven q lg)
+        (if (ms_nonneg_g sizefn lg) (Some (chars_of_sym (qn_name q)))
+        (find_nonneg_lemma rest sizefn)))
+       ((Axiom q lg)
+        (if (ms_nonneg_g sizefn lg) (Some (chars_of_sym (qn_name q)))
+        (find_nonneg_lemma rest sizefn)))))))
+
+;; recipe candidates for a DECREASE obligation goalS (Nil for nonneg or any
+;; goal we don't recognize — those are covered by flat_cands / farkas_cands).
+(fn measure_cands ((s Slv) (th Theory) (seq Sequent) (goalS SExpr))
+  (List (List Int))
+  (match goalS
+    ((SList (Cons _g (Cons _pForm (Cons (SList prems) (Cons concl Nil)))))
+     (match concl
+       ((SList (Cons _eq (Cons (SList (Cons (SSym rel) (Cons aSide _))) _)))
+        (if (sym_eq rel (quote lt))
+          (match aSide
+            ((SList (Cons (SSym sizefn) _))
+             (match (find_nonneg_lemma th sizefn)
+               (None Nil)
+               ((Some nonneg)
+                (ms_cands_for
+                  (ms_subsets (ms_dedup (ms_subterms prems Nil) Nil))
+                  prems
+                  (ms_rewrites prems 0)
+                  (chars_of_sym sizefn)
+                  nonneg))))
+            (_ Nil))
+          Nil))
+       (_ Nil)))
+    (_ Nil)))
+
 ;; a measure-totality obligation is keyed `<fn>#<site>#decrease|nonneg`; the
 ;; '#' never occurs in a source decl name.
 (fn name_has_hash ((cs (List Int))) Bool
@@ -1262,8 +1492,15 @@
 ;; report-only COLedger lines, not COPass), and the GATE re-verifies every
 ;; generated cert at check time anyway (that is the authoritative check). The
 ;; candidate set is the claim ladder plus the measure recipe (measure_cands).
-(fn solve_measure ((s Slv) (th Theory) (seq Sequent)) (Option (List Int))
-  (try_ladder s th seq (append_cands (flat_cands s th seq) (farkas_cands seq))))
+(fn solve_measure ((s Slv) (th Theory) (seq Sequent) (goalS SExpr))
+  (Option (List Int))
+  (try_ladder
+    s
+    th
+    seq
+    (append_cands
+      (flat_cands s th seq)
+      (append_cands (farkas_cands seq) (measure_cands s th seq goalS)))))
 
 ;; `th` is the theory as it stands just before the decl — handed down from
 ;; the RunState solve_all threads through the run.
@@ -1283,7 +1520,7 @@
           (None (SolvedN name))  ; malformed goal — the real pass reports it
           ((Some g)
            (if (is_measure_name name)
-             (match (solve_measure s th (lift_sequent g))
+             (match (solve_measure s th (lift_sequent g) goalS)
                ((Some c) (SolvedY name c))
                (None (SolvedN name)))
              (match (solve_seq s th name (lift_sequent g) hints)
