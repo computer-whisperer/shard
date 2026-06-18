@@ -1,0 +1,536 @@
+;;; proof_size.shard — the AST-size measure for Proof terms.
+;;;
+;;; check_sequent and its mutual SCC (the proof checker) recurse by STRUCTURAL
+;;; descent on the proof: every check_sequent call takes a strict sub-proof of
+;;; the current proof. The honest termination measure is therefore the AST size
+;;; of the proof, defined here as proof_size (mirroring kernel/trace.shard's
+;;; `size`/`size_list` for Expr).
+;;;
+;;; Shape notes (forced by the SCC's edge obligations, see checker.shard):
+;;;   - LIST sizes count a +1 per Cons (the spine). A helper that iterates a
+;;;     list and recurses into check_sequent on the HEAD needs
+;;;     size(head) < size(list) STRICTLY; without the spine +1 that fails when
+;;;     the tail is Nil (size would only be <=).
+;;;   - Have carries TWO sibling sub-proofs, so its size is the SUM — which is
+;;;     exactly why this SCC can't take a plain (measure (struct ARG)).
+;;;
+;;; The family is itself a mutual structural fold over Proof / Case / FinCase
+;;; and their lists, so each member carries (measure (struct ARG)) — the same
+;;; verify-don't-search structural clause `size` uses.
+
+(import "stdlib.shard")
+(import "term.shard")
+(import "module.shard")
+(import "proof.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel proof *))
+
+(fn proof_size ((pf Proof)) Int
+  (measure (struct pf))
+  (match pf
+    ((Refl) 1)
+    ((Admit) 1)
+    ((Steps _ p) (+ 1 (proof_size p)))
+    ((Induct _ cs) (+ 1 (case_list_size cs)))
+    ((Induct2 _ cs) (+ 1 (case_list_size cs)))
+    ((CaseOn _ _ cs) (+ 1 (case_list_size cs)))
+    ((WfInduct _ p) (+ 1 (proof_size p)))
+    ((SubtermInduct _ p) (+ 1 (proof_size p)))
+    ((Below) 1)
+    ((RewriteWith _ _ _ _ ps p) (+ 1 (+ (proof_list_size ps) (proof_size p))))
+    ((Absurd _) 1)
+    ((ByTheory _ _) 1)
+    ((FinSplit _ _ _ cs) (+ 1 (fincase_list_size cs)))
+    ((Have _ p1 p2) (+ 1 (+ (proof_size p1) (proof_size p2))))
+    ((HaveN _ _ p1 p2) (+ 1 (+ (proof_size p1) (proof_size p2))))
+    ((WordFact _ p) (+ 1 (proof_size p)))
+    ((BytesFact _ p) (+ 1 (proof_size p)))
+    ((DivFacts _ _ _ p) (+ 1 (proof_size p)))))
+
+(fn case_list_size ((cs (List Case))) Int
+  (measure (struct cs))
+  (match cs
+    (Nil 0)
+    ((Cons c rest) (+ 1 (+ (case_size c) (case_list_size rest))))))
+
+(fn case_size ((c Case)) Int
+  (measure (struct c))
+  (match c
+    ((Case _ p) (proof_size p))
+    ((CaseB _ _ p) (proof_size p))))
+
+(fn proof_list_size ((ps (List Proof))) Int
+  (measure (struct ps))
+  (match ps
+    (Nil 0)
+    ((Cons p rest) (+ 1 (+ (proof_size p) (proof_list_size rest))))))
+
+(fn fincase_list_size ((cs (List FinCase))) Int
+  (measure (struct cs))
+  (match cs
+    (Nil 0)
+    ((Cons c rest) (+ 1 (+ (fincase_size c) (fincase_list_size rest))))))
+
+(fn fincase_size ((c FinCase)) Int
+  (measure (struct c))
+  (match c
+    ((FinCase _ p) (proof_size p))))
+
+;; ---- defining-equation lemmas (one structural unfold each) -----------------
+;; The decrease proofs in checker.shard cite these to expose proof_size of a
+;; constructor as the sum over its sub-proofs.
+
+(claim ps_steps
+  (goal ((ss (List Step)) (p Proof)) ()
+    (= (proof_size (Steps ss p)) (+ 1 (proof_size p))))
+  (steps ((simp lhs)) refl))
+
+(claim ps_induct
+  (goal ((v Symbol) (cs (List Case))) ()
+    (= (proof_size (Induct v cs)) (+ 1 (case_list_size cs))))
+  (steps ((simp lhs)) refl))
+
+(claim ps_induct2
+  (goal ((v Symbol) (cs (List Case))) ()
+    (= (proof_size (Induct2 v cs)) (+ 1 (case_list_size cs))))
+  (steps ((simp lhs)) refl))
+
+(claim ps_caseon
+  (goal ((e Expr) (q QName) (cs (List Case))) ()
+    (= (proof_size (CaseOn e q cs)) (+ 1 (case_list_size cs))))
+  (steps ((simp lhs)) refl))
+
+(claim ps_wfinduct
+  (goal ((e Expr) (p Proof)) ()
+    (= (proof_size (WfInduct e p)) (+ 1 (proof_size p))))
+  (steps ((simp lhs)) refl))
+
+(claim ps_subterminduct
+  (goal ((v Symbol) (p Proof)) ()
+    (= (proof_size (SubtermInduct v p)) (+ 1 (proof_size p))))
+  (steps ((simp lhs)) refl))
+
+(claim ps_rewritewith
+  (goal
+    ((er EqRef) (d Dir) (sd Side) (is (List Inst)) (ps (List Proof)) (p Proof))
+    ()
+    (= (proof_size (RewriteWith er d sd is ps p))
+       (+ 1 (+ (proof_list_size ps) (proof_size p)))))
+  (steps ((simp lhs)) refl))
+
+(claim ps_finsplit
+  (goal ((v Symbol) (lo EqRef) (hi EqRef) (cs (List FinCase))) ()
+    (= (proof_size (FinSplit v lo hi cs)) (+ 1 (fincase_list_size cs))))
+  (steps ((simp lhs)) refl))
+
+(claim ps_have
+  (goal ((eq Equation) (p1 Proof) (p2 Proof)) ()
+    (= (proof_size (Have eq p1 p2)) (+ 1 (+ (proof_size p1) (proof_size p2)))))
+  (steps ((simp lhs)) refl))
+
+(claim ps_wordfact
+  (goal ((e Expr) (p Proof)) ()
+    (= (proof_size (WordFact e p)) (+ 1 (proof_size p))))
+  (steps ((simp lhs)) refl))
+
+(claim ps_bytesfact
+  (goal ((e Expr) (p Proof)) ()
+    (= (proof_size (BytesFact e p)) (+ 1 (proof_size p))))
+  (steps ((simp lhs)) refl))
+
+(claim ps_divfacts
+  (goal ((e Expr) (d Int) (q Symbol) (p Proof)) ()
+    (= (proof_size (DivFacts e d q p)) (+ 1 (proof_size p))))
+  (steps ((simp lhs)) refl))
+
+(claim cls_nil
+  (goal () () (= (case_list_size Nil) 0))
+  (steps ((simp lhs)) refl))
+
+(claim cls_cons
+  (goal ((c Case) (rest (List Case))) ()
+    (= (case_list_size (Cons c rest)) (+ 1 (+ (case_size c) (case_list_size rest)))))
+  (steps ((simp lhs)) refl))
+
+(claim cs_case
+  (goal ((q QName) (p Proof)) ()
+    (= (case_size (Case q p)) (proof_size p)))
+  (steps ((simp lhs)) refl))
+
+(claim cs_caseb
+  (goal ((q QName) (ns (List Symbol)) (p Proof)) ()
+    (= (case_size (CaseB q ns p)) (proof_size p)))
+  (steps ((simp lhs)) refl))
+
+(claim pls_nil
+  (goal () () (= (proof_list_size Nil) 0))
+  (steps ((simp lhs)) refl))
+
+(claim pls_cons
+  (goal ((p Proof) (rest (List Proof))) ()
+    (= (proof_list_size (Cons p rest)) (+ 1 (+ (proof_size p) (proof_list_size rest)))))
+  (steps ((simp lhs)) refl))
+
+(claim fcls_nil
+  (goal () () (= (fincase_list_size Nil) 0))
+  (steps ((simp lhs)) refl))
+
+(claim fcls_cons
+  (goal ((c FinCase) (rest (List FinCase))) ()
+    (= (fincase_list_size (Cons c rest)) (+ 1 (+ (fincase_size c) (fincase_list_size rest)))))
+  (steps ((simp lhs)) refl))
+
+(claim fcs_fincase
+  (goal ((n Int) (p Proof)) ()
+    (= (fincase_size (FinCase n p)) (proof_size p)))
+  (steps ((simp lhs)) refl))
+
+;; ---- nonneg: 0 <= proof_size p ---------------------------------------------
+;; subterm-induction on p — the only way to reach proof_size of sub-proofs
+;; nested inside the (List Case)/(List Proof)/(List FinCase) fields. Each
+;; sub-proof-bearing case pulls 0 <= proof_size of its child from the strong
+;; IH 'ih (the child ⊰ p, discharged by (below)); the list-bearing cases prove
+;; the list bound inline (see size_nonneg in examples/render_model.shard).
+;; STAGE 1b: list-bearing cases (Induct/Induct2/CaseOn/RewriteWith/FinSplit)
+;; are (admit) placeholders pending their inline inductions.
+(claim proof_size_nonneg
+  (goal ((p Proof)) () (= (le 0 (proof_size p)) True))
+  (subterm-induct
+    p
+    (case-on p Proof
+      ((case Refl
+         (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) refl))
+       (case Admit
+         (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) refl))
+       (case Steps
+         (ss pp)
+         (have (= (le 0 (proof_size pp)) True)
+           (rewrite-with (hyp ih) lr lhs () ((below)) refl)
+           (steps
+             ((rewrite (hyp 0) lr lhs true ())
+              (rewrite (lemma ps_steps) lr lhs true ()))
+             (by farkas (list 1 1)))))
+       (case Induct
+         (v cs)
+         (have (= (le 0 (case_list_size cs)) True)
+           (induct cs
+             ((case Nil
+                (steps
+                  ((rewrite (lemma cls_nil) lr lhs true ()))
+                  (by farkas (list 1))))
+              (case Cons
+                (c rest)
+                (have (= (le 0 (case_size c)) True)
+                  (case-on c Case
+                    ((case Case
+                       (q pp)
+                       (steps
+                         ((rewrite (hyp Case) lr lhs true ())
+                          (rewrite (lemma cs_case) lr lhs true ()))
+                         (rewrite-with (hyp ih) lr lhs () ((below)) refl)))
+                     (case CaseB
+                       (q ns pp)
+                       (steps
+                         ((rewrite (hyp CaseB) lr lhs true ())
+                          (rewrite (lemma cs_caseb) lr lhs true ()))
+                         (rewrite-with (hyp ih) lr lhs () ((below)) refl)))))
+                  (have (= (le 0 (case_list_size rest)) True)
+                    (rewrite-with
+                      (hyp 2)
+                      lr
+                      lhs
+                      ((inst p p) (inst v v))
+                      ()
+                      refl)
+                    (steps
+                      ((rewrite (lemma cls_cons) lr lhs true ()))
+                      (by farkas (list 1 1 1))))))))
+           (steps
+             ((rewrite (hyp 0) lr lhs true ())
+              (rewrite (lemma ps_induct) lr lhs true ()))
+             (by farkas (list 1 1)))))
+       (case Induct2
+         (v cs)
+         (have (= (le 0 (case_list_size cs)) True)
+           (induct cs
+             ((case Nil
+                (steps
+                  ((rewrite (lemma cls_nil) lr lhs true ()))
+                  (by farkas (list 1))))
+              (case Cons
+                (c rest)
+                (have (= (le 0 (case_size c)) True)
+                  (case-on c Case
+                    ((case Case
+                       (q pp)
+                       (steps
+                         ((rewrite (hyp Case) lr lhs true ())
+                          (rewrite (lemma cs_case) lr lhs true ()))
+                         (rewrite-with (hyp ih) lr lhs () ((below)) refl)))
+                     (case CaseB
+                       (q ns pp)
+                       (steps
+                         ((rewrite (hyp CaseB) lr lhs true ())
+                          (rewrite (lemma cs_caseb) lr lhs true ()))
+                         (rewrite-with (hyp ih) lr lhs () ((below)) refl)))))
+                  (have (= (le 0 (case_list_size rest)) True)
+                    (rewrite-with
+                      (hyp 2)
+                      lr
+                      lhs
+                      ((inst p p) (inst v v))
+                      ()
+                      refl)
+                    (steps
+                      ((rewrite (lemma cls_cons) lr lhs true ()))
+                      (by farkas (list 1 1 1))))))))
+           (steps
+             ((rewrite (hyp 0) lr lhs true ())
+              (rewrite (lemma ps_induct2) lr lhs true ()))
+             (by farkas (list 1 1)))))
+       (case CaseOn
+         (e q cs)
+         (have (= (le 0 (case_list_size cs)) True)
+           (induct cs
+             ((case Nil
+                (steps
+                  ((rewrite (lemma cls_nil) lr lhs true ()))
+                  (by farkas (list 1))))
+              (case Cons
+                (c rest)
+                (have (= (le 0 (case_size c)) True)
+                  (case-on c Case
+                    ((case Case
+                       (qq pp)
+                       (steps
+                         ((rewrite (hyp Case) lr lhs true ())
+                          (rewrite (lemma cs_case) lr lhs true ()))
+                         (rewrite-with (hyp ih) lr lhs () ((below)) refl)))
+                     (case CaseB
+                       (qq ns pp)
+                       (steps
+                         ((rewrite (hyp CaseB) lr lhs true ())
+                          (rewrite (lemma cs_caseb) lr lhs true ()))
+                         (rewrite-with (hyp ih) lr lhs () ((below)) refl)))))
+                  (have (= (le 0 (case_list_size rest)) True)
+                    (rewrite-with
+                      (hyp 2)
+                      lr
+                      lhs
+                      ((inst p p) (inst e e) (inst q q))
+                      ()
+                      refl)
+                    (steps
+                      ((rewrite (lemma cls_cons) lr lhs true ()))
+                      (by farkas (list 1 1 1))))))))
+           (steps
+             ((rewrite (hyp 0) lr lhs true ())
+              (rewrite (lemma ps_caseon) lr lhs true ()))
+             (by farkas (list 1 1)))))
+       (case WfInduct
+         (e pp)
+         (have (= (le 0 (proof_size pp)) True)
+           (rewrite-with (hyp ih) lr lhs () ((below)) refl)
+           (steps
+             ((rewrite (hyp 0) lr lhs true ())
+              (rewrite (lemma ps_wfinduct) lr lhs true ()))
+             (by farkas (list 1 1)))))
+       (case SubtermInduct
+         (v pp)
+         (have (= (le 0 (proof_size pp)) True)
+           (rewrite-with (hyp ih) lr lhs () ((below)) refl)
+           (steps
+             ((rewrite (hyp 0) lr lhs true ())
+              (rewrite (lemma ps_subterminduct) lr lhs true ()))
+             (by farkas (list 1 1)))))
+       (case Below
+         (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) refl))
+       (case RewriteWith
+         (er d sd is ps pp)
+         (have (= (le 0 (proof_list_size ps)) True)
+           (induct ps
+             ((case Nil
+                (steps
+                  ((rewrite (lemma pls_nil) lr lhs true ()))
+                  (by farkas (list 1))))
+              (case Cons
+                (h rest)
+                (have (= (le 0 (proof_size h)) True)
+                  (rewrite-with (hyp ih) lr lhs () ((below)) refl)
+                  (have (= (le 0 (proof_list_size rest)) True)
+                    (rewrite-with
+                      (hyp 2)
+                      lr
+                      lhs
+                      ((inst p p) (inst er er) (inst d d) (inst sd sd)
+                       (inst is is) (inst pp pp))
+                      ()
+                      refl)
+                    (steps
+                      ((rewrite (lemma pls_cons) lr lhs true ()))
+                      (by farkas (list 1 1 1))))))))
+           (have (= (le 0 (proof_size pp)) True)
+             (rewrite-with (hyp ih) lr lhs () ((below)) refl)
+             (steps
+               ((rewrite (hyp 0) lr lhs true ())
+                (rewrite (lemma ps_rewritewith) lr lhs true ()))
+               (by farkas (list 1 1 1))))))
+       (case Absurd
+         (er)
+         (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) refl))
+       (case ByTheory
+         (th cert)
+         (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) refl))
+       (case FinSplit
+         (v lo hi cs)
+         (have (= (le 0 (fincase_list_size cs)) True)
+           (induct cs
+             ((case Nil
+                (steps
+                  ((rewrite (lemma fcls_nil) lr lhs true ()))
+                  (by farkas (list 1))))
+              (case Cons
+                (c rest)
+                (have (= (le 0 (fincase_size c)) True)
+                  (case-on c FinCase
+                    ((case FinCase
+                       (n pp)
+                       (steps
+                         ((rewrite (hyp FinCase) lr lhs true ())
+                          (rewrite (lemma fcs_fincase) lr lhs true ()))
+                         (rewrite-with (hyp ih) lr lhs () ((below)) refl)))))
+                  (have (= (le 0 (fincase_list_size rest)) True)
+                    (rewrite-with
+                      (hyp 2)
+                      lr
+                      lhs
+                      ((inst p p) (inst v v) (inst lo lo) (inst hi hi))
+                      ()
+                      refl)
+                    (steps
+                      ((rewrite (lemma fcls_cons) lr lhs true ()))
+                      (by farkas (list 1 1 1))))))))
+           (steps
+             ((rewrite (hyp 0) lr lhs true ())
+              (rewrite (lemma ps_finsplit) lr lhs true ()))
+             (by farkas (list 1 1)))))
+       (case Have
+         (eq p1 p2)
+         (have (= (le 0 (proof_size p1)) True)
+           (rewrite-with (hyp ih) lr lhs () ((below)) refl)
+           (have (= (le 0 (proof_size p2)) True)
+             (rewrite-with (hyp ih) lr lhs () ((below)) refl)
+             (steps
+               ((rewrite (hyp 0) lr lhs true ())
+                (rewrite (lemma ps_have) lr lhs true ()))
+               (by farkas (list 1 1 1))))))
+       (case HaveN
+         (n eq p1 p2)
+         (have (= (le 0 (proof_size p1)) True)
+           (rewrite-with (hyp ih) lr lhs () ((below)) refl)
+           (have (= (le 0 (proof_size p2)) True)
+             (rewrite-with (hyp ih) lr lhs () ((below)) refl)
+             (steps
+               ((rewrite (hyp 0) lr lhs true ())
+                (simp lhs))
+               (by farkas (list 1 1 1))))))
+       (case WordFact
+         (e pp)
+         (have (= (le 0 (proof_size pp)) True)
+           (rewrite-with (hyp ih) lr lhs () ((below)) refl)
+           (steps
+             ((rewrite (hyp 0) lr lhs true ())
+              (rewrite (lemma ps_wordfact) lr lhs true ()))
+             (by farkas (list 1 1)))))
+       (case BytesFact
+         (e pp)
+         (have (= (le 0 (proof_size pp)) True)
+           (rewrite-with (hyp ih) lr lhs () ((below)) refl)
+           (steps
+             ((rewrite (hyp 0) lr lhs true ())
+              (rewrite (lemma ps_bytesfact) lr lhs true ()))
+             (by farkas (list 1 1)))))
+       (case DivFacts
+         (e d q pp)
+         (have (= (le 0 (proof_size pp)) True)
+           (rewrite-with (hyp ih) lr lhs () ((below)) refl)
+           (steps
+             ((rewrite (hyp 0) lr lhs true ())
+              (rewrite (lemma ps_divfacts) lr lhs true ()))
+             (by farkas (list 1 1)))))))))
+
+;; ---- helper nonneg lemmas (cite proof_size_nonneg one-way) -----------------
+;; Needed by the check_sequent decrease/nonneg obligations: each iterator's
+;; measure is a *_list_size, whose nonneg these supply.
+
+(claim case_size_nonneg
+  (goal ((c Case)) () (= (le 0 (case_size c)) True))
+  (case-on c Case
+    ((case Case
+       (q pp)
+       (steps
+         ((rewrite (hyp Case) lr lhs true ())
+          (rewrite (lemma cs_case) lr lhs true ()))
+         (rewrite-with (lemma proof_size_nonneg) lr lhs () () refl)))
+     (case CaseB
+       (q ns pp)
+       (steps
+         ((rewrite (hyp CaseB) lr lhs true ())
+          (rewrite (lemma cs_caseb) lr lhs true ()))
+         (rewrite-with (lemma proof_size_nonneg) lr lhs () () refl))))))
+
+(claim case_list_size_nonneg
+  (goal ((cs (List Case))) () (= (le 0 (case_list_size cs)) True))
+  (induct cs
+    ((case Nil
+       (steps ((rewrite (lemma cls_nil) lr lhs true ())) (by farkas (list 1))))
+     (case Cons
+       (c rest)
+       (have (= (le 0 (case_size c)) True)
+         (rewrite-with (lemma case_size_nonneg) lr lhs () () refl)
+         (have (= (le 0 (case_list_size rest)) True)
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+           (steps
+             ((rewrite (lemma cls_cons) lr lhs true ()))
+             (by farkas (list 1 1 1)))))))))
+
+(claim fincase_size_nonneg
+  (goal ((c FinCase)) () (= (le 0 (fincase_size c)) True))
+  (case-on c FinCase
+    ((case FinCase
+       (n pp)
+       (steps
+         ((rewrite (hyp FinCase) lr lhs true ())
+          (rewrite (lemma fcs_fincase) lr lhs true ()))
+         (rewrite-with (lemma proof_size_nonneg) lr lhs () () refl))))))
+
+(claim fincase_list_size_nonneg
+  (goal ((cs (List FinCase))) () (= (le 0 (fincase_list_size cs)) True))
+  (induct cs
+    ((case Nil
+       (steps ((rewrite (lemma fcls_nil) lr lhs true ())) (by farkas (list 1))))
+     (case Cons
+       (c rest)
+       (have (= (le 0 (fincase_size c)) True)
+         (rewrite-with (lemma fincase_size_nonneg) lr lhs () () refl)
+         (have (= (le 0 (fincase_list_size rest)) True)
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+           (steps
+             ((rewrite (lemma fcls_cons) lr lhs true ()))
+             (by farkas (list 1 1 1)))))))))
+
+(claim proof_list_size_nonneg
+  (goal ((ps (List Proof))) () (= (le 0 (proof_list_size ps)) True))
+  (induct ps
+    ((case Nil
+       (steps ((rewrite (lemma pls_nil) lr lhs true ())) (by farkas (list 1))))
+     (case Cons
+       (h t)
+       (have (= (le 0 (proof_size h)) True)
+         (rewrite-with (lemma proof_size_nonneg) lr lhs () () refl)
+         (have (= (le 0 (proof_list_size t)) True)
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+           (steps
+             ((rewrite (lemma pls_cons) lr lhs true ()))
+             (by farkas (list 1 1 1)))))))))

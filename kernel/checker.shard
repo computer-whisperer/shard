@@ -2492,29 +2492,78 @@
 ;; accepted `subterm_below` always denotes a true ⊰ edge.
 ;; ---------------------------------------------------------------------------
 
-;; `a` equals a child of `x`, OR is a proper subterm of one — structural on x.
-(fn expr_proper_subterm ((a Expr) (x Expr)) Bool
-  (match x
-    ((Ctor _ args) (eps_list a args))
-    ((Call _ args) (eps_list a args))
-    ((If c t e)
-     (if (eps_child a c) True (if (eps_child a t) True (eps_child a e))))
-    ((Match s arms) (if (eps_child a s) True (eps_arms a arms)))
-    ((Let bs body) (if (eps_list a bs) True (eps_child a body)))
-    (_ False)))  ; FVar/BVar/IntLit/SymLit: leaves, no children
+;; `a` is a proper subterm of `x` — structural descent, with one power beyond
+;; plain syntactic descent: when a child is a leaf var carrying an in-scope
+;; (= var ctorform) hyp (the case-on / induct case shape), the var is RESOLVED
+;; and traversal continues into its form. This lets (below) reach a sub-value
+;; under a WRAPPED container element — e.g. the Proof `pp` inside a (Case q pp)
+;; / (FinCase n pp) bound by an inner induct (see proof_size_nonneg in
+;; kernel/proof_size.shard). Resolving a var yields a form that is NOT a
+;; structural subterm of the var, so the family is no longer structural and
+;; carries FUEL. A give-up returns False (conservative: (below) fails, the
+;; citing proof fails — sound). The budget dwarfs any real proof's hyp nesting,
+;; and case-analysis hyps are acyclic, so give-up is dead code on real input.
+(fn below_budget () Int 1000000000)
 
-(fn eps_child ((a Expr) (c Expr)) Bool
-  (if (expr_eq a c) True (expr_proper_subterm a c)))
+(fn eps_h ((a Expr) (x Expr) (hyps (List Goal)) (fuel Int)) Bool
+  (measure fuel (by farkas (list 1 0)) (by farkas (list 1 1))
+                (by farkas (list 1 0)) (by farkas (list 1 1))
+                (by farkas (list 1 0)) (by farkas (list 1 1))
+                (by farkas (list 1 0)) (by farkas (list 1 1))
+                (by farkas (list 1 0)) (by farkas (list 1 1))
+                (by farkas (list 1 0)) (by farkas (list 1 1))
+                (by farkas (list 1 0)) (by farkas (list 1 1))
+                (by farkas (list 1 0)) (by farkas (list 1 1))
+                (by farkas (list 1 0)) (by farkas (list 1 1)))
+  (if (lt fuel 1) False
+    (match x
+      ((Ctor _ args) (eps_list_h a args hyps (- fuel 1)))
+      ((Call _ args) (eps_list_h a args hyps (- fuel 1)))
+      ((If c t e)
+       (if (eps_child_h a c hyps (- fuel 1)) True
+       (if (eps_child_h a t hyps (- fuel 1)) True
+           (eps_child_h a e hyps (- fuel 1)))))
+      ((Match s arms)
+       (if (eps_child_h a s hyps (- fuel 1)) True
+           (eps_arms_h a arms hyps (- fuel 1))))
+      ((Let bs body)
+       (if (eps_list_h a bs hyps (- fuel 1)) True
+           (eps_child_h a body hyps (- fuel 1))))
+      (_ False))))  ; FVar/BVar/IntLit/SymLit: leaves, no children
 
-(fn eps_list ((a Expr) (xs (List Expr))) Bool
-  (match xs
-    (Nil False)
-    ((Cons h t) (if (eps_child a h) True (eps_list a t)))))
+(fn eps_child_h ((a Expr) (c Expr) (hyps (List Goal)) (fuel Int)) Bool
+  (measure fuel (by farkas (list 1 0)) (by farkas (list 1 1))
+                (by farkas (list 1 0)) (by farkas (list 1 1)))
+  (if (lt fuel 1) False
+    (if (expr_eq a c) True
+    (if (eps_h a c hyps (- fuel 1)) True
+      ;; c is a leaf var? resolve via an in-scope ctor-form hyp and recurse
+      (match c
+        ((FVar _)
+         (match (below_resolve c hyps)
+           (None False)
+           ((Some form) (eps_child_h a form hyps (- fuel 1)))))
+        (_ False))))))
 
-(fn eps_arms ((a Expr) (arms (List Arm))) Bool
-  (match arms
-    (Nil False)
-    ((Cons (Arm _ body) rest) (if (eps_child a body) True (eps_arms a rest)))))
+(fn eps_list_h ((a Expr) (xs (List Expr)) (hyps (List Goal)) (fuel Int)) Bool
+  (measure fuel (by farkas (list 1 0)) (by farkas (list 1 1))
+                (by farkas (list 1 0)) (by farkas (list 1 1)))
+  (if (lt fuel 1) False
+    (match xs
+      (Nil False)
+      ((Cons h t)
+       (if (eps_child_h a h hyps (- fuel 1)) True
+           (eps_list_h a t hyps (- fuel 1)))))))
+
+(fn eps_arms_h ((a Expr) (arms (List Arm)) (hyps (List Goal)) (fuel Int)) Bool
+  (measure fuel (by farkas (list 1 0)) (by farkas (list 1 1))
+                (by farkas (list 1 0)) (by farkas (list 1 1)))
+  (if (lt fuel 1) False
+    (match arms
+      (Nil False)
+      ((Cons (Arm _ body) rest)
+       (if (eps_child_h a body hyps (- fuel 1)) True
+           (eps_arms_h a rest hyps (- fuel 1)))))))
 
 ;; resolve an FVar `x` to a constructor-form term via an in-scope hyp
 ;; (= x form) (the CaseOn case-hyp shape: Goal Nil Nil (Equation x form)).
@@ -2542,11 +2591,11 @@
             (match args
               ((Cons a (Cons x Nil))
                (match x
-                 ((Ctor _ _) (expr_proper_subterm a x))
+                 ((Ctor _ _) (eps_h a x hyps (below_budget)))
                  (_
                    (match (below_resolve x hyps)
                      (None False)
-                     ((Some form) (expr_proper_subterm a form))))))
+                     ((Some form) (eps_h a form hyps (below_budget)))))))
               (_ False))
             False))
          (_ False))
