@@ -1031,13 +1031,28 @@
 ;;     reclaimed before the next step (compute_expr_loop conses AFTER the
 ;;     recursive call, pinning the chain).
 ;;
-;; Soundness/semantics are identical to compute_expr: same ungated `step`, same
-;; fixed point. Only the bookkeeping differs.
+;; FUEL (totality, issue #1). Iterating `step` to a fixed point has no
+;; structural decrease — a step can grow the term (unfolding a recursive fn) —
+;; so on a non-terminating app it would not halt. run_expr therefore takes an
+;; explicit `fuel` budget and recurses on its descent: `(measure fuel)`, the
+;; ratified nonneg-Int recursion primitive (cf. admit.shard's ad_fix). Fuel is
+;; spent ONE UNIT PER `step`, so the amount consumed is exactly the number of
+;; small-steps — a faithful (if coarse) cost model, the handle a future
+;; runtime-complexity requirement would bound. Running out returns the current
+;; term: still DEFINITIONALLY EQUAL to the input (every `step` is a def-eq
+;; reduction), just not fully normalized — so exhaustion can only HALT an app
+;; early, never reduce it unsoundly. The budget is a pragmatic bound, not a
+;; soundness condition: run_expr's totality holds for ANY fuel.
+;;
+;; Soundness/semantics are otherwise identical to compute_expr: same ungated
+;; `step`, same fixed point. Only the bookkeeping differs.
 ;; ---------------------------------------------------------------------------
-(fn run_expr ((m Module) (e Expr)) Expr
-  (match (step m e)
-    (None e)
-    ((Some e2) (run_expr m e2))))
+(fn run_expr ((m Module) (e Expr) (fuel Int)) Expr
+  (measure fuel (by farkas (list 1 0)) (by farkas (list 1 1)))
+  (if (lt fuel 1) e
+    (match (step m e)
+      (None e)
+      ((Some e2) (run_expr m e2 (- fuel 1))))))
 
 ;; ---------------------------------------------------------------------------
 ;; ceval — BIG-STEP environment-machine normalizer for the `Compute` tactic.
