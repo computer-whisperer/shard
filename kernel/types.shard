@@ -152,71 +152,147 @@
   (match tc
     ((Tc n s) (Pair (TVar (tc_meta_name n)) (Tc (+ n 1) s)))))
 
+;; ---------------------------------------------------------------------------
+;; Substitution-chasing functions (tc_walk and the resolve/occurs/unify family)
+;; chase bindings through `s`, so none is structural: the next term comes from a
+;; binding, not a subterm. They terminate only because tc_bind's occurs-check
+;; keeps `s` acyclic. We make termination kernel-visible with a fuel measure
+;; (issue #1, totality). Public wrappers keep the original signatures and seed
+;; the budget; the recursive `_go` cores carry (measure fuel).
+;;
+;; tc_walk's budget is `len(s)`: under acyclicity a head-chain visits distinct
+;; meta keys, so it cannot exceed the number of bindings. That bound is
+;; *provably sufficient* — the give-up branch is dead code on every well-formed
+;; (acyclic) substitution, so tc_walk is behaviour-preserving (and on a buggy
+;; cyclic `s` it halts instead of looping). resolve/occurs/unify unfold the
+;; resolved *tree*, whose size can be exponential in len(s), so they take a
+;; generous documented budget (tc_budget) like the reducer loops; their give-up
+;; branches are biased toward rejection (resolve→under-resolved, occurs→True,
+;; unify→None), keeping the checker sound-incomplete.
+
+(fn tc_subst_len ((s (List (Pair Symbol Type)))) Int
+  (measure (struct s))
+  (match s
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (tc_subst_len rest)))))
+
+(fn tc_budget () Int 1000000000)
+
 ;; head-walk: resolve a bound meta to its binding (recursively at the head).
 (fn tc_walk ((t Type) (s (List (Pair Symbol Type)))) Type
-  (match t
-    ((TVar x)
-     (match (assoc_sym_type x s)
-       ((Some t2) (tc_walk t2 s))
-       (None t)))
-    (_ t)))
+  (tc_walk_go t s (tc_subst_len s)))
+
+(fn tc_walk_go ((t Type) (s (List (Pair Symbol Type))) (fuel Int)) Type
+  (measure fuel (by farkas (list 1 0)) (by farkas (list 1 1)))
+  (if (lt fuel 1) t
+    (match t
+      ((TVar x)
+       (match (assoc_sym_type x s)
+         ((Some t2) (tc_walk_go t2 s (- fuel 1)))
+         (None t)))
+      (_ t))))
 
 ;; deep-resolve for diagnostics: walk the head, then resolve TCon args.
 (fn tc_resolve ((t Type) (s (List (Pair Symbol Type)))) Type
-  (match (tc_walk t s)
-    ((TCon c args) (TCon c (tc_resolve_list args s)))
-    (t2 t2)))
+  (tc_resolve_go t s (tc_budget)))
 
 (fn tc_resolve_list ((ts (List Type)) (s (List (Pair Symbol Type)))) (List Type)
-  (match ts
-    (Nil Nil)
-    ((Cons h t) (Cons (tc_resolve h s) (tc_resolve_list t s)))))
+  (tc_resolve_list_go ts s (tc_budget)))
+
+(fn tc_resolve_go ((t Type) (s (List (Pair Symbol Type))) (fuel Int)) Type
+  (measure fuel (by farkas (list 1 0)) (by farkas (list 1 1)))
+  (if (lt fuel 1) (tc_walk t s)
+    (match (tc_walk t s)
+      ((TCon c args) (TCon c (tc_resolve_list_go args s (- fuel 1))))
+      (t2 t2))))
+
+(fn tc_resolve_list_go ((ts (List Type)) (s (List (Pair Symbol Type))) (fuel Int))
+  (List Type)
+  (measure fuel
+    (by farkas (list 1 0)) (by farkas (list 1 1))
+    (by farkas (list 1 0)) (by farkas (list 1 1)))
+  (if (lt fuel 1) ts
+    (match ts
+      (Nil Nil)
+      ((Cons h t)
+       (Cons (tc_resolve_go h s (- fuel 1)) (tc_resolve_list_go t s (- fuel 1)))))))
 
 (fn tc_occurs ((x Symbol) (t Type) (s (List (Pair Symbol Type)))) Bool
-  (match (tc_walk t s)
-    ((TVar y) (sym_eq x y))
-    ((TCon _ args) (tc_occurs_list x args s))))
+  (tc_occurs_go x t s (tc_budget)))
 
 (fn tc_occurs_list ((x Symbol) (ts (List Type)) (s (List (Pair Symbol Type))))
   Bool
-  (match ts
-    (Nil False)
-    ((Cons h t) (if (tc_occurs x h s) True (tc_occurs_list x t s)))))
+  (tc_occurs_list_go x ts s (tc_budget)))
+
+(fn tc_occurs_go ((x Symbol) (t Type) (s (List (Pair Symbol Type))) (fuel Int))
+  Bool
+  (measure fuel (by farkas (list 1 0)) (by farkas (list 1 1)))
+  (if (lt fuel 1) True
+    (match (tc_walk t s)
+      ((TVar y) (sym_eq x y))
+      ((TCon _ args) (tc_occurs_list_go x args s (- fuel 1))))))
+
+(fn tc_occurs_list_go
+  ((x Symbol) (ts (List Type)) (s (List (Pair Symbol Type))) (fuel Int))
+  Bool
+  (measure fuel
+    (by farkas (list 1 0)) (by farkas (list 1 1))
+    (by farkas (list 1 0)) (by farkas (list 1 1)))
+  (if (lt fuel 1) True
+    (match ts
+      (Nil False)
+      ((Cons h t)
+       (if (tc_occurs_go x h s (- fuel 1)) True
+         (tc_occurs_list_go x t s (- fuel 1)))))))
 
 (fn tc_bind ((x Symbol) (t Type) (tc Tc)) (Option Tc)
   (match tc
     ((Tc n s) (if (tc_occurs x t s) None (Some (Tc n (Cons (Pair x t) s)))))))
 
 (fn tc_unify ((a Type) (b Type) (tc Tc)) (Option Tc)
-  (match tc
-    ((Tc _ s)
-     (match (tc_walk a s)
-       ((TVar xa)
-        (match (tc_walk b s)
-          ((TVar xb)
-           (if (sym_eq xa xb) (Some tc)
-           (if (tc_is_meta xa) (tc_bind xa (TVar xb) tc)
-           (if (tc_is_meta xb) (tc_bind xb (TVar xa) tc)
-           None))))
-          (wb (if (tc_is_meta xa) (tc_bind xa wb tc) None))))
-       ((TCon ca aa)
-        (match (tc_walk b s)
-          ((TVar xb) (if (tc_is_meta xb) (tc_bind xb (TCon ca aa) tc) None))
-          ((TCon cb ab) (if (qname_eq ca cb) (tc_unify_list aa ab tc) None))))))))
+  (tc_unify_go a b tc (tc_budget)))
 
 (fn tc_unify_list ((xs (List Type)) (ys (List Type)) (tc Tc)) (Option Tc)
-  (match xs
-    (Nil
-      (match ys
-        (Nil (Some tc))
-        (_ None)))
-    ((Cons x xr)
-     (match ys
-       (Nil None)
-       ((Cons y yr)
-        (match (tc_unify x y tc)
-          (None None)
-          ((Some tc1) (tc_unify_list xr yr tc1))))))))
+  (tc_unify_list_go xs ys tc (tc_budget)))
+
+(fn tc_unify_go ((a Type) (b Type) (tc Tc) (fuel Int)) (Option Tc)
+  (measure fuel (by farkas (list 1 0)) (by farkas (list 1 1)))
+  (if (lt fuel 1) None
+    (match tc
+      ((Tc _ s)
+       (match (tc_walk a s)
+         ((TVar xa)
+          (match (tc_walk b s)
+            ((TVar xb)
+             (if (sym_eq xa xb) (Some tc)
+             (if (tc_is_meta xa) (tc_bind xa (TVar xb) tc)
+             (if (tc_is_meta xb) (tc_bind xb (TVar xa) tc)
+             None))))
+            (wb (if (tc_is_meta xa) (tc_bind xa wb tc) None))))
+         ((TCon ca aa)
+          (match (tc_walk b s)
+            ((TVar xb) (if (tc_is_meta xb) (tc_bind xb (TCon ca aa) tc) None))
+            ((TCon cb ab)
+             (if (qname_eq ca cb) (tc_unify_list_go aa ab tc (- fuel 1)) None)))))))))
+
+(fn tc_unify_list_go ((xs (List Type)) (ys (List Type)) (tc Tc) (fuel Int))
+  (Option Tc)
+  (measure fuel
+    (by farkas (list 1 0)) (by farkas (list 1 1))
+    (by farkas (list 1 0)) (by farkas (list 1 1)))
+  (if (lt fuel 1) None
+    (match xs
+      (Nil
+        (match ys
+          (Nil (Some tc))
+          (_ None)))
+      ((Cons x xr)
+       (match ys
+         (Nil None)
+         ((Cons y yr)
+          (match (tc_unify_go x y tc (- fuel 1))
+            (None None)
+            ((Some tc1) (tc_unify_list_go xr yr tc1 (- fuel 1))))))))))
 
 ;; "WHAT: A vs B" with both sides deep-resolved through the substitution.
 (fn tc_mismatch ((what (List Int)) (a Type) (b Type) (tc Tc)) (List Int)
