@@ -387,6 +387,53 @@
 ;; Returns the kernel Pat plus the variable names it binds, in source
 ;; (left-to-right) order — the order push_scope expects.
 (fn elab_pat ((s SExpr) (ctors (List Symbol))) (Option (Pair Pat (List Symbol)))
+  (measure
+    (size_sexpr s)
+    ;; premises 0/1/2 = (= s (SList items)) / (= items (Cons head rest)) /
+    ;; (= head <ctor>); then the if-guards.
+    ;; site 1 — (elab_qpat rest Nil ctors), guard ::=True. 4 premises.
+    (steps
+      ((rewrite (premise 0) lr lhs true ())
+       (rewrite (lemma size_sexpr_slist) lr lhs true ())
+       (rewrite (premise 1) lr lhs true ())
+       (rewrite (lemma size_sexpr_list_cons) lr lhs true ())
+       (rewrite (premise 2) lr lhs true ())
+       (rewrite (lemma size_sexpr_ssym) lr lhs true ())
+       (rewrite (lemma size_sexpr_list_nil) lr lhs true ()))
+      (by farkas (list 1 0 0 0 0)))
+    (have (= (le 0 (size_sexpr_list rest)) True)
+      (rewrite-with (lemma size_sexpr_list_nonneg) lr lhs () () refl)
+      (steps
+        ((rewrite (lemma size_sexpr_list_nil) lr lhs true ()))
+        (by farkas (list 1 0 0 0 0 1))))
+    ;; site 2 — (elab_pats rest ctors). guards: ::=False, quote=False,
+    ;; (sym_mem h ctors)=True → 6 premises total.
+    (steps
+      ((rewrite (premise 0) lr lhs true ())
+       (rewrite (lemma size_sexpr_slist) lr lhs true ())
+       (rewrite (premise 1) lr lhs true ())
+       (rewrite (lemma size_sexpr_list_cons) lr lhs true ())
+       (rewrite (premise 2) lr lhs true ())
+       (rewrite (lemma size_sexpr_ssym) lr lhs true ()))
+      (by farkas (list 1 0 0 0 0 0 0)))
+    (steps ((rewrite (lemma size_sexpr_list_nonneg) lr lhs true ())) refl)
+    ;; site 3 — (elab_qpat hsegs rest ctors). premise 2 = (= head (SList (Cons
+    ;; (SSym hh) hsegs))). 4 premises.
+    (steps
+      ((rewrite (premise 0) lr lhs true ())
+       (rewrite (lemma size_sexpr_slist) lr lhs true ())
+       (rewrite (premise 1) lr lhs true ())
+       (rewrite (lemma size_sexpr_list_cons) lr lhs true ())
+       (rewrite (premise 2) lr lhs true ())
+       (rewrite (lemma size_sexpr_slist) lr lhs true ())
+       (rewrite (lemma size_sexpr_list_cons) lr lhs true ())
+       (rewrite (lemma size_sexpr_ssym) lr lhs true ()))
+      (by farkas (list 1 0 0 0 0)))
+    (have (= (le 0 (size_sexpr_list hsegs)) True)
+      (rewrite-with (lemma size_sexpr_list_nonneg) lr lhs () () refl)
+      (have (= (le 0 (size_sexpr_list rest)) True)
+        (rewrite-with (lemma size_sexpr_list_nonneg) lr lhs () () refl)
+        (by farkas (list 1 0 0 0 0 1 1)))))
   (match s
     ((SInt n) (Some (Pair (PInt n) Nil)))
     ((SStr _) None)  ; strings aren't narrow patterns
@@ -415,6 +462,14 @@
 ;; sub-patterns. The last segment must name a known constructor.
 (fn elab_qpat ((segs (List SExpr)) (subs (List SExpr)) (ctors (List Symbol)))
   (Option (Pair Pat (List Symbol)))
+  (measure
+    (+ 1 (+ (size_sexpr_list segs) (size_sexpr_list subs)))
+    ;; site 1 — (elab_pats subs ctors). subs is a PARAM; both premises (qpath
+    ;; result, sym_mem guard) drop (q untyped). decrease needs segs >= 0.
+    (have (= (le 0 (size_sexpr_list segs)) True)
+      (rewrite-with (lemma size_sexpr_list_nonneg) lr lhs () () refl)
+      (by farkas (list 1 1)))
+    (steps ((rewrite (lemma size_sexpr_list_nonneg) lr lhs true ())) refl))
   (match (qpath_qname segs)
     (None None)
     ((Some q)
@@ -431,6 +486,25 @@
 
 (fn elab_pats ((ss (List SExpr)) (ctors (List Symbol)))
   (Option (Pair (List Pat) (List Symbol)))
+  (measure
+    (size_sexpr_list ss)
+    ;; site 1 — (elab_pat h ctors). premise 0 = (= ss (Cons h t)). needs t >= 0.
+    (have (= (le 0 (size_sexpr_list t)) True)
+      (rewrite-with (lemma size_sexpr_list_nonneg) lr lhs () () refl)
+      (steps
+        ((rewrite (premise 0) lr lhs true ())
+         (rewrite (lemma size_sexpr_list_cons) lr lhs true ()))
+        (by farkas (list 1 0 1))))
+    (steps ((rewrite (lemma size_sexpr_nonneg) lr lhs true ())) refl)
+    ;; site 2 — (elab_pats t ctors). premise 0, premise 1 = (= (elab_pat h ctors)
+    ;; (Some (Pair p pn))). needs size_sexpr h >= 0.
+    (have (= (le 0 (size_sexpr h)) True)
+      (rewrite-with (lemma size_sexpr_nonneg) lr lhs () () refl)
+      (steps
+        ((rewrite (premise 0) lr lhs true ())
+         (rewrite (lemma size_sexpr_list_cons) lr lhs true ()))
+        (by farkas (list 1 0 0 1))))
+    (steps ((rewrite (lemma size_sexpr_list_nonneg) lr lhs true ())) refl))
   (match ss
     (Nil (Some (Pair Nil Nil)))
     ((Cons h t)
