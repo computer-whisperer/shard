@@ -746,11 +746,12 @@
            (None None)))))))
 
 ;; Default step budget for the proof-side normalizers (simp_iota_expr,
-;; simp_expr). Like run_budget but for the checker: a Simp/ι step that needs
-;; more than this many reductions stops early, leaving a partially-reduced
-;; (still definitionally-equal) term — so the proof step fails to close rather
-;; than reducing unsoundly. Pragmatic bound, not a soundness condition: the
-;; loops' totality holds for any budget (see run_expr's note).
+;; simp_expr, and ceval via compute_eval). Like run_budget but for the checker:
+;; a Simp/ι/Compute step that needs more than this many reductions stops early,
+;; leaving a partially-reduced (still definitionally-equal) term — so the proof
+;; step fails to close rather than reducing unsoundly. Pragmatic bound, not a
+;; soundness condition: the loops' totality holds for any budget (see run_expr's
+;; note).
 (fn simp_budget () Int 1000000000)
 
 ;; Drive step_iota to fixed point, fuelled (totality, issue #1): step_iota is
@@ -1098,42 +1099,87 @@
        ((MStuck) None)
        ((MNo) (ceval_arms rest v))))))
 
-(fn ceval ((m Module) (env (List Expr)) (e Expr)) Expr
-  (match e
-    ((IntLit _) e)
-    ((SymLit _) e)
-    ((FVar _) e)
-    ((BVar k) (cenv_get env k))
-    ((Ctor c args) (Ctor c (ceval_list m env args)))
-    ((Let bs body) (ceval m (cappend (ceval_list m env bs) env) body))  ; bs ⊢ body (no reverse)
-    ((If c t el)
-     (match (ceval m env c)
-       ((Ctor (QName _ (quote True)) Nil) (ceval m env t))
-       ((Ctor (QName _ (quote False)) Nil) (ceval m env el))
-       (cv (If cv (open_many env t) (open_many env el)))))  ; stuck cond → reify branches
-    ((Match s arms)
-     (match (ceval m env s)
-       (sv
-         (match (ceval_arms arms sv)
-           ((Some (Pair body binds)) (ceval m (cappend binds env) body))
-           (None (Match sv (open_many_arms 0 env arms)))))))  ; stuck → reify arms
-    ((Call f args) (ceval_call m f (ceval_list m env args)))))
-
-(fn ceval_list ((m Module) (env (List Expr)) (es (List Expr))) (List Expr)
+;; Reify each element of a list under env (def-eq open_many substitution) — the
+;; give-up value when ceval_list runs out of fuel; structural, not in the ceval
+;; SCC.
+(fn copen_list ((env (List Expr)) (es (List Expr))) (List Expr)
+  (measure (struct es))
   (match es
     (Nil Nil)
-    ((Cons h t) (Cons (ceval m env h) (ceval_list m env t)))))
+    ((Cons h t) (Cons (open_many env h) (copen_list env t)))))
 
-(fn ceval_call ((m Module) (f QName) (vs (List Expr))) Expr
-  (match m
-    ((Module _ _ _ trie _)
-     (match (trie_lookup f trie)
-       ((Some (FnDef _ ptypes _ body))
-        (if (int_eq (len vs) (len_t ptypes)) (ceval m (reverse_exprs vs) body)  ; (reverse args) ⊢ body
-        (Call f vs)))  ; partial app → stuck
-       (None
-         (match (try_step_prim (qn_name f) vs)
-           ((Some r) r)
-           (None (Call f vs))))))))  ; prim-miss / extern → stuck
+;; FUEL (totality, issue #1). ceval/ceval_list/ceval_call form a MUTUAL SCC and
+;; the unfolding edge (ceval_call → the fn body) recurses on a non-subterm, so
+;; there is no structural descent. Each member carries (measure fuel) and EVERY
+;; internal edge spends one unit — so the common measure `fuel` strictly
+;; descends along any call chain (the mutual-measure gate's common-measure
+;; soundness). Because the measure is a PARAM, the obligations are param-pure no
+;; matter how deep the match nesting, and the only premise is each member's fuel
+;; guard → ad_fix vectors at every site. Running out reifies the current term
+;; under env (open_many / copen_list / the stuck Call) — still definitionally
+;; equal to the input, so Compute fails to close rather than computing
+;; unsoundly. fuel = a per-path budget on ceval calls; pragmatic, not a
+;; soundness condition (totality holds for any fuel).
+(fn ceval ((m Module) (env (List Expr)) (e Expr) (fuel Int)) Expr
+  ;; one (decrease nonneg) pair per recursive site, pre-order; all uniform —
+  ;; every site keeps only the fuel guard, so every callee measure (- fuel 1)
+  ;; gives the same ad_fix vectors. Sites: Ctor ceval_list; Let ceval + ceval_list;
+  ;; If ceval×3; Match ceval×2; Call ceval_call + ceval_list = 10.
+  (measure fuel
+    (by farkas (list 1 0)) (by farkas (list 1 1))
+    (by farkas (list 1 0)) (by farkas (list 1 1))
+    (by farkas (list 1 0)) (by farkas (list 1 1))
+    (by farkas (list 1 0)) (by farkas (list 1 1))
+    (by farkas (list 1 0)) (by farkas (list 1 1))
+    (by farkas (list 1 0)) (by farkas (list 1 1))
+    (by farkas (list 1 0)) (by farkas (list 1 1))
+    (by farkas (list 1 0)) (by farkas (list 1 1))
+    (by farkas (list 1 0)) (by farkas (list 1 1))
+    (by farkas (list 1 0)) (by farkas (list 1 1)))
+  (if (lt fuel 1) (open_many env e)
+    (match e
+      ((IntLit _) e)
+      ((SymLit _) e)
+      ((FVar _) e)
+      ((BVar k) (cenv_get env k))
+      ((Ctor c args) (Ctor c (ceval_list m env args (- fuel 1))))
+      ((Let bs body)
+       (ceval m (cappend (ceval_list m env bs (- fuel 1)) env) body (- fuel 1)))  ; bs ⊢ body
+      ((If c t el)
+       (match (ceval m env c (- fuel 1))
+         ((Ctor (QName _ (quote True)) Nil) (ceval m env t (- fuel 1)))
+         ((Ctor (QName _ (quote False)) Nil) (ceval m env el (- fuel 1)))
+         (cv (If cv (open_many env t) (open_many env el)))))  ; stuck cond → reify branches
+      ((Match s arms)
+       (match (ceval m env s (- fuel 1))
+         (sv
+           (match (ceval_arms arms sv)
+             ((Some (Pair body binds)) (ceval m (cappend binds env) body (- fuel 1)))
+             (None (Match sv (open_many_arms 0 env arms)))))))  ; stuck → reify arms
+      ((Call f args) (ceval_call m f (ceval_list m env args (- fuel 1)) (- fuel 1))))))
 
-(fn compute_eval ((m Module) (e Expr)) Expr (ceval m Nil e))
+(fn ceval_list ((m Module) (env (List Expr)) (es (List Expr)) (fuel Int)) (List Expr)
+  ;; two sites: ceval (head), ceval_list (tail) — both uniform.
+  (measure fuel
+    (by farkas (list 1 0)) (by farkas (list 1 1))
+    (by farkas (list 1 0)) (by farkas (list 1 1)))
+  (if (lt fuel 1) (copen_list env es)
+    (match es
+      (Nil Nil)
+      ((Cons h t) (Cons (ceval m env h (- fuel 1)) (ceval_list m env t (- fuel 1)))))))
+
+(fn ceval_call ((m Module) (f QName) (vs (List Expr)) (fuel Int)) Expr
+  (measure fuel (by farkas (list 1 0)) (by farkas (list 1 1)))
+  (if (lt fuel 1) (Call f vs)
+    (match m
+      ((Module _ _ _ trie _)
+       (match (trie_lookup f trie)
+         ((Some (FnDef _ ptypes _ body))
+          (if (int_eq (len vs) (len_t ptypes)) (ceval m (reverse_exprs vs) body (- fuel 1))  ; (reverse args) ⊢ body
+          (Call f vs)))  ; partial app → stuck
+         (None
+           (match (try_step_prim (qn_name f) vs)
+             ((Some r) r)
+             (None (Call f vs)))))))))  ; prim-miss / extern → stuck
+
+(fn compute_eval ((m Module) (e Expr)) Expr (ceval m Nil e (simp_budget)))
