@@ -18,8 +18,10 @@
 (import "stdlib.shard")
 (import "term.shard")
 (import "module.shard")
+(import "expr_size.shard")
 (use (:: kernel term *))
 (use (:: kernel module *))
+(use (:: kernel expr_size *))
 
 (fn match_pat ((p Pat) (v Expr) (acc (List Expr))) MatchResult
   (measure (struct p))
@@ -113,6 +115,7 @@
 ;; ---------------------------------------------------------------------------
 
 (fn step ((m Module) (e Expr)) (Option Expr)
+  (measure (* 2 (size e)))
   (match e
     ((Call f args) (step_call m f args))
     ((Match s arms) (step_match m s arms))
@@ -145,6 +148,7 @@
 ;; reducing a Call VALUE, not invoking a function. See REVISIT —
 ;; "Primitives reachable from the kernel's reducer".
 (fn step_call ((m Module) (f QName) (args (List Expr))) (Option Expr)
+  (measure (+ (* 2 (size_list args)) 2))
   (match m
     ((Module _ _ _ trie _)
      (match (trie_lookup f trie)
@@ -567,6 +571,7 @@
   None)))
 
 (fn step_args_in_call ((m Module) (f QName) (args (List Expr))) (Option Expr)
+  (measure (+ (* 2 (size_list args)) 1))
   (match (step_list m args)
     ((Some args2) (Some (Call f args2)))
     (None None)))
@@ -592,6 +597,7 @@
 ;; ArmStuck (a deep pattern needs a not-yet-reduced position) means reduce
 ;; the scrutinee further and retry — NOT fall through to a later arm.
 (fn step_match ((m Module) (s Expr) (arms (List Arm))) (Option Expr)
+  (measure (+ (* 2 (size s)) 2))
   (match s
     ((Ctor _ _) (resolve_arms m s arms))
     ((IntLit _) (resolve_arms m s arms))
@@ -603,6 +609,7 @@
 
 ;; Resolve a value-headed match for the full reducer `step`.
 (fn resolve_arms ((m Module) (s Expr) (arms (List Arm))) (Option Expr)
+  (measure (+ (* 2 (size s)) 1))
   (match (try_match_arms arms s)
     ((ArmFired e2) (Some e2))
     ((ArmNone) None)  ; all arms clash — stuck (non-exhaustive)
@@ -686,6 +693,7 @@
 ;; ---------------------------------------------------------------------------
 
 (fn step_iota ((m Module) (e Expr)) (Option Expr)
+  (measure (* 2 (size e)))
   (match e
     ((Match s arms) (step_match_iota m s arms))
     ((Let bs body) (Some (open_many bs body)))  ; ζ
@@ -712,6 +720,7 @@
     ((SymLit _) None)))
 
 (fn step_match_iota ((m Module) (s Expr) (arms (List Arm))) (Option Expr)
+  (measure (+ (* 2 (size s)) 2))
   (match s
     ((Ctor _ _) (resolve_arms_iota m s arms))
     ((IntLit _) (resolve_arms_iota m s arms))
@@ -726,6 +735,7 @@
 ;; so a deep pattern blocked on a user-fn sub-call simply stays put — the
 ;; documented ι-only limitation — but a wrong arm is never fired.
 (fn resolve_arms_iota ((m Module) (s Expr) (arms (List Arm))) (Option Expr)
+  (measure (+ (* 2 (size s)) 1))
   (match (try_match_arms arms s)
     ((ArmFired e2) (Some e2))
     ((ArmNone) None)
@@ -735,6 +745,7 @@
        (None None)))))
 
 (fn step_iota_list ((m Module) (es (List Expr))) (Option (List Expr))
+  (measure (* 2 (size_list es)))
   (match es
     (Nil None)
     ((Cons h t)
@@ -770,6 +781,7 @@
 ;; step_list: try to step the first reducible expression in es, left to
 ;; right. Returns the new list if some step succeeded, else None.
 (fn step_list ((m Module) (es (List Expr))) (Option (List Expr))
+  (measure (* 2 (size_list es)))
   (match es
     (Nil None)
     ((Cons h t)
@@ -853,6 +865,7 @@
 ;; ---------------------------------------------------------------------------
 
 (fn step_smart ((m Module) (e Expr)) (Option Expr)
+  (measure (* 2 (size e)))
   (match e
     ((Call f args) (step_smart_call m f args))
     ((Match s arms) (step_smart_match m s arms))
@@ -875,6 +888,7 @@
     ((SymLit _) None)))
 
 (fn step_smart_call ((m Module) (f QName) (args (List Expr))) (Option Expr)
+  (measure (+ (* 2 (size_list args)) 2))
   (match m
     ((Module _ _ _ trie _)
      (match (trie_lookup f trie)
@@ -896,11 +910,13 @@
 
 (fn step_smart_args_in_call ((m Module) (f QName) (args (List Expr)))
   (Option Expr)
+  (measure (+ (* 2 (size_list args)) 1))
   (match (step_smart_list m args)
     ((Some args2) (Some (Call f args2)))
     (None None)))
 
 (fn step_smart_match ((m Module) (s Expr) (arms (List Arm))) (Option Expr)
+  (measure (+ (* 2 (size s)) 2))
   (match s
     ((Ctor _ _) (resolve_arms_smart m s arms))
     ((IntLit _) (resolve_arms_smart m s arms))
@@ -915,6 +931,7 @@
 ;; position stays put (step_smart returns None) while a forceable one
 ;; reduces — and no wrong arm is ever fired.
 (fn resolve_arms_smart ((m Module) (s Expr) (arms (List Arm))) (Option Expr)
+  (measure (+ (* 2 (size s)) 1))
   (match (try_match_arms arms s)
     ((ArmFired e2) (Some e2))
     ((ArmNone) None)
@@ -924,6 +941,7 @@
        (None None)))))
 
 (fn step_smart_list ((m Module) (es (List Expr))) (Option (List Expr))
+  (measure (* 2 (size_list es)))
   (match es
     (Nil None)
     ((Cons h t)
