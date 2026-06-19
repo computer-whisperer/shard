@@ -1599,6 +1599,40 @@
        (ms_cands_for subs prems rewrites sizefn nonneg cf)
        (ms_cands_multi subs prems rewrites rest cf)))))
 
+;; The argument symbols of every 1-symbol-arg call (size X)/(size_list X)/… in a
+;; measure expression — the atoms an ADDITIVE measure (1 + size c + size t + …)
+;; is built from. An _if-style member recurses on several independent params, so
+;; its decrease/nonneg needs a `have` for EACH sibling atom; those atoms are
+;; measure params, not path-condition subterms, so the premise-subterm
+;; enumeration (ms_subterms) can't reach them. Recurses through (+ …)/nesting.
+(fn ms_measure_args ((e SExpr) (acc (List Symbol))) (List Symbol)
+  (match e
+    ((SList (Cons (SSym _f) (Cons (SSym arg) Nil))) (Cons arg acc))  ; (f arg)
+    ((SList items) (ms_measure_args_l items acc))
+    (_ acc)))
+
+(fn ms_measure_args_l ((items (List SExpr)) (acc (List Symbol))) (List Symbol)
+  (match items
+    (Nil acc)
+    ((Cons h t) (ms_measure_args_l t (ms_measure_args h acc)))))
+
+;; xs with every element of `rem` dropped (the callee-measure atom is excluded
+;; from a decrease's sibling-have set: size c < 1+size c+size t+size el needs
+;; haves for t,el — NOT c).
+(fn ms_minus ((xs (List Symbol)) (rem (List Symbol))) (List Symbol)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons h t) (if (ms_sym_in h rem) (ms_minus t rem) (Cons h (ms_minus t rem))))))
+
+(fn ms_app_subs
+  ((a (List (List Symbol))) (b (List (List Symbol))))
+  (List (List Symbol))
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (ms_app_subs t b)))))
+
 ;; recipe candidates for a measure obligation goalS. Handles DECREASE
 ;; (lt callee caller) and NONNEG (le 0 measure); both bare and lex measures.
 ;; Anything else returns Nil (covered by flat_cands / farkas_cands).
@@ -1618,7 +1652,14 @@
           ;;     fn the theory knows (the right one matches st's type), then
           ;;     `by farkas`. cf = the measure's lex multiplier M (1 if bare).
           (let
-            ((subs (ms_singletons (ms_dedup (ms_subterms prems Nil) Nil)))
+            ((subs
+               (ms_app_subs
+                 (ms_singletons (ms_dedup (ms_subterms prems Nil) Nil))
+                 (Cons
+                   (ms_minus
+                     (ms_dedup (ms_measure_args bSide Nil) Nil)
+                     (ms_measure_args aSide Nil))
+                   Nil)))
              (rws (ms_rewrites_g prems 0 (ms_vars aSide (ms_vars bSide Nil))))
              (cf (show_int (ms_mult aSide))))
             (Cons
@@ -1628,22 +1669,30 @@
           ;; NONNEG: (le 0 measure) — bSide = measure; one have over its own arg.
           (match aSide
             ((SInt 0)
-             (match (ms_base_call bSide)
-               (None Nil)
-               ((Some baseCall)
-                (match (ms_call_arg baseCall)
-                  (None Nil)
-                  ((Some arg)
-                   (match (ms_base_sizefn bSide)
-                     (None Nil)
-                     ((Some base)
-                      (match (find_nonneg_lemma th base)
-                        (None Nil)
-                        ((Some nonneg)
-                         (Cons
-                           (ms_nonneg_build arg prems (chars_of_sym base) nonneg
-                             (show_int (ms_mult bSide)))
-                           Nil))))))))))
+             (append_cands
+               (match (ms_base_call bSide)
+                 (None Nil)
+                 ((Some baseCall)
+                  (match (ms_call_arg baseCall)
+                    (None Nil)
+                    ((Some arg)
+                     (match (ms_base_sizefn bSide)
+                       (None Nil)
+                       ((Some base)
+                        (match (find_nonneg_lemma th base)
+                          (None Nil)
+                          ((Some nonneg)
+                           (Cons
+                             (ms_nonneg_build arg prems (chars_of_sym base) nonneg
+                               (show_int (ms_mult bSide)))
+                             Nil)))))))))
+               ;; additive measure (1 + size c + size t + …): a `have` per atom.
+               (ms_cands_multi
+                 (Cons (ms_dedup (ms_measure_args bSide Nil) Nil) Nil)
+                 prems
+                 Nil
+                 (ms_all_nonnegs th)
+                 (show_int (ms_mult bSide)))))
             (_ Nil))
           Nil)))
        (_ Nil)))
