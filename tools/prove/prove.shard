@@ -1314,20 +1314,35 @@
     ((Cons h t)
      (if (ms_sym_in h seen) (ms_dedup t seen) (Cons h (ms_dedup t (Cons h seen)))))))
 
-;; the `(rewrite (premise K) lr lhs true ())` steps, one per structural premise,
-;; at its index K in the full premise list.
-(fn ms_rewrites ((prems (List SExpr)) (k Int)) (List Int)
+;; the bound var of a structural premise (= v (c …)).
+(fn ms_var_of_prem ((p SExpr)) (Option Symbol)
+  (match p
+    ((SList (Cons (SSym _eq) (Cons (SSym v) (Cons _rhs Nil)))) (Some v))
+    (_ None)))
+
+;; like ms_rewrites, but only rewrite a premise whose var occurs in the goal
+;; (gv). A premise binding a var absent from the goal — e.g. an arm that
+;; destructures `seq` into named fields the measure never mentions — would make
+;; the all-occurrences rewrite find no match and FAIL the candidate. The farkas
+;; slot count is still per-premise (ms_zeros), so skipping a rewrite just leaves
+;; that premise at coeff 0.
+(fn ms_rewrites_g ((prems (List SExpr)) (k Int) (gv (List Symbol))) (List Int)
   (measure (struct prems))
   (match prems
     (Nil Nil)
     ((Cons p rest)
      (append_int
-       (if (ms_is_struct_prem p)
-         (append_int
-           "(rewrite (premise "
-           (append_int (show_int k) ") lr lhs true ()) "))
-         Nil)
-       (ms_rewrites rest (+ k 1))))))
+       (match (ms_var_of_prem p)
+         ((Some v)
+          (if (ms_is_struct_prem p)
+            (if (ms_sym_in v gv)
+              (append_int
+                "(rewrite (premise "
+                (append_int (show_int k) ") lr lhs true ()) "))
+              Nil)
+            Nil))
+         (None Nil))
+       (ms_rewrites_g rest (+ k 1) gv)))))
 
 ;; one farkas slot per premise (coeff 0 — equations are consumed by rewrite).
 (fn ms_zeros ((prems (List SExpr))) (List Int)
@@ -1409,26 +1424,16 @@
         (ms_zeros prems)
         (append_int " " (append_int cf ")))"))))))
 
-(fn ms_subsets ((xs (List Symbol))) (List (List Symbol))
+;; size-1 subsets only: a measure-descent obligation needs at most ONE nonneg
+;; have (the caller measure unfolds to 1 + callee-measure + ONE sibling size
+;; term). Enumerating all 2^n subsets is what made the recipe blow past the
+;; budget on big premises (RewriteWith has ~6 binder subterms); singletons keep
+;; it linear. The empty subset is handled separately by ms_ord_build.
+(fn ms_singletons ((xs (List Symbol))) (List (List Symbol))
   (measure (struct xs))
   (match xs
-    (Nil (Cons Nil Nil))
-    ((Cons h t)
-     (let ((ps (ms_subsets t))) (ms_append_lls ps (ms_prepend h ps))))))
-
-(fn ms_prepend ((h Symbol) (ps (List (List Symbol)))) (List (List Symbol))
-  (measure (struct ps))
-  (match ps
     (Nil Nil)
-    ((Cons p r) (Cons (Cons h p) (ms_prepend h r)))))
-
-(fn ms_append_lls
-  ((a (List (List Symbol))) (b (List (List Symbol))))
-  (List (List Symbol))
-  (measure (struct a))
-  (match a
-    (Nil b)
-    ((Cons h t) (Cons h (ms_append_lls t b)))))
+    ((Cons h t) (Cons (Cons h Nil) (ms_singletons t)))))
 
 (fn ms_cands_for
   ((subs (List (List Symbol)))
@@ -1534,6 +1539,66 @@
     ((SList (Cons (SSym _base) (Cons (SSym arg) _))) (Some arg))
     (_ None)))
 
+;; The size fn F of a nonneg lemma  (le 0 (F _)) = True, else None.
+(fn ms_nonneg_sizefn ((lg Goal)) (Option Symbol)
+  (match lg
+    ((Goal _ prems (Equation l _r))
+     (match prems
+       (Nil
+         (match l
+           ((Call _le (Cons (IntLit 0) (Cons (Call f _) Nil))) (Some (qn_name f)))
+           (_ None)))
+       (_ None)))))
+
+(fn ms_nn_acc
+  ((q QName) (lg Goal) (tl (List (Pair (List Int) (List Int)))))
+  (List (Pair (List Int) (List Int)))
+  (match (ms_nonneg_sizefn lg)
+    (None tl)
+    ((Some f)
+     (Cons (Pair (chars_of_sym f) (chars_of_sym (qn_name q))) tl))))
+
+;; EVERY (sizefn-chars, lemma-name-chars) pair the theory offers as a nonneg
+;; fact. The decrease recipe tries each, so a have lands the size fn matching
+;; the SUBTERM's type — a cross-size-fn SCC (e.g. check_sequent's measure is
+;; proof_size but a sibling drop is bounded by case_list_size) is exactly what
+;; needs this. A wrong (sizefn, subterm) pairing just produces an ill-typed
+;; have that fails to verify; the gate re-checks every kept cert anyway.
+(fn ms_all_nonnegs ((th Theory)) (List (Pair (List Int) (List Int)))
+  (measure (struct th))
+  (match th
+    ((TheoryEmpty) Nil)
+    ((TheoryCons e rest)
+     (match e
+       ((Proven q lg) (ms_nn_acc q lg (ms_all_nonnegs rest)))
+       ((Axiom q lg) (ms_nn_acc q lg (ms_all_nonnegs rest)))))))
+
+;; The constant-gap candidate: rewrite the path premises, simp the goal so the
+;; caller measure unfolds over the now-concrete constructor, then `by ord`
+;; (which closes lt(A, 1+A) — the gap canonicalizes to a positive constant). No
+;; `have` — this is the empty-subset case the subset enumeration skips, and the
+;; common shape for a SUFFIX/forwarding recursion (proof_size sub < proof_size
+;; (Ctor … sub) = 1 + proof_size sub).
+(fn ms_ord_build ((rewrites (List Int))) (List Int)
+  (append_int "(steps (" (append_int rewrites "(simp lhs)) (by ord (list)))")))
+
+;; Decrease candidates over EVERY theory size fn (so the right one is tried per
+;; subterm), one block per (sizefn, nonneg-lemma) pair.
+(fn ms_cands_multi
+  ((subs (List (List Symbol)))
+   (prems (List SExpr))
+   (rewrites (List Int))
+   (lemmas (List (Pair (List Int) (List Int))))
+   (cf (List Int)))
+  (List (List Int))
+  (measure (struct lemmas))
+  (match lemmas
+    (Nil Nil)
+    ((Cons (Pair sizefn nonneg) rest)
+     (append_cands
+       (ms_cands_for subs prems rewrites sizefn nonneg cf)
+       (ms_cands_multi subs prems rewrites rest cf)))))
+
 ;; recipe candidates for a measure obligation goalS. Handles DECREASE
 ;; (lt callee caller) and NONNEG (le 0 measure); both bare and lex measures.
 ;; Anything else returns Nil (covered by flat_cands / farkas_cands).
@@ -1545,20 +1610,20 @@
        ((SList
           (Cons _eq (Cons (SList (Cons (SSym rel) (Cons aSide (Cons bSide _)))) _)))
         (if (sym_eq rel (quote lt))
-          ;; DECREASE: aSide = callee measure; haves over path-premise subterms.
-          (match (ms_base_sizefn aSide)
-            (None Nil)
-            ((Some sizefn)
-             (match (find_nonneg_lemma th sizefn)
-               (None Nil)
-               ((Some nonneg)
-                (ms_cands_for
-                  (ms_subsets (ms_dedup (ms_subterms prems Nil) Nil))
-                  prems
-                  (ms_rewrites prems 0)
-                  (chars_of_sym sizefn)
-                  nonneg
-                  (show_int (ms_mult aSide)))))))
+          ;; DECREASE. Two candidate families, both after rewriting the path
+          ;; premises and simp-ing the goal so the caller measure unfolds over
+          ;; the concrete constructor:
+          ;;   - constant gap (lt A (1+A)) closed by `by ord` — no have;
+          ;;   - a `have (le 0 (sizefn st))` over a subterm st, for EVERY size
+          ;;     fn the theory knows (the right one matches st's type), then
+          ;;     `by farkas`. cf = the measure's lex multiplier M (1 if bare).
+          (let
+            ((subs (ms_singletons (ms_dedup (ms_subterms prems Nil) Nil)))
+             (rws (ms_rewrites_g prems 0 (ms_vars aSide (ms_vars bSide Nil))))
+             (cf (show_int (ms_mult aSide))))
+            (Cons
+              (ms_ord_build rws)
+              (ms_cands_multi subs prems rws (ms_all_nonnegs th) cf)))
         (if (sym_eq rel (quote le))
           ;; NONNEG: (le 0 measure) — bSide = measure; one have over its own arg.
           (match aSide
