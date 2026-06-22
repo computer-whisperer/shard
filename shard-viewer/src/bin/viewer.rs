@@ -2,42 +2,120 @@
 //!
 //! Two-pane workbench: a sidebar listing every `.shard` file in the project,
 //! and a canvas drawing the selected file's fns as boxes with their intra-file
-//! call edges as arrows. Click a fn box to highlight it; click a file to switch
-//! the canvas. The view tree itself lives in `shard_viewer::view`.
+//! call edges as arrows. A fn box selects it and opens a detail panel (source +
+//! clickable callers/callees). The canvas pans by dragging an empty area and
+//! zooms with the wheel or the toolbar buttons.
 //!
 //!   shard-viewer [PROJECT_ROOT]   (defaults to the current directory)
 
 use damascene_core::prelude::*;
 use shard_viewer::model::Project;
-use shard_viewer::view;
+use shard_viewer::view::{self, CANVAS_KEY, ViewParams};
+
+const ZOOM_MIN: f32 = 0.2;
+const ZOOM_MAX: f32 = 3.0;
+
+struct Drag {
+    start_pointer: (f32, f32),
+    start_pan: (f32, f32),
+}
 
 struct Viewer {
     project: Project,
     selected_file: Option<usize>,
     selected_fn: Option<usize>,
+    zoom: f32,
+    pan: (f32, f32),
+    drag: Option<Drag>,
+}
+
+impl Viewer {
+    fn params(&self) -> ViewParams {
+        ViewParams {
+            selected_file: self.selected_file,
+            selected_fn: self.selected_fn,
+            zoom: self.zoom,
+            pan: self.pan,
+        }
+    }
+
+    fn zoom_by(&mut self, factor: f32) {
+        self.zoom = (self.zoom * factor).clamp(ZOOM_MIN, ZOOM_MAX);
+    }
+
+    /// Switching files resets the view so the new graph starts framed.
+    fn select_file(&mut self, i: usize) {
+        self.selected_file = Some(i);
+        self.selected_fn = None;
+        self.pan = (0.0, 0.0);
+        self.zoom = 1.0;
+    }
 }
 
 impl App for Viewer {
     fn build(&self, _cx: &BuildCx) -> El {
-        view::app_root(&self.project, self.selected_file, self.selected_fn)
+        view::app_root(&self.project, &self.params())
     }
 
     fn on_event(&mut self, event: UiEvent, _cx: &EventCx) {
-        if !matches!(event.kind, UiEventKind::Click | UiEventKind::Activate) {
-            return;
+        match event.kind {
+            UiEventKind::Click | UiEventKind::Activate => {
+                if event.is_route("zoom_in") {
+                    self.zoom_by(1.25);
+                } else if event.is_route("zoom_out") {
+                    self.zoom_by(0.8);
+                } else if event.is_route("zoom_reset") {
+                    self.pan = (0.0, 0.0);
+                    self.zoom = 1.0;
+                } else if let Some(i) = event.route_index::<usize>("file")
+                    && i < self.project.files.len()
+                {
+                    self.select_file(i);
+                } else if let Some(i) = event.route_index::<usize>("fn")
+                    && i < self.project.fns.len()
+                {
+                    // Following a cross-file callee/caller switches the canvas.
+                    let file = self.project.fns[i].file;
+                    if Some(file) != self.selected_file {
+                        self.select_file(file);
+                    }
+                    self.selected_fn = Some(i);
+                }
+            }
+            UiEventKind::PointerDown if event.is_route(CANVAS_KEY) => {
+                if let Some(pos) = event.pointer_pos() {
+                    self.drag = Some(Drag {
+                        start_pointer: pos,
+                        start_pan: self.pan,
+                    });
+                }
+            }
+            UiEventKind::Drag => {
+                if let (Some(pos), Some(d)) = (event.pointer_pos(), self.drag.as_ref()) {
+                    self.pan = (
+                        d.start_pan.0 + pos.0 - d.start_pointer.0,
+                        d.start_pan.1 + pos.1 - d.start_pointer.1,
+                    );
+                }
+            }
+            UiEventKind::PointerUp => self.drag = None,
+            _ => {}
         }
-        if let Some(i) = event.route_index::<usize>("file")
-            && i < self.project.files.len()
-        {
-            self.selected_file = Some(i);
-            self.selected_fn = None;
-        } else if let Some(i) = event.route_index::<usize>("fn")
-            && i < self.project.fns.len()
-        {
-            self.selected_fn = Some(i);
-            // Following a cross-file callee also switches the canvas.
-            self.selected_file = Some(self.project.fns[i].file);
+    }
+
+    fn on_wheel_event(&mut self, event: UiEvent, _cx: &EventCx) -> bool {
+        // Wheel over the graph zooms; elsewhere (the sidebar) fall through to
+        // damascene's default scroll handling.
+        let over_graph = event
+            .route()
+            .is_some_and(|r| r == CANVAS_KEY || r.starts_with("fn:") || r == "edges");
+        if over_graph {
+            if let Some(dy) = event.wheel_dy() {
+                self.zoom_by(if dy > 0.0 { 1.1 } else { 1.0 / 1.1 });
+            }
+            return true;
         }
+        false
     }
 }
 
@@ -63,6 +141,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             project,
             selected_file,
             selected_fn: None,
+            zoom: 1.0,
+            pan: (0.0, 0.0),
+            drag: None,
         },
     )
 }

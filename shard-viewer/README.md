@@ -16,10 +16,14 @@ First milestone — the **call-graph (methods) view**:
 - Layout is layered left-to-right (callers → callees) with **SCC condensation**,
   so shard's mutual-recursion cycles collapse into one column instead of
   smearing across the canvas.
-- Click a fn box to highlight it (its signature shows in the header).
+- **Pan** by dragging an empty area of the canvas; **zoom** with the mouse wheel
+  or the toolbar `−` / `+` / `Reset view` controls.
+- Click a fn box to open a **detail panel**: signature, the fn's real source
+  text, and clickable **Calls** / **Called by** lists. Clicking a callee/caller
+  (including cross-file) navigates to it, switching the canvas as needed.
 
-Not yet: cross-file neighborhood navigation, the import/"systems" graph, and the
-intra-function control-flow view. The call-scan parser already feeds all three.
+Not yet: the import/"systems" graph and the intra-function control-flow view.
+The call-scan parser already feeds both.
 
 ## Binaries
 

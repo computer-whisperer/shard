@@ -11,7 +11,7 @@
 
 use damascene_core::prelude::*;
 use shard_viewer::model::Project;
-use shard_viewer::view;
+use shard_viewer::view::{self, ViewParams};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
@@ -32,7 +32,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         project.files[file_idx].fns.len()
     );
 
-    let mut root_el = view::app_root(&project, Some(file_idx), None);
+    // Select the file's most-called fn so the detail panel is exercised too.
+    let selected_fn = project.files[file_idx]
+        .fns
+        .iter()
+        .copied()
+        .max_by_key(|&fi| {
+            project
+                .fns
+                .iter()
+                .filter(|g| g.calls.contains(&fi))
+                .count()
+        });
+
+    // Optional ZOOM env knob so the zoom math can be eyeballed headlessly.
+    let zoom = std::env::var("ZOOM")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1.0);
+    let params = ViewParams {
+        selected_file: Some(file_idx),
+        selected_fn,
+        zoom,
+        pan: (0.0, 0.0),
+    };
+    let mut root_el = view::app_root(&project, &params);
     let viewport = Rect::new(0.0, 0.0, 1600.0, 1000.0);
     let bundle = render_bundle(&mut root_el, viewport);
 

@@ -58,6 +58,16 @@ impl std::fmt::Display for ParseError {
 
 /// Parse a whole source file into its sequence of top-level forms.
 pub fn parse_top(src: &str) -> Result<Vec<Sexpr>, ParseError> {
+    Ok(parse_top_spanned(src)?
+        .into_iter()
+        .map(|(e, _)| e)
+        .collect())
+}
+
+/// Like [`parse_top`], but pairs each top-level form with the exact source
+/// text it was parsed from (verbatim, comments between forms excluded). Used to
+/// show a fn's real source in the viewer.
+pub fn parse_top_spanned(src: &str) -> Result<Vec<(Sexpr, String)>, ParseError> {
     let mut p = Parser {
         chars: src.chars().collect(),
         pos: 0,
@@ -69,7 +79,10 @@ pub fn parse_top(src: &str) -> Result<Vec<Sexpr>, ParseError> {
         if p.pos >= p.chars.len() {
             break;
         }
-        forms.push(p.read_expr()?);
+        let start = p.pos;
+        let expr = p.read_expr()?;
+        let text: String = p.chars[start..p.pos].iter().collect();
+        forms.push((expr, text));
     }
     Ok(forms)
 }

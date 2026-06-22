@@ -21,6 +21,8 @@ pub struct FnDef {
     pub body: Vec<Sexpr>,
     pub file: usize,
     pub is_sig: bool,
+    /// The verbatim source text of the definition form.
+    pub src: String,
     /// Resolved callee fn indices within this project (deduped, excludes self).
     pub calls: Vec<usize>,
 }
@@ -84,7 +86,7 @@ impl Project {
                 parse_error: None,
             };
             let src = std::fs::read_to_string(&path)?;
-            match sexpr::parse_top(&src) {
+            match sexpr::parse_top_spanned(&src) {
                 Ok(forms) => extract_file(&mut project, &mut file, forms),
                 Err(e) => file.parse_error = Some(e.to_string()),
             }
@@ -170,9 +172,9 @@ fn collect_refs(e: &Sexpr, params: &BTreeSet<String>, out: &mut BTreeSet<String>
     }
 }
 
-fn extract_file(project: &mut Project, file: &mut ShardFile, forms: Vec<Sexpr>) {
+fn extract_file(project: &mut Project, file: &mut ShardFile, forms: Vec<(Sexpr, String)>) {
     let file_idx = project.files.len();
-    for form in forms {
+    for (form, src) in forms {
         match form.head() {
             Some("import") => {
                 if let Sexpr::List(items) = &form
@@ -182,7 +184,7 @@ fn extract_file(project: &mut Project, file: &mut ShardFile, forms: Vec<Sexpr>) 
                 }
             }
             Some("fn") => {
-                if let Some(def) = parse_fn(&form, file_idx, false) {
+                if let Some(def) = parse_fn(&form, file_idx, false, src) {
                     let idx = project.fns.len();
                     file.fns.push(idx);
                     project.fns.push(def);
@@ -192,7 +194,7 @@ fn extract_file(project: &mut Project, file: &mut ShardFile, forms: Vec<Sexpr>) 
                 // (sig fn NAME PARAMS RET) — a bodyless signature.
                 if let Sexpr::List(items) = &form
                     && items.get(1).and_then(|s| s.as_sym()) == Some("fn")
-                    && let Some(def) = parse_fn_from(&items[1..], file_idx, true)
+                    && let Some(def) = parse_fn_from(&items[1..], file_idx, true, src)
                 {
                     let idx = project.fns.len();
                     file.fns.push(idx);
@@ -219,13 +221,13 @@ fn extract_file(project: &mut Project, file: &mut ShardFile, forms: Vec<Sexpr>) 
 }
 
 /// Parse a `(fn NAME PARAMS RET BODY...)` form.
-fn parse_fn(form: &Sexpr, file: usize, is_sig: bool) -> Option<FnDef> {
+fn parse_fn(form: &Sexpr, file: usize, is_sig: bool, src: String) -> Option<FnDef> {
     let items = form.as_list()?;
-    parse_fn_from(items, file, is_sig)
+    parse_fn_from(items, file, is_sig, src)
 }
 
 /// `items` starts at the `fn` head: `[fn, NAME, PARAMS, RET, BODY...]`.
-fn parse_fn_from(items: &[Sexpr], file: usize, is_sig: bool) -> Option<FnDef> {
+fn parse_fn_from(items: &[Sexpr], file: usize, is_sig: bool, src: String) -> Option<FnDef> {
     let name = items.get(1)?.as_sym()?.to_string();
     let params = parse_params(items.get(2));
     let ret = items.get(3).map(pretty).unwrap_or_default();
@@ -241,6 +243,7 @@ fn parse_fn_from(items: &[Sexpr], file: usize, is_sig: bool) -> Option<FnDef> {
         body,
         file,
         is_sig,
+        src,
         calls: Vec::new(),
     })
 }
