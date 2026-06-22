@@ -154,8 +154,11 @@ fn node_box(project: &Project, node: &Node, selected_fn: Option<usize>) -> El {
     .gap(2.0)
     .padding(8.0)
     .radius(8.0)
-    .key(format!("fn:{}", node.fn_idx))
-    .focusable();
+    // Keyed (so clicks route and pan-drag skips them) but NOT focusable: the
+    // auto hover/press envelope on focusable nodes flashes the fill as the
+    // cursor sweeps across the dense graph. Selection highlight (below) is the
+    // only per-node visual state we want.
+    .key(format!("fn:{}", node.fn_idx));
     if selected {
         b.fill(tokens::ACCENT).stroke(tokens::RING)
     } else if f.is_sig {
