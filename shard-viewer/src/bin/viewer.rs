@@ -108,10 +108,11 @@ impl App for Viewer {
         // damascene's default scroll handling.
         let over_graph = event
             .route()
-            .is_some_and(|r| r == CANVAS_KEY || r.starts_with("fn:") || r == "edges");
+            .is_some_and(|r| r == CANVAS_KEY || r.starts_with("fn:"));
         if over_graph {
             if let Some(dy) = event.wheel_dy() {
-                self.zoom_by(if dy > 0.0 { 1.1 } else { 1.0 / 1.1 });
+                // dy > 0 is scroll-down (damascene wheel convention) → zoom out.
+                self.zoom_by(if dy > 0.0 { 1.0 / 1.1 } else { 1.1 });
             }
             return true;
         }

@@ -107,7 +107,9 @@ fn canvas(project: &Project, file_idx: usize, p: &ViewParams) -> El {
     let mut children: Vec<El> = Vec::with_capacity(gl.nodes.len() + 1);
     // Edge overlay: drawn in unscaled canvas coords; the element rect below is
     // sized cw*z × ch*z, so the whole asset scales by `z` to match the nodes.
-    children.push(vector(edges_asset(&gl)).key("edges"));
+    // Deliberately unkeyed — it spans the whole graph, so keying it would make
+    // it (not the canvas background) the pointer target and swallow pan drags.
+    children.push(vector(edges_asset(&gl)));
     for node in &gl.nodes {
         children.push(node_box(project, node, p.selected_fn, z));
     }
