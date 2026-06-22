@@ -18,9 +18,12 @@ First milestone — the **call-graph (methods) view**:
 - Sidebar lists every `.shard` file with its fn count; click to switch.
 - The canvas draws the selected file's fns as boxes (name + `N args → Ret`)
   with intra-file call edges as curved arrows.
-- Layout is layered left-to-right (callers → callees) with **SCC condensation**,
-  so shard's mutual-recursion cycles collapse into one column instead of
-  smearing across the canvas.
+- Layout is a generic, semantics-agnostic **layered (Sugiyama) engine**
+  (`layout.rs`): SCC condensation (cycles share a column) → dummy nodes for
+  long edges → barycenter crossing reduction → iterative coordinate assignment
+  → port-aware polyline routing. Nodes carry input/output **ports** and a
+  reserved `sub` nesting hook, so the planned s-expr **dataflow (LabVIEW-style)
+  view** plugs into the same engine. The call-graph view is its first client.
 - **Pan** by dragging an empty area of the canvas; **zoom** with the mouse wheel
   (toward the cursor). The canvas is damascene's native `viewport()` widget, so
   the transform follows hit-test for free. `Fit` frames the whole graph;

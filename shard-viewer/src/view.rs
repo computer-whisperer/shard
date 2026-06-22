@@ -4,9 +4,10 @@
 //! tree can be rendered headlessly — to SVG + a lint report — without a GPU or
 //! a window. That headless render is the build-time review loop.
 
-use crate::layout::{self, GraphLayout, Node};
+use crate::layout::{self, EndPoint, GEdge, GNode, Graph, Layout};
 use crate::model::Project;
 use damascene_core::prelude::*;
+use std::collections::HashMap;
 
 /// Everything the view needs from the running app, snapshotted per frame.
 pub struct ViewParams {
@@ -96,22 +97,24 @@ fn toolbar(project: &Project, p: &ViewParams) -> El {
 }
 
 fn canvas(project: &Project, file_idx: usize, p: &ViewParams) -> El {
-    let gl = layout::layout_file(project, file_idx);
-    if gl.nodes.is_empty() {
+    let (graph, fn_of) = build_call_graph(project, file_idx);
+    if graph.nodes.is_empty() {
         return column([text("This file defines no fns.").muted()]).padding(tokens::SPACE_8);
     }
 
-    let mut children: Vec<El> = Vec::with_capacity(gl.nodes.len() + 1);
+    let lay = layout::layout(&graph, &layout::LayoutConfig::default());
+
+    let mut children: Vec<El> = Vec::with_capacity(lay.nodes.len() + 1);
     // Edge overlay, drawn in content coordinates; the viewport transform scales
     // it for free. Unkeyed so it never intercepts the background pan drag.
-    children.push(vector(edges_asset(&gl)));
-    for node in &gl.nodes {
-        children.push(node_box(project, node, p.selected_fn));
+    children.push(vector(edges_asset(&lay)));
+    for (i, pn) in lay.nodes.iter().enumerate() {
+        children.push(node_box(project, fn_of[i], p.selected_fn, pn.w, pn.h));
     }
 
     let positions: Vec<(f32, f32, f32, f32)> =
-        gl.nodes.iter().map(|n| (n.x, n.y, n.w, n.h)).collect();
-    let (cw, ch) = (gl.width, gl.height);
+        lay.nodes.iter().map(|n| (n.x, n.y, n.w, n.h)).collect();
+    let (cw, ch) = (lay.width, lay.height);
 
     // The content layer: nodes placed at their absolute graph coordinates. No
     // pan/zoom math here — the `viewport()` wrapper bakes the transform into
@@ -141,9 +144,54 @@ fn canvas(project: &Project, file_idx: usize, p: &ViewParams) -> El {
         .height(Size::Fill(1.0))
 }
 
-fn node_box(project: &Project, node: &Node, selected_fn: Option<usize>) -> El {
-    let f = &project.fns[node.fn_idx];
-    let selected = selected_fn == Some(node.fn_idx);
+/// Build the engine `Graph` for a file's intra-file call graph, plus the fn
+/// index behind each graph node (index-aligned with the layout result).
+fn build_call_graph(project: &Project, file_idx: usize) -> (Graph, Vec<usize>) {
+    let fn_of: Vec<usize> = project.files[file_idx].fns.clone();
+    let local: HashMap<usize, usize> = fn_of.iter().enumerate().map(|(i, &g)| (g, i)).collect();
+
+    let nodes: Vec<GNode> = fn_of
+        .iter()
+        .map(|&g| {
+            let (w, h) = node_size(project, g);
+            GNode::simple(w, h)
+        })
+        .collect();
+
+    let mut seen = std::collections::HashSet::new();
+    let mut edges = Vec::new();
+    for (i, &g) in fn_of.iter().enumerate() {
+        for &callee in &project.fns[g].calls {
+            if let Some(&j) = local.get(&callee)
+                && i != j
+                && seen.insert((i, j))
+            {
+                edges.push(GEdge {
+                    from: EndPoint { node: i, port: 0 },
+                    to: EndPoint { node: j, port: 0 },
+                });
+            }
+        }
+    }
+    (Graph { nodes, edges }, fn_of)
+}
+
+/// Intrinsic node size: width tracks the longer of the two label lines so the
+/// engine can pack columns tightly; height fits two text lines.
+fn node_size(project: &Project, fn_idx: usize) -> (f32, f32) {
+    let f = &project.fns[fn_idx];
+    let title_len = f.name.chars().count() + if f.is_sig { 6 } else { 0 };
+    let sub_len = format!("{} args → {}", f.params.len(), short_ty(&f.ret))
+        .chars()
+        .count();
+    let chars = title_len.max(sub_len) as f32;
+    let w = (chars * 7.5 + 24.0).clamp(140.0, 300.0);
+    (w, 46.0)
+}
+
+fn node_box(project: &Project, fn_idx: usize, selected_fn: Option<usize>, w: f32, h: f32) -> El {
+    let f = &project.fns[fn_idx];
+    let selected = selected_fn == Some(fn_idx);
     let title = if f.is_sig {
         format!("{}  (sig)", f.name)
     } else {
@@ -157,11 +205,13 @@ fn node_box(project: &Project, node: &Node, selected_fn: Option<usize>) -> El {
     .gap(2.0)
     .padding(8.0)
     .radius(8.0)
+    .width(Size::Fixed(w))
+    .height(Size::Fixed(h))
     // Keyed (so clicks route and pan-drag skips them) but NOT focusable: the
     // auto hover/press envelope on focusable nodes flashes the fill as the
     // cursor sweeps across the dense graph. Selection highlight (below) is the
     // only per-node visual state we want.
-    .key(format!("fn:{}", node.fn_idx));
+    .key(format!("fn:{fn_idx}"));
     if selected {
         b.fill(tokens::ACCENT).stroke(tokens::RING)
     } else if f.is_sig {
@@ -236,27 +286,55 @@ fn fn_link_list(project: &Project, fns: &[usize]) -> El {
     column(chips).gap(2.0)
 }
 
-fn edges_asset(gl: &GraphLayout) -> VectorAsset {
+fn edges_asset(lay: &Layout) -> VectorAsset {
     let mut paths = Vec::new();
-    for &(a, b) in &gl.edges {
-        let na = &gl.nodes[a];
-        let nb = &gl.nodes[b];
-        let x1 = na.x + na.w;
-        let y1 = na.y + na.h / 2.0;
-        let x2 = nb.x;
-        let y2 = nb.y + nb.h / 2.0;
-        let dx = (x2 - x1).abs().max(40.0);
-        let (c1x, c2x) = (x1 + dx * 0.5, x2 - dx * 0.5);
-        paths.push(
-            PathBuilder::new()
-                .move_to(x1, y1)
-                .cubic_to(c1x, y1, c2x, y2, x2, y2)
-                .stroke_solid(tokens::MUTED_FOREGROUND, 1.5)
-                .build(),
-        );
-        paths.push(arrowhead(c2x, y2, x2, y2));
+    for e in &lay.edges {
+        if e.points.len() < 2 {
+            continue;
+        }
+        paths.push(edge_curve(&e.points));
+        let n = e.points.len();
+        let (fx, fy) = e.points[n - 2];
+        let (tx, ty) = e.points[n - 1];
+        paths.push(arrowhead(fx, fy, tx, ty));
     }
-    VectorAsset::from_paths([0.0, 0.0, gl.width, gl.height], paths)
+    VectorAsset::from_paths([0.0, 0.0, lay.width, lay.height], paths)
+}
+
+/// Build a stroked path along an edge's routed polyline. Forward edges (target
+/// to the right of the source) get a smooth spline with horizontal tangents at
+/// the ports and Catmull-Rom interiors through the dummy bends; backward /
+/// same-column edges fall back to straight segments.
+fn edge_curve(pts: &[(f32, f32)]) -> VectorPath {
+    let n = pts.len();
+    let mut pb = PathBuilder::new().move_to(pts[0].0, pts[0].1);
+    let backward = pts[n - 1].0 <= pts[0].0 + 1.0;
+    if backward {
+        for &(x, y) in &pts[1..] {
+            pb = pb.line_to(x, y);
+        }
+    } else {
+        for i in 0..n - 1 {
+            let p0 = pts[i];
+            let p1 = pts[i + 1];
+            // Outgoing tangent at p0.
+            let m0 = if i == 0 {
+                ((p1.0 - p0.0).max(40.0) * 0.5, 0.0) // leave the out-port horizontally
+            } else {
+                let pm = pts[i - 1];
+                ((p1.0 - pm.0) / 6.0, (p1.1 - pm.1) / 6.0)
+            };
+            // Incoming tangent at p1.
+            let m1 = if i + 1 == n - 1 {
+                (-(p1.0 - p0.0).max(40.0) * 0.5, 0.0) // enter the in-port horizontally
+            } else {
+                let pp = pts[i + 2];
+                (-(pp.0 - p0.0) / 6.0, -(pp.1 - p0.1) / 6.0)
+            };
+            pb = pb.cubic_to(p0.0 + m0.0, p0.1 + m0.1, p1.0 + m1.0, p1.1 + m1.1, p1.0, p1.1);
+        }
+    }
+    pb.stroke_solid(tokens::MUTED_FOREGROUND, 1.5).build()
 }
 
 /// A small filled triangle at `(tip_x, tip_y)` pointing along the direction
