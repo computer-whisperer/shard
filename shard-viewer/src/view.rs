@@ -129,13 +129,16 @@ fn canvas(project: &Project, file_idx: usize, p: &ViewParams) -> El {
             rects
         });
 
+    // No `.fill()` here: the per-node hover envelope brightens the fill of any
+    // keyed node, and the viewport must be keyed (for ViewportRequest + state).
+    // A fill would flash as the cursor transits between the background and node
+    // children. Left unfilled, the canvas shows the window BACKGROUND instead.
     viewport([content])
         .key(CANVAS_KEY)
         .min_zoom(MIN_ZOOM)
         .max_zoom(MAX_ZOOM)
         .width(Size::Fill(1.0))
         .height(Size::Fill(1.0))
-        .fill(tokens::BACKGROUND)
 }
 
 fn node_box(project: &Project, node: &Node, selected_fn: Option<usize>) -> El {
