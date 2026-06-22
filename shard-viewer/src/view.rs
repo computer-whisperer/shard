@@ -12,14 +12,15 @@ use damascene_core::prelude::*;
 pub struct ViewParams {
     pub selected_file: Option<usize>,
     pub selected_fn: Option<usize>,
-    /// Canvas zoom factor (1.0 = 100%).
+    /// Current viewport zoom (read back from the runtime), for display only.
     pub zoom: f32,
-    /// Canvas pan offset in logical pixels.
-    pub pan: (f32, f32),
 }
 
-/// Key of the canvas background — pointer events here drive pan.
+/// Key of the pan/zoom viewport — also the target of `ViewportRequest`s.
 pub const CANVAS_KEY: &str = "canvas";
+
+const MIN_ZOOM: f32 = 0.15;
+const MAX_ZOOM: f32 = 3.0;
 
 const TITLE_SIZE: f32 = 13.0;
 const SUB_SIZE: f32 = 11.0;
@@ -82,14 +83,13 @@ fn toolbar(project: &Project, p: &ViewParams) -> El {
     row([
         title,
         spacer(),
-        button("−").key("zoom_out").secondary(),
         text(format!("{:.0}%", p.zoom * 100.0))
             .mono()
             .muted()
             .center_text()
             .width(Size::Fixed(52.0)),
-        button("+").key("zoom_in").secondary(),
-        button("Reset view").key("zoom_reset").ghost(),
+        button("Fit").key("fit").secondary(),
+        button("Reset view").key("reset").ghost(),
     ])
     .gap(tokens::SPACE_2)
     .padding(tokens::SPACE_2)
@@ -101,43 +101,44 @@ fn canvas(project: &Project, file_idx: usize, p: &ViewParams) -> El {
         return column([text("This file defines no fns.").muted()]).padding(tokens::SPACE_8);
     }
 
-    let z = p.zoom;
-    let (px, py) = p.pan;
-
     let mut children: Vec<El> = Vec::with_capacity(gl.nodes.len() + 1);
-    // Edge overlay: drawn in unscaled canvas coords; the element rect below is
-    // sized cw*z × ch*z, so the whole asset scales by `z` to match the nodes.
-    // Deliberately unkeyed — it spans the whole graph, so keying it would make
-    // it (not the canvas background) the pointer target and swallow pan drags.
+    // Edge overlay, drawn in content coordinates; the viewport transform scales
+    // it for free. Unkeyed so it never intercepts the background pan drag.
     children.push(vector(edges_asset(&gl)));
     for node in &gl.nodes {
-        children.push(node_box(project, node, p.selected_fn, z));
+        children.push(node_box(project, node, p.selected_fn));
     }
 
     let positions: Vec<(f32, f32, f32, f32)> =
         gl.nodes.iter().map(|n| (n.x, n.y, n.w, n.h)).collect();
     let (cw, ch) = (gl.width, gl.height);
 
-    stack(children)
-        .width(Size::Fill(1.0))
-        .height(Size::Fill(1.0))
-        .clip()
-        .fill(tokens::BACKGROUND)
-        .key(CANVAS_KEY)
+    // The content layer: nodes placed at their absolute graph coordinates. No
+    // pan/zoom math here — the `viewport()` wrapper bakes the transform into
+    // descendant rects (hit-test included) and scales per-node chrome.
+    let content = stack(children)
+        .width(Size::Fixed(cw))
+        .height(Size::Fixed(ch))
         .layout(move |ctx: LayoutCtx| {
-            // Pan + zoom are baked in here (damascene's `scale` transform does
-            // not propagate to descendants, so we can't lean on it).
             let o = ctx.container;
             let mut rects = Vec::with_capacity(positions.len() + 1);
-            rects.push(Rect::new(o.x + px, o.y + py, cw * z, ch * z));
+            rects.push(Rect::new(o.x, o.y, cw, ch));
             for &(x, y, w, h) in &positions {
-                rects.push(Rect::new(o.x + px + x * z, o.y + py + y * z, w * z, h * z));
+                rects.push(Rect::new(o.x + x, o.y + y, w, h));
             }
             rects
-        })
+        });
+
+    viewport([content])
+        .key(CANVAS_KEY)
+        .min_zoom(MIN_ZOOM)
+        .max_zoom(MAX_ZOOM)
+        .width(Size::Fill(1.0))
+        .height(Size::Fill(1.0))
+        .fill(tokens::BACKGROUND)
 }
 
-fn node_box(project: &Project, node: &Node, selected_fn: Option<usize>, z: f32) -> El {
+fn node_box(project: &Project, node: &Node, selected_fn: Option<usize>) -> El {
     let f = &project.fns[node.fn_idx];
     let selected = selected_fn == Some(node.fn_idx);
     let title = if f.is_sig {
@@ -147,20 +148,12 @@ fn node_box(project: &Project, node: &Node, selected_fn: Option<usize>, z: f32) 
     };
     let sub = format!("{} args → {}", f.params.len(), short_ty(&f.ret));
     let b = column([
-        text(title)
-            .mono()
-            .font_size(TITLE_SIZE * z)
-            .nowrap_text()
-            .ellipsis(),
-        text(sub)
-            .muted()
-            .font_size(SUB_SIZE * z)
-            .nowrap_text()
-            .ellipsis(),
+        text(title).mono().font_size(TITLE_SIZE).nowrap_text().ellipsis(),
+        text(sub).muted().font_size(SUB_SIZE).nowrap_text().ellipsis(),
     ])
-    .gap(2.0 * z)
-    .padding(8.0 * z)
-    .radius(8.0 * z)
+    .gap(2.0)
+    .padding(8.0)
+    .radius(8.0)
     .key(format!("fn:{}", node.fn_idx))
     .focusable();
     if selected {

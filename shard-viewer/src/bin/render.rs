@@ -45,16 +45,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .count()
         });
 
-    // Optional ZOOM env knob so the zoom math can be eyeballed headlessly.
-    let zoom = std::env::var("ZOOM")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(1.0);
     let params = ViewParams {
         selected_file: Some(file_idx),
         selected_fn,
-        zoom,
-        pan: (0.0, 0.0),
+        zoom: 1.0,
     };
     let mut root_el = view::app_root(&project, &params);
     let viewport = Rect::new(0.0, 0.0, 1600.0, 1000.0);

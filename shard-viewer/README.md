@@ -6,6 +6,11 @@ coupling to `rust_bootstrap`) and draws its **methods** as a call-graph flow
 chart, built on the [damascene](https://github.com/computer-whisperer/damascene)
 UI library.
 
+> **Dependency note:** this currently uses damascene's native `viewport()`
+> pan/zoom widget, which isn't in the published 0.4.3 yet, so `Cargo.toml`
+> points at a local damascene checkout via a path dependency. Switch back to a
+> crates.io version once a release ships `viewport()`.
+
 ## Status
 
 First milestone — the **call-graph (methods) view**:
@@ -17,7 +22,9 @@ First milestone — the **call-graph (methods) view**:
   so shard's mutual-recursion cycles collapse into one column instead of
   smearing across the canvas.
 - **Pan** by dragging an empty area of the canvas; **zoom** with the mouse wheel
-  or the toolbar `−` / `+` / `Reset view` controls.
+  (toward the cursor). The canvas is damascene's native `viewport()` widget, so
+  the transform follows hit-test for free. `Fit` frames the whole graph;
+  `Reset view` snaps to 1:1. The graph auto-fits when you switch files.
 - Click a fn box to open a **detail panel**: signature, the fn's real source
   text, and clickable **Calls** / **Called by** lists. Clicking a callee/caller
   (including cross-file) navigates to it, switching the canvas as needed.
