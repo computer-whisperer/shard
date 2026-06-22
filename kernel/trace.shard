@@ -24,6 +24,7 @@
 (import "expr_size.shard")  ; size / size_list — the render_* measure
 (import "module.shard")
 (import "proof.shard")
+(import "proof_size.shard")  ; proof_size / case_list_size — the trace SCC measure
 (import "checker.shard")
 (import "types.shard")
 (import "reduce.shard")
@@ -33,6 +34,7 @@
 (use (:: kernel expr_size *))
 (use (:: kernel module *))
 (use (:: kernel proof *))
+(use (:: kernel proof_size *))
 (use (:: kernel checker *))
 (use (:: kernel types *))
 (use (:: kernel reduce *))
@@ -743,11 +745,16 @@
    (depth Int)
    (verbose Bool))
   (List (List Int))
-  (match cps
+  ;; Match `proofs` (the measure variable) in the OUTER position so the
+  ;; recursion's size drop on (proof_list_size proofs) is visible to the gate
+  ;; from the scrutinee's own destructuring (mirrors check_premise_proofs).
+  ;; `cps` shrinks in lockstep; the truth table is unchanged.
+  (measure (proof_list_size proofs))
+  (match proofs
     (Nil
-      (match proofs
+      (match cps
         (Nil Nil)
-        (_
+        ((Cons cp _)
           (Cons
             (append_int
               (mk_ind depth)
@@ -755,10 +762,14 @@
                 "rewrite ("
                 (append_int
                   (render_eqref er)
-                  "): too many obligation sub-proofs")))
+                  (append_int
+                    "): missing sub-proof for obligation "
+                    (append_int
+                      (show_int k)
+                      (append_int ":  " (render_eq (subst_eq env cp))))))))
             Nil))))
-    ((Cons cp cp_rest)
-     (match proofs
+    ((Cons pf pf_rest)
+     (match cps
        (Nil
          (Cons
            (append_int
@@ -767,13 +778,9 @@
                "rewrite ("
                (append_int
                  (render_eqref er)
-                 (append_int
-                   "): missing sub-proof for obligation "
-                   (append_int
-                     (show_int k)
-                     (append_int ":  " (render_eq (subst_eq env cp))))))))
+                 "): too many obligation sub-proofs")))
            Nil))
-       ((Cons pf pf_rest)
+       ((Cons cp cp_rest)
         (match seq
           ((Sequent s_params s_hyps s_premises _)
            (let
@@ -864,6 +871,7 @@
 (fn trace_proof
   ((m Module) (th Theory) (seq Sequent) (pf Proof) (depth Int) (verbose Bool))
   (List (List Int))
+  (measure (proof_size pf))
   (match pf
     ((Admit)
      (Cons
@@ -1037,7 +1045,57 @@
                   (append_int (chars_of_sym (qn_name ty)) " value)")))
               (context_lines seq depth)))
           ((Some _) (trace_cases m th seq scrut ty cases depth verbose))))))
-    ((Induct var cases) (trace_induct m th seq var cases depth verbose))
+    ;; Induct setup is INLINED here (rather than a trace_induct forwarder) so the
+    ;; only recursive edges are the direct iterator calls below — that keeps every
+    ;; SCC edge an honest size drop on (proof_size pf). Mirrors check_sequent's
+    ;; Induct arm + the check_induct_exhaustive / check_induct_proofs split.
+    ((Induct var cases)
+     ;; Pinpointing a failing induction case re-runs check_sequent per case
+     ;; (~doubling the claim's cost) — fine when FOCUSED to debug (verbose), too
+     ;; expensive for a full run, so non-verbose keeps the cheap one-liner.
+     (if verbose
+       (match seq
+         ((Sequent params _ _ _)
+          (match (find_param var params)
+            (None
+              (Cons
+                (append_int
+                  (mk_ind depth)
+                  "Induct — induction variable not in scope")
+                Nil))
+            ((Some (Param _ var_type))
+             (match (type_head var_type)
+               (None
+                 (Cons
+                   (append_int
+                     (mk_ind depth)
+                     "Induct — variable has a type-variable type")
+                   Nil))
+               ((Some (Pair tname targs))
+                (match (lookup_typedef tname m)
+                  (None
+                    (Cons
+                      (append_int (mk_ind depth) "Induct — unknown datatype")
+                      Nil))
+                  ((Some (TypeDef _ tparams ctors))
+                   (append_lines
+                     (trace_induct_proofs
+                       m
+                       th
+                       seq
+                       var
+                       var_type
+                       (zip_pairs tparams targs)
+                       ctors
+                       cases
+                       depth
+                       verbose)
+                     (trace_induct_missing ctors cases depth))))))))))
+     (Cons
+       (append_int
+         (mk_ind depth)
+         "Induct — branching proof (focus this claim to trace its cases)")
+       Nil)))
     ((Induct2 var cases)
      (Cons
        (append_int
@@ -1255,6 +1313,7 @@
    (depth Int)
    (verbose Bool))
   (List (List Int))
+  (measure (fincase_list_size cases))
   (match cases
     (Nil Nil)
     ((Cons (FinCase v sub) rest)
@@ -1283,6 +1342,23 @@
              (trace_proof m th subgoal sub (+ depth 1) verbose))))
        (trace_fin_split m th seq var rest depth verbose)))))
 
+;; the "case <scrut> = <ctor><tag>" header line (non-recursive; OUT of the SCC).
+(fn caseon_line ((scrut Expr) (cname QName) (depth Int) (tag (List Int)))
+  (List Int)
+  (append_int
+    (mk_ind depth)
+    (append_int
+      "case "
+      (append_int
+        (render_term scrut)
+        (append_int " = " (append_int (chars_of_sym (qn_name cname)) tag))))))
+
+;; CaseOn case tracing. Iterates the CASES (IN the SCC) and descends into each
+;; sub-proof; the lone trace_proof edge is on the structurally-matched `pf`, so
+;; the recursion is an honest size drop on (case_list_size cases) (mirrors the
+;; checker's check_caseon_proofs). The per-case body is inlined in the two ctor
+;; arms (was the trace_case / trace_case_full forwarders) precisely so `pf` is a
+;; visible structural sub-proof.
 (fn trace_cases
   ((m Module)
    (th Theory)
@@ -1293,174 +1369,81 @@
    (depth Int)
    (verbose Bool))
   (List (List Int))
+  (measure (case_list_size cases))
   (match cases
     (Nil Nil)
-    ((Cons c rest)
+    ((Cons (Case cname pf) rest)
      (append_lines
-       (trace_case m th seq scrut ty c depth verbose)
+       (match (dbg_caseon_subgoal m seq scrut ty cname Nil)
+         (None
+           (Cons
+             (append_int
+               (mk_ind depth)
+               (append_int
+                 "case "
+                 (append_int
+                   (chars_of_sym (qn_name cname))
+                   ": could not rebuild subgoal")))
+             Nil))
+         ((Some subgoal)
+          (if (check_sequent m th subgoal pf)
+            (if verbose
+              (Cons
+                (caseon_line scrut cname depth ":")
+                (trace_proof m th subgoal pf (+ depth 1) verbose))
+              (Cons (caseon_line scrut cname depth ": ok") Nil))
+            (Cons
+              (caseon_line scrut cname depth ":  FAILS  v v v")
+              (trace_proof m th subgoal pf (+ depth 1) verbose)))))
+       (trace_cases m th seq scrut ty rest depth verbose)))
+    ((Cons (CaseB cname names pf) rest)
+     (append_lines
+       (match (dbg_caseon_subgoal m seq scrut ty cname names)
+         (None
+           (Cons
+             (append_int
+               (mk_ind depth)
+               (append_int
+                 "case "
+                 (append_int
+                   (chars_of_sym (qn_name cname))
+                   ": could not rebuild subgoal")))
+             Nil))
+         ((Some subgoal)
+          (if (check_sequent m th subgoal pf)
+            (if verbose
+              (Cons
+                (caseon_line scrut cname depth ":")
+                (trace_proof m th subgoal pf (+ depth 1) verbose))
+              (Cons (caseon_line scrut cname depth ": ok") Nil))
+            (Cons
+              (caseon_line scrut cname depth ":  FAILS  v v v")
+              (trace_proof m th subgoal pf (+ depth 1) verbose)))))
        (trace_cases m th seq scrut ty rest depth verbose)))))
 
-(fn trace_case
-  ((m Module)
-   (th Theory)
-   (seq Sequent)
-   (scrut Expr)
-   (ty QName)
-   (c Case)
-   (depth Int)
-   (verbose Bool))
-  (List (List Int))
-  (let ((cname (case_name c)) (names (case_field_names c)) (sub (case_proof c)))
-    (match (dbg_caseon_subgoal m seq scrut ty cname names)
-      (None
-        (Cons
-          (append_int
-            (mk_ind depth)
-            (append_int
-              "case "
-              (append_int
-                (chars_of_sym (qn_name cname))
-                ": could not rebuild subgoal")))
-          Nil))
-      ((Some subgoal)
-       (let ((passes (check_sequent m th subgoal sub)))
-         (if passes
-           (if verbose
-             (trace_case_full m th subgoal sub scrut cname depth verbose ":")
-             ;; passing, non-verbose: the short "ok" line
-             (Cons
-               (append_int
-                 (mk_ind depth)
-                 (append_int
-                   "case "
-                   (append_int
-                     (render_term scrut)
-                     (append_int
-                       " = "
-                       (append_int (chars_of_sym (qn_name cname)) ": ok")))))
-               Nil))
-           (trace_case_full
-             m
-             th
-             subgoal
-             sub
-             scrut
-             cname
-             depth
-             verbose
-             ":  FAILS  v v v")))))))
-
-;; the header line (with `tag` after the ctor name) + the recursive sub-trace.
-(fn trace_case_full
-  ((m Module)
-   (th Theory)
-   (subgoal Sequent)
-   (sub Proof)
-   (scrut Expr)
-   (cname QName)
-   (depth Int)
-   (verbose Bool)
-   (tag (List Int)))
-  (List (List Int))
-  (Cons
-    (append_int
-      (mk_ind depth)
-      (append_int
-        "case "
-        (append_int
-          (render_term scrut)
-          (append_int " = " (append_int (chars_of_sym (qn_name cname)) tag)))))
-    (trace_proof m th subgoal sub (+ depth 1) verbose)))
-
-;; Case/CaseB accessors (cname, author-named fields, sub-proof).
-(fn case_name ((c Case)) QName
-  (match c
-    ((Case cn p) cn)
-    ((CaseB cn fs p) cn)))
-(fn case_field_names ((c Case)) (List Symbol)
-  (match c
-    ((Case cn p) Nil)
-    ((CaseB cn fs p) fs)))
-(fn case_proof ((c Case)) Proof
-  (match c
-    ((Case cn p) p)
-    ((CaseB cn fs p) p)))
-
 ;; ---- branch-aware Induct tracing -------------------------------------------
-;; Mirrors do_induct + check_induct_cases (checker.shard) to rebuild each
-;; constructor case's subgoal (with its IH), then — instead of returning a
-;; Bool — check_sequents each case and DESCENDS into the failing one, rendering
-;; its per-step trace. Passing cases get a one-line "ok". This replaces the old
-;; "Induct — trace stops here" so a failure buried in an induction case is
-;; pinpointed. Untrusted: it only re-runs the trusted check_sequent + renders.
-(fn trace_induct
-  ((m Module)
-   (th Theory)
-   (seq Sequent)
-   (var Symbol)
-   (cases (List Case))
-   (depth Int)
-   (verbose Bool))
-  (List (List Int))
-  ;; Pinpointing a failing induction case means re-running check_sequent on each
-  ;; case (to find the failing one) + replaying it — roughly doubling the cost of
-  ;; the claim. That is fine when you've FOCUSED one claim to debug it (verbose),
-  ;; but too expensive to do for every failure in a full run. So a non-verbose
-  ;; failure_detail keeps the cheap one-liner; focus the claim (pass its name as
-  ;; the 2nd arg to check) to get the per-case trace.
-  (if verbose (trace_induct_v m th seq var cases depth)
-  (Cons
-    (append_int
-      (mk_ind depth)
-      "Induct — branching proof (focus this claim to trace its cases)")
-    Nil)))
+;; Mirrors check_sequent's Induct arm (the setup is inlined into trace_proof) +
+;; the checker's check_induct_exhaustive / check_induct_proofs split: the
+;; proof-carrying recursion iterates the CASES (so each sub-proof is a visible
+;; structural sub-proof ⇒ an honest (case_list_size cases) drop), while coverage
+;; / MISSING reporting iterates the CTORS separately (structural, OUT of the
+;; SCC). Instead of returning a Bool it check_sequents each case and DESCENDS
+;; into a failing one, rendering its per-step trace; passing cases get an "ok".
+;; Untrusted: it only re-runs the trusted check_sequent + renders.
 
-;; The verbose body: rebuild each case's subgoal (as do_induct does) and descend.
-(fn trace_induct_v
-  ((m Module)
-   (th Theory)
-   (seq Sequent)
-   (var Symbol)
-   (cases (List Case))
-   (depth Int))
-  (List (List Int))
-  (match seq
-    ((Sequent params _ _ _)
-     (match (find_param var params)
-       (None
-         (Cons
-           (append_int
-             (mk_ind depth)
-             "Induct — induction variable not in scope")
-           Nil))
-       ((Some (Param _ var_type))
-        (match (type_head var_type)
-          (None
-            (Cons
-              (append_int
-                (mk_ind depth)
-                "Induct — variable has a type-variable type")
-              Nil))
-          ((Some (Pair tname targs))
-           (match (lookup_typedef tname m)
-             (None
-               (Cons
-                 (append_int (mk_ind depth) "Induct — unknown datatype")
-                 Nil))
-             ((Some (TypeDef _ tparams ctors))
-              (trace_induct_cases
-                m
-                th
-                seq
-                var
-                var_type
-                (zip_pairs tparams targs)
-                ctors
-                cases
-                depth
-                True))))))))))
+;; the "case <ctor><tag>" line for an induction case (no scrutinee term).
+(fn caseind_line ((cname QName) (depth Int) (tag (List Int))) (List Int)
+  (append_int
+    (mk_ind depth)
+    (append_int "case " (append_int (chars_of_sym (qn_name cname)) tag))))
 
-(fn trace_induct_cases
+;; Iterate the CASES (IN the SCC): per case, look the ctor's field types up by
+;; the case's own name (structural on ctors), rebuild its subgoal, check, and
+;; descend into the failing one. A spurious case (ctor not in the type) is
+;; ignored (its absence is not coverage — that's trace_induct_missing's job).
+;; The per-case body is inlined in the two ctor arms so the lone trace_proof
+;; edge is on the structurally-matched `pf`.
+(fn trace_induct_proofs
   ((m Module)
    (th Theory)
    (seq Sequent)
@@ -1472,20 +1455,35 @@
    (depth Int)
    (verbose Bool))
   (List (List Int))
-  (match ctors
+  (measure (case_list_size cases))
+  (match cases
     (Nil Nil)
-    ((Cons (CtorDef cname field_types) rest)
+    ((Cons (Case cname pf) rest)
      (append_lines
-       (match (find_case cname cases)
-         (None
-           (Cons
-             (append_int
-               (mk_ind depth)
-               (append_int
-                 "case "
-                 (append_int (chars_of_sym (qn_name cname)) ": MISSING")))
-             Nil))
-         ((Some (Pair names case_pf))
+       (match (find_ctor_fields cname ctors)
+         (None Nil)  ; spurious case — coverage reported separately
+         ((Some field_types)
+          (let
+            ((subgoal
+               (build_induct_subgoal
+                 seq
+                 var
+                 var_type
+                 cname
+                 Nil
+                 (type_subst_list type_env field_types))))
+            (if (check_sequent m th subgoal pf)
+              (Cons (caseind_line cname depth ": ok") Nil)
+              (Cons
+                (caseind_line cname depth ":  FAILS  v v v")
+                (trace_proof m th subgoal pf (+ depth 1) verbose))))))
+       (trace_induct_proofs m th seq var var_type type_env ctors rest depth
+         verbose)))
+    ((Cons (CaseB cname names pf) rest)
+     (append_lines
+       (match (find_ctor_fields cname ctors)
+         (None Nil)
+         ((Some field_types)
           (let
             ((subgoal
                (build_induct_subgoal
@@ -1495,25 +1493,29 @@
                  cname
                  names
                  (type_subst_list type_env field_types))))
-            (if (check_sequent m th subgoal case_pf)
+            (if (check_sequent m th subgoal pf)
+              (Cons (caseind_line cname depth ": ok") Nil)
               (Cons
-                (append_int
-                  (mk_ind depth)
-                  (append_int
-                    "case "
-                    (append_int (chars_of_sym (qn_name cname)) ": ok")))
-                Nil)
-              (Cons
-                (append_int
-                  (mk_ind depth)
-                  (append_int
-                    "case "
-                    (append_int
-                      (chars_of_sym (qn_name cname))
-                      ":  FAILS  v v v")))
-                (trace_proof m th subgoal case_pf (+ depth 1) verbose))))))
-       (trace_induct_cases m th seq var var_type type_env rest cases depth
+                (caseind_line cname depth ":  FAILS  v v v")
+                (trace_proof m th subgoal pf (+ depth 1) verbose))))))
+       (trace_induct_proofs m th seq var var_type type_env ctors rest depth
          verbose)))))
+
+;; Iterate the CTORS (structural, OUT of the SCC — never descends into a proof):
+;; emit a "case <ctor>: MISSING" line for every ctor the author left uncovered.
+(fn trace_induct_missing
+  ((ctors (List CtorDef)) (cases (List Case)) (depth Int))
+  (List (List Int))
+  (measure (struct ctors))
+  (match ctors
+    (Nil Nil)
+    ((Cons (CtorDef cname _) rest)
+     (match (find_case cname cases)
+       (None
+         (Cons
+           (caseind_line cname depth ": MISSING")
+           (trace_induct_missing rest cases depth)))
+       ((Some _) (trace_induct_missing rest cases depth))))))
 
 ;; ---- top-level entries -----------------------------------------------------
 ;; The multi-line indented diagnostic for a failed claim: the goal (with
