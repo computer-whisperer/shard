@@ -1676,6 +1676,245 @@
     (Nil b)
     ((Cons h t) (Cons h (ms_app_subs t b)))))
 
+;; ─── nested-decrease family ──────────────────────────────────────────────────
+;; A member that recurses on a binder nested TWO levels into its scrutinee (e.g.
+;; mc_walk_arms recurses on `body`, where arms=(Cons arm rest) and arm=(SList
+;; (Cons pat (Cons body Nil)))) needs two things the flat recipe lacks:
+;;   1. the INTERMEDIATE premise (arm=…) rewritten too, not just the goal-named
+;;      one (arms=…) — `body` only surfaces after both rewrites unfold;
+;;   2. a `have` per surviving sibling of a DIFFERENT size fn each (size_sexpr
+;;      pat AND size_sexpr_list rest) — one cert mixing two size fns.
+;; This family fires only when premises are genuinely chained (a premise's bound
+;; var appears as a subterm of another premise), and its candidates are appended
+;; AFTER the flat families so already-solved obligations keep their winner.
+
+;; the LHS bound vars of all structural premises (the intermediates that get
+;; substituted away by the rewrites — excluded from the surviving-leaf set).
+(fn ms_lhs_vars ((prems (List SExpr))) (List Symbol)
+  (measure (struct prems))
+  (match prems
+    (Nil Nil)
+    ((Cons p rest)
+     (match (ms_var_of_prem p)
+       ((Some v)
+        (if (ms_is_struct_prem p) (Cons v (ms_lhs_vars rest)) (ms_lhs_vars rest)))
+       (None (ms_lhs_vars rest))))))
+
+;; the RHS subterm vars of one structural premise, added to acc.
+(fn ms_prem_rhs_vars ((p SExpr) (acc (List Symbol))) (List Symbol)
+  (match p
+    ((SList (Cons (SSym _eq) (Cons (SSym _v) (Cons rhs Nil)))) (ms_vars rhs acc))
+    (_ acc)))
+
+;; close gv over the chained premises: a structural premise whose bound var is
+;; already in gv contributes its RHS subterms (so the rewrite of the outer
+;; premise exposes the inner var, which is then itself rewritten). One forward
+;; pass handles outer-before-inner premise order; callers run it twice so either
+;; order resolves a two-level chain.
+(fn ms_gv_close_1 ((prems (List SExpr)) (gv (List Symbol))) (List Symbol)
+  (measure (struct prems))
+  (match prems
+    (Nil gv)
+    ((Cons p rest)
+     (ms_gv_close_1 rest
+       (match (ms_var_of_prem p)
+         ((Some v)
+          (if (ms_is_struct_prem p)
+            (if (ms_sym_in v gv) (ms_prem_rhs_vars p gv) gv)
+            gv))
+         (None gv))))))
+
+(fn ms_gv_close ((prems (List SExpr)) (gv (List Symbol))) (List Symbol)
+  (ms_gv_close_1 prems (ms_gv_close_1 prems gv)))
+
+(fn ms_any_in ((xs (List Symbol)) (ys (List Symbol))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil False)
+    ((Cons h t) (if (ms_sym_in h ys) True (ms_any_in t ys)))))
+
+;; premises are chained iff some structural premise's bound var is a subterm of
+;; another — the trigger for the nested family.
+(fn ms_has_nesting ((prems (List SExpr))) Bool
+  (ms_any_in (ms_lhs_vars prems) (ms_subterms prems Nil)))
+
+(fn ms_len ((xs (List Symbol))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons _ t) (+ 1 (ms_len t)))))
+
+;; a LEAF ctor (SSym/SInt/SStr) carries a non-SExpr payload (a Symbol / Int /
+;; char list). Atoms bound under one can't take a size fn, and the rewrite turns
+;; the whole leaf into the constant 1 — so they need no have. They are dropped
+;; from the leaf set; a forced have over them would be ill-typed and sink the
+;; whole cert.
+(fn ms_leaf_ctor_name ((c Symbol)) Bool
+  (if (sym_eq c (quote SSym)) True
+  (if (sym_eq c (quote SInt)) True
+  (if (sym_eq c (quote SStr)) True False))))
+
+(fn ms_nonsized ((prems (List SExpr)) (acc (List Symbol))) (List Symbol)
+  (measure (struct prems))
+  (match prems
+    (Nil acc)
+    ((Cons p rest)
+     (ms_nonsized rest
+       (match p
+         ((SList (Cons (SSym _eq) (Cons (SSym _v) (Cons rhs Nil))))
+          (match rhs
+            ((SList (Cons (SSym c) args))
+             (if (ms_leaf_ctor_name c) (ms_vars_list args acc) acc))
+            (_ acc)))
+         (_ acc))))))
+
+;; nested `have (le 0 (SIZEFN st))` wrappers, ONE size fn per element (the
+;; mixed-type analogue of ms_haves — pat→size_sexpr, rest→size_sexpr_list).
+(fn ms_haves_mixed
+  ((assign (List (Pair Symbol (Pair (List Int) (List Int)))))
+   (inner (List Int)))
+  (List Int)
+  (measure (struct assign))
+  (match assign
+    (Nil inner)
+    ((Cons (Pair st (Pair sizefn nonneg)) rest)
+     (append_int
+       (append_int
+         "(have (= (le 0 ("
+         (append_int
+           sizefn
+           (append_int
+             " "
+             (append_int
+               (chars_of_sym st)
+               (append_int ")) True) (rewrite-with (lemma " (append_int nonneg ") lr lhs () () refl) "))))))
+       (append_int (ms_haves_mixed rest inner) ")")))))
+
+;; one farkas slot (coeff cf) per assigned have.
+(fn ms_ones_assign
+  ((assign (List (Pair Symbol (Pair (List Int) (List Int))))) (cf (List Int)))
+  (List Int)
+  (measure (struct assign))
+  (match assign
+    (Nil Nil)
+    ((Cons _ r) (append_int (append_int " " cf) (ms_ones_assign r cf)))))
+
+(fn ms_build_mixed
+  ((assign (List (Pair Symbol (Pair (List Int) (List Int)))))
+   (prems (List SExpr))
+   (rewrites (List Int))
+   (cf (List Int)))
+  (List Int)
+  (ms_haves_mixed
+    assign
+    (append_int
+      "(steps ("
+      (append_int
+        rewrites
+        (append_int
+          "(simp lhs)) (by farkas (list 1"
+          (append_int (ms_zeros prems) (append_int (ms_ones_assign assign cf) ")))")))))))
+
+;; cartesian assignment of (size fn, nonneg lemma) pairs to leaf subterms: every
+;; way to give each leaf one size fn. The right assignment matches each leaf's
+;; type; the rest produce ill-typed haves that fail to verify (and the gate
+;; re-checks the winner regardless).
+(fn ms_app_assigns
+  ((a (List (List (Pair Symbol (Pair (List Int) (List Int))))))
+   (b (List (List (Pair Symbol (Pair (List Int) (List Int)))))))
+  (List (List (Pair Symbol (Pair (List Int) (List Int)))))
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (ms_app_assigns t b)))))
+
+(fn ms_prepend
+  ((l Symbol)
+   (p (Pair (List Int) (List Int)))
+   (restA (List (List (Pair Symbol (Pair (List Int) (List Int)))))))
+  (List (List (Pair Symbol (Pair (List Int) (List Int)))))
+  (measure (struct restA))
+  (match restA
+    (Nil Nil)
+    ((Cons a ar) (Cons (Cons (Pair l p) a) (ms_prepend l p ar)))))
+
+(fn ms_distribute
+  ((l Symbol)
+   (pairs (List (Pair (List Int) (List Int))))
+   (restA (List (List (Pair Symbol (Pair (List Int) (List Int)))))))
+  (List (List (Pair Symbol (Pair (List Int) (List Int)))))
+  (measure (struct pairs))
+  (match pairs
+    (Nil Nil)
+    ((Cons p pr)
+     (ms_app_assigns (ms_prepend l p restA) (ms_distribute l pr restA)))))
+
+(fn ms_assign
+  ((leaves (List Symbol)) (pairs (List (Pair (List Int) (List Int)))))
+  (List (List (Pair Symbol (Pair (List Int) (List Int)))))
+  (measure (struct leaves))
+  (match leaves
+    (Nil (Cons Nil Nil))
+    ((Cons l rest) (ms_distribute l pairs (ms_assign rest pairs)))))
+
+(fn ms_mixed_all
+  ((assigns (List (List (Pair Symbol (Pair (List Int) (List Int))))))
+   (prems (List SExpr))
+   (rws (List Int))
+   (cf (List Int)))
+  (List (List Int))
+  (measure (struct assigns))
+  (match assigns
+    (Nil Nil)
+    ((Cons a rest)
+     (Cons (ms_build_mixed a prems rws cf) (ms_mixed_all rest prems rws cf)))))
+
+;; the nested-decrease candidates: transitive-rewrite the chained premises so
+;; nested binders surface, then a constant-gap `by ord` candidate (for a pure
+;; forwarding edge under chained premises — the len-0 case), then one farkas
+;; cert per cartesian size-fn assignment over the surviving leaf subterms
+;; (subterms minus the substituted-away intermediates, the recursed-on atom, and
+;; the non-sized leaf-ctor payloads). Bounded to ≤3 leaves so L^k stays small.
+(fn ms_nested_cands
+  ((prems (List SExpr))
+   (aSide SExpr)
+   (bSide SExpr)
+   (th Theory)
+   (cf (List Int)))
+  (List (List Int))
+  (if (ms_has_nesting prems)
+    (match
+      (ms_rewrites_g prems 0
+        (ms_gv_close prems (ms_vars aSide (ms_vars bSide Nil))))
+      (rws
+       (match
+         ;; leaves are the binders REACHABLE from the caller-measure argument
+         ;; (its gv-closure), minus the substituted-away intermediates, the
+         ;; recursed-on atom, and the non-sized leaf-ctor payloads. Seeding from
+         ;; bSide (not all subterms) drops binders of a SIBLING match on an
+         ;; unrelated value — e.g. (match st ((Pair i acc) …)) binds i/acc, which
+         ;; are not SExpr and would sink every cartesian assignment.
+         (ms_minus
+           (ms_minus
+             (ms_minus
+               (ms_dedup
+                 (ms_gv_close prems (ms_measure_args bSide Nil))
+                 Nil)
+               (ms_lhs_vars prems))
+             (ms_measure_args aSide Nil))
+           (ms_nonsized prems Nil))
+         (leaves
+          (if (lt 3 (ms_len leaves))
+            Nil
+            (Cons
+              (ms_ord_build rws)
+              (ms_mixed_all
+                (ms_assign leaves (ms_all_nonnegs th))
+                prems
+                rws
+                cf)))))))
+    Nil))
+
 ;; recipe candidates for a measure obligation goalS. Handles DECREASE
 ;; (lt callee caller) and NONNEG (le 0 measure); both bare and lex measures.
 ;; Anything else returns Nil (covered by flat_cands / farkas_cands).
@@ -1715,9 +1954,11 @@
                      Nil))))
              (rws (ms_rewrites_g prems 0 (ms_vars aSide (ms_vars bSide Nil))))
              (cf (show_int (ms_mult aSide))))
-            (Cons
-              (ms_ord_build rws)
-              (ms_cands_multi subs prems rws (ms_all_nonnegs th) cf)))
+            (append_cands
+              (Cons
+                (ms_ord_build rws)
+                (ms_cands_multi subs prems rws (ms_all_nonnegs th) cf))
+              (ms_nested_cands prems aSide bSide th cf)))
         (if (sym_eq rel (quote le))
           ;; NONNEG: (le 0 measure) — bSide = measure; one have over its own arg.
           (match aSide
