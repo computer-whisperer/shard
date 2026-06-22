@@ -151,10 +151,10 @@ fn collect_refs(e: &Sexpr, params: &BTreeSet<String>, out: &mut BTreeSet<String>
         }
         Sexpr::List(items) => {
             if e.head() == Some("::") {
-                if let Some(Sexpr::Sym(last)) = items.last() {
-                    if last != "*" {
-                        out.insert(last.clone());
-                    }
+                if let Some(Sexpr::Sym(last)) = items.last()
+                    && last != "*"
+                {
+                    out.insert(last.clone());
                 }
                 return; // don't descend into the path segments
             }
@@ -175,10 +175,10 @@ fn extract_file(project: &mut Project, file: &mut ShardFile, forms: Vec<Sexpr>) 
     for form in forms {
         match form.head() {
             Some("import") => {
-                if let Sexpr::List(items) = &form {
-                    if let Some(Sexpr::Str(s)) = items.get(1) {
-                        file.imports.push(s.clone());
-                    }
+                if let Sexpr::List(items) = &form
+                    && let Some(Sexpr::Str(s)) = items.get(1)
+                {
+                    file.imports.push(s.clone());
                 }
             }
             Some("fn") => {
@@ -190,28 +190,27 @@ fn extract_file(project: &mut Project, file: &mut ShardFile, forms: Vec<Sexpr>) 
             }
             Some("sig") => {
                 // (sig fn NAME PARAMS RET) — a bodyless signature.
-                if let Sexpr::List(items) = &form {
-                    if items.get(1).and_then(|s| s.as_sym()) == Some("fn") {
-                        if let Some(def) = parse_fn_from(&items[1..], file_idx, true) {
-                            let idx = project.fns.len();
-                            file.fns.push(idx);
-                            project.fns.push(def);
-                        }
-                    }
+                if let Sexpr::List(items) = &form
+                    && items.get(1).and_then(|s| s.as_sym()) == Some("fn")
+                    && let Some(def) = parse_fn_from(&items[1..], file_idx, true)
+                {
+                    let idx = project.fns.len();
+                    file.fns.push(idx);
+                    project.fns.push(def);
                 }
             }
             Some("type") => {
-                if let Sexpr::List(items) = &form {
-                    if let Some(name) = items.get(1).and_then(|s| s.as_sym()) {
-                        file.types.push(name.to_string());
-                    }
+                if let Sexpr::List(items) = &form
+                    && let Some(name) = items.get(1).and_then(|s| s.as_sym())
+                {
+                    file.types.push(name.to_string());
                 }
             }
             Some("claim") | Some("requirement") | Some("fulfills") => {
-                if let Sexpr::List(items) = &form {
-                    if let Some(name) = items.get(1).and_then(|s| s.as_sym()) {
-                        file.claims.push(name.to_string());
-                    }
+                if let Sexpr::List(items) = &form
+                    && let Some(name) = items.get(1).and_then(|s| s.as_sym())
+                {
+                    file.claims.push(name.to_string());
                 }
             }
             _ => {}
@@ -250,11 +249,11 @@ fn parse_params(e: Option<&Sexpr>) -> Vec<(String, String)> {
     let mut out = Vec::new();
     if let Some(Sexpr::List(items)) = e {
         for it in items {
-            if let Sexpr::List(pair) = it {
-                if let Some(Sexpr::Sym(n)) = pair.first() {
-                    let ty = pair.get(1).map(pretty).unwrap_or_default();
-                    out.push((n.clone(), ty));
-                }
+            if let Sexpr::List(pair) = it
+                && let Some(Sexpr::Sym(n)) = pair.first()
+            {
+                let ty = pair.get(1).map(pretty).unwrap_or_default();
+                out.push((n.clone(), ty));
             }
         }
     }

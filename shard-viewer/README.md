@@ -1,0 +1,58 @@
+# shard-viewer
+
+A graphical navigator for shard source. It parses a shard project itself (a
+lightweight structural s-expr reader — *not* the kernel elaborator, and with no
+coupling to `rust_bootstrap`) and draws its **methods** as a call-graph flow
+chart, built on the [damascene](https://github.com/computer-whisperer/damascene)
+UI library.
+
+## Status
+
+First milestone — the **call-graph (methods) view**:
+
+- Sidebar lists every `.shard` file with its fn count; click to switch.
+- The canvas draws the selected file's fns as boxes (name + `N args → Ret`)
+  with intra-file call edges as curved arrows.
+- Layout is layered left-to-right (callers → callees) with **SCC condensation**,
+  so shard's mutual-recursion cycles collapse into one column instead of
+  smearing across the canvas.
+- Click a fn box to highlight it (its signature shows in the header).
+
+Not yet: cross-file neighborhood navigation, the import/"systems" graph, and the
+intra-function control-flow view. The call-scan parser already feeds all three.
+
+## Binaries
+
+| Bin | What it does |
+|---|---|
+| `shard-viewer [ROOT]` | The GUI (native window via `damascene-winit-wgpu`). Defaults to the most fn-dense file. |
+| `shard-graph [ROOT] [FN]` | Text dump of the extracted model: per-file counts, the most-called fns, or one fn's callers/callees. No GUI deps. |
+| `shard-render ROOT FILE_SUBSTRING [OUT.svg]` | Headless render of one file's graph to SVG + a lint report. No GPU/window. |
+
+`ROOT` defaults to the current directory; run from a shard checkout.
+
+## Headless review loop
+
+`shard-render` is the cheap build-time way to *see* the graph without a window.
+To rasterize the SVG with the same fonts damascene bundles (so labels render),
+point `resvg` at the font files in your damascene checkout:
+
+```bash
+shard-render . calc/calc.shard /tmp/g.svg
+D=~/workspace/damascene/damascene.main
+resvg \
+  --use-font-file "$D/crates/damascene-fonts-inter/fonts/InterVariable.ttf" \
+  --use-font-file "$D/crates/damascene-fonts-jetbrains-mono/fonts/JetBrainsMonoVariable.ttf" \
+  /tmp/g.svg /tmp/g.png
+```
+
+## Layout
+
+```
+src/
+  sexpr.rs   s-expr reader (paren tree only)
+  model.rs   structural extraction + call-graph resolution (same-file-first)
+  layout.rs  layered SCC-aware graph layout
+  view.rs    damascene view tree (pure: project state -> El)
+  bin/       viewer.rs (GUI) · graph.rs (text) · render.rs (headless SVG)
+```
