@@ -43,12 +43,14 @@
 (type ITrie (ITrie (Option Int) (List (Pair Int ITrie))))
 
 (fn it_child ((c Int) (cs (List (Pair Int ITrie)))) (Option ITrie)
+  (measure (struct cs))
   (match cs
     (Nil None)
     ((Cons (Pair k t) rest) (if (int_eq k c) (Some t) (it_child c rest)))))
 
 (fn it_child_set ((c Int) (sub ITrie) (cs (List (Pair Int ITrie))))
   (List (Pair Int ITrie))
+  (measure (struct cs))
   (match cs
     (Nil (Cons (Pair c sub) Nil))
     ((Cons (Pair k t) rest)
@@ -56,6 +58,7 @@
      (Cons (Pair k t) (it_child_set c sub rest))))))
 
 (fn it_get_chars ((cs (List Int)) (t ITrie)) (Option Int)
+  (measure (struct cs))
   (match t
     ((ITrie here children)
      (match cs
@@ -66,6 +69,7 @@
           ((Some sub) (it_get_chars rest sub))))))))
 
 (fn it_put_chars ((cs (List Int)) (v Int) (t ITrie)) ITrie
+  (measure (struct cs))
   (match t
     ((ITrie here children)
      (match cs
@@ -91,11 +95,13 @@
 (fn ad_min ((a Int) (b Int)) Int (if (lt a b) a b))
 
 (fn ad_qn_member ((q QName) (qs (List QName))) Bool
+  (measure (struct qs))
   (match qs
     (Nil False)
     ((Cons h t) (if (qname_eq h q) True (ad_qn_member q t)))))
 
 (fn ad_int_member ((n Int) (ns (List Int))) Bool
+  (measure (struct ns))
   (match ns
     (Nil False)
     ((Cons h t) (if (int_eq h n) True (ad_int_member n t)))))
@@ -108,6 +114,7 @@
 ;; ---------------------------------------------------------------------------
 
 (fn ad_calls_e ((tr FnTrie) (e Expr) (acc (List QName))) (List QName)
+  (measure (struct e))
   (match e
     ((Call f args)
      (match (trie_lookup f tr)
@@ -120,12 +127,14 @@
     (_ acc)))
 
 (fn ad_calls_list ((tr FnTrie) (es (List Expr)) (acc (List QName))) (List QName)
+  (measure (struct es))
   (match es
     (Nil acc)
     ((Cons h t) (ad_calls_e tr h (ad_calls_list tr t acc)))))
 
 (fn ad_calls_arms ((tr FnTrie) (arms (List Arm)) (acc (List QName)))
   (List QName)
+  (measure (struct arms))
   (match arms
     (Nil acc)
     ((Cons (Arm _ body) rest) (ad_calls_e tr body (ad_calls_arms tr rest acc)))))
@@ -170,6 +179,7 @@
 
 ;; pop the stack down to v inclusive, clearing on-stack flags.
 (fn tj_pop ((v QName) (stk (List QName)) (ons ITrie) (acc (List QName))) TjPop
+  (measure (struct stk))
   (match stk
     (Nil (TjPop Nil ons acc))  ; unreachable: v is on the stack by invariant
     ((Cons h rest)
@@ -198,55 +208,66 @@
 (fn tj_visit_go ((tr FnTrie) (v QName) (st TjSt) (fuel Int)) TjSt
   (measure fuel (by farkas (list 1 0)) (by farkas (list 1 1)))
   (if (lt fuel 1) st
-    (match st
-      ((TjSt n idx low stk ons sccs)
-       (let
-         ((st1
-            (TjSt
-              (+ n 1)
-              (it_put v n idx)
-              (it_put v n low)
-              (Cons v stk)
-              (it_put v 1 ons)
-              sccs)))
-         (match (trie_lookup v tr)
-           (None st1)  ; unreachable: v came from the module's own fn list
-           ((Some fd)
-            (match fd
-              ((FnDef _ _ _ body)
-               (let
-                 ((st2 (tj_neis_go tr (ad_calls_e tr body Nil) v st1 (- fuel 1))))
-                 (if (int_eq (tj_low v st2) n) (tj_emit v st2) st2)))))))))))
+  (match st
+    ((TjSt n idx low stk ons sccs)
+     (let
+       ((st1
+          (TjSt
+            (+ n 1)
+            (it_put v n idx)
+            (it_put v n low)
+            (Cons v stk)
+            (it_put v 1 ons)
+            sccs)))
+       (match (trie_lookup v tr)
+         (None st1)  ; unreachable: v came from the module's own fn list
+         ((Some fd)
+          (match fd
+            ((FnDef _ _ _ body)
+             (let
+               ((st2 (tj_neis_go tr (ad_calls_e tr body Nil) v st1 (- fuel 1))))
+               (if (int_eq (tj_low v st2) n) (tj_emit v st2) st2)))))))))))
 
 (fn tj_neis ((tr FnTrie) (ws (List QName)) (v QName) (st TjSt)) TjSt
   (tj_neis_go tr ws v st (tj_budget)))
 
-(fn tj_neis_go ((tr FnTrie) (ws (List QName)) (v QName) (st TjSt) (fuel Int)) TjSt
-  (measure fuel
-    (by farkas (list 1 0)) (by farkas (list 1 1))
-    (by farkas (list 1 0)) (by farkas (list 1 1))
-    (by farkas (list 1 0)) (by farkas (list 1 1))
-    (by farkas (list 1 0)) (by farkas (list 1 1)))
+(fn tj_neis_go ((tr FnTrie) (ws (List QName)) (v QName) (st TjSt) (fuel Int))
+  TjSt
+  (measure
+    fuel
+    (by farkas (list 1 0))
+    (by farkas (list 1 1))
+    (by farkas (list 1 0))
+    (by farkas (list 1 1))
+    (by farkas (list 1 0))
+    (by farkas (list 1 1))
+    (by farkas (list 1 0))
+    (by farkas (list 1 1)))
   (if (lt fuel 1) st
-    (match ws
-      (Nil st)
-      ((Cons w rest)
-       (match (tj_idx w st)
-         (None
-           (let ((st2 (tj_visit_go tr w st (- fuel 1))))
-             (tj_neis_go
-               tr
-               rest
-               v
-               (tj_set_low v (ad_min (tj_low v st2) (tj_low w st2)) st2)
-               (- fuel 1))))
-         ((Some wi)
-          (if (tj_on w st)
-            (tj_neis_go tr rest v (tj_set_low v (ad_min (tj_low v st) wi) st)
-              (- fuel 1))
-            (tj_neis_go tr rest v st (- fuel 1)))))))))
+  (match ws
+    (Nil st)
+    ((Cons w rest)
+     (match (tj_idx w st)
+       (None
+         (let ((st2 (tj_visit_go tr w st (- fuel 1))))
+           (tj_neis_go
+             tr
+             rest
+             v
+             (tj_set_low v (ad_min (tj_low v st2) (tj_low w st2)) st2)
+             (- fuel 1))))
+       ((Some wi)
+        (if (tj_on w st)
+          (tj_neis_go
+            tr
+            rest
+            v
+            (tj_set_low v (ad_min (tj_low v st) wi) st)
+            (- fuel 1))
+          (tj_neis_go tr rest v st (- fuel 1)))))))))
 
 (fn tj_all ((tr FnTrie) (fns (List FnDef)) (st TjSt)) TjSt
+  (measure (struct fns))
   (match fns
     (Nil st)
     ((Cons fd rest)
@@ -279,6 +300,7 @@
 (type MSite (MSite QName QName (List ArgCls)))  ; caller, callee, per-position classes
 
 (fn ad_env_at ((env (List SubSt)) (k Int)) SubSt
+  (measure (struct env))
   (match env
     (Nil (SubUnknown))
     ((Cons h t) (if (lt k 1) h (ad_env_at t (- k 1))))))
@@ -292,6 +314,7 @@
     (_ (AOther))))
 
 (fn ad_cls_list ((env (List SubSt)) (es (List Expr))) (List ArgCls)
+  (measure (struct es))
   (match es
     (Nil Nil)
     ((Cons h t) (Cons (ad_cls env h) (ad_cls_list env t)))))
@@ -300,6 +323,7 @@
 ;; traversal order (left-to-right, each PVar prepends) — passing the
 ;; enclosing env as `acc` yields the arm body's env directly.
 (fn ad_pat_sts ((p Pat) (pd Int) (root SubSt) (acc (List SubSt))) (List SubSt)
+  (measure (struct p))
   (match p
     ((PVar)
      (Cons
@@ -313,11 +337,13 @@
 
 (fn ad_pats_sts ((ps (List Pat)) (pd Int) (root SubSt) (acc (List SubSt)))
   (List SubSt)
+  (measure (struct ps))
   (match ps
     (Nil acc)
     ((Cons p rest) (ad_pats_sts rest pd root (ad_pat_sts p pd root acc)))))
 
 (fn ad_unks ((bs (List Expr)) (env (List SubSt))) (List SubSt)
+  (measure (struct bs))
   (match bs
     (Nil env)
     ((Cons _ t) (Cons (SubUnknown) (ad_unks t env)))))
@@ -329,6 +355,7 @@
    (e Expr)
    (acc (List MSite)))
   (List MSite)
+  (measure (struct e))
   (match e
     ((Call f args)
      (let ((acc2 (ad_sites_list self set env args acc)))
@@ -374,6 +401,7 @@
    (es (List Expr))
    (acc (List MSite)))
   (List MSite)
+  (measure (struct es))
   (match es
     (Nil acc)
     ((Cons h t) (ad_sites_e self set env h (ad_sites_list self set env t acc)))))
@@ -386,6 +414,7 @@
    (arms (List Arm))
    (acc (List MSite)))
   (List MSite)
+  (measure (struct arms))
   (match arms
     (Nil acc)
     ((Cons (Arm p body) rest)
@@ -400,6 +429,7 @@
 ;; initial env: source parameter i lands at BVar (arity-1-i) — the
 ;; loader's innermost-first convention (last parameter is BVar 0).
 (fn ad_env0 ((ptys (List Type)) (env (List SubSt)) (i Int)) (List SubSt)
+  (measure (struct ptys))
   (match ptys
     (Nil env)
     ((Cons _ rest) (ad_env0 rest (Cons (SubOf i 0) env) (+ i 1)))))
@@ -420,6 +450,7 @@
   (AdUnresolved (List QName) (List MSite)))  ; mutual, no designation found
 
 (fn ad_cls_at ((args (List ArgCls)) (j Int)) ArgCls
+  (measure (struct args))
   (match args
     (Nil (AOther))
     ((Cons h t) (if (lt j 1) h (ad_cls_at t (- j 1))))))
@@ -427,6 +458,7 @@
 ;; self verdict: position j works iff every self-call passes a strict
 ;; subterm of parameter j in position j.
 (fn ad_self_ok_j ((sites (List MSite)) (j Int)) Bool
+  (measure (struct sites))
   (match sites
     (Nil True)
     ((Cons (MSite _ _ args) rest)
@@ -435,6 +467,7 @@
        (_ False)))))
 
 (fn ad_self_find ((ptys (List Type)) (j Int) (sites (List MSite))) (Option Int)
+  (measure (struct ptys))
   (match ptys
     (Nil None)
     ((Cons _ rest)
@@ -444,6 +477,7 @@
 
 (fn ad_sites_into ((g QName) (sites (List MSite)) (acc (List MSite)))
   (List MSite)
+  (measure (struct sites))
   (match sites
     (Nil acc)
     ((Cons s rest)
@@ -453,6 +487,7 @@
         (ad_sites_into g rest acc)))))))
 
 (fn ad_viable_of ((f QName) (vs (List (Pair QName (List Int))))) (List Int)
+  (measure (struct vs))
   (match vs
     (Nil Nil)
     ((Cons (Pair q poss) rest) (if (qname_eq q f) poss (ad_viable_of f rest)))))
@@ -462,6 +497,7 @@
 (fn ad_pos_ok
   ((gsites (List MSite)) (j Int) (vs (List (Pair QName (List Int)))))
   Bool
+  (measure (struct gsites))
   (match gsites
     (Nil True)
     ((Cons (MSite caller _ args) rest)
@@ -474,6 +510,7 @@
 (fn ad_keep_pos
   ((poss (List Int)) (gsites (List MSite)) (vs (List (Pair QName (List Int)))))
   (List Int)
+  (measure (struct poss))
   (match poss
     (Nil Nil)
     ((Cons j rest)
@@ -485,6 +522,7 @@
    (allvs (List (Pair QName (List Int))))
    (allsites (List MSite)))
   (List (Pair QName (List Int)))
+  (measure (struct vs))
   (match vs
     (Nil Nil)
     ((Cons (Pair g poss) rest)
@@ -493,11 +531,13 @@
        (ad_prune_all rest allvs allsites)))))
 
 (fn ad_vs_count ((vs (List (Pair QName (List Int))))) Int
+  (measure (struct vs))
   (match vs
     (Nil 0)
     ((Cons (Pair _ poss) rest) (+ (ad_count_int poss) (ad_vs_count rest)))))
 
 (fn ad_count_int ((ns (List Int))) Int
+  (measure (struct ns))
   (match ns
     (Nil 0)
     ((Cons _ t) (+ 1 (ad_count_int t)))))
@@ -515,12 +555,14 @@
     (ad_fix vs2 allsites (- fuel 1))))))
 
 (fn ad_all_pos ((ptys (List Type)) (j Int)) (List Int)
+  (measure (struct ptys))
   (match ptys
     (Nil Nil)
     ((Cons _ rest) (Cons j (ad_all_pos rest (+ j 1))))))
 
 (fn ad_pick ((vs (List (Pair QName (List Int)))))
   (Option (List (Pair QName Int)))
+  (measure (struct vs))
   (match vs
     (Nil (Some Nil))
     ((Cons (Pair g poss) rest)
@@ -532,11 +574,13 @@
           ((Some des) (Some (Cons (Pair g j) des)))))))))
 
 (fn ad_des_of ((f QName) (des (List (Pair QName Int)))) Int
+  (measure (struct des))
   (match des
     (Nil 0)  ; unreachable: every SCC member has a designation by construction
     ((Cons (Pair q j) rest) (if (qname_eq q f) j (ad_des_of f rest)))))
 
 (fn ad_verify ((allsites (List MSite)) (des (List (Pair QName Int)))) Bool
+  (measure (struct allsites))
   (match allsites
     (Nil True)
     ((Cons (MSite caller callee args) rest)
@@ -552,6 +596,7 @@
 (fn ad_member_sites
   ((tr FnTrie) (scc (List QName)) (qs (List QName)) (acc (List MSite)))
   (List MSite)
+  (measure (struct qs))
   (match qs
     (Nil acc)
     ((Cons q rest)
@@ -561,11 +606,13 @@
         (ad_member_sites tr scc rest (ad_sites_acc (ad_fn_sites scc fd) acc)))))))
 
 (fn ad_sites_acc ((xs (List MSite)) (acc (List MSite))) (List MSite)
+  (measure (struct xs))
   (match xs
     (Nil acc)
     ((Cons h t) (ad_sites_acc t (Cons h acc)))))
 
 (fn ad_init_vs ((tr FnTrie) (qs (List QName))) (List (Pair QName (List Int)))
+  (measure (struct qs))
   (match qs
     (Nil Nil)
     ((Cons q rest)
@@ -618,6 +665,7 @@
     ((AOther) (Cons 45 Nil))))  ; -
 
 (fn ad_render_clss ((cs (List ArgCls))) (List Int)
+  (measure (struct cs))
   (match cs
     (Nil Nil)
     ((Cons h t)
@@ -637,11 +685,13 @@
            (append_int (ad_render_clss args) (append_int "]" (ad_nl)))))))))
 
 (fn ad_render_sites ((ss (List MSite))) (List Int)
+  (measure (struct ss))
   (match ss
     (Nil Nil)
     ((Cons h t) (append_int (ad_render_site h) (ad_render_sites t)))))
 
 (fn ad_render_names ((qs (List QName))) (List Int)
+  (measure (struct qs))
   (match qs
     (Nil Nil)
     ((Cons q t)
@@ -650,6 +700,7 @@
        (_ (append_int (qn_key_chars q) (Cons 32 (ad_render_names t))))))))
 
 (fn ad_count_q ((qs (List QName))) Int
+  (measure (struct qs))
   (match qs
     (Nil 0)
     ((Cons _ t) (+ 1 (ad_count_q t)))))
@@ -660,6 +711,7 @@
 (fn ad_scan_go
   ((tr FnTrie) (sccs (List (List QName))) (k AdCounts) (lines (List Int)))
   (List Int)
+  (measure (struct sccs))
   (match sccs
     (Nil
       (match k
