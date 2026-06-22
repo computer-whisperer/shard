@@ -2671,7 +2671,9 @@
      (append_int
        "admit: a dependency failed to load:"
        (append_int (sr_nl) diag)))
-    ((BMOk m) (admit_scan_s m (ad_sccs m)))))
+    ((BMOk m)
+     (let ((sccs (ad_sccs m)))
+       (append_int (admit_scan_s m sccs) (mc_residual_report m sccs srcs))))))
 
 ;; ===========================================================================
 ;; MEASURE CLAUSES (issue #1, Phase B — report-only). A 6-element fn form
@@ -2736,6 +2738,97 @@
                   (mc_of_forms rest acc)))))
             (_ (mc_of_forms rest acc)))
           (mc_of_forms rest acc)))))))
+
+;; ---- unannotated-recursive-SCC enumerator (issue #1, the Phase-D flip prereq)
+;; mc_outcome verifies the fns that DECLARE a measure clause; it cannot see a
+;; recursive SCC that declares NONE. This pass closes that gap for the flip: it
+;; walks every SCC (ad_sccs) and, for each RECURSIVE one (ad_scc_verdict is not
+;; AdNonRec), reports any member carrying no (measure …) clause. Identity matches
+;; the gate exactly — a clause's QName is (QName (module_path_of path) name), the
+;; same key mc_check_fn uses for trie_lookup / mc_scc_of. Report-only today (it
+;; rides the `admit` diagnostic, leaving the normal check/corpus output byte-
+;; unchanged); the enforcement flip turns a non-empty result into a COFail.
+;; NOTE: a type-parametric member is exempt at flip time (mc_check_fn SKIPs poly
+;; fns — the monomorphic-only v1 limit); the kernel closure has no poly fns so
+;; the report needs no exemption today.
+
+;; QNames of every measure-clause-bearing fn in one source.
+(fn mc_clause_qns_of ((path (List Int)) (mcls (List MCl)) (acc (List QName)))
+  (List QName)
+  (measure (struct mcls))
+  (match mcls
+    (Nil acc)
+    ((Cons (MCl name _ _ _ _ _) rest)
+     (mc_clause_qns_of path rest (Cons (QName (module_path_of path) name) acc)))))
+
+;; QNames of every measure-clause-bearing fn across the closure's sources.
+(fn mc_clause_qns ((srcs (List SrcEntry)) (acc (List QName))) (List QName)
+  (measure (struct srcs))
+  (match srcs
+    (Nil acc)
+    ((Cons (SrcEntry path _ src) rest)
+     (match (read_all src)
+       (None (mc_clause_qns rest acc))
+       ((Some forms)
+        (mc_clause_qns rest (mc_clause_qns_of path (mc_of_forms forms Nil) acc)))))))
+
+(fn mc_qn_in ((q QName) (qs (List QName))) Bool
+  (measure (struct qs))
+  (match qs
+    (Nil False)
+    ((Cons h t) (if (qname_eq q h) True (mc_qn_in q t)))))
+
+;; members of ONE scc carrying no clause (caller has gated on recursive).
+(fn mc_scc_missing ((scc (List QName)) (annot (List QName)) (acc (List QName)))
+  (List QName)
+  (measure (struct scc))
+  (match scc
+    (Nil acc)
+    ((Cons q rest)
+     (if (mc_qn_in q annot) (mc_scc_missing rest annot acc)
+       (mc_scc_missing rest annot (Cons q acc))))))
+
+(fn mc_unannot_go
+  ((tr FnTrie)
+   (sccs (List (List QName)))
+   (annot (List QName))
+   (acc (List QName)))
+  (List QName)
+  (measure (struct sccs))
+  (match sccs
+    (Nil acc)
+    ((Cons scc rest)
+     (match (ad_scc_verdict tr scc)
+       ((AdNonRec) (mc_unannot_go tr rest annot acc))
+       (_ (mc_unannot_go tr rest annot (mc_scc_missing scc annot acc)))))))
+
+(fn mc_unannot_lines ((qs (List QName))) (List Int)
+  (measure (struct qs))
+  (match qs
+    (Nil Nil)
+    ((Cons q rest)
+     (append_int
+       "UNANNOTATED-REC "
+       (append_int (qn_key_chars q) (append_int (sr_nl) (mc_unannot_lines rest)))))))
+
+;; the residual section: recursive-SCC members declaring no measure clause.
+;; Cross-references ad_sccs against the clause-bearing QName set — the half the
+;; measure-BLIND admit scan above cannot compute.
+(fn mc_residual_report
+  ((m Module) (sccs (List (List QName))) (srcs (List SrcEntry)))
+  (List Int)
+  (match m
+    ((Module _ _ _ tr _)
+     (let ((missing (mc_unannot_go tr sccs (mc_clause_qns srcs Nil) Nil)))
+       (append_int
+         (sr_nl)
+         (append_int
+           "---- recursive SCCs lacking a measure clause ----"
+           (append_int
+             (sr_nl)
+             (match missing
+               (Nil "(none — every recursive SCC declares a measure clause)")
+               (_ (mc_unannot_lines missing))))))))))
 
 ;; ---- the site walker (SOURCE level) ---------------------------------------
 
