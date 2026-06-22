@@ -3692,6 +3692,20 @@
          (_ (mc_struct_sites key sites pi mcls 0)))))))
 
 ;; walk the sites pairing each SUPPORTED site with its proof pair.
+;; per-site outcome: SiteHalt stops the whole loop with one line (a setup error
+;; — no measure / arity / unsupported / missing proofs — that the old recursive
+;; form returned without a continuation); SiteGo carries this site's output, the
+;; remaining proofs, and the running nok for the next iteration.
+(type MSiteRes
+  (SiteHalt (List Int))
+  (SiteGo (List Int) (List SExpr) Int))
+
+;; The site loop. STRUCTURAL on `sites`: each iteration consumes one site (the
+;; per-site work is the non-recursive mc_one_site) and recurses on the tail. The
+;; recursion used to live in the pass-through forwarders mc_site_go/mc_typed_site
+;; (they carried the already-shrunk tail and called back with it unchanged — no
+;; structural drop on that edge); relocating it here makes every edge a strict
+;; subterm step ⇒ a plain (struct sites) measure, no lex offsets.
 (fn mc_check_sites
   ((m Module)
    (m2 Module)
@@ -3708,6 +3722,7 @@
    (mcls (List MCl))
    (autos (List (Pair Symbol SExpr))))
   (List Int)
+  (measure (struct sites))
   (match sites
     (Nil
       (match proofs
@@ -3716,44 +3731,78 @@
             key
             (append_int "OK (" (append_int (mc_show_i nok) " site(s))"))))
         (_ (mc_line key "FAIL: leftover proofs after the last site"))))
-    ((Cons (MSiteS i bnds tbs hyps args callee) rest)
+    ((Cons site rest)
+     (match
+       (mc_one_site m m2 th gctx fname key pForm pnames msr site proofs nok mcls
+         autos)
+       ((SiteHalt line) line)
+       ((SiteGo out prest nok2)
+        (append_int
+          out
+          (mc_check_sites m m2 th gctx fname key pForm pnames msr rest prest nok2
+            mcls autos)))))))
+
+;; one site's setup: resolve the callee measure, substitute the call args, then
+;; take the pure-measure path (goal over params) or the typed-binder path. The
+;; tail (mc_one_site_pair) checks the inline proof pair. Non-recursive — the loop
+;; lives in mc_check_sites.
+(fn mc_one_site
+  ((m Module)
+   (m2 Module)
+   (th Theory)
+   (gctx RCtx)
+   (fname Symbol)
+   (key (List Int))
+   (pForm SExpr)
+   (pnames (List Symbol))
+   (msr SExpr)
+   (site MSiteS)
+   (proofs (List SExpr))
+   (nok Int)
+   (mcls (List MCl))
+   (autos (List (Pair Symbol SExpr))))
+  MSiteRes
+  (match site
+    ((MSiteS i bnds tbs hyps args callee)
      (match (mc_callee_measure callee mcls)
        (None
-         (mc_line
-           key
-           (append_int
-             "FAIL site "
+         (SiteHalt
+           (mc_line
+             key
              (append_int
-               (mc_show_i i)
+               "FAIL site "
                (append_int
-                 ": SCC member "
+                 (mc_show_i i)
                  (append_int
-                   (chars_of_sym (qn_name callee))
-                   " has no measure clause"))))))
+                   ": SCC member "
+                   (append_int
+                     (chars_of_sym (qn_name callee))
+                     " has no measure clause")))))))
        ((Some (Pair cpnames cmsr))
         (match (mc_zip cpnames args)
           (None
-            (mc_line
-              key
-              (append_int
-                "FAIL site "
-                (append_int (mc_show_i i) ": arity mismatch at the call"))))
+            (SiteHalt
+              (mc_line
+                key
+                (append_int
+                  "FAIL site "
+                  (append_int (mc_show_i i) ": arity mismatch at the call")))))
           ((Some sub)
            (let ((msr2 (mc_subst sub cmsr)))
              (if (mc_pure msr2 pnames bnds)
                (match (mc_keep_hyps hyps pnames bnds)
                  ((Pair khyps ndrop)
-                  (mc_site_go m m2 th gctx fname key pForm pnames msr rest
-                    proofs nok i pForm khyps ndrop msr2 mcls autos)))
-               (mc_typed_site m m2 th gctx fname key pForm pnames msr rest
-                 proofs nok i tbs hyps msr2 mcls autos))))))))))
+                  (mc_one_site_pair m m2 th gctx fname key pForm khyps ndrop msr2
+                    msr i proofs nok autos)))
+               (mc_one_site_typed m m2 th gctx fname key pForm pnames msr i tbs
+                 hyps msr2 proofs nok autos))))))))))
 
 ;; the typed-binder path: the measure substitution references pattern
 ;; binders, so the obligation is stated over the fn params PLUS the typed
 ;; binders in scope (hyps mentioning an UNTYPED binder still drop, with
 ;; the note). Binder names must be fresh against the params — a shadowing
 ;; pattern would alias two distinct values in one goal.
-(fn mc_typed_site
+(fn mc_one_site_typed
   ((m Module)
    (m2 Module)
    (th Theory)
@@ -3763,80 +3812,87 @@
    (pForm SExpr)
    (pnames (List Symbol))
    (msr SExpr)
-   (rest (List MSiteS))
-   (proofs (List SExpr))
-   (nok Int)
    (i Int)
    (tbs (List (Pair Symbol Type)))
    (hyps (List SExpr))
    (msr2 SExpr)
-   (mcls (List MCl))
+   (proofs (List SExpr))
+   (nok Int)
    (autos (List (Pair Symbol SExpr))))
-  (List Int)
+  MSiteRes
   (let ((tbn (mc_tb_names tbs Nil)))
     (if (mc_tbs_fresh tbn pnames)
       (let ((alln (mc_app_syms tbn pnames)))
         (if (mc_pure msr2 alln Nil)
           (match (mc_ext_pform pForm tbs)
-            (None (mc_line key "SKIP (could not read param names)"))
+            (None (SiteHalt (mc_line key "SKIP (could not read param names)")))
             ((Some pForm2)
              (match (mc_keep_hyps hyps alln Nil)
                ((Pair khyps ndrop)
-                (mc_site_go m m2 th gctx fname key pForm pnames msr rest proofs
-                  nok i pForm2 khyps ndrop msr2 mcls autos)))))
-          (mc_line
-            key
-            (append_int
-              "UNSUPPORTED site "
+                (mc_one_site_pair m m2 th gctx fname key pForm2 khyps ndrop msr2
+                  msr i proofs nok autos)))))
+          (SiteHalt
+            (mc_line
+              key
               (append_int
-                (mc_show_i i)
-                " (measure argument references pattern/let binders)")))))
-      (mc_line
-        key
-        (append_int
-          "UNSUPPORTED site "
-          (append_int (mc_show_i i) " (a pattern binder shadows a parameter)"))))))
+                "UNSUPPORTED site "
+                (append_int
+                  (mc_show_i i)
+                  " (measure argument references pattern/let binders)"))))))
+      (SiteHalt
+        (mc_line
+          key
+          (append_int
+            "UNSUPPORTED site "
+            (append_int
+              (mc_show_i i)
+              " (a pattern binder shadows a parameter)")))))))
 
 ;; pair the site's two inline proofs (decrease, nonneg) against pFormX —
 ;; the fn's params, possibly extended with typed binders — then continue.
-(fn mc_site_go
+;; pair the site's two inline proofs (decrease, nonneg) against pFormX — the
+;; fn's params, possibly extended with typed binders. Non-recursive: returns a
+;; SiteGo carrying this site's output (a bad-cert message + drop note, or empty)
+;; the remaining proofs, and the updated nok; mc_check_sites drives the loop.
+;; A missing proof pair halts (the old form returned the line with no recurse).
+(fn mc_one_site_pair
   ((m Module)
    (m2 Module)
    (th Theory)
    (gctx RCtx)
    (fname Symbol)
    (key (List Int))
-   (pForm SExpr)
-   (pnames (List Symbol))
-   (msr SExpr)
-   (rest (List MSiteS))
-   (proofs (List SExpr))
-   (nok Int)
-   (i Int)
    (pFormX SExpr)
    (khyps (List SExpr))
    (ndrop Int)
    (msr2 SExpr)
-   (mcls (List MCl))
+   (msr SExpr)
+   (i Int)
+   (proofs (List SExpr))
+   (nok Int)
    (autos (List (Pair Symbol SExpr))))
-  (List Int)
+  MSiteRes
   (match proofs
     (Nil
-      (mc_line
-        key
-        (append_int
-          "FAIL site "
-          (append_int (mc_show_i i) ": no proofs left (need decrease + nonneg)"))))
+      (SiteHalt
+        (mc_line
+          key
+          (append_int
+            "FAIL site "
+            (append_int
+              (mc_show_i i)
+              ": no proofs left (need decrease + nonneg)")))))
     ((Cons p1 prest1)
      (match prest1
        (Nil
-         (mc_line
-           key
-           (append_int
-             "FAIL site "
+         (SiteHalt
+           (mc_line
+             key
              (append_int
-               (mc_show_i i)
-               ": only one proof left (need decrease + nonneg)"))))
+               "FAIL site "
+               (append_int
+                 (mc_show_i i)
+                 ": only one proof left (need decrease + nonneg)")))))
        ((Cons p2 prest)
         (match
           (mc_site_pair m m2 th gctx fname key pFormX khyps msr2 msr i p1 p2
@@ -3846,39 +3902,8 @@
           ;; byte-identical to before), but surfaces all slot/cert errors in a
           ;; single run during development.
           ((Some bad)
-            (append_int
-              (append_int bad (mc_drop_note key ndrop))
-              (mc_check_sites
-                m
-                m2
-                th
-                gctx
-                fname
-                key
-                pForm
-                pnames
-                msr
-                rest
-                prest
-                nok
-                mcls
-                autos)))
-          (None
-            (mc_check_sites
-              m
-              m2
-              th
-              gctx
-              fname
-              key
-              pForm
-              pnames
-              msr
-              rest
-              prest
-              (+ nok 1)
-              mcls
-              autos))))))))
+            (SiteGo (append_int bad (mc_drop_note key ndrop)) prest nok))
+          (None (SiteGo Nil prest (+ nok 1)))))))))
 
 ;; typed-binder goal-param plumbing.
 (fn mc_tb_names ((tbs (List (Pair Symbol Type))) (acc (List Symbol)))
@@ -4112,7 +4137,7 @@
 ;; tools/prove uses these to DISCOVER what a bare `(measure E)` clause must
 ;; prove, so the offline solver can search each obligation and persist the cert
 ;; keyed by mc_site_key. The derivation MIRRORS mc_check_fn / mc_check_sites /
-;; mc_typed_site exactly — same mc_walk sites, same callee-measure substitution,
+;; mc_one_site / mc_one_site_typed exactly — same mc_walk sites, same callee-measure substitution,
 ;; same mc_keep_hyps / typed-binder handling, same mc_goal_s — so a generated
 ;; proof is searched against the IDENTICAL obligation the gate later checks. The
 ;; checker never calls these, and a derivation mismatch could only make the gate
