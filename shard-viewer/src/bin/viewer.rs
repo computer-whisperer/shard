@@ -10,10 +10,11 @@
 
 use damascene_core::prelude::*;
 use shard_viewer::model::Project;
-use shard_viewer::view::{self, CANVAS_KEY, ViewParams};
+use shard_viewer::view::{self, CANVAS_KEY, ViewMode, ViewParams};
 
 struct Viewer {
     project: Project,
+    mode: ViewMode,
     selected_file: Option<usize>,
     selected_fn: Option<usize>,
     /// Viewport commands queued from clicks, drained once per frame by the host.
@@ -28,11 +29,13 @@ impl Viewer {
         });
     }
 
-    fn select_file(&mut self, i: usize) {
+    /// Open a file's call graph (the Methods drill-down), framing it.
+    fn open_file(&mut self, i: usize) {
         self.selected_file = Some(i);
         self.selected_fn = None;
+        self.mode = ViewMode::Methods;
         // Frame the newly shown graph (the viewport's pan/zoom persists across
-        // rebuilds, so without this the new file could open off-screen).
+        // rebuilds, so without this the new graph could open off-screen).
         self.fit();
     }
 }
@@ -43,6 +46,7 @@ impl App for Viewer {
         view::app_root(
             &self.project,
             &ViewParams {
+                mode: self.mode,
                 selected_file: self.selected_file,
                 selected_fn: self.selected_fn,
                 zoom,
@@ -60,17 +64,28 @@ impl App for Viewer {
             self.pending.push(ViewportRequest::ResetView {
                 key: CANVAS_KEY.into(),
             });
+        } else if event.is_route("mode_methods") {
+            self.mode = ViewMode::Methods;
+            self.fit();
+        } else if event.is_route("mode_systems") {
+            self.mode = ViewMode::Systems;
+            self.fit();
+        } else if let Some(i) = event.route_index::<usize>("sysfile")
+            && i < self.project.files.len()
+        {
+            // Drill from the systems graph into a file's call graph.
+            self.open_file(i);
         } else if let Some(i) = event.route_index::<usize>("file")
             && i < self.project.files.len()
         {
-            self.select_file(i);
+            self.open_file(i);
         } else if let Some(i) = event.route_index::<usize>("fn")
             && i < self.project.fns.len()
         {
             // Following a cross-file callee/caller switches the canvas.
             let file = self.project.fns[i].file;
-            if Some(file) != self.selected_file {
-                self.select_file(file);
+            if Some(file) != self.selected_file || self.mode != ViewMode::Methods {
+                self.open_file(file);
             }
             self.selected_fn = Some(i);
         }
@@ -111,6 +126,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         viewport_rect,
         Viewer {
             project,
+            mode: ViewMode::Methods,
             selected_file,
             selected_fn: None,
             pending,

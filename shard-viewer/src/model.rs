@@ -37,6 +37,9 @@ pub struct ShardFile {
     pub module: String,
     /// Raw `(import "...")` target strings.
     pub imports: Vec<String>,
+    /// Import strings resolved to file indices (deduped; unresolved/external
+    /// imports are dropped). This file *depends on* each target.
+    pub import_targets: Vec<usize>,
     pub fns: Vec<usize>, // indices into Project::fns
     pub types: Vec<String>,
     pub claims: Vec<String>,
@@ -80,6 +83,7 @@ impl Project {
                 rel,
                 module,
                 imports: Vec::new(),
+                import_targets: Vec::new(),
                 fns: Vec::new(),
                 types: Vec::new(),
                 claims: Vec::new(),
@@ -95,7 +99,33 @@ impl Project {
 
         project.build_name_index();
         project.resolve_calls();
+        project.resolve_imports();
         Ok(project)
+    }
+
+    /// Resolve each file's raw import strings to file indices (the import
+    /// dependency graph). Relative `.shard` paths resolve against the importing
+    /// file's directory; a bare module name `m` tries `m/mod.req.shard`,
+    /// `m.shard`, then `m/mod.shard`. Unresolved (external) imports are dropped.
+    fn resolve_imports(&mut self) {
+        let by_rel: HashMap<String, usize> = self
+            .files
+            .iter()
+            .enumerate()
+            .map(|(i, f)| (f.rel.clone(), i))
+            .collect();
+        for i in 0..self.files.len() {
+            let importer = self.files[i].rel.clone();
+            let imports = self.files[i].imports.clone();
+            let mut targets: Vec<usize> = imports
+                .iter()
+                .filter_map(|imp| resolve_import(&importer, imp, &by_rel))
+                .filter(|&t| t != i)
+                .collect();
+            targets.sort_unstable();
+            targets.dedup();
+            self.files[i].import_targets = targets;
+        }
     }
 
     fn build_name_index(&mut self) {
@@ -276,6 +306,38 @@ pub fn pretty(e: &Sexpr) -> String {
     }
 }
 
+/// Resolve one import string (relative to `importer`'s directory) to a file
+/// index via the rel-path index, trying module-name fallbacks for bare names.
+fn resolve_import(importer: &str, import: &str, by_rel: &HashMap<String, usize>) -> Option<usize> {
+    let base = importer.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+    let candidates: Vec<String> = if import.ends_with(".shard") {
+        vec![normalize_rel(base, import)]
+    } else {
+        vec![
+            normalize_rel(base, &format!("{import}/mod.req.shard")),
+            normalize_rel(base, &format!("{import}.shard")),
+            normalize_rel(base, &format!("{import}/mod.shard")),
+        ]
+    };
+    candidates.iter().find_map(|c| by_rel.get(c).copied())
+}
+
+/// Join `base` (a dir) and `rel` (which may contain `.`/`..`) into a normalized
+/// `/`-separated path, resolving `..` against the accumulated components.
+fn normalize_rel(base: &str, rel: &str) -> String {
+    let mut stack: Vec<&str> = Vec::new();
+    for comp in base.split('/').chain(rel.split('/')) {
+        match comp {
+            "" | "." => {}
+            ".." => {
+                stack.pop();
+            }
+            c => stack.push(c),
+        }
+    }
+    stack.join("/")
+}
+
 fn collect_shard_files(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
@@ -293,4 +355,20 @@ fn collect_shard_files(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_rel;
+
+    #[test]
+    fn normalize_resolves_dotdot() {
+        assert_eq!(normalize_rel("kernel", "stdlib.shard"), "kernel/stdlib.shard");
+        assert_eq!(
+            normalize_rel("examples/modules_demo/bump", "../../../kernel/stdlib.shard"),
+            "kernel/stdlib.shard"
+        );
+        assert_eq!(normalize_rel("", "foo.shard"), "foo.shard");
+        assert_eq!(normalize_rel("a/b", "./c.shard"), "a/b/c.shard");
+    }
 }

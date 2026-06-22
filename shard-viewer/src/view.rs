@@ -9,8 +9,18 @@ use crate::model::Project;
 use damascene_core::prelude::*;
 use std::collections::HashMap;
 
+/// Which graph the canvas is showing.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ViewMode {
+    /// One file's fns and their intra-file call edges.
+    Methods,
+    /// The project-wide file import dependency graph.
+    Systems,
+}
+
 /// Everything the view needs from the running app, snapshotted per frame.
 pub struct ViewParams {
+    pub mode: ViewMode,
     pub selected_file: Option<usize>,
     pub selected_fn: Option<usize>,
     /// Current viewport zoom (read back from the runtime), for display only.
@@ -32,7 +42,9 @@ pub fn app_root(project: &Project, p: &ViewParams) -> El {
         sidebar(project, p.selected_file),
         main_pane(project, p),
     ];
-    if let Some(fni) = p.selected_fn {
+    if p.mode == ViewMode::Methods
+        && let Some(fni) = p.selected_fn
+    {
         panes.push(detail_panel(project, fni));
     }
     page([row(panes).gap(tokens::SPACE_4).height(Size::Fill(1.0))])
@@ -64,11 +76,13 @@ fn sidebar(project: &Project, selected_file: Option<usize>) -> El {
 }
 
 fn main_pane(project: &Project, p: &ViewParams) -> El {
-    let body = match p.selected_file {
-        None => {
-            column([text("Select a file to see its call graph.").muted()]).padding(tokens::SPACE_8)
-        }
-        Some(fi) => canvas(project, fi, p),
+    let body = match p.mode {
+        ViewMode::Systems => systems_canvas(project, p),
+        ViewMode::Methods => match p.selected_file {
+            None => column([text("Select a file to see its call graph.").muted()])
+                .padding(tokens::SPACE_8),
+            Some(fi) => methods_canvas(project, fi, p),
+        },
     };
     column([toolbar(project, p), body])
         .gap(tokens::SPACE_3)
@@ -77,13 +91,22 @@ fn main_pane(project: &Project, p: &ViewParams) -> El {
 }
 
 fn toolbar(project: &Project, p: &ViewParams) -> El {
-    let title = match p.selected_file {
-        Some(fi) => h3(project.files[fi].rel.clone()),
-        None => h3("shard-viewer"),
+    let title = match p.mode {
+        ViewMode::Systems => format!("Systems · {} files", project.files.len()),
+        ViewMode::Methods => match p.selected_file {
+            Some(fi) => project.files[fi].rel.clone(),
+            None => "shard-viewer".to_string(),
+        },
+    };
+    let mode_btn = |label: &str, key: &str, active: bool| {
+        let b = button(label).key(key.to_string());
+        if active { b.selected() } else { b.ghost() }
     };
     row([
-        title,
+        h3(title),
         spacer(),
+        mode_btn("Methods", "mode_methods", p.mode == ViewMode::Methods),
+        mode_btn("Systems", "mode_systems", p.mode == ViewMode::Systems),
         text(format!("{:.0}%", p.zoom * 100.0))
             .mono()
             .muted()
@@ -96,21 +119,45 @@ fn toolbar(project: &Project, p: &ViewParams) -> El {
     .padding(tokens::SPACE_2)
 }
 
-fn canvas(project: &Project, file_idx: usize, p: &ViewParams) -> El {
+fn methods_canvas(project: &Project, file_idx: usize, p: &ViewParams) -> El {
     let (graph, fn_of) = build_call_graph(project, file_idx);
     if graph.nodes.is_empty() {
         return column([text("This file defines no fns.").muted()]).padding(tokens::SPACE_8);
     }
-
     let lay = layout::layout(&graph, &layout::LayoutConfig::default());
+    let node_els: Vec<El> = lay
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, pn)| node_box(project, fn_of[i], p.selected_fn, pn.w, pn.h))
+        .collect();
+    graph_canvas(&lay, node_els)
+}
 
-    let mut children: Vec<El> = Vec::with_capacity(lay.nodes.len() + 1);
+fn systems_canvas(project: &Project, p: &ViewParams) -> El {
+    let (graph, file_of) = build_systems_graph(project);
+    if graph.nodes.is_empty() {
+        return column([text("No in-project imports to graph.").muted()]).padding(tokens::SPACE_8);
+    }
+    let lay = layout::layout(&graph, &layout::LayoutConfig::default());
+    let node_els: Vec<El> = lay
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, pn)| sys_node_box(project, file_of[i], p.selected_file, pn.w, pn.h))
+        .collect();
+    graph_canvas(&lay, node_els)
+}
+
+/// Wrap a laid-out graph in the pan/zoom viewport: an edge overlay plus the
+/// per-node elements (index-aligned with `lay.nodes`), placed at their content
+/// coordinates via the `El::layout` escape hatch.
+fn graph_canvas(lay: &Layout, node_els: Vec<El>) -> El {
+    let mut children: Vec<El> = Vec::with_capacity(node_els.len() + 1);
     // Edge overlay, drawn in content coordinates; the viewport transform scales
     // it for free. Unkeyed so it never intercepts the background pan drag.
-    children.push(vector(edges_asset(&lay)));
-    for (i, pn) in lay.nodes.iter().enumerate() {
-        children.push(node_box(project, fn_of[i], p.selected_fn, pn.w, pn.h));
-    }
+    children.push(vector(edges_asset(lay)));
+    children.extend(node_els);
 
     let positions: Vec<(f32, f32, f32, f32)> =
         lay.nodes.iter().map(|n| (n.x, n.y, n.w, n.h)).collect();
@@ -140,8 +187,90 @@ fn canvas(project: &Project, file_idx: usize, p: &ViewParams) -> El {
         .key(CANVAS_KEY)
         .min_zoom(MIN_ZOOM)
         .max_zoom(MAX_ZOOM)
+        // Center bounds: any node can be parked mid-frame (the default Contain
+        // keeps the bbox glued to the edges, which fights graph navigation).
+        .pan_bounds(PanBounds::Center)
         .width(Size::Fill(1.0))
         .height(Size::Fill(1.0))
+}
+
+/// Build the project-wide import dependency graph (file → files it imports).
+/// Only files that import or are imported participate, so isolated files don't
+/// clutter the canvas. Returns the file index behind each graph node.
+fn build_systems_graph(project: &Project) -> (Graph, Vec<usize>) {
+    let imported: std::collections::HashSet<usize> = project
+        .files
+        .iter()
+        .flat_map(|f| f.import_targets.iter().copied())
+        .collect();
+    let participating: Vec<usize> = (0..project.files.len())
+        .filter(|&i| !project.files[i].import_targets.is_empty() || imported.contains(&i))
+        .collect();
+    let local: HashMap<usize, usize> =
+        participating.iter().enumerate().map(|(li, &fi)| (fi, li)).collect();
+
+    let nodes: Vec<GNode> = participating
+        .iter()
+        .map(|&fi| {
+            let (w, h) = file_node_size(project, fi);
+            GNode::simple(w, h)
+        })
+        .collect();
+
+    let mut edges = Vec::new();
+    for (&fi, &li) in &local {
+        for &target in &project.files[fi].import_targets {
+            if let Some(&lj) = local.get(&target)
+                && li != lj
+            {
+                edges.push(GEdge {
+                    from: EndPoint { node: li, port: 0 },
+                    to: EndPoint { node: lj, port: 0 },
+                });
+            }
+        }
+    }
+    (Graph { nodes, edges }, participating)
+}
+
+fn file_node_size(project: &Project, file_idx: usize) -> (f32, f32) {
+    let (stem, dir) = file_label(&project.files[file_idx].rel);
+    let chars = stem.chars().count().max(dir.chars().count()) as f32;
+    let w = (chars * 7.0 + 24.0).clamp(130.0, 280.0);
+    (w, 46.0)
+}
+
+/// Split a rel path into (file stem, parent dir) for a compact node label.
+fn file_label(rel: &str) -> (String, String) {
+    let (dir, file) = rel.rsplit_once('/').unwrap_or(("", rel));
+    let stem = file.strip_suffix(".shard").unwrap_or(file);
+    (stem.to_string(), dir.to_string())
+}
+
+fn sys_node_box(project: &Project, file_idx: usize, selected_file: Option<usize>, w: f32, h: f32) -> El {
+    let f = &project.files[file_idx];
+    let (stem, dir) = file_label(&f.rel);
+    let selected = selected_file == Some(file_idx);
+    let sub = if dir.is_empty() {
+        format!("{} fns", f.fns.len())
+    } else {
+        format!("{dir}  ·  {} fns", f.fns.len())
+    };
+    let b = column([
+        text(stem).mono().font_size(TITLE_SIZE).nowrap_text().ellipsis(),
+        text(sub).muted().font_size(SUB_SIZE).nowrap_text().ellipsis(),
+    ])
+    .gap(2.0)
+    .padding(8.0)
+    .radius(8.0)
+    .width(Size::Fixed(w))
+    .height(Size::Fixed(h))
+    .key(format!("sysfile:{file_idx}"));
+    if selected {
+        b.fill(tokens::ACCENT).stroke(tokens::RING)
+    } else {
+        b.fill(tokens::CARD).stroke(tokens::BORDER)
+    }
 }
 
 /// Build the engine `Graph` for a file's intra-file call graph, plus the fn

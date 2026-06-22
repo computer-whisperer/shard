@@ -11,7 +11,7 @@
 
 use damascene_core::prelude::*;
 use shard_viewer::model::Project;
-use shard_viewer::view::{self, ViewParams};
+use shard_viewer::view::{self, ViewMode, ViewParams};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
@@ -20,35 +20,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out = args.next().unwrap_or_else(|| "graph.svg".to_string());
 
     let project = Project::load(std::path::Path::new(&root))?;
-    let file_idx = project
-        .files
-        .iter()
-        .position(|f| f.rel.contains(&needle))
-        .ok_or_else(|| format!("no file matching `{needle}`"))?;
 
-    println!(
-        "rendering {} ({} fns)",
-        project.files[file_idx].rel,
-        project.files[file_idx].fns.len()
-    );
-
-    // Select the file's most-called fn so the detail panel is exercised too.
-    let selected_fn = project.files[file_idx]
-        .fns
-        .iter()
-        .copied()
-        .max_by_key(|&fi| {
-            project
-                .fns
-                .iter()
-                .filter(|g| g.calls.contains(&fi))
-                .count()
-        });
-
-    let params = ViewParams {
-        selected_file: Some(file_idx),
-        selected_fn,
-        zoom: 1.0,
+    // `shard-render . systems out.svg` renders the project import graph.
+    let params = if needle == "systems" {
+        println!("rendering systems graph ({} files)", project.files.len());
+        ViewParams {
+            mode: ViewMode::Systems,
+            selected_file: None,
+            selected_fn: None,
+            zoom: 1.0,
+        }
+    } else {
+        let file_idx = project
+            .files
+            .iter()
+            .position(|f| f.rel.contains(&needle))
+            .ok_or_else(|| format!("no file matching `{needle}`"))?;
+        println!(
+            "rendering {} ({} fns)",
+            project.files[file_idx].rel,
+            project.files[file_idx].fns.len()
+        );
+        // Select the file's most-called fn so the detail panel is exercised too.
+        let selected_fn = project.files[file_idx]
+            .fns
+            .iter()
+            .copied()
+            .max_by_key(|&fi| project.fns.iter().filter(|g| g.calls.contains(&fi)).count());
+        ViewParams {
+            mode: ViewMode::Methods,
+            selected_file: Some(file_idx),
+            selected_fn,
+            zoom: 1.0,
+        }
     };
     let mut root_el = view::app_root(&project, &params);
     let viewport = Rect::new(0.0, 0.0, 1600.0, 1000.0);

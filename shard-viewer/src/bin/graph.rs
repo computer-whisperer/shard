@@ -30,6 +30,8 @@ fn main() -> std::io::Result<()> {
     }
 
     let total_calls: usize = project.fns.iter().map(|f| f.calls.len()).sum();
+    let total_imports: usize = project.files.iter().map(|f| f.imports.len()).sum();
+    let resolved_imports: usize = project.files.iter().map(|f| f.import_targets.len()).sum();
     println!(
         "{} files, {} fns ({} sig), {} call edges, {} parse errors",
         project.files.len(),
@@ -37,6 +39,9 @@ fn main() -> std::io::Result<()> {
         project.fns.iter().filter(|f| f.is_sig).count(),
         total_calls,
         parse_errors,
+    );
+    println!(
+        "imports: {resolved_imports} resolved / {total_imports} raw (in-project dependency edges)"
     );
 
     println!("\n== files ==");

@@ -13,11 +13,16 @@ UI library.
 
 ## Status
 
-First milestone — the **call-graph (methods) view**:
+Two views, toggled in the toolbar:
+
+**Methods** — one file's call graph:
 
 - Sidebar lists every `.shard` file with its fn count; click to switch.
 - The canvas draws the selected file's fns as boxes (name + `N args → Ret`)
   with intra-file call edges as curved arrows.
+
+**Systems** — the project-wide file import dependency graph (each file → the
+files it imports). Click a file node to drill into its Methods view.
 - Layout is a generic, semantics-agnostic **layered (Sugiyama) engine**
   (`layout.rs`): SCC condensation (cycles share a column) → dummy nodes for
   long edges → barycenter crossing reduction → iterative coordinate assignment
@@ -41,7 +46,7 @@ The call-scan parser already feeds both.
 |---|---|
 | `shard-viewer [ROOT]` | The GUI (native window via `damascene-winit-wgpu`). Defaults to the most fn-dense file. |
 | `shard-graph [ROOT] [FN]` | Text dump of the extracted model: per-file counts, the most-called fns, or one fn's callers/callees. No GUI deps. |
-| `shard-render ROOT FILE_SUBSTRING [OUT.svg]` | Headless render of one file's graph to SVG + a lint report. No GPU/window. |
+| `shard-render ROOT FILE_SUBSTRING [OUT.svg]` | Headless render of one file's graph to SVG + a lint report. No GPU/window. Use `systems` as the substring to render the import graph. |
 
 `ROOT` defaults to the current directory; run from a shard checkout.
 
