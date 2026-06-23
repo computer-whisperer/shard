@@ -135,6 +135,35 @@ is where to start when planning v3.
   re-admitting their facts), or checking-time regression on the
   corpus becomes the bottleneck.
 
+### Refinement (2026-06-23): div STAYS in core; contraction is Word/Bytes only
+- **Revised:** div's quotient axioms are **not** revoked. Division/mod
+  is **nonlinear** (`n = d*q + r` is a product of unknowns), so farkas
+  provably cannot derive the div facts — there is no linear route, and
+  the prims are not a recursive definition to induct over. Euclidean
+  integer division is an **expansion of the Int base** with the same
+  centuries-of-vetting pedigree as Int arithmetic itself; the #15
+  pedigree test ("invented last week") *passes* for it. The line is
+  therefore: **axioms about the base number system (Int incl. division)
+  are pedigreed and allowed; axioms about our invented formers
+  (Word/Bytes) are not** — those are derivable from the base and must be
+  theorems (`wadd` image is a fact about `mod`; `blen` is `len` of a
+  list).
+- **Did now:** reshaped `std/div` to the minimal euclidean axiom set —
+  **5 axioms → 2** (`mod_lo`/`mod_hi`, the variable-divisor remainder
+  range, unconditional in n). The decimal trio (`ediv_mod_10_id`,
+  `mod_10_lo`, `mod_10_hi`) and the measure lemmas (`div_lt`,
+  `div_nonneg`) are now **theorems**, proven via the kernel `div-facts`
+  step at the literal divisor 10. Deleted the mixed `/`+`mod`
+  `div_mod_10_id` axiom (the one that shipped false on negatives) and
+  moved the proof surface onto a single canonical division: euclidean
+  `ediv`/`mod`. The truncating `/`+`tmod` pair stays a runtime/derived
+  corner. `show`/`wf_induct_demo` and the std/div citers migrated to
+  `ediv`; corpus diff is exactly this change, no new failures.
+- **So:** the "ten std axioms → theorems / std is axiom-free" goal
+  narrows to the **bytes** five; div keeps 2 pedigreed base axioms.
+  Word/Bytes demotion is unchanged and still pending (Word first, since
+  Bytes = `(List u8)` rides on it).
+
 ## Language Surface
 
 ### sexp file format

@@ -1,101 +1,55 @@
 ;;; std/div/div.shard — the `div` module IMPLEMENTATION (private).
 ;;;
-;;; Imports its own interface as an ordinary `.shard` FILE (ungranted): the 3
-;;; trusted axioms are admitted, and div_lt/div_nonneg load as OBLIGATIONS that
-;;; the `fulfills` proofs below discharge. The pure-linear helpers div_lt_aux /
-;;; div_nonneg_aux are PRIVATE — declared here, NOT in mod.req.shard, so a
-;;; consumer can neither cite nor depend on them. Consumers never load this
-;;; file; they get only mod.req.shard.
+;;; Imports its own interface as an ordinary `.shard` FILE (ungranted): the 2
+;;; trusted axioms (mod_lo / mod_hi) are admitted, and the derived facts
+;;; (ediv_mod_10_id / mod_10_lo / mod_10_hi / div_lt / div_nonneg) load as
+;;; OBLIGATIONS that the `fulfills` proofs below discharge. Consumers never load
+;;; this file; they get only mod.req.shard.
 ;;;
-;;; (/ n 10) and (mod n 10) appear to farkas as OPAQUE ATOMS, recognized across
-;;; premises/goal by structural equality — so the identity axiom, fed as a
-;;; premise, lets farkas eliminate them. Divisor is the literal 10 throughout
-;;; (decimal): that keeps 10*(/ n 10) a const*var term, which lia/farkas handle
-;;; linearly; a symbolic divisor would be nonlinear and out of scope.
+;;; Every derived fact is proven through the kernel `div-facts` step at the
+;;; LITERAL divisor 10. That step injects the full euclidean characterization
+;;; as premises — [0] n = 10*q + (mod n 10); [1] 0 <= (mod n 10);
+;;; [2] (mod n 10) <= 9; [3] (ediv n 10) = q (the fresh quotient naming, sound
+;;; by uniqueness) — which is the only bridge that lets the linear backend see
+;;; the otherwise-opaque (ediv n 10) atom. (Any pre-existing requirement
+;;; premise stays at [0] and shifts these to [1..4].)
 
 (import "../../kernel/stdlib.shard")
 (import "mod.req.shard")  ; our interface — the axioms + the obligations
 (use (:: std div *))  ; impl-proof verification: rebind bodies + bring lemma names into citation scope
 
-;; --- private pure-linear helpers (q, r are ordinary Int vars) ---------------
+;; --- the euclidean identity at d = 10 --------------------------------------
+;; Goal: n = 10*(ediv n 10) + (mod n 10). Name (ediv n 10) as q via premise 3,
+;; then the goal is exactly the decomposition premise 0.
+(fulfills ediv_mod_10_id
+  (div-facts
+    n
+    10
+    q
+    (steps
+      ((rewrite (premise 3) lr rhs true ())
+       (rewrite (premise 0) lr lhs true ()))
+      refl)))
 
-;; If n = 10q + r with 0 <= r and 0 < n, then q < n.
-;; Refutation of (q >= n): 10*(q-n) + 1*(n-10q-r) + 1*(r) + 9*(n-1) = -9 < 0.
-(claim div_lt_aux
-  (goal ((n Int) (q Int) (r Int))
-    ((= n (+ (* 10 q) r)) (= (le 0 r) True) (= (lt 0 n) True))
-    (= (lt q n) True))
-  (by farkas (list 10 1 1 9)))
+;; --- the remainder bounds at d = 10 ----------------------------------------
+;; Each goal IS a div-facts premise; rewrite it to True.
+(fulfills mod_10_lo
+  (div-facts n 10 q (steps ((rewrite (premise 1) lr lhs true ())) refl)))
 
-;; If n = 10q + r with 0 <= r <= 9 and 0 <= n, then 0 <= q.
-;; Refutation of (q < 0): G=10 on neg-goal, M0=-1 on the (equality) identity,
-;; M2=1 on (r<=9), M3=1 on (0<=n) ⟹ constant -1 < 0.
-(claim div_nonneg_aux
-  (goal ((n Int) (q Int) (r Int))
-    ((= n (+ (* 10 q) r)) (= (le 0 r) True) (= (le r 9) True) (= (le 0 n) True))
-    (= (le 0 q) True))
-  (by farkas (list 10 -1 0 1 1)))
+(fulfills mod_10_hi
+  (div-facts n 10 q (steps ((rewrite (premise 2) lr lhs true ())) refl)))
 
-;; --- discharge the interface's derived requirements -------------------------
-;; Instantiate the helpers at q := (/ n 10), r := (mod n 10), discharging the
-;; algebraic premises from the trusted axioms.
+;; --- the measure lemmas ----------------------------------------------------
+;; Premises at each obligation: 0 = the requirement premise (0<n / 0<=n);
+;; 1 = decomp; 2 = lo; 3 = hi; 4 = naming (ediv n 10) = q. The farkas certs
+;; are the divdown measure-clause certs (examples/measure_clause.shard) — the
+;; n-terms cancel, so the same vector closes whether the premise is n>=10 or
+;; the weaker 0<n / 0<=n (only the trailing constant changes, staying < 0).
 
-;; div_lt:  0 < n  |-  (/ n 10) < n.
-(fulfills div_lt
-  (rewrite-with
-    (lemma div_lt_aux)
-    lr
-    lhs
-    ((inst n n) (inst q (/ n 10)) (inst r (mod n 10)))
-    (;; P0: n = 10*(/ n 10) + (mod n 10)  — the identity axiom (fold RHS to
-     ;; n); its 0<=n guard from our 0<n premise, like P1's.
-     (rewrite-with
-       (lemma div_mod_10_id)
-       rl
-       rhs
-       ()
-       ((by farkas (list 1 1)))
-       refl)
-     ;; P1: 0 <= (mod n 10)  — mod_10_lo, its premise 0<=n from 0<n.
-     (rewrite-with (lemma mod_10_lo) lr lhs () ((by farkas (list 1 1))) refl)
-     ;; P2: 0 < n  — the goal premise.
-     (steps ((rewrite (premise 0) lr lhs true ())) refl))
-    refl))
+;; div_lt:  0 < n  |-  (ediv n 10) < n.
+;; 10*neg_goal + 9*(0<n) + decomp + lo - 10*naming = -9 < 0.
+(fulfills div_lt (div-facts n 10 q (by farkas (list 10 9 1 1 0 -10))))
 
-;; div_nonneg:  0 <= n  |-  0 <= (/ n 10).
-(fulfills div_nonneg
-  ;; Pin n explicitly: the conclusion (le 0 q) does not mention the lemma's n,
-  ;; so without this inst it stays an unresolved pattern var and the n-premises
-  ;; (identity, 0<=n) couldn't be discharged.
-  (rewrite-with
-    (lemma div_nonneg_aux)
-    lr
-    lhs
-    ((inst n n) (inst q (/ n 10)) (inst r (mod n 10)))
-    (;; P0: n = 10*(/ n 10) + (mod n 10); its 0<=n guard is our premise.
-     (rewrite-with
-       (lemma div_mod_10_id)
-       rl
-       rhs
-       ()
-       ((steps ((rewrite (premise 0) lr lhs true ())) refl))
-       refl)
-     ;; P1: 0 <= (mod n 10)  — mod_10_lo, its premise 0<=n is our premise.
-     (rewrite-with
-       (lemma mod_10_lo)
-       lr
-       lhs
-       ()
-       ((steps ((rewrite (premise 0) lr lhs true ())) refl))
-       refl)
-     ;; P2: (mod n 10) <= 9  — mod_10_hi, its premise 0<=n is our premise.
-     (rewrite-with
-       (lemma mod_10_hi)
-       lr
-       lhs
-       ()
-       ((steps ((rewrite (premise 0) lr lhs true ())) refl))
-       refl)
-     ;; P3: 0 <= n  — the goal premise.
-     (steps ((rewrite (premise 0) lr lhs true ())) refl))
-    refl))
+;; div_nonneg:  0 <= n  |-  0 <= (ediv n 10).
+;; 10*neg_goal + (0<=n) - decomp + hi + 10*naming = -1 < 0.
+(fulfills div_nonneg (div-facts n 10 q (by farkas (list 10 1 -1 0 1 10))))
