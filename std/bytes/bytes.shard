@@ -138,6 +138,141 @@
           (rewrite (lemma append_cons) lr rhs true ()))
          refl)))))
 
+;; in-range mod is the identity: 0<=h<256 |- mod h 256 = h. div-facts names the
+;; quotient q; rational farkas only pins q to (-1,1), so fin-split supplies the
+;; integrality (q in {-1,0,1}; +-1 are contradictory, q=0 gives h = mod h 256).
+(claim mod_byte_id
+  (goal ((h Int)) ((= (le 0 h) True) (= (lt h 256) True)) (= (mod h 256) h))
+  (div-facts
+    h
+    256
+    q
+    (have qlo (= (le -1 q) True)
+      (by farkas (list 256 1 0 -1 0 1 0))
+      (have qhi (= (le q 1) True)
+        (by farkas (list 256 0 1 1 1 0 0))
+        (fin-split
+          q
+          (premise qlo)
+          (premise qhi)
+          ((case -1
+             (by
+               farkas
+               (list (list 0 1 0 -1 0 1 0 0 0) (list 0 1 0 -1 0 1 0 0 0))))
+           (case 0
+             (by
+               farkas
+               (list (list 1 0 0 1 0 0 0 0 0) (list 1 0 0 -1 0 0 0 0 0))))
+           (case 1
+             (by
+               farkas
+               (list (list 0 0 1 1 1 0 0 0 0) (list 0 0 1 1 1 0 0 0 0))))))))))
+
+;; u8 round-trips an in-range int: 0<=h<256 |- u8_val (u8 h) = h.
+(claim u8val_u8_id
+  (goal ((h Int)) ((= (le 0 h) True) (= (lt h 256) True)) (= (u8_val (u8 h)) h))
+  (have g1 (= (mod h 256) h)
+    (rewrite-with
+      (lemma mod_byte_id)
+      lr
+      lhs
+      ((inst h h))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl))
+      refl)
+    (steps
+      ((rewrite (lemma u8_val_of) lr lhs true ((inst nn h)))
+       (rewrite (premise g1) lr lhs true ()))
+      refl)))
+
+;; the round trip on a byte-range list: bytes_ok xs |- mapval (mapu8 xs) = xs.
+;; Induct on xs; the Cons step inverts bytes_ok (Cons h t) = True via case-on
+;; (the two off-range arms are absurd), then u8val_u8_id fixes the head and the
+;; IH (premise: bytes_ok t, extracted from the inversion) fixes the tail.
+(claim roundtrip
+  (goal ((xs (List Int))) ((= (bytes_ok xs) True)) (= (mapval (mapu8 xs)) xs))
+  (induct xs
+    ((case Nil
+       (steps
+         ((rewrite (lemma mapu8_nil) lr lhs true ())
+          (rewrite (lemma mapval_nil) lr lhs true ()))
+         refl))
+     (case Cons
+       (h t)
+       (case-on (le 0 h) Bool
+         ((case True
+            (case-on (lt h 256) Bool
+              ((case True
+                 (have hred (= (bytes_ok (Cons h t)) (bytes_ok t))
+                   (steps
+                     ((unfold bytes_ok lhs)
+                      (reduce lhs)
+                      (rewrite (hyp 1) lr lhs true ())
+                      (reduce lhs)
+                      (rewrite (hyp 0) lr lhs true ())
+                      (reduce lhs))
+                     refl)
+                   (have hbt (= (bytes_ok t) True)
+                     (steps
+                       ((rewrite (premise hred) rl lhs true ())
+                        (rewrite (premise 0) lr lhs true ()))
+                       refl)
+                     (have hu (= (u8_val (u8 h)) h)
+                       (rewrite-with
+                         (lemma u8val_u8_id)
+                         lr
+                         lhs
+                         ((inst h h))
+                         ((steps ((rewrite (hyp 1) lr lhs true ())) refl)
+                          (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                         refl)
+                       (have ihres (= (mapval (mapu8 t)) t)
+                         (rewrite-with
+                           (hyp ih)
+                           lr
+                           lhs
+                           ()
+                           ((steps
+                              ((rewrite (premise hbt) lr lhs true ()))
+                              refl))
+                           refl)
+                         (steps
+                           ((rewrite (lemma mapu8_cons) lr lhs true ())
+                            (rewrite (lemma mapval_cons) lr lhs true ())
+                            (rewrite (premise ihres) lr lhs true ())
+                            (rewrite (premise hu) lr lhs true ()))
+                           refl))))))
+               (case False
+                 (have hf (= (bytes_ok (Cons h t)) False)
+                   (steps
+                     ((unfold bytes_ok lhs)
+                      (reduce lhs)
+                      (rewrite (hyp 1) lr lhs true ())
+                      (reduce lhs)
+                      (rewrite (hyp 0) lr lhs true ())
+                      (reduce lhs))
+                     refl)
+                   (have contra (= True False)
+                     (steps
+                       ((rewrite (premise 0) rl lhs true ())
+                        (rewrite (premise hf) lr lhs true ()))
+                       refl)
+                     (absurd (premise contra))))))))
+          (case False
+            (have hf (= (bytes_ok (Cons h t)) False)
+              (steps
+                ((unfold bytes_ok lhs)
+                 (reduce lhs)
+                 (rewrite (hyp 0) lr lhs true ())
+                 (reduce lhs))
+                refl)
+              (have contra (= True False)
+                (steps
+                  ((rewrite (premise 0) rl lhs true ())
+                   (rewrite (premise hf) lr lhs true ()))
+                  refl)
+                (absurd (premise contra)))))))))))
+
 ;; --- discharge the interface's requirements ---------------------------------
 
 (fulfills bytes_ok_nil (steps ((unfold bytes_ok lhs) (reduce lhs)) refl))
@@ -201,6 +336,24 @@
     ((unfold bidx lhs)
      (rewrite (lemma u8_made_hi) lr lhs true ((inst nn (raw_at (brep b) i)))))
     refl))
+
+;; of_list_id: list_of_bytes (bytes_of_list xs) = mapval (mapu8 xs) = xs (on a
+;; byte-range list) — the round-trip lemma after the rep unfolds.
+(fulfills of_list_id
+  (have hrt (= (mapval (mapu8 xs)) xs)
+    (rewrite-with
+      (lemma roundtrip)
+      lr
+      lhs
+      ((inst xs xs))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+      refl)
+    (steps
+      ((unfold list_of_bytes lhs)
+       (unfold bytes_of_list lhs)
+       (rewrite (lemma brep_mk) lr lhs true ())
+       (rewrite (premise hrt) lr lhs true ()))
+      refl)))
 
 ;; slice_len_exact: blen (bslice b i j) = len (take (j-i) (drop i (brep b))).
 ;; drop_len gives len (drop i rep) = len rep - i on the valid window, then
