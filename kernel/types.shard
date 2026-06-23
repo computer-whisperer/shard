@@ -480,26 +480,52 @@
                            (chars_of_sym (qn_name rname)))))
                      ((Some (Pair base _)) (TcOk tc1 base))))))))))
          (_ (TcErr "refine_val: expects exactly one argument")))
-       (match (tc_fn_sig f m)
-         ;; not a fn/extern/prim: the wrap rules (width literal → type
-         ;; index) get a shot — a user fn of the same name shadows them
-         ;; here exactly as it shadows at runtime (trie-first dispatch).
-         (None (TcErr (tc_app "unknown function: " (chars_of_sym (qn_name f)))))
-         ((Some (Pair ptypes ret))
-          (match (tc_freshen (tc_collect_tvars (Cons ret ptypes) Nil) tc)
-            ((Freshened inst _ tc1)
-             (match
-               (tc_check_args
-                 m
-                 tc1
-                 fenv
-                 env
-                 args
-                 (type_subst_list inst ptypes)
-                 f
-                 1)
-               ((TcsErr msg) (TcErr msg))
-               ((TcsOk tc2) (TcOk tc2 (type_subst inst ret))))))))))
+       (if (sym_eq (qn_name f) (quote refine_try))
+         ;; refine_try : BASE -> (Option R), the decidable downcast into a refined
+         ;; type R = (refine BASE PRED). arg0 is the type MARKER (Ctor R Nil); arg1
+         ;; the candidate, which must have type BASE. Result is (Option R). The
+         ;; reducer computes PRED to wrap Some only on True. See docs/REFINEMENT.md.
+         (match args
+           ((Cons (Ctor rname _) (Cons ev Nil))
+            (match (typedef_refine rname m)
+              (None
+                (TcErr
+                  (tc_app
+                    "refine_try: not a refined type: "
+                    (chars_of_sym (qn_name rname)))))
+              ((Some (Pair base _))
+               (match (tc_infer m tc fenv env ev)
+                 ((TcErr msg) (TcErr msg))
+                 ((TcOk tc1 et)
+                  (match (tc_unify et base tc1)
+                    (None
+                      (TcErr (tc_mismatch "refine_try argument" et base tc1)))
+                    ((Some tc2)
+                     (TcOk
+                       tc2
+                       (TCon (qn (quote Option)) (Cons (TCon rname Nil) Nil))))))))))
+           (_ (TcErr "refine_try: expects a refined type and one argument")))
+         (match (tc_fn_sig f m)
+           ;; not a fn/extern/prim: the wrap rules (width literal → type
+           ;; index) get a shot — a user fn of the same name shadows them
+           ;; here exactly as it shadows at runtime (trie-first dispatch).
+           (None
+             (TcErr (tc_app "unknown function: " (chars_of_sym (qn_name f)))))
+           ((Some (Pair ptypes ret))
+            (match (tc_freshen (tc_collect_tvars (Cons ret ptypes) Nil) tc)
+              ((Freshened inst _ tc1)
+               (match
+                 (tc_check_args
+                   m
+                   tc1
+                   fenv
+                   env
+                   args
+                   (type_subst_list inst ptypes)
+                   f
+                   1)
+                 ((TcsErr msg) (TcErr msg))
+                 ((TcsOk tc2) (TcOk tc2 (type_subst inst ret)))))))))))
     ((If c t e2)
      (match (tc_infer m tc fenv env c)
        ((TcErr msg) (TcErr msg))

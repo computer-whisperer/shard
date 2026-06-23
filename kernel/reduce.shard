@@ -140,9 +140,31 @@
     ((IntLit _) None)
     ((SymLit _) None)))
 
+;; refine_try_step: reduce (refine_try (Ctor R Nil) EXPR) — the decidable
+;; downcast into a refined type R = (refine BASE PRED). It reduces in ONE step
+;; to (if (PRED EXPR) (Some EXPR) None), so the existing If/PRED machinery does
+;; the computation and Some is wrapped ONLY when PRED reduces to True (the
+;; soundness invariant). The type marker (Ctor R Nil) names R; typedef_refine
+;; recovers PRED. Stuck (None) if the marker isn't a refined type — the typer
+;; rules that out ahead of reduction. See docs/REFINEMENT.md.
+(fn refine_try_step ((m Module) (args (List Expr))) (Option Expr)
+  (match args
+    ((Cons (Ctor rname _) (Cons ev Nil))
+     (match (typedef_refine rname m)
+       (None None)
+       ((Some (Pair _ pred))
+        (Some
+          (If
+            (Call pred (Cons ev Nil))
+            (Ctor (qn (quote Some)) (Cons ev Nil))
+            (Ctor (qn (quote None)) Nil))))))
+    (_ None)))
+
 ;; step_call: unfold user-fn application if possible; otherwise try
 ;; the primitive table; otherwise step an argument. Stuck calls
 ;; (unknown name AND not a primitive AND no reducible arg) return None.
+;; refine_try is reserved (handled before trie lookup, like refine_val in
+;; try_step_prim) — see refine_try_step.
 ;;
 ;; The primitive dispatch happens at the data level — the kernel is
 ;; reducing a Call VALUE, not invoking a function. See REVISIT —
@@ -151,6 +173,7 @@
   (measure (+ (* 2 (size_list args)) 2))
   (match m
     ((Module _ _ _ trie _)
+     (if (sym_eq (qn_name f) (quote refine_try)) (refine_try_step m args)
      (match (trie_lookup f trie)
        ((Some fd)
         (match (apply_fn fd args)
@@ -159,7 +182,7 @@
        (None
          (match (try_step_prim (qn_name f) args)
            ((Some e2) (Some e2))
-           (None (step_args_in_call m f args))))))))
+           (None (step_args_in_call m f args)))))))))
 
 ;; try_step_prim: dispatch a Call value to the primitive table when
 ;; all args are already values of the expected shapes. Returns None
@@ -992,18 +1015,40 @@
      (Cons (ceval m env h (- fuel 1)) (ceval_list m env t (- fuel 1)))))))
 
 (fn ceval_call ((m Module) (f QName) (vs (List Expr)) (fuel Int)) Expr
-  (measure fuel (by farkas (list 1 0)) (by farkas (list 1 1)))
+  ;; sites in pre-order: the refine_try recursive (pred ev) eval, then the
+  ;; fn-body ceval — both spend one fuel unit, same ad_fix vectors.
+  (measure
+    fuel
+    (by farkas (list 1 0))
+    (by farkas (list 1 1))
+    (by farkas (list 1 0))
+    (by farkas (list 1 1)))
   (if (lt fuel 1) (Call f vs)
-  (match m
-    ((Module _ _ _ trie _)
-     (match (trie_lookup f trie)
-       ((Some (FnDef _ ptypes _ body))
-        (if (int_eq (len vs) (len_t ptypes))
-          (ceval m (reverse_exprs vs) body (- fuel 1))  ; (reverse args) ⊢ body
-          (Call f vs)))  ; partial app → stuck
-       (None
-         (match (try_step_prim (qn_name f) vs)
-           ((Some r) r)
-           (None (Call f vs)))))))))  ; prim-miss / extern → stuck
+  (if (sym_eq (qn_name f) (quote refine_try))
+    ;; (refine_try (Ctor R Nil) ev): vs already evaluated. Compute R's PRED on
+    ;; ev; wrap Some ONLY on True. Stuck (return the Call) if not a refined type
+    ;; or PRED doesn't decide — the typer rules the former out. docs/REFINEMENT.md.
+    (match vs
+      ((Cons (Ctor rname _) (Cons ev Nil))
+       (match (typedef_refine rname m)
+         (None (Call f vs))
+         ((Some (Pair _ pred))
+          (match (ceval_call m pred (Cons ev Nil) (- fuel 1))
+            ((Ctor (QName _ (quote True)) Nil)
+             (Ctor (qn (quote Some)) (Cons ev Nil)))
+            ((Ctor (QName _ (quote False)) Nil) (Ctor (qn (quote None)) Nil))
+            (_ (Call f vs))))))
+      (_ (Call f vs)))
+    (match m
+      ((Module _ _ _ trie _)
+       (match (trie_lookup f trie)
+         ((Some (FnDef _ ptypes _ body))
+          (if (int_eq (len vs) (len_t ptypes))
+            (ceval m (reverse_exprs vs) body (- fuel 1))  ; (reverse args) ⊢ body
+            (Call f vs)))  ; partial app → stuck
+         (None
+           (match (try_step_prim (qn_name f) vs)
+             ((Some r) r)
+             (None (Call f vs))))))))))  ; prim-miss / extern → stuck
 
 (fn compute_eval ((m Module) (e Expr)) Expr (ceval m Nil e (simp_budget)))

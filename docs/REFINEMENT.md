@@ -109,20 +109,26 @@ reserved `refine` clause instead of constructor clauses. Opaque form is the usua
 `(sig type R)` in the interface + the `(type R (refine …))` in the impl + the
 `use`-glob rebind, identical to how `std/word`/`std/bytes` are hidden.
 
-### 3.2 Introduction — two doors [refined-return BUILT · downcast DECIDED]
+### 3.2 Introduction — two doors [refined-return BUILT · downcast BUILT]
 
 Proofs live in `claim`s, not in expression position, but values are *constructed*
 in runtime function bodies. So "intro requires a proof" cannot mean an inline
 proof term. There are two sound doors, and the corpus needs both:
 
-- **[DECIDED, slice 2b]** **Decidable downcast** — `(refine_try R EXPR) :
+- **[BUILT, slice 2b]** **Decidable downcast** — `(refine_try R EXPR) :
   (Option R)` where `EXPR : BASE`. The obligation is discharged by
   **computation**: on a ground `EXPR` the reducer evaluates `PRED EXPR` and
   yields `(Some EXPR)` iff it is `True`, else `None`. No proof. This is the
   I/O-boundary *validator* — `utf8_decode b = (refine_try Str b)`, exactly Rust's
   `str::from_utf8 → Result`. It threads the evidence *into the data*: in the
   `(Some s)` branch the consumer already holds an `R` with the invariant baked
-  in.
+  in. The type `R` is written bare (`(refine_try Small n)`); the reader carries
+  it as a nullary-ctor MARKER `(Ctor R Nil)` in arg0 so the term stays an
+  ordinary `Call` — `resolve`'s `Ctor` arm runs `rhead` on `R` (→ the type's
+  qname) for free, the typer reads `R` back, and the reducer (both `step_call`
+  and the big-step `ceval_call` that `compute` uses) computes `PRED`. See
+  `examples/refine_try.shard` (pass) / `examples/refine_try_rejects.shard`
+  (must-fail: non-refined marker, wrong base type).
 - **[BUILT]** **Refined return type** — `(fn f (a…) R body)`. A refined return
   type `R = (refine BASE PRED)` **emits the obligation**
   `∀a, (= (PRED (f a)) True)` — the proof that `f`'s result really lands in `R`.
@@ -270,9 +276,10 @@ everything — before the harder `Str`.
      The gate de-refines `f`'s SCC before checking (`rr_deref`) so the proof
      cannot cite the refinement it is establishing; pinned by
      `examples/refine_circular_rejects.shard`.
-   - **[DECIDED, slice 2b]** the `refine_try` decidable downcast (needs the
-     type-in-`Expr` encoding so the reducer can find `PRED`). This is the only
-     remaining intro door; with it `Str`'s `utf8_decode` becomes expressible.
+   - **[BUILT, slice 2b]** the `refine_try` decidable downcast. The type is
+     carried as the nullary-ctor marker `(Ctor R Nil)` in arg0 so the reducer
+     can find `PRED`; reduces in both `step_call` and the big-step `ceval_call`.
+     Both intro doors now exist; with this `Str`'s `utf8_decode` is expressible.
 2. **`Nat`** — a refined nonneg-`Int` `(refine Int (le 0 _))` on the size
    functions. The corpus today carries **~400** `(le 0 (size …))` lemma citations
    plus **~150** measure `#nonneg` sidecar obligations; making the size functions
@@ -331,21 +338,29 @@ the erasure/automation/hiding combination.
 | capability / ghost tokens | reject (status quo) | "thread a `(Valid x)` premise" is exactly what we replace; no type-level guarantee |
 | pure compositional (opaque module, no type feature) | insufficient (where we are) | the Rust newtype ceiling — *cannot state* the forall-inhabitant fact |
 
-## 9. Where the code lives [BUILT through slice 2; downcast 2b PLANNED]
+## 9. Where the code lives [BUILT through slice 2b]
 
 Almost entirely shard kernel (the Rust side is an evaluator/loader only):
 
 - `kernel/module.shard` — the refined-type registry (extend `TypeDef`, or a
   parallel `(QName → (BASE, PRED))` table on `Module`); lookup helper.
 - `kernel/reader.shard` / `kernel/loader.shard` — parse `(type R (refine BASE
-  PRED))` into the registry; route the `refine` type body.
+  PRED))` into the registry; route the `refine` type body. [2b BUILT]
+  `elab_refine_try` rewraps `(refine_try R EXPR)`'s bare type name (a `(FVar R)`)
+  as the marker `(Ctor R Nil)` — in `elaborate_form`'s default arm, AFTER the
+  recursive `elaborate_list`, so it adds no measure-delegation site.
 - `kernel/types.shard` — [BUILT] typing for `refine_val` (`R → BASE`) and
   `tc_fn_body_ret` (admit a `BASE`-typed body at a refined return `R`);
-  [2b] typing for `refine_try` (`BASE → (Option R)`). A refined `(TCon R …)` is
-  already a first-class `TCon` elsewhere (no change needed).
+  [2b BUILT] typing for `refine_try` (decode `R` from the `(Ctor R Nil)` marker,
+  check `EXPR : BASE`, return `(Option R)`). A refined `(TCon R …)` is already a
+  first-class `TCon` elsewhere (no change needed). Both `refine_val` and
+  `refine_try` are RESERVED names, checked before `tc_fn_sig`.
 - `kernel/reduce.shard` — [BUILT] `refine_val` (identity, hoisted in
-  `try_step_prim` so it fires for any carrier shape); [2b] `refine_try` (compute
-  `PRED`, wrap).
+  `try_step_prim` so it fires for any carrier shape); [2b BUILT] `refine_try` in
+  BOTH reducers — small-step `step_call` (`refine_try_step` → `(if (PRED EXPR)
+  (Some EXPR) None)`, reusing the `If` machinery) and the big-step `ceval_call`
+  that `compute` drives (evaluate `PRED EXPR` to a Bool, wrap `Some` only on
+  `True`; one new recursive site, measure updated). Reserved before trie lookup.
 - `kernel/proof.shard` — the `RefineFact` `Proof` ctor (Expr + continuation,
   fact appended last — the `DivFacts`/`Have` shape).
 - `kernel/proof_reader.shard` — parse `(refine-fact EXPR)`.
@@ -367,8 +382,12 @@ Almost entirely shard kernel (the Rust side is an evaluator/loader only):
   — projection, the elim fact, and the borrow-another's-predicate /
   non-refined-type must-fails); `examples/refine_return.shard` +
   `examples/refine_return_rejects.shard` (slice 2 — a discharged refined return,
-  and the predicate-escaping-body / missing-`(returns …)` must-fails). Then the
-  `Nat`/Word/`Str` retrofits become their own corpus regressions.
+  and the predicate-escaping-body / missing-`(returns …)` must-fails);
+  `examples/refine_circular_rejects.shard` (the circularity-guard pin);
+  `examples/refine_try.shard` + `examples/refine_try_rejects.shard` (slice 2b —
+  the Some/None downcast both ways, and the non-refined-marker / wrong-base-type
+  must-fails). Then the `Nat`/Word/`Str` retrofits become their own corpus
+  regressions.
 
 ## 10. Open / deferred
 
