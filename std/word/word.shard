@@ -1,0 +1,73 @@
+;;; std/word/word.shard — the `word` module IMPLEMENTATION (private).
+;;;
+;;; Supplies the full type (with the PRIVATE ctor mk_u8), the bodies behind the
+;;; interface's opaque sig fns, and the `fulfills` proofs. Imports its own
+;;; interface ungranted so the requirements load as obligations; the full
+;;; `(type …)` shadows the abstract `(sig type …)` so the impl may construct and
+;;; match the representation (sound: the module reasons about itself). Consumer
+;;; PROOFS never see mk_u8.
+;;;
+;;; Representation: the raw value, normalized into [0, 256) by `u8` (the only
+;;; maker). Each op projects its args to Int, applies the Int op, re-wraps —
+;;; so the range invariant is maintained BY CONSTRUCTION and every law reduces
+;;; to a fact about euclidean `mod` (std/div).
+
+(import "../../kernel/stdlib.shard")
+(import "../div")  ; mod_lo / mod_hi — euclidean remainder range
+(import "mod.req.shard")  ; our interface — the opaque type + sig fns + reqs
+(use (:: std div *))  ; the mod range axioms for citation
+(use (:: std word *))  ; impl-proof: rebind bodies + bring lemma names into scope
+
+(type U8 (mk_u8 Int))
+
+(fn u8 ((n Int)) U8 (mk_u8 (mod n 256)))
+
+(fn u8_val ((x U8)) Int
+  (match x
+    ((mk_u8 r) r)))
+
+(fn u8_add ((a U8) (b U8)) U8 (u8 (+ (u8_val a) (u8_val b))))
+
+(fn u8_sub ((a U8) (b U8)) U8 (u8 (- (u8_val a) (u8_val b))))
+
+(fn u8_mul ((a U8) (b U8)) U8 (u8 (* (u8_val a) (u8_val b))))
+
+;; ---- discharge the interface's requirements ----
+
+;; u8_val (u8 n) = mod n 256: unfold both, fire the mk_u8 match arm.
+(fulfills u8_val_of
+  (steps ((unfold u8 lhs) (unfold u8_val lhs) (simp lhs)) refl))
+
+;; 0 <= u8_val (u8 n): rewrite to mod, cite mod_lo at the literal divisor 256.
+(fulfills u8_made_lo
+  (steps
+    ((rewrite (lemma u8_val_of) lr lhs true ()))
+    (rewrite-with
+      (lemma mod_lo)
+      lr
+      lhs
+      ((inst n n) (inst d 256))
+      ((steps ((compute both)) refl))
+      refl)))
+
+;; u8_val (u8 n) < 256: rewrite to mod, cite mod_hi at 256.
+(fulfills u8_made_hi
+  (steps
+    ((rewrite (lemma u8_val_of) lr lhs true ()))
+    (rewrite-with
+      (lemma mod_hi)
+      lr
+      lhs
+      ((inst n n) (inst d 256))
+      ((steps ((compute both)) refl))
+      refl)))
+
+;; arithmetic images: unfold the op, rewrite u8_val_of at the summed raw.
+(fulfills u8_add_val
+  (steps ((unfold u8_add lhs) (rewrite (lemma u8_val_of) lr lhs true ())) refl))
+
+(fulfills u8_sub_val
+  (steps ((unfold u8_sub lhs) (rewrite (lemma u8_val_of) lr lhs true ())) refl))
+
+(fulfills u8_mul_val
+  (steps ((unfold u8_mul lhs) (rewrite (lemma u8_val_of) lr lhs true ())) refl))
