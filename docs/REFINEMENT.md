@@ -109,26 +109,32 @@ reserved `refine` clause instead of constructor clauses. Opaque form is the usua
 `(sig type R)` in the interface + the `(type R (refine …))` in the impl + the
 `use`-glob rebind, identical to how `std/word`/`std/bytes` are hidden.
 
-### 3.2 Introduction — two doors [DECIDED]
+### 3.2 Introduction — two doors [refined-return BUILT · downcast DECIDED]
 
 Proofs live in `claim`s, not in expression position, but values are *constructed*
 in runtime function bodies. So "intro requires a proof" cannot mean an inline
 proof term. There are two sound doors, and the corpus needs both:
 
-- **Decidable downcast** — `(refine_try R EXPR) : (Option R)` where `EXPR :
-  BASE`. The obligation is discharged by **computation**: on a ground `EXPR` the
-  reducer evaluates `PRED EXPR` and yields `(Some EXPR)` iff it is `True`, else
-  `None`. No proof. This is the I/O-boundary *validator* — `utf8_decode b =
-  (refine_try Str b)`, exactly Rust's `str::from_utf8 → Result`. It threads the
-  evidence *into the data*: in the `(Some s)` branch the consumer already holds
-  an `R` with the invariant baked in.
-- **Refined return type** — `(fn f (a…) R body)`. Declaring a refined return
-  type **emits the obligation** `∀a, (= (PRED (f a)) True)` as an ordinary claim,
-  discharged by a companion proof (authored, or found by the `tools/prove`
-  sidecar / farkas). The body is ordinary `BASE`-typed code; it is admitted at
-  `R` *because the obligation holds*. This is the *computed-provably-valid* door
-  — `u8`/`u8_add` (obligation closes via `mod_lo`/`mod_hi`), `size_sexpr : Nat`
-  (obligation `0 ≤ size` closes by farkas).
+- **[DECIDED, slice 2b]** **Decidable downcast** — `(refine_try R EXPR) :
+  (Option R)` where `EXPR : BASE`. The obligation is discharged by
+  **computation**: on a ground `EXPR` the reducer evaluates `PRED EXPR` and
+  yields `(Some EXPR)` iff it is `True`, else `None`. No proof. This is the
+  I/O-boundary *validator* — `utf8_decode b = (refine_try Str b)`, exactly Rust's
+  `str::from_utf8 → Result`. It threads the evidence *into the data*: in the
+  `(Some s)` branch the consumer already holds an `R` with the invariant baked
+  in.
+- **[BUILT]** **Refined return type** — `(fn f (a…) R body)`. A refined return
+  type `R = (refine BASE PRED)` **emits the obligation**
+  `∀a, (= (PRED (refine_val (f a))) True)` — the proof that `f`'s result really
+  lands in `R`. The body is ordinary `BASE`-typed code (`tc_fn_body_ret` relaxes
+  the body↔return unification); it is admitted at `R` *because the obligation
+  holds*. The proof is supplied by a **separate top-level form
+  `(returns f PROOF)`** — not a fn clause, so a recursive refined-return fn keeps
+  its `(measure …)` clause unchanged. The driver (`rr_outcome`) **enforces** it:
+  a missing or rejected proof is a HARD failure. This is the
+  *computed-provably-valid* door — `u8`/`u8_add` (obligation closes via
+  `mod_lo`/`mod_hi`), `size_sexpr : Nat` (obligation `0 ≤ size` closes by
+  farkas). The proof may be authored or found by the `tools/prove` sidecar.
 
   Crucially this is **not** flow-sensitive VC generation (the Liquid/F* machinery
   we reject in §8). The obligation is a plain extensional claim `PRED(f a) =
@@ -193,9 +199,11 @@ so this is additive.
 - the **downcast reduction** `refine_try` — wrapping `(Some EXPR)` only when
   `PRED EXPR ⇝ True` is what makes the elim fact true for downcast-introduced
   values;
-- the **refined-return obligation emitter** — the claim it generates
-  (`∀a, PRED(f a) = True`) is what makes the elim fact true for return-introduced
-  values; a missed or mis-stated obligation is unsound;
+- the **refined-return obligation gate** `rr_outcome` (BUILT, enforced) — the
+  claim it generates (`∀a, PRED(refine_val (f a)) = True`) is what makes the elim
+  fact true for return-introduced values; a missed or mis-stated obligation is
+  unsound, so the gate must cover *every* refined-return fn in the closure and
+  fail hard on a missing/rejected proof;
 - the **elim-fact step** `refine-fact` — it asserts `PRED(refine_val s)` for an
   arbitrary `s : R`, sound *only* because every intro above discharged it;
 - the **registry lookup** that ties a refined `(TCon R …)` to its `(BASE, PRED)`.
@@ -229,11 +237,21 @@ everything — before the harder `Str`.
      `examples/refine_rejects.shard` (borrow-another's-predicate and
      non-refined-type are refused). `check_sequent` still proves its own
      termination (13 sites MEASURED OK).
-   - **[DECIDED, not built]** the two intro doors — the `refine_try` decidable
-     downcast (slice 2b, needs the type-in-`Expr` encoding) and the
-     refined-return obligation (slice 2). Refined values are not yet
-     constructible; the elim side is sound regardless (a ∀ over `R` is sound by
-     the subset type's meaning).
+   - **[BUILT]** the refined-return intro door (slice 2): `tc_fn_body_ret` admits
+     a `BASE`-typed body at a refined return `R`; the `refine_val` reduction
+     (identity, hoisted in `try_step_prim`) lets the obligation see through the
+     body; the `(returns f PROOF)` top-level form carries the proof; and the
+     ENFORCED driver gate `rr_outcome` emits a HARD failure for every
+     refined-return fn in the closure with a missing or rejected proof. The gate
+     is closure-wide (not target-only) because `refine-fact` can exploit *any*
+     refined-return fn's contract. Validated on `examples/refine_return.shard`
+     (a `three : Small` discharged) + `examples/refine_return_rejects.shard`
+     (a body that violates the predicate, and a fn with no `(returns …)`, both
+     refused). The soundness COUPLING — the `tc_fn_body_ret` relaxation is only
+     sound because `rr_outcome` enforces — is the load-bearing invariant here.
+   - **[DECIDED, slice 2b]** the `refine_try` decidable downcast (needs the
+     type-in-`Expr` encoding so the reducer can find `PRED`). This is the only
+     remaining intro door; with it `Str`'s `utf8_decode` becomes expressible.
 2. **`Nat`** — a refined return type `(refine Int (le 0 _))` on the size
    functions discharges the **~145** `(le 0 (size …))` premises at the definition
    site. Highest volume, fully automatic, no totality blocker — the best first
@@ -282,7 +300,7 @@ the erasure/automation/hiding combination.
 | capability / ghost tokens | reject (status quo) | "thread a `(Valid x)` premise" is exactly what we replace; no type-level guarantee |
 | pure compositional (opaque module, no type feature) | insufficient (where we are) | the Rust newtype ceiling — *cannot state* the forall-inhabitant fact |
 
-## 9. Where the code will live [PLANNED]
+## 9. Where the code lives [BUILT through slice 2; downcast 2b PLANNED]
 
 Almost entirely shard kernel (the Rust side is an evaluator/loader only):
 
@@ -290,29 +308,35 @@ Almost entirely shard kernel (the Rust side is an evaluator/loader only):
   parallel `(QName → (BASE, PRED))` table on `Module`); lookup helper.
 - `kernel/reader.shard` / `kernel/loader.shard` — parse `(type R (refine BASE
   PRED))` into the registry; route the `refine` type body.
-- `kernel/types.shard` — typing for `refine_val` (`R → BASE`) and `refine_try`
-  (`BASE → (Option R)`); the **refined-return obligation** trigger when a `fn`
-  declares a refined return type; treat a refined `(TCon R …)` as a first-class
-  type elsewhere (no change needed — it is already a `TCon`).
-- `kernel/reduce.shard` — reduction rules: `refine_try` (compute `PRED`, wrap)
-  and `refine_val` (identity).
+- `kernel/types.shard` — [BUILT] typing for `refine_val` (`R → BASE`) and
+  `tc_fn_body_ret` (admit a `BASE`-typed body at a refined return `R`);
+  [2b] typing for `refine_try` (`BASE → (Option R)`). A refined `(TCon R …)` is
+  already a first-class `TCon` elsewhere (no change needed).
+- `kernel/reduce.shard` — [BUILT] `refine_val` (identity, hoisted in
+  `try_step_prim` so it fires for any carrier shape); [2b] `refine_try` (compute
+  `PRED`, wrap).
 - `kernel/proof.shard` — the `RefineFact` `Proof` ctor (Expr + continuation,
   fact appended last — the `DivFacts`/`Have` shape).
 - `kernel/proof_reader.shard` — parse `(refine-fact EXPR)`.
 - `kernel/checker.shard` — `do_refine_fact`: build the `(= (PRED (refine_val
   EXPR)) True)` premise and continue.
-- `kernel/driver.shard` — emit + check the refined-return obligation (mirroring
-  the measure-clause obligation path); the `RefineFact` arms in the `Proof`-walk
-  family (`resolve_proof` / `cites_of_proof` / `proof_has_admit` /
-  `proof_has_inspect`).
+- `kernel/driver.shard` — [BUILT] `rr_outcome`: the ENFORCED refined-return gate
+  (mirrors the `mc_outcome` measure path — walks all srcs, builds each obligation
+  goal, checks via `mc_check_one` with `m2 = m` so the proof can unfold `f`,
+  emits a HARD `COFail` on missing/rejected proof). Plus the `RefineFact` arms in
+  the `Proof`-walk family (`resolve_proof` / `cites_of_proof` / `proof_has_admit`
+  / `proof_has_inspect`). The `(returns f PROOF)` form is whitelisted in the
+  reader's `skip_form`.
 - `kernel/desugar.shard` — `RefineFact` premise-count arm if the desugarer counts
   premises (as for `DivFacts`/`Have`).
 - `rust_bootstrap/src/load.rs` — tolerate/skip the `(refine …)` declaration clause
   for direct `eval run` (the C1-shaped change).
-- Pins: `examples/refine_basic.shard` (downcast Some/None, projection, the elim
-  fact; must-fail cheats — a bogus `refine-fact`, a refined-return fn whose body
-  escapes the predicate). Then the `Nat`/Word/`Str` retrofits become their own
-  corpus regressions.
+- Pins: `examples/refine_basic.shard` + `examples/refine_rejects.shard` (slice 1
+  — projection, the elim fact, and the borrow-another's-predicate /
+  non-refined-type must-fails); `examples/refine_return.shard` +
+  `examples/refine_return_rejects.shard` (slice 2 — a discharged refined return,
+  and the predicate-escaping-body / missing-`(returns …)` must-fails). Then the
+  `Nat`/Word/`Str` retrofits become their own corpus regressions.
 
 ## 10. Open / deferred
 

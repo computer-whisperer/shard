@@ -59,6 +59,8 @@ TARGETS=(
   examples/reflect_rejects.shard
   examples/refine_basic.shard
   examples/refine_rejects.shard
+  examples/refine_return.shard
+  examples/refine_return_rejects.shard
   examples/module_gate_rejects.shard
   examples/parse_rejects.shard
   examples/pending_demo.shard

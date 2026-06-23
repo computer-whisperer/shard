@@ -174,72 +174,83 @@
 ;; on one side only), and coverage drift all fail `cargo test`. When
 ;; adding a primitive, update the spec lists there too.
 (fn try_step_prim ((f Symbol) (args (List Expr))) (Option Expr)
-  (match args
-    ;; Two-Int primitives. Chain ordered by MEASURED dispatch frequency
-    ;; (SHARD_PROF over a checking run): the comparisons + ring ops are the
-    ;; reducer's inner loop — int_eq alone outnumbers every other prim
-    ;; combined — so they are tested first. The tests are mutually exclusive
-    ;; (distinct names), so reordering cannot change which arm fires.
-    ((Cons (IntLit a) (Cons (IntLit b) Nil))
-     (if (sym_eq f (quote int_eq)) (Some (bool_as_expr (int_eq a b)))
-     (if (sym_eq f (quote +)) (Some (IntLit (+ a b)))
-     (if (sym_eq f (quote -)) (Some (IntLit (- a b)))
-     (if (sym_eq f (quote le)) (Some (bool_as_expr (le a b)))
-     (if (sym_eq f (quote lt)) (Some (bool_as_expr (lt a b)))
-     (if (sym_eq f (quote *))
-       (Some (IntLit (* a b)))
-       ;; all four division variants — `/`+`tmod` (truncating) and
-       ;; `ediv`+`mod` (Euclidean) — are guarded on b=0 so the call stays
-       ;; STUCK like the native table (prim.rs) leaves it.
-       (if (sym_eq f (quote /)) (if (int_eq b 0) None (Some (IntLit (/ a b))))
-       (if (sym_eq f (quote mod))
-         (if (int_eq b 0) None (Some (IntLit (mod a b))))
-       (if (sym_eq f (quote tmod))
-         (if (int_eq b 0) None (Some (IntLit (tmod a b))))
-       (if (sym_eq f (quote ediv))
-         (if (int_eq b 0) None (Some (IntLit (ediv a b))))
-       (if (sym_eq f (quote band)) (Some (IntLit (band a b)))
-       (if (sym_eq f (quote bor)) (Some (IntLit (bor a b)))
-       (if (sym_eq f (quote bxor))
-         (Some (IntLit (bxor a b)))
-         ;; shift amounts are guarded to [0, 64) — STUCK outside, like
-         ;; the native table's shift_amount guard (prim.rs). Found by
-         ;; the prim conformance sweep (lib.rs): the unguarded arms
-         ;; crashed the reducer where native stays stuck.
-         (if (sym_eq f (quote bshl))
-           (if (le 0 b) (if (lt b 64) (Some (IntLit (bshl a b))) None) None)
-         (if (sym_eq f (quote bshr))
-           (if (le 0 b) (if (lt b 64) (Some (IntLit (bshr a b))) None) None)
-           None))))))))))))))))
-    ;; Two-Symbol primitives.
-    ((Cons (SymLit a) (Cons (SymLit b) Nil))
-     (if (sym_eq f (quote sym_eq)) (Some (bool_as_expr (sym_eq a b))) None))
-    ;; One-Symbol primitive: chars_of_sym — the name's UTF-8 bytes, lifted
-    ;; back into a reduced object-list Expr. Needed so APPS run on this reducer
-    ;; (eval run check.shard, …) can render Symbol names; the native reader's
-    ;; own output never contains it (see the note below), but a hosted program
-    ;; may call it directly.
-    ((Cons (SymLit s) Nil)
-     (if (sym_eq f (quote chars_of_sym))
-       (Some (intlist_to_expr (chars_of_sym s)))
-       None))
-    ;; One general single-arg: sym_of_chars ((List Int) -> Symbol). VALIDATING
-    ;; decode (bp_read + utf8_ok): the name's UTF-8 bytes, ground and in byte
-    ;; range, else the call stays STUCK — matching the native prim's None
-    ;; domain exactly (an unguarded level-1 call would crash this reducer
-    ;; where the native side is merely stuck). The reader uses this to intern
-    ;; identifiers, so a checker hosted on this reducer needs it dispatched.
-    ((Cons le Nil)
-     (if (sym_eq f (quote sym_of_chars))
-       (match (bp_read le)
-         (None None)
-         ((Some xs) (if (utf8_ok xs) (Some (SymLit (sym_of_chars xs))) None)))
-       None))
-    ;; No-arg: gen_fresh () -> Symbol (effectful — a process-global counter).
-    ;; The checker calls it to open binders with fresh FVars (Induct/Cases/
-    ;; sequent entry), so it too must be dispatched for a hosted checker.
-    (Nil (if (sym_eq f (quote gen_fresh)) (Some (SymLit (gen_fresh))) None))
-    (_ None)))
+  ;; refine_val : R -> BASE is IDENTITY — a refined value IS its carrier (zero
+  ;; runtime content), for ANY carrier shape. Reducing it lets a refined-return
+  ;; obligation see through (refine_val (f args)) to the body once f unfolds.
+  ;; Typing keeps it honest pre-reduction (refine_val s : BASE for s : R), so the
+  ;; reduction only fires inside explicit proof steps. Checked before the
+  ;; arg-shape arms so a Symbol- or list-carried refinement reduces too. See
+  ;; docs/REFINEMENT.md.
+  (if (sym_eq f (quote refine_val))
+    (match args
+      ((Cons le Nil) (Some le))
+      (_ None))
+    (match args
+      ;; Two-Int primitives. Chain ordered by MEASURED dispatch frequency
+      ;; (SHARD_PROF over a checking run): the comparisons + ring ops are the
+      ;; reducer's inner loop — int_eq alone outnumbers every other prim
+      ;; combined — so they are tested first. The tests are mutually exclusive
+      ;; (distinct names), so reordering cannot change which arm fires.
+      ((Cons (IntLit a) (Cons (IntLit b) Nil))
+       (if (sym_eq f (quote int_eq)) (Some (bool_as_expr (int_eq a b)))
+       (if (sym_eq f (quote +)) (Some (IntLit (+ a b)))
+       (if (sym_eq f (quote -)) (Some (IntLit (- a b)))
+       (if (sym_eq f (quote le)) (Some (bool_as_expr (le a b)))
+       (if (sym_eq f (quote lt)) (Some (bool_as_expr (lt a b)))
+       (if (sym_eq f (quote *))
+         (Some (IntLit (* a b)))
+         ;; all four division variants — `/`+`tmod` (truncating) and
+         ;; `ediv`+`mod` (Euclidean) — are guarded on b=0 so the call stays
+         ;; STUCK like the native table (prim.rs) leaves it.
+         (if (sym_eq f (quote /)) (if (int_eq b 0) None (Some (IntLit (/ a b))))
+         (if (sym_eq f (quote mod))
+           (if (int_eq b 0) None (Some (IntLit (mod a b))))
+         (if (sym_eq f (quote tmod))
+           (if (int_eq b 0) None (Some (IntLit (tmod a b))))
+         (if (sym_eq f (quote ediv))
+           (if (int_eq b 0) None (Some (IntLit (ediv a b))))
+         (if (sym_eq f (quote band)) (Some (IntLit (band a b)))
+         (if (sym_eq f (quote bor)) (Some (IntLit (bor a b)))
+         (if (sym_eq f (quote bxor))
+           (Some (IntLit (bxor a b)))
+           ;; shift amounts are guarded to [0, 64) — STUCK outside, like
+           ;; the native table's shift_amount guard (prim.rs). Found by
+           ;; the prim conformance sweep (lib.rs): the unguarded arms
+           ;; crashed the reducer where native stays stuck.
+           (if (sym_eq f (quote bshl))
+             (if (le 0 b) (if (lt b 64) (Some (IntLit (bshl a b))) None) None)
+           (if (sym_eq f (quote bshr))
+             (if (le 0 b) (if (lt b 64) (Some (IntLit (bshr a b))) None) None)
+             None))))))))))))))))
+      ;; Two-Symbol primitives.
+      ((Cons (SymLit a) (Cons (SymLit b) Nil))
+       (if (sym_eq f (quote sym_eq)) (Some (bool_as_expr (sym_eq a b))) None))
+      ;; One-Symbol primitive: chars_of_sym — the name's UTF-8 bytes, lifted
+      ;; back into a reduced object-list Expr. Needed so APPS run on this reducer
+      ;; (eval run check.shard, …) can render Symbol names; the native reader's
+      ;; own output never contains it (see the note below), but a hosted program
+      ;; may call it directly.
+      ((Cons (SymLit s) Nil)
+       (if (sym_eq f (quote chars_of_sym))
+         (Some (intlist_to_expr (chars_of_sym s)))
+         None))
+      ;; One general single-arg: sym_of_chars ((List Int) -> Symbol). VALIDATING
+      ;; decode (bp_read + utf8_ok): the name's UTF-8 bytes, ground and in byte
+      ;; range, else the call stays STUCK — matching the native prim's None
+      ;; domain exactly (an unguarded level-1 call would crash this reducer
+      ;; where the native side is merely stuck). The reader uses this to intern
+      ;; identifiers, so a checker hosted on this reducer needs it dispatched.
+      ((Cons le Nil)
+       (if (sym_eq f (quote sym_of_chars))
+         (match (bp_read le)
+           (None None)
+           ((Some xs) (if (utf8_ok xs) (Some (SymLit (sym_of_chars xs))) None)))
+         None))
+      ;; No-arg: gen_fresh () -> Symbol (effectful — a process-global counter).
+      ;; The checker calls it to open binders with fresh FVars (Induct/Cases/
+      ;; sequent entry), so it too must be dispatched for a hosted checker.
+      (Nil (if (sym_eq f (quote gen_fresh)) (Some (SymLit (gen_fresh))) None))
+      (_ None))))
 
 ;; Convert a Bool VALUE to the corresponding narrow Expr VALUE
 ;; (Ctor "True" Nil) / (Ctor "False" Nil). Used by try_step_prim's

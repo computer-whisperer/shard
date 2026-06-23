@@ -2338,7 +2338,9 @@
          (pending_outcomes (rev_pend pend Nil))
          (oc_concat
            (bin_reports (bins_of_srcs srcs) th m led (own_externs_of_srcs srcs))
-           (mc_outcome m srcs sidecars th focus)))))))
+           (oc_concat
+             (mc_outcome m srcs sidecars th focus)
+             (rr_outcome m srcs sidecars th focus))))))))
 
 ;; Production entry that builds M IN SHARD. `build_module_d` (reader.shard) parses
 ;; each source's types/fns via the self-hosted reader and merges them onto
@@ -4474,6 +4476,243 @@
               (append_int (sr_nl) lines)))
           Nil)))
     Nil))
+
+;; ===========================================================================
+;; REFINED-RETURN OBLIGATIONS (refinement types, slice 2 — ENFORCED).
+;; A fn `(fn f PARAMS R BODY)` whose return type R = (refine BASE PRED) is
+;; admitted with an ordinary BASE-typed body (tc_fn_body_ret relaxes the
+;; body↔return unification in types.shard). That relaxation is ONLY sound if
+;; every such fn discharges
+;;     ∀PARAMS, (= (PRED (refine_val (f PARAMS))) True)
+;; — the proof that f's result really lands in R. The proof is supplied by a
+;; SEPARATE top-level form `(returns f PROOF)` (not a fn clause, so a recursive
+;; refined-return fn keeps its (measure …) clause unchanged). This gate emits a
+;; HARD COFail when the obligation is missing or its proof is rejected; it is
+;; silent on success, so a closure with no refined-return fn is byte-unchanged.
+;;
+;; SOUNDNESS — why EVERY fn in the closure is checked (not just the targets):
+;; refine-fact (slice 1) will inject (= (PRED (refine_val E)) True) for ANY E
+;; whose inferred head is R, in ANY file. So an UNCHECKED refined-return fn g in
+;; an imported file would let a consumer assume g's invariant for free. The gate
+;; therefore walks all srcs, exactly as mc_files does for measure obligations.
+;; The obligation is consumed but never re-published into the theory (its name is
+;; the synthetic `f#returns`), so it can cite freely without circularity.
+;; The proof is checked against the FULL module m (m2 = m) so it can unfold f.
+;; See docs/REFINEMENT.md.
+;; ===========================================================================
+
+;; the declared return type of fn q, if q names a fn in m.
+(fn rr_fn_ret ((m Module) (q QName)) (Option Type)
+  (match m
+    ((Module _ _ _ trie _)
+     (match (trie_lookup q trie)
+       (None None)
+       ((Some fd)
+        (match fd
+          ((FnDef _ _ ret _) (Some ret))))))))
+
+;; the predicate QName of fn q's return type, if that return is refined; else
+;; None (not a fn, or an ordinary return).
+(fn rr_pred_of ((m Module) (q QName)) (Option QName)
+  (match (rr_fn_ret m q)
+    (None None)
+    ((Some ret)
+     (match (type_head ret)
+       (None None)
+       ((Some (Pair rname _))
+        (match (typedef_refine rname m)
+          (None None)
+          ((Some (Pair _ pred)) (Some pred))))))))
+
+;; collect the file's (returns NAME PROOF) forms into a name→proof table.
+(fn rr_returns ((forms (List SExpr)) (acc (List (Pair Symbol SExpr))))
+  (List (Pair Symbol SExpr))
+  (measure (struct forms))
+  (match forms
+    (Nil acc)
+    ((Cons f rest)
+     (match (form_head f)
+       (None (rr_returns rest acc))
+       ((Some h)
+        (if (sym_eq h (quote returns))
+          (match (form_tail f)
+            ((Cons (SSym name) (Cons proofS Nil))
+             (rr_returns rest (Cons (Pair name proofS) acc)))
+            (_ (rr_returns rest acc)))  ; malformed → no proof; fn COFails below
+          (rr_returns rest acc)))))))
+
+(fn rr_proof_for ((name Symbol) (rs (List (Pair Symbol SExpr)))) (Option SExpr)
+  (measure (struct rs))
+  (match rs
+    (Nil None)
+    ((Cons (Pair n p) rest)
+     (if (sym_eq n name) (Some p) (rr_proof_for name rest)))))
+
+;; the call args of the obligation: one (SSym pname) per param binder of pForm.
+(fn rr_arg_syms ((binders (List SExpr))) (List SExpr)
+  (measure (struct binders))
+  (match binders
+    (Nil Nil)
+    ((Cons b rest)
+     (match b
+       ((SList (Cons headS _)) (Cons headS (rr_arg_syms rest)))
+       (_ (rr_arg_syms rest))))))
+
+(fn rr_args ((pForm SExpr)) (List SExpr)
+  (match pForm
+    ((SList binders) (rr_arg_syms binders))
+    (_ Nil)))
+
+;; the obligation goal sexpr: (goal PARAMS () (= (PRED (refine_val (f args))) True)).
+;; PRED and f are written as exact (:: …) qnames so resolution cannot pick a
+;; homonym (an unsound predicate substitution).
+(fn rr_goal_s ((pForm SExpr) (pred QName) (self QName) (args (List SExpr)))
+  SExpr
+  (SList
+    (Cons
+      (SSym (quote goal))
+      (Cons
+        pForm
+        (Cons
+          (SList Nil)
+          (Cons
+            (mc_eq_s
+              (SList
+                (Cons
+                  (mc_qn_form pred)
+                  (Cons
+                    (SList
+                      (Cons
+                        (SSym (quote refine_val))
+                        (Cons (SList (Cons (mc_qn_form self) args)) Nil)))
+                    Nil)))
+              (SSym (quote True)))
+            Nil))))))
+
+;; the synthetic claim name for f's obligation: `f#returns` (# is not a reader
+;; delimiter, so this is one symbol — and it never collides with a real claim).
+(fn rr_gname ((name Symbol)) Symbol
+  (sym_of_chars (append_int (chars_of_sym name) "#returns")))
+
+(fn rr_missing_msg ((name Symbol)) (List Int)
+  (append_int
+    "refined return: fn "
+    (append_int
+      (chars_of_sym name)
+      " has a refined return type but no (returns …) proof — its refinement invariant is unproven")))
+
+(fn rr_fail_msg ((name Symbol) (why (List Int))) (List Int)
+  (append_int
+    "refined return: fn "
+    (append_int (chars_of_sym name) (append_int ": " why))))
+
+;; check one refined-return fn `name` (params pForm, predicate pred, in module
+;; path `modpath`). Nil on success; one COFail on missing/failing proof.
+(fn rr_check
+  ((m Module)
+   (th Theory)
+   (gctx RCtx)
+   (modpath (List Symbol))
+   (name Symbol)
+   (pForm SExpr)
+   (pred QName)
+   (rmap (List (Pair Symbol SExpr)))
+   (autos (List (Pair Symbol SExpr))))
+  (List ClaimOutcome)
+  (match (rr_proof_for name rmap)
+    (None (Cons (COFail name (rr_missing_msg name) Nil) Nil))
+    ((Some proofS)
+     (match
+       (mc_check_one
+         m
+         m
+         th
+         gctx
+         (rr_gname name)
+         (rr_goal_s pForm pred (qn_at modpath name) (rr_args pForm))
+         proofS
+         autos)
+       (None Nil)
+       ((Some why) (Cons (COFail name (rr_fail_msg name why) Nil) Nil))))))
+
+;; one form: if it is a fn with a refined return, check its obligation.
+(fn rr_of_form
+  ((m Module)
+   (th Theory)
+   (gctx RCtx)
+   (modpath (List Symbol))
+   (f SExpr)
+   (rmap (List (Pair Symbol SExpr)))
+   (autos (List (Pair Symbol SExpr))))
+  (List ClaimOutcome)
+  (match (form_head f)
+    (None Nil)
+    ((Some h)
+     (if (sym_eq h (quote fn))
+       (match (form_tail f)
+         ((Cons nameForm (Cons pForm _))
+          (match (parse_head nameForm)
+            (None Nil)
+            ((Some (Pair name _))
+             (match (rr_pred_of m (qn_at modpath name))
+               (None Nil)
+               ((Some pred)
+                (rr_check m th gctx modpath name pForm pred rmap autos))))))
+         (_ Nil))
+       Nil))))
+
+(fn rr_of_forms
+  ((m Module)
+   (th Theory)
+   (gctx RCtx)
+   (modpath (List Symbol))
+   (forms (List SExpr))
+   (rmap (List (Pair Symbol SExpr)))
+   (autos (List (Pair Symbol SExpr))))
+  (List ClaimOutcome)
+  (measure (struct forms))
+  (match forms
+    (Nil Nil)
+    ((Cons f rest)
+     (oc_concat
+       (rr_of_form m th gctx modpath f rmap autos)
+       (rr_of_forms m th gctx modpath rest rmap autos)))))
+
+(fn rr_files
+  ((m Module)
+   (th Theory)
+   (srcs (List SrcEntry))
+   (sidecars (List (Pair Symbol (List Int)))))
+  (List ClaimOutcome)
+  (measure (struct srcs))
+  (match srcs
+    (Nil Nil)
+    ((Cons (SrcEntry path _ src) rest)
+     (match (read_all src)
+       (None (rr_files m th rest sidecars))
+       ((Some forms)
+        (oc_concat
+          (rr_of_forms
+            m
+            th
+            (file_rctx m path src)
+            (module_path_of path)
+            forms
+            (rr_returns forms Nil)
+            (autos_of_src (sym_of_chars path) sidecars))
+          (rr_files m th rest sidecars)))))))
+
+;; the section entry: HARD COFails for unproven refined returns, closure-wide.
+;; Skipped under focus mode (focus admits unproven claims that must not seed the
+;; obligation's citable theory, and the property is whole-closure).
+(fn rr_outcome
+  ((m Module)
+   (srcs (List SrcEntry))
+   (sidecars (List (Pair Symbol (List Int))))
+   (th Theory)
+   (focus Symbol))
+  (List ClaimOutcome)
+  (if (sym_eq focus (quote __all__)) (rr_files m th srcs sidecars) Nil))
 
 (fn check_production_src
   ((seed Module)
