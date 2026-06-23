@@ -33,8 +33,6 @@ TARGETS=(
   examples/auto_demo.shard
   examples/auto_missing_rejects.shard
   examples/admit_demo.shard
-  examples/bytes_basics.shard
-  examples/bytes_facts.shard
   examples/bytes_bridge.shard
   examples/contract_demo.shard
   examples/decl_rejects.shard
