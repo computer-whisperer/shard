@@ -20,6 +20,8 @@
 
 (type U8 (mk_u8 Int))
 
+(type I8 (mk_i8 Int))
+
 (fn u8 ((n Int)) U8 (mk_u8 (mod n 256)))
 
 (fn u8_val ((x U8)) Int
@@ -49,6 +51,25 @@
 (fn u8_shl ((x U8) (k Int)) U8 (u8 (bshl (u8_val x) k)))
 
 (fn u8_shr ((x U8) (k Int)) U8 (u8 (bshr (u8_val x) k)))
+
+;; ---- i8: signed 8-bit, storing the signed value in [-128,128) -------------
+
+;; signed normalization: euclidean mod into [0,256), then fold the top half
+;; [128,256) down by 256 to land in [-128,128).
+(fn i8_wrap ((n Int)) Int
+  (if (lt (mod n 256) 128) (mod n 256) (- (mod n 256) 256)))
+
+(fn i8 ((n Int)) I8 (mk_i8 (i8_wrap n)))
+
+(fn i8_val ((x I8)) Int
+  (match x
+    ((mk_i8 v) v)))
+
+(fn i8_add ((a I8) (b I8)) I8 (i8 (+ (i8_val a) (i8_val b))))
+
+(fn i8_sub ((a I8) (b I8)) I8 (i8 (- (i8_val a) (i8_val b))))
+
+(fn i8_mul ((a I8) (b I8)) I8 (i8 (* (i8_val a) (i8_val b))))
 
 ;; ---- discharge the interface's requirements ----
 
@@ -115,6 +136,72 @@
 (fulfills u8_shr_val
   (steps ((unfold u8_shr lhs) (rewrite (lemma u8_val_of) lr lhs true ())) refl))
 
+;; i8: signed value of a made i8 is its wrap; unfold both, fire the arm.
+(fulfills i8_val_of
+  (steps ((unfold i8 lhs) (unfold i8_val lhs) (simp lhs)) refl))
+
+;; -128 <= i8_wrap n: unfold, case-split the fold boundary. Lower branch
+;; (mod < 128): -128 <= 0 <= mod (mod_lo). Upper branch (mod >= 128):
+;; -128 <= mod - 256 follows from mod >= 128 (the case hyp).
+(fulfills i8_wrap_lo
+  (steps
+    ((unfold i8_wrap lhs))
+    (case-on (lt (mod n 256) 128) Bool
+      ((case True
+         (steps
+           ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
+           (have (= (le 0 (mod n 256)) True)
+             (rewrite-with
+               (lemma mod_lo)
+               lr
+               lhs
+               ((inst n n) (inst d 256))
+               ((steps ((compute both)) refl))
+               refl)
+             (by farkas (list 1 1)))))
+       (case False
+         (steps
+           ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
+           ;; materialize the case hyp (mod >= 128) as a farkas premise.
+           (have (= (lt (mod n 256) 128) False)
+             (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+             (by farkas (list 1 1)))))))))
+
+;; i8_wrap n < 128: lower branch IS the case condition (close via the hyp);
+;; upper branch (mod - 256 < 128) from mod < 256 (mod_hi).
+(fulfills i8_wrap_hi
+  (steps
+    ((unfold i8_wrap lhs))
+    (case-on (lt (mod n 256) 128) Bool
+      ((case True
+         (steps
+           ((rewrite (hyp 0) lr lhs true ())
+            (simp lhs)
+            (rewrite (hyp 0) lr lhs true ()))
+           refl))
+       (case False
+         (steps
+           ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
+           (have (= (lt (mod n 256) 256) True)
+             (rewrite-with
+               (lemma mod_hi)
+               lr
+               lhs
+               ((inst n n) (inst d 256))
+               ((steps ((compute both)) refl))
+               refl)
+             (by farkas (list 1 1)))))))))
+
+;; arithmetic images: unfold the op, rewrite i8_val_of at the wrapped value.
+(fulfills i8_add_val
+  (steps ((unfold i8_add lhs) (rewrite (lemma i8_val_of) lr lhs true ())) refl))
+
+(fulfills i8_sub_val
+  (steps ((unfold i8_sub lhs) (rewrite (lemma i8_val_of) lr lhs true ())) refl))
+
+(fulfills i8_mul_val
+  (steps ((unfold i8_mul lhs) (rewrite (lemma i8_val_of) lr lhs true ())) refl))
+
 ;; ---- ground pins: the ops COMPUTE the wrapping semantics (matches the
 ;; kernel former; an op-semantics change can never slip through silently) ----
 
@@ -136,4 +223,16 @@
 
 (claim u8_shr_pin
   (goal () () (= (u8_val (u8_shr (u8 200) 2)) 50))
+  (steps ((compute lhs)) refl))
+
+(claim i8_wrap_pin
+  (goal () () (= (i8_val (i8 200)) -56))  ; 200 folds to 200-256
+  (steps ((compute lhs)) refl))
+
+(claim i8_neg_pin
+  (goal () () (= (i8_val (i8 -1)) -1))  ; -1 -> raw 255 -> -1
+  (steps ((compute lhs)) refl))
+
+(claim i8_add_ovf_pin
+  (goal () () (= (i8_val (i8_add (i8 100) (i8 100))) -56))  ; signed overflow wraps
   (steps ((compute lhs)) refl))
