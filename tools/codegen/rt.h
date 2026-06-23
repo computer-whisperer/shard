@@ -80,7 +80,10 @@ static uint8_t *rt_startmap;          /* 1 bit per 16B slot: is a cell head */
 static char *rt_stack_base;           /* high end of the C stack (set in init) */
 static int rt_gc_on = 0;              /* enabled at the end of rt_init */
 static char *rt_gc_trigger;           /* next GC when bump passes this */
-#define RT_GC_SPACING (8ul << 30)     /* bump this much between collections */
+#define RT_GC_SPACING (2ul << 30)     /* bump this much between collections.
+   2 GiB (was 8): the collector reclaims, so peak resident ~= live + this per
+   process — keeping it small lets gate_sweep/run_corpus run JOBS-parallel
+   without OOM (8 GiB x N processes was the killer). */
 
 static inline size_t rt_slot(char *p) { return (size_t)(p - rt_heap_base) >> 4; }
 static inline void rt_setstart(char *p) {
