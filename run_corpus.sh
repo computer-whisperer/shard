@@ -105,6 +105,7 @@ TARGETS=(
   std/arith/arith.shard
   std/div/div.shard
   std/map/map.shard
+  std/word/word.shard
 )
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT

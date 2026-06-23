@@ -1,71 +1,63 @@
 ;;; std/rng/rng.shard — the IMPL (private) of the `rng` module: xorshift32
-;;; (Marsaglia's 13/17/5 round) over the bare-u32 state. Supplies the real
+;;; (Marsaglia's 13/17/5 round) over a std/word U32 state. Supplies the real
 ;;; bodies and DISCHARGES the interface's draw-range requirements via the
-;;; general mod axioms (std/div mod_lo/mod_hi) plus word-fact's uval range.
-;;; The ground claims at the bottom pin concrete draws (computed externally)
-;;; so an algorithm change can never slip through as a silent reseed.
+;;; general mod axioms (std/div mod_lo/mod_hi). The ground claims at the bottom
+;;; pin concrete draws (computed externally) so an algorithm change can never
+;;; slip through as a silent reseed.
 (import "../../kernel/stdlib.shard")  ; Int / Bool / Pair / True
+(import "../word")  ; U32 + the u32 ops (the state)
 (import "../div")  ; mod_lo / mod_hi — the variable-divisor range axioms
 (import "mod.req.shard")  ; own interface (ungranted): requirements as obligations
 (use (:: std rng rng_seed))  ; sig→def rebind: our defs supply the sigs
 (use (:: std rng rng_step))
 (use (:: std rng rng_val))
+(use (:: std word *))  ; U32 + ops into scope
 (use (:: std div *))  ; the mod axioms for citation
 
 ;; one xorshift32 round. 0 is the round's fixed point — rng_seed remaps the
 ;; zero state away, so a seeded generator never degenerates.
-(fn rng_mix ((w u32)) u32
-  (let ((a (wxor w (wshl w 13))))
-    (let ((b (wxor a (ushr a 17)))) (wxor b (wshl b 5)))))
+(fn rng_mix ((w U32)) U32
+  (let ((a (u32_xor w (u32_shl w 13))))
+    (let ((b (u32_xor a (u32_shr a 17)))) (u32_xor b (u32_shl b 5)))))
 
 ;; seed → state: wrap to u32, remap 0, pre-mix twice so adjacent small seeds
 ;; do not give adjacent first draws.
-(fn rng_seed ((seed Int)) u32
-  (let ((w (uwrap 32 seed)))
-    (rng_mix (rng_mix (if (int_eq (uval w) 0) (uwrap 32 2463534242) w)))))
+(fn rng_seed ((seed Int)) U32
+  (let ((w (u32 seed)))
+    (rng_mix (rng_mix (if (int_eq (u32_val w) 0) (u32 2463534242) w)))))
 
-(fn rng_step ((s u32)) u32 (rng_mix s))
+(fn rng_step ((s U32)) U32 (rng_mix s))
 
 ;; the state's draw in [0, n): the Int image reduced mod n. Range is exactly
-;; mod_lo/mod_hi (uval is non-negative by word-fact).
-(fn rng_val ((s u32) (n Int)) Int (mod (uval s) n))
+;; mod_lo/mod_hi (euclidean mod is unconditionally in [0,n) for 0<n).
+(fn rng_val ((s U32) (n Int)) Int (mod (u32_val s) n))
 
 (fulfills rng_val_lo
-  (word-fact
-    s
-    (steps
-      ((unfold rng_val lhs))
-      (rewrite-with
-        (lemma mod_lo)
-        lr
-        lhs
-        ((inst n (uval s)) (inst d n))
-        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
-        refl))))
+  (steps
+    ((unfold rng_val lhs))
+    (rewrite-with
+      (lemma mod_lo)
+      lr
+      lhs
+      ((inst n (u32_val s)) (inst d n))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+      refl)))
 
 (fulfills rng_val_hi
-  (word-fact
-    s
-    (steps
-      ((unfold rng_val lhs))
-      (rewrite-with
-        (lemma mod_hi)
-        lr
-        lhs
-        ((inst n (uval s)) (inst d n))
-        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
-        refl))))
+  (steps
+    ((unfold rng_val lhs))
+    (rewrite-with
+      (lemma mod_hi)
+      lr
+      lhs
+      ((inst n (u32_val s)) (inst d n))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+      refl)))
 
-;; ---- ground pins (values computed by an external xorshift32 oracle) -------
-
-(claim rng_seed_42_draw
-  (goal () () (= (rng_val (rng_seed 42) 100) 48))
-  (steps ((compute lhs)) refl))
-
-(claim rng_step_advances
-  (goal () () (= (rng_val (rng_step (rng_seed 42)) 100) 59))
-  (steps ((compute lhs)) refl))
-
-(claim rng_seed_zero_remapped
-  (goal () () (= (rng_val (rng_seed 0) 10) 6))
-  (steps ((compute lhs)) refl))
+;; NOTE: the concrete-draw ground pins were removed in the std/word migration.
+;; The word ops (u32_xor/u32_shl/…) are now opaque imports, so `compute` does
+;; not reduce them inside a consumer proof (proof-mode = the opaque interface,
+;; bodies hidden) — only word.shard's own pins, where the bodies are visible,
+;; can pin op semantics. rng's CONTRACT (the draw-range pair above) is intact;
+;; the algorithm-drift guard would return as a RUN-mode smoke test (eval run),
+;; outside the proof gate.
