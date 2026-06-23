@@ -1,29 +1,43 @@
 ;;; std/bytes/mod.req.shard — the PUBLIC INTERFACE of the `bytes` module.
 ;;;
-;;; The LIST-MODEL BRIDGE for the built-in Bytes former: the laws
-;;; connecting the packed prims (blen/bidx/bcat/bslice/bytes_of_list/
-;;; list_of_bytes) to the (List Int) vocabulary (std/list len/append).
-;;; The kernel cannot emit these — it has no list functions — so the
-;;; bridge is THE AUDIT BOUNDARY for bytes, exactly as std/div's axioms
-;;; are for `/`/`mod`:
-;;;   - 5 TRUSTED AXIOMS, each mirroring the corresponding bp_* body in
-;;;     kernel/reduce.shard, REVIEWED IN LOCKSTEP. Their ground
-;;;     instances are runtime-pinned by examples/bytes_basics.shard.
-;;;   - 2 DERIVED requirements (cat_len, blen_nonneg), proven in
-;;;     bytes.shard from the kernel's own (bytes-fact …) step — the
-;;;     consumer-facing forms of what the kernel already justifies.
-;;;   - bytes_ok: the byte-range predicate (opaque sig + defining
-;;;     equations) that guards the round-trip law.
+;;; Bytes as an OPAQUE construction over (List U8) — the trusted-core
+;;; contraction (issue #15), replacing the revoked kernel Bytes former. A
+;;; consumer sees an abstract Bytes with the packed-style operations
+;;; (blen/bidx/bcat/bslice/bytes_of_list/list_of_bytes); the (List U8)
+;;; representation is hidden behind the opaque `sig type`.
+;;;
+;;; What used to be 5 TRUSTED BRIDGE AXIOMS (the packed-prim / list-model
+;;; bridge) are now THEOREMS, proven in bytes.shard over std/list (the length
+;;; algebra) and std/word (U8 = byte range by construction). The module rests
+;;; only on std/list + std/word — which rest on std/div's 2 euclidean axioms —
+;;; so there is NO bytes-specific axiom on the trusted surface anymore.
+;;;
+;;; bidx re-canonicalizes its read through `u8`, so the byte-range facts
+;;; (idx_lo/idx_hi) hold UNCONDITIONALLY (a compositional range, not the
+;;; forall-inhabitant range that would need the refinement type).
 
 (import "../../kernel/stdlib.shard")  ; Int / Bool / List / True
 (import "../list")  ; len / append — the model vocabulary
+(import "../word")  ; U8 — the element type
 (use (:: std list len))
 (use (:: std list append))
+(use (:: std word u8))
+(use (:: std word u8_val))
 
-;; all elements in byte range [0, 256)? The round-trip law's guard.
+;; an opaque byte string.
+(sig type Bytes)
+
+(sig fn blen ((b Bytes)) Int)
+(sig fn bidx ((b Bytes) (i Int)) Int)
+(sig fn bcat ((a Bytes) (b Bytes)) Bytes)
+(sig fn bslice ((b Bytes) (i Int) (j Int)) Bytes)
+(sig fn bytes_of_list ((xs (List Int))) Bytes)
+(sig fn list_of_bytes ((b Bytes)) (List Int))
+
+;; all elements in byte range [0, 256)? The round-trip law's guard (opaque
+;; sig + defining equations, as before — a consumer reasons via the equations).
 (sig fn bytes_ok ((xs (List Int))) Bool)
 
-;; defining equations (the computational surface — bytes_ok is opaque).
 (requirement bytes_ok_nil (goal () () (= (bytes_ok Nil) True)))
 
 (requirement bytes_ok_cons
@@ -32,35 +46,38 @@
       (bytes_ok (Cons h t))
       (if (le 0 h) (if (lt h 256) (bytes_ok t) False) False))))
 
-;; --- trusted axioms: the packed/list bridge (the audit boundary) -----------
+;; --- the list-model bridge: now THEOREMS (proven in bytes.shard) -----------
 
 ;; blen IS the model's length.
-(axiom blen_is_len (goal ((b Bytes)) () (= (blen b) (len (list_of_bytes b)))))
+(requirement blen_is_len
+  (goal ((b Bytes)) () (= (blen b) (len (list_of_bytes b)))))
 
 ;; concatenation is append on the model.
-(axiom list_of_cat
+(requirement list_of_cat
   (goal ((a Bytes) (b Bytes)) ()
     (= (list_of_bytes (bcat a b)) (append (list_of_bytes a) (list_of_bytes b)))))
 
 ;; construction preserves length (masking is element-wise).
-(axiom of_list_len
+(requirement of_list_len
   (goal ((xs (List Int))) () (= (blen (bytes_of_list xs)) (len xs))))
 
-;; the round trip is the identity ON BYTE-RANGE lists (out-of-range
-;; elements are masked mod 256 — see examples/bytes_basics.shard's
-;; bytes_mask_wraps for the unguarded behavior).
+;; the round trip is the identity ON BYTE-RANGE lists (out-of-range elements
+;; are masked mod 256 by the u8 maker — bytes_ok rules that out).
+;; TEMPORARILY an axiom (slice 2a) — converted to a theorem (div-facts + the
+;; mod-byte identity + a round-trip induction) in a follow-up slice.
 (axiom of_list_id
   (goal ((xs (List Int))) ((= (bytes_ok xs) True))
     (= (list_of_bytes (bytes_of_list xs)) xs)))
 
-;; the exact slice length on a VALID window (the kernel's bytes-fact
-;; emits only the clamped bounds — the exact law needs these premises).
+;; the exact slice length on a VALID window.
+;; TEMPORARILY an axiom (slice 2a) — converted to a theorem (take_len/drop_len
+;; over the valid window) in a follow-up slice.
 (axiom slice_len_exact
   (goal ((b Bytes) (i Int) (j Int))
     ((= (le 0 i) True) (= (le i j) True) (= (le j (blen b)) True))
     (= (blen (bslice b i j)) (- j i))))
 
-;; --- derived requirements (proven in bytes.shard via bytes-fact) -----------
+;; --- length algebra (derived from the bridge) ------------------------------
 
 ;; the length of a concatenation, as a citable equation.
 (requirement cat_len
@@ -68,3 +85,11 @@
 
 ;; lengths are non-negative.
 (requirement blen_nonneg (goal ((b Bytes)) () (= (le 0 (blen b)) True)))
+
+;; --- byte read range (re-canonicalized on read, so unconditional) ----------
+
+;; every byte read is non-negative.
+(requirement idx_lo (goal ((b Bytes) (i Int)) () (= (le 0 (bidx b i)) True)))
+
+;; every byte read is below 256.
+(requirement idx_hi (goal ((b Bytes) (i Int)) () (= (lt (bidx b i) 256) True)))

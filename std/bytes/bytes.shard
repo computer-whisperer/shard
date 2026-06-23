@@ -1,33 +1,203 @@
 ;;; std/bytes/bytes.shard — the `bytes` module IMPLEMENTATION (private).
 ;;;
-;;; Supplies bytes_ok's body and discharges the interface's derived
-;;; requirements from the kernel's own (bytes-fact …) premise step —
-;;; no axiom is touched here; the 5 bridge axioms in mod.req.shard are
-;;; admitted at load and stand as the audit boundary. Consumers never
-;;; load this file; they get mod.req.shard.
+;;; Bytes as an opaque construction over (List U8): the rep is a list of U8
+;;; (so each element is in byte range BY CONSTRUCTION), the ops project to the
+;;; std/list length algebra, and the list-model bridge laws are THEOREMS over
+;;; std/list + std/word — no bytes-specific axiom. Consumers never load this
+;;; file; they get only mod.req.shard.
 
 (import "../../kernel/stdlib.shard")
-(import "mod.req.shard")  ; own interface: axioms + obligations
-(use (:: std bytes bytes_ok))  ; sig→def rebind: our def supplies the sig
+(import "../list")  ; len / append / take / drop + their lemmas
+(import "../word")  ; u8 / u8_val + the byte-range laws
+(import "mod.req.shard")  ; our interface — opaque type + sig fns + obligations
+(use (:: std list *))
+(use (:: std word *))
+(use (:: std bytes *))  ; impl-proof: rebind the opaque type + sig fns to our defs
 
-;; element-wise byte-range check, structurally recursive.
+;; --- representation + private helpers ---------------------------------------
+
+(type Bytes (mk_bytes (List U8)))
+
+;; the rep extractor.
+(fn brep ((b Bytes)) (List U8)
+  (match b
+    ((mk_bytes l) l)))
+
+;; map the u8 maker over a raw int list (each element masked mod 256).
+(fn mapu8 ((xs (List Int))) (List U8)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons h t) (Cons (u8 h) (mapu8 t)))))
+
+;; map u8_val back to ints — the model projection.
+(fn mapval ((xs (List U8))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons h t) (Cons (u8_val h) (mapval t)))))
+
+;; the raw value at index i (u8_val of the element), 0 outside [0, len).
+(fn raw_at ((xs (List U8)) (i Int)) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons h t) (if (int_eq i 0) (u8_val h) (if (lt i 0) 0 (raw_at t (- i 1)))))))
+
+;; --- bodies behind the opaque sig fns ---------------------------------------
+
+(fn blen ((b Bytes)) Int (len (brep b)))
+
+;; re-canonicalize the read through u8 so 0 <= bidx < 256 holds unconditionally.
+(fn bidx ((b Bytes) (i Int)) Int (u8_val (u8 (raw_at (brep b) i))))
+
+(fn bcat ((a Bytes) (b Bytes)) Bytes (mk_bytes (append (brep a) (brep b))))
+
+(fn bslice ((b Bytes) (i Int) (j Int)) Bytes
+  (mk_bytes (take (- j i) (drop i (brep b)))))
+
+(fn bytes_of_list ((xs (List Int))) Bytes (mk_bytes (mapu8 xs)))
+
+(fn list_of_bytes ((b Bytes)) (List Int) (mapval (brep b)))
+
 (fn bytes_ok ((xs (List Int))) Bool
+  (measure (struct xs))
   (match xs
     (Nil True)
     ((Cons h t) (if (le 0 h) (if (lt h 256) (bytes_ok t) False) False))))
 
-;; --- defining equations -----------------------------------------------------
+;; --- defining-equation lemmas (targeted rewrites; avoid symbolic unfold) ----
+
+(claim brep_mk
+  (goal ((l (List U8))) () (= (brep (mk_bytes l)) l))
+  (steps ((unfold brep lhs) (reduce lhs)) refl))
+
+(claim mapu8_nil
+  (goal () () (= (mapu8 Nil) Nil))
+  (steps ((unfold mapu8 lhs) (reduce lhs)) refl))
+
+(claim mapu8_cons
+  (goal ((h Int) (t (List Int))) ()
+    (= (mapu8 (Cons h t)) (Cons (u8 h) (mapu8 t))))
+  (steps ((unfold mapu8 lhs) (reduce lhs)) refl))
+
+(claim mapval_nil
+  (goal () () (= (mapval Nil) Nil))
+  (steps ((unfold mapval lhs) (reduce lhs)) refl))
+
+(claim mapval_cons
+  (goal ((h U8) (t (List U8))) ()
+    (= (mapval (Cons h t)) (Cons (u8_val h) (mapval t))))
+  (steps ((unfold mapval lhs) (reduce lhs)) refl))
+
+;; --- map length / append homomorphisms (the bridge inductions) --------------
+
+(claim mapval_len
+  (goal ((xs (List U8))) () (= (len (mapval xs)) (len xs)))
+  (induct xs
+    ((case Nil (steps ((rewrite (lemma mapval_nil) lr lhs true ())) refl))
+     (case Cons
+       (h t)
+       (steps
+         ((rewrite (lemma mapval_cons) lr lhs true ())
+          (rewrite (lemma len_cons) lr lhs true ())
+          (rewrite (hyp ih) lr lhs true ())
+          (rewrite (lemma len_cons) lr rhs true ()))
+         refl)))))
+
+(claim mapu8_len
+  (goal ((xs (List Int))) () (= (len (mapu8 xs)) (len xs)))
+  (induct xs
+    ((case Nil (steps ((rewrite (lemma mapu8_nil) lr lhs true ())) refl))
+     (case Cons
+       (h t)
+       (steps
+         ((rewrite (lemma mapu8_cons) lr lhs true ())
+          (rewrite (lemma len_cons) lr lhs true ())
+          (rewrite (hyp ih) lr lhs true ())
+          (rewrite (lemma len_cons) lr rhs true ()))
+         refl)))))
+
+(claim mapval_append
+  (goal ((xs (List U8)) (ys (List U8))) ()
+    (= (mapval (append xs ys)) (append (mapval xs) (mapval ys))))
+  (induct xs
+    ((case Nil
+       (steps
+         ((rewrite (lemma append_nil_left) lr lhs true ())
+          (rewrite (lemma mapval_nil) lr rhs true ())
+          (rewrite (lemma append_nil_left) lr rhs true ()))
+         refl))
+     (case Cons
+       (h t)
+       (steps
+         ((rewrite (lemma append_cons) lr lhs true ())
+          (rewrite (lemma mapval_cons) lr lhs true ())
+          (rewrite (hyp ih) lr lhs true ())
+          (rewrite (lemma mapval_cons) lr rhs true ())
+          (rewrite (lemma append_cons) lr rhs true ()))
+         refl)))))
+
+;; --- discharge the interface's requirements ---------------------------------
 
 (fulfills bytes_ok_nil (steps ((unfold bytes_ok lhs) (reduce lhs)) refl))
 
 (fulfills bytes_ok_cons (steps ((unfold bytes_ok lhs) (reduce lhs)) refl))
 
-;; --- derived requirements: the kernel's bytes-fact, re-exported -------------
+(fulfills blen_is_len
+  (steps
+    ((unfold blen lhs)
+     (unfold list_of_bytes rhs)
+     (rewrite (lemma mapval_len) lr rhs true ((inst xs (brep b)))))
+    refl))
 
-;; (bytes-fact (bcat a b)) injects p0: blen (bcat a b) = blen a + blen b.
+(fulfills list_of_cat
+  (steps
+    ((unfold list_of_bytes lhs)
+     (unfold bcat lhs)
+     (rewrite (lemma brep_mk) lr lhs true ())
+     (rewrite
+       (lemma mapval_append)
+       lr
+       lhs
+       true
+       ((inst xs (brep a)) (inst ys (brep b))))
+     (unfold list_of_bytes rhs)
+     (unfold list_of_bytes rhs))
+    refl))
+
+(fulfills of_list_len
+  (steps
+    ((unfold blen lhs)
+     (unfold bytes_of_list lhs)
+     (rewrite (lemma brep_mk) lr lhs true ())
+     (rewrite (lemma mapu8_len) lr lhs true ()))
+    refl))
+
 (fulfills cat_len
-  (bytes-fact (bcat a b) (steps ((rewrite (premise 0) lr lhs true ())) refl)))
+  (steps
+    ((unfold blen lhs)
+     (unfold bcat lhs)
+     (rewrite (lemma brep_mk) lr lhs true ())
+     (rewrite (lemma len_append) lr lhs true ())
+     (unfold blen rhs)
+     (unfold blen rhs))
+    refl))
 
-;; (bytes-fact b) injects p0: (le 0 (blen b)) = True.
 (fulfills blen_nonneg
-  (bytes-fact b (steps ((rewrite (premise 0) lr lhs true ())) refl)))
+  (steps
+    ((unfold blen lhs)
+     (rewrite (lemma len_nonneg) lr lhs true ((inst xs (brep b)))))
+    refl))
+
+(fulfills idx_lo
+  (steps
+    ((unfold bidx lhs)
+     (rewrite (lemma u8_made_lo) lr lhs true ((inst nn (raw_at (brep b) i)))))
+    refl))
+
+(fulfills idx_hi
+  (steps
+    ((unfold bidx lhs)
+     (rewrite (lemma u8_made_hi) lr lhs true ((inst nn (raw_at (brep b) i)))))
+    refl))
