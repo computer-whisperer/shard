@@ -355,7 +355,7 @@
     (Nil None)
     ((Cons td rest)
      (match td
-       ((TypeDef _ _ ctors)
+       ((TypeDef _ _ ctors _)
         (match (tc_find_ctor_in c ctors)
           ((Some cd) (Some (Pair td cd)))
           (None (tc_find_ctor c rest))))))))
@@ -442,7 +442,7 @@
      (match (tc_find_ctor c (tc_tds m))
        (None
          (TcErr (tc_app "unknown constructor: " (chars_of_sym (qn_name c)))))
-       ((Some (Pair (TypeDef tname tparams _) (CtorDef _ fields)))
+       ((Some (Pair (TypeDef tname tparams _ _) (CtorDef _ fields)))
         (match (tc_freshen tparams tc)
           ((Freshened inst metas tc1)
            (match
@@ -458,26 +458,48 @@
              ((TcsErr msg) (TcErr msg))
              ((TcsOk tc2) (TcOk tc2 (TCon tname metas)))))))))
     ((Call f args)
-     (match (tc_fn_sig f m)
-       ;; not a fn/extern/prim: the wrap rules (width literal → type
-       ;; index) get a shot — a user fn of the same name shadows them
-       ;; here exactly as it shadows at runtime (trie-first dispatch).
-       (None (TcErr (tc_app "unknown function: " (chars_of_sym (qn_name f)))))
-       ((Some (Pair ptypes ret))
-        (match (tc_freshen (tc_collect_tvars (Cons ret ptypes) Nil) tc)
-          ((Freshened inst _ tc1)
-           (match
-             (tc_check_args
-               m
-               tc1
-               fenv
-               env
-               args
-               (type_subst_list inst ptypes)
-               f
-               1)
-             ((TcsErr msg) (TcErr msg))
-             ((TcsOk tc2) (TcOk tc2 (type_subst inst ret)))))))))
+     (if (sym_eq (qn_name f) (quote refine_val))
+       ;; refine_val : R -> BASE, a RESERVED projection prim for a refined type
+       ;; R = (refine BASE PRED). Identity at runtime; here it retypes from the
+       ;; argument's refined type to its base. See docs/REFINEMENT.md.
+       (match args
+         ((Cons ev Nil)
+          (match (tc_infer m tc fenv env ev)
+            ((TcErr msg) (TcErr msg))
+            ((TcOk tc1 et)
+             (match tc1
+               ((Tc _ s)
+                (match (type_head (tc_walk et s))
+                  (None (TcErr "refine_val: argument is not a refined type"))
+                  ((Some (Pair rname _))
+                   (match (typedef_refine rname m)
+                     (None
+                       (TcErr
+                         (tc_app
+                           "refine_val: not a refined type: "
+                           (chars_of_sym (qn_name rname)))))
+                     ((Some (Pair base _)) (TcOk tc1 base))))))))))
+         (_ (TcErr "refine_val: expects exactly one argument")))
+       (match (tc_fn_sig f m)
+         ;; not a fn/extern/prim: the wrap rules (width literal → type
+         ;; index) get a shot — a user fn of the same name shadows them
+         ;; here exactly as it shadows at runtime (trie-first dispatch).
+         (None (TcErr (tc_app "unknown function: " (chars_of_sym (qn_name f)))))
+         ((Some (Pair ptypes ret))
+          (match (tc_freshen (tc_collect_tvars (Cons ret ptypes) Nil) tc)
+            ((Freshened inst _ tc1)
+             (match
+               (tc_check_args
+                 m
+                 tc1
+                 fenv
+                 env
+                 args
+                 (type_subst_list inst ptypes)
+                 f
+                 1)
+               ((TcsErr msg) (TcErr msg))
+               ((TcsOk tc2) (TcOk tc2 (type_subst inst ret))))))))))
     ((If c t e2)
      (match (tc_infer m tc fenv env c)
        ((TcErr msg) (TcErr msg))
@@ -614,7 +636,7 @@
            (tc_app
              "unknown constructor in pattern: "
              (chars_of_sym (qn_name c)))))
-       ((Some (Pair (TypeDef tname tparams _) (CtorDef _ fields)))
+       ((Some (Pair (TypeDef tname tparams _ _) (CtorDef _ fields)))
         (match (tc_freshen tparams tc)
           ((Freshened inst metas tc1)
            (match (tc_unify t (TCon tname metas) tc1)
@@ -684,7 +706,7 @@
                (chars_of_sym (qn_name c))))))
        (match (find_typedef c (tc_tds m))
          (None (Some (tc_app "unknown type: " (chars_of_sym (qn_name c)))))
-         ((Some (TypeDef _ tparams _))
+         ((Some (TypeDef _ tparams _ _))
           (if (int_eq (tc_len_tys args) (tc_len_syms tparams))
             (tc_tys_wf m allowed anytv args)
             (Some (tc_app "wrong type arity: " (chars_of_sym (qn_name c)))))))))))
@@ -708,13 +730,47 @@
 (fn tc_label ((kind (List Int)) (name Symbol) (msg (List Int))) (List Int)
   (tc_app kind (tc_app (chars_of_sym name) (tc_app ": " msg))))
 
-;; a typedef: every ctor field type is well-formed over the declared params.
+;; a refined type's predicate must be a fn (BASE) -> Bool (the subset-type
+;; meaning + refine-fact's soundness depend on it; also PRED must be total —
+;; checked by the totality gate). See docs/REFINEMENT.md.
+(fn tc_refine_sig_ok ((ptypes (List Type)) (ret Type) (base Type)) Bool
+  (match ptypes
+    ((Cons p Nil) (if (type_eq p base) (type_eq ret (tc_t_bool)) False))
+    (_ False)))
+
+(fn tc_check_refine
+  ((m Module) (tparams (List Symbol)) (r (Option (Pair Type QName))))
+  (Option (List Int))
+  (match r
+    (None None)
+    ((Some (Pair base pred))
+     (match (tc_tys_wf m tparams False (Cons base Nil))
+       ((Some msg) (Some msg))
+       (None
+         (match (tc_fn_sig pred m)
+           (None
+             (Some
+               (tc_app
+                 "refine predicate not found: "
+                 (chars_of_sym (qn_name pred)))))
+           ((Some (Pair ptypes ret))
+            (if (tc_refine_sig_ok ptypes ret base) None
+            (Some
+              (tc_app
+                "refine predicate must be (BASE) -> Bool: "
+                (chars_of_sym (qn_name pred))))))))))))
+
+;; a typedef: every ctor field type is well-formed over the declared params; a
+;; refined type's (base, predicate) is well-formed and the predicate is BASE->Bool.
 (fn tc_check_td ((m Module) (td TypeDef)) (Option (List Int))
   (match td
-    ((TypeDef name tparams ctors)
+    ((TypeDef name tparams ctors r)
      (match (tc_check_ctors m tparams ctors)
        ((Some msg) (Some (tc_label "type " (qn_name name) msg)))
-       (None None)))))
+       (None
+         (match (tc_check_refine m tparams r)
+           ((Some msg) (Some (tc_label "type " (qn_name name) msg)))
+           (None None)))))))
 
 (fn tc_check_ctors ((m Module) (tparams (List Symbol)) (cds (List CtorDef)))
   (Option (List Int))
@@ -842,7 +898,7 @@
 ;; these are shown to the user, not used as identities).
 (fn tc_td_name ((td TypeDef)) Symbol
   (match td
-    ((TypeDef n _ _) (qn_name n))))
+    ((TypeDef n _ _ _) (qn_name n))))
 
 (fn tc_ed_name ((ed ExternDef)) Symbol
   (match ed

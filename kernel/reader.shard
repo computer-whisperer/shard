@@ -1265,6 +1265,24 @@
        ((Some ns) (Some (Cons n ns)))))
     (_ None)))
 
+;; A refined type body: the sole clause `(refine BASE PRED)` — BASE a type, PRED
+;; the bare name of the (total Bool) predicate fn. Names are resolved to full
+;; QNames later by resolve_refine. None when the body is ordinary ctor clauses.
+;; See docs/REFINEMENT.md. (`refine` is reserved as the sole-clause type-body
+;; keyword; an ordinary ctor may not be named `refine`.)
+(fn parse_refine_body ((ctorForms (List SExpr)) (params (List Symbol)))
+  (Option (Pair Type QName))
+  (match ctorForms
+    ((Cons
+       (SList (Cons (SSym h) (Cons baseForm (Cons (SSym predName) Nil))))
+       Nil)
+     (if (sym_eq h (quote refine))
+       (match (parse_type baseForm params)
+         (None None)
+         ((Some base) (Some (Pair base (qn predName)))))
+       None))
+    (_ None)))
+
 ;; ---- (type …) ----
 (fn parse_typedef ((parts (List SExpr))) (Option TypeDef)
   (match parts
@@ -1273,9 +1291,12 @@
      (match (parse_head nameForm)
        (None None)
        ((Some (Pair name params))
-        (match (parse_ctordefs ctorForms params)
-          (None None)
-          ((Some ctors) (Some (TypeDef (qn name) params ctors)))))))))
+        (match (parse_refine_body ctorForms params)
+          ((Some ref) (Some (TypeDef (qn name) params Nil (Some ref))))
+          (None
+            (match (parse_ctordefs ctorForms params)
+              (None None)
+              ((Some ctors) (Some (TypeDef (qn name) params ctors None)))))))))))
 
 (fn parse_ctordefs ((ss (List SExpr)) (params (List Symbol)))
   (Option (List CtorDef))
@@ -1433,7 +1454,8 @@
        (if (sym_eq kind (quote type))
          (match (parse_head headForm)
            (None None)
-           ((Some (Pair name params)) (Some (TypeDef (qn name) params Nil))))
+           ((Some (Pair name params))
+            (Some (TypeDef (qn name) params Nil None))))
          None)
        None))
     (_ None)))
@@ -1464,7 +1486,7 @@
   (measure (struct tds))
   (match tds
     (Nil Nil)
-    ((Cons (TypeDef _ _ cds) rest)
+    ((Cons (TypeDef _ _ cds _) rest)
      (append_sym (ctordef_names cds) (typedef_ctors rest)))))
 
 ;; The TYPE names a module declares — the proof-DSL reader uses these to tell a
@@ -1473,7 +1495,7 @@
   (measure (struct tds))
   (match tds
     (Nil Nil)
-    ((Cons (TypeDef n _ _) rest) (Cons (qn_name n) (typedef_names rest)))))
+    ((Cons (TypeDef n _ _ _) rest) (Cons (qn_name n) (typedef_names rest)))))
 
 (fn ctordef_names ((cds (List CtorDef))) (List Symbol)
   (measure (struct cds))
@@ -1714,7 +1736,7 @@
   (measure (struct tds))
   (match tds
     (Nil Nil)
-    ((Cons (TypeDef n _ cds) r)
+    ((Cons (TypeDef n _ cds _) r)
      (Cons (Pair (qn_name n) (qn_mod n)) (app_env (cd_env cds) (td_env r))))))
 
 (fn cd_env ((cds (List CtorDef))) (List (Pair Symbol (List Symbol)))
@@ -1840,9 +1862,23 @@
     (Nil Nil)
     ((Cons h t) (Cons (resolve_ctordef env h) (resolve_ctordefs env t)))))
 
+;; resolve the refinement's base type heads + predicate name via the same env
+;; that resolves ctor field types and the typedef name. See docs/REFINEMENT.md.
+(fn resolve_refine ((env RCtx) (r (Option (Pair Type QName))))
+  (Option (Pair Type QName))
+  (match r
+    (None None)
+    ((Some (Pair base pred))
+     (Some (Pair (resolve_type env base) (rhead pred env))))))
+
 (fn resolve_typedef ((env RCtx) (td TypeDef)) TypeDef
   (match td
-    ((TypeDef n ps cds) (TypeDef (rhead n env) ps (resolve_ctordefs env cds)))))
+    ((TypeDef n ps cds r)
+     (TypeDef
+       (rhead n env)
+       ps
+       (resolve_ctordefs env cds)
+       (resolve_refine env r)))))
 
 (fn resolve_typedefs ((env RCtx) (tds (List TypeDef))) (List TypeDef)
   (measure (struct tds))
@@ -1956,7 +1992,7 @@
   (measure (struct tds))
   (match tds
     (Nil False)
-    ((Cons (TypeDef q _ cds) rest)
+    ((Cons (TypeDef q _ cds _) rest)
      (if (sym_eq (qn_name q) n)
        (if (sym_path_eq (qn_mod q) p)
          (match cds

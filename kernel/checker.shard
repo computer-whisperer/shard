@@ -172,7 +172,7 @@
              ((Some (Pair tname targs))
               (match (lookup_typedef tname m)
                 (None False)
-                ((Some (TypeDef _ tparams ctors))
+                ((Some (TypeDef _ tparams ctors _))
                  (let ((type_env (zip_pairs tparams targs)))
                    (if (check_induct_exhaustive ctors cases)
                      (check_induct_proofs m th seq var var_type type_env ctors
@@ -190,7 +190,7 @@
              ((Some (Pair tname _))
               (match (lookup_typedef tname m)
                 (None False)
-                ((Some (TypeDef _ _ ctors))
+                ((Some (TypeDef _ _ ctors _))
                  (if (is_two_ctors ctors)  ; SOUNDNESS GUARD: exactly zero+succ
                    (match (find_zero_ctor ctors)
                      (None False)
@@ -205,7 +205,7 @@
     ((CaseOn scrut ty cases)
      (match (lookup_typedef ty m)
        (None False)  ; unknown type
-       ((Some (TypeDef _ tparams ctors))
+       ((Some (TypeDef _ tparams ctors _))
         ;; TYPE GATE: covering ty's ctors is exhaustive only if scrut IS a ty
         ;; value (see the long note formerly on do_case_on). The gate also
         ;; yields scrut's resolved type args, which instantiate the per-ctor
@@ -401,6 +401,17 @@
                 pr)
               False))))))
 
+    ((RefineFact r expr pr)
+     (match seq
+       ((Sequent params hyps premises goal_eq)
+        (match (refine_fact_checked m params r expr)
+          (None False)
+          ((Some eq)
+           (check_sequent
+             m
+             th
+             (Sequent params hyps (append_eqs premises (Cons eq Nil)) goal_eq)
+             pr))))))
     ((DivFacts n d q pr)
      (match seq
        ((Sequent params hyps premises goal_eq)
@@ -1633,6 +1644,44 @@
             (if (wf_facts_ok m params2 facts) (Some (Pair params2 facts)) None))))))))
 
 ;; ---------------------------------------------------------------------------
+;; do_refine_fact: the structural invariant of a refined type R = (refine BASE
+;; PRED). Injects (= (PRED (refine_val EXPR)) True) as a premise. Sound because
+;; every inhabitant of R was introduced discharging PRED (the subset-type
+;; meaning; PRED must be total — TOTALITY.md). The author names R; the kernel
+;; INFERS EXPR's type and requires its head to equal R, so a refinement cannot
+;; borrow another's predicate (a Big value can't be granted small_pred). The cut
+;; type gate then rejects a malformed predicate. See docs/REFINEMENT.md.
+;; ---------------------------------------------------------------------------
+
+(fn refine_fact_checked ((m Module) (params (List Param)) (r QName) (expr Expr))
+  (Option Equation)
+  (match (typedef_refine r m)
+    (None None)  ; r is not a refined type
+    ((Some (Pair _ pred))
+     (match (tc_infer m (Tc 0 Nil) params Nil expr)
+       ((TcErr _) None)  ; expr ill-typed in this context
+       ((TcOk tc t)
+        (match tc
+          ((Tc _ s)
+           (match (type_head (tc_walk t s))
+             (None None)  ; expr's type is a metavar / TVar — not a concrete R
+             ((Some (Pair rname _))
+              (if (qname_eq rname r)
+                (let
+                  ((eq
+                     (Equation
+                       (Call
+                         pred
+                         (Cons
+                           (Call (qn (quote refine_val)) (Cons expr Nil))
+                           Nil))
+                       (Ctor (qn (quote True)) Nil))))
+                  (match (tc_check_cut m params eq)
+                    ((Some _) None)  ; malformed predicate
+                    (None (Some eq))))
+                None))))))))))  ; expr's type head != R
+
+;; ---------------------------------------------------------------------------
 ;; do_induct: per-ctor sub-sequents with fresh FVars and IHs.
 ;;
 ;; For each ctor C with field types T1..Tn (after instantiating the
@@ -2248,7 +2297,7 @@
   (Option Sequent)
   (match (lookup_typedef ty m)
     (None None)
-    ((Some (TypeDef _ tparams ctors))
+    ((Some (TypeDef _ tparams ctors _))
      (match (tc_scrut_targs m (seq_params seq) scrut ty tparams)
        (None None)
        ((Some targs)
@@ -2276,7 +2325,7 @@
     ((Some (Pair tname targs))
      (match (lookup_typedef tname m)
        (None 0)
-       ((Some (TypeDef _ tparams ctors))
+       ((Some (TypeDef _ tparams ctors _))
         (match (dbg_ctor_fields cname ctors)
           (None 0)
           ((Some fts)
