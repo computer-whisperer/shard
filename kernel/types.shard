@@ -374,44 +374,6 @@
 (fn tc_t_bool () Type (TCon (qn (quote Bool)) Nil))
 (fn tc_t_chars () Type (TCon (qn (quote List)) (Cons (tc_t_int) Nil)))
 
-;; ---------------------------------------------------------------------------
-;; The built-in Bytes type — packed byte sequences. Like Word it has NO
-;; typedef: values (Ctor 'Bytes (L)) are made only by the bytes
-;; primitives (reduce.shard bp_*), so induction/case-on over it is
-;; structurally impossible, and the ctor rule below makes canonicity
-;; (a literal byte list, each element in 0..255) a CHECKED property of
-;; any Bytes literal that appears in a goal. The payload IS the logical
-;; model: (list_of_bytes b) projects it. docs/LANGUAGE.md "Bytes".
-;; ---------------------------------------------------------------------------
-
-(fn tc_t_bytes () Type (TCon (qn (quote Bytes)) Nil))
-
-;; the payload must be a LITERAL canonical byte list: a ground Cons/Nil
-;; chain of IntLits, each in [0, 256).
-(fn tc_bytes_payload_ok ((e Expr)) Bool
-  (measure (struct e))
-  (match e
-    ((Ctor c args)
-     (match args
-       (Nil (sym_eq (qn_name c) (quote Nil)))
-       ((Cons h (Cons t Nil))
-        (if (sym_eq (qn_name c) (quote Cons))
-          (match h
-            ((IntLit n)
-             (if (le 0 n) (if (lt n 256) (tc_bytes_payload_ok t) False) False))
-            (_ False))
-          False))
-       (_ False)))
-    (_ False)))
-
-(fn tc_bytes_lit ((tc Tc) (args (List Expr))) TcRes
-  (match args
-    ((Cons p Nil)
-     (if (tc_bytes_payload_ok p) (TcOk tc (tc_t_bytes))
-     (TcErr
-       "non-canonical Bytes literal (payload must be a literal byte list, each element in 0..255)")))
-    (_ (TcErr "non-canonical Bytes literal (expects exactly one payload list)"))))
-
 ;; the native primitive signatures (mirrors prim.rs / reduce.shard's table).
 (fn tc_builtin_sig ((f Symbol)) (Option (Pair (List Type) Type))
   (if
@@ -440,21 +402,7 @@
       (Some (Pair (Cons (tc_t_chars) Nil) (tc_t_sym)))
     (if (sym_eq f (quote chars_of_sym))
       (Some (Pair (Cons (tc_t_sym) Nil) (tc_t_chars)))
-      ;; bytes primitives — the packed-sequence former. The list side of
-      ;; the bridge is (List Int) = tc_t_chars.
-      (if (sym_eq f (quote blen))
-        (Some (Pair (Cons (tc_t_bytes) Nil) (tc_t_int)))
-      (if (sym_eq f (quote bidx))
-        (Some (Pair (list (tc_t_bytes) (tc_t_int)) (tc_t_int)))
-      (if (sym_eq f (quote bcat))
-        (Some (Pair (list (tc_t_bytes) (tc_t_bytes)) (tc_t_bytes)))
-      (if (sym_eq f (quote bslice))
-        (Some (Pair (list (tc_t_bytes) (tc_t_int) (tc_t_int)) (tc_t_bytes)))
-      (if (sym_eq f (quote bytes_of_list))
-        (Some (Pair (Cons (tc_t_chars) Nil) (tc_t_bytes)))
-      (if (sym_eq f (quote list_of_bytes))
-        (Some (Pair (Cons (tc_t_bytes) Nil) (tc_t_chars)))
-        None)))))))))))))
+      None)))))))
 
 ;; a Call head's signature: user fn first (mirrors the evaluator's dispatch
 ;; order), then extern/sig, then the native primitive table.
@@ -491,7 +439,6 @@
        ((Some t) (TcOk tc t))
        (None (TcErr (tc_app "unbound variable: " (chars_of_sym x))))))
     ((Ctor c args)
-     (if (sym_eq (qn_name c) (quote Bytes)) (tc_bytes_lit tc args)
      (match (tc_find_ctor c (tc_tds m))
        (None
          (TcErr (tc_app "unknown constructor: " (chars_of_sym (qn_name c)))))
@@ -509,7 +456,7 @@
                c
                1)
              ((TcsErr msg) (TcErr msg))
-             ((TcsOk tc2) (TcOk tc2 (TCon tname metas))))))))))
+             ((TcsOk tc2) (TcOk tc2 (TCon tname metas)))))))))
     ((Call f args)
      (match (tc_fn_sig f m)
        ;; not a fn/extern/prim: the wrap rules (width literal → type
@@ -716,7 +663,7 @@
 (fn tc_is_prim_ty ((c QName)) Bool
   (if (sym_eq (qn_name c) (quote Int)) True
   (if (sym_eq (qn_name c) (quote Symbol)) True
-  (sym_eq (qn_name c) (quote Bytes)))))
+  False)))
 
 (fn tc_ty_wf ((m Module) (allowed (List Symbol)) (anytv Bool) (t Type))
   (Option (List Int))

@@ -163,6 +163,14 @@ is where to start when planning v3.
   narrows to the **bytes** five; div keeps 2 pedigreed base axioms.
   Word/Bytes demotion is unchanged and still pending (Word first, since
   Bytes = `(List u8)` rides on it).
+- **DONE (2026-06-23):** both formers revoked. `std/word` (opaque uN/iN
+  over `Int`) landed first; `std/bytes` (opaque `Bytes` over `(List U8)`)
+  followed, riding on it. All five bytes bridge laws are now **theorems**
+  (`blen_is_len`/`list_of_cat`/`of_list_len`/`of_list_id`/
+  `slice_len_exact`) — `std/bytes` carries no bytes-specific axiom. The
+  `of_list_id` mod-identity went through `div-facts` + `fin-split` for the
+  integrality. Kernel `Word`/`Bytes` formers, their prims, and the
+  `word-fact`/`bytes-fact` proof steps are gone; only `div-facts` remains.
 
 ## Language Surface
 

@@ -360,9 +360,9 @@
          ((Sequent _ _ premises goal_eq) (farkas_check premises goal_eq cert)))
        False))))))  ; unknown theory
 
-    ;; FinSplit/Have/BytesFact/DivFacts: likewise inlined (see the
-    ;; Induct group note). Each recursive call is a direct check_sequent on a
-    ;; structural sub-proof of the current Proof, so the measure drops honestly.
+    ;; FinSplit/Have/DivFacts: likewise inlined (see the Induct group note).
+    ;; Each recursive call is a direct check_sequent on a structural sub-proof
+    ;; of the current Proof, so the measure drops honestly.
     ((FinSplit var lo hi cases)
      (match seq
        ((Sequent params hyps premises eq)
@@ -400,18 +400,6 @@
                   goal_eq)
                 pr)
               False))))))
-
-    ((BytesFact e pr)
-     (match seq
-       ((Sequent params hyps premises goal_eq)
-        (match (bytes_facts_checked m params e)
-          (None False)
-          ((Some facts)
-           (check_sequent
-             m
-             th
-             (Sequent params hyps (append_eqs premises facts) goal_eq)
-             pr))))))
 
     ((DivFacts n d q pr)
      (match seq
@@ -1643,91 +1631,6 @@
             ((params2 (Cons (Param q (TCon (qn (quote Int)) Nil)) params))
              (facts (div_facts_eqs n d q)))
             (if (wf_facts_ok m params2 facts) (Some (Pair params2 facts)) None))))))))
-
-;; ---------------------------------------------------------------------------
-;; bytes-fact (bf_*): kernel-justified premise injection for the Bytes
-;; former — the word-fact pattern at the PRIM level. Every emitted
-;; equation mirrors the corresponding bp_* implementation in
-;; reduce.shard, REVIEWED IN LOCKSTEP. The list-model bridge facts
-;; (list_of_bytes homomorphisms — append/len vocabulary) do NOT live
-;; here: the kernel has no list functions; they belong to std/bytes as
-;; tagged axioms. Facts here mention only prims, so farkas/lia read
-;; them linearly (blen/bidx terms are Int atoms).
-;;
-;; bytes-fact facts by target shape (premise order as listed):
-;;   (bcat a b)     blen e = + (blen a) (blen b);  0 <= blen a;
-;;                  0 <= blen b;  0 <= blen e                  [4]
-;;   (bslice b i j) 0 <= blen e;  blen e <= blen b;
-;;                  0 <= blen b                                [3]
-;;                  (the exact clamped length is NOT emitted — its
-;;                  unconditional form is nonlinear; premised exact
-;;                  laws belong to std/bytes)
-;;   (bidx b i)     0 <= e;  e <= 255;  0 <= blen b            [3]
-;;                  (unconditional: out-of-range reads ARE 0)
-;;   anything else Bytes-typed (var, bytes_of_list call, …):
-;;                  0 <= blen e                                [1]
-;; Every fact passes the cut type gate (wf_facts_ok) — which is also
-;; what rejects a bytes-fact on a non-Bytes target, loudly.
-;; ---------------------------------------------------------------------------
-
-(fn bf_blen ((e Expr)) Expr (Call (qn (quote blen)) (Cons e Nil)))
-
-(fn bf_true () Expr (Ctor (qn (quote True)) Nil))
-
-;; (le 0 (blen e)) = True
-(fn bf_nonneg ((e Expr)) Equation
-  (Equation (wf_le (IntLit 0) (bf_blen e)) (bf_true)))
-
-(fn bf_cat_facts ((e Expr) (args (List Expr))) (Option (List Equation))
-  (match args
-    ((Cons a (Cons b Nil))
-     (Some
-       (Cons
-         (Equation
-           (bf_blen e)
-           (Call (qn (quote +)) (Cons (bf_blen a) (Cons (bf_blen b) Nil))))
-         (Cons (bf_nonneg a) (Cons (bf_nonneg b) (Cons (bf_nonneg e) Nil))))))
-    (_ None)))
-
-(fn bf_slice_facts ((e Expr) (args (List Expr))) (Option (List Equation))
-  (match args
-    ((Cons b (Cons _ (Cons _ Nil)))
-     (Some
-       (Cons
-         (bf_nonneg e)
-         (Cons
-           (Equation (wf_le (bf_blen e) (bf_blen b)) (bf_true))
-           (Cons (bf_nonneg b) Nil)))))
-    (_ None)))
-
-(fn bf_idx_facts ((e Expr) (args (List Expr))) (Option (List Equation))
-  (match args
-    ((Cons b (Cons _ Nil))
-     (Some
-       (Cons
-         (Equation (wf_le (IntLit 0) e) (bf_true))
-         (Cons
-           (Equation (wf_le e (IntLit 255)) (bf_true))
-           (Cons (bf_nonneg b) Nil)))))
-    (_ None)))
-
-(fn bytes_facts ((e Expr)) (Option (List Equation))
-  (match e
-    ((Call f args)
-     (if (sym_eq (qn_name f) (quote bcat)) (bf_cat_facts e args)
-     (if (sym_eq (qn_name f) (quote bslice)) (bf_slice_facts e args)
-     (if (sym_eq (qn_name f) (quote bidx)) (bf_idx_facts e args)
-     (Some (Cons (bf_nonneg e) Nil))))))
-    (_ (Some (Cons (bf_nonneg e) Nil)))))
-
-;; validated bytes facts (construction + cut type gate), or None. Shared
-;; with desugar's premise counting and the tracer so neither can diverge
-;; from what the checker adds.
-(fn bytes_facts_checked ((m Module) (params (List Param)) (e Expr))
-  (Option (List Equation))
-  (match (bytes_facts e)
-    (None None)
-    ((Some facts) (if (wf_facts_ok m params facts) (Some facts) None))))
 
 ;; ---------------------------------------------------------------------------
 ;; do_induct: per-ctor sub-sequents with fresh FVars and IHs.

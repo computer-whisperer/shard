@@ -273,12 +273,14 @@ pedigree** — centuries of vetting back integer arithmetic; nothing backs a
 hand-written axiom about a data structure we invented last week, and we have
 shipped or nearly shipped false ones twice (the Word `/`+`mod` mixed-pair
 axiom; std/bytes `of_list_id` unguarded). Consequently the `Word` and `Bytes`
-kernel formers are **revoked**: both are conservative constructions over the
-base (`Bytes` already carries its byte-list model inside its canonical value)
-and are slated for demotion to ordinary `std` modules — opaque `sig type`s
-over `Int`/`(List Int)` whose law families are *proven*, turning today's ten
-std axioms into theorems. Facts about defined things are auditable inside the
-system; facts about opaque primitives are pure trust. The end state: `std`
+kernel formers are **revoked** (issue #15, done): both are now ordinary `std`
+modules — `std/word` is an opaque `sig type` over `Int` (uN/iN), `std/bytes`
+an opaque `sig type` over `(List U8)` — whose law families are *proven*. The
+old bridge axioms (the Word image laws, the five bytes bridge laws) are now
+theorems; `std/bytes` carries **no** bytes-specific axiom, resting only on
+`std/list` + `std/word` → `std/div`'s 2 euclidean axioms. Facts about defined
+things are auditable inside the system; facts about opaque primitives are pure
+trust. The end state: `std`
 is axiom-free, layered proof snowballing on the closed base, and `(axiom …)`
 outside the base is a corpus-gate violation rather than a convention.
 

@@ -211,42 +211,6 @@
          (if (sym_eq f (quote bshr))
            (if (le 0 b) (if (lt b 64) (Some (IntLit (bshr a b))) None) None)
            None))))))))))))))))
-    ;; Two-Bytes primitive: bcat. A non-canonical payload (symbolic
-    ;; element, malformed spine, out-of-range octet) leaves the call
-    ;; STUCK — unreachable for type-checked source, defensive for raw
-    ;; data (the Word width-mismatch posture).
-    ((Cons
-       (Ctor (QName _ (quote Bytes)) (Cons pa Nil))
-       (Cons (Ctor (QName _ (quote Bytes)) (Cons pb Nil)) Nil))
-     (if (sym_eq f (quote bcat))
-       (match (bp_read pa)
-         (None None)
-         ((Some xs)
-          (match (bp_read pb)
-            (None None)
-            ((Some ys) (bp_make (bp_app xs ys))))))
-       None))
-    ;; Bytes-and-Int primitive: bidx (TOTAL: 0 outside [0, blen)).
-    ((Cons (Ctor (QName _ (quote Bytes)) (Cons p Nil)) (Cons (IntLit i) Nil))
-     (if (sym_eq f (quote bidx))
-       (match (bp_read p)
-         (None None)
-         ((Some xs) (Some (IntLit (bp_nth xs i)))))
-       None))
-    ;; Bytes-Int-Int primitive: bslice (clamped window, TOTAL).
-    ((Cons
-       (Ctor (QName _ (quote Bytes)) (Cons p Nil))
-       (Cons (IntLit i) (Cons (IntLit j) Nil)))
-     (if (sym_eq f (quote bslice))
-       (match (bp_read p)
-         (None None)
-         ((Some xs) (bp_make (bp_slice xs i j))))
-       None))
-    ;; One-Bytes primitives: blen / list_of_bytes.
-    ((Cons (Ctor (QName _ (quote Bytes)) (Cons p Nil)) Nil)
-     (match (bp_read p)
-       (None None)
-       ((Some xs) (bp_unop f xs))))
     ;; Two-Symbol primitives.
     ((Cons (SymLit a) (Cons (SymLit b) Nil))
      (if (sym_eq f (quote sym_eq)) (Some (bool_as_expr (sym_eq a b))) None))
@@ -270,14 +234,7 @@
        (match (bp_read le)
          (None None)
          ((Some xs) (if (utf8_ok xs) (Some (SymLit (sym_of_chars xs))) None)))
-       ;; bytes_of_list ((List Int) -> Bytes): the only Bytes maker. The
-       ;; VALIDATING decode (bp_read_ints) is load-bearing — a symbolic
-       ;; element must leave the call stuck, never truncate.
-       (if (sym_eq f (quote bytes_of_list))
-         (match (bp_read_ints le)
-           (None None)
-           ((Some xs) (bp_make (bp_mask xs))))
-         None)))
+       None))
     ;; No-arg: gen_fresh () -> Symbol (effectful — a process-global counter).
     ;; The checker calls it to open binders with fresh FVars (Induct/Cases/
     ;; sequent entry), so it too must be dispatched for a hosted checker.
@@ -291,23 +248,11 @@
   (if b (Ctor (qn (quote True)) Nil) (Ctor (qn (quote False)) Nil)))
 
 ;; ---------------------------------------------------------------------------
-;; Bytes primitives (bp_*): packed byte sequences over the canonical
-;; value (Ctor 'Bytes (L)), L the object-level (List Int) of octets,
-;; each in [0, 256). The payload IS the logical model — list_of_bytes
-;; projects it, bytes_of_list masks into it — so canonicity is
-;; preserved by construction, exactly the Word pattern. Engines may
-;; pack the payload later (rt.h flat buffer); these bodies are the
-;; spec and never depend on the carrier.
-;;
-;; SPEC CONVENTIONS (all ops TOTAL — docs/LANGUAGE.md "Bytes"):
-;;   bytes_of_list L   each element masked: euclidean mod 256
-;;   list_of_bytes b   the payload, exactly
-;;   blen b            payload length
-;;   bidx b i          payload element i; 0 outside [0, blen)
-;;                     (the std/mem total-read convention)
-;;   bcat a b          payload append
-;;   bslice b i j      elements [max 0 i, min (blen b) j) — clamped;
-;;                     empty when the clamped window is empty
+;; Ground list-decode helpers (bp_*): the validating decode of an object
+;; (List Int) value used by sym_of_chars (intern a name from its UTF-8 byte
+;; list). The packed Bytes former was revoked (issue #15) — std/bytes is the
+;; rep now — so only these decode helpers remain; the byte ops live in the
+;; std/bytes construction over (List U8).
 ;; ---------------------------------------------------------------------------
 
 ;; decode a GROUND proper object list of IntLits to its (List Int).
@@ -383,7 +328,7 @@
   None)))))))))))  ; F5..FF invalid
 
 ;; TODO(issue #1, totality): utf8_ok recurses on the suffix utf8_lead returns,
-;; so it is total by a (measure (bp_len xs)) — it terminates because every step
+;; so it is total by a (measure (len xs)) — it terminates because every step
 ;; consumes >=1 byte (<=4 per code point). It is left a FLAG for now: the proof
 ;; needs suffix lemmas len(opt_rest(utf8_cont/utf8_narrow …)) <= len input plus a
 ;; 10-way dispatch lemma over utf8_lead, and utf8 is a TEMPORARY kernel fixture
@@ -398,57 +343,6 @@
      (match (utf8_lead b t)
        (None False)
        ((Some r) (utf8_ok r))))))
-
-(fn bp_make ((xs (List Int))) (Option Expr)
-  (Some (Ctor (qn (quote Bytes)) (Cons (intlist_to_expr xs) Nil))))
-
-(fn bp_mask ((xs (List Int))) (List Int)
-  (measure (struct xs))
-  (match xs
-    (Nil Nil)
-    ((Cons h t) (Cons (mod h 256) (bp_mask t)))))
-
-(fn bp_len ((xs (List Int))) Int
-  (measure (struct xs))
-  (match xs
-    (Nil 0)
-    ((Cons _ t) (+ 1 (bp_len t)))))
-
-(fn bp_nth ((xs (List Int)) (i Int)) Int
-  (measure (struct xs))
-  (if (lt i 0) 0
-  (match xs
-    (Nil 0)
-    ((Cons h t) (if (int_eq i 0) h (bp_nth t (- i 1)))))))
-
-(fn bp_app ((xs (List Int)) (ys (List Int))) (List Int)
-  (measure (struct xs))
-  (match xs
-    (Nil ys)
-    ((Cons h t) (Cons h (bp_app t ys)))))
-
-(fn bp_drop ((xs (List Int)) (k Int)) (List Int)
-  (measure (struct xs))
-  (if (le k 0) xs
-  (match xs
-    (Nil Nil)
-    ((Cons _ t) (bp_drop t (- k 1))))))
-
-(fn bp_take ((xs (List Int)) (k Int)) (List Int)
-  (measure (struct xs))
-  (if (le k 0) Nil
-  (match xs
-    (Nil Nil)
-    ((Cons h t) (Cons h (bp_take t (- k 1)))))))
-
-(fn bp_slice ((xs (List Int)) (i Int) (j Int)) (List Int)
-  (let ((i0 (if (lt i 0) 0 i))) (bp_take (bp_drop xs i0) (- j i0))))
-
-;; one-Bytes primitives: blen / list_of_bytes.
-(fn bp_unop ((f Symbol) (xs (List Int))) (Option Expr)
-  (if (sym_eq f (quote blen)) (Some (IntLit (bp_len xs)))
-  (if (sym_eq f (quote list_of_bytes)) (Some (intlist_to_expr xs))
-  None)))
 
 (fn step_args_in_call ((m Module) (f QName) (args (List Expr))) (Option Expr)
   (measure (+ (* 2 (size_list args)) 1))

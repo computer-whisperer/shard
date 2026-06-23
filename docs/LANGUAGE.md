@@ -188,39 +188,36 @@ These primitives are implemented once, in `kernel/reduce.shard`'s
 table (not natively), so the proof reducer and the hosted evaluator
 share one definition by construction.
 
-### Bytes — packed byte sequences
+### Bytes — an opaque `std/bytes` construction
 
-`Bytes` is a built-in 0-ary type: a packed sequence of octets. Like
-`Word` it has **no typedef**: a value is `(Ctor 'Bytes (L))` with `L`
-the literal byte list (each element in `[0, 256)`), values are
-produced only by the bytes primitives, the type checker enforces
-canonicity on any literal reaching a goal, and induction/case-on over
-it is impossible. **The payload is the logical model**: proofs reason
-about `(list_of_bytes b)` with the ordinary `std/list` vocabulary;
-packing is an engine concern (the compiled chain may carry a flat
-buffer), never a semantic one.
+`Bytes` is **not** a kernel type. It is an **opaque `std/bytes` module**
+over `(List U8)` (`std/word`'s unsigned byte) — the trusted-core
+contraction (issue #15), the same move that revoked the `Word` former.
+A consumer sees an abstract `Bytes` with the packed-style ops; the
+`(List U8)` representation is hidden behind the `sig type`. The kernel
+has no `Bytes` former, no `bytes` primitives, and no `bytes-fact` proof
+step — `std/bytes` rests on `std/list` + `std/word` (→ `std/div`'s 2
+euclidean axioms), with **no bytes-specific axiom**.
 
-All bytes ops are **total**:
+The ops (`std/bytes/mod.req.shard`), all **total**:
 
-- `(bytes_of_list L)` — the only maker: `(List Int) → Bytes`, each
-  element masked euclidean mod 256. A list with a symbolic element
-  stays **stuck** (the decode validates; it never truncates).
-- `(list_of_bytes b)` — the payload, exactly: `Bytes → (List Int)`.
-  `(list_of_bytes (bytes_of_list L))` = `L` element-wise mod 256.
-- `(blen b)` — the length, as an `Int`.
-- `(bidx b i)` — element `i`; **0 outside `[0, blen b)`** (the
-  `std/mem` total-read convention).
-- `(bcat a b)` — concatenation (append on the model).
-- `(bslice b i j)` — the elements in `[max 0 i, min (blen b) j)`;
-  the window clamps, an inverted window is empty.
+- `(bytes_of_list L)` — the maker: `(List Int) → Bytes`, each element
+  masked mod 256 (it maps `u8` over the list).
+- `(list_of_bytes b)` — the model projection: `Bytes → (List Int)`.
+  On a `bytes_ok` list, `(list_of_bytes (bytes_of_list L)) = L`
+  (`of_list_id`, a theorem).
+- `(blen b)` — the length (`= len (list_of_bytes b)`, `blen_is_len`).
+- `(bidx b i)` — element `i`, re-canonicalized through `u8`; **0 outside
+  `[0, blen b)`**, and `0 ≤ (bidx b i) < 256` unconditionally
+  (`idx_lo`/`idx_hi`).
+- `(bcat a b)` — concatenation (`list_of_cat`, `cat_len`).
+- `(bslice b i j)` — the clamped window `[max 0 i, min (blen b) j)`;
+  exact length `j - i` on a valid window (`slice_len_exact`).
 
-These also live only in `kernel/reduce.shard`'s table — one
-definition for the proof reducer and the hosted evaluator. Ground
-calls reduce (so `compute` works); symbolic arguments are reasoned
-about via the list model and the `(bytes-fact …)` premise step
-(§10.3), which injects prim-level `blen`/`bidx` facts; the
-list-model bridge laws (`len`/`append` homomorphisms, the guarded
-round trip, the exact slice length) are `std/bytes`'s tagged axioms.
+The list-model bridge laws (the `len`/`append` homomorphisms, the
+guarded round trip, the exact slice length) are all **theorems** proven
+in `std/bytes/bytes.shard`. A consumer reasons about a `Bytes` only
+through these laws and the `std/list` vocabulary on `(list_of_bytes b)`.
 
 
 ## 4. Expressions
@@ -249,9 +246,7 @@ in normal form). The evaluator is call-by-value.
   byte, the `sym_of_chars`/`chars_of_sym` bridge (a symbol's name as
   its UTF-8 bytes), and the compiled chain's `rt.h`. Per-character
   work on non-ASCII text needs an explicit UTF-8 decode in-language;
-  the packed `Bytes` former (§3) is the typed companion, and the
-  type-level extern signatures move to `Bytes` with the
-  compiled-chain slice.
+  the opaque `std/bytes` construction (§3) is the typed companion.
 
 ### 4.2 Variables
 
@@ -425,12 +420,10 @@ them ("stuck-and-intercept" — see REVISIT).
 `gen_fresh` is the lone effectful primitive [REVISIT — Fresh-symbol
 generation as an effectful primitive].
 
-The word primitives (`wadd` …, §3 "Words") and the bytes primitives
-(`blen bidx bcat bslice bytes_of_list list_of_bytes`, §3 "Bytes")
-are **not** in the native table: they live only in
-`kernel/reduce.shard`'s object table (a native-path call fail-stops
-as UnknownCall, never a second implementation — the conformance
-sweep in `rust_bootstrap/src/lib.rs` pins this).
+The `Word` and `Bytes` formers were both revoked (trusted-core
+contraction, issue #15): there are no `wadd …` or `blen`/`bidx`/… byte
+primitives in any table. Fixed-width modular ints and byte sequences are
+now opaque `std/word` / `std/bytes` constructions (§3).
 
 
 ## 9. Stdlib types
@@ -566,9 +559,7 @@ parameter):
 | `(have EQ PROOF₁ PROOF₂)`                    | `Have`      | the CUT rule: prove `EQ` by `PROOF₁`, then continue with `PROOF₂` under `EQ` as a fresh premise |
 | `(have NAME EQ PROOF₁ PROOF₂)`               | `HaveN`     | named cut: as above, and `PROOF₂` may cite the fact as `(premise NAME)` — resolved to positional at load time, so inserting earlier haves can't break later citations |
 | `(fin-split VAR LO HI (CASE…))`              | `FinSplit`  | bounded-Int enumeration: `LO`/`HI` cite range premises for `VAR`; one `(case INT PROOF)` per value |
-| `(word-fact TERM PROOF)`                     | `WordFact`  | inject `TERM`'s word-semantic facts (defining equation over the Int image at the type-checked width, plus value ranges) as premises; kernel-justified — no obligation. Unsigned terms read via `uval`, signed via `sval` (shifted-mod images for wrap arith; `wnot` linear; bitwise/shift images at literal amounts); concrete width required except for the comparison images |
-| `(bytes-fact TERM PROOF)`                    | `BytesFact` | inject `TERM`'s bytes-semantic facts as premises; kernel-justified — no obligation. By head shape: `(bcat a b)` the `blen` sum equation + non-negativity ranges; `(bslice b i j)` `0 ≤ blen e ≤ blen b`; `(bidx b i)` `0 ≤ e ≤ 255` (unconditional — out-of-range reads are 0); any other Bytes term `0 ≤ blen e`. Prim-level only; the list-model bridge is std territory |
-| `(div-facts TERM D Q PROOF)`                 | `DivFacts`  | inject the Euclidean triple for `TERM` at literal divisor `D` (`n = D·Q + mod n D`, mod ranges), with quotient `Q` a fresh ∀-param — `fin-split Q` then supplies the integrality step rational farkas cannot (see examples/word_facts.shard for the mod-elimination idiom) |
+| `(div-facts TERM D Q PROOF)`                 | `DivFacts`  | inject the Euclidean triple for `TERM` at literal divisor `D` (`n = D·Q + mod n D`, mod ranges), with quotient `Q` a fresh ∀-param — `fin-split Q` then supplies the integrality step rational farkas cannot (see `std/bytes/bytes.shard`'s `mod_byte_id` for the mod-elimination idiom) |
 | `(rewrite-with EQREF DIR SIDE (INST…) (PROOF…) PROOF)` | `RewriteWith` | rewrite by a cited equation whose own premises are discharged by the sub-`PROOF`s, then continue |
 | `(absurd EQREF)`                             | `Absurd`    | close the goal from a contradictory hypothesis                 |
 | `(by THEORY PAYLOAD)`                         | `ByTheory`  | discharge via a decision procedure (§10.7)                     |
@@ -778,8 +769,8 @@ x86) — see `docs/OVERVIEW.md`.
 - No *distinct* string type: string literals `"…"` exist as sugar for
   the `(List Int)` of their UTF-8 bytes (§4.1, §10), not as an opaque
   primitive.
-  (The `Bytes` former (§3) is the packed *byte*-sequence type — the
-  text type over it is future work; issue #2.)
+  (The opaque `std/bytes` construction (§3) is the *byte*-sequence type
+  — the text type over it is future work; issue #2.)
 - No floats.
 
 These are constraints the narrow form imposes; the full language
