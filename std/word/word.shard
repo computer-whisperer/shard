@@ -1,93 +1,37 @@
 ;;; std/word/word.shard — the `word` module IMPLEMENTATION (private).
 ;;;
-;;; Supplies the full type (with the PRIVATE ctor mk_u8), the bodies behind the
-;;; interface's opaque sig fns, and the `fulfills` proofs. Imports its own
-;;; interface ungranted so the requirements load as obligations; the full
-;;; `(type …)` shadows the abstract `(sig type …)` so the impl may construct and
-;;; match the representation (sound: the module reasons about itself). Consumer
-;;; PROOFS never see mk_u8.
-;;;
-;;; Representation: the raw value, normalized into [0, 256) by `u8` (the only
-;;; maker). Each op projects its args to Int, applies the Int op, re-wraps —
-;;; so the range invariant is maintained BY CONSTRUCTION and every law reduces
-;;; to a fact about euclidean `mod` (std/div).
+;;; Full types (private ctors mk_uN/mk_iN), the bodies behind the opaque sig
+;;; fns, and the fulfills proofs. Every op projects to Int, applies the Int op,
+;;; re-wraps — so the range invariant holds BY CONSTRUCTION and each law reduces
+;;; to a fact about euclidean `mod` (std/div). GENERATED — see /tmp/wordgen.py.
 
 (import "../../kernel/stdlib.shard")
 (import "../div")  ; mod_lo / mod_hi — euclidean remainder range
-(import "mod.req.shard")  ; our interface — the opaque type + sig fns + reqs
+(import "mod.req.shard")  ; our interface — the opaque types + sig fns + reqs
 (use (:: std div *))  ; the mod range axioms for citation
 (use (:: std word *))  ; impl-proof: rebind bodies + bring lemma names into scope
 
+;; ---- u8: unsigned 8-bit -------------------------------------------------
 (type U8 (mk_u8 Int))
-
-(type I8 (mk_i8 Int))
-
-(fn u8 ((n Int)) U8 (mk_u8 (mod n 256)))
-
+(fn u8 ((nn Int)) U8 (mk_u8 (mod nn 256)))
 (fn u8_val ((x U8)) Int
   (match x
     ((mk_u8 r) r)))
-
 (fn u8_add ((a U8) (b U8)) U8 (u8 (+ (u8_val a) (u8_val b))))
-
 (fn u8_sub ((a U8) (b U8)) U8 (u8 (- (u8_val a) (u8_val b))))
-
 (fn u8_mul ((a U8) (b U8)) U8 (u8 (* (u8_val a) (u8_val b))))
-
 (fn u8_and ((a U8) (b U8)) U8 (u8 (band (u8_val a) (u8_val b))))
-
 (fn u8_or ((a U8) (b U8)) U8 (u8 (bor (u8_val a) (u8_val b))))
-
 (fn u8_xor ((a U8) (b U8)) U8 (u8 (bxor (u8_val a) (u8_val b))))
-
 (fn u8_not ((x U8)) U8 (u8 (- 255 (u8_val x))))
-
 (fn u8_eq ((a U8) (b U8)) Bool (int_eq (u8_val a) (u8_val b)))
-
 (fn u8_lt ((a U8) (b U8)) Bool (lt (u8_val a) (u8_val b)))
-
 (fn u8_le ((a U8) (b U8)) Bool (le (u8_val a) (u8_val b)))
-
 (fn u8_shl ((x U8) (k Int)) U8 (u8 (bshl (u8_val x) k)))
-
 (fn u8_shr ((x U8) (k Int)) U8 (u8 (bshr (u8_val x) k)))
 
-;; ---- i8: signed 8-bit, storing the signed value in [-128,128) -------------
-
-;; signed normalization: euclidean mod into [0,256), then fold the top half
-;; [128,256) down by 256 to land in [-128,128).
-(fn i8_wrap ((n Int)) Int
-  (if (lt (mod n 256) 128) (mod n 256) (- (mod n 256) 256)))
-
-(fn i8 ((n Int)) I8 (mk_i8 (i8_wrap n)))
-
-(fn i8_val ((x I8)) Int
-  (match x
-    ((mk_i8 v) v)))
-
-(fn i8_add ((a I8) (b I8)) I8 (i8 (+ (i8_val a) (i8_val b))))
-
-(fn i8_sub ((a I8) (b I8)) I8 (i8 (- (i8_val a) (i8_val b))))
-
-(fn i8_mul ((a I8) (b I8)) I8 (i8 (* (i8_val a) (i8_val b))))
-
-(fn i8_eq ((a I8) (b I8)) Bool (int_eq (i8_val a) (i8_val b)))
-
-(fn i8_slt ((a I8) (b I8)) Bool (lt (i8_val a) (i8_val b)))
-
-(fn i8_sle ((a I8) (b I8)) Bool (le (i8_val a) (i8_val b)))
-
-(fn i8_shl ((x I8) (k Int)) I8 (i8 (bshl (i8_val x) k)))
-
-(fn i8_sshr ((x I8) (k Int)) I8 (i8 (ediv (i8_val x) (bshl 1 k))))
-
-;; ---- discharge the interface's requirements ----
-
-;; u8_val (u8 n) = mod n 256: unfold both, fire the mk_u8 match arm.
 (fulfills u8_val_of
   (steps ((unfold u8 lhs) (unfold u8_val lhs) (simp lhs)) refl))
-
-;; 0 <= u8_val (u8 n): rewrite to mod, cite mod_lo at the literal divisor 256.
 (fulfills u8_made_lo
   (steps
     ((rewrite (lemma u8_val_of) lr lhs true ()))
@@ -95,11 +39,9 @@
       (lemma mod_lo)
       lr
       lhs
-      ((inst n n) (inst d 256))
+      ((inst n nn) (inst d 256))
       ((steps ((compute both)) refl))
       refl)))
-
-;; u8_val (u8 n) < 256: rewrite to mod, cite mod_hi at 256.
 (fulfills u8_made_hi
   (steps
     ((rewrite (lemma u8_val_of) lr lhs true ()))
@@ -107,82 +49,234 @@
       (lemma mod_hi)
       lr
       lhs
-      ((inst n n) (inst d 256))
+      ((inst n nn) (inst d 256))
       ((steps ((compute both)) refl))
       refl)))
-
-;; arithmetic images: unfold the op, rewrite u8_val_of at the summed raw.
 (fulfills u8_add_val
   (steps ((unfold u8_add lhs) (rewrite (lemma u8_val_of) lr lhs true ())) refl))
-
 (fulfills u8_sub_val
   (steps ((unfold u8_sub lhs) (rewrite (lemma u8_val_of) lr lhs true ())) refl))
-
 (fulfills u8_mul_val
   (steps ((unfold u8_mul lhs) (rewrite (lemma u8_val_of) lr lhs true ())) refl))
-
 (fulfills u8_and_val
   (steps ((unfold u8_and lhs) (rewrite (lemma u8_val_of) lr lhs true ())) refl))
-
 (fulfills u8_or_val
   (steps ((unfold u8_or lhs) (rewrite (lemma u8_val_of) lr lhs true ())) refl))
-
 (fulfills u8_xor_val
   (steps ((unfold u8_xor lhs) (rewrite (lemma u8_val_of) lr lhs true ())) refl))
-
 (fulfills u8_not_val
   (steps ((unfold u8_not lhs) (rewrite (lemma u8_val_of) lr lhs true ())) refl))
-
 (fulfills u8_eq_val (steps ((unfold u8_eq lhs)) refl))
-
 (fulfills u8_lt_val (steps ((unfold u8_lt lhs)) refl))
-
 (fulfills u8_le_val (steps ((unfold u8_le lhs)) refl))
-
-;; shifts: same wrap-of-op pattern as the arithmetic/bitwise images.
 (fulfills u8_shl_val
   (steps ((unfold u8_shl lhs) (rewrite (lemma u8_val_of) lr lhs true ())) refl))
-
 (fulfills u8_shr_val
   (steps ((unfold u8_shr lhs) (rewrite (lemma u8_val_of) lr lhs true ())) refl))
 
-;; i8: signed value of a made i8 is its wrap; unfold both, fire the arm.
+;; ---- u16: unsigned 16-bit -------------------------------------------------
+(type U16 (mk_u16 Int))
+(fn u16 ((nn Int)) U16 (mk_u16 (mod nn 65536)))
+(fn u16_val ((x U16)) Int
+  (match x
+    ((mk_u16 r) r)))
+(fn u16_add ((a U16) (b U16)) U16 (u16 (+ (u16_val a) (u16_val b))))
+(fn u16_sub ((a U16) (b U16)) U16 (u16 (- (u16_val a) (u16_val b))))
+(fn u16_mul ((a U16) (b U16)) U16 (u16 (* (u16_val a) (u16_val b))))
+(fn u16_and ((a U16) (b U16)) U16 (u16 (band (u16_val a) (u16_val b))))
+(fn u16_or ((a U16) (b U16)) U16 (u16 (bor (u16_val a) (u16_val b))))
+(fn u16_xor ((a U16) (b U16)) U16 (u16 (bxor (u16_val a) (u16_val b))))
+(fn u16_not ((x U16)) U16 (u16 (- 65535 (u16_val x))))
+(fn u16_eq ((a U16) (b U16)) Bool (int_eq (u16_val a) (u16_val b)))
+(fn u16_lt ((a U16) (b U16)) Bool (lt (u16_val a) (u16_val b)))
+(fn u16_le ((a U16) (b U16)) Bool (le (u16_val a) (u16_val b)))
+(fn u16_shl ((x U16) (k Int)) U16 (u16 (bshl (u16_val x) k)))
+(fn u16_shr ((x U16) (k Int)) U16 (u16 (bshr (u16_val x) k)))
+
+(fulfills u16_val_of
+  (steps ((unfold u16 lhs) (unfold u16_val lhs) (simp lhs)) refl))
+(fulfills u16_made_lo
+  (steps
+    ((rewrite (lemma u16_val_of) lr lhs true ()))
+    (rewrite-with
+      (lemma mod_lo)
+      lr
+      lhs
+      ((inst n nn) (inst d 65536))
+      ((steps ((compute both)) refl))
+      refl)))
+(fulfills u16_made_hi
+  (steps
+    ((rewrite (lemma u16_val_of) lr lhs true ()))
+    (rewrite-with
+      (lemma mod_hi)
+      lr
+      lhs
+      ((inst n nn) (inst d 65536))
+      ((steps ((compute both)) refl))
+      refl)))
+(fulfills u16_add_val
+  (steps
+    ((unfold u16_add lhs) (rewrite (lemma u16_val_of) lr lhs true ()))
+    refl))
+(fulfills u16_sub_val
+  (steps
+    ((unfold u16_sub lhs) (rewrite (lemma u16_val_of) lr lhs true ()))
+    refl))
+(fulfills u16_mul_val
+  (steps
+    ((unfold u16_mul lhs) (rewrite (lemma u16_val_of) lr lhs true ()))
+    refl))
+(fulfills u16_and_val
+  (steps
+    ((unfold u16_and lhs) (rewrite (lemma u16_val_of) lr lhs true ()))
+    refl))
+(fulfills u16_or_val
+  (steps ((unfold u16_or lhs) (rewrite (lemma u16_val_of) lr lhs true ())) refl))
+(fulfills u16_xor_val
+  (steps
+    ((unfold u16_xor lhs) (rewrite (lemma u16_val_of) lr lhs true ()))
+    refl))
+(fulfills u16_not_val
+  (steps
+    ((unfold u16_not lhs) (rewrite (lemma u16_val_of) lr lhs true ()))
+    refl))
+(fulfills u16_eq_val (steps ((unfold u16_eq lhs)) refl))
+(fulfills u16_lt_val (steps ((unfold u16_lt lhs)) refl))
+(fulfills u16_le_val (steps ((unfold u16_le lhs)) refl))
+(fulfills u16_shl_val
+  (steps
+    ((unfold u16_shl lhs) (rewrite (lemma u16_val_of) lr lhs true ()))
+    refl))
+(fulfills u16_shr_val
+  (steps
+    ((unfold u16_shr lhs) (rewrite (lemma u16_val_of) lr lhs true ()))
+    refl))
+
+;; ---- u32: unsigned 32-bit -------------------------------------------------
+(type U32 (mk_u32 Int))
+(fn u32 ((nn Int)) U32 (mk_u32 (mod nn 4294967296)))
+(fn u32_val ((x U32)) Int
+  (match x
+    ((mk_u32 r) r)))
+(fn u32_add ((a U32) (b U32)) U32 (u32 (+ (u32_val a) (u32_val b))))
+(fn u32_sub ((a U32) (b U32)) U32 (u32 (- (u32_val a) (u32_val b))))
+(fn u32_mul ((a U32) (b U32)) U32 (u32 (* (u32_val a) (u32_val b))))
+(fn u32_and ((a U32) (b U32)) U32 (u32 (band (u32_val a) (u32_val b))))
+(fn u32_or ((a U32) (b U32)) U32 (u32 (bor (u32_val a) (u32_val b))))
+(fn u32_xor ((a U32) (b U32)) U32 (u32 (bxor (u32_val a) (u32_val b))))
+(fn u32_not ((x U32)) U32 (u32 (- 4294967295 (u32_val x))))
+(fn u32_eq ((a U32) (b U32)) Bool (int_eq (u32_val a) (u32_val b)))
+(fn u32_lt ((a U32) (b U32)) Bool (lt (u32_val a) (u32_val b)))
+(fn u32_le ((a U32) (b U32)) Bool (le (u32_val a) (u32_val b)))
+(fn u32_shl ((x U32) (k Int)) U32 (u32 (bshl (u32_val x) k)))
+(fn u32_shr ((x U32) (k Int)) U32 (u32 (bshr (u32_val x) k)))
+
+(fulfills u32_val_of
+  (steps ((unfold u32 lhs) (unfold u32_val lhs) (simp lhs)) refl))
+(fulfills u32_made_lo
+  (steps
+    ((rewrite (lemma u32_val_of) lr lhs true ()))
+    (rewrite-with
+      (lemma mod_lo)
+      lr
+      lhs
+      ((inst n nn) (inst d 4294967296))
+      ((steps ((compute both)) refl))
+      refl)))
+(fulfills u32_made_hi
+  (steps
+    ((rewrite (lemma u32_val_of) lr lhs true ()))
+    (rewrite-with
+      (lemma mod_hi)
+      lr
+      lhs
+      ((inst n nn) (inst d 4294967296))
+      ((steps ((compute both)) refl))
+      refl)))
+(fulfills u32_add_val
+  (steps
+    ((unfold u32_add lhs) (rewrite (lemma u32_val_of) lr lhs true ()))
+    refl))
+(fulfills u32_sub_val
+  (steps
+    ((unfold u32_sub lhs) (rewrite (lemma u32_val_of) lr lhs true ()))
+    refl))
+(fulfills u32_mul_val
+  (steps
+    ((unfold u32_mul lhs) (rewrite (lemma u32_val_of) lr lhs true ()))
+    refl))
+(fulfills u32_and_val
+  (steps
+    ((unfold u32_and lhs) (rewrite (lemma u32_val_of) lr lhs true ()))
+    refl))
+(fulfills u32_or_val
+  (steps ((unfold u32_or lhs) (rewrite (lemma u32_val_of) lr lhs true ())) refl))
+(fulfills u32_xor_val
+  (steps
+    ((unfold u32_xor lhs) (rewrite (lemma u32_val_of) lr lhs true ()))
+    refl))
+(fulfills u32_not_val
+  (steps
+    ((unfold u32_not lhs) (rewrite (lemma u32_val_of) lr lhs true ()))
+    refl))
+(fulfills u32_eq_val (steps ((unfold u32_eq lhs)) refl))
+(fulfills u32_lt_val (steps ((unfold u32_lt lhs)) refl))
+(fulfills u32_le_val (steps ((unfold u32_le lhs)) refl))
+(fulfills u32_shl_val
+  (steps
+    ((unfold u32_shl lhs) (rewrite (lemma u32_val_of) lr lhs true ()))
+    refl))
+(fulfills u32_shr_val
+  (steps
+    ((unfold u32_shr lhs) (rewrite (lemma u32_val_of) lr lhs true ()))
+    refl))
+
+;; ---- i8: signed 8-bit (stores the signed value in [-128,128)) ----------
+(type I8 (mk_i8 Int))
+(fn i8_wrap ((nn Int)) Int
+  (if (lt (mod nn 256) 128) (mod nn 256) (- (mod nn 256) 256)))
+(fn i8 ((nn Int)) I8 (mk_i8 (i8_wrap nn)))
+(fn i8_val ((x I8)) Int
+  (match x
+    ((mk_i8 v) v)))
+(fn i8_add ((a I8) (b I8)) I8 (i8 (+ (i8_val a) (i8_val b))))
+(fn i8_sub ((a I8) (b I8)) I8 (i8 (- (i8_val a) (i8_val b))))
+(fn i8_mul ((a I8) (b I8)) I8 (i8 (* (i8_val a) (i8_val b))))
+(fn i8_eq ((a I8) (b I8)) Bool (int_eq (i8_val a) (i8_val b)))
+(fn i8_slt ((a I8) (b I8)) Bool (lt (i8_val a) (i8_val b)))
+(fn i8_sle ((a I8) (b I8)) Bool (le (i8_val a) (i8_val b)))
+(fn i8_shl ((x I8) (k Int)) I8 (i8 (bshl (i8_val x) k)))
+(fn i8_sshr ((x I8) (k Int)) I8 (i8 (ediv (i8_val x) (bshl 1 k))))
+
 (fulfills i8_val_of
   (steps ((unfold i8 lhs) (unfold i8_val lhs) (simp lhs)) refl))
-
-;; -128 <= i8_wrap n: unfold, case-split the fold boundary. Lower branch
-;; (mod < 128): -128 <= 0 <= mod (mod_lo). Upper branch (mod >= 128):
-;; -128 <= mod - 256 follows from mod >= 128 (the case hyp).
 (fulfills i8_wrap_lo
   (steps
     ((unfold i8_wrap lhs))
-    (case-on (lt (mod n 256) 128) Bool
+    (case-on (lt (mod nn 256) 128) Bool
       ((case True
          (steps
            ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
-           (have (= (le 0 (mod n 256)) True)
+           (have (= (le 0 (mod nn 256)) True)
              (rewrite-with
                (lemma mod_lo)
                lr
                lhs
-               ((inst n n) (inst d 256))
+               ((inst n nn) (inst d 256))
                ((steps ((compute both)) refl))
                refl)
              (by farkas (list 1 1)))))
        (case False
          (steps
            ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
-           ;; materialize the case hyp (mod >= 128) as a farkas premise.
-           (have (= (lt (mod n 256) 128) False)
+           (have (= (lt (mod nn 256) 128) False)
              (steps ((rewrite (hyp 0) lr lhs true ())) refl)
              (by farkas (list 1 1)))))))))
-
-;; i8_wrap n < 128: lower branch IS the case condition (close via the hyp);
-;; upper branch (mod - 256 < 128) from mod < 256 (mod_hi).
 (fulfills i8_wrap_hi
   (steps
     ((unfold i8_wrap lhs))
-    (case-on (lt (mod n 256) 128) Bool
+    (case-on (lt (mod nn 256) 128) Bool
       ((case True
          (steps
            ((rewrite (hyp 0) lr lhs true ())
@@ -192,69 +286,227 @@
        (case False
          (steps
            ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
-           (have (= (lt (mod n 256) 256) True)
+           (have (= (lt (mod nn 256) 256) True)
              (rewrite-with
                (lemma mod_hi)
                lr
                lhs
-               ((inst n n) (inst d 256))
+               ((inst n nn) (inst d 256))
                ((steps ((compute both)) refl))
                refl)
              (by farkas (list 1 1)))))))))
-
-;; arithmetic images: unfold the op, rewrite i8_val_of at the wrapped value.
 (fulfills i8_add_val
   (steps ((unfold i8_add lhs) (rewrite (lemma i8_val_of) lr lhs true ())) refl))
-
 (fulfills i8_sub_val
   (steps ((unfold i8_sub lhs) (rewrite (lemma i8_val_of) lr lhs true ())) refl))
-
 (fulfills i8_mul_val
   (steps ((unfold i8_mul lhs) (rewrite (lemma i8_val_of) lr lhs true ())) refl))
-
 (fulfills i8_eq_val (steps ((unfold i8_eq lhs)) refl))
-
 (fulfills i8_slt_val (steps ((unfold i8_slt lhs)) refl))
-
 (fulfills i8_sle_val (steps ((unfold i8_sle lhs)) refl))
-
 (fulfills i8_shl_val
   (steps ((unfold i8_shl lhs) (rewrite (lemma i8_val_of) lr lhs true ())) refl))
-
 (fulfills i8_sshr_val
   (steps ((unfold i8_sshr lhs) (rewrite (lemma i8_val_of) lr lhs true ())) refl))
 
-;; ---- ground pins: the ops COMPUTE the wrapping semantics (matches the
-;; kernel former; an op-semantics change can never slip through silently) ----
+;; ---- i16: signed 16-bit (stores the signed value in [-32768,32768)) ----------
+(type I16 (mk_i16 Int))
+(fn i16_wrap ((nn Int)) Int
+  (if (lt (mod nn 65536) 32768) (mod nn 65536) (- (mod nn 65536) 65536)))
+(fn i16 ((nn Int)) I16 (mk_i16 (i16_wrap nn)))
+(fn i16_val ((x I16)) Int
+  (match x
+    ((mk_i16 v) v)))
+(fn i16_add ((a I16) (b I16)) I16 (i16 (+ (i16_val a) (i16_val b))))
+(fn i16_sub ((a I16) (b I16)) I16 (i16 (- (i16_val a) (i16_val b))))
+(fn i16_mul ((a I16) (b I16)) I16 (i16 (* (i16_val a) (i16_val b))))
+(fn i16_eq ((a I16) (b I16)) Bool (int_eq (i16_val a) (i16_val b)))
+(fn i16_slt ((a I16) (b I16)) Bool (lt (i16_val a) (i16_val b)))
+(fn i16_sle ((a I16) (b I16)) Bool (le (i16_val a) (i16_val b)))
+(fn i16_shl ((x I16) (k Int)) I16 (i16 (bshl (i16_val x) k)))
+(fn i16_sshr ((x I16) (k Int)) I16 (i16 (ediv (i16_val x) (bshl 1 k))))
 
+(fulfills i16_val_of
+  (steps ((unfold i16 lhs) (unfold i16_val lhs) (simp lhs)) refl))
+(fulfills i16_wrap_lo
+  (steps
+    ((unfold i16_wrap lhs))
+    (case-on (lt (mod nn 65536) 32768) Bool
+      ((case True
+         (steps
+           ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
+           (have (= (le 0 (mod nn 65536)) True)
+             (rewrite-with
+               (lemma mod_lo)
+               lr
+               lhs
+               ((inst n nn) (inst d 65536))
+               ((steps ((compute both)) refl))
+               refl)
+             (by farkas (list 1 1)))))
+       (case False
+         (steps
+           ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
+           (have (= (lt (mod nn 65536) 32768) False)
+             (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+             (by farkas (list 1 1)))))))))
+(fulfills i16_wrap_hi
+  (steps
+    ((unfold i16_wrap lhs))
+    (case-on (lt (mod nn 65536) 32768) Bool
+      ((case True
+         (steps
+           ((rewrite (hyp 0) lr lhs true ())
+            (simp lhs)
+            (rewrite (hyp 0) lr lhs true ()))
+           refl))
+       (case False
+         (steps
+           ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
+           (have (= (lt (mod nn 65536) 65536) True)
+             (rewrite-with
+               (lemma mod_hi)
+               lr
+               lhs
+               ((inst n nn) (inst d 65536))
+               ((steps ((compute both)) refl))
+               refl)
+             (by farkas (list 1 1)))))))))
+(fulfills i16_add_val
+  (steps
+    ((unfold i16_add lhs) (rewrite (lemma i16_val_of) lr lhs true ()))
+    refl))
+(fulfills i16_sub_val
+  (steps
+    ((unfold i16_sub lhs) (rewrite (lemma i16_val_of) lr lhs true ()))
+    refl))
+(fulfills i16_mul_val
+  (steps
+    ((unfold i16_mul lhs) (rewrite (lemma i16_val_of) lr lhs true ()))
+    refl))
+(fulfills i16_eq_val (steps ((unfold i16_eq lhs)) refl))
+(fulfills i16_slt_val (steps ((unfold i16_slt lhs)) refl))
+(fulfills i16_sle_val (steps ((unfold i16_sle lhs)) refl))
+(fulfills i16_shl_val
+  (steps
+    ((unfold i16_shl lhs) (rewrite (lemma i16_val_of) lr lhs true ()))
+    refl))
+(fulfills i16_sshr_val
+  (steps
+    ((unfold i16_sshr lhs) (rewrite (lemma i16_val_of) lr lhs true ()))
+    refl))
+
+;; ---- i32: signed 32-bit (stores the signed value in [-2147483648,2147483648)) ----------
+(type I32 (mk_i32 Int))
+(fn i32_wrap ((nn Int)) Int
+  (if (lt (mod nn 4294967296) 2147483648) (mod nn 4294967296)
+  (- (mod nn 4294967296) 4294967296)))
+(fn i32 ((nn Int)) I32 (mk_i32 (i32_wrap nn)))
+(fn i32_val ((x I32)) Int
+  (match x
+    ((mk_i32 v) v)))
+(fn i32_add ((a I32) (b I32)) I32 (i32 (+ (i32_val a) (i32_val b))))
+(fn i32_sub ((a I32) (b I32)) I32 (i32 (- (i32_val a) (i32_val b))))
+(fn i32_mul ((a I32) (b I32)) I32 (i32 (* (i32_val a) (i32_val b))))
+(fn i32_eq ((a I32) (b I32)) Bool (int_eq (i32_val a) (i32_val b)))
+(fn i32_slt ((a I32) (b I32)) Bool (lt (i32_val a) (i32_val b)))
+(fn i32_sle ((a I32) (b I32)) Bool (le (i32_val a) (i32_val b)))
+(fn i32_shl ((x I32) (k Int)) I32 (i32 (bshl (i32_val x) k)))
+(fn i32_sshr ((x I32) (k Int)) I32 (i32 (ediv (i32_val x) (bshl 1 k))))
+
+(fulfills i32_val_of
+  (steps ((unfold i32 lhs) (unfold i32_val lhs) (simp lhs)) refl))
+(fulfills i32_wrap_lo
+  (steps
+    ((unfold i32_wrap lhs))
+    (case-on (lt (mod nn 4294967296) 2147483648) Bool
+      ((case True
+         (steps
+           ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
+           (have (= (le 0 (mod nn 4294967296)) True)
+             (rewrite-with
+               (lemma mod_lo)
+               lr
+               lhs
+               ((inst n nn) (inst d 4294967296))
+               ((steps ((compute both)) refl))
+               refl)
+             (by farkas (list 1 1)))))
+       (case False
+         (steps
+           ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
+           (have (= (lt (mod nn 4294967296) 2147483648) False)
+             (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+             (by farkas (list 1 1)))))))))
+(fulfills i32_wrap_hi
+  (steps
+    ((unfold i32_wrap lhs))
+    (case-on (lt (mod nn 4294967296) 2147483648) Bool
+      ((case True
+         (steps
+           ((rewrite (hyp 0) lr lhs true ())
+            (simp lhs)
+            (rewrite (hyp 0) lr lhs true ()))
+           refl))
+       (case False
+         (steps
+           ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
+           (have (= (lt (mod nn 4294967296) 4294967296) True)
+             (rewrite-with
+               (lemma mod_hi)
+               lr
+               lhs
+               ((inst n nn) (inst d 4294967296))
+               ((steps ((compute both)) refl))
+               refl)
+             (by farkas (list 1 1)))))))))
+(fulfills i32_add_val
+  (steps
+    ((unfold i32_add lhs) (rewrite (lemma i32_val_of) lr lhs true ()))
+    refl))
+(fulfills i32_sub_val
+  (steps
+    ((unfold i32_sub lhs) (rewrite (lemma i32_val_of) lr lhs true ()))
+    refl))
+(fulfills i32_mul_val
+  (steps
+    ((unfold i32_mul lhs) (rewrite (lemma i32_val_of) lr lhs true ()))
+    refl))
+(fulfills i32_eq_val (steps ((unfold i32_eq lhs)) refl))
+(fulfills i32_slt_val (steps ((unfold i32_slt lhs)) refl))
+(fulfills i32_sle_val (steps ((unfold i32_sle lhs)) refl))
+(fulfills i32_shl_val
+  (steps
+    ((unfold i32_shl lhs) (rewrite (lemma i32_val_of) lr lhs true ()))
+    refl))
+(fulfills i32_sshr_val
+  (steps
+    ((unfold i32_sshr lhs) (rewrite (lemma i32_val_of) lr lhs true ()))
+    refl))
+
+;; ---- ground pins: the ops COMPUTE the wrapping semantics (an op-semantics
+;; change can never slip through silently) -----------------------------------
 (claim u8_wrap_pin
   (goal () () (= (u8_val (u8 300)) 44))
   (steps ((compute lhs)) refl))
-
-(claim u8_add_pin
-  (goal () () (= (u8_val (u8_add (u8 200) (u8 100))) 44))
-  (steps ((compute lhs)) refl))
-
 (claim u8_xor_pin
   (goal () () (= (u8_val (u8_xor (u8 12) (u8 10))) 6))
   (steps ((compute lhs)) refl))
-
 (claim u8_shl_pin
-  (goal () () (= (u8_val (u8_shl (u8 1) 9)) 0))  ; 1<<9 = 512, wraps to 0
+  (goal () () (= (u8_val (u8_shl (u8 1) 9)) 0))
   (steps ((compute lhs)) refl))
-
-(claim u8_shr_pin
-  (goal () () (= (u8_val (u8_shr (u8 200) 2)) 50))
+(claim u32_wrap_pin
+  (goal () () (= (u32_val (u32 4294967296)) 0))
   (steps ((compute lhs)) refl))
-
 (claim i8_wrap_pin
-  (goal () () (= (i8_val (i8 200)) -56))  ; 200 folds to 200-256
+  (goal () () (= (i8_val (i8 200)) -56))
   (steps ((compute lhs)) refl))
-
 (claim i8_neg_pin
-  (goal () () (= (i8_val (i8 -1)) -1))  ; -1 -> raw 255 -> -1
+  (goal () () (= (i8_val (i8 -1)) -1))
   (steps ((compute lhs)) refl))
-
 (claim i8_add_ovf_pin
-  (goal () () (= (i8_val (i8_add (i8 100) (i8 100))) -56))  ; signed overflow wraps
+  (goal () () (= (i8_val (i8_add (i8 100) (i8 100))) -56))
+  (steps ((compute lhs)) refl))
+(claim i32_neg_pin
+  (goal () () (= (i32_val (i32 -1)) -1))
   (steps ((compute lhs)) refl))

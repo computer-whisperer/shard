@@ -1,163 +1,309 @@
 ;;; std/word/mod.req.shard — the PUBLIC INTERFACE of the `word` module (its ".h").
 ;;;
 ;;; Fixed-width modular integers as OPAQUE std constructions (replacing the
-;;; revoked kernel `(Word W S)` former — trusted-core contraction, issue #15).
-;;; The representation (a raw Int normalized into [0, 2^W)) is hidden behind a
-;;; `sig type`; consumers build words only through the makers and observe only
-;;; through `*_val`, reasoning via the law family below.
+;;; revoked kernel (Word W S) former — trusted-core contraction, issue #15).
+;;; Each type's underlying Int stores its own LOGICAL value: uN in [0,2^W),
+;;; iN the signed value in [-2^(W-1), 2^(W-1)). Consumers build words only
+;;; through the makers and observe through *_val, reasoning via the law family.
 ;;;
-;;; SLICE 1: u8 only — the arithmetic pattern. u16/u32/u64 (and the signed
-;;; siblings) follow this exact template; the `u8…i64` type-alias sugar
-;;; (kernel/reader.shard) will repoint here once the family is complete.
+;;; WIDTHS: u8/u16/u32 + i8/i16/i32. u64/i64 are DEFERRED — the compiled
+;;; dev engine uses i63 native ints and traps on the 2^64 literal (the same
+;;; i63 debt that kept the kernel former's real consumers <= 32-bit). They are
+;;; sound under the Rust authority engine; add them when the engine gets BigInt.
 ;;;
-;;; NOTE on range laws: because the type is opaque, the value-range facts are
-;;; stated over CONSTRUCTED values (u8_made_lo/hi: `u8 n` is in [0,256)). Every
-;;; u8 is `u8`-of-something behind the boundary, so this is the range fact
-;;; consumers use. A structural `∀x:U8. 0 <= u8_val x < 256` over an arbitrary
-;;; inhabitant is NOT provable from the construction (the rep is wider than the
-;;; invariant) — that needs the refinement/subset type (designed follow-up,
-;;; issue #15), which would make the bound type-given rather than compositional.
+;;; GENERATED from the u8 (unsigned) / i8 (signed) templates — see the slice-5
+;;; commit and the (regenerable) /tmp/wordgen.py. Range facts are COMPOSITIONAL
+;;; (over constructed values); a structural forall-inhabitant range needs the
+;;; refinement type (designed follow-up). Bitwise/div on signed types and the
+;;; unwrapped bitwise image laws are deferred (issue #15).
 
 (import "../../kernel/stdlib.shard")  ; Int / Bool / True for the goals
 
-(sig type U8)  ; opaque 8-bit unsigned word; the raw Int is hidden
-
-(sig fn u8 ((n Int)) U8)  ; normalize an Int into a u8 (mod 256)
-(sig fn u8_val ((x U8)) Int)  ; the raw value as an Int
+;; ---- u8: unsigned 8-bit -------------------------------------------------
+(sig type U8)
+(sig fn u8 ((nn Int)) U8)
+(sig fn u8_val ((x U8)) Int)
 (sig fn u8_add ((a U8) (b U8)) U8)
 (sig fn u8_sub ((a U8) (b U8)) U8)
 (sig fn u8_mul ((a U8) (b U8)) U8)
 (sig fn u8_and ((a U8) (b U8)) U8)
 (sig fn u8_or ((a U8) (b U8)) U8)
 (sig fn u8_xor ((a U8) (b U8)) U8)
-(sig fn u8_not ((x U8)) U8)  ; bitwise complement: 255 - raw
+(sig fn u8_not ((x U8)) U8)
 (sig fn u8_eq ((a U8) (b U8)) Bool)
-(sig fn u8_lt ((a U8) (b U8)) Bool)  ; unsigned <
-(sig fn u8_le ((a U8) (b U8)) Bool)  ; unsigned <=
-(sig fn u8_shl ((x U8) (k Int)) U8)  ; logical shift left  (k in [0,64))
-(sig fn u8_shr ((x U8) (k Int)) U8)  ; logical shift right (k in [0,64))
+(sig fn u8_lt ((a U8) (b U8)) Bool)
+(sig fn u8_le ((a U8) (b U8)) Bool)
+(sig fn u8_shl ((x U8) (k Int)) U8)
+(sig fn u8_shr ((x U8) (k Int)) U8)
 
-;; ---- the exported algebra (consumers reason against THIS) ------------------
-
-;; constructor-projection: the raw value of a freshly made u8.
-(requirement u8_val_of (goal ((n Int)) () (= (u8_val (u8 n)) (mod n 256))))
-
-;; range of any constructed u8.
-(requirement u8_made_lo (goal ((n Int)) () (= (le 0 (u8_val (u8 n))) True)))
-
-(requirement u8_made_hi (goal ((n Int)) () (= (lt (u8_val (u8 n)) 256) True)))
-
-;; arithmetic images: each op is the wrapped Int op on the raw values.
+(requirement u8_val_of (goal ((nn Int)) () (= (u8_val (u8 nn)) (mod nn 256))))
+(requirement u8_made_lo (goal ((nn Int)) () (= (le 0 (u8_val (u8 nn))) True)))
+(requirement u8_made_hi (goal ((nn Int)) () (= (lt (u8_val (u8 nn)) 256) True)))
 (requirement u8_add_val
   (goal ((a U8) (b U8)) ()
     (= (u8_val (u8_add a b)) (mod (+ (u8_val a) (u8_val b)) 256))))
-
 (requirement u8_sub_val
   (goal ((a U8) (b U8)) ()
     (= (u8_val (u8_sub a b)) (mod (- (u8_val a) (u8_val b)) 256))))
-
 (requirement u8_mul_val
   (goal ((a U8) (b U8)) ()
     (= (u8_val (u8_mul a b)) (mod (* (u8_val a) (u8_val b)) 256))))
-
-;; bitwise images (WRAPPED form: band/bor/bxor are opaque Int atoms to the
-;; backends; the unwrapped "result already in range" simplification needs a
-;; bit theory and the arbitrary-inhabitant range — deferred, issue #15).
 (requirement u8_and_val
   (goal ((a U8) (b U8)) ()
     (= (u8_val (u8_and a b)) (mod (band (u8_val a) (u8_val b)) 256))))
-
 (requirement u8_or_val
   (goal ((a U8) (b U8)) ()
     (= (u8_val (u8_or a b)) (mod (bor (u8_val a) (u8_val b)) 256))))
-
 (requirement u8_xor_val
   (goal ((a U8) (b U8)) ()
     (= (u8_val (u8_xor a b)) (mod (bxor (u8_val a) (u8_val b)) 256))))
-
 (requirement u8_not_val
   (goal ((x U8)) () (= (u8_val (u8_not x)) (mod (- 255 (u8_val x)) 256))))
-
-;; comparison images: unsigned compare IS Int compare on the raw values.
 (requirement u8_eq_val
   (goal ((a U8) (b U8)) () (= (u8_eq a b) (int_eq (u8_val a) (u8_val b)))))
-
 (requirement u8_lt_val
   (goal ((a U8) (b U8)) () (= (u8_lt a b) (lt (u8_val a) (u8_val b)))))
-
 (requirement u8_le_val
   (goal ((a U8) (b U8)) () (= (u8_le a b) (le (u8_val a) (u8_val b)))))
-
-;; shift images (WRAPPED): bshl/bshr are the raw-Int bit-shift prims (= * /
-;; by 2^k for k in [0,64), opaque atoms to the backends). For a u8 raw and
-;; k>=8 the wrap already yields 0, matching the kernel's wshl/ushr.
 (requirement u8_shl_val
   (goal ((x U8) (k Int)) ()
     (= (u8_val (u8_shl x k)) (mod (bshl (u8_val x) k) 256))))
-
 (requirement u8_shr_val
   (goal ((x U8) (k Int)) ()
     (= (u8_val (u8_shr x k)) (mod (bshr (u8_val x) k) 256))))
 
-;; ===========================================================================
-;; i8 — signed 8-bit. Approach B: the underlying Int stores the SIGNED value
-;; in [-128, 128) (two's-complement value, not the raw bit pattern). i8_val is
-;; therefore an identity projection; the work moves into i8_wrap, the signed
-;; normalization (mod into [0,256), then fold [128,256) down by 256).
-;; ===========================================================================
+;; ---- u16: unsigned 16-bit -------------------------------------------------
+(sig type U16)
+(sig fn u16 ((nn Int)) U16)
+(sig fn u16_val ((x U16)) Int)
+(sig fn u16_add ((a U16) (b U16)) U16)
+(sig fn u16_sub ((a U16) (b U16)) U16)
+(sig fn u16_mul ((a U16) (b U16)) U16)
+(sig fn u16_and ((a U16) (b U16)) U16)
+(sig fn u16_or ((a U16) (b U16)) U16)
+(sig fn u16_xor ((a U16) (b U16)) U16)
+(sig fn u16_not ((x U16)) U16)
+(sig fn u16_eq ((a U16) (b U16)) Bool)
+(sig fn u16_lt ((a U16) (b U16)) Bool)
+(sig fn u16_le ((a U16) (b U16)) Bool)
+(sig fn u16_shl ((x U16) (k Int)) U16)
+(sig fn u16_shr ((x U16) (k Int)) U16)
 
-(sig type I8)  ; opaque 8-bit signed word; the signed Int value is hidden
+(requirement u16_val_of
+  (goal ((nn Int)) () (= (u16_val (u16 nn)) (mod nn 65536))))
+(requirement u16_made_lo
+  (goal ((nn Int)) () (= (le 0 (u16_val (u16 nn))) True)))
+(requirement u16_made_hi
+  (goal ((nn Int)) () (= (lt (u16_val (u16 nn)) 65536) True)))
+(requirement u16_add_val
+  (goal ((a U16) (b U16)) ()
+    (= (u16_val (u16_add a b)) (mod (+ (u16_val a) (u16_val b)) 65536))))
+(requirement u16_sub_val
+  (goal ((a U16) (b U16)) ()
+    (= (u16_val (u16_sub a b)) (mod (- (u16_val a) (u16_val b)) 65536))))
+(requirement u16_mul_val
+  (goal ((a U16) (b U16)) ()
+    (= (u16_val (u16_mul a b)) (mod (* (u16_val a) (u16_val b)) 65536))))
+(requirement u16_and_val
+  (goal ((a U16) (b U16)) ()
+    (= (u16_val (u16_and a b)) (mod (band (u16_val a) (u16_val b)) 65536))))
+(requirement u16_or_val
+  (goal ((a U16) (b U16)) ()
+    (= (u16_val (u16_or a b)) (mod (bor (u16_val a) (u16_val b)) 65536))))
+(requirement u16_xor_val
+  (goal ((a U16) (b U16)) ()
+    (= (u16_val (u16_xor a b)) (mod (bxor (u16_val a) (u16_val b)) 65536))))
+(requirement u16_not_val
+  (goal ((x U16)) ()
+    (= (u16_val (u16_not x)) (mod (- 65535 (u16_val x)) 65536))))
+(requirement u16_eq_val
+  (goal ((a U16) (b U16)) () (= (u16_eq a b) (int_eq (u16_val a) (u16_val b)))))
+(requirement u16_lt_val
+  (goal ((a U16) (b U16)) () (= (u16_lt a b) (lt (u16_val a) (u16_val b)))))
+(requirement u16_le_val
+  (goal ((a U16) (b U16)) () (= (u16_le a b) (le (u16_val a) (u16_val b)))))
+(requirement u16_shl_val
+  (goal ((x U16) (k Int)) ()
+    (= (u16_val (u16_shl x k)) (mod (bshl (u16_val x) k) 65536))))
+(requirement u16_shr_val
+  (goal ((x U16) (k Int)) ()
+    (= (u16_val (u16_shr x k)) (mod (bshr (u16_val x) k) 65536))))
 
-(sig fn i8 ((n Int)) I8)  ; normalize a signed Int into [-128,128)
-(sig fn i8_val ((x I8)) Int)  ; the signed value
-(sig fn i8_wrap ((n Int)) Int)  ; the signed normalization (shared by the laws)
+;; ---- u32: unsigned 32-bit -------------------------------------------------
+(sig type U32)
+(sig fn u32 ((nn Int)) U32)
+(sig fn u32_val ((x U32)) Int)
+(sig fn u32_add ((a U32) (b U32)) U32)
+(sig fn u32_sub ((a U32) (b U32)) U32)
+(sig fn u32_mul ((a U32) (b U32)) U32)
+(sig fn u32_and ((a U32) (b U32)) U32)
+(sig fn u32_or ((a U32) (b U32)) U32)
+(sig fn u32_xor ((a U32) (b U32)) U32)
+(sig fn u32_not ((x U32)) U32)
+(sig fn u32_eq ((a U32) (b U32)) Bool)
+(sig fn u32_lt ((a U32) (b U32)) Bool)
+(sig fn u32_le ((a U32) (b U32)) Bool)
+(sig fn u32_shl ((x U32) (k Int)) U32)
+(sig fn u32_shr ((x U32) (k Int)) U32)
+
+(requirement u32_val_of
+  (goal ((nn Int)) () (= (u32_val (u32 nn)) (mod nn 4294967296))))
+(requirement u32_made_lo
+  (goal ((nn Int)) () (= (le 0 (u32_val (u32 nn))) True)))
+(requirement u32_made_hi
+  (goal ((nn Int)) () (= (lt (u32_val (u32 nn)) 4294967296) True)))
+(requirement u32_add_val
+  (goal ((a U32) (b U32)) ()
+    (= (u32_val (u32_add a b)) (mod (+ (u32_val a) (u32_val b)) 4294967296))))
+(requirement u32_sub_val
+  (goal ((a U32) (b U32)) ()
+    (= (u32_val (u32_sub a b)) (mod (- (u32_val a) (u32_val b)) 4294967296))))
+(requirement u32_mul_val
+  (goal ((a U32) (b U32)) ()
+    (= (u32_val (u32_mul a b)) (mod (* (u32_val a) (u32_val b)) 4294967296))))
+(requirement u32_and_val
+  (goal ((a U32) (b U32)) ()
+    (= (u32_val (u32_and a b)) (mod (band (u32_val a) (u32_val b)) 4294967296))))
+(requirement u32_or_val
+  (goal ((a U32) (b U32)) ()
+    (= (u32_val (u32_or a b)) (mod (bor (u32_val a) (u32_val b)) 4294967296))))
+(requirement u32_xor_val
+  (goal ((a U32) (b U32)) ()
+    (= (u32_val (u32_xor a b)) (mod (bxor (u32_val a) (u32_val b)) 4294967296))))
+(requirement u32_not_val
+  (goal ((x U32)) ()
+    (= (u32_val (u32_not x)) (mod (- 4294967295 (u32_val x)) 4294967296))))
+(requirement u32_eq_val
+  (goal ((a U32) (b U32)) () (= (u32_eq a b) (int_eq (u32_val a) (u32_val b)))))
+(requirement u32_lt_val
+  (goal ((a U32) (b U32)) () (= (u32_lt a b) (lt (u32_val a) (u32_val b)))))
+(requirement u32_le_val
+  (goal ((a U32) (b U32)) () (= (u32_le a b) (le (u32_val a) (u32_val b)))))
+(requirement u32_shl_val
+  (goal ((x U32) (k Int)) ()
+    (= (u32_val (u32_shl x k)) (mod (bshl (u32_val x) k) 4294967296))))
+(requirement u32_shr_val
+  (goal ((x U32) (k Int)) ()
+    (= (u32_val (u32_shr x k)) (mod (bshr (u32_val x) k) 4294967296))))
+
+;; ---- i8: signed 8-bit (stores the signed value in [-128,128)) ----------
+(sig type I8)
+(sig fn i8 ((nn Int)) I8)
+(sig fn i8_val ((x I8)) Int)
+(sig fn i8_wrap ((nn Int)) Int)
 (sig fn i8_add ((a I8) (b I8)) I8)
 (sig fn i8_sub ((a I8) (b I8)) I8)
 (sig fn i8_mul ((a I8) (b I8)) I8)
 (sig fn i8_eq ((a I8) (b I8)) Bool)
-(sig fn i8_slt ((a I8) (b I8)) Bool)  ; signed <
-(sig fn i8_sle ((a I8) (b I8)) Bool)  ; signed <=
-(sig fn i8_shl ((x I8) (k Int)) I8)  ; shift left  (k in [0,64))
-(sig fn i8_sshr ((x I8) (k Int)) I8)  ; arithmetic shift right (floor div)
+(sig fn i8_slt ((a I8) (b I8)) Bool)
+(sig fn i8_sle ((a I8) (b I8)) Bool)
+(sig fn i8_shl ((x I8) (k Int)) I8)
+(sig fn i8_sshr ((x I8) (k Int)) I8)
 
-;; constructor-projection: the value of a freshly made i8 is its signed wrap.
-(requirement i8_val_of (goal ((n Int)) () (= (i8_val (i8 n)) (i8_wrap n))))
-
-;; the signed wrap lands in [-128, 128).
-(requirement i8_wrap_lo (goal ((n Int)) () (= (le -128 (i8_wrap n)) True)))
-
-(requirement i8_wrap_hi (goal ((n Int)) () (= (lt (i8_wrap n) 128) True)))
-
-;; arithmetic images: each op is the signed-wrapped Int op on the values.
+(requirement i8_val_of (goal ((nn Int)) () (= (i8_val (i8 nn)) (i8_wrap nn))))
+(requirement i8_wrap_lo (goal ((nn Int)) () (= (le -128 (i8_wrap nn)) True)))
+(requirement i8_wrap_hi (goal ((nn Int)) () (= (lt (i8_wrap nn) 128) True)))
 (requirement i8_add_val
   (goal ((a I8) (b I8)) ()
     (= (i8_val (i8_add a b)) (i8_wrap (+ (i8_val a) (i8_val b))))))
-
 (requirement i8_sub_val
   (goal ((a I8) (b I8)) ()
     (= (i8_val (i8_sub a b)) (i8_wrap (- (i8_val a) (i8_val b))))))
-
 (requirement i8_mul_val
   (goal ((a I8) (b I8)) ()
     (= (i8_val (i8_mul a b)) (i8_wrap (* (i8_val a) (i8_val b))))))
-
-;; comparison images: signed compare IS Int compare on the stored signed
-;; values (the win of approach B — no sval reinterpretation needed).
 (requirement i8_eq_val
   (goal ((a I8) (b I8)) () (= (i8_eq a b) (int_eq (i8_val a) (i8_val b)))))
-
 (requirement i8_slt_val
   (goal ((a I8) (b I8)) () (= (i8_slt a b) (lt (i8_val a) (i8_val b)))))
-
 (requirement i8_sle_val
   (goal ((a I8) (b I8)) () (= (i8_sle a b) (le (i8_val a) (i8_val b)))))
-
-;; shift images: left = wrap of bshl; arithmetic right = wrap of euclidean
-;; ediv by 2^k (= floor division = the arithmetic shift on a signed value).
 (requirement i8_shl_val
   (goal ((x I8) (k Int)) ()
     (= (i8_val (i8_shl x k)) (i8_wrap (bshl (i8_val x) k)))))
-
 (requirement i8_sshr_val
   (goal ((x I8) (k Int)) ()
     (= (i8_val (i8_sshr x k)) (i8_wrap (ediv (i8_val x) (bshl 1 k))))))
+
+;; ---- i16: signed 16-bit (stores the signed value in [-32768,32768)) ----------
+(sig type I16)
+(sig fn i16 ((nn Int)) I16)
+(sig fn i16_val ((x I16)) Int)
+(sig fn i16_wrap ((nn Int)) Int)
+(sig fn i16_add ((a I16) (b I16)) I16)
+(sig fn i16_sub ((a I16) (b I16)) I16)
+(sig fn i16_mul ((a I16) (b I16)) I16)
+(sig fn i16_eq ((a I16) (b I16)) Bool)
+(sig fn i16_slt ((a I16) (b I16)) Bool)
+(sig fn i16_sle ((a I16) (b I16)) Bool)
+(sig fn i16_shl ((x I16) (k Int)) I16)
+(sig fn i16_sshr ((x I16) (k Int)) I16)
+
+(requirement i16_val_of
+  (goal ((nn Int)) () (= (i16_val (i16 nn)) (i16_wrap nn))))
+(requirement i16_wrap_lo
+  (goal ((nn Int)) () (= (le -32768 (i16_wrap nn)) True)))
+(requirement i16_wrap_hi (goal ((nn Int)) () (= (lt (i16_wrap nn) 32768) True)))
+(requirement i16_add_val
+  (goal ((a I16) (b I16)) ()
+    (= (i16_val (i16_add a b)) (i16_wrap (+ (i16_val a) (i16_val b))))))
+(requirement i16_sub_val
+  (goal ((a I16) (b I16)) ()
+    (= (i16_val (i16_sub a b)) (i16_wrap (- (i16_val a) (i16_val b))))))
+(requirement i16_mul_val
+  (goal ((a I16) (b I16)) ()
+    (= (i16_val (i16_mul a b)) (i16_wrap (* (i16_val a) (i16_val b))))))
+(requirement i16_eq_val
+  (goal ((a I16) (b I16)) () (= (i16_eq a b) (int_eq (i16_val a) (i16_val b)))))
+(requirement i16_slt_val
+  (goal ((a I16) (b I16)) () (= (i16_slt a b) (lt (i16_val a) (i16_val b)))))
+(requirement i16_sle_val
+  (goal ((a I16) (b I16)) () (= (i16_sle a b) (le (i16_val a) (i16_val b)))))
+(requirement i16_shl_val
+  (goal ((x I16) (k Int)) ()
+    (= (i16_val (i16_shl x k)) (i16_wrap (bshl (i16_val x) k)))))
+(requirement i16_sshr_val
+  (goal ((x I16) (k Int)) ()
+    (= (i16_val (i16_sshr x k)) (i16_wrap (ediv (i16_val x) (bshl 1 k))))))
+
+;; ---- i32: signed 32-bit (stores the signed value in [-2147483648,2147483648)) ----------
+(sig type I32)
+(sig fn i32 ((nn Int)) I32)
+(sig fn i32_val ((x I32)) Int)
+(sig fn i32_wrap ((nn Int)) Int)
+(sig fn i32_add ((a I32) (b I32)) I32)
+(sig fn i32_sub ((a I32) (b I32)) I32)
+(sig fn i32_mul ((a I32) (b I32)) I32)
+(sig fn i32_eq ((a I32) (b I32)) Bool)
+(sig fn i32_slt ((a I32) (b I32)) Bool)
+(sig fn i32_sle ((a I32) (b I32)) Bool)
+(sig fn i32_shl ((x I32) (k Int)) I32)
+(sig fn i32_sshr ((x I32) (k Int)) I32)
+
+(requirement i32_val_of
+  (goal ((nn Int)) () (= (i32_val (i32 nn)) (i32_wrap nn))))
+(requirement i32_wrap_lo
+  (goal ((nn Int)) () (= (le -2147483648 (i32_wrap nn)) True)))
+(requirement i32_wrap_hi
+  (goal ((nn Int)) () (= (lt (i32_wrap nn) 2147483648) True)))
+(requirement i32_add_val
+  (goal ((a I32) (b I32)) ()
+    (= (i32_val (i32_add a b)) (i32_wrap (+ (i32_val a) (i32_val b))))))
+(requirement i32_sub_val
+  (goal ((a I32) (b I32)) ()
+    (= (i32_val (i32_sub a b)) (i32_wrap (- (i32_val a) (i32_val b))))))
+(requirement i32_mul_val
+  (goal ((a I32) (b I32)) ()
+    (= (i32_val (i32_mul a b)) (i32_wrap (* (i32_val a) (i32_val b))))))
+(requirement i32_eq_val
+  (goal ((a I32) (b I32)) () (= (i32_eq a b) (int_eq (i32_val a) (i32_val b)))))
+(requirement i32_slt_val
+  (goal ((a I32) (b I32)) () (= (i32_slt a b) (lt (i32_val a) (i32_val b)))))
+(requirement i32_sle_val
+  (goal ((a I32) (b I32)) () (= (i32_sle a b) (le (i32_val a) (i32_val b)))))
+(requirement i32_shl_val
+  (goal ((x I32) (k Int)) ()
+    (= (i32_val (i32_shl x k)) (i32_wrap (bshl (i32_val x) k)))))
+(requirement i32_sshr_val
+  (goal ((x I32) (k Int)) ()
+    (= (i32_val (i32_sshr x k)) (i32_wrap (ediv (i32_val x) (bshl 1 k))))))
