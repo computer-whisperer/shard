@@ -70,8 +70,6 @@ TARGETS=(
   examples/trust_ledger.shard
   examples/types_gate.shard
   examples/types_gate_cite.shard
-  examples/types_gate_word.shard
-  examples/utf8_classify.shard
   examples/wf_induct_demo.shard
   examples/measure_clause.shard
   examples/measure_import_synth.shard
@@ -81,8 +79,6 @@ TARGETS=(
   examples/subterm_induct_rejects.shard
   examples/struct_clause.shard
   examples/render_model.shard
-  examples/word_facts.shard
-  examples/word_facts_signed.shard
   examples/modules_demo/consumer.shard
   examples/calc/calc_proof.shard
   examples/calc/calc_spec_tests.shard

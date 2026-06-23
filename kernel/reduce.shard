@@ -172,10 +172,7 @@
 ;; sweep (rust_bootstrap/src/lib.rs, prim_conformance_*): both tables
 ;; are swept over a value matrix, so value drift, domain drift (a guard
 ;; on one side only), and coverage drift all fail `cargo test`. When
-;; adding a primitive, update the spec lists there too. (The word
-;; primitives below exist ONLY here — the native table doesn't know
-;; them, so a native-path call fail-stops as UnknownCall rather than
-;; diverging from this table; the sweep pins that asymmetry.)
+;; adding a primitive, update the spec lists there too.
 (fn try_step_prim ((f Symbol) (args (List Expr))) (Option Expr)
   (match args
     ;; Two-Int primitives. Chain ordered by MEASURED dispatch frequency
@@ -213,31 +210,7 @@
            (if (le 0 b) (if (lt b 64) (Some (IntLit (bshl a b))) None) None)
          (if (sym_eq f (quote bshr))
            (if (le 0 b) (if (lt b 64) (Some (IntLit (bshr a b))) None) None)
-         (if (sym_eq f (quote uwrap)) (wp_wrap a b)
-         (if (sym_eq f (quote swrap)) (wp_wrap a b)
-         None))))))))))))))))))
-    ;; Two-Word primitives — fixed-width modular ints. A word VALUE is
-    ;; (Ctor 'Word (w raw)), canonical: 1 <= w <= 64, 0 <= raw < 2^w.
-    ;; Only these primitives produce the ctor (no typedef; the type
-    ;; checker enforces canonicity on any literal that reaches a goal).
-    ;; Width mismatch → None (stuck): unreachable for type-checked
-    ;; source, defensive for raw data.
-    ((Cons
-       (Ctor (QName _ (quote Word)) (Cons (IntLit wa) (Cons (IntLit ra) Nil)))
-       (Cons
-         (Ctor (QName _ (quote Word)) (Cons (IntLit wb) (Cons (IntLit rb) Nil)))
-         Nil))
-     (if (int_eq wa wb) (wp_binop f wa ra rb) None))
-    ;; Word-and-Int primitives: shifts (amount is a plain Int).
-    ((Cons
-       (Ctor (QName _ (quote Word)) (Cons (IntLit w) (Cons (IntLit r) Nil)))
-       (Cons (IntLit k) Nil))
-     (wp_shift f w r k))
-    ;; One-Word primitives.
-    ((Cons
-       (Ctor (QName _ (quote Word)) (Cons (IntLit w) (Cons (IntLit r) Nil)))
-       Nil)
-     (wp_unop f w r))
+           None))))))))))))))))
     ;; Two-Bytes primitive: bcat. A non-canonical payload (symbolic
     ;; element, malformed spine, out-of-range octet) leaves the call
     ;; STUCK — unreachable for type-checked source, defensive for raw
@@ -316,99 +289,6 @@
 ;; comparison cases.
 (fn bool_as_expr ((b Bool)) Expr
   (if b (Ctor (qn (quote True)) Nil) (Ctor (qn (quote False)) Nil)))
-
-;; ---------------------------------------------------------------------------
-;; Word primitives (wp_*): fixed-width modular integers over the
-;; canonical value (Ctor 'Word (w raw)), raw the unsigned residue.
-;; Signedness is NOT stored — it lives in the op names (uval/sval,
-;; udiv/sdiv, …) and the (Word W S) type index; the type gate keeps
-;; signed ops off unsigned terms, these bodies just compute on bits.
-;; Every result is masked, so canonicity is preserved by construction.
-;;
-;; SPEC CONVENTIONS (all ops TOTAL — docs/LANGUAGE.md "Words"):
-;;   wadd/wsub/wmul/wneg  value mod 2^w
-;;   udiv a 0 = 2^w-1, urem a 0 = a; sdiv a 0 = -1 (all ones),
-;;   srem a 0 = a; sdiv INT_MIN -1 = INT_MIN, srem INT_MIN -1 = 0
-;;     (the RISC-V M / SMT-LIB profile; signed division TRUNCATES)
-;;   shifts: amount k outside [0, w) saturates — wshl/ushr give 0,
-;;   sshr gives the sign fill (all ones / 0); sshr rounds toward -inf
-;; ---------------------------------------------------------------------------
-
-(fn wp_pow2 ((k Int)) Int  ; k >= 0
-  (measure k (by farkas (list 1 0)) (by farkas (list 1 1)))
-  (if (le k 0) 1 (* 2 (wp_pow2 (- k 1)))))
-
-(fn wp_mask ((w Int) (n Int)) Int (mod n (wp_pow2 w)))  ; euclidean → in [0, 2^w)
-
-(fn wp_make ((w Int) (n Int)) (Option Expr)
-  (Some
-    (Ctor (qn (quote Word)) (Cons (IntLit w) (Cons (IntLit (wp_mask w n)) Nil)))))
-
-;; the two's-complement (signed) reading of a canonical raw.
-(fn wp_sgn ((w Int) (r Int)) Int
-  (if (lt r (wp_pow2 (- w 1))) r (- r (wp_pow2 w))))
-
-;; (uwrap k n) / (swrap k n): same computation — the raw is the
-;; signedness-free residue; only the result TYPE differs (types.shard).
-(fn wp_wrap ((k Int) (n Int)) (Option Expr)
-  (if (le 1 k) (if (le k 64) (wp_make k n) None) None))
-
-(fn wp_binop ((f Symbol) (w Int) (ra Int) (rb Int)) (Option Expr)
-  (if (sym_eq f (quote wadd)) (wp_make w (+ ra rb))
-  (if (sym_eq f (quote wsub)) (wp_make w (- ra rb))
-  (if (sym_eq f (quote wmul)) (wp_make w (* ra rb))
-  (if (sym_eq f (quote wand)) (wp_make w (band ra rb))
-  (if (sym_eq f (quote wor)) (wp_make w (bor ra rb))
-  (if (sym_eq f (quote wxor)) (wp_make w (bxor ra rb))
-  (if (sym_eq f (quote udiv))
-    (if (int_eq rb 0) (wp_make w (- 0 1)) (wp_make w (/ ra rb)))
-  (if (sym_eq f (quote urem))
-    (if (int_eq rb 0) (wp_make w ra) (wp_make w (mod ra rb)))
-  (if (sym_eq f (quote sdiv))
-    (if (int_eq rb 0) (wp_make w (- 0 1))
-    (wp_make w (/ (wp_sgn w ra) (wp_sgn w rb))))
-  (if (sym_eq f (quote srem))
-    (if (int_eq rb 0)
-      (wp_make w ra)
-      ;; the truncating remainder pairs with the truncating `/` (the
-      ;; `tmod` prim) — sb is nonzero here (the rb=0 arm is above).
-      (wp_make w (tmod (wp_sgn w ra) (wp_sgn w rb))))
-  (if (sym_eq f (quote weq)) (Some (bool_as_expr (int_eq ra rb)))
-  (if (sym_eq f (quote ult)) (Some (bool_as_expr (lt ra rb)))
-  (if (sym_eq f (quote ule)) (Some (bool_as_expr (le ra rb)))
-  (if (sym_eq f (quote slt))
-    (Some (bool_as_expr (lt (wp_sgn w ra) (wp_sgn w rb))))
-  (if (sym_eq f (quote sle))
-    (Some (bool_as_expr (le (wp_sgn w ra) (wp_sgn w rb))))
-    None))))))))))))))))
-
-(fn wp_shift ((f Symbol) (w Int) (r Int) (k Int)) (Option Expr)
-  (if (sym_eq f (quote wshl))
-    (if (le 0 k) (if (lt k w) (wp_make w (* r (wp_pow2 k))) (wp_make w 0))
-    (wp_make w 0))
-  (if (sym_eq f (quote ushr))
-    (if (le 0 k) (if (lt k w) (wp_make w (/ r (wp_pow2 k))) (wp_make w 0))
-    (wp_make w 0))
-  (if (sym_eq f (quote sshr))
-    (let ((s (wp_sgn w r)))
-      (if (le 0 k)
-        (if (lt k w)
-          ;; floor division by 2^k (rounds toward -inf, the arithmetic
-          ;; shift): subtract the euclidean remainder, divide exactly.
-          (let ((p (wp_pow2 k))) (wp_make w (/ (- s (mod s p)) p)))
-          (if (lt s 0) (wp_make w (- 0 1)) (wp_make w 0)))
-      (if (lt s 0) (wp_make w (- 0 1))
-      (wp_make w 0))))
-    None))))
-
-(fn wp_unop ((f Symbol) (w Int) (r Int)) (Option Expr)
-  (if (sym_eq f (quote wneg)) (wp_make w (- 0 r))
-  (if (sym_eq f (quote wnot)) (wp_make w (- (- (wp_pow2 w) 1) r))
-  (if (sym_eq f (quote uval)) (Some (IntLit r))
-  (if (sym_eq f (quote sval)) (Some (IntLit (wp_sgn w r)))
-  (if (sym_eq f (quote wbits)) (Some (IntLit r))
-  (if (sym_eq f (quote wwidth)) (Some (IntLit w))
-  None)))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Bytes primitives (bp_*): packed byte sequences over the canonical
@@ -772,11 +652,12 @@
 (fn simp_iota_loop ((m Module) (e Expr) (fuel Int)) Expr
   (measure fuel (by farkas (list 1 0)) (by farkas (list 1 1)))
   (if (lt fuel 1) e
-    (match (step_iota m e)
-      (None e)
-      ((Some e2) (simp_iota_loop m e2 (- fuel 1))))))
+  (match (step_iota m e)
+    (None e)
+    ((Some e2) (simp_iota_loop m e2 (- fuel 1))))))
 
-(fn simp_iota_expr ((m Module) (e Expr)) Expr (simp_iota_loop m e (simp_budget)))
+(fn simp_iota_expr ((m Module) (e Expr)) Expr
+  (simp_iota_loop m e (simp_budget)))
 
 ;; step_list: try to step the first reducible expression in es, left to
 ;; right. Returns the new list if some step succeeded, else None.
@@ -989,20 +870,21 @@
 ;; (= (lt fuel 1) False) and the inert memo equation (= (memo_lookup memo e)
 ;; None) — so the farkas vectors are ad_fix's with a trailing 0 for the memo
 ;; premise (skipped, multiplier 0). Running out returns the current term/memo.
-(fn simp_expr_loop ((m Module) (memo (List (Pair Expr Expr))) (e Expr) (fuel Int))
+(fn simp_expr_loop
+  ((m Module) (memo (List (Pair Expr Expr))) (e Expr) (fuel Int))
   (Pair Expr (List (Pair Expr Expr)))
   (measure fuel (by farkas (list 1 0 0)) (by farkas (list 1 1 0)))
   (if (lt fuel 1) (Pair e memo)
-    (match (memo_lookup memo e)
-      ((Some e_nf) (Pair e_nf memo))
-      (None
-        (match (step_smart m e)
-          (None
-            ;; e is already normal — record it as its own NF.
-            (Pair e (Cons (Pair e e) memo)))
-          ((Some e2)
-           (match (simp_expr_loop m memo e2 (- fuel 1))
-             ((Pair e_nf memo2) (Pair e_nf (Cons (Pair e e_nf) memo2))))))))))
+  (match (memo_lookup memo e)
+    ((Some e_nf) (Pair e_nf memo))
+    (None
+      (match (step_smart m e)
+        (None
+          ;; e is already normal — record it as its own NF.
+          (Pair e (Cons (Pair e e) memo)))
+        ((Some e2)
+         (match (simp_expr_loop m memo e2 (- fuel 1))
+           ((Pair e_nf memo2) (Pair e_nf (Cons (Pair e e_nf) memo2))))))))))
 
 ;; simp_expr: drive `step_smart` to fixed point with memoization.
 ;; The public entry point — kernel callers (apply_step's Simp arm,
@@ -1055,9 +937,9 @@
 (fn run_expr ((m Module) (e Expr) (fuel Int)) Expr
   (measure fuel (by farkas (list 1 0)) (by farkas (list 1 1)))
   (if (lt fuel 1) e
-    (match (step m e)
-      (None e)
-      ((Some e2) (run_expr m e2 (- fuel 1))))))
+  (match (step m e)
+    (None e)
+    ((Some e2) (run_expr m e2 (- fuel 1))))))
 
 ;; ---------------------------------------------------------------------------
 ;; ceval — BIG-STEP environment-machine normalizer for the `Compute` tactic.
@@ -1143,61 +1025,80 @@
   ;; every site keeps only the fuel guard, so every callee measure (- fuel 1)
   ;; gives the same ad_fix vectors. Sites: Ctor ceval_list; Let ceval + ceval_list;
   ;; If ceval×3; Match ceval×2; Call ceval_call + ceval_list = 10.
-  (measure fuel
-    (by farkas (list 1 0)) (by farkas (list 1 1))
-    (by farkas (list 1 0)) (by farkas (list 1 1))
-    (by farkas (list 1 0)) (by farkas (list 1 1))
-    (by farkas (list 1 0)) (by farkas (list 1 1))
-    (by farkas (list 1 0)) (by farkas (list 1 1))
-    (by farkas (list 1 0)) (by farkas (list 1 1))
-    (by farkas (list 1 0)) (by farkas (list 1 1))
-    (by farkas (list 1 0)) (by farkas (list 1 1))
-    (by farkas (list 1 0)) (by farkas (list 1 1))
-    (by farkas (list 1 0)) (by farkas (list 1 1)))
+  (measure
+    fuel
+    (by farkas (list 1 0))
+    (by farkas (list 1 1))
+    (by farkas (list 1 0))
+    (by farkas (list 1 1))
+    (by farkas (list 1 0))
+    (by farkas (list 1 1))
+    (by farkas (list 1 0))
+    (by farkas (list 1 1))
+    (by farkas (list 1 0))
+    (by farkas (list 1 1))
+    (by farkas (list 1 0))
+    (by farkas (list 1 1))
+    (by farkas (list 1 0))
+    (by farkas (list 1 1))
+    (by farkas (list 1 0))
+    (by farkas (list 1 1))
+    (by farkas (list 1 0))
+    (by farkas (list 1 1))
+    (by farkas (list 1 0))
+    (by farkas (list 1 1)))
   (if (lt fuel 1) (open_many env e)
-    (match e
-      ((IntLit _) e)
-      ((SymLit _) e)
-      ((FVar _) e)
-      ((BVar k) (cenv_get env k))
-      ((Ctor c args) (Ctor c (ceval_list m env args (- fuel 1))))
-      ((Let bs body)
-       (ceval m (cappend (ceval_list m env bs (- fuel 1)) env) body (- fuel 1)))  ; bs ⊢ body
-      ((If c t el)
-       (match (ceval m env c (- fuel 1))
-         ((Ctor (QName _ (quote True)) Nil) (ceval m env t (- fuel 1)))
-         ((Ctor (QName _ (quote False)) Nil) (ceval m env el (- fuel 1)))
-         (cv (If cv (open_many env t) (open_many env el)))))  ; stuck cond → reify branches
-      ((Match s arms)
-       (match (ceval m env s (- fuel 1))
-         (sv
-           (match (ceval_arms arms sv)
-             ((Some (Pair body binds)) (ceval m (cappend binds env) body (- fuel 1)))
-             (None (Match sv (open_many_arms 0 env arms)))))))  ; stuck → reify arms
-      ((Call f args) (ceval_call m f (ceval_list m env args (- fuel 1)) (- fuel 1))))))
+  (match e
+    ((IntLit _) e)
+    ((SymLit _) e)
+    ((FVar _) e)
+    ((BVar k) (cenv_get env k))
+    ((Ctor c args) (Ctor c (ceval_list m env args (- fuel 1))))
+    ((Let bs body)
+     (ceval m (cappend (ceval_list m env bs (- fuel 1)) env) body (- fuel 1)))  ; bs ⊢ body
+    ((If c t el)
+     (match (ceval m env c (- fuel 1))
+       ((Ctor (QName _ (quote True)) Nil) (ceval m env t (- fuel 1)))
+       ((Ctor (QName _ (quote False)) Nil) (ceval m env el (- fuel 1)))
+       (cv (If cv (open_many env t) (open_many env el)))))  ; stuck cond → reify branches
+    ((Match s arms)
+     (match (ceval m env s (- fuel 1))
+       (sv
+         (match (ceval_arms arms sv)
+           ((Some (Pair body binds))
+            (ceval m (cappend binds env) body (- fuel 1)))
+           (None (Match sv (open_many_arms 0 env arms)))))))  ; stuck → reify arms
+    ((Call f args)
+     (ceval_call m f (ceval_list m env args (- fuel 1)) (- fuel 1))))))
 
-(fn ceval_list ((m Module) (env (List Expr)) (es (List Expr)) (fuel Int)) (List Expr)
+(fn ceval_list ((m Module) (env (List Expr)) (es (List Expr)) (fuel Int))
+  (List Expr)
   ;; two sites: ceval (head), ceval_list (tail) — both uniform.
-  (measure fuel
-    (by farkas (list 1 0)) (by farkas (list 1 1))
-    (by farkas (list 1 0)) (by farkas (list 1 1)))
+  (measure
+    fuel
+    (by farkas (list 1 0))
+    (by farkas (list 1 1))
+    (by farkas (list 1 0))
+    (by farkas (list 1 1)))
   (if (lt fuel 1) (copen_list env es)
-    (match es
-      (Nil Nil)
-      ((Cons h t) (Cons (ceval m env h (- fuel 1)) (ceval_list m env t (- fuel 1)))))))
+  (match es
+    (Nil Nil)
+    ((Cons h t)
+     (Cons (ceval m env h (- fuel 1)) (ceval_list m env t (- fuel 1)))))))
 
 (fn ceval_call ((m Module) (f QName) (vs (List Expr)) (fuel Int)) Expr
   (measure fuel (by farkas (list 1 0)) (by farkas (list 1 1)))
   (if (lt fuel 1) (Call f vs)
-    (match m
-      ((Module _ _ _ trie _)
-       (match (trie_lookup f trie)
-         ((Some (FnDef _ ptypes _ body))
-          (if (int_eq (len vs) (len_t ptypes)) (ceval m (reverse_exprs vs) body (- fuel 1))  ; (reverse args) ⊢ body
+  (match m
+    ((Module _ _ _ trie _)
+     (match (trie_lookup f trie)
+       ((Some (FnDef _ ptypes _ body))
+        (if (int_eq (len vs) (len_t ptypes))
+          (ceval m (reverse_exprs vs) body (- fuel 1))  ; (reverse args) ⊢ body
           (Call f vs)))  ; partial app → stuck
-         (None
-           (match (try_step_prim (qn_name f) vs)
-             ((Some r) r)
-             (None (Call f vs)))))))))  ; prim-miss / extern → stuck
+       (None
+         (match (try_step_prim (qn_name f) vs)
+           ((Some r) r)
+           (None (Call f vs)))))))))  ; prim-miss / extern → stuck
 
 (fn compute_eval ((m Module) (e Expr)) Expr (ceval m Nil e (simp_budget)))
