@@ -4566,6 +4566,12 @@
 ;; the obligation goal sexpr: (goal PARAMS () (= (PRED (refine_val (f args))) True)).
 ;; PRED and f are written as exact (:: …) qnames so resolution cannot pick a
 ;; homonym (an unsound predicate substitution).
+;; the obligation goal: (goal PARAMS () (= (PRED (self args)) True)). No
+;; refine_val: this goal is checked against a module where `self`'s SCC is
+;; DE-REFINED (return R → BASE; see rr_check), so (self args) : BASE and PRED
+;; applies directly. The de-refinement is what makes refine-fact unable to fire
+;; on `self` or a mutually-recursive sibling — closing the circularity by which
+;; a refined-return obligation could otherwise prove ITSELF.
 (fn rr_goal_s ((pForm SExpr) (pred QName) (self QName) (args (List SExpr)))
   SExpr
   (SList
@@ -4580,12 +4586,7 @@
               (SList
                 (Cons
                   (mc_qn_form pred)
-                  (Cons
-                    (SList
-                      (Cons
-                        (SSym (quote refine_val))
-                        (Cons (SList (Cons (mc_qn_form self) args)) Nil)))
-                    Nil)))
+                  (Cons (SList (Cons (mc_qn_form self) args)) Nil)))
               (SSym (quote True)))
             Nil))))))
 
@@ -4606,10 +4607,38 @@
     "refined return: fn "
     (append_int (chars_of_sym name) (append_int ": " why))))
 
+;; ---- SCC de-refinement: the circularity guard --------------------------------
+;; When checking f's refined-return obligation, every fn in f's recursive SCC has
+;; its return type R lowered to BASE (tc_fn_body_ret does the R→BASE map). The fn
+;; BODIES are untouched, so the proof can still unfold them; only the declared
+;; return type changes, so a call (g args) to an SCC member types as BASE and
+;; refine-fact — which keys off the head being a refined type — cannot grant its
+;; invariant. This is the analogue of the measure gate's mc_opaque (which removes
+;; the SCC) for an obligation whose goal must still MENTION the fn.
+(fn rr_deref_fns ((m Module) (scc (List QName)) (fns (List FnDef))) (List FnDef)
+  (measure (struct fns))
+  (match fns
+    (Nil Nil)
+    ((Cons (FnDef q pts ret body) rest)
+     (Cons
+       (if (ad_qn_member q scc) (FnDef q pts (tc_fn_body_ret m ret) body)
+       (FnDef q pts ret body))
+       (rr_deref_fns m scc rest)))))
+
+(fn rr_deref ((m Module) (scc (List QName))) Module
+  (match m
+    ((Module tds fns exts _ items)
+     (let ((fns2 (rr_deref_fns m scc fns)))
+       (Module tds fns2 exts (build_fn_trie fns2) items)))))
+
 ;; check one refined-return fn `name` (params pForm, predicate pred, in module
-;; path `modpath`). Nil on success; one COFail on missing/failing proof.
+;; path `modpath`). Nil on success; one COFail on missing/failing proof. The
+;; obligation is checked against m DE-REFINED over name's SCC (`sccs` = the run's
+;; precomputed SCCs), so the proof cannot assume name's own refinement nor a
+;; mutually-recursive sibling's — it must establish the invariant honestly.
 (fn rr_check
   ((m Module)
+   (sccs (List (List QName)))
    (th Theory)
    (gctx RCtx)
    (modpath (List Symbol))
@@ -4622,22 +4651,24 @@
   (match (rr_proof_for name rmap)
     (None (Cons (COFail name (rr_missing_msg name) Nil) Nil))
     ((Some proofS)
-     (match
-       (mc_check_one
-         m
-         m
-         th
-         gctx
-         (rr_gname name)
-         (rr_goal_s pForm pred (qn_at modpath name) (rr_args pForm))
-         proofS
-         autos)
-       (None Nil)
-       ((Some why) (Cons (COFail name (rr_fail_msg name why) Nil) Nil))))))
+     (let ((m2 (rr_deref m (mc_scc_of (qn_at modpath name) sccs))))
+       (match
+         (mc_check_one
+           m2
+           m2
+           th
+           gctx
+           (rr_gname name)
+           (rr_goal_s pForm pred (qn_at modpath name) (rr_args pForm))
+           proofS
+           autos)
+         (None Nil)
+         ((Some why) (Cons (COFail name (rr_fail_msg name why) Nil) Nil)))))))
 
 ;; one form: if it is a fn with a refined return, check its obligation.
 (fn rr_of_form
   ((m Module)
+   (sccs (List (List QName)))
    (th Theory)
    (gctx RCtx)
    (modpath (List Symbol))
@@ -4657,12 +4688,13 @@
              (match (rr_pred_of m (qn_at modpath name))
                (None Nil)
                ((Some pred)
-                (rr_check m th gctx modpath name pForm pred rmap autos))))))
+                (rr_check m sccs th gctx modpath name pForm pred rmap autos))))))
          (_ Nil))
        Nil))))
 
 (fn rr_of_forms
   ((m Module)
+   (sccs (List (List QName)))
    (th Theory)
    (gctx RCtx)
    (modpath (List Symbol))
@@ -4675,11 +4707,12 @@
     (Nil Nil)
     ((Cons f rest)
      (oc_concat
-       (rr_of_form m th gctx modpath f rmap autos)
-       (rr_of_forms m th gctx modpath rest rmap autos)))))
+       (rr_of_form m sccs th gctx modpath f rmap autos)
+       (rr_of_forms m sccs th gctx modpath rest rmap autos)))))
 
 (fn rr_files
   ((m Module)
+   (sccs (List (List QName)))
    (th Theory)
    (srcs (List SrcEntry))
    (sidecars (List (Pair Symbol (List Int)))))
@@ -4689,22 +4722,24 @@
     (Nil Nil)
     ((Cons (SrcEntry path _ src) rest)
      (match (read_all src)
-       (None (rr_files m th rest sidecars))
+       (None (rr_files m sccs th rest sidecars))
        ((Some forms)
         (oc_concat
           (rr_of_forms
             m
+            sccs
             th
             (file_rctx m path src)
             (module_path_of path)
             forms
             (rr_returns forms Nil)
             (autos_of_src (sym_of_chars path) sidecars))
-          (rr_files m th rest sidecars)))))))
+          (rr_files m sccs th rest sidecars)))))))
 
 ;; the section entry: HARD COFails for unproven refined returns, closure-wide.
 ;; Skipped under focus mode (focus admits unproven claims that must not seed the
-;; obligation's citable theory, and the property is whole-closure).
+;; obligation's citable theory, and the property is whole-closure). The SCC set
+;; is computed ONCE here and threaded down for the per-fn de-refinement.
 (fn rr_outcome
   ((m Module)
    (srcs (List SrcEntry))
@@ -4712,7 +4747,8 @@
    (th Theory)
    (focus Symbol))
   (List ClaimOutcome)
-  (if (sym_eq focus (quote __all__)) (rr_files m th srcs sidecars) Nil))
+  (if (sym_eq focus (quote __all__)) (rr_files m (ad_sccs m) th srcs sidecars)
+  Nil))
 
 (fn check_production_src
   ((seed Module)

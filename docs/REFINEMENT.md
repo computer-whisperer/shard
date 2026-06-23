@@ -125,16 +125,31 @@ proof term. There are two sound doors, and the corpus needs both:
   in.
 - **[BUILT]** **Refined return type** — `(fn f (a…) R body)`. A refined return
   type `R = (refine BASE PRED)` **emits the obligation**
-  `∀a, (= (PRED (refine_val (f a))) True)` — the proof that `f`'s result really
-  lands in `R`. The body is ordinary `BASE`-typed code (`tc_fn_body_ret` relaxes
-  the body↔return unification); it is admitted at `R` *because the obligation
-  holds*. The proof is supplied by a **separate top-level form
-  `(returns f PROOF)`** — not a fn clause, so a recursive refined-return fn keeps
-  its `(measure …)` clause unchanged. The driver (`rr_outcome`) **enforces** it:
-  a missing or rejected proof is a HARD failure. This is the
-  *computed-provably-valid* door — `u8`/`u8_add` (obligation closes via
-  `mod_lo`/`mod_hi`), `size_sexpr : Nat` (obligation `0 ≤ size` closes by
-  farkas). The proof may be authored or found by the `tools/prove` sidecar.
+  `∀a, (= (PRED (f a)) True)` — the proof that `f`'s result really lands in `R`.
+  The body is ordinary `BASE`-typed code (`tc_fn_body_ret` relaxes the
+  body↔return unification); it is admitted at `R` *because the obligation holds*.
+  The proof is supplied by a **separate top-level form `(returns f PROOF)`** —
+  not a fn clause, so a recursive refined-return fn keeps its `(measure …)`
+  clause unchanged. The driver (`rr_outcome`) **enforces** it: a missing or
+  rejected proof is a HARD failure.
+
+  **Circularity guard (load-bearing).** The obligation is checked against a
+  module where `f`'s entire recursive SCC has its return lowered `R → BASE`
+  (`rr_deref`). So inside the proof `(f a)` and any mutually-recursive sibling
+  type as `BASE`, and `refine-fact` — which only fires on a head that is a
+  refined type — *cannot* grant their invariants. Without this, a body could
+  "prove" its own predicate by `refine-fact` on itself (`big : Small = 99` citing
+  `(big) : Small`): pure circularity. The de-refinement is the analogue of the
+  measure gate's SCC-opacity, and is exactly why the goal is `PRED (f a)` (no
+  `refine_val`: `f` is `BASE` in this context).
+
+  This is the *computed-provably-valid* door — `u8`/`u8_add` (obligation closes
+  via `mod_lo`/`mod_hi`), `size_sexpr : Nat` (obligation `0 ≤ size`). For a
+  *mutually-recursive* size family the obligation is the same honest structural
+  (subterm) induction the standalone `*_nonneg` lemma needs today — the
+  refinement moves the FACT to every use site for free, it does not make the
+  definition-site proof disappear. The proof may be authored or found by
+  `tools/prove`.
 
   Crucially this is **not** flow-sensitive VC generation (the Liquid/F* machinery
   we reject in §8). The obligation is a plain extensional claim `PRED(f a) =
@@ -200,10 +215,13 @@ so this is additive.
   `PRED EXPR ⇝ True` is what makes the elim fact true for downcast-introduced
   values;
 - the **refined-return obligation gate** `rr_outcome` (BUILT, enforced) — the
-  claim it generates (`∀a, PRED(refine_val (f a)) = True`) is what makes the elim
-  fact true for return-introduced values; a missed or mis-stated obligation is
-  unsound, so the gate must cover *every* refined-return fn in the closure and
-  fail hard on a missing/rejected proof;
+  claim it generates (`∀a, PRED(f a) = True`, checked with `f`'s SCC de-refined)
+  is what makes the elim fact true for return-introduced values; a missed or
+  mis-stated obligation is unsound, so the gate must cover *every* refined-return
+  fn in the closure, fail hard on a missing/rejected proof, AND de-refine the
+  SCC so the proof cannot cite the very refinement it is establishing
+  (`rr_deref` — the circularity guard, pinned by
+  `examples/refine_circular_rejects.shard`);
 - the **elim-fact step** `refine-fact` — it asserts `PRED(refine_val s)` for an
   arbitrary `s : R`, sound *only* because every intro above discharged it;
 - the **registry lookup** that ties a refined `(TCon R …)` to its `(BASE, PRED)`.
@@ -249,13 +267,26 @@ everything — before the harder `Str`.
      (a body that violates the predicate, and a fn with no `(returns …)`, both
      refused). The soundness COUPLING — the `tc_fn_body_ret` relaxation is only
      sound because `rr_outcome` enforces — is the load-bearing invariant here.
+     The gate de-refines `f`'s SCC before checking (`rr_deref`) so the proof
+     cannot cite the refinement it is establishing; pinned by
+     `examples/refine_circular_rejects.shard`.
    - **[DECIDED, slice 2b]** the `refine_try` decidable downcast (needs the
      type-in-`Expr` encoding so the reducer can find `PRED`). This is the only
      remaining intro door; with it `Str`'s `utf8_decode` becomes expressible.
-2. **`Nat`** — a refined return type `(refine Int (le 0 _))` on the size
-   functions discharges the **~145** `(le 0 (size …))` premises at the definition
-   site. Highest volume, fully automatic, no totality blocker — the best first
-   real client.
+2. **`Nat`** — a refined nonneg-`Int` `(refine Int (le 0 _))` on the size
+   functions. The corpus today carries **~400** `(le 0 (size …))` lemma citations
+   plus **~150** measure `#nonneg` sidecar obligations; making the size functions
+   return `Nat` makes the nonneg FACT free at every one of those USE sites (via
+   the elim door / a Nat-typed measure satisfying its own nonneg obligation).
+   Caveat learned in slice 3 scoping: the DEFINITION-site proof is NOT eliminated
+   — the circularity guard de-refines the (mutually recursive) size SCC, so each
+   `(returns …)` proof is the same honest subterm-induction the standalone
+   `*_nonneg` lemma uses today, merely relocated. The win is removing the
+   repeated downstream citations, not the one hard proof. Still the best first
+   real client (highest volume, no totality blocker), but it is NOT
+   "fully automatic", and realizing the measure-side win needs the measure gate
+   to recognize a Nat-typed measure expression and skip its `#nonneg` obligation
+   (a new, trust-critical measure-machinery feature — scope it explicitly).
 3. **Word** — `U8 … i64` as refined `Int` (`(refine Int u8_range)`, etc.). The
    forall-inhabitant range becomes a free elim fact, deleting the **12** range
    obligations, the **~120 lines** of byte laundering, and the `bidx` re-mask.
@@ -322,11 +353,12 @@ Almost entirely shard kernel (the Rust side is an evaluator/loader only):
   EXPR)) True)` premise and continue.
 - `kernel/driver.shard` — [BUILT] `rr_outcome`: the ENFORCED refined-return gate
   (mirrors the `mc_outcome` measure path — walks all srcs, builds each obligation
-  goal, checks via `mc_check_one` with `m2 = m` so the proof can unfold `f`,
-  emits a HARD `COFail` on missing/rejected proof). Plus the `RefineFact` arms in
-  the `Proof`-walk family (`resolve_proof` / `cites_of_proof` / `proof_has_admit`
-  / `proof_has_inspect`). The `(returns f PROOF)` form is whitelisted in the
-  reader's `skip_form`.
+  goal, emits a HARD `COFail` on missing/rejected proof). `rr_deref` de-refines
+  the fn's SCC (return `R → BASE`) and the obligation is checked against THAT
+  module (the circularity guard); the proof can still unfold the bodies. Plus the
+  `RefineFact` arms in the `Proof`-walk family (`resolve_proof` /
+  `cites_of_proof` / `proof_has_admit` / `proof_has_inspect`). The
+  `(returns f PROOF)` form is whitelisted in the reader's `skip_form`.
 - `kernel/desugar.shard` — `RefineFact` premise-count arm if the desugarer counts
   premises (as for `DivFacts`/`Have`).
 - `rust_bootstrap/src/load.rs` — tolerate/skip the `(refine …)` declaration clause
