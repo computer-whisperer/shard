@@ -108,6 +108,13 @@ Surface declaration: `(type R (refine BASE PRED))` — a `type` whose body is th
 reserved `refine` clause instead of constructor clauses. Opaque form is the usual
 `(sig type R)` in the interface + the `(type R (refine …))` in the impl + the
 `use`-glob rebind, identical to how `std/word`/`std/bytes` are hidden.
+**[BUILT, slice 6]** — first exercised by `std/str` (`Str`). The opaque form
+contributes *two* same-qname `TypeDef`s to the merged closure (the imported
+ctorless `sig type` with refinement `None`, and the impl's `(refine …)` with
+`Some`); `merge_modules` orders deps first, so the registry lookup
+(`typedef_refine`) must scan past the sig's `None` for the same-qname twin that
+actually carries the refinement — a plain first-by-name lookup misses it. Since
+only `(refine …)` ever sets the field, a `Some` is unambiguous.
 
 ### 3.2 Introduction — two doors [refined-return BUILT · downcast BUILT]
 
@@ -247,6 +254,12 @@ structural subterm), so it needed a real measure. **[BUILT]** `utf8_ok` now carr
 `kernel/lia.shard` `lia_canonical`); the FLAG (issue #1) is resolved in
 `kernel/reduce.shard`. `Str` (over `(refine Bytes utf8_valid)`) was gated on this;
 that gate is now lifted — String started with a totality proof, not the type.
+**[BUILT, slice 6]** `Str` ships: its predicate `utf8_valid b = utf8_ok_list
+(list_of_bytes b)` routes through `std/str/utf8.shard`, a std-visible copy of the
+RFC-3629 validator (the kernel keeps its own private copy for `sym_of_chars` —
+the kernel cannot import std, the same kernel/std split as list/arith). The std
+copy re-proves the `(measure (ilen xs))` totality with the identical suffix
+lemmas; `utf8_valid` itself is non-recursive (trivially total).
 
 ## 6. Where it gets used — the migration order [DECIDED]
 
@@ -303,13 +316,22 @@ everything — before the harder `Str`.
    obligations, the **~120 lines** of byte laundering, and the `bidx` re-mask.
    This retroactively pays back what the contraction arc just shipped — Word's
    "mature form is the opaque sig hiding a refined Int" (OVERVIEW §8).
-4. **`utf8_ok` totality** — a self-contained measure for the RFC-3629 validator
-   (the `Str` prerequisite, §5).
-5. **`Str`** — the opaque `std/str` module over `(refine Bytes utf8_valid)`. The
-   original target of issue #2 Phase 4: `bytes_of = refine_val`, `utf8_decode =
-   refine_try Str`, and the module's validity *requirement* is finally
-   **fulfilled** (via `refine-fact`) rather than assumed-by-construction —
-   structural validity delivered through the opaque interface.
+4. **`utf8_ok` totality [BUILT, slice 5]** — a self-contained measure for the
+   RFC-3629 validator (the `Str` prerequisite, §5).
+5. **`Str` [BUILT, slice 6]** — the opaque `std/str` module over `(refine Bytes
+   utf8_valid)`. The original target of issue #2 Phase 4: `bytes_of = refine_val`,
+   `utf8_decode = refine_try Str`, and the module's validity *requirement*
+   (`str_valid`: `∀ s:Str, utf8_valid (bytes_of s) = True`) is **fulfilled** via
+   `refine-fact` rather than assumed-by-construction — the forall-over-type
+   invariant delivered through the opaque interface (a Rust newtype cannot state
+   it). Slice 6 also surfaced + fixed the opaque-registry lookup (§3.1): `Str`
+   is the *first* opaque refined type, so the sig-twin-shadows-impl bug in
+   `typedef_refine` had never fired. Because `utf8_decode` computes `PRED` over an
+   *opaque* `Bytes`, it reduces only where the bytes impl is in the closure (an
+   `eval run` boundary); a pure-interface consumer reasons via `str_valid`, and
+   the validator's *computation* is pinned at the `(List Int)` level by
+   `examples/utf8_compute.shard` (the RFC-3629 accept/reject cases). Files:
+   `std/str/{mod.req,str,utf8}.shard`, `examples/str_demo.shard`.
 6. **Relational invariants** (§4) — snake `inv`, etc. [FUTURE]
 
 ## 7. Why this beats C/Rust/Liquid/Lean
@@ -342,12 +364,14 @@ the erasure/automation/hiding combination.
 | capability / ghost tokens | reject (status quo) | "thread a `(Valid x)` premise" is exactly what we replace; no type-level guarantee |
 | pure compositional (opaque module, no type feature) | insufficient (where we are) | the Rust newtype ceiling — *cannot state* the forall-inhabitant fact |
 
-## 9. Where the code lives [BUILT through slice 2b]
+## 9. Where the code lives [BUILT through slice 6]
 
 Almost entirely shard kernel (the Rust side is an evaluator/loader only):
 
-- `kernel/module.shard` — the refined-type registry (extend `TypeDef`, or a
-  parallel `(QName → (BASE, PRED))` table on `Module`); lookup helper.
+- `kernel/module.shard` — the refined-type registry (the `TypeDef` 4th field);
+  `typedef_refine` is the lookup. [slice 6 BUILT] `find_refinement` scans for the
+  same-qname `TypeDef` whose refinement is `Some`, so an imported ctorless `(sig
+  type R)` twin no longer shadows the impl's `(refine …)` — the opaque-module fix.
 - `kernel/reader.shard` / `kernel/loader.shard` — parse `(type R (refine BASE
   PRED))` into the registry; route the `refine` type body. [2b BUILT]
   `elab_refine_try` rewraps `(refine_try R EXPR)`'s bare type name (a `(FVar R)`)
@@ -382,6 +406,12 @@ Almost entirely shard kernel (the Rust side is an evaluator/loader only):
   premises (as for `DivFacts`/`Have`).
 - `rust_bootstrap/src/load.rs` — tolerate/skip the `(refine …)` declaration clause
   for direct `eval run` (the C1-shaped change).
+- `std/str/` [slice 6] — the `Str` module: `mod.req.shard` (opaque `sig type Str`
+  + `bytes_of`/`utf8_decode`/`str_len`/`utf8_valid` sigs + the `str_valid` /
+  `str_len_*` requirements); `str.shard` (impl — `(type Str (refine Bytes
+  utf8_valid))`, `bytes_of = refine_val`, `utf8_decode = refine_try Str`, the
+  fulfills via `refine-fact`); `utf8.shard` (the std-side RFC-3629 validator +
+  its `(measure (ilen xs))` totality, the kernel-copy twin per §5).
 - Pins: `examples/refine_basic.shard` + `examples/refine_rejects.shard` (slice 1
   — projection, the elim fact, and the borrow-another's-predicate /
   non-refined-type must-fails); `examples/refine_return.shard` +

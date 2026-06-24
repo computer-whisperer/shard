@@ -1,0 +1,64 @@
+;;; utf8_compute.shard — the std UTF-8 validator (std/str/utf8.shard) COMPUTING
+;;; on real byte sequences, the behavioural pin for the std-side copy. Str's
+;;; refine_try utf8_decode cannot reduce over OPAQUE Bytes in a pure-interface
+;;; consumer (no body to compute), so the validator's actual accept/reject
+;;; behaviour is checked here at the (List Int) level, where there is no opaque
+;;; barrier. These are the RFC-3629 cases the kernel's own utf8_ok enforces for
+;;; sym_of_chars — the two copies must agree. See docs/REFINEMENT.md §6.5.
+
+(import "../std/str/utf8.shard")
+(use (:: std str utf8 *))
+
+;; --- accepts ---------------------------------------------------------------
+
+;; the empty string is valid.
+(claim empty_ok
+  (goal () () (= (utf8_ok_list (list)) True))
+  (steps ((compute lhs)) refl))
+
+;; ASCII "ABC" — every byte < 128 is its own code point.
+(claim ascii_ok
+  (goal () () (= (utf8_ok_list (list 65 66 67)) True))
+  (steps ((compute lhs)) refl))
+
+;; U+00A9 © — a well-formed 2-byte sequence C2 A9.
+(claim two_byte_ok
+  (goal () () (= (utf8_ok_list (list 194 169)) True))
+  (steps ((compute lhs)) refl))
+
+;; U+20AC € — a well-formed 3-byte sequence E2 82 AC.
+(claim three_byte_ok
+  (goal () () (= (utf8_ok_list (list 226 130 172)) True))
+  (steps ((compute lhs)) refl))
+
+;; U+1F600 😀 — a well-formed 4-byte sequence F0 9F 98 80.
+(claim four_byte_ok
+  (goal () () (= (utf8_ok_list (list 240 159 152 128)) True))
+  (steps ((compute lhs)) refl))
+
+;; --- rejects (the RFC-3629 exclusions) -------------------------------------
+
+;; a lone continuation byte (0x80) has no lead — invalid.
+(claim lone_cont_no
+  (goal () () (= (utf8_ok_list (list 128)) False))
+  (steps ((compute lhs)) refl))
+
+;; a 2-byte lead (0xC2) with its continuation missing — truncated.
+(claim truncated_no
+  (goal () () (= (utf8_ok_list (list 194)) False))
+  (steps ((compute lhs)) refl))
+
+;; overlong encoding of NUL: C0 80 — rejected (C0/C1 are never valid leads).
+(claim overlong_no
+  (goal () () (= (utf8_ok_list (list 192 128)) False))
+  (steps ((compute lhs)) refl))
+
+;; a UTF-16 surrogate (U+D800) encoded as ED A0 80 — rejected (ED narrows).
+(claim surrogate_no
+  (goal () () (= (utf8_ok_list (list 237 160 128)) False))
+  (steps ((compute lhs)) refl))
+
+;; past U+10FFFF: F4 90 80 80 would be U+110000 — rejected (F4 narrows to 8F).
+(claim past_max_no
+  (goal () () (= (utf8_ok_list (list 244 144 128 128)) False))
+  (steps ((compute lhs)) refl))

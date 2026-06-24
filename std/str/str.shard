@@ -1,0 +1,62 @@
+;;; std/str/str.shard — the `str` module IMPLEMENTATION (private).
+;;;
+;;; Str as `(refine Bytes utf8_valid)`: the refinement-type machinery
+;;; (docs/REFINEMENT.md) realizes issue #2's String. The refinement predicate
+;;; `utf8_valid b = utf8_ok_list (list_of_bytes b)` routes through the std-side
+;;; RFC-3629 validator (utf8.shard); the two intro/elim doors are the kernel's
+;;; refine_try (downcast) and refine_val (projection); the headline validity
+;;; requirement is FULFILLED — not assumed — via refine-fact. Consumers never
+;;; load this file; they get only mod.req.shard (opaque Str).
+
+(import "../../kernel/stdlib.shard")
+(import "../bytes")  ; Bytes / blen / list_of_bytes (the carrier algebra)
+(import "utf8.shard")  ; utf8_ok_list — the validator over (List Int)
+(import "mod.req.shard")  ; our interface — opaque Str + sig fns + obligations
+(use (:: std bytes *))
+(use (:: std str utf8 utf8_ok_list))  ; the validator (sibling helper module)
+(use (:: std str *))  ; impl-proof: rebind the opaque type + sig fns to our defs
+
+;; --- the refinement predicate + type ----------------------------------------
+
+;; valid UTF-8 = the std validator over the byte-list model of b. Non-recursive,
+;; so trivially total; the recursion (and its measure) lives in utf8_ok_list.
+(fn utf8_valid ((b Bytes)) Bool (utf8_ok_list (list_of_bytes b)))
+
+;; THE type: a Bytes refined by utf8_valid. Opaque to consumers (sig type Str),
+;; so the only inhabitants are those built through the doors below — each of
+;; which discharges utf8_valid — making str_valid true for EVERY Str.
+(type Str (refine Bytes utf8_valid))
+
+;; --- the doors --------------------------------------------------------------
+
+;; elim / projection: a Str IS its bytes (refine_val is identity at runtime).
+(fn bytes_of ((s Str)) Bytes (refine_val s))
+
+;; intro / decidable downcast: validate raw bytes, Some str iff valid UTF-8.
+;; (refine_try Str b) computes utf8_valid b and wraps Some only on True — the
+;; soundness invariant that makes the str_valid fact honest for decoded values.
+(fn utf8_decode ((b Bytes)) (Option Str) (refine_try Str b))
+
+;; the byte length, through the projection.
+(fn str_len ((s Str)) Int (blen (bytes_of s)))
+
+;; --- discharge the interface's requirements ---------------------------------
+
+;; str_valid: every inhabitant is valid UTF-8. refine-fact grants
+;; (= (utf8_valid (refine_val s)) True) for the bound s : Str; bytes_of unfolds
+;; to refine_val s, so the granted fact IS the goal. This is the forall-over-type
+;; invariant a compositional opaque module cannot state — here a proven fact.
+(fulfills str_valid
+  (refine-fact
+    Str
+    s
+    (steps ((unfold bytes_of lhs) (rewrite (premise 0) lr lhs true ())) refl)))
+
+;; str_len is blen of the projection, definitionally.
+(fulfills str_len_is_blen (steps ((unfold str_len lhs)) refl))
+
+;; str_len >= 0 rides bytes' blen_nonneg through the projection.
+(fulfills str_len_nonneg
+  (steps
+    ((unfold str_len lhs))
+    (rewrite-with (lemma blen_nonneg) lr lhs ((inst b (bytes_of s))) () refl)))

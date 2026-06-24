@@ -64,6 +64,8 @@ TARGETS=(
   examples/refine_circular_rejects.shard
   examples/refine_try.shard
   examples/refine_try_rejects.shard
+  examples/utf8_compute.shard
+  examples/str_demo.shard
   examples/module_gate_rejects.shard
   examples/parse_rejects.shard
   examples/pending_demo.shard
@@ -102,6 +104,8 @@ TARGETS=(
   std/order.shard
   std/rng/rng.shard
   std/bytes/bytes.shard
+  std/str/utf8.shard
+  std/str/str.shard
   std/list/list.shard
   std/arith/arith.shard
   std/div/div.shard
