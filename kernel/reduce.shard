@@ -171,9 +171,9 @@
 ;; "Primitives reachable from the kernel's reducer".
 (fn step_call ((m Module) (f QName) (args (List Expr))) (Option Expr)
   (measure (+ (* 2 (size_list args)) 2))
+  (if (sym_eq (qn_name f) (quote refine_try)) (refine_try_step m args)
   (match m
     ((Module _ _ _ trie _)
-     (if (sym_eq (qn_name f) (quote refine_try)) (refine_try_step m args)
      (match (trie_lookup f trie)
        ((Some fd)
         (match (apply_fn fd args)
@@ -347,7 +347,8 @@
 ;; classify a lead byte b and (given the rest t) return the bytes left after
 ;; its continuation bytes are consumed — Some suffix, or None if invalid.
 ;; Extracted from utf8_ok so the loop's scrutinee is a bare call whose result
-;; type synthesizes (the prerequisite for naming the suffix in a measure).
+;; type synthesizes — which lets utf8_lead_le name the suffix and bound its
+;; length, the key fact in utf8_ok's (measure (ilen xs)) below.
 (fn utf8_lead ((b Int) (t (List Int))) (Option (List Int))
   (if (le b 127) (Some t)  ; ascii
   (if (le b 193) None  ; bare continuation or overlong C0/C1
@@ -361,16 +362,581 @@
   (if (int_eq b 244) (utf8_narrow t 128 143 2)  ; F4: cap U+10FFFF
   None)))))))))))  ; F5..FF invalid
 
-;; TODO(issue #1, totality): utf8_ok recurses on the suffix utf8_lead returns,
-;; so it is total by a (measure (len xs)) — it terminates because every step
-;; consumes >=1 byte (<=4 per code point). It is left a FLAG for now: the proof
-;; needs suffix lemmas len(opt_rest(utf8_cont/utf8_narrow …)) <= len input plus a
-;; 10-way dispatch lemma over utf8_lead, and utf8 is a TEMPORARY kernel fixture
-;; (Str #2 demotes strings/utf8 out of the kernel), so the throwaway proof is
-;; deferred. The utf8_lead extraction above is the stateable-measure on-ramp;
-;; stratified citation (93907f0) is the mechanism to finish it. See lia_canonical
-;; for the worked pattern.
+(fn ilen ((xs (List Int))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons _ t) (+ 1 (ilen t)))))
+
+;; opt_rest: the list inside a Some, Nil for None — lets the suffix lemmas be
+;; UNCONDITIONAL (both Option cases collapse), like lia's lsa_rest.
+(fn opt_rest ((o (Option (List Int)))) (List Int)
+  (match o
+    (None Nil)
+    ((Some r) r)))
+
+;; ---- ilen's defining equations + nonneg ------------------------------------
+
+(claim ilen_nil (goal () () (= (ilen Nil) 0)) (steps ((simp lhs)) refl))
+
+(claim ilen_cons
+  (goal ((h Int) (t (List Int))) () (= (ilen (Cons h t)) (+ 1 (ilen t))))
+  (steps ((simp lhs)) refl))
+
+(claim ilen_nonneg
+  (goal ((xs (List Int))) () (= (le 0 (ilen xs)) True))
+  (induct xs
+    ((case Nil
+       (steps ((rewrite (lemma ilen_nil) lr lhs true ())) (by farkas (list 1))))
+     (case Cons
+       (h t)
+       (have (= (le 0 (ilen t)) True)
+         (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+         (steps
+           ((rewrite (lemma ilen_cons) lr lhs true ()))
+           (by farkas (list 1 1))))))))
+
+;; ---- suffix-length bounds (cited by utf8_ok's measure) ---------------------
+
+;; utf8_cont peels <= n continuation bytes (or returns xs unchanged when n<=0),
+;; so the remaining suffix never grows. Induction on xs; IH is over n.
+(claim utf8_cont_le
+  (goal ((xs (List Int)) (n Int)) ()
+    (= (le (ilen (opt_rest (utf8_cont xs n))) (ilen xs)) True))
+  (induct xs
+    ((case Nil
+       (case-on (le n 0) Bool
+         ((case True
+            (steps
+              ((unfold utf8_cont lhs)
+               (rewrite (hyp 0) lr lhs true ())
+               (simp lhs))
+              refl))
+          (case False
+            (steps
+              ((unfold utf8_cont lhs)
+               (rewrite (hyp 0) lr lhs true ())
+               (simp lhs))
+              refl)))))
+     (case Cons
+       (b t)
+       ;; hyp 0 = IH (forall n, ...)
+       (case-on (le n 0) Bool
+         ((case True
+            ;; hyp 0 = (= (le n 0) True), hyp 1 = IH
+            (steps
+              ((unfold utf8_cont lhs)
+               (rewrite (hyp 0) lr lhs true ())
+               (simp lhs))
+              (by ord (list))))
+          (case False
+            ;; hyp 0 = (= (le n 0) False), hyp 1 = IH
+            (case-on (le 128 b) Bool
+              ((case True
+                 ;; hyp 0 = (= (le 128 b) True), hyp 1 = (= (le n 0) False), hyp 2 = IH
+                 (case-on (le b 191) Bool
+                   ((case True
+                      ;; hyp 0 = (= (le b 191) True), hyp 1 = (= (le 128 b) True),
+                      ;; hyp 2 = (= (le n 0) False), hyp 3 = IH
+                      (have
+                        (=
+                          (le (ilen (opt_rest (utf8_cont t (- n 1)))) (ilen t))
+                          True)
+                        (rewrite-with (hyp 3) lr lhs ((inst n (- n 1))) () refl)
+                        (steps
+                          ((unfold utf8_cont lhs)
+                           (rewrite (hyp 2) lr lhs true ())
+                           (simp lhs)
+                           (rewrite (hyp 1) lr lhs true ())
+                           (rewrite (hyp 0) lr lhs true ())
+                           (simp lhs))
+                          (by farkas (list 1 1)))))
+                    (case False
+                      ;; hyp 0 = (= (le b 191) False), hyp 1 = (= (le 128 b) True),
+                      ;; hyp 2 = (= (le n 0) False), hyp 3 = IH
+                      (have (= (le 0 (ilen t)) True)
+                        (rewrite-with
+                          (lemma ilen_nonneg)
+                          lr
+                          lhs
+                          ((inst xs t))
+                          ()
+                          refl)
+                        (steps
+                          ((unfold utf8_cont lhs)
+                           (rewrite (hyp 2) lr lhs true ())
+                           (simp lhs)
+                           (rewrite (hyp 1) lr lhs true ())
+                           (rewrite (hyp 0) lr lhs true ())
+                           (simp lhs))
+                          (by farkas (list 1 1))))))))
+               (case False
+                 ;; hyp 0 = (= (le 128 b) False), hyp 1 = (= (le n 0) False), hyp 2 = IH
+                 (have (= (le 0 (ilen t)) True)
+                   (rewrite-with
+                     (lemma ilen_nonneg)
+                     lr
+                     lhs
+                     ((inst xs t))
+                     ()
+                     refl)
+                   (steps
+                     ((unfold utf8_cont lhs)
+                      (rewrite (hyp 1) lr lhs true ())
+                      (simp lhs)
+                      (rewrite (hyp 0) lr lhs true ())
+                      (simp lhs))
+                     (by farkas (list 1 1))))))))))))))
+
+;; utf8_narrow peels one window byte then defers to utf8_cont.
+(claim utf8_narrow_le
+  (goal ((xs (List Int)) (lo Int) (hi Int) (n Int)) ()
+    (= (le (ilen (opt_rest (utf8_narrow xs lo hi n))) (ilen xs)) True))
+  (induct xs
+    ((case Nil (steps ((unfold utf8_narrow lhs) (simp lhs)) refl))
+     (case Cons
+       (c r)
+       ;; hyp 0 = IH (unused — no recursion on xs)
+       (case-on (le lo c) Bool
+         ((case True
+            ;; hyp 0 = (= (le lo c) True), hyp 1 = IH
+            (case-on (le c hi) Bool
+              ((case True
+                 ;; hyp 0 = (= (le c hi) True), hyp 1 = (= (le lo c) True), hyp 2 = IH
+                 (have (= (le (ilen (opt_rest (utf8_cont r n))) (ilen r)) True)
+                   (rewrite-with
+                     (lemma utf8_cont_le)
+                     lr
+                     lhs
+                     ((inst xs r) (inst n n))
+                     ()
+                     refl)
+                   (steps
+                     ((unfold utf8_narrow lhs)
+                      (simp lhs)
+                      (rewrite (hyp 1) lr lhs true ())
+                      (simp lhs)
+                      (rewrite (hyp 0) lr lhs true ())
+                      (simp lhs))
+                     (by farkas (list 1 1)))))
+               (case False
+                 ;; hyp 0 = (= (le c hi) False), hyp 1 = (= (le lo c) True), hyp 2 = IH
+                 (have (= (le 0 (ilen r)) True)
+                   (rewrite-with
+                     (lemma ilen_nonneg)
+                     lr
+                     lhs
+                     ((inst xs r))
+                     ()
+                     refl)
+                   (steps
+                     ((unfold utf8_narrow lhs)
+                      (simp lhs)
+                      (rewrite (hyp 1) lr lhs true ())
+                      (simp lhs)
+                      (rewrite (hyp 0) lr lhs true ())
+                      (simp lhs))
+                     (by farkas (list 1 1))))))))
+          (case False
+            ;; hyp 0 = (= (le lo c) False), hyp 1 = IH
+            (have (= (le 0 (ilen r)) True)
+              (rewrite-with (lemma ilen_nonneg) lr lhs ((inst xs r)) () refl)
+              (steps
+                ((unfold utf8_narrow lhs)
+                 (simp lhs)
+                 (rewrite (hyp 0) lr lhs true ())
+                 (simp lhs))
+                (by farkas (list 1 1)))))))))))
+
+;; utf8_lead: 10-way dispatch; every Some branch is xs, utf8_cont, or
+;; utf8_narrow — each bounded above by ilen t.
+(claim utf8_lead_le
+  (goal ((b Int) (t (List Int))) ()
+    (= (le (ilen (opt_rest (utf8_lead b t))) (ilen t)) True))
+  (case-on (le b 127) Bool
+    ((case True
+       (steps
+         ((unfold utf8_lead lhs) (rewrite (hyp 0) lr lhs true ()) (simp lhs))
+         (by ord (list))))
+     (case False
+       (case-on (le b 193) Bool
+         ((case True
+            (have (= (le 0 (ilen t)) True)
+              (rewrite-with (lemma ilen_nonneg) lr lhs ((inst xs t)) () refl)
+              (steps
+                ((unfold utf8_lead lhs)
+                 (rewrite (hyp 1) lr lhs true ())
+                 (rewrite (hyp 0) lr lhs true ())
+                 (simp lhs))
+                (by farkas (list 1 1)))))
+          (case False
+            (case-on (le b 223) Bool
+              ((case True
+                 (steps
+                   ((unfold utf8_lead lhs)
+                    (rewrite (hyp 2) lr lhs true ())
+                    (rewrite (hyp 1) lr lhs true ())
+                    (rewrite (hyp 0) lr lhs true ())
+                    (simp lhs))
+                   (rewrite-with
+                     (lemma utf8_cont_le)
+                     lr
+                     lhs
+                     ((inst xs t) (inst n 1))
+                     ()
+                     refl)))
+               (case False
+                 (case-on (int_eq b 224) Bool
+                   ((case True
+                      (steps
+                        ((unfold utf8_lead lhs)
+                         (rewrite (hyp 3) lr lhs true ())
+                         (rewrite (hyp 2) lr lhs true ())
+                         (rewrite (hyp 1) lr lhs true ())
+                         (rewrite (hyp 0) lr lhs true ())
+                         (simp lhs))
+                        (rewrite-with
+                          (lemma utf8_narrow_le)
+                          lr
+                          lhs
+                          ((inst xs t) (inst lo 160) (inst hi 191) (inst n 1))
+                          ()
+                          refl)))
+                    (case False
+                      (case-on (le b 236) Bool
+                        ((case True
+                           (steps
+                             ((unfold utf8_lead lhs)
+                              (rewrite (hyp 4) lr lhs true ())
+                              (rewrite (hyp 3) lr lhs true ())
+                              (rewrite (hyp 2) lr lhs true ())
+                              (rewrite (hyp 1) lr lhs true ())
+                              (rewrite (hyp 0) lr lhs true ())
+                              (simp lhs))
+                             (rewrite-with
+                               (lemma utf8_cont_le)
+                               lr
+                               lhs
+                               ((inst xs t) (inst n 2))
+                               ()
+                               refl)))
+                         (case False
+                           (case-on (int_eq b 237) Bool
+                             ((case True
+                                (steps
+                                  ((unfold utf8_lead lhs)
+                                   (rewrite (hyp 5) lr lhs true ())
+                                   (rewrite (hyp 4) lr lhs true ())
+                                   (rewrite (hyp 3) lr lhs true ())
+                                   (rewrite (hyp 2) lr lhs true ())
+                                   (rewrite (hyp 1) lr lhs true ())
+                                   (rewrite (hyp 0) lr lhs true ())
+                                   (simp lhs))
+                                  (rewrite-with
+                                    (lemma utf8_narrow_le)
+                                    lr
+                                    lhs
+                                    ((inst xs t)
+                                     (inst lo 128)
+                                     (inst hi 159)
+                                     (inst n 1))
+                                    ()
+                                    refl)))
+                              (case False
+                                (case-on (le b 239) Bool
+                                  ((case True
+                                     (steps
+                                       ((unfold utf8_lead lhs)
+                                        (rewrite (hyp 6) lr lhs true ())
+                                        (rewrite (hyp 5) lr lhs true ())
+                                        (rewrite (hyp 4) lr lhs true ())
+                                        (rewrite (hyp 3) lr lhs true ())
+                                        (rewrite (hyp 2) lr lhs true ())
+                                        (rewrite (hyp 1) lr lhs true ())
+                                        (rewrite (hyp 0) lr lhs true ())
+                                        (simp lhs))
+                                       (rewrite-with
+                                         (lemma utf8_cont_le)
+                                         lr
+                                         lhs
+                                         ((inst xs t) (inst n 2))
+                                         ()
+                                         refl)))
+                                   (case False
+                                     (case-on (int_eq b 240) Bool
+                                       ((case True
+                                          (steps
+                                            ((unfold utf8_lead lhs)
+                                             (rewrite (hyp 7) lr lhs true ())
+                                             (rewrite (hyp 6) lr lhs true ())
+                                             (rewrite (hyp 5) lr lhs true ())
+                                             (rewrite (hyp 4) lr lhs true ())
+                                             (rewrite (hyp 3) lr lhs true ())
+                                             (rewrite (hyp 2) lr lhs true ())
+                                             (rewrite (hyp 1) lr lhs true ())
+                                             (rewrite (hyp 0) lr lhs true ())
+                                             (simp lhs))
+                                            (rewrite-with
+                                              (lemma utf8_narrow_le)
+                                              lr
+                                              lhs
+                                              ((inst xs t)
+                                               (inst lo 144)
+                                               (inst hi 191)
+                                               (inst n 2))
+                                              ()
+                                              refl)))
+                                        (case False
+                                          (case-on (le b 243) Bool
+                                            ((case True
+                                               (steps
+                                                 ((unfold utf8_lead lhs)
+                                                  (rewrite
+                                                    (hyp 8)
+                                                    lr
+                                                    lhs
+                                                    true
+                                                    ())
+                                                  (rewrite
+                                                    (hyp 7)
+                                                    lr
+                                                    lhs
+                                                    true
+                                                    ())
+                                                  (rewrite
+                                                    (hyp 6)
+                                                    lr
+                                                    lhs
+                                                    true
+                                                    ())
+                                                  (rewrite
+                                                    (hyp 5)
+                                                    lr
+                                                    lhs
+                                                    true
+                                                    ())
+                                                  (rewrite
+                                                    (hyp 4)
+                                                    lr
+                                                    lhs
+                                                    true
+                                                    ())
+                                                  (rewrite
+                                                    (hyp 3)
+                                                    lr
+                                                    lhs
+                                                    true
+                                                    ())
+                                                  (rewrite
+                                                    (hyp 2)
+                                                    lr
+                                                    lhs
+                                                    true
+                                                    ())
+                                                  (rewrite
+                                                    (hyp 1)
+                                                    lr
+                                                    lhs
+                                                    true
+                                                    ())
+                                                  (rewrite
+                                                    (hyp 0)
+                                                    lr
+                                                    lhs
+                                                    true
+                                                    ())
+                                                  (simp lhs))
+                                                 (rewrite-with
+                                                   (lemma utf8_cont_le)
+                                                   lr
+                                                   lhs
+                                                   ((inst xs t) (inst n 3))
+                                                   ()
+                                                   refl)))
+                                             (case False
+                                               (case-on (int_eq b 244) Bool
+                                                 ((case True
+                                                    (steps
+                                                      ((unfold utf8_lead lhs)
+                                                       (rewrite
+                                                         (hyp 9)
+                                                         lr
+                                                         lhs
+                                                         true
+                                                         ())
+                                                       (rewrite
+                                                         (hyp 8)
+                                                         lr
+                                                         lhs
+                                                         true
+                                                         ())
+                                                       (rewrite
+                                                         (hyp 7)
+                                                         lr
+                                                         lhs
+                                                         true
+                                                         ())
+                                                       (rewrite
+                                                         (hyp 6)
+                                                         lr
+                                                         lhs
+                                                         true
+                                                         ())
+                                                       (rewrite
+                                                         (hyp 5)
+                                                         lr
+                                                         lhs
+                                                         true
+                                                         ())
+                                                       (rewrite
+                                                         (hyp 4)
+                                                         lr
+                                                         lhs
+                                                         true
+                                                         ())
+                                                       (rewrite
+                                                         (hyp 3)
+                                                         lr
+                                                         lhs
+                                                         true
+                                                         ())
+                                                       (rewrite
+                                                         (hyp 2)
+                                                         lr
+                                                         lhs
+                                                         true
+                                                         ())
+                                                       (rewrite
+                                                         (hyp 1)
+                                                         lr
+                                                         lhs
+                                                         true
+                                                         ())
+                                                       (rewrite
+                                                         (hyp 0)
+                                                         lr
+                                                         lhs
+                                                         true
+                                                         ())
+                                                       (simp lhs))
+                                                      (rewrite-with
+                                                        (lemma utf8_narrow_le)
+                                                        lr
+                                                        lhs
+                                                        ((inst xs t)
+                                                         (inst lo 128)
+                                                         (inst hi 143)
+                                                         (inst n 2))
+                                                        ()
+                                                        refl)))
+                                                  (case False
+                                                    (have
+                                                      (= (le 0 (ilen t)) True)
+                                                      (rewrite-with
+                                                        (lemma ilen_nonneg)
+                                                        lr
+                                                        lhs
+                                                        ((inst xs t))
+                                                        ()
+                                                        refl)
+                                                      (steps
+                                                        ((unfold utf8_lead lhs)
+                                                         (rewrite
+                                                           (hyp 9)
+                                                           lr
+                                                           lhs
+                                                           true
+                                                           ())
+                                                         (rewrite
+                                                           (hyp 8)
+                                                           lr
+                                                           lhs
+                                                           true
+                                                           ())
+                                                         (rewrite
+                                                           (hyp 7)
+                                                           lr
+                                                           lhs
+                                                           true
+                                                           ())
+                                                         (rewrite
+                                                           (hyp 6)
+                                                           lr
+                                                           lhs
+                                                           true
+                                                           ())
+                                                         (rewrite
+                                                           (hyp 5)
+                                                           lr
+                                                           lhs
+                                                           true
+                                                           ())
+                                                         (rewrite
+                                                           (hyp 4)
+                                                           lr
+                                                           lhs
+                                                           true
+                                                           ())
+                                                         (rewrite
+                                                           (hyp 3)
+                                                           lr
+                                                           lhs
+                                                           true
+                                                           ())
+                                                         (rewrite
+                                                           (hyp 2)
+                                                           lr
+                                                           lhs
+                                                           true
+                                                           ())
+                                                         (rewrite
+                                                           (hyp 1)
+                                                           lr
+                                                           lhs
+                                                           true
+                                                           ())
+                                                         (rewrite
+                                                           (hyp 0)
+                                                           lr
+                                                           lhs
+                                                           true
+                                                           ())
+                                                         (simp lhs))
+                                                        (by farkas (list 1 1)))))))))))))))))))))))))))))))))))
+
+;; utf8_ok: UTF-8 validity over a byte list. Recursion is on r, the suffix
+;; utf8_lead returns, so it is total by (measure (ilen xs)) — every code point
+;; consumes >=1 byte. This is the (issue #1) FLAG resolved; the worked pattern
+;; is kernel/lia.shard lia_canonical. The suffix lemmas (utf8_*_le) and the
+;; ilen facility above are cited here; none reaches utf8_ok in the call graph,
+;; so stratified citation admits them.
 (fn utf8_ok ((xs (List Int))) Bool
+  (measure
+    (ilen xs)
+    ;; decrease: ilen r < ilen xs. premise 0 = (= xs (Cons b t)),
+    ;; premise 1 = (= (utf8_lead b t) (Some r)); each (have …) APPENDS its fact
+    ;; (premise 2, then 3 …). Bridge r to the projection, bound it by ilen t
+    ;; (utf8_lead_le), then ilen xs = 1 + ilen t (ilen_cons) is strictly larger.
+    (have (= r (opt_rest (utf8_lead b t)))
+      (steps ((rewrite (premise 1) lr rhs true ()) (simp rhs)) refl)
+      ;; premise 2 = the bridge above
+      (have (= (le (ilen r) (ilen t)) True)
+        (steps
+          ((rewrite (premise 2) lr lhs true ()))
+          (rewrite-with
+            (lemma utf8_lead_le)
+            lr
+            lhs
+            ((inst b b) (inst t t))
+            ()
+            refl))
+        ;; premise 3 = the (le (ilen r) (ilen t)) bound
+        (steps
+          ((rewrite (premise 0) lr lhs true ())
+           (rewrite (lemma ilen_cons) lr lhs true ()))
+          (by farkas (list 1 0 0 0 1)))))
+    ;; nonneg: 0 <= ilen r.
+    (rewrite-with (lemma ilen_nonneg) lr lhs ((inst xs r)) () refl))
   (match xs
     (Nil True)
     ((Cons b t)

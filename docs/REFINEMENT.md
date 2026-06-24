@@ -240,9 +240,13 @@ so this is additive.
 and the extension is unsound. So a refinement predicate must be **measure-admitted
 total** (`TOTALITY.md`). Consequences for sequencing (§6): the bounded-integer
 predicates (`le`, `lt`, `andb` of them) are trivially total, so `Nat`/Word ship
-with no totality work; `utf8_ok` currently has the open non-structural-recursion
-TODO (issue #1), so **`Str` is gated on giving `utf8_ok` a verified measure
-first** — String starts with a totality proof, not the type.
+with no totality work; `utf8_ok` recurses on the suffix `utf8_lead` returns (not a
+structural subterm), so it needed a real measure. **[BUILT]** `utf8_ok` now carries
+`(measure (ilen xs))`, discharged by the suffix-length lemmas `utf8_cont_le` /
+`utf8_narrow_le` / `utf8_lead_le` over a kernel-local `ilen` (pattern:
+`kernel/lia.shard` `lia_canonical`); the FLAG (issue #1) is resolved in
+`kernel/reduce.shard`. `Str` (over `(refine Bytes utf8_valid)`) was gated on this;
+that gate is now lifted — String started with a totality proof, not the type.
 
 ## 6. Where it gets used — the migration order [DECIDED]
 
