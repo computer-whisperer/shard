@@ -338,21 +338,36 @@ Migration:
 Verification: the corpus is clean except the intentional cheat pins
 (`measure_clause`, `mutual_toy`, `struct_clause`), which correctly **COFail**
 under enforcement; `kernel/eval.shard` and `tools/prove` are clean (they admit
-nothing). One **known gap (in progress)**: `tools/shardfmt`'s own `(compute both)`
-scenario proofs reduce fns the single-fn `structgen` pass did not cover. Now
-verified: the equality helpers (`bytes_eq`/`sexpr_eq`/`sexprs_eq`), the spacer
-`sp`, the blank-run squashers (`squash1`/`squash2`, via a `drop_lead_blanks`-
-non-increase lemma), and the **CST reader** — which was rewritten from recursive
-descent (whose `cst_node`⟷`cst_items` mutual recursion depended on an
-unprovable intra-SCC consumption postcondition) into a provably-total **lexer +
-structural stack-fold parser** (`lex_go` with `(len cs)` citing three
-consumption lemmas; `parse_go` with `(measure (struct toks))`; output
-byte-identical, all scenarios pass). Still admitted-but-unannotated: the **`em_*`
-printer** (an 8-member mutual SCC whose same-node dispatch edges need
-lexicographic ranks — encodable as a weighted `K·size + rank` measure — plus a
-`prep`-non-increase lemma over CNode AST size). The gate correctly refuses it;
-proving it total is tracked work (§10). A `check admit <closure>` scan still
-enumerates the advisory AdFlag / AdUnresolved set (out of TCB).
+nothing). `tools/shardfmt` — whose own `(compute both)` scenario proofs reduce
+its CST parser / printer / equality SCCs, so the gate genuinely *reaches* them —
+is now **fully total** (46 passed, 0 failed; the 36 axioms are its I/O externs):
+
+- the equality helpers (`bytes_eq`/`sexpr_eq`/`sexprs_eq`), the spacer `sp`, and
+  the blank-run squashers (`squash1`/`squash2`, via a `drop_lead_blanks`-non-
+  increase lemma);
+- the **CST reader** — rewritten from recursive descent (whose
+  `cst_node`⟷`cst_items` mutual recursion depended on an unprovable intra-SCC
+  consumption postcondition) into a provably-total **lexer + structural stack-
+  fold parser** (`lex_go` with `(len cs)` citing three consumption lemmas;
+  `parse_go` with `(measure (struct toks))`);
+- the **`em_*` printer** — an 8-member mutual SCC carrying weighted
+  `(* 10 size) + rank` **numeric** measures over a true CNode AST size
+  (`cz`/`lz`, the mirror of `kernel/expr_size`): the integer offset is a dispatch
+  rank, so a same-node fallback strictly decreases while any real size drop (≥10)
+  dominates a rank rise. The discharge rests on a `prep`-non-increase lemma
+  family over `lz` (`dlb_size_le`, `squash1_size_le` — the first corpus
+  `wf-induct` on a *derived* list measure `(len ns)` — `stb_size_le`,
+  `prep_size_le`) plus `em_keep_rest_le`/`opt_trail_le` stated over accessors.
+  Proving it total **forced merging** `em_if_try`+`em_if5` into one `em_if` that
+  destructures `t` itself, so the extracted `cnd`/`thn`/`els` are syntactic
+  subterms of the measured argument (no single measure can dominate whole `t` for
+  the `em_head` fallback while keeping the pieces below it for `em_if_deep`).
+  Output stays byte-identical and all scenarios pass.
+
+With the printer closed there is **no remaining admitted-but-unannotated
+recursive SCC anywhere in the corpus** — the enforcement gate (§8) is satisfied
+everywhere except the three deliberate cheat pins. A `check admit <closure>` scan
+still enumerates the advisory AdFlag / AdUnresolved set (out of TCB).
 
 ## 9. The trusted core (what to audit)
 
