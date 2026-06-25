@@ -1404,33 +1404,6 @@
       (if (is_if els) (Cons 41 (em_chain els col (em (sp col) (Cons 10 acc3))))
       (Cons 41 (em_pp els (+ col 2) (em (sp (+ col 2)) (Cons 10 acc3))))))))
 
-(fn em_if5
-  ((t (List CNode))  ; the original items after the head, for the fallback
-   (cnd CNode)
-   (ctr (Option (List Int)))
-   (thn CNode)
-   (ttr (Option (List Int)))
-   (els CNode)
-   (col Int)
-   (acc (List Int)))
-  (List Int)
-  (let ((bc (flat_w cnd (- (- 80 col) 4))))
-    (if (lt bc 0) (em_head "if" t col acc)
-    (let ((acc1 (em_flat cnd (em "(if " acc))))
-      (match ctr
-        ((Some ctxt)
-         (em_if_deep thn ttr els col (em ctxt (Cons 32 (Cons 32 acc1)))))
-        (None
-          (let ((bt (flat_w thn (- bc 1))))
-            (if (lt bt 0) (em_if_deep thn ttr els col acc1)
-            (let ((acc2 (em_flat thn (Cons 32 acc1))))
-              (let
-                ((acc3
-                   (match ttr
-                     (None acc2)
-                     ((Some txt) (em txt (Cons 32 (Cons 32 acc2)))))))
-                (Cons 41 (em_chain els col (em (sp col) (Cons 10 acc3))))))))))))))
-
 ;; a broken cascade breaks EVERY link: a chained if in else position skips
 ;; the flat check; anything else falls back to fit-or-break.
 (fn em_chain ((els CNode) (col Int) (acc (List Int))) (List Int)
@@ -1440,14 +1413,19 @@
        ((Cons h t)
         (match h
           ((CAtom hb)
-           (if (bytes_eq hb "if") (em_if_try hb t col acc) (em_pp els col acc)))
+           (if (bytes_eq hb "if") (em_if hb t col acc) (em_pp els col acc)))
           (_ (em_pp els col acc))))
        (_ (em_pp els col acc))))
     (_ (em_pp els col acc))))
 
-;; recognize (if c [tr] t [tr] e) and dispatch to the cascade.
-(fn em_if_try ((hb (List Int)) (t (List CNode)) (col Int) (acc (List Int)))
+(fn em_if ((hb (List Int)) (t (List CNode)) (col Int) (acc (List Int)))
   (List Int)
+  ;; em_if MERGES the old em_if_try (recognizer) and em_if5 (renderer): it
+  ;; destructures t HERE so cnd/thn/els are syntactic subterms of t (the
+  ;; measured argument), which is what lets the cascade calls (em_if_deep on
+  ;; thn/els, em_chain on els) provably decrease while the fallback (em_head on
+  ;; the WHOLE t) stays a same-size dispatch hop. Any shape mismatch falls back
+  ;; to the generic head renderer. hb is always "if" at the call sites.
   (match t
     ((Cons cnd r1)
      (match (opt_trail r1)
@@ -1459,7 +1437,34 @@
               (match r4
                 ((Cons els r5)
                  (match r5
-                   (Nil (em_if5 t cnd ctr thn ttr els col acc))
+                   (Nil
+                     (let ((bc (flat_w cnd (- (- 80 col) 4))))
+                       (if (lt bc 0) (em_head hb t col acc)
+                       (let ((acc1 (em_flat cnd (em "(if " acc))))
+                         (match ctr
+                           ((Some ctxt)
+                            (em_if_deep
+                              thn
+                              ttr
+                              els
+                              col
+                              (em ctxt (Cons 32 (Cons 32 acc1)))))
+                           (None
+                             (let ((bt (flat_w thn (- bc 1))))
+                               (if (lt bt 0) (em_if_deep thn ttr els col acc1)
+                               (let ((acc2 (em_flat thn (Cons 32 acc1))))
+                                 (let
+                                   ((acc3
+                                      (match ttr
+                                        (None acc2)
+                                        ((Some txt)
+                                         (em txt (Cons 32 (Cons 32 acc2)))))))
+                                   (Cons
+                                     41
+                                     (em_chain
+                                       els
+                                       col
+                                       (em (sp col) (Cons 10 acc3))))))))))))))
                    (_ (em_head hb t col acc))))
                 (_ (em_head hb t col acc))))))
           (_ (em_head hb t col acc))))))
@@ -1471,7 +1476,7 @@
     ((Cons h t)
      (match h
        ((CAtom hb)
-        (if (bytes_eq hb "if") (em_if_try hb t col acc)
+        (if (bytes_eq hb "if") (em_if hb t col acc)
         (if (all_atoms items) (em_fill items col acc)
         (em_head hb t col acc))))
        (_  ; headless: align under the first
