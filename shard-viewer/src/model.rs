@@ -25,6 +25,34 @@ pub struct FnDef {
     pub src: String,
     /// Resolved callee fn indices within this project (deduped, excludes self).
     pub calls: Vec<usize>,
+    /// Reverse edges: fn indices that call this one (the "called by" set).
+    /// Populated after `calls`; project-wide in-degree is `callers.len()`.
+    pub callers: Vec<usize>,
+    /// True if this fn's name appears in a claim/fulfills/requirement form
+    /// anywhere in the project — i.e. it is reasoned ABOUT even if nothing
+    /// calls it. In a proof corpus most "uncalled" fns are proof subjects,
+    /// not dead code, so this keeps them out of the orphan set.
+    pub proof_refd: bool,
+}
+
+impl FnDef {
+    /// Source line count of the definition form — a cheap complexity proxy.
+    pub fn src_lines(&self) -> usize {
+        self.src.lines().count().max(1)
+    }
+    /// Total connectivity (callees + callers): how much of a hub this fn is.
+    pub fn degree(&self) -> usize {
+        self.calls.len() + self.callers.len()
+    }
+    /// A dead-code / cut candidate: a real fn (not a bodyless `sig`) that
+    /// nothing in the project calls, isn't reasoned about in a proof, and isn't
+    /// a program entry point. Heuristic — the model's call resolution is
+    /// short-name + same-file-first, so a cross-file caller resolving to a
+    /// homonym can hide a true caller. A "look here", not an authority (verify
+    /// with grep before cutting).
+    pub fn is_orphan(&self) -> bool {
+        self.callers.is_empty() && !self.proof_refd && !self.is_sig && self.name != "main"
+    }
 }
 
 /// One parsed `.shard` file.
@@ -53,6 +81,9 @@ pub struct Project {
     pub fns: Vec<FnDef>,
     /// fn short-name -> indices (homonyms across files are common in shard).
     pub by_name: HashMap<String, Vec<usize>>,
+    /// Short names referenced anywhere in a claim/fulfills/requirement form
+    /// (the proof "uses" set — a fn here is reasoned about, not dead).
+    pub proof_refs: BTreeSet<String>,
 }
 
 impl Project {
@@ -100,6 +131,10 @@ impl Project {
         project.build_name_index();
         project.resolve_calls();
         project.resolve_imports();
+        // Mark fns reasoned about in proofs so they don't read as dead code.
+        for f in &mut project.fns {
+            f.proof_refd = project.proof_refs.contains(&f.name);
+        }
         Ok(project)
     }
 
@@ -167,6 +202,12 @@ impl Project {
                 }
             }
             self.fns[i].calls = calls.into_iter().collect();
+        }
+        // Reverse edges: for each resolved call i -> t, record i as a caller of t.
+        for i in 0..self.fns.len() {
+            for t in self.fns[i].calls.clone() {
+                self.fns[t].callers.push(i);
+            }
         }
     }
 }
@@ -244,6 +285,9 @@ fn extract_file(project: &mut Project, file: &mut ShardFile, forms: Vec<(Sexpr, 
                 {
                     file.claims.push(name.to_string());
                 }
+                // Every symbol the proof form mentions is a "use": the fns it
+                // reasons about (goal terms) and cites (lemma/premise names).
+                collect_refs(&form, &BTreeSet::new(), &mut project.proof_refs);
             }
             _ => {}
         }
@@ -275,6 +319,8 @@ fn parse_fn_from(items: &[Sexpr], file: usize, is_sig: bool, src: String) -> Opt
         is_sig,
         src,
         calls: Vec::new(),
+        callers: Vec::new(),
+        proof_refd: false,
     })
 }
 
@@ -350,7 +396,11 @@ fn collect_shard_files(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()
                 continue;
             }
             collect_shard_files(&path, out)?;
-        } else if path.extension().and_then(|e| e.to_str()) == Some("shard") {
+        } else if path.extension().and_then(|e| e.to_str()) == Some("shard")
+            // Skip generated artifacts: .shard.low.shard (lowered) carries
+            // duplicate fn defs that pollute the call graph and orphan set.
+            && !name.ends_with(".low.shard")
+        {
             out.push(path);
         }
     }
@@ -359,7 +409,31 @@ fn collect_shard_files(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_rel;
+    use super::{normalize_rel, FnDef};
+
+    fn fnd(name: &str, callers: Vec<usize>, proof_refd: bool, is_sig: bool) -> FnDef {
+        FnDef {
+            name: name.into(),
+            params: vec![],
+            ret: String::new(),
+            body: vec![],
+            file: 0,
+            is_sig,
+            src: String::new(),
+            calls: vec![],
+            callers,
+            proof_refd,
+        }
+    }
+
+    #[test]
+    fn orphan_excludes_proven_sigs_and_entry() {
+        assert!(fnd("dead", vec![], false, false).is_orphan()); // nothing uses it
+        assert!(!fnd("hub", vec![1], false, false).is_orphan()); // has a caller
+        assert!(!fnd("lemma_subject", vec![], true, false).is_orphan()); // proven about
+        assert!(!fnd("iface", vec![], false, true).is_orphan()); // bodyless sig
+        assert!(!fnd("main", vec![], false, false).is_orphan()); // entry point
+    }
 
     #[test]
     fn normalize_resolves_dotdot() {

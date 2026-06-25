@@ -15,11 +15,18 @@ UI library.
 
 Two views, toggled in the toolbar:
 
-**Methods** — one file's call graph:
+**Methods** — one file's call graph, with a **triage overlay**:
 
 - Sidebar lists every `.shard` file with its fn count; click to switch.
 - The canvas draws the selected file's fns as boxes (name + `N args → Ret`)
   with intra-file call edges as curved arrows.
+- **Triage colors/sizes** encode the dead-code / complexity signal: a node is
+  **red** when it's an *orphan* — nothing in the project calls it, it isn't
+  reasoned about in any claim/fulfills/requirement, and it isn't an entry
+  point (a cut candidate); **warm/orange** scales with call degree (hubs stand
+  out from leaves); and node **height** grows with the fn's source-line count.
+  The detail panel shows `lines · calls · callers` and tags orphans. Resolution
+  is a short-name heuristic — verify a candidate with grep before cutting.
 
 **Systems** — the project-wide file import dependency graph (each file → the
 files it imports). Click a file node to drill into its Methods view.
@@ -46,7 +53,7 @@ it.
 | Bin | What it does |
 |---|---|
 | `shard-viewer [ROOT]` | The GUI (native window via `damascene-winit-wgpu`). Defaults to the most fn-dense file. |
-| `shard-graph [ROOT] [FN]` | Text dump of the extracted model: per-file counts, the most-called fns, or one fn's callers/callees. No GUI deps. |
+| `shard-graph [ROOT] [FN]` | Text dump of the extracted model: per-file counts, the most-called fns, a **cut-candidate (orphan) list**, or one fn's callers/callees. No GUI deps. |
 | `shard-render ROOT FILE_SUBSTRING [OUT.svg]` | Headless render of one file's graph to SVG + a lint report. No GPU/window. Use `systems` as the substring to render the import graph. |
 
 `ROOT` defaults to the current directory; run from a shard checkout.

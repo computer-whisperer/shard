@@ -57,18 +57,34 @@ fn main() -> std::io::Result<()> {
     }
 
     // Most-called fns — a cheap sanity check that resolution found real hubs.
-    let mut indeg = vec![0usize; project.fns.len()];
-    for f in &project.fns {
-        for &c in &f.calls {
-            indeg[c] += 1;
-        }
-    }
     let mut ranked: Vec<usize> = (0..project.fns.len()).collect();
-    ranked.sort_by_key(|&i| std::cmp::Reverse(indeg[i]));
+    ranked.sort_by_key(|&i| std::cmp::Reverse(project.fns[i].callers.len()));
     println!("\n== most-called fns ==");
     for &i in ranked.iter().take(15) {
         let f = &project.fns[i];
-        println!("  {:>4} callers  {}  ({})", indeg[i], f.name, project.files[f.file].rel);
+        println!("  {:>4} callers  {}  ({})", f.callers.len(), f.name, project.files[f.file].rel);
+    }
+
+    // Cut candidates: fns nothing in the project calls. Heuristic (short-name,
+    // same-file-first resolution), so verify with grep before deleting — but a
+    // useful first sweep for dead code. Biggest first (most code reclaimed).
+    let mut orphans: Vec<usize> = (0..project.fns.len())
+        .filter(|&i| project.fns[i].is_orphan())
+        .collect();
+    orphans.sort_by_key(|&i| std::cmp::Reverse(project.fns[i].src_lines()));
+    println!(
+        "\n== cut candidates: {} orphan fns (0 callers, non-sig, non-main) ==",
+        orphans.len()
+    );
+    println!("   (heuristic — verify with grep before cutting)");
+    for &i in orphans.iter().take(40) {
+        let f = &project.fns[i];
+        println!(
+            "  {:>4} lines  {}  ({})",
+            f.src_lines(),
+            f.name,
+            project.files[f.file].rel
+        );
     }
 
     Ok(())
@@ -102,11 +118,8 @@ fn dump_fn(project: &Project, name: &str) {
             let g = &project.fns[c];
             println!("    -> {}  ({})", g.name, project.files[g.file].rel);
         }
-        let callers: Vec<usize> = (0..project.fns.len())
-            .filter(|&j| project.fns[j].calls.contains(&i))
-            .collect();
         println!("  callers:");
-        for c in callers {
+        for &c in &f.callers {
             let g = &project.fns[c];
             println!("    <- {}  ({})", g.name, project.files[g.file].rel);
         }

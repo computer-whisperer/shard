@@ -87,10 +87,44 @@ fn main_pane(project: &Project, p: &ViewParams) -> El {
             Some(fi) => methods_canvas(project, fi, p),
         },
     };
-    column([toolbar(project, p), body])
+    let mut head = vec![toolbar(project, p)];
+    if p.mode == ViewMode::Methods && p.selected_file.is_some() {
+        head.push(triage_legend());
+    }
+    head.push(body);
+    column(head)
         .gap(tokens::SPACE_3)
         .width(Size::Fill(1.0))
         .height(Size::Fill(1.0))
+}
+
+/// A small colored chip + label, for the triage legend.
+fn legend_chip(color: Color, label: &str) -> El {
+    row([
+        column(Vec::<El>::new())
+            .width(Size::Fixed(14.0))
+            .height(Size::Fixed(14.0))
+            .radius(4.0)
+            .fill(color)
+            .stroke(tokens::BORDER),
+        text(label).muted().font_size(SUB_SIZE),
+    ])
+    .gap(tokens::SPACE_2)
+}
+
+/// The triage-overlay key (Methods view): how node color and size encode the
+/// dead-code / complexity signal.
+fn triage_legend() -> El {
+    row([
+        text("triage").mono().muted().font_size(SUB_SIZE),
+        legend_chip(tokens::CARD.mix(tokens::DESTRUCTIVE, 0.5), "orphan — cut candidate"),
+        legend_chip(tokens::CARD.mix(tokens::WARNING, 0.6), "hub — many callers"),
+        legend_chip(tokens::CARD, "leaf"),
+        legend_chip(tokens::MUTED, "sig"),
+        text("· taller = more source lines").muted().font_size(SUB_SIZE),
+    ])
+    .gap(tokens::SPACE_3)
+    .padding(tokens::SPACE_2)
 }
 
 fn toolbar(project: &Project, p: &ViewParams) -> El {
@@ -309,7 +343,9 @@ fn build_call_graph(project: &Project, file_idx: usize) -> (Graph, Vec<usize>) {
 }
 
 /// Intrinsic node size: width tracks the longer of the two label lines so the
-/// engine can pack columns tightly; height fits two text lines.
+/// engine can pack columns tightly. Height grows with the fn's source-line
+/// count (a cheap complexity proxy) so large fns read as visually massive —
+/// the "where's the weight" half of the triage overlay.
 fn node_size(project: &Project, fn_idx: usize) -> (f32, f32) {
     let f = &project.fns[fn_idx];
     let title_len = f.name.chars().count() + if f.is_sig { 6 } else { 0 };
@@ -318,7 +354,8 @@ fn node_size(project: &Project, fn_idx: usize) -> (f32, f32) {
         .count();
     let chars = title_len.max(sub_len) as f32;
     let w = (chars * 7.5 + 24.0).clamp(140.0, 300.0);
-    (w, 46.0)
+    let h = (40.0 + f.src_lines() as f32 * 1.4).clamp(46.0, 130.0);
+    (w, h)
 }
 
 fn node_box(project: &Project, fn_idx: usize, selected_fn: Option<usize>, w: f32, h: f32) -> El {
@@ -344,12 +381,19 @@ fn node_box(project: &Project, fn_idx: usize, selected_fn: Option<usize>, w: f32
     // cursor sweeps across the dense graph. Selection highlight (below) is the
     // only per-node visual state we want.
     .key(format!("fn:{fn_idx}"));
+    // Triage overlay (when not selected): orphans flag as cut candidates;
+    // everything else warms with connectivity so hubs stand out from leaves.
     if selected {
         b.fill(tokens::ACCENT).stroke(tokens::RING)
+    } else if f.is_orphan() {
+        b.fill(tokens::CARD.mix(tokens::DESTRUCTIVE, 0.5))
+            .stroke(tokens::DESTRUCTIVE)
     } else if f.is_sig {
         b.fill(tokens::MUTED).stroke(tokens::BORDER)
     } else {
-        b.fill(tokens::CARD).stroke(tokens::BORDER)
+        let warmth = (f.degree() as f32 / 14.0).min(1.0);
+        b.fill(tokens::CARD.mix(tokens::WARNING, warmth * 0.6))
+            .stroke(tokens::BORDER)
     }
 }
 
@@ -357,11 +401,22 @@ fn detail_panel(project: &Project, fn_idx: usize) -> El {
     let f = &project.fns[fn_idx];
     let sig: Vec<String> = f.params.iter().map(|(n, t)| format!("({n} {t})")).collect();
 
-    // Callees (within project) and callers.
+    // Callees (within project) and callers (reverse edges, precomputed).
     let callees = &f.calls;
-    let callers: Vec<usize> = (0..project.fns.len())
-        .filter(|&j| project.fns[j].calls.contains(&fn_idx))
-        .collect();
+    let callers = &f.callers;
+
+    // Triage metrics + a cut-candidate / proof-subject tag.
+    let mut metrics = format!(
+        "{} lines · {} calls · {} callers",
+        f.src_lines(),
+        f.calls.len(),
+        f.callers.len()
+    );
+    if f.is_orphan() {
+        metrics.push_str("  ·  ⚠ orphan — cut candidate");
+    } else if f.proof_refd && f.callers.is_empty() {
+        metrics.push_str("  ·  proof subject");
+    }
 
     let mut items = vec![
         row([h3(f.name.clone()), spacer()]).gap(tokens::SPACE_2),
@@ -372,6 +427,7 @@ fn detail_panel(project: &Project, fn_idx: usize) -> El {
         text(format!("in {}", project.files[f.file].rel))
             .caption()
             .muted(),
+        text(metrics).caption().muted(),
         separator(),
         text("Source").label(),
         scroll([code_block(if f.src.is_empty() {
@@ -389,7 +445,7 @@ fn detail_panel(project: &Project, fn_idx: usize) -> El {
     items.push(text(format!("Calls ({})", callees.len())).label());
     items.push(fn_link_list(project, callees));
     items.push(text(format!("Called by ({})", callers.len())).label());
-    items.push(fn_link_list(project, &callers));
+    items.push(fn_link_list(project, callers));
 
     column(items)
         .gap(tokens::SPACE_2)
