@@ -53,10 +53,25 @@
   (CTrail (List Int))  ; trailing comment (same line as the prior node)
   (CBlank))  ; one blank line
 
-(type CR (CROk CNode (List Int)) (CRErr))  ; one node + rest
-(type CIR (CIROk (List CNode) (List Int)) (CIRErr))  ; list items, rest after ')'
-(type CTR (CTROk (List CNode)) (CTRErr))  ; the whole top level
 (type SR (SROk (List Int) (List Int)) (SRErr))  ; raw string body + rest
+
+;; ---- the lexer's token stream ----------------------------------------------
+;; A flat token list is the bridge that lets the PARSER be a structural stack
+;; fold (provably terminating) instead of recursive descent. Whitespace other
+;; than newlines is dropped here; newlines survive as TNL so the parser can
+;; reconstruct blank lines and own-line-vs-trailing comment classification.
+(type Tok
+  (TLP)  ; (
+  (TRP)  ; )
+  (TQuoteT)  ; '
+  (TNL)  ; newline
+  (TAtomT (List Int))  ; atom — RAW bytes
+  (TStrT (List Int))  ; string — RAW inner bytes
+  (TCommentT (List Int)))  ; comment text (includes the leading ';')
+
+;; one open list under construction: its nodes so far (reversed) and the count
+;; of quote prefixes pending for the NEXT node appended to this frame.
+(type PFrame (PFrame (List CNode) Int))
 
 (fn rev_n ((xs (List CNode)) (acc (List CNode))) (List CNode)
   (measure (struct xs))
@@ -78,91 +93,380 @@
      (if (int_eq c 10) (Pair (rev_i acc Nil) cs)
      (cst_comment rest (Cons c acc))))))
 
+(fn cc_rest ((p (Pair (List Int) (List Int)))) (List Int)
+  (match p
+    ((Pair _ r) r)))
+
+(claim cst_comment_le
+  (goal ((cs (List Int)) (acc (List Int))) ()
+    (= (le (len (cc_rest (cst_comment cs acc))) (len cs)) True))
+  (induct cs
+    ((case Nil
+       (steps
+         ((unfold cst_comment lhs)
+          (reduce lhs)
+          (unfold cc_rest lhs)
+          (reduce lhs))
+         (by ord (list))))
+     (case Cons
+       (c rest)
+       (steps
+         ((unfold cst_comment lhs) (reduce lhs))
+         (case-on (int_eq c 10) Bool
+           ((case True
+              (steps
+                ((rewrite (hyp 0) lr lhs true ())
+                 (reduce lhs)
+                 (unfold cc_rest lhs)
+                 (reduce lhs))
+                (by ord (list))))
+            (case False
+              (steps
+                ((rewrite (hyp 0) lr lhs true ())
+                 (reduce lhs)
+                 (rewrite (lemma len_cons) lr lhs true ()))
+                (have
+                  (=
+                    (le
+                      (len (cc_rest (cst_comment rest (Cons c acc))))
+                      (len rest))
+                    True)
+                  (steps ((rewrite (hyp 1) lr lhs true ())) refl)
+                  (by farkas (list 1 1))))))))))))
+
+;; take_atom_go's remainder never grows the input (consumes up to a delimiter).
+(claim take_atom_go_le
+  (goal ((cs (List Int)) (acc (List Int))) ()
+    (= (le (len (cc_rest (take_atom_go cs acc))) (len cs)) True))
+  (induct cs
+    ((case Nil
+       (steps
+         ((unfold take_atom_go lhs)
+          (reduce lhs)
+          (unfold cc_rest lhs)
+          (reduce lhs))
+         (by ord (list))))
+     (case Cons
+       (c rest)
+       (steps
+         ((unfold take_atom_go lhs) (reduce lhs))
+         (case-on (is_delim c) Bool
+           ((case True
+              (steps
+                ((rewrite (hyp 0) lr lhs true ())
+                 (reduce lhs)
+                 (unfold cc_rest lhs)
+                 (reduce lhs))
+                (by ord (list))))
+            (case False
+              (steps
+                ((rewrite (hyp 0) lr lhs true ())
+                 (reduce lhs)
+                 (rewrite (lemma len_cons) lr lhs true ()))
+                (have
+                  (=
+                    (le
+                      (len (cc_rest (take_atom_go rest (Cons c acc))))
+                      (len rest))
+                    True)
+                  (steps ((rewrite (hyp 1) lr lhs true ())) refl)
+                  (by farkas (list 1 1))))))))))))
+
 ;; raw string body after the opening '"': copy verbatim (escape pairs kept
-;; whole) up to the closing unescaped '"'.
-(fn cst_str ((cs (List Int)) (acc (List Int))) SR
+;; whole) up to the closing unescaped '"'. `esc` = the previous byte was a '\',
+;; so this byte is kept literally (even '"' or '\'). Recurring only on the
+;; immediate tail (structural) — the esc flag replaces the old two-byte jump.
+(fn cst_str_go ((cs (List Int)) (acc (List Int)) (esc Bool)) SR
   (measure (struct cs))
   (match cs
-    (Nil SRErr)  ; unterminated string
+    (Nil SRErr)  ; unterminated string (or trailing '\')
     ((Cons c rest)
-     (if (int_eq c 34) (SROk (rev_i acc Nil) rest)
-     (if (int_eq c 92)  ; '\' — keep it AND the next byte
-       (match rest
-         (Nil SRErr)
-         ((Cons e rest2) (cst_str rest2 (Cons e (Cons c acc)))))
-       (cst_str rest (Cons c acc)))))))
+     (if esc (cst_str_go rest (Cons c acc) False)  ; escaped byte: keep literally
+     (if (int_eq c 34) (SROk (rev_i acc Nil) rest)  ; unescaped '"' closes
+     (if (int_eq c 92) (cst_str_go rest (Cons c acc) True)  ; '\' — keep, set esc
+     (cst_str_go rest (Cons c acc) False)))))))
 
-;; read ONE node; cs starts at its first byte (caller has handled layout).
-(fn cst_node ((cs (List Int))) CR
-  (match cs
-    (Nil CRErr)
-    ((Cons c rest)
-     (if (int_eq c 40)  ; '(' → list
-       (match (cst_items rest 0 Nil)
-         (CIRErr CRErr)
-         ((CIROk items rest2) (CROk (CList items) rest2)))
-     (if (int_eq c 34)  ; '"' → string
-       (match (cst_str rest Nil)
-         (SRErr CRErr)
-         ((SROk s rest2) (CROk (CStr s) rest2)))
-     (if (int_eq c 39)  ; '\'' → quote sugar
-       (match (cst_node (skip_ws rest))  ; (pathological ws after ' tolerated)
-         (CRErr CRErr)
-         ((CROk n rest2) (CROk (CQuote n) rest2)))
-     (if (int_eq c 41) CRErr  ; stray ')'
-     (if (int_eq c 59) CRErr  ; defensive: callers eat comments
-     (match (take_atom cs)
-       ((Pair atom rest2)
-        (match atom
-          (Nil CRErr)  ; defensive: delimiter byte
-          (_ (CROk (CAtom atom) rest2)))))))))))))
+(fn sr_rest ((s SR)) (List Int)
+  (match s
+    ((SROk _ r) r)
+    (SRErr Nil)))
 
-;; items of a list, up to the matching ')'. `nl` counts newlines since the
-;; last emitted node (any kind): 0 → still on its line (a ';' here is a
-;; TRAILING comment if anything precedes it), 1+ → fresh line (a second
-;; newline in a row is a BLANK line).
-(fn cst_items ((cs (List Int)) (nl Int) (acc (List CNode))) CIR
-  (match cs
-    (Nil CIRErr)  ; unterminated list
-    ((Cons c rest)
-     (if (int_eq c 41) (CIROk (rev_n acc Nil) rest)
-     (if (int_eq c 10)
-       (if (le 1 nl) (cst_items rest 1 (Cons CBlank acc))
-       (cst_items rest 1 acc))
-     (if (is_ws c) (cst_items rest nl acc)
-     (if (int_eq c 59)
-       (match (cst_comment cs Nil)
-         ((Pair txt rest2)
-          (if (if (int_eq nl 0) (cst_ne acc) False)
-            (cst_items rest2 0 (Cons (CTrail txt) acc))
-            (cst_items rest2 0 (Cons (CComment txt) acc)))))
-       (match (cst_node cs)
-         (CRErr CIRErr)
-         ((CROk n rest2) (cst_items rest2 0 (Cons n acc)))))))))))
+;; cst_str_go's remainder never grows the input.
+(claim cst_str_le
+  (goal ((cs (List Int)) (acc (List Int)) (esc Bool)) ()
+    (= (le (len (sr_rest (cst_str_go cs acc esc))) (len cs)) True))
+  (induct cs
+    ((case Nil
+       (steps
+         ((unfold cst_str_go lhs)
+          (reduce lhs)
+          (unfold sr_rest lhs)
+          (reduce lhs))
+         (by ord (list))))
+     (case Cons
+       (c rest)
+       (steps
+         ((unfold cst_str_go lhs) (reduce lhs))
+         (case-on esc Bool
+           ((case True
+              (steps
+                ((rewrite (hyp 0) lr lhs true ())
+                 (reduce lhs)
+                 (rewrite (lemma len_cons) lr lhs true ()))
+                (have
+                  (=
+                    (le
+                      (len (sr_rest (cst_str_go rest (Cons c acc) False)))
+                      (len rest))
+                    True)
+                  (steps ((rewrite (hyp ih) lr lhs true ())) refl)
+                  (by farkas (list 1 1)))))
+            (case False
+              (steps
+                ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                (case-on (int_eq c 34) Bool
+                  ((case True
+                     (steps
+                       ((rewrite (hyp 0) lr lhs true ())
+                        (reduce lhs)
+                        (unfold sr_rest lhs)
+                        (reduce lhs)
+                        (rewrite (lemma len_cons) lr lhs true ()))
+                       (by farkas (list 1))))
+                   (case False
+                     (steps
+                       ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                       (case-on (int_eq c 92) Bool
+                         ((case True
+                            (steps
+                              ((rewrite (hyp 0) lr lhs true ())
+                               (reduce lhs)
+                               (rewrite (lemma len_cons) lr lhs true ()))
+                              (have
+                                (=
+                                  (le
+                                    (len
+                                      (sr_rest
+                                        (cst_str_go rest (Cons c acc) True)))
+                                    (len rest))
+                                  True)
+                                (steps ((rewrite (hyp ih) lr lhs true ())) refl)
+                                (by farkas (list 1 1)))))
+                          (case False
+                            (steps
+                              ((rewrite (hyp 0) lr lhs true ())
+                               (reduce lhs)
+                               (rewrite (lemma len_cons) lr lhs true ()))
+                              (have
+                                (=
+                                  (le
+                                    (len
+                                      (sr_rest
+                                        (cst_str_go rest (Cons c acc) False)))
+                                    (len rest))
+                                  True)
+                                (steps ((rewrite (hyp ih) lr lhs true ())) refl)
+                                (by farkas (list 1 1))))))))))))))))))))
 
-;; the top level: same walk, ends at EOF; a bare ')' is an error.
-(fn cst_tops ((cs (List Int)) (nl Int) (acc (List CNode))) CTR
+;; ===========================================================================
+;; THE LEXER — bytes → tokens. Self-recursive on the byte remainder; the
+;; helpers it leans on (cst_str_go / cst_comment / take_atom_go) live in lower
+;; SCCs, so the (len cs) measure cites their *_le consumption lemmas. Non-newline
+;; whitespace is dropped; a comment token keeps its leading ';'.
+;; ===========================================================================
+(fn tok_cons ((t Tok) (o (Option (List Tok)))) (Option (List Tok))
+  (match o
+    (None None)
+    ((Some ts) (Some (Cons t ts)))))
+
+(fn lex_go ((cs (List Int))) (Option (List Tok))
+  (measure
+    (len cs)
+    ;; --- site 0: TLP, (lex_go rest), rest a subterm of cs ---
+    (steps
+      ((rewrite (premise 0) lr lhs true ())
+       (rewrite (lemma len_cons) lr lhs true ()))
+      (by farkas (list 1 0 0)))
+    (steps ((rewrite (lemma len_nonneg) lr lhs true ())) refl)
+    ;; --- site 1: TRP ---
+    (steps
+      ((rewrite (premise 0) lr lhs true ())
+       (rewrite (lemma len_cons) lr lhs true ()))
+      (by farkas (list 1 0 0 0)))
+    (steps ((rewrite (lemma len_nonneg) lr lhs true ())) refl)
+    ;; --- site 2: TQuoteT ---
+    (steps
+      ((rewrite (premise 0) lr lhs true ())
+       (rewrite (lemma len_cons) lr lhs true ()))
+      (by farkas (list 1 0 0 0 0)))
+    (steps ((rewrite (lemma len_nonneg) lr lhs true ())) refl)
+    ;; --- site 3: TNL ---
+    (steps
+      ((rewrite (premise 0) lr lhs true ())
+       (rewrite (lemma len_cons) lr lhs true ()))
+      (by farkas (list 1 0 0 0 0 0)))
+    (steps ((rewrite (lemma len_nonneg) lr lhs true ())) refl)
+    ;; --- site 4: whitespace skip ---
+    (steps
+      ((rewrite (premise 0) lr lhs true ())
+       (rewrite (lemma len_cons) lr lhs true ()))
+      (by farkas (list 1 0 0 0 0 0 0)))
+    (steps ((rewrite (lemma len_nonneg) lr lhs true ())) refl)
+    ;; --- site 5: string, (lex_go rest2), rest2 = cst_str_go's remainder ---
+    (steps
+      ((rewrite (premise 0) lr lhs true ())
+       (rewrite (lemma len_cons) lr lhs true ()))
+      (have (= (le (len rest2) (len rest)) True)
+        (have (= (sr_rest (cst_str_go rest Nil False)) rest2)
+          (steps
+            ((rewrite (premise 7) lr lhs true ())
+             (unfold sr_rest lhs)
+             (reduce lhs))
+            refl)
+          (steps
+            ((rewrite (premise 8) rl lhs true ())
+             (rewrite (lemma cst_str_le) lr lhs true ()))
+            refl))
+        (by farkas (list 1 0 0 0 0 0 0 0 0 1))))
+    (steps ((rewrite (lemma len_nonneg) lr lhs true ())) refl)
+    ;; --- site 6: comment, rest2 = cst_comment's remainder ---
+    (steps
+      ((rewrite (premise 0) lr lhs true ())
+       (rewrite (lemma len_cons) lr lhs true ()))
+      (have (= (le (len rest2) (len rest)) True)
+        (have (= (cc_rest (cst_comment rest Nil)) rest2)
+          (steps
+            ((rewrite (premise 8) lr lhs true ())
+             (unfold cc_rest lhs)
+             (reduce lhs))
+            refl)
+          (steps
+            ((rewrite (premise 9) rl lhs true ())
+             (rewrite (lemma cst_comment_le) lr lhs true ()))
+            refl))
+        (by farkas (list 1 0 0 0 0 0 0 0 0 0 1))))
+    (steps ((rewrite (lemma len_nonneg) lr lhs true ())) refl)
+    ;; --- site 7: atom, rest2 = take_atom_go's remainder ---
+    (steps
+      ((rewrite (premise 0) lr lhs true ())
+       (rewrite (lemma len_cons) lr lhs true ()))
+      (have (= (le (len rest2) (len rest)) True)
+        (have (= (cc_rest (take_atom_go rest (Cons c Nil))) rest2)
+          (steps
+            ((rewrite (premise 8) lr lhs true ())
+             (unfold cc_rest lhs)
+             (reduce lhs))
+            refl)
+          (steps
+            ((rewrite (premise 9) rl lhs true ())
+             (rewrite (lemma take_atom_go_le) lr lhs true ()))
+            refl))
+        (by farkas (list 1 0 0 0 0 0 0 0 0 0 1))))
+    (steps ((rewrite (lemma len_nonneg) lr lhs true ())) refl))
   (match cs
-    (Nil (CTROk (rev_n acc Nil)))
+    (Nil (Some Nil))
     ((Cons c rest)
-     (if (int_eq c 41) CTRErr
-     (if (int_eq c 10)
-       (if (le 1 nl) (cst_tops rest 1 (Cons CBlank acc)) (cst_tops rest 1 acc))
-     (if (is_ws c) (cst_tops rest nl acc)
-     (if (int_eq c 59)
-       (match (cst_comment cs Nil)
-         ((Pair txt rest2)
-          (if (if (int_eq nl 0) (cst_ne acc) False)
-            (cst_tops rest2 0 (Cons (CTrail txt) acc))
-            (cst_tops rest2 0 (Cons (CComment txt) acc)))))
-       (match (cst_node cs)
-         (CRErr CTRErr)
-         ((CROk n rest2) (cst_tops rest2 0 (Cons n acc)))))))))))
+     (if (int_eq c 40) (tok_cons TLP (lex_go rest))  ; (
+     (if (int_eq c 41) (tok_cons TRP (lex_go rest))  ; )
+     (if (int_eq c 39) (tok_cons TQuoteT (lex_go rest))  ; '
+     (if (int_eq c 10) (tok_cons TNL (lex_go rest))  ; newline
+     (if (is_ws c) (lex_go rest)  ; other whitespace: drop
+     (if (int_eq c 34)  ; " → read raw string body
+       (match (cst_str_go rest Nil False)
+         (SRErr None)
+         ((SROk s rest2) (tok_cons (TStrT s) (lex_go rest2))))
+     (if (int_eq c 59)  ; ; → comment to EOL (keep the leading ';')
+       (match (cst_comment rest Nil)
+         ((Pair txt rest2) (tok_cons (TCommentT (Cons 59 txt)) (lex_go rest2))))
+       (match (take_atom_go rest (Cons c Nil))  ; atom to next delimiter
+         ((Pair atom rest2) (tok_cons (TAtomT atom) (lex_go rest2))))))))))))))
+
+;; ===========================================================================
+;; THE PARSER — tokens → CST. A structural stack fold: one recursion on the
+;; token tail, a stack of open list frames. '(' pushes, ')' pops-and-wraps,
+;; everything else appends to the current frame. Termination is by (struct toks)
+;; — no recursive descent, no returned-remainder. `nl` (newlines since the last
+;; emitted node) drives blank-line and own-line-vs-trailing comment choice; the
+;; per-frame quote count wraps the next node in CQuote.
+;; ===========================================================================
+(fn wrap_q ((n Int) (node CNode)) CNode
+  (measure n (by farkas (list 1 0)) (by farkas (list 1 1)))
+  (if (le n 0) node (wrap_q (- n 1) (CQuote node))))
+
+(fn push_node ((node CNode) (stack (List PFrame))) (List PFrame)
+  (match stack
+    (Nil Nil)
+    ((Cons (PFrame nodes pend) rest)
+     (Cons (PFrame (Cons (wrap_q pend node) nodes) 0) rest))))
+
+(fn push_q ((stack (List PFrame))) (List PFrame)
+  (match stack
+    (Nil Nil)
+    ((Cons (PFrame nodes pend) rest) (Cons (PFrame nodes (+ pend 1)) rest))))
+
+(fn p_nl ((stack (List PFrame)) (nl Int)) (List PFrame)
+  (match stack
+    (Nil Nil)
+    ((Cons (PFrame nodes pend) rest)
+     (if (le 1 pend) stack  ; mid-quote: skip_ws semantics, no blank
+     (if (le 1 nl) (Cons (PFrame (Cons CBlank nodes) pend) rest)
+     stack)))))
+
+(fn p_comment ((txt (List Int)) (stack (List PFrame)) (nl Int)) (List PFrame)
+  (match stack
+    (Nil Nil)
+    ((Cons (PFrame nodes pend) rest)
+     (Cons
+       (PFrame
+         (Cons
+           (if (if (int_eq nl 0) (cst_ne nodes) False) (CTrail txt)
+           (CComment txt))
+           nodes)
+         pend)
+       rest))))
+
+;; pop the top frame into a CList appended to its parent; None on a stray ')'
+;; or a quote left dangling before ')'.
+(fn pop_frame ((stack (List PFrame))) (Option (List PFrame))
+  (match stack
+    (Nil None)
+    ((Cons (PFrame nodes pend) parents)
+     (if (le 1 pend) None
+     (match parents
+       (Nil None)  ; ')' with no open list
+       (_ (Some (push_node (CList (rev_n nodes Nil)) parents))))))))
+
+;; EOF: exactly one open frame and no dangling quote ⇒ the top-level nodes.
+(fn p_finish ((stack (List PFrame))) (Option (List CNode))
+  (match stack
+    (Nil None)
+    ((Cons (PFrame nodes pend) parents)
+     (match parents
+       (Nil (if (le 1 pend) None (Some (rev_n nodes Nil))))
+       (_ None)))))  ; unterminated list
+
+(fn parse_go ((toks (List Tok)) (stack (List PFrame)) (nl Int))
+  (Option (List CNode))
+  (measure (struct toks))
+  (match toks
+    (Nil (p_finish stack))
+    ((Cons t rest)
+     (match t
+       (TLP (parse_go rest (Cons (PFrame Nil 0) stack) 0))
+       (TRP
+         (match (pop_frame stack)
+           (None None)
+           ((Some s2) (parse_go rest s2 0))))
+       (TQuoteT (parse_go rest (push_q stack) nl))
+       (TNL (parse_go rest (p_nl stack nl) 1))
+       ((TAtomT a) (parse_go rest (push_node (CAtom a) stack) 0))
+       ((TStrT s) (parse_go rest (push_node (CStr s) stack) 0))
+       ((TCommentT txt) (parse_go rest (p_comment txt stack nl) 0))))))
 
 (fn cst_read ((src (List Int))) (Option (List CNode))
-  (match (cst_tops src 1 Nil)
-    (CTRErr None)
-    ((CTROk ns) (Some ns))))
+  (match (lex_go src)
+    (None None)
+    ((Some toks) (parse_go toks (Cons (PFrame Nil 0) Nil) 1))))
 
 ;; ===========================================================================
 ;; THE PRINTER — fit-or-break, 80 columns, 2-space indent, break-after-head.
@@ -268,22 +572,43 @@
   (goal ((ns (List CNode))) ()
     (= (le (len (drop_lead_blanks ns)) (len ns)) True))
   (induct ns
-    ((case Nil (steps ((unfold drop_lead_blanks lhs) (reduce lhs)) (by ord (list))))
-     (case Cons (h t)
-       (steps ((unfold drop_lead_blanks lhs) (reduce lhs))
+    ((case Nil
+       (steps ((unfold drop_lead_blanks lhs) (reduce lhs)) (by ord (list))))
+     (case Cons
+       (h t)
+       (steps
+         ((unfold drop_lead_blanks lhs) (reduce lhs))
          (case-on h CNode
-           ((case CAtom (a)
-              (steps ((rewrite (hyp 0) lr lhs true ()) (reduce lhs)) (by ord (list))))
-            (case CStr (s)
-              (steps ((rewrite (hyp 0) lr lhs true ()) (reduce lhs)) (by ord (list))))
-            (case CQuote (m)
-              (steps ((rewrite (hyp 0) lr lhs true ()) (reduce lhs)) (by ord (list))))
-            (case CList (items)
-              (steps ((rewrite (hyp 0) lr lhs true ()) (reduce lhs)) (by ord (list))))
-            (case CComment (c)
-              (steps ((rewrite (hyp 0) lr lhs true ()) (reduce lhs)) (by ord (list))))
-            (case CTrail (c)
-              (steps ((rewrite (hyp 0) lr lhs true ()) (reduce lhs)) (by ord (list))))
+           ((case CAtom
+              (a)
+              (steps
+                ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                (by ord (list))))
+            (case CStr
+              (s)
+              (steps
+                ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                (by ord (list))))
+            (case CQuote
+              (m)
+              (steps
+                ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                (by ord (list))))
+            (case CList
+              (items)
+              (steps
+                ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                (by ord (list))))
+            (case CComment
+              (c)
+              (steps
+                ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                (by ord (list))))
+            (case CTrail
+              (c)
+              (steps
+                ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                (by ord (list))))
             (case CBlank
               (steps
                 ((rewrite (hyp 0) lr lhs true ())
@@ -294,7 +619,8 @@
                   (by farkas (list 1 1))))))))))))
 
 (fn squash1 ((ns (List CNode))) (List CNode)  ; blank runs → one blank
-  (measure (len ns)
+  (measure
+    (len ns)
     ;; site 0: (squash1 (drop_lead_blanks t)) under ns=(Cons h t), h=CBlank.
     ;; decrease: len(dlb t) <= len t < 1 + len t = len ns.
     (steps
@@ -558,7 +884,8 @@
 
 ;; ---- the top level ----------------------------------------------------------
 (fn squash2 ((ns (List CNode))) (List CNode)  ; blank runs → at most two
-  (measure (len ns)
+  (measure
+    (len ns)
     ;; site 0: (squash2 (drop_lead_blanks t2)) under ns=(Cons h t), h=CBlank,
     ;; t=(Cons h2 t2), h2=CBlank. decrease: len(dlb t2) <= len t2 < 2 + len t2 = len ns.
     (steps
