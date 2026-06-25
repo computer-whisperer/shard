@@ -21,6 +21,8 @@
 ;;; is_body counts exactly board_h rows off the (board_w + 1)-wide split.
 
 (import "../../../kernel/stdlib.shard")  ; List / Option / Bool / Pair
+(import "../../../std/list")  ; len/take/drop + len_nonneg/len_cons/drop_shortens (measure)
+(use (:: std list *))
 
 ;; ---- design constants & glyphs --------------------------------------------
 ;; Declared HERE rather than in mod.req.shard only because mod.req.shard
@@ -34,21 +36,7 @@
 ;; clear = ANSI ESC[2J ESC[H = 27 91 50 74 27 91 72  (7 bytes)
 ;; row   = board_w cells + newline ; body = board_h rows ; frame = 7 + body
 
-;; ---- tiny list helpers (self-contained for inspection) --------------------
-(fn take ((n Int) (xs (List Int))) (List Int)
-  (measure (struct xs))
-  (if (le n 0) Nil
-  (match xs
-    (Nil Nil)
-    ((Cons h t) (Cons h (take (- n 1) t))))))
-
-(fn drop ((n Int) (xs (List Int))) (List Int)
-  (measure (struct xs))
-  (if (le n 0) xs
-  (match xs
-    (Nil Nil)
-    ((Cons h t) (drop (- n 1) t)))))
-
+;; ---- tiny list helpers (take/drop/len from std/list) ----------------------
 (fn nth ((i Int) (xs (List Int))) Int
   (measure (struct xs))
   (match xs
@@ -93,10 +81,54 @@
 ;; ---- row decomposition ----------------------------------------------------
 ;; split fixed-width (board_w + 1)-byte rows off the body (a malformed short
 ;; body yields a short final row, which the row checks above reject).
+;; Recurses on (drop K (Cons h t)) (= drop K bs in this arm) where K=board_w+1.
+;; The (Cons h t) match + binder-referencing recursion arg is what lets the
+;; measure (len bs) descend (Phase D): the arm equation is kept, so len bs >= 1,
+;; and drop_shortens gives the strict drop. The (le K 0) guard supplies K >= 1
+;; (board_w is opaque here; its >= 6 lives at the apex — for board_w > 0 the
+;; guard is never taken, so split_rows is unchanged). premises 0 = arm eq,
+;; 1 = guard.
 (fn split_rows ((bs (List Int))) (List (List Int))
+  (measure
+    (len bs)
+    (steps
+      ((rewrite (premise 0) lr lhs true ()))
+      (have (= (le 1 (+ (board_w) 1)) True) (by farkas (list 1 0 1))
+        (have (= (le 0 (len t)) True)
+          (rewrite-with (lemma len_nonneg) lr lhs ((inst xs t)) () refl)
+          (have (= (le 1 (len (Cons h t))) True)
+            (steps
+              ((rewrite (lemma len_cons) lr lhs true ()))
+              (by farkas (list 1 0 0 0 1)))
+            (have
+              (=
+                (le
+                  (+ (len (drop (+ (board_w) 1) (Cons h t))) 1)
+                  (len (Cons h t)))
+                True)
+              (rewrite-with
+                (lemma drop_shortens)
+                lr
+                lhs
+                ((inst n (+ (board_w) 1)) (inst xs (Cons h t)))
+                ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+                 (steps ((rewrite (premise 4) lr lhs true ())) refl))
+                refl)
+              (by farkas (list 1 0 0 0 0 0 1)))))))
+    (rewrite-with
+      (lemma len_nonneg)
+      lr
+      lhs
+      ((inst xs (drop (+ (board_w) 1) (Cons h t))))
+      ()
+      refl))
   (match bs
     (Nil Nil)
-    (_ (Cons (take (+ (board_w) 1) bs) (split_rows (drop (+ (board_w) 1) bs))))))
+    ((Cons h t)
+     (if (le (+ (board_w) 1) 0) Nil
+     (Cons
+       (take (+ (board_w) 1) bs)
+       (split_rows (drop (+ (board_w) 1) (Cons h t))))))))
 
 ;; the body must be EXACTLY: a wall row, board_h - 2 interior rows, a wall
 ;; row. The count is the recursion fuel; any other row count -> not an arena
