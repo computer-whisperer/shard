@@ -55,7 +55,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
     let mut root_el = view::app_root(&project, &params);
-    let viewport = Rect::new(0.0, 0.0, 1600.0, 1000.0);
+    let (vw, vh) = (
+        std::env::var("SHARD_RENDER_W").ok().and_then(|s| s.parse().ok()).unwrap_or(1600.0),
+        std::env::var("SHARD_RENDER_H").ok().and_then(|s| s.parse().ok()).unwrap_or(1000.0),
+    );
+    let viewport = Rect::new(0.0, 0.0, vw, vh);
     let bundle = render_bundle(&mut root_el, viewport);
 
     std::fs::write(&out, &bundle.svg)?;

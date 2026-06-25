@@ -30,7 +30,10 @@ pub struct ViewParams {
 /// Key of the pan/zoom viewport — also the target of `ViewportRequest`s.
 pub const CANVAS_KEY: &str = "canvas";
 
-const MIN_ZOOM: f32 = 0.15;
+// Low enough that even the densest file (driver.shard ~ 4000×6000 content)
+// fits the frame on `Fit`; FitContent never zooms below the true fit, so this
+// only governs how far the user may manually zoom out.
+const MIN_ZOOM: f32 = 0.04;
 const MAX_ZOOM: f32 = 3.0;
 
 const TITLE_SIZE: f32 = 13.0;
@@ -421,54 +424,59 @@ fn edges_asset(lay: &Layout) -> VectorAsset {
         if e.points.len() < 2 {
             continue;
         }
-        paths.push(edge_curve(&e.points));
+        // Mutual-recursion return arcs get a dimmer, distinct tint so they read
+        // as cycles rather than mystery lines crossing the flow.
+        let color = if e.back {
+            tokens::ACCENT
+        } else {
+            tokens::MUTED_FOREGROUND
+        };
+        paths.push(edge_curve(&e.points, e.back, color));
         let n = e.points.len();
         let (fx, fy) = e.points[n - 2];
         let (tx, ty) = e.points[n - 1];
-        paths.push(arrowhead(fx, fy, tx, ty));
+        paths.push(arrowhead(fx, fy, tx, ty, color));
     }
     VectorAsset::from_paths([0.0, 0.0, lay.width, lay.height], paths)
 }
 
-/// Build a stroked path along an edge's routed polyline. Forward edges (target
-/// to the right of the source) get a smooth spline with horizontal tangents at
-/// the ports and Catmull-Rom interiors through the dummy bends; backward /
-/// same-column edges fall back to straight segments.
-fn edge_curve(pts: &[(f32, f32)]) -> VectorPath {
+/// Build a stroked path along an edge's routed polyline as a smooth spline:
+/// forward edges leave the out-port and enter the in-port horizontally with
+/// Catmull-Rom interiors through the dummy bends; same-column return arcs
+/// (`back`) curve out the right side and back without horizontal port tangents.
+fn edge_curve(pts: &[(f32, f32)], back: bool, color: Color) -> VectorPath {
     let n = pts.len();
     let mut pb = PathBuilder::new().move_to(pts[0].0, pts[0].1);
-    let backward = pts[n - 1].0 <= pts[0].0 + 1.0;
-    if backward {
-        for &(x, y) in &pts[1..] {
-            pb = pb.line_to(x, y);
-        }
-    } else {
-        for i in 0..n - 1 {
-            let p0 = pts[i];
-            let p1 = pts[i + 1];
-            // Outgoing tangent at p0.
-            let m0 = if i == 0 {
-                ((p1.0 - p0.0).max(40.0) * 0.5, 0.0) // leave the out-port horizontally
-            } else {
-                let pm = pts[i - 1];
-                ((p1.0 - pm.0) / 6.0, (p1.1 - pm.1) / 6.0)
-            };
-            // Incoming tangent at p1.
-            let m1 = if i + 1 == n - 1 {
-                (-(p1.0 - p0.0).max(40.0) * 0.5, 0.0) // enter the in-port horizontally
-            } else {
-                let pp = pts[i + 2];
-                (-(pp.0 - p0.0) / 6.0, -(pp.1 - p0.1) / 6.0)
-            };
-            pb = pb.cubic_to(p0.0 + m0.0, p0.1 + m0.1, p1.0 + m1.0, p1.1 + m1.1, p1.0, p1.1);
-        }
+    for i in 0..n - 1 {
+        let p0 = pts[i];
+        let p1 = pts[i + 1];
+        // Outgoing tangent at p0: horizontal off the out-port for a forward
+        // edge; Catmull-Rom (neighbour-based) elsewhere.
+        let m0 = if i == 0 && !back {
+            ((p1.0 - p0.0).max(40.0) * 0.5, 0.0)
+        } else if i == 0 {
+            ((p1.0 - p0.0) / 3.0, (p1.1 - p0.1) / 3.0)
+        } else {
+            let pm = pts[i - 1];
+            ((p1.0 - pm.0) / 6.0, (p1.1 - pm.1) / 6.0)
+        };
+        // Incoming tangent at p1.
+        let m1 = if i + 1 == n - 1 && !back {
+            (-(p1.0 - p0.0).max(40.0) * 0.5, 0.0)
+        } else if i + 1 == n - 1 {
+            (-(p1.0 - p0.0) / 3.0, -(p1.1 - p0.1) / 3.0)
+        } else {
+            let pp = pts[i + 2];
+            (-(pp.0 - p0.0) / 6.0, -(pp.1 - p0.1) / 6.0)
+        };
+        pb = pb.cubic_to(p0.0 + m0.0, p0.1 + m0.1, p1.0 + m1.0, p1.1 + m1.1, p1.0, p1.1);
     }
-    pb.stroke_solid(tokens::MUTED_FOREGROUND, 1.5).build()
+    pb.stroke_solid(color, 1.5).build()
 }
 
 /// A small filled triangle at `(tip_x, tip_y)` pointing along the direction
 /// from `(from_x, from_y)` to the tip.
-fn arrowhead(from_x: f32, from_y: f32, tip_x: f32, tip_y: f32) -> VectorPath {
+fn arrowhead(from_x: f32, from_y: f32, tip_x: f32, tip_y: f32, color: Color) -> VectorPath {
     let (dx, dy) = (tip_x - from_x, tip_y - from_y);
     let len = (dx * dx + dy * dy).sqrt().max(0.001);
     let (ux, uy) = (dx / len, dy / len);
@@ -482,7 +490,7 @@ fn arrowhead(from_x: f32, from_y: f32, tip_x: f32, tip_y: f32) -> VectorPath {
         .line_to(bx + perp_x * HALF, by + perp_y * HALF)
         .line_to(bx - perp_x * HALF, by - perp_y * HALF)
         .close()
-        .fill_solid(tokens::MUTED_FOREGROUND)
+        .fill_solid(color)
         .build()
 }
 

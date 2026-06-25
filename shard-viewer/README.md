@@ -37,8 +37,9 @@ files it imports). Click a file node to drill into its Methods view.
   text, and clickable **Calls** / **Called by** lists. Clicking a callee/caller
   (including cross-file) navigates to it, switching the canvas as needed.
 
-Not yet: the import/"systems" graph and the intra-function control-flow view.
-The call-scan parser already feeds both.
+Not yet: the intra-function control-flow / s-expr dataflow (LabVIEW-style) view.
+The generic layout engine's per-node ports and `sub` nesting hook are built for
+it.
 
 ## Binaries
 

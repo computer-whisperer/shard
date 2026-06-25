@@ -9,11 +9,15 @@
 //! nesting hook).
 //!
 //! Pipeline (left-to-right layering):
-//!   1. SCC condensation + longest-path layer assignment (cycles share a column)
+//!   1. SCC condensation + longest-path layering, then an edge-length-minimizing
+//!      balancing pass (cycles share a column; sources/sinks slide toward their
+//!      neighbours so long edges don't spawn needless dummy chains)
 //!   2. dummy-node insertion for edges spanning more than one layer
 //!   3. barycenter crossing reduction (iterated up/down sweeps)
-//!   4. iterative coordinate assignment (pull nodes toward neighbours, no overlap)
-//!   5. port resolution + polyline edge routing through the dummy chain
+//!   4. priority coordinate assignment (pull nodes toward neighbours, no overlap;
+//!      dummies take a thin gap and win ties so long-edge chains run straight)
+//!   5. port resolution + polyline edge routing, then a bounds pass that re-homes
+//!      the whole drawing — edges included — into a positive box
 //!
 //! [ports]: GNode::n_in
 
@@ -104,6 +108,10 @@ pub struct PlacedNode {
 #[derive(Clone, Debug)]
 pub struct RoutedEdge {
     pub points: Vec<(f32, f32)>,
+    /// True for a same-column (mutual-recursion / SCC) edge, which loops back on
+    /// the right side rather than flowing left-to-right. Renderers style these
+    /// distinctly so a cycle reads as a cycle, not a stray right-angle.
+    pub back: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -117,6 +125,11 @@ pub struct Layout {
 }
 
 const DUMMY_H: f32 = 8.0;
+/// Vertical breathing room reserved beside a routing dummy. Far smaller than
+/// `node_gap`: dummies are 1px-thin waypoints, and long-edge-heavy call graphs
+/// spawn more dummies than real nodes, so charging each a full node gap is what
+/// inflated tall files to a ~10000px strip.
+const DUMMY_GAP: f32 = 5.0;
 const CROSSING_SWEEPS: usize = 8;
 const COORD_SWEEPS: usize = 6;
 
@@ -214,7 +227,7 @@ pub fn layout(graph: &Graph, cfg: &LayoutConfig) -> Layout {
         acc += layer_w[l] + cfg.layer_gap;
     }
 
-    let vy = assign_y(&layers, &up, &down, &vh, cfg);
+    let vy = assign_y(&layers, &up, &down, &vh, n, cfg);
 
     // ---- assemble placed nodes ----
     let mut placed = vec![PlacedNode::default(); n];
@@ -231,20 +244,62 @@ pub fn layout(graph: &Graph, cfg: &LayoutConfig) -> Layout {
     }
 
     // ---- route edges ----
-    let edges = routes
+    let mut edges: Vec<RoutedEdge> = routes
         .iter()
         .zip(&graph.edges)
         .map(|(r, e)| route_edge(r.flat, &r.chain, e, &placed, &layer_x, &vlayer, &vy, cfg))
         .collect();
 
-    let width = placed.iter().map(|p| p.x + p.w).fold(0.0, f32::max) + cfg.margin;
-    let height = placed.iter().map(|p| p.y + p.h).fold(0.0, f32::max) + cfg.margin;
+    // Bounds must cover the routed edges too, not just the node rects: flat
+    // (mutual-recursion) edges bow out past the right column, and long edges
+    // thread a half-gap left of their dummy column — both land outside the node
+    // box. If the bounds (and thus the edge-overlay viewBox) ignored them, those
+    // curves would be clipped at a fixed content coordinate (invariant to pan /
+    // zoom). Shift any negative extent back so the whole drawing sits at >= 0.
+    let mut min_x = placed.iter().map(|p| p.x).fold(f32::INFINITY, f32::min);
+    let mut min_y = placed.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
+    let mut max_x = placed.iter().map(|p| p.x + p.w).fold(0.0, f32::max);
+    let mut max_y = placed.iter().map(|p| p.y + p.h).fold(0.0, f32::max);
+    for e in &edges {
+        for &(x, y) in &e.points {
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+        }
+    }
+    // Re-home the drawing so its top-left padding is exactly `margin`.
+    let (sx, sy) = (cfg.margin - min_x, cfg.margin - min_y);
+    if sx != 0.0 || sy != 0.0 {
+        for p in &mut placed {
+            shift_placed(p, sx, sy);
+        }
+        for e in &mut edges {
+            for pt in &mut e.points {
+                pt.0 += sx;
+                pt.1 += sy;
+            }
+        }
+    }
+
+    let width = (max_x + sx + cfg.margin).max(cfg.margin * 2.0);
+    let height = (max_y + sy + cfg.margin).max(cfg.margin * 2.0);
 
     Layout {
         nodes: placed,
         edges,
-        width: width.max(cfg.margin * 2.0),
-        height: height.max(cfg.margin * 2.0),
+        width,
+        height,
+    }
+}
+
+/// Translate a placed node and its resolved ports by `(sx, sy)`.
+fn shift_placed(p: &mut PlacedNode, sx: f32, sy: f32) {
+    p.x += sx;
+    p.y += sy;
+    for q in p.in_ports.iter_mut().chain(p.out_ports.iter_mut()) {
+        q.0 += sx;
+        q.1 += sy;
     }
 }
 
@@ -277,11 +332,15 @@ fn route_edge(
         .unwrap_or(&(dst.x, dst.y + dst.h / 2.0));
 
     if flat {
-        // Same-column edge (mutual recursion): bow out into the right gap and
-        // come back to the target's left port.
-        let bow = start.0.max(end.0) + cfg.layer_gap * 0.4;
+        // Same-column edge (mutual recursion): both endpoints share a column, so
+        // a left-port target would force the line back *across* the node. Loop on
+        // the right instead — leave the source's right port, bow into the right
+        // gap, and arrow into the target's right edge. Reads as a return arc.
+        let dst_right = (dst.x + dst.w, dst.y + dst.h / 2.0);
+        let bow = start.0.max(dst_right.0) + cfg.layer_gap * 0.45;
         return RoutedEdge {
-            points: vec![start, (bow, start.1), (bow, end.1), end],
+            points: vec![start, (bow, start.1), (bow, dst_right.1), dst_right],
+            back: true,
         };
     }
 
@@ -291,7 +350,7 @@ fn route_edge(
         points.push((layer_x[vlayer[d]] - cfg.layer_gap * 0.5, vy[d] + DUMMY_H / 2.0));
     }
     points.push(end);
-    RoutedEdge { points }
+    RoutedEdge { points, back: false }
 }
 
 /// Reduce edge crossings by iterated barycenter ordering, keeping the best.
@@ -373,21 +432,37 @@ fn count_crossings(layers: &[Vec<usize>], down: &[Vec<usize>], pos: &[usize]) ->
 
 /// Iterative coordinate assignment: pull each vertex toward the mean centre of
 /// its neighbours while keeping layer order and a minimum gap (no overlap).
+/// `n` is the real-node count; vertices `>= n` are routing dummies, which get a
+/// much smaller vertical gap (see [`DUMMY_GAP`]) and a higher placement priority
+/// so long-edge chains run straight instead of bowing.
 fn assign_y(
     layers: &[Vec<usize>],
     up: &[Vec<usize>],
     down: &[Vec<usize>],
     vh: &[f32],
+    n: usize,
     cfg: &LayoutConfig,
 ) -> Vec<f32> {
     let nv: usize = layers.iter().map(|l| l.len()).sum();
     let mut vy = vec![0.0_f32; nv];
+    // Min gap *below* vertex v: thin for dummies (and below dummies), so a layer
+    // packed with routing waypoints stays compact.
+    let gap_below = |v: usize| if v >= n { DUMMY_GAP } else { cfg.node_gap };
+    // Placement priority: dummies win (straighten long edges), then by degree.
+    let prio = |v: usize| -> usize {
+        if v >= n {
+            usize::MAX
+        } else {
+            up[v].len() + down[v].len()
+        }
+    };
+
     // Initial top-down stack within each layer.
     for layer in layers {
         let mut y = cfg.margin;
         for &v in layer {
             vy[v] = y;
-            y += vh[v] + cfg.node_gap;
+            y += vh[v] + gap_below(v);
         }
     }
 
@@ -398,7 +473,7 @@ fn assign_y(
             (0..layers.len()).rev().collect()
         };
         for l in order {
-            place_layer_toward_neighbours(&layers[l], up, down, vh, &mut vy, cfg.node_gap);
+            place_layer_priority(&layers[l], up, down, vh, &mut vy, &gap_below, &prio);
         }
     }
 
@@ -413,32 +488,107 @@ fn assign_y(
     vy
 }
 
-fn place_layer_toward_neighbours(
+/// Place one layer's vertices at their neighbour barycentres using the priority
+/// method: process high-priority vertices first and let them push lower-priority
+/// neighbours aside (never higher ones), keeping left-to-right order and the
+/// per-vertex minimum gaps. Dummies have max priority, so long-edge chains end
+/// up vertically aligned (straight) rather than bowed by averaging.
+fn place_layer_priority(
     layer: &[usize],
     up: &[Vec<usize>],
     down: &[Vec<usize>],
     vh: &[f32],
     vy: &mut [f32],
-    gap: f32,
+    gap_below: &impl Fn(usize) -> f32,
+    prio: &impl Fn(usize) -> usize,
 ) {
-    let desired: Vec<f32> = layer
-        .iter()
-        .map(|&v| {
-            let centre = |u: usize| vy[u] + vh[u] / 2.0;
-            let ns: Vec<usize> = up[v].iter().chain(&down[v]).copied().collect();
-            if ns.is_empty() {
-                vy[v]
-            } else {
-                ns.iter().map(|&u| centre(u)).sum::<f32>() / ns.len() as f32 - vh[v] / 2.0
+    let desired = |v: usize, vy: &[f32]| -> f32 {
+        let ns = up[v].len() + down[v].len();
+        if ns == 0 {
+            return vy[v];
+        }
+        let sum: f32 = up[v]
+            .iter()
+            .chain(&down[v])
+            .map(|&u| vy[u] + vh[u] / 2.0)
+            .sum();
+        sum / ns as f32 - vh[v] / 2.0
+    };
+
+    // Minimum top-of-`layer[j]` given `layer[i]` sits at y (i < j): stack the
+    // intervening vertices with their gaps.
+    let min_top_after = |i: usize, yi: f32| -> Vec<f32> {
+        let mut tops = vec![0.0_f32; layer.len()];
+        let mut run = yi;
+        for j in (i + 1)..layer.len() {
+            run += vh[layer[j - 1]] + gap_below(layer[j - 1]);
+            tops[j] = run;
+        }
+        tops
+    };
+    // Symmetric: maximum top-of-`layer[j]` given `layer[i]` sits at y (j < i).
+    let max_top_before = |i: usize, yi: f32| -> Vec<f32> {
+        let mut tops = vec![0.0_f32; layer.len()];
+        let mut run = yi;
+        for j in (0..i).rev() {
+            run -= vh[layer[j]] + gap_below(layer[j]);
+            tops[j] = run;
+        }
+        tops
+    };
+
+    // Process indices in decreasing priority (stable on ties by position).
+    let mut order: Vec<usize> = (0..layer.len()).collect();
+    order.sort_by(|&a, &b| prio(layer[b]).cmp(&prio(layer[a])).then(a.cmp(&b)));
+
+    for &i in &order {
+        let v = layer[i];
+        let want = desired(v, vy);
+        let pv = prio(v);
+
+        // How far down we may push: bounded by the nearest higher-priority
+        // vertex below (we may shove equal/lower ones, never higher).
+        let mut lo = f32::NEG_INFINITY; // upper bound from above (higher-prio)
+        let mut hi = f32::INFINITY; // lower bound from below (higher-prio)
+        let downs = min_top_after(i, want);
+        for j in (i + 1)..layer.len() {
+            if prio(layer[j]) > pv {
+                hi = hi.min(vy[layer[j]] - (downs[j] - want));
+                break;
             }
-        })
-        .collect();
-    // Place in layer order, clamping each down so it can't overlap the previous.
-    let mut running = f32::NEG_INFINITY;
-    for (i, &v) in layer.iter().enumerate() {
-        let y = desired[i].max(running);
+        }
+        let ups = max_top_before(i, want);
+        for j in (0..i).rev() {
+            if prio(layer[j]) > pv {
+                lo = lo.max(vy[layer[j]] - (ups[j] - want));
+                break;
+            }
+        }
+
+        // When two higher-priority vertices crowd this one from both sides the
+        // band can invert (forced overlap); centre it in that case.
+        let y = if lo > hi { 0.5 * (lo + hi) } else { want.clamp(lo, hi) };
         vy[v] = y;
-        running = y + vh[v] + gap;
+
+        // Push lower/equal-priority neighbours out of the way to keep order+gap.
+        let mut run = y;
+        for j in (i + 1)..layer.len() {
+            run += vh[layer[j - 1]] + gap_below(layer[j - 1]);
+            if vy[layer[j]] < run {
+                vy[layer[j]] = run;
+            } else {
+                break;
+            }
+        }
+        let mut run = y;
+        for j in (0..i).rev() {
+            run -= vh[layer[j]] + gap_below(layer[j]);
+            if vy[layer[j]] > run {
+                vy[layer[j]] = run;
+            } else {
+                break;
+            }
+        }
     }
 }
 
@@ -451,6 +601,12 @@ fn node_pairs(edges: &[GEdge]) -> Vec<(usize, usize)> {
     pairs.sort_unstable();
     pairs.dedup();
     pairs
+}
+
+/// Test/diagnostic hook: the per-node layer assignment for a graph.
+#[doc(hidden)]
+pub fn debug_layers(graph: &Graph) -> Vec<usize> {
+    assign_layers(graph.nodes.len(), &node_pairs(&graph.edges))
 }
 
 /// Assign each node a column by longest path through the *condensed* graph:
@@ -489,7 +645,76 @@ fn assign_layers(n: usize, edges: &[(usize, usize)]) -> Vec<usize> {
         }
     }
 
+    balance_layers(ncomp, &cedges, &mut clayer);
+
     (0..n).map(|i| clayer[scc[i]]).collect()
+}
+
+/// Shorten edges by pulling each component toward its neighbours within its
+/// feasible band. Longest-path layering pins every source at layer 0 even when
+/// its only successor is many layers right, spawning a long chain of routing
+/// dummies (the sweeping-arc spaghetti). Sources have no predecessor, so we may
+/// slide them right to just-left-of their earliest successor; sinks slide left;
+/// interior components move to the median of their neighbours. Iterated to a
+/// fixpoint-ish, then layers are repacked so none are empty.
+fn balance_layers(ncomp: usize, cedges: &[(usize, usize)], clayer: &mut [usize]) {
+    if ncomp == 0 {
+        return;
+    }
+    let mut preds = vec![Vec::new(); ncomp];
+    let mut succs = vec![Vec::new(); ncomp];
+    for &(u, v) in cedges {
+        succs[u].push(v);
+        preds[v].push(u);
+    }
+
+    for _ in 0..8 {
+        let mut changed = false;
+        for c in 0..ncomp {
+            if preds[c].is_empty() && succs[c].is_empty() {
+                continue;
+            }
+            let low = preds[c].iter().map(|&p| clayer[p] + 1).max().unwrap_or(0);
+            let high = succs[c]
+                .iter()
+                .map(|&s| clayer[s].saturating_sub(1))
+                .min()
+                .unwrap_or(usize::MAX);
+            if low > high {
+                continue; // band pinned by neighbours — no slack
+            }
+            let target = if preds[c].is_empty() {
+                high // root: sit just left of the earliest successor
+            } else if succs[c].is_empty() {
+                low // leaf: sit just right of the latest predecessor
+            } else {
+                let mut ns: Vec<usize> = preds[c]
+                    .iter()
+                    .chain(&succs[c])
+                    .map(|&x| clayer[x])
+                    .collect();
+                ns.sort_unstable();
+                ns[ns.len() / 2].clamp(low, high) // median of neighbours
+            };
+            if target != clayer[c] {
+                clayer[c] = target;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    // Repack: drop now-empty layers so columns stay contiguous.
+    let mut used: Vec<usize> = clayer.to_vec();
+    used.sort_unstable();
+    used.dedup();
+    let remap: std::collections::HashMap<usize, usize> =
+        used.iter().enumerate().map(|(i, &l)| (l, i)).collect();
+    for l in clayer.iter_mut() {
+        *l = remap[l];
+    }
 }
 
 /// Tarjan's SCC algorithm: a component id per node. The condensation (one node
@@ -627,5 +852,50 @@ mod tests {
         let after = count_crossings(&layers, &down, &pos);
         assert_eq!(before, 1);
         assert_eq!(after, 0);
+    }
+
+    #[test]
+    fn routed_edges_stay_within_bounds() {
+        // Long forward edges (spanning many layers → dummies threaded a half-gap
+        // left of each column) and a same-column mutual-recursion pair (bowing
+        // out past the right column) both leave the node box. The reported
+        // bounds must still cover every routed point, or the edge overlay's
+        // viewBox clips those curves at a fixed content coordinate.
+        let nodes = vec![GNode::simple(120.0, 40.0); 6];
+        let edges = vec![
+            edge(0, 1),
+            edge(1, 2),
+            edge(2, 3),
+            edge(3, 4),
+            edge(0, 4), // long forward edge → dummies
+            edge(4, 5),
+            edge(5, 4), // 4<->5 mutual recursion → same column, flat bow
+        ];
+        let g = Graph { nodes, edges };
+        let l = layout(&g, &LayoutConfig::default());
+        for (ei, e) in l.edges.iter().enumerate() {
+            for &(x, y) in &e.points {
+                assert!(
+                    x >= -0.5 && x <= l.width + 0.5 && y >= -0.5 && y <= l.height + 0.5,
+                    "edge {ei} point ({x},{y}) outside bounds {}x{}",
+                    l.width,
+                    l.height
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn balancing_shortens_a_dangling_source() {
+        // A source whose only successor sits deep should slide right to just
+        // before it (edge length 1), not stay pinned at layer 0.
+        // 0->1->2->3->4 chain, plus 5->4: node 5's only edge targets layer 4,
+        // so balancing must place 5 at layer 3, not 0.
+        let layers = debug_layers(&Graph {
+            nodes: vec![GNode::simple(80.0, 30.0); 6],
+            edges: vec![edge(0, 1), edge(1, 2), edge(2, 3), edge(3, 4), edge(5, 4)],
+        });
+        assert_eq!(layers[4], 4);
+        assert_eq!(layers[5], 3, "dangling source should slide next to its callee");
     }
 }
