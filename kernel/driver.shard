@@ -2725,25 +2725,56 @@
 ;; fns — the monomorphic-only v1 limit); the kernel closure has no poly fns so
 ;; the report needs no exemption today.
 
-;; QNames of every measure-clause-bearing fn in one source.
-(fn mc_clause_qns_of ((path (List Int)) (mcls (List MCl)) (acc (List QName)))
+;; Resolve a clause's fn to its REAL qname — mirrors mc_check_fn: a same-module
+;; fn keys in the modpath trie; a REBOUND opaque sig fn lives at its interface
+;; qname (the trie misses) → unique short-name fallback. Without this the
+;; residual keys a rebound clause at the file-path qname, never matches the SCC's
+;; (rebound) qname, and falsely reports the fn as unannotated. Fail-safe: an
+;; unresolvable name keeps the file-path qname (at worst a spurious residual
+;; line, never a missed non-terminating fn).
+(fn mc_resolve_qn ((tr FnTrie) (fns (List FnDef)) (q QName) (name Symbol)) QName
+  (match (trie_lookup q tr)
+    ((Some (FnDef rq _ _ _)) rq)
+    (None
+      (match (mc_uniq_short fns name)
+        ((Some (FnDef rq _ _ _)) rq)
+        (None q)))))
+
+;; QNames of every measure-clause-bearing fn in one source (rebind-resolved).
+(fn mc_clause_qns_of
+  ((tr FnTrie)
+   (fns (List FnDef))
+   (path (List Int))
+   (mcls (List MCl))
+   (acc (List QName)))
   (List QName)
   (measure (struct mcls))
   (match mcls
     (Nil acc)
     ((Cons (MCl name _ _ _ _ _) rest)
-     (mc_clause_qns_of path rest (Cons (QName (module_path_of path) name) acc)))))
+     (mc_clause_qns_of
+       tr
+       fns
+       path
+       rest
+       (Cons (mc_resolve_qn tr fns (QName (module_path_of path) name) name) acc)))))
 
 ;; QNames of every measure-clause-bearing fn across the closure's sources.
-(fn mc_clause_qns ((srcs (List SrcEntry)) (acc (List QName))) (List QName)
+(fn mc_clause_qns
+  ((tr FnTrie) (fns (List FnDef)) (srcs (List SrcEntry)) (acc (List QName)))
+  (List QName)
   (measure (struct srcs))
   (match srcs
     (Nil acc)
     ((Cons (SrcEntry path _ src) rest)
      (match (read_all src)
-       (None (mc_clause_qns rest acc))
+       (None (mc_clause_qns tr fns rest acc))
        ((Some forms)
-        (mc_clause_qns rest (mc_clause_qns_of path (mc_of_forms forms Nil) acc)))))))
+        (mc_clause_qns
+          tr
+          fns
+          rest
+          (mc_clause_qns_of tr fns path (mc_of_forms forms Nil) acc)))))))
 
 (fn mc_qn_in ((q QName) (qs (List QName))) Bool
   (measure (struct qs))
@@ -2793,8 +2824,9 @@
   ((m Module) (sccs (List (List QName))) (srcs (List SrcEntry)))
   (List Int)
   (match m
-    ((Module _ _ _ tr _)
-     (let ((missing (mc_unannot_go tr sccs (mc_clause_qns srcs Nil) Nil)))
+    ((Module _ fns _ tr _)
+     (let
+       ((missing (mc_unannot_go tr sccs (mc_clause_qns tr fns srcs Nil) Nil)))
        (append_int
          (sr_nl)
          (append_int
@@ -4047,61 +4079,85 @@
   (List Int)
   (match mcl
     ((MCl name tparams pForm msr proofs body)
-     (let ((q (QName modpath name)))
-       (let ((key (qn_key_chars q)))
-         (match tparams
-           ((Cons _ _)
-            (mc_line
-              key
-              "SKIP (type-parametric fn — v1 measures are monomorphic)"))
-           (Nil
-             (match m
-               ((Module _ _ _ tr _)
-                (match (trie_lookup q tr)
-                  (None
-                    (mc_line
-                      key
-                      "SKIP (fn not found at the file's module path — rebind?)"))
-                  ((Some fd)
-                   (match (mc_pnames pForm)
-                     (None (mc_line key "SKIP (could not read param names)"))
-                     ((Some pnames)
-                      ;; the SCC is needed by the walk (to recognize sibling
-                      ;; calls) AND by opacity/citation, so compute it first.
-                      (let ((scc (mc_scc_of q sccs)))
-                        (if (mc_is_struct msr)
-                          (mc_check_struct key fd scc pnames msr mcls)
-                          (match
-                            (mc_walk
-                              (MCtx m modpath name (mc_fd_penv pnames fd) scc)
-                              Nil
-                              Nil
-                              Nil
-                              body
-                              (Pair 0 Nil))
-                            ((Pair _ rsites)
-                             (let ((sites (mc_rev_sites rsites Nil)))
-                               (match sites
-                                 (Nil
-                                   (mc_line key "OK (no recursive call sites)"))
-                                 (_
-                                   (mc_check_sites
-                                     m
-                                     (mc_opaque m scc)
-                                     (mc_theory_for_scc tr scc th)
-                                     gctx
-                                     name
-                                     key
-                                     pForm
-                                     pnames
-                                     msr
-                                     sites
-                                     (match proofs
-                                       (Nil (mc_auto_proofs sites))
-                                       (_ proofs))
-                                     0
-                                     mcls
-                                     autos)))))))))))))))))))))
+     (match m
+       ((Module _ fns _ tr _)
+        (let ((q (QName modpath name)))
+          ;; Resolve the fn the clause names. A same-module fn keys exactly in
+          ;; the modpath trie; a REBOUND opaque sig fn (std/list, std/bytes, …)
+          ;; lives at its INTERFACE qname, not the file's module path, so the
+          ;; trie misses — fall back to a unique short-name scan (mc_synth's
+          ;; rebind idiom). The fd's own qname (rq) is then the gate identity:
+          ;; trie/SCC keys + the display line all use rq, never the file path.
+          (match
+            (match (trie_lookup q tr)
+              ((Some fd) (Some fd))
+              (None (mc_uniq_short fns name)))
+            (None
+              (mc_line
+                (qn_key_chars q)
+                "SKIP (fn not found at the file's module path — rebind?)"))
+            ((Some fd)
+             (match fd
+               ((FnDef rq _ _ _)
+                (let ((key (qn_key_chars rq)))
+                  (match (mc_pnames pForm)
+                    (None (mc_line key "SKIP (could not read param names)"))
+                    ((Some pnames)
+                     ;; SCC keyed by the fn's REAL qname (rq), so a rebound fn's
+                     ;; SCC is found. Needed by the walk (sibling recognition)
+                     ;; AND opacity/citation, so compute it first.
+                     (let ((scc (mc_scc_of rq sccs)))
+                       (if (mc_is_struct msr)
+                         ;; Structural descent is a SYNTACTIC strict-subterm
+                         ;; check, independent of the element TYPE — so it
+                         ;; verifies POLYMORPHIC fns (std/list append/len/…)
+                         ;; exactly as monomorphic ones. Only NUMERIC measures
+                         ;; (farkas needs typed goals) stay monomorphic-only.
+                         (mc_check_struct key fd scc pnames msr mcls)
+                         (match tparams
+                           ((Cons _ _)
+                            (mc_line
+                              key
+                              "SKIP (type-parametric fn — v1 numeric measures are monomorphic)"))
+                           (Nil
+                             (match
+                               (mc_walk
+                                 (MCtx
+                                   m
+                                   modpath
+                                   name
+                                   (mc_fd_penv pnames fd)
+                                   scc)
+                                 Nil
+                                 Nil
+                                 Nil
+                                 body
+                                 (Pair 0 Nil))
+                               ((Pair _ rsites)
+                                (let ((sites (mc_rev_sites rsites Nil)))
+                                  (match sites
+                                    (Nil
+                                      (mc_line
+                                        key
+                                        "OK (no recursive call sites)"))
+                                    (_
+                                      (mc_check_sites
+                                        m
+                                        (mc_opaque m scc)
+                                        (mc_theory_for_scc tr scc th)
+                                        gctx
+                                        name
+                                        key
+                                        pForm
+                                        pnames
+                                        msr
+                                        sites
+                                        (match proofs
+                                          (Nil (mc_auto_proofs sites))
+                                          (_ proofs))
+                                        0
+                                        mcls
+                                        autos)))))))))))))))))))))))
 
 (fn mc_rev_sites ((xs (List MSiteS)) (acc (List MSiteS))) (List MSiteS)
   (measure (struct xs))
