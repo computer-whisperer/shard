@@ -188,6 +188,36 @@ fn make_handler(prog_args: Vec<String>) -> impl FnMut(&str, &[ast::Expr]) -> Res
                 Ok(contents) => Ok(ctor("Pair", vec![ctor("Some", vec![byte_list(&contents)]), w1])),
                 Err(_) => Ok(ctor("Pair", vec![ctor("None", vec![]), w1])),
             },
+            // directory entries as (Some (List (Pair is_dir name))), or None if
+            // the path is not a readable directory. Each entry is a
+            // (Pair Bool (List Int)): the is-directory flag plus the entry's
+            // basename bytes (binary-safe, raw on unix — same convention as
+            // read_file paths). Sorted by name so the listing is deterministic
+            // (the OS yields directory entries in arbitrary order).
+            "read_dir" => match std::fs::read_dir(path_of_bytes(&args[0])) {
+                Ok(rd) => {
+                    use std::os::unix::ffi::OsStrExt as _;
+                    let mut ents: Vec<(bool, Vec<u8>)> = rd
+                        .flatten()
+                        .map(|e| {
+                            let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                            (is_dir, e.file_name().as_bytes().to_vec())
+                        })
+                        .collect();
+                    ents.sort_by(|a, b| a.1.cmp(&b.1));
+                    let items: Vec<ast::Expr> = ents
+                        .into_iter()
+                        .map(|(is_dir, name)| {
+                            ctor(
+                                "Pair",
+                                vec![ctor(if is_dir { "True" } else { "False" }, vec![]), byte_list(&name)],
+                            )
+                        })
+                        .collect();
+                    Ok(ctor("Pair", vec![ctor("Some", vec![list_of(items)]), w1]))
+                }
+                Err(_) => Ok(ctor("Pair", vec![ctor("None", vec![]), w1])),
+            },
             "write" => {
                 let out = list_bytes(&args[0]);
                 let mut stdout = std::io::stdout();
@@ -243,7 +273,7 @@ fn make_handler(prog_args: Vec<String>) -> impl FnMut(&str, &[ast::Expr]) -> Res
                 std::process::exit(code);
             }
             other => Err(format!(
-                "unknown extern `{}` (eval handler: get_args/read_file/write/write_file/write_line/emit/read_key/exit)",
+                "unknown extern `{}` (eval handler: get_args/read_file/read_dir/write/write_file/write_line/emit/read_key/exit)",
                 other
             )),
         }

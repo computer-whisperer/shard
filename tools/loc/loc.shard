@@ -1,0 +1,349 @@
+;;; loc — a categorizing line counter for a shard source tree.
+;;;
+;;; Walks a directory (via the read_dir extern), reads every shard source file,
+;;; and tallies lines into shard-specific complexity categories rather than a
+;;; flat LOC number:
+;;;
+;;;   impl      implementation — fn bodies, type/import/use/sig/extern/bin decls
+;;;   measure   inline (measure …) totality OBLIGATIONS
+;;;   proof     (claim …) proof blocks
+;;;   reqproof  (fulfills …) requirement-fulfillment proofs
+;;;   req       (requirement …)/(axiom …) interface declarations
+;;;   sidecar   whole .auto.shard files — machine-generated totality proof fill
+;;;   lowered   whole .shard.low.shard files — compiler output
+;;;   comment   ; comment lines
+;;;   blank     blank lines
+;;;
+;;; Classification leans on the canonical (shardfmt) layout: every top-level form
+;;; starts with '(' at column 0 and its body is indented, so a line's category is
+;;; decided by the column-0 head atom of the form it belongs to — no full parse.
+;;;
+;;; Run:  eval run tools/loc/loc.shard [ROOT]      (ROOT defaults to ".")
+
+(type World (World Int))
+
+(extern get_args ((w World)) (Pair (List (List Int)) World))
+(extern read_file ((path (List Int)) (w World)) (Pair (Option (List Int)) World))
+(extern read_dir ((path (List Int)) (w World))
+  (Pair (Option (List (Pair Bool (List Int)))) World))
+(extern write_line ((bytes (List Int)) (w World)) World)
+(extern exit ((code Int) (w World)) World)
+
+;; ---------------------------------------------------------------------------
+;; byte / list helpers
+;; ---------------------------------------------------------------------------
+
+(fn llen ((xs (List Int))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons _ t) (+ 1 (llen t)))))
+
+(fn append ((a (List Int)) (b (List Int))) (List Int)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (append t b)))))
+
+(fn rev_go ((xs (List Int)) (acc (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil acc)
+    ((Cons h t) (rev_go t (Cons h acc)))))
+
+(fn rev ((xs (List Int))) (List Int) (rev_go xs Nil))
+
+;; byte-list equality
+(fn beq ((a (List Int)) (b (List Int))) Bool
+  (measure (struct a))
+  (match a
+    (Nil (match b (Nil True) (_ False)))
+    ((Cons x xs)
+     (match b
+       (Nil False)
+       ((Cons y ys) (if (int_eq x y) (beq xs ys) False))))))
+
+;; does `s` start with the prefix `p`?
+(fn starts_with ((s (List Int)) (p (List Int))) Bool
+  (measure (struct p))
+  (match p
+    (Nil True)
+    ((Cons ph pt)
+     (match s
+       (Nil False)
+       ((Cons sh st) (if (int_eq sh ph) (starts_with st pt) False))))))
+
+;; drop the first n bytes (n may exceed the length → Nil)
+(fn drop_n ((n Int) (xs (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons h t) (if (le n 0) (Cons h t) (drop_n (- n 1) t)))))
+
+;; does `s` end with the suffix `suf`?
+(fn ends_with ((s (List Int)) (suf (List Int))) Bool
+  (beq (drop_n (- (llen s) (llen suf)) s) suf))
+
+(fn is_space ((b Int)) Bool
+  (if (int_eq b 32) True (if (int_eq b 9) True False)))
+
+;; strip leading spaces/tabs
+(fn trim_left ((xs (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons h t) (if (is_space h) (trim_left t) (Cons h t)))))
+
+;; the head atom of a column-0 form: bytes after '(' up to the first delimiter
+;; (space, tab, '(' , ')').
+(fn atom_go ((xs (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons h t)
+     (if (is_space h) Nil
+     (if (int_eq h 40) Nil
+     (if (int_eq h 41) Nil
+     (Cons h (atom_go t))))))))
+
+(fn head_atom ((line (List Int))) (List Int)
+  (match line
+    (Nil Nil)
+    ((Cons _ rest) (atom_go rest))))  ; rest = after the leading '('
+
+;; ---------------------------------------------------------------------------
+;; categories (small int codes so we avoid a bespoke type + giant matches)
+;;   0 impl  1 measure  2 proof  3 reqproof  4 req  5 comment  6 blank
+;;   7 sidecar  8 lowered
+;; ---------------------------------------------------------------------------
+
+(fn head_code ((atom (List Int))) Int
+  (if (beq atom "claim") 2
+  (if (beq atom "fulfills") 3
+  (if (beq atom "requirement") 4
+  (if (beq atom "axiom") 4
+  (if (beq atom "proof-for") 7
+  0))))))  ; fn/type/import/use/sig/extern/bin/mod/default → impl
+
+;; classify one line of a per-form (mixed) file, given the running category of
+;; the enclosing top-level form. Returns (Pair thisLineCode newRunningCat).
+(fn classify_line ((line (List Int)) (cur Int)) (Pair Int Int)
+  (match (trim_left line)
+    (Nil (Pair 6 cur))                       ; blank / whitespace-only
+    ((Cons th tt)
+     (if (int_eq th 59) (Pair 5 cur)         ; ';' → comment
+     (match line
+       (Nil (Pair 6 cur))
+       ((Cons lh _)
+        (if (int_eq lh 40)                   ; '(' at column 0 → new top form
+          (let ((code (head_code (head_atom line)))) (Pair code code))
+          (if (starts_with (Cons th tt) "(measure")
+            (Pair 1 cur)                      ; inline measure obligation
+            (Pair cur cur)))))))))            ; body line → inherit form's cat
+
+;; classify one line of a whole-file-category file (sidecar/lowered): blanks and
+;; comments still split out; everything else takes the forced code.
+(fn classify_line_forced ((line (List Int)) (force Int)) Int
+  (match (trim_left line)
+    (Nil 6)
+    ((Cons th _) (if (int_eq th 59) 5 force))))
+
+;; ---------------------------------------------------------------------------
+;; counts: one Int per category (codes 0..8)
+;; ---------------------------------------------------------------------------
+
+(type Counts (Counts Int Int Int Int Int Int Int Int Int))
+
+(fn zero_counts () Counts (Counts 0 0 0 0 0 0 0 0 0))
+
+(fn bump ((c Counts) (code Int)) Counts
+  (match c
+    ((Counts a0 a1 a2 a3 a4 a5 a6 a7 a8)
+     (if (int_eq code 0) (Counts (+ a0 1) a1 a2 a3 a4 a5 a6 a7 a8)
+     (if (int_eq code 1) (Counts a0 (+ a1 1) a2 a3 a4 a5 a6 a7 a8)
+     (if (int_eq code 2) (Counts a0 a1 (+ a2 1) a3 a4 a5 a6 a7 a8)
+     (if (int_eq code 3) (Counts a0 a1 a2 (+ a3 1) a4 a5 a6 a7 a8)
+     (if (int_eq code 4) (Counts a0 a1 a2 a3 (+ a4 1) a5 a6 a7 a8)
+     (if (int_eq code 5) (Counts a0 a1 a2 a3 a4 (+ a5 1) a6 a7 a8)
+     (if (int_eq code 6) (Counts a0 a1 a2 a3 a4 a5 (+ a6 1) a7 a8)
+     (if (int_eq code 7) (Counts a0 a1 a2 a3 a4 a5 a6 (+ a7 1) a8)
+     (Counts a0 a1 a2 a3 a4 a5 a6 a7 (+ a8 1)))))))))))))
+
+(fn add_counts ((x Counts) (y Counts)) Counts
+  (match x
+    ((Counts a0 a1 a2 a3 a4 a5 a6 a7 a8)
+     (match y
+       ((Counts b0 b1 b2 b3 b4 b5 b6 b7 b8)
+        (Counts (+ a0 b0) (+ a1 b1) (+ a2 b2) (+ a3 b3) (+ a4 b4)
+                (+ a5 b5) (+ a6 b6) (+ a7 b7) (+ a8 b8)))))))
+
+;; ---------------------------------------------------------------------------
+;; split bytes into lines (on '\n' = 10) and classify them
+;; ---------------------------------------------------------------------------
+
+;; split, accumulating the current line in reverse; flush on newline.
+(fn split_lines_go ((bs (List Int)) (cur (List Int)) (acc (List (List Int))))
+  (List (List Int))
+  (measure (struct bs))
+  (match bs
+    (Nil (rev (Cons (rev cur) acc)))
+    ((Cons h t)
+     (if (int_eq h 10)
+       (split_lines_go t Nil (Cons (rev cur) acc))
+       (split_lines_go t (Cons h cur) acc)))))
+
+(fn split_lines ((bs (List Int))) (List (List Int))
+  (split_lines_go bs Nil Nil))
+
+;; mixed (per-form) file: thread the running category through the lines.
+(fn count_mixed ((lines (List (List Int))) (cur Int) (c Counts)) Counts
+  (measure (struct lines))
+  (match lines
+    (Nil c)
+    ((Cons line rest)
+     (match (classify_line line cur)
+       ((Pair code cur2) (count_mixed rest cur2 (bump c code)))))))
+
+;; whole-file-category file: every line takes `force` (save blanks/comments).
+(fn count_forced ((lines (List (List Int))) (force Int) (c Counts)) Counts
+  (measure (struct lines))
+  (match lines
+    (Nil c)
+    ((Cons line rest)
+     (count_forced rest force (bump c (classify_line_forced line force))))))
+
+;; a trailing newline yields a final empty line; don't count it.
+(fn drop_trailing_empty ((lines (List (List Int)))) (List (List Int))
+  (measure (struct lines))
+  (match lines
+    (Nil Nil)
+    ((Cons line rest)
+     (match rest
+       (Nil (match line (Nil Nil) (_ (Cons line Nil))))
+       (_ (Cons line (drop_trailing_empty rest)))))))
+
+(fn classify_bytes ((bytes (List Int)) (force Int)) Counts
+  (let ((lines (drop_trailing_empty (split_lines bytes))))
+    (if (le 0 force)
+      (count_forced lines force (zero_counts))
+      (count_mixed lines 0 (zero_counts)))))
+
+;; which whole-file force code (if any) applies to this path?
+;;   .auto.shard → 7 sidecar ; else -1 (mixed, use the per-form state machine)
+(fn file_force ((path (List Int))) Int
+  (if (ends_with path ".auto.shard") 7 (- 0 1)))
+
+;; is this a file we scan? Any .shard EXCEPT the .shard.low.shard lowered
+;; artifacts — those are multi-hundred-KB compiler output (not human
+;; complexity) and scanning them dominates the run, so they are excluded from
+;; the tally entirely.
+(fn is_shard ((path (List Int))) Bool
+  (if (ends_with path ".low.shard") False (ends_with path ".shard")))
+
+;; ---------------------------------------------------------------------------
+;; the directory walk (filesystem-driven: no structural measure)
+;; ---------------------------------------------------------------------------
+
+(type Acc (Acc Counts Int))  ; running counts + scanned-file count
+
+(fn join ((parent (List Int)) (name (List Int))) (List Int)
+  (append parent (Cons 47 name)))  ; parent "/" name
+
+;; skip dot-dirs (.git, .claude) — not source.
+(fn is_dotted ((name (List Int))) Bool
+  (match name (Nil False) ((Cons h _) (int_eq h 46))))
+
+(fn scan_file ((path (List Int)) (a Acc) (w World)) (Pair Acc World)
+  (match (read_file path w)
+    ((Pair mo w1)
+     (match mo
+       (None (Pair a w1))
+       ((Some bytes)
+        (match a
+          ((Acc c n)
+           (Pair (Acc (add_counts c (classify_bytes bytes (file_force path)))
+                      (+ n 1))
+                 w1))))))))
+
+(fn scan_entries ((parent (List Int)) (es (List (Pair Bool (List Int))))
+                  (a Acc) (w World)) (Pair Acc World)
+  (match es
+    (Nil (Pair a w))
+    ((Cons e rest)
+     (match e
+       ((Pair is_dir name)
+        (let ((child (join parent name)))
+          (match is_dir
+            (True
+             (if (is_dotted name)
+               (scan_entries parent rest a w)
+               (match (scan_dir child a w)
+                 ((Pair a1 w1) (scan_entries parent rest a1 w1)))))
+            (False
+             (if (is_shard name)
+               (match (scan_file child a w)
+                 ((Pair a1 w1) (scan_entries parent rest a1 w1)))
+               (scan_entries parent rest a w))))))))))
+
+(fn scan_dir ((path (List Int)) (a Acc) (w World)) (Pair Acc World)
+  (match (read_dir path w)
+    ((Pair mo w1)
+     (match mo
+       (None (Pair a w1))
+       ((Some es) (scan_entries path es a w1))))))
+
+;; ---------------------------------------------------------------------------
+;; report formatting
+;; ---------------------------------------------------------------------------
+
+(fn int_to_bytes_go ((n Int) (acc (List Int))) (List Int)
+  (if (le n 0) acc
+    (int_to_bytes_go (ediv n 10) (Cons (+ 48 (mod n 10)) acc))))
+
+(fn int_to_bytes ((n Int)) (List Int)
+  (if (le n 0) (Cons 48 Nil) (int_to_bytes_go n Nil)))
+
+;; right-pad a label to width w with spaces
+(fn spaces ((n Int)) (List Int)
+  (if (le n 0) Nil (Cons 32 (spaces (- n 1)))))
+
+(fn pad ((s (List Int)) (w Int)) (List Int)
+  (append s (spaces (- w (llen s)))))
+
+(fn row ((label (List Int)) (n Int) (w World)) World
+  (write_line (append (pad label 12) (int_to_bytes n)) w))
+
+;; rows print top-to-bottom: each row's World feeds the next (impl executes
+;; first). Nesting row-calls instead would reduce inside-out and print reversed.
+(fn report ((c Counts) (files Int) (w World)) World
+  (match c
+    ((Counts impl meas proof reqp req comm blank side low)
+     (let ((w0 (row "impl" impl w)))
+     (let ((w1 (row "measure" meas w0)))
+     (let ((w2 (row "proof" proof w1)))
+     (let ((w3 (row "reqproof" reqp w2)))
+     (let ((w4 (row "req" req w3)))
+     (let ((w5 (row "sidecar" side w4)))
+     (let ((w6 (row "comment" comm w5)))
+     (let ((w7 (row "blank" blank w6)))
+     (let ((w8 (row "FILES" files w7)))
+       (row "TOTAL"
+         (+ impl (+ meas (+ proof (+ reqp (+ req (+ comm (+ blank (+ side low))))))))
+         w8)))))))))))))
+
+;; ---------------------------------------------------------------------------
+;; main
+;; ---------------------------------------------------------------------------
+
+(fn root_of ((args (List (List Int)))) (List Int)
+  (match args
+    (Nil (Cons 46 Nil))          ; "." default
+    ((Cons a0 _) a0)))
+
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Pair args w1)
+     (match (scan_dir (root_of args) (Acc (zero_counts) 0) w1)
+       ((Pair a w2)
+        (match a
+          ((Acc c files) (exit 0 (report c files w2)))))))))

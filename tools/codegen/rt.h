@@ -32,6 +32,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <dirent.h>
+#include <sys/stat.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
 
@@ -367,6 +369,45 @@ static value_t rt_read_file(value_t path, value_t w) {
   value_t acc = rt_nil_;
   for (long k = sz; k > 0; k--) acc = rt_cons(rt_tag_int(buf[k-1]), acc);
   free(buf);
+  return rt_pair(rt_some(acc), w);
+}
+/* directory entries as (Some (List (Pair is_dir name))), or None if the path
+ * is not a readable directory. Mirrors eval.rs read_dir: each entry is a
+ * (Pair Bool (List Int)) of the is-directory flag and the basename bytes,
+ * sorted by name so the listing is deterministic. */
+static int rt_name_cmp(const void *a, const void *b) {
+  return strcmp(*(const char *const *)a, *(const char *const *)b);
+}
+static value_t rt_read_dir(value_t path, value_t w) {
+  char *p = rt_cstr(path, 0);
+  DIR *d = opendir(p);
+  if (!d) { free(p); return rt_pair(rt_none_, w); }
+  /* collect names, then sort for a deterministic listing */
+  size_t cap = 16, n = 0;
+  char **names = malloc(cap * sizeof(char *));
+  struct dirent *de;
+  while ((de = readdir(d))) {
+    if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
+    if (n == cap) { cap *= 2; names = realloc(names, cap * sizeof(char *)); }
+    names[n++] = strdup(de->d_name);
+  }
+  closedir(d);
+  qsort(names, n, sizeof(char *), rt_name_cmp);
+  value_t acc = rt_nil_;
+  for (size_t k = n; k > 0; k--) {
+    const char *nm = names[k - 1];
+    /* is_dir via stat on the joined path */
+    size_t pl = strlen(p), nl = strlen(nm);
+    char *full = malloc(pl + nl + 2);
+    memcpy(full, p, pl); full[pl] = '/'; memcpy(full + pl + 1, nm, nl); full[pl + nl + 1] = 0;
+    struct stat st;
+    int is_dir = stat(full, &st) == 0 && S_ISDIR(st.st_mode);
+    free(full);
+    value_t namelist = rt_str_list(nm);
+    acc = rt_cons(rt_pair(rt_bool(is_dir), namelist), acc);
+    free((void *)nm);
+  }
+  free(names); free(p);
   return rt_pair(rt_some(acc), w);
 }
 static value_t rt_write(value_t s, value_t w) {
