@@ -4507,13 +4507,153 @@
     (Nil acc)
     ((Cons h t) (mc_rev_mcls t (Cons h acc)))))
 
-;; MEASURE OBLIGATIONS in the normal check pass — one informative COLedger block
-;; (report-only: bumps no pass/fail counts). Empty when the closure declares no
-;; measure clauses, so measure-free reports are byte-unchanged. `th` is the run's
-;; accumulated theory (granted axioms + this run's passed claims); mc_check_fn
-;; filters it per fn under the stratified-citation rule. Skipped under focus mode
-;; (totality is a whole-closure property, and focus admits unproven claims that
-;; must not seed measure citations).
+;; ---- failure detection for the enforcement flip (issue #1, Phase D) ---------
+;; needle is a contiguous prefix of hay.
+(fn mc_prefix ((needle (List Int)) (hay (List Int))) Bool
+  (measure (struct needle))
+  (match needle
+    (Nil True)
+    ((Cons n nt)
+     (match hay
+       (Nil False)
+       ((Cons h ht) (if (int_eq n h) (mc_prefix nt ht) False))))))
+
+;; needle occurs as a contiguous substring of hay.
+(fn mc_has_sub ((hay (List Int)) (needle (List Int))) Bool
+  (measure (struct hay))
+  (if (mc_prefix needle hay) True
+  (match hay
+    (Nil False)
+    ((Cons _ ht) (mc_has_sub ht needle)))))
+
+;; True iff some MEASURED line in the rendered block reports a FAIL verdict.
+;; Every failure line is "MEASURED <key> FAIL…"; keys are space-free QName
+;; renderings, so the token " FAIL" appears ONLY as a verdict word (never inside
+;; a key), making this an exact discriminator against OK / SKIP lines.
+(fn mc_any_fail ((lines (List Int))) Bool (mc_has_sub lines " FAIL"))
+
+;; ---- proof-ADMISSION accounting (issue #1, Phase D) ------------------------
+;; The totality gate refuses non-terminating fns that are ADMITTED TO THE PROOF
+;; SYSTEM — used as a component of a proof — not every recursive fn that merely
+;; exists in a loaded file. A fn is admitted when a proof REACHES it through the
+;; call graph: an `unfold`/`reduce`/`compute` step uses its defining equation, so
+;; its non-totality would be unsound. A closure with no proofs admits nothing —
+;; the interpreter (ev) and the offline solver (prove) are programs, not proof
+;; components, and stay un-gated though genuinely partial.
+;;
+;; The seed is every fn NAMED ANYWHERE in a proof-bearing form (claim / fulfills
+;; / requirement / returns / axiom) — goal AND proof body, so a fn pulled into
+;; reduction by a `have` / `case-on` / `unfold` operand (not just the goal's
+;; fns) is caught. Symbols naming no fn drop out (mc_uniq_short). This is an
+;; OVER-approximation by construction: a spurious seed only over-restricts (asks
+;; a measure of a fn no proof truly reduced) — it can never admit a non-total fn.
+;; The advisory admit report (mc_residual_report) is unchanged: it still lists
+;; ALL unannotated recursive SCCs; only the ENFORCED gate is admission-scoped.
+
+;; every SSym appearing anywhere in an SExpr.
+(fn mc_form_syms ((s SExpr) (acc (List Symbol))) (List Symbol)
+  (measure (struct s))
+  (match s
+    ((SSym x) (Cons x acc))
+    ((SList items) (mc_form_syms_list items acc))
+    (_ acc)))
+
+(fn mc_form_syms_list ((items (List SExpr)) (acc (List Symbol))) (List Symbol)
+  (measure (struct items))
+  (match items
+    (Nil acc)
+    ((Cons it rest) (mc_form_syms_list rest (mc_form_syms it acc)))))
+
+;; symbols → fn QNames (a symbol naming no fn drops out), accumulated.
+(fn mc_syms_to_fns
+  ((fns (List FnDef)) (syms (List Symbol)) (acc (List QName)))
+  (List QName)
+  (measure (struct syms))
+  (match syms
+    (Nil acc)
+    ((Cons s rest)
+     (match (mc_uniq_short fns s)
+       ((Some (FnDef rq _ _ _)) (mc_syms_to_fns fns rest (Cons rq acc)))
+       (None (mc_syms_to_fns fns rest acc))))))
+
+;; a proof-bearing top-level form: its named fns seed the admission walk.
+(fn mc_is_proof_form ((h Symbol)) Bool
+  (if (sym_eq h (quote claim)) True
+  (if (sym_eq h (quote fulfills)) True
+  (if (sym_eq h (quote requirement)) True
+  (if (sym_eq h (quote returns)) True
+  (if (sym_eq h (quote axiom)) True
+  False))))))
+
+(fn mc_seed_of_forms ((forms (List SExpr)) (acc (List Symbol))) (List Symbol)
+  (measure (struct forms))
+  (match forms
+    (Nil acc)
+    ((Cons f rest)
+     (match (form_head f)
+       (None (mc_seed_of_forms rest acc))
+       ((Some h)
+        (if (mc_is_proof_form h)
+          (mc_seed_of_forms rest (mc_form_syms f acc))
+          (mc_seed_of_forms rest acc)))))))
+
+;; the closure's proof-admission seed: fn QNames named in any proof form.
+(fn mc_proof_seed
+  ((fns (List FnDef)) (srcs (List SrcEntry)) (acc (List QName)))
+  (List QName)
+  (measure (struct srcs))
+  (match srcs
+    (Nil acc)
+    ((Cons (SrcEntry _ _ src) rest)
+     (match (read_all src)
+       (None (mc_proof_seed fns rest acc))
+       ((Some forms)
+        (mc_proof_seed
+          fns rest (mc_syms_to_fns fns (mc_seed_of_forms forms Nil) acc)))))))
+
+;; keep only the unannotated members a proof actually reaches (admitted). For a
+;; mutual SCC, reaching one member reaches the rest through the cycle, so each
+;; member is tested against the seed independently with no loss.
+(fn mc_filter_admitted
+  ((tr FnTrie) (seed (List QName)) (qs (List QName)) (acc (List QName)))
+  (List QName)
+  (measure (struct qs))
+  (match qs
+    (Nil acc)
+    ((Cons q rest)
+     (if (mc_reaches tr seed Nil (Cons q Nil))
+       (mc_filter_admitted tr seed rest (Cons q acc))
+       (mc_filter_admitted tr seed rest acc)))))
+
+;; one hard COFail per recursive-SCC member that declares no (measure …) clause.
+(fn mc_residual_cofails ((qs (List QName))) (List ClaimOutcome)
+  (measure (struct qs))
+  (match qs
+    (Nil Nil)
+    ((Cons q rest)
+     (Cons
+       (COFail
+         (sym_of_chars (qn_key_chars q))
+         "non-terminating: recursive SCC declares no (measure …) clause"
+         Nil)
+       (mc_residual_cofails rest)))))
+
+;; MEASURE OBLIGATIONS in the normal check pass (issue #1, Phase D — ENFORCED).
+;; Emits the informative COLedger block as before, but the totality gate is now
+;; a HARD gate: a closure FAILS the run when either
+;;   (a) a recursive SCC that is ADMITTED TO THE PROOF SYSTEM declares no
+;;       (measure …) clause — mc_unannot_go ∩ mc_filter_admitted, or
+;;   (b) a declared clause is not verified              — a FAIL in the block.
+;; "Admitted" = reached by a proof through the call graph (see mc_proof_seed);
+;; a recursive fn no proof reduces (the interpreter, the offline solver) is a
+;; program, not a proof component, and does not move the gate. Each (a) is one
+;; COFail naming the unannotated fn; (b) is one COFail pointing at the block. A
+;; measure-free / fully-verified closure is byte-unchanged (no COFail, same
+;; COLedger), so only genuinely non-terminating proof components move.
+;; `th` is the run's accumulated theory (granted axioms + this run's passed
+;; claims); mc_check_fn filters it per fn under the stratified-citation rule.
+;; Skipped under focus mode (totality is a whole-closure property, and focus
+;; admits unproven claims that must not seed measure citations).
 (fn mc_outcome
   ((m Module)
    (srcs (List SrcEntry))
@@ -4522,15 +4662,37 @@
    (focus Symbol))
   (List ClaimOutcome)
   (if (sym_eq focus (quote __all__))
-    (match (mc_files m (ad_sccs m) th srcs sidecars)
-      (Nil Nil)
-      (lines
-        (Cons
-          (COLedger
-            (append_int
-              "---- measure obligations ----"
-              (append_int (sr_nl) lines)))
-          Nil)))
+    (match m
+      ((Module _ fns _ tr _)
+       (let ((sccs (ad_sccs m)))
+         (let ((lines (mc_files m sccs th srcs sidecars)))
+           (let
+             ((missing
+                (mc_filter_admitted
+                  tr
+                  (mc_proof_seed fns srcs Nil)
+                  (mc_unannot_go tr sccs (mc_clause_qns tr fns srcs Nil) Nil)
+                  Nil)))
+             (oc_concat
+               (match lines
+                 (Nil Nil)
+                 (_
+                   (Cons
+                     (COLedger
+                       (append_int
+                         "---- measure obligations ----"
+                         (append_int (sr_nl) lines)))
+                     Nil)))
+               (oc_concat
+                 (mc_residual_cofails missing)
+                 (if (mc_any_fail lines)
+                   (Cons
+                     (COFail
+                       (quote __totality__)
+                       "a declared (measure …) obligation was not verified — see the measure obligations block above"
+                       Nil)
+                     Nil)
+                   Nil))))))))
     Nil))
 
 ;; ===========================================================================

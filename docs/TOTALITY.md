@@ -80,7 +80,7 @@ against an in-gate recognizer is TCB size + verdict drift, not silent unsoundnes
 Every recursive fn carries an **explicit declaration** of its descent. The gate
 verifies the declaration; it never discovers one. Two clause forms:
 
-- **Structural** — `(measure (struct ARG))` **[BUILT, report-only]**. The author
+- **Structural** — `(measure (struct ARG))` **[BUILT]**. The author
   names the descending parameter. The checker verifies, per recursive call, that
   the argument in the **callee's** declared position is a **strict subterm**
   rooted at the **caller's** declared parameter — a small, decidable, *stable*
@@ -115,7 +115,7 @@ one-token `(struct …)`. Chosen over a frozen in-gate recognizer to keep discov
 out of the TCB; chosen over full measure+proof everywhere to avoid proof cost on
 trivial list recursion.)
 
-## 5. The single-fn numeric gate [BUILT, report-only]
+## 5. The single-fn numeric gate [BUILT]
 
 The driver is `mc_check_fn` (kernel/driver.shard). For a fn `F` with
 `(measure E proofs…)` (parsed into `MCl`):
@@ -147,7 +147,7 @@ Report-only today: a failure prints a `MEASURED … FAIL` line. The pins
 `examples/measure_clause.shard` carry intentional cheats (false decrease / false
 nonneg) that must FAIL.
 
-## 6. The mutual extension [BUILT, report-only]
+## 6. The mutual extension [BUILT]
 
 The single-fn gate already operates at SCC granularity (steps 3–4 drop and
 filter the *whole* SCC). The mutual extension closes the last gap — calls to
@@ -273,39 +273,78 @@ near-zero cost:
   the goal so it parses scope-independently. Bounded, localized to obligation
   construction — a known change, not a landmine.
 
-## 8. Enforcement predicate (Phase D) [DECIDED]
+## 8. Enforcement predicate (Phase D) [BUILT]
 
-The flip from report-only to refusal. The predicate is:
+The flip from report-only to refusal has **landed**. The predicate gates
+*admission to the proof system*, not mere existence in a loaded file:
 
-> **Every recursive SCC carries an explicit, verified measure clause.**
+> **Every recursive SCC _admitted to the proof system_ carries an explicit,
+> verified measure clause.**
+
+A recursive SCC is **admitted** when a proof in the closure *reaches* one of its
+members through the call graph — an `unfold` / `reduce` / `compute` / `simp` step
+then uses that fn's defining equation `f x = body[x]` as a rewrite, so if `f` is
+not a total function that equation is unjustified and the proof is unsound. A
+recursive fn that **no proof reaches** is a *program*, not a proof component: it
+may remain non-total without moving the gate. This is what keeps the
+Turing-complete meta-interpreter (`kernel/eval.shard`'s `ev`) and the offline
+solver (`tools/prove`) — neither of which any proof reduces — out of the gate,
+while still refusing a non-total fn the moment a proof leans on it.
 
 There is **no auto-recognition exemption** — `admit` stays advisory/offline
 (§3). A structural SCC satisfies the predicate via its verified `(struct …)`
 declarations (§4); a non-structural SCC via its numeric `(measure E proofs…)`.
-Both clause forms are now **built** (numeric §5/§6, structural §4), so the
-verifier prerequisites are met. Migration progress:
 
-- **Structural migration DONE** — `tools/structgen` (§11) generated and
-  committed `(measure (struct ARG))` on every monomorphic auto-structural fn
-  across the kernel + the prove/shardfmt tools (~510 clauses: driver 125,
-  reader 87, prove 50, checker 46, types 38, term 32, trace 24, reduce 18,
-  module 16, shardfmt 15, desugar 13, proof_reader 11, loader 10, lia 9, eval 8,
-  others ≤2). Verified: the gate sweep reports 0 MEASURED FAIL over all kernel
-  targets; the corpus's claim tallies are byte-identical to the pre-migration
-  baseline (the only FAILs are the intentional cheat pins).
-- **Remaining for the flip** — the *non-structural* recursive SCCs: the
-  genuinely-partial reducer loops (`run_expr`/`compute_expr_loop`/
-  `simp_expr_loop`/`simp_iota_expr`/`ceval`, need fuel — §10), `tc_walk`
-  (acyclicity), the AdUnresolved AST SCCs that lack a single descending track
-  (need a numeric common-AST-size measure, as `render_term` already does), and
-  **polymorphic** recursive fns (the gate's monomorphic-only v1 limit, §5 —
-  structgen and the gate both skip `(fn (f T) …)`; these need either polymorphic
-  measures or monomorphization).
+`mc_outcome` (kernel/driver.shard) now emits a **hard `COFail`** — failing the
+run (exit 1) — when a checked closure either
 
-The **flip** itself (`mc_outcome`'s `COLedger` becomes a `COFail` when any
-recursive SCC is unannotated or any clause FAILs) lands once the remaining SCCs
-carry verified clauses — migration gates the flip. A `check admit <closure>`
-scan enumerates the residual AdFlag / AdUnresolved set.
+- **(a)** has an **admitted** recursive SCC declaring **no** `(measure …)`
+  clause. `mc_unannot_go` cross-references `ad_sccs` against the clause-bearing
+  QName set; `mc_filter_admitted` then keeps only the members a proof reaches
+  (one COFail per such fn). An unannotated SCC no proof reaches passes silently.
+- **(b)** has a declared clause that **does not verify** — a `FAIL` verdict in
+  the measure-obligations block (one `__totality__` COFail pointing at it). This
+  is **unconditional**: a declared `(measure …)` *is* a totality claim, so a
+  false one is refused whether or not the fn is admitted.
+
+The **admission seed** is `mc_proof_seed`: every fn named *anywhere* in a
+proof-bearing form (`claim` / `fulfills` / `requirement` / `returns` / `axiom`)
+— goal **and** proof body, so a fn pulled in by a `have` / `case-on` / `unfold`
+operand is caught, not just the goal's fns — then `mc_reaches` closes it over the
+call graph. This is an over-approximation by construction: a spurious seed only
+over-restricts (asks a measure of a fn no proof truly reduced) — it can never let
+a non-total fn slip in. The *advisory* admit report (`mc_residual_report`) is
+unchanged and still lists **all** unannotated recursive SCCs.
+
+A measure-free or fully-verified closure is byte-unchanged (no COFail, same
+informative `COLedger`), so only genuinely non-terminating *proof components*
+move. The gate is skipped under focus mode (totality is a whole-closure
+property, and focus admits unproven claims that must not seed measure citations).
+
+Migration:
+
+- **Structural migration** — `tools/structgen` (§11) committed
+  `(measure (struct ARG))` on every monomorphic auto-structural fn across the
+  kernel + the prove/shardfmt tools (~510 clauses).
+- **Polymorphic fns** — the gate now verifies polymorphic `(struct …)` clauses
+  directly (the subterm check is syntactic, type-agnostic; only *numeric*
+  measures stay monomorphic), so `std/list`/`std/map`/`std/mem`'s poly recursive
+  fns carry verified structural clauses — no monomorphization needed.
+- **Non-structural SCCs** — the reducer fuel loops, `tc_walk`, `check_sequent`'s
+  own SCC, the AST-size mutual SCCs (`render_term`), and the corpus's three
+  count-up / drop / parse-suffix fns (`render_row`, `split_rows`, `parse_tail`)
+  all carry verified numeric clauses.
+
+Verification: the corpus is clean except the intentional cheat pins
+(`measure_clause`, `mutual_toy`, `struct_clause`), which correctly **COFail**
+under enforcement; `kernel/eval.shard` and `tools/prove` are clean (they admit
+nothing). One **known gap**: `tools/shardfmt`'s own `(compute both)` scenario
+proofs reduce its CST parser (`cst_node`/`cst_items`/`cst_tops`), pretty-printer
+(`sp`/`em_*`) and equality helpers (`sexpr_eq`/`bytes_eq`) — so those SCCs *are*
+admitted, and they carry no measure yet (the mutual / numeric tail the
+single-fn `structgen` pass did not cover). The gate now correctly refuses them;
+proving them total is tracked future work (§10). A `check admit <closure>` scan
+still enumerates the advisory AdFlag / AdUnresolved set (out of TCB).
 
 ## 9. The trusted core (what to audit)
 
@@ -330,10 +369,10 @@ scan enumerates the residual AdFlag / AdUnresolved set.
 
 ## 10. Open / deferred work
 
-- **[BUILT, report-only]** `(struct …)` form + verifier (§4); the mutual
-  extension (§6). **[DECIDED, not built]** the corpus-wide migration (annotate
-  every recursive SCC with a `(struct …)` or numeric clause) and the enforcement
-  flip (§8) — migration gates the flip.
+- **[BUILT]** `(struct …)` form + verifier (§4); the mutual extension (§6); the
+  corpus-wide migration (every recursive SCC carries a `(struct …)` or numeric
+  clause); and the enforcement flip (§8) — `mc_outcome` now refuses a closure
+  with an unannotated or unverified recursive SCC.
 - **[FUTURE]** lexicographic per-member ranks for large/heterogeneous SCCs
   (esp. accidental cross-module ones); **sidecar files** for measures, if the
   in-source clause burden warrants moving discovery results out-of-band; the
