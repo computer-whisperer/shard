@@ -42,6 +42,10 @@
 (import "calc.shard")  ; shared vocabulary: Exp, eval, eval_opt, is_digit,
 ; digit_val  (and the implementation: lex / parse / run)
 (use (:: examples calc calc *))  ; all of the calc module's vocabulary (Exp + ctors + eval…)
+(import "../../std/list.shard")  ; len + len_cons/len_nonneg (parse_tail's measure algebra)
+(use (:: std list *))
+(import "../../std/order.shard")  ; le_refl / le_succ_l / lt_from_le_succ
+(use (:: std order *))
 
 ;; ---------------------------------------------------------------------------
 ;; Spec-internal plumbing: a parse step returns what it produced together with
@@ -90,21 +94,52 @@
 ;; Recurses on a STRICT SUFFIX (at least the operator byte is consumed before
 ;; the recursive call), so it is total by the length measure, not structurally.
 ;;
-;; MEASURE (issue #1, Phase C) — DEFERRED, currently reported as a single FLAG.
-;; The descent is (len cs), and the two facts that discharge it,
-;;     len (skip_ws cs) <= len cs   and   parse_num xs = Some (NumR n r) => len r < len xs
-;; are ALREADY PROVEN by induction in calc_equiv.shard (len_skipws_le /
-;; len_takedigits_le / len_takedigits_lt). The blocker is purely WHERE they can
-;; be CITED: a measure obligation may cite only GRANTED dir-module requirements
-;; (never a same-file claim), and calc_equiv sits DOWNSTREAM of this file in an
-;; ungranted flat file. Homing them upstream is non-trivial here: the spec
-;; parser fns must stay REDUCIBLE (calc_spec_tests/calc_reconcile_tests Compute
-;; spec_run on concrete inputs, so they can't go behind an opaque interface),
-;; and a req-scope file can't import the flat calc.shard for is_ws/is_digit —
-;; so a granted home means a full char-class/parser foundation module the calc
-;; example inverts onto (~6 files). Not worth it for a report-only annotation;
-;; revisit if/when the calc example is modularized for other reasons.
+;; MEASURE (issue #1, Phase D) — (len cs). parse_tail recurses on a strict
+;; suffix produced by parse_num∘skip_ws, not a structural subterm, so the
+;; descent rests on three length facts (all proven just below this fn):
+;;   ptd            — parse_num∘skip_ws after a skip-cons leaves len < len cs,
+;;   (which bundles) skipcons_len_le + len_skipws_le + pn_rest_lt.
+;; None of them reaches parse_tail in the call graph, so stratified citation
+;; admits them as same-closure claims (these were the calc_equiv length lemmas,
+;; now co-located here with the spec fns they describe). Each recursive site
+;; binds rest2 = pn_rest (parse_num (skip_ws rest)); the proof rewrites that
+;; accessor to rest2 via the inner match-arm premise, then cites ptd.
 (fn parse_tail ((acc Exp) (cs (List Int))) (Option ExpRes)
+  (measure
+    (len cs)
+    ;; site 0 (+ arm): premises 0 = (skip_ws cs)=(Cons c rest),
+    ;; 1 = (int_eq c 43)=True, 2 = (parse_num (skip_ws rest))=(Some (NumR n rest2)).
+    (have h0 (= (pn_rest (parse_num (skip_ws rest))) rest2)
+      (steps ((rewrite (premise 2) lr lhs true ()) (simp lhs)) refl)
+      (steps
+        ((rewrite (premise h0) rl lhs true ()))
+        (rewrite-with
+          (lemma ptd)
+          lr
+          lhs
+          ((inst cs cs) (inst c c) (inst rest rest))
+          ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+           (steps ((rewrite (premise 2) lr lhs true ()) (simp lhs)) refl))
+          refl)))
+    ;; site 0 nonneg
+    (rewrite-with (lemma len_nonneg) lr lhs ((inst xs rest2)) () refl)
+    ;; site 1 (- arm): premises 0 = (skip_ws cs)=(Cons c rest),
+    ;; 1 = (int_eq c 43)=False, 2 = (int_eq c 45)=True,
+    ;; 3 = (parse_num (skip_ws rest))=(Some (NumR n rest2)).
+    (have h0 (= (pn_rest (parse_num (skip_ws rest))) rest2)
+      (steps ((rewrite (premise 3) lr lhs true ()) (simp lhs)) refl)
+      (steps
+        ((rewrite (premise h0) rl lhs true ()))
+        (rewrite-with
+          (lemma ptd)
+          lr
+          lhs
+          ((inst cs cs) (inst c c) (inst rest rest))
+          ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+           (steps ((rewrite (premise 3) lr lhs true ()) (simp lhs)) refl))
+          refl)))
+    ;; site 1 nonneg
+    (rewrite-with (lemma len_nonneg) lr lhs ((inst xs rest2)) () refl))
   (match (skip_ws cs)
     (Nil (Some (ExpR acc Nil)))
     ((Cons c rest)
@@ -117,6 +152,197 @@
          (None None)
          ((Some (NumR n rest2)) (parse_tail (combine False acc (Num n)) rest2)))
        None)))))
+
+;; ---------------------------------------------------------------------------
+;; Termination support for parse_tail's measure (issue #1, Phase D).
+;; These length lemmas (previously in calc_equiv.shard, where loop_eq also uses
+;; them) live here now so parse_tail's measure can cite them: none reaches
+;; parse_tail in the call graph, so stratified citation admits them as
+;; same-closure claims. calc_equiv keeps consuming them by importing this file.
+;; ---------------------------------------------------------------------------
+
+;; project a parsed-number result.
+(fn numr_val ((r NumRes)) Int
+  (match r
+    ((NumR v rest) v)))
+(fn numr_rest ((r NumRes)) (List Int)
+  (match r
+    ((NumR v rest) rest)))
+
+;; parse_num result projections — accessor style (no constructor injectivity):
+;; pn_rest goes through numr_rest so it reduces under (Some (take_digits …)).
+(fn pn_some ((o (Option NumRes))) Bool
+  (match o
+    (None False)
+    ((Some _) True)))
+(fn pn_rest ((o (Option NumRes))) (List Int)
+  (match o
+    (None Nil)
+    ((Some r) (numr_rest r))))
+
+;; skip_ws never grows the list.
+(claim len_skipws_le
+  (goal ((cs (List Int))) () (= (le (len (skip_ws cs)) (len cs)) True))
+  (induct cs
+    ((case Nil
+       (steps ((simp lhs) (rewrite (lemma le_refl) lr lhs true ())) refl))
+     (case Cons
+       (c rest)
+       (case-on (is_ws c) Bool
+         ((case True
+            (steps
+              ((simp lhs)
+               (rewrite (hyp 0) lr lhs true ())
+               (simp lhs)
+               (rewrite (lemma len_cons) lr lhs true ()))
+              (rewrite-with
+                (lemma le_succ_l)
+                lr
+                lhs
+                ()
+                ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
+                refl)))
+          (case False
+            (steps
+              ((simp lhs)
+               (rewrite (hyp 0) lr lhs true ())
+               (simp lhs)
+               (rewrite (lemma le_refl) lr lhs true ()))
+              refl))))))))
+
+;; take_digits' leftover never grows the list.
+(claim len_takedigits_le
+  (goal ((cs (List Int)) (acc Int)) ()
+    (= (le (len (numr_rest (take_digits cs acc))) (len cs)) True))
+  (induct cs
+    ((case Nil
+       (steps ((simp lhs) (rewrite (lemma le_refl) lr lhs true ())) refl))
+     (case Cons
+       (c rest)
+       (case-on (is_digit c) Bool
+         ((case True
+            (steps
+              ((simp lhs)
+               (rewrite (hyp 0) lr lhs true ())
+               (simp lhs)
+               (rewrite (lemma len_cons) lr lhs true ()))
+              (rewrite-with
+                (lemma le_succ_l)
+                lr
+                lhs
+                ()
+                ((steps ((rewrite (hyp 1) lr lhs true ())) refl))
+                refl)))
+          (case False
+            (steps
+              ((simp lhs)
+               (rewrite (hyp 0) lr lhs true ())
+               (simp lhs)
+               (rewrite (lemma le_refl) lr lhs true ()))
+              refl))))))))
+
+;; a number starting with a digit leaves a strictly shorter suffix.
+(claim len_takedigits_lt
+  (goal ((c Int) (rest (List Int))) ((= (is_digit c) True))
+    (=
+      (lt
+        (len (numr_rest (take_digits rest (digit_val c))))
+        (len (Cons c rest)))
+      True))
+  (steps
+    ((simp lhs) (rewrite (lemma len_cons) lr lhs true ()))
+    (rewrite-with
+      (lemma lt_from_le_succ)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (lemma len_takedigits_le) lr lhs true ())) refl))
+      refl)))
+
+;; skip_ws cs = Cons h t  =>  1 + len t <= len cs  (the reduced-linear form).
+(claim skipcons_len_le
+  (goal ((cs (List Int)) (h Int) (t (List Int))) ((= (skip_ws cs) (Cons h t)))
+    (= (le (+ 1 (len t)) (len cs)) True))
+  (rewrite-with
+    (lemma len_skipws_le)
+    rl
+    rhs
+    ((inst cs cs))
+    ()
+    (steps
+      ((rewrite (premise 0) lr rhs true ())
+       (rewrite (lemma len_cons) lr rhs true ()))
+      refl)))
+
+;; parse_num returns a STRICTLY shorter suffix when it succeeds. Stated through
+;; the pn_rest accessor (reduces to len_takedigits_lt on the digit-head arm; the
+;; non-digit / empty arms make pn_some False, so the premise is absurd).
+(claim pn_rest_lt
+  (goal ((cs (List Int))) ((= (pn_some (parse_num cs)) True))
+    (= (lt (len (pn_rest (parse_num cs))) (len cs)) True))
+  (induct cs
+    ((case Nil (absurd (premise 0)))
+     (case Cons
+       (c rest)
+       (case-on (is_digit c) Bool
+         ((case True
+            (steps
+              ((simp lhs) (rewrite (hyp 0) lr lhs true ()) (simp lhs))
+              (rewrite-with
+                (lemma len_takedigits_lt)
+                lr
+                lhs
+                ((inst c c) (inst rest rest))
+                ((steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                refl)))
+          (case False
+            ;; parse_num = None here, so pn_rest = Nil and len Nil = 0 < len (Cons …).
+            (steps
+              ((simp lhs)
+               (rewrite (hyp 0) lr lhs true ())
+               (simp lhs)
+               (rewrite (lemma len_nil) lr lhs true ())
+               (rewrite (lemma len_cons) lr lhs true ()))
+              (have hn (= (le 0 (len rest)) True)
+                (rewrite-with
+                  (lemma len_nonneg)
+                  lr
+                  lhs
+                  ((inst xs rest))
+                  ()
+                  refl)
+                (by farkas (list 1 0 1)))))))))))
+
+;; the parse_tail descent, bundled: a skip-cons followed by a successful
+;; parse_num∘skip_ws leaves a STRICTLY shorter remaining input than cs.
+;; premises 0 = (skip_ws cs)=(Cons c rest), 1 = (pn_some (parse_num (skip_ws rest)))=True.
+(claim ptd
+  (goal ((cs (List Int)) (c Int) (rest (List Int)))
+    ((= (skip_ws cs) (Cons c rest))
+     (= (pn_some (parse_num (skip_ws rest))) True))
+    (= (lt (len (pn_rest (parse_num (skip_ws rest)))) (len cs)) True))
+  (have ha
+    (=
+      (lt (len (pn_rest (parse_num (skip_ws rest)))) (len (skip_ws rest)))
+      True)
+    (rewrite-with
+      (lemma pn_rest_lt)
+      lr
+      lhs
+      ((inst cs (skip_ws rest)))
+      ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+      refl)
+    (have hc (= (le (len (skip_ws rest)) (len rest)) True)
+      (rewrite-with (lemma len_skipws_le) lr lhs ((inst cs rest)) () refl)
+      (have hb (= (le (+ 1 (len rest)) (len cs)) True)
+        (rewrite-with
+          (lemma skipcons_len_le)
+          lr
+          lhs
+          ((inst cs cs) (inst h c) (inst t rest))
+          ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+          refl)
+        (by farkas (list 1 0 0 1 1 1))))))
 
 ;; top level: ws* number <tail> ws*, and the input must be FULLY consumed.
 (fn parse_expr ((cs (List Int))) (Option Exp)
