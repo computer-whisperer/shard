@@ -339,16 +339,20 @@ Verification: the corpus is clean except the intentional cheat pins
 (`measure_clause`, `mutual_toy`, `struct_clause`), which correctly **COFail**
 under enforcement; `kernel/eval.shard` and `tools/prove` are clean (they admit
 nothing). One **known gap (in progress)**: `tools/shardfmt`'s own `(compute both)`
-scenario proofs reduce fns the single-fn `structgen` pass did not cover. The
-equality helpers (`bytes_eq`/`sexpr_eq`/`sexprs_eq`), the spacer `sp`, and the
-blank-run squashers (`squash1`/`squash2`, via a `drop_lead_blanks`-non-increase
-lemma) now carry verified measures. Still admitted-but-unannotated: the **CST
-parser** (`cst_node`/`cst_items`/`cst_tops` — a `(len cs)` measure plus
-token-consumption postconditions, mutual) and the **`em_*` printer** (an
-8-member mutual SCC needing an AST-size measure + a `prep`-non-increase lemma).
-The gate correctly refuses these; proving them total is tracked work (§10). A
-`check admit <closure>` scan still enumerates the advisory AdFlag / AdUnresolved
-set (out of TCB).
+scenario proofs reduce fns the single-fn `structgen` pass did not cover. Now
+verified: the equality helpers (`bytes_eq`/`sexpr_eq`/`sexprs_eq`), the spacer
+`sp`, the blank-run squashers (`squash1`/`squash2`, via a `drop_lead_blanks`-
+non-increase lemma), and the **CST reader** — which was rewritten from recursive
+descent (whose `cst_node`⟷`cst_items` mutual recursion depended on an
+unprovable intra-SCC consumption postcondition) into a provably-total **lexer +
+structural stack-fold parser** (`lex_go` with `(len cs)` citing three
+consumption lemmas; `parse_go` with `(measure (struct toks))`; output
+byte-identical, all scenarios pass). Still admitted-but-unannotated: the **`em_*`
+printer** (an 8-member mutual SCC whose same-node dispatch edges need
+lexicographic ranks — encodable as a weighted `K·size + rank` measure — plus a
+`prep`-non-increase lemma over CNode AST size). The gate correctly refuses it;
+proving it total is tracked work (§10). A `check admit <closure>` scan still
+enumerates the advisory AdFlag / AdUnresolved set (out of TCB).
 
 ## 9. The trusted core (what to audit)
 
