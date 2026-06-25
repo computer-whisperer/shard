@@ -53,6 +53,158 @@
   (CTrail (List Int))  ; trailing comment (same line as the prior node)
   (CBlank))  ; one blank line
 
+;; ---- AST size: the citable measure foundation for the em_* printer SCC ------
+;; cz / lz mirror kernel/expr_size.shard's size / size_list: a true tree size
+;; that descends into nested (List CNode) children, so a parent node is always
+;; strictly larger than any child or child-list. The em_* renderers form a
+;; mutual SCC whose recursive calls descend into children (strict size drop) or
+;; fall back to a generic renderer on the SAME node (a dispatch hop, size
+;; unchanged); a weighted `K*cz + offset` measure ranks the dispatch hops so
+;; every edge strictly decreases. cz/lz themselves are STRUCTURAL.
+(fn cz ((n CNode)) Int
+  (measure (struct n))
+  (match n
+    ((CAtom _) 1)
+    ((CStr _) 1)
+    ((CQuote m) (+ 1 (cz m)))
+    ((CList items) (+ 1 (lz items)))
+    ((CComment _) 1)
+    ((CTrail _) 1)
+    (CBlank 1)))
+
+(fn lz ((ns (List CNode))) Int
+  (measure (struct ns))
+  (match ns
+    (Nil 0)
+    ((Cons h t) (+ (cz h) (lz t)))))
+
+;; defining equations (one structural unfold each)
+(claim cz_quote
+  (goal ((m CNode)) () (= (cz (CQuote m)) (+ 1 (cz m))))
+  (steps ((simp lhs)) refl))
+
+(claim cz_list
+  (goal ((items (List CNode))) () (= (cz (CList items)) (+ 1 (lz items))))
+  (steps ((simp lhs)) refl))
+
+(claim lz_nil
+  (goal () () (= (lz Nil) 0))
+  (steps ((simp lhs)) refl))
+
+(claim lz_cons
+  (goal ((h CNode) (t (List CNode))) ()
+    (= (lz (Cons h t)) (+ (cz h) (lz t))))
+  (steps ((simp lhs)) refl))
+
+;; the mutual nonneg pair (mirrors size_nonneg / size_list_nonneg). cz_nonneg
+;; uses subterm-induction to reach sub-CNodes nested in the (List CNode) field;
+;; the CList case proves 0 <= lz items inline (ordinary induct, each head's
+;; bound from the strong IH via (below)). lz_nonneg then cites cz_nonneg.
+(claim cz_nonneg
+  (goal ((n CNode)) () (= (le 0 (cz n)) True))
+  (subterm-induct
+    n
+    (case-on n CNode
+      ((case CAtom
+         (a)
+         (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) refl))
+       (case CStr
+         (s)
+         (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) refl))
+       (case CComment
+         (c)
+         (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) refl))
+       (case CTrail
+         (c)
+         (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) refl))
+       (case CBlank
+         (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) refl))
+       (case CQuote
+         (m)
+         ;; hyp 0 = (= n (CQuote m)); hyp ih = subterm-IH
+         (have (= (le 0 (cz m)) True)
+           (rewrite-with (hyp ih) lr lhs () ((below)) refl)
+           (steps
+             ((rewrite (hyp 0) lr lhs true ())
+              (rewrite (lemma cz_quote) lr lhs true ()))
+             (by farkas (list 1 1)))))
+       (case CList
+         (items)
+         ;; hyp 0 = (= n (CList items)); hyp ih = subterm-IH
+         (have (= (le 0 (lz items)) True)
+           (induct items
+             ((case Nil
+                (steps
+                  ((rewrite (lemma lz_nil) lr lhs true ()))
+                  (by farkas (list 1))))
+              (case Cons
+                (h t)
+                ;; hyp 0 = (= n (CList (Cons h t))), hyp 1 = subterm-IH 'ih,
+                ;; hyp 2 = list-IH (le 0 (lz t))
+                (have (= (le 0 (cz h)) True)
+                  (rewrite-with (hyp ih) lr lhs () ((below)) refl)
+                  (have (= (le 0 (lz t)) True)
+                    (rewrite-with (hyp 2) lr lhs ((inst n n)) () refl)
+                    (steps
+                      ((rewrite (lemma lz_cons) lr lhs true ()))
+                      (by farkas (list 1 1 1))))))))
+           (steps
+             ((rewrite (hyp 0) lr lhs true ())
+              (rewrite (lemma cz_list) lr lhs true ()))
+             (by farkas (list 1 1)))))))))
+
+(claim lz_nonneg
+  (goal ((ns (List CNode))) () (= (le 0 (lz ns)) True))
+  (induct ns
+    ((case Nil
+       (steps ((rewrite (lemma lz_nil) lr lhs true ())) (by farkas (list 1))))
+     (case Cons
+       (h t)
+       ;; hyp 0 = list-IH (le 0 (lz t))
+       (have (= (le 0 (cz h)) True)
+         (rewrite-with (lemma cz_nonneg) lr lhs () () refl)
+         (have (= (le 0 (lz t)) True)
+           (steps ((rewrite (hyp 0) lr lhs true ())) refl)
+           (steps
+             ((rewrite (lemma lz_cons) lr lhs true ()))
+             (by farkas (list 1 1 1)))))))))
+
+;; every node is at least size 1 (used where a strict child drop needs the
+;; sibling's positivity — e.g. cz cnd >= 1 inside em_if).
+(claim cz_pos
+  (goal ((n CNode)) () (= (le 1 (cz n)) True))
+  (case-on n CNode
+    ((case CAtom
+       (a)
+       (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) refl))
+     (case CStr
+       (s)
+       (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) refl))
+     (case CComment
+       (c)
+       (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) refl))
+     (case CTrail
+       (c)
+       (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) refl))
+     (case CBlank
+       (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs)) refl))
+     (case CQuote
+       (m)
+       (have (= (le 0 (cz m)) True)
+         (rewrite-with (lemma cz_nonneg) lr lhs () () refl)
+         (steps
+           ((rewrite (hyp 0) lr lhs true ())
+            (rewrite (lemma cz_quote) lr lhs true ()))
+           (by farkas (list 1 1)))))
+     (case CList
+       (items)
+       (have (= (le 0 (lz items)) True)
+         (rewrite-with (lemma lz_nonneg) lr lhs () () refl)
+         (steps
+           ((rewrite (hyp 0) lr lhs true ())
+            (rewrite (lemma cz_list) lr lhs true ()))
+           (by farkas (list 1 1))))))))
+
 (type SR (SROk (List Int) (List Int)) (SRErr))  ; raw string body + rest
 
 ;; ---- the lexer's token stream ----------------------------------------------
