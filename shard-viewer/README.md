@@ -60,21 +60,27 @@ files it imports), with a **category heat map**:
 nesting becomes spatial instead of parenthetical. Select a fn (in Methods),
 then hit **Flow**. It's a *hybrid* rendering:
 
-- **Control structures** (`match` / `if` / `let`) are branch nodes (cool); each
-  arm / branch / body hangs to the right, headed by a chip showing the pattern
-  or branch (`Nil`, `then`, a binding name) that selects it.
-- **Leaf expressions** become **operation** nodes: the head symbol is the title,
-  *simple* operands (vars / literals) sit inline, and *compound* operands
-  (nested applications) expand into their own op nodes wired in as data
-  children. So `(int_eq th 59)` is one box; `(head_code (head_atom line))` is
-  two.
-- **Control edges** (which branch runs) are muted; **data edges** (a value feeds
-  a computation) are accent-tinted, so the decision skeleton reads apart from
-  the value wiring. The `(measure …)` totality clause is skipped (it's an
-  annotation, not logic).
+Each node *kind* gets a distinct visual form so you read the shape, not the
+text:
 
-The model (`flow.rs`) lowers the body into typed node/edge lists; the view sizes
-and colors them and reuses the same layered layout engine. Today `match`
+- **Control structures** (`match` / `if`) are cards with a blue **keyword band**
+  over their scrutinee/condition — the recognizable skeleton; **`let`** gets a
+  green band. Each arm / branch / body hangs to the right, headed by a **selector
+  chip** showing the pattern or branch (`Nil`, `then`, a binding name).
+- **Leaf expressions** become **operation** cards: the function name is the bold
+  hero, operands a quiet second line. *Simple* operands (vars / literals) sit
+  inline; *compound* operands (nested applications) expand into their own op
+  cards wired in. So `(int_eq th 59)` is one card; `(head_code (head_atom line))`
+  is two.
+- **Variables** are warm amber **pills** (data inputs); **literals** are dim mono
+  **tags** (constants).
+- **Control wires** (which branch runs) are thick and neutral; **data wires** (a
+  value feeds a computation) are thin and accent-tinted, so the decision
+  skeleton reads apart from the value wiring. The `(measure …)` totality clause
+  is skipped (it's an annotation, not logic).
+
+The model (`flow.rs`) lowers the body into typed node/edge lists; the view sizes,
+shapes, and colors them and reuses the same layered layout engine. Today `match`
 scrutinees and `if` conditions are shown inline (not expanded into op trees);
 that's the obvious next tuning knob.
 
