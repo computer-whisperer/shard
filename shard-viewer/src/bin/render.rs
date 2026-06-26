@@ -24,9 +24,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // `shard-render . systems out.svg` renders the project import graph.
     let params = if needle == "systems" {
         println!("rendering systems graph ({} files)", project.files.len());
+        // Select the biggest file so the breakdown panel is exercised too.
+        let selected_file = project
+            .files
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, f)| f.counts.total())
+            .map(|(i, _)| i);
         ViewParams {
             mode: ViewMode::Systems,
-            selected_file: None,
+            selected_file,
             selected_fn: None,
             zoom: 1.0,
         }

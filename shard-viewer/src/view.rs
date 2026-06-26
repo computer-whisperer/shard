@@ -45,10 +45,17 @@ pub fn app_root(project: &Project, p: &ViewParams) -> El {
         sidebar(project, p.selected_file),
         main_pane(project, p),
     ];
-    if p.mode == ViewMode::Methods
-        && let Some(fni) = p.selected_fn
-    {
-        panes.push(detail_panel(project, fni));
+    match p.mode {
+        ViewMode::Methods => {
+            if let Some(fni) = p.selected_fn {
+                panes.push(detail_panel(project, fni));
+            }
+        }
+        ViewMode::Systems => {
+            if let Some(fi) = p.selected_file {
+                panes.push(systems_detail_panel(project, fi));
+            }
+        }
     }
     page([row(panes).gap(tokens::SPACE_4).height(Size::Fill(1.0))])
 }
@@ -88,8 +95,10 @@ fn main_pane(project: &Project, p: &ViewParams) -> El {
         },
     };
     let mut head = vec![toolbar(project, p)];
-    if p.mode == ViewMode::Methods && p.selected_file.is_some() {
-        head.push(triage_legend());
+    match p.mode {
+        ViewMode::Methods if p.selected_file.is_some() => head.push(triage_legend()),
+        ViewMode::Systems => head.push(heat_legend()),
+        _ => {}
     }
     head.push(body);
     column(head)
@@ -98,18 +107,54 @@ fn main_pane(project: &Project, p: &ViewParams) -> El {
         .height(Size::Fill(1.0))
 }
 
-/// A small colored chip + label, for the triage legend.
+/// A small colored square (an empty box used purely as a swatch).
+fn swatch(color: Color, side: f32) -> El {
+    column(Vec::<El>::new())
+        .width(Size::Fixed(side))
+        .height(Size::Fixed(side))
+        .radius(4.0)
+        .fill(color)
+        .stroke(tokens::BORDER)
+}
+
+/// A small colored chip + label, for a legend.
 fn legend_chip(color: Color, label: &str) -> El {
-    row([
-        column(Vec::<El>::new())
-            .width(Size::Fixed(14.0))
-            .height(Size::Fixed(14.0))
-            .radius(4.0)
-            .fill(color)
-            .stroke(tokens::BORDER),
-        text(label).muted().font_size(SUB_SIZE),
-    ])
-    .gap(tokens::SPACE_2)
+    row([swatch(color, 14.0), text(label).muted().font_size(SUB_SIZE)]).gap(tokens::SPACE_2)
+}
+
+/// Heat tint for a file node: cool (ACCENT) for implementation-heavy files,
+/// warm (WARNING) for proof-heavy ones, blended over CARD so labels stay
+/// readable. Files with no substantive code read neutral (plain CARD).
+fn heat_fill(share: Option<f32>) -> Color {
+    match share {
+        None => tokens::CARD,
+        Some(s) => tokens::CARD.mix(tokens::ACCENT.mix(tokens::WARNING, s), 0.4),
+    }
+}
+
+/// A thin stacked bar showing a file's line composition: implementation, then
+/// proof burden, over a track that shows the comment/blank remainder. `inner_w`
+/// is the available width inside the node's padding.
+fn composition_bar(c: &crate::model::Counts, inner_w: f32) -> El {
+    let total = c.total().max(1) as f32;
+    let seg = |n: u32, color: Color| -> Option<El> {
+        let w = (n as f32 / total) * inner_w;
+        (w >= 0.5).then(|| {
+            column(Vec::<El>::new())
+                .width(Size::Fixed(w))
+                .height(Size::Fixed(6.0))
+                .fill(color)
+        })
+    };
+    let mut segs = Vec::new();
+    segs.extend(seg(c.impl_lines(), tokens::ACCENT));
+    segs.extend(seg(c.proof_lines(), tokens::WARNING));
+    row(segs)
+        .gap(0.0)
+        .width(Size::Fixed(inner_w))
+        .height(Size::Fixed(6.0))
+        .radius(3.0)
+        .fill(tokens::BORDER) // the uncovered track = comment/blank remainder
 }
 
 /// The triage-overlay key (Methods view): how node color and size encode the
@@ -122,6 +167,25 @@ fn triage_legend() -> El {
         legend_chip(tokens::CARD, "leaf"),
         legend_chip(tokens::MUTED, "sig"),
         text("· taller = more source lines").muted().font_size(SUB_SIZE),
+    ])
+    .gap(tokens::SPACE_3)
+    .padding(tokens::SPACE_2)
+}
+
+/// The Systems-view heat key: node tint encodes proof-vs-impl share, and each
+/// node carries a stacked composition bar.
+fn heat_legend() -> El {
+    let warm = tokens::ACCENT.mix(tokens::WARNING, 1.0);
+    let cool = tokens::ACCENT.mix(tokens::WARNING, 0.0);
+    row([
+        text("heat").mono().muted().font_size(SUB_SIZE),
+        legend_chip(tokens::CARD.mix(cool, 0.4), "impl-heavy"),
+        legend_chip(tokens::CARD.mix(tokens::ACCENT.mix(tokens::WARNING, 0.5), 0.4), "mixed"),
+        legend_chip(tokens::CARD.mix(warm, 0.4), "proof-heavy"),
+        text("·  bar").mono().muted().font_size(SUB_SIZE),
+        legend_chip(tokens::ACCENT, "impl"),
+        legend_chip(tokens::WARNING, "proof"),
+        legend_chip(tokens::BORDER, "comment/blank"),
     ])
     .gap(tokens::SPACE_3)
     .padding(tokens::SPACE_2)
@@ -274,7 +338,7 @@ fn file_node_size(project: &Project, file_idx: usize) -> (f32, f32) {
     let (stem, dir) = file_label(&project.files[file_idx].rel);
     let chars = stem.chars().count().max(dir.chars().count()) as f32;
     let w = (chars * 7.0 + 24.0).clamp(130.0, 280.0);
-    (w, 46.0)
+    (w, 58.0) // extra height for the composition bar
 }
 
 /// Split a rel path into (file stem, parent dir) for a compact node label.
@@ -296,17 +360,20 @@ fn sys_node_box(project: &Project, file_idx: usize, selected_file: Option<usize>
     let b = column([
         text(stem).mono().font_size(TITLE_SIZE).nowrap_text().ellipsis(),
         text(sub).muted().font_size(SUB_SIZE).nowrap_text().ellipsis(),
+        composition_bar(&f.counts, w - 16.0),
     ])
-    .gap(2.0)
+    .gap(3.0)
     .padding(8.0)
     .radius(8.0)
     .width(Size::Fixed(w))
     .height(Size::Fixed(h))
     .key(format!("sysfile:{file_idx}"));
+    // Tint by proof-vs-impl share so the verification-heavy corners of the tree
+    // stand out at a glance; selection still wins for the focused node.
     if selected {
         b.fill(tokens::ACCENT).stroke(tokens::RING)
     } else {
-        b.fill(tokens::CARD).stroke(tokens::BORDER)
+        b.fill(heat_fill(f.counts.proof_share())).stroke(tokens::BORDER)
     }
 }
 
@@ -446,6 +513,65 @@ fn detail_panel(project: &Project, fn_idx: usize) -> El {
     items.push(fn_link_list(project, callees));
     items.push(text(format!("Called by ({})", callers.len())).label());
     items.push(fn_link_list(project, callers));
+
+    column(items)
+        .gap(tokens::SPACE_2)
+        .padding(tokens::SPACE_3)
+        .width(Size::Fixed(420.0))
+        .height(Size::Fill(1.0))
+        .fill(tokens::CARD)
+        .stroke(tokens::BORDER)
+        .radius(10.0)
+}
+
+/// Systems-mode side panel: the selected file's line-category breakdown plus
+/// its import in/out degree, with a button to drill into its call graph.
+fn systems_detail_panel(project: &Project, file_idx: usize) -> El {
+    let f = &project.files[file_idx];
+    let c = &f.counts;
+    let imported_by = project
+        .files
+        .iter()
+        .filter(|g| g.import_targets.contains(&file_idx))
+        .count();
+
+    // One labelled, swatched, right-aligned count row.
+    let cat_row = |label: &str, n: u32, color: Color| -> El {
+        row([
+            swatch(color, 12.0),
+            text(label.to_string()).font_size(SUB_SIZE),
+            spacer(),
+            text(n.to_string()).mono().muted().font_size(SUB_SIZE),
+        ])
+        .gap(tokens::SPACE_2)
+    };
+
+    let items = vec![
+        row([h3(file_label(&f.rel).0), spacer()]).gap(tokens::SPACE_2),
+        text(f.rel.clone()).caption().muted(),
+        button("Open call graph ▸").key(format!("open:{file_idx}")).secondary(),
+        separator(),
+        text(format!("{} lines · {} fns", c.total(), f.fns.len()))
+            .caption()
+            .muted(),
+        composition_bar(c, 384.0),
+        separator(),
+        cat_row("impl", c.impl_, tokens::ACCENT),
+        cat_row("measure", c.measure, tokens::WARNING),
+        cat_row("proof", c.proof, tokens::WARNING),
+        cat_row("reqproof", c.reqproof, tokens::WARNING),
+        cat_row("req", c.req, tokens::ACCENT),
+        cat_row("sidecar", c.sidecar, tokens::WARNING),
+        cat_row("comment", c.comment, tokens::BORDER),
+        cat_row("blank", c.blank, tokens::BORDER),
+        separator(),
+        text(format!(
+            "imports {} · imported by {imported_by}",
+            f.import_targets.len()
+        ))
+        .caption()
+        .muted(),
+    ];
 
     column(items)
         .gap(tokens::SPACE_2)

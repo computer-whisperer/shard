@@ -44,6 +44,24 @@ fn main() -> std::io::Result<()> {
         "imports: {resolved_imports} resolved / {total_imports} raw (in-project dependency edges)"
     );
 
+    // Project-wide line tally by category — mirrors `tools/loc` (a cross-check
+    // that the Rust classifier port agrees with the shard tool).
+    let mut t = shard_viewer::model::Counts::default();
+    for f in &project.files {
+        let c = &f.counts;
+        t.impl_ += c.impl_;
+        t.measure += c.measure;
+        t.proof += c.proof;
+        t.reqproof += c.reqproof;
+        t.req += c.req;
+        t.comment += c.comment;
+        t.blank += c.blank;
+        t.sidecar += c.sidecar;
+    }
+    println!("\n== lines by category ==");
+    println!("  impl {}  measure {}  proof {}  reqproof {}  req {}", t.impl_, t.measure, t.proof, t.reqproof, t.req);
+    println!("  sidecar {}  comment {}  blank {}  TOTAL {}", t.sidecar, t.comment, t.blank, t.total());
+
     println!("\n== files ==");
     for f in &project.files {
         println!(

@@ -55,6 +55,112 @@ impl FnDef {
     }
 }
 
+/// Per-file line tally by shard complexity category. A direct port of the
+/// column-0-head-atom state machine in `tools/loc/loc.shard`: canonical
+/// (shardfmt) layout starts every top-level form with `(` at column 0 and
+/// indents its body, so a line's category is the category of the form it sits
+/// in — no full parse needed.
+#[derive(Debug, Clone, Default)]
+pub struct Counts {
+    pub impl_: u32,    // fn/type/import/use/sig/extern/bin — implementation
+    pub measure: u32,  // inline (measure …) totality obligations
+    pub proof: u32,    // (claim …) proof blocks
+    pub reqproof: u32, // (fulfills …) requirement-fulfillment proofs
+    pub req: u32,      // (requirement …)/(axiom …) interface declarations
+    pub comment: u32,  // ; lines
+    pub blank: u32,    // whitespace-only
+    pub sidecar: u32,  // whole .auto.shard files (machine-generated proof fill)
+}
+
+impl Counts {
+    /// Substantive (non comment/blank) lines.
+    pub fn code(&self) -> u32 {
+        self.impl_ + self.measure + self.proof + self.reqproof + self.req + self.sidecar
+    }
+    /// Every counted line.
+    pub fn total(&self) -> u32 {
+        self.code() + self.comment + self.blank
+    }
+    /// Proof-burden lines: totality obligations + claim/fulfills proofs +
+    /// machine-generated sidecar fill.
+    pub fn proof_lines(&self) -> u32 {
+        self.measure + self.proof + self.reqproof + self.sidecar
+    }
+    /// Non-proof code: implementation + interface declarations.
+    pub fn impl_lines(&self) -> u32 {
+        self.impl_ + self.req
+    }
+    /// Proof share of substantive code, in `[0,1]` — the heat axis. `None` when
+    /// the file has no substantive code (pure comments/blank) so it reads
+    /// neutral rather than as either extreme.
+    pub fn proof_share(&self) -> Option<f32> {
+        let denom = self.impl_lines() + self.proof_lines();
+        if denom == 0 {
+            None
+        } else {
+            Some(self.proof_lines() as f32 / denom as f32)
+        }
+    }
+}
+
+/// The head atom of a column-0 form: bytes after `(` up to the first delimiter.
+fn head_atom(line: &str) -> &str {
+    let after = &line[1..]; // line starts with '(' (one ASCII byte)
+    let end = after
+        .find([' ', '\t', '(', ')'])
+        .unwrap_or(after.len());
+    &after[..end]
+}
+
+/// Map a top-level form's head atom to its category code (0 = implementation).
+fn head_code(atom: &str) -> u8 {
+    match atom {
+        "claim" => 2,
+        "fulfills" => 3,
+        "requirement" | "axiom" => 4,
+        "proof-for" => 7,
+        _ => 0,
+    }
+}
+
+/// Classify `src` into per-category line counts. `forced` (`Some(7)` for
+/// `.auto.shard` sidecars) forces every substantive line to that category;
+/// blanks and comments still split out.
+pub fn classify_source(src: &str, forced: Option<u8>) -> Counts {
+    let mut c = Counts::default();
+    let mut cur: u8 = 0; // running category of the enclosing top-level form
+    for line in src.lines() {
+        let trimmed = line.trim_start();
+        let code: u8 = if trimmed.is_empty() {
+            6
+        } else if trimmed.starts_with(';') {
+            5
+        } else if let Some(f) = forced {
+            f
+        } else if line.starts_with('(') {
+            // New top-level form: its head atom sets the running category.
+            cur = head_code(head_atom(line));
+            cur
+        } else if trimmed.starts_with("(measure") {
+            1 // inline totality obligation; the form's category is unchanged
+        } else {
+            cur // body line inherits its form's category
+        };
+        match code {
+            0 => c.impl_ += 1,
+            1 => c.measure += 1,
+            2 => c.proof += 1,
+            3 => c.reqproof += 1,
+            4 => c.req += 1,
+            5 => c.comment += 1,
+            6 => c.blank += 1,
+            7 => c.sidecar += 1,
+            _ => {}
+        }
+    }
+    c
+}
+
 /// One parsed `.shard` file.
 #[derive(Debug, Clone)]
 pub struct ShardFile {
@@ -71,6 +177,8 @@ pub struct ShardFile {
     pub fns: Vec<usize>, // indices into Project::fns
     pub types: Vec<String>,
     pub claims: Vec<String>,
+    /// Line tally by complexity category (the heat-map source).
+    pub counts: Counts,
     pub parse_error: Option<String>,
 }
 
@@ -118,9 +226,14 @@ impl Project {
                 fns: Vec::new(),
                 types: Vec::new(),
                 claims: Vec::new(),
+                counts: Counts::default(),
                 parse_error: None,
             };
             let src = std::fs::read_to_string(&path)?;
+            // Category tally is independent of the parse, so it stands even for
+            // files the structural reader chokes on.
+            let forced = if file.rel.ends_with(".auto.shard") { Some(7) } else { None };
+            file.counts = classify_source(&src, forced);
             match sexpr::parse_top_spanned(&src) {
                 Ok(forms) => extract_file(&mut project, &mut file, forms),
                 Err(e) => file.parse_error = Some(e.to_string()),
@@ -409,7 +522,48 @@ fn collect_shard_files(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_rel, FnDef};
+    use super::{classify_source, normalize_rel, FnDef};
+
+    #[test]
+    fn classify_categories_and_heat() {
+        let src = "\
+;; a comment
+(fn f ((x Int)) Int
+  (measure (struct x))
+  (+ x 1))
+
+(claim thing
+  (by lia))
+(requirement r Bool)
+";
+        let c = classify_source(src, None);
+        assert_eq!(c.comment, 1);
+        assert_eq!(c.blank, 1);
+        // (fn… header + body line = impl; the (measure…) line splits out.
+        assert_eq!(c.impl_, 2);
+        assert_eq!(c.measure, 1);
+        // (claim header + its body line.
+        assert_eq!(c.proof, 2);
+        assert_eq!(c.req, 1);
+        // impl_lines = impl_ + req = 3; proof_lines = measure + proof = 3.
+        assert_eq!(c.proof_share(), Some(0.5));
+    }
+
+    #[test]
+    fn classify_forced_sidecar() {
+        let src = "; note\n(fulfills x (by auto))\nbody line\n";
+        let c = classify_source(src, Some(7));
+        assert_eq!(c.comment, 1);
+        assert_eq!(c.sidecar, 2); // both substantive lines forced, comment split
+        assert_eq!(c.proof, 0);
+    }
+
+    use super::Counts;
+    #[test]
+    fn pure_comment_file_reads_neutral() {
+        let c = Counts { comment: 5, blank: 2, ..Counts::default() };
+        assert_eq!(c.proof_share(), None);
+    }
 
     fn fnd(name: &str, callers: Vec<usize>, proof_refd: bool, is_sig: bool) -> FnDef {
         FnDef {

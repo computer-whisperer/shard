@@ -73,7 +73,14 @@ impl App for Viewer {
         } else if let Some(i) = event.route_index::<usize>("sysfile")
             && i < self.project.files.len()
         {
-            // Drill from the systems graph into a file's call graph.
+            // Select the file in the systems graph: opens its breakdown panel
+            // (with an "Open call graph" button to drill) without leaving the
+            // import view. Don't refit — the graph itself is unchanged.
+            self.selected_file = Some(i);
+        } else if let Some(i) = event.route_index::<usize>("open")
+            && i < self.project.files.len()
+        {
+            // Drill from the systems breakdown panel into the call graph.
             self.open_file(i);
         } else if let Some(i) = event.route_index::<usize>("file")
             && i < self.project.files.len()

@@ -29,7 +29,19 @@ Two views, toggled in the toolbar:
   is a short-name heuristic — verify a candidate with grep before cutting.
 
 **Systems** — the project-wide file import dependency graph (each file → the
-files it imports). Click a file node to drill into its Methods view.
+files it imports), with a **category heat map**:
+
+- Each file node is **tinted by its proof-vs-impl share** — cool for
+  implementation-heavy files, warm for proof-heavy ones — and carries a thin
+  **composition bar** (implementation · proof burden · comment/blank track), so
+  you can read a large tree's verification weight at a glance.
+- Lines are classified into shard-specific categories (impl / measure / proof /
+  reqproof / req / sidecar / comment / blank) by the same column-0-head-atom
+  state machine as `tools/loc` — the Rust port is verified byte-identical to
+  that shard tool across the corpus.
+- **Click a file node** to open its **breakdown panel** (per-category line
+  counts + import in/out degree); the panel's **Open call graph ▸** button
+  drills into the file's Methods view.
 - Layout is a generic, semantics-agnostic **layered (Sugiyama) engine**
   (`layout.rs`): SCC condensation (cycles share a column) → dummy nodes for
   long edges → barycenter crossing reduction → iterative coordinate assignment
@@ -53,7 +65,7 @@ it.
 | Bin | What it does |
 |---|---|
 | `shard-viewer [ROOT]` | The GUI (native window via `damascene-winit-wgpu`). Defaults to the most fn-dense file. |
-| `shard-graph [ROOT] [FN]` | Text dump of the extracted model: per-file counts, the most-called fns, a **cut-candidate (orphan) list**, or one fn's callers/callees. No GUI deps. |
+| `shard-graph [ROOT] [FN]` | Text dump of the extracted model: per-file counts, a project-wide **lines-by-category tally** (mirrors `tools/loc`), the most-called fns, a **cut-candidate (orphan) list**, or one fn's callers/callees. No GUI deps. |
 | `shard-render ROOT FILE_SUBSTRING [OUT.svg]` | Headless render of one file's graph to SVG + a lint report. No GPU/window. Use `systems` as the substring to render the import graph. |
 
 `ROOT` defaults to the current directory; run from a shard checkout.
