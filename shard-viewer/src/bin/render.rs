@@ -35,6 +35,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             selected_file: Some(f.file),
             selected_fn: Some(fn_idx),
             zoom: 1.0,
+            filter: String::new(),
+            selection: Default::default(),
         }
     } else if let Some(file_sub) = needle.strip_prefix("board:") {
         // `shard-render . board:SUBSTR out.svg` charts a file's call DAG with
@@ -54,6 +56,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             selected_file: Some(file_idx),
             selected_fn: None,
             zoom: 1.0,
+            filter: String::new(),
+            selection: Default::default(),
         }
     } else if needle == "systems" {
         println!("rendering systems graph ({} files)", project.files.len());
@@ -69,6 +73,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             selected_file,
             selected_fn: None,
             zoom: 1.0,
+            filter: String::new(),
+            selection: Default::default(),
         }
     } else {
         let file_idx = project
@@ -92,6 +98,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             selected_file: Some(file_idx),
             selected_fn,
             zoom: 1.0,
+            filter: String::new(),
+            selection: Default::default(),
         }
     };
     let mut root_el = view::app_root(&project, &params);

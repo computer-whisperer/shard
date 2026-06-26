@@ -19,6 +19,9 @@ struct Viewer {
     selected_fn: Option<usize>,
     /// Viewport commands queued from clicks, drained once per frame by the host.
     pending: Vec<ViewportRequest>,
+    /// Sidebar filter text + its (app-owned) text-selection state.
+    filter: String,
+    selection: Selection,
 }
 
 impl Viewer {
@@ -50,15 +53,37 @@ impl App for Viewer {
                 selected_file: self.selected_file,
                 selected_fn: self.selected_fn,
                 zoom,
+                filter: self.filter.clone(),
+                selection: self.selection.clone(),
             },
         )
     }
 
+    fn selection(&self) -> Selection {
+        self.selection.clone()
+    }
+
     fn on_event(&mut self, event: UiEvent, _cx: &EventCx) {
+        // Sidebar filter editing: keystrokes / focus / pointer within the field
+        // arrive as non-click events routed to "filter". Handle (and the global
+        // selection-clear) before the click gate below.
+        if event.kind == UiEventKind::SelectionChanged {
+            if let Some(sel) = event.selection.as_ref() {
+                self.selection = sel.clone();
+            }
+            return;
+        }
+        if event.target_key() == Some("filter") {
+            text_input::apply_event(&mut self.filter, &mut self.selection, &event, "filter");
+            return;
+        }
         if !matches!(event.kind, UiEventKind::Click | UiEventKind::Activate) {
             return;
         }
-        if event.is_route("fit") {
+        if event.is_route("filter_clear") {
+            self.filter.clear();
+            self.selection = Selection::default();
+        } else if event.is_route("fit") {
             self.fit();
         } else if event.is_route("reset") {
             self.pending.push(ViewportRequest::ResetView {
@@ -143,6 +168,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             selected_file,
             selected_fn: None,
             pending,
+            filter: String::new(),
+            selection: Selection::default(),
         },
     )
 }

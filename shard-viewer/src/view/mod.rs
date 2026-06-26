@@ -46,6 +46,10 @@ pub struct ViewParams {
     pub selected_fn: Option<usize>,
     /// Current viewport zoom (read back from the runtime), for display only.
     pub zoom: f32,
+    /// Sidebar filter text (case-insensitive substring over file paths).
+    pub filter: String,
+    /// Text-selection state for the filter input (app-owned, per damascene).
+    pub selection: Selection,
 }
 
 /// Key of the pan/zoom viewport — also the target of `ViewportRequest`s.
@@ -56,7 +60,7 @@ pub(crate) const SUB_SIZE: f32 = 11.0;
 
 /// The whole window: sidebar + main pane + (when something is selected) panel.
 pub fn app_root(project: &Project, p: &ViewParams) -> El {
-    let mut panes = vec![sidebar(project, p.selected_file), main_pane(project, p)];
+    let mut panes = vec![sidebar(project, p), main_pane(project, p)];
     match p.mode {
         ViewMode::Methods | ViewMode::Flow | ViewMode::Board => {
             if let Some(fni) = p.selected_fn {
@@ -72,11 +76,13 @@ pub fn app_root(project: &Project, p: &ViewParams) -> El {
     page([row(panes).gap(tokens::SPACE_4).height(Size::Fill(1.0))])
 }
 
-fn sidebar(project: &Project, selected_file: Option<usize>) -> El {
+fn sidebar(project: &Project, p: &ViewParams) -> El {
+    let needle = p.filter.to_lowercase();
     let rows: Vec<El> = project
         .files
         .iter()
         .enumerate()
+        .filter(|(_, f)| needle.is_empty() || f.rel.to_lowercase().contains(&needle))
         .map(|(i, f)| {
             // Surface parse failures (otherwise invisible — the file just shows
             // 0 fns as if empty) with a marker + the error on hover.
@@ -89,20 +95,51 @@ fn sidebar(project: &Project, selected_file: Option<usize>) -> El {
                 None => format!("{} · {} lines", f.module, f.counts.total()),
             };
             let mut b = button(label).key(format!("file:{i}")).ghost().tooltip(tip);
-            if selected_file == Some(i) {
+            if p.selected_file == Some(i) {
                 b = b.selected();
             }
             b
         })
         .collect();
-    column([h3("Files"), scroll(rows).height(Size::Fill(1.0))])
-        .gap(tokens::SPACE_2)
-        .padding(tokens::SPACE_3)
-        .width(Size::Fixed(320.0))
-        .height(Size::Fill(1.0))
-        .fill(tokens::CARD)
-        .stroke(tokens::BORDER)
-        .radius(10.0)
+
+    // Header shows the filtered/total count; an X clears the filter when set.
+    let shown = rows.len();
+    let total = project.files.len();
+    let mut header = vec![
+        h3("Files"),
+        spacer(),
+        text(format!("{shown}/{total}"))
+            .mono()
+            .muted()
+            .font_size(SUB_SIZE),
+    ];
+    if !p.filter.is_empty() {
+        header.push(button("✕").key("filter_clear").ghost().tooltip("Clear filter"));
+    }
+
+    let list = if rows.is_empty() {
+        column([text("No files match.").muted().font_size(SUB_SIZE)]).padding(tokens::SPACE_3)
+    } else {
+        scroll(rows).height(Size::Fill(1.0))
+    };
+
+    column([
+        row(header).gap(tokens::SPACE_2),
+        text_input_with(
+            "filter",
+            &p.filter,
+            &p.selection,
+            TextInputOpts::default().placeholder("Filter files…"),
+        ),
+        list,
+    ])
+    .gap(tokens::SPACE_2)
+    .padding(tokens::SPACE_3)
+    .width(Size::Fixed(320.0))
+    .height(Size::Fill(1.0))
+    .fill(tokens::CARD)
+    .stroke(tokens::BORDER)
+    .radius(10.0)
 }
 
 fn main_pane(project: &Project, p: &ViewParams) -> El {

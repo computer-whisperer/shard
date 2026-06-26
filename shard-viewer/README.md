@@ -17,7 +17,9 @@ Four views, toggled in the toolbar:
 
 **Methods** — one file's call graph, with a **triage overlay**:
 
-- Sidebar lists every `.shard` file with its fn count; click to switch.
+- Sidebar lists every `.shard` file with its fn count; a **filter box** narrows
+  the list (case-insensitive substring, with a `shown/total` count), and files
+  that fail to parse are flagged (`⚠`, the error on hover). Click to switch.
 - The canvas draws the selected file's fns as boxes (name + `N args → Ret`)
   with intra-file call edges as curved arrows.
 - **Triage colors/sizes** encode the dead-code / complexity signal: a node is
@@ -52,8 +54,12 @@ files it imports), with a **category heat map**:
   the transform follows hit-test for free. `Fit` frames the whole graph;
   `Reset view` snaps to 1:1. The graph auto-fits when you switch files.
 - Click a fn box to open a **detail panel**: signature, the fn's real source
-  text, and clickable **Calls** / **Called by** lists. Clicking a callee/caller
-  (including cross-file) navigates to it, switching the canvas as needed.
+  text, and clickable **Calls** / **Called by** lists. Cross-file links are
+  tagged with their file (e.g. `main · check` vs `main · eval`) so homonym
+  targets are distinguishable; clicking one navigates there, switching the
+  canvas as needed. **Flow ▸ / Board ▸ / Graph ▸** buttons jump the selected fn
+  between views. Hover any node for its full signature, home file, and triage
+  metrics.
 
 **Flow** — one fn body as a **structured (LabVIEW-style)** diagram, so s-expr
 nesting becomes box *enclosure* instead of parenthesis-counting. Select a fn (in
