@@ -13,7 +13,7 @@ UI library.
 
 ## Status
 
-Two views, toggled in the toolbar:
+Four views, toggled in the toolbar:
 
 **Methods** — one file's call graph, with a **triage overlay**:
 
@@ -82,13 +82,24 @@ with labelled branches; ops with operand sub-regions); the view renders it into
 the pan/zoom viewport. Today `match` scrutinees and `if` conditions are shown
 inline in the band (not expanded into op cards) — the obvious next knob.
 
+**Board** *(experimental)* — one file's **call DAG with each node rendered in the
+Flow form**: instead of a name box, every fn appears as its full expanded flow
+card, and the call arrows wire whole fn bodies together. You read both a fn's
+internal structure *and* where its calls go at once. It reuses the same Sugiyama
+layout as Methods, but the engine needs sizes up front while a flow card's true
+size is intrinsic — so v1 *estimates* each card's size from its region tree
+(`board.rs::est`). Large fns therefore make large nodes (pan/zoom copes);
+tightening this (measured sizes, clamped thumbnails) is the next iteration. The
+view files are split per-variant (`src/view/`) precisely so these are cheap to
+try.
+
 ## Binaries
 
 | Bin | What it does |
 |---|---|
 | `shard-viewer [ROOT]` | The GUI (native window via `damascene-winit-wgpu`). Defaults to the most fn-dense file. |
 | `shard-graph [ROOT] [FN]` | Text dump of the extracted model: per-file counts, a project-wide **lines-by-category tally** (mirrors `tools/loc`), the most-called fns, a **cut-candidate (orphan) list**, or one fn's callers/callees. No GUI deps. |
-| `shard-render ROOT FILE_SUBSTRING [OUT.svg]` | Headless render of one file's graph to SVG + a lint report. No GPU/window. Use `systems` for the import graph, or `flow:FN_NAME` for a fn's dataflow diagram. |
+| `shard-render ROOT FILE_SUBSTRING [OUT.svg]` | Headless render of one file's graph to SVG + a lint report. No GPU/window. Use `systems` for the import graph, `flow:FN_NAME` for a fn's dataflow diagram, or `board:FILE_SUBSTRING` for the expanded call-DAG board. |
 
 `ROOT` defaults to the current directory; run from a shard checkout.
 
@@ -115,6 +126,12 @@ src/
   model.rs   structural extraction + call-graph resolution (same-file-first)
   flow.rs    intra-fn structured model (one fn body -> a region/containment tree)
   layout.rs  layered SCC-aware graph layout
-  view.rs    damascene view tree (pure: project state -> El)
+  view/      damascene view tree (pure: project state -> El), one file per variant
+    mod.rs     shell: sidebar / toolbar / pane dispatch + ViewMode
+    shared.rs  pan/zoom viewport, laid-out-graph canvas, edge + legend primitives
+    methods.rs call graph + triage overlay (+ the shared per-fn detail panel)
+    systems.rs import graph + proof/impl heat map (+ its breakdown panel)
+    flow.rs    one fn body as a region card (render_region, reused by board)
+    board.rs   the call DAG with each node in expanded flow form
   bin/       viewer.rs (GUI) · graph.rs (text) · render.rs (headless SVG)
 ```

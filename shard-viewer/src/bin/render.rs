@@ -36,6 +36,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             selected_fn: Some(fn_idx),
             zoom: 1.0,
         }
+    } else if let Some(file_sub) = needle.strip_prefix("board:") {
+        // `shard-render . board:SUBSTR out.svg` charts a file's call DAG with
+        // each fn rendered in expanded flow form.
+        let file_idx = project
+            .files
+            .iter()
+            .position(|f| f.rel.contains(file_sub))
+            .ok_or_else(|| format!("no file matching `{file_sub}`"))?;
+        println!(
+            "rendering board of {} ({} fns)",
+            project.files[file_idx].rel,
+            project.files[file_idx].fns.len()
+        );
+        ViewParams {
+            mode: ViewMode::Board,
+            selected_file: Some(file_idx),
+            selected_fn: None,
+            zoom: 1.0,
+        }
     } else if needle == "systems" {
         println!("rendering systems graph ({} files)", project.files.len());
         // Select the biggest file so the breakdown panel is exercised too.
