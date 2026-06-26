@@ -1,231 +1,175 @@
-//! Intra-fn **dataflow / decision-tree** model: turns one fn body's s-expr into
-//! a left-to-right graph so the nesting becomes spatial instead of parenthetical.
+//! Intra-fn **structured** model: turns one fn body's s-expr into a *region
+//! tree* for the LabVIEW-style flow view.
 //!
-//! The shape is a *hybrid* (see the viewer's view layer for the rendering):
+//! Unlike a flat node/edge graph, this is a containment hierarchy:
 //!
-//! - **Control structures** (`match` / `if` / `let`) become branch nodes; each
-//!   arm / branch / body hangs to the right as a child, headed by the pattern or
-//!   branch label that selects it. This is the skeleton that de-nests the soup.
-//! - **Leaf expressions** (applications) become **operation** nodes: the head
-//!   symbol is the title, *simple* operands (vars / literals) sit inline, and
-//!   *compound* operands (nested applications) expand into their own op nodes
-//!   wired in as data children. So `(int_eq th 59)` is one box, but
-//!   `(head_code (head_atom line))` is two.
+//! - **Control structures** (`match` / `if` / `let`) become [`Region::Frame`]s
+//!   that *contain* their arms / branches / body as labelled [`Branch`]es. Paren
+//!   nesting becomes box enclosure.
+//! - **Leaf computations** become [`Region::Op`] (a function application — head
+//!   symbol + inline simple operands + nested regions for compound operands),
+//!   [`Region::Var`], or [`Region::Lit`]. Inside a frame these are wired
+//!   left-to-right (the view draws the connectors).
 //!
-//! This module is semantics-light and damascene-free (like `layout`): it builds
-//! the typed node/edge lists; the view layer sizes and draws them.
+//! The view layer renders this tree as nested damascene elements — containment
+//! and sizing fall out of the element layout; only the intra-op wires are drawn.
+//! This module stays damascene-free: it just builds the typed tree.
 
 use crate::model::pretty;
 use crate::sexpr::Sexpr;
 
-/// What a flow node represents — drives its color and chrome in the view.
+/// A control structure's flavor — drives its band color/keyword in the view.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum FlowKind {
-    /// `match` on a scrutinee; control children are its arms.
+pub enum FrameKind {
     Match,
-    /// `if`; control children are the then/else branches.
     If,
-    /// `let`; data children are binding values, the control child is the body.
     Let,
-    /// A function application (leaf computation).
-    Op,
-    /// A bare variable / parameter reference.
-    Source,
-    /// A literal (int, string, or quoted datum).
-    Lit,
 }
 
-/// Whether an edge carries control (which branch runs) or data (a value feeds a
-/// computation). Rendered with distinct styling so the two flows stay legible.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum EdgeKind {
-    Control,
-    Data,
+impl FrameKind {
+    pub fn keyword(self) -> &'static str {
+        match self {
+            FrameKind::Match => "match",
+            FrameKind::If => "if",
+            FrameKind::Let => "let",
+        }
+    }
 }
 
-/// One node in the flow diagram.
+/// A region of the diagram: either a containing control frame or a leaf value.
 #[derive(Clone, Debug)]
-pub struct FlowNode {
-    pub kind: FlowKind,
-    /// The branch/binding label that selects this node, shown as a header chip:
-    /// a `match` pattern, `then`/`else`, or a `let` binding name. Empty for the
-    /// root and for plain operands.
+pub enum Region {
+    /// A `match` / `if` / `let` frame containing labelled child branches.
+    Frame {
+        kind: FrameKind,
+        /// The scrutinee / condition shown in the header (empty for `let`).
+        detail: String,
+        branches: Vec<Branch>,
+    },
+    /// A function application: `head` + inline simple operands + compound
+    /// operand sub-regions (wired in from the left by the view).
+    Op {
+        head: String,
+        inline: String,
+        args: Vec<Region>,
+    },
+    /// A bare variable / parameter reference.
+    Var(String),
+    /// A literal (int / string / quoted datum).
+    Lit(String),
+}
+
+/// A labelled child of a frame: the arm pattern / `then` / `else` / binding name
+/// that selects `region`.
+#[derive(Clone, Debug)]
+pub struct Branch {
     pub label: String,
-    /// Primary content: the head symbol, or `match <scrutinee>` / `if <cond>`.
-    pub title: String,
-    /// Secondary content: an op's inline simple operands, or a `let`'s names.
-    pub subtitle: String,
+    pub region: Region,
 }
 
-/// A directed parent→child edge (parent sits left, child right).
-#[derive(Clone, Copy, Debug)]
-pub struct FlowEdge {
-    pub from: usize,
-    pub to: usize,
-    pub kind: EdgeKind,
-}
+/// Max characters shown for an inline scrutinee / operand before eliding.
+const MAX_INLINE: usize = 28;
 
-/// The whole diagram for one fn body.
-#[derive(Clone, Debug, Default)]
-pub struct FlowGraph {
-    pub nodes: Vec<FlowNode>,
-    pub edges: Vec<FlowEdge>,
-}
-
-/// Max characters shown for an inline scrutinee / operand string before it is
-/// elided; the full text lives in the source panel.
-const MAX_INLINE: usize = 30;
-
-impl FlowGraph {
-    /// Build the flow diagram for a fn body (the forms after the return type).
-    /// A multi-form body (rare — usually one expression) is treated as an
-    /// implicit sequence: each form becomes a root child.
-    pub fn build(body: &[Sexpr]) -> FlowGraph {
-        // The `(measure …)` totality clause is an annotation, not body logic —
-        // drop it so the diagram shows only the computation.
+impl Region {
+    /// Build the region tree for a fn body (the forms after the return type).
+    /// The `(measure …)` totality clause is dropped (annotation, not logic).
+    pub fn build(body: &[Sexpr]) -> Region {
         let forms: Vec<&Sexpr> = body
             .iter()
             .filter(|f| f.head() != Some("measure"))
             .collect();
-        let mut g = FlowGraph::default();
         match forms.as_slice() {
-            [] => {}
-            [single] => {
-                g.go(single, String::new());
-            }
-            many => {
-                // Several top-level forms: a synthetic `do` groups them.
-                let root = g.push(FlowKind::Op, String::new(), "do".into(), String::new());
-                for form in many {
-                    let c = g.go(form, String::new());
-                    g.edges.push(FlowEdge { from: root, to: c, kind: EdgeKind::Control });
-                }
-            }
-        }
-        g
-    }
-
-    /// Recursively lower `expr` into nodes, returning the id of the node that
-    /// stands for its value. `label` is the branch/binding chip leading here.
-    fn go(&mut self, expr: &Sexpr, label: String) -> usize {
-        match expr {
-            Sexpr::Sym(s) => self.push(FlowKind::Source, label, s.clone(), String::new()),
-            Sexpr::Int(_) | Sexpr::Str(_) => {
-                self.push(FlowKind::Lit, label, lit_text(expr), String::new())
-            }
-            Sexpr::List(items) => self.go_list(expr, items, label),
+            [] => Region::Lit(String::new()),
+            [single] => lower(single),
+            many => Region::Op {
+                head: "do".into(),
+                inline: String::new(),
+                args: many.iter().map(|f| lower(f)).collect(),
+            },
         }
     }
+}
 
-    fn go_list(&mut self, expr: &Sexpr, items: &[Sexpr], label: String) -> usize {
-        match expr.head() {
-            Some("match") => self.go_match(items, label),
-            Some("if") => self.go_if(items, label),
-            Some("let") => self.go_let(items, label),
-            Some("quote") => self.push(FlowKind::Lit, label, lit_text(expr), String::new()),
-            // An application with a symbol head, or any other list: an op node.
-            _ => self.go_op(items, label),
-        }
+/// Lower one expression into a region.
+fn lower(expr: &Sexpr) -> Region {
+    match expr {
+        Sexpr::Sym(s) => Region::Var(s.clone()),
+        Sexpr::Int(_) | Sexpr::Str(_) => Region::Lit(lit_text(expr)),
+        Sexpr::List(items) => match expr.head() {
+            Some("match") => lower_match(items),
+            Some("if") => lower_if(items),
+            Some("let") => lower_let(items),
+            Some("quote") => Region::Lit(lit_text(expr)),
+            _ => lower_op(items),
+        },
     }
+}
 
-    fn go_match(&mut self, items: &[Sexpr], label: String) -> usize {
-        let scrut = items.get(1).map(short).unwrap_or_default();
-        let id = self.push(FlowKind::Match, label, format!("match {scrut}"), String::new());
-        // items[2..] are arms: each a `(pattern body)` list.
-        for arm in &items[2.min(items.len())..] {
-            if let Sexpr::List(parts) = arm {
-                let pat = parts.first().map(pretty).unwrap_or_default();
+fn lower_match(items: &[Sexpr]) -> Region {
+    let detail = items.get(1).map(short).unwrap_or_default();
+    let branches = items[2.min(items.len())..]
+        .iter()
+        .filter_map(|arm| match arm {
+            Sexpr::List(parts) => {
+                let label = parts.first().map(pretty).unwrap_or_default();
                 let body = parts.get(1).cloned().unwrap_or(Sexpr::List(vec![]));
-                let c = self.go(&body, pat);
-                self.edges.push(FlowEdge { from: id, to: c, kind: EdgeKind::Control });
+                Some(Branch { label, region: lower(&body) })
+            }
+            _ => None,
+        })
+        .collect();
+    Region::Frame { kind: FrameKind::Match, detail, branches }
+}
+
+fn lower_if(items: &[Sexpr]) -> Region {
+    let detail = items.get(1).map(short).unwrap_or_default();
+    let mut branches = Vec::new();
+    if let Some(then) = items.get(2) {
+        branches.push(Branch { label: "then".into(), region: lower(then) });
+    }
+    if let Some(els) = items.get(3) {
+        branches.push(Branch { label: "else".into(), region: lower(els) });
+    }
+    Region::Frame { kind: FrameKind::If, detail, branches }
+}
+
+fn lower_let(items: &[Sexpr]) -> Region {
+    // (let ((name val) ...) body)
+    let mut branches = Vec::new();
+    if let Some(Sexpr::List(bs)) = items.get(1) {
+        for b in bs {
+            if let Sexpr::List(p) = b
+                && let Some(name) = p.first().and_then(|s| s.as_sym())
+            {
+                let val = p.get(1).cloned().unwrap_or(Sexpr::List(vec![]));
+                branches.push(Branch { label: name.to_string(), region: lower(&val) });
             }
         }
-        id
     }
+    if let Some(body) = items.get(2) {
+        branches.push(Branch { label: "in".into(), region: lower(body) });
+    }
+    Region::Frame { kind: FrameKind::Let, detail: String::new(), branches }
+}
 
-    fn go_if(&mut self, items: &[Sexpr], label: String) -> usize {
-        let cond = items.get(1).map(short).unwrap_or_default();
-        let id = self.push(FlowKind::If, label, format!("if {cond}"), String::new());
-        if let Some(then) = items.get(2) {
-            let c = self.go(then, "then".into());
-            self.edges.push(FlowEdge { from: id, to: c, kind: EdgeKind::Control });
+fn lower_op(items: &[Sexpr]) -> Region {
+    let head = match items.first() {
+        Some(Sexpr::Sym(s)) => s.clone(),
+        Some(h) if h.head() == Some("::") => qualified_short(items.first().unwrap()),
+        _ => "·".into(),
+    };
+    let mut inline: Vec<String> = Vec::new();
+    let mut args: Vec<Region> = Vec::new();
+    for arg in &items[1.min(items.len())..] {
+        match arg {
+            Sexpr::Sym(s) => inline.push(s.clone()),
+            Sexpr::Int(_) | Sexpr::Str(_) => inline.push(lit_text(arg)),
+            Sexpr::List(_) if arg.head() == Some("quote") => inline.push(lit_text(arg)),
+            Sexpr::List(_) if arg.head() == Some("::") => inline.push(qualified_short(arg)),
+            _ => args.push(lower(arg)),
         }
-        if let Some(els) = items.get(3) {
-            let c = self.go(els, "else".into());
-            self.edges.push(FlowEdge { from: id, to: c, kind: EdgeKind::Control });
-        }
-        id
     }
-
-    fn go_let(&mut self, items: &[Sexpr], label: String) -> usize {
-        // (let ((name val) ...) body)
-        let binds: Vec<(String, Sexpr)> = match items.get(1) {
-            Some(Sexpr::List(bs)) => bs
-                .iter()
-                .filter_map(|b| match b {
-                    Sexpr::List(p) => {
-                        let name = p.first()?.as_sym()?.to_string();
-                        Some((name, p.get(1).cloned().unwrap_or(Sexpr::List(vec![]))))
-                    }
-                    _ => None,
-                })
-                .collect(),
-            _ => Vec::new(),
-        };
-        let names: Vec<&str> = binds.iter().map(|(n, _)| n.as_str()).collect();
-        let id = self.push(FlowKind::Let, label, "let".into(), names.join(" "));
-        // Each binding's value is a data child, headed by the binding name.
-        for (name, val) in &binds {
-            let c = self.go(val, name.clone());
-            self.edges.push(FlowEdge { from: id, to: c, kind: EdgeKind::Data });
-        }
-        // The body is the control child (where evaluation continues).
-        if let Some(body) = items.get(2) {
-            let c = self.go(body, String::new());
-            self.edges.push(FlowEdge { from: id, to: c, kind: EdgeKind::Control });
-        }
-        id
-    }
-
-    fn go_op(&mut self, items: &[Sexpr], label: String) -> usize {
-        let head = match items.first() {
-            Some(Sexpr::Sym(s)) => s.clone(),
-            Some(Sexpr::List(_)) if items.first().map(|h| h.head()) == Some(Some("::")) => {
-                // A qualified head `(:: a b name)` — show its short name.
-                qualified_short(items.first().unwrap())
-            }
-            _ => "·".into(),
-        };
-        // Partition operands: simple (var/lit) stay inline; compound expand.
-        let mut inline: Vec<String> = Vec::new();
-        let mut compound: Vec<&Sexpr> = Vec::new();
-        for arg in &items[1.min(items.len())..] {
-            match arg {
-                Sexpr::Sym(s) => inline.push(s.clone()),
-                Sexpr::Int(_) | Sexpr::Str(_) => inline.push(lit_text(arg)),
-                Sexpr::List(_) if arg.head() == Some("quote") => inline.push(lit_text(arg)),
-                Sexpr::List(_) if arg.head() == Some("::") => inline.push(qualified_short(arg)),
-                _ => compound.push(arg),
-            }
-        }
-        let id = self.push(FlowKind::Op, label, head, elide(inline.join(" "), MAX_INLINE));
-        for arg in compound {
-            let c = self.go(arg, String::new());
-            self.edges.push(FlowEdge { from: id, to: c, kind: EdgeKind::Data });
-        }
-        id
-    }
-
-    fn push(&mut self, kind: FlowKind, label: String, title: String, subtitle: String) -> usize {
-        let id = self.nodes.len();
-        self.nodes.push(FlowNode {
-            kind,
-            label,
-            title,
-            subtitle,
-        });
-        id
-    }
+    Region::Op { head, inline: elide(inline.join(" "), MAX_INLINE), args }
 }
 
 /// A compact one-line rendering of an expression for an inline scrutinee/cond.
@@ -268,7 +212,6 @@ mod tests {
     use crate::sexpr::parse_top;
 
     fn body(src: &str) -> Vec<Sexpr> {
-        // Wrap the expression in a trivial fn and take its body.
         let form = parse_top(&format!("(fn f () T {src})")).unwrap().pop().unwrap();
         match form {
             Sexpr::List(items) => items[4..].to_vec(),
@@ -276,60 +219,80 @@ mod tests {
         }
     }
 
+    fn frame(r: &Region) -> (&FrameKind, &str, &[Branch]) {
+        match r {
+            Region::Frame { kind, detail, branches } => (kind, detail.as_str(), branches),
+            _ => panic!("expected a frame, got {r:?}"),
+        }
+    }
+
     #[test]
     fn op_inlines_simple_operands_only() {
-        let g = FlowGraph::build(&body("(int_eq th 59)"));
-        // One op node, no children — both operands are inline.
-        assert_eq!(g.nodes.len(), 1);
-        assert_eq!(g.nodes[0].title, "int_eq");
-        assert_eq!(g.nodes[0].subtitle, "th 59");
-        assert!(g.edges.is_empty());
+        match Region::build(&body("(int_eq th 59)")) {
+            Region::Op { head, inline, args } => {
+                assert_eq!(head, "int_eq");
+                assert_eq!(inline, "th 59");
+                assert!(args.is_empty());
+            }
+            other => panic!("expected op, got {other:?}"),
+        }
     }
 
     #[test]
-    fn op_expands_compound_operand() {
-        let g = FlowGraph::build(&body("(head_code (head_atom line))"));
-        assert_eq!(g.nodes.len(), 2);
-        assert_eq!(g.nodes[0].title, "head_code");
-        assert_eq!(g.nodes[1].title, "head_atom");
-        assert_eq!(g.nodes[1].subtitle, "line");
-        assert_eq!(g.edges.len(), 1);
-        assert_eq!(g.edges[0].kind, EdgeKind::Data);
+    fn op_nests_compound_operand_as_region() {
+        match Region::build(&body("(head_code (head_atom line))")) {
+            Region::Op { head, args, .. } => {
+                assert_eq!(head, "head_code");
+                assert_eq!(args.len(), 1);
+                match &args[0] {
+                    Region::Op { head, inline, .. } => {
+                        assert_eq!(head, "head_atom");
+                        assert_eq!(inline, "line");
+                    }
+                    other => panic!("expected nested op, got {other:?}"),
+                }
+            }
+            other => panic!("expected op, got {other:?}"),
+        }
     }
 
     #[test]
-    fn match_arms_become_labelled_control_children() {
-        let g = FlowGraph::build(&body(
+    fn match_arms_become_labelled_branches() {
+        let r = Region::build(&body(
             "(match (trim_left line) (Nil (Pair 6 cur)) ((Cons th tt) (Pair 5 cur)))",
         ));
-        assert_eq!(g.nodes[0].kind, FlowKind::Match);
-        assert_eq!(g.nodes[0].title, "match (trim_left line)");
-        // Two arms → two control edges from the match node.
-        let ctrl: Vec<_> = g.edges.iter().filter(|e| e.from == 0).collect();
-        assert_eq!(ctrl.len(), 2);
-        assert!(ctrl.iter().all(|e| e.kind == EdgeKind::Control));
-        // Arm children are headed by their patterns.
-        let labels: Vec<&str> = ctrl.iter().map(|e| g.nodes[e.to].label.as_str()).collect();
-        assert!(labels.contains(&"Nil"));
-        assert!(labels.contains(&"(Cons th tt)"));
+        let (kind, detail, branches) = frame(&r);
+        assert_eq!(*kind, FrameKind::Match);
+        assert_eq!(detail, "(trim_left line)");
+        assert_eq!(branches.len(), 2);
+        assert_eq!(branches[0].label, "Nil");
+        assert_eq!(branches[1].label, "(Cons th tt)");
+    }
+
+    #[test]
+    fn nested_control_in_arm_is_a_child_frame() {
+        let r = Region::build(&body(
+            "(match x (Nil (if c (Pair 1 a) (Pair 2 a))))",
+        ));
+        let (_, _, branches) = frame(&r);
+        let (kind, _, inner) = frame(&branches[0].region);
+        assert_eq!(*kind, FrameKind::If);
+        assert_eq!(inner[0].label, "then");
+        assert_eq!(inner[1].label, "else");
+    }
+
+    #[test]
+    fn let_bindings_and_body_are_branches() {
+        let r = Region::build(&body("(let ((code (head_atom line))) (Pair code code))"));
+        let (kind, _, branches) = frame(&r);
+        assert_eq!(*kind, FrameKind::Let);
+        assert_eq!(branches[0].label, "code");
+        assert_eq!(branches.last().unwrap().label, "in");
     }
 
     #[test]
     fn measure_clause_is_skipped() {
-        // A structural body `(measure (struct xs)) (match xs ...)` should chart
-        // only the match — the measure clause is a totality annotation.
-        let g = FlowGraph::build(&body("(measure (struct xs)) (match xs (Nil 0))"));
-        assert_eq!(g.nodes[0].kind, FlowKind::Match);
-        assert!(g.nodes.iter().all(|n| n.title != "measure" && n.title != "do"));
-    }
-
-    #[test]
-    fn let_binding_is_data_body_is_control() {
-        let g = FlowGraph::build(&body("(let ((code (head_atom line))) (Pair code code))"));
-        assert_eq!(g.nodes[0].kind, FlowKind::Let);
-        assert_eq!(g.nodes[0].subtitle, "code");
-        let kinds: Vec<EdgeKind> = g.edges.iter().map(|e| e.kind).collect();
-        assert!(kinds.contains(&EdgeKind::Data)); // the binding value
-        assert!(kinds.contains(&EdgeKind::Control)); // the body
+        let r = Region::build(&body("(measure (struct xs)) (match xs (Nil 0))"));
+        assert!(matches!(r, Region::Frame { kind: FrameKind::Match, .. }));
     }
 }

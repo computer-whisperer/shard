@@ -4,7 +4,7 @@
 //! tree can be rendered headlessly — to SVG + a lint report — without a GPU or
 //! a window. That headless render is the build-time review loop.
 
-use crate::flow::{EdgeKind, FlowGraph, FlowKind, FlowNode};
+use crate::flow::{Branch, FrameKind, Region};
 use crate::layout::{self, EndPoint, GEdge, GNode, Graph, Layout};
 use crate::model::Project;
 use damascene_core::prelude::*;
@@ -300,6 +300,13 @@ fn graph_canvas_edges(lay: &Layout, node_els: Vec<El>, edges: VectorAsset) -> El
             rects
         });
 
+    pan_zoom_viewport(content)
+}
+
+/// Wrap `content` in the shared pan/zoom viewport. The content sizes itself
+/// (absolute-positioned graph stack, or a self-sizing nested flow tree); the
+/// `viewport()` bakes the pan/zoom transform into descendant rects + hit-test.
+fn pan_zoom_viewport(content: El) -> El {
     // No `.fill()` here: the per-node hover envelope brightens the fill of any
     // keyed node, and the viewport must be keyed (for ViewportRequest + state).
     // A fill would flash as the cursor transits between the background and node
@@ -485,11 +492,14 @@ fn node_box(project: &Project, fn_idx: usize, selected_fn: Option<usize>, w: f32
 }
 
 // ---------------------------------------------------------------------------
-// Flow view: one fn body as a dataflow / decision-tree diagram.
+// Flow view: one fn body as a structured (LabVIEW-style) diagram. Control
+// structures are FRAMES that contain their branches; leaf computations are op
+// cards WIRED to their operands. Rendered as nested elements — containment,
+// sizing, and text wrapping fall out of the element layout — inside the
+// pan/zoom viewport. (The Sugiyama engine stays for the call/import graphs.)
 // ---------------------------------------------------------------------------
 
-/// The Flow-view key: node colors (control vs op vs source/lit) and the
-/// control/data edge styling.
+/// The Flow-view key.
 fn flow_legend() -> El {
     row([
         text("flow").mono().muted().font_size(SUB_SIZE),
@@ -498,9 +508,10 @@ fn flow_legend() -> El {
         legend_chip(tokens::CARD, "op"),
         legend_chip(tokens::CARD.mix(tokens::WARNING, 0.32), "var"),
         legend_chip(tokens::BACKGROUND, "literal"),
-        text("·  wires").mono().muted().font_size(SUB_SIZE),
-        legend_chip(tokens::MUTED_FOREGROUND, "control"),
-        legend_chip(tokens::INFO, "data"),
+        text("·  frames contain · operands wired in →")
+            .mono()
+            .muted()
+            .font_size(SUB_SIZE),
     ])
     .gap(tokens::SPACE_3)
     .padding(tokens::SPACE_2)
@@ -508,251 +519,178 @@ fn flow_legend() -> El {
 
 fn flow_canvas(project: &Project, fn_idx: usize) -> El {
     let f = &project.fns[fn_idx];
-    let fg = FlowGraph::build(&f.body);
-    if fg.nodes.is_empty() {
+    if f.body.iter().all(|form| form.head() == Some("measure")) {
         return column([text("This fn has no body to chart (a signature).").muted()])
             .padding(tokens::SPACE_8);
     }
-    let nodes: Vec<GNode> = fg
-        .nodes
-        .iter()
-        .map(|n| {
-            let (w, h) = flow_node_size(n);
-            GNode::simple(w, h)
-        })
-        .collect();
-    let edges: Vec<GEdge> = fg
-        .edges
-        .iter()
-        .map(|e| GEdge {
-            from: EndPoint { node: e.from, port: 0 },
-            to: EndPoint { node: e.to, port: 0 },
-        })
-        .collect();
-    let graph = Graph { nodes, edges };
-    // Roomier than the call-graph default: flow nodes carry more chrome, so
-    // they need vertical breathing room to read as distinct shapes.
-    let cfg = layout::LayoutConfig {
-        layer_gap: 82.0,
-        node_gap: 28.0,
-        margin: 40.0,
+    let region = Region::build(&f.body);
+    // The nested-element tree hugs its own content; a little padding keeps it
+    // off the viewport edges. The viewport frames it (Fit / pan / zoom).
+    let content = row([render_region(&region)]).padding(tokens::SPACE_6);
+    pan_zoom_viewport(content)
+}
+
+/// Render a region as a nested element. Frames contain labelled branches; op
+/// cards wire to their operand sub-regions; vars/lits are leaf pills/tags.
+fn render_region(r: &Region) -> El {
+    match r {
+        Region::Frame { kind, detail, branches } => render_frame(*kind, detail, branches),
+        Region::Op { head, inline, args } => render_op(head, inline, args),
+        Region::Var(name) => var_pill(name),
+        Region::Lit(value) => lit_tag(value),
+    }
+}
+
+/// A control structure: a colored keyword band over a body that *contains* its
+/// branches, each headed by its selector chip. Nesting = box enclosure.
+fn render_frame(kind: FrameKind, detail: &str, branches: &[Branch]) -> El {
+    let (accent, fg) = match kind {
+        FrameKind::Match | FrameKind::If => (tokens::INFO, tokens::INFO_FOREGROUND),
+        FrameKind::Let => (tokens::SUCCESS, tokens::SUCCESS_FOREGROUND),
     };
-    let lay = layout::layout(&graph, &cfg);
-    let node_els: Vec<El> = lay
-        .nodes
-        .iter()
-        .enumerate()
-        .map(|(i, pn)| flow_node_box(&fg.nodes[i], pn.w, pn.h))
-        .collect();
-    graph_canvas_edges(&lay, node_els, flow_edges_asset(&lay, &fg))
-}
-
-/// Split a structure title (`"match <scrutinee>"`) into (keyword, detail).
-fn split_kw(title: &str) -> (&str, &str) {
-    title.split_once(' ').unwrap_or((title, ""))
-}
-
-/// The primary / secondary text a node displays, for width measurement.
-fn node_lines(n: &FlowNode) -> (&str, &str) {
-    match n.kind {
-        FlowKind::Match | FlowKind::If => split_kw(&n.title),
-        FlowKind::Let => ("let", n.subtitle.as_str()),
-        _ => (n.title.as_str(), n.subtitle.as_str()),
-    }
-}
-
-/// Intrinsic size of a flow node. Each kind has its own chrome (header band /
-/// op card / pill / tag), so height is computed per-kind; width tracks the
-/// longer text line plus the selector chip.
-fn flow_node_size(n: &FlowNode) -> (f32, f32) {
-    let (main, sub) = node_lines(n);
-    let text_chars = main.chars().count().max(sub.chars().count());
-    let chars = text_chars.max(n.label.chars().count() + 2) as f32;
-    let w = (chars * 7.0 + 20.0).clamp(54.0, 240.0);
-
-    let mut h = 0.0_f32;
-    if !n.label.is_empty() {
-        h += 18.0; // selector chip + gap
-    }
-    match n.kind {
-        FlowKind::Match | FlowKind::If | FlowKind::Let => {
-            h += 22.0; // header band
-            if !sub.is_empty() {
-                h += 17.0; // detail line
-            }
-        }
-        FlowKind::Op => {
-            h += 23.0;
-            if !sub.is_empty() {
-                h += 15.0;
-            }
-        }
-        FlowKind::Source => h += 26.0, // pill
-        FlowKind::Lit => h += 22.0,    // tag
-    }
-    (w, h.max(26.0_f32))
-}
-
-/// A filled keyword band — the recognizable header of a control structure.
-fn flow_band(kw: &str, fill: Color, fg: Color) -> El {
-    row([text(kw.to_string())
-        .mono()
-        .semibold()
-        .font_size(12.0)
-        .text_color(fg)
-        .nowrap_text()
-        .ellipsis()])
-    .width(Size::Fill(1.0))
-    .padding(4.0)
-    .fill(fill)
-}
-
-/// A muted, padded detail line (a scrutinee/condition or operand list).
-fn flow_detail(s: &str, size: f32) -> El {
-    row([text(s.to_string())
-        .mono()
-        .muted()
-        .font_size(size)
-        .nowrap_text()
-        .ellipsis()])
-    .width(Size::Fill(1.0))
-    .padding(4.0)
-}
-
-/// A control structure: a colored keyword band over its scrutinee/condition.
-fn flow_structure(kw: &str, detail: &str, accent: Color, fg: Color) -> El {
-    let mut kids = vec![flow_band(kw, accent, fg)];
+    let mut band_kids = vec![
+        text(kind.keyword().to_string())
+            .mono()
+            .semibold()
+            .font_size(12.0)
+            .text_color(fg)
+            .nowrap_text(),
+    ];
     if !detail.is_empty() {
-        kids.push(flow_detail(detail, 11.0));
+        band_kids.push(
+            text(detail.to_string())
+                .mono()
+                .font_size(11.0)
+                .text_color(fg)
+                .nowrap_text()
+                .ellipsis(),
+        );
     }
-    column(kids)
-        .gap(0.0)
+    let band = row(band_kids)
+        .gap(tokens::SPACE_2)
+        .padding(5.0)
         .width(Size::Fill(1.0))
-        .height(Size::Fill(1.0))
+        .fill(accent);
+
+    let body = column(branches.iter().map(render_branch).collect::<Vec<_>>())
+        .gap(7.0)
+        .padding(8.0);
+
+    column([band, body])
         .fill(tokens::CARD)
         .stroke(accent)
-        .radius(6.0)
+        .radius(7.0)
 }
 
-/// The accent selector pill (the arm pattern / `then` / binding name).
-fn branch_chip(label: &str) -> El {
+/// One labelled branch inside a frame: its selector chip + the contained region.
+fn render_branch(b: &Branch) -> El {
+    // Top-align: the chip sits beside its region's header, not floating at the
+    // vertical centre of a tall nested frame.
+    row([selector_chip(&b.label), render_region(&b.region)])
+        .gap(tokens::SPACE_2)
+        .align(Align::Start)
+}
+
+/// The selector pill that heads a branch (arm pattern / `then`/`else` / binding
+/// name). Blue ties it to the control vocabulary; it sits left of its region.
+fn selector_chip(label: &str) -> El {
     row([text(label.to_string())
         .mono()
         .semibold()
         .font_size(10.0)
-        .text_color(tokens::ACCENT_FOREGROUND)
+        .text_color(tokens::INFO_FOREGROUND)
         .nowrap_text()
         .ellipsis()])
     .padding(3.0)
     .radius(5.0)
-    .fill(tokens::ACCENT)
+    .fill(tokens::INFO)
 }
 
-/// The per-kind body of a flow node (everything below the selector chip).
-fn flow_body(n: &FlowNode) -> El {
-    match n.kind {
-        FlowKind::Match | FlowKind::If => {
-            let (kw, detail) = split_kw(&n.title);
-            flow_structure(kw, detail, tokens::INFO, tokens::INFO_FOREGROUND)
-        }
-        FlowKind::Let => {
-            flow_structure("let", &n.subtitle, tokens::SUCCESS, tokens::SUCCESS_FOREGROUND)
-        }
-        // An op: the function name is the hero, operands a quiet second line.
-        FlowKind::Op => {
-            let mut kids = vec![row([text(n.title.clone())
-                .mono()
-                .semibold()
-                .font_size(13.0)
-                .text_color(tokens::FOREGROUND)
-                .nowrap_text()
-                .ellipsis()])
-            .width(Size::Fill(1.0))];
-            if !n.subtitle.is_empty() {
-                kids.push(
-                    text(n.subtitle.clone())
-                        .mono()
-                        .muted()
-                        .font_size(11.0)
-                        .nowrap_text()
-                        .ellipsis(),
-                );
-            }
-            column(kids)
-                .gap(1.0)
-                .padding(6.0)
-                .width(Size::Fill(1.0))
-                .height(Size::Fill(1.0))
-                .fill(tokens::CARD)
-                .stroke(tokens::BORDER)
-                .radius(6.0)
-        }
-        // A variable reference: a small warm pill — clearly a data input.
-        FlowKind::Source => column([text(n.title.clone())
+/// A function application: the op card, with any compound operands wired in
+/// from the left (data flows left→right into the op, LabVIEW-style).
+fn render_op(head: &str, inline: &str, args: &[Region]) -> El {
+    let card = op_card(head, inline);
+    if args.is_empty() {
+        return card;
+    }
+    let arg_rows: Vec<El> = args
+        .iter()
+        .map(|a| row([render_region(a), wire_stub()]).align(Align::Center))
+        .collect();
+    row([column(arg_rows).gap(6.0), card]).align(Align::Center)
+}
+
+/// The op card itself: the function name as a bold hero, inline simple operands
+/// a quiet second line.
+fn op_card(head: &str, inline: &str) -> El {
+    let mut kids = vec![
+        text(head.to_string())
             .mono()
             .semibold()
-            .font_size(12.0)
+            .font_size(13.0)
             .text_color(tokens::FOREGROUND)
-            .center_text()
             .nowrap_text()
-            .ellipsis()])
-        .padding(5.0)
-        .width(Size::Fill(1.0))
-        .height(Size::Fill(1.0))
-        .fill(tokens::CARD.mix(tokens::WARNING, 0.32))
-        .stroke(tokens::WARNING)
-        .radius(13.0),
-        // A literal: a dim mono tag — clearly a constant.
-        FlowKind::Lit => column([text(n.title.clone())
-            .mono()
-            .muted()
-            .font_size(11.0)
-            .center_text()
-            .nowrap_text()
-            .ellipsis()])
-        .padding(4.0)
-        .width(Size::Fill(1.0))
-        .height(Size::Fill(1.0))
-        .fill(tokens::BACKGROUND)
-        .stroke(tokens::BORDER)
-        .radius(4.0),
+            .ellipsis(),
+    ];
+    if !inline.is_empty() {
+        kids.push(
+            text(inline.to_string())
+                .mono()
+                .muted()
+                .font_size(11.0)
+                .nowrap_text()
+                .ellipsis(),
+        );
     }
-}
-
-fn flow_node_box(n: &FlowNode, w: f32, h: f32) -> El {
-    let mut kids: Vec<El> = Vec::new();
-    if !n.label.is_empty() {
-        kids.push(branch_chip(&n.label));
-    }
-    kids.push(flow_body(n));
     column(kids)
-        .gap(2.0)
-        .width(Size::Fixed(w))
-        .height(Size::Fixed(h))
+        .gap(1.0)
+        .padding(6.0)
+        .fill(tokens::CARD)
+        .stroke(tokens::BORDER)
+        .radius(6.0)
 }
 
-/// Edge overlay for the flow graph: control edges are solid and muted, data
-/// edges thinner and accent-tinted, so the decision skeleton reads apart from
-/// the value wiring. Index-aligned with `fg.edges` (== `lay.edges`).
-fn flow_edges_asset(lay: &Layout, fg: &FlowGraph) -> VectorAsset {
-    let mut paths = Vec::new();
-    for (e, fe) in lay.edges.iter().zip(&fg.edges) {
-        if e.points.len() < 2 {
-            continue;
-        }
-        // Control = the decision skeleton: thicker, neutral. Data = value
-        // wiring into a computation: thinner, accent-tinted.
-        let (color, width) = match fe.kind {
-            EdgeKind::Control => (tokens::MUTED_FOREGROUND, 2.2),
-            EdgeKind::Data => (tokens::INFO, 1.3),
-        };
-        paths.push(edge_curve(&e.points, e.back, color, width));
-        let n = e.points.len();
-        let (fx, fy) = e.points[n - 2];
-        let (tx, ty) = e.points[n - 1];
-        paths.push(arrowhead(fx, fy, tx, ty, color));
-    }
-    VectorAsset::from_paths([0.0, 0.0, lay.width, lay.height], paths)
+/// A variable reference: a small warm pill (a data input).
+fn var_pill(name: &str) -> El {
+    column([text(name.to_string())
+        .mono()
+        .semibold()
+        .font_size(12.0)
+        .text_color(tokens::FOREGROUND)
+        .center_text()
+        .nowrap_text()])
+    .padding(5.0)
+    .fill(tokens::CARD.mix(tokens::WARNING, 0.32))
+    .stroke(tokens::WARNING)
+    .radius(13.0)
+}
+
+/// A literal: a dim mono tag (a constant).
+fn lit_tag(value: &str) -> El {
+    let show = if value.is_empty() { "·".to_string() } else { value.to_string() };
+    column([text(show)
+        .mono()
+        .muted()
+        .font_size(11.0)
+        .center_text()
+        .nowrap_text()])
+    .padding(4.0)
+    .fill(tokens::BACKGROUND)
+    .stroke(tokens::BORDER)
+    .radius(4.0)
+}
+
+/// A short right-pointing wire stub: an operand feeding into an op card.
+fn wire_stub() -> El {
+    let line = PathBuilder::new()
+        .move_to(0.0, 6.0)
+        .line_to(15.0, 6.0)
+        .stroke_solid(tokens::INFO, 1.6)
+        .build();
+    let head = arrowhead(8.0, 6.0, 21.0, 6.0, tokens::INFO);
+    vector(VectorAsset::from_paths([0.0, 0.0, 22.0, 12.0], vec![line, head]))
+        .width(Size::Fixed(22.0))
+        .height(Size::Fixed(12.0))
 }
 
 fn detail_panel(project: &Project, fn_idx: usize) -> El {

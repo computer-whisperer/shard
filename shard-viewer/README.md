@@ -42,12 +42,11 @@ files it imports), with a **category heat map**:
 - **Click a file node** to open its **breakdown panel** (per-category line
   counts + import in/out degree); the panel's **Open call graph ▸** button
   drills into the file's Methods view.
-- Layout is a generic, semantics-agnostic **layered (Sugiyama) engine**
-  (`layout.rs`): SCC condensation (cycles share a column) → dummy nodes for
-  long edges → barycenter crossing reduction → iterative coordinate assignment
-  → port-aware polyline routing. Nodes carry input/output **ports** and a
-  reserved `sub` nesting hook, so the planned s-expr **dataflow (LabVIEW-style)
-  view** plugs into the same engine. The call-graph view is its first client.
+- Layout (for the call/import graphs) is a generic, semantics-agnostic **layered
+  (Sugiyama) engine** (`layout.rs`): SCC condensation (cycles share a column) →
+  dummy nodes for long edges → barycenter crossing reduction → iterative
+  coordinate assignment → port-aware polyline routing. (The Flow view does *not*
+  use this — a nested tree is a different problem; see below.)
 - **Pan** by dragging an empty area of the canvas; **zoom** with the mouse wheel
   (toward the cursor). The canvas is damascene's native `viewport()` widget, so
   the transform follows hit-test for free. `Fit` frames the whole graph;
@@ -56,33 +55,32 @@ files it imports), with a **category heat map**:
   text, and clickable **Calls** / **Called by** lists. Clicking a callee/caller
   (including cross-file) navigates to it, switching the canvas as needed.
 
-**Flow** — one fn body as a **dataflow / decision-tree** diagram, so s-expr
-nesting becomes spatial instead of parenthetical. Select a fn (in Methods),
-then hit **Flow**. It's a *hybrid* rendering:
+**Flow** — one fn body as a **structured (LabVIEW-style)** diagram, so s-expr
+nesting becomes box *enclosure* instead of parenthesis-counting. Select a fn (in
+Methods), then hit **Flow**. It's a containment hybrid:
 
-Each node *kind* gets a distinct visual form so you read the shape, not the
-text:
-
-- **Control structures** (`match` / `if`) are cards with a blue **keyword band**
-  over their scrutinee/condition — the recognizable skeleton; **`let`** gets a
-  green band. Each arm / branch / body hangs to the right, headed by a **selector
-  chip** showing the pattern or branch (`Nil`, `then`, a binding name).
-- **Leaf expressions** become **operation** cards: the function name is the bold
-  hero, operands a quiet second line. *Simple* operands (vars / literals) sit
-  inline; *compound* operands (nested applications) expand into their own op
-  cards wired in. So `(int_eq th 59)` is one card; `(head_code (head_atom line))`
-  is two.
+- **Control structures** (`match` / `if` / `let`) are **frames** that physically
+  *contain* their branches. A blue keyword band (green for `let`) heads the
+  frame over its scrutinee/condition; inside, each arm / branch / body is a child
+  region headed by a blue **selector chip** (`Nil`, `then`, a binding name).
+  Nesting depth = box enclosure — a deeply nested `match`/`if` reads as nested
+  rectangles, not a sprawl of wires.
+- **Leaf computations** are **op cards**: the function name is the bold hero,
+  *simple* operands (vars / literals) sit inline, and *compound* operands (nested
+  applications) are **wired into the op from the left** (data flows left→right,
+  LabVIEW-style). So `(int_eq th 59)` is one card; `(head_code (head_atom line))`
+  is two, wired.
 - **Variables** are warm amber **pills** (data inputs); **literals** are dim mono
-  **tags** (constants).
-- **Control wires** (which branch runs) are thick and neutral; **data wires** (a
-  value feeds a computation) are thin and accent-tinted, so the decision
-  skeleton reads apart from the value wiring. The `(measure …)` totality clause
-  is skipped (it's an annotation, not logic).
+  **tags** (constants). The `(measure …)` totality clause is skipped (annotation,
+  not logic).
 
-The model (`flow.rs`) lowers the body into typed node/edge lists; the view sizes,
-shapes, and colors them and reuses the same layered layout engine. Today `match`
-scrutinees and `if` conditions are shown inline (not expanded into op trees);
-that's the obvious next tuning knob.
+This is laid out *not* by the Sugiyama engine (which stays for the call/import
+graphs) but as **nested damascene elements** — containment, sizing, and text
+wrapping fall out of the element layout; only the intra-op operand wires are
+drawn. The model (`flow.rs`) lowers the fn body into a **region tree** (frames
+with labelled branches; ops with operand sub-regions); the view renders it into
+the pan/zoom viewport. Today `match` scrutinees and `if` conditions are shown
+inline in the band (not expanded into op cards) — the obvious next knob.
 
 ## Binaries
 
@@ -115,7 +113,7 @@ resvg \
 src/
   sexpr.rs   s-expr reader (paren tree only)
   model.rs   structural extraction + call-graph resolution (same-file-first)
-  flow.rs    intra-fn dataflow / decision-tree model (one fn body -> nodes/edges)
+  flow.rs    intra-fn structured model (one fn body -> a region/containment tree)
   layout.rs  layered SCC-aware graph layout
   view.rs    damascene view tree (pure: project state -> El)
   bin/       viewer.rs (GUI) · graph.rs (text) · render.rs (headless SVG)
