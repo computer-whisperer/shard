@@ -150,7 +150,16 @@ fn sys_node_box(project: &Project, file_idx: usize, selected_file: Option<usize>
     .radius(8.0)
     .width(Size::Fixed(w))
     .height(Size::Fixed(h))
-    .key(format!("sysfile:{file_idx}"));
+    .key(format!("sysfile:{file_idx}"))
+    .tooltip(format!(
+        "{}\n{} lines · {} fns\nimpl {} · proof {} · comment/blank {}",
+        f.rel,
+        f.counts.total(),
+        f.fns.len(),
+        f.counts.impl_lines(),
+        f.counts.proof_lines(),
+        f.counts.comment + f.counts.blank,
+    ));
     // Tint by proof-vs-impl share so the verification-heavy corners of the tree
     // stand out at a glance; selection still wins for the focused node.
     if selected {

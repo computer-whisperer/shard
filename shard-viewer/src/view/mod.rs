@@ -60,7 +60,7 @@ pub fn app_root(project: &Project, p: &ViewParams) -> El {
     match p.mode {
         ViewMode::Methods | ViewMode::Flow | ViewMode::Board => {
             if let Some(fni) = p.selected_fn {
-                panes.push(methods::detail_panel(project, fni));
+                panes.push(methods::detail_panel(project, fni, p.mode));
             }
         }
         ViewMode::Systems => {
@@ -78,9 +78,17 @@ fn sidebar(project: &Project, selected_file: Option<usize>) -> El {
         .iter()
         .enumerate()
         .map(|(i, f)| {
-            let mut b = button(format!("{}  ({})", f.rel, f.fns.len()))
-                .key(format!("file:{i}"))
-                .ghost();
+            // Surface parse failures (otherwise invisible — the file just shows
+            // 0 fns as if empty) with a marker + the error on hover.
+            let label = match &f.parse_error {
+                Some(_) => format!("⚠ {}  ({})", f.rel, f.fns.len()),
+                None => format!("{}  ({})", f.rel, f.fns.len()),
+            };
+            let tip = match &f.parse_error {
+                Some(e) => format!("parse error — {e}"),
+                None => format!("{} · {} lines", f.module, f.counts.total()),
+            };
+            let mut b = button(label).key(format!("file:{i}")).ghost().tooltip(tip);
             if selected_file == Some(i) {
                 b = b.selected();
             }
@@ -147,24 +155,25 @@ fn toolbar(project: &Project, p: &ViewParams) -> El {
             None => "Flow".to_string(),
         },
     };
-    let mode_btn = |label: &str, key: &str, active: bool| {
-        let b = button(label).key(key.to_string());
+    let mode_btn = |label: &str, key: &str, active: bool, tip: &str| {
+        let b = button(label).key(key.to_string()).tooltip(tip.to_string());
         if active { b.selected() } else { b.ghost() }
     };
     row([
         h3(title),
         spacer(),
-        mode_btn("Methods", "mode_methods", p.mode == ViewMode::Methods),
-        mode_btn("Systems", "mode_systems", p.mode == ViewMode::Systems),
-        mode_btn("Board", "mode_board", p.mode == ViewMode::Board),
-        mode_btn("Flow", "mode_flow", p.mode == ViewMode::Flow),
+        mode_btn("Methods", "mode_methods", p.mode == ViewMode::Methods, "One file's call graph + triage overlay"),
+        mode_btn("Systems", "mode_systems", p.mode == ViewMode::Systems, "Project-wide import graph + proof/impl heat map"),
+        mode_btn("Board", "mode_board", p.mode == ViewMode::Board, "This file's call DAG, each fn in expanded flow form"),
+        mode_btn("Flow", "mode_flow", p.mode == ViewMode::Flow, "The selected fn's body as a structured diagram"),
         text(format!("{:.0}%", p.zoom * 100.0))
             .mono()
             .muted()
             .center_text()
-            .width(Size::Fixed(52.0)),
-        button("Fit").key("fit").secondary(),
-        button("Reset view").key("reset").ghost(),
+            .width(Size::Fixed(52.0))
+            .tooltip("Canvas zoom"),
+        button("Fit").key("fit").secondary().tooltip("Frame the whole graph"),
+        button("Reset view").key("reset").ghost().tooltip("Snap back to 1:1"),
     ])
     .gap(tokens::SPACE_2)
     .padding(tokens::SPACE_2)

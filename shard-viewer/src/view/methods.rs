@@ -4,7 +4,7 @@
 //! which the Flow and Board views reuse.
 
 use super::shared::{graph_canvas, legend_chip};
-use super::{SUB_SIZE, TITLE_SIZE, ViewParams};
+use super::{SUB_SIZE, TITLE_SIZE, ViewMode, ViewParams};
 use crate::layout::{self, EndPoint, GEdge, GNode, Graph};
 use crate::model::Project;
 use damascene_core::prelude::*;
@@ -97,6 +97,8 @@ fn node_box(project: &Project, fn_idx: usize, selected_fn: Option<usize>, w: f32
         f.name.clone()
     };
     let sub = format!("{} args → {}", f.params.len(), short_ty(&f.ret));
+    // Hover reveals what the ellipsized box can't: the full signature, the home
+    // file, and the triage metrics (with the orphan reason spelled out).
     let b = column([
         text(title).mono().font_size(TITLE_SIZE).nowrap_text().ellipsis(),
         text(sub).muted().font_size(SUB_SIZE).nowrap_text().ellipsis(),
@@ -110,7 +112,8 @@ fn node_box(project: &Project, fn_idx: usize, selected_fn: Option<usize>, w: f32
     // auto hover/press envelope on focusable nodes flashes the fill as the
     // cursor sweeps across the dense graph. Selection highlight (below) is the
     // only per-node visual state we want.
-    .key(format!("fn:{fn_idx}"));
+    .key(format!("fn:{fn_idx}"))
+    .tooltip(node_tip(project, fn_idx));
     // Triage overlay (when not selected): orphans flag as cut candidates;
     // everything else warms with connectivity so hubs stand out from leaves.
     if selected {
@@ -127,7 +130,48 @@ fn node_box(project: &Project, fn_idx: usize, selected_fn: Option<usize>, w: f32
     }
 }
 
-pub(crate) fn detail_panel(project: &Project, fn_idx: usize) -> El {
+/// Hover text for a fn node/card: full signature, home file, triage metrics.
+/// Shared with the Board view (its cards reuse the same reveal).
+pub(crate) fn node_tip(project: &Project, fn_idx: usize) -> String {
+    let f = &project.fns[fn_idx];
+    let ps: Vec<String> = f.params.iter().map(|(n, t)| format!("({n} {t})")).collect();
+    let kw = if f.is_sig { "sig " } else { "" };
+    let mut tip = format!(
+        "{kw}{}({}) → {}\n{}\n{} lines · {} calls · {} callers",
+        f.name,
+        ps.join(" "),
+        f.ret,
+        project.files[f.file].rel,
+        f.src_lines(),
+        f.calls.len(),
+        f.callers.len()
+    );
+    if f.is_orphan() {
+        tip.push_str("\n⚠ orphan — nothing calls it (cut candidate)");
+    } else if f.proof_refd && f.callers.is_empty() {
+        tip.push_str("\nproof subject — reasoned about, not called");
+    }
+    tip
+}
+
+/// Jump-to-other-view buttons for the selected fn, omitting the current view.
+/// Each reuses an existing toolbar route (the fn / file is already selected, so
+/// the mode switch lands on it), so no new event plumbing is needed.
+fn nav_buttons(mode: ViewMode) -> El {
+    let mut bs = Vec::new();
+    if mode != ViewMode::Flow {
+        bs.push(button("Flow ▸").key("mode_flow").secondary().tooltip("Chart this fn's body"));
+    }
+    if mode != ViewMode::Board {
+        bs.push(button("Board ▸").key("mode_board").ghost().tooltip("This file's call DAG, expanded"));
+    }
+    if mode != ViewMode::Methods {
+        bs.push(button("Graph ▸").key("mode_methods").ghost().tooltip("This file's call graph"));
+    }
+    row(bs).gap(tokens::SPACE_2)
+}
+
+pub(crate) fn detail_panel(project: &Project, fn_idx: usize, mode: ViewMode) -> El {
     let f = &project.fns[fn_idx];
     let sig: Vec<String> = f.params.iter().map(|(n, t)| format!("({n} {t})")).collect();
 
@@ -158,6 +202,7 @@ pub(crate) fn detail_panel(project: &Project, fn_idx: usize) -> El {
             .caption()
             .muted(),
         text(metrics).caption().muted(),
+        nav_buttons(mode),
         separator(),
         text("Source").label(),
         scroll([code_block(if f.src.is_empty() {
@@ -173,9 +218,9 @@ pub(crate) fn detail_panel(project: &Project, fn_idx: usize) -> El {
 
     items.push(separator());
     items.push(text(format!("Calls ({})", callees.len())).label());
-    items.push(fn_link_list(project, callees));
+    items.push(fn_link_list(project, callees, f.file));
     items.push(text(format!("Called by ({})", callers.len())).label());
-    items.push(fn_link_list(project, callers));
+    items.push(fn_link_list(project, callers, f.file));
 
     column(items)
         .gap(tokens::SPACE_2)
@@ -187,8 +232,11 @@ pub(crate) fn detail_panel(project: &Project, fn_idx: usize) -> El {
         .radius(10.0)
 }
 
-/// A wrapped list of clickable fn links (jump targets for navigation).
-fn fn_link_list(project: &Project, fns: &[usize]) -> El {
+/// A list of clickable fn links (jump targets for navigation). Cross-file
+/// targets (file `!= home`) are disambiguated with their file stem, since
+/// homonyms across files are common in shard and a bare name would be
+/// ambiguous; the full path is on hover.
+fn fn_link_list(project: &Project, fns: &[usize], home: usize) -> El {
     if fns.is_empty() {
         return text("—").muted().font_size(tokens::TEXT_SM.size);
     }
@@ -196,12 +244,25 @@ fn fn_link_list(project: &Project, fns: &[usize]) -> El {
         .iter()
         .map(|&j| {
             let g = &project.fns[j];
-            // Disambiguate cross-file targets with their module.
-            let label = g.name.clone();
-            button(label).key(format!("fn:{j}")).ghost()
+            let rel = &project.files[g.file].rel;
+            let label = if g.file == home {
+                g.name.clone()
+            } else {
+                format!("{}  · {}", g.name, file_stem(rel))
+            };
+            button(label)
+                .key(format!("fn:{j}"))
+                .ghost()
+                .tooltip(format!("in {rel}"))
         })
         .collect();
     column(chips).gap(2.0)
+}
+
+/// The bare file name (no dir, no `.shard`) — a compact cross-file tag.
+fn file_stem(rel: &str) -> &str {
+    let file = rel.rsplit('/').next().unwrap_or(rel);
+    file.strip_suffix(".shard").unwrap_or(file)
 }
 
 /// Trim a string so it fits a node box / signature line.

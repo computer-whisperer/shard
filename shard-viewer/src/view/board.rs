@@ -86,15 +86,21 @@ fn card(project: &Project, fn_idx: usize, selected_fn: Option<usize>, w: f32, h:
         None => text("(signature only)").muted().font_size(SUB_SIZE),
     };
 
-    column([title, content])
+    let card = column([title, content])
         .gap(tokens::SPACE_2)
         .padding(8.0)
         .width(Size::Fixed(w))
         .height(Size::Fixed(h))
         .radius(8.0)
         .key(format!("fn:{fn_idx}"))
-        .fill(tokens::CARD)
-        .stroke(if selected { tokens::RING } else { tokens::BORDER })
+        .tooltip(super::methods::node_tip(project, fn_idx));
+    // Selection tints the fill (not just the stroke) so the focused card reads
+    // at a glance across a large board, the way Methods highlights its node.
+    if selected {
+        card.fill(tokens::CARD.mix(tokens::ACCENT, 0.18)).stroke(tokens::RING)
+    } else {
+        card.fill(tokens::CARD).stroke(tokens::BORDER)
+    }
 }
 
 /// The region tree for a fn's body, or `None` if it's a signature (no logic).
