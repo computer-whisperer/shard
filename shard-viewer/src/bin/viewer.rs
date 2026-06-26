@@ -70,6 +70,9 @@ impl App for Viewer {
         } else if event.is_route("mode_systems") {
             self.mode = ViewMode::Systems;
             self.fit();
+        } else if event.is_route("mode_flow") {
+            self.mode = ViewMode::Flow;
+            self.fit();
         } else if let Some(i) = event.route_index::<usize>("sysfile")
             && i < self.project.files.len()
         {

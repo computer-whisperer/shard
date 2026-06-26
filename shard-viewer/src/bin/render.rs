@@ -21,8 +21,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let project = Project::load(std::path::Path::new(&root))?;
 
-    // `shard-render . systems out.svg` renders the project import graph.
-    let params = if needle == "systems" {
+    // `shard-render . flow:FN out.svg` charts one fn body's dataflow diagram.
+    let params = if let Some(fn_name) = needle.strip_prefix("flow:") {
+        let fn_idx = project
+            .fns
+            .iter()
+            .position(|f| f.name == fn_name && !f.body.is_empty())
+            .ok_or_else(|| format!("no fn with a body named `{fn_name}`"))?;
+        let f = &project.fns[fn_idx];
+        println!("charting flow of {} ({})", f.name, project.files[f.file].rel);
+        ViewParams {
+            mode: ViewMode::Flow,
+            selected_file: Some(f.file),
+            selected_fn: Some(fn_idx),
+            zoom: 1.0,
+        }
+    } else if needle == "systems" {
         println!("rendering systems graph ({} files)", project.files.len());
         // Select the biggest file so the breakdown panel is exercised too.
         let selected_file = project

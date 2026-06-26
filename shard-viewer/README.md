@@ -56,9 +56,27 @@ files it imports), with a **category heat map**:
   text, and clickable **Calls** / **Called by** lists. Clicking a callee/caller
   (including cross-file) navigates to it, switching the canvas as needed.
 
-Not yet: the intra-function control-flow / s-expr dataflow (LabVIEW-style) view.
-The generic layout engine's per-node ports and `sub` nesting hook are built for
-it.
+**Flow** — one fn body as a **dataflow / decision-tree** diagram, so s-expr
+nesting becomes spatial instead of parenthetical. Select a fn (in Methods),
+then hit **Flow**. It's a *hybrid* rendering:
+
+- **Control structures** (`match` / `if` / `let`) are branch nodes (cool); each
+  arm / branch / body hangs to the right, headed by a chip showing the pattern
+  or branch (`Nil`, `then`, a binding name) that selects it.
+- **Leaf expressions** become **operation** nodes: the head symbol is the title,
+  *simple* operands (vars / literals) sit inline, and *compound* operands
+  (nested applications) expand into their own op nodes wired in as data
+  children. So `(int_eq th 59)` is one box; `(head_code (head_atom line))` is
+  two.
+- **Control edges** (which branch runs) are muted; **data edges** (a value feeds
+  a computation) are accent-tinted, so the decision skeleton reads apart from
+  the value wiring. The `(measure …)` totality clause is skipped (it's an
+  annotation, not logic).
+
+The model (`flow.rs`) lowers the body into typed node/edge lists; the view sizes
+and colors them and reuses the same layered layout engine. Today `match`
+scrutinees and `if` conditions are shown inline (not expanded into op trees);
+that's the obvious next tuning knob.
 
 ## Binaries
 
@@ -66,7 +84,7 @@ it.
 |---|---|
 | `shard-viewer [ROOT]` | The GUI (native window via `damascene-winit-wgpu`). Defaults to the most fn-dense file. |
 | `shard-graph [ROOT] [FN]` | Text dump of the extracted model: per-file counts, a project-wide **lines-by-category tally** (mirrors `tools/loc`), the most-called fns, a **cut-candidate (orphan) list**, or one fn's callers/callees. No GUI deps. |
-| `shard-render ROOT FILE_SUBSTRING [OUT.svg]` | Headless render of one file's graph to SVG + a lint report. No GPU/window. Use `systems` as the substring to render the import graph. |
+| `shard-render ROOT FILE_SUBSTRING [OUT.svg]` | Headless render of one file's graph to SVG + a lint report. No GPU/window. Use `systems` for the import graph, or `flow:FN_NAME` for a fn's dataflow diagram. |
 
 `ROOT` defaults to the current directory; run from a shard checkout.
 
@@ -91,6 +109,7 @@ resvg \
 src/
   sexpr.rs   s-expr reader (paren tree only)
   model.rs   structural extraction + call-graph resolution (same-file-first)
+  flow.rs    intra-fn dataflow / decision-tree model (one fn body -> nodes/edges)
   layout.rs  layered SCC-aware graph layout
   view.rs    damascene view tree (pure: project state -> El)
   bin/       viewer.rs (GUI) · graph.rs (text) · render.rs (headless SVG)

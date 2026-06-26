@@ -4,6 +4,7 @@
 //! tree can be rendered headlessly — to SVG + a lint report — without a GPU or
 //! a window. That headless render is the build-time review loop.
 
+use crate::flow::{EdgeKind, FlowGraph, FlowKind, FlowNode};
 use crate::layout::{self, EndPoint, GEdge, GNode, Graph, Layout};
 use crate::model::Project;
 use damascene_core::prelude::*;
@@ -16,6 +17,8 @@ pub enum ViewMode {
     Methods,
     /// The project-wide file import dependency graph.
     Systems,
+    /// One fn's body as a dataflow / decision-tree diagram.
+    Flow,
 }
 
 /// Everything the view needs from the running app, snapshotted per frame.
@@ -46,7 +49,7 @@ pub fn app_root(project: &Project, p: &ViewParams) -> El {
         main_pane(project, p),
     ];
     match p.mode {
-        ViewMode::Methods => {
+        ViewMode::Methods | ViewMode::Flow => {
             if let Some(fni) = p.selected_fn {
                 panes.push(detail_panel(project, fni));
             }
@@ -93,11 +96,17 @@ fn main_pane(project: &Project, p: &ViewParams) -> El {
                 .padding(tokens::SPACE_8),
             Some(fi) => methods_canvas(project, fi, p),
         },
+        ViewMode::Flow => match p.selected_fn {
+            None => column([text("Select a fn (in Methods) to chart its body.").muted()])
+                .padding(tokens::SPACE_8),
+            Some(fni) => flow_canvas(project, fni),
+        },
     };
     let mut head = vec![toolbar(project, p)];
     match p.mode {
         ViewMode::Methods if p.selected_file.is_some() => head.push(triage_legend()),
         ViewMode::Systems => head.push(heat_legend()),
+        ViewMode::Flow if p.selected_fn.is_some() => head.push(flow_legend()),
         _ => {}
     }
     head.push(body);
@@ -198,6 +207,10 @@ fn toolbar(project: &Project, p: &ViewParams) -> El {
             Some(fi) => project.files[fi].rel.clone(),
             None => "shard-viewer".to_string(),
         },
+        ViewMode::Flow => match p.selected_fn {
+            Some(fni) => format!("{}  ·  flow", project.fns[fni].name),
+            None => "Flow".to_string(),
+        },
     };
     let mode_btn = |label: &str, key: &str, active: bool| {
         let b = button(label).key(key.to_string());
@@ -208,6 +221,7 @@ fn toolbar(project: &Project, p: &ViewParams) -> El {
         spacer(),
         mode_btn("Methods", "mode_methods", p.mode == ViewMode::Methods),
         mode_btn("Systems", "mode_systems", p.mode == ViewMode::Systems),
+        mode_btn("Flow", "mode_flow", p.mode == ViewMode::Flow),
         text(format!("{:.0}%", p.zoom * 100.0))
             .mono()
             .muted()
@@ -254,10 +268,16 @@ fn systems_canvas(project: &Project, p: &ViewParams) -> El {
 /// per-node elements (index-aligned with `lay.nodes`), placed at their content
 /// coordinates via the `El::layout` escape hatch.
 fn graph_canvas(lay: &Layout, node_els: Vec<El>) -> El {
+    graph_canvas_edges(lay, node_els, edges_asset(lay))
+}
+
+/// Like [`graph_canvas`] but with a caller-supplied edge overlay, so views that
+/// style edges by kind (e.g. flow's control vs data) can build their own.
+fn graph_canvas_edges(lay: &Layout, node_els: Vec<El>, edges: VectorAsset) -> El {
     let mut children: Vec<El> = Vec::with_capacity(node_els.len() + 1);
     // Edge overlay, drawn in content coordinates; the viewport transform scales
     // it for free. Unkeyed so it never intercepts the background pan drag.
-    children.push(vector(edges_asset(lay)));
+    children.push(vector(edges));
     children.extend(node_els);
 
     let positions: Vec<(f32, f32, f32, f32)> =
@@ -462,6 +482,155 @@ fn node_box(project: &Project, fn_idx: usize, selected_fn: Option<usize>, w: f32
         b.fill(tokens::CARD.mix(tokens::WARNING, warmth * 0.6))
             .stroke(tokens::BORDER)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Flow view: one fn body as a dataflow / decision-tree diagram.
+// ---------------------------------------------------------------------------
+
+/// The Flow-view key: node colors (control vs op vs source/lit) and the
+/// control/data edge styling.
+fn flow_legend() -> El {
+    row([
+        text("flow").mono().muted().font_size(SUB_SIZE),
+        legend_chip(tokens::CARD.mix(tokens::ACCENT, 0.4), "match / if / let"),
+        legend_chip(tokens::CARD, "op"),
+        legend_chip(tokens::CARD.mix(tokens::WARNING, 0.28), "var"),
+        legend_chip(tokens::BACKGROUND, "literal"),
+        text("·  edges").mono().muted().font_size(SUB_SIZE),
+        legend_chip(tokens::MUTED_FOREGROUND, "control"),
+        legend_chip(tokens::ACCENT, "data"),
+    ])
+    .gap(tokens::SPACE_3)
+    .padding(tokens::SPACE_2)
+}
+
+fn flow_canvas(project: &Project, fn_idx: usize) -> El {
+    let f = &project.fns[fn_idx];
+    let fg = FlowGraph::build(&f.body);
+    if fg.nodes.is_empty() {
+        return column([text("This fn has no body to chart (a signature).").muted()])
+            .padding(tokens::SPACE_8);
+    }
+    let nodes: Vec<GNode> = fg
+        .nodes
+        .iter()
+        .map(|n| {
+            let (w, h) = flow_node_size(n);
+            GNode::simple(w, h)
+        })
+        .collect();
+    let edges: Vec<GEdge> = fg
+        .edges
+        .iter()
+        .map(|e| GEdge {
+            from: EndPoint { node: e.from, port: 0 },
+            to: EndPoint { node: e.to, port: 0 },
+        })
+        .collect();
+    let graph = Graph { nodes, edges };
+    let lay = layout::layout(&graph, &layout::LayoutConfig::default());
+    let node_els: Vec<El> = lay
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, pn)| flow_node_box(&fg.nodes[i], pn.w, pn.h))
+        .collect();
+    graph_canvas_edges(&lay, node_els, flow_edges_asset(&lay, &fg))
+}
+
+/// Intrinsic size of a flow node: width tracks the longest of its three text
+/// lines (label chip / title / subtitle); height grows with how many it has.
+fn flow_node_size(n: &FlowNode) -> (f32, f32) {
+    let chars = n
+        .title
+        .chars()
+        .count()
+        .max(n.subtitle.chars().count())
+        .max(n.label.chars().count() + 2) as f32;
+    let w = (chars * 7.2 + 20.0).clamp(64.0, 260.0);
+    let mut h = 14.0 + 17.0; // padding + title line
+    if !n.label.is_empty() {
+        h += 13.0;
+    }
+    if !n.subtitle.is_empty() {
+        h += 15.0;
+    }
+    (w, h)
+}
+
+/// Fill + stroke for a flow node, by kind. Decisions read cool, vars warm,
+/// literals recede, ops are plain cards.
+fn flow_node_colors(kind: FlowKind) -> (Color, Color) {
+    match kind {
+        FlowKind::Match | FlowKind::If => (tokens::CARD.mix(tokens::ACCENT, 0.4), tokens::ACCENT),
+        FlowKind::Let => (tokens::CARD.mix(tokens::ACCENT, 0.18), tokens::BORDER),
+        FlowKind::Op => (tokens::CARD, tokens::BORDER),
+        FlowKind::Source => (tokens::CARD.mix(tokens::WARNING, 0.28), tokens::BORDER),
+        FlowKind::Lit => (tokens::BACKGROUND, tokens::BORDER),
+    }
+}
+
+fn flow_node_box(n: &FlowNode, w: f32, h: f32) -> El {
+    let mut kids: Vec<El> = Vec::new();
+    // The branch/binding chip that selects this node (e.g. the match pattern).
+    if !n.label.is_empty() {
+        kids.push(
+            text(n.label.clone())
+                .mono()
+                .font_size(10.0)
+                .text_color(tokens::ACCENT)
+                .nowrap_text()
+                .ellipsis(),
+        );
+    }
+    kids.push(
+        text(n.title.clone())
+            .mono()
+            .font_size(TITLE_SIZE)
+            .nowrap_text()
+            .ellipsis(),
+    );
+    if !n.subtitle.is_empty() {
+        kids.push(
+            text(n.subtitle.clone())
+                .muted()
+                .font_size(SUB_SIZE)
+                .nowrap_text()
+                .ellipsis(),
+        );
+    }
+    let (fill, stroke) = flow_node_colors(n.kind);
+    column(kids)
+        .gap(1.0)
+        .padding(7.0)
+        .radius(7.0)
+        .width(Size::Fixed(w))
+        .height(Size::Fixed(h))
+        .fill(fill)
+        .stroke(stroke)
+}
+
+/// Edge overlay for the flow graph: control edges are solid and muted, data
+/// edges thinner and accent-tinted, so the decision skeleton reads apart from
+/// the value wiring. Index-aligned with `fg.edges` (== `lay.edges`).
+fn flow_edges_asset(lay: &Layout, fg: &FlowGraph) -> VectorAsset {
+    let mut paths = Vec::new();
+    for (e, fe) in lay.edges.iter().zip(&fg.edges) {
+        if e.points.len() < 2 {
+            continue;
+        }
+        let color = match fe.kind {
+            EdgeKind::Control => tokens::MUTED_FOREGROUND,
+            EdgeKind::Data => tokens::ACCENT,
+        };
+        paths.push(edge_curve(&e.points, e.back, color));
+        let n = e.points.len();
+        let (fx, fy) = e.points[n - 2];
+        let (tx, ty) = e.points[n - 1];
+        paths.push(arrowhead(fx, fy, tx, ty, color));
+    }
+    VectorAsset::from_paths([0.0, 0.0, lay.width, lay.height], paths)
 }
 
 fn detail_panel(project: &Project, fn_idx: usize) -> El {
