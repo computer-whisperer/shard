@@ -22,6 +22,8 @@ struct Viewer {
     /// Sidebar filter text + its (app-owned) text-selection state.
     filter: String,
     selection: Selection,
+    /// Whether the source lightbox is open over the selected fn.
+    source_modal: bool,
 }
 
 impl Viewer {
@@ -36,6 +38,7 @@ impl Viewer {
     fn open_file(&mut self, i: usize) {
         self.selected_file = Some(i);
         self.selected_fn = None;
+        self.source_modal = false;
         self.mode = ViewMode::Methods;
         // Frame the newly shown graph (the viewport's pan/zoom persists across
         // rebuilds, so without this the new graph could open off-screen).
@@ -55,6 +58,7 @@ impl App for Viewer {
                 zoom,
                 filter: self.filter.clone(),
                 selection: self.selection.clone(),
+                source_modal: self.source_modal,
             },
         )
     }
@@ -80,7 +84,11 @@ impl App for Viewer {
         if !matches!(event.kind, UiEventKind::Click | UiEventKind::Activate) {
             return;
         }
-        if event.is_route("filter_clear") {
+        if event.is_route("src_expand") {
+            self.source_modal = true;
+        } else if event.is_route("src_close") || event.is_route("src_modal:dismiss") {
+            self.source_modal = false;
+        } else if event.is_route("filter_clear") {
             self.filter.clear();
             self.selection = Selection::default();
         } else if event.is_route("fit") {
@@ -170,6 +178,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             pending,
             filter: String::new(),
             selection: Selection::default(),
+            source_modal: false,
         },
     )
 }

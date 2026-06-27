@@ -58,7 +58,12 @@ files it imports), with a **category heat map**:
   **syntax-highlighted** (a small s-expr tokenizer — blue special forms, amber
   constructors/types, green strings, muted comments/parens) and
   **line-numbered**, and long lines **wrap** (manually, at a monospace character
-  budget) so nothing clips off the right edge. Cross-file links are tagged with
+  budget) so nothing clips off the right edge. The panel is a fixed width and
+  shares space with the call lists, so for a wide or long body (e.g.
+  `driver.shard::run_decls`, 378 lines) the **Expand ⤢** button opens a
+  **source lightbox** — a large centered modal showing the whole source at a
+  much wider wrap budget, scrollable, over a dismiss scrim (click outside or
+  **Close**). Cross-file links are tagged with
   their file (e.g. `main · check` vs `main · eval`) so homonym targets are
   distinguishable; clicking one navigates there, switching the canvas as needed.
   **Flow ▸ / Board ▸ / Graph ▸** buttons jump the selected fn between views.

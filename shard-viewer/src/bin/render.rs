@@ -21,8 +21,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let project = Project::load(std::path::Path::new(&root))?;
 
+    // `shard-render . src:FN out.svg` opens the source lightbox over one fn (so
+    // the modal layout can be checked headlessly).
+    let params = if let Some(fn_name) = needle.strip_prefix("src:") {
+        let fn_idx = project
+            .fns
+            .iter()
+            .position(|f| f.name == fn_name)
+            .ok_or_else(|| format!("no fn named `{fn_name}`"))?;
+        let f = &project.fns[fn_idx];
+        println!("opening source lightbox for {} ({})", f.name, project.files[f.file].rel);
+        ViewParams {
+            mode: ViewMode::Methods,
+            selected_file: Some(f.file),
+            selected_fn: Some(fn_idx),
+            zoom: 1.0,
+            filter: String::new(),
+            selection: Default::default(),
+            source_modal: true,
+        }
     // `shard-render . flow:FN out.svg` charts one fn body's dataflow diagram.
-    let params = if let Some(fn_name) = needle.strip_prefix("flow:") {
+    } else if let Some(fn_name) = needle.strip_prefix("flow:") {
         let fn_idx = project
             .fns
             .iter()
@@ -37,6 +56,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             zoom: 1.0,
             filter: String::new(),
             selection: Default::default(),
+            source_modal: false,
         }
     } else if let Some(file_sub) = needle.strip_prefix("board:") {
         // `shard-render . board:SUBSTR out.svg` charts a file's call DAG with
@@ -58,6 +78,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             zoom: 1.0,
             filter: String::new(),
             selection: Default::default(),
+            source_modal: false,
         }
     } else if needle == "systems" {
         println!("rendering systems graph ({} files)", project.files.len());
@@ -75,6 +96,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             zoom: 1.0,
             filter: String::new(),
             selection: Default::default(),
+            source_modal: false,
         }
     } else {
         let file_idx = project
@@ -100,6 +122,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             zoom: 1.0,
             filter: String::new(),
             selection: Default::default(),
+            source_modal: false,
         }
     };
     let mut root_el = view::app_root(&project, &params);

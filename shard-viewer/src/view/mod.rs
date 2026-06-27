@@ -51,6 +51,8 @@ pub struct ViewParams {
     pub filter: String,
     /// Text-selection state for the filter input (app-owned, per damascene).
     pub selection: Selection,
+    /// Whether the selected fn's source is open in the full-size lightbox.
+    pub source_modal: bool,
 }
 
 /// Key of the pan/zoom viewport — also the target of `ViewportRequest`s.
@@ -62,10 +64,12 @@ pub(crate) const SUB_SIZE: f32 = 11.0;
 /// The whole window: sidebar + main pane + (when something is selected) panel.
 pub fn app_root(project: &Project, p: &ViewParams) -> El {
     let mut panes = vec![sidebar(project, p), main_pane(project, p)];
+    let mut fn_in_panel = None;
     match p.mode {
         ViewMode::Methods | ViewMode::Flow | ViewMode::Board => {
             if let Some(fni) = p.selected_fn {
                 panes.push(methods::detail_panel(project, fni, p.mode));
+                fn_in_panel = Some(fni);
             }
         }
         ViewMode::Systems => {
@@ -74,7 +78,17 @@ pub fn app_root(project: &Project, p: &ViewParams) -> El {
             }
         }
     }
-    page([row(panes).gap(tokens::SPACE_4).height(Size::Fill(1.0))])
+    let main = page([row(panes).gap(tokens::SPACE_4).height(Size::Fill(1.0))]);
+    // The source lightbox: a full-size overlay layer over the workbench. It's
+    // the way to read a wide/long fn body when the fixed-width detail panel
+    // can't show it (e.g. driver.shard::run_decls). `page` is already an
+    // overlay root (tooltips mount there), and `overlays` adds the modal as a
+    // sibling layer painted on top.
+    let modal = match (p.source_modal, fn_in_panel) {
+        (true, Some(fni)) => Some(methods::source_modal(project, fni)),
+        _ => None,
+    };
+    overlays(main, [modal])
 }
 
 fn sidebar(project: &Project, p: &ViewParams) -> El {

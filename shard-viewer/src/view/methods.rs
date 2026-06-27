@@ -208,18 +208,32 @@ pub(crate) fn detail_panel(project: &Project, fn_idx: usize, mode: ViewMode) -> 
         text(metrics).caption().muted(),
         nav_buttons(mode),
         separator(),
-        row([text("Source").label(), spacer(), text(format!("{} lines", f.src_lines())).caption().muted()]),
+        {
+            let mut head = vec![
+                text("Source").label(),
+                spacer(),
+                text(format!("{} lines", f.src_lines())).caption().muted(),
+            ];
+            // The panel is a fixed width and shares space with the call lists,
+            // so a wide/long body can be unreadable here — the lightbox opens
+            // the same source much larger.
+            if !f.src.is_empty() {
+                head.push(
+                    button("Expand ⤢")
+                        .key("src_expand")
+                        .ghost()
+                        .tooltip("Open the source in a larger view (click outside to close)"),
+                );
+            }
+            row(head).gap(tokens::SPACE_2).align(Align::Center)
+        },
         if f.src.is_empty() {
             code_block("(signature only)")
         } else {
             // Syntax-highlighted + line-numbered, manually wrapped to a column
             // budget (the source is monospace, so a character count is an exact
-            // width). Budget = panel content minus the panel + code-block
-            // paddings (2×SPACE_3 each), the line-number gutter, and a scrollbar
-            // gutter, divided by the mono glyph width; vertical overflow scrolls.
-            const MONO_CH: f32 = 7.8; // JetBrains Mono advance at TEXT_SM
-            let avail = PANEL_W - 4.0 * tokens::SPACE_3 - 12.0 - 6.0 * MONO_CH;
-            let max_chars = (avail / MONO_CH).floor() as usize;
+            // width). Vertical overflow scrolls.
+            let max_chars = source_budget(PANEL_W, tokens::SPACE_3);
             scroll([super::highlight::source_view(&f.src, max_chars)]).height(Size::Fill(1.0))
         },
     ];
@@ -238,6 +252,56 @@ pub(crate) fn detail_panel(project: &Project, fn_idx: usize, mode: ViewMode) -> 
         .fill(tokens::CARD)
         .stroke(tokens::BORDER)
         .radius(10.0)
+}
+
+/// The character budget for the manually-wrapped source view inside a panel of
+/// the given outer width and horizontal padding. Subtracts the panel padding
+/// (both sides), the code-block chrome padding (2×`SPACE_3`), the line-number
+/// gutter (~6 mono cols), and a scrollbar gutter, then divides by the mono glyph
+/// advance. Shared by the detail panel and the lightbox so both wrap correctly.
+fn source_budget(panel_w: f32, panel_pad: f32) -> usize {
+    const MONO_CH: f32 = 7.8; // JetBrains Mono advance at TEXT_SM
+    let avail = panel_w - 2.0 * panel_pad - 2.0 * tokens::SPACE_3 - 6.0 * MONO_CH - 12.0;
+    (avail / MONO_CH).floor().max(8.0) as usize
+}
+
+/// The source lightbox: a large centered modal showing the selected fn's full
+/// source, syntax-highlighted and line-numbered, wrapped to the modal's (much
+/// wider) width. The fixed-width detail panel can't show a wide/long body
+/// (run_decls is the motivating case); this is the "read it properly" escape
+/// hatch. A dismiss scrim and a Close button both route to closing it.
+pub(crate) fn source_modal(project: &Project, fn_idx: usize) -> El {
+    const MODAL_W: f32 = 980.0;
+    const MODAL_H: f32 = 720.0;
+    let f = &project.fns[fn_idx];
+
+    let body = if f.src.is_empty() {
+        code_block("(signature only)")
+    } else {
+        let max_chars = source_budget(MODAL_W, tokens::SPACE_4);
+        scroll([super::highlight::source_view(&f.src, max_chars)]).height(Size::Fill(1.0))
+    };
+
+    // The full signature is the first lines of the body itself, so the header
+    // only needs the home file + length (a short line that won't clip).
+    let meta = row([
+        text(format!("{} · {} lines", project.files[f.file].rel, f.src_lines()))
+            .mono()
+            .muted()
+            .font_size(tokens::TEXT_SM.size)
+            .nowrap_text()
+            .ellipsis(),
+        spacer(),
+        button("Close").key("src_close").secondary(),
+    ])
+    .gap(tokens::SPACE_2)
+    .align(Align::Center);
+
+    let panel = modal_panel(f.name.clone(), [meta, body])
+        .width(Size::Fixed(MODAL_W))
+        .height(Size::Fixed(MODAL_H))
+        .block_pointer();
+    overlay([scrim("src_modal:dismiss"), panel])
 }
 
 /// A list of clickable fn links (jump targets for navigation). Cross-file
