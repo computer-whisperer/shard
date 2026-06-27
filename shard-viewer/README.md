@@ -56,8 +56,10 @@ files it imports), with a **category heat map**:
   (toward the cursor). The canvas is damascene's native `viewport()` widget, so
   the transform follows hit-test for free. `Fit` frames the whole graph;
   `Reset view` snaps to 1:1. The graph auto-fits when you switch files.
-- Click a fn box to open a **detail panel**: signature, the fn's real source
-  text, and clickable **Calls** / **Called by** lists. The source is
+- Click a fn box to open a **detail panel**: a fixed header (signature, triage
+  metrics, view-jump buttons) over a **scrolling body** that holds the fn's real
+  source text and the clickable **Calls** / **Called by** lists (so a fn with
+  many calls/callers doesn't overflow the panel). The source is
   **syntax-highlighted** (a small s-expr tokenizer — blue special forms, amber
   constructors/types, green strings, muted comments/parens) and
   **line-numbered**, and long lines **wrap** (manually, at a monospace character

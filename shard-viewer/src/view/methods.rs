@@ -197,7 +197,8 @@ pub(crate) fn detail_panel(
         metrics.push_str("  ·  proof subject");
     }
 
-    let mut items = vec![
+    // Fixed header — identity + triage + nav stay put while the body scrolls.
+    let header = vec![
         row([h3(f.name.clone()), spacer()]).gap(tokens::SPACE_2),
         text(format!("({}) → {}", sig.join(" "), f.ret))
             .mono()
@@ -209,43 +210,58 @@ pub(crate) fn detail_panel(
             .muted(),
         text(metrics).caption().muted(),
         nav_buttons(mode),
-        separator(),
-        {
-            let mut head = vec![
-                text("Source").label(),
-                spacer(),
-                text(format!("{} lines", f.src_lines())).caption().muted(),
-            ];
-            // The panel is a fixed width and shares space with the call lists,
-            // so a wide/long body can be unreadable here — the lightbox opens
-            // the same source much larger.
-            if !f.src.is_empty() {
-                head.push(
-                    button("Expand ⤢")
-                        .key("src_expand")
-                        .ghost()
-                        .tooltip("Open the source in a larger view (click outside to close)"),
-                );
-            }
-            row(head).gap(tokens::SPACE_2).align(Align::Center)
-        },
-        if f.src.is_empty() {
-            code_block("(signature only)")
-        } else {
-            // Syntax-highlighted + line-numbered, manually wrapped to a column
-            // budget (the source is monospace, so a character count is an exact
-            // width). `panel_w` is the live (possibly user-dragged) panel width,
-            // so widening the panel re-wraps to fill it. Vertical overflow scrolls.
-            let max_chars = source_budget(panel_w, tokens::SPACE_3);
-            scroll([super::highlight::source_view(&f.src, max_chars)]).height(Size::Fill(1.0))
-        },
     ];
 
+    let src_header = {
+        let mut head = vec![
+            text("Source").label(),
+            spacer(),
+            text(format!("{} lines", f.src_lines())).caption().muted(),
+        ];
+        // The panel is a fixed width and shares space with the call lists, so a
+        // wide/long body can be unreadable here — the lightbox opens it larger.
+        if !f.src.is_empty() {
+            head.push(
+                button("Expand ⤢")
+                    .key("src_expand")
+                    .ghost()
+                    .tooltip("Open the source in a larger view (click outside to close)"),
+            );
+        }
+        row(head).gap(tokens::SPACE_2).align(Align::Center)
+    };
+
+    let source = if f.src.is_empty() {
+        code_block("(signature only)")
+    } else {
+        // Syntax-highlighted + line-numbered, manually wrapped to a column
+        // budget (the source is monospace, so a character count is an exact
+        // width). `panel_w` is the live (possibly user-dragged) panel width, so
+        // widening the panel re-wraps to fill it. Natural height — the body
+        // scroll below owns the scrolling.
+        let max_chars = source_budget(panel_w, tokens::SPACE_3);
+        super::highlight::source_view(&f.src, max_chars)
+    };
+
+    // One scroll over source + call lists. Previously the source had its own
+    // Fill scroll and the call lists sat un-scrolled beneath it, so a fn with
+    // many calls/callers (e.g. driver.shard::run_decls) overflowed the panel's
+    // bottom edge. Scrolling the whole lower section together fixes that.
+    let body = scroll([column([
+        src_header,
+        source,
+        separator(),
+        text(format!("Calls ({})", callees.len())).label(),
+        fn_link_list(project, callees, f.file),
+        text(format!("Called by ({})", callers.len())).label(),
+        fn_link_list(project, callers, f.file),
+    ])
+    .gap(tokens::SPACE_2)])
+    .height(Size::Fill(1.0));
+
+    let mut items = header;
     items.push(separator());
-    items.push(text(format!("Calls ({})", callees.len())).label());
-    items.push(fn_link_list(project, callees, f.file));
-    items.push(text(format!("Called by ({})", callers.len())).label());
-    items.push(fn_link_list(project, callers, f.file));
+    items.push(body);
 
     column(items)
         .gap(tokens::SPACE_2)
