@@ -19,6 +19,7 @@
 
 mod board;
 mod flow;
+mod highlight;
 mod methods;
 mod shared;
 mod systems;

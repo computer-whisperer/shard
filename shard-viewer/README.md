@@ -54,12 +54,15 @@ files it imports), with a **category heat map**:
   the transform follows hit-test for free. `Fit` frames the whole graph;
   `Reset view` snaps to 1:1. The graph auto-fits when you switch files.
 - Click a fn box to open a **detail panel**: signature, the fn's real source
-  text, and clickable **Calls** / **Called by** lists. Cross-file links are
-  tagged with their file (e.g. `main · check` vs `main · eval`) so homonym
-  targets are distinguishable; clicking one navigates there, switching the
-  canvas as needed. **Flow ▸ / Board ▸ / Graph ▸** buttons jump the selected fn
-  between views. Hover any node for its full signature, home file, and triage
-  metrics.
+  text, and clickable **Calls** / **Called by** lists. The source is
+  **syntax-highlighted** (a small s-expr tokenizer — blue special forms, amber
+  constructors/types, green strings, muted comments/parens) and
+  **line-numbered**, and long lines **wrap** (manually, at a monospace character
+  budget) so nothing clips off the right edge. Cross-file links are tagged with
+  their file (e.g. `main · check` vs `main · eval`) so homonym targets are
+  distinguishable; clicking one navigates there, switching the canvas as needed.
+  **Flow ▸ / Board ▸ / Graph ▸** buttons jump the selected fn between views.
+  Hover any node for its full signature, home file, and triage metrics.
 
 **Flow** — one fn body as a **structured (LabVIEW-style)** diagram, so s-expr
 nesting becomes box *enclosure* instead of parenthesis-counting. Select a fn (in

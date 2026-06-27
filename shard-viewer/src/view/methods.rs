@@ -171,6 +171,9 @@ fn nav_buttons(mode: ViewMode) -> El {
     row(bs).gap(tokens::SPACE_2)
 }
 
+/// Fixed width of the detail panel (the source view wraps against it).
+const PANEL_W: f32 = 420.0;
+
 pub(crate) fn detail_panel(project: &Project, fn_idx: usize, mode: ViewMode) -> El {
     let f = &project.fns[fn_idx];
     let sig: Vec<String> = f.params.iter().map(|(n, t)| format!("({n} {t})")).collect();
@@ -197,23 +200,28 @@ pub(crate) fn detail_panel(project: &Project, fn_idx: usize, mode: ViewMode) -> 
         text(format!("({}) → {}", sig.join(" "), f.ret))
             .mono()
             .muted()
-            .font_size(tokens::TEXT_SM.size),
+            .font_size(tokens::TEXT_SM.size)
+            .wrap_text(),
         text(format!("in {}", project.files[f.file].rel))
             .caption()
             .muted(),
         text(metrics).caption().muted(),
         nav_buttons(mode),
         separator(),
-        text("Source").label(),
-        scroll([code_block(if f.src.is_empty() {
-            "(signature only)".to_string()
+        row([text("Source").label(), spacer(), text(format!("{} lines", f.src_lines())).caption().muted()]),
+        if f.src.is_empty() {
+            code_block("(signature only)")
         } else {
-            f.src.clone()
-        })])
-        .height(Size::Fill(1.0))
-        .fill(tokens::BACKGROUND)
-        .stroke(tokens::BORDER)
-        .radius(8.0),
+            // Syntax-highlighted + line-numbered, manually wrapped to a column
+            // budget (the source is monospace, so a character count is an exact
+            // width). Budget = panel content minus the panel + code-block
+            // paddings (2×SPACE_3 each), the line-number gutter, and a scrollbar
+            // gutter, divided by the mono glyph width; vertical overflow scrolls.
+            const MONO_CH: f32 = 7.8; // JetBrains Mono advance at TEXT_SM
+            let avail = PANEL_W - 4.0 * tokens::SPACE_3 - 12.0 - 6.0 * MONO_CH;
+            let max_chars = (avail / MONO_CH).floor() as usize;
+            scroll([super::highlight::source_view(&f.src, max_chars)]).height(Size::Fill(1.0))
+        },
     ];
 
     items.push(separator());
@@ -225,7 +233,7 @@ pub(crate) fn detail_panel(project: &Project, fn_idx: usize, mode: ViewMode) -> 
     column(items)
         .gap(tokens::SPACE_2)
         .padding(tokens::SPACE_3)
-        .width(Size::Fixed(420.0))
+        .width(Size::Fixed(PANEL_W))
         .height(Size::Fill(1.0))
         .fill(tokens::CARD)
         .stroke(tokens::BORDER)
