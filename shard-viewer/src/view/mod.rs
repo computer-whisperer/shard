@@ -53,6 +53,10 @@ pub struct ViewParams {
     pub selection: Selection,
     /// Whether the selected fn's source is open in the full-size lightbox.
     pub source_modal: bool,
+    /// Current width of the (user-resizable) detail panel, read back from the
+    /// runtime so the manually-wrapped source re-wraps to the dragged width.
+    /// Defaults to [`DEFAULT_PANEL_W`] until the panel is dragged.
+    pub panel_w: f32,
 }
 
 /// Key of the pan/zoom viewport — also the target of `ViewportRequest`s.
@@ -61,6 +65,16 @@ pub const CANVAS_KEY: &str = "canvas";
 pub(crate) const TITLE_SIZE: f32 = 13.0;
 pub(crate) const SUB_SIZE: f32 = 11.0;
 
+/// Default (pre-drag) widths of the two resizable side panes. Both are
+/// `user_resizable` — the runtime overrides these with the dragged size at
+/// layout time and stores it like a scroll offset; we read it back via
+/// `BuildCx::user_size` to re-wrap the panel source. Keys the panes are keyed
+/// with (so the resize bands and stored sizes route correctly).
+pub const DEFAULT_SIDEBAR_W: f32 = 320.0;
+pub const DEFAULT_PANEL_W: f32 = 420.0;
+pub const SIDEBAR_KEY: &str = "sidebar";
+pub const PANEL_KEY: &str = "detail_panel";
+
 /// The whole window: sidebar + main pane + (when something is selected) panel.
 pub fn app_root(project: &Project, p: &ViewParams) -> El {
     let mut panes = vec![sidebar(project, p), main_pane(project, p)];
@@ -68,7 +82,7 @@ pub fn app_root(project: &Project, p: &ViewParams) -> El {
     match p.mode {
         ViewMode::Methods | ViewMode::Flow | ViewMode::Board => {
             if let Some(fni) = p.selected_fn {
-                panes.push(methods::detail_panel(project, fni, p.mode));
+                panes.push(methods::detail_panel(project, fni, p.mode, p.panel_w));
                 fn_in_panel = Some(fni);
             }
         }
@@ -150,11 +164,17 @@ fn sidebar(project: &Project, p: &ViewParams) -> El {
     ])
     .gap(tokens::SPACE_2)
     .padding(tokens::SPACE_3)
-    .width(Size::Fixed(320.0))
+    .width(Size::Fixed(DEFAULT_SIDEBAR_W))
     .height(Size::Fill(1.0))
     .fill(tokens::CARD)
     .stroke(tokens::BORDER)
     .radius(10.0)
+    // Drag the right seam to widen the file list (long paths get cramped at
+    // the default width). No app state — the runtime keeps the dragged width.
+    .key(SIDEBAR_KEY)
+    .user_resizable()
+    .min_width(220.0)
+    .max_width(620.0)
 }
 
 fn main_pane(project: &Project, p: &ViewParams) -> El {

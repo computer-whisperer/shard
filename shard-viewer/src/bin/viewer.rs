@@ -49,6 +49,9 @@ impl Viewer {
 impl App for Viewer {
     fn build(&self, cx: &BuildCx) -> El {
         let zoom = cx.viewport_view(CANVAS_KEY).map_or(1.0, |v| v.zoom);
+        // The detail panel is user-resizable; read its current (dragged) width
+        // so the manually-wrapped source re-wraps to fill it.
+        let panel_w = cx.user_size(view::PANEL_KEY).unwrap_or(view::DEFAULT_PANEL_W);
         view::app_root(
             &self.project,
             &ViewParams {
@@ -59,6 +62,7 @@ impl App for Viewer {
                 filter: self.filter.clone(),
                 selection: self.selection.clone(),
                 source_modal: self.source_modal,
+                panel_w,
             },
         )
     }

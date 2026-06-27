@@ -39,6 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             filter: String::new(),
             selection: Default::default(),
             source_modal: true,
+            panel_w: view::DEFAULT_PANEL_W,
         }
     // `shard-render . flow:FN out.svg` charts one fn body's dataflow diagram.
     } else if let Some(fn_name) = needle.strip_prefix("flow:") {
@@ -57,6 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             filter: String::new(),
             selection: Default::default(),
             source_modal: false,
+            panel_w: view::DEFAULT_PANEL_W,
         }
     } else if let Some(file_sub) = needle.strip_prefix("board:") {
         // `shard-render . board:SUBSTR out.svg` charts a file's call DAG with
@@ -79,6 +81,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             filter: String::new(),
             selection: Default::default(),
             source_modal: false,
+            panel_w: view::DEFAULT_PANEL_W,
         }
     } else if needle == "systems" {
         println!("rendering systems graph ({} files)", project.files.len());
@@ -97,6 +100,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             filter: String::new(),
             selection: Default::default(),
             source_modal: false,
+            panel_w: view::DEFAULT_PANEL_W,
         }
     } else {
         let file_idx = project
@@ -123,6 +127,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             filter: String::new(),
             selection: Default::default(),
             source_modal: false,
+            panel_w: view::DEFAULT_PANEL_W,
         }
     };
     let mut root_el = view::app_root(&project, &params);

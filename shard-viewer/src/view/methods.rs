@@ -171,10 +171,12 @@ fn nav_buttons(mode: ViewMode) -> El {
     row(bs).gap(tokens::SPACE_2)
 }
 
-/// Fixed width of the detail panel (the source view wraps against it).
-const PANEL_W: f32 = 420.0;
-
-pub(crate) fn detail_panel(project: &Project, fn_idx: usize, mode: ViewMode) -> El {
+pub(crate) fn detail_panel(
+    project: &Project,
+    fn_idx: usize,
+    mode: ViewMode,
+    panel_w: f32,
+) -> El {
     let f = &project.fns[fn_idx];
     let sig: Vec<String> = f.params.iter().map(|(n, t)| format!("({n} {t})")).collect();
 
@@ -232,8 +234,9 @@ pub(crate) fn detail_panel(project: &Project, fn_idx: usize, mode: ViewMode) -> 
         } else {
             // Syntax-highlighted + line-numbered, manually wrapped to a column
             // budget (the source is monospace, so a character count is an exact
-            // width). Vertical overflow scrolls.
-            let max_chars = source_budget(PANEL_W, tokens::SPACE_3);
+            // width). `panel_w` is the live (possibly user-dragged) panel width,
+            // so widening the panel re-wraps to fill it. Vertical overflow scrolls.
+            let max_chars = source_budget(panel_w, tokens::SPACE_3);
             scroll([super::highlight::source_view(&f.src, max_chars)]).height(Size::Fill(1.0))
         },
     ];
@@ -247,11 +250,18 @@ pub(crate) fn detail_panel(project: &Project, fn_idx: usize, mode: ViewMode) -> 
     column(items)
         .gap(tokens::SPACE_2)
         .padding(tokens::SPACE_3)
-        .width(Size::Fixed(PANEL_W))
+        .width(Size::Fixed(super::DEFAULT_PANEL_W))
         .height(Size::Fill(1.0))
         .fill(tokens::CARD)
         .stroke(tokens::BORDER)
         .radius(10.0)
+        // Drag the left seam to widen the panel when the source is wide (the
+        // body re-wraps to the new width via `panel_w` above). It's the last
+        // row child, so the runtime anchors the grab band on its left edge.
+        .key(super::PANEL_KEY)
+        .user_resizable()
+        .min_width(320.0)
+        .max_width(820.0)
 }
 
 /// The character budget for the manually-wrapped source view inside a panel of

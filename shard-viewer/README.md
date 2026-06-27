@@ -4,12 +4,7 @@ A graphical navigator for shard source. It parses a shard project itself (a
 lightweight structural s-expr reader — *not* the kernel elaborator, and with no
 coupling to `rust_bootstrap`) and draws its **methods** as a call-graph flow
 chart, built on the [damascene](https://github.com/computer-whisperer/damascene)
-UI library.
-
-> **Dependency note:** this currently uses damascene's native `viewport()`
-> pan/zoom widget, which isn't in the published 0.4.3 yet, so `Cargo.toml`
-> points at a local damascene checkout via a path dependency. Switch back to a
-> crates.io version once a release ships `viewport()`.
+UI library (crates.io `damascene-core` / `damascene-winit-wgpu` 0.4.4).
 
 ## Status
 
@@ -20,6 +15,8 @@ Four views, toggled in the toolbar:
 - Sidebar lists every `.shard` file with its fn count; a **filter box** narrows
   the list (case-insensitive substring, with a `shown/total` count), and files
   that fail to parse are flagged (`⚠`, the error on hover). Click to switch.
+  **Drag the sidebar's right edge** to widen it when paths get cramped
+  (`user_resizable`, 220–620px — no divider, the runtime keeps the width).
 - The canvas draws the selected file's fns as boxes (name + `N args → Ret`)
   with intra-file call edges as curved arrows.
 - **Triage colors/sizes** encode the dead-code / complexity signal: a node is
@@ -58,12 +55,14 @@ files it imports), with a **category heat map**:
   **syntax-highlighted** (a small s-expr tokenizer — blue special forms, amber
   constructors/types, green strings, muted comments/parens) and
   **line-numbered**, and long lines **wrap** (manually, at a monospace character
-  budget) so nothing clips off the right edge. The panel is a fixed width and
-  shares space with the call lists, so for a wide or long body (e.g.
-  `driver.shard::run_decls`, 378 lines) the **Expand ⤢** button opens a
-  **source lightbox** — a large centered modal showing the whole source at a
-  much wider wrap budget, scrollable, over a dismiss scrim (click outside or
-  **Close**). Cross-file links are tagged with
+  budget) so nothing clips off the right edge. The panel is **resizable** —
+  drag its left edge (`user_resizable`, 320–820px) and the source re-wraps to
+  the new width (the live width is read back from the runtime and fed into the
+  wrap budget). For a wide or long body (e.g. `driver.shard::run_decls`, 378
+  lines) the **Expand ⤢** button additionally opens a **source lightbox** — a
+  large centered modal showing the whole source at a much wider wrap budget,
+  scrollable, over a dismiss scrim (click outside or **Close**). Cross-file
+  links are tagged with
   their file (e.g. `main · check` vs `main · eval`) so homonym targets are
   distinguishable; clicking one navigates there, switching the canvas as needed.
   **Flow ▸ / Board ▸ / Graph ▸** buttons jump the selected fn between views.
