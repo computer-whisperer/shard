@@ -157,6 +157,27 @@ fn est(r: &Region) -> (f32, f32) {
             }
             (block_w + card_w + 6.0, card_h.max(block_h))
         }
+        Region::List { elems, tail } => {
+            // header (`list · N`) over a bracketed column of element regions.
+            let mut body_w = 0.0_f32;
+            let mut body_h = 0.0_f32;
+            for (i, e) in elems.iter().enumerate() {
+                let (ew, eh) = est(e);
+                body_w = body_w.max(ew);
+                body_h += eh;
+                if i > 0 {
+                    body_h += 5.0;
+                }
+            }
+            if let Some(t) = tail {
+                let (tw, th) = est(t);
+                body_w = body_w.max(tw + 16.0); // "⋯ " lead
+                body_h += th.max(20.0) + 5.0;
+            }
+            let w = (body_w + 9.0 + 12.0).max(54.0); // bracket bar + paddings
+            let h = 16.0 + body_h + 12.0; // header + body + paddings
+            (w, h)
+        }
         Region::Frame { kind, detail, branches } => {
             let band_w = text_w(kind.keyword(), 7.5) + text_w(detail, 7.0) + 20.0;
             // Branches stack in a column; each is its selector chip + region.

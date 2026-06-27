@@ -46,6 +46,13 @@ pub enum Region {
         detail: String,
         branches: Vec<Branch>,
     },
+    /// A `Cons` spine collapsed into a list: `(Cons a (Cons b Nil))` reads as the
+    /// list `[a, b]` instead of nested constructor cards. `tail` is the spine
+    /// terminator when it isn't `Nil` (an open `(Cons x rest)` cons-onto).
+    List {
+        elems: Vec<Region>,
+        tail: Option<Box<Region>>,
+    },
     /// A function application: `head` + inline simple operands + compound
     /// operand sub-regions (wired in from the left by the view).
     Op {
@@ -100,9 +107,35 @@ fn lower(expr: &Sexpr) -> Region {
             Some("if") => lower_if(items),
             Some("let") => lower_let(items),
             Some("quote") => Region::Lit(lit_text(expr)),
+            // A `(Cons head tail)` is the start of a list spine — collapse the
+            // whole chain into one list region rather than nested op cards.
+            Some("Cons") if items.len() == 3 => lower_list(expr),
             _ => lower_op(items),
         },
     }
+}
+
+/// Collapse a `Cons` spine into a [`Region::List`]. Walks `(Cons h t)` chains
+/// gathering element regions; stops at `Nil` (a closed list) or any other tail
+/// (an open cons-onto, e.g. `(Cons x rest)`, recorded as `tail`).
+fn lower_list(expr: &Sexpr) -> Region {
+    let mut elems = Vec::new();
+    let mut tail = None;
+    let mut cur = expr.clone();
+    loop {
+        match &cur {
+            Sexpr::List(items) if cur.head() == Some("Cons") && items.len() == 3 => {
+                elems.push(lower(&items[1]));
+                cur = items[2].clone();
+            }
+            Sexpr::Sym(s) if s == "Nil" => break,
+            _ => {
+                tail = Some(Box::new(lower(&cur)));
+                break;
+            }
+        }
+    }
+    Region::List { elems, tail }
 }
 
 fn lower_match(items: &[Sexpr]) -> Region {
@@ -288,6 +321,33 @@ mod tests {
         assert_eq!(*kind, FrameKind::Let);
         assert_eq!(branches[0].label, "code");
         assert_eq!(branches.last().unwrap().label, "in");
+    }
+
+    #[test]
+    fn cons_spine_collapses_to_a_list() {
+        match Region::build(&body("(Cons a (Cons b (Cons c Nil)))")) {
+            Region::List { elems, tail } => {
+                assert_eq!(elems.len(), 3);
+                assert!(matches!(&elems[0], Region::Var(n) if n == "a"));
+                assert!(matches!(&elems[2], Region::Var(n) if n == "c"));
+                assert!(tail.is_none(), "Nil-terminated → closed list");
+            }
+            other => panic!("expected list, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn open_cons_records_its_tail() {
+        match Region::build(&body("(Cons x rest)")) {
+            Region::List { elems, tail } => {
+                assert_eq!(elems.len(), 1);
+                match tail.as_deref() {
+                    Some(Region::Var(n)) => assert_eq!(n, "rest"),
+                    other => panic!("expected a var tail, got {other:?}"),
+                }
+            }
+            other => panic!("expected list, got {other:?}"),
+        }
     }
 
     #[test]

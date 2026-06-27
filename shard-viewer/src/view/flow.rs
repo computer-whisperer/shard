@@ -51,10 +51,55 @@ pub(crate) fn canvas(project: &Project, fn_idx: usize) -> El {
 pub(crate) fn render_region(r: &Region) -> El {
     match r {
         Region::Frame { kind, detail, branches } => render_frame(*kind, detail, branches),
+        Region::List { elems, tail } => render_list(elems, tail.as_deref()),
         Region::Op { head, inline, args } => render_op(head, inline, args),
         Region::Var(name) => var_pill(name),
         Region::Lit(value) => lit_tag(value),
     }
+}
+
+/// A collapsed `Cons` spine: a bracketed column of element regions (data
+/// construction, distinct from the control frames and op cards). A non-`Nil`
+/// terminator is shown as a trailing `⋯ tail` row (cons-onto-an-existing-list).
+fn render_list(elems: &[Region], tail: Option<&Region>) -> El {
+    let count = elems.len();
+    let mut rows: Vec<El> = elems.iter().map(render_region).collect();
+    if let Some(t) = tail {
+        rows.push(
+            row([
+                text("⋯").mono().muted().font_size(12.0).nowrap_text(),
+                render_region(t),
+            ])
+            .gap(tokens::SPACE_2)
+            .align(Align::Center),
+        );
+    }
+    // An empty closed list is just `[]`; render it as a literal-style tag.
+    if rows.is_empty() {
+        return lit_tag("[]");
+    }
+    let header = text(format!("list · {count}"))
+        .mono()
+        .muted()
+        .font_size(10.0)
+        .nowrap_text();
+    let body = column(rows).gap(5.0).padding(6.0);
+    // A bracket bar down the left edge marks the elements as one ordered list.
+    column([header, row([bracket_bar(), body]).align(Align::Stretch)])
+        .gap(3.0)
+        .padding(6.0)
+        .fill(tokens::CARD)
+        .stroke(tokens::MUTED)
+        .radius(7.0)
+}
+
+/// The thin vertical rule down the left of a list, tying its elements together.
+fn bracket_bar() -> El {
+    column(Vec::<El>::new())
+        .width(Size::Fixed(3.0))
+        .height(Size::Fill(1.0))
+        .fill(tokens::MUTED)
+        .radius(2.0)
 }
 
 /// A control structure: a colored keyword band over a body that *contains* its
@@ -122,18 +167,46 @@ fn selector_chip(label: &str) -> El {
     .fill(tokens::INFO)
 }
 
-/// A function application: the op card, with any compound operands wired in
-/// from the left (data flows left→right into the op, LabVIEW-style).
+/// A function application: the op card, with any compound operands gathered on a
+/// connector to its left (data flows left→right into the op, LabVIEW-style).
+///
+/// Compound operands stack in a column whose right edge is a full-height
+/// **gather bar**; a single arrow runs from the bar into the card. (The earlier
+/// per-operand stub arrows pointed into empty space — only the vertically
+/// centered operand ever lined up with the card; the bar always spans them.)
 fn render_op(head: &str, inline: &str, args: &[Region]) -> El {
     let card = op_card(head, inline);
     if args.is_empty() {
         return card;
     }
-    let arg_rows: Vec<El> = args
-        .iter()
-        .map(|a| row([render_region(a), wire_stub()]).align(Align::Center))
-        .collect();
-    row([column(arg_rows).gap(6.0), card]).align(Align::Center)
+    let inputs = column(args.iter().map(render_region).collect::<Vec<_>>()).gap(6.0);
+    // The bar spans the full operand-column height (Stretch), so every operand
+    // visibly belongs to the same gather, regardless of how tall the column is.
+    let gathered = row([inputs, gather_bar()]).gap(tokens::SPACE_2).align(Align::Stretch);
+    row([gathered, feed_arrow(), card]).gap(tokens::SPACE_1).align(Align::Center)
+}
+
+/// The full-height vertical rule down the right of an op's operand column: it
+/// gathers every operand into one bus feeding the op.
+fn gather_bar() -> El {
+    column(Vec::<El>::new())
+        .width(Size::Fixed(2.5))
+        .height(Size::Fill(1.0))
+        .fill(tokens::INFO)
+        .radius(2.0)
+}
+
+/// The single arrow from the gather bar into the op card.
+fn feed_arrow() -> El {
+    let line = PathBuilder::new()
+        .move_to(0.0, 6.0)
+        .line_to(11.0, 6.0)
+        .stroke_solid(tokens::INFO, 1.6)
+        .build();
+    let head = super::shared::arrowhead(4.0, 6.0, 17.0, 6.0, tokens::INFO);
+    vector(VectorAsset::from_paths([0.0, 0.0, 18.0, 12.0], vec![line, head]))
+        .width(Size::Fixed(18.0))
+        .height(Size::Fixed(12.0))
 }
 
 /// The op card itself: the function name as a bold hero, inline simple operands
@@ -196,15 +269,3 @@ fn lit_tag(value: &str) -> El {
     .radius(4.0)
 }
 
-/// A short right-pointing wire stub: an operand feeding into an op card.
-fn wire_stub() -> El {
-    let line = PathBuilder::new()
-        .move_to(0.0, 6.0)
-        .line_to(15.0, 6.0)
-        .stroke_solid(tokens::INFO, 1.6)
-        .build();
-    let head = super::shared::arrowhead(8.0, 6.0, 21.0, 6.0, tokens::INFO);
-    vector(VectorAsset::from_paths([0.0, 0.0, 22.0, 12.0], vec![line, head]))
-        .width(Size::Fixed(22.0))
-        .height(Size::Fixed(12.0))
-}

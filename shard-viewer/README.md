@@ -73,9 +73,17 @@ Methods), then hit **Flow**. It's a containment hybrid:
   rectangles, not a sprawl of wires.
 - **Leaf computations** are **op cards**: the function name is the bold hero,
   *simple* operands (vars / literals) sit inline, and *compound* operands (nested
-  applications) are **wired into the op from the left** (data flows left→right,
-  LabVIEW-style). So `(int_eq th 59)` is one card; `(head_code (head_atom line))`
-  is two, wired.
+  applications) are gathered on a **full-height connector bar** to the left and
+  fed into the op by a single arrow (data flows left→right, LabVIEW-style). So
+  `(int_eq th 59)` is one card; `(head_code (head_atom line))` is two, the inner
+  feeding the outer.
+- **`Cons` spines collapse into lists.** A constructor chain like
+  `(Cons a (Cons b (Cons c Nil)))` is *data construction*, not computation, so it
+  reads as one **`list · N`** box (a bracket bar down a column of element
+  regions) instead of three nested `Cons` cards. A non-`Nil` terminator
+  (`(Cons x rest)`) shows as a trailing `⋯ rest` row. This is what tames the
+  deeply right-nested s-expr builders that pervade the kernel (e.g.
+  `driver.shard::rr_goal_s`, which otherwise sprawls into a row of tiny cards).
 - **Variables** are warm amber **pills** (data inputs); **literals** are dim mono
   **tags** (constants). The `(measure …)` totality clause is skipped (annotation,
   not logic).
