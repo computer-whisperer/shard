@@ -4,7 +4,13 @@ A graphical navigator for shard source. It parses a shard project itself (a
 lightweight structural s-expr reader — *not* the kernel elaborator, and with no
 coupling to `rust_bootstrap`) and draws its **methods** as a call-graph flow
 chart, built on the [damascene](https://github.com/computer-whisperer/damascene)
-UI library (crates.io `damascene-core` / `damascene-winit-wgpu` 0.4.4).
+UI library.
+
+> **Dependency note:** this points at a local damascene checkout via a path
+> dependency — it needs fixes not yet in a crates.io release: wheel-zoom
+> yielding to `block_pointer` overlays (so the source lightbox scrolls) and
+> `viewport()` laying `Hug` content at full intrinsic (so tall flow diagrams
+> aren't clamped). Switch back to a crates.io version once a release ships both.
 
 ## Status
 

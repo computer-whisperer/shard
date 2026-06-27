@@ -41,15 +41,6 @@ pub(crate) fn canvas(project: &Project, fn_idx: usize) -> El {
     // The nested-element tree hugs its own content; a little padding keeps it
     // off the viewport edges. The viewport frames it (Fit / pan / zoom).
     let content = row([render_region(&region)]).padding(tokens::SPACE_6);
-    // `viewport()` lays its content out as an OVERLAY child, and overlay layout
-    // clamps a `Hug`-sized child to the viewport rect (right for a centered
-    // modal — don't exceed the screen — but wrong for pan/zoom content meant to
-    // be larger than the frame: a tall diagram was capped at the pane's bottom
-    // and its inner frames spilled out). Measure the content's intrinsic size
-    // and pin it `Fixed`, so it's no longer `Hug` and escapes that clamp; the
-    // viewport then frames the true full size (Fit / pan reveal the rest).
-    let (w, h) = damascene_core::layout::intrinsic(&content);
-    let content = content.width(Size::Fixed(w)).height(Size::Fixed(h));
     pan_zoom_viewport(content)
 }
 
