@@ -14,15 +14,29 @@ UI library.
 
 ## Status
 
-Four views, toggled in the toolbar:
+Five views, toggled in the toolbar. The **subject** a view is about — its
+*scope* — is one value (`scope.rs`): a fn, a file, a directory subtree, a fn's
+call-neighborhood, or the whole project. Each view projects that scope down to
+what it needs (the single-file views read its *focus file*; the Map view reads
+the full fn/file sets), so selection is unified rather than per-view.
+
+**Map** *(experimental — being built)* — the unified view: any scope's fns,
+grouped by origin file/dir, each rendered in the Flow form. Today it ships only
+the **scaffold** (a readout of what the current scope resolves to) while the
+recursive file/dir layout is built; pick a file or a directory in the sidebar
+to scope it. This is the view the others are converging into — see
+*Direction*, below.
 
 **Methods** — one file's call graph, with a **triage overlay**:
 
-- Sidebar lists every `.shard` file with its fn count; a **filter box** narrows
-  the list (case-insensitive substring, with a `shown/total` count), and files
-  that fail to parse are flagged (`⚠`, the error on hover). Click to switch.
-  **Drag the sidebar's right edge** to widen it when paths get cramped
-  (`user_resizable`, 220–620px — no divider, the runtime keeps the width).
+- The sidebar is a **scope picker**: every `.shard` file grouped under a
+  clickable **directory header** (`▸ dir/ (N)` — selecting it scopes the Map to
+  the whole subtree); files show as basenames with their fn count, and selecting
+  one scopes to that file. A **filter box** narrows the list (case-insensitive
+  substring, with a `shown/total` count), and files that fail to parse are
+  flagged (`⚠`, the error on hover). **Drag the sidebar's right edge** to widen
+  it when paths get cramped (`user_resizable`, 220–620px — the runtime keeps the
+  width).
 - The canvas draws the selected file's fns as boxes (name + `N args → Ret`)
   with intra-file call edges as curved arrows.
 - **Triage colors/sizes** encode the dead-code / complexity signal: a node is
@@ -122,13 +136,35 @@ tightening this (measured sizes, clamped thumbnails) is the next iteration. The
 view files are split per-variant (`src/view/`) precisely so these are cheap to
 try.
 
+## Direction
+
+The **Map** view is where the others are heading: one unified canvas that
+renders any *scope* (one fn → a file → a dir → a call-neighborhood → the whole
+project), with fns grouped by origin file/dir into bounding boxes and call usage
+traced between them. The point is to iterate *one* view instead of four, and to
+support richer module-level reading at a glance.
+
+The intended layout is **recursive and compositional**, mirroring the program's
+own containment tree (`dir ⊃ file ⊃ fn ⊃ body`): each level lays out its
+children in its own frame and reports an intrinsic size plus the ports it
+imports/exports; the module tree is laid out against the declared import DAG;
+function-usage wires are routed last, bundled along those import edges. Sugiyama
+(`layout.rs`) survives as *one* intra-level router, swappable per scale rather
+than being the view itself. Stable, identity-anchored placement (so the map is a
+thing you learn, not a fresh diagram each time) and a proof/requirement lens are
+later experiments. Methods/Board/Flow stay as-is until Map subsumes them — at
+which point the plain name box is just a *collapsed* flow card.
+
+This is being built additively: Map is a fifth tab, and the existing four are
+untouched while it grows.
+
 ## Binaries
 
 | Bin | What it does |
 |---|---|
 | `shard-viewer [ROOT]` | The GUI (native window via `damascene-winit-wgpu`). Defaults to the most fn-dense file. |
 | `shard-graph [ROOT] [FN]` | Text dump of the extracted model: per-file counts, a project-wide **lines-by-category tally** (mirrors `tools/loc`), the most-called fns, a **cut-candidate (orphan) list**, or one fn's callers/callees. No GUI deps. |
-| `shard-render ROOT FILE_SUBSTRING [OUT.svg]` | Headless render of one file's graph to SVG + a lint report. No GPU/window. Use `systems` for the import graph, `flow:FN_NAME` for a fn's dataflow diagram, or `board:FILE_SUBSTRING` for the expanded call-DAG board. |
+| `shard-render ROOT FILE_SUBSTRING [OUT.svg]` | Headless render of one file's graph to SVG + a lint report. No GPU/window. Use `systems` for the import graph, `flow:FN_NAME` for a fn's dataflow diagram, `board:FILE_SUBSTRING` for the expanded call-DAG board, or `map:FILE_SUBSTRING` for the unified Map scoped to that file. |
 
 `ROOT` defaults to the current directory; run from a shard checkout.
 
@@ -153,14 +189,16 @@ resvg \
 src/
   sexpr.rs   s-expr reader (paren tree only)
   model.rs   structural extraction + call-graph resolution (same-file-first)
+  scope.rs   the subject selection: a fn / file / dir / call-tree / project
   flow.rs    intra-fn structured model (one fn body -> a region/containment tree)
   layout.rs  layered SCC-aware graph layout
   view/      damascene view tree (pure: project state -> El), one file per variant
-    mod.rs     shell: sidebar / toolbar / pane dispatch + ViewMode
+    mod.rs     shell: sidebar scope-picker / toolbar / pane dispatch + ViewMode
     shared.rs  pan/zoom viewport, laid-out-graph canvas, edge + legend primitives
     methods.rs call graph + triage overlay (+ the shared per-fn detail panel)
     systems.rs import graph + proof/impl heat map (+ its breakdown panel)
-    flow.rs    one fn body as a region card (render_region, reused by board)
+    flow.rs    one fn body as a region card (render_region, reused by board/map)
     board.rs   the call DAG with each node in expanded flow form
+    map.rs     the unified scope view (scaffold; recursive layout in progress)
   bin/       viewer.rs (GUI) · graph.rs (text) · render.rs (headless SVG)
 ```

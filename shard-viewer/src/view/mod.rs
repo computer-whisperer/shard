@@ -14,17 +14,21 @@
 //! - [`flow`] — one fn body as a structured (LabVIEW-style) region card.
 //! - [`board`] — the call DAG with each node rendered in that expanded flow
 //!   form (reuses `flow::render_region`).
+//! - [`map`] — the unified view we're growing toward: any [`Scope`]'s fns,
+//!   grouped by origin file/dir, each in expanded flow form.
 //! - [`shared`] — the pan/zoom viewport, laid-out-graph canvas, and edge/legend
 //!   primitives every variant draws with.
 
 mod board;
 mod flow;
 mod highlight;
+mod map;
 mod methods;
 mod shared;
 mod systems;
 
 use crate::model::Project;
+use crate::scope::Scope;
 use damascene_core::prelude::*;
 
 /// Which visualization the canvas is showing.
@@ -38,12 +42,20 @@ pub enum ViewMode {
     Flow,
     /// One file's call DAG with each fn rendered in expanded flow form.
     Board,
+    /// The unified map: any scope's fns, grouped by origin file/dir, each in
+    /// expanded flow form. The view we're growing toward — still experimental.
+    Map,
 }
 
 /// Everything the view needs from the running app, snapshotted per frame.
 pub struct ViewParams {
     pub mode: ViewMode,
-    pub selected_file: Option<usize>,
+    /// The canvas subject — what set of fns the view is about. The single-file
+    /// views read [`Scope::focus_file`] out of it; the Map view reads the full
+    /// fn/file sets. See [`crate::scope`].
+    pub scope: Scope,
+    /// The focused fn cursor (highlighted in the graph, shown in the detail
+    /// panel, charted by Flow). Orthogonal to `scope`: a focus *within* it.
     pub selected_fn: Option<usize>,
     /// Current viewport zoom (read back from the runtime), for display only.
     pub zoom: f32,
@@ -80,14 +92,14 @@ pub fn app_root(project: &Project, p: &ViewParams) -> El {
     let mut panes = vec![sidebar(project, p), main_pane(project, p)];
     let mut fn_in_panel = None;
     match p.mode {
-        ViewMode::Methods | ViewMode::Flow | ViewMode::Board => {
+        ViewMode::Methods | ViewMode::Flow | ViewMode::Board | ViewMode::Map => {
             if let Some(fni) = p.selected_fn {
                 panes.push(methods::detail_panel(project, fni, p.mode, p.panel_w));
                 fn_in_panel = Some(fni);
             }
         }
         ViewMode::Systems => {
-            if let Some(fi) = p.selected_file {
+            if let Some(fi) = p.scope.focus_file(project) {
                 panes.push(systems::detail_panel(project, fi));
             }
         }
@@ -105,34 +117,62 @@ pub fn app_root(project: &Project, p: &ViewParams) -> El {
     overlays(main, [modal])
 }
 
+/// The directory a file's `rel` path sits in (no trailing slash; `""` = root).
+fn dir_of(rel: &str) -> &str {
+    rel.rsplit_once('/').map(|(d, _)| d).unwrap_or("")
+}
+
 fn sidebar(project: &Project, p: &ViewParams) -> El {
     let needle = p.filter.to_lowercase();
-    let rows: Vec<El> = project
-        .files
-        .iter()
-        .enumerate()
-        .filter(|(_, f)| needle.is_empty() || f.rel.to_lowercase().contains(&needle))
-        .map(|(i, f)| {
-            // Surface parse failures (otherwise invisible — the file just shows
-            // 0 fns as if empty) with a marker + the error on hover.
+    let focus_file = p.scope.focus_file(project);
+
+    // Group the (filtered) files by their directory so the picker mirrors the
+    // Map view's dir/file structure: a clickable dir header (selects the whole
+    // subtree) over its files (each selects that one file).
+    let mut groups: std::collections::BTreeMap<&str, Vec<usize>> = Default::default();
+    let mut shown = 0;
+    for (i, f) in project.files.iter().enumerate() {
+        if needle.is_empty() || f.rel.to_lowercase().contains(&needle) {
+            groups.entry(dir_of(&f.rel)).or_default().push(i);
+            shown += 1;
+        }
+    }
+
+    let mut rows: Vec<El> = Vec::new();
+    for (dir, files) in &groups {
+        // The dir header: selecting it scopes the canvas to the whole subtree.
+        let dir_label = if dir.is_empty() { "(root)".to_string() } else { format!("{dir}/") };
+        let mut dh = button(format!("▸ {dir_label}  ({})", files.len()))
+            .key(format!("dir:{dir}"))
+            .ghost()
+            .tooltip(format!("Scope to everything under {dir_label}"));
+        if p.scope == Scope::Dir(dir.to_string()) {
+            dh = dh.selected();
+        }
+        rows.push(dh);
+        for &i in files {
+            let f = &project.files[i];
+            // Show just the basename under the dir header; surface parse
+            // failures (otherwise invisible — the file looks empty) with a
+            // marker + the error on hover.
+            let base = f.rel.rsplit_once('/').map(|(_, b)| b).unwrap_or(&f.rel);
             let label = match &f.parse_error {
-                Some(_) => format!("⚠ {}  ({})", f.rel, f.fns.len()),
-                None => format!("{}  ({})", f.rel, f.fns.len()),
+                Some(_) => format!("  ⚠ {}  ({})", base, f.fns.len()),
+                None => format!("  {}  ({})", base, f.fns.len()),
             };
             let tip = match &f.parse_error {
                 Some(e) => format!("parse error — {e}"),
                 None => format!("{} · {} lines", f.module, f.counts.total()),
             };
             let mut b = button(label).key(format!("file:{i}")).ghost().tooltip(tip);
-            if p.selected_file == Some(i) {
+            if focus_file == Some(i) {
                 b = b.selected();
             }
-            b
-        })
-        .collect();
+            rows.push(b);
+        }
+    }
 
     // Header shows the filtered/total count; an X clears the filter when set.
-    let shown = rows.len();
     let total = project.files.len();
     let mut header = vec![
         h3("Files"),
@@ -178,14 +218,15 @@ fn sidebar(project: &Project, p: &ViewParams) -> El {
 }
 
 fn main_pane(project: &Project, p: &ViewParams) -> El {
+    let focus_file = p.scope.focus_file(project);
     let body = match p.mode {
         ViewMode::Systems => systems::canvas(project, p),
-        ViewMode::Methods => match p.selected_file {
+        ViewMode::Methods => match focus_file {
             None => column([text("Select a file to see its call graph.").muted()])
                 .padding(tokens::SPACE_8),
             Some(fi) => methods::canvas(project, fi, p),
         },
-        ViewMode::Board => match p.selected_file {
+        ViewMode::Board => match focus_file {
             None => column([text("Select a file to see its board.").muted()])
                 .padding(tokens::SPACE_8),
             Some(fi) => board::canvas(project, fi, p),
@@ -195,13 +236,15 @@ fn main_pane(project: &Project, p: &ViewParams) -> El {
                 .padding(tokens::SPACE_8),
             Some(fni) => flow::canvas(project, fni),
         },
+        ViewMode::Map => map::canvas(project, p),
     };
     let mut head = vec![toolbar(project, p)];
     match p.mode {
-        ViewMode::Methods if p.selected_file.is_some() => head.push(methods::legend()),
+        ViewMode::Methods if focus_file.is_some() => head.push(methods::legend()),
         ViewMode::Systems => head.push(systems::legend()),
-        ViewMode::Board if p.selected_file.is_some() => head.push(board::legend()),
+        ViewMode::Board if focus_file.is_some() => head.push(board::legend()),
         ViewMode::Flow if p.selected_fn.is_some() => head.push(flow::legend()),
+        ViewMode::Map => head.push(map::legend()),
         _ => {}
     }
     head.push(body);
@@ -214,11 +257,11 @@ fn main_pane(project: &Project, p: &ViewParams) -> El {
 fn toolbar(project: &Project, p: &ViewParams) -> El {
     let title = match p.mode {
         ViewMode::Systems => format!("Systems · {} files", project.files.len()),
-        ViewMode::Methods => match p.selected_file {
+        ViewMode::Methods => match p.scope.focus_file(project) {
             Some(fi) => project.files[fi].rel.clone(),
             None => "shard-viewer".to_string(),
         },
-        ViewMode::Board => match p.selected_file {
+        ViewMode::Board => match p.scope.focus_file(project) {
             Some(fi) => format!("{}  ·  board", project.files[fi].rel),
             None => "Board".to_string(),
         },
@@ -226,6 +269,7 @@ fn toolbar(project: &Project, p: &ViewParams) -> El {
             Some(fni) => format!("{}  ·  flow", project.fns[fni].name),
             None => "Flow".to_string(),
         },
+        ViewMode::Map => format!("Map · {}", p.scope.label(project)),
     };
     let mode_btn = |label: &str, key: &str, active: bool, tip: &str| {
         let b = button(label).key(key.to_string()).tooltip(tip.to_string());
@@ -234,6 +278,7 @@ fn toolbar(project: &Project, p: &ViewParams) -> El {
     row([
         h3(title),
         spacer(),
+        mode_btn("Map", "mode_map", p.mode == ViewMode::Map, "Any scope's fns, grouped by file/dir, each in flow form (experimental)"),
         mode_btn("Methods", "mode_methods", p.mode == ViewMode::Methods, "One file's call graph + triage overlay"),
         mode_btn("Systems", "mode_systems", p.mode == ViewMode::Systems, "Project-wide import graph + proof/impl heat map"),
         mode_btn("Board", "mode_board", p.mode == ViewMode::Board, "This file's call DAG, each fn in expanded flow form"),

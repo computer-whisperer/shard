@@ -11,6 +11,7 @@
 
 use damascene_core::prelude::*;
 use shard_viewer::model::Project;
+use shard_viewer::scope::Scope;
 use shard_viewer::view::{self, ViewMode, ViewParams};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -33,7 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("opening source lightbox for {} ({})", f.name, project.files[f.file].rel);
         ViewParams {
             mode: ViewMode::Methods,
-            selected_file: Some(f.file),
+            scope: Scope::File(f.file),
             selected_fn: Some(fn_idx),
             zoom: 1.0,
             filter: String::new(),
@@ -52,7 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("charting flow of {} ({})", f.name, project.files[f.file].rel);
         ViewParams {
             mode: ViewMode::Flow,
-            selected_file: Some(f.file),
+            scope: Scope::File(f.file),
             selected_fn: Some(fn_idx),
             zoom: 1.0,
             filter: String::new(),
@@ -75,7 +76,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         ViewParams {
             mode: ViewMode::Board,
-            selected_file: Some(file_idx),
+            scope: Scope::File(file_idx),
+            selected_fn: None,
+            zoom: 1.0,
+            filter: String::new(),
+            selection: Default::default(),
+            source_modal: false,
+            panel_w: view::DEFAULT_PANEL_W,
+        }
+    } else if let Some(spec) = needle.strip_prefix("map:") {
+        // `shard-render . map:SUBSTR out.svg` scopes the Map to one file (a dir
+        // prefix `map:dir/sub` works too — anything containing the substring is
+        // matched to its file, then scoped by that file).
+        let file_idx = project
+            .files
+            .iter()
+            .position(|f| f.rel.contains(spec))
+            .ok_or_else(|| format!("no file matching `{spec}`"))?;
+        println!("rendering map scoped to {}", project.files[file_idx].rel);
+        ViewParams {
+            mode: ViewMode::Map,
+            scope: Scope::File(file_idx),
             selected_fn: None,
             zoom: 1.0,
             filter: String::new(),
@@ -94,7 +115,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map(|(i, _)| i);
         ViewParams {
             mode: ViewMode::Systems,
-            selected_file,
+            scope: selected_file.map_or(Scope::None, Scope::File),
             selected_fn: None,
             zoom: 1.0,
             filter: String::new(),
@@ -121,7 +142,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .max_by_key(|&fi| project.fns.iter().filter(|g| g.calls.contains(&fi)).count());
         ViewParams {
             mode: ViewMode::Methods,
-            selected_file: Some(file_idx),
+            scope: Scope::File(file_idx),
             selected_fn,
             zoom: 1.0,
             filter: String::new(),

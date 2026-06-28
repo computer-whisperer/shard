@@ -10,12 +10,14 @@
 
 use damascene_core::prelude::*;
 use shard_viewer::model::Project;
+use shard_viewer::scope::Scope;
 use shard_viewer::view::{self, CANVAS_KEY, ViewMode, ViewParams};
 
 struct Viewer {
     project: Project,
     mode: ViewMode,
-    selected_file: Option<usize>,
+    /// The canvas subject (what the view is about). See [`Scope`].
+    scope: Scope,
     selected_fn: Option<usize>,
     /// Viewport commands queued from clicks, drained once per frame by the host.
     pending: Vec<ViewportRequest>,
@@ -36,7 +38,7 @@ impl Viewer {
 
     /// Open a file's call graph (the Methods drill-down), framing it.
     fn open_file(&mut self, i: usize) {
-        self.selected_file = Some(i);
+        self.scope = Scope::File(i);
         self.selected_fn = None;
         self.source_modal = false;
         self.mode = ViewMode::Methods;
@@ -56,7 +58,7 @@ impl App for Viewer {
             &self.project,
             &ViewParams {
                 mode: self.mode,
-                selected_file: self.selected_file,
+                scope: self.scope.clone(),
                 selected_fn: self.selected_fn,
                 zoom,
                 filter: self.filter.clone(),
@@ -113,13 +115,24 @@ impl App for Viewer {
         } else if event.is_route("mode_flow") {
             self.mode = ViewMode::Flow;
             self.fit();
+        } else if event.is_route("mode_map") {
+            self.mode = ViewMode::Map;
+            self.fit();
+        } else if let Some(dir) = event.route_suffix("dir") {
+            // Sidebar dir header: scope the canvas to the whole subtree. A dir
+            // spans many files, so it can only be shown on the Map — switch to
+            // it (single-file views have no anchor for a Dir scope).
+            self.scope = Scope::Dir(dir.to_string());
+            self.selected_fn = None;
+            self.mode = ViewMode::Map;
+            self.fit();
         } else if let Some(i) = event.route_index::<usize>("sysfile")
             && i < self.project.files.len()
         {
             // Select the file in the systems graph: opens its breakdown panel
             // (with an "Open call graph" button to drill) without leaving the
             // import view. Don't refit — the graph itself is unchanged.
-            self.selected_file = Some(i);
+            self.scope = Scope::File(i);
         } else if let Some(i) = event.route_index::<usize>("open")
             && i < self.project.files.len()
         {
@@ -134,7 +147,7 @@ impl App for Viewer {
         {
             // Following a cross-file callee/caller switches the canvas.
             let file = self.project.fns[i].file;
-            if Some(file) != self.selected_file || self.mode != ViewMode::Methods {
+            if Some(file) != self.scope.focus_file(&self.project) || self.mode != ViewMode::Methods {
                 self.open_file(file);
             }
             self.selected_fn = Some(i);
@@ -177,7 +190,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Viewer {
             project,
             mode: ViewMode::Methods,
-            selected_file,
+            scope: selected_file.map_or(Scope::None, Scope::File),
             selected_fn: None,
             pending,
             filter: String::new(),
