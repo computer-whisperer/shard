@@ -85,18 +85,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             panel_w: view::DEFAULT_PANEL_W,
         }
     } else if let Some(spec) = needle.strip_prefix("map:") {
-        // `shard-render . map:SUBSTR out.svg` scopes the Map to one file (a dir
-        // prefix `map:dir/sub` works too — anything containing the substring is
-        // matched to its file, then scoped by that file).
-        let file_idx = project
-            .files
-            .iter()
-            .position(|f| f.rel.contains(spec))
-            .ok_or_else(|| format!("no file matching `{spec}`"))?;
-        println!("rendering map scoped to {}", project.files[file_idx].rel);
+        // `shard-render . map:SUBSTR out.svg` scopes the Map to one file; a
+        // trailing slash (`map:kernel/ out.svg`) scopes to that whole directory
+        // subtree, so the dir/file nesting can be checked headlessly.
+        let scope = if let Some(dir) = spec.strip_suffix('/') {
+            println!("rendering map scoped to dir {dir}/");
+            Scope::Dir(dir.to_string())
+        } else {
+            let file_idx = project
+                .files
+                .iter()
+                .position(|f| f.rel.contains(spec))
+                .ok_or_else(|| format!("no file matching `{spec}`"))?;
+            println!("rendering map scoped to {}", project.files[file_idx].rel);
+            Scope::File(file_idx)
+        };
         ViewParams {
             mode: ViewMode::Map,
-            scope: Scope::File(file_idx),
+            scope,
             selected_fn: None,
             zoom: 1.0,
             filter: String::new(),

@@ -21,11 +21,16 @@ what it needs (the single-file views read its *focus file*; the Map view reads
 the full fn/file sets), so selection is unified rather than per-view.
 
 **Map** *(experimental — being built)* — the unified view: any scope's fns,
-grouped by origin file/dir, each rendered in the Flow form. Today it ships only
-the **scaffold** (a readout of what the current scope resolves to) while the
-recursive file/dir layout is built; pick a file or a directory in the sidebar
-to scope it. This is the view the others are converging into — see
-*Direction*, below.
+grouped by origin **dir ⊃ file** into nested bounding boxes, each fn drawn in
+the Flow form. Pick a file or a directory in the sidebar to scope it. The layout
+is a **recursive containment** pass mirroring the program's own tree: a dir box
+stacks its subdir/file boxes, a file box packs its fn cards (greedy row-wrap on
+each card's *real* intrinsic width), a card is a fn body's region tree — every
+box hugs its contents, so there is **no size estimation** (contrast the Board's
+`est()`). The interface/implementation split reads at a glance: a `mod.req.shard`
+of signature-only cards sits right beside the `.shard` that implements them.
+Call wires between cards and import-DAG-driven module placement are the next
+slices; this is the view the others are converging into — see *Direction*.
 
 **Methods** — one file's call graph, with a **triage overlay**:
 
@@ -164,7 +169,7 @@ untouched while it grows.
 |---|---|
 | `shard-viewer [ROOT]` | The GUI (native window via `damascene-winit-wgpu`). Defaults to the most fn-dense file. |
 | `shard-graph [ROOT] [FN]` | Text dump of the extracted model: per-file counts, a project-wide **lines-by-category tally** (mirrors `tools/loc`), the most-called fns, a **cut-candidate (orphan) list**, or one fn's callers/callees. No GUI deps. |
-| `shard-render ROOT FILE_SUBSTRING [OUT.svg]` | Headless render of one file's graph to SVG + a lint report. No GPU/window. Use `systems` for the import graph, `flow:FN_NAME` for a fn's dataflow diagram, `board:FILE_SUBSTRING` for the expanded call-DAG board, or `map:FILE_SUBSTRING` for the unified Map scoped to that file. |
+| `shard-render ROOT FILE_SUBSTRING [OUT.svg]` | Headless render of one file's graph to SVG + a lint report. No GPU/window. Use `systems` for the import graph, `flow:FN_NAME` for a fn's dataflow diagram, `board:FILE_SUBSTRING` for the expanded call-DAG board, or `map:FILE_SUBSTRING` for the unified Map scoped to that file (`map:DIR/` with a trailing slash scopes to a whole directory subtree). |
 
 `ROOT` defaults to the current directory; run from a shard checkout.
 
@@ -199,6 +204,6 @@ src/
     systems.rs import graph + proof/impl heat map (+ its breakdown panel)
     flow.rs    one fn body as a region card (render_region, reused by board/map)
     board.rs   the call DAG with each node in expanded flow form
-    map.rs     the unified scope view (scaffold; recursive layout in progress)
+    map.rs     the unified scope view (recursive dir/file containment; wires next)
   bin/       viewer.rs (GUI) · graph.rs (text) · render.rs (headless SVG)
 ```
