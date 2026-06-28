@@ -23,14 +23,21 @@ the full fn/file sets), so selection is unified rather than per-view.
 **Map** *(experimental — being built)* — the unified view: any scope's fns,
 grouped by origin **dir ⊃ file** into nested bounding boxes, each fn drawn in
 the Flow form. Pick a file or a directory in the sidebar to scope it. The layout
-is a **recursive containment** pass mirroring the program's own tree: a dir box
-stacks its subdir/file boxes, a file box packs its fn cards (greedy row-wrap on
-each card's *real* intrinsic width), a card is a fn body's region tree — every
-box hugs its contents, so there is **no size estimation** (contrast the Board's
-`est()`). The interface/implementation split reads at a glance: a `mod.req.shard`
-of signature-only cards sits right beside the `.shard` that implements them.
-Call wires between cards and import-DAG-driven module placement are the next
-slices; this is the view the others are converging into — see *Direction*.
+is a **recursive graph-placement** pass mirroring the program's own tree, and at
+*every* level it is **link-based**: inside a file box the fns are placed by the
+file's intra-file **call graph**, and inside a dir box the child file/subdir
+boxes are placed by the **import DAG** among them (aggregated — a subdir imports
+another when any of its files do). Each level is sized bottom-up by the
+*measured* intrinsic size of the level below (`layout::intrinsic`): a card
+measures itself, a file box measures its laid-out call graph, a dir box measures
+its laid-out import graph — so the engine always has real sizes and there is
+**no estimation** (contrast the Board's `est()`). The interface/implementation
+split reads at a glance: a `mod.req.shard` of signature-only cards sits beside
+the `.shard` that implements them, with an import arrow between. The whole tree
+is placed without a viewport (`shared::placed_graph`); only the outermost result
+is wrapped in one pan/zoom viewport. The per-level router is Sugiyama
+(`layout.rs`) for now — swappable per scale, since each level is one layout call.
+This is the view the others are converging into — see *Direction*.
 
 **Methods** — one file's call graph, with a **triage overlay**:
 
@@ -204,6 +211,6 @@ src/
     systems.rs import graph + proof/impl heat map (+ its breakdown panel)
     flow.rs    one fn body as a region card (render_region, reused by board/map)
     board.rs   the call DAG with each node in expanded flow form
-    map.rs     the unified scope view (recursive dir/file containment; wires next)
+    map.rs     the unified scope view (recursive graph placement: calls + imports)
   bin/       viewer.rs (GUI) · graph.rs (text) · render.rs (headless SVG)
 ```

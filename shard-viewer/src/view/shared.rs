@@ -38,9 +38,22 @@ pub(crate) fn graph_canvas(lay: &Layout, node_els: Vec<El>) -> El {
 /// Like [`graph_canvas`] but with a caller-supplied edge overlay, so views that
 /// style edges by kind (e.g. flow's control vs data) can build their own.
 pub(crate) fn graph_canvas_edges(lay: &Layout, node_els: Vec<El>, edges: VectorAsset) -> El {
+    pan_zoom_viewport(placed_graph(lay, node_els, edges))
+}
+
+/// The absolutely-placed content layer of a laid-out graph: an edge overlay
+/// plus the per-node elements positioned at their content coordinates, in a
+/// `Fixed(width) × Fixed(height)` stack — **without** the pan/zoom viewport.
+///
+/// Sized definitely (the layout's bounds), so it composes: a block laid out
+/// this way reports a real intrinsic size to its parent, letting the Map nest
+/// graph layouts (fns inside a file, files inside a dir) and wrap the whole
+/// thing in a single viewport at the top. The `.layout()` escape hatch reads
+/// each level's own `ctx.container` origin, so nested placements compose.
+pub(crate) fn placed_graph(lay: &Layout, node_els: Vec<El>, edges: VectorAsset) -> El {
     let mut children: Vec<El> = Vec::with_capacity(node_els.len() + 1);
-    // Edge overlay, drawn in content coordinates; the viewport transform scales
-    // it for free. Unkeyed so it never intercepts the background pan drag.
+    // Edge overlay, drawn in content coordinates. Unkeyed so it never intercepts
+    // a background pan drag.
     children.push(vector(edges));
     children.extend(node_els);
 
@@ -48,10 +61,7 @@ pub(crate) fn graph_canvas_edges(lay: &Layout, node_els: Vec<El>, edges: VectorA
         lay.nodes.iter().map(|n| (n.x, n.y, n.w, n.h)).collect();
     let (cw, ch) = (lay.width, lay.height);
 
-    // The content layer: nodes placed at their absolute graph coordinates. No
-    // pan/zoom math here — the `viewport()` wrapper bakes the transform into
-    // descendant rects (hit-test included) and scales per-node chrome.
-    let content = stack(children)
+    stack(children)
         .width(Size::Fixed(cw))
         .height(Size::Fixed(ch))
         .layout(move |ctx: LayoutCtx| {
@@ -62,9 +72,7 @@ pub(crate) fn graph_canvas_edges(lay: &Layout, node_els: Vec<El>, edges: VectorA
                 rects.push(Rect::new(o.x + x, o.y + y, w, h));
             }
             rects
-        });
-
-    pan_zoom_viewport(content)
+        })
 }
 
 /// Wrap `content` in the shared pan/zoom viewport. The content sizes itself
