@@ -271,8 +271,9 @@ fn place_with_els(graph: Graph, els: Vec<El>) -> Block {
     Block { el, w: lay.width, h: lay.height }
 }
 
-/// One fn as an intrinsic flow card: a name/signature header over its region
-/// tree (the same renderer the Flow/Board views use). No fixed size — it hugs.
+/// One fn as an intrinsic flow card: a name/signature header, its named
+/// arguments (LabVIEW-style inputs), then its region tree (the same renderer
+/// the Flow/Board views use). No fixed size — it hugs.
 fn fn_card(ctx: &Ctx, fn_idx: usize) -> El {
     let f = &ctx.project.fns[fn_idx];
     let title = row([
@@ -282,7 +283,7 @@ fn fn_card(ctx: &Ctx, fn_idx: usize) -> El {
             .font_size(super::TITLE_SIZE)
             .nowrap_text()
             .ellipsis(),
-        text(format!("{} → {}", f.params.len(), short_ty(&f.ret)))
+        text(format!("→ {}", short_ty(&f.ret)))
             .mono()
             .muted()
             .font_size(SUB_SIZE)
@@ -291,12 +292,19 @@ fn fn_card(ctx: &Ctx, fn_idx: usize) -> El {
     .gap(tokens::SPACE_2)
     .align(Align::Center);
 
-    let body = match body_region(f) {
+    // The fn's inputs, enumerated: `name  Type`, one per row. A LabVIEW panel
+    // reads its wires by their terminals — the signature is first-class, not a
+    // count. Omitted for a nullary fn (nothing to list).
+    let mut parts = vec![title];
+    if let Some(inputs) = params_block(f) {
+        parts.push(inputs);
+    }
+    parts.push(match body_region(f) {
         Some(region) => render_region(&region),
         None => text("(signature only)").muted().font_size(SUB_SIZE),
-    };
+    });
 
-    let card = column([title, body])
+    let card = column(parts)
         .gap(tokens::SPACE_2)
         .padding(8.0)
         .radius(7.0)
@@ -307,6 +315,29 @@ fn fn_card(ctx: &Ctx, fn_idx: usize) -> El {
     } else {
         card.fill(tokens::CARD).stroke(tokens::BORDER)
     }
+}
+
+/// The fn's parameters as a small column of `name  Type` rows, or `None` for a
+/// nullary fn. Names read in the foreground, types muted — the terminals of the
+/// card. Types are trimmed like the return ([`short_ty`]); the tooltip carries
+/// the untrimmed signature.
+fn params_block(f: &FnDef) -> Option<El> {
+    if f.params.is_empty() {
+        return None;
+    }
+    let rows: Vec<El> = f
+        .params
+        .iter()
+        .map(|(name, ty)| {
+            row([
+                text(name.clone()).mono().font_size(SUB_SIZE).nowrap_text(),
+                text(short_ty(ty)).mono().muted().font_size(SUB_SIZE).nowrap_text(),
+            ])
+            .gap(tokens::SPACE_2)
+            .align(Align::Center)
+        })
+        .collect();
+    Some(column(rows).gap(2.0).padding(tokens::SPACE_1))
 }
 
 /// The region tree for a fn's body, or `None` for a bodyless `sig` / a

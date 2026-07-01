@@ -145,12 +145,23 @@ impl App for Viewer {
         } else if let Some(i) = event.route_index::<usize>("fn")
             && i < self.project.fns.len()
         {
-            // Following a cross-file callee/caller switches the canvas.
-            let file = self.project.fns[i].file;
-            if Some(file) != self.scope.focus_file(&self.project) || self.mode != ViewMode::Methods {
-                self.open_file(file);
+            if self.mode == ViewMode::Map {
+                // In the Map, a fn click selects it *in place* — opening the
+                // detail panel over the same canvas. Don't switch views or
+                // collapse the (possibly multi-file) scope to one file; the
+                // whole point of the Map is to keep the surrounding structure.
+                self.selected_fn = Some(i);
+            } else {
+                // Elsewhere, following a cross-file callee/caller switches the
+                // canvas to that fn's file.
+                let file = self.project.fns[i].file;
+                if Some(file) != self.scope.focus_file(&self.project)
+                    || self.mode != ViewMode::Methods
+                {
+                    self.open_file(file);
+                }
+                self.selected_fn = Some(i);
             }
-            self.selected_fn = Some(i);
         }
     }
 
