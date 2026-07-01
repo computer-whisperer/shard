@@ -572,7 +572,6 @@ recovered from the target file or the same-module `mod.req.shard`
 | `refl`                                       | `Refl`      | the two sides are already syntactically equal                  |
 | `(steps (STEP…) PROOF)`                      | `Steps`     | apply rewriting STEPs to the sequent, then continue with PROOF |
 | `(induct VAR (CASE…))`                       | `Induct`    | structural induction on `VAR` (one IH per recursive field)     |
-| `(induct2 VAR (CASE…))`                      | `Induct2`   | two-step (parity) induction; `SS` case carries one IH          |
 | `(case-on TERM TYPE (CASE…))`                | `CaseOn`    | split on the constructor of `TERM` (of named `TYPE`); no IH    |
 | `(wf-induct MEASURE PROOF)`                  | `WfInduct`  | well-founded induction on the Int `MEASURE`; prepends IH `ih`  |
 | `(have EQ PROOF₁ PROOF₂)`                    | `Have`      | the CUT rule: prove `EQ` by `PROOF₁`, then continue with `PROOF₂` under `EQ` as a fresh premise |
@@ -585,7 +584,7 @@ recovered from the target file or the same-module `mod.req.shard`
 
 ### 10.4 Cases
 
-A `CASE` (under `induct`/`induct2`/`case-on`) names a constructor and
+A `CASE` (under `induct`/`case-on`) names a constructor and
 gives the sub-proof for that arm:
 
 ```sexp
@@ -630,7 +629,7 @@ What a `rewrite`/`rewrite-with`/`absurd` cites:
 `desugar_proof_named`) simulates the kernel's hyp stack and rewrites each
 to its positional `(Hyp K)`. The induction hypotheses are auto-named
 `ih`, `ih1`, `ih2`, …: `wf-induct` prepends one `ih`; each
-`induct`/`induct2` case appends one IH per recursive constructor field
+`induct` case appends one IH per recursive constructor field
 (in `do_induct` order). Each `case-on` arm prepends its case equation at
 `Hyp 0`, auto-named after the arm's **constructor** — `(hyp Alive)`,
 `(hyp True)`, `(hyp Some)` — with inner arms shadowing outer; named

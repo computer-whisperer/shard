@@ -56,7 +56,7 @@
 ;; -----------------------------------------------------------------
 
 ((symbol) @keyword
-  (#match? @keyword "^(refl|steps|induct|induct2|case-on|case|wf-induct|rewrite-with|absurd|by)$"))
+  (#match? @keyword "^(refl|steps|induct|case-on|case|wf-induct|rewrite-with|absurd|by)$"))
 
 ;; -----------------------------------------------------------------
 ;; Proof language — tactic steps + equation-reference builders

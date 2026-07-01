@@ -150,11 +150,11 @@
        ((Some seq2) (check_sequent m th seq2 rest))
        (None False)))
 
-    ;; Induct/Induct2/CaseOn/WfInduct/SubtermInduct: the per-form setup is
+    ;; Induct/CaseOn/WfInduct/SubtermInduct: the per-form setup is
     ;; INLINED here (rather than a do_X forwarder) so the only recursive edges
     ;; are the direct check_sequent / iterator calls below — that keeps every
     ;; SCC edge an honest size drop on (proof_size pf), no lex offsets. See the
-    ;; iterators check_induct_proofs / check_caseon_proofs / induct2_run.
+    ;; iterators check_induct_proofs / check_caseon_proofs.
     ((Induct var cases)
      (match seq
        ((Sequent params _ _ _)
@@ -172,29 +172,6 @@
                      (check_induct_proofs m th seq var var_type type_env ctors
                        cases)
                      False)))))))))))
-
-    ((Induct2 var cases)
-     (match seq
-       ((Sequent params _ _ _)
-        (match (find_param var params)
-          (None False)
-          ((Some (Param _ var_type))
-           (match (type_head var_type)
-             (None False)  ; TVar — can't induct
-             ((Some (Pair tname _))
-              (match (lookup_typedef tname m)
-                (None False)
-                ((Some (TypeDef _ _ ctors _))
-                 (if (is_two_ctors ctors)  ; SOUNDNESS GUARD: exactly zero+succ
-                   (match (find_zero_ctor ctors)
-                     (None False)
-                     ((Some zero_c)
-                      (match (find_succ_ctor ctors var_type)
-                        (None False)
-                        ((Some succ_c)
-                         (induct2_run m th seq var var_type zero_c succ_c cases
-                           False False False)))))
-                   False))))))))))
 
     ((CaseOn scrut ty cases)
      (match (lookup_typedef ty m)
@@ -1850,152 +1827,6 @@
        ((Pair fresh_rest env_rest)
         (let ((fx (gen_fresh)))
           (Pair (Cons (Param fx ty) fresh_rest) (Bind x (FVar fx) env_rest))))))))
-
-;; ---------------------------------------------------------------------------
-;; do_induct2: TWO-STEP induction on a Nat-shaped var. Sound because every
-;; Nat is Z, (S Z), or (S (S k)) — so proving the goal at Z and (S Z), plus
-;; the step ∀k. P(k) ⟹ P(S (S k)), covers all n. This is what functions
-;; recurring two-at-a-time (half_nat: half (S (S k)) = S (half k)) need:
-;; single-step Induct only ever yields the IH at k, never k-1, so the
-;; S(S k) arm can't reach P(k). The cases are named 'Z, 'SZ, 'SS; the SS
-;; arm gets one IH = P(k) (the goal with var:=k, other vars closed as ∀,
-;; exactly like single-step Induct's build_ih).
-;;
-;; The var's type must have a nullary ctor (the "zero") and a one-field
-;; recursive ctor (the "succ", field type = var's type). Found generically
-;; below, so this works for any such two-ctor type, not just the literal
-;; Nat declaration. (For PARAMETRIC recursive types find_succ_ctor's
-;; type_eq compares the declared field type against the instantiated
-;; var_type, so it can over-reject — a false NEGATIVE, never unsound.)
-;; ---------------------------------------------------------------------------
-
-;; SOUNDNESS GUARD: two-step induction's three arms (Z, S Z, S (S k))
-;; cover every value of a type IFF that type is EXACTLY a nullary ctor +
-;; a unary recursive ctor (so all values are succ-towers over zero). A
-;; THIRD ctor would leave values uncovered — so require exactly two.
-(fn is_two_ctors ((ctors (List CtorDef))) Bool
-  (match ctors
-    ((Cons _ (Cons _ Nil)) True)
-    (_ False)))
-
-(fn find_zero_ctor ((ctors (List CtorDef))) (Option QName)
-  (measure (struct ctors))
-  (match ctors
-    (Nil None)
-    ((Cons (CtorDef cn fts) rest)
-     (match fts
-       (Nil (Some cn))
-       (_ (find_zero_ctor rest))))))
-
-(fn find_succ_ctor ((ctors (List CtorDef)) (var_type Type)) (Option QName)
-  (measure (struct ctors))
-  (match ctors
-    (Nil None)
-    ((Cons (CtorDef cn fts) rest)
-     (match fts
-       ((Cons ft Nil)
-        (if (type_eq ft var_type) (Some cn) (find_succ_ctor rest var_type)))
-       (_ (find_succ_ctor rest var_type))))))
-
-;; Substitute var := val (a closed Expr) throughout the sequent and drop
-;; var from the params. Used for the Z and (S Z) base arms (no IH).
-(fn build_subst_subgoal ((seq Sequent) (var Symbol) (val Expr)) Sequent
-  (match seq
-    ((Sequent params hyps premises eq)
-     (let ((rest_params (remove_param var params)) (env (Bind var val Empty)))
-       (Sequent
-         rest_params
-         (subst_goals env hyps)
-         (subst_eqs env premises)
-         (subst_eq env eq))))))
-
-;; The (S (S k)) arm: fresh k, substitute var := (succ (succ k)), and add
-;; the single IH P(k) (built exactly as single-step Induct builds it).
-(fn build_ss_subgoal ((seq Sequent) (var Symbol) (var_type Type) (succ_c QName))
-  Sequent
-  (match seq
-    ((Sequent params hyps premises eq)
-     (let ((kfresh (gen_fresh)))
-       (let
-         ((rest_params (remove_param var params))
-          (ss_val (Ctor succ_c (list (Ctor succ_c (list (FVar kfresh)))))))
-         (let
-           ((env_ss (Bind var ss_val Empty))
-            (ih (build_ih var kfresh rest_params premises eq)))
-           (Sequent
-             (append_params rest_params (list (Param kfresh var_type)))
-             (append_goals (subst_goals env_ss hyps) (list ih))
-             (subst_eqs env_ss premises)
-             (subst_eq env_ss eq))))))))
-
-;; Given the resolved zero/succ ctors, check the three arms. Z and (S Z)
-;; substitute and prove directly; (S (S k)) gets the IH at k.
-;; Check the three induct2 arms by ITERATING the case list — structural on
-;; `cases`, so the recursion is an honest size drop on (case_list_size cases),
-;; exactly like check_induct_proofs. The got_* flags accumulate coverage; the
-;; Nil base requires all three of Z / (S Z) / (S (S k)). A case whose tag isn't
-;; one of those pseudo-ctors is skipped (matching the old find_case scan, which
-;; only looked for the three). Induct2's field binding (the k in S(S k)) is
-;; supplied by build_ss_subgoal, not author names, so any CaseB names are
-;; ignored. The tags 'Z/'SZ/'SS are core-qualified like any literal.
-(fn induct2_run
-  ((m Module)
-   (th Theory)
-   (seq Sequent)
-   (var Symbol)
-   (var_type Type)
-   (zero_c QName)
-   (succ_c QName)
-   (cases (List Case))
-   (got_z Bool)
-   (got_sz Bool)
-   (got_ss Bool))
-  Bool
-  (measure (case_list_size cases))
-  (match cases
-    (Nil (if got_z (if got_sz got_ss False) False))  ; all three arms covered
-    ((Cons (Case cname pf) rest)
-     (if (qname_eq cname (qn (quote Z)))
-       (if
-         (check_sequent m th (build_subst_subgoal seq var (Ctor zero_c Nil)) pf)
-         (induct2_run m th seq var var_type zero_c succ_c rest True got_sz
-           got_ss)
-         False)
-     (if (qname_eq cname (qn (quote SZ)))
-       (if
-         (check_sequent
-           m
-           th
-           (build_subst_subgoal seq var (Ctor succ_c (list (Ctor zero_c Nil))))
-           pf)
-         (induct2_run m th seq var var_type zero_c succ_c rest got_z True got_ss)
-         False)
-     (if (qname_eq cname (qn (quote SS)))
-       (if (check_sequent m th (build_ss_subgoal seq var var_type succ_c) pf)
-         (induct2_run m th seq var var_type zero_c succ_c rest got_z got_sz True)
-         False)
-       (induct2_run m th seq var var_type zero_c succ_c rest got_z got_sz got_ss)))))  ; spurious tag — skip
-    ((Cons (CaseB cname nms pf) rest)
-     (if (qname_eq cname (qn (quote Z)))
-       (if
-         (check_sequent m th (build_subst_subgoal seq var (Ctor zero_c Nil)) pf)
-         (induct2_run m th seq var var_type zero_c succ_c rest True got_sz
-           got_ss)
-         False)
-     (if (qname_eq cname (qn (quote SZ)))
-       (if
-         (check_sequent
-           m
-           th
-           (build_subst_subgoal seq var (Ctor succ_c (list (Ctor zero_c Nil))))
-           pf)
-         (induct2_run m th seq var var_type zero_c succ_c rest got_z True got_ss)
-         False)
-     (if (qname_eq cname (qn (quote SS)))
-       (if (check_sequent m th (build_ss_subgoal seq var var_type succ_c) pf)
-         (induct2_run m th seq var var_type zero_c succ_c rest got_z got_sz True)
-         False)
-       (induct2_run m th seq var var_type zero_c succ_c rest got_z got_sz got_ss)))))))  ; spurious tag — skip
 
 ;; ---------------------------------------------------------------------------
 ;; Shared subgoal builders + UNTRUSTED diagnostics support. build_wf_subgoal

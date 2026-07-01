@@ -948,6 +948,22 @@ is where to start when planning v3.
   (Simp's gate is conservative, won't push past stuck heads), the
   helper-lemma pattern remains available — just rarely needed.
 
+### Two-step Nat induction (`Induct2`) — RETIRED 2026-07-01
+
+`Induct2` was deleted from the kernel (proof roster prune, annealing
+arc). The "bigger, later addition" its Revisit note anticipated arrived
+twice over — `wf-induct` (general Int-measure induction) and
+`subterm-induct` (well-founded induction along the structural subterm
+order) — and the latter subsumes it exactly: k-step recursion is just a
+strict-subterm descent, no Nat-shape guard needed. Its only user,
+`std/nat`'s `half_bound`, is now a `subterm-induct` + nested `case-on`
+proof (the SS leaf cites the strong IH at k2 via `(hyp ih)` with
+`(below)`), and the private `half_step` helper it needed is gone too —
+the farkas cert absorbs the linear step. Net: one branching Proof form,
+its checker block (`do_induct2`/`induct2_run`/shape guards, ~150 lines),
+and a per-situation kernel special case removed. The original entry is
+kept below for the design record.
+
 ### Two-step Nat induction (`Induct2`) — kernel addition (slice 50)
 - **What:** a fourth branching Proof, `(Induct2 var (list (Case 'Z …)
   (Case 'SZ …) (Case 'SS …)))`. Splits a Nat-shaped var into Z, (S Z),

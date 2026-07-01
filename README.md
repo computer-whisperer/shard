@@ -177,7 +177,7 @@ std/                   ; the standard library — DIRECTORY MODULES: each topic
   arith/                ;   pure lia index identities (sub_zero, idx_cancel, …)
   div/                  ;   Euclidean div/mod foundation (WfInduct substrate)
   order/                ;   Int order / disequality entailment (arith)
-  nat/                  ;   Nat + add_nat / int_of_nat / half_nat (+ Induct2)
+  nat/                  ;   Nat + add_nat / int_of_nat / half_nat
   list/                 ;   (List T) append/len/rev algebra behind an opaque surface
   map/                  ;   (Map V) — an OPAQUE TYPE (private ctors) + extensional lemmas
   mem.shard             ;   M3 linear memory = (Map Int): read/write/swap/rev_loop
@@ -264,7 +264,7 @@ Feature checklist (✓ = shipped in v2; → = next):
 | M3 loop invariant — untouched (below + above) | ✓     | 39,40  |
 | M3 loop invariant — mirror (`rev_loop` reverses) | ✓  | 44     |
 | M3 capstone (`rev_loop ⊑ rev`: full list↔mem refinement) | ✓ | 45-50 |
-| Two-step induction (`Induct2`, Nat-shaped)   | ✓  | 50     |
+| Two-step induction (`Induct2`, Nat-shaped)   | ✓ (retired — superseded by `subterm-induct`) | 50 |
 | `(import …)` — transitive, deduped deps + `std/` library | ✓ | 51 |
 | Char↔symbol primitives (`sym_of_chars`/`chars_of_sym`) | ✓ | self-host |
 | S-expr reader + module parser **in shard** (`kernel/reader.shard`) | ✓ | self-host |
