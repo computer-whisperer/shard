@@ -99,25 +99,21 @@ def impl_unsigned(T,n,w):
 (fn {n}_shl ((x {T}) (k Int)) {T} ({n} (bshl ({n}_val x) k)))
 (fn {n}_shr ((x {T}) (k Int)) {T} ({n} (bshr ({n}_val x) k)))
 
-(fulfills {n}_val_of (steps ((unfold {n} lhs) (unfold {n}_val lhs) (simp lhs)) refl))
-(fulfills {n}_made_lo
-  (steps ((rewrite (lemma {n}_val_of) lr lhs true ()))
-    (rewrite-with (lemma mod_lo) lr lhs ((inst n nn) (inst d {m})) ((steps ((compute both)) refl)) refl)))
-(fulfills {n}_made_hi
-  (steps ((rewrite (lemma {n}_val_of) lr lhs true ()))
-    (rewrite-with (lemma mod_hi) lr lhs ((inst n nn) (inst d {m})) ((steps ((compute both)) refl)) refl)))
-(fulfills {n}_add_val (steps ((unfold {n}_add lhs) (rewrite (lemma {n}_val_of) lr lhs true ())) refl))
-(fulfills {n}_sub_val (steps ((unfold {n}_sub lhs) (rewrite (lemma {n}_val_of) lr lhs true ())) refl))
-(fulfills {n}_mul_val (steps ((unfold {n}_mul lhs) (rewrite (lemma {n}_val_of) lr lhs true ())) refl))
-(fulfills {n}_and_val (steps ((unfold {n}_and lhs) (rewrite (lemma {n}_val_of) lr lhs true ())) refl))
-(fulfills {n}_or_val (steps ((unfold {n}_or lhs) (rewrite (lemma {n}_val_of) lr lhs true ())) refl))
-(fulfills {n}_xor_val (steps ((unfold {n}_xor lhs) (rewrite (lemma {n}_val_of) lr lhs true ())) refl))
-(fulfills {n}_not_val (steps ((unfold {n}_not lhs) (rewrite (lemma {n}_val_of) lr lhs true ())) refl))
-(fulfills {n}_eq_val (steps ((unfold {n}_eq lhs)) refl))
-(fulfills {n}_lt_val (steps ((unfold {n}_lt lhs)) refl))
-(fulfills {n}_le_val (steps ((unfold {n}_le lhs)) refl))
-(fulfills {n}_shl_val (steps ((unfold {n}_shl lhs) (rewrite (lemma {n}_val_of) lr lhs true ())) refl))
-(fulfills {n}_shr_val (steps ((unfold {n}_shr lhs) (rewrite (lemma {n}_val_of) lr lhs true ())) refl))
+(fulfills {n}_val_of auto)
+(fulfills {n}_made_lo auto)
+(fulfills {n}_made_hi auto)
+(fulfills {n}_add_val auto)
+(fulfills {n}_sub_val auto)
+(fulfills {n}_mul_val auto)
+(fulfills {n}_and_val auto)
+(fulfills {n}_or_val auto)
+(fulfills {n}_xor_val auto)
+(fulfills {n}_not_val auto)
+(fulfills {n}_eq_val auto)
+(fulfills {n}_lt_val auto)
+(fulfills {n}_le_val auto)
+(fulfills {n}_shl_val auto)
+(fulfills {n}_shr_val auto)
 """
 
 def impl_signed(T,n,w):
@@ -138,38 +134,17 @@ def impl_signed(T,n,w):
 (fn {n}_shl ((x {T}) (k Int)) {T} ({n} (bshl ({n}_val x) k)))
 (fn {n}_sshr ((x {T}) (k Int)) {T} ({n} (ediv ({n}_val x) (bshl 1 k))))
 
-(fulfills {n}_val_of (steps ((unfold {n} lhs) (unfold {n}_val lhs) (simp lhs)) refl))
-(fulfills {n}_wrap_lo
-  (steps ((unfold {n}_wrap lhs))
-    (case-on (lt (mod nn {m}) {h}) Bool
-      ((case True
-         (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
-           (have (= (le 0 (mod nn {m})) True)
-             (rewrite-with (lemma mod_lo) lr lhs ((inst n nn) (inst d {m})) ((steps ((compute both)) refl)) refl)
-             (by farkas (list 1 1)))))
-       (case False
-         (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
-           (have (= (lt (mod nn {m}) {h}) False)
-             (steps ((rewrite (hyp 0) lr lhs true ())) refl)
-             (by farkas (list 1 1)))))))))
-(fulfills {n}_wrap_hi
-  (steps ((unfold {n}_wrap lhs))
-    (case-on (lt (mod nn {m}) {h}) Bool
-      ((case True
-         (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs) (rewrite (hyp 0) lr lhs true ())) refl))
-       (case False
-         (steps ((rewrite (hyp 0) lr lhs true ()) (simp lhs))
-           (have (= (lt (mod nn {m}) {m}) True)
-             (rewrite-with (lemma mod_hi) lr lhs ((inst n nn) (inst d {m})) ((steps ((compute both)) refl)) refl)
-             (by farkas (list 1 1)))))))))
-(fulfills {n}_add_val (steps ((unfold {n}_add lhs) (rewrite (lemma {n}_val_of) lr lhs true ())) refl))
-(fulfills {n}_sub_val (steps ((unfold {n}_sub lhs) (rewrite (lemma {n}_val_of) lr lhs true ())) refl))
-(fulfills {n}_mul_val (steps ((unfold {n}_mul lhs) (rewrite (lemma {n}_val_of) lr lhs true ())) refl))
-(fulfills {n}_eq_val (steps ((unfold {n}_eq lhs)) refl))
-(fulfills {n}_slt_val (steps ((unfold {n}_slt lhs)) refl))
-(fulfills {n}_sle_val (steps ((unfold {n}_sle lhs)) refl))
-(fulfills {n}_shl_val (steps ((unfold {n}_shl lhs) (rewrite (lemma {n}_val_of) lr lhs true ())) refl))
-(fulfills {n}_sshr_val (steps ((unfold {n}_sshr lhs) (rewrite (lemma {n}_val_of) lr lhs true ())) refl))
+(fulfills {n}_val_of auto)
+(fulfills {n}_wrap_lo (auto (case-on (lt (mod nn {m}) {h}) Bool)))
+(fulfills {n}_wrap_hi (auto (case-on (lt (mod nn {m}) {h}) Bool)))
+(fulfills {n}_add_val auto)
+(fulfills {n}_sub_val auto)
+(fulfills {n}_mul_val auto)
+(fulfills {n}_eq_val auto)
+(fulfills {n}_slt_val auto)
+(fulfills {n}_sle_val auto)
+(fulfills {n}_shl_val auto)
+(fulfills {n}_sshr_val auto)
 """
 
 REQ_HEADER = """;;; std/word/mod.req.shard — the PUBLIC INTERFACE of the `word` module (its ".h").
@@ -186,7 +161,7 @@ REQ_HEADER = """;;; std/word/mod.req.shard — the PUBLIC INTERFACE of the `word
 ;;; sound under the Rust authority engine; add them when the engine gets BigInt.
 ;;;
 ;;; GENERATED from the u8 (unsigned) / i8 (signed) templates — see the slice-5
-;;; commit and the (regenerable) /tmp/wordgen.py. Range facts are COMPOSITIONAL
+;;; commit and tools/wordgen/wordgen.py. Range facts are COMPOSITIONAL
 ;;; (over constructed values); a structural forall-inhabitant range needs the
 ;;; refinement type (designed follow-up). Bitwise/div on signed types and the
 ;;; unwrapped bitwise image laws are deferred (issue #15).
@@ -197,9 +172,10 @@ REQ_HEADER = """;;; std/word/mod.req.shard — the PUBLIC INTERFACE of the `word
 IMPL_HEADER = """;;; std/word/word.shard — the `word` module IMPLEMENTATION (private).
 ;;;
 ;;; Full types (private ctors mk_uN/mk_iN), the bodies behind the opaque sig
-;;; fns, and the fulfills proofs. Every op projects to Int, applies the Int op,
-;;; re-wraps — so the range invariant holds BY CONSTRUCTION and each law reduces
-;;; to a fact about euclidean `mod` (std/div). GENERATED — see /tmp/wordgen.py.
+;;; fns, and the fulfills (all `auto` — proofs machine-solved into the
+;;; word.auto.shard sidecar by tools/prove; the wrap hints name the case
+;;; split). Every op projects to Int, applies the Int op, re-wraps — so the range invariant holds BY CONSTRUCTION and each law reduces
+;;; to a fact about euclidean `mod` (std/div). GENERATED — see tools/wordgen/wordgen.py.
 
 (import "../../kernel/stdlib.shard")
 (import "../div")  ; mod_lo / mod_hi — euclidean remainder range

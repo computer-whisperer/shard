@@ -517,8 +517,17 @@ discharged by a mini ladder — **premise mining** — a linear-fact lemma
 conclusion instantiated at the goal's own arithmetic atoms and
 materialized as a `have` cut, facts accumulated until the Farkas search
 closes (the `mod_lo`/`mod_hi` idiom; pin
-`examples/prove_cond_mine.shard`) — and structural induction on each
-goal parameter):
+`examples/prove_cond_mine.shard`) — **hypothesis promotion** — every
+closed linear-fact case hypothesis restated as a trivial `have` so the
+Farkas side can read it (the IH-consuming idiom) — **normalizing
+prefixes** — on a stuck case the terminal stages re-run behind small
+step prefixes applied natively (`simp`, case-hyp rewrites
+outermost-first, unfold chains), persisted as `(steps (PFX) TERMINAL)`
+— and structural induction on each goal parameter. Generated induct
+cases NAME their field binders (`(case Cons (c0 c1) …)`) so promoted
+and mined facts about a case's own fields render; a `fulfills`' goal is
+recovered from the target file or the same-module `mod.req.shard`
+(interface file form), so module impls get the full search):
 
 - `(induct VAR)` — synthesize a structural induction on VAR.
 - `(case-on TERM TYPE)` — synthesize a case split on a computed term

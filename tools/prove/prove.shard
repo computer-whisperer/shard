@@ -37,9 +37,21 @@
 ;;;     it (the std/word mod_lo/mod_hi idiom). Match lemma key calls
 ;;;     against the goal's own farkas atoms, prove the cut by citing the
 ;;;     lemma, and GROW the fact set monotonically (an added premise never
-;;;     hurts — slot 0 ignores it) until the farkas search closes. Mined
-;;;     cuts may mention only sequent params (case binders gen-fresh at
-;;;     replay). Pin: examples/prove_cond_mine.shard.
+;;;     hurts — slot 0 ignores it) until the farkas search closes. The
+;;;     fact set is SEEDED with promoted hypotheses: every closed linfact
+;;;     hyp whose atoms touch the goal's own becomes a trivial have (the
+;;;     IH-consuming farkas idiom). Cuts may mention only sequent params —
+;;;     which now include NAMED case binders: generated induct cases spell
+;;;     their field binders ((case Cons (c0 c1) …)), so facts about a
+;;;     case's own fields render. Pin: examples/prove_cond_mine.shard.
+;;;
+;;; Both terminal stages also fire behind NORMALIZING PREFIXES on a stuck
+;;; case: apply (simp both) / rewrite-case-hyps(-then-simp) / unfold+rewrite
+;;; chains natively (the checker's own apply_steps) and solve the residual,
+;;; persisting (steps (PFX) TERMINAL) — the hand idiom for case-on leaves.
+;;; A fulfills' goal is recovered from the target file OR the same-module
+;;; mod.req.shard (already in the closure), so module impls get the full
+;;; search.
 ;;;
 ;;; THE CONTRACT: search happens HERE, offline; `check` only ever REPLAYS
 ;;; the persisted entries. A solver bug can cost coverage, never soundness —
@@ -75,6 +87,7 @@
 (use (:: kernel loader World))
 (use (:: kernel loader get_args))
 (use (:: kernel loader read_file))
+(use (:: kernel loader dir_of))
 (use (:: kernel loader write))
 (use (:: kernel loader write_file))
 (use (:: kernel loader exit))
@@ -130,6 +143,7 @@
 (use (:: kernel checker append_eqs))
 (use (:: kernel types tc_scrut_targs))
 (use (:: kernel checker find_param))
+(use (:: kernel checker apply_steps))  ; native prefix application (residual sequents)
 (use (:: kernel arith farkas_finish))
 (use (:: kernel arith farkas_refute))
 (use (:: kernel arith neg_goal_poly))
@@ -160,6 +174,8 @@
 (use (:: kernel proof Equation))
 (use (:: kernel proof Param))
 (use (:: kernel proof Proof))
+(use (:: kernel proof Step))
+(use (:: kernel proof Steps))
 (use (:: kernel proof CaseOn))
 (use (:: kernel proof Dir))
 (use (:: kernel proof Lr))
@@ -523,6 +539,9 @@
 (fn st_reduce ((side (List Int))) (List Int)
   (append_int "(reduce " (append_int side ")")))
 
+(fn st_simp ((side (List Int))) (List Int)
+  (append_int "(simp " (append_int side ")")))
+
 ;; (rewrite (hyp I) lr SIDE true ()) — the IH-consumption step. The IHs are
 ;; (hyp 0)/(hyp 1): a top-level goal lifts with NO hypotheses, so appended
 ;; IHs land at 0 upward ((hyp 1) exists only for two-recursive-field ctors;
@@ -793,15 +812,21 @@
   (Option (List Int))
   (match cands
     (Nil
-      (match hrest
-        ((Cons h more) (synth_one s th subgoal h more))
-        (Nil
-          ;; ladder + hints exhausted: conditional citation, then premise
-          ;; mining (mined cuts are param-stability-filtered — case binders
-          ;; gen-fresh at replay, so only param-rooted facts survive).
-          (match (cond_solve s th subgoal)
+      ;; ladder exhausted: the terminal stages FIRST (conditional citation,
+      ;; then hyp-promoted premise mining — bare, then behind each
+      ;; normalizing prefix), and only then the next hint's structure. A
+      ;; hint is a descent for goals the terminals can't close; trying it
+      ;; first would spuriously deepen every closable leaf under a nested
+      ;; hint chain.
+      (match (term_solve s th subgoal)
+        ((Some c) (Some c))
+        (None
+          (match (pfx_walk s th subgoal (case_pfxs s subgoal))
             ((Some c) (Some c))
-            (None (mn_solve s th subgoal))))))
+            (None
+              (match hrest
+                ((Cons h more) (synth_one s th subgoal h more))
+                (Nil None)))))))
     ((Cons c crest)
      (match (parse_cand (slv_m s) (slv_rctx s) c)
        (None (solve_case s th subgoal crest hrest))
@@ -809,9 +834,57 @@
         (if (check_sequent (slv_m s) th subgoal p) (Some c)
         (solve_case s th subgoal crest hrest)))))))
 
-;; one (ctor-name, case-proof) per constructor — names = Nil makes
-;; build_induct_subgoal gen-fresh the field params, exactly what the checker
-;; does for a surface (case CTOR PROOF) at replay.
+;; ---- named case binders ------------------------------------------------------
+;; Generated induct cases NAME their field binders ((case Cons (c0 c1) …)):
+;; a named binder is a sequent param of the subgoal, so promoted hyps and
+;; mined cuts may mention it — with names = Nil the fields gen-fresh at
+;; replay and any fact text touching them is unrenderable. Names avoid the
+;; goal's own params by prefixing more 'c's (bounded by the param count;
+;; a residual collision only costs the candidate, never soundness).
+
+(fn cn_pick ((base (List Int)) (taken (List Symbol)) (budget (List Symbol)))
+  Symbol
+  (measure (struct budget))
+  (match budget
+    (Nil (sym_of_chars base))
+    ((Cons _ brest)
+     (if (ms_sym_in (sym_of_chars base) taken)
+       (cn_pick (append_int "c" base) taken brest)
+       (sym_of_chars base)))))
+
+(fn cn_names ((taken (List Symbol)) (fts (List Type)) (i Int)) (List Symbol)
+  (measure (struct fts))
+  (match fts
+    (Nil Nil)
+    ((Cons _ rest)
+     (Cons
+       (cn_pick (append_int "c" (show_int i)) taken taken)
+       (cn_names taken rest (+ i 1))))))
+
+(fn sym_chars_list ((ns (List Symbol))) (List (List Int))
+  (measure (struct ns))
+  (match ns
+    (Nil Nil)
+    ((Cons n rest) (Cons (chars_of_sym n) (sym_chars_list rest)))))
+
+;; "(case CN PF)" for a field-less ctor, "(case CN (c0 c1) PF)" otherwise.
+(fn case_text ((cn (List Int)) (names (List Symbol)) (pf (List Int))) (List Int)
+  (append_int
+    "(case "
+    (append_int
+      cn
+      (append_int
+        " "
+        (append_int
+          (match names
+            (Nil Nil)
+            (_
+              (append_int
+                "("
+                (append_int (join_sp (sym_chars_list names)) ") "))))
+          (append_int pf ")"))))))
+
+;; one rendered (case …) per constructor, field binders named.
 (fn solve_cases
   ((s Slv)
    (th Theory)
@@ -822,23 +895,28 @@
    (ctors (List CtorDef))
    (cands (List (List Int)))
    (hrest (List Hint)))
-  (Option (List (Pair (List Int) (List Int))))
+  (Option (List (List Int)))
   (match ctors
     (Nil (Some Nil))
     ((Cons (CtorDef cname ftypes) rest)
-     (match
-       (solve_case
-         s
-         th
-         (build_induct_subgoal seq v vt cname Nil (type_subst_list tenv ftypes))
-         cands
-         hrest)
-       (None None)
-       ((Some c)
-        (match (solve_cases s th seq v vt tenv rest cands hrest)
-          (None None)
-          ((Some more)
-           (Some (Cons (Pair (chars_of_sym (qn_name cname)) c) more)))))))))
+     (let
+       ((fts (type_subst_list tenv ftypes))
+        (taken (param_syms (seq_params seq))))
+       (let ((names (cn_names taken fts 0)))
+         (match
+           (solve_case
+             s
+             th
+             (build_induct_subgoal seq v vt cname names fts)
+             cands
+             hrest)
+           (None None)
+           ((Some c)
+            (match (solve_cases s th seq v vt tenv rest cands hrest)
+              (None None)
+              ((Some more)
+               (Some
+                 (Cons (case_text (chars_of_sym (qn_name cname)) names c) more)))))))))))
 
 (fn render_cases ((cs (List (Pair (List Int) (List Int))))) (List Int)
   (measure (struct cs))
@@ -859,13 +937,12 @@
                  (Nil Nil)
                  (_ (Cons 32 (render_cases rest))))))))))))
 
-(fn assemble_induct ((v Symbol) (cs (List (Pair (List Int) (List Int)))))
-  (List Int)
+(fn assemble_induct ((v Symbol) (cs (List (List Int)))) (List Int)
   (append_int
     "(induct "
     (append_int
       (chars_of_sym v)
-      (append_int " (" (append_int (render_cases cs) "))")))))
+      (append_int " (" (append_int (join_sp cs) "))")))))
 
 ;; the case ladder an induction case gets: chains over the SUBGOAL's own
 ;; heads, IH tails, lemma steps, farkas certs (premise counts survive the
@@ -1755,9 +1832,10 @@
           (Cons (Pair q lg) (mn_lemmas rest aheads (- cap 1)))
           (mn_lemmas rest aheads cap))))))))
 
-;; one mined fact: the cut equation, its rendered text, the lemma's display
-;; name, and the solved premise sub-proof texts.
-(type MnFact (MnFact Equation (List Int) (List Int) (List (List Int))))
+;; one materialized fact: the cut equation, its rendered text, and the
+;; rendered proof of the cut (a lemma citation for mined facts, a hyp
+;; restatement for promoted hypotheses).
+(type MnFact (MnFact Equation (List Int) (List Int)))
 
 (fn mn_eq_member ((eq Equation) (eqs (List Equation))) Bool
   (measure (struct eqs))
@@ -1799,7 +1877,16 @@
                  (match (solve_premises s th seq env oprems)
                    (None None)
                    ((Some ptexts)
-                    (Some (MnFact ieq eqtxt (chars_of_sym (qn_name q)) ptexts))))))
+                    (Some
+                      (MnFact
+                        ieq
+                        eqtxt
+                        (rww_cand
+                          (chars_of_sym (qn_name q))
+                          "lr"
+                          "lhs"
+                          ptexts
+                          "refl")))))))
               None)))))
        None))))
 
@@ -1874,26 +1961,22 @@
   (match seq
     ((Sequent ps hs pr eq)
      (match f
-       ((MnFact ieq _ _ _) (Sequent ps hs (append_eqs pr (Cons ieq Nil)) eq))))))
+       ((MnFact ieq _ _) (Sequent ps hs (append_eqs pr (Cons ieq Nil)) eq))))))
 
 (fn mn_render ((facts (List MnFact)) (inner (List Int))) (List Int)
   (measure (struct facts))
   (match facts
     (Nil inner)
-    ((Cons (MnFact _ eqtxt lname ptexts) rest)
+    ((Cons (MnFact _ eqtxt ptxt) rest)
      (append_int
        "(have "
        (append_int
          eqtxt
          (append_int
-           " (rewrite-with (lemma "
+           " "
            (append_int
-             lname
-             (append_int
-               ") lr lhs () "
-               (append_int
-                 (join_proofs ptexts)
-                 (append_int " refl) " (append_int (mn_render rest inner) ")")))))))))))
+             ptxt
+             (append_int " " (append_int (mn_render rest inner) ")")))))))))
 
 (fn mn_wrap_cand
   ((s Slv) (th Theory) (seq Sequent) (facts (List MnFact)) (inner (List Int)))
@@ -1932,9 +2015,244 @@
          ((Some inner) (mn_wrap_cand s th seq0 (rev_facts facts2 Nil) inner))
          (None (mn_grow s th seq0 ext2 facts2 atoms lems (- k 1)))))))))
 
+;; ---- hypothesis promotion ----------------------------------------------------
+;; farkas reads PREMISES, not hyps — the hand idiom bridges with a trivial
+;; have ((have EQ (steps ((rewrite (hyp K) lr lhs true ())) refl) …)): the
+;; cut goal IS the hyp's equation, so rewriting the hyp into it closes by
+;; refl. Promote every CLOSED linfact hyp (case equations, single-param
+;; IHs) whose atoms touch the goal's own — relevance keeps the farkas slot
+;; count down (the weight cap shrinks as premises grow). Parameterized
+;; hyps (∀-closed IHs) need insts — out of scope with pivots.
+
+(fn seq_hyps ((seq Sequent)) (List Goal)
+  (match seq
+    ((Sequent _ hs _ _) hs)))
+
+(fn hp_proof ((k Int)) (List Int)
+  (append_int
+    "(steps ((rewrite (hyp "
+    (append_int (show_int k) ") lr lhs true ())) refl)")))
+
+(fn hp_touches ((es (List Expr)) (atoms (List Expr))) Bool
+  (measure (struct es))
+  (match es
+    (Nil False)
+    ((Cons e rest) (if (mn_expr_member e atoms) True (hp_touches rest atoms)))))
+
+(fn hp_facts ((hs (List Goal)) (ps (List Param)) (atoms (List Expr)) (k Int))
+  (List MnFact)
+  (measure (struct hs))
+  (match hs
+    (Nil Nil)
+    ((Cons g rest)
+     (match g
+       ((Goal Nil Nil eq)
+        (if (mn_linfact g)
+          (if (mn_fvars_ok_eq eq ps)
+            (if (hp_touches (mn_atoms_eq eq Nil) atoms)
+              (match (mn_rend_eq eq)
+                (None (hp_facts rest ps atoms (+ k 1)))
+                ((Some eqtxt)
+                 (Cons
+                   (MnFact eq eqtxt (hp_proof k))
+                   (hp_facts rest ps atoms (+ k 1)))))
+              (hp_facts rest ps atoms (+ k 1)))
+            (hp_facts rest ps atoms (+ k 1)))
+          (hp_facts rest ps atoms (+ k 1))))
+       (_ (hp_facts rest ps atoms (+ k 1)))))))
+
+(fn mn_extends ((seq Sequent) (fs (List MnFact))) Sequent
+  (measure (struct fs))
+  (match fs
+    (Nil seq)
+    ((Cons f rest) (mn_extends (mn_extend seq f) rest))))
+
+;; promoted hyps alone often close the goal (the IH-consuming farkas case);
+;; only a non-empty promotion is worth a fresh farkas try — the bare
+;; sequent's cert was already in the ladder.
+(fn hp_try ((s Slv) (th Theory) (seq Sequent) (hf (List MnFact)) (ext0 Sequent))
+  (Option (List Int))
+  (match hf
+    (Nil None)
+    (_
+      (match (farkas_solve ext0)
+        (None None)
+        ((Some inner) (mn_wrap_cand s th seq hf inner))))))
+
 (fn mn_solve ((s Slv) (th Theory) (seq Sequent)) (Option (List Int))
-  (let ((atoms (mn_atoms seq)))
-    (mn_grow s th seq seq Nil atoms (mn_lemmas th (mn_atom_heads atoms) 8) 6)))
+  (let ((gatoms (mn_atoms seq)))
+    (let ((hf (hp_facts (seq_hyps seq) (seq_params seq) gatoms 0)))
+      (let ((ext0 (mn_extends seq hf)))
+        (match (hp_try s th seq hf ext0)
+          ((Some c) (Some c))
+          (None
+            (let ((atoms (mn_atoms ext0)))
+              (mn_grow
+                s
+                th
+                seq
+                ext0
+                (rev_facts hf Nil)
+                atoms
+                (mn_lemmas th (mn_atom_heads atoms) 8)
+                6))))))))
+
+;; ---- prefix-composed terminals -----------------------------------------------
+;; The conditional stages fire on the sequent AS GIVEN, but the hand idioms
+;; normalize first (unfold the goal head, rewrite the case hyps into it,
+;; simp). Recover that: apply a small prefix NATIVELY (parse a dummy
+;; (steps (PFX) refl) through the real proof seam, run the checker's own
+;; apply_steps), solve the RESIDUAL with the terminal stages, and persist
+;; (steps (PFX) TERMINAL). A prefix that fails to apply or doesn't change
+;; the equation is skipped; the assembled whole still re-verifies.
+
+(fn term_solve ((s Slv) (th Theory) (seq Sequent)) (Option (List Int))
+  (match (cond_solve s th seq)
+    ((Some c) (Some c))
+    (None (mn_solve s th seq))))
+
+(fn pfx_steps ((s Slv) (stxts (List (List Int)))) (Option (List Step))
+  (match (parse_cand (slv_m s) (slv_rctx s) (steps_cand stxts "refl"))
+    ((Some (Steps stps _)) (Some stps))
+    (_ None)))
+
+(fn eq_same ((a Equation) (b Equation)) Bool
+  (match a
+    ((Equation al ar)
+     (match b
+       ((Equation bl br) (if (expr_eq al bl) (expr_eq ar br) False))))))
+
+(fn pfx_walk
+  ((s Slv) (th Theory) (subgoal Sequent) (pfxs (List (List (List Int)))))
+  (Option (List Int))
+  (measure (struct pfxs))
+  (match pfxs
+    (Nil None)
+    ((Cons ptxts rest)
+     (match (pfx_steps s ptxts)
+       (None (pfx_walk s th subgoal rest))
+       ((Some stps)
+        (match (apply_steps (slv_m s) th subgoal stps)
+          (None (pfx_walk s th subgoal rest))
+          ((Some rseq)
+           (if (eq_same (seq_equation rseq) (seq_equation subgoal))
+             (pfx_walk s th subgoal rest)
+             (match (term_solve s th rseq)
+               ((Some inner) (Some (steps_cand ptxts inner)))
+               (None (pfx_walk s th subgoal rest)))))))))))
+
+;; the prefix set for a subgoal: (simp both); per closed hyp K a
+;; rewrite-K-then-simp (with and without a leading unfold of each goal-lhs
+;; head); and the ALL-closed-hyps chain (the deep case-on leaves rewrite
+;; every case equation into the unfolded body before one final simp).
+(fn closed_hyp_idxs ((hs (List Goal)) (k Int)) (List Int)
+  (measure (struct hs))
+  (match hs
+    (Nil Nil)
+    ((Cons g rest)
+     (match g
+       ((Goal Nil Nil _) (Cons k (closed_hyp_idxs rest (+ k 1))))
+       (_ (closed_hyp_idxs rest (+ k 1)))))))
+
+(fn rw_hyp_chain ((ks (List Int))) (List (List Int))
+  (measure (struct ks))
+  (match ks
+    (Nil Nil)
+    ((Cons k rest) (Cons (st_rw_hyp k "lhs") (rw_hyp_chain rest)))))
+
+(fn pfx_unfold_rw ((lheads (List (List Int))) (k Int)) (List (List (List Int)))
+  (measure (struct lheads))
+  (match lheads
+    (Nil Nil)
+    ((Cons f rest)
+     (Cons
+       (list (st_unfold f "lhs") (st_rw_hyp k "lhs") (st_simp "lhs"))
+       (pfx_unfold_rw rest k)))))
+
+(fn pfx_single_set ((lheads (List (List Int))) (ks (List Int)))
+  (List (List (List Int)))
+  (measure (struct ks))
+  (match ks
+    (Nil Nil)
+    ((Cons k rest)
+     (Cons
+       (list (st_rw_hyp k "lhs") (st_simp "lhs"))
+       (append_chains (pfx_unfold_rw lheads k) (pfx_single_set lheads rest))))))
+
+(fn pfx_all_unfold ((lheads (List (List Int))) (rws (List (List Int))))
+  (List (List (List Int)))
+  (measure (struct lheads))
+  (match lheads
+    (Nil Nil)
+    ((Cons f rest)
+     (Cons
+       (Cons (st_unfold f "lhs") (append_cands rws (list (st_simp "lhs"))))
+       (pfx_all_unfold rest rws)))))
+
+(fn pfx_all_set ((lheads (List (List Int))) (ks (List Int)))
+  (List (List (List Int)))
+  (match ks
+    (Nil Nil)
+    ((Cons _ Nil) Nil)
+    (_
+      (let ((rws (rw_hyp_chain ks)))
+        (Cons
+          (append_cands rws (list (st_simp "lhs")))
+          (pfx_all_unfold lheads rws))))))
+
+;; descending interleaved chain: simp, then (rw hyp k)(simp) for the closed
+;; hyps OUTERMOST-FIRST (highest index first) — a nested case-on leaf's
+;; if-chain collapses in exactly this order, each simp exposing the next
+;; hyp's scrutinee.
+(fn rev_ints ((xs (List Int)) (acc (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil acc)
+    ((Cons h t) (rev_ints t (Cons h acc)))))
+
+(fn pfx_desc_chain ((ks_desc (List Int))) (List (List Int))
+  (measure (struct ks_desc))
+  (match ks_desc
+    (Nil Nil)
+    ((Cons k rest)
+     (Cons (st_rw_hyp k "lhs") (Cons (st_simp "lhs") (pfx_desc_chain rest))))))
+
+(fn pfx_desc_unfold ((lheads (List (List Int))) (chain (List (List Int))))
+  (List (List (List Int)))
+  (measure (struct lheads))
+  (match lheads
+    (Nil Nil)
+    ((Cons f rest)
+     (Cons (Cons (st_unfold f "lhs") chain) (pfx_desc_unfold rest chain)))))
+
+(fn pfx_desc_set ((lheads (List (List Int))) (ks (List Int)))
+  (List (List (List Int)))
+  (match ks
+    (Nil Nil)
+    (_
+      (let ((chain (Cons (st_simp "lhs") (pfx_desc_chain (rev_ints ks Nil)))))
+        (Cons chain (pfx_desc_unfold lheads chain))))))
+
+;; a bare unfold+simp per goal-lhs head — exposes mining atoms with no hyp
+;; involvement.
+(fn pfx_unfold_simp ((lheads (List (List Int)))) (List (List (List Int)))
+  (measure (struct lheads))
+  (match lheads
+    (Nil Nil)
+    ((Cons f rest)
+     (Cons (list (st_unfold f "lhs") (st_simp "lhs")) (pfx_unfold_simp rest)))))
+
+(fn case_pfxs ((s Slv) (subgoal Sequent)) (List (List (List Int)))
+  (match (seq_side_heads subgoal (slv_m s))
+    ((Pair lh _)
+     (let ((ks (closed_hyp_idxs (seq_hyps subgoal) 0)))
+       (Cons
+         (list (st_simp "both"))
+         (append_chains
+           (pfx_unfold_simp lh)
+           (append_chains
+             (pfx_single_set lh ks)
+             (append_chains (pfx_desc_set lh ks) (pfx_all_set lh ks)))))))))
 
 ;; the flat (no-induction) candidate set for a goal: the same generated
 ;; ladder a case gets — unfold chains over the goal's own heads plus lemma
@@ -1976,7 +2294,11 @@
             (None
               (match (verify_or s name (mn_solve s th seq))
                 ((Some c) (Some c))
-                (None (try_induct_vars s th name seq))))))))))
+                (None
+                  (match
+                    (verify_or s name (pfx_walk s th seq (case_pfxs s seq)))
+                    ((Some c) (Some c))
+                    (None (try_induct_vars s th name seq))))))))))))
 
 ;; ---- the AST-size measure recipe (decrease sites) ---------------------------
 ;; A decrease obligation is  callee_size[args] < caller_size[params]  under the
@@ -3017,6 +3339,28 @@
     ((BMOk m)
      (obs_to_decls (mc_obligations_of_forms m forms (module_path_of target))))))
 
+;; the same-module interface forms: a fulfills' requirement usually lives in
+;; <dir>/mod.req.shard, which the CHECK-mode closure has ALREADY loaded —
+;; recover goals from it so module impls get the full fast search instead of
+;; the flat-ladder slow path. (The dir-form mod.req/ expansion is not
+;; covered; its decls keep the slow path.)
+(fn iface_forms ((target (List Int)) (srcs (List SrcEntry))) (List SExpr)
+  (match (dir_of target)
+    (Nil Nil)
+    (d
+      (match (src_of (append_int d "mod.req.shard") srcs)
+        (None Nil)
+        ((Some bytes)
+         (match (read_all bytes)
+           (None Nil)
+           ((Some fs) fs)))))))
+
+(fn append_sexprs ((a (List SExpr)) (b (List SExpr))) (List SExpr)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (append_sexprs t b)))))
+
 ;; dispatch once args / closure / sidecar / target-forms are in hand.
 (fn run_with
   ((target (List Int))
@@ -3028,7 +3372,9 @@
    (w World))
   World
   (match
-    (append_decls (auto_decls forms forms) (measure_decls target srcs forms))
+    (append_decls
+      (auto_decls forms (append_sexprs forms (iface_forms target srcs)))
+      (measure_decls target srcs forms))
     (ds
       (match mclaim
         ((Some cb)
