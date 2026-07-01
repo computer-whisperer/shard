@@ -168,6 +168,15 @@ fn nav_buttons(mode: ViewMode) -> El {
     if mode != ViewMode::Methods {
         bs.push(button("Graph ▸").key("mode_methods").ghost().tooltip("This file's call graph"));
     }
+    // Scope the Map to this fn's call neighborhood (callers + transitive
+    // callees). A scope change, not just a view switch, so it's offered in every
+    // mode — the handler reads the already-selected fn as the tree root.
+    bs.push(
+        button("Tree ▸")
+            .key("scope_tree")
+            .ghost()
+            .tooltip("Map this fn's call neighborhood (callers + callees) on the Map"),
+    );
     row(bs).gap(tokens::SPACE_2)
 }
 

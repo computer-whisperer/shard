@@ -118,6 +118,21 @@ impl App for Viewer {
         } else if event.is_route("mode_map") {
             self.mode = ViewMode::Map;
             self.fit();
+        } else if event.is_route("scope_project") {
+            // Map the whole project at once (sidebar "Whole project").
+            self.scope = Scope::Project;
+            self.selected_fn = None;
+            self.mode = ViewMode::Map;
+            self.fit();
+        } else if event.is_route("scope_tree") {
+            // Map the selected fn's call neighborhood (detail-panel "Tree ▸").
+            // Keep it focused as the tree's root. One up, two down: immediate
+            // callers plus the transitive implementation it drives.
+            if let Some(root) = self.selected_fn {
+                self.scope = Scope::CallTree { root, up: 1, down: 2 };
+                self.mode = ViewMode::Map;
+                self.fit();
+            }
         } else if let Some(dir) = event.route_suffix("dir") {
             // Sidebar dir header: scope the canvas to the whole subtree. A dir
             // spans many files, so it can only be shown on the Map — switch to

@@ -41,14 +41,16 @@ This is the view the others are converging into — see *Direction*.
 
 **Methods** — one file's call graph, with a **triage overlay**:
 
-- The sidebar is a **scope picker**: every `.shard` file grouped under a
-  clickable **directory header** (`▸ dir/ (N)` — selecting it scopes the Map to
-  the whole subtree); files show as basenames with their fn count, and selecting
-  one scopes to that file. A **filter box** narrows the list (case-insensitive
-  substring, with a `shown/total` count), and files that fail to parse are
-  flagged (`⚠`, the error on hover). **Drag the sidebar's right edge** to widen
-  it when paths get cramped (`user_resizable`, 220–620px — the runtime keeps the
-  width).
+- The sidebar is a **scope picker**: a **`◆ Whole project`** entry at the top
+  (maps every fn at once), then every `.shard` file grouped under a clickable
+  **directory header** (`▸ dir/ (N)` — selecting it scopes the Map to the whole
+  subtree); files show as basenames with their fn count, and selecting one scopes
+  to that file. A **filter box** narrows the list (case-insensitive substring,
+  with a `shown/total` count), and files that fail to parse are flagged (`⚠`, the
+  error on hover). **Drag the sidebar's right edge** to widen it when paths get
+  cramped (`user_resizable`, 220–620px — the runtime keeps the width). A selected
+  fn's detail panel also offers **`Tree ▸`** — scope the Map to that fn's call
+  neighborhood (`CallTree`: one caller level up, two callee levels down).
 - The canvas draws the selected file's fns as boxes (name + `N args → Ret`)
   with intra-file call edges as curved arrows.
 - **Triage colors/sizes** encode the dead-code / complexity signal: a node is
@@ -176,7 +178,7 @@ untouched while it grows.
 |---|---|
 | `shard-viewer [ROOT]` | The GUI (native window via `damascene-winit-wgpu`). Defaults to the most fn-dense file. |
 | `shard-graph [ROOT] [FN]` | Text dump of the extracted model: per-file counts, a project-wide **lines-by-category tally** (mirrors `tools/loc`), the most-called fns, a **cut-candidate (orphan) list**, or one fn's callers/callees. No GUI deps. |
-| `shard-render ROOT FILE_SUBSTRING [OUT.svg]` | Headless render of one file's graph to SVG + a lint report. No GPU/window. Use `systems` for the import graph, `flow:FN_NAME` for a fn's dataflow diagram, `board:FILE_SUBSTRING` for the expanded call-DAG board, or `map:FILE_SUBSTRING` for the unified Map scoped to that file (`map:DIR/` with a trailing slash scopes to a whole directory subtree). |
+| `shard-render ROOT FILE_SUBSTRING [OUT.svg]` | Headless render of one file's graph to SVG + a lint report. No GPU/window. Use `systems` for the import graph, `flow:FN_NAME` for a fn's dataflow diagram, `board:FILE_SUBSTRING` for the expanded call-DAG board, or `map:FILE_SUBSTRING` for the unified Map scoped to that file (`map:DIR/` with a trailing slash scopes to a whole directory subtree, `tree:FN_NAME` to a fn's call neighborhood, `project` to every fn in the project). |
 
 `ROOT` defaults to the current directory; run from a shard checkout.
 

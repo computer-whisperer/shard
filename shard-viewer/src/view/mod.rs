@@ -192,6 +192,16 @@ fn sidebar(project: &Project, p: &ViewParams) -> El {
         scroll(rows).height(Size::Fill(1.0))
     };
 
+    // A top-of-list "everything" scope, above the per-dir/-file rows: the whole
+    // project mapped at once. Kept out of the scroll so it stays reachable.
+    let mut project_btn = button(format!("◆ Whole project  ({} files)", project.files.len()))
+        .key("scope_project")
+        .ghost()
+        .tooltip("Map every fn in the project, grouped by dir and file");
+    if p.scope == Scope::Project {
+        project_btn = project_btn.selected();
+    }
+
     column([
         row(header).gap(tokens::SPACE_2),
         text_input_with(
@@ -200,6 +210,7 @@ fn sidebar(project: &Project, p: &ViewParams) -> El {
             &p.selection,
             TextInputOpts::default().placeholder("Filter files…"),
         ),
+        project_btn,
         list,
     ])
     .gap(tokens::SPACE_2)

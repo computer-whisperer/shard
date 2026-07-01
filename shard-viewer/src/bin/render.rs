@@ -110,6 +110,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             source_modal: false,
             panel_w: view::DEFAULT_PANEL_W,
         }
+    } else if let Some(fn_name) = needle.strip_prefix("tree:") {
+        // `shard-render . tree:FN out.svg` maps a fn's call neighborhood (the
+        // CallTree scope: one caller level up, two callee levels down).
+        let fn_idx = project
+            .fns
+            .iter()
+            .position(|f| f.name == fn_name)
+            .ok_or_else(|| format!("no fn named `{fn_name}`"))?;
+        println!("rendering map scoped to the call tree of {fn_name}");
+        ViewParams {
+            mode: ViewMode::Map,
+            scope: Scope::CallTree { root: fn_idx, up: 1, down: 2 },
+            selected_fn: Some(fn_idx),
+            zoom: 1.0,
+            filter: String::new(),
+            selection: Default::default(),
+            source_modal: false,
+            panel_w: view::DEFAULT_PANEL_W,
+        }
+    } else if needle == "project" {
+        // `shard-render . project out.svg` maps every fn in the project.
+        println!("rendering map scoped to the whole project ({} files)", project.files.len());
+        ViewParams {
+            mode: ViewMode::Map,
+            scope: Scope::Project,
+            selected_fn: None,
+            zoom: 1.0,
+            filter: String::new(),
+            selection: Default::default(),
+            source_modal: false,
+            panel_w: view::DEFAULT_PANEL_W,
+        }
     } else if needle == "systems" {
         println!("rendering systems graph ({} files)", project.files.len());
         // Select the biggest file so the breakdown panel is exercised too.
