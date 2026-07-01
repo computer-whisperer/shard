@@ -11,17 +11,35 @@
 ;;; `<file>.auto.shard` via write_file.
 ;;;
 ;;; THE SEARCH: every decl tries the flat ladder first — closed-form
-;;; candidates, cheapest closer first (refl / compute / simp / eqdec / ord /
-;;; lia). If that fails, structural induction: on the hinted variable for
-;;; (auto (induct VAR)), else on each goal parameter in turn (a hint is an
-;;; accelerator, not a requirement). Induction synthesis builds each
-;;; constructor case's SUBGOAL via the checker's own build_induct_subgoal
-;;; and solves each case independently with a case ladder: per-side
-;;; unfold/reduce chains over that side's own fn heads (a file may only
-;;; unfold fns it owns, which is exactly what a goal's heads are), optional
-;;; IH-rewrite tails ((hyp 0)/(hyp 1), lhs or rhs), closed by refl or a
-;;; theory backend. The assembled (induct …) proof is verified WHOLE
-;;; through the standard driver pass before persisting.
+;;; candidates, cheapest closer first (refl / compute / simp / arith). If
+;;; that fails, two conditional-lemma stages, then structural induction: on
+;;; the hinted variable for (auto (induct VAR)), else on each goal
+;;; parameter in turn (a hint is an accelerator, not a requirement).
+;;; Induction synthesis builds each constructor case's SUBGOAL via the
+;;; checker's own build_induct_subgoal and solves each case independently
+;;; with a case ladder: per-side unfold/reduce chains over that side's own
+;;; fn heads (a file may only unfold fns it owns, which is exactly what a
+;;; goal's heads are), optional IH-rewrite tails ((hyp 0)/(hyp 1), lhs or
+;;; rhs), closed by refl or a theory backend. The assembled (induct …)
+;;; proof is verified WHOLE through the standard driver pass before
+;;; persisting.
+;;;
+;;; The conditional stages (both driven by the checker's OWN RewriteWith
+;;; machinery, so what search finds is what replay re-derives):
+;;;   - CONDITIONAL CITATION: rewrite the goal with a PREMISED lemma —
+;;;     probe the match with apply_rewrite_with_env, require every binder
+;;;     bound (no pivots yet), discharge each instantiated premise with a
+;;;     mini ladder, close the rewritten goal (refl / arith / a farkas
+;;;     cert on the post-rewrite sequent). Candidates carry no insts; the
+;;;     checker's capture-match rebinds identically at replay.
+;;;   - PREMISE MINING (the lemma-fed have): materialize an instantiated
+;;;     linear-fact lemma conclusion as a cut so the farkas side can read
+;;;     it (the std/word mod_lo/mod_hi idiom). Match lemma key calls
+;;;     against the goal's own farkas atoms, prove the cut by citing the
+;;;     lemma, and GROW the fact set monotonically (an added premise never
+;;;     hurts — slot 0 ignores it) until the farkas search closes. Mined
+;;;     cuts may mention only sequent params (case binders gen-fresh at
+;;;     replay). Pin: examples/prove_cond_mine.shard.
 ;;;
 ;;; THE CONTRACT: search happens HERE, offline; `check` only ever REPLAYS
 ;;; the persisted entries. A solver bug can cost coverage, never soundness —
@@ -103,6 +121,13 @@
 (use (:: kernel checker build_induct_subgoal))
 (use (:: kernel checker build_case_on_subgoal))
 (use (:: kernel checker inst_ctor_fields))
+(use (:: kernel checker apply_rewrite_with_env))  ; the RewriteWith matcher (env out)
+(use (:: kernel checker split_params_by_insts))  ; open cited binders fresh
+(use (:: kernel checker open_eq_with))
+(use (:: kernel checker open_eqs_with))
+(use (:: kernel checker subst_eq))
+(use (:: kernel checker expr_match))  ; first-order matcher (premise mining)
+(use (:: kernel checker append_eqs))
 (use (:: kernel types tc_scrut_targs))
 (use (:: kernel checker find_param))
 (use (:: kernel arith farkas_finish))
@@ -113,6 +138,7 @@
 (use (:: kernel arith poly_minus1))
 (use (:: kernel arith farkas_is_eq_true_goal))
 (use (:: kernel arith farkas_is_single_goal))
+(use (:: kernel arith lia_collect))  ; goal atoms (premise-mining targets)
 (use (:: kernel checker seq_params))
 (use (:: kernel admit ad_sccs))  ; call-graph SCC partition for opaque-module verify
 (use (:: kernel proof Theory))
@@ -135,12 +161,26 @@
 (use (:: kernel proof Param))
 (use (:: kernel proof Proof))
 (use (:: kernel proof CaseOn))
+(use (:: kernel proof Dir))
+(use (:: kernel proof Lr))
+(use (:: kernel proof Rl))
+(use (:: kernel proof Side))
+(use (:: kernel proof Lhs))
+(use (:: kernel proof Rhs))
 (use (:: kernel term Expr))
 (use (:: kernel term Call))
 (use (:: kernel term Ctor))
 (use (:: kernel term If))
 (use (:: kernel term Let))
 (use (:: kernel term IntLit))
+(use (:: kernel term FVar))
+(use (:: kernel term SymLit))
+(use (:: kernel term Env))
+(use (:: kernel term Empty))
+(use (:: kernel term Bind))
+(use (:: kernel term reverse_exprs))
+(use (:: kernel term expr_eq))
+(use (:: kernel term core_named))
 (use (:: kernel term QName))
 (use (:: kernel term qname_eq))
 (use (:: kernel term qn_name))
@@ -755,7 +795,13 @@
     (Nil
       (match hrest
         ((Cons h more) (synth_one s th subgoal h more))
-        (Nil None)))
+        (Nil
+          ;; ladder + hints exhausted: conditional citation, then premise
+          ;; mining (mined cuts are param-stability-filtered — case binders
+          ;; gen-fresh at replay, so only param-rooted facts survive).
+          (match (cond_solve s th subgoal)
+            ((Some c) (Some c))
+            (None (mn_solve s th subgoal))))))
     ((Cons c crest)
      (match (parse_cand (slv_m s) (slv_rctx s) c)
        (None (solve_case s th subgoal crest hrest))
@@ -1237,6 +1283,659 @@
     (None Nil)
     ((Some c) (Cons c Nil))))
 
+;; ---- conditional-citation synthesis (premised lemmas via rewrite-with) ------
+;; The kernel's own RewriteWith machinery, driven at solve time: open the
+;; cited lemma's binders fresh (split_params_by_insts with no insts), probe
+;; the match with apply_rewrite_with_env (a cheap native reject), require the
+;; match to bind EVERY binder (pivots are out of scope — an unbound binder
+;; gen-freshes at replay and can never resolve), discharge each instantiated
+;; premise with a mini ladder in the parent context (exactly the sub-sequent
+;; check_premise_proofs builds), and close the rewritten goal from a small
+;; terminal set. The candidate carries NO insts — the checker's capture-match
+;; rebinds identically at replay — so what search finds is what replay
+;; re-derives. Winners still go through try_cand as whole candidates.
+
+(fn env_binds ((name Symbol) (env Env)) Bool
+  (measure (struct env))
+  (match env
+    (Empty False)
+    ((Bind n _ rest) (if (sym_eq n name) True (env_binds name rest)))))
+
+(fn env_binds_all ((names (List Symbol)) (env Env)) Bool
+  (measure (struct names))
+  (match names
+    (Nil True)
+    ((Cons n rest) (if (env_binds n env) (env_binds_all rest env) False))))
+
+;; closed-form closers for premise subgoals; per-premise farkas certs are
+;; appended by solve_premise.
+(fn mini_ladder () (List (List Int))
+  (list
+    "refl"
+    "(steps ((compute both)) refl)"
+    "(steps ((simp both)) refl)"
+    "(by arith (list))"))
+
+(fn solve_premise ((s Slv) (th Theory) (pseq Sequent)) (Option (List Int))
+  (try_ladder s th pseq (append_cands (mini_ladder) (farkas_cands pseq))))
+
+;; one sub-proof text per instantiated cited premise, in citation order.
+(fn solve_premises
+  ((s Slv) (th Theory) (seq Sequent) (env Env) (prems (List Equation)))
+  (Option (List (List Int)))
+  (measure (struct prems))
+  (match prems
+    (Nil (Some Nil))
+    ((Cons cp rest)
+     (match seq
+       ((Sequent ps hs pr _)
+        (match (solve_premise s th (Sequent ps hs pr (subst_eq env cp)))
+          (None None)
+          ((Some t)
+           (match (solve_premises s th seq env rest)
+             (None None)
+             ((Some more) (Some (Cons t more)))))))))))
+
+(fn join_proofs ((ts (List (List Int)))) (List Int)
+  (append_int "(" (append_int (join_sp ts) ")")))
+
+(fn rww_cand
+  ((lname (List Int))
+   (dirtxt (List Int))
+   (sidetxt (List Int))
+   (ptexts (List (List Int)))
+   (k (List Int)))
+  (List Int)
+  (append_int
+    "(rewrite-with (lemma "
+    (append_int
+      lname
+      (append_int
+        ") "
+        (append_int
+          dirtxt
+          (append_int
+            " "
+            (append_int
+              sidetxt
+              (append_int
+                " () "
+                (append_int
+                  (join_proofs ptexts)
+                  (append_int " " (append_int k ")")))))))))))
+
+;; terminals for the REWRITTEN goal: cheap closers plus a farkas cert
+;; searched against the post-rewrite sequent (premise slots unchanged).
+(fn rww_close
+  ((s Slv)
+   (th Theory)
+   (seq Sequent)
+   (lname (List Int))
+   (dirtxt (List Int))
+   (sidetxt (List Int))
+   (ptexts (List (List Int)))
+   (ks (List (List Int))))
+  (Option (List Int))
+  (measure (struct ks))
+  (match ks
+    (Nil None)
+    ((Cons k rest)
+     (let ((cand (rww_cand lname dirtxt sidetxt ptexts k)))
+       (if (try_cand s th seq cand) (Some cand)
+       (rww_close s th seq lname dirtxt sidetxt ptexts rest))))))
+
+(fn rww_try_combo
+  ((s Slv)
+   (th Theory)
+   (seq Sequent)
+   (lname (List Int))
+   (pat_vars (List Symbol))
+   (oeq Equation)
+   (oprems (List Equation))
+   (dir Dir)
+   (dirtxt (List Int))
+   (side Side)
+   (sidetxt (List Int)))
+  (Option (List Int))
+  (match (apply_rewrite_with_env pat_vars oeq dir side (seq_equation seq))
+    (None None)
+    ((Some (Pair env new_eq))
+     (if (env_binds_all pat_vars env)
+       (match (solve_premises s th seq env oprems)
+         (None None)
+         ((Some ptexts)
+          (match seq
+            ((Sequent ps hs pr _)
+             (rww_close
+               s
+               th
+               seq
+               lname
+               dirtxt
+               sidetxt
+               ptexts
+               (append_cands
+                 (mini_ladder)
+                 (farkas_cands (Sequent ps hs pr new_eq))))))))
+       None))))
+
+(fn rww_try_lemma ((s Slv) (th Theory) (seq Sequent) (q QName) (lg Goal))
+  (Option (List Int))
+  (match lg
+    ((Goal cited_params cited_prems cited_eq)
+     (match (split_params_by_insts cited_params Nil)
+       ((Pair openings pat_vars)
+        (let ((ofv (reverse_exprs openings)))
+          (let
+            ((oeq (open_eq_with ofv cited_eq))
+             (oprems (open_eqs_with ofv cited_prems))
+             (lname (chars_of_sym (qn_name q))))
+            (match
+              (rww_try_combo
+                s
+                th
+                seq
+                lname
+                pat_vars
+                oeq
+                oprems
+                (Lr)
+                "lr"
+                (Lhs)
+                "lhs")
+              ((Some c) (Some c))
+              (None
+                (match
+                  (rww_try_combo
+                    s
+                    th
+                    seq
+                    lname
+                    pat_vars
+                    oeq
+                    oprems
+                    (Lr)
+                    "lr"
+                    (Rhs)
+                    "rhs")
+                  ((Some c) (Some c))
+                  (None
+                    (match
+                      (rww_try_combo
+                        s
+                        th
+                        seq
+                        lname
+                        pat_vars
+                        oeq
+                        oprems
+                        (Rl)
+                        "rl"
+                        (Lhs)
+                        "lhs")
+                      ((Some c) (Some c))
+                      (None
+                        (rww_try_combo
+                          s
+                          th
+                          seq
+                          lname
+                          pat_vars
+                          oeq
+                          oprems
+                          (Rl)
+                          "rl"
+                          (Rhs)
+                          "rhs"))))))))))))))
+
+;; premised, relevant lemmas — the conditional pool. Same head-sharing
+;; relevance and most-recent-first cap as lemma_names, opposite premise gate.
+(fn cond_pick ((lg Goal) (gheads (List QName)) (m Module)) Bool
+  (match lg
+    ((Goal _ prems (Equation l r))
+     (match prems
+       (Nil False)
+       (_
+         (shares_head
+           (heads_of l (fn_trie_of m) (heads_of r (fn_trie_of m) Nil))
+           gheads))))))
+
+(fn cond_lemmas ((th Theory) (gheads (List QName)) (m Module) (cap Int))
+  (List (Pair QName Goal))
+  (measure (struct th))
+  (if (lt cap 1) Nil
+  (match th
+    ((TheoryEmpty) Nil)
+    ((TheoryCons e rest)
+     (match e
+       ((Proven q lg)
+        (if (cond_pick lg gheads m)
+          (Cons (Pair q lg) (cond_lemmas rest gheads m (- cap 1)))
+          (cond_lemmas rest gheads m cap)))
+       ((Axiom q lg)
+        (if (cond_pick lg gheads m)
+          (Cons (Pair q lg) (cond_lemmas rest gheads m (- cap 1)))
+          (cond_lemmas rest gheads m cap))))))))
+
+(fn rww_walk ((s Slv) (th Theory) (seq Sequent) (ls (List (Pair QName Goal))))
+  (Option (List Int))
+  (measure (struct ls))
+  (match ls
+    (Nil None)
+    ((Cons (Pair q lg) rest)
+     (match (rww_try_lemma s th seq q lg)
+       ((Some c) (Some c))
+       (None (rww_walk s th seq rest))))))
+
+(fn cond_solve ((s Slv) (th Theory) (seq Sequent)) (Option (List Int))
+  (rww_walk s th seq (cond_lemmas th (seq_qheads seq (slv_m s)) (slv_m s) 6)))
+
+;; ---- premise mining (the lemma-fed have) -------------------------------------
+;; The dominant hand-written have idiom materializes an INSTANTIATED LEMMA
+;; CONCLUSION as a premise so the farkas side can read it (std/word's
+;; mod_lo/mod_hi pattern). Mining reproduces it: match a linear-fact
+;; lemma's key call against the goal's own farkas atoms (the kernel's
+;; expr_match, reused untrusted), render the instantiated conclusion as a
+;; cut, prove the cut by citing the lemma (premises via the mini ladder),
+;; and re-run the farkas search over the premise set EXTENDED with the new
+;; fact — Have APPENDS the cut, so the extra cert slot is last. The depth-2
+;; loop is ITERATIVE (find fact → extend → retry), not recursive: adding a
+;; premise never hurts farkas (slot 0 ignores it), so greedy accumulation
+;; loses nothing and the walkers stay SCC-free. Rendered cuts may mention
+;; only sequent params (case binders gen-fresh at replay — unrenderable).
+
+;; render an Expr as an object-term snippet; None = shape we refuse to
+;; render (Match/Let/BVar), which just drops the candidate.
+(fn mn_wrap ((h (List Int)) (ts (List (List Int)))) (List Int)
+  (match ts
+    (Nil (append_int "(" (append_int h ")")))
+    (_
+      (append_int
+        "("
+        (append_int h (append_int " " (append_int (join_sp ts) ")")))))))
+
+(fn mn_rend ((e Expr)) (Option (List Int))
+  (measure (struct e))
+  (match e
+    ((IntLit n) (Some (show_int n)))
+    ((FVar sname) (Some (chars_of_sym sname)))
+    ((SymLit sname)
+     (Some (append_int "(quote " (append_int (chars_of_sym sname) ")"))))
+    ((Ctor q args)
+     (match args
+       (Nil (Some (chars_of_sym (qn_name q))))
+       (_
+         (match (mn_rend_list args)
+           (None None)
+           ((Some ts) (Some (mn_wrap (chars_of_sym (qn_name q)) ts)))))))
+    ((Call q args)
+     (match (mn_rend_list args)
+       (None None)
+       ((Some ts) (Some (mn_wrap (chars_of_sym (qn_name q)) ts)))))
+    (_ None)))
+
+(fn mn_rend_list ((es (List Expr))) (Option (List (List Int)))
+  (measure (struct es))
+  (match es
+    (Nil (Some Nil))
+    ((Cons e rest)
+     (match (mn_rend e)
+       (None None)
+       ((Some t)
+        (match (mn_rend_list rest)
+          (None None)
+          ((Some more) (Some (Cons t more)))))))))
+
+(fn mn_rend_eq ((eq Equation)) (Option (List Int))
+  (match eq
+    ((Equation l r)
+     (match (mn_rend l)
+       (None None)
+       ((Some lt2)
+        (match (mn_rend r)
+          (None None)
+          ((Some rt)
+           (Some
+             (append_int
+               "(= "
+               (append_int lt2 (append_int " " (append_int rt ")"))))))))))))
+
+;; every FVar in the cut must be a sequent param (stable display name).
+(fn mn_fvars_ok ((e Expr) (ps (List Param))) Bool
+  (measure (struct e))
+  (match e
+    ((FVar n)
+     (match (find_param n ps)
+       (None False)
+       ((Some _) True)))
+    ((Ctor _ args) (mn_fvars_ok_list args ps))
+    ((Call _ args) (mn_fvars_ok_list args ps))
+    ((If c t e2)
+     (if (mn_fvars_ok c ps) (if (mn_fvars_ok t ps) (mn_fvars_ok e2 ps) False)
+     False))
+    (_ True)))
+
+(fn mn_fvars_ok_list ((es (List Expr)) (ps (List Param))) Bool
+  (measure (struct es))
+  (match es
+    (Nil True)
+    ((Cons e rest) (if (mn_fvars_ok e ps) (mn_fvars_ok_list rest ps) False))))
+
+(fn mn_fvars_ok_eq ((eq Equation) (ps (List Param))) Bool
+  (match eq
+    ((Equation l r) (if (mn_fvars_ok l ps) (mn_fvars_ok r ps) False))))
+
+;; farkas-visible atoms: Call-shaped monomial atoms of the comparison args
+;; of the goal and each premise — the terms a mined fact can be ABOUT.
+(fn mn_expr_member ((e Expr) (es (List Expr))) Bool
+  (measure (struct es))
+  (match es
+    (Nil False)
+    ((Cons x rest) (if (expr_eq x e) True (mn_expr_member e rest)))))
+
+(fn mn_atoms_poly ((p (List (Pair Int (Option Expr)))) (acc (List Expr)))
+  (List Expr)
+  (measure (struct p))
+  (match p
+    (Nil acc)
+    ((Cons (Pair _ at) rest)
+     (match at
+       ((Some e2)
+        (match e2
+          ((Call _ _)
+           (mn_atoms_poly rest (if (mn_expr_member e2 acc) acc (Cons e2 acc))))
+          (_ (mn_atoms_poly rest acc))))
+       (None (mn_atoms_poly rest acc))))))
+
+(fn mn_atoms_side ((e Expr) (acc (List Expr))) (List Expr)
+  (mn_atoms_poly (lia_collect e 1) acc))
+
+(fn mn_atoms_eq ((eq Equation) (acc (List Expr))) (List Expr)
+  (match eq
+    ((Equation l r)
+     (match l
+       ((Call _ (Cons a (Cons b Nil)))
+        (mn_atoms_side a (mn_atoms_side b (mn_atoms_side r acc))))
+       (_ (mn_atoms_side l (mn_atoms_side r acc)))))))
+
+(fn mn_atoms_eqs ((eqs (List Equation)) (acc (List Expr))) (List Expr)
+  (measure (struct eqs))
+  (match eqs
+    (Nil acc)
+    ((Cons eq rest) (mn_atoms_eqs rest (mn_atoms_eq eq acc)))))
+
+(fn mn_atoms ((seq Sequent)) (List Expr)
+  (match seq
+    ((Sequent _ _ prems eq) (mn_atoms_eqs prems (mn_atoms_eq eq Nil)))))
+
+;; key calls of an (opened) conclusion — the match patterns.
+(fn mn_keys ((e Expr) (acc (List Expr))) (List Expr)
+  (measure (struct e))
+  (match e
+    ((Call _ args) (mn_keys_list args (Cons e acc)))
+    ((Ctor _ args) (mn_keys_list args acc))
+    ((If c t e2) (mn_keys c (mn_keys t (mn_keys e2 acc))))
+    (_ acc)))
+
+(fn mn_keys_list ((es (List Expr)) (acc (List Expr))) (List Expr)
+  (measure (struct es))
+  (match es
+    (Nil acc)
+    ((Cons e rest) (mn_keys_list rest (mn_keys e acc)))))
+
+(fn mn_keys_eq ((eq Equation)) (List Expr)
+  (match eq
+    ((Equation l _) (mn_keys l Nil))))
+
+;; a linear-fact lemma: conclusion (le|lt|int_eq a b) = CTOR.
+(fn mn_linfact ((lg Goal)) Bool
+  (match lg
+    ((Goal _ _ (Equation l r))
+     (match l
+       ((Call f (Cons _ (Cons _ Nil)))
+        (match r
+          ((Ctor _ _)
+           (if (core_named f (quote le)) True
+           (if (core_named f (quote lt)) True
+           (core_named f (quote int_eq)))))
+          (_ False)))
+       (_ False)))))
+
+;; atom-head relevance: a lemma qualifies only if its conclusion mentions a
+;; call head that actually occurs among the goal's atoms — else recent
+;; unrelated linfacts crowd the capped pool and push the useful axioms out.
+(fn mn_atom_heads ((atoms (List Expr))) (List QName)
+  (measure (struct atoms))
+  (match atoms
+    (Nil Nil)
+    ((Cons a rest)
+     (match a
+       ((Call q _) (Cons q (mn_atom_heads rest)))
+       (_ (mn_atom_heads rest))))))
+
+(fn mn_mentions ((e Expr) (aheads (List QName))) Bool
+  (measure (struct e))
+  (match e
+    ((Call q args)
+     (if (qn_member q aheads) True (mn_mentions_list args aheads)))
+    ((Ctor _ args) (mn_mentions_list args aheads))
+    ((If c t e2)
+     (if (mn_mentions c aheads) True
+     (if (mn_mentions t aheads) True
+     (mn_mentions e2 aheads))))
+    (_ False)))
+
+(fn mn_mentions_list ((es (List Expr)) (aheads (List QName))) Bool
+  (measure (struct es))
+  (match es
+    (Nil False)
+    ((Cons e rest)
+     (if (mn_mentions e aheads) True (mn_mentions_list rest aheads)))))
+
+(fn mn_pick ((lg Goal) (aheads (List QName))) Bool
+  (if (mn_linfact lg)
+    (match lg
+      ((Goal _ _ (Equation l _)) (mn_mentions l aheads)))
+    False))
+
+(fn mn_lemmas ((th Theory) (aheads (List QName)) (cap Int))
+  (List (Pair QName Goal))
+  (measure (struct th))
+  (if (lt cap 1) Nil
+  (match th
+    ((TheoryEmpty) Nil)
+    ((TheoryCons e rest)
+     (match e
+       ((Proven q lg)
+        (if (mn_pick lg aheads)
+          (Cons (Pair q lg) (mn_lemmas rest aheads (- cap 1)))
+          (mn_lemmas rest aheads cap)))
+       ((Axiom q lg)
+        (if (mn_pick lg aheads)
+          (Cons (Pair q lg) (mn_lemmas rest aheads (- cap 1)))
+          (mn_lemmas rest aheads cap))))))))
+
+;; one mined fact: the cut equation, its rendered text, the lemma's display
+;; name, and the solved premise sub-proof texts.
+(type MnFact (MnFact Equation (List Int) (List Int) (List (List Int))))
+
+(fn mn_eq_member ((eq Equation) (eqs (List Equation))) Bool
+  (measure (struct eqs))
+  (match eqs
+    (Nil False)
+    ((Cons x rest)
+     (match x
+       ((Equation xl xr)
+        (match eq
+          ((Equation el er)
+           (if (if (expr_eq xl el) (expr_eq xr er) False) True
+           (mn_eq_member eq rest)))))))))
+
+;; try one (lemma, key, atom): match, bind-all, novel, param-stable,
+;; renderable, premises solvable.
+(fn mn_attempt
+  ((s Slv)
+   (th Theory)
+   (seq Sequent)
+   (q QName)
+   (pat_vars (List Symbol))
+   (oeq Equation)
+   (oprems (List Equation))
+   (key Expr)
+   (atom Expr))
+  (Option MnFact)
+  (match (expr_match pat_vars key atom Empty)
+    (None None)
+    ((Some env)
+     (if (env_binds_all pat_vars env)
+       (let ((ieq (subst_eq env oeq)))
+         (match seq
+           ((Sequent ps _ pr _)
+            (if (mn_eq_member ieq pr) None
+            (if (mn_fvars_ok_eq ieq ps)
+              (match (mn_rend_eq ieq)
+                (None None)
+                ((Some eqtxt)
+                 (match (solve_premises s th seq env oprems)
+                   (None None)
+                   ((Some ptexts)
+                    (Some (MnFact ieq eqtxt (chars_of_sym (qn_name q)) ptexts))))))
+              None)))))
+       None))))
+
+(fn mn_atoms_walk
+  ((s Slv)
+   (th Theory)
+   (seq Sequent)
+   (q QName)
+   (pat_vars (List Symbol))
+   (oeq Equation)
+   (oprems (List Equation))
+   (key Expr)
+   (atoms (List Expr)))
+  (Option MnFact)
+  (measure (struct atoms))
+  (match atoms
+    (Nil None)
+    ((Cons a rest)
+     (match (mn_attempt s th seq q pat_vars oeq oprems key a)
+       ((Some f) (Some f))
+       (None (mn_atoms_walk s th seq q pat_vars oeq oprems key rest))))))
+
+(fn mn_keys_walk
+  ((s Slv)
+   (th Theory)
+   (seq Sequent)
+   (q QName)
+   (pat_vars (List Symbol))
+   (oeq Equation)
+   (oprems (List Equation))
+   (keys (List Expr))
+   (atoms (List Expr)))
+  (Option MnFact)
+  (measure (struct keys))
+  (match keys
+    (Nil None)
+    ((Cons k rest)
+     (match (mn_atoms_walk s th seq q pat_vars oeq oprems k atoms)
+       ((Some f) (Some f))
+       (None (mn_keys_walk s th seq q pat_vars oeq oprems rest atoms))))))
+
+(fn mn_try_lemma
+  ((s Slv) (th Theory) (seq Sequent) (q QName) (lg Goal) (atoms (List Expr)))
+  (Option MnFact)
+  (match lg
+    ((Goal cited_params cited_prems cited_eq)
+     (match (split_params_by_insts cited_params Nil)
+       ((Pair openings pat_vars)
+        (let ((ofv (reverse_exprs openings)))
+          (let
+            ((oeq (open_eq_with ofv cited_eq))
+             (oprems (open_eqs_with ofv cited_prems)))
+            (mn_keys_walk s th seq q pat_vars oeq oprems (mn_keys_eq oeq) atoms))))))))
+
+(fn mn_find
+  ((s Slv)
+   (th Theory)
+   (seq Sequent)
+   (atoms (List Expr))
+   (lems (List (Pair QName Goal))))
+  (Option MnFact)
+  (measure (struct lems))
+  (match lems
+    (Nil None)
+    ((Cons (Pair q lg) rest)
+     (match (mn_try_lemma s th seq q lg atoms)
+       ((Some f) (Some f))
+       (None (mn_find s th seq atoms rest))))))
+
+;; Have APPENDS the cut — mirror it exactly (cert slot order).
+(fn mn_extend ((seq Sequent) (f MnFact)) Sequent
+  (match seq
+    ((Sequent ps hs pr eq)
+     (match f
+       ((MnFact ieq _ _ _) (Sequent ps hs (append_eqs pr (Cons ieq Nil)) eq))))))
+
+(fn mn_render ((facts (List MnFact)) (inner (List Int))) (List Int)
+  (measure (struct facts))
+  (match facts
+    (Nil inner)
+    ((Cons (MnFact _ eqtxt lname ptexts) rest)
+     (append_int
+       "(have "
+       (append_int
+         eqtxt
+         (append_int
+           " (rewrite-with (lemma "
+           (append_int
+             lname
+             (append_int
+               ") lr lhs () "
+               (append_int
+                 (join_proofs ptexts)
+                 (append_int " refl) " (append_int (mn_render rest inner) ")")))))))))))
+
+(fn mn_wrap_cand
+  ((s Slv) (th Theory) (seq Sequent) (facts (List MnFact)) (inner (List Int)))
+  (Option (List Int))
+  (let ((cand (mn_render facts inner)))
+    (if (try_cand s th seq cand) (Some cand) None)))
+
+(fn rev_facts ((xs (List MnFact)) (acc (List MnFact))) (List MnFact)
+  (measure (struct xs))
+  (match xs
+    (Nil acc)
+    ((Cons h t) (rev_facts t (Cons h acc)))))
+
+;; grow the mined-fact set MONOTONICALLY until farkas closes or the budget
+;; or pool dries: an added premise never hurts (slot 0 ignores it), so
+;; accumulation loses nothing where a fixed pair-pick would guess wrong.
+;; The novelty check (mn_eq_member against the extended premises) is what
+;; advances the walk. facts_rev is innermost-first; rendering reverses it.
+(fn mn_grow
+  ((s Slv)
+   (th Theory)
+   (seq0 Sequent)
+   (ext Sequent)
+   (facts_rev (List MnFact))
+   (atoms (List Expr))
+   (lems (List (Pair QName Goal)))
+   (k Int))
+  (Option (List Int))
+  (measure k (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt k 1) None
+  (match (mn_find s th ext atoms lems)
+    (None None)
+    ((Some f)
+     (let ((ext2 (mn_extend ext f)) (facts2 (Cons f facts_rev)))
+       (match (farkas_solve ext2)
+         ((Some inner) (mn_wrap_cand s th seq0 (rev_facts facts2 Nil) inner))
+         (None (mn_grow s th seq0 ext2 facts2 atoms lems (- k 1)))))))))
+
+(fn mn_solve ((s Slv) (th Theory) (seq Sequent)) (Option (List Int))
+  (let ((atoms (mn_atoms seq)))
+    (mn_grow s th seq seq Nil atoms (mn_lemmas th (mn_atom_heads atoms) 8) 6)))
+
 ;; the flat (no-induction) candidate set for a goal: the same generated
 ;; ladder a case gets — unfold chains over the goal's own heads plus lemma
 ;; rewrite tails — minus the IH tails (no hypotheses at top level).
@@ -1251,8 +1950,9 @@
 
 ;; the search over one decl's sequent: the hint chain first (it was hinted
 ;; for a reason; later hints nest inside earlier ones), then the flat
-;; ladder, then unhinted induction on each parameter. Every winner passes
-;; the decl-level driver verify.
+;; ladder, then conditional citation + premise mining (cheaper than
+;; induction synthesis), then unhinted induction on each parameter. Every
+;; winner passes the decl-level driver verify.
 (fn solve_seq
   ((s Slv) (th Theory) (name Symbol) (seq Sequent) (hints (List Hint)))
   (Option (List Int))
@@ -1270,7 +1970,13 @@
           (append_cands (flat_cands s th seq) (farkas_cands seq)))
         ((Some c)
          (if (attempt s name c) (Some c) (try_induct_vars s th name seq)))
-        (None (try_induct_vars s th name seq))))))
+        (None
+          (match (verify_or s name (cond_solve s th seq))
+            ((Some c) (Some c))
+            (None
+              (match (verify_or s name (mn_solve s th seq))
+                ((Some c) (Some c))
+                (None (try_induct_vars s th name seq))))))))))
 
 ;; ---- the AST-size measure recipe (decrease sites) ---------------------------
 ;; A decrease obligation is  callee_size[args] < caller_size[params]  under the

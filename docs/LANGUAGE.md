@@ -508,11 +508,17 @@ failure (`examples/auto_missing_rejects.shard` pins this; the demo is
 `examples/auto_demo.shard`).
 
 The solver (`tools/prove`) understands these hints, all optional
-accelerators — bare `auto` searches unhinted (flat closers, theory
-backends, Farkas certificate search for premised goals (single- and
+accelerators — bare `auto` searches unhinted (flat closers, the arith
+backend, Farkas certificate search for premised goals (single- and
 two-sided, weight-ordered so the first hit is a minimal cert), lemma
-rewrites over earlier theory entries, structural induction on each goal
-parameter):
+rewrites over earlier theory entries, **conditional citation** — a
+premised lemma applied via `rewrite-with`, its instantiated premises
+discharged by a mini ladder — **premise mining** — a linear-fact lemma
+conclusion instantiated at the goal's own arithmetic atoms and
+materialized as a `have` cut, facts accumulated until the Farkas search
+closes (the `mod_lo`/`mod_hi` idiom; pin
+`examples/prove_cond_mine.shard`) — and structural induction on each
+goal parameter):
 
 - `(induct VAR)` — synthesize a structural induction on VAR.
 - `(case-on TERM TYPE)` — synthesize a case split on a computed term
