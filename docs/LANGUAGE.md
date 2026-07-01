@@ -519,10 +519,14 @@ materialized as a `have` cut, facts accumulated until the Farkas search
 closes (the `mod_lo`/`mod_hi` idiom; pin
 `examples/prove_cond_mine.shard`) — **hypothesis promotion** — every
 closed linear-fact case hypothesis restated as a trivial `have` so the
-Farkas side can read it (the IH-consuming idiom) — **normalizing
+Farkas side can read it (the IH-consuming idiom); parameterized
+hypotheses (∀-closed induction IHs) instead join the mining pool citable
+as `(hyp K)`, their binders bound by the key/atom match (so an IH
+instantiated at `(- n 1)` is mined like any lemma) — **normalizing
 prefixes** — on a stuck case the terminal stages re-run behind small
-step prefixes applied natively (`simp`, case-hyp rewrites
-outermost-first, unfold chains), persisted as `(steps (PFX) TERMINAL)`
+step prefixes applied natively (`simp`, case-hyp and goal-premise
+rewrites outermost-first, unfold chains), persisted as
+`(steps (PFX) TERMINAL)`
 — and structural induction on each goal parameter. Generated induct
 cases NAME their field binders (`(case Cons (c0 c1) …)`) so promoted
 and mined facts about a case's own fields render; a `fulfills`' goal is

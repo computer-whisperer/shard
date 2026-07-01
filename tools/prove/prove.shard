@@ -542,6 +542,11 @@
 (fn st_simp ((side (List Int))) (List Int)
   (append_int "(simp " (append_int side ")")))
 
+(fn st_rw_prem ((i Int) (side (List Int))) (List Int)
+  (append_int
+    "(rewrite (premise "
+    (append_int (show_int i) (append_int ") lr " (append_int side " true ())")))))
+
 ;; (rewrite (hyp I) lr SIDE true ()) — the IH-consumption step. The IHs are
 ;; (hyp 0)/(hyp 1): a top-level goal lifts with NO hypotheses, so appended
 ;; IHs land at 0 upward ((hyp 1) exists only for two-recursive-field ctors;
@@ -1416,19 +1421,22 @@
 (fn join_proofs ((ts (List (List Int)))) (List Int)
   (append_int "(" (append_int (join_sp ts) ")")))
 
+;; cite = the rendered citation — "(lemma NAME)" or "(hyp K)"; both open
+;; and capture-match identically at replay, so mined facts can come from
+;; the theory OR from a parameterized hypothesis (an induction IH).
 (fn rww_cand
-  ((lname (List Int))
+  ((cite (List Int))
    (dirtxt (List Int))
    (sidetxt (List Int))
    (ptexts (List (List Int)))
    (k (List Int)))
   (List Int)
   (append_int
-    "(rewrite-with (lemma "
+    "(rewrite-with "
     (append_int
-      lname
+      cite
       (append_int
-        ") "
+        " "
         (append_int
           dirtxt
           (append_int
@@ -1441,13 +1449,19 @@
                   (join_proofs ptexts)
                   (append_int " " (append_int k ")")))))))))))
 
+(fn lemma_cite ((q QName)) (List Int)
+  (append_int "(lemma " (append_int (chars_of_sym (qn_name q)) ")")))
+
+(fn hyp_cite ((k Int)) (List Int)
+  (append_int "(hyp " (append_int (show_int k) ")")))
+
 ;; terminals for the REWRITTEN goal: cheap closers plus a farkas cert
 ;; searched against the post-rewrite sequent (premise slots unchanged).
 (fn rww_close
   ((s Slv)
    (th Theory)
    (seq Sequent)
-   (lname (List Int))
+   (cite (List Int))
    (dirtxt (List Int))
    (sidetxt (List Int))
    (ptexts (List (List Int)))
@@ -1457,15 +1471,15 @@
   (match ks
     (Nil None)
     ((Cons k rest)
-     (let ((cand (rww_cand lname dirtxt sidetxt ptexts k)))
+     (let ((cand (rww_cand cite dirtxt sidetxt ptexts k)))
        (if (try_cand s th seq cand) (Some cand)
-       (rww_close s th seq lname dirtxt sidetxt ptexts rest))))))
+       (rww_close s th seq cite dirtxt sidetxt ptexts rest))))))
 
 (fn rww_try_combo
   ((s Slv)
    (th Theory)
    (seq Sequent)
-   (lname (List Int))
+   (cite (List Int))
    (pat_vars (List Symbol))
    (oeq Equation)
    (oprems (List Equation))
@@ -1487,7 +1501,7 @@
                s
                th
                seq
-               lname
+               cite
                dirtxt
                sidetxt
                ptexts
@@ -1506,13 +1520,13 @@
           (let
             ((oeq (open_eq_with ofv cited_eq))
              (oprems (open_eqs_with ofv cited_prems))
-             (lname (chars_of_sym (qn_name q))))
+             (cite (lemma_cite q)))
             (match
               (rww_try_combo
                 s
                 th
                 seq
-                lname
+                cite
                 pat_vars
                 oeq
                 oprems
@@ -1527,7 +1541,7 @@
                     s
                     th
                     seq
-                    lname
+                    cite
                     pat_vars
                     oeq
                     oprems
@@ -1542,7 +1556,7 @@
                         s
                         th
                         seq
-                        lname
+                        cite
                         pat_vars
                         oeq
                         oprems
@@ -1556,7 +1570,7 @@
                           s
                           th
                           seq
-                          lname
+                          cite
                           pat_vars
                           oeq
                           oprems
@@ -1816,7 +1830,7 @@
     False))
 
 (fn mn_lemmas ((th Theory) (aheads (List QName)) (cap Int))
-  (List (Pair QName Goal))
+  (List (Pair (List Int) Goal))
   (measure (struct th))
   (if (lt cap 1) Nil
   (match th
@@ -1825,12 +1839,29 @@
      (match e
        ((Proven q lg)
         (if (mn_pick lg aheads)
-          (Cons (Pair q lg) (mn_lemmas rest aheads (- cap 1)))
+          (Cons (Pair (lemma_cite q) lg) (mn_lemmas rest aheads (- cap 1)))
           (mn_lemmas rest aheads cap)))
        ((Axiom q lg)
         (if (mn_pick lg aheads)
-          (Cons (Pair q lg) (mn_lemmas rest aheads (- cap 1)))
+          (Cons (Pair (lemma_cite q) lg) (mn_lemmas rest aheads (- cap 1)))
           (mn_lemmas rest aheads cap))))))))
+
+;; parameterized linfact hyps — an induction IH is the same Goal shape as
+;; a stored lemma, so it joins the mining pool citable as (hyp K); its
+;; closed params are bound by the key/atom match (capture-match rebinds
+;; at replay, no insts). Closed hyps are handled by promotion instead.
+(fn mn_hyps ((hs (List Goal)) (aheads (List QName)) (k Int))
+  (List (Pair (List Int) Goal))
+  (measure (struct hs))
+  (match hs
+    (Nil Nil)
+    ((Cons g rest)
+     (match g
+       ((Goal Nil Nil _) (mn_hyps rest aheads (+ k 1)))
+       (_
+         (if (mn_pick g aheads)
+           (Cons (Pair (hyp_cite k) g) (mn_hyps rest aheads (+ k 1)))
+           (mn_hyps rest aheads (+ k 1))))))))
 
 ;; one materialized fact: the cut equation, its rendered text, and the
 ;; rendered proof of the cut (a lemma citation for mined facts, a hyp
@@ -1849,13 +1880,13 @@
            (if (if (expr_eq xl el) (expr_eq xr er) False) True
            (mn_eq_member eq rest)))))))))
 
-;; try one (lemma, key, atom): match, bind-all, novel, param-stable,
+;; try one (fact-source, key, atom): match, bind-all, novel, param-stable,
 ;; renderable, premises solvable.
 (fn mn_attempt
   ((s Slv)
    (th Theory)
    (seq Sequent)
-   (q QName)
+   (cite (List Int))
    (pat_vars (List Symbol))
    (oeq Equation)
    (oprems (List Equation))
@@ -1881,12 +1912,7 @@
                       (MnFact
                         ieq
                         eqtxt
-                        (rww_cand
-                          (chars_of_sym (qn_name q))
-                          "lr"
-                          "lhs"
-                          ptexts
-                          "refl")))))))
+                        (rww_cand cite "lr" "lhs" ptexts "refl")))))))
               None)))))
        None))))
 
@@ -1894,7 +1920,7 @@
   ((s Slv)
    (th Theory)
    (seq Sequent)
-   (q QName)
+   (cite (List Int))
    (pat_vars (List Symbol))
    (oeq Equation)
    (oprems (List Equation))
@@ -1905,15 +1931,15 @@
   (match atoms
     (Nil None)
     ((Cons a rest)
-     (match (mn_attempt s th seq q pat_vars oeq oprems key a)
+     (match (mn_attempt s th seq cite pat_vars oeq oprems key a)
        ((Some f) (Some f))
-       (None (mn_atoms_walk s th seq q pat_vars oeq oprems key rest))))))
+       (None (mn_atoms_walk s th seq cite pat_vars oeq oprems key rest))))))
 
 (fn mn_keys_walk
   ((s Slv)
    (th Theory)
    (seq Sequent)
-   (q QName)
+   (cite (List Int))
    (pat_vars (List Symbol))
    (oeq Equation)
    (oprems (List Equation))
@@ -1924,12 +1950,17 @@
   (match keys
     (Nil None)
     ((Cons k rest)
-     (match (mn_atoms_walk s th seq q pat_vars oeq oprems k atoms)
+     (match (mn_atoms_walk s th seq cite pat_vars oeq oprems k atoms)
        ((Some f) (Some f))
-       (None (mn_keys_walk s th seq q pat_vars oeq oprems rest atoms))))))
+       (None (mn_keys_walk s th seq cite pat_vars oeq oprems rest atoms))))))
 
 (fn mn_try_lemma
-  ((s Slv) (th Theory) (seq Sequent) (q QName) (lg Goal) (atoms (List Expr)))
+  ((s Slv)
+   (th Theory)
+   (seq Sequent)
+   (cite (List Int))
+   (lg Goal)
+   (atoms (List Expr)))
   (Option MnFact)
   (match lg
     ((Goal cited_params cited_prems cited_eq)
@@ -1939,20 +1970,29 @@
           (let
             ((oeq (open_eq_with ofv cited_eq))
              (oprems (open_eqs_with ofv cited_prems)))
-            (mn_keys_walk s th seq q pat_vars oeq oprems (mn_keys_eq oeq) atoms))))))))
+            (mn_keys_walk
+              s
+              th
+              seq
+              cite
+              pat_vars
+              oeq
+              oprems
+              (mn_keys_eq oeq)
+              atoms))))))))
 
 (fn mn_find
   ((s Slv)
    (th Theory)
    (seq Sequent)
    (atoms (List Expr))
-   (lems (List (Pair QName Goal))))
+   (lems (List (Pair (List Int) Goal))))
   (Option MnFact)
   (measure (struct lems))
   (match lems
     (Nil None)
-    ((Cons (Pair q lg) rest)
-     (match (mn_try_lemma s th seq q lg atoms)
+    ((Cons (Pair cite lg) rest)
+     (match (mn_try_lemma s th seq cite lg atoms)
        ((Some f) (Some f))
        (None (mn_find s th seq atoms rest))))))
 
@@ -2002,7 +2042,7 @@
    (ext Sequent)
    (facts_rev (List MnFact))
    (atoms (List Expr))
-   (lems (List (Pair QName Goal)))
+   (lems (List (Pair (List Int) Goal)))
    (k Int))
   (Option (List Int))
   (measure k (by arith (list 1 0)) (by arith (list 1 1)))
@@ -2022,7 +2062,8 @@
 ;; refl. Promote every CLOSED linfact hyp (case equations, single-param
 ;; IHs) whose atoms touch the goal's own — relevance keeps the farkas slot
 ;; count down (the weight cap shrinks as premises grow). Parameterized
-;; hyps (∀-closed IHs) need insts — out of scope with pivots.
+;; hyps (∀-closed IHs) instead join the MINING pool as (hyp K) citations
+;; — see mn_hyps.
 
 (fn seq_hyps ((seq Sequent)) (List Goal)
   (match seq
@@ -2079,6 +2120,14 @@
         (None None)
         ((Some inner) (mn_wrap_cand s th seq hf inner))))))
 
+(fn append_pool
+  ((a (List (Pair (List Int) Goal))) (b (List (Pair (List Int) Goal))))
+  (List (Pair (List Int) Goal))
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (append_pool t b)))))
+
 (fn mn_solve ((s Slv) (th Theory) (seq Sequent)) (Option (List Int))
   (let ((gatoms (mn_atoms seq)))
     (let ((hf (hp_facts (seq_hyps seq) (seq_params seq) gatoms 0)))
@@ -2087,15 +2136,18 @@
           ((Some c) (Some c))
           (None
             (let ((atoms (mn_atoms ext0)))
-              (mn_grow
-                s
-                th
-                seq
-                ext0
-                (rev_facts hf Nil)
-                atoms
-                (mn_lemmas th (mn_atom_heads atoms) 8)
-                6))))))))
+              (let ((aheads (mn_atom_heads atoms)))
+                (mn_grow
+                  s
+                  th
+                  seq
+                  ext0
+                  (rev_facts hf Nil)
+                  atoms
+                  (append_pool
+                    (mn_hyps (seq_hyps seq) aheads 0)
+                    (mn_lemmas th aheads 8))
+                  6)))))))))
 
 ;; ---- prefix-composed terminals -----------------------------------------------
 ;; The conditional stages fire on the sequent AS GIVEN, but the hand idioms
@@ -2107,9 +2159,12 @@
 ;; the equation is skipped; the assembled whole still re-verifies.
 
 (fn term_solve ((s Slv) (th Theory) (seq Sequent)) (Option (List Int))
-  (match (cond_solve s th seq)
+  (match (try_ladder s th seq (append_cands (mini_ladder) (farkas_cands seq)))
     ((Some c) (Some c))
-    (None (mn_solve s th seq))))
+    (None
+      (match (cond_solve s th seq)
+        ((Some c) (Some c))
+        (None (mn_solve s th seq))))))
 
 (fn pfx_steps ((s Slv) (stxts (List (List Int)))) (Option (List Step))
   (match (parse_cand (slv_m s) (slv_rctx s) (steps_cand stxts "refl"))
@@ -2141,10 +2196,11 @@
                ((Some inner) (Some (steps_cand ptxts inner)))
                (None (pfx_walk s th subgoal rest)))))))))))
 
-;; the prefix set for a subgoal: (simp both); per closed hyp K a
-;; rewrite-K-then-simp (with and without a leading unfold of each goal-lhs
-;; head); and the ALL-closed-hyps chain (the deep case-on leaves rewrite
-;; every case equation into the unfolded body before one final simp).
+;; the prefix set for a subgoal: (simp both); per rewrite UNIT (a closed
+;; hyp or a goal premise) a rewrite-then-simp (with and without a leading
+;; unfold of each goal-lhs head); the ALL-units chain (deep case-on leaves
+;; rewrite every case equation into the unfolded body before one final
+;; simp); and the DESCENDING interleaved chain.
 (fn closed_hyp_idxs ((hs (List Goal)) (k Int)) (List Int)
   (measure (struct hs))
   (match hs
@@ -2154,30 +2210,41 @@
        ((Goal Nil Nil _) (Cons k (closed_hyp_idxs rest (+ k 1))))
        (_ (closed_hyp_idxs rest (+ k 1)))))))
 
-(fn rw_hyp_chain ((ks (List Int))) (List (List Int))
+(fn rw_units_hyps ((ks (List Int))) (List (List Int))
   (measure (struct ks))
   (match ks
     (Nil Nil)
-    ((Cons k rest) (Cons (st_rw_hyp k "lhs") (rw_hyp_chain rest)))))
+    ((Cons k rest) (Cons (st_rw_hyp k "lhs") (rw_units_hyps rest)))))
 
-(fn pfx_unfold_rw ((lheads (List (List Int))) (k Int)) (List (List (List Int)))
+(fn rw_units_prems ((prems (List Equation)) (j Int)) (List (List Int))
+  (measure (struct prems))
+  (match prems
+    (Nil Nil)
+    ((Cons _ rest) (Cons (st_rw_prem j "lhs") (rw_units_prems rest (+ j 1))))))
+
+(fn rev_steps ((xs (List (List Int))) (acc (List (List Int)))) (List (List Int))
+  (measure (struct xs))
+  (match xs
+    (Nil acc)
+    ((Cons h t) (rev_steps t (Cons h acc)))))
+
+(fn pfx_unfold_rw ((lheads (List (List Int))) (u (List Int)))
+  (List (List (List Int)))
   (measure (struct lheads))
   (match lheads
     (Nil Nil)
     ((Cons f rest)
-     (Cons
-       (list (st_unfold f "lhs") (st_rw_hyp k "lhs") (st_simp "lhs"))
-       (pfx_unfold_rw rest k)))))
+     (Cons (list (st_unfold f "lhs") u (st_simp "lhs")) (pfx_unfold_rw rest u)))))
 
-(fn pfx_single_set ((lheads (List (List Int))) (ks (List Int)))
+(fn pfx_single_set ((lheads (List (List Int))) (units (List (List Int))))
   (List (List (List Int)))
-  (measure (struct ks))
-  (match ks
+  (measure (struct units))
+  (match units
     (Nil Nil)
-    ((Cons k rest)
+    ((Cons u rest)
      (Cons
-       (list (st_rw_hyp k "lhs") (st_simp "lhs"))
-       (append_chains (pfx_unfold_rw lheads k) (pfx_single_set lheads rest))))))
+       (list u (st_simp "lhs"))
+       (append_chains (pfx_unfold_rw lheads u) (pfx_single_set lheads rest))))))
 
 (fn pfx_all_unfold ((lheads (List (List Int))) (rws (List (List Int))))
   (List (List (List Int)))
@@ -2189,33 +2256,25 @@
        (Cons (st_unfold f "lhs") (append_cands rws (list (st_simp "lhs"))))
        (pfx_all_unfold rest rws)))))
 
-(fn pfx_all_set ((lheads (List (List Int))) (ks (List Int)))
+(fn pfx_all_set ((lheads (List (List Int))) (units (List (List Int))))
   (List (List (List Int)))
-  (match ks
+  (match units
     (Nil Nil)
     ((Cons _ Nil) Nil)
     (_
-      (let ((rws (rw_hyp_chain ks)))
-        (Cons
-          (append_cands rws (list (st_simp "lhs")))
-          (pfx_all_unfold lheads rws))))))
+      (Cons
+        (append_cands units (list (st_simp "lhs")))
+        (pfx_all_unfold lheads units)))))
 
-;; descending interleaved chain: simp, then (rw hyp k)(simp) for the closed
-;; hyps OUTERMOST-FIRST (highest index first) — a nested case-on leaf's
-;; if-chain collapses in exactly this order, each simp exposing the next
-;; hyp's scrutinee.
-(fn rev_ints ((xs (List Int)) (acc (List Int))) (List Int)
-  (measure (struct xs))
-  (match xs
-    (Nil acc)
-    ((Cons h t) (rev_ints t (Cons h acc)))))
-
-(fn pfx_desc_chain ((ks_desc (List Int))) (List (List Int))
-  (measure (struct ks_desc))
-  (match ks_desc
+;; descending interleaved chain: simp, then (rw UNIT)(simp) with the closed
+;; hyps OUTERMOST-FIRST (highest index first, premises after) — a nested
+;; case-on leaf's if-chain collapses in exactly this order, each simp
+;; exposing the next hyp's scrutinee.
+(fn pfx_desc_chain ((units_desc (List (List Int)))) (List (List Int))
+  (measure (struct units_desc))
+  (match units_desc
     (Nil Nil)
-    ((Cons k rest)
-     (Cons (st_rw_hyp k "lhs") (Cons (st_simp "lhs") (pfx_desc_chain rest))))))
+    ((Cons u rest) (Cons u (Cons (st_simp "lhs") (pfx_desc_chain rest))))))
 
 (fn pfx_desc_unfold ((lheads (List (List Int))) (chain (List (List Int))))
   (List (List (List Int)))
@@ -2225,12 +2284,12 @@
     ((Cons f rest)
      (Cons (Cons (st_unfold f "lhs") chain) (pfx_desc_unfold rest chain)))))
 
-(fn pfx_desc_set ((lheads (List (List Int))) (ks (List Int)))
+(fn pfx_desc_set ((lheads (List (List Int))) (units_desc (List (List Int))))
   (List (List (List Int)))
-  (match ks
+  (match units_desc
     (Nil Nil)
     (_
-      (let ((chain (Cons (st_simp "lhs") (pfx_desc_chain (rev_ints ks Nil)))))
+      (let ((chain (Cons (st_simp "lhs") (pfx_desc_chain units_desc))))
         (Cons chain (pfx_desc_unfold lheads chain))))))
 
 ;; a bare unfold+simp per goal-lhs head — exposes mining atoms with no hyp
@@ -2245,14 +2304,19 @@
 (fn case_pfxs ((s Slv) (subgoal Sequent)) (List (List (List Int)))
   (match (seq_side_heads subgoal (slv_m s))
     ((Pair lh _)
-     (let ((ks (closed_hyp_idxs (seq_hyps subgoal) 0)))
-       (Cons
-         (list (st_simp "both"))
-         (append_chains
-           (pfx_unfold_simp lh)
+     (let
+       ((hu (rw_units_hyps (closed_hyp_idxs (seq_hyps subgoal) 0)))
+        (pu (rw_units_prems (seq_premises subgoal) 0)))
+       (let ((units (append_cands hu pu)))
+         (Cons
+           (list (st_simp "both"))
            (append_chains
-             (pfx_single_set lh ks)
-             (append_chains (pfx_desc_set lh ks) (pfx_all_set lh ks)))))))))
+             (pfx_unfold_simp lh)
+             (append_chains
+               (pfx_single_set lh units)
+               (append_chains
+                 (pfx_desc_set lh (append_cands (rev_steps hu Nil) pu))
+                 (pfx_all_set lh units))))))))))
 
 ;; the flat (no-induction) candidate set for a goal: the same generated
 ;; ladder a case gets — unfold chains over the goal's own heads plus lemma
