@@ -177,8 +177,8 @@ executor. The remaining cord-cutter is the shard→machine compiler.
 The kernel is a recursive checker in the LCF lineage (§1): a proof step is
 sound only if every name in it denotes what the checker thinks it does. Two
 layers read the same program — the **reducer**, which unfolds function calls,
-and the **theory backends** (farkas/lia/ord/eqdec), which recognize interpreted
-symbols (`le`, `lt`, `int_eq`, `+`, `True`, …) and reason about them as
+and the **theory backend** (`arith` — the unified linear-integer decision/entailment procedures), which recognizes interpreted
+symbols (`le`, `lt`, `int_eq`, `+`, `True`, …) and reasons about them as
 arithmetic. If those two layers can disagree about what a name means, the
 checker is unsound.
 

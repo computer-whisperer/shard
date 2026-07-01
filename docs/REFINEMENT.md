@@ -48,7 +48,7 @@ The corpus pays for this, measurably and by name:
   re-mask in `bidx` (`u8_val (u8 (raw_at …))`) — all of which exist *only* to
   re-derive a range that a refinement-typed element would carry for free.
 
-Every one of those obligations is currently discharged by **farkas/lia**. The
+Every one of those obligations is currently discharged by **arith** (the Farkas/LIA side). The
 opportunity is to state the invariant once, on the type, and let the existing
 arithmetic backends discharge it automatically.
 
@@ -358,7 +358,7 @@ the erasure/automation/hiding combination.
 
 | structure | verdict | why |
 |---|---|---|
-| Liquid-style ambient refinements + flow-sensitive VC / SMT | reject | needs search over path conditions (against verify-don't-search); the VC generator becomes TCB; we keep proof-*producing* farkas/lia |
+| Liquid-style ambient refinements + flow-sensitive VC / SMT | reject | needs search over path conditions (against verify-don't-search); the VC generator becomes TCB; we keep the proof-*producing* arith backend |
 | full Σ-types / proof-carrying values `{x // p x}` | reject for v1 | a step toward dependent types (no, per OVERVIEW); our proof-*irrelevant* collapse is simpler and sufficient since predicates are decidable |
 | indexed types / GADTs (`Vec n`) | reject | type-level data = a big dependent move; `(refine Int (lt _ n))` recovers `Fin` without indices |
 | capability / ghost tokens | reject (status quo) | "thread a `(Valid x)` premise" is exactly what we replace; no type-level guarantee |

@@ -137,10 +137,9 @@ kernel/                ; the kernel + its self-hosted toolchain, all narrow
   module.shard          ;   Module / FnDef / TypeDef / ExternDef + FnTrie dispatch
   checker.shard         ;   check_sequent + the step interpreters — the kernel proper
   check.shard           ;   the checker ENTRYPOINT, itself a World app (main)
-  lia.shard             ;   LIA decision procedure (ByTheory backend)
-  eqdec.shard           ;   equality-reflection backend (int_eq/sym_eq = True)
-  ord.shard             ;   order-reflection backend (lt/le = True via LIA diff)
-  farkas.shard          ;   linear-integer entailment (premises ⊢ lt/le/≠/=, cert-checked)
+  arith.shard           ;   THE ByTheory backend — decision side (empty payload:
+                       ;     LIA identities, int_eq/sym_eq/lt/le tautologies,
+                       ;     reflect scan) + Farkas entailment (cert payload)
   ;; — the self-hosted front-end + engine —
   reader.shard          ;   s-expr reader + module parser, validated byte-for-byte
                        ;     vs load.rs; located parse-failure diagnostics
@@ -177,7 +176,7 @@ std/                   ; the standard library — DIRECTORY MODULES: each topic
                        ;   back-compat shims forwarding to the modules.
   arith/                ;   pure lia index identities (sub_zero, idx_cancel, …)
   div/                  ;   Euclidean div/mod foundation (WfInduct substrate)
-  order/                ;   Int order / disequality entailment (ord + farkas)
+  order/                ;   Int order / disequality entailment (arith)
   nat/                  ;   Nat + add_nat / int_of_nat / half_nat (+ Induct2)
   list/                 ;   (List T) append/len/rev algebra behind an opaque surface
   map/                  ;   (Map V) — an OPAQUE TYPE (private ctors) + extensional lemmas
@@ -309,7 +308,7 @@ premises"). Each item links to its REVISIT entry if one exists.
    shipped the first cut:* `(Map V)` over **Int keys** (assoc list,
    prepend-insert, first-match-lookup) with an extensional lemma
    library (`lookup_insert_eq`, `lookup_insert_neq`, `insert_shadow`),
-   enabled by the `eqdec` backend deciding `int_eq k k = True`. Map
+   enabled by the arith backend deciding `int_eq k k = True`. Map
    facts are stated EXTENSIONALLY — quantified over a probe key under
    `lookup` — because prepend-insert leaves structurally-distinct but
    observationally-equal maps. *Since then:* `(Map V)` became an
@@ -455,7 +454,7 @@ fungible behind those surfaces.
 - **Substrate:** the self-hosted tower (eval.rs → eval.shard →
   check.shard) running a proof system with structural + two-step +
   well-founded induction, cut, bounded enumeration, four theory
-  backends (LIA, eqdec, ord, farkas), a mode-aware module system with
+  backend (arith: LIA/eqdec/ord/reflect decision side + checked Farkas entailment), a mode-aware module system with
   opaque interfaces/types, and the requirement/fulfills/bin contract
   layer. Proven artifacts beyond the M3 capstone: snake_game_2
   (interactive binary, 10 boundary requirements met) and shardfmt

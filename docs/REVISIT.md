@@ -535,6 +535,42 @@ is where to start when planning v3.
 - **Revisit if:** a proof needs equality conclusions by entailment
   (add the two-sided refutation).
 
+### `arith` — the backends unified (2026-07-01)
+- **Chose:** the five `ByTheory` names (`lia`/`eqdec`/`reflect`/`ord`/
+  `farkas`) collapsed into ONE backend, `arith`
+  (`kernel/arith.shard`), dispatching **cert-only** on the payload
+  shape with NO fallback between the sides:
+    - `(by arith (list))` — empty payload = the tautology/decision
+      side: the four old deciders tried in turn (`lia_decide` plain
+      equalities, `eqdec_decide` int_eq/sym_eq reflexivity,
+      `ord_decide` order tautologies, `reflect_decide` premise scan).
+      Each gates on its own goal shape, so the disjunction accepts
+      exactly the union of the old accepts — every branch is
+      individually sound, so any union is.
+    - `(by arith (list G M0 …))` — non-empty payload = a Farkas
+      certificate, checked as before. A failed cert does NOT fall
+      back to the decision side: one code path per input shape.
+- **Why now:** the five names were one implementation wearing five
+  hats — `ord` is lia's canonicalizer on `(b−a)` with a threshold,
+  `eqdec`'s int side IS `lia_decide`, `farkas` shares
+  `lia_collect`/`lia_canonical`, `reflect` is eqdec's inverse. Five
+  surface names, four kernel files, five checker dispatch arms, and
+  five prover-ladder rungs for one theory was pure audit surface.
+  First slice of the 2026-07 annealing push (collapse surface names;
+  the internal fn names and per-procedure docs are kept as sections
+  of arith.shard).
+- **Migration:** mechanical corpus-wide respell (`(by NAME …)` →
+  `(by arith …)`, payloads untouched; ~1263 sites incl. sidecars and
+  kernel-internal measure proofs). Checker rejects unknown theory
+  names, so a missed site is a loud FAIL, not silence.
+- **Revisit if:** a genuinely non-arithmetic theory backend lands
+  (bitvector bitblasting, string solver) — then `arith` was the
+  right *name* boundary and the new theory is a second registered
+  name, NOT a reason to re-split arith; or if the decision-side
+  union ever needs premise-aware ordering (today the four deciders
+  are order-independent because their accept sets are
+  shape-disjoint).
+
 ### RewriteWith — single-match only (Insts shipped slice 32)
 - **Chose (slice 27):** the conditional rewrite proof step landed
   with two restrictions:

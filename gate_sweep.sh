@@ -48,10 +48,7 @@ TARGETS=(
   kernel/proof.shard
   kernel/reduce.shard
   kernel/types.shard
-  kernel/farkas.shard
-  kernel/lia.shard
-  kernel/ord.shard
-  kernel/eqdec.shard
+  kernel/arith.shard
   kernel/checker.shard
   kernel/desugar.shard
   kernel/proof_reader.shard

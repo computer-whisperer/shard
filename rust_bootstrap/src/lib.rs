@@ -34,10 +34,7 @@ pub fn load_kernel_from<P: AsRef<std::path::Path>>(
         p("term.shard"),
         p("reduce.shard"),
         p("checker.shard"),
-        p("lia.shard"),
-        p("eqdec.shard"),
-        p("ord.shard"),
-        p("farkas.shard"),
+        p("arith.shard"),
     ])
 }
 

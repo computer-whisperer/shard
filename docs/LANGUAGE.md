@@ -509,7 +509,7 @@ failure (`examples/auto_missing_rejects.shard` pins this; the demo is
 
 The solver (`tools/prove`) understands these hints, all optional
 accelerators — bare `auto` searches unhinted (flat closers, theory
-backends, farkas certificate search for premised goals (single- and
+backends, Farkas certificate search for premised goals (single- and
 two-sided, weight-ordered so the first hit is a minimal cert), lemma
 rewrites over earlier theory entries, structural induction on each goal
 parameter):
@@ -559,7 +559,7 @@ parameter):
 | `(have EQ PROOF₁ PROOF₂)`                    | `Have`      | the CUT rule: prove `EQ` by `PROOF₁`, then continue with `PROOF₂` under `EQ` as a fresh premise |
 | `(have NAME EQ PROOF₁ PROOF₂)`               | `HaveN`     | named cut: as above, and `PROOF₂` may cite the fact as `(premise NAME)` — resolved to positional at load time, so inserting earlier haves can't break later citations |
 | `(fin-split VAR LO HI (CASE…))`              | `FinSplit`  | bounded-Int enumeration: `LO`/`HI` cite range premises for `VAR`; one `(case INT PROOF)` per value |
-| `(div-facts TERM D Q PROOF)`                 | `DivFacts`  | inject the Euclidean triple for `TERM` at literal divisor `D` (`n = D·Q + mod n D`, mod ranges), with quotient `Q` a fresh ∀-param — `fin-split Q` then supplies the integrality step rational farkas cannot (see `std/bytes/bytes.shard`'s `mod_byte_id` for the mod-elimination idiom) |
+| `(div-facts TERM D Q PROOF)`                 | `DivFacts`  | inject the Euclidean triple for `TERM` at literal divisor `D` (`n = D·Q + mod n D`, mod ranges), with quotient `Q` a fresh ∀-param — `fin-split Q` then supplies the integrality step the rational Farkas side cannot (see `std/bytes/bytes.shard`'s `mod_byte_id` for the mod-elimination idiom) |
 | `(rewrite-with EQREF DIR SIDE (INST…) (PROOF…) PROOF)` | `RewriteWith` | rewrite by a cited equation whose own premises are discharged by the sub-`PROOF`s, then continue |
 | `(absurd EQREF)`                             | `Absurd`    | close the goal from a contradictory hypothesis                 |
 | `(by THEORY PAYLOAD)`                         | `ByTheory`  | discharge via a decision procedure (§10.7)                     |
@@ -624,24 +624,30 @@ pass, not during parsing.
 ### 10.7 Theories (`by`)
 
 `(by THEORY PAYLOAD)` discharges the current sequent with a decision
-procedure. Four are registered (`kernel/checker.shard`):
+procedure. ONE theory is registered (`kernel/checker.shard`): `arith` —
+linear-integer arithmetic + equality reflection, unified
+(`kernel/arith.shard`). Dispatch is **cert-only** on the payload shape,
+with no fallback between the two sides:
 
-| THEORY   | Decides                                                            | Payload          |
-|----------|-------------------------------------------------------------------|------------------|
-| `lia`    | linear-integer identities (normalize both sides; lhs−rhs ≡ 0)     | `(list)` — unused |
-| `eqdec`  | `(int_eq a b) = True` / `(sym_eq a b) = True` reflexivity facts   | `(list)` — unused |
-| `ord`    | `(lt a b) = True` / `(le a b) = True` when `b−a` is a constant    | `(list)` — unused |
-| `farkas` | linear-integer **entailment**: premises ⊢ `(lt|le a b) = True`, `(int_eq a b) = True/False`, or a plain `L = R` | Farkas cert (below) |
+| Form                     | Side                | Decides                                                            |
+|--------------------------|---------------------|--------------------------------------------------------------------|
+| `(by arith (list))`      | tautology/decision  | plain linear-integer identities (lhs−rhs ≡ 0); `(int_eq a b) = True` / `(sym_eq a b) = True` reflexivity; `(lt a b) = True` / `(le a b) = True` when `b−a` is a constant of the right sign; `(= a b)` from an in-scope `(int_eq\|sym_eq a b) = True` premise/hyp (the reflect scan) |
+| `(by arith (list G M0 …))` | Farkas entailment | premises ⊢ `(lt\|le a b) = True/False`, `(int_eq a b) = True/False`, or a plain `L = R`, by a **checked** multiplier certificate |
 
-Only `farkas` reads its payload. The payload is **checker data**, *not*
-an object-term snippet: `(list 1 1 -2)` parses into the kernel's small
-cert grammar (`CData` — ints and nested lists), and each theory decodes
-the shape it expects. A single-sided cert is `(list G M0 M1 …)` — `G`
+The payload is **checker data**, *not* an object-term snippet:
+`(list 1 1 -2)` parses into the kernel's small cert grammar (`CData` —
+ints and nested lists). A single-sided cert is `(list G M0 M1 …)` — `G`
 multiplies the negated goal, `Mk` premise `k`; an equality conclusion
 (`int_eq…=True` or plain `L = R`) takes the two-sided
 `(list le_mults ge_mults)`, two independent refutations. Inequality
 premises take nonnegative multipliers; equality premises take either
-sign. The other three theories take an empty `(list)`.
+sign. An EMPTY `(list)` selects the decision side — deterministic
+procedures, no search, premises ignored except by the reflect scan.
+
+> History: until 2026-07 these were five backend names
+> (`lia`/`eqdec`/`reflect`/`ord`/`farkas`) over the same polynomial
+> machinery; they collapsed into `arith` (REVISIT — "arith — the
+> backends unified").
 
 ### 10.8 Object-snippet sugars
 

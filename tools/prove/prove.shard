@@ -45,7 +45,7 @@
 (import "../../kernel/term.shard")  ; Expr / QName / chars_of_sym
 (import "../../kernel/proof.shard")  ; Goal / Equation / Param
 (import "../../kernel/types.shard")  ; tc_scrut_targs (the case-on type gate)
-(import "../../kernel/farkas.shard")  ; farkas_finish / neg_goal_poly (cert search)
+(import "../../kernel/arith.shard")  ; farkas_finish / neg_goal_poly (cert search)
 (import "../../kernel/admit.shard")  ; ad_sccs — the call-graph SCC partition
 (import "../../kernel/checker.shard")  ; check_sequent / build_induct_subgoal
 (import "../../kernel/reader.shard")  ; read_all / SExpr / RCtx / build_module_d
@@ -105,14 +105,14 @@
 (use (:: kernel checker inst_ctor_fields))
 (use (:: kernel types tc_scrut_targs))
 (use (:: kernel checker find_param))
-(use (:: kernel farkas farkas_finish))
-(use (:: kernel farkas farkas_refute))
-(use (:: kernel farkas neg_goal_poly))
-(use (:: kernel farkas premise_to_constraint))
-(use (:: kernel farkas poly_sub))
-(use (:: kernel farkas poly_minus1))
-(use (:: kernel farkas farkas_is_eq_true_goal))
-(use (:: kernel farkas farkas_is_single_goal))
+(use (:: kernel arith farkas_finish))
+(use (:: kernel arith farkas_refute))
+(use (:: kernel arith neg_goal_poly))
+(use (:: kernel arith premise_to_constraint))
+(use (:: kernel arith poly_sub))
+(use (:: kernel arith poly_minus1))
+(use (:: kernel arith farkas_is_eq_true_goal))
+(use (:: kernel arith farkas_is_single_goal))
 (use (:: kernel checker seq_params))
 (use (:: kernel admit ad_sccs))  ; call-graph SCC partition for opaque-module verify
 (use (:: kernel proof Theory))
@@ -159,9 +159,7 @@
     "refl"
     "(steps ((compute both)) refl)"
     "(steps ((simp both)) refl)"
-    "(by eqdec (list))"
-    "(by ord (list))"
-    "(by lia (list))"))
+    "(by arith (list))"))
 
 ;; one (proof-for NAME PROOF) entry, as bytes.
 (fn sidecar_for ((claim (List Int)) (cand (List Int))) (List Int)
@@ -387,8 +385,7 @@
   (match cands
     (Nil None)
     ((Cons c rest)
-     (if (try_cand_m s cm th seq c) (Some c)
-     (try_ladder_m s cm th seq rest)))))
+     (if (try_cand_m s cm th seq c) (Some c) (try_ladder_m s cm th seq rest)))))
 
 ;; the slow ladder: a full driver pass per candidate. Only for decls whose
 ;; goal is not recoverable from the target file (a fulfills whose requirement
@@ -734,8 +731,8 @@
       (append_cands
         (with_terminal pfxs "refl")
         (append_cands
-          (list "(by eqdec (list))" "(by ord (list))" "(by lia (list))")
-          (with_terminal pfxs "(by lia (list))"))))))
+          (list "(by arith (list))")
+          (with_terminal pfxs "(by arith (list))"))))))
 
 ;; parse one candidate's bytes to a native Proof (against the file's scope).
 (fn parse_cand ((m Module) (rctx RCtx) (bytes (List Int))) (Option Proof)
@@ -1032,7 +1029,7 @@
        (farkas_cands seq)))))
 
 ;; ---- farkas certificate search ---------------------------------------------
-;; (by farkas …) closes ENTAILMENTS (premised linear-int goals). FINDING the
+;; (by arith …) closes ENTAILMENTS (premised linear-int goals). FINDING the
 ;; multipliers is exactly the untrusted proposer's job: the solver tests
 ;; candidate vectors DIRECTLY against the kernel's own farkas math
 ;; (farkas_finish / farkas_refute — coverage only, never soundness; a winner
@@ -1172,8 +1169,7 @@
          (fk_smax p))
        (None None)
        ((Some v)
-        (Some
-          (append_int "(by farkas (list " (append_int (fk_show_vec v) "))"))))))))
+        (Some (append_int "(by arith (list " (append_int (fk_show_vec v) "))"))))))))
 
 ;; two-sided: refute ¬(a<=b) and ¬(b<=a) independently; both must close.
 (fn fk_two_sided
@@ -1199,7 +1195,7 @@
        ((Some ge_v)
         (Some
           (append_int
-            "(by farkas (list (list "
+            "(by arith (list (list "
             (append_int
               (fk_show_vec le_v)
               (append_int ") (list " (append_int (fk_show_vec ge_v) ")))"))))))))))
@@ -1323,7 +1319,8 @@
   (match prems
     (Nil acc)
     ((Cons p rest)
-     (ms_subterms rest
+     (ms_subterms
+       rest
        (match p
          ((SList (Cons (SSym _eq) (Cons (SSym _v) (Cons rhs Nil))))
           (if (ms_is_struct_prem p) (ms_vars rhs acc) acc))
@@ -1340,7 +1337,8 @@
   (match xs
     (Nil Nil)
     ((Cons h t)
-     (if (ms_sym_in h seen) (ms_dedup t seen) (Cons h (ms_dedup t (Cons h seen)))))))
+     (if (ms_sym_in h seen) (ms_dedup t seen)
+     (Cons h (ms_dedup t (Cons h seen)))))))
 
 ;; the bound var of a structural premise (= v (c …)).
 (fn ms_var_of_prem ((p SExpr)) (Option Symbol)
@@ -1408,7 +1406,9 @@
              " "
              (append_int
                (chars_of_sym st)
-               (append_int ")) True) (rewrite-with (lemma " (append_int nonneg ") lr lhs () () refl) "))))))
+               (append_int
+                 ")) True) (rewrite-with (lemma "
+                 (append_int nonneg ") lr lhs () () refl) "))))))
        (append_int (ms_haves rest sizefn nonneg inner) ")")))))
 
 (fn ms_build
@@ -1428,7 +1428,7 @@
       (append_int
         rewrites
         (append_int
-          "(simp lhs)) (by farkas (list 1"
+          "(simp lhs)) (by arith (list 1"
           (append_int (ms_zeros prems) (append_int (ms_ones subset cf) ")))")))))))
 
 ;; A NONNEG obligation  0 <= M*base(ARG)+off : `have` base(ARG)>=0 (citing its
@@ -1447,16 +1447,14 @@
     sizefn
     nonneg
     (append_int
-      "(steps ((simp lhs)) (by farkas (list 1"
-      (append_int
-        (ms_zeros prems)
-        (append_int " " (append_int cf ")))"))))))
+      "(steps ((simp lhs)) (by arith (list 1"
+      (append_int (ms_zeros prems) (append_int " " (append_int cf ")))"))))))
 
 ;; size-1 subsets only: a measure-descent obligation needs at most ONE nonneg
 ;; have (the caller measure unfolds to 1 + callee-measure + ONE sibling size
 ;; term). Enumerating all 2^n subsets is what made the recipe blow past the
 ;; budget on big premises (RewriteWith has ~6 binder subterms); singletons keep
-;; it linear. The empty subset is handled separately by ms_ord_build.
+;; it linear. The empty subset is handled separately by ms_taut_build.
 (fn ms_singletons ((xs (List Symbol))) (List (List Symbol))
   (measure (struct xs))
   (match xs
@@ -1534,14 +1532,14 @@
                None))
             (_ None)))
          (_ None))
-       (if (sym_eq f (quote *))  ; bare (* M (base arg)) — read base under the scaling
-         (match rest
-           ((Cons _m (Cons baseCall Nil))
-            (match baseCall
-              ((SList (Cons (SSym base) _)) (Some base))
-              (_ None)))
-           (_ None))
-         (Some f))))
+     (if (sym_eq f (quote *))  ; bare (* M (base arg)) — read base under the scaling
+       (match rest
+         ((Cons _m (Cons baseCall Nil))
+          (match baseCall
+            ((SList (Cons (SSym base) _)) (Some base))
+            (_ None)))
+         (_ None))
+       (Some f))))
     (_ None)))
 
 ;; The multiplier M of a measured side: M from (+ (* M base) off), else 1.
@@ -1553,11 +1551,11 @@
          ((SList (Cons (SSym star) (Cons (SInt k) _)))
           (if (sym_eq star (quote *)) k 1))
          (_ 1))
-       (if (sym_eq f (quote *))  ; bare (* M base) — scaled, no offset
-         (match mulS
-           ((SInt k) k)
-           (_ 1))
-         1)))
+     (if (sym_eq f (quote *))  ; bare (* M base) — scaled, no offset
+       (match mulS
+         ((SInt k) k)
+         (_ 1))
+       1)))
     (_ 1)))
 
 ;; The base call (base ARG…) inside a measured side (peels the lex wrapper).
@@ -1569,11 +1567,11 @@
          ((Cons (SList (Cons (SSym star) (Cons _k (Cons baseCall Nil)))) _)
           (if (sym_eq star (quote *)) (Some baseCall) None))
          (_ None))
-       (if (sym_eq f (quote *))  ; bare (* M baseCall) — peel the scaling
-         (match rest
-           ((Cons _k (Cons baseCall Nil)) (Some baseCall))
-           (_ None))
-         (Some m))))  ; bare: m IS the base call
+     (if (sym_eq f (quote *))  ; bare (* M baseCall) — peel the scaling
+       (match rest
+         ((Cons _k (Cons baseCall Nil)) (Some baseCall))
+         (_ None))
+       (Some m))))  ; bare: m IS the base call
     (_ None)))
 
 ;; The (symbol) argument of a (base ARG …) call — the measure's own parameter.
@@ -1589,17 +1587,16 @@
      (match prems
        (Nil
          (match l
-           ((Call _le (Cons (IntLit 0) (Cons (Call f _) Nil))) (Some (qn_name f)))
+           ((Call _le (Cons (IntLit 0) (Cons (Call f _) Nil)))
+            (Some (qn_name f)))
            (_ None)))
        (_ None)))))
 
-(fn ms_nn_acc
-  ((q QName) (lg Goal) (tl (List (Pair (List Int) (List Int)))))
+(fn ms_nn_acc ((q QName) (lg Goal) (tl (List (Pair (List Int) (List Int)))))
   (List (Pair (List Int) (List Int)))
   (match (ms_nonneg_sizefn lg)
     (None tl)
-    ((Some f)
-     (Cons (Pair (chars_of_sym f) (chars_of_sym (qn_name q))) tl))))
+    ((Some f) (Cons (Pair (chars_of_sym f) (chars_of_sym (qn_name q))) tl))))
 
 ;; EVERY (sizefn-chars, lemma-name-chars) pair the theory offers as a nonneg
 ;; fact. The decrease recipe tries each, so a have lands the size fn matching
@@ -1622,8 +1619,8 @@
 ;; `have` — this is the empty-subset case the subset enumeration skips, and the
 ;; common shape for a SUFFIX/forwarding recursion (proof_size sub < proof_size
 ;; (Ctor … sub) = 1 + proof_size sub).
-(fn ms_ord_build ((rewrites (List Int))) (List Int)
-  (append_int "(steps (" (append_int rewrites "(simp lhs)) (by ord (list)))")))
+(fn ms_taut_build ((rewrites (List Int))) (List Int)
+  (append_int "(steps (" (append_int rewrites "(simp lhs)) (by arith (list)))")))
 
 ;; Decrease candidates over EVERY theory size fn (so the right one is tried per
 ;; subterm), one block per (sizefn, nonneg-lemma) pair.
@@ -1666,10 +1663,10 @@
   (measure (struct xs))
   (match xs
     (Nil Nil)
-    ((Cons h t) (if (ms_sym_in h rem) (ms_minus t rem) (Cons h (ms_minus t rem))))))
+    ((Cons h t)
+     (if (ms_sym_in h rem) (ms_minus t rem) (Cons h (ms_minus t rem))))))
 
-(fn ms_app_subs
-  ((a (List (List Symbol))) (b (List (List Symbol))))
+(fn ms_app_subs ((a (List (List Symbol))) (b (List (List Symbol))))
   (List (List Symbol))
   (measure (struct a))
   (match a
@@ -1697,13 +1694,15 @@
     ((Cons p rest)
      (match (ms_var_of_prem p)
        ((Some v)
-        (if (ms_is_struct_prem p) (Cons v (ms_lhs_vars rest)) (ms_lhs_vars rest)))
+        (if (ms_is_struct_prem p) (Cons v (ms_lhs_vars rest))
+        (ms_lhs_vars rest)))
        (None (ms_lhs_vars rest))))))
 
 ;; the RHS subterm vars of one structural premise, added to acc.
 (fn ms_prem_rhs_vars ((p SExpr) (acc (List Symbol))) (List Symbol)
   (match p
-    ((SList (Cons (SSym _eq) (Cons (SSym _v) (Cons rhs Nil)))) (ms_vars rhs acc))
+    ((SList (Cons (SSym _eq) (Cons (SSym _v) (Cons rhs Nil))))
+     (ms_vars rhs acc))
     (_ acc)))
 
 ;; close gv over the chained premises: a structural premise whose bound var is
@@ -1716,7 +1715,8 @@
   (match prems
     (Nil gv)
     ((Cons p rest)
-     (ms_gv_close_1 rest
+     (ms_gv_close_1
+       rest
        (match (ms_var_of_prem p)
          ((Some v)
           (if (ms_is_struct_prem p)
@@ -1752,14 +1752,16 @@
 (fn ms_leaf_ctor_name ((c Symbol)) Bool
   (if (sym_eq c (quote SSym)) True
   (if (sym_eq c (quote SInt)) True
-  (if (sym_eq c (quote SStr)) True False))))
+  (if (sym_eq c (quote SStr)) True
+  False))))
 
 (fn ms_nonsized ((prems (List SExpr)) (acc (List Symbol))) (List Symbol)
   (measure (struct prems))
   (match prems
     (Nil acc)
     ((Cons p rest)
-     (ms_nonsized rest
+     (ms_nonsized
+       rest
        (match p
          ((SList (Cons (SSym _eq) (Cons (SSym _v) (Cons rhs Nil))))
           (match rhs
@@ -1787,7 +1789,9 @@
              " "
              (append_int
                (chars_of_sym st)
-               (append_int ")) True) (rewrite-with (lemma " (append_int nonneg ") lr lhs () () refl) "))))))
+               (append_int
+                 ")) True) (rewrite-with (lemma "
+                 (append_int nonneg ") lr lhs () () refl) "))))))
        (append_int (ms_haves_mixed rest inner) ")")))))
 
 ;; one farkas slot (coeff cf) per assigned have.
@@ -1812,8 +1816,10 @@
       (append_int
         rewrites
         (append_int
-          "(simp lhs)) (by farkas (list 1"
-          (append_int (ms_zeros prems) (append_int (ms_ones_assign assign cf) ")))")))))))
+          "(simp lhs)) (by arith (list 1"
+          (append_int
+            (ms_zeros prems)
+            (append_int (ms_ones_assign assign cf) ")))")))))))
 
 ;; cartesian assignment of (size fn, nonneg lemma) pairs to leaf subterms: every
 ;; way to give each leaf one size fn. The right assignment matches each leaf's
@@ -1876,43 +1882,34 @@
 ;; (subterms minus the substituted-away intermediates, the recursed-on atom, and
 ;; the non-sized leaf-ctor payloads). Bounded to ≤3 leaves so L^k stays small.
 (fn ms_nested_cands
-  ((prems (List SExpr))
-   (aSide SExpr)
-   (bSide SExpr)
-   (th Theory)
-   (cf (List Int)))
+  ((prems (List SExpr)) (aSide SExpr) (bSide SExpr) (th Theory) (cf (List Int)))
   (List (List Int))
   (if (ms_has_nesting prems)
     (match
-      (ms_rewrites_g prems 0
+      (ms_rewrites_g
+        prems
+        0
         (ms_gv_close prems (ms_vars aSide (ms_vars bSide Nil))))
       (rws
-       (match
-         ;; leaves are the binders REACHABLE from the caller-measure argument
-         ;; (its gv-closure), minus the substituted-away intermediates, the
-         ;; recursed-on atom, and the non-sized leaf-ctor payloads. Seeding from
-         ;; bSide (not all subterms) drops binders of a SIBLING match on an
-         ;; unrelated value — e.g. (match st ((Pair i acc) …)) binds i/acc, which
-         ;; are not SExpr and would sink every cartesian assignment.
-         (ms_minus
-           (ms_minus
-             (ms_minus
-               (ms_dedup
-                 (ms_gv_close prems (ms_measure_args bSide Nil))
-                 Nil)
-               (ms_lhs_vars prems))
-             (ms_measure_args aSide Nil))
-           (ms_nonsized prems Nil))
-         (leaves
-          (if (lt 3 (ms_len leaves))
-            Nil
+        (match
+          ;; leaves are the binders REACHABLE from the caller-measure argument
+          ;; (its gv-closure), minus the substituted-away intermediates, the
+          ;; recursed-on atom, and the non-sized leaf-ctor payloads. Seeding from
+          ;; bSide (not all subterms) drops binders of a SIBLING match on an
+          ;; unrelated value — e.g. (match st ((Pair i acc) …)) binds i/acc, which
+          ;; are not SExpr and would sink every cartesian assignment.
+          (ms_minus
+            (ms_minus
+              (ms_minus
+                (ms_dedup (ms_gv_close prems (ms_measure_args bSide Nil)) Nil)
+                (ms_lhs_vars prems))
+              (ms_measure_args aSide Nil))
+            (ms_nonsized prems Nil))
+          (leaves
+            (if (lt 3 (ms_len leaves)) Nil
             (Cons
-              (ms_ord_build rws)
-              (ms_mixed_all
-                (ms_assign leaves (ms_all_nonnegs th))
-                prems
-                rws
-                cf)))))))
+              (ms_taut_build rws)
+              (ms_mixed_all (ms_assign leaves (ms_all_nonnegs th)) prems rws cf)))))))
     Nil))
 
 ;; recipe candidates for a measure obligation goalS. Handles DECREASE
@@ -1924,7 +1921,9 @@
     ((SList (Cons _g (Cons _pForm (Cons (SList prems) (Cons concl Nil)))))
      (match concl
        ((SList
-          (Cons _eq (Cons (SList (Cons (SSym rel) (Cons aSide (Cons bSide _)))) _)))
+          (Cons
+            _eq
+            (Cons (SList (Cons (SSym rel) (Cons aSide (Cons bSide _)))) _)))
         (if (sym_eq rel (quote lt))
           ;; DECREASE. Two candidate families, both after rewriting the path
           ;; premises and simp-ing the goal so the caller measure unfolds over
@@ -1956,39 +1955,43 @@
              (cf (show_int (ms_mult aSide))))
             (append_cands
               (Cons
-                (ms_ord_build rws)
+                (ms_taut_build rws)
                 (ms_cands_multi subs prems rws (ms_all_nonnegs th) cf))
               (ms_nested_cands prems aSide bSide th cf)))
-        (if (sym_eq rel (quote le))
-          ;; NONNEG: (le 0 measure) — bSide = measure; one have over its own arg.
-          (match aSide
-            ((SInt 0)
-             (append_cands
-               (match (ms_base_call bSide)
-                 (None Nil)
-                 ((Some baseCall)
-                  (match (ms_call_arg baseCall)
-                    (None Nil)
-                    ((Some arg)
-                     (match (ms_base_sizefn bSide)
-                       (None Nil)
-                       ((Some base)
-                        (match (find_nonneg_lemma th base)
-                          (None Nil)
-                          ((Some nonneg)
-                           (Cons
-                             (ms_nonneg_build arg prems (chars_of_sym base) nonneg
-                               (show_int (ms_mult bSide)))
-                             Nil)))))))))
-               ;; additive measure (1 + size c + size t + …): a `have` per atom.
-               (ms_cands_multi
-                 (Cons (ms_dedup (ms_measure_args bSide Nil) Nil) Nil)
-                 prems
-                 Nil
-                 (ms_all_nonnegs th)
-                 (show_int (ms_mult bSide)))))
-            (_ Nil))
-          Nil)))
+          (if (sym_eq rel (quote le))
+            ;; NONNEG: (le 0 measure) — bSide = measure; one have over its own arg.
+            (match aSide
+              ((SInt 0)
+               (append_cands
+                 (match (ms_base_call bSide)
+                   (None Nil)
+                   ((Some baseCall)
+                    (match (ms_call_arg baseCall)
+                      (None Nil)
+                      ((Some arg)
+                       (match (ms_base_sizefn bSide)
+                         (None Nil)
+                         ((Some base)
+                          (match (find_nonneg_lemma th base)
+                            (None Nil)
+                            ((Some nonneg)
+                             (Cons
+                               (ms_nonneg_build
+                                 arg
+                                 prems
+                                 (chars_of_sym base)
+                                 nonneg
+                                 (show_int (ms_mult bSide)))
+                               Nil)))))))))
+                 ;; additive measure (1 + size c + size t + …): a `have` per atom.
+                 (ms_cands_multi
+                   (Cons (ms_dedup (ms_measure_args bSide Nil) Nil) Nil)
+                   prems
+                   Nil
+                   (ms_all_nonnegs th)
+                   (show_int (ms_mult bSide)))))
+              (_ Nil))
+            Nil)))
        (_ Nil)))
     (_ Nil)))
 
@@ -2034,8 +2037,7 @@
 ;; report-only COLedger lines, not COPass), and the GATE re-verifies every
 ;; generated cert at check time anyway (that is the authoritative check). The
 ;; candidate set is the claim ladder plus the measure recipe (measure_cands).
-(fn solve_measure
-  ((s Slv) (cm Module) (cth Theory) (seq Sequent) (goalS SExpr))
+(fn solve_measure ((s Slv) (cm Module) (cth Theory) (seq Sequent) (goalS SExpr))
   (Option (List Int))
   (try_ladder_m
     s
@@ -2286,7 +2288,8 @@
   (measure (struct obs))
   (match obs
     (Nil Nil)
-    ((Cons (Pair k g) rest) (Cons (AutoDecl k Nil (Some g)) (obs_to_decls rest)))))
+    ((Cons (Pair k g) rest)
+     (Cons (AutoDecl k Nil (Some g)) (obs_to_decls rest)))))
 
 (fn append_decls ((a (List AutoDecl)) (b (List AutoDecl))) (List AutoDecl)
   (measure (struct a))
@@ -2318,7 +2321,8 @@
    (forms (List SExpr))
    (w World))
   World
-  (match (append_decls (auto_decls forms forms) (measure_decls target srcs forms))
+  (match
+    (append_decls (auto_decls forms forms) (measure_decls target srcs forms))
     (ds
       (match mclaim
         ((Some cb)

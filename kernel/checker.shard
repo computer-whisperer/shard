@@ -32,10 +32,7 @@
 (import "proof.shard")
 (import "proof_size.shard")  ; proof_size / case_list_size — the SCC measure
 (import "reduce.shard")
-(import "lia.shard")
-(import "eqdec.shard")
-(import "ord.shard")
-(import "farkas.shard")
+(import "arith.shard")
 (import "types.shard")  ; mid-proof type gates (have / wf-measure / citations)
 (use (:: kernel term *))
 (use (:: kernel expr_size *))
@@ -43,10 +40,7 @@
 (use (:: kernel proof *))
 (use (:: kernel proof_size *))
 (use (:: kernel reduce *))
-(use (:: kernel lia *))
-(use (:: kernel eqdec *))
-(use (:: kernel ord *))
-(use (:: kernel farkas *))
+(use (:: kernel arith *))
 (use (:: kernel types *))
 
 (type Sequent
@@ -319,46 +313,22 @@
           (_ False)))))
 
     ((ByTheory theory_name cert)
-     ;; Per-theory dispatch. The cert's payload is theory-specific.
-     ;; v2 registers two theories:
-     ;;   lia   — linear integer arithmetic. Decides by normalizing
-     ;;           both sides of the goal eq into polynomials and
-     ;;           checking lhs - rhs canonicalizes to all zero
-     ;;           coefficients. Cert payload unused (poly-time; no
-     ;;           checking/searching asymmetry to exploit).
-     ;;   eqdec — equality-reflection: decides `(int_eq a b) = True`
-     ;;           via lia_decide and `(sym_eq a b) = True` via
-     ;;           expr_eq. See eqdec.shard. This is what discharges
-     ;;           reflexivity facts like `int_eq k k = True` that the
-     ;;           reducer leaves stuck on variables.
-     ;;   reflect— eqdec's INVERSE: discharges `(= a b)` from an in-scope
-     ;;           premise/hyp `(eqprim a b) = True` (eqprim ∈ int_eq/sym_eq).
-     ;;           Same trust as eqdec (no new axiom). The reverse direction
-     ;;           symbol-keyed lookup proofs need. See eqdec.shard.
-     ;;   ord   — order-reflection: decides `(lt a b) = True` and
-     ;;           `(le a b) = True` when (b - a) canonicalizes to a
-     ;;           constant of the right sign. See ord.shard.
-     ;;   farkas— linear-integer ENTAILMENT: premises ⊢ (lt|le a b)=True
-     ;;           via a cert-supplied Farkas combination. The first
-     ;;           backend that reads the sequent's PREMISES and the
-     ;;           Cert payload. See farkas.shard.
-     (if (sym_eq theory_name (quote lia))
+     ;; ONE registered theory: `arith` — linear-integer decision +
+     ;; entailment + equality reflection, unified. Dispatch is
+     ;; CERT-ONLY (one code path per input shape, no fallback):
+     ;;   (by arith (list))        — EMPTY payload: the tautology /
+     ;;     decision side. Plain LIA equalities, (int_eq|sym_eq a b)=True
+     ;;     reflexivity, (lt|le a b)=True order tautologies, and the
+     ;;     reflect scan (`(= a b)` from an in-scope (eqprim a b)=True
+     ;;     premise/hyp). Deterministic decision procedures — no search.
+     ;;   (by arith (list G M0 …)) — NON-EMPTY payload: a Farkas
+     ;;     certificate for  premises ⊢ goal ; the kernel CHECKS the
+     ;;     supplied multipliers (single- or two-sided). See arith.shard.
+     (if (sym_eq theory_name (quote arith))
        (match seq
-         ((Sequent _ _ _ (Equation lhs rhs)) (lia_decide lhs rhs)))
-     (if (sym_eq theory_name (quote eqdec))
-       (match seq
-         ((Sequent _ _ _ (Equation lhs rhs)) (eqdec_decide lhs rhs)))
-     (if (sym_eq theory_name (quote reflect))
-       (match seq
-         ((Sequent _ hyps premises (Equation a b))
-          (reflect_decide a b hyps premises)))
-     (if (sym_eq theory_name (quote ord))
-       (match seq
-         ((Sequent _ _ _ (Equation lhs rhs)) (ord_decide lhs rhs)))
-     (if (sym_eq theory_name (quote farkas))
-       (match seq
-         ((Sequent _ _ premises goal_eq) (farkas_check premises goal_eq cert)))
-       False))))))  ; unknown theory
+         ((Sequent _ hyps premises goal_eq)
+          (arith_check hyps premises goal_eq cert)))
+       False))  ; unknown theory
 
     ;; FinSplit/Have/DivFacts: likewise inlined (see the Induct group note).
     ;; Each recursive call is a direct check_sequent on a structural sub-proof
@@ -2157,24 +2127,24 @@
 (fn eps_h ((a Expr) (x Expr) (hyps (List Goal)) (fuel Int)) Bool
   (measure
     fuel
-    (by farkas (list 1 0))
-    (by farkas (list 1 1))
-    (by farkas (list 1 0))
-    (by farkas (list 1 1))
-    (by farkas (list 1 0))
-    (by farkas (list 1 1))
-    (by farkas (list 1 0))
-    (by farkas (list 1 1))
-    (by farkas (list 1 0))
-    (by farkas (list 1 1))
-    (by farkas (list 1 0))
-    (by farkas (list 1 1))
-    (by farkas (list 1 0))
-    (by farkas (list 1 1))
-    (by farkas (list 1 0))
-    (by farkas (list 1 1))
-    (by farkas (list 1 0))
-    (by farkas (list 1 1)))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1)))
   (if (lt fuel 1) False
   (match x
     ((Ctor _ args) (eps_list_h a args hyps (- fuel 1)))
@@ -2194,10 +2164,10 @@
 (fn eps_child_h ((a Expr) (c Expr) (hyps (List Goal)) (fuel Int)) Bool
   (measure
     fuel
-    (by farkas (list 1 0))
-    (by farkas (list 1 1))
-    (by farkas (list 1 0))
-    (by farkas (list 1 1)))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1)))
   (if (lt fuel 1) False
   (if (expr_eq a c) True
   (if (eps_h a c hyps (- fuel 1))
@@ -2213,10 +2183,10 @@
 (fn eps_list_h ((a Expr) (xs (List Expr)) (hyps (List Goal)) (fuel Int)) Bool
   (measure
     fuel
-    (by farkas (list 1 0))
-    (by farkas (list 1 1))
-    (by farkas (list 1 0))
-    (by farkas (list 1 1)))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1)))
   (if (lt fuel 1) False
   (match xs
     (Nil False)
@@ -2227,10 +2197,10 @@
 (fn eps_arms_h ((a Expr) (arms (List Arm)) (hyps (List Goal)) (fuel Int)) Bool
   (measure
     fuel
-    (by farkas (list 1 0))
-    (by farkas (list 1 1))
-    (by farkas (list 1 0))
-    (by farkas (list 1 1)))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1)))
   (if (lt fuel 1) False
   (match arms
     (Nil False)

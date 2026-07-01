@@ -73,7 +73,7 @@
 ;; -----------------------------------------------------------------
 
 ((symbol) @constant.builtin
-  (#match? @constant.builtin "^(lia|eqdec|ord|farkas)$"))
+  (#match? @constant.builtin "^(arith)$"))
 
 ;; -----------------------------------------------------------------
 ;; Bool / wildcard.
