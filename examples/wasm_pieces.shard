@@ -1,7 +1,16 @@
-;;; wasm_pieces.shard — slice 2 of the ISA arc (docs/ISA.md §6): two
+;;; wasm_pieces.shard — slices 2-3 of the ISA arc (docs/ISA.md §6): three
 ;;; hand-written wasm pieces with SYMBOLIC piece theorems, stated in the
 ;;; equational big-step form welds cite:
 ;;;     ∀ x,  (call_fn FUEL m k (encode x)) = (Some (spec x))
+;;;
+;;; Weldable form (the slice-3 finding): a piece's theorem pins ONLY the
+;;; module slots it touches — its own entry and its callees' — as ctor
+;;; literals at their ABI indices; every other slot is an OPAQUE binder
+;;; (a filler Func the lookup walks past without inspecting) and the list
+;;; tail is an opaque (restfs (List Func)). A weld instantiates fillers
+;;; and tail with the actual co-resident pieces — composite theorems are
+;;; pure instantiations, one rewrite-with each. ABI layout for these
+;;; pieces: add=0, sum=1, triple=2.
 ;;;
 ;;; Fuel discipline (the slice-2 finding): fuel terms are spelled as concrete
 ;;; FS towers over an opaque tail — the interpreter ι-reduces through exactly
@@ -46,6 +55,11 @@
               (Br 0)))))
       (LocalGet 1))))
 
+;; piece C — func 2: triple(x) = add(add(x,x),x), two Calls across the
+;; opaque slot 1 (triple's theorem never mentions sum).
+(fn ptriple () Func
+  (MkFunc 1 0 (list (LocalGet 0) (LocalGet 0) (Call 0) (LocalGet 0) (Call 0))))
+
 (fn pmod () WModule (MkWModule (list (padd) (psum))))
 
 ;; --- specs (ordinary shard functions) ------------------------------------------
@@ -57,6 +71,8 @@
 (fn sum_go ((n Int) (acc Int)) Int
   (measure n (by arith (list 1 0)) (by arith (list 1 1)))
   (if (lt n 1) acc (sum_go (- n 1) (wrap32 (+ acc n)))))
+
+(fn triple_spec ((x Int)) Int (wrap32 (+ (wrap32 (+ x x)) x)))
 
 ;; --- fuel towers ----------------------------------------------------------------
 
@@ -76,15 +92,47 @@
 ;; Concrete code + tower fuel + symbolic values: closes by compute alone.
 ;; The tail c is untouched (9 concrete FS cover the whole run), so the
 ;; theorem holds at ANY fuel of this shape — that's the weld's slack.
+;; Weldable: pins only slot 0 (itself); restfs = whatever else is welded in.
 (claim add_thm
-  (goal ((a Int) (b Int) (c Fuel)) ()
+  (goal ((a Int) (b Int) (c Fuel) (restfs (List Func))) ()
     (=
       (call_fn
         (FS (FS (FS (FS (FS (FS (FS (FS (FS c)))))))))
-        (pmod)
+        (MkWModule
+          (Cons
+            (MkFunc 2 0 (list (LocalGet 0) (LocalGet 1) (I32Bin BAdd)))
+            restfs))
         0
         (list a b))
       (Some (wrap32 (+ a b)))))
+  (steps ((compute both)) refl))
+
+;; triple: pins slot 0 (callee add) and slot 2 (itself); slot 1 is an OPAQUE
+;; filler — func_at walks past it on index arithmetic without inspecting it.
+(claim triple_thm
+  (goal ((x Int) (c Fuel) (f1 Func) (restfs (List Func))) ()
+    (=
+      (call_fn
+        (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS c))))))))))))
+        (MkWModule
+          (Cons
+            (MkFunc 2 0 (list (LocalGet 0) (LocalGet 1) (I32Bin BAdd)))
+            (Cons
+              f1
+              (Cons
+                (MkFunc
+                  1
+                  0
+                  (list
+                    (LocalGet 0)
+                    (LocalGet 0)
+                    (Call 0)
+                    (LocalGet 0)
+                    (Call 0)))
+                restfs))))
+        2
+        (list x))
+      (Some (triple_spec x))))
   (steps ((compute both)) refl))
 
 ;; --- arith mini-lemmas (hyp-facts feed farkas via premised lemmas) ---------------
@@ -174,7 +222,7 @@
 ;; evaluates call arguments, so the citable redex in a consumer's goal holds
 ;; the evaluated literal — a folded (pmod) spelling would never match.
 (claim sum_loop_worker
-  (goal ((n Int) (acc Int) (st (List Int)) (c Fuel))
+  (goal ((n Int) (acc Int) (st (List Int)) (c Fuel) (restfs (List Func)))
     ((= (le 0 n) True) (= (lt n 4294967296) True))
     (=
       (eval_loop
@@ -182,29 +230,31 @@
           (FS
             (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (pf_sum n c))))))))))))))
         (MkWModule
-          (list
+          (Cons
             (MkFunc 2 0 (list (LocalGet 0) (LocalGet 1) (I32Bin BAdd)))
-            (MkFunc
-              1
-              1
-              (list
-                (Block
-                  (list
-                    (Loop
-                      (list
-                        (LocalGet 0)
-                        (I32Eqz)
-                        (BrIf 1)
-                        (LocalGet 1)
-                        (LocalGet 0)
-                        (Call 0)
-                        (LocalSet 1)
-                        (LocalGet 0)
-                        (I32Const 1)
-                        (I32Bin BSub)
-                        (LocalSet 0)
-                        (Br 0)))))
-                (LocalGet 1)))))
+            (Cons
+              (MkFunc
+                1
+                1
+                (list
+                  (Block
+                    (list
+                      (Loop
+                        (list
+                          (LocalGet 0)
+                          (I32Eqz)
+                          (BrIf 1)
+                          (LocalGet 1)
+                          (LocalGet 0)
+                          (Call 0)
+                          (LocalSet 1)
+                          (LocalGet 0)
+                          (I32Const 1)
+                          (I32Bin BSub)
+                          (LocalSet 0)
+                          (Br 0)))))
+                  (LocalGet 1)))
+              restfs)))
         (list
           (LocalGet 0)
           (I32Eqz)
@@ -299,32 +349,34 @@
                                            (FS
                                              (FS (FS (FS (pf_sum (- n 1) c))))))))))))))
                          (MkWModule
-                           (list
+                           (Cons
                              (MkFunc
                                2
                                0
                                (list (LocalGet 0) (LocalGet 1) (I32Bin BAdd)))
-                             (MkFunc
-                               1
-                               1
-                               (list
-                                 (Block
-                                   (list
-                                     (Loop
-                                       (list
-                                         (LocalGet 0)
-                                         (I32Eqz)
-                                         (BrIf 1)
-                                         (LocalGet 1)
-                                         (LocalGet 0)
-                                         (Call 0)
-                                         (LocalSet 1)
-                                         (LocalGet 0)
-                                         (I32Const 1)
-                                         (I32Bin BSub)
-                                         (LocalSet 0)
-                                         (Br 0)))))
-                                 (LocalGet 1)))))
+                             (Cons
+                               (MkFunc
+                                 1
+                                 1
+                                 (list
+                                   (Block
+                                     (list
+                                       (Loop
+                                         (list
+                                           (LocalGet 0)
+                                           (I32Eqz)
+                                           (BrIf 1)
+                                           (LocalGet 1)
+                                           (LocalGet 0)
+                                           (Call 0)
+                                           (LocalSet 1)
+                                           (LocalGet 0)
+                                           (I32Const 1)
+                                           (I32Bin BSub)
+                                           (LocalSet 0)
+                                           (Br 0)))))
+                                   (LocalGet 1)))
+                               restfs)))
                          (list
                            (LocalGet 0)
                            (I32Eqz)
@@ -382,7 +434,8 @@
 ;; shift lemma then re-spells the same tower with the per-pass budget concrete
 ;; at the head — the worker's shape. FS^3 outside covers call_fn's plumbing.
 (claim sum_thm
-  (goal ((n Int) (c Fuel)) ((= (le 0 n) True) (= (lt n 4294967296) True))
+  (goal ((n Int) (c Fuel) (restfs (List Func)))
+    ((= (le 0 n) True) (= (lt n 4294967296) True))
     (=
       (call_fn
         (FS
@@ -394,7 +447,32 @@
                   (FS
                     (FS
                       (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS c))))))))))))))))))
-        (pmod)
+        (MkWModule
+          (Cons
+            (MkFunc 2 0 (list (LocalGet 0) (LocalGet 1) (I32Bin BAdd)))
+            (Cons
+              (MkFunc
+                1
+                1
+                (list
+                  (Block
+                    (list
+                      (Loop
+                        (list
+                          (LocalGet 0)
+                          (I32Eqz)
+                          (BrIf 1)
+                          (LocalGet 1)
+                          (LocalGet 0)
+                          (Call 0)
+                          (LocalSet 1)
+                          (LocalGet 0)
+                          (I32Const 1)
+                          (I32Bin BSub)
+                          (LocalSet 0)
+                          (Br 0)))))
+                  (LocalGet 1)))
+              restfs)))
         1
         (list n))
       (Some (sum_go n 0))))
@@ -445,7 +523,11 @@
                    (lemma sum_loop_worker)
                    lr
                    lhs
-                   ((inst n n) (inst acc 0) (inst st Nil) (inst c c))
+                   ((inst n n)
+                    (inst acc 0)
+                    (inst st Nil)
+                    (inst c c)
+                    (inst restfs restfs))
                    ((steps ((rewrite (premise 0) lr lhs true ())) refl)
                     (steps ((rewrite (premise 1) lr lhs true ())) refl))
                    (steps ((compute both)) refl)))))))))))

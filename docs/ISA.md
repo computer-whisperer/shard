@@ -11,8 +11,9 @@ See also: `OVERVIEW.md` (the trust model this instantiates), `REVISIT.md`
 (refinement lowering — this doc is that issue's ground-up re-derivation and
 supersedes parts of the 2026-06-18 multi-impl/linker design discussion).
 
-Ratified 2026-07-02. Slices 1–2 of the demonstrator (§6) are **[BUILT]**
-(model at `models/wasm/`, pieces at `examples/wasm_pieces.shard`); the
+Ratified 2026-07-02. Slices 1–3 of the demonstrator (§6) are **[BUILT]**
+(model at `models/wasm/`, pieces at `examples/wasm_pieces.shard`, weld
+script + emitted certificate at `examples/wasm_weld{,_out}.shard`); the
 measured question (§7) is answered — see the dated addendum there.
 
 ---
@@ -210,6 +211,26 @@ novel claim. Slices, demonstrator-first per house method:
    (B calls A), emits it plus the stitched correctness claims as an ordinary
    shard file, and the standard pipeline checks it. First exercise of
    kernel-as-library outside prove.
+
+   *(Slice-3 amendment, 2026-07-02 — built, with two shape findings. (i) The
+   **weldable theorem form**: a piece's theorem pins ONLY the module slots it
+   touches — its own entry and its callees' — as ctor literals at their ABI
+   indices; every other slot is an opaque `Func` binder the index lookup
+   walks past without inspecting, and the module list's tail is an opaque
+   `(restfs (List Func))`. Composite theorems are then pure instantiations:
+   the weld script computes each piece's filler/tail bindings from the
+   layout and emits one `rewrite-with` per claim. Three pieces
+   (add=0, sum=1, triple=2, triple calling add across the opaque slot 1)
+   exercise filler, tail, and cross-slot cases. (ii) The script needed **no
+   kernel-as-library beyond the model itself**: pieces are manipulated as
+   ordinary `Func`/`WModule` values and rendered to source text; the checker
+   re-checks the emitted file, so the script stays fully untrusted. In-process
+   checking for iteration remains available later; it wasn't needed here. The
+   corpus carries a regen pin: the committed certificate must be
+   byte-identical to what the script emits from the current pieces. v1
+   composition scope: the ABI layout is fixed at authoring time — theorems
+   are not transportable across re-indexed layouts; that needs symbolic-index
+   or theorem-transport machinery, deliberately deferred.)*
 4. **The reality check.** An encoder from the module value to real `.wasm`
    bytes (`Bytes` exists for exactly this) and a differential run under a
    real engine — so the "engine conforms to model" trust leaf is exercised,

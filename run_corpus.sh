@@ -88,6 +88,8 @@ TARGETS=(
   models/wasm/wasm.shard
   examples/wasm_smoke.shard
   examples/wasm_pieces.shard
+  examples/wasm_weld.shard
+  examples/wasm_weld_out.shard
   examples/record_rejects.shard
   examples/record_sugar_rejects.shard
   examples/subterm_induct.shard
@@ -158,6 +160,23 @@ echo "=== scope: snake_game_3/game ==="
 # here would strip kernel/stdlib's core identity and quietly disable the
 # theory backends (the false "purity bug" of 2026-06-10). See loader.shard
 # visit / reader.shard path_escapes.
+# Weld-regen pin: the committed weld certificate must be byte-identical to
+# what the compile script emits from the CURRENT pieces (drift in either
+# direction fails; the certificate's citations already fail loudly on
+# structural drift, this catches the silent kind).
+echo "=== weld: regen wasm_weld_out ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run examples/wasm_weld.shard > "$TMP/weld.raw" 2>/dev/null
+  bin/shard_eval run tools/shardfmt/shardfmt.shard "$TMP/weld.raw" > "$TMP/weld.fmt" 2>/dev/null
+  if diff -q "$TMP/weld.fmt" examples/wasm_weld_out.shard >/dev/null; then
+    echo "REGEN OK (byte-identical)"
+  else
+    echo "REGEN DRIFT: emitted certificate differs from examples/wasm_weld_out.shard"
+  fi
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
 echo "=== guard: absolute path ==="
 out=$("${CHECK_CMD[@]}" "$PWD/examples/auto_demo.shard" 2>&1); code=$?
 if [ "$code" -eq 2 ] && grep -q "escapes the repo root" <<<"$out"; then
