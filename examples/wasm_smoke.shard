@@ -1,0 +1,58 @@
+;;; wasm_smoke.shard — ground-truth smoke of the wasm32 model (ISA.md slice 1).
+;;; A two-function module — add(a,b), and sum(n) looping over Call add — run
+;;; through call_fn at literal inputs, closed by (compute both): the checker
+;;; itself executes the interpreter. Pins the semantics (incl. i32 wraparound
+;;; and loop/branch plumbing) before any symbolic piece theorems (slice 2).
+
+(import "../kernel/stdlib.shard")  ; List / Option / Bool
+(import "../models/wasm/wasm.shard")
+(use (:: models wasm wasm *))
+
+;; func 0: add(a, b) = a + b  (wrapped)
+(fn add_fn () Func (MkFunc 2 0 (list (LocalGet 0) (LocalGet 1) (I32Bin BAdd))))
+
+;; func 1: sum(n) = n + (n-1) + … + 1, via a block/loop with an accumulator
+;; local and a Call to func 0. locals: 0 = n (param), 1 = acc (extra).
+(fn sum_fn () Func
+  (MkFunc
+    1
+    1
+    (list
+      (Block
+        (list
+          (Loop
+            (list
+              (LocalGet 0)
+              (I32Eqz)
+              (BrIf 1)  ; n == 0 → exit the block
+              (LocalGet 1)
+              (LocalGet 0)
+              (Call 0)  ; acc + n …
+              (LocalSet 1)  ; … → acc
+              (LocalGet 0)
+              (I32Const 1)
+              (I32Bin BSub)
+              (LocalSet 0)  ; n - 1 → n
+              (Br 0)))))  ; re-enter the loop
+      (LocalGet 1))))
+
+(fn demo () WModule (MkWModule (list (add_fn) (sum_fn))))
+
+(claim smoke_add
+  (goal () () (= (call_fn 20 (demo) 0 (list 3 4)) (Some 7)))
+  (steps ((compute both)) refl))
+
+;; i32 wraparound: (2^32 - 1) + 2 ≡ 1
+(claim smoke_wrap
+  (goal () () (= (call_fn 20 (demo) 0 (list 4294967295 2)) (Some 1)))
+  (steps ((compute both)) refl))
+
+;; the loop: sum(4) = 10, ~4 iterations of block/loop/call plumbing
+(claim smoke_sum
+  (goal () () (= (call_fn 300 (demo) 1 (list 4)) (Some 10)))
+  (steps ((compute both)) refl))
+
+;; fuel exhaustion is None, exclusively
+(claim smoke_fuel_out
+  (goal () () (= (call_fn 3 (demo) 1 (list 4)) None))
+  (steps ((compute both)) refl))

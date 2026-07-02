@@ -1,0 +1,308 @@
+;;; models/wasm/wasm.shard — the wasm32 ISA model (docs/ISA.md, slice 1).
+;;;
+;;; An ordinary shard library: instruction/module datatypes plus a fuel-indexed
+;;; interpreter. Zero axioms, zero kernel involvement — the only trust leaf a
+;;; consumer inherits is "the real engine conforms to these semantics", named
+;;; in the trust ledger by whichever bin links a wasm artifact.
+;;;
+;;; Shape decisions (ISA.md §6, pinned here):
+;;;   - Values are bare Int in [0, 2^32), wrapped by euclidean mod at every
+;;;     arithmetic op (`wrap32`). No std/word: the interpreter must REDUCE in
+;;;     consumer proofs, and opaque word ops only cite. Comparisons are
+;;;     unsigned (Eqz/Eq/LtU); signed views ride the word arc's shifted-mod
+;;;     trick when a piece needs them.
+;;;   - Fuel burns on EVERY step, so the whole mutual eval SCC is one numeric
+;;;     countdown measure and fuel-monotonicity is uniform. None = fuel out,
+;;;     exclusively; genuine dynamic failure is the OTrap outcome. Valid
+;;;     (validated) wasm never traps here — trap arms exist so the model
+;;;     refuses invalid code instead of guessing.
+;;;   - The composition boundary is the function call: `call_fn` is the
+;;;     big-step denotation piece theorems are stated against
+;;;     (∀ x, (call_fn fuel m f (encode x)) = (Some (encode (spec x)))) and
+;;;     welds cite. Single-result functions only in v1.
+;;;   - No linear memory in v1 (pieces compute on locals). Memory enters with
+;;;     the Mem arc, deliberately after composition stands.
+
+(import "../../kernel/stdlib.shard")  ; List / Option / Bool / Pair
+
+;; Local list plumbing (length/append/reverse). NOT std/list: that module is
+;; opaque in check mode (interface equations cite but don't COMPUTE), and this
+;; whole file exists to reduce inside consumer proofs — every helper on the
+;; call_fn path must be transparent.
+(fn wlen ((xs (List Int))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons h t) (+ 1 (wlen t)))))
+
+(fn wapp ((xs (List Int)) (ys (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil ys)
+    ((Cons h t) (Cons h (wapp t ys)))))
+
+(fn wrev ((xs (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons h t) (wapp (wrev t) (Cons h Nil)))))
+
+;; --- the instruction set (wasm32 fragment, demonstrator-sized) --------------
+
+;; Binary i32 operators. Stack order: push a, push b, apply → a OP b
+;; (b is the top of stack, a below it — wasm's operand order).
+(type Bop (BAdd) (BSub) (BMul) (BEq) (BLtU))
+
+;; Structured wasm: Block/Loop carry nested bodies; Br/BrIf carry a relative
+;; label depth (0 = innermost enclosing block/loop). A Br targeting a Block
+;; exits it; targeting a Loop re-enters it — wasm's loop labels point at the
+;; loop HEAD. Call pops the callee's arguments (last argument on top).
+(type Instr
+  (I32Const Int)
+  (I32Bin Bop)
+  (I32Eqz)
+  (LocalGet Int)
+  (LocalSet Int)
+  (Block (List Instr))
+  (Loop (List Instr))
+  (Br Int)
+  (BrIf Int)
+  (Call Int)
+  (Return))
+
+;; A function: parameter count, count of extra zero-initialized locals, body.
+;; Result arity is fixed at 1 (v1: single-result functions only).
+(record Func (params Int) (extra Int) (body (List Instr)))
+
+;; A module: functions addressed by index (Call k / call_fn k).
+(record WModule (funcs (List Func)))
+
+;; --- evaluation outcomes -----------------------------------------------------
+
+;; The outcome of evaluating an instruction (sequence): normal completion
+;; carries the stack and locals forward; OBr is an in-flight branch unwinding
+;; d labels outward; ORet is an in-flight function return; OTrap is dynamic
+;; failure (invalid code — stack underflow, bad index).
+(type Out
+  (ONorm (List Int) (List Int))
+  (OBr Int (List Int) (List Int))
+  (ORet Int)
+  (OTrap))
+
+;; --- small total helpers (outside the fuel SCC) ------------------------------
+
+;; wrap to i32: euclidean mod, so negatives land in [0, 2^32) too.
+(fn wrap32 ((x Int)) Int (mod x 4294967296))
+
+(fn b2i ((b Bool)) Int (if b 1 0))
+
+(fn bop_val ((o Bop) (a Int) (b Int)) Int
+  (match o
+    (BAdd (wrap32 (+ a b)))
+    (BSub (wrap32 (- a b)))
+    (BMul (wrap32 (* a b)))
+    (BEq (b2i (int_eq a b)))
+    (BLtU (b2i (lt a b)))))
+
+;; pop two, apply, push. None = stack underflow (→ OTrap at the caller).
+(fn do_bin ((o Bop) (st (List Int))) (Option (List Int))
+  (match st
+    (Nil None)
+    ((Cons b st1)
+     (match st1
+       (Nil None)
+       ((Cons a r) (Some (Cons (bop_val o a b) r)))))))
+
+;; local get/set by index; None = out-of-range index (negative falls through).
+(fn lget ((ls (List Int)) (i Int)) (Option Int)
+  (measure (struct ls))
+  (match ls
+    (Nil None)
+    ((Cons h t) (if (int_eq i 0) (Some h) (lget t (- i 1))))))
+
+(fn lset ((ls (List Int)) (i Int) (v Int)) (Option (List Int))
+  (measure (struct ls))
+  (match ls
+    (Nil None)
+    ((Cons h t)
+     (if (int_eq i 0) (Some (Cons v t))
+     (match (lset t (- i 1) v)
+       (None None)
+       ((Some t2) (Some (Cons h t2))))))))
+
+(fn zeros ((n Int)) (List Int)
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt n 1) Nil (Cons 0 (zeros (- n 1)))))
+
+(fn func_at ((fs (List Func)) (i Int)) (Option Func)
+  (measure (struct fs))
+  (match fs
+    (Nil None)
+    ((Cons f t) (if (int_eq i 0) (Some f) (func_at t (- i 1))))))
+
+;; pop n values off a stack: (Pair popped rest), popped head = old top.
+;; None = underflow.
+(fn pop_n ((n Int) (st (List Int))) (Option (Pair (List Int) (List Int)))
+  (measure (struct st))
+  (if (lt n 1) (Some (Pair Nil st))
+  (match st
+    (Nil None)
+    ((Cons h t)
+     (match (pop_n (- n 1) t)
+       (None None)
+       ((Some p)
+        (match p
+          ((Pair xs rest) (Some (Pair (Cons h xs) rest))))))))))
+
+;; exiting a Block: a branch targeting THIS block (depth 0) becomes normal
+;; completion after it; deeper branches unwind one label. Pure, non-recursive —
+;; weld proofs rewrite through it without touching the fuel SCC.
+(fn block_exit ((out Out)) Out
+  (match out
+    ((ONorm s l) (ONorm s l))
+    ((OBr d s l) (if (int_eq d 0) (ONorm s l) (OBr (- d 1) s l)))
+    ((ORet v) (ORet v))
+    (OTrap OTrap)))
+
+;; --- the interpreter (one fuel-countdown SCC) --------------------------------
+
+;; Every entry burns one fuel unit, so every recursive edge — structural
+;; descent, loop re-entry, and cross-function calls alike — decreases the one
+;; measure. None = fuel exhausted, and nothing else.
+
+(fn eval_instr
+  ((fuel Int) (m WModule) (i Instr) (lc (List Int)) (st (List Int)))
+  (Option Out)
+  ;; four recursive sites in body order: Block→eval_seq, Loop→eval_seq,
+  ;; Loop→eval_instr (re-entry), Call→eval_seq — each funded by fuel-1 < fuel.
+  (measure
+    fuel
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1)))
+  (if (lt fuel 1) None
+  (match i
+    ((I32Const c) (Some (ONorm (Cons (wrap32 c) st) lc)))
+    ((I32Bin o)
+     (match (do_bin o st)
+       (None (Some OTrap))
+       ((Some st2) (Some (ONorm st2 lc)))))
+    (I32Eqz
+      (match st
+        (Nil (Some OTrap))
+        ((Cons a r) (Some (ONorm (Cons (b2i (int_eq a 0)) r) lc)))))
+    ((LocalGet k)
+     (match (lget lc k)
+       (None (Some OTrap))
+       ((Some v) (Some (ONorm (Cons v st) lc)))))
+    ((LocalSet k)
+     (match st
+       (Nil (Some OTrap))
+       ((Cons v r)
+        (match (lset lc k v)
+          (None (Some OTrap))
+          ((Some lc2) (Some (ONorm r lc2)))))))
+    ((Block body)
+     (match (eval_seq (- fuel 1) m body lc st)
+       (None None)
+       ((Some out) (Some (block_exit out)))))
+    ((Loop body)
+     (match (eval_seq (- fuel 1) m body lc st)
+       (None None)
+       ((Some out)
+        (match out
+          ((ONorm s l) (Some (ONorm s l)))
+          ((OBr d s l)
+           (if (int_eq d 0) (eval_instr (- fuel 1) m (Loop body) l s)
+           (Some (OBr (- d 1) s l))))
+          ((ORet v) (Some (ORet v)))
+          (OTrap (Some OTrap))))))
+    ((Br d) (Some (OBr d st lc)))
+    ((BrIf d)
+     (match st
+       (Nil (Some OTrap))
+       ((Cons c r) (if (int_eq c 0) (Some (ONorm r lc)) (Some (OBr d r lc))))))
+    ((Call k)
+     (match (func_at (funcs_of m) k)
+       (None (Some OTrap))
+       ((Some f)
+        (match (pop_n (params_of f) st)
+          (None (Some OTrap))
+          ((Some p)
+           (match p
+             ((Pair popped rest)
+              ;; popped head = last-pushed = last parameter; locals want
+              ;; parameter order, so reverse, then extend with zeros.
+              (match
+                (eval_seq
+                  (- fuel 1)
+                  m
+                  (body_of f)
+                  (wapp (wrev popped) (zeros (extra_of f)))
+                  Nil)
+                (None None)
+                ((Some out)
+                 (match out
+                   ((ONorm s2 l2)
+                    (match s2
+                      (Nil (Some OTrap))
+                      ((Cons v r2) (Some (ONorm (Cons v rest) lc)))))
+                   ((ORet v) (Some (ONorm (Cons v rest) lc)))
+                   ((OBr d s l) (Some OTrap))
+                   (OTrap (Some OTrap))))))))))))
+    (Return
+      (match st
+        (Nil (Some OTrap))
+        ((Cons v r) (Some (ORet v))))))))
+
+(fn eval_seq
+  ((fuel Int) (m WModule) (is (List Instr)) (lc (List Int)) (st (List Int)))
+  (Option Out)
+  ;; two recursive sites in body order: head→eval_instr, tail→eval_seq.
+  (measure
+    fuel
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1)))
+  (if (lt fuel 1) None
+  (match is
+    (Nil (Some (ONorm st lc)))
+    ((Cons i rest)
+     (match (eval_instr (- fuel 1) m i lc st)
+       (None None)
+       ((Some out)
+        (match out
+          ((ONorm st2 lc2) (eval_seq (- fuel 1) m rest lc2 st2))
+          ((OBr d s l) (Some (OBr d s l)))
+          ((ORet v) (Some (ORet v)))
+          (OTrap (Some OTrap)))))))))
+
+;; --- the big-step denotation (the composition boundary) ----------------------
+
+;; Run function k of module m on args (in PARAMETER order, unlike Call's
+;; stack order). Some v = the function completed with result v; None = fuel
+;; out, trapped, wrong arity, or bad index. Piece theorems assert Some, so
+;; conflating failure modes here costs nothing at the weld boundary.
+(fn call_fn ((fuel Int) (m WModule) (k Int) (args (List Int))) (Option Int)
+  (match (func_at (funcs_of m) k)
+    (None None)
+    ((Some f)
+     (if (int_eq (wlen args) (params_of f))
+       (match (eval_seq fuel m (body_of f) (wapp args (zeros (extra_of f))) Nil)
+         (None None)
+         ((Some out)
+          (match out
+            ((ONorm s l)
+             (match s
+               (Nil None)
+               ((Cons v r) (Some v))))
+            ((ORet v) (Some v))
+            ((OBr d s l) None)
+            (OTrap None))))
+       None))))

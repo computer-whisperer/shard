@@ -85,6 +85,8 @@ TARGETS=(
   examples/mutual_toy.shard
   examples/record_proto.shard
   examples/record_basic.shard
+  models/wasm/wasm.shard
+  examples/wasm_smoke.shard
   examples/record_rejects.shard
   examples/record_sugar_rejects.shard
   examples/subterm_induct.shard
