@@ -1219,21 +1219,16 @@
 ;; find_case: look up the Proof for a given ctor branch.
 ;; ---------------------------------------------------------------------------
 
-;; Returns the matching case's (author field-names, sub-proof). For a plain
-;; (Case …) the names list is Nil, meaning "generate fresh field names".
+;; Returns the matching case's (author field-names, sub-proof). A Nil names
+;; list means "generate fresh field names" (the surface 2-arg case form).
 (fn find_case ((ctor_name QName) (cases (List Case)))
   (Option (Pair (List Symbol) Proof))
   (measure (struct cases))
   (match cases
     (Nil None)
-    ((Cons c rest)
-     (match c
-       ((Case cn pf)
-        (if (qname_eq cn ctor_name) (Some (Pair Nil pf))
-        (find_case ctor_name rest)))
-       ((CaseB cn names pf)
-        (if (qname_eq cn ctor_name) (Some (Pair names pf))
-        (find_case ctor_name rest)))))))
+    ((Cons (Case cn names pf) rest)
+     (if (qname_eq cn ctor_name) (Some (Pair names pf))
+     (find_case ctor_name rest)))))
 
 ;; Field types of a named ctor — the cases-iterating proof loops look the ctor
 ;; up by the case's own name (structural on ctors).
@@ -1245,7 +1240,7 @@
      (if (qname_eq cn cname) (Some fts) (find_ctor_fields cname rest)))))
 
 ;; ---------------------------------------------------------------------------
-;; Named-field destructuring (Induct / CaseOn). When a CaseB supplies field
+;; Named-field destructuring (Induct / CaseOn). When a case supplies field
 ;; names, build the field Params from them instead of gen_fresh — so the
 ;; author can reference (and case-split on) a constructor field, e.g. the
 ;; head of an inducted list. Soundness rests on `field_names_ok`: the names
@@ -1375,23 +1370,13 @@
   (measure (case_list_size cases))
   (match cases
     (Nil True)
-    ((Cons (Case cname pf) rest)
+    ((Cons (Case cname names pf) rest)
      (match (find_ctor_fields cname ctors)
        (None  ; spurious case — ignore (coverage already checked)
          (check_caseon_proofs m th seq scrut ctors rest))
        ((Some field_types)
-        (match (caseon_case_subgoal seq scrut cname field_types Nil)
-          (None False)  ; bad field names — reject
-          ((Some sg)
-           (if (check_sequent m th sg pf)
-             (check_caseon_proofs m th seq scrut ctors rest)
-             False))))))
-    ((Cons (CaseB cname names pf) rest)
-     (match (find_ctor_fields cname ctors)
-       (None (check_caseon_proofs m th seq scrut ctors rest))
-       ((Some field_types)
         (match (caseon_case_subgoal seq scrut cname field_types names)
-          (None False)
+          (None False)  ; bad field names — reject
           ((Some sg)
            (if (check_sequent m th sg pf)
              (check_caseon_proofs m th seq scrut ctors rest)
@@ -1636,6 +1621,20 @@
 ;;   - one IH per recursive field (whose type = var's type): the
 ;;     original seq's goal with (var := the_field), with all OTHER
 ;;     seq vars closed as the IH's ∀-bound vars
+;;
+;; TRUST (2026-07-01 roster audit): this rule is ADMISSIBLE — derivable from
+;; SubtermInduct + CaseOn + Below, so it adds no principle of its own. The
+;; derivation: subterm-induct on var gives the strong IH (∀ var'⊰var. goal);
+;; case-on var splits per ctor with (= var (C f1..fn)) at Hyp 0; in each arm
+;; the strong IH instantiated at a recursive field fi has its ordering
+;; premise discharged by (below) — do_below resolves var to ctor form
+;; through the case equation and finds fi a proper subterm. What do_induct
+;; packages beyond that composite is pure ergonomics: the substituted
+;; per-case goals (immediately reducible, no case-equation rewrites) and
+;; premise-free weak IHs (a plain one-step (rewrite (hyp ih) …) cite instead
+;; of rewrite-with + (below) at every use). The one trusted fact under BOTH
+;; forms is well-foundedness of the structural subterm order ⊰. KEPT as the
+;; packaged instance — ~200 uses; the ergonomic delta pays at every site.
 ;; ---------------------------------------------------------------------------
 
 ;; Induct case checking, split exactly like CaseOn (see check_caseon_* above)
@@ -1695,25 +1694,14 @@
   (measure (case_list_size cases))
   (match cases
     (Nil True)
-    ((Cons (Case cname pf) rest)
+    ((Cons (Case cname names pf) rest)
      (match (find_ctor_fields cname ctors)
        (None  ; spurious case — ignore (coverage already checked)
          (check_induct_proofs m th seq var var_type type_env ctors rest))
        ((Some field_types)
         (match
-          (induct_case_subgoal seq var var_type type_env cname field_types Nil)
-          (None False)  ; bad field names — reject
-          ((Some sg)
-           (if (check_sequent m th sg pf)
-             (check_induct_proofs m th seq var var_type type_env ctors rest)
-             False))))))
-    ((Cons (CaseB cname names pf) rest)
-     (match (find_ctor_fields cname ctors)
-       (None (check_induct_proofs m th seq var var_type type_env ctors rest))
-       ((Some field_types)
-        (match
           (induct_case_subgoal seq var var_type type_env cname field_types names)
-          (None False)
+          (None False)  ; bad field names — reject
           ((Some sg)
            (if (check_sequent m th sg pf)
              (check_induct_proofs m th seq var var_type type_env ctors rest)
