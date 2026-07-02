@@ -88,10 +88,23 @@ TARGETS=(
   examples/struct_clause.shard
   examples/render_model.shard
   examples/modules_demo/consumer.shard
+  examples/calc/calc.shard
+  examples/calc/calc_spec.shard
   examples/calc/calc_proof.shard
   examples/calc/calc_spec_tests.shard
   examples/calc/calc_reconcile_tests.shard
+  examples/calc/calc_show.shard
+  examples/calc/calc_show_run.shard
+  examples/calc/calc_ndigit.shard
+  examples/calc/calc_equiv.shard
+  examples/calc/calc_app.shard
+  examples/calc/calc_app_spec.shard
+  examples/calc/calc_app_trace.shard
+  examples/calc/calc_app_world.shard
+  examples/snake_game/snake_game.req.shard
   examples/snake_game/snake.shard
+  examples/snake_game/snake_view.shard
+  examples/snake_game/snake_app.shard
   examples/snake_game_2/mod.req/arena.shard
   examples/snake_game_3/game/game.shard
   examples/snake_game_3/render/render.shard
