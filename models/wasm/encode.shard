@@ -1,0 +1,214 @@
+;;; models/wasm/encode.shard — module value -> real `.wasm` bytes (ISA slice 4).
+;;;
+;;; The reality-check encoder: turns a WModule into the wasm binary format so
+;;; a real engine can run what the model proved about. Output is (List Int)
+;;; with every element in [0,256) — raw bytes, not text. Nothing here is
+;;; in-logic: the encoder is UNTRUSTED dev-side plumbing; the differential
+;;; harness (examples/wasm_diff*) is what exercises the engine-conforms-to-
+;;; model trust leaf. A wrong encoding fails loudly at the engine (validation
+;;; or result mismatch), never silently in a proof.
+;;;
+;;; Encoding commitments (where the model meets the binary format):
+;;;   - Block/Loop get the VOID blocktype (0x40). The model threads the whole
+;;;     operand stack through block boundaries; real wasm validation pins a
+;;;     void block to its entry stack height. For pieces that keep block
+;;;     boundaries stack-neutral (all of ours) the two agree; a piece that
+;;;     branches carrying operands will fail ENGINE VALIDATION, which the
+;;;     differential reports — the honest failure mode.
+;;;   - (I32Const c) encodes s32(wrap32 c): the model wraps the immediate at
+;;;     push time, so the encoder mirrors that before two's-complementing.
+;;;   - One functype per function (no dedup): type index = function index.
+;;;   - Every function is exported as "f<index>" so the harness can invoke it.
+;;;   - LEB128 via bounded ladders: u32/s32 need at most 5 seven-bit chunks,
+;;;     so minimal-width encoding is a 5-branch if-ladder — total, no Int
+;;;     measures. Negative counts/indices would fall through to garbage; the
+;;;     model's own index arithmetic never produces them, and the encoder is
+;;;     untrusted anyway.
+
+(import "wasm.shard")
+(use (:: models wasm wasm *))
+
+;; --- LEB128 -------------------------------------------------------------------
+
+;; unsigned LEB128, minimal width, for n in [0, 2^35) (covers u32 sizes and
+;; indices with room to spare).
+(fn uleb ((n Int)) (List Int)
+  (if (lt n 128) (list n)
+  (if (lt n 16384) (list (+ 128 (mod n 128)) (ediv n 128))
+  (if (lt n 2097152)
+    (list (+ 128 (mod n 128)) (+ 128 (mod (ediv n 128) 128)) (ediv n 16384))
+  (if (lt n 268435456)
+    (list
+      (+ 128 (mod n 128))
+      (+ 128 (mod (ediv n 128) 128))
+      (+ 128 (mod (ediv n 16384) 128))
+      (ediv n 2097152))
+    (list
+      (+ 128 (mod n 128))
+      (+ 128 (mod (ediv n 128) 128))
+      (+ 128 (mod (ediv n 16384) 128))
+      (+ 128 (mod (ediv n 2097152) 128))
+      (ediv n 268435456)))))))
+
+;; the signed view of a u32 bit pattern.
+(fn s32 ((v Int)) Int (if (lt v 2147483648) v (- v 4294967296)))
+
+;; range test for the sleb ladder (shard has no boolean AND form).
+(fn sfits ((sv Int) (lo Int) (hi Int)) Bool (if (le lo sv) (lt sv hi) False))
+
+;; signed LEB128 of a signed value in [-2^31, 2^31), minimal width. Euclidean
+;; mod/ediv give exactly the two's-complement chunks and the arithmetic shift
+;; (ediv sv 128 = floor(sv/128) for the positive divisor).
+(fn sleb ((sv Int)) (List Int)
+  (if (sfits sv -64 64) (list (mod sv 128))
+  (if (sfits sv -8192 8192) (list (+ 128 (mod sv 128)) (mod (ediv sv 128) 128))
+  (if (sfits sv -1048576 1048576)
+    (list
+      (+ 128 (mod sv 128))
+      (+ 128 (mod (ediv sv 128) 128))
+      (mod (ediv sv 16384) 128))
+  (if (sfits sv -134217728 134217728)
+    (list
+      (+ 128 (mod sv 128))
+      (+ 128 (mod (ediv sv 128) 128))
+      (+ 128 (mod (ediv sv 16384) 128))
+      (mod (ediv sv 2097152) 128))
+    (list
+      (+ 128 (mod sv 128))
+      (+ 128 (mod (ediv sv 128) 128))
+      (+ 128 (mod (ediv sv 16384) 128))
+      (+ 128 (mod (ediv sv 2097152) 128))
+      (mod (ediv sv 268435456) 128)))))))
+
+;; decimal digits of n in [0, 10^10) — export names f0..fN.
+(fn dec ((n Int)) (List Int)
+  (if (lt n 10) (list (+ 48 n))
+  (if (lt n 100) (list (+ 48 (ediv n 10)) (+ 48 (mod n 10)))
+  (if (lt n 1000)
+    (list (+ 48 (ediv n 100)) (+ 48 (mod (ediv n 10) 10)) (+ 48 (mod n 10)))
+    (wapp (dec3 (ediv n 1000)) (dec3f (mod n 1000)))))))
+
+;; helpers for the >999 branch: high part re-laddered (bounded: n < 10^10 →
+;; high < 10^7 → one more level suffices), low part always 3 digits.
+(fn dec3f ((n Int)) (List Int)
+  (list (+ 48 (ediv n 100)) (+ 48 (mod (ediv n 10) 10)) (+ 48 (mod n 10))))
+
+(fn dec3 ((n Int)) (List Int)
+  (if (lt n 10) (list (+ 48 n))
+  (if (lt n 100) (list (+ 48 (ediv n 10)) (+ 48 (mod n 10)))
+  (if (lt n 1000) (dec3f n)
+  (if (lt n 10000) (wapp (list (+ 48 (ediv n 1000))) (dec3f (mod n 1000)))
+  (if (lt n 100000)
+    (wapp
+      (list (+ 48 (ediv n 10000)) (+ 48 (mod (ediv n 1000) 10)))
+      (dec3f (mod n 1000)))
+  (if (lt n 1000000) (wapp (dec3f (ediv n 1000)) (dec3f (mod n 1000)))
+  (wapp
+    (list (+ 48 (ediv n 1000000)))
+    (wapp (dec3f (mod (ediv n 1000) 1000)) (dec3f (mod n 1000)))))))))))
+
+;; --- instructions -------------------------------------------------------------
+
+(fn enc_bop ((o Bop)) Int
+  (match o
+    (BAdd 106)
+    (BSub 107)
+    (BMul 108)
+    (BEq 70)
+    (BLtU 73)))
+
+(fn enc_instr ((i Instr)) (List Int)
+  (measure (struct i))
+  (match i
+    ((I32Const c) (Cons 65 (sleb (s32 (wrap32 c)))))
+    ((I32Bin o) (list (enc_bop o)))
+    (I32Eqz (list 69))
+    ((LocalGet k) (Cons 32 (uleb k)))
+    ((LocalSet k) (Cons 33 (uleb k)))
+    ((Block b) (Cons 2 (Cons 64 (wapp (enc_instrs b) (list 11)))))
+    ((Loop b) (Cons 3 (Cons 64 (wapp (enc_instrs b) (list 11)))))
+    ((Br d) (Cons 12 (uleb d)))
+    ((BrIf d) (Cons 13 (uleb d)))
+    ((Call k) (Cons 16 (uleb k)))
+    (Return (list 15))))
+
+(fn enc_instrs ((is (List Instr))) (List Int)
+  (measure (struct is))
+  (match is
+    (Nil Nil)
+    ((Cons i t) (wapp (enc_instr i) (enc_instrs t)))))
+
+;; --- functions and sections ---------------------------------------------------
+
+(fn rep_i32 ((n Int)) (List Int)
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt n 1) Nil (Cons 127 (rep_i32 (- n 1)))))
+
+;; functype: 0x60, param vector (all i32), result vector = one i32.
+(fn enc_functype ((f Func)) (List Int)
+  (Cons
+    96
+    (wapp (uleb (params_of f)) (wapp (rep_i32 (params_of f)) (list 1 127)))))
+
+;; code entry: size-prefixed locals declaration + body expr + end.
+(fn enc_localdecl ((extra Int)) (List Int)
+  (if (lt extra 1) (list 0) (Cons 1 (wapp (uleb extra) (list 127)))))
+
+(fn enc_body ((f Func)) (List Int)
+  (wapp (enc_localdecl (extra_of f)) (wapp (enc_instrs (body_of f)) (list 11))))
+
+(fn enc_code ((f Func)) (List Int)
+  (wapp (uleb (wlen (enc_body f))) (enc_body f)))
+
+;; export entry: name "f<i>", desc 0x00 (func), index i.
+(fn enc_export ((i Int)) (List Int)
+  (wapp
+    (uleb (wlen (Cons 102 (dec i))))
+    (wapp (Cons 102 (dec i)) (Cons 0 (uleb i)))))
+
+(fn flen ((fs (List Func))) Int
+  (measure (struct fs))
+  (match fs
+    (Nil 0)
+    ((Cons f t) (+ 1 (flen t)))))
+
+(fn enc_types ((fs (List Func))) (List Int)
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons f t) (wapp (enc_functype f) (enc_types t)))))
+
+(fn enc_funcidxs ((fs (List Func)) (i Int)) (List Int)
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons f t) (wapp (uleb i) (enc_funcidxs t (+ i 1))))))
+
+(fn enc_exports ((fs (List Func)) (i Int)) (List Int)
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons f t) (wapp (enc_export i) (enc_exports t (+ i 1))))))
+
+(fn enc_codes ((fs (List Func))) (List Int)
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons f t) (wapp (enc_code f) (enc_codes t)))))
+
+;; section: id, size-prefixed payload.
+(fn wsec ((id Int) (payload (List Int))) (List Int)
+  (Cons id (wapp (uleb (wlen payload)) payload)))
+
+(fn enc_sections ((fs (List Func))) (List Int)
+  (wapp
+    (wsec 1 (wapp (uleb (flen fs)) (enc_types fs)))
+    (wapp
+      (wsec 3 (wapp (uleb (flen fs)) (enc_funcidxs fs 0)))
+      (wapp
+        (wsec 7 (wapp (uleb (flen fs)) (enc_exports fs 0)))
+        (wsec 10 (wapp (uleb (flen fs)) (enc_codes fs)))))))
+
+;; the module: magic "\0asm", version 1, type/function/export/code sections.
+(fn enc_module ((m WModule)) (List Int)
+  (wapp (list 0 97 115 109 1 0 0 0) (enc_sections (funcs_of m))))

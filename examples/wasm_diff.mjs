@@ -1,0 +1,45 @@
+// wasm_diff.mjs — engine side of the ISA slice-4 differential (see
+// wasm_diff_run.shard for the plan format). Instantiates each MOD's bytes
+// under the real engine (V8) and replays each CASE, comparing the engine's
+// result against the model's. Any validation failure or mismatch is a FAIL;
+// exit code is the number of failing lines (0 = full agreement).
+import { readFileSync } from "node:fs";
+
+const plan = readFileSync(process.argv[2], "utf8").split("\n");
+const mods = new Map();
+let ok = 0, fail = 0;
+
+const report = (verdict, line, detail) => {
+  if (verdict) { ok++; } else { fail++; console.log(`FAIL ${line}${detail ? `  [${detail}]` : ""}`); }
+};
+
+for (const line of plan) {
+  if (line.startsWith("MOD ")) {
+    const [, name, hex] = line.split(" ");
+    try {
+      const bytes = Uint8Array.from(hex.match(/../g).map((b) => parseInt(b, 16)));
+      mods.set(name, new WebAssembly.Instance(new WebAssembly.Module(bytes)).exports);
+    } catch (e) {
+      mods.set(name, null);
+      report(false, `MOD ${name}`, `engine rejects: ${e.message}`);
+    }
+  } else if (line.startsWith("CASE ")) {
+    const m = line.match(/^CASE (\S+) (\S+)((?: \d+)*) -> (\S+)$/);
+    if (!m) { report(false, line, "unparseable"); continue; }
+    const [, mod, fn, argstr, expect] = m;
+    const exports = mods.get(mod);
+    if (!exports) { report(false, line, "module unavailable"); continue; }
+    const args = argstr.trim() === "" ? [] : argstr.trim().split(" ").map(Number);
+    let got;
+    try {
+      got = (exports[fn](...args) >>> 0).toString(); // engine i32 -> u32 view
+    } catch (e) {
+      report(false, line, `engine traps: ${e.message}`);
+      continue;
+    }
+    report(got === expect, line, `engine says ${got}`);
+  }
+}
+
+console.log(`wasm differential: ${ok} agree, ${fail} disagree`);
+process.exit(fail);

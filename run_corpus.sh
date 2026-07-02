@@ -86,10 +86,12 @@ TARGETS=(
   examples/record_proto.shard
   examples/record_basic.shard
   models/wasm/wasm.shard
+  models/wasm/encode.shard
   examples/wasm_smoke.shard
   examples/wasm_pieces.shard
   examples/wasm_weld.shard
   examples/wasm_weld_out.shard
+  examples/wasm_diff_run.shard
   examples/record_rejects.shard
   examples/record_sugar_rejects.shard
   examples/subterm_induct.shard
@@ -175,6 +177,17 @@ if [ -x bin/shard_eval ]; then
   fi
 else
   echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# Engine-differential pin: encode the composite + const probe to real .wasm
+# and replay the model-computed vectors under node/V8 (the slice-4 reality
+# check — the "engine conforms to model" trust leaf). Summary line only;
+# disagreements change it and fail the diff.
+echo "=== wasm: engine differential ==="
+if command -v node >/dev/null && [ -x bin/shard_eval ]; then
+  bash examples/wasm_diff.sh 2>&1 | tail -1
+else
+  echo "SKIPPED (needs node + bin/shard_eval)"
 fi
 
 echo "=== guard: absolute path ==="

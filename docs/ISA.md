@@ -11,10 +11,11 @@ See also: `OVERVIEW.md` (the trust model this instantiates), `REVISIT.md`
 (refinement lowering — this doc is that issue's ground-up re-derivation and
 supersedes parts of the 2026-06-18 multi-impl/linker design discussion).
 
-Ratified 2026-07-02. Slices 1–3 of the demonstrator (§6) are **[BUILT]**
-(model at `models/wasm/`, pieces at `examples/wasm_pieces.shard`, weld
-script + emitted certificate at `examples/wasm_weld{,_out}.shard`); the
-measured question (§7) is answered — see the dated addendum there.
+Ratified 2026-07-02. All four demonstrator slices (§6) are **[BUILT]**
+(model + encoder at `models/wasm/`, pieces at `examples/wasm_pieces.shard`,
+weld script + emitted certificate at `examples/wasm_weld{,_out}.shard`,
+engine differential at `examples/wasm_diff*`); the measured question (§7)
+is answered — see the dated addendum there.
 
 ---
 
@@ -235,6 +236,26 @@ novel claim. Slices, demonstrator-first per house method:
    bytes (`Bytes` exists for exactly this) and a differential run under a
    real engine — so the "engine conforms to model" trust leaf is exercised,
    not hypothetical. Dev-side script; nothing in-logic.
+   *(Built 2026-07-02. `models/wasm/encode.shard` = the encoder (untrusted,
+   corpus-gated for totality only): type/function/export/code sections, one
+   functype per function, every function exported as `f<i>`, and all LEB128
+   as bounded if-ladders — u32/s32 fit in ≤5 seven-bit chunks, so minimal-
+   width encoding needs no `Int` recursion and no div-based measure proofs.
+   Two commitments where model meets format: Block/Loop get the VOID
+   blocktype (the model threads the whole stack through blocks; a piece that
+   branches carrying operands fails engine VALIDATION — the differential's
+   honest failure mode, not a silent divergence), and `(I32Const c)` encodes
+   `s32(wrap32 c)`, mirroring the model's wrap-at-push. The differential:
+   `examples/wasm_diff_run.shard` (RUN-mode) emits the welded composite +
+   a 15-function const-width probe as hex plus vectors whose expectations
+   are computed by `call_fn` — not hardcoded; `examples/wasm_diff.{sh,mjs}`
+   replays them under node/V8. Result: **25/25 agreement** (wraparound adds,
+   loop sum to 5050, cross-slot triple, every sleb width boundary at both
+   signs), and the harness was verified to fail loudly on a corrupted module
+   and on a wrong expectation. `run_corpus.sh` carries the differential as a
+   node-guarded pin. The output stays `(List Int)` rather than `Bytes` —
+   the artifact is dev-side and `std/bytes` is opaque in check mode; wrap it
+   when something in-logic ever consumes encodings.)*
 
 Hard fences for all four slices: **zero kernel changes, zero loader
 changes.** If a slice appears to need one, the design is wrong — stop and

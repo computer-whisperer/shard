@@ -1,0 +1,135 @@
+;;; wasm_diff_run.shard — the differential PLAN emitter (ISA slice 4).
+;;;
+;;; RUN-mode script: encodes the welded composite (and a constant-width probe
+;;; module) to real .wasm bytes and prints a plan — modules as hex plus test
+;;; vectors whose expected results are computed BY THE MODEL (call_fn), not
+;;; hardcoded. examples/wasm_diff.sh feeds the plan to a real engine
+;;; (node/V8 via examples/wasm_diff.mjs) and compares. This is the dev-side
+;;; exercise of the "engine conforms to model" trust leaf: agreement is
+;;; evidence for the leaf, disagreement is a model bug or an encoder bug —
+;;; either way loud, never a silent proof-side artifact.
+;;;
+;;; Plan format (one record per line):
+;;;   MOD <name> <hex-bytes>
+;;;   CASE <name> f<k> <args...> -> <expected>   (expected: u32 decimal | None)
+;;;
+;;; RUN: bash examples/wasm_diff.sh
+
+(import "../kernel/stdlib.shard")
+(import "../models/wasm/wasm.shard")
+(use (:: models wasm wasm *))
+(import "../models/wasm/encode.shard")
+(use (:: models wasm encode *))
+(import "wasm_pieces.shard")
+(use (:: examples wasm_pieces *))
+
+(type World (World Int))
+
+(extern write ((bytes (List Int)) (w World)) World)
+(extern exit ((code Int) (w World)) World)
+
+;; the welded composite, same ABI layout as the slice-3 certificate.
+(fn dmod () WModule (MkWModule (list (padd) (psum) (ptriple))))
+
+;; constant-width probe: one function per interesting I32Const immediate —
+;; every sleb width boundary, both signs of the signed view, and negative
+;; immediates (the model wraps them; the encoder must mirror that).
+(fn kf ((c Int)) Func (MkFunc 0 0 (list (I32Const c))))
+
+(fn kmod () WModule
+  (MkWModule
+    (list
+      (kf 0)
+      (kf 1)
+      (kf 63)
+      (kf 64)
+      (kf 8191)
+      (kf 8192)
+      (kf 1048575)
+      (kf 1048576)
+      (kf 134217727)
+      (kf 134217728)
+      (kf 2147483647)
+      (kf 2147483648)
+      (kf 4294967295)
+      (kf -1)
+      (kf -64))))
+
+;; --- plan rendering -------------------------------------------------------------
+
+(fn cat ((xs (List (List Int)))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil "")
+    ((Cons h t) (wapp h (cat t)))))
+
+(fn hexd ((d Int)) Int (if (lt d 10) (+ 48 d) (+ 87 d)))
+
+(fn hexs ((bs (List Int))) (List Int)
+  (measure (struct bs))
+  (match bs
+    (Nil Nil)
+    ((Cons b t) (Cons (hexd (ediv b 16)) (Cons (hexd (mod b 16)) (hexs t))))))
+
+(fn showr ((r (Option Int))) (List Int)
+  (match r
+    (None "None")
+    ((Some v) (dec v))))
+
+(fn showargs ((xs (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil "")
+    ((Cons h t) (wapp " " (wapp (dec h) (showargs t))))))
+
+(fn mod_line ((nm (List Int)) (m WModule)) (List Int)
+  (cat (list "MOD " nm " " (hexs (enc_module m)) "\n")))
+
+;; a vector: run the MODEL at generous ground fuel, print what it said.
+(fn case_line ((nm (List Int)) (m WModule) (k Int) (args (List Int)) (fuel Int))
+  (List Int)
+  (cat
+    (list
+      "CASE "
+      nm
+      " f"
+      (dec k)
+      (showargs args)
+      " -> "
+      (showr (call_fn (fnat fuel) m k args))
+      "\n")))
+
+(fn kcase ((k Int)) (List Int) (case_line "kmod" (kmod) k (list) 10))
+
+(fn emit () (List Int)
+  (cat
+    (list
+      (mod_line "dmod" (dmod))
+      (mod_line "kmod" (kmod))
+      (case_line "dmod" (dmod) 0 (list 3 4) 20)
+      (case_line "dmod" (dmod) 0 (list 4294967290 10) 20)
+      (case_line "dmod" (dmod) 0 (list 2147483648 2147483648) 20)
+      (case_line "dmod" (dmod) 1 (list 0) 50)
+      (case_line "dmod" (dmod) 1 (list 1) 50)
+      (case_line "dmod" (dmod) 1 (list 10) 100)
+      (case_line "dmod" (dmod) 1 (list 100) 500)
+      (case_line "dmod" (dmod) 2 (list 0) 30)
+      (case_line "dmod" (dmod) 2 (list 5) 30)
+      (case_line "dmod" (dmod) 2 (list 4294967295) 30)
+      (kcase 0)
+      (kcase 1)
+      (kcase 2)
+      (kcase 3)
+      (kcase 4)
+      (kcase 5)
+      (kcase 6)
+      (kcase 7)
+      (kcase 8)
+      (kcase 9)
+      (kcase 10)
+      (kcase 11)
+      (kcase 12)
+      (kcase 13)
+      (kcase 14))))
+
+(fn main ((w World)) World (exit 0 (write (emit) w)))
