@@ -11,8 +11,9 @@
 ;;; check_sequent stays exactly as fast as native `check` — only the
 ;;; orchestration moved into shard.
 ;;;
-;;; Named hypotheses `(hyp ih)` are resolved to positional form
-;;; (desugar_proof_named, desugar.shard) on the native Proof before checking.
+;;; Named citations `(hyp ih)` / `(premise NAME)` / `(have NAME …)` are
+;;; resolved to positional form at the s-expr level (ds_proof, desugar.shard)
+;;; before each proof is parsed.
 ;;;
 ;;; `check_production` is the entry the DEFAULT `check` routes through: it
 ;;; takes the whole file list (imports first, then targets), processes each
@@ -185,12 +186,6 @@
        (resolve_equation env eq)
        (resolve_proof env pf)
        (resolve_proof env cont)))
-    ((HaveN nm eq pf cont)
-     (HaveN
-       nm
-       (resolve_equation env eq)
-       (resolve_proof env pf)
-       (resolve_proof env cont)))
     ((DivFacts e d q pf)
      (DivFacts (resolve_expr env e) d q (resolve_proof env pf)))
     ((RefineFact r ev pf)
@@ -277,7 +272,7 @@
 
 ;; ---------------------------------------------------------------------------
 ;; Trust ledger — who cites whom. `(Lemma name)` is the ONLY cross-claim
-;; citation form in the proof AST (Hyp/HypName/Premise are sequent-local and
+;; citation form in the proof AST (Hyp/Premise are sequent-local and
 ;; no ByTheory backend reads the theory), so the citation set of an ACCEPTED
 ;; proof is exactly its syntactic Lemma mentions: every step of an accepted
 ;; proof ran, so every mention was resolved and used. cites_of_proof walks
@@ -580,7 +575,10 @@
       " ...) entry in this file's .auto.shard sidecar (generate it with the proof solver)")))
 
 ;; Parse a decl's EFFECTIVE proof — inline as written, or spliced from the
-;; sidecar for `auto`. The two failure modes carry distinct messages.
+;; sidecar for `auto`. Named citations are desugared to positional form at
+;; the s-expr level (ds_proof, desugar.shard) against the goal's params and
+;; premise count, so the parsed Proof is ready for check_sequent directly.
+;; The failure modes carry distinct messages.
 (type PrfRes (PrfOk Proof) (PrfErr (List Int)))
 
 (fn parse_proof_auto
@@ -588,14 +586,18 @@
    (gctx RCtx)
    (name Symbol)
    (raw SExpr)
-   (autos (List (Pair Symbol SExpr))))
+   (autos (List (Pair Symbol SExpr)))
+   (g Goal))
   PrfRes
   (match (if (is_auto_proof raw) (auto_lookup name autos) (Some raw))
     (None (PrfErr (auto_missing_msg name)))
     ((Some prfS)
-     (match (parse_proof_r m gctx prfS)
-       (None (PrfErr "could not parse proof (proof DSL)"))
-       ((Some p) (PrfOk p))))))
+     (match (ds_proof m (goal_params g) Nil (goal_premise_count g) Nil prfS)
+       ((DsErr e) (PrfErr e))
+       ((DsOk prfS2)
+        (match (parse_proof_r m gctx prfS2)
+          (None (PrfErr "could not parse proof (proof DSL)"))
+          ((Some p) (PrfOk p))))))))
 
 ;; `gctx` is the file's resolution context (curmod + use-scope, with the glob
 ;; folded in as the additive base) — used to resolve each goal/proof against the
@@ -672,9 +674,9 @@
                     rest
                     target
                     focus))))))
-          ;; (claim NAME (goal …) PROOF): parse goal and proof STRAIGHT to
-          ;; native via proof_reader, then resolve named hyps to positional
-          ;; with desugar_proof_named, and check.
+          ;; (claim NAME (goal …) PROOF): desugar named citations at the
+          ;; s-expr level, parse goal and proof STRAIGHT to native via
+          ;; proof_reader, and check.
           ((DClaim nc)
            (match (parse_goal_r m gctx (claim_goal nc))
              (None
@@ -740,7 +742,8 @@
                         gctx
                         (claim_name nc)
                         (claim_proof nc)
-                        autos)
+                        autos
+                        g)
                       ((PrfErr emsg)
                        (run_decls
                          gctx
@@ -754,72 +757,51 @@
                          rest
                          target
                          focus))
-                      ((PrfOk p0)
-                       (match
-                         (desugar_proof_named
+                      ((PrfOk p)
+                       (if (check_sequent m th (lift_sequent g) p)
+                         (run_decls
+                           gctx
+                           autos
                            m
-                           (goal_params g)
-                           Nil
-                           (goal_premise_count g)
-                           Nil
-                           p0)
-                         (p
-                           (if (check_sequent m th (lift_sequent g) p)
-                             (run_decls
-                               gctx
-                               autos
-                               m
-                               (RunState
-                                 (TheoryCons
-                                   (Proven
-                                     (QName (rc_mod gctx) (claim_name nc))
-                                     (close_goal_for_storage g))
-                                   th)
-                                 pend
-                                 (Cons
-                                   (pass_or_admit
-                                     (claim_name nc)
-                                     (claim_trace
-                                       m
-                                       th
-                                       g
-                                       p
-                                       (claim_name nc)
-                                       target)
-                                     p)
-                                   acc)
-                                 (Cons
-                                   (LedgerEntry
-                                     (claim_name nc)
-                                     (quote claim)
-                                     (cites_of_proof p))
-                                   led))
-                               rest
-                               target
-                               focus)
-                             (run_decls
-                               gctx
-                               autos
-                               m
-                               (RunState
-                                 th
-                                 pend
-                                 (Cons
-                                   (COFail
-                                     (claim_name nc)
-                                     (failure_detail m th (lift_sequent g) p)
-                                     (claim_trace
-                                       m
-                                       th
-                                       g
-                                       p
-                                       (claim_name nc)
-                                       target))
-                                   acc)
-                                 led)
-                               rest
-                               target
-                               focus))))))))))))
+                           (RunState
+                             (TheoryCons
+                               (Proven
+                                 (QName (rc_mod gctx) (claim_name nc))
+                                 (close_goal_for_storage g))
+                               th)
+                             pend
+                             (Cons
+                               (pass_or_admit
+                                 (claim_name nc)
+                                 (claim_trace m th g p (claim_name nc) target)
+                                 p)
+                               acc)
+                             (Cons
+                               (LedgerEntry
+                                 (claim_name nc)
+                                 (quote claim)
+                                 (cites_of_proof p))
+                               led))
+                           rest
+                           target
+                           focus)
+                         (run_decls
+                           gctx
+                           autos
+                           m
+                           (RunState
+                             th
+                             pend
+                             (Cons
+                               (COFail
+                                 (claim_name nc)
+                                 (failure_detail m th (lift_sequent g) p)
+                                 (claim_trace m th g p (claim_name nc) target))
+                               acc)
+                             led)
+                           rest
+                           target
+                           focus))))))))))
           ;; (requirement NAME (goal …)): parse the goal to native NOW
           ;; (validating it at the contract), seed it as a pending obligation.
           ((DReq r)
@@ -874,8 +856,8 @@
                     target
                     focus))))))
           ;; (fulfills NAME PROOF): look the goal up from the requirement (the
-          ;; single source of truth — never restated here), parse the proof to
-          ;; native, resolve named hyps (desugar_proof_named), check it.
+          ;; single source of truth — never restated here), desugar named
+          ;; citations at the s-expr level, parse the proof to native, check it.
           ((DFul fu)
            (match (lookup_req (ful_name fu) (rc_mod gctx) pend)
              (None
@@ -912,7 +894,7 @@
                   target
                   focus)
                 (match
-                  (parse_proof_auto m gctx (ful_name fu) (ful_proof fu) autos)
+                  (parse_proof_auto m gctx (ful_name fu) (ful_proof fu) autos g)
                   ((PrfErr emsg)
                    (run_decls
                      gctx
@@ -926,58 +908,47 @@
                      rest
                      target
                      focus))
-                  ((PrfOk p0)
-                   (match
-                     (desugar_proof_named
+                  ((PrfOk p)
+                   (if (check_sequent m th (lift_sequent g) p)
+                     (run_decls
+                       gctx
+                       autos
                        m
-                       (goal_params g)
-                       Nil
-                       (goal_premise_count g)
-                       Nil
-                       p0)
-                     (p
-                       (if (check_sequent m th (lift_sequent g) p)
-                         (run_decls
-                           gctx
-                           autos
-                           m
-                           (RunState
-                             (TheoryCons
-                               (Proven rq (close_goal_for_storage g))
-                               th)
-                             (remove_req (ful_name fu) (rc_mod gctx) pend)
-                             (Cons
-                               (pass_or_admit
-                                 (ful_name fu)
-                                 (claim_trace m th g p (ful_name fu) target)
-                                 p)
-                               acc)
-                             (Cons
-                               (LedgerEntry
-                                 (ful_name fu)
-                                 (quote fulfills)
-                                 (cites_of_proof p))
-                               led))
-                           rest
-                           target
-                           focus)
-                         (run_decls
-                           gctx
-                           autos
-                           m
-                           (RunState
-                             th
-                             (remove_req (ful_name fu) (rc_mod gctx) pend)
-                             (Cons
-                               (COFail
-                                 (ful_name fu)
-                                 (failure_detail m th (lift_sequent g) p)
-                                 (claim_trace m th g p (ful_name fu) target))
-                               acc)
-                             led)
-                           rest
-                           target
-                           focus))))))))))))))))
+                       (RunState
+                         (TheoryCons (Proven rq (close_goal_for_storage g)) th)
+                         (remove_req (ful_name fu) (rc_mod gctx) pend)
+                         (Cons
+                           (pass_or_admit
+                             (ful_name fu)
+                             (claim_trace m th g p (ful_name fu) target)
+                             p)
+                           acc)
+                         (Cons
+                           (LedgerEntry
+                             (ful_name fu)
+                             (quote fulfills)
+                             (cites_of_proof p))
+                           led))
+                       rest
+                       target
+                       focus)
+                     (run_decls
+                       gctx
+                       autos
+                       m
+                       (RunState
+                         th
+                         (remove_req (ful_name fu) (rc_mod gctx) pend)
+                         (Cons
+                           (COFail
+                             (ful_name fu)
+                             (failure_detail m th (lift_sequent g) p)
+                             (claim_trace m th g p (ful_name fu) target))
+                           acc)
+                         led)
+                       rest
+                       target
+                       focus))))))))))))))
 
 ;; A file's resolution context (STRICT, Stage 2.5c): real curmod, its OWN
 ;; locals (the merged module's defs at curmod), and its use-scope — NO glob.
@@ -3525,20 +3496,11 @@
      (match (tc_check_goal m g)
        ((Some msg) (Some msg))
        (None
-         (match (parse_proof_auto m gctx gname ps autos)
+         (match (parse_proof_auto m gctx gname ps autos g)
            ((PrfErr emsg) (Some emsg))
-           ((PrfOk p0)
-            (match
-              (desugar_proof_named
-                m
-                (goal_params g)
-                Nil
-                (goal_premise_count g)
-                Nil
-                p0)
-              (p
-                (if (check_sequent m2 th (lift_sequent g) p) None
-                (Some "obligation proof rejected")))))))))))
+           ((PrfOk p)
+            (if (check_sequent m2 th (lift_sequent g) p) None
+            (Some "obligation proof rejected")))))))))
 
 ;; M with an SCC made opaque: those fns are dropped from the fn list and
 ;; the trie is rebuilt, so the definitions under admission are stuck terms

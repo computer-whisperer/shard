@@ -575,7 +575,7 @@ recovered from the target file or the same-module `mod.req.shard`
 | `(case-on TERM TYPE (CASE…))`                | `CaseOn`    | split on the constructor of `TERM` (of named `TYPE`); no IH    |
 | `(wf-induct MEASURE PROOF)`                  | `WfInduct`  | well-founded induction on the Int `MEASURE`; prepends IH `ih`  |
 | `(have EQ PROOF₁ PROOF₂)`                    | `Have`      | the CUT rule: prove `EQ` by `PROOF₁`, then continue with `PROOF₂` under `EQ` as a fresh premise |
-| `(have NAME EQ PROOF₁ PROOF₂)`               | `HaveN`     | named cut: as above, and `PROOF₂` may cite the fact as `(premise NAME)` — resolved to positional at load time, so inserting earlier haves can't break later citations |
+| `(have NAME EQ PROOF₁ PROOF₂)`               | `Have`      | named cut: as above, and `PROOF₂` may cite the fact as `(premise NAME)` — rewritten to the positional 3-arg form before parsing (§10.6), so inserting earlier haves can't break later citations |
 | `(fin-split VAR LO HI (CASE…))`              | `FinSplit`  | bounded-Int enumeration: `LO`/`HI` cite range premises for `VAR`; one `(case INT PROOF)` per value |
 | `(div-facts TERM D Q PROOF)`                 | `DivFacts`  | inject the Euclidean triple for `TERM` at literal divisor `D` (`n = D·Q + mod n D`, mod ranges), with quotient `Q` a fresh ∀-param — `fin-split Q` then supplies the integrality step the rational Farkas side cannot (see `std/bytes/bytes.shard`'s `mod_byte_id` for the mod-elimination idiom) |
 | `(rewrite-with EQREF DIR SIDE (INST…) (PROOF…) PROOF)` | `RewriteWith` | rewrite by a cited equation whose own premises are discharged by the sub-`PROOF`s, then continue |
@@ -619,25 +619,25 @@ What a `rewrite`/`rewrite-with`/`absurd` cites:
 | Form           | Native          | Refers to                                              |
 |----------------|-----------------|--------------------------------------------------------|
 | `(hyp K)`      | `(Hyp K)`       | hypothesis at positional index `K` (innermost = 0)     |
-| `(hyp NAME)`   | `(HypName NAME)`| a hypothesis by name — desugared to positional (below) |
+| `(hyp NAME)`   | —               | a hypothesis by name — rewritten to `(hyp K)` (below)  |
 | `(premise K)`  | `(Premise K)`   | the goal's `K`-th premise                              |
-| `(premise NAME)`| `(PremiseName NAME)` | a named have's fact — desugared to positional (below) |
+| `(premise NAME)`| —              | a named have's fact — rewritten to `(premise K)` (below) |
 | `(lemma NAME)` | `(Lemma NAME)`  | an admitted axiom or previously-proven claim           |
 
-**Named hypotheses** are a parse-time convenience. The reader emits
-`(HypName NAME)`; a separate pass (`kernel/desugar.shard`,
-`desugar_proof_named`) simulates the kernel's hyp stack and rewrites each
-to its positional `(Hyp K)`. The induction hypotheses are auto-named
-`ih`, `ih1`, `ih2`, …: `wf-induct` prepends one `ih`; each
-`induct` case appends one IH per recursive constructor field
-(in `do_induct` order). Each `case-on` arm prepends its case equation at
-`Hyp 0`, auto-named after the arm's **constructor** — `(hyp Alive)`,
-`(hyp True)`, `(hyp Some)` — with inner arms shadowing outer; named
-citations of outer hyps stay valid inside arms because the desugarer's
-simulated stack tracks the prepend. An unbound name is left as `(HypName NAME)` and
-fails cleanly at resolution. The reader stays a pure parser — it does not
-know induction semantics — which is why naming is resolved in a later
-pass, not during parsing.
+**Named citations** are surface sugar only: the loader's s-expr desugar
+pass (`kernel/desugar.shard`, `ds_proof`) simulates the kernel's hyp stack
+and premise list over the proof **source** and rewrites every name to its
+positional form *before* the proof is parsed — the native AST is purely
+positional, and no name reaches the reader or the checker. The induction
+hypotheses are auto-named `ih`, `ih1`, `ih2`, …: `wf-induct` and
+`subterm-induct` prepend one `ih`; each `induct` case appends one IH per
+recursive constructor field (in `do_induct` order). Each `case-on` arm
+prepends its case equation at `Hyp 0`, auto-named after the arm's
+**constructor** — `(hyp Alive)`, `(hyp True)`, `(hyp Some)` — with inner
+arms shadowing outer; named citations of outer hyps stay valid inside arms
+because the desugarer's simulated stack tracks the prepend. An unbound
+name fails LOUDLY at desugaring, naming the missing binding. The pass is
+untrusted: a wrong index fails at the checker's citation gate.
 
 ### 10.7 Theories (`by`)
 

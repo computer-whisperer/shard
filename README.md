@@ -144,7 +144,7 @@ kernel/                ; the kernel + its self-hosted toolchain, all narrow
   reader.shard          ;   s-expr reader + module parser, validated byte-for-byte
                        ;     vs load.rs; located parse-failure diagnostics
   proof_reader.shard    ;   the proof DSL parsed DIRECTLY to native step structures
-  desugar.shard         ;   named-hypothesis desugaring (labels → positional Hyp k)
+  desugar.shard         ;   named-citation desugaring on the proof s-expr (names → positional, pre-parse)
   loader.shard          ;   the World I/O externs + import-closure resolver
                        ;     (mode-aware module resolution: check vs run)
   driver.shard          ;   the production pipeline: build modules, run claims,

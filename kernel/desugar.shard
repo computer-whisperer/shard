@@ -1,48 +1,53 @@
-;;; desugar.shard — named-hypothesis & named-premise desugaring, in shard.
+;;; desugar.shard — named-citation desugaring at the SOURCE (s-expr) level.
 ;;;
-;;; The kernel only understands POSITIONAL citations `(Hyp k)` / `(Premise
-;;; k)`. Proof authors may instead name them — `(hyp ih)`, `(premise
-;;; lo_bound)` — for readability. proof_reader emits native `(HypName s)` /
-;;; `(PremiseName s)` (and the named-cut form `(HaveN s eq pe k)`); this
-;;; pass (desugar_proof_named) rewrites each to positional by simulating
-;;; the kernel's hyp stack AND premise list over the native Proof, and
-;;; strips HaveN to a plain Have — the checker never sees a name.
+;;; The proof AST (proof.shard) is purely POSITIONAL: `(Hyp k)` / `(Premise
+;;; k)`. Proof authors may instead write names — `(hyp ih)`, `(premise
+;;; lo_bound)`, `(have NAME EQ PE K)` — for readability. This pass (ds_proof)
+;;; rewrites a proof S-EXPR to positional form BEFORE it is parsed, by
+;;; simulating the checker's hyp stack and premise list over the surface
+;;; grammar. No name ctor exists in the native AST, so the reader, checker,
+;;; and every proof walker see positional citations only.
 ;;;
-;;; Hyp stack discipline (front = index 0 = `(Hyp 0)`):
-;;;   WfInduct        : PREPEND one IH, named 'ih
-;;;   Induct          : per case, APPEND one IH per recursive ctor field
-;;;                     (do_induct order), named 'ih, 'ih1, … (count via the
-;;;                     kernel's dbg_ih_count)
-;;;   CaseOn          : per case, PREPEND the case equation (the checker's
-;;;                     build_case_on_subgoal puts it at Hyp 0), auto-named
-;;;                     after the ctor — `(hyp Alive)` cites the enclosing
-;;;                     Alive arm's equation; inner arms shadow outer (the
-;;;                     front-first stack_pos search)
-;;; Everything else leaves the stack unchanged. Positional `(Hyp k)` is
+;;; Hyp stack discipline (front = index 0 = `(hyp 0)`):
+;;;   wf-induct /
+;;;   subterm-induct : PREPEND one IH, named 'ih
+;;;   induct         : per case, APPEND one IH per recursive ctor field
+;;;                    (do_induct order), named 'ih, 'ih1, …
+;;;   case-on        : per case, PREPEND the case equation (the checker's
+;;;                    build_case_on_subgoal puts it at Hyp 0), auto-named
+;;;                    after the ctor — `(hyp Alive)` cites the enclosing
+;;;                    Alive arm's equation; inner arms shadow outer (the
+;;;                    front-first stack_pos search)
+;;; Everything else leaves the stack unchanged. Positional `(hyp k)` is
 ;;; untouched.
 ;;;
 ;;; Premise discipline (APPEND-at-end, so indices are stable once assigned;
 ;;; base = the goal's own premise count, threaded in by the driver):
-;;;   Have/HaveN      : the fact lands at index pc; continuation at pc+1.
-;;;                     HaveN records NAME→pc (newest shadows).
-;;;   DivFacts        : likewise via div_facts_checked; its fresh quotient
-;;;                     param also extends ps for the continuation.
-;;; CAVEAT: div fact counting type-checks the term against `ps`, which here
-;;; lacks induction/case field params — a div-facts on a case-bound field
-;;; under-counts (0) and a named premise BELOW it then resolves to a lower
-;;; index. Never unsound (the checker verifies whatever is cited); fails
-;;; loudly at the citation. Spell those rare chains positionally.
+;;;   have        : the fact lands at index pc; continuation at pc+1. The
+;;;                 named form records NAME → pc (newest shadows) and is
+;;;                 REWRITTEN to the plain 3-arg form.
+;;;   div-facts   : +4 — div_facts_eqs emits exactly four facts
+;;;                 (decomposition, both mod bounds, quotient naming); a
+;;;                 div-facts that would emit otherwise is rejected by the
+;;;                 checker itself, taking the whole proof with it.
+;;;   refine-fact : +1
+;;;
+;;; An unbound name is a LOUD error (DsErr carrying the name), surfaced as
+;;; the decl's failure message. Unrecognized forms pass through untouched and
+;;; fail at the parser as before. The pass is UNTRUSTED either way: a wrong
+;;; index fails at the checker's citation gate; it can never make a bad
+;;; proof check.
 
 ;; imports — the kernel files this module uses (dependency-tracked)
 (import "stdlib.shard")
 (import "term.shard")
 (import "module.shard")
-(import "proof.shard")
-(import "checker.shard")
+(import "proof.shard")  ; Param
+(import "reader.shard")
 (use (:: kernel term *))
 (use (:: kernel module *))
 (use (:: kernel proof *))
-(use (:: kernel checker *))
+(use (:: kernel reader *))
 
 (fn stack_pos ((s Symbol) (stk (List (Option Symbol))) (k Int)) (Option Int)
   (measure (struct stk))
@@ -85,234 +90,477 @@
     (Nil b)
     ((Cons h t) (Cons h (append_ms t b)))))
 
-(fn dsn_eqs_len ((es (List Equation))) Int
-  (measure (struct es))
-  (match es
+;; ---------------------------------------------------------------------------
+;; IH count for an induct case: one IH per ctor field whose CONCRETE type
+;; equals the inducting var's type (mirrors do_induct). The typedef is pinned
+;; by the goal-param's type, so the case ctor — written bare or as a
+;; (:: SEG … NAME) path — is matched by BASE NAME within that typedef's ctor
+;; list, where base names are unique.
+;; ---------------------------------------------------------------------------
+
+(fn ds_last_sym ((ss (List SExpr))) (Option Symbol)
+  (measure (struct ss))
+  (match ss
+    (Nil None)
+    ((Cons (SSym n) Nil) (Some n))
+    ((Cons _ t) (ds_last_sym t))))
+
+;; a case's ctor as written: bare `Cons`, or the (:: SEG … NAME) path form.
+(fn ds_ctor_name ((s SExpr)) (Option Symbol)
+  (match s
+    ((SSym n) (Some n))
+    ((SList (Cons (SSym h) segs))
+     (if (sym_eq h (coloncolon_sym)) (ds_last_sym segs) None))
+    (_ None)))
+
+(fn ds_count_rec ((var_type Type) (fields (List Type))) Int
+  (measure (struct fields))
+  (match fields
     (Nil 0)
-    ((Cons _ t) (+ 1 (dsn_eqs_len t)))))
+    ((Cons f rest)
+     (if (type_eq var_type f) (+ 1 (ds_count_rec var_type rest))
+     (ds_count_rec var_type rest)))))
+
+(fn ds_ctor_fields ((cname Symbol) (ctors (List CtorDef))) (Option (List Type))
+  (measure (struct ctors))
+  (match ctors
+    (Nil None)
+    ((Cons (CtorDef nm fts) rest)
+     (if (sym_eq (qn_name nm) cname) (Some fts) (ds_ctor_fields cname rest)))))
 
 ;; How many IHs do_induct appends for ctor `cname` when inducting on `var`.
-(fn case_ih_count ((m Module) (ps (List Param)) (var Symbol) (cname QName)) Int
+(fn ds_case_ihs ((m Module) (ps (List Param)) (var Symbol) (cname Symbol)) Int
   (match (param_type var ps)
     (None 0)
-    ((Some ty) (dbg_ih_count ty cname m))))
+    ((Some ty)
+     (match (type_head ty)
+       (None 0)
+       ((Some (Pair tname targs))
+        (match (lookup_typedef tname m)
+          (None 0)
+          ((Some (TypeDef _ tparams ctors _))
+           (match (ds_ctor_fields cname ctors)
+             (None 0)
+             ((Some fts)
+              (ds_count_rec ty (type_subst_list (zip_pairs tparams targs) fts)))))))))))
 
 ;; ===========================================================================
-;; Native named-citation desugaring — over the native Proof. Simulates the
-;; SAME hyp stack and premise list the checker builds (see the header) and
-;; rewrites every (HypName s) → (Hyp k), (PremiseName s) → (Premise k),
-;; (HaveN s …) → (Have …). An unbound name is left as-is and fails cleanly
-;; at resolve_eq (checker.shard).
+;; The s-expr walk. DsErr = an unbound name (message carries it); everything
+;; the grammar doesn't recognize passes through untouched for the parser to
+;; judge. Subforms are extracted by DIRECT structural matching (not helper
+;; wrappers) so (struct s) closes the recursion — same style as parse_proof.
 ;; ===========================================================================
 
-(fn dsn_ref
-  ((stk (List (Option Symbol))) (pn (List (Pair Symbol Int))) (er EqRef))
-  EqRef
-  (match er
-    ((HypName s)
-     (match (stack_pos s stk 0)
-       ((Some k) (Hyp k))
-       (None (HypName s))))
-    ((PremiseName s)
-     (match (pn_pos s pn)
-       ((Some k) (Premise k))
-       (None (PremiseName s))))
-    (_ er)))
+(type DsRes (DsOk SExpr) (DsErr (List Int)))
+(type DsLRes (DsLOk (List SExpr)) (DsLErr (List Int)))
 
-(fn dsn_step
-  ((stk (List (Option Symbol))) (pn (List (Pair Symbol Int))) (st Step))
-  Step
-  (match st
-    ((Rewrite ref dir side all insts)
-     (Rewrite (dsn_ref stk pn ref) dir side all insts))
-    (_ st)))
+;; (hyp NAME) / (premise NAME) → positional; anything else untouched.
+(fn ds_ref
+  ((stk (List (Option Symbol))) (pn (List (Pair Symbol Int))) (s SExpr))
+  DsRes
+  (match s
+    ((SList (Cons (SSym h) (Cons (SSym nm) Nil)))
+     (if (sym_eq h (quote hyp))
+       (match (stack_pos nm stk 0)
+         ((Some k) (DsOk (SList (Cons (SSym h) (Cons (SInt k) Nil)))))
+         (None (DsErr (append_int "unbound hyp name: " (chars_of_sym nm)))))
+     (if (sym_eq h (quote premise))
+       (match (pn_pos nm pn)
+         ((Some k) (DsOk (SList (Cons (SSym h) (Cons (SInt k) Nil)))))
+         (None (DsErr (append_int "unbound premise name: " (chars_of_sym nm)))))
+       (DsOk s))))
+    (_ (DsOk s))))
 
-(fn dsn_steps
-  ((stk (List (Option Symbol))) (pn (List (Pair Symbol Int))) (sts (List Step)))
-  (List Step)
-  (measure (struct sts))
-  (match sts
-    (Nil Nil)
-    ((Cons h t) (Cons (dsn_step stk pn h) (dsn_steps stk pn t)))))
+;; a step: only (rewrite REF …) carries a citation, in argument 1.
+(fn ds_step
+  ((stk (List (Option Symbol))) (pn (List (Pair Symbol Int))) (s SExpr))
+  DsRes
+  (match s
+    ((SList (Cons (SSym h) (Cons refS rest)))
+     (if (sym_eq h (quote rewrite))
+       (match (ds_ref stk pn refS)
+         ((DsErr e) (DsErr e))
+         ((DsOk r2) (DsOk (SList (Cons (SSym h) (Cons r2 rest))))))
+       (DsOk s)))
+    (_ (DsOk s))))
 
-(fn desugar_proof_named
-  ((m Module)
-   (ps (List Param))
-   (stk (List (Option Symbol)))
-   (pc Int)
-   (pn (List (Pair Symbol Int)))
-   (p Proof))
-  Proof
-  (measure (struct p))
-  (match p
-    (Refl Refl)
-    (Admit Admit)
-    ((Steps steps cont)
-     (Steps (dsn_steps stk pn steps) (desugar_proof_named m ps stk pc pn cont)))
-    ((Induct var cases) (Induct var (dsn_cases m ps stk pc pn var cases)))
-    ((CaseOn e var cases)
-     (CaseOn e var (dsn_caseon_cases m ps stk pc pn cases)))
-    ((WfInduct measure sub)
-     (WfInduct
-       measure
-       (desugar_proof_named m ps (Cons (Some (quote ih)) stk) pc pn sub)))
-    ((SubtermInduct var sub)  ; prepends one IH at Hyp 0, named 'ih (like WfInduct)
-     (SubtermInduct
-       var
-       (desugar_proof_named m ps (Cons (Some (quote ih)) stk) pc pn sub)))
-    ((RewriteWith ref dir side insts subs cont)
-     (RewriteWith
-       (dsn_ref stk pn ref)
-       dir
-       side
-       insts
-       (dsn_proofs m ps stk pc pn subs)
-       (desugar_proof_named m ps stk pc pn cont)))
-    ((Absurd ref) (Absurd (dsn_ref stk pn ref)))
-    ((FinSplit var lo hi cases)  ; no IH pushed; bounds + cases keep the stack
-     (FinSplit
-       var
-       (dsn_ref stk pn lo)
-       (dsn_ref stk pn hi)
-       (dsn_fincases m ps stk pc pn cases)))
-    ((Have eq pe pr)  ; cut: the fact lands at premise pc; continuation +1
-     (Have
-       eq
-       (desugar_proof_named m ps stk pc pn pe)
-       (desugar_proof_named m ps stk (+ pc 1) pn pr)))
-    ((HaveN nm eq pe pr)  ; named cut: record nm → pc, strip to Have
-     (Have
-       eq
-       (desugar_proof_named m ps stk pc pn pe)
-       (desugar_proof_named m ps stk (+ pc 1) (Cons (Pair nm pc) pn) pr)))
-    ((DivFacts n d q pr)  ; facts appended + the fresh quotient param
-     (DivFacts
-       n
-       d
-       q
-       (match (div_facts_checked m ps n d q)
-         (None (desugar_proof_named m ps stk pc pn pr))
-         ((Some (Pair ps2 fs))
-          (desugar_proof_named m ps2 stk (+ pc (dsn_eqs_len fs)) pn pr)))))
-    ((RefineFact r ev pr)  ; one structural-invariant fact appended, no new param
-     (RefineFact r ev (desugar_proof_named m ps stk (+ pc 1) pn pr)))
-    (_ p)))  ; ByTheory — no hyp refs
-
-(fn dsn_fincases
-  ((m Module)
-   (ps (List Param))
-   (stk (List (Option Symbol)))
-   (pc Int)
-   (pn (List (Pair Symbol Int)))
-   (cases (List FinCase)))
-  (List FinCase)
-  (measure (struct cases))
-  (match cases
-    (Nil Nil)
-    ((Cons (FinCase v sub) rest)
-     (Cons
-       (FinCase v (desugar_proof_named m ps stk pc pn sub))
-       (dsn_fincases m ps stk pc pn rest)))))
-
-(fn dsn_proofs
-  ((m Module)
-   (ps (List Param))
-   (stk (List (Option Symbol)))
-   (pc Int)
-   (pn (List (Pair Symbol Int)))
-   (subs (List Proof)))
-  (List Proof)
-  (measure (struct subs))
-  (match subs
-    (Nil Nil)
+(fn ds_steps
+  ((stk (List (Option Symbol))) (pn (List (Pair Symbol Int))) (ss (List SExpr)))
+  DsLRes
+  (measure (struct ss))
+  (match ss
+    (Nil (DsLOk Nil))
     ((Cons h t)
-     (Cons (desugar_proof_named m ps stk pc pn h) (dsn_proofs m ps stk pc pn t)))))
+     (match (ds_step stk pn h)
+       ((DsErr e) (DsLErr e))
+       ((DsOk h2)
+        (match (ds_steps stk pn t)
+          ((DsLErr e) (DsLErr e))
+          ((DsLOk t2) (DsLOk (Cons h2 t2)))))))))
 
-;; Induct cases: each appends its IH entries before the sub-proof.
-(fn dsn_cases
+(fn ds_proof
+  ((m Module)
+   (ps (List Param))
+   (stk (List (Option Symbol)))
+   (pc Int)
+   (pn (List (Pair Symbol Int)))
+   (s SExpr))
+  DsRes
+  (measure (struct s))
+  (match s
+    ((SList (Cons (SSym h) args))
+     (if (sym_eq h (quote steps))
+       (match args
+         ((Cons stepsS (Cons contS Nil))
+          (match stepsS
+            ((SList items)
+             (match (ds_steps stk pn items)
+               ((DsLErr e) (DsErr e))
+               ((DsLOk items2)
+                (match (ds_proof m ps stk pc pn contS)
+                  ((DsErr e) (DsErr e))
+                  ((DsOk cont2)
+                   (DsOk
+                     (SList
+                       (Cons (SSym h) (Cons (SList items2) (Cons cont2 Nil))))))))))
+            (_ (DsOk s))))
+         (_ (DsOk s)))
+     (if (sym_eq h (quote induct))
+       (match args
+         ((Cons (SSym var) (Cons casesS Nil))
+          (match casesS
+            ((SList cs)
+             (match (ds_icases m ps stk pc pn var cs)
+               ((DsLErr e) (DsErr e))
+               ((DsLOk cs2)
+                (DsOk
+                  (SList
+                    (Cons (SSym h) (Cons (SSym var) (Cons (SList cs2) Nil))))))))
+            (_ (DsOk s))))
+         (_ (DsOk s)))
+     (if (sym_eq h (quote case-on))
+       (match args
+         ((Cons termS (Cons tyS (Cons casesS Nil)))
+          (match casesS
+            ((SList cs)
+             (match (ds_ccases m ps stk pc pn cs)
+               ((DsLErr e) (DsErr e))
+               ((DsLOk cs2)
+                (DsOk
+                  (SList
+                    (Cons
+                      (SSym h)
+                      (Cons termS (Cons tyS (Cons (SList cs2) Nil)))))))))
+            (_ (DsOk s))))
+         (_ (DsOk s)))
+     (if (sym_eq h (quote wf-induct))
+       (match args
+         ((Cons measureS (Cons subS Nil))
+          (match (ds_proof m ps (Cons (Some (quote ih)) stk) pc pn subS)
+            ((DsErr e) (DsErr e))
+            ((DsOk sub2)
+             (DsOk (SList (Cons (SSym h) (Cons measureS (Cons sub2 Nil))))))))
+         (_ (DsOk s)))
+     (if (sym_eq h (quote subterm-induct))
+       (match args
+         ((Cons varS (Cons subS Nil))
+          (match (ds_proof m ps (Cons (Some (quote ih)) stk) pc pn subS)
+            ((DsErr e) (DsErr e))
+            ((DsOk sub2)
+             (DsOk (SList (Cons (SSym h) (Cons varS (Cons sub2 Nil))))))))
+         (_ (DsOk s)))
+     (if (sym_eq h (quote fin-split))
+       (match args
+         ((Cons varS (Cons loS (Cons hiS (Cons casesS Nil))))
+          (match (ds_ref stk pn loS)
+            ((DsErr e) (DsErr e))
+            ((DsOk lo2)
+             (match (ds_ref stk pn hiS)
+               ((DsErr e) (DsErr e))
+               ((DsOk hi2)
+                (match casesS
+                  ((SList cs)
+                   (match (ds_fincases m ps stk pc pn cs)
+                     ((DsLErr e) (DsErr e))
+                     ((DsLOk cs2)
+                      (DsOk
+                        (SList
+                          (Cons
+                            (SSym h)
+                            (Cons
+                              varS
+                              (Cons lo2 (Cons hi2 (Cons (SList cs2) Nil))))))))))
+                  (_ (DsOk s))))))))
+         (_ (DsOk s)))
+     (if (sym_eq h (quote absurd))
+       (match args
+         ((Cons refS Nil)
+          (match (ds_ref stk pn refS)
+            ((DsErr e) (DsErr e))
+            ((DsOk r2) (DsOk (SList (Cons (SSym h) (Cons r2 Nil)))))))
+         (_ (DsOk s)))
+     (if (sym_eq h (quote rewrite-with))
+       (match args
+         ((Cons
+            refS
+            (Cons dirS (Cons sideS (Cons instsS (Cons subsS (Cons contS Nil))))))
+          (match (ds_ref stk pn refS)
+            ((DsErr e) (DsErr e))
+            ((DsOk r2)
+             (match subsS
+               ((SList subs)
+                (match (ds_proofs m ps stk pc pn subs)
+                  ((DsLErr e) (DsErr e))
+                  ((DsLOk subs2)
+                   (match (ds_proof m ps stk pc pn contS)
+                     ((DsErr e) (DsErr e))
+                     ((DsOk cont2)
+                      (DsOk
+                        (SList
+                          (Cons
+                            (SSym h)
+                            (Cons
+                              r2
+                              (Cons
+                                dirS
+                                (Cons
+                                  sideS
+                                  (Cons
+                                    instsS
+                                    (Cons (SList subs2) (Cons cont2 Nil))))))))))))))
+               (_ (DsOk s))))))
+         (_ (DsOk s)))
+     (if (sym_eq h (quote have))
+       (match args
+         ;; named form: (have NAME EQ PE K) — NAME a bare symbol (the 3-arg
+         ;; form's EQ is always a list, so the shapes are disjoint). Record
+         ;; NAME → pc for the continuation, emit the plain 3-arg form.
+         ((Cons (SSym nm) (Cons eqS (Cons peS (Cons prS Nil))))
+          (match (ds_proof m ps stk pc pn peS)
+            ((DsErr e) (DsErr e))
+            ((DsOk pe2)
+             (match (ds_proof m ps stk (+ pc 1) (Cons (Pair nm pc) pn) prS)
+               ((DsErr e) (DsErr e))
+               ((DsOk pr2)
+                (DsOk
+                  (SList (Cons (SSym h) (Cons eqS (Cons pe2 (Cons pr2 Nil)))))))))))
+         ((Cons eqS (Cons peS (Cons prS Nil)))
+          (match (ds_proof m ps stk pc pn peS)
+            ((DsErr e) (DsErr e))
+            ((DsOk pe2)
+             (match (ds_proof m ps stk (+ pc 1) pn prS)
+               ((DsErr e) (DsErr e))
+               ((DsOk pr2)
+                (DsOk
+                  (SList (Cons (SSym h) (Cons eqS (Cons pe2 (Cons pr2 Nil)))))))))))
+         (_ (DsOk s)))
+     (if (sym_eq h (quote div-facts))
+       (match args
+         ((Cons termS (Cons dS (Cons qS (Cons subS Nil))))
+          (match (ds_proof m ps stk (+ pc 4) pn subS)
+            ((DsErr e) (DsErr e))
+            ((DsOk sub2)
+             (DsOk
+               (SList
+                 (Cons
+                   (SSym h)
+                   (Cons termS (Cons dS (Cons qS (Cons sub2 Nil))))))))))
+         (_ (DsOk s)))
+     (if (sym_eq h (quote refine-fact))
+       (match args
+         ((Cons rS (Cons exprS (Cons subS Nil)))
+          (match (ds_proof m ps stk (+ pc 1) pn subS)
+            ((DsErr e) (DsErr e))
+            ((DsOk sub2)
+             (DsOk
+               (SList (Cons (SSym h) (Cons rS (Cons exprS (Cons sub2 Nil)))))))))
+         (_ (DsOk s)))
+       (DsOk s)))))))))))))  ; refl/admit/below/by/inspect & unknown forms
+    (_ (DsOk s))))
+
+;; induct cases: each appends its IH entries before the sub-proof.
+(fn ds_icase
   ((m Module)
    (ps (List Param))
    (stk (List (Option Symbol)))
    (pc Int)
    (pn (List (Pair Symbol Int)))
    (var Symbol)
-   (cases (List Case)))
-  (List Case)
-  (measure (struct cases))
-  (match cases
-    (Nil Nil)
-    ((Cons c rest)
-     (Cons (dsn_case m ps stk pc pn var c) (dsn_cases m ps stk pc pn var rest)))))
+   (s SExpr))
+  DsRes
+  (measure (struct s))
+  (match s
+    ((SList (Cons (SSym h) (Cons ctorS (Cons subS Nil))))  ; (case CTOR SUB)
+     (if (sym_eq h (quote case))
+       (match (ds_ctor_name ctorS)
+         (None (DsOk s))
+         ((Some cn)
+          (match
+            (ds_proof
+              m
+              ps
+              (append_ms stk (ih_entries 0 (ds_case_ihs m ps var cn)))
+              pc
+              pn
+              subS)
+            ((DsErr e) (DsErr e))
+            ((DsOk sub2)
+             (DsOk (SList (Cons (SSym h) (Cons ctorS (Cons sub2 Nil)))))))))
+       (DsOk s)))
+    ((SList (Cons (SSym h) (Cons ctorS (Cons fieldsS (Cons subS Nil)))))
+     ;; (case CTOR (FIELD…) SUB)
+     (if (sym_eq h (quote case))
+       (match (ds_ctor_name ctorS)
+         (None (DsOk s))
+         ((Some cn)
+          (match
+            (ds_proof
+              m
+              ps
+              (append_ms stk (ih_entries 0 (ds_case_ihs m ps var cn)))
+              pc
+              pn
+              subS)
+            ((DsErr e) (DsErr e))
+            ((DsOk sub2)
+             (DsOk
+               (SList
+                 (Cons (SSym h) (Cons ctorS (Cons fieldsS (Cons sub2 Nil))))))))))
+       (DsOk s)))
+    (_ (DsOk s))))
 
-(fn dsn_case
+(fn ds_icases
   ((m Module)
    (ps (List Param))
    (stk (List (Option Symbol)))
    (pc Int)
    (pn (List (Pair Symbol Int)))
    (var Symbol)
-   (c Case))
-  Case
-  (measure (struct c))
-  (match c
-    ((Case cname sub)
-     (Case
-       cname
-       (desugar_proof_named
-         m
-         ps
-         (append_ms stk (ih_entries 0 (case_ih_count m ps var cname)))
-         pc
-         pn
-         sub)))
-    ((CaseB cname fields sub)
-     (CaseB
-       cname
-       fields
-       (desugar_proof_named
-         m
-         ps
-         (append_ms stk (ih_entries 0 (case_ih_count m ps var cname)))
-         pc
-         pn
-         sub)))))
+   (ss (List SExpr)))
+  DsLRes
+  (measure (struct ss))
+  (match ss
+    (Nil (DsLOk Nil))
+    ((Cons h t)
+     (match (ds_icase m ps stk pc pn var h)
+       ((DsErr e) (DsLErr e))
+       ((DsOk h2)
+        (match (ds_icases m ps stk pc pn var t)
+          ((DsLErr e) (DsLErr e))
+          ((DsLOk t2) (DsLOk (Cons h2 t2)))))))))
 
-;; CaseOn cases: no IH, but the checker prepends the case equation at Hyp 0
+;; case-on cases: no IH, but the checker prepends the case equation at Hyp 0
 ;; (build_case_on_subgoal) — so each arm prepends one stack slot, auto-named
-;; after the arm's ctor: `(hyp Alive)` cites the enclosing Alive arm's
-;; equation. Inner arms shadow outer (front-first stack_pos search).
-(fn dsn_caseon_cases
+;; after the arm's ctor. Inner arms shadow outer (front-first stack_pos).
+(fn ds_ccase
   ((m Module)
    (ps (List Param))
    (stk (List (Option Symbol)))
    (pc Int)
    (pn (List (Pair Symbol Int)))
-   (cases (List Case)))
-  (List Case)
-  (measure (struct cases))
-  (match cases
-    (Nil Nil)
-    ((Cons c rest)
-     (Cons
-       (dsn_caseon_case m ps stk pc pn c)
-       (dsn_caseon_cases m ps stk pc pn rest)))))
+   (s SExpr))
+  DsRes
+  (measure (struct s))
+  (match s
+    ((SList (Cons (SSym h) (Cons ctorS (Cons subS Nil))))  ; (case CTOR SUB)
+     (if (sym_eq h (quote case))
+       (match (ds_ctor_name ctorS)
+         (None (DsOk s))
+         ((Some cn)
+          (match (ds_proof m ps (Cons (Some cn) stk) pc pn subS)
+            ((DsErr e) (DsErr e))
+            ((DsOk sub2)
+             (DsOk (SList (Cons (SSym h) (Cons ctorS (Cons sub2 Nil)))))))))
+       (DsOk s)))
+    ((SList (Cons (SSym h) (Cons ctorS (Cons fieldsS (Cons subS Nil)))))
+     ;; (case CTOR (FIELD…) SUB)
+     (if (sym_eq h (quote case))
+       (match (ds_ctor_name ctorS)
+         (None (DsOk s))
+         ((Some cn)
+          (match (ds_proof m ps (Cons (Some cn) stk) pc pn subS)
+            ((DsErr e) (DsErr e))
+            ((DsOk sub2)
+             (DsOk
+               (SList
+                 (Cons (SSym h) (Cons ctorS (Cons fieldsS (Cons sub2 Nil))))))))))
+       (DsOk s)))
+    (_ (DsOk s))))
 
-(fn dsn_caseon_case
+(fn ds_ccases
   ((m Module)
    (ps (List Param))
    (stk (List (Option Symbol)))
    (pc Int)
    (pn (List (Pair Symbol Int)))
-   (c Case))
-  Case
-  (measure (struct c))
-  (match c
-    ((Case cname sub)
-     (Case
-       cname
-       (desugar_proof_named m ps (Cons (Some (qn_name cname)) stk) pc pn sub)))
-    ((CaseB cname fields sub)
-     (CaseB
-       cname
-       fields
-       (desugar_proof_named m ps (Cons (Some (qn_name cname)) stk) pc pn sub)))))
+   (ss (List SExpr)))
+  DsLRes
+  (measure (struct ss))
+  (match ss
+    (Nil (DsLOk Nil))
+    ((Cons h t)
+     (match (ds_ccase m ps stk pc pn h)
+       ((DsErr e) (DsLErr e))
+       ((DsOk h2)
+        (match (ds_ccases m ps stk pc pn t)
+          ((DsLErr e) (DsLErr e))
+          ((DsLOk t2) (DsLOk (Cons h2 t2)))))))))
+
+;; fin-split cases: (case INT SUB) — no hyp pushed; stack and premises pass
+;; through unchanged.
+(fn ds_fincase
+  ((m Module)
+   (ps (List Param))
+   (stk (List (Option Symbol)))
+   (pc Int)
+   (pn (List (Pair Symbol Int)))
+   (s SExpr))
+  DsRes
+  (measure (struct s))
+  (match s
+    ((SList (Cons (SSym h) (Cons vS (Cons subS Nil))))
+     (if (sym_eq h (quote case))
+       (match (ds_proof m ps stk pc pn subS)
+         ((DsErr e) (DsErr e))
+         ((DsOk sub2) (DsOk (SList (Cons (SSym h) (Cons vS (Cons sub2 Nil)))))))
+       (DsOk s)))
+    (_ (DsOk s))))
+
+(fn ds_fincases
+  ((m Module)
+   (ps (List Param))
+   (stk (List (Option Symbol)))
+   (pc Int)
+   (pn (List (Pair Symbol Int)))
+   (ss (List SExpr)))
+  DsLRes
+  (measure (struct ss))
+  (match ss
+    (Nil (DsLOk Nil))
+    ((Cons h t)
+     (match (ds_fincase m ps stk pc pn h)
+       ((DsErr e) (DsLErr e))
+       ((DsOk h2)
+        (match (ds_fincases m ps stk pc pn t)
+          ((DsLErr e) (DsLErr e))
+          ((DsLOk t2) (DsLOk (Cons h2 t2)))))))))
+
+;; rewrite-with premise sub-proofs: same stack / premise context.
+(fn ds_proofs
+  ((m Module)
+   (ps (List Param))
+   (stk (List (Option Symbol)))
+   (pc Int)
+   (pn (List (Pair Symbol Int)))
+   (ss (List SExpr)))
+  DsLRes
+  (measure (struct ss))
+  (match ss
+    (Nil (DsLOk Nil))
+    ((Cons h t)
+     (match (ds_proof m ps stk pc pn h)
+       ((DsErr e) (DsLErr e))
+       ((DsOk h2)
+        (match (ds_proofs m ps stk pc pn t)
+          ((DsLErr e) (DsLErr e))
+          ((DsLOk t2) (DsLOk (Cons h2 t2)))))))))
