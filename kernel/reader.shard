@@ -1771,16 +1771,264 @@
     ((Cons (Pair n ty) t)
      (Cons (rx_updater rd rvar vvar n ty) (rx_updaters rd rvar vvar t)))))
 
+;; ---------------------------------------------------------------------------
+;; The LAW FAMILY — one claim per algebraic fact about the generated fns,
+;; each with a machine proof (single-ctor case-on + hyp-rewrite + compute).
+;; Names are mechanical so an author can cite without looking them up:
+;;   FIELD_of_def           (= (FIELD_of (CTOR f…)) FIELD)
+;;   with_FIELD_def         (= (with_FIELD v (CTOR f…)) (CTOR …v…))
+;;   F_of_with_F            select-over-update, same field   (= … v)
+;;   G_of_with_F            select-over-update, cross        (= … (G_of r))
+;;   with_F_with_F          update-over-update, same field
+;;   NAME_eta               reconstruction (the case-on replacement)
+;; Eager n²+3n+1 claims per record — tiny compute proofs; the run pays
+;; nothing (claims are check-only; run's collect_fns_externs skips them).
+;; ---------------------------------------------------------------------------
+
+(fn rx_eqf ((l SExpr) (r SExpr)) SExpr
+  (SList (Cons (SSym (quote =)) (Cons l (Cons r Nil)))))
+
+(fn rx_goal_form ((params (List SExpr)) (concl SExpr)) SExpr
+  (SList
+    (Cons
+      (SSym (quote goal))
+      (Cons (SList params) (Cons (SList Nil) (Cons concl Nil))))))
+
+(fn rx_claim_form ((name Symbol) (goal SExpr) (proof SExpr)) SExpr
+  (SList
+    (Cons (SSym (quote claim)) (Cons (SSym name) (Cons goal (Cons proof Nil))))))
+
+(fn rx_join ((a Symbol) (b Symbol)) Symbol
+  (sym_of_chars (append_int (chars_of_sym a) (append_int "_" (chars_of_sym b)))))
+
+;; (steps ((rewrite (hyp 0) lr both true ()) (compute both)) refl)
+(fn rx_hyp_compute_steps () SExpr
+  (SList
+    (Cons
+      (SSym (quote steps))
+      (Cons
+        (SList
+          (Cons
+            (SList
+              (Cons
+                (SSym (quote rewrite))
+                (Cons
+                  (SList (Cons (SSym (quote hyp)) (Cons (SInt 0) Nil)))
+                  (Cons
+                    (SSym (quote lr))
+                    (Cons
+                      (SSym (quote both))
+                      (Cons (SSym (quote true)) (Cons (SList Nil) Nil)))))))
+            (Cons
+              (SList
+                (Cons (SSym (quote compute)) (Cons (SSym (quote both)) Nil)))
+              Nil)))
+        (Cons (SSym (quote refl)) Nil)))))
+
+;; (steps ((compute both)) refl)
+(fn rx_compute_steps () SExpr
+  (SList
+    (Cons
+      (SSym (quote steps))
+      (Cons
+        (SList
+          (Cons
+            (SList (Cons (SSym (quote compute)) (Cons (SSym (quote both)) Nil)))
+            Nil))
+        (Cons (SSym (quote refl)) Nil)))))
+
+;; (case-on RVAR NAME ((case CTOR (fields…) STEPS)))
+(fn rx_caseon_proof ((rd RecDef) (rvar Symbol)) SExpr
+  (match rd
+    ((RecDef name ctor fs)
+     (SList
+       (Cons
+         (SSym (quote case-on))
+         (Cons
+           (SSym rvar)
+           (Cons
+             (SSym name)
+             (Cons
+               (SList
+                 (Cons
+                   (SList
+                     (Cons
+                       (SSym (quote case))
+                       (Cons
+                         (SSym ctor)
+                         (Cons
+                           (SList (rx_ssyms (rx_names fs)))
+                           (Cons (rx_hyp_compute_steps) Nil)))))
+                   Nil))
+               Nil))))))))
+
+;; the field names as typed goal params ((f0 T0) … (fn Tn))
+(fn rx_field_params ((fs (List (Pair Symbol SExpr)))) (List SExpr)
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons (Pair n ty) t) (Cons (rx_param n ty) (rx_field_params t)))))
+
+;; FIELD_of_def + with_FIELD_def for one field
+(fn rx_def_laws ((rd RecDef) (vvar Symbol) (fld Symbol) (fty SExpr))
+  (List SExpr)
+  (match rd
+    ((RecDef name ctor fs)
+     (Cons
+       (rx_claim_form
+         (rx_join (rx_acc_name fld) (quote def))
+         (rx_goal_form
+           (rx_field_params fs)
+           (rx_eqf
+             (rx_ctor_app
+               (rx_acc_name fld)
+               (Cons (rx_ctor_app ctor (rx_ssyms (rx_names fs))) Nil))
+             (SSym fld)))
+         (rx_compute_steps))
+       (Cons
+         (rx_claim_form
+           (rx_join (rx_upd_name fld) (quote def))
+           (rx_goal_form
+             (Cons (rx_param vvar fty) (rx_field_params fs))
+             (rx_eqf
+               (rx_ctor_app
+                 (rx_upd_name fld)
+                 (Cons
+                   (SSym vvar)
+                   (Cons (rx_ctor_app ctor (rx_ssyms (rx_names fs))) Nil)))
+               (rx_ctor_app ctor (rx_upd_args fs fld vvar))))
+           (rx_compute_steps))
+         Nil)))))
+
+;; F_of_with_F (same) and G_of_with_F (cross, for every other field G)
+(fn rx_select_laws_go
+  ((rd RecDef)
+   (rvar Symbol)
+   (vvar Symbol)
+   (fld Symbol)
+   (fty SExpr)
+   (gs (List (Pair Symbol SExpr))))
+  (List SExpr)
+  (measure (struct gs))
+  (match gs
+    (Nil Nil)
+    ((Cons (Pair g _) t)
+     (match rd
+       ((RecDef name ctor fs)
+        (Cons
+          (rx_claim_form
+            (rx_join (rx_acc_name g) (rx_upd_name fld))
+            (rx_goal_form
+              (Cons (rx_param vvar fty) (Cons (rx_param rvar (SSym name)) Nil))
+              (rx_eqf
+                (rx_ctor_app
+                  (rx_acc_name g)
+                  (Cons
+                    (rx_ctor_app
+                      (rx_upd_name fld)
+                      (Cons (SSym vvar) (Cons (SSym rvar) Nil)))
+                    Nil))
+                (if (sym_eq g fld) (SSym vvar)
+                (rx_ctor_app (rx_acc_name g) (Cons (SSym rvar) Nil)))))
+            (rx_caseon_proof rd rvar))
+          (rx_select_laws_go rd rvar vvar fld fty t)))))))
+
+;; with_F_with_F — the same-field update-over-update collapse
+(fn rx_updupd_law
+  ((rd RecDef)
+   (rvar Symbol)
+   (vvar Symbol)
+   (uvar Symbol)
+   (fld Symbol)
+   (fty SExpr))
+  SExpr
+  (match rd
+    ((RecDef name ctor fs)
+     (rx_claim_form
+       (rx_join (rx_upd_name fld) (rx_upd_name fld))
+       (rx_goal_form
+         (Cons
+           (rx_param vvar fty)
+           (Cons (rx_param uvar fty) (Cons (rx_param rvar (SSym name)) Nil)))
+         (rx_eqf
+           (rx_ctor_app
+             (rx_upd_name fld)
+             (Cons
+               (SSym vvar)
+               (Cons
+                 (rx_ctor_app
+                   (rx_upd_name fld)
+                   (Cons (SSym uvar) (Cons (SSym rvar) Nil)))
+                 Nil)))
+           (rx_ctor_app
+             (rx_upd_name fld)
+             (Cons (SSym vvar) (Cons (SSym rvar) Nil)))))
+       (rx_caseon_proof rd rvar)))))
+
+;; (CTOR (f0_of r) … (fn_of r)) — the eta right-hand side
+(fn rx_eta_args ((fs (List (Pair Symbol SExpr))) (rvar Symbol)) (List SExpr)
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons (Pair n _) t)
+     (Cons
+       (rx_ctor_app (rx_acc_name n) (Cons (SSym rvar) Nil))
+       (rx_eta_args t rvar)))))
+
+(fn rx_eta_law ((rd RecDef) (rvar Symbol)) SExpr
+  (match rd
+    ((RecDef name ctor fs)
+     (rx_claim_form
+       (rx_join name (quote eta))
+       (rx_goal_form
+         (Cons (rx_param rvar (SSym name)) Nil)
+         (rx_eqf (SSym rvar) (rx_ctor_app ctor (rx_eta_args fs rvar))))
+       (rx_caseon_proof rd rvar)))))
+
+;; all per-field laws: defs + the select grid + update-over-update
+(fn rx_field_laws
+  ((rd RecDef)
+   (rvar Symbol)
+   (vvar Symbol)
+   (uvar Symbol)
+   (fs (List (Pair Symbol SExpr))))
+  (List SExpr)
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons (Pair n ty) t)
+     (match rd
+       ((RecDef nm c allfs)
+        (rx_app_sx
+          (rx_def_laws rd vvar n ty)
+          (rx_app_sx
+            (rx_select_laws_go rd rvar vvar n ty allfs)
+            (Cons
+              (rx_updupd_law rd rvar vvar uvar n ty)
+              (rx_field_laws rd rvar vvar uvar t)))))))))
+
+(fn rx_laws ((rd RecDef) (rvar Symbol) (vvar Symbol) (uvar Symbol)) (List SExpr)
+  (match rd
+    ((RecDef name ctor fs)
+     (rx_app_sx
+       (rx_field_laws rd rvar vvar uvar fs)
+       (Cons (rx_eta_law rd rvar) Nil)))))
+
 ;; one record's full expansion, in declaration order: type, accessors,
-;; updaters
+;; updaters, the law family
 (fn rx_expand ((rd RecDef)) (List SExpr)
   (match rd
     ((RecDef name ctor fs)
      (let ((rvar (rx_fresh "r" (rx_names fs))))
        (let ((vvar (rx_fresh "v" (rx_names fs))))
-         (Cons
-           (rx_type_form rd)
-           (rx_app_sx (rx_accessors rd rvar fs) (rx_updaters rd rvar vvar fs))))))))
+         (let ((uvar (rx_fresh "u" (rx_names fs))))
+           (Cons
+             (rx_type_form rd)
+             (rx_app_sx
+               (rx_accessors rd rvar fs)
+               (rx_app_sx
+                 (rx_updaters rd rvar vvar fs)
+                 (rx_laws rd rvar vvar uvar))))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; (make …) / (with …) — the construction and update sugar.
@@ -3346,7 +3594,14 @@
                       (module_externdefs acc)
                       (module_typedefs acc)
                       m)
-                    (claim_items_go (use_forms src) mp))))
+                    ;; scan the EXPANDED forms — a (record …)'s generated
+                    ;; law claims must be citable like hand-written ones
+                    ;; (None is unreachable: parse_module already succeeded)
+                    (claim_items_go
+                      (match (expand_records (use_forms src))
+                        (None Nil)
+                        ((Some efs) efs))
+                      mp))))
                (build_module_d
                  rest
                  (merge_modules acc rm)
