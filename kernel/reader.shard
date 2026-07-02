@@ -1559,21 +1559,266 @@
         (if (skip_form hname) (collect_fns_externs rest ctors)
         None)))))))))  ; unknown form → reject (cf. load.rs)
 
+;; ===========================================================================
+;; (record …) EXPANSION — named-field products (issue #3). The form
+;;
+;;   (record NAME (ctor CTOR)? (FIELD TYPE)+)
+;;
+;; is loader-level SUGAR: it expands at the s-expr level — after read_all,
+;; before the collector passes, in BOTH parse_module and parse_decls, so
+;; check and run see identical declarations — into the positional
+;; single-ctor (type NAME (CTOR T…)), one FIELD_of accessor and one
+;; with_FIELD updater per field (value-first: (with_score v g)). The kernel
+;; never sees a record form and the Rust TCB is untouched: load.rs rejects
+;; the head, so kernel files stay hand-positional and a record-using file
+;; loads only through this reader. CTOR defaults to MkNAME; a leading
+;; (ctor GS) entry overrides it, and `ctor` is therefore reserved — it
+;; cannot name a field. Duplicate field names are refused (None → the
+;; standard parse-failure path names the form).
+;; ===========================================================================
+
+(type RecDef (RecDef Symbol Symbol (List (Pair Symbol SExpr))))  ; name ctor fields
+
+(fn rx_names ((fs (List (Pair Symbol SExpr)))) (List Symbol)
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons (Pair n _) t) (Cons n (rx_names t)))))
+
+(fn rx_ftypes ((fs (List (Pair Symbol SExpr)))) (List SExpr)
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons (Pair _ ty) t) (Cons ty (rx_ftypes t)))))
+
+(fn rx_ssyms ((ns (List Symbol))) (List SExpr)
+  (measure (struct ns))
+  (match ns
+    (Nil Nil)
+    ((Cons n t) (Cons (SSym n) (rx_ssyms t)))))
+
+(fn rx_len ((ns (List Symbol))) Int
+  (measure (struct ns))
+  (match ns
+    (Nil 0)
+    ((Cons _ t) (+ 1 (rx_len t)))))
+
+(fn rx_app_sx ((a (List SExpr)) (b (List SExpr))) (List SExpr)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (rx_app_sx t b)))))
+
+;; A binder name distinct from every field name: candidates base, base0,
+;; base00, … — with F fields at most F candidates are taken, so the first
+;; F+1 contain a free one (fuel = F+1 at the call site).
+(fn rx_zeros ((k Int)) (List Int)
+  (measure k (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (le k 0) Nil (Cons 48 (rx_zeros (- k 1)))))
+
+(fn rx_fresh_go ((base (List Int)) (avoid (List Symbol)) (k Int) (fuel Int))
+  Symbol
+  (measure fuel (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (le fuel 0) (sym_of_chars (append_int base (rx_zeros k)))
+  (if (sym_mem (sym_of_chars (append_int base (rx_zeros k))) avoid)
+    (rx_fresh_go base avoid (+ k 1) (- fuel 1))
+    (sym_of_chars (append_int base (rx_zeros k))))))
+
+(fn rx_fresh ((base (List Int)) (avoid (List Symbol))) Symbol
+  (rx_fresh_go base avoid 0 (+ (rx_len avoid) 1)))
+
+;; the (FIELD TYPE) entries; None on malformed entries, duplicate names, or
+;; a field named `ctor` (reserved for the override entry)
+(fn rx_fields_of ((es (List SExpr)) (seen (List Symbol)))
+  (Option (List (Pair Symbol SExpr)))
+  (measure (struct es))
+  (match es
+    (Nil (Some Nil))
+    ((Cons e rest)
+     (match e
+       ((SList (Cons (SSym n) (Cons ty Nil)))
+        (if (sym_mem n seen) None
+        (if (sym_eq n (quote ctor)) None
+        (match (rx_fields_of rest (Cons n seen))
+          (None None)
+          ((Some fs) (Some (Cons (Pair n ty) fs)))))))
+       (_ None)))))
+
+(fn rx_default_ctor ((name Symbol)) Symbol
+  (sym_of_chars (append_int "Mk" (chars_of_sym name))))
+
+(fn rx_acc_name ((fld Symbol)) Symbol
+  (sym_of_chars (append_int (chars_of_sym fld) "_of")))
+
+(fn rx_upd_name ((fld Symbol)) Symbol
+  (sym_of_chars (append_int "with_" (chars_of_sym fld))))
+
+(fn rx_is_record ((f SExpr)) Bool
+  (match f
+    ((SList (Cons (SSym h) _)) (sym_eq h (quote record)))
+    (_ False)))
+
+;; parse the form; at least one field required
+(fn rx_of_form ((f SExpr)) (Option RecDef)
+  (match f
+    ((SList (Cons _ (Cons (SSym name) entries)))
+     (match entries
+       ((Cons (SList (Cons (SSym ch) (Cons (SSym cn) Nil))) rest)
+        (if (sym_eq ch (quote ctor))
+          (match (rx_fields_of rest Nil)
+            (None None)
+            ((Some Nil) None)
+            ((Some fs) (Some (RecDef name cn fs))))
+          (match (rx_fields_of entries Nil)
+            (None None)
+            ((Some Nil) None)
+            ((Some fs) (Some (RecDef name (rx_default_ctor name) fs))))))
+       (_
+         (match (rx_fields_of entries Nil)
+           (None None)
+           ((Some Nil) None)
+           ((Some fs) (Some (RecDef name (rx_default_ctor name) fs)))))))
+    (_ None)))
+
+;; (CTOR a0 … an) — ctor application / match pattern
+(fn rx_ctor_app ((ctor Symbol) (args (List SExpr))) SExpr
+  (SList (Cons (SSym ctor) args)))
+
+;; (type NAME (CTOR T0 … Tn))
+(fn rx_type_form ((rd RecDef)) SExpr
+  (match rd
+    ((RecDef name ctor fs)
+     (SList
+       (Cons
+         (SSym (quote type))
+         (Cons (SSym name) (Cons (rx_ctor_app ctor (rx_ftypes fs)) Nil)))))))
+
+;; (match RVAR ((CTOR f0 … fn) RESULT))
+(fn rx_match_form
+  ((rvar Symbol) (ctor Symbol) (binders (List Symbol)) (result SExpr))
+  SExpr
+  (SList
+    (Cons
+      (SSym (quote match))
+      (Cons
+        (SSym rvar)
+        (Cons
+          (SList (Cons (rx_ctor_app ctor (rx_ssyms binders)) (Cons result Nil)))
+          Nil)))))
+
+;; (fn FNAME PARAMS RET BODY)
+(fn rx_fn_form ((fname Symbol) (params (List SExpr)) (ret SExpr) (body SExpr))
+  SExpr
+  (SList
+    (Cons
+      (SSym (quote fn))
+      (Cons (SSym fname) (Cons (SList params) (Cons ret (Cons body Nil)))))))
+
+;; (RVAR NAME) / (VVAR TY) — a typed parameter
+(fn rx_param ((v Symbol) (ty SExpr)) SExpr
+  (SList (Cons (SSym v) (Cons ty Nil))))
+
+;; accessor: (fn FLD_of ((r NAME)) FTY (match r ((CTOR fields…) FLD)))
+(fn rx_accessor ((rd RecDef) (rvar Symbol) (fld Symbol) (fty SExpr)) SExpr
+  (match rd
+    ((RecDef name ctor fs)
+     (rx_fn_form
+       (rx_acc_name fld)
+       (Cons (rx_param rvar (SSym name)) Nil)
+       fty
+       (rx_match_form rvar ctor (rx_names fs) (SSym fld))))))
+
+;; the CTOR argument list with FLD's slot replaced by VVAR
+(fn rx_upd_args ((fs (List (Pair Symbol SExpr))) (fld Symbol) (vvar Symbol))
+  (List SExpr)
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons (Pair n _) t)
+     (Cons (if (sym_eq n fld) (SSym vvar) (SSym n)) (rx_upd_args t fld vvar)))))
+
+;; updater: (fn with_FLD ((v FTY) (r NAME)) NAME
+;;            (match r ((CTOR fields…) (CTOR … v …))))
+(fn rx_updater
+  ((rd RecDef) (rvar Symbol) (vvar Symbol) (fld Symbol) (fty SExpr))
+  SExpr
+  (match rd
+    ((RecDef name ctor fs)
+     (rx_fn_form
+       (rx_upd_name fld)
+       (Cons (rx_param vvar fty) (Cons (rx_param rvar (SSym name)) Nil))
+       (SSym name)
+       (rx_match_form
+         rvar
+         ctor
+         (rx_names fs)
+         (rx_ctor_app ctor (rx_upd_args fs fld vvar)))))))
+
+(fn rx_accessors ((rd RecDef) (rvar Symbol) (fs (List (Pair Symbol SExpr))))
+  (List SExpr)
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons (Pair n ty) t)
+     (Cons (rx_accessor rd rvar n ty) (rx_accessors rd rvar t)))))
+
+(fn rx_updaters
+  ((rd RecDef) (rvar Symbol) (vvar Symbol) (fs (List (Pair Symbol SExpr))))
+  (List SExpr)
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons (Pair n ty) t)
+     (Cons (rx_updater rd rvar vvar n ty) (rx_updaters rd rvar vvar t)))))
+
+;; one record's full expansion, in declaration order: type, accessors,
+;; updaters
+(fn rx_expand ((rd RecDef)) (List SExpr)
+  (match rd
+    ((RecDef name ctor fs)
+     (let ((rvar (rx_fresh "r" (rx_names fs))))
+       (let ((vvar (rx_fresh "v" (rx_names fs))))
+         (Cons
+           (rx_type_form rd)
+           (rx_app_sx (rx_accessors rd rvar fs) (rx_updaters rd rvar vvar fs))))))))
+
+;; the pass: splice each (record …) form's expansion in place; None on a
+;; malformed record form (the file then takes the standard parse-failure
+;; path, which re-scans and names the offending form)
+(fn expand_records ((forms (List SExpr))) (Option (List SExpr))
+  (measure (struct forms))
+  (match forms
+    (Nil (Some Nil))
+    ((Cons f rest)
+     (if (rx_is_record f)
+       (match (rx_of_form f)
+         (None None)
+         ((Some rd)
+          (match (expand_records rest)
+            (None None)
+            ((Some tail) (Some (rx_app_sx (rx_expand rd) tail))))))
+       (match (expand_records rest)
+         (None None)
+         ((Some tail) (Some (Cons f tail))))))))
+
 ;; ---- module entry point ---------------------------------------------------
 (fn parse_module ((src (List Int)) (base_ctors (List Symbol))) (Option Module)
   (match (read_all src)
     (None None)
-    ((Some forms)
-     (match (collect_types forms)
+    ((Some forms0)
+     (match (expand_records forms0)
        (None None)
-       ((Some tds)
-        (match
-          (collect_fns_externs
-            forms
-            (append_sym (typedef_ctors tds) base_ctors))
+       ((Some forms)
+        (match (collect_types forms)
           (None None)
-          ((Some (Pair fns externs))
-           (Some (Module tds fns externs (build_fn_trie fns) Nil)))))))))
+          ((Some tds)
+           (match
+             (collect_fns_externs
+               forms
+               (append_sym (typedef_ctors tds) base_ctors))
+             (None None)
+             ((Some (Pair fns externs))
+              (Some (Module tds fns externs (build_fn_trie fns) Nil)))))))))))
 
 ;; ---- whole-program module assembly ----------------------------------------
 ;; Build M (the module proofs reduce against) by folding `parse_module` over a
@@ -2341,7 +2586,10 @@
   (Option (List Decl))
   (match (read_all src)
     (None None)
-    ((Some forms) (collect_decls forms ctors granted))))
+    ((Some forms0)
+     (match (expand_records forms0)
+       (None None)
+       ((Some forms) (collect_decls forms ctors granted))))))
 
 ;; ===========================================================================
 ;; PARSE-FAILURE DIAGNOSIS (failure path ONLY — costs nothing on success).

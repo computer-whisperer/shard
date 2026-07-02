@@ -83,6 +83,9 @@ TARGETS=(
   examples/measure_import_synth.shard
   examples/measure_lex_demo.shard
   examples/mutual_toy.shard
+  examples/record_proto.shard
+  examples/record_basic.shard
+  examples/record_rejects.shard
   examples/subterm_induct.shard
   examples/subterm_induct_rejects.shard
   examples/struct_clause.shard
