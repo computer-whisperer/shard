@@ -105,7 +105,6 @@ TARGETS=(
   examples/snake_game/snake.shard
   examples/snake_game/snake_view.shard
   examples/snake_game/snake_app.shard
-  examples/snake_game_2/mod.req/arena.shard
   examples/snake_game_3/game/game.shard
   examples/snake_game_3/render/render.shard
   examples/snake_game_3/snake.shard
