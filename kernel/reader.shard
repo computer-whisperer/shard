@@ -1782,10 +1782,32 @@
            (rx_type_form rd)
            (rx_app_sx (rx_accessors rd rvar fs) (rx_updaters rd rvar vvar fs))))))))
 
-;; the pass: splice each (record …) form's expansion in place; None on a
-;; malformed record form (the file then takes the standard parse-failure
-;; path, which re-scans and names the offending form)
-(fn expand_records ((forms (List SExpr))) (Option (List SExpr))
+;; ---------------------------------------------------------------------------
+;; (make …) / (with …) — the construction and update sugar.
+;;
+;;   (make R (FIELD V)…)   → (CTOR V0 … Vn)      named, order-free; ALL
+;;                                               fields required exactly once
+;;   (with E (FIELD V)…)   → (with_FIELDn Vn (… (with_FIELD0 V0 E)))
+;;
+;; `with` is PURELY syntactic — it only manufactures updater names, so it
+;; needs no record table and works on records defined in other files (the
+;; with_FIELD fns resolve through normal scope). `make` needs the field
+;; ORDER, so it resolves against the records of the CURRENT file only (v1);
+;; a (make R …) whose R is not a record here is left untouched and fails
+;; loudly downstream as an unknown function. Both rewrites walk every form
+;; in the file (bodies, goals, proofs) and rewrite nested values first.
+;; Malformed sugar — unknown/missing/duplicate fields — refuses the file.
+;; ---------------------------------------------------------------------------
+
+(fn rx_find ((n Symbol) (tab (List RecDef))) (Option RecDef)
+  (measure (struct tab))
+  (match tab
+    (Nil None)
+    ((Cons (RecDef nm c fs) t)
+     (if (sym_eq nm n) (Some (RecDef nm c fs)) (rx_find n t)))))
+
+;; the record table of THIS file — every (record …) form, validated
+(fn rx_table ((forms (List SExpr))) (Option (List RecDef))
   (measure (struct forms))
   (match forms
     (Nil (Some Nil))
@@ -1794,12 +1816,173 @@
        (match (rx_of_form f)
          (None None)
          ((Some rd)
-          (match (expand_records rest)
+          (match (rx_table rest)
+            (None None)
+            ((Some t) (Some (Cons rd t))))))
+       (rx_table rest)))))
+
+;; do these forms all look like (FIELD V) entries with distinct fields?
+(fn rx_entryish ((es (List SExpr)) (seen (List Symbol))) Bool
+  (measure (struct es))
+  (match es
+    (Nil True)
+    ((Cons (SList (Cons (SSym n) (Cons _ Nil))) rest)
+     (if (sym_mem n seen) False (rx_entryish rest (Cons n seen))))
+    ((Cons _ _) False)))
+
+(fn rx_lookup ((n Symbol) (ps (List (Pair Symbol SExpr)))) (Option SExpr)
+  (measure (struct ps))
+  (match ps
+    (Nil None)
+    ((Cons (Pair pn v) t) (if (sym_eq pn n) (Some v) (rx_lookup n t)))))
+
+(fn rx_pair_len ((ps (List (Pair Symbol SExpr)))) Int
+  (measure (struct ps))
+  (match ps
+    (Nil 0)
+    ((Cons _ t) (+ 1 (rx_pair_len t)))))
+
+;; ctor args in FIELD order from the (already rewritten) entries; None if a
+;; field is missing (the exactly-once check is the caller's length guard +
+;; rx_entryish's dup refusal)
+(fn rx_make_args
+  ((fs (List (Pair Symbol SExpr))) (es (List (Pair Symbol SExpr))))
+  (Option (List SExpr))
+  (measure (struct fs))
+  (match fs
+    (Nil (Some Nil))
+    ((Cons (Pair n _) t)
+     (match (rx_lookup n es)
+       (None None)
+       ((Some v)
+        (match (rx_make_args t es)
+          (None None)
+          ((Some vs) (Some (Cons v vs)))))))))
+
+;; (with_FIELDn Vn (… (with_FIELD0 V0 E))) — entries applied left to right,
+;; so a later update is outermost
+(fn rx_with_chain ((e SExpr) (es (List (Pair Symbol SExpr)))) SExpr
+  (measure (struct es))
+  (match es
+    (Nil e)
+    ((Cons (Pair n v) t)
+     (rx_with_chain
+       (SList (Cons (SSym (rx_upd_name n)) (Cons v (Cons e Nil))))
+       t))))
+
+;; the tree walk: rewrite nested values first, then assemble. rw_sx /
+;; rw_sxs / rw_entries form one structural SCC (the size_sexpr shape).
+(fn rw_entries ((tab (List RecDef)) (es (List SExpr)))
+  (Option (List (Pair Symbol SExpr)))
+  (measure (struct es))
+  (match es
+    (Nil (Some Nil))
+    ((Cons (SList (Cons (SSym n) (Cons v Nil))) rest)
+     (match (rw_sx tab v)
+       (None None)
+       ((Some v2)
+        (match (rw_entries tab rest)
+          (None None)
+          ((Some t) (Some (Cons (Pair n v2) t)))))))
+    ((Cons _ _) None)))
+
+(fn rw_sxs ((tab (List RecDef)) (ss (List SExpr))) (Option (List SExpr))
+  (measure (struct ss))
+  (match ss
+    (Nil (Some Nil))
+    ((Cons h t)
+     (match (rw_sx tab h)
+       (None None)
+       ((Some h2)
+        (match (rw_sxs tab t)
+          (None None)
+          ((Some t2) (Some (Cons h2 t2)))))))))
+
+;; The dispatch destructures INLINE (never through a helper's result):
+;; the struct-measure gate tracks only pattern-bound subterms, so every
+;; SCC-internal call (rw_sx / rw_sxs / rw_entries) must receive a binder
+;; from s's own pattern chain. Non-sugar shapes descend generically.
+(fn rw_sx ((tab (List RecDef)) (s SExpr)) (Option SExpr)
+  (measure (struct s))
+  (match s
+    ((SList items)
+     (match items
+       ((Cons (SSym h) (Cons first args))
+        (if (sym_eq h (quote make))
+          (match first
+            ((SSym rname)
+             (match (rx_find rname tab)
+               ((Some (RecDef nm ctor fs))
+                (if (rx_entryish args Nil)
+                  (match (rw_entries tab args)
+                    (None None)
+                    ((Some es)
+                     (if (int_eq (rx_pair_len es) (rx_len (rx_names fs)))
+                       (match (rx_make_args fs es)
+                         (None None)
+                         ((Some vs) (Some (rx_ctor_app ctor vs))))
+                       None)))
+                  None))
+               (None
+                 (match (rw_sxs tab items)
+                   (None None)
+                   ((Some its) (Some (SList its)))))))
+            (_
+              (match (rw_sxs tab items)
+                (None None)
+                ((Some its) (Some (SList its))))))
+        (if (sym_eq h (quote with))
+          (match args
+            ((Cons e0 rest0)
+             (if (rx_entryish args Nil)
+               (match (rw_sx tab first)
+                 (None None)
+                 ((Some e2)
+                  (match (rw_entries tab args)
+                    (None None)
+                    ((Some es) (Some (rx_with_chain e2 es))))))
+               (match (rw_sxs tab items)
+                 (None None)
+                 ((Some its) (Some (SList its))))))
+            (Nil
+              (match (rw_sxs tab items)
+                (None None)
+                ((Some its) (Some (SList its))))))
+          (match (rw_sxs tab items)
+            (None None)
+            ((Some its) (Some (SList its)))))))
+       (_
+         (match (rw_sxs tab items)
+           (None None)
+           ((Some its) (Some (SList its)))))))
+    (_ (Some s))))
+
+;; the pass: splice each (record …) form's expansion in place and rewrite
+;; the sugar everywhere else; None on a malformed record form or malformed
+;; sugar (the file then takes the standard parse-failure path)
+(fn rx_pass ((tab (List RecDef)) (forms (List SExpr))) (Option (List SExpr))
+  (measure (struct forms))
+  (match forms
+    (Nil (Some Nil))
+    ((Cons f rest)
+     (if (rx_is_record f)
+       (match (rx_of_form f)
+         (None None)  ; unreachable — rx_table validated already
+         ((Some rd)
+          (match (rx_pass tab rest)
             (None None)
             ((Some tail) (Some (rx_app_sx (rx_expand rd) tail))))))
-       (match (expand_records rest)
+       (match (rw_sx tab f)
          (None None)
-         ((Some tail) (Some (Cons f tail))))))))
+         ((Some f2)
+          (match (rx_pass tab rest)
+            (None None)
+            ((Some tail) (Some (Cons f2 tail))))))))))
+
+(fn expand_records ((forms (List SExpr))) (Option (List SExpr))
+  (match (rx_table forms)
+    (None None)
+    ((Some tab) (rx_pass tab forms))))
 
 ;; ---- module entry point ---------------------------------------------------
 (fn parse_module ((src (List Int)) (base_ctors (List Symbol))) (Option Module)
