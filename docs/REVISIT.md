@@ -172,6 +172,38 @@ is where to start when planning v3.
   integrality. Kernel `Word`/`Bytes` formers, their prims, and the
   `word-fact`/`bytes-fact` proof steps are gone; only `div-facts` remains.
 
+### The ISA arc — machine computations as proven data (2026-07-02)
+- **Chose:** the three-pillar shape recorded in `docs/ISA.md`: (A) ISA
+  models are ordinary shard libraries (zero kernel/loader involvement;
+  the only trust leaf is "engine conforms to model", ledger-named);
+  (B) composition is *citation, not a calculus* — the model's primary
+  semantic object is a big-step `call_fn`, piece theorems are ordinary
+  equations, and weld proofs are ordinary rewrites citing them; v1
+  composition boundary = wasm module-instance boundary (private
+  memories → no framing clauses; value passing + encode/decode
+  round-trips only); (C) the toolchain is object-language code —
+  compile scripts manipulate programs as data, use the kernel as a
+  library for iteration, and emit replayable artifacts the standard
+  pipeline re-checks (prove's economics generalized; quotation without
+  internalized eval, no `quote`/`eval` axiom ever).
+- **Why now:** ground-up re-derivation of issue #14 + the 2026-06-18
+  multi-impl/linker discussion before building anything. The re-derivation
+  tore up: the distinguished proof-carrying linker (→ user-writable
+  script logic), the bespoke end-to-end certificate format (→ the
+  certificate is a shard file), loader-level impl-selection machinery
+  (→ module system unchanged, selection is script logic), and `Mem` on
+  the composition critical path (→ second arc; composition is the
+  undemonstrated thing, in-place performance is not).
+- **Rejected:** a Hoare-style spec calculus over machine configs —
+  burdensome on every artifact author, must anticipate weld shapes,
+  and the equational form gets the same welds from existing kernel
+  machinery.
+- **Revisit if:** the demonstrator's measured question (symbolic
+  reduction burden per instruction/weld, `ISA.md` §7) comes back
+  heroic — then re-factor the model's denotation or extend the prove
+  solver before scaling; or if boundaries need rich types (adapters
+  re-enter) or cross-model welds (the deferred adequacy dragon).
+
 ## Language Surface
 
 ### sexp file format
