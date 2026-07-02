@@ -219,6 +219,55 @@ guarded round trip, the exact slice length) are all **theorems** proven
 in `std/bytes/bytes.shard`. A consumer reasons about a `Bytes` only
 through these laws and the `std/list` vocabulary on `(list_of_bytes b)`.
 
+### Records — named-field products
+
+```lisp
+(record NAME (ctor CTOR)? (FIELD TYPE)+)
+```
+
+is **loader-level sugar** (expanded at the s-expr level, before the
+collector passes, identically for check and run — the kernel never
+sees a record form, and `load.rs` rejects the head, so kernel files
+stay hand-positional). One record form generates:
+
+- the positional single-ctor type `(type NAME (CTOR T…))` — `CTOR`
+  defaults to `MkNAME`; `(ctor GS)` as the first entry overrides it
+  (`ctor` is therefore reserved as a field name);
+- an accessor `FIELD_of : NAME → T` per field;
+- an updater `with_FIELD : T → NAME → NAME` per field (value first);
+- the **law family**, ordinary claims with machine proofs, named
+  mechanically so they can be cited without lookup:
+
+  | law                | statement                                     |
+  |--------------------|-----------------------------------------------|
+  | `FIELD_of_def`     | `(FIELD_of (CTOR f…)) = FIELD`                |
+  | `with_FIELD_def`   | `(with_FIELD v (CTOR f…)) = (CTOR …v…)`       |
+  | `F_of_with_F`      | select-over-update, same field (`= v`)        |
+  | `G_of_with_F`      | select-over-update, cross (`= (G_of r)`)      |
+  | `with_F_with_F`    | update-over-update collapse                   |
+  | `NAME_eta`         | `r = (CTOR (F0_of r) … (Fn_of r))` — use this |
+  |                    | instead of `case-on` over the record          |
+
+Construction and update sugar (rewritten everywhere in the file —
+bodies, goals, proofs; nested values first):
+
+```lisp
+(make NAME (FIELD V)…)   ; → (CTOR V0 … Vn) — named, order-free;
+                         ;   ALL fields required exactly once
+(with E (FIELD V)…)      ; → (with_FIELDn Vn (… (with_FIELD0 V0 E)))
+                         ;   later entry outermost
+```
+
+`with` is purely syntactic (it only manufactures updater names), so it
+works on records defined in other files; `make` needs the field order
+and resolves against the **current file's** records only. Duplicate or
+missing fields refuse the file loudly. A proof that touches the record
+only through the accessors/updaters and the law family is **textually
+invariant under field addition** — adding a field changes the record
+form and each `make` site (one new entry), nothing else. Pilot:
+`GameState` in `examples/snake_game_3/game/game.shard`; shape pin:
+`examples/record_proto.shard`.
+
 
 ## 4. Expressions
 
