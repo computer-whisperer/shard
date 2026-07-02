@@ -1,0 +1,451 @@
+;;; wasm_pieces.shard — slice 2 of the ISA arc (docs/ISA.md §6): two
+;;; hand-written wasm pieces with SYMBOLIC piece theorems, stated in the
+;;; equational big-step form welds cite:
+;;;     ∀ x,  (call_fn FUEL m k (encode x)) = (Some (spec x))
+;;;
+;;; Fuel discipline (the slice-2 finding): fuel terms are spelled as concrete
+;;; FS towers over an opaque tail — the interpreter ι-reduces through exactly
+;;; the concrete budget and sticks exactly where the proof takes over. The
+;;; tail (c Fuel) is the additive slack that makes piece theorems compose:
+;;; a weld instantiates c with whatever budget remains at the call site.
+;;; Loop pieces get a per-piece tower fn (pf_sum below): one FS per
+;;; iteration over the tail, so the fuel for n iterations is a first-class
+;;; term the induction can recurse on.
+
+(import "../kernel/stdlib.shard")
+(import "../models/wasm/wasm.shard")
+(use (:: models wasm wasm *))
+
+;; --- the module: two pieces ---------------------------------------------------
+
+;; piece A — func 0: add(a, b) = a + b, wrapped. Straight-line.
+(fn padd () Func (MkFunc 2 0 (list (LocalGet 0) (LocalGet 1) (I32Bin BAdd))))
+
+;; piece B — func 1: sum(n) = n + (n-1) + … + 1, block/loop over Call 0.
+;; locals: 0 = n (param), 1 = acc (extra).
+(fn psum () Func
+  (MkFunc
+    1
+    1
+    (list
+      (Block
+        (list
+          (Loop
+            (list
+              (LocalGet 0)
+              (I32Eqz)
+              (BrIf 1)
+              (LocalGet 1)
+              (LocalGet 0)
+              (Call 0)
+              (LocalSet 1)
+              (LocalGet 0)
+              (I32Const 1)
+              (I32Bin BSub)
+              (LocalSet 0)
+              (Br 0)))))
+      (LocalGet 1))))
+
+(fn pmod () WModule (MkWModule (list (padd) (psum))))
+
+;; --- specs (ordinary shard functions) ------------------------------------------
+
+;; sum's denotation, spelled to MIRROR the machine exactly: the accumulator
+;; picks up (wrap32 (+ acc n)) — the add piece's own spelling — per step.
+;; (Kernel compute is inert on symbolic arithmetic, so specs that re-associate
+;; or normalize would not collide with the interpreter's residue.)
+(fn sum_go ((n Int) (acc Int)) Int
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt n 1) acc (sum_go (- n 1) (wrap32 (+ acc n)))))
+
+;; --- fuel towers ----------------------------------------------------------------
+
+;; one FS per loop iteration over the tail: pf_sum n c = FS^n(c).
+(fn pf_sum ((n Int) (c Fuel)) Fuel
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt n 1) c (FS (pf_sum (- n 1) c))))
+
+;; --- ground sanity (the machine and the spec agree at literals) -----------------
+
+(claim ground_sum
+  (goal () () (= (call_fn (fnat 100) (pmod) 1 (list 5)) (Some (sum_go 5 0))))
+  (steps ((compute both)) refl))
+
+;; --- piece theorem A: add, straight-line -----------------------------------------
+
+;; Concrete code + tower fuel + symbolic values: closes by compute alone.
+;; The tail c is untouched (9 concrete FS cover the whole run), so the
+;; theorem holds at ANY fuel of this shape — that's the weld's slack.
+(claim add_thm
+  (goal ((a Int) (b Int) (c Fuel)) ()
+    (=
+      (call_fn
+        (FS (FS (FS (FS (FS (FS (FS (FS (FS c)))))))))
+        (pmod)
+        0
+        (list a b))
+      (Some (wrap32 (+ a b)))))
+  (steps ((compute both)) refl))
+
+;; --- arith mini-lemmas (hyp-facts feed farkas via premised lemmas) ---------------
+
+(claim pred_nonneg
+  (goal ((n Int)) ((= (lt n 1) False)) (= (le 0 (- n 1)) True))
+  (by arith (list 1 1)))
+
+(claim pred_lt_wrap
+  (goal ((n Int)) ((= (lt n 4294967296) True)) (= (lt (- n 1) 4294967296) True))
+  (by arith (list 1 1)))
+
+(claim pos_not_zero
+  (goal ((n Int)) ((= (lt n 1) False)) (= (int_eq n 0) False))
+  (by arith (list -1 1)))
+
+(claim low_is_zero
+  (goal ((n Int)) ((= (le 0 n) True) (= (lt n 1) True)) (= n 0))
+  (by arith (list (list 1 0 1) (list 1 1 0))))
+
+;; --- tower shift: pf_sum n (FS^14 c) = FS^14 (pf_sum n c) ------------------------
+
+;; The loop engine needs its per-iteration budget CONCRETE at the head of the
+;; fuel term each time around; the piece theorem needs the loop's fuel OPAQUE
+;; at the loop entry so reduction stops at the citable redex. This lemma
+;; bridges the two spellings of the same tower.
+(claim pf_shift14
+  (goal ((n Int) (c Fuel)) ((= (le 0 n) True))
+    (=
+      (pf_sum
+        n
+        (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS c)))))))))))))))
+      (FS
+        (FS
+          (FS
+            (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (pf_sum n c)))))))))))))))))
+  (wf-induct n
+    (case-on (lt n 1) Bool
+      ((case True
+         (steps
+           ((unfold pf_sum lhs)
+            (rewrite (hyp True) lr lhs true ())
+            (reduce lhs)
+            (unfold pf_sum rhs)
+            (rewrite (hyp True) lr rhs true ())
+            (reduce rhs))
+           refl))
+       (case False
+         (steps
+           ((unfold pf_sum lhs)
+            (rewrite (hyp False) lr lhs true ())
+            (reduce lhs)
+            (unfold pf_sum rhs)
+            (rewrite (hyp False) lr rhs true ())
+            (reduce rhs))
+           ;; ih obligations: [goal-premise inst, measure-nonneg, measure-decrease]
+           (rewrite-with
+             (hyp ih)
+             lr
+             lhs
+             ()
+             ((rewrite-with
+                (lemma pred_nonneg)
+                lr
+                lhs
+                ((inst n n))
+                ((steps ((rewrite (hyp False) lr lhs true ())) refl))
+                refl)
+              (rewrite-with
+                (lemma pred_nonneg)
+                lr
+                lhs
+                ((inst n n))
+                ((steps ((rewrite (hyp False) lr lhs true ())) refl))
+                refl)
+              (by arith (list)))
+             refl)))))))
+
+;; --- the loop worker: the induction that runs sum's loop -------------------------
+
+;; ∀ n acc st: entering the loop engine with locals (n, acc), any stack, and
+;; fuel FS^13(pf_sum n c) — 13 concrete units (one body pass) plus one FS per
+;; remaining iteration over the slack tail — exits via the BrIf branch with
+;; locals (0, sum_go n acc) and the stack untouched.
+;;
+;; The module and loop body are spelled as LITERALS (not (pmod)): compute
+;; evaluates call arguments, so the citable redex in a consumer's goal holds
+;; the evaluated literal — a folded (pmod) spelling would never match.
+(claim sum_loop_worker
+  (goal ((n Int) (acc Int) (st (List Int)) (c Fuel))
+    ((= (le 0 n) True) (= (lt n 4294967296) True))
+    (=
+      (eval_loop
+        (FS
+          (FS
+            (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (pf_sum n c))))))))))))))
+        (MkWModule
+          (list
+            (MkFunc 2 0 (list (LocalGet 0) (LocalGet 1) (I32Bin BAdd)))
+            (MkFunc
+              1
+              1
+              (list
+                (Block
+                  (list
+                    (Loop
+                      (list
+                        (LocalGet 0)
+                        (I32Eqz)
+                        (BrIf 1)
+                        (LocalGet 1)
+                        (LocalGet 0)
+                        (Call 0)
+                        (LocalSet 1)
+                        (LocalGet 0)
+                        (I32Const 1)
+                        (I32Bin BSub)
+                        (LocalSet 0)
+                        (Br 0)))))
+                (LocalGet 1)))))
+        (list
+          (LocalGet 0)
+          (I32Eqz)
+          (BrIf 1)
+          (LocalGet 1)
+          (LocalGet 0)
+          (Call 0)
+          (LocalSet 1)
+          (LocalGet 0)
+          (I32Const 1)
+          (I32Bin BSub)
+          (LocalSet 0)
+          (Br 0))
+        (list n acc)
+        st)
+      (Some (OBr 0 st (list 0 (sum_go n acc))))))
+  (wf-induct n
+    (case-on (lt n 1) Bool
+      ((case True
+         ;; n = 0: the exit pass — all concrete once n is rewritten to 0.
+         (have hn (= n 0)
+           (rewrite-with
+             (lemma low_is_zero)
+             lr
+             lhs
+             ((inst n n))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+              (steps ((rewrite (hyp True) lr lhs true ())) refl))
+             refl)
+           (steps ((rewrite (premise hn) lr both true ()) (compute both)) refl)))
+       (case False
+         ;; expose one loop iteration's concrete budget: pf_sum n c = FS(pf_sum (n-1) c)
+         (steps
+           ((unfold pf_sum lhs)
+            (rewrite (hyp False) lr lhs true ())
+            (reduce lhs)
+            (compute lhs))
+           ;; the grind stuck at this iteration's exit test — resolve it and go on
+           (have h0 (= (int_eq n 0) False)
+             (rewrite-with
+               (lemma pos_not_zero)
+               lr
+               lhs
+               ((inst n n))
+               ((steps ((rewrite (hyp False) lr lhs true ())) refl))
+               refl)
+             (steps
+               ((rewrite (premise h0) lr lhs true ()) (compute lhs))
+               ;; iteration done; re-entry barreled into iteration 2 and stuck at
+               ;; its exit test on the WRAPPED decrement — clean it to (- n 1)
+               (have hw (= (mod (- n 1) 4294967296) (- n 1))
+                 (rewrite-with
+                   (lemma wrap32_id)
+                   lr
+                   lhs
+                   ((inst x (- n 1)))
+                   ((rewrite-with
+                      (lemma pred_nonneg)
+                      lr
+                      lhs
+                      ((inst n n))
+                      ((steps ((rewrite (hyp False) lr lhs true ())) refl))
+                      refl)
+                    (rewrite-with
+                      (lemma pred_lt_wrap)
+                      lr
+                      lhs
+                      ((inst n n))
+                      ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+                      refl))
+                   refl)
+                 (steps
+                   ((rewrite (premise hw) lr lhs true ())
+                    ;; expose the spec's next step on the pristine RHS
+                    (unfold sum_go rhs)
+                    (rewrite (hyp False) lr rhs true ())
+                    (reduce rhs))
+                   ;; the IH instance, materialized as an equation so LHS-matching
+                   ;; binds every ih binder (the slack c is premise-only on the RHS)
+                   (have hih
+                     (=
+                       (eval_loop
+                         (FS
+                           (FS
+                             (FS
+                               (FS
+                                 (FS
+                                   (FS
+                                     (FS
+                                       (FS
+                                         (FS
+                                           (FS
+                                             (FS (FS (FS (pf_sum (- n 1) c))))))))))))))
+                         (MkWModule
+                           (list
+                             (MkFunc
+                               2
+                               0
+                               (list (LocalGet 0) (LocalGet 1) (I32Bin BAdd)))
+                             (MkFunc
+                               1
+                               1
+                               (list
+                                 (Block
+                                   (list
+                                     (Loop
+                                       (list
+                                         (LocalGet 0)
+                                         (I32Eqz)
+                                         (BrIf 1)
+                                         (LocalGet 1)
+                                         (LocalGet 0)
+                                         (Call 0)
+                                         (LocalSet 1)
+                                         (LocalGet 0)
+                                         (I32Const 1)
+                                         (I32Bin BSub)
+                                         (LocalSet 0)
+                                         (Br 0)))))
+                                 (LocalGet 1)))))
+                         (list
+                           (LocalGet 0)
+                           (I32Eqz)
+                           (BrIf 1)
+                           (LocalGet 1)
+                           (LocalGet 0)
+                           (Call 0)
+                           (LocalSet 1)
+                           (LocalGet 0)
+                           (I32Const 1)
+                           (I32Bin BSub)
+                           (LocalSet 0)
+                           (Br 0))
+                         (list (- n 1) (wrap32 (+ acc n)))
+                         st)
+                       (Some
+                         (OBr 0 st (list 0 (sum_go (- n 1) (wrap32 (+ acc n)))))))
+                     (rewrite-with
+                       (hyp ih)
+                       lr
+                       lhs
+                       ()
+                       ((rewrite-with
+                          (lemma pred_nonneg)
+                          lr
+                          lhs
+                          ((inst n n))
+                          ((steps ((rewrite (hyp False) lr lhs true ())) refl))
+                          refl)
+                        (rewrite-with
+                          (lemma pred_lt_wrap)
+                          lr
+                          lhs
+                          ((inst n n))
+                          ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+                          refl)
+                        (rewrite-with
+                          (lemma pred_nonneg)
+                          lr
+                          lhs
+                          ((inst n n))
+                          ((steps ((rewrite (hyp False) lr lhs true ())) refl))
+                          refl)
+                        (by arith (list)))
+                       refl)
+                     (steps
+                       ((rewrite (premise hih) rl rhs true ()) (compute both))
+                       refl))))))))))))
+
+;; --- piece theorem B: sum, the loop --------------------------------------------
+
+;; The fuel spelling is load-bearing: (pf_sum n (FS^14 c)) keeps the loop's
+;; entry fuel OPAQUE-headed, so the opening compute stops at the citable
+;; (eval_loop …) redex instead of barreling into the first iteration. The
+;; shift lemma then re-spells the same tower with the per-pass budget concrete
+;; at the head — the worker's shape. FS^3 outside covers call_fn's plumbing.
+(claim sum_thm
+  (goal ((n Int) (c Fuel)) ((= (le 0 n) True) (= (lt n 4294967296) True))
+    (=
+      (call_fn
+        (FS
+          (FS
+            (FS
+              (pf_sum
+                n
+                (FS
+                  (FS
+                    (FS
+                      (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS c))))))))))))))))))
+        (pmod)
+        1
+        (list n))
+      (Some (sum_go n 0))))
+  (steps
+    ((compute lhs))
+    (case-on (lt n 1) Bool
+      ((case True
+         (have hn (= n 0)
+           (rewrite-with
+             (lemma low_is_zero)
+             lr
+             lhs
+             ((inst n n))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+              (steps ((rewrite (hyp True) lr lhs true ())) refl))
+             refl)
+           (steps ((rewrite (premise hn) lr both true ()) (compute both)) refl)))
+       (case False
+         ;; fire the stuck guard and ι-resume: the dispatch leaves the loop
+         ;; engine FOLDED — (eval_loop (pf_sum (- n 1) FS^14(c)) …) — since
+         ;; reduce never unfolds calls; then re-spell its fuel to the worker's
+         ;; shape
+         (steps
+           ((rewrite (hyp False) lr lhs true ()) (reduce lhs))
+           (rewrite-with
+             (lemma pf_shift14)
+             lr
+             lhs
+             ((inst n (- n 1)) (inst c c))
+             ((rewrite-with
+                (lemma pred_nonneg)
+                lr
+                lhs
+                ((inst n n))
+                ((steps ((rewrite (hyp False) lr lhs true ())) refl))
+                refl))
+             ;; FS^14(pf_sum (n-1) c) = FS^13(FS(pf_sum (n-1) c)) — fold the inner
+             ;; FS back into pf_sum n c so the worker instance matches at n
+             (have fold_eq (= (pf_sum n c) (FS (pf_sum (- n 1) c)))
+               (steps
+                 ((unfold pf_sum lhs)
+                  (rewrite (hyp False) lr lhs true ())
+                  (reduce lhs))
+                 refl)
+               (steps
+                 ((rewrite (premise fold_eq) rl lhs true ()))
+                 (rewrite-with
+                   (lemma sum_loop_worker)
+                   lr
+                   lhs
+                   ((inst n n) (inst acc 0) (inst st Nil) (inst c c))
+                   ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                    (steps ((rewrite (premise 1) lr lhs true ())) refl))
+                   (steps ((compute both)) refl)))))))))))

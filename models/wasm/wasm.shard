@@ -11,8 +11,12 @@
 ;;;     consumer proofs, and opaque word ops only cite. Comparisons are
 ;;;     unsigned (Eqz/Eq/LtU); signed views ride the word arc's shifted-mod
 ;;;     trick when a piece needs them.
-;;;   - Fuel burns on EVERY step, so the whole mutual eval SCC is one numeric
-;;;     countdown measure and fuel-monotonicity is uniform. None = fuel out,
+;;;   - Fuel is STRUCTURAL (Peano Fuel, not Int) and burns on EVERY step, so
+;;;     the whole mutual eval SCC is one (struct fuel) measure. Structural
+;;;     fuel is what keeps symbolic-value proofs compute-closable: an FS
+;;;     tower over an opaque tail ι-reduces through the interpreter, where an
+;;;     Int guard (lt fuel 1) sticks on symbolic fuel and costs a case-on +
+;;;     farkas pair per decrement (slice-2 finding). None = fuel out,
 ;;;     exclusively; genuine dynamic failure is the OTrap outcome. Valid
 ;;;     (validated) wasm never traps here — trap arms exist so the model
 ;;;     refuses invalid code instead of guessing.
@@ -77,6 +81,19 @@
 ;; A module: functions addressed by index (Call k / call_fn k).
 (record WModule (funcs (List Func)))
 
+;; --- fuel ---------------------------------------------------------------------
+
+;; Structural fuel. Piece theorems spell fuel as a concrete FS tower over an
+;; opaque tail (∀-quantified slack, or a per-piece recursive tower fn), so the
+;; interpreter ι-reduces through exactly the concrete budget and sticks exactly
+;; where the proof takes over.
+(type Fuel (FZ) (FS Fuel))
+
+;; ground fuel from an Int count — run/smoke ergonomics: (fnat 20) etc.
+(fn fnat ((n Int)) Fuel
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt n 1) FZ (FS (fnat (- n 1)))))
+
 ;; --- evaluation outcomes -----------------------------------------------------
 
 ;; The outcome of evaluating an instruction (sequence): normal completion
@@ -95,6 +112,36 @@
 (fn wrap32 ((x Int)) Int (mod x 4294967296))
 
 (fn b2i ((b Bool)) Int (if b 1 0))
+
+;; in-range wrap is the identity: 0<=x<2^32 |- mod x 2^32 = x. Stated over the
+;; mod spelling (wrap32 unfolds to it in stuck goals). div-facts names the
+;; quotient q; rational farkas only pins q to (-1,1), so fin-split supplies the
+;; integrality (std/bytes mod_byte_id, transplanted to 2^32).
+(claim wrap32_id
+  (goal ((x Int)) ((= (le 0 x) True) (= (lt x 4294967296) True))
+    (= (mod x 4294967296) x))
+  (div-facts
+    x
+    4294967296
+    q
+    (have qlo (= (le -1 q) True)
+      (by arith (list 4294967296 1 0 -1 0 1 0))
+      (have qhi (= (le q 1) True)
+        (by arith (list 4294967296 0 1 1 1 0 0))
+        (fin-split
+          q
+          (premise qlo)
+          (premise qhi)
+          ((case -1
+             (by
+               arith
+               (list (list 0 1 0 -1 0 1 0 0 0) (list 0 1 0 -1 0 1 0 0 0))))
+           (case 0
+             (by
+               arith
+               (list (list 1 0 0 1 0 0 0 0 0) (list 1 0 0 -1 0 0 0 0 0))))
+           (case 1
+             (by arith (list (list 0 0 1 1 1 0 0 0 0) (list 0 0 1 1 1 0 0 0 0))))))))))
 
 (fn bop_val ((o Bop) (a Int) (b Int)) Int
   (match o
@@ -167,121 +214,122 @@
 ;; --- the interpreter (one fuel-countdown SCC) --------------------------------
 
 ;; Every entry burns one fuel unit, so every recursive edge — structural
-;; descent, loop re-entry, and cross-function calls alike — decreases the one
-;; measure. None = fuel exhausted, and nothing else.
+;; descent, loop re-entry, and cross-function calls alike — descends the one
+;; structural fuel. None = fuel exhausted, and nothing else. Note fuel is a
+;; DEPTH/ITERATION bound, not a step counter: eval_seq hands the same f2 to
+;; the head instruction and the tail, so a loop costs one fuel per re-entry
+;; plus the (constant) depth of its body.
 
 (fn eval_instr
-  ((fuel Int) (m WModule) (i Instr) (lc (List Int)) (st (List Int)))
+  ((fuel Fuel) (m WModule) (i Instr) (lc (List Int)) (st (List Int)))
   (Option Out)
-  ;; four recursive sites in body order: Block→eval_seq, Loop→eval_seq,
-  ;; Loop→eval_instr (re-entry), Call→eval_seq — each funded by fuel-1 < fuel.
-  (measure
-    fuel
-    (by arith (list 1 0))
-    (by arith (list 1 1))
-    (by arith (list 1 0))
-    (by arith (list 1 1))
-    (by arith (list 1 0))
-    (by arith (list 1 1))
-    (by arith (list 1 0))
-    (by arith (list 1 1)))
-  (if (lt fuel 1) None
-  (match i
-    ((I32Const c) (Some (ONorm (Cons (wrap32 c) st) lc)))
-    ((I32Bin o)
-     (match (do_bin o st)
-       (None (Some OTrap))
-       ((Some st2) (Some (ONorm st2 lc)))))
-    (I32Eqz
-      (match st
-        (Nil (Some OTrap))
-        ((Cons a r) (Some (ONorm (Cons (b2i (int_eq a 0)) r) lc)))))
-    ((LocalGet k)
-     (match (lget lc k)
-       (None (Some OTrap))
-       ((Some v) (Some (ONorm (Cons v st) lc)))))
-    ((LocalSet k)
-     (match st
-       (Nil (Some OTrap))
-       ((Cons v r)
-        (match (lset lc k v)
+  (measure (struct fuel))
+  (match fuel
+    (FZ None)
+    ((FS f2)
+     (match i
+       ((I32Const c) (Some (ONorm (Cons (wrap32 c) st) lc)))
+       ((I32Bin o)
+        (match (do_bin o st)
           (None (Some OTrap))
-          ((Some lc2) (Some (ONorm r lc2)))))))
-    ((Block body)
-     (match (eval_seq (- fuel 1) m body lc st)
-       (None None)
-       ((Some out) (Some (block_exit out)))))
-    ((Loop body)
-     (match (eval_seq (- fuel 1) m body lc st)
+          ((Some st2) (Some (ONorm st2 lc)))))
+       (I32Eqz
+         (match st
+           (Nil (Some OTrap))
+           ((Cons a r) (Some (ONorm (Cons (b2i (int_eq a 0)) r) lc)))))
+       ((LocalGet k)
+        (match (lget lc k)
+          (None (Some OTrap))
+          ((Some v) (Some (ONorm (Cons v st) lc)))))
+       ((LocalSet k)
+        (match st
+          (Nil (Some OTrap))
+          ((Cons v r)
+           (match (lset lc k v)
+             (None (Some OTrap))
+             ((Some lc2) (Some (ONorm r lc2)))))))
+       ((Block body)
+        (match (eval_seq f2 m body lc st)
+          (None None)
+          ((Some out) (Some (block_exit out)))))
+       ((Loop body) (eval_loop f2 m body lc st))
+       ((Br d) (Some (OBr d st lc)))
+       ((BrIf d)
+        (match st
+          (Nil (Some OTrap))
+          ((Cons c r) (if (int_eq c 0) (Some (ONorm r lc)) (Some (OBr d r lc))))))
+       ((Call k)
+        (match (func_at (funcs_of m) k)
+          (None (Some OTrap))
+          ((Some f)
+           (match (pop_n (params_of f) st)
+             (None (Some OTrap))
+             ((Some p)
+              (match p
+                ((Pair popped rest)
+                 ;; popped head = last-pushed = last parameter; locals want
+                 ;; parameter order, so reverse, then extend with zeros.
+                 (match
+                   (eval_seq
+                     f2
+                     m
+                     (body_of f)
+                     (wapp (wrev popped) (zeros (extra_of f)))
+                     Nil)
+                   (None None)
+                   ((Some out)
+                    (match out
+                      ((ONorm s2 l2)
+                       (match s2
+                         (Nil (Some OTrap))
+                         ((Cons v r2) (Some (ONorm (Cons v rest) lc)))))
+                      ((ORet v) (Some (ONorm (Cons v rest) lc)))
+                      ((OBr d s l) (Some OTrap))
+                      (OTrap (Some OTrap))))))))))))
+       (Return
+         (match st
+           (Nil (Some OTrap))
+           ((Cons v r) (Some (ORet v)))))))))
+
+;; the loop engine — a NAMED SCC member, not an inline arm, so proofs can
+;; state and cite loop-level equations against a folded (eval_loop …) term:
+;; loop-body induction recurses on exactly this unit. Runs the body; a branch
+;; targeting this loop (depth 0) re-enters, a deeper branch unwinds one label.
+(fn eval_loop
+  ((fuel Fuel) (m WModule) (body (List Instr)) (lc (List Int)) (st (List Int)))
+  (Option Out)
+  (measure (struct fuel))
+  (match fuel
+    (FZ None)
+    ((FS f2)
+     (match (eval_seq f2 m body lc st)
        (None None)
        ((Some out)
         (match out
           ((ONorm s l) (Some (ONorm s l)))
           ((OBr d s l)
-           (if (int_eq d 0) (eval_instr (- fuel 1) m (Loop body) l s)
-           (Some (OBr (- d 1) s l))))
+           (if (int_eq d 0) (eval_loop f2 m body l s) (Some (OBr (- d 1) s l))))
           ((ORet v) (Some (ORet v)))
-          (OTrap (Some OTrap))))))
-    ((Br d) (Some (OBr d st lc)))
-    ((BrIf d)
-     (match st
-       (Nil (Some OTrap))
-       ((Cons c r) (if (int_eq c 0) (Some (ONorm r lc)) (Some (OBr d r lc))))))
-    ((Call k)
-     (match (func_at (funcs_of m) k)
-       (None (Some OTrap))
-       ((Some f)
-        (match (pop_n (params_of f) st)
-          (None (Some OTrap))
-          ((Some p)
-           (match p
-             ((Pair popped rest)
-              ;; popped head = last-pushed = last parameter; locals want
-              ;; parameter order, so reverse, then extend with zeros.
-              (match
-                (eval_seq
-                  (- fuel 1)
-                  m
-                  (body_of f)
-                  (wapp (wrev popped) (zeros (extra_of f)))
-                  Nil)
-                (None None)
-                ((Some out)
-                 (match out
-                   ((ONorm s2 l2)
-                    (match s2
-                      (Nil (Some OTrap))
-                      ((Cons v r2) (Some (ONorm (Cons v rest) lc)))))
-                   ((ORet v) (Some (ONorm (Cons v rest) lc)))
-                   ((OBr d s l) (Some OTrap))
-                   (OTrap (Some OTrap))))))))))))
-    (Return
-      (match st
-        (Nil (Some OTrap))
-        ((Cons v r) (Some (ORet v))))))))
+          (OTrap (Some OTrap))))))))
 
 (fn eval_seq
-  ((fuel Int) (m WModule) (is (List Instr)) (lc (List Int)) (st (List Int)))
+  ((fuel Fuel) (m WModule) (is (List Instr)) (lc (List Int)) (st (List Int)))
   (Option Out)
-  ;; two recursive sites in body order: head→eval_instr, tail→eval_seq.
-  (measure
-    fuel
-    (by arith (list 1 0))
-    (by arith (list 1 1))
-    (by arith (list 1 0))
-    (by arith (list 1 1)))
-  (if (lt fuel 1) None
-  (match is
-    (Nil (Some (ONorm st lc)))
-    ((Cons i rest)
-     (match (eval_instr (- fuel 1) m i lc st)
-       (None None)
-       ((Some out)
-        (match out
-          ((ONorm st2 lc2) (eval_seq (- fuel 1) m rest lc2 st2))
-          ((OBr d s l) (Some (OBr d s l)))
-          ((ORet v) (Some (ORet v)))
-          (OTrap (Some OTrap)))))))))
+  (measure (struct fuel))
+  (match fuel
+    (FZ None)
+    ((FS f2)
+     (match is
+       (Nil (Some (ONorm st lc)))
+       ((Cons i rest)
+        (match (eval_instr f2 m i lc st)
+          (None None)
+          ((Some out)
+           (match out
+             ((ONorm st2 lc2) (eval_seq f2 m rest lc2 st2))
+             ((OBr d s l) (Some (OBr d s l)))
+             ((ORet v) (Some (ORet v)))
+             (OTrap (Some OTrap))))))))))
 
 ;; --- the big-step denotation (the composition boundary) ----------------------
 
@@ -289,7 +337,7 @@
 ;; stack order). Some v = the function completed with result v; None = fuel
 ;; out, trapped, wrong arity, or bad index. Piece theorems assert Some, so
 ;; conflating failure modes here costs nothing at the weld boundary.
-(fn call_fn ((fuel Int) (m WModule) (k Int) (args (List Int))) (Option Int)
+(fn call_fn ((fuel Fuel) (m WModule) (k Int) (args (List Int))) (Option Int)
   (match (func_at (funcs_of m) k)
     (None None)
     ((Some f)

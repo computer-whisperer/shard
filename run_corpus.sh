@@ -87,6 +87,7 @@ TARGETS=(
   examples/record_basic.shard
   models/wasm/wasm.shard
   examples/wasm_smoke.shard
+  examples/wasm_pieces.shard
   examples/record_rejects.shard
   examples/record_sugar_rejects.shard
   examples/subterm_induct.shard

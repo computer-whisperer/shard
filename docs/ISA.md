@@ -11,8 +11,9 @@ See also: `OVERVIEW.md` (the trust model this instantiates), `REVISIT.md`
 (refinement lowering — this doc is that issue's ground-up re-derivation and
 supersedes parts of the 2026-06-18 multi-impl/linker design discussion).
 
-Ratified 2026-07-02. Nothing in this arc is built yet; the demonstrator (§6)
-is the first slice.
+Ratified 2026-07-02. Slices 1–2 of the demonstrator (§6) are **[BUILT]**
+(model at `models/wasm/`, pieces at `examples/wasm_pieces.shard`); the
+measured question (§7) is answered — see the dated addendum there.
 
 ---
 
@@ -91,8 +92,8 @@ call_fn : Module -> FuncIdx -> (List Val) -> Option (List Val)
 ```
 
 — with the fuel-indexed small-step machine internal to the model library
-(related by proven lemmas, fuel-monotonicity in the law kit). A **piece
-theorem** is then an ordinary equation:
+(related by proven lemmas). A **piece theorem** is then an ordinary
+equation:
 
 ```
 ∀ x,  (call_fn m f (encode x)) = (Some (encode (spec x)))
@@ -198,8 +199,10 @@ novel claim. Slices, demonstrator-first per house method:
    larger: i32 const/arith/compare, locals get/set, block/loop/br_if,
    call/return. **No linear memory in v1** — pieces compute on locals; memory
    enters with the `Mem` arc. Big-step `call_fn` as the primary object;
-   fuel machinery internal; a minimal law kit (call unfolding at a weld
-   boundary, fuel monotonicity).
+   fuel machinery internal. *(Slice-2 amendment: the anticipated
+   fuel-monotonicity law was never needed — see the fuel-form addendum in
+   §7. The law kit that materialized instead: `wrap32_id` (in-range mod is
+   the identity) and per-piece fuel-tower shift lemmas.)*
 2. **Two hand-written pieces.** Small arithmetic-flavored functions as code
    values, each with its equational piece theorem `∀ x, call_fn … = Some …`.
    This slice carries **the measured question of the arc** (§7).
@@ -233,6 +236,44 @@ ten-instruction function), the response is to re-factor the model's
 denotation toward computation-friendliness and/or extend the prove solver —
 *before* scaling to real workloads. The model's factoring is untrusted
 vocabulary; iterating on it is cheap. Do not push through heroically.
+
+**Addendum 2026-07-02 — answered.** Slice 2 measured it, and the go/no-go
+clause fired exactly as intended: the first denotation (Int fuel, `(lt fuel
+1)` guard) made every symbolic-fuel proof pay a case-on + farkas pair per
+fuel decrement (~14 per loop iteration) because the guard never reduces on
+symbolic fuel. Two model re-factors dissolved the burden instead of pushing
+through it:
+
+- **Fuel is structural** (`(type Fuel (FZ) (FS Fuel))`), not Int. A concrete
+  FS tower over an opaque tail ι-reduces through the interpreter and sticks
+  exactly where the proof takes over. Piece theorems quantify an *additive
+  slack tail* `(c Fuel)` — `∀ c, call_fn (TOWER c) m k args = Some …` — which
+  **self-composes**: a weld instantiates `c` with whatever budget remains at
+  the call site. No fuel-monotonicity lemma, no `fuel ≥ bound` premises.
+  Loop pieces use a per-piece tower fn (`pf_sum n c` = FS^n over the tail,
+  one unit per iteration) plus one shift lemma re-spelling the same tower
+  with the per-pass budget at the head.
+- **The loop engine is a named SCC member** (`eval_loop`), not an inline
+  `Loop`-arm blob, because ι-reduction consumes an inline arm before a
+  worker lemma can cite it; the named call stays folded under `reduce` and
+  is the exact unit loop inductions recurse on.
+
+Measured burden after the re-factors: a straight-line piece theorem
+(symbolic values, slack fuel) closes with ONE `(compute both)` — zero
+per-instruction cost. The loop piece (`sum` over `Call add`, ∀ n in i32
+range) costs a fixed ~10-step skeleton per loop — one wf-induct worker whose
+inductive arm is: fire the exit test, one compute per iteration boundary,
+one `wrap32_id` cut for the wrapped counter, cite the IH via a
+have-materialized instance (so LHS-matching binds the slack binder that a
+RHS-side rewrite would dangle), and a final compute both — the two sides
+collide as identical stuck terms. Per-instruction cost inside an iteration:
+still zero (compute grinds the 12-instruction body + the cross-function
+`Call` in one step). Wall time: the whole pieces file checks in ~25 ms under
+`shard_check`. Spelling discipline that makes it work: specs must mirror the
+interpreter's residue exactly (kernel compute is inert on symbolic
+arithmetic — `((x+1)+2)` ≠ `(+ x 3)` syntactically), and claim statements
+spell module/body values as ctor literals, never as nullary-fn calls, since
+CBV evaluates call arguments before sticking.
 
 ## 8. Non-goals for v1
 
