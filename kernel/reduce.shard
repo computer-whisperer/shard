@@ -63,13 +63,14 @@
       (match pats
         (Nil (MOk acc))
         (_ (MNo)))  ; arity garbage — the typer rejects it upstream
-      (if (lt n 0) (MStuck) (MNo)))
+    (if (lt n 0) (MStuck)
+    (MNo)))
   (if (core_named pc (quote S))
     (match pats
       ((Cons p1 Nil)
-       (if (le 1 n)
-         (match_pat p1 (IntLit (- n 1)) acc)
-         (if (int_eq n 0) (MNo) (MStuck))))
+       (if (le 1 n) (match_pat p1 (IntLit (- n 1)) acc)
+       (if (int_eq n 0) (MNo)
+       (MStuck))))
       (_ (MNo)))
     (MNo))))
 
@@ -116,11 +117,14 @@
 ;; value — so ground naturals are machine ints, never unary trees. A
 ;; symbolic (S x) never packs (the proof-facing tower spelling, ordinary
 ;; stuck ctor), and a negative-literal arg never packs (ill-typed garbage
-;; stays stuck). Every COMPUTING reducer tries this at its Ctor head
-;; (step/smart/head/ceval); the ι-only reducer deliberately does NOT —
-;; packing is δ-like computation, and Reduce must preserve the proof-facing
-;; ctor spelling (else a goal's Z packs to 0 while the IH keeps Z, and the
-;; syntactic rewrite dies — see examples/nat_prim.shard nat_iota_no_pack).
+;; stays stuck). ONLY the evaluation-grade reducers pack — `step` (ground
+;; execution) and `ceval` (Compute). The PROOF-FACING normalizers (step_iota
+;; / step_smart / step_head) deliberately do NOT: they have never rewritten
+;; constructor structure, and a goal whose Z packs to 0 under Reduce/Simp
+;; stops matching the claim-spelled IH and every Z/S-spelled lemma statement
+;; (the std/mem rdump_snoc regression — a Simp packed the induct case's Z
+;; and the next citation died). Pinned by examples/nat_prim.shard
+;; nat_iota_no_pack / nat_simp_no_pack.
 (fn nat_pack ((c QName) (args (List Expr))) (Option Expr)
   (if (core_named c (quote Z))
     (match args
@@ -1248,7 +1252,8 @@
        ((Ctor (QName _ (quote False)) Nil) (Some el))
        (_ None)))
     ((Call f args) (try_step_prim (qn_name f) args))
-    ((Ctor c args) (nat_pack c args))  ; ground Z/S IS a head redex
+    ;; NOTE: no nat_pack — step_head is step_smart's gate; the gate must not
+    ;; promise a head step the smart reducer won't take.
     (_ None)))
 
 ;; head_match: the gate's one-step lookahead. The match fires AT THE HEAD
@@ -1309,13 +1314,12 @@
          (match (step_smart m c)
            ((Some c2) (Some (If c2 t el)))
            (None None)))))
+    ;; NOTE: no nat_pack — step_smart drives Simp, a proof-facing normalizer;
+    ;; ctor spellings must survive it (see nat_pack's comment).
     ((Ctor c args)
-     (match (nat_pack c args)
-       ((Some e2) (Some e2))  ; ground Z/S packs to its literal
-       (None
-         (match (step_smart_list m args)
-           ((Some args2) (Some (Ctor c args2)))
-           (None None)))))
+     (match (step_smart_list m args)
+       ((Some args2) (Some (Ctor c args2)))
+       (None None)))
     ((FVar _) None)
     ((BVar _) None)
     ((IntLit _) None)
