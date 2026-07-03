@@ -125,6 +125,12 @@
     (I32Eqz (list 69))
     ((LocalGet k) (Cons 32 (uleb k)))
     ((LocalSet k) (Cons 33 (uleb k)))
+    ;; memory ops carry align+offset immediates; the model has neither, so
+    ;; emit align 0 (1-byte, always valid) and offset 0.
+    (I32Load (list 40 0 0))
+    (I32Store (list 54 0 0))
+    (I32Load8U (list 45 0 0))
+    (I32Store8 (list 58 0 0))
     ((Block b) (Cons 2 (Cons 64 (wapp (enc_instrs b) (list 11)))))
     ((Loop b) (Cons 3 (Cons 64 (wapp (enc_instrs b) (list 11)))))
     ((Br d) (Cons 12 (uleb d)))
@@ -200,15 +206,27 @@
 (fn wsec ((id Int) (payload (List Int))) (List Int)
   (Cons id (wapp (uleb (wlen payload)) payload)))
 
-(fn enc_sections ((fs (List Func))) (List Int)
+;; memory section (id 5): one memory, min = ceil(memsize/64KiB) pages, no
+;; max. Empty when the module declares no memory — byte-identical encodings
+;; for memory-free modules. (The model bounds-checks BYTES; the real engine
+;; rounds up to pages, so keep memsize a page multiple where OOB behavior is
+;; compared.)
+(fn enc_memsec ((memsize Int)) (List Int)
+  (if (lt memsize 1) Nil
+  (wsec 5 (Cons 1 (Cons 0 (uleb (ediv (+ memsize 65535) 65536)))))))
+
+(fn enc_sections ((fs (List Func)) (memsize Int)) (List Int)
   (wapp
     (wsec 1 (wapp (uleb (flen fs)) (enc_types fs)))
     (wapp
       (wsec 3 (wapp (uleb (flen fs)) (enc_funcidxs fs 0)))
       (wapp
-        (wsec 7 (wapp (uleb (flen fs)) (enc_exports fs 0)))
-        (wsec 10 (wapp (uleb (flen fs)) (enc_codes fs)))))))
+        (enc_memsec memsize)
+        (wapp
+          (wsec 7 (wapp (uleb (flen fs)) (enc_exports fs 0)))
+          (wsec 10 (wapp (uleb (flen fs)) (enc_codes fs))))))))
 
-;; the module: magic "\0asm", version 1, type/function/export/code sections.
+;; the module: magic "\0asm", version 1, type/function/[memory/]export/code
+;; sections.
 (fn enc_module ((m WModule)) (List Int)
-  (wapp (list 0 97 115 109 1 0 0 0) (enc_sections (funcs_of m))))
+  (wapp (list 0 97 115 109 1 0 0 0) (enc_sections (funcs_of m) (memsize_of m))))
