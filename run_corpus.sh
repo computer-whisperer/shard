@@ -83,6 +83,9 @@ TARGETS=(
   examples/measure_clause.shard
   examples/measure_import_synth.shard
   examples/measure_lex_demo.shard
+  examples/io/cat_loop.shard
+  examples/measure_tree_demo.shard
+  examples/nested_measure.shard
   examples/mutual_toy.shard
   examples/record_proto.shard
   examples/record_basic.shard
@@ -100,6 +103,9 @@ TARGETS=(
   examples/struct_clause.shard
   examples/render_model.shard
   examples/modules_demo/consumer.shard
+  examples/modules_demo/views/module_view.shard
+  examples/modules_demo/views/consumer_view.shard
+  examples/modules_demo/views/necessity.shard
   examples/calc/calc.shard
   examples/calc/calc_spec.shard
   examples/calc/calc_proof.shard
@@ -207,4 +213,21 @@ if [ "$code" -eq 2 ] && grep -q "escapes the repo root" <<<"$out"; then
 else
   echo "GUARD FAILED: exit $code"
   printf '%s\n' "$out" | head -3
+fi
+
+# Rust-conformance pin: the bootstrap evaluator's cargo suite (prim
+# conformance vs the object table, Word/Bytes revocation guards, kernel
+# loading, induct/match plumbing). It was manual-only and rotted silently
+# for weeks (repaired 2026-07-03); this pin keeps it in every corpus run.
+# Summary line only — a failure changes it and fails the corpus diff.
+echo "=== rust_bootstrap: cargo test ==="
+if command -v cargo >/dev/null; then
+  if cargo test --release --manifest-path rust_bootstrap/Cargo.toml -q > "$TMP/cargo.out" 2>&1; then
+    echo "CARGO OK"
+  else
+    echo "CARGO FAILED"
+    tail -30 "$TMP/cargo.out"
+  fi
+else
+  echo "SKIPPED (no cargo)"
 fi

@@ -187,12 +187,12 @@ std/                   ; the standard library — DIRECTORY MODULES: each topic
 examples/              ; demonstrations (not the library)
   calc/                ;   the stage-0 calculator: spec-first (calc_spec) +
                        ;     run=spec equivalence + the MVU app + World/trace theorems
-  io/                  ;   direct-style World I/O programs (filecat, calc_repl,
-                       ;     echo_world, cat_lazy / cat_loop + clock theorems)
+  io/                  ;   cat_loop — the oracle-driven World I/O loop and its
+                       ;     clock-discipline theorem
   snake_game/          ;   first requirement-isolation probe (pure step, R1–R4)
-  snake_game_2/        ;   the full bin pipeline: mod.req.shard contract, arena
-                       ;     spec vocab, PROVEN interactive play loop (parametric
-                       ;     board, renderer faithfulness, no fin-split)
+  snake_game_3/        ;   the full bin pipeline: two-tier requirement pyramid,
+                       ;     opaque GameState, PROVEN playable interactive loop
+                       ;     (bin contract 7/7 MET; wasd+Enter, seeded rng)
   modules_demo/        ;   directory-module mechanics + surface-discipline views
   lia_basics.shard      ;   LIA + Insts demos; wf_induct_demo / have_test /
                        ;     finsplit_test / list_named_hyp / rewrite_arms_test /

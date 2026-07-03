@@ -133,12 +133,11 @@ boundary grows by exactly one arm.
 
 The I/O vocabulary today: `get_args` / `read_line` / `read_key` /
 `read_file` (input), `write` / `write_line` (output), `exit`. Worked
-examples in `examples/io/`: `filecat` (`get_args → read_file → write →
-exit`); the self-hosted evaluator (same World/extern shape) is now the
+examples: the self-hosted evaluator (same World/extern shape) is the
 kernel entrypoint `kernel/eval.shard`, run via the `eval` binary;
-`calc_repl` and `snake_app` (interactive, line- and key-driven),
-`echo_world` (pure *batched* I/O — slurp/transform/flush, no externs),
-`cat_lazy` / `cat_loop` (the clock-discipline theorems).
+`examples/io/cat_loop` (the oracle-driven loop and its clock-discipline
+theorem); and the snake bin (`examples/snake_game_3/snake.shard`,
+interactive key-driven play under a proven formal contract).
 
 Proofs reason about *what the program produces*: invariants and
 spec-equivalence of the pure core (`examples/calc/calc_app.shard`'s
