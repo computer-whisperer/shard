@@ -11,9 +11,9 @@
 ;;;     consumer proofs, and opaque word ops only cite. Comparisons are
 ;;;     unsigned (Eqz/Eq/LtU); signed views ride the word arc's shifted-mod
 ;;;     trick when a piece needs them.
-;;;   - Fuel is STRUCTURAL (Peano Fuel, not Int) and burns on EVERY step, so
+;;;   - Nat is STRUCTURAL (Peano Nat, not Int) and burns on EVERY step, so
 ;;;     the whole mutual eval SCC is one (struct fuel) measure. Structural
-;;;     fuel is what keeps symbolic-value proofs compute-closable: an FS
+;;;     fuel is what keeps symbolic-value proofs compute-closable: an S
 ;;;     tower over an opaque tail ι-reduces through the interpreter, where an
 ;;;     Int guard (lt fuel 1) sticks on symbolic fuel and costs a case-on +
 ;;;     farkas pair per decrement (slice-2 finding). None = fuel out,
@@ -83,16 +83,21 @@
 
 ;; --- fuel ---------------------------------------------------------------------
 
-;; Structural fuel. Piece theorems spell fuel as a concrete FS tower over an
-;; opaque tail (∀-quantified slack, or a per-piece recursive tower fn), so the
-;; interpreter ι-reduces through exactly the concrete budget and sticks exactly
-;; where the proof takes over.
-(type Fuel (FZ) (FS Fuel))
+;; Fuel is the KERNEL's Nat (kernel/stdlib.shard — literal-backed: ground
+;; fuel is a machine int, never a unary tree). Piece theorems spell fuel as
+;; a concrete S tower over an opaque tail (∀-quantified slack, or a
+;; per-piece recursive tower fn), so the interpreter ι-reduces through
+;; exactly the concrete budget and sticks exactly where the proof takes
+;; over — a symbolic (S x) is an ordinary stuck ctor, unaffected by packing.
 
 ;; ground fuel from an Int count — run/smoke ergonomics: (fnat 20) etc.
-(fn fnat ((n Int)) Fuel
+;; Tail-recursive: under a packing engine the accumulator stays a literal,
+;; so big ground fuels are O(1) space and O(1) host stack.
+(fn fnat_go ((n Int) (acc Nat)) Nat
   (measure n (by arith (list 1 0)) (by arith (list 1 1)))
-  (if (lt n 1) FZ (FS (fnat (- n 1)))))
+  (if (lt n 1) acc (fnat_go (- n 1) (S acc))))
+
+(fn fnat ((n Int)) Nat (fnat_go n Z))
 
 ;; --- evaluation outcomes -----------------------------------------------------
 
@@ -221,12 +226,12 @@
 ;; plus the (constant) depth of its body.
 
 (fn eval_instr
-  ((fuel Fuel) (m WModule) (i Instr) (lc (List Int)) (st (List Int)))
+  ((fuel Nat) (m WModule) (i Instr) (lc (List Int)) (st (List Int)))
   (Option Out)
   (measure (struct fuel))
   (match fuel
-    (FZ None)
-    ((FS f2)
+    (Z None)
+    ((S f2)
      (match i
        ((I32Const c) (Some (ONorm (Cons (wrap32 c) st) lc)))
        ((I32Bin o)
@@ -296,12 +301,12 @@
 ;; loop-body induction recurses on exactly this unit. Runs the body; a branch
 ;; targeting this loop (depth 0) re-enters, a deeper branch unwinds one label.
 (fn eval_loop
-  ((fuel Fuel) (m WModule) (body (List Instr)) (lc (List Int)) (st (List Int)))
+  ((fuel Nat) (m WModule) (body (List Instr)) (lc (List Int)) (st (List Int)))
   (Option Out)
   (measure (struct fuel))
   (match fuel
-    (FZ None)
-    ((FS f2)
+    (Z None)
+    ((S f2)
      (match (eval_seq f2 m body lc st)
        (None None)
        ((Some out)
@@ -313,12 +318,12 @@
           (OTrap (Some OTrap))))))))
 
 (fn eval_seq
-  ((fuel Fuel) (m WModule) (is (List Instr)) (lc (List Int)) (st (List Int)))
+  ((fuel Nat) (m WModule) (is (List Instr)) (lc (List Int)) (st (List Int)))
   (Option Out)
   (measure (struct fuel))
   (match fuel
-    (FZ None)
-    ((FS f2)
+    (Z None)
+    ((S f2)
      (match is
        (Nil (Some (ONorm st lc)))
        ((Cons i rest)
@@ -337,7 +342,7 @@
 ;; stack order). Some v = the function completed with result v; None = fuel
 ;; out, trapped, wrong arity, or bad index. Piece theorems assert Some, so
 ;; conflating failure modes here costs nothing at the weld boundary.
-(fn call_fn ((fuel Fuel) (m WModule) (k Int) (args (List Int))) (Option Int)
+(fn call_fn ((fuel Nat) (m WModule) (k Int) (args (List Int))) (Option Int)
   (match (func_at (funcs_of m) k)
     (None None)
     ((Some f)

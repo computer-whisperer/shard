@@ -12,12 +12,12 @@
 ;;; pure instantiations, one rewrite-with each. ABI layout for these
 ;;; pieces: add=0, sum=1, triple=2.
 ;;;
-;;; Fuel discipline (the slice-2 finding): fuel terms are spelled as concrete
-;;; FS towers over an opaque tail — the interpreter ι-reduces through exactly
+;;; Nat discipline (the slice-2 finding): fuel terms are spelled as concrete
+;;; S towers over an opaque tail — the interpreter ι-reduces through exactly
 ;;; the concrete budget and sticks exactly where the proof takes over. The
-;;; tail (c Fuel) is the additive slack that makes piece theorems compose:
+;;; tail (c Nat) is the additive slack that makes piece theorems compose:
 ;;; a weld instantiates c with whatever budget remains at the call site.
-;;; Loop pieces get a per-piece tower fn (pf_sum below): one FS per
+;;; Loop pieces get a per-piece tower fn (pf_sum below): one S per
 ;;; iteration over the tail, so the fuel for n iterations is a first-class
 ;;; term the induction can recurse on.
 
@@ -76,10 +76,10 @@
 
 ;; --- fuel towers ----------------------------------------------------------------
 
-;; one FS per loop iteration over the tail: pf_sum n c = FS^n(c).
-(fn pf_sum ((n Int) (c Fuel)) Fuel
+;; one S per loop iteration over the tail: pf_sum n c = S^n(c).
+(fn pf_sum ((n Int) (c Nat)) Nat
   (measure n (by arith (list 1 0)) (by arith (list 1 1)))
-  (if (lt n 1) c (FS (pf_sum (- n 1) c))))
+  (if (lt n 1) c (S (pf_sum (- n 1) c))))
 
 ;; --- ground sanity (the machine and the spec agree at literals) -----------------
 
@@ -90,14 +90,14 @@
 ;; --- piece theorem A: add, straight-line -----------------------------------------
 
 ;; Concrete code + tower fuel + symbolic values: closes by compute alone.
-;; The tail c is untouched (9 concrete FS cover the whole run), so the
+;; The tail c is untouched (9 concrete S cover the whole run), so the
 ;; theorem holds at ANY fuel of this shape — that's the weld's slack.
 ;; Weldable: pins only slot 0 (itself); restfs = whatever else is welded in.
 (claim add_thm
-  (goal ((a Int) (b Int) (c Fuel) (restfs (List Func))) ()
+  (goal ((a Int) (b Int) (c Nat) (restfs (List Func))) ()
     (=
       (call_fn
-        (FS (FS (FS (FS (FS (FS (FS (FS (FS c)))))))))
+        (S (S (S (S (S (S (S (S (S c)))))))))
         (MkWModule
           (Cons
             (MkFunc 2 0 (list (LocalGet 0) (LocalGet 1) (I32Bin BAdd)))
@@ -110,10 +110,10 @@
 ;; triple: pins slot 0 (callee add) and slot 2 (itself); slot 1 is an OPAQUE
 ;; filler — func_at walks past it on index arithmetic without inspecting it.
 (claim triple_thm
-  (goal ((x Int) (c Fuel) (f1 Func) (restfs (List Func))) ()
+  (goal ((x Int) (c Nat) (f1 Func) (restfs (List Func))) ()
     (=
       (call_fn
-        (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS c))))))))))))
+        (S (S (S (S (S (S (S (S (S (S (S (S c))))))))))))
         (MkWModule
           (Cons
             (MkFunc 2 0 (list (LocalGet 0) (LocalGet 1) (I32Bin BAdd)))
@@ -153,22 +153,17 @@
   (goal ((n Int)) ((= (le 0 n) True) (= (lt n 1) True)) (= n 0))
   (by arith (list (list 1 0 1) (list 1 1 0))))
 
-;; --- tower shift: pf_sum n (FS^14 c) = FS^14 (pf_sum n c) ------------------------
+;; --- tower shift: pf_sum n (S^14 c) = S^14 (pf_sum n c) ------------------------
 
 ;; The loop engine needs its per-iteration budget CONCRETE at the head of the
 ;; fuel term each time around; the piece theorem needs the loop's fuel OPAQUE
 ;; at the loop entry so reduction stops at the citable redex. This lemma
 ;; bridges the two spellings of the same tower.
 (claim pf_shift14
-  (goal ((n Int) (c Fuel)) ((= (le 0 n) True))
+  (goal ((n Int) (c Nat)) ((= (le 0 n) True))
     (=
-      (pf_sum
-        n
-        (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS c)))))))))))))))
-      (FS
-        (FS
-          (FS
-            (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (pf_sum n c)))))))))))))))))
+      (pf_sum n (S (S (S (S (S (S (S (S (S (S (S (S (S (S c)))))))))))))))
+      (S (S (S (S (S (S (S (S (S (S (S (S (S (S (pf_sum n c)))))))))))))))))
   (wf-induct n
     (case-on (lt n 1) Bool
       ((case True
@@ -214,7 +209,7 @@
 ;; --- the loop worker: the induction that runs sum's loop -------------------------
 
 ;; ∀ n acc st: entering the loop engine with locals (n, acc), any stack, and
-;; fuel FS^13(pf_sum n c) — 13 concrete units (one body pass) plus one FS per
+;; fuel S^13(pf_sum n c) — 13 concrete units (one body pass) plus one S per
 ;; remaining iteration over the slack tail — exits via the BrIf branch with
 ;; locals (0, sum_go n acc) and the stack untouched.
 ;;
@@ -222,13 +217,11 @@
 ;; evaluates call arguments, so the citable redex in a consumer's goal holds
 ;; the evaluated literal — a folded (pmod) spelling would never match.
 (claim sum_loop_worker
-  (goal ((n Int) (acc Int) (st (List Int)) (c Fuel) (restfs (List Func)))
+  (goal ((n Int) (acc Int) (st (List Int)) (c Nat) (restfs (List Func)))
     ((= (le 0 n) True) (= (lt n 4294967296) True))
     (=
       (eval_loop
-        (FS
-          (FS
-            (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (pf_sum n c))))))))))))))
+        (S (S (S (S (S (S (S (S (S (S (S (S (S (pf_sum n c))))))))))))))
         (MkWModule
           (Cons
             (MkFunc 2 0 (list (LocalGet 0) (LocalGet 1) (I32Bin BAdd)))
@@ -286,7 +279,7 @@
              refl)
            (steps ((rewrite (premise hn) lr both true ()) (compute both)) refl)))
        (case False
-         ;; expose one loop iteration's concrete budget: pf_sum n c = FS(pf_sum (n-1) c)
+         ;; expose one loop iteration's concrete budget: pf_sum n c = S(pf_sum (n-1) c)
          (steps
            ((unfold pf_sum lhs)
             (rewrite (hyp False) lr lhs true ())
@@ -337,17 +330,15 @@
                    (have hih
                      (=
                        (eval_loop
-                         (FS
-                           (FS
-                             (FS
-                               (FS
-                                 (FS
-                                   (FS
-                                     (FS
-                                       (FS
-                                         (FS
-                                           (FS
-                                             (FS (FS (FS (pf_sum (- n 1) c))))))))))))))
+                         (S
+                           (S
+                             (S
+                               (S
+                                 (S
+                                   (S
+                                     (S
+                                       (S
+                                         (S (S (S (S (S (pf_sum (- n 1) c))))))))))))))
                          (MkWModule
                            (Cons
                              (MkFunc
@@ -428,25 +419,22 @@
 
 ;; --- piece theorem B: sum, the loop --------------------------------------------
 
-;; The fuel spelling is load-bearing: (pf_sum n (FS^14 c)) keeps the loop's
+;; The fuel spelling is load-bearing: (pf_sum n (S^14 c)) keeps the loop's
 ;; entry fuel OPAQUE-headed, so the opening compute stops at the citable
 ;; (eval_loop …) redex instead of barreling into the first iteration. The
 ;; shift lemma then re-spells the same tower with the per-pass budget concrete
-;; at the head — the worker's shape. FS^3 outside covers call_fn's plumbing.
+;; at the head — the worker's shape. S^3 outside covers call_fn's plumbing.
 (claim sum_thm
-  (goal ((n Int) (c Fuel) (restfs (List Func)))
+  (goal ((n Int) (c Nat) (restfs (List Func)))
     ((= (le 0 n) True) (= (lt n 4294967296) True))
     (=
       (call_fn
-        (FS
-          (FS
-            (FS
+        (S
+          (S
+            (S
               (pf_sum
                 n
-                (FS
-                  (FS
-                    (FS
-                      (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS (FS c))))))))))))))))))
+                (S (S (S (S (S (S (S (S (S (S (S (S (S (S c))))))))))))))))))
         (MkWModule
           (Cons
             (MkFunc 2 0 (list (LocalGet 0) (LocalGet 1) (I32Bin BAdd)))
@@ -492,7 +480,7 @@
            (steps ((rewrite (premise hn) lr both true ()) (compute both)) refl)))
        (case False
          ;; fire the stuck guard and ι-resume: the dispatch leaves the loop
-         ;; engine FOLDED — (eval_loop (pf_sum (- n 1) FS^14(c)) …) — since
+         ;; engine FOLDED — (eval_loop (pf_sum (- n 1) S^14(c)) …) — since
          ;; reduce never unfolds calls; then re-spell its fuel to the worker's
          ;; shape
          (steps
@@ -509,9 +497,9 @@
                 ((inst n n))
                 ((steps ((rewrite (hyp False) lr lhs true ())) refl))
                 refl))
-             ;; FS^14(pf_sum (n-1) c) = FS^13(FS(pf_sum (n-1) c)) — fold the inner
-             ;; FS back into pf_sum n c so the worker instance matches at n
-             (have fold_eq (= (pf_sum n c) (FS (pf_sum (- n 1) c)))
+             ;; S^14(pf_sum (n-1) c) = S^13(S(pf_sum (n-1) c)) — fold the inner
+             ;; S back into pf_sum n c so the worker instance matches at n
+             (have fold_eq (= (pf_sum n c) (S (pf_sum (- n 1) c)))
                (steps
                  ((unfold pf_sum lhs)
                   (rewrite (hyp False) lr lhs true ())
