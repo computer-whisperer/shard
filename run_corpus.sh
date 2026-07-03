@@ -180,6 +180,15 @@ else
   echo "SKIPPED (no bin/shard_eval)"
 fi
 
+# Nat-former RUN pin: ground construction/packing, view matching, deep
+# patterns under the RUN engine (ev). Output must be engine-independent.
+echo "=== nat: run probe ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run examples/nat_run_probe.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
 # Engine-differential pin: encode the composite + const probe to real .wasm
 # and replay the model-computed vectors under node/V8 (the slice-4 reality
 # check — the "engine conforms to model" trust leaf). Summary line only;

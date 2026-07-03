@@ -32,6 +32,8 @@ pub fn load_kernel_from<P: AsRef<std::path::Path>>(
         p("module.shard"),
         p("proof.shard"),
         p("term.shard"),
+        p("expr_size.shard"),
+        p("types.shard"),
         p("reduce.shard"),
         p("checker.shard"),
         p("arith.shard"),
@@ -533,7 +535,7 @@ mod tests {
 
         let fn_names: Vec<&str> = module.fns.iter().map(|f| f.name.as_str()).collect();
         for required in ["lookup", "subst", "open_many", "match_pat", "step",
-                         "lookup_typedef", "check_sequent", "do_induct"] {
+                         "lookup_typedef", "check_sequent", "build_induct_subgoal"] {
             assert!(fn_names.contains(&required),
                 "missing fn: {required}");
         }
@@ -983,11 +985,12 @@ mod tests {
         }
     }
 
-    /// The deliberate asymmetry: word primitives exist ONLY in the
-    /// object table. Native must return None for every one (fail-stop
-    /// UnknownCall at run time — never a second implementation), while
-    /// the object table reduces them. A name appearing in prim.rs
-    /// breaks this pin on purpose.
+    /// Word primitives were REVOKED from the kernel (issue #15,
+    /// 10ee0fa — std/word is the rep now): NEITHER table may know
+    /// them. Native returns None (fail-stop UnknownCall) and the
+    /// object table must not reduce them either. This pin guards
+    /// against reintroduction on either side; the name lists above
+    /// are the revoked inventory.
     #[test]
     fn prim_conformance_word_prims_native_ignorant() {
         let m = load_kernel();
@@ -998,38 +1001,39 @@ mod tests {
             )
         };
         let int = |n: i64| ast::Expr::IntLit(n.into());
-        let assert_object_only = |name: &str, args: &[ast::Expr]| {
+        let assert_revoked = |name: &str, args: &[ast::Expr]| {
             assert_eq!(
                 prim::try_apply(name, args),
                 None,
-                "native table learned the object-only prim {name}"
+                "native table learned the revoked prim {name}"
             );
             let object = object_apply(&m, name, args)
                 .unwrap_or_else(|e| panic!("object {name} crashed: {e}"));
             assert!(
-                matches!(&object, ast::Expr::Ctor(n, _) if n == "Some"),
-                "object table dropped {name}: {object:?}"
+                matches!(&object, ast::Expr::Ctor(n, _) if n == "None"),
+                "object table re-learned the revoked prim {name}: {object:?}"
             );
         };
         for name in OBJECT_ONLY_INT2 {
-            assert_object_only(name, &[int(8), int(300)]);
+            assert_revoked(name, &[int(8), int(300)]);
         }
         for name in OBJECT_ONLY_WORD2 {
-            assert_object_only(name, &[word(8, 200), word(8, 3)]);
-            assert_object_only(name, &[word(8, 200), word(8, 0)]); // division-by-zero profile is TOTAL
+            assert_revoked(name, &[word(8, 200), word(8, 3)]);
+            assert_revoked(name, &[word(8, 200), word(8, 0)]);
         }
         for name in OBJECT_ONLY_WORD_INT {
-            assert_object_only(name, &[word(8, 200), int(3)]);
-            assert_object_only(name, &[word(8, 200), int(99)]); // saturating, still total
+            assert_revoked(name, &[word(8, 200), int(3)]);
+            assert_revoked(name, &[word(8, 200), int(99)]);
         }
         for name in OBJECT_ONLY_WORD1 {
-            assert_object_only(name, &[word(8, 200)]);
+            assert_revoked(name, &[word(8, 200)]);
         }
     }
 
     /// Bytes primitives: same deliberate asymmetry as words — object
-    /// table only, native fail-stops. Also pins the TOTAL profiles
-    /// (out-of-range index, clamped slice window, masked maker).
+    /// Bytes primitives were REVOKED like words (bcce1e0 — std/bytes
+    /// is the rep now): NEITHER table may know them. Same
+    /// reintroduction pin as the word test above.
     #[test]
     fn prim_conformance_bytes_prims_native_ignorant() {
         let m = load_kernel();
@@ -1038,38 +1042,38 @@ mod tests {
         };
         let bytes = |xs: &[i64]| nctor("Bytes", vec![intlist(xs)]);
         let int = |n: i64| ast::Expr::IntLit(n.into());
-        let assert_object_only = |name: &str, args: &[ast::Expr]| {
+        let assert_revoked = |name: &str, args: &[ast::Expr]| {
             assert_eq!(
                 prim::try_apply(name, args),
                 None,
-                "native table learned the object-only prim {name}"
+                "native table learned the revoked prim {name}"
             );
             let object = object_apply(&m, name, args)
                 .unwrap_or_else(|e| panic!("object {name} crashed: {e}"));
             assert!(
-                matches!(&object, ast::Expr::Ctor(n, _) if n == "Some"),
-                "object table dropped {name}: {object:?}"
+                matches!(&object, ast::Expr::Ctor(n, _) if n == "None"),
+                "object table re-learned the revoked prim {name}: {object:?}"
             );
         };
         for name in OBJECT_ONLY_BYTES1 {
-            assert_object_only(name, &[bytes(&[10, 20])]);
-            assert_object_only(name, &[bytes(&[])]); // empty is canonical too
+            assert_revoked(name, &[bytes(&[10, 20])]);
+            assert_revoked(name, &[bytes(&[])]);
         }
         for name in OBJECT_ONLY_BYTES2 {
-            assert_object_only(name, &[bytes(&[1]), bytes(&[2, 3])]);
+            assert_revoked(name, &[bytes(&[1]), bytes(&[2, 3])]);
         }
         for name in OBJECT_ONLY_BYTES_INT {
-            assert_object_only(name, &[bytes(&[10, 20]), int(1)]);
-            assert_object_only(name, &[bytes(&[10, 20]), int(99)]); // total: oob reads 0
-            assert_object_only(name, &[bytes(&[10, 20]), int(-2)]);
+            assert_revoked(name, &[bytes(&[10, 20]), int(1)]);
+            assert_revoked(name, &[bytes(&[10, 20]), int(99)]);
+            assert_revoked(name, &[bytes(&[10, 20]), int(-2)]);
         }
         for name in OBJECT_ONLY_BYTES_INT_INT {
-            assert_object_only(name, &[bytes(&[7, 8, 9]), int(1), int(3)]);
-            assert_object_only(name, &[bytes(&[7, 8, 9]), int(-5), int(99)]); // clamped, total
-            assert_object_only(name, &[bytes(&[7, 8, 9]), int(2), int(1)]); // inverted → empty
+            assert_revoked(name, &[bytes(&[7, 8, 9]), int(1), int(3)]);
+            assert_revoked(name, &[bytes(&[7, 8, 9]), int(-5), int(99)]);
+            assert_revoked(name, &[bytes(&[7, 8, 9]), int(2), int(1)]);
         }
         for name in OBJECT_ONLY_INTLIST1 {
-            assert_object_only(name, &[intlist(&[300, -1])]); // masked euclidean mod 256, total
+            assert_revoked(name, &[intlist(&[300, -1])]);
         }
     }
 }

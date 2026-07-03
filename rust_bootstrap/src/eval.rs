@@ -399,6 +399,24 @@ fn eval_ir<'a>(prog: &'a Prog, env0: &Env, e0: &'a IExpr) -> Result<Val, EvalErr
 
             IExpr::Ctor(name, args) => {
                 let vals = eval_iargs(prog, &env, args)?;
+                // Nat former (kernel/stdlib.shard): ground Z/S packs to its
+                // nonneg literal — the unique ground Nat value. This engine is
+                // flat-core (names ARE identity, cf. the True/False tests
+                // below), so the gate is the bare name. A symbolic or negative
+                // argument never packs.
+                match &**name {
+                    "Z" if vals.is_empty() => {
+                        return Ok(Val::Int(Rc::new(num_traits::Zero::zero())))
+                    }
+                    "S" if vals.len() == 1 => {
+                        if let Val::Int(n) = &vals[0] {
+                            if !num_traits::Signed::is_negative(&**n) {
+                                return Ok(Val::Int(Rc::new((**n).clone() + 1)));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
                 return Ok(Val::Ctor(name.clone(), Rc::from(vals.as_slice())));
             }
 
@@ -636,6 +654,26 @@ fn match_pat(p: &IPat, v: &Val, acc: &mut Vals) -> bool {
                         }
                     }
                     return true;
+                }
+            }
+            // Nat former VIEW: a nonneg literal IS a ground Nat, so it
+            // matches Z/S structurally (0 is Z, n>=1 is (S (n-1)), recursing
+            // for deep patterns). Negatives are ill-typed garbage: no match
+            // (this closed-world engine reports NoMatchArm, loudly).
+            if let Val::Int(m) = v {
+                match &**cn {
+                    "Z" => return sub_pats.is_empty() && num_traits::Zero::is_zero(&**m),
+                    "S" if sub_pats.len() == 1 => {
+                        if num_traits::Signed::is_positive(&**m) {
+                            return match_pat(
+                                &sub_pats[0],
+                                &Val::Int(Rc::new((**m).clone() - 1)),
+                                acc,
+                            );
+                        }
+                        return false;
+                    }
+                    _ => {}
                 }
             }
             false
