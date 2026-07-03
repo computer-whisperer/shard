@@ -1565,6 +1565,13 @@
     (Nil Nil)
     ((Cons h t) (Cons (open_many env h) (copen_list env t)))))
 
+;; stop-set membership for Compute's (stop FN ...) clause
+(fn qn_member ((q QName) (qs (List QName))) Bool
+  (measure (struct qs))
+  (match qs
+    (Nil False)
+    ((Cons h t) (if (qname_eq h q) True (qn_member q t)))))
+
 ;; FUEL (totality, issue #1). ceval/ceval_list/ceval_call form a MUTUAL SCC and
 ;; the unfolding edge (ceval_call → the fn body) recurses on a non-subterm, so
 ;; there is no structural descent. Each member carries (measure fuel) and EVERY
@@ -1577,7 +1584,9 @@
 ;; equal to the input, so Compute fails to close rather than computing
 ;; unsoundly. fuel = a per-path budget on ceval calls; pragmatic, not a
 ;; soundness condition (totality holds for any fuel).
-(fn ceval ((m Module) (env (List Expr)) (e Expr) (fuel Int)) Expr
+(fn ceval
+  ((m Module) (stops (List QName)) (env (List Expr)) (e Expr) (fuel Int))
+  Expr
   ;; one (decrease nonneg) pair per recursive site, pre-order; all uniform —
   ;; every site keeps only the fuel guard, so every callee measure (- fuel 1)
   ;; gives the same ad_fix vectors. Sites: Ctor ceval_list; Let ceval + ceval_list;
@@ -1611,29 +1620,39 @@
     ((FVar _) e)
     ((BVar k) (cenv_get env k))
     ((Ctor c args)
-     (match (ceval_list m env args (- fuel 1))
+     (match (ceval_list m stops env args (- fuel 1))
        (vs
          (match (nat_pack c vs)
            ((Some v) v)  ; ground Z/S packs to its literal
            (None (Ctor c vs))))))
     ((Let bs body)
-     (ceval m (cappend (ceval_list m env bs (- fuel 1)) env) body (- fuel 1)))  ; bs ⊢ body
+     (ceval
+       m
+       stops
+       (cappend (ceval_list m stops env bs (- fuel 1)) env)
+       body
+       (- fuel 1)))  ; bs ⊢ body
     ((If c t el)
-     (match (ceval m env c (- fuel 1))
-       ((Ctor (QName _ (quote True)) Nil) (ceval m env t (- fuel 1)))
-       ((Ctor (QName _ (quote False)) Nil) (ceval m env el (- fuel 1)))
+     (match (ceval m stops env c (- fuel 1))
+       ((Ctor (QName _ (quote True)) Nil) (ceval m stops env t (- fuel 1)))
+       ((Ctor (QName _ (quote False)) Nil) (ceval m stops env el (- fuel 1)))
        (cv (If cv (open_many env t) (open_many env el)))))  ; stuck cond → reify branches
     ((Match s arms)
-     (match (ceval m env s (- fuel 1))
+     (match (ceval m stops env s (- fuel 1))
        (sv
          (match (ceval_arms arms sv)
            ((Some (Pair body binds))
-            (ceval m (cappend binds env) body (- fuel 1)))
+            (ceval m stops (cappend binds env) body (- fuel 1)))
            (None (Match sv (open_many_arms 0 env arms)))))))  ; stuck → reify arms
     ((Call f args)
-     (ceval_call m f (ceval_list m env args (- fuel 1)) (- fuel 1))))))
+     (ceval_call m stops f (ceval_list m stops env args (- fuel 1)) (- fuel 1))))))
 
-(fn ceval_list ((m Module) (env (List Expr)) (es (List Expr)) (fuel Int))
+(fn ceval_list
+  ((m Module)
+   (stops (List QName))
+   (env (List Expr))
+   (es (List Expr))
+   (fuel Int))
   (List Expr)
   ;; two sites: ceval (head), ceval_list (tail) — both uniform.
   (measure
@@ -1646,9 +1665,13 @@
   (match es
     (Nil Nil)
     ((Cons h t)
-     (Cons (ceval m env h (- fuel 1)) (ceval_list m env t (- fuel 1)))))))
+     (Cons
+       (ceval m stops env h (- fuel 1))
+       (ceval_list m stops env t (- fuel 1)))))))
 
-(fn ceval_call ((m Module) (f QName) (vs (List Expr)) (fuel Int)) Expr
+(fn ceval_call
+  ((m Module) (stops (List QName)) (f QName) (vs (List Expr)) (fuel Int))
+  Expr
   ;; sites in pre-order: the refine_try recursive (pred ev) eval, then the
   ;; fn-body ceval — both spend one fuel unit, same ad_fix vectors.
   (measure
@@ -1657,32 +1680,37 @@
     (by arith (list 1 1))
     (by arith (list 1 0))
     (by arith (list 1 1)))
-  (if (lt fuel 1) (Call f vs)
-  (if (sym_eq (qn_name f) (quote refine_try))
-    ;; (refine_try (Ctor R Nil) ev): vs already evaluated. Compute R's PRED on
-    ;; ev; wrap Some ONLY on True. Stuck (return the Call) if not a refined type
-    ;; or PRED doesn't decide — the typer rules the former out. docs/REFINEMENT.md.
-    (match vs
-      ((Cons (Ctor rname _) (Cons ev Nil))
-       (match (typedef_refine rname m)
-         (None (Call f vs))
-         ((Some (Pair _ pred))
-          (match (ceval_call m pred (Cons ev Nil) (- fuel 1))
-            ((Ctor (QName _ (quote True)) Nil)
-             (Ctor (qn (quote Some)) (Cons ev Nil)))
-            ((Ctor (QName _ (quote False)) Nil) (Ctor (qn (quote None)) Nil))
-            (_ (Call f vs))))))
-      (_ (Call f vs)))
-    (match m
-      ((Module _ _ _ trie _)
-       (match (trie_lookup f trie)
-         ((Some (FnDef _ ptypes _ body))
-          (if (int_eq (len vs) (len_t ptypes))
-            (ceval m (reverse_exprs vs) body (- fuel 1))  ; (reverse args) ⊢ body
-            (Call f vs)))  ; partial app → stuck
-         (None
-           (match (try_step_prim (qn_name f) vs)
-             ((Some r) r)
-             (None (Call f vs))))))))))  ; prim-miss / extern → stuck
+  (if (lt fuel 1)
+    (Call f vs)
+    ;; a STOP fn stays folded — args are already evaluated, so this IS the
+    ;; stuck-Call shape; strictly fewer reductions than plain compute.
+    (if (qn_member f stops) (Call f vs)
+    (if (sym_eq (qn_name f) (quote refine_try))
+      ;; (refine_try (Ctor R Nil) ev): vs already evaluated. Compute R's PRED on
+      ;; ev; wrap Some ONLY on True. Stuck (return the Call) if not a refined type
+      ;; or PRED doesn't decide — the typer rules the former out. docs/REFINEMENT.md.
+      (match vs
+        ((Cons (Ctor rname _) (Cons ev Nil))
+         (match (typedef_refine rname m)
+           (None (Call f vs))
+           ((Some (Pair _ pred))
+            (match (ceval_call m stops pred (Cons ev Nil) (- fuel 1))
+              ((Ctor (QName _ (quote True)) Nil)
+               (Ctor (qn (quote Some)) (Cons ev Nil)))
+              ((Ctor (QName _ (quote False)) Nil) (Ctor (qn (quote None)) Nil))
+              (_ (Call f vs))))))
+        (_ (Call f vs)))
+      (match m
+        ((Module _ _ _ trie _)
+         (match (trie_lookup f trie)
+           ((Some (FnDef _ ptypes _ body))
+            (if (int_eq (len vs) (len_t ptypes))
+              (ceval m stops (reverse_exprs vs) body (- fuel 1))  ; (reverse args) ⊢ body
+              (Call f vs)))  ; partial app → stuck
+           (None
+             (match (try_step_prim (qn_name f) vs)
+               ((Some r) r)
+               (None (Call f vs)))))))))))  ; prim-miss / extern → stuck
 
-(fn compute_eval ((m Module) (e Expr)) Expr (ceval m Nil e (simp_budget)))
+(fn compute_eval ((m Module) (stops (List QName)) (e Expr)) Expr
+  (ceval m stops Nil e (simp_budget)))

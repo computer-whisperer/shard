@@ -433,3 +433,11 @@ plain wrapper reduces away — pf_body's vacuous `(lt (int_of_nat k) 0)`
 guard); the folded `eval_loop` redex a worker citation needs only arises
 when the Loop instruction fires under `reduce` (never `compute`), so the
 caller's fuel prefix must stall compute one level above the loop.
+
+**Superseded for future pieces (2026-07-03 QoL slice):** `(compute SIDE
+(stop eval_loop))` now keeps the loop call folded directly — no fuel
+prefix, no vacuous-guard wrapper (LANGUAGE.md §10, pin
+`examples/compute_stop.shard`); `(inline NAME)`/`(S^ N X)` reader sugar
+makes the statement-literal spellings ride the fn definitions instead of
+being hand-copied. wasm_pieces/wasm_rev keep the original choreography as
+the built record; new pieces should use the stop clause and the sugar.

@@ -259,12 +259,12 @@
           ((Some rest) (Some (Cons i rest)))))))))
 
 ;; ---- step -----------------------------------------------------------------
-;; reduce/simp/compute share the shape (KEYWORD SIDE); dispatch by head.
+;; reduce/simp share the shape (KEYWORD SIDE); dispatch by head. compute is
+;; parsed in p_step_head — it optionally carries a (stop FN …) clause.
 (fn p_simple_step ((h Symbol) (sd Side)) (Option Step)
   (if (sym_eq h (quote reduce)) (Some (Reduce sd))
   (if (sym_eq h (quote simp)) (Some (Simp sd))
-  (if (sym_eq h (quote compute)) (Some (Compute sd))
-  None))))
+  None)))
 
 ;; (rewrite EQREF DIR SIDE ALL (INST…))
 (fn p_rewrite_step ((args (List SExpr)) (ctors (List Symbol))) (Option Step)
@@ -301,6 +301,40 @@
      (if (sym_eq h (coloncolon_sym)) (qpath_qname segs) None))
     (_ None)))
 
+(fn p_qnames ((ss (List SExpr))) (Option (List QName))
+  (measure (struct ss))
+  (match ss
+    (Nil (Some Nil))
+    ((Cons h t)
+     (match (p_qname h)
+       (None None)
+       ((Some q)
+        (match (p_qnames t)
+          (None None)
+          ((Some rest) (Some (Cons q rest)))))))))
+
+;; (compute SIDE) — stop list Nil — or (compute SIDE (stop FN FN…)); an
+;; empty (stop) is refused (it would silently be an ordinary compute).
+(fn p_compute_step ((args (List SExpr))) (Option Step)
+  (match args
+    ((Cons sideS Nil)
+     (match (p_side sideS)
+       (None None)
+       ((Some sd) (Some (Compute sd Nil)))))
+    ((Cons sideS (Cons (SList (Cons (SSym sh) names)) Nil))
+     (if (sym_eq sh (quote stop))
+       (match (p_side sideS)
+         (None None)
+         ((Some sd)
+          (match names
+            (Nil None)
+            (_
+              (match (p_qnames names)
+                (None None)
+                ((Some qs) (Some (Compute sd qs))))))))
+       None))
+    (_ None)))
+
 (fn p_step_head ((h Symbol) (args (List SExpr)) (ctors (List Symbol)))
   (Option Step)
   (if (sym_eq h (quote unfold))
@@ -314,16 +348,17 @@
             ((Some sd) (Some (Unfold fq sd)))))))
       (_ None))
   (if (sym_eq h (quote rewrite)) (p_rewrite_step args ctors)
+  (if (sym_eq h (quote compute)) (p_compute_step args)
   (if (sym_eq h (quote inspect))
     (match args
       (Nil (Some Inspect))
       (_ None))
-    (match args  ; reduce / simp / compute: one SIDE arg
+    (match args  ; reduce / simp: one SIDE arg
       ((Cons sideS Nil)
        (match (p_side sideS)
          (None None)
          ((Some sd) (p_simple_step h sd))))
-      (_ None))))))
+      (_ None)))))))
 
 (fn p_step ((s SExpr) (ctors (List Symbol))) (Option Step)
   (match (p_form s)
