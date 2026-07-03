@@ -163,6 +163,38 @@ claim-assembly section of lowergen IS the first statement generator; the
 consensus/validation mechanism of open question 1 now has a concrete
 object to check against.
 
+**P3 — the adapter-combinator probe (`examples/rep_probe.shard`, 69/0,
+2026-07-03).** The type-owned representation cascade demonstrated on the
+first non-scalar shape: a pointer-linked `List Int` in 8-byte cells over
+std/mem's LE layer. The element combinator (`enc_u32`/`dec_u32` + its law
+`u32_round`) and the DERIVED list combinator (`enc_list`/`dec_list` +
+`rep_list_id`), where the list round-trip proof literally cites the
+element law for the head — swap the element combinator and the derivation
+re-instantiates. Two design findings with architectural weight:
+
+1. **Bump direction is a proof-architecture choice.** Encoding
+   parent-first (head cell below, tail encoded above) makes every write
+   land strictly above finished structure, so the only frame lemma needed
+   is "an encoder running above doesn't disturb a word below"
+   (`l4_enc_below`, one clean induction). Child-first order would need a
+   data-dependent read-set invariant. The uniform-rep allocator should
+   allocate-then-fill top-down for this reason.
+2. **Fuel-driven decoding removes tags from the adapter.** DEC may take
+   the spec-side length as a parameter (it is an observation function,
+   like `dump`) — no Nil-word discrimination, no `if`-guard, and the
+   round-trip statement is exactly `dump_load_id`-shaped. Tag words
+   (rt.h's odd/even immediates) are only needed for POLYMORPHIC slots;
+   their proofs (div-facts) are deferred to the uniform-rep arc.
+
+Proof cost: two farkas certs read off the tracer's slot table, one helper
+shape, one chain reorder (leftmost-occurrence targeting forces
+head-chain-first), plus one genuine QoL discovery: **named cut premises
+(`have` names) do not resolve through deep `rewrite-with` continuation
+nesting** — introduce the `have` adjacent to its citation site
+(positional refs can't reach cut premises at all). Also: `len_cons`
+collides with a std/list axiom — homonym hazard for probe-local lemma
+names.
+
 **Findings.** (1) Both ends fit one schema; the only variance is slot
 contents. (2) `(inline …)` is file-local, so cross-file statement reuse
 needs a local nullary twin — fine for generated self-contained cert files,

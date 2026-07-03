@@ -1,0 +1,438 @@
+;;; examples/rep_probe.shard — P3: the uniform-representation ADAPTER
+;;; COMBINATOR probe (docs/LOWERING.md §3/§5). Tests the type-owned
+;;; representation cascade on the first non-scalar shape: a pointer-linked
+;;; List Int laid out in cells over std/mem's LE word layer.
+;;;
+;;; The cascade (CakeML refinement-invariant style): the ELEMENT adapter
+;;; (enc_u32/dec_u32 + its round-trip law u32_round) is one combinator; the
+;;; LIST adapter (enc_list/dec_list) is DERIVED from it — enc_list stores
+;;; (enc_u32 h) per cell, dec_list reads (dec_u32 …) per cell, and the list
+;;; round-trip proof CITES u32_round for the head. Swapping the element
+;;; combinator (tagged immediates, pairs, …) re-instantiates the same
+;;; derivation.
+;;;
+;;; Layout: cell at p = [element word @p][tail pointer @p+4], both 4-byte
+;;; LE words. PARENT-FIRST bump order — the head cell is written BEFORE the
+;;; tail is encoded at p+8, so all later writes land strictly ABOVE
+;;; finished structure and the only frame lemma needed is "an encoder
+;;; running above doesn't disturb a word below" (l4_enc_below, one clean
+;;; induction). Child-first order would need a data-dependent read-set
+;;; invariant instead — the bump DIRECTION is a proof-architecture choice.
+;;;
+;;; The decoder is FUEL-DRIVEN by the spec-side length (exactly like
+;;; mem_reverse's dump): no Nil-word tag, no if-guard, and the round-trip
+;;; statement is dump_load_id-shaped. Tag discrimination (rt.h's odd/even
+;;; immediates) is only needed for POLYMORPHIC slots and is deferred to the
+;;; uniform-rep arc (its proofs = the mod_byte_id div-facts pattern).
+
+(import "../kernel/stdlib.shard")
+(import "../std/mem")
+(import "../std/nat.shard")
+(import "mem_reverse.shard")  ; length_nat
+(use (:: std mem *))
+(use (:: std nat *))
+(use (:: examples mem_reverse *))
+
+;; --- the element combinator (u32 identity) -----------------------------------
+
+(fn enc_u32 ((v Int)) Int v)
+
+(fn dec_u32 ((w Int)) Int w)
+
+;; the element adequacy law — cited by the derived list round trip
+(claim u32_round
+  (goal ((v Int)) () (= (dec_u32 (enc_u32 v)) v))
+  (steps ((compute lhs)) refl))
+
+;; elementwise range guard (byte_ok's shape at the u32 bound)
+(fn u32s_ok ((xs (List Int))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil True)
+    ((Cons h t) (if (le 0 h) (if (lt h 4294967296) (u32s_ok t) False) False))))
+
+;; --- the derived list combinator ----------------------------------------------
+
+;; encode: head cell at p (element word, then tail pointer p+8), tail
+;; encoded above. Returns the extended memory.
+(fn enc_list ((xs (List Int)) (m Mem) (p Int)) Mem
+  (measure (struct xs))
+  (match xs
+    (Nil m)
+    ((Cons h t)
+     (enc_list
+       t
+       (store_le (S^ 4 Z) (store_le (S^ 4 Z) m p (enc_u32 h)) (+ p 4) (+ p 8))
+       (+ p 8)))))
+
+;; decode: follow the stored pointers, one cell per fuel step (fuel = the
+;; spec-side length, dump-style)
+(fn dec_list ((f Nat) (m Mem) (w Int)) (List Int)
+  (measure (struct f))
+  (match f
+    (Z Nil)
+    ((S f2)
+     (Cons
+       (dec_u32 (load_le (S^ 4 Z) m w))
+       (dec_list f2 m (load_le (S^ 4 Z) m (+ w 4)))))))
+
+;; --- arithmetic helpers (farkas) ----------------------------------------------
+
+(claim lp_cons
+  (goal ((h Int) (t (List Int))) ()
+    (= (length_nat (Cons h t)) (S (length_nat t))))
+  (steps ((simp lhs)) refl))
+
+(claim h_refl4
+  (goal ((p Int)) () (= (le (+ p 4) (+ p 4)) True))
+  (by arith (list 1)))
+
+(claim h_a4p8
+  (goal ((p Int)) () (= (le (+ p 4) (+ p 8)) True))
+  (by arith (list 1)))
+
+(claim h_a44p8
+  (goal ((p Int)) () (= (le (+ (+ p 4) 4) (+ p 8)) True))
+  (by arith (list 1)))
+
+(claim h_shiftp8
+  (goal ((a Int) (p Int)) ((= (le (+ a 4) p) True))
+    (= (le (+ a 4) (+ p 8)) True))
+  (by arith (list 1 1)))
+
+(claim h_shiftp4
+  (goal ((a Int) (p Int)) ((= (le (+ a 4) p) True))
+    (= (le (+ a 4) (+ p 4)) True))
+  (by arith (list 1 1)))
+
+(claim h_le1p8
+  (goal ((p Int)) ((= (le 1 p) True)) (= (le 1 (+ p 8)) True))
+  (by arith (list 1 1)))
+
+(claim h_le0p8
+  (goal ((p Int)) ((= (le 1 p) True)) (= (le 0 (+ p 8)) True))
+  (by arith (list 1 1)))
+
+(claim h_twhi
+  (goal ((p Int) (k Int))
+    ((= (lt (+ p (* 8 (+ 1 k))) 4294967296) True) (= (le 0 k) True))
+    (= (lt (+ p 8) 4294967296) True))
+  (by arith (list 1 1 8)))
+
+(claim h_shift8
+  (goal ((p Int) (k Int))
+    ((= (lt (+ p (* 8 (+ 1 k))) 4294967296) True) (= (le 0 k) True))
+    (= (lt (+ (+ p 8) (* 8 k)) 4294967296) True))
+  (by arith (list 1 1 0)))
+
+(claim h_b0
+  (goal ((a Int) (q Int)) ((= (le (+ a 4) q) True)) (= (lt a q) True))
+  (by arith (list 1 1)))
+
+(claim h_b1
+  (goal ((a Int) (q Int)) ((= (le (+ a 4) q) True)) (= (lt (+ a 1) q) True))
+  (by arith (list 1 1)))
+
+(claim h_b2
+  (goal ((a Int) (q Int)) ((= (le (+ a 4) q) True))
+    (= (lt (+ (+ a 1) 1) q) True))
+  (by arith (list 1 1)))
+
+(claim h_b3
+  (goal ((a Int) (q Int)) ((= (le (+ a 4) q) True))
+    (= (lt (+ (+ (+ a 1) 1) 1) q) True))
+  (by arith (list 1 1)))
+
+;; --- word-level framing: a 4-byte load below a store is untouched -------------
+
+;; derived from the exported defining equations (the weaning technique):
+;; open both loads into byte sums, frame each byte (store_le_get_below),
+;; and the sums coincide.
+(claim l4_below
+  (goal ((m Mem) (a Int) (q Int) (v Int) (w2 Nat)) ((= (le (+ a 4) q) True))
+    (= (load_le (S^ 4 Z) (store_le w2 m q v) a) (load_le (S^ 4 Z) m a)))
+  (steps
+    ((rewrite (lemma load_le_s) lr lhs true ())
+     (rewrite (lemma load_le_s) lr lhs true ())
+     (rewrite (lemma load_le_s) lr lhs true ())
+     (rewrite (lemma load_le_s) lr lhs true ())
+     (rewrite (lemma load_le_z) lr lhs true ())
+     (rewrite (lemma load_le_s) lr rhs true ())
+     (rewrite (lemma load_le_s) lr rhs true ())
+     (rewrite (lemma load_le_s) lr rhs true ())
+     (rewrite (lemma load_le_s) lr rhs true ())
+     (rewrite (lemma load_le_z) lr rhs true ()))
+    (rewrite-with
+      (lemma store_le_get_below)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma h_b0)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+         refl))
+      (rewrite-with
+        (lemma store_le_get_below)
+        lr
+        lhs
+        ()
+        ((rewrite-with
+           (lemma h_b1)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+           refl))
+        (rewrite-with
+          (lemma store_le_get_below)
+          lr
+          lhs
+          ()
+          ((rewrite-with
+             (lemma h_b2)
+             lr
+             lhs
+             ()
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+          (rewrite-with
+            (lemma store_le_get_below)
+            lr
+            lhs
+            ()
+            ((rewrite-with
+               (lemma h_b3)
+               lr
+               lhs
+               ()
+               ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+               refl))
+            refl))))))
+
+;; --- structure framing: an encoder running ABOVE doesn't disturb a word -------
+
+(claim l4_enc_below
+  (goal ((xs (List Int)) (m Mem) (a Int) (p Int)) ((= (le (+ a 4) p) True))
+    (= (load_le (S^ 4 Z) (enc_list xs m p) a) (load_le (S^ 4 Z) m a)))
+  (induct xs
+    ((case Nil (steps ((simp lhs)) refl))
+     (case Cons
+       (h t)
+       (steps
+         ((simp lhs))
+         (rewrite-with
+           (hyp ih)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma h_shiftp8)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+              refl))
+           (rewrite-with
+             (lemma l4_below)
+             lr
+             lhs
+             ()
+             ((rewrite-with
+                (lemma h_shiftp4)
+                lr
+                lhs
+                ()
+                ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                refl))
+             (rewrite-with
+               (lemma l4_below)
+               lr
+               lhs
+               ()
+               ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+               refl))))))))
+
+;; --- the round trip: dec ∘ run-of-enc = id -------------------------------------
+
+(claim rep_list_id
+  (goal ((xs (List Int)) (m Mem) (p Int))
+    ((= (u32s_ok xs) True)
+     (= (le 1 p) True)
+     (= (lt (+ p (* 8 (int_of_nat (length_nat xs)))) 4294967296) True))
+    (= (dec_list (length_nat xs) (enc_list xs m p) p) xs))
+  (induct xs
+    ((case Nil (steps ((simp lhs)) refl))
+     (case Cons
+       (h t)
+       (case-on (le 0 h) Bool
+         ((case True
+            (case-on (lt h 4294967296) Bool
+              ((case True
+                 (steps
+                   ((simp lhs))
+                   (rewrite-with
+                     (lemma l4_enc_below)
+                     lr
+                     lhs
+                     ()
+                     ((rewrite-with (lemma h_a4p8) lr lhs () () refl))
+                     (rewrite-with
+                       (lemma l4_below)
+                       lr
+                       lhs
+                       ()
+                       ((rewrite-with (lemma h_refl4) lr lhs () () refl))
+                       (rewrite-with
+                         (lemma ls4_id)
+                         lr
+                         lhs
+                         ()
+                         ((steps
+                            ((compute lhs) (rewrite (hyp 1) lr lhs true ()))
+                            refl)
+                          (steps
+                            ((compute lhs) (rewrite (hyp 0) lr lhs true ()))
+                            refl))
+                         (steps
+                           ((rewrite (lemma u32_round) lr lhs true ()))
+                           (rewrite-with
+                             (lemma l4_enc_below)
+                             lr
+                             lhs
+                             ()
+                             ((rewrite-with (lemma h_a44p8) lr lhs () () refl))
+                             (rewrite-with
+                               (lemma ls4_id)
+                               lr
+                               lhs
+                               ()
+                               ((rewrite-with
+                                  (lemma h_le0p8)
+                                  lr
+                                  lhs
+                                  ()
+                                  ((steps
+                                     ((rewrite (premise 1) lr lhs true ()))
+                                     refl))
+                                  refl)
+                                (rewrite-with
+                                  (lemma h_twhi)
+                                  lr
+                                  lhs
+                                  ((inst k (int_of_nat (length_nat t))))
+                                  ((steps
+                                     ((rewrite
+                                        (lemma int_of_nat_succ)
+                                        rl
+                                        lhs
+                                        true
+                                        ())
+                                      (rewrite
+                                        (lemma lp_cons)
+                                        rl
+                                        lhs
+                                        true
+                                        ((inst h h)))
+                                      (rewrite (premise 2) lr lhs true ()))
+                                     refl)
+                                   (rewrite-with
+                                     (lemma int_of_nat_nonneg)
+                                     lr
+                                     lhs
+                                     ()
+                                     ()
+                                     refl))
+                                  refl))
+                               (have hred (= (u32s_ok (Cons h t)) (u32s_ok t))
+                                 (steps
+                                   ((unfold u32s_ok lhs)
+                                    (reduce lhs)
+                                    (rewrite (hyp 1) lr lhs true ())
+                                    (reduce lhs)
+                                    (rewrite (hyp 0) lr lhs true ())
+                                    (reduce lhs))
+                                   refl)
+                                 (have hbt (= (u32s_ok t) True)
+                                   (steps
+                                     ((rewrite (premise hred) rl lhs true ())
+                                      (rewrite (premise 0) lr lhs true ()))
+                                     refl)
+                                   (rewrite-with
+                                     (hyp ih)
+                                     lr
+                                     lhs
+                                     ()
+                                     ((steps
+                                        ((rewrite (premise hbt) lr lhs true ()))
+                                        refl)
+                                      (rewrite-with
+                                        (lemma h_le1p8)
+                                        lr
+                                        lhs
+                                        ()
+                                        ((steps
+                                           ((rewrite (premise 1) lr lhs true ()))
+                                           refl))
+                                        refl)
+                                      (rewrite-with
+                                        (lemma h_shift8)
+                                        lr
+                                        lhs
+                                        ()
+                                        ((steps
+                                           ((rewrite
+                                              (lemma int_of_nat_succ)
+                                              rl
+                                              lhs
+                                              true
+                                              ())
+                                            (rewrite
+                                              (lemma lp_cons)
+                                              rl
+                                              lhs
+                                              true
+                                              ((inst h h)))
+                                            (rewrite (premise 2) lr lhs true ()))
+                                           refl)
+                                         (rewrite-with
+                                           (lemma int_of_nat_nonneg)
+                                           lr
+                                           lhs
+                                           ()
+                                           ()
+                                           refl))
+                                        refl))
+                                     refl)))))))))))
+               (case False
+                 (have hf (= (u32s_ok (Cons h t)) False)
+                   (steps
+                     ((unfold u32s_ok lhs)
+                      (reduce lhs)
+                      (rewrite (hyp 1) lr lhs true ())
+                      (reduce lhs)
+                      (rewrite (hyp 0) lr lhs true ())
+                      (reduce lhs))
+                     refl)
+                   (have contra (= True False)
+                     (steps
+                       ((rewrite (premise 0) rl lhs true ())
+                        (rewrite (premise hf) lr lhs true ()))
+                       refl)
+                     (absurd (premise contra))))))))
+          (case False
+            (have hf (= (u32s_ok (Cons h t)) False)
+              (steps
+                ((unfold u32s_ok lhs)
+                 (reduce lhs)
+                 (rewrite (hyp 0) lr lhs true ())
+                 (reduce lhs))
+                refl)
+              (have contra (= True False)
+                (steps
+                  ((rewrite (premise 0) rl lhs true ())
+                   (rewrite (premise hf) lr lhs true ()))
+                  refl)
+                (absurd (premise contra)))))))))))
