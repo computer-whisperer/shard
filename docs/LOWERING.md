@@ -206,22 +206,46 @@ citation matches — including fns in ARGUMENT position (`length_nat`); the
 stop-the-fuel-fn law generalizes to "stop everything you intend to cite
 against."
 
-## 6. mod.build.shard (sketch, to be designed)
+## 6. mod.build.shard — BUILT in miniature (P4, 2026-07-03)
 
-Per-module build entry point, `int main()`-analog, standard signature.
-Returns/emits: the ISA program value (e.g. `WModule`), encoded bytes (via
-the model's encoder), a generated cert file whose claims instantiate the
-schema of §2, and the adapter fns. The **default** mod.build = the
-core lowering library (shard → RS-shard → wasm + schema certs); a module
-overrides it to hand-tune, and both roads discharge identical statements.
-Build scripts compose module artifacts by citation; variant selection is
-explicit data in the build script (no resolver magic).
+The convention, demonstrated end to end on `lowergen_src`:
+
+- **`tools/lowcheck`** (P4a) — the consumer-side schema recognizer. Raw
+  s-expr level; validates every `lowered_*` claim's slack binder, restfs
+  binder, `(S^ N BASE)` fuel with the slack in BASE, Cons-pinned
+  `(MkFunc …)` module prefix *ending in restfs*, literal index. The
+  negative fixture (`examples/lowcheck_rejects.shard`) is kernel-TRUE yet
+  schema-REFUSED (Nil module tail) — truth and composability are
+  different gates, and the consumer checks both (the PCC discipline).
+- **`examples/lowergen_src.build.shard`** (P4b) — the first mod.build
+  file: assembles the artifact set as a plan — `ARTIFACT` manifest lines
+  (cert name ↔ cert file ↔ ISA model ↔ export/externs glue), `MOD` lines
+  (real .wasm bytes via the model's encoder, one single-function module
+  per fn = the cert's module at restfs := Nil), and `CASE` vectors whose
+  expected values are the SOURCE fns applied directly (spec-side
+  semantics, not the model).
+- **`examples/lowbuild.sh`** — the four-gate build: (1) REGEN
+  (producer determinism, byte-identical), (2) SCHEMA (lowcheck), (3)
+  KERNEL (the proofs), (4) ENGINE (V8 replays the plan: 10/10 agree).
+
+The **default** mod.build = the core lowering library (lowergen today;
+shard → RS-shard → wasm as it grows); a module overrides it to hand-tune,
+and both roads discharge identical statements. Variant selection stays
+explicit build-script data (no resolver magic).
+
+V1 gaps, on record: (a) the build file's func literals are copied from
+the generated certs — the cert↔binary tie should be CHECKED (re-encode
+the claim's module literal, compare bytes), not maintained by hand; (b)
+certs pin their fn at index 0, so combined multi-function modules can't
+instantiate them yet — the `triple_thm` filler pattern (pin own index,
+opaque fillers before) is the known fix when welding needs it.
 
 ## 7. Open questions (the back-and-forth queue)
 
-1. The statement-generator enforcement mechanism: is "regenerable
-   byte-identical" (weld discipline) enough, or does the `bin` gate learn
-   to recognize the schema structurally?
+1. ~~The statement-generator enforcement mechanism~~ RESOLVED by P4a:
+   both — regen (producer determinism) AND structural recognition
+   (tools/lowcheck, consumer-side). Remaining tail: wiring lowcheck into
+   the `bin` gate, and the cert↔binary byte tie (§6 gap a).
 2. PRE-slot conventions for the uniform rep: the heap invariant's exact
    statement (bump-pointer validity + allocated-cells-never-rewritten).
 3. ~~The footprint/framing lemma shape~~ RESOLVED by P1 (§3: framed form +

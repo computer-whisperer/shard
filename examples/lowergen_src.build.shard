@@ -1,0 +1,136 @@
+;;; examples/lowergen_src.build.shard — the FIRST mod.build FILE (P4b,
+;;; docs/LOWERING.md §6): the per-module build entry that assembles the
+;;; ARTIFACT SET for examples/lowergen_src.shard and prints it as a plan:
+;;;
+;;;   ARTIFACT <fn> …      manifest: which cert covers which binary, under
+;;;                        which ISA model, with which glue (export, externs)
+;;;   MOD <fn> <hex>       the BINARY — real .wasm bytes via the model's
+;;;                        encoder, one single-function module per fn (the
+;;;                        cert's module literal at restfs := Nil)
+;;;   CASE <fn> f0 … -> …  engine smoke vectors; the EXPECTED value is the
+;;;                        SOURCE fn applied directly (spec-side semantics,
+;;;                        not the model) — the artifact-level differential
+;;;
+;;; The full quadruple: binary (MOD) + ISA-model identity (manifest) +
+;;; certs (examples/lowergen_out.shard, kernel- and schema-gated by
+;;; examples/lowbuild.sh) + glue (manifest). wasm_diff.mjs replays the
+;;; plan under V8 and ignores manifest lines.
+;;;
+;;; KNOWN GAP (v1, noted in docs/LOWERING.md): the func literals here are
+;;; copied from the generated certs rather than shared — the cert↔binary
+;;; tie should eventually be CHECKED (re-encode the claim's module literal
+;;; and compare bytes), not maintained by hand.
+;;;
+;;; RUN IT:  bin/shard_eval run examples/lowergen_src.build.shard | node examples/wasm_diff.mjs /dev/stdin
+
+(import "../kernel/stdlib.shard")
+(import "lowergen_src.shard")
+(use (:: examples lowergen_src *))
+(import "../models/wasm/wasm.shard")
+(use (:: models wasm wasm *))
+(import "../models/wasm/encode.shard")
+(use (:: models wasm encode *))
+
+;; --- the binaries: one single-function module per source fn -------------------
+
+(fn m_add1 () WModule
+  (MkWModule
+    (list (MkFunc 1 0 (list (LocalGet 0) (I32Const 1) (I32Bin BAdd))))
+    0))
+
+(fn m_add () WModule
+  (MkWModule
+    (list (MkFunc 2 0 (list (LocalGet 0) (LocalGet 1) (I32Bin BAdd))))
+    0))
+
+(fn m_sub () WModule
+  (MkWModule
+    (list (MkFunc 2 0 (list (LocalGet 0) (LocalGet 1) (I32Bin BSub))))
+    0))
+
+(fn m_mix () WModule
+  (MkWModule
+    (list
+      (MkFunc
+        2
+        0
+        (list
+          (LocalGet 0)
+          (I32Const 2)
+          (I32Bin BMul)
+          (LocalGet 1)
+          (LocalGet 0)
+          (I32Bin BSub)
+          (I32Bin BAdd))))
+    0))
+
+(fn m_id () WModule (MkWModule (list (MkFunc 1 0 (list (LocalGet 0)))) 0))
+
+;; --- plan rendering -----------------------------------------------------------
+
+(fn cat ((xs (List (List Int)))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil "")
+    ((Cons h t) (wapp h (cat t)))))
+
+(fn hexd ((d Int)) Int (if (lt d 10) (+ 48 d) (+ 87 d)))
+
+(fn hexs ((bs (List Int))) (List Int)
+  (measure (struct bs))
+  (match bs
+    (Nil Nil)
+    ((Cons b t) (Cons (hexd (ediv b 16)) (Cons (hexd (mod b 16)) (hexs t))))))
+
+(fn showargs ((xs (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil "")
+    ((Cons h t) (wapp " " (wapp (dec h) (showargs t))))))
+
+;; manifest line: cert name + cert file + ISA model + glue
+(fn art_line ((nm (List Int))) (List Int)
+  (cat
+    (list
+      "ARTIFACT "
+      nm
+      " cert=lowered_"
+      nm
+      " certfile=examples/lowergen_out.shard model=models/wasm/wasm.shard export=f0 externs=none\n")))
+
+(fn mod_line ((nm (List Int)) (m WModule)) (List Int)
+  (cat (list "MOD " nm " " (hexs (enc_module m)) "\n")))
+
+;; a vector: expected = the SOURCE fn applied directly (u32-safe args only —
+;; the certs' premise discipline; out-of-range args are out of contract)
+(fn case_line ((nm (List Int)) (args (List Int)) (expected Int)) (List Int)
+  (cat (list "CASE " nm " f0" (showargs args) " -> " (dec expected) "\n")))
+
+(fn emit () (List Int)
+  (cat
+    (list
+      (art_line "lg_add1")
+      (mod_line "lg_add1" (m_add1))
+      (case_line "lg_add1" (list 5) (lg_add1 5))
+      (case_line "lg_add1" (list 4294967294) (lg_add1 4294967294))
+      (art_line "lg_add")
+      (mod_line "lg_add" (m_add))
+      (case_line "lg_add" (list 7 9) (lg_add 7 9))
+      (case_line "lg_add" (list 4294967290 5) (lg_add 4294967290 5))
+      (art_line "lg_sub")
+      (mod_line "lg_sub" (m_sub))
+      (case_line "lg_sub" (list 20 5) (lg_sub 20 5))
+      (case_line
+        "lg_sub"
+        (list 4294967295 4294967295)
+        (lg_sub 4294967295 4294967295))
+      (art_line "lg_mix")
+      (mod_line "lg_mix" (m_mix))
+      (case_line "lg_mix" (list 3 10) (lg_mix 3 10))
+      (case_line "lg_mix" (list 4 1000) (lg_mix 4 1000))
+      (art_line "lg_id")
+      (mod_line "lg_id" (m_id))
+      (case_line "lg_id" (list 42) (lg_id 42))
+      (case_line "lg_id" (list 4294967295) (lg_id 4294967295)))))
+
+(fn main ((w World)) World (exit 0 (write (emit) w)))
