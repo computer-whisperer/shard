@@ -1,0 +1,82 @@
+;;; tools/bench — the EVALUATOR-PROMOTION YARDSTICK (the nested-eval
+;;; benchmark). The build paradigm's chicken-and-egg: kernel code runs as
+;;; OBJECT CODE at every meta-level (mod.build.shard imports the kernel;
+;;; the linker evals mod.build.shard; …), and compiling the floor evaluator
+;;; accelerates exactly ONE level. So the per-level interpretation
+;;; multiplier of the core evaluator — on the trivial representation, with
+;;; no build-paradigm rep swaps — is load-bearing forever, and this file is
+;;; how we measure it.
+;;;
+;;; The workload: R rounds of (sum (reverse (build-list N))) — list
+;;; construction, structural recursion, matching, arithmetic; the object-
+;;; code diet of the kernel's own reader/reducer. Every level must print
+;;; the SAME sum (a differential check rides along for free).
+;;;
+;;;   L0: bin/shard_eval run tools/bench/bench_work.shard R N
+;;;   L1: bin/shard_eval run kernel/eval.shard run tools/bench/bench_work.shard R N
+;;;   L2: … run kernel/eval.shard run kernel/eval.shard run … (and so on)
+;;;
+;;; tools/bench/nested_bench.sh times the levels; a trivial run (R=0)
+;;; separates each level's FIXED load cost (closure parse) from the
+;;; marginal work cost.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/loader.shard")
+(import "../../kernel/term.shard")
+
+(use (:: kernel loader World))
+(use (:: kernel loader get_args))
+(use (:: kernel loader write))
+(use (:: kernel loader exit))
+(use (:: kernel term append_int))
+(use (:: kernel term show_int))
+
+(fn nl () (List Int) (Cons 10 Nil))
+
+;; argv decimal parsing (the snake seed_digits idiom)
+(fn digits ((bs (List Int)) (acc Int)) Int
+  (measure (struct bs))
+  (match bs
+    (Nil acc)
+    ((Cons b t)
+     (if (le 48 b) (if (le b 57) (digits t (+ (* acc 10) (- b 48))) acc)
+     acc))))
+
+;; ---- the workload -----------------------------------------------------------
+
+(fn build ((n Int) (acc (List Int))) (List Int)
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt n 1) acc (build (- n 1) (Cons n acc))))
+
+(fn revl ((xs (List Int)) (acc (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil acc)
+    ((Cons h t) (revl t (Cons h acc)))))
+
+(fn suml ((xs (List Int)) (acc Int)) Int
+  (measure (struct xs))
+  (match xs
+    (Nil acc)
+    ((Cons h t) (suml t (+ acc h)))))
+
+(fn rounds ((r Int) (n Int) (acc Int)) Int
+  (measure r (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt r 1) acc
+  (rounds (- r 1) n (+ acc (suml (revl (build n Nil) Nil) 0)))))
+
+;; ---- the app ----------------------------------------------------------------
+
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Pair args w1)
+     (match args
+       ((Cons rs (Cons ns _))
+        (exit
+          0
+          (write
+            (append_int
+              (show_int (rounds (digits rs 0) (digits ns 0) 0))
+              (nl))
+            w1)))
+       (_ (exit 2 (write "usage: bench_work R N\n" w1)))))))
