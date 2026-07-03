@@ -441,3 +441,23 @@ prefix, no vacuous-guard wrapper (LANGUAGE.md §10, pin
 makes the statement-literal spellings ride the fn definitions instead of
 being hand-copied. wasm_pieces/wasm_rev keep the original choreography as
 the built record; new pieces should use the stop clause and the sugar.
+
+**Second memory piece — wasm_copy (BUILT 2026-07-03, same day):** forward
+byte copy (`examples/mem_copy.shard` spec: guard-free counter loop,
+`copy_dump` + framing lemmas, `mem_copies` capstone by citation over
+`dump_load_id`; `examples/wasm_copy.shard` piece: 18-instr loop, worker /
+`copy8_thm` / `copy8_copies`, dst-disjoint premises; V8 MEMCASEs 35/0
+incl. an overlapping forward copy that exercises the model beyond the
+proven theorem). The first piece written WITH the QoL trio, and the
+validation is empirical: the worker statement is `(S^ 22 (pfc k c))` +
+`(inline copy_body)` (one body definition, zero hand-pasted literals);
+the worker's S case is `unfold eval_loop` + `(compute lhs (stop eval_loop
+pfc))` — the re-entry redex arrives FOLDED and the IH cites directly (no
+hih materialization, no reduce-vs-compute stall); `copy8_thm`'s fuel is a
+plain tower (no pf_body opaque head, no vacuous guard, no h_negk). Fuel
+prefixes became mere depth budgets — both guesses (22 body, +4 plumbing)
+worked first try. NEW LAW learned: a fuel fn (`pfc`) must ALSO be in the
+stop set — a stopped call still evaluates its arguments, and an unfolded
+`(pfc k c)` in the fuel argument is a stuck match the worker's folded
+spelling cannot cite against. Total debugging for the whole piece: four
+farkas cert signs, two dangling-pivot pins, that one stop-set addition.

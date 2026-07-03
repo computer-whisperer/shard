@@ -1,0 +1,251 @@
+;;; examples/mem_copy.shard — the SECOND memory algorithm over std/mem's
+;;; opaque surface: forward byte copy of k cells from src to a disjoint
+;;; (higher) dst. The functional spec + its theory, stated purely through
+;;; the substrate's framing algebra (get_set_get / get_set_other); the
+;;; wasm piece (examples/wasm_copy.shard) simulates copy_loop and reaches
+;;; mem_copies by citation.
+;;;
+;;; Unlike rev_loop there is NO guard in the loop: the Nat counter alone
+;;; drives it (copy has no pointer-crossing semantics). The machine
+;;; piece's exit guard is reconciled in the WORKER, whose premises pin
+;;; the end pointer to e = s + k.
+
+(import "../kernel/stdlib.shard")  ; List / Option / Bool / Pair, Nat
+(import "../std/mem")  ; the opaque memory substrate
+(import "../std/nat.shard")  ; int_of_nat + its lemmas
+(import "../std/order.shard")  ; lt/le bridge lemmas
+(import "mem_reverse.shard")  ; length_nat / byte_ok / load / dump + dump_load_id
+(use (:: std mem *))
+(use (:: std nat *))
+(use (:: std order *))
+(use (:: examples mem_reverse *))
+
+;; ======================= object machinery =========================
+
+;; copy_loop: m[d+t] := m[s+t] for t = 0 .. k-1, front to back. Each
+;; step's write is a READ of the current memory, so get_set_get makes
+;; the byte semantics cost-free (no byte_ok on the copy itself).
+(fn copy_loop ((m Mem) (s Int) (d Int) (k Nat)) Mem
+  (measure (struct k))
+  (match k
+    (Z m)
+    ((S k2) (copy_loop (mem_set m d (mem_get m s)) (+ s 1) (+ d 1) k2))))
+
+;; ======================= arithmetic helpers ========================
+;; Single farkas facts, base_le_j style: int_of_nat_succ / _nonneg are
+;; taken as PREMISES so each cert is a pure linear reading; callers
+;; discharge them by citing the std/nat lemmas.
+
+;; range bound forces strict order: b + (S c) <= w  ⊢  b < w.
+(claim cp_lt_from_bound
+  (goal ((b Int) (w Int) (c Nat))
+    ((= (le (+ b (int_of_nat (S c))) w) True)
+     (= (int_of_nat (S c)) (+ 1 (int_of_nat c)))
+     (= (le 0 (int_of_nat c)) True))
+    (= (lt b w) True))
+  (by arith (list 1 1 1 1)))
+
+;; the bound steps past one cell: b + (S c) <= w  ⊢  (b+1) + c <= w.
+(claim cp_shift
+  (goal ((b Int) (w Int) (c Nat))
+    ((= (le (+ b (int_of_nat (S c))) w) True)
+     (= (int_of_nat (S c)) (+ 1 (int_of_nat c))))
+    (= (le (+ (+ b 1) (int_of_nat c)) w) True))
+  (by arith (list 1 1 1)))
+
+;; ...and again with the bound itself advancing: ⊢ (b+1) + c <= w+1.
+(claim cp_shift_up
+  (goal ((b Int) (w Int) (c Nat))
+    ((= (le (+ b (int_of_nat (S c))) w) True)
+     (= (int_of_nat (S c)) (+ 1 (int_of_nat c))))
+    (= (le (+ (+ b 1) (int_of_nat c)) (+ w 1)) True))
+  (by arith (list 1 1 1)))
+
+;; ======================= theory ===================================
+
+(claim copy_zero
+  (goal ((m Mem) (s Int) (d Int)) () (= (copy_loop m s d Z) m))
+  (steps ((simp lhs)) refl))
+
+;; ---------------------------------------------------------------------------
+;; copy_untouched_below: a cell below the write range is unchanged.
+;;   ∀ m s d p k. (lt p d) ⊢ (mem_get (copy_loop m s d k) p) = (mem_get m p).
+;; Induction on k; the step's IH premise p < d+1 is lt_succ_from_lt of
+;; p < d, and the base write is peeled by get_set_other (p ≠ d).
+;; ---------------------------------------------------------------------------
+(claim copy_untouched_below
+  (goal ((m Mem) (s Int) (d Int) (p Int) (k Nat)) ((= (lt p d) True))
+    (= (mem_get (copy_loop m s d k) p) (mem_get m p)))
+  (induct k
+    ((case Z (steps ((simp lhs)) refl))
+     (case S
+       (steps
+         ((simp lhs))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma lt_succ_from_lt)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+              refl))
+           (rewrite-with
+             (lemma get_set_other)
+             lr
+             lhs
+             ()
+             ((rewrite-with
+                (lemma lt_implies_neq)
+                lr
+                lhs
+                ()
+                ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                refl))
+             refl)))))))
+
+;; ---------------------------------------------------------------------------
+;; dump_set_above: a dump strictly below a write doesn't see it.
+;;   ∀ base w v m k. base + k <= w ⊢
+;;     dump base k (mem_set m w v) = dump base k m.
+;; Induction on k; head cell by get_set_other (base < w from the range
+;; bound via cp_lt_from_bound), tail by the IH at base+1 (cp_shift).
+;; ---------------------------------------------------------------------------
+(claim dump_set_above
+  (goal ((base Int) (w Int) (v Int) (m Mem) (k Nat))
+    ((= (le (+ base (int_of_nat k)) w) True))
+    (= (dump base k (mem_set m w v)) (dump base k m)))
+  (induct k
+    ((case Z (steps ((simp both)) refl))
+     (case S
+       (k2)
+       (steps
+         ((simp both))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma cp_shift)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+               (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl))
+              refl))
+           (rewrite-with
+             (lemma get_set_other)
+             lr
+             lhs
+             ()
+             ((rewrite-with
+                (lemma lt_implies_neq)
+                lr
+                lhs
+                ()
+                ((rewrite-with
+                   (lemma cp_lt_from_bound)
+                   lr
+                   lhs
+                   ((inst c k2))
+                   ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                    (steps
+                      ((rewrite (lemma int_of_nat_succ) lr lhs true ()))
+                      refl)
+                    (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+                   refl))
+                refl))
+             refl)))))))
+
+;; ---------------------------------------------------------------------------
+;; copy_dump (THE invariant): with dst at or above the end of src
+;; (s + k <= d), reading the copied range back gives the source range.
+;;   ∀ m s d k. s + k <= d ⊢ dump d k (copy_loop m s d k) = dump s k m.
+;; Induction on k. Step (m1 = mem_set m d (mem_get m s)):
+;;   head: the loop's tail never writes below d+1 (copy_untouched_below,
+;;         d < d+1), and the base write reads back exactly (get_set_get);
+;;   tail: IH at (m1, s+1, d+1) — its bound from cp_shift_up — then the
+;;         src-range dump steps back over the base write (dump_set_above,
+;;         (s+1) + k2 <= d from cp_shift).
+;; ---------------------------------------------------------------------------
+(claim copy_dump
+  (goal ((m Mem) (s Int) (d Int) (k Nat)) ((= (le (+ s (int_of_nat k)) d) True))
+    (= (dump d k (copy_loop m s d k)) (dump s k m)))
+  (induct k
+    ((case Z (steps ((simp both)) refl))
+     (case S
+       (steps
+         ((simp both))
+         (rewrite-with
+           (lemma copy_untouched_below)
+           lr
+           lhs
+           ()
+           ((rewrite-with (lemma lt_self_succ) lr lhs () () refl))
+           (rewrite-with
+             (lemma get_set_get)
+             lr
+             lhs
+             ()
+             ()
+             (rewrite-with
+               (hyp 0)
+               lr
+               lhs
+               ()
+               ((rewrite-with
+                  (lemma cp_shift_up)
+                  lr
+                  lhs
+                  ()
+                  ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                   (steps
+                     ((rewrite (lemma int_of_nat_succ) lr lhs true ()))
+                     refl))
+                  refl))
+               (rewrite-with
+                 (lemma dump_set_above)
+                 lr
+                 lhs
+                 ()
+                 ((rewrite-with
+                    (lemma cp_shift)
+                    lr
+                    lhs
+                    ()
+                    ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                     (steps
+                       ((rewrite (lemma int_of_nat_succ) lr lhs true ()))
+                       refl))
+                    refl))
+                 refl)))))))))
+
+;; ---------------------------------------------------------------------------
+;; mem_copies (the capstone): load a byte list at s, copy its range to a
+;; disjoint dst at or above the end of src, dump the dst range — you get
+;; the list back. Composition is citation: copy_dump moves the dump to
+;; the source range, dump_load_id closes the round trip.
+;; ---------------------------------------------------------------------------
+(claim mem_copies
+  (goal ((xs (List Int)) (s Int) (d Int) (m Mem))
+    ((= (byte_ok xs) True) (= (le (+ s (int_of_nat (length_nat xs))) d) True))
+    (=
+      (dump d (length_nat xs) (copy_loop (load xs s m) s d (length_nat xs)))
+      xs))
+  (rewrite-with
+    (lemma copy_dump)
+    lr
+    lhs
+    ()
+    ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+    (rewrite-with
+      (lemma dump_load_id)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+      refl)))

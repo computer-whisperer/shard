@@ -87,6 +87,7 @@ TARGETS=(
   examples/measure_tree_demo.shard
   examples/nested_measure.shard
   examples/mem_reverse.shard
+  examples/mem_copy.shard
   examples/mutual_toy.shard
   examples/record_proto.shard
   examples/record_basic.shard
@@ -98,6 +99,7 @@ TARGETS=(
   examples/wasm_weld_out.shard
   examples/wasm_diff_run.shard
   examples/wasm_rev.shard
+  examples/wasm_copy.shard
   examples/record_rejects.shard
   examples/record_sugar_rejects.shard
   examples/statement_sugar.shard
