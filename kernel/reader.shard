@@ -2232,6 +2232,130 @@
     (None None)
     ((Some tab) (rx_pass tab forms))))
 
+;; ===========================================================================
+;; (S^ N X) / (inline NAME) EXPANSION — statement-literal sugar. Loader-level,
+;; expanded at the s-expr level right after (record …) in both parse funnels,
+;; so check and run see identical forms and the kernel never sees the heads
+;; (load.rs rejects them; kernel files stay hand-spelled).
+;;
+;;   (S^ N X)      N a nonnegative integer literal — N nested (S …) around X.
+;;                 Deep fuel towers ((S (S … (pf_rev k c)))) without hand-
+;;                 balancing 27 parens; X is walked first, so sugar nests.
+;;   (inline NAME) NAME a NULLARY (fn NAME () T BODY) in the SAME file —
+;;                 BODY pasted verbatim (post-S^-expansion). The "claim
+;;                 statements must spell bodies as literals, never nullary
+;;                 calls" discipline made mechanical: the fn stays the single
+;;                 source of truth and every claim spelling rides it. The
+;;                 paste is purely syntactic — a body that is not a ground
+;;                 ctor term fails downstream exactly like the equivalent
+;;                 hand-paste — and a pasted body is NOT re-walked, so
+;;                 (inline …) does not nest.
+;;
+;; Both heads are RESERVED: a form headed S^/inline that does not match its
+;; shape — or names an unknown or non-nullary fn — is None → the standard
+;; parse-failure path.
+;; ===========================================================================
+
+;; n nested (S …) around x
+(fn tw_tower ((n Int) (x SExpr)) SExpr
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (le n 0) x
+  (SList (Cons (SSym (quote S)) (Cons (tw_tower (- n 1) x) Nil)))))
+
+(fn tw_sx ((s SExpr)) (Option SExpr)
+  (measure (struct s))
+  (match s
+    ((SList items)
+     (match items
+       ((Cons (SSym h) rest)
+        (if (sym_eq h (quote S^))
+          (match rest
+            ((Cons (SInt n) (Cons x Nil))
+             (if (lt n 0) None
+             (match (tw_sx x)
+               (None None)
+               ((Some x2) (Some (tw_tower n x2))))))
+            (_ None))
+          (match (tw_sxs items)
+            (None None)
+            ((Some its) (Some (SList its))))))
+       (_
+         (match (tw_sxs items)
+           (None None)
+           ((Some its) (Some (SList its)))))))
+    (_ (Some s))))
+
+(fn tw_sxs ((ss (List SExpr))) (Option (List SExpr))
+  (measure (struct ss))
+  (match ss
+    (Nil (Some Nil))
+    ((Cons h t)
+     (match (tw_sx h)
+       (None None)
+       ((Some h2)
+        (match (tw_sxs t)
+          (None None)
+          ((Some t2) (Some (Cons h2 t2)))))))))
+
+;; the file's nullary fn bodies — built from the POST-tower forms, so pasted
+;; bodies arrive S^-expanded
+(fn il_table ((forms (List SExpr))) (List (Pair Symbol SExpr))
+  (measure (struct forms))
+  (match forms
+    (Nil Nil)
+    ((Cons f rest)
+     (match f
+       ((SList
+          (Cons
+            (SSym h)
+            (Cons (SSym name) (Cons (SList Nil) (Cons _ (Cons body Nil))))))
+        (if (sym_eq h (quote fn)) (Cons (Pair name body) (il_table rest))
+        (il_table rest)))
+       (_ (il_table rest))))))
+
+(fn il_lookup ((tab (List (Pair Symbol SExpr))) (n Symbol)) (Option SExpr)
+  (measure (struct tab))
+  (match tab
+    (Nil None)
+    ((Cons (Pair k v) t) (if (sym_eq k n) (Some v) (il_lookup t n)))))
+
+(fn il_sx ((tab (List (Pair Symbol SExpr))) (s SExpr)) (Option SExpr)
+  (measure (struct s))
+  (match s
+    ((SList items)
+     (match items
+       ((Cons (SSym h) rest)
+        (if (sym_eq h (quote inline))
+          (match rest
+            ((Cons (SSym name) Nil) (il_lookup tab name))
+            (_ None))
+          (match (il_sxs tab items)
+            (None None)
+            ((Some its) (Some (SList its))))))
+       (_
+         (match (il_sxs tab items)
+           (None None)
+           ((Some its) (Some (SList its)))))))
+    (_ (Some s))))
+
+(fn il_sxs ((tab (List (Pair Symbol SExpr))) (ss (List SExpr)))
+  (Option (List SExpr))
+  (measure (struct ss))
+  (match ss
+    (Nil (Some Nil))
+    ((Cons h t)
+     (match (il_sx tab h)
+       (None None)
+       ((Some h2)
+        (match (il_sxs tab t)
+          (None None)
+          ((Some t2) (Some (Cons h2 t2)))))))))
+
+(fn expand_sugar ((forms (List SExpr))) (Option (List SExpr))
+  (match (tw_sxs forms)
+    (None None)
+    ((Some fs) (il_sxs (il_table fs) fs))))
+
 ;; ---- module entry point ---------------------------------------------------
 (fn parse_module ((src (List Int)) (base_ctors (List Symbol))) (Option Module)
   (match (read_all src)
@@ -2239,17 +2363,20 @@
     ((Some forms0)
      (match (expand_records forms0)
        (None None)
-       ((Some forms)
-        (match (collect_types forms)
+       ((Some forms1)
+        (match (expand_sugar forms1)
           (None None)
-          ((Some tds)
-           (match
-             (collect_fns_externs
-               forms
-               (append_sym (typedef_ctors tds) base_ctors))
+          ((Some forms)
+           (match (collect_types forms)
              (None None)
-             ((Some (Pair fns externs))
-              (Some (Module tds fns externs (build_fn_trie fns) Nil)))))))))))
+             ((Some tds)
+              (match
+                (collect_fns_externs
+                  forms
+                  (append_sym (typedef_ctors tds) base_ctors))
+                (None None)
+                ((Some (Pair fns externs))
+                 (Some (Module tds fns externs (build_fn_trie fns) Nil)))))))))))))
 
 ;; ---- whole-program module assembly ----------------------------------------
 ;; Build M (the module proofs reduce against) by folding `parse_module` over a
@@ -3020,7 +3147,10 @@
     ((Some forms0)
      (match (expand_records forms0)
        (None None)
-       ((Some forms) (collect_decls forms ctors granted))))))
+       ((Some forms1)
+        (match (expand_sugar forms1)
+          (None None)
+          ((Some forms) (collect_decls forms ctors granted))))))))
 
 ;; ===========================================================================
 ;; PARSE-FAILURE DIAGNOSIS (failure path ONLY — costs nothing on success).
@@ -3202,6 +3332,28 @@
 (fn pd_src_tag ((k Int)) (List Int)
   (pd_app " [source " (pd_app (pd_nat k) " of the import closure]")))
 
+;; name the first form whose (S^ …)/(inline …) sugar is malformed — the
+;; decl heads all parse, so pd_bad_decl walks past these. The inline table
+;; prefers tower-expanded forms (mirroring expand_sugar) and falls back to
+;; the raw forms when a tower is itself the failure.
+(fn pd_sugar_tab ((forms (List SExpr))) (List (Pair Symbol SExpr))
+  (match (tw_sxs forms)
+    (None (il_table forms))
+    ((Some fs) (il_table fs))))
+
+(fn pd_bad_sugar ((tab (List (Pair Symbol SExpr))) (fs (List SExpr)))
+  (Option SExpr)
+  (measure (struct fs))
+  (match fs
+    (Nil None)
+    ((Cons f rest)
+     (match (tw_sx f)
+       (None (Some f))
+       ((Some f2)
+        (match (il_sx tab f2)
+          (None (Some f))
+          ((Some _) (pd_bad_sugar tab rest))))))))
+
 (fn parse_diag ((src (List Int)) (base_ctors (List Symbol)) (k Int)) (List Int)
   (match (pd_scan src 1 0 0 Nil)
     ((PDStray line)
@@ -3235,7 +3387,15 @@
               "malformed declaration "
               (pd_app (pd_render_form f) (pd_src_tag k))))
            (None
-             (pd_app "module assembly failed (unknown cause)" (pd_src_tag k)))))))))
+             (match (pd_bad_sugar (pd_sugar_tab forms) forms)
+               ((Some f)
+                (pd_app
+                  "malformed (S^ …)/(inline …) sugar in "
+                  (pd_app (pd_render_form f) (pd_src_tag k))))
+               (None
+                 (pd_app
+                   "module assembly failed (unknown cause)"
+                   (pd_src_tag k)))))))))))
 
 ;; ===========================================================================
 ;; USE-DECLARATION SCOPE (Stage 2.5b/c). `use` brings names into THIS module's

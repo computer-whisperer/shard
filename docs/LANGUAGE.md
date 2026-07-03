@@ -308,6 +308,33 @@ form and each `make` site (one new entry), nothing else. Pilot:
 `GameState` in `examples/snake_game_3/game/game.shard`; shape pin:
 `examples/record_proto.shard`.
 
+### Statement-literal sugar — `S^` and `inline`
+
+Two more loader-level expansions (same discipline as `record`: s-expr
+level, right after record expansion, in both parse funnels; `load.rs`
+rejects the heads, so kernel files stay hand-spelled). Both exist for
+the *claim-statements-must-be-literals* rule of loop-piece proofs — a
+nullary-call spelling never matches a CBV residue, so statements must
+spell fuel towers and instruction lists out in full:
+
+```lisp
+(S^ N X)       ; N a nonnegative integer literal → N nested (S …)
+               ; around X; (S^ 0 X) = X; the argument is walked first,
+               ; so towers nest
+(inline NAME)  ; NAME a NULLARY (fn NAME () T BODY) in the SAME file →
+               ; BODY pasted verbatim (post-S^-expansion)
+```
+
+`inline` makes the fn the single source of truth for a spelling: the
+claim rides the definition, so editing the body cannot silently drift
+from its statement copies. The paste is purely syntactic — a body that
+is not a ground ctor term fails downstream exactly like the equivalent
+hand-paste — and pasted bodies are not re-walked, so `inline` does not
+nest. Both heads are reserved; a malformed use (wrong arity, negative
+or non-literal `N`, unknown or non-nullary `NAME`) refuses the file
+loudly, named by the parse diagnosis. Shape pin:
+`examples/statement_sugar.shard` / `statement_sugar_rejects.shard`.
+
 
 ## 4. Expressions
 

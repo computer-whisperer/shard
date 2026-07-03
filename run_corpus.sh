@@ -100,6 +100,8 @@ TARGETS=(
   examples/wasm_rev.shard
   examples/record_rejects.shard
   examples/record_sugar_rejects.shard
+  examples/statement_sugar.shard
+  examples/statement_sugar_rejects.shard
   examples/subterm_induct.shard
   examples/subterm_induct_rejects.shard
   examples/struct_clause.shard
