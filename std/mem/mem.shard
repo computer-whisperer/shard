@@ -15,9 +15,13 @@
 (import "../../kernel/stdlib.shard")
 (import "../map")  ; the carrier — opaque (Map Int)
 (import "../div")  ; mod_lo / mod_hi — the masking range facts
+(import "../nat")  ; int_of_nat + its lemmas — the LE framing bounds
+(import "../order")  ; lt/le bridge lemmas for the framing inductions
 (import "mod.req.shard")  ; our interface — opaque type + sig fns + obligations
 (use (:: std map *))
 (use (:: std div *))
+(use (:: std nat *))
+(use (:: std order *))
 (use (:: std mem *))  ; impl-proof: rebind the opaque type + sig fns to our defs
 
 ;; --- representation + private helpers ---------------------------------------
@@ -45,6 +49,49 @@
 
 ;; a store IS an insert (raw; truncation happens on read).
 (fn mem_set ((m Mem) (a Int) (v Int)) Mem (MkMem (insert a v (mrep m))))
+
+;; w-byte little-endian word read: lowest address = least significant byte.
+(fn load_le ((w Nat) (m Mem) (a Int)) Int
+  (measure (struct w))
+  (match w
+    (Z 0)
+    ((S w2) (+ (mem_get m a) (* 256 (load_le w2 m (+ a 1)))))))
+
+;; w-byte little-endian word write: store the raw quotient chain (mem_get's
+;; masking makes each byte a byte on the way out).
+(fn store_le ((w Nat) (m Mem) (a Int) (v Int)) Mem
+  (measure (struct w))
+  (match w
+    (Z m)
+    ((S w2) (store_le w2 (mem_set m a v) (+ a 1) (ediv v 256)))))
+
+;; --- defining-equation + surface twins (impl proofs cite THESE — a
+;; same-module requirement name is not citable from its own impl, so the
+;; laws the proofs below lean on get internal twins, as in std/bytes) -------
+
+(claim ld_z (goal ((m Mem) (a Int)) () (= (load_le Z m a) 0)) auto)
+
+(claim ld_s
+  (goal ((w Nat) (m Mem) (a Int)) ()
+    (= (load_le (S w) m a) (+ (mem_get m a) (* 256 (load_le w m (+ a 1))))))
+  auto)
+
+(claim st_z (goal ((m Mem) (a Int) (v Int)) () (= (store_le Z m a v) m)) auto)
+
+(claim st_s
+  (goal ((w Nat) (m Mem) (a Int) (v Int)) ()
+    (= (store_le (S w) m a v) (store_le w (mem_set m a v) (+ a 1) (ediv v 256))))
+  auto)
+
+(claim gs_i
+  (goal ((m Mem) (a Int) (v Int)) ()
+    (= (mem_get (mem_set m a v) a) (mod v 256)))
+  auto)
+
+(claim gso_i
+  (goal ((m Mem) (a Int) (b Int) (v Int)) ((= (int_eq b a) False))
+    (= (mem_get (mem_set m a v) b) (mem_get m b)))
+  auto)
 
 ;; --- internal lemmas ---------------------------------------------------------
 
@@ -103,3 +150,381 @@
 (fulfills get_set_get auto)
 
 (fulfills get_set_other auto)
+
+;; --- LE-layer internal lemmas ------------------------------------------------
+
+;; x + 0 = x (the load tower's Z tail).
+(claim add_zero_r
+  (goal ((x Int)) () (= (+ x 0) x))
+  (by arith (list (list 1) (list 1))))
+
+;; address disequalities at literal offsets 1/2/3 — the get_set_other feeders
+;; for peeling a store chain (x matches any address tree).
+(claim neq_lo1
+  (goal ((x Int)) () (= (int_eq x (+ x 1)) False))
+  (by arith (list 1)))
+
+(claim neq_lo2
+  (goal ((x Int)) () (= (int_eq x (+ (+ x 1) 1)) False))
+  (by arith (list 1)))
+
+(claim neq_lo3
+  (goal ((x Int)) () (= (int_eq x (+ (+ (+ x 1) 1) 1)) False))
+  (by arith (list 1)))
+
+;; the euclidean split at 256, unconditional: byte + 256*quotient = the word.
+;; div-facts names q; premise 3 rewrites the ediv atom to it, and the goal is
+;; premise 0 rearranged (two-sided farkas).
+(claim split_id
+  (goal ((x Int)) () (= (+ (mod x 256) (* 256 (ediv x 256))) x))
+  (div-facts
+    x
+    256
+    q
+    (steps
+      ((rewrite (premise 3) lr lhs true ()))
+      (by arith (list (list 1 1 0 0 0) (list 1 -1 0 0 0))))))
+
+;; quotient sign: 0 <= x |- 0 <= ediv x 256 (std/div's div_nonneg at 256).
+(claim ediv_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (ediv x 256)) True))
+  (div-facts x 256 q (by arith (list 256 1 -1 0 1 256))))
+
+;; quotient shrink at the three wasm literals: x < 256K |- ediv x 256 < K.
+(claim shrink_32
+  (goal ((x Int)) ((= (lt x 4294967296) True))
+    (= (lt (ediv x 256) 16777216) True))
+  (div-facts x 256 q (by arith (list 256 1 1 1 0 -256))))
+
+(claim shrink_24
+  (goal ((x Int)) ((= (lt x 16777216) True)) (= (lt (ediv x 256) 65536) True))
+  (div-facts x 256 q (by arith (list 256 1 1 1 0 -256))))
+
+(claim shrink_16
+  (goal ((x Int)) ((= (lt x 65536) True)) (= (lt (ediv x 256) 256) True))
+  (div-facts x 256 q (by arith (list 256 1 1 1 0 -256))))
+
+;; the framing induction's IH-precondition step: a+(1+K) <= b |- (a+1)+K <= b.
+;; The successor link is a premise (discharged by int_of_nat_succ at the cite).
+(claim above_step
+  (goal ((a Int) (b Int) (w Nat))
+    ((= (le (+ a (int_of_nat (S w))) b) True)
+     (= (int_of_nat (S w)) (+ 1 (int_of_nat w))))
+    (= (le (+ (+ a 1) (int_of_nat w)) b) True))
+  (by arith (list 1 1 1)))
+
+;; a store range strictly below b cannot start at b: a+(1+K) <= b, K >= 0
+;; |- b != a.
+(claim above_neq
+  (goal ((a Int) (b Int) (w Nat))
+    ((= (le (+ a (int_of_nat (S w))) b) True)
+     (= (int_of_nat (S w)) (+ 1 (int_of_nat w)))
+     (= (le 0 (int_of_nat w)) True))
+    (= (int_eq b a) False))
+  (by arith (list -1 1 1 1)))
+
+;; (* x 0) = 0 (the load tower's Z tail, other half).
+(claim mul_zero_r
+  (goal ((x Int)) () (= (* x 0) 0))
+  (by arith (list (list 1) (list 1))))
+
+;; leveled in-range mod identities: the ediv-chain spelling pins the rewrite
+;; site (there is no occurrence-targeted rewrite, and a bare mod_byte_id
+;; pattern would grab the leftmost (mod v 256) instead of the tower's tail).
+(claim mbid1
+  (goal ((x Int)) ((= (le 0 x) True) (= (lt x 65536) True))
+    (= (mod (ediv x 256) 256) (ediv x 256)))
+  (have hlo (= (le 0 (ediv x 256)) True)
+    (rewrite-with
+      (lemma ediv_lo)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+      refl)
+    (have hhi (= (lt (ediv x 256) 256) True)
+      (rewrite-with
+        (lemma shrink_16)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl)
+      (rewrite-with
+        (lemma mod_byte_id)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hlo) lr lhs true ())) refl)
+         (steps ((rewrite (premise hhi) lr lhs true ())) refl))
+        refl))))
+
+(claim mbid3
+  (goal ((x Int)) ((= (le 0 x) True) (= (lt x 4294967296) True))
+    (=
+      (mod (ediv (ediv (ediv x 256) 256) 256) 256)
+      (ediv (ediv (ediv x 256) 256) 256)))
+  (have h1lo (= (le 0 (ediv x 256)) True)
+    (rewrite-with
+      (lemma ediv_lo)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+      refl)
+    (have h2lo (= (le 0 (ediv (ediv x 256) 256)) True)
+      (rewrite-with
+        (lemma ediv_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise h1lo) lr lhs true ())) refl))
+        refl)
+      (have h3lo (= (le 0 (ediv (ediv (ediv x 256) 256) 256)) True)
+        (rewrite-with
+          (lemma ediv_lo)
+          lr
+          lhs
+          ()
+          ((steps ((rewrite (premise h2lo) lr lhs true ())) refl))
+          refl)
+        (have h1hi (= (lt (ediv x 256) 16777216) True)
+          (rewrite-with
+            (lemma shrink_32)
+            lr
+            lhs
+            ()
+            ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+            refl)
+          (have h2hi (= (lt (ediv (ediv x 256) 256) 65536) True)
+            (rewrite-with
+              (lemma shrink_24)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise h1hi) lr lhs true ())) refl))
+              refl)
+            (have h3hi (= (lt (ediv (ediv (ediv x 256) 256) 256) 256) True)
+              (rewrite-with
+                (lemma shrink_16)
+                lr
+                lhs
+                ()
+                ((steps ((rewrite (premise h2hi) lr lhs true ())) refl))
+                refl)
+              (rewrite-with
+                (lemma mod_byte_id)
+                lr
+                lhs
+                ()
+                ((steps ((rewrite (premise h3lo) lr lhs true ())) refl)
+                 (steps ((rewrite (premise h3hi) lr lhs true ())) refl))
+                refl))))))))
+
+;; --- discharge the LE interface obligations ----------------------------------
+
+(fulfills load_le_z auto)
+
+(fulfills load_le_s auto)
+
+(fulfills store_le_z auto)
+
+(fulfills store_le_s auto)
+
+;; below-range framing: induction on the width; each step skips the byte
+;; store via get_set_other (b<a gives b!=a) and hands the IH the shifted
+;; bound b < a+1.
+(fulfills store_le_get_below
+  (induct w
+    ((case Z (steps ((rewrite (lemma st_z) lr lhs true ())) refl))
+     (case S
+       (steps
+         ((rewrite (lemma st_s) lr lhs true ()))
+         (rewrite-with
+           (hyp ih)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma lt_succ_from_lt)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+              refl))
+           (rewrite-with
+             (lemma gso_i)
+             lr
+             lhs
+             ()
+             ((rewrite-with
+                (lemma lt_implies_neq)
+                lr
+                lhs
+                ()
+                ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                refl))
+             refl)))))))
+
+;; above-range framing: same induction; the IH bound steps by above_step and
+;; the byte skip's disequality comes from above_neq (w2 is a pivot — premises
+;; only — so it is Inst-pinned at the cite).
+(fulfills store_le_get_above
+  (induct w
+    ((case Z (steps ((rewrite (lemma st_z) lr lhs true ())) refl))
+     (case S
+       (w2)
+       (steps
+         ((rewrite (lemma st_s) lr lhs true ()))
+         (rewrite-with
+           (hyp ih)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma above_step)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+               (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl))
+              refl))
+           (rewrite-with
+             (lemma gso_i)
+             lr
+             lhs
+             ()
+             ((rewrite-with
+                (lemma above_neq)
+                lr
+                lhs
+                ((inst w w2))
+                ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                 (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+                 (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+                refl))
+             refl)))))))
+
+;; width-1 round trip: unfold by the defining equations, collapse the store
+;; (get_set), and the in-range mod identity finishes.
+(fulfills ls1_id
+  (steps
+    ((rewrite (lemma st_s) lr lhs true ())
+     (rewrite (lemma st_z) lr lhs true ())
+     (rewrite (lemma ld_s) lr lhs true ())
+     (rewrite (lemma ld_z) lr lhs true ())
+     (rewrite (lemma mul_zero_r) lr lhs true ())
+     (rewrite (lemma add_zero_r) lr lhs true ())
+     (rewrite (lemma gs_i) lr lhs true ()))
+    (rewrite-with
+      (lemma mod_byte_id)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl))
+      refl)))
+
+;; width-2 round trip: unfold, collapse the HIGH byte first (it is the only
+;; get_set site while the low site still wears the outer store), ladder it to
+;; the raw quotient (mbid1), then peel the low site and split_id recomposes.
+(fulfills ls2_id
+  (steps
+    ((rewrite (lemma st_s) lr lhs true ())
+     (rewrite (lemma st_s) lr lhs true ())
+     (rewrite (lemma st_z) lr lhs true ())
+     (rewrite (lemma ld_s) lr lhs true ())
+     (rewrite (lemma ld_s) lr lhs true ())
+     (rewrite (lemma ld_z) lr lhs true ())
+     (rewrite (lemma mul_zero_r) lr lhs true ())
+     (rewrite (lemma add_zero_r) lr lhs true ())
+     (rewrite (lemma gs_i) lr lhs true ()))
+    (rewrite-with
+      (lemma mbid1)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl))
+      (rewrite-with
+        (lemma gso_i)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (lemma neq_lo1) lr lhs true ())) refl))
+        (steps
+          ((rewrite (lemma gs_i) lr lhs true ())
+           (rewrite (lemma split_id) lr lhs true ()))
+          refl)))))
+
+;; width-4 round trip: same shape, three levels deeper — peel sites highest-
+;; address-first (each is the unique get_set site at its turn), mbid3 fixes
+;; the top quotient, split_id recomposes level by level.
+(fulfills ls4_id
+  (steps
+    ((rewrite (lemma st_s) lr lhs true ())
+     (rewrite (lemma st_s) lr lhs true ())
+     (rewrite (lemma st_s) lr lhs true ())
+     (rewrite (lemma st_s) lr lhs true ())
+     (rewrite (lemma st_z) lr lhs true ())
+     (rewrite (lemma ld_s) lr lhs true ())
+     (rewrite (lemma ld_s) lr lhs true ())
+     (rewrite (lemma ld_s) lr lhs true ())
+     (rewrite (lemma ld_s) lr lhs true ())
+     (rewrite (lemma ld_z) lr lhs true ())
+     (rewrite (lemma mul_zero_r) lr lhs true ())
+     (rewrite (lemma add_zero_r) lr lhs true ())
+     (rewrite (lemma gs_i) lr lhs true ()))
+    (rewrite-with
+      (lemma mbid3)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl))
+      (rewrite-with
+        (lemma gso_i)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (lemma neq_lo3) lr lhs true ())) refl))
+        (rewrite-with
+          (lemma gso_i)
+          lr
+          lhs
+          ()
+          ((steps ((rewrite (lemma neq_lo2) lr lhs true ())) refl))
+          (rewrite-with
+            (lemma gso_i)
+            lr
+            lhs
+            ()
+            ((steps ((rewrite (lemma neq_lo1) lr lhs true ())) refl))
+            (steps
+              ((rewrite (lemma gs_i) lr lhs true ()))
+              (rewrite-with
+                (lemma gso_i)
+                lr
+                lhs
+                ()
+                ((steps ((rewrite (lemma neq_lo2) lr lhs true ())) refl))
+                (rewrite-with
+                  (lemma gso_i)
+                  lr
+                  lhs
+                  ()
+                  ((steps ((rewrite (lemma neq_lo1) lr lhs true ())) refl))
+                  (steps
+                    ((rewrite (lemma gs_i) lr lhs true ()))
+                    (rewrite-with
+                      (lemma gso_i)
+                      lr
+                      lhs
+                      ()
+                      ((steps ((rewrite (lemma neq_lo1) lr lhs true ())) refl))
+                      (steps
+                        ((rewrite (lemma gs_i) lr lhs true ())
+                         (rewrite (lemma split_id) lr lhs true ())
+                         (rewrite (lemma split_id) lr lhs true ())
+                         (rewrite (lemma split_id) lr lhs true ()))
+                        refl))))))))))))

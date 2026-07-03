@@ -18,7 +18,9 @@
 ;;; Same rule as std/map. The sanctioned spelling for "the memory holds these
 ;;; cells" is reading them back out (see examples/mem_reverse.shard).
 
-(import "../../kernel/stdlib.shard")  ; Int / Bool / True
+(import "../../kernel/stdlib.shard")  ; Int / Bool / True / Nat
+(import "../nat")  ; int_of_nat — the width bound in the framing laws
+(use (:: std nat int_of_nat))
 
 ;; an opaque flat byte memory.
 (sig type Mem)
@@ -58,3 +60,64 @@
 (requirement get_set_other
   (goal ((m Mem) (a Int) (b Int) (v Int)) ((= (int_eq b a) False))
     (= (mem_get (mem_set m a v) b) (mem_get m b))))
+
+;; --- little-endian words (the multi-byte view every LE ISA shares) ----------
+;;
+;; load_le/store_le read/write a w-byte little-endian word (byte at the lowest
+;; address = least significant). Width is a STRUCTURAL Nat so consumers unfold
+;; one byte per ι-step and the law proofs are ordinary inductions; the widths
+;; that matter are tiny ((S Z) / two / four). store_le stores the raw
+;; quotient chain — mem_get's masking makes each byte a byte, so the store
+;; needs no masking of its own. The defining equations are exported (the
+;; weaning technique): a consumer can always unfold a concrete-width access
+;; by rewriting; the framing and round-trip laws below are the closed forms.
+
+(sig fn load_le ((w Nat) (m Mem) (a Int)) Int)
+(sig fn store_le ((w Nat) (m Mem) (a Int) (v Int)) Mem)
+
+;; defining equations.
+(requirement load_le_z (goal ((m Mem) (a Int)) () (= (load_le Z m a) 0)))
+
+(requirement load_le_s
+  (goal ((w Nat) (m Mem) (a Int)) ()
+    (= (load_le (S w) m a) (+ (mem_get m a) (* 256 (load_le w m (+ a 1)))))))
+
+(requirement store_le_z
+  (goal ((m Mem) (a Int) (v Int)) () (= (store_le Z m a v) m)))
+
+(requirement store_le_s
+  (goal ((w Nat) (m Mem) (a Int) (v Int)) ()
+    (= (store_le (S w) m a v) (store_le w (mem_set m a v) (+ a 1) (ediv v 256)))))
+
+;; --- word-level framing: a store is invisible outside [a, a+w) --------------
+
+;; a byte read strictly below the stored range is untouched.
+(requirement store_le_get_below
+  (goal ((w Nat) (m Mem) (a Int) (v Int) (b Int)) ((= (lt b a) True))
+    (= (mem_get (store_le w m a v) b) (mem_get m b))))
+
+;; a byte read at or above the stored range's end is untouched.
+(requirement store_le_get_above
+  (goal ((w Nat) (m Mem) (a Int) (v Int) (b Int))
+    ((= (le (+ a (int_of_nat w)) b) True))
+    (= (mem_get (store_le w m a v) b) (mem_get m b))))
+
+;; --- word round trips at the widths wasm speaks (1, 2, 4 bytes) -------------
+;;
+;; Reading back a just-stored in-range word is the identity. Stated at
+;; LITERAL widths: the in-range bound is then a literal too (no pow on the
+;; surface), and these are the only widths a wasm32 model needs. Out-of-range
+;; stores still truncate per byte (get_set) — unfold by the defining
+;; equations if you need the masked general form.
+
+(requirement ls1_id
+  (goal ((m Mem) (a Int) (v Int)) ((= (le 0 v) True) (= (lt v 256) True))
+    (= (load_le (S Z) (store_le (S Z) m a v) a) v)))
+
+(requirement ls2_id
+  (goal ((m Mem) (a Int) (v Int)) ((= (le 0 v) True) (= (lt v 65536) True))
+    (= (load_le (S (S Z)) (store_le (S (S Z)) m a v) a) v)))
+
+(requirement ls4_id
+  (goal ((m Mem) (a Int) (v Int)) ((= (le 0 v) True) (= (lt v 4294967296) True))
+    (= (load_le (S (S (S (S Z)))) (store_le (S (S (S (S Z)))) m a v) a) v)))
