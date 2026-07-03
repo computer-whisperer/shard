@@ -1,0 +1,300 @@
+;;; lowcheck — the P4a SCHEMA RECOGNIZER (docs/LOWERING.md §7 q1): the
+;;; consumer-side validator for lowered-conformance cert files. The PCC
+;;; lesson: the consumer never trusts the producer's statement generator —
+;;; it re-validates structurally that every `lowered_*` claim instantiates
+;;; the standard schema (docs/LOWERING.md §2). Conformance is checked at
+;;; the RAW S-EXPR level (pre-loader, sugar intact): the schema is a
+;;; statement SHAPE, and shape is syntax.
+;;;
+;;; Checked per lowered_* claim (v1):
+;;;   1. goal binders include (c Nat) and (restfs (List Func))
+;;;   2. the conclusion contains a call_fn / call_fn_mem application
+;;;   3. its FUEL slot is (S^ N BASE) with N >= 0 and the slack c in BASE
+;;;   4. its module is (MkWModule CHAIN MEMSIZE-literal) where CHAIN is a
+;;;      Cons-pinned prefix of (MkFunc …) literals ENDING IN restfs — the
+;;;      linking provision; a Nil tail (fully closed module) is REFUSED
+;;;   5. its function index is a literal
+;;; A claim can be kernel-TRUE and still nonconforming (see
+;;; examples/lowcheck_rejects.shard) — truth and composability are
+;;; different gates.
+;;;
+;;; RUN IT:  bin/shard_eval run tools/lowcheck/lowcheck.shard CERTFILE
+;;;          exit 0 = all lowered_* claims conform; exit 1 otherwise
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/loader.shard")
+(import "../../kernel/reader.shard")
+(import "../../kernel/term.shard")
+
+(use (:: kernel loader World))
+(use (:: kernel loader get_args))
+(use (:: kernel loader read_file))
+(use (:: kernel loader write))
+(use (:: kernel loader exit))
+(use (:: kernel reader SExpr))
+(use (:: kernel reader SInt))
+(use (:: kernel reader SSym))
+(use (:: kernel reader SStr))
+(use (:: kernel reader SList))
+(use (:: kernel reader read_expr))
+(use (:: kernel reader RExpr))
+(use (:: kernel reader REOk))
+(use (:: kernel reader REErr))
+(use (:: kernel reader skip_ws))
+(use (:: kernel term append_int))
+(use (:: kernel term show_int))
+
+(fn nl () (List Int) (Cons 10 Nil))
+
+;; ---- read all top-level forms --------------------------------------------------
+
+(fn forms_go ((src (List Int)) (acc (List SExpr)) (fuel Int)) (Option (List SExpr))
+  (measure fuel (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt fuel 1)
+    None
+    (match (skip_ws src)
+      (Nil (Some (rev_forms acc Nil)))
+      ((Cons _ _)
+       (match (read_expr src)
+         (REErr None)
+         ((REOk s rest) (forms_go rest (Cons s acc) (- fuel 1))))))))
+
+(fn rev_forms ((xs (List SExpr)) (acc (List SExpr))) (List SExpr)
+  (measure (struct xs))
+  (match xs
+    (Nil acc)
+    ((Cons h t) (rev_forms t (Cons h acc)))))
+
+;; ---- small s-expr utilities -----------------------------------------------------
+
+(fn is_sym ((s SExpr) (name Symbol)) Bool
+  (match s
+    ((SSym x) (sym_eq x name))
+    (_ False)))
+
+(fn prefix_eq ((pre (List Int)) (cs (List Int))) Bool
+  (measure (struct pre))
+  (match pre
+    (Nil True)
+    ((Cons a as)
+     (match cs
+       (Nil False)
+       ((Cons b bs) (if (int_eq a b) (prefix_eq as bs) False))))))
+
+;; does the slack symbol occur anywhere in this s-expr?
+(fn occ_s ((s SExpr) (name Symbol)) Bool
+  (measure (struct s))
+  (match s
+    ((SSym x) (sym_eq x name))
+    ((SList items) (occ_list items name))
+    (_ False)))
+
+(fn occ_list ((ss (List SExpr)) (name Symbol)) Bool
+  (measure (struct ss))
+  (match ss
+    (Nil False)
+    ((Cons h t) (if (occ_s h name) True (occ_list t name)))))
+
+;; ---- the schema checks -----------------------------------------------------------
+
+;; binder list contains (c Nat)?
+(fn has_slack ((bs (List SExpr))) Bool
+  (measure (struct bs))
+  (match bs
+    (Nil False)
+    ((Cons b rest)
+     (match b
+       ((SList (Cons n (Cons ty Nil)))
+        (if (is_sym n (quote c))
+          (if (is_sym ty (quote Nat)) True (has_slack rest))
+          (has_slack rest)))
+       (_ (has_slack rest))))))
+
+;; binder list contains (restfs (List Func))?
+(fn has_restfs ((bs (List SExpr))) Bool
+  (measure (struct bs))
+  (match bs
+    (Nil False)
+    ((Cons b rest)
+     (match b
+       ((SList (Cons n (Cons ty Nil)))
+        (if (is_sym n (quote restfs))
+          (match ty
+            ((SList (Cons lh (Cons le2 Nil)))
+             (if (is_sym lh (quote List)) (is_sym le2 (quote Func)) False))
+            (_ False))
+          (has_restfs rest)))
+       (_ (has_restfs rest))))))
+
+;; find the first call_fn / call_fn_mem application anywhere in the term
+(fn find_call ((s SExpr)) (Option (List SExpr))
+  (measure (struct s))
+  (match s
+    ((SList items)
+     (match items
+       ((Cons h rest)
+        (if (is_sym h (quote call_fn))
+          (Some items)
+          (if (is_sym h (quote call_fn_mem)) (Some items) (find_call_list items))))
+       (Nil None)))
+    (_ None)))
+
+(fn find_call_list ((ss (List SExpr))) (Option (List SExpr))
+  (measure (struct ss))
+  (match ss
+    (Nil None)
+    ((Cons h t)
+     (match (find_call h)
+       ((Some r) (Some r))
+       (None (find_call_list t))))))
+
+;; FUEL slot: (S^ N BASE), N a literal >= 0, slack c occurs in BASE
+(fn fuel_ok ((s SExpr)) Bool
+  (match s
+    ((SList (Cons h (Cons n (Cons base Nil))))
+     (if (is_sym h (quote S^))
+       (match n
+         ((SInt k) (if (le 0 k) (occ_s base (quote c)) False))
+         (_ False))
+       False))
+    (_ False)))
+
+;; module chain: Cons-pinned (MkFunc …) prefix ending in the restfs symbol
+(fn chain_ok ((s SExpr)) Bool
+  (measure (struct s))
+  (match s
+    ((SSym x) (sym_eq x (quote restfs)))
+    ((SList (Cons h (Cons f (Cons tail Nil))))
+     (if (is_sym h (quote Cons))
+       (match f
+         ((SList (Cons fh _)) (if (is_sym fh (quote MkFunc)) (chain_ok tail) False))
+         (_ False))
+       False))
+    (_ False)))
+
+;; module slot: (MkWModule CHAIN MEMSIZE-literal)
+(fn wm_ok ((s SExpr)) Bool
+  (match s
+    ((SList (Cons h (Cons chain (Cons msz Nil))))
+     (if (is_sym h (quote MkWModule))
+       (match msz
+         ((SInt _) (chain_ok chain))
+         (_ False))
+       False))
+    (_ False)))
+
+(fn idx_ok ((s SExpr)) Bool
+  (match s
+    ((SInt _) True)
+    (_ False)))
+
+;; ---- per-claim verdict ------------------------------------------------------------
+
+;; validate the conclusion (= LHS RHS): all call-slot checks
+(fn concl_verdict ((concl SExpr)) (List Int)
+  (match concl
+    ((SList (Cons eq (Cons lhs (Cons _ Nil))))
+     (if (is_sym eq (quote =))
+       (match (find_call lhs)
+         (None "no call_fn / call_fn_mem application in the conclusion LHS")
+         ((Some items)
+          (match items
+            ((Cons _ (Cons fuel (Cons wm (Cons idx _))))
+             (if (fuel_ok fuel)
+               (if (wm_ok wm)
+                 (if (idx_ok idx) "" "function index is not a literal")
+                 "module is not (MkWModule (Cons (MkFunc ...) ... restfs) LITERAL)")
+               "fuel is not (S^ N BASE) with the slack c in BASE"))
+            (_ "call application is missing slots"))))
+       "conclusion is not an equation"))
+    (_ "conclusion is not an equation")))
+
+;; verdict for one lowered_* claim: empty = conforms, else the reason
+(fn claim_verdict ((goal_form SExpr)) (List Int)
+  (match goal_form
+    ((SList (Cons g (Cons binders (Cons _ (Cons concl Nil)))))
+     (if (is_sym g (quote goal))
+       (match binders
+         ((SList bs)
+          (if (has_slack bs)
+            (if (has_restfs bs)
+              (concl_verdict concl)
+              "no (restfs (List Func)) binder — the linking provision is missing")
+            "no (c Nat) fuel-slack binder"))
+         (_ "malformed binder list"))
+       "second claim element is not (goal ...)"))
+    (_ "second claim element is not (goal ...)")))
+
+;; ---- the walk ---------------------------------------------------------------------
+
+(type VRes (VRes Int Int (List Int)))  ; conforming, nonconforming, report text
+
+(fn scan ((forms (List SExpr)) (ok Int) (bad Int) (out (List Int))) VRes
+  (measure (struct forms))
+  (match forms
+    (Nil (VRes ok bad out))
+    ((Cons f rest)
+     (match f
+       ((SList (Cons h (Cons nm (Cons gf _))))
+        (if (is_sym h (quote claim))
+          (match nm
+            ((SSym name)
+             (if (prefix_eq "lowered_" (chars_of_sym name))
+               (match (claim_verdict gf)
+                 (Nil
+                  (scan
+                    rest
+                    (+ ok 1)
+                    bad
+                    (append_int
+                      out
+                      (append_int "CONFORMS      " (append_int (chars_of_sym name) (nl))))))
+                 ((Cons e es)
+                  (scan
+                    rest
+                    ok
+                    (+ bad 1)
+                    (append_int
+                      out
+                      (append_int
+                        "NONCONFORMING "
+                        (append_int
+                          (chars_of_sym name)
+                          (append_int ": " (append_int (Cons e es) (nl)))))))))
+               (scan rest ok bad out)))
+            (_ (scan rest ok bad out)))
+          (scan rest ok bad out)))
+       (_ (scan rest ok bad out))))))
+
+(fn fail2 ((msg (List Int)) (w World)) World
+  (exit 2 (write (append_int "error: " (append_int msg (nl))) w)))
+
+(fn run1 ((path (List Int)) (w World)) World
+  (match (read_file path w)
+    ((Pair None w1) (fail2 (append_int "cannot read " path) w1))
+    ((Pair (Some src) w1)
+     (match (forms_go src Nil 1000000)
+       (None (fail2 (append_int "cannot parse " path) w1))
+       ((Some forms)
+        (match (scan forms 0 0 "")
+          ((VRes ok bad report)
+           (match
+             (write
+               (append_int
+                 report
+                 (append_int
+                   "SCHEMA: "
+                   (append_int
+                     (show_int ok)
+                     (append_int
+                       " conforming, "
+                       (append_int (show_int bad) (append_int " nonconforming" (nl)))))))
+               w1)
+             (w2 (exit (if (int_eq bad 0) 0 1) w2))))))))))
+
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Pair args w1)
+     (match args
+       ((Cons path Nil) (run1 path w1))
+       (_ (fail2 "usage: lowcheck CERTFILE" w1))))))
