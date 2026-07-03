@@ -403,3 +403,33 @@ manufactured simulation proofs; same measured-question discipline as §7).
 
 **Sequencing decided:** Nat former first (self-contained, fence-respecting
 kernel work that removes a known wall before it is hit), then the `Mem` arc.
+
+**Mem arc BUILT 2026-07-03** (commits 4119031 → the wasm_rev demonstrator).
+The ratified architecture: runtime-efficient raw data structures are OPAQUE
+std modules — surface contract + law family; the wasm model calls the
+substrate internally and consumer proofs cite laws instead of computing
+(the deliberate trade for swappable impls; ISA-backed impl variants +
+build-time selection + JIT-style evaluation are the arc-after). What
+landed: `std/mem` — ONE generic byte substrate (unbounded default-0 LE
+byte map; `mem_get`/`mem_set`/`load_le`/`store_le`; framing + round-trip
+law family, all theorems, machine-solved where the solver reaches) intended
+to back every byte-addressed LE ISA (bounds/pages/alignment stay in each
+ISA model, NOT the substrate); the model gained memsize + Mem-threading
+outcomes + I32Load/I32Store (LE words) + I32Load8U/I32Store8 (= mem_get/
+mem_set directly); `call_fn_mem` = the memory-observable denotation for
+pieces whose OUTPUT is memory. The demonstrator (`examples/wasm_rev.shard`)
+is the M3 dragon at the real ISA: an in-place two-pointer byte reverse
+whose loop worker simulates `examples/mem_reverse`'s rev_loop step for
+step (the interpreter's memory residue IS the swap chain, syntactically),
+lifted to `call_fn_mem` and composed BY CITATION with the mem_reverse
+capstone: load a byte list, run the wasm piece, dump — `(rev xs)`, proven.
+V8 reality check extended with MEMCASE vectors (memory section + export +
+byte opcodes in the encoder): full/partial/odd/single/no-op reversals agree
+byte-for-byte. Existing piece theorems and the weld survived the model
+extension with ZERO proof-body edits (statement-level memory threading
+only). Proof-engineering notes: the loop-entry fuel must stick as an
+IF-condition (a match-scrutinee stick is unreachable by the rewriter and a
+plain wrapper reduces away — pf_body's vacuous `(lt (int_of_nat k) 0)`
+guard); the folded `eval_loop` redex a worker citation needs only arises
+when the Loop instruction fires under `reduce` (never `compute`), so the
+caller's fuel prefix must stall compute one level above the loop.

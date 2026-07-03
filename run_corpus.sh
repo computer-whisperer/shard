@@ -97,6 +97,7 @@ TARGETS=(
   examples/wasm_weld.shard
   examples/wasm_weld_out.shard
   examples/wasm_diff_run.shard
+  examples/wasm_rev.shard
   examples/record_rejects.shard
   examples/record_sugar_rejects.shard
   examples/subterm_induct.shard

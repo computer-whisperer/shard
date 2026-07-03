@@ -22,6 +22,14 @@
 (use (:: models wasm encode *))
 (import "wasm_pieces.shard")
 (use (:: examples wasm_pieces *))
+(import "wasm_rev.shard")
+(use (:: examples wasm_rev prev))
+(import "mem_reverse.shard")
+(use (:: examples mem_reverse load))
+(use (:: examples mem_reverse dump))
+(use (:: examples mem_reverse length_nat))
+(import "../std/mem")
+(use (:: std mem *))
 
 (type World (World Int))
 
@@ -55,6 +63,9 @@
       (kf -1)
       (kf -64))
     0))
+
+;; the in-place byte-reverse piece (wasm_rev.shard), with its 64KiB memory.
+(fn rmod2 () WModule (MkWModule (list (prev)) 65536))
 
 ;; --- plan rendering -------------------------------------------------------------
 
@@ -102,11 +113,44 @@
 
 (fn kcase ((k Int)) (List Int) (case_line "kmod" (kmod) k (list) 10))
 
+;; a memory vector: preload the bytes at 0, run the MODEL's call_fn_mem,
+;; print result + the readback — the engine side replays both.
+(fn show_memr ((r (Option (Pair Int Mem))) (n Nat)) (List Int)
+  (match r
+    (None "None -")
+    ((Some pr)
+     (match pr
+       ((Pair v mf) (cat (list (dec v) " " (hexs (dump 0 n mf)))))))))
+
+(fn memcase_line
+  ((nm (List Int))
+   (m WModule)
+   (k Int)
+   (args (List Int))
+   (fuel Int)
+   (membytes (List Int)))
+  (List Int)
+  (cat
+    (list
+      "MEMCASE "
+      nm
+      " f"
+      (dec k)
+      (showargs args)
+      " MEM "
+      (hexs membytes)
+      " -> "
+      (show_memr
+        (call_fn_mem (fnat fuel) m k args (load membytes 0 (mem_empty)))
+        (length_nat membytes))
+      "\n")))
+
 (fn emit () (List Int)
   (cat
     (list
       (mod_line "dmod" (dmod))
       (mod_line "kmod" (kmod))
+      (mod_line "rmod2" (rmod2))
       (case_line "dmod" (dmod) 0 (list 3 4) 20)
       (case_line "dmod" (dmod) 0 (list 4294967290 10) 20)
       (case_line "dmod" (dmod) 0 (list 2147483648 2147483648) 20)
@@ -117,6 +161,11 @@
       (case_line "dmod" (dmod) 2 (list 0) 30)
       (case_line "dmod" (dmod) 2 (list 5) 30)
       (case_line "dmod" (dmod) 2 (list 4294967295) 30)
+      (memcase_line "rmod2" (rmod2) 0 (list 0 5) 200 (list 1 2 3 4 5 6))
+      (memcase_line "rmod2" (rmod2) 0 (list 1 4) 200 (list 1 2 3 4 5 6))
+      (memcase_line "rmod2" (rmod2) 0 (list 0 2) 200 (list 10 20 30))
+      (memcase_line "rmod2" (rmod2) 0 (list 0 0) 200 (list 7))
+      (memcase_line "rmod2" (rmod2) 0 (list 3 1) 200 (list 9 9 9 9))
       (kcase 0)
       (kcase 1)
       (kcase 2)
