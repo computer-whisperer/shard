@@ -72,11 +72,37 @@
     ((Cons l rest) (Cons (append_int "      " l) (indent6 rest)))))
 
 ;; ---- totality measure for the render_* family (issue #1) ------------------
-;; render_term / render_app / render_args / render_if are a 4-member MUTUAL SCC
-;; that ad_sccs classifies AdUnresolved (render_app passes its list param
-;; UNCHANGED to render_args — no single descending structural track), so they
-;; carry explicit numeric (measure …) clauses below, citing the AST size
-;; helpers `size`/`size_list` now homed in term.shard.
+;; render_term / render_app / render_args / render_if / render_arms are a
+;; 5-member MUTUAL SCC that ad_sccs classifies AdUnresolved (render_app passes
+;; its list param UNCHANGED to render_args — no single descending structural
+;; track), so they carry explicit numeric (measure …) clauses below, citing
+;; the AST size family homed in expr_size.shard. The clauses are pinned (and
+;; iterated fast) in examples/render_model.shard — port changes there first.
+
+;; ---- pattern rendering (structural SCC, no numeric clause needed) ----------
+;; PVar binds the next BVar positionally; there is no name to recover, so it
+;; renders as "_" and the arm body's @k de-Bruijn refs are left as-is.
+(fn render_pat ((p Pat)) (List Int)
+  (measure (struct p))
+  (match p
+    ((PVar) "_")
+    ((PCtor name pats)
+     (match pats
+       (Nil (chars_of_sym (qn_name name)))
+       (_
+         (Cons
+           40
+           (append_int
+             (chars_of_sym (qn_name name))
+             (append_int (render_pats pats) (Cons 41 Nil)))))))
+    ((PInt n) (show_int n))
+    ((PSym s) (Cons 39 (chars_of_sym s)))))
+
+(fn render_pats ((ps (List Pat))) (List Int)  ; " p1 p2"
+  (measure (struct ps))
+  (match ps
+    (Nil Nil)
+    ((Cons p rest) (Cons 32 (append_int (render_pat p) (render_pats rest))))))
 
 ;; ---- term / equation rendering --------------------------------------------
 ;; Mirrors Rust render_term over the runtime Expr value world.
@@ -112,7 +138,44 @@
         (rewrite-with (lemma size_nonneg) lr lhs () () refl)
         (have (= (le 0 (size e2)) True)
           (rewrite-with (lemma size_nonneg) lr lhs () () refl)
-          (by arith (list 1 0 1 1 1))))))
+          (by arith (list 1 0 1 1 1)))))
+    ;; site 4 — Match arm: (render_term s). msr2 = size s, binders s arms,
+    ;; hyp0 = (= e (Match s arms)). decrease needs size_arms arms >= 0.
+    (have (= (le 0 (size_arms arms)) True)
+      (rewrite-with (lemma size_arms_nonneg) lr lhs () () refl)
+      (steps
+        ((rewrite (premise 0) lr lhs true ())
+         (rewrite (lemma size_match) lr lhs true ()))
+        (by arith (list 1 0 1))))
+    (steps ((rewrite (lemma size_nonneg) lr lhs true ())) refl)
+    ;; site 5 — Match arm: (render_arms arms). msr2 = size_arms arms
+    ;; (render_arms's measure). decrease needs size s >= 0.
+    (have (= (le 0 (size s)) True)
+      (rewrite-with (lemma size_nonneg) lr lhs () () refl)
+      (steps
+        ((rewrite (premise 0) lr lhs true ())
+         (rewrite (lemma size_match) lr lhs true ()))
+        (by arith (list 1 0 1))))
+    (steps ((rewrite (lemma size_arms_nonneg) lr lhs true ())) refl)
+    ;; site 6 — Let arm: (render_args bs). msr2 = size_list bs (render_args's
+    ;; measure), binders bs body, hyp0 = (= e (Let bs body)). decrease needs
+    ;; size body >= 0.
+    (have (= (le 0 (size body)) True)
+      (rewrite-with (lemma size_nonneg) lr lhs () () refl)
+      (steps
+        ((rewrite (premise 0) lr lhs true ())
+         (rewrite (lemma size_let) lr lhs true ()))
+        (by arith (list 1 0 1))))
+    (steps ((rewrite (lemma size_list_nonneg) lr lhs true ())) refl)
+    ;; site 7 — Let arm: (render_term body). msr2 = size body. decrease needs
+    ;; size_list bs >= 0.
+    (have (= (le 0 (size_list bs)) True)
+      (rewrite-with (lemma size_list_nonneg) lr lhs () () refl)
+      (steps
+        ((rewrite (premise 0) lr lhs true ())
+         (rewrite (lemma size_let) lr lhs true ()))
+        (by arith (list 1 0 1))))
+    (steps ((rewrite (lemma size_nonneg) lr lhs true ())) refl))
   (match e
     ((FVar s) (chars_of_sym s))
     ((BVar k) (Cons 64 (show_int k)))  ; '@' k
@@ -121,8 +184,18 @@
     ((Ctor name args) (render_app (qn_name name) args))
     ((Call name args) (render_app (qn_name name) args))
     ((If c t e2) (render_if c t e2))
-    ((Match _ _) "<Match>")
-    ((Let _ _) "<Let>")))
+    ((Match s arms)
+     (append_int
+       "(match "
+       (append_int
+         (render_term s)
+         (append_int (render_arms arms) (Cons 41 Nil)))))
+    ((Let bs body)
+     (append_int
+       "(let ("
+       (append_int
+         (render_args bs)
+         (append_int ") " (append_int (render_term body) (Cons 41 Nil))))))))
 
 ;; "(head a b …)" — or bare "head" when no args.
 (fn render_app ((name Symbol) (args (List Expr))) (List Int)
@@ -199,6 +272,39 @@
         (append_int
           (render_term t)
           (append_int (Cons 32 Nil) (append_int (render_term e) (Cons 41 Nil))))))))
+
+;; " (pat body) (pat body)" — one clause per arm, bodies un-opened (@k BVars).
+(fn render_arms ((arms (List Arm))) (List Int)
+  (measure
+    (size_arms arms)
+    ;; site 1 — (render_term b). msr2 = size b, binders p b rest, hyp0 =
+    ;; (= arms (Cons (Arm p b) rest)). decrease needs size_arms rest >= 0.
+    (have (= (le 0 (size_arms rest)) True)
+      (rewrite-with (lemma size_arms_nonneg) lr lhs () () refl)
+      (steps
+        ((rewrite (premise 0) lr lhs true ())
+         (rewrite (lemma size_arms_cons) lr lhs true ())
+         (rewrite (lemma size_arm_arm) lr lhs true ()))
+        (by arith (list 1 0 1))))
+    (steps ((rewrite (lemma size_nonneg) lr lhs true ())) refl)
+    ;; site 2 — (render_arms rest). msr2 = size_arms rest. decrease needs
+    ;; size b >= 0.
+    (have (= (le 0 (size b)) True)
+      (rewrite-with (lemma size_nonneg) lr lhs () () refl)
+      (steps
+        ((rewrite (premise 0) lr lhs true ())
+         (rewrite (lemma size_arms_cons) lr lhs true ())
+         (rewrite (lemma size_arm_arm) lr lhs true ()))
+        (by arith (list 1 0 1))))
+    (steps ((rewrite (lemma size_arms_nonneg) lr lhs true ())) refl))
+  (match arms
+    (Nil Nil)
+    ((Cons (Arm p b) rest)
+     (append_int
+       " ("
+       (append_int
+         (render_pat p)
+         (Cons 32 (append_int (render_term b) (Cons 41 (render_arms rest)))))))))
 
 ;; an Equation as "lhs  =  rhs".
 (fn render_eq ((eq Equation)) (List Int)
