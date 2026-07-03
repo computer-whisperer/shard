@@ -39,7 +39,11 @@ itself). Consequences, all ratified:
   (CakeML precedent); exhaustion is loud refusal (the sound direction); the
   unfueled meaning is recoverable as ∃-fuel theorems.
 - **Int, not unary Peano.** Matches the corpus idiom (Int counters + WfInduct)
-  and avoids pushing executable loops onto Peano fuel.
+  and avoids pushing executable loops onto Peano fuel. (Where a *structural*
+  fuel is what a proof wants — the ISA models — the kernel `Nat` former now
+  removes the runtime objection: ground `Nat` values pack to Int literals,
+  `Z`/`S` match by view, so Peano-shaped fuel costs O(1) storage. See
+  `docs/LANGUAGE.md` §3 "Nat". Measures remain Int.)
 
 ## 3. The architecture principle: discover offline, verify at check time
 
@@ -325,7 +329,9 @@ Migration:
 
 - **Structural migration** — `tools/structgen` (§11) committed
   `(measure (struct ARG))` on every monomorphic auto-structural fn across the
-  kernel + the prove/shardfmt tools (~510 clauses).
+  kernel + the prove/shardfmt tools (~510 clauses). The tool was retired
+  (deleted 2026-07-03) once the migration completed; new fns get their
+  clause written by the author.
 - **Polymorphic fns** — the gate now verifies polymorphic `(struct …)` clauses
   directly (the subterm check is syntactic, type-agnostic; only *numeric*
   measures stay monomorphic), so `std/list`/`std/map`/`std/mem`'s poly recursive
@@ -419,11 +425,10 @@ still enumerates the advisory AdFlag / AdUnresolved set (out of TCB).
   Its subterm *classification* (`ad_cls` / `ad_pat_sts` / `ad_fn_sites` /
   `ad_cls_at`) is reused by the trusted `(struct …)` verifier; its *search*
   (`ad_fix` / `ad_pick` / `ad_self_find`) is advisory only.
-- `tools/structgen/structgen.shard` — the offline migration aid (NOT trusted):
-  runs admit over a file's closure and byte-splices `(measure (struct ARG))`
-  into each monomorphic structural fn it defines (skipping type-parametric and
-  already-measured fns; idempotent), to be piped through shardfmt. The committed
-  clauses are re-verified by the gate, so the tool's output is advisory.
+- `tools/structgen` (RETIRED, deleted 2026-07-03) — the offline migration aid
+  that byte-spliced `(measure (struct ARG))` clauses during the Phase-D
+  migration; its output was advisory (the gate re-verifies every committed
+  clause). Removed once the migration completed.
 - `kernel/checker.shard` — `do_subterm_induct` / `build_subterm_subgoal`
   (subterm induction, §6.1) and `do_below` / `expr_proper_subterm` (the ⊰
   discharge); the `Proof` ctors `SubtermInduct` / `Below` live in

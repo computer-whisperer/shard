@@ -217,7 +217,9 @@ live exploit until the gate lands). The ratified design:
   same trust floor as admitting `Int` itself was — well-foundedness of
   bounded integer descent has the external pedigree we demand of axioms —
   and unlike a structural-only gate it does not push executable loops onto
-  unary Peano fuel.
+  unary Peano fuel. (Structural `Nat` fuel itself stopped being unary at
+  runtime with the kernel Nat former — ground values pack to Int literals;
+  `docs/LANGUAGE.md` §3 "Nat".)
 - **Discover offline, verify at check time** (refined 2026-06-17). The
   descent recognizer is kept *out of the trust path*: `admit` is the offline
   classifier/suggester (the `tools/prove` of totality), and the check-time

@@ -137,56 +137,69 @@ parameter/return positions):
 | `Int`               | arbitrary-precision integer (`BigInt` in the bootstrap) |
 | `Symbol`            | interned identifier                  |
 | `Bool`              | user-defined (in stdlib), `True`/`False` ctor |
+| `Nat`               | Peano naturals, literal-backed (see "Nat" below) |
 | `BareName`          | reference to a declared `type`       |
 | `(TyCon T1 T2 …)`   | type application                     |
-| `(Word W S)`        | fixed-width modular integer (see "Words" below) |
-| `u8 … u64, i8 … i64` | reader aliases for `(Word 8 Unsigned)` etc. |
+| `(refine BASE PRED)` | refinement of `BASE` by a `Bool` predicate (see "Refined types" below) |
 
 Examples: `(List Int)`, `(Option (Pair Symbol Expr))`,
-`(Map Symbol Type)`, `(List u8)`.
+`(Map Symbol Type)`.
 
 `Int` and `Symbol` are primitive; `Bool` is part of the stdlib.
 
-### Words — fixed-width modular integers
+### Nat — the literal-backed Peano type
 
-`(Word W S)` is a built-in type former: `W` a **literal type** — a
-numeric token in type position, width 1..64 — or a type variable; `S`
-a signedness marker (`Unsigned`/`Signed`, ordinary empty stdlib types
-used as phantom indices) or a type variable. Prefer the aliases
-(`u8`, `i32`, …); they expand in the reader, so the kernel only ever
-sees the former.
+```sexp
+(type Nat (Z) (S Nat))       ; declared in kernel/stdlib.shard
+```
 
-A word value is a bare bit pattern (width + unsigned residue,
-canonical: `0 ≤ raw < 2^W`). Signedness is **not** stored in the
-value — it lives in the op names where semantics differ (`uval`/
-`sval`, `udiv`/`sdiv`, `ult`/`slt`, `ushr`/`sshr`) and in the type
-index, which keeps signed ops off unsigned terms. `Word` has no
-typedef: values are produced only by the word primitives, the type
-checker enforces canonicity on any literal reaching a goal, and
-induction/case-on over it is impossible. Construction is
-`(uwrap K e)` / `(swrap K e)` where `K` **must be an integer
-literal** — it becomes the type index.
+`Nat` is declared as an ordinary inductive in the stdlib, but the
+kernel gives its **ground** values a packed representation (the Nat
+former, 2026-07-03):
 
-All word ops are **total**, with explicit conventions (semantics live
-in the operator name, never in context):
+- **The ground normal form is a nonneg `Int` literal.**
+  Evaluation-grade reduction (`compute`, the RUN engines) *packs*
+  ground constructions: `Z` computes to `0`, `(S lit)` to `lit+1` —
+  so `(S (S Z))` evaluates to `2`, and a `10^6`-deep fuel value is
+  one literal, never a million-cell ctor tree.
+- **`Z`/`S` patterns match literals by view.** A literal scrutinee
+  `0` matches `Z`; `n ≥ 1` matches `(S p)` with `p` matched against
+  the literal `n-1`, recursing — deep patterns like `(S (S k))`
+  work. A negative literal in `Nat` position is *stuck*, never a
+  match failure.
+- **Symbolic terms are ordinary ctors.** `(S x)` with `x` symbolic
+  reduces and sticks exactly like a user ctor: `induct` over `Nat`
+  works, and `S`-towers in claim statements survive verbatim.
+- **Proof-facing normalizers never pack.** `(reduce …)` and
+  `(simp …)` fire matches and prims but leave ground `Z`/`S`
+  spellings alone — packing is computation, `compute` territory.
+  This is what keeps a goal's `Z`/`S` spelling matching your IHs and
+  lemma statements; pinned by `examples/nat_prim.shard`
+  (`nat_iota_no_pack` / `nat_simp_no_pack`).
+- **Bare `Int` literals do not (yet) type as `Nat`**: `(fn f () Nat 3)`
+  is a type error. Construct through `Z`/`S` (or a converter fn);
+  the literal typing rule is a designed follow-up.
 
-- `wadd wsub wmul wneg` — value mod `2^W` (wrapping; hardware
-  semantics, reasoned about rather than guarded).
-- `udiv/urem`, `sdiv/srem` — the RISC-V M / SMT-LIB profile:
-  `x/0 = all-ones`, `x rem 0 = x`, `INT_MIN/-1 = INT_MIN` (wraps),
-  `INT_MIN rem -1 = 0`. Signed division **truncates** toward zero.
-- `wshl ushr sshr` — shift amount is an `Int`; amounts outside
-  `[0, W)` saturate (`wshl`/`ushr` → 0, `sshr` → sign fill). `sshr`
-  rounds toward −∞.
-- `wand wor wxor wnot` — bitwise.
-- `weq`, `ult ule`, `slt sle` — comparisons, returning `Bool`.
-- `uval sval` — the value as an `Int` (unsigned residue / two's
-  complement); `wbits` — the raw residue of any word (explicit
-  reinterpretation); `wwidth` — the width as an `Int`.
+Arithmetic over `Nat` (`add_nat`, `int_of_nat`, `half_nat`, and their
+lemma family) lives in `std/nat`; the kernel supplies only the type,
+the packing, and the views. A local user `(type Nat …)` shadows the
+core one (resolution is local > import > core) and gets no special
+treatment.
 
-These primitives are implemented once, in `kernel/reduce.shard`'s
-table (not natively), so the proof reducer and the hosted evaluator
-share one definition by construction.
+### Words — opaque `std/word` constructions
+
+Fixed-width modular integers are **not** a kernel type. The
+`(Word W S)` kernel former was revoked (trusted-core contraction,
+issue #15); `std/word` supplies opaque per-width types instead:
+`U8`/`U16`/`U32` and `I8`/`I16`/`I32` behind `sig type`, constructed
+only through the makers — `(u8 n)` stores `n mod 2^8`; `(i8 n)` the
+shifted-mod image in `[-2^7, 2^7)` — and observed through
+`u8_val`/`i8_val`/…. Each op (`u8_add`, `u8_and`, `u8_shl`, `u8_lt`,
+…) carries a val-image law in the interface
+(e.g. `u8_add_val : (u8_val (u8_add a b)) = (mod (+ (u8_val a)
+(u8_val b)) 256)`); consumers reason exclusively through those
+requirements. There are no word primitives in any kernel table.
+`u64`/`i64` are deferred on the compiled dev engine's i63 debt.
 
 ### Bytes — an opaque `std/bytes` construction
 
@@ -218,6 +231,33 @@ The list-model bridge laws (the `len`/`append` homomorphisms, the
 guarded round trip, the exact slice length) are all **theorems** proven
 in `std/bytes/bytes.shard`. A consumer reasons about a `Bytes` only
 through these laws and the `std/list` vocabulary on `(list_of_bytes b)`.
+
+### Refined types
+
+```sexp
+(type NAME (refine BASE PRED))   ; e.g. (type Small (refine Int is_small))
+```
+
+declares `NAME` as `BASE` restricted by `PRED`, a total, already-defined
+fn `BASE → Bool`. Full treatment: `docs/REFINEMENT.md`. The surface:
+
+- **Intro is an obligation.** A fn whose *return type* is a refinement
+  is admitted only with the proof obligation
+  `∀ args, (= (PRED (refine_val (f args))) True)` — the body is a bare
+  `BASE` value, the checker demands the predicate.
+- **`(refine_val s)`** — the projection `NAME → BASE`. Identity at
+  runtime; in a goal it marks where the refined value is being read at
+  base type.
+- **`(refine_try NAME e)`** — the decidable downcast,
+  `BASE → (Option NAME)`: `Some` iff `PRED` holds. The I/O-boundary
+  validator idiom (`utf8_decode b = (refine_try Str b)` in `std/str`).
+- **`(refine-fact NAME TERM PROOF)`** — the proof form that
+  materializes `(= (PRED (refine_val TERM)) True)` as a premise for
+  `PROOF` (a cut, like `have`): how a consumer *recovers* the invariant
+  a refined value carries.
+
+`std/str` is the worked example: `(type Str (refine Bytes utf8_valid))`,
+an opaque module whose interface exports the validity recovery as a lemma.
 
 ### Records — named-field products
 
@@ -484,10 +524,14 @@ Defined in `kernel/stdlib.shard`:
 (type (Option T) (None) (Some T))
 (type Bool       (False) (True))
 (type (Pair A B) (Pair A B))
+(type Nat        (Z) (S Nat))
 ```
 
 Used throughout the kernel; no privileged status — just user types
-that happen to be ubiquitous.
+that happen to be ubiquitous. The one exception is `Nat`, whose
+**ground** values the kernel packs to `Int` literals and matches by
+view (§3, "Nat"); its symbolic behavior is that of an ordinary
+inductive.
 
 
 ## 10. The proof language
@@ -623,6 +667,9 @@ recovered from the target file or the same-module `mod.req.shard`
 | `(induct VAR (CASE…))`                       | `Induct`    | structural induction on `VAR` (one IH per recursive field)     |
 | `(case-on TERM TYPE (CASE…))`                | `CaseOn`    | split on the constructor of `TERM` (of named `TYPE`); no IH    |
 | `(wf-induct MEASURE PROOF)`                  | `WfInduct`  | well-founded induction on the Int `MEASURE`; prepends IH `ih`  |
+| `(subterm-induct VAR PROOF)`                 | `SubtermInduct` | well-founded induction along the structural **subterm order** of `VAR` (a goal parameter of inductive type); prepends a *strong* IH `ih`, citable at any proper subterm — the tool for two-level/nested recursion (subsumed the old `Induct2`) and mutual AST-size fns. Citing the IH leaves a `⊰` ordering premise, discharged by `(below)` |
+| `(below)`                                    | `Below`     | discharges a proper-subterm (`⊰`) ordering premise from a `subterm-induct` IH citation by syntactic subterm check — used in the premise-proof slot of `rewrite-with` |
+| `(refine-fact TYPE TERM PROOF)`              | `RefineFact` | materialize `(= (PRED (refine_val TERM)) True)` for the refinement `TYPE` as a premise, then continue with `PROOF` (§3, "Refined types") |
 | `(have EQ PROOF₁ PROOF₂)`                    | `Have`      | the CUT rule: prove `EQ` by `PROOF₁`, then continue with `PROOF₂` under `EQ` as a fresh premise |
 | `(have NAME EQ PROOF₁ PROOF₂)`               | `Have`      | named cut: as above, and `PROOF₂` may cite the fact as `(premise NAME)` — rewritten to the positional 3-arg form before parsing (§10.6), so inserting earlier haves can't break later citations |
 | `(fin-split VAR LO HI (CASE…))`              | `FinSplit`  | bounded-Int enumeration: `LO`/`HI` cite range premises for `VAR`; one `(case INT PROOF)` per value |
