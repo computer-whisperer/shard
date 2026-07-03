@@ -82,10 +82,18 @@ static uint8_t *rt_startmap;          /* 1 bit per 16B slot: is a cell head */
 static char *rt_stack_base;           /* high end of the C stack (set in init) */
 static int rt_gc_on = 0;              /* enabled at the end of rt_init */
 static char *rt_gc_trigger;           /* next GC when bump passes this */
-#define RT_GC_SPACING (2ul << 30)     /* bump this much between collections.
-   2 GiB (was 8): the collector reclaims, so peak resident ~= live + this per
-   process — keeping it small lets gate_sweep/run_corpus run JOBS-parallel
-   without OOM (8 GiB x N processes was the killer). */
+/* ADAPTIVE spacing: collect after max(live, MIN) fresh bump bytes, capped at
+   MAX. Spacing proportional to the live set keeps GC cost amortized-constant
+   per allocated byte AND holds the heap extent (and so RSS + sweep length +
+   fresh-page faults) at a small multiple of live. The old FIXED 2 GiB
+   spacing grew the extent by 2 GiB per cycle regardless of a tiny live set —
+   measured ~30% of wall time in fresh-page faults (1.07M faults/6s) and
+   32 GB RSS on a nested-eval run (tools/bench). MAX keeps the old
+   parallel-jobs bound: peak resident ~= live + MAX per process (JOBS-parallel
+   gate_sweep/run_corpus without OOM). */
+#define RT_GC_MIN_SPACING (64ul << 20)
+#define RT_GC_MAX_SPACING (2ul << 30)
+static size_t rt_live_bytes = 0;      /* live bytes found by the last sweep */
 
 static inline size_t rt_slot(char *p) { return (size_t)(p - rt_heap_base) >> 4; }
 static inline void rt_setstart(char *p) {
@@ -170,14 +178,16 @@ static void rt_gc(void) {
   rt_scan_range(sp, rt_stack_base);
   while (rt_mtop) rt_scan(rt_mstk[--rt_mtop]);
   /* sweep: linear walk; live -> clear mark, dead -> size-class free list */
+  size_t live = 0;
   for (char *p = rt_heap_base; p < rt_heap; ) {
     rt_cell *c = (rt_cell *)p;
     size_t sz = rt_cellsz(c->arity);
-    if (c->tag & RT_MARK_) c->tag &= ~RT_MARK_;
+    if (c->tag & RT_MARK_) { c->tag &= ~RT_MARK_; live += sz; }
     else { unsigned cl = (unsigned)(sz >> 4);
            c->fields[0] = (value_t)rt_free[cl]; rt_free[cl] = c; }
     p += sz;
   }
+  rt_live_bytes = live;
 }
 
 static value_t rt_alloc(uint32_t tag, uint32_t arity) {
@@ -189,7 +199,10 @@ static value_t rt_alloc(uint32_t tag, uint32_t arity) {
              c->tag = tag; c->arity = arity; return (value_t)c; }
     if (rt_gc_on && rt_heap + sz > rt_gc_trigger) {
       rt_gc();
-      rt_gc_trigger = rt_heap + RT_GC_SPACING;
+      size_t spacing = rt_live_bytes;
+      if (spacing < RT_GC_MIN_SPACING) spacing = RT_GC_MIN_SPACING;
+      if (spacing > RT_GC_MAX_SPACING) spacing = RT_GC_MAX_SPACING;
+      rt_gc_trigger = rt_heap + spacing;
       if (rt_gc_trigger > rt_heap_end) rt_gc_trigger = rt_heap_end;
       if (rt_free[cl]) continue;       /* sweep produced a cell of this class */
     }
@@ -460,7 +473,7 @@ static void rt_init(int argc, char **argv) {
   rt_startmap = mmap(0, (cap >> 4) >> 3, PROT_READ | PROT_WRITE,
                      MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
   if (rt_startmap == MAP_FAILED) rt_trap("startmap mmap failed");
-  rt_gc_trigger = rt_heap + RT_GC_SPACING;
+  rt_gc_trigger = rt_heap + RT_GC_MIN_SPACING;
   rt_true_  = rt_alloc(RT_TAG_True, 0);
   rt_false_ = rt_alloc(RT_TAG_False, 0);
   rt_nil_   = rt_alloc(RT_TAG_Nil, 0);
