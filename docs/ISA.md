@@ -15,7 +15,9 @@ Ratified 2026-07-02. All four demonstrator slices (§6) are **[BUILT]**
 (model + encoder at `models/wasm/`, pieces at `examples/wasm_pieces.shard`,
 weld script + emitted certificate at `examples/wasm_weld{,_out}.shard`,
 engine differential at `examples/wasm_diff*`); the measured question (§7)
-is answered — see the dated addendum there.
+is answered — see the dated addendum there. A post-demonstrator review
+(§10, 2026-07-02) reframed wasm's role and sequenced the next arcs: the
+Nat former (kernel arc, precondition for fuel at scale) first, then `Mem`.
 
 ---
 
@@ -337,3 +339,53 @@ now) · any change to kernel or loader.
   shard code itself; refined artifacts run under real wasm engines; whether
   the chain's own output ever becomes a modeled-ISA artifact is deliberately
   unforced. [FUTURE]
+
+## 10. Post-demonstrator review (2026-07-02) [DECIDED]
+
+A failure-modes review with the demonstrator complete produced two
+corrections to this doc's framing and a sequencing decision.
+
+**Fuel representation.** Structural `Fuel` (§7's finding) keeps its proof
+economics — kernel cost tracks static body size, never run length, because
+fuel bounds depth/iterations and induction handles one symbolic iteration at
+a time. But *ground* fuel is unary: a real workload's model run at fuel 10⁸
+is 10⁸ cells before the interpreter takes a step. Materializing large
+linked-list naturals is a non-starter, and a dev-side Int-fueled twin was
+rejected (patches one site, leaves an unproven artifact in the loop). The
+fix is a **Nat former**: values are
+machine integers with a nonneg invariant; `FZ`/`FS` are constructor *views*
+(a literal `n ≥ 1` matches `(FS m)` binding `m = n-1` as a literal; symbolic
+`(FS c)` spellings reduce and stick syntactically, unchanged). Every tower,
+shift lemma, and additive-slack theorem from §7 survives verbatim; ground
+fuel becomes a numeral. The `(Word W S)` former is the historical playbook,
+with the caveat that Word was later revoked to std in the trusted-core
+contraction — so the design's first question is the *minimal* kernel delta
+(views are necessarily kernel reduction; everything else may not be).
+Rejected alternatives: refine-only Nat (an opaque
+eliminator kills the free ι-step — every match needs a cited refine-fact)
+and Int fuel with guard-discharge automation (a farkas certificate per
+decrement where an ι-step used to be — worse *checking* cost, not just
+authoring). This is a kernel arc, sequenced deliberately outside this arc's
+fence, and it subsumes the pending Nat refine retrofit (#39).
+
+**Wasm's role, reframed.** Wasm is the *simplest lowering target a proof can
+be traced to* — the training ground for composition-is-citation and the
+certificate shape — not the terminal proof ISA. The ambitious end state is a
+compiler chain whose per-target contract is: *here is a binary, here is the
+ISA model used, here is the proof that the binary-in-model meets the
+bin-level requirements*. An x86 story terminates in an x86 binary with that
+same contract. Crucially the chain **factors**: a certifying wasm→x86
+translation emits per-unit cross-model refinement theorems, and the x86-level
+requirement proof is *composed* from the wasm-level one plus translation
+refinement — the wasm intermediary stays load-bearing as interior lemmas
+inside the x86 certificate, never re-proved from scratch. Certifying
+compilation (per-unit proof emission, standard pipeline checks) is this
+doc's generate-and-check commitment applied to passes; the slice-3 weld
+script is its seed. Dragons, in dependency order: `Mem` (data representation
+in linear memory is the precondition for everything richer, including x86's
+flat memory and calling conventions) → cross-model correspondence vocabulary
+(the adapter thread coming due) → pass-proof generation economics (solver-
+manufactured simulation proofs; same measured-question discipline as §7).
+
+**Sequencing decided:** Nat former first (self-contained, fence-respecting
+kernel work that removes a known wall before it is hit), then the `Mem` arc.
