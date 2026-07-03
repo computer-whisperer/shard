@@ -29,6 +29,7 @@ fi
 JOBS="${JOBS:-$(nproc)}"
 TARGETS=(
   examples/add_nat_zero.shard
+  examples/nat_prim.shard
   examples/axiom_kind_rejects.shard
   examples/auto_demo.shard
   examples/auto_missing_rejects.shard

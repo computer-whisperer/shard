@@ -44,9 +44,34 @@
      (match v
        ((Ctor vc vargs)
         (if (qname_eq pc vc) (match_pats pats vargs acc False) (MNo)))
-       ((IntLit _) (MNo))
+       ((IntLit n) (match_nat_view pc pats n acc))
        ((SymLit _) (MNo))
        (_ (MStuck))))))  ; Call/Match/If/Let/FVar/BVar — undecided
+
+;; match_nat_view: the Nat former's constructor VIEW (kernel/stdlib.shard
+;; `Nat` — core identity). A nonneg IntLit IS a ground Nat value, so it
+;; matches Z/S structurally: 0 is Z, n>=1 is (S (n-1)) with the sub-pattern
+;; matched against the literal n-1 (deep patterns like (S (S k)) recurse).
+;; A literal meeting any OTHER ctor pattern stays a definite clash (MNo),
+;; exactly as before. A NEGATIVE literal at a Z/S pattern is ill-typed
+;; garbage: undecided (MStuck), never a clash — no later arm may fire.
+(fn match_nat_view ((pc QName) (pats (List Pat)) (n Int) (acc (List Expr)))
+  MatchResult
+  (measure (struct pats))
+  (if (core_named pc (quote Z))
+    (if (int_eq n 0)
+      (match pats
+        (Nil (MOk acc))
+        (_ (MNo)))  ; arity garbage — the typer rejects it upstream
+      (if (lt n 0) (MStuck) (MNo)))
+  (if (core_named pc (quote S))
+    (match pats
+      ((Cons p1 Nil)
+       (if (le 1 n)
+         (match_pat p1 (IntLit (- n 1)) acc)
+         (if (int_eq n 0) (MNo) (MStuck))))
+      (_ (MNo)))
+    (MNo))))
 
 ;; match_pats: match positionally, left to right. The combined verdict is
 ;; MNo if ANY position definitely clashes (short-circuit), else MStuck if
@@ -84,6 +109,28 @@
        ((MOk bindings) (ArmFired (open_many bindings body)))
        ((MStuck) (ArmStuck))
        ((MNo) (try_match_arms rest v))))))
+
+;; nat_pack: the Nat former's COMPUTING CONSTRUCTORS (kernel/stdlib.shard
+;; `Nat` — core identity). Ground Z and (S <nonneg literal>) are never
+;; normal forms: they pack to the nonneg IntLit, the unique ground Nat
+;; value — so ground naturals are machine ints, never unary trees. A
+;; symbolic (S x) never packs (the proof-facing tower spelling, ordinary
+;; stuck ctor), and a negative-literal arg never packs (ill-typed garbage
+;; stays stuck). Every COMPUTING reducer tries this at its Ctor head
+;; (step/smart/head/ceval); the ι-only reducer deliberately does NOT —
+;; packing is δ-like computation, and Reduce must preserve the proof-facing
+;; ctor spelling (else a goal's Z packs to 0 while the IH keeps Z, and the
+;; syntactic rewrite dies — see examples/nat_prim.shard nat_iota_no_pack).
+(fn nat_pack ((c QName) (args (List Expr))) (Option Expr)
+  (if (core_named c (quote Z))
+    (match args
+      (Nil (Some (IntLit 0)))
+      (_ None))
+  (if (core_named c (quote S))
+    (match args
+      ((Cons (IntLit n) Nil) (if (le 0 n) (Some (IntLit (+ n 1))) None))
+      (_ None))
+    None)))
 
 ;; ---------------------------------------------------------------------------
 ;; Function dispatch is now via the module's FnTrie (module.shard `trie_lookup`,
@@ -132,9 +179,12 @@
            ((Some c2) (Some (If c2 t el)))
            (None None)))))
     ((Ctor c args)
-     (match (step_list m args)
-       ((Some args2) (Some (Ctor c args2)))
-       (None None)))
+     (match (nat_pack c args)
+       ((Some e2) (Some e2))  ; ground Z/S packs to its literal
+       (None
+         (match (step_list m args)
+           ((Some args2) (Some (Ctor c args2)))
+           (None None)))))
     ((FVar _) None)
     ((BVar _) None)
     ((IntLit _) None)
@@ -1079,6 +1129,11 @@
          (match (step_iota m c)
            ((Some c2) (Some (If c2 t el)))
            (None None)))))
+    ;; NOTE: no nat_pack here — packing is COMPUTATION (δ-like), not ι, so
+    ;; the ι-only reducer leaves ground Z/S spellings intact exactly like
+    ;; unfired primitives. This is what keeps classic induction proofs
+    ;; working: Reduce on (nadd (S k) Z) yields (S (nadd k Z)) with the
+    ;; claim's Z spelling preserved, so the IH still matches syntactically.
     ((Ctor c args)
      (match (step_iota_list m args)
        ((Some args2) (Some (Ctor c args2)))
@@ -1193,6 +1248,7 @@
        ((Ctor (QName _ (quote False)) Nil) (Some el))
        (_ None)))
     ((Call f args) (try_step_prim (qn_name f) args))
+    ((Ctor c args) (nat_pack c args))  ; ground Z/S IS a head redex
     (_ None)))
 
 ;; head_match: the gate's one-step lookahead. The match fires AT THE HEAD
@@ -1254,9 +1310,12 @@
            ((Some c2) (Some (If c2 t el)))
            (None None)))))
     ((Ctor c args)
-     (match (step_smart_list m args)
-       ((Some args2) (Some (Ctor c args2)))
-       (None None)))
+     (match (nat_pack c args)
+       ((Some e2) (Some e2))  ; ground Z/S packs to its literal
+       (None
+         (match (step_smart_list m args)
+           ((Some args2) (Some (Ctor c args2)))
+           (None None)))))
     ((FVar _) None)
     ((BVar _) None)
     ((IntLit _) None)
@@ -1547,7 +1606,12 @@
     ((SymLit _) e)
     ((FVar _) e)
     ((BVar k) (cenv_get env k))
-    ((Ctor c args) (Ctor c (ceval_list m env args (- fuel 1))))
+    ((Ctor c args)
+     (match (ceval_list m env args (- fuel 1))
+       (vs
+         (match (nat_pack c vs)
+           ((Some v) v)  ; ground Z/S packs to its literal
+           (None (Ctor c vs))))))
     ((Let bs body)
      (ceval m (cappend (ceval_list m env bs (- fuel 1)) env) body (- fuel 1)))  ; bs ⊢ body
     ((If c t el)

@@ -1,0 +1,80 @@
+;;; nat_prim.shard — conformance probes for the kernel Nat former.
+;;;
+;;; `Nat` (kernel/stdlib.shard) is the literal-backed Peano type: the reducer
+;;; packs ground constructions to nonneg Int literals ((S (S Z)) computes to
+;;; 2, the unique ground normal form) and matches Z/S patterns against
+;;; literals by VIEW (0 is Z, n>=1 is (S (n-1))). These claims are the
+;;; primitive's pedigree: they hold iff view-matching agrees with ctor
+;;; matching and packing agrees with the constructor image. Symbolic (S x)
+;;; terms stay ordinary stuck ctors — the induction claim pins that ι and
+;;; the induct machinery see the stdlib Nat as a plain inductive.
+;;;
+;;; Deliberately NOT here: bare Int literals in Nat positions ((fn f () Nat 3)
+;;; is a type error — the literal typing rule is a separate slice) and any
+;;; import of std/nat (whose own Z/S shadow core in its consumers;
+;;; examples/add_nat_zero.shard pins that a LOCAL (type Nat …) coexists).
+
+(import "../kernel/stdlib.shard")
+
+;; probe subjects, defined HERE over the CORE Nat (no local type, no std/nat).
+(fn nadd ((a Nat) (b Nat)) Nat
+  (measure (struct a))
+  (match a
+    (Z b)
+    ((S k) (S (nadd k b)))))
+
+(fn npred ((n Nat)) Nat
+  (match n
+    (Z Z)
+    ((S k) k)))
+
+;; deep patterns — the view must recurse ((S (S k)) against a literal).
+(fn nhalf ((n Nat)) Nat
+  (measure (struct n))
+  (match n
+    (Z Z)
+    ((S Z) Z)
+    ((S (S k)) (S (nhalf k)))))
+
+;; packing: ground constructions on BOTH sides compute to the same literal.
+(claim nat_ground_add
+  (goal () () (= (nadd (S (S Z)) (S Z)) (S (S (S Z)))))
+  (steps ((compute both)) refl))
+
+;; the view under CBV: compute packs the argument first, so npred/nhalf
+;; match Z/S patterns against a LITERAL scrutinee.
+(claim nat_view_pred
+  (goal () () (= (npred (npred (S (S (S Z))))) (S Z)))
+  (steps ((compute both)) refl))
+
+(claim nat_view_half
+  (goal () () (= (nhalf (S (S (S (S (S Z)))))) (S (S Z))))
+  (steps ((compute both)) refl))
+
+;; deep-view base cases: 1 hits the (S Z) arm, 0 hits Z.
+(claim nat_view_half_one
+  (goal () () (= (nhalf (S Z)) Z))
+  (steps ((compute both)) refl))
+
+(claim nat_view_half_zero
+  (goal () () (= (nhalf Z) Z))
+  (steps ((compute both)) refl))
+
+;; ι does NOT pack: Reduce leaves the ground ctor spelling alone (packing is
+;; computation — compute/simp territory). Only the lhs is reduced here; if ι
+;; packed, the lhs would become 1 while the rhs stays (S Z), and refl would
+;; fail. This pin is what keeps claim-spelled Z/S matching IHs in inductions.
+(claim nat_iota_no_pack
+  (goal () () (= (npred (S (S Z))) (S Z)))
+  (steps ((unfold npred lhs) (reduce lhs)) refl))
+
+;; induction on the core Nat: the induct machinery reads the stdlib typedef;
+;; the S case walks the ordinary symbolic-ctor path (no packing on (S x)).
+(claim nadd_n_zero
+  (goal ((n Nat)) () (= (nadd n Z) n))
+  (induct n
+    ((case Z (steps ((compute both)) refl))
+     (case S
+       (steps
+         ((unfold nadd lhs) (reduce lhs) (rewrite (hyp 0) lr lhs true ()))
+         refl)))))
