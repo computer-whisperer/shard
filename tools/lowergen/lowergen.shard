@@ -1,0 +1,450 @@
+;;; lowergen — the P2 emitter probe (docs/LOWERING.md §6): a CERTIFYING
+;;; emitter for the scalar straight-line fragment. For every fn in the
+;;; target file whose body is arithmetic over Int params and u32 literals
+;;; (+ - * only), emit:
+;;;   - the wasm function literal (postorder stack code), and
+;;;   - the standard lowered-conformance claim (docs/LOWERING.md §2) with
+;;;     its full proof: compute lhs + unfold SPEC + one wrap32_id cite per
+;;;     param-containing arith node (innermost-first = postorder), premises
+;;;     discharged by position.
+;;; The emitted statement generator IS the schema consensus mechanism; the
+;;; output is deterministic (weld discipline: regenerable byte-identical
+;;; after shardfmt).
+;;;
+;;; THE CONTRACT (lower.shard's): front end is the KERNEL'S by library
+;;; import; refuse, don't guess — any body outside the fragment is a loud
+;;; per-fn error and exit 1. Fragment rules: all params Int, return Int;
+;;; body nodes are params, literals in [0, 2^32), and binary + - *; every
+;;; arith node must contain a param (constant-fold ground subtrees in the
+;;; source — their premises could not be discharged by position).
+;;;
+;;; RUN IT:  bin/shard_eval run tools/lowergen/lowergen.shard SRC OUT.raw
+;;;          then shardfmt OUT.raw -> the committed cert file.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/loader.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/reader.shard")
+
+(use (:: kernel loader resolve_closure))
+(use (:: kernel loader World))
+(use (:: kernel loader get_args))
+(use (:: kernel loader write))
+(use (:: kernel loader write_file))
+(use (:: kernel loader exit))
+(use (:: kernel term Expr))
+(use (:: kernel term FVar))
+(use (:: kernel term BVar))
+(use (:: kernel term Ctor))
+(use (:: kernel term Call))
+(use (:: kernel term Match))
+(use (:: kernel term Let))
+(use (:: kernel term If))
+(use (:: kernel term IntLit))
+(use (:: kernel term SymLit))
+(use (:: kernel term QName))
+(use (:: kernel term qn_name))
+(use (:: kernel term core_named))
+(use (:: kernel term append_int))
+(use (:: kernel term show_int))
+(use (:: kernel module Module))
+(use (:: kernel module FnDef))
+(use (:: kernel module Type))
+(use (:: kernel module TCon))
+(use (:: kernel module TVar))
+(use (:: kernel module FnTrie))
+(use (:: kernel reader build_module_d))
+(use (:: kernel reader BMOk))
+(use (:: kernel reader BMFail))
+
+;; ---- output document (lower.shard's) ----------------------------------------
+(type Doc (DStr (List Int)) (DCat Doc Doc))
+
+(fn dcat3 ((a Doc) (b Doc) (c Doc)) Doc (DCat a (DCat b c)))
+
+(fn doc_flat ((d Doc) (tail (List Int))) (List Int)
+  (measure (struct d))
+  (match d
+    ((DStr s) (append_int s tail))
+    ((DCat a b) (doc_flat a (doc_flat b tail)))))
+
+(fn nl () (List Int) (Cons 10 Nil))
+
+(fn dq () (List Int) (Cons 34 Nil))
+
+(fn sp () Doc (DStr " "))
+
+(fn dsym ((s Symbol)) Doc (DStr (chars_of_sym s)))
+
+(fn dint ((k Int)) Doc (DStr (show_int k)))
+
+(fn dapp ((a (List Doc)) (b (List Doc))) (List Doc)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (dapp t b)))))
+
+(fn djoin ((ds (List Doc))) Doc
+  (measure (struct ds))
+  (match ds
+    (Nil (DStr ""))
+    ((Cons d Nil) d)
+    ((Cons d rest) (DCat d (DCat (sp) (djoin rest))))))
+
+;; ---- path utilities ----------------------------------------------------------
+
+(fn rev_chars ((a (List Int)) (acc (List Int))) (List Int)
+  (measure (struct a))
+  (match a
+    (Nil acc)
+    ((Cons h t) (rev_chars t (Cons h acc)))))
+
+;; chars up to the first '.' (strip the extension)
+(fn until_dot ((cs (List Int))) (List Int)
+  (measure (struct cs))
+  (match cs
+    (Nil Nil)
+    ((Cons h t) (if (int_eq h 46) Nil (Cons h (until_dot t))))))
+
+;; split an extension-stripped path on '/' into module-path symbols
+(fn split_slash ((cs (List Int)) (cur (List Int))) (List Symbol)
+  (measure (struct cs))
+  (match cs
+    (Nil (Cons (sym_of_chars (rev_chars cur Nil)) Nil))
+    ((Cons h t)
+     (if (int_eq h 47)
+       (Cons (sym_of_chars (rev_chars cur Nil)) (split_slash t Nil))
+       (split_slash t (Cons h cur))))))
+
+;; final path segment (with extension) — the same-directory import spelling
+(fn basename_go ((cs (List Int)) (cur (List Int))) (List Int)
+  (measure (struct cs))
+  (match cs
+    (Nil (rev_chars cur Nil))
+    ((Cons h t) (if (int_eq h 47) (basename_go t Nil) (basename_go t (Cons h cur))))))
+
+(fn sym_list_eq ((a (List Symbol)) (b (List Symbol))) Bool
+  (measure (struct a))
+  (match a
+    (Nil (match b (Nil True) ((Cons _ _) False)))
+    ((Cons x xs)
+     (match b
+       (Nil False)
+       ((Cons y ys) (if (sym_eq x y) (sym_list_eq xs ys) False))))))
+
+;; ---- the fragment ------------------------------------------------------------
+
+;; walk result: instr docs (emission order), instr count, contains-a-param,
+;; premise-owning arith nodes (spec spellings, postorder).
+(type G (GOk (List Doc) Int Bool (List Doc)) (GErr (List Int)))
+
+(fn orb ((a Bool) (b Bool)) Bool (if a True b))
+
+(fn bop_of ((q QName)) (Option Doc)
+  (if (core_named q (quote +))
+    (Some (DStr "BAdd"))
+    (if (core_named q (quote -))
+      (Some (DStr "BSub"))
+      (if (core_named q (quote *)) (Some (DStr "BMul")) None))))
+
+;; source-order param name for (BVar i) at arity n: binders are
+;; innermost-first (last param textually = BVar 0), so name index n-1-i.
+(fn xn ((n Int) (i Int)) Doc (DCat (DStr "x") (dint (- (- n 1) i))))
+
+;; the SPEC spelling of a fragment expr (the source-term rendering used in
+;; premises and (inst …) pins — it must match the compute residue exactly)
+(fn pr_e ((n Int) (e Expr)) Doc
+  (measure (struct e))
+  (match e
+    ((BVar i) (xn n i))
+    ((IntLit k) (dint k))
+    ((Call q as)
+     (match as
+       ((Cons a (Cons b Nil))
+        (dcat3
+          (dcat3 (DStr "(") (dsym (qn_name q)) (sp))
+          (DCat (pr_e n a) (sp))
+          (DCat (pr_e n b) (DStr ")"))))
+       (_ (DStr "?"))))
+    (_ (DStr "?"))))
+
+(fn gen_e ((n Int) (e Expr)) G
+  (measure (struct e))
+  (match e
+    ((BVar i)
+     (GOk
+       (Cons (dcat3 (DStr "(LocalGet ") (dint (- (- n 1) i)) (DStr ")")) Nil)
+       1
+       True
+       Nil))
+    ((IntLit k)
+     (if (le 0 k)
+       (if (lt k 4294967296)
+         (GOk (Cons (dcat3 (DStr "(I32Const ") (dint k) (DStr ")")) Nil) 1 False Nil)
+         (GErr "literal outside [0, 2^32)"))
+       (GErr "literal outside [0, 2^32)")))
+    ((Call q as)
+     (match (bop_of q)
+       (None (GErr "call outside the fragment (only + - * allowed)"))
+       ((Some opd)
+        (match as
+          ((Cons a (Cons b Nil))
+           (match (gen_e n a)
+             ((GErr m) (GErr m))
+             ((GOk ia ca pa na)
+              (match (gen_e n b)
+                ((GErr m) (GErr m))
+                ((GOk ib cb pb nb)
+                 (if (orb pa pb)
+                   (GOk
+                     (dapp
+                       ia
+                       (dapp
+                         ib
+                         (Cons (dcat3 (DStr "(I32Bin ") opd (DStr ")")) Nil)))
+                     (+ ca (+ cb 1))
+                     True
+                     (dapp na (dapp nb (Cons (pr_e n e) Nil))))
+                   (GErr
+                     "ground arithmetic subtree (constant-fold it in the source)")))))))
+          (_ (GErr "arith call must be binary"))))))
+    (_ (GErr "body outside the scalar straight-line fragment"))))
+
+;; ---- claim emission ----------------------------------------------------------
+
+(fn is_int_ty ((t Type)) Bool
+  (match t
+    ((TCon q _) (sym_eq (qn_name q) (quote Int)))
+    ((TVar _) False)))
+
+(fn all_int ((ts (List Type))) Bool
+  (measure (struct ts))
+  (match ts
+    (Nil True)
+    ((Cons t rest) (if (is_int_ty t) (all_int rest) False))))
+
+(fn count_ts ((ts (List Type))) Int
+  (measure (struct ts))
+  (match ts
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (count_ts rest)))))
+
+;; goal binders: (x0 Int) (x1 Int) …
+(fn pr_binds ((ts (List Type)) (i Int)) Doc
+  (measure (struct ts))
+  (match ts
+    (Nil (DStr ""))
+    ((Cons _ rest)
+     (dcat3 (DStr "(x") (dint i) (DCat (DStr " Int) ") (pr_binds rest (+ i 1)))))))
+
+;; call args: x0 x1 …
+(fn pr_args ((ts (List Type)) (i Int)) Doc
+  (measure (struct ts))
+  (match ts
+    (Nil (DStr ""))
+    ((Cons _ rest)
+     (match rest
+       (Nil (DCat (DStr "x") (dint i)))
+       ((Cons _ _)
+        (dcat3 (DStr "x") (dint i) (DCat (sp) (pr_args rest (+ i 1)))))))))
+
+;; the PRE premises: two per arith node, postorder
+(fn pr_prems ((ns (List Doc))) Doc
+  (measure (struct ns))
+  (match ns
+    (Nil (DStr ""))
+    ((Cons e rest)
+     (dcat3
+       (dcat3 (DStr "(= (le 0 ") e (DStr ") True) "))
+       (dcat3 (DStr "(= (lt ") e (DStr " 4294967296) True) "))
+       (pr_prems rest)))))
+
+;; the wrap32_id chain: node j uses premises 2j / 2j+1, innermost-first
+(fn pr_chain ((ns (List Doc)) (j Int)) Doc
+  (measure (struct ns))
+  (match ns
+    (Nil (DStr "refl"))
+    ((Cons e rest)
+     (dcat3
+       (dcat3
+         (DStr "(rewrite-with (lemma wrap32_id) lr lhs ((inst x ")
+         e
+         (DStr ")) "))
+       (dcat3
+         (dcat3
+           (DStr "((steps ((rewrite (premise ")
+           (dint (* 2 j))
+           (DStr ") lr lhs true ())) refl) "))
+         (dcat3
+           (DStr "(steps ((rewrite (premise ")
+           (dint (+ (* 2 j) 1))
+           (DStr ") lr lhs true ())) refl)) "))
+         (pr_chain rest (+ j 1)))
+       (DStr ")")))))
+
+(type CRes (COk Doc) (CErr (List Int)))
+
+(fn emit_claim ((f FnDef)) CRes
+  (match f
+    ((FnDef q ts rty body)
+     (if (all_int ts)
+       (if (is_int_ty rty)
+         (match (gen_e (count_ts ts) body)
+           ((GErr m)
+            (CErr (append_int (chars_of_sym (qn_name q)) (append_int ": " m))))
+           ((GOk instrs count _ nodes)
+            (COk
+              (dcat3
+                (dcat3
+                  (dcat3
+                    (DStr "(claim lowered_")
+                    (dsym (qn_name q))
+                    (dcat3
+                      (DStr " (goal (")
+                      (pr_binds ts 0)
+                      (DStr "(c Nat) (restfs (List Func))) (")))
+                  (pr_prems nodes)
+                  (dcat3
+                    (dcat3
+                      (DStr ") (= (call_fn (S^ ")
+                      (dint (+ (* 2 count) 3))
+                      (DStr " c) (MkWModule (Cons (MkFunc "))
+                    (dint (count_ts ts))
+                    (dcat3
+                      (DStr " 0 (list ")
+                      (djoin instrs)
+                      (DStr ")) restfs) 0) 0 (list "))))
+                (dcat3
+                  (pr_args ts 0)
+                  (dcat3 (DStr ")) (Some (") (dsym (qn_name q)) (DStr ""))
+                  (dcat3
+                    (pr_args_lead ts)
+                    (DStr "))))")
+                    (dcat3
+                      (dcat3
+                        (DStr " (steps ((compute lhs) (unfold ")
+                        (dsym (qn_name q))
+                        (DStr " rhs)) "))
+                      (pr_chain nodes 0)
+                      (DStr "))"))))
+                (DStr (nl))))))
+         (CErr
+           (append_int (chars_of_sym (qn_name q)) ": return type is not Int")))
+       (CErr
+         (append_int (chars_of_sym (qn_name q)) ": params are not all Int"))))))
+
+;; SPEC application tail: " x0 x1" (leading space per arg; empty for nullary)
+(fn pr_args_lead ((ts (List Type))) Doc
+  (match ts
+    (Nil (DStr ""))
+    ((Cons _ _) (DCat (sp) (pr_args ts 0)))))
+
+;; ---- module walk -------------------------------------------------------------
+
+(type ERes (EOk Doc) (EErr (List Int)))
+
+(fn emit_fns ((fns (List FnDef)) (modpath (List Symbol)) (acc Doc)) ERes
+  (measure (struct fns))
+  (match fns
+    (Nil (EOk acc))
+    ((Cons f rest)
+     (match f
+       ((FnDef q _ _ _)
+        (match q
+          ((QName mp _)
+           (if (sym_list_eq mp modpath)
+             (match (emit_claim f)
+               ((CErr m) (EErr m))
+               ((COk d) (emit_fns rest modpath (DCat acc (DCat (DStr (nl)) d)))))
+             (emit_fns rest modpath acc)))))))))
+
+(fn pr_modpath ((ms (List Symbol))) Doc
+  (measure (struct ms))
+  (match ms
+    (Nil (DStr ""))
+    ((Cons m Nil) (dsym m))
+    ((Cons m rest) (dcat3 (dsym m) (sp) (pr_modpath rest)))))
+
+(fn header ((target (List Int))) Doc
+  (dcat3
+    (dcat3
+      (DStr
+        ";;; GENERATED by tools/lowergen (the P2 certifying-emitter probe) --")
+      (DStr (nl))
+      (dcat3
+        (DStr ";;; DO NOT EDIT; regenerate from ")
+        (DStr target)
+        (DStr (append_int "." (nl)))))
+    (dcat3
+      (DStr
+        (append_int
+          "(import "
+          (append_int (dq) (append_int "../kernel/stdlib.shard" (dq)))))
+      (DStr (append_int ")" (nl)))
+      (dcat3
+        (DStr
+          (append_int
+            "(import "
+            (append_int (dq) (append_int "../models/wasm/wasm.shard" (dq)))))
+        (DStr (append_int ")" (nl)))
+        (dcat3
+          (DStr (append_int "(import " (dq)))
+          (DStr (basename_go target Nil))
+          (DStr (append_int (dq) (append_int ")" (nl)))))))
+    (dcat3
+      (DStr (append_int "(use (:: models wasm wasm *))" (nl)))
+      (dcat3
+        (DStr "(use (:: ")
+        (pr_modpath (split_slash (until_dot target) Nil))
+        (DStr (append_int " *))" (nl))))
+      (DStr ""))))
+
+;; ---- driver ------------------------------------------------------------------
+
+(fn prelude_ctors_l () (List Symbol)
+  (list
+    (quote Cons)
+    (quote Nil)
+    (quote Some)
+    (quote None)
+    (quote True)
+    (quote False)
+    (quote Pair)))
+
+(fn fail2 ((msg (List Int)) (w World)) World
+  (exit 2 (write (append_int "error: " (append_int msg (nl))) w)))
+
+(fn gen_run ((target (List Int)) (out (List Int)) (w World)) World
+  (match (resolve_closure target True w)
+    ((Pair Nil w1) (fail2 (append_int "cannot read closure of " target) w1))
+    ((Pair srcs w1)
+     (match
+       (build_module_d
+         srcs
+         (Module Nil Nil Nil (FnTrie None Nil) Nil)
+         (prelude_ctors_l)
+         1)
+       ((BMFail diag) (fail2 diag w1))
+       ((BMOk m)
+        (match m
+          ((Module _ fns _ _ _)
+           (match (emit_fns fns (split_slash (until_dot target) Nil) (DStr ""))
+             ((EErr msg)
+              (exit 1 (write (append_int "refused: " (append_int msg (nl))) w1)))
+             ((EOk body)
+              (match
+                (write_file out (doc_flat (DCat (header target) body) Nil) w1)
+                ((Pair ok w2)
+                 (if ok
+                   (exit
+                     0
+                     (write (append_int "wrote " (append_int out (nl))) w2))
+                   (fail2 (append_int "cannot write " out) w2)))))))))))))
+
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Pair args w1)
+     (match args
+       ((Cons target (Cons out Nil)) (gen_run target out w1))
+       (_ (fail2 "usage: lowergen SRC OUT" w1))))))

@@ -145,6 +145,24 @@ head via D and shift via `cp_shift` — the `dump_set_above` template).
 All three ride `copy8_thm` directly, which was already fully general in
 memory — the frame narrowing only ever lived in the capstone.
 
+**P2 — the emitter probe (`tools/lowergen`, 2026-07-03).** The first
+certifying emitter: a ~400-line shard app on the kernel front end
+(lower.shard's anti-split-brain contract) that, for every fn in the scalar
+straight-line fragment (Int params/return, + - * over params and u32
+literals), emits the wasm function literal AND the §2 claim with its full
+proof — one wrap32_id cite per param-containing arith node,
+innermost-first (= postorder), premises discharged positionally (node j →
+premises 2j/2j+1). `examples/lowergen_src.shard` (5 fns) →
+`examples/lowergen_out.shard`: **all five machine-written proofs passed on
+the first generation attempt** (including the 3-node chain and the
+empty-chain identity), the fuel formula `2·instrs + 3` was exact at both
+tested sizes, and regeneration is byte-identical after shardfmt (the weld
+discipline transfers to cert files). Fragment refusals are loud
+(ground-arith subtrees, out-of-range literals — refuse-don't-guess). The
+claim-assembly section of lowergen IS the first statement generator; the
+consensus/validation mechanism of open question 1 now has a concrete
+object to check against.
+
 **Findings.** (1) Both ends fit one schema; the only variance is slot
 contents. (2) `(inline …)` is file-local, so cross-file statement reuse
 needs a local nullary twin — fine for generated self-contained cert files,
