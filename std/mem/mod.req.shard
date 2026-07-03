@@ -1,0 +1,60 @@
+;;; std/mem/mod.req.shard — the PUBLIC INTERFACE of the `mem` module (its ".h").
+;;;
+;;; The generic byte-addressed memory substrate (the Mem arc, docs/ISA.md §10):
+;;; ONE flat memory type intended to back every byte-addressed little-endian
+;;; ISA model (wasm32, x86-64, …). The substrate is deliberately the pure
+;;; mathematical object — an UNBOUNDED, default-zero map from Int addresses
+;;; to byte values. Everything ISAs disagree on (bounds/trap semantics, page
+;;; growth, alignment) is layered in each ISA model, NOT here.
+;;;
+;;; Totality is wasm-style: a read of an unwritten cell returns 0; every read
+;;; is a byte (0 <= mem_get < 256 UNCONDITIONALLY — reads re-canonicalize);
+;;; a store TRUNCATES (reading back a store of v gives v mod 256). No Option,
+;;; no bounds, no traps.
+;;;
+;;; DISCIPLINE (why there is no mem_eq): theorems compare OBSERVATIONS
+;;; (mem_get probes), never Mem values — two observationally equal memories
+;;; need not be structurally equal, so value equality stays off the surface.
+;;; Same rule as std/map. The sanctioned spelling for "the memory holds these
+;;; cells" is reading them back out (see examples/mem_reverse.shard).
+
+(import "../../kernel/stdlib.shard")  ; Int / Bool / True
+
+;; an opaque flat byte memory.
+(sig type Mem)
+
+(sig fn mem_empty () Mem)  ; all cells read 0
+(sig fn mem_get ((m Mem) (a Int)) Int)  ; the byte at address a
+(sig fn mem_set ((m Mem) (a Int) (v Int)) Mem)  ; store v (truncated) at a
+
+;; --- the framing algebra (consumers reason against THIS) -------------------
+
+;; the empty memory reads 0 everywhere.
+(requirement get_empty (goal ((a Int)) () (= (mem_get (mem_empty) a) 0)))
+
+;; every read is a byte: non-negative…
+(requirement get_lo (goal ((m Mem) (a Int)) () (= (le 0 (mem_get m a)) True)))
+
+;; …and below 256. (Unconditional — no premise about how m was built.)
+(requirement get_hi (goal ((m Mem) (a Int)) () (= (lt (mem_get m a) 256) True)))
+
+;; read back the cell you just wrote: stores truncate mod 256.
+(requirement get_set
+  (goal ((m Mem) (a Int) (v Int)) ()
+    (= (mem_get (mem_set m a v) a) (mod v 256))))
+
+;; the in-range corollary: a byte value reads back exactly.
+(requirement get_set_byte
+  (goal ((m Mem) (a Int) (v Int)) ((= (le 0 v) True) (= (lt v 256) True))
+    (= (mem_get (mem_set m a v) a) v)))
+
+;; writing a READ back reads back exactly (reads are bytes by get_lo/get_hi) —
+;; the form in-place algorithms lean on (a swap is two of these).
+(requirement get_set_get
+  (goal ((m Mem) (a Int) (m2 Mem) (b Int)) ()
+    (= (mem_get (mem_set m a (mem_get m2 b)) a) (mem_get m2 b))))
+
+;; a store at a different address is invisible to a read: THE framing law.
+(requirement get_set_other
+  (goal ((m Mem) (a Int) (b Int) (v Int)) ((= (int_eq b a) False))
+    (= (mem_get (mem_set m a v) b) (mem_get m b))))

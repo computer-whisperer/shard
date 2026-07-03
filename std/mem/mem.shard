@@ -1,0 +1,105 @@
+;;; std/mem/mem.shard — the `mem` module IMPLEMENTATION (private).
+;;;
+;;; Mem as an opaque construction over std/map's (Map Int): a store is an
+;;; insert, a read is a lookup defaulted to 0 and re-canonicalized mod 256 —
+;;; so the byte-range facts hold UNCONDITIONALLY with no invariant over the
+;;; rep (the same trick as std/bytes' bidx). The framing laws are THEOREMS
+;;; over std/map's extensional lemmas + std/div's mod facts — no mem-specific
+;;; axiom. Consumers never load this file; they get only mod.req.shard.
+;;;
+;;; This is the substrate's FIRST (functional) implementation; the arc's end
+;;; state adds ISA-backed impl variants conformant to the same mod.req
+;;; (docs/ISA.md §10) — swap-in is proof-neutral because consumers cite only
+;;; the surface.
+
+(import "../../kernel/stdlib.shard")
+(import "../map")  ; the carrier — opaque (Map Int)
+(import "../div")  ; mod_lo / mod_hi — the masking range facts
+(import "mod.req.shard")  ; our interface — opaque type + sig fns + obligations
+(use (:: std map *))
+(use (:: std div *))
+(use (:: std mem *))  ; impl-proof: rebind the opaque type + sig fns to our defs
+
+;; --- representation + private helpers ---------------------------------------
+
+(type Mem (MkMem (Map Int)))
+
+;; the rep extractor.
+(fn mrep ((m Mem)) (Map Int)
+  (match m
+    ((MkMem r) r)))
+
+;; the raw cell read: lookup defaulted to 0. Total; the raw map may hold an
+;; untruncated store (mem_set inserts raw) — mem_get masks on the way out.
+(fn raw_get ((m Mem) (a Int)) Int
+  (match (lookup a (mrep m))
+    (None 0)
+    ((Some v) v)))
+
+;; --- bodies behind the opaque sig fns ---------------------------------------
+
+(fn mem_empty () Mem (MkMem (empty)))
+
+;; re-canonicalize the read mod 256 so 0 <= mem_get < 256 holds unconditionally.
+(fn mem_get ((m Mem) (a Int)) Int (mod (raw_get m a) 256))
+
+;; a store IS an insert (raw; truncation happens on read).
+(fn mem_set ((m Mem) (a Int) (v Int)) Mem (MkMem (insert a v (mrep m))))
+
+;; --- internal lemmas ---------------------------------------------------------
+
+;; in-range mod is the identity: 0<=h<256 |- mod h 256 = h. div-facts names the
+;; quotient q; rational farkas only pins q to (-1,1), so fin-split supplies the
+;; integrality (q in {-1,0,1}; +-1 are contradictory, q=0 gives h = mod h 256).
+;; (Same proof as std/bytes' mod_byte_id — the divisor and certs are identical.)
+(claim mod_byte_id
+  (goal ((h Int)) ((= (le 0 h) True) (= (lt h 256) True)) (= (mod h 256) h))
+  (div-facts
+    h
+    256
+    q
+    (have qlo (= (le -1 q) True)
+      (by arith (list 256 1 0 -1 0 1 0))
+      (have qhi (= (le q 1) True)
+        (by arith (list 256 0 1 1 1 0 0))
+        (fin-split
+          q
+          (premise qlo)
+          (premise qhi)
+          ((case -1
+             (by
+               arith
+               (list (list 0 1 0 -1 0 1 0 0 0) (list 0 1 0 -1 0 1 0 0 0))))
+           (case 0
+             (by
+               arith
+               (list (list 1 0 0 1 0 0 0 0 0) (list 1 0 0 -1 0 0 0 0 0))))
+           (case 1
+             (by arith (list (list 0 0 1 1 1 0 0 0 0) (list 0 0 1 1 1 0 0 0 0))))))))))
+
+;; --- discharge the interface's requirements ---------------------------------
+
+;; get_empty by hand: peel the bodies, kill the lookup via lookup_empty, and
+;; the residue (mod 0 256) computes to 0. (The one the solver's ladder misses.)
+(fulfills get_empty
+  (steps
+    ((unfold mem_get lhs)
+     (unfold mem_empty lhs)
+     (unfold raw_get lhs)
+     (unfold mrep lhs)
+     (simp lhs)
+     (rewrite (lemma lookup_empty) lr lhs true ())
+     (simp lhs))
+    refl))
+
+(fulfills get_lo auto)
+
+(fulfills get_hi auto)
+
+(fulfills get_set auto)
+
+(fulfills get_set_byte auto)
+
+(fulfills get_set_get auto)
+
+(fulfills get_set_other auto)

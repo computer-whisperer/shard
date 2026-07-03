@@ -1,65 +1,36 @@
-;;; std/mem — M3 linear memory = (Map Int): read/write/swap/rev_loop/
-;;; load/dump/rdump, plus the full framing -> mirror -> bridge theory
+;;; examples/mem_reverse — the M3 capstone over the OPAQUE std/mem substrate:
+;;; swap/rev_loop/load/dump/rdump, the framing -> mirror -> bridge theory,
 ;;; culminating in mem_reverses (in-place reverse = rev, universal n).
-;;; The M3 capstone, as a reusable topic.
+;;;
+;;; This file is the Mem arc's interface-adequacy demonstrator: every proof
+;;; reasons through std/mem's surface algebra (get_empty/get_lo/get_hi/
+;;; get_set/get_set_byte/get_set_get/get_set_other) — never the (Map Int)
+;;; representation. The byte semantics shows up in exactly two places: the
+;;; swap lemmas write READS back (get_set_get, exact by construction), and
+;;; the load round trip needs its input list byte-ranged (byte_ok, mirroring
+;;; std/bytes' bytes_ok guard on of_list_id).
 
-(import "../kernel/stdlib.shard")  ; stdlib types (List/Option/Bool/Pair)
-(import "nat.shard")
-(import "order.shard")
-(import "list.shard")
-(import "map.shard")
-(import "arith.shard")
+(import "../kernel/stdlib.shard")  ; stdlib types (List/Option/Bool/Pair, Nat)
+(import "../std/mem")  ; the opaque memory substrate
+(import "../std/nat.shard")  ; int_of_nat / half_nat + their lemmas
+(import "../std/order.shard")  ; lt/le bridge lemmas
+(import "../std/list.shard")  ; rev + its defining equations
+(import "../std/arith.shard")  ; the index-shuffle lemma kit
 
 ;; bring the imported stdlib modules' vocabulary into scope (strict — Stage 2.5c)
-(use (:: std nat *))  ; Nat, int_of_nat, …
-(use (:: std map *))  ; Map, empty, lookup, insert
+(use (:: std mem *))  ; Mem, mem_empty, mem_get, mem_set + the framing algebra
+(use (:: std nat *))  ; int_of_nat, half_nat, …
 (use (:: std order *))
 (use (:: std list *))
 (use (:: std arith *))
 
 ;; ======================= object machinery =========================
-;;; M3 — linear memory model, as the degenerate seed of finite maps.
-;;;
-;;; TRANSFER.md names the pilot's single `Mem` array as "the degenerate
-;;; seed" of the maps mandate. Here Mem IS a map: `(Map Int)` — Int
-;;; addresses (the map keys) to Int cell values. Writes ARE inserts
-;;; (reusing map_lib's `insert`); the array-framing lemma
-;;; `read(write(m,a,v),b)` cased on `a=b` is exactly slice 33's
-;;; insert/lookup story, re-proven at the total-read level below.
-;;;
-;;; Design note surfaced while standing this up: `read` is TOTAL
-;;; (returns a default 0 for unwritten cells) and recurses over the map
-;;; DIRECTLY, rather than wrapping map_lib's Option-returning `lookup`.
-;;; Reason: a `(match (lookup …) …)` form buries the `int_eq` test
-;;; inside a Match SCRUTINEE, and the kernel's rewriter does not descend
-;;; into match scrutinees (check.shard) — so it can't reach the `int_eq`
-;;; to discharge reflexivity. A total `read` reduces to a top-level
-;;; `if`, which the rewriter handles. (A memory cell read is total
-;;; anyway, so this is also the more honest model.) Whether to teach the
-;;; rewriter to descend scrutinees is the slice-34 reassess question.
-;;;
-;;; Modules merged at load time (see mem_lemmas.shard): nat_lib (Nat),
-;;; map_lib (Map type + insert). Cross-file refs resolve in the merged
-;;; Module.
-
-;; read: total cell read. Recurses over the map; default 0 if absent.
-;; Structurally recursive on the map.
-;; read: total Int-valued read (missing key reads 0). Built on map's PUBLIC
-;; `lookup` — std/map's representation (MEmpty/MCons) is opaque to us, so we
-;; observe only through the interface and reason via its extensional lemmas.
-(fn read ((m (Map Int)) (a Int)) Int
-  (match (lookup a m)
-    (None 0)
-    ((Some v) v)))
-
-;; write: store v at address a. A write IS an insert (prepend).
-(fn write ((m (Map Int)) (a Int) (v Int)) (Map Int) (insert a v m))
 
 ;; swap: exchange the cells at addresses i and j. Reads both first,
 ;; then writes them back crossed. (Reads are taken against the ORIGINAL
 ;; m, so order of the two writes doesn't matter for i ≠ j.)
-(fn swap ((m (Map Int)) (i Int) (j Int)) (Map Int)
-  (write (write m i (read m j)) j (read m i)))
+(fn swap ((m Mem) (i Int) (j Int)) Mem
+  (mem_set (mem_set m i (mem_get m j)) j (mem_get m i)))
 
 ;; rev_loop: swap ends inward while i < j. The Nat counter k carries
 ;; STRUCTURAL termination (the address pair i,j are Ints with no
@@ -70,7 +41,7 @@
 ;; loop-invariant proof clean: the recursive branch supplies `i < j`
 ;; as a case hypothesis, so "position p < i is untouched" needs only
 ;; p < i (no int_of_nat k bound arithmetic).
-(fn rev_loop ((m (Map Int)) (i Int) (j Int) (k Nat)) (Map Int)
+(fn rev_loop ((m Mem) (i Int) (j Int) (k Nat)) Mem
   (measure (struct k))
   (match k
     (Z m)
@@ -78,7 +49,7 @@
 
 ;; ---------------------------------------------------------------------------
 ;; Bridge functions — list ↔ linear memory. Used only to STATE the
-;; capstone (see mem_lemmas.shard); their lemmas are next-slice work.
+;; capstone; their lemmas live below.
 ;; ---------------------------------------------------------------------------
 
 ;; length as a Nat (structural on the list).
@@ -88,153 +59,112 @@
     (Nil Z)
     ((Cons _ t) (S (length_nat t)))))
 
+;; all elements in byte range [0, 256)? Stores truncate mod 256, so the load
+;; round trip is the identity only on byte-range lists — this is the guard
+;; (the exact analogue of std/bytes' bytes_ok on of_list_id).
+(fn byte_ok ((xs (List Int))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil True)
+    ((Cons h t) (if (le 0 h) (if (lt h 256) (byte_ok t) False) False))))
+
 ;; load: write xs into m at base, base+1, … (structural on xs).
-(fn load ((xs (List Int)) (base Int) (m (Map Int))) (Map Int)
+(fn load ((xs (List Int)) (base Int) (m Mem)) Mem
   (measure (struct xs))
   (match xs
     (Nil m)
-    ((Cons h t) (load t (+ base 1) (write m base h)))))
+    ((Cons h t) (load t (+ base 1) (mem_set m base h)))))
 
 ;; dump: read k cells starting at base, as a list (structural on k).
-(fn dump ((base Int) (k Nat) (m (Map Int))) (List Int)
+(fn dump ((base Int) (k Nat) (m Mem)) (List Int)
   (measure (struct k))
   (match k
     (Z Nil)
-    ((S k2) (Cons (read m base) (dump (+ base 1) k2 m)))))
+    ((S k2) (Cons (mem_get m base) (dump (+ base 1) k2 m)))))
 
 ;; rdump: read k cells DOWNWARD from top (top, top-1, …), as a list.
 ;; The reverse-order companion to dump: rev (dump base k m) = rdump
 ;; (base+k-1) k m. Used to bridge the mirror's high→low read order to
 ;; the forward dump in the capstone (structural on k).
-(fn rdump ((top Int) (k Nat) (m (Map Int))) (List Int)
+(fn rdump ((top Int) (k Nat) (m Mem)) (List Int)
   (measure (struct k))
   (match k
     (Z Nil)
-    ((S k2) (Cons (read m top) (rdump (- top 1) k2 m)))))
+    ((S k2) (Cons (mem_get m top) (rdump (- top 1) k2 m)))))
 
 ;; ======================= theory ===================================
 
-;; int_eq_refl ((int_eq k k)=True) is imported from std/map; lt_succ_from_lt
-;; and lt_implies_neq from std/order — cited below, no longer re-proven here.
+;; The write-level algebra is std/mem's surface: get_set_get ("writing a read
+;; reads back exactly" — the swap's whole vocabulary) and get_set_other (the
+;; framing law). lt_succ_from_lt / lt_implies_neq come from std/order.
 
 ;; ---------------------------------------------------------------------------
-;; read_write_eq: ∀ m a v. (read (write m a v) a) = v.
-;;
-;; Read back the value you just wrote. Peel write→insert→MCons, fire
-;; read's match to expose (if (int_eq a a) v …), discharge int_eq a a
-;; via int_eq_refl, fire the if.
-;; ---------------------------------------------------------------------------
-
-(claim read_write_eq
-  (goal ((m (Map Int)) (a Int) (v Int)) () (= (read (write m a v) a) v))
-  ;; write→insert (reachable as read's arg), then unfold read, then map's
-  ;; read-back lemma (no peeking at MCons).
-  (steps
-    ((unfold write lhs)
-     (unfold read lhs)
-     (rewrite (lemma lookup_insert_eq) lr lhs true ())
-     (simp lhs))
-    refl))
-
-;; ---------------------------------------------------------------------------
-;; read_write_neq: ∀ m a b v. (int_eq b a) = False ⊢
-;;   (read (write m a v) b) = (read m b).
-;;
-;; A write at a different address is invisible to a read at b. The
-;; disequality is a premise (consumed, not proven); collapse the if's
-;; else-branch with it. Note the RHS (read m b) is left as a stuck Call
-;; (m is a variable), and the LHS Simps to the same stuck Call — Refl
-;; matches them directly.
-;; ---------------------------------------------------------------------------
-
-(claim read_write_neq
-  (goal ((m (Map Int)) (a Int) (b Int) (v Int)) ((= (int_eq b a) False))
-    (= (read (write m a v) b) (read m b)))
-  ;; write→insert (reachable as read's arg), unfold read, then map's
-  ;; lookup_insert_neq (premise: b≠a); unfold read on the rhs so both sides
-  ;; are (match (lookup b m) …).
-  (steps
-    ((unfold write lhs) (unfold read lhs))
-    (rewrite-with
-      (lemma lookup_insert_neq)
-      lr
-      lhs
-      ()
-      ((steps ((rewrite (premise 0) lr lhs true ())) refl))
-      (steps ((unfold read rhs)) refl))))
-
-;; ---------------------------------------------------------------------------
-;; read_swap_j: ∀ m i j. (read (swap m i j) j) = (read m i).
+;; read_swap_j: ∀ m i j. (mem_get (swap m i j) j) = (mem_get m i).
 ;;
 ;; Observing a swap at the j end returns what was at i. Proven PURELY by
 ;; composing the framing layer: swap's outer write is at j with value
-;; (read m i), so read_write_eq fires directly. No unfold-to-MCons, no
-;; premise. This is the payoff of the framing lemmas — the swap reasons
-;; abstractly over read/write.
+;; (mem_get m i) — a READ, so get_set_get fires directly (byte semantics
+;; cost-free: reads are already in range). No premise.
 ;; ---------------------------------------------------------------------------
 
 (claim read_swap_j
-  (goal ((m (Map Int)) (i Int) (j Int)) () (= (read (swap m i j) j) (read m i)))
-  (steps
-    ((unfold swap lhs) (rewrite (lemma read_write_eq) lr lhs true ()))
-    refl))
+  (goal ((m Mem) (i Int) (j Int)) () (= (mem_get (swap m i j) j) (mem_get m i)))
+  (steps ((unfold swap lhs) (rewrite (lemma get_set_get) lr lhs true ())) refl))
 
 ;; ---------------------------------------------------------------------------
 ;; read_swap_i: ∀ m i j. (int_eq i j) = False ⊢
-;;   (read (swap m i j) i) = (read m j).
+;;   (mem_get (swap m i j) i) = (mem_get m j).
 ;;
 ;; Observing a swap at the i end returns what was at j — when i ≠ j.
 ;; Two-step framing: the OUTER write (at j) is skipped by the
-;; disequality (read_write_neq, premise discharged from the goal's
-;; i≠j), exposing the INNER write (at i) which read_write_eq collapses.
-;; First use of RewriteWith here: cite the CONDITIONAL read_write_neq,
-;; discharge its (int_eq i j)=False premise with the goal's own premise,
-;; then continue.
+;; disequality (get_set_other, premise discharged from the goal's
+;; i≠j), exposing the INNER write (at i) — a write of a READ, which
+;; get_set_get collapses.
 ;; ---------------------------------------------------------------------------
 
 (claim read_swap_i
-  (goal ((m (Map Int)) (i Int) (j Int)) ((= (int_eq i j) False))
-    (= (read (swap m i j) i) (read m j)))
+  (goal ((m Mem) (i Int) (j Int)) ((= (int_eq i j) False))
+    (= (mem_get (swap m i j) i) (mem_get m j)))
   (steps
     ((unfold swap lhs))
     (rewrite-with
-      (lemma read_write_neq)
+      (lemma get_set_other)
       lr
       lhs
       ()
       ((steps ((rewrite (premise 0) lr lhs true ())) refl))
-      (steps ((rewrite (lemma read_write_eq) lr lhs true ())) refl))))
+      (steps ((rewrite (lemma get_set_get) lr lhs true ())) refl))))
 
 ;; ---------------------------------------------------------------------------
 ;; read_swap_other: ∀ m i j p. (int_eq p j) = False, (int_eq p i) = False ⊢
-;;   (read (swap m i j) p) = (read m p).
+;;   (mem_get (swap m i j) p) = (mem_get m p).
 ;;
 ;; A swap of i and j is invisible to a read at any OTHER position p.
-;; Both writes are skipped, each by a read_write_neq whose premise is
+;; Both writes are skipped, each by a get_set_other whose premise is
 ;; discharged from the matching goal premise (nested RewriteWith). This
 ;; is the framing the loop invariant leans on most — the bulk of memory
 ;; is untouched by each swap.
 ;; ---------------------------------------------------------------------------
 
 (claim read_swap_other
-  (goal ((m (Map Int)) (i Int) (j Int) (p Int))
+  (goal ((m Mem) (i Int) (j Int) (p Int))
     ((= (int_eq p j) False) (= (int_eq p i) False))
-    (= (read (swap m i j) p) (read m p)))
+    (= (mem_get (swap m i j) p) (mem_get m p)))
   (steps
     ((unfold swap lhs))
     (rewrite-with
-      (lemma read_write_neq)
+      (lemma get_set_other)
       lr
       lhs
       ()
       ((steps ((rewrite (premise 0) lr lhs true ())) refl))
       (rewrite-with
-        (lemma read_write_neq)
+        (lemma get_set_other)
         lr
         lhs
         ()
         ((steps ((rewrite (premise 1) lr lhs true ())) refl))
-        refl))))  ; (read m p) = (read m p)
+        refl))))  ; (mem_get m p) = (mem_get m p)
 
 ;; precond_shrink: the Nat/Int bridge for the mirror induction. Shaped
 ;; to discharge the mirror IH's completion-bound premise EXACTLY: when
@@ -269,7 +199,7 @@
 
 ;; ---------------------------------------------------------------------------
 ;; read_swap_below: ∀ m i j p. (lt p i)=True, (lt i j)=True ⊢
-;;   (read (swap m i j) p) = (read m p).
+;;   (mem_get (swap m i j) p) = (mem_get m p).
 ;;
 ;; The swap-framing lemma in ORDER form (what the loop invariant has):
 ;; a position below the swap range is untouched. Bridges the order
@@ -278,9 +208,8 @@
 ;; ---------------------------------------------------------------------------
 
 (claim read_swap_below
-  (goal ((m (Map Int)) (i Int) (j Int) (p Int))
-    ((= (lt p i) True) (= (lt i j) True))
-    (= (read (swap m i j) p) (read m p)))
+  (goal ((m Mem) (i Int) (j Int) (p Int)) ((= (lt p i) True) (= (lt i j) True))
+    (= (mem_get (swap m i j) p) (mem_get m p)))
   (rewrite-with
     (lemma read_swap_other)
     lr
@@ -312,12 +241,12 @@
 ;; ---------------------------------------------------------------------------
 
 (claim rev_loop_zero
-  (goal ((m (Map Int)) (i Int) (j Int)) () (= (rev_loop m i j Z) m))
+  (goal ((m Mem) (i Int) (j Int)) () (= (rev_loop m i j Z) m))
   (steps ((simp lhs)) refl))
 
 ;; ---------------------------------------------------------------------------
 ;; rev_loop_untouched_below (THE loop invariant, below-the-range case):
-;;   ∀ m i j p k. (lt p i) = True ⊢ (read (rev_loop m i j k) p) = (read m p).
+;;   ∀ m i j p k. (lt p i) = True ⊢ (mem_get (rev_loop m i j k) p) = (mem_get m p).
 ;;
 ;; A cell below the swap range is unchanged by the whole loop. Induction
 ;; on the counter k:
@@ -328,16 +257,16 @@
 ;;        True:  i < j is now a hypothesis. Apply the IH at the shrunk
 ;;               segment (swap m i j, i+1, j-1) — its premise p < i+1 is
 ;;               lt_succ_from_lt of the goal premise p < i — leaving
-;;               (read (swap m i j) p), which read_swap_below collapses
-;;               to (read m p) using p < i (premise) and i < j (the
+;;               (mem_get (swap m i j) p), which read_swap_below collapses
+;;               to (mem_get m p) using p < i (premise) and i < j (the
 ;;               case hypothesis).
 ;; This is the structural-induction-plus-discharge proof the whole
 ;; framing + ord + farkas stack was built to enable.
 ;; ---------------------------------------------------------------------------
 
 (claim rev_loop_untouched_below
-  (goal ((m (Map Int)) (i Int) (j Int) (p Int) (k Nat)) ((= (lt p i) True))
-    (= (read (rev_loop m i j k) p) (read m p)))
+  (goal ((m Mem) (i Int) (j Int) (p Int) (k Nat)) ((= (lt p i) True))
+    (= (mem_get (rev_loop m i j k) p) (mem_get m p)))
   (induct k
     ((case Z (steps ((simp lhs)) refl))
      (case S
@@ -371,11 +300,10 @@
                     refl)))))))))))
 
 ;; read_swap_above: ∀ m i j p. (lt i j)=True, (lt j p)=True ⊢
-;;   (read (swap m i j) p) = (read m p).   (p above the swap range)
+;;   (mem_get (swap m i j) p) = (mem_get m p).   (p above the swap range)
 (claim read_swap_above
-  (goal ((m (Map Int)) (i Int) (j Int) (p Int))
-    ((= (lt i j) True) (= (lt j p) True))
-    (= (read (swap m i j) p) (read m p)))
+  (goal ((m Mem) (i Int) (j Int) (p Int)) ((= (lt i j) True) (= (lt j p) True))
+    (= (mem_get (swap m i j) p) (mem_get m p)))
   (rewrite-with
     (lemma read_swap_other)
     lr
@@ -400,7 +328,7 @@
 
 ;; ---------------------------------------------------------------------------
 ;; rev_loop_untouched_above: ∀ m i j p k. (lt j p) = True ⊢
-;;   (read (rev_loop m i j k) p) = (read m p).
+;;   (mem_get (rev_loop m i j k) p) = (mem_get m p).
 ;;
 ;; Mirror of rev_loop_untouched_below: a cell above the swap range is
 ;; unchanged. Same induction; the IH precondition at the shrunk segment
@@ -409,8 +337,8 @@
 ;; ---------------------------------------------------------------------------
 
 (claim rev_loop_untouched_above
-  (goal ((m (Map Int)) (i Int) (j Int) (p Int) (k Nat)) ((= (lt j p) True))
-    (= (read (rev_loop m i j k) p) (read m p)))
+  (goal ((m Mem) (i Int) (j Int) (p Int) (k Nat)) ((= (lt j p) True))
+    (= (mem_get (rev_loop m i j k) p) (mem_get m p)))
   (induct k
     ((case Z (steps ((simp lhs)) refl))
      (case S
@@ -452,7 +380,7 @@
 ;;
 ;;   ∀ m i j p k.
 ;;     [ i <= p,  p <= j,  (j-i) <= 2*int_of_nat k ]
-;;     ⊢ (read (rev_loop m i j k) p) = (read m (i+j-p))
+;;     ⊢ (mem_get (rev_loop m i j k) p) = (mem_get m (i+j-p))
 ;;
 ;; The bound (j-i) <= 2k is exactly "k is at least ceil((j-i)/2) swaps" —
 ;; tight for BOTH parities of the segment length (at i=0,j=n-1,k=half n
@@ -565,11 +493,11 @@
 ;; ---------------------------------------------------------------------------
 
 (claim rev_loop_mirror
-  (goal ((m (Map Int)) (i Int) (j Int) (p Int) (k Nat))
+  (goal ((m Mem) (i Int) (j Int) (p Int) (k Nat))
     ((= (le i p) True)
      (= (le p j) True)
      (= (le (- j i) (* 2 (int_of_nat k))) True))
-    (= (read (rev_loop m i j k) p) (read m (- (+ i j) p))))
+    (= (mem_get (rev_loop m i j k) p) (mem_get m (- (+ i j) p))))
   (induct k
     ((case Z
        (steps
@@ -759,12 +687,11 @@
 ;; read_load_below: a cell strictly below the load's base is untouched by
 ;; the load (load only writes base, base+1, …). Induction on xs: the Cons
 ;; case writes `base`, recurses at base+1 (IH, premise q<base+1 from q<base
-;; via lt_succ_from_lt), then steps back over the base write (read_write_neq,
+;; via lt_succ_from_lt), then steps back over the base write (get_set_other,
 ;; q≠base from lt_implies_neq).
 (claim read_load_below
-  (goal ((xs (List Int)) (base Int) (m (Map Int)) (q Int))
-    ((= (lt q base) True))
-    (= (read (load xs base m) q) (read m q)))
+  (goal ((xs (List Int)) (base Int) (m Mem) (q Int)) ((= (lt q base) True))
+    (= (mem_get (load xs base m) q) (mem_get m q)))
   (induct xs
     ((case Nil (steps ((simp lhs)) refl))
      (case Cons
@@ -783,7 +710,7 @@
               ((steps ((rewrite (premise 0) lr lhs true ())) refl))
               refl))
            (rewrite-with
-             (lemma read_write_neq)
+             (lemma get_set_other)
              lr
              lhs
              ()
@@ -796,41 +723,104 @@
                 refl))
              refl)))))))
 
-;; dump_load_id: the round trip. dump base (length xs) (load xs base m) =
-;; xs — reading back the n cells you wrote gives the list. Induction on
-;; xs: the Cons case Simp-fires length/load/dump one step, the IH handles
-;; the tail dump at base+1, and the head cell is recovered by stepping the
-;; load past base (read_load_below, base<base+1) then read_write_eq.
+;; dump_load_id: the round trip — ON A BYTE-RANGE LIST. dump base (length xs)
+;; (load xs base m) = xs. Induction on xs: the Cons case inverts
+;; byte_ok (Cons h t) = True via case-on (the two off-range arms are absurd),
+;; the premised IH handles the tail dump at base+1, and the head cell is
+;; recovered by stepping the load past base (read_load_below, base<base+1)
+;; then get_set_byte (h is in range by the inverted guard).
 (claim dump_load_id
-  (goal ((xs (List Int)) (base Int) (m (Map Int))) ()
+  (goal ((xs (List Int)) (base Int) (m Mem)) ((= (byte_ok xs) True))
     (= (dump base (length_nat xs) (load xs base m)) xs))
   (induct xs
     ((case Nil (steps ((simp lhs)) refl))
      (case Cons
-       (steps
-         ((simp lhs))
-         (rewrite-with
-           (hyp 0)
-           lr
-           lhs
-           ()
-           ()
-           (rewrite-with
-             (lemma read_load_below)
-             lr
-             lhs
-             ()
-             ((rewrite-with (lemma lt_self_succ) lr lhs () () refl))
-             (rewrite-with (lemma read_write_eq) lr lhs () () refl))))))))
+       (h t)
+       (case-on (le 0 h) Bool
+         ((case True
+            (case-on (lt h 256) Bool
+              ((case True
+                 (have hred (= (byte_ok (Cons h t)) (byte_ok t))
+                   (steps
+                     ((unfold byte_ok lhs)
+                      (reduce lhs)
+                      (rewrite (hyp 1) lr lhs true ())
+                      (reduce lhs)
+                      (rewrite (hyp 0) lr lhs true ())
+                      (reduce lhs))
+                     refl)
+                   (have hbt (= (byte_ok t) True)
+                     (steps
+                       ((rewrite (premise hred) rl lhs true ())
+                        (rewrite (premise 0) lr lhs true ()))
+                       refl)
+                     (steps
+                       ((simp lhs))
+                       (rewrite-with
+                         (hyp ih)
+                         lr
+                         lhs
+                         ()
+                         ((steps ((rewrite (premise hbt) lr lhs true ())) refl))
+                         (rewrite-with
+                           (lemma read_load_below)
+                           lr
+                           lhs
+                           ()
+                           ((rewrite-with
+                              (lemma lt_self_succ)
+                              lr
+                              lhs
+                              ()
+                              ()
+                              refl))
+                           (rewrite-with
+                             (lemma get_set_byte)
+                             lr
+                             lhs
+                             ()
+                             ((steps ((rewrite (hyp 1) lr lhs true ())) refl)
+                              (steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                             refl)))))))
+               (case False
+                 (have hf (= (byte_ok (Cons h t)) False)
+                   (steps
+                     ((unfold byte_ok lhs)
+                      (reduce lhs)
+                      (rewrite (hyp 1) lr lhs true ())
+                      (reduce lhs)
+                      (rewrite (hyp 0) lr lhs true ())
+                      (reduce lhs))
+                     refl)
+                   (have contra (= True False)
+                     (steps
+                       ((rewrite (premise 0) rl lhs true ())
+                        (rewrite (premise hf) lr lhs true ()))
+                       refl)
+                     (absurd (premise contra))))))))
+          (case False
+            (have hf (= (byte_ok (Cons h t)) False)
+              (steps
+                ((unfold byte_ok lhs)
+                 (reduce lhs)
+                 (rewrite (hyp 0) lr lhs true ())
+                 (reduce lhs))
+                refl)
+              (have contra (= True False)
+                (steps
+                  ((rewrite (premise 0) rl lhs true ())
+                   (rewrite (premise hf) lr lhs true ()))
+                  refl)
+                (absurd (premise contra)))))))))))
 
 ;; rdump_snoc: peel the LAST cell of an rdump. rdump top (S c) A =
 ;; (rdump top c A) ++ [read A (top - c)]. Induction on c; the Z case
 ;; needs (top-0)=top, the S case reconciles (top-1)-c' with top-(1+c').
 (claim rdump_snoc
-  (goal ((top Int) (c Nat) (A (Map Int))) ()
+  (goal ((top Int) (c Nat) (A Mem)) ()
     (=
       (rdump top (S c) A)
-      (append (rdump top c A) (list (read A (- top (int_of_nat c)))))))
+      (append (rdump top c A) (list (mem_get A (- top (int_of_nat c)))))))
   ;; append is OPAQUE (std/list) — peel it via the exported defining equations
   ;; (append_nil_left at Z, append_cons at S), not by unfolding.
   (induct c
@@ -859,7 +849,7 @@
 ;; top index (reassoc_succ), snocs via rdump_snoc, and cancels the tail
 ;; index (idx_cancel) so both sides are append (rdump … c A) [read A base].
 (claim rev_dump_rdump
-  (goal ((base Int) (cnt Nat) (A (Map Int))) ()
+  (goal ((base Int) (cnt Nat) (A Mem)) ()
     (= (rev (dump base cnt A)) (rdump (- (+ base (int_of_nat cnt)) 1) cnt A)))
   ;; rev is OPAQUE (std/list) — peel it via the exported defining equations
   ;; (rev_nil at Z, rev_cons at S), not by unfolding.
@@ -907,7 +897,7 @@
 ;;   tail: the premise rewrites dump (base+1) c R → rdump (i+j-(base+1)) c M;
 ;;   then idx_pred reconciles (i+j-(base+1)) with ((i+j-base)-1).
 (claim dump_R_rdump_step
-  (goal ((M (Map Int)) (i Int) (j Int) (k Nat) (base Int) (c Nat))
+  (goal ((M Mem) (i Int) (j Int) (k Nat) (base Int) (c Nat))
     ((= (le i base) True)
      (= (le (+ base (int_of_nat (S c))) (+ j 1)) True)
      (= (le (- j i) (* 2 (int_of_nat k))) True)
@@ -947,7 +937,7 @@
 ;; supplying its tail premise from the IH (lower bound via le_succ_r, range
 ;; bound via bound_step, loop bound carried).
 (claim dump_R_rdump
-  (goal ((M (Map Int)) (i Int) (j Int) (k Nat) (base Int) (cnt Nat))
+  (goal ((M Mem) (i Int) (j Int) (k Nat) (base Int) (cnt Nat))
     ((= (le i base) True)
      (= (le (+ base (int_of_nat cnt)) (+ j 1)) True)
      (= (le (- j i) (* 2 (int_of_nat k))) True))
@@ -990,18 +980,19 @@
 ;; ===========================================================================
 ;; CAPSTONE — mem_reverses (PROVEN). The M3 data-refinement dragon:
 ;;
-;;   ∀ xs : (List Int).
+;;   ∀ xs : (List Int).  byte_ok xs = True ⊢
 ;;     (dump 0 (length_nat xs)
-;;           (rev_loop (load xs 0 MEmpty)
+;;           (rev_loop (load xs 0 (mem_empty))
 ;;                     0
 ;;                     (- (int_of_nat (length_nat xs)) 1)
 ;;                     (half_nat (length_nat xs))))
 ;;     = (rev xs)
 ;;
-;; "Load xs into fresh memory at 0…n-1, run the in-place two-pointer swap
-;; loop floor(n/2) times, dump the n cells back out — you get rev xs",
-;; for UNIVERSAL n. list ↔ linear memory, the imperative array-reverse
-;; refined against the functional spec, all decided not assumed.
+;; "Load a byte-range xs into fresh memory at 0…n-1, run the in-place
+;; two-pointer swap loop floor(n/2) times, dump the n cells back out — you
+;; get rev xs", for UNIVERSAL n. list ↔ linear memory, the imperative
+;; array-reverse refined against the functional spec, all decided not
+;; assumed — through std/mem's opaque surface only.
 ;;
 ;; The proof is the four-lemma chain, no new reasoning — just composition:
 ;;   dump 0 n R
@@ -1016,13 +1007,13 @@
 ;; ===========================================================================
 
 (claim mem_reverses
-  (goal ((xs (List Int))) ()
+  (goal ((xs (List Int))) ((= (byte_ok xs) True))
     (=
       (dump
         0
         (length_nat xs)
         (rev_loop
-          (load xs 0 (empty))
+          (load xs 0 (mem_empty))
           0
           (- (int_of_nat (length_nat xs)) 1)
           (half_nat (length_nat xs))))
@@ -1045,4 +1036,10 @@
         lhs
         ()
         ()
-        (rewrite-with (lemma dump_load_id) lr lhs () () refl)))))
+        (rewrite-with
+          (lemma dump_load_id)
+          lr
+          lhs
+          ()
+          ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+          refl)))))

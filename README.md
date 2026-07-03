@@ -71,7 +71,7 @@ file means running the self-hosted checker on it:
 
 ```sh
 cargo build --release --manifest-path rust_bootstrap/Cargo.toml
-rust_bootstrap/target/release/eval run kernel/check.shard std/mem.shard
+rust_bootstrap/target/release/eval run kernel/check.shard examples/mem_reverse.shard
 ```
 
 Expected output (tail):
@@ -80,16 +80,18 @@ Expected output (tail):
 PASS  …
 PASS  mem_reverses
 
-53 passed, 0 failed, 29 axiom(s) admitted without proof
+51 passed, 0 failed, 42 axiom(s) admitted without proof
 ```
 
-`std/mem.shard` `(import …)`s the rest of `std/`, so this one file checks the
-whole library (dependencies load transitively, de-duplicated). An optional
-trailing argument focuses a single claim and traces it
-(`… kernel/check.shard std/mem.shard mem_reverses`) — focus runs are a dev
-aid that admits every OTHER proof unchecked, so they are banner-marked
-UNSOUND and exit 3 (never 0): automation gating on exit 0 cannot accept
-one. The demos live in
+(The "axioms" are the imported std modules' opaque interfaces, viewed from
+the consumer side.) `examples/mem_reverse.shard` `(import …)`s much of
+`std/`, so this one file exercises a wide slice of the library (dependencies
+load transitively, de-duplicated). An optional trailing argument focuses a
+single claim and traces it
+(`… kernel/check.shard examples/mem_reverse.shard mem_reverses`) — focus
+runs are a dev aid that admits every OTHER proof unchecked, so they are
+banner-marked UNSOUND and exit 3 (never 0): automation gating on exit 0
+cannot accept one. The demos live in
 `examples/` (`… eval run kernel/check.shard examples/lia_basics.shard`);
 `examples/lia_rejects.shard` is a deliberate negative test (it FAILs).
 Sources are kept in canonical form by the proven formatter:

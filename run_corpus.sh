@@ -86,6 +86,7 @@ TARGETS=(
   examples/io/cat_loop.shard
   examples/measure_tree_demo.shard
   examples/nested_measure.shard
+  examples/mem_reverse.shard
   examples/mutual_toy.shard
   examples/record_proto.shard
   examples/record_basic.shard
@@ -126,7 +127,7 @@ TARGETS=(
   examples/snake_game_3/game/game.shard
   examples/snake_game_3/render/render.shard
   examples/snake_game_3/snake.shard
-  std/mem.shard
+  std/mem/mem.shard
   std/list.shard
   std/map.shard
   std/arith.shard

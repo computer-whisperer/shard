@@ -84,7 +84,7 @@ Two consequences worth stating outright:
 - **Performant representations need zero kernel or compiler features.**
   A packed string, an in-place buffer algorithm, an arena: each is a
   *lower-level shard program* (over the `Word`/`Bytes`/`Mem` vocabulary —
-  see `std/mem.shard` for the in-place seed), proven to refine its
+  see `std/mem` + `examples/mem_reverse.shard` for the in-place seed), proven to refine its
   high-level form, then lowered 1:1. Lining up the refinement that runs
   efficiently on the available machine is **app-level work in the untrusted
   regime** — never a kernel representation, never a smart-compiler guess.

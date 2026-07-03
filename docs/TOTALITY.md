@@ -334,7 +334,7 @@ Migration:
   clause written by the author.
 - **Polymorphic fns** — the gate now verifies polymorphic `(struct …)` clauses
   directly (the subterm check is syntactic, type-agnostic; only *numeric*
-  measures stay monomorphic), so `std/list`/`std/map`/`std/mem`'s poly recursive
+  measures stay monomorphic), so `std/list`/`std/map`'s poly recursive
   fns carry verified structural clauses — no monomorphization needed.
 - **Non-structural SCCs** — the reducer fuel loops, `tc_walk`, `check_sequent`'s
   own SCC, the AST-size mutual SCCs (`render_term`), and the corpus's three
