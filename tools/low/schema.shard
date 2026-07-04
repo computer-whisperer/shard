@@ -133,6 +133,66 @@
     (Nil 0)
     ((Cons h t) (if (chars_eq s (spell h)) k (pres_ix s t (+ k 1))))))
 
+;; is this qname std/mem's fn named s?
+(fn memq_named ((q QName) (s Symbol)) Bool
+  (match q
+    ((QName mp nm)
+     (if (sym_eq nm s)
+       (sym_list_eq mp (Cons (quote std) (Cons (quote mem) Nil)))
+       False))))
+
+;; ---- read generalization (the PRE-hygiene helper claims) --------------------------
+;;
+;; a generated bound helper quantifies over the node's unique reads as
+;; plain Int binders r0 r1 …; the node's spelling with reads substituted
+;; is the helper's goal expression.
+
+(fn rsym ((k Int)) Symbol (sym_of_chars (append_int "r" (show_int k))))
+
+;; index of a spelling among the read atoms (None = not a read atom)
+(fn read_ix ((rs (List (Pair Expr Int))) (s (List Int)) (k Int)) (Option Int)
+  (measure (struct rs))
+  (match rs
+    (Nil None)
+    ((Cons (Pair a _) t)
+     (if (chars_eq (spell a) s) (Some k) (read_ix t s (+ k 1))))))
+
+(fn subst_reads ((e Expr) (rs (List (Pair Expr Int)))) Expr
+  (measure (struct e))
+  (match e
+    ((Call q as)
+     (match (read_ix rs (spell e) 0)
+       ((Some i) (FVar (rsym i)))
+       (None
+         (match as
+           ((Cons a (Cons b Nil))
+            (Call q (Cons (subst_reads a rs) (Cons (subst_reads b rs) Nil))))
+           (_ e)))))
+    (_ e)))
+
+;; param FVar symbols, first-occurrence order (binders for cond helpers)
+(fn fv_syms ((e Expr) (acc (List Symbol))) (List Symbol)
+  (measure (struct e))
+  (match e
+    ((FVar s) (if (sym_in s acc) acc (sym_add s acc)))
+    ((Call _ as)
+     (match as
+       ((Cons a (Cons b Nil)) (fv_syms b (fv_syms a acc)))
+       (_ acc)))
+    (_ acc)))
+
+(fn sym_in ((s Symbol) (ss (List Symbol))) Bool
+  (measure (struct ss))
+  (match ss
+    (Nil False)
+    ((Cons h t) (if (sym_eq h s) True (sym_in s t)))))
+
+(fn sym_add ((s Symbol) (ss (List Symbol))) (List Symbol)
+  (measure (struct ss))
+  (match ss
+    (Nil (Cons s Nil))
+    ((Cons h t) (Cons h (sym_add s t)))))
+
 ;; ---- type predicates --------------------------------------------------------------
 
 (fn is_int_ty ((t Type)) Bool
@@ -204,17 +264,6 @@
     (Nil (DStr ""))
     ((Cons _ _) (DCat (sp) (pr_args ts 0)))))
 
-;; the PRE premises: two per unique arith node, postorder
-(fn pr_prems ((ns (List Expr))) Doc
-  (measure (struct ns))
-  (match ns
-    (Nil (DStr ""))
-    ((Cons e rest)
-     (dcat3
-       (dcat3 (DStr "(= (le 0 ") (pr_e e) (DStr ") True) "))
-       (dcat3 (DStr "(= (lt ") (pr_e e) (DStr " 4294967296) True) "))
-       (pr_prems rest)))))
-
 ;; the symbolic stack, spelled as a Cons chain (top first)
 (fn stack_spell ((stk (List Expr))) Doc
   (measure (struct stk))
@@ -230,15 +279,20 @@
 ;;   1 / 2        callee arities (params_of f0 = 1 / params_of f1 = 2)
 ;;   3..          the items below, each claiming its slot(s):
 ;;     PWrap E      2 slots — wrap bounds for an arith node
+;;     PAuto E      0 slots — a READ-LINEAR arith node whose bounds are
+;;                  DERIVABLE (every read is a byte); no premise — the
+;;                  proof derives them via a generated interval-Farkas
+;;                  helper + get_lo/get_hi (docs/LOWERING.md §6j)
 ;;     PGet A K     1 slot  — slot-0 behavior at site fuel (S^ K c)
 ;;     PSet A V K   1 slot  — slot-1 behavior at site fuel (S^ K c)
 ;; Behavior premises are PER SITE (fuels differ), never deduped; wraps
 ;; dedup by spelling (a recompute re-FIRES the event but reuses the pair).
-(type PItem (PWrap Expr) (PGet Expr Int) (PSet Expr Expr Int))
+(type PItem (PWrap Expr) (PAuto Expr) (PGet Expr Int) (PSet Expr Expr Int))
 
 (fn pit_slots ((p PItem)) Int
   (match p
     ((PWrap _) 2)
+    ((PAuto _) 0)
     ((PGet _ _) 1)
     ((PSet _ _ _) 1)))
 
@@ -267,6 +321,30 @@
        ((PWrap e) (if (chars_eq s (spell e)) acc (wrap_ix s t (+ acc 2))))
        (_ (wrap_ix s t (+ acc (pit_slots h))))))))
 
+;; is this spelling an auto (derivable) node?
+(fn paut_seen ((s (List Int)) (ps (List PItem))) Bool
+  (measure (struct ps))
+  (match ps
+    (Nil False)
+    ((Cons h t)
+     (match h
+       ((PAuto e) (if (chars_eq s (spell e)) True (paut_seen s t)))
+       (_ (paut_seen s t))))))
+
+;; helper ordinal of an auto node (its position among the PAuto items)
+(fn paut_ix ((s (List Int)) (ps (List PItem)) (acc Int)) Int
+  (measure (struct ps))
+  (match ps
+    (Nil 0)
+    ((Cons h t)
+     (match h
+       ((PAuto e) (if (chars_eq s (spell e)) acc (paut_ix s t (+ acc 1))))
+       (_ (paut_ix s t acc))))))
+
+;; already carried, as either a premise pair or an auto node?
+(fn node_known ((s (List Int)) (ps (List PItem))) Bool
+  (if (wrap_seen s ps) True (paut_seen s ps)))
+
 (fn pit_add ((ps (List PItem)) (p PItem)) (List PItem)
   (measure (struct ps))
   (match ps
@@ -281,6 +359,7 @@
        (dcat3 (DStr "(= (le 0 ") (pr_e e) (DStr ") True) "))
        (dcat3 (DStr "(= (lt ") (pr_e e) (DStr " 4294967296) True) "))
        (DStr "")))
+    ((PAuto _) (DStr ""))
     ((PGet a k)
      (dcat3
        (dcat3 (DStr "(= (call_fn_mem (S^ ") (dint k) (DStr " c) m 0 (Cons "))
@@ -312,6 +391,7 @@
     ((Cons h t)
      (match h
        ((PWrap _) (addrs_of t acc))
+       ((PAuto _) (addrs_of t acc))
        ((PGet a _)
         (addrs_of t (if (node_seen (spell a) acc) acc (node_add a acc))))
        ((PSet a _ _)
@@ -323,18 +403,8 @@
     (Nil 0)
     ((Cons _ t) (+ 1 (addr_count t)))))
 
-;; the linked cert's own premises: an address pair per unique address,
-;; then the wrap pairs (discovery order)
-(fn link_addr_prems ((as (List Expr))) Doc
-  (measure (struct as))
-  (match as
-    (Nil (DStr ""))
-    ((Cons a t)
-     (dcat3
-       (dcat3 (DStr "(= (le 0 ") (pr_e a) (DStr ") True) "))
-       (dcat3 (DStr "(= (le (+ ") (pr_e a) (DStr " 1) 65536) True) "))
-       (link_addr_prems t)))))
-
+;; the linked cert's wrap premises (an address pair per ACPrem address
+;; comes first — see lowergen's link_addr_prems2)
 (fn link_wrap_prems ((ps (List PItem))) Doc
   (measure (struct ps))
   (match ps
@@ -347,6 +417,137 @@
           (dcat3 (DStr "(= (lt ") (pr_e e) (DStr " 4294967296) True) "))
           (link_wrap_prems t)))
        (_ (link_wrap_prems t))))))
+
+;; ---- PRE-hygiene renderers (docs/LOWERING.md §6j) ----------------------------------
+;;
+;; the generated helper claims that replace derivable premises: read-
+;; interval bounds (iv_claim, multipliers from tools/low/lin) and
+;; single-condition derivations (cb_claim); plus the condition-wrapped
+;; premise spelling for arm-local nodes (cond_wrap).
+
+;; address classification for the linked derivation: premise pair k /
+;; ground literal (compute) / read-derived (helper ordinal + read atoms)
+(type AC (ACPrem Int) (ACGround) (ACRead Int (List (Pair Expr Int))))
+
+;; helper-claim names: wb_<fn>_<k>_lo/hi (read-interval wrap bounds),
+;; ab_<fn>_<k>_lo/hi (read-derived address bounds, linked file),
+;; cb_<fn>_<k> (single-condition arm derivations)
+(fn wb_name ((fnm Doc) (k Int) (lo Bool)) Doc
+  (dcat3
+    (dcat3 (DStr "wb_") fnm (DStr "_"))
+    (dint k)
+    (DStr (if lo "_lo" "_hi"))))
+
+(fn ab_name ((fnm Doc) (k Int) (lo Bool)) Doc
+  (dcat3
+    (dcat3 (DStr "ab_") fnm (DStr "_"))
+    (dint k)
+    (DStr (if lo "_lo" "_hi"))))
+
+(fn cb_name ((fnm Doc) (k Int)) Doc
+  (dcat3 (dcat3 (DStr "cb_") fnm (DStr "_")) (dint k) (DStr "")))
+
+(fn dints ((ms (List Int))) (List Doc)
+  (measure (struct ms))
+  (match ms
+    (Nil Nil)
+    ((Cons h t) (Cons (dint h) (dints t)))))
+
+(fn bnd_le0 ((e Doc)) Doc (dcat3 (DStr "(le 0 ") e (DStr ")")))
+
+(fn bnd_ltwrap ((e Doc)) Doc (dcat3 (DStr "(lt ") e (DStr " 4294967296)")))
+
+(fn bnd_leaddr ((e Doc)) Doc (dcat3 (DStr "(le (+ ") e (DStr " 1) 65536)")))
+
+;; goal binders (r0 Int) … and the byte premises per read
+(fn pr_read_binds ((rs (List (Pair Expr Int))) (i Int)) Doc
+  (measure (struct rs))
+  (match rs
+    (Nil (DStr ""))
+    ((Cons _ t)
+     (dcat3
+       (dcat3 (DStr "(r") (dint i) (DStr " Int) "))
+       (pr_read_binds t (+ i 1))
+       (DStr "")))))
+
+(fn pr_read_prems ((rs (List (Pair Expr Int))) (i Int)) Doc
+  (measure (struct rs))
+  (match rs
+    (Nil (DStr ""))
+    ((Cons _ t)
+     (dcat3
+       (dcat3 (DStr "(= (le 0 r") (dint i) (DStr ") True) "))
+       (dcat3 (DStr "(= (lt r") (dint i) (DStr " 256) True) "))
+       (pr_read_prems t (+ i 1))))))
+
+;; (inst r0 READ0) … — explicit insts, one per read atom
+(fn pr_read_insts ((rs (List (Pair Expr Int))) (i Int)) Doc
+  (measure (struct rs))
+  (match rs
+    (Nil (DStr ""))
+    ((Cons (Pair a _) t)
+     (dcat3
+       (dcat3 (DStr "(inst r") (dint i) (DCat (sp) (pr_e a)))
+       (DStr ") ")
+       (pr_read_insts t (+ i 1))))))
+
+;; a read-interval helper claim: byte premises ⊢ the bound, by a computed
+;; multiplier certificate
+(fn iv_claim ((nm Doc) (rs (List (Pair Expr Int))) (bound Doc) (ms (List Int)))
+  Doc
+  (dcat3
+    (dcat3
+      (dcat3 (DStr "(claim ") nm (DStr " (goal ("))
+      (pr_read_binds rs 0)
+      (DCat (DStr ") (") (pr_read_prems rs 0)))
+    (dcat3 (DStr ") (= ") bound (DStr " True)) (by arith (list "))
+    (dcat3 (djoin (Cons (dint 1) (dints ms))) (DStr ")))") (DStr (nl)))))
+
+;; binders / self-insts over param symbols (cond helpers)
+(fn pr_sym_binds ((ss (List Symbol))) Doc
+  (measure (struct ss))
+  (match ss
+    (Nil (DStr ""))
+    ((Cons h t)
+     (dcat3
+       (dcat3 (DStr "(") (dsym h) (DStr " Int) "))
+       (pr_sym_binds t)
+       (DStr "")))))
+
+(fn pr_sym_insts ((ss (List Symbol))) Doc
+  (measure (struct ss))
+  (match ss
+    (Nil (DStr ""))
+    ((Cons h t)
+     (dcat3
+       (dcat3 (DStr "(inst ") (dsym h) (DCat (sp) (dsym h)))
+       (DStr ") ")
+       (pr_sym_insts t)))))
+
+;; a single-condition helper claim: the arm's case fact ⊢ the bound
+(fn cb_claim
+  ((nm Doc) (binds Doc) (cond Doc) (pol Bool) (bound Doc) (g Int) (m Int))
+  Doc
+  (dcat3
+    (dcat3
+      (dcat3 (DStr "(claim ") nm (DStr " (goal ("))
+      (DCat binds (DStr ") ((= "))
+      (dcat3 cond (DStr (if pol " True" " False")) (DStr ")) (= ")))
+    (dcat3 bound (DStr " True)) (by arith (list ") (dint g))
+    (dcat3 (DCat (sp) (dint m)) (DStr ")))") (DStr (nl)))))
+
+;; the condition-wrapped premise body: each path segment contributes one
+;; if layer — (if C REST True) on a True arm, (if C True REST) on False
+(fn cond_wrap ((path (List (Pair Expr Bool))) (bound Doc)) Doc
+  (measure (struct path))
+  (match path
+    (Nil bound)
+    ((Cons (Pair c pol) rest)
+     (dcat3
+       (dcat3 (DStr "(if ") (pr_e c) (sp))
+       (if pol (DCat (cond_wrap rest bound) (DStr " True"))
+       (DCat (DStr "True ") (cond_wrap rest bound)))
+       (DStr ")")))))
 
 ;; ---- RHS / self-literal / spec-application builders -------------------------------
 

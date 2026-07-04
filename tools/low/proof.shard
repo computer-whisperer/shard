@@ -2,26 +2,32 @@
 ;;; wrap32_id discharge event (a named have + all-occurrences rewrite —
 ;;; the sharing-proof pattern), the stage-law flush (pending events
 ;;; collapse at each call site while everything materialized is on the
-;;; lhs), the call_bridge citation builders, and the link-derivation
-;;; discharge templates (behavior premises by shipped-cert citation).
-;;; Everything here renders PROOF text over tools/low/schema's canonical
-;;; exprs and premise layouts.
+;;; lhs), the PRE-hygiene discharge templates (docs/LOWERING.md §6j:
+;;; derived read bounds via generated interval helpers + get_lo/get_hi,
+;;; condition-wrapped premise strips, single-condition silent haves),
+;;; the call_bridge citation builders, and the link-derivation discharge
+;;; templates (behavior premises by shipped-cert citation). Everything
+;;; here renders PROOF text over tools/low/schema's canonical exprs and
+;;; premise layouts.
 
 (import "../../kernel/stdlib.shard")
 (import "../../kernel/term.shard")
 (import "doc.shard")
 (import "schema.shard")
+(import "lin.shard")
 
 (use (:: kernel term Expr))
 (use (:: tools low doc *))
 (use (:: tools low schema *))
+(use (:: tools low lin *))
 
 ;; ---- the wrap32_id discharge event ------------------------------------------------
 
 ;; one discharge event: (have wJ …) citing wrap32_id once, its range
-;; premises at indices klo/khi, then an all-occurrences rewrite of the
-;; have fact (constant proof cost per node regardless of fan-out)
-(fn wrap_event ((e Expr) (klo Int) (khi Int) (j Int)) Doc
+;; facts at the given references (premise indices or have names), then an
+;; all-occurrences rewrite of the have fact (constant proof cost per node
+;; regardless of fan-out)
+(fn wrap_event ((e Expr) (loref Doc) (hiref Doc) (j Int)) Doc
   (dcat3
     (dcat3
       (dcat3 (DStr "(have w") (dint j) (DStr " (= (mod "))
@@ -31,41 +37,141 @@
       (DCat (pr_e e) (DStr ")) "))
       (dcat3
         (DStr "((steps ((rewrite (premise ")
-        (dint klo)
+        loref
         (DStr ") lr lhs true ())) refl) "))
       (dcat3
         (DStr "(steps ((rewrite (premise ")
-        (dint khi)
+        hiref
         (DStr ") lr lhs true ())) refl)) refl)) ")))
     (dcat3
       (DStr "(steps ((rewrite (premise w")
       (dint j)
       (DStr ") lr lhs true ()))) "))))
 
-;; premise pair from a node's position in a global PRE list (node k ->
-;; premises 2k / 2k+1 — the pure fragment's positional layout)
-(fn pr_event ((e Expr) (pres (List Expr)) (j Int)) Doc
-  (let ((k (pres_ix (spell e) pres 0))) (wrap_event e (* 2 k) (+ (* 2 k) 1) j)))
-
 ;; premise pair from the PItem layout (wrap pairs after the three fixed
 ;; portable slots — the mem fragment's discovery-order layout)
 (fn m_event ((e Expr) (pres (List PItem)) (j Int)) Doc
-  (let ((k (wrap_ix (spell e) pres 3))) (wrap_event e k (+ k 1) j)))
+  (let ((k (wrap_ix (spell e) pres 3)))
+    (wrap_event e (dint k) (dint (+ k 1)) j)))
+
+;; ---- the PRE-hygiene discharge templates ------------------------------------------
+
+;; get_lo/get_hi sub-proofs, one pair per read (the generated helper's
+;; byte premises, in premise order)
+(fn get_subs ((rs (List (Pair Expr Int)))) Doc
+  (measure (struct rs))
+  (match rs
+    (Nil (DStr ""))
+    ((Cons _ t)
+     (dcat3
+       (DStr "(steps ((rewrite (lemma get_lo) lr lhs true ())) refl) ")
+       (DStr "(steps ((rewrite (lemma get_hi) lr lhs true ())) refl) ")
+       (get_subs t)))))
+
+;; a derived-bound have: cite a generated helper claim, reads pinned by
+;; explicit insts, byte premises by get_lo/get_hi
+(fn iv_have ((nm Doc) (bound Doc) (helper Doc) (rs (List (Pair Expr Int)))) Doc
+  (dcat3
+    (dcat3 (DStr "(have ") nm (DCat (DStr " (= ") bound))
+    (dcat3
+      (DStr " True) (rewrite-with (lemma ")
+      helper
+      (DCat (DStr ") lr lhs (") (pr_read_insts rs 0)))
+    (dcat3 (DStr ") (") (get_subs rs) (DStr ") refl)) "))))
+
+;; the auto wrap event: a read-linear node's bounds derived (names bJ,
+;; bJ+1), then the wrap event at wJ+2 citing them
+(fn m_event_auto ((e Expr) (fnm Doc) (pres (List PItem)) (j Int)) Doc
+  (let ((k (paut_ix (spell e) pres 0)))
+    (let
+      ((rs
+         (match (pl_e e True)
+           ((Some p) (pl_atoms p))
+           (None Nil))))
+      (dcat3
+        (iv_have
+          (DCat (DStr "b") (dint j))
+          (bnd_le0 (pr_e e))
+          (wb_name fnm k True)
+          rs)
+        (iv_have
+          (DCat (DStr "b") (dint (+ j 1)))
+          (bnd_ltwrap (pr_e e))
+          (wb_name fnm k False)
+          rs)
+        (wrap_event
+          e
+          (DCat (DStr "b") (dint j))
+          (DCat (DStr "b") (dint (+ j 1)))
+          (+ j 2))))))
+
+;; hyp rewrites for a condition path, outermost first (hyp indices count
+;; down to the innermost arm's 0)
+(fn hyp_rews ((path (List (Pair Expr Bool))) (h Int)) Doc
+  (measure (struct path))
+  (match path
+    (Nil (DStr ""))
+    ((Cons _ t)
+     (dcat3
+       (dcat3 (DStr "(rewrite (hyp ") (dint h) (DStr ") lr rhs true ()) "))
+       (hyp_rews t (- h 1))
+       (DStr "")))))
+
+(fn path_len ((path (List (Pair Expr Bool)))) Int
+  (measure (struct path))
+  (match path
+    (Nil 0)
+    ((Cons _ t) (+ 1 (path_len t)))))
+
+;; strip a condition-wrapped premise inside its arm: rl-rewrite the
+;; premise onto the goal's rhs, fire every path hyp, compute the if nest
+;; away
+(fn strip_have ((nm Doc) (bound Doc) (idx Int) (path (List (Pair Expr Bool))))
+  Doc
+  (dcat3
+    (dcat3 (DStr "(have ") nm (DCat (DStr " (= ") bound))
+    (dcat3
+      (DStr " True) (chain (steps ((rewrite (premise ")
+      (dint idx)
+      (DCat (DStr ") rl rhs true ()) ") (hyp_rews path (- (path_len path) 1))))
+    (DStr "(compute rhs))) refl)) ")))
+
+;; a silently-derived bound: cite the generated single-condition helper,
+;; its one premise from the path hyp
+(fn drv_have ((nm Doc) (bound Doc) (cb Doc) (insts Doc) (hypIdx Int)) Doc
+  (dcat3
+    (dcat3 (DStr "(have ") nm (DCat (DStr " (= ") bound))
+    (dcat3
+      (DStr " True) (rewrite-with (lemma ")
+      cb
+      (DCat (DStr ") lr lhs (") insts))
+    (dcat3
+      (dcat3
+        (DStr ") ((steps ((rewrite (hyp ")
+        (dint hypIdx)
+        (DStr ") lr lhs true ())) refl)) "))
+      (DStr "refl)) ")
+      (DStr ""))))
 
 ;; ---- the stage-law flush ----------------------------------------------------------
 
-(fn m_flush_go ((ns (List Expr)) (pres (List PItem)) (j Int)) (Pair Doc Int)
+(fn m_flush_go ((ns (List Expr)) (pres (List PItem)) (fnm Doc) (j Int))
+  (Pair Doc Int)
   (measure (struct ns))
   (match ns
     (Nil (Pair (DStr "") j))
     ((Cons e t)
-     (match (m_flush_go t pres (+ j 1))
-       ((Pair d j2) (Pair (DCat (m_event e pres j) d) j2))))))
+     (if (wrap_seen (spell e) pres)
+       (match (m_flush_go t pres fnm (+ j 1))
+         ((Pair d j2) (Pair (DCat (m_event e pres j) d) j2)))
+       (match (m_flush_go t pres fnm (+ j 3))
+         ((Pair d j2) (Pair (DCat (m_event_auto e fnm pres j) d) j2)))))))
 
 ;; flush the pending wrap events (dedup within the stage, walk order =
 ;; postorder — children collapse before parents read them)
-(fn m_flush ((pend (List Expr)) (pres (List PItem)) (j Int)) (Pair Doc Int)
-  (m_flush_go (add_unique pend Nil) pres j))
+(fn m_flush ((pend (List Expr)) (pres (List PItem)) (fnm Doc) (j Int))
+  (Pair Doc Int)
+  (m_flush_go (add_unique pend Nil) pres fnm j))
 
 (fn m_stage_open () Doc (DStr "(steps ((compute lhs (stop eval_call)))) "))
 
@@ -131,33 +237,56 @@
 
 ;; ---- link-derivation discharge templates ------------------------------------------
 
+;; the two address sub-proofs for one behavior, by address class: cite the
+;; linked cert's premise pair, compute a ground literal's bound, or derive
+;; a read-linear address's bound via the generated ab helper
+(fn ac_sub ((ac AC) (fnm Doc) (lo Bool)) Doc
+  (match ac
+    ((ACPrem k)
+     (dcat3
+       (DStr "(steps ((rewrite (premise ")
+       (dint (if lo (* 2 k) (+ (* 2 k) 1)))
+       (DStr ") lr lhs true ())) refl) ")))
+    (ACGround (DStr "(steps ((compute both)) refl) "))
+    ((ACRead k rs)
+     (dcat3
+       (dcat3
+         (DStr "(rewrite-with (lemma ")
+         (ab_name fnm k lo)
+         (DCat (DStr ") lr lhs (") (pr_read_insts rs 0)))
+       (dcat3 (DStr ") (") (get_subs rs) (DStr ") refl) "))
+       (DStr "")))))
+
 ;; discharge one behavior premise by citing a shipped callee cert, its
-;; two premises from the linked cert's address pair k
-(fn link_beh ((cert (List Int)) (k Int)) Doc
+;; two premises by the address's class
+(fn link_beh ((cert (List Int)) (ac AC) (fnm Doc)) Doc
   (dcat3
     (dcat3 (DStr "(rewrite-with (lemma ") (DStr cert) (DStr ") lr lhs () "))
     (dcat3
-      (dcat3
-        (DStr "((steps ((rewrite (premise ")
-        (dint (* 2 k))
-        (DStr ") lr lhs true ())) refl) "))
-      (dcat3
-        (DStr "(steps ((rewrite (premise ")
-        (dint (+ (* 2 k) 1))
-        (DStr ") lr lhs true ())) refl)) "))
-      (DStr ""))
+      (DStr "(")
+      (DCat (ac_sub ac fnm True) (ac_sub ac fnm False))
+      (DStr ") "))
     (DStr "refl) ")))
+
+(fn ac_at ((acs (List AC)) (i Int)) AC
+  (measure (struct acs))
+  (match acs
+    (Nil ACGround)
+    ((Cons h t) (if (int_eq i 0) h (ac_at t (- i 1))))))
 
 ;; sub-proofs for the portable cert's item premises, in item order;
 ;; wb = the linked premise index where the wrap pairs start; getc/setc =
-;; the shipped cert names for slot-0 reads / slot-1 writes
+;; the shipped cert names for slot-0 reads / slot-1 writes; acs = the
+;; address classes aligned with `as`
 (fn link_subs
   ((ps (List PItem))
    (as (List Expr))
+   (acs (List AC))
    (wb Int)
    (w Int)
    (getc (List Int))
-   (setc (List Int)))
+   (setc (List Int))
+   (fnm Doc))
   Doc
   (measure (struct ps))
   (match ps
@@ -174,12 +303,13 @@
             (DStr "(steps ((rewrite (premise ")
             (dint (+ (+ wb (* 2 w)) 1))
             (DStr ") lr lhs true ())) refl) "))
-          (link_subs t as wb (+ w 1) getc setc)))
+          (link_subs t as acs wb (+ w 1) getc setc fnm)))
+       ((PAuto _) (link_subs t as acs wb w getc setc fnm))
        ((PGet a _)
         (DCat
-          (link_beh getc (pres_ix (spell a) as 0))
-          (link_subs t as wb w getc setc)))
+          (link_beh getc (ac_at acs (pres_ix (spell a) as 0)) fnm)
+          (link_subs t as acs wb w getc setc fnm)))
        ((PSet a _ _)
         (DCat
-          (link_beh setc (pres_ix (spell a) as 0))
-          (link_subs t as wb w getc setc)))))))
+          (link_beh setc (ac_at acs (pres_ix (spell a) as 0)) fnm)
+          (link_subs t as acs wb w getc setc fnm)))))))

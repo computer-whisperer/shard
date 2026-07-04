@@ -1,0 +1,255 @@
+;;; tools/low/lin — the lowering library's generator-side linear-arithmetic
+;;; kit: polynomials over spelled atoms (byte reads or param FVars),
+;;; interval bounds for read-linear nodes, and COMPUTED Farkas multiplier
+;;; lists (docs/LOWERING.md §6j, PRE hygiene). Nothing here is trusted:
+;;; every multiplier list this kit computes rides a generated (by arith …)
+;;; claim the kernel checks. Multipliers are computed, never searched —
+;;; interval bounds read them off the atom coefficients; single-condition
+;;; derivations solve the one-atom proportionality directly.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "schema.shard")
+
+(use (:: kernel term Expr))
+(use (:: kernel term FVar))
+(use (:: kernel term Call))
+(use (:: kernel term IntLit))
+(use (:: kernel term core_named))
+(use (:: tools low schema spell))
+(use (:: tools low schema memq_named))
+
+;; ---- polynomials -------------------------------------------------------------------
+;;
+;; atoms keyed by SPELLING (the canonical-expr discipline: equal spellings
+;; are the same site); first-occurrence order is preserved so everything
+;; rendered from a polynomial is regen-stable.
+
+(type Poly (MkPoly (List (Pair Expr Int)) Int))
+
+(fn pl_atom_add ((as (List (Pair Expr Int))) (e Expr) (k Int))
+  (List (Pair Expr Int))
+  (measure (struct as))
+  (match as
+    (Nil (Cons (Pair e k) Nil))
+    ((Cons (Pair a c) t)
+     (if (chars_eq (spell a) (spell e)) (Cons (Pair a (+ c k)) t)
+     (Cons (Pair a c) (pl_atom_add t e k))))))
+
+(fn pl_merge ((from (List (Pair Expr Int))) (into (List (Pair Expr Int))))
+  (List (Pair Expr Int))
+  (measure (struct from))
+  (match from
+    (Nil into)
+    ((Cons (Pair e k) t) (pl_merge t (pl_atom_add into e k)))))
+
+(fn pl_add ((a Poly) (b Poly)) Poly
+  (match a
+    ((MkPoly aa ak)
+     (match b
+       ((MkPoly ba bk) (MkPoly (pl_merge ba aa) (+ ak bk)))))))
+
+(fn pl_sca ((k Int) (as (List (Pair Expr Int)))) (List (Pair Expr Int))
+  (measure (struct as))
+  (match as
+    (Nil Nil)
+    ((Cons (Pair e c) t) (Cons (Pair e (* k c)) (pl_sca k t)))))
+
+(fn pl_scale ((k Int) (p Poly)) Poly
+  (match p
+    ((MkPoly as c) (MkPoly (pl_sca k as) (* k c)))))
+
+(fn pl_addc ((p Poly) (k Int)) Poly
+  (match p
+    ((MkPoly as c) (MkPoly as (+ c k)))))
+
+(fn pl_sub ((a Poly) (b Poly)) Poly (pl_add a (pl_scale (- 0 1) b)))
+
+(fn pl_atoms ((p Poly)) (List (Pair Expr Int))
+  (match p
+    ((MkPoly as _) as)))
+
+(fn pl_const ((p Poly)) Int
+  (match p
+    ((MkPoly _ c) c)))
+
+;; ---- the collector -----------------------------------------------------------------
+;;
+;; rd=True: atoms are std/mem READS (any param FVar makes the node
+;; non-derivable → None). rd=False: atoms are param FVars (the pure
+;; fragment's condition/node forms). Multiplication is linear only when
+;; one side collects to a constant; anything else is None (Farkas cannot
+;; certify a product of atoms).
+
+(fn pl_e ((e Expr) (rd Bool)) (Option Poly)
+  (measure (struct e))
+  (match e
+    ((IntLit k) (Some (MkPoly Nil k)))
+    ((FVar _) (if rd None (Some (MkPoly (Cons (Pair e 1) Nil) 0))))
+    ((Call q as)
+     (if (if rd (memq_named q (quote mem_get)) False)
+       (Some (MkPoly (Cons (Pair e 1) Nil) 0))
+       (match as
+         ((Cons a (Cons b Nil))
+          (if (core_named q (quote +))
+            (match (pl_e a rd)
+              (None None)
+              ((Some pa)
+               (match (pl_e b rd)
+                 (None None)
+                 ((Some pb) (Some (pl_add pa pb))))))
+          (if (core_named q (quote -))
+            (match (pl_e a rd)
+              (None None)
+              ((Some pa)
+               (match (pl_e b rd)
+                 (None None)
+                 ((Some pb) (Some (pl_sub pa pb))))))
+          (if (core_named q (quote *))
+            (match (pl_e a rd)
+              (None None)
+              ((Some pa)
+               (match (pl_e b rd)
+                 (None None)
+                 ((Some pb)
+                  (match pa
+                    ((MkPoly Nil ka) (Some (pl_scale ka pb)))
+                    (_
+                      (match pb
+                        ((MkPoly Nil kb) (Some (pl_scale kb pa)))
+                        (_ None))))))))
+            None))))
+         (_ None))))
+    (_ None)))
+
+;; ---- read intervals ----------------------------------------------------------------
+;;
+;; every read atom ranges over [0, 255]; a read-linear node's exact
+;; interval endpoints are the coefficient-signed corner sums.
+
+(fn pl_lo_go ((as (List (Pair Expr Int)))) Int
+  (measure (struct as))
+  (match as
+    (Nil 0)
+    ((Cons (Pair _ c) t) (+ (if (lt c 0) (* 255 c) 0) (pl_lo_go t)))))
+
+(fn pl_hi_go ((as (List (Pair Expr Int)))) Int
+  (measure (struct as))
+  (match as
+    (Nil 0)
+    ((Cons (Pair _ c) t) (+ (if (lt 0 c) (* 255 c) 0) (pl_hi_go t)))))
+
+(fn pl_lo ((p Poly)) Int (+ (pl_const p) (pl_lo_go (pl_atoms p))))
+
+(fn pl_hi ((p Poly)) Int (+ (pl_const p) (pl_hi_go (pl_atoms p))))
+
+;; ---- negated goals -----------------------------------------------------------------
+;;
+;; the checker refutes G*(¬goal) + Σ Mk*premise_k to a negative constant
+;; (kernel/arith.shard). The negated-goal polynomials, given E's poly:
+;;   (le 0 E) = True        →  -E - 1
+;;   (lt E 4294967296) = True →  E - 4294967296
+;;   (le (+ E 1) 65536) = True →  E - 65536
+
+(fn ng_le0 ((p Poly)) Poly (pl_addc (pl_scale (- 0 1) p) (- 0 1)))
+
+(fn ng_ltwrap ((p Poly)) Poly (pl_addc p (- 0 4294967296)))
+
+(fn ng_leaddr ((p Poly)) Poly (pl_addc p (- 0 65536)))
+
+;; ---- condition polynomials ---------------------------------------------------------
+;;
+;; a case path segment as a `>= 0` constraint (Pair poly is_inequality⁻¹:
+;; the Bool is True for an EQUALITY — any-sign multiplier). int_eq=False
+;; is a disequality (not linear) → None; the caller keeps the premise.
+
+(fn cond_poly ((c Expr) (pol Bool)) (Option (Pair Poly Bool))
+  (match c
+    ((Call q as)
+     (match as
+       ((Cons a (Cons b Nil))
+        (match (pl_e a False)
+          (None None)
+          ((Some pa)
+           (match (pl_e b False)
+             (None None)
+             ((Some pb)
+              (if (core_named q (quote lt))
+                (Some
+                  (Pair
+                    (if pol (pl_addc (pl_sub pb pa) (- 0 1)) (pl_sub pa pb))
+                    False))
+              (if (core_named q (quote le))
+                (Some
+                  (Pair
+                    (if pol (pl_sub pb pa) (pl_addc (pl_sub pa pb) (- 0 1)))
+                    False))
+              (if (core_named q (quote int_eq))
+                (if pol (Some (Pair (pl_sub pa pb) True)) None)
+                None))))))))
+       (_ None)))
+    (_ None)))
+
+;; ---- the single-condition solver ---------------------------------------------------
+
+(fn pl_coeff ((as (List (Pair Expr Int))) (s (List Int))) Int
+  (measure (struct as))
+  (match as
+    (Nil 0)
+    ((Cons (Pair a c) t) (if (chars_eq (spell a) s) c (pl_coeff t s)))))
+
+(fn pl_first_nz ((as (List (Pair Expr Int)))) (Option (Pair Expr Int))
+  (measure (struct as))
+  (match as
+    (Nil None)
+    ((Cons (Pair a c) t) (if (int_eq c 0) (pl_first_nz t) (Some (Pair a c))))))
+
+(fn pl_all_zero ((as (List (Pair Expr Int)))) Bool
+  (measure (struct as))
+  (match as
+    (Nil True)
+    ((Cons (Pair _ c) t) (if (int_eq c 0) (pl_all_zero t) False))))
+
+(fn pl_refuted ((p Poly)) Bool
+  (if (pl_all_zero (pl_atoms p)) (lt (pl_const p) 0) False))
+
+;; Find (G, M) with G*ng + M*cond a negative constant: proportionality on
+;; ng's first live atom fixes the ratio; the full cancellation and the
+;; constant sign are then VERIFIED (a failed check is a clean None — the
+;; premise stays, never an unsound cert). iseq: an equality condition may
+;; take a negative M; an inequality may not.
+(fn solve1 ((ng Poly) (cp Poly) (iseq Bool)) (Option (Pair Int Int))
+  (match (pl_first_nz (pl_atoms ng))
+    (None None)
+    ((Some (Pair a n))
+     (let ((cstar (pl_coeff (pl_atoms cp) (spell a))))
+       (if (int_eq cstar 0) None
+       (let ((g (if (lt cstar 0) (- 0 cstar) cstar)))
+         (let ((m (- 0 (ediv (* g n) cstar))))
+           (if (int_eq m 0) None
+           (if (if iseq False (lt m 0)) None
+           (if (pl_refuted (pl_add (pl_scale g ng) (pl_scale m cp)))
+             (Some (Pair g m))
+             None))))))))))
+
+;; ---- interval multiplier lists -----------------------------------------------------
+;;
+;; the generated read-bound helper puts (le 0 rI) at premise 2I and
+;; (lt rI 256) at 2I+1. The lower-bound cert multiplies premise 2I by
+;; max(cI, 0) and 2I+1 by max(-cI, 0); the upper-bound cert swaps them.
+;; (Each atom's contribution cancels the negated goal's, leaving the
+;; interval endpoint's distance past the bound as the negative constant.)
+
+(fn iv_lo_mults ((as (List (Pair Expr Int)))) (List Int)
+  (measure (struct as))
+  (match as
+    (Nil Nil)
+    ((Cons (Pair _ c) t)
+     (Cons (if (lt 0 c) c 0) (Cons (if (lt c 0) (- 0 c) 0) (iv_lo_mults t))))))
+
+(fn iv_hi_mults ((as (List (Pair Expr Int)))) (List Int)
+  (measure (struct as))
+  (match as
+    (Nil Nil)
+    ((Cons (Pair _ c) t)
+     (Cons (if (lt c 0) (- 0 c) 0) (Cons (if (lt 0 c) c 0) (iv_hi_mults t))))))

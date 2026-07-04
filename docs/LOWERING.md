@@ -217,11 +217,11 @@ Two findings:
   loop pieces already follow, no model or encoder change. This is the
   four-gate architecture doing its job: kernel truth ≠ engine validity,
   and the ENGINE gate is where the difference surfaces.
-- *PRE caveat (v1)*: arm range premises quantify over the whole
+- *PRE caveat (v1)*: arm range premises quantified over the whole
   contract — `(if (lt 0 x) (- x 1) 0)` would demand `0 ≤ x-1` globally.
-  Arm expressions must be in-range on the full domain;
-  condition-relative premises (dischargeable from the case hyp via
-  generator-emitted farkas) are future work.
+  RESOLVED by §6j (PRE hygiene): arm premises are condition-relative,
+  and a side derivable from the case hyp is discharged silently by a
+  generator-emitted Farkas helper.
 
 All 12 proofs pass (4 new: ground-arm gate, arith arms, nested if,
 let-above-if with a zero-node True arm); four gates green, V8 25/25.
@@ -355,8 +355,8 @@ answer to the `(inline …)` same-file rule).
   Emitted module = `[mget, mset, self]` at index 2 (the minimal-prefix
   convention); PREs per unique (kind, spelling): wrap bounds for arith
   nodes, address bounds for mem-op addresses (the callee certs' premise
-  shapes — read-value bounds stated as PREs, derivable via
-  `get_lo`/`get_hi`, not yet auto-discharged).
+  shapes — read-value bounds derivable via `get_lo`/`get_hi` are
+  AUTO-DISCHARGED since §6j and never appear as premises).
 - **The stage law** (what makes the proofs machine-writable): wrap
   events are collected during the CODE walk and flushed per call site —
   `(compute lhs (stop eval_call))`, then the pending events (everything
@@ -605,6 +605,63 @@ modules the theorems are actually about. Now it is CHECKED:
   tools now share it.
 
 All five gates green on all four builds (pure/mem/loop/std-mem).
+
+### 6j. PRE hygiene (2026-07-04)
+
+The last ratification-round queue item: derivable premises leave the
+contracts, and over-broad premises become condition-relative. Probed by
+hand first (`examples/prehyg_probe.shard`, 42/0 first run — in
+wasm_diff_run's check closure), then mechanized. Three mechanisms, all
+riding `tools/low/lin.shard` — the new generator-side linear-arithmetic
+kit (polynomials over spelled atoms, read intervals, and **computed
+Farkas multiplier lists** — multipliers are read off coefficients,
+never searched; every list rides a generated `(by arith …)` claim the
+kernel checks, so a generator bug is a loud gate-3 failure, never an
+unsound cert):
+
+- **Read-bound auto-discharge (mem fragment).** An arith node LINEAR in
+  byte reads whose interval fits `[0, 2^32)` becomes a `PAuto` item —
+  zero premise slots. The proof derives its bounds: a generated
+  `wb_<fn>_<k>_lo/hi` helper claim (byte premises per read ⊢ the bound,
+  by the interval multiplier cert) cited through a `(have bJ …)` whose
+  sub-proofs are `get_lo`/`get_hi` rewrites; the wrap event then cites
+  the haves instead of premise indices. `mg_bump`'s two derivable
+  premises are GONE from `lowered_mg_bump`; `mg_sum2`, `mg_dbl`
+  likewise. A product of reads is NONLINEAR — Farkas cannot certify it,
+  so it keeps its premises (`mg_prod` = the pinned negative control);
+  nodes touching params keep theirs (genuine contract).
+- **Link-side address bounds.** Same classification for behavior
+  addresses in the linked derivation: a ground literal's pair
+  discharges by `(compute both)` (and an out-of-range literal address
+  is now REFUSED at generation — the linked artifact would be vacuous);
+  a read-derived address's pair derives via `ab_<fn>_<k>_lo/hi`
+  helpers (`linked_mg_ind`'s indirection address, `linked_mg_first`'s
+  trivial `(le 0 0)` pair — both premise-free now). Only genuinely
+  contractual addresses keep pairs.
+- **Condition-relative premises (pure fragment — the P2c caveat,
+  resolved).** Arm-local node premises are if-wrapped in the arm's
+  condition path — `(= (if COND BOUND True) True)` (`(if COND True
+  BOUND)` on a False arm), nested for deeper regions — and STRIPPED
+  inside the arm by a `(have pJ …)`: rl-rewrite the premise onto the
+  goal's rhs, fire every path hyp (positional `(hyp K)`, innermost = 0
+  — reaches same-polarity-shadowed outer hyps), compute the if nest
+  away. A side derivable from a path condition alone (the abs pattern)
+  emits NO premise: a generated `cb_<fn>_<k>` single-condition helper
+  (proportionality solved on the first live atom, verified before
+  emission) cited through a silent `(have dJ …)`. `(if (lt 0 x) (- x 1)
+  0)` — the caveat's own example — is now `lg_dec` in the source set:
+  lower bound silent, upper bound condition-relative. Everything is
+  emitted by ONE fused walk (premises, helper claims, proof text
+  together), so indices, ordinals, and have names cannot drift apart;
+  fns without ifs regenerate byte-identically.
+
+Consumer effect, demonstrated the day it landed: the portable certs'
+premise DELETIONS flowed to `repswap_probe`'s v2 derivations as premise
+deletions of their own (drop the corresponding sub-proofs, statement
+gets stronger) — hygiene propagates through the citation chain. All
+five gates green on all four builds; corpus closure 182/0, V8 54/0.
+This also stages the future multiple-stores/aliasing loop work: the
+disequality premises those need are condition-relative by nature.
 
 ## 7. Open questions (the back-and-forth queue)
 
