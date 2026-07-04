@@ -286,16 +286,40 @@
 ;; where the old runtime arity guard stuck it.
 ;; ===========================================================================
 
+;; PExpr: the PURE instruction form — subtrees the effect analysis (below)
+;; proves can never reach an extern. These run on `evp`, which threads no
+;; World and returns a bare Expr: the (Pair value World) that ev allocates
+;; PER CALL was the largest remaining allocation source after lever 3.
+(type PExpr
+  (PuVal Expr)  ; value leaf (IntLit/SymLit/FVar) — returned as-is, shared
+  (PuBVar Int)
+  (PuCtor QName (List PExpr))
+  (PuLet (List PExpr) PExpr)
+  (PuIf PExpr PExpr PExpr)
+  (PuMatch PExpr (List PuArm))
+  (PuCall Bool QName (Option Int) (List PExpr)))  ; core-pathed? + head + index
+
+(type PuArm (PuArm Pat PExpr))
+
+;; EExpr: the EFFECTFUL instruction form — a node is EExpr only if some
+;; extern is reachable under it; pure subtrees embed as (EPure …) and drop
+;; into evp. Value leaves and BVars are always pure, so EExpr has none.
 (type EExpr
-  (EVal Expr)  ; value leaf (IntLit/SymLit/FVar) — returned as-is, shared
-  (EBVar Int)
+  (EPure PExpr)
   (ECtor QName (List EExpr))
   (ELet (List EExpr) EExpr)
   (EIf EExpr EExpr EExpr)
   (EMatch EExpr (List EArm))
-  (ECall Bool QName (Option Int) (List EExpr)))  ; core-pathed? + head + resolved index
+  (ECall Bool QName (Option Int) (List EExpr)))  ; core-pathed? + head + index
 
 (type EArm (EArm Pat EExpr))
+
+;; A table entry: the translated body in whichever form its fn's effect
+;; flag dictates (FtP for pure fns — the invariant that lets evp dispatch
+;; without a World; ev-side calls to a pure fn also take the FtP fast path).
+(type FtEntry
+  (FtP PExpr)
+  (FtE EExpr))
 
 ;; FnTab: a Braun tree over the translated fn bodies, in fns-list order
 ;; (root = index 0, odd indices in the left subtree, even in the right).
@@ -303,15 +327,15 @@
 ;; REVERSED body list yields index i = fn i.
 (type FnTab
   (FtNil)
-  (FtNode EExpr FnTab FnTab))
+  (FtNode FtEntry FnTab FnTab))
 
-(fn braun_cons ((v EExpr) (t FnTab)) FnTab
+(fn braun_cons ((v FtEntry) (t FnTab)) FnTab
   (measure (struct t))
   (match t
     (FtNil (FtNode v FtNil FtNil))
     ((FtNode w o e) (FtNode v (braun_cons w e) o))))
 
-(fn braun_get ((t FnTab) (i Int)) (Option EExpr)
+(fn braun_get ((t FnTab) (i Int)) (Option FtEntry)
   (measure (struct t))
   (match t
     (FtNil None)
@@ -319,6 +343,33 @@
      (if (int_eq i 0) (Some v)
      (if (int_eq (mod i 2) 1) (braun_get o (ediv i 2))
      (braun_get e (- (ediv i 2) 1)))))))
+
+;; BTab: a Braun tree of Bools — the per-fn effect flags (bt_get on a miss
+;; is False: no fn, no effect).
+(type BTab
+  (BtNil)
+  (BtNode Bool BTab BTab))
+
+(fn bt_cons ((v Bool) (t BTab)) BTab
+  (measure (struct t))
+  (match t
+    (BtNil (BtNode v BtNil BtNil))
+    ((BtNode w o e) (BtNode v (bt_cons w e) o))))
+
+(fn bt_get ((t BTab) (i Int)) Bool
+  (measure (struct t))
+  (match t
+    (BtNil False)
+    ((BtNode v o e)
+     (if (int_eq i 0) v
+     (if (int_eq (mod i 2) 1) (bt_get o (ediv i 2))
+     (bt_get e (- (ediv i 2) 1)))))))
+
+(fn bt_build_rev ((bs (List Bool)) (acc BTab)) BTab
+  (measure (struct bs))
+  (match bs
+    (Nil acc)
+    ((Cons b t) (bt_build_rev t (bt_cons b acc)))))
 
 ;; The resolution index: the REAL trie shape — same keys, same insert order,
 ;; same keep-first winners — with each payload's body swapped for its
@@ -347,56 +398,344 @@
          (_ (Some (- 0 1))))
        (Some (- 0 1))))))
 
-;; ---- the body translation: one uniform walk ---------------------------------
+;; ---- effect analysis ---------------------------------------------------------
+;; A fn is EFFECTFUL iff its body can reach an extern: a call whose bare
+;; name is in the extern vocabulary (conservative — in run mode a core
+;; head probes externs after prims, so an extern-named call may perform),
+;; or a resolved call to an effectful fn. Computed as the least fixpoint
+;; over the resolved call graph: per-fn (direct?, callees) once, then
+;; monotone passes until no flag flips (≤ n+1 passes; each pass at least
+;; one new True or the loop stops).
 
-(fn tr_expr ((e Expr) (ixt FnTrie)) EExpr
+;; one body's (direct-extern?, resolved callee indices), accumulator-style.
+(fn eff_scan ((e Expr) (ixt FnTrie) (acc (Pair Bool (List Int))))
+  (Pair Bool (List Int))
   (measure (struct e))
   (match e
-    ((IntLit _) (EVal e))
-    ((SymLit _) (EVal e))
-    ((FVar _) (EVal e))
-    ((BVar k) (EBVar k))
-    ((Ctor c args) (ECtor c (tr_list args ixt)))
-    ((Let bs body) (ELet (tr_list bs ixt) (tr_expr body ixt)))
-    ((If c t el) (EIf (tr_expr c ixt) (tr_expr t ixt) (tr_expr el ixt)))
-    ((Match s arms) (EMatch (tr_expr s ixt) (tr_arms arms ixt)))
     ((Call f args)
-     (ECall
-       (ev_core_path (qn_mod f))  ; the head's path is static — decide it here
-       f
-       (tr_target f args ixt)
-       (tr_list args ixt)))))
+     (let ((acc1 (eff_scan_list args ixt acc)))
+       (if (is_extern (qn_name f))
+         (match acc1
+           ((Pair _ cs) (Pair True cs)))
+         (match (tr_target f args ixt)
+           ((Some i)
+            (if (le 0 i)
+              (match acc1
+                ((Pair d cs) (Pair d (Cons i cs))))
+              acc1))  ; -1 arity sentinel: the call sticks — no effect
+           (None acc1)))))  ; unresolved: a prim or a stuck call — no effect
+    ((Ctor _ args) (eff_scan_list args ixt acc))
+    ((Let bs body) (eff_scan body ixt (eff_scan_list bs ixt acc)))
+    ((If c t el) (eff_scan el ixt (eff_scan t ixt (eff_scan c ixt acc))))
+    ((Match s arms) (eff_scan_arms arms ixt (eff_scan s ixt acc)))
+    (_ acc)))
 
-(fn tr_list ((es (List Expr)) (ixt FnTrie)) (List EExpr)
+(fn eff_scan_list ((es (List Expr)) (ixt FnTrie) (acc (Pair Bool (List Int))))
+  (Pair Bool (List Int))
+  (measure (struct es))
+  (match es
+    (Nil acc)
+    ((Cons h t) (eff_scan_list t ixt (eff_scan h ixt acc)))))
+
+(fn eff_scan_arms ((arms (List Arm)) (ixt FnTrie) (acc (Pair Bool (List Int))))
+  (Pair Bool (List Int))
+  (measure (struct arms))
+  (match arms
+    (Nil acc)
+    ((Cons (Arm _ b) rest) (eff_scan_arms rest ixt (eff_scan b ixt acc)))))
+
+(fn eff_infos ((fds (List FnDef)) (ixt FnTrie))
+  (List (Pair Bool (List Int)))
+  (measure (struct fds))
+  (match fds
+    (Nil Nil)
+    ((Cons fd rest)
+     (match fd
+       ((FnDef _ _ _ b)
+        (Cons (eff_scan b ixt (Pair False Nil)) (eff_infos rest ixt)))))))
+
+(fn any_eff ((cs (List Int)) (eff BTab)) Bool
+  (measure (struct cs))
+  (match cs
+    (Nil False)
+    ((Cons i t) (if (bt_get eff i) True (any_eff t eff)))))
+
+;; one pass: recompute every flag against the previous table.
+;; returns (changed?, new flags REVERSED — bt_build_rev's order).
+(fn eff_pass
+  ((infos (List (Pair Bool (List Int))))
+   (eff BTab)
+   (i Int)
+   (accrev (List Bool))
+   (chg Bool))
+  (Pair Bool (List Bool))
+  (measure (struct infos))
+  (match infos
+    (Nil (Pair chg accrev))
+    ((Cons (Pair d cs) rest)
+     (let ((old (bt_get eff i)))
+       (let ((new (if old True (if d True (any_eff cs eff)))))
+         (eff_pass
+           rest
+           eff
+           (+ i 1)
+           (Cons new accrev)
+           (if new (if old chg True) chg)))))))  ; monotone: only False→True flips
+
+(fn eff_fix
+  ((infos (List (Pair Bool (List Int)))) (eff BTab) (fuel Int))
+  BTab
+  (measure fuel (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt fuel 1) eff
+  (match (eff_pass infos eff 0 Nil False)
+    ((Pair chg flagsrev)
+     (if chg (eff_fix infos (bt_build_rev flagsrev BtNil) (- fuel 1)) eff)))))
+
+(fn eff_fuel ((fds (List FnDef)) (n Int)) Int
+  (measure (struct fds))
+  (match fds
+    (Nil (+ n 1))
+    ((Cons _ t) (eff_fuel t (+ n 1)))))
+
+(fn build_efftab ((fns (List FnDef)) (ixt FnTrie)) BTab
+  (eff_fix (eff_infos fns ixt) BtNil (eff_fuel fns 0)))
+
+;; ---- the body translation: one bottom-up walk --------------------------------
+;; Each subtree translates to its OWN form: TrP if no extern is reachable
+;; under it, TrE otherwise. A pure child in an effectful parent embeds as
+;; (EPure …); the reverse never happens (an effectful child makes its
+;; parent effectful). trp_of's fallback arm is unreachable — every use is
+;; guarded by all_p / is_p — but keeps the extractor total.
+
+(type TrRes
+  (TrP PExpr)
+  (TrE EExpr))
+
+(fn is_p ((r TrRes)) Bool
+  (match r
+    ((TrP _) True)
+    ((TrE _) False)))
+
+(fn all_p ((rs (List TrRes))) Bool
+  (measure (struct rs))
+  (match rs
+    (Nil True)
+    ((Cons h t) (if (is_p h) (all_p t) False))))
+
+(fn tre_of ((r TrRes)) EExpr
+  (match r
+    ((TrP p) (EPure p))
+    ((TrE e) e)))
+
+(fn trp_of ((r TrRes)) PExpr
+  (match r
+    ((TrP p) p)
+    ((TrE _) (PuVal (IntLit 0)))))  ; unreachable (guarded); total
+
+(fn map_trp ((rs (List TrRes))) (List PExpr)
+  (measure (struct rs))
+  (match rs
+    (Nil Nil)
+    ((Cons h t) (Cons (trp_of h) (map_trp t)))))
+
+(fn map_tre ((rs (List TrRes))) (List EExpr)
+  (measure (struct rs))
+  (match rs
+    (Nil Nil)
+    ((Cons h t) (Cons (tre_of h) (map_tre t)))))
+
+;; is a call with this head pure? Aligned EXACTLY with eff_scan's per-call
+;; test — that alignment is the invariant that keeps pure-flagged fns
+;; translating to TrP (so FtP entries exist for evp to dispatch into).
+(fn call_pure ((f QName) (fb (Option Int)) (eff BTab)) Bool
+  (if (is_extern (qn_name f)) False
+  (match fb
+    ((Some i) (if (le 0 i) (if (bt_get eff i) False True) True))
+    (None True))))
+
+(fn tr2_expr ((e Expr) (ixt FnTrie) (eff BTab)) TrRes
+  (measure (struct e))
+  (match e
+    ((IntLit _) (TrP (PuVal e)))
+    ((SymLit _) (TrP (PuVal e)))
+    ((FVar _) (TrP (PuVal e)))
+    ((BVar k) (TrP (PuBVar k)))
+    ((Ctor c args)
+     (let ((rs (tr2_list args ixt eff)))
+       (if (all_p rs)
+         (TrP (PuCtor c (map_trp rs)))
+         (TrE (ECtor c (map_tre rs))))))
+    ((Let bs body)
+     (let ((rb (tr2_list bs ixt eff)))
+       (let ((rbody (tr2_expr body ixt eff)))
+         (if (if (all_p rb) (is_p rbody) False)
+           (TrP (PuLet (map_trp rb) (trp_of rbody)))
+           (TrE (ELet (map_tre rb) (tre_of rbody)))))))
+    ((If c t el)
+     (let ((rc (tr2_expr c ixt eff)))
+       (let ((rt (tr2_expr t ixt eff)))
+         (let ((re (tr2_expr el ixt eff)))
+           (if (if (is_p rc) (if (is_p rt) (is_p re) False) False)
+             (TrP (PuIf (trp_of rc) (trp_of rt) (trp_of re)))
+             (TrE (EIf (tre_of rc) (tre_of rt) (tre_of re))))))))
+    ((Match s arms)
+     (let ((rsc (tr2_expr s ixt eff)))
+       (let ((ras (tr2_arms arms ixt eff)))
+         (if (if (is_p rsc) (arms_all_p ras) False)
+           (TrP (PuMatch (trp_of rsc) (map_parm ras)))
+           (TrE (EMatch (tre_of rsc) (map_earm ras)))))))
+    ((Call f args)
+     (let ((core (ev_core_path (qn_mod f))))  ; the head's path is static
+       (let ((fb (tr_target f args ixt)))
+         (let ((rs (tr2_list args ixt eff)))
+           (if (if (call_pure f fb eff) (all_p rs) False)
+             (TrP (PuCall core f fb (map_trp rs)))
+             (TrE (ECall core f fb (map_tre rs))))))))))
+
+(fn tr2_list ((es (List Expr)) (ixt FnTrie) (eff BTab)) (List TrRes)
   (measure (struct es))
   (match es
     (Nil Nil)
-    ((Cons h t) (Cons (tr_expr h ixt) (tr_list t ixt)))))
+    ((Cons h t) (Cons (tr2_expr h ixt eff) (tr2_list t ixt eff)))))
 
-(fn tr_arms ((arms (List Arm)) (ixt FnTrie)) (List EArm)
+(fn tr2_arms ((arms (List Arm)) (ixt FnTrie) (eff BTab))
+  (List (Pair Pat TrRes))
   (measure (struct arms))
   (match arms
     (Nil Nil)
-    ((Cons (Arm p b) rest) (Cons (EArm p (tr_expr b ixt)) (tr_arms rest ixt)))))
+    ((Cons (Arm p b) rest)
+     (Cons (Pair p (tr2_expr b ixt eff)) (tr2_arms rest ixt eff)))))
 
-;; Translated bodies, REVERSED (the accumulator order braun-building wants).
-(fn tr_bodies_rev ((fds (List FnDef)) (ixt FnTrie) (acc (List EExpr)))
-  (List EExpr)
+(fn arms_all_p ((ras (List (Pair Pat TrRes)))) Bool
+  (measure (struct ras))
+  (match ras
+    (Nil True)
+    ((Cons (Pair _ r) t) (if (is_p r) (arms_all_p t) False))))
+
+(fn map_parm ((ras (List (Pair Pat TrRes)))) (List PuArm)
+  (measure (struct ras))
+  (match ras
+    (Nil Nil)
+    ((Cons (Pair p r) t) (Cons (PuArm p (trp_of r)) (map_parm t)))))
+
+(fn map_earm ((ras (List (Pair Pat TrRes)))) (List EArm)
+  (measure (struct ras))
+  (match ras
+    (Nil Nil)
+    ((Cons (Pair p r) t) (Cons (EArm p (tre_of r)) (map_earm t)))))
+
+;; Table entries, REVERSED (the accumulator order braun-building wants).
+;; A pure-flagged fn's body is TrP by the call_pure/eff_scan alignment;
+;; the FtE fallback there is unreachable belt-and-suspenders.
+(fn ft_entries_rev
+  ((fds (List FnDef)) (ixt FnTrie) (eff BTab) (i Int) (acc (List FtEntry)))
+  (List FtEntry)
   (measure (struct fds))
   (match fds
     (Nil acc)
     ((Cons fd rest)
      (match fd
-       ((FnDef _ _ _ b) (tr_bodies_rev rest ixt (Cons (tr_expr b ixt) acc)))))))
+       ((FnDef _ _ _ b)
+        (ft_entries_rev
+          rest
+          ixt
+          eff
+          (+ i 1)
+          (Cons
+            (if (bt_get eff i)
+              (FtE (tre_of (tr2_expr b ixt eff)))
+              (match (tr2_expr b ixt eff)
+                ((TrP p) (FtP p))
+                ((TrE e) (FtE e))))
+            acc)))))))
 
-(fn ft_build_rev ((bs (List EExpr)) (acc FnTab)) FnTab
+(fn ft_build_rev ((bs (List FtEntry)) (acc FnTab)) FnTab
   (measure (struct bs))
   (match bs
     (Nil acc)
     ((Cons b t) (ft_build_rev t (braun_cons b acc)))))
 
-(fn build_fntab ((fns (List FnDef)) (ixt FnTrie)) FnTab
-  (ft_build_rev (tr_bodies_rev fns ixt Nil) FtNil))
+(fn build_fntab ((fns (List FnDef)) (ixt FnTrie) (eff BTab)) FnTab
+  (ft_build_rev (ft_entries_rev fns ixt eff 0 Nil) FtNil))
+
+;; ---- evp: the PURE evaluator --------------------------------------------------
+;; Runs PExpr — subtrees the effect analysis proved extern-free — with no
+;; World, no app_args, and no result Pair. Same value domain, same env
+;; convention, same probe order as ev (minus the extern probe, which the
+;; analysis excluded). fire_parm/evp_hit mirror fire_earm/ev_hit.
+
+(fn fire_parm ((arms (List PuArm)) (v Expr)) (Option (Pair PExpr (List Expr)))
+  (measure (struct arms))
+  (match arms
+    (Nil None)
+    ((Cons (PuArm p body) rest)
+     (match (match_val p v Nil)
+       ((Some binds) (Some (Pair body binds)))
+       (None (fire_parm rest v))))))
+
+(fn evp ((tab FnTab) (env (List Expr)) (e PExpr)) Expr
+  (match e
+    ((PuVal v) v)
+    ((PuBVar k) (env_get env k))
+    ((PuCtor c args)
+     (let ((vs (evp_list tab env args)))
+       (match (nat_pack c vs)  ; ground Z/S packs to its literal (reduce.shard)
+         ((Some v) v)
+         (None (Ctor c vs)))))
+    ((PuLet bs body)
+     (evp tab (append_exprs (evp_list_rev tab env bs Nil) env) body))  ; last RHS = BVar 0
+    ((PuIf c t el)
+     (let ((cv (evp tab env c)))
+       (match cv
+         ((Ctor (QName _ (quote True)) Nil) (evp tab env t))
+         ((Ctor (QName _ (quote False)) Nil) (evp tab env el))
+         (_ (If cv cv cv)))))  ; stuck cond — error-path residual only
+    ((PuMatch s arms)
+     (let ((sv (evp tab env s)))
+       (match (fire_parm arms sv)
+         ((Some (Pair body binds)) (evp tab (append_exprs binds env) body))
+         (None (Match sv Nil)))))  ; stuck scrut — error-path residual only
+    ((PuCall core f fb args)
+     (evp_call tab core f fb (evp_list_rev tab env args Nil)))))
+
+(fn evp_list ((tab FnTab) (env (List Expr)) (es (List PExpr))) (List Expr)
+  (match es
+    (Nil Nil)
+    ((Cons h t) (Cons (evp tab env h) (evp_list tab env t)))))
+
+(fn evp_list_rev
+  ((tab FnTab) (env (List Expr)) (es (List PExpr)) (acc (List Expr)))
+  (List Expr)
+  (match es
+    (Nil acc)
+    ((Cons h t) (evp_list_rev tab env t (Cons (evp tab env h) acc)))))
+
+(fn evp_call
+  ((tab FnTab) (core Bool) (f QName) (fb (Option Int)) (vsr (List Expr)))
+  Expr
+  (if core
+    (let ((vs (reverse_exprs vsr)))
+      (match (try_step_prim (qn_name f) vs)
+        ((Some r) r)
+        (None (evp_hit tab f fb vsr))))
+    (match fb
+      ((Some _) (evp_hit tab f fb vsr))
+      (None
+        (let ((vs (reverse_exprs vsr)))
+          (match (try_step_prim (qn_name f) vs)
+            ((Some r) r)
+            (None (Call f vs))))))))
+
+;; An FtE hit is unreachable here (an effectful callee would have made the
+;; calling site effectful); it sticks, keeping evp_hit total either way.
+(fn evp_hit ((tab FnTab) (f QName) (fb (Option Int)) (vsr (List Expr))) Expr
+  (match fb
+    ((Some i)
+     (match (braun_get tab i)
+       ((Some (FtP body)) (evp tab vsr body))
+       ((Some (FtE _)) (Call f (reverse_exprs vsr)))
+       (None (Call f (reverse_exprs vsr)))))
+    (None (Call f (reverse_exprs vsr)))))
 
 ;; ev: evaluate `e` (whose free BVars index into `env`) to a value, threading
 ;; the World `w` through inline effects. Returns (value, advanced World).
@@ -407,8 +746,7 @@
   ((tab FnTab) (env (List Expr)) (e EExpr) (app_args (List (List Int))) (w World))
   (Pair Expr World)
   (match e
-    ((EVal v) (Pair v w))
-    ((EBVar k) (Pair (env_get env k) w))
+    ((EPure p) (Pair (evp tab env p) w))  ; extern-free: the World is untouched
     ((ECtor c args)
      (match (ev_list tab env args app_args w)
        ((Pair vs w1)
@@ -504,7 +842,8 @@
   (match fb
     ((Some i)
      (match (braun_get tab i)
-       ((Some body) (ev tab vsr body app_args w))
+       ((Some (FtP body)) (Pair (evp tab vsr body) w))  ; pure fn: Pair-free descent
+       ((Some (FtE body)) (ev tab vsr body app_args w))
        (None (Pair (Call f (reverse_exprs vsr)) w))))
     (None (Pair (Call f (reverse_exprs vsr)) w))))
 
@@ -686,13 +1025,14 @@
   (match m
     ((Module _ fns _ _ _)
      (let ((ixt (build_fn_trie (ix_fndefs fns 0))))
-       (let ((tab (build_fntab fns ixt)))
-         (match (ev tab Nil (tr_expr expr ixt) app_args w)
+       (let ((eff (build_efftab fns ixt)))
+         (let ((tab (build_fntab fns ixt eff)))
+           (match (ev tab Nil (tre_of (tr2_expr expr ixt eff)) app_args w)
            ((Pair r wf)
             (match r
               ((Ctor c _)
                (if (sym_eq (qn_name c) (quote World)) wf (run_app_stuck wf)))
-              (_ (run_app_stuck wf))))))))))
+              (_ (run_app_stuck wf)))))))))))
 
 (fn run_app_stuck ((w World)) World
   (exit
