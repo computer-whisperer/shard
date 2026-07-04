@@ -401,6 +401,17 @@ flat memory and calling conventions) → cross-model correspondence vocabulary
 (the adapter thread coming due) → pass-proof generation economics (solver-
 manufactured simulation proofs; same measured-question discipline as §7).
 
+**Correction (2026-07-04, user):** the wasm→x86 *certifying-translation*
+route above was never directly blessed and should not be read as the plan
+of record. The expectation is a **direct shard→x86 lowering in the same
+manner as shard→wasm**, with the two paths sharing mechanisms by careful
+decision. The load-bearing shared thing is the **common lowering step**
+(the target-independent part of the refinement dance) — a major
+development in its own right; whether its intermediate form happens to
+coincide with wasm's shape is an open question, not a commitment. Present
+focus: generic tooling and libraries for processing/reprocessing that the
+refinement dance requires — the composable kit, not target count.
+
 **Sequencing decided:** Nat former first (self-contained, fence-respecting
 kernel work that removes a known wall before it is hit), then the `Mem` arc.
 
