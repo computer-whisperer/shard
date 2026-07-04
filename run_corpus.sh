@@ -44,6 +44,8 @@ TARGETS=(
   examples/shadow_rejects.shard
   examples/finsplit_test.shard
   examples/have_test.shard
+  examples/inject_basic.shard
+  examples/inject_rejects.shard
   examples/prove_cond_mine.shard
   examples/homonym_dispatch.shard
   examples/inspect_demo.shard

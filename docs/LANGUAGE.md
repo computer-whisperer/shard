@@ -731,10 +731,11 @@ recovered from the target file or the same-module `mod.req.shard`
 | `(have NAME EQ PROOF₁ PROOF₂)`               | `Have`      | named cut: as above, and `PROOF₂` may cite the fact as `(premise NAME)` — rewritten to the positional 3-arg form before parsing (§10.6), so inserting earlier haves can't break later citations |
 | `(fin-split VAR LO HI (CASE…))`              | `FinSplit`  | bounded-Int enumeration: `LO`/`HI` cite range premises for `VAR`; one `(case INT PROOF)` per value |
 | `(div-facts TERM D Q PROOF)`                 | `DivFacts`  | inject the Euclidean triple for `TERM` at literal divisor `D` (`n = D·Q + mod n D`, mod ranges), with quotient `Q` a fresh ∀-param — `fin-split Q` then supplies the integrality step the rational Farkas side cannot (see `std/bytes/bytes.shard`'s `mod_byte_id` for the mod-elimination idiom) |
+| `(inject EQREF (NAME…) PROOF)`               | `Inject`    | constructor injectivity — the converse of `absurd`'s no-confusion half: `EQREF` must resolve closed with both sides Ctor-headed by the SAME ctor **as spelled** (no normalization — `have`/`compute` the fact into ctor form first); appends the fieldwise equations `(= aᵢ bᵢ)` as the LAST premises, one per `NAME` in field order (`_` = counted hole, not registered; cite the rest via `(premise NAME)`). The name count is pinned into the certificate and checked against the ctor's arity — a miscount is a loud kernel rejection |
 | `(rewrite-with EQREF DIR SIDE (INST…) (PROOF…) PROOF)` | `RewriteWith` | rewrite by a cited equation whose own premises are discharged by the sub-`PROOF`s, then continue |
 | `(absurd EQREF)`                             | `Absurd`    | close the goal from a contradictory hypothesis                 |
 | `(by THEORY PAYLOAD)`                         | `ByTheory`  | discharge via a decision procedure (§10.7)                     |
-| `(chain F1 … FINAL)`                         | —           | reader-level sugar (§3, "Flat proof chains"): each `Fi` is a continuation-taking form above (`steps`/`rewrite-with`/`have`/`div-facts`/`refine-fact`) written *without* its trailing PROOF; the rest of the chain is folded in as that argument and `FINAL` closes — sequential proofs without the nesting pyramid |
+| `(chain F1 … FINAL)`                         | —           | reader-level sugar (§3, "Flat proof chains"): each `Fi` is a continuation-taking form above (`steps`/`rewrite-with`/`have`/`div-facts`/`refine-fact`/`inject`) written *without* its trailing PROOF; the rest of the chain is folded in as that argument and `FINAL` closes — sequential proofs without the nesting pyramid |
 
 ### 10.4 Cases
 
@@ -776,7 +777,7 @@ What a `rewrite`/`rewrite-with`/`absurd` cites:
 | `(hyp K)`      | `(Hyp K)`       | hypothesis at positional index `K` (innermost = 0)     |
 | `(hyp NAME)`   | —               | a hypothesis by name — rewritten to `(hyp K)` (below)  |
 | `(premise K)`  | `(Premise K)`   | the goal's `K`-th premise                              |
-| `(premise NAME)`| —              | a named have's fact — rewritten to `(premise K)` (below) |
+| `(premise NAME)`| —              | a named have's fact or an inject field equation — rewritten to `(premise K)` (below) |
 | `(lemma NAME)` | `(Lemma NAME)`  | an admitted axiom or previously-proven claim           |
 
 **Named citations** are surface sugar only: the loader's s-expr desugar

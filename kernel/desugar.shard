@@ -31,6 +31,12 @@
 ;;;                 div-facts that would emit otherwise is rejected by the
 ;;;                 checker itself, taking the whole proof with it.
 ;;;   refine-fact : +1
+;;;   inject      : +N, N = the surface name-list length — one fieldwise
+;;;                 equation per listed name (`_` = counted hole, not
+;;;                 registered). The count rides INTO the AST, where the
+;;;                 checker pins it against the cited ctor's arity — so a
+;;;                 miscounted list is a loud kernel rejection, never a
+;;;                 silent index drift here.
 ;;;
 ;;; An unbound name is a LOUD error (DsErr carrying the name), surfaced as
 ;;; the decl's failure message. Unrecognized forms pass through untouched and
@@ -104,6 +110,29 @@
     (Nil None)
     ((Cons (SSym n) Nil) (Some n))
     ((Cons _ t) (ds_last_sym t))))
+
+;; inject name-list bookkeeping: the list's LENGTH advances the premise
+;; counter; each non-`_` name is registered at its fact's absolute index
+;; (field order), consed front-first so a repeated name shadows newest-wins
+;; like have's registry.
+(fn ds_inj_count ((ss (List SExpr))) Int
+  (measure (struct ss))
+  (match ss
+    (Nil 0)
+    ((Cons _ t) (+ 1 (ds_inj_count t)))))
+
+(fn ds_inj_reg ((ss (List SExpr)) (k Int) (pn (List (Pair Symbol Int))))
+  (List (Pair Symbol Int))
+  (measure (struct ss))
+  (match ss
+    (Nil pn)
+    ((Cons hd t)
+     (match hd
+       ((SSym nm)
+        (if (sym_eq nm (sym_of_chars (Cons 95 Nil)))  ; '_' — hole, no name
+          (ds_inj_reg t (+ k 1) pn)
+          (ds_inj_reg t (+ k 1) (Cons (Pair nm k) pn))))
+       (_ (ds_inj_reg t (+ k 1) pn))))))
 
 ;; a case's ctor as written: bare `Cons`, or the (:: SEG … NAME) path form.
 (fn ds_ctor_name ((s SExpr)) (Option Symbol)
@@ -408,7 +437,30 @@
              (DsOk
                (SList (Cons (SSym h) (Cons rS (Cons exprS (Cons sub2 Nil)))))))))
          (_ (DsOk s)))
-       (DsOk s)))))))))))))  ; refl/admit/below/by/inspect & unknown forms
+     (if (sym_eq h (quote inject))
+       (match args
+         ((Cons refS (Cons namesS (Cons subS Nil)))
+          (match (ds_ref stk pn refS)
+            ((DsErr e) (DsErr e))
+            ((DsOk r2)
+             (match namesS
+               ((SList names)
+                (match
+                  (ds_proof
+                    m
+                    ps
+                    stk
+                    (+ pc (ds_inj_count names))
+                    (ds_inj_reg names pc pn)
+                    subS)
+                  ((DsErr e) (DsErr e))
+                  ((DsOk sub2)
+                   (DsOk
+                     (SList
+                       (Cons (SSym h) (Cons r2 (Cons namesS (Cons sub2 Nil)))))))))
+               (_ (DsOk s))))))
+         (_ (DsOk s)))
+       (DsOk s))))))))))))))  ; refl/admit/below/by/inspect & unknown forms
     (_ (DsOk s))))
 
 ;; induct cases: each appends its IH entries before the sub-proof.
