@@ -1,0 +1,109 @@
+;;; lowfrag_probe.shard — fragment-growth design probes (lowergen round 2).
+;;;
+;;; PROBE A (fuel max+slack): a branch diamond (Block/BrIf/Br — the model has
+;;; no If instruction) whose two paths consume different fuel, certified with
+;;; ONE shared tower sized for the LONGER path. Law under test: a completed
+;;; run is insensitive to leftover fuel (fuel is a depth bound, Out carries
+;;; no fuel), so per-branch exact towers are unnecessary — max + slack, no
+;;; monotonicity lemma.
+;;;
+;;; PROBE B (let → local, sharing): the spec side opens `let` by
+;;; substitution (reduce.shard ζ — the bound term DUPLICATES per use) while
+;;; the wasm side computes the local once and reads it twice. Pattern under
+;;; test: ONE conditional wrap32_id citation factored through a named have,
+;;; then a plain all-occurrences rewrite of the have fact — one cite per
+;;; local, not per use.
+
+(import "../kernel/stdlib.shard")
+(import "../models/wasm/wasm.shard")
+(use (:: models wasm wasm *))
+
+;; ---- probe A -----------------------------------------------------------------
+
+(fn pa_sel ((x Int)) Int (if (int_eq x 0) 10 1))
+
+;; diamond: inner block = condition + BrIf + else-code + Br out; after the
+;; inner block = then-code. BrIf pops x: nonzero → exit inner → I32Const 1;
+;; zero → fall through 7+3 → Br 1 exits outer. Else path is the deeper one.
+(claim pa_diamond
+  (goal ((x Int) (c Nat) (restfs (List Func))) ()
+    (=
+      (call_fn
+        (S^ 20 c)
+        (MkWModule
+          (Cons
+            (MkFunc 1 0
+              (list
+                (Block
+                  (list
+                    (Block
+                      (list
+                        (LocalGet 0)
+                        (BrIf 0)
+                        (I32Const 7)
+                        (I32Const 3)
+                        (I32Bin BAdd)
+                        (Br 1)))
+                    (I32Const 1)))))
+            restfs)
+          0)
+        0
+        (list x))
+      (Some (pa_sel x))))
+  (case-on (int_eq x 0) Bool
+    ((case True
+       (steps
+         ((compute lhs)
+          (unfold pa_sel rhs)
+          (rewrite (hyp True) lr both true ())
+          (compute both))
+         refl))
+     (case False
+       (steps
+         ((compute lhs)
+          (unfold pa_sel rhs)
+          (rewrite (hyp False) lr both true ())
+          (compute both))
+         refl)))))
+
+;; ---- probe B -----------------------------------------------------------------
+
+(fn pb_share ((x Int)) Int (let ((y (* x x))) (+ y y)))
+
+(claim pb_lowered
+  (goal ((x Int) (c Nat) (restfs (List Func)))
+    ((= (le 0 (* x x)) True)
+     (= (lt (* x x) 4294967296) True)
+     (= (le 0 (+ (* x x) (* x x))) True)
+     (= (lt (+ (* x x) (* x x)) 4294967296) True))
+    (=
+      (call_fn
+        (S^ 17 c)
+        (MkWModule
+          (Cons
+            (MkFunc 1 1
+              (list
+                (LocalGet 0)
+                (LocalGet 0)
+                (I32Bin BMul)
+                (LocalSet 1)
+                (LocalGet 1)
+                (LocalGet 1)
+                (I32Bin BAdd)))
+            restfs)
+          0)
+        0
+        (list x))
+      (Some (pb_share x))))
+  (chain
+    (steps ((compute lhs) (unfold pb_share rhs) (reduce rhs)))
+    (have w (= (mod (* x x) 4294967296) (* x x))
+      (rewrite-with (lemma wrap32_id) lr lhs ((inst x (* x x)))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise w) lr lhs true ())))
+    (rewrite-with (lemma wrap32_id) lr lhs ((inst x (+ (* x x) (* x x))))
+      ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+       (steps ((rewrite (premise 3) lr lhs true ())) refl)))
+    refl))

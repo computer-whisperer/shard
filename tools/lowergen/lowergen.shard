@@ -1,12 +1,15 @@
-;;; lowergen — the P2 emitter probe (docs/LOWERING.md §6): a CERTIFYING
-;;; emitter for the scalar straight-line fragment. For every fn in the
-;;; target file whose body is arithmetic over Int params and u32 literals
-;;; (+ - * only), emit:
-;;;   - the wasm function literal (postorder stack code), and
+;;; lowergen — the certifying emitter (docs/LOWERING.md §6): the scalar
+;;; let/straight-line fragment. For every fn in the target file whose body
+;;; is arithmetic over Int params, u32 literals (+ - * only), and
+;;; single-binding lets, emit:
+;;;   - the wasm function literal (postorder stack code; one LocalSet per
+;;;     let, locals allocated after the params in textual order), and
 ;;;   - the standard lowered-conformance claim (docs/LOWERING.md §2) with
-;;;     its full proof: compute lhs + unfold SPEC + one wrap32_id cite per
-;;;     param-containing arith node (innermost-first = postorder), premises
-;;;     discharged by position.
+;;;     its full proof, in chain form: compute lhs + unfold/ζ-reduce SPEC
+;;;     rhs, then per unique substituted arith node (innermost-first) a
+;;;     named have citing wrap32_id once + an all-occurrences rewrite of
+;;;     the have fact (the sharing-proof pattern — a let-bound value read
+;;;     k times duplicates k-fold under ζ but is discharged once).
 ;;; The emitted statement generator IS the schema consensus mechanism; the
 ;;; output is deterministic (weld discipline: regenerable byte-identical
 ;;; after shardfmt).
@@ -14,9 +17,11 @@
 ;;; THE CONTRACT (lower.shard's): front end is the KERNEL'S by library
 ;;; import; refuse, don't guess — any body outside the fragment is a loud
 ;;; per-fn error and exit 1. Fragment rules: all params Int, return Int;
-;;; body nodes are params, literals in [0, 2^32), and binary + - *; every
-;;; arith node must contain a param (constant-fold ground subtrees in the
-;;; source — their premises could not be discharged by position).
+;;; body nodes are params, let-bound names, literals in [0, 2^32), and
+;;; binary + - *; lets bind exactly one name; every arith node of the
+;;; SUBSTITUTED body must contain a param (constant-fold ground subtrees
+;;; in the source — their range premises would be vacuous facts the claim
+;;; should not carry).
 ;;;
 ;;; RUN IT:  bin/shard_eval run tools/lowergen/lowergen.shard SRC OUT.raw
 ;;;          then shardfmt OUT.raw -> the committed cert file.
@@ -138,12 +143,23 @@
        ((Cons y ys) (if (sym_eq x y) (sym_list_eq xs ys) False))))))
 
 ;; ---- the fragment ------------------------------------------------------------
+;;
+;; TWO WALKS, TWO CONCERNS (the let design, docs/LOWERING.md §6):
+;;   - CODE is emitted from the ORIGINAL let tree — sharing preserved, one
+;;     LocalSet per binding, locals allocated in textual order after the
+;;     params (deterministic → regen-stable).
+;;   - PREMISES/CITATIONS come from the ζ-SUBSTITUTED body — the kernel
+;;     opens lets by substitution, so the compute residue's mod-sites are
+;;     exactly the substituted tree's arith nodes. Duplicates (a shared
+;;     local read twice) dedupe by spelling into ONE citation; an unused
+;;     binding's nodes never appear at all.
+;; gen_e does the code walk and simultaneously builds the CANONICAL
+;; substituted expr (params as FVars named x0…, let-free, BVar-free);
+;; nodes_e then collects the unique arith nodes postorder from it.
 
-;; walk result: instr docs (emission order), instr count, contains-a-param,
-;; premise-owning arith nodes (spec spellings, postorder).
-(type G (GOk (List Doc) Int Bool (List Doc)) (GErr (List Int)))
-
-(fn orb ((a Bool) (b Bool)) Bool (if a True b))
+;; canonical walk result: instr docs (emission order), instr count, next
+;; free local index, canonical substituted expr.
+(type G (GOk (List Doc) Int Int Expr) (GErr (List Int)))
 
 (fn bop_of ((q QName)) (Option Doc)
   (if (core_named q (quote +)) (Some (DStr "BAdd"))
@@ -151,44 +167,80 @@
   (if (core_named q (quote *)) (Some (DStr "BMul"))
   None))))
 
-;; source-order param name for (BVar i) at arity n: binders are
-;; innermost-first (last param textually = BVar 0), so name index n-1-i.
-(fn xn ((n Int) (i Int)) Doc (DCat (DStr "x") (dint (- (- n 1) i))))
+;; the source-order param symbol xK (params are locals 0..n-1; BVar j at
+;; let-depth 0 is textual position n-1-j = its local = its name index)
+(fn xsym ((k Int)) Symbol (sym_of_chars (append_int "x" (show_int k))))
 
-;; the SPEC spelling of a fragment expr (the source-term rendering used in
-;; premises and (inst …) pins — it must match the compute residue exactly)
-(fn pr_e ((n Int) (e Expr)) Doc
+;; the SPEC spelling of a canonical expr (used in premises and (inst …)
+;; pins — it must match the compute residue exactly)
+(fn pr_e ((e Expr)) Doc
   (measure (struct e))
   (match e
-    ((BVar i) (xn n i))
+    ((FVar s) (dsym s))
     ((IntLit k) (dint k))
     ((Call q as)
      (match as
        ((Cons a (Cons b Nil))
         (dcat3
           (dcat3 (DStr "(") (dsym (qn_name q)) (sp))
-          (DCat (pr_e n a) (sp))
-          (DCat (pr_e n b) (DStr ")"))))
+          (DCat (pr_e a) (sp))
+          (DCat (pr_e b) (DStr ")"))))
        (_ (DStr "?"))))
     (_ (DStr "?"))))
 
-(fn gen_e ((n Int) (e Expr)) G
+(fn spell ((e Expr)) (List Int) (doc_flat (pr_e e) Nil))
+
+(fn chars_eq ((a (List Int)) (b (List Int))) Bool
+  (measure (struct a))
+  (match a
+    (Nil
+      (match b
+        (Nil True)
+        ((Cons _ _) False)))
+    ((Cons x xs)
+     (match b
+       (Nil False)
+       ((Cons y ys) (if (int_eq x y) (chars_eq xs ys) False))))))
+
+;; let-binder environment: canonical expr + allocated local, innermost first
+(fn env_at ((env (List (Pair Expr Int))) (i Int)) (Option (Pair Expr Int))
+  (measure (struct env))
+  (match env
+    (Nil None)
+    ((Cons h t) (if (int_eq i 0) (Some h) (env_at t (- i 1))))))
+
+(fn env_len ((env (List (Pair Expr Int)))) Int
+  (measure (struct env))
+  (match env
+    (Nil 0)
+    ((Cons _ t) (+ 1 (env_len t)))))
+
+(fn gen_e ((n Int) (env (List (Pair Expr Int))) (nxt Int) (e Expr)) G
   (measure (struct e))
   (match e
     ((BVar i)
-     (GOk
-       (Cons (dcat3 (DStr "(LocalGet ") (dint (- (- n 1) i)) (DStr ")")) Nil)
-       1
-       True
-       Nil))
+     (match (env_at env i)
+       ((Some (Pair ce k))
+        (GOk
+          (Cons (dcat3 (DStr "(LocalGet ") (dint k) (DStr ")")) Nil)
+          1
+          nxt
+          ce))
+       (None
+         (let ((pos (- (- n 1) (- i (env_len env)))))
+           (GOk
+             (Cons (dcat3 (DStr "(LocalGet ") (dint pos) (DStr ")")) Nil)
+             1
+             nxt
+             (FVar (xsym pos)))))))
     ((IntLit k)
      (if (le 0 k)
        (if (lt k 4294967296)
          (GOk
            (Cons (dcat3 (DStr "(I32Const ") (dint k) (DStr ")")) Nil)
            1
-           False
-           Nil)
+           nxt
+           e)
          (GErr "literal outside [0, 2^32)"))
        (GErr "literal outside [0, 2^32)")))
     ((Call q as)
@@ -197,26 +249,90 @@
        ((Some opd)
         (match as
           ((Cons a (Cons b Nil))
-           (match (gen_e n a)
+           (match (gen_e n env nxt a)
              ((GErr m) (GErr m))
-             ((GOk ia ca pa na)
-              (match (gen_e n b)
+             ((GOk ia ca nxa cea)
+              (match (gen_e n env nxa b)
                 ((GErr m) (GErr m))
-                ((GOk ib cb pb nb)
-                 (if (orb pa pb)
-                   (GOk
+                ((GOk ib cb nxb ceb)
+                 (GOk
+                   (dapp
+                     ia
                      (dapp
-                       ia
-                       (dapp
-                         ib
-                         (Cons (dcat3 (DStr "(I32Bin ") opd (DStr ")")) Nil)))
-                     (+ ca (+ cb 1))
-                     True
-                     (dapp na (dapp nb (Cons (pr_e n e) Nil))))
-                   (GErr
-                     "ground arithmetic subtree (constant-fold it in the source)")))))))
+                       ib
+                       (Cons (dcat3 (DStr "(I32Bin ") opd (DStr ")")) Nil)))
+                   (+ ca (+ cb 1))
+                   nxb
+                   (Call q (Cons cea (Cons ceb Nil)))))))))
           (_ (GErr "arith call must be binary"))))))
-    (_ (GErr "body outside the scalar straight-line fragment"))))
+    ((Let bs body)
+     (match bs
+       ((Cons rhs Nil)
+        (match (gen_e n env nxt rhs)
+          ((GErr m) (GErr m))
+          ((GOk ir cr nxr cer)
+           (match (gen_e n (Cons (Pair cer nxr) env) (+ nxr 1) body)
+             ((GErr m) (GErr m))
+             ((GOk ib cb nxb ceb)
+              (GOk
+                (dapp
+                  ir
+                  (Cons (dcat3 (DStr "(LocalSet ") (dint nxr) (DStr ")")) ib))
+                (+ cr (+ cb 1))
+                nxb
+                ceb))))))
+       (_ (GErr "let must bind exactly one name (split into nested lets)"))))
+    (_ (GErr "body outside the scalar let/straight-line fragment"))))
+
+;; ---- premise nodes (the substituted tree's arith sites) -----------------------
+
+(fn has_fv ((e Expr)) Bool
+  (measure (struct e))
+  (match e
+    ((FVar _) True)
+    ((Call _ as) (any_fv as))
+    (_ False)))
+
+(fn any_fv ((as (List Expr))) Bool
+  (measure (struct as))
+  (match as
+    (Nil False)
+    ((Cons h t) (if (has_fv h) True (any_fv t)))))
+
+(fn node_seen ((s (List Int)) (ns (List Expr))) Bool
+  (measure (struct ns))
+  (match ns
+    (Nil False)
+    ((Cons h t) (if (chars_eq s (spell h)) True (node_seen s t)))))
+
+(fn node_add ((e Expr) (ns (List Expr))) (List Expr)
+  (measure (struct ns))
+  (match ns
+    (Nil (Cons e Nil))
+    ((Cons h t) (Cons h (node_add e t)))))
+
+;; unique arith nodes, postorder (children before parents, so each node's
+;; spelling is already child-unwrapped at its discharge point)
+(type NRes (NOk (List Expr)) (NErr (List Int)))
+
+(fn nodes_e ((e Expr) (acc (List Expr))) NRes
+  (measure (struct e))
+  (match e
+    ((Call _ as)
+     (match as
+       ((Cons a (Cons b Nil))
+        (match (nodes_e a acc)
+          ((NErr m) (NErr m))
+          ((NOk acc1)
+           (match (nodes_e b acc1)
+             ((NErr m) (NErr m))
+             ((NOk acc2)
+              (if (has_fv e)
+                (NOk (if (node_seen (spell e) acc2) acc2 (node_add e acc2)))
+                (NErr
+                  "ground arithmetic subtree (constant-fold it in the source)")))))))
+       (_ (NErr "arith call must be binary"))))
+    (_ (NOk acc))))
 
 ;; ---- claim emission ----------------------------------------------------------
 
@@ -256,29 +372,34 @@
        ((Cons _ _)
         (dcat3 (DStr "x") (dint i) (DCat (sp) (pr_args rest (+ i 1)))))))))
 
-;; the PRE premises: two per arith node, postorder
-(fn pr_prems ((ns (List Doc))) Doc
+;; the PRE premises: two per unique arith node, postorder
+(fn pr_prems ((ns (List Expr))) Doc
   (measure (struct ns))
   (match ns
     (Nil (DStr ""))
     ((Cons e rest)
      (dcat3
-       (dcat3 (DStr "(= (le 0 ") e (DStr ") True) "))
-       (dcat3 (DStr "(= (lt ") e (DStr " 4294967296) True) "))
+       (dcat3 (DStr "(= (le 0 ") (pr_e e) (DStr ") True) "))
+       (dcat3 (DStr "(= (lt ") (pr_e e) (DStr " 4294967296) True) "))
        (pr_prems rest)))))
 
-;; the wrap32_id chain: node j uses premises 2j / 2j+1, innermost-first
-(fn pr_chain ((ns (List Doc)) (j Int)) Doc
+;; per node j, two chain items: a named have (wJ) proving the wrap is the
+;; identity — ONE conditional wrap32_id citation, premises 2j/2j+1 — then a
+;; plain ALL-OCCURRENCES rewrite of the have fact. A shared local's wrapped
+;; value duplicates per read site under ζ, so a single-site rewrite-with
+;; would miss copies; the have factoring makes the cost per node constant.
+(fn pr_chain ((ns (List Expr)) (j Int)) Doc
   (measure (struct ns))
   (match ns
     (Nil (DStr "refl"))
     ((Cons e rest)
      (dcat3
        (dcat3
-         (DStr "(rewrite-with (lemma wrap32_id) lr lhs ((inst x ")
-         e
-         (DStr ")) "))
+         (dcat3 (DStr "(have w") (dint j) (DStr " (= (mod "))
+         (dcat3 (pr_e e) (DStr " 4294967296) ") (pr_e e))
+         (DStr ") (rewrite-with (lemma wrap32_id) lr lhs ((inst x "))
        (dcat3
+         (DCat (pr_e e) (DStr ")) "))
          (dcat3
            (DStr "((steps ((rewrite (premise ")
            (dint (* 2 j))
@@ -286,9 +407,14 @@
          (dcat3
            (DStr "(steps ((rewrite (premise ")
            (dint (+ (* 2 j) 1))
-           (DStr ") lr lhs true ())) refl)) "))
-         (pr_chain rest (+ j 1)))
-       (DStr ")")))))
+           (DStr ") lr lhs true ())) refl)) refl)) ")))
+       (dcat3
+         (dcat3
+           (DStr "(steps ((rewrite (premise w")
+           (dint j)
+           (DStr ") lr lhs true ()))) "))
+         (pr_chain rest (+ j 1))
+         (DStr ""))))))
 
 (type CRes (COk Doc) (CErr (List Int)))
 
@@ -297,45 +423,53 @@
     ((FnDef q ts rty body)
      (if (all_int ts)
        (if (is_int_ty rty)
-         (match (gen_e (count_ts ts) body)
+         (match (gen_e (count_ts ts) Nil (count_ts ts) body)
            ((GErr m)
             (CErr (append_int (chars_of_sym (qn_name q)) (append_int ": " m))))
-           ((GOk instrs count _ nodes)
-            (COk
-              (dcat3
-                (dcat3
-                  (dcat3
-                    (DStr "(claim lowered_")
-                    (dsym (qn_name q))
-                    (dcat3
-                      (DStr " (goal (")
-                      (pr_binds ts 0)
-                      (DStr "(c Nat) (restfs (List Func))) (")))
-                  (pr_prems nodes)
-                  (dcat3
-                    (dcat3
-                      (DStr ") (= (call_fn (S^ ")
-                      (dint (+ (* 2 count) 3))
-                      (DStr " c) (MkWModule (Cons (MkFunc "))
-                    (dint (count_ts ts))
-                    (dcat3
-                      (DStr " 0 (list ")
-                      (djoin instrs)
-                      (DStr ")) restfs) 0) 0 (list "))))
-                (dcat3
-                  (pr_args ts 0)
-                  (dcat3 (DStr ")) (Some (") (dsym (qn_name q)) (DStr ""))
-                  (dcat3
-                    (pr_args_lead ts)
-                    (DStr "))))")
-                    (dcat3
-                      (dcat3
-                        (DStr " (steps ((compute lhs) (unfold ")
-                        (dsym (qn_name q))
-                        (DStr " rhs)) "))
-                      (pr_chain nodes 0)
-                      (DStr "))"))))
-                (DStr (nl))))))
+           ((GOk instrs count nxt ce)
+            (match (nodes_e ce Nil)
+              ((NErr m)
+               (CErr
+                 (append_int (chars_of_sym (qn_name q)) (append_int ": " m))))
+              ((NOk nodes)
+               (COk
+                 (dcat3
+                   (dcat3
+                     (dcat3
+                       (DStr "(claim lowered_")
+                       (dsym (qn_name q))
+                       (dcat3
+                         (DStr " (goal (")
+                         (pr_binds ts 0)
+                         (DStr "(c Nat) (restfs (List Func))) (")))
+                     (pr_prems nodes)
+                     (dcat3
+                       (dcat3
+                         (DStr ") (= (call_fn (S^ ")
+                         (dint (+ (* 2 count) 3))
+                         (DStr " c) (MkWModule (Cons (MkFunc "))
+                       (dint (count_ts ts))
+                       (dcat3
+                         (dcat3
+                           (DCat (sp) (dint (- nxt (count_ts ts))))
+                           (DStr " (list ")
+                           (djoin instrs))
+                         (DStr ")) restfs) 0) 0 (list ")
+                         (DStr ""))))
+                   (dcat3
+                     (pr_args ts 0)
+                     (dcat3 (DStr ")) (Some (") (dsym (qn_name q)) (DStr ""))
+                     (dcat3
+                       (pr_args_lead ts)
+                       (DStr "))))")
+                       (dcat3
+                         (dcat3
+                           (DStr " (chain (steps ((compute lhs) (unfold ")
+                           (dsym (qn_name q))
+                           (DStr " rhs) (reduce rhs))) "))
+                         (pr_chain nodes 0)
+                         (DStr "))"))))
+                   (DStr (nl))))))))
          (CErr
            (append_int (chars_of_sym (qn_name q)) ": return type is not Int")))
        (CErr (append_int (chars_of_sym (qn_name q)) ": params are not all Int"))))))
@@ -376,7 +510,7 @@
   (dcat3
     (dcat3
       (DStr
-        ";;; GENERATED by tools/lowergen (the P2 certifying-emitter probe) --")
+        ";;; GENERATED by tools/lowergen (the certifying emitter, scalar let/straight-line fragment) --")
       (DStr (nl))
       (dcat3
         (DStr ";;; DO NOT EDIT; regenerate from ")

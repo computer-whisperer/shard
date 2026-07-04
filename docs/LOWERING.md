@@ -163,6 +163,36 @@ claim-assembly section of lowergen IS the first statement generator; the
 consensus/validation mechanism of open question 1 now has a concrete
 object to check against.
 
+**P2b — the let fragment (2026-07-03).** lowergen grew to
+let/straight-line, de-risked by two probes (`examples/lowfrag_probe.shard`)
+before building:
+
+- *Fuel max+slack law*: a Block/BrIf/Br branch diamond with asymmetric
+  paths certifies under ONE tower sized for the longer path — fuel is a
+  depth bound and `Out` carries no fuel, so a completed run is insensitive
+  to leftover slack. No per-branch fuel, no monotonicity lemma. (Pinned
+  for the coming `if` fragment; the per-arm proof is a fixed 4-step
+  template: compute lhs / unfold rhs / rewrite case-hyp both / compute
+  both.)
+- *Sharing pattern*: the kernel opens `let` by ζ-substitution, so a
+  let-bound value read k times duplicates k-fold on the spec side while
+  the wasm side computes its local once. Reconciliation: per unique
+  substituted arith node, a named `have` citing wrap32_id ONCE + a plain
+  all-occurrences rewrite of the have fact — constant proof cost per node
+  regardless of fan-out. (`unfold` does not ζ-open the let it exposes;
+  the emitted spine carries one `(reduce rhs)`, a safe no-op on let-free
+  bodies.)
+
+The emitter design is TWO WALKS: code from the original let tree (sharing
+preserved, one LocalSet per binding, locals allocated after params in
+textual order), premises/citations from the substituted tree (its arith
+nodes ARE the compute residue's mod-sites; duplicates dedupe by spelling,
+an unused binding's nodes vanish). Emitted proofs are now in `chain` form
+with named haves — machine certs became human-readable. All 8 proofs
+(3 new let fns incl. nested lets and a bare-param alias, 5 re-emitted)
+passed on the first generation attempt; four lowbuild gates green, V8
+differential 16/16 (the locals section exercised for real).
+
 **P3 — the adapter-combinator probe (`examples/rep_probe.shard`, 69/0,
 2026-07-03).** The type-owned representation cascade demonstrated on the
 first non-scalar shape: a pointer-linked `List Int` in 8-byte cells over
