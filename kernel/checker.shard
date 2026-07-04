@@ -416,13 +416,16 @@
      (match seq
        ((Sequent params hyps premises eq)
         (Some (Sequent params hyps premises (reduce_iota_side_eq m side eq))))))
-    ((Simp side)
+    ((Simp side stops)
      ;; Full δ+ι: drives `step` (the kernel's universal reducer) to
      ;; fixed point — unfolds user fns, fires primitives, evaluates
-     ;; matches, ifs, lets. The workhorse.
+     ;; matches, ifs, lets. The workhorse. STOP fns never fire (their
+     ;; args still reduce) — strictly fewer reductions, so soundness
+     ;; is plain Simp's; it exists so a citable spelling survives the
+     ;; normalization (the simp-side twin of Compute's stop set).
      (match seq
        ((Sequent params hyps premises eq)
-        (Some (Sequent params hyps premises (simp_side_eq m side eq))))))
+        (Some (Sequent params hyps premises (simp_side_eq m side stops eq))))))
     ((Compute side stops)
      ;; UNGATED δ+ι to normal form: like Simp but unfolds user fns
      ;; unconditionally, so a ground term whose control flow is guarded
@@ -437,7 +440,7 @@
      (match seq
        ((Sequent params hyps premises eq)
         (Some (Sequent params hyps premises (compute_side_eq m side stops eq))))))
-    ((Rewrite er dir side all insts)
+    ((Rewrite er dir side occ insts)
      ;; Pattern-variable Rewrite. The cited Goal's ∀-binders become
      ;; capture variables (fresh FVars listed in pat_vars) unless
      ;; pre-instantiated by an Inst — those binders are pinned to a
@@ -457,7 +460,7 @@
                     (match seq
                       ((Sequent s_params hyps premises goal_eq)
                        (match
-                         (apply_rewrite pat_var_names opened_eq dir side all
+                         (apply_rewrite pat_var_names opened_eq dir side occ
                            goal_eq)
                          ((Some (Pair envs new_eq))
                           ;; TYPE GATE: every match site instantiates the
@@ -473,15 +476,16 @@
              None))
           (_ None)))))))  ;; non-Nil premises
 
-;; Drive simp_expr (full δ+ι) on the chosen side(s) of an equation.
-;; Used by apply_step's `Simp` arm.
-(fn simp_side_eq ((m Module) (side Side) (eq Equation)) Equation
+;; Drive simp_stop_expr (full δ+ι under the stop fence) on the chosen
+;; side(s) of an equation. Used by apply_step's `Simp` arm.
+(fn simp_side_eq ((m Module) (side Side) (stops (List QName)) (eq Equation))
+  Equation
   (match eq
     ((Equation l r)
      (match side
-       ((Lhs) (Equation (simp_expr m l) r))
-       ((Rhs) (Equation l (simp_expr m r)))
-       ((Both) (Equation (simp_expr m l) (simp_expr m r)))))))
+       ((Lhs) (Equation (simp_stop_expr m stops l) r))
+       ((Rhs) (Equation l (simp_stop_expr m stops r)))
+       ((Both) (Equation (simp_stop_expr m stops l) (simp_stop_expr m stops r)))))))
 
 ;; Drive the ungated δ+ι normalizer to NF on the chosen side(s). Used by
 ;; apply_step's `Compute` arm. Uses `compute_eval` — the big-step env-machine —
@@ -769,6 +773,103 @@
             (None None)))))))
 
 ;; ---------------------------------------------------------------------------
+;; rewrite_nth: replace exactly the K-th match site (0-based), counting
+;; sites in rewrite_all's walk order — preorder, Ctor/Call args left to
+;; right, If cond/then/else, Match scrutinee then arm bodies (same
+;; BVar-free guard as rewrite_all), and a matched site is counted once
+;; and never entered. So `(at K)` targets precisely the K-th of the
+;; sites an all-occurrences rewrite would touch. A miss threads the
+;; remaining count out; fewer than K+1 sites in the whole term means
+;; the step fails (loudly) rather than silently rewriting elsewhere.
+;; ---------------------------------------------------------------------------
+
+;; Counting-walk results: a hit carries the site's match env + the rebuilt
+;; term; a miss carries the count REMAINING after this subtree's sites.
+(type RwNth (RwNthHit Env Expr) (RwNthMiss Int))
+(type RwNthL (RwNthHitL Env (List Expr)) (RwNthMissL Int))
+(type RwNthA (RwNthHitA Env (List Arm)) (RwNthMissA Int))
+
+(fn rewrite_nth
+  ((pat_vars (List Symbol)) (pat Expr) (repl Expr) (e Expr) (k Int))
+  RwNth
+  (measure (size e))
+  (match (expr_match pat_vars pat e Empty)
+    ;; a site: selected iff the countdown is exhausted; never entered
+    ((Some env)
+     (if (int_eq k 0) (RwNthHit env (subst env repl)) (RwNthMiss (- k 1))))
+    (None
+      (match e
+        ((Ctor c args)
+         (match (rewrite_nth_list pat_vars pat repl args k)
+           ((RwNthHitL env args2) (RwNthHit env (Ctor c args2)))
+           ((RwNthMissL k2) (RwNthMiss k2))))
+        ((Call f args)
+         (match (rewrite_nth_list pat_vars pat repl args k)
+           ((RwNthHitL env args2) (RwNthHit env (Call f args2)))
+           ((RwNthMissL k2) (RwNthMiss k2))))
+        ((If c t el) (rewrite_nth_if pat_vars pat repl c t el k))
+        ((Match scrut arms)
+         (match (rewrite_nth pat_vars pat repl scrut k)
+           ((RwNthHit env scrut2) (RwNthHit env (Match scrut2 arms)))
+           ((RwNthMiss k2)
+            (if (no_bvars pat)
+              (if (no_bvars repl)
+                (match (rewrite_nth_arms pat_vars pat repl arms k2)
+                  ((RwNthHitA env arms2) (RwNthHit env (Match scrut arms2)))
+                  ((RwNthMissA k3) (RwNthMiss k3)))
+                (RwNthMiss k2))
+              (RwNthMiss k2)))))
+        (_ (RwNthMiss k))))))
+
+(fn rewrite_nth_list
+  ((pat_vars (List Symbol)) (pat Expr) (repl Expr) (es (List Expr)) (k Int))
+  RwNthL
+  (measure (size_list es))
+  (match es
+    (Nil (RwNthMissL k))
+    ((Cons h t)
+     (match (rewrite_nth pat_vars pat repl h k)
+       ((RwNthHit env h2) (RwNthHitL env (Cons h2 t)))
+       ((RwNthMiss k2)
+        (match (rewrite_nth_list pat_vars pat repl t k2)
+          ((RwNthHitL env t2) (RwNthHitL env (Cons h t2)))
+          ((RwNthMissL k3) (RwNthMissL k3))))))))
+
+(fn rewrite_nth_if
+  ((pat_vars (List Symbol))
+   (pat Expr)
+   (repl Expr)
+   (c Expr)
+   (t Expr)
+   (el Expr)
+   (k Int))
+  RwNth
+  (measure (+ 1 (+ (size c) (+ (size t) (size el)))))
+  (match (rewrite_nth pat_vars pat repl c k)
+    ((RwNthHit env c2) (RwNthHit env (If c2 t el)))
+    ((RwNthMiss k2)
+     (match (rewrite_nth pat_vars pat repl t k2)
+       ((RwNthHit env t2) (RwNthHit env (If c t2 el)))
+       ((RwNthMiss k3)
+        (match (rewrite_nth pat_vars pat repl el k3)
+          ((RwNthHit env el2) (RwNthHit env (If c t el2)))
+          ((RwNthMiss k4) (RwNthMiss k4))))))))
+
+(fn rewrite_nth_arms
+  ((pat_vars (List Symbol)) (pat Expr) (repl Expr) (arms (List Arm)) (k Int))
+  RwNthA
+  (measure (size_arms arms))
+  (match arms
+    (Nil (RwNthMissA k))
+    ((Cons (Arm p b) t)
+     (match (rewrite_nth pat_vars pat repl b k)
+       ((RwNthHit env b2) (RwNthHitA env (Cons (Arm p b2) t)))
+       ((RwNthMiss k2)
+        (match (rewrite_nth_arms pat_vars pat repl t k2)
+          ((RwNthHitA env t2) (RwNthHitA env (Cons (Arm p b) t2)))
+          ((RwNthMissA k3) (RwNthMissA k3))))))))
+
+;; ---------------------------------------------------------------------------
 ;; rewrite_first_with_env: same walk as rewrite_first, but ALSO returns
 ;; the binding env produced by expr_match at the successful match site.
 ;;
@@ -831,7 +932,7 @@
 
 ;; ---------------------------------------------------------------------------
 ;; apply_rewrite: flip the cited equation by Dir, then rewrite on the
-;; chosen Side using either rewrite_first or rewrite_all per `all`.
+;; chosen Side using rewrite_first / rewrite_all / rewrite_nth per `occ`.
 ;; ---------------------------------------------------------------------------
 
 (fn apply_rewrite
@@ -839,53 +940,59 @@
    (cited Equation)
    (dir Dir)
    (side Side)
-   (all_occ Bool)
+   (occ Occ)
    (goal_eq Equation))
   (Option (Pair (List Env) Equation))
   (match cited
     ((Equation cl cr)
      (match dir
-       ((Lr) (rewrite_side pat_vars cl cr side all_occ goal_eq))
-       ((Rl) (rewrite_side pat_vars cr cl side all_occ goal_eq))))))
+       ((Lr) (rewrite_side pat_vars cl cr side occ goal_eq))
+       ((Rl) (rewrite_side pat_vars cr cl side occ goal_eq))))))
 
 (fn rewrite_side
   ((pat_vars (List Symbol))
    (pat Expr)
    (repl Expr)
    (side Side)
-   (all_occ Bool)
+   (occ Occ)
    (goal_eq Equation))
   (Option (Pair (List Env) Equation))
   (match goal_eq
     ((Equation gl gr)
      (match side
        ((Lhs)
-        (match (rewrite_one_or_all pat_vars all_occ pat repl gl)
+        (match (rewrite_one_or_all pat_vars occ pat repl gl)
           ((Some (Pair envs gl2)) (Some (Pair envs (Equation gl2 gr))))
           (None None)))
        ((Rhs)
-        (match (rewrite_one_or_all pat_vars all_occ pat repl gr)
+        (match (rewrite_one_or_all pat_vars occ pat repl gr)
           ((Some (Pair envs gr2)) (Some (Pair envs (Equation gl gr2))))
           (None None)))
        ((Both)
-        (match (rewrite_one_or_all pat_vars all_occ pat repl gl)
+        (match (rewrite_one_or_all pat_vars occ pat repl gl)
           ((Some (Pair el gl2))
-           (match (rewrite_one_or_all pat_vars all_occ pat repl gr)
+           (match (rewrite_one_or_all pat_vars occ pat repl gr)
              ((Some (Pair er gr2))
               (Some (Pair (envs_concat el er) (Equation gl2 gr2))))
              (None (Some (Pair el (Equation gl2 gr))))))
           (None
-            (match (rewrite_one_or_all pat_vars all_occ pat repl gr)
+            (match (rewrite_one_or_all pat_vars occ pat repl gr)
               ((Some (Pair er gr2)) (Some (Pair er (Equation gl gr2))))
               (None None)))))))))
 
 (fn rewrite_one_or_all
-  ((pat_vars (List Symbol)) (all_occ Bool) (pat Expr) (repl Expr) (e Expr))
+  ((pat_vars (List Symbol)) (occ Occ) (pat Expr) (repl Expr) (e Expr))
   (Option (Pair (List Env) Expr))
-  (if all_occ (rewrite_all pat_vars pat repl e)
-  (match (rewrite_first_with_env pat_vars pat repl e)
-    ((Some (Pair env e2)) (Some (Pair (Cons env Nil) e2)))
-    (None None))))
+  (match occ
+    ((OccAll) (rewrite_all pat_vars pat repl e))
+    ((OccFirst)
+     (match (rewrite_first_with_env pat_vars pat repl e)
+       ((Some (Pair env e2)) (Some (Pair (Cons env Nil) e2)))
+       (None None)))
+    ((OccAt k)
+     (match (rewrite_nth pat_vars pat repl e k)
+       ((RwNthHit env e2) (Some (Pair (Cons env Nil) e2)))
+       ((RwNthMiss _) None)))))
 
 ;; ---------------------------------------------------------------------------
 ;; apply_rewrite_with_env: like apply_rewrite, but for RewriteWith. Uses

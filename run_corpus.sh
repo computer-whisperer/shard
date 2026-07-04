@@ -46,6 +46,8 @@ TARGETS=(
   examples/have_test.shard
   examples/inject_basic.shard
   examples/inject_rejects.shard
+  examples/rewrite_at.shard
+  examples/rewrite_at_rejects.shard
   examples/prove_cond_mine.shard
   examples/homonym_dispatch.shard
   examples/inspect_demo.shard
@@ -110,6 +112,7 @@ TARGETS=(
   examples/chain_sugar_rejects.shard
   examples/named_cite_rejects.shard
   examples/compute_stop.shard
+  examples/simp_stop.shard
   examples/subterm_induct.shard
   examples/subterm_induct_rejects.shard
   examples/struct_clause.shard

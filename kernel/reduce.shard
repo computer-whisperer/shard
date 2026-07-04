@@ -1300,24 +1300,24 @@
 ;; See REVISIT — "Simp guarding (gated δ + list-memo)".
 ;; ---------------------------------------------------------------------------
 
-(fn step_smart ((m Module) (e Expr)) (Option Expr)
+(fn step_smart ((m Module) (stops (List QName)) (e Expr)) (Option Expr)
   (measure (* 2 (size e)))
   (match e
-    ((Call f args) (step_smart_call m f args))
-    ((Match s arms) (step_smart_match m s arms))
+    ((Call f args) (step_smart_call m stops f args))
+    ((Match s arms) (step_smart_match m stops s arms))
     ((Let bs body) (Some (open_many bs body)))
     ((If c t el)
      (match c
        ((Ctor (QName _ (quote True)) Nil) (Some t))
        ((Ctor (QName _ (quote False)) Nil) (Some el))
        (_
-         (match (step_smart m c)
+         (match (step_smart m stops c)
            ((Some c2) (Some (If c2 t el)))
            (None None)))))
     ;; NOTE: no nat_pack — step_smart drives Simp, a proof-facing normalizer;
     ;; ctor spellings must survive it (see nat_pack's comment).
     ((Ctor c args)
-     (match (step_smart_list m args)
+     (match (step_smart_list m stops args)
        ((Some args2) (Some (Ctor c args2)))
        (None None)))
     ((FVar _) None)
@@ -1325,42 +1325,51 @@
     ((IntLit _) None)
     ((SymLit _) None)))
 
-(fn step_smart_call ((m Module) (f QName) (args (List Expr))) (Option Expr)
+(fn step_smart_call
+  ((m Module) (stops (List QName)) (f QName) (args (List Expr)))
+  (Option Expr)
   (measure (+ (* 2 (size_list args)) 2))
+  ;; STOP fence: a stopped head never fires (no δ-unfold, no primitive
+  ;; step) — the call stays folded while its args still reduce. Same
+  ;; fewer-reductions soundness as compute's stop set (ceval_call).
+  (if (qn_member f stops) (step_smart_args_in_call m stops f args)
   (match m
     ((Module _ _ _ trie _)
      (match (trie_lookup f trie)
        ((Some fd)
         ;; User fn — apply with gate.
         (match (apply_fn fd args)
-          (None (step_smart_args_in_call m f args))  ; arity mismatch
+          (None (step_smart_args_in_call m stops f args))  ; arity mismatch
           ((Some body)
            ;; Gate: head-only one-step lookahead.
            (match (step_head body)
              ((Some _) (Some body))  ; gate passes — commit
-             (None (step_smart_args_in_call m f args))))))
+             (None (step_smart_args_in_call m stops f args))))))
        (None
          ;; Not a user fn — try primitive table; primitives have no
          ;; gate (they always reduce when arg shapes match).
          (match (try_step_prim (qn_name f) args)
            ((Some e2) (Some e2))
-           (None (step_smart_args_in_call m f args))))))))
+           (None (step_smart_args_in_call m stops f args)))))))))
 
-(fn step_smart_args_in_call ((m Module) (f QName) (args (List Expr)))
+(fn step_smart_args_in_call
+  ((m Module) (stops (List QName)) (f QName) (args (List Expr)))
   (Option Expr)
   (measure (+ (* 2 (size_list args)) 1))
-  (match (step_smart_list m args)
+  (match (step_smart_list m stops args)
     ((Some args2) (Some (Call f args2)))
     (None None)))
 
-(fn step_smart_match ((m Module) (s Expr) (arms (List Arm))) (Option Expr)
+(fn step_smart_match
+  ((m Module) (stops (List QName)) (s Expr) (arms (List Arm)))
+  (Option Expr)
   (measure (+ (* 2 (size s)) 2))
   (match s
-    ((Ctor _ _) (resolve_arms_smart m s arms))
-    ((IntLit _) (resolve_arms_smart m s arms))
-    ((SymLit _) (resolve_arms_smart m s arms))
+    ((Ctor _ _) (resolve_arms_smart m stops s arms))
+    ((IntLit _) (resolve_arms_smart m stops s arms))
+    ((SymLit _) (resolve_arms_smart m stops s arms))
     (_
-      (match (step_smart m s)
+      (match (step_smart m stops s)
         ((Some s2) (Some (Match s2 arms)))
         (None None)))))
 
@@ -1368,25 +1377,28 @@
 ;; reduces the scrutinee with step_smart (gated), so a symbolic sub-
 ;; position stays put (step_smart returns None) while a forceable one
 ;; reduces — and no wrong arm is ever fired.
-(fn resolve_arms_smart ((m Module) (s Expr) (arms (List Arm))) (Option Expr)
+(fn resolve_arms_smart
+  ((m Module) (stops (List QName)) (s Expr) (arms (List Arm)))
+  (Option Expr)
   (measure (+ (* 2 (size s)) 1))
   (match (try_match_arms arms s)
     ((ArmFired e2) (Some e2))
     ((ArmNone) None)
     ((ArmStuck)
-     (match (step_smart m s)
+     (match (step_smart m stops s)
        ((Some s2) (Some (Match s2 arms)))
        (None None)))))
 
-(fn step_smart_list ((m Module) (es (List Expr))) (Option (List Expr))
+(fn step_smart_list ((m Module) (stops (List QName)) (es (List Expr)))
+  (Option (List Expr))
   (measure (* 2 (size_list es)))
   (match es
     (Nil None)
     ((Cons h t)
-     (match (step_smart m h)
+     (match (step_smart m stops h)
        ((Some h2) (Some (Cons h2 t)))
        (None
-         (match (step_smart_list m t)
+         (match (step_smart_list m stops t)
            ((Some t2) (Some (Cons h t2)))
            (None None)))))))
 
@@ -1428,29 +1440,38 @@
 ;; None) — so the farkas vectors are ad_fix's with a trailing 0 for the memo
 ;; premise (skipped, multiplier 0). Running out returns the current term/memo.
 (fn simp_expr_loop
-  ((m Module) (memo (List (Pair Expr Expr))) (e Expr) (fuel Int))
+  ((m Module)
+   (stops (List QName))
+   (memo (List (Pair Expr Expr)))
+   (e Expr)
+   (fuel Int))
   (Pair Expr (List (Pair Expr Expr)))
   (measure fuel (by arith (list 1 0 0)) (by arith (list 1 1 0)))
   (if (lt fuel 1) (Pair e memo)
   (match (memo_lookup memo e)
     ((Some e_nf) (Pair e_nf memo))
     (None
-      (match (step_smart m e)
+      (match (step_smart m stops e)
         (None
           ;; e is already normal — record it as its own NF.
           (Pair e (Cons (Pair e e) memo)))
         ((Some e2)
-         (match (simp_expr_loop m memo e2 (- fuel 1))
+         (match (simp_expr_loop m stops memo e2 (- fuel 1))
            ((Pair e_nf memo2) (Pair e_nf (Cons (Pair e e_nf) memo2))))))))))
 
-;; simp_expr: drive `step_smart` to fixed point with memoization.
-;; The public entry point — kernel callers (apply_step's Simp arm,
-;; head_clash in Absurd) hit this. It keeps its (m e) signature and supplies
-;; the default budget; termination now follows from the fuel measure (the gate
-;; prevents immediately-stuck unfoldings; fuel bounds the rest).
-(fn simp_expr ((m Module) (e Expr)) Expr
-  (match (simp_expr_loop m Nil e (simp_budget))
+;; simp_stop_expr: drive `step_smart` to fixed point with memoization,
+;; under a STOP fence — calls to the named fns never fire (args still
+;; reduce). The fence is per-invocation, so the memo (also per-invocation)
+;; never leaks a fenced NF into an unfenced Simp or vice versa.
+(fn simp_stop_expr ((m Module) (stops (List QName)) (e Expr)) Expr
+  (match (simp_expr_loop m stops Nil e (simp_budget))
     ((Pair e_nf _) e_nf)))
+
+;; simp_expr: the unfenced entry point — kernel callers that always want
+;; the full normalizer (head_clash in Absurd, the tracer's Absurd replay)
+;; hit this. Termination follows from the fuel measure (the gate prevents
+;; immediately-stuck unfoldings; fuel bounds the rest).
+(fn simp_expr ((m Module) (e Expr)) Expr (simp_stop_expr m Nil e))
 
 ;; ---------------------------------------------------------------------------
 ;; run_expr — the GROUND-EXECUTION reducer for running shard APPS (eval.shard's

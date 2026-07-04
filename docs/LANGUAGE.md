@@ -756,17 +756,24 @@ a **side** — `lhs`, `rhs`, or `both`:
 |---------------------------------------|-----------|---------------------------------------------------------|
 | `(reduce SIDE)`                       | `Reduce`  | ι-only: fire matches/ifs on constructor or literal scrutinees, descending everywhere — NEVER unfolds calls (not even ground primitives). The safe workhorse for symbolic proofs. |
 | `(simp SIDE)`                         | `Simp`    | full δ+ι small-step to fixpoint — unfolds user fns and fires primitives. Powerful but can concretize terms a symbolic proof wanted left abstract. |
+| `(simp SIDE (stop FN…))`              | `Simp`    | same, but calls to the named fns never fire (args still reduce) — the simp-side twin of compute's stop set. Strictly fewer reductions, so soundness is plain-simp's. Use it when simp's normalization would eat the folded spelling a later citation matches against. Names resolve like `unfold`'s; an empty `(stop)` is refused. Pin: `examples/simp_stop.shard`. |
 | `(compute SIDE)`                      | `Compute` | ungated big-step evaluation (CBV); unfolds everything incl. nullary fns, leaves genuinely stuck subterms stuck. The ground-fact closer. |
 | `(compute SIDE (stop FN…))`           | `Compute` | same, but calls to the named fns stay **folded** (args still evaluated — the stuck-call shape). Strictly fewer reductions, so soundness is plain-compute's. The loop-piece tool: normalize the caller, stop at the loop, cite the worker against the folded redex — replaces the hand-tuned fuel prefix that used to stall compute one level above the loop. Names resolve like `unfold`'s (an unknown name simply never matches). Ground caveat: a stopped call's ground `Nat` args pack to `IntLit`s (evaluation-grade packing), which an S-tower lemma spelling won't match — worker fuel is open, so the loop pattern is unaffected. Pin: `examples/compute_stop.shard`. |
 | `(unfold FN SIDE)`                    | `Unfold`  | unfold ONE application of `FN` (leftmost-outermost). Descends into `match` **scrutinees** (binder-free) but never into arm bodies or `let` — for those, step via equation lemmas + `rewrite` instead (the failure trace says which case you're in). |
-| `(rewrite EQREF DIR SIDE ALL (INST…))`| `Rewrite` | rewrite SIDE by the cited equation (§10.6)              |
+| `(rewrite EQREF DIR SIDE OCC (INST…))`| `Rewrite` | rewrite SIDE by the cited equation (§10.6)              |
 | `(inspect)`                           | `Inspect` | identity — dev aid. Forces the claim's trace block and dumps the in-scope premises/hyps (with citation indices) at this point, even when the claim passes or is `(admit)`-truncated. The authoring idiom: drop it where you are blind, read the dump, finish, delete. |
 
-In `rewrite`: **`DIR`** is `lr` (left-to-right) or `rl`; **`ALL`** is
-`true`/`false` (rewrite every match vs. the first); **`INST`** is
-`(inst NAME TERM)`, instantiating a variable of the cited equation to an
-object-term snippet. When pattern and replacement are closed (no bound
-variables), `rewrite` also descends into `match` arm bodies.
+In `rewrite`: **`DIR`** is `lr` (left-to-right) or `rl`; **`OCC`** selects
+the match site(s) — `true` (every site), `false` (the first site), or
+`(at K)` (exactly the `K`-th site, 0-based like positional citations,
+counted per side under `both`). Sites are numbered in the all-occurrences
+walk order (preorder; args left to right; `if` cond/then/else; `match`
+scrutinee then arm bodies), and a matched site is never entered for nested
+matches. An out-of-range `K` fails the step; the failure trace reports the
+actual site count. **`INST`** is `(inst NAME TERM)`, instantiating a
+variable of the cited equation to an object-term snippet. When pattern and
+replacement are closed (no bound variables), `rewrite` also descends into
+`match` arm bodies. Pin: `examples/rewrite_at.shard`.
 
 ### 10.6 Equation references (`EQREF`)
 

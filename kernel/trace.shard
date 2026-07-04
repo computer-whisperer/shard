@@ -337,6 +337,14 @@
     ((Cons q t)
      (Cons 32 (append_int (chars_of_sym (qn_name q)) (stop_names t))))))
 
+;; occurrence-selector suffix for the Rewrite label: all/first are the
+;; default spellings and render as nothing; (at K) is worth surfacing.
+(fn render_occ ((occ Occ)) (List Int)
+  (match occ
+    ((OccAll) Nil)
+    ((OccFirst) Nil)
+    ((OccAt k) (append_int " at " (show_int k)))))
+
 (fn step_label ((s Step)) (List Int)
   (match s
     ((Unfold fn sd)
@@ -345,7 +353,13 @@
        (append_int
          (chars_of_sym (qn_name fn))
          (append_int (Cons 32 Nil) (render_side sd)))))
-    ((Simp sd) (append_int "Simp " (render_side sd)))
+    ((Simp sd stops)
+     (match stops
+       (Nil (append_int "Simp " (render_side sd)))
+       (_
+         (append_int
+           "Simp "
+           (append_int (render_side sd) (append_int " stop" (stop_names stops)))))))
     ((Reduce sd) (append_int "Reduce " (render_side sd)))
     ((Compute sd stops)
      (match stops
@@ -354,7 +368,7 @@
          (append_int
            "Compute "
            (append_int (render_side sd) (append_int " stop" (stop_names stops)))))))
-    ((Rewrite er dir sd allocc insts)
+    ((Rewrite er dir sd occ insts)
      (append_int
        "Rewrite "
        (append_int
@@ -363,7 +377,9 @@
            (Cons 32 Nil)
            (append_int
              (render_dir dir)
-             (append_int (Cons 32 Nil) (render_side sd)))))))
+             (append_int
+               (Cons 32 Nil)
+               (append_int (render_side sd) (render_occ occ))))))))
     ((Inspect) "Inspect")))
 
 ;; ---- failure-site context (the premises + hyps in scope) -------------------
@@ -646,6 +662,38 @@
        ((Some msg) (Some msg))
        (None (site_gate_msg m sparams cited_params pat_vars openings rest))))))
 
+(fn count_envs ((es (List Env))) Int
+  (measure (struct es))
+  (match es
+    (Nil 0)
+    ((Cons _ t) (+ 1 (count_envs t)))))
+
+;; distinguish "the pattern matches nowhere" from "(at K) points past the
+;; last site": re-run the rewrite all-occurrences and count what it found.
+(fn rw_no_match_msg
+  ((pat_vars (List Symbol))
+   (opened_eq Equation)
+   (dir Dir)
+   (side Side)
+   (occ Occ)
+   (goal_eq Equation))
+  (List Int)
+  (match occ
+    ((OccAt k)
+     (match (apply_rewrite pat_vars opened_eq dir side OccAll goal_eq)
+       (None "no match")
+       ((Some (Pair envs _))
+        (append_int
+          "(at "
+          (append_int
+            (show_int k)
+            (append_int
+              ") is out of range — the pattern has "
+              (append_int
+                (show_int (count_envs envs))
+                " match site(s) here (0-based, counted per side)")))))))
+    (_ "no match")))
+
 ;; why a (Rewrite …) STEP failed — mirrors apply_step's Rewrite arm link by
 ;; link: unresolved citation / conditional lemma / bad inst name / no match /
 ;; the citation TYPE GATE (tc_check_sites), whose message is recovered here.
@@ -656,7 +704,7 @@
    (er EqRef)
    (dir Dir)
    (side Side)
-   (all Bool)
+   (occ Occ)
    (insts (List Inst)))
   (List Int)
   (match (resolve_eq er seq th)
@@ -674,9 +722,16 @@
                   (open_eq_with (reverse_exprs openings) cited_eq)
                   dir
                   side
-                  all
+                  occ
                   (seq_eq seq))
-                (None "no match")
+                (None
+                  (rw_no_match_msg
+                    pat_vars
+                    (open_eq_with (reverse_exprs openings) cited_eq)
+                    dir
+                    side
+                    occ
+                    (seq_eq seq)))
                 ((Some (Pair envs _))
                  (match
                    (site_gate_msg
@@ -820,8 +875,8 @@
 
 (fn step_fail_reason ((m Module) (th Theory) (seq Sequent) (s Step)) (List Int)
   (match s
-    ((Rewrite er dir side all insts)
-     (rewrite_fail_reason m th seq er dir side all insts))
+    ((Rewrite er dir side occ insts)
+     (rewrite_fail_reason m th seq er dir side occ insts))
     ((Unfold fname side) (unfold_fail_reason m seq fname side))
     (_ "no match")))
 
