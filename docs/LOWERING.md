@@ -439,6 +439,72 @@ behind a module surface is a **relink** — consumer proof burden zero —
 provided consumers cite only behavior-level statements (which the
 portable schema enforces by construction: there are no bytes to cite).
 
+### 6f. The loop-generation probe — PASSED (2026-07-04)
+
+The biggest unproven bet of the ratification round: can the emitter
+machine-generate a LOOP piece — an induction worker plus its piece
+theorem — from a recursive source fn? `examples/loopgen_probe.shard`
+hand-plays the generator on a fixed template, every line derived by
+mechanical rule; **all four machine-template proofs (two workers, two
+theorems) passed with a single template-level fix**, on two instances: a
+new `fill_loop` and mem_copy's real `copy_loop` (the machine twin of the
+hand-written copy8 piece).
+
+- **The fragment (loop template v1)**: Nat-counted tail recursion —
+  `(match k (Z m) ((S k2) (NAME (mem_set …) (+ a 1) … k2)))`, accum
+  updates `a` or `(+ a 1)`, one trailing store per iteration, reads
+  pre-write. **Counter-as-local** design: the machine carries `k` as an
+  i32 local (`ENC` = the uniform type rule `Nat ↦ int_of_nat`), guard
+  `LocalGet kk / I32Eqz / BrIf 1`, decrement by `BSub` — a direct
+  transliteration of the source recursion. Unlike the hand pieces'
+  end-pointer style there is no ghost parameter, so the public signature
+  IS the source signature, and every guard/collapse fact is
+  template-constant (the price: a fixed 3-step counter-collapse dance —
+  `(1+n)-1 → n` by arith, then `wrap32_id`).
+- **Generated items**: per file, a fuel fn (`lg_fuel`, one `S` per
+  iteration), ONE stride twin (`lg_adv`, shared by every advancing
+  accum), and 7 helper certs with **pinned farkas certificates** —
+  template constants, mined once by tools/prove while authoring the
+  template; the generator never enumerates. Per fn: body/func literals,
+  the worker induction (Z = guard-exit compute; S = the staged pass:
+  unfold fuel/eval_loop, guard decider, premise-rewrite address guards
+  in code order, counter collapse + wrap32 haves, open the spec one step
+  on the rhs, cite the IH at the advanced accums), and the `lowered_*`
+  theorem (worker + 4 plumbing levels; both pass tools/lowcheck).
+- **Fuel law (pinned)**: `eval_loop` re-enters at exactly fuel−1 — fuel
+  is a depth bound — so the folded re-entry redex aligns with the IH's
+  spelling at ANY sufficient body budget. Charged formula: worker
+  `S^(instrs+4)`, theorem `+4`.
+- **The one fix — the opacity finding**: `int_of_nat` is a module fn,
+  OPAQUE under check-mode compute, and the counter design feeds it into
+  MACHINE STATE where the interpreter must evaluate it. The general law:
+  any ENC fn riding into machine state must be opened by its **defining
+  lemmas**, not compute — rewrite `int_of_nat_zero` (Z case) /
+  `int_of_nat_succ` (S case) into the lhs before the first compute. Two
+  template steps; the hand pieces never hit this because the end-pointer
+  style keeps spec `k` out of the machine.
+- **Portability limit, recorded**: loop bodies with CALLS cannot ride
+  the §6d portable form — per-site behavior premises are stated at the
+  goal's one slack binder, but a call site inside a loop fires at a
+  different fuel every iteration (`S^j (lg_fuel k2 c)`). A lemma
+  citation CAN instantiate its own slack per site, so calls-in-loops
+  work in the STRUCTURAL form (cite the callee cert directly inside the
+  S case) at the cost of regenerating the loop cert on callee edits.
+  Direct byte-op loop bodies — this probe — are leaf certs with no
+  coupling at all.
+- Engine leg: `lpmod` in the differential plan (fill + copy), V8 54/0 —
+  `Loop`/`Br`/`BrIf`/`I32Eqz`/`BSub` engine-validated, including the
+  store-truncation edge and a forward-overlap run beyond the theorem's
+  premises.
+
+What remains for the emitter fragment proper (after lowergen
+library-ification): source-shape recognition, the walk emitting the
+staged S-case chain (a fixed sequence over the mem fragment's existing
+event machinery), and PRE generation (a range premise pair per advancing
+address accum). Extensions behind the fence: Int-accumulator returns,
+stride ≠ 1, multiple stores per iteration, calls in loop bodies
+(structural form).
+
 ## 7. Open questions (the back-and-forth queue)
 
 1. ~~The statement-generator enforcement mechanism~~ RESOLVED by P4a:
