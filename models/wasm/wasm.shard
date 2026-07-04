@@ -331,40 +331,54 @@
           (Nil (Some OTrap))
           ((Cons c r)
            (if (int_eq c 0) (Some (ONorm r lc mem)) (Some (OBr d r lc mem))))))
-       ((Call k)
-        (match (func_at (funcs_of m) k)
-          (None (Some OTrap))
-          ((Some f)
-           (match (pop_n (params_of f) st)
-             (None (Some OTrap))
-             ((Some p)
-              (match p
-                ((Pair popped rest)
-                 ;; popped head = last-pushed = last parameter; locals want
-                 ;; parameter order, so reverse, then extend with zeros. The
-                 ;; callee shares the instance memory and hands it back.
-                 (match
-                   (eval_seq
-                     f2
-                     m
-                     (body_of f)
-                     (wapp (wrev popped) (zeros (extra_of f)))
-                     Nil
-                     mem)
-                   (None None)
-                   ((Some out)
-                    (match out
-                      ((ONorm s2 l2 mem2)
-                       (match s2
-                         (Nil (Some OTrap))
-                         ((Cons v r2) (Some (ONorm (Cons v rest) lc mem2)))))
-                      ((ORet v mem2) (Some (ONorm (Cons v rest) lc mem2)))
-                      ((OBr d s l mem2) (Some OTrap))
-                      (OTrap (Some OTrap))))))))))))
+       ((Call k) (eval_call f2 m k lc st mem))
        (Return
          (match st
            (Nil (Some OTrap))
            ((Cons v r) (Some (ORet v mem)))))))))
+
+;; the call engine — a NAMED SCC member for the same reason as eval_loop
+;; below: composed proofs must be able to STOP the interpreter at a call
+;; site (a stop-set entry) and rewrite the folded (eval_call …) term by the
+;; callee's own conformance cert (the call_bridge lemma), instead of
+;; computing into the callee's body. Pops the callee's arguments (popped
+;; head = last-pushed = last parameter; locals want parameter order, so
+;; reverse, then extend with zeros); the callee shares the instance memory
+;; and hands it back. Burns one fuel on entry like every SCC member, so a
+;; call costs 2 fuel (eval_instr entry + this) before the callee's body.
+(fn eval_call
+  ((fuel Nat) (m WModule) (k Int) (lc (List Int)) (st (List Int)) (mem Mem))
+  (Option Out)
+  (measure (struct fuel))
+  (match fuel
+    (Z None)
+    ((S f2)
+     (match (func_at (funcs_of m) k)
+       (None (Some OTrap))
+       ((Some f)
+        (match (pop_n (params_of f) st)
+          (None (Some OTrap))
+          ((Some p)
+           (match p
+             ((Pair popped rest)
+              (match
+                (eval_seq
+                  f2
+                  m
+                  (body_of f)
+                  (wapp (wrev popped) (zeros (extra_of f)))
+                  Nil
+                  mem)
+                (None None)
+                ((Some out)
+                 (match out
+                   ((ONorm s2 l2 mem2)
+                    (match s2
+                      (Nil (Some OTrap))
+                      ((Cons v r2) (Some (ONorm (Cons v rest) lc mem2)))))
+                   ((ORet v mem2) (Some (ONorm (Cons v rest) lc mem2)))
+                   ((OBr d s l mem2) (Some OTrap))
+                   (OTrap (Some OTrap))))))))))))))
 
 ;; the loop engine — a NAMED SCC member, not an inline arm, so proofs can
 ;; state and cite loop-level equations against a folded (eval_loop …) term:

@@ -1,0 +1,413 @@
+;;; callcomp_probe.shard — the CALL-COMPOSITION probe (mod.build design,
+;;; docs/LOWERING.md arc). Question under test: can a consumer's
+;;; lowered-conformance cert be proven by CITING its callee's cert at the
+;;; call site — never computing into the callee's body — so that a module
+;;; (std/mem first) can ship wasm implementations of its surface functions
+;;; as ordinary certified artifacts and consumers compose by call?
+;;;
+;;; Three articles:
+;;;   1. mget_thm — the callee: a one-function wrapper over I32Load8U,
+;;;      certified in the standard framed schema (arbitrary m0, ∀ slack,
+;;;      ∀ restfs). This is the shape of a std/mem mod.build artifact.
+;;;   2. call_bridge — THE KEYSTONE: the model-level lemma connecting an
+;;;      in-body (Call k) step — the folded (eval_call …) term a stopped
+;;;      compute leaves — to call_fn_mem of the callee, so a whole-run
+;;;      cert becomes citable mid-run. Piece-independent, proven once.
+;;;   3. sum2_thm — the consumer: reads bytes at x and y via TWO calls to
+;;;      function 0 and adds them. Its proof stops the interpreter at each
+;;;      call site ((compute … (stop eval_call))), rewrites by call_bridge
+;;;      with mget_thm discharging the run premise, and never sees the
+;;;      callee's body.
+
+(import "../kernel/stdlib.shard")
+(import "../std/mem")  ; mem_get (opaque) + get_lo/get_hi byte bounds
+(import "../models/wasm/wasm.shard")
+(use (:: std mem *))
+(use (:: models wasm wasm *))
+
+;; --- the callee: mget = byte read as a module function -------------------------
+
+(fn mget_f () Func (MkFunc 1 0 (list (LocalGet 0) (I32Load8U))))
+
+;; the callee's conformance cert, standard framed schema: arbitrary initial
+;; memory, ∀ fuel slack, ∀ restfs. Memory is returned untouched (the read
+;; leaves it literally m0 — no frame companion needed for a pure read).
+(claim mget_thm
+  (goal ((a Int) (m0 Mem) (c Nat) (restfs (List Func)))
+    ((= (le 0 a) True) (= (le (+ a 1) 65536) True))
+    (=
+      (call_fn_mem
+        (S^ 6 c)
+        (MkWModule (Cons (inline mget_f) restfs) 65536)
+        0
+        (list a)
+        m0)
+      (Some (Pair (mem_get m0 a) m0))))
+  (chain
+    (steps
+      ((compute lhs)
+       (rewrite (premise 0) lr lhs true ())
+       (compute
+         lhs
+         (stop pop_n eval_seq wrev wapp zeros wlen params_of body_of extra_of))
+       (rewrite (premise 1) lr lhs true ())
+       (compute lhs)))
+    refl))
+
+;; --- the keystone: call_bridge --------------------------------------------------
+
+;; projections for extracting the components of a (Some (Pair v mem)) run
+;; result equation without constructor-injectivity machinery: rewrite the
+;; projected term by the equation, then compute.
+(fn pres ((r (Option (Pair Int Mem)))) Int
+  (match r
+    (None 0)
+    ((Some p)
+     (match p
+       ((Pair x2 m2) x2)))))
+
+(fn pmem ((r (Option (Pair Int Mem)))) Mem
+  (match r
+    (None (mem_empty))
+    ((Some p)
+     (match p
+       ((Pair x2 m2) m2)))))
+
+;; The model-level bridge: an in-body (Call k) — which a stopped compute
+;; leaves as a folded (eval_call (S f2) …) term — completes exactly as
+;; call_fn_mem of the callee on the popped arguments and current memory.
+;; Premises 0-3 are ground bookkeeping at any concrete call site (func_at,
+;; pop_n, wrev, arity all compute); premise 4 is the callee's RUN — the
+;; slot the callee's own conformance cert discharges. Piece-independent:
+;; proven once, cited by every composed proof at every call site.
+(claim call_bridge
+  (goal
+    ((f2 Nat)
+     (m WModule)
+     (k Int)
+     (f Func)
+     (popped (List Int))
+     (rest (List Int))
+     (args (List Int))
+     (lc (List Int))
+     (st (List Int))
+     (mem Mem)
+     (v Int)
+     (mem2 Mem))
+    ((= (func_at (funcs_of m) k) (Some f))
+     (= (pop_n (params_of f) st) (Some (Pair popped rest)))
+     (= (wrev popped) args)
+     (= (int_eq (wlen args) (params_of f)) True)
+     (= (call_fn_mem f2 m k args mem) (Some (Pair v mem2))))
+    (= (eval_call (S f2) m k lc st mem) (Some (ONorm (Cons v rest) lc mem2))))
+  (chain
+    (steps
+      ((unfold eval_call lhs)
+       (rewrite (premise 0) lr lhs true ())
+       (compute
+         lhs
+         (stop pop_n eval_seq wrev wapp zeros wlen params_of body_of extra_of))
+       (rewrite (premise 1) lr lhs true ())
+       (compute
+         lhs
+         (stop pop_n eval_seq wrev wapp zeros wlen params_of body_of extra_of))
+       (rewrite (premise 2) lr lhs true ())))
+    (have hv (= v (pres (Some (Pair v mem2)))) (steps ((compute rhs)) refl))
+    (have hm (= mem2 (pmem (Some (Pair v mem2)))) (steps ((compute rhs)) refl))
+    (case-on
+      (eval_seq f2 m (body_of f) (wapp args (zeros (extra_of f))) Nil mem)
+      Option
+      ((case None
+         (chain
+           (have hx (= (Some (Pair v mem2)) None)
+             (steps
+               ((rewrite (premise 4) rl lhs true ())
+                (unfold call_fn_mem lhs)
+                (rewrite (premise 0) lr lhs true ())
+                (compute
+                  lhs
+                  (stop pop_n eval_seq wrev wapp zeros wlen params_of body_of
+                    extra_of))
+                (rewrite (premise 3) lr lhs true ())
+                (compute
+                  lhs
+                  (stop pop_n eval_seq wrev wapp zeros wlen params_of body_of
+                    extra_of))
+                (rewrite (hyp None) lr lhs true ())
+                (compute lhs))
+               refl))
+           (absurd (premise hx))))
+       (case Some
+         (out)
+         (case-on out Out
+           ((case ONorm
+              (s2 l2 mem3)
+              (case-on s2 List
+                ((case Nil
+                   (chain
+                     (have hx (= (Some (Pair v mem2)) None)
+                       (steps
+                         ((rewrite (premise 4) rl lhs true ())
+                          (unfold call_fn_mem lhs)
+                          (rewrite (premise 0) lr lhs true ())
+                          (compute
+                            lhs
+                            (stop pop_n eval_seq wrev wapp zeros wlen params_of
+                              body_of extra_of))
+                          (rewrite (premise 3) lr lhs true ())
+                          (compute
+                            lhs
+                            (stop pop_n eval_seq wrev wapp zeros wlen params_of
+                              body_of extra_of))
+                          (rewrite (hyp Some) lr lhs true ())
+                          (rewrite (hyp ONorm) lr lhs true ())
+                          (rewrite (hyp Nil) lr lhs true ())
+                          (compute lhs))
+                         refl))
+                     (absurd (premise hx))))
+                 (case Cons
+                   (h r)
+                   (chain
+                     (steps
+                       ((rewrite (hyp Some) lr lhs true ())
+                        (rewrite (hyp ONorm) lr lhs true ())
+                        (rewrite (hyp Cons) lr lhs true ())
+                        (compute lhs)))
+                     (have hx (= (Some (Pair v mem2)) (Some (Pair h mem3)))
+                       (steps
+                         ((rewrite (premise 4) rl lhs true ())
+                          (unfold call_fn_mem lhs)
+                          (rewrite (premise 0) lr lhs true ())
+                          (compute
+                            lhs
+                            (stop pop_n eval_seq wrev wapp zeros wlen params_of
+                              body_of extra_of))
+                          (rewrite (premise 3) lr lhs true ())
+                          (compute
+                            lhs
+                            (stop pop_n eval_seq wrev wapp zeros wlen params_of
+                              body_of extra_of))
+                          (rewrite (hyp Some) lr lhs true ())
+                          (rewrite (hyp ONorm) lr lhs true ())
+                          (rewrite (hyp Cons) lr lhs true ())
+                          (compute lhs))
+                         refl))
+                     (have hveq (= v h)
+                       (steps
+                         ((rewrite (premise hv) lr lhs true ())
+                          (rewrite (premise hx) lr lhs true ())
+                          (compute lhs))
+                         refl))
+                     (have hmeq (= mem2 mem3)
+                       (steps
+                         ((rewrite (premise hm) lr lhs true ())
+                          (rewrite (premise hx) lr lhs true ())
+                          (compute lhs))
+                         refl))
+                     (steps
+                       ((rewrite (premise hveq) lr rhs true ())
+                        (rewrite (premise hmeq) lr rhs true ()))
+                       refl))))))
+            (case OBr
+              (d bs bl mem3)
+              (chain
+                (have hx (= (Some (Pair v mem2)) None)
+                  (steps
+                    ((rewrite (premise 4) rl lhs true ())
+                     (unfold call_fn_mem lhs)
+                     (rewrite (premise 0) lr lhs true ())
+                     (compute
+                       lhs
+                       (stop pop_n eval_seq wrev wapp zeros wlen params_of
+                         body_of extra_of))
+                     (rewrite (premise 3) lr lhs true ())
+                     (compute
+                       lhs
+                       (stop pop_n eval_seq wrev wapp zeros wlen params_of
+                         body_of extra_of))
+                     (rewrite (hyp Some) lr lhs true ())
+                     (rewrite (hyp OBr) lr lhs true ())
+                     (compute lhs))
+                    refl))
+                (absurd (premise hx))))
+            (case ORet
+              (vr mem3)
+              (chain
+                (steps
+                  ((rewrite (hyp Some) lr lhs true ())
+                   (rewrite (hyp ORet) lr lhs true ())
+                   (compute lhs)))
+                (have hx (= (Some (Pair v mem2)) (Some (Pair vr mem3)))
+                  (steps
+                    ((rewrite (premise 4) rl lhs true ())
+                     (unfold call_fn_mem lhs)
+                     (rewrite (premise 0) lr lhs true ())
+                     (compute
+                       lhs
+                       (stop pop_n eval_seq wrev wapp zeros wlen params_of
+                         body_of extra_of))
+                     (rewrite (premise 3) lr lhs true ())
+                     (compute
+                       lhs
+                       (stop pop_n eval_seq wrev wapp zeros wlen params_of
+                         body_of extra_of))
+                     (rewrite (hyp Some) lr lhs true ())
+                     (rewrite (hyp ORet) lr lhs true ())
+                     (compute lhs))
+                    refl))
+                (have hveq (= v vr)
+                  (steps
+                    ((rewrite (premise hv) lr lhs true ())
+                     (rewrite (premise hx) lr lhs true ())
+                     (compute lhs))
+                    refl))
+                (have hmeq (= mem2 mem3)
+                  (steps
+                    ((rewrite (premise hm) lr lhs true ())
+                     (rewrite (premise hx) lr lhs true ())
+                     (compute lhs))
+                    refl))
+                (steps
+                  ((rewrite (premise hveq) lr rhs true ())
+                   (rewrite (premise hmeq) lr rhs true ()))
+                  refl)))
+            (case OTrap
+              (chain
+                (have hx (= (Some (Pair v mem2)) None)
+                  (steps
+                    ((rewrite (premise 4) rl lhs true ())
+                     (unfold call_fn_mem lhs)
+                     (rewrite (premise 0) lr lhs true ())
+                     (compute
+                       lhs
+                       (stop pop_n eval_seq wrev wapp zeros wlen params_of
+                         body_of extra_of))
+                     (rewrite (premise 3) lr lhs true ())
+                     (compute
+                       lhs
+                       (stop pop_n eval_seq wrev wapp zeros wlen params_of
+                         body_of extra_of))
+                     (rewrite (hyp Some) lr lhs true ())
+                     (rewrite (hyp OTrap) lr lhs true ())
+                     (compute lhs))
+                    refl))
+                (absurd (premise hx)))))))))))
+
+;; --- the consumer: two byte reads BY CALL, composed by citation ----------------
+
+;; farkas helpers: two byte-bounded values sum inside u32 range
+(claim sum_lo
+  (goal ((p Int) (q Int)) ((= (le 0 p) True) (= (le 0 q) True))
+    (= (le 0 (+ p q)) True))
+  (by arith (list 1 1 1)))
+
+(claim sum_hi
+  (goal ((p Int) (q Int)) ((= (lt p 256) True) (= (lt q 256) True))
+    (= (lt (+ p q) 4294967296) True))
+  (by arith (list 1 1 1)))
+
+(fn sum2_f () Func
+  (MkFunc 2 0 (list (LocalGet 0) (Call 0) (LocalGet 1) (Call 0) (I32Bin BAdd))))
+
+;; the consumer's cert: function 1 of the two-function module, proven by
+;; stopping the interpreter at each call site and citing mget_thm through
+;; call_bridge. The callee's body is NEVER computed into: delete mget_f's
+;; instructions and only mget_thm's proof breaks — this proof reads the
+;; callee purely through its cert.
+(claim sum2_thm
+  (goal ((x Int) (y Int) (m0 Mem) (c Nat) (restfs (List Func)))
+    ((= (le 0 x) True)
+     (= (le (+ x 1) 65536) True)
+     (= (le 0 y) True)
+     (= (le (+ y 1) 65536) True))
+    (=
+      (call_fn_mem
+        (S^ 24 c)
+        (MkWModule (Cons (inline mget_f) (Cons (inline sum2_f) restfs)) 65536)
+        1
+        (list x y)
+        m0)
+      (Some (Pair (+ (mem_get m0 x) (mem_get m0 y)) m0))))
+  (chain
+    (steps ((compute lhs (stop eval_call))))
+    (rewrite-with
+      (lemma call_bridge)
+      lr
+      lhs
+      ((inst f (inline mget_f))
+       (inst popped (Cons x Nil))
+       (inst rest Nil)
+       (inst args (Cons x Nil))
+       (inst v (mem_get m0 x))
+       (inst mem2 m0))
+      ((steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (rewrite-with
+         (lemma mget_thm)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+          (steps ((rewrite (premise 1) lr lhs true ())) refl))
+         refl)))
+    (steps ((compute lhs (stop eval_call))))
+    (rewrite-with
+      (lemma call_bridge)
+      lr
+      lhs
+      ((inst f (inline mget_f))
+       (inst popped (Cons y Nil))
+       (inst rest (Cons (mem_get m0 x) Nil))
+       (inst args (Cons y Nil))
+       (inst v (mem_get m0 y))
+       (inst mem2 m0))
+      ((steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (rewrite-with
+         (lemma mget_thm)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+          (steps ((rewrite (premise 3) lr lhs true ())) refl))
+         refl)))
+    (steps ((compute lhs)))
+    (have h1 (= (le 0 (mem_get m0 x)) True)
+      (steps ((rewrite (lemma get_lo) lr lhs true ())) refl))
+    (have h2 (= (lt (mem_get m0 x) 256) True)
+      (steps ((rewrite (lemma get_hi) lr lhs true ())) refl))
+    (have h3 (= (le 0 (mem_get m0 y)) True)
+      (steps ((rewrite (lemma get_lo) lr lhs true ())) refl))
+    (have h4 (= (lt (mem_get m0 y) 256) True)
+      (steps ((rewrite (lemma get_hi) lr lhs true ())) refl))
+    (have hw
+      (=
+        (mod (+ (mem_get m0 x) (mem_get m0 y)) 4294967296)
+        (+ (mem_get m0 x) (mem_get m0 y)))
+      (rewrite-with
+        (lemma wrap32_id)
+        lr
+        lhs
+        ((inst x (+ (mem_get m0 x) (mem_get m0 y))))
+        ((rewrite-with
+           (lemma sum_lo)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise h1) lr lhs true ())) refl)
+            (steps ((rewrite (premise h3) lr lhs true ())) refl))
+           refl)
+         (rewrite-with
+           (lemma sum_hi)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise h2) lr lhs true ())) refl)
+            (steps ((rewrite (premise h4) lr lhs true ())) refl))
+           refl))
+        refl))
+    (steps ((rewrite (premise hw) lr lhs true ())) refl)))
