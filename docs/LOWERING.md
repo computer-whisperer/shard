@@ -303,6 +303,41 @@ certs pin their fn at index 0, so combined multi-function modules can't
 instantiate them yet — the `triple_thm` filler pattern (pin own index,
 opaque fillers before) is the known fix when welding needs it.
 
+### 6b. std/mem — the first REAL module through the convention (2026-07-04)
+
+`std/mem` ships its surface as callable wasm artifacts, exactly as the
+call-composition probes rehearsed (no module is special to any compiler
+machinery; call-per-byte accepted v1):
+
+- **`std/mem/mem.wasm.shard`** — the artifact pieces: `mget_f`/`mset_f`
+  function literals + `lowered_mem_get`/`lowered_mem_set` certs. Memory
+  effects are stated DENOTATIONALLY against the module's own opaque
+  surface (`mem_set m0 a v`), so consumer frame flow is pure citation:
+  re-cite the read cert at the post-write memory (the framed schema's
+  arbitrary m0), collapse with `get_set_other`. Certs use the
+  **minimal-prefix convention**: each pins the function-table slots up to
+  its own index and quantifies the rest — any consumer keeping std/mem's
+  fns as the low-index prefix in canonical order can cite them. Not part
+  of the std/mem module proper (directory modules load only
+  mod.req/impl); consumers import the file by path.
+- **`std/mem/mod.build.shard`** — the build entry: the shipped binary is
+  the certs' module at `restfs := Nil` (`[mget, mset]`, one 64KiB page);
+  MEMCASE vectors' expected values AND memory readbacks are computed
+  spec-side (`mem_get`/`mem_set` applied directly).
+- **`std/mem/lowbuild.sh`** — three gates (SCHEMA → KERNEL → ENGINE); no
+  REGEN gate, the pieces are hand-written v1.
+- The composition probes are now CONSUMERS of the shipped certs
+  (`sum2`/`setget`/`bump` cite `lowered_mem_*` — the acceptance test that
+  a foreign module can compose against the artifact set), and
+  `call_bridge` graduated to `models/wasm/wasm.shard`.
+
+Findings recorded on the way: `(inline NAME)` is same-file-only, so a
+consumer statement cannot ride a foreign fn's body — consumers carry
+byte-identical local literals (drift fails loudly at the bridge citation)
+until the link-time generator splices literals; `tools/lowcheck` learned
+to resolve same-file `(inline …)` chain elements (the loader's exact
+rule — the expanded element must still be a `MkFunc` literal).
+
 ## 7. Open questions (the back-and-forth queue)
 
 1. ~~The statement-generator enforcement mechanism~~ RESOLVED by P4a:

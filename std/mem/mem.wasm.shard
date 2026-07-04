@@ -1,0 +1,89 @@
+;;; std/mem/mem.wasm.shard — std/mem's wasm ARTIFACT PIECES: the module's
+;;; surface shipped as callable wasm functions with lowered-conformance
+;;; certs (docs/LOWERING.md; the first real module through the mod.build
+;;; convention). std/mem is NOT special to any compiler machinery — these
+;;; are ordinary certified pieces (user-ratified; call-per-byte OK v1,
+;;; inlining later = a general certified transform).
+;;;
+;;; The artifact module is [mget, mset] over one 64KiB page. Certs use the
+;;; MINIMAL-PREFIX convention (proven out in examples/callcomp_probe.shard
+;;; and examples/msetcomp_probe.shard): each cert pins the function-table
+;;; slots up to its own index and quantifies the rest (restfs), so any
+;;; consumer that keeps std/mem's functions as the low-index prefix in
+;;; this canonical order can cite them. The shipped binary is the certs'
+;;; module at restfs := Nil (std/mem/mod.build.shard encodes it).
+;;;
+;;; The memory effects are stated DENOTATIONALLY against std/mem's own
+;;; opaque surface (mem_get / mem_set): consumers reason about post-call
+;;; memory with the module's surface laws (get_set_other framing etc.) —
+;;; frame flow needs no companions and no memory-equality theory.
+;;;
+;;; NOT loaded as part of the std/mem module (directory modules load only
+;;; mod.req.shard / mem.shard): consumers import this file by path.
+
+(import "../../kernel/stdlib.shard")
+(import "../../std/mem")  ; the module's own surface, opaque (Mem/mem_get/mem_set)
+(import "../../models/wasm/wasm.shard")
+(use (:: std mem *))
+(use (:: models wasm wasm *))
+
+;; --- the function literals ------------------------------------------------------
+
+;; slot 0: byte read. params (addr); returns the byte, memory untouched.
+(fn mget_f () Func (MkFunc 1 0 (list (LocalGet 0) (I32Load8U))))
+
+;; slot 1: byte store. params (addr, value); returns the raw value
+;; (single-result v1 — callers park it in a scratch local).
+(fn mset_f () Func
+  (MkFunc 2 0 (list (LocalGet 0) (LocalGet 1) (I32Store8) (LocalGet 1))))
+
+;; --- the conformance certs (standard framed schema) -----------------------------
+
+;; mget: arbitrary initial memory, ∀ fuel slack, ∀ restfs. Memory is
+;; returned untouched — literally m0; a pure read needs no frame story.
+(claim lowered_mem_get
+  (goal ((a Int) (m0 Mem) (c Nat) (restfs (List Func)))
+    ((= (le 0 a) True) (= (le (+ a 1) 65536) True))
+    (=
+      (call_fn_mem
+        (S^ 6 c)
+        (MkWModule (Cons (inline mget_f) restfs) 65536)
+        0
+        (list a)
+        m0)
+      (Some (Pair (mem_get m0 a) m0))))
+  (chain
+    (steps
+      ((compute lhs)
+       (rewrite (premise 0) lr lhs true ())
+       (compute
+         lhs
+         (stop pop_n eval_seq wrev wapp zeros wlen params_of body_of extra_of))
+       (rewrite (premise 1) lr lhs true ())
+       (compute lhs)))
+    refl))
+
+;; mset: the memory effect is the SPEC-LEVEL (mem_set m0 a v). No premise
+;; on v — mem_set truncates observationally (mask-on-read), and the raw
+;; value is returned as pushed.
+(claim lowered_mem_set
+  (goal ((a Int) (v Int) (m0 Mem) (c Nat) (restfs (List Func)))
+    ((= (le 0 a) True) (= (le (+ a 1) 65536) True))
+    (=
+      (call_fn_mem
+        (S^ 10 c)
+        (MkWModule (Cons (inline mget_f) (Cons (inline mset_f) restfs)) 65536)
+        1
+        (list a v)
+        m0)
+      (Some (Pair v (mem_set m0 a v)))))
+  (chain
+    (steps
+      ((compute lhs)
+       (rewrite (premise 0) lr lhs true ())
+       (compute
+         lhs
+         (stop pop_n eval_seq wrev wapp zeros wlen params_of body_of extra_of))
+       (rewrite (premise 1) lr lhs true ())
+       (compute lhs)))
+    refl))

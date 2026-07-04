@@ -1,0 +1,149 @@
+;;; std/mem/mod.build.shard — std/mem's BUILD ENTRY (docs/LOWERING.md §6):
+;;; assembles the module's wasm artifact set as a plan. The first REAL
+;;; module through the mod.build convention — std/mem is not special to
+;;; any compiler machinery; this file is ordinary shard, and an override
+;;; would discharge the same statements (variant selection stays explicit
+;;; build-script data).
+;;;
+;;;   ARTIFACT <fn> …          manifest: which cert covers which export of
+;;;                            the module binary, under which ISA model
+;;;   MOD stdmem <hex>         the BINARY — the certs' module at
+;;;                            restfs := Nil ([mget, mset], one 64KiB page)
+;;;   MEMCASE stdmem f<k> …    engine vectors; expected result AND memory
+;;;                            readback computed from the SOURCE surface
+;;;                            (mem_get/mem_set applied directly — spec-side
+;;;                            semantics, not the model; the artifact-level
+;;;                            differential)
+;;;
+;;; The gates live in std/mem/lowbuild.sh (SCHEMA → KERNEL → ENGINE; no
+;;; REGEN gate — the pieces are hand-written v1, there is no generator to
+;;; hold to determinism yet).
+;;;
+;;; RUN IT:  bin/shard_eval run std/mem/mod.build.shard | node examples/wasm_diff.mjs /dev/stdin
+
+(import "../../kernel/stdlib.shard")
+(import "../../std/mem")  ; interface in check; IMPL in run — spec-side expected values
+(import "mem.wasm.shard")  ; the artifact fns + certs
+(import "../../models/wasm/wasm.shard")
+(import "../../models/wasm/encode.shard")
+(use (:: std mem *))
+(use (:: std mem mem.wasm *))
+(use (:: models wasm wasm *))
+(use (:: models wasm encode *))
+
+(type World (World Int))
+
+(extern write ((bytes (List Int)) (w World)) World)
+(extern exit ((code Int) (w World)) World)
+
+;; the shipped binary: both certs' module literal at restfs := Nil.
+(fn stdmem_mod () WModule (MkWModule (list (mget_f) (mset_f)) 65536))
+
+;; --- spec-side memory helpers ---------------------------------------------------
+
+;; preload bytes at address 0 (the vector's initial memory image)
+(fn mload ((bs (List Int)) (a Int) (m Mem)) Mem
+  (measure (struct bs))
+  (match bs
+    (Nil m)
+    ((Cons b t) (mload t (+ a 1) (mem_set m a b)))))
+
+;; read n bytes from address 0 (the vector's final-memory readback)
+(fn mdump ((a Int) (n Nat) (m Mem)) (List Int)
+  (measure (struct n))
+  (match n
+    (Z Nil)
+    ((S k) (Cons (mem_get m a) (mdump (+ a 1) k m)))))
+
+(fn len_nat ((xs (List Int))) Nat
+  (measure (struct xs))
+  (match xs
+    (Nil Z)
+    ((Cons _ t) (S (len_nat t)))))
+
+;; --- plan rendering -------------------------------------------------------------
+
+(fn cat ((xs (List (List Int)))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil "")
+    ((Cons h t) (wapp h (cat t)))))
+
+(fn hexd ((d Int)) Int (if (lt d 10) (+ 48 d) (+ 87 d)))
+
+(fn hexs ((bs (List Int))) (List Int)
+  (measure (struct bs))
+  (match bs
+    (Nil Nil)
+    ((Cons b t) (Cons (hexd (ediv b 16)) (Cons (hexd (mod b 16)) (hexs t))))))
+
+(fn showargs ((xs (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil "")
+    ((Cons h t) (wapp " " (wapp (dec h) (showargs t))))))
+
+;; manifest line: which cert covers which export of the module binary
+(fn art_line ((nm (List Int)) (k Int)) (List Int)
+  (cat
+    (list
+      "ARTIFACT "
+      nm
+      " cert=lowered_"
+      nm
+      " certfile=std/mem/mem.wasm.shard model=models/wasm/wasm.shard export=f"
+      (dec k)
+      " externs=none\n")))
+
+(fn mod_line ((nm (List Int)) (m WModule)) (List Int)
+  (cat (list "MOD " nm " " (hexs (enc_module m)) "\n")))
+
+;; a memory vector: expected value + final-memory readback, both SPEC-side
+(fn memcase_line
+  ((k Int) (args (List Int)) (membytes (List Int)) (expect (Pair Int Mem)))
+  (List Int)
+  (match expect
+    ((Pair v mf)
+     (cat
+       (list
+         "MEMCASE stdmem f"
+         (dec k)
+         (showargs args)
+         " MEM "
+         (hexs membytes)
+         " -> "
+         (dec v)
+         " "
+         (hexs (mdump 0 (len_nat membytes) mf))
+         "\n")))))
+
+;; spec-side denotations of the two exports
+(fn spec_get ((membytes (List Int)) (a Int)) (Pair Int Mem)
+  (match (mload membytes 0 (mem_empty))
+    (m (Pair (mem_get m a) m))))
+
+(fn spec_set ((membytes (List Int)) (a Int) (v Int)) (Pair Int Mem)
+  (match (mload membytes 0 (mem_empty))
+    (m (Pair v (mem_set m a v)))))
+
+(fn emit () (List Int)
+  (cat
+    (list
+      (art_line "mem_get" 0)
+      (art_line "mem_set" 1)
+      (mod_line "stdmem" (stdmem_mod))
+      (memcase_line 0 (list 2) (list 5 7 11 13) (spec_get (list 5 7 11 13) 2))
+      (memcase_line 0 (list 0) (list 200 1) (spec_get (list 200 1) 0))
+      (memcase_line
+        1
+        (list 3 200)
+        (list 5 7 11 13 17 19)
+        (spec_set (list 5 7 11 13 17 19) 3 200))
+      (memcase_line
+        1
+        (list 1 999)
+        (list 5 7 11 13)
+        (spec_set (list 5 7 11 13) 1 999))
+      (memcase_line 1 (list 0 0) (list 9) (spec_set (list 9) 0 0)))))
+
+(fn main ((w World)) World (exit 0 (write (emit) w)))
