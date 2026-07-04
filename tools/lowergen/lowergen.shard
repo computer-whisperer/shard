@@ -1,15 +1,21 @@
 ;;; lowergen — the certifying emitter (docs/LOWERING.md §6): the scalar
-;;; let/straight-line fragment. For every fn in the target file whose body
-;;; is arithmetic over Int params, u32 literals (+ - * only), and
-;;; single-binding lets, emit:
+;;; let/if fragment. For every fn in the target file whose body is
+;;; arithmetic over Int params, u32 literals (+ - * only), single-binding
+;;; lets, and tail-position ifs over int_eq/lt comparisons, emit:
 ;;;   - the wasm function literal (postorder stack code; one LocalSet per
-;;;     let, locals allocated after the params in textual order), and
+;;;     let, locals allocated after the params in textual order; each if
+;;;     a Block/BrIf/Br diamond — True exits the inner block to the THEN
+;;;     code, False falls through the ELSE code), and
 ;;;   - the standard lowered-conformance claim (docs/LOWERING.md §2) with
-;;;     its full proof, in chain form: compute lhs + unfold/ζ-reduce SPEC
-;;;     rhs, then per unique substituted arith node (innermost-first) a
-;;;     named have citing wrap32_id once + an all-occurrences rewrite of
-;;;     the have fact (the sharing-proof pattern — a let-bound value read
-;;;     k times duplicates k-fold under ζ but is discharged once).
+;;;     its full proof, in chain form mirroring the branch tree: compute
+;;;     lhs + unfold/ζ-reduce SPEC rhs; per if a case-on with the fixed
+;;;     arm template (rewrite ctor-named case hyp into both sides, compute
+;;;     both — the probe-pinned fuel max+slack law needs ONE tower for the
+;;;     longest path, no per-branch fuel); per unique arith node,
+;;;     discharged in the REGION where its code executes, a named have
+;;;     citing wrap32_id once + an all-occurrences rewrite of the have
+;;;     fact (the sharing-proof pattern — a let-bound value read k times
+;;;     duplicates k-fold under ζ but is discharged once).
 ;;; The emitted statement generator IS the schema consensus mechanism; the
 ;;; output is deterministic (weld discipline: regenerable byte-identical
 ;;; after shardfmt).
@@ -18,10 +24,12 @@
 ;;; import; refuse, don't guess — any body outside the fragment is a loud
 ;;; per-fn error and exit 1. Fragment rules: all params Int, return Int;
 ;;; body nodes are params, let-bound names, literals in [0, 2^32), and
-;;; binary + - *; lets bind exactly one name; every arith node of the
-;;; SUBSTITUTED body must contain a param (constant-fold ground subtrees
-;;; in the source — their range premises would be vacuous facts the claim
-;;; should not carry).
+;;; binary + - *; lets bind exactly one name; ifs in TAIL position only,
+;;; conditions = int_eq/lt over params/aliases/literals (no arith in
+;;; conditions — wraps must never enter the case-on spelling); every arith
+;;; node of the SUBSTITUTED body must contain a param (constant-fold
+;;; ground subtrees in the source). PRE caveat: arm range premises
+;;; quantify over the WHOLE contract (see the tail-walk note).
 ;;;
 ;;; RUN IT:  bin/shard_eval run tools/lowergen/lowergen.shard SRC OUT.raw
 ;;;          then shardfmt OUT.raw -> the committed cert file.
@@ -334,6 +342,293 @@
        (_ (NErr "arith call must be binary"))))
     (_ (NOk acc))))
 
+;; ---- tail walk: the branch/region tree -----------------------------------------
+;;
+;; `if` lives in TAIL position (the fn body's result spine after lets, and
+;; arm tails — nested ifs and arm-local lets allowed). The proof mirrors the
+;; branch tree: one case-on per if, and each arith node is discharged in the
+;; REGION where its code executes — pre-branch let bindings before the
+;; case-on, arm-local nodes inside their arm — deduped against ancestor
+;; regions (a spelling rewritten pre-branch stays rewritten when the arm's
+;; compute resumes from the rewritten term).
+;;
+;; Conditions are (int_eq c1 c2) / (lt c1 c2) with operands whose CANONICAL
+;; form is a param or literal (FVar/IntLit — bare params, let-ALIASES,
+;; literals). Wraps never enter a condition, so the case-on spelling matches
+;; the compute residue on both sides. Arith inside a condition is refused.
+;;
+;; PRE caveat (v1): arm range premises quantify over the WHOLE contract —
+;; (if (lt 0 x) (- x 1) 0) would demand 0 <= x-1 globally. Arm expressions
+;; must be in-range on the full domain; condition-relative premises are
+;; future work.
+
+(fn cond_operand_ok ((e Expr)) Bool
+  (match e
+    ((FVar _) True)
+    ((IntLit _) True)
+    (_ False)))
+
+(fn cond_op ((q QName)) (Option Doc)
+  (if (core_named q (quote int_eq)) (Some (DStr "BEq"))
+  (if (core_named q (quote lt)) (Some (DStr "BLtU"))
+  None)))
+
+;; region tree: RTv = the tail is a value (region nodes incl. enclosing let
+;; bindings'); RTif = pre-branch nodes + canonical condition + arm trees.
+;; Both carry the full code, instr count, and next-free-local for the tail.
+(type RT
+  (RTv (List Doc) Int Int (List Expr))
+  (RTif (List Doc) Int Int (List Expr) Expr RT RT))
+
+(type TRes (TOk RT) (TErr (List Int)))
+
+(fn rt_nxt ((r RT)) Int
+  (match r
+    ((RTv _ _ nxt _) nxt)
+    ((RTif _ _ nxt _ _ _ _) nxt)))
+
+(fn rt_count ((r RT)) Int
+  (match r
+    ((RTv _ c _ _) c)
+    ((RTif _ c _ _ _ _ _) c)))
+
+(fn rt_code ((r RT)) (List Doc)
+  (match r
+    ((RTv code _ _ _) code)
+    ((RTif code _ _ _ _ _ _) code)))
+
+;; prepend an enclosing let binding (code + nodes) onto the tail's top region
+(fn rt_prepend ((code (List Doc)) (cnt Int) (ns (List Expr)) (r RT)) RT
+  (match r
+    ((RTv rcode rc rnxt rns)
+     (RTv (dapp code rcode) (+ cnt rc) rnxt (dapp_e ns rns)))
+    ((RTif rcode rc rnxt rns cond a b)
+     (RTif (dapp code rcode) (+ cnt rc) rnxt (dapp_e ns rns) cond a b))))
+
+(fn dapp_e ((a (List Expr)) (b (List Expr))) (List Expr)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (dapp_e t b)))))
+
+;; the diamond, result through a fresh LOCAL rl:
+;;   Block [ Block [ COND, BrIf 0, ELSE…, LocalSet rl, Br 1 ],
+;;           THEN…, LocalSet rl ]
+;;   LocalGet rl
+;; BrIf pops b2i(COND): nonzero (True) exits the inner block to THEN; zero
+;; (False) falls through ELSE and Br 1 exits the outer block. The result
+;; local is LOAD-BEARING for the REAL ISA: wasm blocks are typed and these
+;; are void — every block boundary must have an EMPTY stack (V8 rejects a
+;; value flowing out of a void block; the model's untyped Block would not
+;; have caught it — the engine gate did). Locals-not-stack across block
+;; edges is the same discipline the hand-written loop pieces follow.
+(fn diamond
+  ((cond_code (List Doc))
+   (then_code (List Doc))
+   (else_code (List Doc))
+   (rl Int))
+  (List Doc)
+  (Cons
+    (dcat3
+      (DStr "(Block (list (Block (list ")
+      (djoin
+        (dapp
+          cond_code
+          (dapp
+            (Cons (DStr "(BrIf 0)") Nil)
+            (dapp
+              else_code
+              (Cons
+                (dcat3 (DStr "(LocalSet ") (dint rl) (DStr ")"))
+                (Cons (DStr "(Br 1)") Nil))))))
+      (dcat3
+        (DStr ")) ")
+        (djoin
+          (dapp
+            then_code
+            (Cons (dcat3 (DStr "(LocalSet ") (dint rl) (DStr ")")) Nil)))
+        (DStr "))")))
+    (Cons (dcat3 (DStr "(LocalGet ") (dint rl) (DStr ")")) Nil)))
+
+(fn gen_t ((n Int) (env (List (Pair Expr Int))) (nxt Int) (e Expr)) TRes
+  (measure (struct e))
+  (match e
+    ((If c a b)
+     (match c
+       ((Call q ops)
+        (match (cond_op q)
+          (None (TErr "if condition outside the fragment (int_eq/lt only)"))
+          ((Some opd)
+           (match ops
+             ((Cons c1 (Cons c2 Nil))
+              (match (gen_e n env nxt c1)
+                ((GErr m) (TErr m))
+                ((GOk i1 n1 nx1 ce1)
+                 (match (gen_e n env nx1 c2)
+                   ((GErr m) (TErr m))
+                   ((GOk i2 n2 nx2 ce2)
+                    (if (cond_operand_ok ce1)
+                      (if (cond_operand_ok ce2)
+                        (match (gen_t n env (+ nx2 1) a)
+                          ((TErr m) (TErr m))
+                          ((TOk rta)
+                           (match (gen_t n env (rt_nxt rta) b)
+                             ((TErr m) (TErr m))
+                             ((TOk rtb)
+                              (TOk
+                                (RTif
+                                  (diamond
+                                    (dapp
+                                      i1
+                                      (dapp
+                                        i2
+                                        (Cons
+                                          (dcat3
+                                            (DStr "(I32Bin ")
+                                            opd
+                                            (DStr ")"))
+                                          Nil)))
+                                    (rt_code rta)
+                                    (rt_code rtb)
+                                    nx2)
+                                  (+
+                                    (+ n1 (+ n2 1))
+                                    (+ (rt_count rta) (+ (rt_count rtb) 7)))
+                                  (rt_nxt rtb)
+                                  Nil
+                                  (Call q (Cons ce1 (Cons ce2 Nil)))
+                                  rta
+                                  rtb))))))
+                        (TErr
+                          "if condition operand must be a param or literal (no arith in conditions)"))
+                      (TErr
+                        "if condition operand must be a param or literal (no arith in conditions)")))))))
+             (_ (TErr "if condition must be a binary comparison"))))))
+       (_ (TErr "if condition outside the fragment (int_eq/lt only)"))))
+    ((Let bs body)
+     (match bs
+       ((Cons rhs Nil)
+        (match (gen_e n env nxt rhs)
+          ((GErr m) (TErr m))
+          ((GOk ir cr nxr cer)
+           (match (nodes_e cer Nil)
+             ((NErr m) (TErr m))
+             ((NOk rns)
+              (match (gen_t n (Cons (Pair cer nxr) env) (+ nxr 1) body)
+                ((TErr m) (TErr m))
+                ((TOk rt)
+                 (TOk
+                   (rt_prepend
+                     (dapp
+                       ir
+                       (Cons
+                         (dcat3 (DStr "(LocalSet ") (dint nxr) (DStr ")"))
+                         Nil))
+                     (+ cr 1)
+                     rns
+                     rt)))))))))
+       (_ (TErr "let must bind exactly one name (split into nested lets)"))))
+    (_
+      (match (gen_e n env nxt e)
+        ((GErr m) (TErr m))
+        ((GOk code cnt nx ce)
+         (match (nodes_e ce Nil)
+           ((NErr m) (TErr m))
+           ((NOk ns) (TOk (RTv code cnt nx ns)))))))))
+
+;; ---- proof emission over the region tree ---------------------------------------
+
+;; unique PRE spellings, region-tree preorder (first appearance wins)
+(fn add_unique ((ns (List Expr)) (acc (List Expr))) (List Expr)
+  (measure (struct ns))
+  (match ns
+    (Nil acc)
+    ((Cons h t)
+     (add_unique t (if (node_seen (spell h) acc) acc (node_add h acc))))))
+
+(fn rt_pres ((r RT) (acc (List Expr))) (List Expr)
+  (measure (struct r))
+  (match r
+    ((RTv _ _ _ ns) (add_unique ns acc))
+    ((RTif _ _ _ ns _ a b) (rt_pres b (rt_pres a (add_unique ns acc))))))
+
+;; index of a spelling in the PRE list (present by construction)
+(fn pres_ix ((s (List Int)) (ps (List Expr)) (k Int)) Int
+  (measure (struct ps))
+  (match ps
+    (Nil 0)
+    ((Cons h t) (if (chars_eq s (spell h)) k (pres_ix s t (+ k 1))))))
+
+;; one discharge event: (have wJ …) + all-occurrences rewrite; premise
+;; indices come from the node's position in the global PRE list.
+(fn pr_event ((e Expr) (pres (List Expr)) (j Int)) Doc
+  (let ((k (pres_ix (spell e) pres 0)))
+    (dcat3
+      (dcat3
+        (dcat3 (DStr "(have w") (dint j) (DStr " (= (mod "))
+        (dcat3 (pr_e e) (DStr " 4294967296) ") (pr_e e))
+        (DStr ") (rewrite-with (lemma wrap32_id) lr lhs ((inst x "))
+      (dcat3
+        (DCat (pr_e e) (DStr ")) "))
+        (dcat3
+          (DStr "((steps ((rewrite (premise ")
+          (dint (* 2 k))
+          (DStr ") lr lhs true ())) refl) "))
+        (dcat3
+          (DStr "(steps ((rewrite (premise ")
+          (dint (+ (* 2 k) 1))
+          (DStr ") lr lhs true ())) refl)) refl)) ")))
+      (dcat3
+        (DStr "(steps ((rewrite (premise w")
+        (dint j)
+        (DStr ") lr lhs true ()))) ")))))
+
+;; the region's discharge items: nodes not already discharged in an ancestor
+;; region (nor earlier in this one). Returns (items doc, next have counter,
+;; ancestors incl. this region's nodes).
+(fn pr_items ((ns (List Expr)) (anc (List Expr)) (pres (List Expr)) (j Int))
+  (Pair (Pair Doc Int) (List Expr))
+  (measure (struct ns))
+  (match ns
+    (Nil (Pair (Pair (DStr "") j) anc))
+    ((Cons e t)
+     (if (node_seen (spell e) anc) (pr_items t anc pres j)
+     (match (pr_items t (node_add e anc) pres (+ j 1))
+       ((Pair (Pair d j2) anc2)
+        (Pair (Pair (DCat (pr_event e pres j) d) j2) anc2)))))))
+
+;; region body = discharge items + closer (refl, or the case-on tree).
+;; Each arm re-enters via the fixed template: rewrite the ctor-named case
+;; hyp into BOTH sides, compute both to resume past the fired branch.
+(fn pr_region ((r RT) (anc (List Expr)) (pres (List Expr)) (j Int))
+  (Pair Doc Int)
+  (measure (struct r))
+  (match r
+    ((RTv _ _ _ ns)
+     (match (pr_items ns anc pres j)
+       ((Pair (Pair items j2) _) (Pair (DCat items (DStr "refl")) j2))))
+    ((RTif _ _ _ ns cond a b)
+     (match (pr_items ns anc pres j)
+       ((Pair (Pair items j2) anc2)
+        (match (pr_region a anc2 pres j2)
+          ((Pair da j3)
+           (match (pr_region b anc2 pres j3)
+             ((Pair db j4)
+              (Pair
+                (dcat3
+                  (dcat3
+                    (dcat3 items (DStr "(case-on ") (pr_e cond))
+                    (DStr
+                      " Bool ((case True (chain (steps ((rewrite (hyp True) lr both true ()) (compute both))) ")
+                    da)
+                  (dcat3
+                    (DStr
+                      ")) (case False (chain (steps ((rewrite (hyp False) lr both true ()) (compute both))) ")
+                    db
+                    (DStr "))))"))
+                  (DStr ""))
+                j4))))))))))
+
 ;; ---- claim emission ----------------------------------------------------------
 
 (fn is_int_ty ((t Type)) Bool
@@ -383,39 +678,6 @@
        (dcat3 (DStr "(= (lt ") (pr_e e) (DStr " 4294967296) True) "))
        (pr_prems rest)))))
 
-;; per node j, two chain items: a named have (wJ) proving the wrap is the
-;; identity — ONE conditional wrap32_id citation, premises 2j/2j+1 — then a
-;; plain ALL-OCCURRENCES rewrite of the have fact. A shared local's wrapped
-;; value duplicates per read site under ζ, so a single-site rewrite-with
-;; would miss copies; the have factoring makes the cost per node constant.
-(fn pr_chain ((ns (List Expr)) (j Int)) Doc
-  (measure (struct ns))
-  (match ns
-    (Nil (DStr "refl"))
-    ((Cons e rest)
-     (dcat3
-       (dcat3
-         (dcat3 (DStr "(have w") (dint j) (DStr " (= (mod "))
-         (dcat3 (pr_e e) (DStr " 4294967296) ") (pr_e e))
-         (DStr ") (rewrite-with (lemma wrap32_id) lr lhs ((inst x "))
-       (dcat3
-         (DCat (pr_e e) (DStr ")) "))
-         (dcat3
-           (DStr "((steps ((rewrite (premise ")
-           (dint (* 2 j))
-           (DStr ") lr lhs true ())) refl) "))
-         (dcat3
-           (DStr "(steps ((rewrite (premise ")
-           (dint (+ (* 2 j) 1))
-           (DStr ") lr lhs true ())) refl)) refl)) ")))
-       (dcat3
-         (dcat3
-           (DStr "(steps ((rewrite (premise w")
-           (dint j)
-           (DStr ") lr lhs true ()))) "))
-         (pr_chain rest (+ j 1))
-         (DStr ""))))))
-
 (type CRes (COk Doc) (CErr (List Int)))
 
 (fn emit_claim ((f FnDef)) CRes
@@ -423,53 +685,51 @@
     ((FnDef q ts rty body)
      (if (all_int ts)
        (if (is_int_ty rty)
-         (match (gen_e (count_ts ts) Nil (count_ts ts) body)
-           ((GErr m)
+         (match (gen_t (count_ts ts) Nil (count_ts ts) body)
+           ((TErr m)
             (CErr (append_int (chars_of_sym (qn_name q)) (append_int ": " m))))
-           ((GOk instrs count nxt ce)
-            (match (nodes_e ce Nil)
-              ((NErr m)
-               (CErr
-                 (append_int (chars_of_sym (qn_name q)) (append_int ": " m))))
-              ((NOk nodes)
-               (COk
-                 (dcat3
+           ((TOk rt)
+            (let ((nodes (rt_pres rt Nil)))
+              (match (pr_region rt Nil nodes 0)
+                ((Pair proof_body _)
+                 (COk
                    (dcat3
                      (dcat3
-                       (DStr "(claim lowered_")
-                       (dsym (qn_name q))
                        (dcat3
-                         (DStr " (goal (")
-                         (pr_binds ts 0)
-                         (DStr "(c Nat) (restfs (List Func))) (")))
-                     (pr_prems nodes)
-                     (dcat3
-                       (dcat3
-                         (DStr ") (= (call_fn (S^ ")
-                         (dint (+ (* 2 count) 3))
-                         (DStr " c) (MkWModule (Cons (MkFunc "))
-                       (dint (count_ts ts))
+                         (DStr "(claim lowered_")
+                         (dsym (qn_name q))
+                         (dcat3
+                           (DStr " (goal (")
+                           (pr_binds ts 0)
+                           (DStr "(c Nat) (restfs (List Func))) (")))
+                       (pr_prems nodes)
                        (dcat3
                          (dcat3
-                           (DCat (sp) (dint (- nxt (count_ts ts))))
-                           (DStr " (list ")
-                           (djoin instrs))
-                         (DStr ")) restfs) 0) 0 (list ")
-                         (DStr ""))))
-                   (dcat3
-                     (pr_args ts 0)
-                     (dcat3 (DStr ")) (Some (") (dsym (qn_name q)) (DStr ""))
-                     (dcat3
-                       (pr_args_lead ts)
-                       (DStr "))))")
-                       (dcat3
+                           (DStr ") (= (call_fn (S^ ")
+                           (dint (+ (* 2 (rt_count rt)) 3))
+                           (DStr " c) (MkWModule (Cons (MkFunc "))
+                         (dint (count_ts ts))
                          (dcat3
-                           (DStr " (chain (steps ((compute lhs) (unfold ")
-                           (dsym (qn_name q))
-                           (DStr " rhs) (reduce rhs))) "))
-                         (pr_chain nodes 0)
-                         (DStr "))"))))
-                   (DStr (nl))))))))
+                           (dcat3
+                             (DCat (sp) (dint (- (rt_nxt rt) (count_ts ts))))
+                             (DStr " (list ")
+                             (djoin (rt_code rt)))
+                           (DStr ")) restfs) 0) 0 (list ")
+                           (DStr ""))))
+                     (dcat3
+                       (pr_args ts 0)
+                       (dcat3 (DStr ")) (Some (") (dsym (qn_name q)) (DStr ""))
+                       (dcat3
+                         (pr_args_lead ts)
+                         (DStr "))))")
+                         (dcat3
+                           (dcat3
+                             (DStr " (chain (steps ((compute lhs) (unfold ")
+                             (dsym (qn_name q))
+                             (DStr " rhs) (reduce rhs))) "))
+                           proof_body
+                           (DStr "))"))))
+                     (DStr (nl)))))))))
          (CErr
            (append_int (chars_of_sym (qn_name q)) ": return type is not Int")))
        (CErr (append_int (chars_of_sym (qn_name q)) ": params are not all Int"))))))

@@ -193,6 +193,39 @@ with named haves — machine certs became human-readable. All 8 proofs
 passed on the first generation attempt; four lowbuild gates green, V8
 differential 16/16 (the locals section exercised for real).
 
+**P2c — the if fragment (2026-07-03).** Tail-position `if` over
+`int_eq`/`lt` conditions whose operands are params/aliases/literals —
+*no arith in conditions*, so wraps never enter the case-on spelling and
+the split term matches the compute residue on both sides. The emitter
+walk became a REGION TREE mirroring the branch structure: per `if`, a
+`case-on` with the probe-pinned fixed arm template (rewrite the
+ctor-named case hyp into both sides, compute both); each arith node is
+discharged in the region where its code executes (pre-branch let
+bindings before the case-on, arm-local nodes inside their arm), deduped
+against ancestor regions; PREs are globally unique with an index map.
+One fuel tower per fn (max path; the slack law), formula `2·instrs+3`
+unchanged.
+
+Two findings:
+- *The engine gate caught a real ISA fact the model abstracts away*:
+  wasm blocks are TYPED, and void blocks must have an empty stack at
+  every boundary — a naive diamond that leaves the branch value on the
+  stack kernel-checks green but V8 REJECTS the binary ("expected 0
+  elements on the stack for fallthru"). The fix is a **result local**
+  per if (LocalSet in each arm, LocalGet after the outer block) — the
+  same locals-not-stack-across-block-edges discipline the hand-written
+  loop pieces already follow, no model or encoder change. This is the
+  four-gate architecture doing its job: kernel truth ≠ engine validity,
+  and the ENGINE gate is where the difference surfaces.
+- *PRE caveat (v1)*: arm range premises quantify over the whole
+  contract — `(if (lt 0 x) (- x 1) 0)` would demand `0 ≤ x-1` globally.
+  Arm expressions must be in-range on the full domain;
+  condition-relative premises (dischargeable from the case hyp via
+  generator-emitted farkas) are future work.
+
+All 12 proofs pass (4 new: ground-arm gate, arith arms, nested if,
+let-above-if with a zero-node True arm); four gates green, V8 25/25.
+
 **P3 — the adapter-combinator probe (`examples/rep_probe.shard`, 69/0,
 2026-07-03).** The type-owned representation cascade demonstrated on the
 first non-scalar shape: a pointer-linked `List Int` in 8-byte cells over
