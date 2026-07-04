@@ -338,6 +338,41 @@ until the link-time generator splices literals; `tools/lowcheck` learned
 to resolve same-file `(inline …)` chain elements (the loader's exact
 rule — the expanded element must still be a `MkFunc` literal).
 
+### 6c. The emitter's Call fragment (2026-07-04)
+
+`tools/lowergen` grew the MEM fragment: source fns `(m Mem) (x Int) …`
+whose bodies read/write bytes lower to wasm **Calls against std/mem's
+shipped artifacts** (call-per-byte v1, per the call-composition probes),
+and the generated proofs **compose by citation** — `call_bridge` +
+`lowered_mem_get`/`lowered_mem_set`, never computing into a callee body.
+The generator SPLICES the callee literals into statements (the link-time
+answer to the `(inline …)` same-file rule).
+
+- Fragment: `Int` return = read-only body (arith + `mem_get`, reads may
+  be addresses); `Mem` return = a **single trailing** `mem_set` (lets
+  allowed above; all reads pre-write, so no aliasing premises exist —
+  write-then-read stays a hand piece until condition-relative premises).
+  Emitted module = `[mget, mset, self]` at index 2 (the minimal-prefix
+  convention); PREs per unique (kind, spelling): wrap bounds for arith
+  nodes, address bounds for mem-op addresses (the callee certs' premise
+  shapes — read-value bounds stated as PREs, derivable via
+  `get_lo`/`get_hi`, not yet auto-discharged).
+- **The stage law** (what makes the proofs machine-writable): wrap
+  events are collected during the CODE walk and flushed per call site —
+  `(compute lhs (stop eval_call))`, then the pending events (everything
+  materialized so far — stack, locals, the folded call's arguments — is
+  on the lhs and collapses all-occurrences), then the bridge with clean
+  spellings. A let-bound value collects once (later reads are LocalGets
+  of the collapsed local); a RECOMPUTED spelling collects again and its
+  event re-fires for the post-call materialization (`mg_sq` pins this).
+- `examples/lowergen_mem_src.shard` (9 fns: reads, let-sharing,
+  indirection, re-fire, store, copy, bump) → `lowergen_mem_out.shard`:
+  **all 9 machine-written proofs passed the kernel on first
+  generation**; `examples/lowbuild_mem.sh` = the four gates
+  (REGEN → SCHEMA → KERNEL → ENGINE, V8 11/11 incl. store-truncation
+  and bump-wrap edges); build file `lowergen_mem_src.build.shard` uses
+  spec-side expected values and readbacks throughout.
+
 ## 7. Open questions (the back-and-forth queue)
 
 1. ~~The statement-generator enforcement mechanism~~ RESOLVED by P4a:

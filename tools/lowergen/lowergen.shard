@@ -31,6 +31,12 @@
 ;;; ground subtrees in the source). PRE caveat: arm range premises
 ;;; quantify over the WHOLE contract (see the tail-walk note).
 ;;;
+;;; THE MEM FRAGMENT (first param Mem): bodies that read/write bytes lower
+;;; to wasm Calls against std/mem's shipped artifact functions and the
+;;; proofs COMPOSE BY CITATION (call_bridge + lowered_mem_get/set) — the
+;;; callee bodies are never computed into. See the mem-fragment section
+;;; below for the fragment rules and the stage law.
+;;;
 ;;; RUN IT:  bin/shard_eval run tools/lowergen/lowergen.shard SRC OUT.raw
 ;;;          then shardfmt OUT.raw -> the committed cert file.
 
@@ -629,6 +635,518 @@
                   (DStr ""))
                 j4))))))))))
 
+;; ---- the mem fragment: bodies that CALL std/mem's shipped artifacts -----------
+;;
+;; Source fns (m Mem) (x Int) … whose bodies read/write bytes lower to
+;; wasm Calls against std/mem's artifact module (call-per-byte v1; the
+;; probes' composed-by-citation discipline, mechanized):
+;;   - Int return: arith over params/literals + (mem_get m ADDR) reads;
+;;     memory returned untouched — RHS (Some (Pair (SPEC m0 args) m0)).
+;;   - Mem return: a SINGLE TRAILING (mem_set m ADDR VAL) (lets allowed
+;;     above it). All reads happen pre-write, so no aliasing premises are
+;;     needed; write-then-read stays a hand piece until condition-relative
+;;     premises exist. RHS (Some (Pair VAL (SPEC m0 args))).
+;; The emitted module is (Cons mget (Cons mset (Cons SELF restfs))) at
+;; index 2 — std/mem's minimal-prefix convention; the callee literals are
+;; SPLICED by the generator (the (inline …) same-file rule's link-time
+;; answer), and the proofs cite lowered_mem_get/lowered_mem_set through
+;; call_bridge, never computing into the callee bodies.
+;;
+;; THE STAGE LAW (the machine-order discharge discipline): arith nodes are
+;; collected during the CODE walk — a let-bound value collects once (later
+;; reads are LocalGets of the already-collapsed local), a recomputed
+;; spelling collects AGAIN (its wrap re-materializes after the earlier
+;; all-occurrences fire and needs a fresh event). At each call site the
+;; proof emits (compute lhs (stop eval_call)), flushes the pending wrap
+;; events (every so-far-materialized occurrence — stack, locals, and the
+;; folded call's arguments — is on the lhs and collapses), then rewrites
+;; by call_bridge with CLEAN spellings. PREs are per unique (kind,
+;; spelling): wrap bounds for arith nodes, address bounds for read/write
+;; addresses (the callee certs' own premise shapes).
+
+;; the spliced std/mem artifact literals (std/mem/mem.wasm.shard's fns —
+;; drift fails loudly at the kernel gate when the citations stop matching)
+(fn mget_lit () Doc (DStr "(MkFunc 1 0 (list (LocalGet 0) (I32Load8U)))"))
+
+(fn mset_lit () Doc
+  (DStr
+    "(MkFunc 2 0 (list (LocalGet 0) (LocalGet 1) (I32Store8) (LocalGet 1)))"))
+
+(fn memq_named ((q QName) (s Symbol)) Bool
+  (match q
+    ((QName mp nm)
+     (if (sym_eq nm s)
+       (sym_list_eq mp (Cons (quote std) (Cons (quote mem) Nil)))
+       False))))
+
+;; tagged PRE entries: True = wrap bounds (arith node), False = address
+;; bounds (mem op address). Dedup key is (kind, spelling) — a spelling
+;; used both as an address and as an arith value carries both pairs.
+(fn mpres_seen ((kind Bool) (s (List Int)) (ps (List (Pair Bool Expr)))) Bool
+  (measure (struct ps))
+  (match ps
+    (Nil False)
+    ((Cons (Pair k e) t)
+     (if (bool_eq k kind) (if (chars_eq s (spell e)) True (mpres_seen kind s t))
+     (mpres_seen kind s t)))))
+
+(fn bool_eq ((a Bool) (b Bool)) Bool (if a b (if b False True)))
+
+(fn mpres_add ((kind Bool) (e Expr) (ps (List (Pair Bool Expr))))
+  (List (Pair Bool Expr))
+  (measure (struct ps))
+  (match ps
+    (Nil (Cons (Pair kind e) Nil))
+    ((Cons h t) (Cons h (mpres_add kind e t)))))
+
+(fn mpres_ix ((kind Bool) (s (List Int)) (ps (List (Pair Bool Expr))) (k Int))
+  Int
+  (measure (struct ps))
+  (match ps
+    (Nil 0)
+    ((Cons (Pair kk e) t)
+     (if (bool_eq kk kind)
+       (if (chars_eq s (spell e)) k (mpres_ix kind s t (+ k 1)))
+       (mpres_ix kind s t (+ k 1))))))
+
+;; the PRE premises over the tagged list: wrap pair / address pair
+(fn m_prems ((ps (List (Pair Bool Expr)))) Doc
+  (measure (struct ps))
+  (match ps
+    (Nil (DStr ""))
+    ((Cons (Pair kind e) rest)
+     (DCat
+       (if kind
+         (dcat3
+           (dcat3 (DStr "(= (le 0 ") (pr_e e) (DStr ") True) "))
+           (dcat3 (DStr "(= (lt ") (pr_e e) (DStr " 4294967296) True) "))
+           (DStr ""))
+         (dcat3
+           (dcat3 (DStr "(= (le 0 ") (pr_e e) (DStr ") True) "))
+           (dcat3 (DStr "(= (le (+ ") (pr_e e) (DStr " 1) 65536) True) "))
+           (DStr "")))
+       (m_prems rest)))))
+
+;; one wrap discharge event over the tagged PRE list (pr_event's twin)
+(fn m_event ((e Expr) (pres (List (Pair Bool Expr))) (j Int)) Doc
+  (let ((k (mpres_ix True (spell e) pres 0)))
+    (dcat3
+      (dcat3
+        (dcat3 (DStr "(have w") (dint j) (DStr " (= (mod "))
+        (dcat3 (pr_e e) (DStr " 4294967296) ") (pr_e e))
+        (DStr ") (rewrite-with (lemma wrap32_id) lr lhs ((inst x "))
+      (dcat3
+        (DCat (pr_e e) (DStr ")) "))
+        (dcat3
+          (DStr "((steps ((rewrite (premise ")
+          (dint (* 2 k))
+          (DStr ") lr lhs true ())) refl) "))
+        (dcat3
+          (DStr "(steps ((rewrite (premise ")
+          (dint (+ (* 2 k) 1))
+          (DStr ") lr lhs true ())) refl)) refl)) ")))
+      (dcat3
+        (DStr "(steps ((rewrite (premise w")
+        (dint j)
+        (DStr ") lr lhs true ()))) ")))))
+
+;; flush the pending wrap events (dedup within the stage, walk order =
+;; postorder — children collapse before parents read them)
+(fn m_dedup ((ns (List Expr)) (acc (List Expr))) (List Expr)
+  (measure (struct ns))
+  (match ns
+    (Nil acc)
+    ((Cons h t) (m_dedup t (if (node_seen (spell h) acc) acc (node_add h acc))))))
+
+(fn m_flush_go ((ns (List Expr)) (pres (List (Pair Bool Expr))) (j Int))
+  (Pair Doc Int)
+  (measure (struct ns))
+  (match ns
+    (Nil (Pair (DStr "") j))
+    ((Cons e t)
+     (match (m_flush_go t pres (+ j 1))
+       ((Pair d j2) (Pair (DCat (m_event e pres j) d) j2))))))
+
+(fn m_flush ((pend (List Expr)) (pres (List (Pair Bool Expr))) (j Int))
+  (Pair Doc Int)
+  (m_flush_go (m_dedup pend Nil) pres j))
+
+;; the symbolic stack, spelled as a Cons chain (top first)
+(fn stack_spell ((stk (List Expr))) Doc
+  (measure (struct stk))
+  (match stk
+    (Nil (DStr "Nil"))
+    ((Cons h t)
+     (dcat3 (dcat3 (DStr "(Cons ") (pr_e h) (sp)) (stack_spell t) (DStr ")")))))
+
+;; the run-premise sub-proof: cite the callee's shipped cert, its two
+;; premises discharged by this cert's own PRE pair for the address
+(fn m_run_sub ((cert (List Int)) (k Int)) Doc
+  (dcat3
+    (dcat3 (DStr "(rewrite-with (lemma ") (DStr cert) (DStr ") lr lhs () "))
+    (dcat3
+      (dcat3
+        (DStr "((steps ((rewrite (premise ")
+        (dint (* 2 k))
+        (DStr ") lr lhs true ())) refl) "))
+      (dcat3
+        (DStr "(steps ((rewrite (premise ")
+        (dint (+ (* 2 k) 1))
+        (DStr ") lr lhs true ())) refl)) "))
+      (DStr ""))
+    (DStr "refl)")))
+
+(fn m_bridge_head () Doc
+  (DStr "(rewrite-with (lemma call_bridge) lr lhs ((inst f "))
+
+(fn m_bridge_subs4 () Doc
+  (DStr
+    "((steps ((compute both)) refl) (steps ((compute both)) refl) (steps ((compute both)) refl) (steps ((compute both)) refl) "))
+
+;; the read bridge: popped/args = the address, v = the read, mem2 = m0
+;; (v1: every read happens at the initial memory — writes are trailing)
+(fn m_bridge_get
+  ((addr Expr) (below (List Expr)) (rnode Expr) (pres (List (Pair Bool Expr))))
+  Doc
+  (let ((k (mpres_ix False (spell addr) pres 0)))
+    (dcat3
+      (dcat3
+        (dcat3 (m_bridge_head) (mget_lit) (DStr ") (inst popped (Cons "))
+        (dcat3 (pr_e addr) (DStr " Nil)) (inst rest ") (stack_spell below))
+        (dcat3
+          (DStr ") (inst args (Cons ")
+          (pr_e addr)
+          (DStr " Nil)) (inst v ")))
+      (dcat3 (pr_e rnode) (DStr ") (inst mem2 m0)) ") (m_bridge_subs4))
+      (dcat3 (m_run_sub "lowered_mem_get" k) (DStr ")) ") (DStr "")))))
+
+;; the write bridge: popped = value then address, v = the raw value,
+;; mem2 = the spec-level store
+(fn m_bridge_set
+  ((addr Expr) (val Expr) (below (List Expr)) (pres (List (Pair Bool Expr))))
+  Doc
+  (let ((k (mpres_ix False (spell addr) pres 0)))
+    (dcat3
+      (dcat3
+        (dcat3 (m_bridge_head) (mset_lit) (DStr ") (inst popped (Cons "))
+        (dcat3 (pr_e val) (DStr " (Cons ") (pr_e addr))
+        (dcat3
+          (DStr " Nil))) (inst rest ")
+          (stack_spell below)
+          (DStr ") (inst args (Cons ")))
+      (dcat3
+        (dcat3 (pr_e addr) (DStr " (Cons ") (pr_e val))
+        (dcat3 (DStr " Nil))) (inst v ") (pr_e val) (DStr ""))
+        (dcat3
+          (DStr ") (inst mem2 (mem_set m0 ")
+          (pr_e addr)
+          (DCat (sp) (pr_e val))))
+      (dcat3
+        (DCat (DStr "))) ") (m_bridge_subs4))
+        (dcat3 (m_run_sub "lowered_mem_set" k) (DStr ")) ") (DStr ""))
+        (DStr "")))))
+
+(fn m_stage_open () Doc (DStr "(steps ((compute lhs (stop eval_call)))) "))
+
+;; ---- the mem walk: code + symbolic machine state + staged proof ----------------
+;;
+;; state: code docs, instr count, next free local, symbolic stack (clean
+;; spellings, top first), proof doc so far, have counter, tagged PREs,
+;; pending wrap events, get/set counts.
+(type MSt
+  (MkMSt
+    (List Doc)
+    Int
+    Int
+    (List Expr)
+    Doc
+    Int
+    (List (Pair Bool Expr))
+    (List Expr)
+    Int
+    Int))
+
+(type MRes (MOk MSt Expr) (MErr (List Int)))
+
+;; is this arg the fn's Mem param (textual position 0, not let-bound)?
+(fn is_mem_param ((e Expr) (env (List (Pair Expr Int))) (n Int)) Bool
+  (match e
+    ((BVar i)
+     (match (env_at env i)
+       (None (int_eq (- (- n 1) (- i (env_len env))) 0))
+       ((Some _) False)))
+    (_ False)))
+
+(fn mg_e ((n Int) (env (List (Pair Expr Int))) (st MSt) (e Expr)) MRes
+  (measure (struct e))
+  (match st
+    ((MkMSt code cnt nxt stk prf j pres pend gets sets)
+     (match e
+       ((BVar i)
+        (match (env_at env i)
+          ((Some (Pair ce k))
+           (MOk
+             (MkMSt
+               (dapp
+                 code
+                 (Cons (dcat3 (DStr "(LocalGet ") (dint k) (DStr ")")) Nil))
+               (+ cnt 1)
+               nxt
+               (Cons ce stk)
+               prf
+               j
+               pres
+               pend
+               gets
+               sets)
+             ce))
+          (None
+            (let ((pos (- (- n 1) (- i (env_len env)))))
+              (if (int_eq pos 0)
+                (MErr
+                  "the Mem param may appear only as the memory argument of mem_get/mem_set")
+                (let ((ce (FVar (xsym (- pos 1)))))
+                  (MOk
+                    (MkMSt
+                      (dapp
+                        code
+                        (Cons
+                          (dcat3
+                            (DStr "(LocalGet ")
+                            (dint (- pos 1))
+                            (DStr ")"))
+                          Nil))
+                      (+ cnt 1)
+                      nxt
+                      (Cons ce stk)
+                      prf
+                      j
+                      pres
+                      pend
+                      gets
+                      sets)
+                    ce)))))))
+       ((IntLit k)
+        (if (le 0 k)
+          (if (lt k 4294967296)
+            (MOk
+              (MkMSt
+                (dapp
+                  code
+                  (Cons (dcat3 (DStr "(I32Const ") (dint k) (DStr ")")) Nil))
+                (+ cnt 1)
+                nxt
+                (Cons e stk)
+                prf
+                j
+                pres
+                pend
+                gets
+                sets)
+              e)
+            (MErr "literal outside [0, 2^32)"))
+          (MErr "literal outside [0, 2^32)")))
+       ((Call q as)
+        (match (bop_of q)
+          ((Some opd)
+           (match as
+             ((Cons a (Cons b Nil))
+              (match (mg_e n env st a)
+                ((MErr m) (MErr m))
+                ((MOk st1 cea)
+                 (match (mg_e n env st1 b)
+                   ((MErr m) (MErr m))
+                   ((MOk st2 ceb)
+                    (let ((node (Call q (Cons cea (Cons ceb Nil)))))
+                      (if (has_fv node)
+                        (match st2
+                          ((MkMSt c2 n2 x2 s2 p2 j2 pr2 pd2 g2 w2)
+                           (match s2
+                             ((Cons _ (Cons _ below))
+                              (MOk
+                                (MkMSt
+                                  (dapp
+                                    c2
+                                    (Cons
+                                      (dcat3 (DStr "(I32Bin ") opd (DStr ")"))
+                                      Nil))
+                                  (+ n2 1)
+                                  x2
+                                  (Cons node below)
+                                  p2
+                                  j2
+                                  (if (mpres_seen True (spell node) pr2) pr2
+                                  (mpres_add True node pr2))
+                                  (dapp_e pd2 (Cons node Nil))
+                                  g2
+                                  w2)
+                                node))
+                             (_ (MErr "internal: stack underflow at arith")))))
+                        (MErr
+                          "ground arithmetic subtree (constant-fold it in the source)"))))))))
+             (_ (MErr "arith call must be binary"))))
+          (None
+            (if (memq_named q (quote mem_get))
+              (match as
+                ((Cons marg (Cons addr Nil))
+                 (if (is_mem_param marg env n)
+                   (match (mg_e n env st addr)
+                     ((MErr m) (MErr m))
+                     ((MOk st1 cea)
+                      (match st1
+                        ((MkMSt c1 n1 x1 s1 p1 j1 pr1 pd1 g1 w1)
+                         (match s1
+                           ((Cons _ below)
+                            (let
+                              ((pr1b
+                                 (if (mpres_seen False (spell cea) pr1) pr1
+                                 (mpres_add False cea pr1))))
+                              (match (m_flush pd1 pr1b j1)
+                                ((Pair evd j2)
+                                 (let
+                                   ((rnode
+                                      (Call
+                                        q
+                                        (Cons (FVar (quote m0)) (Cons cea Nil)))))
+                                   (MOk
+                                     (MkMSt
+                                       (dapp c1 (Cons (DStr "(Call 0)") Nil))
+                                       (+ n1 1)
+                                       x1
+                                       (Cons rnode below)
+                                       (dcat3
+                                         p1
+                                         (DCat (m_stage_open) evd)
+                                         (m_bridge_get cea below rnode pr1b))
+                                       j2
+                                       pr1b
+                                       Nil
+                                       (+ g1 1)
+                                       w1)
+                                     rnode))))))
+                           (_ (MErr "internal: stack underflow at mem_get")))))))
+                   (MErr "mem_get's memory argument must be the fn's Mem param")))
+                (_ (MErr "mem_get must have exactly (m ADDR)")))
+            (if (memq_named q (quote mem_set))
+              (MErr
+                "mem_set only as the trailing body of a Mem-returning fn (single write, v1)")
+              (MErr "call outside the mem fragment (+ - * mem_get only)"))))))
+       ((Let bs body)
+        (match bs
+          ((Cons rhs Nil)
+           (match (mg_e n env st rhs)
+             ((MErr m) (MErr m))
+             ((MOk st1 cer)
+              (match st1
+                ((MkMSt c1 n1 x1 s1 p1 j1 pr1 pd1 g1 w1)
+                 (match s1
+                   ((Cons _ below)
+                    (mg_e
+                      n
+                      (Cons (Pair cer x1) env)
+                      (MkMSt
+                        (dapp
+                          c1
+                          (Cons
+                            (dcat3 (DStr "(LocalSet ") (dint x1) (DStr ")"))
+                            Nil))
+                        (+ n1 1)
+                        (+ x1 1)
+                        below
+                        p1
+                        j1
+                        pr1
+                        pd1
+                        g1
+                        w1)
+                      body))
+                   (_ (MErr "internal: stack underflow at let"))))))))
+          (_ (MErr "let must bind exactly one name (split into nested lets)"))))
+       (_
+         (MErr
+           "body outside the mem fragment (straight-line + lets; no if yet)"))))))
+
+;; the Mem-returning tail: lets above a single trailing mem_set
+(fn mg_tail ((n Int) (env (List (Pair Expr Int))) (st MSt) (e Expr)) MRes
+  (measure (struct e))
+  (match e
+    ((Let bs body)
+     (match bs
+       ((Cons rhs Nil)
+        (match (mg_e n env st rhs)
+          ((MErr m) (MErr m))
+          ((MOk st1 cer)
+           (match st1
+             ((MkMSt c1 n1 x1 s1 p1 j1 pr1 pd1 g1 w1)
+              (match s1
+                ((Cons _ below)
+                 (mg_tail
+                   n
+                   (Cons (Pair cer x1) env)
+                   (MkMSt
+                     (dapp
+                       c1
+                       (Cons
+                         (dcat3 (DStr "(LocalSet ") (dint x1) (DStr ")"))
+                         Nil))
+                     (+ n1 1)
+                     (+ x1 1)
+                     below
+                     p1
+                     j1
+                     pr1
+                     pd1
+                     g1
+                     w1)
+                   body))
+                (_ (MErr "internal: stack underflow at let"))))))))
+       (_ (MErr "let must bind exactly one name (split into nested lets)"))))
+    ((Call q as)
+     (if (memq_named q (quote mem_set))
+       (match as
+         ((Cons marg (Cons addr (Cons val Nil)))
+          (if (is_mem_param marg env n)
+            (match (mg_e n env st addr)
+              ((MErr m) (MErr m))
+              ((MOk st1 cea)
+               (match (mg_e n env st1 val)
+                 ((MErr m) (MErr m))
+                 ((MOk st2 cev)
+                  (match st2
+                    ((MkMSt c2 n2 x2 s2 p2 j2 pr2 pd2 g2 w2)
+                     (match s2
+                       ((Cons _ (Cons _ below))
+                        (let
+                          ((pr2b
+                             (if (mpres_seen False (spell cea) pr2) pr2
+                             (mpres_add False cea pr2))))
+                          (match (m_flush pd2 pr2b j2)
+                            ((Pair evd j3)
+                             (MOk
+                               (MkMSt
+                                 (dapp c2 (Cons (DStr "(Call 1)") Nil))
+                                 (+ n2 1)
+                                 x2
+                                 (Cons cev below)
+                                 (dcat3
+                                   p2
+                                   (DCat (m_stage_open) evd)
+                                   (m_bridge_set cea cev below pr2b))
+                                 j3
+                                 pr2b
+                                 Nil
+                                 g2
+                                 (+ w2 1))
+                               cev)))))
+                       (_ (MErr "internal: stack underflow at mem_set")))))))))
+            (MErr "mem_set's memory argument must be the fn's Mem param")))
+         (_ (MErr "mem_set must have exactly (m ADDR VAL)")))
+       (MErr
+         "Mem-returning body must be a trailing (mem_set m ADDR VAL) (single write, v1)")))
+    (_
+      (MErr
+        "Mem-returning body must be a trailing (mem_set m ADDR VAL) (single write, v1)"))))
+
 ;; ---- claim emission ----------------------------------------------------------
 
 (fn is_int_ty ((t Type)) Bool
@@ -680,7 +1198,142 @@
 
 (type CRes (COk Doc) (CErr (List Int)))
 
+(fn is_mem_ty ((t Type)) Bool
+  (match t
+    ((TCon q _) (sym_eq (qn_name q) (quote Mem)))
+    ((TVar _) False)))
+
+(fn cerr_at ((q QName) (m (List Int))) CRes
+  (CErr (append_int (chars_of_sym (qn_name q)) (append_int ": " m))))
+
+;; the SPEC application (NAME m0 x0 …)
+(fn m_spec_app ((q QName) (ints (List Type))) Doc
+  (dcat3
+    (dcat3 (DStr "(") (dsym (qn_name q)) (DStr " m0"))
+    (pr_args_lead ints)
+    (DStr ")")))
+
+;; assemble the mem claim: statement + staged proof chain
+(fn m_claim
+  ((q QName)
+   (ints (List Type))
+   (n Int)
+   (cnt Int)
+   (nxt Int)
+   (gets Int)
+   (sets Int)
+   (pres (List (Pair Bool Expr)))
+   (code (List Doc))
+   (rhs Doc)
+   (prf Doc)
+   (evd Doc))
+  Doc
+  (dcat3
+    (dcat3
+      (dcat3
+        (DStr "(claim lowered_")
+        (dsym (qn_name q))
+        (dcat3
+          (DStr " (goal (")
+          (pr_binds ints 0)
+          (DStr "(m0 Mem) (c Nat) (restfs (List Func))) (")))
+      (m_prems pres)
+      (dcat3
+        (dcat3
+          (DStr ") (= (call_fn_mem (S^ ")
+          (dint (+ (* 2 cnt) (+ 3 (+ (* 7 gets) (* 11 sets)))))
+          (DStr " c) (MkWModule (Cons "))
+        (dcat3 (mget_lit) (DStr " (Cons ") (mset_lit))
+        (dcat3
+          (dcat3 (DStr " (Cons (MkFunc ") (dint (- n 1)) (sp))
+          (dcat3 (dint (- nxt (- n 1))) (DStr " (list ") (djoin code))
+          (DStr ")) restfs))) 65536) 2 (list "))))
+    (dcat3
+      (dcat3 (pr_args ints 0) (DStr ") m0) ") rhs)
+      (dcat3
+        (dcat3
+          (DStr ")) (chain (steps ((unfold ")
+          (dsym (qn_name q))
+          (DStr " rhs) (reduce rhs))) "))
+        prf
+        (DStr "(steps ((compute lhs))) "))
+      (dcat3 evd (DStr "refl))") (DStr (nl))))
+    (DStr "")))
+
+(fn emit_claim_mem ((f FnDef)) CRes
+  (match f
+    ((FnDef q ts rty body)
+     (match ts
+       (Nil (cerr_at q "no params"))
+       ((Cons _ ints)
+        (if (all_int ints)
+          (let ((n (count_ts ts)))
+            (let ((st0 (MkMSt Nil 0 (- n 1) Nil (DStr "") 0 Nil Nil 0 0)))
+              (if (is_int_ty rty)
+                (match (mg_e n Nil st0 body)
+                  ((MErr m) (cerr_at q m))
+                  ((MOk st ce)
+                   (match st
+                     ((MkMSt code cnt nxt stk prf j pres pend gets sets)
+                      (if (int_eq gets 0)
+                        (cerr_at
+                          q
+                          "no memory operations (use the scalar fragment: drop the Mem param)")
+                        (match (m_flush pend pres j)
+                          ((Pair evd _)
+                           (COk
+                             (m_claim
+                               q
+                               ints
+                               n
+                               cnt
+                               nxt
+                               gets
+                               sets
+                               pres
+                               code
+                               (dcat3
+                                 (DStr "(Some (Pair ")
+                                 (m_spec_app q ints)
+                                 (DStr " m0))"))
+                               prf
+                               evd)))))))))
+              (if (is_mem_ty rty)
+                (match (mg_tail n Nil st0 body)
+                  ((MErr m) (cerr_at q m))
+                  ((MOk st cev)
+                   (match st
+                     ((MkMSt code cnt nxt stk prf j pres pend gets sets)
+                      (match (m_flush pend pres j)
+                        ((Pair evd _)
+                         (COk
+                           (m_claim
+                             q
+                             ints
+                             n
+                             cnt
+                             nxt
+                             gets
+                             sets
+                             pres
+                             code
+                             (dcat3
+                               (dcat3 (DStr "(Some (Pair ") (pr_e cev) (sp))
+                               (m_spec_app q ints)
+                               (DStr "))"))
+                             prf
+                             evd))))))))
+                (cerr_at q "return type must be Int or Mem")))))
+          (cerr_at q "params after the Mem param must all be Int")))))))
+
 (fn emit_claim ((f FnDef)) CRes
+  (match f
+    ((FnDef _ ts _ _)
+     (match ts
+       ((Cons t0 _) (if (is_mem_ty t0) (emit_claim_mem f) (emit_claim_pure f)))
+       (Nil (emit_claim_pure f))))))
+
+(fn emit_claim_pure ((f FnDef)) CRes
   (match f
     ((FnDef q ts rty body)
      (if (all_int ts)
@@ -742,12 +1395,20 @@
 
 ;; ---- module walk -------------------------------------------------------------
 
-(type ERes (EOk Doc) (EErr (List Int)))
+(type ERes (EOk Doc Bool) (EErr (List Int)))
 
-(fn emit_fns ((fns (List FnDef)) (modpath (List Symbol)) (acc Doc)) ERes
+(fn fn_is_mem ((f FnDef)) Bool
+  (match f
+    ((FnDef _ ts _ _)
+     (match ts
+       ((Cons t0 _) (is_mem_ty t0))
+       (Nil False)))))
+
+(fn emit_fns ((fns (List FnDef)) (modpath (List Symbol)) (acc Doc) (memf Bool))
+  ERes
   (measure (struct fns))
   (match fns
-    (Nil (EOk acc))
+    (Nil (EOk acc memf))
     ((Cons f rest)
      (match f
        ((FnDef q _ _ _)
@@ -756,8 +1417,13 @@
            (if (sym_list_eq mp modpath)
              (match (emit_claim f)
                ((CErr m) (EErr m))
-               ((COk d) (emit_fns rest modpath (DCat acc (DCat (DStr (nl)) d)))))
-             (emit_fns rest modpath acc)))))))))
+               ((COk d)
+                (emit_fns
+                  rest
+                  modpath
+                  (DCat acc (DCat (DStr (nl)) d))
+                  (if memf True (fn_is_mem f)))))
+             (emit_fns rest modpath acc memf)))))))))
 
 (fn pr_modpath ((ms (List Symbol))) Doc
   (measure (struct ms))
@@ -766,7 +1432,13 @@
     ((Cons m Nil) (dsym m))
     ((Cons m rest) (dcat3 (dsym m) (sp) (pr_modpath rest)))))
 
-(fn header ((target (List Int))) Doc
+(fn dimport ((path (List Int))) Doc
+  (dcat3
+    (DStr (append_int "(import " (dq)))
+    (DStr path)
+    (DStr (append_int (dq) (append_int ")" (nl))))))
+
+(fn header ((target (List Int)) (memf Bool)) Doc
   (dcat3
     (dcat3
       (DStr
@@ -777,28 +1449,24 @@
         (DStr target)
         (DStr (append_int "." (nl)))))
     (dcat3
-      (DStr
-        (append_int
-          "(import "
-          (append_int (dq) (append_int "../kernel/stdlib.shard" (dq)))))
-      (DStr (append_int ")" (nl)))
+      (dimport "../kernel/stdlib.shard")
+      (if memf (dimport "../std/mem") (DStr ""))
       (dcat3
-        (DStr
-          (append_int
-            "(import "
-            (append_int (dq) (append_int "../models/wasm/wasm.shard" (dq)))))
-        (DStr (append_int ")" (nl)))
-        (dcat3
-          (DStr (append_int "(import " (dq)))
-          (DStr (basename_go target Nil))
-          (DStr (append_int (dq) (append_int ")" (nl)))))))
+        (dimport "../models/wasm/wasm.shard")
+        (if memf (dimport "../std/mem/mem.wasm.shard") (DStr ""))
+        (dimport (basename_go target Nil))))
     (dcat3
       (DStr (append_int "(use (:: models wasm wasm *))" (nl)))
+      (if memf
+        (dcat3
+          (DStr (append_int "(use (:: std mem *))" (nl)))
+          (DStr (append_int "(use (:: std mem mem.wasm *))" (nl)))
+          (DStr ""))
+        (DStr ""))
       (dcat3
         (DStr "(use (:: ")
         (pr_modpath (split_slash (until_dot target) Nil))
-        (DStr (append_int " *))" (nl))))
-      (DStr ""))))
+        (DStr (append_int " *))" (nl)))))))
 
 ;; ---- driver ------------------------------------------------------------------
 
@@ -829,12 +1497,16 @@
        ((BMOk m)
         (match m
           ((Module _ fns _ _ _)
-           (match (emit_fns fns (split_slash (until_dot target) Nil) (DStr ""))
+           (match
+             (emit_fns fns (split_slash (until_dot target) Nil) (DStr "") False)
              ((EErr msg)
               (exit 1 (write (append_int "refused: " (append_int msg (nl))) w1)))
-             ((EOk body)
+             ((EOk body memf)
               (match
-                (write_file out (doc_flat (DCat (header target) body) Nil) w1)
+                (write_file
+                  out
+                  (doc_flat (DCat (header target memf) body) Nil)
+                  w1)
                 ((Pair ok w2)
                  (if ok
                    (exit
