@@ -293,7 +293,7 @@
   (ELet (List EExpr) EExpr)
   (EIf EExpr EExpr EExpr)
   (EMatch EExpr (List EArm))
-  (ECall QName (Option Int) (List EExpr)))  ; head + resolved table index
+  (ECall Bool QName (Option Int) (List EExpr)))  ; core-pathed? + head + resolved index
 
 (type EArm (EArm Pat EExpr))
 
@@ -360,7 +360,12 @@
     ((Let bs body) (ELet (tr_list bs ixt) (tr_expr body ixt)))
     ((If c t el) (EIf (tr_expr c ixt) (tr_expr t ixt) (tr_expr el ixt)))
     ((Match s arms) (EMatch (tr_expr s ixt) (tr_arms arms ixt)))
-    ((Call f args) (ECall f (tr_target f args ixt) (tr_list args ixt)))))
+    ((Call f args)
+     (ECall
+       (ev_core_path (qn_mod f))  ; the head's path is static — decide it here
+       f
+       (tr_target f args ixt)
+       (tr_list args ixt)))))
 
 (fn tr_list ((es (List Expr)) (ixt FnTrie)) (List EExpr)
   (measure (struct es))
@@ -411,9 +416,9 @@
           ((Some v) (Pair v w1))
           (None (Pair (Ctor c vs) w1))))))
     ((ELet bs body)
-     (match (ev_list tab env bs app_args w)  ; parallel let: RHSs in outer env
-       ((Pair vs w1)
-        (ev tab (append_exprs (reverse_exprs vs) env) body app_args w1))))  ; last RHS = BVar 0
+     (match (ev_list_rev tab env bs Nil app_args w)  ; parallel let: RHSs in outer env
+       ((Pair vsr w1)
+        (ev tab (append_exprs vsr env) body app_args w1))))  ; last RHS = BVar 0
     ((EIf c t el)
      (match (ev tab env c app_args w)
        ((Pair cv w1)
@@ -428,9 +433,9 @@
           ((Some (Pair body binds))
            (ev tab (append_exprs binds env) body app_args w1))
           (None (Pair (Match sv Nil) w1))))))  ; stuck scrut — out of scope (see header)
-    ((ECall f fb args)
-     (match (ev_list tab env args app_args w)
-       ((Pair vs w1) (ev_call tab f fb vs app_args w1))))))
+    ((ECall core f fb args)
+     (match (ev_list_rev tab env args Nil app_args w)
+       ((Pair vsr w1) (ev_call tab core f fb vsr app_args w1))))))
 
 ;; Evaluate a list of args left-to-right, threading the World (so nested
 ;; effects sequence in source order — the linear World forces it anyway).
@@ -448,6 +453,25 @@
        ((Pair v w1)
         (match (ev_list tab env t app_args w1)
           ((Pair vs w2) (Pair (Cons v vs) w2))))))))
+
+;; ev_list, REVERSED-accumulator form: left-to-right evaluation consing into
+;; `acc`, so the result comes out reversed — which is exactly env order for a
+;; fn dispatch (BVar 0 = LAST arg) and Let extension order. Tail-recursive:
+;; ONE result Pair per list instead of one per element (ev_list's per-level
+;; (Pair (Cons …) …) rebuild was measurable churn at call frequency).
+(fn ev_list_rev
+  ((tab FnTab)
+   (env (List Expr))
+   (es (List EExpr))
+   (acc (List Expr))
+   (app_args (List (List Int)))
+   (w World))
+  (Pair (List Expr) World)
+  (match es
+    (Nil (Pair acc w))
+    ((Cons h t)
+     (match (ev tab env h app_args w)
+       ((Pair v w1) (ev_list_rev tab env t (Cons v acc) app_args w1))))))
 
 ;; Arity guard: |vs| = |ptypes|, decided in ONE simultaneous walk. Now
 ;; consulted at TRANSLATION time only (tr_target — a site's arg count is
@@ -473,16 +497,16 @@
   ((tab FnTab)
    (f QName)
    (fb (Option Int))
-   (vs (List Expr))
+   (vsr (List Expr))  ; REVERSED values — already env order (BVar 0 = LAST param)
    (app_args (List (List Int)))
    (w World))
   (Pair Expr World)
   (match fb
     ((Some i)
      (match (braun_get tab i)
-       ((Some body) (ev tab (reverse_exprs vs) body app_args w))  ; env[0] = BVar 0 = LAST param
-       (None (Pair (Call f vs) w))))
-    (None (Pair (Call f vs) w))))
+       ((Some body) (ev tab vsr body app_args w))
+       (None (Pair (Call f (reverse_exprs vsr)) w))))
+    (None (Pair (Call f (reverse_exprs vsr)) w))))
 
 ;; Apply a head `f` to already-evaluated value args `vs`:
 ;;   user fn  → tail-recurse into its body in a fresh env of the reversed args
@@ -509,27 +533,30 @@
 
 (fn ev_call
   ((tab FnTab)
+   (core Bool)  ; the head's path is static — decided at translation
    (f QName)
    (fb (Option Int))
-   (vs (List Expr))
+   (vsr (List Expr))  ; REVERSED values; prim/extern/stuck paths re-reverse
    (app_args (List (List Int)))
    (w World))
   (Pair Expr World)
-  (if (ev_core_path (qn_mod f))
-    (match (try_step_prim (qn_name f) vs)
-      ((Some r) (Pair r w))
-      (None
-        (if (is_extern (qn_name f)) (perform_frontier (Call f vs) app_args w)
-        (ev_hit tab f fb vs app_args w))))
+  (if core
+    (let ((vs (reverse_exprs vsr)))
+      (match (try_step_prim (qn_name f) vs)
+        ((Some r) (Pair r w))
+        (None
+          (if (is_extern (qn_name f)) (perform_frontier (Call f vs) app_args w)
+          (ev_hit tab f fb vsr app_args w)))))
     (match fb
-      ((Some _) (ev_hit tab f fb vs app_args w))
+      ((Some _) (ev_hit tab f fb vsr app_args w))
       (None
-        (match (try_step_prim (qn_name f) vs)
-          ((Some r) (Pair r w))
-          (None
-            (if (is_extern (qn_name f))
-              (perform_frontier (Call f vs) app_args w)
-              (Pair (Call f vs) w))))))))
+        (let ((vs (reverse_exprs vsr)))
+          (match (try_step_prim (qn_name f) vs)
+            ((Some r) (Pair r w))
+            (None
+              (if (is_extern (qn_name f))
+                (perform_frontier (Call f vs) app_args w)
+                (Pair (Call f vs) w)))))))))
 
 ;; -- perform one frontier extern. Threads eval.shard's REAL World; returns the
 ;; app-facing result (Expr-encoded) paired with the advanced World. `app_args`
