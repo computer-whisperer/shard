@@ -2250,10 +2250,25 @@
 ;;                 ctor term fails downstream exactly like the equivalent
 ;;                 hand-paste — and a pasted body is NOT re-walked, so
 ;;                 (inline …) does not nest.
+;;   (chain F1 … FINAL)  flat spelling for continuation-nested proofs.
+;;                 Every continuation-taking proof form (steps, rewrite-with,
+;;                 have, div-facts, refine-fact) takes its continuation as
+;;                 its LAST argument; chain right-folds — each Fi (written
+;;                 WITHOUT that argument) gets the folded rest of the chain
+;;                 appended, and FINAL (a complete proof) closes. The fold is
+;;                 HEAD-AGNOSTIC — no per-form table, so future continuation
+;;                 forms ride for free — which also means a non-continuation
+;;                 form in item position simply gains a bogus last argument
+;;                 and fails at the proof parser. Items are walked before the
+;;                 fold, so chains nest (a rewrite-with premise sub-proof may
+;;                 itself be a chain).
 ;;
-;; Both heads are RESERVED: a form headed S^/inline that does not match its
-;; shape — or names an unknown or non-nullary fn — is None → the standard
-;; parse-failure path.
+;; All three heads are RESERVED: a form headed S^/inline/chain that does not
+;; match its shape — an unknown or non-nullary inline fn, a chain with fewer
+;; than two items, a non-list chain item — is None → the standard
+;; parse-failure path. The two-item minimum is load-bearing: a binder pair
+;; named chain ((fn ((chain T)) …), (let ((chain E)) …)) looks exactly like
+;; a 1-item chain at this level, and must refuse loudly, never fold.
 ;; ===========================================================================
 
 ;; n nested (S …) around x
@@ -2351,10 +2366,74 @@
           (None None)
           ((Some t2) (Some (Cons h2 t2)))))))))
 
+;; append the folded continuation as the LAST argument of a chain item
+(fn ch_snoc ((its (List SExpr)) (cont SExpr)) (List SExpr)
+  (measure (struct its))
+  (match its
+    (Nil (Cons cont Nil))
+    ((Cons h t) (Cons h (ch_snoc t cont)))))
+
+;; right-fold the (already-walked) chain items: the last item closes, every
+;; earlier item gains the folded rest as its final argument. Empty chain or
+;; a non-list item is malformed.
+(fn ch_fold ((items (List SExpr))) (Option SExpr)
+  (measure (struct items))
+  (match items
+    (Nil None)
+    ((Cons final Nil) (Some final))
+    ((Cons item rest)
+     (match (ch_fold rest)
+       (None None)
+       ((Some cont)
+        (match item
+          ((SList its) (Some (SList (ch_snoc its cont))))
+          (_ None)))))))
+
+(fn ch_sx ((s SExpr)) (Option SExpr)
+  (measure (struct s))
+  (match s
+    ((SList items)
+     (match items
+       ((Cons (SSym h) rest)
+        (if (sym_eq h (quote chain))
+          ;; a chain needs at least TWO items — a 1-item "(chain X)" is
+          ;; indistinguishable from a binder pair named chain ((fn ((chain
+          ;; T)) …) / (let ((chain E)) …)); folding it would SILENTLY
+          ;; rewrite the binder. Refusing keeps every collision loud.
+          (match rest
+            ((Cons _ (Cons _ _))
+             (match (ch_sxs rest)
+               (None None)
+               ((Some rs) (ch_fold rs))))
+            (_ None))
+          (match (ch_sxs items)
+            (None None)
+            ((Some its) (Some (SList its))))))
+       (_
+         (match (ch_sxs items)
+           (None None)
+           ((Some its) (Some (SList its)))))))
+    (_ (Some s))))
+
+(fn ch_sxs ((ss (List SExpr))) (Option (List SExpr))
+  (measure (struct ss))
+  (match ss
+    (Nil (Some Nil))
+    ((Cons h t)
+     (match (ch_sx h)
+       (None None)
+       ((Some h2)
+        (match (ch_sxs t)
+          (None None)
+          ((Some t2) (Some (Cons h2 t2)))))))))
+
 (fn expand_sugar ((forms (List SExpr))) (Option (List SExpr))
   (match (tw_sxs forms)
     (None None)
-    ((Some fs) (il_sxs (il_table fs) fs))))
+    ((Some fs)
+     (match (il_sxs (il_table fs) fs)
+       (None None)
+       ((Some fs2) (ch_sxs fs2))))))
 
 ;; ---- module entry point ---------------------------------------------------
 (fn parse_module ((src (List Int)) (base_ctors (List Symbol))) (Option Module)
@@ -3332,8 +3411,8 @@
 (fn pd_src_tag ((k Int)) (List Int)
   (pd_app " [source " (pd_app (pd_nat k) " of the import closure]")))
 
-;; name the first form whose (S^ …)/(inline …) sugar is malformed — the
-;; decl heads all parse, so pd_bad_decl walks past these. The inline table
+;; name the first form whose (S^ …)/(inline …)/(chain …) sugar is malformed —
+;; the decl heads all parse, so pd_bad_decl walks past these. The inline table
 ;; prefers tower-expanded forms (mirroring expand_sugar) and falls back to
 ;; the raw forms when a tower is itself the failure.
 (fn pd_sugar_tab ((forms (List SExpr))) (List (Pair Symbol SExpr))
@@ -3352,7 +3431,10 @@
        ((Some f2)
         (match (il_sx tab f2)
           (None (Some f))
-          ((Some _) (pd_bad_sugar tab rest))))))))
+          ((Some f3)
+           (match (ch_sx f3)
+             (None (Some f))
+             ((Some _) (pd_bad_sugar tab rest))))))))))
 
 (fn parse_diag ((src (List Int)) (base_ctors (List Symbol)) (k Int)) (List Int)
   (match (pd_scan src 1 0 0 Nil)
@@ -3390,7 +3472,7 @@
              (match (pd_bad_sugar (pd_sugar_tab forms) forms)
                ((Some f)
                 (pd_app
-                  "malformed (S^ …)/(inline …) sugar in "
+                  "malformed (S^ …)/(inline …)/(chain …) sugar in "
                   (pd_app (pd_render_form f) (pd_src_tag k))))
                (None
                  (pd_app

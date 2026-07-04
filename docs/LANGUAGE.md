@@ -335,6 +335,36 @@ or non-literal `N`, unknown or non-nullary `NAME`) refuses the file
 loudly, named by the parse diagnosis. Shape pin:
 `examples/statement_sugar.shard` / `statement_sugar_rejects.shard`.
 
+### Flat proof chains — `chain`
+
+A third loader-level expansion (same pass, run after `S^`/`inline`),
+for proofs rather than statements. Every continuation-taking proof form
+(`steps`, `rewrite-with`, `have`, `div-facts`, `refine-fact`) takes its
+continuation as its **last argument**, so sequential proofs written
+natively nest one level per step — ten steps is a ten-deep pyramid
+whose closer is `refl)))))))))))`. `chain` flattens the spelling:
+
+```lisp
+(chain F1 F2 … FINAL)   ; each Fi written WITHOUT its continuation
+                        ; argument; FINAL is a complete proof
+```
+
+The reader right-folds: `Fi` gets `(chain Fi+1 … FINAL)`'s expansion
+appended as its last argument, and `FINAL` closes. The fold is
+**head-agnostic** — no per-form table, so any future continuation-taking
+form rides for free; a non-continuation form in item position simply
+gains a bogus final argument and fails at the proof parser. Items are
+walked before the fold, so chains nest (a `rewrite-with` premise
+sub-proof may itself be a `chain`). Named `have`s read top-to-bottom:
+introduce the fact as one chain item, cite `(premise NAME)` in any
+later item. The head is reserved and a chain needs at least **two**
+items; fewer, or a non-list item, refuses the file loudly, named by the
+parse diagnosis. The two-item minimum is what keeps a *binder* named
+`chain` — `(fn ((chain T)) …)`, `(let ((chain E)) …)`, whose pair shape
+is exactly a 1-item chain at the s-expr level — a loud refusal instead
+of a silent rewrite. Shape pin: `examples/chain_sugar.shard` /
+`chain_sugar_rejects.shard`.
+
 
 ## 4. Expressions
 
@@ -704,6 +734,7 @@ recovered from the target file or the same-module `mod.req.shard`
 | `(rewrite-with EQREF DIR SIDE (INST…) (PROOF…) PROOF)` | `RewriteWith` | rewrite by a cited equation whose own premises are discharged by the sub-`PROOF`s, then continue |
 | `(absurd EQREF)`                             | `Absurd`    | close the goal from a contradictory hypothesis                 |
 | `(by THEORY PAYLOAD)`                         | `ByTheory`  | discharge via a decision procedure (§10.7)                     |
+| `(chain F1 … FINAL)`                         | —           | reader-level sugar (§3, "Flat proof chains"): each `Fi` is a continuation-taking form above (`steps`/`rewrite-with`/`have`/`div-facts`/`refine-fact`) written *without* its trailing PROOF; the rest of the chain is folded in as that argument and `FINAL` closes — sequential proofs without the nesting pyramid |
 
 ### 10.4 Cases
 
