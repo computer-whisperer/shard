@@ -1,0 +1,80 @@
+;;; std/mem/mem.wasm2.shard — a VARIANT implementation of std/mem's wasm
+;;; artifacts (the rep-swap acceptance article, docs/LOWERING.md
+;;; ratification round). Different bytes, same behavior: the v2 functions
+;;; shuffle values through scratch locals — deliberately WORSE code, to
+;;; stand in for "a module overrides the default mod.build to hand-tune"
+;;; (or a representation change behind the same surface).
+;;;
+;;; The certs discharge the SAME consumer-facing statement shapes as
+;;; std/mem/mem.wasm.shard's (same premises, same RHS — only the self
+;;; literals and towers differ). Portable consumers never see the
+;;; difference: their behavior premises mention no bytes, and the v2
+;;; towers (S^10 / S^14) still fit inside the consumers' 2x fuel budgets
+;;; — the swap is a relink, not a re-proof.
+
+(import "../../kernel/stdlib.shard")
+(import "../../std/mem")
+(import "../../models/wasm/wasm.shard")
+(use (:: std mem *))
+(use (:: models wasm wasm *))
+
+;; slot 0: byte read, v2 — the address takes a detour through local 1
+(fn mget2_f () Func
+  (MkFunc 1 1 (list (LocalGet 0) (LocalSet 1) (LocalGet 1) (I32Load8U))))
+
+;; slot 1: byte store, v2 — the returned value parks in local 2
+(fn mset2_f () Func
+  (MkFunc
+    2
+    1
+    (list
+      (LocalGet 0)
+      (LocalGet 1)
+      (I32Store8)
+      (LocalGet 1)
+      (LocalSet 2)
+      (LocalGet 2))))
+
+(claim lowered_mem_get2
+  (goal ((a Int) (m0 Mem) (c Nat) (restfs (List Func)))
+    ((= (le 0 a) True) (= (le (+ a 1) 65536) True))
+    (=
+      (call_fn_mem
+        (S^ 10 c)
+        (MkWModule (Cons (inline mget2_f) restfs) 65536)
+        0
+        (list a)
+        m0)
+      (Some (Pair (mem_get m0 a) m0))))
+  (chain
+    (steps
+      ((compute lhs)
+       (rewrite (premise 0) lr lhs true ())
+       (compute
+         lhs
+         (stop pop_n eval_seq wrev wapp zeros wlen params_of body_of extra_of))
+       (rewrite (premise 1) lr lhs true ())
+       (compute lhs)))
+    refl))
+
+(claim lowered_mem_set2
+  (goal ((a Int) (v Int) (m0 Mem) (c Nat) (restfs (List Func)))
+    ((= (le 0 a) True) (= (le (+ a 1) 65536) True))
+    (=
+      (call_fn_mem
+        (S^ 14 c)
+        (MkWModule (Cons (inline mget2_f) (Cons (inline mset2_f) restfs)) 65536)
+        1
+        (list a v)
+        m0)
+      (Some (Pair v (mem_set m0 a v)))))
+  (chain
+    (steps
+      ((compute lhs)
+       (rewrite (premise 0) lr lhs true ())
+       (compute
+         lhs
+         (stop pop_n eval_seq wrev wapp zeros wlen params_of body_of extra_of))
+       (rewrite (premise 1) lr lhs true ())
+       (compute lhs)))
+    refl))

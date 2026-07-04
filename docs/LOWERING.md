@@ -413,6 +413,32 @@ record accessors unfold to matches under compute, so `funcs_of` rides
 the first compute's stop set — the spine premise's spelling must
 survive to be rewritten.
 
+### 6e. The rep-swap acceptance test — PASSED (2026-07-04)
+
+The claim the portable form was adopted for, demonstrated end to end:
+*one interface, two conformant artifact sets, one consumer, zero
+consumer proof edits on swap.*
+
+- **`std/mem/mem.wasm2.shard`** — a v2 variant implementation:
+  different bytes (scratch-local detours), different towers
+  (`S^10`/`S^14` vs v1's `S^6`/`S^10`), same behavior — discharging
+  the same statement shapes as v1's certs. Stands in for a hand-tuned
+  mod.build override or a representation change behind the surface.
+- **`examples/repswap_probe.shard`** — the v2 link derivations for
+  `sum2` and `bump`: the portable consumer certs are imported
+  UNCHANGED (the file imports v2's certs and *not* v1's), and the
+  structural artifact statements re-derive against the v2 module by
+  pure citation. Both passed first-try. The v2 towers land inside the
+  consumers' 2× fuel budgets, so even a *larger* implementation swaps
+  in without touching a consumer — the budget policy earning its keep.
+- Engine leg: the v2 module (`rsmod` in the differential plan) runs the
+  same consumer binaries over the variant callees, V8-green.
+
+What this pins for the roadmap: an implementation/representation swap
+behind a module surface is a **relink** — consumer proof burden zero —
+provided consumers cite only behavior-level statements (which the
+portable schema enforces by construction: there are no bytes to cite).
+
 ## 7. Open questions (the back-and-forth queue)
 
 1. ~~The statement-generator enforcement mechanism~~ RESOLVED by P4a:
