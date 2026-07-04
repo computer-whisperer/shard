@@ -296,9 +296,9 @@ shard → RS-shard → wasm as it grows); a module overrides it to hand-tune,
 and both roads discharge identical statements. Variant selection stays
 explicit build-script data (no resolver magic).
 
-V1 gaps, on record: (a) the build file's func literals are copied from
-the generated certs — the cert↔binary tie should be CHECKED (re-encode
-the claim's module literal, compare bytes), not maintained by hand; (b)
+V1 gaps, on record: (a) ~~the build file's func literals are copied from
+the generated certs — the cert↔binary tie should be CHECKED~~ RESOLVED
+by the §6i byte-tie gate (2026-07-04); (b)
 certs pin their fn at index 0, so combined multi-function modules can't
 instantiate them yet — the `triple_thm` filler pattern (pin own index,
 opaque fillers before) is the known fix when welding needs it.
@@ -578,12 +578,41 @@ Fragment fence (unchanged from §6f): Int-accumulator returns, stride
 ≠ 1, multiple stores per iteration, and calls in loop bodies
 (structural-form-only when they come) are future extensions.
 
+### 6i. The byte-tie gate — the fifth gate (2026-07-04)
+
+§6 gap (a), closed. Build files hand-copy function literals from the
+certs into their MOD lines; nothing tied the shipped bytes to the
+modules the theorems are actually about. Now it is CHECKED:
+
+- **`tools/bytetie`** — for every structural `lowered_*`/`linked_*`
+  claim in a cert file, re-derives the bytes of the claim's module at
+  `restfs := Nil`: the raw module literal is REFLECTED into a `WModule`
+  value (`(inline …)` resolved by the same-file rule at any depth —
+  generate-and-check, no internalized eval) and run through the model's
+  own encoder; prints one `TIE <fn> <hex>` line per claim. Portable
+  claims are skipped (no module literal — their artifact form is the
+  linked derivation); an uninterpretable literal is a loud exit 2.
+- The build scripts diff the TIE lines against the plan's MOD lines
+  (`examples/lowbuild{,_mem,_loop}.sh`, exact set match) or, for
+  std/mem's single shipped binary, assert `TIE mem_set = MOD stdmem`
+  (the full-prefix cert's module IS the binary; the prefix certs are
+  tied at the kernel level by citation). A drifted hand-copy now fails
+  the build instead of silently shipping a binary the theorems are not
+  about (drift-injection verified).
+- **`tools/low/certnav.shard`** — the raw-cert navigation machinery
+  (form reading, the inline table, call-application location) extracted
+  from tools/lowcheck when bytetie became its second consumer; both
+  tools now share it.
+
+All five gates green on all four builds (pure/mem/loop/std-mem).
+
 ## 7. Open questions (the back-and-forth queue)
 
 1. ~~The statement-generator enforcement mechanism~~ RESOLVED by P4a:
    both — regen (producer determinism) AND structural recognition
-   (tools/lowcheck, consumer-side). Remaining tail: wiring lowcheck into
-   the `bin` gate, and the cert↔binary byte tie (§6 gap a).
+   (tools/lowcheck, consumer-side). ~~The cert↔binary byte tie~~
+   RESOLVED by §6i (tools/bytetie, the fifth gate). Remaining tail:
+   wiring lowcheck into the `bin` gate.
 2. PRE-slot conventions for the uniform rep: the heap invariant's exact
    statement (bump-pointer validity + allocated-cells-never-rewritten).
 3. ~~The footprint/framing lemma shape~~ RESOLVED by P1 (§3: framed form +

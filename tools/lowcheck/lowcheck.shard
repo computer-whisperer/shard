@@ -27,6 +27,7 @@
 (import "../../kernel/loader.shard")
 (import "../../kernel/reader.shard")
 (import "../../kernel/term.shard")
+(import "../low/certnav.shard")
 
 (use (:: kernel loader World))
 (use (:: kernel loader get_args))
@@ -45,57 +46,10 @@
 (use (:: kernel reader skip_ws))
 (use (:: kernel term append_int))
 (use (:: kernel term show_int))
+(use (:: tools low certnav *))
 
 (fn nl () (List Int) (Cons 10 Nil))
 
-;; ---- read all top-level forms --------------------------------------------------
-
-(fn forms_go ((src (List Int)) (acc (List SExpr)) (fuel Int))
-  (Option (List SExpr))
-  (measure fuel (by arith (list 1 0)) (by arith (list 1 1)))
-  (if (lt fuel 1) None
-  (match (skip_ws src)
-    (Nil (Some (rev_forms acc Nil)))
-    ((Cons _ _)
-     (match (read_expr src)
-       (REErr None)
-       ((REOk s rest) (forms_go rest (Cons s acc) (- fuel 1))))))))
-
-(fn rev_forms ((xs (List SExpr)) (acc (List SExpr))) (List SExpr)
-  (measure (struct xs))
-  (match xs
-    (Nil acc)
-    ((Cons h t) (rev_forms t (Cons h acc)))))
-
-;; ---- small s-expr utilities -----------------------------------------------------
-
-(fn is_sym ((s SExpr) (name Symbol)) Bool
-  (match s
-    ((SSym x) (sym_eq x name))
-    (_ False)))
-
-(fn prefix_eq ((pre (List Int)) (cs (List Int))) Bool
-  (measure (struct pre))
-  (match pre
-    (Nil True)
-    ((Cons a as)
-     (match cs
-       (Nil False)
-       ((Cons b bs) (if (int_eq a b) (prefix_eq as bs) False))))))
-
-;; does the slack symbol occur anywhere in this s-expr?
-(fn occ_s ((s SExpr) (name Symbol)) Bool
-  (measure (struct s))
-  (match s
-    ((SSym x) (sym_eq x name))
-    ((SList items) (occ_list items name))
-    (_ False)))
-
-(fn occ_list ((ss (List SExpr)) (name Symbol)) Bool
-  (measure (struct ss))
-  (match ss
-    (Nil False)
-    ((Cons h t) (if (occ_s h name) True (occ_list t name)))))
 
 ;; ---- the schema checks -----------------------------------------------------------
 
@@ -157,27 +111,6 @@
           (has_restm rest)))
        (_ (has_restm rest))))))
 
-;; find the first call_fn / call_fn_mem application anywhere in the term
-(fn find_call ((s SExpr)) (Option (List SExpr))
-  (measure (struct s))
-  (match s
-    ((SList items)
-     (match items
-       ((Cons h rest)
-        (if (is_sym h (quote call_fn)) (Some items)
-        (if (is_sym h (quote call_fn_mem)) (Some items)
-        (find_call_list items))))
-       (Nil None)))
-    (_ None)))
-
-(fn find_call_list ((ss (List SExpr))) (Option (List SExpr))
-  (measure (struct ss))
-  (match ss
-    (Nil None)
-    ((Cons h t)
-     (match (find_call h)
-       ((Some r) (Some r))
-       (None (find_call_list t))))))
 
 ;; FUEL slot: (S^ N BASE), N a literal >= 0, slack c occurs in BASE
 (fn fuel_ok ((s SExpr)) Bool
@@ -190,34 +123,6 @@
        False))
     (_ False)))
 
-;; the same-file (inline NAME) table: nullary fn name -> raw body s-expr.
-;; The loader's inline sugar is same-file by construction, so the schema
-;; gate can resolve it without trusting anything foreign — the expansion
-;; is deterministic and the expanded element must still be a MkFunc literal.
-(fn inline_table ((forms (List SExpr))) (List (Pair Symbol SExpr))
-  (measure (struct forms))
-  (match forms
-    (Nil Nil)
-    ((Cons f rest)
-     (match f
-       ((SList (Cons h (Cons nm (Cons params (Cons _ty (Cons body Nil))))))
-        (if (is_sym h (quote fn))
-          (match nm
-            ((SSym name)
-             (match params
-               ((SList Nil) (Cons (Pair name body) (inline_table rest)))
-               (_ (inline_table rest))))
-            (_ (inline_table rest)))
-          (inline_table rest)))
-       (_ (inline_table rest))))))
-
-(fn inl_lookup ((tbl (List (Pair Symbol SExpr))) (x Symbol)) (Option SExpr)
-  (measure (struct tbl))
-  (match tbl
-    (Nil None)
-    ((Cons p rest)
-     (match p
-       ((Pair n body) (if (sym_eq n x) (Some body) (inl_lookup rest x)))))))
 
 ;; a chain element: a (MkFunc …) literal, directly or through (inline NAME)
 ;; where NAME is a same-file nullary fn whose body is a (MkFunc …) literal

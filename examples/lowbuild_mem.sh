@@ -10,7 +10,9 @@
 #   2. SCHEMA    — tools/lowcheck structurally validates every cert
 #   3. KERNEL    — the cert proofs actually check (bridge citations of
 #                  lowered_mem_get/lowered_mem_set through call_bridge)
-#   4. ENGINE    — the artifact plan (binaries + spec-semantics vectors)
+#   4. BYTETIE   — tools/bytetie re-encodes each linked cert's module
+#                  literal at restfs := Nil, diffed against the MOD bytes
+#   5. ENGINE    — the artifact plan (binaries + spec-semantics vectors)
 #                  replays under real V8
 # Exit 0 = a fully gated artifact set. Run from the repo root.
 set -eu
@@ -39,9 +41,15 @@ fi
 "${CHECK[@]}" "$LINK" 2>&1 | tail -1 | tee "$TMP/kv.txt"
 grep -q " 0 failed" "$TMP/kv.txt"
 
-echo "== gate 4: engine (V8 replay of the artifact plan)"
-command -v node >/dev/null || { echo "SKIPPED: no node"; exit 0; }
+echo "== gate 4: byte tie (cert module literals re-encode to the shipped bytes)"
 "$EVAL" run examples/lowergen_mem_src.build.shard > "$TMP/plan.txt"
+"$EVAL" run tools/bytetie/bytetie.shard "$LINK" > "$TMP/tie.txt"
+grep '^MOD ' "$TMP/plan.txt" | sort > "$TMP/mods.txt"
+sed 's/^TIE /MOD /' "$TMP/tie.txt" | sort > "$TMP/ties.txt"
+diff "$TMP/ties.txt" "$TMP/mods.txt" && echo "BYTETIE OK"
+
+echo "== gate 5: engine (V8 replay of the artifact plan)"
+command -v node >/dev/null || { echo "SKIPPED: no node"; exit 0; }
 node examples/wasm_diff.mjs "$TMP/plan.txt"
 
-echo "ARTIFACT OK: mem-fragment binaries + manifest + certs, all four gates green"
+echo "ARTIFACT OK: mem-fragment binaries + manifest + certs, all five gates green"

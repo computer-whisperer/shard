@@ -4,7 +4,9 @@
 #   1. SCHEMA — tools/lowcheck structurally validates every lowered_* cert
 #               (consumer-side; PCC discipline — never trust the producer)
 #   2. KERNEL — the cert proofs actually check
-#   3. ENGINE — the build entry's artifact plan (binary + manifest +
+#   3. BYTETIE — the shipped binary equals the full-prefix cert's module
+#               at restfs := Nil, re-encoded by tools/bytetie
+#   4. ENGINE — the build entry's artifact plan (binary + manifest +
 #               spec-semantics vectors) replays under real V8
 # No REGEN gate v1: the pieces are hand-written; there is no generator to
 # hold to determinism yet (examples/lowbuild.sh has the four-gate form).
@@ -27,9 +29,15 @@ fi
 "${CHECK[@]}" "$CERTS" 2>&1 | tail -1 | tee "$TMP/kv.txt"
 grep -q " 0 failed" "$TMP/kv.txt"
 
-echo "== gate 3: engine (V8 replay of the artifact plan)"
-command -v node >/dev/null || { echo "SKIPPED: no node"; exit 0; }
+echo "== gate 3: byte tie (the shipped binary = the full-prefix cert's module)"
 "$EVAL" run "$BUILD" > "$TMP/plan.txt"
+"$EVAL" run tools/bytetie/bytetie.shard "$CERTS" > "$TMP/tie.txt"
+TIE=$(grep '^TIE mem_set ' "$TMP/tie.txt" | cut -d' ' -f3)
+MOD=$(grep '^MOD stdmem ' "$TMP/plan.txt" | cut -d' ' -f3)
+[ -n "$TIE" ] && [ "$TIE" = "$MOD" ] && echo "BYTETIE OK"
+
+echo "== gate 4: engine (V8 replay of the artifact plan)"
+command -v node >/dev/null || { echo "SKIPPED: no node"; exit 0; }
 node examples/wasm_diff.mjs "$TMP/plan.txt"
 
 echo "ARTIFACT OK: std/mem wasm pieces — binary + manifest + certs, all gates green"

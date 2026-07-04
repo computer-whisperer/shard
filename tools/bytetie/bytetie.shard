@@ -1,0 +1,349 @@
+;;; bytetie — the CERT↔BINARY TIE (docs/LOWERING.md §6 gap a, the fifth
+;;; build gate). A build file's MOD lines carry the shipped .wasm bytes;
+;;; the certs' theorems are about their MODULE LITERALS. Nothing ties the
+;;; two unless it is CHECKED: this tool re-derives, for every structural
+;;; lowered_*/linked_* claim in a cert file, the bytes of the claim's
+;;; module at restfs := Nil — reflecting the raw module literal into a
+;;; WModule value ((inline …) resolved by the same-file rule at any
+;;; depth) and running the model's own encoder — and prints
+;;;
+;;;   TIE <fn-name> <hex>
+;;;
+;;; per claim (name = the claim minus its lowered_/linked_ prefix).
+;;; The build script diffs these against the plan's MOD lines: a
+;;; hand-copied literal that drifts from the cert now fails the build
+;;; instead of silently shipping a binary the theorems are not about.
+;;; PORTABLE claims (abstract module binder) are skipped — they have no
+;;; module literal; their artifact form is the linked derivation.
+;;; A module literal the reflector cannot interpret is a LOUD exit 2
+;;; (refuse, don't guess).
+;;;
+;;; RUN IT:  bin/shard_eval run tools/bytetie/bytetie.shard CERTFILE
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/loader.shard")
+(import "../../kernel/reader.shard")
+(import "../../kernel/term.shard")
+(import "../low/certnav.shard")
+(import "../../models/wasm/wasm.shard")
+(import "../../models/wasm/encode.shard")
+
+(use (:: kernel loader World))
+(use (:: kernel loader get_args))
+(use (:: kernel loader read_file))
+(use (:: kernel loader write))
+(use (:: kernel loader exit))
+(use (:: kernel reader SExpr))
+(use (:: kernel reader SInt))
+(use (:: kernel reader SSym))
+(use (:: kernel reader SStr))
+(use (:: kernel reader SList))
+(use (:: kernel term append_int))
+(use (:: tools low certnav *))
+(use (:: models wasm wasm *))
+(use (:: models wasm encode *))
+
+(fn nl () (List Int) (Cons 10 Nil))
+
+;; ---- the reflector: raw module literal -> WModule value ---------------------------
+;; Grammar: exactly what the emitters and hand pieces spell in claims —
+;; MkWModule / Cons chains ending in restfs / MkFunc / (list …) or Cons
+;; instruction sequences / the model's instruction ctors, with
+;; (inline NAME) resolvable at ANY position via the same-file table.
+
+(type RInstr (RIOk Instr) (RIErr (List Int)))
+
+(type RInstrs (RISOk (List Instr)) (RISErr (List Int)))
+
+(type RFunc (RFOk Func) (RFErr (List Int)))
+
+(type RFuncs (RFSOk (List Func)) (RFSErr (List Int)))
+
+(type RMod (RMOk WModule) (RMErr (List Int)))
+
+(fn rbop ((s SExpr)) (Option Bop)
+  (match s
+    ((SSym x)
+     (if (sym_eq x (quote BAdd)) (Some BAdd)
+     (if (sym_eq x (quote BSub)) (Some BSub)
+     (if (sym_eq x (quote BMul)) (Some BMul)
+     (if (sym_eq x (quote BEq)) (Some BEq)
+     (if (sym_eq x (quote BLtU)) (Some BLtU)
+     None))))))
+    (_ None)))
+
+;; one instruction; nullary ctors accepted bare or parenthesized
+(fn rinstr ((tbl (List (Pair Symbol SExpr))) (s SExpr)) RInstr
+  (measure (struct s))
+  (match s
+    ((SSym x)
+     (if (sym_eq x (quote I32Eqz)) (RIOk I32Eqz)
+     (if (sym_eq x (quote I32Load)) (RIOk I32Load)
+     (if (sym_eq x (quote I32Store)) (RIOk I32Store)
+     (if (sym_eq x (quote I32Load8U)) (RIOk I32Load8U)
+     (if (sym_eq x (quote I32Store8)) (RIOk I32Store8)
+     (if (sym_eq x (quote Return)) (RIOk Return)
+     (RIErr "unknown bare instruction symbol"))))))))
+    ((SList (Cons h args))
+     (if (is_sym h (quote I32Const))
+       (match args
+         ((Cons (SInt k) Nil) (RIOk (I32Const k)))
+         (_ (RIErr "I32Const needs one int literal")))
+     (if (is_sym h (quote I32Bin))
+       (match args
+         ((Cons b Nil)
+          (match (rbop b)
+            ((Some o) (RIOk (I32Bin o)))
+            (None (RIErr "unknown binary op"))))
+         (_ (RIErr "I32Bin needs one op")))
+     (if (is_sym h (quote LocalGet))
+       (match args
+         ((Cons (SInt k) Nil) (RIOk (LocalGet k)))
+         (_ (RIErr "LocalGet needs one int literal")))
+     (if (is_sym h (quote LocalSet))
+       (match args
+         ((Cons (SInt k) Nil) (RIOk (LocalSet k)))
+         (_ (RIErr "LocalSet needs one int literal")))
+     (if (is_sym h (quote Br))
+       (match args
+         ((Cons (SInt k) Nil) (RIOk (Br k)))
+         (_ (RIErr "Br needs one int literal")))
+     (if (is_sym h (quote BrIf))
+       (match args
+         ((Cons (SInt k) Nil) (RIOk (BrIf k)))
+         (_ (RIErr "BrIf needs one int literal")))
+     (if (is_sym h (quote Call))
+       (match args
+         ((Cons (SInt k) Nil) (RIOk (Call k)))
+         (_ (RIErr "Call needs one int literal")))
+     (if (is_sym h (quote Block))
+       (match args
+         ((Cons body Nil)
+          (match (rinstrs tbl body)
+            ((RISOk is) (RIOk (Block is)))
+            ((RISErr m) (RIErr m))))
+         (_ (RIErr "Block needs one body")))
+     (if (is_sym h (quote Loop))
+       (match args
+         ((Cons body Nil)
+          (match (rinstrs tbl body)
+            ((RISOk is) (RIOk (Loop is)))
+            ((RISErr m) (RIErr m))))
+         (_ (RIErr "Loop needs one body")))
+     (if (is_sym h (quote I32Eqz)) (RIOk I32Eqz)
+     (if (is_sym h (quote I32Load)) (RIOk I32Load)
+     (if (is_sym h (quote I32Store)) (RIOk I32Store)
+     (if (is_sym h (quote I32Load8U)) (RIOk I32Load8U)
+     (if (is_sym h (quote I32Store8)) (RIOk I32Store8)
+     (if (is_sym h (quote Return)) (RIOk Return)
+     (RIErr "unknown instruction")))))))))))))))))
+    (_ (RIErr "instruction is not a symbol or application"))))
+
+;; an instruction sequence: (list I …), a Cons chain, Nil, or (inline NAME)
+(fn rinstrs ((tbl (List (Pair Symbol SExpr))) (s SExpr)) RInstrs
+  (measure (struct s))
+  (match s
+    ((SSym x)
+     (if (sym_eq x (quote Nil)) (RISOk Nil)
+     (RISErr "instruction list is a bare symbol")))
+    ((SList (Cons h rest))
+     (if (is_sym h (quote list)) (rinstr_items tbl rest)
+     (if (is_sym h (quote inline))
+       (match rest
+         ((Cons (SSym n) Nil)
+          (match (inl_lookup tbl n)
+            ((Some body) (rinstrs tbl body))
+            (None (RISErr "inline of an unknown same-file nullary fn"))))
+         (_ (RISErr "malformed (inline …)")))
+     (if (is_sym h (quote Cons))
+       (match rest
+         ((Cons f (Cons tail Nil))
+          (match (rinstr tbl f)
+            ((RIErr m) (RISErr m))
+            ((RIOk i)
+             (match (rinstrs tbl tail)
+               ((RISOk is) (RISOk (Cons i is)))
+               ((RISErr m) (RISErr m))))))
+         (_ (RISErr "malformed Cons chain")))
+       (RISErr "instruction list is not (list …), a Cons chain, or Nil")))))
+    (_ (RISErr "instruction list is not (list …), a Cons chain, or Nil"))))
+
+(fn rinstr_items ((tbl (List (Pair Symbol SExpr))) (ss (List SExpr))) RInstrs
+  (measure (struct ss))
+  (match ss
+    (Nil (RISOk Nil))
+    ((Cons h t)
+     (match (rinstr tbl h)
+       ((RIErr m) (RISErr m))
+       ((RIOk i)
+        (match (rinstr_items tbl t)
+          ((RISOk is) (RISOk (Cons i is)))
+          ((RISErr m) (RISErr m))))))))
+
+;; a function literal: (MkFunc P E BODY), directly or through (inline NAME)
+(fn rfunc ((tbl (List (Pair Symbol SExpr))) (s SExpr)) RFunc
+  (measure (struct s))
+  (match s
+    ((SList (Cons h rest))
+     (if (is_sym h (quote MkFunc))
+       (match rest
+         ((Cons (SInt p) (Cons (SInt e) (Cons body Nil)))
+          (match (rinstrs tbl body)
+            ((RISOk is) (RFOk (MkFunc p e is)))
+            ((RISErr m) (RFErr m))))
+         (_ (RFErr "MkFunc needs two int literals and a body")))
+     (if (is_sym h (quote inline))
+       (match rest
+         ((Cons (SSym n) Nil)
+          (match (inl_lookup tbl n)
+            ((Some body) (rfunc tbl body))
+            (None (RFErr "inline of an unknown same-file nullary fn"))))
+         (_ (RFErr "malformed (inline …)")))
+       (RFErr "chain element is not a MkFunc literal"))))
+    (_ (RFErr "chain element is not a MkFunc literal"))))
+
+;; the module's function chain at restfs := Nil
+(fn rchain ((tbl (List (Pair Symbol SExpr))) (s SExpr)) RFuncs
+  (measure (struct s))
+  (match s
+    ((SSym x)
+     (if (sym_eq x (quote restfs)) (RFSOk Nil)
+     (if (sym_eq x (quote Nil)) (RFSOk Nil)
+     (RFSErr "module chain tail is not restfs"))))
+    ((SList (Cons h rest))
+     (if (is_sym h (quote Cons))
+       (match rest
+         ((Cons f (Cons tail Nil))
+          (match (rfunc tbl f)
+            ((RFErr m) (RFSErr m))
+            ((RFOk fu)
+             (match (rchain tbl tail)
+               ((RFSOk fs) (RFSOk (Cons fu fs)))
+               ((RFSErr m) (RFSErr m))))))
+         (_ (RFSErr "malformed Cons chain")))
+       (RFSErr "module chain is not a Cons chain")))
+    (_ (RFSErr "module chain is not a Cons chain"))))
+
+(fn rmod ((tbl (List (Pair Symbol SExpr))) (s SExpr)) RMod
+  (match s
+    ((SList (Cons h (Cons chain (Cons msz Nil))))
+     (if (is_sym h (quote MkWModule))
+       (match msz
+         ((SInt m)
+          (match (rchain tbl chain)
+            ((RFSOk fs) (RMOk (MkWModule fs m)))
+            ((RFSErr e) (RMErr e))))
+         (_ (RMErr "memsize is not a literal")))
+       (RMErr "module slot is not (MkWModule …)")))
+    (_ (RMErr "module slot is not (MkWModule …)"))))
+
+;; ---- hex rendering ----------------------------------------------------------------
+
+(fn hexd ((d Int)) Int (if (lt d 10) (+ 48 d) (+ 87 d)))
+
+(fn hexs ((bs (List Int))) (List Int)
+  (measure (struct bs))
+  (match bs
+    (Nil Nil)
+    ((Cons b t) (Cons (hexd (ediv b 16)) (Cons (hexd (mod b 16)) (hexs t))))))
+
+;; ---- the scan ----------------------------------------------------------------------
+
+(fn drop_prefix ((pre (List Int)) (cs (List Int))) (List Int)
+  (measure (struct pre))
+  (match pre
+    (Nil cs)
+    ((Cons _ as)
+     (match cs
+       (Nil Nil)
+       ((Cons _ bs) (drop_prefix as bs))))))
+
+;; the artifact name: the claim minus its lowered_/linked_ prefix
+(fn tie_name ((name Symbol)) (Option (List Int))
+  (let ((cs (chars_of_sym name)))
+    (if (prefix_eq "lowered_" cs) (Some (drop_prefix "lowered_" cs))
+    (if (prefix_eq "linked_" cs) (Some (drop_prefix "linked_" cs))
+    None))))
+
+;; one claim's TIE line, or None (portable form / not a gated name),
+;; or a loud reflection error
+(type TRes (TLine (List Int)) (TSkip) (TFail (List Int)))
+
+(fn tie_of ((tbl (List (Pair Symbol SExpr))) (name Symbol) (goal_form SExpr))
+  TRes
+  (match goal_form
+    ((SList (Cons g (Cons _ (Cons _ (Cons concl Nil)))))
+     (if (is_sym g (quote goal))
+       (match (find_call concl)
+         (None (TFail "no call application in the conclusion"))
+         ((Some items)
+          (match items
+            ((Cons _ (Cons _ (Cons wm _)))
+             (match wm
+               ((SSym _) TSkip)
+               (_
+                 (match (rmod tbl wm)
+                   ((RMErr m) (TFail m))
+                   ((RMOk m)
+                    (match (tie_name name)
+                      (None TSkip)
+                      ((Some nm)
+                       (TLine
+                         (append_int
+                           "TIE "
+                           (append_int
+                             nm
+                             (append_int
+                               " "
+                               (append_int (hexs (enc_module m)) (nl)))))))))))))
+            (_ (TFail "call application is missing slots")))))
+       (TFail "second claim element is not (goal …)")))
+    (_ (TFail "second claim element is not (goal …)"))))
+
+(type SRes (SOk (List Int)) (SErr (List Int)))
+
+(fn scan_ties
+  ((tbl (List (Pair Symbol SExpr))) (forms (List SExpr)) (out (List Int)))
+  SRes
+  (measure (struct forms))
+  (match forms
+    (Nil (SOk out))
+    ((Cons f rest)
+     (match f
+       ((SList (Cons h (Cons nm (Cons gf _))))
+        (if (is_sym h (quote claim))
+          (match nm
+            ((SSym name)
+             (if
+               (if (prefix_eq "lowered_" (chars_of_sym name)) True
+               (prefix_eq "linked_" (chars_of_sym name)))
+               (match (tie_of tbl name gf)
+                 (TSkip (scan_ties tbl rest out))
+                 ((TLine l) (scan_ties tbl rest (append_int out l)))
+                 ((TFail m)
+                  (SErr (append_int (chars_of_sym name) (append_int ": " m)))))
+               (scan_ties tbl rest out)))
+            (_ (scan_ties tbl rest out)))
+          (scan_ties tbl rest out)))
+       (_ (scan_ties tbl rest out))))))
+
+(fn fail2 ((msg (List Int)) (w World)) World
+  (exit 2 (write (append_int "error: " (append_int msg (nl))) w)))
+
+(fn run1 ((path (List Int)) (w World)) World
+  (match (read_file path w)
+    ((Pair None w1) (fail2 (append_int "cannot read " path) w1))
+    ((Pair (Some src) w1)
+     (match (forms_go src Nil 1000000)
+       (None (fail2 (append_int "cannot parse " path) w1))
+       ((Some forms)
+        (match (scan_ties (inline_table forms) forms "")
+          ((SErr m) (fail2 m w1))
+          ((SOk out) (exit 0 (write out w1)))))))))
+
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Pair args w1)
+     (match args
+       ((Cons path Nil) (run1 path w1))
+       (_ (fail2 "usage: bytetie CERTFILE" w1))))))
