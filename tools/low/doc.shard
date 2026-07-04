@@ -1,0 +1,150 @@
+;;; tools/low/doc — the lowering library's output-document kit. Doc is
+;;; lower.shard's two-ctor rope (constant-time concatenation, one flatten
+;;; at write time); alongside it the text/path utilities every emitter
+;;; needs: extension stripping, path->module-path splitting, and the
+;;; import/use header line builders. Pure text — nothing here knows about
+;;; wasm, schemas, or proofs.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+
+(use (:: kernel term append_int))
+(use (:: kernel term show_int))
+
+;; ---- the document rope ---------------------------------------------------------
+
+(type Doc (DStr (List Int)) (DCat Doc Doc))
+
+(fn dcat3 ((a Doc) (b Doc) (c Doc)) Doc (DCat a (DCat b c)))
+
+(fn doc_flat ((d Doc) (tail (List Int))) (List Int)
+  (measure (struct d))
+  (match d
+    ((DStr s) (append_int s tail))
+    ((DCat a b) (doc_flat a (doc_flat b tail)))))
+
+(fn nl () (List Int) (Cons 10 Nil))
+
+(fn dq () (List Int) (Cons 34 Nil))
+
+(fn sp () Doc (DStr " "))
+
+(fn dsym ((s Symbol)) Doc (DStr (chars_of_sym s)))
+
+(fn dint ((k Int)) Doc (DStr (show_int k)))
+
+(fn dapp ((a (List Doc)) (b (List Doc))) (List Doc)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (dapp t b)))))
+
+(fn djoin ((ds (List Doc))) Doc
+  (measure (struct ds))
+  (match ds
+    (Nil (DStr ""))
+    ((Cons d Nil) d)
+    ((Cons d rest) (DCat d (DCat (sp) (djoin rest))))))
+
+;; ---- text / path utilities -----------------------------------------------------
+
+(fn rev_chars ((a (List Int)) (acc (List Int))) (List Int)
+  (measure (struct a))
+  (match a
+    (Nil acc)
+    ((Cons h t) (rev_chars t (Cons h acc)))))
+
+(fn chars_eq ((a (List Int)) (b (List Int))) Bool
+  (measure (struct a))
+  (match a
+    (Nil
+      (match b
+        (Nil True)
+        ((Cons _ _) False)))
+    ((Cons x xs)
+     (match b
+       (Nil False)
+       ((Cons y ys) (if (int_eq x y) (chars_eq xs ys) False))))))
+
+;; chars up to the first '.' (strip the extension)
+(fn until_dot ((cs (List Int))) (List Int)
+  (measure (struct cs))
+  (match cs
+    (Nil Nil)
+    ((Cons h t) (if (int_eq h 46) Nil (Cons h (until_dot t))))))
+
+;; split an extension-stripped path on '/' into module-path symbols
+(fn split_slash ((cs (List Int)) (cur (List Int))) (List Symbol)
+  (measure (struct cs))
+  (match cs
+    (Nil (Cons (sym_of_chars (rev_chars cur Nil)) Nil))
+    ((Cons h t)
+     (if (int_eq h 47)
+       (Cons (sym_of_chars (rev_chars cur Nil)) (split_slash t Nil))
+       (split_slash t (Cons h cur))))))
+
+;; final path segment (with extension) — the same-directory import spelling
+(fn basename_go ((cs (List Int)) (cur (List Int))) (List Int)
+  (measure (struct cs))
+  (match cs
+    (Nil (rev_chars cur Nil))
+    ((Cons h t)
+     (if (int_eq h 47) (basename_go t Nil) (basename_go t (Cons h cur))))))
+
+(fn sym_list_eq ((a (List Symbol)) (b (List Symbol))) Bool
+  (measure (struct a))
+  (match a
+    (Nil
+      (match b
+        (Nil True)
+        ((Cons _ _) False)))
+    ((Cons x xs)
+     (match b
+       (Nil False)
+       ((Cons y ys) (if (sym_eq x y) (sym_list_eq xs ys) False))))))
+
+(fn drop_last ((xs (List Symbol))) (List Symbol)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons _ Nil) Nil)
+    ((Cons h t) (Cons h (drop_last t)))))
+
+(fn sym_app ((a (List Symbol)) (b (List Symbol))) (List Symbol)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (sym_app t b)))))
+
+;; ---- header line builders --------------------------------------------------------
+
+(fn pr_modpath ((ms (List Symbol))) Doc
+  (measure (struct ms))
+  (match ms
+    (Nil (DStr ""))
+    ((Cons m Nil) (dsym m))
+    ((Cons m rest) (dcat3 (dsym m) (sp) (pr_modpath rest)))))
+
+(fn dimport ((path (List Int))) Doc
+  (dcat3
+    (DStr (append_int "(import " (dq)))
+    (DStr path)
+    (DStr (append_int (dq) (append_int ")" (nl))))))
+
+(fn use_of ((path (List Int))) Doc
+  (dcat3
+    (DStr "(use (:: ")
+    (pr_modpath (split_slash (until_dot path) Nil))
+    (DStr (append_int " *))" (nl)))))
+
+;; the module path of a SIBLING file imported by basename: the target's
+;; directory + the sibling's extension-stripped basename (raw outputs may
+;; be written anywhere; the committed file lands next to the target)
+(fn use_sibling ((target (List Int)) (path (List Int))) Doc
+  (dcat3
+    (DStr "(use (:: ")
+    (pr_modpath
+      (sym_app
+        (drop_last (split_slash (until_dot target) Nil))
+        (Cons (sym_of_chars (until_dot (basename_go path Nil))) Nil)))
+    (DStr (append_int " *))" (nl)))))

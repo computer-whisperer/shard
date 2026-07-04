@@ -505,6 +505,36 @@ address accum). Extensions behind the fence: Int-accumulator returns,
 stride ≠ 1, multiple stores per iteration, calls in loop bodies
 (structural form).
 
+### 6g. lowergen library-ification (2026-07-04)
+
+The emitter's reusable core now lives in **`tools/low/`** — three plain
+library files, imported by path, glob-used — with `tools/lowergen`
+keeping only what is genuinely the app (the fragment walks, claim
+assembly, the module walk, the CLI):
+
+- **`tools/low/doc.shard`** — the output-document rope (`Doc`,
+  combinators, one flatten at write time) plus the text/path utilities
+  and import/use header-line builders. Pure text; knows nothing about
+  wasm or schemas.
+- **`tools/low/schema.shard`** — the statement-schema kit: canonical-
+  expr spelling (`pr_e`/`spell` — the invariant that premises and inst
+  pins must match compute residues exactly), binder environments,
+  node-set dedup machinery, type predicates, goal binder/arg/PRE
+  printers, the `PItem` portable-premise layout (§6d) with its premise
+  renderers, and the RHS/self-literal builders.
+- **`tools/low/proof.shard`** — the proof-form templates: ONE unified
+  `wrap_event` (the previously duplicated `pr_event`/`m_event` differ
+  only in premise-index lookup), the stage-law flush, the `call_bridge`
+  citation builders, and the link-derivation discharge templates
+  (`link_subs` now takes the shipped cert names as parameters instead
+  of hardcoding std/mem's).
+
+Acceptance was mechanical: both four-gate builds pass with the REGEN
+gate **byte-identical** — the refactor provably changed no output. The
+loop fragment (§6f's emitter work) will be written over this kit; if
+lowergen itself grows unwieldy with it, the next split is per-fragment
+files over the same kit.
+
 ## 7. Open questions (the back-and-forth queue)
 
 1. ~~The statement-generator enforcement mechanism~~ RESOLVED by P4a:

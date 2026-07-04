@@ -1,0 +1,185 @@
+;;; tools/low/proof — the lowering library's proof-form templates: the
+;;; wrap32_id discharge event (a named have + all-occurrences rewrite —
+;;; the sharing-proof pattern), the stage-law flush (pending events
+;;; collapse at each call site while everything materialized is on the
+;;; lhs), the call_bridge citation builders, and the link-derivation
+;;; discharge templates (behavior premises by shipped-cert citation).
+;;; Everything here renders PROOF text over tools/low/schema's canonical
+;;; exprs and premise layouts.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "doc.shard")
+(import "schema.shard")
+
+(use (:: kernel term Expr))
+(use (:: tools low doc *))
+(use (:: tools low schema *))
+
+;; ---- the wrap32_id discharge event ------------------------------------------------
+
+;; one discharge event: (have wJ …) citing wrap32_id once, its range
+;; premises at indices klo/khi, then an all-occurrences rewrite of the
+;; have fact (constant proof cost per node regardless of fan-out)
+(fn wrap_event ((e Expr) (klo Int) (khi Int) (j Int)) Doc
+  (dcat3
+    (dcat3
+      (dcat3 (DStr "(have w") (dint j) (DStr " (= (mod "))
+      (dcat3 (pr_e e) (DStr " 4294967296) ") (pr_e e))
+      (DStr ") (rewrite-with (lemma wrap32_id) lr lhs ((inst x "))
+    (dcat3
+      (DCat (pr_e e) (DStr ")) "))
+      (dcat3
+        (DStr "((steps ((rewrite (premise ")
+        (dint klo)
+        (DStr ") lr lhs true ())) refl) "))
+      (dcat3
+        (DStr "(steps ((rewrite (premise ")
+        (dint khi)
+        (DStr ") lr lhs true ())) refl)) refl)) ")))
+    (dcat3
+      (DStr "(steps ((rewrite (premise w")
+      (dint j)
+      (DStr ") lr lhs true ()))) "))))
+
+;; premise pair from a node's position in a global PRE list (node k ->
+;; premises 2k / 2k+1 — the pure fragment's positional layout)
+(fn pr_event ((e Expr) (pres (List Expr)) (j Int)) Doc
+  (let ((k (pres_ix (spell e) pres 0))) (wrap_event e (* 2 k) (+ (* 2 k) 1) j)))
+
+;; premise pair from the PItem layout (wrap pairs after the three fixed
+;; portable slots — the mem fragment's discovery-order layout)
+(fn m_event ((e Expr) (pres (List PItem)) (j Int)) Doc
+  (let ((k (wrap_ix (spell e) pres 3))) (wrap_event e k (+ k 1) j)))
+
+;; ---- the stage-law flush ----------------------------------------------------------
+
+(fn m_flush_go ((ns (List Expr)) (pres (List PItem)) (j Int)) (Pair Doc Int)
+  (measure (struct ns))
+  (match ns
+    (Nil (Pair (DStr "") j))
+    ((Cons e t)
+     (match (m_flush_go t pres (+ j 1))
+       ((Pair d j2) (Pair (DCat (m_event e pres j) d) j2))))))
+
+;; flush the pending wrap events (dedup within the stage, walk order =
+;; postorder — children collapse before parents read them)
+(fn m_flush ((pend (List Expr)) (pres (List PItem)) (j Int)) (Pair Doc Int)
+  (m_flush_go (add_unique pend Nil) pres j))
+
+(fn m_stage_open () Doc (DStr "(steps ((compute lhs (stop eval_call)))) "))
+
+;; ---- the call_bridge citation builders --------------------------------------------
+
+(fn m_bridge_head () Doc
+  (DStr "(rewrite-with (lemma call_bridge) lr lhs ((inst f "))
+
+;; bridge premises 0-3: func_at via the spine premise, pop_n/arity via the
+;; callee's arity premise (index aix), wrev by compute
+(fn m_bridge_pre ((aix Int)) Doc
+  (dcat3
+    (dcat3
+      (DStr
+        "((steps ((rewrite (premise 0) lr lhs true ()) (compute both)) refl) (steps ((rewrite (premise ")
+      (dint aix)
+      (DStr ") lr lhs true ()) (compute both)) refl) "))
+    (dcat3
+      (DStr "(steps ((compute both)) refl) (steps ((rewrite (premise ")
+      (dint aix)
+      (DStr ") lr lhs true ()) (compute both)) refl) "))
+    (DStr "")))
+
+;; the run-premise sub-proof: THE behavior premise, verbatim
+(fn m_run_sub ((bidx Int)) Doc
+  (dcat3
+    (DStr "(steps ((rewrite (premise ")
+    (dint bidx)
+    (DStr ") lr lhs true ())) refl)")))
+
+;; the read bridge: f = the abstract slot-0 binder; the run premise is the
+;; site's behavior premise (v1: every read happens at the initial memory)
+(fn m_bridge_get ((addr Expr) (below (List Expr)) (rnode Expr) (bidx Int)) Doc
+  (dcat3
+    (dcat3
+      (dcat3 (m_bridge_head) (DStr "f0") (DStr ") (inst popped (Cons "))
+      (dcat3 (pr_e addr) (DStr " Nil)) (inst rest ") (stack_spell below))
+      (dcat3 (DStr ") (inst args (Cons ") (pr_e addr) (DStr " Nil)) (inst v ")))
+    (dcat3 (pr_e rnode) (DStr ") (inst mem2 m0)) ") (m_bridge_pre 1))
+    (dcat3 (m_run_sub bidx) (DStr ")) ") (DStr ""))))
+
+;; the write bridge: f = the abstract slot-1 binder
+(fn m_bridge_set ((addr Expr) (val Expr) (below (List Expr)) (bidx Int)) Doc
+  (dcat3
+    (dcat3
+      (dcat3 (m_bridge_head) (DStr "f1") (DStr ") (inst popped (Cons "))
+      (dcat3 (pr_e val) (DStr " (Cons ") (pr_e addr))
+      (dcat3
+        (DStr " Nil))) (inst rest ")
+        (stack_spell below)
+        (DStr ") (inst args (Cons ")))
+    (dcat3
+      (dcat3 (pr_e addr) (DStr " (Cons ") (pr_e val))
+      (dcat3 (DStr " Nil))) (inst v ") (pr_e val) (DStr ""))
+      (dcat3
+        (DStr ") (inst mem2 (mem_set m0 ")
+        (pr_e addr)
+        (DCat (sp) (pr_e val))))
+    (dcat3
+      (DCat (DStr "))) ") (m_bridge_pre 2))
+      (dcat3 (m_run_sub bidx) (DStr ")) ") (DStr ""))
+      (DStr ""))))
+
+;; ---- link-derivation discharge templates ------------------------------------------
+
+;; discharge one behavior premise by citing a shipped callee cert, its
+;; two premises from the linked cert's address pair k
+(fn link_beh ((cert (List Int)) (k Int)) Doc
+  (dcat3
+    (dcat3 (DStr "(rewrite-with (lemma ") (DStr cert) (DStr ") lr lhs () "))
+    (dcat3
+      (dcat3
+        (DStr "((steps ((rewrite (premise ")
+        (dint (* 2 k))
+        (DStr ") lr lhs true ())) refl) "))
+      (dcat3
+        (DStr "(steps ((rewrite (premise ")
+        (dint (+ (* 2 k) 1))
+        (DStr ") lr lhs true ())) refl)) "))
+      (DStr ""))
+    (DStr "refl) ")))
+
+;; sub-proofs for the portable cert's item premises, in item order;
+;; wb = the linked premise index where the wrap pairs start; getc/setc =
+;; the shipped cert names for slot-0 reads / slot-1 writes
+(fn link_subs
+  ((ps (List PItem))
+   (as (List Expr))
+   (wb Int)
+   (w Int)
+   (getc (List Int))
+   (setc (List Int)))
+  Doc
+  (measure (struct ps))
+  (match ps
+    (Nil (DStr ""))
+    ((Cons h t)
+     (match h
+       ((PWrap _)
+        (dcat3
+          (dcat3
+            (DStr "(steps ((rewrite (premise ")
+            (dint (+ wb (* 2 w)))
+            (DStr ") lr lhs true ())) refl) "))
+          (dcat3
+            (DStr "(steps ((rewrite (premise ")
+            (dint (+ (+ wb (* 2 w)) 1))
+            (DStr ") lr lhs true ())) refl) "))
+          (link_subs t as wb (+ w 1) getc setc)))
+       ((PGet a _)
+        (DCat
+          (link_beh getc (pres_ix (spell a) as 0))
+          (link_subs t as wb w getc setc)))
+       ((PSet a _ _)
+        (DCat
+          (link_beh setc (pres_ix (spell a) as 0))
+          (link_subs t as wb w getc setc)))))))
