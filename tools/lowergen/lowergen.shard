@@ -679,57 +679,88 @@
        (sym_list_eq mp (Cons (quote std) (Cons (quote mem) Nil)))
        False))))
 
-;; tagged PRE entries: True = wrap bounds (arith node), False = address
-;; bounds (mem op address). Dedup key is (kind, spelling) — a spelling
-;; used both as an address and as an arith value carries both pairs.
-(fn mpres_seen ((kind Bool) (s (List Int)) (ps (List (Pair Bool Expr)))) Bool
-  (measure (struct ps))
-  (match ps
-    (Nil False)
-    ((Cons (Pair k e) t)
-     (if (bool_eq k kind) (if (chars_eq s (spell e)) True (mpres_seen kind s t))
-     (mpres_seen kind s t)))))
+;; tagged premise items, DISCOVERY order. The portable premise layout:
+;;   0            the funcs SPINE (module shape, callee slots abstract)
+;;   1 / 2        callee arities (params_of f0 = 1 / params_of f1 = 2)
+;;   3..          the items below, each claiming its slot(s):
+;;     PWrap E      2 slots — wrap bounds for an arith node
+;;     PGet A K     1 slot  — slot-0 behavior at site fuel (S^ K c)
+;;     PSet A V K   1 slot  — slot-1 behavior at site fuel (S^ K c)
+;; Behavior premises are PER SITE (fuels differ), never deduped; wraps
+;; dedup by spelling (a recompute re-FIRES the event but reuses the pair).
+(type PItem (PWrap Expr) (PGet Expr Int) (PSet Expr Expr Int))
 
-(fn bool_eq ((a Bool) (b Bool)) Bool (if a b (if b False True)))
+(fn pit_slots ((p PItem)) Int
+  (match p
+    ((PWrap _) 2)
+    ((PGet _ _) 1)
+    ((PSet _ _ _) 1)))
 
-(fn mpres_add ((kind Bool) (e Expr) (ps (List (Pair Bool Expr))))
-  (List (Pair Bool Expr))
-  (measure (struct ps))
-  (match ps
-    (Nil (Cons (Pair kind e) Nil))
-    ((Cons h t) (Cons h (mpres_add kind e t)))))
-
-(fn mpres_ix ((kind Bool) (s (List Int)) (ps (List (Pair Bool Expr))) (k Int))
-  Int
+(fn poff ((ps (List PItem))) Int
   (measure (struct ps))
   (match ps
     (Nil 0)
-    ((Cons (Pair kk e) t)
-     (if (bool_eq kk kind)
-       (if (chars_eq s (spell e)) k (mpres_ix kind s t (+ k 1)))
-       (mpres_ix kind s t (+ k 1))))))
+    ((Cons h t) (+ (pit_slots h) (poff t)))))
 
-;; the PRE premises over the tagged list: wrap pair / address pair
-(fn m_prems ((ps (List (Pair Bool Expr)))) Doc
+(fn wrap_seen ((s (List Int)) (ps (List PItem))) Bool
+  (measure (struct ps))
+  (match ps
+    (Nil False)
+    ((Cons h t)
+     (match h
+       ((PWrap e) (if (chars_eq s (spell e)) True (wrap_seen s t)))
+       (_ (wrap_seen s t))))))
+
+;; premise index of the FIRST slot of the wrap pair for this spelling
+(fn wrap_ix ((s (List Int)) (ps (List PItem)) (acc Int)) Int
+  (measure (struct ps))
+  (match ps
+    (Nil 0)
+    ((Cons h t)
+     (match h
+       ((PWrap e) (if (chars_eq s (spell e)) acc (wrap_ix s t (+ acc 2))))
+       (_ (wrap_ix s t (+ acc (pit_slots h))))))))
+
+(fn pit_add ((ps (List PItem)) (p PItem)) (List PItem)
+  (measure (struct ps))
+  (match ps
+    (Nil (Cons p Nil))
+    ((Cons h t) (Cons h (pit_add t p)))))
+
+;; the portable premise text for one item
+(fn pit_prem ((p PItem)) Doc
+  (match p
+    ((PWrap e)
+     (dcat3
+       (dcat3 (DStr "(= (le 0 ") (pr_e e) (DStr ") True) "))
+       (dcat3 (DStr "(= (lt ") (pr_e e) (DStr " 4294967296) True) "))
+       (DStr "")))
+    ((PGet a k)
+     (dcat3
+       (dcat3 (DStr "(= (call_fn_mem (S^ ") (dint k) (DStr " c) m 0 (Cons "))
+       (dcat3 (pr_e a) (DStr " Nil) m0) (Some (Pair (mem_get m0 ") (pr_e a))
+       (DStr ") m0))) ")))
+    ((PSet a v k)
+     (dcat3
+       (dcat3 (DStr "(= (call_fn_mem (S^ ") (dint k) (DStr " c) m 1 (Cons "))
+       (dcat3
+         (dcat3 (pr_e a) (DStr " (Cons ") (pr_e v))
+         (DStr " Nil)) m0) (Some (Pair ")
+         (pr_e v))
+       (dcat3
+         (DStr " (mem_set m0 ")
+         (DCat (pr_e a) (DCat (sp) (pr_e v)))
+         (DStr ")))) "))))))
+
+(fn pits_prems ((ps (List PItem))) Doc
   (measure (struct ps))
   (match ps
     (Nil (DStr ""))
-    ((Cons (Pair kind e) rest)
-     (DCat
-       (if kind
-         (dcat3
-           (dcat3 (DStr "(= (le 0 ") (pr_e e) (DStr ") True) "))
-           (dcat3 (DStr "(= (lt ") (pr_e e) (DStr " 4294967296) True) "))
-           (DStr ""))
-         (dcat3
-           (dcat3 (DStr "(= (le 0 ") (pr_e e) (DStr ") True) "))
-           (dcat3 (DStr "(= (le (+ ") (pr_e e) (DStr " 1) 65536) True) "))
-           (DStr "")))
-       (m_prems rest)))))
+    ((Cons h t) (DCat (pit_prem h) (pits_prems t)))))
 
-;; one wrap discharge event over the tagged PRE list (pr_event's twin)
-(fn m_event ((e Expr) (pres (List (Pair Bool Expr))) (j Int)) Doc
-  (let ((k (mpres_ix True (spell e) pres 0)))
+;; one wrap discharge event; premise pair looked up in the item list
+(fn m_event ((e Expr) (pres (List PItem)) (j Int)) Doc
+  (let ((k (wrap_ix (spell e) pres 3)))
     (dcat3
       (dcat3
         (dcat3 (DStr "(have w") (dint j) (DStr " (= (mod "))
@@ -739,11 +770,11 @@
         (DCat (pr_e e) (DStr ")) "))
         (dcat3
           (DStr "((steps ((rewrite (premise ")
-          (dint (* 2 k))
+          (dint k)
           (DStr ") lr lhs true ())) refl) "))
         (dcat3
           (DStr "(steps ((rewrite (premise ")
-          (dint (+ (* 2 k) 1))
+          (dint (+ k 1))
           (DStr ") lr lhs true ())) refl)) refl)) ")))
       (dcat3
         (DStr "(steps ((rewrite (premise w")
@@ -758,8 +789,7 @@
     (Nil acc)
     ((Cons h t) (m_dedup t (if (node_seen (spell h) acc) acc (node_add h acc))))))
 
-(fn m_flush_go ((ns (List Expr)) (pres (List (Pair Bool Expr))) (j Int))
-  (Pair Doc Int)
+(fn m_flush_go ((ns (List Expr)) (pres (List PItem)) (j Int)) (Pair Doc Int)
   (measure (struct ns))
   (match ns
     (Nil (Pair (DStr "") j))
@@ -767,8 +797,7 @@
      (match (m_flush_go t pres (+ j 1))
        ((Pair d j2) (Pair (DCat (m_event e pres j) d) j2))))))
 
-(fn m_flush ((pend (List Expr)) (pres (List (Pair Bool Expr))) (j Int))
-  (Pair Doc Int)
+(fn m_flush ((pend (List Expr)) (pres (List PItem)) (j Int)) (Pair Doc Int)
   (m_flush_go (m_dedup pend Nil) pres j))
 
 ;; the symbolic stack, spelled as a Cons chain (top first)
@@ -779,72 +808,63 @@
     ((Cons h t)
      (dcat3 (dcat3 (DStr "(Cons ") (pr_e h) (sp)) (stack_spell t) (DStr ")")))))
 
-;; the run-premise sub-proof: cite the callee's shipped cert, its two
-;; premises discharged by this cert's own PRE pair for the address
-(fn m_run_sub ((cert (List Int)) (k Int)) Doc
-  (dcat3
-    (dcat3 (DStr "(rewrite-with (lemma ") (DStr cert) (DStr ") lr lhs () "))
-    (dcat3
-      (dcat3
-        (DStr "((steps ((rewrite (premise ")
-        (dint (* 2 k))
-        (DStr ") lr lhs true ())) refl) "))
-      (dcat3
-        (DStr "(steps ((rewrite (premise ")
-        (dint (+ (* 2 k) 1))
-        (DStr ") lr lhs true ())) refl)) "))
-      (DStr ""))
-    (DStr "refl)")))
-
 (fn m_bridge_head () Doc
   (DStr "(rewrite-with (lemma call_bridge) lr lhs ((inst f "))
 
-(fn m_bridge_subs4 () Doc
-  (DStr
-    "((steps ((compute both)) refl) (steps ((compute both)) refl) (steps ((compute both)) refl) (steps ((compute both)) refl) "))
-
-;; the read bridge: popped/args = the address, v = the read, mem2 = m0
-;; (v1: every read happens at the initial memory — writes are trailing)
-(fn m_bridge_get
-  ((addr Expr) (below (List Expr)) (rnode Expr) (pres (List (Pair Bool Expr))))
-  Doc
-  (let ((k (mpres_ix False (spell addr) pres 0)))
+;; bridge premises 0-3: func_at via the spine premise, pop_n/arity via the
+;; callee's arity premise (index aix), wrev by compute
+(fn m_bridge_pre ((aix Int)) Doc
+  (dcat3
     (dcat3
-      (dcat3
-        (dcat3 (m_bridge_head) (mget_lit) (DStr ") (inst popped (Cons "))
-        (dcat3 (pr_e addr) (DStr " Nil)) (inst rest ") (stack_spell below))
-        (dcat3
-          (DStr ") (inst args (Cons ")
-          (pr_e addr)
-          (DStr " Nil)) (inst v ")))
-      (dcat3 (pr_e rnode) (DStr ") (inst mem2 m0)) ") (m_bridge_subs4))
-      (dcat3 (m_run_sub "lowered_mem_get" k) (DStr ")) ") (DStr "")))))
-
-;; the write bridge: popped = value then address, v = the raw value,
-;; mem2 = the spec-level store
-(fn m_bridge_set
-  ((addr Expr) (val Expr) (below (List Expr)) (pres (List (Pair Bool Expr))))
-  Doc
-  (let ((k (mpres_ix False (spell addr) pres 0)))
+      (DStr
+        "((steps ((rewrite (premise 0) lr lhs true ()) (compute both)) refl) (steps ((rewrite (premise ")
+      (dint aix)
+      (DStr ") lr lhs true ()) (compute both)) refl) "))
     (dcat3
+      (DStr "(steps ((compute both)) refl) (steps ((rewrite (premise ")
+      (dint aix)
+      (DStr ") lr lhs true ()) (compute both)) refl) "))
+    (DStr "")))
+
+;; the run-premise sub-proof: THE behavior premise, verbatim
+(fn m_run_sub ((bidx Int)) Doc
+  (dcat3
+    (DStr "(steps ((rewrite (premise ")
+    (dint bidx)
+    (DStr ") lr lhs true ())) refl)")))
+
+;; the read bridge: f = the abstract slot-0 binder; the run premise is the
+;; site's behavior premise (v1: every read happens at the initial memory)
+(fn m_bridge_get ((addr Expr) (below (List Expr)) (rnode Expr) (bidx Int)) Doc
+  (dcat3
+    (dcat3
+      (dcat3 (m_bridge_head) (DStr "f0") (DStr ") (inst popped (Cons "))
+      (dcat3 (pr_e addr) (DStr " Nil)) (inst rest ") (stack_spell below))
+      (dcat3 (DStr ") (inst args (Cons ") (pr_e addr) (DStr " Nil)) (inst v ")))
+    (dcat3 (pr_e rnode) (DStr ") (inst mem2 m0)) ") (m_bridge_pre 1))
+    (dcat3 (m_run_sub bidx) (DStr ")) ") (DStr ""))))
+
+;; the write bridge: f = the abstract slot-1 binder
+(fn m_bridge_set ((addr Expr) (val Expr) (below (List Expr)) (bidx Int)) Doc
+  (dcat3
+    (dcat3
+      (dcat3 (m_bridge_head) (DStr "f1") (DStr ") (inst popped (Cons "))
+      (dcat3 (pr_e val) (DStr " (Cons ") (pr_e addr))
       (dcat3
-        (dcat3 (m_bridge_head) (mset_lit) (DStr ") (inst popped (Cons "))
-        (dcat3 (pr_e val) (DStr " (Cons ") (pr_e addr))
-        (dcat3
-          (DStr " Nil))) (inst rest ")
-          (stack_spell below)
-          (DStr ") (inst args (Cons ")))
+        (DStr " Nil))) (inst rest ")
+        (stack_spell below)
+        (DStr ") (inst args (Cons ")))
+    (dcat3
+      (dcat3 (pr_e addr) (DStr " (Cons ") (pr_e val))
+      (dcat3 (DStr " Nil))) (inst v ") (pr_e val) (DStr ""))
       (dcat3
-        (dcat3 (pr_e addr) (DStr " (Cons ") (pr_e val))
-        (dcat3 (DStr " Nil))) (inst v ") (pr_e val) (DStr ""))
-        (dcat3
-          (DStr ") (inst mem2 (mem_set m0 ")
-          (pr_e addr)
-          (DCat (sp) (pr_e val))))
-      (dcat3
-        (DCat (DStr "))) ") (m_bridge_subs4))
-        (dcat3 (m_run_sub "lowered_mem_set" k) (DStr ")) ") (DStr ""))
-        (DStr "")))))
+        (DStr ") (inst mem2 (mem_set m0 ")
+        (pr_e addr)
+        (DCat (sp) (pr_e val))))
+    (dcat3
+      (DCat (DStr "))) ") (m_bridge_pre 2))
+      (dcat3 (m_run_sub bidx) (DStr ")) ") (DStr ""))
+      (DStr ""))))
 
 (fn m_stage_open () Doc (DStr "(steps ((compute lhs (stop eval_call)))) "))
 
@@ -861,7 +881,7 @@
     (List Expr)
     Doc
     Int
-    (List (Pair Bool Expr))
+    (List PItem)
     (List Expr)
     Int
     Int))
@@ -877,7 +897,7 @@
        ((Some _) False)))
     (_ False)))
 
-(fn mg_e ((n Int) (env (List (Pair Expr Int))) (st MSt) (e Expr)) MRes
+(fn mg_e ((n Int) (nn Int) (env (List (Pair Expr Int))) (st MSt) (e Expr)) MRes
   (measure (struct e))
   (match st
     ((MkMSt code cnt nxt stk prf j pres pend gets sets)
@@ -951,10 +971,10 @@
           ((Some opd)
            (match as
              ((Cons a (Cons b Nil))
-              (match (mg_e n env st a)
+              (match (mg_e n nn env st a)
                 ((MErr m) (MErr m))
                 ((MOk st1 cea)
-                 (match (mg_e n env st1 b)
+                 (match (mg_e n nn env st1 b)
                    ((MErr m) (MErr m))
                    ((MOk st2 ceb)
                     (let ((node (Call q (Cons cea (Cons ceb Nil)))))
@@ -975,8 +995,8 @@
                                   (Cons node below)
                                   p2
                                   j2
-                                  (if (mpres_seen True (spell node) pr2) pr2
-                                  (mpres_add True node pr2))
+                                  (if (wrap_seen (spell node) pr2) pr2
+                                  (pit_add pr2 (PWrap node)))
                                   (dapp_e pd2 (Cons node Nil))
                                   g2
                                   w2)
@@ -990,7 +1010,7 @@
               (match as
                 ((Cons marg (Cons addr Nil))
                  (if (is_mem_param marg env n)
-                   (match (mg_e n env st addr)
+                   (match (mg_e n nn env st addr)
                      ((MErr m) (MErr m))
                      ((MOk st1 cea)
                       (match st1
@@ -998,9 +1018,7 @@
                          (match s1
                            ((Cons _ below)
                             (let
-                              ((pr1b
-                                 (if (mpres_seen False (spell cea) pr1) pr1
-                                 (mpres_add False cea pr1))))
+                              ((pr1b (pit_add pr1 (PGet cea (- nn (+ n1 3))))))
                               (match (m_flush pd1 pr1b j1)
                                 ((Pair evd j2)
                                  (let
@@ -1017,7 +1035,11 @@
                                        (dcat3
                                          p1
                                          (DCat (m_stage_open) evd)
-                                         (m_bridge_get cea below rnode pr1b))
+                                         (m_bridge_get
+                                           cea
+                                           below
+                                           rnode
+                                           (+ 3 (poff pr1))))
                                        j2
                                        pr1b
                                        Nil
@@ -1034,7 +1056,7 @@
        ((Let bs body)
         (match bs
           ((Cons rhs Nil)
-           (match (mg_e n env st rhs)
+           (match (mg_e n nn env st rhs)
              ((MErr m) (MErr m))
              ((MOk st1 cer)
               (match st1
@@ -1043,6 +1065,7 @@
                    ((Cons _ below)
                     (mg_e
                       n
+                      nn
                       (Cons (Pair cer x1) env)
                       (MkMSt
                         (dapp
@@ -1067,13 +1090,14 @@
            "body outside the mem fragment (straight-line + lets; no if yet)"))))))
 
 ;; the Mem-returning tail: lets above a single trailing mem_set
-(fn mg_tail ((n Int) (env (List (Pair Expr Int))) (st MSt) (e Expr)) MRes
+(fn mg_tail ((n Int) (nn Int) (env (List (Pair Expr Int))) (st MSt) (e Expr))
+  MRes
   (measure (struct e))
   (match e
     ((Let bs body)
      (match bs
        ((Cons rhs Nil)
-        (match (mg_e n env st rhs)
+        (match (mg_e n nn env st rhs)
           ((MErr m) (MErr m))
           ((MOk st1 cer)
            (match st1
@@ -1082,6 +1106,7 @@
                 ((Cons _ below)
                  (mg_tail
                    n
+                   nn
                    (Cons (Pair cer x1) env)
                    (MkMSt
                      (dapp
@@ -1106,10 +1131,10 @@
        (match as
          ((Cons marg (Cons addr (Cons val Nil)))
           (if (is_mem_param marg env n)
-            (match (mg_e n env st addr)
+            (match (mg_e n nn env st addr)
               ((MErr m) (MErr m))
               ((MOk st1 cea)
-               (match (mg_e n env st1 val)
+               (match (mg_e n nn env st1 val)
                  ((MErr m) (MErr m))
                  ((MOk st2 cev)
                   (match st2
@@ -1117,9 +1142,7 @@
                      (match s2
                        ((Cons _ (Cons _ below))
                         (let
-                          ((pr2b
-                             (if (mpres_seen False (spell cea) pr2) pr2
-                             (mpres_add False cea pr2))))
+                          ((pr2b (pit_add pr2 (PSet cea cev (- nn (+ n2 3))))))
                           (match (m_flush pd2 pr2b j2)
                             ((Pair evd j3)
                              (MOk
@@ -1131,7 +1154,7 @@
                                  (dcat3
                                    p2
                                    (DCat (m_stage_open) evd)
-                                   (m_bridge_set cea cev below pr2b))
+                                   (m_bridge_set cea cev below (+ 3 (poff pr2))))
                                  j3
                                  pr2b
                                  Nil
@@ -1196,7 +1219,7 @@
        (dcat3 (DStr "(= (lt ") (pr_e e) (DStr " 4294967296) True) "))
        (pr_prems rest)))))
 
-(type CRes (COk Doc) (CErr (List Int)))
+(type CRes (COk Doc Doc) (CErr (List Int)))
 
 (fn is_mem_ty ((t Type)) Bool
   (match t
@@ -1213,17 +1236,32 @@
     (pr_args_lead ints)
     (DStr ")")))
 
-;; assemble the mem claim: statement + staged proof chain
-(fn m_claim
+;; the SELF function literal (from the code walk)
+(fn m_self_lit ((n Int) (nxt Int) (code (List Doc))) Doc
+  (dcat3
+    (dcat3 (DStr "(MkFunc ") (dint (- n 1)) (sp))
+    (dcat3 (dint (- nxt (- n 1))) (DStr " (list ") (djoin code))
+    (DStr "))")))
+
+;; the RHS: value slot + the SPEC application (memory slot for Mem fns)
+(fn m_rhs ((q QName) (ints (List Type)) (rty Type) (ce Expr)) Doc
+  (if (is_int_ty rty)
+    (dcat3 (DStr "(Some (Pair ") (m_spec_app q ints) (DStr " m0))"))
+    (dcat3
+      (dcat3 (DStr "(Some (Pair ") (pr_e ce) (sp))
+      (m_spec_app q ints)
+      (DStr "))"))))
+
+;; the PORTABLE claim (the primary cert): module abstract, callee slots
+;; abstract binders, premises = spine + arities + the item list. The
+;; callee bytes appear NOWHERE — a callee edit leaves this file byte-
+;; identical; only the linked derivation regenerates.
+(fn m_claim_port
   ((q QName)
    (ints (List Type))
-   (n Int)
-   (cnt Int)
-   (nxt Int)
-   (gets Int)
-   (sets Int)
-   (pres (List (Pair Bool Expr)))
-   (code (List Doc))
+   (nn Int)
+   (self Doc)
+   (pres (List PItem))
    (rhs Doc)
    (prf Doc)
    (evd Doc))
@@ -1236,30 +1274,175 @@
         (dcat3
           (DStr " (goal (")
           (pr_binds ints 0)
-          (DStr "(m0 Mem) (c Nat) (restfs (List Func))) (")))
-      (m_prems pres)
-      (dcat3
-        (dcat3
-          (DStr ") (= (call_fn_mem (S^ ")
-          (dint (+ (* 2 cnt) (+ 3 (+ (* 7 gets) (* 11 sets)))))
-          (DStr " c) (MkWModule (Cons "))
-        (dcat3 (mget_lit) (DStr " (Cons ") (mset_lit))
-        (dcat3
-          (dcat3 (DStr " (Cons (MkFunc ") (dint (- n 1)) (sp))
-          (dcat3 (dint (- nxt (- n 1))) (DStr " (list ") (djoin code))
-          (DStr ")) restfs))) 65536) 2 (list "))))
+          (DStr
+            "(m0 Mem) (m WModule) (f0 Func) (f1 Func) (restm (List Func)) (c Nat)) ((= (funcs_of m) (Cons f0 (Cons f1 (Cons ")))
+      (DCat self (DStr " restm)))) (= (params_of f0) 1) (= (params_of f1) 2) "))
+      (pits_prems pres))
     (dcat3
+      (dcat3 (DStr ") (= (call_fn_mem (S^ ") (dint nn) (DStr " c) m 2 (list "))
       (dcat3 (pr_args ints 0) (DStr ") m0) ") rhs)
       (dcat3
         (dcat3
-          (DStr ")) (chain (steps ((unfold ")
+          (DStr
+            ")) (chain (steps ((compute lhs (stop eval_call funcs_of)) (rewrite (premise 0) lr lhs true ()) (unfold ")
           (dsym (qn_name q))
           (DStr " rhs) (reduce rhs))) "))
         prf
-        (DStr "(steps ((compute lhs))) "))
-      (dcat3 evd (DStr "refl))") (DStr (nl))))
-    (DStr "")))
+        (DStr "(steps ((compute lhs))) ")))
+    (dcat3 evd (DStr "refl))") (DStr (nl)))))
 
+;; ---- the LINKED derivation (the artifact form, derived by citation) ------------
+
+;; unique addresses among the behavior items, first-use order
+(fn addrs_of ((ps (List PItem)) (acc (List Expr))) (List Expr)
+  (measure (struct ps))
+  (match ps
+    (Nil acc)
+    ((Cons h t)
+     (match h
+       ((PWrap _) (addrs_of t acc))
+       ((PGet a _)
+        (addrs_of t (if (node_seen (spell a) acc) acc (node_add a acc))))
+       ((PSet a _ _)
+        (addrs_of t (if (node_seen (spell a) acc) acc (node_add a acc))))))))
+
+(fn addr_count ((as (List Expr))) Int
+  (measure (struct as))
+  (match as
+    (Nil 0)
+    ((Cons _ t) (+ 1 (addr_count t)))))
+
+;; the linked cert's own premises: an address pair per unique address,
+;; then the wrap pairs (discovery order)
+(fn link_addr_prems ((as (List Expr))) Doc
+  (measure (struct as))
+  (match as
+    (Nil (DStr ""))
+    ((Cons a t)
+     (dcat3
+       (dcat3 (DStr "(= (le 0 ") (pr_e a) (DStr ") True) "))
+       (dcat3 (DStr "(= (le (+ ") (pr_e a) (DStr " 1) 65536) True) "))
+       (link_addr_prems t)))))
+
+(fn link_wrap_prems ((ps (List PItem))) Doc
+  (measure (struct ps))
+  (match ps
+    (Nil (DStr ""))
+    ((Cons h t)
+     (match h
+       ((PWrap e)
+        (dcat3
+          (dcat3 (DStr "(= (le 0 ") (pr_e e) (DStr ") True) "))
+          (dcat3 (DStr "(= (lt ") (pr_e e) (DStr " 4294967296) True) "))
+          (link_wrap_prems t)))
+       (_ (link_wrap_prems t))))))
+
+;; discharge one behavior premise by citing a shipped std/mem cert, its
+;; two premises from this cert's address pair k
+(fn link_beh ((cert (List Int)) (k Int)) Doc
+  (dcat3
+    (dcat3 (DStr "(rewrite-with (lemma ") (DStr cert) (DStr ") lr lhs () "))
+    (dcat3
+      (dcat3
+        (DStr "((steps ((rewrite (premise ")
+        (dint (* 2 k))
+        (DStr ") lr lhs true ())) refl) "))
+      (dcat3
+        (DStr "(steps ((rewrite (premise ")
+        (dint (+ (* 2 k) 1))
+        (DStr ") lr lhs true ())) refl)) "))
+      (DStr ""))
+    (DStr "refl) ")))
+
+;; sub-proofs for the portable cert's item premises, in item order;
+;; wb = the linked premise index where the wrap pairs start
+(fn link_subs ((ps (List PItem)) (as (List Expr)) (wb Int) (w Int)) Doc
+  (measure (struct ps))
+  (match ps
+    (Nil (DStr ""))
+    ((Cons h t)
+     (match h
+       ((PWrap _)
+        (dcat3
+          (dcat3
+            (DStr "(steps ((rewrite (premise ")
+            (dint (+ wb (* 2 w)))
+            (DStr ") lr lhs true ())) refl) "))
+          (dcat3
+            (DStr "(steps ((rewrite (premise ")
+            (dint (+ (+ wb (* 2 w)) 1))
+            (DStr ") lr lhs true ())) refl) "))
+          (link_subs t as wb (+ w 1))))
+       ((PGet a _)
+        (DCat
+          (link_beh "lowered_mem_get" (pres_ix (spell a) as 0))
+          (link_subs t as wb w)))
+       ((PSet a _ _)
+        (DCat
+          (link_beh "lowered_mem_set" (pres_ix (spell a) as 0))
+          (link_subs t as wb w)))))))
+
+;; the LINKED claim: the structural artifact statement, proven by ONE
+;; citation of the portable cert (zero interpreter steps)
+(fn m_claim_link
+  ((q QName)
+   (ints (List Type))
+   (nn Int)
+   (self Doc)
+   (pres (List PItem))
+   (rhs Doc))
+  Doc
+  (let ((as (addrs_of pres Nil)))
+    (dcat3
+      (dcat3
+        (dcat3
+          (DStr "(claim linked_")
+          (dsym (qn_name q))
+          (dcat3
+            (DStr " (goal (")
+            (pr_binds ints 0)
+            (DStr "(m0 Mem) (c Nat) (restfs (List Func))) (")))
+        (DCat (link_addr_prems as) (link_wrap_prems pres))
+        (dcat3
+          (dcat3
+            (DStr ") (= (call_fn_mem (S^ ")
+            (dint nn)
+            (DStr " c) (MkWModule (Cons "))
+          (dcat3 (mget_lit) (DStr " (Cons ") (mset_lit))
+          (dcat3
+            (DCat (DStr " (Cons ") self)
+            (DStr " restfs))) 65536) 2 (list ")
+            (DStr ""))))
+      (dcat3
+        (dcat3 (pr_args ints 0) (DStr ") m0) ") rhs)
+        (dcat3
+          (dcat3
+            (DStr ")) (chain (rewrite-with (lemma lowered_")
+            (dsym (qn_name q))
+            (DStr ") lr lhs ((inst m (MkWModule (Cons "))
+          (dcat3 (mget_lit) (DStr " (Cons ") (mset_lit))
+          (dcat3
+            (DCat (DStr " (Cons ") self)
+            (DStr " restfs))) 65536)) (inst f0 ")
+            (DStr "")))
+        (dcat3
+          (dcat3 (mget_lit) (DStr ") (inst f1 ") (mset_lit))
+          (DStr
+            ") (inst restm restfs)) ((steps ((compute both)) refl) (steps ((compute both)) refl) (steps ((compute both)) refl) ")
+          (link_subs pres as (* 2 (addr_count as)) 0)))
+      (dcat3 (DStr ")) refl))") (DStr (nl)) (DStr "")))))
+
+;; dispatch by return type, shared by both passes
+(fn mg_walk ((n Int) (nn Int) (rty Type) (body Expr)) MRes
+  (let ((st0 (MkMSt Nil 0 (- n 1) Nil (DStr "") 0 Nil Nil 0 0)))
+    (if (is_int_ty rty) (mg_e n nn Nil st0 body)
+    (if (is_mem_ty rty) (mg_tail n nn Nil st0 body)
+    (MErr "return type must be Int or Mem")))))
+
+;; TWO-PASS: behavior premises embed site fuels, which depend on the
+;; total tower — pass 1 counts, pass 2 emits. Budget: each call site is
+;; charged 2x its callee's tower + 1 (callee growth within 2x relinks
+;; without touching this cert).
 (fn emit_claim_mem ((f FnDef)) CRes
   (match f
     ((FnDef q ts rty body)
@@ -1268,62 +1451,30 @@
        ((Cons _ ints)
         (if (all_int ints)
           (let ((n (count_ts ts)))
-            (let ((st0 (MkMSt Nil 0 (- n 1) Nil (DStr "") 0 Nil Nil 0 0)))
-              (if (is_int_ty rty)
-                (match (mg_e n Nil st0 body)
-                  ((MErr m) (cerr_at q m))
-                  ((MOk st ce)
-                   (match st
-                     ((MkMSt code cnt nxt stk prf j pres pend gets sets)
-                      (if (int_eq gets 0)
-                        (cerr_at
-                          q
-                          "no memory operations (use the scalar fragment: drop the Mem param)")
-                        (match (m_flush pend pres j)
-                          ((Pair evd _)
-                           (COk
-                             (m_claim
-                               q
-                               ints
-                               n
-                               cnt
-                               nxt
-                               gets
-                               sets
-                               pres
-                               code
-                               (dcat3
-                                 (DStr "(Some (Pair ")
-                                 (m_spec_app q ints)
-                                 (DStr " m0))"))
-                               prf
-                               evd)))))))))
-              (if (is_mem_ty rty)
-                (match (mg_tail n Nil st0 body)
-                  ((MErr m) (cerr_at q m))
-                  ((MOk st cev)
-                   (match st
-                     ((MkMSt code cnt nxt stk prf j pres pend gets sets)
-                      (match (m_flush pend pres j)
-                        ((Pair evd _)
-                         (COk
-                           (m_claim
-                             q
-                             ints
-                             n
-                             cnt
-                             nxt
-                             gets
-                             sets
-                             pres
-                             code
-                             (dcat3
-                               (dcat3 (DStr "(Some (Pair ") (pr_e cev) (sp))
-                               (m_spec_app q ints)
-                               (DStr "))"))
-                             prf
-                             evd))))))))
-                (cerr_at q "return type must be Int or Mem")))))
+            (match (mg_walk n 0 rty body)
+              ((MErr m) (cerr_at q m))
+              ((MOk st1 ce1)
+               (match st1
+                 ((MkMSt cd1 cnt1 nx1 sk1 pf1 j1 pr1 pd1 gets1 sets1)
+                  (if (int_eq (+ gets1 sets1) 0)
+                    (cerr_at
+                      q
+                      "no memory operations (use the scalar fragment: drop the Mem param)")
+                    (let
+                      ((nn (+ (* 2 cnt1) (+ 3 (+ (* 13 gets1) (* 21 sets1))))))
+                      (match (mg_walk n nn rty body)
+                        ((MErr m) (cerr_at q m))
+                        ((MOk st ce)
+                         (match st
+                           ((MkMSt code cnt nxt stk prf j pres pend gets sets)
+                            (match (m_flush pend pres j)
+                              ((Pair evd _)
+                               (let ((self (m_self_lit n nxt code)))
+                                 (let ((rhs (m_rhs q ints rty ce)))
+                                   (COk
+                                     (m_claim_port q ints nn self pres rhs prf
+                                       evd)
+                                     (m_claim_link q ints nn self pres rhs)))))))))))))))))
           (cerr_at q "params after the Mem param must all be Int")))))))
 
 (fn emit_claim ((f FnDef)) CRes
@@ -1382,7 +1533,8 @@
                              (DStr " rhs) (reduce rhs))) "))
                            proof_body
                            (DStr "))"))))
-                     (DStr (nl)))))))))
+                     (DStr (nl)))
+                   (DStr "")))))))
          (CErr
            (append_int (chars_of_sym (qn_name q)) ": return type is not Int")))
        (CErr (append_int (chars_of_sym (qn_name q)) ": params are not all Int"))))))
@@ -1395,7 +1547,7 @@
 
 ;; ---- module walk -------------------------------------------------------------
 
-(type ERes (EOk Doc Bool) (EErr (List Int)))
+(type ERes (EOk Doc Doc Bool) (EErr (List Int)))
 
 (fn fn_is_mem ((f FnDef)) Bool
   (match f
@@ -1404,11 +1556,12 @@
        ((Cons t0 _) (is_mem_ty t0))
        (Nil False)))))
 
-(fn emit_fns ((fns (List FnDef)) (modpath (List Symbol)) (acc Doc) (memf Bool))
+(fn emit_fns
+  ((fns (List FnDef)) (modpath (List Symbol)) (accp Doc) (accl Doc) (memf Bool))
   ERes
   (measure (struct fns))
   (match fns
-    (Nil (EOk acc memf))
+    (Nil (EOk accp accl memf))
     ((Cons f rest)
      (match f
        ((FnDef q _ _ _)
@@ -1417,13 +1570,14 @@
            (if (sym_list_eq mp modpath)
              (match (emit_claim f)
                ((CErr m) (EErr m))
-               ((COk d)
+               ((COk dp dl)
                 (emit_fns
                   rest
                   modpath
-                  (DCat acc (DCat (DStr (nl)) d))
+                  (DCat accp (DCat (DStr (nl)) dp))
+                  (if (fn_is_mem f) (DCat accl (DCat (DStr (nl)) dl)) accl)
                   (if memf True (fn_is_mem f)))))
-             (emit_fns rest modpath acc memf)))))))))
+             (emit_fns rest modpath accp accl memf)))))))))
 
 (fn pr_modpath ((ms (List Symbol))) Doc
   (measure (struct ms))
@@ -1453,20 +1607,74 @@
       (if memf (dimport "../std/mem") (DStr ""))
       (dcat3
         (dimport "../models/wasm/wasm.shard")
-        (if memf (dimport "../std/mem/mem.wasm.shard") (DStr ""))
+        (DStr "")
         (dimport (basename_go target Nil))))
     (dcat3
       (DStr (append_int "(use (:: models wasm wasm *))" (nl)))
-      (if memf
-        (dcat3
-          (DStr (append_int "(use (:: std mem *))" (nl)))
-          (DStr (append_int "(use (:: std mem mem.wasm *))" (nl)))
-          (DStr ""))
-        (DStr ""))
+      (if memf (DStr (append_int "(use (:: std mem *))" (nl))) (DStr ""))
       (dcat3
         (DStr "(use (:: ")
         (pr_modpath (split_slash (until_dot target) Nil))
         (DStr (append_int " *))" (nl)))))))
+
+;; the LINKED file's header: needs the shipped certs AND the portable file
+(fn use_of ((path (List Int))) Doc
+  (dcat3
+    (DStr "(use (:: ")
+    (pr_modpath (split_slash (until_dot path) Nil))
+    (DStr (append_int " *))" (nl)))))
+
+(fn drop_last ((xs (List Symbol))) (List Symbol)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons _ Nil) Nil)
+    ((Cons h t) (Cons h (drop_last t)))))
+
+(fn sym_app ((a (List Symbol)) (b (List Symbol))) (List Symbol)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (sym_app t b)))))
+
+;; the module path of a SIBLING file imported by basename: the target's
+;; directory + the sibling's extension-stripped basename (raw outputs may
+;; be written anywhere; the committed file lands next to the target)
+(fn use_sibling ((target (List Int)) (path (List Int))) Doc
+  (dcat3
+    (DStr "(use (:: ")
+    (pr_modpath
+      (sym_app
+        (drop_last (split_slash (until_dot target) Nil))
+        (Cons (sym_of_chars (until_dot (basename_go path Nil))) Nil)))
+    (DStr (append_int " *))" (nl)))))
+
+(fn link_header ((target (List Int)) (portout (List Int))) Doc
+  (dcat3
+    (dcat3
+      (DStr
+        ";;; GENERATED by tools/lowergen (the LINKED derivations for the mem fragment) --")
+      (DStr (nl))
+      (dcat3
+        (DStr ";;; DO NOT EDIT; regenerate from ")
+        (DStr target)
+        (DStr (append_int "." (nl)))))
+    (dcat3
+      (dimport "../kernel/stdlib.shard")
+      (dimport "../std/mem")
+      (dcat3
+        (dimport "../models/wasm/wasm.shard")
+        (dimport "../std/mem/mem.wasm.shard")
+        (DCat
+          (dimport (basename_go portout Nil))
+          (dimport (basename_go target Nil)))))
+    (dcat3
+      (DStr (append_int "(use (:: models wasm wasm *))" (nl)))
+      (dcat3
+        (DStr (append_int "(use (:: std mem *))" (nl)))
+        (DStr (append_int "(use (:: std mem mem.wasm *))" (nl)))
+        (use_sibling target portout))
+      (use_of target))))
 
 ;; ---- driver ------------------------------------------------------------------
 
@@ -1483,7 +1691,18 @@
 (fn fail2 ((msg (List Int)) (w World)) World
   (exit 2 (write (append_int "error: " (append_int msg (nl))) w)))
 
-(fn gen_run ((target (List Int)) (out (List Int)) (w World)) World
+(fn wrote2 ((out (List Int)) (lo (List Int)) (w World)) World
+  (exit
+    0
+    (write
+      (append_int
+        "wrote "
+        (append_int out (append_int " " (append_int lo (nl)))))
+      w)))
+
+(fn gen_run
+  ((target (List Int)) (out (List Int)) (linko (Option (List Int))) (w World))
+  World
   (match (resolve_closure target True w)
     ((Pair Nil w1) (fail2 (append_int "cannot read closure of " target) w1))
     ((Pair srcs w1)
@@ -1498,25 +1717,47 @@
         (match m
           ((Module _ fns _ _ _)
            (match
-             (emit_fns fns (split_slash (until_dot target) Nil) (DStr "") False)
+             (emit_fns
+               fns
+               (split_slash (until_dot target) Nil)
+               (DStr "")
+               (DStr "")
+               False)
              ((EErr msg)
               (exit 1 (write (append_int "refused: " (append_int msg (nl))) w1)))
-             ((EOk body memf)
+             ((EOk bodyp bodyl memf)
               (match
                 (write_file
                   out
-                  (doc_flat (DCat (header target memf) body) Nil)
+                  (doc_flat (DCat (header target memf) bodyp) Nil)
                   w1)
                 ((Pair ok w2)
                  (if ok
-                   (exit
-                     0
-                     (write (append_int "wrote " (append_int out (nl))) w2))
+                   (if memf
+                     (match linko
+                       (None
+                         (fail2
+                           "mem-fragment fns present -- usage: lowergen SRC OUT LINKOUT"
+                           w2))
+                       ((Some lo)
+                        (match
+                          (write_file
+                            lo
+                            (doc_flat (DCat (link_header target out) bodyl) Nil)
+                            w2)
+                          ((Pair ok2 w3)
+                           (if ok2 (wrote2 out lo w3)
+                           (fail2 (append_int "cannot write " lo) w3))))))
+                     (exit
+                       0
+                       (write (append_int "wrote " (append_int out (nl))) w2)))
                    (fail2 (append_int "cannot write " out) w2)))))))))))))
 
 (fn main ((w World)) World
   (match (get_args w)
     ((Pair args w1)
      (match args
-       ((Cons target (Cons out Nil)) (gen_run target out w1))
-       (_ (fail2 "usage: lowergen SRC OUT" w1))))))
+       ((Cons target (Cons out Nil)) (gen_run target out None w1))
+       ((Cons target (Cons out (Cons lo Nil)))
+        (gen_run target out (Some lo) w1))
+       (_ (fail2 "usage: lowergen SRC OUT [LINKOUT]" w1))))))

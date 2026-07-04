@@ -366,12 +366,52 @@ answer to the `(inline …)` same-file rule).
   of the collapsed local); a RECOMPUTED spelling collects again and its
   event re-fires for the post-call materialization (`mg_sq` pins this).
 - `examples/lowergen_mem_src.shard` (9 fns: reads, let-sharing,
-  indirection, re-fire, store, copy, bump) → `lowergen_mem_out.shard`:
-  **all 9 machine-written proofs passed the kernel on first
-  generation**; `examples/lowbuild_mem.sh` = the four gates
+  indirection, re-fire, store, copy, bump): **all 9 machine-written
+  proofs passed the kernel on first generation**;
+  `examples/lowbuild_mem.sh` = the four gates
   (REGEN → SCHEMA → KERNEL → ENGINE, V8 11/11 incl. store-truncation
   and bump-wrap edges); build file `lowergen_mem_src.build.shard` uses
   spec-side expected values and readbacks throughout.
+
+### 6d. The PORTABLE cert form — RATIFIED and adopted (2026-07-04)
+
+The callee-coupling answer (probed in `examples/portcert_probe.shard`,
+adopted as the emitter default the same day). A consumer cert need not
+embed its callees' bytes; the emitter now produces TWO files:
+
+- **The portable file** (`lowergen_mem_port.shard`) — the PRIMARY
+  certs, `lowered_*`: the module is an abstract binder `(m WModule)`
+  with premises (0) the **funcs spine** `(= (funcs_of m) (Cons f0
+  (Cons f1 (Cons SELF-LITERAL restm))))` — callee slots abstract, only
+  the claim's own function a literal; (1,2) callee **arities**
+  (`call_bridge` needs the pop count, never a body); then per-site
+  **behavior equations** at each site's exact fuel spelling, and wrap
+  bounds, in discovery order. Callee implementation bytes appear
+  NOWHERE (grep-checkable) — a std/mem reimplementation leaves this
+  file byte-identical. Statement size is O(call sites), not
+  O(transitive callee closure).
+- **The linked file** (`lowergen_mem_link.shard`) — the DERIVED
+  artifact certs, `linked_*`: today's structural statements, proven by
+  ONE citation of the portable cert (spine/arity premises by compute,
+  behavior premises by citing std/mem's shipped certs, wrap bounds
+  passed through). Zero interpreter steps — when a callee's bytes
+  change, only this file regenerates and re-derives.
+
+Residual coupling = the **fuel budget**: behavior premises pin site
+towers, and at link each must dominate the callee's actual tower (the
+slack absorbs the difference by unification). The emitter charges each
+call site 2× its callee's tower + 1, so callee growth within 2×
+relinks without touching consumers; a budget miss fails the link
+derivation loudly and regenerating the one consumer fixes it.
+
+`tools/lowcheck` recognizes BOTH forms, classified by the conclusion's
+module slot (`MkWModule` literal = structural — linked artifacts and
+leaf certs like std/mem's; the symbol `m` = portable, with the
+spine/binder rules above). Build manifests point at the linked certs
+(the form tied to the shipped binary). Proof-side gotcha, pinned:
+record accessors unfold to matches under compute, so `funcs_of` rides
+the first compute's stop set — the spine premise's spelling must
+survive to be rewritten.
 
 ## 7. Open questions (the back-and-forth queue)
 

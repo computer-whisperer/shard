@@ -128,6 +128,35 @@
           (has_restfs rest)))
        (_ (has_restfs rest))))))
 
+;; binder list contains (NAME TYPE-SYM)?
+(fn has_bind ((bs (List SExpr)) (name Symbol) (tyname Symbol)) Bool
+  (measure (struct bs))
+  (match bs
+    (Nil False)
+    ((Cons b rest)
+     (match b
+       ((SList (Cons n (Cons ty Nil)))
+        (if (is_sym n name)
+          (if (is_sym ty tyname) True (has_bind rest name tyname))
+          (has_bind rest name tyname)))
+       (_ (has_bind rest name tyname))))))
+
+;; binder list contains (restm (List Func))?
+(fn has_restm ((bs (List SExpr))) Bool
+  (measure (struct bs))
+  (match bs
+    (Nil False)
+    ((Cons b rest)
+     (match b
+       ((SList (Cons n (Cons ty Nil)))
+        (if (is_sym n (quote restm))
+          (match ty
+            ((SList (Cons lh (Cons le2 Nil)))
+             (if (is_sym lh (quote List)) (is_sym le2 (quote Func)) False))
+            (_ False))
+          (has_restm rest)))
+       (_ (has_restm rest))))))
+
 ;; find the first call_fn / call_fn_mem application anywhere in the term
 (fn find_call ((s SExpr)) (Option (List SExpr))
   (measure (struct s))
@@ -220,6 +249,38 @@
        False))
     (_ False)))
 
+;; the portable funcs-SPINE chain: Cons of abstract slot symbols and/or
+;; MkFunc literals ending in restm; the slot at index IDX (the claim's own
+;; function) must be a LITERAL — that is the binary the cert is about
+(fn pchain_ok ((tbl (List (Pair Symbol SExpr))) (s SExpr) (k Int) (idx Int))
+  Bool
+  (measure (struct s))
+  (match s
+    ((SSym x) (sym_eq x (quote restm)))
+    ((SList (Cons h (Cons f (Cons tail Nil))))
+     (if (is_sym h (quote Cons))
+       (if (int_eq k idx)
+         (if (elem_mkfunc tbl f) (pchain_ok tbl tail (+ k 1) idx) False)
+         (match f
+           ((SSym _) (pchain_ok tbl tail (+ k 1) idx))
+           (_ (if (elem_mkfunc tbl f) (pchain_ok tbl tail (+ k 1) idx) False))))
+       False))
+    (_ False)))
+
+;; the portable module-shape premise: (= (funcs_of m) SPINE)
+(fn spine_ok ((tbl (List (Pair Symbol SExpr))) (prem SExpr) (idx Int)) Bool
+  (match prem
+    ((SList (Cons eq (Cons lhs (Cons chain Nil))))
+     (if (is_sym eq (quote =))
+       (match lhs
+         ((SList (Cons fh (Cons marg Nil)))
+          (if (is_sym fh (quote funcs_of))
+            (if (is_sym marg (quote m)) (pchain_ok tbl chain 0 idx) False)
+            False))
+         (_ False))
+       False))
+    (_ False)))
+
 ;; module slot: (MkWModule CHAIN MEMSIZE-literal)
 (fn wm_ok ((tbl (List (Pair Symbol SExpr))) (s SExpr)) Bool
   (match s
@@ -238,8 +299,32 @@
 
 ;; ---- per-claim verdict ------------------------------------------------------------
 
-;; validate the conclusion (= LHS RHS): all call-slot checks
-(fn concl_verdict ((tbl (List (Pair Symbol SExpr))) (concl SExpr)) (List Int)
+;; the PORTABLE form: abstract module binder, spine premise, restm tail
+(fn port_verdict
+  ((tbl (List (Pair Symbol SExpr))) (bs (List SExpr)) (prems SExpr) (idx SExpr))
+  (List Int)
+  (if (has_bind bs (quote m) (quote WModule))
+    (if (has_restm bs)
+      (match idx
+        ((SInt k)
+         (match prems
+           ((SList (Cons p0 _))
+            (if (spine_ok tbl p0 k) ""
+            "premise 0 is not the funcs spine (= (funcs_of m) (Cons ... own-literal ... restm)) with a literal at the claim's index"))
+           (_ "no premises — the funcs spine premise is missing")))
+        (_ "function index is not a literal"))
+      "no (restm (List Func)) binder — the portable linking provision is missing")
+    "module is abstract but there is no (m WModule) binder"))
+
+;; validate the conclusion (= LHS RHS), classifying by the module slot:
+;; MkWModule literal = the STRUCTURAL (linked/leaf) form; the symbol m =
+;; the PORTABLE form (callee slots abstract, behavior premises)
+(fn concl_verdict
+  ((tbl (List (Pair Symbol SExpr)))
+   (bs (List SExpr))
+   (prems SExpr)
+   (concl SExpr))
+  (List Int)
   (match concl
     ((SList (Cons eq (Cons lhs (Cons _ Nil))))
      (if (is_sym eq (quote =))
@@ -249,26 +334,31 @@
           (match items
             ((Cons _ (Cons fuel (Cons wm (Cons idx _))))
              (if (fuel_ok fuel)
-               (if (wm_ok tbl wm)
-                 (if (idx_ok idx) "" "function index is not a literal")
-                 "module is not (MkWModule (Cons (MkFunc ...) ... restfs) LITERAL)")
+               (match wm
+                 ((SSym x)
+                  (if (sym_eq x (quote m)) (port_verdict tbl bs prems idx)
+                  "module slot is a symbol but not the m binder"))
+                 (_
+                   (if (has_restfs bs)
+                     (if (wm_ok tbl wm)
+                       (if (idx_ok idx) "" "function index is not a literal")
+                       "module is not (MkWModule (Cons (MkFunc ...) ... restfs) LITERAL)")
+                     "no (restfs (List Func)) binder — the linking provision is missing")))
                "fuel is not (S^ N BASE) with the slack c in BASE"))
             (_ "call application is missing slots"))))
        "conclusion is not an equation"))
     (_ "conclusion is not an equation")))
 
-;; verdict for one lowered_* claim: empty = conforms, else the reason
+;; verdict for one lowered_*/linked_* claim: empty = conforms
 (fn claim_verdict ((tbl (List (Pair Symbol SExpr))) (goal_form SExpr))
   (List Int)
   (match goal_form
-    ((SList (Cons g (Cons binders (Cons _ (Cons concl Nil)))))
+    ((SList (Cons g (Cons binders (Cons prems (Cons concl Nil)))))
      (if (is_sym g (quote goal))
        (match binders
          ((SList bs)
-          (if (has_slack bs)
-            (if (has_restfs bs) (concl_verdict tbl concl)
-            "no (restfs (List Func)) binder — the linking provision is missing")
-            "no (c Nat) fuel-slack binder"))
+          (if (has_slack bs) (concl_verdict tbl bs prems concl)
+          "no (c Nat) fuel-slack binder"))
          (_ "malformed binder list"))
        "second claim element is not (goal ...)"))
     (_ "second claim element is not (goal ...)")))
@@ -293,7 +383,9 @@
         (if (is_sym h (quote claim))
           (match nm
             ((SSym name)
-             (if (prefix_eq "lowered_" (chars_of_sym name))
+             (if
+               (if (prefix_eq "lowered_" (chars_of_sym name)) True
+               (prefix_eq "linked_" (chars_of_sym name)))
                (match (claim_verdict tbl gf)
                  (Nil
                    (scan
