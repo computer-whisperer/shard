@@ -535,6 +535,49 @@ loop fragment (§6f's emitter work) will be written over this kit; if
 lowergen itself grows unwieldy with it, the next split is per-fragment
 files over the same kit.
 
+### 6h. The emitter's LOOP fragment (2026-07-04)
+
+The §6f template, mechanized over the §6g kit — `tools/lowergen` now
+emits **machine-written inductions**. For every source fn in the loop
+shape (`(fn NAME ((m Mem) (a1 Int) … (an Int) (k Nat)) Mem (match k (Z
+m) ((S k2) (NAME (mem_set …) U1 … Un k2))))`, updates `ai` or
+`(+ ai 1)`, store value an accum / u32 literal / `(mem_get m ADV)`,
+addresses ADVANCING accums), it emits the counter-as-local wasm body,
+the `lg_*` worker induction, and the `lowered_*` theorem.
+
+- **`models/wasm/loopkit.shard`** — the probe's per-file kit promoted
+  to a shared proven article (fuel fn, stride twin, the 7
+  template-constant helper certs); generated files import it, the
+  generator never emits or enumerates certificates.
+- Recognition works on the kernel's own term representation
+  (`Match`/`Arm`/`PCtor` over the loader's BVar indexing) — the
+  anti-split-brain contract extends to pattern shapes. Refusals are
+  loud and specific (non-advancing address, `(+ 1 a)` spelling,
+  non-self tail call, …).
+- Proof emission is the §6f staged chain: guard decider, per
+  address-OCCURRENCE guard stages in code order (a re-used address
+  re-fires its stage — the stage law's re-materialization rule),
+  counter collapse + wrap haves, spec opened one step on the rhs, the
+  IH at the advanced accums. Premise layout: one nonneg + one range
+  pair per advancing accum, nonnegs first, param order.
+- **`examples/lowergen_loop_src.shard`** (fill / copy / stamp — value
+  accum, read value, literal value) → `lowergen_loop_out.shard`: **all
+  six machine-written proofs (3 workers + 3 theorems) passed the
+  kernel on the first generation attempt**; fuel formula
+  `S^(instrs+4)` worker / `+4` theorem held at all three sizes.
+- `examples/lowbuild_loop.sh` = the four gates
+  (REGEN → SCHEMA → KERNEL → ENGINE, V8 6/6 incl. store-truncation,
+  k=0, and forward-overlap vectors); build file
+  `lowergen_loop_src.build.shard` computes expected values and
+  readbacks spec-side (the Nat counter arg via `fnat`). Loop pieces
+  are LEAF certs — module `[self]` at index 0, no callee prefix, no
+  link file (the pure/mem REGEN gates stayed byte-identical under the
+  shared header change).
+
+Fragment fence (unchanged from §6f): Int-accumulator returns, stride
+≠ 1, multiple stores per iteration, and calls in loop bodies
+(structural-form-only when they come) are future extensions.
+
 ## 7. Open questions (the back-and-forth queue)
 
 1. ~~The statement-generator enforcement mechanism~~ RESOLVED by P4a:

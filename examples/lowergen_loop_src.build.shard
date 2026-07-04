@@ -1,0 +1,159 @@
+;;; examples/lowergen_loop_src.build.shard — the mod.build file for the
+;;; LOOP fragment (docs/LOWERING.md §6h): the artifact plan for
+;;; examples/lowergen_loop_src.shard. Loop pieces are LEAF certs (no
+;;; callee prefix): each shipped binary is the cert's module at
+;;; restfs := Nil — [self], one 64KiB page, export f0.
+;;;
+;;;   ARTIFACT <fn> …        manifest: cert ↔ cert file ↔ ISA model ↔ glue
+;;;   MOD <fn> <hex>         real .wasm bytes via the model's encoder
+;;;   MEMCASE <fn> f0 …      engine vectors; expected value AND memory
+;;;                          readback computed SPEC-SIDE (the source fn
+;;;                          applied directly — the Nat counter arg via
+;;;                          fnat of the machine i32)
+;;;
+;;; RUN IT:  bin/shard_eval run examples/lowergen_loop_src.build.shard | node examples/wasm_diff.mjs /dev/stdin
+
+(import "../kernel/stdlib.shard")
+(import "lowergen_loop_src.shard")
+(use (:: examples lowergen_loop_src *))
+(import "lowergen_loop_out.shard")
+(use (:: examples lowergen_loop_out lp_fill_func))
+(use (:: examples lowergen_loop_out lp_copy_func))
+(use (:: examples lowergen_loop_out lp_stamp_func))
+(import "../std/mem")
+(use (:: std mem *))
+(import "../models/wasm/wasm.shard")
+(use (:: models wasm wasm *))
+(import "../models/wasm/encode.shard")
+(use (:: models wasm encode *))
+
+(type World (World Int))
+
+(extern write ((bytes (List Int)) (w World)) World)
+(extern exit ((code Int) (w World)) World)
+
+;; --- the binaries: [self] per source fn (leaf pieces, no callee prefix) ----------
+
+(fn lmod ((self Func)) WModule (MkWModule (list self) 65536))
+
+;; --- spec-side memory helpers ---------------------------------------------------
+
+(fn mload ((bs (List Int)) (a Int) (m Mem)) Mem
+  (measure (struct bs))
+  (match bs
+    (Nil m)
+    ((Cons b t) (mload t (+ a 1) (mem_set m a b)))))
+
+(fn mdump ((a Int) (n Nat) (m Mem)) (List Int)
+  (measure (struct n))
+  (match n
+    (Z Nil)
+    ((S k) (Cons (mem_get m a) (mdump (+ a 1) k m)))))
+
+(fn len_nat ((xs (List Int))) Nat
+  (measure (struct xs))
+  (match xs
+    (Nil Z)
+    ((Cons _ t) (S (len_nat t)))))
+
+;; --- plan rendering -------------------------------------------------------------
+
+(fn cat ((xs (List (List Int)))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil "")
+    ((Cons h t) (wapp h (cat t)))))
+
+(fn hexd ((d Int)) Int (if (lt d 10) (+ 48 d) (+ 87 d)))
+
+(fn hexs ((bs (List Int))) (List Int)
+  (measure (struct bs))
+  (match bs
+    (Nil Nil)
+    ((Cons b t) (Cons (hexd (ediv b 16)) (Cons (hexd (mod b 16)) (hexs t))))))
+
+(fn showargs ((xs (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil "")
+    ((Cons h t) (wapp " " (wapp (dec h) (showargs t))))))
+
+(fn art_line ((nm (List Int))) (List Int)
+  (cat
+    (list
+      "ARTIFACT "
+      nm
+      " cert=lowered_"
+      nm
+      " certfile=examples/lowergen_loop_out.shard model=models/wasm/wasm.shard export=f0 callees=none externs=none\n")))
+
+(fn mod_line ((nm (List Int)) (m WModule)) (List Int)
+  (cat (list "MOD " nm " " (hexs (enc_module m)) "\n")))
+
+;; a memory vector: expected value + final-memory readback, both SPEC-side
+(fn memcase
+  ((nm (List Int)) (args (List Int)) (membytes (List Int)) (v Int) (mf Mem))
+  (List Int)
+  (cat
+    (list
+      "MEMCASE "
+      nm
+      " f0"
+      (showargs args)
+      " MEM "
+      (hexs membytes)
+      " -> "
+      (dec v)
+      " "
+      (hexs (mdump 0 (len_nat membytes) mf))
+      "\n")))
+
+(fn ld ((bs (List Int))) Mem (mload bs 0 (mem_empty)))
+
+(fn emit () (List Int)
+  (cat
+    (list
+      (art_line "lp_fill")
+      (mod_line "lp_fill" (lmod (lp_fill_func)))
+      (memcase
+        "lp_fill"
+        (list 1 200 3)
+        (list 5 5 5 5 5)
+        0
+        (lp_fill (ld (list 5 5 5 5 5)) 1 200 (fnat 3)))
+      (memcase
+        "lp_fill"
+        (list 0 999 2)
+        (list 7 7 7)
+        0
+        (lp_fill (ld (list 7 7 7)) 0 999 (fnat 2)))
+      (memcase
+        "lp_fill"
+        (list 2 50 0)
+        (list 9 9 9)
+        0
+        (lp_fill (ld (list 9 9 9)) 2 50 (fnat 0)))
+      (art_line "lp_copy")
+      (mod_line "lp_copy" (lmod (lp_copy_func)))
+      (memcase
+        "lp_copy"
+        (list 0 3 3)
+        (list 1 2 3 0 0 0)
+        0
+        (lp_copy (ld (list 1 2 3 0 0 0)) 0 3 (fnat 3)))
+      (memcase
+        "lp_copy"
+        (list 0 1 3)
+        (list 8 9 10 11)
+        0
+        (lp_copy (ld (list 8 9 10 11)) 0 1 (fnat 3)))
+      (art_line "lp_stamp")
+      (mod_line "lp_stamp" (lmod (lp_stamp_func)))
+      (memcase
+        "lp_stamp"
+        (list 1 3)
+        (list 0 0 0 0 0)
+        0
+        (lp_stamp (ld (list 0 0 0 0 0)) 1 (fnat 3))))))
+
+(fn main ((w World)) World (exit 0 (write (emit) w)))

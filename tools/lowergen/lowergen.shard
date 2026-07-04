@@ -69,6 +69,11 @@
 (use (:: kernel term Let))
 (use (:: kernel term If))
 (use (:: kernel term IntLit))
+(use (:: kernel term Match))
+(use (:: kernel term Arm))
+(use (:: kernel term Pat))
+(use (:: kernel term PCtor))
+(use (:: kernel term PVar))
 (use (:: kernel term QName))
 (use (:: kernel term qn_name))
 (use (:: kernel term append_int))
@@ -779,6 +784,580 @@
       (MErr
         "Mem-returning body must be a trailing (mem_set m ADDR VAL) (single write, v1)"))))
 
+
+;; ---- the LOOP fragment: Nat-counted tail recursion (docs/LOWERING.md §6f/§6h) ---
+;;
+;; Source shape:  (fn NAME ((m Mem) (a1 Int) … (an Int) (k Nat)) Mem
+;;                  (match k (Z m) ((S k2) (NAME WORK U1 … Un k2))))
+;; with updates Ui = ai | (+ ai 1) and WORK = (mem_set m A V), A an
+;; ADVANCING accum, V = an accum | a u32 literal | (mem_get m A2) with A2
+;; advancing. Lowers COUNTER-AS-LOCAL: k rides as an i32 local (ENC =
+;; int_of_nat), guard LocalGet/I32Eqz/BrIf 1, decrement by BSub — direct
+;; byte ops, a LEAF cert (calls-in-loops cannot ride the portable form;
+;; §6f). The worker is a machine-written INDUCTION on k citing
+;; models/wasm/loopkit.shard's template constants; the theorem adds 4
+;; plumbing levels. Fuel: worker = S^(instrs+4) over (lg_fuel k c) —
+;; eval_loop re-enters at exactly fuel-1, so the IH spelling aligns at
+;; any sufficient body budget. int_of_nat is module-opaque under proof
+;; compute, so both cases OPEN it by its defining lemmas (int_of_nat_zero
+;; / int_of_nat_succ) before computing — the §6f opacity law. Premise
+;; layout: one nonneg + one range pair PER ADVANCING ACCUM (nonnegs
+;; first, param order).
+
+(fn qn_eq ((a QName) (b QName)) Bool
+  (match a
+    ((QName am an)
+     (match b
+       ((QName bm bn) (if (sym_eq an bn) (sym_list_eq am bm) False))))))
+
+;; the store value: an accum read, a u32 literal, or a byte read at an
+;; advancing accum
+(type LVal (LVAcc Int) (LVLit Int) (LVRead Int))
+
+(type LRec (LROk (List Bool) Int LVal) (LRErr (List Int)))
+
+;; accum index of an S-arm BVar: accum i (of n) sits at BVar (n+1-i)
+(fn lp_acc ((e Expr) (n Int)) (Option Int)
+  (match e
+    ((BVar b)
+     (let ((i (- (+ n 1) b))) (if (le 0 i) (if (lt i n) (Some i) None) None)))
+    (_ None)))
+
+(fn lp_is_mem_arg ((e Expr) (n Int)) Bool
+  (match e
+    ((BVar b) (int_eq b (+ n 2)))
+    (_ False)))
+
+(fn bool_at ((bs (List Bool)) (i Int)) Bool
+  (measure (struct bs))
+  (match bs
+    (Nil False)
+    ((Cons h t) (if (int_eq i 0) h (bool_at t (- i 1))))))
+
+;; one accumulator update: itself (Some False) or (+ itself 1) (Some True)
+(fn lp_upd ((u Expr) (n Int) (i Int)) (Option Bool)
+  (match u
+    ((BVar b) (if (int_eq b (- (+ n 1) i)) (Some False) None))
+    ((Call q as)
+     (if (core_named q (quote +))
+       (match as
+         ((Cons a (Cons b Nil))
+          (match a
+            ((BVar ab)
+             (if (int_eq ab (- (+ n 1) i))
+               (match b
+                 ((IntLit one) (if (int_eq one 1) (Some True) None))
+                 (_ None))
+               None))
+            (_ None)))
+         (_ None))
+       None))
+    (_ None)))
+
+;; the self-call's tail: n updates then the peeled counter (BVar 0)
+(fn lp_updk ((us (List Expr)) (n Int) (i Int)) (Option (List Bool))
+  (measure (struct us))
+  (match us
+    (Nil None)
+    ((Cons u t)
+     (match t
+       (Nil
+         (match u
+           ((BVar b) (if (int_eq b 0) (if (int_eq i n) (Some Nil) None) None))
+           (_ None)))
+       ((Cons _ _)
+        (match (lp_upd u n i)
+          (None None)
+          ((Some f)
+           (match (lp_updk t n (+ i 1))
+             (None None)
+             ((Some fs) (Some (Cons f fs)))))))))))
+
+(fn lp_val ((e Expr) (n Int) (adv (List Bool))) (Option LVal)
+  (match e
+    ((BVar _)
+     (match (lp_acc e n)
+       ((Some i) (Some (LVAcc i)))
+       (None None)))
+    ((IntLit l) (if (le 0 l) (if (lt l 4294967296) (Some (LVLit l)) None) None))
+    ((Call q as)
+     (if (memq_named q (quote mem_get))
+       (match as
+         ((Cons marg (Cons aarg Nil))
+          (if (lp_is_mem_arg marg n)
+            (match (lp_acc aarg n)
+              ((Some i) (if (bool_at adv i) (Some (LVRead i)) None))
+              (None None))
+            None))
+         (_ None))
+       None))
+    (_ None)))
+
+(fn lp_workc ((w Expr) (n Int) (adv (List Bool))) LRec
+  (match w
+    ((Call q as)
+     (if (memq_named q (quote mem_set))
+       (match as
+         ((Cons marg (Cons aarg (Cons varg Nil)))
+          (if (lp_is_mem_arg marg n)
+            (match (lp_acc aarg n)
+              ((Some ai)
+               (if (bool_at adv ai)
+                 (match (lp_val varg n adv)
+                   ((Some v) (LROk adv ai v))
+                   (None
+                     (LRErr
+                       "store value must be an accum, a u32 literal, or (mem_get m ADV-ACCUM)")))
+                 (LRErr "store address must be an ADVANCING accumulator")))
+              (None (LRErr "store address must be an accumulator")))
+            (LRErr "mem_set's memory argument must be the fn's Mem param")))
+         (_ (LRErr "mem_set must have exactly (m ADDR VAL)")))
+       (LRErr "loop work must be a single (mem_set m ADDR VAL)")))
+    (_ (LRErr "loop work must be a single (mem_set m ADDR VAL)"))))
+
+(fn is_pvar ((p Pat)) Bool
+  (match p
+    (PVar True)
+    (_ False)))
+
+(fn lp_zarm ((pz Pat) (zb Expr) (n Int)) Bool
+  (match pz
+    ((PCtor qz zps)
+     (match zps
+       (Nil
+         (if (core_named qz (quote Z))
+           (match zb
+             ((BVar mb) (int_eq mb (+ n 1)))
+             (_ False))
+           False))
+       ((Cons _ _) False)))
+    (_ False)))
+
+(fn lp_spat ((ps Pat)) Bool
+  (match ps
+    ((PCtor qs sps)
+     (if (core_named qs (quote S))
+       (match sps
+         ((Cons pv Nil) (is_pvar pv))
+         (_ False))
+       False))
+    (_ False)))
+
+(fn lp_sarm ((sb Expr) (q QName) (n Int)) LRec
+  (match sb
+    ((Call q2 args)
+     (if (qn_eq q2 q)
+       (match args
+         ((Cons w rest)
+          (match (lp_updk rest n 0)
+            (None
+              (LRErr
+                "self-call updates must be ACCUM or (+ ACCUM 1), ending in the peeled counter"))
+            ((Some adv) (lp_workc w n adv))))
+         (Nil (LRErr "self-call must carry WORK, the updates, and the counter")))
+       (LRErr "S arm must be a tail self-call")))
+    (_ (LRErr "S arm must be a tail self-call"))))
+
+(fn lp_recognize ((q QName) (n Int) (body Expr)) LRec
+  (match body
+    ((Match scr arms)
+     (match scr
+       ((BVar b)
+        (if (int_eq b 0)
+          (match arms
+            ((Cons (Arm pz zb) (Cons (Arm ps sb) Nil))
+             (if (lp_zarm pz zb n)
+               (if (lp_spat ps) (lp_sarm sb q n)
+               (LRErr "second match arm must be ((S k2) ...)"))
+               (LRErr "first match arm must be (Z m)")))
+            (_ (LRErr "loop match must have exactly the Z and S arms")))
+          (LRErr "loop match must scrutinize the Nat counter (the last param)")))
+       (_ (LRErr "loop match must scrutinize the Nat counter (the last param)"))))
+    (_ (LRErr "loop body must be a match on the Nat counter"))))
+
+;; ---- loop codegen ----------------------------------------------------------------
+
+(fn lp_lget ((k Int)) Doc
+  (dconc (list (DStr "(LocalGet ") (dint k) (DStr ")"))))
+
+(fn lp_const ((k Int)) Doc
+  (dconc (list (DStr "(I32Const ") (dint k) (DStr ")"))))
+
+(fn lp_lset ((k Int)) Doc
+  (dconc (list (DStr "(LocalSet ") (dint k) (DStr ")"))))
+
+(fn lp_valcode ((v LVal)) (List Doc)
+  (match v
+    ((LVAcc i) (Cons (lp_lget i) Nil))
+    ((LVLit l) (Cons (lp_const l) Nil))
+    ((LVRead i) (Cons (lp_lget i) (Cons (DStr "(I32Load8U)") Nil)))))
+
+(fn lp_vlen ((v LVal)) Int
+  (match v
+    ((LVAcc _) 1)
+    ((LVLit _) 1)
+    ((LVRead _) 2)))
+
+(fn lp_advcode ((adv (List Bool)) (i Int)) (List Doc)
+  (measure (struct adv))
+  (match adv
+    (Nil Nil)
+    ((Cons h t)
+     (if h
+       (dapp
+         (list (lp_lget i) (lp_const 1) (DStr "(I32Bin BAdd)") (lp_lset i))
+         (lp_advcode t (+ i 1)))
+       (lp_advcode t (+ i 1))))))
+
+;; guard / work / advances / decrement / re-enter (instrs = 10 + vlen + 4*nAdv)
+(fn lp_code ((n Int) (adv (List Bool)) (ai Int) (v LVal)) (List Doc)
+  (dapp
+    (list (lp_lget n) (DStr "(I32Eqz)") (DStr "(BrIf 1)") (lp_lget ai))
+    (dapp
+      (lp_valcode v)
+      (dapp
+        (Cons (DStr "(I32Store8)") Nil)
+        (dapp
+          (lp_advcode adv 0)
+          (list
+            (lp_lget n)
+            (lp_const 1)
+            (DStr "(I32Bin BSub)")
+            (lp_lset n)
+            (DStr "(Br 0)")))))))
+
+;; ---- loop claim assembly ----------------------------------------------------------
+
+(fn lp_nadv ((bs (List Bool))) Int
+  (measure (struct bs))
+  (match bs
+    (Nil 0)
+    ((Cons h t) (+ (if h 1 0) (lp_nadv t)))))
+
+;; number of advancing accums among the first i (= accum i's nonneg premise ix)
+(fn lp_advpos ((bs (List Bool)) (i Int)) Int
+  (measure (struct bs))
+  (match bs
+    (Nil 0)
+    ((Cons h t) (if (int_eq i 0) 0 (+ (if h 1 0) (lp_advpos t (- i 1)))))))
+
+(fn lp_first_adv ((bs (List Bool)) (i Int)) Int
+  (measure (struct bs))
+  (match bs
+    (Nil 0)
+    ((Cons h t) (if h i (lp_first_adv t (+ i 1))))))
+
+(fn lp_prems_lo ((bs (List Bool)) (i Int)) Doc
+  (measure (struct bs))
+  (match bs
+    (Nil (DStr ""))
+    ((Cons h t)
+     (DCat
+       (if h (dconc (list (DStr "(= (le 0 x") (dint i) (DStr ") True) ")))
+       (DStr ""))
+       (lp_prems_lo t (+ i 1))))))
+
+(fn lp_prems_rng ((bs (List Bool)) (i Int)) Doc
+  (measure (struct bs))
+  (match bs
+    (Nil (DStr ""))
+    ((Cons h t)
+     (DCat
+       (if h
+         (dconc
+           (list
+             (DStr "(= (le (+ x")
+             (dint i)
+             (DStr " (int_of_nat k)) 65536) True) ")))
+         (DStr ""))
+       (lp_prems_rng t (+ i 1))))))
+
+;; exit locals: advancing -> (lg_adv xi k), static -> xi, counter -> 0
+(fn lp_exits ((bs (List Bool)) (i Int)) Doc
+  (measure (struct bs))
+  (match bs
+    (Nil (DStr "0"))
+    ((Cons h t)
+     (DCat
+       (if h (dconc (list (DStr "(lg_adv x") (dint i) (DStr " k) ")))
+       (dconc (list (DStr "x") (dint i) (DStr " "))))
+       (lp_exits t (+ i 1))))))
+
+;; address-guard occurrences, code order: the load's (if any), then the store's
+(fn lp_occs ((ai Int) (v LVal)) (List Int)
+  (match v
+    ((LVRead i2) (Cons i2 (Cons ai Nil)))
+    (_ (Cons ai Nil))))
+
+;; one address-guard stage: premise-rewrite the nonneg guard, cite lg_a1_ms
+;; for the upper guard, compute on
+(fn lp_stage ((p Int) (r Int)) Doc
+  (dconc
+    (list
+      (DStr "(steps ((compute lhs (stop eval_loop lg_fuel)) (rewrite (premise ")
+      (dint p)
+      (DStr
+        ") lr lhs true ()) (compute lhs (stop eval_loop lg_fuel)))) (rewrite-with (lemma lg_a1_ms) lr lhs ((inst c k2)) ((steps ((rewrite (premise ")
+      (dint r)
+      (DStr
+        ") lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl) (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))) "))))
+
+(fn lp_stages ((occs (List Int)) (adv (List Bool)) (na Int)) Doc
+  (measure (struct occs))
+  (match occs
+    (Nil (DStr ""))
+    ((Cons i t)
+     (DCat
+       (lp_stage (lp_advpos adv i) (+ na (lp_advpos adv i)))
+       (lp_stages t adv na)))))
+
+;; the counter wrap: (1+n)-1 collapse, then wrap32_id via lg_kM off the
+;; FIRST advancing accum's range premise
+(fn lp_hwk ((f Int) (na Int)) Doc
+  (dconc
+    (list
+      (DStr
+        "(have hsub (= (- (+ 1 (int_of_nat k2)) 1) (int_of_nat k2)) (rewrite-with (lemma lg_sub) lr lhs () () refl)) (steps ((rewrite (premise hsub) lr lhs true ()))) (have hwk (= (mod (int_of_nat k2) 4294967296) (int_of_nat k2)) (rewrite-with (lemma wrap32_id) lr lhs ((inst x (int_of_nat k2))) ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl) (rewrite-with (lemma lg_kM) lr lhs ((inst a x")
+      (dint f)
+      (DStr ") (inst c k2)) ((steps ((rewrite (premise ")
+      (dint na)
+      (DStr
+        ") lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl) (steps ((rewrite (premise 0) lr lhs true ())) refl)) refl)) refl)) (steps ((rewrite (premise hwk) lr lhs true ()))) "))))
+
+;; one advancing accum's pointer-advance wrap have + all-occurrences rewrite
+(fn lp_hw ((p Int) (i Int) (na Int)) Doc
+  (dconc
+    (list
+      (DStr "(have hw")
+      (dint p)
+      (DStr " (= (mod (+ x")
+      (dint i)
+      (DStr " 1) 4294967296) (+ x")
+      (dint i)
+      (DStr " 1)) (rewrite-with (lemma wrap32_id) lr lhs ((inst x (+ x")
+      (dint i)
+      (DStr
+        " 1))) ((rewrite-with (lemma lg_lo1) lr lhs () ((steps ((rewrite (premise ")
+      (dint p)
+      (DStr
+        ") lr lhs true ())) refl)) refl) (rewrite-with (lemma lg_32) lr lhs () ((rewrite-with (lemma lg_a1_ms) lr lhs ((inst c k2)) ((steps ((rewrite (premise ")
+      (dint (+ na p))
+      (DStr
+        ") lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl) (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)) refl)) refl)) refl)) (steps ((rewrite (premise hw")
+      (dint p)
+      (DStr ") lr lhs true ()))) "))))
+
+(fn lp_hws ((bs (List Bool)) (i Int) (p Int) (na Int)) Doc
+  (measure (struct bs))
+  (match bs
+    (Nil (DStr ""))
+    ((Cons h t)
+     (if h (DCat (lp_hw p i na) (lp_hws t (+ i 1) (+ p 1) na))
+     (lp_hws t (+ i 1) p na)))))
+
+;; the IH's premise discharges: lg_lo1 per advancing accum, then lg_shift
+(fn lp_lo1s ((bs (List Bool)) (p Int)) Doc
+  (measure (struct bs))
+  (match bs
+    (Nil (DStr ""))
+    ((Cons h t)
+     (if h
+       (DCat
+         (dconc
+           (list
+             (DStr
+               "(rewrite-with (lemma lg_lo1) lr lhs () ((steps ((rewrite (premise ")
+             (dint p)
+             (DStr ") lr lhs true ())) refl)) refl) ")))
+         (lp_lo1s t (+ p 1)))
+       (lp_lo1s t p)))))
+
+(fn lp_shifts ((bs (List Bool)) (p Int) (na Int)) Doc
+  (measure (struct bs))
+  (match bs
+    (Nil (DStr ""))
+    ((Cons h t)
+     (if h
+       (DCat
+         (dconc
+           (list
+             (DStr
+               "(rewrite-with (lemma lg_shift) lr lhs () ((steps ((rewrite (premise ")
+             (dint (+ na p))
+             (DStr
+               ") lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)) refl) ")))
+         (lp_shifts t (+ p 1) na))
+       (lp_shifts t p na)))))
+
+;; pass-through premise steps (theorem -> worker), one per advancing accum
+(fn lp_pass1 ((bs (List Bool)) (p Int)) Doc
+  (measure (struct bs))
+  (match bs
+    (Nil (DStr ""))
+    ((Cons h t)
+     (if h
+       (DCat
+         (dconc
+           (list
+             (DStr "(steps ((rewrite (premise ")
+             (dint p)
+             (DStr ") lr lhs true ())) refl) ")))
+         (lp_pass1 t (+ p 1)))
+       (lp_pass1 t p)))))
+
+;; the SELF literal as spelled in claims ((inline …) rides the emitted body fn)
+(fn lp_self ((nm Doc) (n Int)) Doc
+  (dconc
+    (list
+      (DStr "(MkFunc ")
+      (dint (+ n 1))
+      (DStr " 0 (list (Block (list (Loop (inline ")
+      nm
+      (DStr "_body)))) (I32Const 0)))"))))
+
+(fn lp_worker
+  ((nm Doc)
+   (mids (List Type))
+   (n Int)
+   (adv (List Bool))
+   (ai Int)
+   (v LVal)
+   (p Int))
+  Doc
+  (let ((na (lp_nadv adv)))
+    (dconc
+      (list
+        (DStr "(claim lgw_")
+        nm
+        (DStr " (goal (")
+        (pr_binds mids 0)
+        (DStr
+          "(st (List Int)) (m0 Mem) (c Nat) (k Nat) (restfs (List Func))) (")
+        (lp_prems_lo adv 0)
+        (lp_prems_rng adv 0)
+        (DStr ") (= (eval_loop (S^ ")
+        (dint p)
+        (DStr " (lg_fuel k c)) (MkWModule (Cons ")
+        (lp_self nm n)
+        (DStr " restfs) 65536) (inline ")
+        nm
+        (DStr "_body) (list ")
+        (pr_args mids 0)
+        (DStr " (int_of_nat k)) st m0) (Some (OBr 0 st (list ")
+        (lp_exits adv 0)
+        (DStr ") (")
+        nm
+        (DStr " m0")
+        (pr_args_lead mids)
+        (DStr
+          " k))))) (induct k ((case Z (steps ((rewrite (lemma int_of_nat_zero) lr lhs true ()) (compute both)) refl)) (case S (k2) (chain (steps ((unfold lg_fuel lhs) (reduce lhs) (unfold eval_loop lhs) (rewrite (lemma int_of_nat_succ) lr lhs true ()) (compute lhs (stop eval_loop lg_fuel)))) (rewrite-with (lemma lg_ne) lr lhs () ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))) ")
+        (lp_stages (lp_occs ai v) adv na)
+        (DStr "(steps ((compute lhs (stop eval_loop lg_fuel)))) ")
+        (lp_hwk (lp_first_adv adv 0) na)
+        (lp_hws adv 0 0 na)
+        (DStr "(steps ((unfold ")
+        nm
+        (DStr
+          " rhs) (unfold lg_adv rhs) (reduce rhs))) (rewrite-with (hyp 0) lr lhs () (")
+        (lp_lo1s adv 0)
+        (lp_shifts adv 0 na)
+        (DStr ")) (steps ((compute both))) refl)))))")
+        (DStr (nl))))))
+
+(fn lp_thm ((nm Doc) (mids (List Type)) (n Int) (adv (List Bool)) (p4 Int)) Doc
+  (let ((na (lp_nadv adv)))
+    (dconc
+      (list
+        (DStr "(claim lowered_")
+        nm
+        (DStr " (goal (")
+        (pr_binds mids 0)
+        (DStr "(m0 Mem) (c Nat) (k Nat) (restfs (List Func))) (")
+        (lp_prems_lo adv 0)
+        (lp_prems_rng adv 0)
+        (DStr ") (= (call_fn_mem (S^ ")
+        (dint p4)
+        (DStr " (lg_fuel k c)) (MkWModule (Cons ")
+        (lp_self nm n)
+        (DStr " restfs) 65536) 0 (list ")
+        (pr_args mids 0)
+        (DStr " (int_of_nat k)) m0) (Some (Pair 0 (")
+        nm
+        (DStr " m0")
+        (pr_args_lead mids)
+        (DStr
+          " k))))) (chain (steps ((compute lhs (stop eval_loop lg_fuel)))) (rewrite-with (lemma lgw_")
+        nm
+        (DStr ") lr lhs () (")
+        (lp_pass1 adv 0)
+        (lp_pass1 adv na)
+        (DStr ")) (steps ((compute both))) refl))")
+        (DStr (nl))))))
+
+;; body/func fns + worker + theorem, one unit per source fn
+(fn lp_unit
+  ((nm Doc)
+   (mids (List Type))
+   (n Int)
+   (adv (List Bool))
+   (ai Int)
+   (v LVal)
+   (p Int))
+  Doc
+  (dconc
+    (list
+      (DStr "(fn ")
+      nm
+      (DStr "_body () (List Instr) (list ")
+      (djoin (lp_code n adv ai v))
+      (DStr "))")
+      (DStr (nl))
+      (DStr "(fn ")
+      nm
+      (DStr "_func () Func (MkFunc ")
+      (dint (+ n 1))
+      (DStr " 0 (list (Block (list (Loop (")
+      nm
+      (DStr "_body)))) (I32Const 0))))")
+      (DStr (nl))
+      (lp_worker nm mids n adv ai v p)
+      (lp_thm nm mids n adv (+ p 4)))))
+
+(fn emit_claim_loop ((f FnDef)) CRes
+  (match f
+    ((FnDef q ts rty body)
+     (if (is_mem_ty rty)
+       (match ts
+         ((Cons _ rest)
+          (match (ts_lasto rest)
+            ((Some lt)
+             (if (is_nat_ty lt)
+               (let ((mids (ts_mids rest)))
+                 (if (all_int mids)
+                   (let ((n (count_ts mids)))
+                     (if (lt 0 n)
+                       (match (lp_recognize q n body)
+                         ((LRErr m) (cerr_at q m))
+                         ((LROk adv ai v)
+                          (let
+                            ((cnt (+ 10 (+ (lp_vlen v) (* 4 (lp_nadv adv))))))
+                            (COk
+                              (lp_unit
+                                (dsym (qn_name q))
+                                mids
+                                n
+                                adv
+                                ai
+                                v
+                                (+ cnt 4))
+                              (DStr "")))))
+                       (cerr_at q "loop fn needs at least one Int accumulator")))
+                   (cerr_at q "loop accumulators must all be Int")))
+               (cerr_at q "loop fn's last param must be the Nat counter")))
+            (None (cerr_at q "loop fn needs (m Mem) (accums Int...) (k Nat)"))))
+         (Nil (cerr_at q "loop fn needs params")))
+       (cerr_at q "loop fn must return Mem")))))
+
 ;; ---- claim emission ----------------------------------------------------------
 
 
@@ -931,11 +1510,26 @@
                                      (m_claim_link q ints nn self pres rhs)))))))))))))))))
           (cerr_at q "params after the Mem param must all be Int")))))))
 
+(fn fn_is_loop ((f FnDef)) Bool
+  (match f
+    ((FnDef _ ts _ body)
+     (match ts
+       ((Cons t0 _)
+        (if (is_mem_ty t0)
+          (match body
+            ((Match _ _) True)
+            (_ False))
+          False))
+       (Nil False)))))
+
 (fn emit_claim ((f FnDef)) CRes
   (match f
     ((FnDef _ ts _ _)
      (match ts
-       ((Cons t0 _) (if (is_mem_ty t0) (emit_claim_mem f) (emit_claim_pure f)))
+       ((Cons t0 _)
+        (if (is_mem_ty t0)
+          (if (fn_is_loop f) (emit_claim_loop f) (emit_claim_mem f))
+          (emit_claim_pure f)))
        (Nil (emit_claim_pure f))))))
 
 (fn emit_claim_pure ((f FnDef)) CRes
@@ -996,7 +1590,7 @@
 
 ;; ---- module walk -------------------------------------------------------------
 
-(type ERes (EOk Doc Doc Bool) (EErr (List Int)))
+(type ERes (EOk Doc Doc Bool Bool) (EErr (List Int)))
 
 (fn fn_is_mem ((f FnDef)) Bool
   (match f
@@ -1006,11 +1600,16 @@
        (Nil False)))))
 
 (fn emit_fns
-  ((fns (List FnDef)) (modpath (List Symbol)) (accp Doc) (accl Doc) (memf Bool))
+  ((fns (List FnDef))
+   (modpath (List Symbol))
+   (accp Doc)
+   (accl Doc)
+   (memf Bool)
+   (loopf Bool))
   ERes
   (measure (struct fns))
   (match fns
-    (Nil (EOk accp accl memf))
+    (Nil (EOk accp accl memf loopf))
     ((Cons f rest)
      (match f
        ((FnDef q _ _ _)
@@ -1020,39 +1619,42 @@
              (match (emit_claim f)
                ((CErr m) (EErr m))
                ((COk dp dl)
-                (emit_fns
-                  rest
-                  modpath
-                  (DCat accp (DCat (DStr (nl)) dp))
-                  (if (fn_is_mem f) (DCat accl (DCat (DStr (nl)) dl)) accl)
-                  (if memf True (fn_is_mem f)))))
-             (emit_fns rest modpath accp accl memf)))))))))
+                (let ((isl (fn_is_loop f)))
+                  (let ((ism (if isl False (fn_is_mem f))))
+                    (emit_fns
+                      rest
+                      modpath
+                      (DCat accp (DCat (DStr (nl)) dp))
+                      (if ism (DCat accl (DCat (DStr (nl)) dl)) accl)
+                      (if memf True ism)
+                      (if loopf True isl))))))
+             (emit_fns rest modpath accp accl memf loopf)))))))))
 
 
-(fn header ((target (List Int)) (memf Bool)) Doc
-  (dcat3
-    (dcat3
+(fn header ((target (List Int)) (memf Bool) (loopf Bool)) Doc
+  (dconc
+    (list
       (DStr
         ";;; GENERATED by tools/lowergen (the certifying emitter, scalar let/straight-line fragment) --")
       (DStr (nl))
-      (dcat3
-        (DStr ";;; DO NOT EDIT; regenerate from ")
-        (DStr target)
-        (DStr (append_int "." (nl)))))
-    (dcat3
+      (DStr ";;; DO NOT EDIT; regenerate from ")
+      (DStr target)
+      (DStr (append_int "." (nl)))
       (dimport "../kernel/stdlib.shard")
-      (if memf (dimport "../std/mem") (DStr ""))
-      (dcat3
-        (dimport "../models/wasm/wasm.shard")
-        (DStr "")
-        (dimport (basename_go target Nil))))
-    (dcat3
+      (if (if memf True loopf) (dimport "../std/mem") (DStr ""))
+      (if loopf (dimport "../std/nat.shard") (DStr ""))
+      (dimport "../models/wasm/wasm.shard")
+      (if loopf (dimport "../models/wasm/loopkit.shard") (DStr ""))
+      (dimport (basename_go target Nil))
       (DStr (append_int "(use (:: models wasm wasm *))" (nl)))
-      (if memf (DStr (append_int "(use (:: std mem *))" (nl))) (DStr ""))
-      (dcat3
-        (DStr "(use (:: ")
-        (pr_modpath (split_slash (until_dot target) Nil))
-        (DStr (append_int " *))" (nl)))))))
+      (if loopf (DStr (append_int "(use (:: models wasm loopkit *))" (nl)))
+      (DStr ""))
+      (if (if memf True loopf) (DStr (append_int "(use (:: std mem *))" (nl)))
+      (DStr ""))
+      (if loopf (DStr (append_int "(use (:: std nat *))" (nl))) (DStr ""))
+      (DStr "(use (:: ")
+      (pr_modpath (split_slash (until_dot target) Nil))
+      (DStr (append_int " *))" (nl))))))
 
 ;; the LINKED file's header: needs the shipped certs AND the portable file
 (fn link_header ((target (List Int)) (portout (List Int))) Doc
@@ -1128,14 +1730,15 @@
                (split_slash (until_dot target) Nil)
                (DStr "")
                (DStr "")
+               False
                False)
              ((EErr msg)
               (exit 1 (write (append_int "refused: " (append_int msg (nl))) w1)))
-             ((EOk bodyp bodyl memf)
+             ((EOk bodyp bodyl memf loopf)
               (match
                 (write_file
                   out
-                  (doc_flat (DCat (header target memf) bodyp) Nil)
+                  (doc_flat (DCat (header target memf loopf) bodyp) Nil)
                   w1)
                 ((Pair ok w2)
                  (if ok
