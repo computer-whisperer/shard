@@ -921,6 +921,43 @@ pure/mem builds keep local literals (the generated files inline their
 MkFunc terms — no named Func fns to import yet), with bytetie policing
 that tie as before.
 
+### 6p. The aggregate rep-relation probe — PASSED (2026-07-05)
+
+The std/str runway's design question: can a lowered statement speak
+about a LIST value living in linear memory? `examples/bytesrep_probe.shard`
+— 63/0 on its FIRST check — answers yes, and the aggregate statement
+**decomposes** so cleanly that the machine layer never learns about it:
+
+1. **The rep relation is an EQUATION, not a Bool predicate**:
+   `(br_read m p n) = bs` — "the readback at [p, p+n) IS bs", with
+   `br_read` the abstraction function (memory segment → list). Stating
+   it as an equation avoids Bool-invariant inversion entirely; a
+   `bytes_at`-style predicate would have needed have/cut chains to
+   invert.
+2. **The core theorem is pure shard — premise-free, machine-free**:
+   `lp_scan m p n = p + br_z (br_read m p n)`, where `br_z` is the
+   rep-independent list spec (index of the first 0 — the strlen shape).
+   Induction on the budget; both sides case on the same
+   `(int_eq (mem_get m p) 0)` scrutinee, so the arms align by spelling —
+   the spelling-alignment law extending to the rep boundary. Only two
+   local `(by arith (list))` identities needed (`p+0=p`, the
+   `(p+1)+x = p+(1+x)` shift).
+3. **The aggregate-level cert is composition by citation**:
+   `lowered_br_z` = ∀ bs x0 m0 c restfs, under the rep premise + the
+   machine cert's bounds premises (k := br_len bs) —
+   `DEC(call …(x0, len bs)… m0) = Some (Pair (x0 + br_z bs) m0)`.
+   Proof: cite the GENERATED `lowered_lp_scan` (untouched), rewrite with
+   the core theorem, rewrite the readback away by the rep premise. Zero
+   new machine reasoning, zero kernel features — the refinement-lowering
+   decomposition doing exactly what it was ratified to do.
+
+Schema candidate for aggregate-typed module surfaces: rep-premise(s) +
+inherited bounds premises + list-spec RHS. Mechanization path: std/str
+ops whose loop shapes the fragment already covers, with `br_read`/`br_len`
+generalized behind std/bytes' opaque surface. Not yet probed: ops that
+WRITE an aggregate result (the rep premise in the conclusion position),
+and two-region ops (`bytes_eq` — two rep premises).
+
 ## 7. Open questions — triaged at ratification (2026-07-04)
 
 None of these block the ratified form; they are the backlog the next
