@@ -954,9 +954,38 @@ about a LIST value living in linear memory? `examples/bytesrep_probe.shard`
 Schema candidate for aggregate-typed module surfaces: rep-premise(s) +
 inherited bounds premises + list-spec RHS. Mechanization path: std/str
 ops whose loop shapes the fragment already covers, with `br_read`/`br_len`
-generalized behind std/bytes' opaque surface. Not yet probed: ops that
-WRITE an aggregate result (the rep premise in the conclusion position),
-and two-region ops (`bytes_eq` — two rep premises).
+generalized behind std/bytes' opaque surface. Not yet probed: two-region
+ops (`bytes_eq` — two rep premises).
+
+### 6q. The write-side aggregate probe — PASSED (2026-07-05)
+
+`examples/byteswr_probe.shard` (69/0 first check, one name typo aside):
+an op that WRITES an aggregate — `lp_fill`, its generated cert untouched.
+Same decomposition as §6p, plus the write side's honest new content:
+
+1. **The frame commute is where write-side disequalities live** —
+   `mem_get (lp_fill m q v k) x = mem_get m x` under `x < q`: a read
+   below the fill window commutes past the WHOLE loop. Induction with a
+   premise-carrying IH; discharged by std/mem's `get_set_other` plus two
+   farkas one-liners (`x<q → x<q+1`, `x<q → int_eq x q = False`). All at
+   the SPEC level — the machine layer never sees a disequality.
+2. **The write-side core theorem**:
+   `br_read (lp_fill m p v k) p k = br_repl v k` under `0 ≤ v < 256` —
+   the written window reads back as the list spec (replicate). Head byte
+   = frame + `get_set_byte`; tail = IH. The value-range premises are the
+   honest string story: in-range bytes read back exactly; out-of-range
+   stores would surface mod-256 in the spec.
+3. **The observation form**: since a cert's conclusion is one equation
+   about the call, the write-side aggregate statement composes through a
+   total extractor — `br_read_call (call_fn_mem …) x0 k = br_repl x1 k`:
+   "the observable readback of running the shipped artifact IS the list
+   spec". Cites `lowered_lp_fill`, then the core theorem. Zero new
+   machine reasoning.
+
+With §6p (read side) and §6q (write side) both passing first-check, the
+aggregate schema has two of its three shapes; the remaining probe is
+two-region ops (`bytes_eq` — two rep premises, disjointness question),
+after which std/str mechanization has its full template set.
 
 ## 7. Open questions — triaged at ratification (2026-07-04)
 

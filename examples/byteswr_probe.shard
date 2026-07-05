@@ -1,0 +1,210 @@
+;;; examples/byteswr_probe.shard — the WRITE-SIDE aggregate rep probe (std/str
+;;; runway, slice 2; the read side is examples/bytesrep_probe.shard): an op
+;;; that WRITES an aggregate — the rep relation lands in the CONCLUSION
+;;; ("the final memory's readback IS the spec list"), not just the premises.
+;;;
+;;; Op under test: lp_fill (generated cert lowered_lp_fill, UNTOUCHED).
+;;; The decomposition, same as the read side, plus the write-side's honest
+;;; new content — the FRAME COMMUTE:
+;;;
+;;;   1. bw_fill_frame:  mem_get (lp_fill m q v k) x = mem_get m x   [x < q]
+;;;      a read BELOW the fill window commutes past the whole loop. THIS is
+;;;      where write-side disequalities live — at the SPEC level, discharged
+;;;      by std/mem's get_set_other + two farkas one-liners; the machine
+;;;      layer never sees them.
+;;;   2. bw_fill_read:   br_read (lp_fill m p v k) p k = br_repl v k
+;;;      [0 <= v < 256] — the written window reads back as the list spec
+;;;      (replicate). Head byte via the frame + get_set_byte; tail = IH.
+;;;   3. lowered_bw_fill — composition by citation: the OBSERVABLE readback
+;;;      of running the shipped artifact equals the list spec:
+;;;          br_read_call (call_fn_mem ... (x0, v, len) ... m0) x0 k
+;;;            = br_repl v k
+;;;      (br_read_call = the total observation extractor over the call's
+;;;      Option result). Cites lowered_lp_fill, then bw_fill_read. Zero new
+;;;      machine reasoning.
+;;;
+;;; Value-range premises (0 <= v < 256) are the honest string story: bytes
+;;; in range read back exactly (get_set_byte); out-of-range stores would
+;;; surface the mod-256 truncation in the spec instead.
+
+(import "../kernel/stdlib.shard")
+(import "../std/mem")
+(import "../std/nat.shard")
+(import "../models/wasm/wasm.shard")
+(import "../models/wasm/loopkit.shard")
+(import "lowergen_loop_src.shard")
+(import "lowergen_loop_out.shard")
+(import "bytesrep_probe.shard")
+(use (:: std mem *))
+(use (:: std nat *))
+(use (:: models wasm wasm *))
+(use (:: models wasm loopkit *))
+(use (:: examples lowergen_loop_src *))
+(use (:: examples lowergen_loop_out *))
+(use (:: examples bytesrep_probe *))
+
+;; --- the list spec: replicate (what a fill means, rep-independently) -------------
+
+(fn br_repl ((v Int) (n Nat)) (List Int)
+  (measure (struct n))
+  (match n
+    (Z Nil)
+    ((S k) (Cons v (br_repl v k)))))
+
+;; --- local arith kit -------------------------------------------------------------
+
+(claim bw_ltp1 (goal ((p Int)) () (= (lt p (+ p 1)) True)) (by arith (list 1)))
+
+(claim bw_lt1
+  (goal ((x Int) (q Int)) ((= (lt x q) True)) (= (lt x (+ q 1)) True))
+  (by arith (list 1 1)))
+
+(claim bw_ne
+  (goal ((x Int) (q Int)) ((= (lt x q) True)) (= (int_eq x q) False))
+  (by arith (list 1 1)))
+
+;; --- the frame commute: a read below the window survives the whole fill ---------
+
+(claim bw_fill_frame
+  (goal ((m Mem) (q Int) (v Int) (k Nat) (x Int)) ((= (lt x q) True))
+    (= (mem_get (lp_fill m q v k) x) (mem_get m x)))
+  (induct k
+    ((case Z (steps ((compute both)) refl))
+     (case S
+       (k2)
+       (chain
+         (steps ((unfold lp_fill lhs) (reduce lhs)))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma bw_lt1)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+              refl)))
+         (rewrite-with
+           (lemma get_set_other)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma bw_ne)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+              refl)))
+         refl)))))
+
+;; --- THE WRITE-SIDE CORE THEOREM: the window reads back as the spec list --------
+
+(claim bw_fill_read
+  (goal ((m Mem) (p Int) (v Int) (k Nat))
+    ((= (le 0 v) True) (= (lt v 256) True))
+    (= (br_read (lp_fill m p v k) p k) (br_repl v k)))
+  (induct k
+    ((case Z (steps ((compute both)) refl))
+     (case S
+       (k2)
+       (chain
+         (steps
+           ((unfold lp_fill lhs) (reduce lhs) (unfold br_read lhs) (reduce lhs)))
+         (rewrite-with
+           (lemma bw_fill_frame)
+           lr
+           lhs
+           ()
+           ((rewrite-with (lemma bw_ltp1) lr lhs () () refl)))
+         (rewrite-with
+           (lemma get_set_byte)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+            (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+            (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+         (steps ((unfold br_repl rhs) (reduce rhs)))
+         refl)))))
+
+;; --- the machine body: byte-identical local copy ((inline …) is same-file-only) --
+
+(fn bw_body () (List Instr)
+  (list
+    (LocalGet 2)
+    (I32Eqz)
+    (BrIf 1)
+    (LocalGet 0)
+    (LocalGet 1)
+    (I32Store8)
+    (LocalGet 0)
+    (I32Const 1)
+    (I32Bin BAdd)
+    (LocalSet 0)
+    (LocalGet 2)
+    (I32Const 1)
+    (I32Bin BSub)
+    (LocalSet 2)
+    (Br 0)))
+
+;; the total observation extractor over a call's Option result
+(fn br_read_call ((r (Option (Pair Int Mem))) (p Int) (n Nat)) (List Int)
+  (match r
+    (None Nil)
+    ((Some (Pair _ mf)) (br_read mf p n))))
+
+;; --- THE WRITE-SIDE AGGREGATE CERT: composition by citation ----------------------
+;; The observable readback of running the shipped fill artifact on
+;; (p, v, len) equals the list spec. lowered_lp_fill cited as generated;
+;; bw_fill_read bridges reps; nothing else.
+
+(claim lowered_bw_fill
+  (goal ((x0 Int) (x1 Int) (m0 Mem) (c Nat) (k Nat) (restfs (List Func)))
+    ((= (le 0 x0) True)
+     (= (le (+ x0 (int_of_nat k)) 65536) True)
+     (= (le 0 x1) True)
+     (= (lt x1 256) True))
+    (=
+      (br_read_call
+        (call_fn_mem
+          (S^ 23 (lg_fuel k c))
+          (MkWModule
+            (Cons
+              (MkFunc
+                3
+                0
+                (list (Block (list (Loop (inline bw_body)))) (I32Const 0)))
+              restfs)
+            65536)
+          0
+          (list x0 x1 (int_of_nat k))
+          m0)
+        x0
+        k)
+      (br_repl x1 k)))
+  (chain
+    (rewrite-with
+      (lemma lowered_lp_fill)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (steps ((unfold br_read_call lhs) (reduce lhs)))
+    (rewrite-with
+      (lemma bw_fill_read)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+       (steps ((rewrite (premise 3) lr lhs true ())) refl)))
+    refl))
