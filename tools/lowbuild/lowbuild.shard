@@ -1,0 +1,309 @@
+;;; tools/lowbuild/lowbuild.shard — the GENERIC BUILD DRIVER (docs/LOWERING.md
+;;; §6): runs any module's build entry and renders its Plan.
+;;;
+;;;     bin/shard_eval run tools/lowbuild/lowbuild.shard <mod.build path>
+;;;
+;;; ONE driver for every gated module — no per-module stubs. It loads the
+;;; mod.build's import closure AT RUNTIME (tools/invoke: kernel-as-a-module),
+;;; constructs the Target compile-context, calls `build : Target -> Plan`
+;;; across the meta-level boundary, decodes the returned Plan value, and
+;;; renders the wire formats at the boundary:
+;;;   ARTIFACT/MOD/CASE/MEMCASE lines on stdout — the V8 differ's grammar
+;;;   (examples/wasm_diff.mjs), byte-compatible with the retired
+;;;   main()-rendering mod.build form.
+;;; The Target ctor's QName comes from the LOADED closure's own typedefs
+;;; (ctor_qn) — the driver never spells vocabulary paths by hand. Decode is
+;;; whole-or-nothing: a stuck term or shape mismatch anywhere fails LOUDLY
+;;; (exit 1), never renders a truncated plan.
+;;;
+;;; v1 Target is fixed here: wasm, 65536, 32 — the values every current
+;;; build hardcoded. Argv-selectable targets arrive when a second ISA does.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/loader.shard")
+(import "../invoke/invoke.shard")
+(import "../low/plan.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel loader *))
+(use (:: tools invoke invoke *))
+(use (:: tools low plan *))
+
+;; ---------------------------------------------------------------------------
+;; decoding — Plan value (Expr) -> native plan structures, whole-or-nothing
+;; ---------------------------------------------------------------------------
+
+;; a Ctor node with this local name yields its args
+(fn dc_ctor ((name Symbol) (e Expr)) (Option (List Expr))
+  (match e
+    ((Ctor q args) (if (sym_eq (qn_name q) name) (Some args) None))
+    (_ None)))
+
+(fn dc_vec ((e Expr)) (Option PVec)
+  (match (dc_ctor (quote PV) e)
+    ((Some (Cons k (Cons args (Cons mem (Cons want (Cons memout Nil))))))
+     (match (expr_int k)
+       ((Some kv)
+        (match (expr_ints args)
+          ((Some av)
+           (match (expr_ints mem)
+             ((Some mv)
+              (match (expr_int want)
+                ((Some wv)
+                 (match (expr_ints memout)
+                   ((Some ov) (Some (PV kv av mv wv ov)))
+                   (_ None)))
+                (_ None)))
+             (_ None)))
+          (_ None)))
+       (_ None)))
+    (_ None)))
+
+(fn dc_vecs ((es (List Expr))) (Option (List PVec))
+  (measure (struct es))
+  (match es
+    (Nil (Some Nil))
+    ((Cons e rest)
+     (match (dc_vec e)
+       (None None)
+       ((Some v)
+        (match (dc_vecs rest)
+          (None None)
+          ((Some vs) (Some (Cons v vs)))))))))
+
+(fn dc_art ((e Expr)) (Option PArt)
+  (match (dc_ctor (quote PA) e)
+    ((Some
+       (Cons
+         nm
+         (Cons cert (Cons cf (Cons model (Cons k (Cons cal (Cons ext Nil))))))))
+     (match (expr_ints nm)
+       ((Some nv)
+        (match (expr_ints cert)
+          ((Some certv)
+           (match (expr_ints cf)
+             ((Some cfv)
+              (match (expr_ints model)
+                ((Some modelv)
+                 (match (expr_int k)
+                   ((Some kv)
+                    (match (expr_ints cal)
+                      ((Some calv)
+                       (match (expr_ints ext)
+                         ((Some extv)
+                          (Some (PA nv certv cfv modelv kv calv extv)))
+                         (_ None)))
+                      (_ None)))
+                   (_ None)))
+                (_ None)))
+             (_ None)))
+          (_ None)))
+       (_ None)))
+    (_ None)))
+
+(fn dc_arts ((es (List Expr))) (Option (List PArt))
+  (measure (struct es))
+  (match es
+    (Nil (Some Nil))
+    ((Cons e rest)
+     (match (dc_art e)
+       (None None)
+       ((Some a)
+        (match (dc_arts rest)
+          (None None)
+          ((Some as_) (Some (Cons a as_)))))))))
+
+(fn dc_mod ((e Expr)) (Option PMod)
+  (match (dc_ctor (quote PM) e)
+    ((Some (Cons nm (Cons bytes (Cons arts (Cons vecs Nil)))))
+     (match (expr_ints nm)
+       ((Some nv)
+        (match (expr_ints bytes)
+          ((Some bv)
+           (match (expr_list arts)
+             ((Some aes)
+              (match (dc_arts aes)
+                ((Some av)
+                 (match (expr_list vecs)
+                   ((Some ves)
+                    (match (dc_vecs ves)
+                      ((Some vv) (Some (PM nv bv av vv)))
+                      (_ None)))
+                   (_ None)))
+                (_ None)))
+             (_ None)))
+          (_ None)))
+       (_ None)))
+    (_ None)))
+
+(fn dc_mods ((es (List Expr))) (Option (List PMod))
+  (measure (struct es))
+  (match es
+    (Nil (Some Nil))
+    ((Cons e rest)
+     (match (dc_mod e)
+       (None None)
+       ((Some m)
+        (match (dc_mods rest)
+          (None None)
+          ((Some ms) (Some (Cons m ms)))))))))
+
+(fn dc_plan ((e Expr)) (Option (List PMod))
+  (match (dc_ctor (quote MkPlan) e)
+    ((Some (Cons mods Nil))
+     (match (expr_list mods)
+       ((Some mes) (dc_mods mes))
+       (_ None)))
+    (_ None)))
+
+;; ---------------------------------------------------------------------------
+;; rendering — native plan structures -> the wire lines
+;; ---------------------------------------------------------------------------
+
+(fn cat ((xs (List (List Int)))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil "")
+    ((Cons h t) (append_int h (cat t)))))
+
+(fn hexd ((d Int)) Int (if (lt d 10) (+ 48 d) (+ 87 d)))
+
+(fn hexs ((bs (List Int))) (List Int)
+  (measure (struct bs))
+  (match bs
+    (Nil Nil)
+    ((Cons b t) (Cons (hexd (ediv b 16)) (Cons (hexd (mod b 16)) (hexs t))))))
+
+(fn showargs ((xs (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil "")
+    ((Cons h t) (append_int " " (append_int (show_int h) (showargs t))))))
+
+(fn art_line ((a PArt)) (List Int)
+  (match a
+    ((PA nm cert cf model k cal ext)
+     (cat
+       (list
+         "ARTIFACT "
+         nm
+         " cert="
+         cert
+         " certfile="
+         cf
+         " model="
+         model
+         " export=f"
+         (show_int k)
+         (match cal
+           (Nil "")
+           (_ (append_int " callees=" cal)))
+         " externs="
+         ext
+         "\n")))))
+
+(fn vec_line ((nm (List Int)) (v PVec)) (List Int)
+  (match v
+    ((PV k args mem want memout)
+     (match mem
+       (Nil
+         (cat
+           (list
+             "CASE "
+             nm
+             " f"
+             (show_int k)
+             (showargs args)
+             " -> "
+             (show_int want)
+             "\n")))
+       (_
+         (cat
+           (list
+             "MEMCASE "
+             nm
+             " f"
+             (show_int k)
+             (showargs args)
+             " MEM "
+             (hexs mem)
+             " -> "
+             (show_int want)
+             " "
+             (hexs memout)
+             "\n")))))))
+
+(fn vec_lines ((nm (List Int)) (vs (List PVec))) (List Int)
+  (measure (struct vs))
+  (match vs
+    (Nil "")
+    ((Cons v rest) (append_int (vec_line nm v) (vec_lines nm rest)))))
+
+(fn art_lines ((as_ (List PArt))) (List Int)
+  (measure (struct as_))
+  (match as_
+    (Nil "")
+    ((Cons a rest) (append_int (art_line a) (art_lines rest)))))
+
+(fn mod_lines ((pm PMod)) (List Int)
+  (match pm
+    ((PM nm bytes arts vecs)
+     (cat
+       (list
+         (art_lines arts)
+         "MOD "
+         nm
+         " "
+         (hexs bytes)
+         "\n"
+         (vec_lines nm vecs))))))
+
+(fn plan_lines ((ms (List PMod))) (List Int)
+  (measure (struct ms))
+  (match ms
+    (Nil "")
+    ((Cons m rest) (append_int (mod_lines m) (plan_lines rest)))))
+
+;; ---------------------------------------------------------------------------
+;; the driver
+;; ---------------------------------------------------------------------------
+
+(fn fail ((msg (List Int)) (w World)) World
+  (exit 1 (write (append_int "lowbuild: " (append_int msg "\n")) w)))
+
+;; v1 compile-context: the values every current build hardcoded
+(fn target_val ((tq QName)) Expr
+  (Ctor
+    tq
+    (Cons (SymLit (quote wasm)) (Cons (IntLit 65536) (Cons (IntLit 32) Nil)))))
+
+(fn drive ((m Module) (w World)) World
+  (match (ctor_qn m (quote MkTarget))
+    (None
+      (fail
+        "loaded closure has no Target vocabulary (tools/low/plan.shard not imported?)"
+        w))
+    ((Some tq)
+     (match (invoke m (quote build) (Cons (target_val tq) Nil))
+       (None (fail "no unique `build` fn in the loaded closure" w))
+       ((Some pv)
+        (match (dc_plan pv)
+          (None
+            (fail
+              "build's result does not decode as a Plan (stuck term or shape mismatch)"
+              w))
+          ((Some mods) (exit 0 (write (plan_lines mods) w)))))))))
+
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Pair args w1)
+     (match args
+       ((Cons bpath _)
+        (match (load_run_module bpath w1)
+          ((Pair om w2)
+           (match om
+             (None (fail "could not load/parse the mod.build closure" w2))
+             ((Some m) (drive m w2))))))
+       (_ (fail "usage: lowbuild <mod.build path>" w1))))))

@@ -859,6 +859,61 @@ certs and both link derivations green, five gates, V8 17/17.
 - Regen stability: pure, mem, and loop outputs all BYTE-IDENTICAL under
   the memory-threading rework before the new fns landed.
 
+### 6o. mod.build v2 — the plan is a VALUE (2026-07-04)
+
+The text-plan-on-stdout interface was a serialization boundary between
+two shard programs, and it is retired: a mod.build now exports
+
+    (fn build ((t Target)) Plan)      — PURE; the whole interface
+
+with the vocabulary in **`tools/low/plan.shard`** (`Target` record:
+isa/mem_limit/width — the compile-context channel, grows sizeof/layout
+tables for generics without breaking build entries; `Plan` = `PMod`
+modules each carrying name, pre-encoded binary bytes, `PArt` manifest
+entries, `PVec` vectors). Module bytes ride the plan pre-encoded
+(the model's encoder applied spec-side inside build) so the vocabulary
+and driver stay target-generic.
+
+Reaching `build` is the **dynamic-invocation pattern**
+(**`tools/invoke/invoke.shard`** — kernel-as-a-module): the driver loads
+the mod.build's import closure at runtime (`resolve_closure` +
+`build_module`), finds fns by LOCAL name over the FnDef list (root files
+key at `core`, directory modules at their real path — callers shouldn't
+know which), marshals values across the meta-level boundary (ctor QNames
+from the LOADED closure's own typedefs via `ctor_qn` — the matcher
+compares full qualified identities, so hand-spelled paths would be a
+silent MNo), and applies via `apply_fn` + `run_expr`. Probe:
+`examples/invoke_probe.shard` (4/4, corpus-pinned). Two hard-won laws:
+a library consumed this way must NOT import `eval.shard` (its app `main`
+collides with the consumer's at the core qname — silent usage exit), and
+it lives in tools/ because the engine stamp hashes `kernel/*.shard`.
+
+**`tools/lowbuild/lowbuild.shard`** is the ONE generic driver — no
+per-module stubs: constructs the v1 Target (wasm/65536/32, argv-selectable
+when a second ISA lands), invokes build, decodes the Plan
+whole-or-nothing (stuck term or shape mismatch anywhere = loud exit 1,
+never a truncated plan), and renders wire formats AT THE BOUNDARY only:
+the ARTIFACT/MOD/CASE/MEMCASE lines are the V8 differ's grammar, now a
+rendering the driver performs, not the interface modules speak.
+
+`std/mem/mod.build.shard` converted (the rendering half of the file
+simply deleted; vectors keep their spec-side computation); its gate
+script's plan step became `lowbuild <mod.build path>`. Validation: the
+driver's rendering of the converted build is **byte-identical** to the
+retired main()-rendered plan, first run; all four std/mem gates green
+(V8 5/5). The `Target.mem_limit` field is the first real metadata flow —
+the module literal's memory size now arrives from the compile-context.
+
+What this dissolves: hand-kept duplication between build files and
+certs (a build entry references the cert file's own Func fns natively),
+and shell-grep consumption of structured data. What it deliberately
+keeps: cert proofs as FILES (the kernel gate needs source), the V8 wire
+format (V8 is outside the shard world; irreducible, but rendered once
+in one place), and bytetie for any bytes that PERSIST on disk.
+Remaining v1 residue: the examples build plans
+(`lowergen_{src,mem,loop}_src.build.shard`) still speak the retired
+main()-rendering form — conversion is mechanical, queued next.
+
 ## 7. Open questions — triaged at ratification (2026-07-04)
 
 None of these block the ratified form; they are the backlog the next

@@ -1,0 +1,67 @@
+;;; tools/low/plan.shard — the BUILD-PLAN VOCABULARY (docs/LOWERING.md §6):
+;;; the native structures a module's build entry returns to the lowering
+;;; driver, replacing the v1 text-plan-on-stdout interface.
+;;;
+;;; THE CONTRACT: a mod.build.shard exports
+;;;
+;;;     (fn build ((t Target)) Plan)
+;;;
+;;; — PURE (no World, no externs, no main). The driver
+;;; (tools/lowbuild/lowbuild.shard) loads the mod.build's closure at runtime
+;;; (tools/invoke), constructs the Target, calls build across the meta-level
+;;; boundary, and consumes the returned Plan. Wire formats (the V8 differ's
+;;; ARTIFACT/MOD/CASE/MEMCASE lines, shipped binaries) are RENDERINGS the
+;;; driver performs at the boundary — never the interface itself. Module
+;;; bytes ride the plan pre-encoded ((List Int), the target model's encoder
+;;; applied spec-side inside build) so the vocabulary and the driver stay
+;;; target-generic; the certs named by each artifact remain the authority
+;;; tying those bytes to proofs.
+;;;
+;;; Target is the compile-context channel: what kind of compile is being
+;;; asked for. v1 carries what the builds used to hardcode (ISA id, the
+;;; declared linear-memory limit, value width); it is a RECORD so the
+;;; vocabulary can grow (type layout/sizeof tables for generics, callee
+;;; index environments) without breaking existing build entries.
+
+(import "../../kernel/stdlib.shard")
+
+;; the compile-context the driver passes IN
+(record
+  Target
+  (ctor MkTarget)
+  (isa Symbol)  ; target ISA/model id, e.g. 'wasm — isa_of
+  (mem_limit Int)  ; linear-memory size a module declares (65536 = one wasm page)
+  (width Int))  ; value width in bits (32)
+
+;; one engine vector: run export f<export> on <args> against an initial
+;; memory image and expect <want> plus a final-memory readback. mem = Nil
+;; means a PURE vector (no memory image; memout ignored) — the CASE form.
+(type PVec
+  (PV
+    Int  ; export index within the module
+    (List Int)  ; arguments
+    (List Int)  ; initial memory bytes at address 0 (Nil = pure CASE)
+    Int  ; expected result
+    (List Int)))  ; expected final-memory readback (same length as mem)
+
+;; one manifest entry: which cert covers which export of the module binary
+(type PArt
+  (PA
+    (List Int)  ; source fn name
+    (List Int)  ; cert claim name (e.g. "lowered_mem_set", "linked_mg_swap")
+    (List Int)  ; cert FILE path
+    (List Int)  ; ISA model path
+    Int  ; export index the cert covers
+    (List Int)  ; callee-module note ("" = none)
+    (List Int)))  ; externs note ("none" typical)
+
+;; one module artifact: name, its encoded binary, the certs over its
+;; exports, and its engine vectors
+(type PMod
+  (PM
+    (List Int)  ; module name
+    (List Int)  ; the encoded binary, byte list
+    (List PArt)
+    (List PVec)))
+
+(type Plan (MkPlan (List PMod)))

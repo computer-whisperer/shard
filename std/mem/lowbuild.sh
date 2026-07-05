@@ -30,7 +30,7 @@ fi
 grep -q " 0 failed" "$TMP/kv.txt"
 
 echo "== gate 3: byte tie (the shipped binary = the full-prefix cert's module)"
-"$EVAL" run "$BUILD" > "$TMP/plan.txt"
+"$EVAL" run tools/lowbuild/lowbuild.shard "$BUILD" > "$TMP/plan.txt"
 "$EVAL" run tools/bytetie/bytetie.shard "$CERTS" > "$TMP/tie.txt"
 TIE=$(grep '^TIE mem_set ' "$TMP/tie.txt" | cut -d' ' -f3)
 MOD=$(grep '^MOD stdmem ' "$TMP/plan.txt" | cut -d' ' -f3)
