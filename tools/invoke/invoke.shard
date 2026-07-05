@@ -1,0 +1,175 @@
+;;; tools/invoke/invoke.shard — DYNAMIC INVOCATION: the kernel as a loading
+;;; library.
+;;;
+;;; The pattern: an app uses the kernel's own machinery to load another shard
+;;; file's import closure at runtime, enumerate its functions, marshal argument
+;;; VALUES across the meta-level boundary, call one function, and consume the
+;;; returned value — invoking the target as if it were an interpreted library.
+;;; First consumer: the lowering driver calling a module's build entry
+;;; (`build : Target -> Plan`, docs/LOWERING.md mod.build).
+;;;
+;;; Composition, not new machinery: resolve_closure (loader) walks the import
+;;; closure via the read_file extern; build_module (reader) parses it into a
+;;; Module; apply_fn + run_expr (reducer) apply a FnDef to argument Exprs.
+;;; Two deliberate choices:
+;;;   - functions are found by LOCAL name over the module's FnDef list: a root
+;;;     file's fns key at `core` while a directory-module's key at its real
+;;;     path, and the caller shouldn't have to know which spelling the
+;;;     resolver assigned;
+;;;   - constructor QNames for marshalled values come from the LOADED module's
+;;;     own typedefs (ctor_qn), never from hand-spelled paths — the matcher
+;;;     compares full qualified identities, so a guessed path is a silent MNo.
+;;;
+;;; This file lives in tools/ (not kernel/) on purpose: the engine stamp
+;;; hashes kernel/*.shard, and a pure library must not mark the compiled
+;;; engines stale. It is kernel-as-a-module by IMPORT, like tools/prove.
+;;;
+;;; v1 runs the call under the pure reducer (run_expr): the intended callees
+;;; are pure (no World, no externs) and small. If invoked work ever gets
+;;; compute-heavy, the known lever is the env-machine `ev` (eval.shard —
+;;; which cannot be imported here: it defines an app `main` that would
+;;; collide with any consumer's `main` at the core qname).
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/reader.shard")
+(import "../../kernel/reduce.shard")
+(import "../../kernel/loader.shard")
+(import "../../kernel/driver.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel reader *))
+(use (:: kernel reduce *))
+(use (:: kernel loader *))
+(use (:: kernel driver prelude_ctors))
+
+;; Step budget for an invoked call — same pragmatic bound as eval.shard's
+;; run_budget (not importable from there, see header). Running out returns
+;; the partially-reduced term; decoders fail cleanly on it.
+(fn inv_budget () Int 1000000000)
+
+;; ---------------------------------------------------------------------------
+;; loading — resolve a root file's import closure and build its Module.
+;; RUN mode (impl bodies): an invoked function must actually compute.
+;; ---------------------------------------------------------------------------
+
+(fn load_run_module ((root (List Int)) (w World)) (Pair (Option Module) World)
+  (match (resolve_closure root True w)
+    ((Pair sources w2)
+     (Pair
+       (build_module
+         (untag_sources sources)
+         (Module Nil Nil Nil (FnTrie None Nil) Nil)
+         (prelude_ctors))
+       w2))))
+
+;; ---------------------------------------------------------------------------
+;; lookup — enumerate functions by LOCAL name.
+;; ---------------------------------------------------------------------------
+
+(fn fns_named ((name Symbol) (fds (List FnDef))) (List FnDef)
+  (measure (struct fds))
+  (match fds
+    (Nil Nil)
+    ((Cons fd rest)
+     (match fd
+       ((FnDef q _ _ _)
+        (if (sym_eq (qn_name q) name) (Cons fd (fns_named name rest))
+        (fns_named name rest)))))))
+
+;; the unique fn with this local name, or None (absent OR ambiguous — an
+;; ambiguous local name in a loaded closure is a caller-side naming problem,
+;; not something to resolve by picking a winner).
+(fn find_fn ((name Symbol) (m Module)) (Option FnDef)
+  (match m
+    ((Module _ fds _ _ _)
+     (match (fns_named name fds)
+       ((Cons fd Nil) (Some fd))
+       (_ None)))))
+
+;; the ctor with this local name, from the loaded module's own typedefs —
+;; the marshalling caller builds (Ctor <this qname> args) values.
+(fn ctor_in_defs ((name Symbol) (cds (List CtorDef))) (Option QName)
+  (measure (struct cds))
+  (match cds
+    (Nil None)
+    ((Cons (CtorDef cq _) rest)
+     (if (sym_eq (qn_name cq) name) (Some cq) (ctor_in_defs name rest)))))
+
+(fn ctor_in_tds ((name Symbol) (tds (List TypeDef))) (Option QName)
+  (measure (struct tds))
+  (match tds
+    (Nil None)
+    ((Cons (TypeDef _ _ cds _) rest)
+     (match (ctor_in_defs name cds)
+       (None (ctor_in_tds name rest))
+       ((Some cq) (Some cq))))))
+
+(fn ctor_qn ((m Module) (name Symbol)) (Option QName)
+  (match m
+    ((Module tds _ _ _ _) (ctor_in_tds name tds))))
+
+;; ---------------------------------------------------------------------------
+;; invocation — apply a FnDef to argument values and reduce.
+;; ---------------------------------------------------------------------------
+
+(fn invoke_fd ((m Module) (fd FnDef) (args (List Expr))) (Option Expr)
+  (match (apply_fn fd args)
+    (None None)  ; arity mismatch
+    ((Some opened) (Some (run_expr m opened (inv_budget))))))
+
+(fn invoke ((m Module) (name Symbol) (args (List Expr))) (Option Expr)
+  (match (find_fn name m)
+    (None None)
+    ((Some fd) (invoke_fd m fd args))))
+
+;; ---------------------------------------------------------------------------
+;; value marshalling — the object-list/scalar codecs the boundary needs.
+;; (Char lists already have intlist_to_expr / expr_to_intlist in term.shard.)
+;; ---------------------------------------------------------------------------
+
+(fn expr_int ((e Expr)) (Option Int)
+  (match e
+    ((IntLit n) (Some n))
+    (_ None)))
+
+(fn expr_bool ((e Expr)) (Option Bool)
+  (match e
+    ((Ctor q args)
+     (match args
+       (Nil
+         (if (core_named q (quote True)) (Some True)
+         (if (core_named q (quote False)) (Some False)
+         None)))
+       (_ None)))
+    (_ None)))
+
+;; decode an object-level list value into its element Exprs. Any non-list
+;; spine cell (stuck term, wrong ctor) fails the WHOLE decode — unlike
+;; expr_to_intlist's truncate-on-malformed, an invocation result must not
+;; silently shorten.
+(fn expr_list ((e Expr)) (Option (List Expr))
+  (measure (struct e))
+  (match e
+    ((Ctor q args)
+     (if (core_named q (quote Nil))
+       (match args
+         (Nil (Some Nil))
+         (_ None))
+     (if (core_named q (quote Cons))
+       (match args
+         ((Cons h (Cons t Nil))
+          (match (expr_list t)
+            (None None)
+            ((Some ts) (Some (Cons h ts)))))
+         (_ None))
+       None)))
+    (_ None)))
+
+;; encode a list of already-encoded element values as an object-level list.
+(fn list_expr ((xs (List Expr))) Expr
+  (measure (struct xs))
+  (match xs
+    (Nil (Ctor (qn (quote Nil)) Nil))
+    ((Cons h t) (Ctor (qn (quote Cons)) (Cons h (Cons (list_expr t) Nil))))))

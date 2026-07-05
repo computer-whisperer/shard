@@ -88,6 +88,8 @@ TARGETS=(
   examples/measure_import_synth.shard
   examples/measure_lex_demo.shard
   examples/io/cat_loop.shard
+  examples/invoke_fixture.shard
+  examples/invoke_probe.shard
   examples/measure_tree_demo.shard
   examples/nested_measure.shard
   examples/mem_reverse.shard
@@ -210,6 +212,17 @@ fi
 echo "=== nat: run probe ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run examples/nat_run_probe.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# Dynamic-invocation pin: tools/invoke loads a fixture's closure AT RUNTIME
+# (kernel-as-a-module), marshals values across the meta-level boundary, and
+# calls fns by local name — the mod.build driver's foundation. Self-checking
+# app: one OK/FAIL line per case, exit 0 iff all OK.
+echo "=== invoke: dynamic-invocation probe ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run examples/invoke_probe.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
