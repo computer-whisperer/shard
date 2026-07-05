@@ -6,12 +6,13 @@
 ;;; The design under test — the aggregate statement DECOMPOSES:
 ;;;
 ;;;   1. the rep relation is an EQUATION, not a Bool predicate:
-;;;          (br_read m p n) = bs        "the readback at [p, p+n) IS bs"
-;;;      (br_read = the abstraction function; stating it as an equation
-;;;      avoids Bool-invariant inversion entirely, and both proof sides
-;;;      case on the SAME scrutinee — the spelling-alignment law again);
+;;;          (mem_read n m p) = bs       "the readback at [p, p+n) IS bs"
+;;;      (mem_read = std/mem's abstraction function, graduated from this
+;;;      probe's br_read; stating it as an equation avoids Bool-invariant
+;;;      inversion entirely, and both proof sides case on the SAME
+;;;      scrutinee — the spelling-alignment law again);
 ;;;   2. the core theorem is PURE SHARD, premise-free, machine-free:
-;;;          lp_scan m p n = p + br_z (br_read m p n)
+;;;          lp_scan m p n = p + br_z (mem_read n m p)
 ;;;      (br_z = the rep-independent list spec: index of the first 0 —
 ;;;      the strlen shape; lp_scan = the memory-walking source fn the
 ;;;      emitter already compiled);
@@ -21,11 +22,12 @@
 ;;;      machine reasoning, zero new kernel features — the
 ;;;      refinement-lowering vision's decomposition.
 ;;;
-;;; What the mechanization would generalize: br_read/br_len are the
-;;; probe-local spellings of the bytes-at abstraction (std/str's Bytes
-;;; would sit behind its opaque surface); the composed statement's shape
-;;; (rep premise + bounds premises + list-spec RHS) is the schema
-;;; candidate for aggregate-typed module surfaces.
+;;; The abstraction function GRADUATED (2026-07-05): mem_read + its window
+;;; framing laws now live on std/mem's surface, and this probe consumes
+;;; them opaquely — the same posture std/str's certs will take. br_len
+;;; stays probe-local (list vocabulary, a std/list question); the composed
+;;; statement's shape (rep premise + bounds premises + list-spec RHS) is
+;;; the schema candidate for aggregate-typed module surfaces.
 
 (import "../kernel/stdlib.shard")
 (import "../std/mem")
@@ -41,13 +43,11 @@
 (use (:: examples lowergen_loop_src *))
 (use (:: examples lowergen_loop_out *))
 
-;; --- the abstraction function: memory segment -> list value ---------------------
-
-(fn br_read ((m Mem) (p Int) (n Nat)) (List Int)
-  (measure (struct n))
-  (match n
-    (Z Nil)
-    ((S k) (Cons (mem_get m p) (br_read m (+ p 1) k)))))
+;; --- the abstraction function is std/mem's mem_read --------------------------
+;; (this probe's br_read, graduated to the surface — option A, 2026-07-05:
+;; the rep equation is now spelled (mem_read n m p) = bs and the window
+;; framing law is mem_read_set_above/below; proofs below rewrite with the
+;; exported defining equations mem_read_z/mem_read_s instead of unfolding).
 
 ;; list length as the machine's loop budget
 (fn br_len ((bs (List Int))) Nat
@@ -79,10 +79,14 @@
 
 (claim br_scan_read
   (goal ((m Mem) (p Int) (n Nat)) ()
-    (= (lp_scan m p n) (+ p (br_z (br_read m p n)))))
+    (= (lp_scan m p n) (+ p (br_z (mem_read n m p)))))
   (induct n
     ((case Z
-       (steps ((compute both) (rewrite (lemma br_p0) lr rhs true ())) refl))
+       (steps
+         ((rewrite (lemma mem_read_z) lr rhs true ())
+          (compute both)
+          (rewrite (lemma br_p0) lr rhs true ()))
+         refl))
      (case S
        (k2)
        (case-on (int_eq (mem_get m p) 0) Bool
@@ -92,8 +96,7 @@
                (reduce lhs)
                (rewrite (hyp 0) lr lhs true ())
                (reduce lhs)
-               (unfold br_read rhs)
-               (reduce rhs)
+               (rewrite (lemma mem_read_s) lr rhs true ())
                (unfold br_z rhs)
                (reduce rhs)
                (rewrite (hyp 0) lr rhs true ())
@@ -109,8 +112,7 @@
                  (reduce lhs)))
               (rewrite-with (hyp 1) lr lhs () ())
               (steps
-                ((unfold br_read rhs)
-                 (reduce rhs)
+                ((rewrite (lemma mem_read_s) lr rhs true ())
                  (unfold br_z rhs)
                  (reduce rhs)
                  (rewrite (hyp 0) lr rhs true ())
@@ -148,7 +150,7 @@
 
 (claim lowered_br_z
   (goal ((bs (List Int)) (x0 Int) (m0 Mem) (c Nat) (restfs (List Func)))
-    ((= (br_read m0 x0 (br_len bs)) bs)
+    ((= (mem_read (br_len bs) m0 x0) bs)
      (= (le 0 x0) True)
      (= (le (+ x0 (int_of_nat (br_len bs))) 65536) True))
     (=

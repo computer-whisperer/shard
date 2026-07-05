@@ -1060,6 +1060,45 @@ path utilities — meta-shaped, next candidate when a second consumer
 appears), certnav's generic raw-SExpr layer (entangled with cert-shape
 logic), and `schema`/`proof`/`lin` (emitter policy, correctly tools).
 
+### 6t. The readback abstraction graduates to std/mem (2026-07-05)
+
+The §6p-§6r probes' shared kit resolved to **option A — std/mem's
+surface** (ruling: the stdlib modules are there to be expanded over
+time). The composition argument forced *some* single home: the rep
+relation must be ONE function with ONE qname, or certs from different
+modules state rep facts about definitionally-equal-but-distinct
+functions and cannot cite each other.
+
+std/mem's surface grows the aggregate readback view, exactly parallel
+to the LE word view:
+
+    (sig fn mem_read ((w Nat) (m Mem) (a Int)) (List Int))
+    mem_read_z / mem_read_s          — exported defining equations
+    mem_read_set_below / _set_above  — a store OUTSIDE [a, a+w) is
+                                       invisible to the readback
+
+The framing laws are the probes' window lemma (bc_swin) made surface
+law; the impl proofs are the probe proofs ported (~verbatim — the
+above case is bc_swin's induction, the below case reuses std/order's
+`lt_implies_neq_flip`). std/mem impl 66/0.
+
+**The retrofit is the adequacy check**: all three probes were weaned
+off their local `br_read` onto the opaque surface — every `unfold
+br_read` became a `mem_read_z`/`mem_read_s` defining-equation rewrite
+(the weaning technique, now exercised across the rep boundary), and
+`bc_swin` + its `bc_ne2` one-liner were deleted in favor of citing
+`mem_read_set_above`. The probe suite passed **74/0 on the first
+check** (76 minus the two graduated claims); wasm_diff_run closure
+242/0; std/mem five-gate build + corpus green. This is precisely the
+posture std/str's certs will take, so the surface is proven adequate
+before mechanization starts.
+
+Still probe-local, by design: `br_len` (list vocabulary — a std/list
+question), `br_read_call` (names the machine call's result shape —
+graduates toward the wasm model's kit with the std/str slice), and the
+per-op frame commutes (bw_fill_frame / bc_frame — they are about the
+ops, not the abstraction).
+
 ## 7. Open questions — triaged at ratification (2026-07-04)
 
 None of these block the ratified form; they are the backlog the next

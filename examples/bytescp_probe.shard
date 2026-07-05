@@ -11,16 +11,18 @@
 ;;; the read-while-write shape that pays, and it pays exactly two frame
 ;;; lemmas:
 ;;;
-;;;   1. bc_swin  — a read WINDOW survives one store above it
-;;;                 (br_read past mem_set; the window-level get_set_other)
+;;;   1. mem_read_set_above — a read WINDOW survives one store above it.
+;;;                 Born here as bc_swin; GRADUATED to std/mem's surface
+;;;                 (option A, 2026-07-05) with the readback abstraction.
 ;;;   2. bc_frame — a read cell below the dest survives the WHOLE copy
 ;;;                 (the §6q frame commute, verbatim shape, lp_copy body)
 ;;;   3. bc_copy_read — the memcpy theorem:
-;;;          br_read (lp_copy m s d k) d k = br_read m s k    [s + k <= d]
+;;;          mem_read k (lp_copy m s d k) d = mem_read k m s    [s + k <= d]
 ;;;      head byte = frame + get_set_get (writing a READ reads back exactly
-;;;      — NO value-range premises, reads are bytes); tail = IH + bc_swin.
+;;;      — NO value-range premises, reads are bytes); tail = IH + the
+;;;      graduated window law.
 ;;;   4. lowered_bc_copy — the full two-rep-instance composition: rep
-;;;      premise on the SOURCE (br_read m0 x0 (br_len bs) = bs), rep in
+;;;      premise on the SOURCE (mem_read (br_len bs) m0 x0 = bs), rep in
 ;;;      the CONCLUSION at the DEST — the observable readback at x1 of
 ;;;      running the shipped copy artifact IS bs. Cites lowered_lp_copy +
 ;;;      bc_copy_read + the rep premise; zero new machine reasoning.
@@ -45,13 +47,6 @@
 
 ;; --- local arith kit -------------------------------------------------------------
 
-;; p + (1+j) <= dd  and  0 <= j   entail   p != dd
-(claim bc_ne2
-  (goal ((p Int) (j Int) (dd Int))
-    ((= (le (+ p (+ 1 j)) dd) True) (= (le 0 j) True))
-    (= (int_eq p dd) False))
-  (by arith (list 1 1 1)))
-
 ;; p + (1+j) <= dd   entails   (p+1) + j <= dd
 (claim bc_step
   (goal ((p Int) (j Int) (dd Int)) ((= (le (+ p (+ 1 j)) dd) True))
@@ -64,51 +59,7 @@
     (= (le (+ (+ s 1) j) (+ dd 1)) True))
   (by arith (list 1 1)))
 
-;; --- frame 1: a read WINDOW survives one store above it --------------------------
-
-(claim bc_swin
-  (goal ((m Mem) (dd Int) (v Int) (p Int) (n Nat))
-    ((= (le (+ p (int_of_nat n)) dd) True))
-    (= (br_read (mem_set m dd v) p n) (br_read m p n)))
-  (induct n
-    ((case Z (steps ((compute both)) refl))
-     (case S
-       (k2)
-       (chain
-         (steps ((unfold br_read lhs) (reduce lhs)))
-         (rewrite-with
-           (lemma get_set_other)
-           lr
-           lhs
-           ()
-           ((rewrite-with
-              (lemma bc_ne2)
-              lr
-              lhs
-              ((inst j (int_of_nat k2)))
-              ((steps
-                 ((rewrite (lemma int_of_nat_succ) rl lhs true ())
-                  (rewrite (premise 0) lr lhs true ()))
-                 refl)
-               (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
-              refl)))
-         (rewrite-with
-           (hyp 0)
-           lr
-           lhs
-           ()
-           ((rewrite-with
-              (lemma bc_step)
-              lr
-              lhs
-              ()
-              ((steps
-                 ((rewrite (lemma int_of_nat_succ) rl lhs true ())
-                  (rewrite (premise 0) lr lhs true ()))
-                 refl))
-              refl)))
-         (steps ((unfold br_read rhs) (reduce rhs)))
-         refl)))))
+;; --- frame 1 is std/mem's mem_read_set_above (born here as bc_swin) --------------
 
 ;; --- frame 2: a read cell below the dest survives the WHOLE copy ----------------
 
@@ -152,14 +103,20 @@
 (claim bc_copy_read
   (goal ((m Mem) (s Int) (dd Int) (k Nat))
     ((= (le (+ s (int_of_nat k)) dd) True))
-    (= (br_read (lp_copy m s dd k) dd k) (br_read m s k)))
+    (= (mem_read k (lp_copy m s dd k) dd) (mem_read k m s)))
   (induct k
-    ((case Z (steps ((compute both)) refl))
+    ((case Z
+       (steps
+         ((rewrite (lemma mem_read_z) lr lhs true ())
+          (rewrite (lemma mem_read_z) lr rhs true ()))
+         refl))
      (case S
        (k2)
        (chain
          (steps
-           ((unfold lp_copy lhs) (reduce lhs) (unfold br_read lhs) (reduce lhs)))
+           ((unfold lp_copy lhs)
+            (reduce lhs)
+            (rewrite (lemma mem_read_s) lr lhs true ())))
          (rewrite-with
            (lemma bc_frame)
            lr
@@ -183,7 +140,7 @@
                  refl))
               refl)))
          (rewrite-with
-           (lemma bc_swin)
+           (lemma mem_read_set_above)
            lr
            lhs
            ()
@@ -197,7 +154,7 @@
                   (rewrite (premise 0) lr lhs true ()))
                  refl))
               refl)))
-         (steps ((unfold br_read rhs) (reduce rhs)))
+         (steps ((rewrite (lemma mem_read_s) lr rhs true ())))
          refl)))))
 
 ;; --- the machine body: byte-identical local copy ((inline …) is same-file-only) --
@@ -234,7 +191,7 @@
 (claim lowered_bc_copy
   (goal
     ((bs (List Int)) (x0 Int) (x1 Int) (m0 Mem) (c Nat) (restfs (List Func)))
-    ((= (br_read m0 x0 (br_len bs)) bs)
+    ((= (mem_read (br_len bs) m0 x0) bs)
      (= (le 0 x0) True)
      (= (le 0 x1) True)
      (= (le (+ x0 (int_of_nat (br_len bs))) 65536) True)

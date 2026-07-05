@@ -528,3 +528,133 @@
                          (rewrite (lemma split_id) lr lhs true ())
                          (rewrite (lemma split_id) lr lhs true ()))
                         refl))))))))))))
+
+;; --- the aggregate readback view ----------------------------------------------
+;;
+;; mem_read = the abstraction function for aggregate rep relations (mod.req's
+;; last section; graduated from the §6p-§6r probes' br_read). The framing
+;; proofs are the probes' window lemma (bc_swin) made surface law: induction
+;; on the width, the head byte skips the store via gso_i, the IH takes the
+;; shifted bound.
+
+(fn mem_read ((w Nat) (m Mem) (a Int)) (List Int)
+  (measure (struct w))
+  (match w
+    (Z Nil)
+    ((S w2) (Cons (mem_get m a) (mem_read w2 m (+ a 1))))))
+
+;; defining-equation twins.
+(claim mr_z (goal ((m Mem) (a Int)) () (= (mem_read Z m a) Nil)) auto)
+
+(claim mr_s
+  (goal ((w Nat) (m Mem) (a Int)) ()
+    (= (mem_read (S w) m a) (Cons (mem_get m a) (mem_read w m (+ a 1)))))
+  auto)
+
+;; a window starting at a with 1+j more bytes below b cannot start AT b —
+;; the above law's head-byte disequality (read-addr-first orientation;
+;; lt_implies_neq_flip covers the below law's).
+(claim mr_neq_above
+  (goal ((a Int) (j Int) (b Int))
+    ((= (le (+ a (+ 1 j)) b) True) (= (le 0 j) True))
+    (= (int_eq a b) False))
+  (by arith (list 1 1 1)))
+
+;; a + (1+j) <= b  entails  (a+1) + j <= b — the above law's IH bound.
+(claim mr_step
+  (goal ((a Int) (j Int) (b Int)) ((= (le (+ a (+ 1 j)) b) True))
+    (= (le (+ (+ a 1) j) b) True))
+  (by arith (list 1 1)))
+
+;; --- discharge the readback interface obligations ------------------------------
+
+(fulfills mem_read_z auto)
+
+(fulfills mem_read_s auto)
+
+;; below-range framing: the read walks UP from a while the store sits below;
+;; each head byte skips it (b < a gives a != b) and the IH bound is b < a+1.
+(fulfills mem_read_set_below
+  (induct w
+    ((case Z
+       (steps
+         ((rewrite (lemma mr_z) lr lhs true ())
+          (rewrite (lemma mr_z) lr rhs true ()))
+         refl))
+     (case S
+       (chain
+         (steps ((rewrite (lemma mr_s) lr lhs true ())))
+         (rewrite-with
+           (lemma gso_i)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma lt_implies_neq_flip)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+              refl)))
+         (rewrite-with
+           (hyp ih)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma lt_succ_from_lt)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+              refl)))
+         (steps ((rewrite (lemma mr_s) lr rhs true ())))
+         refl)))))
+
+;; above-range framing: the probes' bc_swin shape — head-byte disequality by
+;; mr_neq_above (j Inst-pinned; the successor spelling discharged by
+;; int_of_nat_succ RL), IH bound by mr_step.
+(fulfills mem_read_set_above
+  (induct w
+    ((case Z
+       (steps
+         ((rewrite (lemma mr_z) lr lhs true ())
+          (rewrite (lemma mr_z) lr rhs true ()))
+         refl))
+     (case S
+       (w2)
+       (chain
+         (steps ((rewrite (lemma mr_s) lr lhs true ())))
+         (rewrite-with
+           (lemma gso_i)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma mr_neq_above)
+              lr
+              lhs
+              ((inst j (int_of_nat w2)))
+              ((steps
+                 ((rewrite (lemma int_of_nat_succ) rl lhs true ())
+                  (rewrite (premise 0) lr lhs true ()))
+                 refl)
+               (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+              refl)))
+         (rewrite-with
+           (hyp ih)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma mr_step)
+              lr
+              lhs
+              ()
+              ((steps
+                 ((rewrite (lemma int_of_nat_succ) rl lhs true ())
+                  (rewrite (premise 0) lr lhs true ()))
+                 refl))
+              refl)))
+         (steps ((rewrite (lemma mr_s) lr rhs true ())))
+         refl)))))
