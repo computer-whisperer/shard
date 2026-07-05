@@ -77,6 +77,7 @@
 (use (:: kernel term PVar))
 (use (:: kernel term QName))
 (use (:: kernel term qn_name))
+(use (:: kernel term core_named))
 (use (:: kernel term append_int))
 (use (:: kernel module Module))
 (use (:: kernel module FnDef))
@@ -968,6 +969,23 @@
 ;; / int_of_nat_succ) before computing — the §6f opacity law. Premise
 ;; layout: one nonneg + one range pair PER ADVANCING ACCUM (nonnegs
 ;; first, param order).
+;;
+;; INT-RETURN shape (probe: examples/intloop_probe.shard) — a READ-ONLY
+;; loop returning an accumulator:
+;;   (fn NAME ((m Mem) (a1 Int) … (an Int) (k Nat)) Int
+;;     (match k (Z ar) ((S k2) (NAME m U1 … Un k2))))
+;; The Mem param passes through unchanged (no store); the Z arm returns
+;; accum r, whose update MUST be the sum shape (+ ar (mem_get m ADV));
+;; every other update is ai | (+ ai 1) as above. Template deltas: the
+;; function epilogue is (LocalGet r) and the machine update for r is
+;; emitted FIRST (it reads other accums' OLD values); the worker's
+;; final-locals entry for r carries the SPEC-CALL spelling (no lg_adv
+;; closed form for data-dependent accums); r's premise pair is the
+;; K-SCALED WRAP INVARIANT (le 0 ar) + (le (+ ar (* 256 (int_of_nat k)))
+;; 4294967296), discharged via loopkit's lg_sum_lo / lg_sum_32 /
+;; lg_sum_shift with byte bounds from std/mem get_lo/get_hi. Premise
+;; layout: nonneg + range pair per PREMISED accum (advancing OR the
+;; return accum), nonnegs first, param order.
 
 (fn qn_eq ((a QName) (b QName)) Bool
   (match a
@@ -1140,6 +1158,164 @@
        (_ (LRErr "loop match must scrutinize the Nat counter (the last param)"))))
     (_ (LRErr "loop body must be a match on the Nat counter"))))
 
+;; ---- Int-return loop recognition --------------------------------------------------
+
+;; per-accum update classification for the Int-return shape
+(type LUpd (LUStat) (LUAdv) (LUSum Int))
+
+(type LIRec (LIOk (List Bool) Int Int) (LIErr (List Int)))
+
+;; one update: static / advancing (via lp_upd) or the sum shape
+;; (+ SELF (mem_get m ACCUM-j))
+(fn li_upd ((u Expr) (n Int) (i Int)) (Option LUpd)
+  (match (lp_upd u n i)
+    ((Some f) (Some (if f (LUAdv) (LUStat))))
+    (None
+      (match u
+        ((Call q as)
+         (if (core_named q (quote +))
+           (match as
+             ((Cons a (Cons b Nil))
+              (match a
+                ((BVar ab)
+                 (if (int_eq ab (- (+ n 1) i))
+                   (match b
+                     ((Call qm ms)
+                      (if (memq_named qm (quote mem_get))
+                        (match ms
+                          ((Cons marg (Cons aarg Nil))
+                           (if (lp_is_mem_arg marg n)
+                             (match (lp_acc aarg n)
+                               ((Some j) (Some (LUSum j)))
+                               (None None))
+                             None))
+                          (_ None))
+                        None))
+                     (_ None))
+                   None))
+                (_ None)))
+             (_ None))
+           None))
+        (_ None)))))
+
+(fn li_updk ((us (List Expr)) (n Int) (i Int)) (Option (List LUpd))
+  (measure (struct us))
+  (match us
+    (Nil None)
+    ((Cons u t)
+     (match t
+       (Nil
+         (match u
+           ((BVar b) (if (int_eq b 0) (if (int_eq i n) (Some Nil) None) None))
+           (_ None)))
+       ((Cons _ _)
+        (match (li_upd u n i)
+          (None None)
+          ((Some f)
+           (match (li_updk t n (+ i 1))
+             (None None)
+             ((Some fs) (Some (Cons f fs)))))))))))
+
+(fn li_advflags ((us (List LUpd))) (List Bool)
+  (measure (struct us))
+  (match us
+    (Nil Nil)
+    ((Cons h t)
+     (Cons
+       (match h
+         ((LUAdv) True)
+         (_ False))
+       (li_advflags t)))))
+
+;; the sum update's read-source accum, if accum r's update is LUSum
+(fn li_sum_at ((us (List LUpd)) (r Int)) (Option Int)
+  (measure (struct us))
+  (match us
+    (Nil None)
+    ((Cons h t)
+     (if (int_eq r 0)
+       (match h
+         ((LUSum j) (Some j))
+         (_ None))
+       (li_sum_at t (- r 1))))))
+
+;; no accum other than r may carry a sum update
+(fn li_only_sum ((us (List LUpd)) (r Int) (i Int)) Bool
+  (measure (struct us))
+  (match us
+    (Nil True)
+    ((Cons h t)
+     (match h
+       ((LUSum _)
+        (if (int_eq i r) (li_only_sum t r (+ i 1)) False))
+       (_ (li_only_sum t r (+ i 1)))))))
+
+;; Z arm: (Z ACCUM) — the returned accumulator (Z-arm context: accum i
+;; sits at BVar (n-i), no peeled binder)
+(fn li_zarm ((pz Pat) (zb Expr) (n Int)) (Option Int)
+  (match pz
+    ((PCtor qz zps)
+     (match zps
+       (Nil
+         (if (core_named qz (quote Z))
+           (match zb
+             ((BVar b)
+              (let ((r (- n b)))
+                (if (le 0 r) (if (lt r n) (Some r) None) None)))
+             (_ None))
+           None))
+       ((Cons _ _) None)))
+    (_ None)))
+
+(fn li_sarm ((sb Expr) (q QName) (n Int) (r Int)) LIRec
+  (match sb
+    ((Call q2 args)
+     (if (qn_eq q2 q)
+       (match args
+         ((Cons marg rest)
+          (if (lp_is_mem_arg marg n)
+            (match (li_updk rest n 0)
+              (None
+                (LIErr
+                  "self-call updates must be ACCUM, (+ ACCUM 1), or (+ ACCUM (mem_get m ADV)), ending in the peeled counter"))
+              ((Some us)
+               (match (li_sum_at us r)
+                 (None
+                   (LIErr
+                     "the returned accumulator's update must be (+ ACC (mem_get m ADV-ACCUM))"))
+                 ((Some j)
+                  (if (li_only_sum us r 0)
+                    (let ((adv (li_advflags us)))
+                      (if (bool_at adv j)
+                        (LIOk adv r j)
+                        (LIErr
+                          "the summed read's address must be an ADVANCING accumulator")))
+                    (LIErr "only the returned accumulator may accumulate a read"))))))
+            (LIErr "Int-return loop must pass the Mem param through unchanged")))
+         (Nil (LIErr "self-call must carry the Mem param, the updates, and the counter")))
+       (LIErr "S arm must be a tail self-call")))
+    (_ (LIErr "S arm must be a tail self-call"))))
+
+(fn li_recognize ((q QName) (n Int) (body Expr)) LIRec
+  (match body
+    ((Match scr arms)
+     (match scr
+       ((BVar b)
+        (if (int_eq b 0)
+          (match arms
+            ((Cons (Arm pz zb) (Cons (Arm ps sb) Nil))
+             (match (li_zarm pz zb n)
+               (None
+                 (LIErr
+                   "first match arm must be (Z ACCUM) (the returned accumulator)"))
+               ((Some r)
+                (if (lp_spat ps) (li_sarm sb q n r)
+                (LIErr "second match arm must be ((S k2) ...)")))))
+            (_ (LIErr "loop match must have exactly the Z and S arms")))
+          (LIErr "loop match must scrutinize the Nat counter (the last param)")))
+       (_ (LIErr "loop match must scrutinize the Nat counter (the last param)"))))
+    (_ (LIErr "loop body must be a match on the Nat counter"))))
+
 ;; ---- loop codegen ----------------------------------------------------------------
 
 (fn lp_lget ((k Int)) Doc
@@ -1190,6 +1366,28 @@
             (DStr "(I32Bin BSub)")
             (lp_lset n)
             (DStr "(Br 0)")))))))
+
+;; Int-return: guard / sum FIRST (reads accum j's OLD value) / advances /
+;; decrement / re-enter (instrs = 13 + 4*nAdv)
+(fn li_code ((n Int) (adv (List Bool)) (r Int) (j Int)) (List Doc)
+  (dapp
+    (list
+      (lp_lget n)
+      (DStr "(I32Eqz)")
+      (DStr "(BrIf 1)")
+      (lp_lget r)
+      (lp_lget j)
+      (DStr "(I32Load8U)")
+      (DStr "(I32Bin BAdd)")
+      (lp_lset r))
+    (dapp
+      (lp_advcode adv 0)
+      (list
+        (lp_lget n)
+        (lp_const 1)
+        (DStr "(I32Bin BSub)")
+        (lp_lset n)
+        (DStr "(Br 0)")))))
 
 ;; ---- loop claim assembly ----------------------------------------------------------
 
@@ -1248,6 +1446,53 @@
        (dconc (list (DStr "x") (dint i) (DStr " "))))
        (lp_exits t (+ i 1))))))
 
+;; ---- Int-return claim pieces ------------------------------------------------------
+
+;; premised accums for the Int-return shape: advancing addresses + the
+;; return accum (whose pair is the k-scaled sum invariant)
+(fn li_pflags ((adv (List Bool)) (r Int) (i Int)) (List Bool)
+  (measure (struct adv))
+  (match adv
+    (Nil Nil)
+    ((Cons h t) (Cons (if (int_eq i r) True h) (li_pflags t r (+ i 1))))))
+
+;; range premises: address range for advancing accums, the k-scaled sum
+;; invariant for the return accum (param order)
+(fn li_prems_rng ((adv (List Bool)) (r Int) (i Int)) Doc
+  (measure (struct adv))
+  (match adv
+    (Nil (DStr ""))
+    ((Cons h t)
+     (DCat
+       (if (int_eq i r)
+         (dconc
+           (list
+             (DStr "(= (le (+ x")
+             (dint i)
+             (DStr " (* 256 (int_of_nat k))) 4294967296) True) ")))
+         (if h
+           (dconc
+             (list
+               (DStr "(= (le (+ x")
+               (dint i)
+               (DStr " (int_of_nat k)) 65536) True) ")))
+           (DStr "")))
+       (li_prems_rng t r (+ i 1))))))
+
+;; exit locals: return accum -> the SPEC-CALL spelling, advancing ->
+;; (lg_adv xi k), static -> xi, counter -> 0
+(fn li_exits ((adv (List Bool)) (r Int) (i Int) (spec Doc)) Doc
+  (measure (struct adv))
+  (match adv
+    (Nil (DStr "0"))
+    ((Cons h t)
+     (DCat
+       (if (int_eq i r)
+         (DCat spec (DStr " "))
+         (if h (dconc (list (DStr "(lg_adv x") (dint i) (DStr " k) ")))
+         (dconc (list (DStr "x") (dint i) (DStr " ")))))
+       (li_exits t r (+ i 1) spec)))))
+
 ;; address-guard occurrences, code order: the load's (if any), then the store's
 (fn lp_occs ((ai Int) (v LVal)) (List Int)
   (match v
@@ -1277,17 +1522,19 @@
        (lp_stages t adv na)))))
 
 ;; the counter wrap: (1+n)-1 collapse, then wrap32_id via lg_kM off the
-;; FIRST advancing accum's range premise
-(fn lp_hwk ((f Int) (na Int)) Doc
+;; FIRST advancing accum's range premise (rng) and nonneg premise (lo)
+(fn lp_hwk ((f Int) (rng Int) (lo Int)) Doc
   (dconc
     (list
       (DStr
         "(have hsub (= (- (+ 1 (int_of_nat k2)) 1) (int_of_nat k2)) (rewrite-with (lemma lg_sub) lr lhs () () refl)) (steps ((rewrite (premise hsub) lr lhs true ()))) (have hwk (= (mod (int_of_nat k2) 4294967296) (int_of_nat k2)) (rewrite-with (lemma wrap32_id) lr lhs ((inst x (int_of_nat k2))) ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl) (rewrite-with (lemma lg_kM) lr lhs ((inst a x")
       (dint f)
       (DStr ") (inst c k2)) ((steps ((rewrite (premise ")
-      (dint na)
+      (dint rng)
+      (DStr ") lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl) (steps ((rewrite (premise ")
+      (dint lo)
       (DStr
-        ") lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl) (steps ((rewrite (premise 0) lr lhs true ())) refl)) refl)) refl)) (steps ((rewrite (premise hwk) lr lhs true ()))) "))))
+        ") lr lhs true ())) refl)) refl)) refl)) (steps ((rewrite (premise hwk) lr lhs true ()))) "))))
 
 ;; one advancing accum's pointer-advance wrap have + all-occurrences rewrite
 (fn lp_hw ((p Int) (i Int) (na Int)) Doc
@@ -1354,6 +1601,96 @@
          (lp_shifts t (+ p 1) na))
        (lp_shifts t p na)))))
 
+;; Int-return pointer-advance wraps: per advancing accum in param order,
+;; premise indices from the PREMISED-accum position (pf includes r)
+(fn li_hws ((adv (List Bool)) (pf (List Bool)) (i Int) (nap Int)) Doc
+  (measure (struct adv))
+  (match adv
+    (Nil (DStr ""))
+    ((Cons h t)
+     (DCat
+       (if h (lp_hw (lp_advpos pf i) i nap) (DStr ""))
+       (li_hws t pf (+ i 1) nap)))))
+
+;; the sum wrap: the machine BAdd's (mod (+ xr (mem_get m0 xj)) 2^32)
+;; collapses via wrap32_id off the sum-invariant pair + get_lo/get_hi
+(fn li_hwa ((r Int) (j Int) (plo Int) (prng Int)) Doc
+  (dconc
+    (list
+      (DStr "(have hwa (= (mod (+ x")
+      (dint r)
+      (DStr " (mem_get m0 x")
+      (dint j)
+      (DStr ")) 4294967296) (+ x")
+      (dint r)
+      (DStr " (mem_get m0 x")
+      (dint j)
+      (DStr "))) (rewrite-with (lemma wrap32_id) lr lhs ((inst x (+ x")
+      (dint r)
+      (DStr " (mem_get m0 x")
+      (dint j)
+      (DStr
+        ")))) ((rewrite-with (lemma lg_sum_lo) lr lhs () ((steps ((rewrite (premise ")
+      (dint plo)
+      (DStr
+        ") lr lhs true ())) refl) (rewrite-with (lemma get_lo) lr lhs () () refl)) refl) (rewrite-with (lemma lg_sum_32) lr lhs ((inst c k2)) ((steps ((rewrite (premise ")
+      (dint prng)
+      (DStr
+        ") lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl) (rewrite-with (lemma get_hi) lr lhs () () refl) (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)) refl)) refl)) (steps ((rewrite (premise hwa) lr lhs true ()))) "))))
+
+;; the IH's nonneg discharges, param order: lg_lo1 for advancing accums,
+;; lg_sum_lo (+ get_lo) for the return accum
+(fn li_los ((pf (List Bool)) (r Int) (i Int) (p Int)) Doc
+  (measure (struct pf))
+  (match pf
+    (Nil (DStr ""))
+    ((Cons h t)
+     (DCat
+       (if h
+         (if (int_eq i r)
+           (dconc
+             (list
+               (DStr
+                 "(rewrite-with (lemma lg_sum_lo) lr lhs () ((steps ((rewrite (premise ")
+               (dint p)
+               (DStr
+                 ") lr lhs true ())) refl) (rewrite-with (lemma get_lo) lr lhs () () refl)) refl) ")))
+           (dconc
+             (list
+               (DStr
+                 "(rewrite-with (lemma lg_lo1) lr lhs () ((steps ((rewrite (premise ")
+               (dint p)
+               (DStr ") lr lhs true ())) refl)) refl) "))))
+         (DStr ""))
+       (li_los t r (+ i 1) (+ p (if h 1 0)))))))
+
+;; the IH's range discharges, param order: lg_shift for advancing accums,
+;; lg_sum_shift (+ get_hi) for the return accum
+(fn li_shs ((pf (List Bool)) (r Int) (i Int) (p Int) (nap Int)) Doc
+  (measure (struct pf))
+  (match pf
+    (Nil (DStr ""))
+    ((Cons h t)
+     (DCat
+       (if h
+         (if (int_eq i r)
+           (dconc
+             (list
+               (DStr
+                 "(rewrite-with (lemma lg_sum_shift) lr lhs () ((steps ((rewrite (premise ")
+               (dint (+ nap p))
+               (DStr
+                 ") lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl) (rewrite-with (lemma get_hi) lr lhs () () refl)) refl) ")))
+           (dconc
+             (list
+               (DStr
+                 "(rewrite-with (lemma lg_shift) lr lhs () ((steps ((rewrite (premise ")
+               (dint (+ nap p))
+               (DStr
+                 ") lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)) refl) "))))
+         (DStr ""))
+       (li_shs t r (+ i 1) (+ p (if h 1 0)) nap)))))
+
 ;; pass-through premise steps (theorem -> worker), one per advancing accum
 (fn lp_pass1 ((bs (List Bool)) (p Int)) Doc
   (measure (struct bs))
@@ -1418,7 +1755,7 @@
           " k))))) (induct k ((case Z (steps ((rewrite (lemma int_of_nat_zero) lr lhs true ()) (compute both)) refl)) (case S (k2) (chain (steps ((unfold lg_fuel lhs) (reduce lhs) (unfold eval_loop lhs) (rewrite (lemma int_of_nat_succ) lr lhs true ()) (compute lhs (stop eval_loop lg_fuel)))) (rewrite-with (lemma lg_ne) lr lhs () ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))) ")
         (lp_stages (lp_occs ai v) adv na)
         (DStr "(steps ((compute lhs (stop eval_loop lg_fuel)))) ")
-        (lp_hwk (lp_first_adv adv 0) na)
+        (lp_hwk (lp_first_adv adv 0) na 0)
         (lp_hws adv 0 0 na)
         (DStr "(steps ((unfold ")
         nm
@@ -1488,19 +1825,145 @@
       (lp_worker nm mids n adv ai v p)
       (lp_thm nm mids n adv (+ p 4)))))
 
+;; the Int-return SELF literal: epilogue reads the return accum's local
+(fn li_self ((nm Doc) (n Int) (r Int)) Doc
+  (dconc
+    (list
+      (DStr "(MkFunc ")
+      (dint (+ n 1))
+      (DStr " 0 (list (Block (list (Loop (inline ")
+      nm
+      (DStr "_body)))) (LocalGet ")
+      (dint r)
+      (DStr ")))"))))
+
+;; the Int-return spec-call spelling (rides the worker's exit locals and
+;; the theorem's scalar result)
+(fn li_spec ((nm Doc) (mids (List Type))) Doc
+  (dconc (list (DStr "(") nm (DStr " m0") (pr_args_lead mids) (DStr " k)"))))
+
+(fn li_worker
+  ((nm Doc)
+   (mids (List Type))
+   (n Int)
+   (adv (List Bool))
+   (r Int)
+   (j Int)
+   (p Int))
+  Doc
+  (let ((pf (li_pflags adv r 0)))
+    (let ((nap (lp_nadv pf)))
+      (let ((fa (lp_first_adv adv 0)))
+        (dconc
+          (list
+            (DStr "(claim lgw_")
+            nm
+            (DStr " (goal (")
+            (pr_binds mids 0)
+            (DStr
+              "(st (List Int)) (m0 Mem) (c Nat) (k Nat) (restfs (List Func))) (")
+            (lp_prems_lo pf 0)
+            (li_prems_rng adv r 0)
+            (DStr ") (= (eval_loop (S^ ")
+            (dint p)
+            (DStr " (lg_fuel k c)) (MkWModule (Cons ")
+            (li_self nm n r)
+            (DStr " restfs) 65536) (inline ")
+            nm
+            (DStr "_body) (list ")
+            (pr_args mids 0)
+            (DStr " (int_of_nat k)) st m0) (Some (OBr 0 st (list ")
+            (li_exits adv r 0 (li_spec nm mids))
+            (DStr
+              ") m0)))) (induct k ((case Z (steps ((rewrite (lemma int_of_nat_zero) lr lhs true ()) (compute both)) refl)) (case S (k2) (chain (steps ((unfold lg_fuel lhs) (reduce lhs) (unfold eval_loop lhs) (rewrite (lemma int_of_nat_succ) lr lhs true ()) (compute lhs (stop eval_loop lg_fuel)))) (rewrite-with (lemma lg_ne) lr lhs () ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))) ")
+            (lp_stage (lp_advpos pf j) (+ nap (lp_advpos pf j)))
+            (DStr "(steps ((compute lhs (stop eval_loop lg_fuel)))) ")
+            (lp_hwk fa (+ nap (lp_advpos pf fa)) (lp_advpos pf fa))
+            (li_hws adv pf 0 nap)
+            (li_hwa r j (lp_advpos pf r) (+ nap (lp_advpos pf r)))
+            (DStr "(steps ((unfold ")
+            nm
+            (DStr
+              " rhs) (unfold lg_adv rhs) (reduce rhs))) (rewrite-with (hyp 0) lr lhs () (")
+            (li_los pf r 0 0)
+            (li_shs pf r 0 0 nap)
+            (DStr ")) (steps ((compute both))) refl)))))")
+            (DStr (nl))))))))
+
+(fn li_thm
+  ((nm Doc) (mids (List Type)) (n Int) (adv (List Bool)) (r Int) (p4 Int))
+  Doc
+  (let ((pf (li_pflags adv r 0)))
+    (let ((nap (lp_nadv pf)))
+      (dconc
+        (list
+          (DStr "(claim lowered_")
+          nm
+          (DStr " (goal (")
+          (pr_binds mids 0)
+          (DStr "(m0 Mem) (c Nat) (k Nat) (restfs (List Func))) (")
+          (lp_prems_lo pf 0)
+          (li_prems_rng adv r 0)
+          (DStr ") (= (call_fn_mem (S^ ")
+          (dint p4)
+          (DStr " (lg_fuel k c)) (MkWModule (Cons ")
+          (li_self nm n r)
+          (DStr " restfs) 65536) 0 (list ")
+          (pr_args mids 0)
+          (DStr " (int_of_nat k)) m0) (Some (Pair ")
+          (li_spec nm mids)
+          (DStr
+            " m0)))) (chain (steps ((compute lhs (stop eval_loop lg_fuel)))) (rewrite-with (lemma lgw_")
+          nm
+          (DStr ") lr lhs () (")
+          (lp_pass1 pf 0)
+          (lp_pass1 pf nap)
+          (DStr ")) (steps ((compute both))) refl))")
+          (DStr (nl)))))))
+
+(fn li_unit
+  ((nm Doc)
+   (mids (List Type))
+   (n Int)
+   (adv (List Bool))
+   (r Int)
+   (j Int)
+   (p Int))
+  Doc
+  (dconc
+    (list
+      (DStr "(fn ")
+      nm
+      (DStr "_body () (List Instr) (list ")
+      (djoin (li_code n adv r j))
+      (DStr "))")
+      (DStr (nl))
+      (DStr "(fn ")
+      nm
+      (DStr "_func () Func (MkFunc ")
+      (dint (+ n 1))
+      (DStr " 0 (list (Block (list (Loop (")
+      nm
+      (DStr "_body)))) (LocalGet ")
+      (dint r)
+      (DStr "))))")
+      (DStr (nl))
+      (li_worker nm mids n adv r j p)
+      (li_thm nm mids n adv r (+ p 4)))))
+
 (fn emit_claim_loop ((f FnDef)) CRes
   (match f
     ((FnDef q ts rty body)
-     (if (is_mem_ty rty)
-       (match ts
-         ((Cons _ rest)
-          (match (ts_lasto rest)
-            ((Some lt)
-             (if (is_nat_ty lt)
-               (let ((mids (ts_mids rest)))
-                 (if (all_int mids)
-                   (let ((n (count_ts mids)))
-                     (if (lt 0 n)
+     (match ts
+       ((Cons _ rest)
+        (match (ts_lasto rest)
+          ((Some lt)
+           (if (is_nat_ty lt)
+             (let ((mids (ts_mids rest)))
+               (if (all_int mids)
+                 (let ((n (count_ts mids)))
+                   (if (lt 0 n)
+                     (if (is_mem_ty rty)
                        (match (lp_recognize q n body)
                          ((LRErr m) (cerr_at q m))
                          ((LROk adv ai v)
@@ -1516,12 +1979,27 @@
                                 v
                                 (+ cnt 4))
                               (DStr "")))))
-                       (cerr_at q "loop fn needs at least one Int accumulator")))
+                       (if (is_int_ty rty)
+                         (match (li_recognize q n body)
+                           ((LIErr m) (cerr_at q m))
+                           ((LIOk adv r j)
+                            (let ((cnt (+ 13 (* 4 (lp_nadv adv)))))
+                              (COk
+                                (li_unit
+                                  (dsym (qn_name q))
+                                  mids
+                                  n
+                                  adv
+                                  r
+                                  j
+                                  (+ cnt 4))
+                                (DStr "")))))
+                         (cerr_at q "loop fn must return Mem or Int")))
+                     (cerr_at q "loop fn needs at least one Int accumulator")))
                    (cerr_at q "loop accumulators must all be Int")))
                (cerr_at q "loop fn's last param must be the Nat counter")))
             (None (cerr_at q "loop fn needs (m Mem) (accums Int...) (k Nat)"))))
-         (Nil (cerr_at q "loop fn needs params")))
-       (cerr_at q "loop fn must return Mem")))))
+       (Nil (cerr_at q "loop fn needs params"))))))
 
 ;; ---- claim emission ----------------------------------------------------------
 

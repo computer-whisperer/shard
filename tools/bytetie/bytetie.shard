@@ -72,9 +72,17 @@
      None))))))
     (_ None)))
 
+;; The reflector threads FUEL (d): the (inline …) hop swaps the term
+;; being walked for a same-file table body, so descent is not structural
+;; — a cyclic inline chain in a malformed file would hang. Fuel = the
+;; input file's character count (every legitimate acyclic walk visits
+;; distinct file text, so total steps are bounded by it); exhaustion is
+;; a loud reflection error, never a hang.
+
 ;; one instruction; nullary ctors accepted bare or parenthesized
-(fn rinstr ((tbl (List (Pair Symbol SExpr))) (s SExpr)) RInstr
-  (measure (struct s))
+(fn rinstr ((tbl (List (Pair Symbol SExpr))) (d Int) (s SExpr)) RInstr
+  (measure d)
+  (if (le d 0) (RIErr "reflection fuel exhausted (cyclic (inline …)?)")
   (match s
     ((SSym x)
      (if (sym_eq x (quote I32Eqz)) (RIOk I32Eqz)
@@ -119,14 +127,14 @@
      (if (is_sym h (quote Block))
        (match args
          ((Cons body Nil)
-          (match (rinstrs tbl body)
+          (match (rinstrs tbl (- d 1) body)
             ((RISOk is) (RIOk (Block is)))
             ((RISErr m) (RIErr m))))
          (_ (RIErr "Block needs one body")))
      (if (is_sym h (quote Loop))
        (match args
          ((Cons body Nil)
-          (match (rinstrs tbl body)
+          (match (rinstrs tbl (- d 1) body)
             ((RISOk is) (RIOk (Loop is)))
             ((RISErr m) (RIErr m))))
          (_ (RIErr "Loop needs one body")))
@@ -137,58 +145,62 @@
      (if (is_sym h (quote I32Store8)) (RIOk I32Store8)
      (if (is_sym h (quote Return)) (RIOk Return)
      (RIErr "unknown instruction")))))))))))))))))
-    (_ (RIErr "instruction is not a symbol or application"))))
+    (_ (RIErr "instruction is not a symbol or application")))))
 
 ;; an instruction sequence: (list I …), a Cons chain, Nil, or (inline NAME)
-(fn rinstrs ((tbl (List (Pair Symbol SExpr))) (s SExpr)) RInstrs
-  (measure (struct s))
+(fn rinstrs ((tbl (List (Pair Symbol SExpr))) (d Int) (s SExpr)) RInstrs
+  (measure d)
+  (if (le d 0) (RISErr "reflection fuel exhausted (cyclic (inline …)?)")
   (match s
     ((SSym x)
      (if (sym_eq x (quote Nil)) (RISOk Nil)
      (RISErr "instruction list is a bare symbol")))
     ((SList (Cons h rest))
-     (if (is_sym h (quote list)) (rinstr_items tbl rest)
+     (if (is_sym h (quote list)) (rinstr_items tbl (- d 1) rest)
      (if (is_sym h (quote inline))
        (match rest
          ((Cons (SSym n) Nil)
           (match (inl_lookup tbl n)
-            ((Some body) (rinstrs tbl body))
+            ((Some body) (rinstrs tbl (- d 1) body))
             (None (RISErr "inline of an unknown same-file nullary fn"))))
          (_ (RISErr "malformed (inline …)")))
      (if (is_sym h (quote Cons))
        (match rest
          ((Cons f (Cons tail Nil))
-          (match (rinstr tbl f)
+          (match (rinstr tbl (- d 1) f)
             ((RIErr m) (RISErr m))
             ((RIOk i)
-             (match (rinstrs tbl tail)
+             (match (rinstrs tbl (- d 1) tail)
                ((RISOk is) (RISOk (Cons i is)))
                ((RISErr m) (RISErr m))))))
          (_ (RISErr "malformed Cons chain")))
        (RISErr "instruction list is not (list …), a Cons chain, or Nil")))))
-    (_ (RISErr "instruction list is not (list …), a Cons chain, or Nil"))))
+    (_ (RISErr "instruction list is not (list …), a Cons chain, or Nil")))))
 
-(fn rinstr_items ((tbl (List (Pair Symbol SExpr))) (ss (List SExpr))) RInstrs
-  (measure (struct ss))
+(fn rinstr_items ((tbl (List (Pair Symbol SExpr))) (d Int) (ss (List SExpr)))
+  RInstrs
+  (measure d)
+  (if (le d 0) (RISErr "reflection fuel exhausted (cyclic (inline …)?)")
   (match ss
     (Nil (RISOk Nil))
     ((Cons h t)
-     (match (rinstr tbl h)
+     (match (rinstr tbl (- d 1) h)
        ((RIErr m) (RISErr m))
        ((RIOk i)
-        (match (rinstr_items tbl t)
+        (match (rinstr_items tbl (- d 1) t)
           ((RISOk is) (RISOk (Cons i is)))
-          ((RISErr m) (RISErr m))))))))
+          ((RISErr m) (RISErr m)))))))))
 
 ;; a function literal: (MkFunc P E BODY), directly or through (inline NAME)
-(fn rfunc ((tbl (List (Pair Symbol SExpr))) (s SExpr)) RFunc
-  (measure (struct s))
+(fn rfunc ((tbl (List (Pair Symbol SExpr))) (d Int) (s SExpr)) RFunc
+  (measure d)
+  (if (le d 0) (RFErr "reflection fuel exhausted (cyclic (inline …)?)")
   (match s
     ((SList (Cons h rest))
      (if (is_sym h (quote MkFunc))
        (match rest
          ((Cons (SInt p) (Cons (SInt e) (Cons body Nil)))
-          (match (rinstrs tbl body)
+          (match (rinstrs tbl (- d 1) body)
             ((RISOk is) (RFOk (MkFunc p e is)))
             ((RISErr m) (RFErr m))))
          (_ (RFErr "MkFunc needs two int literals and a body")))
@@ -196,14 +208,14 @@
        (match rest
          ((Cons (SSym n) Nil)
           (match (inl_lookup tbl n)
-            ((Some body) (rfunc tbl body))
+            ((Some body) (rfunc tbl (- d 1) body))
             (None (RFErr "inline of an unknown same-file nullary fn"))))
          (_ (RFErr "malformed (inline …)")))
        (RFErr "chain element is not a MkFunc literal"))))
-    (_ (RFErr "chain element is not a MkFunc literal"))))
+    (_ (RFErr "chain element is not a MkFunc literal")))))
 
 ;; the module's function chain at restfs := Nil
-(fn rchain ((tbl (List (Pair Symbol SExpr))) (s SExpr)) RFuncs
+(fn rchain ((tbl (List (Pair Symbol SExpr))) (d Int) (s SExpr)) RFuncs
   (measure (struct s))
   (match s
     ((SSym x)
@@ -214,23 +226,23 @@
      (if (is_sym h (quote Cons))
        (match rest
          ((Cons f (Cons tail Nil))
-          (match (rfunc tbl f)
+          (match (rfunc tbl d f)
             ((RFErr m) (RFSErr m))
             ((RFOk fu)
-             (match (rchain tbl tail)
+             (match (rchain tbl d tail)
                ((RFSOk fs) (RFSOk (Cons fu fs)))
                ((RFSErr m) (RFSErr m))))))
          (_ (RFSErr "malformed Cons chain")))
        (RFSErr "module chain is not a Cons chain")))
     (_ (RFSErr "module chain is not a Cons chain"))))
 
-(fn rmod ((tbl (List (Pair Symbol SExpr))) (s SExpr)) RMod
+(fn rmod ((tbl (List (Pair Symbol SExpr))) (d Int) (s SExpr)) RMod
   (match s
     ((SList (Cons h (Cons chain (Cons msz Nil))))
      (if (is_sym h (quote MkWModule))
        (match msz
          ((SInt m)
-          (match (rchain tbl chain)
+          (match (rchain tbl d chain)
             ((RFSOk fs) (RMOk (MkWModule fs m)))
             ((RFSErr e) (RMErr e))))
          (_ (RMErr "memsize is not a literal")))
@@ -269,7 +281,8 @@
 ;; or a loud reflection error
 (type TRes (TLine (List Int)) (TSkip) (TFail (List Int)))
 
-(fn tie_of ((tbl (List (Pair Symbol SExpr))) (name Symbol) (goal_form SExpr))
+(fn tie_of
+  ((tbl (List (Pair Symbol SExpr))) (d Int) (name Symbol) (goal_form SExpr))
   TRes
   (match goal_form
     ((SList (Cons g (Cons _ (Cons _ (Cons concl Nil)))))
@@ -282,7 +295,7 @@
              (match wm
                ((SSym _) TSkip)
                (_
-                 (match (rmod tbl wm)
+                 (match (rmod tbl d wm)
                    ((RMErr m) (TFail m))
                    ((RMOk m)
                     (match (tie_name name)
@@ -303,7 +316,10 @@
 (type SRes (SOk (List Int)) (SErr (List Int)))
 
 (fn scan_ties
-  ((tbl (List (Pair Symbol SExpr))) (forms (List SExpr)) (out (List Int)))
+  ((tbl (List (Pair Symbol SExpr)))
+   (d Int)
+   (forms (List SExpr))
+   (out (List Int)))
   SRes
   (measure (struct forms))
   (match forms
@@ -317,18 +333,25 @@
              (if
                (if (prefix_eq "lowered_" (chars_of_sym name)) True
                (prefix_eq "linked_" (chars_of_sym name)))
-               (match (tie_of tbl name gf)
-                 (TSkip (scan_ties tbl rest out))
-                 ((TLine l) (scan_ties tbl rest (append_int out l)))
+               (match (tie_of tbl d name gf)
+                 (TSkip (scan_ties tbl d rest out))
+                 ((TLine l) (scan_ties tbl d rest (append_int out l)))
                  ((TFail m)
                   (SErr (append_int (chars_of_sym name) (append_int ": " m)))))
-               (scan_ties tbl rest out)))
-            (_ (scan_ties tbl rest out)))
-          (scan_ties tbl rest out)))
-       (_ (scan_ties tbl rest out))))))
+               (scan_ties tbl d rest out)))
+            (_ (scan_ties tbl d rest out)))
+          (scan_ties tbl d rest out)))
+       (_ (scan_ties tbl d rest out))))))
 
 (fn fail2 ((msg (List Int)) (w World)) World
   (exit 2 (write (append_int "error: " (append_int msg (nl))) w)))
+
+;; reflection fuel: the file's character count (see the reflector note)
+(fn clen ((cs (List Int))) Int
+  (measure (struct cs))
+  (match cs
+    (Nil 0)
+    ((Cons _ t) (+ 1 (clen t)))))
 
 (fn run1 ((path (List Int)) (w World)) World
   (match (read_file path w)
@@ -337,7 +360,7 @@
      (match (forms_go src Nil 1000000)
        (None (fail2 (append_int "cannot parse " path) w1))
        ((Some forms)
-        (match (scan_ties (inline_table forms) forms "")
+        (match (scan_ties (inline_table forms) (+ 1 (clen src)) forms "")
           ((SErr m) (fail2 m w1))
           ((SOk out) (exit 0 (write out w1)))))))))
 

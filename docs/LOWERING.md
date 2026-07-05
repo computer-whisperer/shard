@@ -589,9 +589,9 @@ the `lg_*` worker induction, and the `lowered_*` theorem.
   link file (the pure/mem REGEN gates stayed byte-identical under the
   shared header change).
 
-Fragment fence (unchanged from §6f): Int-accumulator returns, stride
-≠ 1, multiple stores per iteration, and calls in loop bodies
-(structural-form-only when they come) are future extensions.
+Fragment fence (unchanged from §6f): stride ≠ 1, multiple stores per
+iteration, and calls in loop bodies (structural-form-only when they
+come) are future extensions. Int-accumulator returns landed as §6k.
 
 ### 6i. The byte-tie gate — the fifth gate (2026-07-04)
 
@@ -677,6 +677,62 @@ gets stronger) — hygiene propagates through the citation chain. All
 five gates green on all four builds; corpus closure 182/0, V8 54/0.
 This also stages the future multiple-stores/aliasing loop work: the
 disequality premises those need are condition-relative by nature.
+
+### 6k. INT-RETURN loops — the accumulator comes home (2026-07-04)
+
+The first §7.7 fragment-growth slice: loops whose Z arm returns an
+ACCUMULATOR instead of the memory. Probe first
+(`examples/intloop_probe.shard`, hand-played template on sum-of-bytes,
+**44/0 on the first run**), then mechanized; `lp_sum` (byte checksum
+over a range) joined the loop source set and **both machine-written
+proofs passed on the first generation attempt**; all five gates green,
+V8 replays the sum vectors.
+
+The fragment (v1, deliberately minimal): READ-ONLY loops
+`(fn NAME ((m Mem) (a1 Int) … (an Int) (k Nat)) Int (match k (Z ar)
+((S k2) (NAME m U1 … Un k2))))` — the Mem param passes through
+unchanged, the returned accum's update MUST be the sum shape
+`(+ ar (mem_get m ADV))`, every other update is `ai` / `(+ ai 1)` as
+before. Store+Int-return combinations and `(+ ar 1)` count-returns stay
+behind the fence (the scan slice will need the latter and brings its
+own helper pair).
+
+Template deltas over the Mem-return loop, each now mechanized in
+`tools/lowergen` (`li_*` path):
+
+- **Epilogue** `(LocalGet r)` instead of `(I32Const 0)`; the theorem's
+  result is `(Some (Pair (NAME m0 args k) m0))` — the spec call as the
+  scalar, memory unchanged.
+- **Spec-call spelling in the final locals**: a data-dependent accum
+  has no `lg_adv` closed form, so the worker's exit-locals entry for
+  the return accum IS the spec call — the IH's result and the
+  rhs-opened spec meet at exactly that spelling.
+- **The k-scaled wrap invariant**: premise pair `(le 0 ar)` +
+  `(le (+ ar (* 256 (int_of_nat k))) 4294967296)` — self-sustaining
+  through the induction (the accum grows by a byte while k drops by
+  one). Three new template constants in `loopkit`
+  (`lg_sum_lo`/`lg_sum_32`/`lg_sum_shift`, farkas certs computed per
+  §6j) feed `wrap32_id` at the machine BAdd and step the invariant to
+  the IH; byte bounds come from std/mem's `get_lo`/`get_hi`.
+- **Machine update order**: the return accum's update reads other
+  accums' OLD values (spec updates are simultaneous, machine's are
+  sequential), so it is emitted FIRST, before the addresses advance.
+- Premise layout generalizes to one nonneg + one range pair per
+  PREMISED accum (advancing OR return), nonnegs first, param order;
+  `lgw_`/`lowered_` fuel formula `S^(instrs+4)`/`+4` held unchanged
+  (17 instrs + 4·extra-advancing).
+
+Gate fallout worth remembering: running the (ratification-pinned but
+never-yet-run) gate_sweep targets surfaced two pre-existing holes,
+both fixed here — missing strict-scope use-lines (`core_named` in
+lowergen, `chars_eq` in tools/low/lin — run-mode dispatch tolerated
+them, check-mode scope did not), and a REAL totality gap in
+tools/bytetie's reflector (the `(inline …)` table hop isn't structural
+descent; a cyclic inline chain in a malformed input would hang the
+tool). The reflector now threads reflection FUEL (= the input file's
+character count, a bound every legitimate acyclic walk respects) with
+`(measure d)` obligations discharged by tools/prove's sidecar
+(`tools/bytetie/bytetie.auto.shard`); exhaustion is a loud error.
 
 ## 7. Open questions — triaged at ratification (2026-07-04)
 
