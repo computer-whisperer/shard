@@ -213,8 +213,9 @@ gate (`kernel/driver.shard::run_srcs`) enforces it, with
 
 1. **`kernel/facts.shard` — the reviewed core-math set.** Facts about
    kernel prims that have no derivation route inside the proof theory
-   (the euclidean remainder range at a symbolic divisor; the
-   bitwise/shift defining recurrences). These are the trust floor —
+   (the euclidean characterization at a symbolic divisor — range,
+   identity, and the uniqueness pair; the multiplication ring laws;
+   the bitwise/shift defining recurrences). These are the trust floor —
    the same standing as the arith backend and the `div-facts` step:
    exempt from `(bin trusts)` listing, rendered on their own ledger
    line ("kernel axioms (reviewed core)"), and each rides executable

@@ -1235,12 +1235,15 @@ INTEGER-TIGHT (¬(0≤q) reads q≤−1), which closes quotient bounds and
 quotient composition (`ediv (ediv a N) 2 = ediv a 2N`) at literal
 divisors by pure farkas; and div-facts — not the kernel mod axioms —
 is the integrality gateway at literal divisors (le-spelled remainder
-bounds, variable quotient). Still fenced: mask-mod bridges
+bounds, variable quotient). The mask-mod bridges
 (`band x 255 = mod x 256`) need the PARITY of symbolic terms, which
-linear reasoning cannot see — the unblock is a euclidean uniqueness
-pair (div_unique/mod_unique) in kernel/facts.shard, proposed for
-review, not landed. Emitter bitwise support = wiring std/bits range
-facts into lin.shard's intervals; a later slice.
+linear reasoning cannot see — the unblock was a euclidean completion
+(ediv_mod_id + the uniqueness pair div_unique/mod_unique) plus the
+mul ring laws in kernel/facts.shard, reviewed and LANDED same day
+(15 axioms total, probe-differentialed); std/bits then proved
+mask_pow2/mask_byte and the general symbolic-k shl_pow2/shr_pow2 on
+top. Emitter bitwise support = wiring std/bits range facts into
+lin.shard's intervals; a later slice.
 
 ## 7. Open questions — triaged at ratification (2026-07-04)
 

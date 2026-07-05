@@ -12,6 +12,10 @@
 ;;;   3. bshl_z/bshr_z — shift by zero is the identity.
 ;;;   4. mod_lo/mod_hi — euclidean remainder range, dividends INCLUDING
 ;;;      negatives, positive divisors.
+;;;   5. ediv_mod_id (+ div_unique/mod_unique, whose truth is identity +
+;;;      range: the decomposition with an in-range remainder is unique) —
+;;;      the euclidean identity over the same dividend/divisor grid.
+;;;   6. mul_comm/mul_assoc/mul_dist — the ring laws over signed triples.
 ;;;
 ;;; Self-checking: one OK/FAIL line per section; exit 0 iff all OK.
 ;;;
@@ -84,6 +88,22 @@
 (fn mod_range_ok ((n Int) (d Int)) Bool
   (if (le 0 (mod n d)) (lt (mod n d) d) False))
 
+(fn ediv_id_ok ((n Int) (d Int)) Bool (int_eq n (+ (* d (ediv n d)) (mod n d))))
+
+;; the signed triple grid for the ring laws. Values stay under 2^20 so the
+;; worst triple product is < 2^62 — the compiled chain traps on i63 mul
+;; overflow (chain debt, like its shift traps; the interpreter's bignum is
+;; the semantics authority). The laws are structural, not range-sensitive.
+(fn mul_grid () (List Int)
+  (list -1048576 -65536 -255 -7 -2 -1 0 1 2 3 7 255 256 65535 65536 1048576))
+
+(fn mul_laws_ok ((a Int) (b Int) (c Int)) Bool
+  (if (int_eq (* a b) (* b a))
+    (if (int_eq (* (* a b) c) (* a (* b c)))
+      (int_eq (* a (+ b c)) (+ (* a b) (* a c)))
+      False)
+    False))
+
 ;; --- fold the grids ----------------------------------------------------------
 
 (fn count_bit_bs ((a Int) (bs (List Int))) Int
@@ -128,6 +148,36 @@
     (Nil 0)
     ((Cons n t) (+ (count_mod_ds n ds) (count_mod t ds)))))
 
+(fn count_id_ds ((n Int) (ds (List Int))) Int
+  (measure (struct ds))
+  (match ds
+    (Nil 0)
+    ((Cons d t) (+ (if (ediv_id_ok n d) 0 1) (count_id_ds n t)))))
+
+(fn count_id ((ns (List Int)) (ds (List Int))) Int
+  (measure (struct ns))
+  (match ns
+    (Nil 0)
+    ((Cons n t) (+ (count_id_ds n ds) (count_id t ds)))))
+
+(fn count_mul_cs ((a Int) (b Int) (cs (List Int))) Int
+  (measure (struct cs))
+  (match cs
+    (Nil 0)
+    ((Cons c t) (+ (if (mul_laws_ok a b c) 0 1) (count_mul_cs a b t)))))
+
+(fn count_mul_bs ((a Int) (bs (List Int))) Int
+  (measure (struct bs))
+  (match bs
+    (Nil 0)
+    ((Cons b t) (+ (count_mul_cs a b (mul_grid)) (count_mul_bs a t)))))
+
+(fn count_mul ((as (List Int))) Int
+  (measure (struct as))
+  (match as
+    (Nil 0)
+    ((Cons a t) (+ (count_mul_bs a (mul_grid)) (count_mul t)))))
+
 ;; --- report ------------------------------------------------------------------
 
 (fn chk ((label (List Int)) (fails Int)) (List Int)
@@ -138,15 +188,25 @@
     (let ((c_shift (count_shift (grid) (shifts))))
       (let ((c_z (count_z (grid))))
         (let ((c_mod (count_mod (sapp (grid) (neg_grid)) (divisors))))
-          (let ((allok (int_eq (+ (+ c_bit c_shift) (+ c_z c_mod)) 0)))
-            (exit
-              (if allok 0 1)
-              (write
-                (sapp
-                  (chk "facts_probe bitwise recurrences" c_bit)
-                  (sapp
-                    (chk "facts_probe shift recurrences" c_shift)
+          (let ((c_id (count_id (sapp (grid) (neg_grid)) (divisors))))
+            (let ((c_mul (count_mul (mul_grid))))
+              (let
+                ((allok
+                   (int_eq
+                     (+ (+ (+ c_bit c_shift) (+ c_z c_mod)) (+ c_id c_mul))
+                     0)))
+                (exit
+                  (if allok 0 1)
+                  (write
                     (sapp
-                      (chk "facts_probe shift-zero identities" c_z)
-                      (chk "facts_probe mod range" c_mod))))
-                w))))))))
+                      (chk "facts_probe bitwise recurrences" c_bit)
+                      (sapp
+                        (chk "facts_probe shift recurrences" c_shift)
+                        (sapp
+                          (chk "facts_probe shift-zero identities" c_z)
+                          (sapp
+                            (chk "facts_probe mod range" c_mod)
+                            (sapp
+                              (chk "facts_probe euclidean identity" c_id)
+                              (chk "facts_probe mul ring laws" c_mul))))))
+                    w))))))))))
