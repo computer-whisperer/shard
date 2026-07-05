@@ -774,6 +774,46 @@ vectors (12/12).
   counter wrap `lg_kM` rides its premise pair), at most two stores per
   iteration.
 
+### 6m. Conditional loops — early exit and the machine-written twin (2026-07-04)
+
+The third fragment-growth slice, the one flagged as design-risk:
+`lp_scan` (bounded byte scan, the strlen shape) — an `if` INSIDE the
+loop body with a DATA-DEPENDENT early exit and an Int return. Probe
+first (`examples/scanloop_probe.shard`, **49/0 on the first run**),
+then mechanized; `lp_scan`'s machine-written worker + theorem (and its
+twin) passed on the first generation attempt; five gates green, V8
+16/16 including both exit paths.
+
+- **The structure is the hand `wasm_rev` answer key's**: the S case is
+  a `case-on` the condition. True arm = exit — the case hypothesis
+  collapses the machine's branch flag AND the spec's `if` in one
+  positional-hyp rewrite; no wraps, no IH. False arm = the standard
+  iteration + IH at the advanced args. Termination stays Nat-counted
+  (the budget guard) while correctness follows the condition — the two
+  concerns never mix.
+- **The twin**: on an early exit the budget counter's local is not a
+  closed form of the inputs. The emitter writes a per-fn SPEC TWIN
+  (`NAME_kf` — mirroring the source recursion, `wasm_rev`'s `fi`/`fj`
+  made machine output) that rides the worker's exit locals; the
+  RETURN accum needs no twin because its exit value IS the spec fn.
+  This is the first RECURSIVE FUNCTION the emitter writes (spec-side
+  only; gate 3 checks it like any article). `int_of_nat` rides into
+  the twin's True arm, so that arm opens it with `int_of_nat_succ` on
+  the rhs — the §6f opacity law again.
+- **No new helper certs**: the scanned pointer is a standard inc accum;
+  the whole slice rides the existing loopkit.
+- v1 fragment: `(match k (Z ar) ((S k2) (if (int_eq (mem_get m ar) 0)
+  ar (NAME m U… k2))))` — condition reads AT the returned accum against
+  literal zero (one `I32Eqz`); `Ur = (+ ar 1)`, other accums static.
+  Behind the fence: nonzero literals (`I32Const`+`BEq`), conditions at
+  non-returned accums (each non-closed-form local costs one more twin),
+  accumulating scans.
+
+With §6k/§6l/§6m the loop fragment now covers: fill/copy/stamp-style
+stores, byte checksums, in-place reverse, and bounded scans — every
+piece machine-written end to end, every extension landed with zero
+proof-template failures after its probe.
+
 ## 7. Open questions — triaged at ratification (2026-07-04)
 
 None of these block the ratified form; they are the backlog the next
@@ -801,10 +841,13 @@ arcs draw from.
 6. OPEN (likely yes, confirm during the RS fragment): is one scalar +
    memory enough return surface? (Structured results live in memory
    under the uniform rep.)
-7. OPEN (fragment growth, staged by §6j): write-then-read bodies and
-   multi-store/aliasing loops via condition-relative disequality
-   premises; Int-accumulator loop returns; stride ≠ 1;
-   calls-in-loops (structural form).
+7. Fragment growth — Int-accumulator returns (§6k), multi-store +
+   decrementing accums (§6l), and conditional early-exit scans (§6m)
+   LANDED 2026-07-04. Still open: write-then-READ bodies (a later load
+   seeing through an earlier store — the condition-relative disequality
+   premises staged by §6j), stride ≠ 1, calls-in-loops (structural
+   form), nonzero scan literals, twins for non-returned data-dependent
+   accums.
 
 ## 8. The model-authoring contract — what a target ISA model provides
 

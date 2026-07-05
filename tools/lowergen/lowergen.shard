@@ -994,6 +994,22 @@
 ;; lg_sum_shift with byte bounds from std/mem get_lo/get_hi. Premise
 ;; layout: nonneg + range pair per PREMISED accum (advancing OR the
 ;; return accum), nonnegs first, param order.
+;;
+;; SCAN shape (probe: examples/scanloop_probe.shard) — Int-return with a
+;; DATA-DEPENDENT EARLY EXIT (strlen):
+;;   (fn NAME ((m Mem) (a1 Int) … (an Int) (k Nat)) Int
+;;     (match k (Z ar) ((S k2) (if (int_eq (mem_get m ar) 0) ar
+;;                               (NAME m U1 … Un k2)))))
+;; v1: the condition reads AT the returned accum against literal 0
+;; (I32Eqz); Ur = (+ ar 1), every other accum static. The S case is a
+;; CASE-ON the condition (the hand wasm_rev structure): True arm = exit
+;; (the case hyp collapses the machine flag AND the spec's if — no
+;; wraps, no IH); False arm = the standard iteration + IH. The budget
+;; counter's exit value is not a closed form — the emitter writes a
+;; per-fn SPEC TWIN (NAME_kf, its first recursive fn) that mirrors the
+;; source and rides the worker's exit locals; the return accum's local
+;; is the spec fn itself. int_of_nat rides into the twin's True arm, so
+;; that arm opens it with int_of_nat_succ on the rhs (the opacity law).
 
 (fn qn_eq ((a QName) (b QName)) Bool
   (match a
@@ -1218,7 +1234,12 @@
 ;; per-accum update classification for the Int-return shape
 (type LUpd (LUStr LStr) (LUSum Int))
 
-(type LIRec (LIOk (List LStr) Int Int) (LIErr (List Int)))
+;; LIOk = the sum shape; LCOk = the SCAN shape (conditional early exit:
+;; strides have r = LSInc, everything else static)
+(type LIRec
+  (LIOk (List LStr) Int Int)
+  (LCOk (List LStr) Int)
+  (LIErr (List Int)))
 
 ;; one update: static / +1 / -1 (via lp_upd) or the sum shape
 ;; (+ SELF (mem_get m ACCUM-j))
@@ -1353,6 +1374,90 @@
        (LIErr "S arm must be a tail self-call")))
     (_ (LIErr "S arm must be a tail self-call"))))
 
+;; the scan condition: (int_eq (mem_get m ACCUM-r) 0) — v1 zero test only
+(fn lc_cond ((cnd Expr) (n Int) (r Int)) Bool
+  (match cnd
+    ((Call q as)
+     (if (core_named q (quote int_eq))
+       (match as
+         ((Cons rd (Cons z Nil))
+          (match z
+            ((IntLit zz)
+             (if (int_eq zz 0)
+               (match rd
+                 ((Call qm ms)
+                  (if (memq_named qm (quote mem_get))
+                    (match ms
+                      ((Cons marg (Cons aarg Nil))
+                       (if (lp_is_mem_arg marg n)
+                         (match (lp_acc aarg n)
+                           ((Some i) (int_eq i r))
+                           (None False))
+                         False))
+                      (_ False))
+                    False))
+                 (_ False))
+               False))
+            (_ False)))
+         (_ False))
+       False))
+    (_ False)))
+
+;; scan strides: r must be (+ r 1), every other accum static (statics'
+;; exit locals stay closed forms; anything else would need its own twin)
+(fn lc_strides_ok ((ss (List LStr)) (r Int) (i Int)) Bool
+  (measure (struct ss))
+  (match ss
+    (Nil True)
+    ((Cons h t)
+     (if
+       (if (int_eq i r)
+         (match h
+           ((LSInc) True)
+           (_ False))
+         (match h
+           ((LSStat) True)
+           (_ False)))
+       (lc_strides_ok t r (+ i 1))
+       False))))
+
+;; the SCAN S arm: (if (int_eq (mem_get m ar) 0) ar SELF-CALL)
+(fn lc_sarm ((cnd Expr) (thn Expr) (els Expr) (q QName) (n Int) (r Int))
+  LIRec
+  (if (lc_cond cnd n r)
+    (match thn
+      ((BVar tb)
+       (if (int_eq tb (- (+ n 1) r))
+         (match els
+           ((Call q2 args)
+            (if (qn_eq q2 q)
+              (match args
+                ((Cons marg rest)
+                 (if (lp_is_mem_arg marg n)
+                   (match (lp_updk rest n 0)
+                     (None
+                       (LIErr
+                         "scan self-call updates must be ACCUM or (+ ACCUM 1), ending in the peeled counter"))
+                     ((Some ss)
+                      (if (lc_strides_ok ss r 0)
+                        (LCOk ss r)
+                        (LIErr
+                          "scan v1: the returned accum must be (+ ACC 1) and every other accum static"))))
+                   (LIErr
+                     "scan loop must pass the Mem param through unchanged")))
+                (Nil
+                  (LIErr
+                    "self-call must carry the Mem param, the updates, and the counter")))
+              (LIErr "scan else-branch must be a tail self-call")))
+           (_ (LIErr "scan else-branch must be a tail self-call")))
+         (LIErr
+           "scan then-branch must be the RETURNED accumulator (the Z arm's)")))
+      (_
+        (LIErr
+          "scan then-branch must be the RETURNED accumulator (the Z arm's)")))
+    (LIErr
+      "scan condition must be (int_eq (mem_get m RET-ACCUM) 0) (v1: zero test at the returned accum)")))
+
 (fn li_recognize ((q QName) (n Int) (body Expr)) LIRec
   (match body
     ((Match scr arms)
@@ -1366,7 +1471,10 @@
                  (LIErr
                    "first match arm must be (Z ACCUM) (the returned accumulator)"))
                ((Some r)
-                (if (lp_spat ps) (li_sarm sb q n r)
+                (if (lp_spat ps)
+                  (match sb
+                    ((If cnd thn els) (lc_sarm cnd thn els q n r))
+                    (_ (li_sarm sb q n r)))
                 (LIErr "second match arm must be ((S k2) ...)")))))
             (_ (LIErr "loop match must have exactly the Z and S arms")))
           (LIErr "loop match must scrutinize the Nat counter (the last param)")))
@@ -1472,6 +1580,27 @@
         (DStr "(I32Bin BSub)")
         (lp_lset n)
         (DStr "(Br 0)")))))
+
+;; SCAN codegen: budget guard / load + zero-test exit / r += 1 / k -= 1 /
+;; re-enter (16 instrs, statics add nothing)
+(fn lc_code ((n Int) (r Int)) (List Doc)
+  (list
+    (lp_lget n)
+    (DStr "(I32Eqz)")
+    (DStr "(BrIf 1)")
+    (lp_lget r)
+    (DStr "(I32Load8U)")
+    (DStr "(I32Eqz)")
+    (DStr "(BrIf 1)")
+    (lp_lget r)
+    (lp_const 1)
+    (DStr "(I32Bin BAdd)")
+    (lp_lset r)
+    (lp_lget n)
+    (lp_const 1)
+    (DStr "(I32Bin BSub)")
+    (lp_lset n)
+    (DStr "(Br 0)")))
 
 ;; ---- loop claim assembly ----------------------------------------------------------
 
@@ -2175,6 +2304,159 @@
       (li_worker nm mids n adv r j fa p)
       (li_thm nm mids n adv r (+ p 4)))))
 
+;; ---- the SCAN shape (conditional early exit; probe: scanloop_probe) ----------
+
+;; the twin's self-call args: r advanced, statics passed through
+(fn lc_targs ((mids (List Type)) (r Int) (i Int)) Doc
+  (measure (struct mids))
+  (match mids
+    (Nil (DStr ""))
+    ((Cons _ t)
+     (DCat
+       (if (int_eq i r)
+         (dconc (list (DStr " (+ x") (dint i) (DStr " 1)")))
+         (dconc (list (DStr " x") (dint i))))
+       (lc_targs t r (+ i 1))))))
+
+;; the machine-generated COUNTER TWIN: the budget local's exit value —
+;; the first fn the emitter writes with real recursion (spec-side only;
+;; gate 3 checks it like any article)
+(fn lc_twin ((nm Doc) (mids (List Type)) (r Int)) Doc
+  (dconc
+    (list
+      (DStr "(fn ")
+      nm
+      (DStr "_kf ((m Mem) ")
+      (pr_binds mids 0)
+      (DStr
+        "(k Nat)) Int (measure (struct k)) (match k (Z 0) ((S k2) (if (int_eq (mem_get m x")
+      (dint r)
+      (DStr ") 0) (int_of_nat (S k2)) (")
+      nm
+      (DStr "_kf m")
+      (lc_targs mids r 0)
+      (DStr " k2)))))")
+      (DStr (nl)))))
+
+(fn lc_tspec ((nm Doc) (mids (List Type))) Doc
+  (dconc
+    (list (DStr "(") nm (DStr "_kf m0") (pr_args_lead mids) (DStr " k)"))))
+
+;; exit locals: r -> the spec call, statics -> xi, counter -> the twin
+(fn lc_exits ((mids (List Type)) (r Int) (i Int) (spec Doc) (twin Doc)) Doc
+  (measure (struct mids))
+  (match mids
+    (Nil twin)
+    ((Cons _ t)
+     (DCat
+       (if (int_eq i r)
+         (DCat spec (DStr " "))
+         (dconc (list (DStr "x") (dint i) (DStr " "))))
+       (lc_exits t r (+ i 1) spec twin)))))
+
+;; the shared head of both condition arms: fuel/eval_loop open, guard
+;; decider, the read stage at r, then the flag collapse via the case hyp
+(fn lc_arm_head ((r Int)) Doc
+  (dconc
+    (list
+      (DStr
+        "(chain (steps ((unfold lg_fuel lhs) (reduce lhs) (unfold eval_loop lhs) (rewrite (lemma int_of_nat_succ) lr lhs true ()) (compute lhs (stop eval_loop lg_fuel)))) (rewrite-with (lemma lg_ne) lr lhs () ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))) (steps ((compute lhs (stop eval_loop lg_fuel)) (rewrite (premise 0) lr lhs true ()) (compute lhs (stop eval_loop lg_fuel)))) (rewrite-with (lemma lg_a1_ms) lr lhs ((inst c k2)) ((steps ((rewrite (premise 1) lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl) (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))) (steps ((compute lhs (stop eval_loop lg_fuel)) (rewrite (hyp 0) lr lhs true ()) (compute lhs (stop eval_loop lg_fuel)))) "))))
+
+(fn lc_worker
+  ((nm Doc) (mids (List Type)) (n Int) (r Int) (p Int))
+  Doc
+  (dconc
+    (list
+      (DStr "(claim lgw_")
+      nm
+      (DStr " (goal (")
+      (pr_binds mids 0)
+      (DStr
+        "(st (List Int)) (m0 Mem) (c Nat) (k Nat) (restfs (List Func))) ((= (le 0 x")
+      (dint r)
+      (DStr ") True) (= (le (+ x")
+      (dint r)
+      (DStr " (int_of_nat k)) 65536) True)) (= (eval_loop (S^ ")
+      (dint p)
+      (DStr " (lg_fuel k c)) (MkWModule (Cons ")
+      (li_self nm n r)
+      (DStr " restfs) 65536) (inline ")
+      nm
+      (DStr "_body) (list ")
+      (pr_args mids 0)
+      (DStr " (int_of_nat k)) st m0) (Some (OBr 0 st (list ")
+      (lc_exits mids r 0 (li_spec nm mids) (lc_tspec nm mids))
+      (DStr
+        ") m0)))) (induct k ((case Z (steps ((rewrite (lemma int_of_nat_zero) lr lhs true ()) (compute both)) refl)) (case S (k2) (case-on (int_eq (mem_get m0 x")
+      (dint r)
+      (DStr ") 0) Bool ((case True ")
+      (lc_arm_head r)
+      (DStr "(steps ((unfold ")
+      nm
+      (DStr " rhs) (unfold ")
+      nm
+      (DStr
+        "_kf rhs) (reduce rhs) (rewrite (hyp 0) lr rhs true ()) (rewrite (lemma int_of_nat_succ) lr rhs true ()))) (steps ((compute both))) refl)) (case False ")
+      (lc_arm_head r)
+      (lp_hwk r 1 0)
+      (lp_hw 0 r 1)
+      (DStr "(steps ((unfold ")
+      nm
+      (DStr " rhs) (unfold ")
+      nm
+      (DStr
+        "_kf rhs) (reduce rhs) (rewrite (hyp 0) lr rhs true ()))) (rewrite-with (hyp 1) lr lhs () ((rewrite-with (lemma lg_lo1) lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl)) refl) (rewrite-with (lemma lg_shift) lr lhs () ((steps ((rewrite (premise 1) lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)) refl))) (steps ((compute both))) refl))))))))")
+      (DStr (nl)))))
+
+(fn lc_thm ((nm Doc) (mids (List Type)) (n Int) (r Int) (p4 Int)) Doc
+  (dconc
+    (list
+      (DStr "(claim lowered_")
+      nm
+      (DStr " (goal (")
+      (pr_binds mids 0)
+      (DStr "(m0 Mem) (c Nat) (k Nat) (restfs (List Func))) ((= (le 0 x")
+      (dint r)
+      (DStr ") True) (= (le (+ x")
+      (dint r)
+      (DStr " (int_of_nat k)) 65536) True)) (= (call_fn_mem (S^ ")
+      (dint p4)
+      (DStr " (lg_fuel k c)) (MkWModule (Cons ")
+      (li_self nm n r)
+      (DStr " restfs) 65536) 0 (list ")
+      (pr_args mids 0)
+      (DStr " (int_of_nat k)) m0) (Some (Pair ")
+      (li_spec nm mids)
+      (DStr
+        " m0)))) (chain (steps ((compute lhs (stop eval_loop lg_fuel)))) (rewrite-with (lemma lgw_")
+      nm
+      (DStr
+        ") lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((rewrite (premise 1) lr lhs true ())) refl))) (steps ((compute both))) refl))")
+      (DStr (nl)))))
+
+(fn lc_unit ((nm Doc) (mids (List Type)) (n Int) (r Int) (p Int)) Doc
+  (dconc
+    (list
+      (DStr "(fn ")
+      nm
+      (DStr "_body () (List Instr) (list ")
+      (djoin (lc_code n r))
+      (DStr "))")
+      (DStr (nl))
+      (DStr "(fn ")
+      nm
+      (DStr "_func () Func (MkFunc ")
+      (dint (+ n 1))
+      (DStr " 0 (list (Block (list (Loop (")
+      nm
+      (DStr "_body)))) (LocalGet ")
+      (dint r)
+      (DStr "))))")
+      (DStr (nl))
+      (lc_twin nm mids r)
+      (lc_worker nm mids n r p)
+      (lc_thm nm mids n r (+ p 4)))))
+
 (fn emit_claim_loop ((f FnDef)) CRes
   (match f
     ((FnDef q ts rty body)
@@ -2213,6 +2495,10 @@
                        (if (is_int_ty rty)
                          (match (li_recognize q n body)
                            ((LIErr m) (cerr_at q m))
+                           ((LCOk adv r)
+                            (COk
+                              (lc_unit (dsym (qn_name q)) mids n r 20)
+                              (DStr "")))
                            ((LIOk adv r j)
                             (match (lp_first_inc adv 0)
                               (None

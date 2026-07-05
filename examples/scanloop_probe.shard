@@ -1,0 +1,306 @@
+;;; scanloop_probe.shard — the CONDITIONAL LOOP / EARLY-EXIT probe
+;;; (docs/LOWERING.md §7 item 7, fragment growth; slice 3 of the
+;;; user-approved sequence — the design-risk one). Hand-plays the loop
+;;; template extended with a DATA-DEPENDENT EARLY EXIT: bounded byte
+;;; scan (strlen shape) — walk at most k bytes from p, stop at the first
+;;; zero, return the final pointer.
+;;;
+;;; Template deltas over the unconditional loops:
+;;;   1. IF-IN-LOOP: the S arm is (if COND ar SELF-CALL). The machine
+;;;      tests the loaded byte (I32Eqz) and BrIf-exits the block — TWO
+;;;      exits (budget exhausted / byte found), both leaving the result
+;;;      in the return accum's local.
+;;;   2. CASE-ON THE CONDITION in the S case (the hand wasm_rev answer
+;;;      key's structure): True arm = exit (hyp rewrite collapses the
+;;;      machine flag AND the spec's if; no wraps, no IH); False arm =
+;;;      the standard iteration + IH at the advanced args. Positional
+;;;      hyps: (hyp 0) = the condition equation, (hyp 1) = the IH.
+;;;   3. THE TWIN: on an early exit the counter local is not a closed
+;;;      form (lg_adv-style) of the inputs — it is described by a
+;;;      machine-generated PER-FN SPEC TWIN (sc_find_kf) mirroring the
+;;;      source recursion (wasm_rev's fi/fj, machine-written). The
+;;;      return accum's local needs no twin: its exit value IS the spec
+;;;      fn. int_of_nat rides into the twin's True arm, so the arm
+;;;      opens it with int_of_nat_succ on the rhs (the §6f opacity law).
+;;;   4. NO new helper certs: the scanned pointer is a standard inc
+;;;      accum (lg_lo1/lg_32/lg_a1_ms/lg_shift/lg_kM as always).
+;;;
+;;; V1 condition: (int_eq (mem_get m ADV) 0) — the zero test is one
+;;; I32Eqz; nonzero literals (I32Const + BEq) are a later widening.
+
+(import "../kernel/stdlib.shard")
+(import "../std/mem")
+(import "../std/nat.shard")
+(import "../models/wasm/wasm.shard")
+(import "../models/wasm/loopkit.shard")
+(use (:: std mem *))
+(use (:: std nat *))
+(use (:: models wasm wasm *))
+(use (:: models wasm loopkit *))
+
+;; the source article: first zero's address in [p, p+k), else p+k
+(fn sc_find ((m Mem) (p Int) (k Nat)) Int
+  (measure (struct k))
+  (match k
+    (Z p)
+    ((S k2) (if (int_eq (mem_get m p) 0) p (sc_find m (+ p 1) k2)))))
+
+;; the counter twin: the machine budget local's exit value
+(fn sc_find_kf ((m Mem) (p Int) (k Nat)) Int
+  (measure (struct k))
+  (match k
+    (Z 0)
+    ((S k2)
+     (if (int_eq (mem_get m p) 0)
+       (int_of_nat (S k2))
+       (sc_find_kf m (+ p 1) k2)))))
+
+;; the machine body: budget guard / load + zero-test exit / p += 1 /
+;; k -= 1 / loop
+(fn sc_find_body () (List Instr)
+  (list
+    (LocalGet 1)
+    (I32Eqz)
+    (BrIf 1)
+    (LocalGet 0)
+    (I32Load8U)
+    (I32Eqz)
+    (BrIf 1)
+    (LocalGet 0)
+    (I32Const 1)
+    (I32Bin BAdd)
+    (LocalSet 0)
+    (LocalGet 1)
+    (I32Const 1)
+    (I32Bin BSub)
+    (LocalSet 1)
+    (Br 0)))
+
+(fn sc_find_func () Func
+  (MkFunc 2 0 (list (Block (list (Loop (sc_find_body)))) (LocalGet 0))))
+
+;; --- the worker induction ----------------------------------------------------------
+
+(claim sgw_sc_find
+  (goal
+    ((x0 Int)
+     (st (List Int))
+     (m0 Mem)
+     (c Nat)
+     (k Nat)
+     (restfs (List Func)))
+    ((= (le 0 x0) True) (= (le (+ x0 (int_of_nat k)) 65536) True))
+    (=
+      (eval_loop
+        (S^ 20 (lg_fuel k c))
+        (MkWModule
+          (Cons
+            (MkFunc
+              2
+              0
+              (list (Block (list (Loop (inline sc_find_body)))) (LocalGet 0)))
+            restfs)
+          65536)
+        (inline sc_find_body)
+        (list x0 (int_of_nat k))
+        st
+        m0)
+      (Some (OBr 0 st (list (sc_find m0 x0 k) (sc_find_kf m0 x0 k)) m0))))
+  (induct k
+    ((case Z
+       (steps
+         ((rewrite (lemma int_of_nat_zero) lr lhs true ()) (compute both))
+         refl))
+     (case S
+       (k2)
+       (case-on (int_eq (mem_get m0 x0) 0) Bool
+         ((case True
+            (chain
+              (steps
+                ((unfold lg_fuel lhs)
+                 (reduce lhs)
+                 (unfold eval_loop lhs)
+                 (rewrite (lemma int_of_nat_succ) lr lhs true ())
+                 (compute lhs (stop eval_loop lg_fuel))))
+              (rewrite-with
+                (lemma lg_ne)
+                lr
+                lhs
+                ()
+                ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+              (steps
+                ((compute lhs (stop eval_loop lg_fuel))
+                 (rewrite (premise 0) lr lhs true ())
+                 (compute lhs (stop eval_loop lg_fuel))))
+              (rewrite-with
+                (lemma lg_a1_ms)
+                lr
+                lhs
+                ((inst c k2))
+                ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                 (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+                 (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+              (steps
+                ((compute lhs (stop eval_loop lg_fuel))
+                 (rewrite (hyp 0) lr lhs true ())
+                 (compute lhs (stop eval_loop lg_fuel))))
+              (steps
+                ((unfold sc_find rhs)
+                 (unfold sc_find_kf rhs)
+                 (reduce rhs)
+                 (rewrite (hyp 0) lr rhs true ())
+                 (rewrite (lemma int_of_nat_succ) lr rhs true ())))
+              (steps ((compute both)))
+              refl))
+          (case False
+            (chain
+              (steps
+                ((unfold lg_fuel lhs)
+                 (reduce lhs)
+                 (unfold eval_loop lhs)
+                 (rewrite (lemma int_of_nat_succ) lr lhs true ())
+                 (compute lhs (stop eval_loop lg_fuel))))
+              (rewrite-with
+                (lemma lg_ne)
+                lr
+                lhs
+                ()
+                ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+              (steps
+                ((compute lhs (stop eval_loop lg_fuel))
+                 (rewrite (premise 0) lr lhs true ())
+                 (compute lhs (stop eval_loop lg_fuel))))
+              (rewrite-with
+                (lemma lg_a1_ms)
+                lr
+                lhs
+                ((inst c k2))
+                ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                 (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+                 (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+              (steps
+                ((compute lhs (stop eval_loop lg_fuel))
+                 (rewrite (hyp 0) lr lhs true ())
+                 (compute lhs (stop eval_loop lg_fuel))))
+              (have hsub (= (- (+ 1 (int_of_nat k2)) 1) (int_of_nat k2))
+                (rewrite-with (lemma lg_sub) lr lhs () () refl))
+              (steps ((rewrite (premise hsub) lr lhs true ())))
+              (have hwk (= (mod (int_of_nat k2) 4294967296) (int_of_nat k2))
+                (rewrite-with
+                  (lemma wrap32_id)
+                  lr
+                  lhs
+                  ((inst x (int_of_nat k2)))
+                  ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)
+                   (rewrite-with
+                     (lemma lg_kM)
+                     lr
+                     lhs
+                     ((inst a x0) (inst c k2))
+                     ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                      (steps
+                        ((rewrite (lemma int_of_nat_succ) lr lhs true ()))
+                        refl)
+                      (steps ((rewrite (premise 0) lr lhs true ())) refl))
+                     refl))
+                  refl))
+              (steps ((rewrite (premise hwk) lr lhs true ())))
+              (have hw0 (= (mod (+ x0 1) 4294967296) (+ x0 1))
+                (rewrite-with
+                  (lemma wrap32_id)
+                  lr
+                  lhs
+                  ((inst x (+ x0 1)))
+                  ((rewrite-with
+                     (lemma lg_lo1)
+                     lr
+                     lhs
+                     ()
+                     ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                     refl)
+                   (rewrite-with
+                     (lemma lg_32)
+                     lr
+                     lhs
+                     ()
+                     ((rewrite-with
+                        (lemma lg_a1_ms)
+                        lr
+                        lhs
+                        ((inst c k2))
+                        ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                         (steps
+                           ((rewrite (lemma int_of_nat_succ) lr lhs true ()))
+                           refl)
+                         (rewrite-with
+                           (lemma int_of_nat_nonneg)
+                           lr
+                           lhs
+                           ()
+                           ()
+                           refl))
+                        refl))
+                     refl))
+                  refl))
+              (steps ((rewrite (premise hw0) lr lhs true ())))
+              (steps
+                ((unfold sc_find rhs)
+                 (unfold sc_find_kf rhs)
+                 (reduce rhs)
+                 (rewrite (hyp 0) lr rhs true ())))
+              (rewrite-with
+                (hyp 1)
+                lr
+                lhs
+                ()
+                ((rewrite-with
+                   (lemma lg_lo1)
+                   lr
+                   lhs
+                   ()
+                   ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                   refl)
+                 (rewrite-with
+                   (lemma lg_shift)
+                   lr
+                   lhs
+                   ()
+                   ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                    (steps
+                      ((rewrite (lemma int_of_nat_succ) lr lhs true ()))
+                      refl))
+                   refl)))
+              (steps ((compute both)))
+              refl))))))))
+
+;; --- the lowered theorem ------------------------------------------------------------
+
+(claim lowered_sc_find
+  (goal ((x0 Int) (m0 Mem) (c Nat) (k Nat) (restfs (List Func)))
+    ((= (le 0 x0) True) (= (le (+ x0 (int_of_nat k)) 65536) True))
+    (=
+      (call_fn_mem
+        (S^ 24 (lg_fuel k c))
+        (MkWModule
+          (Cons
+            (MkFunc
+              2
+              0
+              (list (Block (list (Loop (inline sc_find_body)))) (LocalGet 0)))
+            restfs)
+          65536)
+        0
+        (list x0 (int_of_nat k))
+        m0)
+      (Some (Pair (sc_find m0 x0 k) m0))))
+  (chain
+    (steps ((compute lhs (stop eval_loop lg_fuel))))
+    (rewrite-with
+      (lemma sgw_sc_find)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (steps ((compute both)))
+    refl))
