@@ -734,6 +734,46 @@ character count, a bound every legitimate acyclic walk respects) with
 `(measure d)` obligations discharged by tools/prove's sidecar
 (`tools/bytetie/bytetie.auto.shard`); exhaustion is a loud error.
 
+### 6l. Multi-store + two-pointer loops — in-place reverse (2026-07-04)
+
+The second fragment-growth slice: TWO stores per iteration and a
+DECREMENTING address accumulator, driven by the challenge example
+`lp_rev` (in-place range reverse — the counter-as-local twin of the
+hand-proven `wasm_rev`). Probe first (`examples/revloop_probe.shard`,
+**49/0 on the first run**), then mechanized; `lp_rev` joined the loop
+source set and **both machine-written proofs passed on the first
+generation attempt**; all five gates green, V8 replays the reverse
+vectors (12/12).
+
+- **Two stores, zero aliasing lemmas.** The source work generalizes to
+  the nest `(mem_set (mem_set m A1 V1) A2 V2)` (inner store executes
+  first). The machine pushes the OUTER store's (addr, value) pair
+  deepest, then the inner's, then stores twice — every load executes
+  before either store on the pure stack (no scratch locals; the hand
+  piece's idiom). Because reads happen against the OLD memory on both
+  sides, the interpreter's memory residue is byte-for-byte the spec's
+  nested spelling — the condition-relative disequality machinery (§6j)
+  stays unused for this shape. (It remains staged for write-then-READ
+  bodies, where a later load must see through an earlier store.)
+- **The stride enum.** Per-accum updates generalize from a Bool to
+  static / +1 / −1 (`LStr`). A dec accum rides the premise pair
+  count-lower `(le (int_of_nat k) x)` + address-upper
+  `(le (+ x 1) 65536)`: every touched address stays ≥ 1 and the final
+  local stays ≥ 0, so the last decrement never wraps — the recorded
+  fence is that a dec accum can never touch byte 0. Six new template
+  constants in `loopkit` (`lg_dec` twin + `lg_dlo`/`lg_dlo1`/`lg_d32`/
+  `lg_dshift`/`lg_dhi`, farkas certs computed per §6j). The dec guard
+  stage is asymmetric to inc: the address-UPPER premise rewrites
+  directly (it IS the model's check spelling) while the lower guard
+  cites `lg_dlo`.
+- The rework was proven output-neutral before `lp_rev` landed: the
+  regenerated cert file for fill/copy/stamp/sum stayed BYTE-IDENTICAL
+  under the stride generalization, and the pure/mem REGEN gates stayed
+  green.
+- V1 fences now explicit in the recognizer: at least one INC accum (the
+  counter wrap `lg_kM` rides its premise pair), at most two stores per
+  iteration.
+
 ## 7. Open questions — triaged at ratification (2026-07-04)
 
 None of these block the ratified form; they are the backlog the next
