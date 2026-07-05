@@ -1,17 +1,19 @@
-;;; examples/lowergen_loop_src.build.shard — the mod.build file for the
-;;; LOOP fragment (docs/LOWERING.md §6h): the artifact plan for
-;;; examples/lowergen_loop_src.shard. Loop pieces are LEAF certs (no
-;;; callee prefix): each shipped binary is the cert's module at
-;;; restfs := Nil — [self], one 64KiB page, export f0.
+;;; examples/lowergen_loop_src.build.shard — the mod.build ENTRY for the
+;;; LOOP fragment (docs/LOWERING.md §6h, §6o): assembles the artifact set
+;;; for examples/lowergen_loop_src.shard as a native Plan value.
 ;;;
-;;;   ARTIFACT <fn> …        manifest: cert ↔ cert file ↔ ISA model ↔ glue
-;;;   MOD <fn> <hex>         real .wasm bytes via the model's encoder
-;;;   MEMCASE <fn> f0 …      engine vectors; expected value AND memory
-;;;                          readback computed SPEC-SIDE (the source fn
-;;;                          applied directly — the Nat counter arg via
-;;;                          fnat of the machine i32)
+;;;     (fn build ((t Target)) Plan)     — PURE; the whole interface
 ;;;
-;;; RUN IT:  bin/shard_eval run examples/lowergen_loop_src.build.shard | node examples/wasm_diff.mjs /dev/stdin
+;;; Loop pieces are LEAF certs (no callee prefix): each module is the
+;;; cert's module at restfs := Nil — [self], linear memory from the
+;;; Target, export f0. The Func literals come from the GENERATED cert
+;;; file itself (lowergen_loop_out.shard's lp_*_func) — no hand copies.
+;;; MEMCASE vectors' expected value AND memory readback computed
+;;; SPEC-SIDE (the source fn applied directly — the Nat counter arg via
+;;; fnat of the machine i32). The driver (tools/lowbuild/lowbuild.shard)
+;;; renders the wire lines.
+;;;
+;;; RUN IT:  bin/shard_eval run tools/lowbuild/lowbuild.shard examples/lowergen_loop_src.build.shard | node examples/wasm_diff.mjs /dev/stdin
 
 (import "../kernel/stdlib.shard")
 (import "lowergen_loop_src.shard")
@@ -29,15 +31,12 @@
 (use (:: models wasm wasm *))
 (import "../models/wasm/encode.shard")
 (use (:: models wasm encode *))
-
-(type World (World Int))
-
-(extern write ((bytes (List Int)) (w World)) World)
-(extern exit ((code Int) (w World)) World)
+(import "../tools/low/plan.shard")
+(use (:: tools low plan *))
 
 ;; --- the binaries: [self] per source fn (leaf pieces, no callee prefix) ----------
 
-(fn lmod ((self Func)) WModule (MkWModule (list self) 65536))
+(fn lmod ((self Func) (limit Int)) WModule (MkWModule (list self) limit))
 
 ;; --- spec-side memory helpers ---------------------------------------------------
 
@@ -59,170 +58,139 @@
     (Nil Z)
     ((Cons _ t) (S (len_nat t)))))
 
-;; --- plan rendering -------------------------------------------------------------
+;; --- the build entry -------------------------------------------------------------
 
-(fn cat ((xs (List (List Int)))) (List Int)
-  (measure (struct xs))
-  (match xs
-    (Nil "")
-    ((Cons h t) (wapp h (cat t)))))
-
-(fn hexd ((d Int)) Int (if (lt d 10) (+ 48 d) (+ 87 d)))
-
-(fn hexs ((bs (List Int))) (List Int)
-  (measure (struct bs))
-  (match bs
-    (Nil Nil)
-    ((Cons b t) (Cons (hexd (ediv b 16)) (Cons (hexd (mod b 16)) (hexs t))))))
-
-(fn showargs ((xs (List Int))) (List Int)
-  (measure (struct xs))
-  (match xs
-    (Nil "")
-    ((Cons h t) (wapp " " (wapp (dec h) (showargs t))))))
-
-(fn art_line ((nm (List Int))) (List Int)
-  (cat
-    (list
-      "ARTIFACT "
-      nm
-      " cert=lowered_"
-      nm
-      " certfile=examples/lowergen_loop_out.shard model=models/wasm/wasm.shard export=f0 callees=none externs=none\n")))
-
-(fn mod_line ((nm (List Int)) (m WModule)) (List Int)
-  (cat (list "MOD " nm " " (hexs (enc_module m)) "\n")))
+(fn art ((nm (List Int))) PArt
+  (PA
+    nm
+    (wapp "lowered_" nm)
+    "examples/lowergen_loop_out.shard"
+    "models/wasm/wasm.shard"
+    0
+    "none"
+    "none"))
 
 ;; a memory vector: expected value + final-memory readback, both SPEC-side
-(fn memcase
-  ((nm (List Int)) (args (List Int)) (membytes (List Int)) (v Int) (mf Mem))
-  (List Int)
-  (cat
-    (list
-      "MEMCASE "
-      nm
-      " f0"
-      (showargs args)
-      " MEM "
-      (hexs membytes)
-      " -> "
-      (dec v)
-      " "
-      (hexs (mdump 0 (len_nat membytes) mf))
-      "\n")))
+(fn vec ((args (List Int)) (membytes (List Int)) (v Int) (mf Mem)) PVec
+  (PV 0 args membytes v (mdump 0 (len_nat membytes) mf)))
 
 (fn ld ((bs (List Int))) Mem (mload bs 0 (mem_empty)))
 
-(fn emit () (List Int)
-  (cat
-    (list
-      (art_line "lp_fill")
-      (mod_line "lp_fill" (lmod (lp_fill_func)))
-      (memcase
-        "lp_fill"
-        (list 1 200 3)
-        (list 5 5 5 5 5)
-        0
-        (lp_fill (ld (list 5 5 5 5 5)) 1 200 (fnat 3)))
-      (memcase
-        "lp_fill"
-        (list 0 999 2)
-        (list 7 7 7)
-        0
-        (lp_fill (ld (list 7 7 7)) 0 999 (fnat 2)))
-      (memcase
-        "lp_fill"
-        (list 2 50 0)
-        (list 9 9 9)
-        0
-        (lp_fill (ld (list 9 9 9)) 2 50 (fnat 0)))
-      (art_line "lp_copy")
-      (mod_line "lp_copy" (lmod (lp_copy_func)))
-      (memcase
-        "lp_copy"
-        (list 0 3 3)
-        (list 1 2 3 0 0 0)
-        0
-        (lp_copy (ld (list 1 2 3 0 0 0)) 0 3 (fnat 3)))
-      (memcase
-        "lp_copy"
-        (list 0 1 3)
-        (list 8 9 10 11)
-        0
-        (lp_copy (ld (list 8 9 10 11)) 0 1 (fnat 3)))
-      (art_line "lp_stamp")
-      (mod_line "lp_stamp" (lmod (lp_stamp_func)))
-      (memcase
-        "lp_stamp"
-        (list 1 3)
-        (list 0 0 0 0 0)
-        0
-        (lp_stamp (ld (list 0 0 0 0 0)) 1 (fnat 3)))
-      (art_line "lp_sum")
-      (mod_line "lp_sum" (lmod (lp_sum_func)))
-      (memcase
-        "lp_sum"
-        (list 0 0 4)
-        (list 1 2 3 4 5)
-        (lp_sum (ld (list 1 2 3 4 5)) 0 0 (fnat 4))
-        (ld (list 1 2 3 4 5)))
-      (memcase
-        "lp_sum"
-        (list 1 100 3)
-        (list 10 20 30 40)
-        (lp_sum (ld (list 10 20 30 40)) 1 100 (fnat 3))
-        (ld (list 10 20 30 40)))
-      (memcase
-        "lp_sum"
-        (list 2 7 0)
-        (list 9 9 9)
-        (lp_sum (ld (list 9 9 9)) 2 7 (fnat 0))
-        (ld (list 9 9 9)))
-      (art_line "lp_rev")
-      (mod_line "lp_rev" (lmod (lp_rev_func)))
-      (memcase
-        "lp_rev"
-        (list 0 5 3)
-        (list 1 2 3 4 5 6)
-        0
-        (lp_rev (ld (list 1 2 3 4 5 6)) 0 5 (fnat 3)))
-      (memcase
-        "lp_rev"
-        (list 0 4 2)
-        (list 9 8 7 6 5)
-        0
-        (lp_rev (ld (list 9 8 7 6 5)) 0 4 (fnat 2)))
-      (memcase
-        "lp_rev"
-        (list 1 3 0)
-        (list 4 4 4 4)
-        0
-        (lp_rev (ld (list 4 4 4 4)) 1 3 (fnat 0)))
-      (art_line "lp_scan")
-      (mod_line "lp_scan" (lmod (lp_scan_func)))
-      (memcase
-        "lp_scan"
-        (list 0 4)
-        (list 65 66 0 68)
-        (lp_scan (ld (list 65 66 0 68)) 0 (fnat 4))
-        (ld (list 65 66 0 68)))
-      (memcase
-        "lp_scan"
-        (list 0 3)
-        (list 1 2 3)
-        (lp_scan (ld (list 1 2 3)) 0 (fnat 3))
-        (ld (list 1 2 3)))
-      (memcase
-        "lp_scan"
-        (list 1 3)
-        (list 0 7 7 0)
-        (lp_scan (ld (list 0 7 7 0)) 1 (fnat 3))
-        (ld (list 0 7 7 0)))
-      (memcase
-        "lp_scan"
-        (list 2 0)
-        (list 9 9 9)
-        (lp_scan (ld (list 9 9 9)) 2 (fnat 0))
-        (ld (list 9 9 9))))))
+(fn pmod ((nm (List Int)) (self Func) (limit Int) (vs (List PVec))) PMod
+  (PM nm (enc_module (lmod self limit)) (list (art nm)) vs))
 
-(fn main ((w World)) World (exit 0 (write (emit) w)))
+(fn build ((t Target)) Plan
+  (match (mem_limit_of t)
+    (lim
+      (MkPlan
+        (list
+          (pmod
+            "lp_fill"
+            (lp_fill_func)
+            lim
+            (list
+              (vec
+                (list 1 200 3)
+                (list 5 5 5 5 5)
+                0
+                (lp_fill (ld (list 5 5 5 5 5)) 1 200 (fnat 3)))
+              (vec
+                (list 0 999 2)
+                (list 7 7 7)
+                0
+                (lp_fill (ld (list 7 7 7)) 0 999 (fnat 2)))
+              (vec
+                (list 2 50 0)
+                (list 9 9 9)
+                0
+                (lp_fill (ld (list 9 9 9)) 2 50 (fnat 0)))))
+          (pmod
+            "lp_copy"
+            (lp_copy_func)
+            lim
+            (list
+              (vec
+                (list 0 3 3)
+                (list 1 2 3 0 0 0)
+                0
+                (lp_copy (ld (list 1 2 3 0 0 0)) 0 3 (fnat 3)))
+              (vec
+                (list 0 1 3)
+                (list 8 9 10 11)
+                0
+                (lp_copy (ld (list 8 9 10 11)) 0 1 (fnat 3)))))
+          (pmod
+            "lp_stamp"
+            (lp_stamp_func)
+            lim
+            (list
+              (vec
+                (list 1 3)
+                (list 0 0 0 0 0)
+                0
+                (lp_stamp (ld (list 0 0 0 0 0)) 1 (fnat 3)))))
+          (pmod
+            "lp_sum"
+            (lp_sum_func)
+            lim
+            (list
+              (vec
+                (list 0 0 4)
+                (list 1 2 3 4 5)
+                (lp_sum (ld (list 1 2 3 4 5)) 0 0 (fnat 4))
+                (ld (list 1 2 3 4 5)))
+              (vec
+                (list 1 100 3)
+                (list 10 20 30 40)
+                (lp_sum (ld (list 10 20 30 40)) 1 100 (fnat 3))
+                (ld (list 10 20 30 40)))
+              (vec
+                (list 2 7 0)
+                (list 9 9 9)
+                (lp_sum (ld (list 9 9 9)) 2 7 (fnat 0))
+                (ld (list 9 9 9)))))
+          (pmod
+            "lp_rev"
+            (lp_rev_func)
+            lim
+            (list
+              (vec
+                (list 0 5 3)
+                (list 1 2 3 4 5 6)
+                0
+                (lp_rev (ld (list 1 2 3 4 5 6)) 0 5 (fnat 3)))
+              (vec
+                (list 0 4 2)
+                (list 9 8 7 6 5)
+                0
+                (lp_rev (ld (list 9 8 7 6 5)) 0 4 (fnat 2)))
+              (vec
+                (list 1 3 0)
+                (list 4 4 4 4)
+                0
+                (lp_rev (ld (list 4 4 4 4)) 1 3 (fnat 0)))))
+          (pmod
+            "lp_scan"
+            (lp_scan_func)
+            lim
+            (list
+              (vec
+                (list 0 4)
+                (list 65 66 0 68)
+                (lp_scan (ld (list 65 66 0 68)) 0 (fnat 4))
+                (ld (list 65 66 0 68)))
+              (vec
+                (list 0 3)
+                (list 1 2 3)
+                (lp_scan (ld (list 1 2 3)) 0 (fnat 3))
+                (ld (list 1 2 3)))
+              (vec
+                (list 1 3)
+                (list 0 7 7 0)
+                (lp_scan (ld (list 0 7 7 0)) 1 (fnat 3))
+                (ld (list 0 7 7 0)))
+              (vec
+                (list 2 0)
+                (list 9 9 9)
+                (lp_scan (ld (list 9 9 9)) 2 (fnat 0))
+                (ld (list 9 9 9))))))))))

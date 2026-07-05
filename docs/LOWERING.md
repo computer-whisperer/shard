@@ -910,9 +910,16 @@ and shell-grep consumption of structured data. What it deliberately
 keeps: cert proofs as FILES (the kernel gate needs source), the V8 wire
 format (V8 is outside the shard world; irreducible, but rendered once
 in one place), and bytetie for any bytes that PERSIST on disk.
-Remaining v1 residue: the examples build plans
-(`lowergen_{src,mem,loop}_src.build.shard`) still speak the retired
-main()-rendering form — conversion is mechanical, queued next.
+
+All four build entries speak the form: the three examples plans
+(`lowergen_{src,mem,loop}_src.build.shard`) converted next to std/mem —
+every one of the four rendered **byte-identical** to its retired
+main()-rendered plan on the first driver run, and all four five-gate
+builds are green under the new pipeline. The loop build entry references
+the GENERATED cert file's own `lp_*_func` literals (no hand copies); the
+pure/mem builds keep local literals (the generated files inline their
+MkFunc terms — no named Func fns to import yet), with bytetie policing
+that tie as before.
 
 ## 7. Open questions — triaged at ratification (2026-07-04)
 

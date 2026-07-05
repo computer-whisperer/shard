@@ -1,27 +1,21 @@
-;;; examples/lowergen_src.build.shard — the FIRST mod.build FILE (P4b,
-;;; docs/LOWERING.md §6): the per-module build entry that assembles the
-;;; ARTIFACT SET for examples/lowergen_src.shard and prints it as a plan:
+;;; examples/lowergen_src.build.shard — the mod.build ENTRY (P4b →
+;;; docs/LOWERING.md §6o): assembles the artifact set for
+;;; examples/lowergen_src.shard as a native Plan value.
 ;;;
-;;;   ARTIFACT <fn> …      manifest: which cert covers which binary, under
-;;;                        which ISA model, with which glue (export, externs)
-;;;   MOD <fn> <hex>       the BINARY — real .wasm bytes via the model's
-;;;                        encoder, one single-function module per fn (the
-;;;                        cert's module literal at restfs := Nil)
-;;;   CASE <fn> f0 … -> …  engine smoke vectors; the EXPECTED value is the
-;;;                        SOURCE fn applied directly (spec-side semantics,
-;;;                        not the model) — the artifact-level differential
+;;;     (fn build ((t Target)) Plan)     — PURE; the whole interface
 ;;;
-;;; The full quadruple: binary (MOD) + ISA-model identity (manifest) +
-;;; certs (examples/lowergen_out.shard, kernel- and schema-gated by
-;;; examples/lowbuild.sh) + glue (manifest). wasm_diff.mjs replays the
-;;; plan under V8 and ignores manifest lines.
+;;; One single-function module per fn (the cert's module literal at
+;;; restfs := Nil, no memory), one manifest entry each
+;;; (lowered_<fn> over export f0), and CASE vectors whose expected value
+;;; is the SOURCE fn applied directly (spec-side semantics, not the
+;;; model; u32-safe args only — the certs' premise discipline).
+;;; The driver (tools/lowbuild/lowbuild.shard) renders the wire lines.
 ;;;
 ;;; The func literals here are copied from the generated certs; the
-;;; cert↔binary tie is CHECKED by the BYTETIE gate (tools/bytetie
-;;; re-encodes each claim's module literal and diffs the MOD bytes —
+;;; cert↔binary tie is CHECKED by the BYTETIE gate (tools/bytetie —
 ;;; docs/LOWERING.md §6i), so drift fails the build.
 ;;;
-;;; RUN IT:  bin/shard_eval run examples/lowergen_src.build.shard | node examples/wasm_diff.mjs /dev/stdin
+;;; RUN IT:  bin/shard_eval run tools/lowbuild/lowbuild.shard examples/lowergen_src.build.shard | node examples/wasm_diff.mjs /dev/stdin
 
 (import "../kernel/stdlib.shard")
 (import "lowergen_src.shard")
@@ -30,6 +24,8 @@
 (use (:: models wasm wasm *))
 (import "../models/wasm/encode.shard")
 (use (:: models wasm encode *))
+(import "../tools/low/plan.shard")
+(use (:: tools low plan *))
 
 ;; --- the binaries: one single-function module per source fn -------------------
 
@@ -251,105 +247,93 @@
           (LocalGet 1))))
     0))
 
-;; --- plan rendering -----------------------------------------------------------
+;; --- the build entry -------------------------------------------------------------
 
-(fn cat ((xs (List (List Int)))) (List Int)
-  (measure (struct xs))
-  (match xs
-    (Nil "")
-    ((Cons h t) (wapp h (cat t)))))
+(fn art ((nm (List Int))) PArt
+  (PA
+    nm
+    (wapp "lowered_" nm)
+    "examples/lowergen_out.shard"
+    "models/wasm/wasm.shard"
+    0
+    ""
+    "none"))
 
-(fn hexd ((d Int)) Int (if (lt d 10) (+ 48 d) (+ 87 d)))
+(fn pv ((args (List Int)) (want Int)) PVec (PV 0 args Nil want Nil))
 
-(fn hexs ((bs (List Int))) (List Int)
-  (measure (struct bs))
-  (match bs
-    (Nil Nil)
-    ((Cons b t) (Cons (hexd (ediv b 16)) (Cons (hexd (mod b 16)) (hexs t))))))
+(fn pmod ((nm (List Int)) (m WModule) (vs (List PVec))) PMod
+  (PM nm (enc_module m) (list (art nm)) vs))
 
-(fn showargs ((xs (List Int))) (List Int)
-  (measure (struct xs))
-  (match xs
-    (Nil "")
-    ((Cons h t) (wapp " " (wapp (dec h) (showargs t))))))
-
-;; manifest line: cert name + cert file + ISA model + glue
-(fn art_line ((nm (List Int))) (List Int)
-  (cat
+(fn build ((t Target)) Plan
+  (MkPlan
     (list
-      "ARTIFACT "
-      nm
-      " cert=lowered_"
-      nm
-      " certfile=examples/lowergen_out.shard model=models/wasm/wasm.shard export=f0 externs=none\n")))
-
-(fn mod_line ((nm (List Int)) (m WModule)) (List Int)
-  (cat (list "MOD " nm " " (hexs (enc_module m)) "\n")))
-
-;; a vector: expected = the SOURCE fn applied directly (u32-safe args only —
-;; the certs' premise discipline; out-of-range args are out of contract)
-(fn case_line ((nm (List Int)) (args (List Int)) (expected Int)) (List Int)
-  (cat (list "CASE " nm " f0" (showargs args) " -> " (dec expected) "\n")))
-
-(fn emit () (List Int)
-  (cat
-    (list
-      (art_line "lg_add1")
-      (mod_line "lg_add1" (m_add1))
-      (case_line "lg_add1" (list 5) (lg_add1 5))
-      (case_line "lg_add1" (list 4294967294) (lg_add1 4294967294))
-      (art_line "lg_add")
-      (mod_line "lg_add" (m_add))
-      (case_line "lg_add" (list 7 9) (lg_add 7 9))
-      (case_line "lg_add" (list 4294967290 5) (lg_add 4294967290 5))
-      (art_line "lg_sub")
-      (mod_line "lg_sub" (m_sub))
-      (case_line "lg_sub" (list 20 5) (lg_sub 20 5))
-      (case_line
+      (pmod
+        "lg_add1"
+        (m_add1)
+        (list
+          (pv (list 5) (lg_add1 5))
+          (pv (list 4294967294) (lg_add1 4294967294))))
+      (pmod
+        "lg_add"
+        (m_add)
+        (list
+          (pv (list 7 9) (lg_add 7 9))
+          (pv (list 4294967290 5) (lg_add 4294967290 5))))
+      (pmod
         "lg_sub"
-        (list 4294967295 4294967295)
-        (lg_sub 4294967295 4294967295))
-      (art_line "lg_mix")
-      (mod_line "lg_mix" (m_mix))
-      (case_line "lg_mix" (list 3 10) (lg_mix 3 10))
-      (case_line "lg_mix" (list 4 1000) (lg_mix 4 1000))
-      (art_line "lg_id")
-      (mod_line "lg_id" (m_id))
-      (case_line "lg_id" (list 42) (lg_id 42))
-      (case_line "lg_id" (list 4294967295) (lg_id 4294967295))
-      (art_line "lg_share")
-      (mod_line "lg_share" (m_share))
-      (case_line "lg_share" (list 5) (lg_share 5))
-      (case_line "lg_share" (list 46000) (lg_share 46000))
-      (art_line "lg_nest")
-      (mod_line "lg_nest" (m_nest))
-      (case_line "lg_nest" (list 3 10) (lg_nest 3 10))
-      (case_line "lg_nest" (list 100000 200000) (lg_nest 100000 200000))
-      (art_line "lg_alias")
-      (mod_line "lg_alias" (m_alias))
-      (case_line "lg_alias" (list 41) (lg_alias 41))
-      (case_line "lg_alias" (list 4294967294) (lg_alias 4294967294))
-      (art_line "lg_gate")
-      (mod_line "lg_gate" (m_gate))
-      (case_line "lg_gate" (list 5) (lg_gate 5))
-      (case_line "lg_gate" (list 10) (lg_gate 10))
-      (art_line "lg_sel")
-      (mod_line "lg_sel" (m_sel))
-      (case_line "lg_sel" (list 0 7) (lg_sel 0 7))
-      (case_line "lg_sel" (list 3 7) (lg_sel 3 7))
-      (art_line "lg_clamp2")
-      (mod_line "lg_clamp2" (m_clamp2))
-      (case_line "lg_clamp2" (list 5) (lg_clamp2 5))
-      (case_line "lg_clamp2" (list 50) (lg_clamp2 50))
-      (case_line "lg_clamp2" (list 200) (lg_clamp2 200))
-      (art_line "lg_selsq")
-      (mod_line "lg_selsq" (m_selsq))
-      (case_line "lg_selsq" (list 3 0) (lg_selsq 3 0))
-      (case_line "lg_selsq" (list 3 4) (lg_selsq 3 4))
-      (art_line "lg_dec")
-      (mod_line "lg_dec" (m_dec))
-      (case_line "lg_dec" (list 5) (lg_dec 5))
-      (case_line "lg_dec" (list 0) (lg_dec 0))
-      (case_line "lg_dec" (list 4294967295) (lg_dec 4294967295)))))
-
-(fn main ((w World)) World (exit 0 (write (emit) w)))
+        (m_sub)
+        (list
+          (pv (list 20 5) (lg_sub 20 5))
+          (pv (list 4294967295 4294967295) (lg_sub 4294967295 4294967295))))
+      (pmod
+        "lg_mix"
+        (m_mix)
+        (list (pv (list 3 10) (lg_mix 3 10)) (pv (list 4 1000) (lg_mix 4 1000))))
+      (pmod
+        "lg_id"
+        (m_id)
+        (list
+          (pv (list 42) (lg_id 42))
+          (pv (list 4294967295) (lg_id 4294967295))))
+      (pmod
+        "lg_share"
+        (m_share)
+        (list (pv (list 5) (lg_share 5)) (pv (list 46000) (lg_share 46000))))
+      (pmod
+        "lg_nest"
+        (m_nest)
+        (list
+          (pv (list 3 10) (lg_nest 3 10))
+          (pv (list 100000 200000) (lg_nest 100000 200000))))
+      (pmod
+        "lg_alias"
+        (m_alias)
+        (list
+          (pv (list 41) (lg_alias 41))
+          (pv (list 4294967294) (lg_alias 4294967294))))
+      (pmod
+        "lg_gate"
+        (m_gate)
+        (list (pv (list 5) (lg_gate 5)) (pv (list 10) (lg_gate 10))))
+      (pmod
+        "lg_sel"
+        (m_sel)
+        (list (pv (list 0 7) (lg_sel 0 7)) (pv (list 3 7) (lg_sel 3 7))))
+      (pmod
+        "lg_clamp2"
+        (m_clamp2)
+        (list
+          (pv (list 5) (lg_clamp2 5))
+          (pv (list 50) (lg_clamp2 50))
+          (pv (list 200) (lg_clamp2 200))))
+      (pmod
+        "lg_selsq"
+        (m_selsq)
+        (list (pv (list 3 0) (lg_selsq 3 0)) (pv (list 3 4) (lg_selsq 3 4))))
+      (pmod
+        "lg_dec"
+        (m_dec)
+        (list
+          (pv (list 5) (lg_dec 5))
+          (pv (list 0) (lg_dec 0))
+          (pv (list 4294967295) (lg_dec 4294967295)))))))

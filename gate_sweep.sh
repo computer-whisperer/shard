@@ -63,6 +63,8 @@ TARGETS=(
   tools/lowergen/lowergen.shard
   tools/lowcheck/lowcheck.shard
   tools/bytetie/bytetie.shard
+  tools/invoke/invoke.shard
+  tools/lowbuild/lowbuild.shard
 )
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT

@@ -42,7 +42,7 @@ fi
 grep -q " 0 failed" "$TMP/kv.txt"
 
 echo "== gate 4: byte tie (cert module literals re-encode to the shipped bytes)"
-"$EVAL" run examples/lowergen_mem_src.build.shard > "$TMP/plan.txt"
+"$EVAL" run tools/lowbuild/lowbuild.shard examples/lowergen_mem_src.build.shard > "$TMP/plan.txt"
 "$EVAL" run tools/bytetie/bytetie.shard "$LINK" > "$TMP/tie.txt"
 grep '^MOD ' "$TMP/plan.txt" | sort > "$TMP/mods.txt"
 sed 's/^TIE /MOD /' "$TMP/tie.txt" | sort > "$TMP/ties.txt"

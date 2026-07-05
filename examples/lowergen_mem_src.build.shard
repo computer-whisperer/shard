@@ -1,20 +1,23 @@
-;;; examples/lowergen_mem_src.build.shard — the mod.build file for the MEM
-;;; fragment (docs/LOWERING.md §6): the artifact plan for
-;;; examples/lowergen_mem_src.shard. Same quadruple as P4b, mem-shaped:
+;;; examples/lowergen_mem_src.build.shard — the mod.build ENTRY for the MEM
+;;; fragment (docs/LOWERING.md §6, §6o): assembles the artifact set for
+;;; examples/lowergen_mem_src.shard as a native Plan value.
 ;;;
-;;;   ARTIFACT <fn> …        manifest: cert ↔ cert file ↔ ISA model ↔ glue;
-;;;                          every module carries std/mem's callee prefix
-;;;   MOD <fn> <hex>         real .wasm bytes: the cert's module at
-;;;                          restfs := Nil — [mget, mset, self], one page
-;;;   MEMCASE <fn> f2 …      engine vectors; expected value AND memory
-;;;                          readback computed SPEC-SIDE (the source fn +
-;;;                          std/mem applied directly, not the model)
+;;;     (fn build ((t Target)) Plan)     — PURE; the whole interface
+;;;
+;;; Every module carries std/mem's callee prefix ([mget, mset, self],
+;;; linear memory from the Target); one manifest entry per fn
+;;; (linked_<fn> over export f2, callees=std/mem); MEMCASE vectors'
+;;; expected value AND memory readback computed SPEC-SIDE (the source fn
+;;; + std/mem applied directly, not the model). The driver
+;;; (tools/lowbuild/lowbuild.shard) renders the wire lines.
 ;;;
 ;;; KNOWN GAP (v1, same as P4b): the self-function literals are copied
-;;; from the generated certs rather than shared — the cert↔binary tie
-;;; should eventually be CHECKED (re-encode, compare), not hand-kept.
+;;; from the generated certs rather than shared (the generated link file
+;;; inlines its MkFunc literals; there are no named Func fns to import) —
+;;; the cert↔binary tie is CHECKED by the BYTETIE gate, so drift fails
+;;; the build.
 ;;;
-;;; RUN IT:  bin/shard_eval run examples/lowergen_mem_src.build.shard | node examples/wasm_diff.mjs /dev/stdin
+;;; RUN IT:  bin/shard_eval run tools/lowbuild/lowbuild.shard examples/lowergen_mem_src.build.shard | node examples/wasm_diff.mjs /dev/stdin
 
 (import "../kernel/stdlib.shard")
 (import "lowergen_mem_src.shard")
@@ -27,15 +30,13 @@
 (use (:: models wasm wasm *))
 (import "../models/wasm/encode.shard")
 (use (:: models wasm encode *))
-
-(type World (World Int))
-
-(extern write ((bytes (List Int)) (w World)) World)
-(extern exit ((code Int) (w World)) World)
+(import "../tools/low/plan.shard")
+(use (:: tools low plan *))
 
 ;; --- the binaries: [mget, mset, self] per source fn ---------------------------
 
-(fn mmod ((self Func)) WModule (MkWModule (list (mget_f) (mset_f) self) 65536))
+(fn mmod ((self Func) (limit Int)) WModule
+  (MkWModule (list (mget_f) (mset_f) self) limit))
 
 (fn m_mg_first () Func (MkFunc 0 0 (list (I32Const 0) (Call 0))))
 
@@ -145,188 +146,166 @@
     (Nil Z)
     ((Cons _ t) (S (len_nat t)))))
 
-;; --- plan rendering -------------------------------------------------------------
+;; --- the build entry -------------------------------------------------------------
 
-(fn cat ((xs (List (List Int)))) (List Int)
-  (measure (struct xs))
-  (match xs
-    (Nil "")
-    ((Cons h t) (wapp h (cat t)))))
-
-(fn hexd ((d Int)) Int (if (lt d 10) (+ 48 d) (+ 87 d)))
-
-(fn hexs ((bs (List Int))) (List Int)
-  (measure (struct bs))
-  (match bs
-    (Nil Nil)
-    ((Cons b t) (Cons (hexd (ediv b 16)) (Cons (hexd (mod b 16)) (hexs t))))))
-
-(fn showargs ((xs (List Int))) (List Int)
-  (measure (struct xs))
-  (match xs
-    (Nil "")
-    ((Cons h t) (wapp " " (wapp (dec h) (showargs t))))))
-
-(fn art_line ((nm (List Int))) (List Int)
-  (cat
-    (list
-      "ARTIFACT "
-      nm
-      " cert=linked_"
-      nm
-      " certfile=examples/lowergen_mem_link.shard model=models/wasm/wasm.shard export=f2 callees=std/mem externs=none\n")))
-
-(fn mod_line ((nm (List Int)) (m WModule)) (List Int)
-  (cat (list "MOD " nm " " (hexs (enc_module m)) "\n")))
+(fn art ((nm (List Int))) PArt
+  (PA
+    nm
+    (wapp "linked_" nm)
+    "examples/lowergen_mem_link.shard"
+    "models/wasm/wasm.shard"
+    2
+    "std/mem"
+    "none"))
 
 ;; a memory vector: expected value + final-memory readback, both SPEC-side
-(fn memcase
-  ((nm (List Int)) (args (List Int)) (membytes (List Int)) (v Int) (mf Mem))
-  (List Int)
-  (cat
-    (list
-      "MEMCASE "
-      nm
-      " f2"
-      (showargs args)
-      " MEM "
-      (hexs membytes)
-      " -> "
-      (dec v)
-      " "
-      (hexs (mdump 0 (len_nat membytes) mf))
-      "\n")))
+(fn vec ((args (List Int)) (membytes (List Int)) (v Int) (mf Mem)) PVec
+  (PV 2 args membytes v (mdump 0 (len_nat membytes) mf)))
 
 (fn ld ((bs (List Int))) Mem (mload bs 0 (mem_empty)))
 
-(fn emit () (List Int)
-  (cat
-    (list
-      (art_line "mg_first")
-      (mod_line "mg_first" (mmod (m_mg_first)))
-      (memcase
-        "mg_first"
-        (list)
-        (list 7 9)
-        (mg_first (ld (list 7 9)))
-        (ld (list 7 9)))
-      (art_line "mg_at")
-      (mod_line "mg_at" (mmod (m_mg_at)))
-      (memcase
-        "mg_at"
-        (list 2)
-        (list 5 6 7 8)
-        (mg_at (ld (list 5 6 7 8)) 2)
-        (ld (list 5 6 7 8)))
-      (art_line "mg_sum2")
-      (mod_line "mg_sum2" (mmod (m_mg_sum2)))
-      (memcase
-        "mg_sum2"
-        (list 0 3)
-        (list 5 6 7 200)
-        (mg_sum2 (ld (list 5 6 7 200)) 0 3)
-        (ld (list 5 6 7 200)))
-      (art_line "mg_dbl")
-      (mod_line "mg_dbl" (mmod (m_mg_dbl)))
-      (memcase
-        "mg_dbl"
-        (list 1)
-        (list 5 250)
-        (mg_dbl (ld (list 5 250)) 1)
-        (ld (list 5 250)))
-      (art_line "mg_ind")
-      (mod_line "mg_ind" (mmod (m_mg_ind)))
-      (memcase
-        "mg_ind"
-        (list 0)
-        (list 2 9 77)
-        (mg_ind (ld (list 2 9 77)) 0)
-        (ld (list 2 9 77)))
-      (art_line "mg_sq")
-      (mod_line "mg_sq" (mmod (m_mg_sq)))
-      (memcase
-        "mg_sq"
-        (list 2)
-        (list 0 0 0 0 9)
-        (mg_sq (ld (list 0 0 0 0 9)) 2)
-        (ld (list 0 0 0 0 9)))
-      (art_line "mg_store")
-      (mod_line "mg_store" (mmod (m_mg_store)))
-      (memcase
-        "mg_store"
-        (list 1 99)
-        (list 5 6 7)
-        99
-        (mg_store (ld (list 5 6 7)) 1 99))
-      (memcase
-        "mg_store"
-        (list 0 999)
-        (list 1 2)
-        999
-        (mg_store (ld (list 1 2)) 0 999))
-      (art_line "mg_copy")
-      (mod_line "mg_copy" (mmod (m_mg_copy)))
-      (memcase
-        "mg_copy"
-        (list 0 3)
-        (list 42 0 0 7)
-        (mem_get (ld (list 42 0 0 7)) 0)
-        (mg_copy (ld (list 42 0 0 7)) 0 3))
-      (art_line "mg_bump")
-      (mod_line "mg_bump" (mmod (m_mg_bump)))
-      (memcase
-        "mg_bump"
-        (list 2)
-        (list 5 6 250 8)
-        (+ (mem_get (ld (list 5 6 250 8)) 2) 1)
-        (mg_bump (ld (list 5 6 250 8)) 2))
-      (memcase
-        "mg_bump"
-        (list 0)
-        (list 255 1)
-        (+ (mem_get (ld (list 255 1)) 0) 1)
-        (mg_bump (ld (list 255 1)) 0))
-      (art_line "mg_prod")
-      (mod_line "mg_prod" (mmod (m_mg_prod)))
-      (memcase
-        "mg_prod"
-        (list 0 1)
-        (list 6 7)
-        (mg_prod (ld (list 6 7)) 0 1)
-        (ld (list 6 7)))
-      (memcase
-        "mg_prod"
-        (list 0 1)
-        (list 255 255)
-        (mg_prod (ld (list 255 255)) 0 1)
-        (ld (list 255 255)))
-      (art_line "mg_putget")
-      (mod_line "mg_putget" (mmod (m_mg_putget)))
-      (memcase
-        "mg_putget"
-        (list 0 3)
-        (list 9 9 9 9)
-        (mem_get (mem_set (ld (list 9 9 9 9)) 0 7) 0)
-        (mg_putget (ld (list 9 9 9 9)) 0 3))
-      (memcase
-        "mg_putget"
-        (list 2 2)
-        (list 1 2 3)
-        (mem_get (mem_set (ld (list 1 2 3)) 2 7) 2)
-        (mg_putget (ld (list 1 2 3)) 2 2))
-      (art_line "mg_swap")
-      (mod_line "mg_swap" (mmod (m_mg_swap)))
-      (memcase
-        "mg_swap"
-        (list 0 2)
-        (list 10 20 30)
-        (mem_get (ld (list 10 20 30)) 0)
-        (mg_swap (ld (list 10 20 30)) 0 2))
-      (memcase
-        "mg_swap"
-        (list 1 1)
-        (list 5 6 7)
-        (mem_get (ld (list 5 6 7)) 1)
-        (mg_swap (ld (list 5 6 7)) 1 1)))))
+(fn pmod ((nm (List Int)) (self Func) (limit Int) (vs (List PVec))) PMod
+  (PM nm (enc_module (mmod self limit)) (list (art nm)) vs))
 
-(fn main ((w World)) World (exit 0 (write (emit) w)))
+(fn build ((t Target)) Plan
+  (match (mem_limit_of t)
+    (lim
+      (MkPlan
+        (list
+          (pmod
+            "mg_first"
+            (m_mg_first)
+            lim
+            (list
+              (vec (list) (list 7 9) (mg_first (ld (list 7 9))) (ld (list 7 9)))))
+          (pmod
+            "mg_at"
+            (m_mg_at)
+            lim
+            (list
+              (vec
+                (list 2)
+                (list 5 6 7 8)
+                (mg_at (ld (list 5 6 7 8)) 2)
+                (ld (list 5 6 7 8)))))
+          (pmod
+            "mg_sum2"
+            (m_mg_sum2)
+            lim
+            (list
+              (vec
+                (list 0 3)
+                (list 5 6 7 200)
+                (mg_sum2 (ld (list 5 6 7 200)) 0 3)
+                (ld (list 5 6 7 200)))))
+          (pmod
+            "mg_dbl"
+            (m_mg_dbl)
+            lim
+            (list
+              (vec
+                (list 1)
+                (list 5 250)
+                (mg_dbl (ld (list 5 250)) 1)
+                (ld (list 5 250)))))
+          (pmod
+            "mg_ind"
+            (m_mg_ind)
+            lim
+            (list
+              (vec
+                (list 0)
+                (list 2 9 77)
+                (mg_ind (ld (list 2 9 77)) 0)
+                (ld (list 2 9 77)))))
+          (pmod
+            "mg_sq"
+            (m_mg_sq)
+            lim
+            (list
+              (vec
+                (list 2)
+                (list 0 0 0 0 9)
+                (mg_sq (ld (list 0 0 0 0 9)) 2)
+                (ld (list 0 0 0 0 9)))))
+          (pmod
+            "mg_store"
+            (m_mg_store)
+            lim
+            (list
+              (vec
+                (list 1 99)
+                (list 5 6 7)
+                99
+                (mg_store (ld (list 5 6 7)) 1 99))
+              (vec (list 0 999) (list 1 2) 999 (mg_store (ld (list 1 2)) 0 999))))
+          (pmod
+            "mg_copy"
+            (m_mg_copy)
+            lim
+            (list
+              (vec
+                (list 0 3)
+                (list 42 0 0 7)
+                (mem_get (ld (list 42 0 0 7)) 0)
+                (mg_copy (ld (list 42 0 0 7)) 0 3))))
+          (pmod
+            "mg_bump"
+            (m_mg_bump)
+            lim
+            (list
+              (vec
+                (list 2)
+                (list 5 6 250 8)
+                (+ (mem_get (ld (list 5 6 250 8)) 2) 1)
+                (mg_bump (ld (list 5 6 250 8)) 2))
+              (vec
+                (list 0)
+                (list 255 1)
+                (+ (mem_get (ld (list 255 1)) 0) 1)
+                (mg_bump (ld (list 255 1)) 0))))
+          (pmod
+            "mg_prod"
+            (m_mg_prod)
+            lim
+            (list
+              (vec
+                (list 0 1)
+                (list 6 7)
+                (mg_prod (ld (list 6 7)) 0 1)
+                (ld (list 6 7)))
+              (vec
+                (list 0 1)
+                (list 255 255)
+                (mg_prod (ld (list 255 255)) 0 1)
+                (ld (list 255 255)))))
+          (pmod
+            "mg_putget"
+            (m_mg_putget)
+            lim
+            (list
+              (vec
+                (list 0 3)
+                (list 9 9 9 9)
+                (mem_get (mem_set (ld (list 9 9 9 9)) 0 7) 0)
+                (mg_putget (ld (list 9 9 9 9)) 0 3))
+              (vec
+                (list 2 2)
+                (list 1 2 3)
+                (mem_get (mem_set (ld (list 1 2 3)) 2 7) 2)
+                (mg_putget (ld (list 1 2 3)) 2 2))))
+          (pmod
+            "mg_swap"
+            (m_mg_swap)
+            lim
+            (list
+              (vec
+                (list 0 2)
+                (list 10 20 30)
+                (mem_get (ld (list 10 20 30)) 0)
+                (mg_swap (ld (list 10 20 30)) 0 2))
+              (vec
+                (list 1 1)
+                (list 5 6 7)
+                (mem_get (ld (list 5 6 7)) 1)
+                (mg_swap (ld (list 5 6 7)) 1 1)))))))))
