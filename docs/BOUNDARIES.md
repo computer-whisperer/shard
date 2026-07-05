@@ -205,6 +205,31 @@ This is the same shape as the pilot's `Mem` ADT (an in-language data
 model of memory). It generalizes to file systems, networks, hardware
 state, anything pinnable as data.
 
+## Where axioms live (resolved 2026-07-05)
+
+Axioms are authored in exactly two places; the driver's axiom-scope
+gate (`kernel/driver.shard::run_srcs`) enforces it, with
+`std/axiom_scope_rejects.shard` as the pinned negative fixture:
+
+1. **`kernel/facts.shard` — the reviewed core-math set.** Facts about
+   kernel prims that have no derivation route inside the proof theory
+   (the euclidean remainder range at a symbolic divisor; the
+   bitwise/shift defining recurrences). These are the trust floor —
+   the same standing as the arith backend and the `div-facts` step:
+   exempt from `(bin trusts)` listing, rendered on their own ledger
+   line ("kernel axioms (reviewed core)"), and each rides executable
+   evidence (`examples/facts_probe.shard` checks every statement
+   against the live prims — the axiom file's engine differential).
+   Growing this file is a kernel change; review it so.
+2. **App/bin trust scopes** — the bolt axioms and bridging axioms this
+   document describes, granted per-artifact and named in the bin's
+   `trusts` list.
+
+The library trees — `std/`, `meta/`, `models/` — are **theorem-only**:
+libraries never grow the trust surface. (std/div's old `mod_lo`/`mod_hi`
+axioms moved to `kernel/facts.shard`; an ISA model's trust comes from
+its engine differential, never from an axiom.)
+
 ## Audit ledger
 
 For any verified artifact, we want to enumerate its *trust dependencies*:
@@ -260,10 +285,10 @@ rather than being defaulted into:
   rule.** Direct extern calls work but are not proof-friendly. Should
   the type system forbid them in proof-relevant code, or is it left
   to convention?
-- **Where axioms live.** Currently inline in the theory file. Could
-  move them to live with their corresponding `extern` declaration in
-  the module for locality, or fold them into trait-with-laws when
-  traits land.
+- ~~**Where axioms live.**~~ RESOLVED 2026-07-05 — see "Where axioms
+  live" above: kernel/facts.shard for reviewed core math, app/bin
+  trust scopes for boundary bolts, library trees theorem-only
+  (driver-enforced).
 - **Whether the runtime linkage step is data (a config file mapping
   extern names to Rust function paths) or code (Rust registration
   calls).** Affects how a deployment "links" against a verified

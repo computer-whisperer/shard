@@ -632,6 +632,26 @@ cite them.
 of truth for the goal); see `docs/BOUNDARIES.md`. An axiom or a passing
 claim/fulfillment is stored closed for citation as a `(lemma NAME)`.
 
+**Where axioms may live.** Axioms are authored in exactly two places,
+and the driver enforces it (`run_srcs`'s axiom-scope gate; negative
+fixture `std/axiom_scope_rejects.shard`):
+
+- **`kernel/facts.shard`** — the reviewed core-math axiom set: facts
+  about kernel prims with no derivation route (euclidean `mod` range at
+  a symbolic divisor; the bitwise/shift defining recurrences). The
+  trust floor, same standing as the arith backend; exempt from `(bin
+  trusts)` listing but rendered on its own ledger line ("kernel axioms
+  (reviewed core)"). Growing this file is a kernel change — review it
+  so. Each fact rides executable evidence
+  (`examples/facts_probe.shard`, the ground differential).
+- **App/bin trust scopes** — I/O bolts and bridging axioms
+  (`docs/BOUNDARIES.md`), granted per-artifact and named in the bin's
+  `trusts` list.
+
+The library trees — `std/`, `meta/`, `models/` — are **theorem-only**:
+an `(axiom …)` authored there is refused before admission. Libraries
+never grow the trust surface.
+
 A fifth declaration ties contracts to an executable:
 
 ```sexp

@@ -286,7 +286,11 @@
 ;; Entry kinds: 'claim | 'fulfills — interior, proven in this run;
 ;; 'operational | 'bridging | 'untagged — own axioms (this run's TCB);
 ;; 'granted — a granted interface's requirement (upstream-PROVEN);
-;; 'upstream — a granted interface's axiom (upstream-TRUSTED).
+;; 'upstream — a granted interface's axiom (upstream-TRUSTED);
+;; 'kernel — an axiom AUTHORED in the kernel tree (kernel/facts.shard, the
+;;   reviewed core-math set): the trust floor, exempt from (bin trusts)
+;;   listing like the arith backend, rendered on its own ledger line.
+;;   Driver-assigned (ax_kind_at), never surface syntax.
 ;; Focus-skipped decls record EMPTY cites — focus runs are unsound and
 ;; banner-marked anyway; the ledger is only meaningful on acceptance runs.
 ;; ---------------------------------------------------------------------------
@@ -604,6 +608,19 @@
           (None (PrfErr "could not parse proof (proof DSL)"))
           ((Some p) (PrfOk p))))))))
 
+;; ledger-kind promotion: an axiom AUTHORED in the kernel tree is the trust
+;; floor ('kernel) — exempt from (bin trusts) listing (led_own_axioms skips
+;; it, like the arith backend), rendered on its own ledger line. Granted
+;; sources never reach here with kernel paths in practice, but the promotion
+;; is by DECLARING module either way. Never surface syntax (ax_kind_ok).
+(fn ax_kind_at ((mp (List Symbol)) (k Symbol)) Symbol
+  (match mp
+    (Nil k)
+    ((Cons h _)
+     (if (sym_eq h (quote kernel)) (quote kernel)
+     (if (sym_eq h (quote core)) (quote kernel)
+     k)))))
+
 ;; `gctx` is the file's resolution context (curmod + use-scope, with the glob
 ;; folded in as the additive base) — used to resolve each goal/proof against the
 ;; module it was authored in. Constant per file; threaded unchanged.
@@ -674,8 +691,14 @@
                       pend
                       (Cons (COAxiom (ax_name a)) acc)
                       ;; leaf entry: kind set by the reader ('granted /
-                      ;; 'upstream for granted sources, else the surface tag).
-                      (Cons (LedgerEntry (ax_name a) (ax_kind a) Nil) led))
+                      ;; 'upstream for granted sources, else the surface tag),
+                      ;; promoted to 'kernel for kernel-tree sources.
+                      (Cons
+                        (LedgerEntry
+                          (ax_name a)
+                          (ax_kind_at (rc_mod gctx) (ax_kind a))
+                          Nil)
+                        led))
                     rest
                     target
                     focus))))))
@@ -969,6 +992,31 @@
          (app_env (filter_modpath (module_resolve_env m) curmod) uitems)
          ualiases)))))
 
+;; ---- axiom scope: library trees are THEOREM-ONLY ---------------------------
+;; Axioms may be AUTHORED in exactly two places: kernel/ (the reviewed
+;; core-math set, kernel/facts.shard) and app/bin trust scopes (I/O bolts,
+;; bridging axioms — granted per-artifact, ledger-visible). The library trees
+;; (std/, meta/, models/) may never grow the trust surface: an (axiom …)
+;; authored in one is refused below, loudly, before admission. Granted
+;; sources are exempt — their DAxioms are consumer-side ADMISSIONS of an
+;; upstream interface (kinds 'granted/'upstream), not authored axioms.
+(fn axscope_banned ((path (List Int))) Bool
+  (match (module_path_of path)
+    (Nil False)
+    ((Cons h _)
+     (if (sym_eq h (quote std)) True
+     (if (sym_eq h (quote meta)) True
+     (sym_eq h (quote models)))))))
+
+(fn first_own_axiom ((ds (List Decl))) (Option Symbol)
+  (measure (struct ds))
+  (match ds
+    (Nil None)
+    ((Cons d rest)
+     (match d
+       ((DAxiom a) (Some (ax_name a)))
+       (_ (first_own_axiom rest))))))
+
 ;; Run a whole file list (imports first, then targets), threading theory.
 ;; A source whose decl stream fails to parse (e.g. a claim missing its proof)
 ;; is a HARD failure: every decl in that source would otherwise vanish
@@ -1013,22 +1061,46 @@
               focus
               (+ k 1)))))
        ((Some ds)
-        (run_srcs
-          m
-          rest
-          ctors
-          sidecars
-          (run_decls
-            (file_rctx m path src)
-            (autos_of_src (sym_of_chars path) sidecars)
-            m
-            st
-            ds
-            target
-            focus)
-          target
-          focus
-          (+ k 1)))))))
+        (match
+          (if granted None (if (axscope_banned path) (first_own_axiom ds) None))
+          ((Some badax)
+           (match st
+             ((RunState th pend acc led)
+              (run_srcs
+                m
+                rest
+                ctors
+                sidecars
+                (RunState
+                  th
+                  pend
+                  (Cons
+                    (COFail
+                      badax
+                      "axiom authored in a library tree -- std/, meta/, models/ are theorem-only; reviewed prim facts live in kernel/facts.shard, boundary axioms at app/bin trust scopes"
+                      Nil)
+                    acc)
+                  led)
+                target
+                focus
+                (+ k 1)))))
+          (None
+            (run_srcs
+              m
+              rest
+              ctors
+              sidecars
+              (run_decls
+                (file_rctx m path src)
+                (autos_of_src (sym_of_chars path) sidecars)
+                m
+                st
+                ds
+                target
+                focus)
+              target
+              focus
+              (+ k 1)))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; solver theory walk — the theory as a real check pass would have it, built
@@ -2166,29 +2238,34 @@
                      "upstream axioms (granted-source, trusted)"
                      (led_names (led_filter reach led (list (quote upstream)))))
                    (append_int
-                     (led_line
-                       "granted (upstream-proven)"
-                       (led_names (led_filter reach led (list (quote granted)))))
+                     (led_line_opt
+                       "kernel axioms (reviewed core)"
+                       (led_filter reach led (list (quote kernel))))
                      (append_int
                        (led_line
-                         "lemmas (proven, interior)"
-                         (show_nat
-                           (len_syms
-                             (led_filter
-                               reach
-                               led
-                               (list (quote claim) (quote fulfills))))))
+                         "granted (upstream-proven)"
+                         (led_names
+                           (led_filter reach led (list (quote granted)))))
                        (append_int
                          (led_line
-                           "externs (reachable from entry)"
-                           (led_names (syms_inter own_ext calls)))
+                           "lemmas (proven, interior)"
+                           (show_nat
+                             (len_syms
+                               (led_filter
+                                 reach
+                                 led
+                                 (list (quote claim) (quote fulfills))))))
                          (append_int
-                           (led_line_opt
-                             "externs (declared, unreachable)"
-                             (syms_minus own_ext calls))
-                           (led_line_opt
-                             "own axioms uncited by this bin"
-                             (syms_minus (led_own_axioms led) reach))))))))))))))))
+                           (led_line
+                             "externs (reachable from entry)"
+                             (led_names (syms_inter own_ext calls)))
+                           (append_int
+                             (led_line_opt
+                               "externs (declared, unreachable)"
+                               (syms_minus own_ext calls))
+                             (led_line_opt
+                               "own axioms uncited by this bin"
+                               (syms_minus (led_own_axioms led) reach)))))))))))))))))
 
 (fn bin_report
   ((b Bin)

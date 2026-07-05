@@ -31,6 +31,9 @@ TARGETS=(
   examples/add_nat_zero.shard
   examples/nat_prim.shard
   examples/axiom_kind_rejects.shard
+  kernel/facts.shard
+  std/axiom_scope_rejects.shard
+  examples/ledger_dep/ledger_dep.shard
   examples/auto_demo.shard
   examples/auto_missing_rejects.shard
   examples/admit_demo.shard
@@ -212,6 +215,19 @@ fi
 echo "=== nat: run probe ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run examples/nat_run_probe.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# Kernel-facts ground differential: every axiom in kernel/facts.shard is
+# checked as a ground equation against the LIVE prims over a value grid
+# (the reviewed core-math set rides executable evidence). Self-checking:
+# one OK/FAIL line per section, exit 0 iff all OK. NOTE: a stuck run-mode
+# program prints nothing and exits 0, so the pin is the OK LINES, which a
+# stuck run would drop from the diff.
+echo "=== facts: ground differential ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run examples/facts_probe.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
