@@ -63,7 +63,8 @@ TARGETS=(
   tools/lowergen/lowergen.shard
   tools/lowcheck/lowcheck.shard
   tools/bytetie/bytetie.shard
-  tools/invoke/invoke.shard
+  meta/invoke/invoke.shard
+  meta/plan/plan.shard
   tools/lowbuild/lowbuild.shard
 )
 TMP=$(mktemp -d)

@@ -866,7 +866,8 @@ two shard programs, and it is retired: a mod.build now exports
 
     (fn build ((t Target)) Plan)      — PURE; the whole interface
 
-with the vocabulary in **`tools/low/plan.shard`** (`Target` record:
+with the vocabulary in **`meta/plan`** (originally `tools/low/plan.shard`,
+graduated §6s) (`Target` record:
 isa/mem_limit/width — the compile-context channel, grows sizeof/layout
 tables for generics without breaking build entries; `Plan` = `PMod`
 modules each carrying name, pre-encoded binary bytes, `PArt` manifest
@@ -875,7 +876,8 @@ entries, `PVec` vectors). Module bytes ride the plan pre-encoded
 and driver stay target-generic.
 
 Reaching `build` is the **dynamic-invocation pattern**
-(**`tools/invoke/invoke.shard`** — kernel-as-a-module): the driver loads
+(**`meta/invoke`**, originally `tools/invoke` — kernel-as-a-module,
+graduated §6s): the driver loads
 the mod.build's import closure at runtime (`resolve_closure` +
 `build_module`), finds fns by LOCAL name over the FnDef list (root files
 key at `core`, directory modules at their real path — callers shouldn't
@@ -886,7 +888,7 @@ silent MNo), and applies via `apply_fn` + `run_expr`. Probe:
 `examples/invoke_probe.shard` (4/4, corpus-pinned). Two hard-won laws:
 a library consumed this way must NOT import `eval.shard` (its app `main`
 collides with the consumer's at the core qname — silent usage exit), and
-it lives in tools/ because the engine stamp hashes `kernel/*.shard`.
+it lives outside kernel/ because the engine stamp hashes `kernel/*.shard`.
 
 **`tools/lowbuild/lowbuild.shard`** is the ONE generic driver — no
 per-module stubs: constructs the v1 Target (wasm/65536/32, argv-selectable
@@ -1018,6 +1020,45 @@ fact and disequality confined to the spec level. The probes stack
 (`bytescp` imports both predecessors' kits: `br_read`/`br_len`/
 `br_read_call`/`bw_lt1`/`bw_ne`/`bw_ltp1` all reused) — the shape of the
 abstraction library std/str mechanization will extract.
+
+### 6s. The meta stdlib — plan + invoke graduate to modules (2026-07-05)
+
+The first residents of **`meta/`** — the meta stdlib: interfaces and
+helpers for programs that manipulate shard under the kernel's own
+datastructures. Rationale: build.shard implementations were importing a
+tool's internals (`tools/low/plan.shard`) for their own interface
+vocabulary — backwards; the vocabulary and the invocation pattern are
+library surface, the emitters and gate drivers are tools.
+
+- **`meta/plan`** (from tools/low/plan.shard) — the build-plan
+  vocabulary. A PURE-VOCABULARY module: the interface carries everything
+  (transparent `Plan`/`PMod`/`PArt`/`PVec` types + the `Target` record
+  and its machine-proved law family — producers construct plans, the
+  driver destructures them; nothing to hide), and the impl file is just
+  the run-mode entry re-importing the interface. First directory module
+  exporting a transparent datatype family.
+- **`meta/invoke`** (from tools/invoke) — dynamic invocation. The
+  interface is stated entirely in KERNEL vocabulary (`Module`/`FnDef`/
+  `Expr`/`QName`/`World` — the req-scope gate names the whole kernel/
+  crate as the trust floor, so a mod.req may import it); the ten public
+  fns are `sig fn`s, and the impl's helpers (`fns_named`,
+  `ctor_in_defs`, `inv_budget`) drop OFF the surface — the eval.shard
+  main-collision law is now structural: consumers get the interface,
+  they cannot drag eval in by accident.
+
+Both modules live outside kernel/ (engine stamp) and outside tools/
+(they are libraries, not apps). Consumers rewired: the lowbuild driver,
+all four mod.build entries, the invoke probe — bare-module imports +
+`(:: meta plan *)`/`(:: meta invoke *)` use lines. Validation: all four
+driver-rendered plans **byte-identical** to pre-graduation baselines;
+meta/plan 19/0, meta/invoke 72/0, every consumer gate green first run;
+invoke probe 4/4; gate_sweep (now pinning both meta impls) + corpus
+green.
+
+Deliberately NOT graduated yet: `tools/low/doc.shard` (generic rope +
+path utilities — meta-shaped, next candidate when a second consumer
+appears), certnav's generic raw-SExpr layer (entangled with cert-shape
+logic), and `schema`/`proof`/`lin` (emitter policy, correctly tools).
 
 ## 7. Open questions — triaged at ratification (2026-07-04)
 

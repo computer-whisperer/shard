@@ -216,7 +216,7 @@ else
   echo "SKIPPED (no bin/shard_eval)"
 fi
 
-# Dynamic-invocation pin: tools/invoke loads a fixture's closure AT RUNTIME
+# Dynamic-invocation pin: meta/invoke loads a fixture's closure AT RUNTIME
 # (kernel-as-a-module), marshals values across the meta-level boundary, and
 # calls fns by local name — the mod.build driver's foundation. Self-checking
 # app: one OK/FAIL line per case, exit 0 iff all OK.
