@@ -1,0 +1,243 @@
+;;; std/str/str.rep.shard — std/str's AGGREGATE CERTS: the module's wasm
+;;; artifacts tied to the OPAQUE module surface via std/mem's mem_read
+;;; readback (docs/LOWERING.md §6p-§6r mechanized; the probes'
+;;; decomposition, now module-grade). Everything here is stated against
+;;; interfaces a consumer holds — std/str's (Str/bytes_of), std/bytes'
+;;; (list_of_bytes), std/mem's (mem_read + framing) — and cites the
+;;; GENERATED machine certs (str.wasm.shard) untouched.
+;;;
+;;;   1. sc_frame     — a read cell below the dest survives the whole copy
+;;;                     (the write-side frame commute; disequalities stay
+;;;                     at the spec level, two farkas one-liners)
+;;;   2. sc_copy_read — the memcpy theorem over sc_copy:
+;;;          mem_read k (sc_copy m s d k) d = mem_read k m s   [s + k <= d]
+;;;      head byte = frame + get_set_get (no value-range premises);
+;;;      window survival = std/mem's mem_read_set_above; tail = IH.
+;;;   3. lowered_str_copy — THE MODULE CONTRACT, both rep instances at
+;;;      once: if memory holds a string's bytes at x0 (rep premise
+;;;      (mem_read n m0 x0) = (list_of_bytes (bytes_of st))), running the
+;;;      shipped copy artifact on (x0, x1, n) makes the observable
+;;;      readback at x1 BE the string's bytes. One linear disjointness
+;;;      premise (x0 + n <= x1). Cites lowered_sc_copy (generated) +
+;;;      sc_copy_read + the rep premise; zero new machine reasoning.
+;;;
+;;; The budget n is a Nat binder pinned BY the rep premise: mem_read n
+;;; returns exactly n bytes, so the equation with the string's byte list
+;;; forces int_of_nat n = str_len st — no separate length premise needed.
+;;;
+;;; NOT loaded as part of the std/str module; consumers import this file
+;;; by path (the mem.wasm.shard convention).
+
+(import "../../kernel/stdlib.shard")
+(import "../../std/str")  ; the module's own surface, opaque (Str / bytes_of)
+(import "../../std/bytes")  ; list_of_bytes — the byte-list projection
+(import "../../std/mem")  ; mem_read + the window framing laws
+(import "../../std/nat")  ; int_of_nat + its lemmas
+(import "../../models/wasm/wasm.shard")
+(import "../../models/wasm/loopkit.shard")
+(import "str.lowsrc.shard")  ; sc_copy — the mem-walking spec fn
+(import "str.wasm.shard")  ; the GENERATED machine certs (lowered_sc_copy)
+(use (:: std str *))
+(use (:: std bytes *))
+(use (:: std mem *))
+(use (:: std nat *))
+(use (:: models wasm wasm *))
+(use (:: models wasm loopkit *))
+(use (:: std str str.lowsrc *))
+(use (:: std str str.wasm *))
+
+;; --- local arith kit -------------------------------------------------------------
+
+(claim sc_ltp1 (goal ((p Int)) () (= (lt p (+ p 1)) True)) (by arith (list 1)))
+
+(claim sc_lt1
+  (goal ((x Int) (q Int)) ((= (lt x q) True)) (= (lt x (+ q 1)) True))
+  (by arith (list 1 1)))
+
+(claim sc_ne
+  (goal ((x Int) (q Int)) ((= (lt x q) True)) (= (int_eq x q) False))
+  (by arith (list 1 1)))
+
+;; a + (1+j) <= b   entails   (a+1) + j <= b
+(claim sc_step
+  (goal ((a Int) (j Int) (b Int)) ((= (le (+ a (+ 1 j)) b) True))
+    (= (le (+ (+ a 1) j) b) True))
+  (by arith (list 1 1)))
+
+;; s + (1+j) <= dd   entails   (s+1) + j <= dd+1
+(claim sc_step1
+  (goal ((s Int) (j Int) (dd Int)) ((= (le (+ s (+ 1 j)) dd) True))
+    (= (le (+ (+ s 1) j) (+ dd 1)) True))
+  (by arith (list 1 1)))
+
+;; --- the frame commute: a cell below the dest survives the WHOLE copy ------------
+
+(claim sc_frame
+  (goal ((m Mem) (s Int) (dd Int) (k Nat) (x Int)) ((= (lt x dd) True))
+    (= (mem_get (sc_copy m s dd k) x) (mem_get m x)))
+  (induct k
+    ((case Z (steps ((compute both)) refl))
+     (case S
+       (k2)
+       (chain
+         (steps ((unfold sc_copy lhs) (reduce lhs)))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma sc_lt1)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+              refl)))
+         (rewrite-with
+           (lemma get_set_other)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma sc_ne)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+              refl)))
+         refl)))))
+
+;; --- THE MEMCPY THEOREM: dest readback = source readback, disjoint --------------
+
+(claim sc_copy_read
+  (goal ((m Mem) (s Int) (dd Int) (k Nat))
+    ((= (le (+ s (int_of_nat k)) dd) True))
+    (= (mem_read k (sc_copy m s dd k) dd) (mem_read k m s)))
+  (induct k
+    ((case Z
+       (steps
+         ((rewrite (lemma mem_read_z) lr lhs true ())
+          (rewrite (lemma mem_read_z) lr rhs true ()))
+         refl))
+     (case S
+       (k2)
+       (chain
+         (steps
+           ((unfold sc_copy lhs)
+            (reduce lhs)
+            (rewrite (lemma mem_read_s) lr lhs true ())))
+         (rewrite-with
+           (lemma sc_frame)
+           lr
+           lhs
+           ()
+           ((rewrite-with (lemma sc_ltp1) lr lhs () () refl)))
+         (rewrite-with (lemma get_set_get) lr lhs () ())
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma sc_step1)
+              lr
+              lhs
+              ()
+              ((steps
+                 ((rewrite (lemma int_of_nat_succ) rl lhs true ())
+                  (rewrite (premise 0) lr lhs true ()))
+                 refl))
+              refl)))
+         (rewrite-with
+           (lemma mem_read_set_above)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma sc_step)
+              lr
+              lhs
+              ()
+              ((steps
+                 ((rewrite (lemma int_of_nat_succ) rl lhs true ())
+                  (rewrite (premise 0) lr lhs true ()))
+                 refl))
+              refl)))
+         (steps ((rewrite (lemma mem_read_s) lr rhs true ())))
+         refl)))))
+
+;; --- the machine body: byte-identical local copy ((inline …) is same-file-only) --
+
+(fn sc_body () (List Instr)
+  (list
+    (LocalGet 2)
+    (I32Eqz)
+    (BrIf 1)
+    (LocalGet 1)
+    (LocalGet 0)
+    (I32Load8U)
+    (I32Store8)
+    (LocalGet 0)
+    (I32Const 1)
+    (I32Bin BAdd)
+    (LocalSet 0)
+    (LocalGet 1)
+    (I32Const 1)
+    (I32Bin BAdd)
+    (LocalSet 1)
+    (LocalGet 2)
+    (I32Const 1)
+    (I32Bin BSub)
+    (LocalSet 2)
+    (Br 0)))
+
+;; --- THE MODULE CONTRACT: the copy artifact moves a STRING -----------------------
+;; Rep premise at the source in std/str vocabulary; rep in the conclusion
+;; at the dest. lowered_sc_copy cited as generated.
+
+(claim lowered_str_copy
+  (goal
+    ((st Str) (x0 Int) (x1 Int) (m0 Mem) (c Nat) (n Nat) (restfs (List Func)))
+    ((= (mem_read n m0 x0) (list_of_bytes (bytes_of st)))
+     (= (le 0 x0) True)
+     (= (le 0 x1) True)
+     (= (le (+ x0 (int_of_nat n)) 65536) True)
+     (= (le (+ x1 (int_of_nat n)) 65536) True)
+     (= (le (+ x0 (int_of_nat n)) x1) True))
+    (=
+      (mem_read_call
+        (call_fn_mem
+          (S^ 28 (lg_fuel n c))
+          (MkWModule
+            (Cons
+              (MkFunc
+                3
+                0
+                (list (Block (list (Loop (inline sc_body)))) (I32Const 0)))
+              restfs)
+            65536)
+          0
+          (list x0 x1 (int_of_nat n))
+          m0)
+        n
+        x1)
+      (list_of_bytes (bytes_of st))))
+  (chain
+    (rewrite-with
+      (lemma lowered_sc_copy)
+      lr
+      lhs
+      ((inst k n))
+      ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)
+       (steps ((rewrite (premise 3) lr lhs true ())) refl)
+       (steps ((rewrite (premise 4) lr lhs true ())) refl)))
+    (steps ((unfold mem_read_call lhs) (reduce lhs)))
+    (rewrite-with
+      (lemma sc_copy_read)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 5) lr lhs true ())) refl)))
+    (steps ((rewrite (premise 0) lr lhs true ())))
+    refl))

@@ -1,0 +1,98 @@
+;;; std/str/mod.build.shard — the mod.build ENTRY for std/str's wasm
+;;; artifacts (docs/LOWERING.md §6o): assembles the module's artifact set
+;;; as a native Plan value.
+;;;
+;;;     (fn build ((t Target)) Plan)     — PURE; the whole interface
+;;;
+;;; One module, "stdstr": the string ops the loop fragment covers, each a
+;;; leaf cert's module at restfs := Nil, linear memory from the Target.
+;;; The Func literals come from the GENERATED cert file (str.wasm.shard's
+;;; sc_copy_func) — no hand copies. MEMCASE vectors' expected value AND
+;;; memory readback computed SPEC-SIDE (sc_copy applied directly). The
+;;; consumer-facing contract over these artifacts is str.rep.shard's
+;;; lowered_str_copy (the aggregate rep cert); the manifest lists the
+;;; machine cert the binary is byte-tied to.
+;;;
+;;; RUN IT:  bin/shard_eval run tools/lowbuild/lowbuild.shard std/str/mod.build.shard | node examples/wasm_diff.mjs /dev/stdin
+
+(import "../../kernel/stdlib.shard")
+(import "str.lowsrc.shard")
+(use (:: std str str.lowsrc *))
+(import "str.wasm.shard")
+(use (:: std str str.wasm sc_copy_func))
+(import "../../std/mem")
+(use (:: std mem *))
+(import "../../models/wasm/wasm.shard")
+(use (:: models wasm wasm *))
+(import "../../models/wasm/encode.shard")
+(use (:: models wasm encode *))
+(import "../../meta/plan")
+(use (:: meta plan *))
+
+;; --- the binary: [self] (leaf piece, no callee prefix) ---------------------------
+
+(fn smod ((self Func) (limit Int)) WModule (MkWModule (list self) limit))
+
+;; --- spec-side memory helpers ---------------------------------------------------
+
+(fn mload ((bs (List Int)) (a Int) (m Mem)) Mem
+  (measure (struct bs))
+  (match bs
+    (Nil m)
+    ((Cons b t) (mload t (+ a 1) (mem_set m a b)))))
+
+(fn mdump ((a Int) (n Nat) (m Mem)) (List Int)
+  (measure (struct n))
+  (match n
+    (Z Nil)
+    ((S k) (Cons (mem_get m a) (mdump (+ a 1) k m)))))
+
+(fn len_nat ((xs (List Int))) Nat
+  (measure (struct xs))
+  (match xs
+    (Nil Z)
+    ((Cons _ t) (S (len_nat t)))))
+
+;; --- the build entry -------------------------------------------------------------
+
+(fn art ((nm (List Int))) PArt
+  (PA
+    nm
+    (wapp "lowered_" nm)
+    "std/str/str.wasm.shard"
+    "models/wasm/wasm.shard"
+    0
+    "none"
+    "none"))
+
+;; a memory vector: expected value + final-memory readback, both SPEC-side
+(fn vec ((args (List Int)) (membytes (List Int)) (v Int) (mf Mem)) PVec
+  (PV 0 args membytes v (mdump 0 (len_nat membytes) mf)))
+
+(fn ld ((bs (List Int))) Mem (mload bs 0 (mem_empty)))
+
+(fn build ((t Target)) Plan
+  (match (mem_limit_of t)
+    (lim
+      (MkPlan
+        (list
+          (PM
+            "stdstr"
+            (enc_module (smod (sc_copy_func) lim))
+            (list (art "sc_copy"))
+            (list
+              (vec
+                (list 0 3 3)
+                (list 72 105 33 0 0 0)
+                0
+                (sc_copy (ld (list 72 105 33 0 0 0)) 0 3 (fnat 3)))
+              (vec
+                (list 0 1 3)
+                (list 8 9 10 11)
+                0
+                (sc_copy (ld (list 8 9 10 11)) 0 1 (fnat 3)))
+              (vec
+                (list 5 2 0)
+                (list 1 2 3)
+                0
+                (sc_copy (ld (list 1 2 3)) 5 2 (fnat 0))))))))))

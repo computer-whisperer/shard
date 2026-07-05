@@ -251,7 +251,7 @@ fi
 # gated artifact builds — REGEN (producer determinism) / SCHEMA (lowcheck)
 # / KERNEL / BYTETIE (cert↔binary) / ENGINE (V8) — run end to end. Summary
 # line only; any gate failure changes it and fails the corpus diff.
-for LB in examples/lowbuild.sh examples/lowbuild_mem.sh examples/lowbuild_loop.sh std/mem/lowbuild.sh; do
+for LB in examples/lowbuild.sh examples/lowbuild_mem.sh examples/lowbuild_loop.sh std/mem/lowbuild.sh std/str/lowbuild.sh; do
   echo "=== lowering: $LB ==="
   if [ -x bin/shard_eval ]; then
     if bash "$LB" > "$TMP/lb.out" 2>&1; then
