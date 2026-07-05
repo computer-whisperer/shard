@@ -1,0 +1,141 @@
+;;; std/bits/mod.req.shard — the PUBLIC INTERFACE of the `bits` module.
+;;;
+;;; THE theorem library over the kernel's bitwise/shift prims. Every fact
+;;; here is a THEOREM (std is axiom-free, driver-enforced): the proofs in
+;;; bits.shard derive them from the defining recurrences in
+;;; kernel/facts.shard (band_rec / bor_rec / bxor_rec, bshl_z/s, bshr_z/s)
+;;; by well-founded induction, div-facts at literal divisor 2 (the
+;;; integrality gateway: its remainder bounds are le-spelled and its
+;;; quotient is a genuine variable), and the integer-tight linear backend.
+;;;
+;;; The domain is the prims' axiomatized domain: NONNEG arguments
+;;; throughout. Everything is stated in prim vocabulary (band/bor/bxor/
+;;; bshl/bshr, ediv/mod, pow2) — pow2 is this module's one function,
+;;; opaque to consumers, spoken through its defining equations.
+;;;
+;;; What is NOT here (needs kernel support that does not exist yet):
+;;; mask/mod bridges (band a (2^k - 1) = mod a 2^k) and any fact whose
+;;; proof needs the PARITY of a symbolic term — the linear backend cannot
+;;; see divisibility, and div-facts speaks only literal divisors. The
+;;; euclidean uniqueness pair (div_unique / mod_unique) in
+;;; kernel/facts.shard would unblock those; proposed, not landed.
+
+(import "../../kernel/stdlib.shard")
+
+;; --- pow2: the power-of-two tower -------------------------------------------
+
+;; pow2 k = 2^k for k >= 0 (and 1 below zero — total, but the surface facts
+;; only speak k >= 0). Opaque: consumers use the defining equations.
+(sig fn pow2 ((k Int)) Int)
+
+;; pow2 0 = 1.
+(requirement pow2_z (goal () () (= (pow2 0) 1)))
+
+;; Each step doubles:  0 <= k  |-  pow2 (k+1) = 2 * pow2 k.
+(requirement pow2_s
+  (goal ((k Int)) ((= (le 0 k) True)) (= (pow2 (+ k 1)) (* 2 (pow2 k)))))
+
+;; Positivity:  0 <= k  |-  0 < pow2 k.
+(requirement pow2_pos
+  (goal ((k Int)) ((= (le 0 k) True)) (= (lt 0 (pow2 k)) True)))
+
+;; --- zero identities ---------------------------------------------------------
+
+;; band 0 b = 0.
+(requirement band_zero_l (goal ((b Int)) ((= (le 0 b) True)) (= (band 0 b) 0)))
+
+;; bor 0 b = b.
+(requirement bor_zero_l (goal ((b Int)) ((= (le 0 b) True)) (= (bor 0 b) b)))
+
+;; bxor 0 b = b.
+(requirement bxor_zero_l (goal ((b Int)) ((= (le 0 b) True)) (= (bxor 0 b) b)))
+
+;; --- band range: AND is bounded by each operand ------------------------------
+
+;; 0 <= band a b.
+(requirement band_lo
+  (goal ((a Int) (b Int)) ((= (le 0 a) True) (= (le 0 b) True))
+    (= (le 0 (band a b)) True)))
+
+;; band a b <= a  — with band_lo this closes AND under any operand range;
+;; in particular band a b < 2^32 whenever a is (the model's closure fact).
+(requirement band_le_l
+  (goal ((a Int) (b Int)) ((= (le 0 a) True) (= (le 0 b) True))
+    (= (le (band a b) a) True)))
+
+;; band a b <= b.
+(requirement band_le_r
+  (goal ((a Int) (b Int)) ((= (le 0 a) True) (= (le 0 b) True))
+    (= (le (band a b) b) True)))
+
+;; --- bor/bxor range: bounded by the common power-of-two width ----------------
+
+;; 0 <= bor a b.
+(requirement bor_lo
+  (goal ((a Int) (b Int)) ((= (le 0 a) True) (= (le 0 b) True))
+    (= (le 0 (bor a b)) True)))
+
+;; OR stays under a shared power-of-two bound:
+;;   0<=k, 0<=a<=2^k-1, 0<=b<=2^k-1  |-  bor a b <= 2^k - 1.
+(requirement bor_le_pow2
+  (goal ((k Int) (a Int) (b Int))
+    ((= (le 0 k) True)
+     (= (le 0 a) True)
+     (= (le 0 b) True)
+     (= (le a (- (pow2 k) 1)) True)
+     (= (le b (- (pow2 k) 1)) True))
+    (= (le (bor a b) (- (pow2 k) 1)) True)))
+
+;; The 32-bit instance in literal vocabulary — the wasm model's closure fact.
+(requirement bor_le32
+  (goal ((a Int) (b Int))
+    ((= (le 0 a) True)
+     (= (le 0 b) True)
+     (= (le a 4294967295) True)
+     (= (le b 4294967295) True))
+    (= (le (bor a b) 4294967295) True)))
+
+;; 0 <= bxor a b.
+(requirement bxor_lo
+  (goal ((a Int) (b Int)) ((= (le 0 a) True) (= (le 0 b) True))
+    (= (le 0 (bxor a b)) True)))
+
+;; XOR stays under a shared power-of-two bound.
+(requirement bxor_le_pow2
+  (goal ((k Int) (a Int) (b Int))
+    ((= (le 0 k) True)
+     (= (le 0 a) True)
+     (= (le 0 b) True)
+     (= (le a (- (pow2 k) 1)) True)
+     (= (le b (- (pow2 k) 1)) True))
+    (= (le (bxor a b) (- (pow2 k) 1)) True)))
+
+;; The 32-bit instance in literal vocabulary.
+(requirement bxor_le32
+  (goal ((a Int) (b Int))
+    ((= (le 0 a) True)
+     (= (le 0 b) True)
+     (= (le a 4294967295) True)
+     (= (le b 4294967295) True))
+    (= (le (bxor a b) 4294967295) True)))
+
+;; --- literal shifts are multiplication / division ----------------------------
+;; The lowering story's slice-D spelling, proven: a constant shift IS the
+;; corresponding mul/ediv. Instances at 1 and 8 (the byte width); further
+;; widths follow the same two proof patterns (bits.shard documents them).
+
+;; bshl a 1 = 2 * a.
+(requirement shl1_mul
+  (goal ((a Int)) ((= (le 0 a) True)) (= (bshl a 1) (* 2 a))))
+
+;; bshl a 8 = 256 * a.
+(requirement shl8_mul
+  (goal ((a Int)) ((= (le 0 a) True)) (= (bshl a 8) (* 256 a))))
+
+;; bshr a 1 = ediv a 2.
+(requirement shr1_div
+  (goal ((a Int)) ((= (le 0 a) True)) (= (bshr a 1) (ediv a 2))))
+
+;; bshr a 8 = ediv a 256.
+(requirement shr8_div
+  (goal ((a Int)) ((= (le 0 a) True)) (= (bshr a 8) (ediv a 256))))

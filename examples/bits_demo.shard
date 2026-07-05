@@ -1,0 +1,104 @@
+;;; examples/bits_demo.shard — consumer-side exercise of std/bits: the
+;;; surface facts cited through the GRANTED module interface (pow2 opaque,
+;;; every fact upstream-proven). One citation per fact family:
+;;;   - a pow2 defining-equation chain (pow2 3 = 8 without unfolding pow2),
+;;;   - the band closure at a concrete range bound,
+;;;   - the bor 32-bit closure,
+;;;   - a literal-shift spelling swap (bshl x 8 at a symbolic byte).
+;;; Expected: 4 passed, 0 failed.
+
+(import "../kernel/stdlib.shard")
+(import "../std/bits")
+(use (:: std bits *))
+
+;; pow2 3 = 8, by the defining equations alone (pow2 is opaque here: no
+;; unfold is possible — each step rewrites pow2_s at a literal k, premise
+;; discharged by compute, then pow2_z closes).
+(claim d_pow2_3
+  (goal () () (= (pow2 3) 8))
+  (chain
+    (have h3 (= 3 (+ 2 1)) (by arith (list (list 1) (list 1))))
+    (have h2 (= 2 (+ 1 1)) (by arith (list (list 1 0) (list 1 0))))
+    (have h1 (= 1 (+ 0 1)) (by arith (list (list 1 0 0) (list 1 0 0))))
+    (steps ((rewrite (premise h3) lr lhs (at 0) ())))
+    (rewrite-with
+      (lemma pow2_s)
+      lr
+      lhs
+      ((inst k 2))
+      ((steps ((compute both)) refl)))
+    (steps ((rewrite (premise h2) lr lhs (at 1) ())))
+    (rewrite-with
+      (lemma pow2_s)
+      lr
+      lhs
+      ((inst k 1))
+      ((steps ((compute both)) refl)))
+    (steps ((rewrite (premise h1) lr lhs true ())))
+    (rewrite-with
+      (lemma pow2_s)
+      lr
+      lhs
+      ((inst k 0))
+      ((steps ((compute both)) refl)))
+    (rewrite-with
+      (lemma pow2_z)
+      lr
+      lhs
+      ()
+      ()
+      (by arith (list (list 1 0 0 0) (list 1 0 0 0))))))
+
+;; AND of a byte-ranged value stays byte-ranged (band_le_l composed with a
+;; range premise — the emitter's PAuto-interval shape for bitwise nodes).
+(claim d_band_byte
+  (goal ((x Int) (m Int))
+    ((= (le 0 x) True) (= (le x 255) True) (= (le 0 m) True))
+    (= (le (band x m) 255) True))
+  (chain
+    (have hb (= (le (band x m) x) True)
+      (rewrite-with
+        (lemma band_le_l)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 2) lr lhs true ())) refl))
+        refl))
+    (by arith (list 1 0 1 0 1))))
+
+;; OR of two u32-ranged values stays u32-ranged — the wasm model's closure
+;; fact for BOr, cited as one lemma.
+(claim d_bor_u32
+  (goal ((x Int) (y Int))
+    ((= (le 0 x) True)
+     (= (le 0 y) True)
+     (= (le x 4294967295) True)
+     (= (le y 4294967295) True))
+    (= (le (bor x y) 4294967295) True))
+  (rewrite-with
+    (lemma bor_le32)
+    lr
+    lhs
+    ()
+    ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+     (steps ((rewrite (premise 1) lr lhs true ())) refl)
+     (steps ((rewrite (premise 2) lr lhs true ())) refl)
+     (steps ((rewrite (premise 3) lr lhs true ())) refl))
+    refl))
+
+;; A byte shifted left 8 is exactly the high byte of a 16-bit word — the
+;; slice-D constant-shift spelling in use.
+(claim d_shl8_word
+  (goal ((x Int)) ((= (le 0 x) True) (= (le x 255) True))
+    (= (le (bshl x 8) 65280) True))
+  (chain
+    (have hs (= (bshl x 8) (* 256 x))
+      (rewrite-with
+        (lemma shl8_mul)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise hs) lr lhs true ())) (by arith (list 1 0 256 0)))))

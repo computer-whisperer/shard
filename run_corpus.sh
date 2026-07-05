@@ -32,6 +32,8 @@ TARGETS=(
   examples/nat_prim.shard
   examples/axiom_kind_rejects.shard
   kernel/facts.shard
+  std/bits/bits.shard
+  examples/bits_demo.shard
   std/axiom_scope_rejects.shard
   examples/ledger_dep/ledger_dep.shard
   examples/auto_demo.shard

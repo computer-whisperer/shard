@@ -1224,10 +1224,23 @@ add/sub/mul/div_u/rem_u, the full unsigned comparison family, eqz,
 and the bitwise trio.
 
 What certs can SAY about bitwise nodes is a separate ledger:
-reasoning about `band`-containing spellings (range facts, mask-mod
-bridges like `band x 255 = mod x 256`) needs the std/bits theorem
-library over the kernel recurrences — queued as its own
-proof-engineering piece, prerequisite for emitter bitwise support.
+reasoning about `band`-containing spellings needs the std/bits theorem
+library over the kernel recurrences — LANDED same day (std/bits:
+pow2 + the range/closure family band_le_l / bor_le_pow2+bor_le32 /
+bxor twins + literal shifts PROVEN as mul/ediv, all theorems, zero
+axioms; consumer demo examples/bits_demo.shard cites the surface
+through the granted interface). Two proof-engineering findings there
+with reach beyond bits: the arith backend's goal negation is
+INTEGER-TIGHT (¬(0≤q) reads q≤−1), which closes quotient bounds and
+quotient composition (`ediv (ediv a N) 2 = ediv a 2N`) at literal
+divisors by pure farkas; and div-facts — not the kernel mod axioms —
+is the integrality gateway at literal divisors (le-spelled remainder
+bounds, variable quotient). Still fenced: mask-mod bridges
+(`band x 255 = mod x 256`) need the PARITY of symbolic terms, which
+linear reasoning cannot see — the unblock is a euclidean uniqueness
+pair (div_unique/mod_unique) in kernel/facts.shard, proposed for
+review, not landed. Emitter bitwise support = wiring std/bits range
+facts into lin.shard's intervals; a later slice.
 
 ## 7. Open questions — triaged at ratification (2026-07-04)
 

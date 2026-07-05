@@ -1,0 +1,1253 @@
+;;; std/bits/bits.shard — the `bits` module IMPLEMENTATION (private).
+;;;
+;;; Proves the interface from kernel/facts.shard's defining recurrences.
+;;; The proof kit, used throughout:
+;;;   - div-facts at literal divisor 2 = the bit decomposition: names the
+;;;     quotient as a VARIABLE, spells the remainder as the TERM (mod x 2)
+;;;     with LE-SPELLED bounds (the axioms' lt-spelled mod_hi cannot feed
+;;;     fin-split; div-facts is the integrality gateway).
+;;;   - The linear backend is INTEGER-TIGHT on goal negation (¬(0<=q) reads
+;;;     q<=-1), which closes quotient bounds and quotient COMPOSITION at
+;;;     literal divisors without fin-split.
+;;;   - Bit-combiner facts (products of bits) are proven ONCE over genuine
+;;;     variables by fin-split (the bit_* claims below) and cited with the
+;;;     div-facts remainder terms instantiated — after a bit goes literal,
+;;;     (* 0 q)/(* 1 q) read linearly and farkas sees through them.
+;;;   - Case-on conditions reach farkas by hyp->premise conversion: a have
+;;;     whose equation IS the case hyp's, proven by rewriting the hyp.
+;;; Inductions are wf-induct on the dividend (zero/range lemmas) or on the
+;;; width k (pow2-bound lemmas); the IH's premises are discharged in order
+;;; [goal premises at fresh][0 <= measure'][measure' < measure].
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/facts.shard")  ; band_rec/bor_rec/bxor_rec, bshl_*/bshr_*
+(import "mod.req.shard")  ; our interface — the obligations
+(use (:: kernel facts *))
+(use (:: std bits *))
+
+;; --- pow2 --------------------------------------------------------------------
+
+(fn pow2 ((k Int)) Int
+  (measure k (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (le k 0) 1 (* 2 (pow2 (- k 1)))))
+
+(fulfills pow2_z (steps ((compute lhs)) refl))
+
+(fulfills pow2_s
+  (chain
+    (have hc (= (le (+ k 1) 0) False) (by arith (list 1 1)))
+    (have ha (= (- (+ k 1) 1) k) (by arith (list (list 1 0 0) (list 1 0 0))))
+    (steps
+      ((unfold pow2 lhs)
+       (rewrite (premise hc) lr lhs true ())
+       (reduce lhs)
+       (rewrite (premise ha) lr lhs true ()))
+      refl)))
+
+(fulfills pow2_pos
+  (wf-induct k
+    (case-on (le k 0) Bool
+      ((case True
+         (steps
+           ((unfold pow2 lhs) (rewrite (hyp True) lr lhs true ()) (compute lhs))
+           refl))
+       (case False
+         (chain
+           (have hk1 (= (le k 0) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (have hp (= (lt 0 (pow2 (- k 1))) True)
+             (rewrite-with
+               (hyp 1)
+               lr
+               lhs
+               ()
+               ((by arith (list 1 0 1))
+                (by arith (list 1 0 1))
+                (by arith (list 1 0 0)))
+               refl))
+           (steps
+             ((unfold pow2 lhs)
+              (rewrite (premise hk1) lr lhs true ())
+              (reduce lhs))
+             (by arith (list 1 0 0 2)))))))))
+
+;; --- the bit-combiner facts (proven once over genuine variables) --------------
+;; Each recurrence's low-bit combiner, bounded on the bit domain [0,1]^2.
+;; One fin-split on p suffices: with p literal, (* 0 q)/(* 1 q) read linearly.
+
+(claim bit_and_lo
+  (goal ((p Int) (q Int))
+    ((= (le 0 p) True) (= (le p 1) True) (= (le 0 q) True) (= (le q 1) True))
+    (= (le 0 (* p q)) True))
+  (fin-split
+    p
+    (premise 0)
+    (premise 1)
+    ((case 0 (by arith (list 1 0 0 0 0))) (case 1 (by arith (list 1 0 0 1 0))))))
+
+(claim bit_and_le
+  (goal ((p Int) (q Int))
+    ((= (le 0 p) True) (= (le p 1) True) (= (le 0 q) True) (= (le q 1) True))
+    (= (le (* p q) p) True))
+  (fin-split
+    p
+    (premise 0)
+    (premise 1)
+    ((case 0 (by arith (list 1 0 0 0 0))) (case 1 (by arith (list 1 0 0 0 1))))))
+
+(claim bit_and_le_r
+  (goal ((p Int) (q Int))
+    ((= (le 0 p) True) (= (le p 1) True) (= (le 0 q) True) (= (le q 1) True))
+    (= (le (* p q) q) True))
+  (fin-split
+    p
+    (premise 0)
+    (premise 1)
+    ((case 0 (by arith (list 1 0 0 1 0))) (case 1 (by arith (list 1 0 0 0 0))))))
+
+(claim bit_or_lo
+  (goal ((p Int) (q Int))
+    ((= (le 0 p) True) (= (le p 1) True) (= (le 0 q) True) (= (le q 1) True))
+    (= (le 0 (- (+ p q) (* p q))) True))
+  (fin-split
+    p
+    (premise 0)
+    (premise 1)
+    ((case 0 (by arith (list 1 0 0 1 0))) (case 1 (by arith (list 1 0 0 0 0))))))
+
+(claim bit_or_hi
+  (goal ((p Int) (q Int))
+    ((= (le 0 p) True) (= (le p 1) True) (= (le 0 q) True) (= (le q 1) True))
+    (= (le (- (+ p q) (* p q)) 1) True))
+  (fin-split
+    p
+    (premise 0)
+    (premise 1)
+    ((case 0 (by arith (list 1 0 0 0 1))) (case 1 (by arith (list 1 0 0 0 0))))))
+
+(claim bit_xor_lo
+  (goal ((p Int) (q Int))
+    ((= (le 0 p) True) (= (le p 1) True) (= (le 0 q) True) (= (le q 1) True))
+    (= (le 0 (- (+ p q) (* 2 (* p q)))) True))
+  (fin-split
+    p
+    (premise 0)
+    (premise 1)
+    ((case 0 (by arith (list 1 0 0 1 0))) (case 1 (by arith (list 1 0 0 0 1))))))
+
+(claim bit_xor_hi
+  (goal ((p Int) (q Int))
+    ((= (le 0 p) True) (= (le p 1) True) (= (le 0 q) True) (= (le q 1) True))
+    (= (le (- (+ p q) (* 2 (* p q))) 1) True))
+  (fin-split
+    p
+    (premise 0)
+    (premise 1)
+    ((case 0 (by arith (list 1 0 0 0 1))) (case 1 (by arith (list 1 0 0 1 0))))))
+
+;; --- zero identities: wf-induct on b, recurrence at a := 0 --------------------
+;; The base b = 0 is pure ground compute (band/bor/bxor are prims). The step
+;; rewrites the recurrence, computes the ground bits of the a = 0 column
+;; ((ediv 0 2) -> 0, (mod 0 2) -> 0), names (ediv b 2) via div-facts, and
+;; closes with the IH as a linear premise.
+
+(fulfills band_zero_l
+  (wf-induct b
+    (case-on (le b 0) Bool
+      ((case True
+         (fin-split
+           b
+           (premise 0)
+           (hyp True)
+           ((case 0 (steps ((compute lhs)) refl)))))
+       (case False
+         (chain
+           (have hb1 (= (le b 0) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (div-facts
+             b
+             2
+             qb
+             (chain
+               (rewrite-with
+                 (lemma band_rec)
+                 lr
+                 lhs
+                 ((inst a 0))
+                 ((steps ((compute both)) refl)
+                  (steps ((rewrite (premise 0) lr lhs true ())) refl)))
+               (steps ((compute lhs) (rewrite (premise 5) lr lhs true ())))
+               (have hih (= (band 0 qb) 0)
+                 (rewrite-with
+                   (hyp 1)
+                   lr
+                   lhs
+                   ()
+                   ((by arith (list 2 1 0 -1 0 1 0))
+                    (by arith (list 2 1 0 -1 0 1 0))
+                    (by arith (list 2 0 1 1 1 0 0)))
+                   refl))
+               (by arith (list (list 1 0 0 0 0 0 0 -2) (list 1 0 0 0 0 0 0 2)))))))))))
+
+(fulfills bor_zero_l
+  (wf-induct b
+    (case-on (le b 0) Bool
+      ((case True
+         (fin-split
+           b
+           (premise 0)
+           (hyp True)
+           ((case 0 (steps ((compute lhs)) refl)))))
+       (case False
+         (chain
+           (have hb1 (= (le b 0) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (div-facts
+             b
+             2
+             qb
+             (chain
+               (rewrite-with
+                 (lemma bor_rec)
+                 lr
+                 lhs
+                 ((inst a 0))
+                 ((steps ((compute both)) refl)
+                  (steps ((rewrite (premise 0) lr lhs true ())) refl)))
+               (steps ((compute lhs) (rewrite (premise 5) lr lhs true ())))
+               (have hih (= (bor 0 qb) qb)
+                 (rewrite-with
+                   (hyp 1)
+                   lr
+                   lhs
+                   ()
+                   ((by arith (list 2 1 0 -1 0 1 0))
+                    (by arith (list 2 1 0 -1 0 1 0))
+                    (by arith (list 2 0 1 1 1 0 0)))
+                   refl))
+               (by arith (list (list 1 0 0 1 0 0 0 -2) (list 1 0 0 -1 0 0 0 2)))))))))))
+
+(fulfills bxor_zero_l
+  (wf-induct b
+    (case-on (le b 0) Bool
+      ((case True
+         (fin-split
+           b
+           (premise 0)
+           (hyp True)
+           ((case 0 (steps ((compute lhs)) refl)))))
+       (case False
+         (chain
+           (have hb1 (= (le b 0) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (div-facts
+             b
+             2
+             qb
+             (chain
+               (rewrite-with
+                 (lemma bxor_rec)
+                 lr
+                 lhs
+                 ((inst a 0))
+                 ((steps ((compute both)) refl)
+                  (steps ((rewrite (premise 0) lr lhs true ())) refl)))
+               (steps ((compute lhs) (rewrite (premise 5) lr lhs true ())))
+               (have hih (= (bxor 0 qb) qb)
+                 (rewrite-with
+                   (hyp 1)
+                   lr
+                   lhs
+                   ()
+                   ((by arith (list 2 1 0 -1 0 1 0))
+                    (by arith (list 2 1 0 -1 0 1 0))
+                    (by arith (list 2 0 1 1 1 0 0)))
+                   refl))
+               (by arith (list (list 1 0 0 1 0 0 0 -2) (list 1 0 0 -1 0 0 0 2)))))))))))
+
+;; --- band range: wf-induct on a ------------------------------------------------
+;; Base a = 0 rides band_zero_l. The step decomposes BOTH operands at 2,
+;; rewrites the recurrence, and closes linearly with the IH plus the cited
+;; combiner fact at the remainder terms. Premise layout in the False arm:
+;; [0] 0<=a  [1] 0<=b  [2] ha1  [3..6] div-a  [7..10] div-b  [11] hpq [12] hih.
+
+(fulfills band_lo
+  (wf-induct a
+    (case-on (le a 0) Bool
+      ((case True
+         (fin-split
+           a
+           (premise 0)
+           (hyp True)
+           ((case 0
+              (rewrite-with
+                (lemma band_zero_l)
+                lr
+                lhs
+                ()
+                ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+                (steps ((compute lhs)) refl))))))
+       (case False
+         (chain
+           (have ha1 (= (le a 0) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (div-facts
+             a
+             2
+             qa
+             (div-facts
+               b
+               2
+               qb
+               (chain
+                 (rewrite-with
+                   (lemma band_rec)
+                   lr
+                   lhs
+                   ()
+                   ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                    (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+                 (steps
+                   ((rewrite (premise 6) lr lhs true ())
+                    (rewrite (premise 10) lr lhs true ())))
+                 (have hpq (= (le 0 (* (mod a 2) (mod b 2))) True)
+                   (rewrite-with
+                     (lemma bit_and_lo)
+                     lr
+                     lhs
+                     ()
+                     ((steps ((rewrite (premise 4) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 5) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 8) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 9) lr lhs true ())) refl))
+                     refl))
+                 (have hih (= (le 0 (band qa qb)) True)
+                   (rewrite-with
+                     (hyp 1)
+                     lr
+                     lhs
+                     ()
+                     ((by arith (list 2 1 0 0 -1 0 1 0 0 0 0 0))
+                      (by arith (list 2 0 1 0 0 0 0 0 -1 0 1 0))
+                      (by arith (list 2 1 0 0 -1 0 1 0 0 0 0 0))
+                      (by arith (list 2 0 0 1 1 1 0 0 0 0 0 0)))
+                     refl))
+                 (by arith (list 1 0 0 0 0 0 0 0 0 0 0 0 1 2)))))))))))
+
+(fulfills band_le_l
+  (wf-induct a
+    (case-on (le a 0) Bool
+      ((case True
+         (fin-split
+           a
+           (premise 0)
+           (hyp True)
+           ((case 0
+              (rewrite-with
+                (lemma band_zero_l)
+                lr
+                lhs
+                ()
+                ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+                (steps ((compute lhs)) refl))))))
+       (case False
+         (chain
+           (have ha1 (= (le a 0) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (div-facts
+             a
+             2
+             qa
+             (div-facts
+               b
+               2
+               qb
+               (chain
+                 (rewrite-with
+                   (lemma band_rec)
+                   lr
+                   lhs
+                   ()
+                   ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                    (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+                 (steps
+                   ((rewrite (premise 6) lr lhs true ())
+                    (rewrite (premise 10) lr lhs true ())))
+                 (have hpq (= (le (* (mod a 2) (mod b 2)) (mod a 2)) True)
+                   (rewrite-with
+                     (lemma bit_and_le)
+                     lr
+                     lhs
+                     ()
+                     ((steps ((rewrite (premise 4) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 5) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 8) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 9) lr lhs true ())) refl))
+                     refl))
+                 (have hih (= (le (band qa qb) qa) True)
+                   (rewrite-with
+                     (hyp 1)
+                     lr
+                     lhs
+                     ()
+                     ((by arith (list 2 1 0 0 -1 0 1 0 0 0 0 0))
+                      (by arith (list 2 0 1 0 0 0 0 0 -1 0 1 0))
+                      (by arith (list 2 1 0 0 -1 0 1 0 0 0 0 0))
+                      (by arith (list 2 0 0 1 1 1 0 0 0 0 0 0)))
+                     refl))
+                 (by arith (list 1 0 0 0 1 0 0 0 0 0 0 0 1 2)))))))))))
+
+(fulfills band_le_r
+  (wf-induct a
+    (case-on (le a 0) Bool
+      ((case True
+         (fin-split
+           a
+           (premise 0)
+           (hyp True)
+           ((case 0
+              (rewrite-with
+                (lemma band_zero_l)
+                lr
+                lhs
+                ()
+                ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+                (steps ((rewrite (premise 1) lr lhs true ())) refl))))))
+       (case False
+         (chain
+           (have ha1 (= (le a 0) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (div-facts
+             a
+             2
+             qa
+             (div-facts
+               b
+               2
+               qb
+               (chain
+                 (rewrite-with
+                   (lemma band_rec)
+                   lr
+                   lhs
+                   ()
+                   ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                    (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+                 (steps
+                   ((rewrite (premise 6) lr lhs true ())
+                    (rewrite (premise 10) lr lhs true ())))
+                 (have hpq (= (le (* (mod a 2) (mod b 2)) (mod b 2)) True)
+                   (rewrite-with
+                     (lemma bit_and_le_r)
+                     lr
+                     lhs
+                     ()
+                     ((steps ((rewrite (premise 4) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 5) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 8) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 9) lr lhs true ())) refl))
+                     refl))
+                 (have hih (= (le (band qa qb) qb) True)
+                   (rewrite-with
+                     (hyp 1)
+                     lr
+                     lhs
+                     ()
+                     ((by arith (list 2 1 0 0 -1 0 1 0 0 0 0 0))
+                      (by arith (list 2 0 1 0 0 0 0 0 -1 0 1 0))
+                      (by arith (list 2 1 0 0 -1 0 1 0 0 0 0 0))
+                      (by arith (list 2 0 0 1 1 1 0 0 0 0 0 0)))
+                     refl))
+                 (by arith (list 1 0 0 0 0 0 0 0 1 0 0 0 1 2)))))))))))
+
+;; --- bor/bxor lower bounds: same skeleton, or/xor combiners --------------------
+
+(fulfills bor_lo
+  (wf-induct a
+    (case-on (le a 0) Bool
+      ((case True
+         (fin-split
+           a
+           (premise 0)
+           (hyp True)
+           ((case 0
+              (rewrite-with
+                (lemma bor_zero_l)
+                lr
+                lhs
+                ()
+                ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+                (steps ((rewrite (premise 1) lr lhs true ())) refl))))))
+       (case False
+         (chain
+           (have ha1 (= (le a 0) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (div-facts
+             a
+             2
+             qa
+             (div-facts
+               b
+               2
+               qb
+               (chain
+                 (rewrite-with
+                   (lemma bor_rec)
+                   lr
+                   lhs
+                   ()
+                   ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                    (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+                 (steps
+                   ((rewrite (premise 6) lr lhs true ())
+                    (rewrite (premise 10) lr lhs true ())))
+                 (have hc
+                   (=
+                     (le 0 (- (+ (mod a 2) (mod b 2)) (* (mod a 2) (mod b 2))))
+                     True)
+                   (rewrite-with
+                     (lemma bit_or_lo)
+                     lr
+                     lhs
+                     ()
+                     ((steps ((rewrite (premise 4) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 5) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 8) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 9) lr lhs true ())) refl))
+                     refl))
+                 (have hih (= (le 0 (bor qa qb)) True)
+                   (rewrite-with
+                     (hyp 1)
+                     lr
+                     lhs
+                     ()
+                     ((by arith (list 2 1 0 0 -1 0 1 0 0 0 0 0))
+                      (by arith (list 2 0 1 0 0 0 0 0 -1 0 1 0))
+                      (by arith (list 2 1 0 0 -1 0 1 0 0 0 0 0))
+                      (by arith (list 2 0 0 1 1 1 0 0 0 0 0 0)))
+                     refl))
+                 (by arith (list 1 0 0 0 0 0 0 0 0 0 0 0 1 2)))))))))))
+
+(fulfills bxor_lo
+  (wf-induct a
+    (case-on (le a 0) Bool
+      ((case True
+         (fin-split
+           a
+           (premise 0)
+           (hyp True)
+           ((case 0
+              (rewrite-with
+                (lemma bxor_zero_l)
+                lr
+                lhs
+                ()
+                ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+                (steps ((rewrite (premise 1) lr lhs true ())) refl))))))
+       (case False
+         (chain
+           (have ha1 (= (le a 0) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (div-facts
+             a
+             2
+             qa
+             (div-facts
+               b
+               2
+               qb
+               (chain
+                 (rewrite-with
+                   (lemma bxor_rec)
+                   lr
+                   lhs
+                   ()
+                   ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                    (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+                 (steps
+                   ((rewrite (premise 6) lr lhs true ())
+                    (rewrite (premise 10) lr lhs true ())))
+                 (have hc
+                   (=
+                     (le
+                       0
+                       (- (+ (mod a 2) (mod b 2)) (* 2 (* (mod a 2) (mod b 2)))))
+                     True)
+                   (rewrite-with
+                     (lemma bit_xor_lo)
+                     lr
+                     lhs
+                     ()
+                     ((steps ((rewrite (premise 4) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 5) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 8) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 9) lr lhs true ())) refl))
+                     refl))
+                 (have hih (= (le 0 (bxor qa qb)) True)
+                   (rewrite-with
+                     (hyp 1)
+                     lr
+                     lhs
+                     ()
+                     ((by arith (list 2 1 0 0 -1 0 1 0 0 0 0 0))
+                      (by arith (list 2 0 1 0 0 0 0 0 -1 0 1 0))
+                      (by arith (list 2 1 0 0 -1 0 1 0 0 0 0 0))
+                      (by arith (list 2 0 0 1 1 1 0 0 0 0 0 0)))
+                     refl))
+                 (by arith (list 1 0 0 0 0 0 0 0 0 0 0 0 1 2)))))))))))
+
+;; --- the pow2 bounds: wf-induct on the width k ---------------------------------
+;; k = 0 collapses both operands to 0 (pow2 0 = 1 by compute-have, then the
+;; equality eliminates the pow2 atom linearly); the step halves both operands
+;; (IH at k-1, qa, qb) and pays the combiner's <= 1. Premise layout, False arm:
+;; [0..4] goal  [5] hk1  [6] hkk  [7] hps  [8..11] div-a  [12..15] div-b
+;; [16] hchi  [17] hih.
+
+(fulfills bor_le_pow2
+  (wf-induct k
+    (case-on (le k 0) Bool
+      ((case True
+         (fin-split
+           k
+           (premise 0)
+           (hyp True)
+           ((case 0
+              (chain
+                (have hp0 (= (pow2 0) 1) (steps ((compute lhs)) refl))
+                (have ha0 (= (le a 0) True) (by arith (list 1 0 0 0 1 0 -1)))
+                (fin-split
+                  a
+                  (premise 1)
+                  (premise ha0)
+                  ((case 0
+                     (chain
+                       (have hz (= (bor 0 b) b)
+                         (rewrite-with
+                           (lemma bor_zero_l)
+                           lr
+                           lhs
+                           ()
+                           ((steps ((rewrite (premise 2) lr lhs true ())) refl))
+                           refl))
+                       (steps
+                         ((rewrite (premise hz) lr lhs true ()))
+                         (by arith (list 1 0 0 0 0 1 0 0 0))))))))))))
+       (case False
+         (chain
+           (have hk1 (= (le k 0) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (have hkk (= k (+ (- k 1) 1))
+             (by arith (list (list 1 0 0 0 0 0 0) (list 1 0 0 0 0 0 0))))
+           (have hps (= (pow2 k) (* 2 (pow2 (- k 1))))
+             (chain
+               (steps ((rewrite (premise hkk) lr lhs true ())))
+               (rewrite-with
+                 (lemma pow2_s)
+                 lr
+                 lhs
+                 ((inst k (- k 1)))
+                 ((by arith (list 1 0 0 0 0 0 1 0)))
+                 refl)))
+           (div-facts
+             a
+             2
+             qa
+             (div-facts
+               b
+               2
+               qb
+               (chain
+                 (rewrite-with
+                   (lemma bor_rec)
+                   lr
+                   lhs
+                   ()
+                   ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                    (steps ((rewrite (premise 2) lr lhs true ())) refl)))
+                 (steps
+                   ((rewrite (premise 11) lr lhs true ())
+                    (rewrite (premise 15) lr lhs true ())))
+                 (have hchi
+                   (=
+                     (le (- (+ (mod a 2) (mod b 2)) (* (mod a 2) (mod b 2))) 1)
+                     True)
+                   (rewrite-with
+                     (lemma bit_or_hi)
+                     lr
+                     lhs
+                     ()
+                     ((steps ((rewrite (premise 9) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 10) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 13) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 14) lr lhs true ())) refl))
+                     refl))
+                 (have hih (= (le (bor qa qb) (- (pow2 (- k 1)) 1)) True)
+                   (rewrite-with
+                     (hyp 1)
+                     lr
+                     lhs
+                     ()
+                     ((by arith (list 1 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0))
+                      (by arith (list 2 0 1 0 0 0 0 0 0 -1 0 1 0 0 0 0 0))
+                      (by arith (list 2 0 0 1 0 0 0 0 0 0 0 0 0 -1 0 1 0))
+                      (by arith (list 2 0 0 0 1 0 0 0 -1 1 1 0 0 0 0 0 0))
+                      (by arith (list 2 0 0 0 0 1 0 0 -1 0 0 0 0 1 1 0 0))
+                      (by arith (list 1 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0))
+                      (by arith (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+                     refl))
+                 (by arith (list 1 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 1 2)))))))))))
+
+(fulfills bxor_le_pow2
+  (wf-induct k
+    (case-on (le k 0) Bool
+      ((case True
+         (fin-split
+           k
+           (premise 0)
+           (hyp True)
+           ((case 0
+              (chain
+                (have hp0 (= (pow2 0) 1) (steps ((compute lhs)) refl))
+                (have ha0 (= (le a 0) True) (by arith (list 1 0 0 0 1 0 -1)))
+                (fin-split
+                  a
+                  (premise 1)
+                  (premise ha0)
+                  ((case 0
+                     (chain
+                       (have hz (= (bxor 0 b) b)
+                         (rewrite-with
+                           (lemma bxor_zero_l)
+                           lr
+                           lhs
+                           ()
+                           ((steps ((rewrite (premise 2) lr lhs true ())) refl))
+                           refl))
+                       (steps
+                         ((rewrite (premise hz) lr lhs true ()))
+                         (by arith (list 1 0 0 0 0 1 0 0 0))))))))))))
+       (case False
+         (chain
+           (have hk1 (= (le k 0) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (have hkk (= k (+ (- k 1) 1))
+             (by arith (list (list 1 0 0 0 0 0 0) (list 1 0 0 0 0 0 0))))
+           (have hps (= (pow2 k) (* 2 (pow2 (- k 1))))
+             (chain
+               (steps ((rewrite (premise hkk) lr lhs true ())))
+               (rewrite-with
+                 (lemma pow2_s)
+                 lr
+                 lhs
+                 ((inst k (- k 1)))
+                 ((by arith (list 1 0 0 0 0 0 1 0)))
+                 refl)))
+           (div-facts
+             a
+             2
+             qa
+             (div-facts
+               b
+               2
+               qb
+               (chain
+                 (rewrite-with
+                   (lemma bxor_rec)
+                   lr
+                   lhs
+                   ()
+                   ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                    (steps ((rewrite (premise 2) lr lhs true ())) refl)))
+                 (steps
+                   ((rewrite (premise 11) lr lhs true ())
+                    (rewrite (premise 15) lr lhs true ())))
+                 (have hchi
+                   (=
+                     (le
+                       (- (+ (mod a 2) (mod b 2)) (* 2 (* (mod a 2) (mod b 2))))
+                       1)
+                     True)
+                   (rewrite-with
+                     (lemma bit_xor_hi)
+                     lr
+                     lhs
+                     ()
+                     ((steps ((rewrite (premise 9) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 10) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 13) lr lhs true ())) refl)
+                      (steps ((rewrite (premise 14) lr lhs true ())) refl))
+                     refl))
+                 (have hih (= (le (bxor qa qb) (- (pow2 (- k 1)) 1)) True)
+                   (rewrite-with
+                     (hyp 1)
+                     lr
+                     lhs
+                     ()
+                     ((by arith (list 1 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0))
+                      (by arith (list 2 0 1 0 0 0 0 0 0 -1 0 1 0 0 0 0 0))
+                      (by arith (list 2 0 0 1 0 0 0 0 0 0 0 0 0 -1 0 1 0))
+                      (by arith (list 2 0 0 0 1 0 0 0 -1 1 1 0 0 0 0 0 0))
+                      (by arith (list 2 0 0 0 0 1 0 0 -1 0 0 0 0 1 1 0 0))
+                      (by arith (list 1 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0))
+                      (by arith (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+                     refl))
+                 (by arith (list 1 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 1 2)))))))))))
+
+;; --- 32-bit corollaries: instantiate at k = 32, compute the tower -------------
+
+(fulfills bor_le32
+  (chain
+    (have h32 (= 4294967295 (- (pow2 32) 1)) (steps ((compute rhs)) refl))
+    (steps ((rewrite (premise h32) lr lhs true ())))
+    (rewrite-with
+      (lemma bor_le_pow2)
+      lr
+      lhs
+      ((inst k 32))
+      ((steps ((compute both)) refl)
+       (steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps
+         ((rewrite (premise h32) rl lhs true ())
+          (rewrite (premise 2) lr lhs true ()))
+         refl)
+       (steps
+         ((rewrite (premise h32) rl lhs true ())
+          (rewrite (premise 3) lr lhs true ()))
+         refl))
+      refl)))
+
+(fulfills bxor_le32
+  (chain
+    (have h32 (= 4294967295 (- (pow2 32) 1)) (steps ((compute rhs)) refl))
+    (steps ((rewrite (premise h32) lr lhs true ())))
+    (rewrite-with
+      (lemma bxor_le_pow2)
+      lr
+      lhs
+      ((inst k 32))
+      ((steps ((compute both)) refl)
+       (steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps
+         ((rewrite (premise h32) rl lhs true ())
+          (rewrite (premise 2) lr lhs true ()))
+         refl)
+       (steps
+         ((rewrite (premise h32) rl lhs true ())
+          (rewrite (premise 3) lr lhs true ()))
+         refl))
+      refl)))
+
+;; --- literal shifts: unroll the step axioms ------------------------------------
+
+(fulfills shl1_mul
+  (chain
+    (have h1 (= 1 (+ 0 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise h1) lr lhs true ())))
+    (rewrite-with
+      (lemma bshl_s)
+      lr
+      lhs
+      ((inst k 0))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute both)) refl)))
+    (rewrite-with
+      (lemma bshl_z)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+      refl)))
+
+(fulfills shr1_div
+  (chain
+    (have h1 (= 1 (+ 0 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise h1) lr lhs true ())))
+    (rewrite-with
+      (lemma bshr_s)
+      lr
+      lhs
+      ((inst k 0))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute both)) refl)))
+    (rewrite-with
+      (lemma bshr_z)
+      lr
+      lhs
+      ()
+      ((div-facts a 2 q (by arith (list 2 1 0 -1 0 1 2))))
+      refl)))
+
+;; shl8: unroll bshl_s eight times, close the multiplier tower linearly.
+;; h2 must target ONLY the shift count — by then six multiplier 2s precede
+;; it in preorder, so the count is occurrence (at 6).
+
+(fulfills shl8_mul
+  (chain
+    (have h8 (= 8 (+ 7 1)) (by arith (list (list 1 0) (list 1 0))))
+    (have h7 (= 7 (+ 6 1)) (by arith (list (list 1 0 0) (list 1 0 0))))
+    (have h6 (= 6 (+ 5 1)) (by arith (list (list 1 0 0 0) (list 1 0 0 0))))
+    (have h5 (= 5 (+ 4 1)) (by arith (list (list 1 0 0 0 0) (list 1 0 0 0 0))))
+    (have h4 (= 4 (+ 3 1))
+      (by arith (list (list 1 0 0 0 0 0) (list 1 0 0 0 0 0))))
+    (have h3 (= 3 (+ 2 1))
+      (by arith (list (list 1 0 0 0 0 0 0) (list 1 0 0 0 0 0 0))))
+    (have h2 (= 2 (+ 1 1))
+      (by arith (list (list 1 0 0 0 0 0 0 0) (list 1 0 0 0 0 0 0 0))))
+    (have h1 (= 1 (+ 0 1))
+      (by arith (list (list 1 0 0 0 0 0 0 0 0) (list 1 0 0 0 0 0 0 0 0))))
+    (steps ((rewrite (premise h8) lr lhs true ())))
+    (rewrite-with
+      (lemma bshl_s)
+      lr
+      lhs
+      ((inst k 7))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute both)) refl)))
+    (steps ((rewrite (premise h7) lr lhs true ())))
+    (rewrite-with
+      (lemma bshl_s)
+      lr
+      lhs
+      ((inst k 6))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute both)) refl)))
+    (steps ((rewrite (premise h6) lr lhs true ())))
+    (rewrite-with
+      (lemma bshl_s)
+      lr
+      lhs
+      ((inst k 5))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute both)) refl)))
+    (steps ((rewrite (premise h5) lr lhs true ())))
+    (rewrite-with
+      (lemma bshl_s)
+      lr
+      lhs
+      ((inst k 4))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute both)) refl)))
+    (steps ((rewrite (premise h4) lr lhs true ())))
+    (rewrite-with
+      (lemma bshl_s)
+      lr
+      lhs
+      ((inst k 3))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute both)) refl)))
+    (steps ((rewrite (premise h3) lr lhs true ())))
+    (rewrite-with
+      (lemma bshl_s)
+      lr
+      lhs
+      ((inst k 2))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute both)) refl)))
+    (steps ((rewrite (premise h2) lr lhs (at 6) ())))
+    (rewrite-with
+      (lemma bshl_s)
+      lr
+      lhs
+      ((inst k 1))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute both)) refl)))
+    (steps ((rewrite (premise h1) lr lhs true ())))
+    (rewrite-with
+      (lemma bshl_s)
+      lr
+      lhs
+      ((inst k 0))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute both)) refl)))
+    (rewrite-with
+      (lemma bshl_z)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+      (by arith (list (list 1 0 0 0 0 0 0 0 0 0) (list 1 0 0 0 0 0 0 0 0 0))))))
+
+;; shr8: seven quotient-composition haves (the div_div cert formula at
+;; N = 2,4,...,128), then unroll bshr_s collapsing the nest as it grows —
+;; each step's nonneg premise is a single div-facts at the current power.
+
+(fulfills shr8_div
+  (chain
+    (have hc2 (= (ediv (ediv a 2) 2) (ediv a 4))
+      (div-facts
+        a
+        2
+        q1
+        (div-facts
+          (ediv a 2)
+          2
+          q2
+          (div-facts
+            a
+            4
+            q4
+            (by
+              arith
+              (list
+                (list 4 0 1 1 0 -2 2 2 0 -4 -1 0 1 4)
+                (list 4 0 -1 0 1 2 -2 0 2 4 1 1 0 -4)))))))
+    (have hc3 (= (ediv (ediv a 4) 2) (ediv a 8))
+      (div-facts
+        a
+        4
+        q1
+        (div-facts
+          (ediv a 4)
+          2
+          q2
+          (div-facts
+            a
+            8
+            q4
+            (by
+              arith
+              (list
+                (list 8 0 0 1 1 0 -4 4 4 0 -8 -1 0 1 8)
+                (list 8 0 0 -1 0 1 4 -4 0 4 8 1 1 0 -8)))))))
+    (have hc4 (= (ediv (ediv a 8) 2) (ediv a 16))
+      (div-facts
+        a
+        8
+        q1
+        (div-facts
+          (ediv a 8)
+          2
+          q2
+          (div-facts
+            a
+            16
+            q4
+            (by
+              arith
+              (list
+                (list 16 0 0 0 1 1 0 -8 8 8 0 -16 -1 0 1 16)
+                (list 16 0 0 0 -1 0 1 8 -8 0 8 16 1 1 0 -16)))))))
+    (have hc5 (= (ediv (ediv a 16) 2) (ediv a 32))
+      (div-facts
+        a
+        16
+        q1
+        (div-facts
+          (ediv a 16)
+          2
+          q2
+          (div-facts
+            a
+            32
+            q4
+            (by
+              arith
+              (list
+                (list 32 0 0 0 0 1 1 0 -16 16 16 0 -32 -1 0 1 32)
+                (list 32 0 0 0 0 -1 0 1 16 -16 0 16 32 1 1 0 -32)))))))
+    (have hc6 (= (ediv (ediv a 32) 2) (ediv a 64))
+      (div-facts
+        a
+        32
+        q1
+        (div-facts
+          (ediv a 32)
+          2
+          q2
+          (div-facts
+            a
+            64
+            q4
+            (by
+              arith
+              (list
+                (list 64 0 0 0 0 0 1 1 0 -32 32 32 0 -64 -1 0 1 64)
+                (list 64 0 0 0 0 0 -1 0 1 32 -32 0 32 64 1 1 0 -64)))))))
+    (have hc7 (= (ediv (ediv a 64) 2) (ediv a 128))
+      (div-facts
+        a
+        64
+        q1
+        (div-facts
+          (ediv a 64)
+          2
+          q2
+          (div-facts
+            a
+            128
+            q4
+            (by
+              arith
+              (list
+                (list 128 0 0 0 0 0 0 1 1 0 -64 64 64 0 -128 -1 0 1 128)
+                (list 128 0 0 0 0 0 0 -1 0 1 64 -64 0 64 128 1 1 0 -128)))))))
+    (have hc8 (= (ediv (ediv a 128) 2) (ediv a 256))
+      (div-facts
+        a
+        128
+        q1
+        (div-facts
+          (ediv a 128)
+          2
+          q2
+          (div-facts
+            a
+            256
+            q4
+            (by
+              arith
+              (list
+                (list 256 0 0 0 0 0 0 0 1 1 0 -128 128 128 0 -256 -1 0 1 256)
+                (list 256 0 0 0 0 0 0 0 -1 0 1 128 -128 0 128 256 1 1 0 -256)))))))
+    (have h8 (= 8 (+ 7 1))
+      (by arith (list (list 1 0 0 0 0 0 0 0 0) (list 1 0 0 0 0 0 0 0 0))))
+    (have h7 (= 7 (+ 6 1))
+      (by arith (list (list 1 0 0 0 0 0 0 0 0 0) (list 1 0 0 0 0 0 0 0 0 0))))
+    (have h6 (= 6 (+ 5 1))
+      (by
+        arith
+        (list (list 1 0 0 0 0 0 0 0 0 0 0) (list 1 0 0 0 0 0 0 0 0 0 0))))
+    (have h5 (= 5 (+ 4 1))
+      (by
+        arith
+        (list (list 1 0 0 0 0 0 0 0 0 0 0 0) (list 1 0 0 0 0 0 0 0 0 0 0 0))))
+    (have h4 (= 4 (+ 3 1))
+      (by
+        arith
+        (list (list 1 0 0 0 0 0 0 0 0 0 0 0 0) (list 1 0 0 0 0 0 0 0 0 0 0 0 0))))
+    (have h3 (= 3 (+ 2 1))
+      (by
+        arith
+        (list
+          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0)
+          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0))))
+    (have h2 (= 2 (+ 1 1))
+      (by
+        arith
+        (list
+          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0)
+          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0))))
+    (have h1 (= 1 (+ 0 1))
+      (by
+        arith
+        (list
+          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)
+          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))))
+    (steps ((rewrite (premise h8) lr lhs true ())))
+    (rewrite-with
+      (lemma bshr_s)
+      lr
+      lhs
+      ((inst k 7))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute both)) refl)))
+    (steps ((rewrite (premise h7) lr lhs true ())))
+    (rewrite-with
+      (lemma bshr_s)
+      lr
+      lhs
+      ((inst k 6))
+      ((div-facts
+         a
+         2
+         q
+         (by arith (list 2 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -1 0 1 2)))
+       (steps ((compute both)) refl)))
+    (steps
+      ((rewrite (premise hc2) lr lhs true ())
+       (rewrite (premise h6) lr lhs true ())))
+    (rewrite-with
+      (lemma bshr_s)
+      lr
+      lhs
+      ((inst k 5))
+      ((div-facts
+         a
+         4
+         q
+         (by arith (list 4 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -1 0 1 4)))
+       (steps ((compute both)) refl)))
+    (steps
+      ((rewrite (premise hc3) lr lhs true ())
+       (rewrite (premise h5) lr lhs true ())))
+    (rewrite-with
+      (lemma bshr_s)
+      lr
+      lhs
+      ((inst k 4))
+      ((div-facts
+         a
+         8
+         q
+         (by arith (list 8 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -1 0 1 8)))
+       (steps ((compute both)) refl)))
+    (steps
+      ((rewrite (premise hc4) lr lhs true ())
+       (rewrite (premise h4) lr lhs true ())))
+    (rewrite-with
+      (lemma bshr_s)
+      lr
+      lhs
+      ((inst k 3))
+      ((div-facts
+         a
+         16
+         q
+         (by arith (list 16 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -1 0 1 16)))
+       (steps ((compute both)) refl)))
+    (steps
+      ((rewrite (premise hc5) lr lhs true ())
+       (rewrite (premise h3) lr lhs true ())))
+    (rewrite-with
+      (lemma bshr_s)
+      lr
+      lhs
+      ((inst k 2))
+      ((div-facts
+         a
+         32
+         q
+         (by arith (list 32 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -1 0 1 32)))
+       (steps ((compute both)) refl)))
+    (steps
+      ((rewrite (premise hc6) lr lhs true ())
+       (rewrite (premise h2) lr lhs true ())))
+    (rewrite-with
+      (lemma bshr_s)
+      lr
+      lhs
+      ((inst k 1))
+      ((div-facts
+         a
+         64
+         q
+         (by arith (list 64 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -1 0 1 64)))
+       (steps ((compute both)) refl)))
+    (steps
+      ((rewrite (premise hc7) lr lhs true ())
+       (rewrite (premise h1) lr lhs true ())))
+    (rewrite-with
+      (lemma bshr_s)
+      lr
+      lhs
+      ((inst k 0))
+      ((div-facts
+         a
+         128
+         q
+         (by arith (list 128 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -1 0 1 128)))
+       (steps ((compute both)) refl)))
+    (steps ((rewrite (premise hc8) lr lhs true ())))
+    (rewrite-with
+      (lemma bshr_z)
+      lr
+      lhs
+      ()
+      ((div-facts
+         a
+         256
+         q
+         (by arith (list 256 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -1 0 1 256))))
+      refl)))
