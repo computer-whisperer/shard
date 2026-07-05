@@ -68,8 +68,21 @@
 ;; Binary i32 operators. Stack order: push a, push b, apply → a OP b
 ;; (b is the top of stack, a below it — wasm's operand order). The
 ;; comparison set is the unsigned family (values live in [0, 2^32), so
-;; Int lt/le ARE the unsigned orders); signed variants wait for a consumer.
-(type Bop (BAdd) (BSub) (BMul) (BEq) (BNe) (BLtU) (BLeU) (BGtU) (BGeU))
+;; Int lt/le ARE the unsigned orders); division likewise (ediv/mod on the
+;; nonneg range ARE div_u/rem_u — machine spelling = spec spelling, no
+;; wrap). Signed variants wait for a consumer.
+(type Bop
+  (BAdd)
+  (BSub)
+  (BMul)
+  (BEq)
+  (BNe)
+  (BLtU)
+  (BLeU)
+  (BGtU)
+  (BGeU)
+  (BDivU)
+  (BRemU))
 
 ;; Structured wasm: Block/Loop carry nested bodies; Br/BrIf carry a relative
 ;; label depth (0 = innermost enclosing block/loop). A Br targeting a Block
@@ -170,26 +183,34 @@
            (case 1
              (by arith (list (list 0 0 1 1 1 0 0 0 0) (list 0 0 1 1 1 0 0 0 0))))))))))
 
-(fn bop_val ((o Bop) (a Int) (b Int)) Int
+;; None = the op itself traps: division by zero. The divisor guard is
+;; spelled (le 1 b) — the PRE convention certs rewrite directly.
+(fn bop_val ((o Bop) (a Int) (b Int)) (Option Int)
   (match o
-    (BAdd (wrap32 (+ a b)))
-    (BSub (wrap32 (- a b)))
-    (BMul (wrap32 (* a b)))
-    (BEq (b2i (int_eq a b)))
-    (BNe (if (int_eq a b) 0 1))
-    (BLtU (b2i (lt a b)))
-    (BLeU (b2i (le a b)))
-    (BGtU (b2i (lt b a)))
-    (BGeU (b2i (le b a)))))
+    (BAdd (Some (wrap32 (+ a b))))
+    (BSub (Some (wrap32 (- a b))))
+    (BMul (Some (wrap32 (* a b))))
+    (BEq (Some (b2i (int_eq a b))))
+    (BNe (Some (if (int_eq a b) 0 1)))
+    (BLtU (Some (b2i (lt a b))))
+    (BLeU (Some (b2i (le a b))))
+    (BGtU (Some (b2i (lt b a))))
+    (BGeU (Some (b2i (le b a))))
+    (BDivU (if (le 1 b) (Some (ediv a b)) None))
+    (BRemU (if (le 1 b) (Some (mod a b)) None))))
 
-;; pop two, apply, push. None = stack underflow (→ OTrap at the caller).
+;; pop two, apply, push. None = stack underflow or a trapping op
+;; (division by zero) — OTrap at the caller either way.
 (fn do_bin ((o Bop) (st (List Int))) (Option (List Int))
   (match st
     (Nil None)
     ((Cons b st1)
      (match st1
        (Nil None)
-       ((Cons a r) (Some (Cons (bop_val o a b) r)))))))
+       ((Cons a r)
+        (match (bop_val o a b)
+          (None None)
+          ((Some v) (Some (Cons v r)))))))))
 
 ;; local get/set by index; None = out-of-range index (negative falls through).
 (fn lget ((ls (List Int)) (i Int)) (Option Int)

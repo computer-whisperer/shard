@@ -36,7 +36,9 @@ for (const line of plan) {
     try {
       got = (exports[fn](...args) >>> 0).toString(); // engine i32 -> u32 view
     } catch (e) {
-      report(false, line, `engine traps: ${e.message}`);
+      // model None = trap: the engine trapping IS agreement (the trap leg
+      // of the differential — division by zero etc. must trap BOTH sides).
+      report(expect === "None", line, `engine traps: ${e.message}`);
       continue;
     }
     report(got === expect, line, `engine says ${got}`);
