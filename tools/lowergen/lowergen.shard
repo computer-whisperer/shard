@@ -581,10 +581,17 @@
 ;; probes' composed-by-citation discipline, mechanized):
 ;;   - Int return: arith over params/literals + (mem_get m ADDR) reads;
 ;;     memory returned untouched — RHS (Some (Pair (SPEC m0 args) m0)).
-;;   - Mem return: a SINGLE TRAILING (mem_set m ADDR VAL) (lets allowed
-;;     above it). All reads happen pre-write, so no aliasing premises are
-;;     needed; write-then-read stays a hand piece until condition-relative
-;;     premises exist. RHS (Some (Pair VAL (SPEC m0 args))).
+;;   - Mem return: lets above a trailing (mem_set …) store — and since
+;;     the WRITE-THEN-READ slice (probe: examples/wtrmem_probe.shard),
+;;     Mem-typed lets sequence MULTIPLE stores with reads THROUGH them:
+;;     the walk threads the CURRENT MEMORY TERM (m0 growing one mem_set
+;;     per store); reads and behavior premises fire AT that term, so
+;;     machine and spec spellings stay identical and no collapse lemmas
+;;     or disequality premises exist anywhere. LINEARITY is enforced —
+;;     using the param or a stale Mem binding after a store refuses
+;;     loudly. Intermediate mset returns park in scratch locals (no
+;;     Drop). RHS (Some (Pair LASTVAL (SPEC m0 args))). Int-return fns
+;;     stay store-free (the schema pins their memory unchanged).
 ;; The emitted module is (Cons mget (Cons mset (Cons SELF restfs))) at
 ;; index 2 — std/mem's minimal-prefix convention; the callee literals are
 ;; SPLICED by the generator (the (inline …) same-file rule's link-time
@@ -637,7 +644,13 @@
 ;;
 ;; state: code docs, instr count, next free local, symbolic stack (clean
 ;; spellings, top first), proof doc so far, have counter, tagged PREs,
-;; pending wrap events, get/set counts.
+;; pending wrap events, get/set counts, and the CURRENT MEMORY TERM (the
+;; spec spelling of the machine memory; starts at m0, grows one mem_set
+;; per store). WRITE-THEN-READ discipline: reads and writes fire AT the
+;; current term — machine and spec stay on identical spellings, so no
+;; collapse lemmas or disequality premises are ever needed; Mem-typed
+;; lets are the linear sequencing form (they ζ-open by substitution on
+;; the spec side, exactly like scalar lets).
 (type MSt
   (MkMSt
     (List Doc)
@@ -649,44 +662,44 @@
     (List PItem)
     (List Expr)
     Int
-    Int))
+    Int
+    Expr))
 
 (type MRes (MOk MSt Expr) (MErr (List Int)))
 
-;; is this arg the fn's Mem param (textual position 0, not let-bound)?
-(fn is_mem_param ((e Expr) (env (List (Pair Expr Int))) (n Int)) Bool
-  (match e
-    ((BVar i)
-     (match (env_at env i)
-       (None (int_eq (- (- n 1) (- i (env_len env))) 0))
-       ((Some _) False)))
-    (_ False)))
+(fn m0v () Expr (FVar (quote m0)))
+
+;; the env marker for a Mem-typed binding (its scratch local is dead)
+(fn memk () Int (- 0 1))
 
 (fn mg_e
   ((n Int) (nn Int) (fnm Doc) (env (List (Pair Expr Int))) (st MSt) (e Expr))
   MRes
   (measure (struct e))
   (match st
-    ((MkMSt code cnt nxt stk prf j pres pend gets sets)
+    ((MkMSt code cnt nxt stk prf j pres pend gets sets mm)
      (match e
        ((BVar i)
         (match (env_at env i)
           ((Some (Pair ce k))
-           (MOk
-             (MkMSt
-               (dapp
-                 code
-                 (Cons (dcat3 (DStr "(LocalGet ") (dint k) (DStr ")")) Nil))
-               (+ cnt 1)
-               nxt
-               (Cons ce stk)
-               prf
-               j
-               pres
-               pend
-               gets
-               sets)
-             ce))
+           (if (int_eq k (memk))
+             (MErr "a Mem-typed binding cannot be used as a scalar value")
+             (MOk
+               (MkMSt
+                 (dapp
+                   code
+                   (Cons (dcat3 (DStr "(LocalGet ") (dint k) (DStr ")")) Nil))
+                 (+ cnt 1)
+                 nxt
+                 (Cons ce stk)
+                 prf
+                 j
+                 pres
+                 pend
+                 gets
+                 sets
+                 mm)
+               ce)))
           (None
             (let ((pos (- (- n 1) (- i (env_len env)))))
               (if (int_eq pos 0)
@@ -711,7 +724,8 @@
                       pres
                       pend
                       gets
-                      sets)
+                      sets
+                      mm)
                     ce)))))))
        ((IntLit k)
         (if (le 0 k)
@@ -729,7 +743,8 @@
                 pres
                 pend
                 gets
-                sets)
+                sets
+                mm)
               e)
             (MErr "literal outside [0, 2^32)"))
           (MErr "literal outside [0, 2^32)")))
@@ -747,7 +762,7 @@
                     (let ((node (Call q (Cons cea (Cons ceb Nil)))))
                       (if (has_fv node)
                         (match st2
-                          ((MkMSt c2 n2 x2 s2 p2 j2 pr2 pd2 g2 w2)
+                          ((MkMSt c2 n2 x2 s2 p2 j2 pr2 pd2 g2 w2 mm2)
                            (match s2
                              ((Cons _ (Cons _ below))
                               (MOk
@@ -766,7 +781,8 @@
                                   (pit_add pr2 (wrap_item node)))
                                   (dapp_e pd2 (Cons node Nil))
                                   g2
-                                  w2)
+                                  w2
+                                  mm2)
                                 node))
                              (_ (MErr "internal: stack underflow at arith")))))
                         (MErr
@@ -776,92 +792,237 @@
             (if (memq_named q (quote mem_get))
               (match as
                 ((Cons marg (Cons addr Nil))
-                 (if (is_mem_param marg env n)
-                   (match (mg_e n nn fnm env st addr)
-                     ((MErr m) (MErr m))
-                     ((MOk st1 cea)
-                      (if (addr_ground_bad cea)
-                        (MErr "literal byte address outside [0, 65535]")
-                        (match st1
-                          ((MkMSt c1 n1 x1 s1 p1 j1 pr1 pd1 g1 w1)
-                           (match s1
-                             ((Cons _ below)
-                              (let
-                                ((pr1b (pit_add pr1 (PGet cea (- nn (+ n1 3))))))
-                                (match (m_flush pd1 pr1b fnm j1)
-                                  ((Pair evd j2)
-                                   (let
-                                     ((rnode
-                                        (Call
-                                          q
-                                          (Cons
-                                            (FVar (quote m0))
-                                            (Cons cea Nil)))))
-                                     (MOk
-                                       (MkMSt
-                                         (dapp c1 (Cons (DStr "(Call 0)") Nil))
-                                         (+ n1 1)
-                                         x1
-                                         (Cons rnode below)
-                                         (dcat3
-                                           p1
-                                           (DCat (m_stage_open) evd)
-                                           (m_bridge_get
-                                             cea
-                                             below
-                                             rnode
-                                             (+ 3 (poff pr1))))
-                                         j2
-                                         pr1b
-                                         Nil
-                                         (+ g1 1)
-                                         w1)
-                                       rnode))))))
-                             (_ (MErr "internal: stack underflow at mem_get"))))))))
-                   (MErr "mem_get's memory argument must be the fn's Mem param")))
+                 (match (mg_mem n nn fnm env st marg False)
+                   ((MErr m) (MErr m))
+                   ((MOk stm mmt)
+                    (match (mg_e n nn fnm env stm addr)
+                      ((MErr m) (MErr m))
+                      ((MOk st1 cea)
+                       (if (addr_ground_bad cea)
+                         (MErr "literal byte address outside [0, 65535]")
+                         (match st1
+                           ((MkMSt c1 n1 x1 s1 p1 j1 pr1 pd1 g1 w1 mm1)
+                            (match s1
+                              ((Cons _ below)
+                               (let
+                                 ((pr1b
+                                    (pit_add
+                                      pr1
+                                      (PGet mmt cea (- nn (+ n1 3))))))
+                                 (match (m_flush pd1 pr1b fnm j1)
+                                   ((Pair evd j2)
+                                    (let
+                                      ((rnode
+                                         (Call q (Cons mmt (Cons cea Nil)))))
+                                      (MOk
+                                        (MkMSt
+                                          (dapp
+                                            c1
+                                            (Cons (DStr "(Call 0)") Nil))
+                                          (+ n1 1)
+                                          x1
+                                          (Cons rnode below)
+                                          (dcat3
+                                            p1
+                                            (DCat (m_stage_open) evd)
+                                            (m_bridge_get
+                                              mmt
+                                              cea
+                                              below
+                                              rnode
+                                              (+ 3 (poff pr1))))
+                                          j2
+                                          pr1b
+                                          Nil
+                                          (+ g1 1)
+                                          w1
+                                          mm1)
+                                        rnode))))))
+                              (_
+                                (MErr
+                                  "internal: stack underflow at mem_get")))))))))))
                 (_ (MErr "mem_get must have exactly (m ADDR)")))
             (if (memq_named q (quote mem_set))
               (MErr
-                "mem_set only as the trailing body of a Mem-returning fn (single write, v1)")
+                "mem_set is a memory expression (bind it with a Mem let or nest it as a memory argument)")
               (MErr "call outside the mem fragment (+ - * mem_get only)"))))))
        ((Let bs body)
         (match bs
           ((Cons rhs Nil)
-           (match (mg_e n nn fnm env st rhs)
-             ((MErr m) (MErr m))
-             ((MOk st1 cer)
-              (match st1
-                ((MkMSt c1 n1 x1 s1 p1 j1 pr1 pd1 g1 w1)
-                 (match s1
-                   ((Cons _ below)
-                    (mg_e
-                      n
-                      nn
-                      fnm
-                      (Cons (Pair cer x1) env)
-                      (MkMSt
-                        (dapp
-                          c1
-                          (Cons
-                            (dcat3 (DStr "(LocalSet ") (dint x1) (DStr ")"))
-                            Nil))
-                        (+ n1 1)
-                        (+ x1 1)
-                        below
-                        p1
-                        j1
-                        pr1
-                        pd1
-                        g1
-                        w1)
-                      body))
-                   (_ (MErr "internal: stack underflow at let"))))))))
+           (if (rhs_is_set rhs)
+             (match (mg_mem n nn fnm env st rhs False)
+               ((MErr m) (MErr m))
+               ((MOk st1 mmt)
+                (mg_e n nn fnm (Cons (Pair mmt (memk)) env) st1 body)))
+             (match (mg_e n nn fnm env st rhs)
+               ((MErr m) (MErr m))
+               ((MOk st1 cer)
+                (match st1
+                  ((MkMSt c1 n1 x1 s1 p1 j1 pr1 pd1 g1 w1 mm1)
+                   (match s1
+                     ((Cons _ below)
+                      (mg_e
+                        n
+                        nn
+                        fnm
+                        (Cons (Pair cer x1) env)
+                        (MkMSt
+                          (dapp
+                            c1
+                            (Cons
+                              (dcat3 (DStr "(LocalSet ") (dint x1) (DStr ")"))
+                              Nil))
+                          (+ n1 1)
+                          (+ x1 1)
+                          below
+                          p1
+                          j1
+                          pr1
+                          pd1
+                          g1
+                          w1
+                          mm1)
+                        body))
+                     (_ (MErr "internal: stack underflow at let")))))))))
           (_ (MErr "let must bind exactly one name (split into nested lets)"))))
        (_
          (MErr
            "body outside the mem fragment (straight-line + lets; no if yet)"))))))
 
-;; the Mem-returning tail: lets above a single trailing mem_set
+;; is this let-rhs a Mem-typed expression (a mem_set application)?
+(fn rhs_is_set ((e Expr)) Bool
+  (match e
+    ((Call q _) (memq_named q (quote mem_set)))
+    (_ False)))
+
+;; a MEMORY expression: the Mem param, a Mem binding, or a
+;; (mem_set MEMEXPR ADDR VAL) nest. Emits the nest's stores in execution
+;; order; the intermediate mset returns PARK in a fresh scratch local
+;; (the no-Drop discipline) — tail=True leaves the LAST store's return
+;; on the stack (the Mem-returning fn's scalar result). LINEARITY: a
+;; param/binding use must denote the CURRENT memory term.
+(fn mg_mem
+  ((n Int)
+   (nn Int)
+   (fnm Doc)
+   (env (List (Pair Expr Int)))
+   (st MSt)
+   (e Expr)
+   (tail Bool))
+  MRes
+  (measure (struct e))
+  (match st
+    ((MkMSt code cnt nxt stk prf j pres pend gets sets mm)
+     (match e
+       ((BVar i)
+        (match (env_at env i)
+          ((Some (Pair ce k))
+           (if (int_eq k (memk))
+             (if (chars_eq (spell ce) (spell mm)) (MOk st ce)
+             (MErr
+               "memory used non-linearly (a stale Mem binding was read or written)"))
+             (MErr "a scalar binding cannot be used as a memory argument")))
+          (None
+            (let ((pos (- (- n 1) (- i (env_len env)))))
+              (if (int_eq pos 0)
+                (if (chars_eq (spell mm) (spell (m0v))) (MOk st mm)
+                (MErr
+                  "memory used non-linearly (the Mem param was used after a store)"))
+                (MErr "an Int param cannot be used as a memory argument"))))))
+       ((Call q as)
+        (if (memq_named q (quote mem_set))
+          (match as
+            ((Cons marg (Cons addr (Cons val Nil)))
+             (match (mg_mem n nn fnm env st marg False)
+               ((MErr m) (MErr m))
+               ((MOk st0 mmt)
+                (match (mg_e n nn fnm env st0 addr)
+                  ((MErr m) (MErr m))
+                  ((MOk st1 cea)
+                   (if (addr_ground_bad cea)
+                     (MErr "literal byte address outside [0, 65535]")
+                     (match (mg_e n nn fnm env st1 val)
+                       ((MErr m) (MErr m))
+                       ((MOk st2 cev)
+                        (match st2
+                          ((MkMSt c2 n2 x2 s2 p2 j2 pr2 pd2 g2 w2 mm2)
+                           (match s2
+                             ((Cons _ (Cons _ below))
+                              (let
+                                ((newmm
+                                   (Call
+                                     q
+                                     (Cons mmt (Cons cea (Cons cev Nil))))))
+                                (let
+                                  ((pr2b
+                                     (pit_add
+                                       pr2
+                                       (PSet mmt cea cev (- nn (+ n2 3))))))
+                                  (match (m_flush pd2 pr2b fnm j2)
+                                    ((Pair evd j3)
+                                     (let
+                                       ((prf2
+                                          (dcat3
+                                            p2
+                                            (DCat (m_stage_open) evd)
+                                            (m_bridge_set
+                                              mmt
+                                              cea
+                                              cev
+                                              below
+                                              (+ 3 (poff pr2))))))
+                                       (if tail
+                                         (MOk
+                                           (MkMSt
+                                             (dapp
+                                               c2
+                                               (Cons (DStr "(Call 1)") Nil))
+                                             (+ n2 1)
+                                             x2
+                                             (Cons cev below)
+                                             prf2
+                                             j3
+                                             pr2b
+                                             Nil
+                                             g2
+                                             (+ w2 1)
+                                             newmm)
+                                           newmm)
+                                         (MOk
+                                           (MkMSt
+                                             (dapp
+                                               c2
+                                               (Cons
+                                                 (DStr "(Call 1)")
+                                                 (Cons
+                                                   (dcat3
+                                                     (DStr "(LocalSet ")
+                                                     (dint x2)
+                                                     (DStr ")"))
+                                                   Nil)))
+                                             (+ n2 2)
+                                             (+ x2 1)
+                                             below
+                                             prf2
+                                             j3
+                                             pr2b
+                                             Nil
+                                             g2
+                                             (+ w2 1)
+                                             newmm)
+                                           newmm))))))))
+                             (_
+                               (MErr
+                                 "internal: stack underflow at mem_set")))))))))))))
+            (_ (MErr "mem_set must have exactly (m ADDR VAL)")))
+          (MErr
+            "memory argument must be the Mem param, a Mem binding, or a (mem_set …) nest")))
+       (_
+         (MErr
+           "memory argument must be the Mem param, a Mem binding, or a (mem_set …) nest"))))))
+
+;; the Mem-returning tail: lets above a trailing memory expression (the
+;; final store's return value stays on the stack as the scalar result)
 (fn mg_tail
   ((n Int) (nn Int) (fnm Doc) (env (List (Pair Expr Int))) (st MSt) (e Expr))
   MRes
@@ -870,86 +1031,100 @@
     ((Let bs body)
      (match bs
        ((Cons rhs Nil)
-        (match (mg_e n nn fnm env st rhs)
-          ((MErr m) (MErr m))
-          ((MOk st1 cer)
-           (match st1
-             ((MkMSt c1 n1 x1 s1 p1 j1 pr1 pd1 g1 w1)
-              (match s1
-                ((Cons _ below)
-                 (mg_tail
-                   n
-                   nn
-                   fnm
-                   (Cons (Pair cer x1) env)
-                   (MkMSt
-                     (dapp
-                       c1
-                       (Cons
-                         (dcat3 (DStr "(LocalSet ") (dint x1) (DStr ")"))
-                         Nil))
-                     (+ n1 1)
-                     (+ x1 1)
-                     below
-                     p1
-                     j1
-                     pr1
-                     pd1
-                     g1
-                     w1)
-                   body))
-                (_ (MErr "internal: stack underflow at let"))))))))
+        (if (rhs_is_set rhs)
+          (match (mg_mem n nn fnm env st rhs False)
+            ((MErr m) (MErr m))
+            ((MOk st1 mmt)
+             (mg_tail n nn fnm (Cons (Pair mmt (memk)) env) st1 body)))
+          (match (mg_e n nn fnm env st rhs)
+            ((MErr m) (MErr m))
+            ((MOk st1 cer)
+             (match st1
+               ((MkMSt c1 n1 x1 s1 p1 j1 pr1 pd1 g1 w1 mm1)
+                (match s1
+                  ((Cons _ below)
+                   (mg_tail
+                     n
+                     nn
+                     fnm
+                     (Cons (Pair cer x1) env)
+                     (MkMSt
+                       (dapp
+                         c1
+                         (Cons
+                           (dcat3 (DStr "(LocalSet ") (dint x1) (DStr ")"))
+                           Nil))
+                       (+ n1 1)
+                       (+ x1 1)
+                       below
+                       p1
+                       j1
+                       pr1
+                       pd1
+                       g1
+                       w1
+                       mm1)
+                     body))
+                  (_ (MErr "internal: stack underflow at let")))))))))
        (_ (MErr "let must bind exactly one name (split into nested lets)"))))
     ((Call q as)
      (if (memq_named q (quote mem_set))
        (match as
          ((Cons marg (Cons addr (Cons val Nil)))
-          (if (is_mem_param marg env n)
-            (match (mg_e n nn fnm env st addr)
-              ((MErr m) (MErr m))
-              ((MOk st1 cea)
-               (if (addr_ground_bad cea)
-                 (MErr "literal byte address outside [0, 65535]")
-                 (match (mg_e n nn fnm env st1 val)
-                   ((MErr m) (MErr m))
-                   ((MOk st2 cev)
-                    (match st2
-                      ((MkMSt c2 n2 x2 s2 p2 j2 pr2 pd2 g2 w2)
-                       (match s2
-                         ((Cons _ (Cons _ below))
-                          (let
-                            ((pr2b (pit_add pr2 (PSet cea cev (- nn (+ n2 3))))))
-                            (match (m_flush pd2 pr2b fnm j2)
-                              ((Pair evd j3)
-                               (MOk
-                                 (MkMSt
-                                   (dapp c2 (Cons (DStr "(Call 1)") Nil))
-                                   (+ n2 1)
-                                   x2
-                                   (Cons cev below)
-                                   (dcat3
-                                     p2
-                                     (DCat (m_stage_open) evd)
-                                     (m_bridge_set
-                                       cea
-                                       cev
-                                       below
-                                       (+ 3 (poff pr2))))
-                                   j3
-                                   pr2b
-                                   Nil
-                                   g2
-                                   (+ w2 1))
-                                 cev)))))
-                         (_ (MErr "internal: stack underflow at mem_set"))))))))))
-            (MErr "mem_set's memory argument must be the fn's Mem param")))
+          (match (mg_mem n nn fnm env st marg False)
+            ((MErr m) (MErr m))
+            ((MOk st0 mmt)
+             (match (mg_e n nn fnm env st0 addr)
+               ((MErr m) (MErr m))
+               ((MOk st1 cea)
+                (if (addr_ground_bad cea)
+                  (MErr "literal byte address outside [0, 65535]")
+                  (match (mg_e n nn fnm env st1 val)
+                    ((MErr m) (MErr m))
+                    ((MOk st2 cev)
+                     (match st2
+                       ((MkMSt c2 n2 x2 s2 p2 j2 pr2 pd2 g2 w2 mm2)
+                        (match s2
+                          ((Cons _ (Cons _ below))
+                           (let
+                             ((newmm
+                                (Call q (Cons mmt (Cons cea (Cons cev Nil))))))
+                             (let
+                               ((pr2b
+                                  (pit_add
+                                    pr2
+                                    (PSet mmt cea cev (- nn (+ n2 3))))))
+                               (match (m_flush pd2 pr2b fnm j2)
+                                 ((Pair evd j3)
+                                  (MOk
+                                    (MkMSt
+                                      (dapp c2 (Cons (DStr "(Call 1)") Nil))
+                                      (+ n2 1)
+                                      x2
+                                      (Cons cev below)
+                                      (dcat3
+                                        p2
+                                        (DCat (m_stage_open) evd)
+                                        (m_bridge_set
+                                          mmt
+                                          cea
+                                          cev
+                                          below
+                                          (+ 3 (poff pr2))))
+                                      j3
+                                      pr2b
+                                      Nil
+                                      g2
+                                      (+ w2 1)
+                                      newmm)
+                                    cev))))))
+                          (_ (MErr "internal: stack underflow at mem_set")))))))))))))
          (_ (MErr "mem_set must have exactly (m ADDR VAL)")))
        (MErr
-         "Mem-returning body must be a trailing (mem_set m ADDR VAL) (single write, v1)")))
+         "Mem-returning body must end in a (mem_set …) store")))
     (_
       (MErr
-        "Mem-returning body must be a trailing (mem_set m ADDR VAL) (single write, v1)"))))
-
+        "Mem-returning body must end in a (mem_set …) store"))))
 
 ;; ---- the LOOP fragment: Nat-counted tail recursion (docs/LOWERING.md §6f/§6h) ---
 ;;
@@ -2711,7 +2886,7 @@
 
 ;; dispatch by return type, shared by both passes
 (fn mg_walk ((n Int) (nn Int) (fnm Doc) (rty Type) (body Expr)) MRes
-  (let ((st0 (MkMSt Nil 0 (- n 1) Nil (DStr "") 0 Nil Nil 0 0)))
+  (let ((st0 (MkMSt Nil 0 (- n 1) Nil (DStr "") 0 Nil Nil 0 0 (m0v))))
     (if (is_int_ty rty) (mg_e n nn fnm Nil st0 body)
     (if (is_mem_ty rty) (mg_tail n nn fnm Nil st0 body)
     (MErr "return type must be Int or Mem")))))
@@ -2760,28 +2935,43 @@
               ((MErr m) (cerr_at q m))
               ((MOk st1 ce1)
                (match st1
-                 ((MkMSt cd1 cnt1 nx1 sk1 pf1 j1 pr1 pd1 gets1 sets1)
+                 ((MkMSt cd1 cnt1 nx1 sk1 pf1 j1 pr1 pd1 gets1 sets1 mm1)
                   (if (int_eq (+ gets1 sets1) 0)
                     (cerr_at
                       q
                       "no memory operations (use the scalar fragment: drop the Mem param)")
-                    (let
-                      ((nn (+ (* 2 cnt1) (+ 3 (+ (* 13 gets1) (* 21 sets1))))))
-                      (match (mg_walk n nn (dsym (qn_name q)) rty body)
-                        ((MErr m) (cerr_at q m))
-                        ((MOk st ce)
-                         (match st
-                           ((MkMSt code cnt nxt stk prf j pres pend gets sets)
-                            (match (m_flush pend pres (dsym (qn_name q)) j)
-                              ((Pair evd _)
-                               (let ((self (m_self_lit n nxt code)))
-                                 (let ((rhs (m_rhs q ints rty ce)))
-                                   (COk
-                                     (DCat
-                                       (wb_claims pres (dsym (qn_name q)) 0)
-                                       (m_claim_port q ints nn self pres rhs prf
-                                         evd))
-                                     (m_claim_link q ints nn self pres rhs)))))))))))))))))
+                    (if
+                      (if (is_int_ty rty)
+                        (if (chars_eq (spell mm1) (spell (m0v))) False True)
+                        False)
+                      (cerr_at
+                        q
+                        "stores in an Int-returning fn (the schema pins its memory unchanged) -- return Mem")
+                      (let
+                        ((nn
+                           (+ (* 2 cnt1) (+ 3 (+ (* 13 gets1) (* 21 sets1))))))
+                        (match (mg_walk n nn (dsym (qn_name q)) rty body)
+                          ((MErr m) (cerr_at q m))
+                          ((MOk st ce)
+                           (match st
+                             ((MkMSt code cnt nxt stk prf j pres pend gets sets
+                                mmf)
+                              (match (m_flush pend pres (dsym (qn_name q)) j)
+                                ((Pair evd _)
+                                 (let ((self (m_self_lit n nxt code)))
+                                   (let ((rhs (m_rhs q ints rty ce)))
+                                     (COk
+                                       (DCat
+                                         (wb_claims pres (dsym (qn_name q)) 0)
+                                         (m_claim_port q ints nn self pres rhs
+                                           prf evd))
+                                       (m_claim_link
+                                         q
+                                         ints
+                                         nn
+                                         self
+                                         pres
+                                         rhs))))))))))))))))))
           (cerr_at q "params after the Mem param must all be Int")))))))
 
 (fn fn_is_loop ((f FnDef)) Bool

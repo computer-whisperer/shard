@@ -814,6 +814,51 @@ stores, byte checksums, in-place reverse, and bounded scans — every
 piece machine-written end to end, every extension landed with zero
 proof-template failures after its probe.
 
+### 6n. Write-then-read — the memory term comes to the walk (2026-07-04)
+
+The fourth fragment-growth slice, and the resolution of §7.7's last
+staged item: straight-line mem-fragment bodies may now STORE AND THEN
+READ THROUGH THE STORE. Probe first (`examples/wtrmem_probe.shard`,
+**36/0 on the first run** — a put-then-get-through-the-store body in
+the emitter's exact generated shapes), then mechanized; `mg_putget`
+(read back a just-written byte) and `mg_swap` (a real two-byte swap
+through a Mem let chain) joined the mem source set — both portable
+certs and both link derivations green, five gates, V8 17/17.
+
+- **The design**: the walk threads the CURRENT MEMORY TERM (the spec
+  spelling — `m0` growing one `mem_set` per store). Reads, behavior
+  premises, and bridge instantiations all fire AT that term, and since
+  Mem-typed lets ζ-open by substitution on the spec side (exactly like
+  scalar lets), machine and spec spellings stay identical throughout.
+  **No collapse lemmas, no disequality premises, anywhere** — the §6j
+  condition-relative disequality staging turned out to be needed by
+  NONE of the four growth slices; a read that should see through a
+  store simply does, on both sides, by spelling. (`get_set_other`-style
+  reasoning remains what CONSUMERS of these certs do when they want the
+  collapsed value — e.g. the wtrmem probe's statement carries the
+  honest `(mem_get (mem_set m0 x 7) x)` spelling.)
+- **Mem-typed lets are the linear sequencing form**: `(let ((m2
+  (mem_set m x v))) …)` binds the updated memory; the walk enforces
+  LINEARITY (using the param or a stale Mem binding after a store
+  refuses loudly — the machine destructively updates, so non-linear
+  sources are untranslatable). Intermediate mset returns park in
+  scratch locals (the no-Drop discipline); the trailing store's return
+  is the fn's scalar result, as before.
+- **Portable-form generalization**: `PGet`/`PSet` items carry the
+  site's memory term; behavior premises spell it in both the input and
+  result positions (byte-identical to the old text when the term is
+  `m0`). The link derivation discharges an updated-memory behavior by
+  citing the same shipped `lowered_mem_get`/`set` — their arbitrary-m0
+  binder unifies against the `mem_set` term (the framed schema earning
+  its keep at a premise boundary). `lowered_mem_*` needed NO changes.
+- Int-return fns stay store-free (the schema pins their memory
+  unchanged) — a loud refusal, not a silent wrong statement.
+- Fallout fixed en route: `pr_e` learned ternary applications (memory
+  terms print as `(mem_set M A V)`); it printed `?` before, which the
+  kernel caught as an unbound variable — gate 3 loud, per design.
+- Regen stability: pure, mem, and loop outputs all BYTE-IDENTICAL under
+  the memory-threading rework before the new fns landed.
+
 ## 7. Open questions — triaged at ratification (2026-07-04)
 
 None of these block the ratified form; they are the backlog the next
@@ -842,12 +887,13 @@ arcs draw from.
    memory enough return surface? (Structured results live in memory
    under the uniform rep.)
 7. Fragment growth — Int-accumulator returns (§6k), multi-store +
-   decrementing accums (§6l), and conditional early-exit scans (§6m)
-   LANDED 2026-07-04. Still open: write-then-READ bodies (a later load
-   seeing through an earlier store — the condition-relative disequality
-   premises staged by §6j), stride ≠ 1, calls-in-loops (structural
-   form), nonzero scan literals, twins for non-returned data-dependent
-   accums.
+   decrementing accums (§6l), conditional early-exit scans (§6m), and
+   write-then-read bodies (§6n) LANDED 2026-07-04. Notably, the
+   condition-relative DISEQUALITY premises staged by §6j were needed by
+   none of them — every slice kept machine and spec on identical
+   spellings instead. Still open: stride ≠ 1, calls-in-loops
+   (structural form), nonzero scan literals, twins for non-returned
+   data-dependent accums, write-then-read inside LOOP iterations.
 
 ## 8. The model-authoring contract — what a target ISA model provides
 
