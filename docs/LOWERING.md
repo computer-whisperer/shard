@@ -1203,6 +1203,32 @@ so the pure-fragment proof needs the mem-fragment's staged
 compute/rewrite interleaving — a fragment-growth slice with its own
 probe (§7.7 residue), not a model slice.
 
+### 6x. Bitwise ops close the op set — Ring 0 slices C/D (2026-07-05)
+
+`Bop` gains `BAnd`/`BOr`/`BXor` (encoder bytes 0x71/0x72/0x73). The
+arms apply the kernel's `band`/`bor`/`bxor` prims directly — same
+qname on the machine and spec side, no wrap: on the nonneg range the
+prims ARE the machine ops, and the in-range closure is backed by the
+`kernel/facts.shard` defining recurrences. The differential's bitmod
+leg (27 vectors: complementary masks, alternating-bit patterns,
+identity/annihilator operands, extremes) is thereby also a live
+engine differential for the kernel's bitwise prims. 141 vectors agree
+under V8. Proof-neutral as with §6v/§6w — every article green, all
+builds byte-identical.
+
+Slice D is a spelling, not an op: constant shifts are
+`(* x 2^k)` / `(ediv x 2^k)` over existing ops — shift OPCODES (and
+dynamic shift counts, which need the mod-32 masking story) wait for a
+consumer. With this the Ring 0 op-set gap is CLOSED: the model speaks
+add/sub/mul/div_u/rem_u, the full unsigned comparison family, eqz,
+and the bitwise trio.
+
+What certs can SAY about bitwise nodes is a separate ledger:
+reasoning about `band`-containing spellings (range facts, mask-mod
+bridges like `band x 255 = mod x 256`) needs the std/bits theorem
+library over the kernel recurrences — queued as its own
+proof-engineering piece, prerequisite for emitter bitwise support.
+
 ## 7. Open questions — triaged at ratification (2026-07-04)
 
 None of these block the ratified form; they are the backlog the next
