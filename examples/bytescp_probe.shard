@@ -1,0 +1,279 @@
+;;; examples/bytescp_probe.shard — the TWO-REGION aggregate rep probe (std/str
+;;; runway, slice 3; read side = bytesrep_probe, write side = byteswr_probe):
+;;; one region READ while another is WRITTEN — memcpy — the shape where
+;;; disjointness genuinely bites. Op under test: lp_copy (generated cert
+;;; lowered_lp_copy, UNTOUCHED).
+;;;
+;;; The finding staged for: disjointness is ONE linear premise
+;;; (s + k <= d — source window below dest window), living at the SPEC
+;;; level like every other write-side fact. Read-only two-region ops need
+;;; no disjointness at all (two readback equations cannot conflict); it is
+;;; the read-while-write shape that pays, and it pays exactly two frame
+;;; lemmas:
+;;;
+;;;   1. bc_swin  — a read WINDOW survives one store above it
+;;;                 (br_read past mem_set; the window-level get_set_other)
+;;;   2. bc_frame — a read cell below the dest survives the WHOLE copy
+;;;                 (the §6q frame commute, verbatim shape, lp_copy body)
+;;;   3. bc_copy_read — the memcpy theorem:
+;;;          br_read (lp_copy m s d k) d k = br_read m s k    [s + k <= d]
+;;;      head byte = frame + get_set_get (writing a READ reads back exactly
+;;;      — NO value-range premises, reads are bytes); tail = IH + bc_swin.
+;;;   4. lowered_bc_copy — the full two-rep-instance composition: rep
+;;;      premise on the SOURCE (br_read m0 x0 (br_len bs) = bs), rep in
+;;;      the CONCLUSION at the DEST — the observable readback at x1 of
+;;;      running the shipped copy artifact IS bs. Cites lowered_lp_copy +
+;;;      bc_copy_read + the rep premise; zero new machine reasoning.
+
+(import "../kernel/stdlib.shard")
+(import "../std/mem")
+(import "../std/nat.shard")
+(import "../models/wasm/wasm.shard")
+(import "../models/wasm/loopkit.shard")
+(import "lowergen_loop_src.shard")
+(import "lowergen_loop_out.shard")
+(import "bytesrep_probe.shard")
+(import "byteswr_probe.shard")
+(use (:: std mem *))
+(use (:: std nat *))
+(use (:: models wasm wasm *))
+(use (:: models wasm loopkit *))
+(use (:: examples lowergen_loop_src *))
+(use (:: examples lowergen_loop_out *))
+(use (:: examples bytesrep_probe *))
+(use (:: examples byteswr_probe *))
+
+;; --- local arith kit -------------------------------------------------------------
+
+;; p + (1+j) <= dd  and  0 <= j   entail   p != dd
+(claim bc_ne2
+  (goal ((p Int) (j Int) (dd Int))
+    ((= (le (+ p (+ 1 j)) dd) True) (= (le 0 j) True))
+    (= (int_eq p dd) False))
+  (by arith (list 1 1 1)))
+
+;; p + (1+j) <= dd   entails   (p+1) + j <= dd
+(claim bc_step
+  (goal ((p Int) (j Int) (dd Int)) ((= (le (+ p (+ 1 j)) dd) True))
+    (= (le (+ (+ p 1) j) dd) True))
+  (by arith (list 1 1)))
+
+;; s + (1+j) <= dd   entails   (s+1) + j <= dd+1
+(claim bc_step1
+  (goal ((s Int) (j Int) (dd Int)) ((= (le (+ s (+ 1 j)) dd) True))
+    (= (le (+ (+ s 1) j) (+ dd 1)) True))
+  (by arith (list 1 1)))
+
+;; --- frame 1: a read WINDOW survives one store above it --------------------------
+
+(claim bc_swin
+  (goal ((m Mem) (dd Int) (v Int) (p Int) (n Nat))
+    ((= (le (+ p (int_of_nat n)) dd) True))
+    (= (br_read (mem_set m dd v) p n) (br_read m p n)))
+  (induct n
+    ((case Z (steps ((compute both)) refl))
+     (case S
+       (k2)
+       (chain
+         (steps ((unfold br_read lhs) (reduce lhs)))
+         (rewrite-with
+           (lemma get_set_other)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma bc_ne2)
+              lr
+              lhs
+              ((inst j (int_of_nat k2)))
+              ((steps
+                 ((rewrite (lemma int_of_nat_succ) rl lhs true ())
+                  (rewrite (premise 0) lr lhs true ()))
+                 refl)
+               (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+              refl)))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma bc_step)
+              lr
+              lhs
+              ()
+              ((steps
+                 ((rewrite (lemma int_of_nat_succ) rl lhs true ())
+                  (rewrite (premise 0) lr lhs true ()))
+                 refl))
+              refl)))
+         (steps ((unfold br_read rhs) (reduce rhs)))
+         refl)))))
+
+;; --- frame 2: a read cell below the dest survives the WHOLE copy ----------------
+
+(claim bc_frame
+  (goal ((m Mem) (s Int) (dd Int) (k Nat) (x Int)) ((= (lt x dd) True))
+    (= (mem_get (lp_copy m s dd k) x) (mem_get m x)))
+  (induct k
+    ((case Z (steps ((compute both)) refl))
+     (case S
+       (k2)
+       (chain
+         (steps ((unfold lp_copy lhs) (reduce lhs)))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma bw_lt1)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+              refl)))
+         (rewrite-with
+           (lemma get_set_other)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma bw_ne)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+              refl)))
+         refl)))))
+
+;; --- THE MEMCPY THEOREM: dest readback = source readback, disjoint --------------
+
+(claim bc_copy_read
+  (goal ((m Mem) (s Int) (dd Int) (k Nat))
+    ((= (le (+ s (int_of_nat k)) dd) True))
+    (= (br_read (lp_copy m s dd k) dd k) (br_read m s k)))
+  (induct k
+    ((case Z (steps ((compute both)) refl))
+     (case S
+       (k2)
+       (chain
+         (steps
+           ((unfold lp_copy lhs) (reduce lhs) (unfold br_read lhs) (reduce lhs)))
+         (rewrite-with
+           (lemma bc_frame)
+           lr
+           lhs
+           ()
+           ((rewrite-with (lemma bw_ltp1) lr lhs () () refl)))
+         (rewrite-with (lemma get_set_get) lr lhs () ())
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma bc_step1)
+              lr
+              lhs
+              ()
+              ((steps
+                 ((rewrite (lemma int_of_nat_succ) rl lhs true ())
+                  (rewrite (premise 0) lr lhs true ()))
+                 refl))
+              refl)))
+         (rewrite-with
+           (lemma bc_swin)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma bc_step)
+              lr
+              lhs
+              ()
+              ((steps
+                 ((rewrite (lemma int_of_nat_succ) rl lhs true ())
+                  (rewrite (premise 0) lr lhs true ()))
+                 refl))
+              refl)))
+         (steps ((unfold br_read rhs) (reduce rhs)))
+         refl)))))
+
+;; --- the machine body: byte-identical local copy ((inline …) is same-file-only) --
+
+(fn bc_body () (List Instr)
+  (list
+    (LocalGet 2)
+    (I32Eqz)
+    (BrIf 1)
+    (LocalGet 1)
+    (LocalGet 0)
+    (I32Load8U)
+    (I32Store8)
+    (LocalGet 0)
+    (I32Const 1)
+    (I32Bin BAdd)
+    (LocalSet 0)
+    (LocalGet 1)
+    (I32Const 1)
+    (I32Bin BAdd)
+    (LocalSet 1)
+    (LocalGet 2)
+    (I32Const 1)
+    (I32Bin BSub)
+    (LocalSet 2)
+    (Br 0)))
+
+;; --- THE TWO-REGION AGGREGATE CERT: both rep instances at once -------------------
+;; Rep premise at the SOURCE, rep in the CONCLUSION at the DEST: running
+;; the shipped copy artifact on (s, d, len bs) against a memory holding bs
+;; at s makes the observable readback at d BE bs. One linear disjointness
+;; premise; lowered_lp_copy cited as generated.
+
+(claim lowered_bc_copy
+  (goal
+    ((bs (List Int)) (x0 Int) (x1 Int) (m0 Mem) (c Nat) (restfs (List Func)))
+    ((= (br_read m0 x0 (br_len bs)) bs)
+     (= (le 0 x0) True)
+     (= (le 0 x1) True)
+     (= (le (+ x0 (int_of_nat (br_len bs))) 65536) True)
+     (= (le (+ x1 (int_of_nat (br_len bs))) 65536) True)
+     (= (le (+ x0 (int_of_nat (br_len bs))) x1) True))
+    (=
+      (br_read_call
+        (call_fn_mem
+          (S^ 28 (lg_fuel (br_len bs) c))
+          (MkWModule
+            (Cons
+              (MkFunc
+                3
+                0
+                (list (Block (list (Loop (inline bc_body)))) (I32Const 0)))
+              restfs)
+            65536)
+          0
+          (list x0 x1 (int_of_nat (br_len bs)))
+          m0)
+        x1
+        (br_len bs))
+      bs))
+  (chain
+    (rewrite-with
+      (lemma lowered_lp_copy)
+      lr
+      lhs
+      ((inst k (br_len bs)))
+      ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)
+       (steps ((rewrite (premise 3) lr lhs true ())) refl)
+       (steps ((rewrite (premise 4) lr lhs true ())) refl)))
+    (steps ((unfold br_read_call lhs) (reduce lhs)))
+    (rewrite-with
+      (lemma bc_copy_read)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 5) lr lhs true ())) refl)))
+    (steps ((rewrite (premise 0) lr lhs true ())))
+    refl))

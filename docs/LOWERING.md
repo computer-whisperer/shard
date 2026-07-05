@@ -987,6 +987,38 @@ aggregate schema has two of its three shapes; the remaining probe is
 two-region ops (`bytes_eq` — two rep premises, disjointness question),
 after which std/str mechanization has its full template set.
 
+### 6r. The two-region aggregate probe — PASSED (2026-07-05)
+
+`examples/bytescp_probe.shard` (76/0, FIRST check, zero fixes): one
+region READ while another is WRITTEN — memcpy, via `lp_copy`'s generated
+cert untouched. The disjointness question settles cheaply:
+
+- **Disjointness is ONE linear premise** — `s + k ≤ d` (source window
+  below dest window) — living at the SPEC level like every write-side
+  fact. Read-only two-region ops need none (two readback equations
+  cannot conflict); it is the read-while-write shape that pays, and it
+  pays exactly two frame lemmas: `bc_swin` (a read WINDOW survives one
+  store above it — window-level `get_set_other`) and `bc_frame` (a read
+  cell below the dest survives the whole copy — §6q's commute, verbatim
+  shape).
+- **The memcpy theorem**: `br_read (lp_copy m s d k) d k = br_read m s k`
+  under `s + k ≤ d`. Head byte = frame + `get_set_get` (writing a READ
+  reads back exactly — NO value-range premises, reads are bytes);
+  tail = IH + `bc_swin`.
+- **The full two-rep-instance cert** (`lowered_bc_copy`): rep premise at
+  the SOURCE (`br_read m0 x0 (br_len bs) = bs`), rep in the CONCLUSION
+  at the DEST — the observable readback at x1 of running the shipped
+  copy artifact IS `bs`. Cites `lowered_lp_copy` + the memcpy theorem +
+  the rep premise.
+
+The aggregate schema's template set is COMPLETE: read (§6p), write
+(§6q), two-region read-while-write (§6r) — three probes, three
+first-check passes, every generated machine cert untouched, every frame
+fact and disequality confined to the spec level. The probes stack
+(`bytescp` imports both predecessors' kits: `br_read`/`br_len`/
+`br_read_call`/`bw_lt1`/`bw_ne`/`bw_ltp1` all reused) — the shape of the
+abstraction library std/str mechanization will extract.
+
 ## 7. Open questions — triaged at ratification (2026-07-04)
 
 None of these block the ratified form; they are the backlog the next
