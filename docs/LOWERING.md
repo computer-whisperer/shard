@@ -1148,6 +1148,32 @@ tools/low/doc.shard (`until_dot` = strip from the LAST dot; new `updots`
 example fragments regen **byte-identical** under the fixed emitter, so
 the fix is proven behavior-preserving for everything already shipped.
 
+### 6v. The comparison family — Ring 0 slice A (2026-07-05)
+
+The model's op set grows its unsigned comparison family: `Bop` gains
+`BNe`/`BLeU`/`BGtU`/`BGeU` (with encoder bytes 0x47/0x4D/0x4B/0x4F)
+alongside the founding `BEq`/`BLtU`. Model values live in `[0, 2^32)`,
+so Int `lt`/`le` ARE the unsigned orders — `bop_val`'s new arms are
+one-liners and every existing proof is untouched (the whole wasm
+article set re-verified green, zero edits). Signed variants wait for a
+consumer.
+
+The vocabulary is five tables wide, all extended in step: `bop_val`
+(semantics), `enc_bop` (bytes), bytetie's `rbop` (cert readback),
+wasm_weld's `r_bop` (rendering), and schema's `cond_op` (the emitter's
+condition fragment, now `int_eq`/`lt`/`le` — surface `gt`/`ge`/`ne`
+have no prim spelling, so `le` completes what the emitter can meet).
+The generated diamond proof is CASE-ON over the SURFACE condition, so
+widening `cond_op` needed zero new proof machinery: `lg_le` joined the
+lowergen source set and its cert checked first generation, five gates
+green (regen byte-identical modulo the new cert, schema 14/14, kernel
+47/0, bytetie, V8 replay).
+
+Evidence: `examples/wasm_diff_run.shard` gains `cmpmod` — one function
+per comparison op, seven vectors each, straddling the 2^31 SIGNED
+boundary both ways so a signed-variant encoding slip (lt_s 0x48 for
+lt_u 0x49) flips an expected value. 96 vectors agree under V8.
+
 ## 7. Open questions — triaged at ratification (2026-07-04)
 
 None of these block the ratified form; they are the backlog the next
