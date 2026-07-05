@@ -104,6 +104,10 @@ TARGETS=(
   examples/wasm_diff_run.shard
   examples/wasm_rev.shard
   examples/wasm_copy.shard
+  examples/lowered_form.shard
+  examples/rep_probe.shard
+  examples/lowfrag_probe.shard
+  examples/lowcheck_rejects.shard
   examples/record_rejects.shard
   examples/record_sugar_rejects.shard
   examples/statement_sugar.shard
@@ -228,6 +232,38 @@ if [ "$code" -eq 2 ] && grep -q "escapes the repo root" <<<"$out"; then
 else
   echo "GUARD FAILED: exit $code"
   printf '%s\n' "$out" | head -3
+fi
+
+# Lowering-build pins (ratified 2026-07-04, docs/LOWERING.md): the four
+# gated artifact builds — REGEN (producer determinism) / SCHEMA (lowcheck)
+# / KERNEL / BYTETIE (cert↔binary) / ENGINE (V8) — run end to end. Summary
+# line only; any gate failure changes it and fails the corpus diff.
+for LB in examples/lowbuild.sh examples/lowbuild_mem.sh examples/lowbuild_loop.sh std/mem/lowbuild.sh; do
+  echo "=== lowering: $LB ==="
+  if [ -x bin/shard_eval ]; then
+    if bash "$LB" > "$TMP/lb.out" 2>&1; then
+      tail -1 "$TMP/lb.out"
+    else
+      echo "BUILD FAILED"
+      tail -20 "$TMP/lb.out"
+    fi
+  else
+    echo "SKIPPED (no bin/shard_eval)"
+  fi
+done
+
+# Schema-recognizer negative pin: lowcheck_rejects.shard is kernel-TRUE yet
+# schema-REFUSED (truth ≠ composability) — the recognizer must reject it.
+echo "=== lowering: lowcheck negative fixture ==="
+if [ -x bin/shard_eval ]; then
+  if bin/shard_eval run tools/lowcheck/lowcheck.shard examples/lowcheck_rejects.shard > "$TMP/lc.out" 2>&1; then
+    echo "GATE FAILED: nonconforming fixture ACCEPTED"
+    tail -5 "$TMP/lc.out"
+  else
+    tail -1 "$TMP/lc.out"
+  fi
+else
+  echo "SKIPPED (no bin/shard_eval)"
 fi
 
 # Rust-conformance pin: the bootstrap evaluator's cargo suite (prim

@@ -1,10 +1,25 @@
 # Lowered-conformance certificates — the standard form
 
-**STATUS: DRAFT — discussion artifact, not ratified.** Companion test
-articles: `examples/lowered_form.shard` (kernel-checked, 2 claims). This
-document proposes the one formal object the arch-specific build paradigm
-hangs from; everything else (the wasm lowerer, mod.build conventions, the
-CLI runner, welds/linking) is engineering behind it.
+**STATUS: RATIFIED 2026-07-04.** What is ratified is the FORM — the
+statement schema (§2), the portable/linked split (§6d), the mod.build +
+five-gate artifact conventions (§6, §6i), and the tools/low library
+architecture (§6g) — as the standard that future work builds on rather
+than revises. Fragment coverage, the common lowering step's design, and
+target count all stay open by design (§7, §8). Nothing here is set in
+stone — reworking on evidence of a better way is expected — but changes
+to ratified sections are deliberate acts against the corpus pins, not
+drift. This document is the one formal object the arch-specific build
+paradigm hangs from; everything else (the wasm lowerer, mod.build
+conventions, the CLI runner, welds/linking) is engineering behind it.
+
+Corpus pins (run_corpus.sh): the four gated builds
+(`examples/lowbuild{,_mem,_loop}.sh`, `std/mem/lowbuild.sh`) run end to
+end, the schema recognizer's negative fixture must stay refused, and the
+kernel articles (`lowered_form`, `rep_probe`, `lowfrag_probe`, the
+probes riding wasm_diff_run's closure, the generated cert files through
+their builds' KERNEL gates) are checked every run. gate_sweep.sh
+type-gates the three apps (lowergen, lowcheck, bytetie) and, through
+their closures, the tools/low kit.
 
 ## 1. What this is
 
@@ -663,24 +678,91 @@ five gates green on all four builds; corpus closure 182/0, V8 54/0.
 This also stages the future multiple-stores/aliasing loop work: the
 disequality premises those need are condition-relative by nature.
 
-## 7. Open questions (the back-and-forth queue)
+## 7. Open questions — triaged at ratification (2026-07-04)
 
-1. ~~The statement-generator enforcement mechanism~~ RESOLVED by P4a:
-   both — regen (producer determinism) AND structural recognition
-   (tools/lowcheck, consumer-side). ~~The cert↔binary byte tie~~
-   RESOLVED by §6i (tools/bytetie, the fifth gate). Remaining tail:
-   wiring lowcheck into the `bin` gate.
-2. PRE-slot conventions for the uniform rep: the heap invariant's exact
-   statement (bump-pointer validity + allocated-cells-never-rewritten).
-3. ~~The footprint/framing lemma shape~~ RESOLVED by P1 (§3: framed form +
-   observational companions). Remaining tail: the above-footprint
-   pointwise twin, and whether the emitter generates the companions
-   mechanically (it should — same schema machinery).
-4. Trap-conditional variant: wanted at all, or do premises + interpreted
-   fallback cover the roadmap?
-5. Cross-rep conversion glue (v2): certified adapter pieces between the
-   uniform rep and hand-rolled reps.
-6. Multi-result / memory-only functions: `call_fn_mem` returns one scalar
-   + memory; is that enough surface for the RS fragment? (RS fns return
-   one value; structured results live in memory under the uniform rep —
-   likely yes.)
+None of these block the ratified form; they are the backlog the next
+arcs draw from.
+
+1. ~~The statement-generator enforcement mechanism~~ RESOLVED by P4a
+   (regen + tools/lowcheck). ~~The cert↔binary byte tie~~ RESOLVED by
+   §6i (tools/bytetie). ~~Corpus pinning~~ RESOLVED at ratification
+   (run_corpus.sh build pins + negative fixture + kernel articles).
+   The `bin`-gate wiring is RE-SCOPED, deferred: no `bin` artifact
+   cites lowered certs today, and every build already passes the
+   recognizer through its pinned lowbuild script — driver machinery
+   with no consumer would be speculative. Revisit when the first bin
+   ships a lowered binary (the wasm CLI runner milestone).
+2. OPEN (uniform-rep arc): PRE-slot conventions for the uniform rep —
+   the heap invariant's exact statement (bump-pointer validity +
+   allocated-cells-never-rewritten).
+3. ~~The footprint/framing lemma shape~~ RESOLVED by P1. Remaining
+   tail (fragment growth): the above-footprint pointwise twin, and
+   emitting the observational companions mechanically.
+4. OPEN (decide when a consumer appears): trap-conditional variant, or
+   do premises + interpreted fallback cover the roadmap?
+5. OPEN (uniform-rep arc, v2): cross-rep conversion glue — certified
+   adapter pieces between the uniform rep and hand-rolled reps.
+6. OPEN (likely yes, confirm during the RS fragment): is one scalar +
+   memory enough return surface? (Structured results live in memory
+   under the uniform rep.)
+7. OPEN (fragment growth, staged by §6j): write-then-read bodies and
+   multi-store/aliasing loops via condition-relative disequality
+   premises; Int-accumulator loop returns; stride ≠ 1;
+   calls-in-loops (structural form).
+
+## 8. The model-authoring contract — what a target ISA model provides
+
+Ratified alongside the form. The lowering architecture is generic in
+the target exactly to the extent that a target model supplies the
+following; this list is what "add a new ISA" means, distilled from
+everything the wasm pilot needed. A model is an ORDINARY shard library
+— data types + total functions; zero kernel, loader, or checker
+changes. (wasm: `models/wasm/wasm.shard`, encoder in `encode.shard`,
+loop article in `loopkit.shard`.)
+
+1. **A fuel big-step denotation** with the additive-slack discipline:
+   an entry shaped like `call_fn` / `call_fn_mem` (args in, scalar [+
+   memory] out, `Option` for exhaustion), where fuel is a DEPTH bound —
+   recursive entry burns exactly one unit, so a loop's induction
+   hypothesis respells at ANY sufficient budget — and every cert
+   statement quantifies over slack (`(S^ K c)` towers, never exact
+   fuels). Over-provisioned towers compose by pure unification; exact
+   heights are never computed.
+2. **Named SCC stop points**: the evaluator's recursion split into
+   named members (wasm: `eval_call`, `eval_loop`, `eval_seq`) so proofs
+   can stage — `(compute lhs (stop eval_call))` at call boundaries,
+   fuel-fn stops in loop workers. An evaluator written as one opaque
+   function cannot be composed against.
+3. **A call-composition keystone** (`call_bridge`): folded call-entry =
+   the callee's pushed denotation, under premises that all discharge by
+   compute at concrete sites plus ONE behavior slot the callee's cert
+   fills. Proven once per model, piece-independent. This is what makes
+   consumer proofs cite callee certs instead of computing into bodies.
+4. **The representation-collapse lemma family** (`wrap32_id`): per
+   arithmetic op class, the lemma that collapses the machine's value
+   representation back to the spec's, with positional range premises —
+   the target of the emitter's discharge events (§6c stage law, §6j
+   derived bounds).
+5. **Literal-spelling discipline**: the model's value and instruction
+   spellings must be stable under check-mode compute — statements match
+   compute residues EXACTLY. Folded redexes only under `reduce`;
+   literals, not nullary calls, in machine state; any ENC function that
+   rides into machine state must be openable by defining lemmas
+   (int_of_nat's opacity law, §6f).
+6. **An encoder + an engine differential**: model terms → real target
+   bytes, and a harness replaying model-computed vectors on a real
+   engine (wasm: `encode.shard` + `wasm_diff.mjs`/V8). Kernel truth ≠
+   engine validity — the typed-block finding (§6, P2c) was caught ONLY
+   by this gate. The encoder also powers the byte tie (§6i).
+7. **A memory denotation over the observational substrate** (targets
+   with memory): std/mem's discipline — mask-on-read, no Mem equality,
+   framed arbitrary-`m0` statements with ENC as an observation premise
+   (§3/P1).
+
+The emitter, checker, byte tie, build convention, statement schema, and
+proof templates (tools/low) are target-generic against this contract;
+what stays per-target is the model library itself and the fragment
+walks' instruction selection. The expected common lowering step
+(shard→imperative canonical shard, proven shard→shard) sits ABOVE this
+contract and narrows what each target's walks must handle; whether its
+output form coincides with any one target's shape is deliberately open.

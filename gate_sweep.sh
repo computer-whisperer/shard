@@ -60,6 +60,9 @@ TARGETS=(
   kernel/eval.shard
   tools/prove/prove.shard
   tools/shardfmt/shardfmt.shard
+  tools/lowergen/lowergen.shard
+  tools/lowcheck/lowcheck.shard
+  tools/bytetie/bytetie.shard
 )
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
