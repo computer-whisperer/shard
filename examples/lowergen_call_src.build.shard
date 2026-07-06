@@ -1,0 +1,140 @@
+;;; examples/lowergen_call_src.build.shard — the mod.build ENTRY for the
+;;; CALLS-IN-LOOPS set (docs/LOWERING.md; probe: callloop_probe.shard):
+;;; assembles the artifact set for examples/lowergen_call_src.shard as a
+;;; native Plan value.
+;;;
+;;;     (fn build ((t Target)) Plan)     — PURE; the whole interface
+;;;
+;;; Two modules: cw_put ships as an ordinary mem-fragment artifact
+;;; ([mget, mset, self], linked_cw_put over f2); cw_fill ships the FOUR
+;;; slot spine ([mget, mset, cw_put, self], lowered_cw_fill over f3 —
+;;; the loop that CALLS its callee, Drop after the call). MEMCASE
+;;; expected values and readbacks computed SPEC-SIDE. The cw_put literal
+;;; is a local copy (the generated files inline MkFunc terms); the
+;;; BYTETIE gate polices drift. cw_fill's Func fn is imported from the
+;;; generated LINK file (the calls-in-loops unit lives there — it
+;;; regenerates on callee edits).
+;;;
+;;; RUN IT:  bin/shard_eval run tools/lowbuild/lowbuild.shard examples/lowergen_call_src.build.shard | node examples/wasm_diff.mjs /dev/stdin
+
+(import "../kernel/stdlib.shard")
+(import "lowergen_call_src.shard")
+(use (:: examples lowergen_call_src *))
+(import "lowergen_call_link.shard")
+(use (:: examples lowergen_call_link cw_fill_func))
+(import "../std/mem")
+(use (:: std mem *))
+(import "../std/mem/mem.wasm.shard")
+(use (:: std mem mem.wasm *))
+(import "../models/wasm/wasm.shard")
+(use (:: models wasm wasm *))
+(import "../models/wasm/encode.shard")
+(use (:: models wasm encode *))
+(import "../meta/plan")
+(use (:: meta plan *))
+
+;; local copy of cw_put's machine literal (bytetie polices drift)
+(fn m_cw_put () Func
+  (MkFunc
+    2
+    1
+    (list
+      (LocalGet 0)
+      (LocalGet 1)
+      (Call 1)
+      (LocalSet 2)
+      (LocalGet 0)
+      (I32Const 1)
+      (I32Bin BAdd)
+      (LocalGet 1)
+      (Call 1))))
+
+;; --- spec-side memory helpers ---------------------------------------------------
+
+(fn mload ((bs (List Int)) (a Int) (m Mem)) Mem
+  (measure (struct bs))
+  (match bs
+    (Nil m)
+    ((Cons b t) (mload t (+ a 1) (mem_set m a b)))))
+
+(fn mdump ((a Int) (n Nat) (m Mem)) (List Int)
+  (measure (struct n))
+  (match n
+    (Z Nil)
+    ((S k) (Cons (mem_get m a) (mdump (+ a 1) k m)))))
+
+(fn len_nat ((xs (List Int))) Nat
+  (measure (struct xs))
+  (match xs
+    (Nil Z)
+    ((Cons _ t) (S (len_nat t)))))
+
+(fn ld ((bs (List Int))) Mem (mload bs 0 (mem_empty)))
+
+;; --- the build entry -------------------------------------------------------------
+
+(fn vec ((k Int) (args (List Int)) (membytes (List Int)) (v Int) (mf Mem)) PVec
+  (PV k args membytes v (mdump 0 (len_nat membytes) mf)))
+
+(fn build ((t Target)) Plan
+  (match (mem_limit_of t)
+    (lim
+      (MkPlan
+        (list
+          (PM
+            "cw_put"
+            (enc_module (MkWModule (list (mget_f) (mset_f) (m_cw_put)) lim))
+            (list
+              (PA
+                "cw_put"
+                "linked_cw_put"
+                "examples/lowergen_call_link.shard"
+                "models/wasm/wasm.shard"
+                2
+                "std/mem"
+                "none"))
+            (list
+              (vec
+                2
+                (list 1 7)
+                (list 9 9 9 9)
+                7
+                (cw_put (ld (list 9 9 9 9)) 1 7))
+              (vec
+                2
+                (list 0 300)
+                (list 5 5 5)
+                300
+                (cw_put (ld (list 5 5 5)) 0 300))))
+          (PM
+            "cw_fill"
+            (enc_module
+              (MkWModule (list (mget_f) (mset_f) (m_cw_put) (cw_fill_func)) lim))
+            (list
+              (PA
+                "cw_fill"
+                "lowered_cw_fill"
+                "examples/lowergen_call_link.shard"
+                "models/wasm/wasm.shard"
+                3
+                "std/mem"
+                "none"))
+            (list
+              (vec
+                3
+                (list 1 7 2)
+                (list 9 9 9 9 9 9)
+                0
+                (cw_fill (ld (list 9 9 9 9 9 9)) 1 7 (fnat 2)))
+              (vec
+                3
+                (list 0 300 1)
+                (list 5 5 5)
+                0
+                (cw_fill (ld (list 5 5 5)) 0 300 (fnat 1)))
+              (vec
+                3
+                (list 2 8 0)
+                (list 1 2 3)
+                0
+                (cw_fill (ld (list 1 2 3)) 2 8 (fnat 0))))))))))

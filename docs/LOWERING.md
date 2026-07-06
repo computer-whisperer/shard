@@ -1460,6 +1460,69 @@ stride-C read would need a combined k-scaled premise, do it with a
 consumer); decrements stay stride 1; scan/flag shapes reject LSIncK
 through their existing stride gates.
 
+### 6ac. Calls in loop bodies — the fragments compose (2026-07-06)
+
+The last consumer-backed §7.7 item: a Mem-return loop whose
+per-iteration WORK is a CALL to an earlier same-file mem-fragment fn.
+Instance: `cw_put` (2-byte cell store, an ordinary §6n two-store fn) +
+`cw_fill` (stride-2 loop calling it) — the uniform-rep cell runway.
+Probe `examples/callloop_probe.shard` (59/0 FIRST CHECK, all farkas
+and fuel guesses held); machine proofs FIRST GENERATION;
+`examples/lowbuild_call.sh` five gates green first run (V8 5/5); the
+`clmod` differential leg is the first engine validation of
+Loop/Br + Call + Drop in one body.
+
+- **Groundwork — the model grew wasm's `Drop` (0x1A)**: the callee's
+  return must be discarded before `Br 0` or the re-entry stack does
+  not match the IH's. Parking it in a scratch local (the straight-line
+  consumers' idiom) would cost a per-fn memory-threading twin for the
+  scratch's exit value inside an induction; real wasm has drop, and
+  with it the loop body is `Call 2, Drop` — locals untouched across
+  the call, IH direct. Vocabulary growth in step (§6v discipline):
+  eval arm + encoder byte + bytetie reflector arms; proof-neutral
+  (zero article edits); `dropmod` differential leg.
+- **STRUCTURAL form, LINK-file residency**: the §6f portability limit
+  is real — loop call sites fire at a different fuel every iteration,
+  so behavior premises pinned to the goal's one slack binder cannot
+  express them. The loop's whole unit (body/func fns, stride kit,
+  premise helpers, worker, theorem) is emitted into the LINKED file:
+  the callee's literal rides the module spine
+  (`[mget, mset, callee@2, self@3 | restfs]`), and the file
+  regenerates on callee edits — exactly the linked file's existing
+  contract. The portable file stays byte-stable.
+- **The bridge stage in the S case**: after the guard, compute stops
+  at the folded `eval_call` (every S-case compute carries
+  `(stop eval_call eval_loop lg_fuel)`); `call_bridge` fires with the
+  callee's LINKED cert discharging the run premise. Fuel composes by
+  pure slack unification — the callee's `S^NN c'` tower unifies under
+  the iteration fuel with `c' := S^(j-NN) (lg_fuel k2 c)`. Charge
+  formula: worker `S^(instrs + 4 + (2·NN_callee + 1))`, theorem +4.
+- **Spelling alignment across the call**: the callee cert returns its
+  memory effect as the FOLDED spec application (`cw_put m0 x0 x1`) —
+  exactly the recursion argument the spec's own rhs unfold produces.
+  Zero collapse lemmas at the boundary; the IH fires at the folded
+  term.
+- **Callee premises at loop-varying args** (the registry): when the
+  mem fragment emits a Mem-return fn it records a `CInfo` — name,
+  self literal, tower, param count, the linked cert's premises as
+  `CPre` items (enumerated in the linked claim's exact premise order —
+  drift fails the kernel gate loudly at the citation subproofs), and
+  the return-value expr. At the loop site each premise is instantiated
+  (callee param ↦ site arg) and classified: exact loop-premise
+  spelling → direct rewrite; ground → compute; linear in one
+  incrementing accum → a generated `clh_<fn>_<p>` helper claim with
+  computed farkas (uppers `(1 1 C C)` from the accum's scaled range
+  premise, lowers `(1 1)` from its nonneg; C = the accum's stride),
+  cited by a hoisted have before the bridge. A footprint byte at
+  offset J needs `J + 1 ≤ C` — the callee must fit the stride
+  (loud refusal otherwise).
+- v1 fences (loud refusals): work = ONE call, callee = an EARLIER
+  same-file mem-fragment Mem-return fn (source order is registration
+  order); site args are accums or u32 literals; callee premises may
+  touch only incrementing accums; the callee's return value must be a
+  param or literal (a read-returning callee like `mg_swap` would need
+  a memory-threading twin — wait for a consumer).
+
 ## 7. Open questions — triaged at ratification (2026-07-04)
 
 None of these block the ratified form; they are the backlog the next
@@ -1496,10 +1559,12 @@ arcs draw from.
    accums LANDED 2026-07-05 (§6aa, the FLAG shape — bytes_eq); nonzero
    scan literals LANDED 2026-07-05 (§6m update — memchr); stride ≠ 1
    LANDED 2026-07-05 (§6ab — literal inc strides, Mem-return loops,
-   generated lgs_* helper certs). Still open: calls-in-loops
-   (structural form), general literal arm values for flag loops (1/0
-   are pinned by the BEq-bit encoding), write-then-read inside LOOP
-   iterations, stride ≠ 1 on Int-return/dec accums.
+   generated lgs_* helper certs); calls-in-loops LANDED 2026-07-06
+   (§6ac — structural form, link-file residency, the fragments
+   compose). Still open (all consumer-less, fenced): general literal
+   arm values for flag loops (1/0 are pinned by the BEq-bit encoding),
+   write-then-read inside LOOP iterations, stride ≠ 1 on
+   Int-return/dec accums, read-returning/multi-call loop callees.
 
 ## 8. The model-authoring contract — what a target ISA model provides
 
