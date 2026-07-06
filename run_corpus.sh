@@ -113,7 +113,10 @@ TARGETS=(
   examples/wasm_copy.shard
   examples/lowered_form.shard
   examples/w64_probe.shard
+  models/x86/x86.shard
+  models/x86/encode.shard
   examples/x86_pieces.shard
+  examples/x86_diff_run.shard
   examples/rep_probe.shard
   examples/lowfrag_probe.shard
   examples/divfrag_probe.shard
@@ -269,6 +272,18 @@ if command -v node >/dev/null && [ -x bin/shard_eval ]; then
   bash examples/wasm_diff.sh 2>&1 | tail -1
 else
   echo "SKIPPED (needs node + bin/shard_eval)"
+fi
+
+# Silicon differential (the x86_64 arc's Probe B): flatten each XFunc to real
+# machine code, mmap it executable, and CALL it on this CPU — comparing the
+# hardware result + memory (and the trap leg: model None == hardware fault)
+# against the model. The "CPU conforms to the model" trust leaf. Summary line
+# only; disagreements change it and fail the diff.
+echo "=== x86: silicon differential ==="
+if command -v cc >/dev/null && [ -x bin/shard_eval ]; then
+  bash examples/x86_diff.sh 2>&1 | tail -1
+else
+  echo "SKIPPED (needs cc + bin/shard_eval)"
 fi
 
 echo "=== guard: absolute path ==="

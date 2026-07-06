@@ -1,0 +1,219 @@
+;;; examples/x86_diff_run.shard — model side of the x86_64 silicon differential
+;;; (docs/X86.md, Probe B). Emits a PLAN: real machine-code bytes for each
+;;; module plus vectors whose expected results are computed BY THE MODEL
+;;; (xcall_fn / xcall_fn_mem). The engine side (examples/x86_diff.c) mmaps the
+;;; bytes into an executable page and calls them on real hardware, comparing
+;;; the CPU's result (and memory) against the model's.
+;;;
+;;; Plan grammar (all integers 16-char little-endian hex; "None" = the model
+;;; says the call fails / traps):
+;;;   XMOD <name> <hexcode>
+;;;   XCASE <name> <argc> <a0> <a1> <a2> -> <exp>
+;;;   XMEMCASE <name> <argc> <a0> <a1> <a2> READ <addr> <len> -> <exp> <outhex>
+;;;
+;;; Memory addresses are REAL absolute addresses (DATA_BASE = 0x40000000): the
+;;; model's Mem is a sparse (Map Int) so an absolute-address key is cheap, and
+;;; model-address == silicon-pointer with NO base/offset fiction — the honest
+;;; flat-memory semantics. The harness MAP_FIXEDs the data page at DATA_BASE.
+;;; The trap vector stores past the module's memsize: the model traps (None),
+;;; the CPU SIGSEGVs on the unmapped page, and the harness scores the caught
+;;; signal as AGREEMENT (the trap leg of the differential).
+;;;
+;;; RUN IT:  examples/x86_diff.sh   (emit + execute on the CPU)
+
+(import "../kernel/stdlib.shard")
+(import "../models/x86/x86.shard")
+(import "../models/x86/encode.shard")
+(use (:: models x86 x86 *))
+(use (:: models x86 encode *))
+(use (:: std mem *))
+
+(type World (World Int))
+(extern write ((bytes (List Int)) (w World)) World)
+(extern exit ((code Int) (w World)) World)
+
+;; --- text plumbing -----------------------------------------------------------
+
+(fn eap ((xs (List Int)) (ys (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil ys)
+    ((Cons h t) (Cons h (eap t ys)))))
+
+(fn cat ((xss (List (List Int)))) (List Int)
+  (measure (struct xss))
+  (match xss
+    (Nil Nil)
+    ((Cons h t) (eap h (cat t)))))
+
+(fn hexd ((d Int)) Int (if (lt d 10) (+ 48 d) (+ 87 d)))
+
+(fn hexs ((bs (List Int))) (List Int)
+  (measure (struct bs))
+  (match bs
+    (Nil Nil)
+    ((Cons b t) (Cons (hexd (ediv b 16)) (Cons (hexd (mod b 16)) (hexs t))))))
+
+;; 16-char little-endian hex of a value in [0, 2^64) (le8 lives in encode)
+(fn hx ((v Int)) (List Int) (hexs (le8 v)))
+
+(fn showr ((r (Option Int))) (List Int)
+  (match r
+    (None "None")
+    ((Some v) (hx v))))
+
+;; three padded arg slots
+(fn argslots ((args (List Int))) (List Int)
+  (match args
+    (Nil (cat (list " " (hx 0) " " (hx 0) " " (hx 0))))
+    ((Cons a0 t0)
+     (match t0
+       (Nil (cat (list " " (hx a0) " " (hx 0) " " (hx 0))))
+       ((Cons a1 t1)
+        (match t1
+          (Nil (cat (list " " (hx a0) " " (hx a1) " " (hx 0))))
+          ((Cons a2 t2) (cat (list " " (hx a0) " " (hx a1) " " (hx a2))))))))))
+
+(fn argc ((args (List Int))) Int
+  (measure (struct args))
+  (match args
+    (Nil 0)
+    ((Cons h t) (+ 1 (argc t)))))
+
+(fn dec1 ((n Int)) (List Int) (list (+ 48 n)))
+
+;; --- the modules (differential-only; no proof obligation) --------------------
+
+(fn add_f () XFunc
+  (MkXFunc 2 (list (XMovRR RAX RDI) (XBin XAdd RAX (SReg RSI)))))
+
+(fn inc_f () XFunc (MkXFunc 1 (list (XMovRR RAX RDI) (XBin XAdd RAX (SImm 1)))))
+
+(fn addmul_f () XFunc
+  (MkXFunc
+    2
+    (list
+      (XMovRR RAX RDI)
+      (XBin XAdd RAX (SReg RSI))
+      (XBin XMul RAX (SReg RDI)))))
+
+;; count-up register loop: f(n) = n (result depends on iteration count — a
+;; strong flattening test; a wrong rel32 infinite-loops or crashes)
+(fn count_body () (List XInstr)
+  (list
+    (XBrIf (CEqz RDI) 1)
+    (XBin XAdd RAX (SImm 1))
+    (XBin XSub RDI (SImm 1))
+    (XBr 0)))
+
+(fn count_f () XFunc
+  (MkXFunc 1 (list (XMovRI RAX 0) (XBlock (list (XLoop (count_body)))))))
+
+;; single byte store: f(p, v) = store low byte of v at [p], return v
+(fn put_f () XFunc
+  (MkXFunc 2 (list (XStore8 (AReg RDI) (SReg RSI)) (XMovRR RAX RSI))))
+
+;; fill loop: f(p, v, k) = store v at [p..p+k), return 0
+(fn fill_body () (List XInstr)
+  (list
+    (XBrIf (CEqz RDX) 1)
+    (XStore8 (AReg RDI) (SReg RSI))
+    (XBin XAdd RDI (SImm 1))
+    (XBin XSub RDX (SImm 1))
+    (XBr 0)))
+
+(fn fill_f () XFunc (MkXFunc 3 (list (XBlock (list (XLoop (fill_body)))))))
+
+;; register modules have no memory; memory modules bound [DATA_BASE, +0x10000)
+(fn mreg ((f XFunc)) XModule (MkXModule (Cons f Nil) 0))
+
+(fn mmem ((f XFunc)) XModule (MkXModule (Cons f Nil) 1073807360))
+
+;; --- plan lines --------------------------------------------------------------
+
+(fn mod_line ((nm (List Int)) (f XFunc)) (List Int)
+  (cat (list "XMOD " nm " " (hexs (enc_func f)) "\n")))
+
+(fn xcase ((nm (List Int)) (m XModule) (args (List Int)) (fuel Int)) (List Int)
+  (cat
+    (list
+      "XCASE "
+      nm
+      " "
+      (dec1 (argc args))
+      (argslots args)
+      " -> "
+      (showr (xcall_fn (xfnat fuel) m 0 args))
+      "\n")))
+
+(fn memresv ((r (Option (Pair Int Mem)))) (List Int)
+  (match r
+    (None "None")
+    ((Some pr)
+     (match pr
+       ((Pair v mf) (hx v))))))
+
+(fn memouthex ((r (Option (Pair Int Mem))) (addr Int) (len Nat)) (List Int)
+  (match r
+    (None "-")
+    ((Some pr)
+     (match pr
+       ((Pair v mf) (hexs (mem_read len mf addr)))))))
+
+(fn xmemcase
+  ((nm (List Int))
+   (m XModule)
+   (args (List Int))
+   (addr Int)
+   (len Int)
+   (fuel Int))
+  (List Int)
+  (let ((r (xcall_fn_mem (xfnat fuel) m 0 args (mem_empty))))
+    (cat
+      (list
+        "XMEMCASE "
+        nm
+        " "
+        (dec1 (argc args))
+        (argslots args)
+        " READ "
+        (hx addr)
+        " "
+        (hx len)
+        " -> "
+        (memresv r)
+        " "
+        (memouthex r addr (xfnat len))
+        "\n"))))
+
+;; --- the plan ----------------------------------------------------------------
+;; DATA_BASE = 0x40000000 = 1073741824; the trap address 0x40100000 =
+;; 1074790400 is past the module's memsize (1073807360 = DATA_BASE+0x10000).
+
+(fn emit () (List Int)
+  (cat
+    (list
+      (mod_line "add" (add_f))
+      (xcase "add" (mreg (add_f)) (list 2 3) 12)
+      (xcase "add" (mreg (add_f)) (list 18446744073709551615 1) 12)
+      (xcase "add" (mreg (add_f)) (list 4294967296 4294967296) 12)
+      (mod_line "inc" (inc_f))
+      (xcase "inc" (mreg (inc_f)) (list 41) 12)
+      (xcase "inc" (mreg (inc_f)) (list 18446744073709551615) 12)
+      (mod_line "addmul" (addmul_f))
+      (xcase "addmul" (mreg (addmul_f)) (list 7 5) 14)
+      (xcase "addmul" (mreg (addmul_f)) (list 0 0) 14)
+      (xcase "addmul" (mreg (addmul_f)) (list 4294967296 3) 14)
+      (mod_line "count" (count_f))
+      (xcase "count" (mreg (count_f)) (list 0) 40)
+      (xcase "count" (mreg (count_f)) (list 1) 40)
+      (xcase "count" (mreg (count_f)) (list 7) 80)
+      (xcase "count" (mreg (count_f)) (list 100) 800)
+      (mod_line "put" (put_f))
+      (xmemcase "put" (mmem (put_f)) (list 1073741824 65) 1073741824 1 12)
+      (xmemcase "put" (mmem (put_f)) (list 1074790400 65) 1074790400 1 12)
+      (mod_line "fill" (fill_f))
+      (xmemcase "fill" (mmem (fill_f)) (list 1073741824 65 8) 1073741824 8 200)
+      (xmemcase "fill" (mmem (fill_f)) (list 1073741840 187 4) 1073741840 4 200))))
+
+(fn main ((w World)) World (exit 0 (write (emit) w)))
