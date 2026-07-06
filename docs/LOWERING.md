@@ -1576,6 +1576,58 @@ spelling (two distinct exprs both spelling `"?"` would dedup to one
 premise BEFORE the kernel sees anything; unreachable in the current
 fragment, structurally silent if it ever isn't).
 
+### 6ae. The front/back split — tools/low/shape.shard (2026-07-06)
+
+The §6ad review's architectural verdict acted on: fragment growth had
+been appending shapes to one 5,100-line app, and the recognition
+vocabulary — the part of the emitter a second target consumes UNCHANGED
+— had no named home. `tools/low/shape.shard` is now the canonical
+source-form library, the FRONT END of the certifying emitter and the
+seed of the common lowering step (the §8 contract bounds what a target
+model provides; shape.shard is the layer that sits entirely above it).
+
+What graduated (~880 lines; lowergen 5,098 → 4,250):
+
+- **Fragment dispatch scans** — `has_div`/`any_div` (the §6y staged-walk
+  dispatch), `dv_has_if`/`any_if` (the div+if fence), `fn_is_loop` (the
+  loop-vs-mem-walk dispatch).
+- **The branch/region tree vocabulary** — `RT`/`TRes` +
+  `rt_nxt`/`rt_count`/`rt_code`/`rt_prepend`. Payload-generic: the tree
+  STRUCTURE mirrors the source's branch shape; the code payload is
+  whatever the back end fills it with (`Doc` is opaque rope here).
+- **The loop-shape recognition layer** — the value/stride/argument
+  vocabulary (`LVal`/`LStr`/`LKArg`/`LUpd`) and the shape records
+  (`LRec`, `LIRec`) with every recognizer (`lp_*`, `li_*`, `lc_*`,
+  `lb_*`): kernel-term inspection only, loud LRErr/LIErr refusals, zero
+  Doc construction.
+- **The callee registry** — `CPre`/`CInfo` + `reg_find`/`reg_add`/
+  `cpre_bound` (the type vocabulary; the back end populates entries
+  when it emits a callee and reads them at loop call sites).
+
+The rule that drew the line: a definition graduates iff it reads kernel
+terms and produces a target-independent description — it renders
+neither instruction text nor proof text. Two consequences worth
+pinning: (1) the pure/if fragment has NO separate recognizer to
+graduate — `gen_e`/`gen_t` fuse recognition with code emission by
+design (the walk refuses out-of-fragment bodies as it compiles), and
+their front-end product, the canonical substituted expr, is already
+schema.shard vocabulary; (2) `fn_is_mem` turned out to be dead (retired
+by the §6o mod.build-v2 rework) and was deleted, not graduated.
+
+Acceptance, §6g's bar: all six five-gate builds green with REGEN
+byte-identical — the split provably changed no output. shape.shard
+rides lowergen's type-gate closure (the tools/low kit convention).
+
+The survival map this makes structural (the §6ad reviewer's estimate,
+now a file boundary): a second target imports shape/schema/lin/doc
+unchanged; proof.shard's wrap-event/bridge templates are wasm-shaped
+and would fork; lowergen is the wasm back end entirely. NOT graduated,
+recorded as the next candidates when a second target arrives: the
+calls-in-loops discharge classifier (`lk_lin`/`LKD`/`lk_disch` —
+generic classification currently interleaved with `clh_*` helper-cert
+emission) and the premise walk over the region tree (`pw_*` — §6j
+layout logic fused with wasm proof docs).
+
 ## 7. Open questions — triaged at ratification (2026-07-04)
 
 None of these block the ratified form; they are the backlog the next
