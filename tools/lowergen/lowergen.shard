@@ -1,7 +1,7 @@
 ;;; lowergen — the certifying emitter (docs/LOWERING.md §6): the scalar
 ;;; let/if fragment. For every fn in the target file whose body is
-;;; arithmetic over Int params, u32 literals (+ - * only), single-binding
-;;; lets, and tail-position ifs over int_eq/lt/le comparisons, emit:
+;;; arithmetic over Int params, u32 literals (+ - * ediv mod), single-
+;;; binding lets, and tail-position ifs over int_eq/lt/le comparisons, emit:
 ;;;   - the wasm function literal (postorder stack code; one LocalSet per
 ;;;     let, locals allocated after the params in textual order; each if
 ;;;     a Block/BrIf/Br diamond — True exits the inner block to the THEN
@@ -24,12 +24,15 @@
 ;;; import; refuse, don't guess — any body outside the fragment is a loud
 ;;; per-fn error and exit 1. Fragment rules: all params Int, return Int;
 ;;; body nodes are params, let-bound names, literals in [0, 2^32), and
-;;; binary + - *; lets bind exactly one name; ifs in TAIL position only,
-;;; conditions = int_eq/lt/le over params/aliases/literals (no arith in
-;;; conditions — wraps must never enter the case-on spelling); every arith
-;;; node of the SUBSTITUTED body must contain a param (constant-fold
+;;; binary + - * ediv mod; lets bind exactly one name; ifs in TAIL position
+;;; only, conditions = int_eq/lt/le over params/aliases/literals (no arith
+;;; in conditions — wraps must never enter the case-on spelling); every
+;;; arith node of the SUBSTITUTED body must contain a param (constant-fold
 ;;; ground subtrees in the source). PRE caveat: arm range premises
 ;;; quantify over the WHOLE contract (see the tail-walk note).
+;;; ediv/mod fns take the STAGED pure walk (§6y — guard PRE per symbolic
+;;; divisor, compute interleaved with guard rewrites) and are
+;;; straight-line/let only for now: div + if is behind the fence.
 ;;;
 ;;; THE MEM FRAGMENT (first param Mem): bodies that read/write bytes lower
 ;;; to wasm Calls against std/mem's shipped artifact functions and the
@@ -108,8 +111,27 @@
 ;; nodes_e then collects the unique arith nodes postorder from it.
 
 ;; canonical walk result: instr docs (emission order), instr count, next
-;; free local index, canonical substituted expr.
-(type G (GOk (List Doc) Int Int Expr) (GErr (List Int)))
+;; free local index, canonical substituted expr, discharge events.
+;;
+;; EVENTS (the staged pure walk, docs/LOWERING.md §6y): the code walk
+;; collects, in MACHINE ORDER, one EvW per computed arith node (its wrap
+;; materializes at that code point) and one EvD per division with a
+;; symbolic divisor (bop_val's guard if sticks there). Collection rides
+;; the CODE walk, not the substituted tree, because only the code walk
+;; can tell a let-SHARE (one materialization — a re-fire would find no
+;; site) from a textual RECOMPUTATION (a fresh wrap after any earlier
+;; all-occurrences fire — a re-fire is required). Div-free fns produce
+;; events too; the region path simply ignores them (nodes_e stays its
+;; source of truth), so their output is untouched.
+(type DEv (EvW Expr) (EvD Expr))
+
+(type G (GOk (List Doc) Int Int Expr (List DEv)) (GErr (List Int)))
+
+(fn ev_app ((a (List DEv)) (b (List DEv))) (List DEv)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (ev_app t b)))))
 
 (fn gen_e ((n Int) (env (List (Pair Expr Int))) (nxt Int) (e Expr)) G
   (measure (struct e))
@@ -121,14 +143,16 @@
           (Cons (dcat3 (DStr "(LocalGet ") (dint k) (DStr ")")) Nil)
           1
           nxt
-          ce))
+          ce
+          Nil))
        (None
          (let ((pos (- (- n 1) (- i (env_len env)))))
            (GOk
              (Cons (dcat3 (DStr "(LocalGet ") (dint pos) (DStr ")")) Nil)
              1
              nxt
-             (FVar (xsym pos)))))))
+             (FVar (xsym pos))
+             Nil)))))
     ((IntLit k)
      (if (le 0 k)
        (if (lt k 4294967296)
@@ -136,47 +160,96 @@
            (Cons (dcat3 (DStr "(I32Const ") (dint k) (DStr ")")) Nil)
            1
            nxt
-           e)
+           e
+           Nil)
          (GErr "literal outside [0, 2^32)"))
        (GErr "literal outside [0, 2^32)")))
     ((Call q as)
-     (match (bop_of q)
-       (None (GErr "call outside the fragment (only + - * allowed)"))
-       ((Some opd)
-        (match as
-          ((Cons a (Cons b Nil))
-           (match (gen_e n env nxt a)
+     (match as
+       ((Cons a (Cons b Nil))
+        (match (gen_e n env nxt a)
+          ((GErr m) (GErr m))
+          ((GOk ia ca nxa cea eva)
+           (match (gen_e n env nxa b)
              ((GErr m) (GErr m))
-             ((GOk ia ca nxa cea)
-              (match (gen_e n env nxa b)
-                ((GErr m) (GErr m))
-                ((GOk ib cb nxb ceb)
-                 (GOk
-                   (dapp
-                     ia
-                     (dapp
-                       ib
-                       (Cons (dcat3 (DStr "(I32Bin ") opd (DStr ")")) Nil)))
-                   (+ ca (+ cb 1))
-                   nxb
-                   (Call q (Cons cea (Cons ceb Nil)))))))))
-          (_ (GErr "arith call must be binary"))))))
+             ((GOk ib cb nxb ceb evb)
+              (let ((ce (Call q (Cons cea (Cons ceb Nil)))))
+                (if (has_fv ce)
+                  (match (bop_of q)
+                    ((Some opd)
+                     (GOk
+                       (dapp
+                         ia
+                         (dapp
+                           ib
+                           (Cons (dcat3 (DStr "(I32Bin ") opd (DStr ")")) Nil)))
+                       (+ ca (+ cb 1))
+                       nxb
+                       ce
+                       (ev_app eva (ev_app evb (Cons (EvW ce) Nil)))))
+                    (None
+                      (match (dop_of q)
+                        ((Some opd)
+                         (match ceb
+                           ((IntLit dk)
+                            (if (int_eq dk 0)
+                              (GErr "division by a zero literal")
+                              (GOk
+                                (dapp
+                                  ia
+                                  (dapp
+                                    ib
+                                    (Cons
+                                      (dcat3 (DStr "(I32Bin ") opd (DStr ")"))
+                                      Nil)))
+                                (+ ca (+ cb 1))
+                                nxb
+                                ce
+                                (ev_app eva evb))))
+                           (_
+                             (GOk
+                               (dapp
+                                 ia
+                                 (dapp
+                                   ib
+                                   (Cons
+                                     (dcat3 (DStr "(I32Bin ") opd (DStr ")"))
+                                     Nil)))
+                               (+ ca (+ cb 1))
+                               nxb
+                               ce
+                               (ev_app eva (ev_app evb (Cons (EvD ceb) Nil)))))))
+                        (None
+                          (GErr
+                            "call outside the fragment (only + - * ediv mod allowed)")))))
+                  (GErr
+                    "ground arithmetic subtree (constant-fold it in the source)"))))))))
+       (_
+         (match (bop_of q)
+           (None
+             (match (dop_of q)
+               (None
+                 (GErr
+                   "call outside the fragment (only + - * ediv mod allowed)"))
+               ((Some _) (GErr "arith call must be binary"))))
+           ((Some _) (GErr "arith call must be binary"))))))
     ((Let bs body)
      (match bs
        ((Cons rhs Nil)
         (match (gen_e n env nxt rhs)
           ((GErr m) (GErr m))
-          ((GOk ir cr nxr cer)
+          ((GOk ir cr nxr cer evr)
            (match (gen_e n (Cons (Pair cer nxr) env) (+ nxr 1) body)
              ((GErr m) (GErr m))
-             ((GOk ib cb nxb ceb)
+             ((GOk ib cb nxb ceb evb)
               (GOk
                 (dapp
                   ir
                   (Cons (dcat3 (DStr "(LocalSet ") (dint nxr) (DStr ")")) ib))
                 (+ cr (+ cb 1))
                 nxb
-                ceb))))))
+                ceb
+                (ev_app evr evb)))))))
        (_ (GErr "let must bind exactly one name (split into nested lets)"))))
     (_ (GErr "body outside the scalar let/straight-line fragment"))))
 
@@ -205,6 +278,41 @@
                   "ground arithmetic subtree (constant-fold it in the source)")))))))
        (_ (NErr "arith call must be binary"))))
     (_ (NOk acc))))
+
+;; ---- fragment dispatch scans ---------------------------------------------------
+
+;; does the raw body mention ediv/mod anywhere? Div fns take the STAGED
+;; pure walk (§6y); everything else keeps the region path untouched.
+(fn has_div ((e Expr)) Bool
+  (measure (struct e))
+  (match e
+    ((Call q as)
+     (match (dop_of q)
+       ((Some _) True)
+       (None (any_div as))))
+    ((Let bs body) (if (any_div bs) True (has_div body)))
+    ((If c a b) (if (has_div c) True (if (has_div a) True (has_div b))))
+    (_ False)))
+
+(fn any_div ((as (List Expr))) Bool
+  (measure (struct as))
+  (match as
+    (Nil False)
+    ((Cons h t) (if (has_div h) True (any_div t)))))
+
+(fn dv_has_if ((e Expr)) Bool
+  (measure (struct e))
+  (match e
+    ((If _ _ _) True)
+    ((Call _ as) (any_if as))
+    ((Let bs body) (if (any_if bs) True (dv_has_if body)))
+    (_ False)))
+
+(fn any_if ((as (List Expr))) Bool
+  (measure (struct as))
+  (match as
+    (Nil False)
+    ((Cons h t) (if (dv_has_if h) True (any_if t)))))
 
 ;; ---- tail walk: the branch/region tree -----------------------------------------
 ;;
@@ -313,10 +421,10 @@
              ((Cons c1 (Cons c2 Nil))
               (match (gen_e n env nxt c1)
                 ((GErr m) (TErr m))
-                ((GOk i1 n1 nx1 ce1)
+                ((GOk i1 n1 nx1 ce1 _)
                  (match (gen_e n env nx1 c2)
                    ((GErr m) (TErr m))
-                   ((GOk i2 n2 nx2 ce2)
+                   ((GOk i2 n2 nx2 ce2 _)
                     (if (cond_operand_ok ce1)
                       (if (cond_operand_ok ce2)
                         (match (gen_t n env (+ nx2 1) a)
@@ -360,7 +468,7 @@
        ((Cons rhs Nil)
         (match (gen_e n env nxt rhs)
           ((GErr m) (TErr m))
-          ((GOk ir cr nxr cer)
+          ((GOk ir cr nxr cer _)
            (match (nodes_e cer Nil)
              ((NErr m) (TErr m))
              ((NOk rns)
@@ -381,7 +489,7 @@
     (_
       (match (gen_e n env nxt e)
         ((GErr m) (TErr m))
-        ((GOk code cnt nx ce)
+        ((GOk code cnt nx ce _)
          (match (nodes_e ce Nil)
            ((NErr m) (TErr m))
            ((NOk ns) (TOk (RTv code cnt nx ns)))))))))
@@ -2960,11 +3068,185 @@
           (emit_claim_pure f)))
        (Nil (emit_claim_pure f))))))
 
+;; ---- the staged pure walk: ediv/mod (docs/LOWERING.md §6y) ---------------------
+;;
+;; A division's guard makes bop_val reduce to (if (le 1 B) (Some (ediv A
+;; B)) None); with B symbolic the machine fold JAMS at that instruction,
+;; so the one-shot (compute lhs) no longer runs the whole machine. The
+;; proof interleaves instead (the mem fragment's stage law, probe:
+;; examples/divfrag_probe.shard): per div site in code order — flush the
+;; wrap events materialized so far (their all-occurrence rewrites clean
+;; the divisor spelling), rewrite the guard PRE (= (le 1 B) True) into
+;; the stuck if, resume (compute lhs). The div node itself contributes
+;; NO wrap event (bop_val returns the ediv/mod unwrapped — machine
+;; spelling = spec spelling); a LITERAL divisor's guard computes away
+;; (zero staging — (ediv x 2^k) is slice D's constant right shift, free);
+;; a zero-literal divisor refuses at generation. v1 fence: div fns are
+;; straight-line/let only (no ifs — the region templates and the stage
+;; law have not been composed yet).
+;;
+;; Premise layout in EVENT ORDER, dedup by spelling: a wrap node claims
+;; the (le 0 E)/(lt E 2^32) pair, a symbolic divisor the single guard
+;; (le 1 B). Guard spellings are le-headed and wrap spellings
+;; arith-headed, but separate assoc lists keep the lookup honest.
+(type DLay (MkDLay Doc (List (Pair Expr Int)) (List (Pair Expr Int)) Int))
+
+(fn dvx_at ((a (List (Pair Expr Int))) (s (List Int))) Int
+  (measure (struct a))
+  (match a
+    (Nil 0)
+    ((Cons (Pair k v) t) (if (chars_eq s (spell k)) v (dvx_at t s)))))
+
+(fn dvx_seen ((a (List (Pair Expr Int))) (s (List Int))) Bool
+  (measure (struct a))
+  (match a
+    (Nil False)
+    ((Cons (Pair k _) t) (if (chars_eq s (spell k)) True (dvx_seen t s)))))
+
+(fn dv_lay
+  ((evs (List DEv))
+   (pd Doc)
+   (wa (List (Pair Expr Int)))
+   (ga (List (Pair Expr Int)))
+   (ni Int))
+  DLay
+  (measure (struct evs))
+  (match evs
+    (Nil (MkDLay pd wa ga ni))
+    ((Cons ev t)
+     (match ev
+       ((EvW e)
+        (if (dvx_seen wa (spell e)) (dv_lay t pd wa ga ni)
+        (dv_lay
+          t
+          (dcat3
+            pd
+            (dcat3 (DStr "(= ") (bnd_le0 (pr_e e)) (DStr " True) "))
+            (dcat3 (DStr "(= ") (bnd_ltwrap (pr_e e)) (DStr " True) ")))
+          (Cons (Pair e ni) wa)
+          ga
+          (+ ni 2))))
+       ((EvD b)
+        (if (dvx_seen ga (spell b)) (dv_lay t pd wa ga ni)
+        (dv_lay
+          t
+          (DCat pd (dcat3 (DStr "(= ") (bnd_ge1 (pr_e b)) (DStr " True) ")))
+          wa
+          (Cons (Pair b ni) ga)
+          (+ ni 1))))))))
+
+;; flush the pending wrap events (all materialized in the residue by this
+;; stage point), machine order; j = the running have ordinal
+(fn dv_flush ((pend (List Expr)) (wa (List (Pair Expr Int))) (j Int))
+  (Pair Doc Int)
+  (measure (struct pend))
+  (match pend
+    (Nil (Pair (DStr "") j))
+    ((Cons e t)
+     (match (dv_flush t wa (+ j 1))
+       ((Pair d j2)
+        (Pair
+          (DCat
+            (wrap_event
+              e
+              (dint (dvx_at wa (spell e)))
+              (dint (+ (dvx_at wa (spell e)) 1))
+              j)
+            d)
+          j2))))))
+
+;; the staged proof body: pending wraps batch per segment (dedup WITHIN
+;; the segment — one all-occurrences fire covers same-segment duplicates;
+;; a spelling recomputed in a LATER segment re-enters pending and
+;; re-fires); each EvD flushes, rewrites its guard premise (re-use
+;; re-fires the same index), and resumes compute.
+(fn dv_pf
+  ((evs (List DEv))
+   (pend (List Expr))
+   (wa (List (Pair Expr Int)))
+   (ga (List (Pair Expr Int)))
+   (j Int))
+  Doc
+  (measure (struct evs))
+  (match evs
+    (Nil
+      (match (dv_flush pend wa j)
+        ((Pair d _) (DCat d (DStr "refl")))))
+    ((Cons ev t)
+     (match ev
+       ((EvW e)
+        (if (node_seen (spell e) pend) (dv_pf t pend wa ga j)
+        (dv_pf t (node_add e pend) wa ga j)))
+       ((EvD b)
+        (match (dv_flush pend wa j)
+          ((Pair d j1)
+           (DCat
+             d
+             (DCat
+               (dcat3
+                 (DStr "(steps ((rewrite (premise ")
+                 (dint (dvx_at ga (spell b)))
+                 (DStr ") lr lhs true ()) (compute lhs))) "))
+               (dv_pf t Nil wa ga j1))))))))))
+
+(fn emit_claim_div ((q QName) (ts (List Type)) (body Expr)) CRes
+  (if (dv_has_if body)
+    (CErr
+      (append_int
+        (chars_of_sym (qn_name q))
+        ": ediv/mod with if is not in the fragment yet (straight-line/let bodies only)"))
+    (match (gen_e (count_ts ts) Nil (count_ts ts) body)
+      ((GErr m)
+       (CErr (append_int (chars_of_sym (qn_name q)) (append_int ": " m))))
+      ((GOk code cnt nxt _ evs)
+       (match (dv_lay evs (DStr "") Nil Nil 0)
+         ((MkDLay prems wa ga _)
+          (COk
+            (dcat3
+              (dcat3
+                (dcat3
+                  (DStr "(claim lowered_")
+                  (dsym (qn_name q))
+                  (dcat3
+                    (DStr " (goal (")
+                    (pr_binds ts 0)
+                    (DStr "(c Nat) (restfs (List Func))) (")))
+                prems
+                (dcat3
+                  (dcat3
+                    (DStr ") (= (call_fn (S^ ")
+                    (dint (+ (* 2 cnt) 3))
+                    (DStr " c) (MkWModule (Cons (MkFunc "))
+                  (dint (count_ts ts))
+                  (dcat3
+                    (dcat3
+                      (DCat (sp) (dint (- nxt (count_ts ts))))
+                      (DStr " (list ")
+                      (djoin code))
+                    (DStr ")) restfs) 0) 0 (list ")
+                    (DStr ""))))
+              (dcat3
+                (pr_args ts 0)
+                (dcat3 (DStr ")) (Some (") (dsym (qn_name q)) (DStr ""))
+                (dcat3
+                  (pr_args_lead ts)
+                  (DStr "))))")
+                  (dcat3
+                    (dcat3
+                      (DStr " (chain (steps ((compute lhs) (unfold ")
+                      (dsym (qn_name q))
+                      (DStr " rhs) (reduce rhs))) "))
+                    (dv_pf evs Nil wa ga 0)
+                    (DStr "))"))))
+              (DStr (nl)))
+            (DStr ""))))))))
+
 (fn emit_claim_pure ((f FnDef)) CRes
   (match f
     ((FnDef q ts rty body)
      (if (all_int ts)
        (if (is_int_ty rty)
+         (if (has_div body) (emit_claim_div q ts body)
          (match (gen_t (count_ts ts) Nil (count_ts ts) body)
            ((TErr m)
             (CErr (append_int (chars_of_sym (qn_name q)) (append_int ": " m))))
@@ -3011,7 +3293,7 @@
                            proof_body
                            (DStr "))"))))
                      (DStr (nl))))
-                 (DStr ""))))))
+                 (DStr "")))))))
          (CErr
            (append_int (chars_of_sym (qn_name q)) ": return type is not Int")))
        (CErr (append_int (chars_of_sym (qn_name q)) ": params are not all Int"))))))

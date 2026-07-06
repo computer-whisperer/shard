@@ -1,0 +1,321 @@
+;;; divfrag_probe.shard — the emitter ediv/mod design probe (docs/LOWERING.md
+;;; §6w residue: the staged-interleave fragment slice, probed by hand before
+;;; mechanization).
+;;;
+;;; THE STICK: a division node's guard makes bop_val reduce to
+;;; (if (le 1 B) (Some (ediv A B)) None), and with B symbolic the if is
+;;; stuck — the machine fold jams at that instruction, so the pure
+;;; fragment's one-shot (compute lhs) no longer runs the whole machine.
+;;; PATTERN UNDER TEST (the mem fragment's stage law, transplanted): per
+;;; div site in code order — flush the wrap events materialized so far
+;;; (their all-occurrence rewrites clean the divisor spelling), rewrite
+;;; the guard PRE premise (= (le 1 B) True) into the stuck if, resume
+;;; (compute lhs). The div node itself contributes NO wrap event —
+;;; bop_val returns (Some (ediv a b)) unwrapped, machine spelling = spec
+;;; spelling.
+;;;
+;;; Cases: bare div / bare rem / wrapped operands (flush-before-guard) /
+;;; literal divisor (guard computes away — zero staging, and (ediv x 2^k)
+;;; = slice D's constant right shift lands free) / div feeding arith
+;;; (wrap after the stage) / let-shared div (one guard, spec-side ζ
+;;; duplication) / two sites at one divisor spelling (premise dedup, the
+;;; stage RE-FIRES the same premise index) / div-of-div (two distinct
+;;; guards in sequence).
+
+(import "../kernel/stdlib.shard")
+(import "../models/wasm/wasm.shard")
+(use (:: models wasm wasm *))
+
+;; ---- the source fns (the fragment instances) ----------------------------------
+
+(fn dv_q ((a Int) (b Int)) Int (ediv a b))
+
+(fn dv_r ((a Int) (b Int)) Int (mod a b))
+
+(fn dv_w ((a Int) (b Int)) Int (ediv (+ a b) (- b a)))
+
+(fn dv_l ((a Int)) Int (ediv a 7))
+
+(fn dv_a ((a Int) (b Int)) Int (+ (ediv a b) 1))
+
+(fn dv_s ((a Int) (b Int)) Int (let ((d (ediv a b))) (+ d d)))
+
+(fn dv_d ((a Int) (b Int)) Int (+ (ediv a b) (mod a b)))
+
+(fn dv_n ((a Int) (b Int) (e Int)) Int (ediv (ediv a b) e))
+
+;; ---- bare div: one stage, no wraps anywhere ------------------------------------
+
+(claim dvp_q
+  (goal ((x0 Int) (x1 Int) (c Nat) (restfs (List Func))) ((= (le 1 x1) True))
+    (=
+      (call_fn
+        (S^ 9 c)
+        (MkWModule
+          (Cons
+            (MkFunc 2 0 (list (LocalGet 0) (LocalGet 1) (I32Bin BDivU)))
+            restfs)
+          0)
+        0
+        (list x0 x1))
+      (Some (dv_q x0 x1))))
+  (chain
+    (steps ((compute lhs) (unfold dv_q rhs) (reduce rhs)))
+    (steps ((rewrite (premise 0) lr lhs true ()) (compute lhs)))
+    refl))
+
+;; ---- bare rem: the BRemU twin ---------------------------------------------------
+
+(claim dvp_r
+  (goal ((x0 Int) (x1 Int) (c Nat) (restfs (List Func))) ((= (le 1 x1) True))
+    (=
+      (call_fn
+        (S^ 9 c)
+        (MkWModule
+          (Cons
+            (MkFunc 2 0 (list (LocalGet 0) (LocalGet 1) (I32Bin BRemU)))
+            restfs)
+          0)
+        0
+        (list x0 x1))
+      (Some (dv_r x0 x1))))
+  (chain
+    (steps ((compute lhs) (unfold dv_r rhs) (reduce rhs)))
+    (steps ((rewrite (premise 0) lr lhs true ()) (compute lhs)))
+    refl))
+
+;; ---- wrapped operands: both wraps flush BEFORE the guard rewrite ----------------
+
+(claim dvp_w
+  (goal ((x0 Int) (x1 Int) (c Nat) (restfs (List Func)))
+    ((= (le 0 (+ x0 x1)) True)
+     (= (lt (+ x0 x1) 4294967296) True)
+     (= (le 0 (- x1 x0)) True)
+     (= (lt (- x1 x0) 4294967296) True)
+     (= (le 1 (- x1 x0)) True))
+    (=
+      (call_fn
+        (S^ 17 c)
+        (MkWModule
+          (Cons
+            (MkFunc
+              2
+              0
+              (list
+                (LocalGet 0)
+                (LocalGet 1)
+                (I32Bin BAdd)
+                (LocalGet 1)
+                (LocalGet 0)
+                (I32Bin BSub)
+                (I32Bin BDivU)))
+            restfs)
+          0)
+        0
+        (list x0 x1))
+      (Some (dv_w x0 x1))))
+  (chain
+    (steps ((compute lhs) (unfold dv_w rhs) (reduce rhs)))
+    (have w0 (= (mod (+ x0 x1) 4294967296) (+ x0 x1))
+      (rewrite-with
+        (lemma wrap32_id)
+        lr
+        lhs
+        ((inst x (+ x0 x1)))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise w0) lr lhs true ())))
+    (have w1 (= (mod (- x1 x0) 4294967296) (- x1 x0))
+      (rewrite-with
+        (lemma wrap32_id)
+        lr
+        lhs
+        ((inst x (- x1 x0)))
+        ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+         (steps ((rewrite (premise 3) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise w1) lr lhs true ())))
+    (steps ((rewrite (premise 4) lr lhs true ()) (compute lhs)))
+    refl))
+
+;; ---- literal divisor: the guard computes away — zero staging, zero premises ------
+
+(claim dvp_l
+  (goal ((x0 Int) (c Nat) (restfs (List Func))) ()
+    (=
+      (call_fn
+        (S^ 9 c)
+        (MkWModule
+          (Cons
+            (MkFunc 1 0 (list (LocalGet 0) (I32Const 7) (I32Bin BDivU)))
+            restfs)
+          0)
+        0
+        (list x0))
+      (Some (dv_l x0))))
+  (steps ((compute lhs) (unfold dv_l rhs) (reduce rhs)) refl))
+
+;; ---- div feeding arith: stage first, wrap event after ----------------------------
+
+(claim dvp_a
+  (goal ((x0 Int) (x1 Int) (c Nat) (restfs (List Func)))
+    ((= (le 1 x1) True)
+     (= (le 0 (+ (ediv x0 x1) 1)) True)
+     (= (lt (+ (ediv x0 x1) 1) 4294967296) True))
+    (=
+      (call_fn
+        (S^ 13 c)
+        (MkWModule
+          (Cons
+            (MkFunc
+              2
+              0
+              (list
+                (LocalGet 0)
+                (LocalGet 1)
+                (I32Bin BDivU)
+                (I32Const 1)
+                (I32Bin BAdd)))
+            restfs)
+          0)
+        0
+        (list x0 x1))
+      (Some (dv_a x0 x1))))
+  (chain
+    (steps ((compute lhs) (unfold dv_a rhs) (reduce rhs)))
+    (steps ((rewrite (premise 0) lr lhs true ()) (compute lhs)))
+    (have w0 (= (mod (+ (ediv x0 x1) 1) 4294967296) (+ (ediv x0 x1) 1))
+      (rewrite-with
+        (lemma wrap32_id)
+        lr
+        lhs
+        ((inst x (+ (ediv x0 x1) 1)))
+        ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+         (steps ((rewrite (premise 2) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise w0) lr lhs true ())))
+    refl))
+
+;; ---- let-shared div: machine computes once (local), spec duplicates under ζ ------
+
+(claim dvp_s
+  (goal ((x0 Int) (x1 Int) (c Nat) (restfs (List Func)))
+    ((= (le 1 x1) True)
+     (= (le 0 (+ (ediv x0 x1) (ediv x0 x1))) True)
+     (= (lt (+ (ediv x0 x1) (ediv x0 x1)) 4294967296) True))
+    (=
+      (call_fn
+        (S^ 17 c)
+        (MkWModule
+          (Cons
+            (MkFunc
+              2
+              1
+              (list
+                (LocalGet 0)
+                (LocalGet 1)
+                (I32Bin BDivU)
+                (LocalSet 2)
+                (LocalGet 2)
+                (LocalGet 2)
+                (I32Bin BAdd)))
+            restfs)
+          0)
+        0
+        (list x0 x1))
+      (Some (dv_s x0 x1))))
+  (chain
+    (steps ((compute lhs) (unfold dv_s rhs) (reduce rhs)))
+    (steps ((rewrite (premise 0) lr lhs true ()) (compute lhs)))
+    (have w0
+      (=
+        (mod (+ (ediv x0 x1) (ediv x0 x1)) 4294967296)
+        (+ (ediv x0 x1) (ediv x0 x1)))
+      (rewrite-with
+        (lemma wrap32_id)
+        lr
+        lhs
+        ((inst x (+ (ediv x0 x1) (ediv x0 x1))))
+        ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+         (steps ((rewrite (premise 2) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise w0) lr lhs true ())))
+    refl))
+
+;; ---- two sites, one divisor spelling: premise dedup, the stage RE-FIRES ----------
+
+(claim dvp_d
+  (goal ((x0 Int) (x1 Int) (c Nat) (restfs (List Func)))
+    ((= (le 1 x1) True)
+     (= (le 0 (+ (ediv x0 x1) (mod x0 x1))) True)
+     (= (lt (+ (ediv x0 x1) (mod x0 x1)) 4294967296) True))
+    (=
+      (call_fn
+        (S^ 17 c)
+        (MkWModule
+          (Cons
+            (MkFunc
+              2
+              0
+              (list
+                (LocalGet 0)
+                (LocalGet 1)
+                (I32Bin BDivU)
+                (LocalGet 0)
+                (LocalGet 1)
+                (I32Bin BRemU)
+                (I32Bin BAdd)))
+            restfs)
+          0)
+        0
+        (list x0 x1))
+      (Some (dv_d x0 x1))))
+  (chain
+    (steps ((compute lhs) (unfold dv_d rhs) (reduce rhs)))
+    (steps ((rewrite (premise 0) lr lhs true ()) (compute lhs)))
+    (steps ((rewrite (premise 0) lr lhs true ()) (compute lhs)))
+    (have w0
+      (=
+        (mod (+ (ediv x0 x1) (mod x0 x1)) 4294967296)
+        (+ (ediv x0 x1) (mod x0 x1)))
+      (rewrite-with
+        (lemma wrap32_id)
+        lr
+        lhs
+        ((inst x (+ (ediv x0 x1) (mod x0 x1))))
+        ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+         (steps ((rewrite (premise 2) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise w0) lr lhs true ())))
+    refl))
+
+;; ---- div-of-div: two distinct guards, staged in code order -----------------------
+
+(claim dvp_n
+  (goal ((x0 Int) (x1 Int) (x2 Int) (c Nat) (restfs (List Func)))
+    ((= (le 1 x1) True) (= (le 1 x2) True))
+    (=
+      (call_fn
+        (S^ 13 c)
+        (MkWModule
+          (Cons
+            (MkFunc
+              3
+              0
+              (list
+                (LocalGet 0)
+                (LocalGet 1)
+                (I32Bin BDivU)
+                (LocalGet 2)
+                (I32Bin BDivU)))
+            restfs)
+          0)
+        0
+        (list x0 x1 x2))
+      (Some (dv_n x0 x1 x2))))
+  (chain
+    (steps ((compute lhs) (unfold dv_n rhs) (reduce rhs)))
+    (steps ((rewrite (premise 0) lr lhs true ()) (compute lhs)))
+    (steps ((rewrite (premise 1) lr lhs true ()) (compute lhs)))
+    refl))
