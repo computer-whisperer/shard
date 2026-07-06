@@ -1,0 +1,475 @@
+;;; callloop_probe.shard — the CALLS-IN-LOOPS probe (docs/LOWERING.md
+;;; §7.7 residue; the §6f portability limit made concrete). Hand-plays
+;;; the loop template whose per-iteration WORK is a CALL to another
+;;; lowered fn — the composition payoff: loop certs cite callee certs
+;;; inside the induction, in the STRUCTURAL form (callee literals in the
+;;; module spine; regenerate on callee edit), because a loop's call
+;;; sites fire at a different fuel every iteration and so cannot ride
+;;; §6d behavior premises pinned to the goal's one slack binder.
+;;;
+;;; The instance: cw_fill fills k 2-byte cells by calling cp_put (a
+;;; 2-byte cell store, itself a generated-mem-fragment shape citing
+;;; std/mem's shipped mset artifact). What is new against §6ab's stride
+;;; template:
+;;;   1. THE BRIDGE STAGE IN THE S CASE: compute stops at the folded
+;;;      (eval_call …); call_bridge fires with the callee's own cert
+;;;      discharging the run premise — slack instantiation is pure
+;;;      unification, so the callee's S^30 tower unifies under the
+;;;      iteration fuel S^j (lg_fuel k2 c) with c' := S^(j-30) (…).
+;;;   2. THE CALLEE'S PREMISES AT LOOP-VARYING ARGS: the callee cert's
+;;;      address bounds are discharged from the loop's scaled range
+;;;      premise by hoisted haves (the lgs_* closed-formula family plus
+;;;      one NEW spelling, (le (+ (+ a 1) 1) 65536) — farkas (1 1 2 2)).
+;;;   3. DROP: the callee's return is discarded by the model's Drop, so
+;;;      the re-entry stack equals the entry stack and the IH applies
+;;;      with no scratch local and no return-value twin.
+;;;   4. SPELLING ALIGNMENT ACROSS THE CALL: the callee cert returns its
+;;;      memory effect as the FOLDED spec term (cp_put m0 x0 x1) — which
+;;;      is exactly the recursion argument the spec's own unfold puts on
+;;;      the rhs. No collapse lemmas at the boundary.
+;;; Fuel: worker S^(instrs + 4 + 2*T_callee + 1) = S^81 (16 instrs, one
+;;; call site, callee tower 30); theorem +4. Re-entry aligns at any
+;;; sufficient budget (the §6f fuel law).
+
+(import "../kernel/stdlib.shard")
+(import "../std/mem")
+(import "../std/nat.shard")
+(import "../models/wasm/wasm.shard")
+(import "../models/wasm/loopkit.shard")
+(import "../std/mem/mem.wasm.shard")
+(use (:: std mem *))
+(use (:: std nat *))
+(use (:: models wasm wasm *))
+(use (:: models wasm loopkit *))
+(use (:: std mem mem.wasm *))
+
+;; --- the source articles ------------------------------------------------------
+
+;; the callee: store v at both bytes of the 2-byte cell at d
+(fn cp_put ((m Mem) (d Int) (v Int)) Mem (mem_set (mem_set m d v) (+ d 1) v))
+
+;; the loop: fill k 2-byte cells starting at d by calling cp_put
+(fn cw_fill ((m Mem) (d Int) (v Int) (k Nat)) Mem
+  (measure (struct k))
+  (match k
+    (Z m)
+    ((S k2) (cw_fill (cp_put m d v) (+ d 2) v k2))))
+
+;; --- local copies of std/mem's shipped fns ((inline …) is same-file-only;
+;; byte-identical, so the canonical certs apply — drift fails loudly at the
+;; bridge citation) -------------------------------------------------------------
+
+(fn clg_c () Func (MkFunc 1 0 (list (LocalGet 0) (I32Load8U))))
+
+(fn cls_c () Func
+  (MkFunc 2 0 (list (LocalGet 0) (LocalGet 1) (I32Store8) (LocalGet 1))))
+
+;; --- the callee's machine body and cert (the generated-mem-fragment shape:
+;; two mset calls, the first return Dropped, the arith node wrap-collapsed
+;; before its call site) --------------------------------------------------------
+
+(fn cp_put_f () Func
+  (MkFunc
+    2
+    0
+    (list
+      (LocalGet 0)
+      (LocalGet 1)
+      (Call 1)
+      (Drop)
+      (LocalGet 0)
+      (I32Const 1)
+      (I32Bin BAdd)
+      (LocalGet 1)
+      (Call 1))))
+
+(claim lowered_cp_put
+  (goal ((x0 Int) (x1 Int) (m0 Mem) (c Nat) (restfs (List Func)))
+    ((= (le 0 x0) True)
+     (= (le (+ x0 1) 65536) True)
+     (= (le 0 (+ x0 1)) True)
+     (= (le (+ (+ x0 1) 1) 65536) True))
+    (=
+      (call_fn_mem
+        (S^ 30 c)
+        (MkWModule
+          (Cons
+            (inline clg_c)
+            (Cons (inline cls_c) (Cons (inline cp_put_f) restfs)))
+          65536)
+        2
+        (list x0 x1)
+        m0)
+      (Some (Pair x1 (cp_put m0 x0 x1)))))
+  (chain
+    (steps ((compute lhs (stop eval_call))))
+    (rewrite-with
+      (lemma call_bridge)
+      lr
+      lhs
+      ((inst f (inline cls_c))
+       (inst popped (Cons x1 (Cons x0 Nil)))
+       (inst rest Nil)
+       (inst args (Cons x0 (Cons x1 Nil)))
+       (inst v x1)
+       (inst mem2 (mem_set m0 x0 x1)))
+      ((steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (rewrite-with
+         (lemma lowered_mem_set)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+          (steps ((rewrite (premise 1) lr lhs true ())) refl))
+         refl)))
+    (steps ((compute lhs (stop eval_call))))
+    (have hw (= (mod (+ x0 1) 4294967296) (+ x0 1))
+      (rewrite-with
+        (lemma wrap32_id)
+        lr
+        lhs
+        ((inst x (+ x0 1)))
+        ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+         (rewrite-with
+           (lemma lg_32)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+           refl))
+        refl))
+    (steps ((rewrite (premise hw) lr lhs true ())))
+    (rewrite-with
+      (lemma call_bridge)
+      lr
+      lhs
+      ((inst f (inline cls_c))
+       (inst popped (Cons x1 (Cons (+ x0 1) Nil)))
+       (inst rest Nil)
+       (inst args (Cons (+ x0 1) (Cons x1 Nil)))
+       (inst v x1)
+       (inst mem2 (mem_set (mem_set m0 x0 x1) (+ x0 1) x1)))
+      ((steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (steps ((compute both)) refl)
+       (rewrite-with
+         (lemma lowered_mem_set)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+          (steps ((rewrite (premise 3) lr lhs true ())) refl))
+         refl)))
+    (steps ((unfold cp_put rhs) (compute both)))
+    refl))
+
+;; --- the C=2 helper kit (the lgs_* closed formulas at C=2, plus the ONE
+;; new spelling the callee's second address needs) -------------------------------
+
+;; store guard, upper: a + 2*(S c) <= 65536  |-  a + 1 <= 65536
+(claim clc_a1ms
+  (goal ((a Int) (c Nat))
+    ((= (le (+ a (* 2 (int_of_nat (S c)))) 65536) True)
+     (= (int_of_nat (S c)) (+ 1 (int_of_nat c)))
+     (= (le 0 (int_of_nat c)) True))
+    (= (le (+ a 1) 65536) True))
+  (by arith (list 1 1 2 2)))
+
+;; the NEW spelling: the callee's second address, one past the cell head.
+;; a + 2*(S c) <= 65536  |-  (a+1) + 1 <= 65536
+(claim clc_a2ms
+  (goal ((a Int) (c Nat))
+    ((= (le (+ a (* 2 (int_of_nat (S c)))) 65536) True)
+     (= (int_of_nat (S c)) (+ 1 (int_of_nat c)))
+     (= (le 0 (int_of_nat c)) True))
+    (= (le (+ (+ a 1) 1) 65536) True))
+  (by arith (list 1 1 2 2)))
+
+;; advance, upper: a + 2*(S c) <= 65536  |-  a + 2 <= 65536
+(claim clc_ac
+  (goal ((a Int) (c Nat))
+    ((= (le (+ a (* 2 (int_of_nat (S c)))) 65536) True)
+     (= (int_of_nat (S c)) (+ 1 (int_of_nat c)))
+     (= (le 0 (int_of_nat c)) True))
+    (= (le (+ a 2) 65536) True))
+  (by arith (list 1 1 2 2)))
+
+;; advance, lower: 0 <= x  |-  0 <= x + 2
+(claim clc_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (+ x 2)) True))
+  (by arith (list 1 1)))
+
+;; advance, wrap bound: x + 2 <= 65536  |-  x + 2 < 2^32
+(claim clc_c32
+  (goal ((x Int)) ((= (le (+ x 2) 65536) True))
+    (= (lt (+ x 2) 4294967296) True))
+  (by arith (list 1 1)))
+
+;; counter wrap: the scaled range still caps the counter below 2^32
+(claim clc_kM
+  (goal ((a Int) (c Nat))
+    ((= (le (+ a (* 2 (int_of_nat (S c)))) 65536) True)
+     (= (int_of_nat (S c)) (+ 1 (int_of_nat c)))
+     (= (le 0 a) True))
+    (= (lt (int_of_nat c) 4294967296) True))
+  (by arith (list 2 1 2 1)))
+
+;; range premise steps to the IH: b + 2*(S c) <= w  |-  (b+2) + 2*c <= w
+(claim clc_shift
+  (goal ((b Int) (w Int) (c Nat))
+    ((= (le (+ b (* 2 (int_of_nat (S c)))) w) True)
+     (= (int_of_nat (S c)) (+ 1 (int_of_nat c))))
+    (= (le (+ (+ b 2) (* 2 (int_of_nat c))) w) True))
+  (by arith (list 1 1 2)))
+
+;; --- the loop's machine body: budget guard / call the cell store / Drop /
+;; d += 2 / k -= 1 / loop ---------------------------------------------------------
+
+(fn cw_body () (List Instr)
+  (list
+    (LocalGet 2)
+    (I32Eqz)
+    (BrIf 1)
+    (LocalGet 0)
+    (LocalGet 1)
+    (Call 2)
+    (Drop)
+    (LocalGet 0)
+    (I32Const 2)
+    (I32Bin BAdd)
+    (LocalSet 0)
+    (LocalGet 2)
+    (I32Const 1)
+    (I32Bin BSub)
+    (LocalSet 2)
+    (Br 0)))
+
+(fn cw_fill_f () Func
+  (MkFunc 3 0 (list (Block (list (Loop (cw_body)))) (I32Const 0))))
+
+;; --- the worker induction ------------------------------------------------------
+
+(claim clw_cw_fill
+  (goal
+    ((x0 Int)
+     (x1 Int)
+     (st (List Int))
+     (m0 Mem)
+     (c Nat)
+     (k Nat)
+     (restfs (List Func)))
+    ((= (le 0 x0) True) (= (le (+ x0 (* 2 (int_of_nat k))) 65536) True))
+    (=
+      (eval_loop
+        (S^ 81 (lg_fuel k c))
+        (MkWModule
+          (Cons
+            (inline clg_c)
+            (Cons
+              (inline cls_c)
+              (Cons
+                (inline cp_put_f)
+                (Cons
+                  (MkFunc
+                    3
+                    0
+                    (list (Block (list (Loop (inline cw_body)))) (I32Const 0)))
+                  restfs))))
+          65536)
+        (inline cw_body)
+        (list x0 x1 (int_of_nat k))
+        st
+        m0)
+      (Some (OBr 0 st (list (lg_advk x0 2 k) x1 0) (cw_fill m0 x0 x1 k)))))
+  (induct k
+    ((case Z
+       (steps
+         ((rewrite (lemma int_of_nat_zero) lr lhs true ()) (compute both))
+         refl))
+     (case S
+       (k2)
+       (chain
+         (steps
+           ((unfold lg_fuel lhs)
+            (reduce lhs)
+            (unfold eval_loop lhs)
+            (rewrite (lemma int_of_nat_succ) lr lhs true ())
+            (compute lhs (stop eval_call eval_loop lg_fuel))))
+         (rewrite-with
+           (lemma lg_ne)
+           lr
+           lhs
+           ()
+           ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         (steps ((compute lhs (stop eval_call eval_loop lg_fuel))))
+         (have ha1 (= (le (+ x0 1) 65536) True)
+           (rewrite-with
+             (lemma clc_a1ms)
+             lr
+             lhs
+             ((inst c k2))
+             ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+              (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+              (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+             refl))
+         (have hlo1 (= (le 0 (+ x0 1)) True)
+           (rewrite-with
+             (lemma lg_lo1)
+             lr
+             lhs
+             ()
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+         (have ha2 (= (le (+ (+ x0 1) 1) 65536) True)
+           (rewrite-with
+             (lemma clc_a2ms)
+             lr
+             lhs
+             ((inst c k2))
+             ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+              (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+              (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+             refl))
+         (rewrite-with
+           (lemma call_bridge)
+           lr
+           lhs
+           ((inst f (inline cp_put_f))
+            (inst popped (Cons x1 (Cons x0 Nil)))
+            (inst rest st)
+            (inst args (Cons x0 (Cons x1 Nil)))
+            (inst v x1)
+            (inst mem2 (cp_put m0 x0 x1)))
+           ((steps ((compute both)) refl)
+            (steps ((compute both)) refl)
+            (steps ((compute both)) refl)
+            (steps ((compute both)) refl)
+            (rewrite-with
+              (lemma lowered_cp_put)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+               (steps ((rewrite (premise ha1) lr lhs true ())) refl)
+               (steps ((rewrite (premise hlo1) lr lhs true ())) refl)
+               (steps ((rewrite (premise ha2) lr lhs true ())) refl))
+              refl)))
+         (steps ((compute lhs (stop eval_call eval_loop lg_fuel))))
+         (have hsub (= (- (+ 1 (int_of_nat k2)) 1) (int_of_nat k2))
+           (rewrite-with (lemma lg_sub) lr lhs () () refl))
+         (steps ((rewrite (premise hsub) lr lhs true ())))
+         (have hwk (= (mod (int_of_nat k2) 4294967296) (int_of_nat k2))
+           (rewrite-with
+             (lemma wrap32_id)
+             lr
+             lhs
+             ((inst x (int_of_nat k2)))
+             ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)
+              (rewrite-with
+                (lemma clc_kM)
+                lr
+                lhs
+                ((inst a x0) (inst c k2))
+                ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                 (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+                 (steps ((rewrite (premise 0) lr lhs true ())) refl))
+                refl))
+             refl))
+         (steps ((rewrite (premise hwk) lr lhs true ())))
+         (have hw0 (= (mod (+ x0 2) 4294967296) (+ x0 2))
+           (rewrite-with
+             (lemma wrap32_id)
+             lr
+             lhs
+             ((inst x (+ x0 2)))
+             ((rewrite-with
+                (lemma clc_lo)
+                lr
+                lhs
+                ()
+                ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                refl)
+              (rewrite-with
+                (lemma clc_c32)
+                lr
+                lhs
+                ()
+                ((rewrite-with
+                   (lemma clc_ac)
+                   lr
+                   lhs
+                   ((inst c k2))
+                   ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                    (steps
+                      ((rewrite (lemma int_of_nat_succ) lr lhs true ()))
+                      refl)
+                    (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+                   refl))
+                refl))
+             refl))
+         (steps ((rewrite (premise hw0) lr lhs true ())))
+         (steps ((unfold cw_fill rhs) (unfold lg_advk rhs) (reduce rhs)))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma clc_lo)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+              refl)
+            (rewrite-with
+              (lemma clc_shift)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+               (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl))
+              refl)))
+         (steps ((compute both)))
+         refl)))))
+
+;; --- the lowered theorem -------------------------------------------------------
+
+(claim lowered_cw_fill
+  (goal ((x0 Int) (x1 Int) (m0 Mem) (c Nat) (k Nat) (restfs (List Func)))
+    ((= (le 0 x0) True) (= (le (+ x0 (* 2 (int_of_nat k))) 65536) True))
+    (=
+      (call_fn_mem
+        (S^ 85 (lg_fuel k c))
+        (MkWModule
+          (Cons
+            (inline clg_c)
+            (Cons
+              (inline cls_c)
+              (Cons
+                (inline cp_put_f)
+                (Cons
+                  (MkFunc
+                    3
+                    0
+                    (list (Block (list (Loop (inline cw_body)))) (I32Const 0)))
+                  restfs))))
+          65536)
+        3
+        (list x0 x1 (int_of_nat k))
+        m0)
+      (Some (Pair 0 (cw_fill m0 x0 x1 k)))))
+  (chain
+    (steps ((compute lhs (stop eval_loop lg_fuel))))
+    (rewrite-with
+      (lemma clw_cw_fill)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (steps ((compute both)))
+    refl))
