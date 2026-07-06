@@ -72,7 +72,12 @@ Consequences that fall out for free:
   external-pedigree question exactly like an axiom's pedigree under the
   closed-base rule, and it goes in the trust ledger like extern reachability
   does today. Everything between the shard spec and the modeled execution is
-  proof.
+  proof. One scope note: the leaf asserts conformance for RESOURCE-ADEQUATE
+  executions — a real engine may resource-trap (call-stack exhaustion) where
+  the model, which carries no stack bound, denotes `Some`; model fuel bounds
+  recursion depth, not the engine's stack. Nil for everything shipped (loops
+  don't consume stack; call depth is small and static), but the leaf's
+  wording must not be read as covering unbounded-depth programs.
 
 **Which ISA first: wasm, for structural reasons, not just precedent.**
 [DECIDED] Wasm's structured control flow (blocks/loops, no arbitrary jumps)

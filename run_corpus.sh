@@ -299,6 +299,22 @@ else
   echo "SKIPPED (no bin/shard_eval)"
 fi
 
+# Manifest-gate negative pin: ARTIFACT lines that MISBIND (wrong export
+# index / cert name not lowered_<name>-shaped / a certfile the build never
+# gated) must be REFUSED — before this gate the manifest's cert/export
+# fields were checked by nothing (docs/LOWERING.md §6ad).
+echo "=== lowering: manifest negative fixture ==="
+if [ -x bin/shard_eval ]; then
+  if bin/shard_eval run tools/lowcheck/manifest.shard examples/manifest_rejects.txt models/wasm/wasm.shard examples/lowergen_call_link.shard > "$TMP/mf.out" 2>&1; then
+    echo "GATE FAILED: misbound manifest ACCEPTED"
+    tail -5 "$TMP/mf.out"
+  else
+    tail -1 "$TMP/mf.out"
+  fi
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
 # Rust-conformance pin: the bootstrap evaluator's cargo suite (prim
 # conformance vs the object table, Word/Bytes revocation guards, kernel
 # loading, induct/match plumbing). It was manual-only and rotted silently

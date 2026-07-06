@@ -62,6 +62,7 @@ TARGETS=(
   tools/shardfmt/shardfmt.shard
   tools/lowergen/lowergen.shard
   tools/lowcheck/lowcheck.shard
+  tools/lowcheck/manifest.shard
   tools/bytetie/bytetie.shard
   meta/invoke/invoke.shard
   meta/plan/plan.shard

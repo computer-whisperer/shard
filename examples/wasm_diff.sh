@@ -5,7 +5,7 @@
 # Dev-side only — this exercises the "engine conforms to model" trust leaf;
 # nothing here is in-logic. Run from the repo root. Exit 0 = full agreement.
 set -eu
-command -v node >/dev/null || { echo "SKIPPED: no node on PATH"; exit 0; }
+command -v node >/dev/null || { echo "REFUSED: no node on PATH — the differential cannot run"; exit 1; }
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 if [ -x bin/shard_eval ]; then EMIT=(bin/shard_eval); else EMIT=(./rust_bootstrap/target/release/eval); fi

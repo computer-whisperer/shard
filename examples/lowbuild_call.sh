@@ -9,10 +9,12 @@
 #   2. SCHEMA    — tools/lowcheck structurally validates every cert
 #   3. KERNEL    — the machine-written proofs check (bridge + callee
 #                  cert citations inside the induction)
-#   4. BYTETIE   — cert module literals re-encode to the shipped bytes
+#   4. BYTETIE   — cert module literals re-encode to the shipped bytes,
+#                  and the manifest's ARTIFACT lines bind name -> cert ->
+#                  pinned export index (tools/lowcheck/manifest.shard)
 #   5. ENGINE    — the artifact plan replays under real V8
 # Exit 0 = a fully gated artifact set. Run from the repo root.
-set -eu
+set -euo pipefail
 SRC=examples/lowergen_call_src.shard
 OUT=examples/lowergen_call_out.shard
 LINK=examples/lowergen_call_link.shard
@@ -44,9 +46,10 @@ echo "== gate 4: byte tie (cert module literals re-encode to the shipped bytes)"
 grep '^MOD ' "$TMP/plan.txt" | sort > "$TMP/mods.txt"
 sed 's/^TIE /MOD /' "$TMP/tie.txt" | sort > "$TMP/ties.txt"
 diff "$TMP/ties.txt" "$TMP/mods.txt" && echo "BYTETIE OK"
+"$EVAL" run tools/lowcheck/manifest.shard "$TMP/plan.txt" models/wasm/wasm.shard "$OUT" "$LINK"
 
 echo "== gate 5: engine (V8 replay of the artifact plan)"
-command -v node >/dev/null || { echo "SKIPPED: no node"; exit 0; }
+command -v node >/dev/null || { echo "REFUSED: no node — the ENGINE gate cannot run"; exit 1; }
 node examples/wasm_diff.mjs "$TMP/plan.txt"
 
 echo "ARTIFACT OK: calls-in-loops binaries + manifest + certs, all five gates green"

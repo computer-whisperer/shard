@@ -12,14 +12,15 @@ drift. This document is the one formal object the arch-specific build
 paradigm hangs from; everything else (the wasm lowerer, mod.build
 conventions, the CLI runner, welds/linking) is engineering behind it.
 
-Corpus pins (run_corpus.sh): the four gated builds
-(`examples/lowbuild{,_mem,_loop}.sh`, `std/mem/lowbuild.sh`) run end to
-end, the schema recognizer's negative fixture must stay refused, and the
+Corpus pins (run_corpus.sh): the six gated builds
+(`examples/lowbuild{,_mem,_loop,_call}.sh`, `std/mem/lowbuild.sh`,
+`std/str/lowbuild.sh`) run end to end, the schema recognizer's and the
+manifest gate's negative fixtures must stay refused (§6ad), and the
 kernel articles (`lowered_form`, `rep_probe`, `lowfrag_probe`, the
 probes riding wasm_diff_run's closure, the generated cert files through
 their builds' KERNEL gates) are checked every run. gate_sweep.sh
-type-gates the three apps (lowergen, lowcheck, bytetie) and, through
-their closures, the tools/low kit.
+type-gates the four apps (lowergen, lowcheck, manifest, bytetie) and,
+through their closures, the tools/low kit.
 
 ## 1. What this is
 
@@ -1522,6 +1523,58 @@ Loop/Br + Call + Drop in one body.
   touch only incrementing accums; the callee's return value must be a
   param or literal (a read-returning callee like `mg_swap` would need
   a memory-threading twin — wait for a consumer).
+
+### 6ad. The manifest gate + gate hardening (2026-07-06)
+
+The review round after §6ac audited the end-to-end trust story of a
+shipped artifact set and found one user-facing seam: the five gates
+verified the SET's internal consistency, but the MANIFEST — the first
+thing a third party consumes — was checked by nothing. wasm_diff.mjs
+replays `MOD`/`CASE`/`MEMCASE` lines and never reads `ARTIFACT` lines,
+so a `PA` entry could name the wrong cert or the wrong export index
+with all five gates green: the byte tie binds module name ↔ claim ↔
+bytes, and every OTHER manifest field was decoration. A consumer
+trusting the handed manifest could invoke export `f2` believing it
+certified `cw_fill` and get `cw_put`'s behavior.
+
+- **`tools/lowcheck/manifest.shard` = the binding gate** (the third
+  certnav consumer; same PCC stance — the plan's producer is never
+  trusted). Per `ARTIFACT` line: `cert=` must be
+  `lowered_<name>`/`linked_<name>` (the naming rule the byte tie
+  already rides), `certfile=` must be one of the build's GATED cert
+  files (passed by the calling script — the binding is to what the
+  KERNEL/SCHEMA gates actually checked, not to whatever the plan
+  says), `model=` must be the gated model, and `export=fN` must equal
+  the pinned function-index literal in the named claim's conclusion,
+  read from the cert file RAW. A plan with zero `ARTIFACT` lines is
+  refused — no pass by vacuity. Rides gate 4 in every lowbuild script
+  (the rendered plan is in hand there). Negative fixture
+  `examples/manifest_rejects.txt` (wrong index / wrong cert name /
+  ungated certfile) is corpus-pinned REFUSED; the app joins
+  gate_sweep's type-gated set.
+- **Script hardening** from the same review: `set -euo pipefail` in
+  all six build scripts (the KERNEL gate's `CHECK | tail -1` pipeline
+  used to discard the checker's exit status — the verdict was only
+  the grep on the tally line), and a missing `node` now REFUSES
+  (exit 1) instead of printing SKIPPED and exiting 0 — the ENGINE
+  gate is the one reality tie (§6, P2c), so a box without node must
+  fail the build rather than silently record success.
+- **Doc alignment**: the ratified-header pin list counts all six
+  builds; lowergen's file header dropped the stale P2c PRE caveat
+  (resolved by §6j); docs/ISA.md's trust-leaf bullet now carries the
+  resource-exhaustion scope note (a real engine may trap on stack
+  exhaustion where the model, which has no stack bound, says `Some`).
+
+Recorded from the same review, deliberately NOT this slice: the
+rep-swap emitter coupling (lowergen hardcodes std/mem's v1 literals
+and tower budgets — a real std/mem rep swap today edits the emitter,
+§6d's byte-stability claim covers only the portable file), the
+front/back split of lowergen (graduating the recognition vocabulary
+LRec/LIRec/RT into a named canonical-form library — the seed of the
+common lowering step), and the latent `pr_e` unknown-head `"?"`
+spelling (two distinct exprs both spelling `"?"` would dedup to one
+premise BEFORE the kernel sees anything; unreachable in the current
+fragment, structurally silent if it ever isn't).
 
 ## 7. Open questions — triaged at ratification (2026-07-04)
 

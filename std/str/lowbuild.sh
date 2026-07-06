@@ -10,11 +10,13 @@
 #   3. KERNEL    — the machine-written inductions actually check, AND the
 #                  aggregate rep certs (lowered_str_copy/lowered_str_eq) check
 #   4. BYTETIE   — tools/bytetie re-encodes each cert's module literal at
-#                  restfs := Nil and diffs against the plan's MOD bytes
+#                  restfs := Nil and diffs against the plan's MOD bytes,
+#                  and the manifest's ARTIFACT lines bind name -> cert ->
+#                  pinned export index (tools/lowcheck/manifest.shard)
 #   5. ENGINE    — the artifact plan (binary + spec-semantics vectors)
 #                  replays under real V8
 # Exit 0 = a fully gated artifact set. Run from the repo root.
-set -eu
+set -euo pipefail
 SRC=std/str/str.lowsrc.shard
 OUT=std/str/str.wasm.shard
 REP=std/str/str.rep.shard
@@ -50,9 +52,10 @@ MOD=$(grep '^MOD stdstr ' "$TMP/plan.txt" | cut -d' ' -f3)
 TIEQ=$(grep '^TIE sc_eq ' "$TMP/tie.txt" | cut -d' ' -f3)
 MODQ=$(grep '^MOD stdstreq ' "$TMP/plan.txt" | cut -d' ' -f3)
 [ -n "$TIEQ" ] && [ "$TIEQ" = "$MODQ" ] && echo "BYTETIE OK"
+"$EVAL" run tools/lowcheck/manifest.shard "$TMP/plan.txt" models/wasm/wasm.shard "$OUT"
 
 echo "== gate 5: engine (V8 replay of the artifact plan)"
-command -v node >/dev/null || { echo "SKIPPED: no node"; exit 0; }
+command -v node >/dev/null || { echo "REFUSED: no node — the ENGINE gate cannot run"; exit 1; }
 node examples/wasm_diff.mjs "$TMP/plan.txt"
 
 echo "ARTIFACT OK: std/str wasm pieces — binary + manifest + certs, all five gates green"
