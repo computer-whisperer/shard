@@ -79,6 +79,7 @@
 (import "../../kernel/admit.shard")  ; ad_sccs — the call-graph SCC partition
 (import "../../kernel/checker.shard")  ; check_sequent / build_induct_subgoal
 (import "../../kernel/reader.shard")  ; read_all / SExpr / RCtx / build_module_d
+(import "../../meta/format")  ; fmt — canonicalize the rendered sidecar
 
 ;; the explicit library surface this app consumes (STRICT-mode scoping).
 (use (:: kernel loader resolve_closure))
@@ -91,6 +92,7 @@
 (use (:: kernel loader write))
 (use (:: kernel loader write_file))
 (use (:: kernel loader exit))
+(use (:: meta format fmt))  ; sidecar canonicalizer (fmt_or_raw)
 (use (:: kernel reader SrcEntry))
 (use (:: kernel reader SExpr))
 (use (:: kernel reader SInt))
@@ -3299,6 +3301,18 @@
 (fn fail2 ((msg (List Int)) (w World)) World
   (exit 2 (write (append_int "error: " (append_int msg (nl))) w)))
 
+;; Canonicalize the machine-rendered sidecar before it hits disk: pipe it
+;; through meta/format's fmt so a regenerated FILE.auto.shard is byte-identical
+;; to what shardfmt would produce — the bin/rebuild.sh fmt gate then stays
+;; green across sidecar regens (the sidecar is MACHINE-OWNED, so there is no
+;; hand layout to preserve). fmt's re-parse gate is a safety net: on the
+;; unexpected None (render did not round-trip) we keep the raw bytes, never
+;; corrupting the sidecar.
+(fn fmt_or_raw ((bytes (List Int))) (List Int)
+  (match (fmt bytes)
+    ((Some out) out)
+    (None bytes)))
+
 ;; ---- the run -------------------------------------------------------------------
 ;; Solve `todo`, persist winners (merged over the kept existing entries),
 ;; report, exit. No write when nothing was solved.
@@ -3343,7 +3357,8 @@
                         (match
                           (write_file
                             (auto_path_of target)
-                            (render_sidecar (keep_entries existing solved) rs)
+                            (fmt_or_raw
+                              (render_sidecar (keep_entries existing solved) rs))
                             w)
                           ((Pair ok w1)
                            (if ok

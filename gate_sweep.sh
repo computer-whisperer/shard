@@ -66,6 +66,7 @@ TARGETS=(
   tools/bytetie/bytetie.shard
   meta/invoke/invoke.shard
   meta/plan/plan.shard
+  meta/format/mod.req.shard
   tools/lowbuild/lowbuild.shard
 )
 TMP=$(mktemp -d)
