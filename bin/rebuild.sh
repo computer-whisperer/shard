@@ -12,6 +12,30 @@ cd "$(dirname "$0")/.."
 RUST_EVAL=./rust_bootstrap/target/release/eval
 [ -x "$RUST_EVAL" ] || { echo "missing $RUST_EVAL (cargo build --release in rust_bootstrap/)"; exit 1; }
 
+# Refuse to build (and stamp) from non-canonical sources: the stamp hashes
+# raw bytes, so a later formatting-only pass over a stamp input would flip
+# the stamp without changing engine behavior, permanently flagging the fresh
+# binary STALE (seen 2026-07-06: post-rebuild shardfmt of codegen.shard).
+# shardfmt --check: exit 0 = already canonical, 1 = a reformat would change
+# bytes. Runs on the trusted interpreter like everything else here, in
+# parallel across the stamp inputs (~1-2 min wall; the worst single file is
+# ~1 min). rt.h is a stamp input too but not a .shard file; it has no
+# canonical form to drift from.
+stamp_inputs() {
+  ls kernel/*.shard | grep -v '\.low\.shard$'
+  echo tools/lower/lower.shard
+  echo tools/codegen/codegen.shard
+}
+echo "== fmt gate: stamp inputs canonical?"
+drift=$(stamp_inputs | xargs -P 8 -I{} sh -c \
+  '"$1" run tools/shardfmt/shardfmt.shard --check "{}" >/dev/null 2>&1 || echo "{}"' \
+  _ "$RUST_EVAL")
+if [ -n "$drift" ]; then
+  echo "REFUSE: stamp inputs are not shardfmt-canonical; format these first:" >&2
+  echo "$drift" >&2
+  exit 1
+fi
+
 build() {
   local src=$1 out=$2
   local low=$src.low.shard

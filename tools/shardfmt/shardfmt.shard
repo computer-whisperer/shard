@@ -28,8 +28,10 @@
 ;;;     `flat_w`, a width probe that decrements a budget and aborts negative —
 ;;;     no intermediate strings, no quadratic re-rendering.
 ;;;
-;;; RUN IT:   ./rust_bootstrap/target/release/eval run tools/shardfmt/shardfmt.shard FILE
-;;; (formatted source on stdout; exit 0 gate-passed, 2 bad input, 3 gate refusal)
+;;; RUN IT:   ./rust_bootstrap/target/release/eval run tools/shardfmt/shardfmt.shard [--check] FILE
+;;; (formatted source on stdout; exit 0 gate-passed, 2 bad input, 3 gate refusal;
+;;; with --check the write is identical but exit 0 = file already canonical,
+;;; exit 1 = a reformat would change bytes — the pre-stamp drift gate)
 ;;; CHECK IT: ./rust_bootstrap/target/release/eval run kernel/check.shard tools/shardfmt/shardfmt.shard
 
 (import "../../kernel/stdlib.shard")  ; List / Option / Bool / Pair
@@ -1584,33 +1586,51 @@
     (Nil b)
     ((Cons h t) (Cons h (cat t b)))))
 
+;; The shared run: read, fmt, write the formatted bytes, exit. In CHECK mode
+;; the write is identical but the exit code reports canonicality: 0 = the
+;; file already equals its formatted form, 1 = a reformat would change bytes.
+;; Both modes' 0-exits therefore have the SAME observable shape (one read,
+;; one write of exactly fmt's bytes), which is why fmt_main_contract holds
+;; over both without any change to the requirement: nonzero exits promise
+;; nothing, and check-mode's exit 0 is a special case of format-mode's.
+(fn run_fmt ((path (List Int)) (check Bool) (w World)) World
+  (match (read_file path w)
+    ((Pair r w2)
+     (match r
+       (None (exit 2 (write "shardfmt: cannot read file\n" w2)))
+       ((Some src)
+        (match (fmt src)
+          ((Some out)
+           (if check
+             (if (bytes_eq out src) (exit 0 (write out w2))
+             (exit 1 (write out w2)))
+             (exit 0 (write out w2))))
+          (None
+            (match (cst_read src)
+              (None
+                (exit
+                  2
+                  (write
+                    (cat "shardfmt: " (cat (parse_diag src Nil 1) "\n"))
+                    w2)))
+              (_
+                (exit
+                  3
+                  (write
+                    "shardfmt: reformat changed the parse; refusing to emit\n"
+                    w2)))))))))))
+
 (fn main ((w World)) World
   (match (get_args w)
     ((Pair aa w1)
      (match aa
-       (Nil (exit 2 (write "usage: shardfmt <file.shard>\n" w1)))
-       ((Cons path more)
-        (match (read_file path w1)
-          ((Pair r w2)
-           (match r
-             (None (exit 2 (write "shardfmt: cannot read file\n" w2)))
-             ((Some src)
-              (match (fmt src)
-                ((Some out) (exit 0 (write out w2)))
-                (None
-                  (match (cst_read src)
-                    (None
-                      (exit
-                        2
-                        (write
-                          (cat "shardfmt: " (cat (parse_diag src Nil 1) "\n"))
-                          w2)))
-                    (_
-                      (exit
-                        3
-                        (write
-                          "shardfmt: reformat changed the parse; refusing to emit\n"
-                          w2)))))))))))))))
+       (Nil (exit 2 (write "usage: shardfmt [--check] <file.shard>\n" w1)))
+       ((Cons a0 more)
+        (if (bytes_eq a0 "--check")
+          (match more
+            (Nil (exit 2 (write "usage: shardfmt [--check] <file.shard>\n" w1)))
+            ((Cons path more2) (run_fmt path True w1)))
+          (run_fmt a0 False w1)))))))
 
 ;; ===========================================================================
 ;; DISCHARGE — the fulfills, smallest first.
@@ -1684,7 +1704,10 @@
 ;; R-RUN — symbolic execution of main: case the four effects in program order,
 ;; thread each observable down to the fresh world through the bolts, then run
 ;; fmt_run_ok on the resulting ground traces. Error leaves never look past the
-;; nonzero exit code; the success leaf ends in bytes_eq out out.
+;; nonzero exit code; each 0-exit leaf ends in bytes_eq out out. The --check
+;; dispatch adds one Bool split: the format branch is the historical body;
+;; the check branch re-runs it with the extra canonicality split, whose
+;; nonzero (needs-reformat) leg is an error leaf like any other.
 (fulfills fmt_main_contract
   (steps
     ((unfold main lhs) (unfold main lhs) (unfold main lhs))
@@ -1702,29 +1725,24 @@
                    (compute lhs))
                   refl))
               (case Cons
-                (path more)
+                (a0 more)
                 (steps
                   ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
-                  (case-on (read_file path w1) Pair
-                    ((case Pair
-                       (r w2)
+                  (case-on (bytes_eq a0 "--check") Bool
+                    ((case False
                        (steps
-                         ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
-                         (case-on r Option
-                           ((case None
-                              (steps
-                                ((rewrite (hyp 0) lr lhs true ())
-                                 (reduce lhs)
-                                 (rewrite (lemma exit_code) lr lhs true ())
-                                 (compute lhs))
-                                refl))
-                            (case Some
-                              (src)
+                         ((rewrite (hyp 0) lr lhs true ())
+                          (reduce lhs)
+                          (unfold run_fmt lhs)
+                          (unfold run_fmt lhs)
+                          (unfold run_fmt lhs))
+                         (case-on (read_file a0 w1) Pair
+                           ((case Pair
+                              (r w2)
                               (steps
                                 ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
-                                (case-on (fmt src) Option
-                                  ((case Some
-                                     (out)
+                                (case-on r Option
+                                  ((case None
                                      (steps
                                        ((rewrite (hyp 0) lr lhs true ())
                                         (reduce lhs)
@@ -1734,135 +1752,226 @@
                                           lhs
                                           true
                                           ())
-                                        (rewrite
-                                          (lemma exit_reads)
-                                          lr
-                                          lhs
-                                          true
-                                          ())
-                                        (rewrite
-                                          (lemma exit_output)
-                                          lr
-                                          lhs
-                                          true
-                                          ())
-                                        (rewrite
-                                          (lemma write_reads)
-                                          lr
-                                          lhs
-                                          true
-                                          ())
-                                        (rewrite
-                                          (lemma write_output)
-                                          lr
-                                          lhs
-                                          true
-                                          ()))
-                                       (rewrite-with
-                                         (lemma read_reads)
-                                         lr
-                                         lhs
-                                         ((inst p path)
-                                          (inst w w1)
-                                          (inst r r)
-                                          (inst w1 w2))
-                                         ((steps
-                                            ((rewrite (hyp 2) lr lhs true ()))
-                                            refl))
-                                         (rewrite-with
-                                           (lemma read_output)
-                                           lr
-                                           lhs
-                                           ((inst p path)
-                                            (inst w w1)
-                                            (inst r r)
-                                            (inst w1 w2))
-                                           ((steps
-                                              ((rewrite (hyp 2) lr lhs true ()))
-                                              refl))
-                                           (rewrite-with
-                                             (lemma args_reads)
-                                             lr
-                                             lhs
-                                             ((inst w w)
-                                              (inst aa aa)
-                                              (inst w1 w1))
-                                             ((steps
-                                                ((rewrite
-                                                   (hyp 4)
-                                                   lr
-                                                   lhs
-                                                   true
-                                                   ()))
-                                                refl))
-                                             (rewrite-with
-                                               (lemma args_output)
-                                               lr
-                                               lhs
-                                               ((inst w w)
-                                                (inst aa aa)
-                                                (inst w1 w1))
-                                               ((steps
-                                                  ((rewrite
-                                                     (hyp 4)
-                                                     lr
-                                                     lhs
-                                                     true
-                                                     ()))
-                                                  refl))
-                                               (steps
-                                                 ((rewrite
-                                                    (premise 0)
-                                                    lr
-                                                    lhs
-                                                    true
-                                                    ())
-                                                  (rewrite
-                                                    (premise 1)
-                                                    lr
-                                                    lhs
-                                                    true
-                                                    ())
-                                                  (rewrite
-                                                    (hyp 1)
-                                                    lr
-                                                    lhs
-                                                    true
-                                                    ())
-                                                  (rewrite
-                                                    (lemma append_nil_left)
-                                                    lr
-                                                    lhs
-                                                    true
-                                                    ())
-                                                  (unfold fmt_run_ok lhs)
-                                                  (reduce lhs)
-                                                  (rewrite
-                                                    (lemma int_eq_refl)
-                                                    lr
-                                                    lhs
-                                                    true
-                                                    ())
-                                                  (reduce lhs)
-                                                  (rewrite
-                                                    (hyp 0)
-                                                    lr
-                                                    lhs
-                                                    true
-                                                    ())
-                                                  (reduce lhs)
-                                                  (rewrite
-                                                    (lemma bytes_eq_refl)
-                                                    lr
-                                                    lhs
-                                                    true
-                                                    ()))
-                                                 refl)))))))
-                                   (case None
+                                        (compute lhs))
+                                       refl))
+                                   (case Some
+                                     (src)
                                      (steps
                                        ((rewrite (hyp 0) lr lhs true ())
                                         (reduce lhs))
-                                       (case-on (cst_read src) Option
+                                       (case-on (fmt src) Option
+                                         ((case Some
+                                            (out)
+                                            (steps
+                                              ((rewrite (hyp 0) lr lhs true ())
+                                               (reduce lhs)
+                                               (rewrite
+                                                 (lemma exit_code)
+                                                 lr
+                                                 lhs
+                                                 true
+                                                 ())
+                                               (rewrite
+                                                 (lemma exit_reads)
+                                                 lr
+                                                 lhs
+                                                 true
+                                                 ())
+                                               (rewrite
+                                                 (lemma exit_output)
+                                                 lr
+                                                 lhs
+                                                 true
+                                                 ())
+                                               (rewrite
+                                                 (lemma write_reads)
+                                                 lr
+                                                 lhs
+                                                 true
+                                                 ())
+                                               (rewrite
+                                                 (lemma write_output)
+                                                 lr
+                                                 lhs
+                                                 true
+                                                 ()))
+                                              (rewrite-with
+                                                (lemma read_reads)
+                                                lr
+                                                lhs
+                                                ((inst p a0)
+                                                 (inst w w1)
+                                                 (inst r r)
+                                                 (inst w1 w2))
+                                                ((steps
+                                                   ((rewrite
+                                                      (hyp 2)
+                                                      lr
+                                                      lhs
+                                                      true
+                                                      ()))
+                                                   refl))
+                                                (rewrite-with
+                                                  (lemma read_output)
+                                                  lr
+                                                  lhs
+                                                  ((inst p a0)
+                                                   (inst w w1)
+                                                   (inst r r)
+                                                   (inst w1 w2))
+                                                  ((steps
+                                                     ((rewrite
+                                                        (hyp 2)
+                                                        lr
+                                                        lhs
+                                                        true
+                                                        ()))
+                                                     refl))
+                                                  (rewrite-with
+                                                    (lemma args_reads)
+                                                    lr
+                                                    lhs
+                                                    ((inst w w)
+                                                     (inst aa aa)
+                                                     (inst w1 w1))
+                                                    ((steps
+                                                       ((rewrite
+                                                          (hyp 5)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ()))
+                                                       refl))
+                                                    (rewrite-with
+                                                      (lemma args_output)
+                                                      lr
+                                                      lhs
+                                                      ((inst w w)
+                                                       (inst aa aa)
+                                                       (inst w1 w1))
+                                                      ((steps
+                                                         ((rewrite
+                                                            (hyp 5)
+                                                            lr
+                                                            lhs
+                                                            true
+                                                            ()))
+                                                         refl))
+                                                      (steps
+                                                        ((rewrite
+                                                           (premise 0)
+                                                           lr
+                                                           lhs
+                                                           true
+                                                           ())
+                                                         (rewrite
+                                                           (premise 1)
+                                                           lr
+                                                           lhs
+                                                           true
+                                                           ())
+                                                         (rewrite
+                                                           (hyp 1)
+                                                           lr
+                                                           lhs
+                                                           true
+                                                           ())
+                                                         (rewrite
+                                                           (lemma
+                                                             append_nil_left)
+                                                           lr
+                                                           lhs
+                                                           true
+                                                           ())
+                                                         (unfold fmt_run_ok lhs)
+                                                         (reduce lhs)
+                                                         (rewrite
+                                                           (lemma int_eq_refl)
+                                                           lr
+                                                           lhs
+                                                           true
+                                                           ())
+                                                         (reduce lhs)
+                                                         (rewrite
+                                                           (hyp 0)
+                                                           lr
+                                                           lhs
+                                                           true
+                                                           ())
+                                                         (reduce lhs)
+                                                         (rewrite
+                                                           (lemma bytes_eq_refl)
+                                                           lr
+                                                           lhs
+                                                           true
+                                                           ()))
+                                                        refl)))))))
+                                          (case None
+                                            (steps
+                                              ((rewrite (hyp 0) lr lhs true ())
+                                               (reduce lhs))
+                                              (case-on (cst_read src) Option
+                                                ((case None
+                                                   (steps
+                                                     ((rewrite
+                                                        (hyp 0)
+                                                        lr
+                                                        lhs
+                                                        true
+                                                        ())
+                                                      (reduce lhs)
+                                                      (rewrite
+                                                        (lemma exit_code)
+                                                        lr
+                                                        lhs
+                                                        true
+                                                        ())
+                                                      (compute lhs))
+                                                     refl))
+                                                 (case Some
+                                                   (ns2)
+                                                   (steps
+                                                     ((rewrite
+                                                        (hyp 0)
+                                                        lr
+                                                        lhs
+                                                        true
+                                                        ())
+                                                      (reduce lhs)
+                                                      (rewrite
+                                                        (lemma exit_code)
+                                                        lr
+                                                        lhs
+                                                        true
+                                                        ())
+                                                      (compute lhs))
+                                                     refl))))))))))))))))))
+                     (case True
+                       (steps
+                         ((rewrite (hyp 0) lr lhs true ()) (reduce lhs))
+                         (case-on more List
+                           ((case Nil
+                              (steps
+                                ((rewrite (hyp 0) lr lhs true ())
+                                 (reduce lhs)
+                                 (rewrite (lemma exit_code) lr lhs true ())
+                                 (compute lhs))
+                                refl))
+                            (case Cons
+                              (path more2)
+                              (steps
+                                ((rewrite (hyp 0) lr lhs true ())
+                                 (reduce lhs)
+                                 (unfold run_fmt lhs)
+                                 (unfold run_fmt lhs)
+                                 (unfold run_fmt lhs))
+                                (case-on (read_file path w1) Pair
+                                  ((case Pair
+                                     (r w2)
+                                     (steps
+                                       ((rewrite (hyp 0) lr lhs true ())
+                                        (reduce lhs))
+                                       (case-on r Option
                                          ((case None
                                             (steps
                                               ((rewrite (hyp 0) lr lhs true ())
@@ -1876,15 +1985,248 @@
                                                (compute lhs))
                                               refl))
                                           (case Some
-                                            (ns2)
+                                            (src)
                                             (steps
                                               ((rewrite (hyp 0) lr lhs true ())
-                                               (reduce lhs)
-                                               (rewrite
-                                                 (lemma exit_code)
-                                                 lr
-                                                 lhs
-                                                 true
-                                                 ())
-                                               (compute lhs))
-                                              refl))))))))))))))))))))))))))
+                                               (reduce lhs))
+                                              (case-on (fmt src) Option
+                                                ((case Some
+                                                   (out)
+                                                   (steps
+                                                     ((rewrite
+                                                        (hyp 0)
+                                                        lr
+                                                        lhs
+                                                        true
+                                                        ())
+                                                      (reduce lhs))
+                                                     (case-on (bytes_eq out src)
+                                                       Bool
+                                                       ((case True
+                                                          (steps
+                                                            ((rewrite
+                                                               (hyp 0)
+                                                               lr
+                                                               lhs
+                                                               true
+                                                               ())
+                                                             (reduce lhs)
+                                                             (rewrite
+                                                               (lemma exit_code)
+                                                               lr
+                                                               lhs
+                                                               true
+                                                               ())
+                                                             (rewrite
+                                                               (lemma exit_reads)
+                                                               lr
+                                                               lhs
+                                                               true
+                                                               ())
+                                                             (rewrite
+                                                               (lemma
+                                                                 exit_output)
+                                                               lr
+                                                               lhs
+                                                               true
+                                                               ())
+                                                             (rewrite
+                                                               (lemma
+                                                                 write_reads)
+                                                               lr
+                                                               lhs
+                                                               true
+                                                               ())
+                                                             (rewrite
+                                                               (lemma
+                                                                 write_output)
+                                                               lr
+                                                               lhs
+                                                               true
+                                                               ()))
+                                                            (rewrite-with
+                                                              (lemma read_reads)
+                                                              lr
+                                                              lhs
+                                                              ((inst p path)
+                                                               (inst w w1)
+                                                               (inst r r)
+                                                               (inst w1 w2))
+                                                              ((steps
+                                                                 ((rewrite
+                                                                    (hyp 3)
+                                                                    lr
+                                                                    lhs
+                                                                    true
+                                                                    ()))
+                                                                 refl))
+                                                              (rewrite-with
+                                                                (lemma
+                                                                  read_output)
+                                                                lr
+                                                                lhs
+                                                                ((inst p path)
+                                                                 (inst w w1)
+                                                                 (inst r r)
+                                                                 (inst w1 w2))
+                                                                ((steps
+                                                                   ((rewrite
+                                                                      (hyp 3)
+                                                                      lr
+                                                                      lhs
+                                                                      true
+                                                                      ()))
+                                                                   refl))
+                                                                (rewrite-with
+                                                                  (lemma
+                                                                    args_reads)
+                                                                  lr
+                                                                  lhs
+                                                                  ((inst w w)
+                                                                   (inst aa aa)
+                                                                   (inst w1 w1))
+                                                                  ((steps
+                                                                     ((rewrite
+                                                                        (hyp 7)
+                                                                        lr
+                                                                        lhs
+                                                                        true
+                                                                        ()))
+                                                                     refl))
+                                                                  (rewrite-with
+                                                                    (lemma
+                                                                      args_output)
+                                                                    lr
+                                                                    lhs
+                                                                    ((inst w w)
+                                                                     (inst aa aa)
+                                                                     (inst w1 w1))
+                                                                    ((steps
+                                                                       ((rewrite
+                                                                          (hyp 7)
+                                                                          lr
+                                                                          lhs
+                                                                          true
+                                                                          ()))
+                                                                       refl))
+                                                                    (steps
+                                                                      ((rewrite
+                                                                         (premise
+                                                                           0)
+                                                                         lr
+                                                                         lhs
+                                                                         true
+                                                                         ())
+                                                                       (rewrite
+                                                                         (premise
+                                                                           1)
+                                                                         lr
+                                                                         lhs
+                                                                         true
+                                                                         ())
+                                                                       (rewrite
+                                                                         (hyp 2)
+                                                                         lr
+                                                                         lhs
+                                                                         true
+                                                                         ())
+                                                                       (rewrite
+                                                                         (lemma
+                                                                           append_nil_left)
+                                                                         lr
+                                                                         lhs
+                                                                         true
+                                                                         ())
+                                                                       (unfold
+                                                                         fmt_run_ok
+                                                                         lhs)
+                                                                       (reduce
+                                                                         lhs)
+                                                                       (rewrite
+                                                                         (lemma
+                                                                           int_eq_refl)
+                                                                         lr
+                                                                         lhs
+                                                                         true
+                                                                         ())
+                                                                       (reduce
+                                                                         lhs)
+                                                                       (rewrite
+                                                                         (hyp 1)
+                                                                         lr
+                                                                         lhs
+                                                                         true
+                                                                         ())
+                                                                       (reduce
+                                                                         lhs)
+                                                                       (rewrite
+                                                                         (lemma
+                                                                           bytes_eq_refl)
+                                                                         lr
+                                                                         lhs
+                                                                         true
+                                                                         ()))
+                                                                      refl)))))))
+                                                        (case False
+                                                          (steps
+                                                            ((rewrite
+                                                               (hyp 0)
+                                                               lr
+                                                               lhs
+                                                               true
+                                                               ())
+                                                             (reduce lhs)
+                                                             (rewrite
+                                                               (lemma exit_code)
+                                                               lr
+                                                               lhs
+                                                               true
+                                                               ())
+                                                             (compute lhs))
+                                                            refl))))))
+                                                 (case None
+                                                   (steps
+                                                     ((rewrite
+                                                        (hyp 0)
+                                                        lr
+                                                        lhs
+                                                        true
+                                                        ())
+                                                      (reduce lhs))
+                                                     (case-on (cst_read src)
+                                                       Option
+                                                       ((case None
+                                                          (steps
+                                                            ((rewrite
+                                                               (hyp 0)
+                                                               lr
+                                                               lhs
+                                                               true
+                                                               ())
+                                                             (reduce lhs)
+                                                             (rewrite
+                                                               (lemma exit_code)
+                                                               lr
+                                                               lhs
+                                                               true
+                                                               ())
+                                                             (compute lhs))
+                                                            refl))
+                                                        (case Some
+                                                          (ns2)
+                                                          (steps
+                                                            ((rewrite
+                                                               (hyp 0)
+                                                               lr
+                                                               lhs
+                                                               true
+                                                               ())
+                                                             (reduce lhs)
+                                                             (rewrite
+                                                               (lemma exit_code)
+                                                               lr
+                                                               lhs
+                                                               true
+                                                               ())
+                                                             (compute lhs))
+                                                            refl))))))))))))))))))))))))))))))))))
