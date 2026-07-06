@@ -1298,8 +1298,9 @@
 ;;   (fn NAME ((m Mem) (a1 Int) … (an Int) (k Nat)) Int
 ;;     (match k (Z ar) ((S k2) (if (int_eq (mem_get m ar) 0) ar
 ;;                               (NAME m U1 … Un k2)))))
-;; v1: the condition reads AT the returned accum against literal 0
-;; (I32Eqz); Ur = (+ ar 1), every other accum static. The S case is a
+;; The condition reads AT the returned accum against a BYTE literal —
+;; 0 tests via I32Eqz, nonzero via I32Const + BEq (same b2i residue);
+;; Ur = (+ ar 1), every other accum static. The S case is a
 ;; CASE-ON the condition (the hand wasm_rev structure): True arm = exit
 ;; (the case hyp collapses the machine flag AND the spec's if — no
 ;; wraps, no IH); False arm = the standard iteration + IH. The budget
@@ -1546,13 +1547,14 @@
 ;; per-accum update classification for the Int-return shape
 (type LUpd (LUStr LStr) (LUSum Int))
 
-;; LIOk = the sum shape; LCOk = the SCAN shape (conditional early exit:
-;; strides have r = LSInc, everything else static); LBOk = the FLAG shape
-;; (two-read comparison, Z arm literal 1, mismatch exit literal 0 — the
-;; two read accums a b advance, everything else static)
+;; LIOk = the sum shape; LCOk = the SCAN shape (conditional early exit
+;; against a byte literal: strides have r = LSInc, everything else
+;; static; carries the literal); LBOk = the FLAG shape (two-read
+;; comparison, Z arm literal 1, mismatch exit literal 0 — the two read
+;; accums a b advance, everything else static)
 (type LIRec
   (LIOk (List LStr) Int Int)
-  (LCOk (List LStr) Int)
+  (LCOk (List LStr) Int Int)
   (LBOk (List LStr) Int Int)
   (LIErr (List Int)))
 
@@ -1689,8 +1691,9 @@
        (LIErr "S arm must be a tail self-call")))
     (_ (LIErr "S arm must be a tail self-call"))))
 
-;; the scan condition: (int_eq (mem_get m ACCUM-r) 0) — v1 zero test only
-(fn lc_cond ((cnd Expr) (n Int) (r Int)) Bool
+;; the scan condition: (int_eq (mem_get m ACCUM-r) LIT) — returns the
+;; literal (range-checked at lc_sarm)
+(fn lc_cond ((cnd Expr) (n Int) (r Int)) (Option Int)
   (match cnd
     ((Call q as)
      (if (core_named q (quote int_eq))
@@ -1698,25 +1701,23 @@
          ((Cons rd (Cons z Nil))
           (match z
             ((IntLit zz)
-             (if (int_eq zz 0)
-               (match rd
-                 ((Call qm ms)
-                  (if (memq_named qm (quote mem_get))
-                    (match ms
-                      ((Cons marg (Cons aarg Nil))
-                       (if (lp_is_mem_arg marg n)
-                         (match (lp_acc aarg n)
-                           ((Some i) (int_eq i r))
-                           (None False))
-                         False))
-                      (_ False))
-                    False))
-                 (_ False))
-               False))
-            (_ False)))
-         (_ False))
-       False))
-    (_ False)))
+             (match rd
+               ((Call qm ms)
+                (if (memq_named qm (quote mem_get))
+                  (match ms
+                    ((Cons marg (Cons aarg Nil))
+                     (if (lp_is_mem_arg marg n)
+                       (match (lp_acc aarg n)
+                         ((Some i) (if (int_eq i r) (Some zz) None))
+                         (None None))
+                       None))
+                    (_ None))
+                  None))
+               (_ None)))
+            (_ None)))
+         (_ None))
+       None))
+    (_ None)))
 
 ;; scan strides: r must be (+ r 1), every other accum static (statics'
 ;; exit locals stay closed forms; anything else would need its own twin)
@@ -1736,39 +1737,48 @@
        (lc_strides_ok t r (+ i 1))
        False))))
 
-;; the SCAN S arm: (if (int_eq (mem_get m ar) 0) ar SELF-CALL)
+;; the SCAN S arm: (if (int_eq (mem_get m ar) LIT) ar SELF-CALL)
 (fn lc_sarm ((cnd Expr) (thn Expr) (els Expr) (q QName) (n Int) (r Int)) LIRec
-  (if (lc_cond cnd n r)
-    (match thn
-      ((BVar tb)
-       (if (int_eq tb (- (+ n 1) r))
-         (match els
-           ((Call q2 args)
-            (if (qn_eq q2 q)
-              (match args
-                ((Cons marg rest)
-                 (if (lp_is_mem_arg marg n)
-                   (match (lp_updk rest n 0)
-                     (None
+  (match (lc_cond cnd n r)
+    (None
+      (LIErr
+        "scan condition must be (int_eq (mem_get m RET-ACCUM) LITERAL) (the test reads at the returned accum)"))
+    ((Some zz)
+     (if (le 0 zz)
+       (if (lt zz 256)
+         (match thn
+           ((BVar tb)
+            (if (int_eq tb (- (+ n 1) r))
+              (match els
+                ((Call q2 args)
+                 (if (qn_eq q2 q)
+                   (match args
+                     ((Cons marg rest)
+                      (if (lp_is_mem_arg marg n)
+                        (match (lp_updk rest n 0)
+                          (None
+                            (LIErr
+                              "scan self-call updates must be ACCUM or (+ ACCUM 1), ending in the peeled counter"))
+                          ((Some ss)
+                           (if (lc_strides_ok ss r 0) (LCOk ss r zz)
+                           (LIErr
+                             "scan v1: the returned accum must be (+ ACC 1) and every other accum static"))))
+                        (LIErr
+                          "scan loop must pass the Mem param through unchanged")))
+                     (Nil
                        (LIErr
-                         "scan self-call updates must be ACCUM or (+ ACCUM 1), ending in the peeled counter"))
-                     ((Some ss)
-                      (if (lc_strides_ok ss r 0) (LCOk ss r)
-                      (LIErr
-                        "scan v1: the returned accum must be (+ ACC 1) and every other accum static"))))
-                   (LIErr "scan loop must pass the Mem param through unchanged")))
-                (Nil
-                  (LIErr
-                    "self-call must carry the Mem param, the updates, and the counter")))
-              (LIErr "scan else-branch must be a tail self-call")))
-           (_ (LIErr "scan else-branch must be a tail self-call")))
+                         "self-call must carry the Mem param, the updates, and the counter")))
+                   (LIErr "scan else-branch must be a tail self-call")))
+                (_ (LIErr "scan else-branch must be a tail self-call")))
+              (LIErr
+                "scan then-branch must be the RETURNED accumulator (the Z arm's)")))
+           (_
+             (LIErr
+               "scan then-branch must be the RETURNED accumulator (the Z arm's)")))
          (LIErr
-           "scan then-branch must be the RETURNED accumulator (the Z arm's)")))
-      (_
-        (LIErr
-          "scan then-branch must be the RETURNED accumulator (the Z arm's)")))
-    (LIErr
-      "scan condition must be (int_eq (mem_get m RET-ACCUM) 0) (v1: zero test at the returned accum)")))
+           "scan literal must be a byte (0..255) — reads are bytes, a larger literal never matches"))
+       (LIErr
+         "scan literal must be a byte (0..255) — reads are bytes, a larger literal never matches")))))
 
 ;; ---- the FLAG shape recognition (bytes_eq; probe: beqloop_probe) -------------
 
@@ -1998,26 +2008,35 @@
         (lp_lset n)
         (DStr "(Br 0)")))))
 
-;; SCAN codegen: budget guard / load + zero-test exit / r += 1 / k -= 1 /
-;; re-enter (16 instrs, statics add nothing)
-(fn lc_code ((n Int) (r Int)) (List Doc)
-  (list
-    (lp_lget n)
-    (DStr "(I32Eqz)")
-    (DStr "(BrIf 1)")
-    (lp_lget r)
-    (DStr "(I32Load8U)")
-    (DStr "(I32Eqz)")
-    (DStr "(BrIf 1)")
-    (lp_lget r)
-    (lp_const 1)
-    (DStr "(I32Bin BAdd)")
-    (lp_lset r)
-    (lp_lget n)
-    (lp_const 1)
-    (DStr "(I32Bin BSub)")
-    (lp_lset n)
-    (DStr "(Br 0)")))
+;; SCAN codegen: budget guard / load + literal-test exit / r += 1 /
+;; k -= 1 / re-enter. The zero literal keeps the one-instr I32Eqz test
+;; (16 instrs); a nonzero literal pays I32Const + BEq (17 instrs) —
+;; both leave (b2i (int_eq BYTE LIT)) as the machine flag residue.
+(fn lc_test ((z Int)) (List Doc)
+  (if (int_eq z 0) (list (DStr "(I32Eqz)"))
+  (list (lp_const z) (DStr "(I32Bin BEq)"))))
+
+(fn lc_code ((n Int) (r Int) (z Int)) (List Doc)
+  (dapp
+    (list
+      (lp_lget n)
+      (DStr "(I32Eqz)")
+      (DStr "(BrIf 1)")
+      (lp_lget r)
+      (DStr "(I32Load8U)"))
+    (dapp
+      (lc_test z)
+      (list
+        (DStr "(BrIf 1)")
+        (lp_lget r)
+        (lp_const 1)
+        (DStr "(I32Bin BAdd)")
+        (lp_lset r)
+        (lp_lget n)
+        (lp_const 1)
+        (DStr "(I32Bin BSub)")
+        (lp_lset n)
+        (DStr "(Br 0)")))))
 
 ;; FLAG codegen: budget guard / two loads + BEq into the flag local /
 ;; exit if flag=0 / advances / k -= 1 / re-enter (instrs = 17 + 4*nAdv;
@@ -2757,7 +2776,7 @@
 ;; the machine-generated COUNTER TWIN: the budget local's exit value —
 ;; the first fn the emitter writes with real recursion (spec-side only;
 ;; gate 3 checks it like any article)
-(fn lc_twin ((nm Doc) (mids (List Type)) (r Int)) Doc
+(fn lc_twin ((nm Doc) (mids (List Type)) (r Int) (z Int)) Doc
   (dconc
     (list
       (DStr "(fn ")
@@ -2767,7 +2786,9 @@
       (DStr
         "(k Nat)) Int (measure (struct k)) (match k (Z 0) ((S k2) (if (int_eq (mem_get m x")
       (dint r)
-      (DStr ") 0) (int_of_nat (S k2)) (")
+      (DStr ") ")
+      (dint z)
+      (DStr ") (int_of_nat (S k2)) (")
       nm
       (DStr "_kf m")
       (lc_targs mids r 0)
@@ -2796,7 +2817,7 @@
       (DStr
         "(chain (steps ((unfold lg_fuel lhs) (reduce lhs) (unfold eval_loop lhs) (rewrite (lemma int_of_nat_succ) lr lhs true ()) (compute lhs (stop eval_loop lg_fuel)))) (rewrite-with (lemma lg_ne) lr lhs () ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))) (steps ((compute lhs (stop eval_loop lg_fuel)) (rewrite (premise 0) lr lhs true ()) (compute lhs (stop eval_loop lg_fuel)))) (rewrite-with (lemma lg_a1_ms) lr lhs ((inst c k2)) ((steps ((rewrite (premise 1) lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl) (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))) (steps ((compute lhs (stop eval_loop lg_fuel)) (rewrite (hyp 0) lr lhs true ()) (compute lhs (stop eval_loop lg_fuel)))) "))))
 
-(fn lc_worker ((nm Doc) (mids (List Type)) (n Int) (r Int) (p Int)) Doc
+(fn lc_worker ((nm Doc) (mids (List Type)) (n Int) (r Int) (z Int) (p Int)) Doc
   (dconc
     (list
       (DStr "(claim lgw_")
@@ -2821,7 +2842,9 @@
       (DStr
         ") m0)))) (induct k ((case Z (steps ((rewrite (lemma int_of_nat_zero) lr lhs true ()) (compute both)) refl)) (case S (k2) (case-on (int_eq (mem_get m0 x")
       (dint r)
-      (DStr ") 0) Bool ((case True ")
+      (DStr ") ")
+      (dint z)
+      (DStr ") Bool ((case True ")
       (lc_arm_head r)
       (DStr "(steps ((unfold ")
       nm
@@ -2866,13 +2889,13 @@
         ") lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((rewrite (premise 1) lr lhs true ())) refl))) (steps ((compute both))) refl))")
       (DStr (nl)))))
 
-(fn lc_unit ((nm Doc) (mids (List Type)) (n Int) (r Int) (p Int)) Doc
+(fn lc_unit ((nm Doc) (mids (List Type)) (n Int) (r Int) (z Int) (p Int)) Doc
   (dconc
     (list
       (DStr "(fn ")
       nm
       (DStr "_body () (List Instr) (list ")
-      (djoin (lc_code n r))
+      (djoin (lc_code n r z))
       (DStr "))")
       (DStr (nl))
       (DStr "(fn ")
@@ -2885,8 +2908,8 @@
       (dint r)
       (DStr "))))")
       (DStr (nl))
-      (lc_twin nm mids r)
-      (lc_worker nm mids n r p)
+      (lc_twin nm mids r z)
+      (lc_worker nm mids n r z p)
       (lc_thm nm mids n r (+ p 4)))))
 
 ;; ---- the FLAG shape (two-region comparison; probe: beqloop_probe) ------------
@@ -3220,9 +3243,15 @@
                      (if (is_int_ty rty)
                        (match (li_recognize q n body)
                          ((LIErr m) (cerr_at q m))
-                         ((LCOk adv r)
+                         ((LCOk adv r z)
                           (COk
-                            (lc_unit (dsym (qn_name q)) mids n r 20)
+                            (lc_unit
+                              (dsym (qn_name q))
+                              mids
+                              n
+                              r
+                              z
+                              (if (int_eq z 0) 20 21))
                             (DStr "")))
                          ((LBOk adv a b)
                           (match (lp_first_inc adv 0)

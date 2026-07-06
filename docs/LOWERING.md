@@ -809,6 +809,17 @@ twin) passed on the first generation attempt; five gates green, V8
   non-returned accums (each non-closed-form local costs one more twin),
   accumulating scans.
 
+  UPDATE 2026-07-05: the literal WIDENED to any byte — nonzero tests
+  emit `I32Const z` + `I32Bin BEq` (17 instrs, worker S^21/theorem
+  S^25), zero keeps the one-instr `I32Eqz` encoding so existing outputs
+  stay byte-identical. Both leave the same `(b2i (int_eq BYTE LIT))`
+  machine residue, so the case-on template is UNTOUCHED — pure
+  condition-vocabulary widening, the §6v precedent (no probe needed;
+  `lp_find`, the memchr shape, proved first generation). Literals
+  outside [0,256) refuse loudly (reads are bytes — a larger literal is
+  a vacuous artifact). Conditions at non-returned accums fell with the
+  §6aa flag shape; still fenced here: accumulating scans.
+
 With §6k/§6l/§6m the loop fragment now covers: fill/copy/stamp-style
 stores, byte checksums, in-place reverse, and bounded scans — every
 piece machine-written end to end, every extension landed with zero
@@ -1443,10 +1454,11 @@ arcs draw from.
    condition-relative DISEQUALITY premises staged by §6j were needed by
    none of them — every slice kept machine and spec on identical
    spellings instead. Two-read conditions + twins at non-returned
-   accums LANDED 2026-07-05 (§6aa, the FLAG shape — bytes_eq). Still
-   open: stride ≠ 1, calls-in-loops (structural form), nonzero scan
-   literals, general literal arm values for flag loops (1/0 are pinned
-   by the BEq-bit encoding), write-then-read inside LOOP iterations.
+   accums LANDED 2026-07-05 (§6aa, the FLAG shape — bytes_eq); nonzero
+   scan literals LANDED 2026-07-05 (§6m update — memchr). Still open:
+   stride ≠ 1, calls-in-loops (structural form), general literal arm
+   values for flag loops (1/0 are pinned by the BEq-bit encoding),
+   write-then-read inside LOOP iterations.
 
 ## 8. The model-authoring contract — what a target ISA model provides
 
