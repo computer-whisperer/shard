@@ -113,6 +113,7 @@ TARGETS=(
   examples/wasm_copy.shard
   examples/lowered_form.shard
   examples/w64_probe.shard
+  examples/x86_pieces.shard
   examples/rep_probe.shard
   examples/lowfrag_probe.shard
   examples/divfrag_probe.shard

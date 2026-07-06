@@ -1,0 +1,452 @@
+;;; models/x86/x86.shard — the x86_64 ISA model (docs/X86.md; Probe A).
+;;;
+;;; An ordinary shard library, mirroring models/wasm/wasm.shard's operational
+;;; discipline (fuel-indexed big-step, named SCC members, Out outcomes, the
+;;; call_fn denotation boundary) while speaking x86_64: a register machine
+;;; with two-operand destructive ops, not a stack machine. The abstraction
+;;; ledger this file instantiates is docs/X86.md §3-§5; the §8/LOWERING §8
+;;; contract items are called out inline.
+;;;
+;;; Shape decisions (X86.md, pinned here):
+;;;   - Values are bare Int in [0, 2^64), wrapped by euclidean mod at every
+;;;     arithmetic write (`wrap64`). Same reasons as wasm's wrap32: the
+;;;     interpreter must REDUCE in consumer proofs.
+;;;   - The REGISTER FILE IS GLOBAL MACHINE STATE, threaded through calls
+;;;     like the silicon's: XCall runs the callee on the caller's registers
+;;;     (args already in their SysV homes by the caller's own moves) and the
+;;;     caller continues with whatever the callee left. There are NO frames
+;;;     in the model. The SysV caller-/callee-saved discipline is NOT a
+;;;     model mechanism — it lives in CERTS as register preservation
+;;;     equations (the register analog of the framed arbitrary-m0 memory
+;;;     schema), arriving with the x86 call-composition arc.
+;;;   - NO rsp, anywhere: the control stack is private (X86.md §3.3 — the
+;;;     model's structured XCall/XRet IS the call mechanism; return
+;;;     addresses do not exist as values). The register file has 15 GPRs.
+;;;     When the data-stack convention arrives (§4.3) its stack pointer
+;;;     enters as one of these ordinary registers.
+;;;   - NO FLAGS: comparisons fuse into structured conditions (Cond on
+;;;     XBrIf) — the encoder emits cmp+jcc from the fused form. Compound-op
+;;;     exceptions (div's quot+rem pair, widening mul, adc) enter as ops
+;;;     when consumers arrive.
+;;;   - The operand position is a DATATYPE (Src / Addr) so addressing modes
+;;;     arrive as new arms, not a grammar rework; v1 arms: register and
+;;;     immediate sources, register-indirect addresses.
+;;;   - Structured control mirrors wasm's proven Block/Loop/Br-depth shape
+;;;     (XBlock/XLoop/XBr/XBrIf): reducible control is a permanent
+;;;     abstraction; the flattening encoder owns labels and jumps.
+;;;   - Memory is std/mem's OPAQUE substrate, byte ops only in v1
+;;;     (X86.md §5: wide loads/stores are a named growth path). Bounds are
+;;;     byte-precise and model-side against the module's static memsize.
+;;;   - Nat fuel, structural, burns on EVERY SCC entry; None = fuel out
+;;;     exclusively; XTrap = dynamic failure (invalid code). Fuel is a
+;;;     DEPTH bound: loop re-entry at exactly fuel-1 (the §6f IH law).
+
+(import "../../kernel/stdlib.shard")  ; List / Option / Bool / Pair
+(import "../../std/mem")  ; the opaque byte substrate (Mem / mem_get / mem_set)
+(use (:: std mem *))
+
+;; local list length (transparent; std/list is opaque in check mode)
+(fn xlen ((xs (List Int))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons h t) (+ 1 (xlen t)))))
+
+;; ground fuel from an Int count — run/differential ergonomics
+(fn xfnat_go ((n Int) (acc Nat)) Nat
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt n 1) acc (xfnat_go (- n 1) (S acc))))
+
+(fn xfnat ((n Int)) Nat (xfnat_go n Z))
+
+;; --- wrap to i64: euclidean mod, so negatives land in [0, 2^64) too ----------
+
+(fn wrap64 ((x Int)) Int (mod x 18446744073709551616))
+
+;; in-range wrap is the identity — wrap32_id (models/wasm) transplanted to
+;; modulus 2^64 (validated against both engines in examples/w64_probe.shard):
+;; div-facts names the quotient q, rational farkas pins q to (-1,1) with the
+;; modulus as a coefficient, fin-split supplies the integrality.
+(claim wrap64_id
+  (goal ((x Int)) ((= (le 0 x) True) (= (lt x 18446744073709551616) True))
+    (= (mod x 18446744073709551616) x))
+  (div-facts
+    x
+    18446744073709551616
+    q
+    (have qlo (= (le -1 q) True)
+      (by arith (list 18446744073709551616 1 0 -1 0 1 0))
+      (have qhi (= (le q 1) True)
+        (by arith (list 18446744073709551616 0 1 1 1 0 0))
+        (fin-split
+          q
+          (premise qlo)
+          (premise qhi)
+          ((case -1
+             (by
+               arith
+               (list (list 0 1 0 -1 0 1 0 0 0) (list 0 1 0 -1 0 1 0 0 0))))
+           (case 0
+             (by
+               arith
+               (list (list 1 0 0 1 0 0 0 0 0) (list 1 0 0 -1 0 0 0 0 0))))
+           (case 1
+             (by arith (list (list 0 0 1 1 1 0 0 0 0) (list 0 0 1 1 1 0 0 0 0))))))))))
+
+;; --- the register file --------------------------------------------------------
+
+;; 15 GPRs in x86_64 encoding order, MINUS rsp (number 4): the control stack
+;; is the encoder's, not the model's. Record fields give FIELD_of/with_FIELD
+;; get/set that collapse by compute on any concrete register file — and
+;; instructions always name registers by ground ctor, so machine states in
+;; piece proofs stay computable.
+(record
+  Regs
+  (rax Int)
+  (rcx Int)
+  (rdx Int)
+  (rbx Int)
+  (rbp Int)
+  (rsi Int)
+  (rdi Int)
+  (r8 Int)
+  (r9 Int)
+  (r10 Int)
+  (r11 Int)
+  (r12 Int)
+  (r13 Int)
+  (r14 Int)
+  (r15 Int))
+
+(fn xregs0 () Regs (MkRegs 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))
+
+;; register names as instruction operands
+(type Reg
+  (RAX)
+  (RCX)
+  (RDX)
+  (RBX)
+  (RBP)
+  (RSI)
+  (RDI)
+  (R8)
+  (R9)
+  (R10)
+  (R11)
+  (R12)
+  (R13)
+  (R14)
+  (R15))
+
+(fn rget ((rs Regs) (r Reg)) Int
+  (match r
+    (RAX (rax_of rs))
+    (RCX (rcx_of rs))
+    (RDX (rdx_of rs))
+    (RBX (rbx_of rs))
+    (RBP (rbp_of rs))
+    (RSI (rsi_of rs))
+    (RDI (rdi_of rs))
+    (R8 (r8_of rs))
+    (R9 (r9_of rs))
+    (R10 (r10_of rs))
+    (R11 (r11_of rs))
+    (R12 (r12_of rs))
+    (R13 (r13_of rs))
+    (R14 (r14_of rs))
+    (R15 (r15_of rs))))
+
+(fn rset ((rs Regs) (r Reg) (v Int)) Regs
+  (match r
+    (RAX (with_rax v rs))
+    (RCX (with_rcx v rs))
+    (RDX (with_rdx v rs))
+    (RBX (with_rbx v rs))
+    (RBP (with_rbp v rs))
+    (RSI (with_rsi v rs))
+    (RDI (with_rdi v rs))
+    (R8 (with_r8 v rs))
+    (R9 (with_r9 v rs))
+    (R10 (with_r10 v rs))
+    (R11 (with_r11 v rs))
+    (R12 (with_r12 v rs))
+    (R13 (with_r13 v rs))
+    (R14 (with_r14 v rs))
+    (R15 (with_r15 v rs))))
+
+;; --- operands, conditions, operators ------------------------------------------
+
+;; source operand: register or immediate (the immediate wraps like wasm's
+;; I32Const). The datatype IS the addressing-mode growth point.
+(type Src (SReg Reg) (SImm Int))
+
+;; address operand: register-indirect only in v1; [base + scale*index + disp]
+;; arrives as new arms.
+(type Addr (AReg Reg))
+
+;; fused comparison conditions (no FLAGS): what jcc sees, structured.
+;; v1: zero tests — the loop-guard vocabulary; relational conditions arrive
+;; with the if fragment.
+(type Cond (CEqz Reg) (CNz Reg))
+
+;; two-operand binary ops: dst = dst OP src. Arithmetic wraps; the bitwise
+;; trio is closed on [0, 2^64) (kernel/facts recurrences). Division waits
+;; for a consumer (x86 div is a compound rdx:rax op — X86.md §5).
+(type XBop (XAdd) (XSub) (XMul) (XAnd) (XOr) (XXor))
+
+(fn xbop_val ((o XBop) (a Int) (b Int)) Int
+  (match o
+    (XAdd (wrap64 (+ a b)))
+    (XSub (wrap64 (- a b)))
+    (XMul (wrap64 (* a b)))
+    (XAnd (band a b))
+    (XOr (bor a b))
+    (XXor (bxor a b))))
+
+(fn xsrc ((rs Regs) (s Src)) Int
+  (match s
+    ((SReg r) (rget rs r))
+    ((SImm v) (wrap64 v))))
+
+(fn xaddr ((rs Regs) (a Addr)) Int
+  (match a
+    ((AReg r) (rget rs r))))
+
+(fn xcond ((rs Regs) (c Cond)) Bool
+  (match c
+    ((CEqz r) (int_eq (rget rs r) 0))
+    ((CNz r) (if (int_eq (rget rs r) 0) False True))))
+
+;; --- the instruction set (x86_64 fragment, probe-sized) ------------------------
+
+(type XInstr
+  (XMovRI Reg Int)
+  (XMovRR Reg Reg)
+  (XBin XBop Reg Src)
+  (XLoad8 Reg Addr)
+  (XStore8 Addr Src)
+  (XBlock (List XInstr))
+  (XLoop (List XInstr))
+  (XBr Int)
+  (XBrIf Cond Int)
+  (XCall Int)
+  (XRet))
+
+;; A function: SysV parameter count (<= 6 in v1 — the seventh argument needs
+;; the data stack) and a body. The result is rax at completion; there is no
+;; result-arity machinery.
+(record XFunc (xparams Int) (xbody (List XInstr)))
+
+;; A module: functions addressed by index, plus static memory size in bytes.
+(record XModule (xfuncs (List XFunc)) (xmemsize Int))
+
+(fn xfunc_at ((fs (List XFunc)) (i Int)) (Option XFunc)
+  (measure (struct fs))
+  (match fs
+    (Nil None)
+    ((Cons f t) (if (int_eq i 0) (Some f) (xfunc_at t (- i 1))))))
+
+;; --- evaluation outcomes -------------------------------------------------------
+
+;; Normal completion carries registers and memory forward; XBrk is an
+;; in-flight branch unwinding d labels; XRetO an in-flight return (registers
+;; ride along — rax is the result and the callee-saved regs are what the
+;; clobber-discipline certs speak about); XTrap is dynamic failure.
+(type XOut (XNorm Regs Mem) (XBrk Int Regs Mem) (XRetO Regs Mem) (XTrap))
+
+;; exiting a block: a depth-0 branch becomes normal completion after it
+(fn xblock_exit ((out XOut)) XOut
+  (match out
+    ((XNorm rs mem) (XNorm rs mem))
+    ((XBrk d rs mem) (if (int_eq d 0) (XNorm rs mem) (XBrk (- d 1) rs mem)))
+    ((XRetO rs mem) (XRetO rs mem))
+    (XTrap XTrap)))
+
+;; --- the interpreter (one fuel-countdown SCC) ----------------------------------
+
+;; Same discipline as the wasm SCC: every entry burns one fuel unit; None =
+;; fuel exhausted, exclusively; fuel is a depth bound (eval_seq hands the
+;; same f2 to head and tail; a loop costs one unit per re-entry).
+
+(fn xeval_instr ((fuel Nat) (m XModule) (i XInstr) (rs Regs) (mem Mem))
+  (Option XOut)
+  (measure (struct fuel))
+  (match fuel
+    (Z None)
+    ((S f2)
+     (match i
+       ((XMovRI r v) (Some (XNorm (rset rs r (wrap64 v)) mem)))
+       ((XMovRR d s) (Some (XNorm (rset rs d (rget rs s)) mem)))
+       ((XBin o d s)
+        (Some (XNorm (rset rs d (xbop_val o (rget rs d) (xsrc rs s))) mem)))
+       ((XLoad8 d a)
+        (let ((p (xaddr rs a)))
+          (if (le 0 p)
+            (if (le (+ p 1) (xmemsize_of m))
+              (Some (XNorm (rset rs d (mem_get mem p)) mem))
+              (Some XTrap))
+            (Some XTrap))))
+       ((XStore8 a s)
+        (let ((p (xaddr rs a)))
+          (if (le 0 p)
+            (if (le (+ p 1) (xmemsize_of m))
+              (Some (XNorm rs (mem_set mem p (xsrc rs s))))
+              (Some XTrap))
+            (Some XTrap))))
+       ((XBlock body)
+        (match (xeval_seq f2 m body rs mem)
+          (None None)
+          ((Some out) (Some (xblock_exit out)))))
+       ((XLoop body) (xeval_loop f2 m body rs mem))
+       ((XBr d) (Some (XBrk d rs mem)))
+       ((XBrIf c d)
+        (if (xcond rs c) (Some (XBrk d rs mem)) (Some (XNorm rs mem))))
+       ((XCall k) (xeval_call f2 m k rs mem))
+       (XRet (Some (XRetO rs mem)))))))
+
+;; the call engine — a NAMED SCC member (composed proofs stop here and cite
+;; the callee's cert). No frame construction: the callee runs on the
+;; caller's register file (args already in their SysV homes) and the caller
+;; continues with the callee's final registers — the silicon's semantics.
+;; Preservation of callee-saved registers is the CALLEE CERT's business.
+(fn xeval_call ((fuel Nat) (m XModule) (k Int) (rs Regs) (mem Mem))
+  (Option XOut)
+  (measure (struct fuel))
+  (match fuel
+    (Z None)
+    ((S f2)
+     (match (xfunc_at (xfuncs_of m) k)
+       (None (Some XTrap))
+       ((Some f)
+        (match (xeval_seq f2 m (xbody_of f) rs mem)
+          (None None)
+          ((Some out)
+           (match out
+             ((XNorm rs2 mem2) (Some (XNorm rs2 mem2)))
+             ((XRetO rs2 mem2) (Some (XNorm rs2 mem2)))
+             ((XBrk d rs2 mem2) (Some XTrap))
+             (XTrap (Some XTrap))))))))))
+
+;; the loop engine — a NAMED SCC member: loop-body induction recurses on
+;; exactly this unit; a depth-0 branch RE-ENTERS at fuel-1 (the IH law).
+(fn xeval_loop ((fuel Nat) (m XModule) (body (List XInstr)) (rs Regs) (mem Mem))
+  (Option XOut)
+  (measure (struct fuel))
+  (match fuel
+    (Z None)
+    ((S f2)
+     (match (xeval_seq f2 m body rs mem)
+       (None None)
+       ((Some out)
+        (match out
+          ((XNorm rs2 mem2) (Some (XNorm rs2 mem2)))
+          ((XBrk d rs2 mem2)
+           (if (int_eq d 0) (xeval_loop f2 m body rs2 mem2)
+           (Some (XBrk (- d 1) rs2 mem2))))
+          ((XRetO rs2 mem2) (Some (XRetO rs2 mem2)))
+          (XTrap (Some XTrap))))))))
+
+(fn xeval_seq ((fuel Nat) (m XModule) (is (List XInstr)) (rs Regs) (mem Mem))
+  (Option XOut)
+  (measure (struct fuel))
+  (match fuel
+    (Z None)
+    ((S f2)
+     (match is
+       (Nil (Some (XNorm rs mem)))
+       ((Cons i rest)
+        (match (xeval_instr f2 m i rs mem)
+          (None None)
+          ((Some out)
+           (match out
+             ((XNorm rs2 mem2) (xeval_seq f2 m rest rs2 mem2))
+             ((XBrk d rs2 mem2) (Some (XBrk d rs2 mem2)))
+             ((XRetO rs2 mem2) (Some (XRetO rs2 mem2)))
+             (XTrap (Some XTrap))))))))))
+
+;; --- the big-step denotation (the composition boundary) ------------------------
+
+;; SysV argument homes: rdi rsi rdx rcx r8 r9, remaining registers zero.
+;; None = more than six arguments (the data-stack convention's business).
+(fn xargs ((args (List Int))) (Option Regs)
+  (match args
+    (Nil (Some (xregs0)))
+    ((Cons a0 t0)
+     (match t0
+       (Nil (Some (with_rdi a0 (xregs0))))
+       ((Cons a1 t1)
+        (match t1
+          (Nil (Some (with_rsi a1 (with_rdi a0 (xregs0)))))
+          ((Cons a2 t2)
+           (match t2
+             (Nil (Some (with_rdx a2 (with_rsi a1 (with_rdi a0 (xregs0))))))
+             ((Cons a3 t3)
+              (match t3
+                (Nil
+                  (Some
+                    (with_rcx
+                      a3
+                      (with_rdx a2 (with_rsi a1 (with_rdi a0 (xregs0)))))))
+                ((Cons a4 t4)
+                 (match t4
+                   (Nil
+                     (Some
+                       (with_r8
+                         a4
+                         (with_rcx
+                           a3
+                           (with_rdx a2 (with_rsi a1 (with_rdi a0 (xregs0))))))))
+                   ((Cons a5 t5)
+                    (match t5
+                      (Nil
+                        (Some
+                          (with_r9
+                            a5
+                            (with_r8
+                              a4
+                              (with_rcx
+                                a3
+                                (with_rdx
+                                  a2
+                                  (with_rsi a1 (with_rdi a0 (xregs0)))))))))
+                      ((Cons a6 t6) None)))))))))))))))
+
+;; Run function k of module m on a given register file and memory; the
+;; result is (rax, final memory). This regs-general entry is what the
+;; framed-register cert schema will quantify over when the call arc lands;
+;; the SysV denotations below are its zero-initialized instances.
+(fn xrun_fn ((fuel Nat) (m XModule) (k Int) (rs Regs) (mem Mem))
+  (Option (Pair Int Mem))
+  (match (xfunc_at (xfuncs_of m) k)
+    (None None)
+    ((Some f)
+     (match (xeval_seq fuel m (xbody_of f) rs mem)
+       (None None)
+       ((Some out)
+        (match out
+          ((XNorm rs2 mem2) (Some (Pair (rax_of rs2) mem2)))
+          ((XRetO rs2 mem2) (Some (Pair (rax_of rs2) mem2)))
+          ((XBrk d rs2 mem2) None)
+          (XTrap None)))))))
+
+;; the piece-theorem boundary: args in PARAMETER order into their SysV
+;; homes, everything else zero, memory a parameter, memory returned —
+;; the call_fn_mem analog. (A memoryless call_fn analog is just this at
+;; mem_empty; pieces state against the mem form.)
+(fn xcall_fn_mem ((fuel Nat) (m XModule) (k Int) (args (List Int)) (mem0 Mem))
+  (Option (Pair Int Mem))
+  (match (xfunc_at (xfuncs_of m) k)
+    (None None)
+    ((Some f)
+     (if (int_eq (xlen args) (xparams_of f))
+       (match (xargs args)
+         (None None)
+         ((Some rs) (xrun_fn fuel m k rs mem0)))
+       None))))
+
+(fn xcall_fn ((fuel Nat) (m XModule) (k Int) (args (List Int))) (Option Int)
+  (match (xcall_fn_mem fuel m k args (mem_empty))
+    (None None)
+    ((Some p)
+     (match p
+       ((Pair v mem) (Some v))))))
