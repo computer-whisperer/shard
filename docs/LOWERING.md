@@ -1327,6 +1327,89 @@ substrate no longer blocks it. Also behind the fence: bitwise in
 conditions (cond operands stay params/aliases/literals) and bitwise in
 mem/loop bodies (same op-classing, unprobed).
 
+### 6aa. The FLAG shape — bytes_eq / two-region comparison loops (2026-07-05)
+
+The loop fragment grows its fourth Int-return template, and two §7.7
+residue items fall at once: conditions that compare TWO reads, and
+twins for NON-RETURNED advancing accumulators. The shape:
+
+    (fn NAME ((m Mem) (a1 Int) … (an Int) (k Nat)) Int
+      (match k
+        (Z 1)
+        ((S k2) (if (int_eq (mem_get m aA) (mem_get m aB))
+                  (NAME m U1 … Un k2)
+                  0))))
+
+— walk two regions in lockstep, exit 0 at the first mismatch, return 1
+on budget exhaustion (bytes_eq/memcmp). Probe
+`examples/beqloop_probe.shard` (worker + theorem hand-played by rule,
+first check; rides wasm_diff_run's check closure); mechanization in
+lowergen (`lb_*`), `lp_beq` in the source set, all machine proofs FIRST
+GENERATION; five gates green, V8 replays equal/mismatch-first/
+mismatch-last/zero-budget/self-compare vectors.
+
+Template deltas over the §6m scan:
+
+- **Two-read condition.** The exit test is `I32Bin BEq` over two loads;
+  `bop_val BEq`'s residue `(b2i (int_eq a b))` collapses under the case
+  hyp exactly like scan's `I32Eqz`. Each read discharges the standard
+  address-guard pair, so both accums carry nonneg+range premises
+  (nonnegs first, param order) and the read stages fire in CODE order
+  (`lp_stage` at A's indices, then B's — re-firing handles A = B).
+- **The flag result local.** The source returns LITERAL 1 or 0, so no
+  accum local carries the result. The machine materializes it in an
+  extra local at index n+1: `I32Const 1, LocalSet` BEFORE the loop
+  (locals zero-init and a zero-iteration call must read 1), then set to
+  the BEq bit each iteration; the mismatch exit is the flag's `I32Eqz`.
+  Its exit value IS the spec fn — scan's returned-accum mechanism, no
+  twin. The pre-loop init costs the theorem +2 fuel over scan's +4 (one
+  per instruction in the eval_seq spine); the worker formula
+  S^(instrs+4) is unchanged. CONSEQUENCE of the encoding: the arm
+  literals are PINNED to 1/0 — the flag holds the comparison bit, so a
+  source spelling `(Z 7)` refuses. General literal arm values would
+  need per-exit-path epilogues; do it when an op wants it.
+- **Twins for every advancing accum.** On an early exit NO accum is a
+  closed form of the inputs: the emitter writes one spec twin per
+  advancing accum (`NAME_t<i>`, exit arm returns the accum's OLD value)
+  plus the §6m counter twin (`NAME_kf`, exit arm keeps the
+  undecremented count) — machine-written recursive fns, gate-3-checked
+  like any article. The worker's exit locals read
+  `(t0 … kf spec-call)`.
+
+v1 fences: the two read accums stride +1, every other accum static;
+condition operands are exactly the two reads (no literal leg — that
+stays the §6m scan; no read-vs-arith); Z arm literal 1, else arm
+literal 0. Refusals are loud for all of them.
+
+**The std/str consumer (the slice's point).** std/bytes' surface grew
+`bytes_eq ((a (List Int)) (b (List Int))) Bool` — pointwise byte-list
+equality as an opaque sig + four defining-equation requirements
+(`bytes_eq_nil`/`bytes_eq_nil_cons`/`bytes_eq_cons_nil`/
+`bytes_eq_cons`, the bytes_ok pattern; fulfills auto). On top of it
+std/str ships `sc_eq` (str.lowsrc → GENERATED lowered_sc_eq in
+str.wasm.shard) and str.rep.shard states the aggregate pair:
+
+- `sc_eq_read` — the memcmp theorem: `sc_eq m s d k =
+  (if (bytes_eq (mem_read k m s) (mem_read k m d)) 1 0)`. PREMISE-FREE:
+  read-only means no frame commute and no disjointness — the two
+  windows may overlap arbitrarily (compare §6q/§6r, where every write
+  slice paid frame lemmas). Both sides case on the same head-byte
+  test; mem_read_s/bytes_eq_cons open the readbacks under the case
+  hyp; the IH closes the True arm.
+- `lowered_str_eq` — the EQUALITY MODULE CONTRACT: rep premises for
+  st's bytes at x0 AND su's bytes at x1, and the shipped artifact
+  returns `(if (bytes_eq st-bytes su-bytes) 1 0)`. The ONE budget n
+  across both rep premises pins the strings to equal length — the
+  honest precondition of a fixed-budget comparison. Proof = cite
+  generated lowered_sc_eq + sc_eq_read + both rep premises; zero new
+  machine reasoning (the §6r citation discipline, third instance).
+
+mod.build ships the piece as its own module ("stdstreq" — leaf certs
+pin slot 0, so one artifact per module), byte-tied by gate 4's second
+TIE/MOD pair. str.wasm.shard and lowergen_loop_out.shard both stayed
+pure appends; the three sibling fragment outputs regenerated
+byte-identical under the emitter rework before the source sets grew.
+
 ## 7. Open questions — triaged at ratification (2026-07-04)
 
 None of these block the ratified form; they are the backlog the next
@@ -1359,9 +1442,11 @@ arcs draw from.
    write-then-read bodies (§6n) LANDED 2026-07-04. Notably, the
    condition-relative DISEQUALITY premises staged by §6j were needed by
    none of them — every slice kept machine and spec on identical
-   spellings instead. Still open: stride ≠ 1, calls-in-loops
-   (structural form), nonzero scan literals, twins for non-returned
-   data-dependent accums, write-then-read inside LOOP iterations.
+   spellings instead. Two-read conditions + twins at non-returned
+   accums LANDED 2026-07-05 (§6aa, the FLAG shape — bytes_eq). Still
+   open: stride ≠ 1, calls-in-loops (structural form), nonzero scan
+   literals, general literal arm values for flag loops (1/0 are pinned
+   by the BEq-bit encoding), write-then-read inside LOOP iterations.
 
 ## 8. The model-authoring contract — what a target ISA model provides
 

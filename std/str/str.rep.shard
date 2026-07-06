@@ -20,10 +20,23 @@
 ;;;      readback at x1 BE the string's bytes. One linear disjointness
 ;;;      premise (x0 + n <= x1). Cites lowered_sc_copy (generated) +
 ;;;      sc_copy_read + the rep premise; zero new machine reasoning.
+;;;   4. sc_eq_read — the memcmp theorem over sc_eq (the FLAG-shape
+;;;      comparison): the machine's spec twin IS the byte-list equality
+;;;      decider — sc_eq m s d k = (if (bytes_eq (mem_read k m s)
+;;;      (mem_read k m d)) 1 0). Premise-free (read-only: no frames, no
+;;;      disjointness); both sides case on the same head-byte test.
+;;;   5. lowered_str_eq — the EQUALITY MODULE CONTRACT: two rep premises
+;;;      (st's bytes at x0, su's bytes at x1 — regions may overlap
+;;;      freely), and the shipped comparison artifact returns
+;;;      (if (bytes_eq st-bytes su-bytes) 1 0). Cites lowered_sc_eq
+;;;      (generated) + sc_eq_read + both rep premises.
 ;;;
 ;;; The budget n is a Nat binder pinned BY the rep premise: mem_read n
 ;;; returns exactly n bytes, so the equation with the string's byte list
 ;;; forces int_of_nat n = str_len st — no separate length premise needed.
+;;; (In lowered_str_eq the ONE n across both rep premises additionally
+;;; pins the two strings to EQUAL length — the honest precondition of a
+;;; fixed-budget byte comparison.)
 ;;;
 ;;; NOT loaded as part of the std/str module; consumers import this file
 ;;; by path (the mem.wasm.shard convention).
@@ -240,4 +253,140 @@
       ()
       ((steps ((rewrite (premise 5) lr lhs true ())) refl)))
     (steps ((rewrite (premise 0) lr lhs true ())))
+    refl))
+
+;; --- THE MEMCMP THEOREM: the flag result decides readback equality ---------------
+;; Read-only, so premise-free: no frame commute, no disjointness — the
+;; two windows may overlap arbitrarily. Both sides case on the same
+;; (int_eq head-byte head-byte) scrutinee (the §6p spelling-alignment
+;; discipline extended to TWO readbacks).
+
+(claim sc_eq_read
+  (goal ((m Mem) (s Int) (d Int) (k Nat)) ()
+    (= (sc_eq m s d k) (if (bytes_eq (mem_read k m s) (mem_read k m d)) 1 0)))
+  (induct k
+    ((case Z
+       (steps
+         ((rewrite (lemma mem_read_z) lr rhs true ())
+          (rewrite (lemma bytes_eq_nil) lr rhs true ())
+          (compute both))
+         refl))
+     (case S
+       (k2)
+       (case-on (int_eq (mem_get m s) (mem_get m d)) Bool
+         ((case True
+            (steps
+              ((unfold sc_eq lhs)
+               (reduce lhs)
+               (rewrite (hyp 0) lr lhs true ())
+               (reduce lhs)
+               (rewrite (lemma mem_read_s) lr rhs true ())
+               (rewrite (lemma bytes_eq_cons) lr rhs true ())
+               (rewrite (hyp 0) lr rhs true ())
+               (reduce rhs)
+               (rewrite (hyp 1) lr lhs true ()))
+              refl))
+          (case False
+            (steps
+              ((unfold sc_eq lhs)
+               (reduce lhs)
+               (rewrite (hyp 0) lr lhs true ())
+               (reduce lhs)
+               (rewrite (lemma mem_read_s) lr rhs true ())
+               (rewrite (lemma bytes_eq_cons) lr rhs true ())
+               (rewrite (hyp 0) lr rhs true ())
+               (reduce rhs))
+              refl))))))))
+
+;; --- the machine body: byte-identical local copy of the generated sc_eq body -----
+
+(fn se_body () (List Instr)
+  (list
+    (LocalGet 2)
+    (I32Eqz)
+    (BrIf 1)
+    (LocalGet 0)
+    (I32Load8U)
+    (LocalGet 1)
+    (I32Load8U)
+    (I32Bin BEq)
+    (LocalSet 3)
+    (LocalGet 3)
+    (I32Eqz)
+    (BrIf 1)
+    (LocalGet 0)
+    (I32Const 1)
+    (I32Bin BAdd)
+    (LocalSet 0)
+    (LocalGet 1)
+    (I32Const 1)
+    (I32Bin BAdd)
+    (LocalSet 1)
+    (LocalGet 2)
+    (I32Const 1)
+    (I32Bin BSub)
+    (LocalSet 2)
+    (Br 0)))
+
+;; --- THE EQUALITY MODULE CONTRACT: the artifact decides string equality ----------
+;; Rep premise per region (overlap allowed); the shared budget n pins the
+;; strings to equal length. lowered_sc_eq cited as generated.
+
+(claim lowered_str_eq
+  (goal
+    ((st Str)
+     (su Str)
+     (x0 Int)
+     (x1 Int)
+     (m0 Mem)
+     (c Nat)
+     (n Nat)
+     (restfs (List Func)))
+    ((= (mem_read n m0 x0) (list_of_bytes (bytes_of st)))
+     (= (mem_read n m0 x1) (list_of_bytes (bytes_of su)))
+     (= (le 0 x0) True)
+     (= (le 0 x1) True)
+     (= (le (+ x0 (int_of_nat n)) 65536) True)
+     (= (le (+ x1 (int_of_nat n)) 65536) True))
+    (=
+      (call_fn_mem
+        (S^ 35 (lg_fuel n c))
+        (MkWModule
+          (Cons
+            (MkFunc
+              3
+              1
+              (list
+                (I32Const 1)
+                (LocalSet 3)
+                (Block (list (Loop (inline se_body))))
+                (LocalGet 3)))
+            restfs)
+          65536)
+        0
+        (list x0 x1 (int_of_nat n))
+        m0)
+      (Some
+        (Pair
+          (if
+            (bytes_eq
+              (list_of_bytes (bytes_of st))
+              (list_of_bytes (bytes_of su)))
+            1
+            0)
+          m0))))
+  (chain
+    (rewrite-with
+      (lemma lowered_sc_eq)
+      lr
+      lhs
+      ((inst k n))
+      ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+       (steps ((rewrite (premise 3) lr lhs true ())) refl)
+       (steps ((rewrite (premise 4) lr lhs true ())) refl)
+       (steps ((rewrite (premise 5) lr lhs true ())) refl)))
+    (rewrite-with (lemma sc_eq_read) lr lhs () ())
+    (steps
+      ((rewrite (premise 0) lr lhs true ())
+       (rewrite (premise 1) lr lhs true ())))
     refl))

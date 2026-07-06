@@ -8,8 +8,8 @@
 #                  committed one (producer determinism)
 #   2. SCHEMA    — tools/lowcheck structurally validates every cert
 #   3. KERNEL    — the machine-written inductions actually check, AND the
-#                  aggregate rep certs (lowered_str_copy) check
-#   4. BYTETIE   — tools/bytetie re-encodes the cert's module literal at
+#                  aggregate rep certs (lowered_str_copy/lowered_str_eq) check
+#   4. BYTETIE   — tools/bytetie re-encodes each cert's module literal at
 #                  restfs := Nil and diffs against the plan's MOD bytes
 #   5. ENGINE    — the artifact plan (binary + spec-semantics vectors)
 #                  replays under real V8
@@ -41,12 +41,15 @@ grep -q " 0 failed" "$TMP/kv.txt"
 "${CHECK[@]}" "$REP" 2>&1 | tail -1 | tee "$TMP/kr.txt"
 grep -q " 0 failed" "$TMP/kr.txt"
 
-echo "== gate 4: byte tie (cert module literal re-encodes to the shipped bytes)"
+echo "== gate 4: byte tie (cert module literals re-encode to the shipped bytes)"
 "$EVAL" run tools/lowbuild/lowbuild.shard "$BUILD" > "$TMP/plan.txt"
 "$EVAL" run tools/bytetie/bytetie.shard "$OUT" > "$TMP/tie.txt"
 TIE=$(grep '^TIE sc_copy ' "$TMP/tie.txt" | cut -d' ' -f3)
 MOD=$(grep '^MOD stdstr ' "$TMP/plan.txt" | cut -d' ' -f3)
-[ -n "$TIE" ] && [ "$TIE" = "$MOD" ] && echo "BYTETIE OK"
+[ -n "$TIE" ] && [ "$TIE" = "$MOD" ]
+TIEQ=$(grep '^TIE sc_eq ' "$TMP/tie.txt" | cut -d' ' -f3)
+MODQ=$(grep '^MOD stdstreq ' "$TMP/plan.txt" | cut -d' ' -f3)
+[ -n "$TIEQ" ] && [ "$TIEQ" = "$MODQ" ] && echo "BYTETIE OK"
 
 echo "== gate 5: engine (V8 replay of the artifact plan)"
 command -v node >/dev/null || { echo "SKIPPED: no node"; exit 0; }

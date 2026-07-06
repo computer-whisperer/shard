@@ -1308,6 +1308,20 @@
 ;; source and rides the worker's exit locals; the return accum's local
 ;; is the spec fn itself. int_of_nat rides into the twin's True arm, so
 ;; that arm opens it with int_of_nat_succ on the rhs (the opacity law).
+;;
+;; FLAG shape (probe: examples/beqloop_probe.shard) — Int-return
+;; two-region comparison (bytes_eq):
+;;   (fn NAME ((m Mem) (a1 Int) … (an Int) (k Nat)) Int
+;;     (match k (Z 1) ((S k2) (if (int_eq (mem_get m aA) (mem_get m aB))
+;;                               (NAME m U1 … Un k2) 0))))
+;; v1: the condition compares TWO reads (I32Bin BEq); the read accums
+;; advance (+ 1), every other accum static; the literals are PINNED 1/0
+;; (the machine's flag local holds the BEq bit — 1 on every budget
+;; exit, 0 on mismatch). The result rides an EXTRA LOCAL at index n+1,
+;; initialized to 1 before the loop (2 extra theorem fuel); its exit
+;; value is the spec fn. EVERY advancing accum needs a twin (NAME_t<i>)
+;; plus the counter twin (NAME_kf) — early exit leaves none of them a
+;; closed form.
 
 (fn qn_eq ((a QName) (b QName)) Bool
   (match a
@@ -1533,10 +1547,13 @@
 (type LUpd (LUStr LStr) (LUSum Int))
 
 ;; LIOk = the sum shape; LCOk = the SCAN shape (conditional early exit:
-;; strides have r = LSInc, everything else static)
+;; strides have r = LSInc, everything else static); LBOk = the FLAG shape
+;; (two-read comparison, Z arm literal 1, mismatch exit literal 0 — the
+;; two read accums a b advance, everything else static)
 (type LIRec
   (LIOk (List LStr) Int Int)
   (LCOk (List LStr) Int)
+  (LBOk (List LStr) Int Int)
   (LIErr (List Int)))
 
 ;; one update: static / +1 / -1 (via lp_upd) or the sum shape
@@ -1753,6 +1770,104 @@
     (LIErr
       "scan condition must be (int_eq (mem_get m RET-ACCUM) 0) (v1: zero test at the returned accum)")))
 
+;; ---- the FLAG shape recognition (bytes_eq; probe: beqloop_probe) -------------
+
+;; the flag-loop Z arm: (Z 1) — the all-equal literal (the machine's flag
+;; local reads 1 on every budget exit, so the literal is PINNED)
+(fn lb_zone ((pz Pat) (zb Expr)) Bool
+  (match pz
+    ((PCtor qz zps)
+     (match zps
+       (Nil
+         (if (core_named qz (quote Z))
+           (match zb
+             ((IntLit v) (int_eq v 1))
+             (_ False))
+           False))
+       ((Cons _ _) False)))
+    (_ False)))
+
+;; one condition operand: (mem_get m ACCUM)
+(fn lb_read ((e Expr) (n Int)) (Option Int)
+  (match e
+    ((Call qm ms)
+     (if (memq_named qm (quote mem_get))
+       (match ms
+         ((Cons marg (Cons aarg Nil))
+          (if (lp_is_mem_arg marg n) (lp_acc aarg n) None))
+         (_ None))
+       None))
+    (_ None)))
+
+;; the flag-loop condition: (int_eq (mem_get m A) (mem_get m B))
+(fn lb_cond ((cnd Expr) (n Int)) (Option (Pair Int Int))
+  (match cnd
+    ((Call q as)
+     (if (core_named q (quote int_eq))
+       (match as
+         ((Cons rd1 (Cons rd2 Nil))
+          (match (lb_read rd1 n)
+            ((Some a)
+             (match (lb_read rd2 n)
+               ((Some b) (Some (Pair a b)))
+               (None None)))
+            (None None)))
+         (_ None))
+       None))
+    (_ None)))
+
+;; flag-loop strides: the two read accums must be (+ ACC 1), every other
+;; accum static (non-read advancing accums would need their own twins)
+(fn lb_strides_ok ((ss (List LStr)) (a Int) (b Int) (i Int)) Bool
+  (measure (struct ss))
+  (match ss
+    (Nil True)
+    ((Cons h t)
+     (if
+       (if (if (int_eq i a) True (int_eq i b))
+         (match h
+           ((LSInc) True)
+           (_ False))
+         (match h
+           ((LSStat) True)
+           (_ False)))
+       (lb_strides_ok t a b (+ i 1))
+       False))))
+
+;; the FLAG S arm: (if (int_eq (mem_get m A) (mem_get m B)) SELF-CALL 0)
+(fn lb_sarm ((cnd Expr) (thn Expr) (els Expr) (q QName) (n Int)) LIRec
+  (match (lb_cond cnd n)
+    (None
+      (LIErr
+        "flag-loop condition must be (int_eq (mem_get m ACCUM) (mem_get m ACCUM))"))
+    ((Some (Pair a b))
+     (match els
+       ((IntLit z)
+        (if (int_eq z 0)
+          (match thn
+            ((Call q2 args)
+             (if (qn_eq q2 q)
+               (match args
+                 ((Cons marg rest)
+                  (if (lp_is_mem_arg marg n)
+                    (match (lp_updk rest n 0)
+                      (None
+                        (LIErr
+                          "flag-loop self-call updates must be ACCUM or (+ ACCUM 1), ending in the peeled counter"))
+                      ((Some ss)
+                       (if (lb_strides_ok ss a b 0) (LBOk ss a b)
+                       (LIErr
+                         "flag-loop v1: the two read accums must be (+ ACC 1) and every other accum static"))))
+                    (LIErr
+                      "flag-loop must pass the Mem param through unchanged")))
+                 (Nil
+                   (LIErr
+                     "self-call must carry the Mem param, the updates, and the counter")))
+               (LIErr "flag-loop then-branch must be a tail self-call")))
+            (_ (LIErr "flag-loop then-branch must be a tail self-call")))
+          (LIErr "flag-loop else-branch must be the literal 0")))
+       (_ (LIErr "flag-loop else-branch must be the literal 0"))))))
+
 (fn li_recognize ((q QName) (n Int) (body Expr)) LIRec
   (match body
     ((Match scr arms)
@@ -1763,8 +1878,16 @@
             ((Cons (Arm pz zb) (Cons (Arm ps sb) Nil))
              (match (li_zarm pz zb n)
                (None
-                 (LIErr
-                   "first match arm must be (Z ACCUM) (the returned accumulator)"))
+                 (if (lb_zone pz zb)
+                   (if (lp_spat ps)
+                     (match sb
+                       ((If cnd thn els) (lb_sarm cnd thn els q n))
+                       (_
+                         (LIErr
+                           "flag-loop S arm must be (if (int_eq READ READ) SELF-CALL 0)")))
+                     (LIErr "second match arm must be ((S k2) ...)"))
+                   (LIErr
+                     "first match arm must be (Z ACCUM) (the returned accumulator) or (Z 1) (the flag-loop form)")))
                ((Some r)
                 (if (lp_spat ps)
                   (match sb
@@ -1895,6 +2018,33 @@
     (DStr "(I32Bin BSub)")
     (lp_lset n)
     (DStr "(Br 0)")))
+
+;; FLAG codegen: budget guard / two loads + BEq into the flag local /
+;; exit if flag=0 / advances / k -= 1 / re-enter (instrs = 17 + 4*nAdv;
+;; the flag local sits at index n+1, past the counter)
+(fn lb_code ((n Int) (a Int) (b Int) (adv (List LStr))) (List Doc)
+  (dapp
+    (list
+      (lp_lget n)
+      (DStr "(I32Eqz)")
+      (DStr "(BrIf 1)")
+      (lp_lget a)
+      (DStr "(I32Load8U)")
+      (lp_lget b)
+      (DStr "(I32Load8U)")
+      (DStr "(I32Bin BEq)")
+      (lp_lset (+ n 1))
+      (lp_lget (+ n 1))
+      (DStr "(I32Eqz)")
+      (DStr "(BrIf 1)"))
+    (dapp
+      (lp_advcode adv 0)
+      (list
+        (lp_lget n)
+        (lp_const 1)
+        (DStr "(I32Bin BSub)")
+        (lp_lset n)
+        (DStr "(Br 0)")))))
 
 ;; ---- loop claim assembly ----------------------------------------------------------
 
@@ -2739,6 +2889,299 @@
       (lc_worker nm mids n r p)
       (lc_thm nm mids n r (+ p 4)))))
 
+;; ---- the FLAG shape (two-region comparison; probe: beqloop_probe) ------------
+;; bytes_eq: Z arm literal 1, S arm (if (int_eq READ READ) SELF-CALL 0).
+;; The machine materializes the result in an EXTRA LOCAL (index n+1):
+;; initialized to 1 BEFORE the loop, set to the BEq bit each iteration,
+;; exit-tested by I32Eqz — its exit value IS the spec fn (the literals
+;; are pinned 1/0 by this encoding). Every advancing accum gets a spec
+;; TWIN (nm_t<i>) for its exit local, plus the counter twin (nm_kf).
+
+;; the condition spelling ("m" in twins, "m0" in claims)
+(fn lb_cnd ((mv Doc) (a Int) (b Int)) Doc
+  (dconc
+    (list
+      (DStr "(int_eq (mem_get ")
+      mv
+      (DStr " x")
+      (dint a)
+      (DStr ") (mem_get ")
+      mv
+      (DStr " x")
+      (dint b)
+      (DStr "))"))))
+
+;; the twins' self-call args: advancing accums stepped, statics through
+(fn lb_targs ((ss (List LStr)) (i Int)) Doc
+  (measure (struct ss))
+  (match ss
+    (Nil (DStr ""))
+    ((Cons h t)
+     (DCat
+       (match h
+         ((LSInc) (dconc (list (DStr " (+ x") (dint i) (DStr " 1)"))))
+         (_ (dconc (list (DStr " x") (dint i)))))
+       (lb_targs t (+ i 1))))))
+
+;; accum i's twin: its local's exit value (exit arm returns the OLD value)
+(fn lb_twin
+  ((nm Doc) (mids (List Type)) (all (List LStr)) (a Int) (b Int) (i Int))
+  Doc
+  (dconc
+    (list
+      (DStr "(fn ")
+      nm
+      (DStr "_t")
+      (dint i)
+      (DStr " ((m Mem) ")
+      (pr_binds mids 0)
+      (DStr "(k Nat)) Int (measure (struct k)) (match k (Z x")
+      (dint i)
+      (DStr ") ((S k2) (if ")
+      (lb_cnd (DStr "m") a b)
+      (DStr " (")
+      nm
+      (DStr "_t")
+      (dint i)
+      (DStr " m")
+      (lb_targs all 0)
+      (DStr " k2) x")
+      (dint i)
+      (DStr "))))")
+      (DStr (nl)))))
+
+(fn lb_twins
+  ((nm Doc)
+   (mids (List Type))
+   (all (List LStr))
+   (ss (List LStr))
+   (a Int)
+   (b Int)
+   (i Int))
+  Doc
+  (measure (struct ss))
+  (match ss
+    (Nil (DStr ""))
+    ((Cons h t)
+     (DCat
+       (match h
+         ((LSInc) (lb_twin nm mids all a b i))
+         (_ (DStr "")))
+       (lb_twins nm mids all t a b (+ i 1))))))
+
+;; the counter twin: the budget local's exit value (exit arm keeps the
+;; undecremented count)
+(fn lb_ktwin ((nm Doc) (mids (List Type)) (ss (List LStr)) (a Int) (b Int)) Doc
+  (dconc
+    (list
+      (DStr "(fn ")
+      nm
+      (DStr "_kf ((m Mem) ")
+      (pr_binds mids 0)
+      (DStr "(k Nat)) Int (measure (struct k)) (match k (Z 0) ((S k2) (if ")
+      (lb_cnd (DStr "m") a b)
+      (DStr " (")
+      nm
+      (DStr "_kf m")
+      (lb_targs ss 0)
+      (DStr " k2) (int_of_nat (S k2))))))")
+      (DStr (nl)))))
+
+;; exit locals: inc -> its twin, static -> xi, counter -> the counter
+;; twin, flag -> the spec call
+(fn lb_exits ((ss (List LStr)) (nm Doc) (mids (List Type)) (i Int) (spec Doc))
+  Doc
+  (measure (struct ss))
+  (match ss
+    (Nil
+      (dconc
+        (list
+          (DStr "(")
+          nm
+          (DStr "_kf m0")
+          (pr_args_lead mids)
+          (DStr " k) ")
+          spec)))
+    ((Cons h t)
+     (DCat
+       (match h
+         ((LSInc)
+          (dconc
+            (list
+              (DStr "(")
+              nm
+              (DStr "_t")
+              (dint i)
+              (DStr " m0")
+              (pr_args_lead mids)
+              (DStr " k) "))))
+         (_ (dconc (list (DStr "x") (dint i) (DStr " ")))))
+       (lb_exits t nm mids (+ i 1) spec)))))
+
+;; per-inc-accum twin unfolds for the rhs opening
+(fn lb_unfolds ((nm Doc) (ss (List LStr)) (i Int)) Doc
+  (measure (struct ss))
+  (match ss
+    (Nil (DStr ""))
+    ((Cons h t)
+     (DCat
+       (match h
+         ((LSInc)
+          (dconc
+            (list (DStr "(unfold ") nm (DStr "_t") (dint i) (DStr " rhs) "))))
+         (_ (DStr "")))
+       (lb_unfolds nm t (+ i 1))))))
+
+;; the FLAG SELF literal: extra local + pre-loop init + flag epilogue
+(fn lb_self ((nm Doc) (n Int)) Doc
+  (dconc
+    (list
+      (DStr "(MkFunc ")
+      (dint (+ n 1))
+      (DStr " 1 (list (I32Const 1) (LocalSet ")
+      (dint (+ n 1))
+      (DStr ") (Block (list (Loop (inline ")
+      nm
+      (DStr "_body)))) (LocalGet ")
+      (dint (+ n 1))
+      (DStr ")))"))))
+
+;; the shared head of both condition arms: fuel/eval_loop open, guard
+;; decider, the read stages at A and B in code order, then the flag
+;; collapse via the case hyp
+(fn lb_arm_head ((adv (List LStr)) (a Int) (b Int) (na Int)) Doc
+  (dconc
+    (list
+      (DStr
+        "(chain (steps ((unfold lg_fuel lhs) (reduce lhs) (unfold eval_loop lhs) (rewrite (lemma int_of_nat_succ) lr lhs true ()) (compute lhs (stop eval_loop lg_fuel)))) (rewrite-with (lemma lg_ne) lr lhs () ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))) ")
+      (lp_stage (lp_advpos adv a) (+ na (lp_advpos adv a)))
+      (lp_stage (lp_advpos adv b) (+ na (lp_advpos adv b)))
+      (DStr
+        "(steps ((compute lhs (stop eval_loop lg_fuel)) (rewrite (hyp 0) lr lhs true ()) (compute lhs (stop eval_loop lg_fuel)))) "))))
+
+(fn lb_worker
+  ((nm Doc)
+   (mids (List Type))
+   (n Int)
+   (adv (List LStr))
+   (a Int)
+   (b Int)
+   (fa Int)
+   (p Int))
+  Doc
+  (let ((na (lp_nadv adv)))
+    (dconc
+      (list
+        (DStr "(claim lgw_")
+        nm
+        (DStr " (goal (")
+        (pr_binds mids 0)
+        (DStr
+          "(st (List Int)) (m0 Mem) (c Nat) (k Nat) (restfs (List Func))) (")
+        (lp_prems_lo adv 0)
+        (lp_prems_rng adv 0)
+        (DStr ") (= (eval_loop (S^ ")
+        (dint p)
+        (DStr " (lg_fuel k c)) (MkWModule (Cons ")
+        (lb_self nm n)
+        (DStr " restfs) 65536) (inline ")
+        nm
+        (DStr "_body) (list ")
+        (pr_args mids 0)
+        (DStr " (int_of_nat k) 1) st m0) (Some (OBr 0 st (list ")
+        (lb_exits adv nm mids 0 (li_spec nm mids))
+        (DStr
+          ") m0)))) (induct k ((case Z (steps ((rewrite (lemma int_of_nat_zero) lr lhs true ()) (compute both)) refl)) (case S (k2) (case-on ")
+        (lb_cnd (DStr "m0") a b)
+        (DStr " Bool ((case True ")
+        (lb_arm_head adv a b na)
+        (lp_hwk fa (+ na (lp_advpos adv fa)) (lp_advpos adv fa))
+        (lp_hws adv 0 0 na)
+        (DStr "(steps ((unfold ")
+        nm
+        (DStr " rhs) ")
+        (lb_unfolds nm adv 0)
+        (DStr "(unfold ")
+        nm
+        (DStr
+          "_kf rhs) (reduce rhs) (rewrite (hyp 0) lr rhs true ()))) (rewrite-with (hyp 1) lr lhs () (")
+        (lp_lo1s adv 0)
+        (lp_shifts adv 0 na)
+        (DStr ")) (steps ((compute both))) refl)) (case False ")
+        (lb_arm_head adv a b na)
+        (DStr "(steps ((unfold ")
+        nm
+        (DStr " rhs) ")
+        (lb_unfolds nm adv 0)
+        (DStr "(unfold ")
+        nm
+        (DStr
+          "_kf rhs) (reduce rhs) (rewrite (hyp 0) lr rhs true ()) (rewrite (lemma int_of_nat_succ) lr rhs true ()))) (steps ((compute both))) refl))))))))")
+        (DStr (nl))))))
+
+(fn lb_thm ((nm Doc) (mids (List Type)) (n Int) (adv (List LStr)) (p6 Int)) Doc
+  (let ((na (lp_nadv adv)))
+    (dconc
+      (list
+        (DStr "(claim lowered_")
+        nm
+        (DStr " (goal (")
+        (pr_binds mids 0)
+        (DStr "(m0 Mem) (c Nat) (k Nat) (restfs (List Func))) (")
+        (lp_prems_lo adv 0)
+        (lp_prems_rng adv 0)
+        (DStr ") (= (call_fn_mem (S^ ")
+        (dint p6)
+        (DStr " (lg_fuel k c)) (MkWModule (Cons ")
+        (lb_self nm n)
+        (DStr " restfs) 65536) 0 (list ")
+        (pr_args mids 0)
+        (DStr " (int_of_nat k)) m0) (Some (Pair ")
+        (li_spec nm mids)
+        (DStr
+          " m0)))) (chain (steps ((compute lhs (stop eval_loop lg_fuel)))) (rewrite-with (lemma lgw_")
+        nm
+        (DStr ") lr lhs () (")
+        (lp_pass1 adv 0)
+        (lp_pass1 adv na)
+        (DStr ")) (steps ((compute both))) refl))")
+        (DStr (nl))))))
+
+(fn lb_unit
+  ((nm Doc)
+   (mids (List Type))
+   (n Int)
+   (adv (List LStr))
+   (a Int)
+   (b Int)
+   (fa Int)
+   (p Int))
+  Doc
+  (dconc
+    (list
+      (DStr "(fn ")
+      nm
+      (DStr "_body () (List Instr) (list ")
+      (djoin (lb_code n a b adv))
+      (DStr "))")
+      (DStr (nl))
+      (DStr "(fn ")
+      nm
+      (DStr "_func () Func (MkFunc ")
+      (dint (+ n 1))
+      (DStr " 1 (list (I32Const 1) (LocalSet ")
+      (dint (+ n 1))
+      (DStr ") (Block (list (Loop (")
+      nm
+      (DStr "_body)))) (LocalGet ")
+      (dint (+ n 1))
+      (DStr "))))")
+      (DStr (nl))
+      (lb_twins nm mids adv adv a b 0)
+      (lb_ktwin nm mids adv a b)
+      (lb_worker nm mids n adv a b fa p)
+      (lb_thm nm mids n adv (+ p 6)))))
+
 (fn emit_claim_loop ((f FnDef)) CRes
   (match f
     ((FnDef q ts rty body)
@@ -2781,6 +3224,25 @@
                           (COk
                             (lc_unit (dsym (qn_name q)) mids n r 20)
                             (DStr "")))
+                         ((LBOk adv a b)
+                          (match (lp_first_inc adv 0)
+                            (None
+                              (cerr_at
+                                q
+                                "v1: at least one (+ ACCUM 1) accumulator is required (the counter wrap rides its range premise)"))
+                            ((Some fa)
+                             (let ((cnt (+ 17 (* 4 (lp_nadv adv)))))
+                               (COk
+                                 (lb_unit
+                                   (dsym (qn_name q))
+                                   mids
+                                   n
+                                   adv
+                                   a
+                                   b
+                                   fa
+                                   (+ cnt 4))
+                                 (DStr ""))))))
                          ((LIOk adv r j)
                           (match (lp_first_inc adv 0)
                             (None
