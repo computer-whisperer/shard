@@ -12,7 +12,10 @@
 ;;;      operand datatype, bounds premises discharged by the staged
 ;;;      compute/rewrite interleave (the wasm mem-piece idiom, unchanged).
 ;;;
-;;; The loop piece (fill) follows as stage 2 of the probe.
+;;; The loop piece (fill) follows as stage 2; stage 3 is the CALL ARC
+;;; hand-play — a regs-general clobber-set callee cert (xsq_cert) welded
+;;; into a two-call consumer (xsumsq_thm) through the model's
+;;; xcall_bridge keystone, never computing into the callee's body.
 
 (import "../kernel/stdlib.shard")
 (import "../std/nat.shard")
@@ -374,5 +377,149 @@
       ()
       ((steps ((rewrite (premise 0) lr lhs true ())) refl)
        (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (steps ((compute both)))
+    refl))
+
+;; --- stage 3: call composition — the keystone in action ------------------------
+;; The §7 item-3 hand-play: a callee's REGS-GENERAL cert (every register
+;; field quantified, so the result record literal reads off as the CLOBBER
+;; SET) welded into a two-call consumer through xcall_bridge. The consumer
+;; keeps a live value in rcx ACROSS the second call — justified purely by
+;; rcx passing through the callee cert verbatim, the register analog of a
+;; memory footprint. The callee's body is never computed into.
+
+;; the callee: f(a) = a*a (wrapped), a in rdi, result in rax
+(fn xp_sq_func () XFunc
+  (MkXFunc 1 (list (XMovRR RAX RDI) (XBin XMul RAX (SReg RDI)))))
+
+;; the clobber-set cert: rax changes (the result); the other fourteen
+;; fields pass through verbatim. Pure compute — matches reduce on the
+;; MkRegs literal even with every field symbolic.
+(claim xsq_cert
+  (goal
+    ((c Nat)
+     (restfs (List XFunc))
+     (msz Int)
+     (mem Mem)
+     (rax Int)
+     (rcx Int)
+     (rdx Int)
+     (rbx Int)
+     (rbp Int)
+     (rsi Int)
+     (rdi Int)
+     (r8 Int)
+     (r9 Int)
+     (r10 Int)
+     (r11 Int)
+     (r12 Int)
+     (r13 Int)
+     (r14 Int)
+     (r15 Int))
+    ()
+    (=
+      (xrun_regs
+        (S (S (S c)))
+        (MkXModule (Cons (inline xp_sq_func) restfs) msz)
+        0
+        (MkRegs rax rcx rdx rbx rbp rsi rdi r8 r9 r10 r11 r12 r13 r14 r15)
+        mem)
+      (Some
+        (Pair
+          (MkRegs
+            (wrap64 (* rdi rdi))
+            rcx
+            rdx
+            rbx
+            rbp
+            rsi
+            rdi
+            r8
+            r9
+            r10
+            r11
+            r12
+            r13
+            r14
+            r15)
+          mem))))
+  (steps ((compute both)) refl))
+
+;; the consumer: f(a) = sq(a+1) + sq(a) (all wrapped). sq(a) is parked in
+;; rcx across the second call; rdi survives the first call to be bumped.
+(fn xc_sumsq_func () XFunc
+  (MkXFunc
+    1
+    (list
+      (XCall 0)
+      (XMovRR RCX RAX)
+      (XBin XAdd RDI (SImm 1))
+      (XCall 0)
+      (XBin XAdd RAX (SReg RCX)))))
+
+;; the composed theorem: each call site is a stopped fold rewritten by
+;; xcall_bridge, its run premise discharged by xsq_cert at the concrete
+;; site registers (the machine spelling of the result is the honest
+;; postorder wrap nesting, as everywhere in this file).
+(claim xsumsq_thm
+  (goal ((a Int) (m0 Mem) (c Nat) (restfs (List XFunc))) ()
+    (=
+      (xcall_fn_mem
+        (S^ 10 c)
+        (MkXModule
+          (Cons (inline xp_sq_func) (Cons (inline xc_sumsq_func) restfs))
+          0)
+        1
+        (list a)
+        m0)
+      (Some
+        (Pair
+          (wrap64
+            (+ (wrap64 (* (wrap64 (+ a 1)) (wrap64 (+ a 1)))) (wrap64 (* a a))))
+          m0))))
+  (chain
+    (steps ((compute lhs (stop xeval_call))))
+    (rewrite-with
+      (lemma xcall_bridge)
+      lr
+      lhs
+      ((inst f (inline xp_sq_func))
+       (inst rs2 (MkRegs (wrap64 (* a a)) 0 0 0 0 0 a 0 0 0 0 0 0 0 0))
+       (inst mem2 m0))
+      ((steps ((compute both)) refl)
+       (chain
+         (rewrite-with (lemma xsq_cert) lr lhs () ())
+         (steps ((compute both)))
+         refl)))
+    (steps ((compute lhs (stop xeval_call))))
+    (rewrite-with
+      (lemma xcall_bridge)
+      lr
+      lhs
+      ((inst f (inline xp_sq_func))
+       (inst
+         rs2
+         (MkRegs
+           (wrap64 (* (wrap64 (+ a 1)) (wrap64 (+ a 1))))
+           (wrap64 (* a a))
+           0
+           0
+           0
+           0
+           (wrap64 (+ a 1))
+           0
+           0
+           0
+           0
+           0
+           0
+           0
+           0))
+       (inst mem2 m0))
+      ((steps ((compute both)) refl)
+       (chain
+         (rewrite-with (lemma xsq_cert) lr lhs () ())
+         (steps ((compute both)))
+         refl)))
     (steps ((compute both)))
     refl))

@@ -18,7 +18,10 @@
 ;;;     in the model. The SysV caller-/callee-saved discipline is NOT a
 ;;;     model mechanism — it lives in CERTS as register preservation
 ;;;     equations (the register analog of the framed arbitrary-m0 memory
-;;;     schema), arriving with the x86 call-composition arc.
+;;;     schema): a callee cert states xrun_regs with every register FIELD
+;;;     quantified, so its result record reads off as the clobber set;
+;;;     xcall_bridge (the call-composition keystone, end of file) welds
+;;;     such certs into callers at in-body call sites.
 ;;;   - NO rsp, anywhere: the control stack is private (X86.md §3.3 — the
 ;;;     model's structured XCall/XRet IS the call mechanism; return
 ;;;     addresses do not exist as values). The register file has 15 GPRs.
@@ -412,11 +415,15 @@
                       ((Cons a6 t6) None)))))))))))))))
 
 ;; Run function k of module m on a given register file and memory; the
-;; result is (rax, final memory). This regs-general entry is what the
-;; framed-register cert schema will quantify over when the call arc lands;
-;; the SysV denotations below are its zero-initialized instances.
-(fn xrun_fn ((fuel Nat) (m XModule) (k Int) (rs Regs) (mem Mem))
-  (Option (Pair Int Mem))
+;; result is the FULL final register file plus memory. This regs-general
+;; denotation is the call-composition boundary: a callee's conformance cert
+;; is stated against it with every register field quantified, so the cert's
+;; result record reads off as the CLOBBER SET (changed fields) and register
+;; preservation (fields passed through verbatim) — the register analog of
+;; the framed arbitrary-m0 memory schema (docs/X86.md §4.2). xcall_bridge
+;; below rewrites an in-body folded (xeval_call …) term by exactly this.
+(fn xrun_regs ((fuel Nat) (m XModule) (k Int) (rs Regs) (mem Mem))
+  (Option (Pair Regs Mem))
   (match (xfunc_at (xfuncs_of m) k)
     (None None)
     ((Some f)
@@ -424,10 +431,19 @@
        (None None)
        ((Some out)
         (match out
-          ((XNorm rs2 mem2) (Some (Pair (rax_of rs2) mem2)))
-          ((XRetO rs2 mem2) (Some (Pair (rax_of rs2) mem2)))
+          ((XNorm rs2 mem2) (Some (Pair rs2 mem2)))
+          ((XRetO rs2 mem2) (Some (Pair rs2 mem2)))
           ((XBrk d rs2 mem2) None)
           (XTrap None)))))))
+
+;; the rax projection: what a caller that only wants the SysV result sees.
+(fn xrun_fn ((fuel Nat) (m XModule) (k Int) (rs Regs) (mem Mem))
+  (Option (Pair Int Mem))
+  (match (xrun_regs fuel m k rs mem)
+    (None None)
+    ((Some p)
+     (match p
+       ((Pair rs2 mem2) (Some (Pair (rax_of rs2) mem2)))))))
 
 ;; the piece-theorem boundary: args in PARAMETER order into their SysV
 ;; homes, everything else zero, memory a parameter, memory returned —
@@ -450,3 +466,124 @@
     ((Some p)
      (match p
        ((Pair v mem) (Some v))))))
+
+;; --- the call-composition keystone ---------------------------------------------
+
+;; xcall_bridge: an in-body (XCall k) step — the folded (xeval_call (S f2) …)
+;; term a stopped compute leaves — completes exactly as xrun_regs of the
+;; callee on the CALLER'S registers and memory (no frames, no argument
+;; marshalling: the registers ARE the interface, docs/X86.md §4.1-§4.2).
+;; Premise 0 is ground bookkeeping at any concrete call site (xfunc_at
+;; computes); premise 1 is the callee's RUN — the slot the callee's own
+;; regs-general conformance cert discharges, whose result record carries
+;; the clobber set. Piece-independent: proven once, cited at every call
+;; site. (models/wasm/wasm.shard call_bridge, transplanted: the x86 proof
+;; is SMALLER because xeval_call does no pop/reverse/zero-extend
+;; bookkeeping — the register file passes through whole.)
+(claim xcall_bridge
+  (goal
+    ((f2 Nat)
+     (m XModule)
+     (k Int)
+     (f XFunc)
+     (rs Regs)
+     (mem Mem)
+     (rs2 Regs)
+     (mem2 Mem))
+    ((= (xfunc_at (xfuncs_of m) k) (Some f))
+     (= (xrun_regs f2 m k rs mem) (Some (Pair rs2 mem2))))
+    (= (xeval_call (S f2) m k rs mem) (Some (XNorm rs2 mem2))))
+  (chain
+    (steps
+      ((unfold xeval_call lhs)
+       (rewrite (premise 0) lr lhs true ())
+       (compute lhs (stop xeval_seq xbody_of))))
+    (case-on (xeval_seq f2 m (xbody_of f) rs mem) Option
+      ((case None
+         (chain
+           (have hx (= (Some (Pair rs2 mem2)) None)
+             (steps
+               ((rewrite (premise 1) rl lhs true ())
+                (unfold xrun_regs lhs)
+                (rewrite (premise 0) lr lhs true ())
+                (compute lhs (stop xeval_seq xbody_of))
+                (rewrite (hyp None) lr lhs true ())
+                (compute lhs))
+               refl))
+           (absurd (premise hx))))
+       (case Some
+         (out)
+         (case-on out XOut
+           ((case XNorm
+              (rs3 mem3)
+              (chain
+                (steps
+                  ((rewrite (hyp Some) lr lhs true ())
+                   (rewrite (hyp XNorm) lr lhs true ())
+                   (compute lhs)))
+                (have hx (= (Some (Pair rs2 mem2)) (Some (Pair rs3 mem3)))
+                  (steps
+                    ((rewrite (premise 1) rl lhs true ())
+                     (unfold xrun_regs lhs)
+                     (rewrite (premise 0) lr lhs true ())
+                     (compute lhs (stop xeval_seq xbody_of))
+                     (rewrite (hyp Some) lr lhs true ())
+                     (rewrite (hyp XNorm) lr lhs true ())
+                     (compute lhs))
+                    refl))
+                (inject (premise hx) (hpair))
+                (inject (premise hpair) (hreq hmeq))
+                (steps
+                  ((rewrite (premise hreq) lr rhs true ())
+                   (rewrite (premise hmeq) lr rhs true ()))
+                  refl)))
+            (case XBrk
+              (d rs3 mem3)
+              (chain
+                (have hx (= (Some (Pair rs2 mem2)) None)
+                  (steps
+                    ((rewrite (premise 1) rl lhs true ())
+                     (unfold xrun_regs lhs)
+                     (rewrite (premise 0) lr lhs true ())
+                     (compute lhs (stop xeval_seq xbody_of))
+                     (rewrite (hyp Some) lr lhs true ())
+                     (rewrite (hyp XBrk) lr lhs true ())
+                     (compute lhs))
+                    refl))
+                (absurd (premise hx))))
+            (case XRetO
+              (rs3 mem3)
+              (chain
+                (steps
+                  ((rewrite (hyp Some) lr lhs true ())
+                   (rewrite (hyp XRetO) lr lhs true ())
+                   (compute lhs)))
+                (have hx (= (Some (Pair rs2 mem2)) (Some (Pair rs3 mem3)))
+                  (steps
+                    ((rewrite (premise 1) rl lhs true ())
+                     (unfold xrun_regs lhs)
+                     (rewrite (premise 0) lr lhs true ())
+                     (compute lhs (stop xeval_seq xbody_of))
+                     (rewrite (hyp Some) lr lhs true ())
+                     (rewrite (hyp XRetO) lr lhs true ())
+                     (compute lhs))
+                    refl))
+                (inject (premise hx) (hpair))
+                (inject (premise hpair) (hreq hmeq))
+                (steps
+                  ((rewrite (premise hreq) lr rhs true ())
+                   (rewrite (premise hmeq) lr rhs true ()))
+                  refl)))
+            (case XTrap
+              (chain
+                (have hx (= (Some (Pair rs2 mem2)) None)
+                  (steps
+                    ((rewrite (premise 1) rl lhs true ())
+                     (unfold xrun_regs lhs)
+                     (rewrite (premise 0) lr lhs true ())
+                     (compute lhs (stop xeval_seq xbody_of))
+                     (rewrite (hyp Some) lr lhs true ())
+                     (rewrite (hyp XTrap) lr lhs true ())
+                     (compute lhs))
+                    refl))
+                (absurd (premise hx)))))))))))
