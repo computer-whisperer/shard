@@ -1421,6 +1421,45 @@ TIE/MOD pair. str.wasm.shard and lowergen_loop_out.shard both stayed
 pure appends; the three sibling fragment outputs regenerated
 byte-identical under the emitter rework before the source sets grew.
 
+### 6ab. Stride ≠ 1 — literal strides and generated helper certs (2026-07-05)
+
+Incrementing accums take any positive LITERAL stride: `(+ a C)` with
+C ≥ 2 recognizes as `LSIncK C` (stride 1 stays `LSInc`, its outputs
+byte-identical). Probe `examples/strideloop_probe.shard` (the CELL-TAG
+FILL — stamp the head byte of each 4-byte cell, the uniform-rep
+cell-walk shape — hand-played at C=4, first check); `lp_tag` machine
+proofs first generation after ONE template fix; five gates green.
+
+The design fact: the loopkit's stride-1 helpers (`lg_a1_ms`/`lg_lo1`/
+`lg_32`/`lg_kM`/`lg_shift`) are template constants, and they CANNOT
+generalize to a stride binder — `c·n` is nonlinear, farkas has no
+multiplier for it. As a generation-time literal, C is just a
+COEFFICIENT, so the emitter writes per-(fn, stride) instances
+(`lgs_<fn>_<C>_{a1ms,ac,lo,c32,kM,shift}`) into the output file with
+farkas lists computed by closed formula:
+
+    a1ms / ac -> (list 1 1 C C)     lo / c32 -> (list 1 1)
+    kM        -> (list C 1 C 1)     shift    -> (list 1 1 C)
+
+(mined once at C=4 in the probe; wrong-formula = loud gate-3 fail,
+never unsound — the §6j computed-certificate discipline extended to
+the loop fragment). The stride-C accum's range premise scales to
+`(le (+ x (* C (int_of_nat k))) 65536)`; its exit local is
+`(lg_advk x C k)` — the stride rides the new loopkit twin as an
+argument. Stage/wrap/IH shapes are the stride-1 template verbatim with
+the helper names swapped (`lp_kstage`/`lp_khwk`/`lp_khw`).
+
+The one template fix: the worker's rhs opening unconditionally
+unfolded `lg_adv`, which FAILS LOUDLY on a loop with no stride-1 accum
+(`lp_tag`'s only mover is the stride-4 pointer) — all three twin
+unfolds (`lg_adv`/`lg_dec`/`lg_advk`) are now presence-conditional.
+
+v1 fences: stride ≠ 1 is Mem-return-loop-only (Int-return loops keep
+±1 accums — loud refusal; the sum invariant's 256-scaling and a
+stride-C read would need a combined k-scaled premise, do it with a
+consumer); decrements stay stride 1; scan/flag shapes reject LSIncK
+through their existing stride gates.
+
 ## 7. Open questions — triaged at ratification (2026-07-04)
 
 None of these block the ratified form; they are the backlog the next
@@ -1455,10 +1494,12 @@ arcs draw from.
    none of them — every slice kept machine and spec on identical
    spellings instead. Two-read conditions + twins at non-returned
    accums LANDED 2026-07-05 (§6aa, the FLAG shape — bytes_eq); nonzero
-   scan literals LANDED 2026-07-05 (§6m update — memchr). Still open:
-   stride ≠ 1, calls-in-loops (structural form), general literal arm
-   values for flag loops (1/0 are pinned by the BEq-bit encoding),
-   write-then-read inside LOOP iterations.
+   scan literals LANDED 2026-07-05 (§6m update — memchr); stride ≠ 1
+   LANDED 2026-07-05 (§6ab — literal inc strides, Mem-return loops,
+   generated lgs_* helper certs). Still open: calls-in-loops
+   (structural form), general literal arm values for flag loops (1/0
+   are pinned by the BEq-bit encoding), write-then-read inside LOOP
+   iterations, stride ≠ 1 on Int-return/dec accums.
 
 ## 8. The model-authoring contract — what a target ISA model provides
 

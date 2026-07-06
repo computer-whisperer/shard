@@ -1334,8 +1334,11 @@
 ;; advancing accum
 (type LVal (LVAcc Int) (LVLit Int) (LVRead Int))
 
-;; per-accum stride: static, +1, or -1 per iteration
-(type LStr (LSStat) (LSInc) (LSDec))
+;; per-accum stride: static, +1, -1, or +C (C >= 2, a literal) per
+;; iteration. LSIncK is Mem-return-loop-only in v1 (probe:
+;; examples/strideloop_probe.shard); scan/flag/Int-return shapes and
+;; decrementing strides stay +-1.
+(type LStr (LSStat) (LSInc) (LSDec) (LSIncK Int))
 
 (fn ls_adv ((s LStr)) Bool
   (match s
@@ -1369,7 +1372,9 @@
     (Nil False)
     ((Cons h t) (if (int_eq i 0) h (bool_at t (- i 1))))))
 
-;; one accumulator update: itself, (+ itself 1), or (- itself 1)
+;; one accumulator update: itself, (+ itself C), or (- itself 1) —
+;; increments take any positive literal stride (+1 = LSInc, C >= 2 =
+;; LSIncK); decrements stay stride 1
 (fn lp_upd ((u Expr) (n Int) (i Int)) (Option LStr)
   (match u
     ((BVar b) (if (int_eq b (- (+ n 1) i)) (Some (LSStat)) None))
@@ -1381,10 +1386,12 @@
             ((BVar ab)
              (if (int_eq ab (- (+ n 1) i))
                (match b
-                 ((IntLit one)
-                  (if (int_eq one 1)
+                 ((IntLit s)
+                  (if (int_eq s 1)
                     (Some (if (core_named q (quote +)) (LSInc) (LSDec)))
-                    None))
+                  (if (core_named q (quote +))
+                    (if (lt 1 s) (Some (LSIncK s)) None)
+                    None)))
                  (_ None))
                None))
             (_ None)))
@@ -1946,6 +1953,10 @@
        ((LSDec)
         (dapp
           (list (lp_lget i) (lp_const 1) (DStr "(I32Bin BSub)") (lp_lset i))
+          (lp_advcode t (+ i 1))))
+       ((LSIncK s)
+        (dapp
+          (list (lp_lget i) (lp_const s) (DStr "(I32Bin BAdd)") (lp_lset i))
           (lp_advcode t (+ i 1))))))))
 
 ;; the store block: (addr, value) pairs pushed in REVERSE execution
@@ -2081,8 +2092,9 @@
     ((Cons h t)
      (if (int_eq i 0) 0 (+ (if (ls_adv h) 1 0) (lp_advpos t (- i 1)))))))
 
-;; the first INCREMENTING accum — the counter wrap (lg_kM) rides its
-;; premise pair, so every loop needs one (v1 fence)
+;; the first INCREMENTING accum — the counter wrap (lg_kM or the
+;; stride-scaled instance) rides its premise pair, so every loop needs
+;; one (v1 fence)
 (fn lp_first_inc ((bs (List LStr)) (i Int)) (Option Int)
   (measure (struct bs))
   (match bs
@@ -2090,6 +2102,7 @@
     ((Cons h t)
      (match h
        ((LSInc) (Some i))
+       ((LSIncK _) (Some i))
        (_ (lp_first_inc t (+ i 1)))))))
 
 (fn lp_has_dec ((bs (List LStr))) Bool
@@ -2111,12 +2124,15 @@
        (match h
          ((LSStat) (DStr ""))
          ((LSInc) (dconc (list (DStr "(= (le 0 x") (dint i) (DStr ") True) "))))
+         ((LSIncK _)
+          (dconc (list (DStr "(= (le 0 x") (dint i) (DStr ") True) "))))
          ((LSDec)
           (dconc
             (list (DStr "(= (le (int_of_nat k) x") (dint i) (DStr ") True) ")))))
        (lp_prems_lo t (+ i 1))))))
 
-;; group-B premises, param order: inc -> range, dec -> address-upper
+;; group-B premises, param order: inc -> range (stride-scaled for
+;; LSIncK), dec -> address-upper
 (fn lp_prems_rng ((bs (List LStr)) (i Int)) Doc
   (measure (struct bs))
   (match bs
@@ -2131,13 +2147,21 @@
               (DStr "(= (le (+ x")
               (dint i)
               (DStr " (int_of_nat k)) 65536) True) "))))
+         ((LSIncK s)
+          (dconc
+            (list
+              (DStr "(= (le (+ x")
+              (dint i)
+              (DStr " (* ")
+              (dint s)
+              (DStr " (int_of_nat k))) 65536) True) "))))
          ((LSDec)
           (dconc
             (list (DStr "(= (le (+ x") (dint i) (DStr " 1) 65536) True) ")))))
        (lp_prems_rng t (+ i 1))))))
 
-;; exit locals: inc -> (lg_adv xi k), dec -> (lg_dec xi k), static -> xi,
-;; counter -> 0
+;; exit locals: inc -> (lg_adv xi k), stride-C -> (lg_advk xi C k),
+;; dec -> (lg_dec xi k), static -> xi, counter -> 0
 (fn lp_exits ((bs (List LStr)) (i Int)) Doc
   (measure (struct bs))
   (match bs
@@ -2146,6 +2170,14 @@
      (DCat
        (match h
          ((LSInc) (dconc (list (DStr "(lg_adv x") (dint i) (DStr " k) "))))
+         ((LSIncK s)
+          (dconc
+            (list
+              (DStr "(lg_advk x")
+              (dint i)
+              (DStr " ")
+              (dint s)
+              (DStr " k) "))))
          ((LSDec) (dconc (list (DStr "(lg_dec x") (dint i) (DStr " k) "))))
          ((LSStat) (dconc (list (DStr "x") (dint i) (DStr " ")))))
        (lp_exits t (+ i 1))))))
@@ -2182,6 +2214,12 @@
                 (DStr "(= (le (+ x")
                 (dint i)
                 (DStr " (int_of_nat k)) 65536) True) "))))
+           ((LSIncK _)
+            (dconc
+              (list
+                (DStr "(= (le (+ x")
+                (dint i)
+                (DStr " (int_of_nat k)) 65536) True) "))))
            ((LSDec)
             (dconc
               (list (DStr "(= (le (+ x") (dint i) (DStr " 1) 65536) True) "))))))
@@ -2197,6 +2235,14 @@
        (if (int_eq i r) (DCat spec (DStr " "))
        (match h
          ((LSInc) (dconc (list (DStr "(lg_adv x") (dint i) (DStr " k) "))))
+         ((LSIncK s)
+          (dconc
+            (list
+              (DStr "(lg_advk x")
+              (dint i)
+              (DStr " ")
+              (dint s)
+              (DStr " k) "))))
          ((LSDec) (dconc (list (DStr "(lg_dec x") (dint i) (DStr " k) "))))
          ((LSStat) (dconc (list (DStr "x") (dint i) (DStr " "))))))
        (li_exits t r (+ i 1) spec)))))
@@ -2231,6 +2277,192 @@
       (DStr
         ") lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl) (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))) "))))
 
+;; ---- stride != 1 support (LSIncK; probe: strideloop_probe) -------------------
+;; A stride-C accum rides the SAME stage/wrap/IH shapes as stride 1, but
+;; its helper certs are C-scaled instances GENERATED per (fn, stride)
+;; with computed farkas lists (the kit lemmas cannot take C as a binder
+;; — C*n is nonlinear; as a literal it is a coefficient). Closed
+;; formulas, mined at C=4 in the probe:
+;;   a1ms / ac  -> (list 1 1 C C)      lo / c32 -> (list 1 1)
+;;   kM         -> (list C 1 C 1)      shift    -> (list 1 1 C)
+
+;; generated-helper name: lgs_<fn>_<C>_<suffix>
+(fn lgs_nm ((fnm Doc) (s Int) (suf (List Int))) Doc
+  (dconc (list (DStr "lgs_") fnm (DStr "_") (dint s) (DStr "_") (DStr suf))))
+
+(fn lp_has_inck ((bs (List LStr))) Bool
+  (measure (struct bs))
+  (match bs
+    (Nil False)
+    ((Cons h t)
+     (match h
+       ((LSIncK _) True)
+       (_ (lp_has_inck t))))))
+
+(fn lp_has_inc1 ((bs (List LStr))) Bool
+  (measure (struct bs))
+  (match bs
+    (Nil False)
+    ((Cons h t)
+     (match h
+       ((LSInc) True)
+       (_ (lp_has_inc1 t))))))
+
+(fn int_in ((x Int) (xs (List Int))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil False)
+    ((Cons h t) (if (int_eq h x) True (int_in x t)))))
+
+;; the distinct LSIncK strides, first-seen order
+(fn lp_incks ((bs (List LStr)) (seen (List Int))) (List Int)
+  (measure (struct bs))
+  (match bs
+    (Nil Nil)
+    ((Cons h t)
+     (match h
+       ((LSIncK s)
+        (if (int_in s seen) (lp_incks t seen)
+        (Cons s (lp_incks t (Cons s seen)))))
+       (_ (lp_incks t seen))))))
+
+;; the six C-scaled helper claims for one (fn, stride)
+(fn lgs_one ((fnm Doc) (s Int)) Doc
+  (dconc
+    (list
+      (DStr "(claim ")
+      (lgs_nm fnm s "a1ms")
+      (DStr " (goal ((a Int) (c Nat)) ((= (le (+ a (* ")
+      (dint s)
+      (DStr
+        " (int_of_nat (S c)))) 65536) True) (= (int_of_nat (S c)) (+ 1 (int_of_nat c))) (= (le 0 (int_of_nat c)) True)) (= (le (+ a 1) 65536) True)) (by arith (list 1 1 ")
+      (dint s)
+      (DStr " ")
+      (dint s)
+      (DStr ")))")
+      (DStr (nl))
+      (DStr "(claim ")
+      (lgs_nm fnm s "ac")
+      (DStr " (goal ((a Int) (c Nat)) ((= (le (+ a (* ")
+      (dint s)
+      (DStr
+        " (int_of_nat (S c)))) 65536) True) (= (int_of_nat (S c)) (+ 1 (int_of_nat c))) (= (le 0 (int_of_nat c)) True)) (= (le (+ a ")
+      (dint s)
+      (DStr ") 65536) True)) (by arith (list 1 1 ")
+      (dint s)
+      (DStr " ")
+      (dint s)
+      (DStr ")))")
+      (DStr (nl))
+      (DStr "(claim ")
+      (lgs_nm fnm s "lo")
+      (DStr " (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (+ x ")
+      (dint s)
+      (DStr ")) True)) (by arith (list 1 1)))")
+      (DStr (nl))
+      (DStr "(claim ")
+      (lgs_nm fnm s "c32")
+      (DStr " (goal ((x Int)) ((= (le (+ x ")
+      (dint s)
+      (DStr ") 65536) True)) (= (lt (+ x ")
+      (dint s)
+      (DStr ") 4294967296) True)) (by arith (list 1 1)))")
+      (DStr (nl))
+      (DStr "(claim ")
+      (lgs_nm fnm s "kM")
+      (DStr " (goal ((a Int) (c Nat)) ((= (le (+ a (* ")
+      (dint s)
+      (DStr
+        " (int_of_nat (S c)))) 65536) True) (= (int_of_nat (S c)) (+ 1 (int_of_nat c))) (= (le 0 a) True)) (= (lt (int_of_nat c) 4294967296) True)) (by arith (list ")
+      (dint s)
+      (DStr " 1 ")
+      (dint s)
+      (DStr " 1)))")
+      (DStr (nl))
+      (DStr "(claim ")
+      (lgs_nm fnm s "shift")
+      (DStr " (goal ((b Int) (w Int) (c Nat)) ((= (le (+ b (* ")
+      (dint s)
+      (DStr
+        " (int_of_nat (S c)))) w) True) (= (int_of_nat (S c)) (+ 1 (int_of_nat c)))) (= (le (+ (+ b ")
+      (dint s)
+      (DStr ") (* ")
+      (dint s)
+      (DStr " (int_of_nat c))) w) True)) (by arith (list 1 1 ")
+      (dint s)
+      (DStr ")))")
+      (DStr (nl)))))
+
+(fn lgs_all ((fnm Doc) (ss (List Int))) Doc
+  (measure (struct ss))
+  (match ss
+    (Nil (DStr ""))
+    ((Cons s t) (DCat (lgs_one fnm s) (lgs_all fnm t)))))
+
+;; the stride-C address-guard stage (lp_stage with the generated a1ms)
+(fn lp_kstage ((anm Doc) (p Int) (r Int)) Doc
+  (dconc
+    (list
+      (DStr "(steps ((compute lhs (stop eval_loop lg_fuel)) (rewrite (premise ")
+      (dint p)
+      (DStr
+        ") lr lhs true ()) (compute lhs (stop eval_loop lg_fuel)))) (rewrite-with (lemma ")
+      anm
+      (DStr ") lr lhs ((inst c k2)) ((steps ((rewrite (premise ")
+      (dint r)
+      (DStr
+        ") lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl) (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))) "))))
+
+;; the stride-C counter wrap (lp_hwk with the generated kM)
+(fn lp_khwk ((knm Doc) (f Int) (rng Int) (lo Int)) Doc
+  (dconc
+    (list
+      (DStr
+        "(have hsub (= (- (+ 1 (int_of_nat k2)) 1) (int_of_nat k2)) (rewrite-with (lemma lg_sub) lr lhs () () refl)) (steps ((rewrite (premise hsub) lr lhs true ()))) (have hwk (= (mod (int_of_nat k2) 4294967296) (int_of_nat k2)) (rewrite-with (lemma wrap32_id) lr lhs ((inst x (int_of_nat k2))) ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl) (rewrite-with (lemma ")
+      knm
+      (DStr ") lr lhs ((inst a x")
+      (dint f)
+      (DStr ") (inst c k2)) ((steps ((rewrite (premise ")
+      (dint rng)
+      (DStr
+        ") lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl) (steps ((rewrite (premise ")
+      (dint lo)
+      (DStr
+        ") lr lhs true ())) refl)) refl)) refl)) (steps ((rewrite (premise hwk) lr lhs true ()))) "))))
+
+;; the stride-C advance wrap (lp_hw with the generated lo/c32/ac chain)
+(fn lp_khw ((fnm Doc) (s Int) (p Int) (i Int) (na Int)) Doc
+  (dconc
+    (list
+      (DStr "(have hw")
+      (dint p)
+      (DStr " (= (mod (+ x")
+      (dint i)
+      (DStr " ")
+      (dint s)
+      (DStr ") 4294967296) (+ x")
+      (dint i)
+      (DStr " ")
+      (dint s)
+      (DStr ")) (rewrite-with (lemma wrap32_id) lr lhs ((inst x (+ x")
+      (dint i)
+      (DStr " ")
+      (dint s)
+      (DStr "))) ((rewrite-with (lemma ")
+      (lgs_nm fnm s "lo")
+      (DStr ") lr lhs () ((steps ((rewrite (premise ")
+      (dint p)
+      (DStr ") lr lhs true ())) refl)) refl) (rewrite-with (lemma ")
+      (lgs_nm fnm s "c32")
+      (DStr ") lr lhs () ((rewrite-with (lemma ")
+      (lgs_nm fnm s "ac")
+      (DStr ") lr lhs ((inst c k2)) ((steps ((rewrite (premise ")
+      (dint (+ na p))
+      (DStr
+        ") lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl) (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)) refl)) refl)) refl)) (steps ((rewrite (premise hw")
+      (dint p)
+      (DStr ") lr lhs true ()))) "))))
+
 ;; one DEC address-guard stage: cite lg_dlo for the lower guard, then
 ;; premise-rewrite the address-upper directly
 (fn lp_dstage ((p Int) (r Int)) Doc
@@ -2244,7 +2476,7 @@
       (dint r)
       (DStr ") lr lhs true ()) (compute lhs (stop eval_loop lg_fuel)))) "))))
 
-(fn lp_stages ((occs (List Int)) (adv (List LStr)) (na Int)) Doc
+(fn lp_stages ((fnm Doc) (occs (List Int)) (adv (List LStr)) (na Int)) Doc
   (measure (struct occs))
   (match occs
     (Nil (DStr ""))
@@ -2252,8 +2484,13 @@
      (DCat
        (match (ls_at adv i)
          ((LSDec) (lp_dstage (lp_advpos adv i) (+ na (lp_advpos adv i))))
+         ((LSIncK s)
+          (lp_kstage
+            (lgs_nm fnm s "a1ms")
+            (lp_advpos adv i)
+            (+ na (lp_advpos adv i))))
          (_ (lp_stage (lp_advpos adv i) (+ na (lp_advpos adv i)))))
-       (lp_stages t adv na)))))
+       (lp_stages fnm t adv na)))))
 
 ;; the counter wrap: (1+n)-1 collapse, then wrap32_id via lg_kM off the
 ;; FIRST incrementing accum's range premise (rng) and nonneg premise (lo)
@@ -2317,24 +2554,27 @@
       (dint p)
       (DStr ") lr lhs true ()))) "))))
 
-(fn lp_hws ((bs (List LStr)) (i Int) (p Int) (na Int)) Doc
+(fn lp_hws ((fnm Doc) (bs (List LStr)) (i Int) (p Int) (na Int)) Doc
   (measure (struct bs))
   (match bs
     (Nil (DStr ""))
     ((Cons h t)
      (match h
-       ((LSStat) (lp_hws t (+ i 1) p na))
-       ((LSInc) (DCat (lp_hw p i na) (lp_hws t (+ i 1) (+ p 1) na)))
-       ((LSDec) (DCat (lp_dhw p i na) (lp_hws t (+ i 1) (+ p 1) na)))))))
+       ((LSStat) (lp_hws fnm t (+ i 1) p na))
+       ((LSInc) (DCat (lp_hw p i na) (lp_hws fnm t (+ i 1) (+ p 1) na)))
+       ((LSIncK s)
+        (DCat (lp_khw fnm s p i na) (lp_hws fnm t (+ i 1) (+ p 1) na)))
+       ((LSDec) (DCat (lp_dhw p i na) (lp_hws fnm t (+ i 1) (+ p 1) na)))))))
 
-;; the IH's group-A discharges: lg_lo1 (inc) / lg_dshift (dec)
-(fn lp_lo1s ((bs (List LStr)) (p Int)) Doc
+;; the IH's group-A discharges: lg_lo1 (inc) / lg_dshift (dec) / the
+;; generated lo (stride C)
+(fn lp_lo1s ((fnm Doc) (bs (List LStr)) (p Int)) Doc
   (measure (struct bs))
   (match bs
     (Nil (DStr ""))
     ((Cons h t)
      (match h
-       ((LSStat) (lp_lo1s t p))
+       ((LSStat) (lp_lo1s fnm t p))
        ((LSInc)
         (DCat
           (dconc
@@ -2343,7 +2583,17 @@
                 "(rewrite-with (lemma lg_lo1) lr lhs () ((steps ((rewrite (premise ")
               (dint p)
               (DStr ") lr lhs true ())) refl)) refl) ")))
-          (lp_lo1s t (+ p 1))))
+          (lp_lo1s fnm t (+ p 1))))
+       ((LSIncK s)
+        (DCat
+          (dconc
+            (list
+              (DStr "(rewrite-with (lemma ")
+              (lgs_nm fnm s "lo")
+              (DStr ") lr lhs () ((steps ((rewrite (premise ")
+              (dint p)
+              (DStr ") lr lhs true ())) refl)) refl) ")))
+          (lp_lo1s fnm t (+ p 1))))
        ((LSDec)
         (DCat
           (dconc
@@ -2353,16 +2603,17 @@
               (dint p)
               (DStr
                 ") lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)) refl) ")))
-          (lp_lo1s t (+ p 1))))))))
+          (lp_lo1s fnm t (+ p 1))))))))
 
-;; the IH's group-B discharges: lg_shift (inc) / lg_dhi (dec)
-(fn lp_shifts ((bs (List LStr)) (p Int) (na Int)) Doc
+;; the IH's group-B discharges: lg_shift (inc) / lg_dhi (dec) / the
+;; generated shift (stride C)
+(fn lp_shifts ((fnm Doc) (bs (List LStr)) (p Int) (na Int)) Doc
   (measure (struct bs))
   (match bs
     (Nil (DStr ""))
     ((Cons h t)
      (match h
-       ((LSStat) (lp_shifts t p na))
+       ((LSStat) (lp_shifts fnm t p na))
        ((LSInc)
         (DCat
           (dconc
@@ -2372,7 +2623,18 @@
               (dint (+ na p))
               (DStr
                 ") lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)) refl) ")))
-          (lp_shifts t (+ p 1) na)))
+          (lp_shifts fnm t (+ p 1) na)))
+       ((LSIncK s)
+        (DCat
+          (dconc
+            (list
+              (DStr "(rewrite-with (lemma ")
+              (lgs_nm fnm s "shift")
+              (DStr ") lr lhs () ((steps ((rewrite (premise ")
+              (dint (+ na p))
+              (DStr
+                ") lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)) refl) ")))
+          (lp_shifts fnm t (+ p 1) na)))
        ((LSDec)
         (DCat
           (dconc
@@ -2381,7 +2643,7 @@
                 "(rewrite-with (lemma lg_dhi) lr lhs () ((steps ((rewrite (premise ")
               (dint (+ na p))
               (DStr ") lr lhs true ())) refl)) refl) ")))
-          (lp_shifts t (+ p 1) na)))))))
+          (lp_shifts fnm t (+ p 1) na)))))))
 
 ;; Int-return advance wraps: per advancing accum in param order, premise
 ;; indices from the PREMISED-accum position (pf includes r)
@@ -2394,6 +2656,7 @@
        (match h
          ((LSStat) (DStr ""))
          ((LSInc) (lp_hw (lp_advpos pf i) i nap))
+         ((LSIncK _) (lp_hw (lp_advpos pf i) i nap))
          ((LSDec) (lp_dhw (lp_advpos pf i) i nap)))
        (li_hws t pf (+ i 1) nap)))))
 
@@ -2557,17 +2820,26 @@
         (pr_args_lead mids)
         (DStr
           " k))))) (induct k ((case Z (steps ((rewrite (lemma int_of_nat_zero) lr lhs true ()) (compute both)) refl)) (case S (k2) (chain (steps ((unfold lg_fuel lhs) (reduce lhs) (unfold eval_loop lhs) (rewrite (lemma int_of_nat_succ) lr lhs true ()) (compute lhs (stop eval_loop lg_fuel)))) (rewrite-with (lemma lg_ne) lr lhs () ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))) ")
-        (lp_stages (lp_occs sts) adv na)
+        (lp_stages nm (lp_occs sts) adv na)
         (DStr "(steps ((compute lhs (stop eval_loop lg_fuel)))) ")
-        (lp_hwk fa (+ na (lp_advpos adv fa)) (lp_advpos adv fa))
-        (lp_hws adv 0 0 na)
+        (match (ls_at adv fa)
+          ((LSIncK s)
+           (lp_khwk
+             (lgs_nm nm s "kM")
+             fa
+             (+ na (lp_advpos adv fa))
+             (lp_advpos adv fa)))
+          (_ (lp_hwk fa (+ na (lp_advpos adv fa)) (lp_advpos adv fa))))
+        (lp_hws nm adv 0 0 na)
         (DStr "(steps ((unfold ")
         nm
-        (DStr " rhs) (unfold lg_adv rhs) ")
+        (DStr " rhs) ")
+        (if (lp_has_inc1 adv) (DStr "(unfold lg_adv rhs) ") (DStr ""))
         (if (lp_has_dec adv) (DStr "(unfold lg_dec rhs) ") (DStr ""))
+        (if (lp_has_inck adv) (DStr "(unfold lg_advk rhs) ") (DStr ""))
         (DStr "(reduce rhs))) (rewrite-with (hyp 0) lr lhs () (")
-        (lp_lo1s adv 0)
-        (lp_shifts adv 0 na)
+        (lp_lo1s nm adv 0)
+        (lp_shifts nm adv 0 na)
         (DStr ")) (steps ((compute both))) refl)))))")
         (DStr (nl))))))
 
@@ -2627,6 +2899,7 @@
       nm
       (DStr "_body)))) (I32Const 0))))")
       (DStr (nl))
+      (lgs_all nm (lp_incks adv Nil))
       (lp_worker nm mids n adv sts fa p)
       (lp_thm nm mids n adv (+ p 4)))))
 
@@ -3119,7 +3392,7 @@
         (DStr " Bool ((case True ")
         (lb_arm_head adv a b na)
         (lp_hwk fa (+ na (lp_advpos adv fa)) (lp_advpos adv fa))
-        (lp_hws adv 0 0 na)
+        (lp_hws nm adv 0 0 na)
         (DStr "(steps ((unfold ")
         nm
         (DStr " rhs) ")
@@ -3128,8 +3401,8 @@
         nm
         (DStr
           "_kf rhs) (reduce rhs) (rewrite (hyp 0) lr rhs true ()))) (rewrite-with (hyp 1) lr lhs () (")
-        (lp_lo1s adv 0)
-        (lp_shifts adv 0 na)
+        (lp_lo1s nm adv 0)
+        (lp_shifts nm adv 0 na)
         (DStr ")) (steps ((compute both))) refl)) (case False ")
         (lb_arm_head adv a b na)
         (DStr "(steps ((unfold ")
@@ -3273,24 +3546,28 @@
                                    (+ cnt 4))
                                  (DStr ""))))))
                          ((LIOk adv r j)
-                          (match (lp_first_inc adv 0)
-                            (None
-                              (cerr_at
-                                q
-                                "v1: at least one (+ ACCUM 1) accumulator is required (the counter wrap rides its range premise)"))
-                            ((Some fa)
-                             (let ((cnt (+ 13 (* 4 (lp_nadv adv)))))
-                               (COk
-                                 (li_unit
-                                   (dsym (qn_name q))
-                                   mids
-                                   n
-                                   adv
-                                   r
-                                   j
-                                   fa
-                                   (+ cnt 4))
-                                 (DStr "")))))))
+                          (if (lp_has_inck adv)
+                            (cerr_at
+                              q
+                              "stride != 1 is Mem-return-loop-only in v1 (Int-return loops keep +-1 accums)")
+                            (match (lp_first_inc adv 0)
+                              (None
+                                (cerr_at
+                                  q
+                                  "v1: at least one (+ ACCUM 1) accumulator is required (the counter wrap rides its range premise)"))
+                              ((Some fa)
+                               (let ((cnt (+ 13 (* 4 (lp_nadv adv)))))
+                                 (COk
+                                   (li_unit
+                                     (dsym (qn_name q))
+                                     mids
+                                     n
+                                     adv
+                                     r
+                                     j
+                                     fa
+                                     (+ cnt 4))
+                                   (DStr ""))))))))
                        (cerr_at q "loop fn must return Mem or Int")))
                      (cerr_at q "loop fn needs at least one Int accumulator")))
                  (cerr_at q "loop accumulators must all be Int")))
