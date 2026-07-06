@@ -1,6 +1,7 @@
 ;;; lowergen — the certifying emitter (docs/LOWERING.md §6): the scalar
 ;;; let/if fragment. For every fn in the target file whose body is
-;;; arithmetic over Int params, u32 literals (+ - * ediv mod), single-
+;;; arithmetic over Int params, u32 literals (+ - * ediv mod band bor
+;;; bxor), single-
 ;;; binding lets, and tail-position ifs over int_eq/lt/le comparisons, emit:
 ;;;   - the wasm function literal (postorder stack code; one LocalSet per
 ;;;     let, locals allocated after the params in textual order; each if
@@ -24,7 +25,7 @@
 ;;; import; refuse, don't guess — any body outside the fragment is a loud
 ;;; per-fn error and exit 1. Fragment rules: all params Int, return Int;
 ;;; body nodes are params, let-bound names, literals in [0, 2^32), and
-;;; binary + - * ediv mod; lets bind exactly one name; ifs in TAIL position
+;;; binary + - * ediv mod band bor bxor; lets bind exactly one name; ifs in TAIL position
 ;;; only, conditions = int_eq/lt/le over params/aliases/literals (no arith
 ;;; in conditions — wraps must never enter the case-on spelling); every
 ;;; arith node of the SUBSTITUTED body must contain a param (constant-fold
@@ -33,6 +34,10 @@
 ;;; ediv/mod fns take the STAGED pure walk (§6y — guard PRE per symbolic
 ;;; divisor, compute interleaved with guard rewrites) and are
 ;;; straight-line/let only for now: div + if is behind the fence.
+;;; band/bor/bxor are TRANSPARENT ops (§6z — prims applied directly, no
+;;; wrap, no guard, no premise of their own) and compose everywhere the
+;;; fragment goes, ifs included; bounds on containing arith nodes are
+;;; consumer premises (std/bits is the discharge kit).
 ;;;
 ;;; THE MEM FRAGMENT (first param Mem): bodies that read/write bytes lower
 ;;; to wasm Calls against std/mem's shipped artifact functions and the
@@ -220,8 +225,23 @@
                                ce
                                (ev_app eva (ev_app evb (Cons (EvD ceb) Nil)))))))
                         (None
-                          (GErr
-                            "call outside the fragment (only + - * ediv mod allowed)")))))
+                          (match (top_of q)
+                            ((Some opd)
+                             (GOk
+                               (dapp
+                                 ia
+                                 (dapp
+                                   ib
+                                   (Cons
+                                     (dcat3 (DStr "(I32Bin ") opd (DStr ")"))
+                                     Nil)))
+                               (+ ca (+ cb 1))
+                               nxb
+                               ce
+                               (ev_app eva evb)))
+                            (None
+                              (GErr
+                                "call outside the fragment (only + - * ediv mod band bor bxor allowed)")))))))
                   (GErr
                     "ground arithmetic subtree (constant-fold it in the source)"))))))))
        (_
@@ -229,8 +249,11 @@
            (None
              (match (dop_of q)
                (None
-                 (GErr
-                   "call outside the fragment (only + - * ediv mod allowed)"))
+                 (match (top_of q)
+                   (None
+                     (GErr
+                       "call outside the fragment (only + - * ediv mod band bor bxor allowed)"))
+                   ((Some _) (GErr "arith call must be binary"))))
                ((Some _) (GErr "arith call must be binary"))))
            ((Some _) (GErr "arith call must be binary"))))))
     ((Let bs body)
@@ -257,13 +280,15 @@
 
 
 ;; unique arith nodes, postorder (children before parents, so each node's
-;; spelling is already child-unwrapped at its discharge point)
+;; spelling is already child-unwrapped at its discharge point). Bitwise
+;; nodes are NOT wrap sites (bop_val applies the prims directly, §6z) —
+;; they recurse for children but never claim a premise pair or an event.
 (type NRes (NOk (List Expr)) (NErr (List Int)))
 
 (fn nodes_e ((e Expr) (acc (List Expr))) NRes
   (measure (struct e))
   (match e
-    ((Call _ as)
+    ((Call q as)
      (match as
        ((Cons a (Cons b Nil))
         (match (nodes_e a acc)
@@ -272,10 +297,13 @@
            (match (nodes_e b acc1)
              ((NErr m) (NErr m))
              ((NOk acc2)
-              (if (has_fv e)
-                (NOk (if (node_seen (spell e) acc2) acc2 (node_add e acc2)))
-                (NErr
-                  "ground arithmetic subtree (constant-fold it in the source)")))))))
+              (match (top_of q)
+                ((Some _) (NOk acc2))
+                (None
+                  (if (has_fv e)
+                    (NOk (if (node_seen (spell e) acc2) acc2 (node_add e acc2)))
+                    (NErr
+                      "ground arithmetic subtree (constant-fold it in the source)")))))))))
        (_ (NErr "arith call must be binary"))))
     (_ (NOk acc))))
 

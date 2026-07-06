@@ -1293,6 +1293,40 @@ it). Behind the same fence: divisors at aggregate readbacks, and
 div/mod in mem/loop bodies (the mem walk already has staged machinery —
 composing the two guard kinds is mechanical but unproven).
 
+### 6z. Emitter bitwise — transparent ops (2026-07-05)
+
+The pure fragment speaks `band`/`bor`/`bxor`, and the slice is SMALLER
+than division because the ops are structurally transparent: `bop_val`
+applies the kernel prims directly — total, no wrap, no guard — so a
+bitwise node sticks nowhere, contributes NO premise and NO discharge
+event, and the machine spelling IS the spec spelling (the folded prim
+term just rides the residue). Probe `examples/bitfrag_probe.shard` (six
+hand instances, all first-check, corpus-pinned); mechanization =
+`top_of` in the op vocabulary, an eventless `gen_e` arm, and one
+`nodes_e` change (bitwise heads recurse for children but are never wrap
+sites). Because nothing sticks, bitwise composes everywhere the
+fragment already goes — lets, SHARED lets, ifs (unlike div: the region
+path handles it, no staging), div divisors (`(ediv a (bor b 1))` — the
+§6y guard premise lands at the already-clean bor spelling), and arith
+over bitwise (the wrap pair fires at a band-containing spelling;
+`lg_bifp` exercises the §6j condition-relative machinery over one).
+Nine `lg_b*` emitter instances, all machine proofs FIRST GENERATION;
+five gates green; V8 replays the bitwise vectors (mask patterns,
+complementary halves, u32 extremes).
+
+Bounds on arith-over-bitwise nodes are CONSUMER premises, discharged
+through std/bits (`band_le_l`/`bor_le32`/`mask_byte` … — the
+`bits_demo` pattern). Auto-discharge (PAuto for bitwise-over-reads in
+the mem fragment) is deliberately NOT in this slice: it needs per-atom
+intervals in lin.shard's poly kit (atoms are hardcoded byte reads
+today), a citation-style helper template alongside the farkas one, and
+literal-width corollaries on std/bits' surface (its width facts speak
+symbolic `pow2 k`; the emitter wants literal 255/65535 bounds). Do that
+wiring when a mem-fragment consumer actually masks bytes; the fragment
+substrate no longer blocks it. Also behind the fence: bitwise in
+conditions (cond operands stay params/aliases/literals) and bitwise in
+mem/loop bodies (same op-classing, unprobed).
+
 ## 7. Open questions — triaged at ratification (2026-07-04)
 
 None of these block the ratified form; they are the backlog the next
