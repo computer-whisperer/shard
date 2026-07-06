@@ -5,10 +5,12 @@
  * RT_TAG_World) BEFORE including this header.
  *
  * Representation: value_t is one machine word.
- *   odd  = small int, (i << 1) | 1, i in i63 — overflow TRAPS (the
- *          interpreted engines are BigInt-exact; a trap means "rerun on
- *          the direct engine", never a wrong answer).
+ *   odd  = small int, (i << 1) | 1, i in i63.
  *   even = pointer to cell { tag, arity, fields... }.
+ * Ints outside i63 are BIGNUM cells (tag RT_TAG_BIG_, see the bignum
+ * section) — arithmetic is exact like the interpreted engines; the old
+ * "overflow traps" posture survives only as the explicit guards (shift
+ * counts, RT_BIG_MAXLIMB), still loud never wrong.
  * Symbols are cells with tag RT_TAG_SYM_ (runtime-reserved, not a ctor
  * tag) whose single field is the intern id (small int). Equality = id.
  *
@@ -53,8 +55,14 @@ static void rt_trap(const char *msg) {
 
 static inline int rt_is_int(value_t v) { return v & 1; }
 static inline int64_t rt_untag(value_t v) { return (int64_t)v >> 1; }
+/* i outside i63 promotes to a bignum cell (see the bignum section below) —
+   the arithmetic prims are exact like the interpreted engines. */
+static value_t rt_big_from_i64(int64_t i);
+static inline value_t rt_mk_small(int64_t i) {  /* caller guarantees i63 */
+  return (value_t)((uint64_t)i << 1 | 1);
+}
 static inline value_t rt_tag_int(int64_t i) {
-  if (i > RT_INT_MAX || i < RT_INT_MIN) rt_trap("i63 overflow");
+  if (i > RT_INT_MAX || i < RT_INT_MIN) return rt_big_from_i64(i);
   return (value_t)((uint64_t)i << 1 | 1);
 }
 
@@ -244,66 +252,461 @@ static value_t rt_sym(uint32_t id) {
 }
 static inline uint32_t rt_symid(value_t v) { return (uint32_t)rt_untag(rt_field(v, 0)); }
 
+/* ---- bignum: out-of-i63 ints as heap cells ------------------------------- */
+/* Cell layout: tag RT_TAG_BIG_ (runtime-reserved, like SYM_), field 0 = sign
+ * (tagged -1/+1), fields 1..arity-1 = 32-bit magnitude limbs little-endian,
+ * each stored as a TAGGED SMALL INT so the conservative GC needs no changes.
+ * CANONICAL: top limb nonzero, magnitude outside i63 (in-range values demote
+ * to small ints in rt_big_make) — so tagged-word equality stays valid for
+ * smalls and small-vs-big is never equal. Slow paths only: every prim keeps
+ * its small-int fast path and falls through on overflow or a big operand.
+ * Semantics authority = prim.rs (num-bigint): truncating `/`+`tmod`,
+ * euclidean `mod`+`ediv`, two's-complement bitwise, floor shifts. Division
+ * is bit-serial (simple over fast; division is rare in cert checking). */
+#define RT_TAG_BIG_ 0x7ffffffeu
+#define RT_BIG_MAXLIMB 120  /* ~2^3840; stays inside the GC size classes */
+
+static inline int rt_is_big(value_t v) {
+  return !(v & 1) && rt_cellof(v)->tag == RT_TAG_BIG_;
+}
+static inline int rt_big_sign(value_t v) { return (int)rt_untag(rt_field(v, 0)); }
+static inline uint32_t rt_big_n(value_t v) { return rt_cellof(v)->arity - 1; }
+static inline uint32_t rt_big_limb(value_t v, uint32_t i) {
+  return (uint32_t)rt_untag(rt_field(v, i + 1));
+}
+
+/* magnitude helpers: little-endian uint32 limb arrays */
+static uint32_t rt_mag_norm(const uint32_t *a, uint32_t n) {
+  while (n && !a[n - 1]) n--;
+  return n;
+}
+static int rt_mag_cmp(const uint32_t *a, uint32_t na,
+                      const uint32_t *b, uint32_t nb) {
+  if (na != nb) return na < nb ? -1 : 1;
+  for (uint32_t i = na; i > 0; i--)
+    if (a[i - 1] != b[i - 1]) return a[i - 1] < b[i - 1] ? -1 : 1;
+  return 0;
+}
+/* r = a + b (r cap max(na,nb)+1) */
+static uint32_t rt_mag_add(const uint32_t *a, uint32_t na,
+                           const uint32_t *b, uint32_t nb, uint32_t *r) {
+  if (na < nb) { const uint32_t *tp = a; a = b; b = tp;
+                 uint32_t tn = na; na = nb; nb = tn; }
+  uint64_t carry = 0;
+  for (uint32_t i = 0; i < na; i++) {
+    uint64_t s = (uint64_t)a[i] + (i < nb ? b[i] : 0) + carry;
+    r[i] = (uint32_t)s; carry = s >> 32;
+  }
+  if (carry) { r[na] = (uint32_t)carry; return na + 1; }
+  return rt_mag_norm(r, na);
+}
+/* r = a - b, requires a >= b; in-place safe (r may alias a) */
+static uint32_t rt_mag_sub(const uint32_t *a, uint32_t na,
+                           const uint32_t *b, uint32_t nb, uint32_t *r) {
+  int64_t borrow = 0;
+  for (uint32_t i = 0; i < na; i++) {
+    int64_t d = (int64_t)a[i] - (int64_t)(i < nb ? b[i] : 0) - borrow;
+    if (d < 0) { d += (int64_t)1 << 32; borrow = 1; } else borrow = 0;
+    r[i] = (uint32_t)d;
+  }
+  return rt_mag_norm(r, na);
+}
+/* r = a * b (r cap na+nb, distinct from a and b) */
+static uint32_t rt_mag_mul(const uint32_t *a, uint32_t na,
+                           const uint32_t *b, uint32_t nb, uint32_t *r) {
+  memset(r, 0, (size_t)(na + nb) * 4);
+  for (uint32_t i = 0; i < na; i++) {
+    uint64_t ai = a[i], carry = 0;
+    if (!ai) continue;
+    for (uint32_t j = 0; j < nb; j++) {
+      uint64_t s = ai * b[j] + r[i + j] + carry;
+      r[i + j] = (uint32_t)s; carry = s >> 32;
+    }
+    r[i + nb] = (uint32_t)carry;  /* slot untouched until iteration i */
+  }
+  return rt_mag_norm(r, na + nb);
+}
+/* r = a << k, k in 0..63 (r cap na + k/32 + 2, distinct from a) */
+static uint32_t rt_mag_shl(const uint32_t *a, uint32_t na, uint32_t k,
+                           uint32_t *r) {
+  uint32_t lw = k >> 5, lb = k & 31, n = na + lw + (lb ? 1 : 0);
+  memset(r, 0, (size_t)n * 4);
+  for (uint32_t i = 0; i < na; i++) {
+    uint64_t v = (uint64_t)a[i] << lb;
+    r[i + lw] |= (uint32_t)v;
+    if (lb) r[i + lw + 1] |= (uint32_t)(v >> 32);
+  }
+  return rt_mag_norm(r, n);
+}
+/* r = a >> k; *dropped = 1 iff any shifted-out bit was set (floor fix-up) */
+static uint32_t rt_mag_shr(const uint32_t *a, uint32_t na, uint32_t k,
+                           uint32_t *r, int *dropped) {
+  uint32_t lw = k >> 5, lb = k & 31;
+  *dropped = 0;
+  for (uint32_t i = 0; i < lw && i < na; i++) if (a[i]) *dropped = 1;
+  if (lb && lw < na && (a[lw] & ((1u << lb) - 1))) *dropped = 1;
+  if (lw >= na) return 0;
+  uint32_t n = na - lw;
+  for (uint32_t i = 0; i < n; i++) {
+    uint64_t hi = (i + lw + 1 < na) ? a[i + lw + 1] : 0;
+    r[i] = lb ? (uint32_t)(((uint64_t)a[i + lw] >> lb) | (hi << (32 - lb)))
+              : a[i + lw];
+  }
+  return rt_mag_norm(r, n);
+}
+/* bit-serial divmod: q = a/b, rem = a%b on magnitudes; b nonzero.
+   q cap na (zeroed here), rem cap nb+1 (zeroed here). */
+static void rt_mag_divmod(const uint32_t *a, uint32_t na,
+                          const uint32_t *b, uint32_t nb,
+                          uint32_t *q, uint32_t *nq,
+                          uint32_t *rem, uint32_t *nrem) {
+  memset(q, 0, (size_t)na * 4);
+  memset(rem, 0, (size_t)(nb + 1) * 4);
+  uint32_t rn = 0;
+  for (uint32_t bit = na * 32; bit > 0; bit--) {
+    uint32_t i = bit - 1;
+    uint32_t carry = (a[i >> 5] >> (i & 31)) & 1;  /* rem = rem<<1 | bit */
+    for (uint32_t j = 0; j <= nb; j++) {
+      uint32_t nc = rem[j] >> 31;
+      rem[j] = (rem[j] << 1) | carry;
+      carry = nc;
+    }
+    rn = rt_mag_norm(rem, nb + 1);
+    if (rt_mag_cmp(rem, rn, b, nb) >= 0) {
+      rn = rt_mag_sub(rem, rn, b, nb, rem);
+      q[i >> 5] |= 1u << (i & 31);
+    }
+  }
+  *nq = rt_mag_norm(q, na);
+  *nrem = rn;
+}
+
+/* build the canonical value; demotes to a small int when it fits */
+static value_t rt_big_make(int sign, const uint32_t *limbs, uint32_t n) {
+  n = rt_mag_norm(limbs, n);
+  if (!n || !sign) return rt_mk_small(0);
+  if (n <= 2) {
+    uint64_t m = (uint64_t)limbs[0] | (n > 1 ? (uint64_t)limbs[1] << 32 : 0);
+    if (sign > 0 && m <= (uint64_t)RT_INT_MAX) return rt_mk_small((int64_t)m);
+    if (sign < 0 && m <= (uint64_t)RT_INT_MAX + 1)
+      return rt_mk_small(m == (uint64_t)RT_INT_MAX + 1 ? RT_INT_MIN
+                                                       : -(int64_t)m);
+  }
+  if (n > RT_BIG_MAXLIMB) rt_trap("bignum too large (exceeds 2^3840)");
+  value_t c = rt_alloc(RT_TAG_BIG_, n + 1);
+  rt_cellof(c)->fields[0] = rt_mk_small(sign);
+  for (uint32_t i = 0; i < n; i++)
+    rt_cellof(c)->fields[i + 1] = rt_mk_small((int64_t)limbs[i]);
+  return c;
+}
+static value_t rt_big_from_i64(int64_t x) {
+  uint64_t m = x < 0 ? -(uint64_t)x : (uint64_t)x;
+  uint32_t limbs[2] = { (uint32_t)m, (uint32_t)(m >> 32) };
+  return rt_big_make(x < 0 ? -1 : 1, limbs, 2);
+}
+
+/* copy any int value's limbs into a fresh malloc'd array (>= 1 slot) */
+static uint32_t *rt_limbs_alloc(value_t v, uint32_t *n, int *sign) {
+  if (v & 1) {
+    int64_t x = rt_untag(v);
+    uint32_t *p = (uint32_t *)malloc(2 * 4);
+    if (!x) { *sign = 0; *n = 0; return p; }
+    uint64_t m = x < 0 ? -(uint64_t)x : (uint64_t)x;
+    *sign = x < 0 ? -1 : 1;
+    p[0] = (uint32_t)m; p[1] = (uint32_t)(m >> 32);
+    *n = p[1] ? 2 : 1;
+    return p;
+  }
+  uint32_t nn = rt_big_n(v);
+  uint32_t *p = (uint32_t *)malloc((size_t)nn * 4);
+  for (uint32_t i = 0; i < nn; i++) p[i] = rt_big_limb(v, i);
+  *sign = rt_big_sign(v);
+  *n = nn;
+  return p;
+}
+
+/* a + b, or a - b when negb (slow path; at least one operand big or the
+   small fast path overflowed) */
+static value_t rt_iadd2(value_t a, value_t b, int negb) {
+  int sa, sb; uint32_t na, nb;
+  uint32_t *A = rt_limbs_alloc(a, &na, &sa);
+  uint32_t *B = rt_limbs_alloc(b, &nb, &sb);
+  if (negb) sb = -sb;
+  uint32_t *R = (uint32_t *)malloc(((size_t)(na > nb ? na : nb) + 1) * 4);
+  int rs; uint32_t rn;
+  if (!sa)      { memcpy(R, B, (size_t)nb * 4); rn = nb; rs = sb; }
+  else if (!sb) { memcpy(R, A, (size_t)na * 4); rn = na; rs = sa; }
+  else if (sa == sb) { rn = rt_mag_add(A, na, B, nb, R); rs = sa; }
+  else {
+    int c = rt_mag_cmp(A, na, B, nb);
+    if (!c)      { rn = 0; rs = 0; }
+    else if (c > 0) { rn = rt_mag_sub(A, na, B, nb, R); rs = sa; }
+    else            { rn = rt_mag_sub(B, nb, A, na, R); rs = sb; }
+  }
+  value_t out = rt_big_make(rs, R, rn);
+  free(A); free(B); free(R);
+  return out;
+}
+static value_t rt_imul2(value_t a, value_t b) {
+  int sa, sb; uint32_t na, nb;
+  uint32_t *A = rt_limbs_alloc(a, &na, &sa);
+  uint32_t *B = rt_limbs_alloc(b, &nb, &sb);
+  if (!sa || !sb) { free(A); free(B); return rt_mk_small(0); }
+  uint32_t *R = (uint32_t *)malloc((size_t)(na + nb) * 4);
+  uint32_t rn = rt_mag_mul(A, na, B, nb, R);
+  value_t out = rt_big_make(sa == sb ? 1 : -1, R, rn);
+  free(A); free(B); free(R);
+  return out;
+}
+/* op: 0 = `/` (trunc), 1 = tmod, 2 = mod (euclid), 3 = ediv */
+static value_t rt_idiv2(int op, value_t a, value_t b) {
+  int sa, sb; uint32_t na, nb;
+  uint32_t *A = rt_limbs_alloc(a, &na, &sa);
+  uint32_t *B = rt_limbs_alloc(b, &nb, &sb);
+  if (!sb) rt_trap("div/mod by zero (stuck on the interpreted engines)");
+  uint32_t *Q = (uint32_t *)malloc(((size_t)na + 1) * 4);
+  uint32_t *REM = (uint32_t *)malloc(((size_t)nb + 1) * 4);
+  uint32_t nq = 0, nrem = 0;
+  if (sa) rt_mag_divmod(A, na, B, nb, Q, &nq, REM, &nrem);
+  else { memset(Q, 0, ((size_t)na + 1) * 4); memset(REM, 0, ((size_t)nb + 1) * 4); }
+  value_t out;
+  switch (op) {
+    case 0:  /* trunc quotient: sign = sa*sb */
+      out = rt_big_make(sa == sb ? 1 : -1, Q, nq);
+      break;
+    case 1:  /* trunc remainder: sign follows the dividend */
+      out = rt_big_make(sa, REM, nrem);
+      break;
+    case 2:  /* euclidean remainder: in [0, |b|) */
+      if (sa >= 0 || !nrem) out = rt_big_make(1, REM, nrem);
+      else { nrem = rt_mag_sub(B, nb, REM, nrem, REM);
+             out = rt_big_make(1, REM, nrem); }
+      break;
+    default: /* ediv: trunc quotient, minus-one-ward fix when a<0 with rest */
+      if (sa < 0 && nrem) {
+        uint32_t one = 1;
+        nq = rt_mag_add(Q, nq, &one, 1, Q);  /* Q cap na+1, in-place ok */
+        out = rt_big_make(-sb, Q, nq);
+      } else out = rt_big_make(sa == sb ? 1 : -1, Q, nq);
+      break;
+  }
+  free(A); free(B); free(Q); free(REM);
+  return out;
+}
+/* three-way compare (slow path; at least one big). Canonical form makes
+   sign/size decide before any limb walk. */
+static int rt_icmp2(value_t a, value_t b) {
+  int64_t xa, xb;
+  int sa = (a & 1) ? ((xa = rt_untag(a)) > 0 ? 1 : xa < 0 ? -1 : 0)
+                   : rt_big_sign(a);
+  int sb = (b & 1) ? ((xb = rt_untag(b)) > 0 ? 1 : xb < 0 ? -1 : 0)
+                   : rt_big_sign(b);
+  if (sa != sb) return sa < sb ? -1 : 1;
+  if (!sa) return 0;
+  int abig = !(a & 1), bbig = !(b & 1);
+  if (abig != bbig) return (abig ? 1 : -1) * sa;  /* big magnitude > small */
+  if (!abig) { int64_t x = rt_untag(a), y = rt_untag(b);
+               return x < y ? -1 : x > y ? 1 : 0; }
+  uint32_t na = rt_big_n(a), nb = rt_big_n(b);
+  if (na != nb) return (na < nb ? -1 : 1) * sa;
+  for (uint32_t i = na; i > 0; i--) {
+    uint32_t la = rt_big_limb(a, i - 1), lb = rt_big_limb(b, i - 1);
+    if (la != lb) return (la < lb ? -1 : 1) * sa;
+  }
+  return 0;
+}
+/* two's-complement bitwise (num-bigint semantics); op: 0 & 1 | 2 ^ */
+static value_t rt_ibit2(int op, value_t a, value_t b) {
+  int sa, sb; uint32_t na, nb;
+  uint32_t *A = rt_limbs_alloc(a, &na, &sa);
+  uint32_t *B = rt_limbs_alloc(b, &nb, &sb);
+  uint32_t len = (na > nb ? na : nb) + 1;
+  uint32_t *TA = (uint32_t *)malloc((size_t)len * 4);
+  uint32_t *TB = (uint32_t *)malloc((size_t)len * 4);
+  /* materialize two's complement over len limbs (sign-extended) */
+  for (uint32_t i = 0; i < len; i++) TA[i] = i < na ? A[i] : 0;
+  for (uint32_t i = 0; i < len; i++) TB[i] = i < nb ? B[i] : 0;
+  if (sa < 0) { uint64_t c = 1;
+    for (uint32_t i = 0; i < len; i++) { uint64_t s = (uint64_t)(~TA[i]) + c;
+      TA[i] = (uint32_t)s; c = s >> 32; } }
+  if (sb < 0) { uint64_t c = 1;
+    for (uint32_t i = 0; i < len; i++) { uint64_t s = (uint64_t)(~TB[i]) + c;
+      TB[i] = (uint32_t)s; c = s >> 32; } }
+  for (uint32_t i = 0; i < len; i++)
+    TA[i] = op == 0 ? (TA[i] & TB[i]) : op == 1 ? (TA[i] | TB[i])
+                                                : (TA[i] ^ TB[i]);
+  value_t out;
+  if (TA[len - 1] & 0x80000000u) {   /* negative: back to sign-magnitude */
+    uint64_t c = 1;
+    for (uint32_t i = 0; i < len; i++) { uint64_t s = (uint64_t)(~TA[i]) + c;
+      TA[i] = (uint32_t)s; c = s >> 32; }
+    out = rt_big_make(-1, TA, len);
+  } else out = rt_big_make(1, TA, len);
+  free(A); free(B); free(TA); free(TB);
+  return out;
+}
+static value_t rt_ishl2(value_t a, uint32_t k) {
+  int sa; uint32_t na;
+  uint32_t *A = rt_limbs_alloc(a, &na, &sa);
+  uint32_t *R = (uint32_t *)malloc(((size_t)na + (k >> 5) + 2) * 4);
+  uint32_t rn = rt_mag_shl(A, na, k, R);
+  value_t out = rt_big_make(sa, R, rn);
+  free(A); free(R);
+  return out;
+}
+static value_t rt_ishr2(value_t a, uint32_t k) {
+  int sa, dropped; uint32_t na;
+  uint32_t *A = rt_limbs_alloc(a, &na, &sa);
+  uint32_t *R = (uint32_t *)malloc(((size_t)na + 1) * 4);
+  uint32_t rn = rt_mag_shr(A, na, k, R, &dropped);
+  if (sa < 0 && dropped) {           /* floor: -(|a|>>k) - 1 */
+    uint32_t one = 1;
+    rn = rt_mag_add(R, rn, &one, 1, R);
+  }
+  value_t out = rt_big_make(sa, R, rn);
+  free(A); free(R);
+  return out;
+}
+/* decimal literal -> value (codegen emits rt_big_dec("...") for out-of-i63
+   literals; also the unit-test entry) */
+static value_t rt_big_dec(const char *s) {
+  int sign = 1;
+  if (*s == '-') { sign = -1; s++; }
+  uint32_t cap = (uint32_t)(strlen(s) / 9 + 2), n = 0;
+  uint32_t *L = (uint32_t *)malloc((size_t)cap * 4);
+  for (; *s; s++) {
+    uint32_t carry = (uint32_t)(*s - '0');
+    for (uint32_t i = 0; i < n; i++) {
+      uint64_t v = (uint64_t)L[i] * 10 + carry;
+      L[i] = (uint32_t)v; carry = (uint32_t)(v >> 32);
+    }
+    if (carry) L[n++] = carry;
+  }
+  value_t r = rt_big_make(sign, L, n);
+  free(L);
+  return r;
+}
+/* euclidean low byte of any int (the extern wire's mod-256 masking) */
+static inline int rt_byte_of(value_t v) {
+  if (v & 1) return (int)(rt_untag(v) & 0xFF);
+  int b = (int)(rt_big_limb(v, 0) & 0xFF);
+  return rt_big_sign(v) < 0 ? (256 - b) & 0xFF : b;
+}
+
 /* ---- prims (specs = kernel reduce.shard / host prim.rs) ------------------ */
+/* Every prim: small-int fast path first (both operands tagged odd), big
+ * slow path on overflow or a big operand. rt_tag_int itself promotes
+ * int64-but-not-i63 results, so fast paths only pre-check int64 overflow. */
 static inline value_t rt_add(value_t a, value_t b) {
-  int64_t r;
-  if (__builtin_add_overflow(rt_untag(a), rt_untag(b), &r)) rt_trap("add overflow");
-  return rt_tag_int(r);
+  if (a & b & 1) {
+    int64_t r;
+    if (!__builtin_add_overflow(rt_untag(a), rt_untag(b), &r))
+      return rt_tag_int(r);
+  }
+  return rt_iadd2(a, b, 0);
 }
 static inline value_t rt_sub(value_t a, value_t b) {
-  int64_t r;
-  if (__builtin_sub_overflow(rt_untag(a), rt_untag(b), &r)) rt_trap("sub overflow");
-  return rt_tag_int(r);
+  if (a & b & 1) {
+    int64_t r;
+    if (!__builtin_sub_overflow(rt_untag(a), rt_untag(b), &r))
+      return rt_tag_int(r);
+  }
+  return rt_iadd2(a, b, 1);
 }
 static inline value_t rt_mul(value_t a, value_t b) {
-  int64_t r;
-  if (__builtin_mul_overflow(rt_untag(a), rt_untag(b), &r)) rt_trap("mul overflow");
-  return rt_tag_int(r);
+  if (a & b & 1) {
+    int64_t r;
+    if (!__builtin_mul_overflow(rt_untag(a), rt_untag(b), &r))
+      return rt_tag_int(r);
+  }
+  return rt_imul2(a, b);
 }
 /* `/` truncates toward zero; `mod` is the EUCLIDEAN remainder (always >= 0);
- * `tmod` is the truncating remainder; `ediv` the Euclidean division. */
+ * `tmod` is the truncating remainder; `ediv` the Euclidean division.
+ * Small/small never overflows int64 (operands are i63), so the fast paths
+ * are exact as-is. */
 static inline value_t rt_div(value_t a, value_t b) {
-  int64_t d = rt_untag(b);
-  if (d == 0) rt_trap("div by zero (stuck on the interpreted engines)");
-  return rt_tag_int(rt_untag(a) / d);
+  if (a & b & 1) {
+    int64_t d = rt_untag(b);
+    if (d == 0) rt_trap("div by zero (stuck on the interpreted engines)");
+    return rt_tag_int(rt_untag(a) / d);  /* RT_INT_MIN / -1 = 2^62 promotes */
+  }
+  return rt_idiv2(0, a, b);
 }
 static inline value_t rt_mod(value_t a, value_t b) {
-  int64_t n = rt_untag(a), d = rt_untag(b);
-  if (d == 0) rt_trap("mod by zero (stuck on the interpreted engines)");
-  int64_t r = n % d;
-  if (r < 0) r += (d < 0 ? -d : d);
-  return rt_tag_int(r);
+  if (a & b & 1) {
+    int64_t n = rt_untag(a), d = rt_untag(b);
+    if (d == 0) rt_trap("mod by zero (stuck on the interpreted engines)");
+    int64_t r = n % d;
+    if (r < 0) r += (d < 0 ? -d : d);
+    return rt_mk_small(r);
+  }
+  return rt_idiv2(2, a, b);
 }
 static inline value_t rt_tmod(value_t a, value_t b) {
-  int64_t d = rt_untag(b);
-  if (d == 0) rt_trap("tmod by zero");
-  return rt_tag_int(rt_untag(a) % d);
+  if (a & b & 1) {
+    int64_t d = rt_untag(b);
+    if (d == 0) rt_trap("tmod by zero");
+    return rt_mk_small(rt_untag(a) % d);
+  }
+  return rt_idiv2(1, a, b);
 }
 static inline value_t rt_ediv(value_t a, value_t b) {
-  int64_t n = rt_untag(a), d = rt_untag(b);
-  if (d == 0) rt_trap("ediv by zero");
-  int64_t q = n / d, r = n % d;
-  if (r < 0) q -= (d > 0 ? 1 : -1);
-  return rt_tag_int(q);
+  if (a & b & 1) {
+    int64_t n = rt_untag(a), d = rt_untag(b);
+    if (d == 0) rt_trap("ediv by zero");
+    int64_t q = n / d, r = n % d;
+    if (r < 0) q -= (d > 0 ? 1 : -1);
+    return rt_tag_int(q);  /* RT_INT_MIN / -1 = 2^62 promotes */
+  }
+  return rt_idiv2(3, a, b);
 }
-static inline value_t rt_lt(value_t a, value_t b) { return rt_bool(rt_untag(a) < rt_untag(b)); }
-static inline value_t rt_le(value_t a, value_t b) { return rt_bool(rt_untag(a) <= rt_untag(b)); }
-static inline value_t rt_int_eq(value_t a, value_t b) { return rt_bool(rt_untag(a) == rt_untag(b)); }
+static inline value_t rt_lt(value_t a, value_t b) {
+  if (a & b & 1) return rt_bool(rt_untag(a) < rt_untag(b));
+  return rt_bool(rt_icmp2(a, b) < 0);
+}
+static inline value_t rt_le(value_t a, value_t b) {
+  if (a & b & 1) return rt_bool(rt_untag(a) <= rt_untag(b));
+  return rt_bool(rt_icmp2(a, b) <= 0);
+}
+static inline value_t rt_int_eq(value_t a, value_t b) {
+  if (a & b & 1) return rt_bool(a == b);  /* canonical tagged words */
+  return rt_bool(rt_icmp2(a, b) == 0);
+}
 static inline value_t rt_sym_eq(value_t a, value_t b) { return rt_bool(rt_symid(a) == rt_symid(b)); }
-static inline value_t rt_band(value_t a, value_t b) { return rt_tag_int(rt_untag(a) & rt_untag(b)); }
-static inline value_t rt_bor(value_t a, value_t b) { return rt_tag_int(rt_untag(a) | rt_untag(b)); }
-static inline value_t rt_bxor(value_t a, value_t b) { return rt_tag_int(rt_untag(a) ^ rt_untag(b)); }
+/* small & | ^ stay in i63 (two's complement is closed under them) */
+static inline value_t rt_band(value_t a, value_t b) {
+  if (a & b & 1) return rt_mk_small(rt_untag(a) & rt_untag(b));
+  return rt_ibit2(0, a, b);
+}
+static inline value_t rt_bor(value_t a, value_t b) {
+  if (a & b & 1) return rt_mk_small(rt_untag(a) | rt_untag(b));
+  return rt_ibit2(1, a, b);
+}
+static inline value_t rt_bxor(value_t a, value_t b) {
+  if (a & b & 1) return rt_mk_small(rt_untag(a) ^ rt_untag(b));
+  return rt_ibit2(2, a, b);
+}
+/* shift counts stay guarded to 0..63 (the interpreted engines' stuck rule;
+ * a big count is out of range by canonicality) */
 static inline value_t rt_bshl(value_t a, value_t b) {
+  if (!(b & 1)) rt_trap("bshl shift out of range (stuck on engines)");
   int64_t s = rt_untag(b);
   if (s < 0 || s >= 64) rt_trap("bshl shift out of range (stuck on engines)");
-  int64_t r = rt_untag(a);
-  if (s >= 2 && (r > (RT_INT_MAX >> s) || r < (RT_INT_MIN >> s))) rt_trap("bshl overflow");
-  return rt_tag_int(r << s);
+  if (a & 1) {
+    int64_t r = rt_untag(a);
+    if (s < 2 || (r <= (RT_INT_MAX >> s) && r >= (RT_INT_MIN >> s)))
+      /* shift via unsigned: defined for negative r, same bits */
+      return rt_tag_int((int64_t)((uint64_t)r << s));
+  }
+  return rt_ishl2(a, (uint32_t)s);
 }
 static inline value_t rt_bshr(value_t a, value_t b) {
+  if (!(b & 1)) rt_trap("bshr shift out of range (stuck on engines)");
   int64_t s = rt_untag(b);
   if (s < 0 || s >= 64) rt_trap("bshr shift out of range (stuck on engines)");
-  return rt_tag_int(rt_untag(a) >> s);
+  if (a & 1) return rt_mk_small(rt_untag(a) >> s);  /* arithmetic = floor */
+  return rt_ishr2(a, (uint32_t)s);
 }
 static value_t rt_word_stub(void) { rt_trap("word ops unimplemented in v0 codegen"); return 0; }
 
@@ -350,7 +753,7 @@ static char *rt_cstr(value_t l, size_t *lenp) {
   for (value_t p = l; rt_tag(p) == RT_TAG_Cons; p = rt_field(p, 1)) n++;
   char *buf = malloc(n + 1); size_t i = 0;
   for (value_t p = l; rt_tag(p) == RT_TAG_Cons; p = rt_field(p, 1))
-    buf[i++] = (char)(rt_untag(rt_field(p, 0)) & 0xFF);
+    buf[i++] = (char)rt_byte_of(rt_field(p, 0));
   buf[i] = 0; if (lenp) *lenp = i;
   return buf;
 }

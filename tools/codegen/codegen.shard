@@ -275,13 +275,20 @@
 (type CR (COk Doc) (CErr (List Int)))
 (type CRS (CsOk (List Doc)) (CsErr (List Int)))
 
+;; a literal inside i63 rides a C integer constant; outside it parses at
+;; runtime through rt_big_dec (exact; out-of-line — big literals are rare)
+(fn em_intlit ((n Int)) Doc
+  (if (if (le -4611686018427387904 n) (le n 4611686018427387903) False)
+    (dcat3 (DStr "rt_tag_int(") (dint n) (DStr "LL)"))
+    (dcat3 (DStr "rt_big_dec(\"") (dint n) (DStr "\")"))))
+
 (fn em_atom ((e Expr) (env (List (List Int))) (cx Cx)) CR
   (match e
     ((BVar i)
      (match (nth_c env i)
        (None (CErr "BVar out of range"))
        ((Some n) (COk (DStr n)))))
-    ((IntLit n) (COk (dcat3 (DStr "rt_tag_int(") (dint n) (DStr "LL)"))))
+    ((IntLit n) (COk (em_intlit n)))
     ((SymLit s)
      (match (sym_idx s (cx_syms cx) 0)
        (None (CErr "unknown sym literal"))
@@ -527,11 +534,16 @@
     ((AKCtor)
      (dcat4 (ind_d ind) (DStr "switch (rt_tag(") (DStr sn) (DStr ")) {\n")))
     ((AKInt)
+     ;; a bignum scrutinee routes to default via an i63-impossible sentinel
+     ;; (case labels are refused outside i63, so INT64_MIN is unmatchable)
      (dcat4
        (ind_d ind)
-       (DStr "switch ((int64_t)rt_untag(")
+       (dcat3
+         (DStr "switch (rt_is_int(")
+         (DStr sn)
+         (DStr ") ? (int64_t)rt_untag("))
        (DStr sn)
-       (DStr ")) {\n")))
+       (DStr ") : (-9223372036854775807LL - 1)) {\n")))
     ((AKSym) (DCat (ind_d ind) (DStr "do {\n")))
     ((AKVarOnly) (DStr ""))))
 
@@ -623,15 +635,18 @@
                bd
                (DCat (ind_d ind) (DStr "}\n")))))))))
     ((PInt n)
-     (match (em_tail body env cx (+ ind 1))
-       ((CErr m) (CErr m))
-       ((COk bd)
-        (COk
-          (dcat4
-            (dcat4 (ind_d ind) (DStr "case ") (dint n) (DStr "LL: {\n"))
-            bd
-            (DCat (ind_d ind) (DStr "}\n"))
-            (DStr ""))))))
+     ;; a C case label must be an i63 constant (bigs take the switch default)
+     (if (if (le -4611686018427387904 n) (le n 4611686018427387903) False)
+       (match (em_tail body env cx (+ ind 1))
+         ((CErr m) (CErr m))
+         ((COk bd)
+          (COk
+            (dcat4
+              (dcat4 (ind_d ind) (DStr "case ") (dint n) (DStr "LL: {\n"))
+              bd
+              (DCat (ind_d ind) (DStr "}\n"))
+              (DStr "")))))
+       (CErr "int case label outside i63 (cannot be a C case label)")))
     ((PSym s)
      (match (sym_idx s (cx_syms cx) 0)
        (None (CErr "unknown sym in pattern"))

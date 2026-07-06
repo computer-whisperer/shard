@@ -112,6 +112,7 @@ TARGETS=(
   examples/wasm_rev.shard
   examples/wasm_copy.shard
   examples/lowered_form.shard
+  examples/w64_probe.shard
   examples/rep_probe.shard
   examples/lowfrag_probe.shard
   examples/divfrag_probe.shard
@@ -232,6 +233,17 @@ fi
 echo "=== facts: ground differential ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run examples/facts_probe.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# 64-bit range pin (the x86_64 arc's probe 0a): ground facts at and past
+# 2^64 through the compiled chain's bignum runtime. Same OK-line pin
+# discipline as facts_probe; the CHECK side rides the kernel TARGETS list
+# (wrap64_id's farkas certificate carries 2^64 coefficients).
+echo "=== facts: 64-bit range probe ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run examples/w64_probe.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
