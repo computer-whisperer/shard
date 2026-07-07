@@ -685,6 +685,14 @@ five gates green on all four builds; corpus closure 182/0, V8 54/0.
 This also stages the future multiple-stores/aliasing loop work: the
 disequality premises those need are condition-relative by nature.
 
+**2026-07-07: the condition-path walk GRADUATED to meta/proof**,
+parametric in a wrap key (`WrapK`: modulus Int + rendered digits +
+collapse lemma) — the second back end spoke it (X86.md §13 is the
+record). wasm re-instantiates `wk32` byte-identically; x86 rides
+`wk64` = 2^64/wrap64_id and deleted its whole global-premise chain.
+meta/lin's `ng_ltwrap` carries the modulus parameter; `cb_name` lives
+with the walk.
+
 ### 6k. INT-RETURN loops — the accumulator comes home (2026-07-04)
 
 The first §7.7 fragment-growth slice: loops whose Z arm returns an
@@ -1634,7 +1642,9 @@ recorded as the next candidates when a second target arrives: the
 calls-in-loops discharge classifier (`lk_lin`/`LKD`/`lk_disch` —
 generic classification currently interleaved with `clh_*` helper-cert
 emission) and the premise walk over the region tree (`pw_*` — §6j
-layout logic fused with wasm proof docs).
+layout logic fused with wasm proof docs). [`pw_*` GRADUATED
+2026-07-07 when the x86 back end spoke it — meta/proof, parametric in
+the wrap key; X86.md §13. The lk_ classifier still waits.]
 
 ### 6af. The hygiene pass — the manipulation library moves to meta/ (2026-07-07)
 
