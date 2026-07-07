@@ -69,6 +69,7 @@ TARGETS=(
   meta/invoke/invoke.shard
   meta/plan/plan.shard
   meta/format/mod.req.shard
+  meta/doc/mod.req.shard
   tools/lowbuild/lowbuild.shard
 )
 # Argv selection: `./gate_sweep.sh FILE...` gates only those targets — the
