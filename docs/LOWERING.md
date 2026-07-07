@@ -1636,6 +1636,65 @@ generic classification currently interleaved with `clh_*` helper-cert
 emission) and the premise walk over the region tree (`pw_*` — §6j
 layout logic fused with wasm proof docs).
 
+### 6af. The hygiene pass — the manipulation library moves to meta/ (2026-07-07)
+
+The user's framing, ratified: the wasm and x86 pipelines are
+INDEPENDENT library constructs that reflect each other in semantics
+and paradigm; shard-manipulation machinery shared between them is
+meta/ material — interfaces any program that explicitly manipulates
+and generates shard can pull in. The compilers are the first
+dogfooders of that library; other consumers are expected. Nine slices,
+each verified by the full battery (all seven five-gate builds, regen
+byte-identical; targeted gates; full corpus, zero unexpected diff):
+
+- **Run-mode qualified dispatch** (`build_module_r`, kernel/reader):
+  run mode resolves like check mode with glob fallback; module-internal
+  bare calls bind to their own module (the enc_instr homonym bug dies;
+  models/x86's encoder got its natural name back and bytetie's
+  co-loaded closure is the live guard, with examples/runhom_run.shard
+  the pinned fixture). Entry = the entry file's main by modpath-PREFIX
+  scan (sig→def rebind parks a sig'd app's main at its interface
+  qname); world tokens mint at the app's own World qname. The flat
+  builder and the distinct-basename discipline are gone.
+- **tools/lowergen → tools/wasmgen** (+ examples/wasmgen_*): the
+  tool-per-target naming (see the note at the top of this file).
+- **kernel/evm.shard**: the env machine graduated out of eval.shard;
+  meta/invoke's plan evaluation rides `evm_call_pure` (pure evp path;
+  effectful callee → None, loud). Plan steps 10+ min → ~1.5 s; all
+  seven builds ~14 s wall (examples/lowbuild_all.sh, the concurrent
+  runner); full corpus ~1m40s; gate_sweep grew argv target selection.
+  TOTALITY-GATE RULE pinned by the one debugging round this cost: the
+  admission walk seeds every symbol a proof form mentions, so claim
+  binders must stay off evm's fn names (proof_size.shard's `ev` binder
+  → `fe`).
+- **meta/doc** — the Doc rope + text/path utils + header builders.
+- **meta/spell** — schema's generic Expr core: canonical spelling
+  (pr_e/spell), binder envs, node sets, read/binder substitution, type
+  predicates, binder/arg printers, the generic claim builders.
+- **meta/lin** — the computed-Farkas kit (loud-never-unsound).
+- **meta/shape** — the FULL source-form library (user placement
+  ruling), now including the source-op classifiers
+  (is_wrap_op/is_div_op/is_bit_op/is_cond_op): the fragment vocabulary
+  is classification here, rendering per back end — shape scans and
+  x86gen's transparency test share one truth.
+- **meta/proof** — the parametrized proof-form spine: `wrap_event`
+  over (modulus, collapse-lemma); wasmgen instantiates w32_event,
+  x86gen xwrap_event, and x86gen's duplicated wrap chain is deleted.
+  The wasm-shaped templates (PItem flushes, call bridges, link
+  derivations) moved into wasmgen and graduate only when a second
+  target speaks them.
+- **meta/forms** — certnav's generic raw-form kit (read forms, symbol
+  tests, the inline table); the call_fn/xcall_fn conclusion finders
+  stay tools/low/certnav.
+
+tools/low after the pass = schema.shard (the PItem §6d premise-layout
+policy + cond-operand fencing + wb_/ab_/cb_ naming) and certnav.shard
+(conclusion-boundary finders) — lowering POLICY only; everything
+generic is meta/, everything wasm-shaped is wasmgen. Named follow-up:
+the emitter-app load prologue dedup (gen_run skeletons + the third
+copy of the prelude ctor list) wants `stdlib_ctors` graduated into
+kernel/reader.shard — bundle with the next kernel-touching slice.
+
 ## 7. Open questions — triaged at ratification (2026-07-04)
 
 None of these block the ratified form; they are the backlog the next
