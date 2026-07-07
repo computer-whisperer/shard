@@ -110,6 +110,22 @@
 (use (:: meta shape nodes_e))
 (use (:: meta shape NOk))
 (use (:: meta shape NErr))
+(use (:: meta shape fn_is_loop))
+(use (:: meta shape lp_recognize))
+(use (:: meta shape LROk))
+(use (:: meta shape LRCall))
+(use (:: meta shape LRErr))
+(use (:: meta shape LStr))
+(use (:: meta shape LSStat))
+(use (:: meta shape LSInc))
+(use (:: meta shape LSDec))
+(use (:: meta shape LSIncK))
+(use (:: meta shape LVal))
+(use (:: meta shape LVAcc))
+(use (:: meta shape LVLit))
+(use (:: meta shape LVRead))
+(use (:: meta shape ls_adv))
+(use (:: meta shape ls_at))
 
 ;; ---- the register file at the meta level ---------------------------------------
 ;;
@@ -606,6 +622,7 @@
     ((TOk rt) (xg_finish q ts rt (+ (* 2 (rt_count rt)) 10)))))
 
 (fn xg_claim ((f FnDef)) XCR
+  (if (fn_is_loop f) (xg_claim_loop f)
   (match f
     ((FnDef q ts rty body)
      (if (all_int ts)
@@ -622,16 +639,509 @@
              q
              "more than six Int params (SysV register homes only in v1)"))
          (xerr_at q "return type is not Int"))
-       (xerr_at q "params are not all Int")))))
+       (xerr_at q "params are not all Int"))))))
+
+;; ---- the loop fragment (docs/X86.md §14): Nat-counted store loops --------------
+;;
+;; Source shape (meta/shape's SHARED recognizers — wasm's §6f family):
+;;   (fn NAME ((m Mem) (x0 Int) … (xn-1 Int) (k Nat)) Mem
+;;     (match k (Z m) ((S k2) (NAME (mem_set m ADDR VAL) U0 … Un-1 k2))))
+;; v1 = the probed article (examples/x86_pieces.shard stage 2): ONE store
+;; per iteration, strides +1/static, store value an accum or an imm32
+;; literal. Refused with named growth: two-store nests (the reverse
+;; slice), byte-read values (copy needs a scratch-register closed form),
+;; stride != 1 and decrementing accums, calls-in-loops (inter-function
+;; layout).
+;;
+;; Machine shape: params stay in their SysV homes for the WHOLE loop —
+;; the counter's home is the loop counter, advancing accums are bumped
+;; IN PLACE by two-operand adds (no local shuffle: 4+nadv instructions
+;; vs wasm's 8+stlen+4nadv). The claims mirror the hand play verbatim:
+;; worker xlgw_* by induction on k against the folded xeval_loop term
+;; (register state as concrete MkRegs literals, exit accums via the
+;; xlg_adv closed form), theorem lowered_* = the entry spine (+4) plus
+;; the worker by citation; the kit facts are models/x86/loopkit's.
+
+;; Regs-field owner: which param slot's SysV home is record field f
+;; (field order rax rcx rdx rbx rbp rsi rdi r8 r9 r10..r15; -1 = none)
+(fn xslot_of ((f Int)) Int
+  (if (int_eq f 6) 0
+  (if (int_eq f 5) 1
+  (if (int_eq f 2) 2
+  (if (int_eq f 1) 3
+  (if (int_eq f 7) 4
+  (if (int_eq f 8) 5
+  (- 0 1))))))))
+
+;; one ENTRY-record field: accums in their homes, the counter home reads
+;; (int_of_nat k), every other field 0
+(fn xl_entryf ((n Int) (f Int)) Doc
+  (let ((s (xslot_of f)))
+    (if (lt s 0) (DStr "0")
+    (if (int_eq s n) (DStr "(int_of_nat k)")
+    (if (lt s n) (DCat (DStr "x") (dint s))
+    (DStr "0"))))))
+
+;; one EXIT-record field: advancing accums at the xlg_adv closed form,
+;; static accums unchanged, the counter (and everything else) 0
+(fn xl_exitf ((n Int) (adv (List LStr)) (f Int)) Doc
+  (let ((s (xslot_of f)))
+    (if (lt s 0) (DStr "0")
+    (if (int_eq s n) (DStr "0")
+    (if (lt s n)
+      (if (ls_adv (ls_at adv s))
+        (dconc (list (DStr "(xlg_adv x") (dint s) (DStr " k)")))
+        (DCat (DStr "x") (dint s)))
+      (DStr "0"))))))
+
+(fn xl_rf ((n Int) (adv (List LStr)) (exitp Bool) (f Int)) Doc
+  (if exitp (xl_exitf n adv f) (xl_entryf n f)))
+
+;; the full 15-field record literal
+(fn xl_regs ((n Int) (adv (List LStr)) (exitp Bool)) Doc
+  (dconc
+    (list
+      (DStr "(MkRegs ")
+      (xl_rf n adv exitp 0)
+      (sp)
+      (xl_rf n adv exitp 1)
+      (sp)
+      (xl_rf n adv exitp 2)
+      (sp)
+      (xl_rf n adv exitp 3)
+      (sp)
+      (xl_rf n adv exitp 4)
+      (sp)
+      (xl_rf n adv exitp 5)
+      (sp)
+      (xl_rf n adv exitp 6)
+      (sp)
+      (xl_rf n adv exitp 7)
+      (sp)
+      (xl_rf n adv exitp 8)
+      (sp)
+      (xl_rf n adv exitp 9)
+      (sp)
+      (xl_rf n adv exitp 10)
+      (sp)
+      (xl_rf n adv exitp 11)
+      (sp)
+      (xl_rf n adv exitp 12)
+      (sp)
+      (xl_rf n adv exitp 13)
+      (sp)
+      (xl_rf n adv exitp 14)
+      (DStr ")"))))
+
+;; ---- loop codegen -----------------------------------------------------------------
+
+;; store value operand (v1: accum home or imm32 literal)
+(fn xlv_src ((v LVal)) (Option Doc)
+  (match v
+    ((LVAcc j) (Some (xs_reg (xhome j))))
+    ((LVLit l) (if (lt l 2147483648) (Some (xs_imm l)) None))
+    ((LVRead _) None)))
+
+(fn xl_advcode ((adv (List LStr)) (i Int)) (List Doc)
+  (measure (struct adv))
+  (match adv
+    (Nil Nil)
+    ((Cons h t)
+     (match h
+       ((LSInc)
+        (Cons
+          (xi_bin (DStr "XAdd") (xhome i) (xs_imm 1))
+          (xl_advcode t (+ i 1))))
+       (_ (xl_advcode t (+ i 1)))))))
+
+;; guard / the store / advances / counter decrement / re-enter
+;; (instrs = 4 + nadv)
+(fn xl_code ((n Int) (adv (List LStr)) (ai Int) (vsrc Doc)) (List Doc)
+  (dapp
+    (list
+      (dconc (list (DStr "(XBrIf (CEqz ") (xhome n) (DStr ") 1)")))
+      (dconc
+        (list (DStr "(XStore8 (AReg ") (xhome ai) (DStr ") ") vsrc (DStr ")"))))
+    (dapp
+      (xl_advcode adv 0)
+      (list (xi_bin (DStr "XSub") (xhome n) (xs_imm 1)) (DStr "(XBr 0)")))))
+
+;; ---- loop claim assembly ------------------------------------------------------------
+
+(fn xl_nadv ((bs (List LStr))) Int
+  (measure (struct bs))
+  (match bs
+    (Nil 0)
+    ((Cons h t) (+ (if (ls_adv h) 1 0) (xl_nadv t)))))
+
+;; number of advancing accums among the first i (= accum i's group-A
+;; premise index)
+(fn xl_advpos ((bs (List LStr)) (i Int)) Int
+  (measure (struct bs))
+  (match bs
+    (Nil 0)
+    ((Cons h t)
+     (if (int_eq i 0) 0 (+ (if (ls_adv h) 1 0) (xl_advpos t (- i 1)))))))
+
+;; the first INCREMENTING accum — the counter wrap (xlg_kM) rides its
+;; premise pair, so every loop needs one (v1 fence)
+(fn xl_first_inc ((bs (List LStr)) (i Int)) (Option Int)
+  (measure (struct bs))
+  (match bs
+    (Nil None)
+    ((Cons h t)
+     (match h
+       ((LSInc) (Some i))
+       (_ (xl_first_inc t (+ i 1)))))))
+
+(fn xl_strides_ok ((bs (List LStr))) Bool
+  (measure (struct bs))
+  (match bs
+    (Nil True)
+    ((Cons h t)
+     (match h
+       ((LSDec) False)
+       ((LSIncK _) False)
+       (_ (xl_strides_ok t))))))
+
+;; group-A premises, param order: one nonneg per advancing accum
+(fn xl_prems_lo ((bs (List LStr)) (i Int)) Doc
+  (measure (struct bs))
+  (match bs
+    (Nil (DStr ""))
+    ((Cons h t)
+     (DCat
+       (if (ls_adv h)
+         (dconc (list (DStr "(= (le 0 x") (dint i) (DStr ") True) ")))
+         (DStr ""))
+       (xl_prems_lo t (+ i 1))))))
+
+;; group-B premises, param order: one range per advancing accum
+(fn xl_prems_rng ((bs (List LStr)) (i Int)) Doc
+  (measure (struct bs))
+  (match bs
+    (Nil (DStr ""))
+    ((Cons h t)
+     (DCat
+       (if (ls_adv h)
+         (dconc
+           (list
+             (DStr "(= (le (+ x")
+             (dint i)
+             (DStr " (int_of_nat k)) 65536) True) ")))
+         (DStr ""))
+       (xl_prems_rng t (+ i 1))))))
+
+;; the SELF literal as spelled in claims ((inline …) rides the body fn)
+(fn xl_self ((nm Doc) (n Int)) Doc
+  (dconc
+    (list
+      (DStr "(MkXFunc ")
+      (dint (+ n 1))
+      (DStr " (list (XBlock (list (XLoop (inline ")
+      nm
+      (DStr "_body))))))"))))
+
+;; the store-address stage: premise-rewrite the nonneg guard, cite
+;; xlg_a1_ms for the upper guard, compute on
+(fn xl_stage ((pa Int) (pb Int)) Doc
+  (dconc
+    (list
+      (DStr
+        "(steps ((compute lhs (stop xeval_loop xlg_fuel)) (rewrite (premise ")
+      (dint pa)
+      (DStr
+        ") lr lhs true ()) (compute lhs (stop xeval_loop xlg_fuel)))) (rewrite-with (lemma xlg_a1_ms) lr lhs ((inst c k2)) ((steps ((rewrite (premise ")
+      (dint pb)
+      (DStr
+        ") lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl) (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))) "))))
+
+;; counter collapse + counter wrap (xlg_kM at the first inc accum's pair)
+(fn xl_hwk ((fa Int) (pa Int) (pb Int)) Doc
+  (dconc
+    (list
+      (DStr
+        "(have hsub (= (- (+ 1 (int_of_nat k2)) 1) (int_of_nat k2)) (rewrite-with (lemma xlg_sub) lr lhs () () refl)) (steps ((rewrite (premise hsub) lr lhs true ()))) (have hwk (= (mod (int_of_nat k2) 18446744073709551616) (int_of_nat k2)) (rewrite-with (lemma wrap64_id) lr lhs ((inst x (int_of_nat k2))) ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl) (rewrite-with (lemma xlg_kM) lr lhs ((inst a x")
+      (dint fa)
+      (DStr ") (inst c k2)) ((steps ((rewrite (premise ")
+      (dint pb)
+      (DStr
+        ") lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl) (steps ((rewrite (premise ")
+      (dint pa)
+      (DStr
+        ") lr lhs true ())) refl)) refl)) refl)) (steps ((rewrite (premise hwk) lr lhs true ()))) "))))
+
+;; one advancing accum's advance wrap: (mod (+ xi 1) 2^64) collapses via
+;; wrap64_id off xlg_lo1 + xlg_64/xlg_a1_ms at its premise pair
+(fn xl_hw1 ((i Int) (j Int) (pa Int) (pb Int)) Doc
+  (dconc
+    (list
+      (DStr "(have hw")
+      (dint j)
+      (DStr " (= (mod (+ x")
+      (dint i)
+      (DStr " 1) 18446744073709551616) (+ x")
+      (dint i)
+      (DStr " 1)) (rewrite-with (lemma wrap64_id) lr lhs ((inst x (+ x")
+      (dint i)
+      (DStr
+        " 1))) ((rewrite-with (lemma xlg_lo1) lr lhs () ((steps ((rewrite (premise ")
+      (dint pa)
+      (DStr
+        ") lr lhs true ())) refl)) refl) (rewrite-with (lemma xlg_64) lr lhs () ((rewrite-with (lemma xlg_a1_ms) lr lhs ((inst c k2)) ((steps ((rewrite (premise ")
+      (dint pb)
+      (DStr
+        ") lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl) (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)) refl)) refl)) refl)) (steps ((rewrite (premise hw")
+      (dint j)
+      (DStr ") lr lhs true ()))) "))))
+
+;; advance wraps, param order (ordinal j names hw0, hw1, …)
+(fn xl_hws ((adv (List LStr)) (i Int) (j Int) (na Int)) Doc
+  (measure (struct adv))
+  (match adv
+    (Nil (DStr ""))
+    ((Cons h t)
+     (if (ls_adv h)
+       (DCat (xl_hw1 i j j (+ na j)) (xl_hws t (+ i 1) (+ j 1) na))
+       (xl_hws t (+ i 1) j na)))))
+
+;; the IH's group-A discharges: xlg_lo1 per advancing accum
+(fn xl_lo1s ((adv (List LStr)) (p Int)) Doc
+  (measure (struct adv))
+  (match adv
+    (Nil (DStr ""))
+    ((Cons h t)
+     (if (ls_adv h)
+       (DCat
+         (dconc
+           (list
+             (DStr
+               "(rewrite-with (lemma xlg_lo1) lr lhs () ((steps ((rewrite (premise ")
+             (dint p)
+             (DStr ") lr lhs true ())) refl)) refl) ")))
+         (xl_lo1s t (+ p 1)))
+       (xl_lo1s t p)))))
+
+;; the IH's group-B discharges: xlg_shift per advancing accum
+(fn xl_shifts ((adv (List LStr)) (p Int) (na Int)) Doc
+  (measure (struct adv))
+  (match adv
+    (Nil (DStr ""))
+    ((Cons h t)
+     (if (ls_adv h)
+       (DCat
+         (dconc
+           (list
+             (DStr
+               "(rewrite-with (lemma xlg_shift) lr lhs () ((steps ((rewrite (premise ")
+             (dint (+ na p))
+             (DStr
+               ") lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)) refl) ")))
+         (xl_shifts t (+ p 1) na))
+       (xl_shifts t p na)))))
+
+;; pass-through premise steps (theorem -> worker), one per premise
+(fn xl_pass1 ((bs (List LStr)) (p Int)) Doc
+  (measure (struct bs))
+  (match bs
+    (Nil (DStr ""))
+    ((Cons h t)
+     (if (ls_adv h)
+       (DCat
+         (dconc
+           (list
+             (DStr "(steps ((rewrite (premise ")
+             (dint p)
+             (DStr ") lr lhs true ())) refl) ")))
+         (xl_pass1 t (+ p 1)))
+       (xl_pass1 t p)))))
+
+;; the loop worker: induction on k against the folded xeval_loop term —
+;; the hand play (examples/x86_pieces.shard xlgw_fill) parametrized
+(fn xl_worker
+  ((nm Doc)
+   (mids (List Type))
+   (n Int)
+   (adv (List LStr))
+   (ai Int)
+   (fa Int)
+   (p Int))
+  Doc
+  (let ((na (xl_nadv adv)))
+    (dconc
+      (list
+        (DStr "(claim xlgw_")
+        nm
+        (DStr " (goal (")
+        (pr_binds mids 0)
+        (DStr "(m0 Mem) (c Nat) (k Nat) (restfs (List XFunc))) (")
+        (xl_prems_lo adv 0)
+        (xl_prems_rng adv 0)
+        (DStr ") (= (xeval_loop (S^ ")
+        (dint p)
+        (DStr " (xlg_fuel k c)) (MkXModule (Cons ")
+        (xl_self nm n)
+        (DStr " restfs) 65536) (inline ")
+        nm
+        (DStr "_body) ")
+        (xl_regs n adv False)
+        (DStr " m0) (Some (XBrk 0 ")
+        (xl_regs n adv True)
+        (DStr " (")
+        nm
+        (DStr " m0")
+        (pr_args_lead mids)
+        (DStr
+          " k))))) (induct k ((case Z (steps ((rewrite (lemma int_of_nat_zero) lr lhs true ()) (compute both)) refl)) (case S (k2) (chain (steps ((unfold xlg_fuel lhs) (reduce lhs) (unfold xeval_loop lhs) (rewrite (lemma int_of_nat_succ) lr lhs true ()) (compute lhs (stop xeval_loop xlg_fuel)))) (rewrite-with (lemma xlg_ne) lr lhs () ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))) ")
+        (xl_stage (xl_advpos adv ai) (+ na (xl_advpos adv ai)))
+        (DStr "(steps ((compute lhs (stop xeval_loop xlg_fuel)))) ")
+        (xl_hwk fa (xl_advpos adv fa) (+ na (xl_advpos adv fa)))
+        (xl_hws adv 0 0 na)
+        (DStr "(steps ((unfold ")
+        nm
+        (DStr
+          " rhs) (unfold xlg_adv rhs) (reduce rhs))) (rewrite-with (hyp 0) lr lhs () (")
+        (xl_lo1s adv 0)
+        (xl_shifts adv 0 na)
+        (DStr ")) (steps ((compute both))) refl)))))")
+        (DStr (nl))))))
+
+;; the piece theorem: entry spine (outer seq / XBlock / inner seq /
+;; XLoop = +4 over the worker), then the worker by citation
+(fn xl_thm ((nm Doc) (mids (List Type)) (n Int) (adv (List LStr)) (p4 Int))
+  Doc
+  (let ((na (xl_nadv adv)))
+    (dconc
+      (list
+        (DStr "(claim lowered_")
+        nm
+        (DStr " (goal (")
+        (pr_binds mids 0)
+        (DStr "(m0 Mem) (c Nat) (k Nat) (restfs (List XFunc))) (")
+        (xl_prems_lo adv 0)
+        (xl_prems_rng adv 0)
+        (DStr ") (= (xcall_fn_mem (S^ ")
+        (dint p4)
+        (DStr " (xlg_fuel k c)) (MkXModule (Cons ")
+        (xl_self nm n)
+        (DStr " restfs) 65536) 0 (list ")
+        (pr_args mids 0)
+        (DStr " (int_of_nat k)) m0) (Some (Pair 0 (")
+        nm
+        (DStr " m0")
+        (pr_args_lead mids)
+        (DStr
+          " k))))) (chain (steps ((compute lhs (stop xeval_loop xlg_fuel)))) (rewrite-with (lemma xlgw_")
+        nm
+        (DStr ") lr lhs () (")
+        (xl_pass1 adv 0)
+        (xl_pass1 adv na)
+        (DStr ")) (steps ((compute both))) refl))")
+        (DStr (nl))))))
+
+;; body/func fns + worker + theorem, one unit per source fn
+(fn xl_unit
+  ((nm Doc)
+   (mids (List Type))
+   (n Int)
+   (adv (List LStr))
+   (ai Int)
+   (vsrc Doc)
+   (fa Int)
+   (p Int))
+  Doc
+  (dconc
+    (list
+      (DStr "(fn ")
+      nm
+      (DStr "_body () (List XInstr) (list ")
+      (djoin (xl_code n adv ai vsrc))
+      (DStr "))")
+      (DStr (nl))
+      (DStr "(fn ")
+      nm
+      (DStr "_func () XFunc (MkXFunc ")
+      (dint (+ n 1))
+      (DStr " (list (XBlock (list (XLoop (")
+      nm
+      (DStr "_body)))))))")
+      (DStr (nl))
+      (xl_worker nm mids n adv ai fa p)
+      (xl_thm nm mids n adv (+ p 4)))))
+
+;; the loop-fn gate: param slicing + the shared recognizer + v1 fences
+(fn xg_claim_loop ((f FnDef)) XCR
+  (match f
+    ((FnDef q ts rty body)
+     (match ts
+       ((Cons _ rest)
+        (match (ts_lasto rest)
+          ((Some lt2)
+           (if (is_nat_ty lt2)
+             (let ((mids (ts_mids rest)))
+               (if (all_int mids)
+                 (let ((n (count_ts mids)))
+                   (if (lt 0 n)
+                     (if (le n 5)
+                       (if (is_mem_ty rty)
+                         (match (lp_recognize q n body Nil)
+                           ((LRErr m) (xerr_at q m))
+                           ((LRCall _ _ _)
+                            (xerr_at
+                              q
+                              "calls-in-loops follow the mem fragment (inter-function layout)"))
+                           ((LROk adv sts)
+                            (if (xl_strides_ok adv)
+                              (match sts
+                                ((Cons (Pair ai v) Nil)
+                                 (match (xlv_src v)
+                                   (None
+                                     (xerr_at
+                                       q
+                                       "store value must be an accum or an imm32 literal (byte-read values follow the copy slice)"))
+                                   ((Some vsrc)
+                                    (match (xl_first_inc adv 0)
+                                      (None
+                                        (xerr_at
+                                          q
+                                          "v1: at least one (+ ACCUM 1) accumulator is required (the counter wrap rides its range premise)"))
+                                      ((Some fa)
+                                       (XCOk
+                                         (xl_unit
+                                           (dsym (qn_name q))
+                                           mids
+                                           n
+                                           adv
+                                           ai
+                                           vsrc
+                                           fa
+                                           (+ (+ 4 (xl_nadv adv)) 4))))))))
+                                (_
+                                  (xerr_at
+                                    q
+                                    "two-store nests follow the reverse slice (v1: one store per iteration)")))
+                              (xerr_at
+                                q
+                                "v1 strides are +1 or static (decrementing and stride-K accums are named growth)"))))
+                         (xerr_at
+                           q
+                           "loop fn must return Mem (Int-return loops are named growth)"))
+                       (xerr_at q "more than five accumulators (SysV register homes only)"))
+                     (xerr_at q "loop fn needs at least one Int accumulator")))
+                 (xerr_at q "loop accumulators must all be Int")))
+             (xerr_at q "loop fn's last param must be the Nat counter")))
+          (None (xerr_at q "loop fn needs (m Mem) (accums Int...) (k Nat)"))))
+       (Nil (xerr_at q "loop fn needs params"))))))
 
 ;; ---- module walk ------------------------------------------------------------------
 
-(type XER (XEOk Doc) (XEErr (List Int)))
+(type XER (XEOk Doc Bool) (XEErr (List Int)))
 
-(fn xg_fns ((fns (List FnDef)) (modpath (List Symbol)) (acc Doc)) XER
+(fn xg_fns ((fns (List FnDef)) (modpath (List Symbol)) (acc Doc) (lf Bool))
+  XER
   (measure (struct fns))
   (match fns
-    (Nil (XEOk acc))
+    (Nil (XEOk acc lf))
     ((Cons f rest)
      (match f
        ((FnDef q _ _ _)
@@ -640,22 +1150,38 @@
            (if (sym_list_eq mp modpath)
              (match (xg_claim f)
                ((XCErr m) (XEErr m))
-               ((XCOk d) (xg_fns rest modpath (DCat acc (DCat (DStr (nl)) d)))))
-             (xg_fns rest modpath acc)))))))))
+               ((XCOk d)
+                (xg_fns
+                  rest
+                  modpath
+                  (DCat acc (DCat (DStr (nl)) d))
+                  (if (fn_is_loop f) True lf))))
+             (xg_fns rest modpath acc lf)))))))))
 
-(fn xg_header ((target (List Int))) Doc
+(fn xg_header ((target (List Int)) (loopf Bool)) Doc
   (dconc
     (list
       (DStr
-        ";;; GENERATED by tools/x86gen (the certifying x86_64 emitter, pure fragment) --")
+        ";;; GENERATED by tools/x86gen (the certifying x86_64 emitter) --")
       (DStr (nl))
       (DStr ";;; DO NOT EDIT; regenerate from ")
       (DStr target)
       (DStr (append_int "." (nl)))
       (dimport (append_int (updots target) "kernel/stdlib.shard"))
       (dimport (append_int (updots target) "models/x86/x86.shard"))
+      (if loopf
+        (DCat
+          (dimport (append_int (updots target) "models/x86/loopkit.shard"))
+          (dimport (append_int (updots target) "std/nat.shard")))
+        (DStr ""))
       (dimport (basename_go target Nil))
       (DStr (append_int "(use (:: models x86 x86 *))" (nl)))
+      (if loopf
+        (DStr
+          (append_int
+            "(use (:: models x86 loopkit *))"
+            (append_int (nl) (append_int "(use (:: std nat *))" (nl)))))
+        (DStr ""))
       (DStr (append_int "(use (:: std mem *))" (nl)))
       (DStr "(use (:: ")
       (pr_modpath (split_slash (until_dot target) Nil))
@@ -690,14 +1216,15 @@
        ((BMOk m)
         (match m
           ((Module _ fns _ _ _)
-           (match (xg_fns fns (split_slash (until_dot target) Nil) (DStr ""))
+           (match
+             (xg_fns fns (split_slash (until_dot target) Nil) (DStr "") False)
              ((XEErr msg)
               (exit 1 (write (append_int "refused: " (append_int msg (nl))) w1)))
-             ((XEOk body)
+             ((XEOk body loopf)
               (match
                 (write_file
                   out
-                  (doc_flat (DCat (xg_header target) body) Nil)
+                  (doc_flat (DCat (xg_header target loopf) body) Nil)
                   w1)
                 ((Pair ok w2)
                  (if ok
