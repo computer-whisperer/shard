@@ -201,7 +201,47 @@
                (list (mod v 256)))))))))
     (other Nil)))
 
+;; --- comparison bytes for conditional jumps -----------------------------------
+
+;; test r,r (REX.W 0x85 /r, mod=11) — sets ZF from the register (the zero
+;; tests: CEqz / CNz).
+(fn enc_test_r ((r Reg)) (List Int)
+  (let ((n (reg_num r)))
+    (list
+      (+ 72 (+ (* 4 (rhi n)) (rhi n)))
+      133
+      (+ 192 (+ (* 8 (rlo n)) (rlo n))))))
+
+;; cmp r, s — REX.W 0x39 /r (reg source, r/m = dst, reg = src) or
+;; REX.W 0x81 /7 id (imm32 source). The dst is the comparison's first
+;; operand, the src its second (CLtU r s tests rget r < xsrc s).
+(fn enc_cmp_rs ((r Reg) (s Src)) (List Int)
+  (let ((nd (reg_num r)))
+    (match s
+      ((SReg sr)
+       (let ((ns (reg_num sr)))
+         (list
+           (+ 72 (+ (* 4 (rhi ns)) (rhi nd)))
+           57
+           (+ 192 (+ (* 8 (rlo ns)) (rlo nd))))))
+      ((SImm v)
+       (eapp (list (+ 72 (rhi nd)) 129 (+ 192 (+ 56 (rlo nd)))) (le4 v))))))
+
+;; the comparison bytes preceding the jcc, per condition. Fixed per
+;; (op, operand shape) so branch widths stay computable without
+;; displacements — reg-reg cmp / test = 3 bytes, imm32 cmp = 7.
+(fn enc_ccmp ((c Cond)) (List Int)
+  (match c
+    ((CEqz r) (enc_test_r r))
+    ((CNz r) (enc_test_r r))
+    ((CEq r s) (enc_cmp_rs r s))
+    ((CLtU r s) (enc_cmp_rs r s))
+    ((CLeU r s) (enc_cmp_rs r s))))
+
 ;; --- sizes (fixed for branches; the flattening's foundation) ------------------
+
+;; the whole XBrIf width: the comparison bytes + jcc rel32 (0x0F 0x8x + 4).
+(fn xsz_brif ((c Cond)) Int (+ (elen (enc_ccmp c)) 6))
 
 (fn xsz_instr ((i XInstr)) Int
   (measure (struct i))
@@ -209,7 +249,7 @@
     ((XBlock b) (xsz_seq b))
     ((XLoop b) (xsz_seq b))
     ((XBr d) 5)
-    ((XBrIf c d) 9)
+    ((XBrIf c d) (xsz_brif c))
     (XRet 1)
     ((XCall k) 1)
     (i2 (elen (enc_simple i2)))))
@@ -255,39 +295,30 @@
        ((LB rem) (Cons 233 (le4 (- rem 5))))
        ((LL el) (Cons 233 (le4 (- 0 (+ el 5)))))))))
 
-(fn cond_reg ((c Cond)) Reg
-  (match c
-    ((CEqz r) r)
-    ((CNz r) r)))
-
-;; jz (0x0F 0x84) when the condition is "== 0", jnz (0x85) when "!= 0" — the
-;; branch is TAKEN exactly when the model's xcond is true.
+;; jcc opcode (second byte, after 0x0F), TAKEN exactly when xcond is true:
+;; jz/je 0x84, jnz 0x85, jb 0x82, jbe 0x86.
 (fn cond_jop ((c Cond)) Int
   (match c
     ((CEqz r) 132)
-    ((CNz r) 133)))
+    ((CNz r) 133)
+    ((CEq r s) 132)
+    ((CLtU r s) 130)
+    ((CLeU r s) 134)))
 
-;; test r,r (REX.W 0x85 /r, mod=11) — sets ZF from the register.
-(fn enc_test ((c Cond)) (List Int)
-  (let ((n (reg_num (cond_reg c))))
-    (list
-      (+ 72 (+ (* 4 (rhi n)) (rhi n)))
-      133
-      (+ 192 (+ (* 8 (rlo n)) (rlo n))))))
-
-;; test + jcc; the rel32 is the last 4 bytes, so displacement is off the
-;; whole 9-byte instruction end.
+;; the comparison bytes + jcc rel32; the rel32 is off the whole
+;; instruction end (xsz_brif c bytes), so imm32-cmp branches (13 bytes)
+;; and reg/test branches (9) both resolve correctly.
 (fn enc_brif ((c Cond) (d Int) (env (List Lbl))) (List Int)
   (eapp
-    (enc_test c)
+    (enc_ccmp c)
     (match (lbl_at env d)
       (None (list 204))
       ((Some l)
        (eapp
          (list 15 (cond_jop c))
          (match l
-           ((LB rem) (le4 (- rem 9)))
-           ((LL el) (le4 (- 0 (+ el 9))))))))))
+           ((LB rem) (le4 (- rem (xsz_brif c))))
+           ((LL el) (le4 (- 0 (+ el (xsz_brif c)))))))))))
 
 ;; x-prefixed (NOT enc_instr): models/wasm/encode.shard defines enc_instr
 ;; too, and run-mode dispatch resolves module-internal bare homonyms across

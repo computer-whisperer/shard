@@ -60,6 +60,7 @@
 (import "../../kernel/reader.shard")
 (import "../low/doc.shard")
 (import "../low/schema.shard")
+(import "../low/shape.shard")
 
 (use (:: kernel loader resolve_closure))
 (use (:: kernel loader World))
@@ -72,6 +73,7 @@
 (use (:: kernel term BVar))
 (use (:: kernel term Call))
 (use (:: kernel term Let))
+(use (:: kernel term If))
 (use (:: kernel term IntLit))
 (use (:: kernel term QName))
 (use (:: kernel term qn_name))
@@ -86,6 +88,15 @@
 (use (:: kernel reader BMFail))
 (use (:: tools low doc *))
 (use (:: tools low schema *))
+(use (:: tools low shape RT))
+(use (:: tools low shape RTv))
+(use (:: tools low shape RTif))
+(use (:: tools low shape TRes))
+(use (:: tools low shape TOk))
+(use (:: tools low shape TErr))
+(use (:: tools low shape rt_count))
+(use (:: tools low shape rt_code))
+(use (:: tools low shape rt_prepend))
 
 ;; ---- the register file at the meta level ---------------------------------------
 ;;
@@ -393,6 +404,246 @@
          (DStr ") lr lhs true ()))) ")
          (xg_haves t (+ j 1)))))))
 
+;; ---- the if fragment (docs/X86.md §12): tail-position ifs ---------------------
+;;
+;; `if` lives in TAIL position (the body's result spine after lets, and arm
+;; tails — nested ifs and arm-local lets allowed). Conditions are
+;; int_eq/lt/le fused into an XBrIf Cond (the §5 design): the LEFT operand
+;; is register-resident (a param home or a value binding), the RIGHT a
+;; register or immediate; both canonical operands must be a param/alias or
+;; literal (a COMPUTED binding wraps into machine state and would not match
+;; the spec's case-on scrutinee — refused, as in the wasm fragment).
+;;
+;; The diamond mirrors wasm's structured-control shape (x86 keeps XBlock/
+;; XBrIf/XBr): XBlock[ XBlock[ XBrIf COND 0, ELSE.., XBr 1 ], THEN.. ] with
+;; both arms depositing at the if's result register rl. No stack value and
+;; no separate cond code — the comparison is fused into the branch, so the
+;; x86 diamond is SMALLER than wasm's (which computes b2i on the stack).
+;;
+;; PROOF: the region tree (shape.shard's RT, reused) mirrors the branch
+;; structure; the proof case-ons the source condition, and each arm rewrites
+;; the ctor-named case hyp into both sides and computes past the branch
+;; (the machine's fused XBrIf test IS the source condition after ground
+;; wrap collapse, so no b2i intermediate). Wrap nodes discharge in the
+;; region where their code runs, deduped against ancestor regions. Premises
+;; are GLOBAL here (every wrap node a plain premise) — the §6j
+;; condition-relative hygiene is a named later slice.
+
+;; source comparison -> the fused Cond ctor
+(fn xcmp_cond ((q QName)) (Option Doc)
+  (if (core_named q (quote int_eq)) (Some (DStr "CEq"))
+  (if (core_named q (quote lt)) (Some (DStr "CLtU"))
+  (if (core_named q (quote le)) (Some (DStr "CLeU"))
+  None))))
+
+;; a condition -> (Cond doc, canonical condition expr) or None (refuse).
+;; Left operand must be register-resident AND a param/alias/literal; right
+;; a register or immediate, param/alias/literal.
+(fn xcond_of ((n Int) (env (List (Pair Expr Int))) (c Expr))
+  (Option (Pair Doc Expr))
+  (match c
+    ((Call q ops)
+     (match (xcmp_cond q)
+       (None None)
+       ((Some cop)
+        (match ops
+          ((Cons c1 (Cons c2 Nil))
+           (match (xoper n env c1)
+             ((XOReg lr ce1)
+              (if (cond_operand_ok ce1)
+                (match (xoper n env c2)
+                  ((XOReg rr ce2)
+                   (if (cond_operand_ok ce2)
+                     (Some
+                       (Pair
+                         (dconc
+                           (list
+                             (DStr "(")
+                             cop
+                             (sp)
+                             lr
+                             (DStr " (SReg ")
+                             rr
+                             (DStr "))")))
+                         (Call q (Cons ce1 (Cons ce2 Nil)))))
+                     None))
+                  ((XOImm v ce2)
+                   (Some
+                     (Pair
+                       (dconc
+                         (list
+                           (DStr "(")
+                           cop
+                           (sp)
+                           lr
+                           (DStr " (SImm ")
+                           (dint v)
+                           (DStr "))")))
+                       (Call q (Cons ce1 (Cons ce2 Nil))))))
+                  (_ None))
+                None))
+             (_ None)))
+          (_ None)))))
+    (_ None)))
+
+;; the diamond: a single XBlock whose body branches on COND, both arms
+;; depositing into the result register (their code already ends with the
+;; deposit mov).
+(fn xdiamond ((cond Doc) (then_code (List Doc)) (else_code (List Doc)))
+  (List Doc)
+  (Cons
+    (dconc
+      (list
+        (DStr "(XBlock (list (XBlock (list (XBrIf ")
+        cond
+        (DStr " 0) ")
+        (djoin (dapp else_code (Cons (DStr "(XBr 1)") Nil)))
+        (DStr ")) ")
+        (djoin then_code)
+        (DStr "))")))
+    Nil))
+
+;; does this body have a tail-position if (so the region path is needed)?
+(fn has_tail_if ((e Expr)) Bool
+  (measure (struct e))
+  (match e
+    ((If _ _ _) True)
+    ((Let _ body) (has_tail_if body))
+    (_ False)))
+
+;; the region walk: emit e depositing its value at reg(rl), scratch from
+;; nxt (nxt > rl), returning a region tree (shape.shard RT). Arms of an if
+;; deposit at the SAME rl (the result is the function result path, so rl is
+;; stable down the whole tail spine); lets bind below the scratch window.
+(fn xg_depo ((n Int) (env (List (Pair Expr Int))) (nxt Int) (rl Int) (e Expr))
+  TRes
+  (measure (struct e))
+  (match e
+    ((If c a b)
+     (match (xcond_of n env c)
+       (None
+         (TErr
+           "if condition outside the fragment (int_eq/lt/le, register-resident param/alias/literal operands)"))
+       ((Some (Pair cdoc ce_c))
+        (match (xg_depo n env nxt rl a)
+          ((TErr m) (TErr m))
+          ((TOk rta)
+           (match (xg_depo n env nxt rl b)
+             ((TErr m) (TErr m))
+             ((TOk rtb)
+              (TOk
+                (RTif
+                  (xdiamond cdoc (rt_code rta) (rt_code rtb))
+                  (+ (rt_count rta) (+ (rt_count rtb) 4))
+                  rl
+                  Nil
+                  ce_c
+                  rta
+                  rtb)))))))))
+    ((Let bs body)
+     (match bs
+       ((Cons rhs Nil)
+        (match (xg_v n env nxt rhs)
+          ((XGErr m) (TErr m))
+          ((XGOk ir cr nxr rr cer)
+           (match (xg_nodes cer Nil)
+             ((NRErr m) (TErr m))
+             ((NROk rns)
+              (match (xg_depo n (Cons (Pair cer rr) env) nxr rl body)
+                ((TErr m) (TErr m))
+                ((TOk rt) (TOk (rt_prepend ir cr rns rt)))))))))
+       (_ (TErr "let must bind exactly one name (split into nested lets)"))))
+    (_
+      (match (xoper n env e)
+        ((XOBad m) (TErr m))
+        ((XOReg r ce)
+         (match (xreg_at n rl)
+           (None (TErr "register pool exhausted (no spills in v1)"))
+           ((Some rd) (TOk (RTv (Cons (xi_movrr rd r) Nil) 1 rl Nil)))))
+        ((XOImm v ce)
+         (match (xreg_at n rl)
+           (None (TErr "register pool exhausted (no spills in v1)"))
+           ((Some rd) (TOk (RTv (Cons (xi_movri rd v) Nil) 1 rl Nil)))))
+        (XONo
+          (match (xg_v n env nxt e)
+            ((XGErr m) (TErr m))
+            ((XGOk code cnt nx res ce)
+             (match (xg_nodes ce Nil)
+               ((NRErr m) (TErr m))
+               ((NROk ns)
+                (match (xreg_at n rl)
+                  (None (TErr "register pool exhausted (no spills in v1)"))
+                  ((Some rd)
+                   (match (xreg_at n res)
+                     (None (TErr "register pool exhausted (no spills in v1)"))
+                     ((Some rs)
+                      (TOk
+                        (RTv
+                          (dapp code (Cons (xi_movrr rd rs) Nil))
+                          (+ cnt 1)
+                          rl
+                          ns)))))))))))))))
+
+;; all wrap nodes across the tree, deduped, in region order (prenodes, then
+;; then-arm, then else-arm) — the global premise set
+(fn xrt_nodes ((r RT) (acc (List Expr))) (List Expr)
+  (measure (struct r))
+  (match r
+    ((RTv _ _ _ ns) (add_unique ns acc))
+    ((RTif _ _ _ pns _ a b) (xrt_nodes b (xrt_nodes a (add_unique pns acc))))))
+
+;; one node's wrap64 discharge, citing its GLOBAL premise indices (2i/2i+1)
+;; and named by its global index (unique per branch scope)
+(fn xhave_node ((e Expr) (allnodes (List Expr))) Doc
+  (let ((idx (pres_ix (spell e) allnodes 0)))
+    (dconc
+      (list
+        (DStr "(have w")
+        (dint idx)
+        (DStr " (= (mod ")
+        (pr_e e)
+        (DStr " 18446744073709551616) ")
+        (pr_e e)
+        (DStr ") (rewrite-with (lemma wrap64_id) lr lhs ((inst x ")
+        (pr_e e)
+        (DStr ")) ((steps ((rewrite (premise ")
+        (dint (* 2 idx))
+        (DStr ") lr lhs true ())) refl) (steps ((rewrite (premise ")
+        (dint (+ (* 2 idx) 1))
+        (DStr ") lr lhs true ())) refl)) refl)) (steps ((rewrite (premise w")
+        (dint idx)
+        (DStr ") lr lhs true ()))) ")))))
+
+;; discharge the region's nodes not already discharged in an ancestor
+(fn xdisch ((ns (List Expr)) (anc (List Expr)) (allnodes (List Expr))) Doc
+  (measure (struct ns))
+  (match ns
+    (Nil (DStr ""))
+    ((Cons e t)
+     (if (node_seen (spell e) anc) (xdisch t anc allnodes)
+     (DCat (xhave_node e allnodes) (xdisch t (node_add e anc) allnodes))))))
+
+;; the proof over the region tree: discharge this region's nodes, then
+;; either refl (value region) or the case-on (if region, arms re-entered by
+;; the fixed template)
+(fn xpw ((r RT) (anc (List Expr)) (allnodes (List Expr))) Doc
+  (measure (struct r))
+  (match r
+    ((RTv _ _ _ ns) (DCat (xdisch ns anc allnodes) (DStr "refl")))
+    ((RTif _ _ _ pns cond a b)
+     (dconc
+       (list
+         (xdisch pns anc allnodes)
+         (DStr "(case-on ")
+         (pr_e cond)
+         (DStr
+           " Bool ((case True (chain (steps ((rewrite (hyp True) lr both true ()) (compute both))) ")
+         (xpw a (dapp_e pns anc) allnodes)
+         (DStr
+           ")) (case False (chain (steps ((rewrite (hyp False) lr both true ()) (compute both))) ")
+         (xpw b (dapp_e pns anc) allnodes)
+         (DStr "))))"))))))
+
 ;; ---- claim assembly ---------------------------------------------------------------
 
 (type XCR (XCOk Doc) (XCErr (List Int)))
@@ -400,12 +651,67 @@
 (fn xerr_at ((q QName) (m (List Int))) XCR
   (XCErr (append_int (chars_of_sym (qn_name q)) (append_int ": " m))))
 
+;; the shared claim skeleton: goal binders + premises + the module literal
+;; (one function at restfs := Nil, no memory) + the spec RHS + the proof
+;; body, which begins with compute lhs / unfold + ζ-reduce rhs.
+(fn xg_emit_claim
+  ((q QName)
+   (ts (List Type))
+   (code (List Doc))
+   (nodes (List Expr))
+   (fuel Int)
+   (proofbody Doc))
+  Doc
+  (dconc
+    (list
+      (DStr "(claim lowered_")
+      (dsym (qn_name q))
+      (DStr " (goal (")
+      (pr_binds ts 0)
+      (DStr "(c Nat) (restfs (List XFunc)) (mem Mem)) (")
+      (xg_prems nodes)
+      (DStr ") (= (xcall_fn_mem (S^ ")
+      (dint fuel)
+      (DStr " c) (MkXModule (Cons (MkXFunc ")
+      (dint (count_ts ts))
+      (DStr " (list ")
+      (djoin code)
+      (DStr ")) restfs) 0) 0 (list ")
+      (pr_args ts 0)
+      (DStr ") mem) (Some (Pair (")
+      (dsym (qn_name q))
+      (pr_args_lead ts)
+      (DStr ") mem)))) (chain (steps ((compute lhs) (unfold ")
+      (dsym (qn_name q))
+      (DStr " rhs) (reduce rhs))) ")
+      proofbody
+      (DStr "))")
+      (DStr (nl)))))
+
+;; the if path: build the region tree (result at rl=0=rax, scratch reserved
+;; from index 1), collect the global premise set, emit the case-on proof.
+;; Fuel is generously over-provisioned — additive slack absorbs the excess.
+(fn xg_claim_if ((q QName) (ts (List Type)) (body Expr)) XCR
+  (match (xg_depo (count_ts ts) Nil 1 0 body)
+    ((TErr m) (xerr_at q m))
+    ((TOk rt)
+     (let ((allnodes (xrt_nodes rt Nil)))
+       (XCOk
+         (xg_emit_claim
+           q
+           ts
+           (rt_code rt)
+           allnodes
+           (+ (* 2 (rt_count rt)) 10)
+           (xpw rt Nil allnodes)))))))
+
 (fn xg_claim ((f FnDef)) XCR
   (match f
     ((FnDef q ts rty body)
      (if (all_int ts)
        (if (is_int_ty rty)
          (if (le (count_ts ts) 6)
+           (if (has_tail_if body) (xg_claim_if q ts body)
            (match (xg_t (count_ts ts) body)
              ((XTErr m) (xerr_at q m))
              ((XTOk code cnt ce)
@@ -413,31 +719,13 @@
                 ((NRErr m) (xerr_at q m))
                 ((NROk ns)
                  (XCOk
-                   (dconc
-                     (list
-                       (DStr "(claim lowered_")
-                       (dsym (qn_name q))
-                       (DStr " (goal (")
-                       (pr_binds ts 0)
-                       (DStr "(c Nat) (restfs (List XFunc)) (mem Mem)) (")
-                       (xg_prems ns)
-                       (DStr ") (= (xcall_fn_mem (S^ ")
-                       (dint (+ cnt 4))
-                       (DStr " c) (MkXModule (Cons (MkXFunc ")
-                       (dint (count_ts ts))
-                       (DStr " (list ")
-                       (djoin code)
-                       (DStr ")) restfs) 0) 0 (list ")
-                       (pr_args ts 0)
-                       (DStr ") mem) (Some (Pair (")
-                       (dsym (qn_name q))
-                       (pr_args_lead ts)
-                       (DStr ") mem)))) (chain (steps ((compute lhs) (unfold ")
-                       (dsym (qn_name q))
-                       (DStr " rhs) (reduce rhs))) ")
-                       (xg_haves ns 0)
-                       (DStr "refl))")
-                       (DStr (nl)))))))))
+                   (xg_emit_claim
+                     q
+                     ts
+                     code
+                     ns
+                     (+ cnt 4)
+                     (DCat (xg_haves ns 0) (DStr "refl")))))))))
            (xerr_at
              q
              "more than six Int params (SysV register homes only in v1)"))

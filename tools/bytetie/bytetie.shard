@@ -331,7 +331,64 @@
        None)))
     (_ None)))
 
-(fn rxinstr ((s SExpr)) RXI
+;; the fused Cond: zero tests (CEqz/CNz over a register) and the relational
+;; trio (CEq/CLtU/CLeU, a dst register vs a Src) — the if fragment's.
+(fn rxcond ((s SExpr)) (Option Cond)
+  (match s
+    ((SList (Cons h args))
+     (if (is_sym h (quote CEqz))
+       (match args
+         ((Cons r Nil)
+          (match (rxreg r)
+            ((Some rr) (Some (CEqz rr)))
+            (None None)))
+         (_ None))
+     (if (is_sym h (quote CNz))
+       (match args
+         ((Cons r Nil)
+          (match (rxreg r)
+            ((Some rr) (Some (CNz rr)))
+            (None None)))
+         (_ None))
+     (if (is_sym h (quote CEq))
+       (match args
+         ((Cons r (Cons s2 Nil))
+          (match (rxreg r)
+            (None None)
+            ((Some rr)
+             (match (rxsrc s2)
+               (None None)
+               ((Some ss) (Some (CEq rr ss)))))))
+         (_ None))
+     (if (is_sym h (quote CLtU))
+       (match args
+         ((Cons r (Cons s2 Nil))
+          (match (rxreg r)
+            (None None)
+            ((Some rr)
+             (match (rxsrc s2)
+               (None None)
+               ((Some ss) (Some (CLtU rr ss)))))))
+         (_ None))
+     (if (is_sym h (quote CLeU))
+       (match args
+         ((Cons r (Cons s2 Nil))
+          (match (rxreg r)
+            (None None)
+            ((Some rr)
+             (match (rxsrc s2)
+               (None None)
+               ((Some ss) (Some (CLeU rr ss)))))))
+         (_ None))
+       None))))))
+    (_ None)))
+
+;; one instruction; the structured-control arms (XBlock/XLoop/XBr/XBrIf)
+;; recurse through rxinstrs, fuel-threaded like the wasm reflector (the
+;; input file's char count bounds the descent — see rfunc's note).
+(fn rxinstr ((d Int) (s SExpr)) RXI
+  (measure d)
+  (if (le d 0) (RXIErr "reflection fuel exhausted")
   (match s
     ((SList (Cons h args))
      (if (is_sym h (quote XMovRR))
@@ -364,31 +421,66 @@
                   (None (RXIErr "XBin needs a register or immediate source"))
                   ((Some ss) (RXIOk (XBin oo rd ss)))))))))
          (_ (RXIErr "XBin needs an op, a register, and a source")))
+     (if (is_sym h (quote XBlock))
+       (match args
+         ((Cons body Nil)
+          (match (rxinstrs (- d 1) body)
+            ((RXISOk is) (RXIOk (XBlock is)))
+            ((RXISErr m) (RXIErr m))))
+         (_ (RXIErr "XBlock needs one body")))
+     (if (is_sym h (quote XLoop))
+       (match args
+         ((Cons body Nil)
+          (match (rxinstrs (- d 1) body)
+            ((RXISOk is) (RXIOk (XLoop is)))
+            ((RXISErr m) (RXIErr m))))
+         (_ (RXIErr "XLoop needs one body")))
+     (if (is_sym h (quote XBr))
+       (match args
+         ((Cons (SInt k) Nil) (RXIOk (XBr k)))
+         (_ (RXIErr "XBr needs one int literal")))
+     (if (is_sym h (quote XBrIf))
+       (match args
+         ((Cons c (Cons (SInt k) Nil))
+          (match (rxcond c)
+            ((Some cc) (RXIOk (XBrIf cc k)))
+            (None (RXIErr "unknown XBrIf condition"))))
+         (_ (RXIErr "XBrIf needs a condition and an int literal")))
+     (if (is_sym h (quote XCall))
+       (match args
+         ((Cons (SInt k) Nil) (RXIOk (XCall k)))
+         (_ (RXIErr "XCall needs one int literal")))
        (RXIErr
-         "x86 instruction outside the straight-line reflector (extend per emitter slice)")))))
-    (_ (RXIErr "instruction is not an application"))))
+         "x86 instruction outside the reflector (extend per emitter slice)"))))))))))
+    ((SSym x)
+     (if (sym_eq x (quote XRet)) (RXIOk XRet)
+     (RXIErr "unknown bare x86 instruction")))
+    (_ (RXIErr "instruction is not an application")))))
 
-(fn rxinstr_items ((ss (List SExpr))) RXIS
-  (measure (struct ss))
+(fn rxinstr_items ((d Int) (ss (List SExpr))) RXIS
+  (measure d)
+  (if (le d 0) (RXISErr "reflection fuel exhausted")
   (match ss
     (Nil (RXISOk Nil))
     ((Cons h t)
-     (match (rxinstr h)
+     (match (rxinstr (- d 1) h)
        ((RXIErr m) (RXISErr m))
        ((RXIOk i)
-        (match (rxinstr_items t)
+        (match (rxinstr_items (- d 1) t)
           ((RXISOk is) (RXISOk (Cons i is)))
-          ((RXISErr m) (RXISErr m))))))))
+          ((RXISErr m) (RXISErr m)))))))))
 
-(fn rxinstrs ((s SExpr)) RXIS
+(fn rxinstrs ((d Int) (s SExpr)) RXIS
+  (measure d)
+  (if (le d 0) (RXISErr "reflection fuel exhausted")
   (match s
     ((SSym x)
      (if (sym_eq x (quote Nil)) (RXISOk Nil)
      (RXISErr "instruction list is a bare symbol")))
     ((SList (Cons h rest))
-     (if (is_sym h (quote list)) (rxinstr_items rest)
+     (if (is_sym h (quote list)) (rxinstr_items (- d 1) rest)
      (RXISErr "instruction list is not (list …) or Nil")))
-    (_ (RXISErr "instruction list is not (list …) or Nil"))))
+    (_ (RXISErr "instruction list is not (list …) or Nil")))))
 
 ;; a function literal: (MkXFunc P BODY), directly or through (inline NAME)
 (fn rxfunc ((tbl (List (Pair Symbol SExpr))) (d Int) (s SExpr)) RXF
@@ -399,7 +491,7 @@
      (if (is_sym h (quote MkXFunc))
        (match rest
          ((Cons (SInt p) (Cons body Nil))
-          (match (rxinstrs body)
+          (match (rxinstrs (- d 1) body)
             ((RXISOk is) (RXFOk (MkXFunc p is)))
             ((RXISErr m) (RXFErr m))))
          (_ (RXFErr "MkXFunc needs one int literal and a body")))
