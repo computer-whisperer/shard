@@ -1,0 +1,133 @@
+;;; meta/proof — the PROOF-FORM SPINE for programs that generate shard
+;;; proofs: the wrap-collapse discharge event (a named have citing a
+;;; rep-collapse lemma once, range facts at given premise references,
+;;; then ONE all-occurrences rewrite — constant proof cost per node
+;;; regardless of fan-out), PARAMETRIC in the modulus and the lemma name
+;;; (wasm instantiates 2^32/wrap32_id, x86 2^64/wrap64_id — the delta
+;;; that proved the spine target-generic); the derived-bound have
+;;; (generated interval helper + get_lo/get_hi byte sub-proofs); and the
+;;; condition-path discharge kit (§6j: path hyp rewrites, premise
+;;; strips, silent single-condition derivations). Deliberately small:
+;;; target-shaped templates (PItem flushes, call bridges, link
+;;; derivations) live in each back end and graduate here only when a
+;;; second target speaks them. Meta stdlib resident (from
+;;; tools/low/proof.shard, the hygiene-pass ruling). Pure vocabulary.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../doc")
+(import "../spell")
+
+(use (:: kernel term Expr))
+(use (:: meta doc *))
+(use (:: meta spell *))
+
+;; ---- the wrap-collapse discharge event --------------------------------------------
+
+;; one discharge event: (have wJ …) citing the rep-collapse lemma once at
+;; the given modulus, its range facts at the given references (premise
+;; indices or have names), then an all-occurrences rewrite of the have
+;; fact. The interstitial text is pinned byte-for-byte to both back ends'
+;; generated certs — regen gates verify the instantiations.
+(fn wrap_event
+  ((e Expr)
+   (modulus (List Int))
+   (lemma (List Int))
+   (loref Doc)
+   (hiref Doc)
+   (j Int))
+  Doc
+  (dconc
+    (list
+      (DStr "(have w")
+      (dint j)
+      (DStr " (= (mod ")
+      (pr_e e)
+      (DStr " ")
+      (DStr modulus)
+      (DStr ") ")
+      (pr_e e)
+      (DStr ") (rewrite-with (lemma ")
+      (DStr lemma)
+      (DStr ") lr lhs ((inst x ")
+      (pr_e e)
+      (DStr ")) ((steps ((rewrite (premise ")
+      loref
+      (DStr ") lr lhs true ())) refl) (steps ((rewrite (premise ")
+      hiref
+      (DStr ") lr lhs true ())) refl)) refl)) (steps ((rewrite (premise w")
+      (dint j)
+      (DStr ") lr lhs true ()))) "))))
+
+;; ---- the PRE-hygiene discharge templates ------------------------------------------
+
+;; get_lo/get_hi sub-proofs, one pair per read (the generated helper's
+;; byte premises, in premise order)
+(fn get_subs ((rs (List (Pair Expr Int)))) Doc
+  (measure (struct rs))
+  (match rs
+    (Nil (DStr ""))
+    ((Cons _ t)
+     (dcat3
+       (DStr "(steps ((rewrite (lemma get_lo) lr lhs true ())) refl) ")
+       (DStr "(steps ((rewrite (lemma get_hi) lr lhs true ())) refl) ")
+       (get_subs t)))))
+
+;; a derived-bound have: cite a generated helper claim, reads pinned by
+;; explicit insts, byte premises by get_lo/get_hi
+(fn iv_have ((nm Doc) (bound Doc) (helper Doc) (rs (List (Pair Expr Int)))) Doc
+  (dcat3
+    (dcat3 (DStr "(have ") nm (DCat (DStr " (= ") bound))
+    (dcat3
+      (DStr " True) (rewrite-with (lemma ")
+      helper
+      (DCat (DStr ") lr lhs (") (pr_read_insts rs 0)))
+    (dcat3 (DStr ") (") (get_subs rs) (DStr ") refl)) "))))
+
+;; hyp rewrites for a condition path, outermost first (hyp indices count
+;; down to the innermost arm's 0)
+(fn hyp_rews ((path (List (Pair Expr Bool))) (h Int)) Doc
+  (measure (struct path))
+  (match path
+    (Nil (DStr ""))
+    ((Cons _ t)
+     (dcat3
+       (dcat3 (DStr "(rewrite (hyp ") (dint h) (DStr ") lr rhs true ()) "))
+       (hyp_rews t (- h 1))
+       (DStr "")))))
+
+(fn path_len ((path (List (Pair Expr Bool)))) Int
+  (measure (struct path))
+  (match path
+    (Nil 0)
+    ((Cons _ t) (+ 1 (path_len t)))))
+
+;; strip a condition-wrapped premise inside its arm: rl-rewrite the
+;; premise onto the goal's rhs, fire every path hyp, compute the if nest
+;; away
+(fn strip_have ((nm Doc) (bound Doc) (idx Int) (path (List (Pair Expr Bool))))
+  Doc
+  (dcat3
+    (dcat3 (DStr "(have ") nm (DCat (DStr " (= ") bound))
+    (dcat3
+      (DStr " True) (chain (steps ((rewrite (premise ")
+      (dint idx)
+      (DCat (DStr ") rl rhs true ()) ") (hyp_rews path (- (path_len path) 1))))
+    (DStr "(compute rhs))) refl)) ")))
+
+;; a silently-derived bound: cite the generated single-condition helper,
+;; its one premise from the path hyp
+(fn drv_have ((nm Doc) (bound Doc) (cb Doc) (insts Doc) (hypIdx Int)) Doc
+  (dcat3
+    (dcat3 (DStr "(have ") nm (DCat (DStr " (= ") bound))
+    (dcat3
+      (DStr " True) (rewrite-with (lemma ")
+      cb
+      (DCat (DStr ") lr lhs (") insts))
+    (dcat3
+      (dcat3
+        (DStr ") ((steps ((rewrite (hyp ")
+        (dint hypIdx)
+        (DStr ") lr lhs true ())) refl)) "))
+      (DStr "refl)) ")
+      (DStr ""))))

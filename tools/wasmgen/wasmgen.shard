@@ -70,7 +70,7 @@
 (import "../../meta/spell")
 (import "../low/schema.shard")
 (import "../../meta/lin")
-(import "../low/proof.shard")
+(import "../../meta/proof")
 (import "../../meta/shape")
 
 (use (:: kernel loader resolve_closure))
@@ -106,8 +106,218 @@
 (use (:: meta spell *))
 (use (:: tools low schema *))
 (use (:: meta lin *))
-(use (:: tools low proof *))
+(use (:: meta proof *))
 (use (:: meta shape *))
+
+;; ---- the wasm proof templates (moved from tools/low/proof in the
+;; meta/proof split): the wrap event instantiated at the wasm modulus,
+;; the PItem stage-law flush, the call_bridge citation builders, and
+;; the link-derivation discharge templates.
+
+(fn bnd_ltwrap ((e Doc)) Doc (dcat3 (DStr "(lt ") e (DStr " 4294967296)")))
+
+;; the wasm instantiation of meta/proof's wrap_event (2^32 / wrap32_id)
+(fn w32_event ((e Expr) (loref Doc) (hiref Doc) (j Int)) Doc
+  (wrap_event e "4294967296" "wrap32_id" loref hiref j))
+
+;; premise pair from the PItem layout (wrap pairs after the three fixed
+;; portable slots — the mem fragment's discovery-order layout)
+(fn m_event ((e Expr) (pres (List PItem)) (j Int)) Doc
+  (let ((k (wrap_ix (spell e) pres 3))) (w32_event e (dint k) (dint (+ k 1)) j)))
+
+;; the auto wrap event: a read-linear node's bounds derived (names bJ,
+;; bJ+1), then the wrap event at wJ+2 citing them
+(fn m_event_auto ((e Expr) (fnm Doc) (pres (List PItem)) (j Int)) Doc
+  (let ((k (paut_ix (spell e) pres 0)))
+    (let
+      ((rs
+         (match (pl_e e True)
+           ((Some p) (pl_atoms p))
+           (None Nil))))
+      (dcat3
+        (iv_have
+          (DCat (DStr "b") (dint j))
+          (bnd_le0 (pr_e e))
+          (wb_name fnm k True)
+          rs)
+        (iv_have
+          (DCat (DStr "b") (dint (+ j 1)))
+          (bnd_ltwrap (pr_e e))
+          (wb_name fnm k False)
+          rs)
+        (w32_event
+          e
+          (DCat (DStr "b") (dint j))
+          (DCat (DStr "b") (dint (+ j 1)))
+          (+ j 2))))))
+
+;; ---- the stage-law flush ----------------------------------------------------------
+
+(fn m_flush_go ((ns (List Expr)) (pres (List PItem)) (fnm Doc) (j Int))
+  (Pair Doc Int)
+  (measure (struct ns))
+  (match ns
+    (Nil (Pair (DStr "") j))
+    ((Cons e t)
+     (if (wrap_seen (spell e) pres)
+       (match (m_flush_go t pres fnm (+ j 1))
+         ((Pair d j2) (Pair (DCat (m_event e pres j) d) j2)))
+       (match (m_flush_go t pres fnm (+ j 3))
+         ((Pair d j2) (Pair (DCat (m_event_auto e fnm pres j) d) j2)))))))
+
+;; flush the pending wrap events (dedup within the stage, walk order =
+;; postorder — children collapse before parents read them)
+(fn m_flush ((pend (List Expr)) (pres (List PItem)) (fnm Doc) (j Int))
+  (Pair Doc Int)
+  (m_flush_go (add_unique pend Nil) pres fnm j))
+
+(fn m_stage_open () Doc (DStr "(steps ((compute lhs (stop eval_call)))) "))
+
+;; ---- the call_bridge citation builders --------------------------------------------
+
+(fn m_bridge_head () Doc
+  (DStr "(rewrite-with (lemma call_bridge) lr lhs ((inst f "))
+
+;; bridge premises 0-3: func_at via the spine premise, pop_n/arity via the
+;; callee's arity premise (index aix), wrev by compute
+(fn m_bridge_pre ((aix Int)) Doc
+  (dcat3
+    (dcat3
+      (DStr
+        "((steps ((rewrite (premise 0) lr lhs true ()) (compute both)) refl) (steps ((rewrite (premise ")
+      (dint aix)
+      (DStr ") lr lhs true ()) (compute both)) refl) "))
+    (dcat3
+      (DStr "(steps ((compute both)) refl) (steps ((rewrite (premise ")
+      (dint aix)
+      (DStr ") lr lhs true ()) (compute both)) refl) "))
+    (DStr "")))
+
+;; the run-premise sub-proof: THE behavior premise, verbatim
+(fn m_run_sub ((bidx Int)) Doc
+  (dcat3
+    (DStr "(steps ((rewrite (premise ")
+    (dint bidx)
+    (DStr ") lr lhs true ())) refl)")))
+
+;; the read bridge: f = the abstract slot-0 binder; the run premise is
+;; the site's behavior premise, at the site's CURRENT memory mm
+(fn m_bridge_get
+  ((mm Expr) (addr Expr) (below (List Expr)) (rnode Expr) (bidx Int))
+  Doc
+  (dcat3
+    (dcat3
+      (dcat3 (m_bridge_head) (DStr "f0") (DStr ") (inst popped (Cons "))
+      (dcat3 (pr_e addr) (DStr " Nil)) (inst rest ") (stack_spell below))
+      (dcat3 (DStr ") (inst args (Cons ") (pr_e addr) (DStr " Nil)) (inst v ")))
+    (dcat3
+      (DCat (pr_e rnode) (DStr ") (inst mem2 "))
+      (DCat (pr_e mm) (DStr ")) "))
+      (m_bridge_pre 1))
+    (dcat3 (m_run_sub bidx) (DStr ")) ") (DStr ""))))
+
+;; the write bridge: f = the abstract slot-1 binder
+(fn m_bridge_set
+  ((mm Expr) (addr Expr) (val Expr) (below (List Expr)) (bidx Int))
+  Doc
+  (dcat3
+    (dcat3
+      (dcat3 (m_bridge_head) (DStr "f1") (DStr ") (inst popped (Cons "))
+      (dcat3 (pr_e val) (DStr " (Cons ") (pr_e addr))
+      (dcat3
+        (DStr " Nil))) (inst rest ")
+        (stack_spell below)
+        (DStr ") (inst args (Cons ")))
+    (dcat3
+      (dcat3 (pr_e addr) (DStr " (Cons ") (pr_e val))
+      (dcat3 (DStr " Nil))) (inst v ") (pr_e val) (DStr ""))
+      (dcat3
+        (DCat (DStr ") (inst mem2 (mem_set ") (pr_e mm))
+        (DCat (sp) (pr_e addr))
+        (DCat (sp) (pr_e val))))
+    (dcat3
+      (DCat (DStr "))) ") (m_bridge_pre 2))
+      (dcat3 (m_run_sub bidx) (DStr ")) ") (DStr ""))
+      (DStr ""))))
+
+;; ---- link-derivation discharge templates ------------------------------------------
+
+;; the two address sub-proofs for one behavior, by address class: cite the
+;; linked cert's premise pair, compute a ground literal's bound, or derive
+;; a read-linear address's bound via the generated ab helper
+(fn ac_sub ((ac AC) (fnm Doc) (lo Bool)) Doc
+  (match ac
+    ((ACPrem k)
+     (dcat3
+       (DStr "(steps ((rewrite (premise ")
+       (dint (if lo (* 2 k) (+ (* 2 k) 1)))
+       (DStr ") lr lhs true ())) refl) ")))
+    (ACGround (DStr "(steps ((compute both)) refl) "))
+    ((ACRead k rs)
+     (dcat3
+       (dcat3
+         (DStr "(rewrite-with (lemma ")
+         (ab_name fnm k lo)
+         (DCat (DStr ") lr lhs (") (pr_read_insts rs 0)))
+       (dcat3 (DStr ") (") (get_subs rs) (DStr ") refl) "))
+       (DStr "")))))
+
+;; discharge one behavior premise by citing a shipped callee cert, its
+;; two premises by the address's class
+(fn link_beh ((cert (List Int)) (ac AC) (fnm Doc)) Doc
+  (dcat3
+    (dcat3 (DStr "(rewrite-with (lemma ") (DStr cert) (DStr ") lr lhs () "))
+    (dcat3
+      (DStr "(")
+      (DCat (ac_sub ac fnm True) (ac_sub ac fnm False))
+      (DStr ") "))
+    (DStr "refl) ")))
+
+(fn ac_at ((acs (List AC)) (i Int)) AC
+  (measure (struct acs))
+  (match acs
+    (Nil ACGround)
+    ((Cons h t) (if (int_eq i 0) h (ac_at t (- i 1))))))
+
+;; sub-proofs for the portable cert's item premises, in item order;
+;; wb = the linked premise index where the wrap pairs start; getc/setc =
+;; the shipped cert names for slot-0 reads / slot-1 writes; acs = the
+;; address classes aligned with `as`
+(fn link_subs
+  ((ps (List PItem))
+   (as (List Expr))
+   (acs (List AC))
+   (wb Int)
+   (w Int)
+   (getc (List Int))
+   (setc (List Int))
+   (fnm Doc))
+  Doc
+  (measure (struct ps))
+  (match ps
+    (Nil (DStr ""))
+    ((Cons h t)
+     (match h
+       ((PWrap _)
+        (dcat3
+          (dcat3
+            (DStr "(steps ((rewrite (premise ")
+            (dint (+ wb (* 2 w)))
+            (DStr ") lr lhs true ())) refl) "))
+          (dcat3
+            (DStr "(steps ((rewrite (premise ")
+            (dint (+ (+ wb (* 2 w)) 1))
+            (DStr ") lr lhs true ())) refl) "))
+          (link_subs t as acs wb (+ w 1) getc setc fnm)))
+       ((PAuto _) (link_subs t as acs wb w getc setc fnm))
+       ((PGet _ a _)
+        (DCat
+          (link_beh getc (ac_at acs (pres_ix (spell a) as 0)) fnm)
+          (link_subs t as acs wb w getc setc fnm)))
+       ((PSet _ a _ _)
+        (DCat
+          (link_beh setc (ac_at acs (pres_ix (spell a) as 0)) fnm)
+          (link_subs t as acs wb w getc setc fnm)))))))
 
 ;; ---- the wasm statement vocabulary (moved from tools/low/schema in the
 ;; meta/spell split): opcode rendering over the shared source-op
@@ -690,7 +900,7 @@
        (match (pw_side e False path fnm ngo ni1 nk1 j1)
          ((MkSR pf2 pr2 hl2 hiref ni2 nk2 j2)
           (MkPWR
-            (dcat3 pf1 pf2 (wrap_event e loref hiref j2))
+            (dcat3 pf1 pf2 (w32_event e loref hiref j2))
             (DCat pr1 pr2)
             (DCat hl1 hl2)
             ni2
@@ -3992,7 +4202,7 @@
        ((Pair d j2)
         (Pair
           (DCat
-            (wrap_event
+            (w32_event
               e
               (dint (dvx_at wa (spell e)))
               (dint (+ (dvx_at wa (spell e)) 1))
