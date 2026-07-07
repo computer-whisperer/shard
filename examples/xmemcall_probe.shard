@@ -1,0 +1,162 @@
+;;; examples/xmemcall_probe.shard — the x86 MEM-FRAGMENT hand-play
+;;; (docs/X86.md §15 probe): caller pieces whose reads/stores go THROUGH
+;;; std/mem's x86 artifact functions (call-per-byte, composed by
+;;; citation), in the exact form the emitter will generate. New territory
+;;; over the §10 hand-play (xsumsq): the callee certs carry PREMISES —
+;;; the caller's address-bounds premises thread into the bridge's
+;;; sub-proof and discharge the callee cert's guard pair.
+;;;
+;;; Module convention (std/mem/mem.x86.shard): get at 0, set at 1, the
+;;; caller at 2; entry-first image layout at encode time. The caller's
+;;; prologue parks its params off the marshalling homes (rdi/rsi) into
+;;; r10/r11, then each read/store marshals and calls; the callee's body
+;;; is NEVER computed into — its cert's result record (the clobber set)
+;;; is all the caller knows.
+
+(import "../kernel/stdlib.shard")
+(import "../std/mem")
+(import "../std/mem/mem.x86.shard")
+(import "../models/x86/x86.shard")
+
+(use (:: std mem *))
+(use (:: std mem mem.x86 *))
+(use (:: models x86 x86 *))
+
+;; --- the specs -------------------------------------------------------------------
+
+(fn xm_bump ((m Mem) (p Int)) Int (+ (mem_get m p) 1))
+
+(fn xm_put ((m Mem) (p Int) (v Int)) Mem (mem_set m p v))
+
+;; --- local copies of the callee literals -------------------------------------------
+;; (inline …) is same-file sugar, so the caller file carries its own
+;; copies of std/mem's x86 function literals. A drifted copy cannot
+;; slip through: the callee certs' statements expand THEIR copies, and
+;; the citation unifies by VALUE — a mismatch is a loud gate-3 failure.
+
+(fn pget_f () XFunc (MkXFunc 1 (list (XLoad8 RAX (AReg RDI)))))
+
+(fn pset_f () XFunc (MkXFunc 2 (list (XStore8 (AReg RDI) (SReg RSI)))))
+
+;; --- the caller pieces (the generated shape) --------------------------------------
+
+;; bump: park p, marshal, call get, add 1 on the result home
+(fn xmb_f () XFunc
+  (MkXFunc
+    1
+    (list
+      (XMovRR R10 RDI)
+      (XMovRR RDI R10)
+      (XCall 0)
+      (XBin XAdd RAX (SImm 1)))))
+
+;; put: park p and v, marshal both, call set
+(fn xmp_f () XFunc
+  (MkXFunc
+    2
+    (list
+      (XMovRR R10 RDI)
+      (XMovRR R11 RSI)
+      (XMovRR RDI R10)
+      (XMovRR RSI R11)
+      (XCall 1))))
+
+;; --- the composed theorems --------------------------------------------------------
+
+;; Int-return read: the bridge's run premise is discharged by xmget_cert,
+;; the caller's address premises threading into the cert's guard pair;
+;; the arith node over the read discharges by the standard wrap64_id
+;; chain at its own premise pair.
+(claim xmb_thm
+  (goal ((p Int) (m0 Mem) (c Nat) (restfs (List XFunc)))
+    ((= (le 0 p) True)
+     (= (le (+ p 1) 65536) True)
+     (= (le 0 (+ (mem_get m0 p) 1)) True)
+     (= (lt (+ (mem_get m0 p) 1) 18446744073709551616) True))
+    (=
+      (xcall_fn_mem
+        (S^ 12 c)
+        (MkXModule
+          (Cons (inline pget_f) (Cons (inline pset_f) (Cons (inline xmb_f) restfs)))
+          65536)
+        2
+        (list p)
+        m0)
+      (Some (Pair (xm_bump m0 p) m0))))
+  (chain
+    (steps ((compute lhs (stop xeval_call))))
+    (rewrite-with
+      (lemma xcall_bridge)
+      lr
+      lhs
+      ((inst f (inline pget_f))
+       (inst rs2 (MkRegs (mem_get m0 p) 0 0 0 0 0 p 0 0 p 0 0 0 0 0))
+       (inst mem2 m0))
+      ((steps ((compute both)) refl)
+       (chain
+         (rewrite-with
+           (lemma xmget_cert)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+            (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+         (steps ((compute both)))
+         refl)))
+    (steps ((compute lhs (stop mem_get))))
+    (have w0
+      (=
+        (mod (+ (mem_get m0 p) 1) 18446744073709551616)
+        (+ (mem_get m0 p) 1))
+      (rewrite-with
+        (lemma wrap64_id)
+        lr
+        lhs
+        ((inst x (+ (mem_get m0 p) 1)))
+        ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+         (steps ((rewrite (premise 3) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise w0) lr lhs true ())))
+    (steps ((unfold xm_bump rhs) (reduce rhs)))
+    (steps ((compute both)))
+    refl))
+
+;; Mem-return store: the bridge's run premise is discharged by
+;; xmset_cert (clobber ∅ — rax stays the entry 0, which IS the piece's
+;; result); the memory effect is the denotational mem_set.
+(claim xmp_thm
+  (goal ((p Int) (v Int) (m0 Mem) (c Nat) (restfs (List XFunc)))
+    ((= (le 0 p) True) (= (le (+ p 1) 65536) True))
+    (=
+      (xcall_fn_mem
+        (S^ 12 c)
+        (MkXModule
+          (Cons (inline pget_f) (Cons (inline pset_f) (Cons (inline xmp_f) restfs)))
+          65536)
+        2
+        (list p v)
+        m0)
+      (Some (Pair 0 (xm_put m0 p v)))))
+  (chain
+    (steps ((compute lhs (stop xeval_call))))
+    (rewrite-with
+      (lemma xcall_bridge)
+      lr
+      lhs
+      ((inst f (inline pset_f))
+       (inst rs2 (MkRegs 0 0 0 0 0 v p 0 0 p v 0 0 0 0))
+       (inst mem2 (mem_set m0 p v)))
+      ((steps ((compute both)) refl)
+       (chain
+         (rewrite-with
+           (lemma xmset_cert)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+            (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+         (steps ((compute both)))
+         refl)))
+    (steps ((unfold xm_put rhs) (reduce rhs)))
+    (steps ((compute both)))
+    refl))
