@@ -67,6 +67,7 @@
 (import "../../kernel/module.shard")
 (import "../../kernel/reader.shard")
 (import "../../meta/doc")
+(import "../../meta/spell")
 (import "../low/schema.shard")
 (import "../low/lin.shard")
 (import "../low/proof.shard")
@@ -102,10 +103,126 @@
 (use (:: kernel reader BMOk))
 (use (:: kernel reader BMFail))
 (use (:: meta doc *))
+(use (:: meta spell *))
 (use (:: tools low schema *))
 (use (:: tools low lin *))
 (use (:: tools low proof *))
 (use (:: tools low shape *))
+
+;; ---- the wasm statement vocabulary (moved from tools/low/schema in the
+;; meta/spell split): opcode rendering over the shared source-op
+;; classification, the PItem premise renderers at the wasm modulus and
+;; call_fn_mem spellings, and the RHS / self-literal statement builders.
+
+;; ---- target vocabulary ------------------------------------------------------------
+
+(fn bop_of ((q QName)) (Option Doc)
+  (if (core_named q (quote +)) (Some (DStr "BAdd"))
+  (if (core_named q (quote -)) (Some (DStr "BSub"))
+  (if (core_named q (quote *)) (Some (DStr "BMul"))
+  None))))
+
+;; the PARTIAL ops: ediv/mod lower to the guarded BDivU/BRemU. A symbolic
+;; divisor sticks bop_val's guard if mid-compute, so these ride the STAGED
+;; pure walk (docs/LOWERING.md §6y), never the one-shot compute.
+(fn dop_of ((q QName)) (Option Doc)
+  (if (core_named q (quote ediv)) (Some (DStr "BDivU"))
+  (if (core_named q (quote mod)) (Some (DStr "BRemU"))
+  None)))
+
+;; the TRANSPARENT bitwise ops: bop_val applies the kernel prims directly
+;; (total, no wrap, no guard — docs/LOWERING.md §6z), so a bitwise node
+;; contributes no premise and no discharge event; the machine spelling IS
+;; the spec spelling. Bounds on CONTAINING arith nodes are consumer
+;; premises (std/bits is the discharge kit).
+(fn top_of ((q QName)) (Option Doc)
+  (if (core_named q (quote band)) (Some (DStr "BAnd"))
+  (if (core_named q (quote bor)) (Some (DStr "BOr"))
+  (if (core_named q (quote bxor)) (Some (DStr "BXor"))
+  None))))
+
+(fn cond_op ((q QName)) (Option Doc)
+  (if (core_named q (quote int_eq)) (Some (DStr "BEq"))
+  (if (core_named q (quote lt)) (Some (DStr "BLtU"))
+  (if (core_named q (quote le)) (Some (DStr "BLeU"))
+  None))))
+
+;; the portable premise text for one item
+(fn pit_prem ((p PItem)) Doc
+  (match p
+    ((PWrap e)
+     (dcat3
+       (dcat3 (DStr "(= (le 0 ") (pr_e e) (DStr ") True) "))
+       (dcat3 (DStr "(= (lt ") (pr_e e) (DStr " 4294967296) True) "))
+       (DStr "")))
+    ((PAuto _) (DStr ""))
+    ((PGet mm a k)
+     (dcat3
+       (dcat3 (DStr "(= (call_fn_mem (S^ ") (dint k) (DStr " c) m 0 (Cons "))
+       (dcat3
+         (dcat3 (pr_e a) (DStr " Nil) ") (pr_e mm))
+         (DStr ") (Some (Pair (mem_get ")
+         (DCat (pr_e mm) (DCat (sp) (pr_e a))))
+       (dcat3 (DStr ") ") (pr_e mm) (DStr "))) "))))
+    ((PSet mm a v k)
+     (dcat3
+       (dcat3 (DStr "(= (call_fn_mem (S^ ") (dint k) (DStr " c) m 1 (Cons "))
+       (dcat3
+         (dcat3 (pr_e a) (DStr " (Cons ") (pr_e v))
+         (DStr " Nil)) ")
+         (DCat (pr_e mm) (DStr ") (Some (Pair ")))
+       (dcat3
+         (DCat (pr_e v) (DStr " (mem_set "))
+         (DCat (pr_e mm) (DCat (sp) (DCat (pr_e a) (DCat (sp) (pr_e v)))))
+         (DStr ")))) "))))))
+
+(fn pits_prems ((ps (List PItem))) Doc
+  (measure (struct ps))
+  (match ps
+    (Nil (DStr ""))
+    ((Cons h t) (DCat (pit_prem h) (pits_prems t)))))
+
+;; the linked cert's wrap premises (an address pair per ACPrem address
+;; comes first — see wasmgen's link_addr_prems2)
+(fn link_wrap_prems ((ps (List PItem))) Doc
+  (measure (struct ps))
+  (match ps
+    (Nil (DStr ""))
+    ((Cons h t)
+     (match h
+       ((PWrap e)
+        (dcat3
+          (dcat3 (DStr "(= (le 0 ") (pr_e e) (DStr ") True) "))
+          (dcat3 (DStr "(= (lt ") (pr_e e) (DStr " 4294967296) True) "))
+          (link_wrap_prems t)))
+       (_ (link_wrap_prems t))))))
+
+(fn bnd_leaddr ((e Doc)) Doc (dcat3 (DStr "(le (+ ") e (DStr " 1) 65536)")))
+
+;; ---- RHS / self-literal / spec-application builders -------------------------------
+
+;; the SPEC application (NAME m0 x0 …)
+(fn m_spec_app ((q QName) (ints (List Type))) Doc
+  (dcat3
+    (dcat3 (DStr "(") (dsym (qn_name q)) (DStr " m0"))
+    (pr_args_lead ints)
+    (DStr ")")))
+
+;; the SELF function literal (from the code walk)
+(fn m_self_lit ((n Int) (nxt Int) (code (List Doc))) Doc
+  (dcat3
+    (dcat3 (DStr "(MkFunc ") (dint (- n 1)) (sp))
+    (dcat3 (dint (- nxt (- n 1))) (DStr " (list ") (djoin code))
+    (DStr "))")))
+
+;; the RHS: value slot + the SPEC application (memory slot for Mem fns)
+(fn m_rhs ((q QName) (ints (List Type)) (rty Type) (ce Expr)) Doc
+  (if (is_int_ty rty)
+    (dcat3 (DStr "(Some (Pair ") (m_spec_app q ints) (DStr " m0))"))
+    (dcat3
+      (dcat3 (DStr "(Some (Pair ") (pr_e ce) (sp))
+      (m_spec_app q ints)
+      (DStr "))"))))
 
 
 ;; ---- the fragment ------------------------------------------------------------

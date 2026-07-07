@@ -1,16 +1,21 @@
-;;; tools/low/schema — the lowering library's statement-schema kit: the
-;;; canonical-expr spelling (the SPEC form premises and (inst …) pins must
-;;; match compute residues exactly), binder environments for the two-walk
-;;; designs, node-set machinery (unique arith sites), type predicates,
-;;; goal binder/arg/PRE printers, the PItem portable-premise layout
-;;; (docs/LOWERING.md §6d) with its renderers, and the RHS/self-literal
-;;; builders. Everything here renders STATEMENT text or canonical exprs;
-;;; proof-form templates live in tools/low/proof.shard.
+;;; tools/low/schema — the lowering library's statement-schema POLICY:
+;;; source-op classification (which core ops are wrap/div/bitwise/cond
+;;; fragment vocabulary — target-independent; each back end renders its
+;;; own opcode names), condition-operand fencing, the PItem
+;;; portable-premise layout (docs/LOWERING.md §6d) with its slot
+;;; accounting, address classification for linked derivations, and the
+;;; generated-helper naming conventions (wb_/ab_/cb_). The generic
+;;; kernel-term kit (canonical spelling, node sets, printers, claim
+;;; builders) graduated to meta/spell; the wasm premise/statement
+;;; RENDERERS live in tools/wasmgen. (bnd_ltwrap — the wasm modulus
+;;; bound — is TEMPORARY residue here: tools/low/proof.shard still
+;;; cites it, and both move with the proof-spine split.)
 
 (import "../../kernel/stdlib.shard")
 (import "../../kernel/term.shard")
 (import "../../kernel/module.shard")
 (import "../../meta/doc")
+(import "../../meta/spell")
 
 (use (:: kernel term Expr))
 (use (:: kernel term FVar))
@@ -25,277 +30,40 @@
 (use (:: kernel module TCon))
 (use (:: kernel module TVar))
 (use (:: meta doc *))
+(use (:: meta spell *))
 
-;; ---- canonical exprs and their spelling ------------------------------------------
+;; ---- source-op classification (the fragment vocabulary, target-independent) -------
+;;
+;; which CORE ops the pure fragment speaks, by kind: WRAP ops claim a
+;; premise pair + a wrap_id citation per node; DIV ops ride the staged
+;; walk behind the divisor guard (§6y); BITWISE ops are transparent
+;; prims (§6z — no premise, no event); COND ops fuse into the branch
+;; vocabulary (§6v). Each back end renders these to its own opcodes
+;; (BAdd/BDivU/… in wasmgen; XAdd/CEq/… in x86gen).
 
-;; the source-order param symbol xK (params are locals 0..n-1; BVar j at
-;; let-depth 0 is textual position n-1-j = its local = its name index)
-(fn xsym ((k Int)) Symbol (sym_of_chars (append_int "x" (show_int k))))
+(fn is_wrap_op ((q QName)) Bool
+  (if (core_named q (quote +)) True
+  (if (core_named q (quote -)) True
+  (core_named q (quote *)))))
 
-;; the SPEC spelling of a canonical expr (used in premises and (inst …)
-;; pins — it must match the compute residue exactly)
-(fn pr_e ((e Expr)) Doc
-  (measure (struct e))
-  (match e
-    ((FVar s) (dsym s))
-    ((IntLit k) (dint k))
-    ((Call q as)
-     (match as
-       ((Cons a (Cons b Nil))
-        (dcat3
-          (dcat3 (DStr "(") (dsym (qn_name q)) (sp))
-          (DCat (pr_e a) (sp))
-          (DCat (pr_e b) (DStr ")"))))
-       ((Cons a (Cons b (Cons c2 Nil)))
-        (dcat3
-          (dcat3 (DStr "(") (dsym (qn_name q)) (sp))
-          (DCat (pr_e a) (sp))
-          (dcat3 (pr_e b) (sp) (DCat (pr_e c2) (DStr ")")))))
-       (_ (DStr "?"))))
-    (_ (DStr "?"))))
+(fn is_div_op ((q QName)) Bool
+  (if (core_named q (quote ediv)) True (core_named q (quote mod))))
 
-(fn spell ((e Expr)) (List Int) (doc_flat (pr_e e) Nil))
+(fn is_bit_op ((q QName)) Bool
+  (if (core_named q (quote band)) True
+  (if (core_named q (quote bor)) True
+  (core_named q (quote bxor)))))
 
-;; ---- binder environments (let-bound canonical exprs + allocated locals) ----------
-
-;; let-binder environment: canonical expr + allocated local, innermost first
-(fn env_at ((env (List (Pair Expr Int))) (i Int)) (Option (Pair Expr Int))
-  (measure (struct env))
-  (match env
-    (Nil None)
-    ((Cons h t) (if (int_eq i 0) (Some h) (env_at t (- i 1))))))
-
-(fn env_len ((env (List (Pair Expr Int)))) Int
-  (measure (struct env))
-  (match env
-    (Nil 0)
-    ((Cons _ t) (+ 1 (env_len t)))))
-
-;; ---- target vocabulary ------------------------------------------------------------
-
-(fn bop_of ((q QName)) (Option Doc)
-  (if (core_named q (quote +)) (Some (DStr "BAdd"))
-  (if (core_named q (quote -)) (Some (DStr "BSub"))
-  (if (core_named q (quote *)) (Some (DStr "BMul"))
-  None))))
-
-;; the PARTIAL ops: ediv/mod lower to the guarded BDivU/BRemU. A symbolic
-;; divisor sticks bop_val's guard if mid-compute, so these ride the STAGED
-;; pure walk (docs/LOWERING.md §6y), never the one-shot compute.
-(fn dop_of ((q QName)) (Option Doc)
-  (if (core_named q (quote ediv)) (Some (DStr "BDivU"))
-  (if (core_named q (quote mod)) (Some (DStr "BRemU"))
-  None)))
-
-;; the TRANSPARENT bitwise ops: bop_val applies the kernel prims directly
-;; (total, no wrap, no guard — docs/LOWERING.md §6z), so a bitwise node
-;; contributes no premise and no discharge event; the machine spelling IS
-;; the spec spelling. Bounds on CONTAINING arith nodes are consumer
-;; premises (std/bits is the discharge kit).
-(fn top_of ((q QName)) (Option Doc)
-  (if (core_named q (quote band)) (Some (DStr "BAnd"))
-  (if (core_named q (quote bor)) (Some (DStr "BOr"))
-  (if (core_named q (quote bxor)) (Some (DStr "BXor"))
-  None))))
-
-(fn cond_op ((q QName)) (Option Doc)
-  (if (core_named q (quote int_eq)) (Some (DStr "BEq"))
-  (if (core_named q (quote lt)) (Some (DStr "BLtU"))
-  (if (core_named q (quote le)) (Some (DStr "BLeU"))
-  None))))
+(fn is_cond_op ((q QName)) Bool
+  (if (core_named q (quote int_eq)) True
+  (if (core_named q (quote lt)) True
+  (core_named q (quote le)))))
 
 (fn cond_operand_ok ((e Expr)) Bool
   (match e
     ((FVar _) True)
     ((IntLit _) True)
     (_ False)))
-
-;; ---- node sets (unique arith sites, by spelling) ----------------------------------
-
-(fn has_fv ((e Expr)) Bool
-  (measure (struct e))
-  (match e
-    ((FVar _) True)
-    ((Call _ as) (any_fv as))
-    (_ False)))
-
-(fn any_fv ((as (List Expr))) Bool
-  (measure (struct as))
-  (match as
-    (Nil False)
-    ((Cons h t) (if (has_fv h) True (any_fv t)))))
-
-(fn node_seen ((s (List Int)) (ns (List Expr))) Bool
-  (measure (struct ns))
-  (match ns
-    (Nil False)
-    ((Cons h t) (if (chars_eq s (spell h)) True (node_seen s t)))))
-
-(fn node_add ((e Expr) (ns (List Expr))) (List Expr)
-  (measure (struct ns))
-  (match ns
-    (Nil (Cons e Nil))
-    ((Cons h t) (Cons h (node_add e t)))))
-
-;; append each unseen node (dedup by spelling, first appearance wins)
-(fn add_unique ((ns (List Expr)) (acc (List Expr))) (List Expr)
-  (measure (struct ns))
-  (match ns
-    (Nil acc)
-    ((Cons h t)
-     (add_unique t (if (node_seen (spell h) acc) acc (node_add h acc))))))
-
-(fn dapp_e ((a (List Expr)) (b (List Expr))) (List Expr)
-  (measure (struct a))
-  (match a
-    (Nil b)
-    ((Cons h t) (Cons h (dapp_e t b)))))
-
-;; index of a spelling in a node list (present by construction)
-(fn pres_ix ((s (List Int)) (ps (List Expr)) (k Int)) Int
-  (measure (struct ps))
-  (match ps
-    (Nil 0)
-    ((Cons h t) (if (chars_eq s (spell h)) k (pres_ix s t (+ k 1))))))
-
-;; is this qname std/mem's fn named s?
-(fn memq_named ((q QName) (s Symbol)) Bool
-  (match q
-    ((QName mp nm)
-     (if (sym_eq nm s)
-       (sym_list_eq mp (Cons (quote std) (Cons (quote mem) Nil)))
-       False))))
-
-;; ---- read generalization (the PRE-hygiene helper claims) --------------------------
-;;
-;; a generated bound helper quantifies over the node's unique reads as
-;; plain Int binders r0 r1 …; the node's spelling with reads substituted
-;; is the helper's goal expression.
-
-(fn rsym ((k Int)) Symbol (sym_of_chars (append_int "r" (show_int k))))
-
-;; index of a spelling among the read atoms (None = not a read atom)
-(fn read_ix ((rs (List (Pair Expr Int))) (s (List Int)) (k Int)) (Option Int)
-  (measure (struct rs))
-  (match rs
-    (Nil None)
-    ((Cons (Pair a _) t)
-     (if (chars_eq (spell a) s) (Some k) (read_ix t s (+ k 1))))))
-
-(fn subst_reads ((e Expr) (rs (List (Pair Expr Int)))) Expr
-  (measure (struct e))
-  (match e
-    ((Call q as)
-     (match (read_ix rs (spell e) 0)
-       ((Some i) (FVar (rsym i)))
-       (None
-         (match as
-           ((Cons a (Cons b Nil))
-            (Call q (Cons (subst_reads a rs) (Cons (subst_reads b rs) Nil))))
-           (_ e)))))
-    (_ e)))
-
-;; param FVar symbols, first-occurrence order (binders for cond helpers)
-(fn fv_syms ((e Expr) (acc (List Symbol))) (List Symbol)
-  (measure (struct e))
-  (match e
-    ((FVar s) (if (sym_in s acc) acc (sym_add s acc)))
-    ((Call _ as)
-     (match as
-       ((Cons a (Cons b Nil)) (fv_syms b (fv_syms a acc)))
-       (_ acc)))
-    (_ acc)))
-
-(fn sym_in ((s Symbol) (ss (List Symbol))) Bool
-  (measure (struct ss))
-  (match ss
-    (Nil False)
-    ((Cons h t) (if (sym_eq h s) True (sym_in s t)))))
-
-(fn sym_add ((s Symbol) (ss (List Symbol))) (List Symbol)
-  (measure (struct ss))
-  (match ss
-    (Nil (Cons s Nil))
-    ((Cons h t) (Cons h (sym_add s t)))))
-
-;; ---- type predicates --------------------------------------------------------------
-
-(fn is_int_ty ((t Type)) Bool
-  (match t
-    ((TCon q _) (sym_eq (qn_name q) (quote Int)))
-    ((TVar _) False)))
-
-(fn is_mem_ty ((t Type)) Bool
-  (match t
-    ((TCon q _) (sym_eq (qn_name q) (quote Mem)))
-    ((TVar _) False)))
-
-(fn is_nat_ty ((t Type)) Bool
-  (match t
-    ((TCon q _) (sym_eq (qn_name q) (quote Nat)))
-    ((TVar _) False)))
-
-;; all params but the last / the last param (None on empty)
-(fn ts_mids ((ts (List Type))) (List Type)
-  (measure (struct ts))
-  (match ts
-    (Nil Nil)
-    ((Cons _ Nil) Nil)
-    ((Cons h t) (Cons h (ts_mids t)))))
-
-(fn ts_lasto ((ts (List Type))) (Option Type)
-  (measure (struct ts))
-  (match ts
-    (Nil None)
-    ((Cons h Nil) (Some h))
-    ((Cons _ t) (ts_lasto t))))
-
-(fn all_int ((ts (List Type))) Bool
-  (measure (struct ts))
-  (match ts
-    (Nil True)
-    ((Cons t rest) (if (is_int_ty t) (all_int rest) False))))
-
-(fn count_ts ((ts (List Type))) Int
-  (measure (struct ts))
-  (match ts
-    (Nil 0)
-    ((Cons _ rest) (+ 1 (count_ts rest)))))
-
-;; ---- goal binder / arg / PRE printers ---------------------------------------------
-
-;; goal binders: (x0 Int) (x1 Int) …
-(fn pr_binds ((ts (List Type)) (i Int)) Doc
-  (measure (struct ts))
-  (match ts
-    (Nil (DStr ""))
-    ((Cons _ rest)
-     (dcat3 (DStr "(x") (dint i) (DCat (DStr " Int) ") (pr_binds rest (+ i 1)))))))
-
-;; call args: x0 x1 …
-(fn pr_args ((ts (List Type)) (i Int)) Doc
-  (measure (struct ts))
-  (match ts
-    (Nil (DStr ""))
-    ((Cons _ rest)
-     (match rest
-       (Nil (DCat (DStr "x") (dint i)))
-       ((Cons _ _)
-        (dcat3 (DStr "x") (dint i) (DCat (sp) (pr_args rest (+ i 1)))))))))
-
-;; SPEC application tail: " x0 x1" (leading space per arg; empty for nullary)
-(fn pr_args_lead ((ts (List Type))) Doc
-  (match ts
-    (Nil (DStr ""))
-    ((Cons _ _) (DCat (sp) (pr_args ts 0)))))
-
-;; the symbolic stack, spelled as a Cons chain (top first)
-(fn stack_spell ((stk (List Expr))) Doc
-  (measure (struct stk))
-  (match stk
-    (Nil (DStr "Nil"))
-    ((Cons h t)
-     (dcat3 (dcat3 (DStr "(Cons ") (pr_e h) (sp)) (stack_spell t) (DStr ")")))))
 
 ;; ---- the PItem portable-premise layout (docs/LOWERING.md §6d) ---------------------
 ;;
@@ -380,41 +148,6 @@
     (Nil (Cons p Nil))
     ((Cons h t) (Cons h (pit_add t p)))))
 
-;; the portable premise text for one item
-(fn pit_prem ((p PItem)) Doc
-  (match p
-    ((PWrap e)
-     (dcat3
-       (dcat3 (DStr "(= (le 0 ") (pr_e e) (DStr ") True) "))
-       (dcat3 (DStr "(= (lt ") (pr_e e) (DStr " 4294967296) True) "))
-       (DStr "")))
-    ((PAuto _) (DStr ""))
-    ((PGet mm a k)
-     (dcat3
-       (dcat3 (DStr "(= (call_fn_mem (S^ ") (dint k) (DStr " c) m 0 (Cons "))
-       (dcat3
-         (dcat3 (pr_e a) (DStr " Nil) ") (pr_e mm))
-         (DStr ") (Some (Pair (mem_get ")
-         (DCat (pr_e mm) (DCat (sp) (pr_e a))))
-       (dcat3 (DStr ") ") (pr_e mm) (DStr "))) "))))
-    ((PSet mm a v k)
-     (dcat3
-       (dcat3 (DStr "(= (call_fn_mem (S^ ") (dint k) (DStr " c) m 1 (Cons "))
-       (dcat3
-         (dcat3 (pr_e a) (DStr " (Cons ") (pr_e v))
-         (DStr " Nil)) ")
-         (DCat (pr_e mm) (DStr ") (Some (Pair ")))
-       (dcat3
-         (DCat (pr_e v) (DStr " (mem_set "))
-         (DCat (pr_e mm) (DCat (sp) (DCat (pr_e a) (DCat (sp) (pr_e v)))))
-         (DStr ")))) "))))))
-
-(fn pits_prems ((ps (List PItem))) Doc
-  (measure (struct ps))
-  (match ps
-    (Nil (DStr ""))
-    ((Cons h t) (DCat (pit_prem h) (pits_prems t)))))
-
 ;; unique addresses among the behavior items, first-use order
 (fn addrs_of ((ps (List PItem)) (acc (List Expr))) (List Expr)
   (measure (struct ps))
@@ -434,21 +167,6 @@
   (match as
     (Nil 0)
     ((Cons _ t) (+ 1 (addr_count t)))))
-
-;; the linked cert's wrap premises (an address pair per ACPrem address
-;; comes first — see wasmgen's link_addr_prems2)
-(fn link_wrap_prems ((ps (List PItem))) Doc
-  (measure (struct ps))
-  (match ps
-    (Nil (DStr ""))
-    ((Cons h t)
-     (match h
-       ((PWrap e)
-        (dcat3
-          (dcat3 (DStr "(= (le 0 ") (pr_e e) (DStr ") True) "))
-          (dcat3 (DStr "(= (lt ") (pr_e e) (DStr " 4294967296) True) "))
-          (link_wrap_prems t)))
-       (_ (link_wrap_prems t))))))
 
 ;; ---- PRE-hygiene renderers (docs/LOWERING.md §6j) ----------------------------------
 ;;
@@ -479,132 +197,4 @@
 (fn cb_name ((fnm Doc) (k Int)) Doc
   (dcat3 (dcat3 (DStr "cb_") fnm (DStr "_")) (dint k) (DStr "")))
 
-(fn dints ((ms (List Int))) (List Doc)
-  (measure (struct ms))
-  (match ms
-    (Nil Nil)
-    ((Cons h t) (Cons (dint h) (dints t)))))
-
-(fn bnd_le0 ((e Doc)) Doc (dcat3 (DStr "(le 0 ") e (DStr ")")))
-
 (fn bnd_ltwrap ((e Doc)) Doc (dcat3 (DStr "(lt ") e (DStr " 4294967296)")))
-
-;; the divisor guard bound — bop_val's own spelling ((le 1 b), §6w)
-(fn bnd_ge1 ((e Doc)) Doc (dcat3 (DStr "(le 1 ") e (DStr ")")))
-
-(fn bnd_leaddr ((e Doc)) Doc (dcat3 (DStr "(le (+ ") e (DStr " 1) 65536)")))
-
-;; goal binders (r0 Int) … and the byte premises per read
-(fn pr_read_binds ((rs (List (Pair Expr Int))) (i Int)) Doc
-  (measure (struct rs))
-  (match rs
-    (Nil (DStr ""))
-    ((Cons _ t)
-     (dcat3
-       (dcat3 (DStr "(r") (dint i) (DStr " Int) "))
-       (pr_read_binds t (+ i 1))
-       (DStr "")))))
-
-(fn pr_read_prems ((rs (List (Pair Expr Int))) (i Int)) Doc
-  (measure (struct rs))
-  (match rs
-    (Nil (DStr ""))
-    ((Cons _ t)
-     (dcat3
-       (dcat3 (DStr "(= (le 0 r") (dint i) (DStr ") True) "))
-       (dcat3 (DStr "(= (lt r") (dint i) (DStr " 256) True) "))
-       (pr_read_prems t (+ i 1))))))
-
-;; (inst r0 READ0) … — explicit insts, one per read atom
-(fn pr_read_insts ((rs (List (Pair Expr Int))) (i Int)) Doc
-  (measure (struct rs))
-  (match rs
-    (Nil (DStr ""))
-    ((Cons (Pair a _) t)
-     (dcat3
-       (dcat3 (DStr "(inst r") (dint i) (DCat (sp) (pr_e a)))
-       (DStr ") ")
-       (pr_read_insts t (+ i 1))))))
-
-;; a read-interval helper claim: byte premises ⊢ the bound, by a computed
-;; multiplier certificate
-(fn iv_claim ((nm Doc) (rs (List (Pair Expr Int))) (bound Doc) (ms (List Int)))
-  Doc
-  (dcat3
-    (dcat3
-      (dcat3 (DStr "(claim ") nm (DStr " (goal ("))
-      (pr_read_binds rs 0)
-      (DCat (DStr ") (") (pr_read_prems rs 0)))
-    (dcat3 (DStr ") (= ") bound (DStr " True)) (by arith (list "))
-    (dcat3 (djoin (Cons (dint 1) (dints ms))) (DStr ")))") (DStr (nl)))))
-
-;; binders / self-insts over param symbols (cond helpers)
-(fn pr_sym_binds ((ss (List Symbol))) Doc
-  (measure (struct ss))
-  (match ss
-    (Nil (DStr ""))
-    ((Cons h t)
-     (dcat3
-       (dcat3 (DStr "(") (dsym h) (DStr " Int) "))
-       (pr_sym_binds t)
-       (DStr "")))))
-
-(fn pr_sym_insts ((ss (List Symbol))) Doc
-  (measure (struct ss))
-  (match ss
-    (Nil (DStr ""))
-    ((Cons h t)
-     (dcat3
-       (dcat3 (DStr "(inst ") (dsym h) (DCat (sp) (dsym h)))
-       (DStr ") ")
-       (pr_sym_insts t)))))
-
-;; a single-condition helper claim: the arm's case fact ⊢ the bound
-(fn cb_claim
-  ((nm Doc) (binds Doc) (cond Doc) (pol Bool) (bound Doc) (g Int) (m Int))
-  Doc
-  (dcat3
-    (dcat3
-      (dcat3 (DStr "(claim ") nm (DStr " (goal ("))
-      (DCat binds (DStr ") ((= "))
-      (dcat3 cond (DStr (if pol " True" " False")) (DStr ")) (= ")))
-    (dcat3 bound (DStr " True)) (by arith (list ") (dint g))
-    (dcat3 (DCat (sp) (dint m)) (DStr ")))") (DStr (nl)))))
-
-;; the condition-wrapped premise body: each path segment contributes one
-;; if layer — (if C REST True) on a True arm, (if C True REST) on False
-(fn cond_wrap ((path (List (Pair Expr Bool))) (bound Doc)) Doc
-  (measure (struct path))
-  (match path
-    (Nil bound)
-    ((Cons (Pair c pol) rest)
-     (dcat3
-       (dcat3 (DStr "(if ") (pr_e c) (sp))
-       (if pol (DCat (cond_wrap rest bound) (DStr " True"))
-       (DCat (DStr "True ") (cond_wrap rest bound)))
-       (DStr ")")))))
-
-;; ---- RHS / self-literal / spec-application builders -------------------------------
-
-;; the SPEC application (NAME m0 x0 …)
-(fn m_spec_app ((q QName) (ints (List Type))) Doc
-  (dcat3
-    (dcat3 (DStr "(") (dsym (qn_name q)) (DStr " m0"))
-    (pr_args_lead ints)
-    (DStr ")")))
-
-;; the SELF function literal (from the code walk)
-(fn m_self_lit ((n Int) (nxt Int) (code (List Doc))) Doc
-  (dcat3
-    (dcat3 (DStr "(MkFunc ") (dint (- n 1)) (sp))
-    (dcat3 (dint (- nxt (- n 1))) (DStr " (list ") (djoin code))
-    (DStr "))")))
-
-;; the RHS: value slot + the SPEC application (memory slot for Mem fns)
-(fn m_rhs ((q QName) (ints (List Type)) (rty Type) (ce Expr)) Doc
-  (if (is_int_ty rty)
-    (dcat3 (DStr "(Some (Pair ") (m_spec_app q ints) (DStr " m0))"))
-    (dcat3
-      (dcat3 (DStr "(Some (Pair ") (pr_e ce) (sp))
-      (m_spec_app q ints)
-      (DStr "))"))))
