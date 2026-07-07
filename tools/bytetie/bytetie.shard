@@ -47,8 +47,9 @@
 (use (:: models wasm wasm *))
 (use (:: models wasm encode *))
 (use (:: models x86 x86 *))
-;; single name, not the wildcard: both encoders define enc_instr
+;; single names, not the wildcard: both encoders define enc_instr
 (use (:: models x86 encode enc_func))
+(use (:: models x86 encode enc_image))
 
 (fn nl () (List Int) (Cons 10 Nil))
 
@@ -476,8 +477,18 @@
                (None (RXIErr "XStore8 needs a register or immediate source"))
                ((Some ss) (RXIOk (XStore8 aa ss)))))))
          (_ (RXIErr "XStore8 needs an address and a source")))
+     (if (is_sym h (quote XLoad8))
+       (match args
+         ((Cons d2 (Cons a Nil))
+          (match (rxreg d2)
+            (None (RXIErr "XLoad8 needs a destination register and an address"))
+            ((Some rd)
+             (match (rxaddr a)
+               (None (RXIErr "XLoad8 needs an address operand"))
+               ((Some aa) (RXIOk (XLoad8 rd aa)))))))
+         (_ (RXIErr "XLoad8 needs a destination register and an address")))
        (RXIErr
-         "x86 instruction outside the reflector (extend per emitter slice)")))))))))))
+         "x86 instruction outside the reflector (extend per emitter slice)"))))))))))))
     ((SSym x)
      (if (sym_eq x (quote XRet)) (RXIOk XRet)
      (RXIErr "unknown bare x86 instruction")))
@@ -605,9 +616,11 @@
 ;; or a loud reflection error
 (type TRes (TLine (List Int)) (TSkip) (TFail (List Int)))
 
-;; the x86 tie: the artifact is ONE FUNCTION's flat bytes (the plan's
-;; XMOD line is per-function), so the tie is enc_func of the reflected
-;; module's function at the claim's pinned index
+;; the x86 tie: the artifact is the module's flat IMAGE with the claim's
+;; pinned index as the ENTRY (enc_image lays the entry first, XCalls as
+;; call rel32 through the offset table). For a single-function no-call
+;; module this is byte-identical to enc_func f; a multi-function mem
+;; caller ties the whole [get, set, caller] image the plan ships.
 (fn xtie_of
   ((tbl (List (Pair Symbol SExpr))) (d Int) (name Symbol) (items (List SExpr)))
   TRes
@@ -635,7 +648,9 @@
                            nm
                            (append_int
                              " "
-                             (append_int (hexs (enc_func f)) (nl)))))))))))
+                             (append_int
+                               (hexs (enc_image (xfuncs_of xm) ix))
+                               (nl)))))))))))
               (_ (TFail "function index is not a literal"))))))))
     (_ (TFail "call application is missing slots"))))
 

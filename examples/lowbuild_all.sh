@@ -14,6 +14,7 @@ BUILDS=(
   std/str/lowbuild.sh
   examples/lowbuild_x86.sh
   examples/lowbuild_x86loop.sh
+  examples/lowbuild_x86mem.sh
 )
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT

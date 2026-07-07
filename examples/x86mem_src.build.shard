@@ -1,0 +1,115 @@
+;;; examples/x86mem_src.build.shard — the mod.build ENTRY for the x86_64
+;;; MEM FRAGMENT (docs/X86.md §15): assembles the artifact set for
+;;; examples/x86mem_src.shard as a native Plan value.
+;;;
+;;;     (fn build ((t Target)) Plan)     — PURE; the whole interface
+;;;
+;;; Each caller ships as a multi-function IMAGE [get, set, caller] with
+;;; the caller as the ENTRY (enc_image entry=2 lays it first — the blob
+;;; the harness calls at offset 0). The function literals (the two callee
+;;; copies + each caller body) come from the GENERATED cert file
+;;; (x86mem_out.shard); the cert<->binary tie is the BYTETIE gate's
+;;; (tools/bytetie encodes enc_image of the reflected module at the
+;;; claim's entry index). Vectors are wire export f0 (the blob entry):
+;;; XCASE for the reads (result = the source fn at byte 0 of the zeroed
+;;; data page), XMEMCASE for the store (readback window). Expectations
+;;; are SPEC-side.
+;;;
+;;; ADDRESSES: the harness MAP_FIXEDs its data page at DATA_BASE =
+;;; 0x40000000 (the reads land at byte 0 there, value 0 on the zeroed
+;;; page). The cert PREMISE domain is [0, 65536); the shipped binary is
+;;; range-agnostic, so the vectors exercise DATA_BASE while the certs
+;;; cover the model's low range.
+;;;
+;;; RUN IT:  bin/shard_eval run tools/lowbuild/lowbuild.shard examples/x86mem_src.build.shard x86
+
+(import "../kernel/stdlib.shard")
+(import "x86mem_src.shard")
+(use (:: examples x86mem_src *))
+(import "x86mem_out.shard")
+(use (:: examples x86mem_out xg_mget_f))
+(use (:: examples x86mem_out xg_mset_f))
+(use (:: examples x86mem_out xmg_bump_body))
+(use (:: examples x86mem_out xmg_dbl_body))
+(use (:: examples x86mem_out xmg_put_body))
+(import "../std/mem")
+(use (:: std mem *))
+(import "../models/x86/x86.shard")
+(use (:: models x86 x86 *))
+(import "../models/x86/encode.shard")
+(use (:: models x86 encode enc_image))
+(use (:: models x86 encode eapp))
+(import "../meta/plan")
+(use (:: meta plan *))
+
+;; Nat of a small machine count
+(fn xnat ((i Int)) Nat
+  (measure i)
+  (if (le i 0) Z (S (xnat (- i 1)))))
+
+;; n bytes read out of a spec-side memory at address a
+(fn xdump ((a Int) (n Nat) (m Mem)) (List Int)
+  (measure (struct n))
+  (match n
+    (Z Nil)
+    ((S n2) (Cons (mem_get m a) (xdump (+ a 1) n2 m)))))
+
+;; the [get, set, caller] image, caller as entry (index 2)
+(fn img ((cbody (List XInstr)) (cparams Int)) (List Int)
+  (enc_image
+    (Cons (xg_mget_f) (Cons (xg_mset_f) (Cons (MkXFunc cparams cbody) Nil)))
+    2))
+
+;; --- the build entry -------------------------------------------------------------
+
+;; the cert pins module index 2 (the caller; get/set are the low prefix);
+;; the wire vectors call the blob entry (f0) — a different notion, the ART
+;; line is filtered out of the CPU replayer's copy
+(fn art ((nm (List Int)) (cert (List Int))) PArt
+  (PA nm cert "examples/x86mem_out.shard" "models/x86/x86.shard" 2 "" "none"))
+
+;; a read vector: wire export 0, result-only (XCASE), = the source fn at
+;; byte 0 of the zeroed data page
+(fn rvec ((args (List Int)) (want Int)) PVec (PV 0 args Nil want Nil))
+
+;; a store vector: readback window at addr
+(fn svec ((args (List Int)) (addr Int) (n Int) (mf Mem)) PVec
+  (PXV 0 args addr 0 (xdump addr (xnat n) mf)))
+
+(fn pmod ((nm (List Int)) (cert (List Int)) (bytes (List Int)) (vs (List PVec)))
+  PMod
+  (PM nm bytes (list (art nm cert)) vs))
+
+;; DATA_BASE = 0x40000000
+(fn dbase () Int 1073741824)
+
+(fn build ((t Target)) Plan
+  (MkPlan
+    (list
+      (pmod
+        "xmg_bump"
+        "lowered_xmg_bump"
+        (img (xmg_bump_body) 1)
+        (list
+          (rvec (list (dbase)) (xmg_bump (mem_empty) (dbase)))
+          (rvec (list (+ (dbase) 16)) (xmg_bump (mem_empty) (+ (dbase) 16)))))
+      (pmod
+        "xmg_dbl"
+        "lowered_xmg_dbl"
+        (img (xmg_dbl_body) 1)
+        (list (rvec (list (dbase)) (xmg_dbl (mem_empty) (dbase)))))
+      (pmod
+        "xmg_put"
+        "lowered_xmg_put"
+        (img (xmg_put_body) 2)
+        (list
+          (svec
+            (list (dbase) 65)
+            (dbase)
+            3
+            (xmg_put (mem_empty) (dbase) 65))
+          (svec
+            (list (+ (dbase) 4) 200)
+            (dbase)
+            6
+            (xmg_put (mem_empty) (+ (dbase) 4) 200)))))))
