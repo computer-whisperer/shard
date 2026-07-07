@@ -22,7 +22,8 @@ TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 echo "== gate 1: regen (producer determinism)"
 "$EVAL" run tools/wasmgen/wasmgen.shard "$SRC" "$TMP/certs.raw" >/dev/null
 "$EVAL" run tools/shardfmt/shardfmt.shard "$TMP/certs.raw" > "$TMP/certs.fmt"
-diff -q "$TMP/certs.fmt" "$OUT" && echo "REGEN OK (byte-identical)"
+diff -q "$TMP/certs.fmt" "$OUT"
+echo "REGEN OK (byte-identical)"
 
 echo "== gate 2: schema (consumer-side validation)"
 "$EVAL" run tools/lowcheck/lowcheck.shard "$OUT"
@@ -41,7 +42,8 @@ echo "== gate 4: byte tie (cert module literals re-encode to the shipped bytes)"
 "$EVAL" run tools/bytetie/bytetie.shard "$OUT" > "$TMP/tie.txt"
 grep '^MOD ' "$TMP/plan.txt" | sort > "$TMP/mods.txt"
 sed 's/^TIE /MOD /' "$TMP/tie.txt" | sort > "$TMP/ties.txt"
-diff "$TMP/ties.txt" "$TMP/mods.txt" && echo "BYTETIE OK"
+diff "$TMP/ties.txt" "$TMP/mods.txt"
+echo "BYTETIE OK"
 "$EVAL" run tools/lowcheck/manifest.shard "$TMP/plan.txt" models/wasm/wasm.shard "$OUT"
 
 echo "== gate 5: engine (V8 replay of the artifact plan)"
