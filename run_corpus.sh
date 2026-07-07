@@ -117,6 +117,7 @@ TARGETS=(
   models/x86/x86.shard
   models/x86/encode.shard
   examples/x86_pieces.shard
+  std/mem/mem.x86.shard
   examples/x86_diff_run.shard
   examples/rep_probe.shard
   examples/lowfrag_probe.shard

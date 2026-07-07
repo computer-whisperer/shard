@@ -1,0 +1,144 @@
+;;; std/mem/mem.x86.shard — std/mem's x86_64 ARTIFACT PIECES: the byte
+;;; surface as callable x86 functions with REGS-GENERAL clobber-set certs
+;;; (docs/X86.md §10 form, §15 consumer) — the wasm twin is
+;;; std/mem/mem.wasm.shard. std/mem is NOT special to any compiler
+;;; machinery: ordinary certified pieces, call-per-byte v1.
+;;;
+;;; The callee convention (X86.md §15): std/mem's functions sit at the
+;;; LOW indices of a consumer's module — get at 0, set at 1 — and the
+;;; consumer (the caller piece) follows. Each cert pins the slots up to
+;;; its own index (set quantifies the one before it) and quantifies the
+;;; rest (restfs) plus the memsize (msz), so any consumer keeping this
+;;; canonical prefix can cite them through xcall_bridge.
+;;;
+;;; THE CERT FORM: xrun_regs with all fifteen register fields quantified
+;;; (the entry file a MkRegs literal over symbolic fields — matches
+;;; reduce, pure compute); the result record literal READS OFF as the
+;;; clobber set. get clobbers {rax} (the result); set clobbers NOTHING —
+;;; its whole effect is the store, stated denotationally against
+;;; std/mem's opaque surface (mem_set), so consumers frame with the
+;;; module's surface laws. Bounds guards ride premise pairs discharged
+;;; by the staged compute/rewrite interleave (the wasm mem-piece idiom).
+;;;
+;;; NOT loaded as part of the std/mem module (directory modules load only
+;;; mod.req.shard / mem.shard): consumers import this file by path.
+
+(import "../../kernel/stdlib.shard")
+(import "../../std/mem")  ; the module's own surface, opaque (Mem/mem_get/mem_set)
+(import "../../models/x86/x86.shard")
+
+(use (:: std mem *))
+(use (:: models x86 x86 *))
+
+;; --- the function literals ------------------------------------------------------
+
+;; slot 0: byte read. addr in rdi; the byte lands in rax.
+(fn xmget_f () XFunc (MkXFunc 1 (list (XLoad8 RAX (AReg RDI)))))
+
+;; slot 1: byte store. addr in rdi, value in rsi; no register written.
+(fn xmset_f () XFunc (MkXFunc 2 (list (XStore8 (AReg RDI) (SReg RSI)))))
+
+;; --- the clobber-set certs -------------------------------------------------------
+
+;; get: clobber set = {rax}; fourteen fields verbatim; memory untouched.
+(claim xmget_cert
+  (goal
+    ((c Nat)
+     (restfs (List XFunc))
+     (msz Int)
+     (mem Mem)
+     (rax Int)
+     (rcx Int)
+     (rdx Int)
+     (rbx Int)
+     (rbp Int)
+     (rsi Int)
+     (rdi Int)
+     (r8 Int)
+     (r9 Int)
+     (r10 Int)
+     (r11 Int)
+     (r12 Int)
+     (r13 Int)
+     (r14 Int)
+     (r15 Int))
+    ((= (le 0 rdi) True) (= (le (+ rdi 1) msz) True))
+    (=
+      (xrun_regs
+        (S (S c))
+        (MkXModule (Cons (inline xmget_f) restfs) msz)
+        0
+        (MkRegs rax rcx rdx rbx rbp rsi rdi r8 r9 r10 r11 r12 r13 r14 r15)
+        mem)
+      (Some
+        (Pair
+          (MkRegs
+            (mem_get mem rdi)
+            rcx
+            rdx
+            rbx
+            rbp
+            rsi
+            rdi
+            r8
+            r9
+            r10
+            r11
+            r12
+            r13
+            r14
+            r15)
+          mem))))
+  (chain
+    (steps
+      ((compute lhs (stop mem_get))
+       (rewrite (premise 0) lr lhs true ())
+       (compute lhs (stop mem_get))
+       (rewrite (premise 1) lr lhs true ())
+       (compute both (stop mem_get))))
+    refl))
+
+;; set: clobber set = ∅ — every field verbatim, rax included; the whole
+;; effect is the store.
+(claim xmset_cert
+  (goal
+    ((c Nat)
+     (g0 XFunc)
+     (restfs (List XFunc))
+     (msz Int)
+     (mem Mem)
+     (rax Int)
+     (rcx Int)
+     (rdx Int)
+     (rbx Int)
+     (rbp Int)
+     (rsi Int)
+     (rdi Int)
+     (r8 Int)
+     (r9 Int)
+     (r10 Int)
+     (r11 Int)
+     (r12 Int)
+     (r13 Int)
+     (r14 Int)
+     (r15 Int))
+    ((= (le 0 rdi) True) (= (le (+ rdi 1) msz) True))
+    (=
+      (xrun_regs
+        (S (S c))
+        (MkXModule (Cons g0 (Cons (inline xmset_f) restfs)) msz)
+        1
+        (MkRegs rax rcx rdx rbx rbp rsi rdi r8 r9 r10 r11 r12 r13 r14 r15)
+        mem)
+      (Some
+        (Pair
+          (MkRegs rax rcx rdx rbx rbp rsi rdi r8 r9 r10 r11 r12 r13 r14 r15)
+          (mem_set mem rdi rsi)))))
+  (chain
+    (steps
+      ((compute lhs (stop mem_set))
+       (rewrite (premise 0) lr lhs true ())
+       (compute lhs (stop mem_set))
+       (rewrite (premise 1) lr lhs true ())
+       (compute both (stop mem_set))))
+    refl))
