@@ -2531,19 +2531,13 @@
   (match m
     ((Module _ _ exts _ _) exts)))
 
-(fn build_module ((srcs (List (List Int))) (acc Module) (ctors (List Symbol)))
-  (Option Module)
-  (measure (struct srcs))
-  (match srcs
-    (Nil (Some acc))
-    ((Cons src rest)
-     (match (parse_module src ctors)
-       (None None)
-       ((Some m)
-        (build_module
-          rest
-          (merge_modules acc m)
-          (append_sym (typedef_ctors (module_typedefs m)) ctors)))))))
+(fn module_fndefs ((m Module)) (List FnDef)
+  (match m
+    ((Module _ fns _ _ _) fns)))
+
+;; (The flat, core-tagged `build_module` lived here until run mode went
+;; qualified — build_module_r below is the run-mode builder, build_module_d
+;; the diagnosing strict CHECK builder. Nothing builds flat any more.)
 
 ;; A resolved source: its PATH (for module-path derivation), the `granted` tag
 ;; (a dependency interface, whose requirements are admitted as axioms), and the
@@ -3849,3 +3843,39 @@
                  (merge_modules acc rm)
                  (append_sym (typedef_ctors (module_typedefs rm)) ctors)
                  (+ k 1)))))))))))
+
+;; build_module for RUN mode: the same per-file qualified resolution as
+;; build_module_d (module path + use scope + resolve_module), but with GLOB
+;; FALLBACK instead of strict scope — a bare name not bound locally or by a
+;; use item resolves against everything loaded so far (first-loaded wins,
+;; the flat builder's order), so run-only files without use lines keep
+;; resolving. The point of the pass: a module-INTERNAL bare call now binds
+;; to its OWN module first — a co-loaded foreign module's same-named fn can
+;; no longer capture it (the run-mode homonym bug; check mode never had it
+;; because build_module_d resolves). No claims attachment (run mode proves
+;; nothing) and no parse diagnosis (a failing source collapses to None).
+(fn build_module_r ((srcs (List SrcEntry)) (acc Module) (ctors (List Symbol)))
+  (Option Module)
+  (measure (struct srcs))
+  (match srcs
+    (Nil (Some acc))
+    ((Cons (SrcEntry path _ src) rest)
+     (match (parse_module src ctors)
+       (None None)
+       ((Some m)
+        (let ((mp (module_path_of path)))
+          (match (use_scope_of (use_forms src) mp (module_resolve_env acc))
+            ((Pair uitems ualiases)
+             (let
+               ((rm
+                  (resolve_module
+                    mp
+                    (app_env uitems (module_resolve_env acc))
+                    ualiases
+                    (module_externdefs acc)
+                    (module_typedefs acc)
+                    m)))
+               (build_module_r
+                 rest
+                 (merge_modules acc rm)
+                 (append_sym (typedef_ctors (module_typedefs rm)) ctors)))))))))))

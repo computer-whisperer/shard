@@ -64,7 +64,7 @@
 
 ;; ---- the eval pipeline ----------------------------------------------------
 ;; The ambient ctor base: stdlib ctors a user program may use without
-;; declaring (parse needs them to tell Ctor from Call). build_module then
+;; declaring (parse needs them to tell Ctor from Call). build_module_r then
 ;; accumulates each file's own ctors as it folds the closure in order.
 (fn stdlib_ctors () (List Symbol)
   (list
@@ -87,9 +87,9 @@
 ;; running out returns the partially-reduced (still definitionally-equal) term.
 (fn run_budget () Int 1000000000)
 
-(fn eval_run ((sources (List (List Int))) (expr_src (List Int))) (List Int)
+(fn eval_run ((sources (List SrcEntry)) (expr_src (List Int))) (List Int)
   (match
-    (build_module
+    (build_module_r
       sources
       (Module Nil Nil Nil (FnTrie None Nil) Nil)
       (stdlib_ctors))
@@ -98,7 +98,11 @@
      (match (parse_expr expr_src (module_all_ctors m))
        (None "error: could not parse expression\n")
        ((Some e)
-        (append_int (show_expr (run_expr m e (run_budget))) (Cons 10 Nil)))))))
+        ;; the CLI expr parses core-tagged — resolve it against everything
+        ;; loaded (glob, first-loaded wins), the run-mode scope for an
+        ;; anonymous caller; unresolved names stay core (prims/prelude)
+        (let ((re (resolve_expr (RCtx (qn_core) (module_resolve_env m) Nil) e)))
+          (append_int (show_expr (run_expr m re (run_budget))) (Cons 10 Nil))))))))
 
 ;; ===========================================================================
 ;; THE APP RUNNER — eval.shard actually RUNS a shard app (performs its effects).
@@ -121,9 +125,15 @@
 ;; on whole files at the extern boundary here. A local duplicate of
 ;; expr_to_intlist used to sit in this file, dead under first-match-wins.)
 
-(fn encode_world ((w World)) Expr
+;; `wq` is the app's OWN World qname (read off its main's signature in
+;; run_main): qualified resolution stamps the app's (World …) patterns with
+;; the module that binds World there — the app's own typedef for io-style
+;; programs, kernel/loader's for tool apps — so every world token handed
+;; into the object program must carry that same identity, or the app's
+;; matches would go stuck.
+(fn encode_world ((wq QName) (w World)) Expr
   (match w
-    ((World c) (Ctor (qn (quote World)) (Cons (IntLit c) Nil)))))
+    ((World c) (Ctor wq (Cons (IntLit c) Nil)))))
 
 (fn encode_opt_bytes ((o (Option (List Int)))) Expr
   (match o
@@ -732,37 +742,37 @@
   ((tab FnTab)
    (env (List Expr))
    (e EExpr)
-   (app_args (List (List Int)))
+   (renv (Pair (List (List Int)) QName))  ; app argv + the app's World qname
    (w World))
   (Pair Expr World)
   (match e
     ((EPure p) (Pair (evp tab env p) w))  ; extern-free: the World is untouched
     ((ECtor c args)
-     (match (ev_list tab env args app_args w)
+     (match (ev_list tab env args renv w)
        ((Pair vs w1)
         (match (nat_pack c vs)  ; ground Z/S packs to its literal (reduce.shard)
           ((Some v) (Pair v w1))
           (None (Pair (Ctor c vs) w1))))))
     ((ELet bs body)
-     (match (ev_list_rev tab env bs Nil app_args w)  ; parallel let: RHSs in outer env
-       ((Pair vsr w1) (ev tab (append_exprs vsr env) body app_args w1))))  ; last RHS = BVar 0
+     (match (ev_list_rev tab env bs Nil renv w)  ; parallel let: RHSs in outer env
+       ((Pair vsr w1) (ev tab (append_exprs vsr env) body renv w1))))  ; last RHS = BVar 0
     ((EIf c t el)
-     (match (ev tab env c app_args w)
+     (match (ev tab env c renv w)
        ((Pair cv w1)
         (match cv
-          ((Ctor (QName _ (quote True)) Nil) (ev tab env t app_args w1))
-          ((Ctor (QName _ (quote False)) Nil) (ev tab env el app_args w1))
+          ((Ctor (QName _ (quote True)) Nil) (ev tab env t renv w1))
+          ((Ctor (QName _ (quote False)) Nil) (ev tab env el renv w1))
           (_ (Pair (If cv cv cv) w1))))))  ; stuck cond — out of scope (see header)
     ((EMatch s arms)
-     (match (ev tab env s app_args w)
+     (match (ev tab env s renv w)
        ((Pair sv w1)
         (match (fire_earm arms sv)
           ((Some (Pair body binds))
-           (ev tab (append_exprs binds env) body app_args w1))
+           (ev tab (append_exprs binds env) body renv w1))
           (None (Pair (Match sv Nil) w1))))))  ; stuck scrut — out of scope (see header)
     ((ECall core f fb args)
-     (match (ev_list_rev tab env args Nil app_args w)
-       ((Pair vsr w1) (ev_call tab core f fb vsr app_args w1))))))
+     (match (ev_list_rev tab env args Nil renv w)
+       ((Pair vsr w1) (ev_call tab core f fb vsr renv w1))))))
 
 ;; Evaluate a list of args left-to-right, threading the World (so nested
 ;; effects sequence in source order — the linear World forces it anyway).
@@ -770,15 +780,15 @@
   ((tab FnTab)
    (env (List Expr))
    (es (List EExpr))
-   (app_args (List (List Int)))
+   (renv (Pair (List (List Int)) QName))
    (w World))
   (Pair (List Expr) World)
   (match es
     (Nil (Pair Nil w))
     ((Cons h t)
-     (match (ev tab env h app_args w)
+     (match (ev tab env h renv w)
        ((Pair v w1)
-        (match (ev_list tab env t app_args w1)
+        (match (ev_list tab env t renv w1)
           ((Pair vs w2) (Pair (Cons v vs) w2))))))))
 
 ;; ev_list, REVERSED-accumulator form: left-to-right evaluation consing into
@@ -791,14 +801,14 @@
    (env (List Expr))
    (es (List EExpr))
    (acc (List Expr))
-   (app_args (List (List Int)))
+   (renv (Pair (List (List Int)) QName))
    (w World))
   (Pair (List Expr) World)
   (match es
     (Nil (Pair acc w))
     ((Cons h t)
-     (match (ev tab env h app_args w)
-       ((Pair v w1) (ev_list_rev tab env t (Cons v acc) app_args w1))))))
+     (match (ev tab env h renv w)
+       ((Pair v w1) (ev_list_rev tab env t (Cons v acc) renv w1))))))
 
 ;; Arity guard: |vs| = |ptypes|, decided in ONE simultaneous walk. Now
 ;; consulted at TRANSLATION time only (tr_target — a site's arg count is
@@ -825,14 +835,14 @@
    (f QName)
    (fb (Option Int))
    (vsr (List Expr))  ; REVERSED values — already env order (BVar 0 = LAST param)
-   (app_args (List (List Int)))
+   (renv (Pair (List (List Int)) QName))
    (w World))
   (Pair Expr World)
   (match fb
     ((Some i)
      (match (braun_get tab i)
        ((Some (FtP body)) (Pair (evp tab vsr body) w))  ; pure fn: Pair-free descent
-       ((Some (FtE body)) (ev tab vsr body app_args w))
+       ((Some (FtE body)) (ev tab vsr body renv w))
        (None (Pair (Call f (reverse_exprs vsr)) w))))
     (None (Pair (Call f (reverse_exprs vsr)) w))))
 
@@ -865,7 +875,7 @@
    (f QName)
    (fb (Option Int))
    (vsr (List Expr))  ; REVERSED values; prim/extern/stuck paths re-reverse
-   (app_args (List (List Int)))
+   (renv (Pair (List (List Int)) QName))
    (w World))
   (Pair Expr World)
   (if core
@@ -873,64 +883,73 @@
       (match (try_step_prim (qn_name f) vs)
         ((Some r) (Pair r w))
         (None
-          (if (is_extern (qn_name f)) (perform_frontier (Call f vs) app_args w)
-          (ev_hit tab f fb vsr app_args w)))))
+          (if (is_extern (qn_name f)) (perform_frontier (Call f vs) renv w)
+          (ev_hit tab f fb vsr renv w)))))
     (match fb
-      ((Some _) (ev_hit tab f fb vsr app_args w))
+      ((Some _) (ev_hit tab f fb vsr renv w))
       (None
         (let ((vs (reverse_exprs vsr)))
           (match (try_step_prim (qn_name f) vs)
             ((Some r) (Pair r w))
             (None
-              (if (is_extern (qn_name f))
-                (perform_frontier (Call f vs) app_args w)
-                (Pair (Call f vs) w)))))))))
+              (if (is_extern (qn_name f)) (perform_frontier (Call f vs) renv w)
+              (Pair (Call f vs) w)))))))))
 
 ;; -- perform one frontier extern. Threads eval.shard's REAL World; returns the
 ;; app-facing result (Expr-encoded) paired with the advanced World. `app_args`
 ;; serves the app's get_args (the real argv slice, computed once at startup).
-(fn perform_frontier ((call Expr) (app_args (List (List Int))) (w World))
+(fn perform_frontier
+  ((call Expr) (renv (Pair (List (List Int)) QName)) (w World))
   (Pair Expr World)
-  (match call
-    ((Call name args)
-     (if (sym_eq (qn_name name) (quote get_args)) (perform_get_args app_args w)
-     (if (sym_eq (qn_name name) (quote read_file)) (perform_read_file args w)
-     (if (sym_eq (qn_name name) (quote read_dir)) (perform_read_dir args w)
-     (if (sym_eq (qn_name name) (quote write)) (perform_write args w)
-     (if (sym_eq (qn_name name) (quote write_file)) (perform_write_file args w)
-     (if (sym_eq (qn_name name) (quote write_line)) (perform_write_line args w)
-     (if (sym_eq (qn_name name) (quote exit)) (perform_exit args w)
-     (if (sym_eq (qn_name name) (quote key_oracle)) (perform_key_oracle w)
-     (Pair (Ctor (qn (quote Nil)) Nil) w))))))))))
-    (_ (Pair (Ctor (qn (quote Nil)) Nil) w))))
+  (match renv
+    ((Pair app_args wq)
+     (match call
+       ((Call name args)
+        (if (sym_eq (qn_name name) (quote get_args))
+          (perform_get_args wq app_args w)
+        (if (sym_eq (qn_name name) (quote read_file))
+          (perform_read_file wq args w)
+        (if (sym_eq (qn_name name) (quote read_dir))
+          (perform_read_dir wq args w)
+        (if (sym_eq (qn_name name) (quote write)) (perform_write wq args w)
+        (if (sym_eq (qn_name name) (quote write_file))
+          (perform_write_file wq args w)
+        (if (sym_eq (qn_name name) (quote write_line))
+          (perform_write_line wq args w)
+        (if (sym_eq (qn_name name) (quote exit)) (perform_exit wq args w)
+        (if (sym_eq (qn_name name) (quote key_oracle)) (perform_key_oracle wq w)
+        (Pair (Ctor (qn (quote Nil)) Nil) w))))))))))
+       (_ (Pair (Ctor (qn (quote Nil)) Nil) w))))))
 
 ;; get_args performs no real I/O — it just hands back the stored argv slice and
 ;; bumps the clock by one (matching the extern's clock axiom).
-(fn perform_get_args ((app_args (List (List Int))) (w World)) (Pair Expr World)
+(fn perform_get_args ((wq QName) (app_args (List (List Int))) (w World))
+  (Pair Expr World)
   (match w
     ((World c)
      (Pair
        (encode_pair
          (encode_arglist app_args)
-         (Ctor (qn (quote World)) (Cons (IntLit (+ c 1)) Nil)))
+         (Ctor wq (Cons (IntLit (+ c 1)) Nil)))
        (World (+ c 1))))))
 
 ;; key_oracle now THREADS the World (clock-locked, input-traced in the contract):
 ;; the app-facing value is (Pair (Option Int) World), mirroring read_file. The
 ;; input trace itself is a proof-only observable (no runtime field) — read_key's
 ;; advanced clock is the only real effect.
-(fn perform_key_oracle ((w World)) (Pair Expr World)
+(fn perform_key_oracle ((wq QName) (w World)) (Pair Expr World)
   (match (read_key w)
     ((Pair opt w1)
-     (Pair (encode_pair (encode_opt_int opt) (encode_world w1)) w1))))
+     (Pair (encode_pair (encode_opt_int opt) (encode_world wq w1)) w1))))
 
-(fn perform_read_file ((args (List Expr)) (w World)) (Pair Expr World)
+(fn perform_read_file ((wq QName) (args (List Expr)) (w World))
+  (Pair Expr World)
   (match args
     ((Cons path_e _)
      (match (read_file (expr_to_intlist path_e) w)
        ((Pair opt w1)
-        (Pair (encode_pair (encode_opt_bytes opt) (encode_world w1)) w1))))
-    (_ (Pair (encode_pair (Ctor (qn (quote None)) Nil) (encode_world w)) w))))
+        (Pair (encode_pair (encode_opt_bytes opt) (encode_world wq w1)) w1))))
+    (_ (Pair (encode_pair (Ctor (qn (quote None)) Nil) (encode_world wq w)) w))))
 
 (fn encode_bool ((b Bool)) Expr
   (if b (Ctor (qn (quote True)) Nil) (Ctor (qn (quote False)) Nil)))
@@ -955,48 +974,49 @@
     (None (Ctor (qn (quote None)) Nil))
     ((Some es) (Ctor (qn (quote Some)) (Cons (encode_dirent_list es) Nil)))))
 
-(fn perform_read_dir ((args (List Expr)) (w World)) (Pair Expr World)
+(fn perform_read_dir ((wq QName) (args (List Expr)) (w World)) (Pair Expr World)
   (match args
     ((Cons path_e _)
      (match (read_dir (expr_to_intlist path_e) w)
        ((Pair opt w1)
-        (Pair (encode_pair (encode_dirents opt) (encode_world w1)) w1))))
-    (_ (Pair (encode_pair (Ctor (qn (quote None)) Nil) (encode_world w)) w))))
+        (Pair (encode_pair (encode_dirents opt) (encode_world wq w1)) w1))))
+    (_ (Pair (encode_pair (Ctor (qn (quote None)) Nil) (encode_world wq w)) w))))
 
 ;; write_file: app-facing (Pair Bool World) — True = persisted.
-(fn perform_write_file ((args (List Expr)) (w World)) (Pair Expr World)
+(fn perform_write_file ((wq QName) (args (List Expr)) (w World))
+  (Pair Expr World)
   (match args
     ((Cons path_e (Cons bytes_e _))
      (match (write_file (expr_to_intlist path_e) (expr_to_intlist bytes_e) w)
-       ((Pair ok w1) (Pair (encode_pair (encode_bool ok) (encode_world w1)) w1))))
-    (_ (Pair (encode_pair (encode_bool False) (encode_world w)) w))))
+       ((Pair ok w1)
+        (Pair (encode_pair (encode_bool ok) (encode_world wq w1)) w1))))
+    (_ (Pair (encode_pair (encode_bool False) (encode_world wq w)) w))))
 
-(fn perform_write ((args (List Expr)) (w World)) (Pair Expr World)
+(fn perform_write ((wq QName) (args (List Expr)) (w World)) (Pair Expr World)
   (match args
     ((Cons bytes_e _)
      (match (write (expr_to_intlist bytes_e) w)
-       ((World c)
-        (Pair (Ctor (qn (quote World)) (Cons (IntLit c) Nil)) (World c)))))
-    (_ (Pair (encode_world w) w))))
+       ((World c) (Pair (Ctor wq (Cons (IntLit c) Nil)) (World c)))))
+    (_ (Pair (encode_world wq w) w))))
 
-(fn perform_write_line ((args (List Expr)) (w World)) (Pair Expr World)
+(fn perform_write_line ((wq QName) (args (List Expr)) (w World))
+  (Pair Expr World)
   (match args
     ((Cons bytes_e _)
      (match (write_line (expr_to_intlist bytes_e) w)
-       ((World c)
-        (Pair (Ctor (qn (quote World)) (Cons (IntLit c) Nil)) (World c)))))
-    (_ (Pair (encode_world w) w))))
+       ((World c) (Pair (Ctor wq (Cons (IntLit c) Nil)) (World c)))))
+    (_ (Pair (encode_world wq w) w))))
 
 ;; exit performs a real process exit (never returns); the (World c) arm only
 ;; satisfies the type checker.
-(fn perform_exit ((args (List Expr)) (w World)) (Pair Expr World)
+(fn perform_exit ((wq QName) (args (List Expr)) (w World)) (Pair Expr World)
   (match args
     ((Cons (IntLit code) _)
      (match (exit code w)
-       ((World c) (Pair (encode_world (World c)) (World c)))))
+       ((World c) (Pair (encode_world wq (World c)) (World c)))))
     (_
       (match (exit 0 w)
-        ((World c) (Pair (encode_world (World c)) (World c)))))))
+        ((World c) (Pair (encode_world wq (World c)) (World c)))))))
 
 ;; -- run an app: evaluate `expr` (its `(main world0)`) with the env-machine,
 ;; which performs every effect inline and threads the real World. The app exits
@@ -1009,14 +1029,16 @@
 ;; residual — e.g. a call to an extern outside `is_extern`'s vocabulary —
 ;; and used to fall out as a SILENT exit 0: automation read "success" where
 ;; nothing ran. Fail loudly instead.
-(fn run_app ((m Module) (expr Expr) (app_args (List (List Int))) (w World))
+(fn run_app
+  ((m Module) (expr Expr) (wq QName) (app_args (List (List Int))) (w World))
   World
   (match m
     ((Module _ fns _ _ _)
      (let ((ixt (build_fn_trie (ix_fndefs fns 0))))
        (let ((eff (build_efftab fns ixt)))
          (let ((tab (build_fntab fns ixt eff)))
-           (match (ev tab Nil (tre_of (tr2_expr expr ixt eff)) app_args w)
+           (match
+             (ev tab Nil (tre_of (tr2_expr expr ixt eff)) (Pair app_args wq) w)
              ((Pair r wf)
               (match r
                 ((Ctor c _)
@@ -1041,34 +1063,78 @@
         (if (int_list_eq a0 "run") (run_main rest w1) (eval_main args w1)))
        (_ (exit 2 w1))))))  ; usage
 
-;; run an app: resolve its import closure, build it, drive its `main` with the
-;; remaining argv as the app's own arguments. This is THE standard path for
-;; running any shard app — check.shard included.
+;; the ENTRY FILE's main: the fn named main whose module path is the entry
+;; file's modpath — or a PREFIX of it, because a `(sig fn main …)` in the
+;; app's own directory interface REBINDS the def to the interface qname
+;; (sig→def rebind; shardfmt is the live case). A prefix is exactly what
+;; supplies_scope_ok admits, so this cannot pick up a foreign module's main
+;; (the old flat build's first-loaded-wins hazard — the reason eval.shard
+;; could never be imported into an app's closure).
+(fn entry_main ((modpath (List Symbol)) (fds (List FnDef))) (Option FnDef)
+  (measure (struct fds))
+  (match fds
+    (Nil None)
+    ((Cons fd rest)
+     (match fd
+       ((FnDef n _ _ _)
+        (if
+          (if (sym_eq (qn_name n) (quote main))
+            (path_prefix_sym (qn_mod n) modpath)
+            False)
+          (Some fd)
+          (entry_main modpath rest)))))))
+
+;; the app's World identity, read off its (already-resolved) main signature:
+;; main : (World) -> World, and the resolver stamped that TCon with whatever
+;; module binds World in the entry file — the one identity every world token
+;; the run loop hands back must carry. Core fallback keeps this total (a main
+;; with a non-TCon param is not runnable anyway — entry dispatch will stick).
+(fn world_qname ((fd FnDef)) QName
+  (match fd
+    ((FnDef _ params _ _)
+     (match params
+       ((Cons (TCon q _) _) q)
+       (_ (qn (quote World)))))))
+
+;; run an app: resolve its import closure, build it (QUALIFIED, glob-fallback
+;; — build_module_r), drive its `main` with the remaining argv as the app's
+;; own arguments. The entry is the ENTRY FILE's main (its module path is
+;; derived from the same path string the resolver saw), not any main in the
+;; closure. This is THE standard path for running any shard app —
+;; check.shard included.
 (fn run_main ((rest (List (List Int))) (w World)) World
   (match rest
     ((Cons app_path app_args)
      (match (resolve_closure app_path True w)  ; True = RUN mode → load module impl bodies
        ((Pair sources w2)
         (match
-          (build_module
-            (untag_sources sources)
+          (build_module_r
+            sources
             (Module Nil Nil Nil (FnTrie None Nil) Nil)
             (stdlib_ctors))
           (None (exit 1 (write "error: could not parse app\n" w2)))
           ((Some m)
-           (run_app
-             m
-             (Call
-               (qn (quote main))
-               (Cons (Ctor (qn (quote World)) (Cons (IntLit 0) Nil)) Nil))
-             app_args
-             w2))))))
+           (match (entry_main (module_path_of app_path) (module_fndefs m))
+             (None
+               (exit 1 (write "error: app entry file defines no main\n" w2)))
+             ((Some mainfd)
+              (match mainfd
+                ((FnDef mq _ _ _)
+                 (run_app
+                   m
+                   (Call
+                     mq
+                     (Cons
+                       (Ctor (world_qname mainfd) (Cons (IntLit 0) Nil))
+                       Nil))
+                   (world_qname mainfd)
+                   app_args
+                   w2))))))))))
     (_ (exit 2 w))))  ; usage: need app path
 
 (fn eval_main ((args (List (List Int))) (w World)) World
   (match args
     ((Cons module_path (Cons expr_str _))
      (match (resolve_closure module_path True w)  ; True = RUN mode → load module impl bodies
-       ((Pair sources w2)
-        (exit 0 (write (eval_run (untag_sources sources) expr_str) w2)))))
+       ((Pair sources w2) (exit 0 (write (eval_run sources expr_str) w2)))))
     (_ (exit 2 w))))  ; usage: need 2 args

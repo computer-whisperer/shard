@@ -891,8 +891,9 @@ Reaching `build` is the **dynamic-invocation pattern**
 (**`meta/invoke`**, originally `tools/invoke` — kernel-as-a-module,
 graduated §6s): the driver loads
 the mod.build's import closure at runtime (`resolve_closure` +
-`build_module`), finds fns by LOCAL name over the FnDef list (root files
-key at `core`, directory modules at their real path — callers shouldn't
+`build_module_r` — QUALIFIED run-mode resolution with glob fallback),
+finds fns by LOCAL name over the FnDef list (every file keys at its real
+module path — callers shouldn't
 know which), marshals values across the meta-level boundary (ctor QNames
 from the LOADED closure's own typedefs via `ctor_qn` — the matcher
 compares full qualified identities, so hand-spelled paths would be a

@@ -55,6 +55,7 @@ TARGETS=(
   examples/rewrite_at_rejects.shard
   examples/prove_cond_mine.shard
   examples/homonym_dispatch.shard
+  examples/runhom_run.shard
   examples/inspect_demo.shard
   examples/cite_resolves.shard
   examples/cite_rejects.shard
@@ -259,6 +260,18 @@ fi
 echo "=== invoke: dynamic-invocation probe ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run examples/invoke_probe.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# Run-mode qualified-dispatch pin (the enc_instr bug): two co-loaded modules
+# define the same-named internal helper; each pick must call its OWN. Also
+# pins the run loop's World-identity threading (the app defines its own
+# World and destructures the token write hands back — a mis-tagged token
+# sticks loudly, exit 4). Self-checking: OK lines, exit 0 iff both hold.
+echo "=== run-mode: qualified dispatch (runhom) ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run examples/runhom_run.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
