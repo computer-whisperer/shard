@@ -1,0 +1,102 @@
+;;; meta/forms — RAW-FORM NAVIGATION: read a shard source file's
+;;; top-level forms at the raw s-expr level (pre-loader, sugar intact)
+;;; and inspect them — symbol tests, occurrence checks, and the
+;;; same-file (inline NAME) table (the loader's exact rule, resolvable
+;;; without trusting anything foreign). The PCC stance for consumer-side
+;;; tools: re-validate structure, never trust the producer. Meta stdlib
+;;; resident (graduated from tools/low/certnav's generic layer, the
+;;; hygiene-pass ruling — any program that inspects shard source
+;;; without loading it wants this). Pure vocabulary; impl is the stub.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/reader.shard")
+
+(use (:: kernel reader SExpr))
+(use (:: kernel reader SInt))
+(use (:: kernel reader SSym))
+(use (:: kernel reader SStr))
+(use (:: kernel reader SList))
+(use (:: kernel reader read_expr))
+(use (:: kernel reader RExpr))
+(use (:: kernel reader REOk))
+(use (:: kernel reader REErr))
+(use (:: kernel reader skip_ws))
+
+;; ---- read all top-level forms --------------------------------------------------
+
+(fn rev_forms ((xs (List SExpr)) (acc (List SExpr))) (List SExpr)
+  (measure (struct xs))
+  (match xs
+    (Nil acc)
+    ((Cons h t) (rev_forms t (Cons h acc)))))
+
+(fn forms_go ((src (List Int)) (acc (List SExpr)) (fuel Int))
+  (Option (List SExpr))
+  (measure fuel (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt fuel 1) None
+  (match (skip_ws src)
+    (Nil (Some (rev_forms acc Nil)))
+    ((Cons _ _)
+     (match (read_expr src)
+       (REErr None)
+       ((REOk s rest) (forms_go rest (Cons s acc) (- fuel 1))))))))
+
+;; ---- small s-expr utilities -----------------------------------------------------
+
+(fn is_sym ((s SExpr) (name Symbol)) Bool
+  (match s
+    ((SSym x) (sym_eq x name))
+    (_ False)))
+
+(fn prefix_eq ((pre (List Int)) (cs (List Int))) Bool
+  (measure (struct pre))
+  (match pre
+    (Nil True)
+    ((Cons a as)
+     (match cs
+       (Nil False)
+       ((Cons b bs) (if (int_eq a b) (prefix_eq as bs) False))))))
+
+;; does the named symbol occur anywhere in this s-expr?
+(fn occ_s ((s SExpr) (name Symbol)) Bool
+  (measure (struct s))
+  (match s
+    ((SSym x) (sym_eq x name))
+    ((SList items) (occ_list items name))
+    (_ False)))
+
+(fn occ_list ((ss (List SExpr)) (name Symbol)) Bool
+  (measure (struct ss))
+  (match ss
+    (Nil False)
+    ((Cons h t) (if (occ_s h name) True (occ_list t name)))))
+
+;; ---- the same-file (inline NAME) table --------------------------------------------
+;; nullary fn name -> raw body s-expr. The loader's inline sugar is
+;; same-file by construction, so a consumer tool can resolve it without
+;; trusting anything foreign — the expansion is deterministic.
+
+(fn inline_table ((forms (List SExpr))) (List (Pair Symbol SExpr))
+  (measure (struct forms))
+  (match forms
+    (Nil Nil)
+    ((Cons f rest)
+     (match f
+       ((SList (Cons h (Cons nm (Cons params (Cons _ty (Cons body Nil))))))
+        (if (is_sym h (quote fn))
+          (match nm
+            ((SSym name)
+             (match params
+               ((SList Nil) (Cons (Pair name body) (inline_table rest)))
+               (_ (inline_table rest))))
+            (_ (inline_table rest)))
+          (inline_table rest)))
+       (_ (inline_table rest))))))
+
+(fn inl_lookup ((tbl (List (Pair Symbol SExpr))) (x Symbol)) (Option SExpr)
+  (measure (struct tbl))
+  (match tbl
+    (Nil None)
+    ((Cons p rest)
+     (match p
+       ((Pair n body) (if (sym_eq n x) (Some body) (inl_lookup rest x)))))))

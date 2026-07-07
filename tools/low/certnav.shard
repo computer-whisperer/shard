@@ -1,106 +1,18 @@
-;;; tools/low/certnav — the lowering library's raw-cert navigation kit:
-;;; shared machinery for consumer-side tools that inspect cert FILES at
-;;; the raw s-expr level (pre-loader, sugar intact) — the PCC stance:
-;;; consumers re-validate structure, they never trust the producer.
-;;; Extracted from tools/lowcheck when tools/bytetie became the second
-;;; consumer. Reading all top-level forms, symbol tests, occurrence
-;;; checks, the same-file (inline NAME) table (the loader's exact rule),
-;;; and locating the call_fn / call_fn_mem application in a conclusion.
+;;; tools/low/certnav — the lowering library's raw-cert navigation:
+;;; locating the call_fn / call_fn_mem (wasm) and xcall_fn /
+;;; xcall_fn_mem (x86) applications in a lowered claim's conclusion —
+;;; the conclusion-boundary POLICY consumer tools classify certs by.
+;;; The generic raw-form kit (reading forms, symbol tests, the inline
+;;; table) lives in meta/forms.
 
 (import "../../kernel/stdlib.shard")
 (import "../../kernel/reader.shard")
+(import "../../meta/forms")
 
 (use (:: kernel reader SExpr))
-(use (:: kernel reader SInt))
 (use (:: kernel reader SSym))
-(use (:: kernel reader SStr))
 (use (:: kernel reader SList))
-(use (:: kernel reader read_expr))
-(use (:: kernel reader RExpr))
-(use (:: kernel reader REOk))
-(use (:: kernel reader REErr))
-(use (:: kernel reader skip_ws))
-
-;; ---- read all top-level forms --------------------------------------------------
-
-(fn rev_forms ((xs (List SExpr)) (acc (List SExpr))) (List SExpr)
-  (measure (struct xs))
-  (match xs
-    (Nil acc)
-    ((Cons h t) (rev_forms t (Cons h acc)))))
-
-(fn forms_go ((src (List Int)) (acc (List SExpr)) (fuel Int))
-  (Option (List SExpr))
-  (measure fuel (by arith (list 1 0)) (by arith (list 1 1)))
-  (if (lt fuel 1) None
-  (match (skip_ws src)
-    (Nil (Some (rev_forms acc Nil)))
-    ((Cons _ _)
-     (match (read_expr src)
-       (REErr None)
-       ((REOk s rest) (forms_go rest (Cons s acc) (- fuel 1))))))))
-
-;; ---- small s-expr utilities -----------------------------------------------------
-
-(fn is_sym ((s SExpr) (name Symbol)) Bool
-  (match s
-    ((SSym x) (sym_eq x name))
-    (_ False)))
-
-(fn prefix_eq ((pre (List Int)) (cs (List Int))) Bool
-  (measure (struct pre))
-  (match pre
-    (Nil True)
-    ((Cons a as)
-     (match cs
-       (Nil False)
-       ((Cons b bs) (if (int_eq a b) (prefix_eq as bs) False))))))
-
-;; does the named symbol occur anywhere in this s-expr?
-(fn occ_s ((s SExpr) (name Symbol)) Bool
-  (measure (struct s))
-  (match s
-    ((SSym x) (sym_eq x name))
-    ((SList items) (occ_list items name))
-    (_ False)))
-
-(fn occ_list ((ss (List SExpr)) (name Symbol)) Bool
-  (measure (struct ss))
-  (match ss
-    (Nil False)
-    ((Cons h t) (if (occ_s h name) True (occ_list t name)))))
-
-;; ---- the same-file (inline NAME) table --------------------------------------------
-;; nullary fn name -> raw body s-expr. The loader's inline sugar is
-;; same-file by construction, so a consumer tool can resolve it without
-;; trusting anything foreign — the expansion is deterministic.
-
-(fn inline_table ((forms (List SExpr))) (List (Pair Symbol SExpr))
-  (measure (struct forms))
-  (match forms
-    (Nil Nil)
-    ((Cons f rest)
-     (match f
-       ((SList (Cons h (Cons nm (Cons params (Cons _ty (Cons body Nil))))))
-        (if (is_sym h (quote fn))
-          (match nm
-            ((SSym name)
-             (match params
-               ((SList Nil) (Cons (Pair name body) (inline_table rest)))
-               (_ (inline_table rest))))
-            (_ (inline_table rest)))
-          (inline_table rest)))
-       (_ (inline_table rest))))))
-
-(fn inl_lookup ((tbl (List (Pair Symbol SExpr))) (x Symbol)) (Option SExpr)
-  (measure (struct tbl))
-  (match tbl
-    (Nil None)
-    ((Cons p rest)
-     (match p
-       ((Pair n body) (if (sym_eq n x) (Some body) (inl_lookup rest x)))))))
-
-;; ---- locate the call application in a conclusion ----------------------------------
+(use (:: meta forms *))
 
 ;; find the first call_fn / call_fn_mem application anywhere in the term
 (fn find_call ((s SExpr)) (Option (List SExpr))
