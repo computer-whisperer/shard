@@ -107,6 +107,9 @@
 (use (:: meta shape rt_code))
 (use (:: meta shape rt_prepend))
 (use (:: meta shape is_bit_op))
+(use (:: meta shape nodes_e))
+(use (:: meta shape NOk))
+(use (:: meta shape NErr))
 
 ;; ---- the register file at the meta level ---------------------------------------
 ;;
@@ -341,32 +344,8 @@
            ((Some r)
             (XTOk (dapp is (Cons (xi_movrr (DStr "RAX") r) Nil)) (+ cnt 1) ce)))))))))
 
-;; ---- premise nodes (the substituted tree's arith sites) --------------------------
-
-;; unique WRAP nodes, postorder (children before parents, so each node's
-;; spelling is already child-unwrapped at its discharge point). Bitwise
-;; nodes recurse for children but never claim a premise pair.
-(type NR (NROk (List Expr)) (NRErr (List Int)))
-
-(fn xg_nodes ((e Expr) (acc (List Expr))) NR
-  (measure (struct e))
-  (match e
-    ((Call q as)
-     (match as
-       ((Cons a (Cons b Nil))
-        (match (xg_nodes a acc)
-          ((NRErr m) (NRErr m))
-          ((NROk acc1)
-           (match (xg_nodes b acc1)
-             ((NRErr m) (NRErr m))
-             ((NROk acc2)
-              (if (is_bit_op q) (NROk acc2)
-              (if (has_fv e)
-                (NROk (if (node_seen (spell e) acc2) acc2 (node_add e acc2)))
-                (NRErr
-                  "ground arithmetic subtree (constant-fold it in the source)"))))))))
-       (_ (NRErr "arith call must be binary"))))
-    (_ (NROk acc))))
+;; ---- premise nodes: meta/shape's nodes_e (the shared wrap-node collector,
+;; is_bit_op transparency — graduated with the x86 loop slice) ----------------------
 
 ;; ---- premise and proof emission ---------------------------------------------------
 ;;
@@ -526,9 +505,9 @@
         (match (xg_v n env nxt rhs)
           ((XGErr m) (TErr m))
           ((XGOk ir cr nxr rr cer)
-           (match (xg_nodes cer Nil)
-             ((NRErr m) (TErr m))
-             ((NROk rns)
+           (match (nodes_e cer Nil)
+             ((NErr m) (TErr m))
+             ((NOk rns)
               (match (xg_depo n (Cons (Pair cer rr) env) nxr rl body)
                 ((TErr m) (TErr m))
                 ((TOk rt) (TOk (rt_prepend ir cr rns rt)))))))))
@@ -548,9 +527,9 @@
           (match (xg_v n env nxt e)
             ((XGErr m) (TErr m))
             ((XGOk code cnt nx res ce)
-             (match (xg_nodes ce Nil)
-               ((NRErr m) (TErr m))
-               ((NROk ns)
+             (match (nodes_e ce Nil)
+               ((NErr m) (TErr m))
+               ((NOk ns)
                 (match (xreg_at n rl)
                   (None (TErr "register pool exhausted (no spills in v1)"))
                   ((Some rd)
@@ -636,9 +615,9 @@
            (match (xg_t (count_ts ts) body)
              ((XTErr m) (xerr_at q m))
              ((XTOk code cnt ce)
-              (match (xg_nodes ce Nil)
-                ((NRErr m) (xerr_at q m))
-                ((NROk ns) (xg_finish q ts (RTv code cnt 0 ns) (+ cnt 4)))))))
+              (match (nodes_e ce Nil)
+                ((NErr m) (xerr_at q m))
+                ((NOk ns) (xg_finish q ts (RTv code cnt 0 ns) (+ cnt 4)))))))
            (xerr_at
              q
              "more than six Int params (SysV register homes only in v1)"))
