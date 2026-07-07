@@ -60,7 +60,7 @@ TARGETS=(
   kernel/eval.shard
   tools/prove/prove.shard
   tools/shardfmt/shardfmt.shard
-  tools/lowergen/lowergen.shard
+  tools/wasmgen/wasmgen.shard
   tools/lowcheck/lowcheck.shard
   tools/lowcheck/manifest.shard
   tools/x86gen/x86gen.shard

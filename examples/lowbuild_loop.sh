@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# lowbuild_loop.sh — the four-gate build for lowergen's LOOP fragment
-# (examples/lowergen_loop_src.shard: Nat-counted tail recursions lowered
+# lowbuild_loop.sh — the four-gate build for wasmgen's LOOP fragment
+# (examples/wasmgen_loop_src.shard: Nat-counted tail recursions lowered
 # to counter-as-local wasm loops with MACHINE-WRITTEN induction workers;
 # docs/LOWERING.md §6h). Same gates as lowbuild.sh:
 #   1. REGEN     — the generator's cert file is byte-identical to the
@@ -15,14 +15,14 @@
 #                  replays under real V8
 # Exit 0 = a fully gated artifact set. Run from the repo root.
 set -euo pipefail
-SRC=examples/lowergen_loop_src.shard
-OUT=examples/lowergen_loop_out.shard
+SRC=examples/wasmgen_loop_src.shard
+OUT=examples/wasmgen_loop_out.shard
 EVAL=bin/shard_eval
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 
 echo "== gate 1: regen (producer determinism)"
-"$EVAL" run tools/lowergen/lowergen.shard "$SRC" "$TMP/lowergen_loop_out.shard" >/dev/null
-"$EVAL" run tools/shardfmt/shardfmt.shard "$TMP/lowergen_loop_out.shard" > "$TMP/out.fmt"
+"$EVAL" run tools/wasmgen/wasmgen.shard "$SRC" "$TMP/wasmgen_loop_out.shard" >/dev/null
+"$EVAL" run tools/shardfmt/shardfmt.shard "$TMP/wasmgen_loop_out.shard" > "$TMP/out.fmt"
 diff -q "$TMP/out.fmt" "$OUT" && echo "REGEN OK (byte-identical)"
 
 echo "== gate 2: schema (consumer-side validation)"
@@ -38,7 +38,7 @@ fi
 grep -q " 0 failed" "$TMP/kv.txt"
 
 echo "== gate 4: byte tie (cert module literals re-encode to the shipped bytes)"
-"$EVAL" run tools/lowbuild/lowbuild.shard examples/lowergen_loop_src.build.shard > "$TMP/plan.txt"
+"$EVAL" run tools/lowbuild/lowbuild.shard examples/wasmgen_loop_src.build.shard > "$TMP/plan.txt"
 "$EVAL" run tools/bytetie/bytetie.shard "$OUT" > "$TMP/tie.txt"
 grep '^MOD ' "$TMP/plan.txt" | sort > "$TMP/mods.txt"
 sed 's/^TIE /MOD /' "$TMP/tie.txt" | sort > "$TMP/ties.txt"

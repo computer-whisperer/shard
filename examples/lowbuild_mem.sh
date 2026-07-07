@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# lowbuild_mem.sh — the four-gate build for lowergen's MEM fragment
+# lowbuild_mem.sh — the four-gate build for wasmgen's MEM fragment
 # (PORTABLE certs = the primary, callee bytes appear nowhere; LINKED
 # derivations = the artifact form, derived by citation — regenerates
 # alone when std/mem's implementation changes)
-# (examples/lowergen_mem_src.shard: bodies that CALL std/mem's shipped
+# (examples/wasmgen_mem_src.shard: bodies that CALL std/mem's shipped
 # wasm artifacts). Same gates as lowbuild.sh:
 #   1. REGEN     — the generator's cert file is byte-identical to the
 #                  committed one (producer determinism)
@@ -18,16 +18,16 @@
 #                  replays under real V8
 # Exit 0 = a fully gated artifact set. Run from the repo root.
 set -euo pipefail
-SRC=examples/lowergen_mem_src.shard
-PORT=examples/lowergen_mem_port.shard
-LINK=examples/lowergen_mem_link.shard
+SRC=examples/wasmgen_mem_src.shard
+PORT=examples/wasmgen_mem_port.shard
+LINK=examples/wasmgen_mem_link.shard
 EVAL=bin/shard_eval
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 
 echo "== gate 1: regen (producer determinism, portable + linked)"
-"$EVAL" run tools/lowergen/lowergen.shard "$SRC" "$TMP/lowergen_mem_port.shard" "$TMP/lowergen_mem_link.shard" >/dev/null
-"$EVAL" run tools/shardfmt/shardfmt.shard "$TMP/lowergen_mem_port.shard" > "$TMP/port.fmt"
-"$EVAL" run tools/shardfmt/shardfmt.shard "$TMP/lowergen_mem_link.shard" > "$TMP/link.fmt"
+"$EVAL" run tools/wasmgen/wasmgen.shard "$SRC" "$TMP/wasmgen_mem_port.shard" "$TMP/wasmgen_mem_link.shard" >/dev/null
+"$EVAL" run tools/shardfmt/shardfmt.shard "$TMP/wasmgen_mem_port.shard" > "$TMP/port.fmt"
+"$EVAL" run tools/shardfmt/shardfmt.shard "$TMP/wasmgen_mem_link.shard" > "$TMP/link.fmt"
 diff -q "$TMP/port.fmt" "$PORT" && diff -q "$TMP/link.fmt" "$LINK" && echo "REGEN OK (both byte-identical)"
 
 echo "== gate 2: schema (consumer-side validation, both forms)"
@@ -44,7 +44,7 @@ fi
 grep -q " 0 failed" "$TMP/kv.txt"
 
 echo "== gate 4: byte tie (cert module literals re-encode to the shipped bytes)"
-"$EVAL" run tools/lowbuild/lowbuild.shard examples/lowergen_mem_src.build.shard > "$TMP/plan.txt"
+"$EVAL" run tools/lowbuild/lowbuild.shard examples/wasmgen_mem_src.build.shard > "$TMP/plan.txt"
 "$EVAL" run tools/bytetie/bytetie.shard "$LINK" > "$TMP/tie.txt"
 grep '^MOD ' "$TMP/plan.txt" | sort > "$TMP/mods.txt"
 sed 's/^TIE /MOD /' "$TMP/tie.txt" | sort > "$TMP/ties.txt"

@@ -19,8 +19,14 @@ manifest gate's negative fixtures must stay refused (§6ad), and the
 kernel articles (`lowered_form`, `rep_probe`, `lowfrag_probe`, the
 probes riding wasm_diff_run's closure, the generated cert files through
 their builds' KERNEL gates) are checked every run. gate_sweep.sh
-type-gates the four apps (lowergen, lowcheck, manifest, bytetie) and,
+type-gates the four apps (wasmgen, lowcheck, manifest, bytetie) and,
 through their closures, the tools/low kit.
+
+> **Naming note (2026-07-07):** the wasm back end `tools/lowergen` was
+> renamed **`tools/wasmgen`** (and its build set `examples/lowergen_*` →
+> `examples/wasmgen_*`) when the second back end (`tools/x86gen`) made
+> the tool-per-target naming the honest one. Dated sections below keep
+> the name they landed under; read `lowergen` = today's `wasmgen`.
 
 ## 1. What this is
 
@@ -307,7 +313,7 @@ The convention, demonstrated end to end on `lowergen_src`:
   (producer determinism, byte-identical), (2) SCHEMA (lowcheck), (3)
   KERNEL (the proofs), (4) ENGINE (V8 replays the plan: 10/10 agree).
 
-The **default** mod.build = the core lowering library (lowergen today;
+The **default** mod.build = the core lowering library (wasmgen today;
 shard → RS-shard → wasm as it grows); a module overrides it to hand-tune,
 and both roads discharge identical statements. Variant selection stays
 explicit build-script data (no resolver magic).
@@ -1622,7 +1628,8 @@ rides lowergen's type-gate closure (the tools/low kit convention).
 The survival map this makes structural (the §6ad reviewer's estimate,
 now a file boundary): a second target imports shape/schema/lin/doc
 unchanged; proof.shard's wrap-event/bridge templates are wasm-shaped
-and would fork; lowergen is the wasm back end entirely. NOT graduated,
+and would fork; wasmgen (né lowergen) is the wasm back end entirely.
+NOT graduated,
 recorded as the next candidates when a second target arrives: the
 calls-in-loops discharge classifier (`lk_lin`/`LKD`/`lk_disch` —
 generic classification currently interleaved with `clh_*` helper-cert

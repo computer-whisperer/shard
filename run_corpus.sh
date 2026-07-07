@@ -347,7 +347,7 @@ fi
 # fields were checked by nothing (docs/LOWERING.md §6ad).
 echo "=== lowering: manifest negative fixture ==="
 if [ -x bin/shard_eval ]; then
-  if bin/shard_eval run tools/lowcheck/manifest.shard examples/manifest_rejects.txt models/wasm/wasm.shard examples/lowergen_call_link.shard > "$TMP/mf.out" 2>&1; then
+  if bin/shard_eval run tools/lowcheck/manifest.shard examples/manifest_rejects.txt models/wasm/wasm.shard examples/wasmgen_call_link.shard > "$TMP/mf.out" 2>&1; then
     echo "GATE FAILED: misbound manifest ACCEPTED"
     tail -5 "$TMP/mf.out"
   else

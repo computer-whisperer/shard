@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # std/str/lowbuild.sh — the gated artifact build for std/str's wasm string
 # ops (the first module whose pieces are EMITTER-GENERATED end to end:
-# str.lowsrc.shard sources -> tools/lowergen -> str.wasm.shard certs, with
+# str.lowsrc.shard sources -> tools/wasmgen -> str.wasm.shard certs, with
 # the aggregate rep certs in str.rep.shard tying the machine behavior to
 # the module's opaque surface). Gates:
 #   1. REGEN     — the generator's cert file is byte-identical to the
@@ -25,7 +25,7 @@ EVAL=bin/shard_eval
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 
 echo "== gate 1: regen (producer determinism)"
-"$EVAL" run tools/lowergen/lowergen.shard "$SRC" "$TMP/str.wasm.shard" >/dev/null
+"$EVAL" run tools/wasmgen/wasmgen.shard "$SRC" "$TMP/str.wasm.shard" >/dev/null
 "$EVAL" run tools/shardfmt/shardfmt.shard "$TMP/str.wasm.shard" > "$TMP/out.fmt"
 diff -q "$TMP/out.fmt" "$OUT" && echo "REGEN OK (byte-identical)"
 
