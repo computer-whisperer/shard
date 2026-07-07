@@ -59,6 +59,27 @@
              (_ None)))
           (_ None)))
        (_ None)))
+    (_ (dc_xvec e))))
+
+;; the x86 memory-readback vector (PXV — the XMEMCASE wire form)
+(fn dc_xvec ((e Expr)) (Option PVec)
+  (match (dc_ctor (quote PXV) e)
+    ((Some (Cons k (Cons args (Cons addr (Cons want (Cons outb Nil))))))
+     (match (expr_int k)
+       ((Some kv)
+        (match (expr_ints args)
+          ((Some av)
+           (match (expr_int addr)
+             ((Some pv)
+              (match (expr_int want)
+                ((Some wv)
+                 (match (expr_ints outb)
+                   ((Some ov) (Some (PXV kv av pv wv ov)))
+                   (_ None)))
+                (_ None)))
+             (_ None)))
+          (_ None)))
+       (_ None)))
     (_ None)))
 
 (fn dc_vecs ((es (List Expr))) (Option (List PVec))
@@ -204,42 +225,53 @@
          ext
          "\n")))))
 
-(fn vec_line ((nm (List Int)) (v PVec)) (List Int)
+;; PXV has no wasm grammar — a plan carrying it under the wasm ISA is a
+;; loud refusal (None threads to the driver)
+(fn vec_line ((nm (List Int)) (v PVec)) (Option (List Int))
   (match v
+    ((PXV _ _ _ _ _) None)
     ((PV k args mem want memout)
      (match mem
        (Nil
-         (cat
-           (list
-             "CASE "
-             nm
-             " f"
-             (show_int k)
-             (showargs args)
-             " -> "
-             (show_int want)
-             "\n")))
+         (Some
+           (cat
+             (list
+               "CASE "
+               nm
+               " f"
+               (show_int k)
+               (showargs args)
+               " -> "
+               (show_int want)
+               "\n"))))
        (_
-         (cat
-           (list
-             "MEMCASE "
-             nm
-             " f"
-             (show_int k)
-             (showargs args)
-             " MEM "
-             (hexs mem)
-             " -> "
-             (show_int want)
-             " "
-             (hexs memout)
-             "\n")))))))
+         (Some
+           (cat
+             (list
+               "MEMCASE "
+               nm
+               " f"
+               (show_int k)
+               (showargs args)
+               " MEM "
+               (hexs mem)
+               " -> "
+               (show_int want)
+               " "
+               (hexs memout)
+               "\n"))))))))
 
-(fn vec_lines ((nm (List Int)) (vs (List PVec))) (List Int)
+(fn vec_lines ((nm (List Int)) (vs (List PVec))) (Option (List Int))
   (measure (struct vs))
   (match vs
-    (Nil "")
-    ((Cons v rest) (append_int (vec_line nm v) (vec_lines nm rest)))))
+    (Nil (Some ""))
+    ((Cons v rest)
+     (match (vec_line nm v)
+       (None None)
+       ((Some l)
+        (match (vec_lines nm rest)
+          (None None)
+          ((Some ls) (Some (append_int l ls)))))))))
 
 (fn art_lines ((as_ (List PArt))) (List Int)
   (measure (struct as_))
@@ -247,36 +279,39 @@
     (Nil "")
     ((Cons a rest) (append_int (art_line a) (art_lines rest)))))
 
-(fn mod_lines ((pm PMod)) (List Int)
+(fn mod_lines ((pm PMod)) (Option (List Int))
   (match pm
     ((PM nm bytes arts vecs)
-     (cat
-       (list
-         (art_lines arts)
-         "MOD "
-         nm
-         " "
-         (hexs bytes)
-         "\n"
-         (vec_lines nm vecs))))))
+     (match (vec_lines nm vecs)
+       (None None)
+       ((Some vls)
+        (Some
+          (cat (list (art_lines arts) "MOD " nm " " (hexs bytes) "\n" vls))))))))
 
-(fn plan_lines ((ms (List PMod))) (List Int)
+(fn plan_lines ((ms (List PMod))) (Option (List Int))
   (measure (struct ms))
   (match ms
-    (Nil "")
-    ((Cons m rest) (append_int (mod_lines m) (plan_lines rest)))))
+    (Nil (Some ""))
+    ((Cons m rest)
+     (match (mod_lines m)
+       (None None)
+       ((Some l)
+        (match (plan_lines rest)
+          (None None)
+          ((Some ls) (Some (append_int l ls)))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; rendering — the x86 wire grammar (examples/x86_diff.c's plan reader)
 ;; ---------------------------------------------------------------------------
 ;; XMOD <name> <hex>
 ;; XCASE <name> <argc> <a0> <a1> <a2> -> <exp>
+;; XMEMCASE <name> <argc> <a0> <a1> <a2> READ <addr> <len> -> <exp> <outhex>
 ;; Integers are 16-char little-endian hex, exactly three padded arg slots.
 ;; ARTIFACT lines render the same as wasm's (the manifest gate reads them;
 ;; the build script filters them out of the CPU replayer's copy). Memory
-;; vectors and exports beyond f0 have no x86 grammar yet — a plan carrying
-;; them under the x86 ISA is a loud refusal (the mem-fragment build slice
-;; owns that growth).
+;; readback vectors ride PXV (an absolute-address window, no init image —
+;; the harness's data page starts zeroed); wasm-style init-image vectors
+;; (PV with a mem field) and exports beyond f0 stay refusals.
 
 ;; low 8 bytes of (n mod 2^64), little-endian
 (fn le8b ((n Int)) (List Int)
@@ -331,7 +366,29 @@
                    "\n")))
              None)
            None))
-       (_ None)))))
+       (_ None)))
+    ((PXV k args addr want outb)
+     (if (int_eq k 0)
+       (if (le (xargc args) 3)
+         (Some
+           (cat
+             (list
+               "XMEMCASE "
+               nm
+               " "
+               (show_int (xargc args))
+               (xslots args)
+               " READ "
+               (hx addr)
+               " "
+               (hx (xargc outb))
+               " -> "
+               (hx want)
+               " "
+               (hexs outb)
+               "\n")))
+         None)
+       None))))
 
 (fn xvec_lines ((nm (List Int)) (vs (List PVec))) (Option (List Int))
   (measure (struct vs))
@@ -416,10 +473,15 @@
              (match (xplan_lines mods)
                (None
                  (fail
-                   "x86 plan outside the XCASE grammar (memory vector, >3 args, or nonzero export)"
+                   "x86 plan outside the XCASE/XMEMCASE grammar (wasm memory image, >3 args, or nonzero export)"
                    w))
                ((Some ls) (exit 0 (write ls w))))
-             (exit 0 (write (plan_lines mods) w))))))))))
+             (match (plan_lines mods)
+               (None
+                 (fail
+                   "wasm plan carries an x86 memory vector (PXV) -- build it with ISA x86"
+                   w))
+               ((Some ls) (exit 0 (write ls w))))))))))))
 
 (fn run_isa ((bpath (List Int)) (xisa Bool) (w World)) World
   (match (load_run_module bpath w)
