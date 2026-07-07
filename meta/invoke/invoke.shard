@@ -10,8 +10,9 @@
 ;;; (`build : Target -> Plan`, docs/LOWERING.md mod.build).
 ;;;
 ;;; Composition, not new machinery: resolve_closure (loader) walks the import
-;;; closure via the read_file extern; build_module (reader) parses it into a
-;;; Module; apply_fn + run_expr (reducer) apply a FnDef to argument Exprs.
+;;; closure via the read_file extern; build_module_r (reader) resolves it
+;;; into a Module; the env machine (kernel/evm.shard) applies a FnDef to
+;;; argument Exprs under the PURE fast path (evm_call_pure).
 ;;; Two deliberate choices:
 ;;;   - functions are found by LOCAL name over the module's FnDef list: a root
 ;;;     file's fns key at `core` while a directory-module's key at its real
@@ -25,11 +26,14 @@
 ;;; hashes kernel/*.shard, and a pure library must not mark the compiled
 ;;; engines stale. It is kernel-as-a-module by IMPORT, like tools/prove.
 ;;;
-;;; v1 runs the call under the pure reducer (run_expr): the intended callees
-;;; are pure (no World, no externs) and small. If invoked work ever gets
-;;; compute-heavy, the known lever is the env-machine `ev` (eval.shard —
-;;; which cannot be imported here: it defines an app `main` that would
-;;; collide with any consumer's `main` at the core qname).
+;;; v1 ran calls under the pure reducer (run_expr); 2026-07-07 the pinned
+;;; "known lever" was pulled: invocation rides the env machine's PURE path
+;;; (kernel/evm.shard evm_call_pure — graduated from eval.shard, whose
+;;; main-collision hazard died with qualified run dispatch). An EFFECTFUL
+;;; callee (externs in its call graph) refuses with None — the pure machine
+;;; performs no effects, and decoders treat None as any other loud failure.
+;;; No step budget: the machine runs to completion (invoked callees are
+;;; check-side total; a runaway build fn hangs loudly, not silently).
 
 (import "mod.req.shard")  ; our interface — the sig fns this impl rebinds
 (import "../../kernel/stdlib.shard")
@@ -39,17 +43,15 @@
 (import "../../kernel/reduce.shard")
 (import "../../kernel/loader.shard")
 (import "../../kernel/driver.shard")
+(import "../../kernel/evm.shard")
 (use (:: kernel term *))
 (use (:: kernel module *))
 (use (:: kernel reader *))
 (use (:: kernel reduce *))
 (use (:: kernel loader *))
 (use (:: kernel driver prelude_ctors))
-
-;; Step budget for an invoked call — same pragmatic bound as eval.shard's
-;; run_budget (not importable from there, see header). Running out returns
-;; the partially-reduced term; decoders fail cleanly on it.
-(fn inv_budget () Int 1000000000)
+(use (:: kernel evm evm_call_pure))
+(use (:: kernel evm arity_ok))
 
 ;; ---------------------------------------------------------------------------
 ;; loading — resolve a root file's import closure and build its Module.
@@ -119,10 +121,13 @@
 ;; invocation — apply a FnDef to argument values and reduce.
 ;; ---------------------------------------------------------------------------
 
+;; Arity is checked here (None, the apply_fn contract); the machine then
+;; dispatches the call by the FnDef's own qname. An effectful callee also
+;; answers None (see header).
 (fn invoke_fd ((m Module) (fd FnDef) (args (List Expr))) (Option Expr)
-  (match (apply_fn fd args)
-    (None None)  ; arity mismatch
-    ((Some opened) (Some (run_expr m opened (inv_budget))))))
+  (match fd
+    ((FnDef q params _ _)
+     (if (arity_ok args params) (evm_call_pure m q args) None))))
 
 (fn invoke ((m Module) (name Symbol) (args (List Expr))) (Option Expr)
   (match (find_fn name m)

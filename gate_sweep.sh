@@ -57,6 +57,7 @@ TARGETS=(
   kernel/trace.shard
   kernel/driver.shard
   kernel/check.shard
+  kernel/evm.shard
   kernel/eval.shard
   tools/prove/prove.shard
   tools/shardfmt/shardfmt.shard
@@ -70,6 +71,9 @@ TARGETS=(
   meta/format/mod.req.shard
   tools/lowbuild/lowbuild.shard
 )
+# Argv selection: `./gate_sweep.sh FILE...` gates only those targets — the
+# iteration mode. No args = the full list (the commit-point bar).
+if (( $# )); then TARGETS=("$@"); fi
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
