@@ -5,9 +5,13 @@
 ;;; regardless of fan-out), PARAMETRIC in the modulus and the lemma name
 ;;; (wasm instantiates 2^32/wrap32_id, x86 2^64/wrap64_id — the delta
 ;;; that proved the spine target-generic); the derived-bound have
-;;; (generated interval helper + get_lo/get_hi byte sub-proofs); and the
+;;; (generated interval helper + get_lo/get_hi byte sub-proofs); the
 ;;; condition-path discharge kit (§6j: path hyp rewrites, premise
-;;; strips, silent single-condition derivations). Deliberately small:
+;;; strips, silent single-condition derivations); and the FUSED
+;;; CONDITION-PATH WALK over the region tree (pw_*) — premises, helper
+;;; claims, and discharge proof text emitted together, parametric in
+;;; the wrap key (a second target spoke it, so it graduated — the
+;;; wrap_event precedent one level up). Deliberately small:
 ;;; target-shaped templates (PItem flushes, call bridges, link
 ;;; derivations) live in each back end and graduate here only when a
 ;;; second target speaks them. Meta stdlib resident (from
@@ -17,10 +21,22 @@
 (import "../../kernel/term.shard")
 (import "../doc")
 (import "../spell")
+(import "../lin")
+(import "../shape")
 
 (use (:: kernel term Expr))
+(use (:: kernel term IntLit))
 (use (:: meta doc *))
 (use (:: meta spell *))
+(use (:: meta lin Poly))
+(use (:: meta lin pl_e))
+(use (:: meta lin cond_poly))
+(use (:: meta lin solve1))
+(use (:: meta lin ng_le0))
+(use (:: meta lin ng_ltwrap))
+(use (:: meta shape RT))
+(use (:: meta shape RTv))
+(use (:: meta shape RTif))
 
 ;; ---- the wrap-collapse discharge event --------------------------------------------
 
@@ -131,3 +147,226 @@
         (DStr ") lr lhs true ())) refl)) "))
       (DStr "refl)) ")
       (DStr ""))))
+
+;; ---- the condition-path walk (§6j) -------------------------------------------------
+;;
+;; ONE fused walk over the region tree emits, per wrap node, its premises
+;; (condition-wrapped in the node's region path), any generated helper
+;; claims, and the discharge proof text — so premise indices, helper
+;; ordinals, and have names never drift apart. Parametric in the WRAP
+;; KEY: the target's modulus (the Farkas-side Int and the rendered
+;; digits) and its collapse lemma — wasm instantiates 2^32/wrap32_id,
+;; x86 2^64/wrap64_id. Per node SIDE (lower / upper wrap bound):
+;;   - derivable from a path condition (single-cond Farkas, computed
+;;     multipliers): a cb_* helper claim + a silent (have dJ …) — NO
+;;     premise at all;
+;;   - otherwise: a premise — bare when the path is empty, if-wrapped
+;;     in the path when arm-local, stripped inside the arm by a
+;;     (have pJ …) (premise rl-rewrite, path hyp rewrites, compute).
+
+(type WrapK (MkWrapK Int (List Int) (List Int)))
+
+;; the (lt E M) wrap bound at rendered modulus digits
+(fn bnd_ltm ((e Doc) (ms (List Int))) Doc
+  (dcat3 (DStr "(lt ") e (dcat3 (DStr " ") (DStr ms) (DStr ")"))))
+
+;; the generated single-condition helper's name (the §6j naming policy)
+(fn cb_name ((fnm Doc) (k Int)) Doc
+  (dcat3 (dcat3 (DStr "cb_") fnm (DStr "_")) (dint k) (DStr "")))
+
+;; find the first path condition that derives ng (returns position + the
+;; computed multiplier pair)
+(fn pw_find ((ng Poly) (path (List (Pair Expr Bool))) (pos Int))
+  (Option (Pair Int (Pair Int Int)))
+  (measure (struct path))
+  (match path
+    (Nil None)
+    ((Cons (Pair cnd pol) rest)
+     (match (cond_poly cnd pol)
+       (None (pw_find ng rest (+ pos 1)))
+       ((Some (Pair cp iseq))
+        (match (solve1 ng cp iseq)
+          ((Some gm) (Some (Pair pos gm)))
+          (None (pw_find ng rest (+ pos 1)))))))))
+
+(fn path_at ((p (List (Pair Expr Bool))) (i Int)) (Pair Expr Bool)
+  (measure (struct p))
+  (match p
+    (Nil (Pair (IntLit 0) True))
+    ((Cons h t) (if (int_eq i 0) h (path_at t (- i 1))))))
+
+(fn path_app ((p (List (Pair Expr Bool))) (s (Pair Expr Bool)))
+  (List (Pair Expr Bool))
+  (measure (struct p))
+  (match p
+    (Nil (Cons s Nil))
+    ((Cons h t) (Cons h (path_app t s)))))
+
+;; one side's emission: proof doc, premise doc, helper doc, the reference
+;; the wrap event cites, next premise index / helper ordinal / have name
+(type SR (MkSR Doc Doc Doc Doc Int Int Int))
+
+(fn pw_side
+  ((e Expr)
+   (lo Bool)
+   (path (List (Pair Expr Bool)))
+   (fnm Doc)
+   (ngo (Option Poly))
+   (wk WrapK)
+   (ni Int)
+   (nk Int)
+   (j Int))
+  SR
+  (match wk
+    ((MkWrapK md ms _)
+     (let ((bound (if lo (bnd_le0 (pr_e e)) (bnd_ltm (pr_e e) ms))))
+       (match
+         (match ngo
+           (None None)
+           ((Some pe) (pw_find (if lo (ng_le0 pe) (ng_ltwrap pe md)) path 0)))
+         ((Some (Pair pos (Pair g m)))
+          (match (path_at path pos)
+            ((Pair cnd pol)
+             (let ((syms (fv_syms cnd (fv_syms e Nil))))
+               (MkSR
+                 (drv_have
+                   (DCat (DStr "d") (dint j))
+                   bound
+                   (cb_name fnm nk)
+                   (pr_sym_insts syms)
+                   (- (- (path_len path) 1) pos))
+                 (DStr "")
+                 (cb_claim
+                   (cb_name fnm nk)
+                   (pr_sym_binds syms)
+                   (pr_e cnd)
+                   pol
+                   bound
+                   g
+                   m)
+                 (DCat (DStr "d") (dint j))
+                 ni
+                 (+ nk 1)
+                 (+ j 1))))))
+         (None
+           (let
+             ((prem
+                (dcat3 (DStr "(= ") (cond_wrap path bound) (DStr " True) "))))
+             (match path
+               (Nil (MkSR (DStr "") prem (DStr "") (dint ni) (+ ni 1) nk j))
+               (_
+                 (MkSR
+                   (strip_have (DCat (DStr "p") (dint j)) bound ni path)
+                   prem
+                   (DStr "")
+                   (DCat (DStr "p") (dint j))
+                   (+ ni 1)
+                   nk
+                   (+ j 1)))))))))))
+
+;; walk result: proof doc, premises doc, helper claims doc, counters
+(type PWR (MkPWR Doc Doc Doc Int Int Int))
+
+(fn pw_node
+  ((e Expr)
+   (path (List (Pair Expr Bool)))
+   (fnm Doc)
+   (wk WrapK)
+   (ni Int)
+   (nk Int)
+   (j Int))
+  PWR
+  (let ((ngo (pl_e e False)))
+    (match (pw_side e True path fnm ngo wk ni nk j)
+      ((MkSR pf1 pr1 hl1 loref ni1 nk1 j1)
+       (match (pw_side e False path fnm ngo wk ni1 nk1 j1)
+         ((MkSR pf2 pr2 hl2 hiref ni2 nk2 j2)
+          (match wk
+            ((MkWrapK _ ms lm)
+             (MkPWR
+               (dcat3 pf1 pf2 (wrap_event e ms lm loref hiref j2))
+               (DCat pr1 pr2)
+               (DCat hl1 hl2)
+               ni2
+               nk2
+               (+ j2 1))))))))))
+
+;; the region's discharge items: nodes not already discharged in an
+;; ancestor region (nor earlier in this one)
+(fn pw_items
+  ((ns (List Expr))
+   (anc (List Expr))
+   (path (List (Pair Expr Bool)))
+   (fnm Doc)
+   (wk WrapK)
+   (ni Int)
+   (nk Int)
+   (j Int))
+  (Pair PWR (List Expr))
+  (measure (struct ns))
+  (match ns
+    (Nil (Pair (MkPWR (DStr "") (DStr "") (DStr "") ni nk j) anc))
+    ((Cons e t)
+     (if (node_seen (spell e) anc) (pw_items t anc path fnm wk ni nk j)
+     (match (pw_node e path fnm wk ni nk j)
+       ((MkPWR pf pr hl ni1 nk1 j1)
+        (match (pw_items t (node_add e anc) path fnm wk ni1 nk1 j1)
+          ((Pair (MkPWR pf2 pr2 hl2 ni2 nk2 j2) anc2)
+           (Pair
+             (MkPWR (DCat pf pf2) (DCat pr pr2) (DCat hl hl2) ni2 nk2 j2)
+             anc2)))))))))
+
+;; region body = discharge items + closer (refl, or the case-on tree).
+;; Each arm re-enters via the fixed template: rewrite the ctor-named case
+;; hyp into BOTH sides, compute both to resume past the fired branch.
+(fn pw_region
+  ((r RT)
+   (anc (List Expr))
+   (path (List (Pair Expr Bool)))
+   (fnm Doc)
+   (wk WrapK)
+   (ni Int)
+   (nk Int)
+   (j Int))
+  PWR
+  (measure (struct r))
+  (match r
+    ((RTv _ _ _ ns)
+     (match (pw_items ns anc path fnm wk ni nk j)
+       ((Pair (MkPWR pf pr hl ni1 nk1 j1) _)
+        (MkPWR (DCat pf (DStr "refl")) pr hl ni1 nk1 j1))))
+    ((RTif _ _ _ ns cond a b)
+     (match (pw_items ns anc path fnm wk ni nk j)
+       ((Pair (MkPWR pf pr hl ni1 nk1 j1) anc2)
+        (match
+          (pw_region a anc2 (path_app path (Pair cond True)) fnm wk ni1 nk1 j1)
+          ((MkPWR pfa pra hla ni2 nk2 j2)
+           (match
+             (pw_region
+               b
+               anc2
+               (path_app path (Pair cond False))
+               fnm
+               wk
+               ni2
+               nk2
+               j2)
+             ((MkPWR pfb prb hlb ni3 nk3 j3)
+              (MkPWR
+                (dcat3
+                  (dcat3
+                    (dcat3 pf (DStr "(case-on ") (pr_e cond))
+                    (DStr
+                      " Bool ((case True (chain (steps ((rewrite (hyp True) lr both true ()) (compute both))) ")
+                    pfa)
+                  (dcat3
+                    (DStr
+                      ")) (case False (chain (steps ((rewrite (hyp False) lr both true ()) (compute both))) ")
+                    pfb
+                    (DStr "))))"))
+                  (DStr ""))
+                (dcat3 pr (DCat pra prb) (DStr ""))
+                (dcat3 hl (DCat hla hlb) (DStr ""))
+                ni3
+                nk3
+                j3))))))))))
