@@ -1,0 +1,204 @@
+;;; examples/x86gen_src.build.shard — the mod.build ENTRY for the x86
+;;; straight-line artifact set (docs/X86.md §11): assembles the artifacts
+;;; for examples/x86gen_src.shard as a native Plan value.
+;;;
+;;;     (fn build ((t Target)) Plan)     — PURE; the whole interface
+;;;
+;;; One single-function module per fn (the cert's module literal at
+;;; restfs := Nil, no memory), one manifest entry each (lowered_<fn> over
+;;; export f0), and vectors whose expected value is the SOURCE fn applied
+;;; directly (spec-side semantics; in-range args per the certs' premise
+;;; discipline — wrap edges spell wrap64 explicitly). Module bytes ride
+;;; the plan PRE-ENCODED through the x86 flattening encoder, so the plan
+;;; vocabulary and the driver stay target-generic; the driver
+;;; (tools/lowbuild, ISA arg `x86`) renders the XMOD/XCASE wire lines the
+;;; silicon replayer (examples/x86_diff.c) executes on the real CPU.
+;;;
+;;; The func literals here are copied from the generated certs; the
+;;; cert↔binary tie is CHECKED by the BYTETIE gate (tools/bytetie — the
+;;; x86 reflector), so drift fails the build.
+;;;
+;;; RUN IT:  bin/shard_eval run tools/lowbuild/lowbuild.shard examples/x86gen_src.build.shard x86
+
+(import "../kernel/stdlib.shard")
+(import "x86gen_src.shard")
+(use (:: examples x86gen_src *))
+(import "../models/x86/x86.shard")
+(use (:: models x86 x86 *))
+(import "../models/x86/encode.shard")
+(use (:: models x86 encode enc_func))
+(use (:: models x86 encode eapp))
+(import "../meta/plan")
+(use (:: meta plan *))
+
+;; --- the binaries: one function per source fn (copied from the certs) ----------
+
+(fn f_add1 () XFunc
+  (MkXFunc 1 (list (XMovRR RAX RDI) (XBin XAdd RAX (SImm 1)))))
+
+(fn f_add () XFunc
+  (MkXFunc 2 (list (XMovRR RAX RDI) (XBin XAdd RAX (SReg RSI)))))
+
+(fn f_sub () XFunc
+  (MkXFunc 2 (list (XMovRR RAX RDI) (XBin XSub RAX (SReg RSI)))))
+
+(fn f_mix () XFunc
+  (MkXFunc
+    2
+    (list
+      (XMovRR RAX RDI)
+      (XBin XMul RAX (SImm 2))
+      (XMovRR R10 RSI)
+      (XBin XSub R10 (SReg RDI))
+      (XBin XAdd RAX (SReg R10)))))
+
+(fn f_id () XFunc (MkXFunc 1 (list (XMovRR RAX RDI))))
+
+(fn f_madd () XFunc
+  (MkXFunc
+    3
+    (list
+      (XMovRR RAX RDI)
+      (XBin XMul RAX (SReg RSI))
+      (XBin XAdd RAX (SReg RDX)))))
+
+(fn f_share () XFunc
+  (MkXFunc
+    1
+    (list
+      (XMovRR RAX RDI)
+      (XBin XMul RAX (SReg RDI))
+      (XMovRR R10 RAX)
+      (XBin XAdd R10 (SReg RAX))
+      (XMovRR RAX R10))))
+
+(fn f_nest () XFunc
+  (MkXFunc
+    2
+    (list
+      (XMovRR RAX RDI)
+      (XBin XAdd RAX (SReg RSI))
+      (XMovRR R10 RAX)
+      (XBin XMul R10 (SImm 2))
+      (XMovRR R11 R10)
+      (XBin XAdd R11 (SReg RAX))
+      (XMovRR RAX R11))))
+
+(fn f_alias () XFunc
+  (MkXFunc
+    1
+    (list
+      (XMovRR RAX RDI)
+      (XMovRR R10 RAX)
+      (XBin XAdd R10 (SImm 1))
+      (XMovRR RAX R10))))
+
+(fn f_band () XFunc
+  (MkXFunc 2 (list (XMovRR RAX RDI) (XBin XAnd RAX (SReg RSI)))))
+
+(fn f_bor () XFunc
+  (MkXFunc 2 (list (XMovRR RAX RDI) (XBin XOr RAX (SReg RSI)))))
+
+(fn f_bxor () XFunc
+  (MkXFunc 2 (list (XMovRR RAX RDI) (XBin XXor RAX (SReg RSI)))))
+
+(fn f_bmask () XFunc
+  (MkXFunc 1 (list (XMovRR RAX RDI) (XBin XAnd RAX (SImm 255)))))
+
+(fn f_barith () XFunc
+  (MkXFunc
+    2
+    (list (XMovRR RAX RDI) (XBin XAnd RAX (SReg RSI)) (XBin XAdd RAX (SImm 1)))))
+
+(fn f_bshare () XFunc
+  (MkXFunc
+    1
+    (list
+      (XMovRR RAX RDI)
+      (XBin XAnd RAX (SImm 240))
+      (XMovRR R10 RAX)
+      (XBin XAdd R10 (SReg RAX))
+      (XMovRR RAX R10))))
+
+;; --- the build entry -------------------------------------------------------------
+
+(fn art ((nm (List Int))) PArt
+  (PA
+    nm
+    (eapp "lowered_" nm)
+    "examples/x86gen_out.shard"
+    "models/x86/x86.shard"
+    0
+    ""
+    "none"))
+
+(fn pv ((args (List Int)) (want Int)) PVec (PV 0 args Nil want Nil))
+
+(fn pmod ((nm (List Int)) (f XFunc) (vs (List PVec))) PMod
+  (PM nm (enc_func f) (list (art nm)) vs))
+
+(fn build ((t Target)) Plan
+  (MkPlan
+    (list
+      (pmod
+        "xg_add1"
+        (f_add1)
+        (list
+          (pv (list 5) (xg_add1 5))
+          (pv
+            (list 18446744073709551615)
+            (wrap64 (xg_add1 18446744073709551615)))))
+      (pmod
+        "xg_add"
+        (f_add)
+        (list
+          (pv (list 7 9) (xg_add 7 9))
+          (pv
+            (list 18446744073709551615 2)
+            (wrap64 (xg_add 18446744073709551615 2)))))
+      (pmod
+        "xg_sub"
+        (f_sub)
+        (list
+          (pv (list 9 7) (xg_sub 9 7))
+          (pv (list 3 5) (wrap64 (xg_sub 3 5)))))
+      (pmod
+        "xg_mix"
+        (f_mix)
+        (list (pv (list 6 20) (xg_mix 6 20)) (pv (list 0 1) (xg_mix 0 1))))
+      (pmod "xg_id" (f_id) (list (pv (list 42) (xg_id 42))))
+      (pmod
+        "xg_madd"
+        (f_madd)
+        (list
+          (pv (list 6 7 5) (xg_madd 6 7 5))
+          (pv
+            (list 4294967296 4294967296 1)
+            (wrap64 (xg_madd 4294967296 4294967296 1)))))
+      (pmod
+        "xg_share"
+        (f_share)
+        (list
+          (pv (list 9) (xg_share 9))
+          (pv (list 4294967296) (wrap64 (xg_share 4294967296)))))
+      (pmod "xg_nest" (f_nest) (list (pv (list 3 4) (xg_nest 3 4))))
+      (pmod "xg_alias" (f_alias) (list (pv (list 41) (xg_alias 41))))
+      (pmod
+        "xg_band"
+        (f_band)
+        (list
+          (pv
+            (list 12297829382473034410 6148914691236517205)
+            (xg_band 12297829382473034410 6148914691236517205))
+          (pv (list 255 240) (xg_band 255 240))))
+      (pmod "xg_bor" (f_bor) (list (pv (list 240 15) (xg_bor 240 15))))
+      (pmod
+        "xg_bxor"
+        (f_bxor)
+        (list
+          (pv
+            (list 18446744073709551615 6148914691236517205)
+            (xg_bxor 18446744073709551615 6148914691236517205))))
+      (pmod "xg_bmask" (f_bmask) (list (pv (list 65535) (xg_bmask 65535))))
+      (pmod "xg_barith" (f_barith) (list (pv (list 255 15) (xg_barith 255 15))))
+      (pmod "xg_bshare" (f_bshare) (list (pv (list 255) (xg_bshare 255)))))))

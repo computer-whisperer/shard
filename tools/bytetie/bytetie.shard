@@ -27,6 +27,8 @@
 (import "../low/certnav.shard")
 (import "../../models/wasm/wasm.shard")
 (import "../../models/wasm/encode.shard")
+(import "../../models/x86/x86.shard")
+(import "../../models/x86/encode.shard")
 
 (use (:: kernel loader World))
 (use (:: kernel loader get_args))
@@ -42,6 +44,9 @@
 (use (:: tools low certnav *))
 (use (:: models wasm wasm *))
 (use (:: models wasm encode *))
+(use (:: models x86 x86 *))
+;; single name, not the wildcard: both encoders define enc_instr
+(use (:: models x86 encode enc_func))
 
 (fn nl () (List Int) (Cons 10 Nil))
 
@@ -260,6 +265,189 @@
        (RMErr "module slot is not (MkWModule …)")))
     (_ (RMErr "module slot is not (MkWModule …)"))))
 
+;; ---- the x86 reflector: raw module literal -> XModule value ------------------------
+;; The straight-line instruction subset tools/x86gen emits today
+;; (XMovRR / XMovRI / XBin over register and immediate sources); anything
+;; else is a loud reflection error — extend per emitter slice, refuse
+;; don't guess.
+
+(type RXI (RXIOk XInstr) (RXIErr (List Int)))
+
+(type RXIS (RXISOk (List XInstr)) (RXISErr (List Int)))
+
+(type RXF (RXFOk XFunc) (RXFErr (List Int)))
+
+(type RXFS (RXFSOk (List XFunc)) (RXFSErr (List Int)))
+
+(type RXM (RXMOk XModule) (RXMErr (List Int)))
+
+(fn rxreg ((s SExpr)) (Option Reg)
+  (match s
+    ((SSym x)
+     (if (sym_eq x (quote RAX)) (Some RAX)
+     (if (sym_eq x (quote RCX)) (Some RCX)
+     (if (sym_eq x (quote RDX)) (Some RDX)
+     (if (sym_eq x (quote RBX)) (Some RBX)
+     (if (sym_eq x (quote RBP)) (Some RBP)
+     (if (sym_eq x (quote RSI)) (Some RSI)
+     (if (sym_eq x (quote RDI)) (Some RDI)
+     (if (sym_eq x (quote R8)) (Some R8)
+     (if (sym_eq x (quote R9)) (Some R9)
+     (if (sym_eq x (quote R10)) (Some R10)
+     (if (sym_eq x (quote R11)) (Some R11)
+     (if (sym_eq x (quote R12)) (Some R12)
+     (if (sym_eq x (quote R13)) (Some R13)
+     (if (sym_eq x (quote R14)) (Some R14)
+     (if (sym_eq x (quote R15)) (Some R15)
+     None))))))))))))))))
+    (_ None)))
+
+(fn rxbop ((s SExpr)) (Option XBop)
+  (match s
+    ((SSym x)
+     (if (sym_eq x (quote XAdd)) (Some XAdd)
+     (if (sym_eq x (quote XSub)) (Some XSub)
+     (if (sym_eq x (quote XMul)) (Some XMul)
+     (if (sym_eq x (quote XAnd)) (Some XAnd)
+     (if (sym_eq x (quote XOr)) (Some XOr)
+     (if (sym_eq x (quote XXor)) (Some XXor)
+     None)))))))
+    (_ None)))
+
+(fn rxsrc ((s SExpr)) (Option Src)
+  (match s
+    ((SList (Cons h args))
+     (if (is_sym h (quote SReg))
+       (match args
+         ((Cons r Nil)
+          (match (rxreg r)
+            ((Some rr) (Some (SReg rr)))
+            (None None)))
+         (_ None))
+     (if (is_sym h (quote SImm))
+       (match args
+         ((Cons (SInt k) Nil) (Some (SImm k)))
+         (_ None))
+       None)))
+    (_ None)))
+
+(fn rxinstr ((s SExpr)) RXI
+  (match s
+    ((SList (Cons h args))
+     (if (is_sym h (quote XMovRR))
+       (match args
+         ((Cons d2 (Cons s2 Nil))
+          (match (rxreg d2)
+            (None (RXIErr "XMovRR needs two registers"))
+            ((Some rd)
+             (match (rxreg s2)
+               (None (RXIErr "XMovRR needs two registers"))
+               ((Some rs) (RXIOk (XMovRR rd rs)))))))
+         (_ (RXIErr "XMovRR needs two registers")))
+     (if (is_sym h (quote XMovRI))
+       (match args
+         ((Cons d2 (Cons (SInt k) Nil))
+          (match (rxreg d2)
+            (None (RXIErr "XMovRI needs a register and an int literal"))
+            ((Some rd) (RXIOk (XMovRI rd k)))))
+         (_ (RXIErr "XMovRI needs a register and an int literal")))
+     (if (is_sym h (quote XBin))
+       (match args
+         ((Cons o (Cons d2 (Cons s2 Nil)))
+          (match (rxbop o)
+            (None (RXIErr "unknown x86 binary op"))
+            ((Some oo)
+             (match (rxreg d2)
+               (None (RXIErr "XBin needs a destination register"))
+               ((Some rd)
+                (match (rxsrc s2)
+                  (None (RXIErr "XBin needs a register or immediate source"))
+                  ((Some ss) (RXIOk (XBin oo rd ss)))))))))
+         (_ (RXIErr "XBin needs an op, a register, and a source")))
+       (RXIErr
+         "x86 instruction outside the straight-line reflector (extend per emitter slice)")))))
+    (_ (RXIErr "instruction is not an application"))))
+
+(fn rxinstr_items ((ss (List SExpr))) RXIS
+  (measure (struct ss))
+  (match ss
+    (Nil (RXISOk Nil))
+    ((Cons h t)
+     (match (rxinstr h)
+       ((RXIErr m) (RXISErr m))
+       ((RXIOk i)
+        (match (rxinstr_items t)
+          ((RXISOk is) (RXISOk (Cons i is)))
+          ((RXISErr m) (RXISErr m))))))))
+
+(fn rxinstrs ((s SExpr)) RXIS
+  (match s
+    ((SSym x)
+     (if (sym_eq x (quote Nil)) (RXISOk Nil)
+     (RXISErr "instruction list is a bare symbol")))
+    ((SList (Cons h rest))
+     (if (is_sym h (quote list)) (rxinstr_items rest)
+     (RXISErr "instruction list is not (list …) or Nil")))
+    (_ (RXISErr "instruction list is not (list …) or Nil"))))
+
+;; a function literal: (MkXFunc P BODY), directly or through (inline NAME)
+(fn rxfunc ((tbl (List (Pair Symbol SExpr))) (d Int) (s SExpr)) RXF
+  (measure d)
+  (if (le d 0) (RXFErr "reflection fuel exhausted (cyclic (inline …)?)")
+  (match s
+    ((SList (Cons h rest))
+     (if (is_sym h (quote MkXFunc))
+       (match rest
+         ((Cons (SInt p) (Cons body Nil))
+          (match (rxinstrs body)
+            ((RXISOk is) (RXFOk (MkXFunc p is)))
+            ((RXISErr m) (RXFErr m))))
+         (_ (RXFErr "MkXFunc needs one int literal and a body")))
+     (if (is_sym h (quote inline))
+       (match rest
+         ((Cons (SSym n) Nil)
+          (match (inl_lookup tbl n)
+            ((Some body) (rxfunc tbl (- d 1) body))
+            (None (RXFErr "inline of an unknown same-file nullary fn"))))
+         (_ (RXFErr "malformed (inline …)")))
+       (RXFErr "chain element is not a MkXFunc literal"))))
+    (_ (RXFErr "chain element is not a MkXFunc literal")))))
+
+;; the module's function chain at restfs := Nil
+(fn rxchain ((tbl (List (Pair Symbol SExpr))) (d Int) (s SExpr)) RXFS
+  (measure (struct s))
+  (match s
+    ((SSym x)
+     (if (sym_eq x (quote restfs)) (RXFSOk Nil)
+     (if (sym_eq x (quote Nil)) (RXFSOk Nil)
+     (RXFSErr "module chain tail is not restfs"))))
+    ((SList (Cons h rest))
+     (if (is_sym h (quote Cons))
+       (match rest
+         ((Cons f (Cons tail Nil))
+          (match (rxfunc tbl d f)
+            ((RXFErr m) (RXFSErr m))
+            ((RXFOk fu)
+             (match (rxchain tbl d tail)
+               ((RXFSOk fs) (RXFSOk (Cons fu fs)))
+               ((RXFSErr m) (RXFSErr m))))))
+         (_ (RXFSErr "malformed Cons chain")))
+       (RXFSErr "module chain is not a Cons chain")))
+    (_ (RXFSErr "module chain is not a Cons chain"))))
+
+(fn rxmod ((tbl (List (Pair Symbol SExpr))) (d Int) (s SExpr)) RXM
+  (match s
+    ((SList (Cons h (Cons chain (Cons msz Nil))))
+     (if (is_sym h (quote MkXModule))
+       (match msz
+         ((SInt m)
+          (match (rxchain tbl d chain)
+            ((RXFSOk fs) (RXMOk (MkXModule fs m)))
+            ((RXFSErr e) (RXMErr e))))
+         (_ (RXMErr "memsize is not a literal")))
+       (RXMErr "module slot is not (MkXModule …)")))
+    (_ (RXMErr "module slot is not (MkXModule …)"))))
+
 ;; ---- hex rendering ----------------------------------------------------------------
 
 (fn hexd ((d Int)) Int (if (lt d 10) (+ 48 d) (+ 87 d)))
@@ -292,6 +480,40 @@
 ;; or a loud reflection error
 (type TRes (TLine (List Int)) (TSkip) (TFail (List Int)))
 
+;; the x86 tie: the artifact is ONE FUNCTION's flat bytes (the plan's
+;; XMOD line is per-function), so the tie is enc_func of the reflected
+;; module's function at the claim's pinned index
+(fn xtie_of
+  ((tbl (List (Pair Symbol SExpr))) (d Int) (name Symbol) (items (List SExpr)))
+  TRes
+  (match items
+    ((Cons _ (Cons _ (Cons wm (Cons idxs _))))
+     (match wm
+       ((SSym _) TSkip)
+       (_
+         (match (rxmod tbl d wm)
+           ((RXMErr m) (TFail m))
+           ((RXMOk xm)
+            (match idxs
+              ((SInt ix)
+               (match (xfunc_at (xfuncs_of xm) ix)
+                 (None
+                   (TFail "claim index has no function in the reflected module"))
+                 ((Some f)
+                  (match (tie_name name)
+                    (None TSkip)
+                    ((Some nm)
+                     (TLine
+                       (append_int
+                         "TIE "
+                         (append_int
+                           nm
+                           (append_int
+                             " "
+                             (append_int (hexs (enc_func f)) (nl)))))))))))
+              (_ (TFail "function index is not a literal"))))))))
+    (_ (TFail "call application is missing slots"))))
+
 (fn tie_of
   ((tbl (List (Pair Symbol SExpr))) (d Int) (name Symbol) (goal_form SExpr))
   TRes
@@ -299,7 +521,10 @@
     ((SList (Cons g (Cons _ (Cons _ (Cons concl Nil)))))
      (if (is_sym g (quote goal))
        (match (find_call concl)
-         (None (TFail "no call application in the conclusion"))
+         (None
+           (match (find_xcall concl)
+             (None (TFail "no call application in the conclusion"))
+             ((Some items) (xtie_of tbl d name items))))
          ((Some items)
           (match items
             ((Cons _ (Cons _ (Cons wm _)))

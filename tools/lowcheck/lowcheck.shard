@@ -95,6 +95,22 @@
           (has_bind rest name tyname)))
        (_ (has_bind rest name tyname))))))
 
+;; binder list contains (restfs (List XFunc))? — the x86 linking provision
+(fn has_restfs_x ((bs (List SExpr))) Bool
+  (measure (struct bs))
+  (match bs
+    (Nil False)
+    ((Cons b rest)
+     (match b
+       ((SList (Cons n (Cons ty Nil)))
+        (if (is_sym n (quote restfs))
+          (match ty
+            ((SList (Cons lh (Cons le2 Nil)))
+             (if (is_sym lh (quote List)) (is_sym le2 (quote XFunc)) False))
+            (_ False))
+          (has_restfs_x rest)))
+       (_ (has_restfs_x rest))))))
+
 ;; binder list contains (restm (List Func))?
 (fn has_restm ((bs (List SExpr))) Bool
   (measure (struct bs))
@@ -202,6 +218,48 @@
     ((SInt _) True)
     (_ False)))
 
+;; ---- the x86 structural form (docs/X86.md §11) -------------------------------------
+
+;; a chain element: a (MkXFunc …) literal, directly or through (inline NAME)
+(fn elem_mkxfunc ((tbl (List (Pair Symbol SExpr))) (f SExpr)) Bool
+  (match f
+    ((SList (Cons fh args))
+     (if (is_sym fh (quote MkXFunc)) True
+     (if (is_sym fh (quote inline))
+       (match args
+         ((Cons (SSym n) Nil)
+          (match (inl_lookup tbl n)
+            ((Some body)
+             (match body
+               ((SList (Cons bh _)) (is_sym bh (quote MkXFunc)))
+               (_ False)))
+            (None False)))
+         (_ False))
+       False)))
+    (_ False)))
+
+;; module chain: Cons-pinned (MkXFunc …) prefix ending in the restfs symbol
+(fn xchain_ok ((tbl (List (Pair Symbol SExpr))) (s SExpr)) Bool
+  (measure (struct s))
+  (match s
+    ((SSym x) (sym_eq x (quote restfs)))
+    ((SList (Cons h (Cons f (Cons tail Nil))))
+     (if (is_sym h (quote Cons))
+       (if (elem_mkxfunc tbl f) (xchain_ok tbl tail) False)
+       False))
+    (_ False)))
+
+;; module slot: (MkXModule CHAIN MEMSIZE-literal)
+(fn xm_ok ((tbl (List (Pair Symbol SExpr))) (s SExpr)) Bool
+  (match s
+    ((SList (Cons h (Cons chain (Cons msz Nil))))
+     (if (is_sym h (quote MkXModule))
+       (match msz
+         ((SInt _) (xchain_ok tbl chain))
+         (_ False))
+       False))
+    (_ False)))
+
 ;; ---- per-claim verdict ------------------------------------------------------------
 
 ;; the PORTABLE form: abstract module binder, spine premise, restm tail
@@ -221,9 +279,27 @@
       "no (restm (List Func)) binder — the portable linking provision is missing")
     "module is abstract but there is no (m WModule) binder"))
 
-;; validate the conclusion (= LHS RHS), classifying by the module slot:
-;; MkWModule literal = the STRUCTURAL (linked/leaf) form; the symbol m =
-;; the PORTABLE form (callee slots abstract, behavior premises)
+;; the x86 STRUCTURAL verdict: xcall_fn / xcall_fn_mem, (MkXModule …)
+;; literal chain ending in restfs, literal index. No portable form exists
+;; for x86 yet — an abstract module slot is nonconforming.
+(fn xitems_verdict
+  ((tbl (List (Pair Symbol SExpr))) (bs (List SExpr)) (items (List SExpr)))
+  (List Int)
+  (match items
+    ((Cons _ (Cons fuel (Cons wm (Cons idx _))))
+     (if (fuel_ok fuel)
+       (if (has_restfs_x bs)
+         (if (xm_ok tbl wm)
+           (if (idx_ok idx) "" "function index is not a literal")
+           "module is not (MkXModule (Cons (MkXFunc ...) ... restfs) LITERAL)")
+         "no (restfs (List XFunc)) binder — the linking provision is missing")
+       "fuel is not (S^ N BASE) with the slack c in BASE"))
+    (_ "call application is missing slots")))
+
+;; validate the conclusion (= LHS RHS), classifying by the call head and
+;; the module slot: call_fn/call_fn_mem = wasm (MkWModule literal =
+;; STRUCTURAL linked/leaf form; the symbol m = PORTABLE form);
+;; xcall_fn/xcall_fn_mem = the x86 structural form
 (fn concl_verdict
   ((tbl (List (Pair Symbol SExpr)))
    (bs (List SExpr))
@@ -234,7 +310,11 @@
     ((SList (Cons eq (Cons lhs (Cons _ Nil))))
      (if (is_sym eq (quote =))
        (match (find_call lhs)
-         (None "no call_fn / call_fn_mem application in the conclusion LHS")
+         (None
+           (match (find_xcall lhs)
+             (None
+               "no call_fn / call_fn_mem / xcall_fn_mem application in the conclusion LHS")
+             ((Some items) (xitems_verdict tbl bs items))))
          ((Some items)
           (match items
             ((Cons _ (Cons fuel (Cons wm (Cons idx _))))

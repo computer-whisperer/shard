@@ -1,0 +1,534 @@
+;;; x86gen — the certifying x86_64 emitter (docs/X86.md §11): the
+;;; STRAIGHT-LINE fragment. For every fn in the target file whose body is
+;;; arithmetic over Int params (+ - * band bor bxor), literals in
+;;; [0, 2^31) (the encoder's imm32 fence), and single-binding lets, emit:
+;;;   - the XFunc literal (two-operand register code against the SysV
+;;;     argument homes; emitter-time register allocation, docs/X86.md
+;;;     §4.1 — the generator is untrusted, the cert speaks about the
+;;;     ALLOCATED program), and
+;;;   - the standard lowered-conformance claim (docs/LOWERING.md §2 at
+;;;     the xcall_fn_mem boundary) with its full machine-written proof:
+;;;     compute lhs + unfold/ζ-reduce SPEC rhs, then per unique arith
+;;;     node a named have citing wrap64_id once + an all-occurrences
+;;;     rewrite (the wasm pure fragment's chain, modulus 2^64; bitwise
+;;;     nodes are transparent and claim nothing, the §6z discipline).
+;;;
+;;; REGISTER ALLOCATION (the piece wasm never needed): values live in
+;;; registers, allocation is STACK-SHAPED — the temp pool is a fixed
+;;; register sequence and the walk threads a next-free INDEX exactly the
+;;; way the wasm walk threads its next-local counter. Params stay pinned
+;;; in their SysV homes (rdi rsi rdx rcx r8 r9 — never written; XBin dst
+;;; is always a pool register); the pool is the CALLER-SAVED file first
+;;; (rax r10 r11) then the UNUSED argument homes (r9 r8 rcx rdx rsi rdi
+;;; as param count permits) — callee-saved registers are never touched,
+;;; so a generated piece's clobber story stays SysV-clean by
+;;; construction. A binary op materializes its LEFT operand into the
+;;; next pool register (two-operand ops destroy dst), takes its RIGHT
+;;; operand in place (register or immediate source), and frees
+;;; everything above the result. Let bindings hold their register until
+;;; scope exit (binding reg = its stack slot). No spills in v1
+;;; (docs/X86.md §5): pool exhaustion is a loud refusal.
+;;;
+;;; THE CONTRACT (lower.shard's): front end is the KERNEL'S by library
+;;; import; refuse, don't guess — any body outside the fragment is a
+;;; loud per-fn error and exit 1. No ifs yet (relational Cond growth in
+;;; the model arrives with the if fragment); no ediv/mod (x86 div is a
+;;; compound rdx:rax op, a §5 named growth path); no Mem params (the
+;;; mem fragment follows the call arc); at most six Int params.
+;;;
+;;; TWO WALKS, TWO CONCERNS (the wasm let design, docs/LOWERING.md §6):
+;;; code is emitted from the ORIGINAL let tree (sharing preserved — a
+;;; binding is computed once into its register); premises/citations come
+;;; from the ζ-SUBSTITUTED body (the kernel opens lets by substitution,
+;;; so the compute residue's mod-sites are the substituted tree's arith
+;;; nodes, deduped by spelling).
+;;;
+;;; THE KIT: tools/low/doc.shard (documents) and tools/low/schema.shard
+;;; (canonical-expr spelling, binder envs, node sets, type predicates,
+;;; binder/arg printers) import UNCHANGED — the front/back split
+;;; (docs/LOWERING.md §6ae) doing its job; this file is the x86 BACK
+;;; END: the register walk, claim assembly, proof emission, module walk,
+;;; and CLI. (tools/lowergen is the wasm back end, same shape.)
+;;;
+;;; RUN IT:  bin/shard_eval run tools/x86gen/x86gen.shard SRC OUT.raw
+;;;          then shardfmt OUT.raw -> the committed cert file.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/loader.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/reader.shard")
+(import "../low/doc.shard")
+(import "../low/schema.shard")
+
+(use (:: kernel loader resolve_closure))
+(use (:: kernel loader World))
+(use (:: kernel loader get_args))
+(use (:: kernel loader write))
+(use (:: kernel loader write_file))
+(use (:: kernel loader exit))
+(use (:: kernel term Expr))
+(use (:: kernel term FVar))
+(use (:: kernel term BVar))
+(use (:: kernel term Call))
+(use (:: kernel term Let))
+(use (:: kernel term IntLit))
+(use (:: kernel term QName))
+(use (:: kernel term qn_name))
+(use (:: kernel term core_named))
+(use (:: kernel term append_int))
+(use (:: kernel module Module))
+(use (:: kernel module FnDef))
+(use (:: kernel module Type))
+(use (:: kernel module FnTrie))
+(use (:: kernel reader build_module_d))
+(use (:: kernel reader BMOk))
+(use (:: kernel reader BMFail))
+(use (:: tools low doc *))
+(use (:: tools low schema *))
+
+;; ---- the register file at the meta level ---------------------------------------
+;;
+;; Registers are TEXT here (the emitter writes source); the model's Reg
+;; ctors are spelled, never constructed.
+
+;; SysV argument home of param k (k < 6, checked at the fn gate)
+(fn xhome ((k Int)) Doc
+  (if (int_eq k 0) (DStr "RDI")
+  (if (int_eq k 1) (DStr "RSI")
+  (if (int_eq k 2) (DStr "RDX")
+  (if (int_eq k 3) (DStr "RCX")
+  (if (int_eq k 4) (DStr "R8")
+  (DStr "R9")))))))
+
+;; temp-pool candidates in allocation order, each with the param index
+;; that claims it as a home (-1 = never a home). Caller-saved scratch
+;; first, then unused argument homes, last-home first.
+(fn xcands () (List (Pair (List Int) Int))
+  (list
+    (Pair "RAX" (- 0 1))
+    (Pair "R10" (- 0 1))
+    (Pair "R11" (- 0 1))
+    (Pair "R9" 5)
+    (Pair "R8" 4)
+    (Pair "RCX" 3)
+    (Pair "RDX" 2)
+    (Pair "RSI" 1)
+    (Pair "RDI" 0)))
+
+;; the k-th pool register for a fn with n params (None = pool exhausted).
+;; Pool slot 0 is ALWAYS rax (the result home) — the root walk relies on
+;; it (result index 0 needs no final mov).
+(fn xpool_go ((cs (List (Pair (List Int) Int))) (n Int) (k Int))
+  (Option (List Int))
+  (measure (struct cs))
+  (match cs
+    (Nil None)
+    ((Cons c t)
+     (match c
+       ((Pair nm claim)
+        (if (if (lt claim 0) True (le n claim))
+          (if (int_eq k 0) (Some nm) (xpool_go t n (- k 1)))
+          (xpool_go t n k)))))))
+
+(fn xreg_at ((n Int) (k Int)) (Option Doc)
+  (match (xpool_go (xcands) n k)
+    (None None)
+    ((Some nm) (Some (DStr nm)))))
+
+;; ---- instruction and operand spellings ------------------------------------------
+
+(fn xi_movrr ((d Doc) (s Doc)) Doc
+  (dconc (list (DStr "(XMovRR ") d (sp) s (DStr ")"))))
+
+(fn xi_movri ((d Doc) (v Int)) Doc
+  (dconc (list (DStr "(XMovRI ") d (sp) (dint v) (DStr ")"))))
+
+(fn xi_bin ((o Doc) (d Doc) (s Doc)) Doc
+  (dconc (list (DStr "(XBin ") o (sp) d (sp) s (DStr ")"))))
+
+(fn xs_reg ((r Doc)) Doc (dcat3 (DStr "(SReg ") r (DStr ")")))
+
+(fn xs_imm ((v Int)) Doc (dcat3 (DStr "(SImm ") (dint v) (DStr ")")))
+
+;; ---- target vocabulary -----------------------------------------------------------
+
+;; the WRAP ops (xbop_val wraps at 2^64: each node claims a premise pair
+;; and a wrap64_id citation)
+(fn xbop_of ((q QName)) (Option Doc)
+  (if (core_named q (quote +)) (Some (DStr "XAdd"))
+  (if (core_named q (quote -)) (Some (DStr "XSub"))
+  (if (core_named q (quote *)) (Some (DStr "XMul"))
+  None))))
+
+;; the TRANSPARENT bitwise ops (xbop_val applies the prims directly —
+;; total, no wrap; no premise, no discharge, docs/LOWERING.md §6z)
+(fn xtop_of ((q QName)) (Option Doc)
+  (if (core_named q (quote band)) (Some (DStr "XAnd"))
+  (if (core_named q (quote bor)) (Some (DStr "XOr"))
+  (if (core_named q (quote bxor)) (Some (DStr "XXor"))
+  None))))
+
+;; either table
+(fn xop_of ((q QName)) (Option Doc)
+  (match (xbop_of q)
+    ((Some d) (Some d))
+    (None (xtop_of q))))
+
+;; ---- the value walk --------------------------------------------------------------
+
+;; operand view of an ATOM: a param reads from its SysV home, a let-bound
+;; name from its pool register, a literal is an immediate. XONo = not an
+;; atom (evaluate it); XOBad = a loud fragment refusal.
+(type XO (XOReg Doc Expr) (XOImm Int Expr) (XONo) (XOBad (List Int)))
+
+(fn xoper ((n Int) (env (List (Pair Expr Int))) (e Expr)) XO
+  (match e
+    ((BVar i)
+     (match (env_at env i)
+       ((Some (Pair ce k))
+        (match (xreg_at n k)
+          ((Some r) (XOReg r ce))
+          (None (XOBad "register pool exhausted (no spills in v1)"))))
+       (None
+         (let ((pos (- (- n 1) (- i (env_len env)))))
+           (XOReg (xhome pos) (FVar (xsym pos)))))))
+    ((IntLit v)
+     (if (le 0 v)
+       (if (lt v 2147483648) (XOImm v e)
+       (XOBad "literal outside [0, 2^31) (the imm32 fence)"))
+       (XOBad "literal outside [0, 2^31) (the imm32 fence)")))
+    (_ XONo)))
+
+;; walk result: instr docs (emission order), instr count, next free pool
+;; index, RESULT pool index, canonical substituted expr
+(type XG (XGOk (List Doc) Int Int Int Expr) (XGErr (List Int)))
+
+;; assemble a binary node once both sides are placed: the canonical node,
+;; the ground-subtree gate, the XBin, and the frees (everything above the
+;; result index is dead — including any let registers internal to the
+;; operands, which are out of scope the moment the node completes).
+(fn xg_fin
+  ((q QName)
+   (cea Expr)
+   (ceb Expr)
+   (ia (List Doc))
+   (ib (List Doc))
+   (od Doc)
+   (t Doc)
+   (src Doc)
+   (ca Int)
+   (cb Int)
+   (ra Int))
+  XG
+  (let ((ce (Call q (Cons cea (Cons ceb Nil)))))
+    (if (has_fv ce)
+      (XGOk
+        (dapp ia (dapp ib (Cons (xi_bin od t src) Nil)))
+        (+ ca (+ cb 1))
+        (+ ra 1)
+        ra
+        ce)
+      (XGErr "ground arithmetic subtree (constant-fold it in the source)"))))
+
+;; the walk. Atoms MATERIALIZE (an atom reached here is a left operand, a
+;; let rhs, or a let body — all need a register); operand-position atoms
+;; are peeled by xoper before recursion.
+(fn xg_v ((n Int) (env (List (Pair Expr Int))) (nxt Int) (e Expr)) XG
+  (measure (struct e))
+  (match e
+    ((BVar i)
+     (match (xoper n env e)
+       ((XOReg r ce)
+        (match (xreg_at n nxt)
+          (None (XGErr "register pool exhausted (no spills in v1)"))
+          ((Some t) (XGOk (Cons (xi_movrr t r) Nil) 1 (+ nxt 1) nxt ce))))
+       ((XOBad m) (XGErr m))
+       (_ (XGErr "unbound variable"))))
+    ((IntLit v)
+     (match (xoper n env e)
+       ((XOImm v2 ce)
+        (match (xreg_at n nxt)
+          (None (XGErr "register pool exhausted (no spills in v1)"))
+          ((Some t) (XGOk (Cons (xi_movri t v2) Nil) 1 (+ nxt 1) nxt ce))))
+       ((XOBad m) (XGErr m))
+       (_ (XGErr "unreachable literal shape"))))
+    ((Call q as)
+     (match as
+       ((Cons a (Cons b Nil))
+        (match (xop_of q)
+          (None
+            (XGErr
+              "call outside the fragment (only + - * band bor bxor allowed)"))
+          ((Some od)
+           (match (xg_v n env nxt a)
+             ((XGErr m) (XGErr m))
+             ((XGOk ia ca nxa ra cea)
+              (match (xreg_at n ra)
+                (None (XGErr "register pool exhausted (no spills in v1)"))
+                ((Some t)
+                 (match (xoper n env b)
+                   ((XOBad m) (XGErr m))
+                   ((XOReg rb ceb)
+                    (xg_fin q cea ceb ia Nil od t (xs_reg rb) ca 0 ra))
+                   ((XOImm v ceb)
+                    (xg_fin q cea ceb ia Nil od t (xs_imm v) ca 0 ra))
+                   (XONo
+                     (match (xg_v n env nxa b)
+                       ((XGErr m) (XGErr m))
+                       ((XGOk ib cb nxb rb ceb)
+                        (match (xreg_at n rb)
+                          (None
+                            (XGErr "register pool exhausted (no spills in v1)"))
+                          ((Some sr)
+                           (xg_fin q cea ceb ia ib od t (xs_reg sr) ca cb ra))))))))))))))
+       (_
+         (match (xop_of q)
+           (None
+             (XGErr
+               "call outside the fragment (only + - * band bor bxor allowed)"))
+           ((Some _) (XGErr "arith call must be binary"))))))
+    ((Let bs body)
+     (match bs
+       ((Cons rhs Nil)
+        (match (xg_v n env nxt rhs)
+          ((XGErr m) (XGErr m))
+          ((XGOk ir cr nxr rr cer)
+           (match (xg_v n (Cons (Pair cer rr) env) nxr body)
+             ((XGErr m) (XGErr m))
+             ((XGOk ib cb nxb rb ceb) (XGOk (dapp ir ib) (+ cr cb) nxb rb ceb))))))
+       (_ (XGErr "let must bind exactly one name (split into nested lets)"))))
+    (_ (XGErr "body outside the straight-line fragment"))))
+
+;; the root walk: the result must land in rax. A bare-atom body movs it
+;; there directly; a compound body already ends in pool slot 0 (= rax)
+;; unless live let bindings pushed it up, in which case one final mov.
+(type XT (XTOk (List Doc) Int Expr) (XTErr (List Int)))
+
+(fn xg_t ((n Int) (body Expr)) XT
+  (match (xoper n Nil body)
+    ((XOBad m) (XTErr m))
+    ((XOReg r ce) (XTOk (Cons (xi_movrr (DStr "RAX") r) Nil) 1 ce))
+    ((XOImm v ce) (XTOk (Cons (xi_movri (DStr "RAX") v) Nil) 1 ce))
+    (XONo
+      (match (xg_v n Nil 0 body)
+        ((XGErr m) (XTErr m))
+        ((XGOk is cnt nx res ce)
+         (if (int_eq res 0) (XTOk is cnt ce)
+         (match (xreg_at n res)
+           (None (XTErr "register pool exhausted (no spills in v1)"))
+           ((Some r)
+            (XTOk (dapp is (Cons (xi_movrr (DStr "RAX") r) Nil)) (+ cnt 1) ce)))))))))
+
+;; ---- premise nodes (the substituted tree's arith sites) --------------------------
+
+;; unique WRAP nodes, postorder (children before parents, so each node's
+;; spelling is already child-unwrapped at its discharge point). Bitwise
+;; nodes recurse for children but never claim a premise pair.
+(type NR (NROk (List Expr)) (NRErr (List Int)))
+
+(fn xg_nodes ((e Expr) (acc (List Expr))) NR
+  (measure (struct e))
+  (match e
+    ((Call q as)
+     (match as
+       ((Cons a (Cons b Nil))
+        (match (xg_nodes a acc)
+          ((NRErr m) (NRErr m))
+          ((NROk acc1)
+           (match (xg_nodes b acc1)
+             ((NRErr m) (NRErr m))
+             ((NROk acc2)
+              (match (xtop_of q)
+                ((Some _) (NROk acc2))
+                (None
+                  (if (has_fv e)
+                    (NROk
+                      (if (node_seen (spell e) acc2) acc2 (node_add e acc2)))
+                    (NRErr
+                      "ground arithmetic subtree (constant-fold it in the source)")))))))))
+       (_ (NRErr "arith call must be binary"))))
+    (_ (NROk acc))))
+
+;; ---- premise and proof emission ---------------------------------------------------
+
+;; one wrap premise pair per node: (le 0 E) and (lt E 2^64)
+(fn xg_prems ((ns (List Expr))) Doc
+  (measure (struct ns))
+  (match ns
+    (Nil (DStr ""))
+    ((Cons e t)
+     (dconc
+       (list
+         (DStr "(= (le 0 ")
+         (pr_e e)
+         (DStr ") True) (= (lt ")
+         (pr_e e)
+         (DStr " 18446744073709551616) True) ")
+         (xg_prems t))))))
+
+;; per node j: a named have citing wrap64_id (premises 2j / 2j+1) + the
+;; all-occurrences rewrite — the wasm pure chain at modulus 2^64
+(fn xg_haves ((ns (List Expr)) (j Int)) Doc
+  (measure (struct ns))
+  (match ns
+    (Nil (DStr ""))
+    ((Cons e t)
+     (dconc
+       (list
+         (DStr "(have w")
+         (dint j)
+         (DStr " (= (mod ")
+         (pr_e e)
+         (DStr " 18446744073709551616) ")
+         (pr_e e)
+         (DStr ") (rewrite-with (lemma wrap64_id) lr lhs ((inst x ")
+         (pr_e e)
+         (DStr ")) ((steps ((rewrite (premise ")
+         (dint (* 2 j))
+         (DStr ") lr lhs true ())) refl) (steps ((rewrite (premise ")
+         (dint (+ (* 2 j) 1))
+         (DStr ") lr lhs true ())) refl)) refl)) (steps ((rewrite (premise w")
+         (dint j)
+         (DStr ") lr lhs true ()))) ")
+         (xg_haves t (+ j 1)))))))
+
+;; ---- claim assembly ---------------------------------------------------------------
+
+(type XCR (XCOk Doc) (XCErr (List Int)))
+
+(fn xerr_at ((q QName) (m (List Int))) XCR
+  (XCErr (append_int (chars_of_sym (qn_name q)) (append_int ": " m))))
+
+(fn xg_claim ((f FnDef)) XCR
+  (match f
+    ((FnDef q ts rty body)
+     (if (all_int ts)
+       (if (is_int_ty rty)
+         (if (le (count_ts ts) 6)
+           (match (xg_t (count_ts ts) body)
+             ((XTErr m) (xerr_at q m))
+             ((XTOk code cnt ce)
+              (match (xg_nodes ce Nil)
+                ((NRErr m) (xerr_at q m))
+                ((NROk ns)
+                 (XCOk
+                   (dconc
+                     (list
+                       (DStr "(claim lowered_")
+                       (dsym (qn_name q))
+                       (DStr " (goal (")
+                       (pr_binds ts 0)
+                       (DStr "(c Nat) (restfs (List XFunc)) (mem Mem)) (")
+                       (xg_prems ns)
+                       (DStr ") (= (xcall_fn_mem (S^ ")
+                       (dint (+ cnt 4))
+                       (DStr " c) (MkXModule (Cons (MkXFunc ")
+                       (dint (count_ts ts))
+                       (DStr " (list ")
+                       (djoin code)
+                       (DStr ")) restfs) 0) 0 (list ")
+                       (pr_args ts 0)
+                       (DStr ") mem) (Some (Pair (")
+                       (dsym (qn_name q))
+                       (pr_args_lead ts)
+                       (DStr ") mem)))) (chain (steps ((compute lhs) (unfold ")
+                       (dsym (qn_name q))
+                       (DStr " rhs) (reduce rhs))) ")
+                       (xg_haves ns 0)
+                       (DStr "refl))")
+                       (DStr (nl)))))))))
+           (xerr_at
+             q
+             "more than six Int params (SysV register homes only in v1)"))
+         (xerr_at q "return type is not Int"))
+       (xerr_at q "params are not all Int")))))
+
+;; ---- module walk ------------------------------------------------------------------
+
+(type XER (XEOk Doc) (XEErr (List Int)))
+
+(fn xg_fns ((fns (List FnDef)) (modpath (List Symbol)) (acc Doc)) XER
+  (measure (struct fns))
+  (match fns
+    (Nil (XEOk acc))
+    ((Cons f rest)
+     (match f
+       ((FnDef q _ _ _)
+        (match q
+          ((QName mp _)
+           (if (sym_list_eq mp modpath)
+             (match (xg_claim f)
+               ((XCErr m) (XEErr m))
+               ((XCOk d) (xg_fns rest modpath (DCat acc (DCat (DStr (nl)) d)))))
+             (xg_fns rest modpath acc)))))))))
+
+(fn xg_header ((target (List Int))) Doc
+  (dconc
+    (list
+      (DStr
+        ";;; GENERATED by tools/x86gen (the certifying x86_64 emitter, straight-line fragment) --")
+      (DStr (nl))
+      (DStr ";;; DO NOT EDIT; regenerate from ")
+      (DStr target)
+      (DStr (append_int "." (nl)))
+      (dimport (append_int (updots target) "kernel/stdlib.shard"))
+      (dimport (append_int (updots target) "models/x86/x86.shard"))
+      (dimport (basename_go target Nil))
+      (DStr (append_int "(use (:: models x86 x86 *))" (nl)))
+      (DStr (append_int "(use (:: std mem *))" (nl)))
+      (DStr "(use (:: ")
+      (pr_modpath (split_slash (until_dot target) Nil))
+      (DStr (append_int " *))" (nl))))))
+
+;; ---- driver -----------------------------------------------------------------------
+
+(fn prelude_ctors_l () (List Symbol)
+  (list
+    (quote Cons)
+    (quote Nil)
+    (quote Some)
+    (quote None)
+    (quote True)
+    (quote False)
+    (quote Pair)))
+
+(fn xfail ((msg (List Int)) (w World)) World
+  (exit 2 (write (append_int "error: " (append_int msg (nl))) w)))
+
+(fn xgen_run ((target (List Int)) (out (List Int)) (w World)) World
+  (match (resolve_closure target True w)
+    ((Pair Nil w1) (xfail (append_int "cannot read closure of " target) w1))
+    ((Pair srcs w1)
+     (match
+       (build_module_d
+         srcs
+         (Module Nil Nil Nil (FnTrie None Nil) Nil)
+         (prelude_ctors_l)
+         1)
+       ((BMFail diag) (xfail diag w1))
+       ((BMOk m)
+        (match m
+          ((Module _ fns _ _ _)
+           (match (xg_fns fns (split_slash (until_dot target) Nil) (DStr ""))
+             ((XEErr msg)
+              (exit 1 (write (append_int "refused: " (append_int msg (nl))) w1)))
+             ((XEOk body)
+              (match
+                (write_file
+                  out
+                  (doc_flat (DCat (xg_header target) body) Nil)
+                  w1)
+                ((Pair ok w2)
+                 (if ok
+                   (exit
+                     0
+                     (write (append_int "wrote " (append_int out (nl))) w2))
+                   (xfail (append_int "cannot write " out) w2)))))))))))))
+
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Pair args w1)
+     (match args
+       ((Cons target (Cons out Nil)) (xgen_run target out w1))
+       (_ (xfail "usage: x86gen SRC OUT" w1))))))

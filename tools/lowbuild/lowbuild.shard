@@ -267,26 +267,143 @@
     ((Cons m rest) (append_int (mod_lines m) (plan_lines rest)))))
 
 ;; ---------------------------------------------------------------------------
+;; rendering — the x86 wire grammar (examples/x86_diff.c's plan reader)
+;; ---------------------------------------------------------------------------
+;; XMOD <name> <hex>
+;; XCASE <name> <argc> <a0> <a1> <a2> -> <exp>
+;; Integers are 16-char little-endian hex, exactly three padded arg slots.
+;; ARTIFACT lines render the same as wasm's (the manifest gate reads them;
+;; the build script filters them out of the CPU replayer's copy). Memory
+;; vectors and exports beyond f0 have no x86 grammar yet — a plan carrying
+;; them under the x86 ISA is a loud refusal (the mem-fragment build slice
+;; owns that growth).
+
+;; low 8 bytes of (n mod 2^64), little-endian
+(fn le8b ((n Int)) (List Int)
+  (let ((u (mod n 18446744073709551616)))
+    (list
+      (mod u 256)
+      (mod (ediv u 256) 256)
+      (mod (ediv u 65536) 256)
+      (mod (ediv u 16777216) 256)
+      (mod (ediv u 4294967296) 256)
+      (mod (ediv u 1099511627776) 256)
+      (mod (ediv u 281474976710656) 256)
+      (mod (ediv u 72057594037927936) 256))))
+
+(fn hx ((v Int)) (List Int) (hexs (le8b v)))
+
+(fn xargc ((xs (List Int))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons _ t) (+ 1 (xargc t)))))
+
+;; three padded arg slots, each preceded by one space
+(fn xslots ((args (List Int))) (List Int)
+  (match args
+    (Nil (cat (list " " (hx 0) " " (hx 0) " " (hx 0))))
+    ((Cons a0 t0)
+     (match t0
+       (Nil (cat (list " " (hx a0) " " (hx 0) " " (hx 0))))
+       ((Cons a1 t1)
+        (match t1
+          (Nil (cat (list " " (hx a0) " " (hx a1) " " (hx 0))))
+          ((Cons a2 t2) (cat (list " " (hx a0) " " (hx a1) " " (hx a2))))))))))
+
+(fn xvec_line ((nm (List Int)) (v PVec)) (Option (List Int))
+  (match v
+    ((PV k args mem want memout)
+     (match mem
+       (Nil
+         (if (int_eq k 0)
+           (if (le (xargc args) 3)
+             (Some
+               (cat
+                 (list
+                   "XCASE "
+                   nm
+                   " "
+                   (show_int (xargc args))
+                   (xslots args)
+                   " -> "
+                   (hx want)
+                   "\n")))
+             None)
+           None))
+       (_ None)))))
+
+(fn xvec_lines ((nm (List Int)) (vs (List PVec))) (Option (List Int))
+  (measure (struct vs))
+  (match vs
+    (Nil (Some ""))
+    ((Cons v rest)
+     (match (xvec_line nm v)
+       (None None)
+       ((Some l)
+        (match (xvec_lines nm rest)
+          (None None)
+          ((Some ls) (Some (append_int l ls)))))))))
+
+(fn xmod_lines ((pm PMod)) (Option (List Int))
+  (match pm
+    ((PM nm bytes arts vecs)
+     (match (xvec_lines nm vecs)
+       (None None)
+       ((Some vls)
+        (Some
+          (cat (list (art_lines arts) "XMOD " nm " " (hexs bytes) "\n" vls))))))))
+
+(fn xplan_lines ((ms (List PMod))) (Option (List Int))
+  (measure (struct ms))
+  (match ms
+    (Nil (Some ""))
+    ((Cons m rest)
+     (match (xmod_lines m)
+       (None None)
+       ((Some ls)
+        (match (xplan_lines rest)
+          (None None)
+          ((Some rls) (Some (append_int ls rls)))))))))
+
+;; ---------------------------------------------------------------------------
 ;; the driver
 ;; ---------------------------------------------------------------------------
 
 (fn fail ((msg (List Int)) (w World)) World
   (exit 1 (write (append_int "lowbuild: " (append_int msg "\n")) w)))
 
-;; v1 compile-context: the values every current build hardcoded
-(fn target_val ((tq QName)) Expr
-  (Ctor
-    tq
-    (Cons (SymLit (quote wasm)) (Cons (IntLit 65536) (Cons (IntLit 32) Nil)))))
+(fn ceq ((a (List Int)) (b (List Int))) Bool
+  (measure (struct a))
+  (match a
+    (Nil
+      (match b
+        (Nil True)
+        (_ False)))
+    ((Cons x xs)
+     (match b
+       (Nil False)
+       ((Cons y ys) (if (int_eq x y) (ceq xs ys) False))))))
 
-(fn drive ((m Module) (w World)) World
+;; the compile-context per ISA: wasm = the v1 defaults every build
+;; hardcoded; x86 = 64-bit values, same declared memory limit
+(fn target_val ((tq QName) (xisa Bool)) Expr
+  (if xisa
+    (Ctor
+      tq
+      (Cons (SymLit (quote x86)) (Cons (IntLit 65536) (Cons (IntLit 64) Nil))))
+    (Ctor
+      tq
+      (Cons (SymLit (quote wasm)) (Cons (IntLit 65536) (Cons (IntLit 32) Nil))))))
+
+(fn drive ((m Module) (xisa Bool) (w World)) World
   (match (ctor_qn m (quote MkTarget))
     (None
       (fail
         "loaded closure has no Target vocabulary (meta/plan not imported?)"
         w))
     ((Some tq)
-     (match (invoke m (quote build) (Cons (target_val tq) Nil))
+     (match (invoke m (quote build) (Cons (target_val tq xisa) Nil))
        (None (fail "no unique `build` fn in the loaded closure" w))
        ((Some pv)
         (match (dc_plan pv)
@@ -294,16 +411,30 @@
             (fail
               "build's result does not decode as a Plan (stuck term or shape mismatch)"
               w))
-          ((Some mods) (exit 0 (write (plan_lines mods) w)))))))))
+          ((Some mods)
+           (if xisa
+             (match (xplan_lines mods)
+               (None
+                 (fail
+                   "x86 plan outside the XCASE grammar (memory vector, >3 args, or nonzero export)"
+                   w))
+               ((Some ls) (exit 0 (write ls w))))
+             (exit 0 (write (plan_lines mods) w))))))))))
+
+(fn run_isa ((bpath (List Int)) (xisa Bool) (w World)) World
+  (match (load_run_module bpath w)
+    ((Pair om w2)
+     (match om
+       (None (fail "could not load/parse the mod.build closure" w2))
+       ((Some m) (drive m xisa w2))))))
 
 (fn main ((w World)) World
   (match (get_args w)
     ((Pair args w1)
      (match args
-       ((Cons bpath _)
-        (match (load_run_module bpath w1)
-          ((Pair om w2)
-           (match om
-             (None (fail "could not load/parse the mod.build closure" w2))
-             ((Some m) (drive m w2))))))
-       (_ (fail "usage: lowbuild <mod.build path>" w1))))))
+       ((Cons bpath Nil) (run_isa bpath False w1))
+       ((Cons bpath (Cons isa Nil))
+        (if (ceq isa "wasm") (run_isa bpath False w1)
+        (if (ceq isa "x86") (run_isa bpath True w1)
+        (fail "unknown ISA (wasm | x86)" w1))))
+       (_ (fail "usage: lowbuild <mod.build path> [wasm | x86]" w1))))))
