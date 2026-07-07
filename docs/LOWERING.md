@@ -1671,6 +1671,43 @@ arcs draw from.
    arm values for flag loops (1/0 are pinned by the BEq-bit encoding),
    write-then-read inside LOOP iterations, stride ≠ 1 on
    Int-return/dec accums, read-returning/multi-call loop callees.
+8. NAMED SLICE (2026-07-07, no consumer yet): the WORD fragment —
+   lowering `std/word`-style modular types. Today both back ends
+   accept only Int (+ Mem) and bridge unbounded spec arithmetic to
+   wrapping hardware by the per-node premise pair + wrap_id collapse
+   (§2, §6j). Word-typed code is the fragment where the machine op IS
+   the source semantics (`u32_add a b` = `mod (+ a b) 2^32` = exactly
+   `i32.add`), so the slice is PREMISE-FREE: no wrap pairs, no wrap_id
+   events — the proof cites the surface defining equations
+   (`u32_add_val` …) instead, never piercing the opaque type. The
+   natural first consumer is std/rng's xorshift32. Width mismatches
+   are the only real content: U32-on-wasm is 1:1; U32-on-x86 wants the
+   encoder's 32-bit operand forms (non-REX.W `add` wraps at 2^32
+   natively); U8/U16 anywhere = mask-after-op, which the `mod 256`
+   spelling matches directly; x86 wants a U64 added to std/word.
+9. DIRECTION (user, 2026-07-07): the FLAGSHIP lowering target once the
+   x86 pipeline is operational is kernel/eval.shard itself — the
+   certifying pipeline replacing the temporary native chain on its own
+   interpreter. Kernel code cannot consume std/word's opaque
+   rep-switching (layering: kernel is the trust floor), so the scalar
+   plan is to grow the kernel's inner stdlib with PRIVATE u8/u32/u64
+   built on the invariant refinement structure (`(refine BASE PRED)`):
+   range invariants carried by the TYPE discharge the wrap premises at
+   the source level, once, instead of riding every artifact cert as
+   PREs — the lowering pipeline then picks hardware types for
+   refinement-typed bindings directly. Distinct from item 8's modular
+   Word semantics (wrap-by-definition, for code that WANTS wrapping):
+   refined bounded Ints keep ordinary Int arithmetic + bounds, which is
+   what interpreter code (fuel, indices, char codes, lengths) actually
+   is. The refinements do not close under arithmetic (u32+u32 can
+   exceed 2^32), so ops on refined types carry fit obligations
+   discharged from the source invariant at construction sites — the
+   measure-clause discipline's shape. Zero new kernel machinery:
+   (refine …) exists; the types + op surface + law family are ordinary
+   definitions (the std/bits precedent). If eval.shard's scalar
+   traffic can be reasonably limited to those types, the scalar half
+   of the flagship lowers neatly; the aggregate half (Expr trees,
+   tries, allocation) stays with the uniform-rep arc (items 2/5/6).
 
 ## 8. The model-authoring contract — what a target ISA model provides
 
