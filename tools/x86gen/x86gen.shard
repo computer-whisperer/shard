@@ -1,8 +1,11 @@
-;;; x86gen — the certifying x86_64 emitter (docs/X86.md §11-§13): the
-;;; pure fragment. For every fn in the target file whose body is
-;;; arithmetic over Int params (+ - * band bor bxor), literals in
-;;; [0, 2^31) (the encoder's imm32 fence), single-binding lets, and
-;;; tail-position ifs (int_eq/lt/le fused conditions, §12), emit:
+;;; x86gen — the certifying x86_64 emitter (docs/X86.md §11-§16): the
+;;; pure fragment (straight-line/lets/ifs), the loop fragment (§14), the
+;;; mem fragment (§15), and the call fragment (§16 — sibling calls
+;;; through GENERATED clobber-set certs). For every fn in the target
+;;; file whose body is arithmetic over Int params (+ - * band bor bxor),
+;;; literals in [0, 2^31) (the encoder's imm32 fence), single-binding
+;;; lets, and tail-position ifs (int_eq/lt/le fused conditions, §12),
+;;; emit:
 ;;;   - the XFunc literal (two-operand register code against the SysV
 ;;;     argument homes; emitter-time register allocation, docs/X86.md
 ;;;     §4.1 — the generator is untrusted, the cert speaks about the
@@ -35,8 +38,7 @@
 ;;; THE CONTRACT (lower.shard's): front end is the KERNEL'S by library
 ;;; import; refuse, don't guess — any body outside the fragment is a
 ;;; loud per-fn error and exit 1. No ediv/mod (x86 div is a compound
-;;; rdx:rax op, a §5 named growth path); no Mem params (the mem
-;;; fragment follows the call arc); at most six Int params.
+;;; rdx:rax op, a §5 named growth path); at most six Int params.
 ;;;
 ;;; TWO WALKS, TWO CONCERNS (the wasm let design, docs/LOWERING.md §6):
 ;;; code is emitted from the ORIGINAL let tree (sharing preserved — a
@@ -92,6 +94,7 @@
 (use (:: kernel reader BMFail))
 (use (:: meta doc *))
 (use (:: meta proof pw_region))
+(use (:: meta proof pw_items))
 (use (:: meta proof MkPWR))
 (use (:: meta proof WrapK))
 (use (:: meta proof MkWrapK))
@@ -111,6 +114,7 @@
 (use (:: meta shape NOk))
 (use (:: meta shape NErr))
 (use (:: meta shape fn_is_loop))
+(use (:: meta shape qn_eq))
 (use (:: meta shape lp_recognize))
 (use (:: meta shape LROk))
 (use (:: meta shape LRCall))
@@ -609,9 +613,7 @@
   (match (pw_region rt Nil Nil (dsym (qn_name q)) (wk64) 0 0 0)
     ((MkPWR proof_body prems helpers _ _ _)
      (XCOk
-       (DCat
-         helpers
-         (xg_emit_claim q ts (rt_code rt) prems fuel proof_body))))))
+       (DCat helpers (xg_emit_claim q ts (rt_code rt) prems fuel proof_body))))))
 
 ;; the if path: build the region tree (result at rl=0=rax, scratch reserved
 ;; from index 1) and hand it to the walk. Fuel is generously
@@ -909,9 +911,8 @@
   (match adv
     (Nil (DStr ""))
     ((Cons h t)
-     (if (ls_adv h)
-       (DCat (xl_hw1 i j j (+ na j)) (xl_hws t (+ i 1) (+ j 1) na))
-       (xl_hws t (+ i 1) j na)))))
+     (if (ls_adv h) (DCat (xl_hw1 i j j (+ na j)) (xl_hws t (+ i 1) (+ j 1) na))
+     (xl_hws t (+ i 1) j na)))))
 
 ;; the IH's group-A discharges: xlg_lo1 per advancing accum
 (fn xl_lo1s ((adv (List LStr)) (p Int)) Doc
@@ -1016,8 +1017,7 @@
 
 ;; the piece theorem: entry spine (outer seq / XBlock / inner seq /
 ;; XLoop = +4 over the worker), then the worker by citation
-(fn xl_thm ((nm Doc) (mids (List Type)) (n Int) (adv (List LStr)) (p4 Int))
-  Doc
+(fn xl_thm ((nm Doc) (mids (List Type)) (n Int) (adv (List LStr)) (p4 Int)) Doc
   (let ((na (xl_nadv adv)))
     (dconc
       (list
@@ -1134,7 +1134,9 @@
                          (xerr_at
                            q
                            "loop fn must return Mem (Int-return loops are named growth)"))
-                       (xerr_at q "more than five accumulators (SysV register homes only)"))
+                       (xerr_at
+                         q
+                         "more than five accumulators (SysV register homes only)"))
                      (xerr_at q "loop fn needs at least one Int accumulator")))
                  (xerr_at q "loop accumulators must all be Int")))
              (xerr_at q "loop fn's last param must be the Nat counter")))
@@ -1163,7 +1165,8 @@
 ;; the mem param is BVar n
 (fn xm_pidx ((e Expr) (n Int)) (Option Int)
   (match e
-    ((BVar i) (if (int_eq i n) None (if (le 0 (- (- n 1) i)) (Some (- (- n 1) i)) None)))
+    ((BVar i)
+     (if (int_eq i n) None (if (le 0 (- (- n 1) i)) (Some (- (- n 1) i)) None)))
     (_ None)))
 
 (fn xm_is_mem ((e Expr) (n Int)) Bool
@@ -1297,10 +1300,10 @@
             (dapp
               (xm_prologue mids 0)
               (dapp
-                (match (xm_park a) ((Some pr) (Cons (xi_movrr (DStr "RDI") pr) Nil)) (None Nil))
-                (list
-                  (DStr "(XCall 0)")
-                  (xi_bin od (DStr "RAX") (xs_imm l))))))
+                (match (xm_park a)
+                  ((Some pr) (Cons (xi_movrr (DStr "RDI") pr) Nil))
+                  (None Nil))
+                (list (DStr "(XCall 0)") (xi_bin od (DStr "RAX") (xs_imm l))))))
           (DStr "))")
           (DStr (nl))
           (DStr "(claim lowered_")
@@ -1317,25 +1320,31 @@
           (DStr ") True) (= (lt ")
           node
           (DStr " 18446744073709551616) True)) (= (xcall_fn_mem (S^ 12 c) ")
-          (xm_modpfx n
+          (xm_modpfx
+            n
             (dapp
               (xm_prologue mids 0)
               (dapp
-                (match (xm_park a) ((Some pr) (Cons (xi_movrr (DStr "RDI") pr) Nil)) (None Nil))
+                (match (xm_park a)
+                  ((Some pr) (Cons (xi_movrr (DStr "RDI") pr) Nil))
+                  (None Nil))
                 (list (DStr "(XCall 0)") (xi_bin od (DStr "RAX") (xs_imm l))))))
           (DStr " 2 (list ")
           (pr_args mids 0)
           (DStr ") m0) (Some (Pair ")
           (xm_spec nm mids)
-          (DStr " m0)))) (chain (steps ((compute lhs (stop xeval_call)))) (rewrite-with (lemma xcall_bridge) lr lhs ((inst f (inline xg_mget_f)) (inst rs2 ")
+          (DStr
+            " m0)))) (chain (steps ((compute lhs (stop xeval_call)))) (rewrite-with (lemma xcall_bridge) lr lhs ((inst f (inline xg_mget_f)) (inst rs2 ")
           (xm_regs rd (DStr "0") a n)
-          (DStr ") (inst mem2 m0)) ((steps ((compute both)) refl) (chain (rewrite-with (lemma xmget_cert) lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((rewrite (premise 1) lr lhs true ())) refl))) (steps ((compute both))) refl))) (steps ((compute lhs (stop mem_get)))) (have w0 (= (mod ")
+          (DStr
+            ") (inst mem2 m0)) ((steps ((compute both)) refl) (chain (rewrite-with (lemma xmget_cert) lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((rewrite (premise 1) lr lhs true ())) refl))) (steps ((compute both))) refl))) (steps ((compute lhs (stop mem_get)))) (have w0 (= (mod ")
           node
           (DStr " 18446744073709551616) ")
           node
           (DStr ") (rewrite-with (lemma wrap64_id) lr lhs ((inst x ")
           node
-          (DStr ")) ((steps ((rewrite (premise 2) lr lhs true ())) refl) (steps ((rewrite (premise 3) lr lhs true ())) refl)) refl)) (steps ((rewrite (premise w0) lr lhs true ()))) (steps ((unfold ")
+          (DStr
+            ")) ((steps ((rewrite (premise 2) lr lhs true ())) refl) (steps ((rewrite (premise 3) lr lhs true ())) refl)) refl)) (steps ((rewrite (premise w0) lr lhs true ()))) (steps ((unfold ")
           nm
           (DStr " rhs) (reduce rhs))) (steps ((compute both))) refl))")
           (DStr (nl)))))))
@@ -1368,9 +1377,13 @@
        (dapp
          (xm_prologue mids 0)
          (dapp
-           (match (xm_park a) ((Some pr) (Cons (xi_movrr (DStr "RDI") pr) Nil)) (None Nil))
+           (match (xm_park a)
+             ((Some pr) (Cons (xi_movrr (DStr "RDI") pr) Nil))
+             (None Nil))
            (dapp
-             (match (xm_park v) ((Some pr) (Cons (xi_movrr (DStr "RSI") pr) Nil)) (None Nil))
+             (match (xm_park v)
+               ((Some pr) (Cons (xi_movrr (DStr "RSI") pr) Nil))
+               (None Nil))
              (list (DStr "(XCall 1)")))))))
     (dconc
       (list
@@ -1395,13 +1408,15 @@
         (pr_args mids 0)
         (DStr ") m0) (Some (Pair 0 ")
         (xm_spec nm mids)
-        (DStr ")))) (chain (steps ((compute lhs (stop xeval_call)))) (rewrite-with (lemma xcall_bridge) lr lhs ((inst f (inline xg_mset_f)) (inst rs2 ")
+        (DStr
+          ")))) (chain (steps ((compute lhs (stop xeval_call)))) (rewrite-with (lemma xcall_bridge) lr lhs ((inst f (inline xg_mset_f)) (inst rs2 ")
         (xm_regs (DStr "0") (xm_xk v) a n)
         (DStr ") (inst mem2 (mem_set m0 ")
         (xm_xk a)
         (sp)
         (xm_xk v)
-        (DStr "))) ((steps ((compute both)) refl) (chain (rewrite-with (lemma xmset_cert) lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((rewrite (premise 1) lr lhs true ())) refl))) (steps ((compute both))) refl))) (steps ((unfold ")
+        (DStr
+          "))) ((steps ((compute both)) refl) (chain (rewrite-with (lemma xmset_cert) lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((rewrite (premise 1) lr lhs true ())) refl))) (steps ((compute both))) refl))) (steps ((unfold ")
         nm
         (DStr " rhs) (reduce rhs))) (steps ((compute both))) refl))")
         (DStr (nl))))))
@@ -1424,19 +1439,509 @@
                       (xerr_at
                         q
                         "Int-return mem body must be (OP (mem_get m p) LIT) — one read, one arith node (v1)")))
-                  (if (is_mem_ty rty)
-                    (match (xm_store body n)
-                      ((XMSOk a v)
-                       (XCOk (xm_store_unit (dsym (qn_name q)) rest n a v)))
-                      (XMSNo
-                        (xerr_at
-                          q
-                          "Mem-return mem body must be (mem_set m p v) — one store, param address and value (v1)")))
-                    (xerr_at q "mem fn must return Int or Mem")))
-                (xerr_at q "more than two Int params (v1 parks into r10/r11 only)"))
+                (if (is_mem_ty rty)
+                  (match (xm_store body n)
+                    ((XMSOk a v)
+                     (XCOk (xm_store_unit (dsym (qn_name q)) rest n a v)))
+                    (XMSNo
+                      (xerr_at
+                        q
+                        "Mem-return mem body must be (mem_set m p v) — one store, param address and value (v1)")))
+                  (xerr_at q "mem fn must return Int or Mem")))
+                (xerr_at
+                  q
+                  "more than two Int params (v1 parks into r10/r11 only)"))
               (xerr_at q "mem fn needs at least one Int param")))
           (xerr_at q "mem fn params must all be Int")))
        (Nil (xerr_at q "mem fn needs params"))))))
+
+;; ---- the call fragment (docs/X86.md §16): sibling calls through GENERATED
+;; clobber-set certs -----------------------------------------------------------------
+;;
+;; A source fn whose body calls an EARLIER fn of the same file lowers to
+;; marshalling + XCall against that sibling's generated function literal,
+;; and the emitter also generates the sibling's §10 CLOBBER-SET cert
+;; (xcert_* — all fifteen register fields quantified, the result record
+;; literal reading off as the clobber set). The caller's proof composes
+;; by citation exactly like the mem fragment: each call's run premise
+;; discharges by the generated cert through xcall_bridge, the callee
+;; body never computed into (xsibcall_probe.shard = the hand-play).
+;;
+;; v1 fences (loud, named growth): the callee is arity-1 Int->Int with a
+;; LEFT-SPINE body (right operands are params/literals, so the whole body
+;; writes only rax — clobber {rax} by construction, no per-register value
+;; tracking); the caller body is (F a) or (OP (F a) (F b)) against ONE
+;; callee, args params or imm32 literals, <=2 caller params (parked
+;; r10/r11, the mem fragment's convention); callers are not themselves
+;; callable (no cert is generated for a fn containing calls). A two-call
+;; body evaluates the RIGHT call first and parks its result in rcx across
+;; the left call — justified purely by the cert (rcx passes through
+;; verbatim).
+
+;; find a sibling fn by name among the already-processed defs
+(fn xc_find ((seen (List FnDef)) (q QName)) (Option FnDef)
+  (measure (struct seen))
+  (match seen
+    (Nil None)
+    ((Cons f t)
+     (match f
+       ((FnDef q2 _ _ _) (if (qn_eq q2 q) (Some f) (xc_find t q)))))))
+
+;; the head of a call expr, if it names a sibling
+(fn xc_sib_of ((e Expr) (seen (List FnDef))) (Option FnDef)
+  (match e
+    ((Call q _) (xc_find seen q))
+    (_ None)))
+
+;; dispatch: Some callee if the body is call-shaped at the top level —
+;; a bare sibling call, or a binary arith node with a sibling call as
+;; either operand (deeper sibling calls fall to the pure path's refusal)
+(fn xc_target ((body Expr) (seen (List FnDef))) (Option FnDef)
+  (match (xc_sib_of body seen)
+    ((Some f) (Some f))
+    (None
+      (match body
+        ((Call q as)
+         (match as
+           ((Cons l (Cons r Nil))
+            (match (xop_of q)
+              (None None)
+              ((Some _)
+               (match (xc_sib_of l seen)
+                 ((Some f) (Some f))
+                 (None (xc_sib_of r seen))))))
+           (_ None)))
+        (_ None)))))
+
+;; membership in the emitted-cert list
+(fn xc_certed ((cs (List Symbol)) (s Symbol)) Bool
+  (measure (struct cs))
+  (match cs
+    (Nil False)
+    ((Cons h t) (if (sym_eq h s) True (xc_certed t s)))))
+
+;; ---- the callee walk: left-spine bodies, rax-only ---------------------------------
+
+;; operand source of a callee-body atom (arity n, env empty): a param
+;; reads its SysV home, a literal is an immediate
+(fn xcb_atom_src ((e Expr) (n Int)) (Option Doc)
+  (match e
+    ((BVar i)
+     (let ((pos (- (- n 1) i)))
+       (if (le 0 pos) (if (lt pos n) (Some (xs_reg (xhome pos))) None) None)))
+    ((IntLit v)
+     (if (le 0 v) (if (lt v 2147483648) (Some (xs_imm v)) None) None))
+    (_ None)))
+
+;; materialize the spine head into rax
+(fn xcb_head ((e Expr) (n Int)) (Option Doc)
+  (match e
+    ((BVar i)
+     (let ((pos (- (- n 1) i)))
+       (if (le 0 pos)
+         (if (lt pos n) (Some (xi_movrr (DStr "RAX") (xhome pos))) None)
+         None)))
+    ((IntLit v)
+     (if (le 0 v) (if (lt v 2147483648) (Some (xi_movri (DStr "RAX") v)) None)
+     None))
+    (_ None)))
+
+;; the left-spine walk: head materializes into rax, every node is a
+;; two-operand op on rax with an atom right operand
+(type XCB (XCBOk (List Doc) Int) (XCBNo (List Int)))
+
+(fn xcb_code ((e Expr) (n Int)) XCB
+  (measure (struct e))
+  (match e
+    ((Call q as)
+     (match as
+       ((Cons l (Cons r Nil))
+        (match (xop_of q)
+          (None
+            (XCBNo
+              "callee body op outside the fragment (only + - * band bor bxor)"))
+          ((Some od)
+           (match (xcb_atom_src r n)
+             (None
+               (XCBNo
+                 "callee body must be left-spine: right operands are params or imm32 literals (v1)"))
+             ((Some src)
+              (match (xcb_code l n)
+                ((XCBNo m) (XCBNo m))
+                ((XCBOk is cnt)
+                 (XCBOk
+                   (dapp is (Cons (xi_bin od (DStr "RAX") src) Nil))
+                   (+ cnt 1)))))))))
+       (_ (XCBNo "callee arith call must be binary"))))
+    (_
+      (match (xcb_head e n)
+        ((Some i) (XCBOk (Cons i Nil) 1))
+        (None
+          (XCBNo
+            "callee body atom outside the fragment (param or imm32 literal)"))))))
+
+;; the callee body with its (single) param substituted — the caller's
+;; effective inlined expr and the source of its wrap nodes
+(fn xcb_inline ((e Expr) (arg Expr)) Expr
+  (measure (struct e))
+  (match e
+    ((BVar _) arg)
+    ((Call q (Cons l (Cons r Nil)))
+     (Call q (Cons (xcb_inline l arg) (Cons (xcb_inline r arg) Nil))))
+    (_ e)))
+
+;; the source arith op symbol (spec-side spelling)
+(fn xc_opsym ((q QName)) Doc
+  (if (core_named q (quote +)) (DStr "+")
+  (if (core_named q (quote -)) (DStr "-")
+  (if (core_named q (quote *)) (DStr "*")
+  (if (core_named q (quote band)) (DStr "band")
+  (if (core_named q (quote bor)) (DStr "bor")
+  (DStr "bxor")))))))
+
+;; the honest postorder wrap spelling of a left-spine body with the param
+;; spelled as argd (rdi for the cert, the marshalled value for an rs2).
+;; Total: shapes outside the validated fragment spell as 0 — the
+;; generator is untrusted, a wrong spelling fails the cert at check time.
+(fn xcb_spell ((e Expr) (argd Doc)) Doc
+  (measure (struct e))
+  (match e
+    ((BVar _) argd)
+    ((IntLit v) (dint v))
+    ((Call q (Cons l (Cons r Nil)))
+     (let
+       ((nd
+          (dconc
+            (list
+              (DStr "(")
+              (xc_opsym q)
+              (sp)
+              (xcb_spell l argd)
+              (sp)
+              (xcb_spell r argd)
+              (DStr ")")))))
+       (match (xbop_of q)
+         ((Some _) (dcat3 (DStr "(wrap64 ") nd (DStr ")")))
+         (None nd))))
+    (_ (DStr "0"))))
+
+;; ---- callee cert emission ---------------------------------------------------------
+
+(fn xc_gfname ((q QName)) Doc (DCat (DStr "xgf_") (dsym (qn_name q))))
+
+(fn xc_certname ((q QName)) Doc (DCat (DStr "xcert_") (dsym (qn_name q))))
+
+;; the named function literal + the §10 clobber-set cert: callee at
+;; module index 0 (restfs and msz quantified — the cert applies inside
+;; any extension), all fifteen fields quantified, result rax = the wrap
+;; spelling over the entry home, the other fourteen verbatim
+(fn xc_callee_doc ((cq QName) (ccode (List Doc)) (ccnt Int) (cbody Expr)) Doc
+  (dconc
+    (list
+      (DStr "(fn ")
+      (xc_gfname cq)
+      (DStr " () XFunc (MkXFunc 1 (list ")
+      (djoin ccode)
+      (DStr ")))")
+      (DStr (nl))
+      (DStr "(claim ")
+      (xc_certname cq)
+      (DStr
+        " (goal ((c Nat) (restfs (List XFunc)) (msz Int) (mem Mem) (rax Int) (rcx Int) (rdx Int) (rbx Int) (rbp Int) (rsi Int) (rdi Int) (r8 Int) (r9 Int) (r10 Int) (r11 Int) (r12 Int) (r13 Int) (r14 Int) (r15 Int)) () (= (xrun_regs (S^ ")
+      (dint (+ ccnt 1))
+      (DStr " c) (MkXModule (Cons (inline ")
+      (xc_gfname cq)
+      (DStr
+        ") restfs) msz) 0 (MkRegs rax rcx rdx rbx rbp rsi rdi r8 r9 r10 r11 r12 r13 r14 r15) mem) (Some (Pair (MkRegs ")
+      (xcb_spell cbody (DStr "rdi"))
+      (DStr
+        " rcx rdx rbx rbp rsi rdi r8 r9 r10 r11 r12 r13 r14 r15) mem)))) (steps ((compute both)) refl))")
+      (DStr (nl)))))
+
+;; ---- caller assembly ----------------------------------------------------------------
+
+;; a call argument: canonical expr, value spelling, marshalling instr
+(type XCA (XCAOk Expr Doc Doc) (XCANo))
+
+(fn xc_arg ((e Expr) (n Int)) XCA
+  (match e
+    ((BVar i)
+     (let ((pos (- (- n 1) i)))
+       (if (le 0 pos)
+         (if (lt pos n)
+           (match (xm_park pos)
+             ((Some pr)
+              (XCAOk (FVar (xsym pos)) (xm_xk pos) (xi_movrr (DStr "RDI") pr)))
+             (None XCANo))
+           XCANo)
+         XCANo)))
+    ((IntLit v)
+     (if (le 0 v)
+       (if (lt v 2147483648) (XCAOk e (dint v) (xi_movri (DStr "RDI") v)) XCANo)
+       XCANo))
+    (_ XCANo)))
+
+;; the 15-field register literal at a call site: rax/rcx/rdi given, rsi
+;; the surviving entry value of param 1, r10/r11 the parked params
+(fn xc_regs ((raxd Doc) (rcxd Doc) (rdid Doc) (n Int)) Doc
+  (dconc
+    (list
+      (DStr "(MkRegs ")
+      raxd
+      (sp)
+      rcxd
+      (DStr " 0 0 0 ")
+      (xm_parkval 1 n)
+      (sp)
+      rdid
+      (DStr " 0 0 ")
+      (xm_parkval 0 n)
+      (sp)
+      (xm_parkval 1 n)
+      (DStr " 0 0 0 0)"))))
+
+;; one bridge: stop at the fold, rewrite by xcall_bridge, discharge the
+;; run premise by the generated cert (no cert premises — pure callee)
+(fn xc_bridge ((cq QName) (rs2 Doc)) Doc
+  (dconc
+    (list
+      (DStr
+        "(steps ((compute lhs (stop xeval_call)))) (rewrite-with (lemma xcall_bridge) lr lhs ((inst f (inline ")
+      (xc_gfname cq)
+      (DStr ")) (inst rs2 ")
+      rs2
+      (DStr
+        ") (inst mem2 mem)) ((steps ((compute both)) refl) (chain (rewrite-with (lemma ")
+      (xc_certname cq)
+      (DStr ") lr lhs () ()) (steps ((compute both))) refl)))"))))
+
+;; the caller claim: multi-fn module literal (callee at 0, caller = the
+;; entry at 1), bridges first, then the standard wrap chain over the
+;; INLINED effective body, then the spec RHS opens (the closing compute
+;; both also opens the transparent callee spec calls)
+(fn xc_unit
+  ((q QName)
+   (ts (List Type))
+   (cq QName)
+   (code (List Doc))
+   (fuel Int)
+   (prems Doc)
+   (pf Doc)
+   (bridges Doc))
+  Doc
+  (dconc
+    (list
+      (DStr "(fn ")
+      (dsym (qn_name q))
+      (DStr "_body () (List XInstr) (list ")
+      (djoin code)
+      (DStr "))")
+      (DStr (nl))
+      (DStr "(claim lowered_")
+      (dsym (qn_name q))
+      (DStr " (goal (")
+      (pr_binds ts 0)
+      (DStr "(c Nat) (restfs (List XFunc)) (mem Mem)) (")
+      prems
+      (DStr ") (= (xcall_fn_mem (S^ ")
+      (dint fuel)
+      (DStr " c) (MkXModule (Cons (inline ")
+      (xc_gfname cq)
+      (DStr ") (Cons (MkXFunc ")
+      (dint (count_ts ts))
+      (DStr " (list ")
+      (djoin code)
+      (DStr ")) restfs)) 0) 1 (list ")
+      (pr_args ts 0)
+      (DStr ") mem) (Some (Pair (")
+      (dsym (qn_name q))
+      (pr_args_lead ts)
+      (DStr ") mem)))) (chain ")
+      bridges
+      (DStr " (steps ((compute lhs))) ")
+      pf
+      (DStr " (steps ((unfold ")
+      (dsym (qn_name q))
+      (DStr " rhs) (reduce rhs))) (steps ((compute both))) refl))")
+      (DStr (nl)))))
+
+;; single call: park, marshal, call — the result is already in rax
+(fn xc_single
+  ((q QName)
+   (ts (List Type))
+   (cq QName)
+   (cbody Expr)
+   (ccode (List Doc))
+   (ccnt Int)
+   (fresh Bool)
+   (a Expr))
+  XCR
+  (let ((n (count_ts ts)))
+    (match (xc_arg a n)
+      (XCANo
+        (xerr_at q "call argument must be a param or an imm32 literal (v1)"))
+      ((XCAOk ace avald marshal)
+       (match (nodes_e (xcb_inline cbody ace) Nil)
+         ((NErr m) (xerr_at q m))
+         ((NOk ns)
+          (match (pw_items ns Nil Nil (dsym (qn_name q)) (wk64) 0 0 0)
+            ((Pair (MkPWR pf prems _ _ _ _) _)
+             (let
+               ((code
+                  (dapp
+                    (xm_prologue ts 0)
+                    (Cons marshal (Cons (DStr "(XCall 0)") Nil)))))
+               (let
+                 ((cd
+                    (xc_unit
+                      q
+                      ts
+                      cq
+                      code
+                      (+ (+ n 2) (+ ccnt 8))
+                      prems
+                      pf
+                      (xc_bridge
+                        cq
+                        (xc_regs (xcb_spell cbody avald) (DStr "0") avald n)))))
+                 (XCOk
+                   (if fresh (DCat (xc_callee_doc cq ccode ccnt cbody) cd) cd))))))))))))
+
+;; two calls, one callee: evaluate the RIGHT call first, park its result
+;; in rcx across the left call, combine on the result home
+(fn xc_two
+  ((q QName)
+   (ts (List Type))
+   (cq QName)
+   (cbody Expr)
+   (ccode (List Doc))
+   (ccnt Int)
+   (fresh Bool)
+   (opq QName)
+   (od Doc)
+   (al Expr)
+   (ar Expr))
+  XCR
+  (let ((n (count_ts ts)))
+    (match (xc_arg al n)
+      (XCANo
+        (xerr_at q "call argument must be a param or an imm32 literal (v1)"))
+      ((XCAOk alce alvald marshall)
+       (match (xc_arg ar n)
+         (XCANo
+           (xerr_at q "call argument must be a param or an imm32 literal (v1)"))
+         ((XCAOk arce arvald marshalr)
+          (match
+            (nodes_e
+              (Call
+                opq
+                (Cons
+                  (xcb_inline cbody alce)
+                  (Cons (xcb_inline cbody arce) Nil)))
+              Nil)
+            ((NErr m) (xerr_at q m))
+            ((NOk ns)
+             (match (pw_items ns Nil Nil (dsym (qn_name q)) (wk64) 0 0 0)
+               ((Pair (MkPWR pf prems _ _ _ _) _)
+                (let
+                  ((code
+                     (dapp
+                       (xm_prologue ts 0)
+                       (list
+                         marshalr
+                         (DStr "(XCall 0)")
+                         (xi_movrr (DStr "RCX") (DStr "RAX"))
+                         marshall
+                         (DStr "(XCall 0)")
+                         (xi_bin od (DStr "RAX") (xs_reg (DStr "RCX")))))))
+                  (let
+                    ((bridges
+                       (DCat
+                         (xc_bridge
+                           cq
+                           (xc_regs
+                             (xcb_spell cbody arvald)
+                             (DStr "0")
+                             arvald
+                             n))
+                         (DCat
+                           (sp)
+                           (xc_bridge
+                             cq
+                             (xc_regs
+                               (xcb_spell cbody alvald)
+                               (xcb_spell cbody arvald)
+                               alvald
+                               n))))))
+                    (let
+                      ((cd
+                         (xc_unit
+                           q
+                           ts
+                           cq
+                           code
+                           (+ (+ n 4) (+ (* 2 (+ ccnt 2)) 6))
+                           prems
+                           pf
+                           bridges)))
+                      (XCOk
+                        (if fresh (DCat (xc_callee_doc cq ccode ccnt cbody) cd)
+                        cd)))))))))))))))
+
+;; shape dispatch over the caller body
+(fn xc_shape
+  ((q QName)
+   (ts (List Type))
+   (cq QName)
+   (cbody Expr)
+   (ccode (List Doc))
+   (ccnt Int)
+   (fresh Bool)
+   (body Expr))
+  XCR
+  (match body
+    ((Call q1 as)
+     (if (qn_eq q1 cq)
+       (match as
+         ((Cons a Nil) (xc_single q ts cq cbody ccode ccnt fresh a))
+         (_ (xerr_at q "callee call must have exactly one argument (v1)")))
+       (match (xop_of q1)
+         (None (xerr_at q "call body must be (F a) or (OP (F a) (F b)) (v1)"))
+         ((Some od)
+          (match as
+            ((Cons (Call ql (Cons al Nil)) (Cons (Call qr (Cons ar Nil)) Nil))
+             (if (qn_eq ql cq)
+               (if (qn_eq qr cq)
+                 (xc_two q ts cq cbody ccode ccnt fresh q1 od al ar)
+                 (xerr_at q "both calls must target the same callee (v1)"))
+               (xerr_at q "both calls must target the same callee (v1)")))
+            (_ (xerr_at q "call body must be (F a) or (OP (F a) (F b)) (v1)")))))))
+    (_ (xerr_at q "call body must be (F a) or (OP (F a) (F b)) (v1)"))))
+
+;; the call-fn gate: caller fences, callee fences, then the shape
+(fn xg_claim_call ((f FnDef) (cf FnDef) (fresh Bool)) XCR
+  (match f
+    ((FnDef q ts rty body)
+     (if (all_int ts)
+       (if (is_int_ty rty)
+         (if (le (count_ts ts) 2)
+           (match cf
+             ((FnDef cq cts crty cbody)
+              (if (int_eq (count_ts cts) 1)
+                (if (all_int cts)
+                  (if (is_int_ty crty)
+                    (match (xcb_code cbody 1)
+                      ((XCBNo m) (xerr_at q m))
+                      ((XCBOk ccode ccnt)
+                       (xc_shape q ts cq cbody ccode ccnt fresh body)))
+                    (xerr_at q "callee must return Int (v1)"))
+                  (xerr_at q "callee params must be Int"))
+                (xerr_at q "callee arity must be 1 (v1)"))))
+           (xerr_at
+             q
+             "more than two Int params (call fragment parks r10/r11 only in v1)"))
+         (xerr_at q "return type is not Int"))
+       (xerr_at q "params are not all Int")))))
 
 ;; ---- module walk ------------------------------------------------------------------
 
@@ -1445,6 +1950,8 @@
 (fn xg_fns
   ((fns (List FnDef))
    (modpath (List Symbol))
+   (seen (List FnDef))
+   (certed (List Symbol))
    (acc Doc)
    (lf Bool)
    (mf Bool))
@@ -1454,26 +1961,57 @@
     (Nil (XEOk acc lf mf))
     ((Cons f rest)
      (match f
-       ((FnDef q _ _ _)
+       ((FnDef q _ _ body)
         (match q
           ((QName mp _)
            (if (sym_list_eq mp modpath)
-             (match (xg_claim f)
-               ((XCErr m) (XEErr m))
-               ((XCOk d)
-                (xg_fns
-                  rest
-                  modpath
-                  (DCat acc (DCat (DStr (nl)) d))
-                  (if (fn_is_loop f) True lf)
-                  (if (fn_is_mem f) True mf))))
-             (xg_fns rest modpath acc lf mf)))))))))
+             (if (if (fn_is_loop f) True (fn_is_mem f))
+               (match (xg_claim f)
+                 ((XCErr m) (XEErr m))
+                 ((XCOk d)
+                  (xg_fns
+                    rest
+                    modpath
+                    (Cons f seen)
+                    certed
+                    (DCat acc (DCat (DStr (nl)) d))
+                    (if (fn_is_loop f) True lf)
+                    (if (fn_is_loop f) mf (if (fn_is_mem f) True mf)))))
+               (match (xc_target body seen)
+                 ((Some cf)
+                  (match cf
+                    ((FnDef cq _ _ _)
+                     (let
+                       ((fresh (if (xc_certed certed (qn_name cq)) False True)))
+                       (match (xg_claim_call f cf fresh)
+                         ((XCErr m) (XEErr m))
+                         ((XCOk d)
+                          (xg_fns
+                            rest
+                            modpath
+                            (Cons f seen)
+                            (if fresh (Cons (qn_name cq) certed) certed)
+                            (DCat acc (DCat (DStr (nl)) d))
+                            lf
+                            mf)))))))
+                 (None
+                   (match (xg_claim f)
+                     ((XCErr m) (XEErr m))
+                     ((XCOk d)
+                      (xg_fns
+                        rest
+                        modpath
+                        (Cons f seen)
+                        certed
+                        (DCat acc (DCat (DStr (nl)) d))
+                        lf
+                        mf))))))
+             (xg_fns rest modpath seen certed acc lf mf)))))))))
 
 (fn xg_header ((target (List Int)) (loopf Bool) (memf Bool)) Doc
   (dconc
     (list
-      (DStr
-        ";;; GENERATED by tools/x86gen (the certifying x86_64 emitter) --")
+      (DStr ";;; GENERATED by tools/x86gen (the certifying x86_64 emitter) --")
       (DStr (nl))
       (DStr ";;; DO NOT EDIT; regenerate from ")
       (DStr target)
@@ -1485,9 +2023,8 @@
           (dimport (append_int (updots target) "models/x86/loopkit.shard"))
           (dimport (append_int (updots target) "std/nat.shard")))
         (DStr ""))
-      (if memf
-        (dimport (append_int (updots target) "std/mem/mem.x86.shard"))
-        (DStr ""))
+      (if memf (dimport (append_int (updots target) "std/mem/mem.x86.shard"))
+      (DStr ""))
       (dimport (basename_go target Nil))
       (DStr (append_int "(use (:: models x86 x86 *))" (nl)))
       (if loopf
@@ -1496,9 +2033,8 @@
             "(use (:: models x86 loopkit *))"
             (append_int (nl) (append_int "(use (:: std nat *))" (nl)))))
         (DStr ""))
-      (if memf
-        (DStr (append_int "(use (:: std mem mem.x86 *))" (nl)))
-        (DStr ""))
+      (if memf (DStr (append_int "(use (:: std mem mem.x86 *))" (nl)))
+      (DStr ""))
       (DStr (append_int "(use (:: std mem *))" (nl)))
       (DStr "(use (:: ")
       (pr_modpath (split_slash (until_dot target) Nil))
@@ -1538,6 +2074,8 @@
              (xg_fns
                fns
                (split_slash (until_dot target) Nil)
+               Nil
+               Nil
                (DStr "")
                False
                False)

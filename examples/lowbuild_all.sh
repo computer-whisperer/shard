@@ -15,6 +15,7 @@ BUILDS=(
   examples/lowbuild_x86.sh
   examples/lowbuild_x86loop.sh
   examples/lowbuild_x86mem.sh
+  examples/lowbuild_x86call.sh
 )
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT

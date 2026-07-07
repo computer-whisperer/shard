@@ -119,6 +119,7 @@ TARGETS=(
   examples/x86_pieces.shard
   std/mem/mem.x86.shard
   examples/xmemcall_probe.shard
+  examples/xsibcall_probe.shard
   examples/x86_diff_run.shard
   examples/rep_probe.shard
   examples/lowfrag_probe.shard
@@ -315,7 +316,7 @@ fi
 # / KERNEL / BYTETIE (cert↔binary) / ENGINE (V8; the x86 build's engine
 # is the CPU itself) — run end to end. Summary
 # line only; any gate failure changes it and fails the corpus diff.
-for LB in examples/lowbuild.sh examples/lowbuild_mem.sh examples/lowbuild_loop.sh examples/lowbuild_call.sh std/mem/lowbuild.sh std/str/lowbuild.sh examples/lowbuild_x86.sh examples/lowbuild_x86loop.sh examples/lowbuild_x86mem.sh; do
+for LB in examples/lowbuild.sh examples/lowbuild_mem.sh examples/lowbuild_loop.sh examples/lowbuild_call.sh std/mem/lowbuild.sh std/str/lowbuild.sh examples/lowbuild_x86.sh examples/lowbuild_x86loop.sh examples/lowbuild_x86mem.sh examples/lowbuild_x86call.sh; do
   echo "=== lowering: $LB ==="
   if [ -x bin/shard_eval ]; then
     if bash "$LB" > "$TMP/lb.out" 2>&1; then
