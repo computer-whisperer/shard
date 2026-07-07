@@ -22,10 +22,11 @@
 ;;;   - Register file order skips rsp (num 4): the control stack is the
 ;;;     encoder's, so rsp is never a model register. reg_num maps the 15
 ;;;     model registers onto {0,1,2,3,5,6,7,8..15}.
-;;;   - The function is a single flat body + a trailing `ret` (0xC3). Inter-
-;;;     function layout (XCall -> call rel32) is the CALL ARC's business;
-;;;     XCall encodes to int3 (0xCC) here — a loud fence, never reached by a
-;;;     probe piece.
+;;;   - A function is a flat body + a trailing `ret` (0xC3). Multi-function
+;;;     IMAGES (docs/X86.md §15) lay the ENTRY function first and the rest
+;;;     in index order; XCall k -> call rel32 (0xE8) through the per-index
+;;;     offset table (fixed 5-byte width). Single-function enc_func has no
+;;;     table, so an XCall there is a five-byte int3 fence.
 ;;;   - SImm arithmetic uses imm32 (sign-extended by the CPU to 64); the
 ;;;     model wraps the immediate to [0,2^64). They agree for |imm| < 2^31
 ;;;     (all probe immediates); a wider immediate needs a scratch-register
@@ -251,7 +252,7 @@
     ((XBr d) 5)
     ((XBrIf c d) (xsz_brif c))
     (XRet 1)
-    ((XCall k) 1)
+    ((XCall k) 5)
     (i2 (elen (enc_simple i2)))))
 
 (fn xsz_seq ((is (List XInstr))) Int
@@ -320,29 +321,103 @@
            ((LB rem) (le4 (- rem (xsz_brif c))))
            ((LL el) (le4 (- 0 (+ el (xsz_brif c)))))))))))
 
+;; --- inter-function layout (docs/X86.md §15) -----------------------------------
+;;
+;; A multi-function IMAGE lays the ENTRY function first (the harness
+;; calls the blob's start; the wire carries no entry offset) and every
+;; other function after it in index order. Function INDICES are model
+;; truth and never move; only the byte layout is entry-first. XCall k
+;; encodes as `call rel32` (0xE8) against the per-index offset table —
+;; fixed 5-byte width, so the flattening's size arithmetic is
+;; unaffected. Emission threads POS (the absolute image offset of the
+;; instruction being encoded) alongside the label stack.
+
+;; per-index offset lookup
+(fn off_at ((offs (List Int)) (k Int)) (Option Int)
+  (measure (struct offs))
+  (match offs
+    (Nil None)
+    ((Cons o t) (if (int_eq k 0) (Some o) (off_at t (- k 1))))))
+
+;; call rel32: target offset minus the call's END. A missing offset
+;; (single-function encoding, or an out-of-range index) emits five int3
+;; bytes — size-consistent with xsz_instr, loud at the CPU.
+(fn enc_call ((k Int) (pos Int) (offs (List Int))) (List Int)
+  (match (off_at offs k)
+    (None (list 204 204 204 204 204))
+    ((Some o) (Cons 232 (le4 (- o (+ pos 5)))))))
+
 ;; enc_instr is ALSO models/wasm/encode.shard's name — deliberately: run
 ;; mode resolves module-internal bare calls QUALIFIED (build_module_r), so
 ;; co-loaded same-named fns are sound. This shared spelling is the live
 ;; guard: tools/bytetie loads both encoders, and a regression to flat-core
 ;; dispatch would cross-resolve it again (the 2026-07-06 bug, then
 ;; worked around as xenc_instr; examples/runhom_run.shard is the fixture).
-(fn enc_instr ((i XInstr) (env (List Lbl))) (List Int)
+(fn enc_instr ((i XInstr) (env (List Lbl)) (pos Int) (offs (List Int)))
+  (List Int)
   (measure (struct i))
   (match i
-    ((XBlock b) (enc_seq b (Cons (LB (xsz_seq b)) env)))
-    ((XLoop b) (enc_seq b (Cons (LL 0) env)))
+    ((XBlock b) (enc_seq b (Cons (LB (xsz_seq b)) env) pos offs))
+    ((XLoop b) (enc_seq b (Cons (LL 0) env) pos offs))
     ((XBr d) (enc_br d env))
     ((XBrIf c d) (enc_brif c d env))
-    ((XCall k) (list 204))
+    ((XCall k) (enc_call k pos offs))
     (XRet (list 195))
     (i2 (enc_simple i2))))
 
-(fn enc_seq ((is (List XInstr)) (env (List Lbl))) (List Int)
+(fn enc_seq ((is (List XInstr)) (env (List Lbl)) (pos Int) (offs (List Int)))
+  (List Int)
   (measure (struct is))
   (match is
     (Nil Nil)
-    ((Cons i t) (eapp (enc_instr i env) (enc_seq t (adv env (xsz_instr i)))))))
+    ((Cons i t)
+     (eapp
+       (enc_instr i env pos offs)
+       (enc_seq t (adv env (xsz_instr i)) (+ pos (xsz_instr i)) offs)))))
 
-;; the function: flat body + trailing ret.
+;; the function: flat body + trailing ret. Single-function encoding — no
+;; offset table, so an XCall is the int3 fence.
 (fn enc_func ((f XFunc)) (List Int)
-  (eapp (enc_seq (xbody_of f) Nil) (list 195)))
+  (eapp (enc_seq (xbody_of f) Nil 0 Nil) (list 195)))
+
+;; a function placed at image offset POS
+(fn enc_fn_at ((f XFunc) (pos Int) (offs (List Int))) (List Int)
+  (eapp (enc_seq (xbody_of f) Nil pos offs) (list 195)))
+
+;; function byte size in an image (body + ret)
+(fn xsz_func ((f XFunc)) Int (+ (xsz_seq (xbody_of f)) 1))
+
+;; per-index offsets under the entry-first layout: entry at 0, every
+;; other function following in index order (acc = the next free offset)
+(fn img_offs ((fs (List XFunc)) (i Int) (entry Int) (acc Int)) (List Int)
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons f t)
+     (if (int_eq i entry) (Cons 0 (img_offs t (+ i 1) entry acc))
+     (Cons acc (img_offs t (+ i 1) entry (+ acc (xsz_func f))))))))
+
+;; the non-entry functions, index order, each at its table offset
+(fn img_emit
+  ((fs (List XFunc)) (myoffs (List Int)) (i Int) (entry Int)
+   (offs (List Int)))
+  (List Int)
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons f t)
+     (match myoffs
+       (Nil Nil)
+       ((Cons o ot)
+        (if (int_eq i entry) (img_emit t ot (+ i 1) entry offs)
+        (eapp (enc_fn_at f o offs) (img_emit t ot (+ i 1) entry offs))))))))
+
+;; the image: entry function's bytes first, the rest in index order;
+;; every XCall resolves through the shared per-index table. An
+;; out-of-range entry yields the empty image (loud at the differ).
+(fn enc_image ((fs (List XFunc)) (entry Int)) (List Int)
+  (match (xfunc_at fs entry)
+    (None Nil)
+    ((Some ef)
+     (let ((offs (img_offs fs 0 entry (xsz_func ef))))
+       (eapp (enc_fn_at ef 0 offs) (img_emit fs offs 0 entry offs))))))

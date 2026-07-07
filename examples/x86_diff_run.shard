@@ -177,10 +177,102 @@
 
 (fn mmem ((f XFunc)) XModule (MkXModule (Cons f Nil) 1073807360))
 
+;; --- multi-function CALL modules (docs/X86.md §15: the image layout) ----------
+;; Convention under test: callees at LOW indices, the entry (caller) last;
+;; the blob lays the ENTRY first (the harness calls the blob start), so
+;; callee calls are forward rel32 and a callee-to-callee call whose target
+;; sits earlier in the blob exercises the BACKWARD rel32.
+
+;; the §10 hand-play's callee: sq(a) = a*a, a in rdi, result in rax
+(fn csq_f () XFunc
+  (MkXFunc 1 (list (XMovRR RAX RDI) (XBin XMul RAX (SReg RDI)))))
+
+;; sumsq(a) = sq(a+1) + sq(a) — two calls, a live value parked in rcx
+(fn csumsq_f () XFunc
+  (MkXFunc
+    1
+    (list
+      (XCall 0)
+      (XMovRR RCX RAX)
+      (XBin XAdd RDI (SImm 1))
+      (XCall 0)
+      (XBin XAdd RAX (SReg RCX)))))
+
+;; sq1(a) = sq(a) + 1 — a callee that itself calls (nested depth; in the
+;; blob sq sits BEFORE sq1, so sq1's call is a backward rel32)
+(fn csq1_f () XFunc (MkXFunc 1 (list (XCall 0) (XBin XAdd RAX (SImm 1)))))
+
+;; chain(a) = sq1(a) * 2 — entry for the three-function nest
+(fn cchain_f () XFunc
+  (MkXFunc 1 (list (XCall 1) (XBin XMul RAX (SImm 2)))))
+
+;; store callee: *rdi = rsi (byte)
+(fn cst_f () XFunc (MkXFunc 2 (list (XStore8 (AReg RDI) (SReg RSI)))))
+
+;; caller storing v at p and p+1 THROUGH the callee (memory effect
+;; across a call boundary)
+(fn cst2_f () XFunc
+  (MkXFunc 2 (list (XCall 0) (XBin XAdd RDI (SImm 1)) (XCall 0))))
+
+(fn msumsq () XModule
+  (MkXModule (Cons (csq_f) (Cons (csumsq_f) Nil)) 0))
+
+(fn mchain () XModule
+  (MkXModule (Cons (csq_f) (Cons (csq1_f) (Cons (cchain_f) Nil))) 0))
+
+(fn mst2 () XModule
+  (MkXModule (Cons (cst_f) (Cons (cst2_f) Nil)) 1073807360))
+
 ;; --- plan lines --------------------------------------------------------------
 
 (fn mod_line ((nm (List Int)) (f XFunc)) (List Int)
   (cat (list "XMOD " nm " " (hexs (enc_func f)) "\n")))
+
+;; a multi-function image at entry k (the blob the harness calls at its
+;; start IS function k)
+(fn mod_linei ((nm (List Int)) (m XModule) (k Int)) (List Int)
+  (cat (list "XMOD " nm " " (hexs (enc_image (xfuncs_of m) k)) "\n")))
+
+(fn xcasek
+  ((nm (List Int)) (m XModule) (k Int) (args (List Int)) (fuel Int))
+  (List Int)
+  (cat
+    (list
+      "XCASE "
+      nm
+      " "
+      (dec1 (argc args))
+      (argslots args)
+      " -> "
+      (showr (xcall_fn (xfnat fuel) m k args))
+      "\n")))
+
+(fn xmemcasek
+  ((nm (List Int))
+   (m XModule)
+   (k Int)
+   (args (List Int))
+   (addr Int)
+   (len Int)
+   (fuel Int))
+  (List Int)
+  (let ((r (xcall_fn_mem (xfnat fuel) m k args (mem_empty))))
+    (cat
+      (list
+        "XMEMCASE "
+        nm
+        " "
+        (dec1 (argc args))
+        (argslots args)
+        " READ "
+        (hx addr)
+        " "
+        (hx len)
+        " -> "
+        (memresv r)
+        " "
+        (memouthex r addr (xfnat len))
+        "\n"))))
 
 (fn xcase ((nm (List Int)) (m XModule) (args (List Int)) (fuel Int)) (List Int)
   (cat
@@ -276,6 +368,16 @@
       (xcase "cmpreg" (mreg (cmpreg_f)) (list 5 5) 30)
       (mod_line "eqsel" (eqsel_f))
       (xcase "eqsel" (mreg (eqsel_f)) (list 0 7) 30)
-      (xcase "eqsel" (mreg (eqsel_f)) (list 1 7) 30))))
+      (xcase "eqsel" (mreg (eqsel_f)) (list 1 7) 30)
+      (mod_linei "sumsq" (msumsq) 1)
+      (xcasek "sumsq" (msumsq) 1 (list 6) 30)
+      (xcasek "sumsq" (msumsq) 1 (list 0) 30)
+      (xcasek "sumsq" (msumsq) 1 (list 18446744073709551615) 30)
+      (mod_linei "chain" (mchain) 2)
+      (xcasek "chain" (mchain) 2 (list 5) 30)
+      (xcasek "chain" (mchain) 2 (list 0) 30)
+      (mod_linei "st2" (mst2) 1)
+      (xmemcasek "st2" (mst2) 1 (list 1073741824 65) 1073741824 3 30)
+      (xmemcasek "st2" (mst2) 1 (list 1073741830 200) 1073741828 5 30))))
 
 (fn main ((w World)) World (exit 0 (write (emit) w)))
