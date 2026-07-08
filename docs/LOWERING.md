@@ -1773,14 +1773,40 @@ that driver-derivation eats most of mod.build's body (vectors, plan
 assembly), gates move into the driver, and the residue is a small
 per-module override.
 
+PREMISE PERCOLATION (user ruling, 2026-07-08): cert premises are not
+an internal proof mechanism at the ARTIFACT boundary — they are trust
+statements, and every premise that conditions a shipped export's
+guarantee must be PERCOLATED UP to an explicit, project-reviewed
+declaration (the `trusts` law one level up: the artifact's premise
+surface must EQUAL its declared accepts list — no hidden exception, no
+phantom entry). The automatic surfacing of numeric overflow / wrap /
+guard conditions during refinement proof is one of shard's strongest
+features (what Rust tracks by convention and manual review of
+invariant assertions, shard derives); the accepts gate is what makes
+it DURABLE — an undeclared premise fails the build until the project
+either fixes the types or signs the exception. Mechanism sketch: the
+premise surface is machine-readable (the §6j families — wrap ranges,
+div guards, byte-range fences); `(lib …)`/`(bin …)` grow an accepts
+clause (family-level granularity, reviewable); gate = set equality
+both directions, trusts_check's twin. Downstream payoffs: the CLI
+runner generates BOUNDARY GUARDS from the accepted premise set (the
+conditional guarantee enforced at the FFI edge), and driver-derived
+engine vectors sample inside the declared domain. The §7.8 Word and
+§7.9 refined-int directions drive premise surfaces toward EMPTY —
+empty accepts is the clean-project default, and the gate is the
+ratchet. Carrier: the driver-derivation rung (the driver reading the
+(lib …) decl is the code that computes the surface and enforces
+accepts).
+
 Next rungs, in demand order: the generic driver that derives the plan
 from the (lib …) declaration (kills the per-module script + build
-boilerplate; the bin-gate wiring of §7.1 gets its consumer); the CLI
-runner bin over a lib (the first bin shipping a lowered binary);
-std/str re-shipped as ONE lib module (named exports; the spine
-machinery already proven here); std/rng through the WORD fragment
-(§7.8) as the first new content; the x86 lib arm (enc_image already
-multi-fn; ELF packaging when the runner story lands there).
+boilerplate; the bin-gate wiring of §7.1 gets its consumer) WITH the
+premise-percolation accepts gate riding it; the CLI runner bin over a
+lib (the first bin shipping a lowered binary; boundary guards from the
+accepts set); std/str re-shipped as ONE lib module (named exports; the
+spine machinery already proven here); std/rng through the WORD
+fragment (§7.8) as the first new content; the x86 lib arm (enc_image
+already multi-fn; ELF packaging when the runner story lands there).
 
 ## 7. Open questions — triaged at ratification (2026-07-04)
 
