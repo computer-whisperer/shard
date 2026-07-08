@@ -128,11 +128,26 @@ fn quantize(zoom: f32) -> f32 {
     2f32.powf((zoom.max(0.001).log2() * 2.0).round() / 2.0)
 }
 
+/// What an anchor point is the center of. Fn cards are the fine grain — a
+/// tier flip can grow a file box tenfold, leaving its *center* in inter-card
+/// wiring space, so pinning must happen at the card the user is steering
+/// toward. A chipped file has no cards; its box center is the fallback grain
+/// (`Fn` carries its home file so a card that folds away can degrade to it).
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum AnchorId {
+    Fn { fn_idx: usize, file: usize },
+    File(usize),
+}
+
+/// An anchor candidate: an identity plus its center in the layout's local
+/// (pre-offset) coordinates.
+type Anchor = (AnchorId, f32, f32);
+
 /// Cross-frame Map state, owned by the app and lent to the (otherwise pure)
 /// view: what the last build was keyed on, the content offset that kept it
-/// anchored, and where each file's box landed. `None` between scopes and on
-/// at-home frames (the armed fit frames the pristine layout; anchoring only
-/// matters once the user is steering).
+/// anchored, and where every fn card / file box landed. `None` between scopes
+/// and on at-home frames (the armed fit frames the pristine layout; anchoring
+/// only matters once the user is steering).
 pub struct MapMemo {
     scope: Scope,
     selected_fn: Option<usize>,
@@ -140,37 +155,40 @@ pub struct MapMemo {
     z_used: f32,
     /// Translation applied to the whole placed tree (accumulated re-anchors).
     offset: (f32, f32),
-    /// Per-file box centers in pre-offset content coordinates.
-    anchors: Vec<(usize, f32, f32)>,
+    /// Anchor candidates in pre-offset content coordinates.
+    anchors: Vec<Anchor>,
 }
 
 pub type MapMemoCell = std::cell::RefCell<Option<MapMemo>>;
 
-/// Re-anchor a reflow: pick the previous-layout file box nearest the viewport
+/// Re-anchor a reflow: pick the previous-layout anchor nearest the viewport
 /// center (`target`, in applied content coordinates) and return the offset
-/// that pins its box center — the content point the user is steering toward
-/// stays put while everything reflows around it.
-fn reanchor(
-    prev: &MapMemo,
-    new_anchors: &[(usize, f32, f32)],
-    target: (f32, f32),
-) -> (f32, f32) {
+/// that pins its center — the content the user is steering toward stays put
+/// while everything reflows around it. A fn anchor whose card folded away
+/// (its file chipped on a zoom-out) degrades to its file box; only a scope
+/// mismatch (which the caller filters) leaves nothing to pin.
+fn reanchor(prev: &MapMemo, new_anchors: &[Anchor], target: (f32, f32)) -> (f32, f32) {
     let dist2 = |x: f32, y: f32| {
         let (dx, dy) = (x - target.0, y - target.1);
         dx * dx + dy * dy
     };
-    let mut best: Option<(f32, usize, f32, f32)> = None; // (d2, file, prev applied x, y)
-    for &(file, x, y) in &prev.anchors {
+    let mut best: Option<(f32, AnchorId, f32, f32)> = None; // (d2, id, prev applied x, y)
+    for &(id, x, y) in &prev.anchors {
         let (ax, ay) = (x + prev.offset.0, y + prev.offset.1);
         let d = dist2(ax, ay);
         if best.is_none_or(|(bd, ..)| d < bd) {
-            best = Some((d, file, ax, ay));
+            best = Some((d, id, ax, ay));
         }
     }
-    let Some((_, file, px, py)) = best else {
+    let Some((_, id, px, py)) = best else {
         return prev.offset;
     };
-    match new_anchors.iter().find(|&&(f, ..)| f == file) {
+    let find = |want: AnchorId| new_anchors.iter().find(|&&(a, ..)| a == want);
+    let hit = find(id).or_else(|| match id {
+        AnchorId::Fn { file, .. } => find(AnchorId::File(file)),
+        AnchorId::File(_) => None,
+    });
+    match hit {
         Some(&(_, nx, ny)) => (px - nx, py - ny),
         None => prev.offset,
     }
@@ -241,13 +259,9 @@ pub(crate) fn canvas(project: &Project, p: &ViewParams, memo: Option<&MapMemoCel
                     return Some(prev.offset);
                 }
                 // Reflow (band edge, or the selection expanded a card): pin
-                // the box nearest the viewport center. The center's content
-                // position is (screen_center - pan) / zoom off the readbacks.
-                let target = (
-                    (NOMINAL_W * 0.5 - p.pan.0) / p.zoom,
-                    (NOMINAL_H * 0.5 - p.pan.1) / p.zoom,
-                );
-                Some(reanchor(prev, &placed.anchors, target))
+                // the anchor nearest the point the user is steering — the
+                // content under the pointer (wheel-zoom's own fixed point).
+                Some(reanchor(prev, &placed.anchors, p.anchor_target))
             })
             .unwrap_or((0.0, 0.0));
         (placed, zq, offset)
@@ -295,13 +309,13 @@ struct Ctx<'a> {
 }
 
 /// A laid-out, measured sub-tree: its element plus the intrinsic size the parent
-/// graph needs to place it, and the file-box centers inside it (in this
-/// block's local coordinates) — the anchor candidates re-anchoring pins.
+/// graph needs to place it, and the anchor candidates inside it (fn-card and
+/// file-box centers, in this block's local coordinates) — what re-anchoring pins.
 struct Block {
     el: El,
     w: f32,
     h: f32,
-    anchors: Vec<(usize, f32, f32)>,
+    anchors: Vec<Anchor>,
 }
 
 /// A directory in the map tree: nested subdirs plus the files directly in it.
@@ -462,15 +476,31 @@ fn layout_file(ctx: &Ctx, file: usize) -> Block {
             ..chip
         }
     } else {
-        boxed(
+        let header_h = intrinsic(&header()).1;
+        let mut block = boxed(
             column([header(), inner.el]),
             tokens::CARD.mix(tokens::BACKGROUND, 0.4),
             tokens::BORDER,
-        )
+        );
+        // Fn-card anchors — the fine grain re-anchoring pins. A tier flip can
+        // grow this box tenfold, leaving its *center* in inter-card wiring
+        // space; the card the user is steering toward is what must stay put.
+        // Card centers = the inner layout's node centers, shifted by the
+        // content's offset inside the box (padding + header band).
+        let (ox, oy) = (tokens::SPACE_3, tokens::SPACE_3 + header_h + tokens::SPACE_2);
+        block.anchors = members
+            .iter()
+            .enumerate()
+            .map(|(i, &g)| {
+                let n = &lay.nodes[i];
+                (AnchorId::Fn { fn_idx: g, file }, n.x + n.w * 0.5 + ox, n.y + n.h * 0.5 + oy)
+            })
+            .collect();
+        block
     };
-    // The file's anchor is its own box center — chip or full box alike, so an
-    // anchor never vanishes when a file folds or unfolds across a reflow.
-    block.anchors = vec![(file, block.w * 0.5, block.h * 0.5)];
+    // The file box's own center rides along at every tier — chip or full box —
+    // so a file always has *some* anchor across a fold/unfold.
+    block.anchors.push((AnchorId::File(file), block.w * 0.5, block.h * 0.5));
     block
 }
 
@@ -683,35 +713,40 @@ mod tests {
         }
     }
 
+    fn memo(offset: (f32, f32), anchors: Vec<Anchor>) -> MapMemo {
+        MapMemo { scope: Scope::Project, selected_fn: None, z_used: 0.5, offset, anchors }
+    }
+
     #[test]
-    fn reanchor_pins_the_file_nearest_the_target() {
-        let prev = MapMemo {
-            scope: Scope::Project,
-            selected_fn: None,
-            z_used: 0.5,
-            offset: (10.0, 0.0),
-            // Applied positions: file 1 at (110,100), file 2 at (510,100).
-            anchors: vec![(1, 100.0, 100.0), (2, 500.0, 100.0)],
-        };
-        // Target sits by file 2's applied position → it's the anchor. Its new
+    fn reanchor_pins_the_anchor_nearest_the_target() {
+        let f = |fn_idx, file| AnchorId::Fn { fn_idx, file };
+        // Applied positions: fn 1 at (110,100), fn 2 at (510,100).
+        let prev = memo((10.0, 0.0), vec![(f(1, 9), 100.0, 100.0), (f(2, 9), 500.0, 100.0)]);
+        // Target sits by fn 2's applied position → it's the anchor. Its new
         // pre-offset center is (250,50); the offset must pin it at (510,100).
-        let new_anchors = vec![(1, 50.0, 50.0), (2, 250.0, 50.0)];
+        let new_anchors = vec![(f(1, 9), 50.0, 50.0), (f(2, 9), 250.0, 50.0)];
         let off = reanchor(&prev, &new_anchors, (520.0, 90.0));
         assert_eq!(off, (260.0, 50.0));
         assert_eq!((250.0 + off.0, 50.0 + off.1), (510.0, 100.0));
     }
 
     #[test]
+    fn reanchor_degrades_a_folded_fn_to_its_file_box() {
+        // Fn 3 (of file 7) was the anchor, but its file chipped on a zoom-out —
+        // no fn cards in the new layout. The pin lands on file 7's box instead.
+        let prev = memo((0.0, 0.0), vec![(AnchorId::Fn { fn_idx: 3, file: 7 }, 200.0, 80.0)]);
+        let new_anchors = vec![(AnchorId::File(7), 40.0, 10.0)];
+        assert_eq!(reanchor(&prev, &new_anchors, (190.0, 80.0)), (160.0, 70.0));
+    }
+
+    #[test]
     fn reanchor_keeps_the_old_offset_when_the_anchor_vanished() {
-        let prev = MapMemo {
-            scope: Scope::Project,
-            selected_fn: None,
-            z_used: 0.5,
-            offset: (7.0, -3.0),
-            anchors: vec![(1, 100.0, 100.0)],
-        };
+        let prev = memo((7.0, -3.0), vec![(AnchorId::File(1), 100.0, 100.0)]);
         // File 1 isn't in the new layout (can't happen for same-scope reflows,
         // but the fallback must stay sane rather than teleport to (0,0)).
-        assert_eq!(reanchor(&prev, &[(2, 0.0, 0.0)], (100.0, 100.0)), (7.0, -3.0));
+        assert_eq!(
+            reanchor(&prev, &[(AnchorId::File(2), 0.0, 0.0)], (100.0, 100.0)),
+            (7.0, -3.0)
+        );
     }
 }

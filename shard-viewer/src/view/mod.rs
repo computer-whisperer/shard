@@ -61,9 +61,12 @@ pub struct ViewParams {
     /// toolbar, and — when the user has taken the viewport over — it drives the
     /// Map's level-of-detail tiers.
     pub zoom: f32,
-    /// Current viewport pan (read back alongside `zoom`). The Map uses it to
-    /// locate the viewport center in content space when re-anchoring a reflow.
-    pub pan: (f32, f32),
+    /// Where re-anchoring should pin, in canvas *content* coordinates: the
+    /// content point currently under the pointer (wheel-zoom's own anchor),
+    /// or under the canvas center when no pointer has been seen. The GUI
+    /// computes it from the pointer + viewport readbacks; headless passes
+    /// anything (a single fitted frame never re-anchors).
+    pub anchor_target: (f32, f32),
     /// Whether the canvas viewport is still "at home" — fitted by the armed
     /// `FitPolicy` / an app `FitContent`, untouched by the user (read back via
     /// `viewport_at_home`; headless render is always at home). While at home
