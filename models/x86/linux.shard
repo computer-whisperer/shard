@@ -1,0 +1,61 @@
+;;; models/x86/linux.shard — the Linux x86_64 syscall shim (docs/X86.md §20,
+;;; the platform-externs ruling). The FIRST increment of a shard PLATFORM
+;;; API: the platform is the Linux KERNEL ABI directly — NO libc, ever
+;;; (linking it would drag the C toolchain, CRT startup, and the dynamic
+;;; loader into the TCB). A freestanding static image reaches the OS through
+;;; raw `syscall` instructions and nothing else.
+;;;
+;;; TRUST STATUS — these bytes are AXIOM-KIND. They are hand-reviewed once
+;;; and thereafter trusted: the x86 model (models/x86/x86.shard) is purely
+;;; computational (registers + memory, no World, no `syscall` instruction),
+;;; so their EFFECT cannot yet be refined against a spec. In the current
+;;; (self-checking ELF) rung nothing CITES them — the ELF harness only USES
+;;; them to report results, exactly as examples/x86_diff.c uses printf: a
+;;; reality check, not a soundness claim. The full World-effect axiom
+;;; (spec extern ⊑ shim) arrives with the runner rung, when a program's
+;;; proven I/O behaviour cites a shim; the register-discipline contract
+;;; below is what that citation will rest on.
+;;;
+;;; LEDGER (axiom-kind trusted bytes — the percolation-twin gate one level
+;;; down will hold the image's linked shim set equal to the declared extern
+;;; set once externs are declared):
+;;;
+;;;   syscall            0F 05     rax = syscall number in; rax = result out.
+;;;                                CLOBBERS {rcx, r11} (the CPU stores rip in
+;;;                                rcx and rflags in r11). Nothing else moves.
+;;;   sys_write  (nr 1)  rdi=fd  rsi=buf  rdx=count -> rax = bytes written.
+;;;                      Clobber set (SysV + syscall): {rax, rcx, r11}.
+;;;   sys_exit   (nr 60) rdi=code -> TERMINAL (control never returns).
+;;;   entry state        _start receives argc/argv/envp/auxv on the initial
+;;;                      stack (no CRT); this is the _start contract, owned
+;;;                      by the harness stub that consumes it.
+
+(import "../../kernel/stdlib.shard")
+(import "encode.shard")
+(use (:: models x86 encode le4))
+(use (:: models x86 encode eapp))
+
+;; the syscall numbers (Linux x86_64)
+(fn sc_nr_write () Int 1)
+
+(fn sc_nr_exit () Int 60)
+
+;; the syscall instruction: 0F 05.
+(fn i_syscall () (List Int) (list 15 5))
+
+;; sys_write of the top 8 stack bytes to stdout: assumes the value to emit
+;; has just been PUSHed (so it sits at [rsp]); leaves rsp unchanged.
+;;   B8 01000000   mov eax, 1     (nr = write)
+;;   BF 01000000   mov edi, 1     (fd = stdout)
+;;   48 89 E6      mov rsi, rsp   (buf = rsp)
+;;   BA 08000000   mov edx, 8     (count = 8)
+;;   0F 05         syscall
+(fn sys_write_top8 () (List Int)
+  (list 184 1 0 0 0 191 1 0 0 0 72 137 230 186 8 0 0 0 15 5))
+
+;; sys_exit with a status code (terminal):
+;;   B8 3C000000   mov eax, 60    (nr = exit)
+;;   BF <code>     mov edi, code
+;;   0F 05         syscall
+(fn sys_exit_code ((code Int)) (List Int)
+  (eapp (list 184 60 0 0 0) (eapp (Cons 191 (le4 code)) (list 15 5))))

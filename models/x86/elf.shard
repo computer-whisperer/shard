@@ -1,0 +1,137 @@
+;;; models/x86/elf.shard — the ELF64 container + the self-checking harness
+;;; stub (docs/X86.md §20, the lib-build arc's engine-as-a-process rung).
+;;;
+;;; enc_elf wraps a lib IMAGE (index-order bytes + the per-index offset
+;;; table) in a freestanding static ELF64 executable whose entry is a
+;;; GENERATED _start stub: for each synthesized vector it marshals the args
+;;; into their SysV homes, `call`s the export (rel32 into the image), and
+;;; sys_writes the 8-byte result to stdout; after the last, sys_exit(0). The
+;;; produced binary RUNS on real Linux with zero C in the loop — the engine
+;;; gate becomes the artifact itself, its stdout diffed against the plan's
+;;; expected values.
+;;;
+;;; UNTRUSTED PLUMBING: like examples/x86_diff.c, nothing here is in-logic —
+;;; a wrong header or stub byte fails LOUDLY at the loader (the kernel
+;;; refuses the image) or at the diff (wrong stdout), never in a proof. The
+;;; syscall bytes it splices come from the reviewed models/x86/linux.shard;
+;;; the IMAGE bytes are cert-tied upstream (bytetie re-derives enc_image_ord
+;;; from the claim literals — the ELF runs bytes tied to the proofs).
+;;;
+;;; Layout (one R+X PT_LOAD mapping the whole file at LOAD_BASE):
+;;;   [ELF header : 64][program header : 56][_start stub][image]
+;;; e_entry = LOAD_BASE + 120 (the stub, first in the mapped code).
+;;; The image's pure Int exports need no writable data segment.
+
+(import "../../kernel/stdlib.shard")
+(import "encode.shard")
+(import "linux.shard")
+(use (:: models x86 encode le4))
+(use (:: models x86 encode le8))
+(use (:: models x86 encode eapp))
+(use (:: models x86 encode elen))
+(use (:: models x86 encode off_at))
+(use (:: models x86 linux sys_write_top8))
+(use (:: models x86 linux sys_exit_code))
+
+;; a harness vector: which export (natural image index) on which args
+;; (1-3 values; the stub pads unused arg registers to 0 harmlessly)
+(type EVec (EV Int (List Int)))
+
+(fn load_base () Int 4194304)  ; 0x400000 — fixed-address ET_EXEC
+
+;; per-vector stub fragment width and the trailing exit, both fixed so the
+;; stub size (hence the image's placement) is computable from vector count:
+;;   marshal 3x(mov r64,imm64 = 10) + call rel32 (5) + push (1)
+;;     + sys_write_top8 (20) + pop (1) = 57
+;;   sys_exit_code (12)
+(fn frag_w () Int 57)
+
+(fn stub_size ((nv Int)) Int (+ (* (frag_w) nv) 12))
+
+(fn vlen ((vs (List EVec))) Int
+  (measure (struct vs))
+  (match vs
+    (Nil 0)
+    ((Cons _ t) (+ 1 (vlen t)))))
+
+(fn catb ((xs (List (List Int)))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons h t) (eapp h (catb t)))))
+
+(fn arg_at ((args (List Int)) (i Int)) Int
+  (measure (struct args))
+  (match args
+    (Nil 0)
+    ((Cons a t) (if (int_eq i 0) a (arg_at t (- i 1))))))
+
+(fn off_or0 ((o (Option Int))) Int
+  (match o
+    (None 0)
+    ((Some x) x)))
+
+;; one vector's 57 bytes at stub offset `fs`; `ss` = stub size (the image
+;; sits at region offset ss, so export k is at ss + image_offset[k])
+(fn evec_frag ((v EVec) (fs Int) (ss Int) (offs (List Int))) (List Int)
+  (match v
+    ((EV k args)
+     (catb
+       (list
+         (eapp (list 72 191) (le8 (arg_at args 0)))  ; mov rdi, a0
+         (eapp (list 72 190) (le8 (arg_at args 1)))  ; mov rsi, a1
+         (eapp (list 72 186) (le8 (arg_at args 2)))  ; mov rdx, a2
+         (Cons
+           232
+           (le4 (- (+ ss (off_or0 (off_at offs k))) (+ (+ fs 30) 5))))  ; call
+         (list 80)  ; push rax
+         (sys_write_top8)
+         (list 89))))))  ; pop rcx
+
+(fn gen_stub ((vs (List EVec)) (fs Int) (ss Int) (offs (List Int))) (List Int)
+  (measure (struct vs))
+  (match vs
+    (Nil (sys_exit_code 0))
+    ((Cons v rest)
+     (eapp (evec_frag v fs ss offs) (gen_stub rest (+ fs (frag_w)) ss offs)))))
+
+;; the 64-byte ELF64 header: ET_EXEC, x86-64, no section headers (a static
+;; image needs none to run), e_entry at the stub
+(fn elf_hdr ((filesz Int)) (List Int)
+  (catb
+    (list
+      (list 127 69 76 70 2 1 1 0)  ; magic, ELFCLASS64, LE, ver 1, SysV
+      (list 0 0 0 0 0 0 0 0)  ; EI_ABIVERSION + pad
+      (list 2 0)  ; e_type = ET_EXEC
+      (list 62 0)  ; e_machine = x86-64
+      (list 1 0 0 0)  ; e_version
+      (le8 (+ (load_base) 120))  ; e_entry
+      (le8 64)  ; e_phoff
+      (le8 0)  ; e_shoff
+      (list 0 0 0 0)  ; e_flags
+      (list 64 0)  ; e_ehsize
+      (list 56 0)  ; e_phentsize
+      (list 1 0)  ; e_phnum
+      (list 0 0)  ; e_shentsize
+      (list 0 0)  ; e_shnum
+      (list 0 0))))  ; e_shstrndx
+
+;; the 56-byte program header: one PT_LOAD, R+X, whole file at LOAD_BASE
+(fn elf_phdr ((filesz Int)) (List Int)
+  (catb
+    (list
+      (list 1 0 0 0)  ; p_type = PT_LOAD
+      (list 5 0 0 0)  ; p_flags = R+X
+      (le8 0)  ; p_offset
+      (le8 (load_base))  ; p_vaddr
+      (le8 (load_base))  ; p_paddr
+      (le8 filesz)  ; p_filesz
+      (le8 filesz)  ; p_memsz
+      (le8 4096))))  ; p_align
+
+;; the whole executable: headers + stub + image
+(fn enc_elf ((img (List Int)) (offs (List Int)) (vs (List EVec))) (List Int)
+  (let ((ss (stub_size (vlen vs))))
+    (let ((code (eapp (gen_stub vs 0 ss offs) img)))
+      (let ((filesz (+ 120 (elen code))))
+        (eapp (elf_hdr filesz) (eapp (elf_phdr filesz) code))))))
