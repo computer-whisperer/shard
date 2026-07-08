@@ -1853,14 +1853,25 @@ the CPU. Two cross-target rulings landed with it (both user-ratified
   bl_mask (band — transparent, premise-free under both); x86 div is
   the first EXAMPLE-DEMANDED fragment growth.
 
+THE ENGINE BECOMES A PROCESS (2026-07-08, docs/X86.md §20 = the
+record). The direct ELF push landed: models/x86/linux.shard (the
+trusted Linux syscall shims — NO libc), models/x86/elf.shard's enc_elf
+(ELF64 + one R+X PT_LOAD + a generated _start stub that marshals,
+calls each proven export, and sys_writes the result), the index-order
+image cert-tie (bytetie TIEIMG == LNAME_elf_image, so the ELF runs
+bytes assembled from the claim literals), `lowbuild elf SRC OUT`, and
+examples/lowbuild_lib_x86_elf.sh (regen / imgtie / engine). purelib
+now RUNS as a native Linux binary, zero C in the loop, its stdout
+diffed against the spec results — 6 vectors agree on silicon
+in-process. The shims are axiom-kind but uncited here (the x86 model
+is pure); the World-effect axiom waits for the runner.
+
 Roadmap (revised 2026-07-08; wasm runner + std/str-as-lib DROPPED —
 the former was an x86 stand-in, the latter supply-side growth with no
-consumer): the direct ELF push — enc_elf + the _start stub carrying
-the FIRST TRUSTED SHIMS (sys_exit/sys_write as axiom-pedigree
-clobber-set certs; Linux syscall ABI directly, NO libc — the
-platform-externs ruling), the self-checking ELF engine gate (the
-artifact ITSELF runs as a process, no C harness), then the CLI runner
-bin with accepts-derived boundary guards. std/rng via WORD (§7.8,
+consumer): NEXT the CLI runner bin (argv-derived args instead of baked
+vectors; boundary guards from the accepts set), then the World-effect
+axiom that lets a runner's proven I/O cite the shims (the
+platform-externs API's first real consumer). std/rng via WORD (§7.8,
 accepts → EMPTY) stays queued behind it.
 
 ## 7. Open questions — triaged at ratification (2026-07-04)
