@@ -494,7 +494,8 @@
      (RXIErr "unknown bare x86 instruction")))
     (_ (RXIErr "instruction is not an application")))))
 
-(fn rxinstr_items ((tbl (List (Pair Symbol SExpr))) (d Int) (ss (List SExpr))) RXIS
+(fn rxinstr_items ((tbl (List (Pair Symbol SExpr))) (d Int) (ss (List SExpr)))
+  RXIS
   (measure d)
   (if (le d 0) (RXISErr "reflection fuel exhausted")
   (match ss
@@ -689,6 +690,224 @@
        (TFail "second claim element is not (goal …)")))
     (_ (TFail "second claim element is not (goal …)"))))
 
+;; ---- the LIB tie (the lib-build arc) -----------------------------------------------
+;; A lib cert file (tools/wasmgen LIB mode) carries position-general certs
+;; (quantified Func-binder slots before the claim's own literal), a closed
+;; LIBNAME_wmod value and a LIBNAME_exports table. The tie is assembled
+;; FROM THE CERTS: each lowered_* claim contributes its own MkFunc literal
+;; at its pinned index, the positions must cover 0..n-1 exactly, the
+;; export table is reflected from the LIBNAME_exports body, and the ONE
+;; TIE line is enc_lib over the assembly — certs -> bytes with no
+;; producer value in the loop (LIBNAME_wmod is producer output; it never
+;; enters the tie).
+
+;; the chain's own-literal slot: skip quantified symbol slots, return
+;; (index, literal sexpr); tail after the literal must be restfs
+(fn lib_slot ((s SExpr) (j Int)) (Option (Pair Int SExpr))
+  (measure (struct s))
+  (match s
+    ((SList (Cons h (Cons f (Cons tail Nil))))
+     (if (is_sym h (quote Cons))
+       (match f
+         ((SSym _) (lib_slot tail (+ j 1)))
+         (_
+           (match tail
+             ((SSym x) (if (sym_eq x (quote restfs)) (Some (Pair j f)) None))
+             (_ None))))
+       None))
+    (_ None)))
+
+;; one lib claim's contribution: (pinned index, own literal, memsize)
+(type LSlot (LSlot Int SExpr Int))
+
+(fn lib_claim_slot ((gf SExpr)) (Option LSlot)
+  (match gf
+    ((SList (Cons g (Cons _ (Cons _ (Cons concl Nil)))))
+     (if (is_sym g (quote goal))
+       (match (find_call concl)
+         (None None)
+         ((Some items)
+          (match items
+            ((Cons _ (Cons _ (Cons wm (Cons idxs _))))
+             (match wm
+               ((SList (Cons mh (Cons chain (Cons msz Nil))))
+                (if (is_sym mh (quote MkWModule))
+                  (match msz
+                    ((SInt ms)
+                     (match idxs
+                       ((SInt ix)
+                        (match (lib_slot chain 0)
+                          (None None)
+                          ((Some (Pair j f))
+                           (if (int_eq j ix) (Some (LSlot ix f ms)) None))))
+                       (_ None)))
+                    (_ None))
+                  None))
+               (_ None)))
+            (_ None))))
+       None))
+    (_ None)))
+
+(fn lib_slots ((forms (List SExpr))) (Option (List LSlot))
+  (measure (struct forms))
+  (match forms
+    (Nil (Some Nil))
+    ((Cons f rest)
+     (match f
+       ((SList (Cons h (Cons nm (Cons gf _))))
+        (if (is_sym h (quote claim))
+          (match nm
+            ((SSym name)
+             (if (prefix_eq "lowered_" (chars_of_sym name))
+               (match (lib_claim_slot gf)
+                 (None None)
+                 ((Some sl)
+                  (match (lib_slots rest)
+                    (None None)
+                    ((Some sls) (Some (Cons sl sls))))))
+               (lib_slots rest)))
+            (_ (lib_slots rest)))
+          (lib_slots rest)))
+       (_ (lib_slots rest))))))
+
+(fn lslen ((sls (List LSlot))) Int
+  (measure (struct sls))
+  (match sls
+    (Nil 0)
+    ((Cons _ t) (+ 1 (lslen t)))))
+
+(fn ls_at ((sls (List LSlot)) (i Int)) (Option SExpr)
+  (measure (struct sls))
+  (match sls
+    (Nil None)
+    ((Cons (LSlot k f _) rest) (if (int_eq k i) (Some f) (ls_at rest i)))))
+
+;; assemble positions 0..n-1, each covered by exactly one claim's literal
+(fn lib_asm
+  ((tbl (List (Pair Symbol SExpr))) (d Int) (sls (List LSlot)) (i Int) (n Int))
+  RFuncs
+  (measure (- n i) (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (le n i) (RFSOk Nil)
+  (match (ls_at sls i)
+    (None (RFSErr "a module position has no covering claim"))
+    ((Some fs)
+     (match (rfunc tbl d fs)
+       ((RFErr m) (RFSErr m))
+       ((RFOk fu)
+        (match (lib_asm tbl d sls (+ i 1) n)
+          ((RFSOk more) (RFSOk (Cons fu more)))
+          ((RFSErr m) (RFSErr m)))))))))
+
+;; ---- the exports table -------------------------------------------------------------
+
+(fn rwx ((s SExpr)) (Option WExport)
+  (match s
+    ((SList (Cons h (Cons nm (Cons ix Nil))))
+     (if (is_sym h (quote WX))
+       (match nm
+         ((SStr cs)
+          (match ix
+            ((SInt i) (Some (WX cs i)))
+            (_ None)))
+         (_ None))
+       None))
+    (_ None)))
+
+(fn rwxs ((ss (List SExpr))) (Option (List WExport))
+  (measure (struct ss))
+  (match ss
+    (Nil (Some Nil))
+    ((Cons s rest)
+     (match (rwx s)
+       (None None)
+       ((Some e)
+        (match (rwxs rest)
+          (None None)
+          ((Some es) (Some (Cons e es)))))))))
+
+;; drop the LAST k characters (the "_exports" suffix) — the lib name
+(fn take_head ((cs (List Int)) (n Int)) (List Int)
+  (measure (struct cs))
+  (if (le n 0) Nil
+  (match cs
+    (Nil Nil)
+    ((Cons c t) (Cons c (take_head t (- n 1)))))))
+
+(fn llen ((cs (List Int))) Int
+  (measure (struct cs))
+  (match cs
+    (Nil 0)
+    ((Cons _ t) (+ 1 (llen t)))))
+
+;; the (fn NAME () (List WExport) (list …)) form: (libname, table)
+(fn lib_exports_of ((forms (List SExpr)))
+  (Option (Pair (List Int) (List WExport)))
+  (measure (struct forms))
+  (match forms
+    (Nil None)
+    ((Cons f rest)
+     (match f
+       ((SList
+          (Cons
+            h
+            (Cons (SSym nm) (Cons (SList Nil) (Cons rty (Cons body Nil))))))
+        (if (is_sym h (quote fn))
+          (match rty
+            ((SList (Cons lh (Cons wh Nil)))
+             (if (is_sym lh (quote List))
+               (if (is_sym wh (quote WExport))
+                 (match body
+                   ((SList (Cons bh entries))
+                    (if (is_sym bh (quote list))
+                      (match (rwxs entries)
+                        (None (lib_exports_of rest))
+                        ((Some es)
+                         (Some
+                           (Pair
+                             (take_head
+                               (chars_of_sym nm)
+                               (- (llen (chars_of_sym nm)) 8))
+                             es))))
+                      (lib_exports_of rest)))
+                   (_ (lib_exports_of rest)))
+                 (lib_exports_of rest))
+               (lib_exports_of rest)))
+            (_ (lib_exports_of rest)))
+          (lib_exports_of rest)))
+       (_ (lib_exports_of rest))))))
+
+(fn lib_msz ((sls (List LSlot))) Int
+  (match sls
+    (Nil 0)
+    ((Cons (LSlot _ _ ms) _) ms)))
+
+(type SRes2 (SOk2 (List Int)) (SErr2 (List Int)))
+
+;; the whole-file lib tie: one TIE line for the assembled module
+(fn lib_tie
+  ((tbl (List (Pair Symbol SExpr)))
+   (d Int)
+   (forms (List SExpr))
+   (lname (List Int))
+   (exps (List WExport)))
+  SRes2
+  (match (lib_slots forms)
+    (None (SErr2 "a lowered_ claim in a lib file is not in the lib form"))
+    ((Some sls)
+     (match (lib_asm tbl d sls 0 (lslen sls))
+       ((RFSErr m) (SErr2 m))
+       ((RFSOk fs)
+        (SOk2
+          (append_int
+            "TIE "
+            (append_int
+              lname
+              (append_int
+                " "
+                (append_int
+                  (hexs (enc_lib (MkWModule fs (lib_msz sls)) exps))
+                  (nl)))))))))))
+
 (type SRes (SOk (List Int)) (SErr (List Int)))
 
 (fn scan_ties
@@ -736,9 +955,16 @@
      (match (forms_go src Nil 1000000)
        (None (fail2 (append_int "cannot parse " path) w1))
        ((Some forms)
-        (match (scan_ties (inline_table forms) (+ 1 (clen src)) forms "")
-          ((SErr m) (fail2 m w1))
-          ((SOk out) (exit 0 (write out w1)))))))))
+        (match (lib_exports_of forms)
+          ((Some (Pair lname exps))
+           (match
+             (lib_tie (inline_table forms) (+ 1 (clen src)) forms lname exps)
+             ((SErr2 m) (fail2 m w1))
+             ((SOk2 out) (exit 0 (write out w1)))))
+          (None
+            (match (scan_ties (inline_table forms) (+ 1 (clen src)) forms "")
+              ((SErr m) (fail2 m w1))
+              ((SOk out) (exit 0 (write out w1)))))))))))
 
 (fn main ((w World)) World
   (match (get_args w)

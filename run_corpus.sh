@@ -122,6 +122,11 @@ TARGETS=(
   examples/xsibcall_probe.shard
   examples/xchain_probe.shard
   examples/xloopcall_probe.shard
+  examples/libmod_probe.shard
+  examples/lib_form.shard
+  examples/lib_form_rejects.shard
+  examples/purelib_src.shard
+  examples/purelib_out.shard
   examples/x86_diff_run.shard
   examples/rep_probe.shard
   examples/lowfrag_probe.shard

@@ -136,6 +136,29 @@
           (None None)
           ((Some as_) (Some (Cons a as_)))))))))
 
+(fn dc_mod_lib ((e Expr)) (Option PMod)
+  (match (dc_ctor (quote PLib) e)
+    ((Some (Cons nm (Cons bytes (Cons arts (Cons vecs Nil)))))
+     (match (expr_ints nm)
+       ((Some nv)
+        (match (expr_ints bytes)
+          ((Some bv)
+           (match (expr_list arts)
+             ((Some aes)
+              (match (dc_arts aes)
+                ((Some av)
+                 (match (expr_list vecs)
+                   ((Some ves)
+                    (match (dc_vecs ves)
+                      ((Some vv) (Some (PLib nv bv av vv)))
+                      (_ None)))
+                   (_ None)))
+                (_ None)))
+             (_ None)))
+          (_ None)))
+       (_ None)))
+    (_ None)))
+
 (fn dc_mod ((e Expr)) (Option PMod)
   (match (dc_ctor (quote PM) e)
     ((Some (Cons nm (Cons bytes (Cons arts (Cons vecs Nil)))))
@@ -157,7 +180,7 @@
              (_ None)))
           (_ None)))
        (_ None)))
-    (_ None)))
+    (_ (dc_mod_lib e))))
 
 (fn dc_mods ((es (List Expr))) (Option (List PMod))
   (measure (struct es))
@@ -279,14 +302,79 @@
     (Nil "")
     ((Cons a rest) (append_int (art_line a) (art_lines rest)))))
 
+;; the export name covering index k in the art table (lib rendering)
+(fn art_name_at ((as_ (List PArt)) (k Int)) (Option (List Int))
+  (measure (struct as_))
+  (match as_
+    (Nil None)
+    ((Cons (PA nm _ _ _ i _ _) rest)
+     (if (int_eq i k) (Some nm) (art_name_at rest k)))))
+
+;; a lib vector: the fn field is the export NAME (the named-export wire);
+;; a vector whose index no art covers refuses
+(fn vec_line_lib ((nm (List Int)) (arts (List PArt)) (v PVec))
+  (Option (List Int))
+  (match v
+    ((PXV _ _ _ _ _) None)
+    ((PV k args mem want memout)
+     (match (art_name_at arts k)
+       (None None)
+       ((Some en)
+        (match mem
+          (Nil
+            (Some
+              (cat
+                (list
+                  "CASE "
+                  nm
+                  " "
+                  en
+                  (showargs args)
+                  " -> "
+                  (show_int want)
+                  "\n"))))
+          (_
+            (Some
+              (cat
+                (list
+                  "MEMCASE "
+                  nm
+                  " "
+                  en
+                  (showargs args)
+                  " MEM "
+                  (hexs mem)
+                  " -> "
+                  (show_int want)
+                  " "
+                  (hexs memout)
+                  "\n"))))))))))
+
+(fn vec_lines_lib ((nm (List Int)) (arts (List PArt)) (vs (List PVec)))
+  (Option (List Int))
+  (measure (struct vs))
+  (match vs
+    (Nil (Some ""))
+    ((Cons v rest)
+     (match (vec_line_lib nm arts v)
+       (None None)
+       ((Some l)
+        (match (vec_lines_lib nm arts rest)
+          (None None)
+          ((Some ls) (Some (append_int l ls)))))))))
+
 (fn mod_lines ((pm PMod)) (Option (List Int))
   (match pm
     ((PM nm bytes arts vecs)
      (match (vec_lines nm vecs)
        (None None)
        ((Some vls)
-        (Some
-          (cat (list (art_lines arts) "MOD " nm " " (hexs bytes) "\n" vls))))))))
+        (Some (cat (list (art_lines arts) "MOD " nm " " (hexs bytes) "\n" vls))))))
+    ((PLib nm bytes arts vecs)
+     (match (vec_lines_lib nm arts vecs)
+       (None None)
+       ((Some vls)
+        (Some (cat (list (art_lines arts) "MOD " nm " " (hexs bytes) "\n" vls))))))))
 
 (fn plan_lines ((ms (List PMod))) (Option (List Int))
   (measure (struct ms))
@@ -409,7 +497,9 @@
        (None None)
        ((Some vls)
         (Some
-          (cat (list (art_lines arts) "XMOD " nm " " (hexs bytes) "\n" vls))))))))
+          (cat (list (art_lines arts) "XMOD " nm " " (hexs bytes) "\n" vls))))))
+    ;; no lib grammar for the x86 wire yet — a PLib under x86 refuses
+    ((PLib _ _ _ _) None)))
 
 (fn xplan_lines ((ms (List PMod))) (Option (List Int))
   (measure (struct ms))

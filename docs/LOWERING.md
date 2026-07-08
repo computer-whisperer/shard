@@ -1705,6 +1705,83 @@ the emitter-app load prologue dedup (gen_run skeletons + the third
 copy of the prelude ctor list) wants `stdlib_ctors` graduated into
 kernel/reader.shard — bundle with the next kernel-touching slice.
 
+### 6ag. The lib-build arc opens — (lib …) + wasmgen LIB mode (2026-07-07)
+
+THE FLIP (user direction): after the x86 emitter arc's convergence, the
+push moves from fragment growth to COMPILING EXAMPLES end to end — the
+demand side ranks the remaining fragment queue. The framing is a Rust
+cdylib project: instead of describing a `bin` artifact, a source file
+describes PUBLIC FUNCTIONS baked into a LIBRARY — a semantic set that is
+deliberately target-agnostic (the target arrives at build invocation,
+never in the declaration). x86 ELF is the real target; wasm goes first
+because it lands faster and nearly everything transfers (the ELF later
+decomposes as the lib image + a main stub + ELF packaging). Long-term
+vision, pinned: a very boring library example — plain shard functions +
+a three-line declaration — compiles correctly with no per-module
+boilerplate; mod.build stitching is tolerated only until the driver
+derives it.
+
+What landed (each stage first check / first generation):
+
+- **The probe** (examples/libmod_probe.shard): (a) the leaf cert form
+  at NONZERO index — the claim's literal at index K under a QUANTIFIED
+  (f0 Func) prefix, restfs after; call_fn's lookup walks the symbolic
+  cons spine (the §6ac call certs' funcs_of premises already did this);
+  (b) `enc_lib` (models/wasm/encode.shard, ADDITIVE — enc_module and
+  every pinned artifact byte-identical): a WExport (name, index) table
+  drives the export section; V8 replays named CASE lines UNCHANGED —
+  the f<i> convention was only ever the driver's rendering. The export
+  surface is exactly the declared names; internal fns are invisible.
+- **The (lib …) form** (kernel): `(lib NAME (exports E …))` = the bin
+  form's sibling for compiled modules with no entry point. reader.shard
+  Lib/lib_of_form/skip_form; driver.shard COLib + lib acceptance wired
+  into check_production (every export names an implemented fn — a
+  bodyless sig refuses); check.shard renders "LIB name: N/M exports
+  implemented". LAYERING: which SIGNATURES may cross a compiled
+  boundary stays the lowering emitter's refusal; the spec ⊑ machine tie
+  stays the build gates' job. Fixtures: examples/lib_form.shard +
+  lib_form_rejects.shard (ghost export → FAIL, exit 1).
+- **wasmgen LIB mode**: a (lib …) in the target source lays the WHOLE
+  file into ONE module — every fn at its source-order index, certs in
+  the position-general leaf form (pr_fbinds/pr_fcons/pr_rpars; pfx=0 =
+  the old leaf form BYTE-FOR-BYTE, all five regen-gated wasm pins
+  verified identical), plus a CLOSED module value (LIBNAME_wmod) and
+  the export table (LIBNAME_exports) for the build entry. v1 fragment:
+  pure Int fns (straight-line/let/div); mem/loop/call refuse loudly.
+- **Plan + gates**: meta/plan grew PLib (same fields as PM; the wire
+  renders each vector's fn field as the export NAME resolved through
+  the PArt table). lowcheck grew the lib-form arm (quantified
+  Func-binder slots before the literal at the pinned index). bytetie
+  grew the LIB tie: the module is assembled FROM THE CERTS (each
+  claim's own literal at its pinned index, positions covering 0..n-1
+  exactly), the export table reflected from LIBNAME_exports, one TIE
+  line = enc_lib over the assembly — the producer's wmod value never
+  enters the tie. The manifest gate needed ZERO changes (for a lib the
+  export name IS the artifact name; the index binding is unchanged).
+- **The pilot** (examples/purelib_src.shard, THIRTEENTH build pin,
+  lowbuild_purelib.sh): 4 fns, 3 exported, bl_dbl internal-but-certed;
+  all five gates green FIRST RUN (regen byte-identical, schema 4/4,
+  kernel 36/0 + the LIB acceptance line, byte tie + manifest 3 bound,
+  V8 4/4 by name).
+
+DEFERRED (user, explicitly): how mod.build.shard is structured under
+the multi-target + temp-scripting reality — today's `build : Target →
+Plan` signature claims target-genericity while every actual file is
+single-target, spec-side helpers are copy-pasted, and gate sequencing
+lives in shell. Take it up in an arc or two; expected resolution is
+that driver-derivation eats most of mod.build's body (vectors, plan
+assembly), gates move into the driver, and the residue is a small
+per-module override.
+
+Next rungs, in demand order: the generic driver that derives the plan
+from the (lib …) declaration (kills the per-module script + build
+boilerplate; the bin-gate wiring of §7.1 gets its consumer); the CLI
+runner bin over a lib (the first bin shipping a lowered binary);
+std/str re-shipped as ONE lib module (named exports; the spine
+machinery already proven here); std/rng through the WORD fragment
+(§7.8) as the first new content; the x86 lib arm (enc_image already
+multi-fn; ELF packaging when the runner story lands there).
+
 ## 7. Open questions — triaged at ratification (2026-07-04)
 
 None of these block the ratified form; they are the backlog the next
