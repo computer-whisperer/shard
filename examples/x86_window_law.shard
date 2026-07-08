@@ -13,11 +13,19 @@
 ;;; asserts becomes unprovable. "The code never touches unmapped memory"
 ;;; stops being a hope and becomes a CONSEQUENCE of the cert.
 ;;;
-;;; These four claims pin exactly that, on std/mem's own artifact pieces
-;;; over the window [100, 200): in-window read and store succeed;
-;;; below-window and at-hi reads trap. The below-window leg is the one a
-;;; prefix guard could not state — it is the fixture that would have
-;;; caught the gap.
+;;; These ten claims pin exactly that, on std/mem's own artifact pieces
+;;; over the window [100, 200). BOTH guards get all four legs: in-window
+;;; succeeds, the last byte (199) succeeds and hi (200) traps — the
+;;; half-open boundary — and below-window (50) and address 0 trap. The
+;;; below-window leg is the one a prefix guard could not state; it is the
+;;; fixture that would have caught the gap.
+;;;
+;;; Every leg earns its place: mutate one bound of one guard and exactly
+;;; the claims for THAT guard's THAT end go red. Note xrun_regs collapses
+;;; fuel-exhaustion to None as well as XTrap, so a bare `= None` could be
+;;; satisfied by running out of fuel — the in-window claims run the SAME
+;;; fuel (S (S Z)) on the same modules and return Some, which is what
+;;; makes the trap claims mean trap.
 
 (import "../kernel/stdlib.shard")
 (import "../std/mem")
@@ -77,11 +85,18 @@
     (= (xrun_regs (S (S Z)) (wl_get_mod) 0 (wl_regs 200 0) mem) None))
   (steps ((compute both)) refl))
 
-;; --- the STORE guard is the same window -----------------------------------------
+;; --- the STORE guard is the same window, pinned at all four legs -----------------
+;; Not a courtesy: XStore8 has its OWN copy of the guard, so an off-by-one
+;; in the store's high bound is invisible to every load claim above.
 
 (claim window_store_below_traps
   (goal ((mem Mem)) ()
     (= (xrun_regs (S (S Z)) (wl_set_mod) 0 (wl_regs 50 65) mem) None))
+  (steps ((compute both)) refl))
+
+(claim window_store_zero_traps
+  (goal ((mem Mem)) ()
+    (= (xrun_regs (S (S Z)) (wl_set_mod) 0 (wl_regs 0 65) mem) None))
   (steps ((compute both)) refl))
 
 (claim window_store_in_writes
@@ -89,4 +104,16 @@
     (=
       (xrun_regs (S (S Z)) (wl_set_mod) 0 (wl_regs 100 65) mem)
       (Some (Pair (wl_regs 100 65) (mem_set mem 100 65)))))
+  (steps ((compute both)) refl))
+
+(claim window_store_last_byte_writes
+  (goal ((mem Mem)) ()
+    (=
+      (xrun_regs (S (S Z)) (wl_set_mod) 0 (wl_regs 199 65) mem)
+      (Some (Pair (wl_regs 199 65) (mem_set mem 199 65)))))
+  (steps ((compute both)) refl))
+
+(claim window_store_hi_traps
+  (goal ((mem Mem)) ()
+    (= (xrun_regs (S (S Z)) (wl_set_mod) 0 (wl_regs 200 65) mem) None))
   (steps ((compute both)) refl))

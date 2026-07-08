@@ -721,8 +721,15 @@
        None))
     (_ None)))
 
-;; one lib claim's contribution: (pinned index, own literal, memsize)
-(type LSlot (LSlot Int SExpr Int))
+;; a module's memory datum. wasm's linear memory is a PREFIX [0, size) and
+;; that is faithful; x86's is the half-open WINDOW [lo, hi) (X86.md §23).
+;; They are NOT interchangeable: keeping them distinct here is what stops a
+;; future x86 reader from silently receiving `hi` under the name `memsize`
+;; (the two coincide only while lo = 0, which is exactly the pilot's case).
+(type LMem (LPrefix Int) (LWindow Int Int))
+
+;; one lib claim's contribution: (pinned index, own literal, memory datum)
+(type LSlot (LSlot Int SExpr LMem))
 
 (fn lib_claim_slot ((gf SExpr)) (Option LSlot)
   (match gf
@@ -743,7 +750,8 @@
                         (match (lib_slot chain 0)
                           (None None)
                           ((Some (Pair j f))
-                           (if (int_eq j ix) (Some (LSlot ix f ms)) None))))
+                           (if (int_eq j ix) (Some (LSlot ix f (LPrefix ms)))
+                           None))))
                        (_ None)))
                     (_ None))
                   None))
@@ -880,10 +888,16 @@
           (lib_exports_of rest)))
        (_ (lib_exports_of rest))))))
 
+;; the WASM lib tie's memsize (its only consumer is (MkWModule …) below).
+;; An LWindow here would mean an x86 slot reached the wasm tie: unreachable,
+;; and 0 rather than a plausible-looking `hi` if it ever did.
 (fn lib_msz ((sls (List LSlot))) Int
   (match sls
     (Nil 0)
-    ((Cons (LSlot _ _ ms) _) ms)))
+    ((Cons (LSlot _ _ m) _)
+     (match m
+       ((LPrefix s) s)
+       ((LWindow _ _) 0)))))
 
 (type SRes2 (SOk2 (List Int)) (SErr2 (List Int)))
 
@@ -995,16 +1009,21 @@
           (match items
             ((Cons _ (Cons _ (Cons wm (Cons idxs _))))
              (match wm
-               ((SList (Cons mh (Cons chain (Cons _mlo (Cons mhi Nil)))))
+               ((SList (Cons mh (Cons chain (Cons mlo (Cons mhi Nil)))))
                 (if (is_sym mh (quote MkXModule))
-                  (match mhi
-                    ((SInt hi)
-                     (match idxs
-                       ((SInt ix)
-                        (match (lib_slot chain 0)
-                          (None None)
-                          ((Some (Pair j f))
-                           (if (int_eq j ix) (Some (LSlot ix f hi)) None))))
+                  (match mlo
+                    ((SInt lo)
+                     (match mhi
+                       ((SInt hi)
+                        (match idxs
+                          ((SInt ix)
+                           (match (lib_slot chain 0)
+                             (None None)
+                             ((Some (Pair j f))
+                              (if (int_eq j ix)
+                                (Some (LSlot ix f (LWindow lo hi)))
+                                None))))
+                          (_ None)))
                        (_ None)))
                     (_ None))
                   None))
