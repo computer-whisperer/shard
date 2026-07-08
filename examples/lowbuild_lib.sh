@@ -20,7 +20,7 @@ set -euo pipefail
 [ $# -eq 2 ] || { echo "usage: lowbuild_lib.sh SRC OUT"; exit 2; }
 SRC=$1
 OUT=$2
-EVAL=bin/shard_eval
+EVAL=${EVAL:-bin/shard_eval}
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 
 echo "== gate 1: regen (producer determinism)"
