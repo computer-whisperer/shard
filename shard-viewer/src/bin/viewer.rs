@@ -51,6 +51,9 @@ impl Viewer {
 impl App for Viewer {
     fn build(&self, cx: &BuildCx) -> El {
         let zoom = cx.viewport_view(CANVAS_KEY).map_or(1.0, |v| v.zoom);
+        // Whether the viewport is still fitted by the armed policy (vs taken
+        // over by a user pan/zoom) — the Map keys its level of detail off this.
+        let at_home = cx.viewport_at_home(CANVAS_KEY).unwrap_or(true);
         // The detail panel is user-resizable; read its current (dragged) width
         // so the manually-wrapped source re-wraps to fill it.
         let panel_w = cx.user_size(view::PANEL_KEY).unwrap_or(view::DEFAULT_PANEL_W);
@@ -61,6 +64,7 @@ impl App for Viewer {
                 scope: self.scope.clone(),
                 selected_fn: self.selected_fn,
                 zoom,
+                at_home,
                 filter: self.filter.clone(),
                 selection: self.selection.clone(),
                 source_modal: self.source_modal,

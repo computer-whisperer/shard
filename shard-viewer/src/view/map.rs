@@ -23,6 +23,29 @@
 //! The per-level router is Sugiyama for now; because each level is one call to
 //! [`layout_graph`], a better router can replace it per scale without touching
 //! the box rendering.
+//!
+//! ## Semantic zoom (LOD)
+//! A flow card is only worth its pixels when its text is near-legible, so fns
+//! render at one of three tiers ([`Lod`]) chosen from an effective zoom: the
+//! full **flow** card, a **name** box (name + return type — a collapsed flow
+//! card), or a bare **block**. On top of that, per node, a *file* whose box
+//! would land under [`CHIP_PX`] on screen collapses to a **chip** (basename +
+//! fn count) — so at a wide scope the big files stay boxes while the small
+//! ones fold away, and the extent stops exploding.
+//!
+//! Which zoom drives the tiers depends on who owns the viewport:
+//! - **User-driven** (`!at_home`): the live readback zoom. No feedback — the
+//!   extent doesn't move the zoom — so a pure `zoom → tier` map is stable
+//!   (crossing a threshold reflows once, deterministically).
+//! - **At home** (armed fit, incl. headless): the fit zoom is *derived from*
+//!   the content extent, which the tiers themselves determine — deriving tiers
+//!   from the live zoom would oscillate. Instead the tier comes from a
+//!   **predicted** fit zoom: a cheap name-tier probe layout, refined once
+//!   against the layout it produces ([`canvas`]). A pure function of the
+//!   scope, so the armed fit lands on a fixed point.
+//!
+//! The selected fn always renders as a full flow card (and its file never
+//! chips): clicking a name box expands it in place.
 
 use super::flow::render_region;
 use super::shared::{edges_asset, pan_zoom_viewport, placed_graph};
@@ -38,12 +61,59 @@ use std::collections::BTreeMap;
 pub(crate) fn legend() -> El {
     row([
         text("map").mono().muted().font_size(SUB_SIZE),
-        text("dir/file boxes placed by imports · fns by calls · drag to pan, wheel to zoom")
+        text("dir/file boxes placed by imports · fns by calls · zoom for detail (blocks → names → flow) · click a fn to expand it")
             .muted()
             .font_size(SUB_SIZE),
     ])
     .gap(tokens::SPACE_3)
     .padding(tokens::SPACE_2)
+}
+
+/// The level of detail a fn renders at. Ordered: each tier strictly contains
+/// the one below it visually (a name box is a collapsed flow card; a block is
+/// a name box without the text).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Lod {
+    /// A bare tinted rectangle — shape and placement only (name on hover).
+    Block,
+    /// Name + return type: what the Methods view draws.
+    Name,
+    /// The full flow card ([`fn_card`] with the region tree).
+    Flow,
+}
+
+/// Flow-card text is ~11-13px; below this zoom it isn't worth drawing.
+const Z_FLOW: f32 = 0.55;
+/// Below this even the name box's text is illegible — draw bare blocks.
+const Z_NAME: f32 = 0.22;
+/// A file box smaller than this on screen (either dimension) chips.
+const CHIP_PX: f32 = 48.0;
+/// Below this on-screen size a file's intra-file call-edge overlay is dropped
+/// (the nodes stay — placement still encodes the structure).
+const EDGE_PX: f32 = 140.0;
+/// Fixed size of a block-tier fn (placement still comes from the call graph).
+const BLOCK_W: f32 = 56.0;
+const BLOCK_H: f32 = 18.0;
+/// Nominal canvas size for the at-home fit-zoom prediction. The real canvas
+/// depends on the window and open panels, which the pure view can't see; a
+/// tier heuristic doesn't need it exactly.
+const NOMINAL_W: f32 = 1180.0;
+const NOMINAL_H: f32 = 840.0;
+
+/// The tier an effective zoom affords.
+fn tier_for(zoom: f32) -> Lod {
+    if zoom >= Z_FLOW {
+        Lod::Flow
+    } else if zoom >= Z_NAME {
+        Lod::Name
+    } else {
+        Lod::Block
+    }
+}
+
+/// The zoom an armed `FitPolicy::Contain` would land on for this extent.
+fn fit_zoom(b: &Block) -> f32 {
+    (NOMINAL_W / b.w).min(NOMINAL_H / b.h).min(1.0)
 }
 
 pub(crate) fn canvas(project: &Project, p: &ViewParams) -> El {
@@ -69,8 +139,30 @@ pub(crate) fn canvas(project: &Project, p: &ViewParams) -> El {
     for &file in by_file.keys() {
         root.insert(&dir_segments(&project.files[file].rel), file);
     }
-    let ctx = Ctx { project, by_file: &by_file, selected_fn: p.selected_fn };
-    let placed = layout_children(&ctx, &root);
+    let ctx = |tier: Lod, zoom_lod: f32| Ctx {
+        project,
+        by_file: &by_file,
+        selected_fn: p.selected_fn,
+        tier,
+        zoom_lod,
+    };
+    let placed = if p.at_home {
+        // Predict the fitted zoom instead of reading it back (see module docs:
+        // the armed fit derives zoom from the extent the tiers determine, so
+        // the live readback would oscillate). Probe at name tier with chips
+        // off, refine once against the layout the first choice produces.
+        let probe = layout_children(&ctx(Lod::Name, f32::INFINITY), &root);
+        let z0 = fit_zoom(&probe);
+        let first = layout_children(&ctx(tier_for(z0), z0), &root);
+        let z1 = fit_zoom(&first);
+        if tier_for(z1) == tier_for(z0) {
+            first
+        } else {
+            layout_children(&ctx(tier_for(z1), z1), &root)
+        }
+    } else {
+        layout_children(&ctx(tier_for(p.zoom), p.zoom), &root)
+    };
 
     pan_zoom_viewport(row([placed.el]).padding(tokens::SPACE_6))
 }
@@ -81,6 +173,11 @@ struct Ctx<'a> {
     project: &'a Project,
     by_file: &'a BTreeMap<usize, Vec<usize>>,
     selected_fn: Option<usize>,
+    /// The LOD tier fns render at (the selected fn overrides to [`Lod::Flow`]).
+    tier: Lod,
+    /// The effective zoom behind `tier` — also prices the file-chip rule
+    /// (`size × zoom_lod < CHIP_PX`). `INFINITY` disables chipping (probe).
+    zoom_lod: f32,
 }
 
 /// A laid-out, measured sub-tree: its element plus the intrinsic size the parent
@@ -209,22 +306,48 @@ fn layout_file(ctx: &Ctx, file: usize) -> Block {
         }
     }
 
-    let inner = place_with_els(Graph { nodes, edges }, cards);
+    // Edge LOD: below ~EDGE_PX on screen the intra-file web is unreadable gray
+    // mass (placement already encodes the call structure — callers left,
+    // callees right), so the overlay is dropped. Edges still shape the layout.
+    let lay = layout::layout(&Graph { nodes, edges }, &layout::LayoutConfig::default());
+    let visible = |px: f32| lay.width.min(lay.height) * ctx.zoom_lod >= px;
+    let edge_overlay = if visible(EDGE_PX) {
+        edges_asset(&lay)
+    } else {
+        VectorAsset::from_paths([0.0, 0.0, lay.width, lay.height], Vec::new())
+    };
+    let inner = Block { el: placed_graph(&lay, cards, edge_overlay), w: lay.width, h: lay.height };
     let f = &ctx.project.files[file];
     let base = f.rel.rsplit_once('/').map(|(_, b)| b).unwrap_or(&f.rel);
-    let header = row([
-        text(base.to_string()).mono().semibold().font_size(12.0).nowrap_text(),
-        text(format!("{} fns", members.len()))
-            .mono()
-            .muted()
-            .font_size(SUB_SIZE)
-            .nowrap_text(),
-    ])
-    .gap(tokens::SPACE_2)
-    .align(Align::Center);
+    let header = || {
+        row([
+            text(base.to_string()).mono().semibold().font_size(12.0).nowrap_text(),
+            text(format!("{} fns", members.len()))
+                .mono()
+                .muted()
+                .font_size(SUB_SIZE)
+                .nowrap_text(),
+        ])
+        .gap(tokens::SPACE_2)
+        .align(Align::Center)
+    };
+
+    // Per-node LOD: a file whose box would land under CHIP_PX on screen folds
+    // to its header — the surrounding structure keeps reading while the extent
+    // stops paying for invisible content. Never chip the selection's home (the
+    // expanded selected card must stay visible).
+    let holds_selection = ctx.selected_fn.is_some_and(|s| members.contains(&s));
+    let (bw, bh) = (inner.w + 24.0, inner.h + 44.0); // + box padding/header
+    if !holds_selection && (bw.min(bh)) * ctx.zoom_lod < CHIP_PX {
+        let chip = boxed(column([header()]), tokens::CARD.mix(tokens::BACKGROUND, 0.4), tokens::BORDER);
+        return Block {
+            el: chip.el.tooltip(format!("{} · {} fns · {} lines", f.rel, members.len(), f.counts.total())),
+            ..chip
+        };
+    }
 
     boxed(
-        column([header, inner.el]),
+        column([header(), inner.el]),
         tokens::CARD.mix(tokens::BACKGROUND, 0.4),
         tokens::BORDER,
     )
@@ -271,10 +394,56 @@ fn place_with_els(graph: Graph, els: Vec<El>) -> Block {
     Block { el, w: lay.width, h: lay.height }
 }
 
+/// One fn at the context's LOD tier (the selected fn always expands to
+/// [`Lod::Flow`] — click a name box and it opens in place). All tiers carry
+/// the key (clicks route, pan-drag skips) and the triage tooltip.
+fn fn_card(ctx: &Ctx, fn_idx: usize) -> El {
+    let tier = if ctx.selected_fn == Some(fn_idx) { Lod::Flow } else { ctx.tier };
+    match tier {
+        Lod::Flow => flow_card(ctx, fn_idx),
+        Lod::Name => name_card(ctx, fn_idx),
+        // Blocks get the muted fill instead of chrome's CARD: with no text,
+        // fill contrast is all that keeps them visible against the canvas.
+        Lod::Block => column(Vec::<El>::new())
+            .width(Size::Fixed(BLOCK_W))
+            .height(Size::Fixed(BLOCK_H))
+            .radius(3.0)
+            .fill(tokens::MUTED)
+            .stroke(tokens::BORDER)
+            .key(format!("fn:{fn_idx}"))
+            .tooltip(super::methods::node_tip(ctx.project, fn_idx)),
+    }
+}
+
+/// The name tier: the flow card's header line and nothing else.
+fn name_card(ctx: &Ctx, fn_idx: usize) -> El {
+    let f = &ctx.project.fns[fn_idx];
+    row([
+        text(f.name.clone())
+            .mono()
+            .semibold()
+            .font_size(super::TITLE_SIZE)
+            .nowrap_text(),
+        text(format!("→ {}", short_ty(&f.ret)))
+            .mono()
+            .muted()
+            .font_size(SUB_SIZE)
+            .nowrap_text(),
+    ])
+    .gap(tokens::SPACE_2)
+    .align(Align::Center)
+    .padding(6.0)
+    .radius(7.0)
+    .fill(tokens::CARD)
+    .stroke(tokens::BORDER)
+    .key(format!("fn:{fn_idx}"))
+    .tooltip(super::methods::node_tip(ctx.project, fn_idx))
+}
+
 /// One fn as an intrinsic flow card: a name/signature header, its named
 /// arguments (LabVIEW-style inputs), then its region tree (the same renderer
 /// the Flow/Board views use). No fixed size — it hugs.
-fn fn_card(ctx: &Ctx, fn_idx: usize) -> El {
+fn flow_card(ctx: &Ctx, fn_idx: usize) -> El {
     let f = &ctx.project.fns[fn_idx];
     let title = row([
         text(f.name.clone())

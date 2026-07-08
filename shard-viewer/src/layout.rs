@@ -133,9 +133,140 @@ const DUMMY_GAP: f32 = 5.0;
 const CROSSING_SWEEPS: usize = 8;
 const COORD_SWEEPS: usize = 6;
 
+/// Aspect the component-packing pass steers the overall drawing toward
+/// (screen-shaped). Layering itself is left-to-right; a graph of many weakly
+/// connected pieces would otherwise stack them all into layer 0 — one enormous
+/// column whose fit zoom is uselessly small.
+const PACK_ASPECT: f32 = 1.6;
+
 /// Lay out `graph`. The result's `nodes`/`edges` are index-aligned with the
 /// input so callers can map placement back to their own data.
+///
+/// The graph's weakly-connected components are laid out independently and
+/// shelf-packed toward [`PACK_ASPECT`]; a connected graph takes the layered
+/// pipeline directly.
 pub fn layout(graph: &Graph, cfg: &LayoutConfig) -> Layout {
+    let comps = components(graph);
+    if comps.len() <= 1 {
+        return layout_connected(graph, cfg);
+    }
+
+    // Lay each component out with a slim margin (the pack gap spaces them; the
+    // real margin goes around the packed whole), tracking which original node /
+    // edge indices each sub-layout speaks about.
+    let sub_cfg = LayoutConfig { margin: cfg.node_gap * 0.5, ..*cfg };
+    let mut comp_of: Vec<usize> = vec![0; graph.nodes.len()];
+    let mut node_of: Vec<usize> = vec![0; graph.nodes.len()]; // orig node -> comp-local idx
+    for (c, comp) in comps.iter().enumerate() {
+        for (li, &g) in comp.iter().enumerate() {
+            comp_of[g] = c;
+            node_of[g] = li;
+        }
+    }
+    let mut placed: Vec<(Layout, Vec<usize>, Vec<usize>)> = Vec::with_capacity(comps.len());
+    for (c, comp) in comps.iter().enumerate() {
+        let mut edge_ids = Vec::new();
+        let mut edges = Vec::new();
+        for (ei, e) in graph.edges.iter().enumerate() {
+            if comp_of[e.from.node] == c {
+                edge_ids.push(ei);
+                edges.push(GEdge {
+                    from: EndPoint { node: node_of[e.from.node], port: e.from.port },
+                    to: EndPoint { node: node_of[e.to.node], port: e.to.port },
+                });
+            }
+        }
+        let nodes = comp.iter().map(|&g| graph.nodes[g].clone()).collect();
+        placed.push((layout_connected(&Graph { nodes, edges }, &sub_cfg), comp.clone(), edge_ids));
+    }
+
+    // Shelf-pack the component boxes: rows filled left-to-right up to a target
+    // width chosen so the packed area lands near PACK_ASPECT (never narrower
+    // than the widest component). Tallest-first keeps shelves dense.
+    let total_area: f32 = placed.iter().map(|(l, _, _)| l.width * l.height).sum();
+    let widest = placed.iter().map(|(l, _, _)| l.width).fold(0.0, f32::max);
+    let target_w = (total_area * PACK_ASPECT).sqrt().max(widest);
+    let mut order: Vec<usize> = (0..placed.len()).collect();
+    order.sort_by(|&a, &b| placed[b].0.height.total_cmp(&placed[a].0.height));
+
+    let mut out = Layout {
+        nodes: vec![PlacedNode::default(); graph.nodes.len()],
+        edges: vec![RoutedEdge { points: Vec::new(), back: false }; graph.edges.len()],
+        width: 0.0,
+        height: 0.0,
+    };
+    let gap = cfg.node_gap;
+    let (mut x, mut y, mut shelf_h) = (cfg.margin, cfg.margin, 0.0_f32);
+    for &c in &order {
+        let (lay, comp, edge_ids) = &placed[c];
+        if x > cfg.margin && x + lay.width > cfg.margin + target_w {
+            x = cfg.margin;
+            y += shelf_h + gap;
+            shelf_h = 0.0;
+        }
+        for (li, &g) in comp.iter().enumerate() {
+            let mut pn = lay.nodes[li].clone();
+            pn.x += x;
+            pn.y += y;
+            for p in pn.in_ports.iter_mut().chain(pn.out_ports.iter_mut()) {
+                p.0 += x;
+                p.1 += y;
+            }
+            out.nodes[g] = pn;
+        }
+        for (li, &ei) in edge_ids.iter().enumerate() {
+            let mut re = lay.edges[li].clone();
+            for p in &mut re.points {
+                p.0 += x;
+                p.1 += y;
+            }
+            out.edges[ei] = re;
+        }
+        out.width = out.width.max(x + lay.width + cfg.margin);
+        out.height = out.height.max(y + lay.height + cfg.margin);
+        shelf_h = shelf_h.max(lay.height);
+        x += lay.width + gap;
+    }
+    out
+}
+
+/// The graph's weakly-connected components (each a sorted list of node ids),
+/// in first-seen order.
+fn components(graph: &Graph) -> Vec<Vec<usize>> {
+    let n = graph.nodes.len();
+    let mut adj = vec![Vec::new(); n];
+    for e in &graph.edges {
+        adj[e.from.node].push(e.to.node);
+        adj[e.to.node].push(e.from.node);
+    }
+    let mut comp = vec![usize::MAX; n];
+    let mut out: Vec<Vec<usize>> = Vec::new();
+    for start in 0..n {
+        if comp[start] != usize::MAX {
+            continue;
+        }
+        let c = out.len();
+        let mut members = vec![start];
+        comp[start] = c;
+        let mut stack = vec![start];
+        while let Some(v) = stack.pop() {
+            for &w in &adj[v] {
+                if comp[w] == usize::MAX {
+                    comp[w] = c;
+                    members.push(w);
+                    stack.push(w);
+                }
+            }
+        }
+        members.sort_unstable();
+        out.push(members);
+    }
+    out
+}
+
+/// The layered pipeline over one weakly-connected graph (the historical
+/// `layout` body; [`layout`] wraps it with component packing).
+fn layout_connected(graph: &Graph, cfg: &LayoutConfig) -> Layout {
     let n = graph.nodes.len();
     if n == 0 {
         return Layout::default();
@@ -882,6 +1013,47 @@ mod tests {
                     l.height
                 );
             }
+        }
+    }
+
+    #[test]
+    fn disconnected_components_pack_toward_screen_aspect() {
+        // 24 isolated nodes: without component packing they all share layer 0 —
+        // one 24-node column. Packed, the drawing should land near PACK_ASPECT,
+        // not degenerate into a strip in either direction.
+        let g = Graph { nodes: vec![GNode::simple(120.0, 40.0); 24], edges: Vec::new() };
+        let l = layout(&g, &LayoutConfig::default());
+        let aspect = l.width / l.height;
+        assert!((0.5..=4.0).contains(&aspect), "degenerate aspect {aspect} ({}x{})", l.width, l.height);
+        // Placement stays index-aligned and inside bounds, and no two nodes
+        // overlap (packing must not stack shelves onto each other).
+        for (i, a) in l.nodes.iter().enumerate() {
+            assert!(a.x >= 0.0 && a.y >= 0.0 && a.x + a.w <= l.width && a.y + a.h <= l.height);
+            for b in &l.nodes[i + 1..] {
+                let apart = a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y;
+                assert!(apart, "packed nodes overlap");
+            }
+        }
+    }
+
+    #[test]
+    fn component_packing_keeps_edges_aligned_and_local() {
+        // Two components — a 3-chain and a 2-chain — plus an isolated node.
+        // Edges must come back index-aligned, with each polyline connecting its
+        // own endpoints' placed ports (never bridging components).
+        let g = Graph {
+            nodes: vec![GNode::simple(100.0, 36.0); 6],
+            edges: vec![edge(0, 1), edge(1, 2), edge(3, 4)],
+        };
+        let l = layout(&g, &LayoutConfig::default());
+        assert_eq!(l.edges.len(), 3);
+        for (ei, e) in g.edges.iter().enumerate() {
+            let pts = &l.edges[ei].points;
+            assert!(pts.len() >= 2, "edge {ei} unrouted");
+            let (sx, sy) = l.nodes[e.from.node].out_ports[0];
+            let (tx, ty) = l.nodes[e.to.node].in_ports[0];
+            assert_eq!(pts[0], (sx, sy), "edge {ei} start not at its out-port");
+            assert_eq!(*pts.last().unwrap(), (tx, ty), "edge {ei} end not at its in-port");
         }
     }
 

@@ -57,8 +57,17 @@ pub struct ViewParams {
     /// The focused fn cursor (highlighted in the graph, shown in the detail
     /// panel, charted by Flow). Orthogonal to `scope`: a focus *within* it.
     pub selected_fn: Option<usize>,
-    /// Current viewport zoom (read back from the runtime), for display only.
+    /// Current viewport zoom (read back from the runtime). Shown in the
+    /// toolbar, and — when the user has taken the viewport over — it drives the
+    /// Map's level-of-detail tiers.
     pub zoom: f32,
+    /// Whether the canvas viewport is still "at home" — fitted by the armed
+    /// `FitPolicy` / an app `FitContent`, untouched by the user (read back via
+    /// `viewport_at_home`; headless render is always at home). While at home
+    /// the Map derives its level of detail from the scope (a predicted fit
+    /// zoom) instead of `zoom`: an armed fit sets zoom *from* the content
+    /// extent, so deriving detail from the live zoom there would oscillate.
+    pub at_home: bool,
     /// Sidebar filter text (case-insensitive substring over file paths).
     pub filter: String,
     /// Text-selection state for the filter input (app-owned, per damascene).

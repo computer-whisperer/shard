@@ -25,7 +25,18 @@ another when any of its files do). Each level is sized bottom-up by the
 *measured* intrinsic size of the level below (`layout::intrinsic`): a card
 measures itself, a file box measures its laid-out call graph, a dir box measures
 its laid-out import graph — so the engine always has real sizes and there is
-**no estimation** (contrast the Board's `est()`). The interface/implementation
+**no estimation** (contrast the Board's `est()`). **Semantic zoom (LOD)**: fns
+render at three tiers by effective zoom — bare **blocks**, **name boxes**, or
+full **flow cards** — and per node, a file box that would land under ~48px on
+screen collapses to a **chip** (basename + fn count), while a file under ~140px
+drops its call-edge overlay (placement still encodes the structure). The
+selected fn always renders as a full flow card and its file never chips, so
+clicking a name box expands it in place. While the viewport is *at home*
+(fitted by the armed `FitPolicy`, or headless) the tier comes from a
+**predicted** fit zoom — a name-tier probe layout, refined once — because an
+armed fit derives zoom from the extent the tiers themselves determine (a live
+readback there would oscillate); once the user pans or zooms, the tier follows
+the real zoom. The interface/implementation
 split reads at a glance: a `mod.req.shard` of signature-only cards sits beside
 the `.shard` that implements them, with an import arrow between. The whole tree
 is placed without a viewport (`shared::placed_graph`); only the outermost result
@@ -199,7 +210,9 @@ src/
   model.rs   structural extraction + call-graph resolution (same-file-first)
   scope.rs   the subject selection: a fn / file / dir / call-tree / project
   flow.rs    intra-fn structured model (one fn body -> a region/containment tree)
-  layout.rs  layered SCC-aware graph layout
+  layout.rs  layered SCC-aware graph layout (+ weakly-connected components
+             shelf-packed toward a screen aspect, so sparse graphs don't
+             degenerate into one enormous column)
   view/      damascene view tree (pure: project state -> El), one file per variant
     mod.rs     shell: sidebar scope-picker / toolbar / pane dispatch + ViewMode
     shared.rs  pan/zoom viewport, laid-out-graph canvas, edge + legend primitives
