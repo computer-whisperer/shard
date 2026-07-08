@@ -682,8 +682,8 @@
        (Nil False)))))
 
 (fn xg_claim ((f FnDef) (pfx Int)) XCR
-  (if (fn_is_loop f) (xg_claim_loop f)
-  (if (fn_is_mem f) (xg_claim_mem f)
+  (if (fn_is_loop f) (xg_claim_loop f (xw_hlo) (xw_hhi))
+  (if (fn_is_mem f) (xg_claim_mem f (xw_hlo) (xw_hhi))
   (match f
     ((FnDef q ts rty body)
      (if (all_int ts)
@@ -865,20 +865,33 @@
        ((LSIncK _) False)
        (_ (xl_strides_ok t))))))
 
-;; group-A premises, param order: one nonneg per advancing accum
-(fn xl_prems_lo ((bs (List LStr)) (i Int)) Doc
+;; the HARNESS window the fragment claims pin (X86.md §23): the CPU
+;; differential harness maps [0, 65536) at DATA_BASE and the §15 range
+;; dispensation identifies model addresses with window offsets. The bin
+;; route passes its own window instead ([BUF, BUF+4096), the A1 rung).
+(fn xw_hlo () Int 0)
+(fn xw_hhi () Int 65536)
+
+;; group-A premises, param order: one lower bound per advancing accum
+(fn xl_prems_lo ((bs (List LStr)) (wl Int) (i Int)) Doc
   (measure (struct bs))
   (match bs
     (Nil (DStr ""))
     ((Cons h t)
      (DCat
        (if (ls_adv h)
-         (dconc (list (DStr "(= (le 0 x") (dint i) (DStr ") True) ")))
+         (dconc
+           (list
+             (DStr "(= (le ")
+             (dint wl)
+             (DStr " x")
+             (dint i)
+             (DStr ") True) ")))
          (DStr ""))
-       (xl_prems_lo t (+ i 1))))))
+       (xl_prems_lo t wl (+ i 1))))))
 
 ;; group-B premises, param order: one range per advancing accum
-(fn xl_prems_rng ((bs (List LStr)) (i Int)) Doc
+(fn xl_prems_rng ((bs (List LStr)) (wh Int) (i Int)) Doc
   (measure (struct bs))
   (match bs
     (Nil (DStr ""))
@@ -889,9 +902,11 @@
            (list
              (DStr "(= (le (+ x")
              (dint i)
-             (DStr " (int_of_nat k)) 65536) True) ")))
+             (DStr " (int_of_nat k)) ")
+             (dint wh)
+             (DStr ") True) ")))
          (DStr ""))
-       (xl_prems_rng t (+ i 1))))))
+       (xl_prems_rng t wh (+ i 1))))))
 
 ;; the SELF literal as spelled in claims ((inline …) rides the body fn)
 (fn xl_self ((nm Doc) (n Int)) Doc
@@ -1025,7 +1040,9 @@
    (adv (List LStr))
    (ai Int)
    (fa Int)
-   (p Int))
+   (p Int)
+   (wl Int)
+   (wh Int))
   Doc
   (let ((na (xl_nadv adv)))
     (dconc
@@ -1035,13 +1052,17 @@
         (DStr " (goal (")
         (pr_binds mids 0)
         (DStr "(m0 Mem) (c Nat) (k Nat) (restfs (List XFunc))) (")
-        (xl_prems_lo adv 0)
-        (xl_prems_rng adv 0)
+        (xl_prems_lo adv wl 0)
+        (xl_prems_rng adv wh 0)
         (DStr ") (= (xeval_loop (S^ ")
         (dint p)
         (DStr " (xlg_fuel k c)) (MkXModule (Cons ")
         (xl_self nm n)
-        (DStr " restfs) 0 65536) (inline ")
+        (DStr " restfs) ")
+        (dint wl)
+        (sp)
+        (dint wh)
+        (DStr ") (inline ")
         nm
         (DStr "_body) ")
         (xl_regs n adv False)
@@ -1068,7 +1089,15 @@
 
 ;; the piece theorem: entry spine (outer seq / XBlock / inner seq /
 ;; XLoop = +4 over the worker), then the worker by citation
-(fn xl_thm ((nm Doc) (mids (List Type)) (n Int) (adv (List LStr)) (p4 Int)) Doc
+(fn xl_thm
+  ((nm Doc)
+   (mids (List Type))
+   (n Int)
+   (adv (List LStr))
+   (p4 Int)
+   (wl Int)
+   (wh Int))
+  Doc
   (let ((na (xl_nadv adv)))
     (dconc
       (list
@@ -1077,13 +1106,17 @@
         (DStr " (goal (")
         (pr_binds mids 0)
         (DStr "(m0 Mem) (c Nat) (k Nat) (restfs (List XFunc))) (")
-        (xl_prems_lo adv 0)
-        (xl_prems_rng adv 0)
+        (xl_prems_lo adv wl 0)
+        (xl_prems_rng adv wh 0)
         (DStr ") (= (xcall_fn_mem (S^ ")
         (dint p4)
         (DStr " (xlg_fuel k c)) (MkXModule (Cons ")
         (xl_self nm n)
-        (DStr " restfs) 0 65536) 0 (list ")
+        (DStr " restfs) ")
+        (dint wl)
+        (sp)
+        (dint wh)
+        (DStr ") 0 (list ")
         (pr_args mids 0)
         (DStr " (int_of_nat k)) m0) (Some (Pair 0 (")
         nm
@@ -1107,7 +1140,9 @@
    (ai Int)
    (vsrc Doc)
    (fa Int)
-   (p Int))
+   (p Int)
+   (wl Int)
+   (wh Int))
   Doc
   (dconc
     (list
@@ -1125,11 +1160,11 @@
       nm
       (DStr "_body)))))))")
       (DStr (nl))
-      (xl_worker nm mids n adv ai fa p)
-      (xl_thm nm mids n adv (+ p 4)))))
+      (xl_worker nm mids n adv ai fa p wl wh)
+      (xl_thm nm mids n adv (+ p 4) wl wh))))
 
 ;; the loop-fn gate: param slicing + the shared recognizer + v1 fences
-(fn xg_claim_loop ((f FnDef)) XCR
+(fn xg_claim_loop ((f FnDef) (wl Int) (wh Int)) XCR
   (match f
     ((FnDef q ts rty body)
      (match ts
@@ -1174,7 +1209,9 @@
                                            ai
                                            vsrc
                                            fa
-                                           (+ (+ 4 (xl_nadv adv)) 4))))))))
+                                           (+ (+ 4 (xl_nadv adv)) 4)
+                                           wl
+                                           wh)))))))
                                 (_
                                   (xerr_at
                                     q
@@ -1278,7 +1315,7 @@
       (DStr (nl)))))
 
 ;; the shared module-literal prefix: [get, set, caller-body, restfs]
-(fn xm_modpfx ((n Int) (body (List Doc))) Doc
+(fn xm_modpfx ((n Int) (body (List Doc)) (wl Int) (wh Int)) Doc
   (dconc
     (list
       (DStr
@@ -1286,7 +1323,11 @@
       (dint n)
       (DStr " (list ")
       (djoin body)
-      (DStr ")) restfs))) 0 65536)"))))
+      (DStr ")) restfs))) ")
+      (dint wl)
+      (sp)
+      (dint wh)
+      (DStr ")"))))
 
 ;; ---- read fragment: (OP (mem_get m p_a) LIT) -----------------------------------
 
@@ -1335,7 +1376,15 @@
 
 ;; the read piece: park, marshal the address, call get, arith on the byte
 (fn xm_read_unit
-  ((nm Doc) (mids (List Type)) (n Int) (a Int) (od Doc) (q QName) (l Int))
+  ((nm Doc)
+   (mids (List Type))
+   (n Int)
+   (a Int)
+   (od Doc)
+   (q QName)
+   (l Int)
+   (wl Int)
+   (wh Int))
   Doc
   (let ((rd (dcat3 (DStr "(mem_get m0 ") (xm_xk a) (DStr ")"))))
     (let
@@ -1362,11 +1411,15 @@
           (DStr " (goal (")
           (pr_binds mids 0)
           (DStr "(m0 Mem) (c Nat) (restfs (List XFunc))) (")
-          (DStr "(= (le 0 ")
+          (DStr "(= (le ")
+          (dint wl)
+          (DStr " ")
           (xm_xk a)
           (DStr ") True) (= (le (+ ")
           (xm_xk a)
-          (DStr " 1) 65536) True) (= (le 0 ")
+          (DStr " 1) ")
+          (dint wh)
+          (DStr ") True) (= (le 0 ")
           node
           (DStr ") True) (= (lt ")
           node
@@ -1379,7 +1432,9 @@
                 (match (xm_park a)
                   ((Some pr) (Cons (xi_movrr (DStr "RDI") pr) Nil))
                   (None Nil))
-                (list (DStr "(XCall 0)") (xi_bin od (DStr "RAX") (xs_imm l))))))
+                (list (DStr "(XCall 0)") (xi_bin od (DStr "RAX") (xs_imm l)))))
+            wl
+            wh)
           (DStr " 2 (list ")
           (pr_args mids 0)
           (DStr ") m0) (Some (Pair ")
@@ -1428,7 +1483,9 @@
 ;; what makes such fns callable from loops with zero state bookkeeping.
 (fn xm_aligned ((a Int) (v Int)) Bool (if (int_eq a 0) (int_eq v 1) False))
 
-(fn xm_store_unit ((nm Doc) (mids (List Type)) (n Int) (a Int) (v Int)) Doc
+(fn xm_store_unit
+  ((nm Doc) (mids (List Type)) (n Int) (a Int) (v Int) (wl Int) (wh Int))
+  Doc
   (let
     ((mvcode
        (if (xm_aligned a v) (list (DStr "(XCall 1)"))
@@ -1456,12 +1513,16 @@
         (DStr " (goal (")
         (pr_binds mids 0)
         (DStr "(m0 Mem) (c Nat) (restfs (List XFunc))) (")
-        (DStr "(= (le 0 ")
+        (DStr "(= (le ")
+        (dint wl)
+        (DStr " ")
         (xm_xk a)
         (DStr ") True) (= (le (+ ")
         (xm_xk a)
-        (DStr " 1) 65536) True)) (= (xcall_fn_mem (S^ 12 c) ")
-        (xm_modpfx n mvcode)
+        (DStr " 1) ")
+        (dint wh)
+        (DStr ") True)) (= (xcall_fn_mem (S^ 12 c) ")
+        (xm_modpfx n mvcode wl wh)
         (DStr " 2 (list ")
         (pr_args mids 0)
         (DStr ") m0) (Some (Pair 0 ")
@@ -1488,7 +1549,7 @@
         (DStr (nl))))))
 
 ;; the mem-fn gate: param slicing + shape recognition + v1 fences
-(fn xg_claim_mem ((f FnDef)) XCR
+(fn xg_claim_mem ((f FnDef) (wl Int) (wh Int)) XCR
   (match f
     ((FnDef q ts rty body)
      (match ts
@@ -1500,7 +1561,8 @@
                 (if (is_int_ty rty)
                   (match (xm_read body n)
                     ((XMROk a od sq l)
-                     (XCOk (xm_read_unit (dsym (qn_name q)) rest n a od sq l)))
+                     (XCOk
+                       (xm_read_unit (dsym (qn_name q)) rest n a od sq l wl wh)))
                     (XMRNo
                       (xerr_at
                         q
@@ -1508,7 +1570,7 @@
                 (if (is_mem_ty rty)
                   (match (xm_store body n)
                     ((XMSOk a v)
-                     (XCOk (xm_store_unit (dsym (qn_name q)) rest n a v)))
+                     (XCOk (xm_store_unit (dsym (qn_name q)) rest n a v wl wh)))
                     (XMSNo
                       (xerr_at
                         q
@@ -2474,7 +2536,7 @@
       (DStr (nl)))))
 
 ;; the loop's module literal: [get, set, callee, loop | restfs], loop at 3
-(fn xcl_mod ((cs Symbol) (nm Doc)) Doc
+(fn xcl_mod ((cs Symbol) (nm Doc) (wl Int) (wh Int)) Doc
   (dconc
     (list
       (DStr
@@ -2482,11 +2544,15 @@
       (xc_gfsym cs)
       (DStr ") (Cons (MkXFunc 3 (list (XBlock (list (XLoop (inline ")
       nm
-      (DStr "_body)))))) restfs)))) 0 65536)"))))
+      (DStr "_body)))))) restfs)))) ")
+      (dint wl)
+      (sp)
+      (dint wh)
+      (DStr ")"))))
 
 ;; the loop body fn + worker induction + lowered theorem (the probe
 ;; templated; fuel 20/24 probe-validated)
-(fn xcl_unit ((q QName) (cs Symbol)) Doc
+(fn xcl_unit ((q QName) (cs Symbol) (wl Int) (wh Int)) Doc
   (let ((nm (dsym (qn_name q))))
     (dconc
       (list
@@ -2498,15 +2564,22 @@
         (DStr "(claim xclw_")
         nm
         (DStr
-          " (goal ((x0 Int) (x1 Int) (m0 Mem) (c Nat) (k Nat) (restfs (List XFunc))) ((= (le 0 x0) True) (= (le (+ x0 (int_of_nat k)) 65536) True)) (= (xeval_loop (S^ 20 (xlg_fuel k c)) ")
-        (xcl_mod cs nm)
+          " (goal ((x0 Int) (x1 Int) (m0 Mem) (c Nat) (k Nat) (restfs (List XFunc))) ((= (le ")
+        (dint wl)
+        (DStr " x0) True) (= (le (+ x0 (int_of_nat k)) ")
+        (dint wh)
+        (DStr ") True)) (= (xeval_loop (S^ 20 (xlg_fuel k c)) ")
+        (xcl_mod cs nm wl wh)
         (DStr " (inline ")
         nm
         (DStr
           "_body) (MkRegs 0 0 (int_of_nat k) 0 0 x1 x0 0 0 0 0 0 0 0 0) m0) (Some (XBrk 0 (MkRegs 0 0 0 0 0 x1 (xlg_adv x0 k) 0 0 0 0 0 0 0 0) (")
         nm
         (DStr
-          " m0 x0 x1 k))))) (induct k ((case Z (steps ((rewrite (lemma int_of_nat_zero) lr lhs true ()) (compute both)) refl)) (case S (k2) (chain (steps ((unfold xlg_fuel lhs) (reduce lhs) (unfold xeval_loop lhs) (rewrite (lemma int_of_nat_succ) lr lhs true ()) (compute lhs (stop xeval_call xeval_loop xlg_fuel)))) (rewrite-with (lemma xlg_ne) lr lhs () ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))) (steps ((compute lhs (stop xeval_call xeval_loop xlg_fuel)))) (have ha1 (= (le (+ x0 1) 65536) True) (rewrite-with (lemma xlg_a1_ms) lr lhs ((inst c k2)) ((steps ((rewrite (premise 1) lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl) (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)) refl)) (rewrite-with (lemma xcall_bridge) lr lhs ((inst f (inline ")
+          " m0 x0 x1 k))))) (induct k ((case Z (steps ((rewrite (lemma int_of_nat_zero) lr lhs true ()) (compute both)) refl)) (case S (k2) (chain (steps ((unfold xlg_fuel lhs) (reduce lhs) (unfold xeval_loop lhs) (rewrite (lemma int_of_nat_succ) lr lhs true ()) (compute lhs (stop xeval_call xeval_loop xlg_fuel)))) (rewrite-with (lemma xlg_ne) lr lhs () ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))) (steps ((compute lhs (stop xeval_call xeval_loop xlg_fuel)))) (have ha1 (= (le (+ x0 1) ")
+        (dint wh)
+        (DStr
+          ") True) (rewrite-with (lemma xlg_a1_ms) lr lhs ((inst c k2)) ((steps ((rewrite (premise 1) lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl) (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)) refl)) (rewrite-with (lemma xcall_bridge) lr lhs ((inst f (inline ")
         (xc_gfsym cs)
         (DStr
           ")) (inst rs2 (MkRegs 0 0 (+ 1 (int_of_nat k2)) 0 0 x1 x0 0 0 0 0 0 0 0 0)) (inst mem2 (")
@@ -2523,8 +2596,12 @@
         (DStr "(claim lowered_")
         nm
         (DStr
-          " (goal ((x0 Int) (x1 Int) (m0 Mem) (c Nat) (k Nat) (restfs (List XFunc))) ((= (le 0 x0) True) (= (le (+ x0 (int_of_nat k)) 65536) True)) (= (xcall_fn_mem (S^ 24 (xlg_fuel k c)) ")
-        (xcl_mod cs nm)
+          " (goal ((x0 Int) (x1 Int) (m0 Mem) (c Nat) (k Nat) (restfs (List XFunc))) ((= (le ")
+        (dint wl)
+        (DStr " x0) True) (= (le (+ x0 (int_of_nat k)) ")
+        (dint wh)
+        (DStr ") True)) (= (xcall_fn_mem (S^ 24 (xlg_fuel k c)) ")
+        (xcl_mod cs nm wl wh)
         (DStr " 3 (list x0 x1 (int_of_nat k)) m0) (Some (Pair 0 (")
         nm
         (DStr
@@ -2542,7 +2619,9 @@
    (cs Symbol)
    (ks (List LKArg))
    (reg (List CInfo))
-   (certed (List (Pair Symbol CK))))
+   (certed (List (Pair Symbol CK)))
+   (wl Int)
+   (wh Int))
   XCC
   (if (int_eq (count_ts mids) 2)
     (match adv
@@ -2561,7 +2640,7 @@
                   (match (xm_store cbody 2)
                     ((XMSOk a2 v2)
                      (if (xm_aligned a2 v2)
-                       (let ((unit (xcl_unit q cs)))
+                       (let ((unit (xcl_unit q cs wl wh)))
                          (match (ck_find certed cs)
                            ((Some (CKMem)) (XCCOk unit certed))
                            ((Some _)
@@ -2609,7 +2688,11 @@
 ;; the loop route: LRCall bodies dispatch to the call-loop fragment,
 ;; everything else delegates to the store-loop path unchanged
 (fn xg_claim_loop_r
-  ((f FnDef) (reg (List CInfo)) (certed (List (Pair Symbol CK))))
+  ((f FnDef)
+   (reg (List CInfo))
+   (certed (List (Pair Symbol CK)))
+   (wl Int)
+   (wh Int))
   XCC
   (match f
     ((FnDef q ts rty body)
@@ -2621,12 +2704,13 @@
              (let ((mids (ts_mids rest)))
                (if (all_int mids)
                  (match (lp_recognize q (count_ts mids) body reg)
-                   ((LRCall adv cs ks) (xcl_claim q mids adv cs ks reg certed))
-                   (_ (xcc_of (xg_claim_loop f) certed)))
-                 (xcc_of (xg_claim_loop f) certed)))
-             (xcc_of (xg_claim_loop f) certed)))
-          (None (xcc_of (xg_claim_loop f) certed))))
-       (Nil (xcc_of (xg_claim_loop f) certed))))))
+                   ((LRCall adv cs ks)
+                    (xcl_claim q mids adv cs ks reg certed wl wh))
+                   (_ (xcc_of (xg_claim_loop f wl wh) certed)))
+                 (xcc_of (xg_claim_loop f wl wh) certed)))
+             (xcc_of (xg_claim_loop f wl wh) certed)))
+          (None (xcc_of (xg_claim_loop f wl wh) certed))))
+       (Nil (xcc_of (xg_claim_loop f wl wh) certed))))))
 
 ;; ---- module walk ------------------------------------------------------------------
 
@@ -2666,7 +2750,7 @@
           ((QName mp _)
            (if (sym_list_eq mp modpath)
              (if (fn_is_loop f)
-               (match (xg_claim_loop_r f reg certed)
+               (match (xg_claim_loop_r f reg certed (xw_hlo) (xw_hhi))
                  ((XCCErr m) (XEErr m))
                  ((XCCOk d certed2)
                   (xg_fns
