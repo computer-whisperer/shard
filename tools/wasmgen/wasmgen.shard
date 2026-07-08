@@ -102,6 +102,12 @@
 (use (:: kernel reader build_module_d))
 (use (:: kernel reader BMOk))
 (use (:: kernel reader BMFail))
+(use (:: kernel reader read_all))
+(use (:: kernel reader is_lib_form))
+(use (:: kernel reader lib_of_form))
+(use (:: kernel reader Lib))
+(use (:: kernel reader SrcEntry))
+(use (:: kernel loader int_list_eq))
 (use (:: meta doc *))
 (use (:: meta spell *))
 (use (:: tools low schema *))
@@ -3913,8 +3919,8 @@
        ((Cons t0 _)
         (if (is_mem_ty t0)
           (if (fn_is_loop f) (emit_claim_loop f reg) (emit_claim_mem f))
-          (emit_claim_pure f)))
-       (Nil (emit_claim_pure f))))))
+          (emit_claim_pure f 0)))
+       (Nil (emit_claim_pure f 0))))))
 
 ;; ---- the staged pure walk: ediv/mod (docs/LOWERING.md §6y) ---------------------
 ;;
@@ -4037,7 +4043,26 @@
                  (DStr ") lr lhs true ()) (compute lhs))) "))
                (dv_pf t Nil wa ga j1))))))))))
 
-(fn emit_claim_div ((q QName) (ts (List Type)) (body Expr)) CRes
+;; ---- lib position vocabulary (the lib-build arc) --------------------------------
+;; A lib module lays EVERY fn of the source file into ONE WModule; the cert
+;; for the fn at index K quantifies the K slots before it ((f0 Func) …) and
+;; keeps the tail in restfs — the probe form (examples/libmod_probe.shard).
+;; pfx = 0 emits today's leaf form byte-for-byte.
+(fn pr_fbinds ((k Int)) Doc
+  (measure k (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt k 1) (DStr "")
+  (DCat (pr_fbinds (- k 1)) (dcat3 (DStr "(f") (dint (- k 1)) (DStr " Func) ")))))
+
+(fn pr_fcons ((k Int)) Doc
+  (measure k (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt k 1) (DStr "")
+  (DCat (pr_fcons (- k 1)) (dcat3 (DStr "(Cons f") (dint (- k 1)) (DStr " ")))))
+
+(fn pr_rpars ((k Int)) Doc
+  (measure k (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt k 1) (DStr "") (DCat (pr_rpars (- k 1)) (DStr ")"))))
+
+(fn emit_claim_div ((q QName) (ts (List Type)) (body Expr) (pfx Int)) CRes
   (if (dv_has_if body)
     (CErr
       (append_int
@@ -4058,20 +4083,30 @@
                   (dcat3
                     (DStr " (goal (")
                     (pr_binds ts 0)
-                    (DStr "(c Nat) (restfs (List Func))) (")))
+                    (DCat
+                      (pr_fbinds pfx)
+                      (DStr "(c Nat) (restfs (List Func))) ("))))
                 prems
                 (dcat3
                   (dcat3
                     (DStr ") (= (call_fn (S^ ")
                     (dint (+ (* 2 cnt) 3))
-                    (DStr " c) (MkWModule (Cons (MkFunc "))
+                    (DCat
+                      (DStr " c) (MkWModule ")
+                      (DCat (pr_fcons pfx) (DStr "(Cons (MkFunc "))))
                   (dint (count_ts ts))
                   (dcat3
                     (dcat3
                       (DCat (sp) (dint (- nxt (count_ts ts))))
                       (DStr " (list ")
                       (djoin code))
-                    (DStr ")) restfs) 0) 0 (list ")
+                    (dconc
+                      (list
+                        (DStr ")) restfs)")
+                        (pr_rpars pfx)
+                        (DStr " 0) ")
+                        (dint pfx)
+                        (DStr " (list ")))
                     (DStr ""))))
               (dcat3
                 (pr_args ts 0)
@@ -4089,12 +4124,12 @@
               (DStr (nl)))
             (DStr ""))))))))
 
-(fn emit_claim_pure ((f FnDef)) CRes
+(fn emit_claim_pure ((f FnDef) (pfx Int)) CRes
   (match f
     ((FnDef q ts rty body)
      (if (all_int ts)
        (if (is_int_ty rty)
-         (if (has_div body) (emit_claim_div q ts body)
+         (if (has_div body) (emit_claim_div q ts body pfx)
          (match (gen_t (count_ts ts) Nil (count_ts ts) body)
            ((TErr m)
             (CErr (append_int (chars_of_sym (qn_name q)) (append_int ": " m))))
@@ -4112,20 +4147,30 @@
                          (dcat3
                            (DStr " (goal (")
                            (pr_binds ts 0)
-                           (DStr "(c Nat) (restfs (List Func))) (")))
+                           (DCat
+                             (pr_fbinds pfx)
+                             (DStr "(c Nat) (restfs (List Func))) ("))))
                        prems
                        (dcat3
                          (dcat3
                            (DStr ") (= (call_fn (S^ ")
                            (dint (+ (* 2 (rt_count rt)) 3))
-                           (DStr " c) (MkWModule (Cons (MkFunc "))
+                           (DCat
+                             (DStr " c) (MkWModule ")
+                             (DCat (pr_fcons pfx) (DStr "(Cons (MkFunc "))))
                          (dint (count_ts ts))
                          (dcat3
                            (dcat3
                              (DCat (sp) (dint (- (rt_nxt rt) (count_ts ts))))
                              (DStr " (list ")
                              (djoin (rt_code rt)))
-                           (DStr ")) restfs) 0) 0 (list ")
+                           (dconc
+                             (list
+                               (DStr ")) restfs)")
+                               (pr_rpars pfx)
+                               (DStr " 0) ")
+                               (dint pfx)
+                               (DStr " (list ")))
                            (DStr ""))))
                      (dcat3
                        (pr_args ts 0)
@@ -4207,6 +4252,170 @@
              (emit_fns rest modpath accp accl memf loopf callf reg)))))))))
 
 
+;; ---- lib mode (the lib-build arc) ----------------------------------------------
+;; With a (lib …) declaration in the source file, the WHOLE file lays out as
+;; ONE module: every fn at its source-order index, certs in the position-
+;; general leaf form (pfx = the index; examples/libmod_probe.shard), and the
+;; OUT file additionally ships the CLOSED module value (LIBNAME_wmod) and
+;; the named-export table (LIBNAME_exports) for the build entry — the
+;; declaration's exports baked BY NAME, internal fns present but
+;; unexported. v1 fragment: pure Int fns (straight-line/let/div); mem, loop
+;; and call fns refuse loudly.
+
+;; a Func literal, spelled exactly as the claim spells it (same generator,
+;; same inputs — the byte tie holds both to the shipped bytes anyway)
+(fn flit_doc ((np Int) (extra Int) (code (List Doc))) Doc
+  (dconc
+    (list
+      (DStr "(MkFunc ")
+      (dint np)
+      (sp)
+      (dint extra)
+      (DStr " (list ")
+      (djoin code)
+      (DStr "))"))))
+
+(fn lib_flit ((f FnDef)) (Option Doc)
+  (match f
+    ((FnDef q ts rty body)
+     (if (has_div body)
+       (match (gen_e (count_ts ts) Nil (count_ts ts) body)
+         ((GErr _) None)
+         ((GOk code cnt nxt _ evs)
+          (Some (flit_doc (count_ts ts) (- nxt (count_ts ts)) code))))
+       (match (gen_t (count_ts ts) Nil (count_ts ts) body)
+         ((TErr _) None)
+         ((TOk rt)
+          (Some
+            (flit_doc (count_ts ts) (- (rt_nxt rt) (count_ts ts)) (rt_code rt)))))))))
+
+;; claims, the wmod cons spine (open), name -> index, count
+(type LERes (LEOk Doc Doc (List (Pair Symbol Int)) Int) (LEErr (List Int)))
+
+(fn emit_fns_lib
+  ((fns (List FnDef))
+   (modpath (List Symbol))
+   (k Int)
+   (accp Doc)
+   (accw Doc)
+   (accn (List (Pair Symbol Int))))
+  LERes
+  (measure (struct fns))
+  (match fns
+    (Nil (LEOk accp accw accn k))
+    ((Cons f rest)
+     (match f
+       ((FnDef q _ _ _)
+        (match q
+          ((QName mp nm)
+           (if (sym_list_eq mp modpath)
+             (match (emit_claim_pure f k)
+               ((CErr m) (LEErr m))
+               ((COkM d1 d2 d3)
+                (LEErr "mem fns are not in the lib fragment yet"))
+               ((COkC d1) (LEErr "call fns are not in the lib fragment yet"))
+               ((COk dp dl)
+                (match (lib_flit f)
+                  (None (LEErr "lib literal generation failed"))
+                  ((Some flit)
+                   (emit_fns_lib
+                     rest
+                     modpath
+                     (+ k 1)
+                     (DCat accp (DCat (DStr (nl)) dp))
+                     (DCat accw (dcat3 (DStr "(Cons ") flit (sp)))
+                     (Cons (Pair nm k) accn))))))
+             (emit_fns_lib rest modpath k accp accw accn)))))))))
+
+(fn lib_wmod_doc ((lname Symbol) (accw Doc) (k Int)) Doc
+  (dconc
+    (list
+      (DStr (nl))
+      (DStr ";; the lib module: every fn of the file at its source-order index")
+      (DStr (nl))
+      (DStr "(fn ")
+      (dsym lname)
+      (DStr "_wmod () WModule (MkWModule ")
+      accw
+      (DStr "Nil")
+      (pr_rpars k)
+      (DStr " 0))")
+      (DStr (nl)))))
+
+(fn lib_exp_at ((x Symbol) (ns (List (Pair Symbol Int)))) (Option Int)
+  (measure (struct ns))
+  (match ns
+    (Nil None)
+    ((Cons (Pair n i) rest) (if (sym_eq x n) (Some i) (lib_exp_at x rest)))))
+
+(fn lib_exp_entries ((exps (List Symbol)) (ns (List (Pair Symbol Int))))
+  (Option Doc)
+  (measure (struct exps))
+  (match exps
+    (Nil (Some (DStr "")))
+    ((Cons x rest)
+     (match (lib_exp_at x ns)
+       (None None)
+       ((Some i)
+        (match (lib_exp_entries rest ns)
+          (None None)
+          ((Some d)
+           (Some
+             (DCat
+               (dconc
+                 (list
+                   (DStr " (WX ")
+                   (DStr (list 34))
+                   (dsym x)
+                   (DStr (list 34))
+                   (sp)
+                   (dint i)
+                   (DStr ")")))
+               d)))))))))
+
+(fn lib_exports_doc
+  ((lname Symbol) (exps (List Symbol)) (ns (List (Pair Symbol Int))))
+  (Option Doc)
+  (match (lib_exp_entries exps ns)
+    (None None)
+    ((Some entries)
+     (Some
+       (dconc
+         (list
+           (DStr (nl))
+           (DStr
+             ";; the export table: the (lib …) declaration's names, by index")
+           (DStr (nl))
+           (DStr "(fn ")
+           (dsym lname)
+           (DStr "_exports () (List WExport) (list")
+           entries
+           (DStr "))")
+           (DStr (nl))))))))
+
+;; the (lib …) declaration of the TARGET source, if any
+(fn lib_scan_forms ((forms (List SExpr))) (Option Lib)
+  (measure (struct forms))
+  (match forms
+    (Nil None)
+    ((Cons f rest)
+     (if (is_lib_form f)
+       (match (lib_of_form f)
+         (None (lib_scan_forms rest))
+         ((Some l) (Some l)))
+       (lib_scan_forms rest)))))
+
+(fn lib_scan ((srcs (List SrcEntry)) (target (List Int))) (Option Lib)
+  (measure (struct srcs))
+  (match srcs
+    (Nil None)
+    ((Cons (SrcEntry path _ src) rest)
+     (if (int_list_eq path target)
+       (match (read_all src)
+         (None None)
+         ((Some forms) (lib_scan_forms forms)))
+       (lib_scan rest target)))))
+
 (fn header ((target (List Int)) (memf Bool) (loopf Bool)) Doc
   (dconc
     (list
@@ -4232,6 +4441,28 @@
       (if (if memf True loopf) (DStr (append_int "(use (:: std mem *))" (nl)))
       (DStr ""))
       (if loopf (DStr (append_int "(use (:: std nat *))" (nl))) (DStr ""))
+      (DStr "(use (:: ")
+      (pr_modpath (split_slash (until_dot target) Nil))
+      (DStr (append_int " *))" (nl))))))
+
+;; the LIB file's header: the model, the encoder (WExport/WX for the
+;; export table), and the source
+(fn lib_header ((target (List Int))) Doc
+  (dconc
+    (list
+      (DStr
+        ";;; GENERATED by tools/wasmgen (LIB mode: one module, named exports) --")
+      (DStr (nl))
+      (DStr ";;; DO NOT EDIT; regenerate from ")
+      (DStr target)
+      (DStr (append_int "." (nl)))
+      (dimport (append_int (updots target) "kernel/stdlib.shard"))
+      (dimport (append_int (updots target) "models/wasm/wasm.shard"))
+      (dimport (append_int (updots target) "models/wasm/encode.shard"))
+      (dimport (basename_go target Nil))
+      (DStr (append_int "(use (:: models wasm wasm *))" (nl)))
+      (DStr (append_int "(use (:: models wasm encode WExport))" (nl)))
+      (DStr (append_int "(use (:: models wasm encode WX))" (nl)))
       (DStr "(use (:: ")
       (pr_modpath (split_slash (until_dot target) Nil))
       (DStr (append_int " *))" (nl))))))
@@ -4302,6 +4533,49 @@
         (append_int out (append_int " " (append_int lo (nl)))))
       w)))
 
+;; lib mode: emit the position-general claims + the closed module value +
+;; the export table; no link file.
+(fn lib_run
+  ((l Lib) (fns (List FnDef)) (target (List Int)) (out (List Int)) (w World))
+  World
+  (match l
+    ((Lib lname exps)
+     (match
+       (emit_fns_lib
+         fns
+         (split_slash (until_dot target) Nil)
+         0
+         (DStr "")
+         (DStr "")
+         Nil)
+       ((LEErr msg)
+        (exit 1 (write (append_int "refused: " (append_int msg (nl))) w)))
+       ((LEOk bodyp accw ns k)
+        (match (lib_exports_doc lname exps ns)
+          (None
+            (exit
+              1
+              (write
+                "refused: a (lib exports) name is not an emitted fn of this file\n"
+                w)))
+          ((Some expdoc)
+           (match
+             (write_file
+               out
+               (doc_flat
+                 (dconc
+                   (list
+                     (lib_header target)
+                     bodyp
+                     (lib_wmod_doc lname accw k)
+                     expdoc))
+                 Nil)
+               w)
+             ((Pair ok w2)
+              (if ok
+                (exit 0 (write (append_int "wrote " (append_int out (nl))) w2))
+                (fail2 (append_int "cannot write " out) w2)))))))))))
+
 (fn gen_run
   ((target (List Int)) (out (List Int)) (linko (Option (List Int))) (w World))
   World
@@ -4318,47 +4592,54 @@
        ((BMOk m)
         (match m
           ((Module _ fns _ _ _)
-           (match
-             (emit_fns
-               fns
-               (split_slash (until_dot target) Nil)
-               (DStr "")
-               (DStr "")
-               False
-               False
-               False
-               Nil)
-             ((EErr msg)
-              (exit 1 (write (append_int "refused: " (append_int msg (nl))) w1)))
-             ((EOk bodyp bodyl memf loopf callf)
-              (match
-                (write_file
-                  out
-                  (doc_flat (DCat (header target memf loopf) bodyp) Nil)
-                  w1)
-                ((Pair ok w2)
-                 (if ok
-                   (if memf
-                     (match linko
-                       (None
-                         (fail2
-                           "mem-fragment fns present -- usage: wasmgen SRC OUT LINKOUT"
-                           w2))
-                       ((Some lo)
-                        (match
-                          (write_file
-                            lo
-                            (doc_flat
-                              (DCat (link_header target out callf) bodyl)
-                              Nil)
-                            w2)
-                          ((Pair ok2 w3)
-                           (if ok2 (wrote2 out lo w3)
-                           (fail2 (append_int "cannot write " lo) w3))))))
-                     (exit
-                       0
-                       (write (append_int "wrote " (append_int out (nl))) w2)))
-                   (fail2 (append_int "cannot write " out) w2)))))))))))))
+           (match (lib_scan srcs target)
+             ((Some l) (lib_run l fns target out w1))
+             (None
+               (match
+                 (emit_fns
+                   fns
+                   (split_slash (until_dot target) Nil)
+                   (DStr "")
+                   (DStr "")
+                   False
+                   False
+                   False
+                   Nil)
+                 ((EErr msg)
+                  (exit
+                    1
+                    (write (append_int "refused: " (append_int msg (nl))) w1)))
+                 ((EOk bodyp bodyl memf loopf callf)
+                  (match
+                    (write_file
+                      out
+                      (doc_flat (DCat (header target memf loopf) bodyp) Nil)
+                      w1)
+                    ((Pair ok w2)
+                     (if ok
+                       (if memf
+                         (match linko
+                           (None
+                             (fail2
+                               "mem-fragment fns present -- usage: wasmgen SRC OUT LINKOUT"
+                               w2))
+                           ((Some lo)
+                            (match
+                              (write_file
+                                lo
+                                (doc_flat
+                                  (DCat (link_header target out callf) bodyl)
+                                  Nil)
+                                w2)
+                              ((Pair ok2 w3)
+                               (if ok2 (wrote2 out lo w3)
+                               (fail2 (append_int "cannot write " lo) w3))))))
+                         (exit
+                           0
+                           (write
+                             (append_int "wrote " (append_int out (nl)))
+                             w2)))
+                       (fail2 (append_int "cannot write " out) w2)))))))))))))))
 
 (fn main ((w World)) World
   (match (get_args w)
