@@ -1868,11 +1868,15 @@ is pure); the World-effect axiom waits for the runner.
 
 Roadmap (revised 2026-07-08; wasm runner + std/str-as-lib DROPPED —
 the former was an x86 stand-in, the latter supply-side growth with no
-consumer): NEXT the CLI runner bin (argv-derived args instead of baked
-vectors; boundary guards from the accepts set), then the World-effect
-axiom that lets a runner's proven I/O cite the shims (the
-platform-externs API's first real consumer). std/rng via WORD (§7.8,
-accepts → EMPTY) stays queued behind it.
+consumer; the CLI runner RESHAPED same day — a wrapper whose stub
+parses argv is still harness-shaped): NEXT the BIN RUNG (X86.md §21 =
+the record) — `(bin …)` lowers to a plainly executable ELF: proven
+pure main over argv bytes, crt0-sized byte-moving glue, parsing and
+rendering as proven code, the accepts surface driving to EMPTY at the
+program boundary; THEN the World-effect axiom that lets proven
+interactive I/O cite the shims (the platform-externs API's first real
+consumer). std/rng via WORD (§7.8, accepts → EMPTY) stays queued
+behind it.
 
 ## 7. Open questions — triaged at ratification (2026-07-04)
 
