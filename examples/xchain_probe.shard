@@ -1,0 +1,392 @@
+;;; examples/xchain_probe.shard — the COMPOSITION-CHAIN hand-play
+;;; (docs/X86.md §17 probe): a clobber-set cert for a fn that ITSELF
+;;; CONTAINS CALLS, consumed by a caller-of-caller lowered claim. New
+;;; territory over the §16 play:
+;;;   1. THE CERT'S PROOF HAS BRIDGES: xch_mid_cert is not pure compute
+;;;      — its fold stops at the inner calls, each rewritten by
+;;;      xcall_bridge citing xch_sq_cert. The regs-general form pays
+;;;      off: the leaf cert applies AT SYMBOLIC ENTRY REGISTERS (the
+;;;      mid cert's own quantified fields), pure unification.
+;;;   2. THE CLOBBER SET GROWS AND DRIVES THE OUTER ALLOCATION: mid
+;;;      clobbers {rax, rcx, r10} (its stash and park, with SPELLED
+;;;      final values — rcx = the parked sq result, r10 = the entry
+;;;      argument). The outer caller therefore parks in r8/r9 and
+;;;      stashes in rdx — registers mid's cert passes through verbatim.
+;;;      The cert's result record is the register analog of a memory
+;;;      footprint, and here it actually steers regalloc.
+;;;   3. MODULE SPINES NEST: mid's cert pins [sq, mid | restfs]; the
+;;;      consumer's module is [sq, mid, top | restfs] with entry 2 and
+;;;      XCall 1 — the cert's quantified restfs absorbs the extension.
+
+(import "../kernel/stdlib.shard")
+(import "../std/mem")
+(import "../models/x86/x86.shard")
+
+(use (:: std mem *))
+(use (:: models x86 x86 *))
+
+;; --- the specs -------------------------------------------------------------------
+
+(fn xch_sq ((x Int)) Int (* x x))
+
+(fn xch_mid ((a Int)) Int (+ (xch_sq a) (xch_sq a)))
+
+(fn xch_top ((a Int) (b Int)) Int (- (xch_mid a) (xch_mid b)))
+
+;; --- the function literals ----------------------------------------------------------
+
+(fn xch_sq_f () XFunc
+  (MkXFunc 1 (list (XMovRR RAX RDI) (XBin XMul RAX (SReg RDI)))))
+
+;; mid: the §16 two-call caller shape (park r10, both args = the param,
+;; right call first, stash rcx)
+(fn xch_mid_f () XFunc
+  (MkXFunc
+    1
+    (list
+      (XMovRR R10 RDI)
+      (XMovRR RDI R10)
+      (XCall 0)
+      (XMovRR RCX RAX)
+      (XMovRR RDI R10)
+      (XCall 0)
+      (XBin XAdd RAX (SReg RCX)))))
+
+;; top: parks in r8/r9 and stashes in rdx — the complement of mid's
+;; clobber set {rax, rcx, r10}
+(fn xch_top_f () XFunc
+  (MkXFunc
+    2
+    (list
+      (XMovRR R8 RDI)
+      (XMovRR R9 RSI)
+      (XMovRR RDI R9)
+      (XCall 1)
+      (XMovRR RDX RAX)
+      (XMovRR RDI R8)
+      (XCall 1)
+      (XBin XSub RAX (SReg RDX)))))
+
+;; --- the leaf cert (the §10/§16 form, unchanged) ------------------------------------
+
+(claim xch_sq_cert
+  (goal
+    ((c Nat)
+     (restfs (List XFunc))
+     (msz Int)
+     (mem Mem)
+     (rax Int)
+     (rcx Int)
+     (rdx Int)
+     (rbx Int)
+     (rbp Int)
+     (rsi Int)
+     (rdi Int)
+     (r8 Int)
+     (r9 Int)
+     (r10 Int)
+     (r11 Int)
+     (r12 Int)
+     (r13 Int)
+     (r14 Int)
+     (r15 Int))
+    ()
+    (=
+      (xrun_regs
+        (S^ 3 c)
+        (MkXModule (Cons (inline xch_sq_f) restfs) msz)
+        0
+        (MkRegs rax rcx rdx rbx rbp rsi rdi r8 r9 r10 r11 r12 r13 r14 r15)
+        mem)
+      (Some
+        (Pair
+          (MkRegs
+            (wrap64 (* rdi rdi))
+            rcx
+            rdx
+            rbx
+            rbp
+            rsi
+            rdi
+            r8
+            r9
+            r10
+            r11
+            r12
+            r13
+            r14
+            r15)
+          mem))))
+  (steps ((compute both)) refl))
+
+;; --- the chain cert: mid at module index 1, proof BY BRIDGES ------------------------
+;; Result record: rax = the doubly-wrapped combined value, rcx = the
+;; parked first result, r10 = the entry argument, rdi = rdi verbatim
+;; (the marshal reloads the same value); everything else passes through.
+
+(claim xch_mid_cert
+  (goal
+    ((c Nat)
+     (restfs (List XFunc))
+     (msz Int)
+     (mem Mem)
+     (rax Int)
+     (rcx Int)
+     (rdx Int)
+     (rbx Int)
+     (rbp Int)
+     (rsi Int)
+     (rdi Int)
+     (r8 Int)
+     (r9 Int)
+     (r10 Int)
+     (r11 Int)
+     (r12 Int)
+     (r13 Int)
+     (r14 Int)
+     (r15 Int))
+    ()
+    (=
+      (xrun_regs
+        (S^ 20 c)
+        (MkXModule
+          (Cons (inline xch_sq_f) (Cons (inline xch_mid_f) restfs))
+          msz)
+        1
+        (MkRegs rax rcx rdx rbx rbp rsi rdi r8 r9 r10 r11 r12 r13 r14 r15)
+        mem)
+      (Some
+        (Pair
+          (MkRegs
+            (wrap64 (+ (wrap64 (* rdi rdi)) (wrap64 (* rdi rdi))))
+            (wrap64 (* rdi rdi))
+            rdx
+            rbx
+            rbp
+            rsi
+            rdi
+            r8
+            r9
+            rdi
+            r11
+            r12
+            r13
+            r14
+            r15)
+          mem))))
+  (chain
+    (steps ((compute lhs (stop xeval_call))))
+    (rewrite-with
+      (lemma xcall_bridge)
+      lr
+      lhs
+      ((inst f (inline xch_sq_f))
+       (inst
+         rs2
+         (MkRegs
+           (wrap64 (* rdi rdi))
+           rcx
+           rdx
+           rbx
+           rbp
+           rsi
+           rdi
+           r8
+           r9
+           rdi
+           r11
+           r12
+           r13
+           r14
+           r15))
+       (inst mem2 mem))
+      ((steps ((compute both)) refl)
+       (chain
+         (rewrite-with (lemma xch_sq_cert) lr lhs () ())
+         (steps ((compute both)))
+         refl)))
+    (steps ((compute lhs (stop xeval_call))))
+    (rewrite-with
+      (lemma xcall_bridge)
+      lr
+      lhs
+      ((inst f (inline xch_sq_f))
+       (inst
+         rs2
+         (MkRegs
+           (wrap64 (* rdi rdi))
+           (wrap64 (* rdi rdi))
+           rdx
+           rbx
+           rbp
+           rsi
+           rdi
+           r8
+           r9
+           rdi
+           r11
+           r12
+           r13
+           r14
+           r15))
+       (inst mem2 mem))
+      ((steps ((compute both)) refl)
+       (chain
+         (rewrite-with (lemma xch_sq_cert) lr lhs () ())
+         (steps ((compute both)))
+         refl)))
+    (steps ((compute both)))
+    refl))
+
+;; --- the consumer: caller-of-caller in the LOWERED form -----------------------------
+;; Module [sq, mid, top | restfs], entry 2; each XCall 1 rewritten by the
+;; bridge citing xch_mid_cert; the wrap chain runs over the DOUBLY
+;; inlined effective body; the spec RHS opens under the closing compute
+;; both (both xch_mid and xch_sq are transparent).
+
+(claim xch_top_thm
+  (goal ((a Int) (b Int) (c Nat) (restfs (List XFunc)) (mem Mem))
+    ((= (le 0 (* a a)) True)
+     (= (lt (* a a) 18446744073709551616) True)
+     (= (le 0 (+ (* a a) (* a a))) True)
+     (= (lt (+ (* a a) (* a a)) 18446744073709551616) True)
+     (= (le 0 (* b b)) True)
+     (= (lt (* b b) 18446744073709551616) True)
+     (= (le 0 (+ (* b b) (* b b))) True)
+     (= (lt (+ (* b b) (* b b)) 18446744073709551616) True)
+     (= (le 0 (- (+ (* a a) (* a a)) (+ (* b b) (* b b)))) True)
+     (=
+       (lt (- (+ (* a a) (* a a)) (+ (* b b) (* b b))) 18446744073709551616)
+       True))
+    (=
+      (xcall_fn_mem
+        (S^ 60 c)
+        (MkXModule
+          (Cons
+            (inline xch_sq_f)
+            (Cons (inline xch_mid_f) (Cons (inline xch_top_f) restfs)))
+          0)
+        2
+        (list a b)
+        mem)
+      (Some (Pair (xch_top a b) mem))))
+  (chain
+    (steps ((compute lhs (stop xeval_call))))
+    (rewrite-with
+      (lemma xcall_bridge)
+      lr
+      lhs
+      ((inst f (inline xch_mid_f))
+       (inst
+         rs2
+         (MkRegs
+           (wrap64 (+ (wrap64 (* b b)) (wrap64 (* b b))))
+           (wrap64 (* b b))
+           0
+           0
+           0
+           b
+           b
+           a
+           b
+           b
+           0
+           0
+           0
+           0
+           0))
+       (inst mem2 mem))
+      ((steps ((compute both)) refl)
+       (chain
+         (rewrite-with (lemma xch_mid_cert) lr lhs () ())
+         (steps ((compute both)))
+         refl)))
+    (steps ((compute lhs (stop xeval_call))))
+    (rewrite-with
+      (lemma xcall_bridge)
+      lr
+      lhs
+      ((inst f (inline xch_mid_f))
+       (inst
+         rs2
+         (MkRegs
+           (wrap64 (+ (wrap64 (* a a)) (wrap64 (* a a))))
+           (wrap64 (* a a))
+           (wrap64 (+ (wrap64 (* b b)) (wrap64 (* b b))))
+           0
+           0
+           b
+           a
+           a
+           b
+           a
+           0
+           0
+           0
+           0
+           0))
+       (inst mem2 mem))
+      ((steps ((compute both)) refl)
+       (chain
+         (rewrite-with (lemma xch_mid_cert) lr lhs () ())
+         (steps ((compute both)))
+         refl)))
+    (steps ((compute lhs)))
+    (have w0 (= (mod (* a a) 18446744073709551616) (* a a))
+      (rewrite-with
+        (lemma wrap64_id)
+        lr
+        lhs
+        ((inst x (* a a)))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise w0) lr lhs true ())))
+    (have w1
+      (= (mod (+ (* a a) (* a a)) 18446744073709551616) (+ (* a a) (* a a)))
+      (rewrite-with
+        (lemma wrap64_id)
+        lr
+        lhs
+        ((inst x (+ (* a a) (* a a))))
+        ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+         (steps ((rewrite (premise 3) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise w1) lr lhs true ())))
+    (have w2 (= (mod (* b b) 18446744073709551616) (* b b))
+      (rewrite-with
+        (lemma wrap64_id)
+        lr
+        lhs
+        ((inst x (* b b)))
+        ((steps ((rewrite (premise 4) lr lhs true ())) refl)
+         (steps ((rewrite (premise 5) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise w2) lr lhs true ())))
+    (have w3
+      (= (mod (+ (* b b) (* b b)) 18446744073709551616) (+ (* b b) (* b b)))
+      (rewrite-with
+        (lemma wrap64_id)
+        lr
+        lhs
+        ((inst x (+ (* b b) (* b b))))
+        ((steps ((rewrite (premise 6) lr lhs true ())) refl)
+         (steps ((rewrite (premise 7) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise w3) lr lhs true ())))
+    (have w4
+      (=
+        (mod (- (+ (* a a) (* a a)) (+ (* b b) (* b b))) 18446744073709551616)
+        (- (+ (* a a) (* a a)) (+ (* b b) (* b b))))
+      (rewrite-with
+        (lemma wrap64_id)
+        lr
+        lhs
+        ((inst x (- (+ (* a a) (* a a)) (+ (* b b) (* b b)))))
+        ((steps ((rewrite (premise 8) lr lhs true ())) refl)
+         (steps ((rewrite (premise 9) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise w4) lr lhs true ())))
+    (steps ((unfold xch_top rhs) (reduce rhs)))
+    (steps ((compute both)))
+    refl))
