@@ -1,0 +1,138 @@
+;;; examples/libmod_probe.shard — the LIB-MODULE probe (the lib-build arc):
+;;; ONE wasm module carrying several functions, the public ones exported BY
+;;; NAME (models/wasm/encode.shard's enc_lib — the cdylib boundary), the
+;;; internals unexported. Two findings this probe pins:
+;;;
+;;;   1. the leaf cert form at NONZERO index: libp_add_at1 pins its literal
+;;;      at index 1 under a QUANTIFIED prefix (f0 Func) — call_fn's lookup
+;;;      walks the symbolic cons spine (the §6ac call certs already do this
+;;;      through their funcs_of premises); the index-0 form (libp_inc) is
+;;;      the degenerate case;
+;;;   2. named exports replay under V8: main renders a MOD + CASE plan whose
+;;;      fn fields are the EXPORT NAMES (wasm_diff.mjs is name-agnostic),
+;;;      over a module whose third function is internal and unexported.
+;;;
+;;; RUN IT:
+;;;   bin/shard_eval run examples/libmod_probe.shard | node examples/wasm_diff.mjs /dev/stdin
+
+(import "../kernel/stdlib.shard")
+(import "../models/wasm/wasm.shard")
+(import "../models/wasm/encode.shard")
+(use (:: models wasm wasm *))
+(use (:: models wasm encode *))
+
+;; --- the specs -------------------------------------------------------------------
+
+(fn pl_inc ((a Int)) Int (+ a 1))
+
+(fn pl_add ((a Int) (b Int)) Int (+ a b))
+
+;; --- the certs -------------------------------------------------------------------
+
+;; index 0, others behind: the existing leaf form (restfs absorbs the rest
+;; of the lib).
+(claim libp_inc
+  (goal ((x0 Int) (c Nat) (restfs (List Func)))
+    ((= (le 0 (+ x0 1)) True) (= (lt (+ x0 1) 4294967296) True))
+    (=
+      (call_fn
+        (S^ 9 c)
+        (MkWModule
+          (Cons
+            (MkFunc 1 0 (list (LocalGet 0) (I32Const 1) (I32Bin BAdd)))
+            restfs)
+          0)
+        0
+        (list x0))
+      (Some (pl_inc x0))))
+  (chain
+    (steps ((compute lhs) (unfold pl_inc rhs) (reduce rhs)))
+    (have w0 (= (mod (+ x0 1) 4294967296) (+ x0 1))
+      (rewrite-with
+        (lemma wrap32_id)
+        lr
+        lhs
+        ((inst x (+ x0 1)))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise w0) lr lhs true ())))
+    refl))
+
+;; THE PROBE TARGET: the same leaf form at index 1, the function BEFORE it
+;; fully quantified — the position-general cert a lib layout emits.
+(claim libp_add_at1
+  (goal ((f0 Func) (x0 Int) (x1 Int) (c Nat) (restfs (List Func)))
+    ((= (le 0 (+ x0 x1)) True) (= (lt (+ x0 x1) 4294967296) True))
+    (=
+      (call_fn
+        (S^ 9 c)
+        (MkWModule
+          (Cons
+            f0
+            (Cons
+              (MkFunc 2 0 (list (LocalGet 0) (LocalGet 1) (I32Bin BAdd)))
+              restfs))
+          0)
+        1
+        (list x0 x1))
+      (Some (pl_add x0 x1))))
+  (chain
+    (steps ((compute lhs) (unfold pl_add rhs) (reduce rhs)))
+    (have w0 (= (mod (+ x0 x1) 4294967296) (+ x0 x1))
+      (rewrite-with
+        (lemma wrap32_id)
+        lr
+        lhs
+        ((inst x (+ x0 x1)))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise w0) lr lhs true ())))
+    refl))
+
+;; --- the module and its plan ------------------------------------------------------
+
+(fn inc_f () Func (MkFunc 1 0 (list (LocalGet 0) (I32Const 1) (I32Bin BAdd))))
+
+(fn add_f () Func (MkFunc 2 0 (list (LocalGet 0) (LocalGet 1) (I32Bin BAdd))))
+
+;; internal: present in the module, absent from the export section.
+(fn help_f () Func (MkFunc 1 0 (list (LocalGet 0) (LocalGet 0) (I32Bin BMul))))
+
+(fn libp_mod () WModule
+  (MkWModule (Cons (inc_f) (Cons (add_f) (Cons (help_f) Nil))) 0))
+
+(fn libp_bytes () (List Int)
+  (enc_lib (libp_mod) (list (WX "pl_inc" 0) (WX "pl_add" 1))))
+
+;; --- rendering (the differ's MOD/CASE grammar) -------------------------------------
+
+(type World (World Int))
+
+(extern write ((bytes (List Int)) (w World)) World)
+
+(extern exit ((code Int) (w World)) World)
+
+(fn sapp ((xs (List Int)) (ys (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil ys)
+    ((Cons h t) (Cons h (sapp t ys)))))
+
+(fn hexd ((d Int)) Int (if (lt d 10) (+ 48 d) (+ 87 d)))
+
+(fn hexs ((bs (List Int))) (List Int)
+  (measure (struct bs))
+  (match bs
+    (Nil Nil)
+    ((Cons b t) (Cons (hexd (ediv b 16)) (Cons (hexd (mod b 16)) (hexs t))))))
+
+(fn plan () (List Int)
+  (sapp
+    "MOD libp "
+    (sapp
+      (hexs (libp_bytes))
+      "\nCASE libp pl_inc 5 -> 6\nCASE libp pl_add 7 8 -> 15\n")))
+
+(fn main ((w World)) World (exit 0 (write (plan) w)))

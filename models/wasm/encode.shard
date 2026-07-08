@@ -251,3 +251,53 @@
 ;; sections.
 (fn enc_module ((m WModule)) (List Int)
   (wapp (list 0 97 115 109 1 0 0 0) (enc_sections (funcs_of m) (memsize_of m))))
+
+;; --- lib modules: named exports -------------------------------------------------
+;; The LIB encoding (the lib-build arc): a module whose PUBLIC functions are
+;; exported by NAME — the cdylib boundary — and whose other functions stay
+;; unexported. ADDITIVE next to enc_module (the f<i> harness convention):
+;; every artifact pinned on enc_module stays byte-identical.
+
+;; a named export entry: the export name (byte string) and the function
+;; index it binds.
+(type WExport (WX (List Int) Int))
+
+;; export entry: size-prefixed name, desc 0x00 (func), index.
+(fn enc_nexport ((e WExport)) (List Int)
+  (match e
+    ((WX nm i) (wapp (uleb (wlen nm)) (wapp nm (Cons 0 (uleb i)))))))
+
+(fn enc_nexports ((es (List WExport))) (List Int)
+  (measure (struct es))
+  (match es
+    (Nil Nil)
+    ((Cons e t) (wapp (enc_nexport e) (enc_nexports t)))))
+
+(fn xlen ((es (List WExport))) Int
+  (measure (struct es))
+  (match es
+    (Nil 0)
+    ((Cons e t) (+ 1 (xlen t)))))
+
+;; lib sections: type/function/memory/code identical to enc_sections; the
+;; export section carries the NAMED entries (plus the memory export).
+(fn enc_lib_sections ((fs (List Func)) (memsize Int) (es (List WExport)))
+  (List Int)
+  (wapp
+    (wsec 1 (wapp (uleb (flen fs)) (enc_types fs)))
+    (wapp
+      (wsec 3 (wapp (uleb (flen fs)) (enc_funcidxs fs 0)))
+      (wapp
+        (enc_memsec memsize)
+        (wapp
+          (wsec
+            7
+            (wapp
+              (uleb (+ (xlen es) (memcount memsize)))
+              (wapp (enc_nexports es) (enc_memexport memsize))))
+          (wsec 10 (wapp (uleb (flen fs)) (enc_codes fs))))))))
+
+(fn enc_lib ((m WModule) (es (List WExport))) (List Int)
+  (wapp
+    (list 0 97 115 109 1 0 0 0)
+    (enc_lib_sections (funcs_of m) (memsize_of m) es)))
