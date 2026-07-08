@@ -202,6 +202,29 @@
                (list (mod v 256)))))))))
     (other Nil)))
 
+;; --- ELF harness stub byte encoders (docs/X86.md §20) -------------------------
+;;
+;; The self-checking ELF stub (models/x86/elf.shard) marshals SysV args and
+;; `call`s exports; these concentrate its instruction opcodes HERE in the
+;; encoder, leaving elf.shard only ELF-structural bytes + encoder/shim calls.
+;; Byte-level: push/pop are not model XInstr (the encoder owns the control
+;; stack, so rsp is never a model register), but their opcode bytes belong
+;; with the rest of the ISA's byte authorship, not in the container.
+
+;; mov r64, imm64 (REX.W + B8+rd io) — the same bytes enc_simple gives XMovRI.
+(fn enc_mov_imm64 ((r Reg) (v Int)) (List Int)
+  (let ((n (reg_num r))) (eapp (list (+ 72 (rhi n)) (+ 184 (rlo n))) (le8 v))))
+
+;; call rel32 (0xE8 cd) to a caller-computed displacement (target - call end).
+;; The image-relative disp is the container's arithmetic; the opcode is ours.
+(fn enc_call_rel32 ((disp Int)) (List Int) (Cons 232 (le4 disp)))
+
+;; push r64 / pop r64 (0x50+rd / 0x58+rd, low-8 regs — the stub only spills
+;; rax/rcx across the syscall splice).
+(fn enc_push_reg ((r Reg)) (List Int) (list (+ 80 (rlo (reg_num r)))))
+
+(fn enc_pop_reg ((r Reg)) (List Int) (list (+ 88 (rlo (reg_num r)))))
+
 ;; --- comparison bytes for conditional jumps -----------------------------------
 
 ;; test r,r (REX.W 0x85 /r, mod=11) — sets ZF from the register (the zero
@@ -445,13 +468,11 @@
     ((Cons f t)
      (match myoffs
        (Nil Nil)
-       ((Cons o ot)
-        (eapp (enc_fn_at f o offs) (img_emit_ord t ot offs)))))))
+       ((Cons o ot) (eapp (enc_fn_at f o offs) (img_emit_ord t ot offs)))))))
 
 ;; the whole image, index order, internal calls resolved image-relative
 (fn enc_image_ord ((fs (List XFunc))) (List Int)
-  (let ((offs (img_offs_ord fs 0)))
-    (img_emit_ord fs offs offs)))
+  (let ((offs (img_offs_ord fs 0))) (img_emit_ord fs offs offs)))
 
 ;; ---- named exports (LIB mode, docs/X86.md §19) ------------------------------
 ;;
