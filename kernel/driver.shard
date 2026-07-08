@@ -258,6 +258,7 @@
   (COAdmit Symbol (List Int))  ; (admit) in proof — UNSOUND, exit 3; + trace-block
   (COPending Symbol)  ; a requirement stated but never fulfilled in this closure
   (COBin Symbol Int Int)  ; a bin acceptance summary: name, required, met
+  (COLib Symbol Int Int)  ; a lib acceptance summary: name, exports declared, implemented
   ;; COTypeFail: a type error from types.shard — a HARD failure. The decl is
   ;; rejected: an ill-typed axiom is not admitted, an ill-typed requirement is
   ;; not seeded, an ill-typed claim is not proof-checked. (The theory backends
@@ -2342,6 +2343,76 @@
           (bins_with_mp (module_path_of path) (bins_of_forms forms))
           (bins_of_srcs rest)))))))
 
+;; ---- lib acceptance reporting ----------------------------------------------
+;; A `(lib …)` declares a LIBRARY artifact (reader.shard): the module's
+;; public functions compiled into a binary and exported BY NAME. Check-side
+;; acceptance is DECLARATION well-formedness — every listed export names an
+;; implemented fn in the closure (the entry_check posture; a bodyless sig is
+;; not an export). Which SIGNATURES may cross a compiled boundary is the
+;; lowering emitter's refusal, and the spec ⊑ machine tie is the build
+;; gates' job (certs + bytetie + manifest) — neither is re-checked here.
+(fn export_impl ((x Symbol) (m Module)) Bool
+  (match m
+    ((Module _ fns _ _ _)
+     (match (find_fn_named x fns)
+       (None False)
+       ((Some _) True)))))
+
+(fn exports_check ((xs (List Symbol)) (m Module)) (List ClaimOutcome)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons x rest)
+     (if (export_impl x m) (exports_check rest m)
+     (Cons
+       (COFail x "lib export: no implemented fn of this name" Nil)
+       (exports_check rest m))))))
+
+(fn count_impl ((xs (List Symbol)) (m Module)) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons x rest) (+ (if (export_impl x m) 1 0) (count_impl rest m)))))
+
+(fn lib_report ((l Lib) (m Module)) (List ClaimOutcome)
+  (match l
+    ((Lib name exports)
+     (oc_concat
+       (Cons (COLib name (len_syms exports) (count_impl exports m)) Nil)
+       (exports_check exports m)))))
+
+(fn lib_reports ((ls (List Lib)) (m Module)) (List ClaimOutcome)
+  (measure (struct ls))
+  (match ls
+    (Nil Nil)
+    ((Cons l rest) (oc_concat (lib_report l m) (lib_reports rest m)))))
+
+(fn lib_concat ((a (List Lib)) (b (List Lib))) (List Lib)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (lib_concat t b)))))
+
+(fn libs_of_forms ((forms (List SExpr))) (List Lib)
+  (measure (struct forms))
+  (match forms
+    (Nil Nil)
+    ((Cons f rest)
+     (if (is_lib_form f)
+       (match (lib_of_form f)
+         (None (libs_of_forms rest))
+         ((Some l) (Cons l (libs_of_forms rest))))
+       (libs_of_forms rest)))))
+
+(fn libs_of_srcs ((srcs (List SrcEntry))) (List Lib)
+  (measure (struct srcs))
+  (match srcs
+    (Nil Nil)
+    ((Cons (SrcEntry path _ src) rest)
+     (match (read_all src)
+       (None (libs_of_srcs rest))
+       ((Some forms) (lib_concat (libs_of_forms forms) (libs_of_srcs rest)))))))
+
 ;; Production entry point: returns the per-claim/axiom outcomes (source order)
 ;; for the whole file list, checked against m from the empty theory, followed
 ;; by each bin's acceptance report. `target` is the `--trace` claim name ('all
@@ -2388,8 +2459,10 @@
          (oc_concat
            (bin_reports (bins_of_srcs srcs) th m led (own_externs_of_srcs srcs))
            (oc_concat
-             (mc_outcome m srcs sidecars th focus)
-             (rr_outcome m srcs sidecars th focus))))))))
+             (lib_reports (libs_of_srcs srcs) m)
+             (oc_concat
+               (mc_outcome m srcs sidecars th focus)
+               (rr_outcome m srcs sidecars th focus)))))))))
 
 ;; Production entry that builds M IN SHARD. `build_module_d` (reader.shard) parses
 ;; each source's types/fns via the self-hosted reader and merges them onto
