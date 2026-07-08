@@ -1869,14 +1869,19 @@ is pure); the World-effect axiom waits for the runner.
 Roadmap (revised 2026-07-08; wasm runner + std/str-as-lib DROPPED —
 the former was an x86 stand-in, the latter supply-side growth with no
 consumer; the CLI runner RESHAPED same day — a wrapper whose stub
-parses argv is still harness-shaped): NEXT the BIN RUNG (X86.md §21 =
-the record) — `(bin …)` lowers to a plainly executable ELF: proven
-pure main over argv bytes, crt0-sized byte-moving glue, parsing and
-rendering as proven code, the accepts surface driving to EMPTY at the
-program boundary; THEN the World-effect axiom that lets proven
-interactive I/O cite the shims (the platform-externs API's first real
-consumer). std/rng via WORD (§7.8, accepts → EMPTY) stays queued
-behind it.
+parses argv is still harness-shaped): the BIN RUNG LANDED same day
+(X86.md §21 probe + §22 pipeline = the record) — `(bin …)` lowers to a
+plainly executable ELF (arglen: exit code = |argv[1]|), a bin admitted
+as a one-export lib everywhere except the packaging (enc_binelf's argv
+glue under the SIGNED GLUE CONTRACT) and the boundary law (bin premise
+surface = exactly what the glue contract supplies; v1 = EMPTY, both
+ratchet directions verified). Ladder: A1 = mem fns in the lib image
+walk (the entry READS the payload; address-bounds enter glue_fams),
+A2 = store loops + the out-buffer/stdout leg, B = decimal parse/render
+(x86 div, proven atoi/itoa); THEN the World-effect axiom that lets
+proven interactive I/O cite the shims (the platform-externs API's
+first real consumer; the pure-entry driver bridge is superseded
+there). std/rng via WORD (§7.8, accepts → EMPTY) stays queued behind.
 
 ## 7. Open questions — triaged at ratification (2026-07-04)
 
