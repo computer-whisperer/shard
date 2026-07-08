@@ -131,6 +131,13 @@
 (use (:: meta shape LVRead))
 (use (:: meta shape ls_adv))
 (use (:: meta shape ls_at))
+(use (:: meta shape LKArg))
+(use (:: meta shape LKAcc))
+(use (:: meta shape LKLit))
+(use (:: meta shape CInfo))
+(use (:: meta shape MkCInfo))
+(use (:: meta shape reg_find))
+(use (:: meta shape reg_add))
 
 ;; ---- the register file at the meta level ---------------------------------------
 ;;
@@ -1098,7 +1105,7 @@
                            ((LRCall _ _ _)
                             (xerr_at
                               q
-                              "calls-in-loops follow the mem fragment (inter-function layout)"))
+                              "internal: LRCall loops route through xg_claim_loop_r"))
                            ((LROk adv sts)
                             (if (xl_strides_ok adv)
                               (match sts
@@ -1534,7 +1541,11 @@
 ;; §16 caller shape certed by the chain form, clobber {rax, rcx, r10}).
 ;; The kind carries what a consumer needs: bodies for spellings and
 ;; inlining, the mid's combining op and leaf, and the cert's fuel tower.
-(type CK (CKLeaf Expr Int) (CKM1 Symbol Expr Int) (CKM2 QName Symbol Expr Int))
+(type CK
+  (CKLeaf Expr Int)
+  (CKM1 Symbol Expr Int)
+  (CKM2 QName Symbol Expr Int)
+  (CKMem))
 
 (fn ck_find ((cs (List (Pair Symbol CK))) (s Symbol)) (Option CK)
   (measure (struct cs))
@@ -2287,7 +2298,8 @@
   (match k
     ((CKLeaf cbody ccnt) (xc_shape q ts cq cbody ccnt body))
     ((CKM1 ls _ _) (xt_shape q ts cq k ls body))
-    ((CKM2 _ ls _ _) (xt_shape q ts cq k ls body))))
+    ((CKM2 _ ls _ _) (xt_shape q ts cq k ls body))
+    ((CKMem) (xerr_at q "a mem callee is callable only from loops (v1)"))))
 
 ;; classify an unregistered callee: a LEAF (left-spine) or a v1 MID (a
 ;; §16 caller shape over an already-certed LEAF — depth 2)
@@ -2375,15 +2387,228 @@
          (xcc_of (xerr_at q "return type is not Int") certed))
        (xcc_of (xerr_at q "params are not all Int") certed)))))
 
+;; ---- the call-loop fragment (docs/X86.md par.18): calls inside loops ------------
+;;
+;; A Nat-counted loop whose per-iteration WORK is a call to an EARLIER
+;; same-file HOME-ALIGNED store fn (probe: xloopcall_probe.shard):
+;;   (fn NAME ((m Mem) (x0 Int) (x1 Int) (k Nat)) Mem
+;;     (match k (Z m) ((S k2) (NAME (CS m x0 x1) (+ x0 1) x1 k2))))
+;; The callee's body is (XCall 1) alone (the par.18 fast path), so it
+;; clobbers NOTHING: the loop's state (rdi/rsi/rdx) passes through the
+;; call verbatim by the callee's cert, and the worker's register
+;; literals are byte-for-byte fill's. The worker's S case stops at the
+;; folded call and fires xcall_bridge with the callee's PREMISED cert,
+;; the bounds discharging from the loop's range premise via the
+;; existing xlg_* kit (stride 1). The cert returns the FOLDED spec
+;; term, so the IH re-applies with no collapse at the boundary.
+;;
+;; v1 fences (loud, named growth): exactly two accumulators (the
+;; advancing address in rdi, the static value in rsi), stride +1, call
+;; args = accums 0 and 1 in order, the callee a home-aligned single
+;; store.
+
+;; the callee's named literal + premised clobber-set cert (result mem =
+;; the folded spec call; clobber emptyset)
+(fn xcl_cert_doc ((cs Symbol)) Doc
+  (dconc
+    (list
+      (DStr "(fn ")
+      (xc_gfsym cs)
+      (DStr " () XFunc (MkXFunc 2 (list (XCall 1))))")
+      (DStr (nl))
+      (DStr "(claim xcert_")
+      (dsym cs)
+      (DStr
+        " (goal ((c Nat) (restfs (List XFunc)) (msz Int) (mem Mem) (rax Int) (rcx Int) (rdx Int) (rbx Int) (rbp Int) (rsi Int) (rdi Int) (r8 Int) (r9 Int) (r10 Int) (r11 Int) (r12 Int) (r13 Int) (r14 Int) (r15 Int)) ((= (le 0 rdi) True) (= (le (+ rdi 1) msz) True)) (= (xrun_regs (S^ 6 c) (MkXModule (Cons (inline xg_mget_f) (Cons (inline xg_mset_f) (Cons (inline ")
+      (xc_gfsym cs)
+      (DStr
+        ") restfs))) msz) 2 (MkRegs rax rcx rdx rbx rbp rsi rdi r8 r9 r10 r11 r12 r13 r14 r15) mem) (Some (Pair (MkRegs rax rcx rdx rbx rbp rsi rdi r8 r9 r10 r11 r12 r13 r14 r15) (")
+      (dsym cs)
+      (DStr
+        " mem rdi rsi))))) (chain (steps ((compute lhs (stop xeval_call)))) (rewrite-with (lemma xcall_bridge) lr lhs ((inst f (inline xg_mset_f)) (inst rs2 (MkRegs rax rcx rdx rbx rbp rsi rdi r8 r9 r10 r11 r12 r13 r14 r15)) (inst mem2 (mem_set mem rdi rsi))) ((steps ((compute both)) refl) (chain (rewrite-with (lemma xmset_cert) lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((rewrite (premise 1) lr lhs true ())) refl))) (steps ((compute both))) refl))) (steps ((unfold ")
+      (dsym cs)
+      (DStr " rhs) (reduce rhs))) (steps ((compute both))) refl))")
+      (DStr (nl)))))
+
+;; the loop's module literal: [get, set, callee, loop | restfs], loop at 3
+(fn xcl_mod ((cs Symbol) (nm Doc)) Doc
+  (dconc
+    (list
+      (DStr
+        "(MkXModule (Cons (inline xg_mget_f) (Cons (inline xg_mset_f) (Cons (inline ")
+      (xc_gfsym cs)
+      (DStr ") (Cons (MkXFunc 3 (list (XBlock (list (XLoop (inline ")
+      nm
+      (DStr "_body)))))) restfs)))) 65536)"))))
+
+;; the loop body fn + worker induction + lowered theorem (the probe
+;; templated; fuel 20/24 probe-validated)
+(fn xcl_unit ((q QName) (cs Symbol)) Doc
+  (let ((nm (dsym (qn_name q))))
+    (dconc
+      (list
+        (DStr "(fn ")
+        nm
+        (DStr
+          "_body () (List XInstr) (list (XBrIf (CEqz RDX) 1) (XCall 2) (XBin XAdd RDI (SImm 1)) (XBin XSub RDX (SImm 1)) (XBr 0)))")
+        (DStr (nl))
+        (DStr "(claim xclw_")
+        nm
+        (DStr
+          " (goal ((x0 Int) (x1 Int) (m0 Mem) (c Nat) (k Nat) (restfs (List XFunc))) ((= (le 0 x0) True) (= (le (+ x0 (int_of_nat k)) 65536) True)) (= (xeval_loop (S^ 20 (xlg_fuel k c)) ")
+        (xcl_mod cs nm)
+        (DStr " (inline ")
+        nm
+        (DStr
+          "_body) (MkRegs 0 0 (int_of_nat k) 0 0 x1 x0 0 0 0 0 0 0 0 0) m0) (Some (XBrk 0 (MkRegs 0 0 0 0 0 x1 (xlg_adv x0 k) 0 0 0 0 0 0 0 0) (")
+        nm
+        (DStr
+          " m0 x0 x1 k))))) (induct k ((case Z (steps ((rewrite (lemma int_of_nat_zero) lr lhs true ()) (compute both)) refl)) (case S (k2) (chain (steps ((unfold xlg_fuel lhs) (reduce lhs) (unfold xeval_loop lhs) (rewrite (lemma int_of_nat_succ) lr lhs true ()) (compute lhs (stop xeval_call xeval_loop xlg_fuel)))) (rewrite-with (lemma xlg_ne) lr lhs () ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))) (steps ((compute lhs (stop xeval_call xeval_loop xlg_fuel)))) (have ha1 (= (le (+ x0 1) 65536) True) (rewrite-with (lemma xlg_a1_ms) lr lhs ((inst c k2)) ((steps ((rewrite (premise 1) lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl) (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)) refl)) (rewrite-with (lemma xcall_bridge) lr lhs ((inst f (inline ")
+        (xc_gfsym cs)
+        (DStr
+          ")) (inst rs2 (MkRegs 0 0 (+ 1 (int_of_nat k2)) 0 0 x1 x0 0 0 0 0 0 0 0 0)) (inst mem2 (")
+        (dsym cs)
+        (DStr
+          " m0 x0 x1))) ((steps ((compute both)) refl) (chain (rewrite-with (lemma xcert_")
+        (dsym cs)
+        (DStr
+          ") lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((rewrite (premise ha1) lr lhs true ())) refl))) (steps ((compute both))) refl))) (steps ((compute lhs (stop xeval_loop xlg_fuel)))) (have hsub (= (- (+ 1 (int_of_nat k2)) 1) (int_of_nat k2)) (rewrite-with (lemma xlg_sub) lr lhs () () refl)) (steps ((rewrite (premise hsub) lr lhs true ()))) (have hwk (= (mod (int_of_nat k2) 18446744073709551616) (int_of_nat k2)) (rewrite-with (lemma wrap64_id) lr lhs ((inst x (int_of_nat k2))) ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl) (rewrite-with (lemma xlg_kM) lr lhs ((inst a x0) (inst c k2)) ((steps ((rewrite (premise 1) lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl) (steps ((rewrite (premise 0) lr lhs true ())) refl)) refl)) refl)) (steps ((rewrite (premise hwk) lr lhs true ()))) (have hw0 (= (mod (+ x0 1) 18446744073709551616) (+ x0 1)) (rewrite-with (lemma wrap64_id) lr lhs ((inst x (+ x0 1))) ((rewrite-with (lemma xlg_lo1) lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl)) refl) (rewrite-with (lemma xlg_64) lr lhs () ((rewrite-with (lemma xlg_a1_ms) lr lhs ((inst c k2)) ((steps ((rewrite (premise 1) lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl) (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)) refl)) refl)) refl)) (steps ((rewrite (premise hw0) lr lhs true ()))) (steps ((unfold ")
+        nm
+        (DStr
+          " rhs) (unfold xlg_adv rhs) (reduce rhs))) (rewrite-with (hyp 0) lr lhs () ((rewrite-with (lemma xlg_lo1) lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl)) refl) (rewrite-with (lemma xlg_shift) lr lhs () ((steps ((rewrite (premise 1) lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)) refl))) (steps ((compute both))) refl)))))")
+        (DStr (nl))
+        (DStr "(claim lowered_")
+        nm
+        (DStr
+          " (goal ((x0 Int) (x1 Int) (m0 Mem) (c Nat) (k Nat) (restfs (List XFunc))) ((= (le 0 x0) True) (= (le (+ x0 (int_of_nat k)) 65536) True)) (= (xcall_fn_mem (S^ 24 (xlg_fuel k c)) ")
+        (xcl_mod cs nm)
+        (DStr " 3 (list x0 x1 (int_of_nat k)) m0) (Some (Pair 0 (")
+        nm
+        (DStr
+          " m0 x0 x1 k))))) (chain (steps ((compute lhs (stop xeval_loop xlg_fuel)))) (rewrite-with (lemma xclw_")
+        nm
+        (DStr
+          ") lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((rewrite (premise 1) lr lhs true ())) refl))) (steps ((compute both))) refl))")
+        (DStr (nl))))))
+
+;; the call-loop gate: shape fences, callee validation, cert emission
+(fn xcl_claim
+  ((q QName)
+   (mids (List Type))
+   (adv (List LStr))
+   (cs Symbol)
+   (ks (List LKArg))
+   (reg (List CInfo))
+   (certed (List (Pair Symbol CK))))
+  XCC
+  (if (int_eq (count_ts mids) 2)
+    (match adv
+      ((Cons (LSInc) (Cons (LSStat) Nil))
+       (match ks
+         ((Cons (LKAcc ka) (Cons (LKAcc kb) Nil))
+          (if (if (int_eq ka 0) (int_eq kb 1) False)
+            (match (reg_find reg cs)
+              (None
+                (xcc_of
+                  (xerr_at q "loop callee is not a registered same-file mem fn")
+                  certed))
+              ((Some ci)
+               (match ci
+                 ((MkCInfo _ _ _ _ _ cbody)
+                  (match (xm_store cbody 2)
+                    ((XMSOk a2 v2)
+                     (if (xm_aligned a2 v2)
+                       (let ((unit (xcl_unit q cs)))
+                         (match (ck_find certed cs)
+                           ((Some (CKMem)) (XCCOk unit certed))
+                           ((Some _)
+                            (xcc_of
+                              (xerr_at
+                                q
+                                "loop callee name collides with a non-mem cert")
+                              certed))
+                           (None
+                             (XCCOk
+                               (DCat (xcl_cert_doc cs) unit)
+                               (Cons (Pair cs (CKMem)) certed)))))
+                       (xcc_of
+                         (xerr_at
+                           q
+                           "loop callee must be a HOME-ALIGNED single store (mem_set m p v) at (param0, param1) (v1)")
+                         certed)))
+                    (XMSNo
+                      (xcc_of
+                        (xerr_at
+                          q
+                          "loop callee must be a HOME-ALIGNED single store (mem_set m p v) at (param0, param1) (v1)")
+                        certed)))))))
+            (xcc_of
+              (xerr_at
+                q
+                "call-site args must be the accumulators (addr, value) in order (v1)")
+              certed)))
+         (_
+           (xcc_of
+             (xerr_at
+               q
+               "call-site args must be the accumulators (addr, value) in order (v1)")
+             certed))))
+      (_
+        (xcc_of
+          (xerr_at
+            q
+            "call-loop accumulators must be one advancing (+1) address and one static value (v1)")
+          certed)))
+    (xcc_of
+      (xerr_at q "call-loop needs exactly two Int accumulators (v1)")
+      certed)))
+
+;; the loop route: LRCall bodies dispatch to the call-loop fragment,
+;; everything else delegates to the store-loop path unchanged
+(fn xg_claim_loop_r
+  ((f FnDef) (reg (List CInfo)) (certed (List (Pair Symbol CK))))
+  XCC
+  (match f
+    ((FnDef q ts rty body)
+     (match ts
+       ((Cons _ rest)
+        (match (ts_lasto rest)
+          ((Some lt2)
+           (if (is_nat_ty lt2)
+             (let ((mids (ts_mids rest)))
+               (if (all_int mids)
+                 (match (lp_recognize q (count_ts mids) body reg)
+                   ((LRCall adv cs ks) (xcl_claim q mids adv cs ks reg certed))
+                   (_ (xcc_of (xg_claim_loop f) certed)))
+                 (xcc_of (xg_claim_loop f) certed)))
+             (xcc_of (xg_claim_loop f) certed)))
+          (None (xcc_of (xg_claim_loop f) certed))))
+       (Nil (xcc_of (xg_claim_loop f) certed))))))
+
 ;; ---- module walk ------------------------------------------------------------------
 
 (type XER (XEOk Doc Bool Bool) (XEErr (List Int)))
+
+;; register a Mem-returning mem-fragment fn as a potential loop callee
+;; (only the name, arity, and body matter to the x86 side)
+(fn xg_reg ((f FnDef) (reg (List CInfo))) (List CInfo)
+  (match f
+    ((FnDef q ts rty body)
+     (if (is_mem_ty rty)
+       (match ts
+         ((Cons _ rest)
+          (reg_add
+            reg
+            (MkCInfo (qn_name q) (DStr "") 0 (count_ts rest) Nil body)))
+         (Nil reg))
+       reg))))
 
 (fn xg_fns
   ((fns (List FnDef))
    (modpath (List Symbol))
    (seen (List FnDef))
    (certed (List (Pair Symbol CK)))
+   (reg (List CInfo))
    (acc Doc)
    (lf Bool)
    (mf Bool))
@@ -2397,7 +2622,20 @@
         (match q
           ((QName mp _)
            (if (sym_list_eq mp modpath)
-             (if (if (fn_is_loop f) True (fn_is_mem f))
+             (if (fn_is_loop f)
+               (match (xg_claim_loop_r f reg certed)
+                 ((XCCErr m) (XEErr m))
+                 ((XCCOk d certed2)
+                  (xg_fns
+                    rest
+                    modpath
+                    (Cons f seen)
+                    certed2
+                    reg
+                    (DCat acc (DCat (DStr (nl)) d))
+                    True
+                    mf)))
+             (if (fn_is_mem f)
                (match (xg_claim f)
                  ((XCErr m) (XEErr m))
                  ((XCOk d)
@@ -2406,9 +2644,10 @@
                     modpath
                     (Cons f seen)
                     certed
+                    (xg_reg f reg)
                     (DCat acc (DCat (DStr (nl)) d))
-                    (if (fn_is_loop f) True lf)
-                    (if (fn_is_loop f) mf (if (fn_is_mem f) True mf)))))
+                    lf
+                    True)))
                (match (xc_target body seen)
                  ((Some cf)
                   (match (xg_claim_call f cf certed)
@@ -2419,6 +2658,7 @@
                        modpath
                        (Cons f seen)
                        certed2
+                       reg
                        (DCat acc (DCat (DStr (nl)) d))
                        lf
                        mf))))
@@ -2431,10 +2671,11 @@
                         modpath
                         (Cons f seen)
                         certed
+                        reg
                         (DCat acc (DCat (DStr (nl)) d))
                         lf
-                        mf))))))
-             (xg_fns rest modpath seen certed acc lf mf)))))))))
+                        mf)))))))
+             (xg_fns rest modpath seen certed reg acc lf mf)))))))))
 
 (fn xg_header ((target (List Int)) (loopf Bool) (memf Bool)) Doc
   (dconc
@@ -2502,6 +2743,7 @@
              (xg_fns
                fns
                (split_slash (until_dot target) Nil)
+               Nil
                Nil
                Nil
                (DStr "")
