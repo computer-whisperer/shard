@@ -95,6 +95,13 @@
 (use (:: kernel reader build_module_d))
 (use (:: kernel reader BMOk))
 (use (:: kernel reader BMFail))
+(use (:: kernel reader read_all))
+(use (:: kernel reader SExpr))
+(use (:: kernel reader is_lib_form))
+(use (:: kernel reader lib_of_form))
+(use (:: kernel reader Lib))
+(use (:: kernel reader SrcEntry))
+(use (:: kernel loader int_list_eq))
 (use (:: meta doc *))
 (use (:: meta proof pw_region))
 (use (:: meta proof pw_items))
@@ -580,16 +587,38 @@
 (fn xerr_at ((q QName) (m (List Int))) XCR
   (XCErr (append_int (chars_of_sym (qn_name q)) (append_int ": " m))))
 
+;; position-general prefix printers (LIB mode, docs/X86.md §19): pfx
+;; quantified (fN XFunc) binders before the claim's own literal, so the
+;; cert holds at its PINNED index inside any module extension. pfx=0 is
+;; the old single-function form byte-for-byte.
+(fn xpr_fbinds ((k Int)) Doc
+  (measure k (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt k 1) (DStr "")
+  (DCat
+    (xpr_fbinds (- k 1))
+    (dcat3 (DStr "(f") (dint (- k 1)) (DStr " XFunc) ")))))
+
+(fn xpr_fcons ((k Int)) Doc
+  (measure k (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt k 1) (DStr "")
+  (DCat (xpr_fcons (- k 1)) (dcat3 (DStr "(Cons f") (dint (- k 1)) (DStr " ")))))
+
+(fn xpr_rpars ((k Int)) Doc
+  (measure k (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt k 1) (DStr "") (DCat (xpr_rpars (- k 1)) (DStr ")"))))
+
 ;; the shared claim skeleton: goal binders + premises + the module literal
-;; (one function at restfs := Nil, no memory) + the spec RHS + the proof
-;; body, which begins with compute lhs / unfold + ζ-reduce rhs.
+;; (the own function at pinned index pfx, quantified prefix functions
+;; before it, restfs after, no memory) + the spec RHS + the proof body,
+;; which begins with compute lhs / unfold + ζ-reduce rhs.
 (fn xg_emit_claim
   ((q QName)
    (ts (List Type))
    (code (List Doc))
    (prems Doc)
    (fuel Int)
-   (proofbody Doc))
+   (proofbody Doc)
+   (pfx Int))
   Doc
   (dconc
     (list
@@ -597,15 +626,22 @@
       (dsym (qn_name q))
       (DStr " (goal (")
       (pr_binds ts 0)
+      (xpr_fbinds pfx)
       (DStr "(c Nat) (restfs (List XFunc)) (mem Mem)) (")
       prems
       (DStr ") (= (xcall_fn_mem (S^ ")
       (dint fuel)
-      (DStr " c) (MkXModule (Cons (MkXFunc ")
+      (DStr " c) (MkXModule ")
+      (xpr_fcons pfx)
+      (DStr "(Cons (MkXFunc ")
       (dint (count_ts ts))
       (DStr " (list ")
       (djoin code)
-      (DStr ")) restfs) 0) 0 (list ")
+      (DStr ")) restfs)")
+      (xpr_rpars pfx)
+      (DStr " 0) ")
+      (dint pfx)
+      (DStr " (list ")
       (pr_args ts 0)
       (DStr ") mem) (Some (Pair (")
       (dsym (qn_name q))
@@ -619,19 +655,21 @@
 
 ;; run the condition-path walk over the region tree and assemble: any
 ;; generated cb_* helper claims land BEFORE the lowered claim
-(fn xg_finish ((q QName) (ts (List Type)) (rt RT) (fuel Int)) XCR
+(fn xg_finish ((q QName) (ts (List Type)) (rt RT) (fuel Int) (pfx Int)) XCR
   (match (pw_region rt Nil Nil (dsym (qn_name q)) (wk64) 0 0 0)
     ((MkPWR proof_body prems helpers _ _ _)
      (XCOk
-       (DCat helpers (xg_emit_claim q ts (rt_code rt) prems fuel proof_body))))))
+       (DCat
+         helpers
+         (xg_emit_claim q ts (rt_code rt) prems fuel proof_body pfx))))))
 
 ;; the if path: build the region tree (result at rl=0=rax, scratch reserved
 ;; from index 1) and hand it to the walk. Fuel is generously
 ;; over-provisioned — additive slack absorbs the excess.
-(fn xg_claim_if ((q QName) (ts (List Type)) (body Expr)) XCR
+(fn xg_claim_if ((q QName) (ts (List Type)) (body Expr) (pfx Int)) XCR
   (match (xg_depo (count_ts ts) Nil 1 0 body)
     ((TErr m) (xerr_at q m))
-    ((TOk rt) (xg_finish q ts rt (+ (* 2 (rt_count rt)) 10)))))
+    ((TOk rt) (xg_finish q ts rt (+ (* 2 (rt_count rt)) 10) pfx))))
 
 (fn fn_is_mem ((f FnDef)) Bool
   (match f
@@ -640,7 +678,7 @@
        ((Cons t0 _) (is_mem_ty t0))
        (Nil False)))))
 
-(fn xg_claim ((f FnDef)) XCR
+(fn xg_claim ((f FnDef) (pfx Int)) XCR
   (if (fn_is_loop f) (xg_claim_loop f)
   (if (fn_is_mem f) (xg_claim_mem f)
   (match f
@@ -648,13 +686,13 @@
      (if (all_int ts)
        (if (is_int_ty rty)
          (if (le (count_ts ts) 6)
-           (if (has_tail_if body) (xg_claim_if q ts body)
+           (if (has_tail_if body) (xg_claim_if q ts body pfx)
            (match (xg_t (count_ts ts) body)
              ((XTErr m) (xerr_at q m))
              ((XTOk code cnt ce)
               (match (nodes_e ce Nil)
                 ((NErr m) (xerr_at q m))
-                ((NOk ns) (xg_finish q ts (RTv code cnt 0 ns) (+ cnt 4)))))))
+                ((NOk ns) (xg_finish q ts (RTv code cnt 0 ns) (+ cnt 4) pfx))))))
            (xerr_at
              q
              "more than six Int params (SysV register homes only in v1)"))
@@ -2638,7 +2676,7 @@
                     True
                     mf)))
              (if (fn_is_mem f)
-               (match (xg_claim f)
+               (match (xg_claim f 0)
                  ((XCErr m) (XEErr m))
                  ((XCOk d)
                   (xg_fns
@@ -2665,7 +2703,7 @@
                        lf
                        mf))))
                  (None
-                   (match (xg_claim f)
+                   (match (xg_claim f 0)
                      ((XCErr m) (XEErr m))
                      ((XCOk d)
                       (xg_fns
@@ -2712,6 +2750,261 @@
       (DStr (append_int " *))" (nl)))
       (if memf (DCat (DStr (nl)) (xm_callee_fns)) (DStr "")))))
 
+;; ---- LIB mode (docs/X86.md §19): one image, named exports --------------------------
+;;
+;; A (lib …) declaration in the TARGET source lays the whole file into ONE
+;; x86 image: every fn at its source-order index, certs position-general
+;; (the xpr_* prefix binders; each claim's own literal at its PINNED
+;; index), the declared exports baked BY NAME. The OUT file additionally
+;; ships the image function list (LNAME_xfuncs), the named-export table
+;; (LNAME_exports), and the per-entry encoding (LNAME_entry_bytes k =
+;; enc_image with export k laid FIRST — the existing harness calls the
+;; blob's start; the ELF rung owns the single-container bytes). v1
+;; fragment: pure Int fns (straight-line/let/tail-if); mem, loop and call
+;; fns refuse loudly.
+
+;; an XFunc literal, spelled exactly as the claim spells it (same
+;; generator, same inputs — the byte tie holds both to the shipped bytes)
+(fn xflit_doc ((np Int) (code (List Doc))) Doc
+  (dconc
+    (list
+      (DStr "(MkXFunc ")
+      (dint np)
+      (DStr " (list ")
+      (djoin code)
+      (DStr "))"))))
+
+(fn xlib_flit ((f FnDef)) (Option Doc)
+  (match f
+    ((FnDef q ts rty body)
+     (if (has_tail_if body)
+       (match (xg_depo (count_ts ts) Nil 1 0 body)
+         ((TErr _) None)
+         ((TOk rt) (Some (xflit_doc (count_ts ts) (rt_code rt)))))
+       (match (xg_t (count_ts ts) body)
+         ((XTErr _) None)
+         ((XTOk code _ _) (Some (xflit_doc (count_ts ts) code))))))))
+
+;; claims, the xfuncs cons spine (open), name -> index, count
+(type XLE (XLEOk Doc Doc (List (Pair Symbol Int)) Int) (XLEErr (List Int)))
+
+(fn xemit_fns_lib
+  ((fns (List FnDef))
+   (modpath (List Symbol))
+   (seen (List FnDef))
+   (k Int)
+   (accp Doc)
+   (accf Doc)
+   (accn (List (Pair Symbol Int))))
+  XLE
+  (measure (struct fns))
+  (match fns
+    (Nil (XLEOk accp accf accn k))
+    ((Cons f rest)
+     (match f
+       ((FnDef q _ _ body)
+        (match q
+          ((QName mp nm)
+           (if (sym_list_eq mp modpath)
+             (if (fn_is_loop f)
+               (XLEErr "loop fns are not in the x86 lib fragment yet")
+             (if (fn_is_mem f)
+               (XLEErr "mem fns are not in the x86 lib fragment yet")
+               (match (xc_target body seen)
+                 ((Some _)
+                  (XLEErr "call fns are not in the x86 lib fragment yet"))
+                 (None
+                   (match (xg_claim f k)
+                     ((XCErr m) (XLEErr m))
+                     ((XCOk d)
+                      (match (xlib_flit f)
+                        (None (XLEErr "lib literal generation failed"))
+                        ((Some flit)
+                         (xemit_fns_lib
+                           rest
+                           modpath
+                           (Cons f seen)
+                           (+ k 1)
+                           (DCat accp (DCat (DStr (nl)) d))
+                           (DCat accf (dcat3 (DStr "(Cons ") flit (sp)))
+                           (Cons (Pair nm k) accn))))))))))
+             (xemit_fns_lib rest modpath seen k accp accf accn)))))))))
+
+(fn xlib_funcs_doc ((lname Symbol) (accf Doc) (k Int)) Doc
+  (dconc
+    (list
+      (DStr (nl))
+      (DStr ";; the lib image: every fn of the file at its source-order index")
+      (DStr (nl))
+      (DStr "(fn ")
+      (dsym lname)
+      (DStr "_xfuncs () (List XFunc) ")
+      accf
+      (DStr "Nil")
+      (xpr_rpars k)
+      (DStr ")")
+      (DStr (nl)))))
+
+(fn xlib_exp_at ((x Symbol) (ns (List (Pair Symbol Int)))) (Option Int)
+  (measure (struct ns))
+  (match ns
+    (Nil None)
+    ((Cons (Pair n i) rest) (if (sym_eq x n) (Some i) (xlib_exp_at x rest)))))
+
+(fn xlib_exp_entries ((exps (List Symbol)) (ns (List (Pair Symbol Int))))
+  (Option Doc)
+  (measure (struct exps))
+  (match exps
+    (Nil (Some (DStr "")))
+    ((Cons x rest)
+     (match (xlib_exp_at x ns)
+       (None None)
+       ((Some i)
+        (match (xlib_exp_entries rest ns)
+          (None None)
+          ((Some d)
+           (Some
+             (DCat
+               (dconc
+                 (list
+                   (DStr " (XX ")
+                   (DStr (list 34))
+                   (dsym x)
+                   (DStr (list 34))
+                   (sp)
+                   (dint i)
+                   (DStr ")")))
+               d)))))))))
+
+(fn xlib_exports_doc
+  ((lname Symbol) (exps (List Symbol)) (ns (List (Pair Symbol Int))))
+  (Option Doc)
+  (match (xlib_exp_entries exps ns)
+    (None None)
+    ((Some entries)
+     (Some
+       (dconc
+         (list
+           (DStr (nl))
+           (DStr
+             ";; the export table: the (lib …) declaration's names, by index")
+           (DStr (nl))
+           (DStr "(fn ")
+           (dsym lname)
+           (DStr "_exports () (List XExport) (list")
+           entries
+           (DStr "))")
+           (DStr (nl))))))))
+
+;; the per-entry encoding, spec-side: the plan driver evaluates this
+;; instead of importing target encoders — export k is laid FIRST (the
+;; harness calls the blob's start); indices inside the image never move
+(fn xlib_bytes_doc ((lname Symbol)) Doc
+  (dconc
+    (list
+      (DStr (nl))
+      (DStr
+        ";; the encoded image, one layout per export: enc_image with entry k")
+      (DStr (nl))
+      (DStr "(fn ")
+      (dsym lname)
+      (DStr "_entry_bytes ((k Int)) (List Int) (enc_image (")
+      (dsym lname)
+      (DStr "_xfuncs) k))")
+      (DStr (nl)))))
+
+;; the (lib …) declaration of the TARGET source, if any
+(fn xlib_scan_forms ((forms (List SExpr))) (Option Lib)
+  (measure (struct forms))
+  (match forms
+    (Nil None)
+    ((Cons f rest)
+     (if (is_lib_form f)
+       (match (lib_of_form f)
+         (None (xlib_scan_forms rest))
+         ((Some l) (Some l)))
+       (xlib_scan_forms rest)))))
+
+(fn xlib_scan ((srcs (List SrcEntry)) (target (List Int))) (Option Lib)
+  (measure (struct srcs))
+  (match srcs
+    (Nil None)
+    ((Cons (SrcEntry path _ src) rest)
+     (if (int_list_eq path target)
+       (match (read_all src)
+         (None None)
+         ((Some forms) (xlib_scan_forms forms)))
+       (xlib_scan rest target)))))
+
+;; the LIB file's header: the model, the encoder (XExport/XX for the
+;; export table, enc_image for the per-entry bytes), and the source
+(fn xlib_header ((target (List Int))) Doc
+  (dconc
+    (list
+      (DStr
+        ";;; GENERATED by tools/x86gen (LIB mode: one image, named exports) --")
+      (DStr (nl))
+      (DStr ";;; DO NOT EDIT; regenerate from ")
+      (DStr target)
+      (DStr (append_int "." (nl)))
+      (dimport (append_int (updots target) "kernel/stdlib.shard"))
+      (dimport (append_int (updots target) "models/x86/x86.shard"))
+      (dimport (append_int (updots target) "models/x86/encode.shard"))
+      (dimport (basename_go target Nil))
+      (DStr (append_int "(use (:: models x86 x86 *))" (nl)))
+      (DStr (append_int "(use (:: models x86 encode XExport))" (nl)))
+      (DStr (append_int "(use (:: models x86 encode XX))" (nl)))
+      (DStr (append_int "(use (:: models x86 encode enc_image))" (nl)))
+      (DStr (append_int "(use (:: std mem *))" (nl)))
+      (DStr "(use (:: ")
+      (pr_modpath (split_slash (until_dot target) Nil))
+      (DStr (append_int " *))" (nl))))))
+
+;; lib mode: emit the position-general claims + the image function list +
+;; the export table + the per-entry encoding.
+(fn xlib_run
+  ((l Lib) (fns (List FnDef)) (target (List Int)) (out (List Int)) (w World))
+  World
+  (match l
+    ((Lib lname exps _acc)
+     (match
+       (xemit_fns_lib
+         fns
+         (split_slash (until_dot target) Nil)
+         Nil
+         0
+         (DStr "")
+         (DStr "")
+         Nil)
+       ((XLEErr msg)
+        (exit 1 (write (append_int "refused: " (append_int msg (nl))) w)))
+       ((XLEOk bodyp accf ns k)
+        (match (xlib_exports_doc lname exps ns)
+          (None
+            (exit
+              1
+              (write
+                "refused: a (lib exports) name is not an emitted fn of this file\n"
+                w)))
+          ((Some expdoc)
+           (match
+             (write_file
+               out
+               (doc_flat
+                 (dconc
+                   (list
+                     (xlib_header target)
+                     bodyp
+                     (xlib_funcs_doc lname accf k)
+                     expdoc
+                     (xlib_bytes_doc lname)))
+                 Nil)
+               w)
+             ((Pair ok w2)
+              (if ok
+                (exit 0 (write (append_int "wrote " (append_int out (nl))) w2))
+                (xfail (append_int "cannot write " out) w2)))))))))))
+
 ;; ---- driver -----------------------------------------------------------------------
 
 (fn prelude_ctors_l () (List Symbol)
@@ -2741,30 +3034,35 @@
        ((BMOk m)
         (match m
           ((Module _ fns _ _ _)
-           (match
-             (xg_fns
-               fns
-               (split_slash (until_dot target) Nil)
-               Nil
-               Nil
-               Nil
-               (DStr "")
-               False
-               False)
-             ((XEErr msg)
-              (exit 1 (write (append_int "refused: " (append_int msg (nl))) w1)))
-             ((XEOk body loopf memf)
-              (match
-                (write_file
-                  out
-                  (doc_flat (DCat (xg_header target loopf memf) body) Nil)
-                  w1)
-                ((Pair ok w2)
-                 (if ok
-                   (exit
-                     0
-                     (write (append_int "wrote " (append_int out (nl))) w2))
-                   (xfail (append_int "cannot write " out) w2)))))))))))))
+           (match (xlib_scan srcs target)
+             ((Some l) (xlib_run l fns target out w1))
+             (None
+               (match
+                 (xg_fns
+                   fns
+                   (split_slash (until_dot target) Nil)
+                   Nil
+                   Nil
+                   Nil
+                   (DStr "")
+                   False
+                   False)
+                 ((XEErr msg)
+                  (exit
+                    1
+                    (write (append_int "refused: " (append_int msg (nl))) w1)))
+                 ((XEOk body loopf memf)
+                  (match
+                    (write_file
+                      out
+                      (doc_flat (DCat (xg_header target loopf memf) body) Nil)
+                      w1)
+                    ((Pair ok w2)
+                     (if ok
+                       (exit
+                         0
+                         (write (append_int "wrote " (append_int out (nl))) w2))
+                       (xfail (append_int "cannot write " out) w2)))))))))))))))
 
 (fn main ((w World)) World
   (match (get_args w)
