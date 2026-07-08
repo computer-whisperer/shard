@@ -225,6 +225,32 @@
 
 (fn enc_pop_reg ((r Reg)) (List Int) (list (+ 88 (rlo (reg_num r)))))
 
+;; --- BIN-rung glue byte encoders (docs/X86.md §21) ---------------------------
+;;
+;; The plainly-executable ELF's `_start` glue reads argc/argv off the entry
+;; stack and copies argv[1]'s bytes into the writable data segment. Its three
+;; extra opcodes live HERE (like the §20 stub's): a stack-relative load — rsp
+;; is NOT a model register, so it can never come through enc_simple — and bare
+;; jcc/jmp rel32 (enc_brif bundles cmp+jcc for the MODEL's structured form;
+;; the glue's flat argc check and copy-loop back-edge need them standalone).
+;; The glue's remaining instructions REUSE the encoders above (enc_mov_imm64,
+;; enc_cmp_rs, enc_test_r, enc_bin_ri, enc_call_rel32, push/pop, and enc_simple
+;; for the byte load/store XLoad8/XStore8), so still nothing emits raw opcodes.
+
+;; mov r64, [rsp + disp8]  (REX.W 8B /r, mod=01 reg=r rm=100 SIB=0x24 disp8):
+;; the only [rsp+k] form (argc at [rsp], argv[1] at [rsp+16]).
+(fn enc_mov_reg_rsp8 ((r Reg) (disp Int)) (List Int)
+  (let ((n (reg_num r)))
+    (list (+ 72 (* 4 (rhi n))) 139 (+ 64 (+ (* 8 (rlo n)) 4)) 36 (mod disp 256))))
+
+;; jcc rel32 (0F 8x cd): `op` is the second opcode byte (cond_jop's vocabulary,
+;; e.g. jae 0x83, je/jz 0x84), `disp` = target - (this instruction's end).
+(fn enc_jcc_rel32 ((op Int) (disp Int)) (List Int)
+  (eapp (list 15 op) (le4 disp)))
+
+;; jmp rel32 (E9 cd): the copy loop's back-edge to its guard.
+(fn enc_jmp_rel32 ((disp Int)) (List Int) (Cons 233 (le4 disp)))
+
 ;; --- comparison bytes for conditional jumps -----------------------------------
 
 ;; test r,r (REX.W 0x85 /r, mod=11) — sets ZF from the register (the zero
