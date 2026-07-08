@@ -23,13 +23,23 @@
 (import "../../kernel/term.shard")
 (import "../../kernel/module.shard")
 (import "../../kernel/loader.shard")
+(import "../../kernel/reader.shard")
 (import "../../meta/invoke")
 (import "../../meta/plan")
+(import "../../meta/forms")
 (use (:: kernel term *))
 (use (:: kernel module *))
 (use (:: kernel loader *))
+(use (:: kernel reader SExpr))
+(use (:: kernel reader SInt))
+(use (:: kernel reader SSym))
+(use (:: kernel reader SList))
+(use (:: kernel reader Lib))
+(use (:: kernel reader is_lib_form))
+(use (:: kernel reader lib_of_form))
 (use (:: meta invoke *))
 (use (:: meta plan *))
+(use (:: meta forms *))
 
 ;; ---------------------------------------------------------------------------
 ;; decoding — Plan value (Expr) -> native plan structures, whole-or-nothing
@@ -514,6 +524,383 @@
           ((Some rls) (Some (append_int ls rls)))))))))
 
 ;; ---------------------------------------------------------------------------
+;; LIB PLAN DERIVATION (the lib-build arc, docs/LOWERING.md §6ag): given a
+;; lib SOURCE (the (lib …) declaration) and its GENERATED cert file, derive
+;; the whole PLib plan — no mod.build:
+;;   name/exports  <- the declaration
+;;   bytes         <- invoke LIBNAME_bytes in the OUT closure (spec-side
+;;                    encoding; the byte tie independently re-derives from
+;;                    the certs, so the producer value is not trusted)
+;;   export table  <- invoke LIBNAME_exports (name <-> index)
+;;   vectors       <- SYNTHESIZED: candidate arg tuples filtered by GROUND
+;;                    EVALUATION of the export's cert premises (a vector
+;;                    must lie in the domain where the theorem applies),
+;;                    expected values = the SPEC fns invoked in the same
+;;                    closure. An export no candidate satisfies refuses
+;;                    loudly (hand vectors via mod.build remain the
+;;                    fallback).
+;; ---------------------------------------------------------------------------
+
+;; ---- raw-form access (the declaration + the cert goals) --------------------
+
+(fn lb_lib_find ((forms (List SExpr))) (Option Lib)
+  (measure (struct forms))
+  (match forms
+    (Nil None)
+    ((Cons f rest)
+     (if (is_lib_form f)
+       (match (lib_of_form f)
+         (None (lb_lib_find rest))
+         ((Some l) (Some l)))
+       (lb_lib_find rest)))))
+
+;; claim lowered_<name>'s goal: (binders, premises)
+(fn lb_goal ((forms (List SExpr)) (want (List Int)))
+  (Option (Pair (List SExpr) (List SExpr)))
+  (measure (struct forms))
+  (match forms
+    (Nil None)
+    ((Cons f rest)
+     (match f
+       ((SList (Cons h (Cons (SSym nm) (Cons gf _))))
+        (if (is_sym h (quote claim))
+          (if (ceq (chars_of_sym nm) want)
+            (match gf
+              ((SList (Cons g (Cons bs (Cons prems (Cons _c Nil)))))
+               (if (is_sym g (quote goal))
+                 (match bs
+                   ((SList bl)
+                    (match prems
+                      ((SList ps) (Some (Pair bl ps)))
+                      (_ None)))
+                   (_ None))
+                 None))
+              (_ None))
+            (lb_goal rest want))
+          (lb_goal rest want)))
+       (_ (lb_goal rest want))))))
+
+;; the Int-typed binder names, in order — the fn's params (lib fragment:
+;; every param is Int; c/restfs/f0… are Nat/List/Func typed)
+(fn lb_params ((bs (List SExpr))) (List (List Int))
+  (measure (struct bs))
+  (match bs
+    (Nil Nil)
+    ((Cons b rest)
+     (match b
+       ((SList (Cons (SSym n) (Cons ty Nil)))
+        (match ty
+          ((SSym t)
+           (if (sym_eq t (quote Int)) (Cons (chars_of_sym n) (lb_params rest))
+           (lb_params rest)))
+          (_ (lb_params rest))))
+       (_ (lb_params rest))))))
+
+;; ---- ground premise evaluation ----------------------------------------------
+
+(fn lb_env_at ((env (List (Pair (List Int) Int))) (n (List Int))) (Option Int)
+  (measure (struct env))
+  (match env
+    (Nil None)
+    ((Cons (Pair k v) rest) (if (ceq k n) (Some v) (lb_env_at rest n)))))
+
+;; the arithmetic sublanguage cert premises use: +, -, *, ediv, mod over
+;; Int literals and bound params
+(fn lb_ev ((env (List (Pair (List Int) Int))) (s SExpr)) (Option Int)
+  (measure (struct s))
+  (match s
+    ((SInt k) (Some k))
+    ((SSym x) (lb_env_at env (chars_of_sym x)))
+    ((SList (Cons (SSym op) (Cons a (Cons b Nil))))
+     (match (lb_ev env a)
+       (None None)
+       ((Some av)
+        (match (lb_ev env b)
+          (None None)
+          ((Some bv)
+           (if (sym_eq op (quote +)) (Some (+ av bv))
+           (if (sym_eq op (quote -)) (Some (- av bv))
+           (if (sym_eq op (quote *)) (Some (* av bv))
+           (if (sym_eq op (quote ediv)) (Some (ediv av bv))
+           (if (sym_eq op (quote mod)) (Some (mod av bv))
+           None))))))))))
+    (_ None)))
+
+;; one premise (= (le|lt A B) True) holds under env? None = not the shape
+;; or unevaluable — treated as NOT holding (the candidate is skipped)
+(fn lb_prem_holds ((env (List (Pair (List Int) Int))) (p SExpr)) Bool
+  (match p
+    ((SList (Cons eq (Cons inner (Cons tr Nil))))
+     (if (is_sym eq (quote =))
+       (if (is_sym tr (quote True))
+         (match inner
+           ((SList (Cons (SSym rel) (Cons a (Cons b Nil))))
+            (match (lb_ev env a)
+              (None False)
+              ((Some av)
+               (match (lb_ev env b)
+                 (None False)
+                 ((Some bv)
+                  (if (sym_eq rel (quote le)) (le av bv)
+                  (if (sym_eq rel (quote lt)) (lt av bv)
+                  False)))))))
+           (_ False))
+         False)
+       False))
+    (_ False)))
+
+(fn lb_prems_hold ((env (List (Pair (List Int) Int))) (ps (List SExpr))) Bool
+  (measure (struct ps))
+  (match ps
+    (Nil True)
+    ((Cons p rest) (if (lb_prem_holds env p) (lb_prems_hold env rest) False))))
+
+;; ---- candidate tuples ---------------------------------------------------------
+
+(fn lb_take ((xs (List Int)) (n Int)) (List Int)
+  (measure (struct xs))
+  (if (le n 0) Nil
+  (match xs
+    (Nil Nil)
+    ((Cons h t) (Cons h (lb_take t (- n 1)))))))
+
+(fn lb_pools () (List (List Int))
+  (list
+    (list 7 3 2 9 6 4 8 5)
+    (list 41 23 12 30 17 25 11 19)
+    (list 100 55 201 3 70 21 90 33)
+    (list 1 1 1 1 1 1 1 1)
+    (list 0 0 0 0 0 0 0 0)))
+
+(fn lb_zip ((ns (List (List Int))) (vs (List Int))) (List (Pair (List Int) Int))
+  (measure (struct ns))
+  (match ns
+    (Nil Nil)
+    ((Cons n nrest)
+     (match vs
+       (Nil Nil)
+       ((Cons v vrest) (Cons (Pair n v) (lb_zip nrest vrest)))))))
+
+(fn lb_len ((xs (List (List Int)))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons _ t) (+ 1 (lb_len t)))))
+
+;; up to `want` premise-satisfying tuples for params/prems
+(fn lb_pick
+  ((pools (List (List Int)))
+   (params (List (List Int)))
+   (ps (List SExpr))
+   (want Int))
+  (List (List Int))
+  (measure (struct pools))
+  (if (le want 0) Nil
+  (match pools
+    (Nil Nil)
+    ((Cons pool rest)
+     (if (lb_prems_hold (lb_zip params (lb_take pool (lb_len params))) ps)
+       (Cons (lb_take pool (lb_len params)) (lb_pick rest params ps (- want 1)))
+       (lb_pick rest params ps want))))))
+
+;; ---- the OUT-closure calls ------------------------------------------------------
+
+;; fn lookup by CHARS name (the lib names are derived, never minted symbols)
+(fn lb_find_fd ((fns (List FnDef)) (want (List Int))) (Option FnDef)
+  (measure (struct fns))
+  (match fns
+    (Nil None)
+    ((Cons f rest)
+     (match f
+       ((FnDef q _ _ _)
+        (if (ceq (chars_of_sym (qn_name q)) want) (Some f)
+        (lb_find_fd rest want)))))))
+
+(fn lb_call ((m Module) (want (List Int)) (args (List Expr))) (Option Expr)
+  (match m
+    ((Module _ fns _ _ _)
+     (match (lb_find_fd fns want)
+       (None None)
+       ((Some fd) (invoke_fd m fd args))))))
+
+(fn lb_intlits ((xs (List Int))) (List Expr)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons h t) (Cons (IntLit h) (lb_intlits t)))))
+
+;; decode the exports table value: (list (WX "name" idx) …)
+(fn lb_wx ((e Expr)) (Option (Pair (List Int) Int))
+  (match (dc_ctor (quote WX) e)
+    ((Some (Cons nm (Cons ix Nil)))
+     (match (expr_ints nm)
+       ((Some nv)
+        (match (expr_int ix)
+          ((Some iv) (Some (Pair nv iv)))
+          (_ None)))
+       (_ None)))
+    (_ None)))
+
+(fn lb_wxs ((es (List Expr))) (Option (List (Pair (List Int) Int)))
+  (measure (struct es))
+  (match es
+    (Nil (Some Nil))
+    ((Cons e rest)
+     (match (lb_wx e)
+       (None None)
+       ((Some p)
+        (match (lb_wxs rest)
+          (None None)
+          ((Some ps) (Some (Cons p ps)))))))))
+
+(fn lb_idx_of ((tbl (List (Pair (List Int) Int))) (nm (List Int))) (Option Int)
+  (measure (struct tbl))
+  (match tbl
+    (Nil None)
+    ((Cons (Pair n i) rest) (if (ceq n nm) (Some i) (lb_idx_of rest nm)))))
+
+;; ---- per-export art + vectors ----------------------------------------------------
+
+(fn lb_art ((nm (List Int)) (outp (List Int)) (idx Int)) PArt
+  (PA nm (append_int "lowered_" nm) outp "models/wasm/wasm.shard" idx "" "none"))
+
+(fn lb_vec_of ((m Module) (nm (List Int)) (idx Int) (args (List Int)))
+  (Option PVec)
+  (match (lb_call m nm (lb_intlits args))
+    (None None)
+    ((Some ev)
+     (match (expr_int ev)
+       (None None)
+       ((Some v) (Some (PV idx args Nil v Nil)))))))
+
+(fn lb_vecs_of ((m Module) (nm (List Int)) (idx Int) (tuples (List (List Int))))
+  (Option (List PVec))
+  (measure (struct tuples))
+  (match tuples
+    (Nil (Some Nil))
+    ((Cons t rest)
+     (match (lb_vec_of m nm idx t)
+       (None None)
+       ((Some v)
+        (match (lb_vecs_of m nm idx rest)
+          (None None)
+          ((Some vs) (Some (Cons v vs)))))))))
+
+(type LBE (LBEOk (List PArt) (List PVec)) (LBEErr (List Int)))
+
+(fn lb_exports_walk
+  ((m Module)
+   (cforms (List SExpr))
+   (tbl (List (Pair (List Int) Int)))
+   (outp (List Int))
+   (xs (List Symbol)))
+  LBE
+  (measure (struct xs))
+  (match xs
+    (Nil (LBEOk Nil Nil))
+    ((Cons x rest)
+     (match (lb_idx_of tbl (chars_of_sym x))
+       (None
+         (LBEErr
+           (append_int (chars_of_sym x) " is not in the generated export table")))
+       ((Some idx)
+        (match (lb_goal cforms (append_int "lowered_" (chars_of_sym x)))
+          (None
+            (LBEErr
+              (append_int "no lowered_ goal for export " (chars_of_sym x))))
+          ((Some (Pair bs ps))
+           (match (lb_pick (lb_pools) (lb_params bs) ps 2)
+             (Nil
+               (LBEErr
+                 (append_int
+                   "no candidate vector satisfies the premises of "
+                   (append_int
+                     (chars_of_sym x)
+                     " -- supply hand vectors via mod.build"))))
+             (tuples
+               (match (lb_vecs_of m (chars_of_sym x) idx tuples)
+                 (None
+                   (LBEErr
+                     (append_int
+                       "spec evaluation failed for export "
+                       (chars_of_sym x))))
+                 ((Some vecs)
+                  (match (lb_exports_walk m cforms tbl outp rest)
+                    ((LBEErr e) (LBEErr e))
+                    ((LBEOk arts more)
+                     (LBEOk
+                       (Cons (lb_art (chars_of_sym x) outp idx) arts)
+                       (vec_app vecs more)))))))))))))))
+
+(fn vec_app ((a (List PVec)) (b (List PVec))) (List PVec)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (vec_app t b)))))
+
+;; ---- the lib entry ----------------------------------------------------------------
+
+(fn run_lib ((srcp (List Int)) (outp (List Int)) (w World)) World
+  (match (read_file srcp w)
+    ((Pair None w1) (fail (append_int "cannot read " srcp) w1))
+    ((Pair (Some ssrc) w1)
+     (match (forms_go ssrc Nil 1000000)
+       (None (fail (append_int "cannot parse " srcp) w1))
+       ((Some sforms)
+        (match (lb_lib_find sforms)
+          (None (fail (append_int "no (lib ...) declaration in " srcp) w1))
+          ((Some (Lib lname exports _acc))
+           (match (read_file outp w1)
+             ((Pair None w2) (fail (append_int "cannot read " outp) w2))
+             ((Pair (Some csrc) w2)
+              (match (forms_go csrc Nil 1000000)
+                (None (fail (append_int "cannot parse " outp) w2))
+                ((Some cforms)
+                 (match (load_run_module outp w2)
+                   ((Pair None w3)
+                    (fail "could not load the cert file's closure" w3))
+                   ((Pair (Some m) w3)
+                    (match
+                      (lb_call m (append_int (chars_of_sym lname) "_bytes") Nil)
+                      (None (fail "no LIBNAME_bytes fn in the closure" w3))
+                      ((Some bev)
+                       (match (expr_ints bev)
+                         (None
+                           (fail "LIBNAME_bytes did not evaluate to bytes" w3))
+                         ((Some bytes)
+                          (match
+                            (lb_call
+                              m
+                              (append_int (chars_of_sym lname) "_exports")
+                              Nil)
+                            (None
+                              (fail "no LIBNAME_exports fn in the closure" w3))
+                            ((Some tev)
+                             (match (expr_list tev)
+                               (None (fail "LIBNAME_exports is not a list" w3))
+                               ((Some tes)
+                                (match (lb_wxs tes)
+                                  (None
+                                    (fail "LIBNAME_exports did not decode" w3))
+                                  ((Some tbl)
+                                   (match
+                                     (lb_exports_walk m cforms tbl outp exports)
+                                     ((LBEErr e) (fail e w3))
+                                     ((LBEOk arts vecs)
+                                      (match
+                                        (plan_lines
+                                          (Cons
+                                            (PLib
+                                              (chars_of_sym lname)
+                                              bytes
+                                              arts
+                                              vecs)
+                                            Nil))
+                                        (None
+                                          (fail "lib plan did not render" w3))
+                                        ((Some ls) (exit 0 (write ls w3)))))))))))))))))))))))))))))
+
+;; ---------------------------------------------------------------------------
 ;; the driver
 ;; ---------------------------------------------------------------------------
 
@@ -589,4 +976,10 @@
         (if (ceq isa "wasm") (run_isa bpath False w1)
         (if (ceq isa "x86") (run_isa bpath True w1)
         (fail "unknown ISA (wasm | x86)" w1))))
-       (_ (fail "usage: lowbuild <mod.build path> [wasm | x86]" w1))))))
+       ((Cons mode (Cons srcp (Cons outp Nil)))
+        (if (ceq mode "lib") (run_lib srcp outp w1)
+        (fail "unknown 3-arg mode (lib SRC OUT)" w1)))
+       (_
+         (fail
+           "usage: lowbuild <mod.build path> [wasm | x86] | lowbuild lib SRC OUT"
+           w1))))))

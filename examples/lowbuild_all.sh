@@ -18,13 +18,14 @@ BUILDS=(
   examples/lowbuild_x86call.sh
   examples/lowbuild_x86chain.sh
   examples/lowbuild_x86loopcall.sh
-  examples/lowbuild_purelib.sh
+  "examples/lowbuild_lib.sh examples/purelib_src.shard examples/purelib_out.shard"
 )
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
 for i in "${!BUILDS[@]}"; do
-  { "${BUILDS[$i]}" > "$TMP/$i.out" 2>&1; echo $? > "$TMP/$i.rc"; } &
+  # unquoted: an entry may carry arguments (the generic lib build)
+  { ${BUILDS[$i]} > "$TMP/$i.out" 2>&1; echo $? > "$TMP/$i.rc"; } &
 done
 wait
 
