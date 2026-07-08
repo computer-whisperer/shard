@@ -24,6 +24,7 @@
 (import "../../kernel/module.shard")
 (import "../../kernel/loader.shard")
 (import "../../kernel/reader.shard")
+(import "../../models/x86/elf.shard")
 (import "../../meta/invoke")
 (import "../../meta/plan")
 (import "../../meta/forms")
@@ -40,6 +41,9 @@
 (use (:: meta invoke *))
 (use (:: meta plan *))
 (use (:: meta forms *))
+(use (:: models x86 elf enc_elf))
+(use (:: models x86 elf EV))
+(use (:: models x86 elf EVec))
 
 ;; ---------------------------------------------------------------------------
 ;; decoding — Plan value (Expr) -> native plan structures, whole-or-nothing
@@ -978,6 +982,165 @@
                                   (None (fail "x86 lib plan did not render" w3))
                                   ((Some ls) (exit 0 (write ls w3)))))))))))))))))))))))))
 
+;; ---- the ELF harness derivation (docs/X86.md §20) ----------------------------------
+;; `lowbuild elf SRC OUT` derives a self-checking static ELF: the index-order
+;; image (LNAME_elf_image, cert-tied by bytetie) + its offsets, plus one
+;; harness vector per synthesized cert vector (natural export index + args).
+;; enc_elf wraps them in a runnable binary; the driver emits its hex plus the
+;; expected stdout (EXPOUT = the spec results in vector order) for the gate to
+;; diff against the binary's actual output.
+
+(type EVR (EVR (List EVec) (List Int) (List Int)))  ; vecs, expout hex, exp lines
+
+(fn elf_exp_line ((nm (List Int)) (args (List Int)) (want Int)) (List Int)
+  (cat (list "EXP " nm (showargs args) " -> " (hx want) "\n")))
+
+(fn lb_evecs_of
+  ((m Module) (nm (List Int)) (idx Int) (tuples (List (List Int))))
+  (Option EVR)
+  (measure (struct tuples))
+  (match tuples
+    (Nil (Some (EVR Nil "" "")))
+    ((Cons t rest)
+     (match (lb_call m nm (lb_intlits t))
+       (None None)
+       ((Some ev)
+        (match (expr_int ev)
+          (None None)
+          ((Some want)
+           (match (lb_evecs_of m nm idx rest)
+             (None None)
+             ((Some (EVR evs expout exps))
+              (Some
+                (EVR
+                  (Cons (EV idx t) evs)
+                  (append_int (hx want) expout)
+                  (append_int (elf_exp_line nm t want) exps))))))))))))
+
+(fn evec_app ((a (List EVec)) (b (List EVec))) (List EVec)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (evec_app t b)))))
+
+(fn lb_elf_walk
+  ((m Module)
+   (cforms (List SExpr))
+   (tbl (List (Pair (List Int) Int)))
+   (xs (List Symbol)))
+  (Option EVR)
+  (measure (struct xs))
+  (match xs
+    (Nil (Some (EVR Nil "" "")))
+    ((Cons x rest)
+     (match (lb_idx_of tbl (chars_of_sym x))
+       (None None)
+       ((Some idx)
+        (match (lb_goal cforms (append_int "lowered_" (chars_of_sym x)))
+          (None None)
+          ((Some (Pair bs ps))
+           (match (lb_pick (lb_pools) (lb_params bs) ps 2)
+             (Nil None)
+             (tuples
+               (match (lb_evecs_of m (chars_of_sym x) idx tuples)
+                 (None None)
+                 ((Some (EVR evs expout exps))
+                  (match (lb_elf_walk m cforms tbl rest)
+                    (None None)
+                    ((Some (EVR evs2 expout2 exps2))
+                     (Some
+                       (EVR
+                         (evec_app evs evs2)
+                         (append_int expout expout2)
+                         (append_int exps exps2))))))))))))))))
+
+(fn run_elf ((srcp (List Int)) (outp (List Int)) (w World)) World
+  (match (read_file srcp w)
+    ((Pair None w1) (fail (append_int "cannot read " srcp) w1))
+    ((Pair (Some ssrc) w1)
+     (match (forms_go ssrc Nil 1000000)
+       (None (fail (append_int "cannot parse " srcp) w1))
+       ((Some sforms)
+        (match (lb_lib_find sforms)
+          (None (fail (append_int "no (lib ...) declaration in " srcp) w1))
+          ((Some (Lib lname exports _acc))
+           (match (read_file outp w1)
+             ((Pair None w2) (fail (append_int "cannot read " outp) w2))
+             ((Pair (Some csrc) w2)
+              (match (forms_go csrc Nil 1000000)
+                (None (fail (append_int "cannot parse " outp) w2))
+                ((Some cforms)
+                 (match (load_run_module outp w2)
+                   ((Pair None w3)
+                    (fail "could not load the cert file's closure" w3))
+                   ((Pair (Some m) w3)
+                    (match
+                      (lb_call
+                        m
+                        (append_int (chars_of_sym lname) "_elf_image")
+                        Nil)
+                      (None (fail "no LIBNAME_elf_image fn in the closure" w3))
+                      ((Some imev)
+                       (match (expr_ints imev)
+                         (None (fail "LIBNAME_elf_image is not bytes" w3))
+                         ((Some image)
+                          (match
+                            (lb_call
+                              m
+                              (append_int (chars_of_sym lname) "_elf_offsets")
+                              Nil)
+                            (None
+                              (fail
+                                "no LIBNAME_elf_offsets fn in the closure"
+                                w3))
+                            ((Some ofev)
+                             (match (expr_ints ofev)
+                               (None
+                                 (fail "LIBNAME_elf_offsets is not ints" w3))
+                               ((Some offs)
+                                (match
+                                  (lb_call
+                                    m
+                                    (append_int (chars_of_sym lname) "_exports")
+                                    Nil)
+                                  (None
+                                    (fail "no LIBNAME_exports fn in closure" w3))
+                                  ((Some tev)
+                                   (match (expr_list tev)
+                                     (None
+                                       (fail "LIBNAME_exports is not a list" w3))
+                                     ((Some tes)
+                                      (match (lb_xxs tes)
+                                        (None
+                                          (fail
+                                            "LIBNAME_exports did not decode"
+                                            w3))
+                                        ((Some tbl)
+                                         (match
+                                           (lb_elf_walk m cforms tbl exports)
+                                           (None
+                                             (fail
+                                               "ELF vector synthesis failed (no candidate or spec eval)"
+                                               w3))
+                                           ((Some (EVR evs expout exps))
+                                            (exit
+                                              0
+                                              (write
+                                                (cat
+                                                  (list
+                                                    "IMG "
+                                                    (hexs image)
+                                                    "\n"
+                                                    "ELF "
+                                                    (hexs
+                                                      (enc_elf image offs evs))
+                                                    "\n"
+                                                    "EXPOUT "
+                                                    expout
+                                                    "\n"
+                                                    exps))
+                                                w3)))))))))))))))))))))))))))))))
+
 ;; ---- the lib entry ----------------------------------------------------------------
 
 (fn run_lib ((srcp (List Int)) (outp (List Int)) (w World)) World
@@ -1118,7 +1281,8 @@
         (fail "unknown ISA (wasm | x86)" w1))))
        ((Cons mode (Cons srcp (Cons outp Nil)))
         (if (ceq mode "lib") (run_lib srcp outp w1)
-        (fail "unknown 3-arg mode (lib SRC OUT)" w1)))
+        (if (ceq mode "elf") (run_elf srcp outp w1)
+        (fail "unknown 3-arg mode (lib SRC OUT | elf SRC OUT)" w1))))
        ((Cons mode (Cons srcp (Cons outp (Cons isa Nil))))
         (if (ceq mode "lib")
           (if (ceq isa "wasm") (run_lib srcp outp w1)

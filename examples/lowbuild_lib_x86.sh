@@ -55,7 +55,7 @@ echo "== gate 5: byte tie (certs -> assembled image -> enc_image = shipped bytes
 "$EVAL" run tools/lowbuild/lowbuild.shard lib "$SRC" "$OUT" x86 > "$TMP/plan.txt"
 "$EVAL" run tools/bytetie/bytetie.shard "$OUT" > "$TMP/tie.txt"
 grep '^XMOD ' "$TMP/plan.txt" | sort > "$TMP/mods.txt"
-sed 's/^TIE /XMOD /' "$TMP/tie.txt" | sort > "$TMP/ties.txt"
+grep '^TIE ' "$TMP/tie.txt" | sed 's/^TIE /XMOD /' | sort > "$TMP/ties.txt"
 diff "$TMP/ties.txt" "$TMP/mods.txt"
 echo "BYTETIE OK"
 "$EVAL" run tools/lowcheck/manifest.shard "$TMP/plan.txt" models/x86/x86.shard "$OUT"
