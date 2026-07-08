@@ -39,7 +39,14 @@
 ;;;     abstraction; the flattening encoder owns labels and jumps.
 ;;;   - Memory is std/mem's OPAQUE substrate, byte ops only in v1
 ;;;     (X86.md §5: wide loads/stores are a named growth path). Bounds are
-;;;     byte-precise and model-side against the module's static memsize.
+;;;     byte-precise and model-side against the module's static WINDOW
+;;;     [xmemlo, xmemhi) — a half-open interval, NOT a prefix. A prefix
+;;;     [0, size) is a wasm-ism (linear memory really is addressed from
+;;;     zero); a Linux process never has one, because page 0 is
+;;;     unmappable. The window is what makes "the code never touches
+;;;     unmapped memory" a CONSEQUENCE of a cert rather than a hope: a
+;;;     stray access outside it traps, so the Some(...) conclusion
+;;;     becomes unprovable (X86.md §23).
 ;;;   - Nat fuel, structural, burns on EVERY SCC entry; None = fuel out
 ;;;     exclusively; XTrap = dynamic failure (invalid code). Fuel is a
 ;;;     DEPTH bound: loop re-entry at exactly fuel-1 (the §6f IH law).
@@ -247,8 +254,10 @@
 ;; result-arity machinery.
 (record XFunc (xparams Int) (xbody (List XInstr)))
 
-;; A module: functions addressed by index, plus static memory size in bytes.
-(record XModule (xfuncs (List XFunc)) (xmemsize Int))
+;; A module: functions addressed by index, plus the static memory WINDOW
+;; [xmemlo, xmemhi) in bytes — the region a process actually maps. An empty
+;; window (lo = hi) admits no access at all.
+(record XModule (xfuncs (List XFunc)) (xmemlo Int) (xmemhi Int))
 
 (fn xfunc_at ((fs (List XFunc)) (i Int)) (Option XFunc)
   (measure (struct fs))
@@ -291,15 +300,15 @@
         (Some (XNorm (rset rs d (xbop_val o (rget rs d) (xsrc rs s))) mem)))
        ((XLoad8 d a)
         (let ((p (xaddr rs a)))
-          (if (le 0 p)
-            (if (le (+ p 1) (xmemsize_of m))
+          (if (le (xmemlo_of m) p)
+            (if (le (+ p 1) (xmemhi_of m))
               (Some (XNorm (rset rs d (mem_get mem p)) mem))
               (Some XTrap))
             (Some XTrap))))
        ((XStore8 a s)
         (let ((p (xaddr rs a)))
-          (if (le 0 p)
-            (if (le (+ p 1) (xmemsize_of m))
+          (if (le (xmemlo_of m) p)
+            (if (le (+ p 1) (xmemhi_of m))
               (Some (XNorm rs (mem_set mem p (xsrc rs s))))
               (Some XTrap))
             (Some XTrap))))

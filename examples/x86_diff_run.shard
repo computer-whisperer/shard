@@ -15,7 +15,7 @@
 ;;; model's Mem is a sparse (Map Int) so an absolute-address key is cheap, and
 ;;; model-address == silicon-pointer with NO base/offset fiction — the honest
 ;;; flat-memory semantics. The harness MAP_FIXEDs the data page at DATA_BASE.
-;;; The trap vector stores past the module's memsize: the model traps (None),
+;;; The trap vector stores past the module's window: the model traps (None),
 ;;; the CPU SIGSEGVs on the unmapped page, and the harness scores the caught
 ;;; signal as AGREEMENT (the trap leg of the differential).
 ;;;
@@ -173,9 +173,9 @@
           (XBin XAdd RAX (SImm 1)))))))
 
 ;; register modules have no memory; memory modules bound [DATA_BASE, +0x10000)
-(fn mreg ((f XFunc)) XModule (MkXModule (Cons f Nil) 0))
+(fn mreg ((f XFunc)) XModule (MkXModule (Cons f Nil) 0 0))
 
-(fn mmem ((f XFunc)) XModule (MkXModule (Cons f Nil) 1073807360))
+(fn mmem ((f XFunc)) XModule (MkXModule (Cons f Nil) 1073741824 1073807360))
 
 ;; --- multi-function CALL modules (docs/X86.md §15: the image layout) ----------
 ;; Convention under test: callees at LOW indices, the entry (caller) last;
@@ -203,8 +203,7 @@
 (fn csq1_f () XFunc (MkXFunc 1 (list (XCall 0) (XBin XAdd RAX (SImm 1)))))
 
 ;; chain(a) = sq1(a) * 2 — entry for the three-function nest
-(fn cchain_f () XFunc
-  (MkXFunc 1 (list (XCall 1) (XBin XMul RAX (SImm 2)))))
+(fn cchain_f () XFunc (MkXFunc 1 (list (XCall 1) (XBin XMul RAX (SImm 2)))))
 
 ;; store callee: *rdi = rsi (byte)
 (fn cst_f () XFunc (MkXFunc 2 (list (XStore8 (AReg RDI) (SReg RSI)))))
@@ -214,14 +213,13 @@
 (fn cst2_f () XFunc
   (MkXFunc 2 (list (XCall 0) (XBin XAdd RDI (SImm 1)) (XCall 0))))
 
-(fn msumsq () XModule
-  (MkXModule (Cons (csq_f) (Cons (csumsq_f) Nil)) 0))
+(fn msumsq () XModule (MkXModule (Cons (csq_f) (Cons (csumsq_f) Nil)) 0 0))
 
 (fn mchain () XModule
-  (MkXModule (Cons (csq_f) (Cons (csq1_f) (Cons (cchain_f) Nil))) 0))
+  (MkXModule (Cons (csq_f) (Cons (csq1_f) (Cons (cchain_f) Nil))) 0 0))
 
 (fn mst2 () XModule
-  (MkXModule (Cons (cst_f) (Cons (cst2_f) Nil)) 1073807360))
+  (MkXModule (Cons (cst_f) (Cons (cst2_f) Nil)) 1073741824 1073807360))
 
 ;; --- plan lines --------------------------------------------------------------
 
@@ -233,8 +231,7 @@
 (fn mod_linei ((nm (List Int)) (m XModule) (k Int)) (List Int)
   (cat (list "XMOD " nm " " (hexs (enc_image (xfuncs_of m) k)) "\n")))
 
-(fn xcasek
-  ((nm (List Int)) (m XModule) (k Int) (args (List Int)) (fuel Int))
+(fn xcasek ((nm (List Int)) (m XModule) (k Int) (args (List Int)) (fuel Int))
   (List Int)
   (cat
     (list
@@ -328,7 +325,9 @@
 
 ;; --- the plan ----------------------------------------------------------------
 ;; DATA_BASE = 0x40000000 = 1073741824; the trap address 0x40100000 =
-;; 1074790400 is past the module's memsize (1073807360 = DATA_BASE+0x10000).
+;; 1074790400 is past the module's window [DATA_BASE, DATA_BASE+0x10000).
+;; The window's LOW end is DATA_BASE too, so an address below it traps as
+;; well — the model now says exactly what the harness maps (X86.md §23).
 
 (fn emit () (List Int)
   (cat

@@ -1875,9 +1875,20 @@ plainly executable ELF (arglen: exit code = |argv[1]|), a bin admitted
 as a one-export lib everywhere except the packaging (enc_binelf's argv
 glue under the SIGNED GLUE CONTRACT) and the boundary law (bin premise
 surface = exactly what the glue contract supplies; v1 = EMPTY, both
-ratchet directions verified). Ladder: A1 = mem fns in the lib image
-walk (the entry READS the payload; address-bounds enter glue_fams),
-A2 = store loops + the out-buffer/stdout leg, B = decimal parse/render
+ratchet directions verified). The MEMORY WINDOW landed next as A1's
+prerequisite (X86.md §23): `XModule` carries `[xmemlo, xmemhi)`, not a
+prefix `[0, memsize)` — a prefix is a wasm-ism (linear memory really is
+addressed from zero) and never describes a process, whose page 0 is
+unmappable. Under the prefix guard a load at address 5 was model-VALID
+and silicon-fatal (measured), so a cert could be proven for a binary
+that faults; premises cannot fix it (they bind the argument, not what
+the code does with it) — only the guard can, and now a stray access
+traps, making `Some (Pair …)` unprovable. Zero proof-SCRIPT edits (only
+the callee certs' premises generalize, msz → mlo/mhi); fixture =
+examples/x86_window_law.shard. Ladder: A1 = mem fns in the lib image
+walk (the entry READS the payload; the window's address-bounds family
+enters glue_fams), A2 = store loops + the out-buffer/stdout leg, B =
+decimal parse/render
 (x86 div, proven atoi/itoa); THEN the World-effect axiom that lets
 proven interactive I/O cite the shims (the platform-externs API's
 first real consumer; the pure-entry driver bridge is superseded

@@ -1,0 +1,92 @@
+;;; examples/x86_window_law.shard — THE WINDOW LAW, pinned (docs/X86.md §23).
+;;;
+;;; An XModule's memory is the half-open WINDOW [xmemlo, xmemhi) — the
+;;; region a process actually maps — not a prefix [0, size). The prefix
+;;; shape is a wasm-ism: wasm linear memory really is addressed from
+;;; zero, so a prefix was faithful there. A Linux process never has one,
+;;; because page 0 is unmappable. Under a prefix guard the model would
+;;; declare a load at address 5 VALID while silicon SIGSEGVs — so a cert
+;;; could be proven for a binary that faults.
+;;;
+;;; The window closes that: a stray access below the window TRAPS, and a
+;;; trap is `None`, so the `Some (Pair …)` conclusion every lowering cert
+;;; asserts becomes unprovable. "The code never touches unmapped memory"
+;;; stops being a hope and becomes a CONSEQUENCE of the cert.
+;;;
+;;; These four claims pin exactly that, on std/mem's own artifact pieces
+;;; over the window [100, 200): in-window read and store succeed;
+;;; below-window and at-hi reads trap. The below-window leg is the one a
+;;; prefix guard could not state — it is the fixture that would have
+;;; caught the gap.
+
+(import "../kernel/stdlib.shard")
+(import "../std/mem")
+(import "../models/x86/x86.shard")
+(import "../std/mem/mem.x86.shard")
+
+(use (:: std mem *))
+(use (:: models x86 x86 *))
+(use (:: std mem mem.x86 *))
+
+;; the read module: xmget_f alone, memory window [100, 200)
+(fn wl_get_mod () XModule (MkXModule (Cons (xmget_f) Nil) 100 200))
+
+;; the store module: xmset_f alone, same window
+(fn wl_set_mod () XModule (MkXModule (Cons (xmset_f) Nil) 100 200))
+
+;; registers with rdi = a (the address) and rsi = v (the store value)
+(fn wl_regs ((a Int) (v Int)) Regs (MkRegs 0 0 0 0 0 v a 0 0 0 0 0 0 0 0))
+
+;; --- IN the window: the load reads the byte -------------------------------------
+
+(claim window_in_reads
+  (goal ((mem Mem)) ()
+    (=
+      (xrun_regs (S (S Z)) (wl_get_mod) 0 (wl_regs 100 0) mem)
+      (Some (Pair (MkRegs (mem_get mem 100) 0 0 0 0 0 100 0 0 0 0 0 0 0 0) mem))))
+  (steps ((compute both)) refl))
+
+;; --- BELOW the window: the load TRAPS -------------------------------------------
+;; The address is nonneg and below xmemhi, so the OLD prefix guard
+;; (0 <= p AND p+1 <= memsize) admitted it. Silicon would fault. The
+;; window's low end refuses it, and a trap is None.
+
+(claim window_below_traps
+  (goal ((mem Mem)) ()
+    (= (xrun_regs (S (S Z)) (wl_get_mod) 0 (wl_regs 50 0) mem) None))
+  (steps ((compute both)) refl))
+
+;; address 0 — the page a process can never map — likewise traps
+(claim window_zero_traps
+  (goal ((mem Mem)) ()
+    (= (xrun_regs (S (S Z)) (wl_get_mod) 0 (wl_regs 0 0) mem) None))
+  (steps ((compute both)) refl))
+
+;; --- AT the high end: the last readable byte is xmemhi - 1 ----------------------
+;; the guard is p + 1 <= xmemhi, so 199 reads and 200 traps (half-open)
+
+(claim window_last_byte_reads
+  (goal ((mem Mem)) ()
+    (=
+      (xrun_regs (S (S Z)) (wl_get_mod) 0 (wl_regs 199 0) mem)
+      (Some (Pair (MkRegs (mem_get mem 199) 0 0 0 0 0 199 0 0 0 0 0 0 0 0) mem))))
+  (steps ((compute both)) refl))
+
+(claim window_hi_traps
+  (goal ((mem Mem)) ()
+    (= (xrun_regs (S (S Z)) (wl_get_mod) 0 (wl_regs 200 0) mem) None))
+  (steps ((compute both)) refl))
+
+;; --- the STORE guard is the same window -----------------------------------------
+
+(claim window_store_below_traps
+  (goal ((mem Mem)) ()
+    (= (xrun_regs (S (S Z)) (wl_set_mod) 0 (wl_regs 50 65) mem) None))
+  (steps ((compute both)) refl))
+
+(claim window_store_in_writes
+  (goal ((mem Mem)) ()
+    (=
+      (xrun_regs (S (S Z)) (wl_set_mod) 0 (wl_regs 100 65) mem)
+      (Some (Pair (wl_regs 100 65) (mem_set mem 100 65)))))
+  (steps ((compute both)) refl))

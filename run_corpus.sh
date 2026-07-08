@@ -119,6 +119,7 @@ TARGETS=(
   examples/x86_pieces.shard
   std/mem/mem.x86.shard
   examples/xmemcall_probe.shard
+  examples/x86_window_law.shard
   examples/xsibcall_probe.shard
   examples/xchain_probe.shard
   examples/xloopcall_probe.shard
