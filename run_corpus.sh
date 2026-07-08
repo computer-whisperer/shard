@@ -125,6 +125,8 @@ TARGETS=(
   examples/xloopcall_probe.shard
   examples/xintloop_probe.shard
   examples/xbinsum_probe.shard
+  examples/bytesum_src.shard
+  examples/bytesum_x86_out.shard
   examples/libmod_probe.shard
   examples/lib_form.shard
   examples/lib_form_rejects.shard

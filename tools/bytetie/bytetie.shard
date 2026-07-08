@@ -999,7 +999,57 @@
 
 ;; one x86 lib claim's contribution: the wasm lib_claim_slot's twin
 ;; (find_xcall + MkXModule; the chain walker lib_slot is shared)
-(fn xlib_claim_slot ((gf SExpr)) (Option LSlot)
+(fn ilist_eq ((a (List Int)) (b (List Int))) Bool
+  (measure (struct a))
+  (match a
+    (Nil
+      (match b
+        (Nil True)
+        ((Cons _ _) False)))
+    ((Cons x xs)
+     (match b
+       (Nil False)
+       ((Cons y ys) (if (int_eq x y) (ilist_eq xs ys) False))))))
+
+;; every LITERAL slot of an x86 lib chain: a caller pins its callees'
+;; copies beside its own literal (X86.md par.24 — the wrapper claim
+;; carries the loop's literal at slot 0 AND its own at slot 1). Binder
+;; slots (SSym) skip; the tail must end in restfs.
+(fn xlib_lits ((s SExpr) (j Int)) (Option (List (Pair Int SExpr)))
+  (measure (struct s))
+  (match s
+    ((SList (Cons h (Cons f (Cons tail Nil))))
+     (if (is_sym h (quote Cons))
+       (match f
+         ((SSym _)
+          (match tail
+            ((SSym x) (if (sym_eq x (quote restfs)) (Some Nil) None))
+            (_ (xlib_lits tail (+ j 1)))))
+         (_
+           (match tail
+             ((SSym x)
+              (if (sym_eq x (quote restfs)) (Some (Cons (Pair j f) Nil)) None))
+             (_
+               (match (xlib_lits tail (+ j 1))
+                 (None None)
+                 ((Some more) (Some (Cons (Pair j f) more))))))))
+       None))
+    (_ None)))
+
+(fn xlp_at ((ls (List (Pair Int SExpr))) (i Int)) (Option SExpr)
+  (measure (struct ls))
+  (match ls
+    (Nil None)
+    ((Cons (Pair j f) rest) (if (int_eq j i) (Some f) (xlp_at rest i)))))
+
+(fn xlp_drop ((ls (List (Pair Int SExpr))) (i Int)) (List (Pair Int SExpr))
+  (measure (struct ls))
+  (match ls
+    (Nil Nil)
+    ((Cons (Pair j f) rest)
+     (if (int_eq j i) (xlp_drop rest i) (Cons (Pair j f) (xlp_drop rest i))))))
+
+(fn xlib_claim_slot ((gf SExpr)) (Option (Pair LSlot (List (Pair Int SExpr))))
   (match gf
     ((SList (Cons g (Cons _ (Cons _ (Cons concl Nil)))))
      (if (is_sym g (quote goal))
@@ -1017,12 +1067,16 @@
                        ((SInt hi)
                         (match idxs
                           ((SInt ix)
-                           (match (lib_slot chain 0)
+                           (match (xlib_lits chain 0)
                              (None None)
-                             ((Some (Pair j f))
-                              (if (int_eq j ix)
-                                (Some (LSlot ix f (LWindow lo hi)))
-                                None))))
+                             ((Some lits)
+                              (match (xlp_at lits ix)
+                                (None None)
+                                ((Some f)
+                                 (Some
+                                   (Pair
+                                     (LSlot ix f (LWindow lo hi))
+                                     (xlp_drop lits ix))))))))
                           (_ None)))
                        (_ None)))
                     (_ None))
@@ -1032,10 +1086,18 @@
        None))
     (_ None)))
 
-(fn xlib_slots ((forms (List SExpr))) (Option (List LSlot))
+(fn app_cps ((a (List (Pair Int SExpr))) (b (List (Pair Int SExpr))))
+  (List (Pair Int SExpr))
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (app_cps t b)))))
+
+(fn xlib_slots ((forms (List SExpr)))
+  (Option (Pair (List LSlot) (List (Pair Int SExpr))))
   (measure (struct forms))
   (match forms
-    (Nil (Some Nil))
+    (Nil (Some (Pair Nil Nil)))
     ((Cons f rest)
      (match f
        ((SList (Cons h (Cons nm (Cons gf _))))
@@ -1045,10 +1107,11 @@
              (if (prefix_eq "lowered_" (chars_of_sym name))
                (match (xlib_claim_slot gf)
                  (None None)
-                 ((Some sl)
+                 ((Some (Pair sl cps))
                   (match (xlib_slots rest)
                     (None None)
-                    ((Some sls) (Some (Cons sl sls))))))
+                    ((Some (Pair sls acps))
+                     (Some (Pair (Cons sl sls) (app_cps cps acps)))))))
                (xlib_slots rest)))
             (_ (xlib_slots rest)))
           (xlib_slots rest)))
@@ -1094,6 +1157,30 @@
 (fn xlib_tieimg_line ((fs (List XFunc))) (List Int)
   (append_int "TIEIMG " (append_int (hexs (enc_image_ord fs)) (nl))))
 
+;; a caller's pinned callee copy must RE-ENCODE to the same bytes as the
+;; image function at that slot — otherwise the caller's cert speaks about
+;; a module that is not the shipped image (the tie's whole point)
+(fn xlib_copies_ok
+  ((tbl (List (Pair Symbol SExpr)))
+   (d Int)
+   (copies (List (Pair Int SExpr)))
+   (fs (List XFunc)))
+  (Option (List Int))
+  (measure (struct copies))
+  (match copies
+    (Nil None)
+    ((Cons (Pair j cexpr) rest)
+     (match (rxfunc tbl d cexpr)
+       ((RXFErr m) (Some m))
+       ((RXFOk cf)
+        (match (xfunc_at fs j)
+          (None (Some "a pinned callee copy points outside the image"))
+          ((Some fj)
+           (if (ilist_eq (enc_func cf) (enc_func fj))
+             (xlib_copies_ok tbl d rest fs)
+             (Some
+               "a caller's pinned callee copy does not re-encode to the image's bytes at its slot")))))))))
+
 (fn xlib_tie
   ((tbl (List (Pair Symbol SExpr)))
    (d Int)
@@ -1102,11 +1189,14 @@
   SRes2
   (match (xlib_slots forms)
     (None (SErr2 "a lowered_ claim in an x86 lib file is not in the lib form"))
-    ((Some sls)
+    ((Some (Pair sls copies))
      (match (xlib_asm tbl d sls 0 (lslen sls))
        ((RXFSErr m) (SErr2 m))
        ((RXFSOk fs)
-        (SOk2 (append_int (xlib_tieimg_line fs) (xlib_tie_lines fs exps))))))))
+        (match (xlib_copies_ok tbl d copies fs)
+          ((Some m) (SErr2 m))
+          (None
+            (SOk2 (append_int (xlib_tieimg_line fs) (xlib_tie_lines fs exps))))))))))
 
 (type SRes (SOk (List Int)) (SErr (List Int)))
 
