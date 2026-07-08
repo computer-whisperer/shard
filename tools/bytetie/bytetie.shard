@@ -908,6 +908,175 @@
                   (hexs (enc_lib (MkWModule fs (lib_msz sls)) exps))
                   (nl)))))))))))
 
+;; ---- the x86 LIB tie (docs/X86.md §19) ---------------------------------------------
+;; The wasm lib tie's twin over x86 cert files (tools/x86gen LIB mode):
+;; certs are position-general xcall_fn_mem claims, the export table is a
+;; (fn NAME () (List XExport) (list (XX "name" idx) …)) form, and the tie
+;; emits ONE line PER EXPORT — enc_image over the cert-assembled function
+;; list with that export's pinned index as the entry — matching the
+;; plan's per-export XMOD lines. LIBNAME_xfuncs is producer output; it
+;; never enters the tie.
+
+(fn rxx ((s SExpr)) (Option (Pair (List Int) Int))
+  (match s
+    ((SList (Cons h (Cons nm (Cons ix Nil))))
+     (if (is_sym h (quote XX))
+       (match nm
+         ((SStr cs)
+          (match ix
+            ((SInt i) (Some (Pair cs i)))
+            (_ None)))
+         (_ None))
+       None))
+    (_ None)))
+
+(fn rxxs ((ss (List SExpr))) (Option (List (Pair (List Int) Int)))
+  (measure (struct ss))
+  (match ss
+    (Nil (Some Nil))
+    ((Cons s rest)
+     (match (rxx s)
+       (None None)
+       ((Some e)
+        (match (rxxs rest)
+          (None None)
+          ((Some es) (Some (Cons e es)))))))))
+
+;; the (fn NAME () (List XExport) (list …)) form: (libname, table)
+(fn xlib_exports_of ((forms (List SExpr)))
+  (Option (Pair (List Int) (List (Pair (List Int) Int))))
+  (measure (struct forms))
+  (match forms
+    (Nil None)
+    ((Cons f rest)
+     (match f
+       ((SList
+          (Cons
+            h
+            (Cons (SSym nm) (Cons (SList Nil) (Cons rty (Cons body Nil))))))
+        (if (is_sym h (quote fn))
+          (match rty
+            ((SList (Cons lh (Cons wh Nil)))
+             (if (is_sym lh (quote List))
+               (if (is_sym wh (quote XExport))
+                 (match body
+                   ((SList (Cons bh entries))
+                    (if (is_sym bh (quote list))
+                      (match (rxxs entries)
+                        (None (xlib_exports_of rest))
+                        ((Some es)
+                         (Some
+                           (Pair
+                             (take_head
+                               (chars_of_sym nm)
+                               (- (llen (chars_of_sym nm)) 8))
+                             es))))
+                      (xlib_exports_of rest)))
+                   (_ (xlib_exports_of rest)))
+                 (xlib_exports_of rest))
+               (xlib_exports_of rest)))
+            (_ (xlib_exports_of rest)))
+          (xlib_exports_of rest)))
+       (_ (xlib_exports_of rest))))))
+
+;; one x86 lib claim's contribution: the wasm lib_claim_slot's twin
+;; (find_xcall + MkXModule; the chain walker lib_slot is shared)
+(fn xlib_claim_slot ((gf SExpr)) (Option LSlot)
+  (match gf
+    ((SList (Cons g (Cons _ (Cons _ (Cons concl Nil)))))
+     (if (is_sym g (quote goal))
+       (match (find_xcall concl)
+         (None None)
+         ((Some items)
+          (match items
+            ((Cons _ (Cons _ (Cons wm (Cons idxs _))))
+             (match wm
+               ((SList (Cons mh (Cons chain (Cons msz Nil))))
+                (if (is_sym mh (quote MkXModule))
+                  (match msz
+                    ((SInt ms)
+                     (match idxs
+                       ((SInt ix)
+                        (match (lib_slot chain 0)
+                          (None None)
+                          ((Some (Pair j f))
+                           (if (int_eq j ix) (Some (LSlot ix f ms)) None))))
+                       (_ None)))
+                    (_ None))
+                  None))
+               (_ None)))
+            (_ None))))
+       None))
+    (_ None)))
+
+(fn xlib_slots ((forms (List SExpr))) (Option (List LSlot))
+  (measure (struct forms))
+  (match forms
+    (Nil (Some Nil))
+    ((Cons f rest)
+     (match f
+       ((SList (Cons h (Cons nm (Cons gf _))))
+        (if (is_sym h (quote claim))
+          (match nm
+            ((SSym name)
+             (if (prefix_eq "lowered_" (chars_of_sym name))
+               (match (xlib_claim_slot gf)
+                 (None None)
+                 ((Some sl)
+                  (match (xlib_slots rest)
+                    (None None)
+                    ((Some sls) (Some (Cons sl sls))))))
+               (xlib_slots rest)))
+            (_ (xlib_slots rest)))
+          (xlib_slots rest)))
+       (_ (xlib_slots rest))))))
+
+;; assemble positions 0..n-1, each covered by exactly one claim's literal
+(fn xlib_asm
+  ((tbl (List (Pair Symbol SExpr))) (d Int) (sls (List LSlot)) (i Int) (n Int))
+  RXFS
+  (measure (- n i) (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (le n i) (RXFSOk Nil)
+  (match (ls_at sls i)
+    (None (RXFSErr "a module position has no covering claim"))
+    ((Some fs)
+     (match (rxfunc tbl d fs)
+       ((RXFErr m) (RXFSErr m))
+       ((RXFOk fu)
+        (match (xlib_asm tbl d sls (+ i 1) n)
+          ((RXFSOk more) (RXFSOk (Cons fu more)))
+          ((RXFSErr m) (RXFSErr m)))))))))
+
+;; one TIE line per export: enc_image at the export's pinned entry index
+(fn xlib_tie_lines ((fs (List XFunc)) (exps (List (Pair (List Int) Int))))
+  (List Int)
+  (measure (struct exps))
+  (match exps
+    (Nil "")
+    ((Cons (Pair nm ix) rest)
+     (append_int
+       "TIE "
+       (append_int
+         nm
+         (append_int
+           " "
+           (append_int
+             (hexs (enc_image fs ix))
+             (append_int (nl) (xlib_tie_lines fs rest)))))))))
+
+(fn xlib_tie
+  ((tbl (List (Pair Symbol SExpr)))
+   (d Int)
+   (forms (List SExpr))
+   (exps (List (Pair (List Int) Int))))
+  SRes2
+  (match (xlib_slots forms)
+    (None (SErr2 "a lowered_ claim in an x86 lib file is not in the lib form"))
+    ((Some sls)
+     (match (xlib_asm tbl d sls 0 (lslen sls))
+       ((RXFSErr m) (SErr2 m))
+       ((RXFSOk fs) (SOk2 (xlib_tie_lines fs exps)))))))
+
 (type SRes (SOk (List Int)) (SErr (List Int)))
 
 (fn scan_ties
@@ -962,9 +1131,17 @@
              ((SErr2 m) (fail2 m w1))
              ((SOk2 out) (exit 0 (write out w1)))))
           (None
-            (match (scan_ties (inline_table forms) (+ 1 (clen src)) forms "")
-              ((SErr m) (fail2 m w1))
-              ((SOk out) (exit 0 (write out w1)))))))))))
+            (match (xlib_exports_of forms)
+              ((Some (Pair _ xexps))
+               (match
+                 (xlib_tie (inline_table forms) (+ 1 (clen src)) forms xexps)
+                 ((SErr2 m) (fail2 m w1))
+                 ((SOk2 out) (exit 0 (write out w1)))))
+              (None
+                (match
+                  (scan_ties (inline_table forms) (+ 1 (clen src)) forms "")
+                  ((SErr m) (fail2 m w1))
+                  ((SOk out) (exit 0 (write out w1)))))))))))))
 
 (fn main ((w World)) World
   (match (get_args w)

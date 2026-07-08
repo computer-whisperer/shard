@@ -127,6 +127,7 @@ TARGETS=(
   examples/lib_form_rejects.shard
   examples/purelib_src.shard
   examples/purelib_out.shard
+  examples/purelib_x86_out.shard
   examples/x86_diff_run.shard
   examples/rep_probe.shard
   examples/lowfrag_probe.shard

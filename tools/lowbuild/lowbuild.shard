@@ -741,6 +741,30 @@
        (_ None)))
     (_ None)))
 
+;; the x86 twin: (list (XX "name" idx) …)
+(fn lb_xx ((e Expr)) (Option (Pair (List Int) Int))
+  (match (dc_ctor (quote XX) e)
+    ((Some (Cons nm (Cons ix Nil)))
+     (match (expr_ints nm)
+       ((Some nv)
+        (match (expr_int ix)
+          ((Some iv) (Some (Pair nv iv)))
+          (_ None)))
+       (_ None)))
+    (_ None)))
+
+(fn lb_xxs ((es (List Expr))) (Option (List (Pair (List Int) Int)))
+  (measure (struct es))
+  (match es
+    (Nil (Some Nil))
+    ((Cons e rest)
+     (match (lb_xx e)
+       (None None)
+       ((Some p)
+        (match (lb_xxs rest)
+          (None None)
+          ((Some ps) (Some (Cons p ps)))))))))
+
 (fn lb_wxs ((es (List Expr))) (Option (List (Pair (List Int) Int)))
   (measure (struct es))
   (match es
@@ -837,6 +861,122 @@
   (match a
     (Nil b)
     ((Cons h t) (Cons h (vec_app t b)))))
+
+;; ---- the x86 lib walk ---------------------------------------------------------------
+;; One PM per export: bytes = LIBNAME_entry_bytes idx evaluated in the OUT
+;; closure (enc_image with the export laid FIRST — the harness calls the
+;; blob's start), one ART at the export's PINNED cert index, vectors at
+;; wire index 0 (blob entry). xplan_lines renders the result unchanged.
+
+(fn lb_art_x ((nm (List Int)) (outp (List Int)) (idx Int)) PArt
+  (PA nm (append_int "lowered_" nm) outp "models/x86/x86.shard" idx "" "none"))
+
+(type LBX (LBXOk (List PMod)) (LBXErr (List Int)))
+
+(fn lb_exports_walk_x
+  ((m Module)
+   (cforms (List SExpr))
+   (tbl (List (Pair (List Int) Int)))
+   (outp (List Int))
+   (lname Symbol)
+   (xs (List Symbol)))
+  LBX
+  (measure (struct xs))
+  (match xs
+    (Nil (LBXOk Nil))
+    ((Cons x rest)
+     (match (lb_idx_of tbl (chars_of_sym x))
+       (None
+         (LBXErr
+           (append_int (chars_of_sym x) " is not in the generated export table")))
+       ((Some idx)
+        (match (lb_goal cforms (append_int "lowered_" (chars_of_sym x)))
+          (None
+            (LBXErr
+              (append_int "no lowered_ goal for export " (chars_of_sym x))))
+          ((Some (Pair bs ps))
+           (match (lb_pick (lb_pools) (lb_params bs) ps 2)
+             (Nil
+               (LBXErr
+                 (append_int
+                   "no candidate vector satisfies the premises of "
+                   (append_int
+                     (chars_of_sym x)
+                     " -- supply hand vectors via mod.build"))))
+             (tuples
+               (match (lb_vecs_of m (chars_of_sym x) 0 tuples)
+                 (None
+                   (LBXErr
+                     (append_int
+                       "spec evaluation failed for export "
+                       (chars_of_sym x))))
+                 ((Some vecs)
+                  (match
+                    (lb_call
+                      m
+                      (append_int (chars_of_sym lname) "_entry_bytes")
+                      (Cons (IntLit idx) Nil))
+                    (None (LBXErr "no LIBNAME_entry_bytes fn in the closure"))
+                    ((Some bev)
+                     (match (expr_ints bev)
+                       (None
+                         (LBXErr
+                           "LIBNAME_entry_bytes did not evaluate to bytes"))
+                       ((Some bytes)
+                        (match (lb_exports_walk_x m cforms tbl outp lname rest)
+                          ((LBXErr e) (LBXErr e))
+                          ((LBXOk more)
+                           (LBXOk
+                             (Cons
+                               (PM
+                                 (chars_of_sym x)
+                                 bytes
+                                 (Cons (lb_art_x (chars_of_sym x) outp idx) Nil)
+                                 vecs)
+                               more)))))))))))))))))))
+
+;; the x86 lib entry: derive per-export XMOD/XCASE lines from SRC + OUT
+(fn run_lib_x ((srcp (List Int)) (outp (List Int)) (w World)) World
+  (match (read_file srcp w)
+    ((Pair None w1) (fail (append_int "cannot read " srcp) w1))
+    ((Pair (Some ssrc) w1)
+     (match (forms_go ssrc Nil 1000000)
+       (None (fail (append_int "cannot parse " srcp) w1))
+       ((Some sforms)
+        (match (lb_lib_find sforms)
+          (None (fail (append_int "no (lib ...) declaration in " srcp) w1))
+          ((Some (Lib lname exports _acc))
+           (match (read_file outp w1)
+             ((Pair None w2) (fail (append_int "cannot read " outp) w2))
+             ((Pair (Some csrc) w2)
+              (match (forms_go csrc Nil 1000000)
+                (None (fail (append_int "cannot parse " outp) w2))
+                ((Some cforms)
+                 (match (load_run_module outp w2)
+                   ((Pair None w3)
+                    (fail "could not load the cert file's closure" w3))
+                   ((Pair (Some m) w3)
+                    (match
+                      (lb_call
+                        m
+                        (append_int (chars_of_sym lname) "_exports")
+                        Nil)
+                      (None (fail "no LIBNAME_exports fn in the closure" w3))
+                      ((Some tev)
+                       (match (expr_list tev)
+                         (None (fail "LIBNAME_exports is not a list" w3))
+                         ((Some tes)
+                          (match (lb_xxs tes)
+                            (None (fail "LIBNAME_exports did not decode" w3))
+                            ((Some tbl)
+                             (match
+                               (lb_exports_walk_x m cforms tbl outp lname
+                                 exports)
+                               ((LBXErr e) (fail e w3))
+                               ((LBXOk mods)
+                                (match (xplan_lines mods)
+                                  (None (fail "x86 lib plan did not render" w3))
+                                  ((Some ls) (exit 0 (write ls w3)))))))))))))))))))))))))
 
 ;; ---- the lib entry ----------------------------------------------------------------
 
@@ -979,6 +1119,12 @@
        ((Cons mode (Cons srcp (Cons outp Nil)))
         (if (ceq mode "lib") (run_lib srcp outp w1)
         (fail "unknown 3-arg mode (lib SRC OUT)" w1)))
+       ((Cons mode (Cons srcp (Cons outp (Cons isa Nil))))
+        (if (ceq mode "lib")
+          (if (ceq isa "wasm") (run_lib srcp outp w1)
+          (if (ceq isa "x86") (run_lib_x srcp outp w1)
+          (fail "unknown lib ISA (wasm | x86)" w1)))
+          (fail "unknown 4-arg mode (lib SRC OUT ISA)" w1)))
        (_
          (fail
            "usage: lowbuild <mod.build path> [wasm | x86] | lowbuild lib SRC OUT"
