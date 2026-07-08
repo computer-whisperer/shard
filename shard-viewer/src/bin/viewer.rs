@@ -26,6 +26,10 @@ struct Viewer {
     selection: Selection,
     /// Whether the source lightbox is open over the selected fn.
     source_modal: bool,
+    /// The Map's cross-frame anchoring state (see `view::map::MapMemo`).
+    /// Interior-mutable because the pure `build` is what learns each frame's
+    /// layout.
+    map_memo: view::MapMemoCell,
 }
 
 impl Viewer {
@@ -50,7 +54,7 @@ impl Viewer {
 
 impl App for Viewer {
     fn build(&self, cx: &BuildCx) -> El {
-        let zoom = cx.viewport_view(CANVAS_KEY).map_or(1.0, |v| v.zoom);
+        let view = cx.viewport_view(CANVAS_KEY).unwrap_or_default();
         // Whether the viewport is still fitted by the armed policy (vs taken
         // over by a user pan/zoom) — the Map keys its level of detail off this.
         let at_home = cx.viewport_at_home(CANVAS_KEY).unwrap_or(true);
@@ -63,13 +67,15 @@ impl App for Viewer {
                 mode: self.mode,
                 scope: self.scope.clone(),
                 selected_fn: self.selected_fn,
-                zoom,
+                zoom: view.zoom,
+                pan: view.pan,
                 at_home,
                 filter: self.filter.clone(),
                 selection: self.selection.clone(),
                 source_modal: self.source_modal,
                 panel_w,
             },
+            Some(&self.map_memo),
         )
     }
 
@@ -226,6 +232,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             filter: String::new(),
             selection: Selection::default(),
             source_modal: false,
+            map_memo: view::MapMemoCell::default(),
         },
     )
 }

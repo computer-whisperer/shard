@@ -53,6 +53,7 @@ use super::SUB_SIZE;
 use crate::flow::Region;
 use crate::layout::{self, EndPoint, GEdge, GNode, Graph};
 use crate::model::{FnDef, Project};
+use crate::scope::Scope;
 use crate::view::ViewParams;
 use damascene_core::layout::intrinsic;
 use damascene_core::prelude::*;
@@ -116,7 +117,66 @@ fn fit_zoom(b: &Block) -> f32 {
     (NOMINAL_W / b.w).min(NOMINAL_H / b.h).min(1.0)
 }
 
-pub(crate) fn canvas(project: &Project, p: &ViewParams) -> El {
+/// Quantize a user-driven zoom to half-octave bands (…, 0.25, 0.35, 0.5, 0.7,
+/// 1.0, …). Every LOD decision — tier, chips, edge overlays — is priced off
+/// the band, so the layout is piecewise-constant in zoom: within a band,
+/// zooming is a pure visual scale (no reflow); crossing a band edge is the
+/// single, re-anchored reflow moment. Unquantized zoom made the per-file chip
+/// thresholds fire one after another through a zoom gesture — a continuous
+/// rain of reflows.
+fn quantize(zoom: f32) -> f32 {
+    2f32.powf((zoom.max(0.001).log2() * 2.0).round() / 2.0)
+}
+
+/// Cross-frame Map state, owned by the app and lent to the (otherwise pure)
+/// view: what the last build was keyed on, the content offset that kept it
+/// anchored, and where each file's box landed. `None` between scopes and on
+/// at-home frames (the armed fit frames the pristine layout; anchoring only
+/// matters once the user is steering).
+pub struct MapMemo {
+    scope: Scope,
+    selected_fn: Option<usize>,
+    /// The quantized zoom the stored layout was built at.
+    z_used: f32,
+    /// Translation applied to the whole placed tree (accumulated re-anchors).
+    offset: (f32, f32),
+    /// Per-file box centers in pre-offset content coordinates.
+    anchors: Vec<(usize, f32, f32)>,
+}
+
+pub type MapMemoCell = std::cell::RefCell<Option<MapMemo>>;
+
+/// Re-anchor a reflow: pick the previous-layout file box nearest the viewport
+/// center (`target`, in applied content coordinates) and return the offset
+/// that pins its box center — the content point the user is steering toward
+/// stays put while everything reflows around it.
+fn reanchor(
+    prev: &MapMemo,
+    new_anchors: &[(usize, f32, f32)],
+    target: (f32, f32),
+) -> (f32, f32) {
+    let dist2 = |x: f32, y: f32| {
+        let (dx, dy) = (x - target.0, y - target.1);
+        dx * dx + dy * dy
+    };
+    let mut best: Option<(f32, usize, f32, f32)> = None; // (d2, file, prev applied x, y)
+    for &(file, x, y) in &prev.anchors {
+        let (ax, ay) = (x + prev.offset.0, y + prev.offset.1);
+        let d = dist2(ax, ay);
+        if best.is_none_or(|(bd, ..)| d < bd) {
+            best = Some((d, file, ax, ay));
+        }
+    }
+    let Some((_, file, px, py)) = best else {
+        return prev.offset;
+    };
+    match new_anchors.iter().find(|&&(f, ..)| f == file) {
+        Some(&(_, nx, ny)) => (px - nx, py - ny),
+        None => prev.offset,
+    }
+}
+
+pub(crate) fn canvas(project: &Project, p: &ViewParams, memo: Option<&MapMemoCell>) -> El {
     let fns = p.scope.fns(project);
     if fns.is_empty() {
         return column([
@@ -146,7 +206,7 @@ pub(crate) fn canvas(project: &Project, p: &ViewParams) -> El {
         tier,
         zoom_lod,
     };
-    let placed = if p.at_home {
+    let (placed, z_used, offset) = if p.at_home {
         // Predict the fitted zoom instead of reading it back (see module docs:
         // the armed fit derives zoom from the extent the tiers determine, so
         // the live readback would oscillate). Probe at name tier with chips
@@ -156,15 +216,69 @@ pub(crate) fn canvas(project: &Project, p: &ViewParams) -> El {
         let first = layout_children(&ctx(tier_for(z0), z0), &root);
         let z1 = fit_zoom(&first);
         if tier_for(z1) == tier_for(z0) {
-            first
+            (first, z0, (0.0, 0.0))
         } else {
-            layout_children(&ctx(tier_for(z1), z1), &root)
+            let second = layout_children(&ctx(tier_for(z1), z1), &root);
+            (second, z1, (0.0, 0.0))
         }
     } else {
-        layout_children(&ctx(tier_for(p.zoom), p.zoom), &root)
+        // User-driven: LOD from the live zoom, quantized to bands so the
+        // layout only reflows at band edges — and there, re-anchored so the
+        // content under the viewport center stays put.
+        let zq = quantize(p.zoom);
+        let placed = layout_children(&ctx(tier_for(zq), zq), &root);
+        let offset = memo
+            .and_then(|m| {
+                let borrowed = m.borrow();
+                let prev = borrowed.as_ref()?;
+                // A new subject has nothing meaningful to anchor to (and the
+                // scope switch refits anyway).
+                if prev.scope != p.scope {
+                    return None;
+                }
+                // Same layout key → identical layout; keep the offset.
+                if prev.selected_fn == p.selected_fn && prev.z_used == zq {
+                    return Some(prev.offset);
+                }
+                // Reflow (band edge, or the selection expanded a card): pin
+                // the box nearest the viewport center. The center's content
+                // position is (screen_center - pan) / zoom off the readbacks.
+                let target = (
+                    (NOMINAL_W * 0.5 - p.pan.0) / p.zoom,
+                    (NOMINAL_H * 0.5 - p.pan.1) / p.zoom,
+                );
+                Some(reanchor(prev, &placed.anchors, target))
+            })
+            .unwrap_or((0.0, 0.0));
+        (placed, zq, offset)
     };
+    if let Some(m) = memo {
+        *m.borrow_mut() = Some(MapMemo {
+            scope: p.scope.clone(),
+            selected_fn: p.selected_fn,
+            z_used,
+            offset,
+            anchors: placed.anchors.clone(),
+        });
+    }
 
-    pan_zoom_viewport(row([placed.el]).padding(tokens::SPACE_6))
+    let content = row([placed.el]).padding(tokens::SPACE_6);
+    let content = if offset == (0.0, 0.0) {
+        content
+    } else {
+        // Slide the whole placed tree by the anchor offset. Content may hang
+        // outside the nominal box; the viewport pans over it regardless.
+        let (w, h) = (placed.w + 48.0, placed.h + 48.0);
+        let (dx, dy) = offset;
+        stack([content])
+            .width(Size::Fixed(w))
+            .height(Size::Fixed(h))
+            .layout(move |lc: LayoutCtx| {
+                let o = lc.container;
+                vec![Rect::new(o.x + dx, o.y + dy, w, h)]
+            })
+    };
+    pan_zoom_viewport(content)
 }
 
 /// Shared inputs threaded through the recursion (project data + the in-scope fn
@@ -181,11 +295,13 @@ struct Ctx<'a> {
 }
 
 /// A laid-out, measured sub-tree: its element plus the intrinsic size the parent
-/// graph needs to place it.
+/// graph needs to place it, and the file-box centers inside it (in this
+/// block's local coordinates) — the anchor candidates re-anchoring pins.
 struct Block {
     el: El,
     w: f32,
     h: f32,
+    anchors: Vec<(usize, f32, f32)>,
 }
 
 /// A directory in the map tree: nested subdirs plus the files directly in it.
@@ -316,7 +432,8 @@ fn layout_file(ctx: &Ctx, file: usize) -> Block {
     } else {
         VectorAsset::from_paths([0.0, 0.0, lay.width, lay.height], Vec::new())
     };
-    let inner = Block { el: placed_graph(&lay, cards, edge_overlay), w: lay.width, h: lay.height };
+    let inner =
+        Block { el: placed_graph(&lay, cards, edge_overlay), w: lay.width, h: lay.height, anchors: Vec::new() };
     let f = &ctx.project.files[file];
     let base = f.rel.rsplit_once('/').map(|(_, b)| b).unwrap_or(&f.rel);
     let header = || {
@@ -338,22 +455,28 @@ fn layout_file(ctx: &Ctx, file: usize) -> Block {
     // expanded selected card must stay visible).
     let holds_selection = ctx.selected_fn.is_some_and(|s| members.contains(&s));
     let (bw, bh) = (inner.w + 24.0, inner.h + 44.0); // + box padding/header
-    if !holds_selection && (bw.min(bh)) * ctx.zoom_lod < CHIP_PX {
+    let mut block = if !holds_selection && (bw.min(bh)) * ctx.zoom_lod < CHIP_PX {
         let chip = boxed(column([header()]), tokens::CARD.mix(tokens::BACKGROUND, 0.4), tokens::BORDER);
-        return Block {
+        Block {
             el: chip.el.tooltip(format!("{} · {} fns · {} lines", f.rel, members.len(), f.counts.total())),
             ..chip
-        };
-    }
-
-    boxed(
-        column([header(), inner.el]),
-        tokens::CARD.mix(tokens::BACKGROUND, 0.4),
-        tokens::BORDER,
-    )
+        }
+    } else {
+        boxed(
+            column([header(), inner.el]),
+            tokens::CARD.mix(tokens::BACKGROUND, 0.4),
+            tokens::BORDER,
+        )
+    };
+    // The file's anchor is its own box center — chip or full box alike, so an
+    // anchor never vanishes when a file folds or unfolds across a reflow.
+    block.anchors = vec![(file, block.w * 0.5, block.h * 0.5)];
+    block
 }
 
-/// Wrap a laid-out dir's content in a folder-labelled bounding box.
+/// Wrap a laid-out dir's content in a folder-labelled bounding box. The
+/// inner block's anchors shift by the content's offset inside the box
+/// (padding + label band).
 fn dir_box(name: &str, inner: Block) -> Block {
     let band = text(format!("▸ {name}/"))
         .mono()
@@ -361,11 +484,20 @@ fn dir_box(name: &str, inner: Block) -> Block {
         .font_size(11.0)
         .muted()
         .nowrap_text();
-    boxed(column([band, inner.el]), tokens::BACKGROUND, tokens::MUTED)
+    let band_h = intrinsic(&band).1;
+    let anchors = inner
+        .anchors
+        .iter()
+        .map(|&(f, x, y)| (f, x + tokens::SPACE_3, y + tokens::SPACE_3 + band_h + tokens::SPACE_2))
+        .collect();
+    let mut block = boxed(column([band, inner.el]), tokens::BACKGROUND, tokens::MUTED);
+    block.anchors = anchors;
+    block
 }
 
 /// Common box chrome (padding/fill/stroke/radius) + the bottom-up measure: pin
 /// the result to its intrinsic size so the parent graph places it exactly.
+/// Anchors start empty; callers that carry any set them.
 fn boxed(body: El, fill: Color, stroke: Color) -> Block {
     let el = body
         .gap(tokens::SPACE_2)
@@ -375,23 +507,25 @@ fn boxed(body: El, fill: Color, stroke: Color) -> Block {
         .radius(8.0)
         .align(Align::Start);
     let (w, h) = intrinsic(&el);
-    Block { el: el.width(Size::Fixed(w)).height(Size::Fixed(h)), w, h }
+    Block { el: el.width(Size::Fixed(w)).height(Size::Fixed(h)), w, h, anchors: Vec::new() }
 }
 
-/// Place pre-measured child blocks by `edges` and return the placed content as a
-/// measured block (no box) — used at the dir level.
+/// Place pre-measured child blocks by `edges` and return the placed content as
+/// a measured block (no box) — used at the dir level. Child anchors shift to
+/// their placed positions and aggregate.
 fn place(blocks: Vec<Block>, edges: Vec<GEdge>) -> Block {
     let nodes: Vec<GNode> = blocks.iter().map(|b| GNode::simple(b.w, b.h)).collect();
-    let els: Vec<El> = blocks.into_iter().map(|b| b.el).collect();
-    place_with_els(Graph { nodes, edges }, els)
-}
-
-/// Run the engine over `graph` (node sizes already set) and place `els` at the
-/// computed coordinates, returning the placed content sized to the layout.
-fn place_with_els(graph: Graph, els: Vec<El>) -> Block {
+    let graph = Graph { nodes, edges };
     let lay = layout::layout(&graph, &layout::LayoutConfig::default());
+    let mut anchors = Vec::new();
+    let mut els = Vec::with_capacity(blocks.len());
+    for (i, b) in blocks.into_iter().enumerate() {
+        let (px, py) = (lay.nodes[i].x, lay.nodes[i].y);
+        anchors.extend(b.anchors.into_iter().map(|(f, x, y)| (f, x + px, y + py)));
+        els.push(b.el);
+    }
     let el = placed_graph(&lay, els, edges_asset(&lay));
-    Block { el, w: lay.width, h: lay.height }
+    Block { el, w: lay.width, h: lay.height, anchors }
 }
 
 /// One fn at the context's LOD tier (the selected fn always expands to
@@ -528,5 +662,56 @@ fn short_ty(ty: &str) -> String {
         s
     } else {
         ty.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quantize_snaps_to_half_octave_bands() {
+        // Band points are 2^(k/2): …, 0.5, ~0.707, 1.0, ~1.414, …
+        assert_eq!(quantize(1.0), 1.0);
+        assert_eq!(quantize(0.5), 0.5);
+        assert!((quantize(0.6) - 0.707).abs() < 0.01);
+        // Idempotent: a band point maps to itself, so the layout key is stable
+        // frame-over-frame while the zoom sits inside one band.
+        for z in [0.05, 0.13, 0.3, 0.62, 1.7] {
+            let q = quantize(z);
+            assert_eq!(quantize(q), q, "quantize not idempotent at {z}");
+        }
+    }
+
+    #[test]
+    fn reanchor_pins_the_file_nearest_the_target() {
+        let prev = MapMemo {
+            scope: Scope::Project,
+            selected_fn: None,
+            z_used: 0.5,
+            offset: (10.0, 0.0),
+            // Applied positions: file 1 at (110,100), file 2 at (510,100).
+            anchors: vec![(1, 100.0, 100.0), (2, 500.0, 100.0)],
+        };
+        // Target sits by file 2's applied position → it's the anchor. Its new
+        // pre-offset center is (250,50); the offset must pin it at (510,100).
+        let new_anchors = vec![(1, 50.0, 50.0), (2, 250.0, 50.0)];
+        let off = reanchor(&prev, &new_anchors, (520.0, 90.0));
+        assert_eq!(off, (260.0, 50.0));
+        assert_eq!((250.0 + off.0, 50.0 + off.1), (510.0, 100.0));
+    }
+
+    #[test]
+    fn reanchor_keeps_the_old_offset_when_the_anchor_vanished() {
+        let prev = MapMemo {
+            scope: Scope::Project,
+            selected_fn: None,
+            z_used: 0.5,
+            offset: (7.0, -3.0),
+            anchors: vec![(1, 100.0, 100.0)],
+        };
+        // File 1 isn't in the new layout (can't happen for same-scope reflows,
+        // but the fallback must stay sane rather than teleport to (0,0)).
+        assert_eq!(reanchor(&prev, &[(2, 0.0, 0.0)], (100.0, 100.0)), (7.0, -3.0));
     }
 }

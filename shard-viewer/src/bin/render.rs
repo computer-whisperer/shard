@@ -37,6 +37,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             scope: Scope::File(f.file),
             selected_fn: Some(fn_idx),
             zoom: 1.0,
+            pan: (0.0, 0.0),
             at_home: true,
             filter: String::new(),
             selection: Default::default(),
@@ -57,6 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             scope: Scope::File(f.file),
             selected_fn: Some(fn_idx),
             zoom: 1.0,
+            pan: (0.0, 0.0),
             at_home: true,
             filter: String::new(),
             selection: Default::default(),
@@ -81,6 +83,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             scope: Scope::File(file_idx),
             selected_fn: None,
             zoom: 1.0,
+            pan: (0.0, 0.0),
             at_home: true,
             filter: String::new(),
             selection: Default::default(),
@@ -108,6 +111,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             scope,
             selected_fn: None,
             zoom: 1.0,
+            pan: (0.0, 0.0),
             at_home: true,
             filter: String::new(),
             selection: Default::default(),
@@ -128,6 +132,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             scope: Scope::CallTree { root: fn_idx, up: 1, down: 2 },
             selected_fn: Some(fn_idx),
             zoom: 1.0,
+            pan: (0.0, 0.0),
             at_home: true,
             filter: String::new(),
             selection: Default::default(),
@@ -142,6 +147,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             scope: Scope::Project,
             selected_fn: None,
             zoom: 1.0,
+            pan: (0.0, 0.0),
             at_home: true,
             filter: String::new(),
             selection: Default::default(),
@@ -162,6 +168,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             scope: selected_file.map_or(Scope::None, Scope::File),
             selected_fn: None,
             zoom: 1.0,
+            pan: (0.0, 0.0),
             at_home: true,
             filter: String::new(),
             selection: Default::default(),
@@ -190,6 +197,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             scope: Scope::File(file_idx),
             selected_fn,
             zoom: 1.0,
+            pan: (0.0, 0.0),
             at_home: true,
             filter: String::new(),
             selection: Default::default(),
@@ -197,7 +205,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             panel_w: view::DEFAULT_PANEL_W,
         }
     };
-    let mut root_el = view::app_root(&project, &params);
+    let mut root_el = view::app_root(&project, &params, None);
     let (vw, vh) = (
         std::env::var("SHARD_RENDER_W").ok().and_then(|s| s.parse().ok()).unwrap_or(1600.0),
         std::env::var("SHARD_RENDER_H").ok().and_then(|s| s.parse().ok()).unwrap_or(1000.0),

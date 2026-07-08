@@ -61,6 +61,9 @@ pub struct ViewParams {
     /// toolbar, and — when the user has taken the viewport over — it drives the
     /// Map's level-of-detail tiers.
     pub zoom: f32,
+    /// Current viewport pan (read back alongside `zoom`). The Map uses it to
+    /// locate the viewport center in content space when re-anchoring a reflow.
+    pub pan: (f32, f32),
     /// Whether the canvas viewport is still "at home" — fitted by the armed
     /// `FitPolicy` / an app `FitContent`, untouched by the user (read back via
     /// `viewport_at_home`; headless render is always at home). While at home
@@ -96,9 +99,14 @@ pub const DEFAULT_PANEL_W: f32 = 420.0;
 pub const SIDEBAR_KEY: &str = "sidebar";
 pub const PANEL_KEY: &str = "detail_panel";
 
+pub use map::MapMemoCell;
+
 /// The whole window: sidebar + main pane + (when something is selected) panel.
-pub fn app_root(project: &Project, p: &ViewParams) -> El {
-    let mut panes = vec![sidebar(project, p), main_pane(project, p)];
+/// `map_memo` is the Map's cross-frame anchoring state, owned by the app (the
+/// GUI passes its cell; headless render passes `None` — a single fitted frame
+/// has nothing to anchor across).
+pub fn app_root(project: &Project, p: &ViewParams, map_memo: Option<&MapMemoCell>) -> El {
+    let mut panes = vec![sidebar(project, p), main_pane(project, p, map_memo)];
     let mut fn_in_panel = None;
     match p.mode {
         ViewMode::Methods | ViewMode::Flow | ViewMode::Board | ViewMode::Map => {
@@ -237,7 +245,7 @@ fn sidebar(project: &Project, p: &ViewParams) -> El {
     .max_width(620.0)
 }
 
-fn main_pane(project: &Project, p: &ViewParams) -> El {
+fn main_pane(project: &Project, p: &ViewParams, map_memo: Option<&MapMemoCell>) -> El {
     let focus_file = p.scope.focus_file(project);
     let body = match p.mode {
         ViewMode::Systems => systems::canvas(project, p),
@@ -256,7 +264,7 @@ fn main_pane(project: &Project, p: &ViewParams) -> El {
                 .padding(tokens::SPACE_8),
             Some(fni) => flow::canvas(project, fni),
         },
-        ViewMode::Map => map::canvas(project, p),
+        ViewMode::Map => map::canvas(project, p, map_memo),
     };
     let mut head = vec![toolbar(project, p)];
     match p.mode {

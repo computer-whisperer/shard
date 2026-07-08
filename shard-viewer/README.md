@@ -36,7 +36,13 @@ clicking a name box expands it in place. While the viewport is *at home*
 **predicted** fit zoom — a name-tier probe layout, refined once — because an
 armed fit derives zoom from the extent the tiers themselves determine (a live
 readback there would oscillate); once the user pans or zooms, the tier follows
-the real zoom. The interface/implementation
+the real zoom, **quantized to half-octave bands** so the layout is
+piecewise-constant in zoom (within a band, zooming is a pure visual scale).
+Crossing a band edge reflows once — **re-anchored**: the file box nearest the
+viewport center keeps its content position (a translation of the whole placed
+tree, tracked in a small cross-frame memo the GUI owns), so what you're
+zooming toward stays under the cursor instead of snapping away.
+The interface/implementation
 split reads at a glance: a `mod.req.shard` of signature-only cards sits beside
 the `.shard` that implements them, with an import arrow between. The whole tree
 is placed without a viewport (`shared::placed_graph`); only the outermost result
