@@ -8,12 +8,24 @@
 ;;; Checked per EXPORT of the (lib …) declaration:
 ;;;   1. the cert file has claim lowered_<export> with a (goal …) form
 ;;;   2. every premise of that goal classifies into a known FAMILY —
-;;;        (= (le 0 E) True) / (= (lt E 4294967296) True)  -> wrap32
-;;;        (= (le 1 E) True)                               -> divguard
+;;;        (= (lt E 4294967296) True)           -> wrap32
+;;;        (= (lt E 18446744073709551616) True) -> wrap64
+;;;        (= (le 0 E) True)                    -> the wrap pair's lower
+;;;          bound: width-neutral, absorbed by whichever wrap family the
+;;;          surface carries (alone it refuses)
+;;;        (= (le 1 E) True)                    -> divguard
 ;;;      an unclassifiable premise is a LOUD refusal (grow the gate, don't
 ;;;      guess)
-;;;   3. the export's family set EQUALS its accepts entry (an export with
-;;;      an empty surface must have NO accepts entry)
+;;;   3. WIDTH-ORDERED COVERAGE (the cross-target law, user-ratified
+;;;      2026-07-08): the declaration pins the NARROWEST width accepted
+;;;      across intended targets. Every surface family must be covered by
+;;;      a declared entry at declared-or-wider width — declared wrap32
+;;;      covers a wrap32 or wrap64 premise (accepting "correct only on
+;;;      32-bit inputs" subsumes trusting an artifact correct on all
+;;;      64-bit inputs); declared wrap64 does NOT cover a wrap32 premise.
+;;;      divguard is exact. And every declared entry must be WITNESSED by
+;;;      some surface family (no phantom: an export with an empty surface
+;;;      must have NO accepts entry).
 ;;; Internal (non-exported) fns are not checked here: their premises reach
 ;;; the boundary only through composition into exported certs, where the
 ;;; bridge threading re-states them on the caller.
@@ -49,7 +61,9 @@
 
 ;; ---- premise classification --------------------------------------------------------
 
-;; one premise -> its family, or None (unclassifiable)
+;; one premise -> its family, or None (unclassifiable). wraplo is the
+;; wrap pair's width-neutral lower bound — internal: normalized away when
+;; a width family is present, refused when alone.
 (fn prem_family ((p SExpr)) (Option Symbol)
   (match p
     ((SList (Cons eq (Cons inner (Cons tr Nil))))
@@ -60,13 +74,16 @@
             (if (is_sym h (quote le))
               (match a
                 ((SInt k)
-                 (if (int_eq k 0) (Some (quote wrap32))
+                 (if (int_eq k 0) (Some (quote wraplo))
                  (if (int_eq k 1) (Some (quote divguard))
                  None)))
                 (_ None))
             (if (is_sym h (quote lt))
               (match b
-                ((SInt k) (if (int_eq k 4294967296) (Some (quote wrap32)) None))
+                ((SInt k)
+                 (if (int_eq k 4294967296) (Some (quote wrap32))
+                 (if (int_eq k 18446744073709551616) (Some (quote wrap64))
+                 None)))
                 (_ None))
               None)))
            (_ None))
@@ -145,15 +162,51 @@
     (Nil Nil)
     ((Cons (Pair n fams) rest) (if (sym_eq x n) fams (acc_of x rest)))))
 
-;; set equality over symbol lists (both dedup'd small sets)
-(fn sub_syms ((a (List Symbol)) (b (List Symbol))) Bool
-  (measure (struct a))
-  (match a
-    (Nil True)
-    ((Cons x rest) (if (sym_in x b) (sub_syms rest b) False))))
+;; drop the width-neutral lower-bound family from a surface
+(fn drop_lo ((s (List Symbol))) (List Symbol)
+  (measure (struct s))
+  (match s
+    (Nil Nil)
+    ((Cons f rest)
+     (if (sym_eq f (quote wraplo)) (drop_lo rest) (Cons f (drop_lo rest))))))
 
-(fn syms_eq ((a (List Symbol)) (b (List Symbol))) Bool
-  (if (sub_syms a b) (sub_syms b a) False))
+;; normalize: wraplo is absorbed by a width family; alone it refuses
+(fn norm_surface ((s (List Symbol))) (Option (List Symbol))
+  (if (sym_in (quote wraplo) s)
+    (if (if (sym_in (quote wrap32) s) True (sym_in (quote wrap64) s))
+      (Some (drop_lo s))
+      None)
+    (Some s)))
+
+;; ---- width-ordered coverage (the cross-target law) ---------------------------------
+
+;; a surface family is covered by a declared entry at declared-or-wider
+;; width: wrap32 <= wrap64; divguard exact
+(fn fam_covered ((f Symbol) (d (List Symbol))) Bool
+  (if (sym_eq f (quote wrap64))
+    (if (sym_in (quote wrap32) d) True (sym_in (quote wrap64) d))
+    (sym_in f d)))
+
+(fn surface_covered ((s (List Symbol)) (d (List Symbol))) Bool
+  (measure (struct s))
+  (match s
+    (Nil True)
+    ((Cons f rest) (if (fam_covered f d) (surface_covered rest d) False))))
+
+;; a declared entry is witnessed by some surface family it covers
+(fn entry_witnessed ((e Symbol) (s (List Symbol))) Bool
+  (if (sym_eq e (quote wrap32))
+    (if (sym_in (quote wrap32) s) True (sym_in (quote wrap64) s))
+    (sym_in e s)))
+
+(fn entries_witnessed ((d (List Symbol)) (s (List Symbol))) Bool
+  (measure (struct d))
+  (match d
+    (Nil True)
+    ((Cons e rest) (if (entry_witnessed e s) (entries_witnessed rest s) False))))
+
+(fn acc_covers ((s (List Symbol)) (d (List Symbol))) Bool
+  (if (surface_covered s d) (entries_witnessed d s) False))
 
 (fn show_fams ((fams (List Symbol))) (List Int)
   (measure (struct fams))
@@ -183,26 +236,33 @@
            (append_int
              (chars_of_sym x)
              ": a premise does not classify into a known family — grow the gate, don't guess")))
-       ((Some surface)
-        (match (syms_eq surface (acc_of x acc))
-          (True
-            (AOk
-              (append_int
-                "ACCEPTS       "
-                (append_int
-                  (chars_of_sym x)
-                  (append_int ": " (append_int (show_fams surface) (nl)))))))
-          (False
+       ((Some raw)
+        (match (norm_surface raw)
+          (None
             (ABad
               (append_int
                 (chars_of_sym x)
-                (append_int
-                  ": cert premise surface {"
-                  (append_int
-                    (show_fams surface)
-                    (append_int
-                      "} does not equal the declared accepts {"
-                      (append_int (show_fams (acc_of x acc)) "}")))))))))))))
+                ": a wrap lower bound (le 0 E) has no width bound beside it")))
+          ((Some surface)
+           (match (acc_covers surface (acc_of x acc))
+             (True
+               (AOk
+                 (append_int
+                   "ACCEPTS       "
+                   (append_int
+                     (chars_of_sym x)
+                     (append_int ": " (append_int (show_fams surface) (nl)))))))
+             (False
+               (ABad
+                 (append_int
+                   (chars_of_sym x)
+                   (append_int
+                     ": cert premise surface {"
+                     (append_int
+                       (show_fams surface)
+                       (append_int
+                         "} is not covered/witnessed by the declared accepts {"
+                         (append_int (show_fams (acc_of x acc)) "}")))))))))))))))
 
 (fn walk_exports
   ((cforms (List SExpr))
