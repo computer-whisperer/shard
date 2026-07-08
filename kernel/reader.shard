@@ -3170,28 +3170,54 @@
     (_ None)))
 
 ;; ---- lib (library-artifact decl) -------------------------------------------
-;; (lib NAME (exports E …)) declares a LIBRARY artifact — the bin form's
-;; sibling for compiled modules with no entry point (the cdylib boundary):
-;; the listed functions are the artifact's public exports, baked into the
-;; binary BY NAME by a target's lib encoder. TARGET-AGNOSTIC: the target
-;; arrives at build invocation, never in the declaration. The driver checks
-;; each export names an implemented fn (declaration well-formedness); the
-;; spec ⊑ machine tie is the BUILD gates' job (certs + bytetie + manifest),
-;; and which signatures may cross a compiled boundary is the lowering
-;; emitter's refusal.
-(type Lib (Lib Symbol (List Symbol)))
-; name, exports
+;; (lib NAME (exports E …) (accepts (E FAMILY …) …)) declares a LIBRARY
+;; artifact — the bin form's sibling for compiled modules with no entry
+;; point (the cdylib boundary): the listed functions are the artifact's
+;; public exports, baked into the binary BY NAME by a target's lib encoder.
+;; TARGET-AGNOSTIC: the target arrives at build invocation, never in the
+;; declaration. The `accepts` clause is the PREMISE-PERCOLATION declaration
+;; (docs/LOWERING.md §6ag): which premise families each export's cert is
+;; accepted to be conditional on — every dilution of an export's guarantee
+;; must be signed here, and the artifact toolchain holds the cert premise
+;; surface EQUAL to the declaration (the trusts law one level up). The
+;; kernel driver checks each export names an implemented fn and each
+;; accepted name is an export; the family-vs-surface equality, the
+;; spec ⊑ machine tie, and boundary-signature policing stay with the
+;; build gates and the lowering emitter.
+(type Lib (Lib Symbol (List Symbol) (List (Pair Symbol (List Symbol)))))
+; name, exports, accepts
 (fn lib_name ((l Lib)) Symbol
   (match l
-    ((Lib n x) n)))
+    ((Lib n x a) n)))
 (fn lib_exports ((l Lib)) (List Symbol)
   (match l
-    ((Lib n x) x)))
+    ((Lib n x a) x)))
+(fn lib_accepts ((l Lib)) (List (Pair Symbol (List Symbol)))
+  (match l
+    ((Lib n x a) a)))
+
+;; the (EXPORT FAMILY …) pairs of an accepts clause
+(fn acc_pairs ((xs (List SExpr))) (List (Pair Symbol (List Symbol)))
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons (SList (Cons (SSym e) fams)) rest)
+     (Cons (Pair e (syms_of_sexprs fams)) (acc_pairs rest)))
+    ((Cons _ rest) (acc_pairs rest))))
+
+(fn accepts_clause ((clauses (List SExpr))) (List (Pair Symbol (List Symbol)))
+  (measure (struct clauses))
+  (match clauses
+    (Nil Nil)
+    ((Cons (SList (Cons (SSym h) args)) rest)
+     (if (sym_eq h (quote accepts)) (acc_pairs args) (accepts_clause rest)))
+    ((Cons _ rest) (accepts_clause rest))))
 
 (fn lib_of_form ((f SExpr)) (Option Lib)
   (match f
     ((SList (Cons (SSym h) (Cons (SSym name) clauses)))
-     (Some (Lib name (bin_clause (quote exports) clauses))))
+     (Some
+       (Lib name (bin_clause (quote exports) clauses) (accepts_clause clauses))))
     (_ None)))
 
 (type Decl (DClaim Claim) (DAxiom Ax) (DReq Req) (DFul Ful))
