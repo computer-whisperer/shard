@@ -87,6 +87,10 @@ pub(crate) fn pan_zoom_viewport(content: El) -> El {
         .key(CANVAS_KEY)
         .min_zoom(MIN_ZOOM)
         .max_zoom(MAX_ZOOM)
+        // Open fitted (and stay fitted through resizes) until the user pans or
+        // zooms; the toolbar's Fit re-arms it. Also what makes the headless
+        // `shard-render` frame the graph instead of an unfitted 1:1 corner.
+        .fit_policy(FitPolicy::Contain { padding: 24.0 })
         // Center bounds: any node can be parked mid-frame (the default Contain
         // keeps the bbox glued to the edges, which fights graph navigation).
         .pan_bounds(PanBounds::Center)
