@@ -889,6 +889,94 @@
 (fn lb_art_x ((nm (List Int)) (outp (List Int)) (idx Int)) PArt
   (PA nm (append_int "lowered_" nm) outp "models/x86/x86.shard" idx "" "none"))
 
+;; the mem-loop entry shape: a Mem binder BESIDE the (k Nat) count
+;; binder (the lib walk's generated convention — machine args are
+;; (ptr, count); a straight-line cert also carries a Mem binder but no
+;; count, and stays on the premise-domain Int path)
+(fn lb_bind_has ((bs (List SExpr)) (n Symbol) (t Symbol)) Bool
+  (measure (struct bs))
+  (match bs
+    (Nil False)
+    ((Cons b rest)
+     (match b
+       ((SList (Cons (SSym bn) (Cons (SSym bt) Nil)))
+        (if (if (sym_eq bt t) (sym_eq bn n) False) True (lb_bind_has rest n t)))
+       (_ (lb_bind_has rest n t))))))
+
+(fn lb_bind_ty ((bs (List SExpr)) (t Symbol)) Bool
+  (measure (struct bs))
+  (match bs
+    (Nil False)
+    ((Cons b rest)
+     (match b
+       ((SList (Cons (SSym _n) (Cons (SSym bt) Nil)))
+        (if (sym_eq bt t) True (lb_bind_ty rest t)))
+       (_ (lb_bind_ty rest t))))))
+
+(fn lb_memshape ((bs (List SExpr))) Bool
+  (if (lb_bind_ty bs (quote Mem)) (lb_bind_has bs (quote k) (quote Nat)) False))
+
+;; mem-shape vectors: the x86intloop DATA_BASE precedent — machine args
+;; (ptr, k) on the differ's zeroed page (the model's window pages are
+;; NOT mapped by the differ; the cert's own premise domain is exercised
+;; by the bin ENGINE gate, where the glue maps the real window and the
+;; payload varies). wants = the spec over mem_empty: the emitted loop
+;; walks k zeroed bytes on real silicon.
+(fn lb_dbase () Int 1073741824)
+
+(fn lb_mem_vec1 ((m Module) (nm (List Int)) (ptr Int) (ks (List Int)))
+  (Option PVec)
+  (match (ctor_qn m (quote Z))
+    (None None)
+    ((Some zq)
+     (match (ctor_qn m (quote S))
+       (None None)
+       ((Some sq)
+        (match (lb_call m "mem_empty" Nil)
+          (None None)
+          ((Some me)
+           (match (lb_call m nm (list me (IntLit ptr) (lb_nat_of zq sq ks)))
+             (None None)
+             ((Some ev)
+              (match (expr_int ev)
+                (None None)
+                ((Some v) (Some (PV 0 (list ptr (lb_len_i ks)) Nil v Nil)))))))))))))
+
+(fn lb_mem_vecs ((m Module) (nm (List Int))) (Option (List PVec))
+  (match (lb_mem_vec1 m nm (lb_dbase) (list 0 0 0 0 0))
+    (None None)
+    ((Some v1)
+     (match (lb_mem_vec1 m nm (+ (lb_dbase) 3) Nil)
+       (None None)
+       ((Some v2) (Some (list v1 v2)))))))
+
+;; per-export vector synthesis, dispatched on the cert's entry shape
+(type LBV (LBVOk (List PVec)) (LBVErr (List Int)))
+
+(fn lb_x_vecs ((m Module) (x Symbol) (bs (List SExpr)) (ps (List SExpr))) LBV
+  (if (lb_memshape bs)
+    (match (lb_mem_vecs m (chars_of_sym x))
+      (None
+        (LBVErr
+          (append_int
+            "mem-shape spec evaluation failed for export "
+            (chars_of_sym x))))
+      ((Some vecs) (LBVOk vecs)))
+    (match (lb_pick (lb_pools) (lb_params bs) ps 2)
+      (Nil
+        (LBVErr
+          (append_int
+            "no candidate vector satisfies the premises of "
+            (append_int
+              (chars_of_sym x)
+              " -- supply hand vectors via mod.build"))))
+      (tuples
+        (match (lb_vecs_of m (chars_of_sym x) 0 tuples)
+          (None
+            (LBVErr
+              (append_int "spec evaluation failed for export " (chars_of_sym x))))
+          ((Some vecs) (LBVOk vecs)))))))
+
 (type LBX (LBXOk (List PMod)) (LBXErr (List Int)))
 
 (fn lb_exports_walk_x
@@ -913,45 +1001,31 @@
             (LBXErr
               (append_int "no lowered_ goal for export " (chars_of_sym x))))
           ((Some (Pair bs ps))
-           (match (lb_pick (lb_pools) (lb_params bs) ps 2)
-             (Nil
-               (LBXErr
-                 (append_int
-                   "no candidate vector satisfies the premises of "
-                   (append_int
-                     (chars_of_sym x)
-                     " -- supply hand vectors via mod.build"))))
-             (tuples
-               (match (lb_vecs_of m (chars_of_sym x) 0 tuples)
-                 (None
-                   (LBXErr
-                     (append_int
-                       "spec evaluation failed for export "
-                       (chars_of_sym x))))
-                 ((Some vecs)
-                  (match
-                    (lb_call
-                      m
-                      (append_int (chars_of_sym lname) "_entry_bytes")
-                      (Cons (IntLit idx) Nil))
-                    (None (LBXErr "no LIBNAME_entry_bytes fn in the closure"))
-                    ((Some bev)
-                     (match (expr_ints bev)
-                       (None
-                         (LBXErr
-                           "LIBNAME_entry_bytes did not evaluate to bytes"))
-                       ((Some bytes)
-                        (match (lb_exports_walk_x m cforms tbl outp lname rest)
-                          ((LBXErr e) (LBXErr e))
-                          ((LBXOk more)
-                           (LBXOk
-                             (Cons
-                               (PM
-                                 (chars_of_sym x)
-                                 bytes
-                                 (Cons (lb_art_x (chars_of_sym x) outp idx) Nil)
-                                 vecs)
-                               more)))))))))))))))))))
+           (match (lb_x_vecs m x bs ps)
+             ((LBVErr e) (LBXErr e))
+             ((LBVOk vecs)
+              (match
+                (lb_call
+                  m
+                  (append_int (chars_of_sym lname) "_entry_bytes")
+                  (Cons (IntLit idx) Nil))
+                (None (LBXErr "no LIBNAME_entry_bytes fn in the closure"))
+                ((Some bev)
+                 (match (expr_ints bev)
+                   (None
+                     (LBXErr "LIBNAME_entry_bytes did not evaluate to bytes"))
+                   ((Some bytes)
+                    (match (lb_exports_walk_x m cforms tbl outp lname rest)
+                      ((LBXErr e) (LBXErr e))
+                      ((LBXOk more)
+                       (LBXOk
+                         (Cons
+                           (PM
+                             (chars_of_sym x)
+                             bytes
+                             (Cons (lb_art_x (chars_of_sym x) outp idx) Nil)
+                             vecs)
+                           more)))))))))))))))))
 
 ;; the x86 lib entry: derive per-export XMOD/XCASE lines from SRC + OUT
 (fn run_lib_x ((srcp (List Int)) (outp (List Int)) (w World)) World
@@ -1162,7 +1236,10 @@
 ;; are copied to BUF = 0x600000, entry is called with rdi = BUF and
 ;; rsi = len, the exit code is the low 8 bits of its result). The
 ;; derivation MODELS the contract: len = min(|arg|, MAXLEN 255), the
-;; expected exit = entry(BUF, len) evaluated in the OUT closure — and
+;; expected exit = entry(BUF, len) — or, for the payload-Mem entry
+;; shape (the A1 rung), entry(mem, BUF, len-as-Nat) with mem = the
+;; payload's bytes mem_set at BUF over mem_empty — evaluated in the
+;; OUT closure, and
 ;; REFUSED unless in [0, 256): the kernel's truncation must never be
 ;; load-bearing in a derived expectation. Vectors: the no-arg leg
 ;; (argc = 1 -> len 0) plus a fixed argument pool, incl. one > MAXLEN
@@ -1211,20 +1288,64 @@
     (Nil 0)
     ((Cons _ t) (+ 1 (lb_len_i t)))))
 
-;; expected exit code for one argument under the glue contract
-(fn lb_bin_want ((m Module) (nm (List Int)) (arg (List Int))) (Option Int)
-  (match
-    (lb_call
-      m
-      nm
+;; a ground Nat literal (the payload length as the entry's count arg)
+(fn lb_nat_of ((zq QName) (sq QName) (xs (List Int))) Expr
+  (measure (struct xs))
+  (match xs
+    (Nil (Ctor zq Nil))
+    ((Cons _ t) (Ctor sq (Cons (lb_nat_of zq sq t) Nil)))))
+
+;; the payload Mem: bytes written at BUF via the closure's own mem_set
+;; over mem_empty — the spec-side twin of glue clauses 2-3 (the mapped
+;; zeroed page with the payload copied to BUF)
+(fn lb_mem_expr ((m Module) (acc Expr) (a Int) (bytes (List Int))) (Option Expr)
+  (measure (struct bytes))
+  (match bytes
+    (Nil (Some acc))
+    ((Cons b rest)
+     (match
+       (lb_call m "mem_set" (Cons acc (Cons (IntLit a) (Cons (IntLit b) Nil))))
+       (None None)
+       ((Some acc2) (lb_mem_expr m acc2 (+ a 1) rest))))))
+
+;; the entry's spec arguments for one payload under the glue contract:
+;; memf = the payload-Mem shape ((m Mem) (p Int) (k Nat), the A1 rung)
+;; vs the v1 two-Int shape ((buf Int) (len Int))
+(fn lb_bin_args ((m Module) (arg (List Int)) (memf Bool)) (Option (List Expr))
+  (if memf
+    (match (ctor_qn m (quote Z))
+      (None None)
+      ((Some zq)
+       (match (ctor_qn m (quote S))
+         (None None)
+         ((Some sq)
+          (match (lb_call m "mem_empty" Nil)
+            (None None)
+            ((Some m0)
+             (let ((payload (lb_take arg (lb_maxlen))))
+               (match (lb_mem_expr m m0 (lb_buf_addr) payload)
+                 (None None)
+                 ((Some mm)
+                  (Some
+                    (list mm (IntLit (lb_buf_addr)) (lb_nat_of zq sq payload))))))))))))
+    (Some
       (Cons
         (IntLit (lb_buf_addr))
-        (Cons (IntLit (lb_min (lb_len_i arg) (lb_maxlen))) Nil)))
+        (Cons (IntLit (lb_min (lb_len_i arg) (lb_maxlen))) Nil)))))
+
+;; expected exit code for one argument under the glue contract
+(fn lb_bin_want ((m Module) (nm (List Int)) (arg (List Int)) (memf Bool))
+  (Option Int)
+  (match (lb_bin_args m arg memf)
     (None None)
-    ((Some ev)
-     (match (expr_int ev)
+    ((Some args)
+     (match (lb_call m nm args)
        (None None)
-       ((Some want) (if (le 0 want) (if (lt want 256) (Some want) None) None))))))
+       ((Some ev)
+        (match (expr_int ev)
+          (None None)
+          ((Some want)
+           (if (le 0 want) (if (lt want 256) (Some want) None) None))))))))
 
 (fn lb_bvec_line ((arg (List Int)) (want Int)) (List Int)
   (cat
@@ -1237,16 +1358,17 @@
       (show_int want)
       "\n")))
 
-(fn lb_bin_vecs ((m Module) (nm (List Int)) (pool (List (List Int))))
+(fn lb_bin_vecs
+  ((m Module) (nm (List Int)) (pool (List (List Int))) (memf Bool))
   (Option (List Int))
   (measure (struct pool))
   (match pool
     (Nil (Some ""))
     ((Cons arg rest)
-     (match (lb_bin_want m nm arg)
+     (match (lb_bin_want m nm arg memf)
        (None None)
        ((Some want)
-        (match (lb_bin_vecs m nm rest)
+        (match (lb_bin_vecs m nm rest memf)
           (None None)
           ((Some ls) (Some (append_int (lb_bvec_line arg want) ls)))))))))
 
@@ -1270,122 +1392,128 @@
                    (lb_goal cforms (append_int "lowered_" (chars_of_sym entry)))
                    (None (fail "no lowered_ claim for the bin entry" w2))
                    ((Some (Pair bs _ps))
-                    (if (int_eq (lb_len (lb_params bs)) 2)
-                      (match (load_run_module outp w2)
-                        ((Pair None w3)
-                         (fail "could not load the cert file's closure" w3))
-                        ((Pair (Some m) w3)
-                         (match
-                           (lb_call
-                             m
-                             (append_int (chars_of_sym bname) "_elf_image")
-                             Nil)
-                           (None
-                             (fail "no BINNAME_elf_image fn in the closure" w3))
-                           ((Some imev)
-                            (match (expr_ints imev)
-                              (None (fail "BINNAME_elf_image is not bytes" w3))
-                              ((Some image)
-                               (match
-                                 (lb_call
-                                   m
-                                   (append_int
-                                     (chars_of_sym bname)
-                                     "_elf_offsets")
-                                   Nil)
-                                 (None
-                                   (fail
-                                     "no BINNAME_elf_offsets fn in the closure"
-                                     w3))
-                                 ((Some ofev)
-                                  (match (expr_ints ofev)
-                                    (None
-                                      (fail
-                                        "BINNAME_elf_offsets is not ints"
-                                        w3))
-                                    ((Some offs)
-                                     (match
-                                       (lb_call
-                                         m
-                                         (append_int
-                                           (chars_of_sym bname)
-                                           "_exports")
-                                         Nil)
-                                       (None
-                                         (fail
-                                           "no BINNAME_exports fn in closure"
-                                           w3))
-                                       ((Some tev)
-                                        (match (expr_list tev)
-                                          (None
-                                            (fail
-                                              "BINNAME_exports is not a list"
-                                              w3))
-                                          ((Some tes)
-                                           (match (lb_xxs tes)
-                                             (None
-                                               (fail
-                                                 "BINNAME_exports did not decode"
-                                                 w3))
-                                             ((Some tbl)
-                                              (match
-                                                (lb_idx_of
-                                                  tbl
-                                                  (chars_of_sym entry))
-                                                (None
-                                                  (fail
-                                                    "the bin entry is not in the export table"
-                                                    w3))
-                                                ((Some idx)
-                                                 (match (lb_nth offs idx)
-                                                   (None
-                                                     (fail
-                                                       "no offset for the entry index"
-                                                       w3))
-                                                   ((Some entry_off)
-                                                    (match
-                                                      (lb_bin_want
-                                                        m
-                                                        (chars_of_sym entry)
-                                                        Nil)
-                                                      (None
-                                                        (fail
-                                                          "spec eval failed or exit code out of [0,256)"
-                                                          w3))
-                                                      ((Some noarg_want)
-                                                       (match
-                                                         (lb_bin_vecs
-                                                           m
-                                                           (chars_of_sym entry)
-                                                           (lb_bin_pool))
-                                                         (None
-                                                           (fail
-                                                             "spec eval failed or exit code out of [0,256)"
-                                                             w3))
-                                                         ((Some bvecs)
-                                                          (exit
-                                                            0
-                                                            (write
-                                                              (cat
-                                                                (list
-                                                                  "IMG "
-                                                                  (hexs image)
-                                                                  "\n"
-                                                                  "ELF "
-                                                                  (hexs
-                                                                    (enc_binelf
-                                                                      image
-                                                                      entry_off))
-                                                                  "\n"
-                                                                  "BNOARG EXIT "
-                                                                  (show_int
-                                                                    noarg_want)
-                                                                  "\n"
-                                                                  bvecs))
-                                                              w3))))))))))))))))))))))))))
-                      (fail
-                        "bin entry must take exactly (buf Int) (len Int) — the glue contract's two arguments"
-                        w2)))))))))))))))
+                    (let ((memf (int_eq (lb_len (lb_params bs)) 1)))
+                      (if (if (int_eq (lb_len (lb_params bs)) 2) True memf)
+                        (match (load_run_module outp w2)
+                          ((Pair None w3)
+                           (fail "could not load the cert file's closure" w3))
+                          ((Pair (Some m) w3)
+                           (match
+                             (lb_call
+                               m
+                               (append_int (chars_of_sym bname) "_elf_image")
+                               Nil)
+                             (None
+                               (fail
+                                 "no BINNAME_elf_image fn in the closure"
+                                 w3))
+                             ((Some imev)
+                              (match (expr_ints imev)
+                                (None
+                                  (fail "BINNAME_elf_image is not bytes" w3))
+                                ((Some image)
+                                 (match
+                                   (lb_call
+                                     m
+                                     (append_int
+                                       (chars_of_sym bname)
+                                       "_elf_offsets")
+                                     Nil)
+                                   (None
+                                     (fail
+                                       "no BINNAME_elf_offsets fn in the closure"
+                                       w3))
+                                   ((Some ofev)
+                                    (match (expr_ints ofev)
+                                      (None
+                                        (fail
+                                          "BINNAME_elf_offsets is not ints"
+                                          w3))
+                                      ((Some offs)
+                                       (match
+                                         (lb_call
+                                           m
+                                           (append_int
+                                             (chars_of_sym bname)
+                                             "_exports")
+                                           Nil)
+                                         (None
+                                           (fail
+                                             "no BINNAME_exports fn in closure"
+                                             w3))
+                                         ((Some tev)
+                                          (match (expr_list tev)
+                                            (None
+                                              (fail
+                                                "BINNAME_exports is not a list"
+                                                w3))
+                                            ((Some tes)
+                                             (match (lb_xxs tes)
+                                               (None
+                                                 (fail
+                                                   "BINNAME_exports did not decode"
+                                                   w3))
+                                               ((Some tbl)
+                                                (match
+                                                  (lb_idx_of
+                                                    tbl
+                                                    (chars_of_sym entry))
+                                                  (None
+                                                    (fail
+                                                      "the bin entry is not in the export table"
+                                                      w3))
+                                                  ((Some idx)
+                                                   (match (lb_nth offs idx)
+                                                     (None
+                                                       (fail
+                                                         "no offset for the entry index"
+                                                         w3))
+                                                     ((Some entry_off)
+                                                      (match
+                                                        (lb_bin_want
+                                                          m
+                                                          (chars_of_sym entry)
+                                                          Nil
+                                                          memf)
+                                                        (None
+                                                          (fail
+                                                            "spec eval failed or exit code out of [0,256)"
+                                                            w3))
+                                                        ((Some noarg_want)
+                                                         (match
+                                                           (lb_bin_vecs
+                                                             m
+                                                             (chars_of_sym entry)
+                                                             (lb_bin_pool)
+                                                             memf)
+                                                           (None
+                                                             (fail
+                                                               "spec eval failed or exit code out of [0,256)"
+                                                               w3))
+                                                           ((Some bvecs)
+                                                            (exit
+                                                              0
+                                                              (write
+                                                                (cat
+                                                                  (list
+                                                                    "IMG "
+                                                                    (hexs image)
+                                                                    "\n"
+                                                                    "ELF "
+                                                                    (hexs
+                                                                      (enc_binelf
+                                                                        image
+                                                                        entry_off))
+                                                                    "\n"
+                                                                    "BNOARG EXIT "
+                                                                    (show_int
+                                                                      noarg_want)
+                                                                    "\n"
+                                                                    bvecs))
+                                                                w3))))))))))))))))))))))))))
+                        (fail
+                          "bin entry cert must carry the glue contract's two Int binders, or the payload-Mem shape's one"
+                          w2))))))))))))))))
 
 ;; ---- the lib entry ----------------------------------------------------------------
 

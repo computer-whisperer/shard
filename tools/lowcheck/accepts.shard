@@ -292,11 +292,18 @@
 
 ;; ---- the bin arm: the GLUE-CONTRACT law (docs/X86.md §22) --------------------------
 ;; A bin's premise surface must be exactly what the glue contract
-;; supplies — nothing else (user-ratified 2026-07-08). v1 glue supplies
-;; NO premise families, so the entry's surface must be EMPTY. There is
-;; no accepts clause on a bin: an arithmetic premise means fixing the
-;; types, an address premise waits for the contract's address-bounds
-;; clauses (the A1 rung) — never a signed exception here.
+;; supplies — nothing else (user-ratified 2026-07-08). The contract's
+;; address-bounds clauses (2-4: [BUF, BUF+4096) mapped, payload copied
+;; to BUF, rdi = BUF, rsi = len <= 255) discharge EXACTLY the window
+;; pair on the entry's OWN address/count arguments —
+;;     (= (le 6291456 A) True)
+;;     (= (le (+ A (int_of_nat K)) 6295552) True)
+;; ROLE-CHECKED against the cert conclusion's xcall_fn_mem argument
+;; list (list A (int_of_nat K)): the same shape on any OTHER variable
+;; is a premise the glue does NOT satisfy — the cert would ship
+;; vacuous — and refuses as unclassifiable. Everything else (wrap/div
+;; families) still refuses: an arithmetic premise means fixing the
+;; types, never a signed exception here.
 
 (fn bin_find ((forms (List SExpr))) (Option Bin)
   (measure (struct forms))
@@ -309,53 +316,162 @@
          ((Some b) (Some b)))
        (bin_find rest)))))
 
-;; v1: the families the glue contract supplies (none yet; the A1 rung's
-;; address-bounds clauses grow this list — never wrap/div families)
+;; the families the glue contract supplies as FAMILIES (none: the
+;; window pair is matched structurally above, since it must bind the
+;; role-checked arguments, not just a shape)
 (fn glue_fams () (List Symbol) Nil)
 
+;; the glue page (models/x86/elf.shard BUF/BUF+4096; xw_blo/xw_bhi in
+;; tools/x86gen — the emitter's twin constants)
+(fn glue_buf () Int 6291456)
+
+(fn glue_bufend () Int 6295552)
+
+;; the goal's (premises, conclusion) of claim lowered_<name>, or None
+(fn find_goal ((forms (List SExpr)) (want (List Int)))
+  (Option (Pair (List SExpr) SExpr))
+  (measure (struct forms))
+  (match forms
+    (Nil None)
+    ((Cons f rest)
+     (match f
+       ((SList (Cons h (Cons (SSym nm) (Cons gf _))))
+        (if (is_sym h (quote claim))
+          (if (chars_eq2 (chars_of_sym nm) want)
+            (match gf
+              ((SList (Cons g (Cons _bs (Cons prems (Cons c Nil)))))
+               (if (is_sym g (quote goal))
+                 (match prems
+                   ((SList ps) (Some (Pair ps c)))
+                   (_ None))
+                 None))
+              (_ None))
+            (find_goal rest want))
+          (find_goal rest want)))
+       (_ (find_goal rest want))))))
+
+;; the entry's (address, count) argument symbols from the conclusion's
+;; xcall_fn_mem argument list (list A (int_of_nat K)) — the roles the
+;; glue binds to rdi/rsi. None when the shape differs (then NO premise
+;; is glue-discharged).
+(fn bin_arg_syms ((c SExpr)) (Option (Pair Symbol Symbol))
+  (match c
+    ((SList (Cons eq (Cons lhs (Cons _r Nil))))
+     (if (is_sym eq (quote =))
+       (match lhs
+         ((SList
+            (Cons
+              h
+              (Cons _fuel (Cons _mod (Cons _ix (Cons args (Cons _m Nil)))))))
+          (if (is_sym h (quote xcall_fn_mem))
+            (match args
+              ((SList (Cons li (Cons (SSym a) (Cons kf Nil))))
+               (if (is_sym li (quote list))
+                 (match kf
+                   ((SList (Cons io (Cons (SSym k) Nil)))
+                    (if (is_sym io (quote int_of_nat)) (Some (Pair a k)) None))
+                   (_ None))
+                 None))
+              (_ None))
+            None))
+         (_ None))
+       None))
+    (_ None)))
+
+;; a premise the glue contract discharges: the window pair on the
+;; role-checked arguments, literals exact
+(fn is_glue_prem ((p SExpr) (ar (Option (Pair Symbol Symbol)))) Bool
+  (match ar
+    (None False)
+    ((Some (Pair a k))
+     (match p
+       ((SList (Cons eq (Cons inner (Cons tr Nil))))
+        (if (is_sym eq (quote =))
+          (if (is_sym tr (quote True))
+            (match inner
+              ((SList (Cons h (Cons x (Cons y Nil))))
+               (if (is_sym h (quote le))
+                 (match x
+                   ((SInt b)
+                    (if (int_eq b (glue_buf))
+                      (match y
+                        ((SSym s) (sym_eq s a))
+                        (_ False))
+                      False))
+                   ((SList (Cons pl (Cons (SSym s) (Cons kf Nil))))
+                    (if (is_sym pl (quote +))
+                      (if (sym_eq s a)
+                        (match kf
+                          ((SList (Cons io (Cons (SSym ks) Nil)))
+                           (if (is_sym io (quote int_of_nat))
+                             (if (sym_eq ks k)
+                               (match y
+                                 ((SInt e) (int_eq e (glue_bufend)))
+                                 (_ False))
+                               False)
+                             False))
+                          (_ False))
+                        False)
+                      False))
+                   (_ False))
+                 False))
+              (_ False))
+            False)
+          False))
+       (_ False)))))
+
+(fn drop_glue ((ps (List SExpr)) (ar (Option (Pair Symbol Symbol))))
+  (List SExpr)
+  (measure (struct ps))
+  (match ps
+    (Nil Nil)
+    ((Cons p rest)
+     (if (is_glue_prem p ar) (drop_glue rest ar) (Cons p (drop_glue rest ar))))))
+
 (fn bin_verdict ((cforms (List SExpr)) (x Symbol)) ARes
-  (match (find_prems cforms (append_int "lowered_" (chars_of_sym x)))
+  (match (find_goal cforms (append_int "lowered_" (chars_of_sym x)))
     (None
       (ABad
         (append_int
           (chars_of_sym x)
           ": no lowered_ claim with a (goal …) in the cert file")))
-    ((Some ps)
-     (match (prem_surface ps Nil)
-       (None
-         (ABad
-           (append_int
-             (chars_of_sym x)
-             ": a premise does not classify into a known family — grow the gate, don't guess")))
-       ((Some raw)
-        (match (norm_surface raw)
-          (None
-            (ABad
-              (append_int
-                (chars_of_sym x)
-                ": a wrap lower bound (le 0 E) has no width bound beside it")))
-          ((Some surface)
-           (match (surface_covered surface (glue_fams))
-             (True
-               (AOk
-                 (append_int
-                   "BINSURFACE    "
+    ((Some (Pair ps0 concl))
+     (let ((ps (drop_glue ps0 (bin_arg_syms concl))))
+       (match (prem_surface ps Nil)
+         (None
+           (ABad
+             (append_int
+               (chars_of_sym x)
+               ": a premise does not classify into a known family — grow the gate, don't guess")))
+         ((Some raw)
+          (match (norm_surface raw)
+            (None
+              (ABad
+                (append_int
+                  (chars_of_sym x)
+                  ": a wrap lower bound (le 0 E) has no width bound beside it")))
+            ((Some surface)
+             (match (surface_covered surface (glue_fams))
+               (True
+                 (AOk
+                   (append_int
+                     "BINSURFACE    "
+                     (append_int
+                       (chars_of_sym x)
+                       (append_int
+                         ": "
+                         (append_int
+                           (show_fams surface)
+                           (append_int " (glue-covered)" (nl))))))))
+               (False
+                 (ABad
                    (append_int
                      (chars_of_sym x)
                      (append_int
-                       ": "
+                       ": cert premise surface {"
                        (append_int
                          (show_fams surface)
-                         (append_int " (glue-covered)" (nl))))))))
-             (False
-               (ABad
-                 (append_int
-                   (chars_of_sym x)
-                   (append_int
-                     ": cert premise surface {"
-                     (append_int
-                       (show_fams surface)
-                       "} exceeds the glue contract — a bin signs no exceptions; fix the types")))))))))))))
+                         "} exceeds the glue contract — a bin signs no exceptions; fix the types"))))))))))))))
 
 (fn run_bin ((b Bin) (certp (List Int)) (w World)) World
   (match b
