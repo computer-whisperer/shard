@@ -1798,15 +1798,50 @@ ratchet. Carrier: the driver-derivation rung (the driver reading the
 (lib …) decl is the code that computes the surface and enforces
 accepts).
 
-Next rungs, in demand order: the generic driver that derives the plan
-from the (lib …) declaration (kills the per-module script + build
-boilerplate; the bin-gate wiring of §7.1 gets its consumer) WITH the
-premise-percolation accepts gate riding it; the CLI runner bin over a
-lib (the first bin shipping a lowered binary; boundary guards from the
-accepts set); std/str re-shipped as ONE lib module (named exports; the
-spine machinery already proven here); std/rng through the WORD
-fragment (§7.8) as the first new content; the x86 lib arm (enc_image
-already multi-fn; ELF packaging when the runner story lands there).
+DRIVER DERIVATION + THE ACCEPTS GATE — LANDED (2026-07-08). The
+boring-library endgame: a (lib …) source builds with NO mod.build and
+NO per-module gate script.
+
+- `(lib NAME (exports …) (accepts (EXPORT FAMILY …) …))`: the accepts
+  clause is the percolation declaration. Kernel acceptance checks
+  accepted names are exports (phantom entries FAIL); the
+  family-vs-surface equality is tools/lowcheck/accepts.shard — each
+  export's cert premises classify into families (the §6j shapes:
+  wrap ranges → wrap32, div guards → divguard; an unclassifiable
+  premise is a loud refusal, grow the gate) and the set must EQUAL
+  the declared entry, both directions. Run undeclared first, the
+  ratchet fired exactly as ruled: bl_inc/bl_add3 FAILED until
+  purelib_src signed wrap32; bl_halve (div by literal) is premise-free
+  and needs no entry.
+- `lowbuild lib SRC OUT` derives the whole plan: arts from the
+  declaration; bytes + export table evaluated in the OUT closure
+  (wasmgen emits LIBNAME_bytes = enc_lib applied spec-side, so the
+  driver never imports target encoders; the byte tie still re-derives
+  independently from the certs); vectors SYNTHESIZED — candidate
+  tuples filtered by ground evaluation of the export's cert premises
+  (a vector must lie in the theorem's domain), expected values = the
+  spec fns invoked in the same closure; an export no candidate
+  satisfies refuses loudly (hand vectors via mod.build stay the
+  fallback for curated builds). Arity comes from the cert goal's
+  Int-binder count — nothing is asked of the source beyond the
+  declaration.
+- examples/lowbuild_lib.sh = THE generic six-gate lib build
+  (regen/schema/kernel/ACCEPTS/bytetie+manifest/engine), parameterized
+  by SRC OUT; purelib's mod.build + per-module script are DELETED.
+  Derived plan verified end to end: V8 6/6 on synthesized vectors.
+- Match-arity gotcha worth pinning: growing a kernel ctor (Lib 2→3
+  fields) leaves stale destructuring patterns MStuck at RUN TIME (the
+  three-valued matcher) — wasmgen's lib_run stuck loudly, fixed by
+  the _acc field. Grep pattern sites when growing kernel ctors.
+
+Next rungs, in demand order: the CLI runner bin over a lib (the first
+bin shipping a lowered binary; BOUNDARY GUARDS generated from the
+accepts set — the conditional guarantee enforced at the FFI edge);
+std/str re-shipped as ONE lib module (named exports; the spine
+machinery already proven here); std/rng through the WORD fragment
+(§7.8) as the first new content — its accepts list drops to EMPTY, the
+ratchet's first payoff; the x86 lib arm (enc_image already multi-fn;
+ELF packaging when the runner story lands there).
 
 ## 7. Open questions — triaged at ratification (2026-07-04)
 

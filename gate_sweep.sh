@@ -64,6 +64,7 @@ TARGETS=(
   tools/wasmgen/wasmgen.shard
   tools/lowcheck/lowcheck.shard
   tools/lowcheck/manifest.shard
+  tools/lowcheck/accepts.shard
   tools/x86gen/x86gen.shard
   tools/bytetie/bytetie.shard
   meta/invoke/invoke.shard
