@@ -1834,14 +1834,34 @@ NO per-module gate script.
   three-valued matcher) — wasmgen's lib_run stuck loudly, fixed by
   the _acc field. Grep pattern sites when growing kernel ctors.
 
-Next rungs, in demand order: the CLI runner bin over a lib (the first
-bin shipping a lowered binary; BOUNDARY GUARDS generated from the
-accepts set — the conditional guarantee enforced at the FFI edge);
-std/str re-shipped as ONE lib module (named exports; the spine
-machinery already proven here); std/rng through the WORD fragment
-(§7.8) as the first new content — its accepts list drops to EMPTY, the
-ratchet's first payoff; the x86 lib arm (enc_image already multi-fn;
-ELF packaging when the runner story lands there).
+THE SECOND TARGET SPEAKS (2026-07-08, docs/X86.md §19 = the record).
+The SAME purelib_src declaration now builds under x86: tools/x86gen LIB
+mode (position-general certs, pfx=0 byte-identical), a derived
+per-export XMOD plan (`lowbuild lib SRC OUT x86`), the x86 lib arms in
+lowcheck/bytetie, and examples/lowbuild_lib_x86.sh — six gates incl.
+the CPU. Two cross-target rulings landed with it (both user-ratified
+2026-07-08):
+
+- WIDTH-ORDERED COVERAGE replaces set equality in the accepts gate:
+  the declaration pins the NARROWEST width accepted across intended
+  targets; every cert surface family must be covered at
+  declared-or-wider width (declared wrap32 covers x86's wrap64
+  surface; declared wrap64 does NOT cover wrap32) and every declared
+  entry must be witnessed (no phantom). The pair's lower bound
+  (le 0 E) is width-neutral (wraplo), absorbed by any wrap family.
+- The pilot is the two-target INTERSECTION: bl_halve (ediv) became
+  bl_mask (band — transparent, premise-free under both); x86 div is
+  the first EXAMPLE-DEMANDED fragment growth.
+
+Roadmap (revised 2026-07-08; wasm runner + std/str-as-lib DROPPED —
+the former was an x86 stand-in, the latter supply-side growth with no
+consumer): the direct ELF push — enc_elf + the _start stub carrying
+the FIRST TRUSTED SHIMS (sys_exit/sys_write as axiom-pedigree
+clobber-set certs; Linux syscall ABI directly, NO libc — the
+platform-externs ruling), the self-checking ELF engine gate (the
+artifact ITSELF runs as a process, no C harness), then the CLI runner
+bin with accepts-derived boundary guards. std/rng via WORD (§7.8,
+accepts → EMPTY) stays queued behind it.
 
 ## 7. Open questions — triaged at ratification (2026-07-04)
 
