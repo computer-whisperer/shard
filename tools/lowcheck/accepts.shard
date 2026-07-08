@@ -53,6 +53,9 @@
 (use (:: kernel reader Lib))
 (use (:: kernel reader is_lib_form))
 (use (:: kernel reader lib_of_form))
+(use (:: kernel reader Bin))
+(use (:: kernel reader is_bin_form))
+(use (:: kernel reader bin_of_form))
 (use (:: kernel term append_int))
 (use (:: kernel term show_int))
 (use (:: meta forms *))
@@ -287,6 +290,108 @@
           (+ bad 1)
           (append_int out (append_int "UNDECLARED    " (append_int m (nl))))))))))
 
+;; ---- the bin arm: the GLUE-CONTRACT law (docs/X86.md §22) --------------------------
+;; A bin's premise surface must be exactly what the glue contract
+;; supplies — nothing else (user-ratified 2026-07-08). v1 glue supplies
+;; NO premise families, so the entry's surface must be EMPTY. There is
+;; no accepts clause on a bin: an arithmetic premise means fixing the
+;; types, an address premise waits for the contract's address-bounds
+;; clauses (the A1 rung) — never a signed exception here.
+
+(fn bin_find ((forms (List SExpr))) (Option Bin)
+  (measure (struct forms))
+  (match forms
+    (Nil None)
+    ((Cons f rest)
+     (if (is_bin_form f)
+       (match (bin_of_form f)
+         (None (bin_find rest))
+         ((Some b) (Some b)))
+       (bin_find rest)))))
+
+;; v1: the families the glue contract supplies (none yet; the A1 rung's
+;; address-bounds clauses grow this list — never wrap/div families)
+(fn glue_fams () (List Symbol) Nil)
+
+(fn bin_verdict ((cforms (List SExpr)) (x Symbol)) ARes
+  (match (find_prems cforms (append_int "lowered_" (chars_of_sym x)))
+    (None
+      (ABad
+        (append_int
+          (chars_of_sym x)
+          ": no lowered_ claim with a (goal …) in the cert file")))
+    ((Some ps)
+     (match (prem_surface ps Nil)
+       (None
+         (ABad
+           (append_int
+             (chars_of_sym x)
+             ": a premise does not classify into a known family — grow the gate, don't guess")))
+       ((Some raw)
+        (match (norm_surface raw)
+          (None
+            (ABad
+              (append_int
+                (chars_of_sym x)
+                ": a wrap lower bound (le 0 E) has no width bound beside it")))
+          ((Some surface)
+           (match (surface_covered surface (glue_fams))
+             (True
+               (AOk
+                 (append_int
+                   "BINSURFACE    "
+                   (append_int
+                     (chars_of_sym x)
+                     (append_int
+                       ": "
+                       (append_int
+                         (show_fams surface)
+                         (append_int " (glue-covered)" (nl))))))))
+             (False
+               (ABad
+                 (append_int
+                   (chars_of_sym x)
+                   (append_int
+                     ": cert premise surface {"
+                     (append_int
+                       (show_fams surface)
+                       "} exceeds the glue contract — a bin signs no exceptions; fix the types")))))))))))))
+
+(fn run_bin ((b Bin) (certp (List Int)) (w World)) World
+  (match b
+    ((Bin bname entry _x _t _r)
+     (match (read_file certp w)
+       ((Pair None w1) (fail2 (append_int "cannot read " certp) w1))
+       ((Pair (Some csrc) w1)
+        (match (forms_go csrc Nil 1000000)
+          (None (fail2 (append_int "cannot parse " certp) w1))
+          ((Some cforms)
+           (match (bin_verdict cforms entry)
+             ((AOk l)
+              (match
+                (write
+                  (append_int
+                    l
+                    (append_int
+                      "BINSURFACE: entry covered by the glue contract"
+                      (nl)))
+                  w1)
+                (w2 (exit 0 w2))))
+             ((ABad m)
+              (match
+                (write
+                  (append_int
+                    "UNCOVERED     "
+                    (append_int
+                      m
+                      (append_int
+                        (nl)
+                        (append_int
+                          "BINSURFACE: the entry's surface exceeds the glue contract"
+                          (nl)))))
+                  w1)
+                (w2 (exit 1 w2))))))))))))
+
 ;; ---- IO plumbing -------------------------------------------------------------------
 
 (fn fail2 ((msg (List Int)) (w World)) World
@@ -300,7 +405,13 @@
        (None (fail2 (append_int "cannot parse " srcp) w1))
        ((Some sforms)
         (match (lib_find sforms)
-          (None (fail2 (append_int "no (lib …) declaration in " srcp) w1))
+          (None
+            (match (bin_find sforms)
+              ((Some b) (run_bin b certp w1))
+              (None
+                (fail2
+                  (append_int "no (lib …) or (bin …) declaration in " srcp)
+                  w1))))
           ((Some (Lib lname exports acc))
            (match (read_file certp w1)
              ((Pair None w2) (fail2 (append_int "cannot read " certp) w2))

@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+# examples/lowbuild_bin_x86.sh SRC OUT — the GENERIC x86 BIN BUILD (docs/
+# X86.md §21/§22, the bin rung): one script for every (bin …) source lowered
+# by tools/x86gen BIN mode into a PLAINLY EXECUTABLE Linux ELF. A bin is
+# admitted AS a one-export lib, so the schema/kernel/tie/manifest machinery is
+# the lib script's, unchanged over the same OUT; the bin-specific legs are the
+# glue-contract SURFACE gate and the BINELF packaging + on-silicon ENGINE run.
+# Gates:
+#   1. REGEN      — x86gen BIN mode output is byte-identical to OUT
+#   2. SCHEMA     — tools/lowcheck validates the entry's cert (x86 lib form)
+#      KERNEL     — OUT's machine proofs check; SRC's bin acceptance checks
+#      TIE        — the image assembled FROM THE CERTS re-encodes to the plan's
+#                   XMOD bytes; MANIFEST binds name -> cert -> pinned index
+#   3. SURFACE    — the accepts tool's bin arm: the entry's cert-premise surface
+#                   is covered by the GLUE CONTRACT (v1: must be empty)
+#   4. PLAN-ENGINE — the derived lib plan replays on the REAL CPU (x86_diff.c)
+#   5. BINELF     — lowbuild binelf emits the executable; IMGTIE: the embedded
+#                   image == bytetie's cert-assembled TIEIMG
+#   6. ENGINE     — the ELF is run AS A USER WOULD: the no-arg leg, then one run
+#                   per BVEC (hexarg '-' = the empty-string argument, otherwise
+#                   the hex decoded to the literal argument); exit codes must
+#                   equal the derived plan's. One pool argument is 300 chars,
+#                   pinning the MAXLEN=255 truncation clause (expected exit 255).
+# Exit 0 = a fully gated, plainly-executable artifact. Run from the repo root.
+set -uo pipefail
+[ $# -eq 2 ] || { echo "usage: lowbuild_bin_x86.sh SRC OUT"; exit 2; }
+SRC=$1
+OUT=$2
+EVAL=${EVAL:-bin/shard_eval}
+command -v xxd >/dev/null || { echo "REFUSED: no xxd — the BINELF/ENGINE gates cannot run"; exit 1; }
+TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+rc=0
+fail() { echo "FAIL $1"; rc=1; }
+
+echo "== gate 1: regen (producer determinism)"
+if "$EVAL" run tools/x86gen/x86gen.shard "$SRC" "$TMP/out.raw" >/dev/null 2>"$TMP/regen.err" \
+   && "$EVAL" run tools/shardfmt/shardfmt.shard "$TMP/out.raw" > "$TMP/out.fmt" 2>>"$TMP/regen.err" \
+   && diff -q "$TMP/out.fmt" "$OUT" >/dev/null; then
+  echo "PASS regen (byte-identical)"
+else
+  fail "regen (x86gen BIN output drifts from OUT)"; cat "$TMP/regen.err"
+fi
+
+echo "== gate 2a: schema (consumer-side cert validation)"
+if "$EVAL" run tools/lowcheck/lowcheck.shard "$OUT" > "$TMP/schema.txt" 2>&1; then
+  tail -1 "$TMP/schema.txt"; echo "PASS schema"
+else
+  cat "$TMP/schema.txt"; fail "schema"
+fi
+
+echo "== gate 2b: kernel (machine proofs + the bin acceptance)"
+if [ -x bin/shard_check ] && [ "$(bin/engine_stamp.sh)" = "$(cat bin/shard_check.stamp 2>/dev/null)" ]; then
+  CHECK=(bin/shard_check)
+else
+  CHECK=("$EVAL" run kernel/check.shard)
+fi
+"${CHECK[@]}" "$OUT" > "$TMP/kv.txt" 2>&1
+if tail -1 "$TMP/kv.txt" | grep -q " 0 failed"; then
+  tail -1 "$TMP/kv.txt"; echo "PASS kernel (OUT proofs)"
+else
+  tail -1 "$TMP/kv.txt"; fail "kernel (OUT has failing obligations)"
+fi
+"${CHECK[@]}" "$SRC" > "$TMP/ks.txt" 2>&1
+if grep -q "^BIN   " "$TMP/ks.txt" && tail -1 "$TMP/ks.txt" | grep -q " 0 failed"; then
+  grep "^BIN   " "$TMP/ks.txt"; tail -1 "$TMP/ks.txt"; echo "PASS kernel (SRC bin acceptance)"
+else
+  grep "^BIN   " "$TMP/ks.txt" || true; tail -1 "$TMP/ks.txt"; fail "kernel (SRC bin acceptance)"
+fi
+
+echo "== gate 2c: byte tie (certs -> assembled image -> enc_image = shipped bytes)"
+"$EVAL" run tools/lowbuild/lowbuild.shard lib "$SRC" "$OUT" x86 > "$TMP/plan.txt" 2>"$TMP/plan.err" || {
+  cat "$TMP/plan.err"; fail "plan derivation"; }
+"$EVAL" run tools/bytetie/bytetie.shard "$OUT" > "$TMP/tie.txt" 2>&1 || fail "bytetie run"
+grep '^XMOD ' "$TMP/plan.txt" | sort > "$TMP/mods.txt"
+grep '^TIE ' "$TMP/tie.txt" | sed 's/^TIE /XMOD /' | sort > "$TMP/ties.txt"
+if diff "$TMP/ties.txt" "$TMP/mods.txt" > "$TMP/tiediff.txt"; then
+  echo "PASS byte tie"
+else
+  cat "$TMP/tiediff.txt"; fail "byte tie (certs != shipped bytes)"
+fi
+
+echo "== gate 2d: manifest (name -> cert -> pinned index)"
+if "$EVAL" run tools/lowcheck/manifest.shard "$TMP/plan.txt" models/x86/x86.shard "$OUT" > "$TMP/man.txt" 2>&1; then
+  tail -1 "$TMP/man.txt"; echo "PASS manifest"
+else
+  cat "$TMP/man.txt"; fail "manifest"
+fi
+
+echo "== gate 3: surface (the glue-contract premise gate, bin arm)"
+if "$EVAL" run tools/lowcheck/accepts.shard "$SRC" "$OUT" > "$TMP/acc.txt" 2>&1 \
+   && grep -q "(glue-covered)" "$TMP/acc.txt"; then
+  grep "BINSURFACE" "$TMP/acc.txt"; echo "PASS surface"
+else
+  cat "$TMP/acc.txt"; fail "surface (entry's cert surface exceeds the glue contract)"
+fi
+
+echo "== gate 4: plan-engine (the CPU replays the derived lib plan)"
+if command -v cc >/dev/null; then
+  grep -v '^ARTIFACT ' "$TMP/plan.txt" > "$TMP/cpu_plan.txt"
+  cc -O2 -o "$TMP/x86_diff" examples/x86_diff.c 2>"$TMP/cc.err" || { cat "$TMP/cc.err"; fail "cc"; }
+  if [ -x "$TMP/x86_diff" ] && "$TMP/x86_diff" "$TMP/cpu_plan.txt" > "$TMP/eng.txt" 2>&1; then
+    tail -1 "$TMP/eng.txt"; echo "PASS plan-engine"
+  else
+    cat "$TMP/eng.txt"; fail "plan-engine (CPU differential)"
+  fi
+else
+  echo "REFUSED: no cc — the PLAN-ENGINE gate cannot run"; fail "plan-engine (no cc)"
+fi
+
+echo "== gate 5: binelf (the plainly-executable ELF, cert-tied image)"
+"$EVAL" run tools/lowbuild/lowbuild.shard binelf "$SRC" "$OUT" > "$TMP/be.txt" 2>"$TMP/be.err" || {
+  cat "$TMP/be.err"; fail "binelf derivation"; }
+IMG=$(grep '^IMG ' "$TMP/be.txt" | cut -d' ' -f2)
+# ^TIEIMG anchored: the '^TIE ' family collides on prefix otherwise
+TIEIMG=$(grep '^TIEIMG ' "$TMP/tie.txt" | cut -d' ' -f2)
+if [ -n "$IMG" ] && [ "$IMG" = "$TIEIMG" ]; then
+  echo "PASS binelf IMGTIE (embedded image == cert-assembled image)"
+else
+  echo "  IMG=$IMG"; echo "  TIEIMG=$TIEIMG"; fail "binelf IMGTIE"
+fi
+grep '^ELF ' "$TMP/be.txt" | cut -d' ' -f2 | xxd -r -p > "$TMP/a.bin"
+chmod +x "$TMP/a.bin"
+if [ -s "$TMP/a.bin" ]; then
+  echo "PASS binelf ($(wc -c < "$TMP/a.bin") bytes)"
+else
+  fail "binelf (empty ELF)"
+fi
+
+echo "== gate 6: engine (run the binary as a user would)"
+BNOARG=$(grep '^BNOARG EXIT ' "$TMP/be.txt" | awk '{print $3}')
+"$TMP/a.bin"; code=$?
+if [ "$code" = "$BNOARG" ]; then
+  echo "PASS engine no-arg (exit $code == BNOARG $BNOARG)"
+else
+  fail "engine no-arg (exit $code, expected $BNOARG)"
+fi
+while read -r _bv hexarg _e want; do
+  if [ "$hexarg" = "-" ]; then
+    "$TMP/a.bin" ""; code=$?; label="'' (empty string)"
+  else
+    arg=$(printf '%s' "$hexarg" | xxd -r -p)
+    "$TMP/a.bin" "$arg"; code=$?; label="<${#arg} byte(s)>"
+  fi
+  if [ "$code" = "$want" ]; then
+    echo "PASS engine $label -> exit $code"
+  else
+    fail "engine $label (exit $code, expected $want)"
+  fi
+done < <(grep '^BVEC ' "$TMP/be.txt")
+
+if [ "$rc" -eq 0 ]; then
+  echo "ARTIFACT OK: $(basename "$SRC" .shard) — a plainly-executable Linux ELF, proven entry, six gates green"
+else
+  echo "BIN BUILD FAILED"
+fi
+exit $rc

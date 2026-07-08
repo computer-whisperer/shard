@@ -31,6 +31,13 @@
 (use (:: models x86 x86 RDX))
 (use (:: models x86 x86 RSI))
 (use (:: models x86 x86 RDI))
+(use (:: models x86 x86 XMovRR))
+(use (:: models x86 x86 XLoad8))
+(use (:: models x86 x86 XStore8))
+(use (:: models x86 x86 XAdd))
+(use (:: models x86 x86 AReg))
+(use (:: models x86 x86 SReg))
+(use (:: models x86 x86 SImm))
 (use (:: models x86 encode le4))
 (use (:: models x86 encode le8))
 (use (:: models x86 encode eapp))
@@ -40,8 +47,16 @@
 (use (:: models x86 encode enc_call_rel32))
 (use (:: models x86 encode enc_push_reg))
 (use (:: models x86 encode enc_pop_reg))
+(use (:: models x86 encode enc_simple))
+(use (:: models x86 encode enc_mov_reg_rsp8))
+(use (:: models x86 encode enc_cmp_rs))
+(use (:: models x86 encode enc_jcc_rel32))
+(use (:: models x86 encode enc_jmp_rel32))
+(use (:: models x86 encode enc_test_r))
+(use (:: models x86 encode enc_bin_ri))
 (use (:: models x86 linux sys_write_top8))
 (use (:: models x86 linux sys_exit_code))
+(use (:: models x86 linux i_syscall))
 
 ;; a harness vector: which export (natural image index) on which args
 ;; (1-3 values; the stub pads unused arg registers to 0 harmlessly)
@@ -143,3 +158,153 @@
     (let ((code (eapp (gen_stub vs 0 ss offs) img)))
       (let ((filesz (+ 120 (elen code))))
         (eapp (elf_hdr filesz) (eapp (elf_phdr filesz) code))))))
+
+;; ============================================================================
+;; THE BIN RUNG — a plainly-executable Linux ELF (docs/X86.md §21/§22)
+;; ============================================================================
+;;
+;; enc_binelf wraps a cert-tied index-order IMAGE in an argv `_start` GLUE and
+;; a two-segment ELF64, producing a binary a user runs directly: `./arglen
+;; hello` exits with the entry's result. The glue is BYTE-MOVING PLUMBING —
+;; untrusted like enc_elf and the shims' USE sites — but its behaviour is a
+;; SIGNED TRUST STATEMENT, because a bin's proven entry receives its arguments
+;; FROM the glue. That statement is the contract below.
+;;
+;; ----------------------------------------------------------------------------
+;; THE GLUE CONTRACT (user-ratified 2026-07-08, the bin boundary)
+;; ----------------------------------------------------------------------------
+;; A bin's cert-premise surface must be EXACTLY what this contract supplies —
+;; no more (the accepts gate's bin arm enforces it against `glue_fams`). The
+;; clauses:
+;;
+;;   1. ENTRY STATE (trusted like the shims). The process starts under the
+;;      Linux x86_64 SysV entry ABI: [rsp] = argc, the argv pointers follow at
+;;      [rsp+8], [rsp+16], …, and every argv string is NUL-terminated. This is
+;;      the kernel's `_start` contract; the glue is its sole consumer.
+;;
+;;   2. RW SEGMENT. [0x600000, 0x601000) (4096 bytes) is mapped read-write and
+;;      kernel-zero-filled at load (PT_LOAD #2, p_filesz 0, p_memsz 4096).
+;;
+;;   3. PAYLOAD. On entry the glue writes the first min(|argv[1]|, 255) bytes of
+;;      argv[1] to 0x600000; every byte beyond the payload up to the segment top
+;;      (0x601000) remains zero (clause 2). An absent argv[1] (argc < 2) is the
+;;      empty payload — the glue copies nothing and holds count = 0 (there is NO
+;;      exit-1 leg: absent argument is a value, not an error).
+;;
+;;   4. CALL. The entry is called with rdi = 0x600000 (the payload base) and
+;;      rsi = the payload length (0..255). MODEL ADDRESSES ARE PROCESS ADDRESSES:
+;;      this is the permanent home of X86.md §15's range dispensation — the A1
+;;      rung's address-bounds premises will cite THIS clause together with clause
+;;      2 (the payload lives in the mapped, zeroed RW page).
+;;
+;;   5. EXIT. The process terminates with sys_exit(entry's result); the exit code
+;;      the shell observes is the low 8 bits (kernel truncation of the status).
+;;      The derived plan refuses any expected exit outside [0, 256), so the
+;;      truncation is never load-bearing in a signed expectation.
+;;
+;;   6. THE LAW. The glue MOVES bytes — it never interprets them. Copy, marshal
+;;      into the SysV arg registers, exit: nothing else. Any logic beyond that
+;;      (parsing, branching on payload content, arithmetic on the bytes) is a
+;;      contract VIOLATION, to be caught in review of this one file.
+;; ----------------------------------------------------------------------------
+
+(fn bin_data_base () Int 6291456)  ; 0x600000 — the RW payload segment (clause 2)
+
+(fn bin_data_size () Int 4096)  ; zero-filled bytes reserved at bin_data_base
+
+(fn bin_maxlen () Int 255)  ; copy-loop length cap (clause 3)
+
+(fn bin_hdrs_sz () Int 176)  ; 64 (ELF header) + 2*56 (two program headers)
+
+;; The `_start` glue, hand-laid at fixed widths so every displacement is a
+;; computable constant (the flattening's foundation — see encode.shard). The
+;; byte offset from glue start annotates each instruction; a jump's rel32 is
+;; (target offset) - (this instruction's end). Landmarks: loop_start = 43,
+;; after_loop = 98, glue length = 131, so the image begins at glue offset 131
+;; and `call` reaches the entry (at image offset `entry_off`) with rel32 =
+;; (131 + entry_off) - 116 = 15 + entry_off.
+(fn bin_glue ((entry_off Int)) (List Int)
+  (catb
+    (list
+      (enc_mov_reg_rsp8 RAX 0)  ; 0    mov rax,[rsp]         argc
+      (enc_mov_imm64 RCX 0)  ; 5    mov rcx,0            count = 0
+      (enc_cmp_rs RAX (SImm 2))  ; 15   cmp rax,2
+      (enc_jcc_rel32 130 70)  ; 22   jb +70 -> 98 (argc<2: empty payload)
+      (enc_mov_reg_rsp8 RSI 16)  ; 28   mov rsi,[rsp+16]     src = argv[1]
+      (enc_mov_imm64 RDI (bin_data_base))  ; 33   mov rdi,0x600000    dest
+      ;; loop_start = 43
+      (enc_cmp_rs RCX (SImm (bin_maxlen)))  ; 43   cmp rcx,255
+      (enc_jcc_rel32 131 42)  ; 50   jae +42 -> 98 (MAXLEN cap, clause 3)
+      (enc_simple (XLoad8 RDX (AReg RSI)))  ; 56   movzx rdx,byte[rsi]
+      (enc_test_r RDX)  ; 60   test rdx,rdx
+      (enc_jcc_rel32 132 29)  ; 63   jz +29 -> 98 (NUL terminator, clause 1)
+      (enc_simple (XStore8 (AReg RDI) (SReg RDX)))  ; 69   mov [rdi],dl
+      (enc_bin_ri XAdd RSI 1)  ; 72   add rsi,1
+      (enc_bin_ri XAdd RDI 1)  ; 79   add rdi,1
+      (enc_bin_ri XAdd RCX 1)  ; 86   add rcx,1
+      (enc_jmp_rel32 -55)  ; 93   jmp -55 -> 43 (loop_start)
+      ;; after_loop = 98
+      (enc_mov_imm64 RDI (bin_data_base))  ; 98   mov rdi,0x600000    arg0 = base
+      (enc_simple (XMovRR RSI RCX))  ; 108  mov rsi,rcx          arg1 = count
+      (enc_call_rel32 (+ 15 entry_off))  ; 111  call entry (clause 4)
+      (enc_simple (XMovRR RDI RAX))  ; 116  mov rdi,rax          exit arg = result
+      (enc_mov_imm64 RAX 60)  ; 119  mov rax,60           sys_exit nr
+      (i_syscall))))  ; 129  syscall (clause 5)  (ends at 131)
+
+;; 64-byte ELF header: ET_EXEC, x86-64, TWO program headers, entry at the glue
+;; (first code after the headers).
+(fn bin_elf_hdr () (List Int)
+  (catb
+    (list
+      (list 127 69 76 70 2 1 1 0)  ; magic, ELFCLASS64, LE, ver 1, SysV
+      (list 0 0 0 0 0 0 0 0)  ; EI_ABIVERSION + pad
+      (list 2 0)  ; e_type = ET_EXEC
+      (list 62 0)  ; e_machine = x86-64
+      (list 1 0 0 0)  ; e_version
+      (le8 (+ (load_base) (bin_hdrs_sz)))  ; e_entry = glue start
+      (le8 64)  ; e_phoff
+      (le8 0)  ; e_shoff
+      (list 0 0 0 0)  ; e_flags
+      (list 64 0)  ; e_ehsize
+      (list 56 0)  ; e_phentsize
+      (list 2 0)  ; e_phnum = 2
+      (list 0 0)  ; e_shentsize
+      (list 0 0)  ; e_shnum
+      (list 0 0))))  ; e_shstrndx
+
+;; program header 1: PT_LOAD, R+X, the whole file at load_base.
+(fn bin_phdr_code ((filesz Int)) (List Int)
+  (catb
+    (list
+      (list 1 0 0 0)  ; p_type = PT_LOAD
+      (list 5 0 0 0)  ; p_flags = R+X
+      (le8 0)  ; p_offset
+      (le8 (load_base))  ; p_vaddr
+      (le8 (load_base))  ; p_paddr
+      (le8 filesz)  ; p_filesz
+      (le8 filesz)  ; p_memsz
+      (le8 4096))))  ; p_align
+
+;; program header 2: PT_LOAD, RW, a zero-filled BSS segment at bin_data_base
+;; (clause 2; p_filesz = 0, p_memsz = bin_data_size, p_vaddr ≡ p_offset mod 4096).
+(fn bin_phdr_data () (List Int)
+  (catb
+    (list
+      (list 1 0 0 0)  ; p_type = PT_LOAD
+      (list 6 0 0 0)  ; p_flags = R+W
+      (le8 0)  ; p_offset
+      (le8 (bin_data_base))  ; p_vaddr
+      (le8 (bin_data_base))  ; p_paddr
+      (le8 0)  ; p_filesz = 0 (no file bytes)
+      (le8 (bin_data_size))  ; p_memsz = zero-filled reserve
+      (le8 4096))))  ; p_align
+
+;; the plainly-executable binary: [ELF hdr:64][phdr0:56][phdr1:56][glue][image].
+;; e_entry = load_base + 176 (the glue); the entry function sits at glue offset
+;; 131 + entry_off, reached by the glue's `call`.
+(fn enc_binelf ((image (List Int)) (entry_off Int)) (List Int)
+  (let ((code (eapp (bin_glue entry_off) image)))
+    (let ((filesz (+ (bin_hdrs_sz) (elen code))))
+      (eapp
+        (bin_elf_hdr)
+        (eapp (bin_phdr_code filesz) (eapp (bin_phdr_data) code))))))
