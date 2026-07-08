@@ -132,6 +132,9 @@
 (use (:: meta shape LROk))
 (use (:: meta shape LRCall))
 (use (:: meta shape LRErr))
+(use (:: meta shape li_recognize))
+(use (:: meta shape LIOk))
+(use (:: meta shape LIErr))
 (use (:: meta shape LStr))
 (use (:: meta shape LSStat))
 (use (:: meta shape LSInc))
@@ -1163,6 +1166,96 @@
       (xl_worker nm mids n adv ai fa p wl wh)
       (xl_thm nm mids n adv (+ p 4) wl wh))))
 
+;; ---- the Int-return SUM loop (bytesum; probe examples/xintloop_probe) ----------
+;;
+;; (fn NAME ((m Mem) (p Int) (a Int) (k Nat)) Int
+;;   (match k (Z a) ((S k2) (NAME m (+ p 1) (+ a (mem_get m p)) k2))))
+;; — the LIOk shape of meta/shape's li_recognize (wasm's §6ab twin). v1
+;; pins the probe exactly: two accums, the advancing address first, the
+;; sum second (reading the address's OLD value — load+add precede the
+;; advances). The load target is a REGISTER, so the worker closes rax
+;; over models/x86/loopkit's xlg_last and QUANTIFIES the entry rax (ra);
+;; the piece's epilogue XMovRR RAX RSI overwrites the residue with the
+;; sum. The sum accum rides the k-scaled wrap invariant
+;; (le (+ a (* 256 k)) 2^64) — xlg_sum_lo/xlg_sum_64/xlg_sum_shift.
+
+;; the module literal: [the epilogue'd loop func | restfs], self at 0
+(fn xli_mod ((nm Doc) (wl Int) (wh Int)) Doc
+  (dconc
+    (list
+      (DStr "(MkXModule (Cons (MkXFunc 3 (list (XBlock (list (XLoop (inline ")
+      nm
+      (DStr "_body)))) (XMovRR RAX RSI))) restfs) ")
+      (dint wl)
+      (sp)
+      (dint wh)
+      (DStr ")"))))
+
+;; the shared premise text: window pair on the address, nonneg + the
+;; k-scaled wrap invariant on the sum
+(fn xli_prems ((wl Int) (wh Int)) Doc
+  (dconc
+    (list
+      (DStr "((= (le ")
+      (dint wl)
+      (DStr " x0) True) (= (le 0 x1) True) (= (le (+ x0 (int_of_nat k)) ")
+      (dint wh)
+      (DStr
+        ") True) (= (le (+ x1 (* 256 (int_of_nat k))) 18446744073709551616) True))"))))
+
+;; body + func + worker induction + lowered theorem (the probe
+;; templated; fuel 10/14 probe-validated)
+(fn xli_unit ((q QName) (mids (List Type)) (wl Int) (wh Int)) Doc
+  (let ((nm (dsym (qn_name q))))
+    (dconc
+      (list
+        (DStr "(fn ")
+        nm
+        (DStr
+          "_body () (List XInstr) (list (XBrIf (CEqz RDX) 1) (XLoad8 RAX (AReg RDI)) (XBin XAdd RSI (SReg RAX)) (XBin XAdd RDI (SImm 1)) (XBin XSub RDX (SImm 1)) (XBr 0)))")
+        (DStr (nl))
+        (DStr "(fn ")
+        nm
+        (DStr "_func () XFunc (MkXFunc 3 (list (XBlock (list (XLoop (")
+        nm
+        (DStr "_body)))) (XMovRR RAX RSI))))")
+        (DStr (nl))
+        (DStr "(claim xliw_")
+        nm
+        (DStr " (goal ((ra Int) ")
+        (pr_binds mids 0)
+        (DStr "(m0 Mem) (c Nat) (k Nat) (restfs (List XFunc))) ")
+        (xli_prems wl wh)
+        (DStr " (= (xeval_loop (S^ 10 (xlg_fuel k c)) ")
+        (xli_mod nm wl wh)
+        (DStr " (inline ")
+        nm
+        (DStr
+          "_body) (MkRegs ra 0 (int_of_nat k) 0 0 x1 x0 0 0 0 0 0 0 0 0) m0) (Some (XBrk 0 (MkRegs (xlg_last m0 x0 ra k) 0 0 0 0 (")
+        nm
+        (DStr
+          " m0 x0 x1 k) (xlg_adv x0 k) 0 0 0 0 0 0 0 0) m0)))) (induct k ((case Z (steps ((rewrite (lemma int_of_nat_zero) lr lhs true ()) (compute both)) refl)) (case S (k2) (chain (steps ((unfold xlg_fuel lhs) (reduce lhs) (unfold xeval_loop lhs) (rewrite (lemma int_of_nat_succ) lr lhs true ()) (compute lhs (stop xeval_loop xlg_fuel)))) (rewrite-with (lemma xlg_ne) lr lhs () ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))) (steps ((compute lhs (stop xeval_loop xlg_fuel)) (rewrite (premise 0) lr lhs true ()) (compute lhs (stop xeval_loop xlg_fuel)))) (rewrite-with (lemma xlg_a1_ms) lr lhs ((inst c k2)) ((steps ((rewrite (premise 2) lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl) (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))) (steps ((compute lhs (stop xeval_loop xlg_fuel)))) (have hsub (= (- (+ 1 (int_of_nat k2)) 1) (int_of_nat k2)) (rewrite-with (lemma xlg_sub) lr lhs () () refl)) (steps ((rewrite (premise hsub) lr lhs true ()))) (have hwk (= (mod (int_of_nat k2) 18446744073709551616) (int_of_nat k2)) (rewrite-with (lemma wrap64_id) lr lhs ((inst x (int_of_nat k2))) ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl) (rewrite-with (lemma xlg_kM) lr lhs ((inst a x0) (inst c k2)) ((steps ((rewrite (premise 2) lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl) (steps ((rewrite (premise 0) lr lhs true ())) refl)) refl)) refl)) (steps ((rewrite (premise hwk) lr lhs true ()))) (have hw0 (= (mod (+ x0 1) 18446744073709551616) (+ x0 1)) (rewrite-with (lemma wrap64_id) lr lhs ((inst x (+ x0 1))) ((rewrite-with (lemma xlg_lo1) lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl)) refl) (rewrite-with (lemma xlg_64) lr lhs () ((rewrite-with (lemma xlg_a1_ms) lr lhs ((inst c k2)) ((steps ((rewrite (premise 2) lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl) (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)) refl)) refl)) refl)) (steps ((rewrite (premise hw0) lr lhs true ()))) (have hwa (= (mod (+ x1 (mem_get m0 x0)) 18446744073709551616) (+ x1 (mem_get m0 x0))) (rewrite-with (lemma wrap64_id) lr lhs ((inst x (+ x1 (mem_get m0 x0)))) ((rewrite-with (lemma xlg_sum_lo) lr lhs () ((steps ((rewrite (premise 1) lr lhs true ())) refl) (rewrite-with (lemma get_lo) lr lhs () () refl)) refl) (rewrite-with (lemma xlg_sum_64) lr lhs ((inst c k2)) ((steps ((rewrite (premise 3) lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl) (rewrite-with (lemma get_hi) lr lhs () () refl) (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)) refl)) refl)) (steps ((rewrite (premise hwa) lr lhs true ()))) (steps ((unfold ")
+        nm
+        (DStr
+          " rhs) (unfold xlg_adv rhs) (unfold xlg_last rhs) (reduce rhs))) (rewrite-with (hyp 0) lr lhs () ((rewrite-with (lemma xlg_lo1) lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl)) refl) (rewrite-with (lemma xlg_sum_lo) lr lhs () ((steps ((rewrite (premise 1) lr lhs true ())) refl) (rewrite-with (lemma get_lo) lr lhs () () refl)) refl) (rewrite-with (lemma xlg_shift) lr lhs () ((steps ((rewrite (premise 2) lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)) refl) (rewrite-with (lemma xlg_sum_shift) lr lhs () ((steps ((rewrite (premise 3) lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl) (rewrite-with (lemma get_hi) lr lhs () () refl)) refl))) (steps ((compute both))) refl)))))")
+        (DStr (nl))
+        (DStr "(claim lowered_")
+        nm
+        (DStr " (goal (")
+        (pr_binds mids 0)
+        (DStr "(m0 Mem) (c Nat) (k Nat) (restfs (List XFunc))) ")
+        (xli_prems wl wh)
+        (DStr " (= (xcall_fn_mem (S^ 14 (xlg_fuel k c)) ")
+        (xli_mod nm wl wh)
+        (DStr " 0 (list x0 x1 (int_of_nat k)) m0) (Some (Pair (")
+        nm
+        (DStr
+          " m0 x0 x1 k) m0)))) (chain (steps ((compute lhs (stop xeval_loop xlg_fuel)))) (rewrite-with (lemma xliw_")
+        nm
+        (DStr
+          ") lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((rewrite (premise 1) lr lhs true ())) refl) (steps ((rewrite (premise 2) lr lhs true ())) refl) (steps ((rewrite (premise 3) lr lhs true ())) refl))) (steps ((compute both))) refl))")
+        (DStr (nl))))))
+
 ;; the loop-fn gate: param slicing + the shared recognizer + v1 fences
 (fn xg_claim_loop ((f FnDef) (wl Int) (wh Int)) XCR
   (match f
@@ -1219,9 +1312,34 @@
                               (xerr_at
                                 q
                                 "v1 strides are +1 or static (decrementing and stride-K accums are named growth)"))))
-                         (xerr_at
-                           q
-                           "loop fn must return Mem (Int-return loops are named growth)"))
+                       (if (is_int_ty rty)
+                         (match (li_recognize q n body)
+                           ((LIErr m) (xerr_at q m))
+                           ((LIOk adv r j)
+                            (if (int_eq n 2)
+                              (if (int_eq r 1)
+                                (if (int_eq j 0)
+                                  (match adv
+                                    ((Cons (LSInc) (Cons (LSStat) Nil))
+                                     (XCOk (xli_unit q mids wl wh)))
+                                    (_
+                                      (xerr_at
+                                        q
+                                        "v1 Int-return loop: the address accumulator advances +1, the sum rides (named growth)")))
+                                  (xerr_at
+                                    q
+                                    "v1 Int-return loop: the summed read's address must be accumulator 0"))
+                                (xerr_at
+                                  q
+                                  "v1 Int-return loop: the sum accumulator must be accumulator 1 (the returned one)"))
+                              (xerr_at
+                                q
+                                "v1 Int-return loop needs exactly two Int accumulators (address, sum)")))
+                           (_
+                             (xerr_at
+                               q
+                               "scan/flag Int-return loop shapes are named growth (v1: the sum shape)")))
+                         (xerr_at q "loop fn must return Mem or Int")))
                        (xerr_at
                          q
                          "more than five accumulators (SysV register homes only)"))

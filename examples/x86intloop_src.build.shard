@@ -1,0 +1,81 @@
+;;; examples/x86intloop_src.build.shard — the mod.build ENTRY for the
+;;; x86_64 INT-RETURN loop fragment (docs/X86.md §14 growth): assembles
+;;; the artifact set for examples/x86intloop_src.shard as a native Plan
+;;; value.
+;;;
+;;;     (fn build ((t Target)) Plan)     — PURE; the whole interface
+;;;
+;;; The sum piece is a LEAF cert: the module is the cert's module at
+;;; restfs := Nil — [self]. The XFunc literal comes from the GENERATED
+;;; cert file itself (x86intloop_out.shard's xi_bsum_func) — no hand
+;;; copies; the cert<->binary tie is the BYTETIE gate's. Vectors are
+;;; result-only (PV): the harness's data page starts ZEROED, so spec-side
+;;; expected values are the source fn over mem_empty (mask-on-read zeros
+;;; = the zeroed page) — the loop path and the accumulator are exercised
+;;; on silicon; content-dependent sums arrive with the bin rung's engine
+;;; leg (payload bytes at BUF, X86.md §22).
+;;;
+;;; ADDRESSES: the harness MAP_FIXEDs its data page at DATA_BASE =
+;;; 0x40000000. The cert PREMISE domain is [0, 65536): the shipped
+;;; binary is range-agnostic, so the vectors exercise the mapped
+;;; DATA_BASE window while the certs cover the model's low range.
+;;;
+;;; RUN IT:  bin/shard_eval run tools/lowbuild/lowbuild.shard examples/x86intloop_src.build.shard x86
+
+(import "../kernel/stdlib.shard")
+(import "x86intloop_src.shard")
+(use (:: examples x86intloop_src *))
+(import "x86intloop_out.shard")
+(use (:: examples x86intloop_out xi_bsum_func))
+(import "../std/mem")
+(use (:: std mem *))
+(import "../models/x86/x86.shard")
+(use (:: models x86 x86 *))
+(import "../models/x86/encode.shard")
+(use (:: models x86 encode enc_func))
+(import "../meta/plan")
+(use (:: meta plan *))
+
+;; Nat of a small machine count
+(fn xnat ((i Int)) Nat
+  (measure i)
+  (if (le i 0) Z (S (xnat (- i 1)))))
+
+;; --- the build entry -------------------------------------------------------------
+
+(fn art ((nm (List Int))) PArt
+  (PA
+    nm
+    (eapp "lowered_" nm)
+    "examples/x86intloop_out.shard"
+    "models/x86/x86.shard"
+    0
+    ""
+    "none"))
+
+;; a result vector (PV, no memory image): expected = the source fn over
+;; the zeroed page (mem_empty reads 0 everywhere, matching the harness)
+(fn rvec ((args (List Int)) (want Int)) PVec (PV 0 args Nil want Nil))
+
+(fn pmod ((nm (List Int)) (f XFunc) (vs (List PVec))) PMod
+  (PM nm (enc_func f) (list (art nm)) vs))
+
+;; DATA_BASE = 0x40000000
+(fn dbase () Int 1073741824)
+
+(fn build ((t Target)) Plan
+  (MkPlan
+    (list
+      (pmod
+        "xi_bsum"
+        (xi_bsum_func)
+        (list
+          (rvec
+            (list (dbase) 7 5)
+            (xi_bsum (mem_empty) (dbase) 7 (xnat 5)))
+          (rvec
+            (list (dbase) 42 0)
+            (xi_bsum (mem_empty) (dbase) 42 (xnat 0)))
+          (rvec
+            (list (+ (dbase) 3) 0 100)
+            (xi_bsum (mem_empty) (+ (dbase) 3) 0 (xnat 100))))))))
