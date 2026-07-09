@@ -28,8 +28,14 @@
 (import "../kernel/stdlib.shard")
 (import "../std/mem")
 (use (:: std mem *))
+(import "../std/div")
+(use (:: std div *))
+(import "../std/nat.shard")
+(use (:: std nat *))
 (import "../models/x86/x86.shard")
 (use (:: models x86 x86 *))
+(import "../models/x86/loopkit.shard")
+(use (:: models x86 loopkit *))
 
 ;; --- the spec trio -----------------------------------------------------------------
 
@@ -62,22 +68,21 @@
 
 ;; --- the exact machine text ---------------------------------------------------------
 
-(fn xit_body () (List XInstr)
+;; the loop body as its own article (the worker inducts on exactly this list)
+(fn xit_loop_body () (List XInstr)
   (list
-    (XBlock
-      (list
-        (XLoop
-          (list
-            (XMovRR RAX RDI)
-            (XMovRI RDX 0)
-            (XMovRI R10 10)
-            (XDivU R10)
-            (XBin XAdd RDX (SImm 48))
-            (XBin XSub RSI (SImm 1))
-            (XStore8 (AReg RSI) (SReg RDX))
-            (XMovRR RDI RAX)
-            (XBrIf (CNz RDI) 0)
-            (XBr 1)))))))
+    (XMovRR RAX RDI)
+    (XMovRI RDX 0)
+    (XMovRI R10 10)
+    (XDivU R10)
+    (XBin XAdd RDX (SImm 48))
+    (XBin XSub RSI (SImm 1))
+    (XStore8 (AReg RSI) (SReg RDX))
+    (XMovRR RDI RAX)
+    (XBrIf (CNz RDI) 0)
+    (XBr 1)))
+
+(fn xit_body () (List XInstr) (list (XBlock (list (XLoop (xit_loop_body))))))
 
 ;; the piece as a 2-arg callee (rdi = n, rsi = end pointer) on a one-page
 ;; window [0, 64)
@@ -123,7 +128,7 @@
           (MkRegs
             0
             c0
-            (+ (mod (xi_hd 307 (S^ 4 Z)) 10) 48)
+            (mod (+ (mod (xi_hd 307 (S^ 4 Z)) 10) 48) 18446744073709551616)
             b0
             p0
             (- 32 (xi_len 307 (S^ 4 Z)))
@@ -171,7 +176,7 @@
           (MkRegs
             0
             c0
-            (+ (mod (xi_hd 0 (S^ 4 Z)) 10) 48)
+            (mod (+ (mod (xi_hd 0 (S^ 4 Z)) 10) 48) 18446744073709551616)
             b0
             p0
             (- 32 (xi_len 0 (S^ 4 Z)))
@@ -220,7 +225,9 @@
           (MkRegs
             0
             c0
-            (+ (mod (xi_hd 18446744073709551615 (S^ 21 Z)) 10) 48)
+            (mod
+              (+ (mod (xi_hd 18446744073709551615 (S^ 21 Z)) 10) 48)
+              18446744073709551616)
             b0
             p0
             (- 64 (xi_len 18446744073709551615 (S^ 21 Z)))
@@ -266,3 +273,476 @@
         mem)
       None))
   (steps ((compute both)) refl))
+
+;; --- the symbolic worker -------------------------------------------------------------
+;;
+;; Induction on the ghost bound k, spec stated at (S k) — the do-while runs
+;; AT LEAST once, so the k = Z instance of the trio (no iteration) is not a
+;; machine behavior; (S k) is. Premises: the §11 pair on n, the ghost bound
+;; (lt n (xi_pow10 (S k))), and the DOWNWARD window pair — room for the
+;; ghost below p ((+ 1 (int_of_nat k)) <= p) and p inside the page. The
+;; induction step FORKS on the quotient's zeroness (the A2 symbolic-byte
+;; precedent): the exit leg closes like the base, the recurse leg steps the
+;; premises down (quotient below the next power by xig_qlt — the div-facts
+;; integrality gateway — and the store pointer down one) and cites the IH.
+
+;; the ghost power: n < xi_pow10 k means "n has at most k decimal digits"
+(fn xi_pow10 ((k Nat)) Int
+  (measure (struct k))
+  (match k
+    (Z 1)
+    ((S k2) (* 10 (xi_pow10 k2)))))
+
+;; the XDivU overflow guard (xdg_ub of the B2 article, restated for this
+;; article's imports): a 64-bit dividend's decimal quotient fits 64 bits
+(claim xig_ub
+  (goal ((x Int)) ((= (le 0 x) True) (= (lt x 18446744073709551616) True))
+    (= (lt (ediv x 10) 18446744073709551616) True))
+  (chain
+    (have hid (= x (+ (* 10 (ediv x 10)) (mod x 10)))
+      (rewrite-with (lemma ediv_mod_10_id) lr lhs ((inst n x)) () refl))
+    (have hlo (= (le 0 (mod x 10)) True)
+      (rewrite-with (lemma mod_10_lo) lr lhs ((inst n x)) () refl))
+    (have hq (= (le 0 (ediv x 10)) True)
+      (rewrite-with
+        (lemma div_nonneg)
+        lr
+        lhs
+        ((inst n x))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (by arith (list 10 0 1 1 1 0))))
+
+;; a one-digit value's quotient IS zero (the exit condition, as an Int
+;; equation — rewritten into the machine's cond AND the spec's forks)
+(claim xig_qz0
+  (goal ((n Int)) ((= (le 0 n) True) (= (lt n 10) True)) (= (ediv n 10) 0))
+  (chain
+    (have hid (= n (+ (* 10 (ediv n 10)) (mod n 10)))
+      (rewrite-with (lemma ediv_mod_10_id) lr lhs ((inst n n)) () refl))
+    (have hlo (= (le 0 (mod n 10)) True)
+      (rewrite-with (lemma mod_10_lo) lr lhs ((inst n n)) () refl))
+    (have hq (= (le 0 (ediv n 10)) True)
+      (rewrite-with
+        (lemma div_nonneg)
+        lr
+        lhs
+        ((inst n n))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (by arith (list (list 10 0 1 1 1 0) (list 1 0 0 0 0 1)))))
+
+;; int_eq inversion: the case-on's Bool equation back to the Int equation
+(claim xig_qinv
+  (goal ((q Int)) ((= (int_eq q 0) True)) (= q 0))
+  (by arith (list (list 1 -1) (list 1 1))))
+
+;; THE INTEGRALITY STEP: n below ten c's puts the quotient below c — how
+;; the ghost-bound premise walks down through the IH
+(claim xig_qlt
+  (goal ((n Int) (c Int)) ((= (le 0 n) True) (= (lt n (* 10 c)) True))
+    (= (lt (ediv n 10) c) True))
+  (chain
+    (have hid (= n (+ (* 10 (ediv n 10)) (mod n 10)))
+      (rewrite-with (lemma ediv_mod_10_id) lr lhs ((inst n n)) () refl))
+    (have hlo (= (le 0 (mod n 10)) True)
+      (rewrite-with (lemma mod_10_lo) lr lhs ((inst n n)) () refl))
+    (by arith (list 10 0 1 1 1))))
+
+;; the downward window walk: the predecremented store stays on the page …
+(claim xig_p_lo
+  (goal ((p Int) (c Nat))
+    ((= (le (+ 1 (int_of_nat c)) p) True) (= (le 0 (int_of_nat c)) True))
+    (= (le 0 (- p 1)) True))
+  (by arith (list 1 1 1)))
+
+(claim xig_p_64
+  (goal ((p Int) (w Int))
+    ((= (le p w) True) (= (lt w 18446744073709551616) True))
+    (= (lt (- p 1) 18446744073709551616) True))
+  (by arith (list 1 1 1)))
+
+(claim xig_p_hi
+  (goal ((p Int) (w Int)) ((= (le p w) True)) (= (le (+ (- p 1) 1) w) True))
+  (by arith (list 1 1)))
+
+;; … and the premise pair steps down to the IH
+(claim xig_shift_dn
+  (goal ((p Int) (c Nat))
+    ((= (le (+ 1 (int_of_nat (S c))) p) True)
+     (= (int_of_nat (S c)) (+ 1 (int_of_nat c))))
+    (= (le (+ 1 (int_of_nat c)) (- p 1)) True))
+  (by arith (list 1 1 1)))
+
+(claim xig_hi_dn
+  (goal ((p Int) (w Int)) ((= (le p w) True)) (= (le (- p 1) w) True))
+  (by arith (list 1 1)))
+
+;; the final-pointer collapse: the IH's (p-1) - len IS p - (1 + len)
+(claim xig_psub
+  (goal ((p Int) (l Int)) () (= (- (- p 1) l) (- p (+ 1 l))))
+  (by arith (list (list 1) (list 1))))
+
+;; the worker: one full register file in, the spec trio out
+(claim xigw_xit
+  (goal
+    ((a0 Int)
+     (c0 Int)
+     (d0 Int)
+     (b0 Int)
+     (p0 Int)
+     (e8 Int)
+     (e9 Int)
+     (e10 Int)
+     (e11 Int)
+     (e12 Int)
+     (e13 Int)
+     (e14 Int)
+     (e15 Int)
+     (n Int)
+     (p Int)
+     (mem Mem)
+     (c Nat)
+     (k Nat)
+     (restfs (List XFunc)))
+    ((= (le 0 n) True)
+     (= (lt n 18446744073709551616) True)
+     (= (lt n (xi_pow10 (S k))) True)
+     (= (le (+ 1 (int_of_nat k)) p) True)
+     (= (le p 64) True))
+    (=
+      (xeval_loop
+        (S^ 14 (xlg_fuel k c))
+        (MkXModule
+          (Cons
+            (MkXFunc 2 (list (XBlock (list (XLoop (inline xit_loop_body))))))
+            restfs)
+          0
+          64)
+        (inline xit_loop_body)
+        (MkRegs a0 c0 d0 b0 p0 p n e8 e9 e10 e11 e12 e13 e14 e15)
+        mem)
+      (Some
+        (XBrk
+          0
+          (MkRegs
+            0
+            c0
+            (mod (+ (mod (xi_hd n (S k)) 10) 48) 18446744073709551616)
+            b0
+            p0
+            (- p (xi_len n (S k)))
+            0
+            e8
+            e9
+            10
+            e11
+            e12
+            e13
+            e14
+            e15)
+          (xi_wr mem n p (S k))))))
+  (induct k
+    ((case Z
+       (chain
+         (steps ((compute lhs)))
+         (have h0n (= (+ 0 n) n) (by arith (list (list 1) (list 1))))
+         (steps ((rewrite (premise h0n) lr lhs true ())))
+         (rewrite-with
+           (lemma xig_ub)
+           lr
+           lhs
+           ((inst x n))
+           ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+            (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+         (steps ((compute lhs)))
+         (have hwp (= (mod (- p 1) 18446744073709551616) (- p 1))
+           (rewrite-with
+             (lemma wrap64_id)
+             lr
+             lhs
+             ((inst x (- p 1)))
+             ((rewrite-with
+                (lemma xig_p_lo)
+                lr
+                lhs
+                ((inst c Z))
+                ((steps ((rewrite (premise 3) lr lhs true ())) refl)
+                 (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+                refl)
+              (rewrite-with
+                (lemma xig_p_64)
+                lr
+                lhs
+                ((inst w 64))
+                ((steps ((rewrite (premise 4) lr lhs true ())) refl)
+                 (steps ((compute both)) refl))
+                refl))
+             refl))
+         (steps ((rewrite (premise hwp) lr lhs true ())))
+         (rewrite-with
+           (lemma xig_p_lo)
+           lr
+           lhs
+           ((inst c Z))
+           ((steps ((rewrite (premise 3) lr lhs true ())) refl)
+            (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         (steps ((compute lhs)))
+         (rewrite-with
+           (lemma xig_p_hi)
+           lr
+           lhs
+           ((inst w 64))
+           ((steps ((rewrite (premise 4) lr lhs true ())) refl)))
+         (steps ((compute lhs)))
+         (have hqz (= (ediv n 10) 0)
+           (rewrite-with
+             (lemma xig_qz0)
+             lr
+             lhs
+             ((inst n n))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+              (chain
+                (have hb (= 10 (xi_pow10 (S Z))) (steps ((compute rhs)) refl))
+                (steps
+                  ((rewrite (premise hb) lr lhs true ())
+                   (rewrite (premise 2) lr lhs true ()))
+                  refl)))
+             refl))
+         (steps ((rewrite (premise hqz) lr both true ()) (compute lhs)))
+         (steps
+           ((unfold xi_len rhs)
+            (unfold xi_hd rhs)
+            (unfold xi_wr rhs)
+            (compute rhs (stop xi_len xi_hd xi_wr))
+            (rewrite (premise hqz) lr rhs true ())
+            (compute both))
+           refl)))
+     (case S
+       (k3)
+       (chain
+         (steps
+           ((unfold xlg_fuel lhs)
+            (reduce lhs)
+            (unfold xeval_loop lhs)
+            (compute lhs (stop xeval_loop xlg_fuel))))
+         (have h0n (= (+ 0 n) n) (by arith (list (list 1) (list 1))))
+         (steps ((rewrite (premise h0n) lr lhs true ())))
+         (rewrite-with
+           (lemma xig_ub)
+           lr
+           lhs
+           ((inst x n))
+           ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+            (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+         (steps ((compute lhs (stop xeval_loop xlg_fuel))))
+         (have hwp (= (mod (- p 1) 18446744073709551616) (- p 1))
+           (rewrite-with
+             (lemma wrap64_id)
+             lr
+             lhs
+             ((inst x (- p 1)))
+             ((rewrite-with
+                (lemma xig_p_lo)
+                lr
+                lhs
+                ((inst c (S k3)))
+                ((steps ((rewrite (premise 3) lr lhs true ())) refl)
+                 (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+                refl)
+              (rewrite-with
+                (lemma xig_p_64)
+                lr
+                lhs
+                ((inst w 64))
+                ((steps ((rewrite (premise 4) lr lhs true ())) refl)
+                 (steps ((compute both)) refl))
+                refl))
+             refl))
+         (steps ((rewrite (premise hwp) lr lhs true ())))
+         (rewrite-with
+           (lemma xig_p_lo)
+           lr
+           lhs
+           ((inst c (S k3)))
+           ((steps ((rewrite (premise 3) lr lhs true ())) refl)
+            (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         (steps ((compute lhs (stop xeval_loop xlg_fuel))))
+         (rewrite-with
+           (lemma xig_p_hi)
+           lr
+           lhs
+           ((inst w 64))
+           ((steps ((rewrite (premise 4) lr lhs true ())) refl)))
+         (steps ((compute lhs (stop xeval_loop xlg_fuel))))
+         (case-on (int_eq (ediv n 10) 0) Bool
+           ((case True
+              (chain
+                (steps
+                  ((rewrite (hyp True) lr lhs true ())
+                   (compute lhs (stop xeval_loop xlg_fuel))))
+                (have hqz (= (ediv n 10) 0)
+                  (rewrite-with
+                    (lemma xig_qinv)
+                    lr
+                    lhs
+                    ((inst q (ediv n 10)))
+                    ((steps ((rewrite (hyp True) lr lhs true ())) refl))
+                    refl))
+                (steps
+                  ((rewrite (premise hqz) lr lhs true ())
+                   (compute lhs (stop xeval_loop xlg_fuel))))
+                (steps
+                  ((unfold xi_len rhs)
+                   (unfold xi_hd rhs)
+                   (unfold xi_wr rhs)
+                   (compute rhs (stop xi_len xi_hd xi_wr))
+                   (rewrite (hyp True) lr rhs true ())
+                   (compute rhs (stop xi_len xi_hd xi_wr))
+                   (compute both))
+                  refl)))
+            (case False
+              (chain
+                (steps
+                  ((rewrite (hyp False) lr lhs true ())
+                   (compute lhs (stop xeval_loop xlg_fuel))))
+                (have hqn (= (le 0 (ediv n 10)) True)
+                  (rewrite-with
+                    (lemma div_nonneg)
+                    lr
+                    lhs
+                    ((inst n n))
+                    ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                    refl))
+                (have hq64 (= (lt (ediv n 10) 18446744073709551616) True)
+                  (rewrite-with
+                    (lemma xig_ub)
+                    lr
+                    lhs
+                    ((inst x n))
+                    ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                     (steps ((rewrite (premise 1) lr lhs true ())) refl))
+                    refl))
+                (have hpu (= (xi_pow10 (S (S k3))) (* 10 (xi_pow10 (S k3))))
+                  (steps ((unfold xi_pow10 lhs) (reduce lhs)) refl))
+                (have hx10 (= (lt n (* 10 (xi_pow10 (S k3)))) True)
+                  (steps
+                    ((rewrite (premise hpu) rl lhs true ())
+                     (rewrite (premise 2) lr lhs true ()))
+                    refl))
+                (have hql (= (lt (ediv n 10) (xi_pow10 (S k3))) True)
+                  (rewrite-with
+                    (lemma xig_qlt)
+                    lr
+                    lhs
+                    ((inst n n) (inst c (xi_pow10 (S k3))))
+                    ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                     (steps ((rewrite (premise hx10) lr lhs true ())) refl))
+                    refl))
+                (have hp3 (= (le (+ 1 (int_of_nat k3)) (- p 1)) True)
+                  (rewrite-with
+                    (lemma xig_shift_dn)
+                    lr
+                    lhs
+                    ((inst c k3))
+                    ((steps ((rewrite (premise 3) lr lhs true ())) refl)
+                     (steps
+                       ((rewrite (lemma int_of_nat_succ) lr lhs true ()))
+                       refl))
+                    refl))
+                (have hp4 (= (le (- p 1) 64) True)
+                  (rewrite-with
+                    (lemma xig_hi_dn)
+                    lr
+                    lhs
+                    ((inst w 64))
+                    ((steps ((rewrite (premise 4) lr lhs true ())) refl))
+                    refl))
+                (rewrite-with
+                  (hyp 1)
+                  lr
+                  lhs
+                  ()
+                  ((steps ((rewrite (premise hqn) lr lhs true ())) refl)
+                   (steps ((rewrite (premise hq64) lr lhs true ())) refl)
+                   (steps ((rewrite (premise hql) lr lhs true ())) refl)
+                   (steps ((rewrite (premise hp3) lr lhs true ())) refl)
+                   (steps ((rewrite (premise hp4) lr lhs true ())) refl)))
+                (steps
+                  ((unfold xi_len rhs)
+                   (unfold xi_hd rhs)
+                   (unfold xi_wr rhs)
+                   (compute rhs (stop xi_len xi_hd xi_wr))
+                   (rewrite (hyp False) lr rhs true ())
+                   (compute rhs (stop xi_len xi_hd xi_wr))))
+                (rewrite-with (lemma xig_psub) lr lhs () ())
+                (steps ((compute both)) refl))))))))))
+
+;; the piece theorem: the pins' xrun_regs surface, symbolically — the
+;; callee-cert form the W4 entry will cite (consumers instantiate k = 20:
+;; every register value has at most 20 digits)
+(claim xit_piece
+  (goal
+    ((a0 Int)
+     (c0 Int)
+     (d0 Int)
+     (b0 Int)
+     (p0 Int)
+     (e8 Int)
+     (e9 Int)
+     (e10 Int)
+     (e11 Int)
+     (e12 Int)
+     (e13 Int)
+     (e14 Int)
+     (e15 Int)
+     (n Int)
+     (p Int)
+     (mem Mem)
+     (c Nat)
+     (k Nat)
+     (restfs (List XFunc)))
+    ((= (le 0 n) True)
+     (= (lt n 18446744073709551616) True)
+     (= (lt n (xi_pow10 (S k))) True)
+     (= (le (+ 1 (int_of_nat k)) p) True)
+     (= (le p 64) True))
+    (=
+      (xrun_regs
+        (S^ 18 (xlg_fuel k c))
+        (xit_m restfs)
+        0
+        (MkRegs a0 c0 d0 b0 p0 p n e8 e9 e10 e11 e12 e13 e14 e15)
+        mem)
+      (Some
+        (Pair
+          (MkRegs
+            0
+            c0
+            (mod (+ (mod (xi_hd n (S k)) 10) 48) 18446744073709551616)
+            b0
+            p0
+            (- p (xi_len n (S k)))
+            0
+            e8
+            e9
+            10
+            e11
+            e12
+            e13
+            e14
+            e15)
+          (xi_wr mem n p (S k))))))
+  (chain
+    (steps ((compute lhs (stop xeval_loop xlg_fuel))))
+    (rewrite-with
+      (lemma xigw_xit)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)
+       (steps ((rewrite (premise 3) lr lhs true ())) refl)
+       (steps ((rewrite (premise 4) lr lhs true ())) refl)))
+    (steps ((compute both)) refl)))
