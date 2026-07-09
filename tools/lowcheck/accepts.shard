@@ -450,50 +450,103 @@
     ((Cons p rest)
      (if (is_glue_prem p ar) (drop_glue rest ar) (Cons p (drop_glue rest ar))))))
 
+;; the WORLD BIN's role symbols (docs/X86.md §47): the entry's
+;; (address, count) pairs live in the xrun_w conclusion's MkRegs literal
+;; — payload 1 at rdi/rsi (slots 6/5), payload 2 at rdx/rcx (slots 2/1)
+(fn bin_argw_syms ((c SExpr)) (List (Pair Symbol Symbol))
+  (match c
+    ((SList (Cons eq (Cons lhs (Cons _r Nil))))
+     (if (is_sym eq (quote =))
+       (match lhs
+         ((SList
+            (Cons
+              h
+              (Cons
+                _fuel
+                (Cons _mod (Cons _ix (Cons regs (Cons _m (Cons _w Nil))))))))
+          (if (is_sym h (quote xrun_w))
+            (match regs
+              ((SList
+                 (Cons
+                   mk
+                   (Cons
+                     _a0
+                     (Cons
+                       kf2
+                       (Cons
+                         (SSym a2)
+                         (Cons _a3 (Cons _a4 (Cons kf1 (Cons (SSym a1) _rest)))))))))
+               (if (is_sym mk (quote MkRegs))
+                 (match kf1
+                   ((SList (Cons io1 (Cons (SSym k1) Nil)))
+                    (if (is_sym io1 (quote int_of_nat))
+                      (match kf2
+                        ((SList (Cons io2 (Cons (SSym k2) Nil)))
+                         (if (is_sym io2 (quote int_of_nat))
+                           (Cons (Pair a1 k1) (Cons (Pair a2 k2) Nil))
+                           Nil))
+                        (_ Nil))
+                      Nil))
+                   (_ Nil))
+                 Nil))
+              (_ Nil))
+            Nil))
+         (_ Nil))
+       Nil))
+    (_ Nil)))
+
 (fn bin_verdict ((cforms (List SExpr)) (x Symbol)) ARes
-  (match (find_goal cforms (append_int "lowered_" (chars_of_sym x)))
+  (match (find_goal cforms (append_int "lowered_w_" (chars_of_sym x)))
+    ((Some (Pair ps0 concl)) (bin_surface x ps0 (bin_argw_syms concl)))
     (None
-      (ABad
-        (append_int
-          (chars_of_sym x)
-          ": no lowered_ claim with a (goal …) in the cert file")))
-    ((Some (Pair ps0 concl))
-     (let ((ps (drop_glue ps0 (bin_arg_syms concl))))
-       (match (prem_surface ps Nil)
+      (match (find_goal cforms (append_int "lowered_" (chars_of_sym x)))
+        (None
+          (ABad
+            (append_int
+              (chars_of_sym x)
+              ": no lowered_ claim with a (goal …) in the cert file")))
+        ((Some (Pair ps0 concl)) (bin_surface x ps0 (bin_arg_syms concl)))))))
+
+;; the premise-surface pipeline shared by both bin flavors: glue-drop
+;; the window pairs on the role symbols, classify, cover
+(fn bin_surface ((x Symbol) (ps0 (List SExpr)) (ar (List (Pair Symbol Symbol))))
+  ARes
+  (let ((ps (drop_glue ps0 ar)))
+    (match (prem_surface ps Nil)
+      (None
+        (ABad
+          (append_int
+            (chars_of_sym x)
+            ": a premise does not classify into a known family — grow the gate, don't guess")))
+      ((Some raw)
+       (match (norm_surface raw)
          (None
            (ABad
              (append_int
                (chars_of_sym x)
-               ": a premise does not classify into a known family — grow the gate, don't guess")))
-         ((Some raw)
-          (match (norm_surface raw)
-            (None
+               ": a wrap lower bound (le 0 E) has no width bound beside it")))
+         ((Some surface)
+          (match (surface_covered surface (glue_fams))
+            (True
+              (AOk
+                (append_int
+                  "BINSURFACE    "
+                  (append_int
+                    (chars_of_sym x)
+                    (append_int
+                      ": "
+                      (append_int
+                        (show_fams surface)
+                        (append_int " (glue-covered)" (nl))))))))
+            (False
               (ABad
                 (append_int
                   (chars_of_sym x)
-                  ": a wrap lower bound (le 0 E) has no width bound beside it")))
-            ((Some surface)
-             (match (surface_covered surface (glue_fams))
-               (True
-                 (AOk
-                   (append_int
-                     "BINSURFACE    "
-                     (append_int
-                       (chars_of_sym x)
-                       (append_int
-                         ": "
-                         (append_int
-                           (show_fams surface)
-                           (append_int " (glue-covered)" (nl))))))))
-               (False
-                 (ABad
-                   (append_int
-                     (chars_of_sym x)
-                     (append_int
-                       ": cert premise surface {"
-                       (append_int
-                         (show_fams surface)
-                         "} exceeds the glue contract — a bin signs no exceptions; fix the types"))))))))))))))
+                  (append_int
+                    ": cert premise surface {"
+                    (append_int
+                      (show_fams surface)
+                      "} exceeds the glue contract — a bin signs no exceptions; fix the types"))))))))))))
 
 (fn run_bin ((b Bin) (certp (List Int)) (w World)) World
   (match b

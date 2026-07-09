@@ -23,9 +23,12 @@
 #                   carry no OUT field: stdout must be EMPTY (contract 5a writes
 #                   nothing). Write-variant lines carry 'OUT <hex|->': stdout
 #                   must be exactly those bytes (contract 5b: sys_write(1, BUF,
-#                   len), exit 0). One pool argument is 300 chars, pinning the
-#                   MAXLEN=255 truncation clause (5a: expected exit 255; 5b:
-#                   exactly 255 bytes out).
+#                   len), exit 0). WORLD-bin lines (docs/X86.md §47) carry
+#                   'EXIT n OUT <hex|->' both no-arg and two-arg: the expected
+#                   stdout/exit come from evaluating xrun_w — the bin equation
+#                   at ground values. One pool argument is 300 chars, pinning
+#                   the MAXLEN=255 truncation clause (5a: expected exit 255;
+#                   5b: exactly 255 bytes out).
 # Exit 0 = a fully gated, plainly-executable artifact. Run from the repo root.
 set -uo pipefail
 [ $# -eq 2 ] || { echo "usage: lowbuild_bin_x86.sh SRC OUT"; exit 2; }
@@ -161,16 +164,18 @@ while read -r _bv hexarg _e want _kw outhex; do
   fi
 done < <(grep '^BVEC ' "$TMP/be.txt")
 
-# two-arg vectors (BVEC2 hex1 hex2 EXIT n) — exit variant: stdout must be empty
-while read -r _bv hex1 hex2 _e want; do
-  : > "$TMP/want.out"
+# two-arg vectors (BVEC2 hex1 hex2 EXIT n [OUT hex]) — exit-variant lines
+# carry no OUT field (stdout must be empty); the WORLD bin's lines carry
+# the model-predicted stdout (docs/X86.md §47: xrun_w's WExit trace)
+while read -r _bv hex1 hex2 _e want _kw outhex; do
+  want_out "$outhex"
   if [ "$hex1" = "-" ]; then a1=""; else a1=$(printf '%s' "$hex1" | xxd -r -p); fi
   if [ "$hex2" = "-" ]; then a2=""; else a2=$(printf '%s' "$hex2" | xxd -r -p); fi
   "$TMP/a.bin" "$a1" "$a2" > "$TMP/got.out"; code=$?
   if [ "$code" = "$want" ] && cmp -s "$TMP/got.out" "$TMP/want.out"; then
-    echo "PASS engine <'${#a1}'+'${#a2}' byte args> -> exit $code"
+    echo "PASS engine <'${#a1}'+'${#a2}' byte args> -> exit $code, stdout $(wc -c < "$TMP/got.out") byte(s)"
   else
-    fail "engine two-arg (exit $code expected $want, stdout $(wc -c < "$TMP/got.out") expected 0 bytes)"
+    fail "engine two-arg (exit $code expected $want, stdout $(wc -c < "$TMP/got.out") expected $(wc -c < "$TMP/want.out") byte(s))"
   fi
 done < <(grep '^BVEC2 ' "$TMP/be.txt")
 

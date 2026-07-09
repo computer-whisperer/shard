@@ -499,7 +499,8 @@
          "x86 instruction outside the reflector (extend per emitter slice)")))))))))))))
     ((SSym x)
      (if (sym_eq x (quote XRet)) (RXIOk XRet)
-     (RXIErr "unknown bare x86 instruction")))
+     (if (sym_eq x (quote XSyscall)) (RXIOk XSyscall)
+     (RXIErr "unknown bare x86 instruction"))))
     (_ (RXIErr "instruction is not an application")))))
 
 (fn rxinstr_items ((tbl (List (Pair Symbol SExpr))) (d Int) (ss (List SExpr)))
@@ -1056,11 +1057,19 @@
     ((Cons (Pair j f) rest)
      (if (int_eq j i) (xlp_drop rest i) (Cons (Pair j f) (xlp_drop rest i))))))
 
+;; the claim's boundary application: the pure x86 heads, or the WORLD
+;; BIN's xrun_w (docs/X86.md §47) — module and index sit at the same
+;; positional slots in both, so one extractor serves both flavors
+(fn xlib_concl_items ((concl SExpr)) (Option (List SExpr))
+  (match (find_xcall concl)
+    ((Some items) (Some items))
+    (None (find_xrun_w concl))))
+
 (fn xlib_claim_slot ((gf SExpr)) (Option (Pair LSlot (List (Pair Int SExpr))))
   (match gf
     ((SList (Cons g (Cons _ (Cons _ (Cons concl Nil)))))
      (if (is_sym g (quote goal))
-       (match (find_xcall concl)
+       (match (xlib_concl_items concl)
          (None None)
          ((Some items)
           (match items
@@ -1125,18 +1134,51 @@
        (_ (xlib_slots rest))))))
 
 ;; assemble positions 0..n-1, each covered by exactly one claim's literal
+;; a position's assembly source: its own claim's literal, or — the WORLD
+;; BIN case (docs/X86.md §47), where the entry's ONE claim spells every
+;; callee inline — a pinned copy at that index (any other copy of the
+;; same position is still diffed against the assembled bytes below)
+(fn xlib_src ((sls (List LSlot)) (cps (List (Pair Int SExpr))) (i Int))
+  (Option SExpr)
+  (match (ls_at sls i)
+    ((Some fs) (Some fs))
+    (None (xlp_at cps i))))
+
+(fn ls_ixmax ((sls (List LSlot)) (m Int)) Int
+  (measure (struct sls))
+  (match sls
+    (Nil m)
+    ((Cons sl rest)
+     (match sl
+       ((LSlot ix _ _) (ls_ixmax rest (if (lt m ix) ix m)))))))
+
+(fn xlp_ixmax ((cps (List (Pair Int SExpr))) (m Int)) Int
+  (measure (struct cps))
+  (match cps
+    (Nil m)
+    ((Cons (Pair j _) rest) (xlp_ixmax rest (if (lt m j) j m)))))
+
+;; the image size: one past the highest position any claim speaks about
+(fn xlib_n ((sls (List LSlot)) (cps (List (Pair Int SExpr)))) Int
+  (+ 1 (xlp_ixmax cps (ls_ixmax sls -1))))
+
 (fn xlib_asm
-  ((tbl (List (Pair Symbol SExpr))) (d Int) (sls (List LSlot)) (i Int) (n Int))
+  ((tbl (List (Pair Symbol SExpr)))
+   (d Int)
+   (sls (List LSlot))
+   (cps (List (Pair Int SExpr)))
+   (i Int)
+   (n Int))
   RXFS
   (measure (- n i) (by arith (list 1 0)) (by arith (list 1 1)))
   (if (le n i) (RXFSOk Nil)
-  (match (ls_at sls i)
+  (match (xlib_src sls cps i)
     (None (RXFSErr "a module position has no covering claim"))
     ((Some fs)
      (match (rxfunc tbl d fs)
        ((RXFErr m) (RXFSErr m))
        ((RXFOk fu)
-        (match (xlib_asm tbl d sls (+ i 1) n)
+        (match (xlib_asm tbl d sls cps (+ i 1) n)
           ((RXFSOk more) (RXFSOk (Cons fu more)))
           ((RXFSErr m) (RXFSErr m)))))))))
 
@@ -1197,7 +1239,7 @@
   (match (xlib_slots forms)
     (None (SErr2 "a lowered_ claim in an x86 lib file is not in the lib form"))
     ((Some (Pair sls copies))
-     (match (xlib_asm tbl d sls 0 (lslen sls))
+     (match (xlib_asm tbl d sls copies 0 (xlib_n sls copies))
        ((RXFSErr m) (SErr2 m))
        ((RXFSOk fs)
         (match (xlib_copies_ok tbl d copies fs)
