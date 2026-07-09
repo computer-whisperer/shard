@@ -1,0 +1,219 @@
+;;; models/x86/world.shard — the WORLD LAYER (docs/X86.md §32, slice W2):
+;;; the x86-Linux composition of the machine model (models/x86/x86.shard)
+;;; and the kernel model (models/linux/kernel.shard).
+;;;
+;;; STRUCTURE — a weval_* family MIRRORING the base evaluator's recursion
+;;; exactly (same fuel discipline, same control arms), threading a world
+;;; and accumulating a trace. Every LEAF instruction delegates to
+;;; xeval_instr AT THE SAME FUEL — for effect-free code the two towers
+;;; agree definitionally arm-by-arm, and the ADEQUACY THEOREM (§32
+;;; amendment) pins the mirrored control arms. The three code-carrying
+;;; ctors (block/loop/call) recurse in-world because their bodies may
+;;; contain effect-points; XSyscall applies the kernel transition and
+;;; CONTINUES — no stop, no continuation capture.
+;;;
+;;; DEVIATION FROM THE §32 SKETCH (recorded in the W2 ledger entry): the
+;;; call arm does NOT dispatch on a static purity predicate to xrun_regs —
+;;; xeval_call burns a fuel unit at the boundary and xrun_regs does not,
+;;; so predicate-dispatch would break EXACT adequacy. weval_call mirrors
+;;; the base uniformly; pure callees plug in through per-callee bridge
+;;; lemmas (emitted beside the xcert twins when composition arrives).
+;;;
+;;; THE x86-LINUX BINDING — this file owns what kernel.shard deliberately
+;;; does not: nr = rax, args = rdi/rsi/rdx (the first three syscall arg
+;;; homes ARE the first three SysV homes), the return lands in rax, and
+;;; the `syscall` instruction trashes rcx/r11 (rip/rflags) — modeled
+;;; faithfully-by-nondeterminism: the trash is DRAWN FROM THE ORACLE, so
+;;; no cert can depend on it. All three drawn values enter registers
+;;; through wrap64 (the register invariant is the world layer's to keep).
+;;;
+;;; TRACES are LOCAL: each evaluation returns the events IT produced;
+;;; sequencing prepends via wapp (transparent — std/list append is opaque
+;;; and would stick under compute). WExit is TERMINAL: sys_exit ends the
+;;; process mid-function and percolates like a trap — but carrying the
+;;; trace, because a bin's whole contract is ONE equation about it:
+;;;   (= (xrun_w F m ENTRY rs mem w) (Some (WExit code trace)))
+
+(import "../../kernel/stdlib.shard")
+(import "../../std/mem")
+(use (:: std mem *))
+(import "x86.shard")
+(use (:: models x86 x86 *))
+(import "../linux/kernel.shard")
+(use (:: models linux kernel *))
+
+;; --- outcomes: XOut + world + trace, plus the terminal exit ---------------------
+
+(type WOut
+  (WNorm Regs Mem LxWorld (List LxEvent))
+  (WBrk Int Regs Mem LxWorld (List LxEvent))
+  (WRetO Regs Mem LxWorld (List LxEvent))
+  (WExit Int (List LxEvent))
+  (WTrap))
+
+;; transparent trace append (std/list's is opaque; models compute)
+(fn wapp ((a (List LxEvent)) (b (List LxEvent))) (List LxEvent)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (wapp t b)))))
+
+;; prepend already-produced events to a continuation's outcome
+(fn wtr_pre ((tr (List LxEvent)) (out WOut)) WOut
+  (match out
+    ((WNorm rs mem w tr2) (WNorm rs mem w (wapp tr tr2)))
+    ((WBrk d rs mem w tr2) (WBrk d rs mem w (wapp tr tr2)))
+    ((WRetO rs mem w tr2) (WRetO rs mem w (wapp tr tr2)))
+    ((WExit c tr2) (WExit c (wapp tr tr2)))
+    (WTrap WTrap)))
+
+;; exiting a block — the base xblock_exit, trace riding along
+(fn wblock_exit ((out WOut)) WOut
+  (match out
+    ((WNorm rs mem w tr) (WNorm rs mem w tr))
+    ((WBrk d rs mem w tr)
+     (if (int_eq d 0) (WNorm rs mem w tr) (WBrk (- d 1) rs mem w tr)))
+    ((WRetO rs mem w tr) (WRetO rs mem w tr))
+    ((WExit c tr) (WExit c tr))
+    (WTrap WTrap)))
+
+;; --- the effect-point: the x86-Linux binding of lx_step ---------------------------
+
+;; nr = rax, args = rdi/rsi/rdx; on an answering syscall the return and
+;; the rcx/r11 trash are the NEXT THREE oracle values (ret via lx_step,
+;; the two trash draws here); on exit nothing more is consumed.
+(fn wsyscall ((rs Regs) (mem Mem) (w LxWorld)) (Option WOut)
+  (match (lx_step (rget rs RAX) (rget rs RDI) (rget rs RSI) (rget rs RDX) mem w)
+    (None None)
+    ((Some st)
+     (match st
+       ((LxGo r w2 ev)
+        (match (lxans_of w2)
+          (Nil None)
+          ((Cons c1 t1)
+           (match t1
+             (Nil None)
+             ((Cons c2 t2)
+              (Some
+                (WNorm
+                  (rset
+                    (rset (rset rs RAX (wrap64 r)) RCX (wrap64 c1))
+                    R11
+                    (wrap64 c2))
+                  mem
+                  (with_lxans t2 w2)
+                  (Cons ev Nil))))))))
+       ((LxEnd c ev) (Some (WExit c (Cons ev Nil))))))))
+
+;; --- the interpreter twin (one fuel-countdown SCC, mirroring the base) ------------
+
+(fn weval_instr
+  ((fuel Nat) (m XModule) (i XInstr) (rs Regs) (mem Mem) (w LxWorld))
+  (Option WOut)
+  (measure (struct fuel))
+  (match fuel
+    (Z None)
+    ((S f2)
+     (match i
+       ((XBlock body)
+        (match (weval_seq f2 m body rs mem w)
+          (None None)
+          ((Some out) (Some (wblock_exit out)))))
+       ((XLoop body) (weval_loop f2 m body rs mem w))
+       ((XCall k) (weval_call f2 m k rs mem w))
+       (XSyscall (wsyscall rs mem w))
+       ;; every LEAF delegates to the base AT THE SAME FUEL — for
+       ;; effect-free code the towers agree arm-by-arm, definitionally
+       (other
+         (match (xeval_instr fuel m i rs mem)
+           (None None)
+           ((Some out)
+            (match out
+              ((XNorm rs2 mem2) (Some (WNorm rs2 mem2 w Nil)))
+              ((XBrk d rs2 mem2) (Some (WBrk d rs2 mem2 w Nil)))
+              ((XRetO rs2 mem2) (Some (WRetO rs2 mem2 w Nil)))
+              (XTrap (Some WTrap))))))))))
+
+(fn weval_call ((fuel Nat) (m XModule) (k Int) (rs Regs) (mem Mem) (w LxWorld))
+  (Option WOut)
+  (measure (struct fuel))
+  (match fuel
+    (Z None)
+    ((S f2)
+     (match (xfunc_at (xfuncs_of m) k)
+       (None (Some WTrap))
+       ((Some f)
+        (match (weval_seq f2 m (xbody_of f) rs mem w)
+          (None None)
+          ((Some out)
+           (match out
+             ((WNorm rs2 mem2 w2 tr) (Some (WNorm rs2 mem2 w2 tr)))
+             ((WRetO rs2 mem2 w2 tr) (Some (WNorm rs2 mem2 w2 tr)))
+             ((WBrk d rs2 mem2 w2 tr) (Some WTrap))
+             ((WExit c tr) (Some (WExit c tr)))
+             (WTrap (Some WTrap))))))))))
+
+(fn weval_loop
+  ((fuel Nat) (m XModule) (body (List XInstr)) (rs Regs) (mem Mem) (w LxWorld))
+  (Option WOut)
+  (measure (struct fuel))
+  (match fuel
+    (Z None)
+    ((S f2)
+     (match (weval_seq f2 m body rs mem w)
+       (None None)
+       ((Some out)
+        (match out
+          ((WNorm rs2 mem2 w2 tr) (Some (WNorm rs2 mem2 w2 tr)))
+          ((WBrk d rs2 mem2 w2 tr)
+           (if (int_eq d 0)
+             (match (weval_loop f2 m body rs2 mem2 w2)
+               (None None)
+               ((Some out2) (Some (wtr_pre tr out2))))
+             (Some (WBrk (- d 1) rs2 mem2 w2 tr))))
+          ((WRetO rs2 mem2 w2 tr) (Some (WRetO rs2 mem2 w2 tr)))
+          ((WExit c tr) (Some (WExit c tr)))
+          (WTrap (Some WTrap))))))))
+
+(fn weval_seq
+  ((fuel Nat) (m XModule) (is (List XInstr)) (rs Regs) (mem Mem) (w LxWorld))
+  (Option WOut)
+  (measure (struct fuel))
+  (match fuel
+    (Z None)
+    ((S f2)
+     (match is
+       (Nil (Some (WNorm rs mem w Nil)))
+       ((Cons i rest)
+        (match (weval_instr f2 m i rs mem w)
+          (None None)
+          ((Some out)
+           (match out
+             ((WNorm rs2 mem2 w2 tr)
+              (match (weval_seq f2 m rest rs2 mem2 w2)
+                (None None)
+                ((Some out2) (Some (wtr_pre tr out2)))))
+             ((WBrk d rs2 mem2 w2 tr) (Some (WBrk d rs2 mem2 w2 tr)))
+             ((WRetO rs2 mem2 w2 tr) (Some (WRetO rs2 mem2 w2 tr)))
+             ((WExit c tr) (Some (WExit c tr)))
+             (WTrap (Some WTrap))))))))))
+
+;; --- the big-step denotation (the world-layer composition boundary) ---------------
+
+;; xrun_regs's twin: fuel is NOT burned at the boundary, an in-flight
+;; branch or trap is None — and WExit SURVIVES, because a bin's contract
+;; is one equation about it.
+(fn xrun_w ((fuel Nat) (m XModule) (k Int) (rs Regs) (mem Mem) (w LxWorld))
+  (Option WOut)
+  (match (xfunc_at (xfuncs_of m) k)
+    (None None)
+    ((Some f)
+     (match (weval_seq fuel m (xbody_of f) rs mem w)
+       (None None)
+       ((Some out)
+        (match out
+          ((WNorm rs2 mem2 w2 tr) (Some (WNorm rs2 mem2 w2 tr)))
+          ((WRetO rs2 mem2 w2 tr) (Some (WNorm rs2 mem2 w2 tr)))
+          ((WBrk d rs2 mem2 w2 tr) None)
+          ((WExit c tr) (Some (WExit c tr)))
+          (WTrap None)))))))
