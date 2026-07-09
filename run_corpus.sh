@@ -128,6 +128,7 @@ TARGETS=(
   examples/xtransform_probe.shard
   examples/xfoldloop_probe.shard
   examples/xdiv_probe.shard
+  examples/lxkernel_probe.shard
   examples/x86div_src.shard
   examples/x86div_out.shard
   examples/xbinsum_probe.shard

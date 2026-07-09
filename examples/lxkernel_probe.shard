@@ -1,0 +1,58 @@
+;;; examples/lxkernel_probe.shard — ground pins for the Linux kernel model
+;;; (models/linux/kernel.shard, docs/X86.md §32 slice W1). These are the
+;;; model's defining observations, stated small: the exit truncation, the
+;;; write event carrying the OFFERED bytes (read back from a QUANTIFIED
+;;; memory — mem is opaque, so ground bytes would go stuck), the oracle
+;;; advancing, and the two refusals (exhausted oracle, unmodeled nr).
+;;; The differential twin — the REAL kernel agreeing with these arms —
+;;; is the W3 gate's business; this file pins what the arms SAY.
+
+(import "../kernel/stdlib.shard")
+(import "../std/mem")
+(use (:: std mem *))
+(import "../models/linux/kernel.shard")
+(use (:: models linux kernel *))
+
+;; exit: terminal, code passed through
+(claim lxp_exit
+  (goal ((mem Mem)) ()
+    (= (lx_step 60 7 0 0 mem (MkLxWorld Nil)) (Some (LxEnd 7 (LxExited 7)))))
+  (steps ((compute both)) refl))
+
+;; exit: the kernel keeps only the wait-status byte (300 & 0xFF = 44)
+(claim lxp_exit_trunc
+  (goal ((mem Mem)) ()
+    (= (lx_step 60 300 0 0 mem (MkLxWorld Nil)) (Some (LxEnd 44 (LxExited 44)))))
+  (steps ((compute both)) refl))
+
+;; write: one oracle answer consumed, the event records the offered bytes
+(claim lxp_write
+  (goal ((mem Mem)) ()
+    (=
+      (lx_step 1 1 100 2 mem (MkLxWorld (list 2)))
+      (Some
+        (LxGo
+          2
+          (MkLxWorld Nil)
+          (LxWrote 1 (Cons (mem_get mem 100) (Cons (mem_get mem 101) Nil)))))))
+  (steps ((compute both)) refl))
+
+;; write of length zero: an answer is still consumed, the offer is empty
+(claim lxp_write_z
+  (goal ((mem Mem)) ()
+    (=
+      (lx_step 1 1 100 0 mem (MkLxWorld (list 0)))
+      (Some (LxGo 0 (MkLxWorld Nil) (LxWrote 1 Nil)))))
+  (steps ((compute both)) refl))
+
+;; write against an exhausted oracle: None — the world-layer resource
+;; convention, exactly like fuel
+(claim lxp_dry
+  (goal ((mem Mem)) () (= (lx_step 1 1 100 2 mem (MkLxWorld Nil)) None))
+  (steps ((compute both)) refl))
+
+;; an unmodeled syscall number is REFUSED, never guessed
+(claim lxp_unmodeled
+  (goal ((mem Mem) (ws (List Int))) ()
+    (= (lx_step 999 0 0 0 mem (MkLxWorld ws)) None))
+  (steps ((compute both)) refl))

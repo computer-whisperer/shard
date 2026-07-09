@@ -1,0 +1,92 @@
+;;; models/linux/kernel.shard — the Linux kernel MODEL (docs/X86.md §32,
+;;; the World-effect rung, slice W1): the written-in-shard TRUST LOCUS for
+;;; effects.
+;;;
+;;; TRUST STATUS — this file is to the kernel what models/x86/x86.shard is
+;;; to silicon: a DEFINITIONAL transition function whose fidelity is
+;;; empirical, checked by differential gates (real stdout/exit vs the
+;;; model-predicted trace) and carried as a LEDGER TRUST KIND beside the
+;;; x86 one. It contains NO in-language axioms (the models tree is
+;;; theorem-only); "Linux does what this file says" is a reviewed,
+;;; gate-checked trust, never a proof step. Shim certs are THEOREMS over
+;;; this model — the §32 supersession of the axiom-pedigree shim plan.
+;;;
+;;; VOCABULARY — platform-neutral: events speak fds and bytes, NEVER
+;;; registers. The x86-Linux binding (nr = rax, args = rdi/rsi/rdx, the
+;;; `syscall` instruction's rcx/r11 trash) lives in the world layer
+;;; (models/x86/world.shard), not here. On another platform the same
+;;; events are discharged against that platform's own boundary.
+;;;
+;;; WORLD-AS-ORACLE — the kernel is nondeterministic (short writes,
+;;; errno); determinism is restored by making nondeterminism an INPUT.
+;;; A world carries the stream of syscall answers; lx_step consumes one
+;;; per answering syscall and the RETURN IS UNCONSTRAINED — specs
+;;; quantify over worlds, which is the strongest reading. An exhausted
+;;; stream is None: the world-layer resource convention, exactly like
+;;; fuel. Events record what the program OFFERED (a write's bytes are
+;;; read back from memory), so v1 contracts are unconditional.
+;;;
+;;; v1 COVERAGE — write (nr 1) and exit (nr 60), the closed set the
+;;; permanent output channel needs. Unmodeled nr = None: refused, never
+;;; guessed. NAMED GROWTH (each lands only with a consumer): EFAULT/
+;;; window checking on buffers, read (memory-out leg), open/close (fd
+;;; table state in the world), mmap/brk (machine-model window growth),
+;;; fork (process-tree traces), per-used-ioctl arms.
+
+(import "../../kernel/stdlib.shard")
+(import "../../std/mem")
+(use (:: std mem *))
+
+;; --- events: the trace vocabulary contracts are stated over ---------------------
+
+;; LxWrote fd bytes — the program offered these bytes on this fd;
+;; LxExited code — the process ended with this wait-status byte.
+(type LxEvent (LxWrote Int (List Int)) (LxExited Int))
+
+;; --- the world: the oracle stream ------------------------------------------------
+
+;; v1: a stream of Ints, one consumed per answering syscall (the return
+;; value). Platform layers may consume additional entropy from the same
+;; stream (the x86 layer draws the syscall instruction's rcx/r11 trash
+;; here too). Later syscall families grow this record (fd tables, ...).
+(record LxWorld (lxans (List Int)))
+
+;; --- the transition result --------------------------------------------------------
+
+;; LxGo ret w' ev — the syscall answered: ret to the program, the world
+;; advanced, one event recorded. LxEnd code ev — terminal (sys_exit):
+;; control never returns; the event closes the trace.
+(type LxStep (LxGo Int LxWorld LxEvent) (LxEnd Int LxEvent))
+
+;; --- byte readback (what a write OFFERS) ------------------------------------------
+
+;; reads n bytes at p, counting i up; mem_get is total (mask-on-read), so
+;; the offered bytes are well-defined for any pointer — EFAULT modeling is
+;; named growth, not silent behavior.
+(fn lx_read_r ((mem Mem) (p Int) (i Int) (n Int)) (List Int)
+  (measure (- n i) (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt i n) (Cons (mem_get mem (+ p i)) (lx_read_r mem p (+ i 1) n)) Nil))
+
+(fn lx_read ((mem Mem) (p Int) (n Int)) (List Int) (lx_read_r mem p 0 n))
+
+;; --- syscall numbers (the closed v1 set, exported for shim emitters) --------------
+
+(fn lx_nr_write () Int 1)
+
+(fn lx_nr_exit () Int 60)
+
+;; --- the transition ----------------------------------------------------------------
+
+;; lx_step nr a1 a2 a3 mem w. write: fd = a1, buf = a2, len = a3; the
+;; return comes from the oracle. exit: code = a1, truncated to the
+;; wait-status byte exactly as the kernel does (args are wrap64-maintained
+;; nonneg, so mod IS the masking). Anything else: None — refused.
+(fn lx_step ((nr Int) (a1 Int) (a2 Int) (a3 Int) (mem Mem) (w LxWorld))
+  (Option LxStep)
+  (if (int_eq nr 1)
+    (match (lxans_of w)
+      (Nil None)
+      ((Cons r rest)
+       (Some (LxGo r (MkLxWorld rest) (LxWrote a1 (lx_read mem a2 a3))))))
+  (if (int_eq nr 60) (Some (LxEnd (mod a1 256) (LxExited (mod a1 256))))
+  None)))
