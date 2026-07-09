@@ -676,8 +676,9 @@
 
 ;; ---- Int-return loop recognition --------------------------------------------------
 
-;; per-accum update classification for the Int-return shape
-(type LUpd (LUStr LStr) (LUSum Int))
+;; per-accum update classification for the Int-return shape: static/stride,
+;; the sum read, or the decimal fold (read accum, multiplier, subtrahend)
+(type LUpd (LUStr LStr) (LUSum Int) (LUFold Int Int Int))
 
 ;; LIOk = the sum shape; LCOk = the SCAN shape (conditional early exit
 ;; against a byte literal: strides have r = LSInc, everything else
@@ -686,42 +687,118 @@
 ;; accums a b advance, everything else static)
 (type LIRec
   (LIOk (List LStr) Int Int)
+  (LFOk (List LStr) Int Int Int Int)
   (LCOk (List LStr) Int Int)
   (LBOk (List LStr) Int Int)
   (LIErr (List Int)))
 
-;; one update: static / +1 / -1 (via lp_upd) or the sum shape
-;; (+ SELF (mem_get m ACCUM-j))
+;; one machine wrap: (mod E 2^64) — peels to E
+(fn li_w64 ((e Expr)) (Option Expr)
+  (match e
+    ((Call q as)
+     (if (core_named q (quote mod))
+       (match as
+         ((Cons b (Cons w Nil))
+          (match w
+            ((IntLit ww) (if (int_eq ww 18446744073709551616) (Some b) None))
+            (_ None)))
+         (_ None))
+       None))
+    (_ None)))
+
+;; the S-arm data read `(mem_get m ACCUM-j)` — the sum/fold source
+;; (adv-ness is checked later, at li_sarm, once the stride roster exists)
+(fn li_read ((e Expr) (n Int)) (Option Int)
+  (match e
+    ((Call qm ms)
+     (if (memq_named qm (quote mem_get))
+       (match ms
+         ((Cons marg (Cons aarg Nil))
+          (if (lp_is_mem_arg marg n) (lp_acc aarg n) None))
+         (_ None))
+       None))
+    (_ None)))
+
+;; the sum shape: (+ SELF (mem_get m ACCUM-j))
+(fn li_sum ((u Expr) (n Int) (i Int)) (Option LUpd)
+  (match u
+    ((Call q as)
+     (if (core_named q (quote +))
+       (match as
+         ((Cons a (Cons b Nil))
+          (match a
+            ((BVar ab)
+             (if (int_eq ab (- (+ n 1) i))
+               (match (li_read b n)
+                 ((Some j) (Some (LUSum j)))
+                 (None None))
+               None))
+            (_ None)))
+         (_ None))
+       None))
+    (_ None)))
+
+;; the decimal-fold shape — the machine's three wrap64 writes spelled in
+;; the source (§11's law; examples/xfoldloop_probe is the design article):
+;; (mod (- (mod (+ (mod (* SELF A) W) (mem_get m ACCUM-j)) W) C) W)
+(fn li_fold ((u Expr) (n Int) (i Int)) (Option LUpd)
+  (match (li_w64 u)
+    (None None)
+    ((Some e1)
+     (match e1
+       ((Call qs sas)
+        (if (core_named qs (quote -))
+          (match sas
+            ((Cons e2w (Cons cl Nil))
+             (match cl
+               ((IntLit c)
+                (match (li_w64 e2w)
+                  (None None)
+                  ((Some e2)
+                   (match e2
+                     ((Call qa aas)
+                      (if (core_named qa (quote +))
+                        (match aas
+                          ((Cons e3w (Cons rd Nil))
+                           (match (li_w64 e3w)
+                             (None None)
+                             ((Some e3)
+                              (match e3
+                                ((Call qm mas)
+                                 (if (core_named qm (quote *))
+                                   (match mas
+                                     ((Cons sv (Cons al Nil))
+                                      (match sv
+                                        ((BVar ab)
+                                         (if (int_eq ab (- (+ n 1) i))
+                                           (match al
+                                             ((IntLit a)
+                                              (match (li_read rd n)
+                                                ((Some j) (Some (LUFold j a c)))
+                                                (None None)))
+                                             (_ None))
+                                           None))
+                                        (_ None)))
+                                     (_ None))
+                                   None))
+                                (_ None)))))
+                          (_ None))
+                        None))
+                     (_ None)))))
+               (_ None)))
+            (_ None))
+          None))
+       (_ None)))))
+
+;; one update: static / +1 / -1 (via lp_upd), the sum shape, or the
+;; decimal-fold shape
 (fn li_upd ((u Expr) (n Int) (i Int)) (Option LUpd)
   (match (lp_upd u n i)
     ((Some f) (Some (LUStr f)))
     (None
-      (match u
-        ((Call q as)
-         (if (core_named q (quote +))
-           (match as
-             ((Cons a (Cons b Nil))
-              (match a
-                ((BVar ab)
-                 (if (int_eq ab (- (+ n 1) i))
-                   (match b
-                     ((Call qm ms)
-                      (if (memq_named qm (quote mem_get))
-                        (match ms
-                          ((Cons marg (Cons aarg Nil))
-                           (if (lp_is_mem_arg marg n)
-                             (match (lp_acc aarg n)
-                               ((Some j) (Some (LUSum j)))
-                               (None None))
-                             None))
-                          (_ None))
-                        None))
-                     (_ None))
-                   None))
-                (_ None)))
-             (_ None))
-           None))
-        (_ None)))))
+      (match (li_sum u n i)
+        ((Some s) (Some s))
+        (None (li_fold u n i))))))
 
 (fn li_updk ((us (List Expr)) (n Int) (i Int)) (Option (List LUpd))
   (measure (struct us))
@@ -766,15 +843,27 @@
          (_ None))
        (li_sum_at t (- r 1))))))
 
-;; no accum other than r may carry a sum update
+;; the fold update at accum r, if accum r's update is LUFold
+(fn li_fold_at ((us (List LUpd)) (r Int)) (Option LUpd)
+  (measure (struct us))
+  (match us
+    (Nil None)
+    ((Cons h t)
+     (if (int_eq r 0)
+       (match h
+         ((LUFold j a c) (Some (LUFold j a c)))
+         (_ None))
+       (li_fold_at t (- r 1))))))
+
+;; no accum other than r may carry a DATA update (sum or fold)
 (fn li_only_sum ((us (List LUpd)) (r Int) (i Int)) Bool
   (measure (struct us))
   (match us
     (Nil True)
     ((Cons h t)
      (match h
-       ((LUSum _) (if (int_eq i r) (li_only_sum t r (+ i 1)) False))
-       (_ (li_only_sum t r (+ i 1)))))))
+       ((LUStr _) (li_only_sum t r (+ i 1)))
+       (_ (if (int_eq i r) (li_only_sum t r (+ i 1)) False))))))
 
 ;; Z arm: (Z ACCUM) — the returned accumulator (Z-arm context: accum i
 ;; sits at BVar (n-i), no peeled binder)
@@ -802,20 +891,25 @@
             (match (li_updk rest n 0)
               (None
                 (LIErr
-                  "self-call updates must be ACCUM, (+ ACCUM 1), or (+ ACCUM (mem_get m ADV)), ending in the peeled counter"))
+                  "self-call updates must be ACCUM, (+ ACCUM 1), (+ ACCUM (mem_get m ADV)), or the wrap64-spelled decimal fold, ending in the peeled counter"))
               ((Some us)
-               (match (li_sum_at us r)
-                 (None
-                   (LIErr
-                     "the returned accumulator's update must be (+ ACC (mem_get m ADV-ACCUM))"))
-                 ((Some j)
-                  (if (li_only_sum us r 0)
-                    (let ((adv (li_advflags us)))
+               (if (li_only_sum us r 0)
+                 (let ((adv (li_advflags us)))
+                   (match (li_sum_at us r)
+                     ((Some j)
                       (if (ls_adv (ls_at adv j)) (LIOk adv r j)
                       (LIErr
                         "the summed read's address must be an ADVANCING accumulator")))
-                    (LIErr
-                      "only the returned accumulator may accumulate a read"))))))
+                     (None
+                       (match (li_fold_at us r)
+                         ((Some (LUFold j a c))
+                          (if (ls_adv (ls_at adv j)) (LFOk adv r j a c)
+                          (LIErr
+                            "the folded read's address must be an ADVANCING accumulator")))
+                         (_
+                           (LIErr
+                             "the returned accumulator's update must be the sum (+ ACC (mem_get m ADV)) or the wrap64-spelled decimal fold"))))))
+                 (LIErr "only the returned accumulator may accumulate a read"))))
             (LIErr "Int-return loop must pass the Mem param through unchanged")))
          (Nil
            (LIErr
