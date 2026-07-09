@@ -87,6 +87,11 @@
 (use (:: kernel term QName))
 (use (:: kernel term qn_name))
 (use (:: kernel term core_named))
+(use (:: kernel term Match))
+(use (:: kernel term Arm))
+(use (:: kernel term Pat))
+(use (:: kernel term PVar))
+(use (:: kernel term PCtor))
 (use (:: kernel term append_int))
 (use (:: kernel module Module))
 (use (:: kernel module FnDef))
@@ -797,6 +802,7 @@
 (fn xg_claim ((f FnDef) (pfx Int)) XCR
   (if (fn_is_loop f) (xg_claim_loop f (xw_hlo) (xw_hhi))
   (if (fn_is_mem f) (xg_claim_mem f (xw_hlo) (xw_hhi))
+  (if (fn_is_dwptr f) (xg_claim_dwptr f (xw_hlo) (xw_hhi))
   (match f
     ((FnDef q ts rty body)
      (if (all_int ts)
@@ -821,7 +827,7 @@
              q
              "more than six Int params (SysV register homes only in v1)"))
          (xerr_at q "return type is not Int"))
-       (xerr_at q "params are not all Int")))))))
+       (xerr_at q "params are not all Int"))))))))
 
 ;; ---- the loop fragment (docs/X86.md §14): Nat-counted store loops --------------
 ;;
@@ -1498,6 +1504,840 @@
           ") lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((rewrite (premise 1) lr lhs true ())) refl))) (steps ((compute both))) refl))")
         (DStr (nl))))))
 
+;; ---- the DO-WHILE (value-condition) loop family (docs/X86.md §38-§41;
+;; ---- probe examples/xitoa_probe.shard — the itoa design article) ---------------
+;;
+;; The trip count is a function of the DATA (loop while the quotient is
+;; nonzero); the Nat is a GHOST bound the machine never sees — machine
+;; args are the Ints only, and the premise surface is the §11 pair on n,
+;; the ghost power bound, and the DOWNWARD window pair. Two shapes:
+;;
+;;   STORE ((m Mem) (n Int) (p Int) (k Nat)) -> Mem   (digits, predecrement)
+;;     (match k (Z m) ((S k2)
+;;       (let ((m2 (mem_set m (- p 1) (mod (+ (mod n D) C) W))))
+;;         (if (int_eq (ediv n D) 0) m2 (SELF m2 (ediv n D) (- p 1) k2)))))
+;;   POINTER ((n Int) (p Int) (k Nat)) -> Int          (the start-pointer twin)
+;;     (match k (Z p) ((S k2)
+;;       (if (int_eq (ediv n D) 0) (- p 1) (SELF (ediv n D) (- p 1) k2))))
+;;
+;; Emitted per unit: body/func literals, the D-spliced spec companions
+;; (pow/hd, + len for the store shape), FOUR div guards through the
+;; kernel div-facts step (fact order [id, rlo, rhi, qdef]; multipliers
+;; divisor-spliced, probe-pinned), the worker induction (xdww_*/xdpw_*,
+;; the §39 proof templated), and the lowered theorem. The divisor-free
+;; template constants are loopkit's xlg_qinv / xlg_dw*. D and C are
+;; imm32 literals; window low is pinned 0 (the harness page and the bin
+;; page both).
+
+;; (mod E 2^64) -> E
+(fn xdw_w64 ((e Expr)) (Option Expr)
+  (match e
+    ((Call q as)
+     (if (core_named q (quote mod))
+       (match as
+         ((Cons b (Cons w Nil))
+          (match w
+            ((IntLit ww) (if (int_eq ww 18446744073709551616) (Some b) None))
+            (_ None)))
+         (_ None))
+       None))
+    (_ None)))
+
+;; (- (BVar pi) 1)
+(fn xdw_p1 ((e Expr) (pi Int)) Bool
+  (match e
+    ((Call q as)
+     (if (core_named q (quote -))
+       (match as
+         ((Cons a (Cons b Nil))
+          (match a
+            ((BVar ab)
+             (if (int_eq ab pi)
+               (match b
+                 ((IntLit bb) (int_eq bb 1))
+                 (_ False))
+               False))
+            (_ False)))
+         (_ False))
+       False))
+    (_ False)))
+
+;; (ediv (BVar ni) D) -> D  (imm32, positive)
+(fn xdw_q ((e Expr) (ni Int)) (Option Int)
+  (match e
+    ((Call q as)
+     (if (core_named q (quote ediv))
+       (match as
+         ((Cons a (Cons b Nil))
+          (match a
+            ((BVar ab)
+             (if (int_eq ab ni)
+               (match b
+                 ((IntLit d)
+                  (if (lt 0 d) (if (lt d 2147483648) (Some d) None) None))
+                 (_ None))
+               None))
+            (_ None)))
+         (_ None))
+       None))
+    (_ None)))
+
+;; (int_eq (ediv (BVar ni) D) 0) -> D
+(fn xdw_cond ((e Expr) (ni Int)) (Option Int)
+  (match e
+    ((Call q as)
+     (if (core_named q (quote int_eq))
+       (match as
+         ((Cons a (Cons b Nil))
+          (match b
+            ((IntLit z) (if (int_eq z 0) (xdw_q a ni) None))
+            (_ None)))
+         (_ None))
+       None))
+    (_ None)))
+
+;; the stored byte (mod (+ (mod (BVar ni) D) C) W) -> (Pair D C)
+(fn xdw_byte ((e Expr) (ni Int)) (Option (Pair Int Int))
+  (match (xdw_w64 e)
+    (None None)
+    ((Some e1)
+     (match e1
+       ((Call qp pas)
+        (if (core_named qp (quote +))
+          (match pas
+            ((Cons md (Cons cl Nil))
+             (match cl
+               ((IntLit c)
+                (if (le 0 c)
+                  (if (lt c 2147483648)
+                    (match md
+                      ((Call qm mas)
+                       (if (core_named qm (quote mod))
+                         (match mas
+                           ((Cons a (Cons b Nil))
+                            (match a
+                              ((BVar ab)
+                               (if (int_eq ab ni)
+                                 (match b
+                                   ((IntLit d)
+                                    (if (lt 0 d)
+                                      (if (lt d 2147483648) (Some (Pair d c))
+                                      None)
+                                      None))
+                                   (_ None))
+                                 None))
+                              (_ None)))
+                           (_ None))
+                         None))
+                      (_ None))
+                    None)
+                  None))
+               (_ None)))
+            (_ None))
+          None))
+       (_ None)))))
+
+;; the store binding (mem_set (BVar mi) (- (BVar pi) 1) BYTE)
+(fn xdw_store ((e Expr) (mi Int) (pi Int) (ni Int)) (Option (Pair Int Int))
+  (match e
+    ((Call q as)
+     (if (memq_named q (quote mem_set))
+       (match as
+         ((Cons ma (Cons aa (Cons va Nil)))
+          (match ma
+            ((BVar mb)
+             (if (int_eq mb mi) (if (xdw_p1 aa pi) (xdw_byte va ni) None) None))
+            (_ None)))
+         (_ None))
+       None))
+    (_ None)))
+
+;; the let body (m2=0 k2=1 k=2 p=3 n=4 m=5):
+;; (if (int_eq (ediv n D) 0) m2 (SELF m2 (ediv n D) (- p 1) k2))
+(fn xdw_ltail ((self QName) (e Expr) (d Int)) Bool
+  (match e
+    ((If cnd thn els)
+     (match (xdw_cond cnd 4)
+       ((Some d2)
+        (if (int_eq d2 d)
+          (match thn
+            ((BVar t0)
+             (if (int_eq t0 0)
+               (match els
+                 ((Call q2 as)
+                  (if (qn_eq q2 self)
+                    (match as
+                      ((Cons a1 (Cons a2 (Cons a3 (Cons a4 Nil))))
+                       (match a1
+                         ((BVar b1)
+                          (if (int_eq b1 0)
+                            (match (xdw_q a2 4)
+                              ((Some d3)
+                               (if (int_eq d3 d)
+                                 (if (xdw_p1 a3 3)
+                                   (match a4
+                                     ((BVar b4) (int_eq b4 1))
+                                     (_ False))
+                                   False)
+                                 False))
+                              (None False))
+                            False))
+                         (_ False)))
+                      (_ False))
+                    False))
+                 (_ False))
+               False))
+            (_ False))
+          False))
+       (None False)))
+    (_ False)))
+
+(fn xdw_zarm ((pz Pat) (zb Expr) (mi Int)) Bool
+  (match pz
+    ((PCtor qz zps)
+     (match zps
+       (Nil
+         (if (core_named qz (quote Z))
+           (match zb
+             ((BVar mb) (int_eq mb mi))
+             (_ False))
+           False))
+       ((Cons _ _) False)))
+    (_ False)))
+
+(fn xdw_spat ((ps Pat)) Bool
+  (match ps
+    ((PCtor qs sps)
+     (if (core_named qs (quote S))
+       (match sps
+         ((Cons pv Nil)
+          (match pv
+            ((PVar) True)
+            (_ False)))
+         (_ False))
+       False))
+    (_ False)))
+
+;; the STORE shape -> (Pair D C)
+(fn xdw_shape ((self QName) (body Expr)) (Option (Pair Int Int))
+  (match body
+    ((Match scr arms)
+     (match scr
+       ((BVar b0)
+        (if (int_eq b0 0)
+          (match arms
+            ((Cons az (Cons asx Nil))
+             (match az
+               ((Arm pz zb)
+                (if (xdw_zarm pz zb 3)
+                  (match asx
+                    ((Arm ps sb)
+                     (if (xdw_spat ps)
+                       (match sb
+                         ((Let bs lbody)
+                          (match bs
+                            ((Cons st Nil)
+                             (match (xdw_store st 4 2 3)
+                               ((Some dc)
+                                (match dc
+                                  ((Pair d c)
+                                   (if (xdw_ltail self lbody d)
+                                     (Some (Pair d c))
+                                     None))))
+                               (None None)))
+                            (_ None)))
+                         (_ None))
+                       None)))
+                  None))))
+            (_ None))
+          None))
+       (_ None)))
+    (_ None)))
+
+;; the POINTER S arm (k2=0 k=1 p=2 n=3):
+;; (if (int_eq (ediv n D) 0) (- p 1) (SELF (ediv n D) (- p 1) k2))
+(fn xdp_sarm ((self QName) (e Expr)) (Option Int)
+  (match e
+    ((If cnd thn els)
+     (match (xdw_cond cnd 3)
+       ((Some d)
+        (if (xdw_p1 thn 2)
+          (match els
+            ((Call q2 as)
+             (if (qn_eq q2 self)
+               (match as
+                 ((Cons a1 (Cons a2 (Cons a3 Nil)))
+                  (match (xdw_q a1 3)
+                    ((Some d2)
+                     (if (int_eq d2 d)
+                       (if (xdw_p1 a2 2)
+                         (match a3
+                           ((BVar b3) (if (int_eq b3 0) (Some d) None))
+                           (_ None))
+                         None)
+                       None))
+                    (None None)))
+                 (_ None))
+               None))
+            (_ None))
+          None))
+       (None None)))
+    (_ None)))
+
+;; the POINTER shape -> D
+(fn xdp_shape ((self QName) (body Expr)) (Option Int)
+  (match body
+    ((Match scr arms)
+     (match scr
+       ((BVar b0)
+        (if (int_eq b0 0)
+          (match arms
+            ((Cons az (Cons asx Nil))
+             (match az
+               ((Arm pz zb)
+                (match pz
+                  ((PCtor qz zps)
+                   (match zps
+                     (Nil
+                       (if (core_named qz (quote Z))
+                         (match zb
+                           ((BVar pb)
+                            (if (int_eq pb 1)
+                              (match asx
+                                ((Arm ps sb)
+                                 (if (xdw_spat ps) (xdp_sarm self sb) None)))
+                              None))
+                           (_ None))
+                         None))
+                     ((Cons _ _) None)))
+                  (_ None)))))
+            (_ None))
+          None))
+       (_ None)))
+    (_ None)))
+
+;; the POINTER route (params (Int Int Nat), Int return — defeats both
+;; fn_is_loop and the all-Int path, so it gets its own xg_claim case)
+(fn fn_is_dwptr ((f FnDef)) Bool
+  (match f
+    ((FnDef _ ts rty body)
+     (match ts
+       ((Cons t0 (Cons t1 (Cons t2 Nil)))
+        (if (is_int_ty t0)
+          (if (is_int_ty t1)
+            (if (is_nat_ty t2)
+              (if (is_int_ty rty)
+                (match body
+                  ((Match _ _) True)
+                  (_ False))
+                False)
+              False)
+            False)
+          False))
+       (_ False)))))
+
+(fn xg_claim_dwptr ((f FnDef) (wl Int) (wh Int)) XCR
+  (match f
+    ((FnDef q ts rty body)
+     (match (xdp_shape q body)
+       ((Some d)
+        (if (int_eq wl 0) (XCOk (xdp_unit q d wh))
+        (xerr_at q "v1 do-while: the window low bound must be 0")))
+       (None
+         (xerr_at
+           q
+           "do-while pointer shape: (match k (Z p) ((S k2) (if (int_eq (ediv n D) 0) (- p 1) (SELF (ediv n D) (- p 1) k2))))"))))))
+
+(fn xdw_unit ((q QName) (d Int) (cc Int) (wh Int)) Doc
+  (let ((nm (dsym (qn_name q))))
+    (dconc
+      (list
+        (DStr "(fn ")
+        nm
+        (DStr
+          "_body () (List XInstr) (list (XMovRR RAX RDI) (XMovRI RDX 0) (XMovRI R10 ")
+        (dint d)
+        (DStr ") (XDivU R10) (XBin XAdd RDX (SImm ")
+        (dint cc)
+        (DStr
+          ")) (XBin XSub RSI (SImm 1)) (XStore8 (AReg RSI) (SReg RDX)) (XMovRR RDI RAX) (XBrIf (CNz RDI) 0) (XBr 1))) (fn ")
+        nm
+        (DStr "_func () XFunc (MkXFunc 2 (list (XBlock (list (XLoop (")
+        nm
+        (DStr "_body))))))) (fn ")
+        nm
+        (DStr
+          "_pow ((k Nat)) Int (measure (struct k)) (match k (Z 1) ((S k2) (* ")
+        (dint d)
+        (DStr " (")
+        nm
+        (DStr "_pow k2))))) (fn ")
+        nm
+        (DStr
+          "_hd ((n Int) (k Nat)) Int (measure (struct k)) (match k (Z 0) ((S k2) (if (int_eq (ediv n ")
+        (dint d)
+        (DStr ") 0) n (")
+        nm
+        (DStr "_hd (ediv n ")
+        (dint d)
+        (DStr ") k2))))) (fn ")
+        nm
+        (DStr
+          "_len ((n Int) (k Nat)) Int (measure (struct k)) (match k (Z 0) ((S k2) (if (int_eq (ediv n ")
+        (dint d)
+        (DStr ") 0) 1 (+ 1 (")
+        nm
+        (DStr "_len (ediv n ")
+        (dint d)
+        (DStr ") k2)))))) (claim xdg_")
+        nm
+        (DStr
+          " (goal ((x Int)) ((= (le 0 x) True) (= (lt x 18446744073709551616) True)) (= (lt (ediv x ")
+        (dint d)
+        (DStr ") 18446744073709551616) True)) (div-facts x ")
+        (dint d)
+        (DStr " q (by arith (list ")
+        (dint d)
+        (DStr " 0 1 1 1 0 ")
+        (dint (- 0 d))
+        (DStr ")))) (claim xdz_")
+        nm
+        (DStr " (goal ((n Int)) ((= (le 0 n) True) (= (lt n ")
+        (dint d)
+        (DStr ") True)) (= (ediv n ")
+        (dint d)
+        (DStr ") 0)) (div-facts n ")
+        (dint d)
+        (DStr " q (by arith (list (list ")
+        (dint d)
+        (DStr " 0 1 1 1 0 ")
+        (dint (- 0 d))
+        (DStr ") (list ")
+        (dint d)
+        (DStr " 1 0 -1 0 1 ")
+        (dint d)
+        (DStr "))))) (claim xdl_")
+        nm
+        (DStr " (goal ((n Int) (c Int)) ((= (le 0 n) True) (= (lt n (* ")
+        (dint d)
+        (DStr " c)) True)) (= (lt (ediv n ")
+        (dint d)
+        (DStr ") c) True)) (div-facts n ")
+        (dint d)
+        (DStr " q (by arith (list ")
+        (dint d)
+        (DStr " 0 1 1 1 0 ")
+        (dint (- 0 d))
+        (DStr ")))) (claim xdn_")
+        nm
+        (DStr " (goal ((n Int)) ((= (le 0 n) True)) (= (le 0 (ediv n ")
+        (dint d)
+        (DStr ")) True)) (div-facts n ")
+        (dint d)
+        (DStr " q (by arith (list ")
+        (dint d)
+        (DStr " 1 -1 0 1 ")
+        (dint d)
+        (DStr ")))) (claim xdww_")
+        nm
+        (DStr
+          " (goal ((a0 Int) (c0 Int) (d0 Int) (b0 Int) (p0 Int) (e8 Int) (e9 Int) (e10 Int) (e11 Int) (e12 Int) (e13 Int) (e14 Int) (e15 Int) (n Int) (p Int) (mem Mem) (c Nat) (k Nat) (restfs (List XFunc))) ((= (le 0 n) True) (= (lt n 18446744073709551616) True) (= (lt n (")
+        nm
+        (DStr
+          "_pow (S k))) True) (= (le (+ 1 (int_of_nat k)) p) True) (= (le p ")
+        (dint wh)
+        (DStr
+          ") True)) (= (xeval_loop (S^ 14 (xlg_fuel k c)) (MkXModule (Cons (MkXFunc 2 (list (XBlock (list (XLoop (inline ")
+        nm
+        (DStr "_body)))))) restfs) 0 ")
+        (dint wh)
+        (DStr ") (inline ")
+        nm
+        (DStr
+          "_body) (MkRegs a0 c0 d0 b0 p0 p n e8 e9 e10 e11 e12 e13 e14 e15) mem) (Some (XBrk 0 (MkRegs 0 c0 (mod (+ (mod (")
+        nm
+        (DStr "_hd n (S k)) ")
+        (dint d)
+        (DStr ") ")
+        (dint cc)
+        (DStr ") 18446744073709551616) b0 p0 (- p (")
+        nm
+        (DStr "_len n (S k))) 0 e8 e9 ")
+        (dint d)
+        (DStr " e11 e12 e13 e14 e15) (")
+        nm
+        (DStr
+          " mem n p (S k)))))) (induct k ((case Z (chain (steps ((compute lhs))) (have h0n (= (+ 0 n) n) (by arith (list (list 1) (list 1)))) (steps ((rewrite (premise h0n) lr lhs true ()))) (rewrite-with (lemma xdg_")
+        nm
+        (DStr
+          ") lr lhs ((inst x n)) ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((rewrite (premise 1) lr lhs true ())) refl))) (steps ((compute lhs))) (have hwp (= (mod (- p 1) 18446744073709551616) (- p 1)) (rewrite-with (lemma wrap64_id) lr lhs ((inst x (- p 1))) ((rewrite-with (lemma xlg_dwlo) lr lhs ((inst c Z)) ((steps ((rewrite (premise 3) lr lhs true ())) refl) (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)) refl) (rewrite-with (lemma xlg_dw64) lr lhs ((inst w ")
+        (dint wh)
+        (DStr
+          ")) ((steps ((rewrite (premise 4) lr lhs true ())) refl) (steps ((compute both)) refl)) refl)) refl)) (steps ((rewrite (premise hwp) lr lhs true ()))) (rewrite-with (lemma xlg_dwlo) lr lhs ((inst c Z)) ((steps ((rewrite (premise 3) lr lhs true ())) refl) (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))) (steps ((compute lhs))) (rewrite-with (lemma xlg_dwhi) lr lhs ((inst w ")
+        (dint wh)
+        (DStr
+          ")) ((steps ((rewrite (premise 4) lr lhs true ())) refl))) (steps ((compute lhs))) (have hqz (= (ediv n ")
+        (dint d)
+        (DStr ") 0) (rewrite-with (lemma xdz_")
+        nm
+        (DStr
+          ") lr lhs ((inst n n)) ((steps ((rewrite (premise 0) lr lhs true ())) refl) (chain (have hb (= ")
+        (dint d)
+        (DStr " (")
+        nm
+        (DStr
+          "_pow (S Z))) (steps ((compute rhs)) refl)) (steps ((rewrite (premise hb) lr lhs true ()) (rewrite (premise 2) lr lhs true ())) refl))) refl)) (steps ((rewrite (premise hqz) lr both true ()) (compute lhs))) (steps ((unfold ")
+        nm
+        (DStr "_len rhs) (unfold ")
+        nm
+        (DStr "_hd rhs) (unfold ")
+        nm
+        (DStr " rhs) (compute rhs (stop ")
+        nm
+        (DStr "_len ")
+        nm
+        (DStr "_hd ")
+        nm
+        (DStr
+          ")) (rewrite (premise hqz) lr rhs true ()) (compute both)) refl))) (case S (k3) (chain (steps ((unfold xlg_fuel lhs) (reduce lhs) (unfold xeval_loop lhs) (compute lhs (stop xeval_loop xlg_fuel)))) (have h0n (= (+ 0 n) n) (by arith (list (list 1) (list 1)))) (steps ((rewrite (premise h0n) lr lhs true ()))) (rewrite-with (lemma xdg_")
+        nm
+        (DStr
+          ") lr lhs ((inst x n)) ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((rewrite (premise 1) lr lhs true ())) refl))) (steps ((compute lhs (stop xeval_loop xlg_fuel)))) (have hwp (= (mod (- p 1) 18446744073709551616) (- p 1)) (rewrite-with (lemma wrap64_id) lr lhs ((inst x (- p 1))) ((rewrite-with (lemma xlg_dwlo) lr lhs ((inst c (S k3))) ((steps ((rewrite (premise 3) lr lhs true ())) refl) (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)) refl) (rewrite-with (lemma xlg_dw64) lr lhs ((inst w ")
+        (dint wh)
+        (DStr
+          ")) ((steps ((rewrite (premise 4) lr lhs true ())) refl) (steps ((compute both)) refl)) refl)) refl)) (steps ((rewrite (premise hwp) lr lhs true ()))) (rewrite-with (lemma xlg_dwlo) lr lhs ((inst c (S k3))) ((steps ((rewrite (premise 3) lr lhs true ())) refl) (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))) (steps ((compute lhs (stop xeval_loop xlg_fuel)))) (rewrite-with (lemma xlg_dwhi) lr lhs ((inst w ")
+        (dint wh)
+        (DStr
+          ")) ((steps ((rewrite (premise 4) lr lhs true ())) refl))) (steps ((compute lhs (stop xeval_loop xlg_fuel)))) (case-on (int_eq (ediv n ")
+        (dint d)
+        (DStr
+          ") 0) Bool ((case True (chain (steps ((rewrite (hyp True) lr lhs true ()) (compute lhs (stop xeval_loop xlg_fuel)))) (have hqz (= (ediv n ")
+        (dint d)
+        (DStr ") 0) (rewrite-with (lemma xlg_qinv) lr lhs ((inst q (ediv n ")
+        (dint d)
+        (DStr
+          "))) ((steps ((rewrite (hyp True) lr lhs true ())) refl)) refl)) (steps ((rewrite (premise hqz) lr lhs true ()) (compute lhs (stop xeval_loop xlg_fuel)))) (steps ((unfold ")
+        nm
+        (DStr "_len rhs) (unfold ")
+        nm
+        (DStr "_hd rhs) (unfold ")
+        nm
+        (DStr " rhs) (compute rhs (stop ")
+        nm
+        (DStr "_len ")
+        nm
+        (DStr "_hd ")
+        nm
+        (DStr ")) (rewrite (hyp True) lr rhs true ()) (compute rhs (stop ")
+        nm
+        (DStr "_len ")
+        nm
+        (DStr "_hd ")
+        nm
+        (DStr
+          ")) (compute both)) refl))) (case False (chain (steps ((rewrite (hyp False) lr lhs true ()) (compute lhs (stop xeval_loop xlg_fuel)))) (have hqn (= (le 0 (ediv n ")
+        (dint d)
+        (DStr ")) True) (rewrite-with (lemma xdn_")
+        nm
+        (DStr
+          ") lr lhs ((inst n n)) ((steps ((rewrite (premise 0) lr lhs true ())) refl)) refl)) (have hq64 (= (lt (ediv n ")
+        (dint d)
+        (DStr ") 18446744073709551616) True) (rewrite-with (lemma xdg_")
+        nm
+        (DStr
+          ") lr lhs ((inst x n)) ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((rewrite (premise 1) lr lhs true ())) refl)) refl)) (have hpu (= (")
+        nm
+        (DStr "_pow (S (S k3))) (* ")
+        (dint d)
+        (DStr " (")
+        nm
+        (DStr "_pow (S k3)))) (steps ((unfold ")
+        nm
+        (DStr "_pow lhs) (reduce lhs)) refl)) (have hx10 (= (lt n (* ")
+        (dint d)
+        (DStr " (")
+        nm
+        (DStr
+          "_pow (S k3)))) True) (steps ((rewrite (premise hpu) rl lhs true ()) (rewrite (premise 2) lr lhs true ())) refl)) (have hql (= (lt (ediv n ")
+        (dint d)
+        (DStr ") (")
+        nm
+        (DStr "_pow (S k3))) True) (rewrite-with (lemma xdl_")
+        nm
+        (DStr ") lr lhs ((inst n n) (inst c (")
+        nm
+        (DStr
+          "_pow (S k3)))) ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((rewrite (premise hx10) lr lhs true ())) refl)) refl)) (have hp3 (= (le (+ 1 (int_of_nat k3)) (- p 1)) True) (rewrite-with (lemma xlg_dwshift) lr lhs ((inst c k3)) ((steps ((rewrite (premise 3) lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)) refl)) (have hp4 (= (le (- p 1) ")
+        (dint wh)
+        (DStr ") True) (rewrite-with (lemma xlg_dwhi1) lr lhs ((inst w ")
+        (dint wh)
+        (DStr
+          ")) ((steps ((rewrite (premise 4) lr lhs true ())) refl)) refl)) (rewrite-with (hyp 1) lr lhs () ((steps ((rewrite (premise hqn) lr lhs true ())) refl) (steps ((rewrite (premise hq64) lr lhs true ())) refl) (steps ((rewrite (premise hql) lr lhs true ())) refl) (steps ((rewrite (premise hp3) lr lhs true ())) refl) (steps ((rewrite (premise hp4) lr lhs true ())) refl))) (steps ((unfold ")
+        nm
+        (DStr "_len rhs) (unfold ")
+        nm
+        (DStr "_hd rhs) (unfold ")
+        nm
+        (DStr " rhs) (compute rhs (stop ")
+        nm
+        (DStr "_len ")
+        nm
+        (DStr "_hd ")
+        nm
+        (DStr ")) (rewrite (hyp False) lr rhs true ()) (compute rhs (stop ")
+        nm
+        (DStr "_len ")
+        nm
+        (DStr "_hd ")
+        nm
+        (DStr
+          ")))) (rewrite-with (lemma xlg_dwpsub) lr lhs () ()) (steps ((compute both)) refl)))))))))) (claim lowered_")
+        nm
+        (DStr
+          " (goal ((n Int) (p Int) (mem Mem) (c Nat) (k Nat) (restfs (List XFunc))) ((= (le 0 n) True) (= (lt n 18446744073709551616) True) (= (lt n (")
+        nm
+        (DStr
+          "_pow (S k))) True) (= (le (+ 1 (int_of_nat k)) p) True) (= (le p ")
+        (dint wh)
+        (DStr
+          ") True)) (= (xcall_fn_mem (S^ 18 (xlg_fuel k c)) (MkXModule (Cons (MkXFunc 2 (list (XBlock (list (XLoop (inline ")
+        nm
+        (DStr "_body)))))) restfs) 0 ")
+        (dint wh)
+        (DStr ") 0 (list n p) mem) (Some (Pair 0 (")
+        nm
+        (DStr
+          " mem n p (S k)))))) (chain (steps ((compute lhs (stop xeval_loop xlg_fuel)))) (rewrite-with (lemma xdww_")
+        nm
+        (DStr
+          ") lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((rewrite (premise 1) lr lhs true ())) refl) (steps ((rewrite (premise 2) lr lhs true ())) refl) (steps ((rewrite (premise 3) lr lhs true ())) refl) (steps ((rewrite (premise 4) lr lhs true ())) refl))) (steps ((compute both)) refl)))")))))
+
+(fn xdp_unit ((q QName) (d Int) (wh Int)) Doc
+  (let ((nm (dsym (qn_name q))))
+    (dconc
+      (list
+        (DStr "(fn ")
+        nm
+        (DStr
+          "_body () (List XInstr) (list (XMovRR RAX RDI) (XMovRI RDX 0) (XMovRI R10 ")
+        (dint d)
+        (DStr
+          ") (XDivU R10) (XBin XSub RSI (SImm 1)) (XMovRR RDI RAX) (XBrIf (CNz RDI) 0) (XBr 1))) (fn ")
+        nm
+        (DStr "_func () XFunc (MkXFunc 2 (list (XBlock (list (XLoop (")
+        nm
+        (DStr "_body)))) (XMovRR RAX RSI)))) (fn ")
+        nm
+        (DStr
+          "_pow ((k Nat)) Int (measure (struct k)) (match k (Z 1) ((S k2) (* ")
+        (dint d)
+        (DStr " (")
+        nm
+        (DStr "_pow k2))))) (fn ")
+        nm
+        (DStr
+          "_hd ((n Int) (k Nat)) Int (measure (struct k)) (match k (Z 0) ((S k2) (if (int_eq (ediv n ")
+        (dint d)
+        (DStr ") 0) n (")
+        nm
+        (DStr "_hd (ediv n ")
+        (dint d)
+        (DStr ") k2))))) (claim xdg_")
+        nm
+        (DStr
+          " (goal ((x Int)) ((= (le 0 x) True) (= (lt x 18446744073709551616) True)) (= (lt (ediv x ")
+        (dint d)
+        (DStr ") 18446744073709551616) True)) (div-facts x ")
+        (dint d)
+        (DStr " q (by arith (list ")
+        (dint d)
+        (DStr " 0 1 1 1 0 ")
+        (dint (- 0 d))
+        (DStr ")))) (claim xdz_")
+        nm
+        (DStr " (goal ((n Int)) ((= (le 0 n) True) (= (lt n ")
+        (dint d)
+        (DStr ") True)) (= (ediv n ")
+        (dint d)
+        (DStr ") 0)) (div-facts n ")
+        (dint d)
+        (DStr " q (by arith (list (list ")
+        (dint d)
+        (DStr " 0 1 1 1 0 ")
+        (dint (- 0 d))
+        (DStr ") (list ")
+        (dint d)
+        (DStr " 1 0 -1 0 1 ")
+        (dint d)
+        (DStr "))))) (claim xdl_")
+        nm
+        (DStr " (goal ((n Int) (c Int)) ((= (le 0 n) True) (= (lt n (* ")
+        (dint d)
+        (DStr " c)) True)) (= (lt (ediv n ")
+        (dint d)
+        (DStr ") c) True)) (div-facts n ")
+        (dint d)
+        (DStr " q (by arith (list ")
+        (dint d)
+        (DStr " 0 1 1 1 0 ")
+        (dint (- 0 d))
+        (DStr ")))) (claim xdn_")
+        nm
+        (DStr " (goal ((n Int)) ((= (le 0 n) True)) (= (le 0 (ediv n ")
+        (dint d)
+        (DStr ")) True)) (div-facts n ")
+        (dint d)
+        (DStr " q (by arith (list ")
+        (dint d)
+        (DStr " 1 -1 0 1 ")
+        (dint d)
+        (DStr ")))) (claim xdpw_")
+        nm
+        (DStr
+          " (goal ((a0 Int) (c0 Int) (d0 Int) (b0 Int) (p0 Int) (e8 Int) (e9 Int) (e10 Int) (e11 Int) (e12 Int) (e13 Int) (e14 Int) (e15 Int) (n Int) (p Int) (mem Mem) (c Nat) (k Nat) (restfs (List XFunc))) ((= (le 0 n) True) (= (lt n 18446744073709551616) True) (= (lt n (")
+        nm
+        (DStr
+          "_pow (S k))) True) (= (le (+ 1 (int_of_nat k)) p) True) (= (le p ")
+        (dint wh)
+        (DStr
+          ") True)) (= (xeval_loop (S^ 12 (xlg_fuel k c)) (MkXModule (Cons (MkXFunc 2 (list (XBlock (list (XLoop (inline ")
+        nm
+        (DStr "_body)))) (XMovRR RAX RSI))) restfs) 0 ")
+        (dint wh)
+        (DStr ") (inline ")
+        nm
+        (DStr
+          "_body) (MkRegs a0 c0 d0 b0 p0 p n e8 e9 e10 e11 e12 e13 e14 e15) mem) (Some (XBrk 0 (MkRegs 0 c0 (mod (")
+        nm
+        (DStr "_hd n (S k)) ")
+        (dint d)
+        (DStr ") b0 p0 (")
+        nm
+        (DStr " n p (S k)) 0 e8 e9 ")
+        (dint d)
+        (DStr
+          " e11 e12 e13 e14 e15) mem)))) (induct k ((case Z (chain (steps ((compute lhs))) (have h0n (= (+ 0 n) n) (by arith (list (list 1) (list 1)))) (steps ((rewrite (premise h0n) lr lhs true ()))) (rewrite-with (lemma xdg_")
+        nm
+        (DStr
+          ") lr lhs ((inst x n)) ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((rewrite (premise 1) lr lhs true ())) refl))) (steps ((compute lhs))) (have hwp (= (mod (- p 1) 18446744073709551616) (- p 1)) (rewrite-with (lemma wrap64_id) lr lhs ((inst x (- p 1))) ((rewrite-with (lemma xlg_dwlo) lr lhs ((inst c Z)) ((steps ((rewrite (premise 3) lr lhs true ())) refl) (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)) refl) (rewrite-with (lemma xlg_dw64) lr lhs ((inst w ")
+        (dint wh)
+        (DStr
+          ")) ((steps ((rewrite (premise 4) lr lhs true ())) refl) (steps ((compute both)) refl)) refl)) refl)) (steps ((rewrite (premise hwp) lr lhs true ()) (compute lhs))) (have hqz (= (ediv n ")
+        (dint d)
+        (DStr ") 0) (rewrite-with (lemma xdz_")
+        nm
+        (DStr
+          ") lr lhs ((inst n n)) ((steps ((rewrite (premise 0) lr lhs true ())) refl) (chain (have hb (= ")
+        (dint d)
+        (DStr " (")
+        nm
+        (DStr
+          "_pow (S Z))) (steps ((compute rhs)) refl)) (steps ((rewrite (premise hb) lr lhs true ()) (rewrite (premise 2) lr lhs true ())) refl))) refl)) (steps ((rewrite (premise hqz) lr both true ()) (compute lhs))) (steps ((unfold ")
+        nm
+        (DStr "_hd rhs) (unfold ")
+        nm
+        (DStr " rhs) (compute rhs (stop ")
+        nm
+        (DStr "_hd ")
+        nm
+        (DStr
+          ")) (rewrite (premise hqz) lr rhs true ()) (compute both)) refl))) (case S (k3) (chain (steps ((unfold xlg_fuel lhs) (reduce lhs) (unfold xeval_loop lhs) (compute lhs (stop xeval_loop xlg_fuel)))) (have h0n (= (+ 0 n) n) (by arith (list (list 1) (list 1)))) (steps ((rewrite (premise h0n) lr lhs true ()))) (rewrite-with (lemma xdg_")
+        nm
+        (DStr
+          ") lr lhs ((inst x n)) ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((rewrite (premise 1) lr lhs true ())) refl))) (steps ((compute lhs (stop xeval_loop xlg_fuel)))) (have hwp (= (mod (- p 1) 18446744073709551616) (- p 1)) (rewrite-with (lemma wrap64_id) lr lhs ((inst x (- p 1))) ((rewrite-with (lemma xlg_dwlo) lr lhs ((inst c (S k3))) ((steps ((rewrite (premise 3) lr lhs true ())) refl) (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)) refl) (rewrite-with (lemma xlg_dw64) lr lhs ((inst w ")
+        (dint wh)
+        (DStr
+          ")) ((steps ((rewrite (premise 4) lr lhs true ())) refl) (steps ((compute both)) refl)) refl)) refl)) (steps ((rewrite (premise hwp) lr lhs true ()) (compute lhs (stop xeval_loop xlg_fuel)))) (case-on (int_eq (ediv n ")
+        (dint d)
+        (DStr
+          ") 0) Bool ((case True (chain (steps ((rewrite (hyp True) lr lhs true ()) (compute lhs (stop xeval_loop xlg_fuel)))) (have hqz (= (ediv n ")
+        (dint d)
+        (DStr ") 0) (rewrite-with (lemma xlg_qinv) lr lhs ((inst q (ediv n ")
+        (dint d)
+        (DStr
+          "))) ((steps ((rewrite (hyp True) lr lhs true ())) refl)) refl)) (steps ((rewrite (premise hqz) lr lhs true ()) (compute lhs (stop xeval_loop xlg_fuel)))) (steps ((unfold ")
+        nm
+        (DStr "_hd rhs) (unfold ")
+        nm
+        (DStr " rhs) (compute rhs (stop ")
+        nm
+        (DStr "_hd ")
+        nm
+        (DStr ")) (rewrite (hyp True) lr rhs true ()) (compute rhs (stop ")
+        nm
+        (DStr "_hd ")
+        nm
+        (DStr
+          ")) (compute both)) refl))) (case False (chain (steps ((rewrite (hyp False) lr lhs true ()) (compute lhs (stop xeval_loop xlg_fuel)))) (have hqn (= (le 0 (ediv n ")
+        (dint d)
+        (DStr ")) True) (rewrite-with (lemma xdn_")
+        nm
+        (DStr
+          ") lr lhs ((inst n n)) ((steps ((rewrite (premise 0) lr lhs true ())) refl)) refl)) (have hq64 (= (lt (ediv n ")
+        (dint d)
+        (DStr ") 18446744073709551616) True) (rewrite-with (lemma xdg_")
+        nm
+        (DStr
+          ") lr lhs ((inst x n)) ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((rewrite (premise 1) lr lhs true ())) refl)) refl)) (have hpu (= (")
+        nm
+        (DStr "_pow (S (S k3))) (* ")
+        (dint d)
+        (DStr " (")
+        nm
+        (DStr "_pow (S k3)))) (steps ((unfold ")
+        nm
+        (DStr "_pow lhs) (reduce lhs)) refl)) (have hx10 (= (lt n (* ")
+        (dint d)
+        (DStr " (")
+        nm
+        (DStr
+          "_pow (S k3)))) True) (steps ((rewrite (premise hpu) rl lhs true ()) (rewrite (premise 2) lr lhs true ())) refl)) (have hql (= (lt (ediv n ")
+        (dint d)
+        (DStr ") (")
+        nm
+        (DStr "_pow (S k3))) True) (rewrite-with (lemma xdl_")
+        nm
+        (DStr ") lr lhs ((inst n n) (inst c (")
+        nm
+        (DStr
+          "_pow (S k3)))) ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((rewrite (premise hx10) lr lhs true ())) refl)) refl)) (have hp3 (= (le (+ 1 (int_of_nat k3)) (- p 1)) True) (rewrite-with (lemma xlg_dwshift) lr lhs ((inst c k3)) ((steps ((rewrite (premise 3) lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)) refl)) (have hp4 (= (le (- p 1) ")
+        (dint wh)
+        (DStr ") True) (rewrite-with (lemma xlg_dwhi1) lr lhs ((inst w ")
+        (dint wh)
+        (DStr
+          ")) ((steps ((rewrite (premise 4) lr lhs true ())) refl)) refl)) (rewrite-with (hyp 1) lr lhs () ((steps ((rewrite (premise hqn) lr lhs true ())) refl) (steps ((rewrite (premise hq64) lr lhs true ())) refl) (steps ((rewrite (premise hql) lr lhs true ())) refl) (steps ((rewrite (premise hp3) lr lhs true ())) refl) (steps ((rewrite (premise hp4) lr lhs true ())) refl))) (steps ((unfold ")
+        nm
+        (DStr "_hd rhs) (unfold ")
+        nm
+        (DStr " rhs) (compute rhs (stop ")
+        nm
+        (DStr "_hd ")
+        nm
+        (DStr ")) (rewrite (hyp False) lr rhs true ()) (compute rhs (stop ")
+        nm
+        (DStr "_hd ")
+        nm
+        (DStr ")) (compute both)) refl)))))))))) (claim lowered_")
+        nm
+        (DStr
+          " (goal ((n Int) (p Int) (mem Mem) (c Nat) (k Nat) (restfs (List XFunc))) ((= (le 0 n) True) (= (lt n 18446744073709551616) True) (= (lt n (")
+        nm
+        (DStr
+          "_pow (S k))) True) (= (le (+ 1 (int_of_nat k)) p) True) (= (le p ")
+        (dint wh)
+        (DStr
+          ") True)) (= (xcall_fn_mem (S^ 16 (xlg_fuel k c)) (MkXModule (Cons (MkXFunc 2 (list (XBlock (list (XLoop (inline ")
+        nm
+        (DStr "_body)))) (XMovRR RAX RSI))) restfs) 0 ")
+        (dint wh)
+        (DStr ") 0 (list n p) mem) (Some (Pair (")
+        nm
+        (DStr
+          " n p (S k)) mem)))) (chain (steps ((compute lhs (stop xeval_loop xlg_fuel)))) (rewrite-with (lemma xdpw_")
+        nm
+        (DStr
+          ") lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((rewrite (premise 1) lr lhs true ())) refl) (steps ((rewrite (premise 2) lr lhs true ())) refl) (steps ((rewrite (premise 3) lr lhs true ())) refl) (steps ((rewrite (premise 4) lr lhs true ())) refl))) (steps ((compute both)) refl)))")))))
+
 ;; ---- the COPY loop (probe examples/xcopyloop_probe) ----------------------------
 ;;
 ;; (fn NAME ((m Mem) (s Int) (d Int) (k Nat)) Mem
@@ -1915,61 +2755,70 @@
                    (if (lt 0 n)
                      (if (le n 5)
                        (if (is_mem_ty rty)
-                         (match (lp_recognize q n body Nil)
-                           ((LRErr m) (xerr_at q m))
-                           ((LRCall _ _ _)
-                            (xerr_at
-                              q
-                              "internal: LRCall loops route through xg_claim_loop_r"))
-                           ((LROk adv sts)
-                            (if (xl_strides_ok adv)
-                              (match sts
-                                ((Cons (Pair ai v) Nil)
-                                 (match v
-                                   ((LVRead j)
-                                    (if (xlc_shape_ok n adv ai j)
-                                      (XCOk (xlc_unit q mids wl wh))
+                         (match (xdw_shape q body)
+                           ((Some dwp)
+                            (match dwp
+                              ((Pair dwd dwc)
+                               (if (int_eq wl 0) (XCOk (xdw_unit q dwd dwc wh))
+                               (xerr_at
+                                 q
+                                 "v1 do-while: the window low bound must be 0")))))
+                           (None
+                             (match (lp_recognize q n body Nil)
+                               ((LRErr m) (xerr_at q m))
+                               ((LRCall _ _ _)
+                                (xerr_at
+                                  q
+                                  "internal: LRCall loops route through xg_claim_loop_r"))
+                               ((LROk adv sts)
+                                (if (xl_strides_ok adv)
+                                  (match sts
+                                    ((Cons (Pair ai v) Nil)
+                                     (match v
+                                       ((LVRead j)
+                                        (if (xlc_shape_ok n adv ai j)
+                                          (XCOk (xlc_unit q mids wl wh))
+                                          (xerr_at
+                                            q
+                                            "v1 copy loops pin the probe: exactly two +1 accums, the READ address first, the store address second")))
+                                       ((LVXf j lo hi d)
+                                        (if (xlx_shape_ok n adv ai j)
+                                          (XCOk (xlx_unit q lo hi d wl wh))
+                                          (xerr_at
+                                            q
+                                            "v1 transform loops pin the probe: exactly ONE +1 accum, the pointer, read and stored at it")))
+                                       (_
+                                         (match (xlv_src v)
+                                           (None
+                                             (xerr_at
+                                               q
+                                               "store value must be an accum, an imm32 literal, or (mem_get m ADV-ACCUM)"))
+                                           ((Some vsrc)
+                                            (match (xl_first_inc adv 0)
+                                              (None
+                                                (xerr_at
+                                                  q
+                                                  "v1: at least one (+ ACCUM 1) accumulator is required (the counter wrap rides its range premise)"))
+                                              ((Some fa)
+                                               (XCOk
+                                                 (xl_unit
+                                                   (dsym (qn_name q))
+                                                   mids
+                                                   n
+                                                   adv
+                                                   ai
+                                                   vsrc
+                                                   fa
+                                                   (+ (+ 4 (xl_nadv adv)) 4)
+                                                   wl
+                                                   wh)))))))))
+                                    (_
                                       (xerr_at
                                         q
-                                        "v1 copy loops pin the probe: exactly two +1 accums, the READ address first, the store address second")))
-                                   ((LVXf j lo hi d)
-                                    (if (xlx_shape_ok n adv ai j)
-                                      (XCOk (xlx_unit q lo hi d wl wh))
-                                      (xerr_at
-                                        q
-                                        "v1 transform loops pin the probe: exactly ONE +1 accum, the pointer, read and stored at it")))
-                                   (_
-                                     (match (xlv_src v)
-                                       (None
-                                         (xerr_at
-                                           q
-                                           "store value must be an accum, an imm32 literal, or (mem_get m ADV-ACCUM)"))
-                                       ((Some vsrc)
-                                        (match (xl_first_inc adv 0)
-                                          (None
-                                            (xerr_at
-                                              q
-                                              "v1: at least one (+ ACCUM 1) accumulator is required (the counter wrap rides its range premise)"))
-                                          ((Some fa)
-                                           (XCOk
-                                             (xl_unit
-                                               (dsym (qn_name q))
-                                               mids
-                                               n
-                                               adv
-                                               ai
-                                               vsrc
-                                               fa
-                                               (+ (+ 4 (xl_nadv adv)) 4)
-                                               wl
-                                               wh)))))))))
-                                (_
+                                        "two-store nests follow the reverse slice (v1: one store per iteration)")))
                                   (xerr_at
                                     q
-                                    "two-store nests follow the reverse slice (v1: one store per iteration)")))
-                              (xerr_at
-                                q
-                                "v1 strides are +1 or static (decrementing and stride-K accums are named growth)"))))
+                                    "v1 strides are +1 or static (decrementing and stride-K accums are named growth)"))))))
                        (if (is_int_ty rty)
                          (match (li_recognize q n body)
                            ((LIErr m) (xerr_at q m))
@@ -3623,7 +4472,7 @@
                         certed
                         reg
                         (DCat acc (DCat (DStr (nl)) d))
-                        lf
+                        (if (fn_is_dwptr f) True lf)
                         mf)))))))
              (xg_fns rest modpath seen certed reg acc lf mf)))))))))
 
