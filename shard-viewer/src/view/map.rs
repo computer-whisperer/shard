@@ -159,7 +159,9 @@ pub(crate) fn canvas(project: &Project, p: &ViewParams, cache: Option<&MapCache>
     }
 
     // The committed topology: from the cache, or committed now. The borrow is
-    // held across the render walk (single-threaded; nothing else borrows).
+    // held across the render walk — sound because app_root builds exactly ONE
+    // Map canvas per frame. A second canvas() call in one build (a future
+    // minimap / split pane) would panic here; give it its own cache cell.
     let fresh;
     let guard;
     let com: &Committed = match cache {

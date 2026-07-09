@@ -58,8 +58,12 @@ impl App for Viewer {
     fn build(&self, cx: &BuildCx) -> El {
         let view = cx.viewport_view(CANVAS_KEY).unwrap_or_default();
         // Whether the viewport is still fitted by the armed policy (vs taken
-        // over by a user pan/zoom) — the Map keys its level of detail off this.
-        let at_home = cx.viewport_at_home(CANVAS_KEY).unwrap_or(true);
+        // over by a user pan/zoom) — the Map keys its cull + LOD pricing off
+        // this. A queued FitContent/ResetView counts as home too: it applies
+        // during this frame's layout (after build), so the readbacks still
+        // hold the *previous* scope's pan/zoom — culling the fresh layout
+        // against that stale window would blank regions of the fitted frame.
+        let at_home = cx.viewport_at_home(CANVAS_KEY).unwrap_or(true) || !self.pending.is_empty();
         // The detail panel is user-resizable; read its current (dragged) width
         // so the manually-wrapped source re-wraps to fill it.
         let panel_w = cx.user_size(view::PANEL_KEY).unwrap_or(view::DEFAULT_PANEL_W);
