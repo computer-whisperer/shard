@@ -15,11 +15,15 @@
 ;;; design article, the loopgen_probe precedent).
 
 (import "../../kernel/stdlib.shard")
+(import "../../kernel/facts.shard")
 (import "../../std/mem")
 (import "../../std/nat.shard")
+(import "x86.shard")
 
 (use (:: std mem *))
 (use (:: std nat *))
+(use (:: kernel facts *))
+(use (:: models x86 x86 *))
 
 ;; one S per remaining iteration over the slack tail (the pfc shape)
 (fn xlg_fuel ((k Nat) (c Nat)) Nat
@@ -149,3 +153,92 @@
      (= (lt b 256) True))
     (= (le (+ (+ a b) (* 256 (int_of_nat c))) 18446744073709551616) True))
   (by arith (list 1 1 256 1)))
+
+;; --- the RANGE-SHIFT store value (docs/X86.md §28, probe
+;; --- examples/xtransform_probe.shard) --------------------------------
+;;
+;; A flagless ISA cannot materialize a comparison, so the transform
+;;
+;;     (if (le LO b) (if (le b HI) (- b D) b) b)      b = (mem_get m p)
+;;
+;; compiles to ONE unsigned compare against the range WIDTH: b is in
+;; [LO, HI] iff (b - LO) <u (HI - LO) + 1, because below LO the wrap64
+;; subtraction lands near 2^64. These four facts are that trick, stated
+;; PARAMETRICALLY in (LO, HI, D) — the emitter instantiates them with the
+;; recognizer's ground literals and discharges the literal legs by
+;; (compute both), exactly as the window pair rides xlg_kM. Bytehood of b
+;; comes from std/mem's get_lo/get_hi, never from a premise on the
+;; argument.
+
+;; inside the range: the machine cond is True
+(claim xlg_xfT
+  (goal ((b Int) (lo Int) (hi Int))
+    ((= (le lo b) True)
+     (= (le b hi) True)
+     (= (le 0 lo) True)
+     (= (lt hi 256) True))
+    (= (lt (mod (- b lo) 18446744073709551616) (+ (- hi lo) 1)) True))
+  (chain
+    (rewrite-with
+      (lemma wrap64_id)
+      lr
+      lhs
+      ((inst x (- b lo)))
+      ((by arith (list 1 1 0 0 0)) (by arith (list 1 0 1 1 1))))
+    (by arith (list 1 0 1 0 0))))
+
+;; above the range (and a byte): the cond is False
+(claim xlg_xfFhi
+  (goal ((b Int) (lo Int) (hi Int))
+    ((= (le b hi) False)
+     (= (lt b 256) True)
+     (= (le 0 lo) True)
+     (= (le lo hi) True))
+    (= (lt (mod (- b lo) 18446744073709551616) (+ (- hi lo) 1)) False))
+  (chain
+    (rewrite-with
+      (lemma wrap64_id)
+      lr
+      lhs
+      ((inst x (- b lo)))
+      ((by arith (list 1 1 0 0 1)) (by arith (list 1 0 1 1 0))))
+    (by arith (list 1 1 0 0 0))))
+
+;; below the range: the subtraction wraps one window below zero, so the
+;; UNSIGNED compare is False. mod_unique at the exhibited q = -1
+;; decomposition is what makes that a theorem rather than a hope. The
+;; (lt lo 256) premise is load-bearing: without an upper bound on lo the
+;; statement is simply FALSE.
+(claim xlg_xfFlo
+  (goal ((b Int) (lo Int) (hi Int))
+    ((= (le lo b) False)
+     (= (le 0 b) True)
+     (= (lt hi 256) True)
+     (= (lt lo 256) True))
+    (= (lt (mod (- b lo) 18446744073709551616) (+ (- hi lo) 1)) False))
+  (chain
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      lhs
+      ((inst q -1) (inst r (+ (- b lo) 18446744073709551616)))
+      ((by arith (list (list 1 0 0 0 0) (list 1 0 0 0 0)))
+       (by arith (list 1 0 1 0 1))
+       (by arith (list 1 1 0 0 0))))
+    (by arith (list 1 0 1 1 0))))
+
+;; the in-range arm's stored value strips its wrap64 to the spec's (- b D)
+(claim xlg_xfst
+  (goal ((b Int) (lo Int) (d Int))
+    ((= (le lo b) True)
+     (= (lt b 256) True)
+     (= (le d lo) True)
+     (= (le 0 d) True))
+    (= (mod (- b d) 18446744073709551616) (- b d)))
+  (rewrite-with
+    (lemma wrap64_id)
+    lr
+    lhs
+    ((inst x (- b d)))
+    ((by arith (list 1 1 0 1 0)) (by arith (list 1 0 1 0 1)))
+    refl))

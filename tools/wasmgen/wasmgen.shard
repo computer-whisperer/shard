@@ -1327,17 +1327,35 @@
 (fn lp_lset ((k Int)) Doc
   (dconc (list (DStr "(LocalSet ") (dint k) (DStr ")"))))
 
+;; the range-shift store value is x86's rung (docs/X86.md §28): a flagless
+;; ISA pays a compare-and-skip diamond for it, and wasm's own emission is
+;; unwritten. The loop gate REFUSES it by name before any LVal is
+;; consumed, so lp_valcode/lp_vlen never meet an LVXf (a missing match arm
+;; would go MStuck and exit 0 silently — the shape must refuse LOUDLY).
+(fn lp_is_xf ((v LVal)) Bool
+  (match v
+    ((LVXf _ _ _ _) True)
+    (_ False)))
+
+(fn lp_has_xf ((sts (List (Pair Int LVal)))) Bool
+  (measure (struct sts))
+  (match sts
+    (Nil False)
+    ((Cons (Pair _ v) rest) (if (lp_is_xf v) True (lp_has_xf rest)))))
+
 (fn lp_valcode ((v LVal)) (List Doc)
   (match v
     ((LVAcc i) (Cons (lp_lget i) Nil))
     ((LVLit l) (Cons (lp_const l) Nil))
-    ((LVRead i) (Cons (lp_lget i) (Cons (DStr "(I32Load8U)") Nil)))))
+    ((LVRead i) (Cons (lp_lget i) (Cons (DStr "(I32Load8U)") Nil)))
+    ((LVXf _ _ _ _) Nil)))
 
 (fn lp_vlen ((v LVal)) Int
   (match v
     ((LVAcc _) 1)
     ((LVLit _) 1)
-    ((LVRead _) 2)))
+    ((LVRead _) 2)
+    ((LVXf _ _ _ _) 0)))
 
 (fn lp_advcode ((adv (List LStr)) (i Int)) (List Doc)
   (measure (struct adv))
@@ -3511,25 +3529,29 @@
                                                 fa
                                                 (+ cnt (+ 4 (+ (* 2 cnn) 1)))))))))))))))))
                          ((LROk adv sts)
-                          (match (lp_first_inc adv 0)
-                            (None
-                              (cerr_at
-                                q
-                                "v1: at least one (+ ACCUM 1) accumulator is required (the counter wrap rides its range premise)"))
-                            ((Some fa)
-                             (let
-                               ((cnt
-                                  (+ 8 (+ (lp_stlen sts) (* 4 (lp_nadv adv))))))
-                               (COk
-                                 (lp_unit
-                                   (dsym (qn_name q))
-                                   mids
-                                   n
-                                   adv
-                                   sts
-                                   fa
-                                   (+ cnt 4))
-                                 (DStr "")))))))
+                          (if (lp_has_xf sts)
+                            (cerr_at
+                              q
+                              "range-shift store values (LVXf) are not in the wasm loop fragment yet (the x86 rung, docs/X86.md §28, speaks first)")
+                            (match (lp_first_inc adv 0)
+                              (None
+                                (cerr_at
+                                  q
+                                  "v1: at least one (+ ACCUM 1) accumulator is required (the counter wrap rides its range premise)"))
+                              ((Some fa)
+                               (let
+                                 ((cnt
+                                    (+ 8 (+ (lp_stlen sts) (* 4 (lp_nadv adv))))))
+                                 (COk
+                                   (lp_unit
+                                     (dsym (qn_name q))
+                                     mids
+                                     n
+                                     adv
+                                     sts
+                                     fa
+                                     (+ cnt 4))
+                                   (DStr ""))))))))
                      (if (is_int_ty rty)
                        (match (li_recognize q n body)
                          ((LIErr m) (cerr_at q m))

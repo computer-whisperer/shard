@@ -258,9 +258,17 @@
      (match b
        ((QName bm bn) (if (sym_eq an bn) (sym_list_eq am bm) False))))))
 
-;; the store value: an accum read, a u32 literal, or a byte read at an
-;; advancing accum
-(type LVal (LVAcc Int) (LVLit Int) (LVRead Int))
+;; the store value: an accum read, a u32 literal, a byte read at an
+;; advancing accum, or that byte RANGE-SHIFTED (docs/X86.md §28, probe
+;; examples/xtransform_probe.shard) — the read-modify-write shape
+;;
+;;   (if (le LO b) (if (le b HI) (- b DELTA) b) b)   where b = (mem_get m ACC)
+;;
+;; LVXf carries (ACC, LO, HI, DELTA). It is the first store value that
+;; makes the machine BRANCH on a loaded byte; on a flagless ISA it costs a
+;; compare-and-skip diamond, so the emitters treat it as its own arm
+;; rather than a compound of the others.
+(type LVal (LVAcc Int) (LVLit Int) (LVRead Int) (LVXf Int Int Int Int))
 
 ;; per-accum stride: static, +1, -1, or +C (C >= 2, a literal) per
 ;; iteration. LSIncK is Mem-return-loop-only in v1 (probe:
@@ -391,6 +399,100 @@
              (None None)
              ((Some fs) (Some (Cons f fs)))))))))))
 
+;; `(mem_get m ACC)` at an ADVANCING accum — the LVRead subterm, reused
+;; three times by the range-shift shape below
+(fn lp_read_at ((e Expr) (n Int) (adv (List LStr))) (Option Int)
+  (match e
+    ((Call q as)
+     (if (memq_named q (quote mem_get))
+       (match as
+         ((Cons marg (Cons aarg Nil))
+          (if (lp_is_mem_arg marg n)
+            (match (lp_acc aarg n)
+              ((Some i) (if (ls_adv (ls_at adv i)) (Some i) None))
+              (None None))
+            None))
+         (_ None))
+       None))
+    (_ None)))
+
+;; the same read at a KNOWN accum (the shape's repeated occurrences)
+(fn lp_read_is ((e Expr) (n Int) (adv (List LStr)) (i Int)) Bool
+  (match (lp_read_at e n adv)
+    (None False)
+    ((Some j) (int_eq i j))))
+
+;; `(- (mem_get m ACC) DELTA)`, DELTA a positive byte-sized literal
+(fn lp_shift_of ((e Expr) (n Int) (adv (List LStr)) (i Int)) (Option Int)
+  (match e
+    ((Call q as)
+     (if (core_named q (quote -))
+       (match as
+         ((Cons barg (Cons (IntLit d) Nil))
+          (if (lp_read_is barg n adv i)
+            (if (lt 0 d) (if (lt d 256) (Some d) None) None)
+            None))
+         (_ None))
+       None))
+    (_ None)))
+
+;; `(le LIT (mem_get m ACC))` -> the accum and the literal lower bound;
+;; `(le (mem_get m ACC) LIT)` -> the accum and the literal upper bound
+(fn lp_cmp_lo ((e Expr) (n Int) (adv (List LStr))) (Option (Pair Int Int))
+  (match e
+    ((Call q as)
+     (if (core_named q (quote le))
+       (match as
+         ((Cons (IntLit lo) (Cons barg Nil))
+          (match (lp_read_at barg n adv)
+            (None None)
+            ((Some i)
+             (if (le 0 lo) (if (lt lo 256) (Some (Pair i lo)) None) None))))
+         (_ None))
+       None))
+    (_ None)))
+
+(fn lp_cmp_hi ((e Expr) (n Int) (adv (List LStr)) (i Int)) (Option Int)
+  (match e
+    ((Call q as)
+     (if (core_named q (quote le))
+       (match as
+         ((Cons barg (Cons (IntLit hi) Nil))
+          (if (lp_read_is barg n adv i)
+            (if (le 0 hi) (if (lt hi 256) (Some hi) None) None)
+            None))
+         (_ None))
+       None))
+    (_ None)))
+
+;; the RANGE-SHIFT store value (LVXf): every `b` must be the SAME read at
+;; the SAME advancing accum, both else-arms must be that bare read, and
+;; the window must be non-empty (LO <= HI) with the shift landing inside
+;; a byte (DELTA <= LO, so LO-DELTA >= 0). A malformed member of the
+;; family is a REFUSAL, not a silent miss.
+(fn lp_xf ((e Expr) (n Int) (adv (List LStr))) (Option LVal)
+  (match e
+    ((If c t f)
+     (match (lp_cmp_lo c n adv)
+       (None None)
+       ((Some (Pair i lo))
+        (if (lp_read_is f n adv i)
+          (match t
+            ((If c2 t2 f2)
+             (match (lp_cmp_hi c2 n adv i)
+               (None None)
+               ((Some hi)
+                (if (lp_read_is f2 n adv i)
+                  (match (lp_shift_of t2 n adv i)
+                    (None None)
+                    ((Some d)
+                     (if (le lo hi) (if (le d lo) (Some (LVXf i lo hi d)) None)
+                     None)))
+                  None))))
+            (_ None))
+          None))))
+    (_ None)))
+
 (fn lp_val ((e Expr) (n Int) (adv (List LStr))) (Option LVal)
   (match e
     ((BVar _)
@@ -398,17 +500,11 @@
        ((Some i) (Some (LVAcc i)))
        (None None)))
     ((IntLit l) (if (le 0 l) (if (lt l 4294967296) (Some (LVLit l)) None) None))
-    ((Call q as)
-     (if (memq_named q (quote mem_get))
-       (match as
-         ((Cons marg (Cons aarg Nil))
-          (if (lp_is_mem_arg marg n)
-            (match (lp_acc aarg n)
-              ((Some i) (if (ls_adv (ls_at adv i)) (Some (LVRead i)) None))
-              (None None))
-            None))
-         (_ None))
-       None))
+    ((If _ _ _) (lp_xf e n adv))
+    ((Call _ _)
+     (match (lp_read_at e n adv)
+       (None None)
+       ((Some i) (Some (LVRead i)))))
     (_ None)))
 
 ;; one store's (ADDR-accum, VALUE) from a mem_set's A/V slots
