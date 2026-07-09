@@ -46,6 +46,7 @@
 (use (:: meta forms *))
 (use (:: models x86 elf enc_elf))
 (use (:: models x86 elf enc_binelf))
+(use (:: models x86 elf enc_binelf_w))
 (use (:: models x86 elf EV))
 (use (:: models x86 elf EVec))
 
@@ -1012,6 +1013,45 @@
        (None None)
        ((Some v2) (Some (list v1 v2)))))))
 
+;; the Mem-RETURNING mem-shape twin (the write-variant entry, docs/
+;; X86.md §27): the spec's result is a MEM, so the vector is a SEEDED
+;; readback (PXVS — the §26 precedent: a zeroed page cannot witness a
+;; data path). Seed bytes at the pointer, k = the seed length, expected
+;; rax = 0 (the Mem pieces' epilogue), expected window = the spec's
+;; returned Mem read back over seed + 3 guard zeros (pinning that
+;; nothing beyond the payload was touched).
+(fn lb_memw_vec1 ((m Module) (nm (List Int)) (ptr Int) (seed (List Int)))
+  (Option PVec)
+  (match (ctor_qn m (quote Z))
+    (None None)
+    ((Some zq)
+     (match (ctor_qn m (quote S))
+       (None None)
+       ((Some sq)
+        (match (lb_call m "mem_empty" Nil)
+          (None None)
+          ((Some me)
+           (match (lb_mem_expr m me ptr seed)
+             (None None)
+             ((Some mm)
+              (match
+                (lb_call m nm (list mm (IntLit ptr) (lb_nat_of zq sq seed)))
+                (None None)
+                ((Some ev)
+                 (match (lb_rb m ev ptr (append_int seed (list 0 0 0)))
+                   (None None)
+                   ((Some outb)
+                    (Some
+                      (PXVS 0 (list ptr (lb_len_i seed)) ptr seed ptr 0 outb)))))))))))))))
+
+(fn lb_memw_vecs ((m Module) (nm (List Int))) (Option (List PVec))
+  (match (lb_memw_vec1 m nm (lb_dbase) (list 104 101 108 108 111))
+    (None None)
+    ((Some v1)
+     (match (lb_memw_vec1 m nm (+ (lb_dbase) 3) Nil)
+       (None None)
+       ((Some v2) (Some (list v1 v2)))))))
+
 ;; per-export vector synthesis, dispatched on the cert's entry shape
 (type LBV (LBVOk (List PVec)) (LBVErr (List Int)))
 
@@ -1019,10 +1059,13 @@
   (if (lb_memshape bs)
     (match (lb_mem_vecs m (chars_of_sym x))
       (None
-        (LBVErr
-          (append_int
-            "mem-shape spec evaluation failed for export "
-            (chars_of_sym x))))
+        (match (lb_memw_vecs m (chars_of_sym x))
+          (None
+            (LBVErr
+              (append_int
+                "mem-shape spec evaluation failed for export "
+                (chars_of_sym x))))
+          ((Some vecs) (LBVOk vecs))))
       ((Some vecs) (LBVOk vecs)))
     (match (lb_pick (lb_pools) (lb_params bs) ps 2)
       (Nil
@@ -1434,6 +1477,136 @@
           (None None)
           ((Some ls) (Some (append_int (lb_bvec_line arg want) ls)))))))))
 
+;; the entry's declared RETURN TYPE, read from the source forms: Mem
+;; selects the glue's WRITE variant (contract clause 5b — sys_write(1,
+;; BUF, len) then exit(0)), anything else the exit variant (clause 5a).
+;; The variant is a BUILD-time choice signed into the contract text: the
+;; driver picks the encoder; the bin ENGINE gate diffs what it implies.
+(fn lb_entry_memret ((forms (List SExpr)) (entry Symbol)) Bool
+  (measure (struct forms))
+  (match forms
+    (Nil False)
+    ((Cons f rest)
+     (match f
+       ((SList (Cons (SSym fw) (Cons (SSym nm) (Cons _bs (Cons (SSym rty) _)))))
+        (if (sym_eq fw (quote fn))
+          (if (sym_eq nm entry) (sym_eq rty (quote Mem))
+          (lb_entry_memret rest entry))
+          (lb_entry_memret rest entry)))
+       (_ (lb_entry_memret rest entry))))))
+
+;; one byte read back per element of the (truncated) payload, out of an
+;; evaluated Mem VALUE starting at address a — the write variant's
+;; stdout: the glue writes [BUF, BUF+len) after the call, so the
+;; payload itself is the readback's length ruler
+(fn lb_rb ((m Module) (ev Expr) (a Int) (n (List Int))) (Option (List Int))
+  (measure (struct n))
+  (match n
+    (Nil (Some Nil))
+    ((Cons _ t)
+     (match (lb_call m "mem_get" (Cons ev (Cons (IntLit a) Nil)))
+       (None None)
+       ((Some bv)
+        (match (expr_int bv)
+          (None None)
+          ((Some b)
+           (match (lb_rb m ev (+ a 1) t)
+             (None None)
+             ((Some rest) (Some (Cons b rest)))))))))))
+
+;; expected stdout for one argument under the WRITE variant: the entry's
+;; returned Mem read back over the payload window (exit = the constant 0)
+(fn lb_bin_want_w ((m Module) (nm (List Int)) (arg (List Int)))
+  (Option (List Int))
+  (match (lb_bin_args m arg True)
+    (None None)
+    ((Some args)
+     (match (lb_call m nm args)
+       (None None)
+       ((Some ev) (lb_rb m ev (lb_buf_addr) (lb_take arg (lb_maxlen))))))))
+
+(fn lb_bwvec_line ((arg (List Int)) (out (List Int))) (List Int)
+  (cat
+    (list
+      "BVEC "
+      (match arg
+        (Nil "-")
+        ((Cons _ _) (hexs arg)))
+      " EXIT 0 OUT "
+      (match out
+        (Nil "-")
+        ((Cons _ _) (hexs out)))
+      "\n")))
+
+(fn lb_bin_vecs_w ((m Module) (nm (List Int)) (pool (List (List Int))))
+  (Option (List Int))
+  (measure (struct pool))
+  (match pool
+    (Nil (Some ""))
+    ((Cons arg rest)
+     (match (lb_bin_want_w m nm arg)
+       (None None)
+       ((Some out)
+        (match (lb_bin_vecs_w m nm rest)
+          (None None)
+          ((Some ls) (Some (append_int (lb_bwvec_line arg out) ls)))))))))
+
+;; the binelf emission tail: the exit variant (enc_binelf, BNOARG/BVEC
+;; EXIT lines) or the write variant (enc_binelf_w, EXIT 0 OUT lines),
+;; selected by the entry's declared return type. A Mem-returning entry
+;; without the payload-Mem binder shape has no derivable stdout: refuse.
+(fn lb_binelf_tail
+  ((m Module)
+   (entry Symbol)
+   (memf Bool)
+   (sforms (List SExpr))
+   (image (List Int))
+   (entry_off Int)
+   (w World))
+  World
+  (if (lb_entry_memret sforms entry)
+    (if memf
+      (match (lb_bin_vecs_w m (chars_of_sym entry) (lb_bin_pool))
+        (None (fail "spec eval failed (the write-variant stdout derivation)" w))
+        ((Some bvecs)
+         (exit
+           0
+           (write
+             (cat
+               (list
+                 "IMG "
+                 (hexs image)
+                 "\n"
+                 "ELF "
+                 (hexs (enc_binelf_w image entry_off))
+                 "\n"
+                 "BNOARG EXIT 0 OUT -\n"
+                 bvecs))
+             w))))
+      (fail "a Mem-returning entry must carry the payload-Mem binder shape" w))
+    (match (lb_bin_want m (chars_of_sym entry) Nil memf)
+      (None (fail "spec eval failed or exit code out of [0,256)" w))
+      ((Some noarg_want)
+       (match (lb_bin_vecs m (chars_of_sym entry) (lb_bin_pool) memf)
+         (None (fail "spec eval failed or exit code out of [0,256)" w))
+         ((Some bvecs)
+          (exit
+            0
+            (write
+              (cat
+                (list
+                  "IMG "
+                  (hexs image)
+                  "\n"
+                  "ELF "
+                  (hexs (enc_binelf image entry_off))
+                  "\n"
+                  "BNOARG EXIT "
+                  (show_int noarg_want)
+                  "\n"
+                  bvecs))
+              w))))))))
+
 (fn run_binelf ((srcp (List Int)) (outp (List Int)) (w World)) World
   (match (read_file srcp w)
     ((Pair None w1) (fail (append_int "cannot read " srcp) w1))
@@ -1531,48 +1704,9 @@
                                                          "no offset for the entry index"
                                                          w3))
                                                      ((Some entry_off)
-                                                      (match
-                                                        (lb_bin_want
-                                                          m
-                                                          (chars_of_sym entry)
-                                                          Nil
-                                                          memf)
-                                                        (None
-                                                          (fail
-                                                            "spec eval failed or exit code out of [0,256)"
-                                                            w3))
-                                                        ((Some noarg_want)
-                                                         (match
-                                                           (lb_bin_vecs
-                                                             m
-                                                             (chars_of_sym entry)
-                                                             (lb_bin_pool)
-                                                             memf)
-                                                           (None
-                                                             (fail
-                                                               "spec eval failed or exit code out of [0,256)"
-                                                               w3))
-                                                           ((Some bvecs)
-                                                            (exit
-                                                              0
-                                                              (write
-                                                                (cat
-                                                                  (list
-                                                                    "IMG "
-                                                                    (hexs image)
-                                                                    "\n"
-                                                                    "ELF "
-                                                                    (hexs
-                                                                      (enc_binelf
-                                                                        image
-                                                                        entry_off))
-                                                                    "\n"
-                                                                    "BNOARG EXIT "
-                                                                    (show_int
-                                                                      noarg_want)
-                                                                    "\n"
-                                                                    bvecs))
-                                                                w3))))))))))))))))))))))))))
+                                                      (lb_binelf_tail m entry
+                                                        memf sforms image
+                                                        entry_off w3)))))))))))))))))))))
                         (fail
                           "bin entry cert must carry the glue contract's two Int binders, or the payload-Mem shape's one"
                           w2))))))))))))))))

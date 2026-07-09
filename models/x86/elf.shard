@@ -200,15 +200,35 @@
 ;;      rung's address-bounds premises will cite THIS clause together with clause
 ;;      2 (the payload lives in the mapped, zeroed RW page).
 ;;
-;;   5. EXIT. The process terminates with sys_exit(entry's result); the exit code
-;;      the shell observes is the low 8 bits (kernel truncation of the status).
-;;      The derived plan refuses any expected exit outside [0, 256), so the
-;;      truncation is never load-bearing in a signed expectation.
+;;   5. TERMINATION — one of two BUILD-SELECTED variants. The driver picks the
+;;      variant by the entry's DECLARED RETURN TYPE (which encoder it invokes): an
+;;      Int-returning entry gets 5a (enc_binelf), a Mem-returning entry gets 5b
+;;      (enc_binelf_w). Exactly one variant is compiled into any given binary.
+;;
+;;      5a. EXIT variant (Int entry, enc_binelf). The process terminates with
+;;          sys_exit(entry's result); the exit code the shell observes is the low
+;;          8 bits (kernel truncation of the status). The derived plan refuses any
+;;          expected exit outside [0, 256), so the truncation is never load-bearing
+;;          in a signed expectation.
+;;
+;;      5b. WRITE variant (Mem entry, enc_binelf_w). The glue IGNORES the entry's
+;;          rax and instead does sys_write(1, 0x600000, len) then sys_exit(0),
+;;          where len is the clause-3 payload length (0..255). The glue PRESERVES
+;;          len across the call by its OWN stack (push before the `call`, pop
+;;          after) — nothing in a register is assumed to survive the entry's
+;;          arbitrary clobbers. The write is a SINGLE syscall whose result is
+;;          UNCHECKED (SIGNED CAVEAT, v1: len <= 255 <= PIPE_BUF, so the kernel
+;;          completes it in one shot; a short write would silently truncate stdout
+;;          — acceptable only under this length bound). A no-arg run (clause 3,
+;;          len = 0) writes zero bytes then exits 0 — NOT special-cased, keeping
+;;          the no-branch spirit.
 ;;
 ;;   6. THE LAW. The glue MOVES bytes — it never interprets them. Copy, marshal
-;;      into the SysV arg registers, exit: nothing else. Any logic beyond that
-;;      (parsing, branching on payload content, arithmetic on the bytes) is a
-;;      contract VIOLATION, to be caught in review of this one file.
+;;      into the SysV arg registers, exit, or sys_write the payload page back out
+;;      (5b is a byte MOVE from 0x600000 to fd 1, never a computation on the
+;;      bytes): nothing else. Any logic beyond that (parsing, branching on payload
+;;      content, arithmetic on the bytes) is a contract VIOLATION, to be caught in
+;;      review of this one file.
 ;; ----------------------------------------------------------------------------
 
 (fn bin_data_base () Int 6291456)  ; 0x600000 — the RW payload segment (clause 2)
@@ -222,11 +242,15 @@
 ;; The `_start` glue, hand-laid at fixed widths so every displacement is a
 ;; computable constant (the flattening's foundation — see encode.shard). The
 ;; byte offset from glue start annotates each instruction; a jump's rel32 is
-;; (target offset) - (this instruction's end). Landmarks: loop_start = 43,
-;; after_loop = 98, glue length = 131, so the image begins at glue offset 131
-;; and `call` reaches the entry (at image offset `entry_off`) with rel32 =
-;; (131 + entry_off) - 116 = 15 + entry_off.
-(fn bin_glue ((entry_off Int)) (List Int)
+;; (target offset) - (this instruction's end). Both termination variants (5a/5b)
+;; share bin_glue_pre — the entry-state read, the payload copy loop, and the
+;; SysV arg marshalling — and diverge only in the tail after the `call`.
+;;
+;; bin_glue_pre: entry-ABI read + copy loop + arg marshalling, ending with the
+;; entry's args in place (rdi = base, rsi = len) at glue offset 111. Landmarks:
+;; loop_start = 43, after_loop = 98. It is self-contained (all its jumps target
+;; 43 or 98, both inside it) and carries NO `call`, so both tails append cleanly.
+(fn bin_glue_pre () (List Int)
   (catb
     (list
       (enc_mov_reg_rsp8 RAX 0)  ; 0    mov rax,[rsp]         argc
@@ -248,11 +272,43 @@
       (enc_jmp_rel32 -55)  ; 93   jmp -55 -> 43 (loop_start)
       ;; after_loop = 98
       (enc_mov_imm64 RDI (bin_data_base))  ; 98   mov rdi,0x600000    arg0 = base
-      (enc_simple (XMovRR RSI RCX))  ; 108  mov rsi,rcx          arg1 = count
-      (enc_call_rel32 (+ 15 entry_off))  ; 111  call entry (clause 4)
-      (enc_simple (XMovRR RDI RAX))  ; 116  mov rdi,rax          exit arg = result
-      (enc_mov_imm64 RAX 60)  ; 119  mov rax,60           sys_exit nr
-      (i_syscall))))  ; 129  syscall (clause 5)  (ends at 131)
+      (enc_simple (XMovRR RSI RCX)))))  ; 108  mov rsi,rcx          arg1 = count
+
+;; 5a EXIT variant. Tail after the prefix: call the entry, then sys_exit(rax).
+;; glue length = 131, so the image begins at glue offset 131 and `call` (at 111,
+;; ending 116) reaches the entry (at image offset `entry_off`) with rel32 =
+;; (131 + entry_off) - 116 = 15 + entry_off.
+(fn bin_glue ((entry_off Int)) (List Int)
+  (eapp
+    (bin_glue_pre)
+    (catb
+      (list
+        (enc_call_rel32 (+ 15 entry_off))  ; 111  call entry (clause 4)
+        (enc_simple (XMovRR RDI RAX))  ; 116  mov rdi,rax          exit arg = result
+        (enc_mov_imm64 RAX 60)  ; 119  mov rax,60           sys_exit nr
+        (i_syscall)))))  ; 129  syscall (clause 5a)  (ends at 131)
+
+;; 5b WRITE variant. Tail after the prefix: PUSH len (rcx) so it survives the
+;; entry's arbitrary clobbers, call the entry, POP len into rdx, then a single
+;; sys_write(1, 0x600000, len) and sys_exit(0) — the entry's rax is ignored.
+;; glue length = 172, so the image begins at glue offset 172 and `call` (at 112,
+;; ending 117) reaches the entry with rel32 = (172 + entry_off) - 117 =
+;; 55 + entry_off.
+(fn bin_glue_w ((entry_off Int)) (List Int)
+  (eapp
+    (bin_glue_pre)
+    (catb
+      (list
+        (enc_push_reg RCX)  ; 111  push rcx             preserve len (clause 5b)
+        (enc_call_rel32 (+ 55 entry_off))  ; 112  call entry (clause 4)
+        (enc_pop_reg RDX)  ; 117  pop rdx              len restored across the call
+        (enc_mov_imm64 RDI 1)  ; 118  mov rdi,1            fd = stdout
+        (enc_mov_imm64 RSI (bin_data_base))  ; 128  mov rsi,0x600000     buf = base
+        (enc_mov_imm64 RAX 1)  ; 138  mov rax,1            sys_write nr
+        (i_syscall)  ; 148  syscall              write(1,base,len)
+        (enc_mov_imm64 RDI 0)  ; 150  mov rdi,0            exit code 0 (clause 5b)
+        (enc_mov_imm64 RAX 60)  ; 160  mov rax,60           sys_exit nr
+        (i_syscall)))))  ; 170  syscall (clause 5b)  (ends at 172)
 
 ;; 64-byte ELF header: ET_EXEC, x86-64, TWO program headers, entry at the glue
 ;; (first code after the headers).
@@ -307,6 +363,17 @@
 ;; 131 + entry_off, reached by the glue's `call`.
 (fn enc_binelf ((image (List Int)) (entry_off Int)) (List Int)
   (let ((code (eapp (bin_glue entry_off) image)))
+    (let ((filesz (+ (bin_hdrs_sz) (elen code))))
+      (eapp
+        (bin_elf_hdr)
+        (eapp (bin_phdr_code filesz) (eapp (bin_phdr_data) code))))))
+
+;; the WRITE-variant binary (clause 5b): same layout, addresses, and PT_LOADs as
+;; enc_binelf — only the glue tail differs (bin_glue_w). The driver invokes THIS
+;; encoder for a Mem-returning entry; the produced binary sys_writes the payload
+;; page to stdout and exits 0.
+(fn enc_binelf_w ((image (List Int)) (entry_off Int)) (List Int)
+  (let ((code (eapp (bin_glue_w entry_off) image)))
     (let ((filesz (+ (bin_hdrs_sz) (elen code))))
       (eapp
         (bin_elf_hdr)

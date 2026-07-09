@@ -3177,6 +3177,52 @@
 ;; window-literal-blind). Fuel 19/14 probe-validated (five pre-call
 ;; peels over the callee cert's 14).
 
+;; the IDENTITY entry (docs/X86.md §27, probe examples/xid_probe.shard):
+;; the payload-Mem binder list ((m Mem) (p Int) (k Nat)), Mem return,
+;; body = the Mem binder itself. Machine code is the Mem pieces' zero-rax
+;; epilogue alone — entry rax is undefined and the (Pair 0 …) conclusion
+;; needs the store. ZERO premises: no memory is touched, so there is no
+;; address to guard (the bin surface gate's empty-covered case).
+(fn xid_shape ((ts (List Type)) (rty Type) (body Expr)) Bool
+  (match ts
+    ((Cons t0 (Cons t1 (Cons t2 Nil)))
+     (if (is_mem_ty t0)
+       (if (is_int_ty t1)
+         (if (is_nat_ty t2)
+           (if (is_mem_ty rty)
+             (match body
+               ((BVar v) (int_eq v 2))
+               (_ False))
+             False)
+           False)
+         False)
+       False))
+    (_ False)))
+
+;; the identity fn's literal (shared by the cert and the funcs spine)
+(fn xid_flit () Doc (DStr "(MkXFunc 2 (list (XMovRI RAX 0)))"))
+
+;; the identity entry's lowered theorem (arglen's 1-instruction chain)
+(fn xid_unit ((q QName) (wl Int) (wh Int)) Doc
+  (let ((nm (dsym (qn_name q))))
+    (dconc
+      (list
+        (DStr "(claim lowered_")
+        nm
+        (DStr
+          " (goal ((x0 Int) (k Nat) (c Nat) (restfs (List XFunc)) (m0 Mem)) () (= (xcall_fn_mem (S^ 5 c) (MkXModule (Cons ")
+        (xid_flit)
+        (DStr " restfs) ")
+        (dint wl)
+        (sp)
+        (dint wh)
+        (DStr ") 0 (list x0 (int_of_nat k)) m0) (Some (Pair 0 (")
+        nm
+        (DStr " m0 x0 k))))) (chain (steps ((compute lhs) (unfold ")
+        nm
+        (DStr " rhs) (reduce rhs))) refl))")
+        (DStr (nl))))))
+
 ;; the loop callee's literal, spelled as the loop's own claims spell it
 (fn xbw_ll ((cs Symbol)) Doc
   (dconc
@@ -3358,29 +3404,44 @@
                      "an Int-return loop must be fn 0 of the lib file (v1)"))
                  (XLEErr "Mem-return loops are not in the x86 lib fragment yet"))
              (if (fn_is_mem f)
-               (match lloop
-                 ((Some cs)
-                  (if (xbw_shape ts rty body cs)
-                    (if (int_eq k 1)
-                      (xemit_fns_lib
-                        rest
-                        modpath
-                        (Cons f seen)
-                        2
-                        (DCat accp (DCat (DStr (nl)) (xbw_unit q cs wl wh)))
-                        (DCat
-                          accf
-                          (dconc
-                            (list (DStr "(Cons (") (dsym nm) (DStr "_func) "))))
-                        (Cons (Pair nm 1) accn)
-                        lloop
-                        wl
-                        wh)
+               (if (xid_shape ts rty body)
+                 (if (int_eq k 0)
+                   (xemit_fns_lib
+                     rest
+                     modpath
+                     (Cons f seen)
+                     1
+                     (DCat accp (DCat (DStr (nl)) (xid_unit q wl wh)))
+                     (DCat accf (dcat3 (DStr "(Cons ") (xid_flit) (sp)))
+                     (Cons (Pair nm 0) accn)
+                     lloop
+                     wl
+                     wh)
+                   (XLEErr
+                     "the identity entry must be fn 0 of the bin file (v1)"))
+                 (match lloop
+                   ((Some cs)
+                    (if (xbw_shape ts rty body cs)
+                      (if (int_eq k 1)
+                        (xemit_fns_lib
+                          rest
+                          modpath
+                          (Cons f seen)
+                          2
+                          (DCat accp (DCat (DStr (nl)) (xbw_unit q cs wl wh)))
+                          (DCat
+                            accf
+                            (dconc
+                              (list (DStr "(Cons (") (dsym nm) (DStr "_func) "))))
+                          (Cons (Pair nm 1) accn)
+                          lloop
+                          wl
+                          wh)
+                        (XLEErr
+                          "the entry wrapper must immediately follow its loop (v1)"))
                       (XLEErr
-                        "the entry wrapper must immediately follow its loop (v1)"))
-                    (XLEErr
-                      "mem fns are not in the x86 lib fragment yet (v1 lib mem shape: the band-masked seeded sum call against fn 0)")))
-                 (None (XLEErr "mem fns are not in the x86 lib fragment yet")))
+                        "mem fns are not in the x86 lib fragment yet (v1 lib mem shape: the band-masked seeded sum call against fn 0)")))
+                   (None (XLEErr "mem fns are not in the x86 lib fragment yet"))))
                (match (xc_target body seen)
                  ((Some _)
                   (XLEErr "call fns are not in the x86 lib fragment yet"))

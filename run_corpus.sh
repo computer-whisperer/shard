@@ -126,6 +126,7 @@ TARGETS=(
   examples/xintloop_probe.shard
   examples/xcopyloop_probe.shard
   examples/xbinsum_probe.shard
+  examples/xid_probe.shard
   examples/bytesum_src.shard
   examples/bytesum_x86_out.shard
   examples/libmod_probe.shard
@@ -136,6 +137,8 @@ TARGETS=(
   examples/purelib_x86_out.shard
   examples/arglen_src.shard
   examples/arglen_x86_out.shard
+  examples/echoarg_src.shard
+  examples/echoarg_x86_out.shard
   examples/bin_entry_rejects.shard
   examples/x86_diff_run.shard
   examples/rep_probe.shard

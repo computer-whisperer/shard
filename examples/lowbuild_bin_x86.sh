@@ -18,9 +18,14 @@
 #                   image == bytetie's cert-assembled TIEIMG
 #   6. ENGINE     — the ELF is run AS A USER WOULD: the no-arg leg, then one run
 #                   per BVEC (hexarg '-' = the empty-string argument, otherwise
-#                   the hex decoded to the literal argument); exit codes must
-#                   equal the derived plan's. One pool argument is 300 chars,
-#                   pinning the MAXLEN=255 truncation clause (expected exit 255).
+#                   the hex decoded to the literal argument); exit codes AND
+#                   stdout must equal the derived plan's. Exit-variant lines
+#                   carry no OUT field: stdout must be EMPTY (contract 5a writes
+#                   nothing). Write-variant lines carry 'OUT <hex|->': stdout
+#                   must be exactly those bytes (contract 5b: sys_write(1, BUF,
+#                   len), exit 0). One pool argument is 300 chars, pinning the
+#                   MAXLEN=255 truncation clause (5a: expected exit 255; 5b:
+#                   exactly 255 bytes out).
 # Exit 0 = a fully gated, plainly-executable artifact. Run from the repo root.
 set -uo pipefail
 [ $# -eq 2 ] || { echo "usage: lowbuild_bin_x86.sh SRC OUT"; exit 2; }
@@ -127,24 +132,32 @@ else
 fi
 
 echo "== gate 6: engine (run the binary as a user would)"
+# expected stdout for one line: no OUT field (exit variant) or OUT '-' =
+# empty; otherwise the OUT hex decoded to bytes
+want_out() { # $1 = OUT hex field ('' or '-' = empty)
+  if [ -z "$1" ] || [ "$1" = "-" ]; then : > "$TMP/want.out"; else
+    printf '%s' "$1" | xxd -r -p > "$TMP/want.out"; fi
+}
 BNOARG=$(grep '^BNOARG EXIT ' "$TMP/be.txt" | awk '{print $3}')
-"$TMP/a.bin"; code=$?
-if [ "$code" = "$BNOARG" ]; then
-  echo "PASS engine no-arg (exit $code == BNOARG $BNOARG)"
+want_out "$(grep '^BNOARG EXIT ' "$TMP/be.txt" | awk '{print $5}')"
+"$TMP/a.bin" > "$TMP/got.out"; code=$?
+if [ "$code" = "$BNOARG" ] && cmp -s "$TMP/got.out" "$TMP/want.out"; then
+  echo "PASS engine no-arg (exit $code == BNOARG $BNOARG, stdout $(wc -c < "$TMP/got.out") byte(s))"
 else
-  fail "engine no-arg (exit $code, expected $BNOARG)"
+  fail "engine no-arg (exit $code expected $BNOARG, stdout $(wc -c < "$TMP/got.out") expected $(wc -c < "$TMP/want.out") byte(s))"
 fi
-while read -r _bv hexarg _e want; do
+while read -r _bv hexarg _e want _kw outhex; do
+  want_out "$outhex"
   if [ "$hexarg" = "-" ]; then
-    "$TMP/a.bin" ""; code=$?; label="'' (empty string)"
+    "$TMP/a.bin" "" > "$TMP/got.out"; code=$?; label="'' (empty string)"
   else
     arg=$(printf '%s' "$hexarg" | xxd -r -p)
-    "$TMP/a.bin" "$arg"; code=$?; label="<${#arg} byte(s)>"
+    "$TMP/a.bin" "$arg" > "$TMP/got.out"; code=$?; label="<${#arg} byte(s)>"
   fi
-  if [ "$code" = "$want" ]; then
-    echo "PASS engine $label -> exit $code"
+  if [ "$code" = "$want" ] && cmp -s "$TMP/got.out" "$TMP/want.out"; then
+    echo "PASS engine $label -> exit $code, stdout $(wc -c < "$TMP/got.out") byte(s)"
   else
-    fail "engine $label (exit $code, expected $want)"
+    fail "engine $label (exit $code expected $want, stdout $(wc -c < "$TMP/got.out") expected $(wc -c < "$TMP/want.out") byte(s))"
   fi
 done < <(grep '^BVEC ' "$TMP/be.txt")
 
