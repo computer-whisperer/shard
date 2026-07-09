@@ -204,8 +204,9 @@
 (type Cond (CEqz Reg) (CNz Reg) (CEq Reg Src) (CLtU Reg Src) (CLeU Reg Src))
 
 ;; two-operand binary ops: dst = dst OP src. Arithmetic wraps; the bitwise
-;; trio is closed on [0, 2^64) (kernel/facts recurrences). Division waits
-;; for a consumer (x86 div is a compound rdx:rax op — X86.md §5).
+;; trio is closed on [0, 2^64) (kernel/facts recurrences). Division is NOT
+;; an XBop — it is the compound rdx:rax instruction XDivU below (§5's
+;; named growth, landed at rung B2 for decimal render).
 (type XBop (XAdd) (XSub) (XMul) (XAnd) (XOr) (XXor))
 
 (fn xbop_val ((o XBop) (a Int) (b Int)) Int
@@ -240,6 +241,7 @@
   (XMovRI Reg Int)
   (XMovRR Reg Reg)
   (XBin XBop Reg Src)
+  (XDivU Reg)
   (XLoad8 Reg Addr)
   (XStore8 Addr Src)
   (XBlock (List XInstr))
@@ -298,6 +300,21 @@
        ((XMovRR d s) (Some (XNorm (rset rs d (rget rs s)) mem)))
        ((XBin o d s)
         (Some (XNorm (rset rs d (xbop_val o (rget rs d) (xsrc rs s))) mem)))
+       ;; the compound unsigned divide (DIV r/m64, one machine instruction;
+       ;; NO immediate form exists — the divisor rides a register): the
+       ;; 128-bit dividend rdx:rax by the operand; quot -> rax, rem -> rdx.
+       ;; #DE is a TRAP: divisor zero, or a quotient that cannot fit 64
+       ;; bits. Register values are wrap64-maintained nonneg, so ediv/mod
+       ;; on them IS the machine's unsigned arithmetic. An emitter that
+       ;; zeroes rdx first collapses the dividend to rax and makes the
+       ;; overflow leg unreachable (quot <= rax < 2^64).
+       ((XDivU r)
+        (let ((d (rget rs r)))
+          (if (int_eq d 0) (Some XTrap)
+          (let ((n (+ (* (rget rs RDX) 18446744073709551616) (rget rs RAX))))
+            (if (lt (ediv n d) 18446744073709551616)
+              (Some (XNorm (rset (rset rs RAX (ediv n d)) RDX (mod n d)) mem))
+              (Some XTrap))))))
        ((XLoad8 d a)
         (let ((p (xaddr rs a)))
           (if (le (xmemlo_of m) p)
