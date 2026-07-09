@@ -174,6 +174,50 @@ int main(int argc, char **argv) {
       } else {
         report(!strcmp(exp, "None"), line, "hardware faulted");
       }
+    } else if (!strncmp(line, "XSEEDCASE ", 10)) {
+      char name[32], a0[24], a1[24], a2[24], seedaddr[24], seedhex[4096];
+      char addr[24], len[24], exp[24], outhex[4096];
+      int ac;
+      if (sscanf(line + 10,
+                 "%31s %d %23s %23s %23s SEED %23s %4095s READ %23s %23s -> %23s %4095s",
+                 name, &ac, a0, a1, a2, seedaddr, seedhex, addr, len, exp, outhex) != 11) {
+        report(0, line, "unparseable");
+        continue;
+      }
+      void *code = find_mod(name);
+      if (!code) { report(0, line, "module unavailable"); continue; }
+      memset(data_page, 0, DATA_SIZE);
+      /* seed the data page BEFORE the call ("-" = empty seed, zero bytes) */
+      uint64_t sd = parse_le_u64(seedaddr);
+      size_t seedlen = strcmp(seedhex, "-") ? strlen(seedhex) / 2 : 0;
+      if (sd < DATA_BASE || sd + seedlen > DATA_BASE + DATA_SIZE) {
+        report(0, line, "seed out of range");
+        continue;
+      }
+      for (size_t i = 0; i < seedlen; i++) {
+        unsigned b;
+        sscanf(seedhex + 2 * i, "%2x", &b);
+        ((uint8_t *)(uintptr_t)sd)[i] = (uint8_t)b;
+      }
+      uint64_t rd = parse_le_u64(addr), ln = parse_le_u64(len);
+      uint64_t got;
+      char gothex[17];
+      faulted = 0;
+      if (sigsetjmp(fault_env, 1) == 0) {
+        got = call_code(code, parse_le_u64(a0), parse_le_u64(a1), parse_le_u64(a2));
+        fmt_le_u64(got, gothex);
+        /* read back ln bytes at rd (an absolute address inside data_page) */
+        char rb[4096];
+        int p = 0;
+        for (uint64_t i = 0; i < ln && p < 4000; i++)
+          p += sprintf(rb + p, "%02x", ((uint8_t *)(uintptr_t)rd)[i]);
+        if (ln == 0) strcpy(rb, "");
+        char detail[8300];
+        snprintf(detail, sizeof detail, "%s %s", gothex, rb);
+        report(!strcmp(gothex, exp) && !strcmp(rb, outhex), line, detail);
+      } else {
+        report(!strcmp(exp, "None"), line, "hardware faulted");
+      }
     }
   }
   fclose(f);

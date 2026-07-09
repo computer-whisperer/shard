@@ -1284,6 +1284,132 @@
           ") lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((rewrite (premise 1) lr lhs true ())) refl) (steps ((rewrite (premise 2) lr lhs true ())) refl) (steps ((rewrite (premise 3) lr lhs true ())) refl))) (steps ((compute both))) refl))")
         (DStr (nl))))))
 
+;; ---- the COPY loop (probe examples/xcopyloop_probe) ----------------------------
+;;
+;; (fn NAME ((m Mem) (s Int) (d Int) (k Nat)) Mem
+;;   (match k (Z m) ((S k2) (NAME (mem_set m d (mem_get m s)) (+ s 1) (+ d 1) k2))))
+;; — the LVRead store value of lp_recognize's LROk (wasm's twin emits it
+;; directly; x86 has no mem-to-mem move, so the byte lands in rax). v1
+;; pins the probe exactly: two advancing accums, the READ address first,
+;; the store address second. The worker closes rax over the kit's
+;; xlg_lastc — which threads the memory, since this loop's own store
+;; changes what the next load sees — and QUANTIFIES the entry rax (ra);
+;; the piece's epilogue XMovRI RAX 0 overwrites the residue, keeping the
+;; Mem-return (Pair 0 mem') conclusion. Two address guards per iteration
+;; (the load, then the store), so the guard stage runs twice.
+
+;; the module literal: [the epilogue'd loop func | restfs], self at 0
+(fn xlc_mod ((nm Doc) (wl Int) (wh Int)) Doc
+  (dconc
+    (list
+      (DStr "(MkXModule (Cons (MkXFunc 3 (list (XBlock (list (XLoop (inline ")
+      nm
+      (DStr "_body)))) (XMovRI RAX 0))) restfs) ")
+      (dint wl)
+      (sp)
+      (dint wh)
+      (DStr ")"))))
+
+;; the window pair on BOTH addresses (mark's premise set)
+(fn xlc_prems ((wl Int) (wh Int)) Doc
+  (dconc
+    (list
+      (DStr "((= (le ")
+      (dint wl)
+      (DStr " x0) True) (= (le ")
+      (dint wl)
+      (DStr " x1) True) (= (le (+ x0 (int_of_nat k)) ")
+      (dint wh)
+      (DStr ") True) (= (le (+ x1 (int_of_nat k)) ")
+      (dint wh)
+      (DStr ") True))"))))
+
+;; one address guard stage: the lo premise, then xlg_a1_ms at its pair
+(fn xlc_stage ((pa Int) (pb Int)) Doc
+  (dconc
+    (list
+      (DStr
+        "(steps ((compute lhs (stop xeval_loop xlg_fuel)) (rewrite (premise ")
+      (dint pa)
+      (DStr
+        ") lr lhs true ()) (compute lhs (stop xeval_loop xlg_fuel)))) (rewrite-with (lemma xlg_a1_ms) lr lhs ((inst c k2)) ((steps ((rewrite (premise ")
+      (dint pb)
+      (DStr
+        ") lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl) (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))) "))))
+
+;; body + func + worker induction + lowered theorem (the probe
+;; templated; fuel 11/15 probe-validated)
+(fn xlc_unit ((q QName) (mids (List Type)) (wl Int) (wh Int)) Doc
+  (let ((nm (dsym (qn_name q))))
+    (dconc
+      (list
+        (DStr "(fn ")
+        nm
+        (DStr
+          "_body () (List XInstr) (list (XBrIf (CEqz RDX) 1) (XLoad8 RAX (AReg RDI)) (XStore8 (AReg RSI) (SReg RAX)) (XBin XAdd RDI (SImm 1)) (XBin XAdd RSI (SImm 1)) (XBin XSub RDX (SImm 1)) (XBr 0)))")
+        (DStr (nl))
+        (DStr "(fn ")
+        nm
+        (DStr "_func () XFunc (MkXFunc 3 (list (XBlock (list (XLoop (")
+        nm
+        (DStr "_body)))) (XMovRI RAX 0))))")
+        (DStr (nl))
+        (DStr "(claim xlcw_")
+        nm
+        (DStr " (goal ((ra Int) ")
+        (pr_binds mids 0)
+        (DStr "(m0 Mem) (c Nat) (k Nat) (restfs (List XFunc))) ")
+        (xlc_prems wl wh)
+        (DStr " (= (xeval_loop (S^ 11 (xlg_fuel k c)) ")
+        (xlc_mod nm wl wh)
+        (DStr " (inline ")
+        nm
+        (DStr
+          "_body) (MkRegs ra 0 (int_of_nat k) 0 0 x1 x0 0 0 0 0 0 0 0 0) m0) (Some (XBrk 0 (MkRegs (xlg_lastc m0 x0 x1 ra k) 0 0 0 0 (xlg_adv x1 k) (xlg_adv x0 k) 0 0 0 0 0 0 0 0) (")
+        nm
+        (DStr
+          " m0 x0 x1 k))))) (induct k ((case Z (steps ((rewrite (lemma int_of_nat_zero) lr lhs true ()) (compute both)) refl)) (case S (k2) (chain (steps ((unfold xlg_fuel lhs) (reduce lhs) (unfold xeval_loop lhs) (rewrite (lemma int_of_nat_succ) lr lhs true ()) (compute lhs (stop xeval_loop xlg_fuel)))) (rewrite-with (lemma xlg_ne) lr lhs () ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))) ")
+        (xlc_stage 0 2)
+        (xlc_stage 1 3)
+        (DStr "(steps ((compute lhs (stop xeval_loop xlg_fuel)))) ")
+        (xl_hwk 0 0 2 wl wh)
+        (xl_hw1 0 0 0 2 wl wh)
+        (xl_hw1 1 1 1 3 wl wh)
+        (DStr "(steps ((unfold ")
+        nm
+        (DStr
+          " rhs) (unfold xlg_lastc rhs) (unfold xlg_adv rhs) (reduce rhs))) (rewrite-with (hyp 0) lr lhs () ((rewrite-with (lemma xlg_lo1) lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl)) refl) (rewrite-with (lemma xlg_lo1) lr lhs () ((steps ((rewrite (premise 1) lr lhs true ())) refl)) refl) (rewrite-with (lemma xlg_shift) lr lhs () ((steps ((rewrite (premise 2) lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)) refl) (rewrite-with (lemma xlg_shift) lr lhs () ((steps ((rewrite (premise 3) lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)) refl))) (steps ((compute both))) refl)))))")
+        (DStr (nl))
+        (DStr "(claim lowered_")
+        nm
+        (DStr " (goal (")
+        (pr_binds mids 0)
+        (DStr "(m0 Mem) (c Nat) (k Nat) (restfs (List XFunc))) ")
+        (xlc_prems wl wh)
+        (DStr " (= (xcall_fn_mem (S^ 15 (xlg_fuel k c)) ")
+        (xlc_mod nm wl wh)
+        (DStr " 0 (list x0 x1 (int_of_nat k)) m0) (Some (Pair 0 (")
+        nm
+        (DStr
+          " m0 x0 x1 k))))) (chain (steps ((compute lhs (stop xeval_loop xlg_fuel)))) (rewrite-with (lemma xlcw_")
+        nm
+        (DStr
+          ") lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((rewrite (premise 1) lr lhs true ())) refl) (steps ((rewrite (premise 2) lr lhs true ())) refl) (steps ((rewrite (premise 3) lr lhs true ())) refl))) (steps ((compute both))) refl))")
+        (DStr (nl))))))
+
+;; the copy shape's v1 fences: exactly two accums, both +1, the READ
+;; address accum 0, the store address accum 1 (the probe's pinning)
+(fn xlc_shape_ok ((n Int) (adv (List LStr)) (ai Int) (j Int)) Bool
+  (if (int_eq n 2)
+    (if (int_eq j 0)
+      (if (int_eq ai 1)
+        (match adv
+          ((Cons (LSInc) (Cons (LSInc) Nil)) True)
+          (_ False))
+        False)
+      False)
+    False))
+
 ;; the loop-fn gate: param slicing + the shared recognizer + v1 fences
 (fn xg_claim_loop ((f FnDef) (wl Int) (wh Int)) XCR
   (match f
@@ -1309,30 +1435,38 @@
                             (if (xl_strides_ok adv)
                               (match sts
                                 ((Cons (Pair ai v) Nil)
-                                 (match (xlv_src v)
-                                   (None
-                                     (xerr_at
-                                       q
-                                       "store value must be an accum or an imm32 literal (byte-read values follow the copy slice)"))
-                                   ((Some vsrc)
-                                    (match (xl_first_inc adv 0)
-                                      (None
-                                        (xerr_at
-                                          q
-                                          "v1: at least one (+ ACCUM 1) accumulator is required (the counter wrap rides its range premise)"))
-                                      ((Some fa)
-                                       (XCOk
-                                         (xl_unit
-                                           (dsym (qn_name q))
-                                           mids
-                                           n
-                                           adv
-                                           ai
-                                           vsrc
-                                           fa
-                                           (+ (+ 4 (xl_nadv adv)) 4)
-                                           wl
-                                           wh)))))))
+                                 (match v
+                                   ((LVRead j)
+                                    (if (xlc_shape_ok n adv ai j)
+                                      (XCOk (xlc_unit q mids wl wh))
+                                      (xerr_at
+                                        q
+                                        "v1 copy loops pin the probe: exactly two +1 accums, the READ address first, the store address second")))
+                                   (_
+                                     (match (xlv_src v)
+                                       (None
+                                         (xerr_at
+                                           q
+                                           "store value must be an accum, an imm32 literal, or (mem_get m ADV-ACCUM)"))
+                                       ((Some vsrc)
+                                        (match (xl_first_inc adv 0)
+                                          (None
+                                            (xerr_at
+                                              q
+                                              "v1: at least one (+ ACCUM 1) accumulator is required (the counter wrap rides its range premise)"))
+                                          ((Some fa)
+                                           (XCOk
+                                             (xl_unit
+                                               (dsym (qn_name q))
+                                               mids
+                                               n
+                                               adv
+                                               ai
+                                               vsrc
+                                               fa
+                                               (+ (+ 4 (xl_nadv adv)) 4)
+                                               wl
+                                               wh)))))))))
                                 (_
                                   (xerr_at
                                     q
