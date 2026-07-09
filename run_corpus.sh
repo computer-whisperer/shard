@@ -131,6 +131,7 @@ TARGETS=(
   examples/lxkernel_probe.shard
   examples/xworld_probe.shard
   examples/xadequacy_probe.shard
+  examples/xitoa_probe.shard
   examples/x86div_src.shard
   examples/x86div_out.shard
   examples/xbinsum_probe.shard
