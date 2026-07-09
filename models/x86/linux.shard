@@ -1,36 +1,50 @@
-;;; models/x86/linux.shard — the Linux x86_64 syscall shim (docs/X86.md §20,
-;;; the platform-externs ruling). The FIRST increment of a shard PLATFORM
-;;; API: the platform is the Linux KERNEL ABI directly — NO libc, ever
+;;; models/x86/linux.shard — the Linux x86_64 syscall shims (docs/X86.md
+;;; §20 born, §32/§44 pedigree): the FIRST increment of a shard PLATFORM
+;;; API. The platform is the Linux KERNEL ABI directly — NO libc, ever
 ;;; (linking it would drag the C toolchain, CRT startup, and the dynamic
-;;; loader into the TCB). A freestanding static image reaches the OS through
-;;; raw `syscall` instructions and nothing else.
+;;; loader into the TCB). A freestanding static image reaches the OS
+;;; through raw `syscall` instructions and nothing else.
 ;;;
-;;; TRUST STATUS — these bytes are AXIOM-KIND. They are hand-reviewed once
-;;; and thereafter trusted: the x86 model (models/x86/x86.shard) is purely
-;;; computational (registers + memory, no World, no `syscall` instruction),
-;;; so their EFFECT cannot yet be refined against a spec. In the current
-;;; (self-checking ELF) rung nothing CITES them — the ELF harness only USES
-;;; them to report results, exactly as examples/x86_diff.c uses printf: a
-;;; reality check, not a soundness claim. The full World-effect axiom
-;;; (spec extern ⊑ shim) arrives with the runner rung, when a program's
-;;; proven I/O behaviour cites a shim; the register-discipline contract
-;;; below is what that citation will rest on.
+;;; TRUST STATUS (rewritten at W4c per the §32 ratification, superseding
+;;; this file's original axiom-kind header): the shim BODIES below are
+;;; ORDINARY PROVABLE CODE. Their behavior is a THEOREM against the
+;;; world layer (models/x86/world.shard) composed with the kernel model
+;;; (models/linux/kernel.shard) — the §10 clobber-set form, proven by
+;;; computation (design articles: examples/xworld_probe.shard
+;;; wxp_write_shim / wxp_exit_shim; per-image certs are emitted at the
+;;; shim's image index like any callee cert). What REMAINS trusted:
+;;; (1) the 2-byte `syscall` encoding (0F 05, objdump-verified, in
+;;; encode.shard's table); (2) the kernel model's FIDELITY to Linux —
+;;; the ledger's kernel-model trust kind, held by the W4d trace
+;;; differential gate, never by an in-language axiom; (3) the _start
+;;; entry-state contract (argc/argv stack layout), owned by the glue.
 ;;;
-;;; LEDGER (axiom-kind trusted bytes — the percolation-twin gate one level
-;;; down will hold the image's linked shim set equal to the declared extern
-;;; set once externs are declared):
+;;; THE XINSTR BODIES are the shims' source of truth: emitted images
+;;; carry them as ordinary image functions (encoded through enc_image
+;;; with everything else), and the byte-tie law holds because the bytes
+;;; enter the image from THIS pinned reviewed file, never from a
+;;; producer. Two instructions each — the first three SysV arg homes
+;;; (rdi/rsi/rdx) ARE the first three syscall arg homes, so the
+;;; marshalling is the calling convention and only the number needs
+;;; loading.
+;;;
+;;; LEDGER (the per-effect-point register discipline the certs state):
 ;;;
 ;;;   syscall            0F 05     rax = syscall number in; rax = result out.
 ;;;                                CLOBBERS {rcx, r11} (the CPU stores rip in
-;;;                                rcx and rflags in r11). Nothing else moves.
+;;;                                rcx and rflags in r11) — oracle-drawn in
+;;;                                the model, so no cert can depend on them.
 ;;;   sys_write  (nr 1)  rdi=fd  rsi=buf  rdx=count -> rax = bytes written.
-;;;                      Clobber set (SysV + syscall): {rax, rcx, r11}.
-;;;   sys_exit   (nr 60) rdi=code -> TERMINAL (control never returns).
+;;;                      Clobber set: {rax, rcx, r11}. Trace: LxWrote fd
+;;;                      (the bytes OFFERED — the v1 unconditional form).
+;;;   sys_exit   (nr 60) rdi=code -> TERMINAL (WExit, wait-status masked).
 ;;;   entry state        _start receives argc/argv/envp/auxv on the initial
 ;;;                      stack (no CRT); this is the _start contract, owned
-;;;                      by the harness stub that consumes it.
+;;;                      by the glue stub that consumes it.
 
 (import "../../kernel/stdlib.shard")
+(import "x86.shard")
+(use (:: models x86 x86 *))
 (import "encode.shard")
 (use (:: models x86 encode le4))
 (use (:: models x86 encode eapp))
@@ -39,6 +53,17 @@
 (fn sc_nr_write () Int 1)
 
 (fn sc_nr_exit () Int 60)
+
+;; --- the shim bodies (model level — the emitter splices these into images) --------
+
+;; sys_write: fd/buf/count already sit in rdi/rsi/rdx (SysV = syscall)
+(fn shim_write_body () (List XInstr) (list (XMovRI RAX 1) XSyscall))
+
+;; sys_exit: code already sits in rdi; control never returns (WExit)
+(fn shim_exit_body () (List XInstr) (list (XMovRI RAX 60) XSyscall))
+
+;; --- byte-level residue (the GLUE's own effect tail, §20-era, still consumed
+;; --- by the exit-variant packagings; dissolves as those variants do) --------------
 
 ;; the syscall instruction: 0F 05.
 (fn i_syscall () (List Int) (list 15 5))

@@ -255,6 +255,24 @@
 ;;   blind — each emits its fixed glue and never inspects the image. There is
 ;;   no two-arg WRITE variant (no consumer demands one; termination growth is
 ;;   what the §30 re-cut forecloses).
+;;
+;;   THE WORLD VARIANT OF THE TWO-ARGUMENT GLUE (enc_binelfw; X86.md §44, the
+;;   W4c rung). Clauses 1, 2, 3, 3', 4, 4', 6 apply UNCHANGED BY REFERENCE (same
+;;   layout, the same two window pairs at BUF1/BUF2, the same marshalling rdi =
+;;   BUF1, rsi = len1, rdx = BUF2, rcx = len2) — DO NOT renumber them. Only
+;;   termination differs: for THIS variant the exit-code clause (5) is REPLACED.
+;;   The entry is an effectful, NEVER-RETURNING World entry (its model contract
+;;   is a terminal WExit): it performs its OWN sys_write and sys_exit through the
+;;   in-image shims and never comes back. So the process's observable behavior is
+;;   the entry's trace (write/exit through the in-image shims, docs/X86.md §32's
+;;   one-equation contract), and the glue emits NO exit tail after the `call`. In
+;;   its place sits a single `ud2` (0F 0B): a non-policy TRAP FENCE — were the
+;;   never-returns contract ever violated on real silicon, the process dies
+;;   deterministically with SIGILL rather than running off the code segment. The
+;;   ud2 is a fence, not policy (clause 6 stays unbroken: the glue still only
+;;   MOVES bytes). SELECTION is by the entry's WORLD SHAPE (a World-threading
+;;   entry gets this encoder), decided by the CALLER (tools/lowbuild); the
+;;   encoder stays variant-blind.
 ;; ----------------------------------------------------------------------------
 
 (fn bin_data_base () Int 6291456)  ; 0x600000 — the RW payload segment (clause 2)
@@ -392,6 +410,30 @@
       (enc_mov_imm64 RAX 60)  ; 225  mov rax,60           sys_exit nr
       (i_syscall))))  ; 235  syscall (clause 5a)  (ends at 237)
 
+;; WORLD-VARIANT TWO-ARG glue (clauses 3'/4' verbatim; termination REPLACED, the
+;; §44 W4c rung). Identical to bin_glue2 up to and including the `call` — the
+;; same argc read, the two bin_copy_loop fills (BUF1 from argv[1], BUF2 from
+;; argv[2]), the len1 stash to r8, and the rdi/rsi/rdx/rcx marshalling — but the
+;; entry is a NEVER-RETURNING World entry (it sys_writes and sys_exits through
+;; the in-image shims). So there is NO exit tail: after the `call` sits a single
+;; `ud2` (0F 0B) as a trap fence (a violated never-returns contract dies with
+;; SIGILL, never runs off the segment). glue length = 224, so the image begins at
+;; glue offset 224 and `call` (at 217, ending 222) reaches the entry with rel32 =
+;; (224 + entry_off) - 222 = 2 + entry_off — the 15-byte 5a exit tail shrank to
+;; the 2-byte ud2, so the call-to-image gap is +2, not +15.
+(fn bin_glue2w ((entry_off Int)) (List Int)
+  (catb
+    (list
+      (enc_mov_reg_rsp8 RAX 0)  ; 0    mov rax,[rsp]        argc (both guards)
+      (bin_copy_loop 2 16 (bin_data_base))  ; 5    argv[1] -> BUF1; rcx = len1
+      (enc_simple (XMovRR R8 RCX))  ; 98   mov r8,rcx           stash len1
+      (bin_copy_loop 3 24 (bin_buf2))  ; 101  argv[2] -> BUF2; rcx = len2
+      (enc_mov_imm64 RDI (bin_data_base))  ; 194  mov rdi,0x600000    arg0 = BUF1
+      (enc_simple (XMovRR RSI R8))  ; 204  mov rsi,r8           arg1 = len1
+      (enc_mov_imm64 RDX (bin_buf2))  ; 207  mov rdx,0x600100    arg2 = BUF2 (rcx = len2 = arg3)
+      (enc_call_rel32 (+ 2 entry_off))  ; 217  call entry (clause 4')  (ends at 222)
+      (list 15 11))))  ; 222  ud2 (0F 0B) trap fence — entry never returns (ends at 224)
+
 ;; 64-byte ELF header: ET_EXEC, x86-64, TWO program headers, entry at the glue
 ;; (first code after the headers).
 (fn bin_elf_hdr () (List Int)
@@ -468,6 +510,20 @@
 ;; encoder itself is arity-blind.
 (fn enc_binelf2 ((image (List Int)) (entry_off Int)) (List Int)
   (let ((code (eapp (bin_glue2 entry_off) image)))
+    (let ((filesz (+ (bin_hdrs_sz) (elen code))))
+      (eapp
+        (bin_elf_hdr)
+        (eapp (bin_phdr_code filesz) (eapp (bin_phdr_data) code))))))
+
+;; the TWO-ARG WORLD-variant binary (§44 W4c): same layout, addresses, and
+;; PT_LOADs as enc_binelf2 — only the glue differs (bin_glue2w, 224 bytes; the
+;; entry function sits at glue offset 224 + entry_off). The entry is a never-
+;; returning World entry that writes and exits through the in-image shims, so
+;; the glue just copies argv, marshals, calls, and traps (ud2). The CALLER
+;; selects this encoder by the entry's World shape (tools/lowbuild); the encoder
+;; itself is variant-blind.
+(fn enc_binelfw ((image (List Int)) (entry_off Int)) (List Int)
+  (let ((code (eapp (bin_glue2w entry_off) image)))
     (let ((filesz (+ (bin_hdrs_sz) (elen code))))
       (eapp
         (bin_elf_hdr)

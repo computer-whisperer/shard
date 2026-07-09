@@ -1,0 +1,113 @@
+;;; examples/addw_src.shard — the W4c RUNG'S DELIVERABLE (docs/X86.md
+;;; §44-): `./add 2 3` PRINTS 5 — the first native binary whose stdout
+;;; is a cited effect extern rather than glue behavior. The entry is
+;;; WORLD-LEADING (World first and last, the §44 driver contract): it
+;;; decimal-folds both glue-supplied payloads, adds (THE SPEC SPELLS THE
+;;; MACHINE'S ADD WRAP, §11's law), renders the FULL sum's decimal
+;;; digits into program memory through the §38 do-while pair (store +
+;;; pointer twin — v1 calls both units; fusing the twin into the store's
+;;; exit rsi is a named optimization), and leaves the process through
+;;; the two effect externs: the sum's digits to stdout via nw_write,
+;;; exit 0 via nw_exit. The exit code stops being the data channel.
+;;;
+;;; The externs are the bin-local v1 of the platform surface (the
+;;; friendly opaque module is a later increment): nw_write carries the
+;;; MEMORY because the spec-level event is the OFFERED bytes
+;;; (lx_read m buf n — models/linux/kernel.shard); both thread the
+;;; World linearly. At the machine level they lower to the reviewed
+;;; shim bodies (models/x86/linux.shard) and the bin's contract is
+;;; §32's ONE equation: xrun_w … = Some (WExit 0 trace), the trace
+;;; naming the write and the exit in order.
+;;;
+;;; The digit buffer: digits end at 6292480 (0x600400, inside the glue
+;;; window, clear of both payload buffers) and are stored high-to-low;
+;;; the ghost bound 20 covers every 64-bit value (at most 20 decimal
+;;; digits), and the do-while writes at least one digit, so empty
+;;; payloads print "0".
+
+(import "../kernel/stdlib.shard")
+(import "../std/mem")
+
+(use (:: std mem *))
+
+(type World (World Int))
+
+;; the effect externs (the platform surface's bin-local v1)
+(extern nw_write ((w World) (m Mem) (fd Int) (buf Int) (n Int)) World)
+
+(extern nw_exit ((w World) (code Int)) World)
+
+;; the decimal fold (B1's, verbatim): k payload bytes at p, onto acc a
+(fn adw_go ((m Mem) (p Int) (a Int) (k Nat)) Int
+  (measure (struct k))
+  (match k
+    (Z a)
+    ((S k2)
+     (adw_go
+       m
+       (+ p 1)
+       (mod
+         (-
+           (mod
+             (+ (mod (* a 10) 18446744073709551616) (mem_get m p))
+             18446744073709551616)
+           48)
+         18446744073709551616)
+       k2))))
+
+;; the digit writer (the §38 do-while STORE shape, decimal/ASCII):
+;; digits high-to-low ending at p, predecrement, at-least-once
+(fn adw_digits ((m Mem) (n Int) (p Int) (k Nat)) Mem
+  (measure (struct k))
+  (match k
+    (Z m)
+    ((S k2)
+     (let
+       ((m2 (mem_set m (- p 1) (mod (+ (mod n 10) 48) 18446744073709551616))))
+       (if (int_eq (ediv n 10) 0) m2 (adw_digits m2 (ediv n 10) (- p 1) k2))))))
+
+;; the start pointer (the §40 POINTER TWIN): where the digits begin;
+;; the digit count is (- p (adw_start n p k)) in pure arithmetic
+(fn adw_start ((n Int) (p Int) (k Nat)) Int
+  (measure (struct k))
+  (match k
+    (Z p)
+    ((S k2)
+     (if (int_eq (ediv n 10) 0) (- p 1) (adw_start (ediv n 10) (- p 1) k2)))))
+
+;; the entry: parse both, add (the spec spells the wrap), render the
+;; digits, write them to stdout, exit 0 — World threaded linearly
+(fn adw_main ((w World) (m Mem) (p1 Int) (k1 Nat) (p2 Int) (k2 Nat)) World
+  (let
+    ((s (mod (+ (adw_go m p1 0 k1) (adw_go m p2 0 k2)) 18446744073709551616)))
+    (let
+      ((m2
+         (adw_digits
+           m
+           s
+           6292480
+           (S
+             (S
+               (S
+                 (S
+                   (S
+                     (S
+                       (S (S (S (S (S (S (S (S (S (S (S (S (S (S Z)))))))))))))))))))))))
+      (let
+        ((st
+           (adw_start
+             s
+             6292480
+             (S
+               (S
+                 (S
+                   (S
+                     (S
+                       (S
+                         (S
+                           (S (S (S (S (S (S (S (S (S (S (S (S (S Z)))))))))))))))))))))))
+        (nw_exit
+          (nw_write w m2 1 st (mod (- 6292480 st) 18446744073709551616))
+          0)))))
+
+(bin addw (entry adw_main) (externs nw_write nw_exit))

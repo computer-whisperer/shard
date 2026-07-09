@@ -132,6 +132,8 @@ TARGETS=(
   examples/xworld_probe.shard
   examples/xadequacy_probe.shard
   examples/xweff_probe.shard
+  examples/addw_src.shard
+  examples/addw_x86_out.shard
   examples/xitoa_probe.shard
   examples/x86div_src.shard
   examples/x86div_out.shard
