@@ -12,12 +12,22 @@
 ;;; contain effect-points; XSyscall applies the kernel transition and
 ;;; CONTINUES — no stop, no continuation capture.
 ;;;
-;;; DEVIATION FROM THE §32 SKETCH (recorded in the W2 ledger entry): the
-;;; call arm does NOT dispatch on a static purity predicate to xrun_regs —
-;;; xeval_call burns a fuel unit at the boundary and xrun_regs does not,
-;;; so predicate-dispatch would break EXACT adequacy. weval_call mirrors
-;;; the base uniformly; pure callees plug in through per-callee bridge
-;;; lemmas (emitted beside the xcert twins when composition arrives).
+;;; THE CALL ARM'S PURITY DISPATCH (§32's delegation principle, RESTORED
+;;; at W4c — superseding the W2 deviation note that stood here): a callee
+;;; with no effect-point (xfn_eff at a ground budget) is evaluated by
+;;; DELEGATING to xeval_call AT THE SAME FUEL. The §32 sketch delegated
+;;; to xrun_regs, which drops the call boundary's fuel unit and so broke
+;;; exact adequacy — the W2 cut therefore mirrored uniformly and priced
+;;; per-callee bridge lemmas. Composition (W4c) exposed that price: a
+;;; data-dependent loop callee's bridge is either a mutual fuel induction
+;;; or a lemma-for-lemma twin of the pure worker — the B-tripwire's named
+;;; failure. xeval_call burns the boundary unit ITSELF, so delegating to
+;;; it is fuel-exact, and a pure callee's W call site computes to
+;;; (wlift w (xeval_call …)): the EXISTING regs-general cert welds in
+;;; through xcall_bridge — no bridge lemma, no twin. Effectful callees
+;;; take the mirror arm; an exhausted budget answers True = mirror,
+;;; always SOUND (only the delegation convenience is lost, and loudly —
+;;; the pure cert's citation fails to fire).
 ;;;
 ;;; THE x86-LINUX BINDING — this file owns what kernel.shard deliberately
 ;;; does not: nr = rax, args = rdi/rsi/rdx (the first three syscall arg
@@ -105,6 +115,61 @@
                   (Cons ev Nil))))))))
        ((LxEnd c ev) (Some (WExit c (Cons ev Nil))))))))
 
+;; --- the static effect predicate (the call arm's, the gates', the emitter's) ------
+
+;; does this code contain an effect-point, SYNTACTICALLY? Fuel-style
+;; mutual pair (the evaluator's own pattern); exhausted fuel answers
+;; True — the CONSERVATIVE default, so anything built on this can refuse
+;; (or mirror) but never under-report an effect. XCall is False here: a
+;; call is not itself an effect-point (image-level transitivity is the
+;; gate's walk over every body, not this predicate's business).
+(fn xeff_i ((d Nat) (i XInstr)) Bool
+  (measure (struct d))
+  (match d
+    (Z True)
+    ((S d2)
+     (match i
+       (XSyscall True)
+       ((XBlock body) (xeff_l d2 body))
+       ((XLoop body) (xeff_l d2 body))
+       (other False)))))
+
+(fn xeff_l ((d Nat) (is (List XInstr))) Bool
+  (measure (struct d))
+  (match d
+    (Z True)
+    ((S d2)
+     (match is
+       (Nil False)
+       ((Cons i rest) (if (xeff_i d2 i) True (xeff_l d2 rest)))))))
+
+;; a function's answer at its own depth budget: body length + nesting
+;; rides comfortably under fuel = list length + 8 per nesting level; the
+;; caller picks the budget (gates use a generous ground one)
+(fn xfn_eff ((d Nat) (f XFunc)) Bool (xeff_l d (xbody_of f)))
+
+;; the call arm's ground budget: GROUND so the dispatch reduces at
+;; symbolic fuel; generous for every emitted body (spine length +
+;; nesting ≤ ~40 today). A body beyond it answers True = the mirror
+;; arm — always sound, only delegation is lost, and loudly.
+(fn wnat ((i Int)) Nat (measure i) (if (le i 0) Z (S (wnat (- i 1)))))
+
+(fn weff_budget () Nat (wnat 96))
+
+;; the LIFT of a base outcome into the world layer: same outcome, the
+;; world threaded through untouched, no events — what the delegate arm
+;; wraps around xeval_call, and what "the towers agree" means (the
+;; adequacy fixture's probe-local adq, graduated to model vocabulary).
+(fn wlift ((w LxWorld) (o (Option XOut))) (Option WOut)
+  (match o
+    (None None)
+    ((Some out)
+     (match out
+       ((XNorm rs mem) (Some (WNorm rs mem w Nil)))
+       ((XBrk d rs mem) (Some (WBrk d rs mem w Nil)))
+       ((XRetO rs mem) (Some (WRetO rs mem w Nil)))
+       (XTrap (Some WTrap))))))
+
 ;; --- the interpreter twin (one fuel-countdown SCC, mirroring the base) ------------
 
 (fn weval_instr
@@ -143,15 +208,17 @@
      (match (xfunc_at (xfuncs_of m) k)
        (None (Some WTrap))
        ((Some f)
-        (match (weval_seq f2 m (xbody_of f) rs mem w)
-          (None None)
-          ((Some out)
-           (match out
-             ((WNorm rs2 mem2 w2 tr) (Some (WNorm rs2 mem2 w2 tr)))
-             ((WRetO rs2 mem2 w2 tr) (Some (WNorm rs2 mem2 w2 tr)))
-             ((WBrk d rs2 mem2 w2 tr) (Some WTrap))
-             ((WExit c tr) (Some (WExit c tr)))
-             (WTrap (Some WTrap))))))))))
+        (if (xfn_eff (weff_budget) f)
+          (match (weval_seq f2 m (xbody_of f) rs mem w)
+            (None None)
+            ((Some out)
+             (match out
+               ((WNorm rs2 mem2 w2 tr) (Some (WNorm rs2 mem2 w2 tr)))
+               ((WRetO rs2 mem2 w2 tr) (Some (WNorm rs2 mem2 w2 tr)))
+               ((WBrk d rs2 mem2 w2 tr) (Some WTrap))
+               ((WExit c tr) (Some (WExit c tr)))
+               (WTrap (Some WTrap)))))
+          (wlift w (xeval_call (S f2) m k rs mem))))))))
 
 (fn weval_loop
   ((fuel Nat) (m XModule) (body (List XInstr)) (rs Regs) (mem Mem) (w LxWorld))
@@ -217,36 +284,3 @@
           ((WBrk d rs2 mem2 w2 tr) None)
           ((WExit c tr) (Some (WExit c tr)))
           (WTrap None)))))))
-
-;; --- the static effect predicate (the gates' and the emitter's question) -----------
-
-;; does this code contain an effect-point, SYNTACTICALLY? Fuel-style
-;; mutual pair (the evaluator's own pattern); exhausted fuel answers
-;; True — the CONSERVATIVE default, so a gate built on this can refuse
-;; but never under-report an effect. XCall is False here: a call is not
-;; itself an effect-point (image-level transitivity is the gate's walk
-;; over every body, not this predicate's business).
-(fn xeff_i ((d Nat) (i XInstr)) Bool
-  (measure (struct d))
-  (match d
-    (Z True)
-    ((S d2)
-     (match i
-       (XSyscall True)
-       ((XBlock body) (xeff_l d2 body))
-       ((XLoop body) (xeff_l d2 body))
-       (other False)))))
-
-(fn xeff_l ((d Nat) (is (List XInstr))) Bool
-  (measure (struct d))
-  (match d
-    (Z True)
-    ((S d2)
-     (match is
-       (Nil False)
-       ((Cons i rest) (if (xeff_i d2 i) True (xeff_l d2 rest)))))))
-
-;; a function's answer at its own depth budget: body length + nesting
-;; rides comfortably under fuel = list length + 8 per nesting level; the
-;; caller picks the budget (gates use a generous ground one)
-(fn xfn_eff ((d Nat) (f XFunc)) Bool (xeff_l d (xbody_of f)))
