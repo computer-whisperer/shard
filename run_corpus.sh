@@ -143,6 +143,8 @@ TARGETS=(
   examples/echoarg_x86_out.shard
   examples/upcase_src.shard
   examples/upcase_x86_out.shard
+  examples/parse_src.shard
+  examples/parse_x86_out.shard
   examples/bin_entry_rejects.shard
   examples/x86_diff_run.shard
   examples/rep_probe.shard

@@ -26,6 +26,7 @@ BUILDS=(
   "examples/lowbuild_bin_x86.sh examples/bytesum_src.shard examples/bytesum_x86_out.shard"
   "examples/lowbuild_bin_x86.sh examples/echoarg_src.shard examples/echoarg_x86_out.shard"
   "examples/lowbuild_bin_x86.sh examples/upcase_src.shard examples/upcase_x86_out.shard"
+  "examples/lowbuild_bin_x86.sh examples/parse_src.shard examples/parse_x86_out.shard"
 )
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT

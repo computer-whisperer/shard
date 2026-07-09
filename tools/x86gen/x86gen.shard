@@ -3685,9 +3685,26 @@
        False))
     (_ False)))
 
-;; body + func + the seeded-sum farkas fact + the callee's xrun_regs-form
-;; cert + the wrapper's lowered theorem (the probe templated)
-(fn xbw_unit ((q QName) (cs Symbol) (wl Int) (wh Int)) Doc
+;; is the registered Int-return callee the FOLD shape? (the wrapper unit
+;; cites the matching worker/fuel; xg_claim_loop already refused
+;; everything but the sum and the fold, so a non-LFOk answer means sum)
+(fn xbw_isfold ((f FnDef)) Bool
+  (match f
+    ((FnDef q ts rty body)
+     (match ts
+       ((Cons _ rest)
+        (match (li_recognize q (count_ts (ts_mids rest)) body)
+          ((LFOk adv r j a c) True)
+          (_ False)))
+       (Nil False)))))
+
+;; body + func + the callee's xrun_regs-form cert + the wrapper's lowered
+;; theorem (the probe templated). SUM callees also carry the seeded-sum
+;; farkas fact (xsumk_CS) and discharge the loop's accumulator invariants
+;; at the citation; FOLD callees have NO accumulator premises (the spec
+;; spells the machine's wraps) — the cert cites xlfw_ with the window
+;; pair alone, and fuel rides the fold's 16/21 over the sum's 14/19.
+(fn xbw_unit ((q QName) (cs Symbol) (fold Bool) (wl Int) (wh Int)) Doc
   (let ((nm (dsym (qn_name q))))
     (dconc
       (list
@@ -3702,15 +3719,18 @@
         nm
         (DStr "_body)))")
         (DStr (nl))
-        (DStr "(claim xsumk_")
-        (dsym cs)
-        (DStr " (goal ((x Int) (k Nat)) ((= (le ")
-        (dint wl)
-        (DStr " x) True) (= (le (+ x (int_of_nat k)) ")
-        (dint wh)
-        (DStr
-          ") True)) (= (le (+ 0 (* 256 (int_of_nat k))) 18446744073709551616) True)) (by arith (list 1 256 256)))")
-        (DStr (nl))
+        (if fold (DStr "")
+        (dconc
+          (list
+            (DStr "(claim xsumk_")
+            (dsym cs)
+            (DStr " (goal ((x Int) (k Nat)) ((= (le ")
+            (dint wl)
+            (DStr " x) True) (= (le (+ x (int_of_nat k)) ")
+            (dint wh)
+            (DStr
+              ") True)) (= (le (+ 0 (* 256 (int_of_nat k))) 18446744073709551616) True)) (by arith (list 1 256 256)))")
+            (DStr (nl)))))
         (DStr "(claim xcert_")
         (dsym cs)
         (DStr
@@ -3718,7 +3738,9 @@
         (dint wl)
         (DStr " x0) True) (= (le (+ x0 (int_of_nat k)) ")
         (dint wh)
-        (DStr ") True)) (= (xrun_regs (S^ 14 (xlg_fuel k c)) (MkXModule (Cons ")
+        (DStr ") True)) (= (xrun_regs (S^ ")
+        (dint (if fold 16 14))
+        (DStr " (xlg_fuel k c)) (MkXModule (Cons ")
         (xbw_ll cs)
         (DStr " restfs) ")
         (dint wl)
@@ -3730,13 +3752,19 @@
         (DStr " m0 x0 0 k) 0 0 0 0 (")
         (dsym cs)
         (DStr
-          " m0 x0 0 k) (xlg_adv x0 k) 0 0 0 0 0 0 0 0) m0)))) (chain (steps ((compute lhs (stop xeval_loop xlg_fuel)))) (rewrite-with (lemma xliw_")
+          " m0 x0 0 k) (xlg_adv x0 k) 0 0 0 0 0 0 0 0) m0)))) (chain (steps ((compute lhs (stop xeval_loop xlg_fuel)))) (rewrite-with (lemma ")
+        (DStr (if fold "xlfw_" "xliw_"))
         (dsym cs)
-        (DStr
-          ") lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((compute both)) refl) (steps ((rewrite (premise 1) lr lhs true ())) refl) (rewrite-with (lemma xsumk_")
-        (dsym cs)
-        (DStr
-          ") lr lhs ((inst x x0)) ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((rewrite (premise 1) lr lhs true ())) refl)) refl))) (steps ((compute both))) refl))")
+        (if fold
+          (DStr
+            ") lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((rewrite (premise 1) lr lhs true ())) refl))) (steps ((compute both))) refl))")
+          (dconc
+            (list
+              (DStr
+                ") lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((compute both)) refl) (steps ((rewrite (premise 1) lr lhs true ())) refl) (rewrite-with (lemma xsumk_")
+              (dsym cs)
+              (DStr
+                ") lr lhs ((inst x x0)) ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((rewrite (premise 1) lr lhs true ())) refl)) refl))) (steps ((compute both))) refl))"))))
         (DStr (nl))
         (DStr "(claim lowered_")
         nm
@@ -3745,8 +3773,9 @@
         (dint wl)
         (DStr " x0) True) (= (le (+ x0 (int_of_nat k)) ")
         (dint wh)
-        (DStr
-          ") True)) (= (xcall_fn_mem (S^ 19 (xlg_fuel k c)) (MkXModule (Cons ")
+        (DStr ") True)) (= (xcall_fn_mem (S^ ")
+        (dint (if fold 21 19))
+        (DStr " (xlg_fuel k c)) (MkXModule (Cons ")
         (xbw_ll cs)
         (DStr " (Cons (MkXFunc 2 (inline ")
         nm
@@ -3783,7 +3812,7 @@
    (accp Doc)
    (accf Doc)
    (accn (List (Pair Symbol Int)))
-   (lloop (Option Symbol))
+   (lloop (Option (Pair Symbol Bool)))
    (wl Int)
    (wh Int))
   XLE
@@ -3818,7 +3847,7 @@
                         (dconc
                           (list (DStr "(Cons (") (dsym nm) (DStr "_func) "))))
                       (Cons (Pair nm 0) accn)
-                      (if (is_int_ty rty) (Some nm) lloop)
+                      (if (is_int_ty rty) (Some (Pair nm (xbw_isfold f))) lloop)
                       wl
                       wh)))
                  (XLEErr "a loop must be fn 0 of the lib file (v1)"))
@@ -3839,7 +3868,7 @@
                      (XLEErr
                        "the identity entry must be fn 0 of the bin file (v1)"))
                    (match lloop
-                     ((Some cs)
+                     ((Some (Pair cs fold))
                       (if (xbw_shape ts rty body cs)
                         (if (int_eq k 1)
                           (xemit_fns_lib
@@ -3847,7 +3876,9 @@
                             modpath
                             (Cons f seen)
                             2
-                            (DCat accp (DCat (DStr (nl)) (xbw_unit q cs wl wh)))
+                            (DCat
+                              accp
+                              (DCat (DStr (nl)) (xbw_unit q cs fold wl wh)))
                             (DCat
                               accf
                               (dconc
