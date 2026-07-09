@@ -136,6 +136,7 @@ TARGETS=(
   examples/x86div_out.shard
   examples/x86itoa_src.shard
   examples/x86itoa_out.shard
+  examples/xbinadd_probe.shard
   examples/xbinsum_probe.shard
   examples/xid_probe.shard
   examples/bytesum_src.shard
