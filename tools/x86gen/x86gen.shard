@@ -328,7 +328,7 @@
         (match (xop_of q)
           (None
             (XGErr
-              "call outside the fragment (only + - * band bor bxor allowed)"))
+              "call outside the fragment (+ - * band bor bxor; ediv/mod only as the WHOLE BODY over a param and a positive literal, v1)"))
           ((Some od)
            (match (xg_v n env nxt a)
              ((XGErr m) (XGErr m))
@@ -355,7 +355,7 @@
          (match (xop_of q)
            (None
              (XGErr
-               "call outside the fragment (only + - * band bor bxor allowed)"))
+               "call outside the fragment (+ - * band bor bxor; ediv/mod only as the WHOLE BODY over a param and a positive literal, v1)"))
            ((Some _) (XGErr "arith call must be binary"))))))
     ((Let bs body)
      (match bs
@@ -661,6 +661,114 @@
       (DStr "))")
       (DStr (nl)))))
 
+;; ---- the DIV unit (docs/X86.md §31; probe examples/xdiv_probe.shard) ------------
+;;
+;; v1 pins itoa's two reads exactly: the WHOLE BODY is (ediv PARAM +LIT)
+;; or (mod PARAM +LIT). Machine: mov rax from the param's home, zero rdx
+;; (collapsing the rdx:rax dividend to rax — the overflow trap leg
+;; becomes quot <= dividend), divisor in r10 (no immediate form exists),
+;; XDivU; mod additionally moves the remainder home. Premises = the
+;; standard §11 pair on the DIVIDEND param — no new premise family. The
+;; guard leg cites an EMITTED per-fn div-facts lemma whose farkas
+;; multipliers are divisor-spliced and otherwise literal-blind.
+
+;; the shape: (Some (Pair ismod (Pair param-position divisor)))
+(fn xdv_shape ((n Int) (body Expr)) (Option (Pair Bool (Pair Int Int)))
+  (match body
+    ((Call q as)
+     (if (if (core_named q (quote ediv)) True (core_named q (quote mod)))
+       (match as
+         ((Cons a (Cons b Nil))
+          (match a
+            ((BVar i)
+             (match b
+               ((IntLit d)
+                (if (lt 0 d)
+                  (if (lt d 2147483648)
+                    (let ((pos (- (- n 1) i)))
+                      (if (le 0 pos)
+                        (if (lt pos n)
+                          (Some (Pair (core_named q (quote mod)) (Pair pos d)))
+                          None)
+                        None))
+                    None)
+                  None))
+               (_ None)))
+            (_ None)))
+         (_ None))
+       None))
+    (_ None)))
+
+(fn xdv_code ((ismod Bool) (pos Int) (d Int)) (List Doc)
+  (if ismod
+    (list
+      (xi_movrr (DStr "RAX") (xhome pos))
+      (xi_movri (DStr "RDX") 0)
+      (xi_movri (DStr "R10") d)
+      (DStr "(XDivU R10)")
+      (xi_movrr (DStr "RAX") (DStr "RDX")))
+    (list
+      (xi_movrr (DStr "RAX") (xhome pos))
+      (xi_movri (DStr "RDX") 0)
+      (xi_movri (DStr "R10") d)
+      (DStr "(XDivU R10)"))))
+
+(fn xdv_unit
+  ((q QName) (ts (List Type)) (ismod Bool) (pos Int) (d Int) (pfx Int))
+  Doc
+  (let ((nm (dsym (qn_name q))))
+    (let ((xp (dcat3 (DStr "x") (dint pos) (DStr ""))))
+      (DCat
+        (dconc
+          (list
+            (DStr "(fn ")
+            nm
+            (DStr "_func () XFunc (MkXFunc ")
+            (dint (count_ts ts))
+            (DStr " (list ")
+            (djoin (xdv_code ismod pos d))
+            (DStr ")))")
+            (DStr (nl))
+            (DStr "(claim xdg_")
+            nm
+            (DStr
+              " (goal ((x Int)) ((= (le 0 x) True) (= (lt x 18446744073709551616) True)) (= (lt (ediv x ")
+            (dint d)
+            (DStr ") 18446744073709551616) True)) (div-facts x ")
+            (dint d)
+            (DStr " q (by arith (list ")
+            (dint d)
+            (DStr " 0 1 1 1 0 ")
+            (dint (- 0 d))
+            (DStr "))))")
+            (DStr (nl))))
+        (xg_emit_claim
+          q
+          ts
+          (xdv_code ismod pos d)
+          (dconc
+            (list
+              (DStr "(= (le 0 ")
+              xp
+              (DStr ") True) (= (lt ")
+              xp
+              (DStr " 18446744073709551616) True)")))
+          (if ismod 9 8)
+          (dconc
+            (list
+              (DStr "(have h0 (= (+ 0 ")
+              xp
+              (DStr ") ")
+              xp
+              (DStr
+                ") (by arith (list (list 1) (list 1)))) (steps ((rewrite (premise h0) lr lhs true ()))) (rewrite-with (lemma xdg_")
+              nm
+              (DStr ") lr lhs ((inst x ")
+              xp
+              (DStr
+                ")) ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((rewrite (premise 1) lr lhs true ())) refl))) (steps ((compute lhs))) refl")))
+          pfx)))))
+
 ;; run the condition-path walk over the region tree and assemble: any
 ;; generated cb_* helper claims land BEFORE the lowered claim
 (fn xg_finish ((q QName) (ts (List Type)) (rt RT) (fuel Int) (pfx Int)) XCR
@@ -695,12 +803,20 @@
        (if (is_int_ty rty)
          (if (le (count_ts ts) 6)
            (if (has_tail_if body) (xg_claim_if q ts body pfx)
-           (match (xg_t (count_ts ts) body)
-             ((XTErr m) (xerr_at q m))
-             ((XTOk code cnt ce)
-              (match (nodes_e ce Nil)
-                ((NErr m) (xerr_at q m))
-                ((NOk ns) (xg_finish q ts (RTv code cnt 0 ns) (+ cnt 4) pfx))))))
+           (match (xdv_shape (count_ts ts) body)
+             ((Some (Pair ismod (Pair pos d)))
+              (if (le (count_ts ts) 2) (XCOk (xdv_unit q ts ismod pos d pfx))
+              (xerr_at
+                q
+                "v1 div: at most two Int params (the divide clobbers rdx, param 3's home)")))
+             (None
+               (match (xg_t (count_ts ts) body)
+                 ((XTErr m) (xerr_at q m))
+                 ((XTOk code cnt ce)
+                  (match (nodes_e ce Nil)
+                    ((NErr m) (xerr_at q m))
+                    ((NOk ns)
+                     (xg_finish q ts (RTv code cnt 0 ns) (+ cnt 4) pfx))))))))
            (xerr_at
              q
              "more than six Int params (SysV register homes only in v1)"))
