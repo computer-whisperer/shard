@@ -47,6 +47,7 @@
 (use (:: models x86 elf enc_elf))
 (use (:: models x86 elf enc_binelf))
 (use (:: models x86 elf enc_binelf_w))
+(use (:: models x86 elf enc_binelf2))
 (use (:: models x86 elf EV))
 (use (:: models x86 elf EVec))
 
@@ -475,8 +476,25 @@
     (Nil 0)
     ((Cons _ t) (+ 1 (xargc t)))))
 
-;; three padded arg slots, each preceded by one space
+;; four padded arg slots, each preceded by one space (slot 4 = rcx, the
+;; two-arg wrapper's fourth machine argument — docs/X86.md §43)
 (fn xslots ((args (List Int))) (List Int)
+  (match args
+    (Nil (cat (list " " (hx 0) " " (hx 0) " " (hx 0) " " (hx 0))))
+    ((Cons a0 t0)
+     (match t0
+       (Nil (cat (list " " (hx a0) " " (hx 0) " " (hx 0) " " (hx 0))))
+       ((Cons a1 t1)
+        (match t1
+          (Nil (cat (list " " (hx a0) " " (hx a1) " " (hx 0) " " (hx 0))))
+          ((Cons a2 t2)
+           (match t2
+             (Nil (cat (list " " (hx a0) " " (hx a1) " " (hx a2) " " (hx 0))))
+             ((Cons a3 _)
+              (cat (list " " (hx a0) " " (hx a1) " " (hx a2) " " (hx a3))))))))))))
+
+;; the mem case kinds stay three slots (the mem fragment is <= 3 args)
+(fn xslots3 ((args (List Int))) (List Int)
   (match args
     (Nil (cat (list " " (hx 0) " " (hx 0) " " (hx 0))))
     ((Cons a0 t0)
@@ -493,7 +511,7 @@
      (match mem
        (Nil
          (if (int_eq k 0)
-           (if (le (xargc args) 3)
+           (if (le (xargc args) 4)
              (Some
                (cat
                  (list
@@ -518,7 +536,7 @@
                nm
                " "
                (show_int (xargc args))
-               (xslots args)
+               (xslots3 args)
                " READ "
                (hx addr)
                " "
@@ -540,7 +558,7 @@
                nm
                " "
                (show_int (xargc args))
-               (xslots args)
+               (xslots3 args)
                " SEED "
                (hx saddr)
                " "
@@ -636,6 +654,50 @@
        (lb_lib_find rest))))))
 
 ;; claim lowered_<name>'s goal: (binders, premises)
+(fn lb_len_s ((xs (List SExpr))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons _ t) (+ 1 (lb_len_s t)))))
+
+(fn lb_goal_nargs ((forms (List SExpr)) (want (List Int))) (Option Int)
+  (measure (struct forms))
+  (match forms
+    (Nil None)
+    ((Cons f rest)
+     (match f
+       ((SList (Cons h (Cons (SSym nm) (Cons gf _))))
+        (if (is_sym h (quote claim))
+          (if (ceq (chars_of_sym nm) want)
+            (match gf
+              ((SList (Cons g (Cons _bs (Cons _prems (Cons c Nil)))))
+               (if (is_sym g (quote goal))
+                 (match c
+                   ((SList (Cons eq (Cons lhs (Cons _r Nil))))
+                    (if (is_sym eq (quote =))
+                      (match lhs
+                        ((SList
+                           (Cons
+                             xh
+                             (Cons
+                               _fuel
+                               (Cons _mod (Cons _ix (Cons args (Cons _m Nil)))))))
+                         (if (is_sym xh (quote xcall_fn_mem))
+                           (match args
+                             ((SList (Cons li as))
+                              (if (is_sym li (quote list)) (Some (lb_len_s as))
+                              None))
+                             (_ None))
+                           None))
+                        (_ None))
+                      None))
+                   (_ None))
+                 None))
+              (_ None))
+            (lb_goal_nargs rest want))
+          (lb_goal_nargs rest want)))
+       (_ (lb_goal_nargs rest want))))))
+
 (fn lb_goal ((forms (List SExpr)) (want (List Int)))
   (Option (Pair (List SExpr) (List SExpr)))
   (measure (struct forms))
@@ -1013,6 +1075,57 @@
        (None None)
        ((Some v2) (Some (list v1 v2)))))))
 
+(fn lb_memshape2 ((bs (List SExpr))) Bool
+  (if (lb_bind_ty bs (quote Mem))
+    (if (lb_bind_has bs (quote k1) (quote Nat))
+      (lb_bind_has bs (quote k2) (quote Nat))
+      False)
+    False))
+
+(fn lb_mem_vec2
+  ((m Module)
+   (nm (List Int))
+   (p1 Int)
+   (ks1 (List Int))
+   (p2 Int)
+   (ks2 (List Int)))
+  (Option PVec)
+  (match (ctor_qn m (quote Z))
+    (None None)
+    ((Some zq)
+     (match (ctor_qn m (quote S))
+       (None None)
+       ((Some sq)
+        (match (lb_call m "mem_empty" Nil)
+          (None None)
+          ((Some me)
+           (match
+             (lb_call
+               m
+               nm
+               (list
+                 me
+                 (IntLit p1)
+                 (lb_nat_of zq sq ks1)
+                 (IntLit p2)
+                 (lb_nat_of zq sq ks2)))
+             (None None)
+             ((Some ev)
+              (match (expr_int ev)
+                (None None)
+                ((Some v)
+                 (Some
+                   (PV 0 (list p1 (lb_len_i ks1) p2 (lb_len_i ks2)) Nil v Nil)))))))))))))
+
+(fn lb_mem_vecs2 ((m Module) (nm (List Int))) (Option (List PVec))
+  (match
+    (lb_mem_vec2 m nm (lb_dbase) (list 0 0 0 0 0) (+ (lb_dbase) 8) (list 0 0 0))
+    (None None)
+    ((Some v1)
+     (match (lb_mem_vec2 m nm (+ (lb_dbase) 3) Nil (+ (lb_dbase) 5) Nil)
+       (None None)
+       ((Some v2) (Some (list v1 v2)))))))
+
 ;; the Mem-RETURNING mem-shape twin (the write-variant entry, docs/
 ;; X86.md §27): the spec's result is a MEM, so the vector is a SEEDED
 ;; readback (PXVS — the §26 precedent: a zeroed page cannot witness a
@@ -1067,6 +1180,14 @@
                 (chars_of_sym x))))
           ((Some vecs) (LBVOk vecs))))
       ((Some vecs) (LBVOk vecs)))
+  (if (lb_memshape2 bs)
+    (match (lb_mem_vecs2 m (chars_of_sym x))
+      (None
+        (LBVErr
+          (append_int
+            "two-arg mem-shape spec evaluation failed for export "
+            (chars_of_sym x))))
+      ((Some vecs) (LBVOk vecs)))
     (match (lb_pick (lb_pools) (lb_params bs) ps 2)
       (Nil
         (LBVErr
@@ -1080,7 +1201,7 @@
           (None
             (LBVErr
               (append_int "spec evaluation failed for export " (chars_of_sym x))))
-          ((Some vecs) (LBVOk vecs)))))))
+          ((Some vecs) (LBVOk vecs))))))))
 
 (type LBX (LBXOk (List PMod)) (LBXErr (List Int)))
 
@@ -1438,6 +1559,98 @@
         (IntLit (lb_buf_addr))
         (Cons (IntLit (lb_min (lb_len_i arg) (lb_maxlen))) Nil)))))
 
+(fn lb_buf2_addr () Int 6291712)
+
+;; spec-side args for the TWO-ARG entry (docs/X86.md §43): both payloads
+;; laid into one memory (BUF1/BUF2), pointers and Nat lengths after it
+(fn lb_bin_args2 ((m Module) (a1 (List Int)) (a2 (List Int)))
+  (Option (List Expr))
+  (match (ctor_qn m (quote Z))
+    (None None)
+    ((Some zq)
+     (match (ctor_qn m (quote S))
+       (None None)
+       ((Some sq)
+        (match (lb_call m "mem_empty" Nil)
+          (None None)
+          ((Some m0)
+           (let ((p1 (lb_take a1 (lb_maxlen))))
+             (match (lb_mem_expr m m0 (lb_buf_addr) p1)
+               (None None)
+               ((Some m1)
+                (let ((p2 (lb_take a2 (lb_maxlen))))
+                  (match (lb_mem_expr m m1 (lb_buf2_addr) p2)
+                    (None None)
+                    ((Some m2)
+                     (Some
+                       (list
+                         m2
+                         (IntLit (lb_buf_addr))
+                         (lb_nat_of zq sq p1)
+                         (IntLit (lb_buf2_addr))
+                         (lb_nat_of zq sq p2))))))))))))))))
+
+(fn lb_bin_want2 ((m Module) (nm (List Int)) (a1 (List Int)) (a2 (List Int)))
+  (Option Int)
+  (match (lb_bin_args2 m a1 a2)
+    (None None)
+    ((Some args)
+     (match (lb_call m nm args)
+       (None None)
+       ((Some ev)
+        (match (expr_int ev)
+          (None None)
+          ((Some want)
+           (if (le 0 want) (if (lt want 256) (Some want) None) None))))))))
+
+(fn lb_hex_or_dash ((a (List Int))) (List Int)
+  (match a
+    (Nil "-")
+    ((Cons _ _) (hexs a))))
+
+(fn lb_bvec2_line ((a1 (List Int)) (a2 (List Int)) (want Int)) (List Int)
+  (cat
+    (list
+      "BVEC2 "
+      (lb_hex_or_dash a1)
+      " "
+      (lb_hex_or_dash a2)
+      " EXIT "
+      (show_int want)
+      "\n")))
+
+;; the two-arg pool: the deliverable, both-empty, the wrap edge, GIGO,
+;; and the 300-char second argument pinning BUF2's MAXLEN truncation
+(fn lb_pair_pool () (List (Pair (List Int) (List Int)))
+  (list
+    (Pair "2" "3")
+    (Pair "" "")
+    (Pair "255" "255")
+    (Pair "hello" "7")
+    (Pair
+      "1"
+      (append_int
+        (lb_x60)
+        (append_int
+          (lb_x60)
+          (append_int (lb_x60) (append_int (lb_x60) (lb_x60))))))))
+
+(fn lb_bin_vecs2
+  ((m Module) (nm (List Int)) (pool (List (Pair (List Int) (List Int)))))
+  (Option (List Int))
+  (measure (struct pool))
+  (match pool
+    (Nil (Some ""))
+    ((Cons pr rest)
+     (match pr
+       ((Pair a1 a2)
+        (match (lb_bin_want2 m nm a1 a2)
+          (None None)
+          ((Some want)
+           (match (lb_bin_vecs2 m nm rest)
+             (None None)
+             ((Some ls) (Some (append_int (lb_bvec2_line a1 a2 want) ls)))))))))))
+
 ;; expected exit code for one argument under the glue contract
 (fn lb_bin_want ((m Module) (nm (List Int)) (arg (List Int)) (memf Bool))
   (Option Int)
@@ -1559,11 +1772,45 @@
   ((m Module)
    (entry Symbol)
    (memf Bool)
+   (two Bool)
    (sforms (List SExpr))
    (image (List Int))
    (entry_off Int)
    (w World))
   World
+  (if two
+    (if (lb_entry_memret sforms entry)
+      (fail
+        "the two-arg write variant is the W4c effectful entry's, not glue's"
+        w)
+      (match (lb_bin_want2 m (chars_of_sym entry) "" "")
+        (None
+          (fail
+            "spec eval failed or exit code out of [0,256) (two-arg no-arg leg)"
+            w))
+        ((Some noarg_want)
+         (match (lb_bin_vecs2 m (chars_of_sym entry) (lb_pair_pool))
+           (None
+             (fail
+               "spec eval failed or exit code out of [0,256) (two-arg vectors)"
+               w))
+           ((Some bvecs)
+            (exit
+              0
+              (write
+                (cat
+                  (list
+                    "IMG "
+                    (hexs image)
+                    "\n"
+                    "ELF "
+                    (hexs (enc_binelf2 image entry_off))
+                    "\n"
+                    "BNOARG EXIT "
+                    (show_int noarg_want)
+                    "\n"
+                    bvecs))
+                w)))))))
   (if (lb_entry_memret sforms entry)
     (if memf
       (match (lb_bin_vecs_w m (chars_of_sym entry) (lb_bin_pool))
@@ -1605,7 +1852,7 @@
                   (show_int noarg_want)
                   "\n"
                   bvecs))
-              w))))))))
+              w)))))))))
 
 (fn run_binelf ((srcp (List Int)) (outp (List Int)) (w World)) World
   (match (read_file srcp w)
@@ -1627,8 +1874,19 @@
                    (lb_goal cforms (append_int "lowered_" (chars_of_sym entry)))
                    (None (fail "no lowered_ claim for the bin entry" w2))
                    ((Some (Pair bs _ps))
-                    (let ((memf (int_eq (lb_len (lb_params bs)) 1)))
-                      (if (if (int_eq (lb_len (lb_params bs)) 2) True memf)
+                    (let
+                      ((memf (int_eq (lb_len (lb_params bs)) 1))
+                       (two
+                         (match
+                           (lb_goal_nargs
+                             cforms
+                             (append_int "lowered_" (chars_of_sym entry)))
+                           ((Some na) (int_eq na 4))
+                           (None False))))
+                      (if
+                        (if (int_eq (lb_len (lb_params bs)) 2) True
+                        (if memf True
+                        two))
                         (match (load_run_module outp w2)
                           ((Pair None w3)
                            (fail "could not load the cert file's closure" w3))
@@ -1705,10 +1963,10 @@
                                                          w3))
                                                      ((Some entry_off)
                                                       (lb_binelf_tail m entry
-                                                        memf sforms image
+                                                        memf two sforms image
                                                         entry_off w3)))))))))))))))))))))
                         (fail
-                          "bin entry cert must carry the glue contract's two Int binders, or the payload-Mem shape's one"
+                          "bin entry cert must carry the glue contract's two Int binders, the payload-Mem shape's one, or the two-arg contract's four"
                           w2))))))))))))))))
 
 ;; ---- the lib entry ----------------------------------------------------------------

@@ -161,6 +161,19 @@ while read -r _bv hexarg _e want _kw outhex; do
   fi
 done < <(grep '^BVEC ' "$TMP/be.txt")
 
+# two-arg vectors (BVEC2 hex1 hex2 EXIT n) — exit variant: stdout must be empty
+while read -r _bv hex1 hex2 _e want; do
+  : > "$TMP/want.out"
+  if [ "$hex1" = "-" ]; then a1=""; else a1=$(printf '%s' "$hex1" | xxd -r -p); fi
+  if [ "$hex2" = "-" ]; then a2=""; else a2=$(printf '%s' "$hex2" | xxd -r -p); fi
+  "$TMP/a.bin" "$a1" "$a2" > "$TMP/got.out"; code=$?
+  if [ "$code" = "$want" ] && cmp -s "$TMP/got.out" "$TMP/want.out"; then
+    echo "PASS engine <'${#a1}'+'${#a2}' byte args> -> exit $code"
+  else
+    fail "engine two-arg (exit $code expected $want, stdout $(wc -c < "$TMP/got.out") expected 0 bytes)"
+  fi
+done < <(grep '^BVEC2 ' "$TMP/be.txt")
+
 if [ "$rc" -eq 0 ]; then
   echo "ARTIFACT OK: $(basename "$SRC" .shard) — a plainly-executable Linux ELF, proven entry, six gates green"
 else

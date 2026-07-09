@@ -34,6 +34,7 @@
 (use (:: models x86 x86 RDX))
 (use (:: models x86 x86 RSI))
 (use (:: models x86 x86 RDI))
+(use (:: models x86 x86 R8))
 (use (:: models x86 x86 XMovRR))
 (use (:: models x86 x86 XLoad8))
 (use (:: models x86 x86 XStore8))
@@ -229,6 +230,31 @@
 ;;      bytes): nothing else. Any logic beyond that (parsing, branching on payload
 ;;      content, arithmetic on the bytes) is a contract VIOLATION, to be caught in
 ;;      review of this one file.
+;;
+;;   THE TWO-ARGUMENT GLUE (enc_binelf2; X86.md §42, sanctioned by §36(b) —
+;;   argv[2] joins the window contract as INPUT growth; the §30 re-cut bars new
+;;   OUTPUT variants, not this). Clauses 1, 2, 3, 6 and termination 5a hold
+;;   verbatim; the growth is clauses 3-4 said TWICE (two window pairs on the
+;;   same RW page), primed so the existing clause numbers keep their citations:
+;;
+;;   3'. PAYLOAD 2. The glue also writes the first min(|argv[2]|, 255) bytes of
+;;       argv[2] (read at [rsp+24], clause 1) to BUF2 = 0x600100 (= 0x600000 +
+;;       256, inside the clause-2 segment). Zeros hold beyond EACH payload:
+;;       payload 1's length is <= 255 < 256 so it can never reach BUF2, hence
+;;       [0x600000+len1, 0x600100) and [0x600100+len2, 0x601000) remain kernel-
+;;       zero. An absent argv[2] (argc < 3) is the empty payload, len2 = 0 —
+;;       same as clause 3, the glue has NO policy, and there is no exit-1 leg.
+;;
+;;   4'. CALL. The entry is called with rdi = 0x600000 (payload 1 base), rsi =
+;;       len1, rdx = 0x600100 (payload 2 base), rcx = len2 (each len 0..255).
+;;       Clause 4's address dispensation covers both windows.
+;;
+;;   SELECTION is BY THE ENTRY'S MACHINE ARITY, decided by the CALLER
+;;   (tools/lowbuild): a 2-register entry (rdi, rsi) gets the one-arg glue, a
+;;   4-register entry gets enc_binelf2. The encoders themselves stay arity-
+;;   blind — each emits its fixed glue and never inspects the image. There is
+;;   no two-arg WRITE variant (no consumer demands one; termination growth is
+;;   what the §30 re-cut forecloses).
 ;; ----------------------------------------------------------------------------
 
 (fn bin_data_base () Int 6291456)  ; 0x600000 — the RW payload segment (clause 2)
@@ -236,6 +262,8 @@
 (fn bin_data_size () Int 4096)  ; zero-filled bytes reserved at bin_data_base
 
 (fn bin_maxlen () Int 255)  ; copy-loop length cap (clause 3)
+
+(fn bin_buf2 () Int (+ (bin_data_base) 256))  ; 0x600100 — payload 2 base (clause 3')
 
 (fn bin_hdrs_sz () Int 176)  ; 64 (ELF header) + 2*56 (two program headers)
 
@@ -310,6 +338,60 @@
         (enc_mov_imm64 RAX 60)  ; 160  mov rax,60           sys_exit nr
         (i_syscall)))))  ; 170  syscall (clause 5b)  (ends at 172)
 
+;; One parametric argv copy loop for the TWO-ARG glue — the exact instruction
+;; shape of bin_glue_pre's loop (bytes 5..98 there), with the three per-payload
+;; constants lifted out: `argmin` (the argc bound below which the payload is
+;; empty), `rspoff` (the argv pointer's [rsp+k] home, clause 1), `dest` (the
+;; payload base). Expects argc in rax (preserved: the loop clobbers only
+;; rcx/rsi/rdi/rdx) and leaves rcx = the payload length. Fixed width 93; it is
+;; SELF-CONTAINED (every jump targets local 38 or the local end 93), so the
+;; branch displacements are position-independent constants — identical at both
+;; of bin_glue2's instantiation offsets. Local offsets annotate each line.
+(fn bin_copy_loop ((argmin Int) (rspoff Int) (dest Int)) (List Int)
+  (catb
+    (list
+      (enc_mov_imm64 RCX 0)  ; 0    mov rcx,0            count = 0
+      (enc_cmp_rs RAX (SImm argmin))  ; 10   cmp rax,argmin
+      (enc_jcc_rel32 130 70)  ; 17   jb +70 -> 93 (absent arg: empty payload)
+      (enc_mov_reg_rsp8 RSI rspoff)  ; 23   mov rsi,[rsp+rspoff]  src
+      (enc_mov_imm64 RDI dest)  ; 28   mov rdi,dest
+      ;; loop_start = 38
+      (enc_cmp_rs RCX (SImm (bin_maxlen)))  ; 38   cmp rcx,255
+      (enc_jcc_rel32 131 42)  ; 45   jae +42 -> 93 (MAXLEN cap, clause 3)
+      (enc_simple (XLoad8 RDX (AReg RSI)))  ; 51   movzx rdx,byte[rsi]
+      (enc_test_r RDX)  ; 55   test rdx,rdx
+      (enc_jcc_rel32 132 29)  ; 58   jz +29 -> 93 (NUL terminator, clause 1)
+      (enc_simple (XStore8 (AReg RDI) (SReg RDX)))  ; 64   mov [rdi],dl
+      (enc_bin_ri XAdd RSI 1)  ; 67   add rsi,1
+      (enc_bin_ri XAdd RDI 1)  ; 74   add rdi,1
+      (enc_bin_ri XAdd RCX 1)  ; 81   add rcx,1
+      (enc_jmp_rel32 -55))))  ; 88   jmp -55 -> 38 (loop_start)  (ends at 93)
+
+;; TWO-ARG glue (clauses 3'/4', termination 5a verbatim). Copy loop 1 fills
+;; BUF1 from argv[1] ([rsp+16]) leaving rcx = len1, stashed to r8 across copy
+;; loop 2 (which clobbers rcx/rsi/rdi/rdx but not rax/r8); copy loop 2 fills
+;; BUF2 from argv[2] ([rsp+24]) leaving rcx = len2, which then rides UNTOUCHED
+;; through the marshalling into the call (clause 4'). It does not reuse
+;; bin_glue_pre (whose one-arg marshal tail is baked in) — bin_copy_loop
+;; restates the loop both glues share. glue length = 237, so the image begins
+;; at glue offset 237 and `call` (at 217, ending 222) reaches the entry with
+;; rel32 = (237 + entry_off) - 222 = 15 + entry_off — the SAME +15 as 5a,
+;; because the call-to-image gap (the 20-byte 5a exit tail) is unchanged.
+(fn bin_glue2 ((entry_off Int)) (List Int)
+  (catb
+    (list
+      (enc_mov_reg_rsp8 RAX 0)  ; 0    mov rax,[rsp]        argc (both guards)
+      (bin_copy_loop 2 16 (bin_data_base))  ; 5    argv[1] -> BUF1; rcx = len1
+      (enc_simple (XMovRR R8 RCX))  ; 98   mov r8,rcx           stash len1
+      (bin_copy_loop 3 24 (bin_buf2))  ; 101  argv[2] -> BUF2; rcx = len2
+      (enc_mov_imm64 RDI (bin_data_base))  ; 194  mov rdi,0x600000    arg0 = BUF1
+      (enc_simple (XMovRR RSI R8))  ; 204  mov rsi,r8           arg1 = len1
+      (enc_mov_imm64 RDX (bin_buf2))  ; 207  mov rdx,0x600100    arg2 = BUF2 (rcx = len2 = arg3)
+      (enc_call_rel32 (+ 15 entry_off))  ; 217  call entry (clause 4')
+      (enc_simple (XMovRR RDI RAX))  ; 222  mov rdi,rax          exit arg = result
+      (enc_mov_imm64 RAX 60)  ; 225  mov rax,60           sys_exit nr
+      (i_syscall))))  ; 235  syscall (clause 5a)  (ends at 237)
+
 ;; 64-byte ELF header: ET_EXEC, x86-64, TWO program headers, entry at the glue
 ;; (first code after the headers).
 (fn bin_elf_hdr () (List Int)
@@ -374,6 +456,18 @@
 ;; page to stdout and exits 0.
 (fn enc_binelf_w ((image (List Int)) (entry_off Int)) (List Int)
   (let ((code (eapp (bin_glue_w entry_off) image)))
+    (let ((filesz (+ (bin_hdrs_sz) (elen code))))
+      (eapp
+        (bin_elf_hdr)
+        (eapp (bin_phdr_code filesz) (eapp (bin_phdr_data) code))))))
+
+;; the TWO-ARG exit-variant binary (clauses 3'/4'): same layout, addresses, and
+;; PT_LOADs as enc_binelf — only the glue differs (bin_glue2, 237 bytes; the
+;; entry function sits at glue offset 237 + entry_off). The CALLER selects this
+;; encoder by the entry's machine arity (4 registers, tools/lowbuild); the
+;; encoder itself is arity-blind.
+(fn enc_binelf2 ((image (List Int)) (entry_off Int)) (List Int)
+  (let ((code (eapp (bin_glue2 entry_off) image)))
     (let ((filesz (+ (bin_hdrs_sz) (elen code))))
       (eapp
         (bin_elf_hdr)

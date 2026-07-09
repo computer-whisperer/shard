@@ -38,16 +38,19 @@ static sigjmp_buf fault_env;
 static volatile sig_atomic_t faulted;
 static void on_fault(int sig) { (void)sig; faulted = 1; siglongjmp(fault_env, 1); }
 
-/* SysV trampoline: establish the model's entry state (args in rdi/rsi/rdx,
- * rax zeroed — a piece that never writes rax returns 0, matching xregs0) and
- * call the code. Non-arg scratch registers are clobbered; a real emitter
- * materializes its result so their entry values never matter. */
-static uint64_t call_code(void *code, uint64_t a0, uint64_t a1, uint64_t a2) {
+/* SysV trampoline: establish the model's entry state (args in
+ * rdi/rsi/rdx/rcx, rax zeroed — a piece that never writes rax returns 0,
+ * matching xregs0) and call the code. Non-arg scratch registers are
+ * clobbered; a real emitter materializes its result so their entry values
+ * never matter. Case kinds with fewer meaningful args pass 0 for the rest
+ * (an extra register argument is ABI-harmless). */
+static uint64_t call_code(void *code, uint64_t a0, uint64_t a1, uint64_t a2,
+                          uint64_t a3) {
   uint64_t r;
-  __asm__ volatile("xor %%eax, %%eax\n\t call *%[c]"
-                   : "=a"(r)
-                   : [c] "r"(code), "D"(a0), "S"(a1), "d"(a2)
-                   : "rcx", "r8", "r9", "r10", "r11", "cc", "memory");
+  __asm__ volatile("xor %%eax, %%eax\n\t call *%[cd]"
+                   : "=a"(r), "+c"(a3)
+                   : [cd] "r"(code), "D"(a0), "S"(a1), "d"(a2)
+                   : "r8", "r9", "r10", "r11", "cc", "memory");
   return r;
 }
 
@@ -125,9 +128,10 @@ int main(int argc, char **argv) {
         nmods++;
       }
     } else if (!strncmp(line, "XCASE ", 6)) {
-      char name[32], a0[24], a1[24], a2[24], exp[24];
+      char name[32], a0[24], a1[24], a2[24], a3[24], exp[24];
       int ac;
-      if (sscanf(line + 6, "%31s %d %23s %23s %23s -> %23s", name, &ac, a0, a1, a2, exp) != 6) {
+      if (sscanf(line + 6, "%31s %d %23s %23s %23s %23s -> %23s",
+                 name, &ac, a0, a1, a2, a3, exp) != 7) {
         report(0, line, "unparseable");
         continue;
       }
@@ -137,7 +141,8 @@ int main(int argc, char **argv) {
       char gothex[17];
       faulted = 0;
       if (sigsetjmp(fault_env, 1) == 0) {
-        got = call_code(code, parse_le_u64(a0), parse_le_u64(a1), parse_le_u64(a2));
+        got = call_code(code, parse_le_u64(a0), parse_le_u64(a1),
+                        parse_le_u64(a2), parse_le_u64(a3));
         fmt_le_u64(got, gothex);
         report(!strcmp(gothex, exp), line, gothex);
       } else {
@@ -160,7 +165,8 @@ int main(int argc, char **argv) {
       char gothex[17];
       faulted = 0;
       if (sigsetjmp(fault_env, 1) == 0) {
-        got = call_code(code, parse_le_u64(a0), parse_le_u64(a1), parse_le_u64(a2));
+        got = call_code(code, parse_le_u64(a0), parse_le_u64(a1),
+                        parse_le_u64(a2), 0);
         fmt_le_u64(got, gothex);
         /* read back ln bytes at rd (an absolute address inside data_page) */
         char rb[4096];
@@ -204,7 +210,8 @@ int main(int argc, char **argv) {
       char gothex[17];
       faulted = 0;
       if (sigsetjmp(fault_env, 1) == 0) {
-        got = call_code(code, parse_le_u64(a0), parse_le_u64(a1), parse_le_u64(a2));
+        got = call_code(code, parse_le_u64(a0), parse_le_u64(a1),
+                        parse_le_u64(a2), 0);
         fmt_le_u64(got, gothex);
         /* read back ln bytes at rd (an absolute address inside data_page) */
         char rb[4096];
