@@ -124,6 +124,7 @@ TARGETS=(
   examples/xchain_probe.shard
   examples/xloopcall_probe.shard
   examples/xintloop_probe.shard
+  examples/xcopyloop_probe.shard
   examples/xbinsum_probe.shard
   examples/bytesum_src.shard
   examples/bytesum_x86_out.shard
