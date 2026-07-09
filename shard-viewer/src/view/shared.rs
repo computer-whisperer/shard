@@ -79,13 +79,20 @@ pub(crate) fn placed_graph(lay: &Layout, node_els: Vec<El>, edges: VectorAsset) 
 /// (absolute-positioned graph stack, or a self-sizing nested flow tree); the
 /// `viewport()` bakes the pan/zoom transform into descendant rects + hit-test.
 pub(crate) fn pan_zoom_viewport(content: El) -> El {
+    pan_zoom_viewport_min(content, MIN_ZOOM)
+}
+
+/// [`pan_zoom_viewport`] with a caller-chosen zoom-out floor — the Map derives
+/// it from the committed extent (a project-wide map needs to fit at ~0.005,
+/// where a single small file would zoom out into nothing at that floor).
+pub(crate) fn pan_zoom_viewport_min(content: El, min_zoom: f32) -> El {
     // No `.fill()` here: the per-node hover envelope brightens the fill of any
     // keyed node, and the viewport must be keyed (for ViewportRequest + state).
     // A fill would flash as the cursor transits between the background and node
     // children. Left unfilled, the canvas shows the window BACKGROUND instead.
     viewport([content])
         .key(CANVAS_KEY)
-        .min_zoom(MIN_ZOOM)
+        .min_zoom(min_zoom)
         .max_zoom(MAX_ZOOM)
         // Open fitted (and stay fitted through resizes) until the user pans or
         // zooms; the toolbar's Fit re-arms it. Also what makes the headless
@@ -99,6 +106,14 @@ pub(crate) fn pan_zoom_viewport(content: El) -> El {
 }
 
 pub(crate) fn edges_asset(lay: &Layout) -> VectorAsset {
+    edges_asset_scaled(lay, 1.0)
+}
+
+/// [`edges_asset`] with stroke widths and arrowheads multiplied by `scale`.
+/// The Map draws content at zooms far below 1:1 where a 1.5-content-px spline
+/// disappears; passing `1/zoom` (clamped ≥ 1) keeps edges hairline-visible on
+/// screen at any distance — cartographic line weight, not content geometry.
+pub(crate) fn edges_asset_scaled(lay: &Layout, scale: f32) -> VectorAsset {
     let mut paths = Vec::new();
     for e in &lay.edges {
         if e.points.len() < 2 {
@@ -111,11 +126,11 @@ pub(crate) fn edges_asset(lay: &Layout) -> VectorAsset {
         } else {
             tokens::MUTED_FOREGROUND
         };
-        paths.push(edge_curve(&e.points, e.back, color, 1.5));
+        paths.push(edge_curve(&e.points, e.back, color, 1.5 * scale));
         let n = e.points.len();
         let (fx, fy) = e.points[n - 2];
         let (tx, ty) = e.points[n - 1];
-        paths.push(arrowhead(fx, fy, tx, ty, color));
+        paths.push(arrowhead_scaled(fx, fy, tx, ty, color, scale));
     }
     VectorAsset::from_paths([0.0, 0.0, lay.width, lay.height], paths)
 }
@@ -157,18 +172,30 @@ pub(crate) fn edge_curve(pts: &[(f32, f32)], back: bool, color: Color, width: f3
 /// A small filled triangle at `(tip_x, tip_y)` pointing along the direction
 /// from `(from_x, from_y)` to the tip.
 pub(crate) fn arrowhead(from_x: f32, from_y: f32, tip_x: f32, tip_y: f32, color: Color) -> VectorPath {
+    arrowhead_scaled(from_x, from_y, tip_x, tip_y, color, 1.0)
+}
+
+/// [`arrowhead`] scaled by `scale` (see [`edges_asset_scaled`]).
+pub(crate) fn arrowhead_scaled(
+    from_x: f32,
+    from_y: f32,
+    tip_x: f32,
+    tip_y: f32,
+    color: Color,
+    scale: f32,
+) -> VectorPath {
     let (dx, dy) = (tip_x - from_x, tip_y - from_y);
     let len = (dx * dx + dy * dy).sqrt().max(0.001);
     let (ux, uy) = (dx / len, dy / len);
     let (perp_x, perp_y) = (-uy, ux);
-    const SIZE: f32 = 9.0;
-    const HALF: f32 = 4.0;
-    let bx = tip_x - ux * SIZE;
-    let by = tip_y - uy * SIZE;
+    let size: f32 = 9.0 * scale;
+    let half: f32 = 4.0 * scale;
+    let bx = tip_x - ux * size;
+    let by = tip_y - uy * size;
     PathBuilder::new()
         .move_to(tip_x, tip_y)
-        .line_to(bx + perp_x * HALF, by + perp_y * HALF)
-        .line_to(bx - perp_x * HALF, by - perp_y * HALF)
+        .line_to(bx + perp_x * half, by + perp_y * half)
+        .line_to(bx - perp_x * half, by - perp_y * half)
         .close()
         .fill_solid(color)
         .build()

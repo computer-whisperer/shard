@@ -25,23 +25,28 @@ another when any of its files do). Each level is sized bottom-up by the
 *measured* intrinsic size of the level below (`layout::intrinsic`): a card
 measures itself, a file box measures its laid-out call graph, a dir box measures
 its laid-out import graph — so the engine always has real sizes and there is
-**no estimation** (contrast the Board's `est()`). **Semantic zoom (LOD)**: fns
-render at three tiers by effective zoom — bare **blocks**, **name boxes**, or
-full **flow cards** — and per node, a file box that would land under ~48px on
-screen collapses to a **chip** (basename + fn count), while a file under ~140px
-drops its call-edge overlay (placement still encodes the structure). The
-selected fn always renders as a full flow card and its file never chips, so
-clicking a name box expands it in place. While the viewport is *at home*
-(fitted by the armed `FitPolicy`, or headless) the tier comes from a
-**predicted** fit zoom — a name-tier probe layout, refined once — because an
-armed fit derives zoom from the extent the tiers themselves determine (a live
-readback there would oscillate); once the user pans or zooms, the tier follows
-the real zoom, **quantized to half-octave bands** so the layout is
-piecewise-constant in zoom (within a band, zooming is a pure visual scale).
-Crossing a band edge reflows once — **re-anchored**: the file box nearest the
-viewport center keeps its content position (a translation of the whole placed
-tree, tracked in a small cross-frame memo the GUI owns), so what you're
-zooming toward stays under the cursor instead of snapping away.
+**no estimation** (contrast the Board's `est()`).
+
+**One committed topology per scope (the cartographic rule)**: the layout is a
+pure function of the scope — zoom, selection, and the pointer never move
+anything. Every fn owns a footprint sized for its full flow card, laid out
+once (cached per scope in an app-owned `MapCache`); zooming only changes
+*what is drawn inside* the fixed footprints, the way a map reveals streets
+and labels as you approach while no city ever moves. Rendering is priced in
+**screen px** per frame: a fn slot draws its flow innards when it's in view
+and the zoom affords legible text (the selected fn always — so selecting
+highlights in place, nothing reflows), else a slab with the fn name at a
+**screen-constant (cartographic) font** clamped into the slot; file/dir boxes
+draw their contents only past ~48px on screen and carry their names as
+cartographic labels over the box (child labels yield to an ancestor's label
+that still overhangs them — country names before city names); a file's
+call-edge overlay gates at ~140px on screen; box strokes and edge splines
+draw at **hairline (screen-constant) weight**, since a project-fit zoom of
+~0.005 makes any content-space stroke invisible. Everything outside the
+(unprojected) viewport is culled per frame. While the viewport is *at home*
+(armed `FitPolicy`, or headless) the effective zoom is computed exactly from
+the committed extent — which no longer depends on zoom, so the old
+fit⇄extent feedback loop cannot exist.
 The interface/implementation
 split reads at a glance: a `mod.req.shard` of signature-only cards sits beside
 the `.shard` that implements them, with an import arrow between. The whole tree

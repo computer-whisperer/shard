@@ -37,7 +37,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             scope: Scope::File(f.file),
             selected_fn: Some(fn_idx),
             zoom: 1.0,
-            anchor_target: (0.0, 0.0),
+            pan: (0.0, 0.0),
+            canvas: canvas_estimate(),
             at_home: true,
             filter: String::new(),
             selection: Default::default(),
@@ -58,7 +59,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             scope: Scope::File(f.file),
             selected_fn: Some(fn_idx),
             zoom: 1.0,
-            anchor_target: (0.0, 0.0),
+            pan: (0.0, 0.0),
+            canvas: canvas_estimate(),
             at_home: true,
             filter: String::new(),
             selection: Default::default(),
@@ -83,7 +85,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             scope: Scope::File(file_idx),
             selected_fn: None,
             zoom: 1.0,
-            anchor_target: (0.0, 0.0),
+            pan: (0.0, 0.0),
+            canvas: canvas_estimate(),
             at_home: true,
             filter: String::new(),
             selection: Default::default(),
@@ -111,7 +114,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             scope,
             selected_fn: None,
             zoom: 1.0,
-            anchor_target: (0.0, 0.0),
+            pan: (0.0, 0.0),
+            canvas: canvas_estimate(),
             at_home: true,
             filter: String::new(),
             selection: Default::default(),
@@ -132,7 +136,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             scope: Scope::CallTree { root: fn_idx, up: 1, down: 2 },
             selected_fn: Some(fn_idx),
             zoom: 1.0,
-            anchor_target: (0.0, 0.0),
+            pan: (0.0, 0.0),
+            canvas: canvas_estimate(),
             at_home: true,
             filter: String::new(),
             selection: Default::default(),
@@ -147,7 +152,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             scope: Scope::Project,
             selected_fn: None,
             zoom: 1.0,
-            anchor_target: (0.0, 0.0),
+            pan: (0.0, 0.0),
+            canvas: canvas_estimate(),
             at_home: true,
             filter: String::new(),
             selection: Default::default(),
@@ -168,7 +174,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             scope: selected_file.map_or(Scope::None, Scope::File),
             selected_fn: None,
             zoom: 1.0,
-            anchor_target: (0.0, 0.0),
+            pan: (0.0, 0.0),
+            canvas: canvas_estimate(),
             at_home: true,
             filter: String::new(),
             selection: Default::default(),
@@ -197,7 +204,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             scope: Scope::File(file_idx),
             selected_fn,
             zoom: 1.0,
-            anchor_target: (0.0, 0.0),
+            pan: (0.0, 0.0),
+            canvas: canvas_estimate(),
             at_home: true,
             filter: String::new(),
             selection: Default::default(),
@@ -206,10 +214,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
     let mut root_el = view::app_root(&project, &params, None);
-    let (vw, vh) = (
-        std::env::var("SHARD_RENDER_W").ok().and_then(|s| s.parse().ok()).unwrap_or(1600.0),
-        std::env::var("SHARD_RENDER_H").ok().and_then(|s| s.parse().ok()).unwrap_or(1000.0),
-    );
+    let (vw, vh) = frame_size();
     let viewport = Rect::new(0.0, 0.0, vw, vh);
     let bundle = render_bundle(&mut root_el, viewport);
 
@@ -223,4 +228,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  [{:?}] {}", f.kind, f.message);
     }
     Ok(())
+}
+
+/// The headless frame size (env-overridable: SHARD_RENDER_W/H).
+fn frame_size() -> (f32, f32) {
+    (
+        std::env::var("SHARD_RENDER_W").ok().and_then(|s| s.parse().ok()).unwrap_or(1600.0),
+        std::env::var("SHARD_RENDER_H").ok().and_then(|s| s.parse().ok()).unwrap_or(1000.0),
+    )
+}
+
+/// Estimated canvas pane (the frame minus the default sidebar + chrome),
+/// mirroring the GUI's estimate in viewer.rs — feeds the Map's at-home fit
+/// computation so the headless LOD matches what the fitted GUI would show.
+fn canvas_estimate() -> (f32, f32) {
+    let (w, h) = frame_size();
+    ((w - view::DEFAULT_SIDEBAR_W - 48.0).max(200.0), (h - 138.0).max(200.0))
 }

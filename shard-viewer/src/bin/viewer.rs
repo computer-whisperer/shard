@@ -26,14 +26,10 @@ struct Viewer {
     selection: Selection,
     /// Whether the source lightbox is open over the selected fn.
     source_modal: bool,
-    /// The Map's cross-frame anchoring state (see `view::map::MapMemo`).
-    /// Interior-mutable because the pure `build` is what learns each frame's
-    /// layout.
-    map_memo: view::MapMemoCell,
-    /// Last pointer position seen on any event (wheel, click, drag), in
-    /// window logical px. Wheel-zoom is cursor-anchored, so this is the
-    /// screen point a Map reflow must re-anchor under.
-    pointer: Option<(f32, f32)>,
+    /// The Map's per-scope committed-layout cache (see `view::map::Committed`).
+    /// Interior-mutable because the pure `build` is what commits a scope the
+    /// first time it's shown.
+    map_cache: view::MapCache,
 }
 
 impl Viewer {
@@ -65,21 +61,15 @@ impl App for Viewer {
         // The detail panel is user-resizable; read its current (dragged) width
         // so the manually-wrapped source re-wraps to fill it.
         let panel_w = cx.user_size(view::PANEL_KEY).unwrap_or(view::DEFAULT_PANEL_W);
-        // The screen point a Map reflow must hold still: the pointer (wheel
-        // zoom's own anchor), or the canvas center as a fallback. Mapped into
-        // content space via the live pan/zoom. The canvas origin is estimated
-        // from the (readback) sidebar width + fixed chrome — a small error
-        // here only nudges *which* nearby card gets pinned.
+        // Estimated canvas size: the window minus the sidebar, open panel, and
+        // fixed chrome. Only feeds the Map's (padded) cull window and at-home
+        // fit computation — a rough estimate is fine.
         let sidebar_w = cx.user_size(view::SIDEBAR_KEY).unwrap_or(view::DEFAULT_SIDEBAR_W);
-        let origin = (sidebar_w + 32.0, 122.0);
-        let screen = self.pointer.unwrap_or_else(|| {
-            let (win_w, win_h) = cx.viewport().unwrap_or((1280.0, 800.0));
-            let panel = if self.selected_fn.is_some() { panel_w + 16.0 } else { 0.0 };
-            (origin.0 + (win_w - origin.0 - panel - 16.0) * 0.5, origin.1 + (win_h - origin.1 - 16.0) * 0.5)
-        });
-        let anchor_target = (
-            (screen.0 - origin.0 - view.pan.0) / view.zoom,
-            (screen.1 - origin.1 - view.pan.1) / view.zoom,
+        let (win_w, win_h) = cx.viewport().unwrap_or((1280.0, 800.0));
+        let panel = if self.selected_fn.is_some() { panel_w + 16.0 } else { 0.0 };
+        let canvas = (
+            (win_w - sidebar_w - 32.0 - panel - 16.0).max(200.0),
+            (win_h - 122.0 - 16.0).max(200.0),
         );
         view::app_root(
             &self.project,
@@ -88,14 +78,15 @@ impl App for Viewer {
                 scope: self.scope.clone(),
                 selected_fn: self.selected_fn,
                 zoom: view.zoom,
-                anchor_target,
+                pan: view.pan,
+                canvas,
                 at_home,
                 filter: self.filter.clone(),
                 selection: self.selection.clone(),
                 source_modal: self.source_modal,
                 panel_w,
             },
-            Some(&self.map_memo),
+            Some(&self.map_cache),
         )
     }
 
@@ -104,11 +95,6 @@ impl App for Viewer {
     }
 
     fn on_event(&mut self, event: UiEvent, _cx: &EventCx) {
-        // Remember where the pointer is (wheel events land here too, via the
-        // default on_wheel_event) — it's the Map's re-anchoring target.
-        if let Some(p) = event.pointer {
-            self.pointer = Some(p);
-        }
         // Sidebar filter editing: keystrokes / focus / pointer within the field
         // arrive as non-click events routed to "filter". Handle (and the global
         // selection-clear) before the click gate below.
@@ -257,8 +243,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             filter: String::new(),
             selection: Selection::default(),
             source_modal: false,
-            map_memo: view::MapMemoCell::default(),
-            pointer: None,
+            map_cache: view::MapCache::default(),
         },
     )
 }
