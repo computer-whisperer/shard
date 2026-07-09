@@ -647,11 +647,58 @@
        (None (Call f (reverse_exprs vsr)))))
     (None (Call f (reverse_exprs vsr)))))
 
+;; -- loud stuckness (the anti-silent-exit-0 hardening) ------------------------
+;; Run mode operates on ground values: a stuck If/Match, a malformed extern
+;; argument, or a non-Int exit code is ALWAYS a bug (a missing match arm, a
+;; ctor pattern that silently became a binder, poison embedded in output
+;; data) — never a legitimate state. The pure machine cannot abort (totality:
+;; exit is a World extern), so every detection lives at a World-holding
+;; boundary and dies via exit 4, matching run_app_stuck. val_head names the
+;; offending value's head — the first thing a debugger wants. Stuck CALL
+;; residuals are deliberately NOT trapped here (word-prim stubs may stick
+;; legitimately); they die when consumed by an if/match/extern instead.
+
+(fn val_head ((e Expr)) (List Int)
+  (match e
+    ((Ctor q _) (chars_of_sym (qn_name q)))
+    ((Call q _) (chars_of_sym (qn_name q)))
+    ((IntLit n) (show_int n))
+    ((SymLit s) (chars_of_sym s))
+    ((Match _ _) "<stuck-match>")
+    ((If _ _ _) "<stuck-if>")
+    (_ "<non-value>")))
+
+(fn run_die ((msg (List Int)) (culprit Expr) (w World)) (Pair Expr World)
+  (match
+    (exit 4 (write (append_int msg (append_int (val_head culprit) "\n")) w))
+    ((World c) (Pair (IntLit 0) (World c)))))
+
+;; the first node a byte-list decode would silently TRUNCATE at (shape-blind
+;; on ctor names, exactly mirroring expr_to_intlist's acceptance); None = the
+;; whole spine decodes
+(fn intlist_bad ((e Expr)) (Option Expr)
+  (measure (struct e))
+  (match e
+    ((Ctor _ args)
+     (match args
+       (Nil None)
+       ((Cons h rest)
+        (match h
+          ((IntLit _)
+           (match rest
+             ((Cons t Nil) (intlist_bad t))
+             (_ (Some e))))
+          (_ (Some h))))
+       (_ (Some e))))
+    (_ (Some e))))
+
 ;; ev: evaluate `e` (whose free BVars index into `env`) to a value, threading
 ;; the World `w` through inline effects. Returns (value, advanced World).
 ;; The stuck If/Match residuals can no longer carry their original branches
 ;; (those are EExpr now) — they are error-path-only values (run_app matches
 ;; nothing but a Ctor-headed World), so a minimal reconstruction suffices.
+;; Since the loud-stuckness hardening they no longer even escape ev: both
+;; construction sites below (and the EPure boundary) die immediately.
 (fn ev
   ((tab FnTab)
    (env (List Expr))
@@ -660,7 +707,20 @@
    (w World))
   (Pair Expr World)
   (match e
-    ((EPure p) (Pair (evp tab env p) w))  ; extern-free: the World is untouched
+    ((EPure p)  ; extern-free: the World is untouched
+     (let ((v (evp tab env p)))
+       (match v
+         ((Match sv _)
+          (run_die
+            "error: run-mode match fell through every arm (missing arm, or a ctor pattern that became a binder?); scrutinee head: "
+            sv
+            w))
+         ((If cv _ _)
+          (run_die
+            "error: run-mode if stuck on a non-Bool condition; head: "
+            cv
+            w))
+         (_ (Pair v w)))))
     ((ECtor c args)
      (match (ev_list tab env args renv w)
        ((Pair vs w1)
@@ -676,14 +736,22 @@
         (match cv
           ((Ctor (QName _ (quote True)) Nil) (ev tab env t renv w1))
           ((Ctor (QName _ (quote False)) Nil) (ev tab env el renv w1))
-          (_ (Pair (If cv cv cv) w1))))))  ; stuck cond — out of scope (see header)
+          (_
+            (run_die
+              "error: run-mode if stuck on a non-Bool condition; head: "
+              cv
+              w1))))))
     ((EMatch s arms)
      (match (ev tab env s renv w)
        ((Pair sv w1)
         (match (fire_earm arms sv)
           ((Some (Pair body binds))
            (ev tab (append_exprs binds env) body renv w1))
-          (None (Pair (Match sv Nil) w1))))))  ; stuck scrut — out of scope (see header)
+          (None
+            (run_die
+              "error: run-mode match fell through every arm (missing arm, or a ctor pattern that became a binder?); scrutinee head: "
+              sv
+              w1))))))
     ((ECall core f fb args)
      (match (ev_list_rev tab env args Nil renv w)
        ((Pair vsr w1) (ev_call tab core f fb vsr renv w1))))))
@@ -860,9 +928,16 @@
   (Pair Expr World)
   (match args
     ((Cons path_e _)
-     (match (read_file (expr_to_intlist path_e) w)
-       ((Pair opt w1)
-        (Pair (encode_pair (encode_opt_bytes opt) (encode_world wq w1)) w1))))
+     (match (intlist_bad path_e)
+       ((Some bad)
+        (run_die
+          "error: read_file called with a malformed path (silent truncation would read the WRONG file); offending head: "
+          bad
+          w))
+       (None
+         (match (read_file (expr_to_intlist path_e) w)
+           ((Pair opt w1)
+            (Pair (encode_pair (encode_opt_bytes opt) (encode_world wq w1)) w1))))))
     (_ (Pair (encode_pair (Ctor (qn (quote None)) Nil) (encode_world wq w)) w))))
 
 (fn encode_bool ((b Bool)) Expr
@@ -891,46 +966,89 @@
 (fn perform_read_dir ((wq QName) (args (List Expr)) (w World)) (Pair Expr World)
   (match args
     ((Cons path_e _)
-     (match (read_dir (expr_to_intlist path_e) w)
-       ((Pair opt w1)
-        (Pair (encode_pair (encode_dirents opt) (encode_world wq w1)) w1))))
+     (match (intlist_bad path_e)
+       ((Some bad)
+        (run_die
+          "error: read_dir called with a malformed path (silent truncation would read the WRONG directory); offending head: "
+          bad
+          w))
+       (None
+         (match (read_dir (expr_to_intlist path_e) w)
+           ((Pair opt w1)
+            (Pair (encode_pair (encode_dirents opt) (encode_world wq w1)) w1))))))
     (_ (Pair (encode_pair (Ctor (qn (quote None)) Nil) (encode_world wq w)) w))))
 
-;; write_file: app-facing (Pair Bool World) — True = persisted.
+;; write_file: app-facing (Pair Bool World) — True = persisted. A malformed
+;; PATH is the dangerous case (silent truncation writes to the WRONG file).
 (fn perform_write_file ((wq QName) (args (List Expr)) (w World))
   (Pair Expr World)
   (match args
     ((Cons path_e (Cons bytes_e _))
-     (match (write_file (expr_to_intlist path_e) (expr_to_intlist bytes_e) w)
-       ((Pair ok w1)
-        (Pair (encode_pair (encode_bool ok) (encode_world wq w1)) w1))))
+     (match (intlist_bad path_e)
+       ((Some bad)
+        (run_die
+          "error: write_file called with a malformed path (silent truncation would write the WRONG file); offending head: "
+          bad
+          w))
+       (None
+         (match (intlist_bad bytes_e)
+           ((Some bad)
+            (run_die
+              "error: write_file called with a malformed byte list (stuck value in output data?); offending head: "
+              bad
+              w))
+           (None
+             (match
+               (write_file (expr_to_intlist path_e) (expr_to_intlist bytes_e) w)
+               ((Pair ok w1)
+                (Pair (encode_pair (encode_bool ok) (encode_world wq w1)) w1))))))))
     (_ (Pair (encode_pair (encode_bool False) (encode_world wq w)) w))))
 
 (fn perform_write ((wq QName) (args (List Expr)) (w World)) (Pair Expr World)
   (match args
     ((Cons bytes_e _)
-     (match (write (expr_to_intlist bytes_e) w)
-       ((World c) (Pair (Ctor wq (Cons (IntLit c) Nil)) (World c)))))
+     (match (intlist_bad bytes_e)
+       ((Some bad)
+        (run_die
+          "error: write called with a malformed byte list (stuck value in output data?); offending head: "
+          bad
+          w))
+       (None
+         (match (write (expr_to_intlist bytes_e) w)
+           ((World c) (Pair (Ctor wq (Cons (IntLit c) Nil)) (World c)))))))
     (_ (Pair (encode_world wq w) w))))
 
 (fn perform_write_line ((wq QName) (args (List Expr)) (w World))
   (Pair Expr World)
   (match args
     ((Cons bytes_e _)
-     (match (write_line (expr_to_intlist bytes_e) w)
-       ((World c) (Pair (Ctor wq (Cons (IntLit c) Nil)) (World c)))))
+     (match (intlist_bad bytes_e)
+       ((Some bad)
+        (run_die
+          "error: write_line called with a malformed byte list (stuck value in output data?); offending head: "
+          bad
+          w))
+       (None
+         (match (write_line (expr_to_intlist bytes_e) w)
+           ((World c) (Pair (Ctor wq (Cons (IntLit c) Nil)) (World c)))))))
     (_ (Pair (encode_world wq w) w))))
 
 ;; exit performs a real process exit (never returns); the (World c) arm only
-;; satisfies the type checker.
+;; satisfies the type checker. A non-Int code is a bug and MUST NOT become a
+;; silent success — the old fallback exited 0 and automation read "green"
+;; where nothing ran.
 (fn perform_exit ((wq QName) (args (List Expr)) (w World)) (Pair Expr World)
   (match args
     ((Cons (IntLit code) _)
      (match (exit code w)
        ((World c) (Pair (encode_world wq (World c)) (World c)))))
-    (_
-      (match (exit 0 w)
-        ((World c) (Pair (encode_world wq (World c)) (World c)))))))
+    ((Cons bad _)
+     (run_die "error: exit called with a non-Int code; head: " bad w))
+    (Nil
+      (run_die
+        "error: exit called with no arguments; head: "
+        (Ctor (qn (quote Nil)) Nil)
+        w))))
 
 ;; -- run an app: evaluate `expr` (its `(main world0)`) with the env-machine,
 ;; which performs every effect inline and threads the real World. The app exits

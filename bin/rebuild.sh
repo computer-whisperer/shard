@@ -61,3 +61,7 @@ if [ "${1:-}" = check ]; then
   bin/engine_stamp.sh > bin/shard_check.stamp
   echo "OK: bin/shard_check (stamp $(cat bin/shard_check.stamp | cut -c1-12))"
 fi
+
+# Live guard: run-mode stuckness and malformed extern args must die LOUDLY
+# (exit 4 + the offending head), never exit 0 — see examples/run_stuckctl.sh.
+./examples/run_stuckctl.sh || { echo "REFUSE: stuckness guard failed on the fresh engine"; exit 1; }
