@@ -1416,6 +1416,282 @@
     False))
 
 ;; the loop-fn gate: param slicing + the shared recognizer + v1 fences
+;; the TRANSFORM loop (docs/X86.md §28): a one-pointer read-modify-write
+;; whose store value is the range shift `(if (le LO b) (if (le b HI) (- b
+;; D) b) b)` at b = (mem_get m p). The ISA has no cmov and no setcc, so
+;; the transform is a nested-XBlock DIAMOND inside the loop body — the
+;; only place in the tree where one loop iteration branches. The range
+;; test is ONE unsigned compare against the WIDTH (HI - LO) + 1, because
+;; below LO the wrap64 subtraction lands near 2^64; conds do not negate
+;; at use, so the taken branch is the SKIP.
+;;
+;; The worker's S case forks on the SPEC's conditions and pins the
+;; MACHINE cond per leg with loopkit's xlg_xf* bridges (std/mem's
+;; get_lo/get_hi supply bytehood; the ground legs — 0 <= LO, HI < 256,
+;; (HI - LO) + 1 = W — ride (compute both), the window pair's idiom).
+;; Residues xlg_lastxf / xlg_lastsc thread the loop's own memory; the
+;; epilogue (XMovRI RAX 0) keeps them out of the theorem. 9-instruction
+;; body: S^13 worker / S^17 theorem (nesting is free — fuel is
+;; DEPTH-shaped). Counter home RSI leaves RCX as the compare scratch.
+;; Probe: examples/xtransform_probe.shard.
+(fn xlx_unit ((q QName) (lo Int) (hi Int) (d Int) (wl Int) (wh Int)) Doc
+  (let ((nm (dsym (qn_name q))))
+    (dconc
+      (list
+        (DStr "(fn ")
+        nm
+        (DStr
+          "_body () (List XInstr) (list (XBrIf (CEqz RSI) 1) (XLoad8 RAX (AReg RDI)) (XMovRR RCX RAX) (XBin XSub RCX (SImm ")
+        (dint lo)
+        (DStr ")) (XBlock (list (XBlock (list (XBrIf (CLtU RCX (SImm ")
+        (dint (+ (- hi lo) 1))
+        (DStr ")) 0) (XBr 1))) (XBin XSub RAX (SImm ")
+        (dint d)
+        (DStr
+          ")))) (XStore8 (AReg RDI) (SReg RAX)) (XBin XAdd RDI (SImm 1)) (XBin XSub RSI (SImm 1)) (XBr 0))) (fn ")
+        nm
+        (DStr "_func () XFunc (MkXFunc 2 (list (XBlock (list (XLoop (")
+        nm
+        (DStr "_body)))) (XMovRI RAX 0)))) (claim xlxw_")
+        nm
+        (DStr
+          " (goal ((ra Int) (rc Int) (x0 Int) (m0 Mem) (c Nat) (k Nat) (restfs (List XFunc))) ((= (le ")
+        (dint wl)
+        (DStr " x0) True) (= (le (+ x0 (int_of_nat k)) ")
+        (dint wh)
+        (DStr
+          ") True)) (= (xeval_loop (S^ 13 (xlg_fuel k c)) (MkXModule (Cons (MkXFunc 2 (list (XBlock (list (XLoop (inline ")
+        nm
+        (DStr "_body)))) (XMovRI RAX 0))) restfs) ")
+        (dint wl)
+        (DStr " ")
+        (dint wh)
+        (DStr ") (inline ")
+        nm
+        (DStr
+          "_body) (MkRegs ra rc 0 0 0 (int_of_nat k) x0 0 0 0 0 0 0 0 0) m0) (Some (XBrk 0 (MkRegs (xlg_lastxf m0 x0 ")
+        (dint lo)
+        (DStr " ")
+        (dint hi)
+        (DStr " ")
+        (dint d)
+        (DStr " ra k) (xlg_lastsc m0 x0 ")
+        (dint lo)
+        (DStr " ")
+        (dint hi)
+        (DStr " ")
+        (dint d)
+        (DStr " rc k) 0 0 0 0 (xlg_adv x0 k) 0 0 0 0 0 0 0 0) (")
+        nm
+        (DStr
+          " m0 x0 k))))) (induct k ((case Z (steps ((rewrite (lemma int_of_nat_zero) lr lhs true ()) (compute both)) refl)) (case S (k2) (chain (steps ((unfold xlg_fuel lhs) (reduce lhs) (unfold xeval_loop lhs) (rewrite (lemma int_of_nat_succ) lr lhs true ()) (compute")
+        (DStr
+          " lhs (stop xeval_loop xlg_fuel)))) (rewrite-with (lemma xlg_ne) lr lhs () ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))) (steps ((compute lhs (stop xeval_loop xlg_fuel)) (rewrite (premise 0) lr lhs true ()) (compute lhs (stop xeval_loop")
+        (DStr
+          " xlg_fuel)))) (rewrite-with (lemma xlg_a1_ms) lr lhs ((inst c k2)) ((steps ((rewrite (premise 1) lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl) (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))) (case-on (le ")
+        (dint lo)
+        (DStr
+          " (mem_get m0 x0)) Bool ((case True (case-on (le (mem_get m0 x0) ")
+        (dint hi)
+        (DStr
+          ") Bool ((case True (chain (steps ((compute lhs (stop xeval_loop xlg_fuel)))) (rewrite-with (lemma xlg_xfT) lr lhs ((inst lo ")
+        (dint lo)
+        (DStr ") (inst hi ")
+        (dint hi)
+        (DStr ") (inst w ")
+        (dint (+ (- hi lo) 1))
+        (DStr
+          ")) ((steps ((rewrite (hyp 1) lr lhs true ())) refl) (steps ((rewrite (hyp 0) lr lhs true ())) refl) (steps ((compute both)) refl) (steps ((compute both)) refl) (steps ((compute both)) refl)) ) (steps ((compute lhs (stop xeval_loop xlg_fuel)) (rewrite (premise")
+        (DStr
+          " 0) lr lhs true ()) (compute lhs (stop xeval_loop xlg_fuel)))) (rewrite-with (lemma xlg_a1_ms) lr lhs ((inst c k2)) ((steps ((rewrite (premise 1) lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl) (rewrite-with (lemma")
+        (DStr
+          " int_of_nat_nonneg) lr lhs () () refl))) (steps ((compute lhs (stop xeval_loop xlg_fuel)))) (have hst (= (mod (- (mem_get m0 x0) ")
+        (dint d)
+        (DStr ") 18446744073709551616) (- (mem_get m0 x0) ")
+        (dint d)
+        (DStr ")) (rewrite-with (lemma xlg_xfst) lr lhs ((inst lo ")
+        (dint lo)
+        (DStr ") (inst d ")
+        (dint d)
+        (DStr
+          ")) ((steps ((rewrite (hyp 1) lr lhs true ())) refl) (rewrite-with (lemma get_hi) lr lhs ((inst m m0) (inst a x0)) () refl) (steps ((compute both)) refl) (steps ((compute both)) refl)) refl)) (steps ((rewrite (premise hst) lr lhs true ()))) (have hsub (= (- (+")
+        (DStr
+          " 1 (int_of_nat k2)) 1) (int_of_nat k2)) (rewrite-with (lemma xlg_sub) lr lhs () () refl)) (steps ((rewrite (premise hsub) lr lhs true ()))) (have hwk (= (mod (int_of_nat k2) 18446744073709551616) (int_of_nat k2)) (rewrite-with (lemma wrap64_id) lr lhs ((inst")
+        (DStr
+          " x (int_of_nat k2))) ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl) (rewrite-with (lemma xlg_kM) lr lhs ((inst a x0) (inst c k2) (inst w ")
+        (dint wh)
+        (DStr ") (inst l ")
+        (dint wl)
+        (DStr
+          ")) ((steps ((rewrite (premise 1) lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl) (steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((compute both)) refl) (steps ((compute both)) refl)) refl)) refl)) (steps")
+        (DStr
+          " ((rewrite (premise hwk) lr lhs true ()))) (have hw0 (= (mod (+ x0 1) 18446744073709551616) (+ x0 1)) (rewrite-with (lemma wrap64_id) lr lhs ((inst x (+ x0 1))) ((rewrite-with (lemma xlg_lo0) lr lhs ((inst l ")
+        (dint wl)
+        (DStr
+          ")) ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((compute both)) refl)) refl) (rewrite-with (lemma xlg_64) lr lhs ((inst w ")
+        (dint wh)
+        (DStr
+          ")) ((rewrite-with (lemma xlg_a1_ms) lr lhs ((inst c k2)) ((steps ((rewrite (premise 1) lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl) (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)) refl) (steps ((compute")
+        (DStr
+          " both)) refl)) refl)) refl)) (steps ((rewrite (premise hw0) lr lhs true ()))) (steps ((unfold ")
+        nm
+        (DStr
+          " rhs) (unfold xlg_lastxf rhs) (unfold xlg_lastsc rhs) (unfold xlg_adv rhs) (reduce rhs))) (have hxa (= (xlg_xf (mem_get m0 x0) ")
+        (dint lo)
+        (DStr " ")
+        (dint hi)
+        (DStr " ")
+        (dint d)
+        (DStr ") (- (mem_get m0 x0) ")
+        (dint d)
+        (DStr
+          ")) (steps ((unfold xlg_xf lhs) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (reduce lhs)) refl)) (steps ((rewrite (premise hxa) lr rhs true ()))) (have hxb (= (if (le ")
+        (dint lo)
+        (DStr " (mem_get m0 x0)) (if (le (mem_get m0 x0) ")
+        (dint hi)
+        (DStr ") (- (mem_get m0 x0) ")
+        (dint d)
+        (DStr ") (mem_get m0 x0)) (mem_get m0 x0)) (- (mem_get m0 x0) ")
+        (dint d)
+        (DStr
+          ")) (steps ((rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (reduce lhs)) refl)) (steps ((rewrite (premise hxb) lr rhs true ()))) (rewrite-with (hyp 2) lr lhs () ((rewrite-with (lemma xlg_lo1) lr lhs () ((steps ((rewrite (premise 0) lr lhs")
+        (DStr
+          " true ())) refl)) refl) (rewrite-with (lemma xlg_shift) lr lhs () ((steps ((rewrite (premise 1) lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)) refl))) refl)) (case False (chain (steps ((compute lhs (stop xeval_loop")
+        (DStr " xlg_fuel)))) (rewrite-with (lemma xlg_xfFhi) lr lhs ((inst lo ")
+        (dint lo)
+        (DStr ") (inst hi ")
+        (dint hi)
+        (DStr ") (inst w ")
+        (dint (+ (- hi lo) 1))
+        (DStr
+          ")) ((steps ((rewrite (hyp 0) lr lhs true ())) refl) (rewrite-with (lemma get_hi) lr lhs ((inst m m0) (inst a x0)) () refl) (steps ((compute both)) refl) (steps ((compute both)) refl) (steps ((compute both)) refl)) ) (steps ((compute lhs (stop xeval_loop")
+        (DStr
+          " xlg_fuel)) (rewrite (premise 0) lr lhs true ()) (compute lhs (stop xeval_loop xlg_fuel)))) (rewrite-with (lemma xlg_a1_ms) lr lhs ((inst c k2)) ((steps ((rewrite (premise 1) lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ()))")
+        (DStr
+          " refl) (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))) (steps ((compute lhs (stop xeval_loop xlg_fuel)))) (have hsub (= (- (+ 1 (int_of_nat k2)) 1) (int_of_nat k2)) (rewrite-with (lemma xlg_sub) lr lhs () () refl)) (steps ((rewrite (premise hsub)")
+        (DStr
+          " lr lhs true ()))) (have hwk (= (mod (int_of_nat k2) 18446744073709551616) (int_of_nat k2)) (rewrite-with (lemma wrap64_id) lr lhs ((inst x (int_of_nat k2))) ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl) (rewrite-with (lemma xlg_kM) lr lhs")
+        (DStr " ((inst a x0) (inst c k2) (inst w ")
+        (dint wh)
+        (DStr ") (inst l ")
+        (dint wl)
+        (DStr
+          ")) ((steps ((rewrite (premise 1) lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl) (steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((compute both)) refl) (steps ((compute both)) refl)) refl)) refl)) (steps")
+        (DStr
+          " ((rewrite (premise hwk) lr lhs true ()))) (have hw0 (= (mod (+ x0 1) 18446744073709551616) (+ x0 1)) (rewrite-with (lemma wrap64_id) lr lhs ((inst x (+ x0 1))) ((rewrite-with (lemma xlg_lo0) lr lhs ((inst l ")
+        (dint wl)
+        (DStr
+          ")) ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((compute both)) refl)) refl) (rewrite-with (lemma xlg_64) lr lhs ((inst w ")
+        (dint wh)
+        (DStr
+          ")) ((rewrite-with (lemma xlg_a1_ms) lr lhs ((inst c k2)) ((steps ((rewrite (premise 1) lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl) (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)) refl) (steps ((compute")
+        (DStr
+          " both)) refl)) refl)) refl)) (steps ((rewrite (premise hw0) lr lhs true ()))) (steps ((unfold ")
+        nm
+        (DStr
+          " rhs) (unfold xlg_lastxf rhs) (unfold xlg_lastsc rhs) (unfold xlg_adv rhs) (reduce rhs))) (have hxa (= (xlg_xf (mem_get m0 x0) ")
+        (dint lo)
+        (DStr " ")
+        (dint hi)
+        (DStr " ")
+        (dint d)
+        (DStr
+          ") (mem_get m0 x0)) (steps ((unfold xlg_xf lhs) (rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (reduce lhs)) refl)) (steps ((rewrite (premise hxa) lr rhs true ()))) (have hxb (= (if (le ")
+        (dint lo)
+        (DStr " (mem_get m0 x0)) (if (le (mem_get m0 x0) ")
+        (dint hi)
+        (DStr ") (- (mem_get m0 x0) ")
+        (dint d)
+        (DStr
+          ") (mem_get m0 x0)) (mem_get m0 x0)) (mem_get m0 x0)) (steps ((rewrite (hyp 1) lr lhs true ()) (rewrite (hyp 0) lr lhs true ()) (reduce lhs)) refl)) (steps ((rewrite (premise hxb) lr rhs true ()))) (rewrite-with (hyp 2) lr lhs () ((rewrite-with (lemma xlg_lo1)")
+        (DStr
+          " lr lhs () ((steps ((rewrite (premise 0) lr lhs true ())) refl)) refl) (rewrite-with (lemma xlg_shift) lr lhs () ((steps ((rewrite (premise 1) lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)) refl))) refl))))) (case")
+        (DStr
+          " False (chain (steps ((compute lhs (stop xeval_loop xlg_fuel)))) (rewrite-with (lemma xlg_xfFlo) lr lhs ((inst lo ")
+        (dint lo)
+        (DStr ") (inst hi ")
+        (dint hi)
+        (DStr ") (inst w ")
+        (dint (+ (- hi lo) 1))
+        (DStr
+          ")) ((steps ((rewrite (hyp 0) lr lhs true ())) refl) (rewrite-with (lemma get_lo) lr lhs ((inst m m0) (inst a x0)) () refl) (steps ((compute both)) refl) (steps ((compute both)) refl) (steps ((compute both)) refl)) ) (steps ((compute lhs (stop xeval_loop")
+        (DStr
+          " xlg_fuel)) (rewrite (premise 0) lr lhs true ()) (compute lhs (stop xeval_loop xlg_fuel)))) (rewrite-with (lemma xlg_a1_ms) lr lhs ((inst c k2)) ((steps ((rewrite (premise 1) lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ()))")
+        (DStr
+          " refl) (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))) (steps ((compute lhs (stop xeval_loop xlg_fuel)))) (have hsub (= (- (+ 1 (int_of_nat k2)) 1) (int_of_nat k2)) (rewrite-with (lemma xlg_sub) lr lhs () () refl)) (steps ((rewrite (premise hsub)")
+        (DStr
+          " lr lhs true ()))) (have hwk (= (mod (int_of_nat k2) 18446744073709551616) (int_of_nat k2)) (rewrite-with (lemma wrap64_id) lr lhs ((inst x (int_of_nat k2))) ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl) (rewrite-with (lemma xlg_kM) lr lhs")
+        (DStr " ((inst a x0) (inst c k2) (inst w ")
+        (dint wh)
+        (DStr ") (inst l ")
+        (dint wl)
+        (DStr
+          ")) ((steps ((rewrite (premise 1) lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl) (steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((compute both)) refl) (steps ((compute both)) refl)) refl)) refl)) (steps")
+        (DStr
+          " ((rewrite (premise hwk) lr lhs true ()))) (have hw0 (= (mod (+ x0 1) 18446744073709551616) (+ x0 1)) (rewrite-with (lemma wrap64_id) lr lhs ((inst x (+ x0 1))) ((rewrite-with (lemma xlg_lo0) lr lhs ((inst l ")
+        (dint wl)
+        (DStr
+          ")) ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((compute both)) refl)) refl) (rewrite-with (lemma xlg_64) lr lhs ((inst w ")
+        (dint wh)
+        (DStr
+          ")) ((rewrite-with (lemma xlg_a1_ms) lr lhs ((inst c k2)) ((steps ((rewrite (premise 1) lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl) (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)) refl) (steps ((compute")
+        (DStr
+          " both)) refl)) refl)) refl)) (steps ((rewrite (premise hw0) lr lhs true ()))) (steps ((unfold ")
+        nm
+        (DStr
+          " rhs) (unfold xlg_lastxf rhs) (unfold xlg_lastsc rhs) (unfold xlg_adv rhs) (reduce rhs))) (have hxa (= (xlg_xf (mem_get m0 x0) ")
+        (dint lo)
+        (DStr " ")
+        (dint hi)
+        (DStr " ")
+        (dint d)
+        (DStr
+          ") (mem_get m0 x0)) (steps ((unfold xlg_xf lhs) (rewrite (hyp 0) lr lhs true ()) (reduce lhs)) refl)) (steps ((rewrite (premise hxa) lr rhs true ()))) (have hxb (= (if (le ")
+        (dint lo)
+        (DStr " (mem_get m0 x0)) (if (le (mem_get m0 x0) ")
+        (dint hi)
+        (DStr ") (- (mem_get m0 x0) ")
+        (dint d)
+        (DStr
+          ") (mem_get m0 x0)) (mem_get m0 x0)) (mem_get m0 x0)) (steps ((rewrite (hyp 0) lr lhs true ()) (reduce lhs)) refl)) (steps ((rewrite (premise hxb) lr rhs true ()))) (rewrite-with (hyp 1) lr lhs () ((rewrite-with (lemma xlg_lo1) lr lhs () ((steps ((rewrite")
+        (DStr
+          " (premise 0) lr lhs true ())) refl)) refl) (rewrite-with (lemma xlg_shift) lr lhs () ((steps ((rewrite (premise 1) lr lhs true ())) refl) (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)) refl))) refl))))))))) (claim lowered_")
+        nm
+        (DStr
+          " (goal ((x0 Int) (m0 Mem) (c Nat) (k Nat) (restfs (List XFunc))) ((= (le ")
+        (dint wl)
+        (DStr " x0) True) (= (le (+ x0 (int_of_nat k)) ")
+        (dint wh)
+        (DStr
+          ") True)) (= (xcall_fn_mem (S^ 17 (xlg_fuel k c)) (MkXModule (Cons (MkXFunc 2 (list (XBlock (list (XLoop (inline ")
+        nm
+        (DStr "_body)))) (XMovRI RAX 0))) restfs) ")
+        (dint wl)
+        (DStr " ")
+        (dint wh)
+        (DStr ") 0 (list x0 (int_of_nat k)) m0) (Some (Pair 0 (")
+        nm
+        (DStr
+          " m0 x0 k))))) (chain (steps ((compute lhs (stop xeval_loop xlg_fuel)))) (rewrite-with (lemma xlxw_")
+        nm
+        (DStr
+          ") lr lhs ((inst ra 0) (inst rc 0)) ((steps ((rewrite (premise 0) lr lhs true ())) refl) (steps ((rewrite (premise 1) lr lhs true ())) refl))) (steps ((compute both))) refl))")
+        (DStr (nl))))))
+;; the transform shape's v1 fences: exactly ONE accum (the pointer), +1,
+;; and the store lands at it. LO/HI/D wellformedness is meta/shape's
+;; (LO <= HI, D <= LO, all byte-sized) — restated here as the emitter's
+;; own guard because the kit's ground legs depend on it.
+(fn xlx_shape_ok ((n Int) (adv (List LStr)) (ai Int) (j Int)) Bool
+  (if (int_eq n 1)
+    (if (int_eq ai 0)
+      (if (int_eq j 0)
+        (match adv
+          ((Cons (LSInc) Nil) True)
+          (_ False))
+        False)
+      False)
+    False))
+
 (fn xg_claim_loop ((f FnDef) (wl Int) (wh Int)) XCR
   (match f
     ((FnDef q ts rty body)
@@ -1447,10 +1723,12 @@
                                       (xerr_at
                                         q
                                         "v1 copy loops pin the probe: exactly two +1 accums, the READ address first, the store address second")))
-                                   ((LVXf _ _ _ _)
-                                    (xerr_at
-                                      q
-                                      "the range-shift store value is proven (models/x86/loopkit xlg_xf*, probe examples/xtransform_probe.shard) but the emitter's template is not written yet (docs/X86.md §28)"))
+                                   ((LVXf j lo hi d)
+                                    (if (xlx_shape_ok n adv ai j)
+                                      (XCOk (xlx_unit q lo hi d wl wh))
+                                      (xerr_at
+                                        q
+                                        "v1 transform loops pin the probe: exactly ONE +1 accum, the pointer, read and stored at it")))
                                    (_
                                      (match (xlv_src v)
                                        (None

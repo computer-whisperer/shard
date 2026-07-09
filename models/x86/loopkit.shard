@@ -170,39 +170,46 @@
 ;; comes from std/mem's get_lo/get_hi, never from a premise on the
 ;; argument.
 
-;; inside the range: the machine cond is True
+;; inside the range: the machine cond is True. `w` is the range WIDTH,
+;; the literal the machine actually compares against; the ground equation
+;; (+ (- hi lo) 1) = w links it to the source's bounds and is discharged
+;; by (compute both) at every citation — the window pair's idiom.
 (claim xlg_xfT
-  (goal ((b Int) (lo Int) (hi Int))
+  (goal ((b Int) (lo Int) (hi Int) (w Int))
     ((= (le lo b) True)
      (= (le b hi) True)
      (= (le 0 lo) True)
-     (= (lt hi 256) True))
-    (= (lt (mod (- b lo) 18446744073709551616) (+ (- hi lo) 1)) True))
+     (= (lt hi 256) True)
+     (= (+ (- hi lo) 1) w))
+    (= (lt (mod (- b lo) 18446744073709551616) w) True))
   (chain
+    (steps ((rewrite (premise 4) rl lhs true ())))
     (rewrite-with
       (lemma wrap64_id)
       lr
       lhs
       ((inst x (- b lo)))
-      ((by arith (list 1 1 0 0 0)) (by arith (list 1 0 1 1 1))))
-    (by arith (list 1 0 1 0 0))))
+      ((by arith (list 1 1 0 0 0 0)) (by arith (list 1 0 1 1 1 0))))
+    (by arith (list 1 0 1 0 0 0))))
 
 ;; above the range (and a byte): the cond is False
 (claim xlg_xfFhi
-  (goal ((b Int) (lo Int) (hi Int))
+  (goal ((b Int) (lo Int) (hi Int) (w Int))
     ((= (le b hi) False)
      (= (lt b 256) True)
      (= (le 0 lo) True)
-     (= (le lo hi) True))
-    (= (lt (mod (- b lo) 18446744073709551616) (+ (- hi lo) 1)) False))
+     (= (le lo hi) True)
+     (= (+ (- hi lo) 1) w))
+    (= (lt (mod (- b lo) 18446744073709551616) w) False))
   (chain
+    (steps ((rewrite (premise 4) rl lhs true ())))
     (rewrite-with
       (lemma wrap64_id)
       lr
       lhs
       ((inst x (- b lo)))
-      ((by arith (list 1 1 0 0 1)) (by arith (list 1 0 1 1 0))))
-    (by arith (list 1 1 0 0 0))))
+      ((by arith (list 1 1 0 0 1 0)) (by arith (list 1 0 1 1 0 0))))
+    (by arith (list 1 1 0 0 0 0))))
 
 ;; below the range: the subtraction wraps one window below zero, so the
 ;; UNSIGNED compare is False. mod_unique at the exhibited q = -1
@@ -210,24 +217,25 @@
 ;; (lt lo 256) premise is load-bearing: without an upper bound on lo the
 ;; statement is simply FALSE.
 (claim xlg_xfFlo
-  (goal ((b Int) (lo Int) (hi Int))
+  (goal ((b Int) (lo Int) (hi Int) (w Int))
     ((= (le lo b) False)
      (= (le 0 b) True)
      (= (lt hi 256) True)
-     (= (lt lo 256) True))
-    (= (lt (mod (- b lo) 18446744073709551616) (+ (- hi lo) 1)) False))
+     (= (lt lo 256) True)
+     (= (+ (- hi lo) 1) w))
+    (= (lt (mod (- b lo) 18446744073709551616) w) False))
   (chain
+    (steps ((rewrite (premise 4) rl lhs true ())))
     (rewrite-with
       (lemma mod_unique)
       lr
       lhs
       ((inst q -1) (inst r (+ (- b lo) 18446744073709551616)))
-      ((by arith (list (list 1 0 0 0 0) (list 1 0 0 0 0)))
-       (by arith (list 1 0 1 0 1))
-       (by arith (list 1 1 0 0 0))))
-    (by arith (list 1 0 1 1 0))))
+      ((by arith (list (list 1 0 0 0 0 0) (list 1 0 0 0 0 0)))
+       (by arith (list 1 0 1 0 1 0))
+       (by arith (list 1 1 0 0 0 0))))
+    (by arith (list 1 0 1 1 0 0))))
 
-;; the in-range arm's stored value strips its wrap64 to the spec's (- b D)
 (claim xlg_xfst
   (goal ((b Int) (lo Int) (d Int))
     ((= (le lo b) True)
@@ -242,3 +250,43 @@
     ((inst x (- b d)))
     ((by arith (list 1 1 0 1 0)) (by arith (list 1 0 1 0 1)))
     refl))
+
+;; the range-shift transform itself, and the two residues a transform
+;; loop leaves behind — PARAMETRIC in (lo, hi, d), so no per-loop
+;; generated fn is needed. Both thread the memory exactly as the spec's
+;; recursion does (the xlg_lastc precedent: a loop whose store changes
+;; what the next load sees cannot use a fixed-memory residue). The
+;; piece's epilogue (XMovRI RAX 0) overwrites rax, so neither residue
+;; reaches a lowered theorem's conclusion.
+(fn xlg_xf ((b Int) (lo Int) (hi Int) (d Int)) Int
+  (if (le lo b) (if (le b hi) (- b d) b) b))
+
+;; the load register's residue: the last byte STORED
+(fn xlg_lastxf ((m Mem) (p Int) (lo Int) (hi Int) (d Int) (r Int) (k Nat)) Int
+  (measure (struct k))
+  (match k
+    (Z r)
+    ((S k2)
+     (xlg_lastxf
+       (mem_set m p (xlg_xf (mem_get m p) lo hi d))
+       (+ p 1)
+       lo
+       hi
+       d
+       (xlg_xf (mem_get m p) lo hi d)
+       k2))))
+
+;; the compare scratch's residue: wrap64 of (last byte READ - lo)
+(fn xlg_lastsc ((m Mem) (p Int) (lo Int) (hi Int) (d Int) (r Int) (k Nat)) Int
+  (measure (struct k))
+  (match k
+    (Z r)
+    ((S k2)
+     (xlg_lastsc
+       (mem_set m p (xlg_xf (mem_get m p) lo hi d))
+       (+ p 1)
+       lo
+       hi
+       d
+       (mod (- (mem_get m p) lo) 18446744073709551616)
+       k2))))
