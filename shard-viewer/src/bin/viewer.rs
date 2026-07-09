@@ -30,6 +30,8 @@ struct Viewer {
     /// Interior-mutable because the pure `build` is what commits a scope the
     /// first time it's shown.
     map_cache: view::MapCache,
+    /// Zoom past which Map fn slots draw their flow innards (legend −/+).
+    flow_z: f32,
 }
 
 impl Viewer {
@@ -81,6 +83,7 @@ impl App for Viewer {
                 pan: view.pan,
                 canvas,
                 at_home,
+                flow_z: self.flow_z,
                 filter: self.filter.clone(),
                 selection: self.selection.clone(),
                 source_modal: self.source_modal,
@@ -118,6 +121,11 @@ impl App for Viewer {
         } else if event.is_route("filter_clear") {
             self.filter.clear();
             self.selection = Selection::default();
+        } else if event.is_route("flowz_down") {
+            // Half-octave steps, mirroring how zoom itself is felt.
+            self.flow_z = (self.flow_z / std::f32::consts::SQRT_2).max(0.05);
+        } else if event.is_route("flowz_up") {
+            self.flow_z = (self.flow_z * std::f32::consts::SQRT_2).min(1.0);
         } else if event.is_route("fit") {
             self.fit();
         } else if event.is_route("reset") {
@@ -244,6 +252,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             selection: Selection::default(),
             source_modal: false,
             map_cache: view::MapCache::default(),
+            flow_z: view::DEFAULT_FLOW_Z,
         },
     )
 }

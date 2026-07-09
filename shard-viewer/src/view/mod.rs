@@ -75,6 +75,10 @@ pub struct ViewParams {
     /// the Map prices rendering off the exact fit zoom of the committed extent
     /// (the headless zoom readback lies) and draws without culling.
     pub at_home: bool,
+    /// Zoom past which the Map's fn slots draw their flow innards. A feel
+    /// knob: user-tunable live from the Map legend's −/+ controls (app state),
+    /// default [`DEFAULT_FLOW_Z`].
+    pub flow_z: f32,
     /// Sidebar filter text (case-insensitive substring over file paths).
     pub filter: String,
     /// Text-selection state for the filter input (app-owned, per damascene).
@@ -103,7 +107,7 @@ pub const DEFAULT_PANEL_W: f32 = 420.0;
 pub const SIDEBAR_KEY: &str = "sidebar";
 pub const PANEL_KEY: &str = "detail_panel";
 
-pub use map::MapCache;
+pub use map::{DEFAULT_FLOW_Z, MapCache};
 
 /// The whole window: sidebar + main pane + (when something is selected) panel.
 /// `map_cache` is the Map's per-scope committed-layout cache, owned by the app
@@ -276,7 +280,7 @@ fn main_pane(project: &Project, p: &ViewParams, map_cache: Option<&MapCache>) ->
         ViewMode::Systems => head.push(systems::legend()),
         ViewMode::Board if focus_file.is_some() => head.push(board::legend()),
         ViewMode::Flow if p.selected_fn.is_some() => head.push(flow::legend()),
-        ViewMode::Map => head.push(map::legend()),
+        ViewMode::Map => head.push(map::legend(p.flow_z)),
         _ => {}
     }
     head.push(body);

@@ -27,7 +27,8 @@
 //! coordinates, culls against the unprojected viewport, and picks each
 //! footprint's drawing by its size **on screen**:
 //! - a fn slot draws its full flow innards when it is in view and the zoom
-//!   affords legible flow text ([`Z_FLOW`]; the selected fn always) — else a
+//!   clears the flow threshold (`ViewParams::flow_z`, user-tunable from the
+//!   legend, default [`DEFAULT_FLOW_Z`]; the selected fn always) — else a
 //!   slab carrying the fn name at a screen-constant (cartographic) font
 //!   clamped into the slot, or a bare slab when even that would be illegible;
 //! - a file/dir box always occupies its committed rect; its contents draw
@@ -54,20 +55,40 @@ use damascene_core::layout::intrinsic;
 use damascene_core::prelude::*;
 use std::collections::BTreeMap;
 
-pub(crate) fn legend() -> El {
+pub(crate) fn legend(flow_z: f32) -> El {
     row([
         text("map").mono().muted().font_size(SUB_SIZE),
         text("one committed layout per scope · dir/file boxes placed by imports · fns by calls · zoom reveals detail in place · click a fn to select it")
             .muted()
             .font_size(SUB_SIZE),
+        spacer(),
+        text("innards ≥").muted().font_size(SUB_SIZE),
+        button("−")
+            .key("flowz_down")
+            .ghost()
+            .tooltip("Show fn internals from further out (lower zoom threshold)"),
+        text(format!("{:.0}%", flow_z * 100.0))
+            .mono()
+            .muted()
+            .font_size(SUB_SIZE)
+            .center_text()
+            .width(Size::Fixed(36.0))
+            .tooltip("Zoom at which fn slots draw their flow internals"),
+        button("+")
+            .key("flowz_up")
+            .ghost()
+            .tooltip("Show fn internals only when closer (higher zoom threshold)"),
     ])
     .gap(tokens::SPACE_3)
     .padding(tokens::SPACE_2)
+    .align(Align::Center)
 }
 
-/// Flow-card text is ~11-13px; below this zoom it isn't worth drawing — the
-/// slot carries the fn name instead.
-const Z_FLOW: f32 = 0.55;
+/// Default zoom past which fn slots draw their flow innards (the live value
+/// rides in `ViewParams::flow_z` — the Map legend has −/+ controls). Well
+/// below text legibility (~0.55): the innards read as *structure* long before
+/// their text does, and structure-first is what a map is for.
+pub const DEFAULT_FLOW_Z: f32 = 0.25;
 /// A box (file or dir) smaller than this on screen (either dimension) draws
 /// label-only: its committed footprint stays, its contents don't spend els.
 const CONTENTS_PX: f32 = 48.0;
@@ -183,7 +204,8 @@ pub(crate) fn canvas(project: &Project, p: &ViewParams, cache: Option<&MapCache>
         ))
     };
 
-    let rctx = RCtx { project, by_file: &by_file, selected_fn: p.selected_fn, zoom, cull };
+    let rctx =
+        RCtx { project, by_file: &by_file, selected_fn: p.selected_fn, zoom, flow_z: p.flow_z, cull };
     let pad = tokens::SPACE_6;
     let content = row([render_walk(&rctx, com, &root, "", (pad, pad), &[])]).padding(pad);
 
@@ -371,6 +393,8 @@ struct RCtx<'a> {
     selected_fn: Option<usize>,
     /// Effective zoom — prices every screen-space LOD decision.
     zoom: f32,
+    /// Zoom past which fn slots draw their flow innards (user-tunable).
+    flow_z: f32,
     /// Visible content rect (absolute content coords), `None` = draw all.
     cull: Option<Rect>,
 }
@@ -532,7 +556,7 @@ fn fn_el(ctx: &RCtx, fn_idx: usize, (w, h): (f32, f32), abs: (f32, f32)) -> El {
         return blank();
     }
     let selected = ctx.selected_fn == Some(fn_idx);
-    if selected || ctx.zoom >= Z_FLOW {
+    if selected || ctx.zoom >= ctx.flow_z {
         // The card's intrinsic size *is* the committed slot (commit measured
         // this same construction), so it lands exactly in its footprint.
         return flow_card(ctx.project, fn_idx, selected);
