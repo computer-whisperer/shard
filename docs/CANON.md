@@ -3,11 +3,16 @@ shard canonicalization — CANON.md
 
 STATUS: RATIFIED (user review completed 2026-07-10) — §1–§10 stand as
 the arc's scope ledger; §11 items remain OPEN questions, each needing
-its own ruling before any code assumes an answer. The v1 cut is C1–C7
+its own ruling before any code assumes an answer. The v1 cut is C1–C8
 at enforcement stages 1–2. Also ratified: (a) canonicalization is the
 next core-shaping arc; (b) content addressing is a direction shard
 should adopt and exploit — it constrains the canonical form now even
-though its consumers land later; (c) the D7 ruling recorded at C1.
+though its consumers land later; (c) the D7 ruling recorded at C1;
+(d) the census-driven sharpening of 2026-07-10 (playground commits
+f76845a + d9c7dbf): C8 joins the v1 cut, §6 gains the certificate
+taxonomy and the escape-rule criterion, §8/§9 gain the census's
+boundary examples and verification lesson — all ratified before
+stage 2 so the whole cut rides ONE std migration.
 
 The evidence base is ~/workspace/playground/shard_search_playground
 (read as data, never touched): needed narrowing over shard terms, three
@@ -198,6 +203,19 @@ hazard, and the disposition.
   twice. Not a form question; a CORPUS question. Becomes detectable
   ~for free under §7 (same canonical hash). Consumer of the arc, not
   an invariant in it.
+- **D15 arm-local scrutinee respelling** — inside a match arm, the
+  scrutinee variable and the arm's pattern name the same value by the
+  arm's own equation: `ys` ≡ `Nil` in the Nil arm; `(Cons h t)` — the
+  exact rebuild of what was just destructured — ≡ `ys` in the Cons
+  arm. First filed under §8 as context-sensitive equality; the
+  playground's solution-set census (commit d9c7dbf) showed the
+  arm-LOCAL cases are LEXICAL, not flow — the sketch builder cut them
+  statically, and they priced at a factor of 4 of insertion sort's 16
+  residual true-sort spellings (the census's 2×2 of "nil-arm
+  respelling" × "cons-arm rebuild"; quotient depth-stable across
+  eight orders of space). PROPOSAL C8 below. The rebuild direction
+  also SHARES where the spelling re-allocates — a small performance-
+  parity bonus.
 
 ## 5. The invariant set (proposed v1 cut)
 
@@ -239,6 +257,16 @@ Tier 1 — syntactic, theory-free, recognizer runs at read:
 - **C6 ground Nats are literals.** The packed form is the source
   form: `2`, never `(S (S Z))`; S^ only with a symbolic base or a
   symbolic count.
+- **C8 arm-local scrutinee discipline** (census-driven, ratified
+  2026-07-10; applies only when the scrutinee is a VARIABLE — a
+  computed scrutinee has no other spelling). Two directions:
+  (a) in an arm whose pattern binds nothing (a ground ctor, an Int or
+  Sym literal), the scrutinee variable must not occur in the arm
+  body — the arm's equation has pinned it; write the value.
+  (b) no arm body may contain the EXACT rebuild of the arm's own
+  pattern over the arm's own binders — the scrutinee variable already
+  names that value (and shares it). Partial rebuilds — any component
+  changed — are untouched.
 
 Tier 2 — theory quotients, recognizer runs at check (needs types):
 
@@ -306,6 +334,31 @@ moved ZERO verdicts once the append theory was quotiented; what
 remained needed match-context reasoning no equational lemma states.
 Each family buys its exact quotient, no more.
 
+**The certificate taxonomy (from the playground's second theory,
+commit f76845a).** Three kernel-replayable license categories for
+canon steps, and rule sets may draw on any of them:
+
+- *definitional* — constant folding IS computation (C1's category);
+- *lemma-cited* — each rewrite names a checked requirement (the
+  append four; the `canon-rules` form above);
+- *decision-procedure-backed* — each rewrite is a tautology of a
+  kernel decision procedure (the lia arithmetic normalizer: fold
+  constants, drop zeros, order operands, right-nest — every step a
+  `by lia` the kernel would accept). std/arith self-describes as
+  "lia tautologies used to reconcile term shapes the reducer doesn't
+  canonicalize" — the scar tissue of the missing canonicalizer, and
+  the standing measure of what this category is owed.
+
+**The escape-rule criterion (the typed-lemma lesson, generalized on
+first contact with a second theory).** A rule that REBUILDS a spine
+keeps every operand under its original forcing context and is
+fail-consistent for any operand; a rule that lets an operand ESCAPE
+its context (`append_nil_right`'s bare `xs`, zero-elimination's bare
+operand) requires the typed side-condition — the operand must be
+known to inhabit the binder's type. When ratifying a rule set, sort
+its rules by this criterion first: spine-preserving rules are safe by
+shape; escape rules carry the type obligation.
+
 ## 7. Content addressing (ratified direction)
 
 Ratified 2026-07-10: shard should adopt and exploit content-addressed
@@ -346,10 +399,17 @@ canonical form must be stable before any hash is stored anywhere.
 
 Excluded by decision, not accident:
 
-- **Context-sensitive equality.** `(Cons x Nil)` vs `(Cons x ys)`
-  equal only where the enclosing match arm pins `ys = Nil`. No
-  equational rule states this; quotienting it means flow reasoning
-  inside the recognizer. OUT.
+- **Context-sensitive equality — the FLOW-dependent kind.** The
+  census sharpened this boundary (see D15): equalities pinned by the
+  ENCLOSING arm's own equation are lexical and moved IN as C8; what
+  stays out is equality that needs reasoning across calls, through
+  conditions, or along paths — anything the arm's pattern does not
+  spell directly. OUT.
+- **Extensional variation.** The census's cleanest specimen: `le` vs
+  `lt` as insertion sort's tie-break — the SAME function computed
+  differently on equal keys. No spelling quotient can touch it; it
+  is laws/oracle territory (behavioral fingerprinting, requirement
+  proofs), permanently. OUT.
 - **Recursion shape.** Accumulator vs direct recursion, fold vs
   explicit structural descent — extensionally equal, structurally
   incomparable. Program equivalence, not spelling. OUT.
@@ -381,6 +441,15 @@ Excluded by decision, not accident:
   claims checkable — pin with one proof-bearing module rewritten by
   the tool and rechecked green before any tree-wide sweep (the
   records-arc proof-neutrality pilot, replayed).
+- **Two-level fingerprinting (the census's lesson, commit d9c7dbf).**
+  Any census over "equivalent" artifacts needs fingerprints at TWO
+  levels of the artifact (the playground: the sort entry AND the bare
+  insert) — the first battery lacked the one input that separates
+  true inserts from impostors, and the two levels DISAGREEING is what
+  exposed it. Silence is not success; a single fingerprint cannot
+  audit its own battery. Corollary for oracle strength: the 32
+  surviving impostors were the TEST SET's weakness, not duplication —
+  requirement proofs (the laws oracle) are the standing fix.
 
 ## 10. Migration
 
