@@ -1024,6 +1024,45 @@
        ((DAxiom a) (Some (ax_name a)))
        (_ (first_own_axiom rest))))))
 
+;; ---- axiom kind: every authored axiom names its trust kind ------------------
+;; An own axiom with no (kind …) clause parses as 'untagged (ax_of_form) and
+;; is refused below, before admission — the trust ledger never carries an
+;; unclassified entry. Granted sources are exempt for the same reason as the
+;; scope gate: their DAxioms are re-kinded 'granted/'upstream consumer-side;
+;; the authoring module's own check run is where its tags are enforced.
+;; kernel/facts.shard is NOT exempt — its axioms carry surface tags too
+;; (ax_kind_at's 'kernel promotion happens at ledger time, after this gate).
+(fn first_untagged_axiom ((ds (List Decl))) (Option Symbol)
+  (measure (struct ds))
+  (match ds
+    (Nil None)
+    ((Cons d rest)
+     (match d
+       ((DAxiom a)
+        (if (sym_eq (ax_kind a) (quote untagged)) (Some (ax_name a))
+        (first_untagged_axiom rest)))
+       (_ (first_untagged_axiom rest))))))
+
+;; the one admission veto for a source's decl stream: scope first, then kind.
+;; Some = (Pair offending-axiom-name refusal-message) → COFail in run_srcs.
+(fn ax_admit_veto ((granted Bool) (path (List Int)) (ds (List Decl)))
+  (Option (Pair Symbol (List Int)))
+  (if granted None
+  (match (if (axscope_banned path) (first_own_axiom ds) None)
+    ((Some n)
+     (Some
+       (Pair
+         n
+         "axiom authored in a library tree -- std/, meta/, models/ are theorem-only; reviewed prim facts live in kernel/facts.shard, boundary axioms at app/bin trust scopes")))
+    (None
+      (match (first_untagged_axiom ds)
+        ((Some n)
+         (Some
+           (Pair
+             n
+             "axiom missing its (kind ...) tag -- every authored axiom names its trust kind: (kind operational) for extern/prim boundary behavior, (kind bridging) for an assumed bridge")))
+        (None None))))))
+
 ;; Run a whole file list (imports first, then targets), threading theory.
 ;; A source whose decl stream fails to parse (e.g. a claim missing its proof)
 ;; is a HARD failure: every decl in that source would otherwise vanish
@@ -1083,9 +1122,8 @@
               focus
               (+ k 1)))))
        ((Some ds)
-        (match
-          (if granted None (if (axscope_banned path) (first_own_axiom ds) None))
-          ((Some badax)
+        (match (ax_admit_veto granted path ds)
+          ((Some (Pair badax vmsg))
            (match st
              ((RunState th pend acc led)
               (run_srcs
@@ -1093,16 +1131,7 @@
                 rest
                 ctors
                 sidecars
-                (RunState
-                  th
-                  pend
-                  (Cons
-                    (COFail
-                      badax
-                      "axiom authored in a library tree -- std/, meta/, models/ are theorem-only; reviewed prim facts live in kernel/facts.shard, boundary axioms at app/bin trust scopes"
-                      Nil)
-                    acc)
-                  led)
+                (RunState th pend (Cons (COFail badax vmsg Nil) acc) led)
                 target
                 focus
                 (+ k 1)))))
