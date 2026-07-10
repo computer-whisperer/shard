@@ -27,9 +27,9 @@
 (use (:: kernel module *))
 (use (:: kernel reduce try_step_prim))
 
-;; one violation: invariant number (1..8) + a subject symbol for the line
+;; one violation: invariant number (1..9) + a subject symbol for the line
 ;; (C1: the prim; C2: 'if/'match; C3: 'dead/'order/'merge; C4/C5: the ctor
-;; or 'lit/'unreachable; C6: 'S/'Z; C8: 'respell/'rebuild).
+;; or 'lit/'unreachable; C6: 'S/'Z; C8: 'respell/'rebuild; C9: 'bool).
 (type CViol (CViol Int Symbol))
 
 ;; ---------------------------------------------------------------------------
@@ -428,6 +428,22 @@
                  (cn_arms_disc rest tds pix pint (Some s) False))
                (cn_arms_disc rest tds pix pint (Some s) False)))))))))))
 
+;; C9: no match on Bool — `(match b (True X) (_ Y))` and `(if b X Y)` are
+;; two spellings of the same branch; the if is canonical (shorter,
+;; binder-free). Syntactic detection: any arm whose pattern head is the
+;; core Bool ctor. Flagged once per match.
+(fn cn_c9 ((arms (List Arm))) (List CViol)
+  (measure (struct arms))
+  (match arms
+    (Nil Nil)
+    ((Cons (Arm p _) rest)
+     (match p
+       ((PCtor q _)
+        (if (core_named q (quote True)) (Cons (CViol 9 (quote bool)) Nil)
+        (if (core_named q (quote False)) (Cons (CViol 9 (quote bool)) Nil)
+        (cn_c9 rest))))
+       (_ (cn_c9 rest))))))
+
 ;; ---------------------------------------------------------------------------
 ;; per-node checks C1 / C2 / C6
 ;; ---------------------------------------------------------------------------
@@ -478,7 +494,9 @@
        (if (cn_ground s) (Cons (CViol 2 (quote match)) Nil) Nil)
        (cn_app
          (cn_arms_disc arms (cn_tds m) None None None False)
-         (cn_app (cn_c8 s arms) (cn_app (cn_e s m) (cn_arms_b arms m))))))
+         (cn_app
+           (cn_c8 s arms)
+           (cn_app (cn_c9 arms) (cn_app (cn_e s m) (cn_arms_b arms m)))))))
     ((Let bs body) (cn_app (cn_c3 bs body) (cn_app (cn_l bs m) (cn_e body m))))
     (_ Nil)))
 

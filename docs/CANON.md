@@ -3,7 +3,7 @@ shard canonicalization — CANON.md
 
 STATUS: RATIFIED (user review completed 2026-07-10) — §1–§10 stand as
 the arc's scope ledger; §11 items remain OPEN questions, each needing
-its own ruling before any code assumes an answer. The v1 cut is C1–C8
+its own ruling before any code assumes an answer. The v1 cut is C1–C9
 at enforcement stages 1–2. Also ratified: (a) canonicalization is the
 next core-shaping arc; (b) content addressing is a direction shard
 should adopt and exploit — it constrains the canonical form now even
@@ -203,6 +203,24 @@ hazard, and the disposition.
   twice. Not a form question; a CORPUS question. Becomes detectable
   ~for free under §7 (same canonical hash). Consumer of the arc, not
   an invariant in it.
+- **D16 basis minimization (the lt pilot)** — when a primitive family
+  is closed under a cheap syntactic involution (argument swap, branch
+  swap), keep ONE orbit representative: the freedom never EXISTS
+  rather than being rewritten away. shard already half-lives by this
+  (no gt/ge, no and/or/not). The playground is testing the comparison
+  set collapsed to lt: branch-switching absorbs le in if position;
+  the VALUE position needs the canonical not-idiom
+  `(if (lt b a) False True)` plus one emitter recognizer unit (setge)
+  — perf parity holds, the machine keeps its condition codes. The
+  BOUNDARY RULE: drop a primitive only when its elimination is
+  absorbed by syntax for FREE; keep it when elimination computes (the
+  division quartet stays — sign corrections are value-dependent) or
+  hides a machine instruction (int_eq stays). Payoff compounds
+  through the emitters: a smaller basis = a permanently smaller
+  proven-fragment surface per target. RULED 2026-07-10: lt AND le
+  both KEPT for now, pending the playground's results; the control-
+  layer instance (match on Bool) ruled IN as C9. Symmetric-operand
+  order (int_eq/sym_eq) sequences behind §7's hash order.
 - **D15 arm-local scrutinee respelling** — inside a match arm, the
   scrutinee variable and the arm's pattern name the same value by the
   arm's own equation: `ys` ≡ `Nil` in the Nil arm; `(Cons h t)` — the
@@ -267,6 +285,13 @@ Tier 1 — syntactic, theory-free, recognizer runs at read:
   pattern over the arm's own binders — the scrutinee variable already
   names that value (and shares it). Partial rebuilds — any component
   changed — are untouched.
+- **C9 no match on Bool** (ratified 2026-07-10). `(match b (True X)
+  (_ Y))` and `(if b X Y)` are two spellings of the same branch; the
+  if is canonical (shorter, binder-free). Detection is syntactic —
+  any arm whose pattern head is the core Bool ctor. The first
+  application of D16's basis-minimization principle at the control
+  layer: shard already has no and/or/not prims (Bool combination IS
+  if-spellings); this closes the match-side duplicate.
 
 Tier 2 — theory quotients, recognizer runs at check (needs types):
 
