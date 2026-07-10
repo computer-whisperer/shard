@@ -423,7 +423,8 @@ declares an executable whose acceptance contract is its requires list —
 names the extern bolt axioms that are that binary's trust surface.
 Each bin also gets a transitive TRUST LEDGER block: the axioms its
 requirements' proofs transitively cite (tagged `(kind operational)` /
-`(kind bridging)` on the axiom, else `[untagged]`), the upstream-trusted
+`(kind bridging)` on the axiom — mandatory: an untagged axiom is
+refused before admission), the upstream-trusted
 and upstream-proven facts pulled in through granted interfaces, and the
 externs actually reachable from its entry fn (exact — narrow is
 first-order), with flag lines for dead trust and unreachable declared
