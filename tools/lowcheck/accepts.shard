@@ -8,11 +8,15 @@
 ;;; Checked per EXPORT of the (lib …) declaration:
 ;;;   1. the cert file has claim lowered_<export> with a (goal …) form
 ;;;   2. every premise of that goal classifies into a known FAMILY —
-;;;        (= (lt E 4294967296) True)           -> wrap32
+;;;        (= (lt E 4294967296) True)           -> wrap32 (computed E);
+;;;          argw32 when E is a BARE binder — the WORD fragment's
+;;;          argument-width pair (§7.8), supplied by the signature (an
+;;;          i32's Int image is in range by representation): ABSORBED,
+;;;          never declared (ratified 2026-07-10)
 ;;;        (= (lt E 18446744073709551616) True) -> wrap64
 ;;;        (= (le 0 E) True)                    -> the wrap pair's lower
 ;;;          bound: width-neutral, absorbed by whichever wrap family the
-;;;          surface carries (alone it refuses)
+;;;          surface carries (alone it refuses); argw32 at a bare binder
 ;;;        (= (le 1 E) True)                    -> divguard
 ;;;      an unclassifiable premise is a LOUD refusal (grow the gate, don't
 ;;;      guess)
@@ -66,7 +70,12 @@
 
 ;; one premise -> its family, or None (unclassifiable). wraplo is the
 ;; wrap pair's width-neutral lower bound — internal: normalized away when
-;; a width family is present, refused when alone.
+;; a width family is present, refused when alone. A bound at a BARE GOAL
+;; BINDER is the argw32 family (the WORD fragment's argument-width pair,
+;; LOWERING.md §7.8): supplied by the signature at any real boundary — an
+;; i32's Int image is in [0, 2^32) by representation — so it is ABSORBED
+;; in normalization and needs no accepts entry (ratified 2026-07-10). A
+;; bound at a COMPUTED node stays wrap32: a real overflow condition.
 (fn prem_family ((p SExpr)) (Option Symbol)
   (match p
     ((SList (Cons eq (Cons inner (Cons tr Nil))))
@@ -77,14 +86,20 @@
             (if (is_sym h (quote le))
               (match a
                 ((SInt k)
-                 (if (int_eq k 0) (Some (quote wraplo))
+                 (if (int_eq k 0)
+                   (match b
+                     ((SSym _) (Some (quote argw32)))
+                     (_ (Some (quote wraplo))))
                  (if (int_eq k 1) (Some (quote divguard))
                  None)))
                 (_ None))
             (if (is_sym h (quote lt))
               (match b
                 ((SInt k)
-                 (if (int_eq k 4294967296) (Some (quote wrap32))
+                 (if (int_eq k 4294967296)
+                   (match a
+                     ((SSym _) (Some (quote argw32)))
+                     (_ (Some (quote wrap32))))
                  (if (int_eq k 18446744073709551616) (Some (quote wrap64))
                  None)))
                 (_ None))
@@ -173,13 +188,24 @@
     ((Cons f rest)
      (if (sym_eq f (quote wraplo)) (drop_lo rest) (Cons f (drop_lo rest))))))
 
-;; normalize: wraplo is absorbed by a width family; alone it refuses
-(fn norm_surface ((s (List Symbol))) (Option (List Symbol))
-  (if (sym_in (quote wraplo) s)
-    (if (if (sym_in (quote wrap32) s) True (sym_in (quote wrap64) s))
-      (Some (drop_lo s))
-      None)
-    (Some s)))
+;; drop the signature-supplied argument-width family (never declared)
+(fn drop_argw ((s (List Symbol))) (List Symbol)
+  (measure (struct s))
+  (match s
+    (Nil Nil)
+    ((Cons f rest)
+     (if (sym_eq f (quote argw32)) (drop_argw rest) (Cons f (drop_argw rest))))))
+
+;; normalize: argw32 is ABSORBED unconditionally (the signature supplies
+;; it — argw32 never absorbs a wraplo, whose partner must be a real width
+;; family); wraplo is absorbed by a width family; alone it refuses
+(fn norm_surface ((s0 (List Symbol))) (Option (List Symbol))
+  (let ((s (drop_argw s0)))
+    (if (sym_in (quote wraplo) s)
+      (if (if (sym_in (quote wrap32) s) True (sym_in (quote wrap64) s))
+        (Some (drop_lo s))
+        None)
+      (Some s))))
 
 ;; ---- width-ordered coverage (the cross-target law) ---------------------------------
 

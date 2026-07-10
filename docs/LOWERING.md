@@ -1894,6 +1894,84 @@ proven interactive I/O cite the shims (the platform-externs API's
 first real consumer; the pure-entry driver bridge is superseded
 there). std/rng via WORD (§7.8, accepts → EMPTY) stays queued behind.
 
+### 6ah. The WORD fragment — std/rng on V8 through the lib battery (2026-07-10, §7.8 LANDED)
+
+The §7 item-8 named slice, built probe-first in a parallel worktree.
+Word-typed code is the fragment where the machine op IS the source
+semantics: `u32_add a b` = `mod (+ a b) 2^32` = exactly `i32.add`. The
+consumer that set the op list is std/rng's xorshift32 (13/17/5):
+u32_xor, u32_shl/u32_shr at literal counts, the u32 maker, u32_val —
+nothing else (the house accepts law; add/sub/mul land nearly free when
+a consumer arrives, their wrap32 residues are spelling-identical to the
+defining equations).
+
+- **Statement form (ratified 2026-07-10): Int binders + ENC/DEC.** The
+  goal binds plain Ints; ENC = the u32 maker spec-side, DEC = u32_val —
+  the §2 adapter slots in the module's own vocabulary
+  (`… = Some (u32_val (rng_step (u32 x0)))`). Vector synthesis,
+  lowcheck, and the accepts gate ride unchanged (arity = Int-binder
+  count); lowbuild's synthesized vectors evaluate the same adapters in
+  the OUT closure. ENC wraps ONLY U32-typed params — an Int param stays
+  bare even when the body makes a word of it (the type gate caught the
+  probe writing it wrong).
+- **Premises: ONE width pair per word-touched param + §6y div guards —
+  no per-node wrap pairs.** The pair is mandatory (the opaque rep admits
+  out-of-range Int images and `bxor` on them falsifies the equation) but
+  vacuous at any real boundary: an i32's Int image is in range by
+  representation. The accepts gate classifies a bound at a BARE goal
+  binder as the **argw32 family, ABSORBED** (never declared; a bound at
+  a computed node stays wrap32) — so rng_seed/rng_step declare EMPTY
+  accepts, the §7.8 clean-project default, and rng_val signs only the
+  honest `divguard` (the draw contract's 0 < n).
+- **The proof (probe examples/wordfrag_probe.shard, then machine
+  templates — every proof first generation after the probes):**
+  defining-equation OPENS outside-in (u32_xor_val …, one have + one
+  all-occurrences rewrite each — rewrite-with rewrites the FIRST
+  occurrence only, the P2b sharing law), maker-atom collapses
+  (u32_val_of + wrap32_id at the width premises), then per node
+  bottom-up: std/bits literal bridges at shl/shr (shl13_mul/shl5_mul/
+  shr17_div — std/bits grew the rng widths + bxor_lt32, the lt-spelled
+  closure twin), and a wrap32_id rep-collapse with derived bounds at
+  xor/shr nodes (bxor_lo/bxor_lt32, mod_lo/mod_hi, generated
+  wq_<fn>_<k> quotient-bound helper claims — div-facts at the literal
+  divisor with formulaic farkas). shl needs NO collapse: after the
+  bridge, spec = `mod (* 2^k E) 2^32` = the machine's wrap32 residue
+  verbatim; div nodes are §6y (machine spelling = spec spelling, the
+  guard premise stages the stuck if). TWO ORDERING LAWS the probe's
+  sharing-free tree could not expose: opens fire in REVERSED POSTORDER
+  (every projection user before the node), node events in true deduped
+  POSTORDER — reversed preorder is wrong under let-sharing.
+- **The seed shape: tail-position if + same-file calls.** rng_seed's if
+  was respelled to tail position (semantics-identical); lib-mode calls
+  are STRUCTURALLY TRANSPARENT — a word fn with calls pins its
+  preceding module slots as LITERALS (the §6ac structural precedent;
+  free in lib mode, the whole file regenerates together) and the
+  machine COMPUTES THROUGH the Call into the spine literal: no bridge,
+  no callee-cert citation, fuel padded by callee size at each site.
+  The spec side unfolds the callee by name (transitively collected).
+  The condition's val-projection collapses GLOBALLY before the
+  case-on; each arm then runs the standard cascade over its own tree
+  under region-prefixed have names (P2c's discipline) — the ground arm
+  crunches to a literal on the machine side and the cascade brings the
+  opaque spec tower to the same literal. bytetie's lib reflector
+  learned to walk over pinned literal prefix slots (the own slot is
+  the last before restfs). Call-free fns keep the position-general
+  binder form byte-identically.
+- **Dir-module lib targets:** a module impl's sig-fulfilling fns key at
+  the MODULE path while private fns key at the file path — lib mode
+  filters on both and emits both use-globs. examples-style targets are
+  untouched (purelib regen byte-identical throughout).
+- **The landing:** `(lib rng (exports rng_seed rng_step rng_val)
+  (accepts (rng_val divguard)))` rides std/rng/rng.shard itself — SPEC
+  = the real module fns, no twins, no bridging article. Generated
+  std/rng/rng.wasm.shard (4 certs + wq helpers, rng_mix
+  internal-but-certed), six gates green through the generic
+  examples/lowbuild_lib.sh, V8 replays 6 synthesized vectors (seed both
+  arms, step, val); build wired into examples/lowbuild_all.sh, both
+  files corpus-pinned. The V8 differential also RESTORES std/rng's
+  algorithm-drift guard (the ground pins lost in the std/word
+  migration): the engine replays concrete draws against the very fns.
+
 ## 7. Open questions — triaged at ratification (2026-07-04)
 
 None of these block the ratified form; they are the backlog the next
@@ -1936,7 +2014,7 @@ arcs draw from.
    arm values for flag loops (1/0 are pinned by the BEq-bit encoding),
    write-then-read inside LOOP iterations, stride ≠ 1 on
    Int-return/dec accums, read-returning/multi-call loop callees.
-8. NAMED SLICE (2026-07-07, no consumer yet): the WORD fragment —
+8. LANDED 2026-07-10 (§6ah): the WORD fragment —
    lowering `std/word`-style modular types. Today both back ends
    accept only Int (+ Mem) and bridge unbounded spec arithmetic to
    wrapping hardware by the per-node premise pair + wrap_id collapse

@@ -4089,6 +4089,1455 @@
   (measure k (by arith (list 1 0)) (by arith (list 1 1)))
   (if (lt k 1) (DStr "") (DCat (pr_rpars (- k 1)) (DStr ")"))))
 
+;; ---- the WORD fragment: std/word u32 ops (docs/LOWERING.md §7.8) ---------------
+;;
+;; Source fns whose signatures speak std/word's U32 lower with the word op
+;; AS the machine op: u32_xor = I32Bin BXor, u32_shl/u32_shr at a LITERAL
+;; count = the §6x slice-D constant multiply/divide, and the u32 maker /
+;; u32_val = identity code (the Int image IS the machine value). The
+;; statement keeps Int binders; ENC = the u32 maker spec-side, DEC =
+;; u32_val (the §2 adapter slots in the module's own vocabulary).
+;; Premises: ONE width pair per param the tree touches as a word (the
+;; argw32 family — vacuous at any real i32 boundary), plus §6y div guards.
+;; The proof (probe: examples/wordfrag_probe.shard, first-generation
+;; template): defining-equation opens outside-in, maker-atom collapses,
+;; then per node bottom-up — std/bits literal bridges at shl/shr,
+;; wrap32_id rep-collapse with derived bounds at xor/shr (bxor_lo /
+;; bxor_lt32, mod_lo/mod_hi, generated wq_* quotient-bound helper claims
+;; via div-facts + formulaic farkas). Every spec-side rewrite = named
+;; have + ONE all-occurrences premise rewrite (rewrite-with rewrites the
+;; FIRST occurrence only — the P2b sharing law).
+
+(fn is_u32_ty ((t Type)) Bool
+  (match t
+    ((TCon q _) (sym_eq (qn_name q) (quote U32)))
+    ((TVar _) False)))
+
+(fn any_u32 ((ts (List Type))) Bool
+  (measure (struct ts))
+  (match ts
+    (Nil False)
+    ((Cons t rest) (if (is_u32_ty t) True (any_u32 rest)))))
+
+(fn word_sig ((ts (List Type)) (rty Type)) Bool
+  (if (any_u32 ts) True (is_u32_ty rty)))
+
+;; std/word's fn named s? (strict module identity, memq_named's shape)
+(fn wordq_named ((q QName) (s Symbol)) Bool
+  (match q
+    ((QName mp nm)
+     (if (sym_eq nm s)
+       (sym_list_eq mp (Cons (quote std) (Cons (quote word) Nil)))
+       False))))
+
+(fn wd_wq ((s Symbol)) QName
+  (QName (Cons (quote std) (Cons (quote word) Nil)) s))
+
+(type WOp (WOXor) (WOShl) (WOShr) (WOMk) (WOVal))
+
+(fn wd_op ((q QName)) (Option WOp)
+  (if (wordq_named q (quote u32_xor)) (Some WOXor)
+  (if (wordq_named q (quote u32_shl)) (Some WOShl)
+  (if (wordq_named q (quote u32_shr)) (Some WOShr)
+  (if (wordq_named q (quote u32)) (Some WOMk)
+  (if (wordq_named q (quote u32_val)) (Some WOVal)
+  None))))))
+
+;; the shl/shr widths std/bits ships literal bridges for (shlK_mul /
+;; shrK_div + the wq farkas formulas below); a new width = grow std/bits
+;; by the documented two patterns.
+(fn wd_shl_ok ((k Int)) Bool
+  (if (int_eq k 1) True
+  (if (int_eq k 5) True
+  (if (int_eq k 8) True
+  (if (int_eq k 13) True
+  False)))))
+
+(fn wd_shr_ok ((k Int)) Bool
+  (if (int_eq k 1) True (if (int_eq k 8) True (if (int_eq k 17) True False))))
+
+(fn wd_p2 ((k Int)) Int (bshl 1 k))
+
+;; canonical-tree builders (std/word qnames so wd_op matches uniformly;
+;; the printer emits bare names resolved by the generated file's use-globs)
+(fn wd_c1 ((s Symbol) (a Expr)) Expr (Call (wd_wq s) (Cons a Nil)))
+
+(fn wd_c2 ((s Symbol) (a Expr) (b Expr)) Expr
+  (Call (wd_wq s) (Cons a (Cons b Nil))))
+
+;; the word spelling printer — pr_e's 2/3-ary grammar plus the 1-ary
+;; calls the word vocabulary needs ((u32 x0), (u32_val …))
+(fn wd_pr ((e Expr)) Doc
+  (measure (struct e))
+  (match e
+    ((FVar s) (dsym s))
+    ((IntLit k) (dint k))
+    ((Call q as)
+     (match as
+       ((Cons a Nil)
+        (dcat3 (dcat3 (DStr "(") (dsym (qn_name q)) (sp)) (wd_pr a) (DStr ")")))
+       ((Cons a (Cons b Nil))
+        (dcat3
+          (dcat3 (DStr "(") (dsym (qn_name q)) (sp))
+          (DCat (wd_pr a) (sp))
+          (DCat (wd_pr b) (DStr ")"))))
+       (_ (DStr "?"))))
+    (_ (DStr "?"))))
+
+(fn wd_spell ((e Expr)) (List Int) (doc_flat (wd_pr e) Nil))
+
+(fn wd_seen ((s (List Int)) (ns (List Expr))) Bool
+  (measure (struct ns))
+  (match ns
+    (Nil False)
+    ((Cons h t) (if (chars_eq s (wd_spell h)) True (wd_seen s t)))))
+
+(fn wd_ix ((s (List Int)) (ns (List Expr)) (k Int)) Int
+  (measure (struct ns))
+  (match ns
+    (Nil 0)
+    ((Cons h t) (if (chars_eq s (wd_spell h)) k (wd_ix s t (+ k 1))))))
+
+;; ---- the word walk: code + canonical tree + guards + width-pair needs ----------
+
+(fn ts_at ((ts (List Type)) (i Int)) (Option Type)
+  (measure (struct ts))
+  (match ts
+    (Nil None)
+    ((Cons h t) (if (int_eq i 0) (Some h) (ts_at t (- i 1))))))
+
+;; insert a param position, ascending, dedup
+(fn wd_ins ((p Int) (ns (List Int))) (List Int)
+  (measure (struct ns))
+  (match ns
+    (Nil (Cons p Nil))
+    ((Cons h t)
+     (if (int_eq p h) ns (if (lt p h) (Cons p ns) (Cons h (wd_ins p t)))))))
+
+(fn wd_norm ((ps (List Int)) (acc (List Int))) (List Int)
+  (measure (struct ps))
+  (match ps
+    (Nil acc)
+    ((Cons h t) (wd_norm t (wd_ins h acc)))))
+
+;; rank of the width-pair param spelled s among the (sorted) needs
+(fn wd_rank ((s Symbol) (ns (List Int)) (k Int)) Int
+  (measure (struct ns))
+  (match ns
+    (Nil 0)
+    ((Cons h t) (if (sym_eq s (xsym h)) k (wd_rank s t (+ k 1))))))
+
+(fn wd_is32 ((e Expr)) Bool
+  (match e
+    ((Call q _)
+     (match (wd_op q)
+       ((Some WOXor) True)
+       ((Some WOShl) True)
+       ((Some WOShr) True)
+       ((Some WOMk) True)
+       ((Some WOVal) False)
+       (None False)))
+    (_ False)))
+
+(fn wd_len ((ns (List Int))) Int
+  (measure (struct ns))
+  (match ns
+    (Nil 0)
+    ((Cons _ t) (+ 1 (wd_len t)))))
+
+;; walk result: code docs, instr count, next local, canonical tree,
+;; symbolic div-guard divisors (machine order), width-pair positions
+(type WG
+  (WGOk (List Doc) Int Int Expr (List Expr) (List Int))
+  (WGErr (List Int)))
+
+(fn wd_e
+  ((n Int)
+   (pts (List Type))
+   (env (List (Pair Expr Int)))
+   (nxt Int)
+   (e Expr)
+   (tbl (List (Pair Symbol Int)))
+   (fns (List FnDef)))
+  WG
+  (measure (struct e))
+  (match e
+    ((BVar i)
+     (match (env_at env i)
+       ((Some (Pair ce k))
+        (WGOk
+          (Cons (dcat3 (DStr "(LocalGet ") (dint k) (DStr ")")) Nil)
+          1
+          nxt
+          ce
+          Nil
+          Nil))
+       (None
+         (let ((pos (- (- n 1) (- i (env_len env)))))
+           (match (ts_at pts pos)
+             (None (WGErr "param index out of range"))
+             ((Some t)
+              (if (is_u32_ty t)
+                (WGOk
+                  (Cons (dcat3 (DStr "(LocalGet ") (dint pos) (DStr ")")) Nil)
+                  1
+                  nxt
+                  (wd_c1 (quote u32) (FVar (xsym pos)))
+                  Nil
+                  (Cons pos Nil))
+                (WGOk
+                  (Cons (dcat3 (DStr "(LocalGet ") (dint pos) (DStr ")")) Nil)
+                  1
+                  nxt
+                  (FVar (xsym pos))
+                  Nil
+                  Nil))))))))
+    ((IntLit k)
+     (if (le 0 k)
+       (if (lt k 4294967296)
+         (WGOk
+           (Cons (dcat3 (DStr "(I32Const ") (dint k) (DStr ")")) Nil)
+           1
+           nxt
+           e
+           Nil
+           Nil)
+         (WGErr "literal outside [0, 2^32)"))
+       (WGErr "literal outside [0, 2^32)")))
+    ((Call q as)
+     (match (wd_op q)
+       ((Some WOXor)
+        (match as
+          ((Cons a (Cons b Nil))
+           (match (wd_e n pts env nxt a tbl fns)
+             ((WGErr m) (WGErr m))
+             ((WGOk ia ca nxa cea ga na)
+              (if (wd_is32 cea)
+                (match (wd_e n pts env nxa b tbl fns)
+                  ((WGErr m) (WGErr m))
+                  ((WGOk ib cb nxb ceb gb nb)
+                   (if (wd_is32 ceb)
+                     (WGOk
+                       (dapp ia (dapp ib (Cons (DStr "(I32Bin BXor)") Nil)))
+                       (+ ca (+ cb 1))
+                       nxb
+                       (Call q (Cons cea (Cons ceb Nil)))
+                       (dapp_e ga gb)
+                       (append_int na nb))
+                     (WGErr "u32_xor operand is not word-typed"))))
+                (WGErr "u32_xor operand is not word-typed")))))
+          (_ (WGErr "u32_xor must be binary"))))
+       ((Some WOShl)
+        (match as
+          ((Cons a (Cons (IntLit k) Nil))
+           (if (wd_shl_ok k)
+             (match (wd_e n pts env nxt a tbl fns)
+               ((WGErr m) (WGErr m))
+               ((WGOk ia ca nxa cea ga na)
+                (if (wd_is32 cea)
+                  (WGOk
+                    (Cons
+                      (dcat3 (DStr "(I32Const ") (dint (wd_p2 k)) (DStr ")"))
+                      (dapp ia (Cons (DStr "(I32Bin BMul)") Nil)))
+                    (+ ca 2)
+                    nxa
+                    (Call q (Cons cea (Cons (IntLit k) Nil)))
+                    ga
+                    na)
+                  (WGErr "u32_shl operand is not word-typed"))))
+             (WGErr
+               "u32_shl count has no std/bits bridge (grow shlK_mul + wd_shl_ok)")))
+          (_ (WGErr "u32_shl needs a literal count"))))
+       ((Some WOShr)
+        (match as
+          ((Cons a (Cons (IntLit k) Nil))
+           (if (wd_shr_ok k)
+             (match (wd_e n pts env nxt a tbl fns)
+               ((WGErr m) (WGErr m))
+               ((WGOk ia ca nxa cea ga na)
+                (if (wd_is32 cea)
+                  (WGOk
+                    (dapp
+                      ia
+                      (Cons
+                        (dcat3 (DStr "(I32Const ") (dint (wd_p2 k)) (DStr ")"))
+                        (Cons (DStr "(I32Bin BDivU)") Nil)))
+                    (+ ca 2)
+                    nxa
+                    (Call q (Cons cea (Cons (IntLit k) Nil)))
+                    ga
+                    na)
+                  (WGErr "u32_shr operand is not word-typed"))))
+             (WGErr
+               "u32_shr count has no std/bits bridge (grow shrK_div + wd_shr_ok)")))
+          (_ (WGErr "u32_shr needs a literal count"))))
+       ((Some WOMk)
+        (match as
+          ((Cons x Nil)
+           (match x
+             ((BVar i)
+              (match (env_at env i)
+                ((Some _)
+                 (WGErr
+                   "u32 maker over a let-bound value is not in the fragment yet"))
+                (None
+                  (let ((pos (- (- n 1) (- i (env_len env)))))
+                    (match (ts_at pts pos)
+                      (None (WGErr "param index out of range"))
+                      ((Some t)
+                       (if (is_u32_ty t) (WGErr "u32 maker over a word value")
+                       (WGOk
+                         (Cons
+                           (dcat3 (DStr "(LocalGet ") (dint pos) (DStr ")"))
+                           Nil)
+                         1
+                         nxt
+                         (wd_c1 (quote u32) (FVar (xsym pos)))
+                         Nil
+                         (Cons pos Nil)))))))))
+             ((IntLit k)
+              (if (le 0 k)
+                (if (lt k 4294967296)
+                  (WGOk
+                    (Cons (dcat3 (DStr "(I32Const ") (dint k) (DStr ")")) Nil)
+                    1
+                    nxt
+                    (wd_c1 (quote u32) (IntLit k))
+                    Nil
+                    Nil)
+                  (WGErr "u32 maker literal outside [0, 2^32)"))
+                (WGErr "u32 maker literal outside [0, 2^32)")))
+             (_
+               (WGErr
+                 "u32 maker over a computed value is not in the fragment yet"))))
+          (_ (WGErr "u32 maker must be unary"))))
+       ((Some WOVal)
+        (match as
+          ((Cons x Nil)
+           (match (wd_e n pts env nxt x tbl fns)
+             ((WGErr m) (WGErr m))
+             ((WGOk ia ca nxa cea ga na)
+              (if (wd_is32 cea) (WGOk ia ca nxa (Call q (Cons cea Nil)) ga na)
+              (WGErr "u32_val over a non-word value")))))
+          (_ (WGErr "u32_val must be unary"))))
+       (None
+         (match (dop_of q)
+           (None
+             (match (wd_tbl_idx tbl (qn_name q))
+               (None
+                 (WGErr
+                   "call outside the WORD fragment (u32 ops + ediv/mod + same-file word fns)"))
+               ((Some cidx)
+                (match as
+                  ((Cons a Nil)
+                   (match (wd_e n pts env nxt a tbl fns)
+                     ((WGErr m) (WGErr m))
+                     ((WGOk ia ca nxa cea ga na)
+                      (if (wd_is32 cea)
+                        (match (wd_find_fd fns (qn_name q))
+                          (None (WGErr "same-file callee not found"))
+                          ((Some cf)
+                           (match cf
+                             ((FnDef _ cts _ cbody)
+                              (match
+                                (wd_e
+                                  (count_ts cts)
+                                  cts
+                                  (Cons (Pair cea 0) Nil)
+                                  9
+                                  cbody
+                                  tbl
+                                  fns)
+                                ((WGErr m) (WGErr m))
+                                ((WGOk _ cc _ ctree cg cn)
+                                 (WGOk
+                                   (dapp
+                                     ia
+                                     (Cons
+                                       (dcat3
+                                         (DStr "(Call ")
+                                         (dint cidx)
+                                         (DStr ")"))
+                                       Nil))
+                                   (+ ca (+ cc 3))
+                                   nxa
+                                   ctree
+                                   (dapp_e ga cg)
+                                   (append_int na cn))))))))
+                        (WGErr "call argument is not word-typed")))))
+                  (_ (WGErr "same-file calls take exactly one argument"))))))
+           ((Some opd)
+            (match as
+              ((Cons a (Cons b Nil))
+               (match (wd_e n pts env nxt a tbl fns)
+                 ((WGErr m) (WGErr m))
+                 ((WGOk ia ca nxa cea ga na)
+                  (if (wd_is32 cea)
+                    (WGErr "ediv/mod over a word value (project with u32_val)")
+                    (match b
+                      ((IntLit dk)
+                       (if (int_eq dk 0) (WGErr "division by a zero literal")
+                       (if (le 0 dk)
+                         (if (lt dk 4294967296)
+                           (WGOk
+                             (dapp
+                               ia
+                               (Cons
+                                 (dcat3
+                                   (DStr "(I32Const ")
+                                   (dint dk)
+                                   (DStr ")"))
+                                 (Cons
+                                   (dcat3 (DStr "(I32Bin ") opd (DStr ")"))
+                                   Nil)))
+                             (+ ca 2)
+                             nxa
+                             (Call q (Cons cea (Cons (IntLit dk) Nil)))
+                             ga
+                             na)
+                           (WGErr "literal outside [0, 2^32)"))
+                         (WGErr "literal outside [0, 2^32)"))))
+                      ((BVar i)
+                       (match (env_at env i)
+                         ((Some _)
+                          (WGErr
+                            "ediv/mod divisor must be an Int param or literal"))
+                         (None
+                           (let ((pos (- (- n 1) (- i (env_len env)))))
+                             (match (ts_at pts pos)
+                               (None (WGErr "param index out of range"))
+                               ((Some t)
+                                (if (is_u32_ty t)
+                                  (WGErr
+                                    "ediv/mod divisor must be an Int param or literal")
+                                  (WGOk
+                                    (dapp
+                                      ia
+                                      (Cons
+                                        (dcat3
+                                          (DStr "(LocalGet ")
+                                          (dint pos)
+                                          (DStr ")"))
+                                        (Cons
+                                          (dcat3
+                                            (DStr "(I32Bin ")
+                                            opd
+                                            (DStr ")"))
+                                          Nil)))
+                                    (+ ca 2)
+                                    nxa
+                                    (Call
+                                      q
+                                      (Cons cea (Cons (FVar (xsym pos)) Nil)))
+                                    (dapp_e ga (Cons (FVar (xsym pos)) Nil))
+                                    na))))))))
+                      (_
+                        (WGErr
+                          "ediv/mod divisor must be an Int param or literal")))))))
+              (_ (WGErr "ediv/mod must be binary"))))))))
+    ((Let bs body)
+     (match bs
+       ((Cons rhs Nil)
+        (match (wd_e n pts env nxt rhs tbl fns)
+          ((WGErr m) (WGErr m))
+          ((WGOk ir cr nxr cer gr nr)
+           (match (wd_e n pts (Cons (Pair cer nxr) env) (+ nxr 1) body tbl fns)
+             ((WGErr m) (WGErr m))
+             ((WGOk ib cb nxb ceb gb nb)
+              (WGOk
+                (dapp
+                  ir
+                  (Cons (dcat3 (DStr "(LocalSet ") (dint nxr) (DStr ")")) ib))
+                (+ cr (+ cb 1))
+                nxb
+                ceb
+                (dapp_e gr gb)
+                (append_int nr nb)))))))
+       (_ (WGErr "let must bind exactly one name (split into nested lets)"))))
+    (_
+      (WGErr "body outside the WORD fragment (straight-line/let over u32 ops)"))))
+
+;; U32-typed canonical node? (params ride as (u32 xN): maker head = marker)
+
+
+;; ---- machine spelling of a canonical word tree ---------------------------------
+
+(fn wd_m ((e Expr)) Expr
+  (measure (struct e))
+  (match e
+    ((Call q as)
+     (match (wd_op q)
+       ((Some WOXor)
+        (match as
+          ((Cons a (Cons b Nil)) (wd_c2 (quote bxor) (wd_m a) (wd_m b)))
+          (_ e)))
+       ((Some WOShl)
+        (match as
+          ((Cons a (Cons (IntLit k) Nil))
+           (wd_c2
+             (quote mod)
+             (wd_c2 (quote *) (IntLit (wd_p2 k)) (wd_m a))
+             (IntLit 4294967296)))
+          (_ e)))
+       ((Some WOShr)
+        (match as
+          ((Cons a (Cons (IntLit k) Nil))
+           (wd_c2 (quote ediv) (wd_m a) (IntLit (wd_p2 k))))
+          (_ e)))
+       ((Some WOMk)
+        (match as
+          ((Cons x Nil) x)
+          (_ e)))
+       ((Some WOVal)
+        (match as
+          ((Cons x Nil) (wd_m x))
+          (_ e)))
+       (None (Call q (wd_ms as)))))
+    (_ e)))
+
+(fn wd_ms ((as (List Expr))) (List Expr)
+  (measure (struct as))
+  (match as
+    (Nil Nil)
+    ((Cons h t) (Cons (wd_m h) (wd_ms t)))))
+
+;; ---- node/atom collectors (preorder, dedup by word spelling) --------------------
+
+(fn wd_ops ((e Expr) (acc (List Expr))) (List Expr)
+  (measure (struct e))
+  (match e
+    ((Call q as)
+     (match (wd_op q)
+       ((Some WOXor)
+        (wd_ops_l as (if (wd_seen (wd_spell e) acc) acc (node_add e acc))))
+       ((Some WOShl)
+        (wd_ops_l as (if (wd_seen (wd_spell e) acc) acc (node_add e acc))))
+       ((Some WOShr)
+        (wd_ops_l as (if (wd_seen (wd_spell e) acc) acc (node_add e acc))))
+       ((Some WOMk) acc)
+       ((Some WOVal) (wd_ops_l as acc))
+       (None (wd_ops_l as acc))))
+    (_ acc)))
+
+(fn wd_ops_l ((as (List Expr)) (acc (List Expr))) (List Expr)
+  (measure (struct as))
+  (match as
+    (Nil acc)
+    ((Cons h t) (wd_ops_l t (wd_ops h acc)))))
+
+(fn wd_atoms ((e Expr) (acc (List Expr))) (List Expr)
+  (measure (struct e))
+  (match e
+    ((Call q as)
+     (match (wd_op q)
+       ((Some WOMk) (if (wd_seen (wd_spell e) acc) acc (node_add e acc)))
+       (_ (wd_atoms_l as acc))))
+    (_ acc)))
+
+(fn wd_atoms_l ((as (List Expr)) (acc (List Expr))) (List Expr)
+  (measure (struct as))
+  (match as
+    (Nil acc)
+    ((Cons h t) (wd_atoms_l t (wd_atoms h acc)))))
+
+;; ---- have names ----------------------------------------------------------------
+
+(fn wd_nm ((pfx (List Int)) (j Int)) Doc (DCat (DStr pfx) (dint j)))
+
+;; ---- bound-fact subproofs for a word operand ------------------------------------
+;;
+;; per operand KIND: width-pair premise rewrites (param atoms), ground
+;; compute (literal makers), mod_lo/mod_hi citations (shl nodes = mod
+;; spellings), or the node's own lo<j>/lt<j> haves (xor/shr nodes).
+
+(fn wd_sub_prem ((d Doc)) Doc
+  (dcat3
+    (DStr "(steps ((rewrite (premise ")
+    d
+    (DStr ") lr lhs true ())) refl)")))
+
+(fn wd_sub_modlo () Doc
+  (DStr
+    "(rewrite-with (lemma mod_lo) lr lhs () ((steps ((compute both)) refl)) refl)"))
+
+(fn wd_sub_modhi () Doc
+  (DStr
+    "(rewrite-with (lemma mod_hi) lr lhs () ((steps ((compute both)) refl)) refl)"))
+
+;; lo=True -> the lower-bound subproof, else the upper; rg = the region
+;; name prefix ("" straight, "t"/"e" per if arm — P2c's region discipline)
+(fn wd_bsub
+  ((e Expr) (ns (List Int)) (tab (List Expr)) (lo Bool) (rg (List Int)))
+  Doc
+  (measure (struct e))
+  (match e
+    ((Call q as)
+     (match (wd_op q)
+       ((Some WOMk)
+        (match as
+          ((Cons (FVar s) Nil)
+           (wd_sub_prem (dint (+ (* 2 (wd_rank s ns 0)) (if lo 0 1)))))
+          (_ (DStr "(steps ((compute both)) refl)"))))
+       ((Some WOShl) (if lo (wd_sub_modlo) (wd_sub_modhi)))
+       ((Some WOXor)
+        (wd_sub_prem
+          (wd_nm (append_int rg (if lo "lo" "lt")) (wd_ix (wd_spell e) tab 0))))
+       ((Some WOShr)
+        (wd_sub_prem
+          (wd_nm (append_int rg (if lo "lo" "lt")) (wd_ix (wd_spell e) tab 0))))
+       ((Some WOVal)
+        (match as
+          ((Cons x Nil) (wd_bsub x ns tab lo rg))
+          (_ (DStr "(steps ((compute both)) refl)"))))
+       (None (DStr "(steps ((compute both)) refl)"))))
+    (_ (DStr "(steps ((compute both)) refl)"))))
+
+;; ---- have/apply doc builders -----------------------------------------------------
+
+(fn wd_apply ((nm Doc)) Doc
+  (dcat3 (DStr " (steps ((rewrite (premise ") nm (DStr ") lr rhs true ())))")))
+
+;; the defining-equation OPEN have for op node j
+(fn wd_open ((e Expr) (j Int) (rg (List Int))) Doc
+  (match e
+    ((Call q as)
+     (match (wd_op q)
+       ((Some WOXor)
+        (match as
+          ((Cons a (Cons b Nil))
+           (dconc
+             (list
+               (DStr " (have ")
+               (wd_nm (append_int rg "o") j)
+               (DStr " (= (u32_val ")
+               (wd_pr e)
+               (DStr ") (mod (bxor (u32_val ")
+               (wd_pr a)
+               (DStr ") (u32_val ")
+               (wd_pr b)
+               (DStr
+                 ")) 4294967296)) (rewrite-with (lemma u32_xor_val) lr lhs ((inst a ")
+               (wd_pr a)
+               (DStr ") (inst b ")
+               (wd_pr b)
+               (DStr ")) () refl))"))))
+          (_ (DStr ""))))
+       ((Some WOShl)
+        (match as
+          ((Cons a (Cons (IntLit k) Nil))
+           (dconc
+             (list
+               (DStr " (have ")
+               (wd_nm (append_int rg "o") j)
+               (DStr " (= (u32_val ")
+               (wd_pr e)
+               (DStr ") (mod (bshl (u32_val ")
+               (wd_pr a)
+               (DStr ") ")
+               (dint k)
+               (DStr
+                 ") 4294967296)) (rewrite-with (lemma u32_shl_val) lr lhs ((inst x ")
+               (wd_pr a)
+               (DStr ") (inst k ")
+               (dint k)
+               (DStr ")) () refl))"))))
+          (_ (DStr ""))))
+       ((Some WOShr)
+        (match as
+          ((Cons a (Cons (IntLit k) Nil))
+           (dconc
+             (list
+               (DStr " (have ")
+               (wd_nm (append_int rg "o") j)
+               (DStr " (= (u32_val ")
+               (wd_pr e)
+               (DStr ") (mod (bshr (u32_val ")
+               (wd_pr a)
+               (DStr ") ")
+               (dint k)
+               (DStr
+                 ") 4294967296)) (rewrite-with (lemma u32_shr_val) lr lhs ((inst x ")
+               (wd_pr a)
+               (DStr ") (inst k ")
+               (dint k)
+               (DStr ")) () refl))"))))
+          (_ (DStr ""))))
+       (_ (DStr ""))))
+    (_ (DStr ""))))
+
+(fn wd_opens ((es (List Expr)) (tab (List Expr)) (rg (List Int))) Doc
+  (measure (struct es))
+  (match es
+    (Nil (DStr ""))
+    ((Cons h t)
+     (dcat3
+       (DCat
+         (wd_open h (wd_ix (wd_spell h) tab 0) rg)
+         (wd_apply (wd_nm (append_int rg "o") (wd_ix (wd_spell h) tab 0))))
+       (wd_opens t tab rg)
+       (DStr "")))))
+
+;; the maker-atom collapse have for atom i: (u32_val (u32 X)) = X
+(fn wd_atom ((e Expr) (i Int) (ns (List Int)) (rg (List Int))) Doc
+  (match e
+    ((Call q as)
+     (match as
+       ((Cons (FVar s) Nil)
+        (dconc
+          (list
+            (DStr " (have ")
+            (wd_nm (append_int rg "a") i)
+            (DStr " (= (u32_val ")
+            (wd_pr e)
+            (DStr ") ")
+            (dsym s)
+            (DStr ") (chain (rewrite-with (lemma u32_val_of) lr lhs ((inst nn ")
+            (dsym s)
+            (DStr ")) ()) (rewrite-with (lemma wrap32_id) lr lhs ((inst x ")
+            (dsym s)
+            (DStr ")) (")
+            (wd_sub_prem (dint (* 2 (wd_rank s ns 0))))
+            (sp)
+            (wd_sub_prem (dint (+ (* 2 (wd_rank s ns 0)) 1)))
+            (DStr ") refl)))"))))
+       ((Cons (IntLit k) Nil)
+        (dconc
+          (list
+            (DStr " (have ")
+            (wd_nm (append_int rg "a") i)
+            (DStr " (= (u32_val ")
+            (wd_pr e)
+            (DStr ") ")
+            (dint k)
+            (DStr ") (chain (rewrite-with (lemma u32_val_of) lr lhs ((inst nn ")
+            (dint k)
+            (DStr ")) ()) (steps ((compute lhs)) refl)))"))))
+       (_ (DStr ""))))
+    (_ (DStr ""))))
+
+(fn wd_atoms_doc ((es (List Expr)) (i Int) (ns (List Int)) (rg (List Int))) Doc
+  (measure (struct es))
+  (match es
+    (Nil (DStr ""))
+    ((Cons h t)
+     (dcat3
+       (DCat (wd_atom h i ns rg) (wd_apply (wd_nm (append_int rg "a") i)))
+       (wd_atoms_doc t (+ i 1) ns rg)
+       (DStr "")))))
+
+;; the per-node bottom-up events: bridge (shl/shr), bounds pair + wrap32_id
+;; collapse (xor/shr). j = the node's PREORDER-table ordinal.
+(fn wd_node
+  ((e Expr)
+   (j Int)
+   (ns (List Int))
+   (tab (List Expr))
+   (fnm Symbol)
+   (rg (List Int)))
+  Doc
+  (match e
+    ((Call q as)
+     (match (wd_op q)
+       ((Some WOShl)
+        (match as
+          ((Cons a (Cons (IntLit k) Nil))
+           (dconc
+             (list
+               (DStr " (have ")
+               (wd_nm (append_int rg "b") j)
+               (DStr " (= (bshl ")
+               (wd_pr (wd_m a))
+               (DStr " ")
+               (dint k)
+               (DStr ") (* ")
+               (dint (wd_p2 k))
+               (DStr " ")
+               (wd_pr (wd_m a))
+               (DStr ")) (rewrite-with (lemma shl")
+               (dint k)
+               (DStr "_mul) lr lhs ((inst a ")
+               (wd_pr (wd_m a))
+               (DStr ")) (")
+               (wd_bsub a ns tab True rg)
+               (DStr ") refl))")
+               (wd_apply (wd_nm (append_int rg "b") j)))))
+          (_ (DStr ""))))
+       ((Some WOShr)
+        (match as
+          ((Cons a (Cons (IntLit k) Nil))
+           (dconc
+             (list
+               (DStr " (have ")
+               (wd_nm (append_int rg "b") j)
+               (DStr " (= (bshr ")
+               (wd_pr (wd_m a))
+               (DStr " ")
+               (dint k)
+               (DStr ") (ediv ")
+               (wd_pr (wd_m a))
+               (DStr " ")
+               (dint (wd_p2 k))
+               (DStr ")) (rewrite-with (lemma shr")
+               (dint k)
+               (DStr "_div) lr lhs ((inst a ")
+               (wd_pr (wd_m a))
+               (DStr ")) (")
+               (wd_bsub a ns tab True rg)
+               (DStr ") refl))")
+               (wd_apply (wd_nm (append_int rg "b") j))
+               (DStr " (have ")
+               (wd_nm (append_int rg "lo") j)
+               (DStr " (= (le 0 ")
+               (wd_pr (wd_m e))
+               (DStr ") True) (rewrite-with (lemma wq_")
+               (dsym fnm)
+               (DStr "_")
+               (dint k)
+               (DStr "_lo) lr lhs ((inst a ")
+               (wd_pr (wd_m a))
+               (DStr ")) (")
+               (wd_bsub a ns tab True rg)
+               (DStr ") refl))")
+               (DStr " (have ")
+               (wd_nm (append_int rg "lt") j)
+               (DStr " (= (lt ")
+               (wd_pr (wd_m e))
+               (DStr " 4294967296) True) (rewrite-with (lemma wq_")
+               (dsym fnm)
+               (DStr "_")
+               (dint k)
+               (DStr "_lt32) lr lhs ((inst a ")
+               (wd_pr (wd_m a))
+               (DStr ")) (")
+               (wd_bsub a ns tab True rg)
+               (sp)
+               (wd_bsub a ns tab False rg)
+               (DStr ") refl))")
+               (DStr " (have ")
+               (wd_nm (append_int rg "w") j)
+               (DStr " (= (mod ")
+               (wd_pr (wd_m e))
+               (DStr " 4294967296) ")
+               (wd_pr (wd_m e))
+               (DStr ") (rewrite-with (lemma wrap32_id) lr lhs ((inst x ")
+               (wd_pr (wd_m e))
+               (DStr ")) (")
+               (wd_sub_prem (wd_nm (append_int rg "lo") j))
+               (sp)
+               (wd_sub_prem (wd_nm (append_int rg "lt") j))
+               (DStr ") refl))")
+               (wd_apply (wd_nm (append_int rg "w") j)))))
+          (_ (DStr ""))))
+       ((Some WOXor)
+        (match as
+          ((Cons a (Cons b Nil))
+           (dconc
+             (list
+               (DStr " (have ")
+               (wd_nm (append_int rg "lo") j)
+               (DStr " (= (le 0 ")
+               (wd_pr (wd_m e))
+               (DStr ") True) (rewrite-with (lemma bxor_lo) lr lhs ((inst a ")
+               (wd_pr (wd_m a))
+               (DStr ") (inst b ")
+               (wd_pr (wd_m b))
+               (DStr ")) (")
+               (wd_bsub a ns tab True rg)
+               (sp)
+               (wd_bsub b ns tab True rg)
+               (DStr ") refl))")
+               (DStr " (have ")
+               (wd_nm (append_int rg "lt") j)
+               (DStr " (= (lt ")
+               (wd_pr (wd_m e))
+               (DStr
+                 " 4294967296) True) (rewrite-with (lemma bxor_lt32) lr lhs ((inst a ")
+               (wd_pr (wd_m a))
+               (DStr ") (inst b ")
+               (wd_pr (wd_m b))
+               (DStr ")) (")
+               (wd_bsub a ns tab True rg)
+               (sp)
+               (wd_bsub a ns tab False rg)
+               (sp)
+               (wd_bsub b ns tab True rg)
+               (sp)
+               (wd_bsub b ns tab False rg)
+               (DStr ") refl))")
+               (DStr " (have ")
+               (wd_nm (append_int rg "w") j)
+               (DStr " (= (mod ")
+               (wd_pr (wd_m e))
+               (DStr " 4294967296) ")
+               (wd_pr (wd_m e))
+               (DStr ") (rewrite-with (lemma wrap32_id) lr lhs ((inst x ")
+               (wd_pr (wd_m e))
+               (DStr ")) (")
+               (wd_sub_prem (wd_nm (append_int rg "lo") j))
+               (sp)
+               (wd_sub_prem (wd_nm (append_int rg "lt") j))
+               (DStr ") refl))")
+               (wd_apply (wd_nm (append_int rg "w") j)))))
+          (_ (DStr ""))))
+       (_ (DStr ""))))
+    (_ (DStr ""))))
+
+;; ---- postorder node collection (children before parents, dedup FIRST
+;; occurrence; reversed-preorder is NOT enough under sharing) -----------------------
+
+(fn wd_post ((e Expr) (acc (List Expr))) (List Expr)
+  (measure (struct e))
+  (match e
+    ((Call q as)
+     (match (wd_op q)
+       ((Some WOXor)
+        (let ((acc2 (wd_post_l as acc)))
+          (if (wd_seen (wd_spell e) acc2) acc2 (node_add e acc2))))
+       ((Some WOShl)
+        (let ((acc2 (wd_post_l as acc)))
+          (if (wd_seen (wd_spell e) acc2) acc2 (node_add e acc2))))
+       ((Some WOShr)
+        (let ((acc2 (wd_post_l as acc)))
+          (if (wd_seen (wd_spell e) acc2) acc2 (node_add e acc2))))
+       ((Some WOMk) acc)
+       ((Some WOVal) (wd_post_l as acc))
+       (None (wd_post_l as acc))))
+    (_ acc)))
+
+(fn wd_post_l ((as (List Expr)) (acc (List Expr))) (List Expr)
+  (measure (struct as))
+  (match as
+    (Nil acc)
+    ((Cons h t) (wd_post_l t (wd_post h acc)))))
+
+(fn wd_revl ((es (List Expr)) (acc (List Expr))) (List Expr)
+  (measure (struct es))
+  (match es
+    (Nil acc)
+    ((Cons h t) (wd_revl t (Cons h acc)))))
+
+;; per-node events in postorder; names keyed by the PREORDER table
+(fn wd_nodes_post
+  ((es (List Expr))
+   (ns (List Int))
+   (tab (List Expr))
+   (fnm Symbol)
+   (rg (List Int)))
+  Doc
+  (measure (struct es))
+  (match es
+    (Nil (DStr ""))
+    ((Cons h t)
+     (DCat
+       (wd_node h (wd_ix (wd_spell h) tab 0) ns tab fnm rg)
+       (wd_nodes_post t ns tab fnm rg)))))
+
+;; THE CASCADE over one region's tree: opens in REVERSED POSTORDER (every
+;; projection user before the node), atom collapses, node events in true
+;; postorder. rg prefixes the region's have names.
+(fn wd_casc ((tree Expr) (ns (List Int)) (fnm Symbol) (rg (List Int))) Doc
+  (let ((tab (wd_ops tree Nil)))
+    (dcat3
+      (wd_opens (wd_revl (wd_post tree Nil) Nil) tab rg)
+      (wd_atoms_doc (wd_atoms tree Nil) 0 ns rg)
+      (wd_nodes_post (wd_post tree Nil) ns tab fnm rg))))
+
+;; ---- the wq quotient-bound helper claims (one pair per shr width) ---------------
+
+(fn wd_widths ((es (List Expr)) (acc (List Int))) (List Int)
+  (measure (struct es))
+  (match es
+    (Nil acc)
+    ((Cons h t)
+     (match h
+       ((Call q as)
+        (match (wd_op q)
+          ((Some WOShr)
+           (match as
+             ((Cons _ (Cons (IntLit k) Nil)) (wd_widths t (wd_ins k acc)))
+             (_ (wd_widths t acc))))
+          (_ (wd_widths t acc))))
+       (_ (wd_widths t acc))))))
+
+(fn wd_wq_claims ((ws (List Int)) (fnm Symbol)) Doc
+  (measure (struct ws))
+  (match ws
+    (Nil (DStr ""))
+    ((Cons k t)
+     (dcat3
+       (dconc
+         (list
+           (DStr "(claim wq_")
+           (dsym fnm)
+           (DStr "_")
+           (dint k)
+           (DStr "_lo (goal ((a Int)) ((= (le 0 a) True)) (= (le 0 (ediv a ")
+           (dint (wd_p2 k))
+           (DStr ")) True)) (div-facts a ")
+           (dint (wd_p2 k))
+           (DStr " q (by arith (list ")
+           (dint (wd_p2 k))
+           (DStr " 1 -1 0 1 ")
+           (dint (wd_p2 k))
+           (DStr "))))")
+           (DStr (nl))
+           (DStr "(claim wq_")
+           (dsym fnm)
+           (DStr "_")
+           (dint k)
+           (DStr
+             "_lt32 (goal ((a Int)) ((= (le 0 a) True) (= (lt a 4294967296) True)) (= (lt (ediv a ")
+           (dint (wd_p2 k))
+           (DStr ") 4294967296) True)) (div-facts a ")
+           (dint (wd_p2 k))
+           (DStr " q (by arith (list ")
+           (dint (wd_p2 k))
+           (DStr " 0 1 1 1 0 -")
+           (dint (wd_p2 k))
+           (DStr "))))")
+           (DStr (nl))))
+       (wd_wq_claims t fnm)
+       (DStr "")))))
+
+;; ---- premise / spec-arg rendering ------------------------------------------------
+
+(fn wd_prems ((ns (List Int))) Doc
+  (measure (struct ns))
+  (match ns
+    (Nil (DStr ""))
+    ((Cons p t)
+     (dconc
+       (list
+         (DStr "(= (le 0 x")
+         (dint p)
+         (DStr ") True) (= (lt x")
+         (dint p)
+         (DStr " 4294967296) True) ")
+         (wd_prems t))))))
+
+(fn wd_gprems ((gs (List Expr))) Doc
+  (measure (struct gs))
+  (match gs
+    (Nil (DStr ""))
+    ((Cons g t)
+     (dconc (list (DStr "(= (le 1 ") (wd_pr g) (DStr ") True) ") (wd_gprems t))))))
+
+;; guard discharge stages: rewrite the guard premise into the stuck if,
+;; resume compute (§6y; the word walk has no wrap events to flush)
+(fn wd_gstages ((gs (List Expr)) (gi Int)) Doc
+  (measure (struct gs))
+  (match gs
+    (Nil (DStr ""))
+    ((Cons _ t)
+     (dcat3
+       (dcat3
+         (DStr " (steps ((rewrite (premise ")
+         (dint gi)
+         (DStr ") lr lhs true ()) (compute lhs)))"))
+       (wd_gstages t (+ gi 1))
+       (DStr "")))))
+
+;; spec-side call args: (u32 xN) for U32 params, xN for Int params
+(fn wd_args ((ts (List Type)) (i Int)) Doc
+  (measure (struct ts))
+  (match ts
+    (Nil (DStr ""))
+    ((Cons t rest)
+     (dcat3
+       (if (is_u32_ty t) (dcat3 (DStr " (u32 x") (dint i) (DStr ")"))
+       (dcat3 (DStr " x") (dint i) (DStr "")))
+       (wd_args rest (+ i 1))
+       (DStr "")))))
+
+(fn wd_all_ok ((ts (List Type))) Bool
+  (measure (struct ts))
+  (match ts
+    (Nil True)
+    ((Cons t rest)
+     (if (is_u32_ty t) (wd_all_ok rest)
+     (if (is_int_ty t) (wd_all_ok rest)
+     False)))))
+
+;; ---- same-file call support: table/fn lookup, transitive callee scan ------------
+
+(fn wd_tbl_idx ((tbl (List (Pair Symbol Int))) (s Symbol)) (Option Int)
+  (measure (struct tbl))
+  (match tbl
+    (Nil None)
+    ((Cons (Pair n k) rest) (if (sym_eq s n) (Some k) (wd_tbl_idx rest s)))))
+
+(fn wd_find_fd ((fns (List FnDef)) (s Symbol)) (Option FnDef)
+  (measure (struct fns))
+  (match fns
+    (Nil None)
+    ((Cons f rest)
+     (match f
+       ((FnDef q _ _ _)
+        (if (sym_eq (qn_name q) s) (Some f) (wd_find_fd rest s)))))))
+
+(fn wd_symin ((x Symbol) (xs (List Symbol))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil False)
+    ((Cons h t) (if (sym_eq x h) True (wd_symin x t)))))
+
+;; the called same-file fns reachable from a body (callee bodies included:
+;; the spec-side unfolds need every name whose body the residue opens)
+(fn wd_callees
+  ((e Expr)
+   (tbl (List (Pair Symbol Int)))
+   (fns (List FnDef))
+   (fuel Int)
+   (acc (List Symbol)))
+  (List Symbol)
+  (measure fuel)
+  (if (le fuel 0) acc
+  (match e
+    ((Call q as)
+     (let ((acc2 (wd_callees_l as tbl fns (- fuel 1) acc)))
+       (match (wd_tbl_idx tbl (qn_name q))
+         (None acc2)
+         ((Some _)
+          (if (wd_symin (qn_name q) acc2) acc2
+          (match (wd_find_fd fns (qn_name q))
+            (None acc2)
+            ((Some cf)
+             (match cf
+               ((FnDef _ _ _ cbody)
+                (wd_callees cbody tbl fns (- fuel 1) (Cons (qn_name q) acc2)))))))))))
+    ((Let bs body)
+     (wd_callees
+       body
+       tbl
+       fns
+       (- fuel 1)
+       (wd_callees_l bs tbl fns (- fuel 1) acc)))
+    ((If c a b)
+     (wd_callees
+       c
+       tbl
+       fns
+       (- fuel 1)
+       (wd_callees a tbl fns (- fuel 1) (wd_callees b tbl fns (- fuel 1) acc))))
+    (_ acc))))
+
+(fn wd_callees_l
+  ((as (List Expr))
+   (tbl (List (Pair Symbol Int)))
+   (fns (List FnDef))
+   (fuel Int)
+   (acc (List Symbol)))
+  (List Symbol)
+  (measure fuel)
+  (if (le fuel 0) acc
+  (match as
+    (Nil acc)
+    ((Cons h t)
+     (wd_callees_l t tbl fns (- fuel 1) (wd_callees h tbl fns (- fuel 1) acc))))))
+
+(fn wd_unfolds ((ss (List Symbol))) Doc
+  (measure (struct ss))
+  (match ss
+    (Nil (DStr ""))
+    ((Cons s t)
+     (dcat3
+       (dcat3 (DStr " (unfold ") (dsym s) (DStr " rhs) (reduce rhs)"))
+       (wd_unfolds t)
+       (DStr "")))))
+
+;; ---- the tail walk: lets, ONE tail if (the P2c diamond), straight bodies --------
+
+(type WTR (WTStraight Expr) (WTIf Expr Expr Expr))
+
+(type WT
+  (WTOk (List Doc) Int Int WTR (List Expr) (List Int))
+  (WTErr (List Int)))
+
+;; the condition walk: (int_eq A B) over Int-typed word-free sides
+(fn wd_cond
+  ((n Int)
+   (pts (List Type))
+   (env (List (Pair Expr Int)))
+   (nxt Int)
+   (e Expr)
+   (tbl (List (Pair Symbol Int)))
+   (fns (List FnDef)))
+  WG
+  (match e
+    ((Call q as)
+     (if (core_named q (quote int_eq))
+       (match as
+         ((Cons a (Cons b Nil))
+          (match (wd_e n pts env nxt a tbl fns)
+            ((WGErr m) (WGErr m))
+            ((WGOk ia ca nxa cea ga na)
+             (if (wd_is32 cea)
+               (WGErr "if condition side is word-typed (project with u32_val)")
+               (match (wd_e n pts env nxa b tbl fns)
+                 ((WGErr m) (WGErr m))
+                 ((WGOk ib cb nxb ceb gb nb)
+                  (if (wd_is32 ceb)
+                    (WGErr
+                      "if condition side is word-typed (project with u32_val)")
+                    (WGOk
+                      (dapp ia (dapp ib (Cons (DStr "(I32Bin BEq)") Nil)))
+                      (+ ca (+ cb 1))
+                      nxb
+                      (Call q (Cons cea (Cons ceb Nil)))
+                      (dapp_e ga gb)
+                      (append_int na nb)))))))))
+         (_ (WGErr "if condition must be binary int_eq")))
+       (WGErr "if condition outside the word fragment (int_eq only)")))
+    (_ (WGErr "if condition outside the word fragment (int_eq only)"))))
+
+(fn wd_t
+  ((n Int)
+   (pts (List Type))
+   (env (List (Pair Expr Int)))
+   (nxt Int)
+   (e Expr)
+   (tbl (List (Pair Symbol Int)))
+   (fns (List FnDef)))
+  WT
+  (measure (struct e))
+  (match e
+    ((Let bs body)
+     (match bs
+       ((Cons rhs Nil)
+        (match (wd_e n pts env nxt rhs tbl fns)
+          ((WGErr m) (WTErr m))
+          ((WGOk ir cr nxr cer gr nr)
+           (match (wd_t n pts (Cons (Pair cer nxr) env) (+ nxr 1) body tbl fns)
+             ((WTErr m) (WTErr m))
+             ((WTOk ib cb nxb rb gb nb)
+              (WTOk
+                (dapp
+                  ir
+                  (Cons (dcat3 (DStr "(LocalSet ") (dint nxr) (DStr ")")) ib))
+                (+ cr (+ cb 1))
+                nxb
+                rb
+                (dapp_e gr gb)
+                (append_int nr nb)))))))
+       (_ (WTErr "let must bind exactly one name (split into nested lets)"))))
+    ((If c a b)
+     (match (wd_cond n pts env nxt c tbl fns)
+       ((WGErr m) (WTErr m))
+       ((WGOk ic cc nxc cec gc nc)
+        (match (wd_e n pts env nxc a tbl fns)
+          ((WGErr m) (WTErr m))
+          ((WGOk it ct nxt2 cet gt nt)
+           (match (wd_e n pts env nxt2 b tbl fns)
+             ((WGErr m) (WTErr m))
+             ((WGOk ie ce2 nxe cee ge ne)
+              (if (dconc_nil gc)
+                (if (dconc_nil gt)
+                  (if (dconc_nil ge)
+                    (WTOk
+                      (Cons
+                        (dconc
+                          (list
+                            (DStr "(Block (list (Block (list ")
+                            (djoin ic)
+                            (DStr " (BrIf 0) ")
+                            (djoin ie)
+                            (DStr " (LocalSet ")
+                            (dint nxe)
+                            (DStr ") (Br 1))) ")
+                            (djoin it)
+                            (DStr " (LocalSet ")
+                            (dint nxe)
+                            (DStr ")))")))
+                        (Cons
+                          (dcat3 (DStr "(LocalGet ") (dint nxe) (DStr ")"))
+                          Nil))
+                      (+ cc (+ ct (+ ce2 7)))
+                      (+ nxe 1)
+                      (WTIf cec cet cee)
+                      Nil
+                      (append_int nc (append_int nt ne)))
+                    (WTErr
+                      "ediv/mod under an if is not in the word fragment yet"))
+                  (WTErr "ediv/mod under an if is not in the word fragment yet"))
+                (WTErr "ediv/mod under an if is not in the word fragment yet")))))))))
+    (_
+      (match (wd_e n pts env nxt e tbl fns)
+        ((WGErr m) (WTErr m))
+        ((WGOk ia ca nxa cea ga na) (WTOk ia ca nxa (WTStraight cea) ga na))))))
+
+(fn dconc_nil ((gs (List Expr))) Bool
+  (match gs
+    (Nil True)
+    ((Cons _ _) False)))
+
+
+;; ---- the literal call-prefix spine (the §6ac structural precedent) --------------
+;;
+;; A word fn WITH same-file calls cannot ride the quantified Func-binder
+;; prefix — the machine computes THROUGH the Call, so the callee slots
+;; must be pinned literals. In lib mode the whole file regenerates
+;; together, so the structural pin costs nothing. Call-free fns keep the
+;; position-general binder form.
+
+(fn wd_revp ((xs (List (Pair Symbol Int))) (acc (List (Pair Symbol Int))))
+  (List (Pair Symbol Int))
+  (measure (struct xs))
+  (match xs
+    (Nil acc)
+    ((Cons h t) (wd_revp t (Cons h acc)))))
+
+(fn wd_spine_l
+  ((entries (List (Pair Symbol Int)))
+   (tbl (List (Pair Symbol Int)))
+   (fns (List FnDef)))
+  (Option Doc)
+  (measure (struct entries))
+  (match entries
+    (Nil (Some (DStr "")))
+    ((Cons (Pair nm _) rest)
+     (match (wd_find_fd fns nm)
+       (None None)
+       ((Some f)
+        (match (lib_flit f tbl fns)
+          (None None)
+          ((Some flit)
+           (match (wd_spine_l rest tbl fns)
+             (None None)
+             ((Some d) (Some (DCat (dcat3 (DStr "(Cons ") flit (sp)) d)))))))))))
+
+;; (goal-binder doc, module-prefix doc) per shape: binders when call-free,
+;; the pinned literal spine when the body calls
+(fn wd_spinep
+  ((cls (List Symbol))
+   (pfx Int)
+   (tbl (List (Pair Symbol Int)))
+   (fns (List FnDef)))
+  (Option (Pair Doc Doc))
+  (match cls
+    (Nil (Some (Pair (pr_fbinds pfx) (pr_fcons pfx))))
+    ((Cons _ _)
+     (match (wd_spine_l (wd_revp tbl Nil) tbl fns)
+       (None None)
+       ((Some d) (Some (Pair (DStr "") d)))))))
+
+;; ---- the WORD claim ---------------------------------------------------------------
+
+;; one if arm's proof chain: collapse the condition (the case hyp), run
+;; the machine arm, cascade the arm's word tree, converge
+(fn wd_arm
+  ((hy (List Int)) (tree Expr) (ns (List Int)) (fnm Symbol) (rg (List Int)))
+  Doc
+  (dconc
+    (list
+      (DStr " (case ")
+      (DStr hy)
+      (DStr " (chain (steps ((rewrite (hyp ")
+      (DStr hy)
+      (DStr ") lr both true ()) (compute both)))")
+      (wd_casc tree ns fnm rg)
+      (DStr " (steps ((compute both))) refl))"))))
+
+(fn emit_claim_word
+  ((f FnDef) (pfx Int) (tbl (List (Pair Symbol Int))) (fns (List FnDef)))
+  CRes
+  (match f
+    ((FnDef q ts rty body)
+     (if (wd_all_ok ts)
+       (if (if (is_int_ty rty) True (is_u32_ty rty))
+         (match (wd_t (count_ts ts) ts Nil (count_ts ts) body tbl fns)
+           ((WTErr m)
+            (CErr (append_int (chars_of_sym (qn_name q)) (append_int ": " m))))
+           ((WTOk code cnt nxt res guards needs0)
+            (let ((needs (wd_norm needs0 Nil)))
+              (match (wd_spinep (wd_callees body tbl fns 99 Nil) pfx tbl fns)
+                (None
+                  (CErr
+                    (append_int
+                      (chars_of_sym (qn_name q))
+                      ": call-prefix literal generation failed")))
+                ((Some (Pair fbd fcd))
+                 (COk
+                   (DCat
+                     (wd_wq_claims (wd_res_widths res) (qn_name q))
+                     (dconc
+                       (list
+                         (DStr "(claim lowered_")
+                         (dsym (qn_name q))
+                         (DStr " (goal (")
+                         (pr_binds ts 0)
+                         fbd
+                         (DStr "(c Nat) (restfs (List Func))) (")
+                         (wd_prems needs)
+                         (wd_gprems guards)
+                         (DStr ") (= (call_fn (S^ ")
+                         (dint (+ (* 2 cnt) 3))
+                         (DStr " c) (MkWModule ")
+                         fcd
+                         (DStr "(Cons (MkFunc ")
+                         (dint (count_ts ts))
+                         (sp)
+                         (dint (- nxt (count_ts ts)))
+                         (DStr " (list ")
+                         (djoin code)
+                         (DStr ")) restfs)")
+                         (pr_rpars pfx)
+                         (DStr " 0) ")
+                         (dint pfx)
+                         (DStr " (list ")
+                         (pr_args ts 0)
+                         (DStr "))")
+                         (if (is_u32_ty rty)
+                           (dconc
+                             (list
+                               (DStr " (Some (u32_val (")
+                               (dsym (qn_name q))
+                               (wd_args ts 0)
+                               (DStr ")))))")))
+                           (dconc
+                             (list
+                               (DStr " (Some (")
+                               (dsym (qn_name q))
+                               (wd_args ts 0)
+                               (DStr "))))"))))
+                         (DStr " (chain (steps ((compute lhs) (unfold ")
+                         (dsym (qn_name q))
+                         (DStr " rhs) (reduce rhs)")
+                         (wd_unfolds (wd_callees body tbl fns 99 Nil))
+                         (DStr "))")
+                         (match res
+                           ((WTStraight tree)
+                            (dconc
+                              (list
+                                (wd_gstages guards (* 2 (wd_len needs)))
+                                (wd_casc tree needs (qn_name q) "")
+                                (DStr " refl"))))
+                           ((WTIf ct tt et)
+                            (dconc
+                              (list
+                                (wd_atoms_doc (wd_atoms ct Nil) 0 needs "c")
+                                (DStr " (case-on ")
+                                (wd_pr (wd_m ct))
+                                (DStr " Bool (")
+                                (wd_arm "True" tt needs (qn_name q) "t")
+                                (wd_arm "False" et needs (qn_name q) "e")
+                                (DStr "))")))))
+                         (DStr "))")
+                         (DStr (nl)))))
+                   (DStr "")))))))
+         (CErr
+           (append_int
+             (chars_of_sym (qn_name q))
+             ": return type is not Int/U32")))
+       (CErr
+         (append_int (chars_of_sym (qn_name q)) ": params are not all Int/U32"))))))
+
+;; wq widths across the result's region trees
+(fn wd_res_widths ((res WTR)) (List Int)
+  (match res
+    ((WTStraight tree) (wd_widths (wd_ops tree Nil) Nil))
+    ((WTIf _ tt et) (wd_widths (wd_ops tt Nil) (wd_widths (wd_ops et Nil) Nil)))))
+
+
 (fn emit_claim_div ((q QName) (ts (List Type)) (body Expr) (pfx Int)) CRes
   (if (dv_has_if body)
     (CErr
@@ -4154,6 +5603,7 @@
 (fn emit_claim_pure ((f FnDef) (pfx Int)) CRes
   (match f
     ((FnDef q ts rty body)
+     (if (word_sig ts rty) (emit_claim_word f pfx Nil Nil)
      (if (all_int ts)
        (if (is_int_ty rty)
          (if (has_div body) (emit_claim_div q ts body pfx)
@@ -4216,7 +5666,7 @@
                  (DStr "")))))))
          (CErr
            (append_int (chars_of_sym (qn_name q)) ": return type is not Int")))
-       (CErr (append_int (chars_of_sym (qn_name q)) ": params are not all Int"))))))
+       (CErr (append_int (chars_of_sym (qn_name q)) ": params are not all Int")))))))
 
 
 ;; ---- module walk -------------------------------------------------------------
@@ -4302,9 +5752,15 @@
       (djoin code)
       (DStr "))"))))
 
-(fn lib_flit ((f FnDef)) (Option Doc)
+(fn lib_flit ((f FnDef) (tbl (List (Pair Symbol Int))) (fns (List FnDef)))
+  (Option Doc)
   (match f
     ((FnDef q ts rty body)
+     (if (word_sig ts rty)
+       (match (wd_t (count_ts ts) ts Nil (count_ts ts) body tbl fns)
+         ((WTErr _) None)
+         ((WTOk code cnt nxt _ _ _)
+          (Some (flit_doc (count_ts ts) (- nxt (count_ts ts)) code))))
      (if (has_div body)
        (match (gen_e (count_ts ts) Nil (count_ts ts) body)
          ((GErr _) None)
@@ -4314,7 +5770,7 @@
          ((TErr _) None)
          ((TOk rt)
           (Some
-            (flit_doc (count_ts ts) (- (rt_nxt rt) (count_ts ts)) (rt_code rt)))))))))
+            (flit_doc (count_ts ts) (- (rt_nxt rt) (count_ts ts)) (rt_code rt))))))))))
 
 ;; claims, the wmod cons spine (open), name -> index, count
 (type LERes (LEOk Doc Doc (List (Pair Symbol Int)) Int) (LEErr (List Int)))
@@ -4322,37 +5778,43 @@
 (fn emit_fns_lib
   ((fns (List FnDef))
    (modpath (List Symbol))
+   (modpath2 (List Symbol))
    (k Int)
    (accp Doc)
    (accw Doc)
-   (accn (List (Pair Symbol Int))))
+   (accn (List (Pair Symbol Int)))
+   (allfns (List FnDef)))
   LERes
   (measure (struct fns))
   (match fns
     (Nil (LEOk accp accw accn k))
     ((Cons f rest)
      (match f
-       ((FnDef q _ _ _)
+       ((FnDef q ts rty _)
         (match q
           ((QName mp nm)
-           (if (sym_list_eq mp modpath)
-             (match (emit_claim_pure f k)
+           (if (if (sym_list_eq mp modpath) True (sym_list_eq mp modpath2))
+             (match
+               (if (word_sig ts rty) (emit_claim_word f k accn allfns)
+               (emit_claim_pure f k))
                ((CErr m) (LEErr m))
                ((COkM d1 d2 d3)
                 (LEErr "mem fns are not in the lib fragment yet"))
                ((COkC d1) (LEErr "call fns are not in the lib fragment yet"))
                ((COk dp dl)
-                (match (lib_flit f)
+                (match (lib_flit f accn allfns)
                   (None (LEErr "lib literal generation failed"))
                   ((Some flit)
                    (emit_fns_lib
                      rest
                      modpath
+                     modpath2
                      (+ k 1)
                      (DCat accp (DCat (DStr (nl)) dp))
                      (DCat accw (dcat3 (DStr "(Cons ") flit (sp)))
-                     (Cons (Pair nm k) accn))))))
-             (emit_fns_lib rest modpath k accp accw accn)))))))))
+                     (Cons (Pair nm k) accn)
+                     allfns)))))
+             (emit_fns_lib rest modpath modpath2 k accp accw accn allfns)))))))))
 
 (fn lib_wmod_doc ((lname Symbol) (accw Doc) (k Int)) Doc
   (dconc
@@ -4491,8 +5953,35 @@
       (DStr (append_int " *))" (nl))))))
 
 ;; the LIB file's header: the model, the encoder (WExport/WX for the
-;; export table), and the source
-(fn lib_header ((target (List Int))) Doc
+;; export table), and the source; a WORD lib (any u32-signature fn) adds
+;; the fragment's citation surface — kernel/facts (mod_lo/mod_hi),
+;; std/word (the defining equations), std/bits (bridges + closure facts)
+;; a dir-module impl file's fns key at the MODULE path (the file's
+;; dirname), not the file path — resolve by first hit
+(fn lib_mp_hit ((fns (List FnDef)) (mp (List Symbol))) Bool
+  (measure (struct fns))
+  (match fns
+    (Nil False)
+    ((Cons f rest)
+     (match f
+       ((FnDef q _ _ _)
+        (match q
+          ((QName fmp _) (if (sym_list_eq fmp mp) True (lib_mp_hit rest mp)))))))))
+
+(fn lib_dirname ((mp (List Symbol))) (List Symbol)
+  (measure (struct mp))
+  (match mp
+    (Nil Nil)
+    ((Cons _ Nil) Nil)
+    ((Cons h t) (Cons h (lib_dirname t)))))
+
+(fn lib_header
+  ((target (List Int))
+   (wordy Bool)
+   (mp (List Symbol))
+   (mp2 (List Symbol))
+   (h2 Bool))
+  Doc
   (dconc
     (list
       (DStr
@@ -4502,16 +5991,51 @@
       (DStr target)
       (DStr (append_int "." (nl)))
       (dimport (append_int (updots target) "kernel/stdlib.shard"))
+      (if wordy (dimport (append_int (updots target) "kernel/facts.shard"))
+      (DStr ""))
       (dimport (append_int (updots target) "models/wasm/wasm.shard"))
       (dimport (append_int (updots target) "models/wasm/encode.shard"))
+      (if wordy
+        (DCat
+          (dimport (append_int (updots target) "std/word"))
+          (dimport (append_int (updots target) "std/bits")))
+        (DStr ""))
       (dimport (basename_go target Nil))
+      (if wordy (DStr (append_int "(use (:: kernel facts *))" (nl))) (DStr ""))
       (DStr (append_int "(use (:: models wasm wasm *))" (nl)))
       (DStr (append_int "(use (:: models wasm encode WExport))" (nl)))
       (DStr (append_int "(use (:: models wasm encode WX))" (nl)))
       (DStr (append_int "(use (:: models wasm encode enc_lib))" (nl)))
+      (if wordy
+        (DCat
+          (DStr (append_int "(use (:: std word *))" (nl)))
+          (DStr (append_int "(use (:: std bits *))" (nl))))
+        (DStr ""))
       (DStr "(use (:: ")
-      (pr_modpath (split_slash (until_dot target) Nil))
-      (DStr (append_int " *))" (nl))))))
+      (pr_modpath mp)
+      (DStr (append_int " *))" (nl)))
+      (if h2
+        (dcat3
+          (DStr "(use (:: ")
+          (pr_modpath mp2)
+          (DStr (append_int " *))" (nl))))
+        (DStr "")))))
+
+;; does this file (modpath-filtered) contain a word-signature fn?
+(fn any_word_fn
+  ((fns (List FnDef)) (modpath (List Symbol)) (modpath2 (List Symbol)))
+  Bool
+  (measure (struct fns))
+  (match fns
+    (Nil False)
+    ((Cons f rest)
+     (match f
+       ((FnDef q ts rty _)
+        (match q
+          ((QName mp _)
+           (if (if (sym_list_eq mp modpath) True (sym_list_eq mp modpath2))
+             (if (word_sig ts rty) True (any_word_fn rest modpath modpath2))
+             (any_word_fn rest modpath modpath2)))))))))
 
 ;; the LINKED file's header: needs the shipped certs AND the portable
 ;; file; a calls-in-loops unit (callf) adds the loop kit and std/nat
@@ -4590,10 +6114,12 @@
        (emit_fns_lib
          fns
          (split_slash (until_dot target) Nil)
+         (lib_dirname (split_slash (until_dot target) Nil))
          0
          (DStr "")
          (DStr "")
-         Nil)
+         Nil
+         fns)
        ((LEErr msg)
         (exit 1 (write (append_int "refused: " (append_int msg (nl))) w)))
        ((LEOk bodyp accw ns k)
@@ -4611,7 +6137,17 @@
                (doc_flat
                  (dconc
                    (list
-                     (lib_header target)
+                     (lib_header
+                       target
+                       (any_word_fn
+                         fns
+                         (split_slash (until_dot target) Nil)
+                         (lib_dirname (split_slash (until_dot target) Nil)))
+                       (split_slash (until_dot target) Nil)
+                       (lib_dirname (split_slash (until_dot target) Nil))
+                       (lib_mp_hit
+                         fns
+                         (lib_dirname (split_slash (until_dot target) Nil))))
                      bodyp
                      (lib_wmod_doc lname accw k)
                      expdoc
