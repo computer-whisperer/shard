@@ -166,6 +166,7 @@ TARGETS=(
   examples/lowfrag_probe.shard
   examples/divfrag_probe.shard
   examples/bitfrag_probe.shard
+  examples/wordfrag_probe.shard
   examples/lowcheck_rejects.shard
   examples/record_rejects.shard
   examples/record_sugar_rejects.shard
