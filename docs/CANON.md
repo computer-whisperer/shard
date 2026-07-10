@@ -416,3 +416,44 @@ Excluded by decision, not accident:
    byte layer, canon = the term layer; they compose but are distinct
    passes with distinct authorities). Lean: separate tool, shared
    gate discipline.
+
+
+## 12. Implementation record
+
+**Slice 1 (2026-07-10, commit 389d877): the C1–C6 recognizer + the
+stage-1 advisory.** kernel/canon.shard walks fn BODIES of the target
+file's module (goal positions exempt by construction — never
+consulted); the driver appends one count-free COCanon outcome (the
+COLedger shape) rendering `CANON <fn>: C<k> <subject>` per violation,
+via canon_note at run_srcs' target entry, so a violation is stated
+once, at its home module. Nothing fails; no exit code changes.
+
+Facts the slice pinned:
+
+- **C1 is drift-proof by construction**: the recognizer consults
+  try_step_prim itself — a ground prim redex is exactly a core-pathed
+  Call whose literal args make the reducer's own table step. Excluded
+  from flagging: gen_fresh (effectful — folding it would be WRONG, not
+  merely non-canonical) and refine_val (a typing coercion).
+- **The Let binder convention** (needed by C3's first-use walk):
+  the elaborator assigns BVar indices innermost-first — source binding
+  i = BVar n-1-i in the body, the same convention as parameters
+  ("BVar 0 = the LAST parameter"). Pinned empirically by
+  examples/canon_pin.shard's cp_pair; term.shard's open_many comment
+  ("BVar k = bindings[k]") is about the STORED list, which is
+  index-ordered, i.e. reversed from source.
+- **Self-application is honest**: checking kernel/canon.shard reports
+  its own C4 arm-order violations (Call-before-Ctor in cn_e, Some-
+  before-None). Advisory, correct, and burns down when the kernel
+  tree migrates (§10 puts kernel last).
+- Pins: canon_pin (canonical bodies, ZERO lines; the goal-exemption
+  claim `(= (+ 1 2) 3)` passes unflagged while the same shape in a
+  body flags) and canon_rejects (one fn per invariant, 13 lines,
+  exit 0). run_corpus gained both targets plus a tower-run gate that
+  emits FAIL lines on drift, so the FAIL-set diff enforces the pins.
+
+Next slices, in dependency order: the tools/canon REWRITER + the §9
+exactness census harness (slice 2); the C7 check-time tier over the
+append rule set (slice 3); stage-2 enforcement — std/ canonicalized +
+the corpus sweep pin (slice 4); the §7 hash spec + compute tool
+(slice 5, after the form stabilizes).
