@@ -1,6 +1,6 @@
 # TCB.md — the bootstrap trusted computing base
 
-**Status: DRAFT for ratification (trust-residue fork, 2026-07-10).**
+**Status: RATIFIED 2026-07-10 (trust-residue fork).**
 The standing discipline for what a shard verdict rests on, what is
 explicitly NOT authority, and how trust is re-established after an
 engine rebuild. This writes down rules that have governed the repo
