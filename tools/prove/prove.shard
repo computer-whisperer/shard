@@ -49,6 +49,10 @@
 ;;; case: apply (simp both) / rewrite-case-hyps(-then-simp) / unfold+rewrite
 ;;; chains natively (the checker's own apply_steps) and solve the residual,
 ;;; persisting (steps (PFX) TERMINAL) — the hand idiom for case-on leaves.
+;;; The LAST rung is unhinted case-on DISCOVERY: apply a normalizing prefix,
+;;; read the residual's stuck match/If scrutinees off the reduction
+;;; frontier, and synthesize (steps (PFX) (case-on CORE TY …)) — the split
+;;; no hint can spell because its scrutinee mentions case-local binders.
 ;;; A fulfills' goal is recovered from the target file OR the same-module
 ;;; mod.req.shard (already in the closure), so module impls get the full
 ;;; search.
@@ -172,6 +176,7 @@
 (use (:: kernel module type_subst_list))
 (use (:: kernel module zip_pairs))
 (use (:: kernel module trie_lookup))
+(use (:: kernel module FnDef))  ; return type = the discovered scrutinee's type head
 (use (:: kernel proof Goal))
 (use (:: kernel proof Equation))
 (use (:: kernel proof Param))
@@ -190,6 +195,8 @@
 (use (:: kernel term Ctor))
 (use (:: kernel term If))
 (use (:: kernel term Let))
+(use (:: kernel term Match))  ; discovery walks residuals for stuck scrutinees
+(use (:: kernel term Arm))
 (use (:: kernel term IntLit))
 (use (:: kernel term FVar))
 (use (:: kernel term SymLit))
@@ -833,7 +840,7 @@
             (None
               (match hrest
                 ((Cons h more) (synth_one s th subgoal h more))
-                (Nil None)))))))
+                (Nil (disc_solve s th subgoal))))))))
     ((Cons c crest)
      (match (parse_cand (slv_m s) (slv_rctx s) c)
        (None (solve_case s th subgoal crest hrest))
@@ -924,25 +931,6 @@
               ((Some more)
                (Some
                  (Cons (case_text (chars_of_sym (qn_name cname)) names c) more)))))))))))
-
-(fn render_cases ((cs (List (Pair (List Int) (List Int))))) (List Int)
-  (measure (struct cs))
-  (match cs
-    (Nil Nil)
-    ((Cons (Pair cn pf) rest)
-     (append_int
-       "(case "
-       (append_int
-         cn
-         (append_int
-           " "
-           (append_int
-             pf
-             (append_int
-               ")"
-               (match rest
-                 (Nil Nil)
-                 (_ (Cons 32 (render_cases rest))))))))))))
 
 (fn assemble_induct ((v Symbol) (cs (List (List Int)))) (List Int)
   (append_int
@@ -1068,9 +1056,7 @@
     (append_int termtxt (append_int " " (append_int tytxt " ())")))))
 
 (fn assemble_caseon
-  ((termtxt (List Int))
-   (tytxt (List Int))
-   (cs (List (Pair (List Int) (List Int)))))
+  ((termtxt (List Int)) (tytxt (List Int)) (cs (List (List Int))))
   (List Int)
   (append_int
     "(case-on "
@@ -1078,8 +1064,14 @@
       termtxt
       (append_int
         " "
-        (append_int tytxt (append_int " (" (append_int (render_cases cs) "))")))))))
+        (append_int tytxt (append_int " (" (append_int (join_sp cs) "))")))))))
 
+;; `named` = spell the field binders ((case Cons (cc0 c1) …)) like induct's
+;; solve_cases does. Nil-named fields gen-fresh at replay, so any candidate
+;; TEXT mentioning them (a discovered inner scrutinee) is unreplayable —
+;; but naming changes the rendered bytes, so the caller tries Nil first and
+;; retries named only when a branch resists (lazy: committed entries keep
+;; their exact bytes).
 (fn solve_con_cases
   ((s Slv)
    (th Theory)
@@ -1087,24 +1079,42 @@
    (scrut Expr)
    (ctors (List CtorDef))
    (cands (List (List Int)))
-   (hrest (List Hint)))
-  (Option (List (Pair (List Int) (List Int))))
+   (hrest (List Hint))
+   (named Bool))
+  (Option (List (List Int)))
   (match ctors
     (Nil (Some Nil))
     ((Cons (CtorDef cname ftypes) rest)
-     (match
-       (solve_case
-         s
-         th
-         (build_case_on_subgoal seq scrut cname Nil ftypes)
-         cands
-         hrest)
-       (None None)
-       ((Some c)
-        (match (solve_con_cases s th seq scrut rest cands hrest)
-          (None None)
-          ((Some more)
-           (Some (Cons (Pair (chars_of_sym (qn_name cname)) c) more)))))))))
+     (let
+       ((names (if named (cn_names (param_syms (seq_params seq)) ftypes 0) Nil)))
+       (match
+         (solve_case
+           s
+           th
+           (build_case_on_subgoal seq scrut cname names ftypes)
+           cands
+           hrest)
+         (None None)
+         ((Some c)
+          (match (solve_con_cases s th seq scrut rest cands hrest named)
+            (None None)
+            ((Some more)
+             (Some
+               (Cons (case_text (chars_of_sym (qn_name cname)) names c) more))))))))))
+
+(fn caseon_assembled
+  ((s Slv)
+   (th Theory)
+   (seq Sequent)
+   (termtxt (List Int))
+   (tytxt (List Int))
+   (cs (Option (List (List Int)))))
+  (Option (List Int))
+  (match cs
+    (None None)
+    ((Some texts)
+     (let ((cand (assemble_caseon termtxt tytxt texts)))
+       (if (try_cand s th seq cand) (Some cand) None)))))
 
 (fn inner_caseon
   ((s Slv)
@@ -1129,20 +1139,28 @@
            (match (tc_scrut_targs (slv_m s) (seq_params seq) scrut ty tparams)
              (None None)
              ((Some targs)
-              (match
-                (solve_con_cases
-                  s
-                  th
-                  seq
-                  scrut
-                  (inst_ctor_fields (zip_pairs tparams targs) ctors)
-                  (caseon_cands s th seq)
-                  hrest)
-                (None None)
-                ((Some cs)
-                 (let
-                   ((cand (assemble_caseon (sx_print termS) (sx_print tyS) cs)))
-                   (if (try_cand s th seq cand) (Some cand) None)))))))))
+              (let
+                ((ictors (inst_ctor_fields (zip_pairs tparams targs) ctors))
+                 (ccands (caseon_cands s th seq))
+                 (ttxt (sx_print termS))
+                 (tytxt (sx_print tyS)))
+                (match
+                  (caseon_assembled
+                    s
+                    th
+                    seq
+                    ttxt
+                    tytxt
+                    (solve_con_cases s th seq scrut ictors ccands hrest False))
+                  ((Some cand) (Some cand))
+                  (None
+                    (caseon_assembled
+                      s
+                      th
+                      seq
+                      ttxt
+                      tytxt
+                      (solve_con_cases s th seq scrut ictors ccands hrest True))))))))))
        (_ None)))))
 
 ;; the case ladder a case-on branch gets: same generated breadth, with the
@@ -1157,6 +1175,417 @@
          (caseon_tails)
          (lemma_steps (lemma_names th (seq_qheads seq (slv_m s)) (slv_m s) 8)))
        (farkas_cands seq)))))
+
+;; ---- unhinted case-on discovery (the stuck-frontier rung) --------------------
+;; When every other rung has failed on a (sub)goal, inspect its reduction
+;; frontier: apply a normalizing prefix natively (the pfx_walk seam), scan
+;; the residual equation for stuck Match scrutinees / If conditions, and
+;; synthesize a case-on over the stuck core — the persisted candidate is
+;; (steps (PFX) (case-on CORE TYHEAD (CASES…))), through parse_cand +
+;; check_sequent like every other rung. v1 bounds: branches close by a
+;; fixed branch ladder (case-hyp tails × quantified-hyp rewrites at their
+;; TRUE indices — the deep-IH family the generic tails lack — closed by
+;; refl/arith, plus farkas); discovery does not re-enter itself; a global
+;; budget caps synthesis attempts. Branches are solved Nil-named first,
+;; then retried with named binders (a discovered core mentioning an
+;; enclosing case's fields needs the whole path named to replay — the
+;; enclosing synthesis retries named and re-runs this rung).
+
+;; hypotheses a branch may rewrite with: quantified premise-free hyps (IHs),
+;; at their actual stack indices.
+(fn quant_hyp_idxs ((hs (List Goal)) (k Int)) (List Int)
+  (measure (struct hs))
+  (match hs
+    (Nil Nil)
+    ((Cons g rest)
+     (match g
+       ((Goal (Cons _ _) Nil _) (Cons k (quant_hyp_idxs rest (+ k 1))))
+       (_ (quant_hyp_idxs rest (+ k 1)))))))
+
+(fn disc_hyp_tails ((ks (List Int))) (List (List (List Int)))
+  (measure (struct ks))
+  (match ks
+    (Nil Nil)
+    ((Cons k rest)
+     (Cons
+       (list (st_rw_hyp k "lhs"))
+       (Cons (list (st_rw_hyp k "rhs")) (disc_hyp_tails rest))))))
+
+;; case-hyp consumption in a discovered branch: the caseon_tails reduce
+;; variants plus simp twins (reduce picks arms but never δ-unfolds — a
+;; call-headed scrutinee like (lft (Some x)) needs simp to open).
+(fn disc_case_tails () (List (List (List Int)))
+  (append_chains
+    (caseon_tails)
+    (list
+      (list (st_rw_hyp 0 "lhs") (st_simp "lhs"))
+      (list (st_rw_hyp 0 "rhs") (st_simp "rhs"))
+      (list
+        (st_rw_hyp 0 "lhs")
+        (st_simp "lhs")
+        (st_rw_hyp 0 "rhs")
+        (st_simp "rhs")))))
+
+(fn disc_prefixes_b
+  ((bases (List (List (List Int)))) (hts (List (List (List Int)))))
+  (List (List (List Int)))
+  (measure (struct bases))
+  (match bases
+    (Nil Nil)
+    ((Cons b rest)
+     (append_chains (tail_variants b hts Nil) (disc_prefixes_b rest hts)))))
+
+(fn disc_branch_cands ((branch Sequent)) (List (List Int))
+  (let
+    ((pfxs
+       (disc_prefixes_b
+         (disc_case_tails)
+         (disc_hyp_tails (quant_hyp_idxs (seq_hyps branch) 0)))))
+    (append_cands
+      (list "refl" "(steps ((compute both)) refl)" "(steps ((simp both)) refl)")
+      (append_cands
+        (with_terminal pfxs "refl")
+        (append_cands
+          (with_terminal pfxs "(by arith (list))")
+          (farkas_cands branch))))))
+
+;; ---- the frontier scan -------------------------------------------------------
+;; Stuck cores of a stuck scrutinee/condition, innermost-first: a call's
+;; call-headed args are better split candidates than the call itself
+;; ((lft (ev_i …)) is stuck BECAUSE (ev_i …) is).
+(fn disc_app_e ((a (List Expr)) (b (List Expr))) (List Expr)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (disc_app_e t b)))))
+
+(fn disc_cores ((e Expr)) (List Expr)
+  (measure (struct e))
+  (match e
+    ((Call _ args) (disc_app_e (disc_cores_args args) (Cons e Nil)))
+    (_ (Cons e Nil))))
+
+(fn disc_cores_args ((args (List Expr))) (List Expr)
+  (measure (struct args))
+  (match args
+    (Nil Nil)
+    ((Cons a rest)
+     (match a
+       ((Call _ _) (disc_app_e (disc_cores a) (disc_cores_args rest)))
+       (_ (disc_cores_args rest))))))
+
+;; candidate = (core, came-from-If-condition) — the tag types Bool cores
+;; that a fn-trie lookup cannot (prim comparisons).
+(fn disc_seen ((e Expr) (acc (List (Pair Expr Bool)))) Bool
+  (measure (struct acc))
+  (match acc
+    (Nil False)
+    ((Cons (Pair x _) rest) (if (expr_eq x e) True (disc_seen e rest)))))
+
+(fn disc_add1 ((acc (List (Pair Expr Bool))) (c (Pair Expr Bool)))
+  (List (Pair Expr Bool))
+  (measure (struct acc))
+  (match acc
+    (Nil (Cons c Nil))
+    ((Cons h t) (Cons h (disc_add1 t c)))))
+
+(fn disc_add
+  ((es (List Expr)) (cond (Option Expr)) (acc (List (Pair Expr Bool))))
+  (List (Pair Expr Bool))
+  (measure (struct es))
+  (match es
+    (Nil acc)
+    ((Cons e rest)
+     (disc_add
+       rest
+       cond
+       (if (disc_seen e acc) acc
+       (disc_add1
+         acc
+         (Pair
+           e
+           (match cond
+             (None False)
+             ((Some c) (expr_eq e c))))))))))
+
+;; walk an expr collecting stuck frontiers: Match scrutinees and If
+;; conditions that are not constructor-headed. Arm bodies are walked too —
+;; BVar-carrying cores just fail the render filter downstream.
+(fn disc_scan ((e Expr) (acc (List (Pair Expr Bool)))) (List (Pair Expr Bool))
+  (measure (struct e))
+  (match e
+    ((Match scrut arms)
+     (disc_scan_arms
+       arms
+       (disc_scan
+         scrut
+         (match scrut
+           ((Ctor _ _) acc)
+           (_ (disc_add (disc_cores scrut) None acc))))))
+    ((If c t e2)
+     (disc_scan
+       c
+       (disc_scan
+         t
+         (disc_scan
+           e2
+           (match c
+             ((Ctor _ _) acc)
+             (_ (disc_add (disc_cores c) (Some c) acc)))))))
+    ((Call _ args) (disc_scan_list args acc))
+    ((Ctor _ args) (disc_scan_list args acc))
+    ((Let bs body) (disc_scan body (disc_scan_list bs acc)))
+    (_ acc)))
+
+(fn disc_scan_list ((es (List Expr)) (acc (List (Pair Expr Bool))))
+  (List (Pair Expr Bool))
+  (measure (struct es))
+  (match es
+    (Nil acc)
+    ((Cons e rest) (disc_scan_list rest (disc_scan e acc)))))
+
+(fn disc_scan_arms ((arms (List Arm)) (acc (List (Pair Expr Bool))))
+  (List (Pair Expr Bool))
+  (measure (struct arms))
+  (match arms
+    (Nil acc)
+    ((Cons (Arm _ body) rest) (disc_scan_arms rest (disc_scan body acc)))))
+
+(fn disc_scan_eq ((eq Equation)) (List (Pair Expr Bool))
+  (match eq
+    ((Equation l r) (disc_scan r (disc_scan l Nil)))))
+
+;; the type-head text a case-on candidate spells (targs are inferred by the
+;; checker's own tc_scrut_targs, so the HEAD is enough — right even when a
+;; polymorphic return type carries TVars).
+(fn disc_tyhead ((s Slv) (seq Sequent) (e Expr) (ifc Bool)) (Option (List Int))
+  (if ifc (Some "Bool")
+  (match e
+    ((FVar n)
+     (match (find_param n (seq_params seq))
+       (None None)
+       ((Some (Param _ t))
+        (match (type_head t)
+          (None None)
+          ((Some (Pair tq _)) (Some (chars_of_sym (qn_name tq))))))))
+    ((Call q _)
+     (match (trie_lookup q (fn_trie_of (slv_m s)))
+       (None None)
+       ((Some (FnDef _ _ rt _))
+        (match (type_head rt)
+          (None None)
+          ((Some (Pair tq _)) (Some (chars_of_sym (qn_name tq))))))))
+    (_ None))))
+
+;; ---- discovery synthesis -----------------------------------------------------
+;; per-ctor branch solve: the fixed branch ladder only (fail fast — no
+;; term_solve/pfx_walk grind per failing branch, no re-entry into discovery).
+(fn disc_cases
+  ((s Slv)
+   (th Theory)
+   (rseq Sequent)
+   (scrut Expr)
+   (ctors (List CtorDef))
+   (named Bool))
+  (Option (List (List Int)))
+  (measure (struct ctors))
+  (match ctors
+    (Nil (Some Nil))
+    ((Cons (CtorDef cname ftypes) rest)
+     (let
+       ((names
+          (if named (cn_names (param_syms (seq_params rseq)) ftypes 0) Nil)))
+       (let ((branch (build_case_on_subgoal rseq scrut cname names ftypes)))
+         (match (try_ladder s th branch (disc_branch_cands branch))
+           (None None)
+           ((Some pf)
+            (match (disc_cases s th rseq scrut rest named)
+              (None None)
+              ((Some more)
+               (Some
+                 (Cons (case_text (chars_of_sym (qn_name cname)) names pf) more)))))))))))
+
+;; synthesize (case-on TERMTXT TYTXT …) on the residual sequent: the probe
+;; parse resolves term and type through the real seam (what replay sees);
+;; branches Nil-named first, named on retry.
+(fn disc_try
+  ((s Slv) (th Theory) (rseq Sequent) (termtxt (List Int)) (tytxt (List Int)))
+  (Option (List Int))
+  (match (parse_cand (slv_m s) (slv_rctx s) (caseon_probe termtxt tytxt))
+    (None None)
+    ((Some p)
+     (match p
+       ((CaseOn scrut ty _)
+        (match (lookup_typedef ty (slv_m s))
+          (None None)
+          ((Some (TypeDef _ tparams ctors _))
+           (match (tc_scrut_targs (slv_m s) (seq_params rseq) scrut ty tparams)
+             (None None)
+             ((Some targs)
+              (let ((ictors (inst_ctor_fields (zip_pairs tparams targs) ctors)))
+                (match (disc_cases s th rseq scrut ictors False)
+                  ((Some cs) (Some (assemble_caseon termtxt tytxt cs)))
+                  (None
+                    (match (disc_cases s th rseq scrut ictors True)
+                      ((Some cs) (Some (assemble_caseon termtxt tytxt cs)))
+                      (None None))))))))))
+       (_ None)))))
+
+;; ---- the prefix pool ----------------------------------------------------------
+;; case_pfxs exposes the lhs; these add the both-sides case-hyp rewrites
+;; (reduce AND simp twins), single-head unfolds per side (a goal over free
+;; vars exposes its frontier only after an explicit unfold — simp never
+;; commits a stuck-If/match unfold), and one optional trailing lemma step —
+;; the shape that exposes a twin goal's shared stuck core on both sides.
+(fn disc_unfold_bases ((heads (List (List Int))) (side (List Int)))
+  (List (List (List Int)))
+  (measure (struct heads))
+  (match heads
+    (Nil Nil)
+    ((Cons f rest)
+     (Cons
+       (list (st_unfold f side) (st_reduce side))
+       (Cons
+         (list (st_unfold f side) (st_simp side))
+         (disc_unfold_bases rest side))))))
+
+(fn disc_hyp_bases ((ks (List Int))) (List (List (List Int)))
+  (measure (struct ks))
+  (match ks
+    (Nil Nil)
+    ((Cons k rest)
+     (Cons
+       (list (st_rw_hyp k "lhs") (st_reduce "lhs"))
+       (Cons
+         (list (st_rw_hyp k "rhs") (st_reduce "rhs"))
+         (Cons
+           (list
+             (st_rw_hyp k "lhs")
+             (st_reduce "lhs")
+             (st_rw_hyp k "rhs")
+             (st_reduce "rhs"))
+           (Cons
+             (list (st_rw_hyp k "lhs") (st_simp "lhs"))
+             (Cons
+               (list (st_rw_hyp k "rhs") (st_simp "rhs"))
+               (Cons
+                 (list
+                   (st_rw_hyp k "lhs")
+                   (st_simp "lhs")
+                   (st_rw_hyp k "rhs")
+                   (st_simp "rhs"))
+                 (disc_hyp_bases rest))))))))))
+
+(fn disc_lemma_ext ((bases (List (List (List Int)))) (lsteps (List (List Int))))
+  (List (List (List Int)))
+  (measure (struct bases))
+  (match bases
+    (Nil Nil)
+    ((Cons b rest)
+     (append_chains
+       (cons_all b (singleton_tails lsteps))
+       (disc_lemma_ext rest lsteps)))))
+
+(fn disc_pool ((s Slv) (th Theory) (seq Sequent)) (List (List (List Int)))
+  (match (seq_side_heads seq (slv_m s))
+    ((Pair lh rh)
+     (let
+       ((bases
+          (Cons
+            Nil
+            (Cons
+              (list (st_simp "both"))
+              (append_chains
+                (disc_hyp_bases (closed_hyp_idxs (seq_hyps seq) 0))
+                (append_chains
+                  (disc_unfold_bases lh "lhs")
+                  (disc_unfold_bases rh "rhs")))))))
+       (append_chains
+         bases
+         (disc_lemma_ext
+           bases
+           (lemma_steps (lemma_names th (seq_qheads seq (slv_m s)) (slv_m s) 8))))))))
+
+;; residual of one prefix; None = inapplicable or no progress (the empty
+;; prefix IS the no-progress case, deliberately).
+(fn disc_resid ((s Slv) (th Theory) (seq Sequent) (ptxts (List (List Int))))
+  (Option Sequent)
+  (match ptxts
+    (Nil (Some seq))
+    (_
+      (match (pfx_steps s ptxts)
+        (None None)
+        ((Some stps)
+         (match (apply_steps (slv_m s) th seq stps)
+           (None None)
+           ((Some rseq)
+            (if (eq_same (seq_equation rseq) (seq_equation seq)) None
+            (Some rseq)))))))))
+
+;; walk one residual's candidates; returns (winner, synthesis attempts spent).
+(fn disc_pfx_cands
+  ((s Slv)
+   (th Theory)
+   (seq Sequent)
+   (rseq Sequent)
+   (ptxts (List (List Int)))
+   (cands (List (Pair Expr Bool)))
+   (budget Int))
+  (Pair (Option (List Int)) Int)
+  (measure (struct cands))
+  (match cands
+    (Nil (Pair None 0))
+    ((Cons (Pair e ifc) rest)
+     (if (lt budget 1) (Pair None 0)
+     (match (mn_rend e)
+       (None (disc_pfx_cands s th seq rseq ptxts rest budget))
+       ((Some termtxt)
+        (match (disc_tyhead s rseq e ifc)
+          (None (disc_pfx_cands s th seq rseq ptxts rest budget))
+          ((Some tytxt)
+           (match (disc_try s th rseq termtxt tytxt)
+             (None
+               (match (disc_pfx_cands s th seq rseq ptxts rest (- budget 1))
+                 ((Pair r spent) (Pair r (+ spent 1)))))
+             ((Some ctext)
+              (let
+                ((full
+                   (match ptxts
+                     (Nil ctext)
+                     (_ (steps_cand ptxts ctext)))))
+                (if (try_cand s th seq full) (Pair (Some full) 1)
+                (match (disc_pfx_cands s th seq rseq ptxts rest (- budget 1))
+                  ((Pair r spent) (Pair r (+ spent 1))))))))))))))))
+
+(fn disc_walk_pool
+  ((s Slv)
+   (th Theory)
+   (seq Sequent)
+   (pfxs (List (List (List Int))))
+   (budget Int))
+  (Option (List Int))
+  (measure (struct pfxs))
+  (match pfxs
+    (Nil None)
+    ((Cons ptxts rest)
+     (if (lt budget 1) None
+     (match (disc_resid s th seq ptxts)
+       (None (disc_walk_pool s th seq rest budget))
+       ((Some rseq)
+        (match
+          (disc_pfx_cands
+            s
+            th
+            seq
+            rseq
+            ptxts
+            (disc_scan_eq (seq_equation rseq))
+            budget)
+          ((Pair (Some c) _) (Some c))
+          ((Pair None spent) (disc_walk_pool s th seq rest (- budget spent))))))))))
+
+(fn disc_solve ((s Slv) (th Theory) (seq Sequent)) (Option (List Int))
+  (disc_walk_pool s th seq (disc_pool s th seq) 24))
 
 ;; ---- farkas certificate search ---------------------------------------------
 ;; (by arith …) closes ENTAILMENTS (premised linear-int goals). FINDING the
@@ -2402,11 +2831,20 @@
            (_ Nil)))))
     (_ Nil)))
 
+;; unhinted induction on each parameter, then the last rung: unhinted
+;; case-on discovery on the goal itself.
+(fn induct_or_disc ((s Slv) (th Theory) (name Symbol) (seq Sequent))
+  (Option (List Int))
+  (match (try_induct_vars s th name seq)
+    ((Some c) (Some c))
+    (None (verify_or s name (disc_solve s th seq)))))
+
 ;; the search over one decl's sequent: the hint chain first (it was hinted
 ;; for a reason; later hints nest inside earlier ones), then the flat
 ;; ladder, then conditional citation + premise mining (cheaper than
-;; induction synthesis), then unhinted induction on each parameter. Every
-;; winner passes the decl-level driver verify.
+;; induction synthesis), then unhinted induction on each parameter and the
+;; stuck-frontier case-on discovery. Every winner passes the decl-level
+;; driver verify.
 (fn solve_seq
   ((s Slv)
    (th Theory)
@@ -2430,7 +2868,7 @@
             (flat_cands s th seq)
             (append_cands (divfacts_cands goalS) (farkas_cands seq))))
         ((Some c)
-         (if (attempt s name c) (Some c) (try_induct_vars s th name seq)))
+         (if (attempt s name c) (Some c) (induct_or_disc s th name seq)))
         (None
           (match (verify_or s name (cond_solve s th seq))
             ((Some c) (Some c))
@@ -2441,7 +2879,7 @@
                   (match
                     (verify_or s name (pfx_walk s th seq (case_pfxs s seq)))
                     ((Some c) (Some c))
-                    (None (try_induct_vars s th name seq))))))))))))
+                    (None (induct_or_disc s th name seq))))))))))))
 
 ;; ---- the AST-size measure recipe (decrease sites) ---------------------------
 ;; A decrease obligation is  callee_size[args] < caller_size[params]  under the
