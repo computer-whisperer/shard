@@ -2335,13 +2335,85 @@
        Nil
        (lemma_steps (lemma_names th (seq_qheads seq (slv_m s)) (slv_m s) 8))))))
 
+;; ---- the div-facts arm (friction item 7) -------------------------------------
+;; Euclidean mod-range goals ARE div-facts' injected rlo/rhi one step away:
+;;   (= (le 0 (mod X M)) True) → (div-facts X M q (by arith (list 1 0 1 0 0)))
+;;   (= (lt (mod X M) B) True) → (div-facts X M q (by arith (list 1 0 0 1 0)))
+;;     bare when B is syntactically M; a (compute lhs) chain prefix when B
+;;     merely computes to M (the xaddw_sr2/sr3 shape in addw_x86_out).
+;; v1 fires on premise-free goals only — the observed family; a premised
+;; goal needs the decl premises' multiplier slots (extend when one appears).
+;; A candidate that does not close dies in check_sequent like any other.
+
+(fn df_mod_args ((s SExpr)) (Option (Pair SExpr SExpr))
+  (match s
+    ((SList (Cons (SSym h) (Cons x (Cons m Nil))))
+     (if (sym_eq h (quote mod)) (Some (Pair x m)) None))
+    (_ None)))
+
+(fn df_core ((x SExpr) (m SExpr) (vtext (List Int))) (List Int)
+  (append_int
+    "(div-facts "
+    (append_int
+      (sx_print x)
+      (append_int
+        " "
+        (append_int
+          (sx_print m)
+          (append_int " q (by arith (list " (append_int vtext ")))")))))))
+
+;; the prefixed variant: (compute lhs) normalizes a bound that merely
+;; computes to the modulus (the xaddw_sr2 shape); div-facts rides as the
+;; steps TERMINAL — check_sequent takes this form where a `chain` wrapper
+;; would not check through the direct path
+(fn df_pre ((df (List Int))) (List Int)
+  (append_int "(steps ((compute lhs)) " (append_int df ")")))
+
+(fn divfacts_cands ((goalS SExpr)) (List (List Int))
+  (match goalS
+    ((SList (Cons _g (Cons _pForm (Cons (SList prems) (Cons concl Nil)))))
+     (match prems
+       ((Cons _ _) Nil)
+       (Nil
+         (match concl
+           ((SList
+              (Cons
+                _eq
+                (Cons
+                  (SList (Cons (SSym rel) (Cons aSide (Cons bSide Nil))))
+                  (Cons (SSym tt) Nil))))
+            (if (sym_eq tt (quote True))
+              (if (sym_eq rel (quote le))
+                (match aSide
+                  ((SInt 0)
+                   (match (df_mod_args bSide)
+                     ((Some (Pair x m)) (Cons (df_core x m "1 0 1 0 0") Nil))
+                     (None Nil)))
+                  (_ Nil))
+              (if (sym_eq rel (quote lt))
+                (match (df_mod_args aSide)
+                  ((Some (Pair x m))
+                   (Cons
+                     (df_core x m "1 0 0 1 0")
+                     (Cons (df_pre (df_core x m "1 0 0 1 0")) Nil)))
+                  (None Nil))
+                Nil))
+              Nil))
+           (_ Nil)))))
+    (_ Nil)))
+
 ;; the search over one decl's sequent: the hint chain first (it was hinted
 ;; for a reason; later hints nest inside earlier ones), then the flat
 ;; ladder, then conditional citation + premise mining (cheaper than
 ;; induction synthesis), then unhinted induction on each parameter. Every
 ;; winner passes the decl-level driver verify.
 (fn solve_seq
-  ((s Slv) (th Theory) (name Symbol) (seq Sequent) (hints (List Hint)))
+  ((s Slv)
+   (th Theory)
+   (name Symbol)
+   (seq Sequent)
+   (hints (List Hint))
+   (goalS SExpr))
   (Option (List Int))
   (match
     (match hints
@@ -2354,7 +2426,9 @@
           s
           th
           seq
-          (append_cands (flat_cands s th seq) (farkas_cands seq)))
+          (append_cands
+            (flat_cands s th seq)
+            (append_cands (divfacts_cands goalS) (farkas_cands seq))))
         ((Some c)
          (if (attempt s name c) (Some c) (try_induct_vars s th name seq)))
         (None
@@ -3176,7 +3250,7 @@
                 (match (solve_measure s cm cth (lift_sequent g) goalS)
                   ((Some c) (SolvedY name c))
                   (None (SolvedN name)))))
-             (match (solve_seq s th name (lift_sequent g) hints)
+             (match (solve_seq s th name (lift_sequent g) hints goalS)
                ((Some c) (SolvedY name c))
                (None (SolvedN name)))))))))))
 
