@@ -491,12 +491,15 @@ if [ -x bin/shard_eval ]; then
   else
     echo "FAIL canon_tool (pin file not a fixed point of the rewriter)"
   fi
-  bin/shard_eval run tools/canon/canon.shard examples/canon_rejects.shard > "$TMP/cnt_rej.shard" 2>/dev/null
+  # the rewritten file must sit in examples/ so its relative imports resolve
+  bin/shard_eval run tools/canon/canon.shard examples/canon_rejects.shard > examples/.cnt_rej_tmp.shard 2>/dev/null
   cnt_rc=$?
   if [ $cnt_rc -ne 0 ]; then
     echo "FAIL canon_tool (rejects rewrite exited $cnt_rc)"
+    rm -f examples/.cnt_rej_tmp.shard
   else
-    bin/shard_eval run kernel/check.shard "$TMP/cnt_rej.shard" > "$TMP/cnt_rej.out" 2>&1
+    bin/shard_eval run kernel/check.shard examples/.cnt_rej_tmp.shard > "$TMP/cnt_rej.out" 2>&1
+    rm -f examples/.cnt_rej_tmp.shard
     cnt_lines=$(grep -c '^CANON ' "$TMP/cnt_rej.out")
     cnt_bad=$(grep '^CANON ' "$TMP/cnt_rej.out" | grep -vc 'C3 \|C6 ')
     if [ "$cnt_lines" = "6" ] && [ "$cnt_bad" = "0" ]; then
