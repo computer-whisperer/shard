@@ -1,12 +1,13 @@
 shard canonicalization — CANON.md
 =================================
 
-STATUS: DRAFT (2026-07-10). Design pass with the user in progress.
-Sections are numbered for per-section rulings, X86.md-style. Ratified so
-far: (a) canonicalization is the next core-shaping arc (2026-07-10);
-(b) content addressing is a direction shard should adopt and exploit
-(user, 2026-07-10) — it constrains the canonical form now even though
-its consumers land later. Everything else in this file is PROPOSED.
+STATUS: RATIFIED (user review completed 2026-07-10) — §1–§10 stand as
+the arc's scope ledger; §11 items remain OPEN questions, each needing
+its own ruling before any code assumes an answer. The v1 cut is C1–C7
+at enforcement stages 1–2. Also ratified: (a) canonicalization is the
+next core-shaping arc; (b) content addressing is a direction shard
+should adopt and exploit — it constrains the canonical form now even
+though its consumers land later; (c) the D7 ruling recorded at C1.
 
 The evidence base is ~/workspace/playground/shard_search_playground
 (read as data, never touched): needed narrowing over shard terms, three
@@ -203,7 +204,21 @@ hazard, and the disposition.
 Tier 1 — syntactic, theory-free, recognizer runs at read:
 
 - **C1 no ground prim redexes.** No Call of a prim-table op with all
-  args literal. `(+ 1 2)` is refused; write `3`.
+  args literal. `(+ 1 2)` is refused; write `3`. SCOPE: executable
+  positions (fn bodies) ONLY — goals of claims/requirements are
+  exactly where distinct spellings are RELATED (`(= (shl 1 12)
+  4096)`, the ground differential probes), so goal positions are
+  exempt from C1/C2 by construction, not by carve-out.
+  RULING (user, 2026-07-10): refuse-at-gate stands; fold-at-read was
+  weighed and declined (it re-opens surface multiplicity where the
+  corpus lives). The intent-carrying spelling idiom (C's `1<<12`)
+  MIGRATES to the claim layer rather than being lost: a named
+  constant fn plus a defining claim — `(fn page_size () Int 4096)` +
+  `(claim page_size_pow2 … (= (page_size) (shl 1 12)))` — carries
+  intent at every USE site through the name, is citable in proofs,
+  and cannot drift. What `1<<12` really provided was a derivation
+  the compiler checked; shard's checked home for derivations is a
+  claim. std/bits already converged on this shape unforced.
 - **C2 no decided control.** No `(if True …)`/`(if False …)`; no
   Match whose scrutinee is a literal/ground-ctor value that decides
   an arm. (The residual ground-ctor scrutinee cases ride the same
