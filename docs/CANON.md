@@ -1,0 +1,403 @@
+shard canonicalization — CANON.md
+=================================
+
+STATUS: DRAFT (2026-07-10). Design pass with the user in progress.
+Sections are numbered for per-section rulings, X86.md-style. Ratified so
+far: (a) canonicalization is the next core-shaping arc (2026-07-10);
+(b) content addressing is a direction shard should adopt and exploit
+(user, 2026-07-10) — it constrains the canonical form now even though
+its consumers land later. Everything else in this file is PROPOSED.
+
+The evidence base is ~/workspace/playground/shard_search_playground
+(read as data, never touched): needed narrowing over shard terms, three
+engines at equal work currency, and the canonicalization experiments
+its README records. Numbers cited below are from that README.
+
+
+## 1. Why: the residual region
+
+Programming languages were designed under a filter — humans must be
+able to bear writing and reading them. That filter silently rejected
+whole regions of the design space: languages that demand totality
+proofs, languages with one spelling per program, languages where the
+source form is a normal form. shard already lives in the rejected
+region on the first axis (mandatory totality, mandatory proofs); this
+arc explores the second: **invariant-forced canonicalization** — the
+language admits one spelling per meaning, up to a stated, proven,
+growing quotient.
+
+The prototype's export is that the degrees of freedom in base shard
+are not neutral: they are HAZARDS to program search, and (the same
+fact seen from other angles) to proof automation, to caching, and to
+any consumer that must decide term equality. Measured, on rev-from-
+examples with the append theory as the quotient:
+
+- Ground search, depth 4: the full grammar (1.09e15 candidates) was
+  UNFINISHABLE — 67% settled at 4m21s, aborted at 25GB; the fork tree
+  tracks extensional DUPLICATES, not candidates. The lemma-quotiented
+  grammar settled its entire remaining space (2.25e12) in **4,095
+  evaluator steps**. The space shrank 485x; the work fell from
+  unfinishable to seconds. The duplicates were the whole cost.
+- Law-directed search (proofs instead of tests), depth 2: undecided
+  candidates fell 9,318 → 1,040 with canonical joins, → 138 with the
+  quotiented grammar composed in; the lemma-hard bucket flipped to
+  proven (2 → 6 certified against the interface). Depth 3:
+  quotient+join runs at 16,093 steps where join-alone needs 51.2M.
+- The quotient was verified EXACT at depths 1–3 (87 / 2,787 /
+  2,597,487 canonical candidates, censused term-by-term against the
+  full grammar's normal forms): nothing lost, nothing added.
+
+The rule set that did this is four std/list requirements the kernel
+had already checked. The quotient was sitting in the tree, proven,
+waiting to be applied at the right boundary.
+
+## 2. The five precedents already in the tree
+
+shard has converged on invariant-forced canonicalization piecemeal,
+five times, without naming it:
+
+1. **shardfmt** — byte layout. Gate-not-printer; the repo is
+   formatted; bin/rebuild.sh REFUSES to stamp non-canonical inputs.
+2. **prove regen** — proof text. Sidecars must regenerate
+   byte-identically (the regen gate IS an is-canonical check).
+3. **Nat packing** — ground values. A nonneg IntLit IS the packed
+   ground-Nat normal form; packing lives in step+ceval only.
+4. **Qualified identity** — names. Every reference resolves to one
+   QName; bare-name freedom is gone from the core.
+5. **Citation desugaring** — proof references. Named `(hyp ih)` is
+   REWRITTEN to positional `(Hyp k)` before parse; the AST has no
+   name ctor at all (kernel/desugar.shard).
+
+Each has the same shape: a canonical core, a presentation surface,
+a deterministic bridge, and a gate. Each was adopted because a
+machine author plus a gate made bearable what humans wouldn't
+tolerate. This arc generalizes the pattern to TERM STRUCTURE — the
+one layer still uncanonicalized.
+
+The cost of its absence is not hypothetical: friction #6 (2026-07-10,
+X86.md §45 rider) was two spellings of the same ground Nat — source
+tower vs packed literal — leaking across the reducer/type-gate
+boundary and demanding a typing view to bridge. Canonicalization is
+the systematic fix for that defect class: fewer forms, fewer bridges.
+
+## 3. Architecture: recognizer, rewriter, ratchet
+
+The load-bearing safety property: **an admission gate is semantics-
+neutral and trust-neutral.** `is_canonical` admits or rejects source;
+it never changes what a term means, never changes what the kernel
+accepts as proof. A wrong recognizer can only be too strict or too
+lax about ADMISSION — it cannot prove false things. v1 can therefore
+be iterated on aggressively, and enforcement can ratchet.
+
+Three pieces:
+
+- **The recognizer (kernel).** `is_canonical` over the core AST —
+  one pattern-matching pass, no rewriting, no search. Syntactic
+  invariants (§5 C1–C6) are decidable at read; theory invariants
+  (§5 C7) need types and gate at check, after the type gate. The
+  recognizer NEVER needs termination or confluence — "no rule
+  matches anywhere" is pure matching.
+- **The rewriter (tools/canon, untrusted).** shardfmt's contract:
+  gate-not-printer. The tool rewrites a file into canonical form;
+  the kernel recognizer is the only authority on whether it
+  succeeded. Every tier-2 step the rewriter takes cites a proven
+  requirement — replayable as `rewrite (lemma …)` if we ever want
+  certificates for the rewrite itself (we don't, for admission; the
+  gate re-judges from scratch).
+- **The ratchet (enforcement stages, each a separate decision):**
+  1. tool exists; recognizer reports advisory CANON line in check output
+  2. std/ tree canonicalized; corpus gate pins it (fmt's arc, replayed)
+  3. bin/rebuild.sh stamp refusal (fmt precedent, exactly)
+  4. canonical form required for lowering inputs and search corpora
+  5. read-time refusal for the syntactic tier (the "deny parse" end
+     state — only ever reachable for C1–C6; C7 is check-time by nature)
+
+  v1 proposes stages 1–2 only. Nothing about later stages needs
+  deciding now; the point of the ratchet is that it CAN stop anywhere.
+
+## 4. The degrees-of-freedom census (against the grammar)
+
+The core grammar is small enough to census exhaustively. Expr has
+NINE formers (kernel/term.shard:102): FVar, BVar, Ctor, Call,
+Match(scrut, arms), Let(rhss, body) — multi-binding, parallel scope —
+If(c,t,e) — no binders, reduces by True/False — IntLit, SymLit.
+Pat has FOUR: PVar (nameless — binds the next BVar), PCtor, PInt,
+PSym. Binder NAMES do not exist in the core AST at all; they live
+only in surface text and die at elaboration. Match is first-match
+with a three-valued matcher. The Bool prim comparison surface is
+int_eq / le / lt (no gt/ge, no not/and/or prims).
+
+Per degree of freedom: what varies, whether it carries meaning, the
+hazard, and the disposition.
+
+- **D1 byte layout** — no meaning. DONE (shardfmt). Tier 0.
+- **D2 proof text** — no meaning given the goal. DONE (regen). Tier 0.
+- **D3 binder names** — no meaning (already erased at elaboration;
+  BVar/PVar are nameless). Presentation only. PROPOSAL: outside the
+  canonical form, unconstrained — names are the corpus-alignment
+  surface, like whitespace. Consequence: the content hash (§7) is
+  alpha-invariant for free, because it hashes the core AST.
+- **D4 match arm order** — MEANINGFUL under first-match when arms
+  overlap; meaningless permutation freedom when ctor heads are
+  distinct. Hazard: search must enumerate orderings; readers must
+  simulate first-match to know if order matters. PROPOSAL C4 below:
+  decl-order ctor arms + at-most-one trailing catch-all.
+- **D5 dead arms** — an arm subsumed by an earlier arm can never
+  fire. Pure noise; hides bugs. PROPOSAL: refused (C5).
+- **D6 let structure** — three freedoms: (a) dead bindings (never
+  referenced by the body); (b) nested single-binding lets vs one
+  parallel multi-binding Let when bindings are independent (both
+  spellings exist in the corpus today — std/rng nests, the surface
+  form is parallel); (c) binding order within a parallel Let.
+  PROPOSAL C3 below. Full let-normal form (ANF — every non-atomic
+  subterm named) is a much bigger hammer: named as an OPEN question
+  (§11), not proposed for v1; it changes every proof goal's shape.
+- **D7 ground redexes** — `(+ 1 2)`, `(le 1 2)`, `(if True a b)`:
+  closed prim redexes and decided ifs spell a value the long way.
+  Hazard: infinitely many spellings of every literal — the single
+  worst DOF for search (the depth-4 wallpaper was mostly this class
+  composed with D11). PROPOSAL C1/C2 below. Bounded deliberately:
+  prim-op redexes and literal-condition ifs only — NOT general
+  closed-call normalization (`(fact 20)` stays; normalizing it is
+  running the program, with a fuel story we refuse to open here).
+- **D8 ground Nat spelling** — tower `(S (S Z))` vs literal `2`
+  (with the S^ sugar in between). The kernel already HAS a canonical
+  form: the packed literal (precedent 3; friction #6 resolved the
+  typing side). PROPOSAL C6: one source spelling for ground Nats —
+  the literal. `(S x)` with x non-ground is untouched.
+- **D9 algebraic spelling** — `(+ a b)` vs `(+ b a)`; association;
+  literal placement. True ring normalization would quotient hardest
+  for arithmetic-heavy search BUT it rewrites the SHAPE of every
+  arithmetic goal in every existing proof, and the proof kit already
+  dissolves comm/assoc via `by arith`. DISPOSITION: named, NOT
+  proposed. Revisit when a consumer (search over arithmetic sketches)
+  demands it; expected to enter as a tier-2 rule set drawn from
+  kernel/facts' ring laws, not as new machinery.
+- **D10 comparison orientation** — `(if (lt a b) X Y)` vs
+  `(if (le b a) Y X)`: branch-swap freedom via negation. Real but
+  minor (three prims, no `not`). DISPOSITION: census-noted, not
+  proposed; a search dialect can quotient it grammar-side.
+- **D11 theory-equal spellings** — `(Cons h (append acc Nil))` vs
+  `(Cons h acc)`: distinct terms the proven theory identifies. THE
+  measured hazard (§1). PROPOSAL C7: theory quotients as data,
+  append family first.
+- **D12 sugar** — string/list literals, S^, records make/with, `'X`.
+  Expansion is deterministic reader-level; the core never sees sugar.
+  PROPOSAL: canonical form is defined on the CORE (sugar-transparent);
+  the rewriter EMITS maximally sugared surface (readability, corpus
+  alignment). Same split as D3: core canonical, surface free — except
+  where a sugar and its expansion both appear in SOURCE and D7/D8
+  already collapse them.
+- **D13 module-level order** — decl order beyond dependency
+  requirements, import order. Loader semantics constrain some of it.
+  DISPOSITION: deferred to a later slice; census first (what order
+  freedom actually exists per decl kind), then propose. fmt already
+  pins intra-decl layout, so the blast radius is small.
+- **D14 duplicate definitions** — extensionally-equal fns defined
+  twice. Not a form question; a CORPUS question. Becomes detectable
+  ~for free under §7 (same canonical hash). Consumer of the arc, not
+  an invariant in it.
+
+## 5. The invariant set (proposed v1 cut)
+
+Tier 1 — syntactic, theory-free, recognizer runs at read:
+
+- **C1 no ground prim redexes.** No Call of a prim-table op with all
+  args literal. `(+ 1 2)` is refused; write `3`.
+- **C2 no decided control.** No `(if True …)`/`(if False …)`; no
+  Match whose scrutinee is a literal/ground-ctor value that decides
+  an arm. (The residual ground-ctor scrutinee cases ride the same
+  matcher the kernel already has; MStuck never arises on ground.)
+- **C3 let hygiene.** Every binding referenced by the body (no dead
+  bindings); independent adjacent lets merged into one parallel Let
+  (maximal merge — nesting is the spelling of DEPENDENCE); bindings
+  within a Let ordered by first use in the body.
+- **C4 match arm discipline.** Ctor-headed arms appear in ctor
+  DECLARATION order; at most one catch-all arm, and only in last
+  position; literal arms (PInt/PSym) sorted ascending before the
+  catch-all. Arm order thereby stops carrying meaning everywhere a
+  reader can see. (Full disjointness — banning the catch-all — would
+  outlaw the corpus's pervasive `(_ default)` idiom and explode
+  13-ctor matches; named as the stricter mode in §11, not proposed.)
+- **C5 no dead arms.** No arm subsumed by earlier arms (a ctor arm
+  after a catch-all, a duplicate ctor head, a literal repeated).
+- **C6 ground Nats are literals.** The packed form is the source
+  form: `2`, never `(S (S Z))`; S^ only with a symbolic base or a
+  symbolic count.
+
+Tier 2 — theory quotients, recognizer runs at check (needs types):
+
+- **C7 no theory redexes, per ratified rule set.** v1 ships exactly
+  ONE rule set, the playground-validated append family (all four are
+  proven requirements in std/list/mod.req.shard):
+
+      append_nil_left    (append Nil ys)         -> ys
+      append_cons        (append (Cons h t) ys)  -> (Cons h (append t ys))
+      append_assoc       (append (append a b) c) -> (append a (append b c))
+      append_nil_right   (append xs Nil)         -> xs
+
+  A term is canonical iff no rule's LHS matches any subterm AT ITS
+  REQUIRED TYPE. The typed side-condition is load-bearing: the
+  playground's recorded bug — append_nil_right applied to an
+  Int-typed stuck operand certified crashing candidates — is the
+  pinned counterexample. Rules fire only where the requirement's
+  binder types are satisfied.
+
+What C1–C7 buy, concretely: every consumer that keys on term equality
+(the prove solver's candidate spaces, future search executors, the §7
+hash, the emitters' shape dispatch) gets "syntactically equal iff
+equal up to the instituted quotient" — and the quotient is a LIST OF
+CITED THEOREMS, not a compiler's private opinion.
+
+## 6. Rule sets as data (the tier-2 format)
+
+A tier-2 rule set is a declared, ratified object, not code:
+
+    (canon-rules list-append
+      (rule append_nil_left)
+      (rule append_cons)
+      (rule append_assoc)
+      (rule append_nil_right))
+
+Each `rule` names a REQUIREMENT in scope; the kernel derives the
+oriented rewrite (goal equation read left-to-right) and the typed
+side-conditions (the goal's binder types) directly from the checked
+requirement. There is no separate rule syntax to trust — a canon rule
+IS a citation. Orientation is part of ratification: the declaration
+is accepted into the tree by the same review that accepts an axiom
+placement (human-gated, tiny surface).
+
+Obligations, split honestly:
+
+- **Recognizer: none.** Matching LHS shapes needs neither
+  termination nor confluence.
+- **Rewriter: termination.** The tool must halt. v1: hand-ratified
+  per rule set (the append four are the textbook completion example).
+  v2 (named growth): a meta tool checking a termination order +
+  critical-pair convergence, so rule-set ratification becomes
+  machine-assisted.
+- **Metatheory: confluence = uniqueness.** Without it "canonical" is
+  still a well-defined predicate (no rule applies), just not a unique
+  representative per class. Search needs only representative
+  EXISTENCE (termination + rules-are-proven-equalities). Uniqueness
+  is what §7 needs — hash-equality should mean theory-equality — so
+  confluence is REQUIRED for any rule set admitted while content
+  addressing is live. The append four are confluent.
+
+Growth law: one rule set per proven lemma family, each bought
+exactly when a consumer demands it. The boundary stays legible — the
+playground measured this directly: raising the case-split budget
+moved ZERO verdicts once the append theory was quotiented; what
+remained needed match-context reasoning no equational lemma states.
+Each family buys its exact quotient, no more.
+
+## 7. Content addressing (ratified direction)
+
+Ratified 2026-07-10: shard should adopt and exploit content-addressed
+definitions. The Unison precedent probed this region and found humans
+could barely bear it; nothing in OUR authorship model objects.
+
+What it is here: a definition's identity is the hash of its CANONICAL
+core term, binder-nameless (the core AST already is — D3), with every
+Call/Ctor QName reference replaced by the referent's own hash
+(Merkle). Two definitions have equal hashes iff their canonical forms
+are structurally identical up to naming — and, because hashing sits
+downstream of C1–C7, up to the instituted quotient. Canonicalization
+is what makes the hash MEANINGFUL; content addressing is what makes
+canonicalization PAY compositionally:
+
+- **Cert and proof reuse.** Certificates keyed by hash survive
+  renames, module moves, and duplicate definitions. The cert economy
+  (lowering certs, callee certs, CK chains) becomes keyed by what a
+  function IS, not where it lives or what it's called.
+- **Duplicate census.** D14 for free: same hash, same function —
+  reported, not refused.
+- **Search memo keys.** The playground's "the memo is the whole
+  game": hash-consing is content addressing at executor scale; a
+  corpus-level hash gives cross-RUN memoization a sound key.
+- **Incremental checking.** A definition whose hash is unchanged has
+  an unchanged meaning; recheck nothing beneath it. (The checker's
+  future scaling story, named here, built later.)
+
+v1 scope, deliberately thin: DEFINE the hash (spec in this file once
+the invariant set settles) and ship a tool that computes and lists
+it. KEY NOTHING ON IT YET. The first real consumer should be chosen
+the way all our consumers are — by demand; the cert cache is the
+likely candidate. What v1 must get right is only the constraint that
+already binds: the hash is over the canonical nameless core, so the
+canonical form must be stable before any hash is stored anywhere.
+
+## 8. Named exclusions (tier 3 — the honest boundary)
+
+Excluded by decision, not accident:
+
+- **Context-sensitive equality.** `(Cons x Nil)` vs `(Cons x ys)`
+  equal only where the enclosing match arm pins `ys = Nil`. No
+  equational rule states this; quotienting it means flow reasoning
+  inside the recognizer. OUT.
+- **Recursion shape.** Accumulator vs direct recursion, fold vs
+  explicit structural descent — extensionally equal, structurally
+  incomparable. Program equivalence, not spelling. OUT.
+- **Helper decomposition / inlining freedom.** Where one cuts a
+  function into two is a design act, not a spelling. OUT. (Content
+  addressing makes the DUPLICATE case visible — that much and no
+  more.)
+- **General closed-call normalization.** `(fact 20)` → literal is
+  running the program at read time; fuel and cost stories we refuse
+  to import into a recognizer. Prim redexes only (C1).
+
+## 9. Verification
+
+- **The exactness census (the playground's `--canon-verify`,
+  graduated).** Enumerate all terms to a size bound over a small
+  signature; check the recognizer's image equals the rewriter's
+  normal-form image term-by-term, and that every equivalence class
+  keeps exactly one representative. This is the gate that catches a
+  recognizer/rewriter drift — the pair must define the SAME form.
+- **Corpus gates.** A canonical-sweep target (recognizer over the
+  std tree once stage 2 lands); negative fixtures per invariant
+  (canon_rejects.shard: one violation of each of C1–C7, each must be
+  refused with a named message — the percolation_rejects pattern).
+- **Cross-implementation agreement.** The recognizer is kernel shard;
+  the rewriter is a tool. No Rust twin to drift against; the
+  playground remains a differentially-gated accelerator on its own
+  corpus subset, never an authority.
+- **Proof-neutrality probes.** Canonicalizing a module must leave its
+  claims checkable — pin with one proof-bearing module rewritten by
+  the tool and rechecked green before any tree-wide sweep (the
+  records-arc proof-neutrality pilot, replayed).
+
+## 10. Migration
+
+- **Order: std first** (smallest, most cited, owns the append
+  requirements), then examples, then kernel sources last — kernel
+  files are the densest proof-site real estate.
+- **Proof-site churn is the real cost.** Rewriting a measured fn's
+  body shifts sidecar sites (the known gotcha); the prove regen
+  machinery absorbs sidecar entries, but inline measure proofs and
+  hand proofs over reshaped goals need eyes. Price per tree, not per
+  arc; the ratchet exists so this never has to happen in one sweep.
+- **Transition multiplicity is friction-#6 territory by
+  construction.** While canonical and legacy spellings coexist,
+  bridges (typing views, defining-equation lemmas) carry the load.
+  Keep the window short per tree: canonicalize, recheck, pin, move on.
+
+## 11. Open questions (for ratification, none blocking §4–§5 review)
+
+1. **ANF depth (D6).** Does canonical shard eventually name every
+   non-atomic subterm? Massive goal-shape churn; real sharing and
+   emitter benefits. Not in v1; wants its own evidence pass.
+2. **Strict match mode (D4).** A no-catch-all, full-disjointness mode
+   (match as ctor map) — as a per-type or per-module opt-in ratchet
+   beyond C4? The 13-ctor corpus idiom argues against forcing it.
+3. **Ring normalization (D9).** Enters as a tier-2 rule set from
+   kernel/facts when a consumer demands it — or never; `by arith`
+   already dissolves what it would pin.
+4. **Module-level order (D13).** Census first; likely a later slice
+   of the same recognizer.
+5. **Hash algorithm + spec (§7).** Settle after C1–C7 stabilize; the
+   spec lands in this file.
+6. **Tool naming/home.** tools/canon vs growing shardfmt (fmt = the
+   byte layer, canon = the term layer; they compose but are distinct
+   passes with distinct authorities). Lean: separate tool, shared
+   gate discipline.
