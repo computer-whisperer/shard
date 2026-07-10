@@ -1,4 +1,5 @@
-;;; canon.shard — the canonical-form recognizer, syntactic tier C1–C6 + C8–C10
+;;; canon.shard — the canonical-form recognizer: syntactic tier C1–C6 +
+;;; C8–C10, and the tier-2 theory check C7 (the append rule set)
 ;;; (docs/CANON.md §3/§5). An ADMISSION-layer predicate over the elaborated
 ;;; core AST: semantics-neutral and trust-neutral — a verdict here can only
 ;;; admit or reject source, never prove anything. Stage-1 enforcement is
@@ -29,8 +30,8 @@
 
 ;; one violation: invariant number (1..10) + a subject symbol for the line
 ;; (C1: the prim; C2: 'if/'match; C3: 'dead/'order/'merge; C4/C5: the ctor
-;; or 'lit/'unreachable; C6: 'S/'Z; C8: 'respell/'rebuild; C9: 'bool;
-;; C10: 'vacif).
+;; or 'lit/'unreachable; C6: 'S/'Z; C7: the rule name (nil_left/cons/
+;; assoc/nil_right); C8: 'respell/'rebuild; C9: 'bool; C10: 'vacif).
 (type CViol (CViol Int Symbol))
 
 ;; ---------------------------------------------------------------------------
@@ -463,6 +464,50 @@
       Nil)
     Nil))
 
+;; ---------------------------------------------------------------------------
+;; C7 — the tier-2 theory check, v1's ONE ratified rule set (CANON.md §5/§6):
+;; the append family, each rule a PROVEN REQUIREMENT in std/list/mod.req.shard:
+;;   append_nil_left    (append Nil ys)         -> ys
+;;   append_cons        (append (Cons h t) ys)  -> (Cons h (append t ys))
+;;   append_assoc       (append (append a b) c) -> (append a (append b c))
+;;   append_nil_right   (append xs Nil)         -> xs
+;; Detection is qname + shape: the rules are keyed to std/list's OWN append
+;; (resolution already happened at load), and the operand types the §6
+;; escape-rule side-condition guards are exactly what the TYPE GATE has
+;; vetted by the time a checked module's advisory matters — this is why C7
+;; is the check-time tier and can never join a read-time refusal stage.
+;; ---------------------------------------------------------------------------
+
+(fn cn_std_list_path () (List Symbol) (list (quote std) (quote list)))
+
+(fn cn_is_std_append ((q QName)) Bool
+  (if (sym_eq (qn_name q) (quote append))
+    (sym_path_eq (qn_mod q) (cn_std_list_path))
+    False))
+
+(fn cn_c7_left ((a Expr)) (List CViol)
+  (match a
+    ((Ctor q _)
+     (if (core_named q (quote Nil)) (Cons (CViol 7 (quote nil_left)) Nil)
+     (if (core_named q (quote Cons)) (Cons (CViol 7 (quote cons)) Nil)
+     Nil)))
+    ((Call q _)
+     (if (cn_is_std_append q) (Cons (CViol 7 (quote assoc)) Nil) Nil))
+    (_ Nil)))
+
+(fn cn_c7_right ((b Expr)) (List CViol)
+  (match b
+    ((Ctor q _)
+     (if (core_named q (quote Nil)) (Cons (CViol 7 (quote nil_right)) Nil) Nil))
+    (_ Nil)))
+
+(fn cn_c7 ((q QName) (args (List Expr))) (List CViol)
+  (if (cn_is_std_append q)
+    (match args
+      ((Cons a (Cons b Nil)) (cn_app (cn_c7_left a) (cn_c7_right b)))
+      (_ Nil))
+    Nil))
+
 (fn cn_c2_if ((c Expr)) (List CViol)
   (match c
     ((Ctor q _)
@@ -492,7 +537,8 @@
 (fn cn_e ((e Expr) (m Module)) (List CViol)
   (measure (struct e))
   (match e
-    ((Call q args) (cn_app (cn_c1 q args) (cn_l args m)))
+    ((Call q args)
+     (cn_app (cn_c1 q args) (cn_app (cn_c7 q args) (cn_l args m))))
     ((Ctor q args) (cn_app (cn_c6 q args) (cn_l args m)))
     ((If c t e2)
      (cn_app

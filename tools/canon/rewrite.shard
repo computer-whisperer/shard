@@ -710,19 +710,37 @@
   (if (cw_ceq t e) (if (cw_keeps_comments n t) (Some t) None) None))
 
 ;; --- C6 (S of a literal) / C1 (ground prim redex) ----------------------------
-(fn cw_rule_call ((n CNode) (bs (List (List Int))) (f CwFacts)) (Option CNode)
+(fn cw_rule_call
+  ((n CNode) (bs (List (List Int))) (f CwFacts) (ap Bool))
+  (Option CNode)
   (match n
     ((CList items)
      (match (cw_head_name items)
        (None None)
        ((Some h)
-        ;; C6 (S/Z tower folds) is REFUSED in v1: the type gate's literal
-        ;; view (tc_nat_lit_view) fires at argument positions but not at
-        ;; the body-vs-declared site, so a folded literal in return
-        ;; position fails to type. The recognizer's C6 stands; the fold
-        ;; unlocks when the view covers every Nat-expected position
-        ;; (queued kernel companion fix, canon-owned).
-        (if (cw_bytes_eq h "S") None
+        ;; C6 S-fold: only at ARGUMENT POSITIONS (ap) — tc_nat_lit_view
+        ;; covers call args and, since the slice-3 companion fix, the
+        ;; whole-body return position; a literal folded at a branch/arm
+        ;; join would not type, so those towers stay advisory.
+        (if (cw_bytes_eq h "S")
+          (if ap
+            (match (cw_payload items)
+              ((Cons _ (Cons x Nil))
+               (match x
+                 ((CAtom a)
+                  (match (cw_atom_int a)
+                    ((Some v)
+                     (if (le 0 v)
+                       (if (cw_core_free "S" bs f)
+                         (if (int_eq (cw_cmt_count n) 0)
+                           (Some (CAtom (show_int (+ v 1))))
+                           None)
+                         None)
+                       None))
+                    (None None)))
+                 (_ None)))
+              (_ None))
+            None)
         (if (cw_core_free h bs f)
           (if (cn_prim_flaggable (sym_of_chars h))
             (match (cw_payload items)
@@ -1428,22 +1446,33 @@
     (None n)
     ((Some r) r)))
 
-(fn cw_apply_call ((n CNode) (bs (List (List Int))) (f CwFacts)) CNode
-  (match (cw_rule_call n bs f)
+(fn cw_apply_call ((n CNode) (bs (List (List Int))) (f CwFacts) (ap Bool)) CNode
+  (match (cw_rule_call n bs f ap)
     (None n)
     ((Some r) r)))
 
-(fn cw_rw_e ((n CNode) (bs (List (List Int))) (f CwFacts)) CNode
+;; ap = ARGUMENT POSITION: this node is the whole fn body or a direct
+;; call/ctor argument — exactly where tc_nat_lit_view guarantees a folded
+;; Nat literal still types. C6 folds (S towers, bare Z) fire only there;
+;; a tower under an if branch, match arm, or let stays advisory (folding
+;; it would leave Int where the join infers no literal — the view sees
+;; types at the join, not the literal).
+(fn cw_rw_e ((n CNode) (bs (List (List Int))) (f CwFacts) (ap Bool)) CNode
   (measure (struct n))
   (match n
-    ((CAtom a) n)
+    ((CAtom a)
+     (if ap
+       (if (cw_bytes_eq a "Z")
+         (if (cw_core_free "Z" bs f) (CAtom "0") n)
+         n)
+       n))
     ((CList items)
      (match (cw_head_name items)
        (None (CList (cw_rw_args items bs f True)))
        ((Some h)
         (if (cw_bytes_eq h "quote") n
         (if (cw_bytes_eq h "if")
-          (cw_apply_if (CList (cw_rw_args items bs f False)) bs f)
+          (cw_apply_if (CList (cw_rw_ifch items bs f)) bs f)
         (if (cw_bytes_eq h "match")
           (cw_rule_match (CList (cw_rw_match items bs f)) bs f)
         (if (cw_bytes_eq h "let")
@@ -1454,8 +1483,25 @@
               (cw_append_names (cw_let_names items f) bs)
               f
               0))
-          (cw_apply_call (CList (cw_rw_args items bs f False)) bs f))))))))
+          (cw_apply_call (CList (cw_rw_args items bs f False)) bs f ap))))))))
     (_ n)))
+
+;; if-form children: cond and branches are NOT argument positions
+(fn cw_rw_ifch ((items (List CNode)) (bs (List (List Int))) (f CwFacts)) (List CNode)
+  (measure (struct items))
+  (match items
+    (Nil Nil)
+    ((Cons h t)
+     (if (cw_is_layout h) (Cons h (cw_rw_ifch t bs f))
+     (Cons h (cw_rw_ifch_go t bs f))))))
+
+(fn cw_rw_ifch_go ((items (List CNode)) (bs (List (List Int))) (f CwFacts)) (List CNode)
+  (measure (struct items))
+  (match items
+    (Nil Nil)
+    ((Cons h t)
+     (if (cw_is_layout h) (Cons h (cw_rw_ifch_go t bs f))
+     (Cons (cw_rw_e h bs f False) (cw_rw_ifch_go t bs f))))))
 
 ;; rewrite payload items as exprs; the head (first payload) is kept unless
 ;; head_too is set (list-headed forms)
@@ -1467,7 +1513,7 @@
     (Nil Nil)
     ((Cons h t)
      (if (cw_is_layout h) (Cons h (cw_rw_args t bs f head_too))
-     (if head_too (Cons (cw_rw_e h bs f) (cw_rw_args t bs f True))
+     (if head_too (Cons (cw_rw_e h bs f True) (cw_rw_args t bs f True))
      (Cons h (cw_rw_args t bs f True)))))))
 
 ;; match form: head kept, scrutinee rewritten, arm bodies rewritten under
@@ -1488,7 +1534,7 @@
     (Nil Nil)
     ((Cons h t)
      (if (cw_is_layout h) (Cons h (cw_rw_match_s t bs f))
-     (Cons (cw_rw_e h bs f) (cw_rw_arms t bs f))))))
+     (Cons (cw_rw_e h bs f False) (cw_rw_arms t bs f))))))
 
 (fn cw_rw_arms ((items (List CNode)) (bs (List (List Int))) (f CwFacts))
   (List CNode)
@@ -1519,7 +1565,7 @@
     (Nil Nil)
     ((Cons h t)
      (if (cw_is_layout h) (Cons h (cw_rw_arm_go t bs2 f pat_seen))
-     (if pat_seen (Cons (cw_rw_e h bs2 f) (cw_rw_arm_go t bs2 f True))
+     (if pat_seen (Cons (cw_rw_e h bs2 f False) (cw_rw_arm_go t bs2 f True))
      (Cons h (cw_rw_arm_go t bs2 f True)))))))
 
 ;; let form: head kept; binding EXPRS under the OUTER scope (parallel Let —
@@ -1539,7 +1585,7 @@
      (if (int_eq seen 0) (Cons h (cw_rw_let_go t bs bs2 f 1))
      (if (int_eq seen 1)
        (Cons (cw_rw_binds_node h bs f) (cw_rw_let_go t bs bs2 f 2))
-       (Cons (cw_rw_e h bs2 f) (cw_rw_let_go t bs bs2 f seen))))))))
+       (Cons (cw_rw_e h bs2 f False) (cw_rw_let_go t bs bs2 f seen))))))))
 
 (fn cw_rw_binds_node ((n CNode) (bs (List (List Int))) (f CwFacts)) CNode
   (measure (struct n))
@@ -1570,7 +1616,7 @@
     (Nil Nil)
     ((Cons h t)
      (if (cw_is_layout h) (Cons h (cw_rw_bind_go t bs f name_seen))
-     (if name_seen (Cons (cw_rw_e h bs f) (cw_rw_bind_go t bs f True))
+     (if name_seen (Cons (cw_rw_e h bs f False) (cw_rw_bind_go t bs f True))
      (Cons h (cw_rw_bind_go t bs f True)))))))
 
 ;; ===========================================================================
@@ -1579,11 +1625,12 @@
 
 ;; iterate the one-pass rewriter to a fixpoint; False = fuel ran out (the
 ;; caller must REFUSE — an unstable rewrite is never emitted)
+;; the fn BODY is an argument position (the return view covers it)
 (fn cw_fix ((n CNode) (bs (List (List Int))) (f CwFacts) (fuel Int))
   (Pair CNode Bool)
   (measure fuel)
   (if (le fuel 0) (Pair n False)
-  (let ((n2 (cw_rw_e n bs f)))
+  (let ((n2 (cw_rw_e n bs f True)))
     (if (cw_ex_eq n2 n) (Pair n True) (cw_fix n2 bs f (- fuel 1))))))
 
 ;; parameter names of a fn form ((x T) (y T) ...) — payload position 2

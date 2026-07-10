@@ -698,8 +698,39 @@ unchanged** (the flagged count prints in the OK line so a vacuous
 census is visible at a glance). Wired into run_corpus's canon gate;
 census.shard is itself self-canonicalized and checks 52/0.
 
-Next slices, in dependency order: the C7 check-time tier over the
-append rule set (slice 3); stage-2 enforcement — std/ canonicalized +
-the corpus sweep pin (slice 4); the §7 hash spec + compute tool
-(slice 5, after the form stabilizes). Queued kernel companion:
-tc_nat_lit_view at every Nat-expected position (unlocks the C6 fold).
+**Slice 3 (2026-07-10): the C7 tier + the tc_nat_lit_view companion
+fix.** Two kernel edits, one rebuild:
+
+- **tc_nat_lit_view at the RETURN position** (kernel/types.shard):
+  tc_check_fn now applies the same literal view per-argument checking
+  always had, so `(fn f () Nat 2)` types — the canonical C6 spelling
+  is legal everywhere the tower was. Value-aware only: Int VARIABLES
+  still never coerce (natview_rejects unchanged); pinned by
+  examples/natview_pin2.shard (incl. the goal-position idiom: goals
+  spell Nat towers freely — they are C6-exempt and the goal type gate
+  wants Nat=Nat). NOT a bidirectional-checking change: a literal at a
+  branch/arm JOIN still synthesizes Int and fails a Nat return — the
+  view sees the literal only where the literal IS the checked term.
+- **C6 leaves the tool's refusal tier, POSITIONALLY**: the rewriter
+  folds ground towers only at argument positions and the whole fn
+  body (an `ap` flag threaded through the walker) — exactly where the
+  view guarantees the folded literal types. Towers under if branches,
+  match arms, or lets stay advisory; folding them would trade a
+  well-typed tower for an Int-vs-Nat refusal.
+- **C7 joins the recognizer** (kernel/canon.shard cn_c7): the four
+  append shapes, keyed by QNAME to std/list's own append (resolution
+  already happened at load) — nil_left / cons / assoc / nil_right,
+  each line naming the proven std/list requirement being refused. The
+  §6 typed side-condition is discharged by placement: by the time a
+  CHECKED module's advisory matters, the type gate has vetted the
+  operands; and C7 stays check-time forever (never joins a read-time
+  refusal stage). The REWRITER does not apply theory rules in v1 —
+  C7 replaces C6 in the roundtrip's refusal tier (3×C3 + 4×C7 = 7).
+- Validated: rejects grows cr_c7a–d (22 advisory lines), pin grows
+  cp_c7 (a rule-free append stays clean) and remains a rewriter fixed
+  point; census grows the Nat whole-body family — 108 terms, 78
+  flagged→fixed, biconditional green with the C6 fold live.
+
+Next slices, in dependency order: stage-2 enforcement — std/
+canonicalized + the corpus sweep pin (slice 4); the §7 hash spec +
+compute tool (slice 5, after the form stabilizes).
