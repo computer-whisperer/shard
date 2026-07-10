@@ -147,9 +147,17 @@ The driver is `mc_check_fn` (kernel/driver.shard). For a fn `F` with
 
    where `E[args] = mc_subst sub msr` substitutes caller params → call args.
 
-Report-only today: a failure prints a `MEASURED … FAIL` line. The pins
-`examples/measure_clause.shard` carry intentional cheats (false decrease / false
-nonneg) that must FAIL.
+ENFORCED since the Phase-D admission-scoping (3e0f582): any `MEASURED … FAIL`
+line in the block makes `mc_outcome` emit a hard `COFail` ("a declared
+(measure …) obligation was not verified"), and an ADMITTED recursive SCC with
+no annotation COFails via `mc_residual_cofails` — the check refuses, it does
+not merely report. (An earlier revision of this section said "report-only";
+that was true only before the flip.) The pins `examples/measure_clause.shard`
+carry intentional cheats (false decrease / false nonneg) that must FAIL, and
+`examples/struct_mutual_list.shard` pins the fuel-free CODE-WALKER shape — a
+mutual struct-measure pair descending through a List-of-self ctor field
+(`TI → List TI → TI`, the render_term/xeff recursion pattern), proof-admitted
+so the gate actually gates it.
 
 ## 6. The mutual extension [BUILT]
 
