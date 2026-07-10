@@ -109,22 +109,43 @@ pub(crate) fn edges_asset(lay: &Layout) -> VectorAsset {
     edges_asset_scaled(lay, 1.0)
 }
 
+/// How an intra-level edge reads: the call/import web, a proof-layer lemma
+/// citation, or a claim→fn subject link. Colors keep the project-wide
+/// convention (Systems view heat): **amber = proof**.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EdgeClass {
+    /// fn → fn call (or dir-level import) — the implementation web.
+    Flow,
+    /// claim → cited claim/axiom — the proof-dependency web.
+    Cite,
+    /// claim → subject fn — where a statement touches down on the code.
+    About,
+}
+
 /// [`edges_asset`] with stroke widths and arrowheads multiplied by `scale`.
 /// The Map draws content at zooms far below 1:1 where a 1.5-content-px spline
 /// disappears; passing `1/zoom` (clamped ≥ 1) keeps edges hairline-visible on
 /// screen at any distance — cartographic line weight, not content geometry.
 pub(crate) fn edges_asset_scaled(lay: &Layout, scale: f32) -> VectorAsset {
+    edges_asset_classed(lay, scale, &[])
+}
+
+/// [`edges_asset_scaled`] with a per-edge class, index-aligned with the input
+/// `Graph::edges` (as `Layout::edges` is). Missing entries read as [`EdgeClass::Flow`].
+pub(crate) fn edges_asset_classed(lay: &Layout, scale: f32, classes: &[EdgeClass]) -> VectorAsset {
     let mut paths = Vec::new();
-    for e in &lay.edges {
+    for (k, e) in lay.edges.iter().enumerate() {
         if e.points.len() < 2 {
             continue;
         }
-        // Mutual-recursion return arcs get a dimmer, distinct tint so they read
-        // as cycles rather than mystery lines crossing the flow.
-        let color = if e.back {
-            tokens::ACCENT
-        } else {
-            tokens::MUTED_FOREGROUND
+        let class = classes.get(k).copied().unwrap_or(EdgeClass::Flow);
+        let color = match class {
+            // Mutual-recursion return arcs get a dimmer, distinct tint so they
+            // read as cycles rather than mystery lines crossing the flow.
+            EdgeClass::Flow if e.back => tokens::ACCENT,
+            EdgeClass::Flow => tokens::MUTED_FOREGROUND,
+            EdgeClass::Cite => tokens::WARNING.mix(tokens::MUTED_FOREGROUND, 0.25),
+            EdgeClass::About => tokens::WARNING.mix(tokens::MUTED_FOREGROUND, 0.7),
         };
         paths.push(edge_curve(&e.points, e.back, color, 1.5 * scale));
         let n = e.points.len();

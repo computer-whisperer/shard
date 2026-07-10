@@ -14,18 +14,40 @@ call-neighborhood, or the whole project. Each view projects that scope down to
 what it needs (the single-file views read its *focus file*; the Map view reads
 the full fn/file sets), so selection is unified rather than per-view.
 
-**Map** *(experimental — being built)* — the unified view: any scope's fns,
-grouped by origin **dir ⊃ file** into nested bounding boxes, each fn drawn in
-the Flow form. Pick a file or a directory in the sidebar to scope it. The layout
-is a **recursive graph-placement** pass mirroring the program's own tree, and at
-*every* level it is **link-based**: inside a file box the fns are placed by the
-file's intra-file **call graph**, and inside a dir box the child file/subdir
-boxes are placed by the **import DAG** among them (aggregated — a subdir imports
-another when any of its files do). Each level is sized bottom-up by the
-*measured* intrinsic size of the level below (`layout::intrinsic`): a card
-measures itself, a file box measures its laid-out call graph, a dir box measures
-its laid-out import graph — so the engine always has real sizes and there is
-**no estimation** (contrast the Board's `est()`).
+**Map** *(experimental — being built)* — the unified view: any scope's fns
+**and proof-layer forms**, grouped by origin **dir ⊃ file** into nested
+bounding boxes, each fn drawn in the Flow form. Pick a file or a directory in
+the sidebar to scope it. The layout is a **recursive graph-placement** pass
+mirroring the program's own tree, and at *every* level it is **link-based**:
+inside a file box the fns are placed by the file's intra-file **call graph**
+(and the claims by their citations — see below), and inside a dir box the
+child file/subdir boxes are placed by the **import DAG** among them
+(aggregated — a subdir imports another when any of its files do). Each level
+is sized bottom-up by the *measured* intrinsic size of the level below
+(`layout::intrinsic`): a card measures itself, a file box measures its
+laid-out call graph, a dir box measures its laid-out import graph — so the
+engine always has real sizes and there is **no estimation** (contrast the
+Board's `est()`).
+
+**The proof layer is first-class**: every `(claim …)`, `(axiom …)`,
+`(requirement …)`, and `(fulfills …)` form is a **claim card** beside the fn
+cards in its file box — kind tag + name + the goal statement. The model
+(`model.rs::ClaimDef`) resolves two edge families the same shallow
+same-file-first way calls resolve: **citations** (claim → the claims/axioms
+its proof mentions; a fulfills cites its requirement, which is what marks it
+fulfilled) and **subjects** (claim → the fns its `(goal …)` statement
+mentions), and both feed the file's Sugiyama graph — proofs place upstream of
+the lemmas and code they lean on. Colors keep the project-wide convention
+(**amber = proof**, same as the Systems heat): axioms are the loud amber
+(assumed, not proven — the trust roots), plain claims a faint wash,
+requirements **green once fulfilled and red while open** — an unmet
+obligation is visible from across the room. Citation edges draw amber,
+subject edges muted; the kind tint stays on the slab at any zoom, so the wide
+view still reads *where the proof mass and the assumptions live*. A
+statements-only file (`kernel/facts.shard`) earns its box from its claims
+alone. Scopes follow suit (`Scope::claims`): file/dir/project scopes carry
+their files' claims, and fn-anchored scopes (`Fn`, `CallTree`) pull in the
+claims *about* their fns from wherever those claims live.
 
 **One committed topology per scope (the cartographic rule)**: the layout is a
 pure function of the scope — zoom, selection, and the pointer never move

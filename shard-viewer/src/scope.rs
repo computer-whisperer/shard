@@ -63,14 +63,42 @@ impl Scope {
         }
     }
 
+    /// The proof-layer forms in scope (indices into `project.claims`), the
+    /// statement counterpart of [`Self::fns`]. File-anchored scopes take every
+    /// claim living in their files; fn-anchored scopes (`Fn`, `CallTree`) take
+    /// the claims *about* their fns, wherever those claims live.
+    pub fn claims(&self, project: &Project) -> Vec<usize> {
+        match self {
+            Scope::None => Vec::new(),
+            Scope::File(i) => {
+                project.files.get(*i).map(|f| f.claims.clone()).unwrap_or_default()
+            }
+            Scope::Dir(prefix) => (0..project.claims.len())
+                .filter(|&ci| {
+                    dir_contains(prefix, &project.files[project.claims[ci].file].rel)
+                })
+                .collect(),
+            Scope::Project => (0..project.claims.len()).collect(),
+            Scope::Fn(_) | Scope::CallTree { .. } => {
+                let fns: BTreeSet<usize> = self.fns(project).into_iter().collect();
+                (0..project.claims.len())
+                    .filter(|&ci| project.claims[ci].about.iter().any(|a| fns.contains(a)))
+                    .collect()
+            }
+        }
+    }
+
     /// The files this scope spans, ascending — the dir/file boxes the Map view
-    /// groups its fn cards under. Derived from [`Self::fns`] so the two agree.
+    /// groups its cards under. Derived from [`Self::fns`] + [`Self::claims`]
+    /// so the three agree (a statements-only file like `kernel/facts.shard`
+    /// earns its box from its claims).
     pub fn files(&self, project: &Project) -> Vec<usize> {
         match self {
             Scope::File(i) => vec![*i],
             _ => {
-                let set: BTreeSet<usize> =
+                let mut set: BTreeSet<usize> =
                     self.fns(project).iter().map(|&fi| project.fns[fi].file).collect();
+                set.extend(self.claims(project).iter().map(|&ci| project.claims[ci].file));
                 set.into_iter().collect()
             }
         }

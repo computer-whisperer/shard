@@ -44,11 +44,14 @@
 //! longer depends on zoom, so the old fit⇄extent feedback loop cannot exist.
 
 use super::flow::render_region;
-use super::shared::{edges_asset_scaled, pan_zoom_viewport_min, placed_graph};
+use super::shared::{
+    edges_asset_classed, edges_asset_scaled, legend_chip, pan_zoom_viewport_min, placed_graph,
+    EdgeClass,
+};
 use super::SUB_SIZE;
 use crate::flow::Region;
 use crate::layout::{self, EndPoint, GEdge, GNode, Graph, Layout};
-use crate::model::{FnDef, Project};
+use crate::model::{ClaimDef, ClaimKind, FnDef, Project};
 use crate::scope::Scope;
 use crate::view::ViewParams;
 use damascene_core::layout::intrinsic;
@@ -58,9 +61,12 @@ use std::collections::BTreeMap;
 pub(crate) fn legend(flow_z: f32) -> El {
     row([
         text("map").mono().muted().font_size(SUB_SIZE),
-        text("one committed layout per scope · dir/file boxes placed by imports · fns by calls · zoom reveals detail in place · click a fn to select it")
+        text("one committed layout per scope · boxes by imports, fns by calls, claims by citations · zoom reveals detail in place")
             .muted()
             .font_size(SUB_SIZE),
+        legend_chip(claim_colors(ClaimKind::Axiom, false).0, "axiom"),
+        legend_chip(claim_colors(ClaimKind::Claim, false).0, "claim"),
+        legend_chip(claim_colors(ClaimKind::Requirement, false).0, "unmet req"),
         spacer(),
         text("innards ≥").muted().font_size(SUB_SIZE),
         button("−")
@@ -134,6 +140,17 @@ struct LevelGeom {
     /// Where the level's content starts inside its enclosing box (chrome
     /// padding + label band). Zero for the boxless root.
     off: (f32, f32),
+    /// Per-edge class, index-aligned with the layout's edges (empty = all
+    /// [`EdgeClass::Flow`] — dir levels, whose edges are all imports).
+    classes: Vec<EdgeClass>,
+}
+
+/// One slot in a file box: a fn (flow card) or a proof-layer form (claim
+/// card). Slot order per file = fns in definition order, then claims.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Member {
+    Fn(usize),
+    Claim(usize),
 }
 
 /// The app-owned per-scope cache of committed maps, lent to the pure view.
@@ -164,7 +181,8 @@ pub fn region_rect(cache: &MapCache, plane: &Scope, target: MapTarget) -> Option
 
 pub(crate) fn canvas(project: &Project, p: &ViewParams, cache: Option<&MapCache>) -> El {
     let fns = p.scope.fns(project);
-    if fns.is_empty() {
+    let claims = p.scope.claims(project);
+    if fns.is_empty() && claims.is_empty() {
         return column([
             h3("Map"),
             text("Pick a file or directory in the sidebar to scope the map.").muted(),
@@ -173,11 +191,16 @@ pub(crate) fn canvas(project: &Project, p: &ViewParams, cache: Option<&MapCache>
         .padding(tokens::SPACE_8);
     }
 
-    // The in-scope fns of each file (a scope may include only some of a file's
-    // fns, e.g. a call-tree), keyed by file and kept in definition order.
-    let mut by_file: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    // The in-scope members of each file (a scope may include only some of a
+    // file's fns, e.g. a call-tree), keyed by file: fns in definition order,
+    // then the proof-layer forms. A statements-only file (kernel/facts.shard)
+    // gets its box from the claim loop alone.
+    let mut by_file: BTreeMap<usize, Vec<Member>> = BTreeMap::new();
     for &fi in &fns {
-        by_file.entry(project.fns[fi].file).or_default().push(fi);
+        by_file.entry(project.fns[fi].file).or_default().push(Member::Fn(fi));
+    }
+    for &ci in &claims {
+        by_file.entry(project.claims[ci].file).or_default().push(Member::Claim(ci));
     }
     // The dir tree over the spanned files — the walk order both passes share.
     let mut root = DirNode::default();
@@ -254,7 +277,7 @@ pub(crate) fn canvas(project: &Project, p: &ViewParams, cache: Option<&MapCache>
 fn commit(
     project: &Project,
     scope: &Scope,
-    by_file: &BTreeMap<usize, Vec<usize>>,
+    by_file: &BTreeMap<usize, Vec<Member>>,
     root: &DirNode,
 ) -> Committed {
     let mut out = Committed {
@@ -303,7 +326,7 @@ fn region_pass(com: &mut Committed, node: &DirNode, path: &str, origin: (f32, f3
 /// bottom-up, placed by the import DAG among them. Returns the level's size.
 fn commit_children(
     project: &Project,
-    by_file: &BTreeMap<usize, Vec<usize>>,
+    by_file: &BTreeMap<usize, Vec<Member>>,
     node: &DirNode,
     path: &str,
     out: &mut Committed,
@@ -341,47 +364,85 @@ fn commit_children(
     let nodes: Vec<GNode> = sizes.iter().map(|&(w, h)| GNode::simple(w, h)).collect();
     let lay = layout::layout(&Graph { nodes, edges }, &layout::LayoutConfig::default());
     let size = (lay.width, lay.height);
-    out.dirs.insert(path.to_string(), LevelGeom { lay, off: (0.0, 0.0) });
+    out.dirs
+        .insert(path.to_string(), LevelGeom { lay, off: (0.0, 0.0), classes: Vec::new() });
     size
 }
 
-/// Commit one file: every in-scope fn measured as a full flow card, placed by
-/// the intra-file call graph. Returns the file *box* size (content + chrome).
+/// Commit one file: every in-scope fn measured as a full flow card and every
+/// in-scope claim as a claim card, placed together by the intra-file call +
+/// proof-citation graph. Returns the file *box* size (content + chrome).
 fn commit_file(
     project: &Project,
-    by_file: &BTreeMap<usize, Vec<usize>>,
+    by_file: &BTreeMap<usize, Vec<Member>>,
     file: usize,
     out: &mut Committed,
 ) -> (f32, f32) {
     let members = &by_file[&file];
     let nodes: Vec<GNode> = members
         .iter()
-        .map(|&fi| {
-            let (w, h) = intrinsic(&flow_card(project, fi, false));
+        .map(|&m| {
+            let (w, h) = match m {
+                Member::Fn(fi) => intrinsic(&flow_card(project, fi, false)),
+                Member::Claim(ci) => intrinsic(&claim_card(project, ci)),
+            };
             GNode::simple(w, h)
         })
         .collect();
 
-    // Intra-file call edges between in-scope members (dedup, no self-loops).
-    let local: BTreeMap<usize, usize> = members.iter().enumerate().map(|(i, &g)| (g, i)).collect();
+    // Slot indices per layer, for edge resolution within this file.
+    let mut fn_slot: BTreeMap<usize, usize> = BTreeMap::new();
+    let mut claim_slot: BTreeMap<usize, usize> = BTreeMap::new();
+    for (i, &m) in members.iter().enumerate() {
+        match m {
+            Member::Fn(g) => fn_slot.insert(g, i),
+            Member::Claim(c) => claim_slot.insert(c, i),
+        };
+    }
+
+    // Intra-file edges between in-scope members (dedup, no self-loops):
+    // fn→fn calls, claim→claim citations, claim→fn subject links. Placement
+    // follows dependency for all three, so proofs sit upstream of the lemmas
+    // and code they lean on, the way callers sit upstream of callees.
     let mut seen = std::collections::HashSet::new();
     let mut edges = Vec::new();
-    for (i, &g) in members.iter().enumerate() {
-        for &callee in &project.fns[g].calls {
-            if let Some(&j) = local.get(&callee)
-                && i != j
-                && seen.insert((i, j))
-            {
-                edges.push(GEdge {
-                    from: EndPoint { node: i, port: 0 },
-                    to: EndPoint { node: j, port: 0 },
-                });
+    let mut classes = Vec::new();
+    let mut push = |i: usize, j: usize, class: EdgeClass, edges: &mut Vec<GEdge>| {
+        if i != j && seen.insert((i, j)) {
+            edges.push(GEdge {
+                from: EndPoint { node: i, port: 0 },
+                to: EndPoint { node: j, port: 0 },
+            });
+            classes.push(class);
+        }
+    };
+    for (i, &m) in members.iter().enumerate() {
+        match m {
+            Member::Fn(g) => {
+                for &callee in &project.fns[g].calls {
+                    if let Some(&j) = fn_slot.get(&callee) {
+                        push(i, j, EdgeClass::Flow, &mut edges);
+                    }
+                }
+            }
+            Member::Claim(c) => {
+                for &cited in &project.claims[c].cites {
+                    if let Some(&j) = claim_slot.get(&cited) {
+                        push(i, j, EdgeClass::Cite, &mut edges);
+                    }
+                }
+                for &subject in &project.claims[c].about {
+                    if let Some(&j) = fn_slot.get(&subject) {
+                        push(i, j, EdgeClass::About, &mut edges);
+                    }
+                }
             }
         }
     }
+    let (nfns, nclaims) = (fn_slot.len(), claim_slot.len());
     let lay = layout::layout(&Graph { nodes, edges }, &layout::LayoutConfig::default());
-    let m = box_metrics(|| file_header(project, file, members.len()), lay.width, lay.height);
-    out.files.insert(file, LevelGeom { lay, off: m.off });
+    let m = box_metrics(|| file_header(project, file, nfns, nclaims), lay.width, lay.height);
+    out.files.insert(file, LevelGeom { lay, off: m.off, classes });
     m.size
 }
 
@@ -408,12 +469,17 @@ fn box_metrics(header: impl Fn() -> El, iw: f32, ih: f32) -> BoxMetrics {
 
 /// The header row a file box is sized around (also the committed band height —
 /// the render-pass label may draw bigger *over* the box, never into layout).
-fn file_header(project: &Project, file: usize, n: usize) -> El {
+fn file_header(project: &Project, file: usize, nfns: usize, nclaims: usize) -> El {
     let f = &project.files[file];
     let base = f.rel.rsplit_once('/').map(|(_, b)| b).unwrap_or(&f.rel);
+    let what = match (nfns, nclaims) {
+        (n, 0) => format!("{n} fns"),
+        (0, m) => format!("{m} claims"),
+        (n, m) => format!("{n} fns · {m} claims"),
+    };
     row([
         text(base.to_string()).mono().semibold().font_size(12.0).nowrap_text(),
-        text(format!("{n} fns")).mono().muted().font_size(SUB_SIZE).nowrap_text(),
+        text(what).mono().muted().font_size(SUB_SIZE).nowrap_text(),
     ])
     .gap(tokens::SPACE_2)
     .align(Align::Center)
@@ -446,7 +512,7 @@ fn imports_between(
 /// Per-frame inputs to the render walk.
 struct RCtx<'a> {
     project: &'a Project,
-    by_file: &'a BTreeMap<usize, Vec<usize>>,
+    by_file: &'a BTreeMap<usize, Vec<Member>>,
     selected_fn: Option<usize>,
     /// Effective zoom — prices every screen-space LOD decision.
     zoom: f32,
@@ -576,9 +642,13 @@ fn file_el(
         let slots: Vec<El> = members
             .iter()
             .enumerate()
-            .map(|(i, &g)| {
+            .map(|(i, &m)| {
                 let n = &geom.lay.nodes[i];
-                fn_el(ctx, g, (n.w, n.h), (inner_origin.0 + n.x, inner_origin.1 + n.y))
+                let slot_abs = (inner_origin.0 + n.x, inner_origin.1 + n.y);
+                match m {
+                    Member::Fn(g) => fn_el(ctx, g, (n.w, n.h), slot_abs),
+                    Member::Claim(c) => claim_el(ctx, c, (n.w, n.h), slot_abs),
+                }
             })
             .collect();
         // Edge LOD: below ~EDGE_PX on screen the intra-file web is unreadable
@@ -586,7 +656,7 @@ fn file_el(
         // left, callees right), so the overlay is dropped. Pure rendering:
         // the routes were committed with the layout and never change.
         let edge_overlay = if geom.lay.width.min(geom.lay.height) * ctx.zoom >= EDGE_PX {
-            edges_asset_scaled(&geom.lay, ctx.hairline())
+            edges_asset_classed(&geom.lay, ctx.hairline(), &geom.classes)
         } else {
             VectorAsset::from_paths([0.0, 0.0, geom.lay.width, geom.lay.height], Vec::new())
         };
@@ -596,6 +666,11 @@ fn file_el(
     if let Some((lbl, _)) = carto_label(base, FILE_LABEL_PX, ctx.zoom, w, h, abs, shade) {
         layers.push(lbl);
     }
+    let (nfns, nclaims) =
+        members.iter().fold((0, 0), |(a, b), m| match m {
+            Member::Fn(_) => (a + 1, b),
+            Member::Claim(_) => (a, b + 1),
+        });
     stack(layers)
         .width(Size::Fixed(w))
         .height(Size::Fixed(h))
@@ -603,7 +678,13 @@ fn file_el(
         .stroke(tokens::BORDER)
         .stroke_width(ctx.hairline())
         .radius(8.0)
-        .tooltip(format!("{} · {} fns · {} lines", f.rel, members.len(), f.counts.total()))
+        .tooltip(format!(
+            "{} · {} fns · {} claims · {} lines",
+            f.rel,
+            nfns,
+            nclaims,
+            f.counts.total()
+        ))
 }
 
 /// One fn slot at its committed footprint: flow innards when in view and the
@@ -639,6 +720,121 @@ fn fn_el(ctx: &RCtx, fn_idx: usize, (w, h): (f32, f32), abs: (f32, f32)) -> El {
         .stroke_width(ctx.hairline())
         .key(format!("fn:{fn_idx}"))
         .tooltip(super::methods::node_tip(ctx.project, fn_idx))
+}
+
+/// One claim slot at its committed footprint, mirroring [`fn_el`]: the full
+/// claim card past the flow threshold, else a name slab. The kind tint stays
+/// on the slab at any distance — amber specks are axioms, red ones unmet
+/// requirements; that *is* the wide-view proof-layer read.
+fn claim_el(ctx: &RCtx, ci: usize, (w, h): (f32, f32), abs: (f32, f32)) -> El {
+    if !ctx.in_view(abs.0, abs.1, w, h) {
+        return blank();
+    }
+    if ctx.zoom >= ctx.flow_z {
+        return claim_card(ctx.project, ci);
+    }
+    let c = &ctx.project.claims[ci];
+    let (fill, stroke) = claim_colors(c.kind, c.fulfilled);
+    let chars = c.name.chars().count().max(1) as f32;
+    let font = (NAME_PX / ctx.zoom).min(h * 0.45).min(w * 0.92 / (chars * MONO_ADV));
+    let body: Vec<El> = if font * ctx.zoom >= LEGIBLE_PX {
+        vec![text(c.name.clone()).mono().semibold().font_size(font).nowrap_text()]
+    } else {
+        Vec::new()
+    };
+    column(body)
+        .align(Align::Center)
+        .justify(Justify::Center)
+        .width(Size::Fixed(w))
+        .height(Size::Fixed(h))
+        .radius(7.0)
+        .fill(fill)
+        .stroke(stroke)
+        .stroke_width(ctx.hairline())
+        .key(format!("claim:{ci}"))
+        .tooltip(claim_tip(c))
+}
+
+/// The proof-layer card colors `(fill, stroke)` by kind — the Map's arm of
+/// the project-wide convention (Systems heat): **amber = proof**. Axioms are
+/// the loud amber (assumed, not proven — trust roots), plain claims a faint
+/// wash, requirements green once fulfilled and red while open.
+fn claim_colors(kind: ClaimKind, fulfilled: bool) -> (Color, Color) {
+    match (kind, fulfilled) {
+        (ClaimKind::Axiom, _) => {
+            (tokens::CARD.mix(tokens::WARNING, 0.22), tokens::WARNING.mix(tokens::BORDER, 0.35))
+        }
+        (ClaimKind::Requirement, false) => (
+            tokens::CARD.mix(tokens::DESTRUCTIVE, 0.35),
+            tokens::DESTRUCTIVE.mix(tokens::FOREGROUND, 0.35),
+        ),
+        (ClaimKind::Requirement, true) => {
+            (tokens::CARD.mix(tokens::SUCCESS, 0.12), tokens::SUCCESS.mix(tokens::BORDER, 0.5))
+        }
+        (ClaimKind::Claim | ClaimKind::Fulfills, _) => {
+            (tokens::CARD.mix(tokens::WARNING, 0.08), tokens::BORDER)
+        }
+    }
+}
+
+/// The kind tag a claim card leads with, and its text tint.
+fn claim_tag(c: &ClaimDef) -> (&'static str, Color) {
+    match (c.kind, c.fulfilled) {
+        (ClaimKind::Axiom, _) => ("axiom", tokens::WARNING),
+        (ClaimKind::Claim, _) => ("claim", tokens::WARNING.mix(tokens::MUTED_FOREGROUND, 0.5)),
+        (ClaimKind::Requirement, true) => ("req ✓", tokens::SUCCESS),
+        (ClaimKind::Requirement, false) => ("req ✗", tokens::DESTRUCTIVE.mix(tokens::FOREGROUND, 0.4)),
+        (ClaimKind::Fulfills, _) => ("proof", tokens::WARNING.mix(tokens::MUTED_FOREGROUND, 0.5)),
+    }
+}
+
+fn claim_tip(c: &ClaimDef) -> String {
+    let (tag, _) = claim_tag(c);
+    format!("{tag} {}\n{}\ncites {} · about {} fns", c.name, c.goal, c.cites.len(), c.about.len())
+}
+
+/// One proof-layer form as an intrinsic card: kind tag + name, then the goal
+/// statement. Like [`flow_card`] it hugs — the commit pass measures exactly
+/// this construction, so it lands in its footprint.
+fn claim_card(project: &Project, ci: usize) -> El {
+    let c = &project.claims[ci];
+    let (tag, tag_color) = claim_tag(c);
+    let (fill, stroke) = claim_colors(c.kind, c.fulfilled);
+    let title = row([
+        text(tag).mono().semibold().font_size(SUB_SIZE).text_color(tag_color).nowrap_text(),
+        text(c.name.clone())
+            .mono()
+            .semibold()
+            .font_size(super::TITLE_SIZE)
+            .nowrap_text()
+            .ellipsis(),
+    ])
+    .gap(tokens::SPACE_2)
+    .align(Align::Center);
+    let mut parts = vec![title];
+    if !c.goal.is_empty() {
+        parts.push(
+            text(ellipt(&c.goal, 52)).mono().muted().font_size(SUB_SIZE).nowrap_text(),
+        );
+    }
+    column(parts)
+        .gap(tokens::SPACE_1)
+        .padding(8.0)
+        .radius(7.0)
+        .fill(fill)
+        .stroke(stroke)
+        .key(format!("claim:{ci}"))
+        .tooltip(claim_tip(c))
+}
+
+/// Truncate to `max` chars with an ellipsis (goal statements can be long).
+fn ellipt(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let cut: String = s.chars().take(max - 1).collect();
+        format!("{cut}…")
+    }
 }
 
 /// A label drawn *over* a box at a screen-constant font, clamped so it stays
@@ -854,6 +1050,7 @@ mod tests {
         LevelGeom {
             lay: Layout { nodes, edges: Vec::new(), width: 500.0, height: 300.0 },
             off,
+            classes: Vec::new(),
         }
     }
 

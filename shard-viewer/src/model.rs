@@ -35,6 +35,46 @@ pub struct FnDef {
     pub proof_refd: bool,
 }
 
+/// Which proof-layer form a [`ClaimDef`] came from. Together these are the
+/// project's *statements* — the layer that reasons about the fns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaimKind {
+    /// `(claim NAME (goal …) PROOF)` — a self-contained proven lemma.
+    Claim,
+    /// `(axiom NAME (kind …) (goal …))` — assumed, not proven: a trust root.
+    Axiom,
+    /// `(requirement NAME (goal …))` — a declared obligation, proof elsewhere.
+    Requirement,
+    /// `(fulfills NAME PROOF)` — the proof discharging requirement `NAME`.
+    Fulfills,
+}
+
+/// A proof-layer form: claim, axiom, requirement, or fulfills. The proof
+/// analog of [`FnDef`] — a named node with resolved edges into both layers.
+#[derive(Debug, Clone)]
+pub struct ClaimDef {
+    pub name: String,
+    pub kind: ClaimKind,
+    pub file: usize,
+    /// The whole parsed form (kept like a fn's body — a future proof-card
+    /// renderer draws structure from it).
+    pub form: Sexpr,
+    /// The verbatim source text of the form.
+    pub src: String,
+    /// The goal statement, prettied (a fulfills inherits its requirement's).
+    pub goal: String,
+    /// Resolved proof-layer citations: claims/axioms whose names this form's
+    /// proof mentions (for a fulfills, that includes its requirement). Same
+    /// shallow same-file-first resolution as fn calls.
+    pub cites: Vec<usize>,
+    /// Resolved fn indices the *statement* (the `(goal …)` subform, or the
+    /// whole form when there is none) reasons about.
+    pub about: Vec<usize>,
+    /// Requirement only: a `(fulfills NAME …)` exists somewhere. An
+    /// unfulfilled requirement is an open obligation — views draw it loud.
+    pub fulfilled: bool,
+}
+
 impl FnDef {
     /// Source line count of the definition form — a cheap complexity proxy.
     pub fn src_lines(&self) -> usize {
@@ -176,7 +216,7 @@ pub struct ShardFile {
     pub import_targets: Vec<usize>,
     pub fns: Vec<usize>, // indices into Project::fns
     pub types: Vec<String>,
-    pub claims: Vec<String>,
+    pub claims: Vec<usize>, // indices into Project::claims
     /// Line tally by complexity category (the heat-map source).
     pub counts: Counts,
     pub parse_error: Option<String>,
@@ -187,8 +227,13 @@ pub struct Project {
     pub root: PathBuf,
     pub files: Vec<ShardFile>,
     pub fns: Vec<FnDef>,
+    /// Every proof-layer form in the project (see [`ClaimDef`]).
+    pub claims: Vec<ClaimDef>,
     /// fn short-name -> indices (homonyms across files are common in shard).
     pub by_name: HashMap<String, Vec<usize>>,
+    /// Citable claim name -> indices. Fulfills forms are excluded: their name
+    /// *refers to* a requirement, it doesn't declare a citable statement.
+    pub claims_by_name: HashMap<String, Vec<usize>>,
     /// Short names referenced anywhere in a claim/fulfills/requirement form
     /// (the proof "uses" set — a fn here is reasoned about, not dead).
     pub proof_refs: BTreeSet<String>,
@@ -243,6 +288,7 @@ impl Project {
 
         project.build_name_index();
         project.resolve_calls();
+        project.resolve_claims();
         project.resolve_imports();
         // Mark fns reasoned about in proofs so they don't read as dead code.
         for f in &mut project.fns {
@@ -279,6 +325,11 @@ impl Project {
     fn build_name_index(&mut self) {
         for (i, f) in self.fns.iter().enumerate() {
             self.by_name.entry(f.name.clone()).or_default().push(i);
+        }
+        for (i, c) in self.claims.iter().enumerate() {
+            if c.kind != ClaimKind::Fulfills {
+                self.claims_by_name.entry(c.name.clone()).or_default().push(i);
+            }
         }
     }
 
@@ -323,6 +374,104 @@ impl Project {
             }
         }
     }
+
+    /// Resolve the proof layer's edges, the claim analog of [`Self::resolve_calls`]:
+    /// `cites` from every name the form mentions that is a citable claim, `about`
+    /// from the fn names its statement mentions — both same-file-first. Then mark
+    /// each requirement some fulfills discharges.
+    fn resolve_claims(&mut self) {
+        for i in 0..self.claims.len() {
+            let binders = goal_binders(&self.claims[i].form);
+            let mut refs = BTreeSet::new();
+            collect_refs(&self.claims[i].form, &binders, &mut refs);
+            if self.claims[i].kind != ClaimKind::Fulfills {
+                refs.remove(&self.claims[i].name); // its own head name
+            }
+            // The statement's subject fns come from the (goal …) subform alone —
+            // proof-body mentions (tactic keywords, premise handles, farkas
+            // coefficients) would drown the signal. A fulfills has no goal of its
+            // own, so its whole form speaks (unfold targets ARE its subjects).
+            let stmt_refs = match goal_form(&self.claims[i].form) {
+                Some(g) => {
+                    let mut s = BTreeSet::new();
+                    collect_refs(g, &binders, &mut s);
+                    s
+                }
+                None => refs.clone(),
+            };
+            let file = self.claims[i].file;
+            let mut cites = BTreeSet::new();
+            for r in &refs {
+                if let Some(targets) = self.claims_by_name.get(r) {
+                    let local: Vec<usize> = targets
+                        .iter()
+                        .copied()
+                        .filter(|&t| self.claims[t].file == file)
+                        .collect();
+                    let chosen = if local.is_empty() { targets } else { &local };
+                    cites.extend(chosen.iter().copied().filter(|&t| t != i));
+                }
+            }
+            let mut about = BTreeSet::new();
+            for r in &stmt_refs {
+                if let Some(targets) = self.by_name.get(r) {
+                    let local: Vec<usize> = targets
+                        .iter()
+                        .copied()
+                        .filter(|&t| self.fns[t].file == file)
+                        .collect();
+                    let chosen = if local.is_empty() { targets } else { &local };
+                    about.extend(chosen.iter().copied());
+                }
+            }
+            self.claims[i].cites = cites.into_iter().collect();
+            self.claims[i].about = about.into_iter().collect();
+        }
+        // A fulfills discharges every requirement it cites by name (normally
+        // exactly one) and inherits its goal statement for display.
+        for i in 0..self.claims.len() {
+            if self.claims[i].kind != ClaimKind::Fulfills {
+                continue;
+            }
+            for t in self.claims[i].cites.clone() {
+                if self.claims[t].kind == ClaimKind::Requirement {
+                    self.claims[t].fulfilled = true;
+                    if self.claims[i].goal.is_empty() {
+                        self.claims[i].goal = self.claims[t].goal.clone();
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The `(goal BINDERS PREMISES GOAL)` subform of a proof-layer form.
+fn goal_form(form: &Sexpr) -> Option<&Sexpr> {
+    form.as_list()?.iter().find(|it| it.head() == Some("goal"))
+}
+
+/// The bound variable names of the form's goal — the claim analog of fn
+/// params for ref collection (locals, not project names).
+fn goal_binders(form: &Sexpr) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    if let Some(g) = goal_form(form)
+        && let Some(gi) = g.as_list()
+        && let Some(Sexpr::List(binders)) = gi.get(1)
+    {
+        for b in binders {
+            if let Some(pair) = b.as_list()
+                && let Some(Sexpr::Sym(n)) = pair.first()
+            {
+                out.insert(n.clone());
+            }
+        }
+    }
+    out
+}
+
+/// The goal statement (the final term of the `(goal …)` subform), prettied.
+fn goal_text(form: &Sexpr) -> Option<String> {
+    Some(pretty(goal_form(form)?.as_list()?.last()?))
 }
 
 /// Collect every symbol a body references that *could* name a fn. Skips the
@@ -392,15 +541,32 @@ fn extract_file(project: &mut Project, file: &mut ShardFile, forms: Vec<(Sexpr, 
                     file.types.push(name.to_string());
                 }
             }
-            Some("claim") | Some("requirement") | Some("fulfills") => {
-                if let Sexpr::List(items) = &form
-                    && let Some(name) = items.get(1).and_then(|s| s.as_sym())
-                {
-                    file.claims.push(name.to_string());
-                }
+            Some(head @ ("claim" | "requirement" | "fulfills" | "axiom")) => {
                 // Every symbol the proof form mentions is a "use": the fns it
                 // reasons about (goal terms) and cites (lemma/premise names).
                 collect_refs(&form, &BTreeSet::new(), &mut project.proof_refs);
+                if let Sexpr::List(items) = &form
+                    && let Some(name) = items.get(1).and_then(|s| s.as_sym())
+                {
+                    let kind = match head {
+                        "axiom" => ClaimKind::Axiom,
+                        "requirement" => ClaimKind::Requirement,
+                        "fulfills" => ClaimKind::Fulfills,
+                        _ => ClaimKind::Claim,
+                    };
+                    file.claims.push(project.claims.len());
+                    project.claims.push(ClaimDef {
+                        name: name.to_string(),
+                        kind,
+                        file: file_idx,
+                        goal: goal_text(&form).unwrap_or_default(),
+                        form,
+                        src,
+                        cites: Vec::new(),
+                        about: Vec::new(),
+                        fulfilled: false,
+                    });
+                }
             }
             _ => {}
         }
@@ -598,5 +764,73 @@ mod tests {
         );
         assert_eq!(normalize_rel("", "foo.shard"), "foo.shard");
         assert_eq!(normalize_rel("a/b", "./c.shard"), "a/b/c.shard");
+    }
+
+    /// A tiny two-file project on disk (temp dir), exercising the whole
+    /// proof-layer resolution: kinds, citations, subjects, cross-file
+    /// requirement fulfillment, and the pending (unfulfilled) case.
+    #[test]
+    fn proof_layer_resolution() {
+        use super::{ClaimKind, Project};
+        let dir = std::env::temp_dir().join(format!("shard_viewer_claims_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("iface.shard"),
+            "(requirement round_trips (goal ((n Int)) () (= (dec (inc n)) n)))\n\
+             (requirement never_done (goal ((n Int)) () (= n n)))\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("impl.shard"),
+            "(fn inc ((n Int)) Int (+ n 1))\n\
+             (fn dec ((n Int)) Int (- n 1))\n\
+             (axiom ground (kind operational) (goal ((n Int)) () (= (inc n) (+ n 1))))\n\
+             (claim inc_pos (goal ((n Int)) ((= (le 0 n) True)) (= (le 0 (inc n)) True))\n\
+               (steps ((rewrite (lemma ground) lr lhs true ())) refl))\n\
+             (fulfills round_trips\n\
+               (steps ((unfold inc lhs) (unfold dec lhs) (rewrite (lemma inc_pos) lr lhs true ())) refl))\n",
+        )
+        .unwrap();
+        let p = Project::load(&dir).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        let by_name = |n: &str| {
+            p.claims.iter().position(|c| c.name == n).unwrap_or_else(|| panic!("claim {n}"))
+        };
+        let (rt, nd, gr, ip) =
+            (by_name("round_trips"), by_name("never_done"), by_name("ground"), by_name("inc_pos"));
+        // The fulfills shares the requirement's name; find it by kind.
+        let ff = p
+            .claims
+            .iter()
+            .position(|c| c.kind == ClaimKind::Fulfills)
+            .expect("the fulfills form");
+
+        assert_eq!(p.claims[rt].kind, ClaimKind::Requirement);
+        assert_eq!(p.claims[gr].kind, ClaimKind::Axiom);
+        assert_eq!(p.claims[ip].kind, ClaimKind::Claim);
+        // Cross-file fulfillment: the fulfills cites its requirement (plus the
+        // lemma its proof rewrites with) and discharges it; the other
+        // requirement stays open.
+        assert!(p.claims[ff].cites.contains(&rt));
+        assert!(p.claims[ff].cites.contains(&ip));
+        assert!(p.claims[rt].fulfilled);
+        assert!(!p.claims[nd].fulfilled);
+        // The fulfills inherits the requirement's goal for display.
+        assert_eq!(p.claims[ff].goal, p.claims[rt].goal);
+        assert_eq!(p.claims[rt].goal, "(= (dec (inc n)) n)");
+        // Subjects come from the statement: the claim is about inc, not about
+        // its binder n; the citation of ground lives in cites, not about.
+        let inc = p.by_name["inc"][0];
+        assert!(p.claims[ip].about.contains(&inc));
+        assert!(p.claims[ip].cites.contains(&gr));
+        assert!(!p.claims[ip].cites.contains(&ip));
+        // The requirement's goal names both fns even from the other file.
+        let dec = p.by_name["dec"][0];
+        assert!(p.claims[rt].about.contains(&inc) && p.claims[rt].about.contains(&dec));
+        // Per-file claim rosters point back at the same defs.
+        let iface = p.files.iter().position(|f| f.rel == "iface.shard").unwrap();
+        assert_eq!(p.files[iface].claims.len(), 2);
     }
 }
