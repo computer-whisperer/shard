@@ -932,14 +932,57 @@
 (fn lb_art ((nm (List Int)) (outp (List Int)) (idx Int)) PArt
   (PA nm (append_int "lowered_" nm) outp "models/wasm/wasm.shard" idx "" "none"))
 
+;; WORD-aware invocation (LOWERING.md §7.8): a U32 param takes its arg
+;; through the module's own u32 maker, a U32 result projects through
+;; u32_val — the cert's ENC/DEC adapters, evaluated in the same closure.
+(fn lb_is_u32 ((t Type)) Bool
+  (match t
+    ((TCon q _) (sym_eq (qn_name q) (quote U32)))
+    ((TVar _) False)))
+
+(fn lb_enc_args ((m Module) (ts (List Type)) (args (List Int)))
+  (Option (List Expr))
+  (measure (struct ts))
+  (match ts
+    (Nil (Some Nil))
+    ((Cons t trest)
+     (match args
+       (Nil None)
+       ((Cons v vrest)
+        (match
+          (if (lb_is_u32 t) (lb_call m "u32" (Cons (IntLit v) Nil))
+          (Some (IntLit v)))
+          (None None)
+          ((Some ae)
+           (match (lb_enc_args m trest vrest)
+             (None None)
+             ((Some aes) (Some (Cons ae aes)))))))))))
+
+(fn lb_dec_res ((m Module) (rty Type) (ev Expr)) (Option Int)
+  (if (lb_is_u32 rty)
+    (match (lb_call m "u32_val" (Cons ev Nil))
+      (None None)
+      ((Some pv) (expr_int pv)))
+    (expr_int ev)))
+
 (fn lb_vec_of ((m Module) (nm (List Int)) (idx Int) (args (List Int)))
   (Option PVec)
-  (match (lb_call m nm (lb_intlits args))
-    (None None)
-    ((Some ev)
-     (match (expr_int ev)
+  (match m
+    ((Module _ fns _ _ _)
+     (match (lb_find_fd fns nm)
        (None None)
-       ((Some v) (Some (PV idx args Nil v Nil)))))))
+       ((Some fd)
+        (match fd
+          ((FnDef _ ts rty _)
+           (match (lb_enc_args m ts args)
+             (None None)
+             ((Some aes)
+              (match (invoke_fd m fd aes)
+                (None None)
+                ((Some ev)
+                 (match (lb_dec_res m rty ev)
+                   (None None)
+                   ((Some v) (Some (PV idx args Nil v Nil)))))))))))))))
 
 (fn lb_vecs_of ((m Module) (nm (List Int)) (idx Int) (tuples (List (List Int))))
   (Option (List PVec))
