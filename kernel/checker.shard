@@ -164,11 +164,19 @@
               (match (lookup_typedef tname m)
                 (None False)
                 ((Some (TypeDef _ tparams ctors _))
-                 (let ((type_env (zip_pairs tparams targs)))
-                   (if (check_induct_exhaustive ctors cases)
-                     (check_induct_proofs m th seq var var_type type_env ctors
-                       cases)
-                     False)))))))))))
+                 ;; ZERO-ctor typedefs are INHABITED with no visible cases
+                 ;; (an opaque sig view, or a refined type whose values are
+                 ;; its base carriers) — a zero-case induct would be
+                 ;; vacuously "exhaustive" and prove ANY goal (issue #16).
+                 ;; shard has no uninhabited-datatype semantics: refuse.
+                 (match ctors
+                   (Nil False)
+                   (_
+                     (let ((type_env (zip_pairs tparams targs)))
+                       (if (check_induct_exhaustive ctors cases)
+                         (check_induct_proofs m th seq var var_type type_env
+                           ctors cases)
+                         False)))))))))))))
 
     ((CaseOn scrut ty cases)
      (match (lookup_typedef ty m)
@@ -178,13 +186,20 @@
         ;; value (see the long note formerly on do_case_on). The gate also
         ;; yields scrut's resolved type args, which instantiate the per-ctor
         ;; field types.
-        (match (tc_scrut_targs m (seq_params seq) scrut ty tparams)
-          (None False)  ; scrut not a ty value / ambiguous instantiation
-          ((Some targs)
-           (let ((ictors (inst_ctor_fields (zip_pairs tparams targs) ctors)))
-             (if (check_caseon_exhaustive ictors cases)
-               (check_caseon_proofs m th seq scrut ictors cases)
-               False)))))))
+        ;; ZERO-ctor refusal: same hole as Induct above (issue #16) — an
+        ;; opaque view or refined type is inhabited with no visible cases,
+        ;; so a zero-case case-on must refuse, never vacuously succeed.
+        (match ctors
+          (Nil False)
+          (_
+            (match (tc_scrut_targs m (seq_params seq) scrut ty tparams)
+              (None False)  ; scrut not a ty value / ambiguous instantiation
+              ((Some targs)
+               (let
+                 ((ictors (inst_ctor_fields (zip_pairs tparams targs) ctors)))
+                 (if (check_caseon_exhaustive ictors cases)
+                   (check_caseon_proofs m th seq scrut ictors cases)
+                   False)))))))))
 
     ;; subpf (not pf) so the inner proof does not shadow the `pf` parameter the
     ;; measure (proof_size pf) is stated over — the measure gate needs the call

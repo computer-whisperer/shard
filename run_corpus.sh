@@ -185,6 +185,7 @@ TARGETS=(
   examples/adq13_probe.shard
   examples/natview_pin.shard
   examples/natview_rejects.shard
+  examples/zerocase_rejects.shard
   examples/canon_pin.shard
   examples/canon_rejects.shard
   examples/render_model.shard
