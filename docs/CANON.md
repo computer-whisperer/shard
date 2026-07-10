@@ -521,6 +521,19 @@ Facts the slice pinned:
   exit 0). run_corpus gained both targets plus a tower-run gate that
   emits FAIL lines on drift, so the FAIL-set diff enforces the pins.
 
+**Slice 1b (2026-07-10, commit faa4617): C8 joins the recognizer.**
+The census-ratified arm-local scrutinee discipline, both directions,
+variable-scrutinee only. The pattern-binder convention needed its own
+empirical pin (the Let lesson repeating at the pattern layer): a
+pattern's k-th DFS PVar = BVar nb-1-k at arm-body top — innermost-
+first, as parameters and lets — arbitrated by cr_c8b's two-binder
+rebuild matching on the first try. Non-flags pinned: partial rebuilds
+(any component changed) and whole-scrutinee reuse in a binding arm,
+which is the spelling C8 steers toward. Slice-1 validation on the
+first rebuilt engines: corpus FAIL-set identical, both canon gates
+green, sweep 25/25, and the corpus-wide advisory footprint measured
+at 255 CANON lines under C1–C6.
+
 Next slices, in dependency order: the tools/canon REWRITER + the §9
 exactness census harness (slice 2); the C7 check-time tier over the
 append rule set (slice 3); stage-2 enforcement — std/ canonicalized +
