@@ -1,0 +1,394 @@
+;;; canon.shard — the canonical-form recognizer, syntactic tier C1–C6
+;;; (docs/CANON.md §3/§5). An ADMISSION-layer predicate over the elaborated
+;;; core AST: semantics-neutral and trust-neutral — a verdict here can only
+;;; admit or reject source, never prove anything. Stage-1 enforcement is
+;;; ADVISORY (CANON.md §3 ratchet): the driver renders one count-free
+;;; `CANON <fn>: C<k> <subject>` line per violation found in the TARGET
+;;; file's own fns (COCanon outcome); nothing fails, no exit code changes.
+;;;
+;;; Scope: fn BODIES only. Goal positions (claims/requirements) are exempt
+;;; BY CONSTRUCTION — this module is never consulted for them (CANON.md C1
+;;; scope ruling: goals exist to relate spellings). Patterns are likewise
+;;; untouched: Z/S in a match arm is structural case analysis, not a ground
+;;; value spelled the long way.
+;;;
+;;; C1 consults the reducer's OWN prim table (try_step_prim): a ground prim
+;;; redex is exactly a core-pathed Call whose literal args make the table
+;;; step, so the recognizer cannot drift from what actually folds. Two
+;;; table entries are excluded: gen_fresh (effectful — folding it would be
+;;; wrong, not just non-canonical) and refine_val (a typing coercion, not a
+;;; value spelled the long way).
+
+(import "stdlib.shard")
+(import "term.shard")
+(import "module.shard")
+(import "reduce.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel reduce try_step_prim))
+
+;; one violation: invariant number (1..6) + a subject symbol for the line
+;; (C1: the prim; C2: 'if/'match; C3: 'dead/'order/'merge; C4/C5: the ctor
+;; or 'lit/'unreachable; C6: 'S/'Z).
+(type CViol (CViol Int Symbol))
+
+;; ---------------------------------------------------------------------------
+;; small local helpers (Module field access + list plumbing)
+;; ---------------------------------------------------------------------------
+
+(fn cn_tds ((m Module)) (List TypeDef)
+  (match m
+    ((Module tds _ _ _ _) tds)))
+
+(fn cn_fns ((m Module)) (List FnDef)
+  (match m
+    ((Module _ fs _ _ _) fs)))
+
+(fn cn_app ((a (List CViol)) (b (List CViol))) (List CViol)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons v rest) (Cons v (cn_app rest b)))))
+
+(fn cn_len_el ((es (List Expr))) Int
+  (measure (struct es))
+  (match es
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (cn_len_el rest)))))
+
+(fn cn_len_i ((xs (List Int))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (cn_len_i rest)))))
+
+(fn cn_int_mem ((x Int) (xs (List Int))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil False)
+    ((Cons h rest) (if (int_eq h x) True (cn_int_mem x rest)))))
+
+;; strictly descending Int list (the reversed first-use accumulator is
+;; descending exactly when first-use order is ascending)
+(fn cn_desc ((xs (List Int))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil True)
+    ((Cons a rest)
+     (match rest
+       (Nil True)
+       ((Cons b _) (if (lt b a) (cn_desc rest) False))))))
+
+;; lexicographic order on symbol names (C4's key for PSym arms)
+(fn cn_chars_lt ((a (List Int)) (b (List Int))) Bool
+  (measure (struct a))
+  (match a
+    (Nil
+      (match b
+        (Nil False)
+        (_ True)))
+    ((Cons x xr)
+     (match b
+       (Nil False)
+       ((Cons y yr) (if (lt x y) True (if (lt y x) False (cn_chars_lt xr yr))))))))
+
+;; ---------------------------------------------------------------------------
+;; ground values (C2) and ground Nats (C6)
+;; ---------------------------------------------------------------------------
+
+(fn cn_ground ((e Expr)) Bool
+  (measure (struct e))
+  (match e
+    ((IntLit _) True)
+    ((SymLit _) True)
+    ((Ctor _ args) (cn_ground_l args))
+    (_ False)))
+
+(fn cn_ground_l ((es (List Expr))) Bool
+  (measure (struct es))
+  (match es
+    (Nil True)
+    ((Cons a rest) (if (cn_ground a) (cn_ground_l rest) False))))
+
+;; a ground Nat: the packed literal, or a Z/S ctor tower over one (the
+;; matcher's nat view, read as a value recognizer — cf. reduce.shard's
+;; match_nat_view and types.shard's tc_nat_lit_view)
+(fn cn_nat_ground ((e Expr)) Bool
+  (measure (struct e))
+  (match e
+    ((IntLit n) (le 0 n))
+    ((Ctor q args)
+     (if (core_named q (quote Z)) True
+     (if (core_named q (quote S))
+       (match args
+         ((Cons a Nil) (cn_nat_ground a))
+         (_ False))
+       False)))
+    (_ False)))
+
+;; ---------------------------------------------------------------------------
+;; C3 support: the first-use walk. Collects the enclosing Let's binders as
+;; SOURCE positions (0..n-1, source order) in PREORDER first-use order,
+;; REVERSED (front = latest first-use). d = extra binder depth below the
+;; Let body; the Let's binders sit at BVar d..d+n-1 there, and the
+;; elaborator assigns BVar indices INNERMOST-FIRST (source binding i =
+;; BVar n-1-i — the parameter convention, pinned by examples/canon_pin's
+;; cp_pair), so source position = n-1-(i-d).
+;; ---------------------------------------------------------------------------
+
+(fn cn_ord ((e Expr) (d Int) (n Int) (acc (List Int))) (List Int)
+  (measure (struct e))
+  (match e
+    ((BVar i)
+     (let ((j (- i d)))
+       (if (le 0 j)
+         (if (lt j n)
+           (let ((sp (- (- n 1) j))) (if (cn_int_mem sp acc) acc (Cons sp acc)))
+           acc)
+         acc)))
+    ((Ctor _ args) (cn_ord_l args d n acc))
+    ((Call _ args) (cn_ord_l args d n acc))
+    ((If c t e2) (cn_ord e2 d n (cn_ord t d n (cn_ord c d n acc))))
+    ((Let bs body) (cn_ord body (+ d (cn_len_el bs)) n (cn_ord_l bs d n acc)))
+    ((Match s arms) (cn_ord_arms arms d n (cn_ord s d n acc)))
+    (_ acc)))
+
+(fn cn_ord_l ((es (List Expr)) (d Int) (n Int) (acc (List Int))) (List Int)
+  (measure (struct es))
+  (match es
+    (Nil acc)
+    ((Cons a rest) (cn_ord_l rest d n (cn_ord a d n acc)))))
+
+(fn cn_ord_arms ((arms (List Arm)) (d Int) (n Int) (acc (List Int))) (List Int)
+  (measure (struct arms))
+  (match arms
+    (Nil acc)
+    ((Cons (Arm p b) rest)
+     (cn_ord_arms rest d n (cn_ord b (+ d (cn_pat_binds p)) n acc)))))
+
+(fn cn_pat_binds ((p Pat)) Int
+  (measure (struct p))
+  (match p
+    ((PVar) 1)
+    ((PCtor _ ps) (cn_pats_binds ps))
+    (_ 0)))
+
+(fn cn_pats_binds ((ps (List Pat))) Int
+  (measure (struct ps))
+  (match ps
+    (Nil 0)
+    ((Cons p rest) (+ (cn_pat_binds p) (cn_pats_binds rest)))))
+
+;; C3 on one Let node: every binding used (dead), first-use order matches
+;; binding order (order), and an immediately nested INDEPENDENT Let is a
+;; missed parallel merge (merge — nesting is the spelling of dependence).
+(fn cn_c3 ((bs (List Expr)) (body Expr)) (List CViol)
+  (let ((n (cn_len_el bs)))
+    (let ((used (cn_ord body 0 n Nil)))
+      (cn_app
+        (if (lt (cn_len_i used) n) (Cons (CViol 3 (quote dead)) Nil) Nil)
+        (cn_app
+          (if (cn_desc used) Nil (Cons (CViol 3 (quote order)) Nil))
+          (match body
+            ((Let bs2 _)
+             (match (cn_ord_l bs2 0 n Nil)
+               (Nil (Cons (CViol 3 (quote merge)) Nil))
+               (_ Nil)))
+            (_ Nil)))))))
+
+;; ---------------------------------------------------------------------------
+;; C4/C5 support: arm discipline. Ctor arms in declaration order, literal
+;; arms ascending, at most one catch-all and only last, no duplicates.
+;; ---------------------------------------------------------------------------
+
+(fn cn_ctor_ix_go ((q QName) (cs (List CtorDef)) (i Int)) (Option Int)
+  (measure (struct cs))
+  (match cs
+    (Nil None)
+    ((Cons (CtorDef cq _) rest)
+     (if (qname_eq cq q) (Some i) (cn_ctor_ix_go q rest (+ i 1))))))
+
+;; declaration index of ctor q within its type (scan all typedefs; a miss
+;; — e.g. a builtin former — yields None and the arm is skipped, never
+;; guessed about)
+(fn cn_ctor_ix ((q QName) (tds (List TypeDef))) (Option Int)
+  (measure (struct tds))
+  (match tds
+    (Nil None)
+    ((Cons (TypeDef _ _ cs _) rest)
+     (match (cn_ctor_ix_go q cs 0)
+       ((Some i) (Some i))
+       (None (cn_ctor_ix q rest))))))
+
+;; one pass over the arms. State: last ctor decl index (pix, None before
+;; the first placed ctor arm), last Int literal, last Sym literal, and
+;; whether a catch-all has been seen (everything after it is unreachable).
+(fn cn_arms_disc
+  ((arms (List Arm))
+   (tds (List TypeDef))
+   (pix (Option Int))
+   (pint (Option Int))
+   (psym (Option Symbol))
+   (seen_catch Bool))
+  (List CViol)
+  (measure (struct arms))
+  (match arms
+    (Nil Nil)
+    ((Cons (Arm p _) rest)
+     (if seen_catch
+       (Cons
+         (CViol 5 (quote unreachable))
+         (cn_arms_disc rest tds pix pint psym True))
+       (match p
+         ((PVar) (cn_arms_disc rest tds pix pint psym True))
+         ((PCtor q _)
+          (match (cn_ctor_ix q tds)
+            (None (cn_arms_disc rest tds pix pint psym False))
+            ((Some ix)
+             (match pix
+               (None (cn_arms_disc rest tds (Some ix) pint psym False))
+               ((Some prev)
+                (if (int_eq ix prev)
+                  (Cons
+                    (CViol 5 (qn_name q))
+                    (cn_arms_disc rest tds (Some ix) pint psym False))
+                (if (lt ix prev)
+                  (Cons
+                    (CViol 4 (qn_name q))
+                    (cn_arms_disc rest tds (Some ix) pint psym False))
+                  (cn_arms_disc rest tds (Some ix) pint psym False))))))))
+         ((PInt v)
+          (match pint
+            (None (cn_arms_disc rest tds pix (Some v) psym False))
+            ((Some pv)
+             (if (int_eq v pv)
+               (Cons
+                 (CViol 5 (quote lit))
+                 (cn_arms_disc rest tds pix (Some v) psym False))
+             (if (lt v pv)
+               (Cons
+                 (CViol 4 (quote lit))
+                 (cn_arms_disc rest tds pix (Some v) psym False))
+               (cn_arms_disc rest tds pix (Some v) psym False))))))
+         ((PSym s)
+          (match psym
+            (None (cn_arms_disc rest tds pix pint (Some s) False))
+            ((Some ps)
+             (if (sym_eq s ps)
+               (Cons
+                 (CViol 5 (quote lit))
+                 (cn_arms_disc rest tds pix pint (Some s) False))
+             (if (cn_chars_lt (chars_of_sym s) (chars_of_sym ps))
+               (Cons
+                 (CViol 4 (quote lit))
+                 (cn_arms_disc rest tds pix pint (Some s) False))
+               (cn_arms_disc rest tds pix pint (Some s) False)))))))))))
+
+;; ---------------------------------------------------------------------------
+;; per-node checks C1 / C2 / C6
+;; ---------------------------------------------------------------------------
+
+(fn cn_prim_flaggable ((s Symbol)) Bool
+  (if (sym_eq s (quote gen_fresh)) False
+  (if (sym_eq s (quote refine_val)) False
+  True)))
+
+(fn cn_c1 ((q QName) (args (List Expr))) (List CViol)
+  (if (sym_path_eq (qn_mod q) (qn_core))
+    (if (cn_prim_flaggable (qn_name q))
+      (match (try_step_prim (qn_name q) args)
+        ((Some _) (Cons (CViol 1 (qn_name q)) Nil))
+        (None Nil))
+      Nil)
+    Nil))
+
+(fn cn_c2_if ((c Expr)) (List CViol)
+  (match c
+    ((Ctor q _)
+     (if (core_named q (quote True)) (Cons (CViol 2 (quote if)) Nil)
+     (if (core_named q (quote False)) (Cons (CViol 2 (quote if)) Nil)
+     Nil)))
+    (_ Nil)))
+
+(fn cn_c6 ((q QName) (args (List Expr))) (List CViol)
+  (if (core_named q (quote Z)) (Cons (CViol 6 (quote Z)) Nil)
+  (if (core_named q (quote S))
+    (match args
+      ((Cons a Nil) (if (cn_nat_ground a) (Cons (CViol 6 (quote S)) Nil) Nil))
+      (_ Nil))
+    Nil)))
+
+;; ---------------------------------------------------------------------------
+;; the main walk (mutual over Expr / List Expr / arm bodies)
+;; ---------------------------------------------------------------------------
+
+(fn cn_e ((e Expr) (m Module)) (List CViol)
+  (measure (struct e))
+  (match e
+    ((Call q args) (cn_app (cn_c1 q args) (cn_l args m)))
+    ((Ctor q args) (cn_app (cn_c6 q args) (cn_l args m)))
+    ((If c t e2)
+     (cn_app (cn_c2_if c) (cn_app (cn_e c m) (cn_app (cn_e t m) (cn_e e2 m)))))
+    ((Match s arms)
+     (cn_app
+       (if (cn_ground s) (Cons (CViol 2 (quote match)) Nil) Nil)
+       (cn_app
+         (cn_arms_disc arms (cn_tds m) None None None False)
+         (cn_app (cn_e s m) (cn_arms_b arms m)))))
+    ((Let bs body) (cn_app (cn_c3 bs body) (cn_app (cn_l bs m) (cn_e body m))))
+    (_ Nil)))
+
+(fn cn_l ((es (List Expr)) (m Module)) (List CViol)
+  (measure (struct es))
+  (match es
+    (Nil Nil)
+    ((Cons a rest) (cn_app (cn_e a m) (cn_l rest m)))))
+
+(fn cn_arms_b ((arms (List Arm)) (m Module)) (List CViol)
+  (measure (struct arms))
+  (match arms
+    (Nil Nil)
+    ((Cons (Arm _ b) rest) (cn_app (cn_e b m) (cn_arms_b rest m)))))
+
+;; ---------------------------------------------------------------------------
+;; module surface: scan the target module's own fns, render advisory lines
+;; ---------------------------------------------------------------------------
+
+(fn cn_code_chars ((c Int)) (List Int) (Cons 67 (Cons (+ 48 c) Nil)))
+
+(fn cn_render_v ((fname Symbol) (v CViol)) (List Int)
+  (match v
+    ((CViol c subj)
+     (append_int
+       "CANON "
+       (append_int
+         (chars_of_sym fname)
+         (append_int
+           ": "
+           (append_int
+             (cn_code_chars c)
+             (append_int " " (append_int (chars_of_sym subj) (Cons 10 Nil))))))))))
+
+(fn cn_render_vs ((fname Symbol) (vs (List CViol))) (List Int)
+  (measure (struct vs))
+  (match vs
+    (Nil Nil)
+    ((Cons v rest) (append_int (cn_render_v fname v) (cn_render_vs fname rest)))))
+
+(fn cn_scan_fns ((fs (List FnDef)) (m Module) (mp (List Symbol))) (List Int)
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons fd rest)
+     (match fd
+       ((FnDef q _ _ body)
+        (if (sym_path_eq (qn_mod q) mp)
+          (append_int
+            (cn_render_vs (qn_name q) (cn_e body m))
+            (cn_scan_fns rest m mp))
+          (cn_scan_fns rest m mp)))))))
+
+;; the stage-1 advisory block for the module at path mp: empty (all
+;; canonical) or one CANON line per violation in mp's own fn bodies.
+(fn canon_block ((m Module) (mp (List Symbol))) (List Int)
+  (cn_scan_fns (cn_fns m) m mp))

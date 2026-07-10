@@ -183,6 +183,8 @@ TARGETS=(
   examples/adq13_probe.shard
   examples/natview_pin.shard
   examples/natview_rejects.shard
+  examples/canon_pin.shard
+  examples/canon_rejects.shard
   examples/render_model.shard
   examples/modules_demo/consumer.shard
   examples/modules_demo/views/module_view.shard
@@ -433,6 +435,43 @@ if [ -x bin/shard_eval ]; then
     tail -5 "$TMP/pb.out"
   else
     tail -2 "$TMP/pb.out"
+  fi
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# Canon stage-1 advisory pins (CANON.md §5/§9): canon_pin must produce ZERO
+# CANON lines (canonical bodies + the goal-position exemption); canon_rejects
+# must still EXIT 0 (stage 1 is advisory, never a failure) while reporting
+# every invariant C1-C6. Runs the SOURCE checker through the tower so the
+# pins bind TODAY, before the next engine rebuild. Failures emit FAIL lines
+# so the corpus FAIL-set diff catches them.
+echo "=== canon: stage-1 advisory pins ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run kernel/check.shard examples/canon_pin.shard > "$TMP/cnp.out" 2>&1
+  cnp_rc=$?
+  if [ $cnp_rc -ne 0 ]; then
+    echo "FAIL canon_pin (exit $cnp_rc)"
+  elif grep -q '^CANON ' "$TMP/cnp.out"; then
+    echo "FAIL canon_pin (canonical bodies flagged)"
+    grep '^CANON ' "$TMP/cnp.out"
+  else
+    echo "CANON PIN OK"
+  fi
+  bin/shard_eval run kernel/check.shard examples/canon_rejects.shard > "$TMP/cnr.out" 2>&1
+  cnr_rc=$?
+  if [ $cnr_rc -ne 0 ]; then
+    echo "FAIL canon_rejects (advisory changed the exit code: $cnr_rc)"
+  else
+    cnr_missing=""
+    for code in "C1 +" "C2 if" "C2 match" "C3 dead" "C3 order" "C3 merge" "C4 CRB" "C4 lit" "C5 unreachable" "C6 S" "C6 Z"; do
+      grep -q "^CANON cr_.*: $code" "$TMP/cnr.out" || cnr_missing="$cnr_missing [$code]"
+    done
+    if [ -n "$cnr_missing" ]; then
+      echo "FAIL canon_rejects (missing:$cnr_missing)"
+    else
+      echo "CANON REJECTS OK ($(grep -c '^CANON ' "$TMP/cnr.out") lines)"
+    fi
   fi
 else
   echo "SKIPPED (no bin/shard_eval)"

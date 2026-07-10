@@ -34,6 +34,7 @@
 (import "types.shard")  ; object-language type checking (report-only for now)
 (import "proof_reader.shard")  ; native proof-DSL → Goal/Proof
 (import "admit.shard")  ; definitional-admissibility analysis (issue #1, report-only)
+(import "canon.shard")  ; canonical-form recognizer C1-C6 (CANON.md, stage-1 advisory)
 (use (:: kernel term *))
 (use (:: kernel module *))
 (use (:: kernel proof *))
@@ -44,6 +45,7 @@
 (use (:: kernel types *))
 (use (:: kernel proof_reader *))
 (use (:: kernel admit *))
+(use (:: kernel canon *))
 
 ;; The ctor + type-name sets a proof-DSL claim is parsed against. ctors lets
 ;; `elaborate` tell a value constructor from an FVar in an object snippet;
@@ -267,7 +269,11 @@
   ;; COLedger: a bin's trust-ledger block, pre-rendered. Informative — it
   ;; bumps no counts; the acceptance-failing checks (trusts/externs/unmet)
   ;; stay separate COFail outcomes.
-  (COLedger (List Int)))
+  (COLedger (List Int))
+  ;; COCanon: the stage-1 canonicalization advisory (CANON.md §3) — the
+  ;; target module's C1-C6 violations, pre-rendered, one CANON line each.
+  ;; Informative like COLedger: bumps no counts, changes no exit code.
+  (COCanon (List Int)))
 
 ;; theory threaded + PENDING requirements (name→goal, seeded by `requirement`,
 ;; consumed by `fulfills`) + outcomes accumulated in REVERSE (caller reverses).
@@ -1028,6 +1034,21 @@
 ;; Each source is tagged `(Pair granted src)`: `granted` marks a dependency
 ;; module's INTERFACE (its requirements are admitted as axioms, not re-imposed
 ;; as obligations — see collect_decls, reader.shard).
+;; stage-1 canon advisory (CANON.md §3): after the TARGET file's decls run,
+;; append its module's C1-C6 block as a count-free COCanon outcome. Only the
+;; closure's last entry (the target itself) is scanned — imports report when
+;; THEY are the target, so a violation is stated once, at its home.
+(fn canon_note ((m Module) (path (List Int)) (is_target Bool) (st RunState))
+  RunState
+  (if is_target
+    (match (canon_block m (module_path_of path))
+      (Nil st)
+      (block
+        (match st
+          ((RunState th pend acc led)
+           (RunState th pend (Cons (COCanon block) acc) led)))))
+    st))
+
 (fn run_srcs
   ((m Module)
    (srcs (List SrcEntry))
@@ -1091,14 +1112,20 @@
               rest
               ctors
               sidecars
-              (run_decls
-                (file_rctx m path src)
-                (autos_of_src (sym_of_chars path) sidecars)
+              (canon_note
                 m
-                st
-                ds
-                target
-                focus)
+                path
+                (match rest
+                  (Nil True)
+                  (_ False))
+                (run_decls
+                  (file_rctx m path src)
+                  (autos_of_src (sym_of_chars path) sidecars)
+                  m
+                  st
+                  ds
+                  target
+                  focus))
               target
               focus
               (+ k 1)))))))))
