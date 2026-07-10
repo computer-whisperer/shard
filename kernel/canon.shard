@@ -1,4 +1,4 @@
-;;; canon.shard — the canonical-form recognizer, syntactic tier C1–C6
+;;; canon.shard — the canonical-form recognizer, syntactic tier C1–C6 + C8
 ;;; (docs/CANON.md §3/§5). An ADMISSION-layer predicate over the elaborated
 ;;; core AST: semantics-neutral and trust-neutral — a verdict here can only
 ;;; admit or reject source, never prove anything. Stage-1 enforcement is
@@ -27,9 +27,9 @@
 (use (:: kernel module *))
 (use (:: kernel reduce try_step_prim))
 
-;; one violation: invariant number (1..6) + a subject symbol for the line
+;; one violation: invariant number (1..8) + a subject symbol for the line
 ;; (C1: the prim; C2: 'if/'match; C3: 'dead/'order/'merge; C4/C5: the ctor
-;; or 'lit/'unreachable; C6: 'S/'Z).
+;; or 'lit/'unreachable; C6: 'S/'Z; C8: 'respell/'rebuild).
 (type CViol (CViol Int Symbol))
 
 ;; ---------------------------------------------------------------------------
@@ -197,6 +197,150 @@
             (_ Nil)))))))
 
 ;; ---------------------------------------------------------------------------
+;; C8 support: arm-local scrutinee discipline (var scrutinee only).
+;; (a) 'respell — a binder-less arm (ground ctor / literal pattern) must not
+;;     mention the scrutinee var: the arm's equation has pinned the value.
+;; (b) 'rebuild — no arm body may contain the EXACT rebuild of a binding
+;;     PCtor pattern over the arm's own binders: the scrutinee var already
+;;     names (and shares) that value. Bare-PVar catch-alls are excluded —
+;;     binder aliasing is not a priced freedom.
+;; Binder convention: the pattern's k-th DFS PVar = BVar nb-1-k at arm-body
+;; top (innermost-first, as parameters and lets) — arbitrated by
+;; examples/canon_rejects' cr_c8b two-binder rebuild.
+;; ---------------------------------------------------------------------------
+
+(fn cn_occf ((e Expr) (x Symbol)) Bool
+  (measure (struct e))
+  (match e
+    ((FVar y) (sym_eq y x))
+    ((Ctor _ args) (cn_occf_l args x))
+    ((Call _ args) (cn_occf_l args x))
+    ((If c t e2) (if (cn_occf c x) True (if (cn_occf t x) True (cn_occf e2 x))))
+    ((Let bs body) (if (cn_occf_l bs x) True (cn_occf body x)))
+    ((Match s arms) (if (cn_occf s x) True (cn_occf_arms arms x)))
+    (_ False)))
+
+(fn cn_occf_l ((es (List Expr)) (x Symbol)) Bool
+  (measure (struct es))
+  (match es
+    (Nil False)
+    ((Cons a rest) (if (cn_occf a x) True (cn_occf_l rest x)))))
+
+(fn cn_occf_arms ((arms (List Arm)) (x Symbol)) Bool
+  (measure (struct arms))
+  (match arms
+    (Nil False)
+    ((Cons (Arm _ b) rest) (if (cn_occf b x) True (cn_occf_arms rest x)))))
+
+;; does e spell pattern p exactly, with p's k-th DFS PVar as
+;; BVar (dd + nb-1-k)? Threads k; Some k' = matched so far.
+(fn cn_rbp ((p Pat) (e Expr) (dd Int) (nb Int) (k Int)) (Option Int)
+  (measure (struct p))
+  (match p
+    ((PVar)
+     (match e
+       ((BVar j) (if (int_eq j (+ dd (- (- nb 1) k))) (Some (+ k 1)) None))
+       (_ None)))
+    ((PCtor q ps)
+     (match e
+       ((Ctor q2 es) (if (qname_eq q q2) (cn_rbp_l ps es dd nb k) None))
+       (_ None)))
+    ((PInt v)
+     (match e
+       ((IntLit w) (if (int_eq v w) (Some k) None))
+       (_ None)))
+    ((PSym s)
+     (match e
+       ((SymLit s2) (if (sym_eq s s2) (Some k) None))
+       (_ None)))))
+
+(fn cn_rbp_l ((ps (List Pat)) (es (List Expr)) (dd Int) (nb Int) (k Int))
+  (Option Int)
+  (measure (struct ps))
+  (match ps
+    (Nil
+      (match es
+        (Nil (Some k))
+        (_ None)))
+    ((Cons p prest)
+     (match es
+       (Nil None)
+       ((Cons e erest)
+        (match (cn_rbp p e dd nb k)
+          (None None)
+          ((Some k2) (cn_rbp_l prest erest dd nb k2))))))))
+
+;; rebuild scan: the exact rebuild anywhere in e (dd = binder depth below
+;; the arm-body top)
+(fn cn_rbs ((e Expr) (p Pat) (nb Int) (dd Int)) Bool
+  (measure (struct e))
+  (match (cn_rbp p e dd nb 0)
+    ((Some _) True)
+    (None
+      (match e
+        ((Ctor _ args) (cn_rbs_l args p nb dd))
+        ((Call _ args) (cn_rbs_l args p nb dd))
+        ((If c t e2)
+         (if (cn_rbs c p nb dd) True
+         (if (cn_rbs t p nb dd) True
+         (cn_rbs e2 p nb dd))))
+        ((Let bs body)
+         (if (cn_rbs_l bs p nb dd) True
+         (cn_rbs body p nb (+ dd (cn_len_el bs)))))
+        ((Match s arms) (if (cn_rbs s p nb dd) True (cn_rbs_arms arms p nb dd)))
+        (_ False)))))
+
+(fn cn_rbs_l ((es (List Expr)) (p Pat) (nb Int) (dd Int)) Bool
+  (measure (struct es))
+  (match es
+    (Nil False)
+    ((Cons a rest) (if (cn_rbs a p nb dd) True (cn_rbs_l rest p nb dd)))))
+
+(fn cn_rbs_arms ((arms (List Arm)) (p Pat) (nb Int) (dd Int)) Bool
+  (measure (struct arms))
+  (match arms
+    (Nil False)
+    ((Cons (Arm p2 b) rest)
+     (if (cn_rbs b p nb (+ dd (cn_pat_binds p2))) True
+     (cn_rbs_arms rest p nb dd)))))
+
+;; per-arm C8. sf/sb: the scrutinee as FVar name or BVar index (exactly
+;; one Some). (a) fires only at nb=0 where the scrutinee's index needs no
+;; shift (cn_ord handles deeper binders itself); (b) never references the
+;; scrutinee at all.
+(fn cn_c8_arm ((p Pat) (b Expr) (sf (Option Symbol)) (sb (Option Int)))
+  (List CViol)
+  (let ((nb (cn_pat_binds p)))
+    (if (int_eq nb 0)
+      (match sf
+        ((Some x) (if (cn_occf b x) (Cons (CViol 8 (quote respell)) Nil) Nil))
+        (None
+          (match sb
+            ((Some i)
+             (match (cn_ord b i 1 Nil)
+               (Nil Nil)
+               (_ (Cons (CViol 8 (quote respell)) Nil))))
+            (None Nil))))
+      (match p
+        ((PCtor _ _)
+         (if (cn_rbs b p nb 0) (Cons (CViol 8 (quote rebuild)) Nil) Nil))
+        (_ Nil)))))
+
+(fn cn_c8_arms ((arms (List Arm)) (sf (Option Symbol)) (sb (Option Int)))
+  (List CViol)
+  (measure (struct arms))
+  (match arms
+    (Nil Nil)
+    ((Cons (Arm p b) rest)
+     (cn_app (cn_c8_arm p b sf sb) (cn_c8_arms rest sf sb)))))
+
+(fn cn_c8 ((s Expr) (arms (List Arm))) (List CViol)
+  (match s
+    ((FVar x) (cn_c8_arms arms (Some x) None))
+    ((BVar i) (cn_c8_arms arms None (Some i)))
+    (_ Nil)))
+
+;; ---------------------------------------------------------------------------
 ;; C4/C5 support: arm discipline. Ctor arms in declaration order, literal
 ;; arms ascending, at most one catch-all and only last, no duplicates.
 ;; ---------------------------------------------------------------------------
@@ -334,7 +478,7 @@
        (if (cn_ground s) (Cons (CViol 2 (quote match)) Nil) Nil)
        (cn_app
          (cn_arms_disc arms (cn_tds m) None None None False)
-         (cn_app (cn_e s m) (cn_arms_b arms m)))))
+         (cn_app (cn_c8 s arms) (cn_app (cn_e s m) (cn_arms_b arms m))))))
     ((Let bs body) (cn_app (cn_c3 bs body) (cn_app (cn_l bs m) (cn_e body m))))
     (_ Nil)))
 

@@ -464,7 +464,7 @@ if [ -x bin/shard_eval ]; then
     echo "FAIL canon_rejects (advisory changed the exit code: $cnr_rc)"
   else
     cnr_missing=""
-    for code in "C1 +" "C2 if" "C2 match" "C3 dead" "C3 order" "C3 merge" "C4 CRB" "C4 lit" "C5 unreachable" "C6 S" "C6 Z"; do
+    for code in "C1 +" "C2 if" "C2 match" "C3 dead" "C3 order" "C3 merge" "C4 CRB" "C4 lit" "C5 unreachable" "C6 S" "C6 Z" "C8 respell" "C8 rebuild"; do
       grep -q "^CANON cr_.*: $code" "$TMP/cnr.out" || cnr_missing="$cnr_missing [$code]"
     done
     if [ -n "$cnr_missing" ]; then
