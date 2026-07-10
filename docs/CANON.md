@@ -221,6 +221,19 @@ hazard, and the disposition.
   both KEPT for now, pending the playground's results; the control-
   layer instance (match on Bool) ruled IN as C9. Symmetric-operand
   order (int_eq/sym_eq) sequences behind §7's hash order.
+  MEASURED (playground, later 2026-07-10): the lt-only vocabulary is
+  IN and satisfies the boundary rule — dialect cond sets collapsed
+  12 → 2 (lt, both argument orders), sort d3 → 6.76×10¹⁵ candidates,
+  merge d4 → 1.96×10³⁶, with solution counts UNCHANGED (the tie pair
+  re-spells through the branch swap, confirming absorption is free).
+  The lt/le KEEP ruling stands for v1 enforcement regardless: a
+  le-ban now would create fresh std migration (std sits at zero
+  violations) and the value-position price (not-idiom + one setge
+  emitter recognizer) touches the emitters mid-x86-arc. Basis
+  contraction sequences as its own post-v1 slice, riding the queued
+  x86gen simplification. Boundary note: the sound involution is
+  le↔lt-negation WITH branch swap; the cond-MIRROR double swap is
+  not an equivalence (see §8).
 - **D15 arm-local scrutinee respelling** — inside a match arm, the
   scrutinee variable and the arm's pattern name the same value by the
   arm's own equation: `ys` ≡ `Nil` in the Nil arm; `(Cons h t)` — the
@@ -234,6 +247,24 @@ hazard, and the disposition.
   eight orders of space). PROPOSAL C8 below. The rebuild direction
   also SHARES where the spelling re-allocates — a small performance-
   parity bonus.
+- **D17 vacuous control, and the placement taxonomy (playground,
+  2026-07-10)** — `(if c X X)` computes X while spelling a branch:
+  the census's first equality-shaped SIBLING constraint (a Bool case
+  tautology, not a redex — neither C1 nor C2 sees it). Measured on
+  whole-body calculator synthesis as LIVE FORK WEIGHT, not output
+  noise: excluding the family cut solution regions 1,210 → 14 and
+  steps 290,626 → 39,565. The same generation priced WHERE
+  sibling-content constraints live: generative content-pair grammars
+  bought exactness at memo fragmentation (steps ×7, wall ×6);
+  opportunistic join-side pruning bought a strictly larger quotient
+  at a seventh of baseline cost. The taxonomy: sharing-preserving
+  quotients (leaf filters, index ordering, point exclusions) are
+  nearly free generation-side; sibling-CONTENT constraints (equality-
+  or order-shaped) belong at the join/recognizer tier — which is
+  where §3 already put shard's canon. PROPOSAL C10 for the equality
+  case in if position; the order-shaped case (AC operand order) is
+  D9/C7 tier-2 territory; the match analog (all arms binder-less and
+  identical) is priced, not bought, for v1.
 
 ## 5. The invariant set (proposed v1 cut)
 
@@ -292,6 +323,14 @@ Tier 1 — syntactic, theory-free, recognizer runs at read:
   application of D16's basis-minimization principle at the control
   layer: shard already has no and/or/not prims (Bool combination IS
   if-spellings); this closes the match-side duplicate.
+- **C10 no vacuous if** (ratified 2026-07-10, D17's equality case).
+  The two branches of an `if` must differ structurally: `(if c X X)`
+  is X — the Bool case tautology — dressed as control. Nameless
+  syntax makes the check exact alpha-equality for free (If binds
+  nothing; one expr_eq of the two branches). In authored source a
+  vacuous if is always dead control or a bug; in search spaces the
+  family measured as live fork weight (D17). The match analog stays
+  census-priced, not bought, for v1.
 
 Tier 2 — theory quotients, recognizer runs at check (needs types):
 
@@ -435,6 +474,15 @@ Excluded by decision, not accident:
   differently on equal keys. No spelling quotient can touch it; it
   is laws/oracle territory (behavioral fingerprinting, requirement
   proofs), permanently. OUT.
+- **The cond-mirror family** (playground-pinned 2026-07-10).
+  `(if (lt a b) X Y)` vs `(if (lt b a) Y X)` looks like an
+  involution orbit but is NOT an equivalence: on ties both conds are
+  false, so the first computes Y and the second computes X. The
+  sound D16 involution negates the comparison AND swaps branches
+  (`le a b` ⟺ ¬`(lt b a)`); the double swap of the SAME comparison's
+  arguments plus branches differs exactly on ties — the tie pair
+  above is the extensional floor, and this is its spelling-side
+  shadow. OUT, permanently.
 - **Recursion shape.** Accumulator vs direct recursion, fold vs
   explicit structural descent — extensionally equal, structurally
   incomparable. Program equivalence, not spelling. OUT.
@@ -570,6 +618,19 @@ Validation battery: corpus FAIL-set = the justified post-#16 baseline
 (the canon fixtures contributed exactly their deliberate lines), canon
 gates green (17 rejects lines), sweep 26/26 (the WORD-fragment build
 joined the roster).
+
+**Slice 1d (2026-07-10): C10 joins the recognizer.** The playground's
+opportunistic-pruning generation (D17) landed three doc amendments —
+the D17 census entry with the generation-vs-join placement taxonomy,
+the D16 lt-only measurement (boundary rule satisfied; KEEP ruling
+stands for v1, basis contraction sequences post-v1), and the §8
+cond-mirror negative pin — plus the C10 check itself: one expr_eq of
+an If's two branches (If binds nothing, so structural equality IS
+alpha-equality). cn_code_chars grew two-digit rendering (code 10
+previously rendered as `C:`). Pins: cp_c10 (deep near-miss branches,
+unflagged) and cr_c10 (18 rejects lines; gate roster + `C10 vacif`).
+Measured: std/ at ZERO violations under C1–C10 (tower scan, all 12
+std targets) — stage 2 stays pin-only.
 
 Next slices, in dependency order: the tools/canon REWRITER + the §9
 exactness census harness (slice 2); the C7 check-time tier over the
