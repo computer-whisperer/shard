@@ -550,6 +550,26 @@
        ;; rhss collected with prepend → innermost-first (BVar 0 = last binding)
        ((TBOk tc1 binds) (tc_infer m tc1 fenv (tc_app_tys binds env) body))))))
 
+;; the Nat-literal VIEW — the typing twin of reduce.shard's match_nat_view
+;; (core identity): a NONNEG IntLit IS a ground Nat value — the kernel's own
+;; packed normal form — so it may sit anywhere a Nat is expected. The gate
+;; meets packed literals whenever it types a term the reducer has touched
+;; (a citation capture from a computed goal is the canonical case). VALUE-
+;; aware on purpose: only a literal in hand gets the view; an Int-typed
+;; variable or computed expression still refuses (Int is not a subtype of
+;; Nat). A negative literal never gets the view — the matcher's twin treats
+;; it as undecided garbage, and refusing here is the conservative image.
+(fn tc_nat_lit_view ((a Expr) (want Type) (tc Tc)) Bool
+  (match a
+    ((IntLit n)
+     (if (lt n 0) False
+     (match tc
+       ((Tc _ s)
+        (match (tc_resolve want s)
+          ((TCon q Nil) (core_named q (quote Nat)))
+          (_ False))))))
+    (_ False)))
+
 ;; check each arg against its expected (instantiated) param type.
 (fn tc_check_args
   ((m Module)
@@ -580,14 +600,16 @@
           ((TcOk tc1 at)
            (match (tc_unify at p tc1)
              (None
-               (TcsErr
-                 (tc_mismatch
-                   (tc_app
-                     (chars_of_sym (qn_name site))
-                     (tc_app " arg " (tc_nat i)))
-                   at
-                   p
-                   tc1)))
+               (if (tc_nat_lit_view a p tc1)
+                 (tc_check_args m tc1 fenv env arest prest site (+ i 1))
+                 (TcsErr
+                   (tc_mismatch
+                     (tc_app
+                       (chars_of_sym (qn_name site))
+                       (tc_app " arg " (tc_nat i)))
+                     at
+                     p
+                     tc1))))
              ((Some tc2)
               (tc_check_args m tc2 fenv env arest prest site (+ i 1)))))))))))
 
@@ -1094,12 +1116,15 @@
              ((TcOk tc1 t)
               (match (tc_unify t (type_subst inst pty) tc1)
                 (None
-                  (Some
-                    (tc_mismatch
-                      (tc_app "citation binder " (chars_of_sym pname))
-                      t
-                      (type_subst inst pty)
-                      tc1)))
+                  (if (tc_nat_lit_view term (type_subst inst pty) tc1)
+                    (tc_check_bindings m sparams inst tc1 prest pat_vars orest
+                      env)
+                    (Some
+                      (tc_mismatch
+                        (tc_app "citation binder " (chars_of_sym pname))
+                        t
+                        (type_subst inst pty)
+                        tc1))))
                 ((Some tc2)
                  (tc_check_bindings m sparams inst tc2 prest pat_vars orest env))))))))))))
 
