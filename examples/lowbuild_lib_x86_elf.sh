@@ -38,6 +38,9 @@ TIEIMG=$(grep '^TIEIMG ' "$TMP/tie.txt" | cut -d' ' -f2)
 [ -n "$TIEIMG" ]
 [ "$IMG" = "$TIEIMG" ]
 echo "IMGTIE OK (embedded image == cert-assembled image)"
+# percolation (docs/X86.md §49): a pure lib asserts an empty effect surface
+grep '^EFF ' "$TMP/tie.txt" | grep -q ' OK$'
+echo "PERCOLATION OK ($(grep '^EFF ' "$TMP/tie.txt"))"
 
 echo "== gate 3: engine (the ELF runs on real Linux, stdout == spec results)"
 grep '^ELF ' "$TMP/elf.txt" | cut -d' ' -f2 | xxd -r -p > "$TMP/a.elf"

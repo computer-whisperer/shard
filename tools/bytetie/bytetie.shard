@@ -30,6 +30,8 @@
 (import "../../models/wasm/encode.shard")
 (import "../../models/x86/x86.shard")
 (import "../../models/x86/encode.shard")
+(import "../../models/x86/world.shard")
+(import "../../models/x86/linux.shard")
 
 (use (:: kernel loader World))
 (use (:: kernel loader get_args))
@@ -51,6 +53,18 @@
 (use (:: models x86 encode enc_func))
 (use (:: models x86 encode enc_image))
 (use (:: models x86 encode enc_image_ord))
+;; the percolation twin's imports (docs/X86.md §49): the runtime's own
+;; effect predicate, the reviewed shim home + syscall byte pair, and the
+;; SRC bin form's reader for the declared effect surface
+(use (:: models x86 world xfn_eff))
+(use (:: models x86 world wnat))
+(use (:: models x86 linux shim_write_body))
+(use (:: models x86 linux shim_exit_body))
+(use (:: models x86 linux i_syscall))
+(use (:: kernel reader Bin))
+(use (:: kernel reader is_bin_form))
+(use (:: kernel reader bin_of_form))
+(use (:: kernel term show_int))
 
 (fn nl () (List Int) (Cons 10 Nil))
 
@@ -654,16 +668,19 @@
                   (match (tie_name name)
                     (None TSkip)
                     ((Some nm)
-                     (TLine
-                       (append_int
-                         "TIE "
+                     (if (xperc_bare_ok (xfuncs_of xm) ix)
+                       (TLine
                          (append_int
-                           nm
+                           "TIE "
                            (append_int
-                             " "
+                             nm
                              (append_int
-                               (hexs (enc_image (xfuncs_of xm) ix))
-                               (nl)))))))))))
+                               " "
+                               (append_int
+                                 (hexs (enc_image (xfuncs_of xm) ix))
+                                 (nl))))))
+                       (TFail
+                         "percolation: an effect-point in a bare-claim fragment (a fragment declares no effect surface)")))))))
               (_ (TFail "function index is not a literal"))))))))
     (_ (TFail "call application is missing slots"))))
 
@@ -1230,11 +1247,193 @@
              (Some
                "a caller's pinned callee copy does not re-encode to the image's bytes at its slot")))))))))
 
+;; ---- THE PERCOLATION TWIN (docs/X86.md §49, W4d) ---------------------------
+;; Every syscall byte in every shipped image must BE the declared effect
+;; surface. The trace equation proves what the entry does; this gate
+;; proves nothing else in the image CAN effect. Two independent walks
+;; over the tied function list (which the tie above proves byte-identical
+;; to the shipped image):
+;;   TERM WALK — xfn_eff, the SAME predicate weval's purity dispatch
+;;     asks, must answer False at every non-shim index; a shim's body
+;;     must match models/x86/linux.shard verbatim (the reviewed home is
+;;     the source of truth). Fuel-out answers True there, so exhaustion
+;;     lands a body in the effectful set and refuses — the safe polarity.
+;;   BYTE SCAN — every image this tool emits (index-order + one per
+;;     export) must contain EXACTLY surface-many occurrences of the
+;;     syscall byte pair. Count equality catches boundary straddles and
+;;     displacement aliases without trusting the encoder table; a false
+;;     positive (the pair inside a future large immediate) REFUSES, and
+;;     the instruction-boundary walk is that refusal's named growth.
+;; The declared surface arrives as the SRC bin form's extern count (the
+;; optional second CLI arg; absent = empty surface, the pure-module
+;; degenerate case — so the gate runs on EVERY tied x86 module, and a
+;; pure image asserts ZERO syscall bytes).
+
+(fn xperc_pre ((pat (List Int)) (bs (List Int))) Bool
+  (measure (struct pat))
+  (match pat
+    (Nil True)
+    ((Cons p pr)
+     (match bs
+       (Nil False)
+       ((Cons b br) (if (int_eq p b) (xperc_pre pr br) False))))))
+
+(fn xperc_cnt ((pat (List Int)) (bs (List Int))) Int
+  (measure (struct bs))
+  (match bs
+    (Nil 0)
+    ((Cons _ br) (+ (if (xperc_pre pat bs) 1 0) (xperc_cnt pat br)))))
+
+(fn xperc_ilen ((xs (List Int))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons _ t) (+ 1 (xperc_ilen t)))))
+
+(fn xperc_mem ((xs (List Int)) (i Int)) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil False)
+    ((Cons x t) (if (int_eq x i) True (xperc_mem t i)))))
+
+;; the effectful indices, by the runtime's own predicate
+(fn xperc_eff ((d Nat) (fs (List XFunc)) (i Int)) (List Int)
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons f rest)
+     (if (xfn_eff d f) (Cons i (xperc_eff d rest (+ i 1)))
+     (xperc_eff d rest (+ i 1))))))
+
+;; the bare-claim variant (xtie_of): a fragment file has no bin form, so
+;; its surface is NECESSARILY empty — both walks degenerate to "nothing
+;; effectful, zero syscall bytes in the claim's image"
+(fn xperc_bare_ok ((fs (List XFunc)) (ix Int)) Bool
+  (match (xperc_eff (wnat 4096) fs 0)
+    (Nil (int_eq (xperc_cnt (i_syscall) (enc_image fs ix)) 0))
+    (_ False)))
+
+;; a shim body's identifying immediate: the reviewed two-instruction
+;; shape (mov rax NR; syscall). None = not shim-shaped; if the home's
+;; bodies ever outgrow this shape the gate refuses until it learns the
+;; new shape — forced growth, not drift
+(fn xperc_imm ((b (List XInstr))) (Option Int)
+  (match b
+    ((Cons (XMovRI RAX i) (Cons XSyscall Nil)) (Some i))
+    (_ None)))
+
+(fn xperc_fimm ((fs (List XFunc)) (i Int)) (Option Int)
+  (match (xfunc_at fs i)
+    (None None)
+    ((Some f) (xperc_imm (xbody_of f)))))
+
+;; the two effectful bodies must be the write and exit shims (either
+;; index order), verbatim against the imported home bodies
+(fn xperc_shim2 ((fs (List XFunc)) (iw Int) (ie Int)) Bool
+  (match (xperc_imm (shim_write_body))
+    (None False)
+    ((Some a)
+     (match (xperc_imm (shim_exit_body))
+       (None False)
+       ((Some b)
+        (match (xperc_fimm fs iw)
+          (None False)
+          ((Some x)
+           (match (xperc_fimm fs ie)
+             (None False)
+             ((Some y)
+              (if (if (int_eq x a) (int_eq y b) False) True
+              (if (int_eq x b) (int_eq y a)
+              False)))))))))))
+
+(fn xperc_shims_ok ((sn Int) (eff (List Int)) (fs (List XFunc)))
+  (Option (List Int))
+  (if (int_eq sn 0)
+    (match eff
+      (Nil None)
+      (_
+        (Some
+          "percolation: an effectful (or fuel-exhausted) body sits in a module with an empty declared surface")))
+    (match eff
+      ((Cons iw (Cons ie Nil))
+       (if (xperc_shim2 fs iw ie) None
+       (Some
+         "percolation: a shim body differs from the reviewed models/x86/linux.shard home")))
+      (_
+        (Some
+          "percolation: the effectful set does not match the declared 2-extern surface")))))
+
+(fn xperc_exp_clear ((eff (List Int)) (exps (List (Pair (List Int) Int)))) Bool
+  (measure (struct exps))
+  (match exps
+    (Nil True)
+    ((Cons (Pair _ ix) rest)
+     (if (xperc_mem eff ix) False (xperc_exp_clear eff rest)))))
+
+(fn xperc_scan_exps
+  ((pat (List Int))
+   (want Int)
+   (fs (List XFunc))
+   (exps (List (Pair (List Int) Int))))
+  Bool
+  (measure (struct exps))
+  (match exps
+    (Nil True)
+    ((Cons (Pair _ ix) rest)
+     (if (int_eq (xperc_cnt pat (enc_image fs ix)) want)
+       (xperc_scan_exps pat want fs rest)
+       False))))
+
+(fn xperc_scan
+  ((want Int) (fs (List XFunc)) (exps (List (Pair (List Int) Int))))
+  (Option (List Int))
+  (if (int_eq (xperc_cnt (i_syscall) (enc_image_ord fs)) want)
+    (if (xperc_scan_exps (i_syscall) want fs exps) None
+    (Some
+      "percolation: a per-export image's syscall-byte count differs from the declared surface"))
+    (Some
+      "percolation: the index-order image's syscall-byte count differs from the declared surface")))
+
+(fn xperc_ixs_s ((eff (List Int))) (List Int)
+  (measure (struct eff))
+  (match eff
+    (Nil "-")
+    ((Cons i Nil) (show_int i))
+    ((Cons i rest)
+     (append_int (show_int i) (append_int "," (xperc_ixs_s rest))))))
+
+(fn xperc_line ((sn Int) (eff (List Int))) (List Int)
+  (append_int
+    "EFF surface="
+    (append_int
+      (show_int sn)
+      (append_int
+        " shims="
+        (append_int (xperc_ixs_s eff) (append_int " OK" (nl)))))))
+
+;; the percolation verdict; SOk2 carries the EFF line
+(fn xperc_check ((sn Int) (fs (List XFunc)) (exps (List (Pair (List Int) Int))))
+  SRes2
+  (if (if (int_eq sn 0) True (int_eq sn 2))
+    (let ((eff (xperc_eff (wnat 4096) fs 0)))
+      (match (xperc_shims_ok sn eff fs)
+        ((Some m) (SErr2 m))
+        (None
+          (if (xperc_exp_clear eff exps)
+            (match (xperc_scan (xperc_ilen eff) fs exps)
+              ((Some m) (SErr2 m))
+              (None (SOk2 (xperc_line sn eff))))
+            (SErr2
+              "percolation: a shim index is exported — effects are reachable only through the certified entry")))))
+    (SErr2
+      "percolation: only 0- or 2-extern surfaces are built (general shim sets are that refusal's named growth)")))
+
 (fn xlib_tie
   ((tbl (List (Pair Symbol SExpr)))
    (d Int)
    (forms (List SExpr))
-   (exps (List (Pair (List Int) Int))))
+   (exps (List (Pair (List Int) Int)))
+   (sn Int))
   SRes2
   (match (xlib_slots forms)
     (None (SErr2 "a lowered_ claim in an x86 lib file is not in the lib form"))
@@ -1245,7 +1444,13 @@
         (match (xlib_copies_ok tbl d copies fs)
           ((Some m) (SErr2 m))
           (None
-            (SOk2 (append_int (xlib_tieimg_line fs) (xlib_tie_lines fs exps))))))))))
+            (match (xperc_check sn fs exps)
+              ((SErr2 m) (SErr2 m))
+              ((SOk2 el)
+               (SOk2
+                 (append_int
+                   (xlib_tieimg_line fs)
+                   (append_int (xlib_tie_lines fs exps) el))))))))))))
 
 (type SRes (SOk (List Int)) (SErr (List Int)))
 
@@ -1287,7 +1492,7 @@
     (Nil 0)
     ((Cons _ t) (+ 1 (clen t)))))
 
-(fn run1 ((path (List Int)) (w World)) World
+(fn run1 ((path (List Int)) (sn Int) (w World)) World
   (match (read_file path w)
     ((Pair None w1) (fail2 (append_int "cannot read " path) w1))
     ((Pair (Some src) w1)
@@ -1304,7 +1509,7 @@
             (match (xlib_exports_of forms)
               ((Some (Pair _ xexps))
                (match
-                 (xlib_tie (inline_table forms) (+ 1 (clen src)) forms xexps)
+                 (xlib_tie (inline_table forms) (+ 1 (clen src)) forms xexps sn)
                  ((SErr2 m) (fail2 m w1))
                  ((SOk2 out) (exit 0 (write out w1)))))
               (None
@@ -1313,9 +1518,37 @@
                   ((SErr m) (fail2 m w1))
                   ((SOk out) (exit 0 (write out w1)))))))))))))
 
+(fn xperc_slen ((xs (List Symbol))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons _ t) (+ 1 (xperc_slen t)))))
+
+;; the declared effect surface: the SRC bin form's extern count (a lib
+;; SRC has no bin form = empty surface)
+(fn xperc_surface ((forms (List SExpr))) Int
+  (measure (struct forms))
+  (match forms
+    (Nil 0)
+    ((Cons f rest)
+     (if (is_bin_form f)
+       (match (bin_of_form f)
+         ((Some (Bin _ _ xs _ _)) (xperc_slen xs))
+         (None 0))
+       (xperc_surface rest)))))
+
+(fn run_src ((path (List Int)) (srcp (List Int)) (w World)) World
+  (match (read_file srcp w)
+    ((Pair None w1) (fail2 (append_int "cannot read " srcp) w1))
+    ((Pair (Some src) w1)
+     (match (forms_go src Nil 1000000)
+       (None (fail2 (append_int "cannot parse " srcp) w1))
+       ((Some sforms) (run1 path (xperc_surface sforms) w1))))))
+
 (fn main ((w World)) World
   (match (get_args w)
     ((Pair args w1)
      (match args
-       ((Cons path Nil) (run1 path w1))
-       (_ (fail2 "usage: bytetie CERTFILE" w1))))))
+       ((Cons path Nil) (run1 path 0 w1))
+       ((Cons path (Cons srcp Nil)) (run_src path srcp w1))
+       (_ (fail2 "usage: bytetie CERTFILE [SRCFILE]" w1))))))

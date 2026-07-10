@@ -401,6 +401,22 @@ else
   echo "SKIPPED (no bin/shard_eval)"
 fi
 
+# Percolation-twin negative pin (docs/X86.md §49): a smuggled XSyscall in a
+# module with an empty declared effect surface must be REFUSED by bytetie
+# — before this gate a hidden effect-point in a "pure" body was checked by
+# nothing at the byte level.
+echo "=== lowering: percolation negative fixture ==="
+if [ -x bin/shard_eval ]; then
+  if bin/shard_eval run tools/bytetie/bytetie.shard examples/percolation_rejects.shard > "$TMP/pc.out" 2>&1; then
+    echo "GATE FAILED: hidden effect-point ACCEPTED"
+    tail -5 "$TMP/pc.out"
+  else
+    tail -1 "$TMP/pc.out"
+  fi
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
 # Rust-conformance pin: the bootstrap evaluator's cargo suite (prim
 # conformance vs the object table, Word/Bytes revocation guards, kernel
 # loading, induct/match plumbing). It was manual-only and rotted silently

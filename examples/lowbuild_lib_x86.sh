@@ -58,6 +58,9 @@ grep '^XMOD ' "$TMP/plan.txt" | sort > "$TMP/mods.txt"
 grep '^TIE ' "$TMP/tie.txt" | sed 's/^TIE /XMOD /' | sort > "$TMP/ties.txt"
 diff "$TMP/ties.txt" "$TMP/mods.txt"
 echo "BYTETIE OK"
+# percolation (docs/X86.md §49): a pure lib asserts an empty effect surface
+grep '^EFF ' "$TMP/tie.txt" | grep -q ' OK$'
+echo "PERCOLATION OK ($(grep '^EFF ' "$TMP/tie.txt"))"
 "$EVAL" run tools/lowcheck/manifest.shard "$TMP/plan.txt" models/x86/x86.shard "$OUT"
 
 echo "== gate 6: engine (the CPU replays the derived plan)"

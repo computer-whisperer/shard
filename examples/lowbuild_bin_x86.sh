@@ -78,7 +78,10 @@ fi
 echo "== gate 2c: byte tie (certs -> assembled image -> enc_image = shipped bytes)"
 "$EVAL" run tools/lowbuild/lowbuild.shard lib "$SRC" "$OUT" x86 > "$TMP/plan.txt" 2>"$TMP/plan.err" || {
   cat "$TMP/plan.err"; fail "plan derivation"; }
-"$EVAL" run tools/bytetie/bytetie.shard "$OUT" > "$TMP/tie.txt" 2>&1 || fail "bytetie run"
+# SRC rides along: bytetie reads the bin form's extern count as the
+# declared effect surface for the percolation gate (2e)
+"$EVAL" run tools/bytetie/bytetie.shard "$OUT" "$SRC" > "$TMP/tie.txt" 2>&1 || {
+  tail -1 "$TMP/tie.txt"; fail "bytetie run"; }
 grep '^XMOD ' "$TMP/plan.txt" | sort > "$TMP/mods.txt"
 grep '^TIE ' "$TMP/tie.txt" | sed 's/^TIE /XMOD /' | sort > "$TMP/ties.txt"
 if diff "$TMP/ties.txt" "$TMP/mods.txt" > "$TMP/tiediff.txt"; then
@@ -92,6 +95,17 @@ if "$EVAL" run tools/lowcheck/manifest.shard "$TMP/plan.txt" models/x86/x86.shar
   tail -1 "$TMP/man.txt"; echo "PASS manifest"
 else
   cat "$TMP/man.txt"; fail "manifest"
+fi
+
+echo "== gate 2e: percolation (syscall bytes == the declared effect surface)"
+# docs/X86.md §49: bytetie refuses on any hidden effect-point; the EFF
+# line asserts the check actually ran (anti-drift: a bytetie that stops
+# emitting it fails here, not silently)
+EFFL=$(grep '^EFF ' "$TMP/tie.txt" || true)
+if [ -n "$EFFL" ] && printf '%s\n' "$EFFL" | grep -q ' OK$'; then
+  echo "PASS percolation ($EFFL)"
+else
+  fail "percolation (no EFF OK line from bytetie)"
 fi
 
 echo "== gate 3: surface (the glue-contract premise gate, bin arm)"
@@ -141,6 +155,17 @@ want_out() { # $1 = OUT hex field ('' or '-' = empty)
   if [ -z "$1" ] || [ "$1" = "-" ]; then : > "$TMP/want.out"; else
     printf '%s' "$1" | xxd -r -p > "$TMP/want.out"; fi
 }
+# pool-coverage fence (docs/X86.md §49): a WORLD bin's vector pool must
+# not shrink — the no-arg leg carries OUT (the at-least-once store) and
+# at least five two-arg legs ride BVEC2 (single-digit, multi-digit,
+# differing-length, and the MAXLEN truncation pair live in lowbuild's
+# pinned pool; this fence refuses a shrunken pool rather than passing)
+if grep -q '^BVEC2 .* OUT ' "$TMP/be.txt"; then
+  grep -q '^BNOARG EXIT [0-9]* OUT ' "$TMP/be.txt" \
+    || fail "pool coverage (a WORLD bin's no-arg leg lacks OUT)"
+  N2=$(grep -c '^BVEC2 ' "$TMP/be.txt")
+  [ "$N2" -ge 5 ] || fail "pool coverage (BVEC2 pool shrank to $N2 < 5)"
+fi
 BNOARG=$(grep '^BNOARG EXIT ' "$TMP/be.txt" | awk '{print $3}')
 want_out "$(grep '^BNOARG EXIT ' "$TMP/be.txt" | awk '{print $5}')"
 "$TMP/a.bin" > "$TMP/got.out"; code=$?
