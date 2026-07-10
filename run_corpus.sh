@@ -418,6 +418,23 @@ else
   echo "SKIPPED (no bin/shard_eval)"
 fi
 
+# Pattern binder-capture negative pin (friction item 1 residue): a bare
+# CAPITALIZED symbol in pattern position naming no visible ctor must be
+# REFUSED, not silently bound (the ctor-capture footgun). Runs the SOURCE
+# checker through the tower — the compiled engine accepts this file until
+# its next rebuild, the source must refuse it TODAY.
+echo "=== reader: pattern binder-capture negative fixture ==="
+if [ -x bin/shard_eval ]; then
+  if bin/shard_eval run kernel/check.shard examples/pat_binder_rejects.shard > "$TMP/pb.out" 2>&1; then
+    echo "GATE FAILED: capitalized binder-capture pattern ACCEPTED"
+    tail -5 "$TMP/pb.out"
+  else
+    tail -2 "$TMP/pb.out"
+  fi
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
 # Rust-conformance pin: the bootstrap evaluator's cargo suite (prim
 # conformance vs the object table, Word/Bytes revocation guards, kernel
 # loading, induct/match plumbing). It was manual-only and rotted silently
