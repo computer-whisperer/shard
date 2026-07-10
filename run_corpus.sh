@@ -217,6 +217,7 @@ TARGETS=(
   std/nat.shard
   std/order.shard
   std/rng/rng.shard
+  std/rng/rng.wasm.shard
   std/bytes/bytes.shard
   std/str/utf8.shard
   std/str/str.shard
