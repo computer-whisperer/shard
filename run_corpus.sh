@@ -180,6 +180,7 @@ TARGETS=(
   examples/subterm_induct_rejects.shard
   examples/struct_clause.shard
   examples/struct_mutual_list.shard
+  examples/adq13_probe.shard
   examples/render_model.shard
   examples/modules_demo/consumer.shard
   examples/modules_demo/views/module_view.shard
