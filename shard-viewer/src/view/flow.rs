@@ -53,9 +53,30 @@ pub(crate) fn render_region(r: &Region) -> El {
         Region::Frame { kind, detail, branches } => render_frame(*kind, detail, branches),
         Region::List { elems, tail } => render_list(elems, tail.as_deref()),
         Region::Op { head, inline, args } => render_op(head, inline, args),
+        Region::Seq(steps) => render_seq(steps),
         Region::Var(name) => var_pill(name),
         Region::Lit(value) => lit_tag(value),
     }
+}
+
+/// An ordered sequence (a proof's step ladder): an amber rail down the left,
+/// rungs read top→bottom. The proof counterpart of the list's bracket bar —
+/// amber because sequences come from the proof layer.
+fn render_seq(steps: &[Region]) -> El {
+    if steps.is_empty() {
+        return lit_tag("·");
+    }
+    let rows = column(steps.iter().map(render_region).collect::<Vec<_>>()).gap(4.0);
+    row([seq_bar(), rows]).gap(tokens::SPACE_2).align(Align::Stretch)
+}
+
+/// The thin vertical rule tying a step ladder's rungs into one sequence.
+fn seq_bar() -> El {
+    column(Vec::<El>::new())
+        .width(Size::Fixed(2.5))
+        .height(Size::Fill(1.0))
+        .fill(tokens::WARNING.mix(tokens::MUTED, 0.5))
+        .radius(2.0)
 }
 
 /// A collapsed `Cons` spine: a bracketed column of element regions (data
@@ -106,8 +127,16 @@ fn bracket_bar() -> El {
 /// branches, each headed by its selector chip. Nesting = box enclosure.
 fn render_frame(kind: FrameKind, detail: &str, branches: &[Branch]) -> El {
     let (accent, fg) = match kind {
-        FrameKind::Match | FrameKind::If => (tokens::INFO, tokens::INFO_FOREGROUND),
-        FrameKind::Let => (tokens::SUCCESS, tokens::SUCCESS_FOREGROUND),
+        // Branching (a proof case split IS a match — same band, same read).
+        FrameKind::Match
+        | FrameKind::If
+        | FrameKind::Induct
+        | FrameKind::FinSplit
+        | FrameKind::CaseOn
+        | FrameKind::WfInduct
+        | FrameKind::SubtermInduct => (tokens::INFO, tokens::INFO_FOREGROUND),
+        // Binding (`have` binds facts the way `let` binds values).
+        FrameKind::Let | FrameKind::Have => (tokens::SUCCESS, tokens::SUCCESS_FOREGROUND),
     };
     let mut band_kids = vec![
         text(kind.keyword().to_string())
@@ -143,8 +172,12 @@ fn render_frame(kind: FrameKind, detail: &str, branches: &[Branch]) -> El {
         .radius(7.0)
 }
 
-/// One labelled branch inside a frame: its selector chip + the contained region.
+/// One labelled branch inside a frame: its selector chip + the contained
+/// region. An empty label (a single-body induction frame) draws no chip.
 fn render_branch(b: &Branch) -> El {
+    if b.label.is_empty() {
+        return render_region(&b.region);
+    }
     // Top-align: the chip sits beside its region's header, not floating at the
     // vertical centre of a tall nested frame.
     row([selector_chip(&b.label), render_region(&b.region)])

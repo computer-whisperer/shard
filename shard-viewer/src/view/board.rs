@@ -157,6 +157,21 @@ fn est(r: &Region) -> (f32, f32) {
             }
             (block_w + card_w + 6.0, card_h.max(block_h))
         }
+        Region::Seq(steps) => {
+            // A railed column of step rungs (proof ladders; fn bodies never
+            // produce Seq, so the Board only meets this via future reuse).
+            let mut w = 0.0_f32;
+            let mut h = 0.0_f32;
+            for (i, s) in steps.iter().enumerate() {
+                let (sw, sh) = est(s);
+                w = w.max(sw);
+                h += sh;
+                if i > 0 {
+                    h += 4.0;
+                }
+            }
+            (w + 11.0, h.max(20.0)) // rail + gap
+        }
         Region::List { elems, tail } => {
             // header (`list · N`) over a bracketed column of element regions.
             let mut body_w = 0.0_f32;

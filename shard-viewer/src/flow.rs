@@ -19,11 +19,23 @@ use crate::model::pretty;
 use crate::sexpr::Sexpr;
 
 /// A control structure's flavor — drives its band color/keyword in the view.
+/// The proof lowering (`proof.rs`) reuses the frame vocabulary: a case-split
+/// tactic *is* a match, a `have` *is* a let-of-facts — same cognitive role,
+/// same band, so proofs read in the language the fn cards already taught.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum FrameKind {
     Match,
     If,
     Let,
+    /// Proof case splits (branching tactics).
+    Induct,
+    FinSplit,
+    CaseOn,
+    /// Proof well-founded/structural induction over a single body.
+    WfInduct,
+    SubtermInduct,
+    /// The cut: `have` binds proven facts the way `let` binds values.
+    Have,
 }
 
 impl FrameKind {
@@ -32,6 +44,12 @@ impl FrameKind {
             FrameKind::Match => "match",
             FrameKind::If => "if",
             FrameKind::Let => "let",
+            FrameKind::Induct => "induct",
+            FrameKind::FinSplit => "fin-split",
+            FrameKind::CaseOn => "case-on",
+            FrameKind::WfInduct => "wf-induct",
+            FrameKind::SubtermInduct => "subterm-induct",
+            FrameKind::Have => "have",
         }
     }
 }
@@ -60,6 +78,9 @@ pub enum Region {
         inline: String,
         args: Vec<Region>,
     },
+    /// An ordered sequence (a proof's step ladder): rendered as a railed
+    /// column read top→bottom, distinct from a frame's labelled branches.
+    Seq(Vec<Region>),
     /// A bare variable / parameter reference.
     Var(String),
     /// A literal (int / string / quoted datum).

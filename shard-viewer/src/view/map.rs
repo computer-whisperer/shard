@@ -793,9 +793,11 @@ fn claim_tip(c: &ClaimDef) -> String {
     format!("{tag} {}\n{}\ncites {} · about {} fns", c.name, c.goal, c.cites.len(), c.about.len())
 }
 
-/// One proof-layer form as an intrinsic card: kind tag + name, then the goal
-/// statement. Like [`flow_card`] it hugs — the commit pass measures exactly
-/// this construction, so it lands in its footprint.
+/// One proof-layer form as an intrinsic card: kind tag + name, the goal
+/// statement, then the proof's structure in the Flow vocabulary (case-split
+/// frames, have facts, step ladders with lemma citations as the bold heroes —
+/// see `proof.rs`). Like [`flow_card`] it hugs — the commit pass measures
+/// exactly this construction, so it lands in its footprint.
 fn claim_card(project: &Project, ci: usize) -> El {
     let c = &project.claims[ci];
     let (tag, tag_color) = claim_tag(c);
@@ -816,6 +818,9 @@ fn claim_card(project: &Project, ci: usize) -> El {
         parts.push(
             text(ellipt(&c.goal, 52)).mono().muted().font_size(SUB_SIZE).nowrap_text(),
         );
+    }
+    if let Some(region) = crate::proof::build(&c.form) {
+        parts.push(render_region(&region));
     }
     column(parts)
         .gap(tokens::SPACE_1)

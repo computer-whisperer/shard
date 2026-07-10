@@ -49,6 +49,22 @@ alone. Scopes follow suit (`Scope::claims`): file/dir/project scopes carry
 their files' claims, and fn-anchored scopes (`Fn`, `CallTree`) pull in the
 claims *about* their fns from wherever those claims live.
 
+**The proof card** shows each proof's *structure* in the same Flow vocabulary
+the fn cards taught (`proof.rs` lowers the tactic tree into the shared
+`Region` type): case-split tactics (`induct` / `fin-split` / `case-on` /
+`wf-induct`) are blue frames with case-selector chips — a case split *is* a
+match; `have`/`chain` are green frames binding named facts, each shown as its
+goal statement over the proof that establishes it — a `have` *is* a let of
+facts; step ladders (`steps`) are railed columns read top→bottom, where a
+lemma rewrite makes the **lemma name the bold hero** (`bor_le_pow2 ←
+rewrite-with`), premise/hyp rewrites and unfolds keep the verb visible, and
+pure computation moves (`simp`/`compute`/`reduce`, `refl`, `by arith`) are
+dim tags. The rule: render the skeleton — where it branches, what it cuts in,
+what it cites — and drop the checker food (directions, positions, farkas
+coefficient lists). Proof footprints are committed like everything else, so
+proof *size on the plane* is an honest complexity signal; below the flow
+threshold a claim shows as its kind-tinted name slab.
+
 **One committed topology per scope (the cartographic rule)**: the layout is a
 pure function of the scope — zoom, selection, and the pointer never move
 anything. Every fn owns a footprint sized for its full flow card, laid out
