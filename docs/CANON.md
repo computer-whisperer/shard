@@ -559,6 +559,18 @@ first rebuilt engines: corpus FAIL-set identical, both canon gates
 green, sweep 25/25, and the corpus-wide advisory footprint measured
 at 255 CANON lines under C1–C6.
 
+**Slice 1c (2026-07-10, commit 6f01d20, validated post-merge on stamp
+7562f67c543c): C9 joins the recognizer.** Match-on-Bool detection is
+one arm-scan for a core Bool ctor head, flagged once per match. The
+measured organic footprint corpus-wide: 6 sites (plus the 2 deliberate
+rejects lines) — the collapse was already the corpus's idiom. Full
+final measurement under C1–C9 (231 targets): C6 198 (the emitter
+towers, unchanged), C4 28, C8 22, C3 10, C1 9, C9 8, C5 6, C2 2.
+Validation battery: corpus FAIL-set = the justified post-#16 baseline
+(the canon fixtures contributed exactly their deliberate lines), canon
+gates green (17 rejects lines), sweep 26/26 (the WORD-fragment build
+joined the roster).
+
 Next slices, in dependency order: the tools/canon REWRITER + the §9
 exactness census harness (slice 2); the C7 check-time tier over the
 append rule set (slice 3); stage-2 enforcement — std/ canonicalized +
