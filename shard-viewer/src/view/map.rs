@@ -119,6 +119,11 @@ pub struct Committed {
     /// layout of its children. Child index order = subdirs (name order), then
     /// files (ascending index) — [`DirNode`] iteration, identical every walk.
     dirs: BTreeMap<String, LevelGeom>,
+    /// Every file box's absolute rect on this plane (canvas content coords) —
+    /// the fly-to targets for scope-as-camera navigation ([`region_rect`]).
+    file_rects: BTreeMap<usize, Rect>,
+    /// Every dir box's absolute rect, keyed like [`Self::dirs`].
+    dir_rects: BTreeMap<String, Rect>,
     /// Content extent (root layout + canvas padding).
     w: f32,
     h: f32,
@@ -134,6 +139,28 @@ struct LevelGeom {
 /// The app-owned per-scope cache of committed maps, lent to the pure view.
 /// Most-recently-used last. Headless render passes `None`.
 pub type MapCache = std::cell::RefCell<Vec<Committed>>;
+
+/// A region on a committed plane — what scope-as-camera navigation flies to.
+pub enum MapTarget<'a> {
+    File(usize),
+    /// A dir path as [`crate::scope::Scope::Dir`] spells it (no trailing `/`).
+    Dir(&'a str),
+}
+
+/// The committed rect of a region on an **already-committed** plane, in the
+/// Map canvas's content coordinates — push it as a `ViewportRequest::FrameRect`
+/// to fly there. `None` when the plane isn't in the cache (the Map hasn't
+/// drawn this scope yet) or the target isn't on it; the caller falls back to
+/// a scope switch. Never commits: any plane on screen was committed by its
+/// own build.
+pub fn region_rect(cache: &MapCache, plane: &Scope, target: MapTarget) -> Option<Rect> {
+    let g = cache.borrow();
+    let com = g.iter().find(|c| c.scope == *plane)?;
+    match target {
+        MapTarget::File(i) => com.file_rects.get(&i).copied(),
+        MapTarget::Dir(d) => com.dir_rects.get(&format!("{d}/")).copied(),
+    }
+}
 
 pub(crate) fn canvas(project: &Project, p: &ViewParams, cache: Option<&MapCache>) -> El {
     let fns = p.scope.fns(project);
@@ -234,6 +261,8 @@ fn commit(
         scope: scope.clone(),
         files: BTreeMap::new(),
         dirs: BTreeMap::new(),
+        file_rects: BTreeMap::new(),
+        dir_rects: BTreeMap::new(),
         w: 0.0,
         h: 0.0,
     };
@@ -241,7 +270,33 @@ fn commit(
     let pad = tokens::SPACE_6;
     out.w = w + 2.0 * pad;
     out.h = h + 2.0 * pad;
+    // Resolve every box's absolute rect (positions are per-level until the
+    // whole tree is placed) — the region index fly-to navigation reads.
+    region_pass(&mut out, root, "", (pad, pad));
     out
+}
+
+/// Accumulate absolute rects for every dir/file box, mirroring the render
+/// walk's iteration (subdirs in name order, then files) over the committed
+/// per-level layouts.
+fn region_pass(com: &mut Committed, node: &DirNode, path: &str, origin: (f32, f32)) {
+    let rects: Vec<(f32, f32, f32, f32)> =
+        com.dirs[path].lay.nodes.iter().map(|n| (n.x, n.y, n.w, n.h)).collect();
+    let mut i = 0;
+    for (name, sub) in &node.subdirs {
+        let (x, y, w, h) = rects[i];
+        let child_path = format!("{path}{name}/");
+        let abs = (origin.0 + x, origin.1 + y);
+        com.dir_rects.insert(child_path.clone(), Rect::new(abs.0, abs.1, w, h));
+        let off = com.dirs[&child_path].off;
+        region_pass(com, sub, &child_path, (abs.0 + off.0, abs.1 + off.1));
+        i += 1;
+    }
+    for &file in &node.files {
+        let (x, y, w, h) = rects[i];
+        com.file_rects.insert(file, Rect::new(origin.0 + x, origin.1 + y, w, h));
+        i += 1;
+    }
 }
 
 /// Commit one dir level: children (subdir boxes, then file boxes) sized
@@ -789,6 +844,54 @@ mod tests {
         // Long name in a narrow box: width-clamped but still legible at 1:1.
         let long = carto_label("a_rather_long_module_name", 13.0, 1.0, 120.0, 40.0, (0.0, 0.0), no_shade);
         assert!(long.is_some());
+    }
+
+    fn placed(x: f32, y: f32, w: f32, h: f32) -> layout::PlacedNode {
+        layout::PlacedNode { x, y, w, h, in_ports: Vec::new(), out_ports: Vec::new() }
+    }
+
+    fn level(nodes: Vec<layout::PlacedNode>, off: (f32, f32)) -> LevelGeom {
+        LevelGeom {
+            lay: Layout { nodes, edges: Vec::new(), width: 500.0, height: 300.0 },
+            off,
+        }
+    }
+
+    #[test]
+    fn region_pass_resolves_absolute_rects_and_region_rect_reads_them() {
+        // Root level: subdir "a" box then file 3's box. Inside a/: file 7.
+        let mut root = DirNode::default();
+        root.insert(&["a"], 7);
+        root.insert(&[], 3);
+        let mut com = Committed {
+            scope: Scope::Project,
+            files: BTreeMap::new(),
+            dirs: BTreeMap::from([
+                (
+                    String::new(),
+                    level(vec![placed(10.0, 20.0, 300.0, 200.0), placed(350.0, 20.0, 100.0, 80.0)], (0.0, 0.0)),
+                ),
+                ("a/".to_string(), level(vec![placed(5.0, 6.0, 60.0, 40.0)], (12.0, 30.0))),
+            ]),
+            file_rects: BTreeMap::new(),
+            dir_rects: BTreeMap::new(),
+            w: 500.0,
+            h: 300.0,
+        };
+        region_pass(&mut com, &root, "", (24.0, 24.0));
+        assert_eq!(com.dir_rects["a/"], Rect::new(34.0, 44.0, 300.0, 200.0));
+        assert_eq!(com.file_rects[&3], Rect::new(374.0, 44.0, 100.0, 80.0));
+        // File 7 sits inside a/'s box: dir origin + the box's content offset.
+        assert_eq!(com.file_rects[&7], Rect::new(51.0, 80.0, 60.0, 40.0));
+
+        let cache = MapCache::new(vec![com]);
+        let hit = region_rect(&cache, &Scope::Project, MapTarget::Dir("a"));
+        assert_eq!(hit, Some(Rect::new(34.0, 44.0, 300.0, 200.0)));
+        let file = region_rect(&cache, &Scope::Project, MapTarget::File(7));
+        assert_eq!(file, Some(Rect::new(51.0, 80.0, 60.0, 40.0)));
+        // Misses: a dir not on the plane; a plane not in the cache.
+        assert_eq!(region_rect(&cache, &Scope::Project, MapTarget::Dir("b")), None);
+        assert_eq!(region_rect(&cache, &Scope::Dir("a".into()), MapTarget::File(7)), None);
     }
 
     #[test]

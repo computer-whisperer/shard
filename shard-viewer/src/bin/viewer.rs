@@ -39,6 +39,20 @@ impl Viewer {
         self.pending.push(ViewportRequest::FitContent {
             key: CANVAS_KEY.into(),
             padding: 32.0,
+            // Instant: fit() accompanies a content swap (new scope/mode), and
+            // flying between two unrelated layouts is meaningless motion.
+            behavior: ViewportBehavior::Instant,
+        });
+    }
+
+    /// Fly the Map camera to a region of the committed plane (scope-as-camera:
+    /// the layout stays put, the viewport travels).
+    fn fly_to(&mut self, rect: Rect) {
+        self.pending.push(ViewportRequest::FrameRect {
+            key: CANVAS_KEY.into(),
+            rect,
+            padding: 48.0,
+            behavior: ViewportBehavior::Smooth,
         });
     }
 
@@ -135,6 +149,7 @@ impl App for Viewer {
         } else if event.is_route("reset") {
             self.pending.push(ViewportRequest::ResetView {
                 key: CANVAS_KEY.into(),
+                behavior: ViewportBehavior::Instant,
             });
         } else if event.is_route("mode_methods") {
             self.mode = ViewMode::Methods;
@@ -152,11 +167,21 @@ impl App for Viewer {
             self.mode = ViewMode::Map;
             self.fit();
         } else if event.is_route("scope_project") {
-            // Map the whole project at once (sidebar "Whole project").
-            self.scope = Scope::Project;
-            self.selected_fn = None;
-            self.mode = ViewMode::Map;
-            self.fit();
+            if self.mode == ViewMode::Map && self.scope == Scope::Project {
+                // Already on the project plane: fly home rather than snap.
+                // (A smooth FitContent re-arms the fit policy on arrival.)
+                self.pending.push(ViewportRequest::FitContent {
+                    key: CANVAS_KEY.into(),
+                    padding: 32.0,
+                    behavior: ViewportBehavior::Smooth,
+                });
+            } else {
+                // Map the whole project at once (sidebar "Whole project").
+                self.scope = Scope::Project;
+                self.selected_fn = None;
+                self.mode = ViewMode::Map;
+                self.fit();
+            }
         } else if event.is_route("scope_tree") {
             // Map the selected fn's call neighborhood (detail-panel "Tree ▸").
             // Keep it focused as the tree's root. One up, two down: immediate
@@ -167,13 +192,23 @@ impl App for Viewer {
                 self.fit();
             }
         } else if let Some(dir) = event.route_suffix("dir") {
-            // Sidebar dir header: scope the canvas to the whole subtree. A dir
-            // spans many files, so it can only be shown on the Map — switch to
-            // it (single-file views have no anchor for a Dir scope).
-            self.scope = Scope::Dir(dir.to_string());
-            self.selected_fn = None;
-            self.mode = ViewMode::Map;
-            self.fit();
+            // Scope-as-camera: when the Map is up and this dir already sits on
+            // the committed plane on screen, fly the camera to its box — the
+            // topology never re-roots under the user. Otherwise fall back to
+            // scoping the canvas to the subtree (a dir spans many files, so it
+            // can only be shown on the Map — switch to it; single-file views
+            // have no anchor for a Dir scope).
+            if self.mode == ViewMode::Map
+                && let Some(r) =
+                    view::region_rect(&self.map_cache, &self.scope, view::MapTarget::Dir(dir))
+            {
+                self.fly_to(r);
+            } else {
+                self.scope = Scope::Dir(dir.to_string());
+                self.selected_fn = None;
+                self.mode = ViewMode::Map;
+                self.fit();
+            }
         } else if let Some(i) = event.route_index::<usize>("sysfile")
             && i < self.project.files.len()
         {
@@ -189,7 +224,17 @@ impl App for Viewer {
         } else if let Some(i) = event.route_index::<usize>("file")
             && i < self.project.files.len()
         {
-            self.open_file(i);
+            // Scope-as-camera, same as the dir case: a sidebar file click
+            // while its box is on the Map's plane flies there instead of
+            // tearing the user out into the Methods view.
+            if self.mode == ViewMode::Map
+                && let Some(r) =
+                    view::region_rect(&self.map_cache, &self.scope, view::MapTarget::File(i))
+            {
+                self.fly_to(r);
+            } else {
+                self.open_file(i);
+            }
         } else if let Some(i) = event.route_index::<usize>("fn")
             && i < self.project.fns.len()
         {
@@ -237,6 +282,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         vec![ViewportRequest::FitContent {
             key: CANVAS_KEY.into(),
             padding: 32.0,
+            behavior: ViewportBehavior::Instant,
         }]
     } else {
         Vec::new()

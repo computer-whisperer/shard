@@ -47,6 +47,17 @@ draw at **hairline (screen-constant) weight**, since a project-fit zoom of
 (armed `FitPolicy`, or headless) the effective zoom is computed exactly from
 the committed extent — which no longer depends on zoom, so the old
 fit⇄extent feedback loop cannot exist.
+
+**Scope-as-camera (fly-to navigation)**: while the Map is up, clicking a
+sidebar dir or file whose box is already on the committed plane flies the
+camera to it (`ViewportRequest::FrameRect`, damascene #122, smooth van
+Wijk–Nuij zoom-out/translate/zoom-in) instead of re-rooting the layout — so
+from `Whole project` you navigate the entire codebase on one unchanging
+plane, and spatial memory holds: kernel is always *over there*. Clicking
+`Whole project` again flies home. Targets not on the current plane fall back
+to the usual scope switch + instant fit. (Until the next damascene release,
+`FrameRect` rides a temporary `[patch.crates-io]` onto the local damascene
+main checkout — see Cargo.toml.)
 The interface/implementation
 split reads at a glance: a `mod.req.shard` of signature-only cards sits beside
 the `.shard` that implements them, with an import arrow between. The whole tree
