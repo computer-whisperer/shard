@@ -675,9 +675,31 @@ Architecture as ratified in §3, with these implementation rulings:
   two files (ZERO advisory lines); both files check 52/0. run_corpus
   gains both targets + two gate pins (pin-identity, roundtrip).
 
-Next slices, in dependency order: the §9 exactness census harness
-(slice 2b — recognizer image ≡ rewriter fixpoint image over a small
-enumerated signature); the C7 check-time tier over the append rule
-set (slice 3); stage-2 enforcement — std/ canonicalized + the corpus
-sweep pin (slice 4); the §7 hash spec + compute tool (slice 5, after
-the form stabilizes).
+**Slice 2b (2026-07-10): the exactness census
+(tools/canon/census.shard).** §9's `--canon-verify`, graduated, with
+one structural upgrade over the playground: no mini-elaborator — the
+census synthesizes ONE module holding every enumerated candidate and
+judges it through the PRODUCTION pipeline on both sides (recognizer =
+kernel/canon's cn_e over a build_module_r-built module on the real
+stdlib closure; rewriter = the tools/canon core on the file's CST),
+so the census has no translation layer to drift in. Enumerated
+domain: 102 typed fn bodies over `b:Bool, n:Int, xs:(List Int)`
+covering the fixed tier — every if over 5 conditions × 4×4 bodies
+(C2 decided conds incl. the C1→C2 fold cascade, C10 equal branches),
+Bool matches both orders (C9×C4), int-literal arm orders + dups +
+after-catch (C4/C5), ground-scrutinee matches (C2), standalone prim
+redexes (C1), and List-ctor matches with respell/rebuild/reuse arms
+(C8 both directions, C4 ctor order, C5). Excluded by design: the
+refusal tier (C3/C6) and partial matches (runtime-stuck programs;
+refusal is correct there). Asserted: A1 rewriter image is
+recognizer-clean; A2 admitted ⟺ fixpoint, per term; A3 file-wide
+idempotence. Result: **OK — 102 terms, 74 flagged→fixed, 28 admitted
+unchanged** (the flagged count prints in the OK line so a vacuous
+census is visible at a glance). Wired into run_corpus's canon gate;
+census.shard is itself self-canonicalized and checks 52/0.
+
+Next slices, in dependency order: the C7 check-time tier over the
+append rule set (slice 3); stage-2 enforcement — std/ canonicalized +
+the corpus sweep pin (slice 4); the §7 hash spec + compute tool
+(slice 5, after the form stabilizes). Queued kernel companion:
+tc_nat_lit_view at every Nat-expected position (unlocks the C6 fold).

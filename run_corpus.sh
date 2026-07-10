@@ -190,6 +190,7 @@ TARGETS=(
   examples/canon_rejects.shard
   tools/canon/rewrite.shard
   tools/canon/canon.shard
+  tools/canon/census.shard
   examples/render_model.shard
   examples/modules_demo/consumer.shard
   examples/modules_demo/views/module_view.shard
@@ -508,6 +509,14 @@ if [ -x bin/shard_eval ]; then
       echo "FAIL canon_tool (roundtrip: $cnt_lines lines, $cnt_bad outside the refusal tier)"
       grep '^CANON ' "$TMP/cnt_rej.out"
     fi
+  fi
+  # The EXACTNESS CENSUS (CANON.md §9 / slice 2b): recognizer image must
+  # equal the rewriter's fixpoint image over the enumerated tier.
+  if bin/shard_eval run tools/canon/census.shard > "$TMP/census.out" 2>&1; then
+    tail -1 "$TMP/census.out"
+  else
+    echo "FAIL canon_census"
+    cat "$TMP/census.out"
   fi
 else
   echo "SKIPPED (no bin/shard_eval)"

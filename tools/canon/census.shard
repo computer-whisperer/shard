@@ -1,0 +1,460 @@
+;;; census.shard — the §9 EXACTNESS CENSUS for tools/canon (CANON.md
+;;; slice 2b; the playground's --canon-verify, graduated). Enumerates a
+;;; typed grammar of fn bodies over the COVERED invariant tier (C1, C2,
+;;; C4, C5, C8, C9, C10 — the refusal tier C3/C6 is excluded from the
+;;; vocabulary, as are partial matches, which are runtime-stuck programs
+;;; where refusal is correct), synthesizes ONE module holding every
+;;; candidate, and judges each body twice:
+;;;
+;;;   - the PRODUCTION recognizer (kernel/canon's cn_e), on the module
+;;;     built by the production run-mode loader (build_module_r over the
+;;;     real stdlib closure + the synthetic file) — no mini-elaborator,
+;;;     no drift surface;
+;;;   - the REWRITER (tools/canon/rewrite.shard) on the file's CST.
+;;;
+;;; Asserted, per candidate: (A1) the rewriter's output is recognizer-
+;;; CLEAN; (A2) recognizer-admitted iff rewriter-fixed-point (admitted
+;;; bodies unchanged, flagged bodies changed); and file-wide (A3)
+;;; idempotence — a second rewrite pass is the identity. This is the
+;;; gate that catches recognizer/rewriter drift: the pair must define
+;;; the SAME form (the slice-2a self-application corruption is exactly
+;;; the failure class this censuses).
+;;;
+;;; RUN IT:   bin/shard_eval run tools/canon/census.shard
+;;;   (prints "CANON CENSUS OK (<n> terms)" and exits 0, or one
+;;;    "CENSUS FAIL <fn> <assert>" line per violation and exits 1)
+;;; CHECK IT: bin/shard_eval run kernel/check.shard tools/canon/census.shard
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/reader.shard")
+(import "../../kernel/loader.shard")
+(import "../../kernel/canon.shard")
+(import "../../meta/format")
+(import "rewrite.shard")
+
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel reader *))
+(use (:: kernel loader World))
+(use (:: kernel loader get_args))
+(use (:: kernel loader read_file))
+(use (:: kernel loader write))
+(use (:: kernel loader exit))
+(use (:: kernel loader resolve_closure))
+(use (:: kernel canon *))
+(use (:: meta format *))
+(use (:: tools canon rewrite *))
+
+;; the ambient ctor base a user program may use without declaring —
+;; mirrors kernel/eval.shard's stdlib_ctors (drift here breaks the
+;; census loudly at module build, never soundness)
+(fn cs_seed_ctors () (List Symbol)
+  (list
+    (quote Cons)
+    (quote Nil)
+    (quote Some)
+    (quote None)
+    (quote True)
+    (quote False)
+    (quote Pair)))
+
+;; ---------------------------------------------------------------------------
+;; CST construction
+;; ---------------------------------------------------------------------------
+
+(fn ca ((s (List Int))) CNode (CAtom s))
+
+(fn c2 ((h (List Int)) (a CNode) (b CNode)) CNode
+  (CList (Cons (ca h) (Cons a (Cons b Nil)))))
+
+(fn c3 ((h (List Int)) (a CNode) (b CNode) (c CNode)) CNode
+  (CList (Cons (ca h) (Cons a (Cons b (Cons c Nil))))))
+
+;; a match arm (PAT BODY)
+(fn arm ((p CNode) (b CNode)) CNode (CList (Cons p (Cons b Nil))))
+
+;; (match SCRUT ARMS...)
+(fn cmatch ((s CNode) (arms (List CNode))) CNode
+  (CList (Cons (ca "match") (Cons s arms))))
+
+;; (Cons h t) — both the pattern and the expr spelling
+(fn ccons ((h CNode) (t CNode)) CNode
+  (CList (Cons (ca "Cons") (Cons h (Cons t Nil)))))
+
+;; ---------------------------------------------------------------------------
+;; the enumerated bodies. Two families by result type; every candidate is
+;; a TOTAL program over params b:Bool, n:Int, xs:(List Int).
+;; ---------------------------------------------------------------------------
+
+;; small Int atoms/exprs
+(fn g_int ((k Int)) CNode
+  (if (int_eq k 0) (ca "n")
+  (if (int_eq k 1) (ca "0")
+  (if (int_eq k 2) (ca "1")
+  (c2 "+" (ca "n") (ca "1"))))))
+
+;; conditions: decided, symbolic, ground-redex (C1->C2 cascade)
+(fn g_cond ((k Int)) CNode
+  (if (int_eq k 0) (ca "b")
+  (if (int_eq k 1) (ca "True")
+  (if (int_eq k 2) (ca "False")
+  (if (int_eq k 3) (c2 "lt" (ca "n") (ca "1"))
+  (c2 "lt" (ca "1") (ca "2")))))))
+
+;; every (if c t e) over 5 conds x 4x4 int bodies — covers C2 (decided
+;; conds incl. the C1-fold cascade), C10 (t = e), and canonical ifs
+(fn gen_ifs_e ((c Int) (t Int) (e Int) (acc (List CNode))) (List CNode)
+  (measure e)
+  (if (le e 0) acc
+  (let ((i (- e 1)))
+    (gen_ifs_e c t i (Cons (c3 "if" (g_cond c) (g_int t) (g_int i)) acc)))))
+
+(fn gen_ifs_ti ((c Int) (t Int) (acc (List CNode))) (List CNode)
+  (measure t)
+  (if (le t 0) acc (let ((i (- t 1))) (gen_ifs_ti c i (gen_ifs_e c i 4 acc)))))
+
+(fn gen_ifs_c ((c Int) (acc (List CNode))) (List CNode)
+  (measure c)
+  (if (le c 0) acc (let ((i (- c 1))) (gen_ifs_c i (gen_ifs_ti i 4 acc)))))
+
+;; total Bool matches: both ctor arms, or one ctor arm + catch-all, in
+;; both orders — C9 (always flagged) + C4 interaction
+(fn gen_match_b () (List CNode)
+  (list
+    (cmatch
+      (ca "b")
+      (list (arm (ca "True") (ca "n")) (arm (ca "False") (ca "0"))))
+    (cmatch
+      (ca "b")
+      (list (arm (ca "False") (ca "0")) (arm (ca "True") (ca "n"))))
+    (cmatch (ca "b") (list (arm (ca "True") (ca "n")) (arm (ca "_") (ca "0"))))
+    (cmatch (ca "b") (list (arm (ca "False") (ca "0")) (arm (ca "_") (ca "n"))))
+    (cmatch (ca "b") (list (arm (ca "True") (ca "n")) (arm (ca "_") (ca "n"))))))
+
+;; int-literal matches on n: ascending, descending, dup literal, arm
+;; after catch-all — C4 lit order + C5, all TOTAL (catch-all present)
+(fn gen_match_lit () (List CNode)
+  (list
+    (cmatch
+      (ca "n")
+      (list
+        (arm (ca "0") (ca "1"))
+        (arm (ca "1") (ca "0"))
+        (arm (ca "_") (ca "n"))))
+    (cmatch
+      (ca "n")
+      (list
+        (arm (ca "1") (ca "0"))
+        (arm (ca "0") (ca "1"))
+        (arm (ca "_") (ca "n"))))
+    (cmatch
+      (ca "n")
+      (list
+        (arm (ca "0") (ca "1"))
+        (arm (ca "0") (ca "n"))
+        (arm (ca "_") (ca "0"))))
+    (cmatch (ca "n") (list (arm (ca "_") (ca "0")) (arm (ca "1") (ca "n"))))))
+
+;; ground-scrutinee matches — C2 decides them (selected arm binder-free)
+(fn gen_match_ground () (List CNode)
+  (list
+    (cmatch
+      (ca "1")
+      (list
+        (arm (ca "0") (ca "n"))
+        (arm (ca "1") (ca "0"))
+        (arm (ca "_") (ca "n"))))
+    (cmatch (ca "0") (list (arm (ca "0") (ca "n")) (arm (ca "_") (ca "0"))))))
+
+;; standalone ground prim redexes — C1
+(fn gen_c1 () (List CNode)
+  (list
+    (c2 "+" (ca "1") (ca "2"))
+    (c2 "*" (ca "2") (ca "3"))
+    (c2 "-" (ca "5") (ca "3"))
+    (c2 "band" (ca "6") (ca "3"))))
+
+;; (List Int)-valued matches on xs: decl order + reversed (C4), the C8
+;; respell (Nil-arm body mentions xs) and rebuild ((Cons h t) rebuilt),
+;; whole-scrutinee reuse in a binding arm (canonical, must NOT change),
+;; dup Nil arm (C5, total after prune)
+(fn cons_pat () CNode (ccons (ca "h") (ca "t")))
+
+(fn gen_match_xs () (List CNode)
+  (list
+    (cmatch
+      (ca "xs")
+      (list (arm (ca "Nil") (ca "Nil")) (arm (cons_pat) (ca "t"))))
+    (cmatch
+      (ca "xs")
+      (list (arm (cons_pat) (ca "t")) (arm (ca "Nil") (ca "Nil"))))
+    (cmatch
+      (ca "xs")
+      (list (arm (ca "Nil") (ca "xs")) (arm (cons_pat) (ca "t"))))
+    (cmatch
+      (ca "xs")
+      (list (arm (ca "Nil") (ca "Nil")) (arm (cons_pat) (cons_pat))))
+    (cmatch
+      (ca "xs")
+      (list (arm (ca "Nil") (ca "Nil")) (arm (cons_pat) (ca "xs"))))
+    (cmatch
+      (ca "xs")
+      (list
+        (arm (ca "Nil") (ca "Nil"))
+        (arm (ca "Nil") (ca "xs"))
+        (arm (cons_pat) (ca "t"))))
+    (cmatch
+      (ca "xs")
+      (list
+        (arm (ca "Nil") (ca "Nil"))
+        (arm (cons_pat) (ccons (ca "h") (ca "Nil")))))))
+
+;; ---------------------------------------------------------------------------
+;; file synthesis: one fn per candidate, params fixed, RET by family
+;; ---------------------------------------------------------------------------
+
+(fn cs_params () CNode
+  (CList
+    (list
+      (CList (Cons (ca "b") (Cons (ca "Bool") Nil)))
+      (CList (Cons (ca "n") (Cons (ca "Int") Nil)))
+      (CList (Cons (ca "xs") (Cons (CList (list (ca "List") (ca "Int"))) Nil))))))
+
+(fn cs_fn ((name (List Int)) (ret CNode) (body CNode)) CNode
+  (CList (list (ca "fn") (ca name) (cs_params) ret body)))
+
+(fn cs_name ((prefix (List Int)) (k Int)) (List Int)
+  (append_int prefix (show_int k)))
+
+(fn cs_fns_of ((bodies (List CNode)) (prefix (List Int)) (ret CNode) (k Int))
+  (List CNode)
+  (measure (struct bodies))
+  (match bodies
+    (Nil Nil)
+    ((Cons bd rest)
+     (Cons
+       (cs_fn (cs_name prefix k) ret bd)
+       (cs_fns_of rest prefix ret (+ k 1))))))
+
+(fn cs_count ((ns (List CNode))) Int
+  (measure (struct ns))
+  (match ns
+    (Nil 0)
+    ((Cons _ t) (+ 1 (cs_count t)))))
+
+;; the whole synthetic file, as CST top forms
+(fn cs_tops () (List CNode)
+  (let
+    ((ints
+       (cw_app_nodes
+         (gen_ifs_c 5 Nil)
+         (cw_app_nodes
+           (gen_match_b)
+           (cw_app_nodes
+             (gen_match_lit)
+             (cw_app_nodes (gen_match_ground) (gen_c1))))))
+     (lists (gen_match_xs)))
+    (cw_app_nodes
+      (cs_fns_of ints "ci_" (ca "Int") 0)
+      (cs_fns_of lists "cl_" (CList (list (ca "List") (ca "Int"))) 0))))
+
+;; ---------------------------------------------------------------------------
+;; recognizer verdicts: name -> violation count, via the production loader
+;; ---------------------------------------------------------------------------
+
+(fn cs_empty_module () Module (Module Nil Nil Nil (FnTrie None Nil) Nil))
+
+(fn cs_build ((stdsrcs (List SrcEntry)) (bytes (List Int))) (Option Module)
+  (build_module_r
+    (cw_app_srcs stdsrcs (Cons (SrcEntry "census_gen.shard" False bytes) Nil))
+    (cs_empty_module)
+    (cs_seed_ctors)))
+
+(fn cw_app_srcs ((a (List SrcEntry)) (b (List SrcEntry))) (List SrcEntry)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (cw_app_srcs t b)))))
+
+;; per-fn violation counts for the synthetic module's own fns
+(fn cs_viol_len ((vs (List CViol))) Int
+  (measure (struct vs))
+  (match vs
+    (Nil 0)
+    ((Cons _ t) (+ 1 (cs_viol_len t)))))
+
+(fn cs_verdicts ((fs (List FnDef)) (m Module) (mp (List Symbol)))
+  (List (Pair (List Int) Int))
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons (FnDef q _ _ body) rest)
+     (if (sym_path_eq (qn_mod q) mp)
+       (Cons
+         (Pair (chars_of_sym (qn_name q)) (cs_viol_len (cn_e body m)))
+         (cs_verdicts rest m mp))
+       (cs_verdicts rest m mp)))))
+
+;; how many candidates the recognizer flagged — printed so a vacuous
+;; census (nothing exercised) is visible at a glance
+(fn cs_flagged ((vs (List (Pair (List Int) Int)))) Int
+  (measure (struct vs))
+  (match vs
+    (Nil 0)
+    ((Cons (Pair _ k) rest) (+ (if (int_eq k 0) 0 1) (cs_flagged rest)))))
+
+(fn cs_lookup ((name (List Int)) (vs (List (Pair (List Int) Int)))) (Option Int)
+  (measure (struct vs))
+  (match vs
+    (Nil None)
+    ((Cons (Pair nm k) rest)
+     (if (cw_bytes_eq nm name) (Some k) (cs_lookup name rest)))))
+
+;; the name of a (fn NAME ...) CST form
+(fn cs_form_name ((form CNode)) (Option (List Int))
+  (match form
+    ((CList items)
+     (match (cw_payload items)
+       ((Cons _ (Cons nm _))
+        (match nm
+          ((CAtom a) (Some a))
+          (_ None)))
+       (_ None)))
+    (_ None)))
+
+;; ---------------------------------------------------------------------------
+;; the assertions
+;; ---------------------------------------------------------------------------
+
+;; per-fn: A1 rewritten verdict = 0; A2 (verdict0 = 0) iff (form unchanged).
+;; forms0/forms1 walk in lockstep (the rewriter preserves order).
+(fn cs_assert
+  ((forms0 (List CNode))
+   (forms1 (List CNode))
+   (v0 (List (Pair (List Int) Int)))
+   (v1 (List (Pair (List Int) Int)))
+   (acc (List Int)))
+  (List Int)
+  (measure (struct forms0))
+  (match forms0
+    (Nil acc)
+    ((Cons f0 r0)
+     (match forms1
+       (Nil (append_int acc "CENSUS FAIL form-count-mismatch\n"))
+       ((Cons f1 r1)
+        (match (cs_form_name f0)
+          (None (cs_assert r0 r1 v0 v1 acc))
+          ((Some name)
+           (let
+             ((k0
+                (match (cs_lookup name v0)
+                  (None -1)
+                  ((Some k) k)))
+              (k1
+                (match (cs_lookup name v1)
+                  (None -1)
+                  ((Some k) k)))
+              (same (cw_ex_eq f0 f1)))
+             (cs_assert
+               r0
+               r1
+               v0
+               v1
+               (append_int
+                 acc
+                 (append_int
+                   (if (lt k0 0) (cs_fail name "missing-verdict-0") Nil)
+                   (append_int
+                     (if (int_eq k1 0) Nil
+                     (cs_fail name "A1-rewritten-not-clean"))
+                     (if (int_eq k0 0)
+                       (if same Nil (cs_fail name "A2-admitted-but-changed"))
+                     (if same (cs_fail name "A2-flagged-but-unchanged")
+                     Nil))))))))))))))
+
+(fn cs_fail ((name (List Int)) (which (List Int))) (List Int)
+  (append_int
+    "CENSUS FAIL "
+    (append_int name (append_int " " (append_int which "\n")))))
+
+;; ---------------------------------------------------------------------------
+;; main
+;; ---------------------------------------------------------------------------
+
+(fn cs_run ((w World)) World
+  (match (resolve_closure "kernel/stdlib.shard" False w)
+    ((Pair stdsrcs w2)
+     (let ((tops (cs_tops)))
+       (let ((bytes0 (pp_top tops)))
+         (match (cs_build stdsrcs bytes0)
+           (None (exit 1 (write "CENSUS FAIL build-0\n" w2)))
+           ((Some m0)
+            (let
+              ((mp (module_path_of "census_gen.shard"))
+               (facts (cs_facts stdsrcs bytes0)))
+              (let ((v0 (cs_verdicts (cn_fns m0) m0 mp)))
+                (match (cst_read bytes0)
+                  (None (exit 1 (write "CENSUS FAIL cst-0\n" w2)))
+                  ((Some nodes0)
+                   (match (cw_canonize nodes0 facts)
+                     ((Pair nodes1 stable)
+                      (if stable
+                        (let ((bytes1 (pp_top nodes1)))
+                          (match (cs_build stdsrcs bytes1)
+                            (None (exit 1 (write "CENSUS FAIL build-1\n" w2)))
+                            ((Some m1)
+                             (let ((v1 (cs_verdicts (cn_fns m1) m1 mp)))
+                               (match (cw_canonize nodes1 facts)
+                                 ((Pair nodes2 _)
+                                  (let
+                                    ((idem
+                                       (if (cw_ex_eq_l nodes2 nodes1) Nil
+                                       "CENSUS FAIL file A3-not-idempotent\n"))
+                                     (msgs
+                                       (cs_assert
+                                         (cw_payload nodes0)
+                                         (cw_payload nodes1)
+                                         v0
+                                         v1
+                                         Nil)))
+                                    (match (append_int idem msgs)
+                                      (Nil
+                                        (exit
+                                          0
+                                          (write
+                                            (append_int
+                                              "CANON CENSUS OK ("
+                                              (append_int
+                                                (show_int
+                                                  (cs_count (cw_payload nodes0)))
+                                                (append_int
+                                                  " terms, "
+                                                  (append_int
+                                                    (show_int (cs_flagged v0))
+                                                    " flagged -> fixed)\n"))))
+                                            w2)))
+                                      ((Cons c rest)
+                                       (exit 1 (write (Cons c rest) w2)))))))))))
+                        (exit
+                          1
+                          (write "CENSUS FAIL file rewrite-unstable\n" w2))))))))))))))))
+
+;; rewriter facts: the stdlib closure (kernel) + the synthetic file
+(fn cs_facts ((stdsrcs (List SrcEntry)) (bytes (List Int))) CwFacts
+  (let ((f1 (cs_scan_srcs stdsrcs (cw_empty_facts))))
+    (match (read_all bytes)
+      (None f1)
+      ((Some forms) (cw_scan_file forms False f1)))))
+
+(fn cs_scan_srcs ((srcs (List SrcEntry)) (acc CwFacts)) CwFacts
+  (measure (struct srcs))
+  (match srcs
+    (Nil acc)
+    ((Cons (SrcEntry _ _ bytes) rest)
+     (match (read_all bytes)
+       (None (cs_scan_srcs rest acc))
+       ((Some forms) (cs_scan_srcs rest (cw_scan_file forms True acc)))))))
+
+(fn main ((w World)) World (cs_run w))
