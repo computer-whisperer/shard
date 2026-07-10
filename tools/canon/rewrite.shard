@@ -1,0 +1,1759 @@
+;;; rewrite.shard — the PURE canonicalization core for tools/canon (CANON.md
+;;; §3: the untrusted rewriter; slice 2). CST -> CST over meta/format's CNode,
+;;; so comments, blank lines, and raw atom spellings survive; the meta/format
+;;; printer renders the result. The kernel recognizer (kernel/canon.shard) is
+;;; the only authority on whether a rewrite SUCCEEDED — this module refuses
+;;; (leaves a site untouched) whenever a rewrite is not obviously
+;;; meaning-preserving, and the advisory CANON line simply remains.
+;;;
+;;; v1 rewrite set (the mechanical tier): C1 ground prim folds (via the
+;;; reducer's OWN try_step_prim — same drift-proofing as the recognizer),
+;;; C2 decided ifs and binder-free decided matches, C4 arm reorder + literal
+;;; sort, C5 dead-arm delete, C6 nat-tower folds, C8 both directions,
+;;; C9 match-on-Bool -> if, C10 vacuous-if collapse. C3 (let hygiene) is
+;;; REFUSED in v1 — priced as slice 2b.
+;;;
+;;; Refusal rules (each conservative, each leaves the site for the advisory):
+;;;   - never delete a subtree that contains a comment (comment loss);
+;;;   - never reorder arms across inter-arm comments/blank lines;
+;;;   - never fold a head whose name is (re)defined anywhere in the import
+;;;     closure (shadowing — a wrong fold corrupts silently);
+;;;   - never fold Z/True/False atoms bound as local names in scope;
+;;;   - never substitute (C8) into a body that rebinds an involved name;
+;;;   - never decide a match whose selected arm binds a variable, and never
+;;;     apply the int-vs-S/Z nat view (too clever for a printer-tier tool);
+;;;   - quoted forms and pattern positions are DATA — never entered.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/reduce.shard")
+(import "../../kernel/reader.shard")
+(import "../../kernel/canon.shard")
+(import "../../meta/format")
+(use (:: kernel term *))
+(use (:: kernel reduce try_step_prim))
+(use (:: kernel reader *))
+(use (:: kernel canon cn_prim_flaggable))
+(use (:: meta format *))
+
+;; ===========================================================================
+;; facts from the import closure: typedefs (ctor decl order) + defined names
+;; ===========================================================================
+
+;; one scanned typedef: type name + ctor names in DECLARATION order
+(type CwTd (CwTd (List Int) (List (List Int))))
+
+;; typedefs + every DEFINED name in the closure (fn/type/ctor/extern) — the
+;; shadow-refusal set for C1/C6/C9/C2 head resolution
+(type CwFacts (CwFacts (List CwTd) (List (List Int))))
+
+(fn cw_facts_tds ((f CwFacts)) (List CwTd)
+  (match f
+    ((CwFacts tds _) tds)))
+
+(fn cw_facts_names ((f CwFacts)) (List (List Int))
+  (match f
+    ((CwFacts _ ns) ns)))
+
+(fn cw_bytes_eq ((a (List Int)) (b (List Int))) Bool
+  (measure (struct a))
+  (match a
+    (Nil
+      (match b
+        (Nil True)
+        (_ False)))
+    ((Cons x xr)
+     (match b
+       (Nil False)
+       ((Cons y yr) (if (int_eq x y) (cw_bytes_eq xr yr) False))))))
+
+(fn cw_name_mem ((n (List Int)) (ns (List (List Int)))) Bool
+  (measure (struct ns))
+  (match ns
+    (Nil False)
+    ((Cons h t) (if (cw_bytes_eq n h) True (cw_name_mem n t)))))
+
+;; is NAME defined (hence possibly shadowing a core prim/ctor) in the closure?
+(fn cw_shadowed ((n (List Int)) (f CwFacts)) Bool
+  (cw_name_mem n (cw_facts_names f)))
+
+;; decl index of ctor NAME within TD (None if absent)
+(fn cw_ctor_ix_in ((n (List Int)) (cs (List (List Int))) (i Int)) (Option Int)
+  (measure (struct cs))
+  (match cs
+    (Nil None)
+    ((Cons c rest)
+     (if (cw_bytes_eq n c) (Some i) (cw_ctor_ix_in n rest (+ i 1))))))
+
+;; the UNIQUE typedef owning ctor NAME — three-valued so ambiguity refuses
+(type CwOwn (CwOwnNone) (CwOwnOne CwTd) (CwOwnAmbig))
+
+(fn cw_owner ((n (List Int)) (tds (List CwTd))) CwOwn
+  (measure (struct tds))
+  (match tds
+    (Nil (CwOwnNone))
+    ((Cons td rest)
+     (match td
+       ((CwTd _ cs)
+        (match (cw_ctor_ix_in n cs 0)
+          (None (cw_owner n rest))
+          ((Some _)
+           (match (cw_owner n rest)
+             ((CwOwnNone) (CwOwnOne td))
+             (_ (CwOwnAmbig))))))))))
+
+;; ===========================================================================
+;; CST helpers: layout, payload, comments, structural equality mod layout
+;; ===========================================================================
+
+(fn cw_is_layout ((n CNode)) Bool
+  (match n
+    ((CComment _) True)
+    ((CTrail _) True)
+    (CBlank True)
+    (_ False)))
+
+(fn cw_payload ((ns (List CNode))) (List CNode)
+  (measure (struct ns))
+  (match ns
+    (Nil Nil)
+    ((Cons h t) (if (cw_is_layout h) (cw_payload t) (Cons h (cw_payload t))))))
+
+;; any layout node among the DIRECT items (arm-reorder refusal)
+(fn cw_any_layout ((ns (List CNode))) Bool
+  (measure (struct ns))
+  (match ns
+    (Nil False)
+    ((Cons h t) (if (cw_is_layout h) True (cw_any_layout t)))))
+
+;; a COMMENT anywhere in the subtree (deletion refusal; blanks are droppable)
+(fn cw_has_comment ((n CNode)) Bool
+  (measure (struct n))
+  (match n
+    ((CQuote m) (cw_has_comment m))
+    ((CList items) (cw_has_comment_l items))
+    ((CComment _) True)
+    ((CTrail _) True)
+    (_ False)))
+
+(fn cw_has_comment_l ((ns (List CNode))) Bool
+  (measure (struct ns))
+  (match ns
+    (Nil False)
+    ((Cons h t) (if (cw_has_comment h) True (cw_has_comment_l t)))))
+
+;; layout-free image of a subtree (comments/blanks dropped recursively)
+(fn cw_strip ((n CNode)) CNode
+  (measure (struct n))
+  (match n
+    ((CQuote m) (CQuote (cw_strip m)))
+    ((CList xs) (CList (cw_strip_l xs)))
+    (_ n)))
+
+(fn cw_strip_l ((ns (List CNode))) (List CNode)
+  (measure (struct ns))
+  (match ns
+    (Nil Nil)
+    ((Cons h t)
+     (if (cw_is_layout h) (cw_strip_l t) (Cons (cw_strip h) (cw_strip_l t))))))
+
+;; EXACT CNode equality (layout included) — the fixpoint detector
+(fn cw_ex_eq ((a CNode) (b CNode)) Bool
+  (measure (struct a))
+  (match a
+    ((CAtom x)
+     (match b
+       ((CAtom y) (cw_bytes_eq x y))
+       (_ False)))
+    ((CStr x)
+     (match b
+       ((CStr y) (cw_bytes_eq x y))
+       (_ False)))
+    ((CQuote m)
+     (match b
+       ((CQuote n2) (cw_ex_eq m n2))
+       (_ False)))
+    ((CList xs)
+     (match b
+       ((CList ys) (cw_ex_eq_l xs ys))
+       (_ False)))
+    ((CComment x)
+     (match b
+       ((CComment y) (cw_bytes_eq x y))
+       (_ False)))
+    ((CTrail x)
+     (match b
+       ((CTrail y) (cw_bytes_eq x y))
+       (_ False)))
+    (CBlank
+      (match b
+        (CBlank True)
+        (_ False)))))
+
+(fn cw_ex_eq_l ((xs (List CNode)) (ys (List CNode))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil
+      (match ys
+        (Nil True)
+        (_ False)))
+    ((Cons x xr)
+     (match ys
+       (Nil False)
+       ((Cons y yr) (if (cw_ex_eq x y) (cw_ex_eq_l xr yr) False))))))
+
+;; structural equality IGNORING layout (raw atom bytes compared exactly:
+;; two spellings of one value compare unequal, which only ever REFUSES more)
+(fn cw_ceq ((a CNode) (b CNode)) Bool (cw_ex_eq (cw_strip a) (cw_strip b)))
+
+;; ===========================================================================
+;; atoms: int parse/render, head-name access
+;; ===========================================================================
+
+(fn cw_digits_val ((bs (List Int)) (acc Int)) (Option Int)
+  (measure (struct bs))
+  (match bs
+    (Nil (Some acc))
+    ((Cons c rest)
+     (if (le 48 c)
+       (if (le c 57) (cw_digits_val rest (+ (* acc 10) (- c 48))) None)
+       None))))
+
+;; parse a decimal atom (optional leading '-'); None if not an int spelling
+(fn cw_atom_int ((bs (List Int))) (Option Int)
+  (match bs
+    (Nil None)
+    ((Cons c rest)
+     (if (int_eq c 45)
+       (match rest
+         (Nil None)
+         (_
+           (match (cw_digits_val rest 0)
+             (None None)
+             ((Some v) (Some (- 0 v))))))
+       (cw_digits_val bs 0)))))
+
+;; the head atom of a CList form (payload head), if it IS an atom
+(fn cw_head_name ((items (List CNode))) (Option (List Int))
+  (match (cw_payload items)
+    (Nil None)
+    ((Cons h _)
+     (match h
+       ((CAtom a) (Some a))
+       (_ None)))))
+
+;; a name resolves to core iff nothing in the closure defines it and no
+;; enclosing binder captured it
+(fn cw_core_free ((n (List Int)) (bs (List (List Int))) (f CwFacts)) Bool
+  (if (cw_name_mem n bs) False (if (cw_shadowed n f) False True)))
+
+;; ===========================================================================
+;; pattern views: binder names, groundness, arm classification
+;; ===========================================================================
+
+;; is atom NAME a known ctor constant (of any scanned typedef)?
+(fn cw_ctor_known ((n (List Int)) (f CwFacts)) Bool
+  (match (cw_owner n (cw_facts_tds f))
+    ((CwOwnNone) False)
+    (_ True)))
+
+;; names BOUND by a pattern (unknown atoms count as binders — conservative)
+(fn cw_pat_binders ((p CNode) (f CwFacts)) (List (List Int))
+  (measure (struct p))
+  (match p
+    ((CAtom a)
+     (if (cw_bytes_eq a "_") Nil
+     (match (cw_atom_int a)
+       (None (if (cw_ctor_known a f) Nil (Cons a Nil)))
+       ((Some _) Nil))))
+    ((CList items) (cw_pats_binders_hd items f False))
+    (_ Nil)))
+
+;; raw pattern items: skip layout; the first payload (the ctor head) binds
+;; nothing; the rest are subpatterns
+(fn cw_pats_binders_hd ((ps (List CNode)) (f CwFacts) (head_seen Bool))
+  (List (List Int))
+  (measure (struct ps))
+  (match ps
+    (Nil Nil)
+    ((Cons p rest)
+     (if (cw_is_layout p) (cw_pats_binders_hd rest f head_seen)
+     (if head_seen
+       (cw_append_names (cw_pat_binders p f) (cw_pats_binders_hd rest f True))
+       (cw_pats_binders_hd rest f True))))))
+
+(fn cw_append_names ((a (List (List Int))) (b (List (List Int))))
+  (List (List Int))
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (cw_append_names t b)))))
+
+;; FULLY ground pattern: spellable as a value (no vars, no _, all ctor heads
+;; known); exactly the patterns whose arm binds nothing AND pins the value
+(fn cw_pat_ground ((p CNode) (f CwFacts)) Bool
+  (measure (struct p))
+  (match p
+    ((CAtom a)
+     (match (cw_atom_int a)
+       (None (cw_ctor_known a f))
+       ((Some _) True)))
+    ((CQuote m)
+     (match m
+       ((CAtom _) True)
+       (_ False)))
+    ((CList items)
+     (match (cw_head_name items)
+       (None False)
+       ((Some hn)
+        (if (cw_ctor_known hn f) (cw_pats_ground_hd items f False) False))))
+    (_ False)))
+
+;; raw items: layout skipped, head (already vetted) skipped, rest all ground
+(fn cw_pats_ground_hd ((ps (List CNode)) (f CwFacts) (head_seen Bool)) Bool
+  (measure (struct ps))
+  (match ps
+    (Nil True)
+    ((Cons p rest)
+     (if (cw_is_layout p) (cw_pats_ground_hd rest f head_seen)
+     (if head_seen
+       (if (cw_pat_ground p f) (cw_pats_ground_hd rest f True) False)
+       (cw_pats_ground_hd rest f True))))))
+
+;; arm classification for C4/C5/C9/C2
+(type CwArm
+  (CwArmCtor (List Int) CNode)  ; ctor head name, the arm node
+  (CwArmInt Int CNode)  ; int literal arm
+  (CwArmSym (List Int) CNode)  ; 'sym literal arm
+  (CwArmCatch Bool CNode)  ; catch-all; Bool = binds a name (var, not _)
+  (CwArmUnknown CNode))  ; unclassifiable — refuses match-level rewrites
+
+(fn cw_arm_node ((a CwArm)) CNode
+  (match a
+    ((CwArmCtor _ n) n)
+    ((CwArmInt _ n) n)
+    ((CwArmSym _ n) n)
+    ((CwArmCatch _ n) n)
+    ((CwArmUnknown n) n)))
+
+;; classify one arm node ((PAT BODY) as a CList); anything else is Unknown
+(fn cw_classify_arm ((arm CNode) (f CwFacts)) CwArm
+  (match arm
+    ((CList items)
+     (match (cw_payload items)
+       (Nil (CwArmUnknown arm))
+       ((Cons pat rest)
+        (match rest
+          ((Cons _ Nil)
+           (match pat
+             ((CAtom a)
+              (if (cw_bytes_eq a "_") (CwArmCatch False arm)
+              (match (cw_atom_int a)
+                (None
+                  ;; an unknown atom might be a ctor from an unscanned
+                  ;; import: treating it as a named catch-all is how the
+                  ;; tool once deleted live arms from its own source (the
+                  ;; self-application lesson) — UNKNOWN refuses instead
+                  (if (cw_ctor_known a f) (CwArmCtor a arm) (CwArmUnknown arm)))
+                ((Some v) (CwArmInt v arm)))))
+             ((CQuote m)
+              (match m
+                ((CAtom s) (CwArmSym s arm))
+                (_ (CwArmUnknown arm))))
+             ((CList pitems)
+              (match (cw_payload pitems)
+                (Nil (CwArmUnknown arm))
+                ((Cons ph _)
+                 (match ph
+                   ((CAtom pn)
+                    (if (cw_ctor_known pn f) (CwArmCtor pn arm)
+                    (CwArmUnknown arm)))
+                   (_ (CwArmUnknown arm))))))
+             (_ (CwArmUnknown arm))))
+          (_ (CwArmUnknown arm))))))
+    (_ (CwArmUnknown arm))))
+
+(fn cw_classify_arms ((arms (List CNode)) (f CwFacts)) (List CwArm)
+  (measure (struct arms))
+  (match arms
+    (Nil Nil)
+    ((Cons a rest) (Cons (cw_classify_arm a f) (cw_classify_arms rest f)))))
+
+(fn cw_any_unknown ((as2 (List CwArm))) Bool
+  (measure (struct as2))
+  (match as2
+    (Nil False)
+    ((Cons a rest)
+     (match a
+       ((CwArmUnknown _) True)
+       (_ (cw_any_unknown rest))))))
+
+;; the arm's pattern and body (payload positions 0 and 1)
+(fn cw_arm_pat ((arm CNode)) (Option CNode)
+  (match arm
+    ((CList items)
+     (match (cw_payload items)
+       (Nil None)
+       ((Cons p _) (Some p))))
+    (_ None)))
+
+(fn cw_arm_body ((arm CNode)) (Option CNode)
+  (match arm
+    ((CList items)
+     (match (cw_payload items)
+       (Nil None)
+       ((Cons _ rest)
+        (match rest
+          ((Cons b Nil) (Some b))
+          (_ None)))))
+    (_ None)))
+
+;; ===========================================================================
+;; body scans for the C8 guards: names bound anywhere inside, form-aware
+;; mention check, form-aware substitution (quotes and patterns are data)
+;; ===========================================================================
+
+;; every name BOUND anywhere inside N (let names + match pattern binders)
+(fn cw_binds ((n CNode) (f CwFacts)) (List (List Int))
+  (measure (struct n))
+  (match n
+    ((CList items)
+     (match (cw_head_name items)
+       (None (cw_binds_l items f))
+       ((Some h)
+        (if (cw_bytes_eq h "let")
+          (cw_append_names (cw_let_names items f) (cw_binds_l items f))
+        (if (cw_bytes_eq h "match")
+          (cw_append_names (cw_match_binders items f) (cw_binds_l items f))
+          (cw_binds_l items f))))))
+    (_ Nil)))
+
+(fn cw_binds_l ((ns (List CNode)) (f CwFacts)) (List (List Int))
+  (measure (struct ns))
+  (match ns
+    (Nil Nil)
+    ((Cons h t) (cw_append_names (cw_binds h f) (cw_binds_l t f)))))
+
+;; binder names of a let form's binding list ((x E) (y E2) ...)
+(fn cw_let_names ((items (List CNode)) (f CwFacts)) (List (List Int))
+  (match (cw_payload items)
+    (Nil Nil)
+    ((Cons _ rest)
+     (match rest
+       (Nil Nil)
+       ((Cons binds _)
+        (match binds
+          ((CList bitems) (cw_let_names_go (cw_payload bitems)))
+          (_ Nil)))))))
+
+(fn cw_let_names_go ((bs (List CNode))) (List (List Int))
+  (measure (struct bs))
+  (match bs
+    (Nil Nil)
+    ((Cons b rest)
+     (match b
+       ((CList bi)
+        (match (cw_payload bi)
+          (Nil (cw_let_names_go rest))
+          ((Cons nm _)
+           (match nm
+             ((CAtom a) (Cons a (cw_let_names_go rest)))
+             (_ (cw_let_names_go rest))))))
+       (_ (cw_let_names_go rest))))))
+
+;; pattern binders of every arm of a match form
+(fn cw_match_binders ((items (List CNode)) (f CwFacts)) (List (List Int))
+  (match (cw_payload items)
+    (Nil Nil)
+    ((Cons _ rest)
+     (match rest
+       (Nil Nil)
+       ((Cons _ arms) (cw_match_binders_go arms f))))))
+
+(fn cw_match_binders_go ((arms (List CNode)) (f CwFacts)) (List (List Int))
+  (measure (struct arms))
+  (match arms
+    (Nil Nil)
+    ((Cons a rest)
+     (match (cw_arm_pat a)
+       (None (cw_match_binders_go rest f))
+       ((Some p)
+        (cw_append_names (cw_pat_binders p f) (cw_match_binders_go rest f)))))))
+
+(fn cw_names_overlap ((a (List (List Int))) (b (List (List Int)))) Bool
+  (measure (struct a))
+  (match a
+    (Nil False)
+    ((Cons h t) (if (cw_name_mem h b) True (cw_names_overlap t b)))))
+
+;; does N mention atom NAME in a value position? (quotes skipped; match
+;; PATTERN positions skipped — a pattern's atoms are not references)
+(fn cw_mentions ((n CNode) (name (List Int))) Bool
+  (measure (struct n))
+  (match n
+    ((CAtom a) (cw_bytes_eq a name))
+    ((CList items)
+     (match (cw_head_name items)
+       (None (cw_mentions_l items name))
+       ((Some h)
+        (if (cw_bytes_eq h "quote") False
+        (if (cw_bytes_eq h "match") (cw_mentions_match items name 0)
+        (cw_mentions_l items name))))))
+    (_ False)))
+
+(fn cw_mentions_l ((ns (List CNode)) (name (List Int))) Bool
+  (measure (struct ns))
+  (match ns
+    (Nil False)
+    ((Cons h t) (if (cw_mentions h name) True (cw_mentions_l t name)))))
+
+;; inside a match form: scrutinee + arm BODIES only (patterns are data);
+;; seen counts payload items (0 = head pending, 1 = scrutinee pending)
+(fn cw_mentions_match ((items (List CNode)) (name (List Int)) (seen Int)) Bool
+  (measure (struct items))
+  (match items
+    (Nil False)
+    ((Cons h t)
+     (if (cw_is_layout h) (cw_mentions_match t name seen)
+     (if (int_eq seen 0) (cw_mentions_match t name 1)
+     (if (int_eq seen 1)
+       (if (cw_mentions h name) True (cw_mentions_match t name 2))
+     (if (cw_mentions_arm h name) True
+     (cw_mentions_match t name 2))))))))
+
+(fn cw_mentions_arm ((arm CNode) (name (List Int))) Bool
+  (measure (struct arm))
+  (match arm
+    ((CList items) (cw_mentions_armgo items name False))
+    (_ False)))
+
+(fn cw_mentions_armgo ((items (List CNode)) (name (List Int)) (pat_seen Bool))
+  Bool
+  (measure (struct items))
+  (match items
+    (Nil False)
+    ((Cons h t)
+     (if (cw_is_layout h) (cw_mentions_armgo t name pat_seen)
+     (if pat_seen (if (cw_mentions h name) True (cw_mentions_armgo t name True))
+     (cw_mentions_armgo t name True))))))
+
+;; substitute: every value-position subterm cw_ceq-equal to FROM becomes TO
+;; (form-aware: quotes untouched, match patterns untouched)
+(fn cw_subst ((n CNode) (from CNode) (to CNode)) CNode
+  (measure (struct n))
+  (if (cw_ceq n from) to
+  (match n
+    ((CList items)
+     (match (cw_head_name items)
+       (None (CList (cw_subst_l items from to)))
+       ((Some h)
+        (if (cw_bytes_eq h "quote") n
+        (if (cw_bytes_eq h "match") (CList (cw_subst_match items from to))
+        (CList (cw_subst_l items from to)))))))
+    (_ n))))
+
+(fn cw_subst_l ((ns (List CNode)) (from CNode) (to CNode)) (List CNode)
+  (measure (struct ns))
+  (match ns
+    (Nil Nil)
+    ((Cons h t) (Cons (cw_subst h from to) (cw_subst_l t from to)))))
+
+;; match form: substitute in scrutinee and arm bodies; patterns preserved
+(fn cw_subst_match ((items (List CNode)) (from CNode) (to CNode)) (List CNode)
+  (measure (struct items))
+  (match items
+    (Nil Nil)
+    ((Cons h t)
+     (if (cw_is_layout h) (Cons h (cw_subst_match t from to))
+     (Cons h (cw_subst_match_s t from to))))))
+
+;; after the head: first payload = scrutinee (full subst), rest = arms
+(fn cw_subst_match_s ((items (List CNode)) (from CNode) (to CNode)) (List CNode)
+  (measure (struct items))
+  (match items
+    (Nil Nil)
+    ((Cons h t)
+     (if (cw_is_layout h) (Cons h (cw_subst_match_s t from to))
+     (Cons (cw_subst h from to) (cw_subst_arms t from to))))))
+
+(fn cw_subst_arms ((items (List CNode)) (from CNode) (to CNode)) (List CNode)
+  (measure (struct items))
+  (match items
+    (Nil Nil)
+    ((Cons h t)
+     (if (cw_is_layout h) (Cons h (cw_subst_arms t from to))
+     (Cons (cw_subst_arm h from to) (cw_subst_arms t from to))))))
+
+;; one arm: pattern kept verbatim, body substituted
+(fn cw_subst_arm ((arm CNode) (from CNode) (to CNode)) CNode
+  (measure (struct arm))
+  (match arm
+    ((CList items) (CList (cw_subst_arm_go items from to False)))
+    (_ arm)))
+
+(fn cw_subst_arm_go
+  ((items (List CNode)) (from CNode) (to CNode) (pat_seen Bool))
+  (List CNode)
+  (measure (struct items))
+  (match items
+    (Nil Nil)
+    ((Cons h t)
+     (if (cw_is_layout h) (Cons h (cw_subst_arm_go t from to pat_seen))
+     (if pat_seen (Cons (cw_subst h from to) (cw_subst_arm_go t from to True))
+     (Cons h (cw_subst_arm_go t from to True)))))))
+
+;; ===========================================================================
+;; C1 bridge: CST ground args <-> core Expr, folding through the reducer's
+;; OWN table (try_step_prim) — parity with the recognizer by construction
+;; ===========================================================================
+
+(fn cw_arg_core ((n CNode)) (Option Expr)
+  (match n
+    ((CAtom a)
+     (match (cw_atom_int a)
+       (None None)
+       ((Some v) (Some (IntLit v)))))
+    ((CQuote m)
+     (match m
+       ((CAtom s) (Some (SymLit (sym_of_chars s))))
+       (_ None)))
+    (_ None)))
+
+(fn cw_args_core ((ns (List CNode))) (Option (List Expr))
+  (measure (struct ns))
+  (match ns
+    (Nil (Some Nil))
+    ((Cons h t)
+     (match (cw_arg_core h)
+       (None None)
+       ((Some e)
+        (match (cw_args_core t)
+          (None None)
+          ((Some es) (Some (Cons e es)))))))))
+
+;; render a folded result back to source (ints, syms, ground ctor values)
+(fn cw_render_core ((e Expr)) (Option CNode)
+  (measure (struct e))
+  (match e
+    ((Ctor q args)
+     (match args
+       (Nil (Some (CAtom (chars_of_sym (qn_name q)))))
+       (_
+         (match (cw_render_core_l args)
+           (None None)
+           ((Some ns)
+            (Some (CList (Cons (CAtom (chars_of_sym (qn_name q))) ns))))))))
+    ((IntLit n) (Some (CAtom (show_int n))))
+    ((SymLit s) (Some (CQuote (CAtom (chars_of_sym s)))))
+    (_ None)))
+
+(fn cw_render_core_l ((es (List Expr))) (Option (List CNode))
+  (measure (struct es))
+  (match es
+    (Nil (Some Nil))
+    ((Cons h t)
+     (match (cw_render_core h)
+       (None None)
+       ((Some n)
+        (match (cw_render_core_l t)
+          (None None)
+          ((Some ns) (Some (Cons n ns)))))))))
+
+;; ===========================================================================
+;; the rules — each takes the (children-rewritten) node, returns Some on fire.
+;; every rule refuses when firing would delete a comment.
+;; ===========================================================================
+
+(fn cw_cmt_count ((n CNode)) Int
+  (measure (struct n))
+  (match n
+    ((CQuote m) (cw_cmt_count m))
+    ((CList items) (cw_cmt_count_l items))
+    ((CComment _) 1)
+    ((CTrail _) 1)
+    (_ 0)))
+
+(fn cw_cmt_count_l ((ns (List CNode))) Int
+  (measure (struct ns))
+  (match ns
+    (Nil 0)
+    ((Cons h t) (+ (cw_cmt_count h) (cw_cmt_count_l t)))))
+
+;; replacing NODE by KEPT loses no comments?
+(fn cw_keeps_comments ((node CNode) (kept CNode)) Bool
+  (int_eq (cw_cmt_count node) (cw_cmt_count kept)))
+
+;; --- C2-if / C10 ------------------------------------------------------------
+(fn cw_rule_if ((n CNode) (bs (List (List Int))) (f CwFacts)) (Option CNode)
+  (match n
+    ((CList items)
+     (match (cw_payload items)
+       ((Cons _ (Cons c (Cons t (Cons e Nil))))
+        (match c
+          ((CAtom a)
+           (if (cw_bytes_eq a "True")
+             (if (cw_core_free "True" bs f)
+               (if (cw_keeps_comments n t) (Some t) None)
+               (cw_rule_c10 n c t e bs f))
+           (if (cw_bytes_eq a "False")
+             (if (cw_core_free "False" bs f)
+               (if (cw_keeps_comments n e) (Some e) None)
+               (cw_rule_c10 n c t e bs f))
+             (cw_rule_c10 n c t e bs f))))
+          (_ (cw_rule_c10 n c t e bs f))))
+       (_ None)))
+    (_ None)))
+
+(fn cw_rule_c10
+  ((n CNode) (c CNode) (t CNode) (e CNode) (bs (List (List Int))) (f CwFacts))
+  (Option CNode)
+  (if (cw_ceq t e) (if (cw_keeps_comments n t) (Some t) None) None))
+
+;; --- C6 (S of a literal) / C1 (ground prim redex) ----------------------------
+(fn cw_rule_call ((n CNode) (bs (List (List Int))) (f CwFacts)) (Option CNode)
+  (match n
+    ((CList items)
+     (match (cw_head_name items)
+       (None None)
+       ((Some h)
+        ;; C6 (S/Z tower folds) is REFUSED in v1: the type gate's literal
+        ;; view (tc_nat_lit_view) fires at argument positions but not at
+        ;; the body-vs-declared site, so a folded literal in return
+        ;; position fails to type. The recognizer's C6 stands; the fold
+        ;; unlocks when the view covers every Nat-expected position
+        ;; (queued kernel companion fix, canon-owned).
+        (if (cw_bytes_eq h "S") None
+        (if (cw_core_free h bs f)
+          (if (cn_prim_flaggable (sym_of_chars h))
+            (match (cw_payload items)
+              (Nil None)
+              ((Cons _ args)
+               (match (cw_args_core args)
+                 (None None)
+                 ((Some ces)
+                  (match (try_step_prim (sym_of_chars h) ces)
+                    (None None)
+                    ((Some res)
+                     (match (cw_render_core res)
+                       (None None)
+                       ((Some out)
+                        (if (int_eq (cw_cmt_count n) 0) (Some out) None)))))))))
+            None)
+          None)))))
+    (_ None)))
+
+;; --- match support: parts, ground values, three-valued ground matching -------
+
+;; split a match form's items: (prefix through the scrutinee, the arm region)
+(fn cw_split_need ((items (List CNode)) (need Int))
+  (Pair (List CNode) (List CNode))
+  (measure (struct items))
+  (match items
+    (Nil (Pair Nil Nil))
+    ((Cons h t)
+     (if (le need 0) (Pair Nil items)
+     (let ((need2 (if (cw_is_layout h) need (- need 1))))
+       (match (cw_split_need t need2)
+         ((Pair p r) (Pair (Cons h p) r))))))))
+
+;; ground VALUE expression (spellable, decides a match): int / 'sym /
+;; known zero-arg ctor / known ctor applied to ground args
+(fn cw_ground_expr ((n CNode) (bs (List (List Int))) (f CwFacts)) Bool
+  (measure (struct n))
+  (match n
+    ((CAtom a)
+     (match (cw_atom_int a)
+       (None (if (cw_name_mem a bs) False (cw_ctor_known a f)))
+       ((Some _) True)))
+    ((CQuote m)
+     (match m
+       ((CAtom _) True)
+       (_ False)))
+    ((CList items)
+     (match (cw_head_name items)
+       (None False)
+       ((Some hn)
+        (if (cw_name_mem hn bs) False
+        (if (cw_ctor_known hn f) (cw_ground_expr_hd items bs f False)
+        False)))))
+    (_ False)))
+
+(fn cw_ground_expr_hd
+  ((ns (List CNode)) (bs (List (List Int))) (f CwFacts) (head_seen Bool))
+  Bool
+  (measure (struct ns))
+  (match ns
+    (Nil True)
+    ((Cons h t)
+     (if (cw_is_layout h) (cw_ground_expr_hd t bs f head_seen)
+     (if head_seen
+       (if (cw_ground_expr h bs f) (cw_ground_expr_hd t bs f True) False)
+       (cw_ground_expr_hd t bs f True))))))
+
+(type CwM (CwMYes) (CwMNo) (CwMRefuse))
+
+(fn cw_is_nat_name ((a (List Int))) Bool
+  (if (cw_bytes_eq a "S") True (cw_bytes_eq a "Z")))
+
+;; head view of a ground pat/val: name + args (atoms = zero-arg)
+(fn cw_head_view ((n CNode)) (Option (Pair (List Int) (List CNode)))
+  (match n
+    ((CAtom a) (Some (Pair a Nil)))
+    ((CList items)
+     (match (cw_payload items)
+       (Nil None)
+       ((Cons h args)
+        (match h
+          ((CAtom hn) (Some (Pair hn args)))
+          (_ None)))))
+    (_ None)))
+
+;; does PAT match ground VAL, binder-free? (the nat int-vs-S/Z view refuses)
+(fn cw_pat_match ((pat CNode) (val CNode) (f CwFacts)) CwM
+  (measure (struct pat))
+  (match pat
+    ((CAtom a)
+     (if (cw_bytes_eq a "_") (CwMYes)
+     (match (cw_atom_int a)
+       (None
+         (if (cw_ctor_known a f)
+           (if (cw_is_nat_name a) (CwMRefuse)
+           (match (cw_head_view val)
+             (None (CwMRefuse))
+             ((Some (Pair vn vargs))
+              (match (cw_atom_int vn)
+                (None
+                  (if (cw_bytes_eq a vn)
+                    (match vargs
+                      (Nil (CwMYes))
+                      (_ (CwMRefuse)))
+                    (CwMNo)))
+                ((Some _) (CwMRefuse))))))
+           (CwMRefuse)))
+       ((Some pv)
+        (match val
+          ((CAtom va)
+           (match (cw_atom_int va)
+             (None (CwMRefuse))
+             ((Some vv) (if (int_eq pv vv) (CwMYes) (CwMNo)))))
+          (_ (CwMRefuse)))))))
+    ((CQuote m)
+     (match m
+       ((CAtom ps)
+        (match val
+          ((CQuote vm)
+           (match vm
+             ((CAtom vs) (if (cw_bytes_eq ps vs) (CwMYes) (CwMNo)))
+             (_ (CwMRefuse))))
+          (_ (CwMRefuse))))
+       (_ (CwMRefuse))))
+    ((CList pitems)
+     (match (cw_head_name pitems)
+       (None (CwMRefuse))
+       ((Some pn)
+        (if (cw_ctor_known pn f)
+          (if (cw_is_nat_name pn) (CwMRefuse)
+          (match (cw_head_view val)
+            (None (CwMRefuse))
+            ((Some (Pair vn vargs))
+             (match (cw_atom_int vn)
+               (None
+                 (if (cw_bytes_eq pn vn) (cw_pats_match_hd pitems vargs f False)
+                 (CwMNo)))
+               ((Some _) (CwMRefuse))))))
+          (CwMRefuse)))))
+    (_ (CwMRefuse))))
+
+;; pat side walks RAW items (layout skipped, head skipped); the val side is
+;; the pre-extracted payload arg list (unmeasured)
+(fn cw_pats_match_hd
+  ((ps (List CNode)) (vs (List CNode)) (f CwFacts) (head_seen Bool))
+  CwM
+  (measure (struct ps))
+  (match ps
+    (Nil
+      (match vs
+        (Nil (CwMYes))))
+    ((Cons p pr)
+     (if (cw_is_layout p) (cw_pats_match_hd pr vs f head_seen)
+     (if head_seen
+       (match vs
+         (Nil (CwMRefuse))
+         ((Cons v vr)
+          (match (cw_pat_match p v f)
+            ((CwMYes) (cw_pats_match_hd pr vr f True))
+            ((CwMNo)
+             (match (cw_pats_match_hd pr vr f True)
+               ((CwMRefuse) (CwMRefuse))
+               (_ (CwMNo))))
+            ((CwMRefuse) (CwMRefuse)))))
+       (cw_pats_match_hd pr vs f True))))))
+
+;; --- C5: dead arms (after a catch-all; duplicate heads) -----------------------
+
+(fn cw_c5_seen
+  ((a CwArm)
+   (ctors (List (List Int)))
+   (ints (List Int))
+   (syms (List (List Int)))
+   (catch Bool))
+  Bool
+  (if catch True
+  (match a
+    ((CwArmCtor nm _) (cw_name_mem nm ctors))
+    ((CwArmInt v _) (cw_int_mem2 v ints))
+    ((CwArmSym s _) (cw_name_mem s syms))
+    (_ False))))
+
+(fn cw_int_mem2 ((x Int) (xs (List Int))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil False)
+    ((Cons h t) (if (int_eq h x) True (cw_int_mem2 x t)))))
+
+;; walk classified arms: keep live, drop dead; None = a dropped arm had
+;; comments (refuse) — result Some (kept, any_dropped)
+(fn cw_c5_walk
+  ((as2 (List CwArm))
+   (ctors (List (List Int)))
+   (ints (List Int))
+   (syms (List (List Int)))
+   (catch Bool))
+  (Option (Pair (List CNode) Bool))
+  (measure (struct as2))
+  (match as2
+    (Nil (Some (Pair Nil False)))
+    ((Cons a rest)
+     (if (cw_c5_seen a ctors ints syms catch)
+       (if (cw_has_comment (cw_arm_node a)) None
+       (match (cw_c5_walk rest ctors ints syms catch)
+         (None None)
+         ((Some (Pair kept _)) (Some (Pair kept True)))))
+       (let
+         ((c2
+            (match a
+              ((CwArmCtor nm _) (Cons nm ctors))
+              (_ ctors)))
+          (i2
+            (match a
+              ((CwArmInt v _) (Cons v ints))
+              (_ ints)))
+          (s2
+            (match a
+              ((CwArmSym s _) (Cons s syms))
+              (_ syms)))
+          (k2
+            (match a
+              ((CwArmCatch _ _) True)
+              (_ catch))))
+         (match (cw_c5_walk rest c2 i2 s2 k2)
+           (None None)
+           ((Some (Pair kept d)) (Some (Pair (Cons (cw_arm_node a) kept) d)))))))))
+
+(fn cw_rule_c5 ((n CNode) (bs (List (List Int))) (f CwFacts)) (Option CNode)
+  (match n
+    ((CList items)
+     (match (cw_split_need items 2)
+       ((Pair pre arms)
+        (if (cw_any_layout arms) None
+        (let ((cl (cw_classify_arms arms f)))
+          (if (cw_any_unknown cl) None
+          (match (cw_c5_walk cl Nil Nil Nil False)
+            (None None)
+            ((Some (Pair kept dropped))
+             (if dropped (Some (CList (cw_app_nodes pre kept))) None)))))))))
+    (_ None)))
+
+(fn cw_app_nodes ((a (List CNode)) (b (List CNode))) (List CNode)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (cw_app_nodes t b)))))
+
+;; --- C9: match on Bool -> if --------------------------------------------------
+
+;; True/False resolve to the CORE Bool typedef, uniquely
+(fn cw_bool_ok ((f CwFacts) (bs (List (List Int)))) Bool
+  (if (cw_name_mem "True" bs) False
+  (if (cw_name_mem "False" bs) False
+  (match (cw_owner "True" (cw_facts_tds f))
+    ((CwOwnOne td)
+     (match td
+       ((CwTd tn _)
+        (if (cw_bytes_eq tn "Bool")
+          (match (cw_owner "False" (cw_facts_tds f))
+            ((CwOwnOne td2)
+             (match td2
+               ((CwTd tn2 _) (cw_bytes_eq tn2 "Bool"))))
+            (_ False))
+          False))))
+    (_ False)))))
+
+(fn cw_rule_c9 ((n CNode) (bs (List (List Int))) (f CwFacts)) (Option CNode)
+  (match n
+    ((CList items)
+     (match (cw_split_need items 2)
+       ((Pair pre arms)
+        (if (cw_any_layout arms) None
+        (match (cw_payload pre)
+          ((Cons _ (Cons s Nil))
+           (match (cw_classify_arms arms f)
+             ((Cons a1 (Cons a2 Nil))
+              (if (cw_bool_ok f bs)
+                (match (cw_c9_bodies a1 a2)
+                  (None None)
+                  ((Some (Pair tb fb))
+                   (let
+                     ((out
+                        (CList
+                          (Cons (CAtom "if") (Cons s (Cons tb (Cons fb Nil)))))))
+                     (if (int_eq (cw_cmt_count n) (cw_cmt_count out)) (Some out)
+                     None))))
+                None))
+             (_ None)))
+          (_ None))))))
+    (_ None)))
+
+;; (True a)(False b) / (True a)(_ b) -> (a, b); (False a)(True b) / (False a)(_ b) -> (b, a)
+(fn cw_c9_bodies ((a1 CwArm) (a2 CwArm)) (Option (Pair CNode CNode))
+  (match a1
+    ((CwArmCtor n1 arm1)
+     (match (cw_arm_body arm1)
+       (None None)
+       ((Some b1)
+        (match a2
+          ((CwArmCtor n2 arm2)
+           (match (cw_arm_body arm2)
+             (None None)
+             ((Some b2)
+              (if (cw_bytes_eq n1 "True")
+                (if (cw_bytes_eq n2 "False") (Some (Pair b1 b2)) None)
+              (if (cw_bytes_eq n1 "False")
+                (if (cw_bytes_eq n2 "True") (Some (Pair b2 b1)) None)
+                None)))))
+          ((CwArmCatch bind arm2)
+           (if bind None
+           (match (cw_arm_body arm2)
+             (None None)
+             ((Some b2)
+              (if (cw_bytes_eq n1 "True") (Some (Pair b1 b2))
+              (if (cw_bytes_eq n1 "False") (Some (Pair b2 b1))
+              None))))))
+          (_ None)))))
+    (_ None)))
+
+;; --- C2: ground scrutinee decides -----------------------------------------------
+
+(fn cw_c2_select ((arms (List CNode)) (s CNode) (f CwFacts)) (Option CNode)
+  (measure (struct arms))
+  (match arms
+    (Nil None)
+    ((Cons a rest)
+     (if (cw_is_layout a) (cw_c2_select rest s f)
+     (match (cw_arm_pat a)
+       (None None)
+       ((Some p)
+        (match (cw_pat_match p s f)
+          ((CwMYes) (cw_arm_body a))
+          ((CwMNo) (cw_c2_select rest s f))
+          ((CwMRefuse) None))))))))
+
+(fn cw_rule_c2m ((n CNode) (bs (List (List Int))) (f CwFacts)) (Option CNode)
+  (match n
+    ((CList items)
+     (match (cw_split_need items 2)
+       ((Pair pre arms)
+        (match (cw_payload pre)
+          ((Cons _ (Cons s Nil))
+           (if (cw_ground_expr s bs f)
+             (match (cw_c2_select arms s f)
+               (None None)
+               ((Some body) (if (cw_keeps_comments n body) (Some body) None)))
+             None))
+          (_ None)))))
+    (_ None)))
+
+;; --- C4: arm order (ctor decl order; literals ascending; catch-all last) ------
+
+(fn cw_lex_lt ((a (List Int)) (b (List Int))) Bool
+  (measure (struct a))
+  (match a
+    (Nil
+      (match b
+        (Nil False)
+        (_ True)))
+    ((Cons x xr)
+     (match b
+       (Nil False)
+       ((Cons y yr) (if (lt x y) True (if (lt y x) False (cw_lex_lt xr yr))))))))
+
+(fn cw_keys_asc ((ks (List Int))) Bool
+  (measure (struct ks))
+  (match ks
+    (Nil True)
+    ((Cons a rest)
+     (match rest
+       (Nil True)
+       ((Cons b _) (if (lt a b) (cw_keys_asc rest) False))))))
+
+(fn cw_syms_asc ((ks (List (List Int)))) Bool
+  (measure (struct ks))
+  (match ks
+    (Nil True)
+    ((Cons a rest)
+     (match rest
+       (Nil True)
+       ((Cons b _) (if (cw_lex_lt a b) (cw_syms_asc rest) False))))))
+
+(fn cw_ins_i ((p (Pair Int CNode)) (xs (List (Pair Int CNode))))
+  (List (Pair Int CNode))
+  (measure (struct xs))
+  (match xs
+    (Nil (Cons p Nil))
+    ((Cons h t)
+     (match p
+       ((Pair k _)
+        (match h
+          ((Pair hk _) (if (lt k hk) (Cons p xs) (Cons h (cw_ins_i p t))))))))))
+
+(fn cw_sort_i ((xs (List (Pair Int CNode)))) (List (Pair Int CNode))
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons h t) (cw_ins_i h (cw_sort_i t)))))
+
+(fn cw_ins_s ((p (Pair (List Int) CNode)) (xs (List (Pair (List Int) CNode))))
+  (List (Pair (List Int) CNode))
+  (measure (struct xs))
+  (match xs
+    (Nil (Cons p Nil))
+    ((Cons h t)
+     (match p
+       ((Pair k _)
+        (match h
+          ((Pair hk _)
+           (if (cw_lex_lt k hk) (Cons p xs) (Cons h (cw_ins_s p t))))))))))
+
+(fn cw_sort_s ((xs (List (Pair (List Int) CNode))))
+  (List (Pair (List Int) CNode))
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons h t) (cw_ins_s h (cw_sort_s t)))))
+
+(fn cw_pairs_i_nodes ((xs (List (Pair Int CNode)))) (List CNode)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons (Pair _ n2) t) (Cons n2 (cw_pairs_i_nodes t)))))
+
+(fn cw_pairs_i_keys ((xs (List (Pair Int CNode)))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons (Pair k _) t) (Cons k (cw_pairs_i_keys t)))))
+
+(fn cw_pairs_s_nodes ((xs (List (Pair (List Int) CNode)))) (List CNode)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons (Pair _ n2) t) (Cons n2 (cw_pairs_s_nodes t)))))
+
+(fn cw_pairs_s_keys ((xs (List (Pair (List Int) CNode)))) (List (List Int))
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons (Pair k _) t) (Cons k (cw_pairs_s_keys t)))))
+
+;; ctor arms -> (decl index, arm) pairs, all owned by ONE typedef
+(fn cw_c4_ctor_keys
+  ((as2 (List CwArm)) (f CwFacts) (tdname (Option (List Int))))
+  (Option (List (Pair Int CNode)))
+  (measure (struct as2))
+  (match as2
+    (Nil (Some Nil))
+    ((Cons a rest)
+     (match a
+       ((CwArmCtor nm node)
+        (match (cw_owner nm (cw_facts_tds f))
+          ((CwOwnOne (CwTd tn cs))
+           (match tdname
+             (None
+               (match (cw_ctor_ix_in nm cs 0)
+                 (None None)
+                 ((Some ix)
+                  (match (cw_c4_ctor_keys rest f (Some tn))
+                    (None None)
+                    ((Some ps) (Some (Cons (Pair ix node) ps)))))))
+             ((Some prev)
+              (if (cw_bytes_eq prev tn)
+                (match (cw_ctor_ix_in nm cs 0)
+                  (None None)
+                  ((Some ix)
+                   (match (cw_c4_ctor_keys rest f tdname)
+                     (None None)
+                     ((Some ps) (Some (Cons (Pair ix node) ps))))))
+                None))))
+          (_ None)))
+       (_ None)))))
+
+;; int/sym literal arms -> keyed pairs (None on any other kind)
+(fn cw_c4_int_keys ((as2 (List CwArm))) (Option (List (Pair Int CNode)))
+  (measure (struct as2))
+  (match as2
+    (Nil (Some Nil))
+    ((Cons a rest)
+     (match a
+       ((CwArmInt v node)
+        (match (cw_c4_int_keys rest)
+          (None None)
+          ((Some ps) (Some (Cons (Pair v node) ps)))))
+       (_ None)))))
+
+(fn cw_c4_sym_keys ((as2 (List CwArm))) (Option (List (Pair (List Int) CNode)))
+  (measure (struct as2))
+  (match as2
+    (Nil (Some Nil))
+    ((Cons a rest)
+     (match a
+       ((CwArmSym s node)
+        (match (cw_c4_sym_keys rest)
+          (None None)
+          ((Some ps) (Some (Cons (Pair s node) ps)))))
+       (_ None)))))
+
+;; split trailing catch-all: (body arms, Some catch | None); refuses (None
+;; result wrapped) when a catch-all is NOT last or appears twice
+(type CwSplit (CwSplit (List CwArm) (Option CNode)) (CwSplitRefuse))
+
+(fn cw_split_catch ((as2 (List CwArm))) CwSplit
+  (measure (struct as2))
+  (match as2
+    (Nil (CwSplit Nil None))
+    ((Cons a rest)
+     (match a
+       ((CwArmCatch _ node)
+        (match rest
+          (Nil (CwSplit Nil (Some node)))))
+       (_
+         (match (cw_split_catch rest)
+           ((CwSplit body c) (CwSplit (Cons a body) c))
+           ((CwSplitRefuse) (CwSplitRefuse))))))))
+
+(fn cw_maybe_snoc ((xs (List CNode)) (c (Option CNode))) (List CNode)
+  (match c
+    (None xs)
+    ((Some n2) (cw_app_nodes xs (Cons n2 Nil)))))
+
+(fn cw_rule_c4 ((n CNode) (bs (List (List Int))) (f CwFacts)) (Option CNode)
+  (match n
+    ((CList items)
+     (match (cw_split_need items 2)
+       ((Pair pre arms)
+        (if (cw_any_layout arms) None
+        (let ((cl (cw_classify_arms arms f)))
+          (if (cw_any_unknown cl) None
+          (match (cw_split_catch cl)
+            ((CwSplit body catch)
+             (match (cw_c4_ctor_keys body f None)
+               (None
+                 (match (cw_c4_int_keys body)
+                   (None
+                     (match (cw_c4_sym_keys body)
+                       (None None)
+                       ((Some sps)
+                        (if (cw_syms_asc (cw_pairs_s_keys sps)) None
+                        (Some
+                          (CList
+                            (cw_app_nodes
+                              pre
+                              (cw_maybe_snoc
+                                (cw_pairs_s_nodes (cw_sort_s sps))
+                                catch))))))))
+                   ((Some ips)
+                    (if (cw_keys_asc (cw_pairs_i_keys ips)) None
+                    (Some
+                      (CList
+                        (cw_app_nodes
+                          pre
+                          (cw_maybe_snoc
+                            (cw_pairs_i_nodes (cw_sort_i ips))
+                            catch))))))))
+               ((Some cps)
+                (if (cw_keys_asc (cw_pairs_i_keys cps)) None
+                (Some
+                  (CList
+                    (cw_app_nodes
+                      pre
+                      (cw_maybe_snoc (cw_pairs_i_nodes (cw_sort_i cps)) catch))))))))
+            ((CwSplitRefuse) None))))))))
+    (_ None)))
+;; --- C8: arm-local scrutinee discipline ----------------------------------------
+
+;; the scrutinee as a plain VARIABLE atom (C8's precondition)
+(fn cw_scrut_var ((pre (List CNode)) (f CwFacts)) (Option (List Int))
+  (match (cw_payload pre)
+    ((Cons _ (Cons s Nil))
+     (match s
+       ((CAtom v)
+        (if (cw_bytes_eq v "_") None
+        (match (cw_atom_int v)
+          (None (if (cw_ctor_known v f) None (Some v)))
+          ((Some _) None))))
+       (_ None)))
+    (_ None)))
+
+;; every atom name inside a node (the C8b rebind guard set)
+(fn cw_atoms_of ((n CNode)) (List (List Int))
+  (measure (struct n))
+  (match n
+    ((CAtom a) (Cons a Nil))
+    ((CQuote m) (cw_atoms_of m))
+    ((CList items) (cw_atoms_of_l items))
+    (_ Nil)))
+
+(fn cw_atoms_of_l ((ns (List CNode))) (List (List Int))
+  (measure (struct ns))
+  (match ns
+    (Nil Nil)
+    ((Cons h t) (cw_append_names (cw_atoms_of h) (cw_atoms_of_l t)))))
+
+;; replace the arm's body (2nd payload item)
+(fn cw_arm_with_body ((arm CNode) (nb CNode)) CNode
+  (match arm
+    ((CList items) (CList (cw_awb_go items nb 0)))
+    (_ arm)))
+
+(fn cw_awb_go ((items (List CNode)) (nb CNode) (seen Int)) (List CNode)
+  (measure (struct items))
+  (match items
+    (Nil Nil)
+    ((Cons h t)
+     (if (cw_is_layout h) (Cons h (cw_awb_go t nb seen))
+     (if (int_eq seen 1) (Cons nb (cw_awb_go t nb 2))
+     (Cons h (cw_awb_go t nb (+ seen 1))))))))
+
+;; C8a respell: in a fully-ground arm, the scrutinee var reads as the value
+(fn cw_c8a_arm ((arm CNode) (v (List Int)) (f CwFacts)) (Pair CNode Bool)
+  (match (cw_arm_pat arm)
+    (None (Pair arm False))
+    ((Some pat)
+     (match (cw_arm_body arm)
+       (None (Pair arm False))
+       ((Some body)
+        (if (cw_pat_ground pat f)
+          (if (cw_has_comment pat) (Pair arm False)
+          (if (cw_mentions body v)
+            (if (cw_name_mem v (cw_binds body f)) (Pair arm False)
+            (Pair (cw_arm_with_body arm (cw_subst body (CAtom v) pat)) True))
+            (Pair arm False)))
+          (Pair arm False)))))))
+
+;; C8b rebuild: the exact pattern respelled in the body is the scrutinee
+(fn cw_c8b_arm ((arm CNode) (v (List Int)) (f CwFacts)) (Pair CNode Bool)
+  (match (cw_arm_pat arm)
+    (None (Pair arm False))
+    ((Some pat)
+     (match pat
+       ((CList _)
+        (match (cw_arm_body arm)
+          (None (Pair arm False))
+          ((Some body)
+           (let ((binds (cw_binds body f)))
+             (if (cw_names_overlap (cw_atoms_of pat) binds) (Pair arm False)
+             (if (cw_name_mem v binds) (Pair arm False)
+             (let ((b2 (cw_subst body pat (CAtom v))))
+               (if (cw_ex_eq b2 body) (Pair arm False)
+               (if (int_eq (cw_cmt_count b2) (cw_cmt_count body))
+                 (Pair (cw_arm_with_body arm b2) True)
+                 (Pair arm False))))))))))
+       (_ (Pair arm False))))))
+
+;; map an arm rewriter over the arm region (layout preserved in place)
+(fn cw_c8_map ((items (List CNode)) (v (List Int)) (f CwFacts) (rebuild Bool))
+  (Pair (List CNode) Bool)
+  (measure (struct items))
+  (match items
+    (Nil (Pair Nil False))
+    ((Cons h t)
+     (match (cw_c8_map t v f rebuild)
+       ((Pair rest2 chg)
+        (if (cw_is_layout h) (Pair (Cons h rest2) chg)
+        (match (if rebuild (cw_c8b_arm h v f) (cw_c8a_arm h v f))
+          ((Pair h2 c2) (Pair (Cons h2 rest2) (if c2 True chg))))))))))
+
+(fn cw_rule_c8 ((n CNode) (bs (List (List Int))) (f CwFacts) (rebuild Bool))
+  (Option CNode)
+  (match n
+    ((CList items)
+     (match (cw_split_need items 2)
+       ((Pair pre arms)
+        (match (cw_scrut_var pre f)
+          (None None)
+          ((Some v)
+           (match (cw_c8_map arms v f rebuild)
+             ((Pair arms2 changed)
+              (if changed (Some (CList (cw_app_nodes pre arms2))) None))))))))
+    (_ None)))
+
+;; --- the match dispatcher -------------------------------------------------------
+
+(fn cw_rule_match ((n CNode) (bs (List (List Int))) (f CwFacts)) CNode
+  (match (cw_rule_c5 n bs f)
+    (None
+      (match (cw_rule_c9 n bs f)
+        (None
+          (match (cw_rule_c2m n bs f)
+            (None
+              (match (cw_rule_c4 n bs f)
+                (None
+                  (match (cw_rule_c8 n bs f False)
+                    (None
+                      (match (cw_rule_c8 n bs f True)
+                        (None n)
+                        ((Some r) r)))
+                    ((Some r) r)))
+                ((Some r) r)))
+            ((Some r) r)))
+        ((Some r) r)))
+    ((Some r) r)))
+
+;; ===========================================================================
+;; the walker — bottom-up over EXPRESSION positions only (patterns, quotes,
+;; goal-bearing decls are never entered); rules applied to the rebuilt node
+;; ===========================================================================
+
+(fn cw_apply_if ((n CNode) (bs (List (List Int))) (f CwFacts)) CNode
+  (match (cw_rule_if n bs f)
+    (None n)
+    ((Some r) r)))
+
+(fn cw_apply_call ((n CNode) (bs (List (List Int))) (f CwFacts)) CNode
+  (match (cw_rule_call n bs f)
+    (None n)
+    ((Some r) r)))
+
+(fn cw_rw_e ((n CNode) (bs (List (List Int))) (f CwFacts)) CNode
+  (measure (struct n))
+  (match n
+    ((CAtom a) n)
+    ((CList items)
+     (match (cw_head_name items)
+       (None (CList (cw_rw_args items bs f True)))
+       ((Some h)
+        (if (cw_bytes_eq h "quote") n
+        (if (cw_bytes_eq h "if")
+          (cw_apply_if (CList (cw_rw_args items bs f False)) bs f)
+        (if (cw_bytes_eq h "match")
+          (cw_rule_match (CList (cw_rw_match items bs f)) bs f)
+        (if (cw_bytes_eq h "let")
+          (CList
+            (cw_rw_let_go
+              items
+              bs
+              (cw_append_names (cw_let_names items f) bs)
+              f
+              0))
+          (cw_apply_call (CList (cw_rw_args items bs f False)) bs f))))))))
+    (_ n)))
+
+;; rewrite payload items as exprs; the head (first payload) is kept unless
+;; head_too is set (list-headed forms)
+(fn cw_rw_args
+  ((items (List CNode)) (bs (List (List Int))) (f CwFacts) (head_too Bool))
+  (List CNode)
+  (measure (struct items))
+  (match items
+    (Nil Nil)
+    ((Cons h t)
+     (if (cw_is_layout h) (Cons h (cw_rw_args t bs f head_too))
+     (if head_too (Cons (cw_rw_e h bs f) (cw_rw_args t bs f True))
+     (Cons h (cw_rw_args t bs f True)))))))
+
+;; match form: head kept, scrutinee rewritten, arm bodies rewritten under
+;; their pattern binders
+(fn cw_rw_match ((items (List CNode)) (bs (List (List Int))) (f CwFacts))
+  (List CNode)
+  (measure (struct items))
+  (match items
+    (Nil Nil)
+    ((Cons h t)
+     (if (cw_is_layout h) (Cons h (cw_rw_match t bs f))
+     (Cons h (cw_rw_match_s t bs f))))))
+
+(fn cw_rw_match_s ((items (List CNode)) (bs (List (List Int))) (f CwFacts))
+  (List CNode)
+  (measure (struct items))
+  (match items
+    (Nil Nil)
+    ((Cons h t)
+     (if (cw_is_layout h) (Cons h (cw_rw_match_s t bs f))
+     (Cons (cw_rw_e h bs f) (cw_rw_arms t bs f))))))
+
+(fn cw_rw_arms ((items (List CNode)) (bs (List (List Int))) (f CwFacts))
+  (List CNode)
+  (measure (struct items))
+  (match items
+    (Nil Nil)
+    ((Cons h t)
+     (if (cw_is_layout h) (Cons h (cw_rw_arms t bs f))
+     (Cons (cw_rw_arm h bs f) (cw_rw_arms t bs f))))))
+
+(fn cw_rw_arm ((arm CNode) (bs (List (List Int))) (f CwFacts)) CNode
+  (measure (struct arm))
+  (match arm
+    ((CList items)
+     (match (cw_arm_pat arm)
+       (None arm)
+       ((Some p)
+        (CList
+          (cw_rw_arm_go items (cw_append_names (cw_pat_binders p f) bs) f False)))))
+    (_ arm)))
+
+;; bs2 already carries the pattern binders; pattern kept, body rewritten
+(fn cw_rw_arm_go
+  ((items (List CNode)) (bs2 (List (List Int))) (f CwFacts) (pat_seen Bool))
+  (List CNode)
+  (measure (struct items))
+  (match items
+    (Nil Nil)
+    ((Cons h t)
+     (if (cw_is_layout h) (Cons h (cw_rw_arm_go t bs2 f pat_seen))
+     (if pat_seen (Cons (cw_rw_e h bs2 f) (cw_rw_arm_go t bs2 f True))
+     (Cons h (cw_rw_arm_go t bs2 f True)))))))
+
+;; let form: head kept; binding EXPRS under the OUTER scope (parallel Let —
+;; nesting is the spelling of dependence); body under the extended scope
+(fn cw_rw_let_go
+  ((items (List CNode))
+   (bs (List (List Int)))
+   (bs2 (List (List Int)))
+   (f CwFacts)
+   (seen Int))
+  (List CNode)
+  (measure (struct items))
+  (match items
+    (Nil Nil)
+    ((Cons h t)
+     (if (cw_is_layout h) (Cons h (cw_rw_let_go t bs bs2 f seen))
+     (if (int_eq seen 0) (Cons h (cw_rw_let_go t bs bs2 f 1))
+     (if (int_eq seen 1)
+       (Cons (cw_rw_binds_node h bs f) (cw_rw_let_go t bs bs2 f 2))
+       (Cons (cw_rw_e h bs2 f) (cw_rw_let_go t bs bs2 f seen))))))))
+
+(fn cw_rw_binds_node ((n CNode) (bs (List (List Int))) (f CwFacts)) CNode
+  (measure (struct n))
+  (match n
+    ((CList bitems) (CList (cw_rw_bind_l bitems bs f)))
+    (_ n)))
+
+(fn cw_rw_bind_l ((bitems (List CNode)) (bs (List (List Int))) (f CwFacts))
+  (List CNode)
+  (measure (struct bitems))
+  (match bitems
+    (Nil Nil)
+    ((Cons h t)
+     (if (cw_is_layout h) (Cons h (cw_rw_bind_l t bs f))
+     (Cons (cw_rw_bind_pair h bs f) (cw_rw_bind_l t bs f))))))
+
+(fn cw_rw_bind_pair ((n CNode) (bs (List (List Int))) (f CwFacts)) CNode
+  (measure (struct n))
+  (match n
+    ((CList pitems) (CList (cw_rw_bind_go pitems bs f False)))
+    (_ n)))
+
+(fn cw_rw_bind_go
+  ((pitems (List CNode)) (bs (List (List Int))) (f CwFacts) (name_seen Bool))
+  (List CNode)
+  (measure (struct pitems))
+  (match pitems
+    (Nil Nil)
+    ((Cons h t)
+     (if (cw_is_layout h) (Cons h (cw_rw_bind_go t bs f name_seen))
+     (if name_seen (Cons (cw_rw_e h bs f) (cw_rw_bind_go t bs f True))
+     (Cons h (cw_rw_bind_go t bs f True)))))))
+
+;; ===========================================================================
+;; fixpoint driver and the top-level entry
+;; ===========================================================================
+
+;; iterate the one-pass rewriter to a fixpoint; False = fuel ran out (the
+;; caller must REFUSE — an unstable rewrite is never emitted)
+(fn cw_fix ((n CNode) (bs (List (List Int))) (f CwFacts) (fuel Int))
+  (Pair CNode Bool)
+  (measure fuel)
+  (if (le fuel 0) (Pair n False)
+  (let ((n2 (cw_rw_e n bs f)))
+    (if (cw_ex_eq n2 n) (Pair n True) (cw_fix n2 bs f (- fuel 1))))))
+
+;; parameter names of a fn form ((x T) (y T) ...) — payload position 2
+(fn cw_param_names ((items (List CNode))) (List (List Int))
+  (match (cw_payload items)
+    ((Cons _ (Cons _ (Cons params _)))
+     (match params
+       ((CList pitems) (cw_param_names_go (cw_payload pitems)))
+       (_ Nil)))
+    (_ Nil)))
+
+(fn cw_param_names_go ((ps (List CNode))) (List (List Int))
+  (measure (struct ps))
+  (match ps
+    (Nil Nil)
+    ((Cons p rest)
+     (match p
+       ((CList pi)
+        (match (cw_payload pi)
+          (Nil (cw_param_names_go rest))
+          ((Cons nm _)
+           (match nm
+             ((CAtom a) (Cons a (cw_param_names_go rest)))
+             (_ (cw_param_names_go rest))))))
+       (_ (cw_param_names_go rest))))))
+
+;; rewrite the LAST payload item (the fn body) in place
+(fn cw_rw_last ((items (List CNode)) (bs (List (List Int))) (f CwFacts))
+  (Pair (List CNode) Bool)
+  (measure (struct items))
+  (match items
+    (Nil (Pair Nil True))
+    ((Cons h t)
+     (if (cw_is_layout h)
+       (match (cw_rw_last t bs f)
+         ((Pair t2 ok) (Pair (Cons h t2) ok)))
+     (if (cw_more_payload t)
+       (match (cw_rw_last t bs f)
+         ((Pair t2 ok) (Pair (Cons h t2) ok)))
+       (match (cw_fix h bs f 32)
+         ((Pair h2 ok) (Pair (Cons h2 t) ok))))))))
+
+(fn cw_more_payload ((items (List CNode))) Bool
+  (measure (struct items))
+  (match items
+    (Nil False)
+    ((Cons h t) (if (cw_is_layout h) (cw_more_payload t) True))))
+
+;; one top-level form: fn bodies rewritten; every other decl (claims,
+;; requirements, types, uses, axioms, lib/bin forms) untouched
+(fn cw_rw_top ((n CNode) (f CwFacts)) (Pair CNode Bool)
+  (match n
+    ((CList items)
+     (match (cw_head_name items)
+       (None (Pair n True))
+       ((Some h)
+        (if (cw_bytes_eq h "fn")
+          (match (cw_rw_last items (cw_param_names items) f)
+            ((Pair items2 ok) (Pair (CList items2) ok)))
+          (Pair n True)))))
+    (_ (Pair n True))))
+
+;; THE ENTRY: canonicalize a file's top forms; Bool = every rewrite reached
+;; its fixpoint (False anywhere -> the caller refuses to emit)
+(fn cw_canonize ((nodes (List CNode)) (f CwFacts)) (Pair (List CNode) Bool)
+  (measure (struct nodes))
+  (match nodes
+    (Nil (Pair Nil True))
+    ((Cons h t)
+     (match (cw_rw_top h f)
+       ((Pair h2 ok1)
+        (match (cw_canonize t f)
+          ((Pair t2 ok2) (Pair (Cons h2 t2) (if ok1 ok2 False)))))))))
+
+;; ===========================================================================
+;; the facts scanner — over the production reader's SExpr forms. Kernel
+;; files contribute TYPEDEFS (they ARE the core vocabulary: Bool, Nat,
+;; List, ...) but their type/ctor names never count as shadows; any
+;; NON-kernel definition of a core name refuses the affected folds.
+;; ===========================================================================
+
+(fn cw_scan_ctors ((ds (List SExpr))) (List (List Int))
+  (measure (struct ds))
+  (match ds
+    (Nil Nil)
+    ((Cons d rest)
+     (match d
+       ((SList (Cons (SSym cn) _))
+        (if (sym_eq cn (quote refine)) Nil
+        (Cons (chars_of_sym cn) (cw_scan_ctors rest))))
+       (_ (cw_scan_ctors rest))))))
+
+(fn cw_facts_add ((acc CwFacts) (tds (List CwTd)) (names (List (List Int))))
+  CwFacts
+  (match acc
+    ((CwFacts t0 n0) (CwFacts (cw_app_tds tds t0) (cw_append_names names n0)))))
+
+(fn cw_app_tds ((a (List CwTd)) (b (List CwTd))) (List CwTd)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (cw_app_tds t b)))))
+
+;; a declared name: bare (type Foo ...) or parametric (type (Foo T) ...)
+(fn cw_decl_name ((nmform SExpr)) (Option (List Int))
+  (match nmform
+    ((SSym nm) (Some (chars_of_sym nm)))
+    ((SList (Cons (SSym nm) _)) (Some (chars_of_sym nm)))
+    (_ None)))
+
+(fn cw_scan_form ((s SExpr) (kernel Bool) (acc CwFacts)) CwFacts
+  (match s
+    ((SList (Cons (SSym h) rest))
+     (if (sym_eq h (quote type))
+       (match rest
+         ((Cons nmform ctordecls)
+          (match (cw_decl_name nmform)
+            (None acc)
+            ((Some nb)
+             (let ((cs (cw_scan_ctors ctordecls)))
+               (cw_facts_add
+                 acc
+                 (Cons (CwTd nb cs) Nil)
+                 (if kernel Nil (Cons nb cs)))))))
+         (_ acc))
+     (if (sym_eq h (quote record))
+       (match rest
+         ((Cons nmform _)
+          (match (cw_decl_name nmform)
+            (None acc)
+            ((Some nb)
+             (cw_facts_add
+               acc
+               (Cons (CwTd nb (Cons nb Nil)) Nil)
+               (if kernel Nil (Cons nb (Cons nb Nil)))))))
+         (_ acc))
+     (if (sym_eq h (quote fn))
+       (match rest
+         ((Cons (SSym nm) _)
+          (cw_facts_add acc Nil (Cons (chars_of_sym nm) Nil)))
+         (_ acc))
+     (if (sym_eq h (quote extern))
+       (match rest
+         ((Cons (SSym nm) _)
+          (cw_facts_add acc Nil (Cons (chars_of_sym nm) Nil)))
+         (_ acc))
+     (if (sym_eq h (quote sig))
+       (match rest
+         ((Cons (SSym k) (Cons (SSym nm) _))
+          (if kernel acc (cw_facts_add acc Nil (Cons (chars_of_sym nm) Nil))))
+         (_ acc))
+       acc))))))
+    (_ acc)))
+
+(fn cw_scan_file ((forms (List SExpr)) (kernel Bool) (acc CwFacts)) CwFacts
+  (measure (struct forms))
+  (match forms
+    (Nil acc)
+    ((Cons s rest) (cw_scan_file rest kernel (cw_scan_form s kernel acc)))))
+
+;; import paths of a file's forms
+(fn cw_imports_of ((forms (List SExpr))) (List (List Int))
+  (measure (struct forms))
+  (match forms
+    (Nil Nil)
+    ((Cons s rest)
+     (match s
+       ((SList (Cons (SSym h) (Cons (SStr p) Nil)))
+        (if (sym_eq h (quote import)) (Cons p (cw_imports_of rest))
+        (cw_imports_of rest)))
+       (_ (cw_imports_of rest))))))
+
+(fn cw_empty_facts () CwFacts (CwFacts Nil Nil))

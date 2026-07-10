@@ -188,6 +188,8 @@ TARGETS=(
   examples/zerocase_rejects.shard
   examples/canon_pin.shard
   examples/canon_rejects.shard
+  tools/canon/rewrite.shard
+  tools/canon/canon.shard
   examples/render_model.shard
   examples/modules_demo/consumer.shard
   examples/modules_demo/views/module_view.shard
@@ -475,6 +477,33 @@ if [ -x bin/shard_eval ]; then
       echo "FAIL canon_rejects (missing:$cnr_missing)"
     else
       echo "CANON REJECTS OK ($(grep -c '^CANON ' "$TMP/cnr.out") lines)"
+    fi
+  fi
+  # The REWRITER roundtrip pin (CANON.md slice 2): tools/canon on the pin
+  # file is the IDENTITY (already canonical + fmt-canonical), and on the
+  # rejects file it machine-fixes everything except the refusal tier —
+  # C3 (let hygiene, not in v1) and C6 (blocked on the tc_nat_lit_view
+  # position gap) — so the rewritten output re-checks with EXACTLY those
+  # 6 advisory lines and no others.
+  bin/shard_eval run tools/canon/canon.shard examples/canon_pin.shard > "$TMP/cnt_pin.out" 2>/dev/null
+  if cmp -s "$TMP/cnt_pin.out" examples/canon_pin.shard; then
+    echo "CANON TOOL PIN-IDENTITY OK"
+  else
+    echo "FAIL canon_tool (pin file not a fixed point of the rewriter)"
+  fi
+  bin/shard_eval run tools/canon/canon.shard examples/canon_rejects.shard > "$TMP/cnt_rej.shard" 2>/dev/null
+  cnt_rc=$?
+  if [ $cnt_rc -ne 0 ]; then
+    echo "FAIL canon_tool (rejects rewrite exited $cnt_rc)"
+  else
+    bin/shard_eval run kernel/check.shard "$TMP/cnt_rej.shard" > "$TMP/cnt_rej.out" 2>&1
+    cnt_lines=$(grep -c '^CANON ' "$TMP/cnt_rej.out")
+    cnt_bad=$(grep '^CANON ' "$TMP/cnt_rej.out" | grep -vc 'C3 \|C6 ')
+    if [ "$cnt_lines" = "6" ] && [ "$cnt_bad" = "0" ]; then
+      echo "CANON TOOL ROUNDTRIP OK (6 refusal lines)"
+    else
+      echo "FAIL canon_tool (roundtrip: $cnt_lines lines, $cnt_bad outside the refusal tier)"
+      grep '^CANON ' "$TMP/cnt_rej.out"
     fi
   fi
 else

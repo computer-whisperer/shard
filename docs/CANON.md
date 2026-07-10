@@ -632,8 +632,52 @@ unflagged) and cr_c10 (18 rejects lines; gate roster + `C10 vacif`).
 Measured: std/ at ZERO violations under C1–C10 (tower scan, all 12
 std targets) — stage 2 stays pin-only.
 
-Next slices, in dependency order: the tools/canon REWRITER + the §9
-exactness census harness (slice 2); the C7 check-time tier over the
-append rule set (slice 3); stage-2 enforcement — std/ canonicalized +
-the corpus sweep pin (slice 4); the §7 hash spec + compute tool
-(slice 5, after the form stabilizes).
+**Slice 2a (2026-07-10): the tools/canon REWRITER.** Two files:
+tools/canon/rewrite.shard (the pure CST→CST core) + canon.shard (the
+CLI: kernel-loader closure resolution, facts scan, fmt-gated print).
+Architecture as ratified in §3, with these implementation rulings:
+
+- **Substrate = meta/format's CST** (comments/blanks/raw spellings
+  survive; output pipes through fmt, so it is simultaneously
+  canon-rewritten and shardfmt-canonical). Patterns, quotes, and goal
+  positions are never entered — same scope as the recognizer.
+- **v1 rewrite set**: C1 (folds through try_step_prim + the
+  recognizer's own cn_prim_flaggable — parity by construction), C2
+  (both forms; nat-view matches refused), C4 (decl-order sort via a
+  closure-wide typedef scan; unique-owner or refuse), C5, C8 both
+  directions, C9, C10. **Refusal tier: C3** (let hygiene — slice 2b)
+  **and C6** — the type gate's tc_nat_lit_view fires at argument
+  positions but NOT at the body-vs-declared site, so a folded literal
+  in return position fails to type (found by the rejects roundtrip:
+  `(fn f () Nat 2)` refused Int-vs-Nat). The C6 fold unlocks when the
+  view covers every Nat-expected position — QUEUED kernel companion
+  fix, canon-owned.
+- **Conservative-refusal catalogue**: shadowed names (closure scan;
+  kernel files' typedefs ARE the core vocabulary, never shadows),
+  comment-bearing deletions, inter-arm layout on reorders, binder
+  rebinding under C8 substitution, unknown pattern atoms.
+- **THE SELF-APPLICATION LESSON (a §9 argument written in downtime):**
+  the tool's first self-canonicalization CORRUPTED its own source —
+  the facts scanner missed parametric typedefs (`(type (List T) …)`),
+  so `Nil` patterns classified as NAMED CATCH-ALLS and C5 "pruned"
+  the live `(_ …)` arms after them, in eight functions. The checker
+  stayed GREEN (52/0) — arm deletion is invisible to the type gate —
+  and the corruption surfaced only as run-mode stuckness on inputs
+  that forced the damaged paths. Two fixes: parametric names scanned,
+  and unknown pattern atoms now classify as UNKNOWN (refusing all
+  match-level rewrites) rather than as binders. The episode is the
+  census's thesis made concrete: a rewriter bug ships silently unless
+  something re-judges the pair — slice 2b's exactness census is not
+  optional polish.
+- Validated: rejects-file roundtrip re-checks with EXACTLY the 6
+  refusal lines (3×C3 + 3×C6); pin file is a byte-identical fixed
+  point; the tool is idempotent on and self-canonical over its own
+  two files (ZERO advisory lines); both files check 52/0. run_corpus
+  gains both targets + two gate pins (pin-identity, roundtrip).
+
+Next slices, in dependency order: the §9 exactness census harness
+(slice 2b — recognizer image ≡ rewriter fixpoint image over a small
+enumerated signature); the C7 check-time tier over the append rule
+set (slice 3); stage-2 enforcement — std/ canonicalized + the corpus
+sweep pin (slice 4); the §7 hash spec + compute tool (slice 5, after
+the form stabilizes).

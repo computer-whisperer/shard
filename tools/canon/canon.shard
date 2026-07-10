@@ -1,0 +1,118 @@
+;;; canon.shard — the CLI for tools/canon (CANON.md §3: the untrusted
+;;; rewriter, slice 2). Reads a .shard file, rewrites fn bodies into
+;;; canonical form (the v1 mechanical tier — see rewrite.shard), and prints
+;;; the result to stdout through meta/format's printer + gate, so output is
+;;; simultaneously canon-rewritten and shardfmt-canonical.
+;;;
+;;; The kernel recognizer stays the only authority: run the checker on the
+;;; output and the CANON advisory lines that remain are exactly the sites
+;;; the rewriter refused (C3, shadowed names, comment-bearing deletions,
+;;; nat-view matches — rewrite.shard's refusal list).
+;;;
+;;; RUN IT:   bin/shard_eval run tools/canon/canon.shard FILE
+;;;   (canonicalized source on stdout; exit 0 = emitted, 2 = bad input,
+;;;    3 = refusal: rewrite unstable, unparseable, or the fmt gate balked)
+;;; CHECK IT: bin/shard_eval run kernel/check.shard tools/canon/canon.shard
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/reader.shard")
+(import "../../kernel/loader.shard")
+(import "../../meta/format")
+(import "rewrite.shard")
+
+(use (:: kernel loader World))
+(use (:: kernel loader get_args))
+(use (:: kernel loader read_file))
+(use (:: kernel loader write))
+(use (:: kernel loader exit))
+(use (:: kernel loader resolve_closure))
+(use (:: kernel loader int_list_eq))
+(use (:: kernel reader *))
+(use (:: meta format cst_read))
+(use (:: meta format pp_top))
+(use (:: meta format fmt))
+(use (:: tools canon rewrite *))
+
+;; ---------------------------------------------------------------------------
+;; path plumbing: find the target's bytes in the closure; kernel detection
+;; ---------------------------------------------------------------------------
+
+(fn cn_src_find ((path (List Int)) (srcs (List SrcEntry))) (Option (List Int))
+  (measure (struct srcs))
+  (match srcs
+    (Nil None)
+    ((Cons (SrcEntry p _ bytes) rest)
+     (if (int_list_eq p path) (Some bytes) (cn_src_find path rest)))))
+
+(fn cn_starts_with ((p (List Int)) (q (List Int))) Bool
+  (measure (struct q))
+  (match q
+    (Nil True)
+    ((Cons c qr)
+     (match p
+       (Nil False)
+       ((Cons d pr) (if (int_eq c d) (cn_starts_with pr qr) False))))))
+
+(fn cn_contains ((p (List Int)) (q (List Int))) Bool
+  (measure (struct p))
+  (if (cn_starts_with p q) True
+  (match p
+    (Nil False)
+    ((Cons _ pr) (cn_contains pr q)))))
+
+;; a closure path under the kernel tree: its typedefs ARE the core
+;; vocabulary; its names never count as shadows (rewrite.shard's contract)
+(fn cn_is_kernel ((path (List Int))) Bool
+  (if (cn_starts_with path "kernel/") True (cn_contains path "/kernel/")))
+
+;; ---------------------------------------------------------------------------
+;; facts: scan every source in the resolved import closure
+;; ---------------------------------------------------------------------------
+
+(fn cn_scan_srcs ((srcs (List SrcEntry)) (acc CwFacts)) CwFacts
+  (measure (struct srcs))
+  (match srcs
+    (Nil acc)
+    ((Cons (SrcEntry path _ bytes) rest)
+     (match (read_all bytes)
+       (None (cn_scan_srcs rest acc))
+       ((Some forms)
+        (cn_scan_srcs rest (cw_scan_file forms (cn_is_kernel path) acc)))))))
+
+;; ---------------------------------------------------------------------------
+;; the run: resolve, scan, rewrite, print through the fmt gate
+;; ---------------------------------------------------------------------------
+
+(fn cn_run ((target (List Int)) (w World)) World
+  (match (resolve_closure target False w)
+    ((Pair srcs w2)
+     (match (cn_src_find target srcs)
+       (None (exit 2 (write "canon: cannot read file\n" w2)))
+       ((Some src)
+        (match (cst_read src)
+          (None (exit 2 (write "canon: file does not parse\n" w2)))
+          ((Some nodes)
+           (let ((facts (cn_scan_srcs srcs (cw_empty_facts))))
+             (match (cw_canonize nodes facts)
+               ((Pair nodes2 stable)
+                (if stable
+                  (match (fmt (pp_top nodes2))
+                    (None
+                      (exit
+                        3
+                        (write
+                          "canon: rewrite failed the format gate; refusing to emit\n"
+                          w2)))
+                    ((Some out) (exit 0 (write out w2))))
+                  (exit
+                    3
+                    (write
+                      "canon: rewrite did not stabilize; refusing to emit\n"
+                      w2)))))))))))))
+
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Pair args w1)
+     (match args
+       ((Cons target Nil) (cn_run target w1))
+       (_ (exit 2 (write "usage: canon <file.shard>\n" w1)))))))
