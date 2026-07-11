@@ -265,6 +265,26 @@ hazard, and the disposition.
   case in if position; the order-shaped case (AC operand order) is
   D9/C7 tier-2 territory; the match analog (all arms binder-less and
   identical) is priced, not bought, for v1.
+  MEASURED (playground d3bbf0b, the stack machine): at the VM-synthesis
+  frontier the §8 context-sensitive-equality classes were a 50-MINUTE
+  wall-clock tail (92% of a 10²⁵ space settled in seconds; the rest was
+  the engine enumerating spellings of identity in one arm), and the
+  pinned-list normal form — C8 COMPOSED through nested destructuring,
+  plus the vacuous-match rules — turned the same search into 4.6s.
+  Both bought (2026-07-10): C8's rebuild check composes through
+  ground-pinned binders, and C10 gained the 'match tier.
+- **D18 match-commutation order (playground d3bbf0b, census-only)** —
+  independent nested matches commute (the mirror nesting exists with
+  rearranged arm bodies); the playground canonicalized inner-scrutinee
+  index > outer's and cut its VM space 60×. Carries the first honest
+  DEPTH-BUDGET caveat: commuting can push an arm body one level
+  deeper, so under a fixed depth budget a solution whose only
+  in-budget spelling is non-canonical would be lost (search-side
+  concern; source code has no depth budget). Named and priced, NOT
+  proposed for v1 — the let-order analog (C3) has a clear first-use
+  metric, while match order needs an independence analysis the
+  recognizer doesn't yet own. Revisit with the stricter-modes bundle
+  (§11).
 
 ## 5. The invariant set (proposed v1 cut)
 
@@ -316,6 +336,15 @@ Tier 1 — syntactic, theory-free, recognizer runs at read:
   pattern over the arm's own binders — the scrutinee variable already
   names that value (and shares it). Partial rebuilds — any component
   changed — are untouched.
+  COMPOSED (2026-07-10, the stack machine's pinned-list normal form):
+  the rebuild check carries GROUND PINS through nested destructuring —
+  inside `(match xs ((Cons h t) (match t (Nil …))))` the inner Nil arm
+  pins t = Nil, so `(Cons h Nil)` there IS the rebuild of xs and is
+  refused; every matched value keeps exactly one spelling. Still
+  lexical (each equation is an enclosing arm's own — no calls,
+  conditions, or paths), so the §8 flow boundary is untouched. The
+  nested-Cons side needs no new rule: the inner rebuild is flagged
+  one level down and the rewriter's fixpoint composes outward.
 - **C9 no match on Bool** (ratified 2026-07-10). `(match b (True X)
   (_ Y))` and `(if b X Y)` are two spellings of the same branch; the
   if is canonical (shorter, binder-free). Detection is syntactic —
@@ -323,14 +352,20 @@ Tier 1 — syntactic, theory-free, recognizer runs at read:
   application of D16's basis-minimization principle at the control
   layer: shard already has no and/or/not prims (Bool combination IS
   if-spellings); this closes the match-side duplicate.
-- **C10 no vacuous if** (ratified 2026-07-10, D17's equality case).
-  The two branches of an `if` must differ structurally: `(if c X X)`
-  is X — the Bool case tautology — dressed as control. Nameless
-  syntax makes the check exact alpha-equality for free (If binds
-  nothing; one expr_eq of the two branches). In authored source a
-  vacuous if is always dead control or a bug; in search spaces the
-  family measured as live fork weight (D17). The match analog stays
-  census-priced, not bought, for v1.
+- **C10 no vacuous control** (ratified 2026-07-10, D17's equality
+  case; the 'match tier added after the stack machine measured it).
+  Three shapes of control that decides nothing:
+  (if) the two branches of an `if` must differ structurally —
+  `(if c X X)` is X dressed as control (one expr_eq; If binds
+  nothing, so structural equality is alpha-equality);
+  (match-constant) a COVERED match whose every arm body ignores its
+  binders and agrees is that body;
+  (match-identity) a COVERED match whose every arm body respells the
+  scrutinee (the shifted scrut var, the arm's ground value, or a
+  bare-PVar alias) is its scrutinee.
+  Coverage is load-bearing for the match tier: a PARTIAL match is a
+  runtime filter, not a vacuous one — only a catch-all or the full
+  ctor set makes it decorative (pinned by cp_c10p).
 
 Tier 2 — theory quotients, recognizer runs at check (needs types):
 
@@ -730,6 +765,34 @@ fix.** Two kernel edits, one rebuild:
   cp_c7 (a rule-free append stays clean) and remains a rewriter fixed
   point; census grows the Nat whole-body family — 108 terms, 78
   flagged→fixed, biconditional green with the C6 fold live.
+
+**Slice 3b (2026-07-10): C8 composed + C10 'match — the stack
+machine's rules, bought.** Playground d3bbf0b measured the §8
+context-sensitive-equality classes as a 50-minute wall-clock tail and
+its pinned-list normal form as the cure; both halves that are LEXICAL
+moved in:
+
+- **C8 composes through ground pins** (recognizer: cn_rbp/cn_rbs
+  thread a pin context; tool: cw_subst_pin, a pin-aware substitution)
+  — `(Cons h Nil)` under a nested Nil arm is the rebuild of xs and is
+  refused/rewritten. The nested-Cons side was already covered: the
+  inner rebuild flags one level down and the rewriter's fixpoint
+  composes outward (validated: cr_c8c collapses to `xs` through
+  composed-rebuild → constant → identity in one canon run).
+- **C10 'match** (cn_c10m; cw_rule_c10m): constant and identity
+  matches, coverage-guarded (catch-all or full ctor set — cp_c10p
+  pins that a PARTIAL identity-shaped match is a filter, not
+  vacuous). Two prior pin fns were exposed as genuinely vacuous by
+  the new rule and were repaired — the recognizer catching its own
+  fixture file is the system working.
+- **Organic footprint: ZERO** — std (all 12 targets) and the tool's
+  own three files show no new violations under the composed rules;
+  stage 2 stays pin-only. D18 (match-commutation order) entered the
+  census as named-not-proposed, with its depth-budget caveat.
+- Fixtures: rejects 25 lines (cr_c8c, cr_c10m, cr_c10i); pin grows
+  the composed near-miss (literal head ≠ binder) + cp_c10m/cp_c10p;
+  census 115 terms, 84 flagged→fixed, incl. the full-cascade term
+  and the constant/identity near-misses.
 
 Next slices, in dependency order: stage-2 enforcement — std/
 canonicalized + the corpus sweep pin (slice 4); the §7 hash spec +

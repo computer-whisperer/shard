@@ -31,7 +31,7 @@
 ;; one violation: invariant number (1..10) + a subject symbol for the line
 ;; (C1: the prim; C2: 'if/'match; C3: 'dead/'order/'merge; C4/C5: the ctor
 ;; or 'lit/'unreachable; C6: 'S/'Z; C7: the rule name (nil_left/cons/
-;; assoc/nil_right); C8: 'respell/'rebuild; C9: 'bool; C10: 'vacif).
+;; assoc/nil_right); C8: 'respell/'rebuild; C9: 'bool; C10: 'vacif/'match).
 (type CViol (CViol Int Symbol))
 
 ;; ---------------------------------------------------------------------------
@@ -236,16 +236,63 @@
 
 ;; does e spell pattern p exactly, with p's k-th DFS PVar as
 ;; BVar (dd + nb-1-k)? Threads k; Some k' = matched so far.
-(fn cn_rbp ((p Pat) (e Expr) (dd Int) (nb Int) (k Int)) (Option Int)
+;; the GROUND-PIN context: binder index (current depth) -> the ground value
+;; a nested match arm pinned it to. This is what lets the rebuild check
+;; COMPOSE through nesting (the playground's PinnedNil): in
+;;   (match xs ((Cons h t) (match t (Nil ... (Cons h Nil) ...))))
+;; the inner Nil arm pins t = Nil, so (Cons h Nil) IS the rebuild of xs.
+(fn cn_pin_get ((j Int) (pins (List (Pair Int Expr)))) (Option Expr)
+  (measure (struct pins))
+  (match pins
+    (Nil None)
+    ((Cons (Pair i v) rest) (if (int_eq i j) (Some v) (cn_pin_get j rest)))))
+
+(fn cn_pins_shift ((pins (List (Pair Int Expr))) (n Int)) (List (Pair Int Expr))
+  (measure (struct pins))
+  (match pins
+    (Nil Nil)
+    ((Cons (Pair i v) rest) (Cons (Pair (+ i n) v) (cn_pins_shift rest n)))))
+
+;; a fully-ground pattern as the closed value it pins (None if it binds)
+(fn cn_pat_val ((p Pat)) (Option Expr)
+  (measure (struct p))
+  (match p
+    ((PVar) None)
+    ((PCtor q ps)
+     (match (cn_pat_val_l ps)
+       ((Some es) (Some (Ctor q es)))
+       (None None)))
+    ((PInt v) (Some (IntLit v)))
+    ((PSym s) (Some (SymLit s)))))
+
+(fn cn_pat_val_l ((ps (List Pat))) (Option (List Expr))
+  (measure (struct ps))
+  (match ps
+    (Nil (Some Nil))
+    ((Cons p rest)
+     (match (cn_pat_val p)
+       ((Some e)
+        (match (cn_pat_val_l rest)
+          ((Some es) (Some (Cons e es)))
+          (None None)))
+       (None None)))))
+
+(fn cn_rbp
+  ((p Pat) (e Expr) (dd Int) (nb Int) (k Int) (pins (List (Pair Int Expr))))
+  (Option Int)
   (measure (struct p))
   (match p
     ((PVar)
      (match e
        ((BVar j) (if (int_eq j (+ dd (- (- nb 1) k))) (Some (+ k 1)) None))
-       (_ None)))
+       (_
+         ;; the binder's position may be spelled by its pinned GROUND value
+         (match (cn_pin_get (+ dd (- (- nb 1) k)) pins)
+           ((Some v) (if (expr_eq e v) (Some (+ k 1)) None))
+           (None None)))))
     ((PCtor q ps)
      (match e
-       ((Ctor q2 es) (if (qname_eq q q2) (cn_rbp_l ps es dd nb k) None))
+       ((Ctor q2 es) (if (qname_eq q q2) (cn_rbp_l ps es dd nb k pins) None))
        (_ None)))
     ((PInt v)
      (match e
@@ -256,7 +303,13 @@
        ((SymLit s2) (if (sym_eq s s2) (Some k) None))
        (_ None)))))
 
-(fn cn_rbp_l ((ps (List Pat)) (es (List Expr)) (dd Int) (nb Int) (k Int))
+(fn cn_rbp_l
+  ((ps (List Pat))
+   (es (List Expr))
+   (dd Int)
+   (nb Int)
+   (k Int)
+   (pins (List (Pair Int Expr))))
   (Option Int)
   (measure (struct ps))
   (match ps
@@ -268,43 +321,75 @@
      (match es
        (Nil None)
        ((Cons e erest)
-        (match (cn_rbp p e dd nb k)
+        (match (cn_rbp p e dd nb k pins)
           (None None)
-          ((Some k2) (cn_rbp_l prest erest dd nb k2))))))))
+          ((Some k2) (cn_rbp_l prest erest dd nb k2 pins))))))))
 
 ;; rebuild scan: the exact rebuild anywhere in e (dd = binder depth below
-;; the arm-body top)
-(fn cn_rbs ((e Expr) (p Pat) (nb Int) (dd Int)) Bool
+;; the arm-body top). pins carry the ground equations nested match arms
+;; establish (indices at the CURRENT depth, shifted as binders enter), so
+;; the scan composes through nesting — the pinned-list normal form's
+;; recognizer image (CANON.md D17's family, measured by the stack machine).
+(fn cn_rbs ((e Expr) (p Pat) (nb Int) (dd Int) (pins (List (Pair Int Expr))))
+  Bool
   (measure (struct e))
-  (match (cn_rbp p e dd nb 0)
+  (match (cn_rbp p e dd nb 0 pins)
     ((Some _) True)
     (None
       (match e
-        ((Ctor _ args) (cn_rbs_l args p nb dd))
-        ((Call _ args) (cn_rbs_l args p nb dd))
+        ((Ctor _ args) (cn_rbs_l args p nb dd pins))
+        ((Call _ args) (cn_rbs_l args p nb dd pins))
         ((If c t e2)
-         (if (cn_rbs c p nb dd) True
-         (if (cn_rbs t p nb dd) True
-         (cn_rbs e2 p nb dd))))
+         (if (cn_rbs c p nb dd pins) True
+         (if (cn_rbs t p nb dd pins) True
+         (cn_rbs e2 p nb dd pins))))
         ((Let bs body)
-         (if (cn_rbs_l bs p nb dd) True
-         (cn_rbs body p nb (+ dd (cn_len_el bs)))))
-        ((Match s arms) (if (cn_rbs s p nb dd) True (cn_rbs_arms arms p nb dd)))
+         (if (cn_rbs_l bs p nb dd pins) True
+         (cn_rbs
+           body
+           p
+           nb
+           (+ dd (cn_len_el bs))
+           (cn_pins_shift pins (cn_len_el bs)))))
+        ((Match s arms)
+         (if (cn_rbs s p nb dd pins) True (cn_rbs_arms arms s p nb dd pins)))
         (_ False)))))
 
-(fn cn_rbs_l ((es (List Expr)) (p Pat) (nb Int) (dd Int)) Bool
+(fn cn_rbs_l
+  ((es (List Expr)) (p Pat) (nb Int) (dd Int) (pins (List (Pair Int Expr))))
+  Bool
   (measure (struct es))
   (match es
     (Nil False)
-    ((Cons a rest) (if (cn_rbs a p nb dd) True (cn_rbs_l rest p nb dd)))))
+    ((Cons a rest)
+     (if (cn_rbs a p nb dd pins) True (cn_rbs_l rest p nb dd pins)))))
 
-(fn cn_rbs_arms ((arms (List Arm)) (p Pat) (nb Int) (dd Int)) Bool
+;; s = the nested match's scrutinee. A GROUND arm over a BVar scrutinee
+;; pins that binder to the arm's value for the arm's own body (ground
+;; patterns bind nothing, so the index needs no shift at creation).
+(fn cn_rbs_arms
+  ((arms (List Arm))
+   (s Expr)
+   (p Pat)
+   (nb Int)
+   (dd Int)
+   (pins (List (Pair Int Expr))))
+  Bool
   (measure (struct arms))
   (match arms
     (Nil False)
     ((Cons (Arm p2 b) rest)
-     (if (cn_rbs b p nb (+ dd (cn_pat_binds p2))) True
-     (cn_rbs_arms rest p nb dd)))))
+     (let
+       ((nb2 (cn_pat_binds p2))
+        (pins2
+          (match s
+            ((BVar j)
+             (match (cn_pat_val p2)
+               ((Some v) (Cons (Pair j v) pins))
+               (None pins)))
+            (_ pins))))
+       (if (cn_rbs b p nb (+ dd nb2) (cn_pins_shift pins2 nb2)) True
+       (cn_rbs_arms rest s p nb dd pins))))))
 
 ;; per-arm C8. sf/sb: the scrutinee as FVar name or BVar index (exactly
 ;; one Some). (a) fires only at nb=0 where the scrutinee's index needs no
@@ -325,7 +410,7 @@
             (None Nil))))
       (match p
         ((PCtor _ _)
-         (if (cn_rbs b p nb 0) (Cons (CViol 8 (quote rebuild)) Nil) Nil))
+         (if (cn_rbs b p nb 0 Nil) (Cons (CViol 8 (quote rebuild)) Nil) Nil))
         (_ Nil)))))
 
 (fn cn_c8_arms ((arms (List Arm)) (sf (Option Symbol)) (sb (Option Int)))
@@ -341,6 +426,205 @@
     ((FVar x) (cn_c8_arms arms (Some x) None))
     ((BVar i) (cn_c8_arms arms None (Some i)))
     (_ Nil)))
+
+;; ---------------------------------------------------------------------------
+;; C10 'match — vacuous matches (the stack machine's measured tail: control
+;; that decides nothing). Two coverage-guarded shapes:
+;;   constant — every arm body ignores its binders and all bodies agree:
+;;              the match IS that body;
+;;   identity — every arm body respells the scrutinee (the shifted scrut
+;;              var, the arm's ground value, or a bare-PVar alias): the
+;;              match IS its scrutinee.
+;; Coverage is load-bearing: a PARTIAL match is a runtime filter, not a
+;; vacuous one — only a catch-all or a full ctor set makes it decorative.
+;; ---------------------------------------------------------------------------
+
+;; e with its free BVars shifted DOWN past nb arm binders (dd = inner
+;; binder depth); None if e references any of the nb binders
+(fn cn_shdn ((e Expr) (nb Int) (dd Int)) (Option Expr)
+  (measure (struct e))
+  (match e
+    ((BVar j)
+     (if (lt j dd) (Some (BVar j))
+     (if (lt (- j dd) nb) None
+     (Some (BVar (- j nb))))))
+    ((Ctor q args)
+     (match (cn_shdn_l args nb dd)
+       ((Some es) (Some (Ctor q es)))
+       (None None)))
+    ((Call q args)
+     (match (cn_shdn_l args nb dd)
+       ((Some es) (Some (Call q es)))
+       (None None)))
+    ((If c t e2)
+     (match (cn_shdn c nb dd)
+       ((Some c2)
+        (match (cn_shdn t nb dd)
+          ((Some t2)
+           (match (cn_shdn e2 nb dd)
+             ((Some e3) (Some (If c2 t2 e3)))
+             (None None)))
+          (None None)))
+       (None None)))
+    ((Let bs body)
+     (match (cn_shdn_l bs nb dd)
+       ((Some bs2)
+        (match (cn_shdn body nb (+ dd (cn_len_el bs)))
+          ((Some b2) (Some (Let bs2 b2)))
+          (None None)))
+       (None None)))
+    ((Match s arms)
+     (match (cn_shdn s nb dd)
+       ((Some s2)
+        (match (cn_shdn_arms arms nb dd)
+          ((Some arms2) (Some (Match s2 arms2)))
+          (None None)))
+       (None None)))
+    (_ (Some e))))
+
+(fn cn_shdn_l ((es (List Expr)) (nb Int) (dd Int)) (Option (List Expr))
+  (measure (struct es))
+  (match es
+    (Nil (Some Nil))
+    ((Cons a rest)
+     (match (cn_shdn a nb dd)
+       ((Some a2)
+        (match (cn_shdn_l rest nb dd)
+          ((Some es2) (Some (Cons a2 es2)))
+          (None None)))
+       (None None)))))
+
+(fn cn_shdn_arms ((arms (List Arm)) (nb Int) (dd Int)) (Option (List Arm))
+  (measure (struct arms))
+  (match arms
+    (Nil (Some Nil))
+    ((Cons (Arm p b) rest)
+     (match (cn_shdn b nb (+ dd (cn_pat_binds p)))
+       ((Some b2)
+        (match (cn_shdn_arms rest nb dd)
+          ((Some arms2) (Some (Cons (Arm p b2) arms2)))
+          (None None)))
+       (None None)))))
+
+;; the typedef's full ctor list, found from any member ctor
+(fn cn_ctor_home ((q QName) (tds (List TypeDef))) (Option (List CtorDef))
+  (measure (struct tds))
+  (match tds
+    (Nil None)
+    ((Cons (TypeDef _ _ cs _) rest)
+     (match (cn_ctor_ix_go q cs 0)
+       ((Some _) (Some cs))
+       (None (cn_ctor_home q rest))))))
+
+(fn cn_arm_has_ctor ((q QName) (arms (List Arm))) Bool
+  (measure (struct arms))
+  (match arms
+    (Nil False)
+    ((Cons (Arm p _) rest)
+     (match p
+       ((PCtor q2 _) (if (qname_eq q q2) True (cn_arm_has_ctor q rest)))
+       (_ (cn_arm_has_ctor q rest))))))
+
+(fn cn_ctors_all_present ((cs (List CtorDef)) (arms (List Arm))) Bool
+  (measure (struct cs))
+  (match cs
+    (Nil True)
+    ((Cons (CtorDef cq _) rest)
+     (if (cn_arm_has_ctor cq arms) (cn_ctors_all_present rest arms) False))))
+
+(fn cn_any_pvar ((arms (List Arm))) Bool
+  (measure (struct arms))
+  (match arms
+    (Nil False)
+    ((Cons (Arm p _) rest)
+     (match p
+       ((PVar) True)
+       (_ (cn_any_pvar rest))))))
+
+(fn cn_first_ctor ((arms (List Arm))) (Option QName)
+  (measure (struct arms))
+  (match arms
+    (Nil None)
+    ((Cons (Arm p _) rest)
+     (match p
+       ((PCtor q _) (Some q))
+       (_ (cn_first_ctor rest))))))
+
+;; exhaustive arms: a bare-PVar catch-all, or the full ctor set of the
+;; typedef any ctor arm names
+(fn cn_covered ((arms (List Arm)) (m Module)) Bool
+  (if (cn_any_pvar arms) True
+  (match (cn_first_ctor arms)
+    ((Some q)
+     (match (cn_ctor_home q (cn_tds m))
+       ((Some cs) (cn_ctors_all_present cs arms))
+       (None False)))
+    (None False))))
+
+;; constant: all arm bodies binder-free and (shift-normalized) equal
+(fn cn_const_arms ((arms (List Arm)) (prev (Option Expr))) Bool
+  (measure (struct arms))
+  (match arms
+    (Nil True)
+    ((Cons (Arm p b) rest)
+     (match (cn_shdn b (cn_pat_binds p) 0)
+       ((Some nb2)
+        (match prev
+          ((Some v) (if (expr_eq v nb2) (cn_const_arms rest prev) False))
+          (None (cn_const_arms rest (Some nb2)))))
+       (None False)))))
+
+;; identity: the arm body respells the scrutinee inside that arm
+(fn cn_id_arm ((p Pat) (b Expr) (sf (Option Symbol)) (sb (Option Int))) Bool
+  (let ((nb (cn_pat_binds p)))
+    (if
+      (match sf
+        ((Some x)
+         (match b
+           ((FVar y) (sym_eq y x))
+           (_ False)))
+        (None
+          (match sb
+            ((Some i)
+             (match b
+               ((BVar j) (int_eq j (+ i nb)))
+               (_ False)))
+            (None False))))
+      True
+      (match (cn_pat_val p)
+        ((Some v) (expr_eq b v))
+        (None
+          (match p
+            ((PVar)
+             (match b
+               ((BVar j) (int_eq j 0))
+               (_ False)))
+            (_ False)))))))
+
+(fn cn_id_arms ((arms (List Arm)) (sf (Option Symbol)) (sb (Option Int))) Bool
+  (measure (struct arms))
+  (match arms
+    (Nil True)
+    ((Cons (Arm p b) rest)
+     (if (cn_id_arm p b sf sb) (cn_id_arms rest sf sb) False))))
+
+(fn cn_c10m ((s Expr) (arms (List Arm)) (m Module)) (List CViol)
+  (match arms
+    (Nil Nil)
+    (_
+      (if (cn_covered arms m)
+        (if (cn_const_arms arms None) (Cons (CViol 10 (quote match)) Nil)
+        (match s
+          ((FVar x)
+           (if (cn_id_arms arms (Some x) None)
+             (Cons (CViol 10 (quote match)) Nil)
+             Nil))
+          ((BVar i)
+           (if (cn_id_arms arms None (Some i))
+             (Cons (CViol 10 (quote match)) Nil)
+             Nil))
+          (_ Nil)))
+        Nil))))
 
 ;; ---------------------------------------------------------------------------
 ;; C4/C5 support: arm discipline. Ctor arms in declaration order, literal
@@ -553,7 +837,9 @@
          (cn_arms_disc arms (cn_tds m) None None None False)
          (cn_app
            (cn_c8 s arms)
-           (cn_app (cn_c9 arms) (cn_app (cn_e s m) (cn_arms_b arms m)))))))
+           (cn_app
+             (cn_c10m s arms m)
+             (cn_app (cn_c9 arms) (cn_app (cn_e s m) (cn_arms_b arms m))))))))
     ((Let bs body) (cn_app (cn_c3 bs body) (cn_app (cn_l bs m) (cn_e body m))))
     (_ Nil)))
 
