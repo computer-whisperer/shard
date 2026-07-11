@@ -909,10 +909,11 @@ simplification; C3 rewriting (2b's deferral); D18 and the §11
 stricter modes as evidence arrives. (The digest swap to std/sha256
 landed 2026-07-10, same day as the spec.)
 
-## 13. PROPOSAL: contextual normality — C11/C12 (post-v1 tier)
+## 13. Contextual normality — C11/C12 (post-v1 tier)
 
-STATUS: DRAFT 2026-07-10, awaiting ratification. Nothing below is
-recognized, censused, or enforced.
+STATUS: RATIFIED 2026-07-11 (user: "agreed on this scope proposal") at
+the draft's positions on D19–D22. Slice records and the
+implementation-discovered amendments at the end of this section.
 
 PROVENANCE (the playground's catalog arc, measured 2026-07-10). The
 canonical-program census enumerates EVERY canonical program of the
@@ -1017,7 +1018,52 @@ D22. Goal positions stay exempt (unchanged from v1 — goals are where
      spellings are RELATED). Draft treats this as settled, listed
      only for the record.
 
-### The depth price (recorded, from the same measurement)
+### §13 slice 1 (2026-07-11): the 'resplit recognizer — LANDED
+
+The decided-control tier, implemented as SHAPE PINS: kernel/canon's
+main walk now threads two pin environments (FVar-keyed for fn-param
+scrutinees, BVar-keyed for binder scrutinees — cn_ep/cn_lp/cn_abp;
+cn_e is the unchanged external wrapper). Every ctor/literal arm over
+a variable scrutinee pins it to the pattern's shape (cn_pat_shape:
+k-th DFS PVar = arm binder BVar nb-1-k, the parameter convention);
+values shift with depth (cn_pins_shift now shifts values — identity
+on C8's ground pins). The check (cn_c11): a match whose scrutinee is
+pinned, where the BARE variable does not fire but the PIN-EXPANDED
+shape does (cn_px: one substitution pass per pin bounds the
+depth-ordered chase), flags `C11 resplit`. Firing rides the kernel's
+own three-valued try_match_arms — an arm the shape leaves UNDECIDED
+is a runtime filter, no flag (pin cp_c11b); a match the bare
+variable already fires is C5/C10m territory, not a re-split.
+Fixtures: cr_c11a (direct re-split), cr_c11b (fires only through the
+COMPOSED shape (Cons h (Cons a b)) — deep-pattern composition),
+cp_c11a (re-matching the arm's own binder is honest), cp_c11b (the
+MStuck filter). Roundtrip refusal tier grows to C3/C7/C11 (9 lines)
+until slice 3 teaches the tool shape pins.
+
+### Implementation-discovered amendments (recorded at slice 1)
+
+- **The 'if tier is DROPPED**: single-step, an if-condition can only
+  become True/False through a Bool pin, and Bool pins arise only from
+  match-on-Bool — C9-flagged spelling. In C9-clean code the case is
+  unreachable; multi-step decidings route through the fold tier.
+- **D19a (OPEN — the fold tier decomposes; needs a ruling).** Working
+  the rule revealed the census's fold family splits three ways in
+  shard's ledger: (i) pin-derived ground folds are C8a's REWRITE
+  IMAGE — the occurrence is already flagged at the variable, and
+  folding is what the C8a rewrite produces — no new rule needed;
+  (ii) SOURCE-ground user-call folds (`(len Nil)` spelled in a body)
+  collide head-on with the C1 ruling's named-constant idiom (`(fn
+  page_size () Int 4096)` + `(page_size)` at use sites is canonical
+  BY DESIGN) — folding ground calls needs a C1-style user ruling on
+  where names stop and redexes start, plus an evaluation-at-gate cost
+  story; (iii) shape-pin δ (unfold when the body head-fires on a
+  partially-symbolic shape) canonicalizes toward INLINED CALLEE
+  BODIES — `(sum xs)` inside xs's own Cons arm would rewrite to sum's
+  arm body — duplication the playground's evidence does not support
+  (its measured family was ground-decided calls only). Proposed
+  resolution: (i) closed by C8a, (iii) rejected, (ii) = D19a, its own
+  decision. The census slice (slice 2) should measure how often
+  source-ground user calls actually occur before D19a is argued.
 
 The catalog's raw-grammar twin measured that canon rules are
 DIRECTED: a behavior's canonical spelling can sit one rung deeper

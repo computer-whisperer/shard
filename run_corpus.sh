@@ -476,7 +476,7 @@ if [ -x bin/shard_eval ]; then
     echo "FAIL canon_rejects (advisory changed the exit code: $cnr_rc)"
   else
     cnr_missing=""
-    for code in "C1 +" "C2 if" "C2 match" "C3 dead" "C3 order" "C3 merge" "C4 CRB" "C4 lit" "C5 unreachable" "C6 S" "C6 Z" "C7 nil_left" "C7 cons" "C7 assoc" "C7 nil_right" "C8 respell" "C8 rebuild" "C9 bool" "C10 vacif" "C10 match"; do
+    for code in "C1 +" "C2 if" "C2 match" "C3 dead" "C3 order" "C3 merge" "C4 CRB" "C4 lit" "C5 unreachable" "C6 S" "C6 Z" "C7 nil_left" "C7 cons" "C7 assoc" "C7 nil_right" "C8 respell" "C8 rebuild" "C9 bool" "C10 vacif" "C10 match" "C11 resplit"; do
       grep -q "^CANON cr_.*: $code" "$TMP/cnr.out" || cnr_missing="$cnr_missing [$code]"
     done
     if [ -n "$cnr_missing" ]; then
@@ -488,10 +488,12 @@ if [ -x bin/shard_eval ]; then
   # The REWRITER roundtrip pin (CANON.md slices 2/3): tools/canon on the
   # pin file is the IDENTITY (already canonical + fmt-canonical), and on
   # the rejects file it machine-fixes everything except the refusal tier —
-  # C3 (let hygiene, not in v1) and C7 (theory redexes: recognizer-only in
-  # v1; the tool never applies theory rules) — so the rewritten output
-  # re-checks with EXACTLY those 7 advisory lines and no others. (C6 left
-  # the refusal tier with the tc_nat_lit_view return-position fix.)
+  # C3 (let hygiene, not in v1), C7 (theory redexes: recognizer-only in
+  # v1; the tool never applies theory rules), and C11 (resplit —
+  # recognizer-only until §13 slice 3 teaches the tool shape pins) — so
+  # the rewritten output re-checks with EXACTLY those 9 advisory lines
+  # and no others. (C6 left the refusal tier with the tc_nat_lit_view
+  # return-position fix.)
   bin/shard_eval run tools/canon/canon.shard examples/canon_pin.shard > "$TMP/cnt_pin.out" 2>/dev/null
   if cmp -s "$TMP/cnt_pin.out" examples/canon_pin.shard; then
     echo "CANON TOOL PIN-IDENTITY OK"
@@ -508,9 +510,9 @@ if [ -x bin/shard_eval ]; then
     bin/shard_eval run kernel/check.shard examples/.cnt_rej_tmp.shard > "$TMP/cnt_rej.out" 2>&1
     rm -f examples/.cnt_rej_tmp.shard
     cnt_lines=$(grep -c '^CANON ' "$TMP/cnt_rej.out")
-    cnt_bad=$(grep '^CANON ' "$TMP/cnt_rej.out" | grep -vc 'C3 \|C7 ')
-    if [ "$cnt_lines" = "7" ] && [ "$cnt_bad" = "0" ]; then
-      echo "CANON TOOL ROUNDTRIP OK (7 refusal lines)"
+    cnt_bad=$(grep '^CANON ' "$TMP/cnt_rej.out" | grep -vc 'C3 \|C7 \|C11 ')
+    if [ "$cnt_lines" = "9" ] && [ "$cnt_bad" = "0" ]; then
+      echo "CANON TOOL ROUNDTRIP OK (9 refusal lines)"
     else
       echo "FAIL canon_tool (roundtrip: $cnt_lines lines, $cnt_bad outside the refusal tier)"
       grep '^CANON ' "$TMP/cnt_rej.out"

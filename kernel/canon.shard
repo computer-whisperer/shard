@@ -27,6 +27,7 @@
 (use (:: kernel term *))
 (use (:: kernel module *))
 (use (:: kernel reduce try_step_prim))
+(use (:: kernel reduce try_match_arms))
 
 ;; one violation: invariant number (1..10) + a subject symbol for the line
 ;; (C1: the prim; C2: 'if/'match; C3: 'dead/'order/'merge; C4/C5: the ctor
@@ -247,11 +248,15 @@
     (Nil None)
     ((Cons (Pair i v) rest) (if (int_eq i j) (Some v) (cn_pin_get j rest)))))
 
+;; keys shift as binders enter; VALUES shift too — C8's ground values are
+;; untouched (shift is the identity on closed terms) and C11's shape
+;; values spell arm binders, which must track depth.
 (fn cn_pins_shift ((pins (List (Pair Int Expr))) (n Int)) (List (Pair Int Expr))
   (measure (struct pins))
   (match pins
     (Nil Nil)
-    ((Cons (Pair i v) rest) (Cons (Pair (+ i n) v) (cn_pins_shift rest n)))))
+    ((Cons (Pair i v) rest)
+     (Cons (Pair (+ i n) (shift n 0 v)) (cn_pins_shift rest n)))))
 
 ;; a fully-ground pattern as the closed value it pins (None if it binds)
 (fn cn_pat_val ((p Pat)) (Option Expr)
@@ -276,6 +281,127 @@
           ((Some es) (Some (Cons e es)))
           (None None)))
        (None None)))))
+
+;; ---------------------------------------------------------------------------
+;; C11 support (CANON.md §13, slice 1): SHAPE pins. Every ctor/literal arm
+;; over a variable scrutinee pins that variable to the pattern's shape —
+;; the k-th DFS PVar spelled as arm binder BVar nb-1-k (the parameter
+;; convention). Unlike cn_pat_val this is total: binder-bearing patterns
+;; pin partially-symbolic shapes, which is what lets the re-split check
+;; decide DEEP patterns by composing pins through nesting.
+;; ---------------------------------------------------------------------------
+
+(fn cn_pat_shape ((p Pat) (nb Int) (k Int)) (Pair Expr Int)
+  (measure (struct p))
+  (match p
+    ((PVar) (Pair (BVar (- (- nb 1) k)) (+ k 1)))
+    ((PCtor q ps)
+     (match (cn_pat_shape_l ps nb k)
+       ((Pair es k2) (Pair (Ctor q es) k2))))
+    ((PInt v) (Pair (IntLit v) k))
+    ((PSym s) (Pair (SymLit s) k))))
+
+(fn cn_pat_shape_l ((ps (List Pat)) (nb Int) (k Int)) (Pair (List Expr) Int)
+  (measure (struct ps))
+  (match ps
+    (Nil (Pair Nil k))
+    ((Cons p rest)
+     (match (cn_pat_shape p nb k)
+       ((Pair e k2)
+        (match (cn_pat_shape_l rest nb k2)
+          ((Pair es k3) (Pair (Cons e es) k3))))))))
+
+;; FVar-keyed pins (fn-param scrutinees). Keys never shift; VALUES spell
+;; arm binders, so they shift with depth exactly like the Int-keyed pins'.
+(fn cn_fpin_get ((x Symbol) (fp (List (Pair Symbol Expr)))) (Option Expr)
+  (measure (struct fp))
+  (match fp
+    (Nil None)
+    ((Cons (Pair y v) rest) (if (sym_eq y x) (Some v) (cn_fpin_get x rest)))))
+
+(fn cn_fpins_shift ((fp (List (Pair Symbol Expr))) (n Int))
+  (List (Pair Symbol Expr))
+  (measure (struct fp))
+  (match fp
+    (Nil Nil)
+    ((Cons (Pair y v) rest)
+     (Cons (Pair y (shift n 0 v)) (cn_fpins_shift rest n)))))
+
+;; one pin-substitution pass: pinned variables become their shapes. Values
+;; are NOT re-entered here — cn_px iterates passes instead, one per
+;; Int-keyed pin (a chase is depth-ordered: shape values spell only
+;; binders, an FVar hit can occur only at the root, so len(bp)+1 passes
+;; reach the composed shape).
+(fn cn_px1 ((e Expr) (fp (List (Pair Symbol Expr))) (bp (List (Pair Int Expr))))
+  Expr
+  (measure (struct e))
+  (match e
+    ((FVar x)
+     (match (cn_fpin_get x fp)
+       ((Some v) v)
+       (None e)))
+    ((BVar j)
+     (match (cn_pin_get j bp)
+       ((Some v) v)
+       (None e)))
+    ((Ctor q args) (Ctor q (cn_px1_l args fp bp)))
+    (_ e)))
+
+(fn cn_px1_l
+  ((es (List Expr)) (fp (List (Pair Symbol Expr))) (bp (List (Pair Int Expr))))
+  (List Expr)
+  (measure (struct es))
+  (match es
+    (Nil Nil)
+    ((Cons a rest) (Cons (cn_px1 a fp bp) (cn_px1_l rest fp bp)))))
+
+(fn cn_px
+  ((e Expr)
+   (fp (List (Pair Symbol Expr)))
+   (bp (List (Pair Int Expr)))
+   (todo (List (Pair Int Expr))))
+  Expr
+  (measure (struct todo))
+  (match todo
+    (Nil (cn_px1 e fp bp))
+    ((Cons _ rest) (cn_px (cn_px1 e fp bp) fp bp rest))))
+
+;; C11 'resplit: a match on a variable some enclosing arm PINNED re-splits
+;; decided control — after expanding the pins the matcher FIRES an arm
+;; (the composed shape decides deep patterns too). Pin-dependence is
+;; load-bearing: a match the BARE variable already fires (a catch-all
+;; first arm) is C5/C10m territory, not a re-split. Three-valuedness
+;; keeps partial knowledge honest: an arm the shape leaves UNDECIDED
+;; (MStuck) is a runtime filter and no flag is raised.
+(fn cn_c11
+  ((s Expr)
+   (arms (List Arm))
+   (fp (List (Pair Symbol Expr)))
+   (bp (List (Pair Int Expr))))
+  (List CViol)
+  (match s
+    ((FVar x)
+     (match (cn_fpin_get x fp)
+       (None Nil)
+       ((Some _) (cn_c11f s arms fp bp))))
+    ((BVar j)
+     (match (cn_pin_get j bp)
+       (None Nil)
+       ((Some _) (cn_c11f s arms fp bp))))
+    (_ Nil)))
+
+(fn cn_c11f
+  ((s Expr)
+   (arms (List Arm))
+   (fp (List (Pair Symbol Expr)))
+   (bp (List (Pair Int Expr))))
+  (List CViol)
+  (match (try_match_arms arms s)
+    ((ArmFired _) Nil)
+    (_
+      (match (try_match_arms arms (cn_px s fp bp bp))
+        ((ArmFired _) (Cons (CViol 11 (quote resplit)) Nil))
+        (_ Nil)))))
 
 (fn cn_rbp
   ((p Pat) (e Expr) (dd Int) (nb Int) (k Int) (pins (List (Pair Int Expr))))
@@ -818,18 +944,28 @@
 ;; the main walk (mutual over Expr / List Expr / arm bodies)
 ;; ---------------------------------------------------------------------------
 
-(fn cn_e ((e Expr) (m Module)) (List CViol)
+;; the external surface — pins start empty (a fn body's params are unpinned)
+(fn cn_e ((e Expr) (m Module)) (List CViol) (cn_ep e m Nil Nil))
+
+(fn cn_ep
+  ((e Expr)
+   (m Module)
+   (fp (List (Pair Symbol Expr)))
+   (bp (List (Pair Int Expr))))
+  (List CViol)
   (measure (struct e))
   (match e
     ((Call q args)
-     (cn_app (cn_c1 q args) (cn_app (cn_c7 q args) (cn_l args m))))
-    ((Ctor q args) (cn_app (cn_c6 q args) (cn_l args m)))
+     (cn_app (cn_c1 q args) (cn_app (cn_c7 q args) (cn_lp args m fp bp))))
+    ((Ctor q args) (cn_app (cn_c6 q args) (cn_lp args m fp bp)))
     ((If c t e2)
      (cn_app
        (cn_c2_if c)
        (cn_app
          (cn_c10 t e2)
-         (cn_app (cn_e c m) (cn_app (cn_e t m) (cn_e e2 m))))))
+         (cn_app
+           (cn_ep c m fp bp)
+           (cn_app (cn_ep t m fp bp) (cn_ep e2 m fp bp))))))
     ((Match s arms)
      (cn_app
        (if (cn_ground s) (Cons (CViol 2 (quote match)) Nil) Nil)
@@ -839,21 +975,77 @@
            (cn_c8 s arms)
            (cn_app
              (cn_c10m s arms m)
-             (cn_app (cn_c9 arms) (cn_app (cn_e s m) (cn_arms_b arms m))))))))
-    ((Let bs body) (cn_app (cn_c3 bs body) (cn_app (cn_l bs m) (cn_e body m))))
+             (cn_app
+               (cn_c9 arms)
+               (cn_app
+                 (cn_c11 s arms fp bp)
+                 (cn_app (cn_ep s m fp bp) (cn_abp s arms m fp bp)))))))))
+    ((Let bs body)
+     (cn_app
+       (cn_c3 bs body)
+       (cn_app
+         (cn_lp bs m fp bp)
+         (cn_ep
+           body
+           m
+           (cn_fpins_shift fp (cn_len_el bs))
+           (cn_pins_shift bp (cn_len_el bs))))))
     (_ Nil)))
 
-(fn cn_l ((es (List Expr)) (m Module)) (List CViol)
+(fn cn_lp
+  ((es (List Expr))
+   (m Module)
+   (fp (List (Pair Symbol Expr)))
+   (bp (List (Pair Int Expr))))
+  (List CViol)
   (measure (struct es))
   (match es
     (Nil Nil)
-    ((Cons a rest) (cn_app (cn_e a m) (cn_l rest m)))))
+    ((Cons a rest) (cn_app (cn_ep a m fp bp) (cn_lp rest m fp bp)))))
 
-(fn cn_arms_b ((arms (List Arm)) (m Module)) (List CViol)
+;; arm entry: shift both pin environments past the arm's binders, then pin
+;; a VARIABLE scrutinee to the arm's shape. Bare-PVar arms pin nothing
+;; (binder aliasing is not a shape).
+(fn cn_abp
+  ((s Expr)
+   (arms (List Arm))
+   (m Module)
+   (fp (List (Pair Symbol Expr)))
+   (bp (List (Pair Int Expr))))
+  (List CViol)
   (measure (struct arms))
   (match arms
     (Nil Nil)
-    ((Cons (Arm _ b) rest) (cn_app (cn_e b m) (cn_arms_b rest m)))))
+    ((Cons (Arm p b) rest)
+     (cn_app
+       (cn_ep b m (cn_abp_fp s p fp) (cn_abp_bp s p bp))
+       (cn_abp s rest m fp bp)))))
+
+(fn cn_abp_fp ((s Expr) (p Pat) (fp (List (Pair Symbol Expr))))
+  (List (Pair Symbol Expr))
+  (let ((nb (cn_pat_binds p)))
+    (let ((fp2 (cn_fpins_shift fp nb)))
+      (match p
+        ((PVar) fp2)
+        (_
+          (match s
+            ((FVar x)
+             (match (cn_pat_shape p nb 0)
+               ((Pair v _) (Cons (Pair x v) fp2))))
+            (_ fp2)))))))
+
+(fn cn_abp_bp ((s Expr) (p Pat) (bp (List (Pair Int Expr))))
+  (List (Pair Int Expr))
+  (let ((nb (cn_pat_binds p)))
+    (let ((bp2 (cn_pins_shift bp nb)))
+      (match p
+        ((PVar) bp2)
+        (_
+          (match s
+            ((BVar j)
+             (match (cn_pat_shape p nb 0)
+               ((Pair v _) (Cons (Pair (+ j nb) v) bp2))))
+            (_ bp2)))))))
 
 ;; ---------------------------------------------------------------------------
 ;; module surface: scan the target module's own fns, render advisory lines
