@@ -429,6 +429,46 @@ Next slices: x86 lib + ELF ladders into orders_bp/v_bp (slice 2),
 the bin ladder (slice 3) — each retiring its generic script the same
 way.
 
+**Rung 1, slice 2 — the x86 lib + ELF ladders (2026-07-11).** The
+products file now carries all three lib targets over purelib
+(examples/build_products.shard: wasm ×2, x86, x86elf); the driver
+grew `orders_lib_x86` / `orders_lib_x86elf` and their verify ladders,
+gate-for-gate the retired scripts:
+
+- **x86 lib** (six gates): x86gen regen; schema; kernel ×2; accepts
+  (width-ordered coverage rides the same tool); byte-tie as XMOD/TIE
+  *set equality* plus the EFF percolation line (a pure lib asserts an
+  empty effect surface) plus manifest against models/x86; engine =
+  `grep -v ^ARTIFACT` as a plain RUN order (the plan sieve needs no
+  executor smarts), `cc` on the differential harness, and the real
+  CPU replaying the plan.
+- **x86elf** (three gates): regen; IMGTIE (embedded IMG ==
+  cert-assembled TIEIMG, + EFF); the on-silicon run — where the
+  driver's new third mode earns its keep: **`hexbin IN PREFIX OUT`
+  makes the driver its own world-command toolbox** (find the hex
+  line, decode, `write_file` the raw ELF), so the xxd/cut shell
+  pipeline died instead of being ported. The executor gained nothing;
+  the ELF is materialized by a driver self-invocation order, chmod'd
+  and executed as plain RUN orders, and verify compares captured
+  silicon stdout against the plan's EXPOUT bytes in-process.
+- **Structure lesson (from a real defect):** the first cut of the
+  x86 verify gates inlined judgment into World-threaded match towers
+  and shipped a paren-imbalance; the fix was the right shape anyway —
+  *pure judgment helpers over slurped text* (xtie_judge,
+  imgtie_judge, elfrun_judge, eff_judge) with World-threading only in
+  thin rc/slurp shells. Follow that pattern for the bin ladder.
+- **Retired:** examples/lowbuild_lib_x86.sh,
+  examples/lowbuild_lib_x86_elf.sh; lowbuild_all.sh entries collapse
+  3→1 (24 entries remain).
+
+Gates: driver green end-to-end (4 products, 41s serial, silicon leg
+included); lowbuild_all.sh fully green; corpus FAIL set unchanged.
+Duplicate-work note for a later refinement: the x86 and x86elf
+products over the same SRC/OUT re-run regen and kernel checks that
+sibling products already ran — per-(stage,inputs) dedup by content
+address is the natural fix and rides D-acct-style digests, not new
+order vocabulary.
+
 ## 12. Non-goals, stated once
 
 No config dialect — profiles are shard values. No distinguished

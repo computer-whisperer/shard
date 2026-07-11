@@ -23,9 +23,13 @@
 ;;; manifest, engine — printing one OK line per green product and one
 ;;; FAIL line per broken gate (exit 1 if any).
 ;;;
-;;; v1 products: kind 'lib on target 'wasm — gate-for-gate the retired
-;;; examples/lowbuild_lib.sh. Unknown kind/target combinations refuse
-;;; loudly at plan time (grow the driver, don't guess).
+;;; Products: kind 'lib on targets 'wasm / 'x86 / 'x86elf — gate-for-
+;;; gate the retired lowbuild_lib.sh / lowbuild_lib_x86.sh /
+;;; lowbuild_lib_x86_elf.sh. A third mode, `hexbin IN PREFIX OUT`,
+;;; makes the driver its own world-command toolbox (ELF
+;;; materialization: hex line -> raw bytes via write_file). Unknown
+;;; kind/target combinations refuse loudly at plan time (grow the
+;;; driver, don't guess).
 
 (import "../../kernel/stdlib.shard")
 (import "../../kernel/term.shard")
@@ -138,6 +142,90 @@
      None)))))
 
 (fn atoi ((bs (List Int))) (Option Int) (atoi_go bs 0 False))
+
+;; does hay end with suf?
+(fn ewith ((hay (List Int)) (suf (List Int))) Bool
+  (swith (rint hay Nil) (rint suf Nil)))
+
+;; the rest after a byte prefix (None when pfx is not a prefix)
+(fn pfx_rest ((l (List Int)) (pfx (List Int))) (Option (List Int))
+  (measure (struct pfx))
+  (match pfx
+    (Nil (Some l))
+    ((Cons p ps)
+     (match l
+       (Nil None)
+       ((Cons h t) (if (int_eq h p) (pfx_rest t ps) None))))))
+
+;; all lines with this prefix
+(fn lines_pfx ((ls (List (List Int))) (pfx (List Int))) (List (List Int))
+  (measure (struct ls))
+  (match ls
+    (Nil Nil)
+    ((Cons h t) (if (swith h pfx) (Cons h (lines_pfx t pfx)) (lines_pfx t pfx)))))
+
+;; first line with this prefix
+(fn find_line ((ls (List (List Int))) (pfx (List Int))) (Option (List Int))
+  (measure (struct ls))
+  (match ls
+    (Nil None)
+    ((Cons h t) (if (swith h pfx) (Some h) (find_line t pfx)))))
+
+;; second whitespace token of a line
+(fn tok2 ((l (List Int))) (Option (List Int))
+  (match (tokens l)
+    ((Cons _ (Cons b _)) (Some b))
+    (_ None)))
+
+(fn lmem ((x (List Int)) (ls (List (List Int)))) Bool
+  (measure (struct ls))
+  (match ls
+    (Nil False)
+    ((Cons h t) (if (ceq h x) True (lmem x t)))))
+
+;; every element of xs is in ys
+(fn lsub ((xs (List (List Int))) (ys (List (List Int)))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil True)
+    ((Cons h t) (if (lmem h ys) (lsub t ys) False))))
+
+;; "TIE <rest>" lines respelled as "XMOD <rest>" (the byte-tie set compare)
+(fn ties_as_xmod ((ls (List (List Int)))) (List (List Int))
+  (measure (struct ls))
+  (match ls
+    (Nil Nil)
+    ((Cons h t)
+     (match (pfx_rest h "TIE ")
+       (None (ties_as_xmod t))
+       ((Some r) (Cons (append_int "XMOD " r) (ties_as_xmod t)))))))
+
+;; lowercase-hex nibble -> value
+(fn unhexd ((c Int)) (Option Int)
+  (if (le 48 c)
+    (if (le c 57) (Some (- c 48))
+    (if (le 97 c) (if (le c 102) (Some (- c 87)) None)
+    None))
+    None))
+
+;; lowercase-hex bytes -> raw bytes, whole-or-nothing
+(fn unhex ((cs (List Int))) (Option (List Int))
+  (measure (struct cs))
+  (match cs
+    (Nil (Some Nil))
+    ((Cons a rest1)
+     (match rest1
+       (Nil None)
+       ((Cons b rest)
+        (match (unhexd a)
+          (None None)
+          ((Some va)
+           (match (unhexd b)
+             (None None)
+             ((Some vb)
+              (match (unhex rest)
+                (None None)
+                ((Some bs) (Some (Cons (+ (* va 16) vb) bs)))))))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; product decode — BuildProfile values (Expr) -> native, whole-or-nothing
@@ -262,6 +350,92 @@
     (Nil ys)
     ((Cons h t) (Cons h (append t ys)))))
 
+;; the x86 lib ladder — gate-for-gate the retired lowbuild_lib_x86.sh
+(fn orders_lib_x86
+  ((i Int)
+   (src (List Int))
+   (out (List Int))
+   (cap (List Int))
+   (ev (List Int))
+   (check (List (List Int))))
+  (List Int)
+  (cat
+    (list
+      (run_line
+        (capf cap i "gen.log")
+        (list ev "run" "tools/x86gen/x86gen.shard" src (capf cap i "raw")))
+      (run_line
+        (capf cap i "fmt")
+        (list ev "run" "tools/shardfmt/shardfmt.shard" (capf cap i "raw")))
+      (run_line
+        (capf cap i "schema.log")
+        (list ev "run" "tools/lowcheck/lowcheck.shard" out))
+      (run_line (capf cap i "kout.log") (append check (Cons out Nil)))
+      (run_line (capf cap i "ksrc.log") (append check (Cons src Nil)))
+      (run_line
+        (capf cap i "acc.log")
+        (list ev "run" "tools/lowcheck/accepts.shard" src out))
+      (run_line
+        (capf cap i "plan.txt")
+        (list ev "run" "tools/lowbuild/lowbuild.shard" "lib" src out "x86"))
+      (run_line
+        (capf cap i "tie.txt")
+        (list ev "run" "tools/bytetie/bytetie.shard" out))
+      (run_line
+        (capf cap i "man.log")
+        (list
+          ev
+          "run"
+          "tools/lowcheck/manifest.shard"
+          (capf cap i "plan.txt")
+          "models/x86/x86.shard"
+          out))
+      (run_line
+        (capf cap i "cpu_plan.txt")
+        (list "grep" "-v" "^ARTIFACT" (capf cap i "plan.txt")))
+      (run_line
+        (capf cap i "cc.log")
+        (list "cc" "-O2" "-o" (capf cap i "x86_diff") "examples/x86_diff.c"))
+      (run_line
+        (capf cap i "eng.log")
+        (list (capf cap i "x86_diff") (capf cap i "cpu_plan.txt"))))))
+
+;; the x86 ELF ladder — the retired lowbuild_lib_x86_elf.sh (regen +
+;; IMGTIE + on-silicon run; the full cert gates ride the x86 lib product
+;; over the same OUT). The binary is materialized by the driver's own
+;; hexbin mode — no xxd/cut plumbing survives in the world.
+(fn orders_lib_x86elf
+  ((i Int) (src (List Int)) (out (List Int)) (cap (List Int)) (ev (List Int)))
+  (List Int)
+  (cat
+    (list
+      (run_line
+        (capf cap i "gen.log")
+        (list ev "run" "tools/x86gen/x86gen.shard" src (capf cap i "raw")))
+      (run_line
+        (capf cap i "fmt")
+        (list ev "run" "tools/shardfmt/shardfmt.shard" (capf cap i "raw")))
+      (run_line
+        (capf cap i "elf.txt")
+        (list ev "run" "tools/lowbuild/lowbuild.shard" "elf" src out))
+      (run_line
+        (capf cap i "tie.txt")
+        (list ev "run" "tools/bytetie/bytetie.shard" out))
+      (run_line
+        (capf cap i "hexbin.log")
+        (list
+          ev
+          "run"
+          "tools/build/build.shard"
+          "hexbin"
+          (capf cap i "elf.txt")
+          "ELF"
+          (capf cap i "a.elf")))
+      (run_line
+        (capf cap i "chmod.log")
+        (list "chmod" "+x" (capf cap i "a.elf")))
+      (run_line (capf cap i "run.out") (list (capf cap i "a.elf"))))))
+
 ;; None = unsupported kind/target (refuse loudly at the caller)
 (fn orders_bp
   ((i Int) (b BP) (cap (List Int)) (ev (List Int)) (check (List (List Int))))
@@ -271,7 +445,9 @@
      (if (sym_eq k (quote lib))
        (if (sym_eq t (quote wasm))
          (Some (orders_lib_wasm i src out cap ev check))
-         None)
+       (if (sym_eq t (quote x86)) (Some (orders_lib_x86 i src out cap ev check))
+       (if (sym_eq t (quote x86elf)) (Some (orders_lib_x86elf i src out cap ev))
+       None)))
        None))))
 
 (fn orders_all
@@ -497,13 +673,182 @@
                              (cat2 g3a (cat2 g3b (cat2 g4 (cat2 g5 g6))))))
                          w7))))))))))))))))
 
+;; the EFF percolation line: a pure lib asserts an empty effect surface
+(fn eff_judge ((i Int) (tieb (List Int))) (List (List Int))
+  (match (find_line (blines tieb) "EFF ")
+    (None (Cons (vfail i "percolation" "tie has no EFF line") Nil))
+    ((Some el)
+     (if (ewith el " OK") Nil
+     (Cons (vfail i "percolation" "effect surface not OK") Nil)))))
+
+;; pure judgment: plan XMOD set == tie TIE set, then EFF
+(fn xtie_judge ((i Int) (planb (List Int)) (tieb (List Int))) (List (List Int))
+  (match (lines_pfx (blines planb) "XMOD ")
+    (Nil (Cons (vfail i "bytetie" "plan has no XMOD lines") Nil))
+    ((Cons xh xt)
+     (match (ties_as_xmod (lines_pfx (blines tieb) "TIE "))
+       (Nil (Cons (vfail i "bytetie" "tie has no TIE lines") Nil))
+       ((Cons th tt)
+        (if (lsub (Cons xh xt) (Cons th tt))
+          (if (lsub (Cons th tt) (Cons xh xt)) (eff_judge i tieb)
+          (Cons (vfail i "bytetie" "TIE set differs from plan XMOD set") Nil))
+          (Cons (vfail i "bytetie" "plan XMOD not covered by TIE set") Nil)))))))
+
+;; the x86 byte tie: rc gates, then the pure judgment
+(fn g_xtie ((cap (List Int)) (i Int) (w World)) (Pair (List (List Int)) World)
+  (match (rc_gate cap i "plan.txt" "bytetie(plan)" w)
+    ((Pair m1 w1)
+     (match m1
+       ((Cons _ _) (Pair m1 w1))
+       (Nil
+         (match (rc_gate cap i "tie.txt" "bytetie(tie)" w1)
+           ((Pair m2 w2)
+            (match m2
+              ((Cons _ _) (Pair m2 w2))
+              (Nil
+                (match (rc_gate cap i "man.log" "manifest" w2)
+                  ((Pair m3 w3)
+                   (match m3
+                     ((Cons _ _) (Pair m3 w3))
+                     (Nil
+                       (match (slurp (capf cap i "plan.txt") w3)
+                         ((Pair planb w4)
+                          (match (slurp (capf cap i "tie.txt") w4)
+                            ((Pair tieb w5) (Pair (xtie_judge i planb tieb) w5))))))))))))))))))
+
+;; pure judgment: embedded IMG == cert-assembled TIEIMG, then EFF
+(fn imgtie_judge ((i Int) (elfb (List Int)) (tieb (List Int))) (List (List Int))
+  (match (find_line (blines elfb) "IMG ")
+    (None (Cons (vfail i "imgtie" "no IMG line") Nil))
+    ((Some il)
+     (match (find_line (blines tieb) "TIEIMG ")
+       (None (Cons (vfail i "imgtie" "no TIEIMG line") Nil))
+       ((Some tl)
+        (match (tok2 il)
+          (None (Cons (vfail i "imgtie" "bad IMG line") Nil))
+          ((Some ih)
+           (match (tok2 tl)
+             (None (Cons (vfail i "imgtie" "bad TIEIMG line") Nil))
+             ((Some th)
+              (if (ceq ih th) (eff_judge i tieb)
+              (Cons
+                (vfail
+                  i
+                  "imgtie"
+                  "embedded image differs from cert-assembled image")
+                Nil)))))))))))
+
+;; the ELF image tie: rc gates, then the pure judgment
+(fn g_imgtie ((cap (List Int)) (i Int) (w World)) (Pair (List (List Int)) World)
+  (match (rc_gate cap i "elf.txt" "imgtie(elf)" w)
+    ((Pair m1 w1)
+     (match m1
+       ((Cons _ _) (Pair m1 w1))
+       (Nil
+         (match (rc_gate cap i "tie.txt" "imgtie(tie)" w1)
+           ((Pair m2 w2)
+            (match m2
+              ((Cons _ _) (Pair m2 w2))
+              (Nil
+                (match (slurp (capf cap i "elf.txt") w2)
+                  ((Pair elfb w3)
+                   (match (slurp (capf cap i "tie.txt") w3)
+                     ((Pair tieb w4) (Pair (imgtie_judge i elfb tieb) w4))))))))))))))
+
+;; pure judgment: ELF stdout == the plan's EXPOUT bytes
+(fn elfrun_judge ((i Int) (elfb (List Int)) (gotb (List Int))) (List (List Int))
+  (match (find_line (blines elfb) "EXPOUT ")
+    (None (Cons (vfail i "engine" "no EXPOUT line") Nil))
+    ((Some xl)
+     (match (tok2 xl)
+       (None (Cons (vfail i "engine" "bad EXPOUT line") Nil))
+       ((Some xh)
+        (match (unhex xh)
+          (None (Cons (vfail i "engine" "EXPOUT is not hex") Nil))
+          ((Some expb)
+           (if (ceq gotb expb) Nil
+           (Cons
+             (vfail i "engine" "silicon output differs from spec results")
+             Nil)))))))))
+
+;; the on-silicon run: rc gates (hexbin/chmod/run), then the judgment
+(fn g_elfrun ((cap (List Int)) (i Int) (w World)) (Pair (List (List Int)) World)
+  (match (rc_gate cap i "hexbin.log" "engine(hexbin)" w)
+    ((Pair m1 w1)
+     (match m1
+       ((Cons _ _) (Pair m1 w1))
+       (Nil
+         (match (rc_gate cap i "chmod.log" "engine(chmod)" w1)
+           ((Pair m2 w2)
+            (match m2
+              ((Cons _ _) (Pair m2 w2))
+              (Nil
+                (match (rc_gate cap i "run.out" "engine(run)" w2)
+                  ((Pair m3 w3)
+                   (match m3
+                     ((Cons _ _) (Pair m3 w3))
+                     (Nil
+                       (match (slurp (capf cap i "elf.txt") w3)
+                         ((Pair elfb w4)
+                          (match (slurp (capf cap i "run.out") w4)
+                            ((Pair gotb w5)
+                             (Pair (elfrun_judge i elfb gotb) w5))))))))))))))))))
+
+;; all six gates for one x86 lib product
+(fn v_lib_x86
+  ((cap (List Int)) (i Int) (src (List Int)) (out (List Int)) (w World))
+  (Pair (List (List Int)) World)
+  (match (g_regen cap i out w)
+    ((Pair g1 w1)
+     (match (rc_gate cap i "schema.log" "schema" w1)
+       ((Pair g2 w2)
+        (match (g_klog cap i "kout.log" "kernel(out)" False w2)
+          ((Pair g3a w3)
+           (match (g_klog cap i "ksrc.log" "kernel(src)" True w3)
+             ((Pair g3b w4)
+              (match (rc_gate cap i "acc.log" "accepts" w4)
+                ((Pair g4 w5)
+                 (match (g_xtie cap i w5)
+                   ((Pair g5 w6)
+                    (match (rc_gate cap i "cpu_plan.txt" "engine(sieve)" w6)
+                      ((Pair g6a w7)
+                       (match (rc_gate cap i "cc.log" "engine(cc)" w7)
+                         ((Pair g6b w8)
+                          (match (rc_gate cap i "eng.log" "engine" w8)
+                            ((Pair g6c w9)
+                             (Pair
+                               (cat2
+                                 g1
+                                 (cat2
+                                   g2
+                                   (cat2
+                                     g3a
+                                     (cat2
+                                       g3b
+                                       (cat2
+                                         g4
+                                         (cat2 g5 (cat2 g6a (cat2 g6b g6c))))))))
+                               w9))))))))))))))))))))
+
+;; the three ELF gates for one x86elf lib product
+(fn v_lib_x86elf ((cap (List Int)) (i Int) (out (List Int)) (w World))
+  (Pair (List (List Int)) World)
+  (match (g_regen cap i out w)
+    ((Pair g1 w1)
+     (match (g_imgtie cap i w1)
+       ((Pair g2 w2)
+        (match (g_elfrun cap i w2)
+          ((Pair g3 w3) (Pair (cat2 g1 (cat2 g2 g3)) w3))))))))
+
 (fn v_bp ((cap (List Int)) (i Int) (b BP) (w World))
   (Pair (List (List Int)) World)
   (match b
     ((BP k t src out)
      (if (sym_eq k (quote lib))
        (if (sym_eq t (quote wasm)) (v_lib_wasm cap i src out w)
-       (Pair (Cons (vfail i "plan" "unsupported target") Nil) w))
+       (if (sym_eq t (quote x86)) (v_lib_x86 cap i src out w)
+       (if (sym_eq t (quote x86elf)) (v_lib_x86elf cap i out w)
+       (Pair (Cons (vfail i "plan" "unsupported target") Nil) w))))
        (Pair (Cons (vfail i "plan" "unsupported kind") Nil) w)))))
 
 (fn v_all ((cap (List Int)) (i Int) (bs (List BP)) (w World))
@@ -571,6 +916,28 @@
                 w2)))
           (_ (exit 1 (wmsgs ms w2)))))))))
 
+;; hexbin IN PREFIX OUT — the driver as its own world-command toolbox:
+;; find the "<PREFIX> <hex>" line in IN, decode the hex, write the raw
+;; bytes at OUT (the ELF materialization leg; no xxd/cut plumbing).
+(fn run_hexbin ((inf (List Int)) (pfx (List Int)) (outf (List Int)) (w World))
+  World
+  (match (read_file inf w)
+    ((Pair None w1) (fail (cat (list "hexbin: cannot read " inf)) w1))
+    ((Pair (Some bs) w1)
+     (match (find_line (blines bs) (append_int pfx " "))
+       (None (fail (cat (list "hexbin: no " pfx " line in " inf)) w1))
+       ((Some l)
+        (match (tok2 l)
+          (None (fail (cat (list "hexbin: bad " pfx " line")) w1))
+          ((Some hx)
+           (match (unhex hx)
+             (None (fail (cat (list "hexbin: " pfx " payload is not hex")) w1))
+             ((Some bytes)
+              (match (write_file outf bytes w1)
+                ((Pair True w2) (exit 0 w2))
+                ((Pair False w2)
+                 (fail (cat (list "hexbin: cannot write " outf)) w2))))))))))))
+
 (fn main ((w World)) World
   (match (get_args w)
     ((Pair args w1)
@@ -584,8 +951,12 @@
           (match rest
             (Nil (run_verify prods cap w1))
             (_ (fail "verify needs: PRODUCTS CAPDIR" w1)))
-          (fail "unknown mode (plan | verify)" w1))))
+        (if (ceq mode "hexbin")
+          (match rest
+            ((Cons outf Nil) (run_hexbin prods cap outf w1))
+            (_ (fail "hexbin needs: INFILE PREFIX OUTFILE" w1)))
+          (fail "unknown mode (plan | verify | hexbin)" w1)))))
        (_
          (fail
-           "usage: build plan PRODUCTS CAPDIR EVAL CHECK... | build verify PRODUCTS CAPDIR"
+           "usage: build plan PRODUCTS CAPDIR EVAL CHECK... | build verify PRODUCTS CAPDIR | build hexbin IN PREFIX OUT"
            w1))))))

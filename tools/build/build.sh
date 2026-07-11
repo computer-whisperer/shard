@@ -8,7 +8,8 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 PRODUCTS=${1:?usage: build.sh PRODUCTS.shard}
 EVAL=${EVAL:-bin/shard_eval}
-command -v node >/dev/null || { echo "REFUSED: no node — the ENGINE gate cannot run"; exit 1; }
+command -v node >/dev/null || { echo "REFUSED: no node — the wasm ENGINE gate cannot run"; exit 1; }
+command -v cc >/dev/null || { echo "REFUSED: no cc — the x86 ENGINE gate cannot run"; exit 1; }
 if [ -x bin/shard_check ] && [ "$(bin/engine_stamp.sh)" = "$(cat bin/shard_check.stamp 2>/dev/null)" ]; then
   CHECK="bin/shard_check"
 else

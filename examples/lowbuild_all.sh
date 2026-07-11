@@ -20,8 +20,6 @@ BUILDS=(
   examples/lowbuild_x86loopcall.sh
   examples/lowbuild_x86intloop.sh
   "tools/build/build.sh examples/build_products.shard"
-  "examples/lowbuild_lib_x86.sh examples/purelib_src.shard examples/purelib_x86_out.shard"
-  "examples/lowbuild_lib_x86_elf.sh examples/purelib_src.shard examples/purelib_x86_out.shard"
   "examples/lowbuild_bin_x86.sh examples/arglen_src.shard examples/arglen_x86_out.shard"
   "examples/lowbuild_bin_x86.sh examples/bytesum_src.shard examples/bytesum_x86_out.shard"
   "examples/lowbuild_bin_x86.sh examples/echoarg_src.shard examples/echoarg_x86_out.shard"
