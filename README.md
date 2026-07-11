@@ -40,7 +40,7 @@ want proofs, compilable when you want speed.
 
 ## Why shard exists
 
-Four observations, each a reaction to the state of practice:
+Five observations, each a reaction to the state of practice:
 
 1. **The trichotomy.** Requirements, algorithm, and low-level spelling
    are different concerns with different owners and lifetimes, yet
@@ -72,16 +72,49 @@ Four observations, each a reaction to the state of practice:
    and CakeML prove the bottom half of the tower; shard runs the same
    discipline top to bottom, for general-purpose software, with the
    machine models themselves written in the provable language.
+5. **Models write the code now.** shard is LLM-first: designed for
+   what a 2026 agentic model can utilize, not for what a human learns
+   fastest — a small, regular, corpus-aligned surface with guessable
+   names and hardened errors, because the author's context window is
+   the manual. The requirement chain is what makes model-written
+   software *adoptable*, and it is the trichotomy paying off: you do
+   not review ten thousand generated lines; you review the interface
+   they provably meet.
 
 The history, honestly: shard began as a bootstrapped-language
 experiment about the refinement chain. The deliberately tiny core —
 kept simple under threat of making proofs intractable — plus a proof
-DSL turned out to be far more powerful than first hoped; modeling
-hardware *in* shard and compiling to it emerged from having the
-pieces, not from the original plan. The founding premise and v1→v2
-history are archived in
+DSL turned out to be far more powerful than first hoped. The founding
+premise and v1→v2 history are archived in
 [docs/archive/TRANSFER.md](docs/archive/TRANSFER.md); what this file
 describes is what turned out to matter.
+
+## What shard turned out to be
+
+The domain shard landed in was not among the original premises, and it
+is the part most worth understanding before reading anything else:
+**shard proper is a theoretical language** — unbounded integers, a
+free unchecked heap, pure, total. Hardware never enters the language;
+it enters as an **emulated model**. `models/wasm` is a pile of
+ordinary shard functions that read like a very verbose wasm assembler;
+`models/x86` and `models/linux` do the same for the CPU and the
+syscall boundary — and the kernel neither knows nor cares that they
+describe machines. Compiling is then a theorem, proven in two moves:
+refine the algorithm until it is spelled inside the model's
+vocabulary, and transliterate that spelling 1:1 into real bytes (with
+the transliteration tied back to the certificates, byte for byte).
+The machine's limitations surface as honest, explicit premises —
+"under 2^64", "while live data fits" — rather than silent truncation
+or a trusted optimizer's discretion.
+
+The move this unlocks — one we know few systems attempt — is the
+proven **representation swap**: the algorithm you reason about walks
+high-level linked lists in the theoretical domain; the artifact you
+ship mutates linear memory; and the swap between the two is generated
+automatically and certified by the kernel — a theorem, not a compiler
+pass. Nothing about the theoretical language is compromised to get
+there; [docs/MEMORY.md](docs/MEMORY.md) is the design ledger carrying
+this to its full depth.
 
 ## How it works
 
@@ -272,6 +305,14 @@ authority for its area:
 
 ## Conventions
 
+- **Soundness is the foundation, not a feature.** A derivation of
+  `true = false` would be as catastrophic here as it would be for
+  Lean — every contract, ledger, and shipped binary rests on the
+  kernel's word. Hence the tiny kernel, mandatory axiom kinds with a
+  driver-enforced veto, and the negative-test corpus: every
+  historical soundness bug (primitive-name shadowing, zero-case
+  induction, parallel-let reversal) is not just fixed but pinned by a
+  rejects test. A soundness suspicion outranks all other work.
 - **One logical change set per commit, topic-prefixed** (`kernel: …`,
   `x86gen: …`, `docs/MEMORY.md: …`), stating what is proven/checked
   before and after. The kernel build-out's `slice N:` history is in
