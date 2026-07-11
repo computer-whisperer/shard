@@ -903,6 +903,129 @@ core-pathed and serialize terminal like prims.
 **The v1 arc is COMPLETE**: C1–C10 recognized, machine-rewritten
 (C3/C7 refusal-tier), censused, std at stage 2, and content-addressed
 — all under the corpus gates. Post-v1 queue (each its own decision):
-the digest swap to std/sha256 when that branch lands; D16 basis
-contraction riding the x86gen simplification; C3 rewriting (2b's
-deferral); D18 and the §11 stricter modes as evidence arrives.
+the §13 contextual-normality proposal (drafted 2026-07-10, the
+catalog measurement); D16 basis contraction riding the x86gen
+simplification; C3 rewriting (2b's deferral); D18 and the §11
+stricter modes as evidence arrives. (The digest swap to std/sha256
+landed 2026-07-10, same day as the spec.)
+
+## 13. PROPOSAL: contextual normality — C11/C12 (post-v1 tier)
+
+STATUS: DRAFT 2026-07-10, awaiting ratification. Nothing below is
+recognized, censused, or enforced.
+
+PROVENANCE (the playground's catalog arc, measured 2026-07-10). The
+canonical-program census enumerates EVERY canonical program of the
+structural list fragment per depth and brackets the distinct
+functions among them: d1 = 19 programs / exactly 13 functions,
+d2 = 7,790 / [1,068–1,160], d3 = 653,491,008 / ≥ 4.45M. Spellings
+per behavior: 1 → 1.5 → 7 → 147 — the redundancy the v1 rules do
+not name, compounding per rung. Classifying the full spelling sets
+of the named d2 buckets: **85% of the post-dialect space is
+contextually-provable respelling** in exactly two families, and the
+two rules below would take spellings-per-behavior from ~7 to ~1.09.
+The residue (different algorithms, one function — `(append xs xs)`
+vs its single-pass twin) is genuine semantics: the induction prover
+closes those, a syntactic canon never should.
+
+### C11 contextual partial evaluation (proposed)
+
+Inside a match arm, the arm's equation — scrutinee ≡ pattern
+instance — is a hypothesis, and C8's pins already carry the GROUND
+tier of it. C11 generalizes the pins from ground values to pattern
+SHAPES (ctor spines with symbolic binder fields) and the judgment
+from "is the rebuild" to "can take an evaluation step":
+
+    A body subterm that can take a gated evaluation step UNDER THE
+    ARM-HYPOTHESIS PINS is a contextual redex. Canonical form is
+    contextually normal.
+
+The three step kinds, in the license's own terms:
+- **decided control under pins**: a match/if whose scrutinee/cond is
+  pinned to a deciding shape fires (C2 becomes the empty-pin-set
+  special case);
+- **ground folds under pins**: a prim/packed-Nat redex whose args
+  are pinned ground folds (C8a-respell becomes the corollary: the
+  pinned occurrence IS the fold's argument — C1/C6 at empty pins);
+- **gated unfolds under pins**: a user-fn call unfolds ONLY when the
+  unfolded body immediately head-fires under the pins — exactly
+  step_smart's δ gate, evaluated with pins. This is the family the
+  census measured as the bulk: `(f t)` in an arm where t ≡ Nil is
+  `(f Nil)`, a decided call; spelling the call is spelling a redex.
+
+LICENSE: definitional — every C11 step is a step of the kernel's own
+reduction relation instantiated at the arm hypothesis, the same
+license as C1/C2 (and the recognizer consults the kernel's step
+machinery, not a private table). Composition with C8b is the
+already-landed pattern: C11 reduces `(f t)` → Nil under t ≡ Nil,
+then C8b's composed-pin fold takes `(Cons h Nil)` → xs; the pinned
+normal form stays "every matched value has exactly one spelling",
+now closed under evaluation as well as rebuilding.
+
+TERMINATION: steps consume pin ctor-layers (finite, lexical) or fold
+ground redexes (measure-decreasing); δ is gated on immediate
+head-fire, the same discipline that keeps step_smart from chasing
+recursion. The rewriter's obligation is a contextual normal form per
+arm; the recognizer's is one boolean per body (does ANY subterm
+step).
+
+COST (open, measure at census): the recognizer runs on every checked
+body. Step-with-pins is bounded by the same gate that bounds simp;
+the census slice must record wall-time delta on the std tree before
+stage-2 is even discussed.
+
+### C12 no needless case splits (proposed, rides C11)
+
+A COVERED match whose arms, after C11-normalization under each arm's
+own pins, are IDENTICAL up to the arm equation (each body is the
+same expression with the arm's specialization applied) is that
+expression: the split decided nothing the body used. v1 proposes
+only the mechanically-safe tier: all arm bodies contextually
+normalize to the SAME term once the scrutinee variable and binder
+occurrences are folded through the pins — the C10-match-constant
+rule lifted from syntactic equality to contextual-normal equality.
+Full anti-specialization (reconstructing E from its specializations)
+is named and NOT proposed.
+
+### Slice ladder (each gated as v1's were)
+
+1. **Recognizer** (kernel/canon.shard): shape pins + step-with-pins,
+   advisory CANON lines; pins + rejects fixtures; corpus FAIL-diff
+   at the 57-line baseline.
+2. **Census** (§9 extension): generated contextual-redex terms both
+   judged and rewritten; assert image-clean/fixpoint/idempotence;
+   record recognizer wall-time delta on the std tree.
+3. **Tool tier** (tools/canon/rewrite.shard): cw shape pins +
+   fixpoint normalization; self-canonical; roundtrip gate.
+4. **std scan → stage-2 re-pin** only after the census says the tree
+   is near-zero and the proof-neutrality probe (a cert-bearing file
+   whose claims recheck green after rewriting) passes.
+
+### Decision points (for ratification)
+
+D19. δ scope: full gated-unfold tier in v1 of C11, or land decided
+     control + ground folds first and add δ after the census prices
+     it? (The census says δ is the bulk; the draft proposes full.)
+D20. Ledger shape: C11 as the general rule with C2/C8a annotated as
+     its empty-pin/ground corollaries (kept, implementation shared),
+     or restated-and-absorbed? (Draft proposes: kept as corollaries
+     — the tight-general-rule taste, no re-litigating landed pins.)
+D21. C12 in the same slice group or queued behind C11's census?
+     (Draft proposes: same group, it is one comparison once C11
+     normalization exists.)
+D22. Goal positions stay exempt (unchanged from v1 — goals are where
+     spellings are RELATED). Draft treats this as settled, listed
+     only for the record.
+
+### The depth price (recorded, from the same measurement)
+
+The catalog's raw-grammar twin measured that canon rules are
+DIRECTED: a behavior's canonical spelling can sit one rung deeper
+than its shortest raw spelling — and exactly one (raw-depth-d
+behaviors all reachable canonically at d+1; 0 lost at both measured
+rungs, at 8,930× fewer d2 forms and ~10¹⁴× at d3). Two standing
+consequences: **"size of the canonical form" is the size metric**
+for any budgeted tooling over canonical shard (search executors,
+catalog consumers, §7-hash-keyed stores), and a canonical-only
+dialect must budget the extra rung. This generalizes the §4
+match-commutation depth caveat from edge case to norm.
