@@ -59,15 +59,109 @@ pub(crate) fn render_region(r: &Region) -> El {
     }
 }
 
-/// An ordered sequence (a proof's step ladder): an amber rail down the left,
-/// rungs read top→bottom. The proof counterpart of the list's bracket bar —
-/// amber because sequences come from the proof layer.
+/// The width/height a reshaped block aims for. Proof spines are almost pure
+/// sequence-and-fork; rendered strictly vertically they come out as receipts
+/// many screens tall, so both the step ladder and the case fork RESHAPE
+/// toward this aspect (galley columns / branch shelves, below).
+const TARGET_ASPECT: f32 = 1.7;
+/// Ladders shorter than this stay a single column (wrapping a short proof
+/// only adds reading friction).
+const WRAP_MIN_H: f32 = 260.0;
+
+/// An ordered sequence (a proof's step ladder): amber-railed rungs read
+/// top→bottom. A ladder taller than [`WRAP_MIN_H`] wraps into balanced
+/// newspaper columns (read down, then next column — the `↳` marker heads
+/// each continuation), so long spines fill a block instead of a receipt.
 fn render_seq(steps: &[Region]) -> El {
     if steps.is_empty() {
         return lit_tag("·");
     }
-    let rows = column(steps.iter().map(render_region).collect::<Vec<_>>()).gap(4.0);
-    row([seq_bar(), rows]).gap(tokens::SPACE_2).align(Align::Stretch)
+    let ladders: Vec<El> = seq_columns(steps)
+        .into_iter()
+        .enumerate()
+        .map(|(i, chunk)| {
+            let rows = column(chunk.iter().map(render_region).collect::<Vec<_>>()).gap(4.0);
+            let ladder = row([seq_bar(), rows]).gap(tokens::SPACE_2).align(Align::Stretch);
+            if i == 0 {
+                ladder
+            } else {
+                column([cont_marker(), ladder]).gap(2.0)
+            }
+        })
+        .collect();
+    if ladders.len() == 1 {
+        ladders.into_iter().next().expect("len 1")
+    } else {
+        row(ladders).gap(tokens::SPACE_3).align(Align::Start)
+    }
+}
+
+/// Partition a vertical run of regions (ladder rungs, list elements) into
+/// contiguous galley columns: pick the column count that lands the block
+/// nearest [`TARGET_ASPECT`], then break greedily at item boundaries so
+/// columns balance. `gap` is the view's inter-item spacing, `col_extra_w` the
+/// per-column chrome (rail/bracket + gaps). Pure in the region tree (sizes
+/// come from [`est`]) — safe under the Map's committed-topology rule.
+fn galley_columns(items: &[Region], gap: f32, col_extra_w: f32) -> Vec<&[Region]> {
+    let sizes: Vec<(f32, f32)> = items.iter().map(est).collect();
+    galley_partition(&sizes, gap, col_extra_w)
+        .into_iter()
+        .map(|r| &items[r])
+        .collect()
+}
+
+/// The partition itself, on pre-measured sizes — [`est`] goes through this
+/// directly (measuring children exactly once; routing it through
+/// [`galley_columns`] would re-measure per level, exponential in depth).
+fn galley_partition(
+    sizes: &[(f32, f32)],
+    gap: f32,
+    col_extra_w: f32,
+) -> Vec<std::ops::Range<usize>> {
+    let total: f32 =
+        sizes.iter().map(|s| s.1).sum::<f32>() + gap * sizes.len().saturating_sub(1) as f32;
+    let w = sizes.iter().map(|s| s.0).fold(40.0_f32, f32::max) + col_extra_w;
+    let k = if total < WRAP_MIN_H {
+        1
+    } else {
+        ((TARGET_ASPECT * total / w).sqrt().round() as usize).clamp(1, 8)
+    };
+    if k <= 1 {
+        return std::iter::once(0..sizes.len()).collect();
+    }
+    let target = total / k as f32;
+    let mut cols = Vec::new();
+    let mut start = 0;
+    let mut acc = 0.0;
+    for (i, (_, h)) in sizes.iter().enumerate() {
+        if acc > 0.0 && acc + h > target && cols.len() + 1 < k {
+            cols.push(start..i);
+            start = i;
+            acc = 0.0;
+        }
+        acc += h + gap;
+    }
+    cols.push(start..sizes.len());
+    cols
+}
+
+/// Ladder-flavoured galley: rail chrome width, rung gap.
+fn seq_columns(steps: &[Region]) -> Vec<&[Region]> {
+    galley_columns(steps, 4.0, 13.5)
+}
+
+/// List-flavoured galley: bracket-bar chrome width, element gap.
+fn list_columns(elems: &[Region]) -> Vec<&[Region]> {
+    galley_columns(elems, 5.0, 15.0)
+}
+
+/// The reading-order cue heading each continuation column of a wrapped ladder.
+fn cont_marker() -> El {
+    text("↳")
+        .mono()
+        .font_size(11.0)
+        .text_color(tokens::WARNING.mix(tokens::MUTED_FOREGROUND, 0.35))
+        .nowrap_text()
 }
 
 /// The thin vertical rule tying a step ladder's rungs into one sequence.
@@ -84,29 +178,53 @@ fn seq_bar() -> El {
 /// terminator is shown as a trailing `⋯ tail` row (cons-onto-an-existing-list).
 fn render_list(elems: &[Region], tail: Option<&Region>) -> El {
     let count = elems.len();
-    let mut rows: Vec<El> = elems.iter().map(render_region).collect();
-    if let Some(t) = tail {
-        rows.push(
-            row([
-                text("⋯").mono().muted().font_size(12.0).nowrap_text(),
-                render_region(t),
-            ])
-            .gap(tokens::SPACE_2)
-            .align(Align::Center),
-        );
-    }
+    let mut tail_row = tail.map(|t| {
+        row([
+            text("⋯").mono().muted().font_size(12.0).nowrap_text(),
+            render_region(t),
+        ])
+        .gap(tokens::SPACE_2)
+        .align(Align::Center)
+    });
     // An empty closed list is just `[]`; render it as a literal-style tag.
-    if rows.is_empty() {
+    if elems.is_empty() && tail_row.is_none() {
         return lit_tag("[]");
     }
+    // Long element runs wrap into galley columns like the proof ladders do
+    // (a wasm emit list is hundreds of instructions — the same receipt shape);
+    // each column keeps its bracket bar, the tail row closes the last one.
+    let cols = list_columns(elems);
+    let last = cols.len() - 1;
+    let brackets: Vec<El> = cols
+        .into_iter()
+        .enumerate()
+        .map(|(i, chunk)| {
+            let mut rows: Vec<El> = chunk.iter().map(render_region).collect();
+            if i == last
+                && let Some(t) = tail_row.take()
+            {
+                rows.push(t);
+            }
+            let body = column(rows).gap(5.0).padding(6.0);
+            let bracket = row([bracket_bar(), body]).align(Align::Stretch);
+            if i == 0 {
+                bracket
+            } else {
+                column([cont_marker(), bracket]).gap(2.0)
+            }
+        })
+        .collect();
+    let body = if brackets.len() == 1 {
+        brackets.into_iter().next().expect("len 1")
+    } else {
+        row(brackets).gap(tokens::SPACE_3).align(Align::Start)
+    };
     let header = text(format!("list · {count}"))
         .mono()
         .muted()
         .font_size(10.0)
         .nowrap_text();
-    let body = column(rows).gap(5.0).padding(6.0);
-    // A bracket bar down the left edge marks the elements as one ordered list.
-    column([header, row([bracket_bar(), body]).align(Align::Stretch)])
+    column([header, body])
         .gap(3.0)
         .padding(6.0)
         .fill(tokens::CARD)
@@ -162,14 +280,84 @@ fn render_frame(kind: FrameKind, detail: &str, branches: &[Branch]) -> El {
         .width(Size::Fill(1.0))
         .fill(accent);
 
-    let body = column(branches.iter().map(render_branch).collect::<Vec<_>>())
-        .gap(7.0)
-        .padding(8.0);
+    // Proof case splits fork into PARALLEL subproofs — they read side by side
+    // (chip above its case), shelf-wrapped toward the target aspect. Fn-body
+    // match/if arms keep the vertical read (arm order is the code's order and
+    // arms share flow into one result), as do `let`/`have` binding stacks.
+    let body = if forks(kind) && branches.len() > 1 {
+        let shelves: Vec<El> = branch_shelves(branches)
+            .into_iter()
+            .map(|shelf| {
+                row(shelf.iter().map(branch_column).collect::<Vec<_>>())
+                    .gap(tokens::SPACE_3)
+                    .align(Align::Start)
+            })
+            .collect();
+        column(shelves).gap(9.0).padding(8.0)
+    } else {
+        column(branches.iter().map(render_branch).collect::<Vec<_>>()).gap(7.0).padding(8.0)
+    };
 
     column([band, body])
         .fill(tokens::CARD)
         .stroke(accent)
         .radius(7.0)
+}
+
+/// The frame kinds whose branches are parallel alternatives (a case analysis),
+/// eligible for the side-by-side fork layout.
+fn forks(kind: FrameKind) -> bool {
+    matches!(
+        kind,
+        FrameKind::Induct | FrameKind::FinSplit | FrameKind::CaseOn | FrameKind::SubtermInduct
+    )
+}
+
+/// Partition fork branches into shelves (rows of side-by-side cases): pick the
+/// shelf count landing nearest [`TARGET_ASPECT`], fill greedily in case order.
+fn branch_shelves(branches: &[Branch]) -> Vec<&[Branch]> {
+    let sizes: Vec<(f32, f32)> = branches.iter().map(branch_column_est).collect();
+    shelf_partition(&sizes).into_iter().map(|r| &branches[r]).collect()
+}
+
+/// Shelf partition on pre-measured case sizes (same once-only-measure rule as
+/// [`galley_partition`]).
+fn shelf_partition(sizes: &[(f32, f32)]) -> Vec<std::ops::Range<usize>> {
+    if sizes.is_empty() {
+        // Callers guard len > 1, but `clamp(1, 0)` below would panic — match
+        // galley_partition's one-empty-range behavior instead of trapping.
+        return std::iter::once(0..0).collect();
+    }
+    let total: f32 =
+        sizes.iter().map(|s| s.0).sum::<f32>() + 12.0 * sizes.len().saturating_sub(1) as f32;
+    let mean_h = sizes.iter().map(|s| s.1).sum::<f32>() / sizes.len() as f32;
+    let s = ((total / (TARGET_ASPECT * mean_h.max(24.0))).sqrt().round() as usize)
+        .clamp(1, sizes.len());
+    if s <= 1 {
+        return std::iter::once(0..sizes.len()).collect();
+    }
+    let target = total / s as f32;
+    let mut shelves = Vec::new();
+    let mut start = 0;
+    let mut acc = 0.0;
+    for (i, (w, _)) in sizes.iter().enumerate() {
+        if acc > 0.0 && acc + w > target && shelves.len() + 1 < s {
+            shelves.push(start..i);
+            start = i;
+            acc = 0.0;
+        }
+        acc += w + 12.0;
+    }
+    shelves.push(start..sizes.len());
+    shelves
+}
+
+/// One case of a fork, standing upright: its selector chip over its subproof.
+fn branch_column(b: &Branch) -> El {
+    if b.label.is_empty() {
+        return render_region(&b.region);
+    }
+    column([selector_chip(&b.label), render_region(&b.region)]).gap(3.0).align(Align::Start)
 }
 
 /// One labelled branch inside a frame: its selector chip + the contained
@@ -212,9 +400,26 @@ fn render_op(head: &str, inline: &str, args: &[Region]) -> El {
     if args.is_empty() {
         return card;
     }
-    let inputs = column(args.iter().map(render_region).collect::<Vec<_>>()).gap(6.0);
-    // The bar spans the full operand-column height (Stretch), so every operand
-    // visibly belongs to the same gather, regardless of how tall the column is.
+    // A long operand run (a literal instruction list feeding `list`, say)
+    // galley-wraps like the other vertical shapes; the gather bar still spans
+    // the whole block, so every column visibly feeds the same op.
+    let cols: Vec<El> = galley_columns(args, 6.0, 6.0)
+        .into_iter()
+        .enumerate()
+        .map(|(i, chunk)| {
+            let col = column(chunk.iter().map(render_region).collect::<Vec<_>>()).gap(6.0);
+            if i == 0 {
+                col
+            } else {
+                column([cont_marker(), col]).gap(2.0)
+            }
+        })
+        .collect();
+    let inputs = if cols.len() == 1 {
+        cols.into_iter().next().expect("len 1")
+    } else {
+        row(cols).gap(tokens::SPACE_3).align(Align::Start)
+    };
     let gathered = row([inputs, gather_bar()]).gap(tokens::SPACE_2).align(Align::Stretch);
     row([gathered, feed_arrow(), card]).gap(tokens::SPACE_1).align(Align::Center)
 }
@@ -287,6 +492,163 @@ fn var_pill(name: &str) -> El {
     .radius(13.0)
 }
 
+/// Approximate the rendered (w, h) of a region, mirroring the element
+/// structure closely enough that a box sized to it holds its content — a
+/// deliberate slight over-estimate (no clipping is better than overlap).
+/// Feeds the Board's node sizing AND this view's own reshaping decisions
+/// ([`seq_columns`] / [`branch_shelves`]), which must agree with what gets
+/// rendered — that's why it lives beside the renderer.
+pub(crate) fn est(r: &Region) -> (f32, f32) {
+    match r {
+        Region::Var(name) => (text_w(name, 8.0) + 14.0, 26.0),
+        Region::Lit(value) => {
+            let chars = if value.is_empty() { 1 } else { value.chars().count() };
+            (chars as f32 * 7.5 + 12.0, 24.0)
+        }
+        Region::Op { head, inline, args } => {
+            let card_w = text_w(head, 8.5).max(text_w(inline, 7.0)) + 16.0;
+            let card_h = if inline.is_empty() { 32.0 } else { 48.0 };
+            if args.is_empty() {
+                return (card_w, card_h);
+            }
+            // Compound operands gather to the op's left, galley-wrapped.
+            let sizes: Vec<(f32, f32)> = args.iter().map(est).collect();
+            let mut block_w = 0.0_f32;
+            let mut block_h = 0.0_f32;
+            for (i, r) in galley_partition(&sizes, 6.0, 6.0).into_iter().enumerate() {
+                let mut cw = 0.0_f32;
+                let mut ch = if i > 0 { 17.0 } else { 0.0 }; // ↳ marker line + gap
+                for (j, (aw, ah)) in sizes[r].iter().enumerate() {
+                    cw = cw.max(*aw);
+                    ch += ah;
+                    if j > 0 {
+                        ch += 6.0;
+                    }
+                }
+                if i > 0 {
+                    block_w += 12.0; // column gap
+                }
+                block_w += cw;
+                block_h = block_h.max(ch);
+            }
+            block_w += 26.0; // gather bar + feed arrow
+            (block_w + card_w + 6.0, card_h.max(block_h))
+        }
+        Region::Seq(steps) => {
+            if steps.is_empty() {
+                return (20.0, 24.0);
+            }
+            // Mirror the galley wrap: side-by-side railed columns.
+            let sizes: Vec<(f32, f32)> = steps.iter().map(est).collect();
+            let mut w = 0.0_f32;
+            let mut h = 0.0_f32;
+            for (i, r) in galley_partition(&sizes, 4.0, 13.5).into_iter().enumerate() {
+                let mut cw = 0.0_f32;
+                let mut ch = if i > 0 { 17.0 } else { 0.0 }; // ↳ marker line + gap
+                for (j, (sw, sh)) in sizes[r].iter().enumerate() {
+                    cw = cw.max(*sw);
+                    ch += sh;
+                    if j > 0 {
+                        ch += 4.0;
+                    }
+                }
+                if i > 0 {
+                    w += 12.0; // column gap
+                }
+                w += cw + 11.0; // rail + gap
+                h = h.max(ch);
+            }
+            (w, h.max(20.0))
+        }
+        Region::Frame { kind, detail, branches } => {
+            let band_w = text_w(kind.keyword(), 7.5) + text_w(detail, 7.0) + 20.0;
+            let (body_w, body_h) = if forks(*kind) && branches.len() > 1 {
+                // Shelves of upright cases.
+                let sizes: Vec<(f32, f32)> = branches.iter().map(branch_column_est).collect();
+                let mut w = 0.0_f32;
+                let mut h = 0.0_f32;
+                for (i, r) in shelf_partition(&sizes).into_iter().enumerate() {
+                    let mut sw = 0.0_f32;
+                    let mut sh = 0.0_f32;
+                    for (j, (bw, bh)) in sizes[r].iter().enumerate() {
+                        sw += bw;
+                        if j > 0 {
+                            sw += 12.0;
+                        }
+                        sh = sh.max(*bh);
+                    }
+                    w = w.max(sw);
+                    h += sh;
+                    if i > 0 {
+                        h += 9.0;
+                    }
+                }
+                (w, h)
+            } else {
+                // Branches stack in a column; each is its selector chip + region.
+                let mut w = 0.0_f32;
+                let mut h = 0.0_f32;
+                for (i, b) in branches.iter().enumerate() {
+                    let (rw, rh) = est(&b.region);
+                    let chip_w = text_w(&b.label, 7.0) + 10.0;
+                    w = w.max(chip_w + 8.0 + rw);
+                    h += rh.max(24.0);
+                    if i > 0 {
+                        h += 7.0;
+                    }
+                }
+                (w, h)
+            };
+            (band_w.max(body_w + 16.0), 26.0 + body_h + 16.0) // band + paddings
+        }
+        Region::List { elems, tail } => {
+            // header (`list · N`) over galley columns of bracketed elements.
+            let sizes: Vec<(f32, f32)> = elems.iter().map(est).collect();
+            let cols = galley_partition(&sizes, 5.0, 15.0);
+            let last = cols.len() - 1;
+            let mut body_w = 0.0_f32;
+            let mut body_h = 0.0_f32;
+            for (i, r) in cols.into_iter().enumerate() {
+                let mut cw = 0.0_f32;
+                let mut ch = if i > 0 { 17.0 } else { 0.0 }; // ↳ marker line + gap
+                for (j, (ew, eh)) in sizes[r].iter().enumerate() {
+                    cw = cw.max(*ew);
+                    ch += eh;
+                    if j > 0 {
+                        ch += 5.0;
+                    }
+                }
+                if i == last && let Some(t) = tail {
+                    let (tw, th) = est(t);
+                    cw = cw.max(tw + 16.0); // "⋯ " lead
+                    ch += th.max(20.0) + 5.0;
+                }
+                if i > 0 {
+                    body_w += 12.0; // column gap
+                }
+                body_w += cw + 15.0; // bracket bar + paddings
+                body_h = body_h.max(ch);
+            }
+            let w = (body_w + 12.0).max(54.0);
+            let h = 16.0 + body_h + 12.0; // header + body + paddings
+            (w, h)
+        }
+    }
+}
+
+/// [`est`] for one upright fork case (chip over region).
+fn branch_column_est(b: &Branch) -> (f32, f32) {
+    let (rw, rh) = est(&b.region);
+    if b.label.is_empty() {
+        return (rw, rh);
+    }
+    (rw.max(text_w(&b.label, 7.0) + 10.0), rh + 21.0)
+}
+
+pub(crate) fn text_w(s: &str, per: f32) -> f32 {
+    s.chars().count() as f32 * per
+}
+
 /// A literal: a dim mono tag (a constant).
 fn lit_tag(value: &str) -> El {
     let show = if value.is_empty() { "·".to_string() } else { value.to_string() };
@@ -302,3 +664,56 @@ fn lit_tag(value: &str) -> El {
     .radius(4.0)
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn short_runs_stay_one_column() {
+        let sizes = vec![(60.0, 30.0); 5]; // 170px total < WRAP_MIN_H
+        assert_eq!(galley_partition(&sizes, 4.0, 13.5), vec![0..5]);
+    }
+
+    #[test]
+    fn tall_runs_wrap_into_balanced_columns() {
+        let sizes = vec![(60.0, 30.0); 40]; // ~1360px tall, ~74px wide
+        let cols = galley_partition(&sizes, 4.0, 13.5);
+        assert!(cols.len() > 1, "a 1360px ladder must wrap");
+        // Contiguous, in order, covering everything.
+        assert_eq!(cols.first().unwrap().start, 0);
+        assert_eq!(cols.last().unwrap().end, 40);
+        for w in cols.windows(2) {
+            assert_eq!(w[0].end, w[1].start);
+        }
+        // Balanced: no column more than ~2x the mean.
+        let mean = 40.0 / cols.len() as f32;
+        assert!(cols.iter().all(|r| (r.len() as f32) < mean * 2.0));
+    }
+
+    #[test]
+    fn one_oversized_rung_does_not_starve_the_rest() {
+        let mut sizes = vec![(60.0, 24.0); 10];
+        sizes[0] = (200.0, 900.0); // a huge nested frame as rung 0
+        let cols = galley_partition(&sizes, 4.0, 13.5);
+        assert_eq!(cols.last().unwrap().end, 10);
+        assert!(!cols.iter().any(|r| r.is_empty()), "no empty columns");
+    }
+
+    #[test]
+    fn few_wide_cases_stay_on_one_shelf() {
+        let sizes = vec![(80.0, 400.0), (90.0, 380.0)];
+        assert_eq!(shelf_partition(&sizes), vec![0..2]);
+    }
+
+    #[test]
+    fn many_cases_wrap_shelves() {
+        let sizes = vec![(300.0, 60.0); 12]; // 3732px of shelf for 60px height
+        let shelves = shelf_partition(&sizes);
+        assert!(shelves.len() > 1, "a 3700px shelf must wrap");
+        assert_eq!(shelves.last().unwrap().end, 12);
+        for w in shelves.windows(2) {
+            assert_eq!(w[0].end, w[1].start);
+        }
+    }
+}

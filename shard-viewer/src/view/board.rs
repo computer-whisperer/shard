@@ -13,7 +13,7 @@
 //! Tightening this (measured sizes, clamped thumbnails) is the obvious next
 //! iteration; this file is deliberately isolated so variants are cheap to try.
 
-use super::flow::render_region;
+use super::flow::{est, render_region, text_w};
 use super::shared::graph_canvas;
 use super::{SUB_SIZE, TITLE_SIZE, ViewParams};
 use crate::flow::Region;
@@ -126,96 +126,6 @@ fn card_size(project: &Project, fn_idx: usize) -> (f32, f32) {
     let w = title_w.max(cw) + 16.0;
     let h = ch + 44.0; // header line + gaps + padding
     (w, h)
-}
-
-/// Approximate the rendered (w, h) of a region, mirroring the view's element
-/// structure closely enough that the box holds its content. Deliberately a
-/// slight over-estimate (no clipping is better than overlap).
-fn est(r: &Region) -> (f32, f32) {
-    match r {
-        Region::Var(name) => (text_w(name, 8.0) + 14.0, 26.0),
-        Region::Lit(value) => {
-            let chars = if value.is_empty() { 1 } else { value.chars().count() };
-            (chars as f32 * 7.5 + 12.0, 24.0)
-        }
-        Region::Op { head, inline, args } => {
-            let card_w = text_w(head, 8.5).max(text_w(inline, 7.0)) + 16.0;
-            let card_h = if inline.is_empty() { 32.0 } else { 48.0 };
-            if args.is_empty() {
-                return (card_w, card_h);
-            }
-            // Compound operands stack in a column to the left, wired in.
-            let mut block_w = 0.0_f32;
-            let mut block_h = 0.0_f32;
-            for (i, a) in args.iter().enumerate() {
-                let (aw, ah) = est(a);
-                block_w = block_w.max(aw + 26.0); // wire stub + gap
-                block_h += ah;
-                if i > 0 {
-                    block_h += 6.0;
-                }
-            }
-            (block_w + card_w + 6.0, card_h.max(block_h))
-        }
-        Region::Seq(steps) => {
-            // A railed column of step rungs (proof ladders; fn bodies never
-            // produce Seq, so the Board only meets this via future reuse).
-            let mut w = 0.0_f32;
-            let mut h = 0.0_f32;
-            for (i, s) in steps.iter().enumerate() {
-                let (sw, sh) = est(s);
-                w = w.max(sw);
-                h += sh;
-                if i > 0 {
-                    h += 4.0;
-                }
-            }
-            (w + 11.0, h.max(20.0)) // rail + gap
-        }
-        Region::List { elems, tail } => {
-            // header (`list · N`) over a bracketed column of element regions.
-            let mut body_w = 0.0_f32;
-            let mut body_h = 0.0_f32;
-            for (i, e) in elems.iter().enumerate() {
-                let (ew, eh) = est(e);
-                body_w = body_w.max(ew);
-                body_h += eh;
-                if i > 0 {
-                    body_h += 5.0;
-                }
-            }
-            if let Some(t) = tail {
-                let (tw, th) = est(t);
-                body_w = body_w.max(tw + 16.0); // "⋯ " lead
-                body_h += th.max(20.0) + 5.0;
-            }
-            let w = (body_w + 9.0 + 12.0).max(54.0); // bracket bar + paddings
-            let h = 16.0 + body_h + 12.0; // header + body + paddings
-            (w, h)
-        }
-        Region::Frame { kind, detail, branches } => {
-            let band_w = text_w(kind.keyword(), 7.5) + text_w(detail, 7.0) + 20.0;
-            // Branches stack in a column; each is its selector chip + region.
-            let mut body_w = 0.0_f32;
-            let mut body_h = 0.0_f32;
-            for (i, b) in branches.iter().enumerate() {
-                let (rw, rh) = est(&b.region);
-                let chip_w = text_w(&b.label, 7.0) + 10.0;
-                body_w = body_w.max(chip_w + 8.0 + rw);
-                body_h += rh.max(24.0);
-                if i > 0 {
-                    body_h += 7.0;
-                }
-            }
-            let w = band_w.max(body_w + 16.0);
-            let h = 26.0 + body_h + 16.0; // band + body + paddings
-            (w, h)
-        }
-    }
-}
-
-fn text_w(s: &str, per: f32) -> f32 {
-    s.chars().count() as f32 * per
 }
 
 /// Trim a type string for the card header (mirrors Methods).

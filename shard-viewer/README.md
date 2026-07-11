@@ -65,6 +65,18 @@ coefficient lists). Proof footprints are committed like everything else, so
 proof *size on the plane* is an honest complexity signal; below the flow
 threshold a claim shows as its kind-tinted name slab.
 
+**Blocks, not receipts (reshaping)**: proofs and fn bodies are almost pure
+sequence-and-fork, and rendering both dimensions vertically produced cards
+many screens tall. The vertical shapes now reshape toward a target aspect
+(`view/flow.rs`): fork tactics lay their cases **side by side** (chip above
+its case, shelf-wrapped — cases are parallel subproofs), and tall vertical
+runs — step ladders, list elements, op operand stacks — wrap into balanced
+**galley columns** read down-then-right, a `↳` marker heading each
+continuation column. Fn-body `match`/`if` arms and `let`/`have` binding
+stacks keep the vertical read (arm order is code order). The partitions are
+pure in the region tree, sized by the same `est()` the Board uses, so the
+committed topology stays deterministic.
+
 **One committed topology per scope (the cartographic rule)**: the layout is a
 pure function of the scope — zoom, selection, and the pointer never move
 anything. Every fn owns a footprint sized for its full flow card, laid out
