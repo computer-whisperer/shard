@@ -1065,6 +1065,46 @@ until slice 3 teaches the tool shape pins.
   decision. The census slice (slice 2) should measure how often
   source-ground user calls actually occur before D19a is argued.
 
+### §13 slices 2+3 (2026-07-11): tool shape pins + census — LANDED
+
+The tool tier (slice 3): tools/canon/rewrite.shard threads the same
+pin discipline at CST level — where the KERNEL pins carry
+de-Bruijn-shifted shapes, the TOOL pins carry the arm's PATTERN NODE
+itself (concrete syntax spells pattern and shape identically) and
+shadowing replaces shifting: cw_pins_drop kills a pin whose key or
+value names an entering binder. cw_shape_match is the three-valued
+matcher WITH bindings (a forcing pattern on a variable component is
+STUCK, never No; a CAPITALIZED unknown atom REFUSES — a missed ctor
+must never bind as a binder, the corruption lesson; lowercase atoms
+are binders by the reader's own grammar). cw_rule_c11 mirrors the
+recognizer's preconditions exactly (pinned variable scrutinee, bare
+variable does not fire, classified arms only) and rewrites to the
+fired arm's body under cw_subst_sim — SIMULTANEOUS capture-aware
+substitution (shadowed keys drop per scope; a scope rebinding any
+replacement-value name refuses the whole rewrite); comment
+preservation guards the swap, as everywhere. C11 leaves the roundtrip
+refusal tier (back to C3/C7, 7 lines); pin-identity and self-fixpoint
+hold.
+
+The census (slice 2): gen_resplit adds four terms — direct re-split,
+COMPOSED deep re-split (fires only through xs = (Cons h (Cons a b))),
+the MStuck honest filter (admitted, tool-identity), and the C12
+EMERGENCE pin. Census: 121 terms, 89 flagged -> fixed, A1/A2/A3
+green. Recognizer wall-time on the whole std tree: 1.1s (slice 1).
+
+**C12 RESOLVED AS EMERGENT** (recorded; no new rule): the
+mechanically-safe tier — arms that agree after contextual
+normalization — is exactly C10m firing after C11 in the tool's
+fixpoint, census-pinned by the emergence term (the inner re-split
+fires to 0, the outer arms then agree, C10m collapses the match).
+The residual C12 content (anti-specialization through FOLDS — bodies
+like (f Nil) vs (f xs)) is D19a-gated and waits on that ruling.
+Slice 4 (std re-pin) was discharged by slice 1's corpus run: the std
+tree is at ZERO resplits and the stage-2 gate covers C11 from now
+on. **The §13 ladder is COMPLETE except the D19a ruling.**
+
+### The depth price (recorded, from the same measurement)
+
 The catalog's raw-grammar twin measured that canon rules are
 DIRECTED: a behavior's canonical spelling can sit one rung deeper
 than its shortest raw spelling — and exactly one (raw-depth-d
