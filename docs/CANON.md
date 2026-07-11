@@ -1046,9 +1046,22 @@ until slice 3 teaches the tool shape pins.
   become True/False through a Bool pin, and Bool pins arise only from
   match-on-Bool — C9-flagged spelling. In C9-clean code the case is
   unreachable; multi-step decidings route through the fold tier.
-- **D19a (OPEN — the fold tier decomposes; needs a ruling).** Working
-  the rule revealed the census's fold family splits three ways in
-  shard's ledger: (i) pin-derived ground folds are C8a's REWRITE
+- **D19a (RESOLVED 2026-07-11 — ruling A, mechanism-of-record C).**
+  USER RULING: no fold rule for applied ground user-fn calls — the
+  measured occurrence rate in written code is ZERO (every
+  `(len Nil)`-shaped term in the tree sits in a PROOF position,
+  exempt by construction; the fold family is a search-space
+  phenomenon, imposable dialect-side by generators without a source
+  rule). If written code ever accumulates them, the recorded
+  mechanism is the C7 EXTENSION: fold only through ratified
+  defining-equation rule sets (len_nil/len_cons are already proven
+  requirements), which resolves all four constraints structurally —
+  no exported equation ⇒ no fold (opacity free), nullary constants
+  keep the D7 named-constant idiom, per-rule bounded cost (the gate
+  never evaluates), and the quotient stays a list of cited theorems.
+  Ratifying a rule set is then a one-decision slice with no new
+  machinery. The original decomposition, for the record — the census
+  fold family splits three ways in shard's ledger: (i) pin-derived ground folds are C8a's REWRITE
   IMAGE — the occurrence is already flagged at the variable, and
   folding is what the C8a rewrite produces — no new rule needed;
   (ii) SOURCE-ground user-call folds (`(len Nil)` spelled in a body)
@@ -1101,7 +1114,9 @@ The residual C12 content (anti-specialization through FOLDS — bodies
 like (f Nil) vs (f xs)) is D19a-gated and waits on that ruling.
 Slice 4 (std re-pin) was discharged by slice 1's corpus run: the std
 tree is at ZERO resplits and the stage-2 gate covers C11 from now
-on. **The §13 ladder is COMPLETE except the D19a ruling.**
+on. **The §13 arc is COMPLETE** — D19a resolved 2026-07-11 (ruling A,
+no fold rule; the C7-extension mechanism recorded for the day written
+code accumulates ground calls; see the amendments above).
 
 ### The depth price (recorded, from the same measurement)
 
