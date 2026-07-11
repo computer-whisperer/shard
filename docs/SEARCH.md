@@ -1,15 +1,17 @@
 shard program search — SEARCH.md
 =================================
 
-STATUS: DRAFT (proposed 2026-07-11) — nothing below is ratified. This
-is the scope ledger for the meta-search arc: a lasting, in-repo
-replication of the search playground's basic behaviors, built under
-meta/ against the real kernel, the real canonical dialect, and the
-real proof machinery. Decision points are marked D1–D8 and each needs
-a ruling before code assumes an answer. Revised after the 2026-07-11
-review discussion: the durable-home identity (§1), the clone-first
-graduation methodology (§4), and the performance posture (D7) record
-user rulings from that discussion; the rest remains proposed.
+STATUS: RATIFIED (user review 2026-07-11) — the scope ledger for the
+meta-search arc: a lasting, in-repo replication of the search
+playground's basic behaviors, built under meta/ against the real
+kernel, the real canonical dialect, and the real proof machinery.
+User rulings on record: the durable-home identity (§1), the
+clone-first graduation methodology (§4), the performance posture
+(D7), D1 = reserved-head Call encoding, D2 = meta/sketch in meta/
+from day one. D3–D5 and D8 stand as written (ratified defaults);
+per-slice check-ins with the user per house norm. Development lives
+in the shard.search worktree (branch search-arc, cut 2026-07-11);
+this file is the scope authority.
 
 The evidence base is ~/workspace/playground/shard_search_playground
 (read as data, never touched). Its README is the measurement record:
@@ -272,7 +274,7 @@ and the example that proves each bucket before it graduates.
   enumerate/count/rank/fill is lesson 3's ask ("shipping
   enumerate/count beside each recognizer would make every
   certified-lowering shape a search dialect for free") and
-  meta/shape's natural sibling. Confirm at D2.
+  meta/shape's natural sibling. Confirmed at D2: day-one meta/.
 - **meta/search** (or finer buckets) — populated by graduation, not
   up front. A piece moves when its bucket is clean and a second
   consumer exists or is concrete, per the hygiene-pass ruling.
@@ -287,20 +289,20 @@ differentially-gated accelerator, exactly the compiled-chain regime.
 
 ## 5. Decision points
 
-**D1 — hole representation.** (a) RECOMMENDED: a reserved-head
-encoding inside kernel Expr — `(Call (:: meta sketch hole) (IntLit k))`
-— so every existing Expr walker, recognizer, and renderer works on
-partial terms unchanged, with loud classifier helpers in meta/sketch;
-the kernel never checks a sketch (holes are filled before any check).
-(b) A parallel SketchExpr type mirroring Expr + Hole — cleaner
-separation, but duplicates every walker and cuts sketches off from
-the real recognizers. (c) Holes as reserved FVars — viable, but a
-numbered-hole id rides better as an IntLit argument.
+**D1 — hole representation (RESOLVED 2026-07-11 — ruling a).** A
+reserved-head encoding inside kernel Expr —
+`(Call (:: meta sketch hole) (IntLit k))` — so every existing Expr
+walker, recognizer, and renderer works on partial terms unchanged,
+with loud classifier helpers in meta/sketch; the kernel never checks
+a sketch (holes are filled before any check). Rejected: (b) a
+parallel SketchExpr type (duplicates every walker, cuts sketches off
+from the real recognizers); (c) holes as reserved FVars (a numbered
+hole id rides better as an IntLit argument).
 
-**D2 — placement and graduation.** §4's clone-first methodology;
-whether meta/sketch starts in meta/ on its stated reuse story or
-begins in the tool like everything else; and the trust tier (no
-engine output is ever load-bearing without G4).
+**D2 — placement and graduation (RESOLVED 2026-07-11).** §4's
+clone-first methodology stands, AND meta/sketch starts in meta/ from
+day one on its stated reuse story. Trust tier: no engine output is
+ever load-bearing without G4.
 
 **D3 — evaluation substrate.** Ground evaluation via kernel/evm
 (`evm_call_pure`, the meta/invoke precedent) — single hosted
