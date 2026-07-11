@@ -312,9 +312,37 @@
 ;; Type-level helpers.
 ;; ---------------------------------------------------------------------------
 
+;; An OPAQUE datatype contributes TWO same-qname typedefs to the merged
+;; HOME closure: the interface's `(sig type T)` (ctorless) and the impl's
+;; transparent `(type T (C …) …)`. merge_modules orders deps first, so the
+;; sig precedes the impl and a plain first-by-name scan reads ZERO ctors —
+;; which made home-module induct/case-on blind to the module's OWN ctors
+;; (the issue-#16 vacuous proofs, then blanket refusals). Prefer the twin
+;; that CARRIES ctors, the find_refinement pattern below: a module's
+;; fulfills proofs may open their own type. In a CONSUMER's check-mode
+;; closure the impl typedef is ABSENT, so nothing is pierced — opacity
+;; stays structural, not policed. Refined types carry ctors in NEITHER
+;; twin, so zero-ctor induct/case-on still refuse over them.
 (fn lookup_typedef ((name QName) (m Module)) (Option TypeDef)
   (match m
-    ((Module tds _ _ _ _) (find_typedef name tds))))
+    ((Module tds _ _ _ _)
+     (match (find_typedef_ctors name tds)
+       ((Some td) (Some td))
+       (None (find_typedef name tds))))))
+
+;; the same-qname entry that actually carries constructors, if any.
+(fn find_typedef_ctors ((name QName) (tds (List TypeDef))) (Option TypeDef)
+  (measure (struct tds))
+  (match tds
+    (Nil None)
+    ((Cons td rest)
+     (match td
+       ((TypeDef tname _ ctors _)
+        (if (qname_eq name tname)
+          (match ctors
+            (Nil (find_typedef_ctors name rest))
+            (_ (Some td)))
+          (find_typedef_ctors name rest)))))))
 
 ;; Lookup an extern declaration by name. The runtime uses this when
 ;; intercepting stuck calls to extern symbols; not needed by the

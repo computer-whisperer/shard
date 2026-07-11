@@ -68,6 +68,16 @@ Four top-level definitional forms:
                                            ;   an opaque type (private ctors).
 ```
 
+Opacity is **structural, per closure** (2026-07-10): the HOME closure
+holds both same-qname typedefs — the interface's ctorless `sig type`
+and the impl's transparent `type` — and typedef lookup prefers the
+twin that carries ctors, so a module's own proofs (its `fulfills`
+obligations) may `induct`/`case-on` its own representation. A
+consumer's check-mode closure never contains the impl typedef, so
+consumers still see zero ctors and a zero-case split refuses (the
+issue-#16 guard). Refined types carry ctors in neither twin; their
+elim door is `refine-fact`, not case analysis.
+
 ### 2.1 `type` — algebraic data types
 
 Non-parametric:
