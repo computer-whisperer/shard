@@ -194,6 +194,7 @@ TARGETS=(
   tools/canon/census.shard
   tools/canon/hash.shard
   examples/hash_pin.shard
+  examples/parlet_pin.shard
   examples/render_model.shard
   examples/modules_demo/consumer.shard
   examples/modules_demo/views/module_view.shard

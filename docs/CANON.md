@@ -666,9 +666,14 @@ Facts the slice pinned:
   the elaborator assigns BVar indices innermost-first — source binding
   i = BVar n-1-i in the body, the same convention as parameters
   ("BVar 0 = the LAST parameter"). Pinned empirically by
-  examples/canon_pin.shard's cp_pair; term.shard's open_many comment
-  ("BVar k = bindings[k]") is about the STORED list, which is
-  index-ordered, i.e. reversed from source.
+  examples/canon_pin.shard's cp_pair. The Let node STORES bs in SOURCE
+  order (reader.shard elab_let); open_many's bindings argument is
+  index-ordered, so every opener must REVERSE first, as apply_fn does
+  for call args. (An earlier version of this note claimed the stored
+  list was index-ordered — false, and the proof-mode reducer's Let
+  openings shared the error: they opened unreversed, silently swapping
+  parallel-let bindings under compute. Found by the SHA-256 build,
+  fixed 2026-07-10, pinned by examples/parlet_pin.shard.)
 - **Self-application is honest**: checking kernel/canon.shard reports
   its own C4 arm-order violations (Call-before-Ctor in cn_e, Some-
   before-None). Advisory, correct, and burns down when the kernel

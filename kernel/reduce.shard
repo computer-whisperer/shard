@@ -170,7 +170,10 @@
   (match e
     ((Call f args) (step_call m f args))
     ((Match s arms) (step_match m s arms))
-    ((Let bs body) (Some (open_many bs body)))
+    ;; ζ: bs is stored in SOURCE order (elab_let) but the body's BVar 0 is
+    ;; the LAST binding (push_scope, the parameter convention) — open with
+    ;; the list reversed, exactly like apply_fn reverses call args.
+    ((Let bs body) (Some (open_many (reverse_exprs bs) body)))
     ;; If: True/False at the head fires; otherwise step the condition.
     ;; Bool ctor names are hardcoded (cf. prim.rs and REVISIT.md —
     ;; "Primitive comparisons return user Bool").
@@ -1124,7 +1127,7 @@
   (measure (* 2 (size e)))
   (match e
     ((Match s arms) (step_match_iota m s arms))
-    ((Let bs body) (Some (open_many bs body)))  ; ζ
+    ((Let bs body) (Some (open_many (reverse_exprs bs) body)))  ; ζ (last binding = BVar 0)
     ((If c t el)
      (match c
        ((Ctor (QName _ (quote True)) Nil) (Some t))
@@ -1245,7 +1248,7 @@
 (fn step_head ((e Expr)) (Option Expr)
   (match e
     ((Match s arms) (head_match s arms))
-    ((Let bs body) (Some (open_many bs body)))
+    ((Let bs body) (Some (open_many (reverse_exprs bs) body)))  ; ζ (last binding = BVar 0)
     ((If c t el)
      (match c
        ((Ctor (QName _ (quote True)) Nil) (Some t))
@@ -1305,7 +1308,7 @@
   (match e
     ((Call f args) (step_smart_call m stops f args))
     ((Match s arms) (step_smart_match m stops s arms))
-    ((Let bs body) (Some (open_many bs body)))
+    ((Let bs body) (Some (open_many (reverse_exprs bs) body)))  ; ζ (last binding = BVar 0)
     ((If c t el)
      (match c
        ((Ctor (QName _ (quote True)) Nil) (Some t))
@@ -1539,8 +1542,11 @@
 ;;     ctor-arm stays stuck (it does NOT fall through to a later `_`, the
 ;;     two-valued bug `ev` is allowed because it only runs closed apps).
 ;;   - de Bruijn conventions mirror `step` EXACTLY: Call opens
-;;     `(reverse args) ⊢ body` (apply_fn), Let opens `bs ⊢ body` (no reverse),
-;;     a fired arm prepends match_pat's innermost-first binds.
+;;     `(reverse args) ⊢ body` (apply_fn), Let opens `(reverse bs) ⊢ body`
+;;     (bs is stored in SOURCE order; the body's BVar 0 is the LAST binding —
+;;     the 2026-07-10 parallel-let soundness fix, pinned by
+;;     examples/parlet_pin.shard), a fired arm prepends match_pat's
+;;     innermost-first binds.
 ;;   - The language is total/pure/confluent, so CBV reaches the same NF as
 ;;     leftmost-outermost for terminating terms.
 ;;   - STUCK terms (open subterms — the Compute tactic is used on a few, e.g.
@@ -1650,9 +1656,9 @@
      (ceval
        m
        stops
-       (cappend (ceval_list m stops env bs (- fuel 1)) env)
+       (cappend (reverse_exprs (ceval_list m stops env bs (- fuel 1))) env)
        body
-       (- fuel 1)))  ; bs ⊢ body
+       (- fuel 1)))  ; last RHS = BVar 0 (innermost-first, as evm's ev_list_rev)
     ((If c t el)
      (match (ceval m stops env c (- fuel 1))
        ((Ctor (QName _ (quote True)) Nil) (ceval m stops env t (- fuel 1)))
