@@ -34,6 +34,16 @@ User rulings already on record from the design discussions of
   many programs (the embedded-Rust lesson); well-controlled stack
   management is often all you need, and shard must meet that bar
   where programs admit it.
+- **The safety inversion** (first read-through, 2026-07-11): the
+  trust story — every shipped binary is a proven refinement of the
+  shard application with an explicit list of hardware-necessitated
+  premises — means memory design here is never "where do we put the
+  data so it's safe"; safety crossed the bar with the refinement.
+  The ledger's real question is "how efficient a memory layout can
+  we build and still land the proof that closes the compile" (§1).
+  Relatedly, the kernel is NOT immutable — the bar for core
+  provisions is high but usefulness has bought core syntax before
+  (§10).
 - Standing context: the C/Rust performance gap is a to-be-closed
   success criterion, never an accepted constant; mimicry is the named
   hazard — most plausible-sounding memory designs import an industry
@@ -67,6 +77,36 @@ asset. **The dynamic+bulk quadrant stays empty** (§10). The design
 gradient everywhere else: push liveness knowledge as static as the
 program's proofs allow; where it must be dynamic, keep it local and
 deterministic.
+
+**The safety inversion (USER RULING, 2026-07-11).** In every
+mainstream language the memory design IS the safety mechanism — where
+the data lives decides whether the program is sound, so the design
+space is policed by fear, and Rust ships a deliberately conservative
+borrow checker to police it mechanically, because it must run without
+proofs. shard's trust story inverts this. An x86 binary ships only as
+a proven refinement of the shard application, with an explicit premise
+list naming exactly what the hardware made necessary; safety is
+enforced by THAT bar, not by the memory manager — anything that
+provably refines down has already crossed it, and we never build,
+tune, or debug a borrow checker. So the question this ledger optimizes
+is not "where do we put the data so it's safe" but **"how efficient a
+memory layout can we build and still land the proof that closes the
+compile."** Three consequences run through everything below:
+
+- Every mechanism in this file competes on exactly two axes —
+  layout efficiency and proof-landability. Safety is never a
+  tiebreaker; the open decision points (§11) are decided on those
+  two axes alone.
+- The tower degrades gracefully: failing to prove a cancellation
+  theorem never costs soundness — copy instead of mutating in place,
+  count instead of cancelling, box instead of framing — it only
+  costs speed. Uniqueness and borrow facts are optimization licenses,
+  not safety obligations.
+- Layout experimentation is safe by construction. An aggressive rep
+  cannot ship a hazard; it can only fail to close the compile, at
+  which point you retreat one rung. There is no `unsafe` escape hatch
+  to audit, because there is no checker to escape. This is the
+  biggest novelty the arc gets to capitalize on.
 
 
 ## 2. What shard brings that cancels things
@@ -394,10 +434,18 @@ time — this file stays at the architecture level.
   cannot reference young ones — no write barriers, no remembered
   sets), but that optimizes a mechanism we do not want. Revisit only
   on measured fragmentation evidence per §8.
-- **Kernel or type-system changes.** No linear types, no ownership
-  annotations, no lifetime language. Uniqueness, borrow, and bound
-  facts are theorems about lowered forms. `(refine …)` exists;
-  everything here is ordinary definitions plus certs.
+- **A memory type system.** No linear types, no ownership annotations,
+  no lifetime language: uniqueness, borrow, and bound facts are
+  theorems about lowered forms, and nothing in this ledger needs core
+  syntax — `(refine …)` exists; everything here is ordinary
+  definitions plus certs. Stated precisely (USER, 2026-07-11): the
+  kernel is NOT immutable — shard is a whole package whose usefulness
+  has bought core provisions before when the case cleared the high
+  bar (refine, have, fin-split, subterm-induct, the Nat former). The
+  non-goal is kernel growth as a SAFETY MECHANISM, which the safety
+  inversion (§1) makes pointless. If a declaration surface (D1, D3)
+  someday earns core QoL on ergonomic evidence, that is an ordinary
+  user-decided kernel-growth case, not a violation of this file.
 - **Inferred escape analysis or any hidden liveness heuristic.** Class
   assignment is declared and gate-verified. Plumbing moves bytes; it
   never guesses liveness.
