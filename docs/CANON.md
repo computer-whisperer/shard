@@ -527,14 +527,14 @@ Type variables in signatures serialize by first-occurrence index
 (alpha-invariant); ctor references serialize as (typedef-ref, ctor
 declaration index) — ctor NAMES are presentation, like binder names.
 
-DIGEST. v1 = FNV-1a-128 over the serialization. Explicitly
-REPLACEABLE until the first consumer stores a hash: FNV disperses
-well on structured bytes (birthday-safe at this corpus scale for
-random inputs) but is trivially invertible — zero adversarial
-collision resistance — so it is licensed for dedup census and memo
-keys only. std/sha256 (in flight, its own arc) replaces it BEFORE
-anything trust-bearing keys on stored hashes; the swap invalidates
-no stored state because v1 stores none.
+DIGEST. std/sha256 over the serialization (SWAPPED IN 2026-07-10,
+same day as the spec: the sha256-std side-arc landed FIPS 180-4
+SHA-256 with a proven 32-byte digest-length contract and NIST-vector
+compute pins, and hx_digest now folds its 32 bytes into the digest
+Int). v1 briefly shipped FNV-1a-128 — dispersive but trivially
+invertible, licensed for dedup only — and the swap invalidated no
+stored state because v1 stored none: exactly the replaceability the
+spec promised. The digest remains a parameter behind hx_digest.
 
 TOOL. tools/canon/hash.shard prints one `<digest-hex>  <qname>` line
 per fn and typedef of the target module (production loader; whole
@@ -886,8 +886,9 @@ scope is complete.
 §11.5 resolved; the spec is in §7. tools/canon/hash.shard computes it:
 production loader (run-mode closure), one reference graph over fns and
 typedefs, Kosaraju SCCs, fixpoint Merkle hashing bottom-up along the
-condensation, FNV-1a-128 behind the single hx_digest swap point
-(std/sha256 is in flight on its own branch). examples/hash_pin.shard +
+condensation, the digest behind the single hx_digest swap point
+(FNV-1a-128 at landing; std/sha256 swapped in later the same day —
+the pins moved without edits, as designed). examples/hash_pin.shard +
 the corpus pin exercise exactly the digest-stable properties:
 alpha-twins hash EQUAL (names and binder names are presentation),
 distinct definitions hash apart, and the Merkle showpiece —

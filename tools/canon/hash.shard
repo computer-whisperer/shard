@@ -7,8 +7,9 @@
 ;;; The SERIALIZATION is the stable contract (see §7): tagged canonical
 ;;; nameless core, core-pathed names terminal, out-of-SCC references by
 ;;; digest (Merkle), within-SCC references by canonical member index.
-;;; The DIGEST is a parameter: v1 = FNV-1a-128 (hx_digest is the single
-;;; swap point; std/sha256 replaces it before any consumer stores hashes).
+;;; The DIGEST is a parameter behind hx_digest, the single swap point:
+;;; v1 shipped FNV-1a-128; std/sha256 replaced it 2026-07-10, before any
+;;; consumer stored hashes (the corpus pins are relations, digest-stable).
 ;;;
 ;;; Definitions the recognizer flags are marked `!` — a hash is only
 ;;; MEANINGFUL on canonical form.
@@ -22,6 +23,7 @@
 (import "../../kernel/reader.shard")
 (import "../../kernel/loader.shard")
 (import "../../kernel/canon.shard")
+(import "../../std/sha256")
 
 (use (:: kernel term *))
 (use (:: kernel module *))
@@ -33,32 +35,27 @@
 (use (:: kernel loader exit))
 (use (:: kernel loader resolve_closure))
 (use (:: kernel canon *))
+(use (:: std sha256 sha256))
 
 ;; ---------------------------------------------------------------------------
-;; the digest — THE swap point (FNV-1a-128 v1; replace hx_digest's core
-;; with std/sha256 before anything trust-bearing keys on stored hashes)
+;; the digest — THE swap point: std/sha256, the 32 digest bytes folded
+;; big-endian into one Int (bignum-exact). v1 shipped FNV-1a-128 here.
 ;; ---------------------------------------------------------------------------
 
-(fn hx_prime () Int 309485009821345068724781371)
-
-(fn hx_mask () Int 340282366920938463463374607431768211455)
-
-(fn hx_offset () Int 144066263297769815596495629667062367629)
-
-(fn hx_fnv ((bs (List Int)) (h Int)) Int
+(fn hx_fold ((bs (List Int)) (h Int)) Int
   (measure (struct bs))
   (match bs
     (Nil h)
-    ((Cons b rest) (hx_fnv rest (band (* (bxor h b) (hx_prime)) (hx_mask))))))
+    ((Cons b rest) (hx_fold rest (+ (* h 256) b)))))
 
-(fn hx_digest ((bs (List Int))) Int (hx_fnv bs (hx_offset)))
+(fn hx_digest ((bs (List Int))) Int (hx_fold (sha256 bs) 0))
 
-;; the digest as 16 big-endian bytes (for Merkle embedding)
+;; the digest as 32 big-endian bytes (for Merkle embedding)
 (fn hx_bytes_go ((h Int) (k Int) (acc (List Int))) (List Int)
   (measure k)
   (if (le k 0) acc (hx_bytes_go (bshr h 8) (- k 1) (Cons (band h 255) acc))))
 
-(fn hx_bytes ((h Int)) (List Int) (hx_bytes_go h 16 Nil))
+(fn hx_bytes ((h Int)) (List Int) (hx_bytes_go h 32 Nil))
 
 (fn hx_hexd ((d Int)) Int (if (lt d 10) (+ 48 d) (+ 87 d)))
 
@@ -67,7 +64,7 @@
   (if (le k 0) acc
   (hx_hex_go (bshr h 4) (- k 1) (Cons (hx_hexd (band h 15)) acc))))
 
-(fn hx_hex ((h Int)) (List Int) (hx_hex_go h 32 Nil))
+(fn hx_hex ((h Int)) (List Int) (hx_hex_go h 64 Nil))
 
 ;; ---------------------------------------------------------------------------
 ;; small plumbing
