@@ -389,3 +389,94 @@ ground path IS kernel/evm). No unproven rewrite ever enters a neutral
 join. No engine verdict is ever cited without its G4 certificate. And
 no obligation, ever, to keep up with the playground — it explores,
 this version consolidates.
+
+
+## 8. The arc record (slice ledger)
+
+### Slice 1 — meta/sketch + the ground engine (LANDED 2026-07-11)
+
+**What landed.**
+
+- **meta/sketch** (day-one meta/ residence per D2): the D1 reserved-head
+  hole encoding with its loud three-way classifier (HVHole / HVNot /
+  HVBad — a hole-headed call with any other argument shape is refused,
+  never skipped; the reserved head is the qname of the `hole` builder
+  itself), hole collection with sharing-dedup, closedness, verbatim
+  fill (single pass, no binder shifting — the fill contract is stated
+  in the header), and the grammar layer: per-hole alternative tables
+  (GEnt/Grammar) under THE STRATIFICATION LAW — entry ids strictly
+  ascending, an alternative's holes strictly greater than its entry's
+  id, one owner per hole. The law is what makes every pass total by
+  plain structural folds: counting = one reverse fold (memo), deciding
+  = one forward fold (live digits), closing = one reverse fold — no
+  fuel, no cycle detection, no mutual SCC beyond the standard
+  Expr/list/arms walkers. Exact bignum counts; rank-addressed unrank
+  under the documented ADDRESSING LAW (distinct holes ascending, last
+  = least-significant digit; alternatives = consecutive intervals in
+  list order).
+- **examples/sketch_pin.shard** — 14 kernel-computed claims: counts,
+  unrank at interval edges, sharing-is-one-decision (root sharing and
+  in-alternative sharing both pinned), the verbatim-fill contract, and
+  the refusal family (stratification violation at wf AND at count,
+  cross-entry ownership, malformed hole, out-of-range index).
+- **tools/search** (the D2 clone): the ground engine — unrank → FnDef
+  → inject into the loaded object module's fn list → battery through
+  meta/invoke's invoke_fd (evm_call_pure; D3 honored, no
+  engine-private evaluator) with early exit across tests. Injection
+  rides the fact that evm_call_pure rebuilds its dispatch tables from
+  the Module's fn LIST (the stale FnTrie field is never consulted on
+  that path). A stuck / type-wrong candidate (the untyped-grammar
+  regime) fails its test through the whole-or-nothing value decode —
+  probed explicitly before the engine was built on it.
+- **The rev task**, replicating the playground's measurement record
+  against the real kernel: base hole leaf-only {acc, Nil, xs} at every
+  depth, step hole {acc, h, t, Nil} + Cons/append over fresh
+  depth-(d-1) sub-holes (grammar extracted from the playground source,
+  read as data). Space 3·S(d), S(0)=4, S(d)=4+2·S(d-1)²: **COUNT 108 /
+  SOLUTIONS 1 at d1 (0.6s), COUNT 7788 / SOLUTIONS 13 at d2 (15s)** —
+  the published counts and solution-set sizes, exactly. d1's single
+  solution index 8 hand-decodes to the textbook `(Cons h acc)`.
+
+**Gates.** The 14 pin claims replay under bin/shard_check (kernel-
+computed, G5's claim-layer half); the tool's COUNT/SOL/SOLUTIONS lines
+are corpus-pinned in run_corpus.sh (the diff-tool half — an addressing
+or grammar change moves them and fails the FAIL-set/output diff);
+three new corpus targets (sketch_pin, rev_obj, search) check green;
+corpus FAIL-set diff clean against fails-base.txt.
+
+**Gotchas recorded.**
+
+- Int-measured recursion (`(measure d)` / countdown loops) needs
+  solver-generated descent sidecars: `bin/shard_eval run
+  tools/prove/prove.shard FILE` writes the .auto.shard; struct
+  measures need nothing.
+- shardfmt is a stdout filter and REFORMATS multi-line ctor spines;
+  format before hand-diffing anything.
+- evm_call_pure rebuilds ixt/efftab/fntab per invocation. At d2 that
+  is 4×7,788 rebuilds ≈ 15s wall — fine for the pin, and the obvious
+  first engine economy when a rung is actually slow (D7's
+  order-of-attack): a staged pure-invocation surface on meta/invoke
+  ("prepare a module once, invoke many"). Not built; noted.
+
+**Implementation-discovered decision points (user attention wanted).**
+
+- **D9 (open) — rank, the inverse.** S1 says "rank/unrank"; slice 1
+  ships count + unrank. candidate→index needs an alternative-matching
+  discipline (top-level structural non-overlap of alternatives) to be
+  well-defined; no consumer needs it yet. Proposal: defer to the
+  slice that consumes it (dedup/citation), with the non-overlap check
+  added to g_wf at that point.
+- **D10 (open) — cross-entry hole sharing.** The correlation primitive
+  is licensed at the sketch root and within an alternative (both
+  pinned); a hole reachable from two DIFFERENT entries is refused
+  (g_wf + a live-merge guard), because it breaks sum-of-products
+  counting. The playground's skeleton-level sharing maps to root
+  sharing, so nothing measured is lost at this rung; S4b's choices
+  map will want the general form and should bring its own counting
+  story when it arrives.
+- **D11 (open) — solution rendering.** SOL pin lines carry candidate
+  INDICES (deterministic under the addressing law), not source text.
+  Rendering an arbitrary synthesized Expr (Match/Ctor/BVar) as source
+  is exactly the S6-adjacent renderer meta/spell's canonical-expr
+  subset does not cover; it should land once, with proof rendering,
+  not as a one-off printer here.

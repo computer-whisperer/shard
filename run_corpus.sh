@@ -239,6 +239,9 @@ TARGETS=(
   std/word/word.shard
   std/nat/nat.shard
   std/sha256/sha256.shard
+  examples/sketch_pin.shard
+  tools/search/rev_obj.shard
+  tools/search/search.shard
 )
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -322,6 +325,20 @@ fi
 echo "=== invoke: dynamic-invocation probe ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run examples/invoke_probe.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# Ground-search pin (docs/SEARCH.md slice 1): the rev accumulator space,
+# rank-addressed by meta/sketch and settled through the real machine
+# (meta/invoke -> evm_call_pure). Counts and solution sets must match the
+# playground's published measurement record EXACTLY: 108 candidates / 1
+# solution at depth 1, 7788 / 13 at depth 2. Every COUNT / SOL / SOLUTIONS
+# line is diffed; a grammar or addressing change moves them and fails the
+# corpus diff (re-pin deliberately, with the change).
+echo "=== search: ground rev pin ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/search.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi

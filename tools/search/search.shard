@@ -1,0 +1,321 @@
+;;; tools/search — the program-search tool (docs/SEARCH.md; the clone
+;;; that mines meta/ vocabulary, D2). SLICE 1: the GROUND ENGINE —
+;;; enumerate a task's whole candidate space by rank (meta/sketch
+;;; addressing), fill each candidate into a FnDef, inject it into the
+;;; task's object module, and run the I/O battery through the real
+;;; machine (meta/invoke -> kernel/evm evm_call_pure; D3 — no
+;;; engine-private evaluator). Early exit across tests; a candidate
+;;; whose evaluation sticks (the untyped-grammar regime) fails its
+;;; test by failing the whole-or-nothing decode, counted honestly.
+;;;
+;;; THE REV TASK (the playground's measurement record, replicated
+;;; against the real kernel): fill the two holes of
+;;;
+;;;   (fn loop ((xs (List Int)) (acc (List Int))) (List Int)
+;;;     (match xs
+;;;       (Nil        HOLE_0)                 ; base: leaves acc, Nil, xs
+;;;       ((Cons h t) (loop t HOLE_1))))      ; step: depth-d grammar
+;;;
+;;; entry (loop input Nil). Step leaves {acc, h, t, Nil} plus the two
+;;; builders Cons(_, _) and append(_, _) at depth-(d-1) sub-holes;
+;;; base is leaf-only at every depth. Space: 3 * S(d) with S(0) = 4,
+;;; S(d) = 4 + 2*S(d-1)^2 — 108 at d1, 7,788 at d2, matching the
+;;; playground's published counts; solutions 1 (d1) and 13 (d2).
+;;;
+;;; RUN IT: bin/shard_eval run tools/search/search.shard             (d1 + d2)
+;;;         bin/shard_eval run tools/search/search.shard rev N       (depth N)
+;;; Pinned lines: COUNT / SOL <index> / SOLUTIONS (run_corpus.sh).
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/loader.shard")
+(import "../../meta/sketch")
+(import "../../meta/invoke")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel loader World))
+(use (:: kernel loader get_args))
+(use (:: kernel loader write))
+(use (:: kernel loader exit))
+(use (:: meta sketch *))
+(use (:: meta invoke *))
+
+;; ---- module injection --------------------------------------------------------
+
+;; the object-level (List Int) type, for injected candidate signatures
+(fn ty_ilist () Type
+  (TCon (qn (quote List)) (Cons (TCon (qn (quote Int)) Nil) Nil)))
+
+(fn fns_snoc ((fns (List FnDef)) (fd FnDef)) (List FnDef)
+  (measure (struct fns))
+  (match fns
+    (Nil (Cons fd Nil))
+    ((Cons h t) (Cons h (fns_snoc t fd)))))
+
+;; append a candidate FnDef to a loaded Module's fn list. evm_call_pure
+;; rebuilds its dispatch tables from the fn LIST, so the stale FnTrie
+;; field is never consulted on the invocation path.
+(fn inject ((m Module) (fd FnDef)) Module
+  (match m
+    ((Module tds fns exts ft items)
+     (Module tds (fns_snoc fns fd) exts ft items))))
+
+;; ---- the rev task ------------------------------------------------------------
+
+(fn cand_q () QName (qn (quote srch_cand)))
+
+;; the two-hole skeleton body: params (xs acc) -> xs = BVar 1, acc =
+;; BVar 0; Cons-arm binders (h then t, left to right) -> t = BVar 0
+(fn rev_sketch () Expr
+  (Match
+    (BVar 1)
+    (Cons
+      (Arm (PCtor (qn (quote Nil)) Nil) (hole 0))
+      (Cons
+        (Arm
+          (PCtor (qn (quote Cons)) (Cons (PVar) (Cons (PVar) Nil)))
+          (Call (cand_q) (Cons (BVar 0) (Cons (hole 1) Nil))))
+        Nil))))
+
+;; base-hole leaves (Nil-arm scope): acc = BVar 0, Nil, xs = BVar 1
+(fn rev_base_ent () GEnt
+  (GEnt
+    0
+    (Cons (BVar 0) (Cons (Ctor (qn (quote Nil)) Nil) (Cons (BVar 1) Nil)))))
+
+;; step-hole leaves (Cons-arm scope): acc = BVar 2, h = BVar 1,
+;; t = BVar 0, Nil — xs deliberately absent (the measurement record's
+;; vocabulary)
+(fn rev_leaves () (List Expr)
+  (Cons
+    (BVar 2)
+    (Cons (BVar 1) (Cons (BVar 0) (Cons (Ctor (qn (quote Nil)) Nil) Nil)))))
+
+(fn ents_app ((a (List GEnt)) (b (List GEnt))) (List GEnt)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (ents_app t b)))))
+
+;; the step grammar at depth d, entry ids from `next` (pre-order,
+;; consecutive — the stratification law by construction): leaves, then
+;; Cons over two fresh depth-(d-1) sub-holes, then append over two more.
+;; Returns the entries (ascending) and the next free id.
+(fn rev_step_g ((d Int) (next Int) (apq QName)) (Pair (List GEnt) Int)
+  (measure d)
+  (if (le d 0) (Pair (Cons (GEnt next (rev_leaves)) Nil) (+ next 1))
+  (match (rev_step_g (- d 1) (+ next 1) apq)
+    ((Pair es1 n1)
+     (match (rev_step_g (- d 1) n1 apq)
+       ((Pair es2 n2)
+        (match (rev_step_g (- d 1) n2 apq)
+          ((Pair es3 n3)
+           (match (rev_step_g (- d 1) n3 apq)
+             ((Pair es4 n4)
+              (let
+                ((alts
+                   (append_e
+                     (rev_leaves)
+                     (Cons
+                       (Ctor
+                         (qn (quote Cons))
+                         (Cons (hole (+ next 1)) (Cons (hole n1) Nil)))
+                       (Cons
+                         (Call apq (Cons (hole n2) (Cons (hole n3) Nil)))
+                         Nil)))))
+                (Pair
+                  (Cons
+                    (GEnt next alts)
+                    (ents_app es1 (ents_app es2 (ents_app es3 es4))))
+                  n4))))))))))))
+
+(fn append_e ((a (List Expr)) (b (List Expr))) (List Expr)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (append_e t b)))))
+
+;; the whole rev grammar: base = entry 0 (leaf-only at EVERY depth, per
+;; the record), step = entry 1 at depth d
+(fn rev_grammar ((d Int) (apq QName)) Grammar
+  (match (rev_step_g d 1 apq)
+    ((Pair es _) (Grammar (Cons (rev_base_ent) es)))))
+
+;; the four published I/O examples; entry (loop input Nil)
+(fn rev_tests () (List (Pair (List Int) (List Int)))
+  (Cons
+    (Pair Nil Nil)
+    (Cons
+      (Pair (Cons 1 Nil) (Cons 1 Nil))
+      (Cons
+        (Pair (Cons 1 (Cons 2 (Cons 3 Nil))) (Cons 3 (Cons 2 (Cons 1 Nil))))
+        (Cons
+          (Pair
+            (Cons 5 (Cons 7 (Cons 9 (Cons 11 Nil))))
+            (Cons 11 (Cons 9 (Cons 7 (Cons 5 Nil)))))
+          Nil)))))
+
+;; ---- the ground engine ---------------------------------------------------------
+
+(fn int_list_eq ((a (List Int)) (b (List Int))) Bool
+  (measure (struct a))
+  (match a
+    (Nil
+      (match b
+        (Nil True)
+        (_ False)))
+    ((Cons x xs)
+     (match b
+       (Nil False)
+       ((Cons y ys) (if (int_eq x y) (int_list_eq xs ys) False))))))
+
+;; the battery, early exit across tests. A None invocation (effectful
+;; refusal — impossible here) and a non-decoding value (stuck or
+;; type-wrong candidate) both fail the test, counted honestly.
+(fn run_tests ((m2 Module) (fd FnDef) (ts (List (Pair (List Int) (List Int)))))
+  Bool
+  (measure (struct ts))
+  (match ts
+    (Nil True)
+    ((Cons (Pair inp expect) rest)
+     (match
+       (invoke_fd
+         m2
+         fd
+         (Cons (intlist_to_expr inp) (Cons (intlist_to_expr Nil) Nil)))
+       (None False)
+       ((Some r)
+        (match (expr_ints r)
+          (None False)
+          ((Some ys) (if (int_list_eq ys expect) (run_tests m2 fd rest) False))))))))
+
+;; enumerate the whole space: k counts DOWN from total (the measure),
+;; index = total - k; passing indices accumulate reversed
+(type EnR (EnROk (List Int)) (EnRErr (List Int)))
+
+(fn enum_go
+  ((k Int)
+   (total Int)
+   (root Expr)
+   (g Grammar)
+   (m Module)
+   (ts (List (Pair (List Int) (List Int))))
+   (acc (List Int)))
+  EnR
+  (measure k)
+  (if (le k 0) (EnROk (ids_rev acc Nil))
+  (match (sk_unrank root g (- total k))
+    ((SkEErr msg) (EnRErr msg))
+    ((SkEOk body)
+     (let
+       ((fd
+          (FnDef
+            (cand_q)
+            (Cons (ty_ilist) (Cons (ty_ilist) Nil))
+            (ty_ilist)
+            body)))
+       (enum_go
+         (- k 1)
+         total
+         root
+         g
+         m
+         ts
+         (if (run_tests (inject m fd) fd ts) (Cons (- total k) acc) acc)))))))
+
+;; ---- driver --------------------------------------------------------------------
+
+(fn sol_lines ((ixs (List Int))) (List Int)
+  (measure (struct ixs))
+  (match ixs
+    (Nil Nil)
+    ((Cons i t)
+     (append_int
+       "SOL "
+       (append_int (show_int i) (append_int "\n" (sol_lines t)))))))
+
+(fn list_len_i ((xs (List Int))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons _ t) (+ 1 (list_len_i t)))))
+
+;; run the rev task at one depth; write the pinned lines
+(fn run_rev ((m Module) (apq QName) (d Int) (w World)) World
+  (let ((g (rev_grammar d apq)) (root (rev_sketch)))
+    (match (sk_count root g)
+      ((SkCErr msg)
+       (exit
+         1
+         (write (append_int "SEARCH FAIL count: " (append_int msg "\n")) w)))
+      ((SkCOk total)
+       (let
+         ((w2
+            (write
+              (append_int
+                "SEARCH rev DEPTH "
+                (append_int
+                  (show_int d)
+                  (append_int "\nCOUNT " (append_int (show_int total) "\n"))))
+              w)))
+         (match (enum_go total total root g m (rev_tests) Nil)
+           ((EnRErr msg)
+            (exit
+              1
+              (write
+                (append_int "SEARCH FAIL unrank: " (append_int msg "\n"))
+                w2)))
+           ((EnROk sols)
+            (write
+              (append_int
+                (sol_lines sols)
+                (append_int
+                  "SOLUTIONS "
+                  (append_int (show_int (list_len_i sols)) "\n")))
+              w2))))))))
+
+;; ---- CLI -----------------------------------------------------------------------
+
+(fn parse_nat_go ((cs (List Int)) (acc Int)) (Option Int)
+  (measure (struct cs))
+  (match cs
+    (Nil (Some acc))
+    ((Cons c t)
+     (if (le 48 c) (if (le c 57) (parse_nat_go t (+ (* acc 10) (- c 48))) None)
+     None))))
+
+(fn parse_nat ((cs (List Int))) (Option Int)
+  (match cs
+    (Nil None)
+    ((Cons _ _) (parse_nat_go cs 0))))
+
+;; args: none -> the pinned suite (d1 then d2); "rev N" -> depth N
+(fn str_eq ((a (List Int)) (b (List Int))) Bool (int_list_eq a b))
+
+(fn run_args ((as (List (List Int))) (m Module) (apq QName) (w World)) World
+  (match as
+    (Nil (run_rev m apq 2 (run_rev m apq 1 w)))
+    ((Cons a rest)
+     (if (str_eq a "rev")
+       (match rest
+         ((Cons ds Nil)
+          (match (parse_nat ds)
+            ((Some d) (run_rev m apq d w))
+            (None (exit 2 (write "usage: search [rev N]\n" w)))))
+         (_ (exit 2 (write "usage: search [rev N]\n" w))))
+       (exit 2 (write "usage: search [rev N]\n" w))))))
+
+(fn main ((w World)) World
+  (match (load_run_module "tools/search/rev_obj.shard" w)
+    ((Pair om w2)
+     (match om
+       (None (exit 1 (write "SEARCH FAIL: object module load\n" w2)))
+       ((Some m)
+        (match (find_fn (quote append) m)
+          (None (exit 1 (write "SEARCH FAIL: no append in closure\n" w2)))
+          ((Some apfd)
+           (match apfd
+             ((FnDef apq _ _ _)
+              (match (get_args w2)
+                ((Pair as w3) (run_args as m apq w3))))))))))))
