@@ -19,8 +19,7 @@ BUILDS=(
   examples/lowbuild_x86chain.sh
   examples/lowbuild_x86loopcall.sh
   examples/lowbuild_x86intloop.sh
-  "examples/lowbuild_lib.sh examples/purelib_src.shard examples/purelib_out.shard"
-  "examples/lowbuild_lib.sh std/rng/rng.shard std/rng/rng.wasm.shard"
+  "tools/build/build.sh examples/build_products.shard"
   "examples/lowbuild_lib_x86.sh examples/purelib_src.shard examples/purelib_x86_out.shard"
   "examples/lowbuild_lib_x86_elf.sh examples/purelib_src.shard examples/purelib_x86_out.shard"
   "examples/lowbuild_bin_x86.sh examples/arglen_src.shard examples/arglen_x86_out.shard"

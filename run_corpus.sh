@@ -152,6 +152,8 @@ TARGETS=(
   examples/lib_form_rejects.shard
   examples/purelib_src.shard
   examples/purelib_out.shard
+  examples/build_products.shard
+  tools/build/build.shard
   examples/purelib_x86_out.shard
   examples/arglen_src.shard
   examples/arglen_x86_out.shard

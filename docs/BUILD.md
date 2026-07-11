@@ -378,7 +378,58 @@ Kept:
   graduate when a second consumer exists).
 
 
-## 11. Non-goals, stated once
+## 11. Slice records
+
+**Rung 1, slice 1 — the driver skeleton, wasm lib path (2026-07-11).**
+What landed:
+
+- **meta/build** — the BuildProfile vocabulary (transparent record,
+  meta/plan Target precedent; law family machine-proved, 29/0). v1
+  fields: kind / target / src / out — exactly what the generic
+  scripts took as arguments.
+- **examples/build_products.shard** — the first products entry: the
+  standard symbol `build_products : () -> (List BuildProfile)`,
+  carrying the two wasm lib products (purelib, std/rng).
+- **tools/build/build.shard** — the driver, TWO-PHASE because no
+  subprocess extern exists (by design; plumbing moves bytes):
+  `plan PRODUCTS CAPDIR EVAL CHECK...` loads the products closure at
+  runtime (meta/invoke), decodes whole-or-nothing, and emits a
+  deterministic `RUN <capture> <argv...>` order list; `verify
+  PRODUCTS CAPDIR` reads captures + exit codes back and judges the
+  six-gate ladder in-process — byte-identical regen, schema rc,
+  kernel " 0 failed" tails + the LIB acceptance line, accepts rc,
+  MOD=TIE hex equality + manifest, engine rc. This is §6ag's
+  expected resolution ("gates move into the driver") realized for
+  the wasm lib ladder: every judgment the retired script made with
+  diff/grep/cut now lives in shard.
+- **tools/build/build.sh** — the ONE executor: run argv, capture
+  stdout+stderr, record the exit code. Zero build knowledge. Keeps
+  the capture dir on failure (the debugging evidence); surfaces
+  plan-phase refusals (gotcha: the first version swallowed them into
+  the orders file).
+- **Retired:** examples/lowbuild_lib.sh (no remaining callers);
+  lowbuild_all.sh's two generic-lib entries collapse into one driver
+  entry.
+
+Gates: driver build green end-to-end (2 products, 34s serial);
+negative probe (mismatched src/out product) fails regen + accepts +
+bytetie with exit 1; lowbuild_all.sh fully green (26 builds);
+corpus grows two targets (build_products, the driver), FAIL set
+unchanged.
+
+Gotchas for the next slices: loader imports are FILE-RELATIVE — a
+products file outside the repo cannot import meta/build by relative
+path (hosts construct BuildProfile values programmatically instead;
+that is the intended path, not a bug). Products run serially inside
+one driver invocation — cross-product parallelism (order groups are
+independent) is a deliberate later refinement; lowbuild_all's outer
+concurrency absorbs the cost today.
+
+Next slices: x86 lib + ELF ladders into orders_bp/v_bp (slice 2),
+the bin ladder (slice 3) — each retiring its generic script the same
+way.
+
+## 12. Non-goals, stated once
 
 No config dialect — profiles are shard values. No distinguished
 trusted linker — ISA.md §4's ruling stands; linking is user-writable

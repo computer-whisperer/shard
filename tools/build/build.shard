@@ -1,0 +1,591 @@
+;;; tools/build — THE BUILD DRIVER (docs/BUILD.md §7, rung 1): realizes
+;;; the products a BuildProfile list declares, replacing the per-shape
+;;; generic build scripts. All build knowledge lives here; the world
+;;; stays in tools/build/build.sh, a dumb executor that runs RUN orders
+;;; and captures outputs — plumbing that only moves bytes.
+;;;
+;;; Two phases (no subprocess extern exists, by design):
+;;;
+;;;   build.shard plan   PRODUCTS CAPDIR EVAL CHECK...  -> RUN order lines
+;;;   build.shard verify PRODUCTS CAPDIR                -> judge captures
+;;;
+;;; plan: loads PRODUCTS' closure at runtime (meta/invoke), calls its
+;;; build_products fn across the meta-level boundary, decodes the
+;;; BuildProfile list (whole-or-nothing, loud on mismatch), and emits
+;;; one deterministic order list: `RUN <capture-file> <argv...>` per
+;;; gate leg. EVAL is the engine argv token; CHECK... (1..n tokens) is
+;;; the kernel-gate command the wrapper selected (stamp discipline is
+;;; the wrapper's world concern).
+;;;
+;;; verify: reads every capture (+ .rc exit-code file) back and judges
+;;; the six-gate ladder per product — byte-identical regen, schema,
+;;; kernel (artifact + source acceptance), accepts, byte-tie MOD=TIE +
+;;; manifest, engine — printing one OK line per green product and one
+;;; FAIL line per broken gate (exit 1 if any).
+;;;
+;;; v1 products: kind 'lib on target 'wasm — gate-for-gate the retired
+;;; examples/lowbuild_lib.sh. Unknown kind/target combinations refuse
+;;; loudly at plan time (grow the driver, don't guess).
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/loader.shard")
+(import "../../meta/invoke")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel loader *))
+(use (:: meta invoke *))
+
+;; ---------------------------------------------------------------------------
+;; text helpers ((List Int) bytes)
+;; ---------------------------------------------------------------------------
+
+(fn ceq ((a (List Int)) (b (List Int))) Bool
+  (measure (struct a))
+  (match a
+    (Nil
+      (match b
+        (Nil True)
+        (_ False)))
+    ((Cons x xs)
+     (match b
+       (Nil False)
+       ((Cons y ys) (if (int_eq x y) (ceq xs ys) False))))))
+
+(fn cat ((xs (List (List Int)))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil "")
+    ((Cons h t) (append_int h (cat t)))))
+
+;; does hay start with pre?
+(fn swith ((hay (List Int)) (pre (List Int))) Bool
+  (measure (struct pre))
+  (match pre
+    (Nil True)
+    ((Cons p ps)
+     (match hay
+       (Nil False)
+       ((Cons h hs) (if (int_eq h p) (swith hs ps) False))))))
+
+(fn contains ((hay (List Int)) (nee (List Int))) Bool
+  (measure (struct hay))
+  (if (swith hay nee) True
+  (match hay
+    (Nil False)
+    ((Cons _ t) (contains t nee)))))
+
+(fn rint ((xs (List Int)) (acc (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil acc)
+    ((Cons h t) (rint t (Cons h acc)))))
+
+(fn rll ((xs (List (List Int))) (acc (List (List Int)))) (List (List Int))
+  (measure (struct xs))
+  (match xs
+    (Nil acc)
+    ((Cons h t) (rll t (Cons h acc)))))
+
+;; split bytes on a separator byte; keeps empty segments
+(fn bsplit ((bs (List Int)) (sep Int) (cur (List Int)) (acc (List (List Int))))
+  (List (List Int))
+  (measure (struct bs))
+  (match bs
+    (Nil (rll (Cons (rint cur Nil) acc) Nil))
+    ((Cons b t)
+     (if (int_eq b sep) (bsplit t sep Nil (Cons (rint cur Nil) acc))
+     (bsplit t sep (Cons b cur) acc)))))
+
+(fn blines ((bs (List Int))) (List (List Int)) (bsplit bs 10 Nil Nil))
+
+;; whitespace-split into nonempty tokens
+(fn btoks ((ls (List (List Int)))) (List (List Int))
+  (measure (struct ls))
+  (match ls
+    (Nil Nil)
+    ((Cons h t)
+     (match h
+       (Nil (btoks t))
+       (_ (Cons h (btoks t)))))))
+
+(fn tokens ((bs (List Int))) (List (List Int)) (btoks (bsplit bs 32 Nil Nil)))
+
+;; last nonempty line ("" when none)
+(fn lastn_go ((ls (List (List Int))) (best (List Int))) (List Int)
+  (measure (struct ls))
+  (match ls
+    (Nil best)
+    ((Cons h t)
+     (match h
+       (Nil (lastn_go t best))
+       (_ (lastn_go t h))))))
+
+(fn lastn ((bs (List Int))) (List Int) (lastn_go (blines bs) ""))
+
+;; parse leading decimal digits (ignores everything after); None if none
+(fn atoi_go ((bs (List Int)) (acc Int) (seen Bool)) (Option Int)
+  (measure (struct bs))
+  (match bs
+    (Nil (if seen (Some acc) None))
+    ((Cons b t)
+     (if (le 48 b)
+       (if (le b 57) (atoi_go t (+ (* acc 10) (- b 48)) True)
+       (if seen (Some acc)
+       None))
+     (if seen (Some acc)
+     None)))))
+
+(fn atoi ((bs (List Int))) (Option Int) (atoi_go bs 0 False))
+
+;; ---------------------------------------------------------------------------
+;; product decode — BuildProfile values (Expr) -> native, whole-or-nothing
+;; ---------------------------------------------------------------------------
+
+(type BP (BP Symbol Symbol (List Int) (List Int)))
+
+(fn dc_ctor ((name Symbol) (e Expr)) (Option (List Expr))
+  (match e
+    ((Ctor q args) (if (sym_eq (qn_name q) name) (Some args) None))
+    (_ None)))
+
+(fn expr_sym ((e Expr)) (Option Symbol)
+  (match e
+    ((SymLit s) (Some s))
+    (_ None)))
+
+(fn dc_bp ((e Expr)) (Option BP)
+  (match (dc_ctor (quote MkBuildProfile) e)
+    ((Some (Cons ke (Cons te (Cons se (Cons oe Nil)))))
+     (match (expr_sym ke)
+       ((Some k)
+        (match (expr_sym te)
+          ((Some t)
+           (match (expr_ints se)
+             ((Some s)
+              (match (expr_ints oe)
+                ((Some o) (Some (BP k t s o)))
+                (_ None)))
+             (_ None)))
+          (_ None)))
+       (_ None)))
+    (_ None)))
+
+(fn dc_bps ((es (List Expr))) (Option (List BP))
+  (measure (struct es))
+  (match es
+    (Nil (Some Nil))
+    ((Cons h t)
+     (match (dc_bp h)
+       (None None)
+       ((Some b)
+        (match (dc_bps t)
+          (None None)
+          ((Some bs) (Some (Cons b bs)))))))))
+
+(fn load_products ((p (List Int)) (w World)) (Pair (Option (List BP)) World)
+  (match (load_run_module p w)
+    ((Pair None w1) (Pair None w1))
+    ((Pair (Some m) w1)
+     (match (invoke m (quote build_products) Nil)
+       (None (Pair None w1))
+       ((Some pv)
+        (match (expr_list pv)
+          (None (Pair None w1))
+          ((Some es) (Pair (dc_bps es) w1))))))))
+
+;; ---------------------------------------------------------------------------
+;; plan — emit RUN orders
+;; ---------------------------------------------------------------------------
+
+;; capture-file path: CAPDIR/<i>.<tag>
+(fn capf ((cap (List Int)) (i Int) (tag (List Int))) (List Int)
+  (cat (list cap "/" (show_int i) "." tag)))
+
+(fn spaced ((xs (List (List Int)))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil "")
+    ((Cons h t) (cat (list " " h (spaced t))))))
+
+(fn run_line ((capfile (List Int)) (argv (List (List Int)))) (List Int)
+  (cat (list "RUN " capfile (spaced argv) "\n")))
+
+;; the wasm lib ladder — gate-for-gate examples/lowbuild_lib.sh
+(fn orders_lib_wasm
+  ((i Int)
+   (src (List Int))
+   (out (List Int))
+   (cap (List Int))
+   (ev (List Int))
+   (check (List (List Int))))
+  (List Int)
+  (cat
+    (list
+      (run_line
+        (capf cap i "gen.log")
+        (list ev "run" "tools/wasmgen/wasmgen.shard" src (capf cap i "raw")))
+      (run_line
+        (capf cap i "fmt")
+        (list ev "run" "tools/shardfmt/shardfmt.shard" (capf cap i "raw")))
+      (run_line
+        (capf cap i "schema.log")
+        (list ev "run" "tools/lowcheck/lowcheck.shard" out))
+      (run_line (capf cap i "kout.log") (append check (Cons out Nil)))
+      (run_line (capf cap i "ksrc.log") (append check (Cons src Nil)))
+      (run_line
+        (capf cap i "acc.log")
+        (list ev "run" "tools/lowcheck/accepts.shard" src out))
+      (run_line
+        (capf cap i "plan.txt")
+        (list ev "run" "tools/lowbuild/lowbuild.shard" "lib" src out))
+      (run_line
+        (capf cap i "tie.txt")
+        (list ev "run" "tools/bytetie/bytetie.shard" out))
+      (run_line
+        (capf cap i "man.log")
+        (list
+          ev
+          "run"
+          "tools/lowcheck/manifest.shard"
+          (capf cap i "plan.txt")
+          "models/wasm/wasm.shard"
+          out))
+      (run_line
+        (capf cap i "eng.log")
+        (list "node" "examples/wasm_diff.mjs" (capf cap i "plan.txt"))))))
+
+(fn append ((xs (List (List Int))) (ys (List (List Int)))) (List (List Int))
+  (measure (struct xs))
+  (match xs
+    (Nil ys)
+    ((Cons h t) (Cons h (append t ys)))))
+
+;; None = unsupported kind/target (refuse loudly at the caller)
+(fn orders_bp
+  ((i Int) (b BP) (cap (List Int)) (ev (List Int)) (check (List (List Int))))
+  (Option (List Int))
+  (match b
+    ((BP k t src out)
+     (if (sym_eq k (quote lib))
+       (if (sym_eq t (quote wasm))
+         (Some (orders_lib_wasm i src out cap ev check))
+         None)
+       None))))
+
+(fn orders_all
+  ((i Int)
+   (bs (List BP))
+   (cap (List Int))
+   (ev (List Int))
+   (check (List (List Int))))
+  (Option (List Int))
+  (measure (struct bs))
+  (match bs
+    (Nil (Some ""))
+    ((Cons b t)
+     (match (orders_bp i b cap ev check)
+       (None None)
+       ((Some os)
+        (match (orders_all (+ i 1) t cap ev check)
+          (None None)
+          ((Some rest) (Some (append_int os rest)))))))))
+
+;; ---------------------------------------------------------------------------
+;; verify — read captures back, judge the ladder
+;; ---------------------------------------------------------------------------
+
+;; capture bytes ("" when unreadable — rc judgment carries the failure)
+(fn slurp ((p (List Int)) (w World)) (Pair (List Int) World)
+  (match (read_file p w)
+    ((Pair None w1) (Pair "" w1))
+    ((Pair (Some bs) w1) (Pair bs w1))))
+
+;; exit code of a capture (98 = missing/unparseable rc file)
+(fn rc_of ((cap (List Int)) (i Int) (tag (List Int)) (w World)) (Pair Int World)
+  (match (read_file (append_int (capf cap i tag) ".rc") w)
+    ((Pair None w1) (Pair 98 w1))
+    ((Pair (Some bs) w1)
+     (match (atoi bs)
+       (None (Pair 98 w1))
+       ((Some n) (Pair n w1))))))
+
+(fn vfail ((i Int) (gate (List Int)) (why (List Int))) (List Int)
+  (cat (list "FAIL product " (show_int i) " gate " gate ": " why "\n")))
+
+;; rc==0 gate: Nil (green) or one failure message
+(fn rc_gate
+  ((cap (List Int)) (i Int) (tag (List Int)) (gate (List Int)) (w World))
+  (Pair (List (List Int)) World)
+  (match (rc_of cap i tag w)
+    ((Pair rc w1)
+     (if (int_eq rc 0) (Pair Nil w1)
+     (Pair
+       (Cons
+         (vfail i gate (cat (list "nonzero exit (see " (capf cap i tag) ")")))
+         Nil)
+       w1)))))
+
+;; gate 1: regen — generated+formatted bytes == shipped OUT bytes
+(fn g_regen ((cap (List Int)) (i Int) (out (List Int)) (w World))
+  (Pair (List (List Int)) World)
+  (match (rc_gate cap i "gen.log" "regen(gen)" w)
+    ((Pair m1 w1)
+     (match (rc_gate cap i "fmt" "regen(fmt)" w1)
+       ((Pair m2 w2)
+        (match m1
+          ((Cons _ _) (Pair m1 w2))
+          (Nil
+            (match m2
+              ((Cons _ _) (Pair m2 w2))
+              (Nil
+                (match (slurp (capf cap i "fmt") w2)
+                  ((Pair genb w3)
+                   (match (slurp out w3)
+                     ((Pair outb w4)
+                      (if (ceq genb outb) (Pair Nil w4)
+                      (Pair
+                        (Cons
+                          (vfail
+                            i
+                            "regen"
+                            "generated output is not byte-identical to OUT")
+                          Nil)
+                        w4)))))))))))))))
+
+;; kernel-gate log judgment: rc 0 + " 0 failed" tail (+ optional LIB line)
+(fn g_klog
+  ((cap (List Int))
+   (i Int)
+   (tag (List Int))
+   (gate (List Int))
+   (want_lib Bool)
+   (w World))
+  (Pair (List (List Int)) World)
+  (match (rc_gate cap i tag gate w)
+    ((Pair m1 w1)
+     (match m1
+       ((Cons _ _) (Pair m1 w1))
+       (Nil
+         (match (slurp (capf cap i tag) w1)
+           ((Pair logb w2)
+            (if (contains (lastn logb) " 0 failed")
+              (if want_lib
+                (if (has_lib_line (blines logb)) (Pair Nil w2)
+                (Pair (Cons (vfail i gate "no LIB acceptance line") Nil) w2))
+                (Pair Nil w2))
+              (Pair
+                (Cons
+                  (vfail
+                    i
+                    gate
+                    (cat (list "check did not pass (see " (capf cap i tag) ")")))
+                  Nil)
+                w2)))))))))
+
+(fn has_lib_line ((ls (List (List Int)))) Bool
+  (measure (struct ls))
+  (match ls
+    (Nil False)
+    ((Cons h t) (if (swith h "LIB ") True (has_lib_line t)))))
+
+;; first "MOD <name> <hex>" line -> Some (Pair name hex)
+(fn find_mod ((ls (List (List Int)))) (Option (Pair (List Int) (List Int)))
+  (measure (struct ls))
+  (match ls
+    (Nil None)
+    ((Cons h t)
+     (if (swith h "MOD ")
+       (match (tokens h)
+         ((Cons _ (Cons nm (Cons hex _))) (Some (Pair nm hex)))
+         (_ None))
+       (find_mod t)))))
+
+;; "TIE <name> <hex>" for this name -> Some hex
+(fn find_tie ((ls (List (List Int))) (nm (List Int))) (Option (List Int))
+  (measure (struct ls))
+  (match ls
+    (Nil None)
+    ((Cons h t)
+     (if (swith h "TIE ")
+       (match (tokens h)
+         ((Cons _ (Cons n (Cons hex _)))
+          (if (ceq n nm) (Some hex) (find_tie t nm)))
+         (_ (find_tie t nm)))
+       (find_tie t nm)))))
+
+;; gate 5: plan/tie/manifest rc + the MOD=TIE byte equality
+(fn g_tie ((cap (List Int)) (i Int) (w World)) (Pair (List (List Int)) World)
+  (match (rc_gate cap i "plan.txt" "bytetie(plan)" w)
+    ((Pair m1 w1)
+     (match m1
+       ((Cons _ _) (Pair m1 w1))
+       (Nil
+         (match (rc_gate cap i "tie.txt" "bytetie(tie)" w1)
+           ((Pair m2 w2)
+            (match m2
+              ((Cons _ _) (Pair m2 w2))
+              (Nil
+                (match (rc_gate cap i "man.log" "manifest" w2)
+                  ((Pair m3 w3)
+                   (match m3
+                     ((Cons _ _) (Pair m3 w3))
+                     (Nil
+                       (match (slurp (capf cap i "plan.txt") w3)
+                         ((Pair planb w4)
+                          (match (slurp (capf cap i "tie.txt") w4)
+                            ((Pair tieb w5)
+                             (match (find_mod (blines planb))
+                               (None
+                                 (Pair
+                                   (Cons
+                                     (vfail i "bytetie" "plan has no MOD line")
+                                     Nil)
+                                   w5))
+                               ((Some (Pair nm mhex))
+                                (match (find_tie (blines tieb) nm)
+                                  (None
+                                    (Pair
+                                      (Cons
+                                        (vfail
+                                          i
+                                          "bytetie"
+                                          "no TIE line for the plan's module")
+                                        Nil)
+                                      w5))
+                                  ((Some thex)
+                                   (if (ceq mhex thex) (Pair Nil w5)
+                                   (Pair
+                                     (Cons
+                                       (vfail
+                                         i
+                                         "bytetie"
+                                         "TIE bytes differ from plan MOD bytes")
+                                       Nil)
+                                     w5)))))))))))))))))))))))
+
+(fn cat2 ((a (List (List Int))) (b (List (List Int)))) (List (List Int))
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (cat2 t b)))))
+
+;; all six gates for one wasm lib product
+(fn v_lib_wasm
+  ((cap (List Int)) (i Int) (src (List Int)) (out (List Int)) (w World))
+  (Pair (List (List Int)) World)
+  (match (g_regen cap i out w)
+    ((Pair g1 w1)
+     (match (rc_gate cap i "schema.log" "schema" w1)
+       ((Pair g2 w2)
+        (match (g_klog cap i "kout.log" "kernel(out)" False w2)
+          ((Pair g3a w3)
+           (match (g_klog cap i "ksrc.log" "kernel(src)" True w3)
+             ((Pair g3b w4)
+              (match (rc_gate cap i "acc.log" "accepts" w4)
+                ((Pair g4 w5)
+                 (match (g_tie cap i w5)
+                   ((Pair g5 w6)
+                    (match (rc_gate cap i "eng.log" "engine" w6)
+                      ((Pair g6 w7)
+                       (Pair
+                         (cat2
+                           g1
+                           (cat2
+                             g2
+                             (cat2 g3a (cat2 g3b (cat2 g4 (cat2 g5 g6))))))
+                         w7))))))))))))))))
+
+(fn v_bp ((cap (List Int)) (i Int) (b BP) (w World))
+  (Pair (List (List Int)) World)
+  (match b
+    ((BP k t src out)
+     (if (sym_eq k (quote lib))
+       (if (sym_eq t (quote wasm)) (v_lib_wasm cap i src out w)
+       (Pair (Cons (vfail i "plan" "unsupported target") Nil) w))
+       (Pair (Cons (vfail i "plan" "unsupported kind") Nil) w)))))
+
+(fn v_all ((cap (List Int)) (i Int) (bs (List BP)) (w World))
+  (Pair (List (List Int)) World)
+  (measure (struct bs))
+  (match bs
+    (Nil (Pair Nil w))
+    ((Cons b t)
+     (match (v_bp cap i b w)
+       ((Pair ms w1)
+        (match (v_all cap (+ i 1) t w1)
+          ((Pair rest w2) (Pair (cat2 ms rest) w2))))))))
+
+(fn bp_count ((bs (List BP))) Int
+  (measure (struct bs))
+  (match bs
+    (Nil 0)
+    ((Cons _ t) (+ 1 (bp_count t)))))
+
+(fn wmsgs ((ms (List (List Int))) (w World)) World
+  (measure (struct ms))
+  (match ms
+    (Nil w)
+    ((Cons h t) (wmsgs t (write h w)))))
+
+;; ---------------------------------------------------------------------------
+;; the driver
+;; ---------------------------------------------------------------------------
+
+(fn fail ((msg (List Int)) (w World)) World
+  (exit 1 (write (cat (list "build: " msg "\n")) w)))
+
+(fn run_plan
+  ((prods (List Int))
+   (cap (List Int))
+   (ev (List Int))
+   (check (List (List Int)))
+   (w World))
+  World
+  (match (load_products prods w)
+    ((Pair None w1)
+     (fail "could not load/decode the products file (build_products)" w1))
+    ((Pair (Some bs) w1)
+     (match (orders_all 0 bs cap ev check)
+       (None (fail "unsupported kind/target in products (v1: lib wasm)" w1))
+       ((Some os) (exit 0 (write os w1)))))))
+
+(fn run_verify ((prods (List Int)) (cap (List Int)) (w World)) World
+  (match (load_products prods w)
+    ((Pair None w1)
+     (fail "could not load/decode the products file (build_products)" w1))
+    ((Pair (Some bs) w1)
+     (match (v_all cap 0 bs w1)
+       ((Pair ms w2)
+        (match ms
+          (Nil
+            (exit
+              0
+              (write
+                (cat
+                  (list
+                    "build: "
+                    (show_int (bp_count bs))
+                    " product(s), all gates green\n"))
+                w2)))
+          (_ (exit 1 (wmsgs ms w2)))))))))
+
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Pair args w1)
+     (match args
+       ((Cons mode (Cons prods (Cons cap rest)))
+        (if (ceq mode "plan")
+          (match rest
+            ((Cons ev check) (run_plan prods cap ev check w1))
+            (_ (fail "plan needs: PRODUCTS CAPDIR EVAL CHECK..." w1)))
+        (if (ceq mode "verify")
+          (match rest
+            (Nil (run_verify prods cap w1))
+            (_ (fail "verify needs: PRODUCTS CAPDIR" w1)))
+          (fail "unknown mode (plan | verify)" w1))))
+       (_
+         (fail
+           "usage: build plan PRODUCTS CAPDIR EVAL CHECK... | build verify PRODUCTS CAPDIR"
+           w1))))))
