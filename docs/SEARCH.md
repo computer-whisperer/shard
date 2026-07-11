@@ -629,3 +629,49 @@ variant mechanism in meta/sketch; deferred until the residue matters
 at a deeper rung. D10/D11 unchanged. Behavior digests (D8 sha256)
 enter with the sampling instruments, not the exact rungs — full
 output vectors are the bucket keys here (exact, no collision caveat).
+
+
+### Recorded 2026-07-11 — future arc: MODEL-FRAGMENT SEARCH (noted, not scoped)
+
+Raised during slice-3 review: search *within a given ISA model* —
+refine an existing high-level shard program into (e.g.) the wasm
+model's instruction vocabulary, and a proven compiler falls out.
+Feasibility was assessed against this arc's architecture. Nothing
+here scopes that arc, but two of its design consequences bind THIS
+arc's remaining slices, so they are pinned now:
+
+- **S4a PIN — neutrals stay task-agnostic.** Canonical neutrals are
+  keyed off the type table and qnames (as S4a already states);
+  nothing in the symbolic evaluator may hardcode the rev/list
+  vocabulary. Model-state neutrals (stack/locals/memory over symbolic
+  words) must arrive as a rule-set instance, never a rewrite of the
+  machine.
+- **S5/D4 PIN — rule sets are DATA.** The oracle's rewrite table is a
+  passed-in parameter (proven, typed equations per D4), not a
+  baked-in list; "the append four + lia" is the first VALUE of that
+  parameter. A model's defining-equation lemmas plus the word/memory
+  laws are then a rule-set choice, not a code change.
+
+The rest of the assessment, recorded for the future ledger. The
+candidate space is nearly free: models are ordinary shard libraries
+(ISA ruling), candidates are DATA — no injection, pass them to the
+model's stepper — and the ground battery is the lowering statement
+instanced at test points, spec(x) = DEC(model_run(c, ENC(x))), the
+LOWERING §6ah ENC/DEC form. The oracle is S5 retargeted, not
+redesigned. Granularity resolves to FRAGMENTS, not whole programs:
+the source program's structure induces the sketch (one hole per
+source form), search mines LOWERING.md-shaped fragments, and the
+existing composition machinery (portable certs, the pw walk, the
+five gates) assembles programs without caring who authored a
+fragment. A cheaper tier sits above raw instruction search:
+whitelist = the proven fragment COMBINATORS themselves, so search is
+applicability search and the proof is assembled from certs; raw
+instruction search fires only where no combinator path exists —
+exactly where new fragments are worth mining. Trust posture
+unchanged (S6/G4 verbatim). The whitelist question has a structural
+answer already: a meta/sketch Grammar has NO ambient scope — every
+alternative lists its heads explicitly; grammar builders ARE the
+whitelist mechanism. One S7-full item is named by this note: the
+SIGNATURE-DRIVEN GRAMMAR BUILDER — scope spec (qnames with types,
+ctor whitelist, root type) → stratified typed grammar; cat_g is its
+prototype with the ilist typing hardcoded.
