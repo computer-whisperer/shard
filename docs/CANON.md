@@ -794,6 +794,39 @@ moved in:
   census 115 terms, 84 flagged→fixed, incl. the full-cascade term
   and the constant/identity near-misses.
 
-Next slices, in dependency order: stage-2 enforcement — std/
-canonicalized + the corpus sweep pin (slice 4); the §7 hash spec +
-compute tool (slice 5, after the form stabilizes).
+**Slice 4 (2026-07-10): STAGE 2 — the std/ tree canonical, pinned.**
+The ratchet's second notch. Three parts:
+
+- **The join views complete friction #6's family** (kernel/types.shard):
+  tc_nat_lit_view now fires at the IF-branch join and the MATCH-arm
+  join — the latter via a two-pass tc_arms (elaborate all arms, join
+  non-literal arms first, then literal arms unify-or-view), because
+  rty is a fresh meta and C4's canonical order puts literal arms
+  FIRST: a one-pass join would pin the meta to Int at `(Nil 0)` and
+  refuse the `(S …)` arm that follows, exactly backwards. Covered
+  positions now: arguments, returns, if branches, match arms —
+  `(match xs (Nil 0) ((Cons _ t) (S …)))` types in either arm order
+  (natview_pin2 pins all four join cases; Int VARIABLES still never
+  coerce). The tool's C6 fold widened to the join positions; only
+  LET positions remain advisory (a binder's type is inferred from
+  its RHS, and a let body is opaque to the view).
+- **The last organic residue fell to the tool**: the full-tree scan
+  found three violations outside the corpus targets — two `Z`-in-arm
+  sites in the mod.build plans (untypeable as `0` until the join view
+  landed) and one C8 rebuild in std/str/str.wasm.shard. Each fixed by
+  a one-line tools/canon rewrite; **str.wasm.shard is cert-bearing
+  and its 51 claims recheck green — the §9 PROOF-NEUTRALITY PROBE,
+  passed on a real lowering-cert module.**
+- **The stage-2 pin** (run_corpus canon gate): every std source —
+  impl files, wasm/x86/rep siblings, mod.build plans, mod.req
+  interfaces (.auto sidecars and derived .low files excluded) — must
+  produce ZERO CANON advisory lines. Measured at zero across all 26
+  files; regressions fail the corpus.
+
+Census: 117 terms, 86 flagged→fixed (join-position towers added).
+Enforcement stages 1–2 are now both LANDED; the v1 ratchet's stated
+scope is complete.
+
+Remaining slice: the §7 hash spec + compute tool (slice 5) — §11.5's
+ruling is now unblocked (C1–C10 stable); the spec proposal goes to
+review before any code assumes it.

@@ -520,6 +520,20 @@ if [ -x bin/shard_eval ]; then
     echo "FAIL canon_census"
     cat "$TMP/census.out"
   fi
+  # STAGE-2 PIN (CANON.md §3 ratchet / slice 4): the std/ tree is CANONICAL —
+  # every std source (impl files, wasm/x86/rep siblings, mod.build plans,
+  # mod.req interfaces; .auto proof sidecars and derived .low files excluded)
+  # produces ZERO CANON advisory lines. New std code that regresses the
+  # canonical form fails the corpus here.
+  std_canon=$(ls std/*/*.shard | grep -v '\.auto\.shard$\|\.low\.shard$' | while read -r f; do
+    "${CHECK_CMD[@]}" "$f" 2>/dev/null | grep '^CANON ' | sed "s|^|$f |"
+  done)
+  if [ -z "$std_canon" ]; then
+    echo "CANON STD STAGE-2 OK (tree at zero)"
+  else
+    echo "FAIL canon_std_stage2 (non-canonical std source):"
+    echo "$std_canon"
+  fi
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi

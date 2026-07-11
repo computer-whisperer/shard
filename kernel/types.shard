@@ -533,7 +533,13 @@
                 ((TcErr msg) (TcErr msg))
                 ((TcOk tc4 et)
                  (match (tc_unify tt et tc4)
-                   (None (TcErr (tc_mismatch "if branches" tt et tc4)))
+                   (None
+                     ;; the Nat-literal view at the BRANCH JOIN (the same
+                     ;; view arguments and returns get): a nonneg literal
+                     ;; branch joins at Nat when its sibling is Nat
+                     (if (tc_nat_lit_view t et tc4) (TcOk tc4 et)
+                     (if (tc_nat_lit_view e2 tt tc4) (TcOk tc4 tt)
+                     (TcErr (tc_mismatch "if branches" tt et tc4)))))
                    ((Some tc5) (TcOk tc5 tt))))))))))))
     ((Match s arms)
      (match (tc_infer m tc fenv env s)
@@ -630,8 +636,12 @@
        ((TcErr msg) (TBErr msg))
        ((TcOk tc1 t) (tc_infer_rhss m tc1 fenv env rest (Cons t acc)))))))
 
-;; one match arm: elaborate the pattern against the scrutinee type (producing
-;; the new bindings), then the body under them; all arm bodies unify with rty.
+;; match arms: elaborate every pattern + body first, then JOIN in two
+;; passes — non-literal arms pin the join type, then literal arms unify or
+;; take the Nat-literal view against it. Two passes because rty is a fresh
+;; meta and C4's canonical order puts literal arms FIRST: a one-pass join
+;; would bind the meta to Int at `(Nil 0)` and refuse the `(S …)` arm that
+;; follows, exactly backwards.
 (fn tc_arms
   ((m Module)
    (tc Tc)
@@ -641,19 +651,69 @@
    (arms (List Arm))
    (rty Type))
   TcsRes
+  (match (tc_arms_infer m tc fenv env st arms Nil)
+    ((TBErr msg) (TcsErr msg))
+    ((TBOk tc1 bts_rev)
+     (let ((bts (tc_rev_tys bts_rev Nil)))
+       (match (tc_arms_join arms bts rty False tc1)
+         ((TcsErr msg) (TcsErr msg))
+         ((TcsOk tc2) (tc_arms_join arms bts rty True tc2)))))))
+
+;; pass 1: per arm, the pattern against the scrutinee type, then the body
+;; under the new bindings; body types collected (reversed — prepend order)
+(fn tc_arms_infer
+  ((m Module)
+   (tc Tc)
+   (fenv (List Param))
+   (env (List Type))
+   (st Type)
+   (arms (List Arm))
+   (acc (List Type)))
+  TcBinds
+  (measure (struct arms))
+  (match arms
+    (Nil (TBOk tc acc))
+    ((Cons (Arm p body) rest)
+     (match (tc_pat m tc st p Nil)
+       ((TBErr msg) (TBErr msg))
+       ((TBOk tc1 binds)
+        (match (tc_infer m tc1 fenv (tc_app_tys binds env) body)
+          ((TcErr msg) (TBErr msg))
+          ((TcOk tc2 bt) (tc_arms_infer m tc2 fenv env st rest (Cons bt acc)))))))))
+
+;; a body the join defers: the packed ground-Nat normal form
+(fn tc_arm_is_natlit ((body Expr)) Bool
+  (match body
+    ((IntLit n) (le 0 n))
+    (_ False)))
+
+;; pass 2/3: walk arms + collected types in lockstep. lit_pass False =
+;; non-literal arms unify against rty; lit_pass True = literal arms unify
+;; or take the view (rty is pinned by then).
+(fn tc_arms_join
+  ((arms (List Arm)) (bts (List Type)) (rty Type) (lit_pass Bool) (tc Tc))
+  TcsRes
   (measure (struct arms))
   (match arms
     (Nil (TcsOk tc))
-    ((Cons (Arm p body) rest)
-     (match (tc_pat m tc st p Nil)
-       ((TBErr msg) (TcsErr msg))
-       ((TBOk tc1 binds)
-        (match (tc_infer m tc1 fenv (tc_app_tys binds env) body)
-          ((TcErr msg) (TcsErr msg))
-          ((TcOk tc2 bt)
-           (match (tc_unify bt rty tc2)
-             (None (TcsErr (tc_mismatch "match arms" bt rty tc2)))
-             ((Some tc3) (tc_arms m tc3 fenv env st rest rty))))))))))
+    ((Cons (Arm _ body) rest)
+     (match bts
+       (Nil (TcsOk tc))
+       ((Cons bt btr)
+        (if (tc_join_skip (tc_arm_is_natlit body) lit_pass)
+          (tc_arms_join rest btr rty lit_pass tc)
+          (match (tc_unify bt rty tc)
+            ((Some tc2) (tc_arms_join rest btr rty lit_pass tc2))
+            (None
+              (if lit_pass
+                (if (tc_nat_lit_view body rty tc)
+                  (tc_arms_join rest btr rty lit_pass tc)
+                  (TcsErr (tc_mismatch "match arms" bt rty tc)))
+                (TcsErr (tc_mismatch "match arms" bt rty tc)))))))))))
+
+;; this arm belongs to the OTHER pass
+(fn tc_join_skip ((is_lit Bool) (lit_pass Bool)) Bool
+  (if is_lit (if lit_pass False True) (if lit_pass True False)))
 
 ;; pattern elaboration. Bindings are PREPENDED as encountered left-to-right,
 ;; mirroring the evaluator's match_pat — the result is innermost-first
