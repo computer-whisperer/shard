@@ -241,7 +241,9 @@ TARGETS=(
   std/sha256/sha256.shard
   examples/sketch_pin.shard
   tools/search/rev_obj.shard
+  tools/search/rev.shard
   tools/search/search.shard
+  tools/search/census.shard
 )
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -339,6 +341,21 @@ fi
 echo "=== search: ground rev pin ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/search.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# Canonicality census pin (docs/SEARCH.md S9, G1+G2): the dialect rev
+# grammar's candidate set must equal the cn_e-clean subset of the full
+# grammar EXACTLY, censused term-by-term through rank/unrank round-trips
+# (FULL 108 DIALECT 56 CLEAN 56 at d1; 7788/1736/1736 at d2; the 13 full
+# solutions collapse to exactly 1 dialect solution). This is the
+# three-speakers drift alarm: a kernel C-rule change or a generator edit
+# moves these lines and fails the diff — re-pin deliberately, with the
+# change.
+echo "=== search: canonicality census (G1+G2) ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/census.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi

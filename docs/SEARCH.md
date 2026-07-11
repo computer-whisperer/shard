@@ -480,3 +480,78 @@ corpus FAIL-set diff clean against fails-base.txt.
   is exactly the S6-adjacent renderer meta/spell's canonical-expr
   subset does not cover; it should land once, with proof rendering,
   not as a one-off printer here.
+
+
+### Slice 2 — dialect grammar + the G1/G2 census (LANDED 2026-07-11)
+
+**What landed.**
+
+- **The constraint set, fixed empirically.** Before any builder was
+  written, a cn_e probe judged nine hand-picked candidates through the
+  REAL recognizer (kernel/canon, consumed read-only). Every prediction
+  confirmed, and one divergence from the playground surfaced: the real
+  ledger is STRICTER than the playground's canon flag — C8 'respell
+  bans the scrutinee var in a binder-less arm, so the dialect base
+  hole is {acc, Nil} (the playground's canon grammar kept xs; its
+  separate "dialect" flag is already IN the kernel ledger). The full
+  set on this fragment: C8 'respell (base), C8 'rebuild — the exact
+  Cons(h, t) point excluded at EVERY position, C7 nil_left / cons /
+  assoc (append left = atoms only), C7 nil_right (append right ≠ Nil
+  leaf).
+- **meta/sketch grew sk_rank** (D9 resolved by its first consumer, the
+  census): template-vs-candidate matching with holes as binders
+  (sharing = expr_eq consistency), a forward match fold + a reverse
+  digit-composition fold mirroring unrank's decide/close, exact bignum
+  composition. Six new pin claims (20 total): round-trips at interval
+  edges, rank under root sharing, non-member and share-break refusals.
+- **THE RANK ORDERING DISCIPLINE** (found as a latent trap before it
+  fired): sk_rank is first-structural-match with NO backtracking into
+  later alternatives, so a point-exclusion split must list its
+  CONCRETE-headed alternative (Cons(h, B')) BEFORE the hole-headed one
+  (Cons(A', B)) — a hole binds anything structurally, and the general
+  alternative would capture Cons(h, X) candidates and fail deeper.
+  Documented in the module header; a backtracking rank stays unbuilt
+  until a grammar needs it.
+- **The dialect rev grammar** (tools/search/rev.shard): leaf-list
+  kinds (full / minus-h / minus-t / minus-Nil) + the split Cons pair +
+  atoms-only append-left, every variant differing from full by exactly
+  one leaf. Predicted counts D(d) = 4 + (D(d-1)²−1) + 3·(D(d-1)−1):
+  56 at d1, 1,736 at d2 — both confirmed exactly by the census.
+- **tools/search/census.shard — the G1/G2 gate.** Pass A sweeps the
+  dialect space: rank∘unrank = id per candidate (injectivity), cn_e =
+  Nil (G1), rank-into-full + unrank-back (dialect ⊆ full), battery
+  (solution census). Pass B sweeps the full space: every cn_e-clean
+  candidate must rank into the dialect and unrank back expr_eq
+  (clean ⊆ dialect). Counts printed and pinned. **Measured: FULL 108
+  DIALECT 56 CLEAN 56 (d1, 0.7s); FULL 7788 DIALECT 1736 CLEAN 1736
+  (d2, 12.8s); G1 OK, G2 OK, SOLUTIONS dialect 1 at both depths** —
+  the 13 full d2 solutions collapse to exactly the textbook. Quotient
+  exactness against the real ledger, censused term-by-term.
+
+**Gates.** G1 + G2 censused at d1–d2 inside the corpus (the
+three-speakers drift alarm: a kernel C-rule change moves the pinned
+FULL/DIALECT/CLEAN lines); 20 sketch_pin claims kernel-replayed; five
+corpus targets; corpus FAIL-set diff clean. G1's second half (the
+tools/canon REWRITER fixpoint) needs source rendering and lands with
+D11 — recorded as pending, not skipped silently.
+
+**Gotchas recorded.**
+
+- **The canon advisory judges the ROOT file's fns only.** Checked
+  through a pin file, a meta module's own advisories are silent —
+  check meta modules DIRECTLY during development or C-violations hide
+  until someone roots them.
+- The C4 house consequence: result types declare their Err ctor FIRST
+  so guard-style Err-first matching is declaration order; Option
+  matches go None-first; Expr walkers put Ctor before Call (kernel
+  declaration order).
+- Deep match towers hand-balanced: count frames, or lean on the
+  reader's per-form missing-paren report (it names the fn and the
+  deficit).
+
+**Playground comparison, recorded once:** playground canon-flag rev =
+87 / 2,787 (d1/d2); the real kernel dialect = 56 / 1,736 — the delta
+is exactly the contextual C8 tier the playground priced as separate
+"dialect" rules and CANON.md later ratified into the ledger. The
+census flywheel's first in-repo turn agrees with §1's premise: the
+real dialect is measurably tighter than the approximation.

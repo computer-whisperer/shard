@@ -1,0 +1,271 @@
+;;; tools/search/rev.shard — the rev accumulator TASK, as data (docs/
+;;; SEARCH.md S8 direction): the two-hole skeleton, the full grammar
+;;; (the playground's measurement-record vocabulary), the I/O battery,
+;;; and the shared candidate plumbing (inject a filled body as a FnDef,
+;;; run the battery through meta/invoke). Consumed by search.shard (the
+;;; CLI / ground engine) and census.shard (the G1/G2 canonicality
+;;; census).
+;;;
+;;; Grammar shape (extracted from the playground source, read as data):
+;;; base hole leaf-only {acc, Nil, xs} at every depth; step hole leaves
+;;; {acc, h, t, Nil} plus Cons/append over fresh depth-(d-1) sub-holes.
+;;; Space 3*S(d), S(0)=4, S(d)=4+2*S(d-1)^2 -> 108 at d1, 7788 at d2.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../meta/sketch")
+(import "../../meta/invoke")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: meta sketch *))
+(use (:: meta invoke *))
+
+;; ---- shared candidate plumbing -------------------------------------------------
+
+;; the object-level (List Int) type, for injected candidate signatures
+(fn ty_ilist () Type
+  (TCon (qn (quote List)) (Cons (TCon (qn (quote Int)) Nil) Nil)))
+
+(fn fns_snoc ((fns (List FnDef)) (fd FnDef)) (List FnDef)
+  (measure (struct fns))
+  (match fns
+    (Nil (Cons fd Nil))
+    ((Cons h t) (Cons h (fns_snoc t fd)))))
+
+;; append a candidate FnDef to a loaded Module's fn list. evm_call_pure
+;; rebuilds its dispatch tables from the fn LIST, so the stale FnTrie
+;; field is never consulted on the invocation path.
+(fn inject ((m Module) (fd FnDef)) Module
+  (match m
+    ((Module tds fns exts ft items)
+     (Module tds (fns_snoc fns fd) exts ft items))))
+
+(fn int_list_eq ((a (List Int)) (b (List Int))) Bool
+  (measure (struct a))
+  (match a
+    (Nil
+      (match b
+        (Nil True)
+        (_ False)))
+    ((Cons x xs)
+     (match b
+       (Nil False)
+       ((Cons y ys) (if (int_eq x y) (int_list_eq xs ys) False))))))
+
+;; a filled body as the injectable candidate FnDef
+(fn cand_fd ((body Expr)) FnDef
+  (FnDef (cand_q) (Cons (ty_ilist) (Cons (ty_ilist) Nil)) (ty_ilist) body))
+
+;; the battery, early exit across tests. A None invocation (effectful
+;; refusal — impossible here) and a non-decoding value (stuck or
+;; type-wrong candidate) both fail the test, counted honestly.
+(fn run_tests ((m2 Module) (fd FnDef) (ts (List (Pair (List Int) (List Int)))))
+  Bool
+  (measure (struct ts))
+  (match ts
+    (Nil True)
+    ((Cons (Pair inp expect) rest)
+     (match
+       (invoke_fd
+         m2
+         fd
+         (Cons (intlist_to_expr inp) (Cons (intlist_to_expr Nil) Nil)))
+       (None False)
+       ((Some r)
+        (match (expr_ints r)
+          (None False)
+          ((Some ys) (if (int_list_eq ys expect) (run_tests m2 fd rest) False))))))))
+
+;; ---- the rev task ---------------------------------------------------------------
+
+(fn cand_q () QName (qn (quote srch_cand)))
+
+;; the two-hole skeleton body: params (xs acc) -> xs = BVar 1, acc =
+;; BVar 0; Cons-arm binders (h then t, left to right) -> t = BVar 0
+(fn rev_sketch () Expr
+  (Match
+    (BVar 1)
+    (Cons
+      (Arm (PCtor (qn (quote Nil)) Nil) (hole 0))
+      (Cons
+        (Arm
+          (PCtor (qn (quote Cons)) (Cons (PVar) (Cons (PVar) Nil)))
+          (Call (cand_q) (Cons (BVar 0) (Cons (hole 1) Nil))))
+        Nil))))
+
+;; base-hole leaves (Nil-arm scope): acc = BVar 0, Nil, xs = BVar 1
+(fn rev_base_ent () GEnt
+  (GEnt
+    0
+    (Cons (BVar 0) (Cons (Ctor (qn (quote Nil)) Nil) (Cons (BVar 1) Nil)))))
+
+;; step-hole leaves (Cons-arm scope): acc = BVar 2, h = BVar 1,
+;; t = BVar 0, Nil — xs deliberately absent (the measurement record's
+;; vocabulary)
+(fn rev_leaves () (List Expr)
+  (Cons
+    (BVar 2)
+    (Cons (BVar 1) (Cons (BVar 0) (Cons (Ctor (qn (quote Nil)) Nil) Nil)))))
+
+(fn ents_app ((a (List GEnt)) (b (List GEnt))) (List GEnt)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (ents_app t b)))))
+
+(fn append_e ((a (List Expr)) (b (List Expr))) (List Expr)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (append_e t b)))))
+
+;; the FULL step grammar at depth d, entry ids from `next` (pre-order,
+;; consecutive — the stratification law by construction): leaves, then
+;; Cons over two fresh depth-(d-1) sub-holes, then append over two more.
+;; Returns the entries (ascending) and the next free id.
+(fn rev_step_g ((d Int) (next Int) (apq QName)) (Pair (List GEnt) Int)
+  (measure d)
+  (if (le d 0) (Pair (Cons (GEnt next (rev_leaves)) Nil) (+ next 1))
+  (match (rev_step_g (- d 1) (+ next 1) apq)
+    ((Pair es1 n1)
+     (match (rev_step_g (- d 1) n1 apq)
+       ((Pair es2 n2)
+        (match (rev_step_g (- d 1) n2 apq)
+          ((Pair es3 n3)
+           (match (rev_step_g (- d 1) n3 apq)
+             ((Pair es4 n4)
+              (let
+                ((alts
+                   (append_e
+                     (rev_leaves)
+                     (Cons
+                       (Ctor
+                         (qn (quote Cons))
+                         (Cons (hole (+ next 1)) (Cons (hole n1) Nil)))
+                       (Cons
+                         (Call apq (Cons (hole n2) (Cons (hole n3) Nil)))
+                         Nil)))))
+                (Pair
+                  (Cons
+                    (GEnt next alts)
+                    (ents_app es1 (ents_app es2 (ents_app es3 es4))))
+                  n4))))))))))))
+
+;; the whole FULL rev grammar: base = entry 0 (leaf-only at EVERY
+;; depth, per the record), step = entry 1 at depth d
+(fn rev_grammar ((d Int) (apq QName)) Grammar
+  (match (rev_step_g d 1 apq)
+    ((Pair es _) (Grammar (Cons (rev_base_ent) es)))))
+
+;; ---- the DIALECT rev grammar (docs/SEARCH.md S2) --------------------------------
+;;
+;; The generator image of the REAL rule ledger on this fragment,
+;; constraint set fixed empirically against kernel/canon cn_e (the
+;; census.shard probes, slice-2 record):
+;;   - base hole: {acc, Nil} — C8 'respell bans the scrutinee var in a
+;;     binder-less arm (STRICTER than the playground's canon flag,
+;;     which kept xs);
+;;   - Cons nodes exclude the exact rebuild point (h, t) at EVERY
+;;     position (C8 'rebuild scans all positions) — the alternative
+;;     split Cons(A-minus-h, B) | Cons(h, B-minus-t), sizes AB - 1;
+;;   - append left = atoms {acc, h, t} only (C7 nil_left / cons /
+;;     assoc); append right excludes the Nil leaf (C7 nil_right).
+;; Leaf-list kinds: 0 = full {acc,h,t,Nil}, 1 = minus-h, 2 = minus-t,
+;; 3 = minus-Nil (which is also the atoms list, used leaf-only for
+;; append-left). Every variant differs from full by exactly one leaf,
+;; so |variant(d)| = |full(d)| - 1 at every depth.
+
+(fn dial_leaves ((kind Int)) (List Expr)
+  (if (int_eq kind 1)
+    (Cons (BVar 2) (Cons (BVar 0) (Cons (Ctor (qn (quote Nil)) Nil) Nil)))
+  (if (int_eq kind 2)
+    (Cons (BVar 2) (Cons (BVar 1) (Cons (Ctor (qn (quote Nil)) Nil) Nil)))
+  (if (int_eq kind 3) (Cons (BVar 2) (Cons (BVar 1) (Cons (BVar 0) Nil)))
+  (rev_leaves)))))
+
+;; the dialect step grammar at depth d for leaf kind `kind`, ids from
+;; `next` (pre-order, consecutive). Children per builder level: the
+;; Cons split's left (minus-h) and right (full), the split's second
+;; right (minus-t), append's left (atoms, leaf-only at every depth),
+;; append's right (minus-Nil).
+(fn dial_step_g ((d Int) (next Int) (apq QName) (kind Int))
+  (Pair (List GEnt) Int)
+  (measure d)
+  (let ((ls (dial_leaves kind)))
+    (if (le d 0) (Pair (Cons (GEnt next ls) Nil) (+ next 1))
+    (match (dial_step_g (- d 1) (+ next 1) apq 1)
+      ((Pair es1 n1)
+       (match (dial_step_g (- d 1) n1 apq 0)
+         ((Pair es2 n2)
+          (match (dial_step_g (- d 1) n2 apq 2)
+            ((Pair es3 n3)
+             (match (dial_step_g 0 n3 apq 3)
+               ((Pair es4 n4)
+                (match (dial_step_g (- d 1) n4 apq 3)
+                  ((Pair es5 n5)
+                   (let
+                     ((alts
+                        ;; the CONCRETE-headed split alternative comes FIRST:
+                        ;; sk_rank matches alternatives in order, and a hole
+                        ;; binds anything structurally — a Cons(h, X)
+                        ;; candidate must be captured by the exact-h
+                        ;; alternative before the minus-h hole can bind h
+                        ;; and fail deeper (the rank ordering discipline)
+                        (append_e
+                          ls
+                          (Cons
+                            (Ctor
+                              (qn (quote Cons))
+                              (Cons (BVar 1) (Cons (hole n2) Nil)))
+                            (Cons
+                              (Ctor
+                                (qn (quote Cons))
+                                (Cons (hole (+ next 1)) (Cons (hole n1) Nil)))
+                              (Cons
+                                (Call apq (Cons (hole n3) (Cons (hole n4) Nil)))
+                                Nil))))))
+                     (Pair
+                       (Cons
+                         (GEnt next alts)
+                         (ents_app
+                           es1
+                           (ents_app es2 (ents_app es3 (ents_app es4 es5)))))
+                       n5)))))))))))))))
+
+;; the whole DIALECT rev grammar: base = entry 0 {acc, Nil} (leaf-only),
+;; step = entry 1 at depth d over the full leaf kind
+(fn dial_grammar ((d Int) (apq QName)) Grammar
+  (match (dial_step_g d 1 apq 0)
+    ((Pair es _)
+     (Grammar
+       (Cons (GEnt 0 (Cons (BVar 0) (Cons (Ctor (qn (quote Nil)) Nil) Nil))) es)))))
+
+;; ---- small CLI plumbing shared by the tool mains --------------------------------
+
+(fn parse_nat_go ((cs (List Int)) (acc Int)) (Option Int)
+  (measure (struct cs))
+  (match cs
+    (Nil (Some acc))
+    ((Cons c t)
+     (if (le 48 c) (if (le c 57) (parse_nat_go t (+ (* acc 10) (- c 48))) None)
+     None))))
+
+(fn parse_nat ((cs (List Int))) (Option Int)
+  (match cs
+    (Nil None)
+    ((Cons _ _) (parse_nat_go cs 0))))
+
+;; the four published I/O examples; entry (loop input Nil)
+(fn rev_tests () (List (Pair (List Int) (List Int)))
+  (Cons
+    (Pair Nil Nil)
+    (Cons
+      (Pair (Cons 1 Nil) (Cons 1 Nil))
+      (Cons
+        (Pair (Cons 1 (Cons 2 (Cons 3 Nil))) (Cons 3 (Cons 2 (Cons 1 Nil))))
+        (Cons
+          (Pair
+            (Cons 5 (Cons 7 (Cons 9 (Cons 11 Nil))))
+            (Cons 11 (Cons 9 (Cons 7 (Cons 5 Nil)))))
+          Nil)))))
