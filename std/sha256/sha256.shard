@@ -1,0 +1,405 @@
+;;; std/sha256/sha256.shard — the `sha256` module IMPLEMENTATION (private).
+;;;
+;;; FIPS 180-4 SHA-256 over byte lists, in pure shard. Words are plain Ints
+;;; kept in [0, 2^32) by masking after every add/rotate (m32); rotation is
+;;; the standard shift-or-shift under the mask; NOT is xor against the
+;;; all-ones word (there is no bnot prim). The compression loop is structural
+;;; recursion over the 64-entry K list; the schedule extension and the block
+;;; walk carry Int fuel measures in the (le fuel 0)-guard shape.
+;;;
+;;; The list plumbing (slen/sapp/…) is module-LOCAL on purpose (the utf8/ilen
+;;; precedent): std/list's fns are opaque imports, so the ground NIST vector
+;;; pins at the bottom could not `compute` through them. Local copies keep the
+;;; whole pipeline transparent inside this module.
+;;;
+;;; The K round constants are the fractional cube-root words of the first 64
+;;; primes; sha_h0 the fractional square-root words of the first 8 (FIPS
+;;; 180-4 §4.2.2/§5.3.3), transcribed in decimal.
+
+(import "../../kernel/stdlib.shard")  ; Int / Bool / List
+(import "../list")  ; len + its lemmas — the digest-length contract's vocabulary
+(import "mod.req.shard")  ; our interface — sig fns + requirements
+(use (:: std sha256 sha256))  ; sig→def rebind: our defs supply the sigs
+(use (:: std sha256 sha256_hex))
+(use (:: std list *))  ; len / len_nil / len_cons for the length proofs
+
+;; ---- local list plumbing (transparent copies — the ground pins compute) ----
+
+(fn slen ((xs (List Int))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons _ t) (+ 1 (slen t)))))
+
+(fn sapp ((xs (List Int)) (ys (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil ys)
+    ((Cons h t) (Cons h (sapp t ys)))))
+
+(fn srev_acc ((xs (List Int)) (acc (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil acc)
+    ((Cons h t) (srev_acc t (Cons h acc)))))
+
+(fn stake ((n Int) (xs (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons h t) (if (le n 0) Nil (Cons h (stake (- n 1) t))))))
+
+(fn sdrop ((n Int) (xs (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons h t) (if (le n 0) xs (sdrop (- n 1) t)))))
+
+;; element at index n (0-based); 0 past the end. Total on any list.
+(fn snth ((n Int) (xs (List Int))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons h t) (if (le n 0) h (snth (- n 1) t)))))
+
+(fn szeros ((n Int)) (List Int)
+  (measure n)
+  (if (le n 0) Nil (Cons 0 (szeros (- n 1)))))
+
+;; ---- 32-bit word helpers ----------------------------------------------------
+
+;; mask to the 32-bit window.
+(fn m32 ((x Int)) Int (band x 4294967295))
+
+;; rotate right by k (0 < k < 32) within 32 bits.
+(fn rotr32 ((x Int) (k Int)) Int (m32 (bor (bshr x k) (bshl x (- 32 k)))))
+
+;; Ch(x,y,z) = (x AND y) XOR (NOT x AND z); NOT is xor with the all-ones word.
+(fn sha_ch ((x Int) (y Int) (z Int)) Int
+  (bxor (band x y) (band (bxor x 4294967295) z)))
+
+;; Maj(x,y,z) = (x AND y) XOR (x AND z) XOR (y AND z).
+(fn sha_maj ((x Int) (y Int) (z Int)) Int
+  (bxor (band x y) (bxor (band x z) (band y z))))
+
+;; Σ0(x) = ROTR2 x XOR ROTR13 x XOR ROTR22 x.
+(fn bsig0 ((x Int)) Int (bxor (rotr32 x 2) (bxor (rotr32 x 13) (rotr32 x 22))))
+
+;; Σ1(x) = ROTR6 x XOR ROTR11 x XOR ROTR25 x.
+(fn bsig1 ((x Int)) Int (bxor (rotr32 x 6) (bxor (rotr32 x 11) (rotr32 x 25))))
+
+;; σ0(x) = ROTR7 x XOR ROTR18 x XOR SHR3 x.
+(fn ssig0 ((x Int)) Int (bxor (rotr32 x 7) (bxor (rotr32 x 18) (bshr x 3))))
+
+;; σ1(x) = ROTR17 x XOR ROTR19 x XOR SHR10 x.
+(fn ssig1 ((x Int)) Int (bxor (rotr32 x 17) (bxor (rotr32 x 19) (bshr x 10))))
+
+;; ---- the hash state -----------------------------------------------------------
+
+;; the eight working words a..h — a fixed-shape ctor rather than a list, so
+;; every round destructures and rebuilds a statically 8-wide state.
+(type H8 (mk_h8 Int Int Int Int Int Int Int Int))
+
+;; H(0): the fractional square-root words of the first eight primes.
+(fn sha_h0 () H8
+  (mk_h8 1779033703 3144134277 1013904242 2773480762 1359893119 2600822924
+    528734635 1541459225))
+
+;; K: the 64 round constants (fractional cube-root words of the first 64 primes).
+(fn sha_k () (List Int)
+  (list 1116352408 1899447441 3049323471 3921009573 961987163 1508970993
+    2453635748 2870763221 3624381080 310598401 607225278 1426881987 1925078388
+    2162078206 2614888103 3248222580 3835390401 4022224774 264347078 604807628
+    770255983 1249150122 1555081692 1996064986 2554220882 2821834349 2952996808
+    3210313671 3336571891 3584528711 113926993 338241895 666307205 773529912
+    1294757372 1396182291 1695183700 1986661051 2177026350 2456956037 2730485921
+    2820302411 3259730800 3345764771 3516065817 3600352804 4094571909 275423344
+    430227734 506948616 659060556 883997877 958139571 1322822218 1537002063
+    1747873779 1955562222 2024104815 2227730452 2361852424 2428436474 2756734187
+    3204031479 3329325298))
+
+;; ---- the message schedule ------------------------------------------------------
+
+;; big-endian 32-bit word from four bytes.
+(fn word_be ((a Int) (b Int) (c Int) (d Int)) Int
+  (+ (* a 16777216) (+ (* b 65536) (+ (* c 256) d))))
+
+;; the first 16 schedule words from a 64-byte block (fuel = words remaining).
+(fn words16 ((bs (List Int)) (fuel Int)) (List Int)
+  (measure fuel)
+  (if (le fuel 0) Nil
+  (Cons
+    (word_be (snth 0 bs) (snth 1 bs) (snth 2 bs) (snth 3 bs))
+    (words16 (sdrop 4 bs) (- fuel 1)))))
+
+;; schedule extension over the REVERSED prefix (head = newest word):
+;; W[t] = σ1(W[t-2]) + W[t-7] + σ0(W[t-15]) + W[t-16], mod 2^32.
+(fn sched_ext ((ws (List Int)) (fuel Int)) (List Int)
+  (measure fuel)
+  (if (le fuel 0) ws
+  (sched_ext
+    (Cons
+      (m32
+        (+
+          (ssig1 (snth 1 ws))
+          (+ (snth 6 ws) (+ (ssig0 (snth 14 ws)) (snth 15 ws)))))
+      ws)
+    (- fuel 1))))
+
+;; the full 64-word schedule of one block, in order W[0]..W[63].
+(fn sha_sched ((block (List Int))) (List Int)
+  (srev_acc (sched_ext (srev_acc (words16 block 16) Nil) 48) Nil))
+
+;; ---- compression ----------------------------------------------------------------
+
+;; one round: T1 = h + Σ1(e) + Ch(e,f,g) + K[t] + W[t]; T2 = Σ0(a) + Maj(a,b,c).
+;; T2 is inlined unmasked into a' (the outer m32 absorbs it), which keeps the
+;; body to ONE let: a parallel (let ((t1 …) (t2 …)) …) is C3-canonical but the
+;; proof-mode reducer resolves parallel bindings in REVERSE (run-mode is
+;; correct; divergence pinned during this module's build), so the ground pins
+;; below would compute the wrong digest.
+(fn sha_round ((st H8) (k Int) (w Int)) H8
+  (match st
+    ((mk_h8 a b c d e f g h)
+     (let ((t1 (m32 (+ h (+ (bsig1 e) (+ (sha_ch e f g) (+ k w)))))))
+       (mk_h8
+         (m32 (+ t1 (+ (bsig0 a) (sha_maj a b c))))
+         a
+         b
+         c
+         (m32 (+ d t1))
+         e
+         f
+         g)))))
+
+;; the 64 rounds: structural walk down the K list, in step with the schedule.
+(fn sha_rounds ((st H8) (ks (List Int)) (ws (List Int))) H8
+  (measure (struct ks))
+  (match ks
+    (Nil st)
+    ((Cons k kt)
+     (match ws
+       (Nil st)
+       ((Cons w wt) (sha_rounds (sha_round st k w) kt wt))))))
+
+;; elementwise state addition mod 2^32 (the per-block feed-forward).
+(fn h8_add ((x H8) (y H8)) H8
+  (match x
+    ((mk_h8 a b c d e f g h)
+     (match y
+       ((mk_h8 a2 b2 c2 d2 e2 f2 g2 h2)
+        (mk_h8
+          (m32 (+ a a2))
+          (m32 (+ b b2))
+          (m32 (+ c c2))
+          (m32 (+ d d2))
+          (m32 (+ e e2))
+          (m32 (+ f f2))
+          (m32 (+ g g2))
+          (m32 (+ h h2))))))))
+
+;; one 64-byte block: compress from st, then feed forward.
+(fn sha_block ((st H8) (block (List Int))) H8
+  (h8_add st (sha_rounds st (sha_k) (sha_sched block))))
+
+;; all blocks of the padded message (fuel = block count).
+(fn sha_blocks ((st H8) (bs (List Int)) (fuel Int)) H8
+  (measure fuel)
+  (if (le fuel 0) st
+  (sha_blocks (sha_block st (stake 64 bs)) (sdrop 64 bs) (- fuel 1))))
+
+;; ---- padding ---------------------------------------------------------------------
+
+;; the 64-bit big-endian byte spelling of the bit length.
+(fn len_be ((v Int)) (List Int)
+  (list
+    (band (bshr v 56) 255)
+    (band (bshr v 48) 255)
+    (band (bshr v 40) 255)
+    (band (bshr v 32) 255)
+    (band (bshr v 24) 255)
+    (band (bshr v 16) 255)
+    (band (bshr v 8) 255)
+    (band v 255)))
+
+;; msg ++ 0x80 ++ zeros ++ bitlen, padded to a multiple of 64 bytes:
+;; zeros = (55 - n) mod 64 makes n + 1 + zeros + 8 ≡ 0 (mod 64).
+(fn sha_pad ((msg (List Int))) (List Int)
+  (let ((n (slen msg)))
+    (sapp msg (Cons 128 (sapp (szeros (mod (- 55 n) 64)) (len_be (* 8 n)))))))
+
+;; ---- the digest --------------------------------------------------------------------
+
+;; big-endian byte spelling of one 32-bit word.
+(fn word_bytes ((x Int)) (List Int)
+  (list
+    (band (bshr x 24) 255)
+    (band (bshr x 16) 255)
+    (band (bshr x 8) 255)
+    (band x 255)))
+
+;; the 32 digest bytes of a final state.
+(fn h8_bytes ((st H8)) (List Int)
+  (match st
+    ((mk_h8 a b c d e f g h)
+     (sapp
+       (word_bytes a)
+       (sapp
+         (word_bytes b)
+         (sapp
+           (word_bytes c)
+           (sapp
+             (word_bytes d)
+             (sapp
+               (word_bytes e)
+               (sapp (word_bytes f) (sapp (word_bytes g) (word_bytes h)))))))))))
+
+(fn sha256 ((msg (List Int))) (List Int)
+  (let ((padded (sha_pad msg)))
+    (h8_bytes (sha_blocks (sha_h0) padded (ediv (slen padded) 64)))))
+
+;; lowercase hex digit of a nibble.
+(fn hex_digit ((n Int)) Int (if (le n 9) (+ 48 n) (+ 87 n)))
+
+(fn bytes_hex ((bs (List Int))) (List Int)
+  (measure (struct bs))
+  (match bs
+    (Nil Nil)
+    ((Cons b t)
+     (Cons (hex_digit (bshr b 4)) (Cons (hex_digit (band b 15)) (bytes_hex t))))))
+
+(fn sha256_hex ((msg (List Int))) (List Int) (bytes_hex (sha256 msg)))
+
+;; ---- the digest-length contract ----------------------------------------------------
+
+;; std/list len distributes over the local append (mirrors len_append, spoken
+;; through the opaque len's defining-equation lemmas).
+(claim len_sapp
+  (goal ((xs (List Int)) (ys (List Int))) ()
+    (= (len (sapp xs ys)) (+ (len xs) (len ys))))
+  (induct xs
+    ((case Nil
+       (steps
+         ((unfold sapp lhs)
+          (reduce lhs)
+          (rewrite (lemma len_nil) lr rhs true ()))
+         (by arith (list))))
+     (case Cons
+       (c0 c1)
+       (steps
+         ((unfold sapp lhs)
+          (reduce lhs)
+          (rewrite (lemma len_cons) lr lhs true ())
+          (rewrite (hyp 0) lr lhs true ())
+          (rewrite (lemma len_cons) lr rhs true ()))
+         (by arith (list)))))))
+
+;; one word serializes to exactly 4 bytes.
+(claim len_word_bytes
+  (goal ((x Int)) () (= (len (word_bytes x)) 4))
+  (steps
+    ((unfold word_bytes lhs)
+     (rewrite (lemma len_cons) lr lhs true ())
+     (rewrite (lemma len_cons) lr lhs true ())
+     (rewrite (lemma len_cons) lr lhs true ())
+     (rewrite (lemma len_cons) lr lhs true ())
+     (rewrite (lemma len_nil) lr lhs true ()))
+    (by arith (list))))
+
+;; a final state serializes to exactly 32 bytes: 8 words of 4.
+(claim len_h8_bytes
+  (goal ((st H8)) () (= (len (h8_bytes st)) 32))
+  (case-on st H8
+    ((case mk_h8
+       (a b c d e f g h)
+       (steps
+         ((rewrite (hyp 0) lr lhs true ())
+          (unfold h8_bytes lhs)
+          (reduce lhs)
+          (rewrite (lemma len_sapp) lr lhs true ())
+          (rewrite (lemma len_sapp) lr lhs true ())
+          (rewrite (lemma len_sapp) lr lhs true ())
+          (rewrite (lemma len_sapp) lr lhs true ())
+          (rewrite (lemma len_sapp) lr lhs true ())
+          (rewrite (lemma len_sapp) lr lhs true ())
+          (rewrite (lemma len_sapp) lr lhs true ())
+          (rewrite (lemma len_word_bytes) lr lhs true ()))
+         (by arith (list)))))))
+
+;; the digest is 32 bytes for EVERY message — whatever H8 the block walk
+;; returns, h8_bytes serializes it to 32 bytes.
+(claim len_sha256
+  (goal ((msg (List Int))) () (= (len (sha256 msg)) 32))
+  (steps
+    ((unfold sha256 lhs)
+     (reduce lhs)
+     (rewrite (lemma len_h8_bytes) lr lhs true ()))
+    refl))
+
+;; hex rendering doubles the length.
+(claim len_bytes_hex
+  (goal ((bs (List Int))) () (= (len (bytes_hex bs)) (* 2 (len bs))))
+  (induct bs
+    ((case Nil
+       (steps
+         ((unfold bytes_hex lhs)
+          (reduce lhs)
+          (rewrite (lemma len_nil) lr lhs true ())
+          (rewrite (lemma len_nil) lr rhs true ()))
+         (by arith (list))))
+     (case Cons
+       (c0 c1)
+       (steps
+         ((unfold bytes_hex lhs)
+          (reduce lhs)
+          (rewrite (lemma len_cons) lr lhs true ())
+          (rewrite (lemma len_cons) lr lhs true ())
+          (rewrite (hyp 0) lr lhs true ())
+          (rewrite (lemma len_cons) lr rhs true ()))
+         (by arith (list)))))))
+
+(fulfills sha256_len auto)
+
+(fulfills sha256_hex_len
+  (steps
+    ((unfold sha256_hex lhs)
+     (rewrite (lemma len_bytes_hex) lr lhs true ())
+     (rewrite (lemma len_sha256) lr lhs true ()))
+    (by arith (list))))
+
+;; ---- ground pins: the NIST FIPS 180-4 / SHA-2 test vectors ------------------------
+;; compute-proven against the implementation — an algorithm change can never
+;; slip through silently.
+
+;; SHA-256("") — the empty message (pure padding block).
+(claim sha256_empty_pin
+  (goal () ()
+    (=
+      (sha256_hex Nil)
+      "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"))
+  (steps ((compute lhs)) refl))
+
+;; SHA-256("abc") — the classic one-block vector, byte-level digest.
+(claim sha256_abc_bytes_pin
+  (goal () ()
+    (=
+      (sha256 "abc")
+      (list 186 120 22 191 143 1 207 234 65 65 64 222 93 174 34 35 176 3 97 163
+        150 23 122 156 180 16 255 97 242 0 21 173)))
+  (steps ((compute lhs)) refl))
+
+;; SHA-256("abc") in hex.
+(claim sha256_abc_pin
+  (goal () ()
+    (=
+      (sha256_hex "abc")
+      "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"))
+  (steps ((compute lhs)) refl))
+
+;; SHA-256 of the 56-byte NIST vector — TWO blocks (padding spills over).
+(claim sha256_two_block_pin
+  (goal () ()
+    (=
+      (sha256_hex "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")
+      "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"))
+  (steps ((compute lhs)) refl))

@@ -235,6 +235,7 @@ TARGETS=(
   std/map/map.shard
   std/word/word.shard
   std/nat/nat.shard
+  std/sha256/sha256.shard
 )
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
