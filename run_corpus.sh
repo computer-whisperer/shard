@@ -192,6 +192,8 @@ TARGETS=(
   tools/canon/rewrite.shard
   tools/canon/canon.shard
   tools/canon/census.shard
+  tools/canon/hash.shard
+  examples/hash_pin.shard
   examples/render_model.shard
   examples/modules_demo/consumer.shard
   examples/modules_demo/views/module_view.shard
@@ -533,6 +535,27 @@ if [ -x bin/shard_eval ]; then
   else
     echo "FAIL canon_std_stage2 (non-canonical std source):"
     echo "$std_canon"
+  fi
+  # The CONTENT-ADDRESS pin (CANON.md §7 / slice 5): digest-stable
+  # properties only — alpha-twins hash equal, Merkle callers of equal
+  # referents hash equal, distinct definitions hash apart, deterministic —
+  # so the digest swap (FNV-1a-128 -> std/sha256) touches no goldens.
+  bin/shard_eval run tools/canon/hash.shard examples/hash_pin.shard > "$TMP/hx1.out" 2>&1
+  bin/shard_eval run tools/canon/hash.shard examples/hash_pin.shard > "$TMP/hx2.out" 2>&1
+  hx_f() { grep "hash_pin.$1\$" "$TMP/hx1.out" | cut -d' ' -f1; }
+  if ! cmp -s "$TMP/hx1.out" "$TMP/hx2.out"; then
+    echo "FAIL canon_hash (nondeterministic)"
+  elif [ -z "$(hx_f hp_twin_a)" ]; then
+    echo "FAIL canon_hash (no output)"
+    cat "$TMP/hx1.out"
+  elif [ "$(hx_f hp_twin_a)" != "$(hx_f hp_twin_b)" ]; then
+    echo "FAIL canon_hash (alpha twins differ)"
+  elif [ "$(hx_f hp_calls_a)" != "$(hx_f hp_calls_b)" ]; then
+    echo "FAIL canon_hash (Merkle callers differ)"
+  elif [ "$(hx_f hp_twin_a)" = "$(hx_f hp_other)" ] || [ "$(hx_f hp_calls_a)" = "$(hx_f hp_calls_other)" ]; then
+    echo "FAIL canon_hash (distinct definitions collide)"
+  else
+    echo "CANON HASH PIN OK (alpha + merkle + distinctness, deterministic)"
   fi
 else
   echo "SKIPPED (no bin/shard_eval)"

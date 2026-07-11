@@ -486,13 +486,63 @@ canonicalization PAY compositionally:
   an unchanged meaning; recheck nothing beneath it. (The checker's
   future scaling story, named here, built later.)
 
-v1 scope, deliberately thin: DEFINE the hash (spec in this file once
-the invariant set settles) and ship a tool that computes and lists
+v1 scope, deliberately thin: DEFINE the hash (spec below, ratified
+2026-07-10 — §11.5 resolved) and ship a tool that computes and lists
 it. KEY NOTHING ON IT YET. The first real consumer should be chosen
 the way all our consumers are — by demand; the cert cache is the
 likely candidate. What v1 must get right is only the constraint that
 already binds: the hash is over the canonical nameless core, so the
 canonical form must be stable before any hash is stored anywhere.
+
+### The hash spec (v1, ratified 2026-07-10)
+
+**The serialization is the stable contract; the digest is a
+replaceable parameter.**
+
+SERIALIZATION. A definition's identity bytes are a tagged,
+constructive encoding of its elaborated canonical nameless core —
+signature and body for a fn; ctor field types for a typedef. One tag
+byte per former; integers as sign + decimal digits (bignum-safe);
+child lists count-prefixed. References fall in three classes:
+
+- **core-pathed names** (prims and (core)-pathed formers — a closed
+  vocabulary per docs/TCB.md) serialize as themselves: terminal
+  symbols, never hashed;
+- **out-of-SCC references** are replaced by the referent's DIGEST
+  (Merkle) — so identity is compositional: a definition's hash pins
+  the full meaning of everything it reaches;
+- **within-SCC references** (self/mutual recursion) serialize as the
+  referent's index in the SCC's canonical member order.
+
+The reference graph is ONE graph over fns and typedefs (fn→fn calls,
+fn→type signature/ctor refs, type→type field refs); SCCs are hashed
+bottom-up along the condensation. The canonical member order inside
+an SCC: sort members by their serialization with all same-SCC refs
+as a FIXED PLACEHOLDER tag; a member's hash is then
+digest(member-tag ++ scc-digest ++ member-index). Residual: members
+whose placeholder serializations are byte-identical (structurally
+identical mutual twins) tie-break by declaration order — the one
+place decl order can reach a hash, documented and vanishingly rare.
+Type variables in signatures serialize by first-occurrence index
+(alpha-invariant); ctor references serialize as (typedef-ref, ctor
+declaration index) — ctor NAMES are presentation, like binder names.
+
+DIGEST. v1 = FNV-1a-128 over the serialization. Explicitly
+REPLACEABLE until the first consumer stores a hash: FNV disperses
+well on structured bytes (birthday-safe at this corpus scale for
+random inputs) but is trivially invertible — zero adversarial
+collision resistance — so it is licensed for dedup census and memo
+keys only. std/sha256 (in flight, its own arc) replaces it BEFORE
+anything trust-bearing keys on stored hashes; the swap invalidates
+no stored state because v1 stores none.
+
+TOOL. tools/canon/hash.shard prints one `<digest-hex>  <qname>` line
+per fn and typedef of the target module (production loader; whole
+closure hashed so Merkle refs resolve). Definitions the recognizer
+flags are marked `!` — the hash is only MEANINGFUL on canonical form
+(stage 2 guarantees it for std). The corpus pins the DIGEST-STABLE
+properties only (determinism; alpha-twins hash equal; distinct fns
+hash apart), so the digest swap touches no goldens.
 
 ## 8. Named exclusions (tier 3 — the honest boundary)
 
@@ -827,6 +877,26 @@ Census: 117 terms, 86 flagged→fixed (join-position towers added).
 Enforcement stages 1–2 are now both LANDED; the v1 ratchet's stated
 scope is complete.
 
-Remaining slice: the §7 hash spec + compute tool (slice 5) — §11.5's
-ruling is now unblocked (C1–C10 stable); the spec proposal goes to
-review before any code assumes it.
+**Slice 5 (2026-07-10): the content address — spec + tool + pin.**
+§11.5 resolved; the spec is in §7. tools/canon/hash.shard computes it:
+production loader (run-mode closure), one reference graph over fns and
+typedefs, Kosaraju SCCs, fixpoint Merkle hashing bottom-up along the
+condensation, FNV-1a-128 behind the single hx_digest swap point
+(std/sha256 is in flight on its own branch). examples/hash_pin.shard +
+the corpus pin exercise exactly the digest-stable properties:
+alpha-twins hash EQUAL (names and binder names are presentation),
+distinct definitions hash apart, and the Merkle showpiece —
+hp_calls_a/hp_calls_b call DIFFERENT twins yet hash EQUAL, because
+Merkle substitution replaces both references by the referents' equal
+digests: identity is what a definition MEANS. Implementation findings:
+a directory impl's public fns rebind to the INTERFACE's module path
+(std list, one segment above the impl file's own std/list/list), so
+the tool's target filter is prefix-based; stdlib's typedefs are
+core-pathed and serialize terminal like prims.
+
+**The v1 arc is COMPLETE**: C1–C10 recognized, machine-rewritten
+(C3/C7 refusal-tier), censused, std at stage 2, and content-addressed
+— all under the corpus gates. Post-v1 queue (each its own decision):
+the digest swap to std/sha256 when that branch lands; D16 basis
+contraction riding the x86gen simplification; C3 rewriting (2b's
+deferral); D18 and the §11 stricter modes as evidence arrives.

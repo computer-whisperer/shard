@@ -1,0 +1,897 @@
+;;; hash.shard — the content-address computer (CANON.md §7, slice 5).
+;;; Prints one `<digest-hex>  <module>.<name>` line per fn and typedef of
+;;; the TARGET module, hashing the whole closure so Merkle references
+;;; resolve. KEYS NOTHING: this tool defines and exhibits the identity;
+;;; consumers arrive by demand (§7).
+;;;
+;;; The SERIALIZATION is the stable contract (see §7): tagged canonical
+;;; nameless core, core-pathed names terminal, out-of-SCC references by
+;;; digest (Merkle), within-SCC references by canonical member index.
+;;; The DIGEST is a parameter: v1 = FNV-1a-128 (hx_digest is the single
+;;; swap point; std/sha256 replaces it before any consumer stores hashes).
+;;;
+;;; Definitions the recognizer flags are marked `!` — a hash is only
+;;; MEANINGFUL on canonical form.
+;;;
+;;; RUN IT:   bin/shard_eval run tools/canon/hash.shard FILE
+;;; CHECK IT: bin/shard_eval run kernel/check.shard tools/canon/hash.shard
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/reader.shard")
+(import "../../kernel/loader.shard")
+(import "../../kernel/canon.shard")
+
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel reader *))
+(use (:: kernel loader World))
+(use (:: kernel loader get_args))
+(use (:: kernel loader read_file))
+(use (:: kernel loader write))
+(use (:: kernel loader exit))
+(use (:: kernel loader resolve_closure))
+(use (:: kernel canon *))
+
+;; ---------------------------------------------------------------------------
+;; the digest — THE swap point (FNV-1a-128 v1; replace hx_digest's core
+;; with std/sha256 before anything trust-bearing keys on stored hashes)
+;; ---------------------------------------------------------------------------
+
+(fn hx_prime () Int 309485009821345068724781371)
+
+(fn hx_mask () Int 340282366920938463463374607431768211455)
+
+(fn hx_offset () Int 144066263297769815596495629667062367629)
+
+(fn hx_fnv ((bs (List Int)) (h Int)) Int
+  (measure (struct bs))
+  (match bs
+    (Nil h)
+    ((Cons b rest) (hx_fnv rest (band (* (bxor h b) (hx_prime)) (hx_mask))))))
+
+(fn hx_digest ((bs (List Int))) Int (hx_fnv bs (hx_offset)))
+
+;; the digest as 16 big-endian bytes (for Merkle embedding)
+(fn hx_bytes_go ((h Int) (k Int) (acc (List Int))) (List Int)
+  (measure k)
+  (if (le k 0) acc (hx_bytes_go (bshr h 8) (- k 1) (Cons (band h 255) acc))))
+
+(fn hx_bytes ((h Int)) (List Int) (hx_bytes_go h 16 Nil))
+
+(fn hx_hexd ((d Int)) Int (if (lt d 10) (+ 48 d) (+ 87 d)))
+
+(fn hx_hex_go ((h Int) (k Int) (acc (List Int))) (List Int)
+  (measure k)
+  (if (le k 0) acc
+  (hx_hex_go (bshr h 4) (- k 1) (Cons (hx_hexd (band h 15)) acc))))
+
+(fn hx_hex ((h Int)) (List Int) (hx_hex_go h 32 Nil))
+
+;; ---------------------------------------------------------------------------
+;; small plumbing
+;; ---------------------------------------------------------------------------
+
+(fn hx_app ((a (List Int)) (b (List Int))) (List Int)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (hx_app t b)))))
+
+(fn hx_len_q ((qs (List QName))) Int
+  (measure (struct qs))
+  (match qs
+    (Nil 0)
+    ((Cons _ t) (+ 1 (hx_len_q t)))))
+
+(fn hx_q_mem ((q QName) (qs (List QName))) Bool
+  (measure (struct qs))
+  (match qs
+    (Nil False)
+    ((Cons h t) (if (qname_eq q h) True (hx_q_mem q t)))))
+
+(fn hx_q_app ((a (List QName)) (b (List QName))) (List QName)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (hx_q_app t b)))))
+
+;; assoc on qname keys
+(fn hx_get_i ((q QName) (m (List (Pair QName Int)))) (Option Int)
+  (measure (struct m))
+  (match m
+    (Nil None)
+    ((Cons (Pair k v) rest) (if (qname_eq q k) (Some v) (hx_get_i q rest)))))
+
+(fn hx_get_qs ((q QName) (m (List (Pair QName (List QName)))))
+  (Option (List QName))
+  (measure (struct m))
+  (match m
+    (Nil None)
+    ((Cons (Pair k v) rest) (if (qname_eq q k) (Some v) (hx_get_qs q rest)))))
+
+;; is this a (core)-pathed name — a terminal symbol, never hashed?
+(fn hx_is_core ((q QName)) Bool (sym_path_eq (qn_mod q) (qn_core)))
+
+;; sign + decimal digits of an Int, terminated
+(fn hx_int ((n Int)) (List Int)
+  (if (lt n 0) (Cons 45 (hx_app (show_int (- 0 n)) ";"))
+  (hx_app (show_int n) ";")))
+
+;; ---------------------------------------------------------------------------
+;; reference collection: every non-core qname a definition mentions
+;; ---------------------------------------------------------------------------
+
+(fn hx_refs_ty ((t Type) (acc (List QName))) (List QName)
+  (measure (struct t))
+  (match t
+    ((TCon q args) (hx_refs_tys args (if (hx_is_core q) acc (Cons q acc))))
+    ((TVar _) acc)))
+
+(fn hx_refs_tys ((ts (List Type)) (acc (List QName))) (List QName)
+  (measure (struct ts))
+  (match ts
+    (Nil acc)
+    ((Cons t rest) (hx_refs_tys rest (hx_refs_ty t acc)))))
+
+(fn hx_refs_e ((e Expr) (acc (List QName))) (List QName)
+  (measure (struct e))
+  (match e
+    ((Ctor q args) (hx_refs_l args (if (hx_is_core q) acc (Cons q acc))))
+    ((Call q args) (hx_refs_l args (if (hx_is_core q) acc (Cons q acc))))
+    ((Match s arms) (hx_refs_arms arms (hx_refs_e s acc)))
+    ((Let bs body) (hx_refs_e body (hx_refs_l bs acc)))
+    ((If c t e2) (hx_refs_e e2 (hx_refs_e t (hx_refs_e c acc))))
+    (_ acc)))
+
+(fn hx_refs_l ((es (List Expr)) (acc (List QName))) (List QName)
+  (measure (struct es))
+  (match es
+    (Nil acc)
+    ((Cons a rest) (hx_refs_l rest (hx_refs_e a acc)))))
+
+(fn hx_refs_arms ((arms (List Arm)) (acc (List QName))) (List QName)
+  (measure (struct arms))
+  (match arms
+    (Nil acc)
+    ((Cons (Arm p b) rest)
+     (hx_refs_arms rest (hx_refs_e b (hx_refs_pat p acc))))))
+
+(fn hx_refs_pat ((p Pat) (acc (List QName))) (List QName)
+  (measure (struct p))
+  (match p
+    ((PCtor q ps) (hx_refs_pats ps (if (hx_is_core q) acc (Cons q acc))))
+    (_ acc)))
+
+(fn hx_refs_pats ((ps (List Pat)) (acc (List QName))) (List QName)
+  (measure (struct ps))
+  (match ps
+    (Nil acc)
+    ((Cons p rest) (hx_refs_pats rest (hx_refs_pat p acc)))))
+
+(fn hx_refs_fn ((fd FnDef)) (List QName)
+  (match fd
+    ((FnDef _ ptys ret body)
+     (hx_refs_e body (hx_refs_ty ret (hx_refs_tys ptys Nil))))))
+
+(fn hx_refs_ctors ((cs (List CtorDef)) (acc (List QName))) (List QName)
+  (measure (struct cs))
+  (match cs
+    (Nil acc)
+    ((Cons (CtorDef _ ftys) rest) (hx_refs_ctors rest (hx_refs_tys ftys acc)))))
+
+(fn hx_refs_td ((td TypeDef)) (List QName)
+  (match td
+    ((TypeDef _ _ cs refi)
+     (hx_refs_ctors
+       cs
+       (match refi
+         (None Nil)
+         ((Some (Pair bt pq))
+          (hx_refs_ty bt (if (hx_is_core pq) Nil (Cons pq Nil)))))))))
+
+;; keep only refs that are DEFINED nodes (unknown refs — e.g. externs —
+;; serialize as terminal names, like core)
+(fn hx_known ((qs (List QName)) (nodes (List QName)) (acc (List QName)))
+  (List QName)
+  (measure (struct qs))
+  (match qs
+    (Nil acc)
+    ((Cons q rest)
+     (if (hx_q_mem q nodes)
+       (hx_known rest nodes (if (hx_q_mem q acc) acc (Cons q acc)))
+       (hx_known rest nodes acc)))))
+
+;; ---------------------------------------------------------------------------
+;; Kosaraju SCC over the reference graph (iterative DFS, fuel-bounded)
+;; ---------------------------------------------------------------------------
+
+;; entries: (Pair False q) = enter, (Pair True q) = exit (emit to order)
+(fn hx_dfs1
+  ((stack (List (Pair Bool QName)))
+   (adj (List (Pair QName (List QName))))
+   (visited (List QName))
+   (order (List QName))
+   (fuel Int))
+  (Pair (List QName) (List QName))
+  (measure fuel)
+  (if (le fuel 0) (Pair visited order)
+  (match stack
+    (Nil (Pair visited order))
+    ((Cons (Pair ex q) rest)
+     (if ex (hx_dfs1 rest adj visited (Cons q order) (- fuel 1))
+     (if (hx_q_mem q visited) (hx_dfs1 rest adj visited order (- fuel 1))
+     (let
+       ((ns
+          (match (hx_get_qs q adj)
+            (None Nil)
+            ((Some x) x))))
+       (hx_dfs1
+         (hx_push_enters ns (Cons (Pair True q) rest))
+         adj
+         (Cons q visited)
+         order
+         (- fuel 1)))))))))
+
+(fn hx_push_enters ((qs (List QName)) (stack (List (Pair Bool QName))))
+  (List (Pair Bool QName))
+  (measure (struct qs))
+  (match qs
+    (Nil stack)
+    ((Cons q rest) (hx_push_enters rest (Cons (Pair False q) stack)))))
+
+(fn hx_order_all
+  ((nodes (List QName))
+   (adj (List (Pair QName (List QName))))
+   (visited (List QName))
+   (order (List QName))
+   (fuel Int))
+  (List QName)
+  (measure (struct nodes))
+  (match nodes
+    (Nil order)
+    ((Cons q rest)
+     (match (hx_dfs1 (Cons (Pair False q) Nil) adj visited order fuel)
+       ((Pair v2 o2) (hx_order_all rest adj v2 o2 fuel))))))
+
+;; transpose: for each edge u->v add u to v's list
+(fn hx_transpose_add
+  ((u QName) (vs (List QName)) (t (List (Pair QName (List QName)))))
+  (List (Pair QName (List QName)))
+  (measure (struct vs))
+  (match vs
+    (Nil t)
+    ((Cons v rest) (hx_transpose_add u rest (hx_adj_add v u t)))))
+
+(fn hx_adj_add ((k QName) (v QName) (t (List (Pair QName (List QName)))))
+  (List (Pair QName (List QName)))
+  (measure (struct t))
+  (match t
+    (Nil (Cons (Pair k (Cons v Nil)) Nil))
+    ((Cons (Pair k2 vs) rest)
+     (if (qname_eq k k2) (Cons (Pair k2 (Cons v vs)) rest)
+     (Cons (Pair k2 vs) (hx_adj_add k v rest))))))
+
+(fn hx_transpose
+  ((adj (List (Pair QName (List QName)))) (t (List (Pair QName (List QName)))))
+  (List (Pair QName (List QName)))
+  (measure (struct adj))
+  (match adj
+    (Nil t)
+    ((Cons (Pair u vs) rest) (hx_transpose rest (hx_transpose_add u vs t)))))
+
+;; second pass: walk finish order on the transpose; each fresh root's
+;; reachable-unvisited set is one SCC
+(fn hx_sccs_go
+  ((order (List QName))
+   (tadj (List (Pair QName (List QName))))
+   (visited (List QName))
+   (acc (List (List QName)))
+   (fuel Int))
+  (List (List QName))
+  (measure (struct order))
+  (match order
+    (Nil acc)
+    ((Cons q rest)
+     (if (hx_q_mem q visited) (hx_sccs_go rest tadj visited acc fuel)
+     (match (hx_dfs1 (Cons (Pair False q) Nil) tadj visited Nil fuel)
+       ((Pair v2 comp) (hx_sccs_go rest tadj v2 (Cons comp acc) fuel)))))))
+
+(fn hx_sccs
+  ((nodes (List QName)) (adj (List (Pair QName (List QName)))) (fuel Int))
+  (List (List QName))
+  (hx_sccs_go
+    (hx_order_all nodes adj Nil Nil fuel)
+    (hx_transpose adj Nil)
+    Nil
+    Nil
+    fuel))
+
+;; ---------------------------------------------------------------------------
+;; serialization (tags per CANON.md §7)
+;; ---------------------------------------------------------------------------
+
+;; a reference: core/unknown -> 20 name; hashed -> 21 digest-bytes;
+;; same-SCC -> 22 index (or the bare placeholder during member ordering)
+(fn hx_ref
+  ((q QName)
+   (memo (List (Pair QName Int)))
+   (scc (List QName))
+   (ixs (List (Pair QName Int))))
+  (List Int)
+  (if (hx_q_mem q scc)
+    (match (hx_get_i q ixs)
+      (None (Cons 22 Nil))
+      ((Some i) (Cons 22 (hx_int i))))
+    (match (hx_get_i q memo)
+      (None (Cons 20 (hx_app (chars_of_sym (qn_name q)) ";")))
+      ((Some h) (Cons 21 (hx_bytes h))))))
+
+;; type vars by first-occurrence index over the signature (tvs threads)
+(fn hx_tv_ix ((x Symbol) (tvs (List Symbol)) (i Int)) (Option Int)
+  (measure (struct tvs))
+  (match tvs
+    (Nil None)
+    ((Cons h t) (if (sym_eq h x) (Some i) (hx_tv_ix x t (+ i 1))))))
+
+(fn hx_ser_ty
+  ((t Type)
+   (memo (List (Pair QName Int)))
+   (scc (List QName))
+   (ixs (List (Pair QName Int)))
+   (tvs (List Symbol)))
+  (Pair (List Int) (List Symbol))
+  (measure (struct t))
+  (match t
+    ((TCon q args)
+     (match (hx_ser_tys args memo scc ixs tvs)
+       ((Pair bs tvs2)
+        (Pair (Cons 15 (hx_app (hx_ref q memo scc ixs) bs)) tvs2))))
+    ((TVar x)
+     (match (hx_tv_ix x tvs 0)
+       (None
+         (Pair
+           (Cons 14 (hx_int (hx_len_sym tvs)))
+           (hx_app_sym tvs (Cons x Nil))))
+       ((Some i) (Pair (Cons 14 (hx_int i)) tvs))))))
+
+(fn hx_ser_tys
+  ((ts (List Type))
+   (memo (List (Pair QName Int)))
+   (scc (List QName))
+   (ixs (List (Pair QName Int)))
+   (tvs (List Symbol)))
+  (Pair (List Int) (List Symbol))
+  (measure (struct ts))
+  (match ts
+    (Nil (Pair (hx_int 0) tvs))
+    ((Cons t rest)
+     (match (hx_ser_ty t memo scc ixs tvs)
+       ((Pair bs tvs2)
+        (match (hx_ser_tys rest memo scc ixs tvs2)
+          ((Pair bs2 tvs3) (Pair (hx_app bs bs2) tvs3))))))))
+
+(fn hx_len_sym ((xs (List Symbol))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons _ t) (+ 1 (hx_len_sym t)))))
+
+(fn hx_app_sym ((a (List Symbol)) (b (List Symbol))) (List Symbol)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (hx_app_sym t b)))))
+
+(fn hx_ser_e
+  ((e Expr)
+   (memo (List (Pair QName Int)))
+   (scc (List QName))
+   (ixs (List (Pair QName Int))))
+  (List Int)
+  (measure (struct e))
+  (match e
+    ((FVar x) (Cons 9 (hx_app (chars_of_sym x) ";")))
+    ((BVar i) (Cons 1 (hx_int i)))
+    ((Ctor q args)
+     (Cons 4 (hx_app (hx_ref q memo scc ixs) (hx_ser_l args memo scc ixs))))
+    ((Call q args)
+     (Cons 5 (hx_app (hx_ref q memo scc ixs) (hx_ser_l args memo scc ixs))))
+    ((Match s arms)
+     (Cons 7 (hx_app (hx_ser_e s memo scc ixs) (hx_ser_arms arms memo scc ixs))))
+    ((Let bs body)
+     (Cons 8 (hx_app (hx_ser_l bs memo scc ixs) (hx_ser_e body memo scc ixs))))
+    ((If c t e2)
+     (Cons
+       6
+       (hx_app
+         (hx_ser_e c memo scc ixs)
+         (hx_app (hx_ser_e t memo scc ixs) (hx_ser_e e2 memo scc ixs)))))
+    ((IntLit n) (Cons 2 (hx_int n)))
+    ((SymLit s) (Cons 3 (hx_app (chars_of_sym s) ";")))))
+
+(fn hx_ser_l
+  ((es (List Expr))
+   (memo (List (Pair QName Int)))
+   (scc (List QName))
+   (ixs (List (Pair QName Int))))
+  (List Int)
+  (measure (struct es))
+  (match es
+    (Nil (hx_int 0))
+    ((Cons a rest)
+     (hx_app (hx_ser_e a memo scc ixs) (hx_ser_l rest memo scc ixs)))))
+
+(fn hx_ser_arms
+  ((arms (List Arm))
+   (memo (List (Pair QName Int)))
+   (scc (List QName))
+   (ixs (List (Pair QName Int))))
+  (List Int)
+  (measure (struct arms))
+  (match arms
+    (Nil (hx_int 0))
+    ((Cons (Arm p b) rest)
+     (hx_app
+       (hx_ser_pat p memo scc ixs)
+       (hx_app (hx_ser_e b memo scc ixs) (hx_ser_arms rest memo scc ixs))))))
+
+(fn hx_ser_pat
+  ((p Pat)
+   (memo (List (Pair QName Int)))
+   (scc (List QName))
+   (ixs (List (Pair QName Int))))
+  (List Int)
+  (measure (struct p))
+  (match p
+    ((PVar) (Cons 10 Nil))
+    ((PCtor q ps)
+     (Cons 11 (hx_app (hx_ref q memo scc ixs) (hx_ser_pats ps memo scc ixs))))
+    ((PInt v) (Cons 12 (hx_int v)))
+    ((PSym s) (Cons 13 (hx_app (chars_of_sym s) ";")))))
+
+(fn hx_ser_pats
+  ((ps (List Pat))
+   (memo (List (Pair QName Int)))
+   (scc (List QName))
+   (ixs (List (Pair QName Int))))
+  (List Int)
+  (measure (struct ps))
+  (match ps
+    (Nil (hx_int 0))
+    ((Cons p rest)
+     (hx_app (hx_ser_pat p memo scc ixs) (hx_ser_pats rest memo scc ixs)))))
+
+;; a fn node: tag 30, param types + return under one tvar numbering, body
+(fn hx_ser_fn
+  ((fd FnDef)
+   (memo (List (Pair QName Int)))
+   (scc (List QName))
+   (ixs (List (Pair QName Int))))
+  (List Int)
+  (match fd
+    ((FnDef _ ptys ret body)
+     (match (hx_ser_tys ptys memo scc ixs Nil)
+       ((Pair pbs tvs)
+        (match (hx_ser_ty ret memo scc ixs tvs)
+          ((Pair rbs _)
+           (Cons 30 (hx_app pbs (hx_app rbs (hx_ser_e body memo scc ixs)))))))))))
+
+;; a typedef node: tag 31, per-ctor field types (ctor names are
+;; presentation — declaration INDEX is the identity); refine = tag 32
+(fn hx_ser_td
+  ((td TypeDef)
+   (memo (List (Pair QName Int)))
+   (scc (List QName))
+   (ixs (List (Pair QName Int))))
+  (List Int)
+  (match td
+    ((TypeDef _ tparams cs refi)
+     (Cons
+       31
+       (hx_app
+         (hx_int (hx_len_sym tparams))
+         (hx_app
+           (hx_ser_ctors cs memo scc ixs)
+           (match refi
+             (None (hx_int 0))
+             ((Some (Pair bt pq))
+              (match (hx_ser_ty bt memo scc ixs Nil)
+                ((Pair bs _) (Cons 32 (hx_app bs (hx_ref pq memo scc ixs)))))))))))))
+
+(fn hx_ser_ctors
+  ((cs (List CtorDef))
+   (memo (List (Pair QName Int)))
+   (scc (List QName))
+   (ixs (List (Pair QName Int))))
+  (List Int)
+  (measure (struct cs))
+  (match cs
+    (Nil (hx_int 0))
+    ((Cons (CtorDef _ ftys) rest)
+     (match (hx_ser_tys ftys memo scc ixs Nil)
+       ((Pair bs _) (hx_app bs (hx_ser_ctors rest memo scc ixs)))))))
+
+;; ---------------------------------------------------------------------------
+;; node lookup + per-SCC hashing
+;; ---------------------------------------------------------------------------
+
+(fn hx_find_fn ((q QName) (fs (List FnDef))) (Option FnDef)
+  (measure (struct fs))
+  (match fs
+    (Nil None)
+    ((Cons fd rest)
+     (match fd
+       ((FnDef q2 _ _ _) (if (qname_eq q q2) (Some fd) (hx_find_fn q rest)))))))
+
+(fn hx_find_td ((q QName) (tds (List TypeDef))) (Option TypeDef)
+  (measure (struct tds))
+  (match tds
+    (Nil None)
+    ((Cons td rest)
+     (match td
+       ((TypeDef q2 _ _ _) (if (qname_eq q q2) (Some td) (hx_find_td q rest)))))))
+
+;; a node's serialization under the given SCC context
+(fn hx_ser_node
+  ((q QName)
+   (m Module)
+   (memo (List (Pair QName Int)))
+   (scc (List QName))
+   (ixs (List (Pair QName Int))))
+  (List Int)
+  (match (hx_find_fn q (cn_fns m))
+    (None
+      (match (hx_find_td q (cn_tds m))
+        (None Nil)
+        ((Some td) (hx_ser_td td memo scc ixs))))
+    ((Some fd) (hx_ser_fn fd memo scc ixs))))
+
+;; byte-list lexicographic sort (insertion) of (bytes, qname) pairs — the
+;; canonical SCC member order; ties keep input (declaration) order, the
+;; documented residual for structurally identical mutual twins
+(fn hx_blex_le ((a (List Int)) (b (List Int))) Bool
+  (measure (struct a))
+  (match a
+    (Nil True)
+    ((Cons x xr)
+     (match b
+       (Nil False)
+       ((Cons y yr) (if (lt x y) True (if (lt y x) False (hx_blex_le xr yr))))))))
+
+(fn hx_ins_m ((p (Pair (List Int) QName)) (xs (List (Pair (List Int) QName))))
+  (List (Pair (List Int) QName))
+  (measure (struct xs))
+  (match xs
+    (Nil (Cons p Nil))
+    ((Cons h t)
+     (match p
+       ((Pair bs _)
+        (match h
+          ((Pair hbs _)
+           (if (hx_blex_le hbs bs) (Cons h (hx_ins_m p t)) (Cons p xs)))))))))
+
+(fn hx_sort_m ((xs (List (Pair (List Int) QName))))
+  (List (Pair (List Int) QName))
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons h t) (hx_ins_m h (hx_sort_m t)))))
+
+(fn hx_placeholders
+  ((qs (List QName))
+   (m Module)
+   (memo (List (Pair QName Int)))
+   (scc (List QName)))
+  (List (Pair (List Int) QName))
+  (measure (struct qs))
+  (match qs
+    (Nil Nil)
+    ((Cons q rest)
+     (Cons
+       (Pair (hx_ser_node q m memo scc Nil) q)
+       (hx_placeholders rest m memo scc)))))
+
+(fn hx_index ((ms (List (Pair (List Int) QName))) (i Int))
+  (List (Pair QName Int))
+  (measure (struct ms))
+  (match ms
+    (Nil Nil)
+    ((Cons (Pair _ q) rest) (Cons (Pair q i) (hx_index rest (+ i 1))))))
+
+(fn hx_scc_bytes
+  ((ms (List (Pair (List Int) QName)))
+   (m Module)
+   (memo (List (Pair QName Int)))
+   (scc (List QName))
+   (ixs (List (Pair QName Int))))
+  (List Int)
+  (measure (struct ms))
+  (match ms
+    (Nil Nil)
+    ((Cons (Pair _ q) rest)
+     (hx_app (hx_ser_node q m memo scc ixs) (hx_scc_bytes rest m memo scc ixs)))))
+
+;; hash one SCC: order members, digest the group, then each member =
+;; digest(33 ++ scc-digest-bytes ++ index)
+(fn hx_hash_scc ((scc (List QName)) (m Module) (memo (List (Pair QName Int))))
+  (List (Pair QName Int))
+  (let ((ordered (hx_sort_m (hx_placeholders scc m memo scc))))
+    (let ((ixs (hx_index ordered 0)))
+      (let ((gd (hx_digest (hx_scc_bytes ordered m memo scc ixs))))
+        (hx_member_hashes ixs gd memo)))))
+
+(fn hx_member_hashes
+  ((ixs (List (Pair QName Int))) (gd Int) (memo (List (Pair QName Int))))
+  (List (Pair QName Int))
+  (measure (struct ixs))
+  (match ixs
+    (Nil memo)
+    ((Cons (Pair q i) rest)
+     (hx_member_hashes
+       rest
+       gd
+       (Cons
+         (Pair q (hx_digest (Cons 33 (hx_app (hx_bytes gd) (hx_int i)))))
+         memo)))))
+
+;; an SCC is READY when every external known ref is already hashed
+(fn hx_ready
+  ((scc (List QName))
+   (adj (List (Pair QName (List QName))))
+   (memo (List (Pair QName Int))))
+  Bool
+  (measure (struct scc))
+  (match scc
+    (Nil True)
+    ((Cons q rest)
+     (if
+       (hx_ready_refs
+         (match (hx_get_qs q adj)
+           (None Nil)
+           ((Some x) x))
+         scc
+         memo)
+       (hx_ready rest adj memo)
+       False))))
+
+(fn hx_ready_refs
+  ((qs (List QName)) (scc (List QName)) (memo (List (Pair QName Int))))
+  Bool
+  (measure (struct qs))
+  (match qs
+    (Nil True)
+    ((Cons q rest)
+     (if (hx_q_mem q scc) (hx_ready_refs rest scc memo)
+     (match (hx_get_i q memo)
+       (None False)
+       ((Some _) (hx_ready_refs rest scc memo)))))))
+
+;; wait — hx_ready must consult the FULL scc of q... external = not in
+;; THIS scc; memo covers everything already hashed. Correct as written.
+
+;; fixpoint: hash every ready SCC until none remain (fuel = scc count + 1
+;; rounds; the condensation is acyclic so one SCC becomes ready per round
+;; at worst)
+(fn hx_fix
+  ((sccs (List (List QName)))
+   (adj (List (Pair QName (List QName))))
+   (m Module)
+   (memo (List (Pair QName Int)))
+   (fuel Int))
+  (List (Pair QName Int))
+  (measure fuel)
+  (if (le fuel 0) memo
+  (match sccs
+    (Nil memo)
+    (_
+      (match (hx_pass sccs adj m memo Nil)
+        ((Pair memo2 remaining) (hx_fix remaining adj m memo2 (- fuel 1))))))))
+
+(fn hx_pass
+  ((sccs (List (List QName)))
+   (adj (List (Pair QName (List QName))))
+   (m Module)
+   (memo (List (Pair QName Int)))
+   (defer (List (List QName))))
+  (Pair (List (Pair QName Int)) (List (List QName)))
+  (measure (struct sccs))
+  (match sccs
+    (Nil (Pair memo defer))
+    ((Cons scc rest)
+     (if (hx_ready scc adj memo)
+       (hx_pass rest adj m (hx_hash_scc scc m memo) defer)
+       (hx_pass rest adj m memo (Cons scc defer))))))
+
+;; ---------------------------------------------------------------------------
+;; graph assembly + main
+;; ---------------------------------------------------------------------------
+
+(fn hx_fn_nodes ((fs (List FnDef))) (List QName)
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons (FnDef q _ _ _) rest) (Cons q (hx_fn_nodes rest)))))
+
+(fn hx_td_nodes ((tds (List TypeDef))) (List QName)
+  (measure (struct tds))
+  (match tds
+    (Nil Nil)
+    ((Cons (TypeDef q _ _ _) rest) (Cons q (hx_td_nodes rest)))))
+
+(fn hx_adj_fns
+  ((fs (List FnDef))
+   (nodes (List QName))
+   (acc (List (Pair QName (List QName)))))
+  (List (Pair QName (List QName)))
+  (measure (struct fs))
+  (match fs
+    (Nil acc)
+    ((Cons fd rest)
+     (match fd
+       ((FnDef q _ _ _)
+        (hx_adj_fns
+          rest
+          nodes
+          (Cons (Pair q (hx_known (hx_refs_fn fd) nodes Nil)) acc)))))))
+
+(fn hx_adj_tds
+  ((tds (List TypeDef))
+   (nodes (List QName))
+   (acc (List (Pair QName (List QName)))))
+  (List (Pair QName (List QName)))
+  (measure (struct tds))
+  (match tds
+    (Nil acc)
+    ((Cons td rest)
+     (match td
+       ((TypeDef q _ _ _)
+        (hx_adj_tds
+          rest
+          nodes
+          (Cons (Pair q (hx_known (hx_refs_td td) nodes Nil)) acc)))))))
+
+(fn hx_len_sccs ((s (List (List QName)))) Int
+  (measure (struct s))
+  (match s
+    (Nil 0)
+    ((Cons _ t) (+ 1 (hx_len_sccs t)))))
+
+;; one output line: [!]<hex>  <mod>.<name>
+(fn hx_qname_str ((q QName)) (List Int)
+  (hx_app (hx_path_str (qn_mod q)) (hx_app "." (chars_of_sym (qn_name q)))))
+
+(fn hx_path_str ((p (List Symbol))) (List Int)
+  (measure (struct p))
+  (match p
+    (Nil Nil)
+    ((Cons s rest)
+     (match rest
+       (Nil (chars_of_sym s))
+       (_ (hx_app (chars_of_sym s) (hx_app "/" (hx_path_str rest))))))))
+
+;; qn_mod is a PREFIX of the target path: a directory impl's public fns
+;; rebind to the interface's module path (std list), one segment above the
+;; impl file's own (std list list) — prefix acceptance covers both
+(fn hx_path_prefix ((p (List Symbol)) (q (List Symbol))) Bool
+  (measure (struct p))
+  (match p
+    (Nil True)
+    ((Cons a pr)
+     (match q
+       (Nil False)
+       ((Cons b qr) (if (sym_eq a b) (hx_path_prefix pr qr) False))))))
+
+(fn hx_lines
+  ((qs (List QName))
+   (m Module)
+   (mp (List Symbol))
+   (memo (List (Pair QName Int)))
+   (acc (List Int)))
+  (List Int)
+  (measure (struct qs))
+  (match qs
+    (Nil acc)
+    ((Cons q rest)
+     (if (hx_path_prefix (qn_mod q) mp)
+       (match (hx_get_i q memo)
+         (None (hx_lines rest m mp memo acc))
+         ((Some h)
+          (hx_lines
+            rest
+            m
+            mp
+            memo
+            (hx_app
+              acc
+              (hx_app
+                (hx_mark q m)
+                (hx_app (hx_hex h) (hx_app "  " (hx_app (hx_qname_str q) "\n"))))))))
+       (hx_lines rest m mp memo acc)))))
+
+;; `!` when the recognizer flags the fn (hash meaningful on canonical form)
+(fn hx_mark ((q QName) (m Module)) (List Int)
+  (match (hx_find_fn q (cn_fns m))
+    (None "")
+    ((Some (FnDef _ _ _ body))
+     (match (cn_e body m)
+       (Nil "")
+       (_ "!")))))
+
+(fn hx_last_path ((srcs (List SrcEntry)) (acc (List Int))) (List Int)
+  (measure (struct srcs))
+  (match srcs
+    (Nil acc)
+    ((Cons (SrcEntry p _ _) rest) (hx_last_path rest p))))
+
+(fn hx_run ((target (List Int)) (w World)) World
+  (match (resolve_closure target True w)
+    ((Pair srcs w2)
+     (match
+       (build_module_r
+         srcs
+         (Module Nil Nil Nil (FnTrie None Nil) Nil)
+         (hx_seed))
+       (None (exit 2 (write "hash: module does not build\n" w2)))
+       ((Some m)
+        (let
+          ((nodes (hx_q_app (hx_fn_nodes (cn_fns m)) (hx_td_nodes (cn_tds m)))))
+          (let
+            ((n (hx_len_q nodes))
+             (adj
+               (hx_adj_tds (cn_tds m) nodes (hx_adj_fns (cn_fns m) nodes Nil))))
+            (let ((fuel (+ 16 (* 8 (* (+ n 1) (+ n 1))))))
+              (let ((sccs (hx_sccs nodes adj fuel)))
+                (let ((memo (hx_fix sccs adj m Nil (+ 1 (hx_len_sccs sccs)))))
+                  (let
+                    ((out
+                       (hx_lines
+                         nodes
+                         m
+                         (module_path_of (hx_last_path srcs target))
+                         memo
+                         Nil)))
+                    (match out
+                      (Nil
+                        (exit
+                          1
+                          (write
+                            (hx_app
+                              "hash: no target-module lines; nodes/sccs/memo = "
+                              (hx_app
+                                (show_int n)
+                                (hx_app
+                                  "/"
+                                  (hx_app
+                                    (show_int (hx_len_sccs sccs))
+                                    (hx_app
+                                      "/"
+                                      (hx_app
+                                        (show_int (hx_len_memo memo))
+                                        "\n"))))))
+                            w2)))
+                      (_ (exit 0 (write out w2)))))))))))))))
+
+(fn hx_len_memo ((m (List (Pair QName Int)))) Int
+  (measure (struct m))
+  (match m
+    (Nil 0)
+    ((Cons _ t) (+ 1 (hx_len_memo t)))))
+
+(fn hx_seed () (List Symbol)
+  (list
+    (quote Cons)
+    (quote Nil)
+    (quote Some)
+    (quote None)
+    (quote True)
+    (quote False)
+    (quote Pair)))
+
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Pair args w1)
+     (match args
+       ((Cons target Nil) (hx_run target w1))
+       (_ (exit 2 (write "usage: hash <file.shard>\n" w1)))))))
