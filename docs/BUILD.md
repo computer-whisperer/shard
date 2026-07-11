@@ -51,6 +51,21 @@ to rip up and redo if we have a better idea" — §8 uses it); the four
 loose ends of §1 are the needs statement; the expectation that the
 right answer looks unlike any existing language's build system.
 
+**Second-round ruling (USER, 2026-07-11): mod.build.shard is the
+configuration home, not just the metaprogram slot.** mod.req.shard
+establishes the req-tied targets and durable goals; mod.build.shard
+is the natural place for profiles, hook registrations, and the
+explicit binding of pinned implementation files (`.x86.shard` etc.)
+to owned exports of the mod.req surface — bins, libs, opaque types
+and functions. The driving motive is **filesystem-structure
+independence**: a build entry imports `meta/build` (or similar) and
+emits `BuildProfile` values from ordinary functions
+(`bin_helloworld_wasm()`-style) — no kernel-backed syntax, boring
+shard with a standard symbol and setup, easy for an aftermarket
+build chain to co-opt, and droppable entirely when a consumer only
+interprets or manipulates shard programmatically. Consequences
+threaded through §3, §4, §5, §7; D1/D4/D5 updated in §10.
+
 
 ## 1. The needs
 
@@ -128,9 +143,21 @@ to the build story itself:
 
 A **product** is (decl × profile). The **default profile** is what
 makes tier 0 real: counted-heap classes where no proofs are offered,
-derived twins, derived layout from the platform model. A repo (or a
-host program) states its products; everything else is derived or
-pinned per §4. Residence and override structure are D1 (§10).
+derived twins, derived layout from the platform model.
+
+**Residence (RESOLVED, second-round ruling):** profiles are ordinary
+shard values defined in the module's **mod.build.shard** — imported
+from `meta/build`'s vocabulary and returned by standard symbols —
+or constructed directly by a host program. `BuildProfile` values are
+the single interface the driver consumes (§7); mod.build.shard, the
+host program, and the default deriver are three producers of the
+same values, one consumer path. Two laws guard the common case:
+**absence is inviolable** — no mod.build.shard means tier 0, all
+defaults, and the boring-library vision never regresses into a
+mandatory third file; and **build entries are outside the check
+closure** — they import models and targets, are loaded only by the
+driver (the §6o precedent made law), and never burden proof
+checking.
 
 
 ## 4. Stage artifacts and the authorship trichotomy
@@ -141,12 +168,18 @@ each with a canonical file identity (naming: D4). Every stage
 artifact has exactly three possible authors, and **the gates do not
 care which** (the safety inversion makes authorship ceremony-free):
 
-- **PIN** — a literal file, present at its canonical location. The
-  driver verifies it through the same gates it would apply to its own
-  output. This is the first-class home for hand-written twins (loose
-  end 2): write `NAME.x86.shard`, and nothing else. Pins are not a
-  fallback tier — for mem-arc-shaped modules they are the genuinely
-  cleaner form (user ruling).
+- **PIN** — a hand-written artifact, **bound by declaration, not
+  discovered by path**: the module's build entry imports the twin
+  file (ordinary `(import "mem.x86.shard")`) and binds its values by
+  qname to owned exports of the mod.req surface — bins, libs, opaque
+  types and functions alike. The driver's only filesystem coupling is
+  the import resolver the module system already owns; file naming
+  (`.x86.shard`) is human convention, never load-bearing. The driver
+  verifies pinned artifacts through the same gates it applies to its
+  own output. Pins are not a fallback tier — for mem-arc-shaped
+  modules they are the genuinely cleaner form (user ruling). Binding
+  opaque-type impls this way is the conformance-graph path selection
+  of §2 stated as data — the multi-impl consumer in full generality.
 - **DERIVE** — the repo generators fill the edge. wasmgen and x86gen
   hold no privileged position in this frame: they are repo-owned
   metaprograms occupying the derive slot, gated like everything else.
@@ -171,7 +204,8 @@ The recovered original intent, unbundled into its durable form:
 
 - A synthesis hook is an ordinary shard function owned by the module
   it serves ("modules know *how* to specialize themselves; profiles
-  know *what for*"), receiving a **BuildCtx** — target, profile
+  know *what for*") and **registered in its mod.build.shard** (the
+  configuration home), receiving a **BuildCtx** — target, profile
   residue relevant to the module, and for generics the resolved reps
   of the type arguments (§6). Contents of BuildCtx are
   implementation-refined (D7), per the fuzzy-stack license.
@@ -240,12 +274,16 @@ zoo:
   pin, or call the hook, or derive — then gate. The gates are the
   driver's spine, inherited intact: regen (for derived artifacts),
   schema, kernel, accepts, byte-tie + manifest, engine.
-- **The CLI is a thin skin over a library API** — module/decl in,
-  bytes + certs out. The library surface is the embedding consumer
-  (the README's IR ambition) served by construction; a jit-like host
-  calls the same entry the CLI does. Compile latency is a first-class
-  criterion on this path (the evaluator-promotion discipline
-  applies).
+- **The CLI is a thin skin over a library API whose sole input
+  vocabulary is `BuildProfile` values** (meta/build). The CLI path
+  loads build entries and calls their standard symbols; a jit-like
+  host constructs the same values directly and calls the same
+  library entry — the embedding consumer (the README's IR ambition)
+  served with zero special-casing, and the drop-entirely property
+  free: a purely programmatic consumer never touches mod.build,
+  meta/build's vocabulary, or a filesystem layout at all. Compile
+  latency is a first-class criterion on this path (the
+  evaluator-promotion discipline applies).
 - **Incrementality by content addressing**: stage artifacts carry
   std/sha256 digests over their inputs (the canon arc's content
   addressing; the bin/ stamp discipline generalized). Fresh nodes
@@ -262,9 +300,13 @@ zoo:
 
 Ripped up (under the standing license):
 
-- `std/mem/mod.build.shard`, `std/str/mod.build.shard`, and their
-  per-module `lowbuild.sh` — the modules migrate to pinned twins
-  under the driver; the variant zoo gets profile-keyed naming (D4).
+- The **bodies** of `std/mem/mod.build.shard` and
+  `std/str/mod.build.shard` (plan assembly, Target-branching) and
+  their per-module `lowbuild.sh`. The *slot* is re-founded, not
+  buried: mod.build.shard survives with the new charter —
+  configuration home (profiles, hook registrations, pin bindings)
+  per the second-round ruling. std/mem's binding of its hand twins
+  becomes the first build entry of the new era.
 - The `examples/lowbuild_*.sh` zoo — collapsed into the driver, save
   the world-edge legs.
 - Plan-as-user-artifact, everywhere and permanently.
@@ -284,9 +326,11 @@ Kept:
 1. **Driver skeleton:** products + PIN/DERIVE over the existing lib
    pipeline, both targets; the generic scripts collapse; corpus pins
    move to driver invocations. No new semantics — pure consolidation.
-2. **The mod.build funeral:** std/mem and std/str migrate to pinned
-   twins under the driver; both mod.build.shard files and per-module
-   scripts deleted; variant naming (D4) decided here with real cases.
+2. **The mod.build re-founding:** std/mem and std/str migrate to the
+   new-charter build entries — pin bindings replacing plan-assembly
+   bodies; per-module scripts deleted; meta/build's BuildProfile
+   vocabulary and the standard-symbol shape (D1 residual) proven out
+   on real cases here.
 3. **Profiles v1:** target sets + variant selection + the first
    memory-class surface, coordinated with MEMORY.md's rung ladder
    (D1 resolved here).
@@ -302,20 +346,29 @@ Kept:
 
 ## 10. Decision points
 
-- **D1 — profile residence.** Sibling form beside the decl, separate
-  file, or repo-level defaults with an override chain. Propose at
-  rung 3 with real products in hand.
+- **D1 — profile residence: RESOLVED (second-round ruling) —
+  mod.build.shard**, as ordinary values over meta/build's vocabulary;
+  hosts construct the same values directly. Residuals: the
+  standard-symbol shape (one standard entry returning the product
+  list — the lean, since name-pattern scanning is a stringly
+  convention of the kind this ledger deletes — vs named per-product
+  functions, the ruling's `bin_helloworld_wasm()` sketch); and
+  product discovery at repo scope (how the driver enumerates build
+  entries). Both at rung 2 with real cases.
 - **D2 — pin grain.** Lean: the twin file (fns + certs together) is
   the pin unit; per-fn pinning inside a derived twin is a later
   refinement if demanded.
 - **D3 — vector pins.** RESOLVED by prior record: synthesized by
   default, hand vectors as the curated fallback (LOWERING.md §6ag).
-- **D4 — variant naming.** `.wasm.shard`/`.x86.shard` suffixes vs
-  profile-keyed names once one module has two same-target variants
-  (`mem.wasm2.shard` is the standing warning). Decide at rung 2.
-- **D5 — hookable stages and declaration site.** Lean: hooks are
-  module-owned functions; profile provides context only. Which stages
-  are hookable (spec-source synthesis, twin, glue?) — rung 4.
+- **D4 — variant naming: DEMOTED.** Binding is explicit data in the
+  build entry, so file naming is human convention and never
+  load-bearing; settle the convention informally at rung 2
+  (`mem.wasm2.shard` stops being a warning sign once nothing parses
+  names).
+- **D5 — hookable stages.** Declaration site RESOLVED (second-round
+  ruling): hooks register in mod.build.shard; profile provides
+  context only. Which stages are hookable (spec-source synthesis,
+  twin, glue?) — rung 4.
 - **D6 — cert story for synthesized code.** Schemas / prove / emit,
   per §6. Rung 4.
 - **D7 — BuildCtx contents and the metaprogram return surface.**
