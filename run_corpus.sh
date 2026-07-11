@@ -244,6 +244,7 @@ TARGETS=(
   tools/search/rev.shard
   tools/search/search.shard
   tools/search/census.shard
+  tools/search/catalog.shard
 )
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -356,6 +357,22 @@ fi
 echo "=== search: canonicality census (G1+G2) ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/census.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# Catalog census pin (docs/SEARCH.md S7-lite, G5): the structural list
+# fragment enumerated at rungs 1-2, post-filtered through cn_e, and
+# battery-bucketed by behavior. GEN/CLEAN/BEHAVIORS + the flagged
+# content-family tallies + rev/id spelling counts are the arc's first
+# spellings-per-behavior numbers against the REAL dialect (rung 1:
+# 20/17/13 — the playground's certified "exactly 13"; rung 2:
+# 3395/2345/1068 — behaviors match the playground's 1068, rev = 2
+# spellings). A canon-rule or grammar change moves these lines and
+# fails the diff — re-pin deliberately, with the change.
+echo "=== search: catalog census (G5) ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/catalog.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi

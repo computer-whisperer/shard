@@ -555,3 +555,77 @@ is exactly the contextual C8 tier the playground priced as separate
 "dialect" rules and CANON.md later ratified into the ledger. The
 census flywheel's first in-repo turn agrees with §1's premise: the
 real dialect is measurably tighter than the approximation.
+
+
+### Slice 3 — the catalog census, S7-lite (LANDED 2026-07-11)
+
+**What landed: tools/search/catalog.shard** — the first WHOLE-BODY
+grammar (control flow inside the grammar) and the first
+spellings-per-behavior numbers against the real dialect.
+
+- **The fragment:** f : (List Int) -> (List Int) over match / Cons /
+  Nil / append / structural recursion — no comparisons, arithmetic, or
+  literals; matches at tail positions only; typed by construction
+  (Cons's Int slot = pin heads; recursion only on destructured tails,
+  so every candidate is total). THE FRAGMENT INVARIANT that keeps the
+  builder simple: at most one matchable (unpinned) list var exists on
+  any path — matching pins one, destructuring adds one, and Nil arms
+  legitimately have zero. Budgets: rung d = match depth AND expr
+  depth; matches spend match budget only (arms keep the expr budget);
+  leaves and (f t) are atoms.
+- **The two-tier method, made explicit.** The GENERATIVE tier carries
+  the position-local rules (leaf respell filter, no f-calls on
+  pinned-Nil binders, pin-head Int slots, atoms-only append-left,
+  Nil-free append-right, unpinned scrutinees, decl-ordered exhaustive
+  arms). The FILTERED tier is measured, not excluded: every generated
+  candidate is judged by cn_e, and the flagged families are TALLIED
+  per (rule, detail) — the generate → census → classify loop running
+  against the real ledger. The content-shaped residue (exact rebuild
+  points through shared sub-holes; C10m vacuous matches) is exactly
+  what a product grammar cannot exclude without content machinery.
+- **Sub-hole SHARING pays for itself:** Cons alternatives and
+  append-right reference one shared full operand sub-grammar
+  (in-entry sharing is licensed — alternatives are exclusive), which
+  collapses what would be per-pin sub-grammar iteration (a mutual-SCC
+  measure fight) into a SINGLE self-recursive builder on measure m+e.
+- **Measured, corpus-pinned (G5):**
+  - rung 1: **GEN 20 / CLEAN 17 / BEHAVIORS 13** (flagged: 2 vacuous,
+    1 rebuild) — ties exactly to the playground's certified "19
+    programs = exactly 13 functions" (their 19 = our 17 clean + the 2
+    vacuous members their catalog kept);
+  - rung 2: **GEN 3,395 / CLEAN 2,345 / BEHAVIORS 1,068** (flagged:
+    1,039 rebuilds, 11 vacuous; 44s) — behaviors match the
+    playground's 1,068 EXACTLY, rev = 2 spellings (their post-R1
+    number), id = 4; spellings-per-behavior 2.20 (playground post-R1:
+    2.21).
+  - Rank/unrank round-trips verified per candidate across the whole
+    sweep (the first multi-sub-hole, Match-shaped alternatives through
+    sk_rank).
+
+**The slice's discovery, fed back:** the kernel's C8 'respell
+SUBSUMES the playground's mined R1 rule — (f t) under a pinned-Nil t
+is a *mention* of the scrutinee var in a binder-less arm, so the whole
+"no recursion on a pinned-Nil variable" family (8,016 of 13,428
+generated members before the filter — 60%!) is priced position-locally
+by the real ledger. What the playground learned by mining, the ledger
+already knew; the census confirmed it by measurement.
+
+**Gotchas recorded.**
+
+- The measure solver cannot see through `(if …)` expressions in
+  recursive-call ARGUMENTS — branch the CALL, not the argument, and
+  the obligations become plain farkas arithmetic.
+- Int-measured fns whose decrease needs parameter nonnegativity must
+  GUARD it (`(if (lt m 0) (Err …) …)`) — loud dead code that hands the
+  solver its hypotheses.
+- Battery decode failures are treated as builder bugs (loud refusal),
+  not test failures: this fragment is typed and total by construction,
+  so a stuck candidate means the generator drifted.
+
+**Open (rolls forward):** the rebuild family (1,039 at rung 2) is
+position-local in principle — generative exclusion needs per-pin
+sub-grammar variants, i.e. either a bounded unroll (pins ≤ rung) or a
+variant mechanism in meta/sketch; deferred until the residue matters
+at a deeper rung. D10/D11 unchanged. Behavior digests (D8 sha256)
+enter with the sampling instruments, not the exact rungs — full
+output vectors are the bucket keys here (exact, no collision caveat).
