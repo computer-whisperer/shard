@@ -1,13 +1,26 @@
 # shard — design intent
 
-This is the "why" behind the project. The README is the front door and the
-status; `LANGUAGE.md` specifies what runs today; this document records the
+This is the "why" behind the project, in full. The README is the front door;
+`LANGUAGE.md` specifies what runs today; the arc ledgers (the README's
+documentation map) carry each subsystem's rulings. This document records the
 shape of the whole idea so the pieces make sense as one thing.
 
 The one-sentence version: **build software the way verified compilers build
 machine code — as a chain of separately-proven refinements — but for
 general-purpose programs, top to bottom, with the program itself kept as a
 data structure the tools can reason about and compile to bare metal.**
+
+The longer version is the trichotomy the README leads with: every language
+asks one notation to do three jobs at once — state what the software must
+do, express how it is computed, control what the hardware executes — and
+all three suffer, with the result welded to one ecosystem and one
+monolithic compiler. shard splits the jobs into separate, separately-proven
+artifacts in one tiny total language. And one ordering governs everything
+below: **shard is meant to be used.** The proofs, the models, the
+dissolution discipline all serve a language you can ship binaries from,
+embed as an IR, and hand to a model author without a review bottleneck —
+trust is the mechanism that makes that usefulness free, not a goal
+competing with it.
 
 
 ## 1. Programs are data
@@ -29,6 +42,18 @@ transform it, and prove things about the transformation, without dragging an
 opaque language runtime along. Contrast Rust/C, where reasoning about a program
 means reasoning about a large, informal "C virtual machine"; here the
 machine model is small and itself written in the same provable language (§4).
+
+This is an ambition, not just a property: **shard is meant to be usable as
+an IR.** A recurring shape in real projects — UI frameworks, ML runtimes,
+compute pipelines — is "invent an IR for the domain, then build a
+sufficiently fast compiler or evaluator for it," and no common language can
+*be* that IR (wasm comes closest and still misses domains). shard's
+toolchain — reader, evaluator, prover, lowering generators — is built to be
+exploitable as a component inside a host project, including jit-like
+systems: construct shard terms programmatically, evaluate or compile them,
+and attach proofs exactly where the domain wants guarantees. "Not a
+traditional compiler" was never a stylistic preference; it was a refusal to
+build a monolith that can only be stood outside of and invoked.
 
 **Build-time, not runtime.** "Programs are data" is a power the *tooling* uses
 at build time. It is **not** a capability a shipped application gets — see §5.
@@ -72,15 +97,19 @@ Two consequences worth stating outright:
 
 - **The compiler is outside the trusted core.** It belongs to the same regime
   as `tools/prove` and `tools/shardfmt`: untrusted machinery that makes
-  development palatable. Today's chain (`tools/lower` → `tools/codegen` → C)
-  is *functionally* inside only because it does not yet emit refinement
-  proofs — its correctness is attested differentially (loud-error gates,
-  byte-identical corpus runs, and the standing rule that the compiled chain
-  is never the soundness authority). The graduation path is
-  **differentially-gated accelerator → proof-emitting transformer**: the
-  compiler hands back the artifact *plus* a checked refinement tying it to
-  the source, and the only residual trust leaf is that the hardware conforms
-  to the modeled target semantics (§4).
+  development palatable. This is no longer aspiration — the proof-emitting
+  pipeline exists: `tools/wasmgen` and `tools/x86gen` lower a `(lib …)` or
+  `(bin …)` declaration into a lowered twin plus per-function certificates,
+  and gates make the generator irrelevant to trust (regenerated output must
+  be byte-identical; the certs must check in the kernel; the emitted image
+  must re-assemble *from the certs*; the artifact must replay on the real
+  engine — V8, or the bare CPU). The only residual trust leaf is that the
+  hardware conforms to the modeled target semantics (§4); `LOWERING.md` and
+  `X86.md` are the ledgers. What remains merely *differentially-gated* is
+  the temporary native chain that compiles the dev-loop engines
+  (`bin/shard_check`, `bin/shard_eval`) — never the soundness authority,
+  and retired when the certifying pipeline compiles the evaluator itself
+  (the flagship, `LOWERING.md` §7).
 - **Performant representations need zero kernel or compiler features.**
   A packed string, an in-place buffer algorithm, an arena: each is a
   *lower-level shard program* (over the `Word`/`Bytes`/`Mem` vocabulary —
@@ -89,33 +118,67 @@ Two consequences worth stating outright:
   efficiently on the available machine is **app-level work in the untrusted
   regime** — never a kernel representation, never a smart-compiler guess.
   (Optional surface sugar is the lone exception, and it is sugar only.)
+  `MEMORY.md` is the ledger that scales this position to representation and
+  memory management at large.
 
 
-## 4. The machine is modeled in shard
+## 4. The machine is modeled in shard — and shard stays theoretical
 
-Because programs are data and the evaluator is small, the **target itself can be
-modeled in shard**: write a wasm (or x86) interpreter as an ordinary shard
-program. Then a piece of emitted wasm is just more object data, and proving
-`wasm_program ≡ spec` is the *same equational reasoning* as proving anything
-else — you run the wasm on the shard-written interpreter and chain the
-equivalence up to the requirement.
+This premise outgrew its original statement, and what it became is the most
+distinctive thing about the project. **shard proper is a theoretical
+language**: unbounded integers, a free unchecked heap, pure, total. Hardware
+never enters the language — it enters as an **emulated model**, an ordinary
+shard library whose functions read like a very verbose assembler for the
+target. `models/wasm` is a pile of shard functions that sound like wasm ASM;
+`models/x86` and `models/linux` do the same for the CPU and the syscall
+boundary. The kernel neither knows nor cares that these libraries describe
+machines: a machine program is just more object data run on a shard-written
+interpreter, and proving `machine_program ≡ spec` is the same equational
+reasoning as proving anything else.
 
-This is not hypothetical. The **v1 pilot's M4** result: a hand-written **wasm**
-reverse, run on a structured-wasm interpreter written in the object language,
-**proven equal to functional `rev` for all inputs** as the composed chain
-`wasm ⊑ rev_loop ⊑ rev`. Tellingly, it needed *no new inference rule* — only a
-performance fix — because the wasm was just another program to reduce.
-Verification reaching the metal falls out of the architecture, rather than
-requiring a separate verified-compiler effort.
+This was demonstrated before it was a plan. The **v1 pilot's M4** result — a
+hand-written wasm reverse, run on a structured-wasm interpreter written in
+the object language, **proven equal to functional `rev` for all inputs** as
+the composed chain `wasm ⊑ rev_loop ⊑ rev` — needed *no new inference
+rule*, only a performance fix, because the wasm was just another program to
+reduce. Verification reaching the metal falls out of the architecture.
+Since then the premise has been industrialized: the wasm model carries a V8
+differential, the x86 model runs on silicon behind six gates, and the Linux
+model gives syscalls theorem-pedigree shims (`ISA.md`, `X86.md`).
+
+Two consequences define the resulting shape:
+
+- **Hardware limits become honest premises.** The theoretical language never
+  wraps, truncates, or runs out of memory; the lowered artifact does. The
+  delta is stated, not smuggled: certificates carry explicit premises
+  ("under 2^64", "while live data fits"), discharged where the program's
+  own invariants prove them and surfaced at the artifact boundary where
+  they cannot be. No silent truncation, no trusted optimizer discretion.
+- **Representation is swappable under proof.** The algorithm you reason
+  about walks high-level linked lists in the theoretical domain; the
+  artifact you ship mutates linear memory in place; and the swap between
+  them is generated automatically by the untrusted tools and certified by
+  the kernel — a theorem, not a compiler pass. The nearest relatives we
+  know are Isabelle's Sepref and the Fiat/CakeML data-refinement lineage;
+  what we have not seen elsewhere is the whole package in one place — the
+  same tiny language hosting the requirements, the algorithm, the machine
+  model, and the swap proofs, with an artifact-grade byte-tied binary at
+  the end. `MEMORY.md` records the general law (owned mutation licensed by
+  linearity of the state thread, at cell and region granularity).
 
 
 ## 5. Serious applications compile to bare metal
 
 A serious shard application is **compiled, not interpreted**. The output is a
 **standalone binary with no runtime, no GC, no reflection, no interpreter, no
-kernel sidecar.** The snake demo (`examples/snake_game/`) is the litmus: it
-should reduce to a bare x86 executable that is just its `step` function over
-in-register/in-memory state, plus IO syscalls — nothing else.
+kernel sidecar.** This stopped being a litmus test and became a shipped rung:
+`(bin …)` declarations lower to plainly executable Linux ELFs — zero C,
+direct syscalls, glue that only moves bytes — whose current pins run on real
+silicon, and `examples/snake_game_3` is a playable interactive binary whose
+I/O contract is fully met. The standing discipline is **dissolution**: the
+proof apparatus is entirely build-time, every harness convenience needs a
+named path to dissolving away, and the runtime residue of the whole system
+is exactly the proven bytes plus the syscall shims.
 
 This is the crucial counterweight to §1. "Programs are data" is a *build-time*
 power. **We cannot assume a running application can manipulate compute
@@ -131,7 +194,9 @@ leaving no closure machinery in the binary. Likewise runtime `eval` or runtime
 reflection of a program's own code: forbidden in code destined for compilation,
 because the bare binary has none of it. Processing an `Expr` *value* (a tagged
 tree) is fine and compiles like any data structure — what is forbidden is
-**code-as-a-runtime-value**.
+**code-as-a-runtime-value**. (The ratified path for higher-order functions is
+exactly this law applied: static defunctionalization/lowering, admissible
+only because it leaves nothing behind.)
 
 
 ## 6. The substrate: shard, narrow, full, and a disposable bootstrap
@@ -167,12 +232,29 @@ clean entrypoint: the kernel's executable `main` lives in `kernel/eval.shard`
 and evaluates them), and the `eval` binary is a pure passthrough — it bootstraps
 the toolchain + entrypoint and runs `(main world)`, with no eval logic in Rust.
 I/O is done by `extern` calls (uninterpreted in proofs, performed by the host
-handler), with Rust only ferrying bytes. The `check` binary is the legacy
-orchestrator, kept until proof-checking is likewise a shard app run on this
-executor. The remaining cord-cutter is the shard→machine compiler.
+handler), with Rust only ferrying bytes. Proof-checking is likewise a shard
+app: `kernel/check.shard` IS the checker, and checking a file means running
+it on this executor. For the dev loop the checker and engine are additionally
+compiled to native binaries (`bin/shard_check`, `bin/shard_eval`) by the
+temporary native chain — stamp-guarded against source drift and never the
+soundness authority (authoritative runs use the Rust interpreter path
+explicitly). The remaining cord-cutter is the certifying shard→machine
+compile of the evaluator itself (the flagship arc, `LOWERING.md` §7), at
+which point `rust_bootstrap/` and the temporary chain are both deleted.
 
 
 ## 7. Identity is structural, and soundness depends on it
+
+First, the posture. Soundness is the core foundation behind everything here
+even when it is not the headline: a derivation of `true = false` would be as
+catastrophic for shard as it would be for Lean — every contract, every trust
+ledger, every shipped binary rests on the kernel's word. The working rules
+that follow: a soundness suspicion outranks all other work; every soundness
+bug found is fixed AND pinned by a rejects test in the corpus
+(primitive-name shadowing, zero-case induction, parallel-let reversal — all
+live exploits once, all pinned now); and the kernel stays small enough to
+audit (`TCB.md` is the full accounting). The rest of this section records
+the two structural decisions that discipline produced.
 
 The kernel is a recursive checker in the LCF lineage (§1): a proof step is
 sound only if every name in it denotes what the checker thinks it does. Two
@@ -257,6 +339,29 @@ So the architecture is split on purpose: **generation is cheap and untrusted**
 product thesis, not just hygiene — proof *search* is swappable, the *checker*
 is not.
 
+The same economics apply to build-time compute at large. **Build time is
+practically free; runtime is the performance-critical dimension** — and most
+languages under-exploit the free side. Rust's UOM library encodes SI units
+in the type system to catch dimension errors, a papercut that was always a
+build-time problem; the borrow checker moves runtime hazards into pre-run
+verification. Both are steps in the right direction, and both are fixed,
+conservative mechanisms baked into a language. The proof engine is the
+graduated version: arbitrary per-program facts, checked once at build time,
+with nothing left to police at runtime. Its sharpest consequence is the
+safety inversion recorded in `MEMORY.md` §1 — because the refinement bar
+itself delivers safety, layouts and representations compete only on
+efficiency and proof effort; an aggressive spelling can fail to compile,
+never ship a hazard.
+
+The generation side has a design consequence too, not just an economic one:
+**shard is LLM-first.** The language is designed for what a 2026 agentic
+model can utilize, not for what a human learns fastest — corpus alignment
+over verbosity (the corpus is the manual, and it fits in a context window),
+guessable names, errors hardened into loud refusals rather than silent
+degradation. The requirement chain is what makes the resulting economics
+safe to adopt: nobody reviews ten thousand generated lines; they review the
+`mod.req.shard` surface those lines provably meet.
+
 The boundary is worth drawing precisely. The trusted core's charter is
 **exactly three things**: how to parse shard, *one* reference way to execute
 the resulting ASTs, and the logic for establishing formal proofs relating
@@ -291,10 +396,14 @@ outside the base is a corpus-gate violation rather than a convention.
 
 Flagged so we don't paint ourselves into a corner:
 
-- **Data refinement is the real dragon.** Proving `naive(x) = optimized(x)`
-  where both use the *same* representation (the O(n²)→O(n) kind) is tractable.
-  Proving a lowering that *changes the data representation* (abstract set →
-  sorted array → packed buffer → registers) is where it gets genuinely hard.
+- **Data refinement is the real dragon — now engaged.** Proving
+  `naive(x) = optimized(x)` where both use the *same* representation (the
+  O(n²)→O(n) kind) is tractable. Proving a lowering that *changes the data
+  representation* (abstract set → sorted array → packed buffer → registers)
+  is where it gets genuinely hard. The first battles are won — the mem arc's
+  proven in-place programs, the lib/bin pipelines — and `MEMORY.md` is the
+  campaign ledger. The safety inversion bounds the downside: a lost battle
+  costs speed or proof effort, never soundness.
 - **Efficiency is not a correctness property.** `∀ x. impl(x) = spec(x)` proves
   a lowering *correct*, never *fast*. The framework gatekeeps correctness;
   choosing an efficient lowering is the engineer's/LLM's job. A cost /
@@ -311,12 +420,17 @@ Flagged so we don't paint ourselves into a corner:
 
 ## See also
 
-- `../README.md` — front door, quick start, current feature checklist.
+- `../README.md` — front door, quick start, the full documentation map.
 - `LANGUAGE.md` — normative spec of narrow shard (syntax, semantics, the
   narrow/full distinction).
+- `TCB.md` — the trust story: exactly what is trusted, and why.
+- `TOTALITY.md` — the measure-descent admissibility system;
+  `REFINEMENT.md` — structural invariants as types.
 - `BOUNDARIES.md` — modeling external systems (extern + axiom; the direct-style
   World/extern I/O the `eval` runner realizes).
+- `ISA.md` / `LOWERING.md` / `X86.md` / `CANON.md` / `MEMORY.md` /
+  `SEARCH.md` — the arc ledgers: targets-as-libraries, the lowering form,
+  the x86 rung, the canonical dialect, memory/representation, program
+  search.
 - `REVISIT.md` — the design-decision ledger: every choice and when to revisit.
-- `TOTALITY.md` — the measure-descent admissibility system: the verify-don't-search
-  architecture, the single-fn and mutual gates, cycle-readiness, the TCB.
 - `archive/TRANSFER.md` — the v1→v2 handoff: premise, lessons, what changed.
