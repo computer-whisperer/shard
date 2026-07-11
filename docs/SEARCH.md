@@ -6,7 +6,10 @@ is the scope ledger for the meta-search arc: a lasting, in-repo
 replication of the search playground's basic behaviors, built under
 meta/ against the real kernel, the real canonical dialect, and the
 real proof machinery. Decision points are marked D1–D8 and each needs
-a ruling before code assumes an answer.
+a ruling before code assumes an answer. Revised after the 2026-07-11
+review discussion: the durable-home identity (§1), the clone-first
+graduation methodology (§4), and the performance posture (D7) record
+user rulings from that discussion; the rest remains proposed.
 
 The evidence base is ~/workspace/playground/shard_search_playground
 (read as data, never touched). Its README is the measurement record:
@@ -16,15 +19,28 @@ canon rules that CANON.md §13 turned into C11/C12. Numbers cited
 below are from that README.
 
 
-## 1. Why a lasting version: coupling, not scale
+## 1. Why a lasting version: the durable home
 
 The playground proved five things (its "Lessons for shard" section):
 superposition is an executor strategy, sketches are meta-layer work,
 the generator/recognizer duality earns its keep, canonicalization is
-the whole cost of search, and the memo is the whole game. It proved
-them at scales the in-repo version should NOT chase — 10^36-candidate
-settlements are Rust-with-mutable-arenas numbers, and the playground
-remains the right lab for them.
+the whole cost of search, and the memo is the whole game.
+
+The lasting version is built in shard because shard is where anything
+we intend to DEPEND on lives (USER RULING 2026-07-11). Two facts
+retire the speed anxiety up front:
+
+- **The constant factor is a closing gap, not a given.** shard's
+  performance gap with C/Rust is an active target, and closing it
+  ENTIRELY is a success criterion for the language itself. A search
+  engine written in shard rides that trajectory (a flagship consumer
+  for the lowering arc), rather than hedging against it.
+- **The domain's swings dwarf the constant factor anyway.** Measured
+  across every playground arc: a demo either settles in under a
+  second or is intractable, and which of the two it is is decided by
+  the quotient/oracle match (the two-curve gap), never by evaluator
+  throughput. A 100x hosting factor turns 0.5s into 50s and turns
+  intractable into intractable; it does not move the boundary.
 
 What the playground structurally CANNOT do is couple. It re-implements
 an approximation of the dialect (its own canon flags), remaps
@@ -54,8 +70,11 @@ overflow. Every one of those gaps is a thing this repo already owns:
   kernel-certified equivalence brackets, is CANON.md's measurement
   instrument from §13 onward.
 
-So the arc's identity: **exactness + kernel coupling + the proof
-finish line, at honest depths; scale stays in the playground.**
+So the arc's identity: **the durable home for program search —
+kernel-coupled, proof-finished — whose primary deliverable is the
+meta/ vocabulary for navigating the space of shard code.** The
+playground stays what it is: the throwaway exploration lab whose
+findings graduate here.
 
 
 ## 2. What the repo already owns (the mapping)
@@ -141,19 +160,20 @@ plumbing.
 
 **S4b. Superposed candidate executor — needed narrowing proper.**
 The choices-map machine: shared thunk graph, consulted-choice-set
-memo, fork on demanded holes, prefix kills, don't-cares. This is
-where all the playground's scale leverage lives (1,181× at rev d3;
-the only reason 10^15+ spaces settle) — and it is also the most code,
-the least kernel coupling, and the piece whose advantage a
-shard_eval-hosted evaluator throttles hardest (the memo is mutable-
-arena-shaped; pure-functional hash-consing pays real constants).
-*Buys:* scale beyond what enumeration reaches — IF the hosting is
-fast enough to matter.
-*Costs:* high build, high maintenance, performance-critical.
-*Verdict:* **DEFER (D6)** — go/no-go after S1–S7 land, on measured
-evidence: a concrete task the shipped subsystems cannot settle, plus
-a measured throughput estimate. The long-run answer may instead be
-compiling meta/search natively via the lib pipeline (D7).
+memo, fork on demanded holes, prefix kills, don't-cares.
+*Buys:* essentially every fast settlement in the playground is a
+narrowing result — enumeration is the engine that dies (1,181× at
+rev d3; the only reason 10^15+ spaces settle at all). This is the
+core engine of the "basic search behaviors" being replicated.
+*Costs:* the largest single machine in the arc. The memo is
+mutable-arena-shaped in Rust, and a pure-functional rendering
+(structural keys, the two-level consulted-set index) is a real
+engineering item — an item to engineer, not a reason to doubt the
+tier (D6/D7).
+*Verdict:* **BUILD, late in the ladder** — sequenced after
+S1–S3/S4a because those rungs are its parts bin (vocabulary,
+grammars, the evaluation substrate, neutrals), not because its value
+or its hosting is in question. No performance go/no-go.
 
 **S5. Laws oracle — requirements as the search oracle.**
 Parse a requirement, bind its ∀-binders symbolically, remap the
@@ -226,25 +246,38 @@ is tests (floor only) or laws (certifiable).
 **Explicitly OUT (not built, not maintained):**
 the OE engine (the literature control lost the races; its lesson is
 recorded), the damascene race UI, the vanity/IC comparison, wedge
-parallelism (until a native-compiled engine exists to parallelize),
-hashprune/opportunistic pruning (meaningful only on S4b's fork tree),
-u128 counter machinery (bignum), and playground parity as a goal —
-the playground keeps modes this version never grows.
+parallelism (until a compiled engine exists to parallelize),
+hashprune/opportunistic pruning (an S4b follow-on; enters scope only
+with it), u128 counter machinery (bignum), and playground parity as
+a goal — the playground keeps modes this version never grows.
 
 
-## 4. Placement and tier
+## 4. Placement: clone first, graduate into meta/
 
-- **meta/sketch** — S1. Pure vocabulary, meta-stdlib resident (the
-  meta/shape precedent: consumable by any program that manipulates
-  shard source).
-- **meta/search** — S2 + S3 + S4a + S5 (+ S4b if ever ruled in), a
-  directory module. Engines and grammar builders as a library.
-- **tools/search** — the thin bin: tasks, batteries, census drivers,
-  CLI, the corpus-gate entry points. Consumes meta/search the way
-  shardfmt consumes meta/format.
-- Proof rendering (S6) starts life in meta/search's render layer;
-  anything tools/prove later also speaks graduates per the
-  hygiene-pass ruling.
+The development vehicle (USER RULING 2026-07-11): **build a clone of
+the program-search toy as a tool, and graduate pieces into meta/ as
+clean buckets emerge** — the tools/low/shape → meta/shape history,
+adopted this time as deliberate methodology rather than discovered
+after the fact. The arc's primary durable deliverable is the meta/
+vocabulary for navigating the space of shard code (terms with holes,
+grammars, enumerate/count/rank, fingerprints, symbolic verdicts);
+the search tool is the forcing function that mines that vocabulary
+and the example that proves each bucket before it graduates.
+
+- **tools/search** — the clone: tasks, batteries, census drivers,
+  CLI, corpus-gate entry points, and the engines while they are
+  still finding their shape.
+- **meta/sketch** — the one candidate for day-one meta/ residence,
+  with its reuse story stated up front: term-with-holes +
+  enumerate/count/rank/fill is lesson 3's ask ("shipping
+  enumerate/count beside each recognizer would make every
+  certified-lowering shape a search dialect for free") and
+  meta/shape's natural sibling. Confirm at D2.
+- **meta/search** (or finer buckets) — populated by graduation, not
+  up front. A piece moves when its bucket is clean and a second
+  consumer exists or is concrete, per the hygiene-pass ruling.
+- Proof rendering (S6) starts in the tool; anything tools/prove
+  later also speaks graduates the same way.
 
 Trust posture, stated once: **the engines are never the soundness
 authority.** Ground/symbolic agreement is a gate; the kernel replay
@@ -264,8 +297,10 @@ separation, but duplicates every walker and cuts sketches off from
 the real recognizers. (c) Holes as reserved FVars — viable, but a
 numbered-hole id rides better as an IntLit argument.
 
-**D2 — placement and trust tier** as §4. Ratifying this fixes where
-code lives and that no engine output is ever load-bearing without G4.
+**D2 — placement and graduation.** §4's clone-first methodology;
+whether meta/sketch starts in meta/ on its stated reuse story or
+begins in the tool like everything else; and the trust tier (no
+engine output is ever load-bearing without G4).
 
 **D3 — evaluation substrate.** Ground evaluation via kernel/evm
 (`evm_call_pure`, the meta/invoke precedent) — single hosted
@@ -293,20 +328,24 @@ depth 0 excluded so the goal cannot cite itself). Both are search
 heuristics only — the rendered proof faces the kernel's own induction
 forms, and G4 is the judge.
 
-**D6 — the superposed executor (S4b).** DEFERRED. Go/no-go revisited
-only with: (a) a named task the shipped subsystems cannot settle at a
-depth that matters, and (b) a measured throughput estimate of the
-hosted engine on that task. Until then, enumeration + symbolic
-verdicts at honest depths.
+**D6 — engine sequencing.** S4b is IN SCOPE — it is the engine
+behind every fast playground settlement — and sequenced late only
+because the earlier rungs are its parts bin. There is no performance
+gate on it: constant factors do not decide tractability in this
+domain (D7), so the only open question about S4b is build order.
 
-**D7 — the performance path.** Rung 1: shard_eval-hosted, correctness
-first, depths that finish. Rung 2: engine-level economies (the
-evm/meta-invoke precedent: 10min → 1.5s was won by machinery, not
-hosting). Rung 3 — the C-class answer: meta/search compiled natively
-via the lib pipeline, making search a flagship lowering consumer; the
-playground's Rust-speed advantage is not permanent, it is exactly the
-gap the lowering arc exists to close. The playground stays the scale
-lab meanwhile, and parity is explicitly not maintained.
+**D7 — performance posture (USER RULING 2026-07-11).** The in-shard
+version is the durable one: shard is not considered successful until
+the C/Rust gap is entirely closed, and this arc builds on that
+trajectory rather than hedging against it. The measured domain
+structure backs it — demos settle in under a second or not at all;
+tractability is decided by the quotient/oracle match, not evaluator
+throughput. Consequence: **no scoping decision in this arc is made
+on performance grounds.** When something is actually slow, the order
+of attack is engine-level economies first (the evm/meta-invoke
+precedent: 10min → 1.5s was machinery, not hosting), then the
+lowering arc's native compilation (search as a flagship lib
+consumer — the C-class dissolution).
 
 **D8 — census discipline.** Behavior digests via std/sha256 over
 rendered battery outputs; two-level fingerprints where the task has
@@ -332,16 +371,18 @@ std/rng under a fixed seed (bit-identical reruns).
    law-certified synthesis (rev against its interface) and one
    certified catalog bracket (the d1 "19 = exactly 13") land as
    corpus-pinned, kernel-checked artifacts.
-6. **(gated by D6)** the superposed executor, if the evidence ever
-   says so.
+6. **S4b:** the superposed executor — the choices-map machine over
+   the by-now-proven vocabulary; G3 extends to three-way agreement;
+   hashprune-style pruning follows it, not precedes it.
 
 Each slice lands ratified-scope-first, gates with it, corpus
-DIFF-clean, per house discipline.
+DIFF-clean, per house discipline. Graduation into meta/ happens at
+slice boundaries when a bucket is clean (D2), not on a schedule.
 
 
 ## 7. Non-goals, stated once
 
-No UI. No scale headlines. No second evaluator to keep honest (the
+No UI. No second evaluator to keep honest (the
 ground path IS kernel/evm). No unproven rewrite ever enters a neutral
 join. No engine verdict is ever cited without its G4 certificate. And
 no obligation, ever, to keep up with the playground — it explores,
