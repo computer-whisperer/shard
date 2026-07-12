@@ -1072,3 +1072,55 @@ this enters the ledger as C-rules is the canon arc's decision (canon
 owns kernel/canon and CANON.md); the census machinery here is ready
 to re-measure whatever it prices. To be taken up in MAIN once this
 arc merges.
+
+
+### Slice 6 — S4b, the superposed executor (LANDED 2026-07-11)
+
+**The last ladder rung. tools/search/superpose.shard** — named
+SUPERPOSE, the ledger's own word: "narrow" is the bootstrap/
+inner-kernel shard DIALECT's name and stays free (USER, mid-slice).
+
+**What landed: the choices-map machine, built AS RATIFIED.** One
+evaluation runs all candidates at once: the sketch evaluates under a
+partial assignment; an unassigned hole BLOCKS and the region forks
+once per alternative; a failing test prunes everything consistent
+with the partial assignment in one evaluation; a passing region's
+unconsulted holes are don't-cares. Pure-functionally: a thunk arena
+(binary trie keyed by node id, mod/ediv addressing) with CALL-BY-NEED
+update (forcing overwrites with an indirection), LAZY evaluation
+(args allocate as thunks; only scrutinee spines force — laziness is
+what makes don't-cares real), holes as meta/sketch's own reserved
+heads (the grammar IS the hole table — the D10 ruling realized:
+correlation lives in the choices map, the vocabulary stays
+exact-counting), and consistent-counting as a product over reachable
+holes against the sk_count memo.
+
+**Measured, corpus-pinned, settlement EXACT both depths:**
+
+    SUPERPOSE rev DEPTH 1: TOTAL 108   FOUND 1  KILLED 107   REGIONS 26  FORKS 8
+    SUPERPOSE rev DEPTH 2: TOTAL 7788  FOUND 13 KILLED 7775  REGIONS 443 FORKS 133
+
+443 superposed evaluations settle what enumeration pays 7,788 for —
+a 17.6× region reduction at d2 (the playground's leverage curve,
+reproduced in kind). **AGREE extends G3 three ways** and any drift
+exits 1 inside the tool: found coverage equals the enumerative
+engine's solution count; every enumerative solution lies in a found
+region (membership via the rank matcher against the region's
+partially-filled template — match_e reused verbatim); every found
+region's representative (don't-cares at alternative 0) passes the
+kernel/evm battery.
+
+**Design notes.** Call-by-need vs the kernel's call-by-value: for the
+total, grammar-typed fragments searched here the results agree
+(totality), and the AGREE gate polices it empirically — recorded,
+not assumed. The consulted-choice-set MEMO (cross-region thunk
+sharing, the ratified second half of S4b's core) is the next lever
+INSIDE this component: v1 runs per-region arenas, correctness gated
+first; the fork counts above are the baseline it will be measured
+against.
+
+**THE LADDER IS COMPLETE.** S1–S8 and every gate G1–G5 have landed
+instances; the exit criterion was met in slice 5. What remains in
+the arc's queue is by ruling, not ladder: the memo lever, then the
+false-equivalence-proof hunter, with canon-redundancy and the joint
+task behind them.

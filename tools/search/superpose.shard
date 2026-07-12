@@ -1,0 +1,1210 @@
+;;; tools/search/superpose.shard — S4b: the SUPERPOSED CANDIDATE
+;;; EXECUTOR
+;;; (docs/SEARCH.md S4b, built AS RATIFIED — post-exit ruling
+;;; 2026-07-11; named SUPERPOSE, the ledger's own word — "narrow" is
+;;; the bootstrap/inner-kernel shard DIALECT's name and stays free). One evaluation runs ALL candidates at once: the
+;;; sketch evaluates under a PARTIAL choices assignment; reaching an
+;;; unassigned hole BLOCKS, and the region forks once per alternative
+;;; — so a test failure prunes an entire subspace (everything
+;;; consistent with the partial assignment) in one evaluation, and a
+;;; passing region's unconsulted holes are DON'T-CARES covering many
+;;; candidates. Settlement is EXACT: found coverage + killed = the
+;;; grammar's total, term for term.
+;;;
+;;; The machine, pure-functionally:
+;;;   - a THUNK ARENA (binary trie keyed by node id) with
+;;;     CALL-BY-NEED update: forcing a thunk overwrites it with an
+;;;     indirection to its value, so shared subterms are paid once
+;;;     per region;
+;;;   - LAZY evaluation (args allocate as thunks, matches force only
+;;;     the scrutinee spine) — that is what makes don't-cares real:
+;;;     a hole never demanded is never forked on. For the TOTAL,
+;;;     grammar-typed fragments searched here, call-by-need agrees
+;;;     with the kernel's call-by-value on every result (totality),
+;;;     and the AGREE gate cross-checks every found region's
+;;;     representative against kernel/evm anyway;
+;;;   - holes are meta/sketch's own reserved-head calls; the grammar
+;;;     IS the hole table (D10 ruling: correlation lives HERE, in the
+;;;     choices map — the grammar vocabulary stays exact-counting);
+;;;   - counting rides the grammar: a partial assignment's
+;;;     consistent-count is the product over reachable holes of
+;;;     (assigned -> its alternative's sub-holes, unassigned -> the
+;;;     entry's subspace from the sk_count memo).
+;;;
+;;; The consulted-choice-set MEMO (cross-region thunk sharing — the
+;;; ratified second half of S4b's core) is the next lever INSIDE this
+;;; component; v1 lands the machine with per-region arenas, gated for
+;;; correctness first. Recorded, not silent.
+;;;
+;;; RUN IT: bin/shard_eval run tools/search/superpose.shard        (d1 + d2 pins)
+;;;         bin/shard_eval run tools/search/superpose.shard rev N  (depth N)
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/reduce.shard")
+(import "../../meta/sketch")
+(import "../../meta/invoke")
+(import "rev.shard")
+(import "search.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel reduce try_step_prim))
+(use (:: kernel loader World))
+(use (:: kernel loader get_args))
+(use (:: kernel loader write))
+(use (:: kernel loader exit))
+(use (:: meta sketch *))
+(use (:: meta invoke *))
+(use (:: tools search rev *))
+(use (:: tools search search *))
+
+;; ---- the node arena: a binary trie keyed by node id -------------------------
+
+(type Node
+  (SuThunk Expr (List Int))  ; unevaluated: expr + env of node ids
+  (SuInd Int)  ; forced: indirection to the value node
+  (SuInt Int)
+  (SuQuote Symbol)
+  (SuCtor QName (List Int)))  ; fields are LAZY node ids
+
+(type SuBr (SuBLeaf) (SuBNode (Option Node) SuBr SuBr))
+
+;; ids address the trie by the bits of (id+1), LSB first, stopping at 1
+(fn sb_get ((t SuBr) (j Int) (fuel Int)) (Option Node)
+  (measure fuel)
+  (if (lt fuel 1) None
+  (match t
+    ((SuBLeaf) None)
+    ((SuBNode v l r)
+     (if (le j 1) v
+     (if (int_eq (mod j 2) 0) (sb_get l (ediv j 2) (- fuel 1))
+     (sb_get r (ediv j 2) (- fuel 1))))))))
+
+(fn sb_set ((t SuBr) (j Int) (n Node) (fuel Int)) SuBr
+  (measure fuel)
+  (if (lt fuel 1) t
+  (match t
+    ((SuBLeaf)
+     (if (le j 1) (SuBNode (Some n) (SuBLeaf) (SuBLeaf))
+     (if (int_eq (mod j 2) 0)
+       (SuBNode None (sb_set (SuBLeaf) (ediv j 2) n (- fuel 1)) (SuBLeaf))
+       (SuBNode None (SuBLeaf) (sb_set (SuBLeaf) (ediv j 2) n (- fuel 1))))))
+    ((SuBNode v l r)
+     (if (le j 1) (SuBNode (Some n) l r)
+     (if (int_eq (mod j 2) 0) (SuBNode v (sb_set l (ediv j 2) n (- fuel 1)) r)
+     (SuBNode v l (sb_set r (ediv j 2) n (- fuel 1)))))))))
+
+;; arena: next id + trie
+(type SuA (SuA Int SuBr))
+
+(fn sa_new () SuA (SuA 0 (SuBLeaf)))
+
+(fn sa_alloc ((a SuA) (n Node)) (Pair Int SuA)
+  (match a
+    ((SuA sz t) (Pair sz (SuA (+ sz 1) (sb_set t (+ sz 1) n 64))))))
+
+(fn sa_get ((a SuA) (i Int)) (Option Node)
+  (match a
+    ((SuA _ t) (sb_get t (+ i 1) 64))))
+
+(fn sa_put ((a SuA) (i Int) (n Node)) SuA
+  (match a
+    ((SuA sz t) (SuA sz (sb_set t (+ i 1) n 64)))))
+
+;; ---- choices: hole id -> chosen alternative (assoc; -1 = absent) ------------
+
+(fn ch_get ((asg (List (Pair Int Int))) (h Int)) Int
+  (measure (struct asg))
+  (match asg
+    (Nil -1)
+    ((Cons (Pair k v) rest) (if (int_eq k h) v (ch_get rest h)))))
+
+(fn ch_set ((asg (List (Pair Int Int))) (h Int) (v Int)) (List (Pair Int Int))
+  (Cons (Pair h v) asg))
+
+;; ---- grammar access ----------------------------------------------------------
+
+(fn su_alts ((g Grammar) (h Int)) (Option (List Expr))
+  (match g
+    ((Grammar es) (su_alts_go es h))))
+
+(fn su_alts_go ((es (List GEnt)) (h Int)) (Option (List Expr))
+  (measure (struct es))
+  (match es
+    (Nil None)
+    ((Cons (GEnt id alts) rest)
+     (if (int_eq id h) (Some alts) (su_alts_go rest h)))))
+
+(fn alt_nth ((alts (List Expr)) (k Int)) (Option Expr)
+  (measure (struct alts))
+  (match alts
+    (Nil None)
+    ((Cons a rest) (if (le k 0) (Some a) (alt_nth rest (- k 1))))))
+
+(fn alts_len ((alts (List Expr))) Int
+  (measure (struct alts))
+  (match alts
+    (Nil 0)
+    ((Cons _ t) (+ 1 (alts_len t)))))
+
+;; ---- counting: consistent candidates under a partial assignment -------------
+;; product over an expr's holes: assigned -> the chosen alternative's
+;; own count; unassigned -> the entry's total subspace (the sk_count
+;; memo, computed once per grammar)
+
+(type CcR (CcRErr (List Int)) (CcROk Int))
+
+(fn cc_expr
+  ((g Grammar)
+   (memo (List (Pair Int Int)))
+   (asg (List (Pair Int Int)))
+   (e Expr)
+   (fuel Int))
+  CcR
+  (measure fuel)
+  (if (lt fuel 1) (CcRErr "consistent: fuel")
+  (match (holes_e e Nil)
+    ((SkIdsErr msg) (CcRErr msg))
+    ((SkIdsOk hs) (cc_holes g memo asg hs (- fuel 1))))))
+
+(fn cc_holes
+  ((g Grammar)
+   (memo (List (Pair Int Int)))
+   (asg (List (Pair Int Int)))
+   (hs (List Int))
+   (fuel Int))
+  CcR
+  (measure fuel)
+  (if (lt fuel 1) (CcRErr "consistent: fuel")
+  (match hs
+    (Nil (CcROk 1))
+    ((Cons h rest)
+     (match (cc_hole g memo asg h (- fuel 1))
+       ((CcRErr msg) (CcRErr msg))
+       ((CcROk n)
+        (match (cc_holes g memo asg rest (- fuel 1))
+          ((CcRErr msg) (CcRErr msg))
+          ((CcROk n2) (CcROk (* n n2))))))))))
+
+(fn cc_hole
+  ((g Grammar)
+   (memo (List (Pair Int Int)))
+   (asg (List (Pair Int Int)))
+   (h Int)
+   (fuel Int))
+  CcR
+  (measure fuel)
+  (if (lt fuel 1) (CcRErr "consistent: fuel")
+  (let ((a (ch_get asg h)))
+    (if (lt a 0)
+      (match (memo_find h memo)
+        (None (CcRErr "consistent: hole missing from the count memo"))
+        ((Some n) (CcROk n)))
+      (match (su_alts g h)
+        (None (CcRErr "consistent: unknown hole"))
+        ((Some alts)
+         (match (alt_nth alts a)
+           (None (CcRErr "consistent: alternative out of range"))
+           ((Some ae) (cc_expr g memo asg ae (- fuel 1))))))))))
+
+;; ---- the lazy evaluator (one fueled SCC) -------------------------------------
+;; Results thread the arena. Blocked carries the demanded hole.
+
+(type SuR
+  (SuRErr (List Int))
+  (SuROut)
+  (SuRBlocked Int SuA)
+  (SuRFail SuA)
+  (SuRVal Int SuA))
+
+(type SuL
+  (SuLErr (List Int))
+  (SuLOut)
+  (SuLBlocked Int SuA)
+  (SuLFail SuA)
+  (SuLVals (List Int) SuA))
+
+;; force a node to WHNF (call-by-need: thunks update to indirections)
+(fn su_whnf
+  ((fuel Int)
+   (m Module)
+   (candq QName)
+   (body Expr)
+   (g Grammar)
+   (asg (List (Pair Int Int)))
+   (a SuA)
+   (r Int))
+  SuR
+  (measure fuel)
+  (if (lt fuel 1) (SuROut)
+  (match (sa_get a r)
+    (None (SuRErr "superpose: dangling node id"))
+    ((Some n)
+     (match n
+       ((SuThunk e env)
+        (match (su_eval (- fuel 1) m candq body g asg a env e)
+          ((SuRErr msg) (SuRErr msg))
+          ((SuROut) (SuROut))
+          ((SuRBlocked h a2) (SuRBlocked h a2))
+          ((SuRFail a2) (SuRFail a2))
+          ((SuRVal v a2) (SuRVal v (sa_put a2 r (SuInd v))))))
+       ((SuInd v) (su_whnf (- fuel 1) m candq body g asg a v))
+       ((SuInt _) (SuRVal r a))
+       ((SuQuote _) (SuRVal r a))
+       ((SuCtor _ _) (SuRVal r a)))))))
+
+;; evaluate an expr to WHNF under an env of node ids (BVar 0 = head)
+(fn su_eval
+  ((fuel Int)
+   (m Module)
+   (candq QName)
+   (body Expr)
+   (g Grammar)
+   (asg (List (Pair Int Int)))
+   (a SuA)
+   (env (List Int))
+   (e Expr))
+  SuR
+  (measure fuel)
+  (if (lt fuel 1) (SuROut)
+  (match (hole_view e)
+    ((HVHole h)
+     ;; a HOLE: assigned -> evaluate the chosen alternative in THIS
+     ;; env (the fill contract's frame); unassigned -> block
+     (let ((c (ch_get asg h)))
+       (if (lt c 0) (SuRBlocked h a)
+       (match (su_alts g h)
+         (None (SuRErr "superpose: unknown hole"))
+         ((Some alts)
+          (match (alt_nth alts c)
+            (None (SuRErr "superpose: alternative out of range"))
+            ((Some ae) (su_eval (- fuel 1) m candq body g asg a env ae))))))))
+    ((HVBad msg) (SuRErr msg))
+    ((HVNot)
+     (match e
+       ((FVar _) (SuRErr "superpose: free variable"))
+       ((BVar k)
+        (match (env_nth_i k env)
+          (None (SuRErr "superpose: BVar out of scope"))
+          ((Some r) (su_whnf (- fuel 1) m candq body g asg a r))))
+       ((Ctor q args)
+        (match (su_thunks a env args)
+          ((Pair rs a2)
+           (match (sa_alloc a2 (SuCtor q rs))
+             ((Pair r a3) (SuRVal r a3))))))
+       ((Call q args)
+        (if (qname_eq q candq)
+          (match (su_thunks a env args)
+            ((Pair rs a2)
+             (su_eval (- fuel 1) m candq body g asg a2 (rev_ints rs Nil) body)))
+          (match (trie_lookup q (mod_ft_su m))
+            ((Some fd)
+             (match fd
+               ((FnDef _ _ _ fbody)
+                (match (su_thunks a env args)
+                  ((Pair rs a2)
+                   (su_eval
+                     (- fuel 1)
+                     m
+                     candq
+                     body
+                     g
+                     asg
+                     a2
+                     (rev_ints rs Nil)
+                     fbody))))))
+            (None
+              ;; a prim: deep-force the args to ground exprs, step
+              ;; through the kernel's own prim table, evaluate the
+              ;; ground result
+              (match (su_thunks a env args)
+                ((Pair rs a2)
+                 (match (su_gexprs (- fuel 1) m candq body g asg a2 rs)
+                   ((SuGLErr msg) (SuRErr msg))
+                   ((SuGLOut) (SuROut))
+                   ((SuGLBlocked h a3) (SuRBlocked h a3))
+                   ((SuGLFail a3) (SuRFail a3))
+                   ((SuGLOk es a3)
+                    (match (try_step_prim (qn_name q) es)
+                      (None
+                        (SuRErr "superpose: unknown head on ground arguments"))
+                      ((Some res)
+                       (su_eval (- fuel 1) m candq body g asg a3 Nil res)))))))))))
+       ((Match scrut arms)
+        (match (su_eval (- fuel 1) m candq body g asg a env scrut)
+          ((SuRErr msg) (SuRErr msg))
+          ((SuROut) (SuROut))
+          ((SuRBlocked h a2) (SuRBlocked h a2))
+          ((SuRFail a2) (SuRFail a2))
+          ((SuRVal sv a2)
+           (su_arms (- fuel 1) m candq body g asg a2 env sv arms))))
+       ((Let bs bd)
+        (match (su_thunks a env bs)
+          ((Pair rs a2)
+           (su_eval (- fuel 1) m candq body g asg a2 (ext_env_i rs env) bd))))
+       ((If c t e2)
+        (match (su_eval (- fuel 1) m candq body g asg a env c)
+          ((SuRErr msg) (SuRErr msg))
+          ((SuROut) (SuROut))
+          ((SuRBlocked h a2) (SuRBlocked h a2))
+          ((SuRFail a2) (SuRFail a2))
+          ((SuRVal cv a2)
+           (match (sa_get a2 cv)
+             (None (SuRErr "superpose: dangling if condition"))
+             ((Some n)
+              (match n
+                ((SuCtor cq _)
+                 (if (sym_eq (qn_name cq) (quote True))
+                   (su_eval (- fuel 1) m candq body g asg a2 env t)
+                 (if (sym_eq (qn_name cq) (quote False))
+                   (su_eval (- fuel 1) m candq body g asg a2 env e2)
+                   (SuRFail a2))))
+                (_ (SuRFail a2))))))))
+       ((IntLit k)
+        (match (sa_alloc a (SuInt k))
+          ((Pair r a2) (SuRVal r a2))))
+       ((SymLit s)
+        (match (sa_alloc a (SuQuote s))
+          ((Pair r a2) (SuRVal r a2)))))))))
+
+;; allocate arg thunks WITHOUT evaluating (laziness lives here)
+(fn su_thunks ((a SuA) (env (List Int)) (es (List Expr))) (Pair (List Int) SuA)
+  (measure (struct es))
+  (match es
+    (Nil (Pair Nil a))
+    ((Cons e rest)
+     (match (sa_alloc a (SuThunk e env))
+       ((Pair r a2)
+        (match (su_thunks a2 env rest)
+          ((Pair rs a3) (Pair (Cons r rs) a3))))))))
+
+;; first-match arm walk; a Blocked scrutinee position stops the walk
+(fn su_arms
+  ((fuel Int)
+   (m Module)
+   (candq QName)
+   (body Expr)
+   (g Grammar)
+   (asg (List (Pair Int Int)))
+   (a SuA)
+   (env (List Int))
+   (sv Int)
+   (arms (List Arm)))
+  SuR
+  (measure fuel)
+  (if (lt fuel 1) (SuROut)
+  (match arms
+    (Nil (SuRFail a))
+    ((Cons (Arm p b) rest)
+     (match (su_pat (- fuel 1) m candq body g asg a p sv)
+       ((SuPErr msg) (SuRErr msg))
+       ((SuPOut) (SuROut))
+       ((SuPBlocked h a2) (SuRBlocked h a2))
+       ((SuPFail a2) (SuRFail a2))
+       ((SuPNo a2) (su_arms (- fuel 1) m candq body g asg a2 env sv rest))
+       ((SuPOk binds a2)
+        (su_eval (- fuel 1) m candq body g asg a2 (ext_env_i binds env) b)))))))
+
+(type SuP
+  (SuPErr (List Int))
+  (SuPOut)
+  (SuPBlocked Int SuA)
+  (SuPFail SuA)
+  (SuPNo SuA)
+  (SuPOk (List Int) SuA))
+
+;; match a pattern against a node, forcing only what the pattern
+;; inspects; binds are node ids in pattern order
+(fn su_pat
+  ((fuel Int)
+   (m Module)
+   (candq QName)
+   (body Expr)
+   (g Grammar)
+   (asg (List (Pair Int Int)))
+   (a SuA)
+   (p Pat)
+   (r Int))
+  SuP
+  (measure fuel)
+  (if (lt fuel 1) (SuPOut)
+  (match p
+    ((PVar) (SuPOk (Cons r Nil) a))
+    ((PCtor q ps)
+     (match (su_whnf (- fuel 1) m candq body g asg a r)
+       ((SuRErr msg) (SuPErr msg))
+       ((SuROut) (SuPOut))
+       ((SuRBlocked h a2) (SuPBlocked h a2))
+       ((SuRFail a2) (SuPFail a2))
+       ((SuRVal v a2)
+        (match (sa_get a2 v)
+          (None (SuPErr "superpose: dangling scrutinee"))
+          ((Some n)
+           (match n
+             ((SuCtor cq fs)
+              (if (qname_eq q cq)
+                (su_pats (- fuel 1) m candq body g asg a2 ps fs)
+                (SuPNo a2)))
+             (_ (SuPNo a2))))))))
+    ((PInt k)
+     (match (su_whnf (- fuel 1) m candq body g asg a r)
+       ((SuRErr msg) (SuPErr msg))
+       ((SuROut) (SuPOut))
+       ((SuRBlocked h a2) (SuPBlocked h a2))
+       ((SuRFail a2) (SuPFail a2))
+       ((SuRVal v a2)
+        (match (sa_get a2 v)
+          (None (SuPErr "superpose: dangling scrutinee"))
+          ((Some n)
+           (match n
+             ((SuInt x) (if (int_eq x k) (SuPOk Nil a2) (SuPNo a2)))
+             (_ (SuPNo a2))))))))
+    ((PSym s)
+     (match (su_whnf (- fuel 1) m candq body g asg a r)
+       ((SuRErr msg) (SuPErr msg))
+       ((SuROut) (SuPOut))
+       ((SuRBlocked h a2) (SuPBlocked h a2))
+       ((SuRFail a2) (SuPFail a2))
+       ((SuRVal v a2)
+        (match (sa_get a2 v)
+          (None (SuPErr "superpose: dangling scrutinee"))
+          ((Some n)
+           (match n
+             ((SuQuote x) (if (sym_eq x s) (SuPOk Nil a2) (SuPNo a2)))
+             (_ (SuPNo a2)))))))))))
+
+(fn su_pats
+  ((fuel Int)
+   (m Module)
+   (candq QName)
+   (body Expr)
+   (g Grammar)
+   (asg (List (Pair Int Int)))
+   (a SuA)
+   (ps (List Pat))
+   (rs (List Int)))
+  SuP
+  (measure fuel)
+  (if (lt fuel 1) (SuPOut)
+  (match ps
+    (Nil
+      (match rs
+        (Nil (SuPOk Nil a))
+        ((Cons _ _) (SuPErr "superpose: pattern arity"))))
+    ((Cons p pr)
+     (match rs
+       (Nil (SuPErr "superpose: pattern arity"))
+       ((Cons r rr)
+        (match (su_pat (- fuel 1) m candq body g asg a p r)
+          ((SuPErr msg) (SuPErr msg))
+          ((SuPOut) (SuPOut))
+          ((SuPBlocked h a2) (SuPBlocked h a2))
+          ((SuPFail a2) (SuPFail a2))
+          ((SuPNo a2) (SuPNo a2))
+          ((SuPOk binds a2)
+           (match (su_pats (- fuel 1) m candq body g asg a2 pr rr)
+             ((SuPErr msg) (SuPErr msg))
+             ((SuPOut) (SuPOut))
+             ((SuPBlocked h a3) (SuPBlocked h a3))
+             ((SuPFail a3) (SuPFail a3))
+             ((SuPNo a3) (SuPNo a3))
+             ((SuPOk binds2 a3) (SuPOk (ints_app binds binds2) a3)))))))))))
+
+(type SuGr
+  (SuGErr (List Int))
+  (SuGOut)
+  (SuGBlocked Int SuA)
+  (SuGFail SuA)
+  (SuGOk Expr SuA))
+
+;; ground one node to an Expr (deep force)
+(fn su_gexpr
+  ((fuel Int)
+   (m Module)
+   (candq QName)
+   (body Expr)
+   (g Grammar)
+   (asg (List (Pair Int Int)))
+   (a SuA)
+   (r Int))
+  SuGr
+  (measure fuel)
+  (if (lt fuel 1) (SuGOut)
+  (match (su_whnf (- fuel 1) m candq body g asg a r)
+    ((SuRErr msg) (SuGErr msg))
+    ((SuROut) (SuGOut))
+    ((SuRBlocked h a2) (SuGBlocked h a2))
+    ((SuRFail a2) (SuGFail a2))
+    ((SuRVal v a2)
+     (match (sa_get a2 v)
+       (None (SuGErr "superpose: dangling ground node"))
+       ((Some n)
+        (match n
+          ((SuThunk _ _) (SuGErr "superpose: whnf returned a thunk"))
+          ((SuInd _) (SuGErr "superpose: whnf returned an indirection"))
+          ((SuInt k) (SuGOk (IntLit k) a2))
+          ((SuQuote s) (SuGOk (SymLit s) a2))
+          ((SuCtor q fs)
+           (match (su_gexprs (- fuel 1) m candq body g asg a2 fs)
+             ((SuGLErr msg) (SuGErr msg))
+             ((SuGLOut) (SuGOut))
+             ((SuGLBlocked h a3) (SuGBlocked h a3))
+             ((SuGLFail a3) (SuGFail a3))
+             ((SuGLOk es a3) (SuGOk (Ctor q es) a3)))))))))))
+
+(type SuGL
+  (SuGLErr (List Int))
+  (SuGLOut)
+  (SuGLBlocked Int SuA)
+  (SuGLFail SuA)
+  (SuGLOk (List Expr) SuA))
+
+(fn su_gexprs
+  ((fuel Int)
+   (m Module)
+   (candq QName)
+   (body Expr)
+   (g Grammar)
+   (asg (List (Pair Int Int)))
+   (a SuA)
+   (rs (List Int)))
+  SuGL
+  (measure fuel)
+  (if (lt fuel 1) (SuGLOut)
+  (match rs
+    (Nil (SuGLOk Nil a))
+    ((Cons r rest)
+     (match (su_gexpr (- fuel 1) m candq body g asg a r)
+       ((SuGErr msg) (SuGLErr msg))
+       ((SuGOut) (SuGLOut))
+       ((SuGBlocked h a2) (SuGLBlocked h a2))
+       ((SuGFail a2) (SuGLFail a2))
+       ((SuGOk e a2)
+        (match (su_gexprs (- fuel 1) m candq body g asg a2 rest)
+          ((SuGLErr msg) (SuGLErr msg))
+          ((SuGLOut) (SuGLOut))
+          ((SuGLBlocked h a3) (SuGLBlocked h a3))
+          ((SuGLFail a3) (SuGLFail a3))
+          ((SuGLOk es a3) (SuGLOk (Cons e es) a3)))))))))
+
+;; ---- small helpers -----------------------------------------------------------
+
+(fn env_nth_i ((n Int) (env (List Int))) (Option Int)
+  (measure (struct env))
+  (match env
+    (Nil None)
+    ((Cons r rest) (if (le n 0) (Some r) (env_nth_i (- n 1) rest)))))
+
+(fn ext_env_i ((binds (List Int)) (env (List Int))) (List Int)
+  (measure (struct binds))
+  (match binds
+    (Nil env)
+    ((Cons b rest) (ext_env_i rest (Cons b env)))))
+
+(fn rev_ints ((xs (List Int)) (acc (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil acc)
+    ((Cons h t) (rev_ints t (Cons h acc)))))
+
+(fn ints_app ((xs (List Int)) (ys (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil ys)
+    ((Cons h t) (Cons h (ints_app t ys)))))
+
+(fn mod_ft_su ((m Module)) FnTrie
+  (match m
+    ((Module _ _ _ ft _) ft)))
+
+
+;; ---- test checking -----------------------------------------------------------
+
+(type SuT
+  (SuTErr (List Int))
+  (SuTOut)
+  (SuTBlocked Int SuA)
+  (SuTFail SuA)
+  (SuTPass SuA))
+
+;; walk the result spine against the expected ints, forcing lazily
+(fn su_expect
+  ((fuel Int)
+   (m Module)
+   (candq QName)
+   (body Expr)
+   (g Grammar)
+   (asg (List (Pair Int Int)))
+   (a SuA)
+   (r Int)
+   (want (List Int)))
+  SuT
+  (measure fuel)
+  (if (lt fuel 1) (SuTOut)
+  (match (su_whnf (- fuel 1) m candq body g asg a r)
+    ((SuRErr msg) (SuTErr msg))
+    ((SuROut) (SuTOut))
+    ((SuRBlocked h a2) (SuTBlocked h a2))
+    ((SuRFail a2) (SuTFail a2))
+    ((SuRVal v a2)
+     (match (sa_get a2 v)
+       (None (SuTErr "superpose: dangling result"))
+       ((Some n)
+        (match n
+          ((SuCtor cq fs)
+           (if (sym_eq (qn_name cq) (quote Cons))
+             (match fs
+               ((Cons hf (Cons tf Nil))
+                (match want
+                  (Nil (SuTFail a2))
+                  ((Cons w rest)
+                   (match (su_whnf (- fuel 1) m candq body g asg a2 hf)
+                     ((SuRErr msg) (SuTErr msg))
+                     ((SuROut) (SuTOut))
+                     ((SuRBlocked h a3) (SuTBlocked h a3))
+                     ((SuRFail a3) (SuTFail a3))
+                     ((SuRVal hv a3)
+                      (match (sa_get a3 hv)
+                        (None (SuTErr "superpose: dangling head"))
+                        ((Some hn)
+                         (match hn
+                           ((SuInt x)
+                            (if (int_eq x w)
+                              (su_expect
+                                (- fuel 1)
+                                m
+                                candq
+                                body
+                                g
+                                asg
+                                a3
+                                tf
+                                rest)
+                              (SuTFail a3)))
+                           (_ (SuTFail a3))))))))))
+               (_ (SuTErr "superpose: malformed Cons")))
+           (if (sym_eq (qn_name cq) (quote Nil))
+             (match want
+               (Nil (SuTPass a2))
+               ((Cons _ _) (SuTFail a2)))
+             (SuTFail a2))))
+          (_ (SuTFail a2)))))))))
+
+;; one test: the sketch body under (xs = input, acc = Nil)
+(fn su_test
+  ((fuel Int)
+   (m Module)
+   (candq QName)
+   (body Expr)
+   (g Grammar)
+   (asg (List (Pair Int Int)))
+   (a SuA)
+   (inp (List Int))
+   (want (List Int)))
+  SuT
+  (measure fuel)
+  (if (lt fuel 1) (SuTOut)
+  (match (sa_alloc a (SuThunk (intlist_to_expr inp) Nil))
+    ((Pair xsr a2)
+     (match (sa_alloc a2 (SuThunk (Ctor (qn (quote Nil)) Nil) Nil))
+       ((Pair accr a3)
+        (match
+          (su_eval
+            (- fuel 1)
+            m
+            candq
+            body
+            g
+            asg
+            a3
+            (Cons accr (Cons xsr Nil))
+            body)
+          ((SuRErr msg) (SuTErr msg))
+          ((SuROut) (SuTOut))
+          ((SuRBlocked h a4) (SuTBlocked h a4))
+          ((SuRFail a4) (SuTFail a4))
+          ((SuRVal r a4) (su_expect (- fuel 1) m candq body g asg a4 r want)))))))))
+
+;; the battery, sequential; the arena THREADS across tests (within a
+;; region, forced thunks stay forced)
+(fn su_tests
+  ((fuel Int)
+   (m Module)
+   (candq QName)
+   (body Expr)
+   (g Grammar)
+   (asg (List (Pair Int Int)))
+   (a SuA)
+   (ts (List (Pair (List Int) (List Int)))))
+  SuT
+  (measure fuel)
+  (if (lt fuel 1) (SuTOut)
+  (match ts
+    (Nil (SuTPass a))
+    ((Cons (Pair inp want) rest)
+     (match (su_test (- fuel 1) m candq body g asg a inp want)
+       ((SuTErr msg) (SuTErr msg))
+       ((SuTOut) (SuTOut))
+       ((SuTBlocked h a2) (SuTBlocked h a2))
+       ((SuTFail a2) (SuTFail a2))
+       ((SuTPass a2) (su_tests (- fuel 1) m candq body g asg a2 rest)))))))
+
+;; ---- the region loop -----------------------------------------------------------
+
+(fn su_efuel () Int 200000)
+
+;; push one job per alternative of the demanded hole
+(fn su_fork
+  ((asg (List (Pair Int Int)))
+   (h Int)
+   (k Int)
+   (jobs (List (List (Pair Int Int)))))
+  (List (List (Pair Int Int)))
+  (measure k)
+  (if (lt k 1) (if (lt k 0) jobs (Cons (ch_set asg h 0) jobs))
+  (su_fork asg h (- k 1) (Cons (ch_set asg h k) jobs))))
+
+(type SuS
+  (SuSErr (List Int))
+  (SuSOk Int Int Int Int (List (List (Pair Int Int)))))
+
+(fn su_drive
+  ((fuel Int)
+   (m Module)
+   (candq QName)
+   (body Expr)
+   (g Grammar)
+   (memo (List (Pair Int Int)))
+   (ts (List (Pair (List Int) (List Int))))
+   (jobs (List (List (Pair Int Int))))
+   (found Int)
+   (killed Int)
+   (regions Int)
+   (forks Int)
+   (sols (List (List (Pair Int Int)))))
+  SuS
+  (measure fuel)
+  (if (lt fuel 1) (SuSErr "superpose: drive fuel exhausted")
+  (match jobs
+    (Nil (SuSOk found killed regions forks sols))
+    ((Cons asg rest)
+     (match (su_tests (su_efuel) m candq body g asg (sa_new) ts)
+       ((SuTErr msg) (SuSErr msg))
+       ((SuTOut) (SuSErr "superpose: evaluation fuel exhausted"))
+       ((SuTBlocked h _)
+        (match (su_alts g h)
+          (None (SuSErr "superpose: blocked on an unknown hole"))
+          ((Some alts)
+           (su_drive
+             (- fuel 1)
+             m
+             candq
+             body
+             g
+             memo
+             ts
+             (su_fork asg h (- (alts_len alts) 1) rest)
+             found
+             killed
+             regions
+             (+ forks 1)
+             sols))))
+       ((SuTFail _)
+        (match (cc_expr g memo asg body 1000000)
+          ((CcRErr msg) (SuSErr msg))
+          ((CcROk n)
+           (su_drive
+             (- fuel 1)
+             m
+             candq
+             body
+             g
+             memo
+             ts
+             rest
+             found
+             (+ killed n)
+             (+ regions 1)
+             forks
+             sols))))
+       ((SuTPass _)
+        (match (cc_expr g memo asg body 1000000)
+          ((CcRErr msg) (SuSErr msg))
+          ((CcROk n)
+           (su_drive
+             (- fuel 1)
+             m
+             candq
+             body
+             g
+             memo
+             ts
+             rest
+             (+ found n)
+             killed
+             (+ regions 1)
+             forks
+             (Cons asg sols))))))))))
+
+;; ---- region membership + representatives (the AGREE gate) ---------------------
+
+;; the region as a TEMPLATE: assigned holes filled (recursively),
+;; unassigned holes kept — a candidate is a member iff the rank
+;; matcher accepts it against the template
+(fn su_tpl ((g Grammar) (asg (List (Pair Int Int))) (e Expr) (fuel Int))
+  (Option Expr)
+  (measure fuel)
+  (if (lt fuel 1) None
+  (match (hole_view e)
+    ((HVHole h)
+     (let ((c (ch_get asg h)))
+       (if (lt c 0) (Some e)
+       (match (su_alts g h)
+         (None None)
+         ((Some alts)
+          (match (alt_nth alts c)
+            (None None)
+            ((Some ae) (su_tpl g asg ae (- fuel 1)))))))))
+    ((HVBad _) None)
+    ((HVNot)
+     (match e
+       ((FVar _) (Some e))
+       ((BVar _) (Some e))
+       ((Ctor q es)
+        (match (su_tpls g asg es (- fuel 1))
+          (None None)
+          ((Some es2) (Some (Ctor q es2)))))
+       ((Call q es)
+        (match (su_tpls g asg es (- fuel 1))
+          (None None)
+          ((Some es2) (Some (Call q es2)))))
+       ((Match s arms)
+        (match (su_tpl g asg s (- fuel 1))
+          (None None)
+          ((Some s2)
+           (match (su_tpl_arms g asg arms (- fuel 1))
+             (None None)
+             ((Some arms2) (Some (Match s2 arms2)))))))
+       ((Let bs bd)
+        (match (su_tpls g asg bs (- fuel 1))
+          (None None)
+          ((Some bs2)
+           (match (su_tpl g asg bd (- fuel 1))
+             (None None)
+             ((Some bd2) (Some (Let bs2 bd2)))))))
+       ((If c t e2)
+        (match (su_tpl g asg c (- fuel 1))
+          (None None)
+          ((Some c2)
+           (match (su_tpl g asg t (- fuel 1))
+             (None None)
+             ((Some t2)
+              (match (su_tpl g asg e2 (- fuel 1))
+                (None None)
+                ((Some e22) (Some (If c2 t2 e22)))))))))
+       ((IntLit _) (Some e))
+       ((SymLit _) (Some e)))))))
+
+(fn su_tpls
+  ((g Grammar) (asg (List (Pair Int Int))) (es (List Expr)) (fuel Int))
+  (Option (List Expr))
+  (measure fuel)
+  (if (lt fuel 1) None
+  (match es
+    (Nil (Some Nil))
+    ((Cons e rest)
+     (match (su_tpl g asg e (- fuel 1))
+       (None None)
+       ((Some e2)
+        (match (su_tpls g asg rest (- fuel 1))
+          (None None)
+          ((Some es2) (Some (Cons e2 es2))))))))))
+
+(fn su_tpl_arms
+  ((g Grammar) (asg (List (Pair Int Int))) (arms (List Arm)) (fuel Int))
+  (Option (List Arm))
+  (measure fuel)
+  (if (lt fuel 1) None
+  (match arms
+    (Nil (Some Nil))
+    ((Cons (Arm p b) rest)
+     (match (su_tpl g asg b (- fuel 1))
+       (None None)
+       ((Some b2)
+        (match (su_tpl_arms g asg rest (- fuel 1))
+          (None None)
+          ((Some arms2) (Some (Cons (Arm p b2) arms2))))))))))
+
+;; a region representative: don't-cares filled with alternative 0
+(fn su_rep ((g Grammar) (asg (List (Pair Int Int))) (e Expr) (fuel Int))
+  (Option Expr)
+  (measure fuel)
+  (if (lt fuel 1) None
+  (match (hole_view e)
+    ((HVHole h)
+     (let ((c (ch_get asg h)))
+       (match (su_alts g h)
+         (None None)
+         ((Some alts)
+          (match (alt_nth alts (if (lt c 0) 0 c))
+            (None None)
+            ((Some ae) (su_rep g asg ae (- fuel 1))))))))
+    ((HVBad _) None)
+    ((HVNot)
+     (match e
+       ((FVar _) (Some e))
+       ((BVar _) (Some e))
+       ((Ctor q es)
+        (match (su_reps g asg es (- fuel 1))
+          (None None)
+          ((Some es2) (Some (Ctor q es2)))))
+       ((Call q es)
+        (match (su_reps g asg es (- fuel 1))
+          (None None)
+          ((Some es2) (Some (Call q es2)))))
+       ((Match s arms)
+        (match (su_rep g asg s (- fuel 1))
+          (None None)
+          ((Some s2)
+           (match (su_rep_arms g asg arms (- fuel 1))
+             (None None)
+             ((Some arms2) (Some (Match s2 arms2)))))))
+       ((Let bs bd)
+        (match (su_reps g asg bs (- fuel 1))
+          (None None)
+          ((Some bs2)
+           (match (su_rep g asg bd (- fuel 1))
+             (None None)
+             ((Some bd2) (Some (Let bs2 bd2)))))))
+       ((If c t e2)
+        (match (su_rep g asg c (- fuel 1))
+          (None None)
+          ((Some c2)
+           (match (su_rep g asg t (- fuel 1))
+             (None None)
+             ((Some t2)
+              (match (su_rep g asg e2 (- fuel 1))
+                (None None)
+                ((Some e22) (Some (If c2 t2 e22)))))))))
+       ((IntLit _) (Some e))
+       ((SymLit _) (Some e)))))))
+
+(fn su_reps
+  ((g Grammar) (asg (List (Pair Int Int))) (es (List Expr)) (fuel Int))
+  (Option (List Expr))
+  (measure fuel)
+  (if (lt fuel 1) None
+  (match es
+    (Nil (Some Nil))
+    ((Cons e rest)
+     (match (su_rep g asg e (- fuel 1))
+       (None None)
+       ((Some e2)
+        (match (su_reps g asg rest (- fuel 1))
+          (None None)
+          ((Some es2) (Some (Cons e2 es2))))))))))
+
+(fn su_rep_arms
+  ((g Grammar) (asg (List (Pair Int Int))) (arms (List Arm)) (fuel Int))
+  (Option (List Arm))
+  (measure fuel)
+  (if (lt fuel 1) None
+  (match arms
+    (Nil (Some Nil))
+    ((Cons (Arm p b) rest)
+     (match (su_rep g asg b (- fuel 1))
+       (None None)
+       ((Some b2)
+        (match (su_rep_arms g asg rest (- fuel 1))
+          (None None)
+          ((Some arms2) (Some (Cons (Arm p b2) arms2))))))))))
+
+;; does a closed candidate belong to a found region?
+(fn su_member ((g Grammar) (asg (List (Pair Int Int))) (body Expr) (c Expr))
+  Bool
+  (match (su_tpl g asg body 100000)
+    (None False)
+    ((Some tpl)
+     (match (match_e tpl c Nil)
+       ((MtRErr _) False)
+       ((MtRNo) False)
+       ((MtROk _) True)))))
+
+;; every enumerative solution lies in some found region
+(fn su_covered
+  ((g Grammar) (body Expr) (sols (List (List (Pair Int Int)))) (c Expr))
+  Bool
+  (measure (struct sols))
+  (match sols
+    (Nil False)
+    ((Cons asg rest)
+     (if (su_member g asg body c) True (su_covered g body rest c)))))
+
+(fn su_agree
+  ((root Expr)
+   (g Grammar)
+   (m Module)
+   (body Expr)
+   (sols (List (List (Pair Int Int))))
+   (ixs (List Int))
+   (ts (List (Pair (List Int) (List Int)))))
+  (Option (List Int))
+  (measure (struct ixs))
+  (match ixs
+    (Nil None)
+    ((Cons i rest)
+     (match (sk_unrank root g i)
+       ((SkEErr _) (Some (cz_at "agree unrank" i "unrank failed")))
+       ((SkEOk c)
+        (if (su_covered g body sols c) (su_agree root g m body sols rest ts)
+        (Some (cz_at "agree" i "an enumerative solution escaped every region"))))))))
+
+;; every found region's representative passes the evm battery
+(fn su_reps_pass
+  ((g Grammar)
+   (m Module)
+   (body Expr)
+   (sols (List (List (Pair Int Int))))
+   (ts (List (Pair (List Int) (List Int)))))
+  (Option (List Int))
+  (measure (struct sols))
+  (match sols
+    (Nil None)
+    ((Cons asg rest)
+     (match (su_rep g asg body 100000)
+       (None (Some "agree: representative fill failed"))
+       ((Some c)
+        (match (extend_fn m (cand_fd c))
+          (None (Some "agree: representative qname bound"))
+          ((Some m2)
+           (if (run_tests m2 (cand_fd c) ts) (su_reps_pass g m body rest ts)
+           (Some "agree: a region representative FAILS the evm battery")))))))))
+
+;; ---- driver --------------------------------------------------------------------
+
+(fn su_run ((m Module) (apq QName) (d Int) (w World)) World
+  (let ((body (rev_sketch)) (g (rev_grammar d apq)) (ts (rev_tests)))
+    (match (g_counts g)
+      ((GCtErr msg)
+       (exit
+         1
+         (write (append_int "SUPERPOSE FAIL counts: " (append_int msg "\n")) w)))
+      ((GCtOk memo)
+       (match (sk_count body g)
+         ((SkCErr msg)
+          (exit
+            1
+            (write
+              (append_int "SUPERPOSE FAIL count: " (append_int msg "\n"))
+              w)))
+         ((SkCOk total)
+          (match
+            (su_drive
+              (+ (* 4 total) 64)
+              m
+              (cand_q)
+              body
+              g
+              memo
+              ts
+              (Cons Nil Nil)
+              0
+              0
+              0
+              0
+              Nil)
+            ((SuSErr msg)
+             (exit
+               1
+               (write (append_int "SUPERPOSE FAIL " (append_int msg "\n")) w)))
+            ((SuSOk found killed regions forks sols)
+             (if (int_eq (+ found killed) total)
+               (match (enum_go total total body g m ts Nil)
+                 ((EnRErr msg)
+                  (exit
+                    1
+                    (write
+                      (append_int "SUPERPOSE FAIL enum: " (append_int msg "\n"))
+                      w)))
+                 ((EnROk ixs)
+                  (if (int_eq found (list_len_i ixs))
+                    (match (su_agree body g m body sols ixs ts)
+                      ((Some msg)
+                       (exit
+                         1
+                         (write
+                           (append_int "SUPERPOSE FAIL " (append_int msg "\n"))
+                           w)))
+                      (None
+                        (match (su_reps_pass g m body sols ts)
+                          ((Some msg)
+                           (exit
+                             1
+                             (write
+                               (append_int
+                                 "SUPERPOSE FAIL "
+                                 (append_int msg "\n"))
+                               w)))
+                          (None
+                            (write
+                              (append_int
+                                "SUPERPOSE rev DEPTH "
+                                (append_int
+                                  (show_int d)
+                                  (append_int
+                                    "\nTOTAL "
+                                    (append_int
+                                      (show_int total)
+                                      (append_int
+                                        " FOUND "
+                                        (append_int
+                                          (show_int found)
+                                          (append_int
+                                            " KILLED "
+                                            (append_int
+                                              (show_int killed)
+                                              (append_int
+                                                " REGIONS "
+                                                (append_int
+                                                  (show_int regions)
+                                                  (append_int
+                                                    " FORKS "
+                                                    (append_int
+                                                      (show_int forks)
+                                                      "\nAGREE OK\n"))))))))))))
+                              w)))))
+                    (exit
+                      1
+                      (write
+                        "SUPERPOSE FAIL: found coverage != enum solutions\n"
+                        w)))))
+               (exit 1 (write "SUPERPOSE FAIL: found + killed != total\n" w)))))))))))
+
+;; args: none -> the pinned suite (d1 then d2); "rev N" -> depth N
+(fn su_args ((as (List (List Int))) (m Module) (apq QName) (w World)) World
+  (match as
+    (Nil (su_run m apq 2 (su_run m apq 1 w)))
+    ((Cons a rest)
+     (if (int_list_eq a "rev")
+       (match rest
+         ((Cons ds Nil)
+          (match (parse_nat ds)
+            (None (exit 2 (write "usage: superpose [rev N]\n" w)))
+            ((Some d) (su_run m apq d w))))
+         (_ (exit 2 (write "usage: superpose [rev N]\n" w))))
+       (exit 2 (write "usage: superpose [rev N]\n" w))))))
+
+(fn main ((w World)) World
+  (match (load_run_module "tools/search/rev_obj.shard" w)
+    ((Pair om w2)
+     (match om
+       (None (exit 1 (write "SUPERPOSE FAIL: object module load\n" w2)))
+       ((Some m)
+        (match (find_fn (quote append) m)
+          (None (exit 1 (write "SUPERPOSE FAIL: no append in closure\n" w2)))
+          ((Some apfd)
+           (match apfd
+             ((FnDef apq _ _ _)
+              (match (get_args w2)
+                ((Pair as w3) (su_args as m apq w3))))))))))))

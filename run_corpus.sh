@@ -250,6 +250,7 @@ TARGETS=(
   tools/search/render_gate.shard
   tools/search/gen/rev_synth.shard
   tools/search/gen/cat_bracket.shard
+  tools/search/superpose.shard
 )
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -426,6 +427,21 @@ fi
 echo "=== search: render round-trip (D11) ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/render_gate.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# Superposed-executor pin (docs/SEARCH.md S4b, built AS RATIFIED —
+# named superpose; "narrow" is the bootstrap dialect's name): the
+# choices-map machine settles the rev spaces EXACTLY — d1: 108
+# candidates in 26 regions (8 forks), 1 found; d2: 7,788 in 443
+# regions (133 forks), 13 found. AGREE extends G3 three ways: found
+# coverage == the enumerative solution count, every enumerative
+# solution lies in a found region, and every region representative
+# passes the kernel/evm battery. Any drift exits 1 inside the tool.
+echo "=== search: superposed executor (S4b) ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/superpose.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
