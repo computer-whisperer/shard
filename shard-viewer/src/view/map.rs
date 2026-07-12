@@ -439,16 +439,11 @@ fn commit_children(
     size
 }
 
-/// Commit one file: every in-scope fn measured as a full flow card and every
-/// in-scope claim as a claim card, placed together by the intra-file call +
-/// proof-citation graph. Returns the file *box* size (content + chrome).
-fn commit_file(
-    project: &Project,
-    by_file: &BTreeMap<usize, Vec<Member>>,
-    file: usize,
-    out: &mut Committed,
-) -> (f32, f32) {
-    let members = &by_file[&file];
+/// The intra-file graph exactly as committed: every fn measured as a full
+/// flow card, claims as claim cards, types as type cards, with the classed
+/// edge set among them. Factored from [`commit_file`] so layout diagnostics
+/// can run experiments on the true committed topology.
+fn file_graph(project: &Project, members: &[Member]) -> (Graph, Vec<EdgeClass>) {
     let nodes: Vec<GNode> = members
         .iter()
         .map(|&m| {
@@ -535,10 +530,47 @@ fn commit_file(
             }
         }
     }
-    let ends: Vec<(usize, usize)> = edges.iter().map(|e| (e.from.node, e.to.node)).collect();
-    let (nfns, nclaims, ntypes) = (fn_slot.len(), claim_slot.len(), type_slot.len());
-    let cfg = layout::LayoutConfig::for_nodes(&nodes);
-    let lay = layout::layout(&Graph { nodes, edges }, &cfg);
+    (Graph { nodes, edges }, classes)
+}
+
+/// Diagnostic hook: the committed graph for `file` under a File scope (all
+/// members, the same fns/claims/types order [`canvas`] gathers). Lets the
+/// layout diag bin measure the real committed topology — card-true node
+/// sizes — instead of approximating them.
+#[doc(hidden)]
+pub fn debug_file_graph(project: &Project, file: usize) -> Graph {
+    let f = &project.files[file];
+    let members: Vec<Member> = (f.fns.iter().map(|&g| Member::Fn(g)))
+        .chain(f.claims.iter().map(|&c| Member::Claim(c)))
+        .chain(f.types.iter().map(|&t| Member::Type(t)))
+        .collect();
+    file_graph(project, &members).0
+}
+
+/// Commit one file: every in-scope fn measured as a full flow card and every
+/// in-scope claim as a claim card, placed together by the intra-file call +
+/// proof-citation graph. Returns the file *box* size (content + chrome).
+fn commit_file(
+    project: &Project,
+    by_file: &BTreeMap<usize, Vec<Member>>,
+    file: usize,
+    out: &mut Committed,
+) -> (f32, f32) {
+    let members = &by_file[&file];
+    let mut counts = (0usize, 0usize, 0usize);
+    for &m in members {
+        match m {
+            Member::Fn(_) => counts.0 += 1,
+            Member::Claim(_) => counts.1 += 1,
+            Member::Type(_) => counts.2 += 1,
+        }
+    }
+    let (graph, classes) = file_graph(project, members);
+    let ends: Vec<(usize, usize)> =
+        graph.edges.iter().map(|e| (e.from.node, e.to.node)).collect();
+    let cfg = layout::LayoutConfig::for_nodes(&graph.nodes);
+    let lay = layout::layout(&graph, &cfg);
+    let (nfns, nclaims, ntypes) = counts;
     let m =
         box_metrics(|| file_header(project, file, nfns, nclaims, ntypes), lay.width, lay.height);
     out.files.insert(file, LevelGeom { lay, off: m.off, classes, ends });

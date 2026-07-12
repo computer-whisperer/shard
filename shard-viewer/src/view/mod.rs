@@ -112,6 +112,8 @@ pub const SIDEBAR_KEY: &str = "sidebar";
 pub const PANEL_KEY: &str = "detail_panel";
 
 pub use map::{DEFAULT_FLOW_Z, MapCache, MapTarget, region_rect};
+#[doc(hidden)]
+pub use map::debug_file_graph;
 
 /// The whole window: sidebar + main pane + (when something is selected) panel.
 /// `map_cache` is the Map's per-scope committed-layout cache, owned by the app

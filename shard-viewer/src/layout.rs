@@ -14,12 +14,15 @@
 //!      neighbours so long edges don't spawn needless dummy chains), then a
 //!      height cap that splits overfull layers into sub-columns (fan-heavy
 //!      graphs otherwise pile their leaves into one receipt-shaped column)
-//!   2. dummy-node insertion for edges spanning more than one layer
+//!   2. dummy-node insertion for edges spanning more than one layer — for the
+//!      *ordering* phase only
 //!   3. barycenter crossing reduction (iterated up/down sweeps)
-//!   4. priority coordinate assignment (pull nodes toward neighbours, no overlap;
-//!      dummies take a thin gap and win ties so long-edge chains run straight)
-//!   5. port resolution + polyline edge routing, then a bounds pass that re-homes
-//!      the whole drawing — edges included — into a positive box
+//!   4. priority coordinate assignment over the cards alone (pull toward graph
+//!      neighbours, no overlap), column-anchored after every sweep so the
+//!      sweeps' sheared/staircase fixpoints can't survive; edges never reserve
+//!      vertical slots (they draw *under* the card layer)
+//!   5. port resolution + direct port-to-port edge routing, then a bounds pass
+//!      that re-homes the whole drawing — edges included — into a positive box
 //!
 //! [ports]: GNode::n_in
 
@@ -156,12 +159,6 @@ pub struct Layout {
     pub height: f32,
 }
 
-const DUMMY_H: f32 = 8.0;
-/// Vertical breathing room reserved beside a routing dummy. Far smaller than
-/// `node_gap`: dummies are 1px-thin waypoints, and long-edge-heavy call graphs
-/// spawn more dummies than real nodes, so charging each a full node gap is what
-/// inflated tall files to a ~10000px strip.
-const DUMMY_GAP: f32 = 5.0;
 const CROSSING_SWEEPS: usize = 8;
 const COORD_SWEEPS: usize = 6;
 
@@ -326,17 +323,18 @@ fn layout_connected(graph: &Graph, cfg: &LayoutConfig) -> Layout {
     let nlayers = node_layer.iter().copied().max().unwrap_or(0) + 1;
 
     // ---- vertices: real nodes (0..n) + routing dummies (n..) ----
+    // Dummies exist for *ordering only* (crossing reduction sees long edges
+    // pass through intermediate columns); coordinates and routing ignore
+    // them — edges draw under the card layer (see `placed_graph`), so chains
+    // don't reserve vertical slots between cards. Sharing one stack used to
+    // fence low-priority cards thousands of px from their neighbours (the
+    // stranded-satellite artifact) and charge every column a dummy tax.
     let mut vlayer: Vec<usize> = node_layer.clone();
-    let mut vh: Vec<f32> = graph.nodes.iter().map(|nd| nd.h).collect();
-    let mut vw: Vec<f32> = graph.nodes.iter().map(|nd| nd.w).collect();
+    let vh: Vec<f32> = graph.nodes.iter().map(|nd| nd.h).collect();
 
-    // Per-edge routing chain of vertex ids (source .. dummies .. target), and
-    // the consecutive-layer links that the ordering/coordinate phases consume.
-    struct Route {
-        chain: Vec<usize>,
-        flat: bool,
-    }
-    let mut routes: Vec<Route> = Vec::with_capacity(graph.edges.len());
+    // Per-edge flat flag (same-column SCC edge), and the consecutive-layer
+    // links the ordering phase consumes.
+    let mut flats: Vec<bool> = Vec::with_capacity(graph.edges.len());
     let mut links: Vec<(usize, usize)> = Vec::new(); // (upper-layer vertex, lower-layer vertex)
 
     for e in &graph.edges {
@@ -345,10 +343,7 @@ fn layout_connected(graph: &Graph, cfg: &LayoutConfig) -> Layout {
         if la == lb {
             // Intra-SCC (same column) edge — routed directly, kept out of the
             // layered ordering machinery.
-            routes.push(Route {
-                chain: vec![a, b],
-                flat: true,
-            });
+            flats.push(true);
             continue;
         }
         // SCC condensation guarantees la < lb for cross-component edges, but we
@@ -359,8 +354,6 @@ fn layout_connected(graph: &Graph, cfg: &LayoutConfig) -> Layout {
             .map(|l| {
                 let d = vlayer.len();
                 vlayer.push(l);
-                vh.push(DUMMY_H);
-                vw.push(0.0);
                 d
             })
             .collect();
@@ -377,7 +370,7 @@ fn layout_connected(graph: &Graph, cfg: &LayoutConfig) -> Layout {
                 links.push((v, u));
             }
         }
-        routes.push(Route { chain, flat: false });
+        flats.push(false);
     }
 
     let nv = vlayer.len();
@@ -386,7 +379,7 @@ fn layout_connected(graph: &Graph, cfg: &LayoutConfig) -> Layout {
         layers[vlayer[v]].push(v);
     }
 
-    // Up/down adjacency between adjacent layers (for ordering + coordinates).
+    // Up/down adjacency between adjacent layers (for ordering).
     let mut up = vec![Vec::new(); nv];
     let mut down = vec![Vec::new(); nv];
     for &(u, v) in &links {
@@ -398,8 +391,8 @@ fn layout_connected(graph: &Graph, cfg: &LayoutConfig) -> Layout {
 
     // ---- X: one column per layer, width = widest node in the layer ----
     let mut layer_w = vec![0.0_f32; nlayers];
-    for v in 0..nv {
-        layer_w[vlayer[v]] = layer_w[vlayer[v]].max(vw[v]);
+    for i in 0..n {
+        layer_w[node_layer[i]] = layer_w[node_layer[i]].max(graph.nodes[i].w);
     }
     let mut layer_x = vec![0.0_f32; nlayers];
     let mut acc = cfg.margin;
@@ -408,7 +401,7 @@ fn layout_connected(graph: &Graph, cfg: &LayoutConfig) -> Layout {
         acc += layer_w[l] + cfg.layer_gap;
     }
 
-    let vy = assign_y(&layers, &up, &down, &vh, n, cfg);
+    let vy = assign_y(&layers, &graph.edges, &vh, n, cfg);
 
     // ---- assemble placed nodes ----
     let mut placed = vec![PlacedNode::default(); n];
@@ -431,16 +424,14 @@ fn layout_connected(graph: &Graph, cfg: &LayoutConfig) -> Layout {
     // edge instead, ordered by the counterpart's vertical position so the
     // fan doesn't cross itself at the port. Flat (same-column return) edges
     // keep their right-side entry and are excluded.
-    let (starts, ends) = spread_ports(graph, &routes.iter().map(|r| r.flat).collect::<Vec<_>>(), &placed);
+    let (starts, ends) = spread_ports(graph, &flats, &placed);
 
     // ---- route edges ----
-    let mut edges: Vec<RoutedEdge> = routes
+    let mut edges: Vec<RoutedEdge> = flats
         .iter()
         .zip(&graph.edges)
         .enumerate()
-        .map(|(ei, (r, e))| {
-            route_edge(r.flat, &r.chain, e, &placed, &layer_x, &vlayer, &vy, cfg, starts[ei], ends[ei])
-        })
+        .map(|(ei, (&flat, e))| route_edge(flat, e, &placed, cfg, starts[ei], ends[ei]))
         .collect();
 
     // Bounds must cover the routed edges too, not just the node rects: flat
@@ -547,15 +538,10 @@ fn spread_ports(
     (starts, ends)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn route_edge(
     flat: bool,
-    chain: &[usize],
     e: &GEdge,
     placed: &[PlacedNode],
-    layer_x: &[f32],
-    vlayer: &[usize],
-    vy: &[f32],
     cfg: &LayoutConfig,
     start_override: Option<(f32, f32)>,
     end_override: Option<(f32, f32)>,
@@ -586,13 +572,12 @@ fn route_edge(
         };
     }
 
-    let mut points = vec![start];
-    for &d in &chain[1..chain.len() - 1] {
-        // Thread the gap just left of the dummy's column.
-        points.push((layer_x[vlayer[d]] - cfg.layer_gap * 0.5, vy[d] + DUMMY_H / 2.0));
-    }
-    points.push(end);
-    RoutedEdge { points, back: false }
+    // Cross-column edge: a direct port-to-port curve (the renderer's spline
+    // leaves and arrives horizontally). Long edges pass *under* intermediate
+    // cards — the node layer draws over the edge overlay — which keeps their
+    // geometry minimal instead of threading swoopy waypoint chains through
+    // every gap they cross.
+    RoutedEdge { points: vec![start, end], back: false }
 }
 
 /// Reduce edge crossings by iterated barycenter ordering, keeping the best.
@@ -672,54 +657,61 @@ fn count_crossings(layers: &[Vec<usize>], down: &[Vec<usize>], pos: &[usize]) ->
     total
 }
 
-/// Iterative coordinate assignment: pull each vertex toward the mean centre of
-/// its neighbours while keeping layer order and a minimum gap (no overlap).
-/// `n` is the real-node count; vertices `>= n` are routing dummies, which get a
-/// much smaller vertical gap (see [`DUMMY_GAP`]) and a higher placement priority
-/// so long-edge chains run straight instead of bowing.
+/// Iterative coordinate assignment over the *real* nodes: pull each card
+/// toward the mean centre of its graph neighbours while keeping layer order
+/// and a minimum gap (no overlap). Routing dummies never enter — edges draw
+/// under the card layer, so chains don't reserve vertical slots. (They used
+/// to, at max priority: a card ordered below a wall of straightened chain
+/// tracks could be fenced thousands of px from its neighbours.)
 fn assign_y(
     layers: &[Vec<usize>],
-    up: &[Vec<usize>],
-    down: &[Vec<usize>],
+    edges: &[GEdge],
     vh: &[f32],
     n: usize,
     cfg: &LayoutConfig,
 ) -> Vec<f32> {
-    let nv: usize = layers.iter().map(|l| l.len()).sum();
-    let mut vy = vec![0.0_f32; nv];
-    // Min gap *below* vertex v: thin for dummies (and below dummies), so a layer
-    // packed with routing waypoints stays compact.
-    let gap_below = |v: usize| if v >= n { DUMMY_GAP } else { cfg.node_gap };
-    // Placement priority: dummies win (straighten long edges), then by degree.
-    let prio = |v: usize| -> usize {
-        if v >= n {
-            usize::MAX
-        } else {
-            up[v].len() + down[v].len()
+    // Per-layer card lists, in crossing-reduced order.
+    let real_layers: Vec<Vec<usize>> = layers
+        .iter()
+        .map(|l| l.iter().copied().filter(|&v| v < n).collect())
+        .collect();
+    // Direction-agnostic card adjacency straight from the graph edges — a
+    // long edge pulls its endpoints toward each other directly (no chain
+    // mediation), and flat (same-column SCC) edges keep cycle members close.
+    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for e in edges {
+        let (a, b) = (e.from.node, e.to.node);
+        if a != b {
+            adj[a].push(b);
+            adj[b].push(a);
         }
-    };
+    }
+
+    let mut vy = vec![0.0_f32; n];
+    let prio = |v: usize| adj[v].len();
 
     // Initial top-down stack within each layer.
-    for layer in layers {
+    for layer in &real_layers {
         let mut y = cfg.margin;
         for &v in layer {
             vy[v] = y;
-            y += vh[v] + gap_below(v);
+            y += vh[v] + cfg.node_gap;
         }
     }
 
     for it in 0..COORD_SWEEPS {
         let order: Vec<usize> = if it % 2 == 0 {
-            (0..layers.len()).collect()
+            (0..real_layers.len()).collect()
         } else {
-            (0..layers.len()).rev().collect()
+            (0..real_layers.len()).rev().collect()
         };
         for l in order {
-            place_layer_priority(&layers[l], up, down, vh, &mut vy, &gap_below, &prio);
+            place_layer_priority(&real_layers[l], &adj, vh, &mut vy, cfg.node_gap, &prio);
         }
+        align_columns(&real_layers, vh, &mut vy);
     }
 
-    // Normalise so the topmost vertex sits at the margin.
+    // Normalise so the topmost card sits at the margin.
     let min_y = vy.iter().copied().fold(f32::INFINITY, f32::min);
     if min_y.is_finite() {
         let shift = cfg.margin - min_y;
@@ -730,40 +722,68 @@ fn assign_y(
     vy
 }
 
-/// Place one layer's vertices at their neighbour barycentres using the priority
-/// method: process high-priority vertices first and let them push lower-priority
-/// neighbours aside (never higher ones), keeping left-to-right order and the
-/// per-vertex minimum gaps. Dummies have max priority, so long-edge chains end
-/// up vertically aligned (straight) rather than bowed by averaging.
+/// Re-center every column (rigid per-layer shift) so its height-weighted mean
+/// of card centers sits on the global mean. Barycenter sweeps have a soft
+/// mode: any configuration where each column rests at the average of its
+/// neighbours is a fixpoint, including sheared ones — which is exactly the
+/// "condensed diagonal staircase" (and the Λ/V mountains) dense files showed,
+/// wasting up to half the drawing height on drift. Anchoring after every
+/// sweep removes the mode while the sweep keeps re-optimising the *relative*
+/// placement under the anchor; a rigid shift preserves within-column order
+/// and gaps, and the routing pass runs later, so edges stay consistent.
+fn align_columns(layers: &[Vec<usize>], vh: &[f32], vy: &mut [f32]) {
+    let mut shifts: Vec<(f32, f32)> = Vec::with_capacity(layers.len()); // (weight, mean)
+    for layer in layers {
+        let (mut w, mut sum) = (0.0_f32, 0.0_f32);
+        for &v in layer {
+            w += vh[v];
+            sum += (vy[v] + vh[v] / 2.0) * vh[v];
+        }
+        shifts.push(if w > 0.0 { (w, sum / w) } else { (0.0, 0.0) });
+    }
+    let total_w: f32 = shifts.iter().map(|s| s.0).sum();
+    if total_w <= 0.0 {
+        return;
+    }
+    let global = shifts.iter().map(|s| s.0 * s.1).sum::<f32>() / total_w;
+    for (layer, &(w, mean)) in layers.iter().zip(&shifts) {
+        if w <= 0.0 {
+            continue;
+        }
+        let d = global - mean;
+        for &v in layer {
+            vy[v] += d;
+        }
+    }
+}
+
+/// Place one layer's cards at their neighbour barycentres using the priority
+/// method: process high-priority (high-degree) cards first and let them push
+/// lower-priority neighbours aside (never higher ones), keeping top-to-bottom
+/// order and the minimum gap.
 fn place_layer_priority(
     layer: &[usize],
-    up: &[Vec<usize>],
-    down: &[Vec<usize>],
+    adj: &[Vec<usize>],
     vh: &[f32],
     vy: &mut [f32],
-    gap_below: &impl Fn(usize) -> f32,
+    gap: f32,
     prio: &impl Fn(usize) -> usize,
 ) {
     let desired = |v: usize, vy: &[f32]| -> f32 {
-        let ns = up[v].len() + down[v].len();
-        if ns == 0 {
+        if adj[v].is_empty() {
             return vy[v];
         }
-        let sum: f32 = up[v]
-            .iter()
-            .chain(&down[v])
-            .map(|&u| vy[u] + vh[u] / 2.0)
-            .sum();
-        sum / ns as f32 - vh[v] / 2.0
+        let sum: f32 = adj[v].iter().map(|&u| vy[u] + vh[u] / 2.0).sum();
+        sum / adj[v].len() as f32 - vh[v] / 2.0
     };
 
     // Minimum top-of-`layer[j]` given `layer[i]` sits at y (i < j): stack the
-    // intervening vertices with their gaps.
+    // intervening cards with their gaps.
     let min_top_after = |i: usize, yi: f32| -> Vec<f32> {
         let mut tops = vec![0.0_f32; layer.len()];
         let mut run = yi;
         for j in (i + 1)..layer.len() {
-            run += vh[layer[j - 1]] + gap_below(layer[j - 1]);
+            run += vh[layer[j - 1]] + gap;
             tops[j] = run;
         }
         tops
@@ -773,7 +793,7 @@ fn place_layer_priority(
         let mut tops = vec![0.0_f32; layer.len()];
         let mut run = yi;
         for j in (0..i).rev() {
-            run -= vh[layer[j]] + gap_below(layer[j]);
+            run -= vh[layer[j]] + gap;
             tops[j] = run;
         }
         tops
@@ -815,7 +835,7 @@ fn place_layer_priority(
         // Push lower/equal-priority neighbours out of the way to keep order+gap.
         let mut run = y;
         for j in (i + 1)..layer.len() {
-            run += vh[layer[j - 1]] + gap_below(layer[j - 1]);
+            run += vh[layer[j - 1]] + gap;
             if vy[layer[j]] < run {
                 vy[layer[j]] = run;
             } else {
@@ -824,7 +844,7 @@ fn place_layer_priority(
         }
         let mut run = y;
         for j in (0..i).rev() {
-            run -= vh[layer[j]] + gap_below(layer[j]);
+            run -= vh[layer[j]] + gap;
             if vy[layer[j]] > run {
                 vy[layer[j]] = run;
             } else {
