@@ -71,9 +71,9 @@
 ;; Int lt/le ARE the unsigned orders); division likewise (ediv/mod on the
 ;; nonneg range ARE div_u/rem_u — machine spelling = spec spelling, no
 ;; wrap), and bitwise likewise (band/bor/bxor prims on the nonneg range,
-;; in-range closure by the kernel/facts.shard recurrences). Signed
-;; variants and shift OPCODES wait for a consumer (constant shifts spell
-;; as (* x 2^k) / (ediv x 2^k) over existing ops).
+;; in-range closure by the kernel/facts.shard recurrences). The shift
+;; family (shl/shr_u/rotr) landed at rung I2a when the sha256 consumer
+;; arrived; signed variants still wait for one.
 (type Bop
   (BAdd)
   (BSub)
@@ -88,7 +88,10 @@
   (BRemU)
   (BAnd)
   (BOr)
-  (BXor))
+  (BXor)
+  (BShl)
+  (BShrU)
+  (BRotr))
 
 ;; Structured wasm: Block/Loop carry nested bodies; Br/BrIf carry a relative
 ;; label depth (0 = innermost enclosing block/loop). A Br targeting a Block
@@ -207,7 +210,18 @@
     (BRemU (if (le 1 b) (Some (mod a b)) None))
     (BAnd (Some (band a b)))
     (BOr (Some (bor a b)))
-    (BXor (Some (bxor a b)))))
+    (BXor (Some (bxor a b)))
+    ;; shifts take the count mod 32 (the i32 semantics); shl wraps, shr_u
+    ;; cannot exceed its input. rotr's containment is BAND-spelled — the
+    ;; bit-op idiom (matches the sha-class specs' mask spelling and imp's
+    ;; IRotr, so rotation bridges align syntactically); wrap32 stays the
+    ;; ARITHMETIC idiom. Engine conformance rides the V8 differential
+    ;; like every op here.
+    (BShl (Some (wrap32 (bshl a (mod b 32)))))
+    (BShrU (Some (bshr a (mod b 32))))
+    (BRotr
+      (Some
+        (band (bor (bshr a (mod b 32)) (bshl a (- 32 (mod b 32)))) 4294967295)))))
 
 ;; pop two, apply, push. None = stack underflow or a trapping op
 ;; (division by zero) — OTrap at the caller either way.

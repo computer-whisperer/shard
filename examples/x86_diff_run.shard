@@ -62,7 +62,7 @@
     (None "None")
     ((Some v) (hx v))))
 
-;; three padded arg slots
+;; three padded arg slots (the XMEMCASE wire: rdi/rsi/rdx)
 (fn argslots ((args (List Int))) (List Int)
   (match args
     (Nil (cat (list " " (hx 0) " " (hx 0) " " (hx 0))))
@@ -73,6 +73,25 @@
         (match t1
           (Nil (cat (list " " (hx a0) " " (hx a1) " " (hx 0))))
           ((Cons a2 t2) (cat (list " " (hx a0) " " (hx a1) " " (hx a2))))))))))
+
+;; four padded arg slots (the XCASE wire: rdi/rsi/rdx + a fourth -> rcx,
+;; b3954ab). x86_diff.c's XCASE sscanf reads exactly four; XMEMCASE keeps
+;; three. Functions taking fewer args pad with 0 (an extra register arg is
+;; ABI-harmless).
+(fn argslots4 ((args (List Int))) (List Int)
+  (match args
+    (Nil (cat (list " " (hx 0) " " (hx 0) " " (hx 0) " " (hx 0))))
+    ((Cons a0 t0)
+     (match t0
+       (Nil (cat (list " " (hx a0) " " (hx 0) " " (hx 0) " " (hx 0))))
+       ((Cons a1 t1)
+        (match t1
+          (Nil (cat (list " " (hx a0) " " (hx a1) " " (hx 0) " " (hx 0))))
+          ((Cons a2 t2)
+           (match t2
+             (Nil (cat (list " " (hx a0) " " (hx a1) " " (hx a2) " " (hx 0))))
+             ((Cons a3 t3)
+              (cat (list " " (hx a0) " " (hx a1) " " (hx a2) " " (hx a3))))))))))))
 
 (fn argc ((args (List Int))) Int
   (measure (struct args))
@@ -172,6 +191,15 @@
           (XMovRR RAX RSI)
           (XBin XAdd RAX (SImm 1)))))))
 
+;; immediate-count shifts (rung I2a): the count is baked into the instruction
+;; as an imm8, so there is one function per count. f(x) = x SHL/SHR k, value
+;; in rdi, result in rax. Counts 0/1/7/25/63 and 65 (>= 64) probe the CPU's
+;; 6-bit count masking: the model masks with (mod k 64), the encoder emits the
+;; raw imm8 (mod k 256), and the two agree for every count (65 masks to 1).
+(fn shl_f ((k Int)) XFunc (MkXFunc 1 (list (XMovRR RAX RDI) (XShlI RAX k))))
+
+(fn shr_f ((k Int)) XFunc (MkXFunc 1 (list (XMovRR RAX RDI) (XShrI RAX k))))
+
 ;; register modules have no memory; memory modules bound [DATA_BASE, +0x10000)
 (fn mreg ((f XFunc)) XModule (MkXModule (Cons f Nil) 0 0))
 
@@ -239,7 +267,7 @@
       nm
       " "
       (dec1 (argc args))
-      (argslots args)
+      (argslots4 args)
       " -> "
       (showr (xcall_fn (xfnat fuel) m k args))
       "\n")))
@@ -278,7 +306,7 @@
       nm
       " "
       (dec1 (argc args))
-      (argslots args)
+      (argslots4 args)
       " -> "
       (showr (xcall_fn (xfnat fuel) m 0 args))
       "\n")))
@@ -322,6 +350,20 @@
         " "
         (memouthex r addr (xfnat len))
         "\n"))))
+
+;; one shift module's full plan block: its bytes + four value vectors — 0, a
+;; small value, 0x8000000000000000 (bit 63 set), and all-ones (2^64-1). The
+;; last two are the sharp witnesses: shl wraps the top bits off (wrap64) and
+;; shr fills from the top with zeros (logical, not arithmetic). Fuel 12 covers
+;; mov + shift + ret.
+(fn shblock ((nm (List Int)) (f XFunc)) (List Int)
+  (cat
+    (list
+      (mod_line nm f)
+      (xcase nm (mreg f) (list 0) 12)
+      (xcase nm (mreg f) (list 5) 12)
+      (xcase nm (mreg f) (list 9223372036854775808) 12)
+      (xcase nm (mreg f) (list 18446744073709551615) 12))))
 
 ;; --- the plan ----------------------------------------------------------------
 ;; DATA_BASE = 0x40000000 = 1073741824; the trap address 0x40100000 =
@@ -382,6 +424,18 @@
       (xcasek "chain" (mchain) 2 (list 0) 30)
       (mod_linei "st2" (mst2) 1)
       (xmemcasek "st2" (mst2) 1 (list 1073741824 65) 1073741824 3 30)
-      (xmemcasek "st2" (mst2) 1 (list 1073741830 200) 1073741828 5 30))))
+      (xmemcasek "st2" (mst2) 1 (list 1073741830 200) 1073741828 5 30)
+      (shblock "shl0" (shl_f 0))
+      (shblock "shl1" (shl_f 1))
+      (shblock "shl7" (shl_f 7))
+      (shblock "shl25" (shl_f 25))
+      (shblock "shl63" (shl_f 63))
+      (shblock "shl65" (shl_f 65))
+      (shblock "shr0" (shr_f 0))
+      (shblock "shr1" (shr_f 1))
+      (shblock "shr7" (shr_f 7))
+      (shblock "shr25" (shr_f 25))
+      (shblock "shr63" (shr_f 63))
+      (shblock "shr65" (shr_f 65)))))
 
 (fn main ((w World)) World (exit 0 (write (emit) w)))

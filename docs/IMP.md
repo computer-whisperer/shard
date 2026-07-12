@@ -461,6 +461,55 @@ proof shape; rung I1 is complete:
   stabilized) — scheduled after the flagship rungs exercise the
   hand era further.
 
+**I2 opening rulings (2026-07-12).** The sha256 zero-heap flagship's
+scoping pass, ratified: **(1)** shift AND rotate opcodes enter the
+vocabulary (the wasm model's own "wait for a consumer" gate fired);
+**(2)** "one region" at I2 means STATICALLY CARVED WINDOWS — the
+region cancellation is a cert shape (scratch quantified arbitrary,
+output windows framed disjoint), NOT machine syntax; dynamic region
+alloc/death ops defer to MEMORY.md rung 3+ (deliberate deviation
+from the I0-era machine-header note, now corrected); **(3)**
+byte-spelled big-endian word access in v1 (wide loads are a later
+perf rung). Slicing: I2a vocabulary → I2b word kit → I2c twin +
+cancellation cert → I2d ISA legs → I2e ./sha256sum + V8.
+
+**I2a — the shift/rotate vocabulary (2026-07-12).** Three layers,
+one slice, both differentials green:
+
+- **imp**: IShl/IShr (exact kernel-prim semantics; negative counts
+  trap — the honest corner) and (IRotr W a k), width-parametric on
+  the IWrap precedent but BAND-spelled: rotation is a bit op, so
+  its containment is the bit-mask idiom — which is also the
+  sha-class specs' own m32 spelling, so spec ⊑ imp rotation aligns
+  syntactically. wrap/mod stays the arithmetic idiom.
+- **wasm**: BShl/BShrU/BRotr (counts mod 32; BRotr band-spelled to
+  match), encodings 0x74/0x76/0x78; 24 new differential vectors
+  (count-masking boundary 0/31/32/33, high-bit wrap, all-ones) —
+  V8: 173 agree, 0 disagree.
+- **x86**: XShlI/XShrI (immediate-count only — the CL register-count
+  quirk stays out until a consumer; counts mod 64 = the hardware's
+  6-bit mask), REX.W C1 /4|/5 ib encodings + 48 silicon vectors
+  including the count-65≡count-1 masking witness (Opus-delegated
+  per the standing split; conclusions verified by re-running the
+  differential first-hand) — silicon: 82 agree, 0 disagree. No
+  32-bit-view rotate instruction yet: to_x86 lowers (IRotr 32 …)
+  as the mov/shr/shl/or/and composition through the R11 scratch;
+  the single-instruction ror rung is named growth for the perf
+  pass.
+- **The pins**: shift bridges UNPREMISED on both targets; the
+  rotation bridge UNPREMISED on wasm (band meets band — the
+  machine-width family is free on its native target) and carrying
+  exactly ONE wrap64_id premise on x86 (the left-shift leg of the
+  composition). The width mirror's third data point.
+- **Found in passing (Opus, verified first-hand)**: the x86 silicon
+  differential had been silently degraded since b3954ab (2026-07-09)
+  — the XCASE parser moved to a 4-slot wire but the emitter stayed
+  at 3, so all 27 XCASE lines scored unparseable. Fixed emitter-side
+  in x86_diff_run.shard; the differential's scored set went from 7
+  to 82 lines.
+- Gates: no new files (all edits to existing corpus targets); driver
+  51 green; corpus FAIL-set unchanged at 57.
+
 ## 7. Non-goals, stated once
 
 - imp as a shipped target or public surface — it is an intermediate;

@@ -58,7 +58,9 @@
   None)))))))
 
 ;; exact imp ops onto the wrapping two-operand ops; div/rem and the
-;; comparisons refuse (compound instruction / fused-condition-only)
+;; comparisons refuse (compound instruction / fused-condition-only),
+;; and the shifts refuse HERE because they are not XBops — they ride
+;; the immediate-count XShlI/XShrI instructions via dedicated patterns
 (fn ix_op ((o IOp)) (Option XBop)
   (match o
     (IAdd (Some XAdd))
@@ -69,6 +71,8 @@
     (IAnd (Some XAnd))
     (IOr (Some XOr))
     (IXor (Some XXor))
+    (IShl None)
+    (IShr None)
     (IEq None)
     (ILt None)
     (ILe None)))
@@ -83,6 +87,7 @@
        ((Some r) (Some (SReg r)))))
     ((IBin o a b) None)
     ((IWrap w a) None)
+    ((IRotr w a k) None)
     ((ILoad a) None)))
 
 ;; does an atom read local i (the mov+bin clobber fence)
@@ -92,7 +97,23 @@
     ((IConst n) False)
     ((IBin o a b) True)
     ((IWrap w a) True)
+    ((IRotr w a k) True)
     ((ILoad a) True)))
+
+;; rotate-right a register by a ground count within 32 bits: the
+;; shr/shl/or/and composition (this model's vocabulary has no
+;; 32-bit-view rotate instruction; the single-instruction ror rung is
+;; named growth for the perf pass). R11 is the composition's scratch —
+;; no imp local ever maps to it. Alignment with imp's band-spelled
+;; IRotr is exact up to ONE wrap64 on the left-shift leg, which the
+;; bridge certs discharge by wrap64_id under a range premise.
+(fn ix_rot ((d Reg) (k Int)) (List XInstr)
+  (list
+    (XMovRR R11 d)
+    (XShrI d (mod k 32))
+    (XShlI R11 (- 32 (mod k 32)))
+    (XBin XOr d (SReg R11))
+    (XBin XAnd d (SImm 4294967295))))
 
 ;; fused branch conditions: comparison of a local against an atom
 (fn ix_cond ((e IExp)) (Option Cond)
@@ -117,14 +138,18 @@
                 (IRem None)
                 (IAnd None)
                 (IOr None)
-                (IXor None)))))))
+                (IXor None)
+                (IShl None)
+                (IShr None)))))))
        ((IConst n) None)
        ((IBin o2 x y) None)
        ((IWrap w x) None)
+       ((IRotr w x y) None)
        ((ILoad x) None)))
     ((IConst n) None)
     ((ILoc i) None)
     ((IWrap w a) None)
+    ((IRotr w a k) None)
     ((ILoad a) None)))
 
 ;; compile an expression into an accumulator register, LEFT-SPINE ONLY
@@ -138,16 +163,49 @@
        (None None)
        ((Some r) (Some (list (XMovRR dst r))))))
     ((IBin o a b)
-     (match (ix_op o)
-       (None None)
-       ((Some xo)
-        (match (ix_src b)
-          (None None)
-          ((Some bs)
-           (match (ix_acc dst a)
-             (None None)
-             ((Some ia) (Some (ix_app ia (list (XBin xo dst bs)))))))))))
+     (match o
+       (IShl
+         (match b
+           ((IConst k)
+            (if (le 0 k)
+              (if (le k 63)
+                (match (ix_acc dst a)
+                  (None None)
+                  ((Some ia) (Some (ix_app ia (list (XShlI dst k))))))
+                None)
+              None))
+           (_ None)))
+       (IShr
+         (match b
+           ((IConst k)
+            (if (le 0 k)
+              (if (le k 63)
+                (match (ix_acc dst a)
+                  (None None)
+                  ((Some ia) (Some (ix_app ia (list (XShrI dst k))))))
+                None)
+              None))
+           (_ None)))
+       (_
+         (match (ix_op o)
+           (None None)
+           ((Some xo)
+            (match (ix_src b)
+              (None None)
+              ((Some bs)
+               (match (ix_acc dst a)
+                 (None None)
+                 ((Some ia) (Some (ix_app ia (list (XBin xo dst bs)))))))))))))
     ((IWrap w a) (if (int_eq w 64) (ix_acc dst a) None))
+    ((IRotr w a k)
+     (if (int_eq w 32)
+       (match k
+         ((IConst kc)
+          (match (ix_acc dst a)
+            (None None)
+            ((Some ia) (Some (ix_app ia (ix_rot dst kc))))))
+         (_ None))
+       None))
     ((ILoad a) None)))
 
 ;; the result expression into RAX; one right-compound level rides R10
@@ -172,6 +230,7 @@
         ((IConst n) None)
         ((ILoc i) None)
         ((IWrap w a) None)
+        ((IRotr w a k) None)
         ((ILoad a) None)))))
 
 ;; the statement tier: one structural walk (the to_wasm shape); the
@@ -198,44 +257,97 @@
                    (None None)
                    ((Some r) (Some (Cons (XMovRR d r) it)))))
                 ((IBin o a b)
-                 (match (ix_op o)
-                   (None None)
-                   ((Some xo)
-                    (match a
-                      ((ILoc j)
-                       (if (int_eq j i)
-                         (match b
-                           ((ILoad ae)
-                            (match ae
-                              ((ILoc aj)
-                               (match (ix_home aj)
+                 (match o
+                   (IShl
+                     (match b
+                       ((IConst k)
+                        (if (le 0 k)
+                          (if (le k 63)
+                            (match a
+                              ((ILoc j)
+                               (match (ix_home j)
                                  (None None)
-                                 ((Some ar)
+                                 ((Some r)
+                                  (if (int_eq j i) (Some (Cons (XShlI d k) it))
                                   (Some
-                                    (Cons
-                                      (XLoad8 RAX (AReg ar))
-                                      (Cons (XBin xo d (SReg RAX)) it))))))
-                              ((IConst n) None)
-                              ((IBin o2 x y) None)
-                              ((IWrap w x) None)
-                              ((ILoad x) None)))
-                           (_
-                             (match (ix_src b)
-                               (None None)
-                               ((Some bs) (Some (Cons (XBin xo d bs) it))))))
-                       (if (ix_uses b i) None
-                       (match (ix_home j)
-                         (None None)
-                         ((Some r)
-                          (match (ix_src b)
-                            (None None)
-                            ((Some bs)
-                             (Some (Cons (XMovRR d r) (Cons (XBin xo d bs) it))))))))))
-                      ((IConst n) None)
-                      ((IBin o2 x y) None)
-                      ((IWrap w x) None)
-                      ((ILoad x) None)))))
+                                    (Cons (XMovRR d r) (Cons (XShlI d k) it)))))))
+                              (_ None))
+                            None)
+                          None))
+                       (_ None)))
+                   (IShr
+                     (match b
+                       ((IConst k)
+                        (if (le 0 k)
+                          (if (le k 63)
+                            (match a
+                              ((ILoc j)
+                               (match (ix_home j)
+                                 (None None)
+                                 ((Some r)
+                                  (if (int_eq j i) (Some (Cons (XShrI d k) it))
+                                  (Some
+                                    (Cons (XMovRR d r) (Cons (XShrI d k) it)))))))
+                              (_ None))
+                            None)
+                          None))
+                       (_ None)))
+                   (_
+                     (match (ix_op o)
+                       (None None)
+                       ((Some xo)
+                        (match a
+                          ((ILoc j)
+                           (if (int_eq j i)
+                             (match b
+                               ((ILoad ae)
+                                (match ae
+                                  ((ILoc aj)
+                                   (match (ix_home aj)
+                                     (None None)
+                                     ((Some ar)
+                                      (Some
+                                        (Cons
+                                          (XLoad8 RAX (AReg ar))
+                                          (Cons (XBin xo d (SReg RAX)) it))))))
+                                  ((IConst n) None)
+                                  ((IBin o2 x y) None)
+                                  ((IWrap w x) None)
+                                  ((IRotr w x y) None)
+                                  ((ILoad x) None)))
+                               (_
+                                 (match (ix_src b)
+                                   (None None)
+                                   ((Some bs) (Some (Cons (XBin xo d bs) it))))))
+                           (if (ix_uses b i) None
+                           (match (ix_home j)
+                             (None None)
+                             ((Some r)
+                              (match (ix_src b)
+                                (None None)
+                                ((Some bs)
+                                 (Some
+                                   (Cons (XMovRR d r) (Cons (XBin xo d bs) it))))))))))
+                          ((IConst n) None)
+                          ((IBin o2 x y) None)
+                          ((IWrap w x) None)
+                          ((IRotr w x y) None)
+                          ((ILoad x) None)))))))
                 ((IWrap w a) None)
+                ((IRotr w ra rk)
+                 (if (int_eq w 32)
+                   (match rk
+                     ((IConst kc)
+                      (match ra
+                        ((ILoc j)
+                         (match (ix_home j)
+                           (None None)
+                           ((Some r)
+                            (if (int_eq j i) (Some (ix_app (ix_rot d kc) it))
+                            (Some (Cons (XMovRR d r) (ix_app (ix_rot d kc) it)))))))
+                        (_ None)))
+                     (_ None))
+                   None))
                 ((ILoad ae)
                  (match ae
                    ((ILoc aj)
@@ -245,6 +357,7 @@
                    ((IConst n) None)
                    ((IBin o2 x y) None)
                    ((IWrap w x) None)
+                   ((IRotr w x y) None)
                    ((ILoad x) None)))))))
           ((IStore ae ve)
            (match ae
@@ -258,6 +371,7 @@
              ((IConst n) None)
              ((IBin o2 x y) None)
              ((IWrap w x) None)
+             ((IRotr w x y) None)
              ((ILoad x) None)))
           ((IIf c thn els)
            (match (ix_cond c)
@@ -298,6 +412,7 @@
              ((IConst n) None)
              ((IBin o2 x y) None)
              ((IWrap w x) None)
+             ((IRotr w x y) None)
              ((ILoad x) None)))))))))
 
 ;; a function: translated statements, then the result into RAX. The

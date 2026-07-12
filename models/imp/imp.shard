@@ -14,13 +14,19 @@
 ;;;   - byte memory: std/mem's Mem (the neutral memory both ISA
 ;;;     models already consume), byte load/store, bounds-checked
 ;;;     against the program's declared memsize (mask-on-read below,
-;;;     honesty above). Region alloc/death ops arrive at rung I2
-;;;     where the cancellation theorems need syntax to attach to.
+;;;     honesty above). Rung I2's zero-heap flagship uses STATICALLY
+;;;     CARVED WINDOWS of this memory — the region cancellation is a
+;;;     cert shape (scratch quantified arbitrary, outputs framed
+;;;     disjoint), not machine syntax (ruling 2026-07-12); dynamic
+;;;     region alloc/death ops arrive with MEMORY.md rung 3+ where
+;;;     regions actually nest and die mid-run.
 ;;;   - scalars: unbounded Int (the theoretical-language spirit);
-;;;     ops are EXACT — width exists only as the explicit IWrap op,
-;;;     so premises appear exactly where wrap is used and nowhere
-;;;     else. Comparisons yield 1/0. Division/remainder trap on zero
-;;;     divisors (the honest corner; certs carry divisor premises).
+;;;     ops are EXACT — width exists only at the explicit
+;;;     width-parametric ops (IWrap's mod containment; IRotr's band
+;;;     containment), so premises appear exactly where width is used
+;;;     and nowhere else. Comparisons yield 1/0. Division/remainder
+;;;     trap on zero divisors, shifts on negative counts (the honest
+;;;     corners; certs carry the premises).
 ;;;   - calls: NOT in v1 statements — the I0 fragment classes
 ;;;     (straight-line, loop; the mem class collapses into them here
 ;;;     because loads/stores are native) never call. The call layer
@@ -40,7 +46,10 @@
 ;; --- the language -------------------------------------------------------------
 
 ;; scalar binary ops: exact on Int; comparisons yield 1/0; div/rem
-;; follow the euclidean kernel ops and trap on divisor 0
+;; follow the euclidean kernel ops and trap on divisor 0; shifts are
+;; the exact kernel prims (bshl/bshr — value·2^k / ⌊value/2^k⌋ on
+;; nonneg counts) and trap on a negative count (rung I2a: the sha256
+;; consumer arrived — the vocabulary both ISA models grew the same day)
 (type IOp
   (IAdd)
   (ISub)
@@ -50,6 +59,8 @@
   (IAnd)
   (IOr)
   (IXor)
+  (IShl)
+  (IShr)
   (IEq)
   (ILt)
   (ILe))
@@ -59,7 +70,8 @@
   (IConst Int)
   (ILoc Int)
   (IBin IOp IExp IExp)
-  (IWrap Int IExp)  ; wrap into [0, 2^W) — the ONLY width in the machine
+  (IWrap Int IExp)  ; wrap into [0, 2^W) — width as a value (mod spelling)
+  (IRotr Int IExp IExp)  ; rotate-right within width W (band spelling — §I2a)
   (ILoad IExp))  ; byte read at address
 
 ;; statements: the structured imperative core
@@ -144,6 +156,8 @@
     (IAnd (Some (band a b)))
     (IOr (Some (bor a b)))
     (IXor (Some (bxor a b)))
+    (IShl (if (le 0 b) (Some (bshl a b)) None))
+    (IShr (if (le 0 b) (Some (bshr a b)) None))
     (IEq (Some (ib2i (int_eq a b))))
     (ILt (Some (ib2i (lt a b))))
     (ILe (Some (ib2i (le a b))))))
@@ -167,6 +181,22 @@
      (match (iexp a lc mem msz)
        (None None)
        ((Some va) (Some (mod va (ipow2 w))))))
+    ;; rotate-right within W bits, count taken mod W; containment is
+    ;; BAND-spelled (the bit-op idiom — matches the sha-class specs'
+    ;; own mask spelling, so rotation aligns syntactically at every
+    ;; tier; wrap/mod stays the ARITHMETIC idiom). W <= 0 traps.
+    ((IRotr w a k)
+     (if (le w 0) None
+     (match (iexp a lc mem msz)
+       (None None)
+       ((Some va)
+        (match (iexp k lc mem msz)
+          (None None)
+          ((Some vk)
+           (Some
+             (band
+               (bor (bshr va (mod vk w)) (bshl va (- w (mod vk w))))
+               (- (ipow2 w) 1)))))))))
     ((ILoad a)
      (match (iexp a lc mem msz)
        (None None)
