@@ -73,7 +73,13 @@ web is sparse and load-bearing). Ctor-use edges are *committed* — they inform
 placement, so a file's types layer left of the code that works over them —
 but draw only when the **hovered or selected member** is an endpoint (hover
 is render input, like zoom; the committed plane never hears it). Sig-use
-stays out of the routed graph entirely and lives in the deck:
+stays out of the routed graph entirely and lives in the deck. The call and
+citation webs tier the same way: the focus member's edges always draw at
+full strength (hover is the *trace* gesture), while at rest an edge fades by
+**horizontal reach** (crossing most of the file = context, not local
+structure) and by **fan redundancy** (a hub's thirtieth caller-line repeats
+what its committed leftmost position already says) — counted within the
+edge's own class, so a much-cited lemma keeps its crisp call web:
 
 **The shape deck**: hover (or select) a fn and a screen-space overlay docks
 at the canvas edge listing its types' full definition cards — strong shapes
@@ -191,9 +197,18 @@ This is the view the others are converging into — see *Direction*.
   drills into the file's Methods view.
 - Layout (for the call/import graphs) is a generic, semantics-agnostic **layered
   (Sugiyama) engine** (`layout.rs`): SCC condensation (cycles share a column) →
-  dummy nodes for long edges → barycenter crossing reduction → iterative
-  coordinate assignment → port-aware polyline routing. (The Flow view does *not*
-  use this — a nested tree is a different problem; see below.) Two aspect
+  dummy nodes for long edges (ordering only) → barycenter crossing reduction →
+  iterative coordinate assignment over the cards alone → direct port-to-port
+  routing. (The Flow view does *not* use this — a nested tree is a different
+  problem; see below.) Coordinate sweeps are **column-anchored**: after every
+  sweep each column is rigidly re-centered on the global height-weighted mean,
+  because barycenter iteration is otherwise indifferent to shear — any
+  staircase where each column rests at its neighbours' average is a fixpoint,
+  and dense files converged to diagonal drifts that wasted half the drawing.
+  **Edges draw under the card layer** and route as near-straight curves;
+  routing dummies don't reserve vertical slots between cards (sharing the
+  column stack used to fence low-degree cards thousands of px from their
+  neighbours and swept long edges into swooping waypoint chains). Two aspect
   guards keep real shard graphs screen-shaped: overfull layers **split into
   sub-columns** (fan-heavy files pile dozens of leaf helpers into one rank —
   legal to split, since same-rank nodes never have edges between them), and
