@@ -546,6 +546,62 @@ spelling — the manual-spelling-target vision made concrete:
   accumulate-t1-in-h's-slot, two-pointer fusion, or a 13th home by
   reducing scratch pressure.
 
+**I2c-1 — the round tier (2026-07-12).** The compression loop's imp
+twin lands in the sibling file, with the recorded budget question
+resolved at its opening:
+
+- **The layout, at exactly 12 = 12.** Locals 0–7 the working state,
+  8/9 the K/W running pointers, 10 the counter, 11 ONE shuttle temp.
+  Two observations close the budget without W/K fusion or a 13th
+  home: T1 accumulates IN H'S SLOT (old h dies into the T1 sum
+  first, so h's slot IS the temp), and the state rotation is ordered
+  so every original is read through its not-yet-overwritten slot.
+  Every statement shape was verified against to_x86's CURRENT
+  pattern tier before the twin was frozen (in-place bin/mask ops,
+  add-with-load, the rotation set pattern, one-R10 general trees):
+  the x86 leg's only growth at I2d is ix_home 6 → 12.
+- **The round body** (isha_round_body, 51 statements): forward
+  Horner word loads (t := t*256 + m[p], p += 1 — in-pattern on both
+  targets), Ch as the pinned kit tree, Σ trees built right-nested in
+  t so the xor spines land the spec's association exactly, masks
+  wherever the spec masks, the 8-cycle rotation broken by t (t ends
+  holding a').
+- **The single-pass lemma** (isha_round_pass): one body run on
+  symbolic state = one sha_round on (wget m kp)/(wget m wp), both
+  pointers +4, counter −1, a' in the shuttle, MEMORY UNTOUCHED. The
+  proof walks the body discharging the 16 load guards, then aligns
+  by exactly four linear identities: Horner → word_be per word
+  (ish_be) and the two sum re-associations (ish_sum5/ish_sum3) —
+  everything else is refl-grade because the band-spelled rotation
+  trees ARE the spec's trees (the I2b thesis paying off at scale).
+- **The rounds worker** (isha_rounds_w): induction on k lands
+  iwhile = sha_rounds over (wlist m kp k)/(wlist m wp k) — the
+  window-content reading is Nat-indexed (wlist) so the induction
+  unfolds it structurally, pointers advance by lg_advk stride 4, and
+  the shuttle's k-dependent final value rides the rt_last selector
+  with a two-case shift lemma (ish_rt_shift). Memory returns
+  UNTOUCHED for any k — the compression loop is a pure reader: the
+  first half of the region-cancellation story, already in theorem
+  form.
+- **Proof-system findings** (recorded for the arc): plain
+  (rewrite … true ()) rewrites ALL occurrences but rewrite-with
+  rewrites the FIRST only — big-tree rewrites repeat per occurrence
+  (the T1 tree occurs three times: a'-slot, e'-slot, shuttle); a
+  cited lemma with a premise-only binder needs an explicit (inst …)
+  (the type gate names it a dangling pivot); and the stuck-match
+  unfolding gotcha (xlg_last precedent) resolves cleanly as ONE-STEP
+  UNFOLDING LEMMAS (wlist_s/sha_rounds_s/lg_advk_s/rt_last_s, proven
+  by unfold+reduce/refl) cited through the all-occurrence rewrite
+  form, with the kit fns themselves in every stop set.
+- Gates: fast-engine 93/0 on the sibling; driver 52 products green;
+  corpus FAIL-set unchanged at 57.
+- REMAINING I2c: I2c-2 the schedule tier (words16 copy + sched_ext
+  extension loop — the write direction: byte-store/word-readback
+  roundtrip + window framing enter here), I2c-3 block walk + padding
+  + the digest-readback theorem over arbitrary scratch (K-window
+  content as a PREMISE, discharged at I2d/I2e by target data
+  segments).
+
 ## 7. Non-goals, stated once
 
 - imp as a shipped target or public surface — it is an intermediate;

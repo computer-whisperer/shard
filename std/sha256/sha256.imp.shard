@@ -17,12 +17,16 @@
 ;;; induction.
 
 (import "../../kernel/stdlib.shard")
+(import "../../std/nat.shard")
+(use (:: std nat *))
 (import "sha256.shard")
 (use (:: std sha256 sha256 *))
 (import "../../std/mem")
 (use (:: std mem *))
 (import "../../models/imp/imp.shard")
 (use (:: models imp imp *))
+(import "../../models/wasm/loopkit.shard")
+(use (:: models wasm loopkit *))
 
 ;; ---- the builders ---------------------------------------------------------------
 
@@ -115,3 +119,828 @@
   (goal ((x Int) (m Mem)) ()
     (= (iexp (ie_ssig1 0) (Cons x Nil) m 0) (Some (ssig1 x))))
   (steps ((compute both)) refl))
+
+;; ==== rung I2c: the round tier ======================================================
+;;
+;; The compression loop's imp twin. LAYOUT (the recorded I2c budget
+;; question, resolved at exactly 12 locals = the 12 x86 homes):
+;;   0-7  the working state a b c d e f g h
+;;   8    kp — the K-window running pointer (a byte per load)
+;;   9    wp — the W-window running pointer
+;;   10   n  — the remaining-rounds counter (the loop guard)
+;;   11   t  — the ONE shuttle temp
+;; T1 accumulates IN H'S SLOT (old h dies into the sum first), and the
+;; state rotation reads each original through the not-yet-overwritten
+;; slot, so no second temp exists. Every statement shape is within
+;; to_x86's CURRENT pattern tier (in-place bin/shift/mask, add-with-
+;; load, the rotation set pattern, one-R10 general trees) — the x86
+;; leg's only growth at I2d is ix_home 6 -> 12.
+;;
+;; Words are byte-spelled big-endian (I2 ruling 3): a word load is a
+;; forward Horner walk (t := t*256 + m[p]; p := p+1), and the pass
+;; lemma re-associates it to the spec's word_be spelling by one linear
+;; identity per word — the only place the twin's spelling and the
+;; spec's differ.
+
+;; ---- the memory-word reading kit --------------------------------------------------
+;; Spec-side vocabulary for "the window holds these words": wget reads
+;; one big-endian word at p; wlist reads k of them, Nat-indexed so the
+;; rounds worker's induction unfolds it structurally (no fuel guards).
+
+(fn wget ((m Mem) (p Int)) Int
+  (word_be
+    (mem_get m p)
+    (mem_get m (+ p 1))
+    (mem_get m (+ p 2))
+    (mem_get m (+ p 3))))
+
+(fn wlist ((m Mem) (p Int) (k Nat)) (List Int)
+  (measure (struct k))
+  (match k
+    (Z Nil)
+    ((S k2) (Cons (wget m p) (wlist m (+ p 4) k2)))))
+
+;; ---- H8 plumbing ------------------------------------------------------------------
+
+(fn h8a ((s H8)) Int
+  (match s
+    ((mk_h8 xa xb xc xd xe xf xg xh) xa)))
+
+(fn h8e ((s H8)) Int
+  (match s
+    ((mk_h8 xa xb xc xd xe xf xg xh) xe)))
+
+;; the 12-local list of a state + the pointer/counter/shuttle tail
+(fn h8_locals ((r H8) (p Int) (q Int) (nv Int) (tv Int)) (List Int)
+  (match r
+    ((mk_h8 xa xb xc xd xe xf xg xh) (list xa xb xc xd xe xf xg xh p q nv tv))))
+
+;; the shuttle's final value: untouched when no round ran, else the
+;; final a (the rotation parks a' in t before depositing it)
+(fn rt_last ((t0 Int) (r H8) (k Nat)) Int
+  (match k
+    (Z t0)
+    ((S k2) (h8a r))))
+
+;; ---- the arithmetic support -------------------------------------------------------
+;; Load-guard bounds at the pointer-walk's literal trees, the Horner ->
+;; big-endian identity, the two sum re-associations, and the stride-4
+;; premise steps for the worker's induction.
+
+(claim ish_lo2
+  (goal ((p Int)) ((= (le 0 p) True)) (= (le 0 (+ (+ p 1) 1)) True))
+  (by arith (list 1 1)))
+
+(claim ish_lo3
+  (goal ((p Int)) ((= (le 0 p) True)) (= (le 0 (+ (+ (+ p 1) 1) 1)) True))
+  (by arith (list 1 1)))
+
+(claim ish_hi0
+  (goal ((p Int)) ((= (le (+ p 4) 65536) True)) (= (lt p 65536) True))
+  (by arith (list 1 1)))
+
+(claim ish_hi1
+  (goal ((p Int)) ((= (le (+ p 4) 65536) True)) (= (lt (+ p 1) 65536) True))
+  (by arith (list 1 1)))
+
+(claim ish_hi2
+  (goal ((p Int)) ((= (le (+ p 4) 65536) True))
+    (= (lt (+ (+ p 1) 1) 65536) True))
+  (by arith (list 1 1)))
+
+(claim ish_hi3
+  (goal ((p Int)) ((= (le (+ p 4) 65536) True))
+    (= (lt (+ (+ (+ p 1) 1) 1) 65536) True))
+  (by arith (list 1 1)))
+
+;; the forward Horner walk = the spec's big-endian word spelling
+(claim ish_be
+  (goal ((b0 Int) (b1 Int) (b2 Int) (b3 Int)) ()
+    (=
+      (+ (* (+ (* (+ (* b0 256) b1) 256) b2) 256) b3)
+      (+ (* b0 16777216) (+ (* b1 65536) (+ (* b2 256) b3)))))
+  (by arith (list)))
+
+;; the T1 accumulation order = the spec's association
+(claim ish_sum5
+  (goal ((x Int) (kk Int) (ww Int) (cc Int) (ss Int)) ()
+    (= (+ (+ (+ (+ x kk) ww) cc) ss) (+ x (+ ss (+ cc (+ kk ww))))))
+  (by arith (list)))
+
+;; the T2 accumulation order = the spec's association
+(claim ish_sum3
+  (goal ((tt Int) (ss Int) (mm Int)) () (= (+ (+ tt ss) mm) (+ tt (+ ss mm))))
+  (by arith (list)))
+
+;; worker premise steps: a live iteration's window premise gives the
+;; pass lemma's 4-byte bound, and steps by stride 4 to the IH
+(claim ish_w4lo
+  (goal ((p Int)) ((= (le 0 p) True)) (= (le 0 (+ p 4)) True))
+  (by arith (list 1 1)))
+
+(claim ish_w4hi
+  (goal ((p Int) (c2 Nat))
+    ((= (le (+ p (* 4 (int_of_nat (S c2)))) 65536) True)
+     (= (int_of_nat (S c2)) (+ 1 (int_of_nat c2)))
+     (= (le 0 (int_of_nat c2)) True))
+    (= (le (+ p 4) 65536) True))
+  (by arith (list 1 1 4 4)))
+
+(claim ish_w4shift
+  (goal ((p Int) (c2 Nat))
+    ((= (le (+ p (* 4 (int_of_nat (S c2)))) 65536) True)
+     (= (int_of_nat (S c2)) (+ 1 (int_of_nat c2))))
+    (= (le (+ (+ p 4) (* 4 (int_of_nat c2))) 65536) True))
+  (by arith (list 1 1 4)))
+
+;; ---- the round body ---------------------------------------------------------------
+;; One compression round, 51 statements. The word loads are forward
+;; Horner walks; T1 accumulates in h's slot (order: h, K, W, Ch, Σ1 —
+;; re-associated to the spec's tree by ish_sum5); Σ trees build
+;; right-nested in t so the xor spines land the spec's association
+;; exactly; the rotation walks down through the not-yet-overwritten
+;; originals with t breaking the 8-cycle (t ends holding a').
+
+(fn isha_round_body () (List IStmt)
+  (list
+    ;; the K word: t := m[kp]..m[kp+3] big-endian, kp += 4
+    (ISet 11 (ILoad (ILoc 8)))
+    (ISet 8 (IBin IAdd (ILoc 8) (IConst 1)))
+    (ISet 11 (IBin IMul (ILoc 11) (IConst 256)))
+    (ISet 11 (IBin IAdd (ILoc 11) (ILoad (ILoc 8))))
+    (ISet 8 (IBin IAdd (ILoc 8) (IConst 1)))
+    (ISet 11 (IBin IMul (ILoc 11) (IConst 256)))
+    (ISet 11 (IBin IAdd (ILoc 11) (ILoad (ILoc 8))))
+    (ISet 8 (IBin IAdd (ILoc 8) (IConst 1)))
+    (ISet 11 (IBin IMul (ILoc 11) (IConst 256)))
+    (ISet 11 (IBin IAdd (ILoc 11) (ILoad (ILoc 8))))
+    (ISet 8 (IBin IAdd (ILoc 8) (IConst 1)))
+    (ISet 7 (IBin IAdd (ILoc 7) (ILoc 11)))
+    ;; the W word, same walk through wp
+    (ISet 11 (ILoad (ILoc 9)))
+    (ISet 9 (IBin IAdd (ILoc 9) (IConst 1)))
+    (ISet 11 (IBin IMul (ILoc 11) (IConst 256)))
+    (ISet 11 (IBin IAdd (ILoc 11) (ILoad (ILoc 9))))
+    (ISet 9 (IBin IAdd (ILoc 9) (IConst 1)))
+    (ISet 11 (IBin IMul (ILoc 11) (IConst 256)))
+    (ISet 11 (IBin IAdd (ILoc 11) (ILoad (ILoc 9))))
+    (ISet 9 (IBin IAdd (ILoc 9) (IConst 1)))
+    (ISet 11 (IBin IMul (ILoc 11) (IConst 256)))
+    (ISet 11 (IBin IAdd (ILoc 11) (ILoad (ILoc 9))))
+    (ISet 9 (IBin IAdd (ILoc 9) (IConst 1)))
+    (ISet 7 (IBin IAdd (ILoc 7) (ILoc 11)))
+    ;; Ch(e,f,g) — the pinned kit tree — then Σ1(e) right-nested
+    (ISet 11 (ie_ch 4 5 6))
+    (ISet 7 (IBin IAdd (ILoc 7) (ILoc 11)))
+    (ISet 11 (ie_rotr32 4 25))
+    (ISet 11 (IBin IXor (ie_rotr32 4 11) (ILoc 11)))
+    (ISet 11 (IBin IXor (ie_rotr32 4 6) (ILoc 11)))
+    (ISet 7 (IBin IAdd (ILoc 7) (ILoc 11)))
+    (ISet 7 (IBin IAnd (ILoc 7) (IConst 4294967295)))
+    ;; e' = m32(d + T1), in d's slot (d is dead past this point)
+    (ISet 3 (IBin IAdd (ILoc 3) (ILoc 7)))
+    (ISet 3 (IBin IAnd (ILoc 3) (IConst 4294967295)))
+    ;; T2 accumulates onto T1 in h's slot: Σ0(a), then Maj(a,b,c)
+    (ISet 11 (ie_rotr32 0 22))
+    (ISet 11 (IBin IXor (ie_rotr32 0 13) (ILoc 11)))
+    (ISet 11 (IBin IXor (ie_rotr32 0 2) (ILoc 11)))
+    (ISet 7 (IBin IAdd (ILoc 7) (ILoc 11)))
+    (ISet
+      11
+      (IBin IXor (IBin IAnd (ILoc 0) (ILoc 2)) (IBin IAnd (ILoc 1) (ILoc 2))))
+    (ISet 11 (IBin IXor (IBin IAnd (ILoc 0) (ILoc 1)) (ILoc 11)))
+    (ISet 7 (IBin IAdd (ILoc 7) (ILoc 11)))
+    (ISet 7 (IBin IAnd (ILoc 7) (IConst 4294967295)))
+    ;; the state rotation (t breaks the 8-cycle; t keeps a')
+    (ISet 11 (ILoc 7))
+    (ISet 7 (ILoc 6))
+    (ISet 6 (ILoc 5))
+    (ISet 5 (ILoc 4))
+    (ISet 4 (ILoc 3))
+    (ISet 3 (ILoc 2))
+    (ISet 2 (ILoc 1))
+    (ISet 1 (ILoc 0))
+    (ISet 0 (ILoc 11))
+    ;; the counter
+    (ISet 10 (IBin ISub (ILoc 10) (IConst 1)))))
+
+;; ---- the single-pass lemma --------------------------------------------------------
+;; One body run on symbolic state = one sha_round on the words under
+;; the pointers, both pointers advanced by 4, the counter down by one,
+;; and a' parked in the shuttle. Memory untouched (the round only
+;; reads). The proof walks the 51 statements, discharging each load's
+;; two bounds guards, then aligns the accumulated trees to the spec's
+;; by the four linear identities (Horner->big-endian per word, the two
+;; sum re-associations).
+
+(claim isha_round_pass
+  (goal
+    ((sa Int)
+     (sb Int)
+     (sc Int)
+     (sd Int)
+     (se Int)
+     (sf Int)
+     (sg Int)
+     (sh Int)
+     (kp Int)
+     (wp Int)
+     (n Int)
+     (t Int)
+     (m Mem)
+     (fl Nat))
+    ((= (le 0 kp) True)
+     (= (le (+ kp 4) 65536) True)
+     (= (le 0 wp) True)
+     (= (le (+ wp 4) 65536) True))
+    (=
+      (istmts
+        (S^ 56 fl)
+        65536
+        (inline isha_round_body)
+        (list sa sb sc sd se sf sg sh kp wp n t)
+        m)
+      (Some
+        (INorm
+          (list
+            (h8a
+              (sha_round
+                (mk_h8 sa sb sc sd se sf sg sh)
+                (wget m kp)
+                (wget m wp)))
+            sa
+            sb
+            sc
+            (h8e
+              (sha_round
+                (mk_h8 sa sb sc sd se sf sg sh)
+                (wget m kp)
+                (wget m wp)))
+            se
+            sf
+            sg
+            (+ kp 4)
+            (+ wp 4)
+            (- n 1)
+            (h8a
+              (sha_round
+                (mk_h8 sa sb sc sd se sf sg sh)
+                (wget m kp)
+                (wget m wp))))
+          m))))
+  (chain
+    ;; the K-word walk: four loads, eight bounds guards
+    (steps ((compute lhs) (rewrite (premise 0) lr lhs true ()) (compute lhs)))
+    (rewrite-with
+      (lemma ish_hi0)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma lg_lo1)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma ish_hi1)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma ish_lo2)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma ish_hi2)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma ish_lo3)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma ish_hi3)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    ;; the W-word walk
+    (steps ((rewrite (premise 2) lr lhs true ()) (compute lhs)))
+    (rewrite-with
+      (lemma ish_hi0)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 3) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma lg_lo1)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 2) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma ish_hi1)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 3) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma ish_lo2)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 2) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma ish_hi2)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 3) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma ish_lo3)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 2) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma ish_hi3)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 3) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    ;; flatten the pointer-walk address trees, deepest first
+    (have hk4 (= (+ (+ (+ (+ kp 1) 1) 1) 1) (+ kp 4)) (by arith (list)))
+    (have hk3 (= (+ (+ (+ kp 1) 1) 1) (+ kp 3)) (by arith (list)))
+    (have hk2 (= (+ (+ kp 1) 1) (+ kp 2)) (by arith (list)))
+    (have hw4 (= (+ (+ (+ (+ wp 1) 1) 1) 1) (+ wp 4)) (by arith (list)))
+    (have hw3 (= (+ (+ (+ wp 1) 1) 1) (+ wp 3)) (by arith (list)))
+    (have hw2 (= (+ (+ wp 1) 1) (+ wp 2)) (by arith (list)))
+    (steps
+      ((rewrite (premise hk4) lr lhs true ())
+       (rewrite (premise hk3) lr lhs true ())
+       (rewrite (premise hk2) lr lhs true ())
+       (rewrite (premise hw4) lr lhs true ())
+       (rewrite (premise hw3) lr lhs true ())
+       (rewrite (premise hw2) lr lhs true ())))
+    ;; Horner -> big-endian, once per word
+    (rewrite-with
+      (lemma ish_be)
+      lr
+      lhs
+      ((inst b0 (mem_get m kp))
+       (inst b1 (mem_get m (+ kp 1)))
+       (inst b2 (mem_get m (+ kp 2)))
+       (inst b3 (mem_get m (+ kp 3))))
+      ())
+    (rewrite-with
+      (lemma ish_be)
+      lr
+      lhs
+      ((inst b0 (mem_get m kp))
+       (inst b1 (mem_get m (+ kp 1)))
+       (inst b2 (mem_get m (+ kp 2)))
+       (inst b3 (mem_get m (+ kp 3))))
+      ())
+    (rewrite-with
+      (lemma ish_be)
+      lr
+      lhs
+      ((inst b0 (mem_get m kp))
+       (inst b1 (mem_get m (+ kp 1)))
+       (inst b2 (mem_get m (+ kp 2)))
+       (inst b3 (mem_get m (+ kp 3))))
+      ())
+    (rewrite-with
+      (lemma ish_be)
+      lr
+      lhs
+      ((inst b0 (mem_get m wp))
+       (inst b1 (mem_get m (+ wp 1)))
+       (inst b2 (mem_get m (+ wp 2)))
+       (inst b3 (mem_get m (+ wp 3))))
+      ())
+    (rewrite-with
+      (lemma ish_be)
+      lr
+      lhs
+      ((inst b0 (mem_get m wp))
+       (inst b1 (mem_get m (+ wp 1)))
+       (inst b2 (mem_get m (+ wp 2)))
+       (inst b3 (mem_get m (+ wp 3))))
+      ())
+    (rewrite-with
+      (lemma ish_be)
+      lr
+      lhs
+      ((inst b0 (mem_get m wp))
+       (inst b1 (mem_get m (+ wp 1)))
+       (inst b2 (mem_get m (+ wp 2)))
+       (inst b3 (mem_get m (+ wp 3))))
+      ())
+    (rewrite-with
+      (lemma ish_sum5)
+      lr
+      lhs
+      ((inst x sh)
+       (inst
+         kk
+         (+
+           (* (mem_get m kp) 16777216)
+           (+
+             (* (mem_get m (+ kp 1)) 65536)
+             (+ (* (mem_get m (+ kp 2)) 256) (mem_get m (+ kp 3))))))
+       (inst
+         ww
+         (+
+           (* (mem_get m wp) 16777216)
+           (+
+             (* (mem_get m (+ wp 1)) 65536)
+             (+ (* (mem_get m (+ wp 2)) 256) (mem_get m (+ wp 3))))))
+       (inst cc (bxor (band se sf) (band (bxor se 4294967295) sg)))
+       (inst
+         ss
+         (bxor
+           (band (bor (bshr se 6) (bshl se 26)) 4294967295)
+           (bxor
+             (band (bor (bshr se 11) (bshl se 21)) 4294967295)
+             (band (bor (bshr se 25) (bshl se 7)) 4294967295)))))
+      ())
+    (rewrite-with
+      (lemma ish_sum5)
+      lr
+      lhs
+      ((inst x sh)
+       (inst
+         kk
+         (+
+           (* (mem_get m kp) 16777216)
+           (+
+             (* (mem_get m (+ kp 1)) 65536)
+             (+ (* (mem_get m (+ kp 2)) 256) (mem_get m (+ kp 3))))))
+       (inst
+         ww
+         (+
+           (* (mem_get m wp) 16777216)
+           (+
+             (* (mem_get m (+ wp 1)) 65536)
+             (+ (* (mem_get m (+ wp 2)) 256) (mem_get m (+ wp 3))))))
+       (inst cc (bxor (band se sf) (band (bxor se 4294967295) sg)))
+       (inst
+         ss
+         (bxor
+           (band (bor (bshr se 6) (bshl se 26)) 4294967295)
+           (bxor
+             (band (bor (bshr se 11) (bshl se 21)) 4294967295)
+             (band (bor (bshr se 25) (bshl se 7)) 4294967295)))))
+      ())
+    (rewrite-with
+      (lemma ish_sum5)
+      lr
+      lhs
+      ((inst x sh)
+       (inst
+         kk
+         (+
+           (* (mem_get m kp) 16777216)
+           (+
+             (* (mem_get m (+ kp 1)) 65536)
+             (+ (* (mem_get m (+ kp 2)) 256) (mem_get m (+ kp 3))))))
+       (inst
+         ww
+         (+
+           (* (mem_get m wp) 16777216)
+           (+
+             (* (mem_get m (+ wp 1)) 65536)
+             (+ (* (mem_get m (+ wp 2)) 256) (mem_get m (+ wp 3))))))
+       (inst cc (bxor (band se sf) (band (bxor se 4294967295) sg)))
+       (inst
+         ss
+         (bxor
+           (band (bor (bshr se 6) (bshl se 26)) 4294967295)
+           (bxor
+             (band (bor (bshr se 11) (bshl se 21)) 4294967295)
+             (band (bor (bshr se 25) (bshl se 7)) 4294967295)))))
+      ())
+    (rewrite-with
+      (lemma ish_sum3)
+      lr
+      lhs
+      ((inst
+         tt
+         (band
+           (+
+             sh
+             (+
+               (bxor
+                 (band (bor (bshr se 6) (bshl se 26)) 4294967295)
+                 (bxor
+                   (band (bor (bshr se 11) (bshl se 21)) 4294967295)
+                   (band (bor (bshr se 25) (bshl se 7)) 4294967295)))
+               (+
+                 (bxor (band se sf) (band (bxor se 4294967295) sg))
+                 (+
+                   (+
+                     (* (mem_get m kp) 16777216)
+                     (+
+                       (* (mem_get m (+ kp 1)) 65536)
+                       (+ (* (mem_get m (+ kp 2)) 256) (mem_get m (+ kp 3)))))
+                   (+
+                     (* (mem_get m wp) 16777216)
+                     (+
+                       (* (mem_get m (+ wp 1)) 65536)
+                       (+ (* (mem_get m (+ wp 2)) 256) (mem_get m (+ wp 3)))))))))
+           4294967295))
+       (inst
+         ss
+         (bxor
+           (band (bor (bshr sa 2) (bshl sa 30)) 4294967295)
+           (bxor
+             (band (bor (bshr sa 13) (bshl sa 19)) 4294967295)
+             (band (bor (bshr sa 22) (bshl sa 10)) 4294967295))))
+       (inst mm (bxor (band sa sb) (bxor (band sa sc) (band sb sc)))))
+      ())
+    (rewrite-with
+      (lemma ish_sum3)
+      lr
+      lhs
+      ((inst
+         tt
+         (band
+           (+
+             sh
+             (+
+               (bxor
+                 (band (bor (bshr se 6) (bshl se 26)) 4294967295)
+                 (bxor
+                   (band (bor (bshr se 11) (bshl se 21)) 4294967295)
+                   (band (bor (bshr se 25) (bshl se 7)) 4294967295)))
+               (+
+                 (bxor (band se sf) (band (bxor se 4294967295) sg))
+                 (+
+                   (+
+                     (* (mem_get m kp) 16777216)
+                     (+
+                       (* (mem_get m (+ kp 1)) 65536)
+                       (+ (* (mem_get m (+ kp 2)) 256) (mem_get m (+ kp 3)))))
+                   (+
+                     (* (mem_get m wp) 16777216)
+                     (+
+                       (* (mem_get m (+ wp 1)) 65536)
+                       (+ (* (mem_get m (+ wp 2)) 256) (mem_get m (+ wp 3)))))))))
+           4294967295))
+       (inst
+         ss
+         (bxor
+           (band (bor (bshr sa 2) (bshl sa 30)) 4294967295)
+           (bxor
+             (band (bor (bshr sa 13) (bshl sa 19)) 4294967295)
+             (band (bor (bshr sa 22) (bshl sa 10)) 4294967295))))
+       (inst mm (bxor (band sa sb) (bxor (band sa sc) (band sb sc)))))
+      ())
+    (steps ((compute rhs)))
+    refl))
+
+;; ---- one-step unfolding lemmas ----------------------------------------------------
+;; The worker's alignment steps the goal side down by citing these
+;; with the all-occurrence rewrite form — the kit fns themselves stay
+;; in every stop set (a computed unfold of a stuck match would bury
+;; the folded spelling the IH speaks).
+
+(claim wlist_s
+  (goal ((m Mem) (p Int) (k Nat)) ()
+    (= (wlist m p (S k)) (Cons (wget m p) (wlist m (+ p 4) k))))
+  (steps ((unfold wlist lhs) (reduce lhs)) refl))
+
+(claim sha_rounds_s
+  (goal ((st H8) (kw Int) (kt (List Int)) (ww Int) (wt (List Int))) ()
+    (=
+      (sha_rounds st (Cons kw kt) (Cons ww wt))
+      (sha_rounds (sha_round st kw ww) kt wt)))
+  (steps ((unfold sha_rounds lhs) (reduce lhs)) refl))
+
+(claim lg_advk_s
+  (goal ((x Int) (s Int) (k Nat)) ()
+    (= (lg_advk x s (S k)) (lg_advk (+ x s) s k)))
+  (steps ((unfold lg_advk lhs) (reduce lhs)) refl))
+
+(claim rt_last_s
+  (goal ((t0 Int) (r H8) (k Nat)) () (= (rt_last t0 r (S k)) (h8a r)))
+  (steps ((unfold rt_last lhs) (reduce lhs)) refl))
+
+;; ---- the shuttle selector shift ---------------------------------------------------
+;; After one round the shuttle holds the new a — which is exactly the
+;; a-field of ANY further walk from that state, whether or not it runs
+;; (the Z case walks zero rounds and both sides read the parked a).
+
+(claim ish_rt_shift
+  (goal
+    ((xa Int)
+     (xb Int)
+     (xc Int)
+     (xd Int)
+     (xe Int)
+     (xf Int)
+     (xg Int)
+     (xh Int)
+     (m Mem)
+     (p Int)
+     (q Int)
+     (k Nat))
+    ()
+    (=
+      (rt_last
+        xa
+        (sha_rounds (mk_h8 xa xb xc xd xe xf xg xh) (wlist m p k) (wlist m q k))
+        k)
+      (h8a
+        (sha_rounds (mk_h8 xa xb xc xd xe xf xg xh) (wlist m p k) (wlist m q k)))))
+  (case-on k Nat
+    ((case Z (steps ((rewrite (hyp 0) lr both true ()) (compute both)) refl))
+     (case S
+       (k3)
+       (steps ((rewrite (hyp 0) lr both true ()) (compute both)) refl)))))
+
+;; ---- the rounds worker ------------------------------------------------------------
+;; THE 64-ROUND THEOREM SHAPE (stated for any k): the loop from any
+;; state, any window pointers, and any counter k computes sha_rounds
+;; over the words the two windows hold. Memory returns UNTOUCHED — the
+;; compression loop is a pure reader, which is the first half of the
+;; region-cancellation story. Fuel rides lg_fuel inside an S^ 60
+;; reservoir (51 statements + nesting, restored each iteration by the
+;; tower's S).
+
+(claim isha_rounds_w
+  (goal
+    ((sa Int)
+     (sb Int)
+     (sc Int)
+     (sd Int)
+     (se Int)
+     (sf Int)
+     (sg Int)
+     (sh Int)
+     (kp Int)
+     (wp Int)
+     (t Int)
+     (m Mem)
+     (c Nat)
+     (k Nat))
+    ((= (le 0 kp) True)
+     (= (le (+ kp (* 4 (int_of_nat k))) 65536) True)
+     (= (le 0 wp) True)
+     (= (le (+ wp (* 4 (int_of_nat k))) 65536) True))
+    (=
+      (iwhile
+        (S^ 60 (lg_fuel k c))
+        65536
+        (ILoc 10)
+        (inline isha_round_body)
+        (list sa sb sc sd se sf sg sh kp wp (int_of_nat k) t)
+        m)
+      (Some
+        (INorm
+          (h8_locals
+            (sha_rounds
+              (mk_h8 sa sb sc sd se sf sg sh)
+              (wlist m kp k)
+              (wlist m wp k))
+            (lg_advk kp 4 k)
+            (lg_advk wp 4 k)
+            0
+            (rt_last
+              t
+              (sha_rounds
+                (mk_h8 sa sb sc sd se sf sg sh)
+                (wlist m kp k)
+                (wlist m wp k))
+              k))
+          m))))
+  (induct k
+    ((case Z
+       (steps
+         ((rewrite (lemma int_of_nat_zero) lr lhs true ()) (compute both))
+         refl))
+     (case S
+       (k2)
+       (chain
+         (steps
+           ((unfold lg_fuel lhs)
+            (reduce lhs)
+            (unfold iwhile lhs)
+            (rewrite (lemma int_of_nat_succ) lr lhs true ())
+            (compute lhs (stop iwhile lg_fuel istmts wget ie_ch ie_rotr32))))
+         (rewrite-with
+           (lemma lg_ne)
+           lr
+           lhs
+           ()
+           ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         (steps
+           ((compute lhs (stop iwhile lg_fuel istmts wget ie_ch ie_rotr32))))
+         (rewrite-with
+           (lemma isha_round_pass)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+            (rewrite-with
+              (lemma ish_w4hi)
+              lr
+              lhs
+              ((inst c2 k2))
+              ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+               (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+               (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+              refl)
+            (steps ((rewrite (premise 2) lr lhs true ())) refl)
+            (rewrite-with
+              (lemma ish_w4hi)
+              lr
+              lhs
+              ((inst c2 k2))
+              ((steps ((rewrite (premise 3) lr lhs true ())) refl)
+               (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+               (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+              refl)))
+         (steps
+           ((compute lhs (stop iwhile lg_fuel istmts wget ie_ch ie_rotr32))))
+         (have hsub (= (- (+ 1 (int_of_nat k2)) 1) (int_of_nat k2))
+           (rewrite-with (lemma lg_sub) lr lhs () () refl))
+         (steps
+           ((rewrite (premise hsub) lr lhs true ())
+            (compute lhs (stop iwhile lg_fuel istmts wget ie_ch ie_rotr32))))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma ish_w4lo)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+              refl)
+            (rewrite-with
+              (lemma ish_w4shift)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+               (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl))
+              refl)
+            (rewrite-with
+              (lemma ish_w4lo)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 2) lr lhs true ())) refl))
+              refl)
+            (rewrite-with
+              (lemma ish_w4shift)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 3) lr lhs true ())) refl)
+               (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl))
+              refl)))
+         (steps
+           ((compute
+              both
+              (stop iwhile lg_fuel istmts wget wlist sha_rounds h8_locals
+                rt_last lg_advk ie_ch ie_rotr32))))
+         (steps
+           ((rewrite (lemma wlist_s) lr rhs true ())
+            (rewrite (lemma sha_rounds_s) lr rhs true ())
+            (rewrite (lemma lg_advk_s) lr rhs true ())
+            (rewrite (lemma rt_last_s) lr rhs true ())))
+         (steps
+           ((compute
+              both
+              (stop iwhile lg_fuel istmts wget wlist sha_rounds h8_locals
+                rt_last lg_advk h8a ie_ch ie_rotr32))))
+         (rewrite-with (lemma ish_rt_shift) lr lhs () ())
+         refl)))))
