@@ -146,19 +146,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             source_modal: false,
             panel_w: view::DEFAULT_PANEL_W,
         }
-    } else if needle == "systems" {
-        println!("rendering systems graph ({} files)", project.files.len());
-        // Select the biggest file so the breakdown panel is exercised too.
-        let selected_file = project
+    } else if let Some(file_sub) = needle.strip_prefix("inspect:") {
+        // `shard-render . inspect:SUBSTR out.svg` opens the file inspector
+        // next to a Map scoped to that file, so the Sel::File panel can be
+        // checked headlessly.
+        let file_idx = project
             .files
             .iter()
-            .enumerate()
-            .max_by_key(|(_, f)| f.counts.total())
-            .map(|(i, _)| i);
+            .position(|f| f.rel.contains(file_sub))
+            .ok_or_else(|| format!("no file matching `{file_sub}`"))?;
+        println!("rendering file inspector for {}", project.files[file_idx].rel);
         ViewParams {
-            mode: ViewMode::Systems,
-            scope: selected_file.map_or(Scope::None, Scope::File),
-            selected: None,
+            mode: ViewMode::Map,
+            scope: Scope::File(file_idx),
+            selected: Some(view::Sel::File(file_idx)),
             zoom: 1.0,
             pan: (0.0, 0.0),
             canvas: canvas_estimate(),

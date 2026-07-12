@@ -1,9 +1,10 @@
 //! Methods view: one file's fns and their intra-file call edges, with the
 //! dead-code / complexity triage overlay (orphan = cut candidate, warmth =
-//! call degree, height = source lines). Also owns the per-fn detail panel,
-//! which the Flow and Board views reuse.
+//! call degree, height = source lines). Also owns the inspector panels —
+//! the per-fn detail panel and the per-file breakdown panel — which the Map
+//! shares.
 
-use super::shared::{graph_canvas, legend_chip};
+use super::shared::{composition_bar, graph_canvas, legend_chip, swatch};
 use super::{SUB_SIZE, TITLE_SIZE, ViewMode, ViewParams};
 use crate::layout::{self, EndPoint, GEdge, GNode, Graph};
 use crate::model::Project;
@@ -382,6 +383,72 @@ fn fn_link_list(project: &Project, fns: &[usize], home: usize) -> El {
 fn file_stem(rel: &str) -> &str {
     let file = rel.rsplit('/').next().unwrap_or(rel);
     file.strip_suffix(".shard").unwrap_or(file)
+}
+
+/// The file inspector: the selected file's line-category breakdown, its
+/// `;;;` header, and its import in/out degree, with a button to drill into
+/// its call graph. (Grew up in the Systems view; now the `Sel::File` panel.)
+pub(crate) fn file_panel(project: &Project, file_idx: usize) -> El {
+    let f = &project.files[file_idx];
+    let c = &f.counts;
+    let imported_by = project
+        .files
+        .iter()
+        .filter(|g| g.import_targets.contains(&file_idx))
+        .count();
+
+    // One labelled, swatched, right-aligned count row.
+    let cat_row = |label: &str, n: u32, color: Color| -> El {
+        row([
+            swatch(color, 12.0),
+            text(label.to_string()).font_size(SUB_SIZE),
+            spacer(),
+            text(n.to_string()).mono().muted().font_size(SUB_SIZE),
+        ])
+        .gap(tokens::SPACE_2)
+    };
+
+    let mut items = vec![
+        row([h3(file_stem(&f.rel).to_string()), spacer()]).gap(tokens::SPACE_2),
+        text(f.rel.clone()).caption().muted(),
+    ];
+    // The file's `;;;` header block — the author's own account of the file.
+    if !f.doc.is_empty() {
+        items.push(text(f.doc.clone()).font_size(SUB_SIZE).wrap_text());
+    }
+    items.extend(vec![
+        button("Open call graph ▸").key(format!("open:{file_idx}")).secondary(),
+        separator(),
+        text(format!("{} lines · {} fns", c.total(), f.fns.len()))
+            .caption()
+            .muted(),
+        composition_bar(c, 384.0, 6.0),
+        separator(),
+        cat_row("impl", c.impl_, tokens::ACCENT),
+        cat_row("measure", c.measure, tokens::WARNING),
+        cat_row("proof", c.proof, tokens::WARNING),
+        cat_row("reqproof", c.reqproof, tokens::WARNING),
+        cat_row("req", c.req, tokens::ACCENT),
+        cat_row("sidecar", c.sidecar, tokens::WARNING),
+        cat_row("comment", c.comment, tokens::BORDER),
+        cat_row("blank", c.blank, tokens::BORDER),
+        separator(),
+        text(format!(
+            "imports {} · imported by {imported_by}",
+            f.import_targets.len()
+        ))
+        .caption()
+        .muted(),
+    ]);
+
+    column(items)
+        .gap(tokens::SPACE_2)
+        .padding(tokens::SPACE_3)
+        .width(Size::Fixed(420.0))
+        .height(Size::Fill(1.0))
+        .fill(tokens::CARD)
+        .stroke(tokens::BORDER)
+        .radius(10.0)
 }
 
 /// Trim a string so it fits a node box / signature line.

@@ -156,9 +156,6 @@ impl App for Viewer {
         } else if event.is_route("mode_methods") {
             self.mode = ViewMode::Methods;
             self.fit();
-        } else if event.is_route("mode_systems") {
-            self.mode = ViewMode::Systems;
-            self.fit();
         } else if event.is_route("goto_card") {
             // "Read this fn large": fly the Map camera to the selected fn's
             // committed flow card (scope-as-camera, like the dir/file cases
@@ -223,17 +220,10 @@ impl App for Viewer {
                 self.mode = ViewMode::Map;
                 self.fit();
             }
-        } else if let Some(i) = event.route_index::<usize>("sysfile")
-            && i < self.project.files.len()
-        {
-            // Select the file in the systems graph: opens its breakdown panel
-            // (with an "Open call graph" button to drill) without leaving the
-            // import view. Don't refit — the graph itself is unchanged.
-            self.scope = Scope::File(i);
         } else if let Some(i) = event.route_index::<usize>("open")
             && i < self.project.files.len()
         {
-            // Drill from the systems breakdown panel into the call graph.
+            // Drill from the file inspector into the call graph.
             self.open_file(i);
         } else if let Some(i) = event.route_index::<usize>("file")
             && i < self.project.files.len()

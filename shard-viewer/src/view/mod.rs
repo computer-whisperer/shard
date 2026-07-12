@@ -8,9 +8,8 @@
 //! visualization *variant* lives in its own file so new experiments stay
 //! isolated and cheap to try:
 //!
-//! - [`methods`] — one file's call graph + triage overlay (and the shared
-//!   per-fn detail panel).
-//! - [`systems`] — the project-wide import graph + proof/impl heat map.
+//! - [`methods`] — one file's call graph + triage overlay (and the fn/file
+//!   inspector panels the Map shares).
 //! - [`flow`] — the region-card renderer (fn bodies / proof spines as
 //!   structured LabVIEW-style diagrams), drawn inside the Map's cards.
 //! - [`map`] — the unified view we're growing toward: any [`Scope`]'s fns,
@@ -23,7 +22,6 @@ mod highlight;
 mod map;
 mod methods;
 mod shared;
-mod systems;
 
 use crate::model::Project;
 use crate::scope::Scope;
@@ -34,8 +32,6 @@ use damascene_core::prelude::*;
 pub enum ViewMode {
     /// One file's fns and their intra-file call edges.
     Methods,
-    /// The project-wide file import dependency graph.
-    Systems,
     /// The unified map: any scope's fns, grouped by origin file/dir, each in
     /// expanded flow form. The view we're growing toward — still experimental.
     Map,
@@ -137,20 +133,13 @@ pub use map::debug_file_graph;
 pub fn app_root(project: &Project, p: &ViewParams, map_cache: Option<&MapCache>) -> El {
     let mut panes = vec![sidebar(project, p), main_pane(project, p, map_cache)];
     let mut fn_in_panel = None;
-    match p.mode {
-        ViewMode::Methods | ViewMode::Map => match p.selected {
-            Some(Sel::Fn(fni)) => {
-                panes.push(methods::detail_panel(project, fni, p.mode, p.panel_w));
-                fn_in_panel = Some(fni);
-            }
-            Some(Sel::File(fi)) => panes.push(systems::detail_panel(project, fi)),
-            None => {}
-        },
-        ViewMode::Systems => {
-            if let Some(fi) = p.scope.focus_file(project) {
-                panes.push(systems::detail_panel(project, fi));
-            }
+    match p.selected {
+        Some(Sel::Fn(fni)) => {
+            panes.push(methods::detail_panel(project, fni, p.mode, p.panel_w));
+            fn_in_panel = Some(fni);
         }
+        Some(Sel::File(fi)) => panes.push(methods::file_panel(project, fi)),
+        None => {}
     }
     let main = page([row(panes).gap(tokens::SPACE_4).height(Size::Fill(1.0))]);
     // The source lightbox: a full-size overlay layer over the workbench. It's
@@ -279,7 +268,6 @@ fn sidebar(project: &Project, p: &ViewParams) -> El {
 fn main_pane(project: &Project, p: &ViewParams, map_cache: Option<&MapCache>) -> El {
     let focus_file = p.scope.focus_file(project);
     let body = match p.mode {
-        ViewMode::Systems => systems::canvas(project, p),
         ViewMode::Methods => match focus_file {
             None => column([text("Select a file to see its call graph.").muted()])
                 .padding(tokens::SPACE_8),
@@ -290,7 +278,6 @@ fn main_pane(project: &Project, p: &ViewParams, map_cache: Option<&MapCache>) ->
     let mut head = vec![toolbar(project, p)];
     match p.mode {
         ViewMode::Methods if focus_file.is_some() => head.push(methods::legend()),
-        ViewMode::Systems => head.push(systems::legend()),
         ViewMode::Map => head.push(map::legend(p.flow_z)),
         _ => {}
     }
@@ -303,7 +290,6 @@ fn main_pane(project: &Project, p: &ViewParams, map_cache: Option<&MapCache>) ->
 
 fn toolbar(project: &Project, p: &ViewParams) -> El {
     let title = match p.mode {
-        ViewMode::Systems => format!("Systems · {} files", project.files.len()),
         ViewMode::Methods => match p.scope.focus_file(project) {
             Some(fi) => project.files[fi].rel.clone(),
             None => "shard-viewer".to_string(),
@@ -319,7 +305,6 @@ fn toolbar(project: &Project, p: &ViewParams) -> El {
         spacer(),
         mode_btn("Map", "mode_map", p.mode == ViewMode::Map, "Any scope's fns, grouped by file/dir, each in flow form (experimental)"),
         mode_btn("Methods", "mode_methods", p.mode == ViewMode::Methods, "One file's call graph + triage overlay"),
-        mode_btn("Systems", "mode_systems", p.mode == ViewMode::Systems, "Project-wide import graph + proof/impl heat map"),
         text(format!("{:.0}%", p.zoom * 100.0))
             .mono()
             .muted()
