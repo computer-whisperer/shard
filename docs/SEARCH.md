@@ -1229,3 +1229,50 @@ object root does not carry, ~41 claims), the kernel/facts axiom set
 kernel/meta/models claims (the natural extension: per-tree object
 roots, same driver). The corpus pin (run_corpus.sh) replays the full
 sweep every run; any new REFUTED line changes the pinned output.
+
+
+### Slice 8 — the CANON-SUBSUMPTION CENSUS (LANDED 2026-07-12)
+
+**Standing-use #1 built: rule subsumption as absence proofs by
+exhaustion.** tools/search/subsume.shard — the instrument version of
+slice 3's hand-derived C8⊃R1 discovery. Every candidate of the arc's
+two censused spaces (the rev FULL grammar at d1/d2, the structural
+list catalog at rungs 1/2) is judged by cn_e (kernel/canon consumed,
+never modified); flag sets deduplicate to ordered rule identities
+(the CViol number+tag pair); the census tallies DISTINCT FLAG SETS
+and every claim is arithmetic over that tally: RULE r TOTAL/UNIQUE
+(UNIQUE 0 with TOTAL > 0 = locally redundant — deleting r changes no
+verdict on the fragment, proven by exhausting it), and PAIR a COVERS
+b (count(b ∧ ¬a) = 0 — subsumption witnessed across b's whole flag
+count). Both a corpus CHECK target (33/0 — the import graph is
+census/catalog's, no driver) and a run pin; the four fragments sweep
+in ~10s.
+
+**THE RESULT — pinned, and it is a clean negative:**
+
+    rev-full d1: GEN 108  CLEAN 56   FLAGGED 52   SETS 9  (4 rules)
+    rev-full d2: GEN 7788 CLEAN 1736 FLAGGED 6052 SETS 47 (6 rules)
+    catalog r1:  GEN 20   CLEAN 17   FLAGGED 3    SETS 2  (2 rules)
+    catalog r2:  GEN 3395 CLEAN 2345 FLAGGED 1050 SETS 3  (2 rules)
+
+**No LOCALLY REDUNDANT rule and no COVERS pair on any fragment**:
+every kernel rule that fires has unique witnesses at every rung —
+candidates only it prices. The kernel ledger carries no internal
+redundancy on these spaces; slice 3's C8⊃R1 was the kernel's rule
+subsuming the PLAYGROUND's mined rule, and the intra-kernel analogue
+does not exist here. Corroborations along the way: CLEAN counts match
+the census/catalog pins exactly (56 / 1,736 / 17 / 2,345), and the
+catalog-rung-2 tally decomposes slice 3's head-flag counts precisely
+(1,039 rebuild + 11 match-only + 3 carrying BOTH = FLAGGED 1,050;
+C10 match TOTAL 14 UNIQUE 11).
+
+**Why a negative result is the right instrument output:** the census
+re-measures on every corpus sweep. When the canon arc prices new
+rules post-merge (the contextual-PE family is queued for exactly
+that), a rule whose UNIQUE hits zero across fragments — or a COVERS
+pair — changes the pinned lines and surfaces in the diff: admission
+evidence, measured against the real ledger term-by-term. Evidence is
+PER FRAGMENT by design (a rule redundant on list-shaped code may be
+load-bearing elsewhere); the lines are input to the canon arc's
+judgement, never deletions from here (canon owns kernel/canon and
+CANON.md).

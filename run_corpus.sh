@@ -251,6 +251,7 @@ TARGETS=(
   tools/search/gen/rev_synth.shard
   tools/search/gen/cat_bracket.shard
   tools/search/superpose.shard
+  tools/search/subsume.shard
 )
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -468,6 +469,25 @@ fi
 echo "=== search: false-equivalence hunter ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/hunt.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# Canon-subsumption census pin (docs/SEARCH.md standing-use #1): rule
+# subsumption as absence proofs by exhaustion — every candidate of the
+# rev full space (d1/d2) and the catalog rungs (1/2) judged by cn_e,
+# flag sets deduplicated and tallied. Pinned at cut: CLEAN counts
+# match the census/catalog pins exactly (56/1736/17/2345); every rule
+# that fires has UNIQUE witnesses at every rung (no LOCALLY REDUNDANT
+# line, no PAIR ... COVERS line) — the kernel ledger carries no
+# internal redundancy on these fragments; slice 3's C8⊃R1 was
+# kernel-over-playground, not intra-kernel. The instrument re-measures
+# on every sweep: a future rule whose UNIQUE hits 0 across fragments
+# (or a COVERS pair) changes these lines and shows in the corpus diff
+# — evidence for the canon arc, which owns the ledger.
+echo "=== search: canon-subsumption census ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/subsume.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi

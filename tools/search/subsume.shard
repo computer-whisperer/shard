@@ -1,0 +1,395 @@
+;;; tools/search/subsume.shard — the CANON-SUBSUMPTION CENSUS
+;;; (docs/SEARCH.md standing-use #1: identifying redundancies in canon).
+;;; The instrument version of slice 3's hand-derived C8⊃R1 discovery:
+;;; rule subsumption as ABSENCE PROOFS BY EXHAUSTION over rung spaces.
+;;;
+;;; For every candidate of a swept fragment, the REAL recognizer
+;;; (kernel/canon's cn_e — consumed, never modified) yields its flag
+;;; set, deduplicated to the rules that fire (a rule = the CViol
+;;; (number, tag) pair). The census tallies DISTINCT FLAG SETS, and
+;;; everything else is arithmetic over that tally:
+;;;
+;;;   - RULE r TOTAL / UNIQUE — how often r fires at all, and how
+;;;     often it is the ONLY rule that fires. UNIQUE 0 with TOTAL > 0
+;;;     means r is LOCALLY REDUNDANT on the fragment: deleting it
+;;;     changes no verdict there (every witness is co-flagged), proven
+;;;     by exhausting the space.
+;;;   - PAIR a COVERS b — no candidate in the fragment is b-flagged
+;;;     without also being a-flagged (count(b ∧ ¬a) = 0): a subsumes
+;;;     b on this fragment, witnessed by b's whole flag count.
+;;;
+;;; Fragments swept (the arc's two censused spaces, both depths): the
+;;; rev FULL grammar (d1/d2) and the structural list catalog (rungs
+;;; 1/2). Evidence is PER FRAGMENT — a rule redundant on list-shaped
+;;; code may be load-bearing elsewhere, so these lines are input to
+;;; the canon arc's judgement (canon owns kernel/canon and CANON.md;
+;;; this fork only measures), not deletions.
+;;;
+;;; RUN IT: bin/shard_eval run tools/search/subsume.shard            (all four)
+;;;         bin/shard_eval run tools/search/subsume.shard rev N      (one space)
+;;;         bin/shard_eval run tools/search/subsume.shard cat N
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/loader.shard")
+(import "../../kernel/canon.shard")
+(import "../../meta/sketch")
+(import "../../meta/invoke")
+(import "rev.shard")
+(import "catalog.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel loader World))
+(use (:: kernel loader get_args))
+(use (:: kernel loader write))
+(use (:: kernel loader exit))
+(use (:: kernel canon cn_e))
+(use (:: kernel canon CViol))
+(use (:: meta sketch *))
+(use (:: meta invoke *))
+(use (:: tools search rev *))
+(use (:: tools search catalog CatR))
+(use (:: tools search catalog CatRErr))
+(use (:: tools search catalog CatROk))
+(use (:: tools search catalog cat_grammar))
+
+;; ---- rule identities: ordered, deduplicated flag sets ------------------------
+;; A rule is the CViol (number, tag) pair. Sets are kept as ordered
+;; lists (number first, then tag bytes lexicographically) so set
+;; equality is plain structural equality.
+
+(fn chars_lt ((a (List Int)) (b (List Int))) Bool
+  (measure (struct a))
+  (match a
+    (Nil
+      (match b
+        (Nil False)
+        ((Cons _ _) True)))
+    ((Cons x xs)
+     (match b
+       (Nil False)
+       ((Cons y ys) (if (lt x y) True (if (lt y x) False (chars_lt xs ys))))))))
+
+(fn rid_eq ((a (Pair Int Symbol)) (b (Pair Int Symbol))) Bool
+  (match a
+    ((Pair ka sa)
+     (match b
+       ((Pair kb sb) (if (int_eq ka kb) (sym_eq sa sb) False))))))
+
+(fn rid_lt ((a (Pair Int Symbol)) (b (Pair Int Symbol))) Bool
+  (match a
+    ((Pair ka sa)
+     (match b
+       ((Pair kb sb)
+        (if (lt ka kb) True
+        (if (lt kb ka) False
+        (chars_lt (chars_of_sym sa) (chars_of_sym sb)))))))))
+
+(fn rset_ins ((r (Pair Int Symbol)) (s (List (Pair Int Symbol))))
+  (List (Pair Int Symbol))
+  (measure (struct s))
+  (match s
+    (Nil (Cons r Nil))
+    ((Cons h t)
+     (if (rid_eq r h) s (if (rid_lt r h) (Cons r s) (Cons h (rset_ins r t)))))))
+
+(fn rset_of ((vs (List CViol))) (List (Pair Int Symbol))
+  (measure (struct vs))
+  (match vs
+    (Nil Nil)
+    ((Cons (CViol k s) rest) (rset_ins (Pair k s) (rset_of rest)))))
+
+(fn rset_eq ((a (List (Pair Int Symbol))) (b (List (Pair Int Symbol)))) Bool
+  (measure (struct a))
+  (match a
+    (Nil
+      (match b
+        (Nil True)
+        ((Cons _ _) False)))
+    ((Cons x xs)
+     (match b
+       (Nil False)
+       ((Cons y ys) (if (rid_eq x y) (rset_eq xs ys) False))))))
+
+(fn rset_has ((r (Pair Int Symbol)) (s (List (Pair Int Symbol)))) Bool
+  (measure (struct s))
+  (match s
+    (Nil False)
+    ((Cons h t) (if (rid_eq r h) True (rset_has r t)))))
+
+;; ---- the set tally: distinct flag sets -> counts ------------------------------
+
+(fn st_bump
+  ((s (List (Pair Int Symbol))) (t (List (Pair (List (Pair Int Symbol)) Int))))
+  (List (Pair (List (Pair Int Symbol)) Int))
+  (measure (struct t))
+  (match t
+    (Nil (Cons (Pair s 1) Nil))
+    ((Cons (Pair s0 c) rest)
+     (if (rset_eq s s0) (Cons (Pair s0 (+ c 1)) rest)
+     (Cons (Pair s0 c) (st_bump s rest))))))
+
+(fn st_len ((t (List (Pair (List (Pair Int Symbol)) Int)))) Int
+  (measure (struct t))
+  (match t
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (st_len rest)))))
+
+;; ---- the sweep: judge every candidate, tally its flag set ---------------------
+
+(type SbR
+  (SbErr (List Int))
+  (SbOk Int (List (Pair (List (Pair Int Symbol)) Int))))
+
+(fn sb_sweep
+  ((k Int)
+   (total Int)
+   (root Expr)
+   (g Grammar)
+   (m Module)
+   (clean Int)
+   (tly (List (Pair (List (Pair Int Symbol)) Int))))
+  SbR
+  (measure k)
+  (if (le k 0) (SbOk clean tly)
+  (let ((i (- total k)))
+    (match (sk_unrank root g i)
+      ((SkEErr msg) (SbErr (cz_at "subsume unrank" i msg)))
+      ((SkEOk c)
+       (match (cn_e c m)
+         (Nil (sb_sweep (- k 1) total root g m (+ clean 1) tly))
+         ((Cons v vs)
+          (sb_sweep
+            (- k 1)
+            total
+            root
+            g
+            m
+            clean
+            (st_bump (rset_of (Cons v vs)) tly)))))))))
+
+;; ---- arithmetic over the tally -------------------------------------------------
+
+;; the rule universe: the ordered union of every tallied set
+(fn ru_union ((keys (List (Pair Int Symbol))) (acc (List (Pair Int Symbol))))
+  (List (Pair Int Symbol))
+  (measure (struct keys))
+  (match keys
+    (Nil acc)
+    ((Cons r rest) (ru_union rest (rset_ins r acc)))))
+
+(fn ru_of
+  ((t (List (Pair (List (Pair Int Symbol)) Int)))
+   (acc (List (Pair Int Symbol))))
+  (List (Pair Int Symbol))
+  (measure (struct t))
+  (match t
+    (Nil acc)
+    ((Cons (Pair s _) rest) (ru_of rest (ru_union s acc)))))
+
+;; candidates whose set CONTAINS r
+(fn ru_total
+  ((r (Pair Int Symbol)) (t (List (Pair (List (Pair Int Symbol)) Int))))
+  Int
+  (measure (struct t))
+  (match t
+    (Nil 0)
+    ((Cons (Pair s c) rest) (+ (if (rset_has r s) c 0) (ru_total r rest)))))
+
+;; candidates whose set is EXACTLY {r}
+(fn ru_unique
+  ((r (Pair Int Symbol)) (t (List (Pair (List (Pair Int Symbol)) Int))))
+  Int
+  (measure (struct t))
+  (match t
+    (Nil 0)
+    ((Cons (Pair s c) rest)
+     (+ (if (rset_eq s (Cons r Nil)) c 0) (ru_unique r rest)))))
+
+;; candidates b-flagged but NOT a-flagged — zero means a COVERS b here
+(fn ru_bnota
+  ((a (Pair Int Symbol))
+   (b (Pair Int Symbol))
+   (t (List (Pair (List (Pair Int Symbol)) Int))))
+  Int
+  (measure (struct t))
+  (match t
+    (Nil 0)
+    ((Cons (Pair s c) rest)
+     (+ (if (rset_has b s) (if (rset_has a s) 0 c) 0) (ru_bnota a b rest)))))
+
+;; ---- report lines ----------------------------------------------------------------
+
+(fn rid_str ((r (Pair Int Symbol))) (List Int)
+  (match r
+    ((Pair k s)
+     (append_int
+       "C"
+       (append_int (show_int k) (append_int " " (chars_of_sym s)))))))
+
+(fn sb_rule_lines
+  ((rs (List (Pair Int Symbol))) (t (List (Pair (List (Pair Int Symbol)) Int))))
+  (List Int)
+  (measure (struct rs))
+  (match rs
+    (Nil Nil)
+    ((Cons r rest)
+     (let ((tot (ru_total r t)) (uni (ru_unique r t)))
+       (append_int
+         "RULE "
+         (append_int
+           (rid_str r)
+           (append_int
+             " TOTAL "
+             (append_int
+               (show_int tot)
+               (append_int
+                 " UNIQUE "
+                 (append_int
+                   (show_int uni)
+                   (append_int
+                     (if (int_eq uni 0) "  <- LOCALLY REDUNDANT" "")
+                     (append_int "\n" (sb_rule_lines rest t)))))))))))))
+
+;; every ordered pair (a, b) with b never firing without a
+(fn sb_pair_inner
+  ((a (Pair Int Symbol))
+   (bs (List (Pair Int Symbol)))
+   (t (List (Pair (List (Pair Int Symbol)) Int))))
+  (List Int)
+  (measure (struct bs))
+  (match bs
+    (Nil Nil)
+    ((Cons b rest)
+     (append_int
+       (if (rid_eq a b) ""
+       (if (int_eq (ru_bnota a b t) 0)
+         (append_int
+           "PAIR "
+           (append_int
+             (rid_str a)
+             (append_int
+               " COVERS "
+               (append_int
+                 (rid_str b)
+                 (append_int
+                   " WITNESS "
+                   (append_int (show_int (ru_total b t)) "\n"))))))
+         ""))
+       (sb_pair_inner a rest t)))))
+
+(fn sb_pair_lines
+  ((as_ (List (Pair Int Symbol)))
+   (rs (List (Pair Int Symbol)))
+   (t (List (Pair (List (Pair Int Symbol)) Int))))
+  (List Int)
+  (measure (struct as_))
+  (match as_
+    (Nil Nil)
+    ((Cons a rest)
+     (append_int (sb_pair_inner a rs t) (sb_pair_lines rest rs t)))))
+
+;; ---- per-fragment driver ----------------------------------------------------------
+
+(fn sb_frag ((label (List Int)) (root Expr) (g Grammar) (m Module) (w World))
+  World
+  (match (sk_count root g)
+    ((SkCErr msg)
+     (exit
+       1
+       (write (append_int "SUBSUME FAIL count: " (append_int msg "\n")) w)))
+    ((SkCOk total)
+     (match (sb_sweep total total root g m 0 Nil)
+       ((SbErr msg)
+        (exit 1 (write (append_int "SUBSUME FAIL " (append_int msg "\n")) w)))
+       ((SbOk clean tly)
+        (let ((rs (ru_of tly Nil)))
+          (write
+            (append_int
+              "SUBSUME "
+              (append_int
+                label
+                (append_int
+                  " GEN "
+                  (append_int
+                    (show_int total)
+                    (append_int
+                      " CLEAN "
+                      (append_int
+                        (show_int clean)
+                        (append_int
+                          " FLAGGED "
+                          (append_int
+                            (show_int (- total clean))
+                            (append_int
+                              " SETS "
+                              (append_int
+                                (show_int (st_len tly))
+                                (append_int
+                                  "\n"
+                                  (append_int
+                                    (sb_rule_lines rs tly)
+                                    (sb_pair_lines rs rs tly)))))))))))))
+            w)))))))
+
+;; ---- the fragments ------------------------------------------------------------------
+
+(fn run_rev ((m Module) (apq QName) (d Int) (w World)) World
+  (sb_frag
+    (append_int "rev-full d" (show_int d))
+    (rev_sketch)
+    (rev_grammar d apq)
+    m
+    w))
+
+(fn run_cat ((m Module) (apq QName) (d Int) (w World)) World
+  (match (cat_grammar d apq)
+    ((CatRErr msg)
+     (exit
+       1
+       (write (append_int "SUBSUME FAIL grammar: " (append_int msg "\n")) w)))
+    ((CatROk es _)
+     (sb_frag
+       (append_int "catalog rung " (show_int d))
+       (hole 0)
+       (Grammar es)
+       m
+       w))))
+
+;; ---- CLI --------------------------------------------------------------------------
+
+(fn sb_args ((as (List (List Int))) (m Module) (apq QName) (w World)) World
+  (match as
+    (Nil
+      (run_cat m apq 2 (run_cat m apq 1 (run_rev m apq 2 (run_rev m apq 1 w)))))
+    ((Cons a rest)
+     (if (int_list_eq a "rev")
+       (match rest
+         ((Cons ds Nil)
+          (match (parse_nat ds)
+            (None (exit 2 (write "usage: subsume [rev N | cat N]\n" w)))
+            ((Some d) (run_rev m apq d w))))
+         (_ (exit 2 (write "usage: subsume [rev N | cat N]\n" w))))
+     (if (int_list_eq a "cat")
+       (match rest
+         ((Cons ds Nil)
+          (match (parse_nat ds)
+            (None (exit 2 (write "usage: subsume [rev N | cat N]\n" w)))
+            ((Some d) (run_cat m apq d w))))
+         (_ (exit 2 (write "usage: subsume [rev N | cat N]\n" w))))
+       (exit 2 (write "usage: subsume [rev N | cat N]\n" w)))))))
+
+(fn main ((w World)) World
+  (match (load_run_module "tools/search/rev_obj.shard" w)
+    ((Pair om w2)
+     (match om
+       (None (exit 1 (write "SUBSUME FAIL: object module load\n" w2)))
+       ((Some m)
+        (match (find_fn (quote append) m)
+          (None (exit 1 (write "SUBSUME FAIL: no append in closure\n" w2)))
+          ((Some apfd)
+           (match apfd
+             ((FnDef apq _ _ _)
+              (match (get_args w2)
+                ((Pair as w3) (sb_args as m apq w3))))))))))))
