@@ -1,23 +1,26 @@
-;;; tools/lowbuild/lowbuild.shard — the GENERIC BUILD DRIVER (docs/LOWERING.md
-;;; §6): runs any module's build entry and renders its Plan.
+;;; tools/lowbuild/lowbuild.shard — the PLAN DERIVER (docs/BUILD.md §4/§5,
+;;; docs/LOWERING.md §6ag): ONE generic tool that derives artifact plans;
+;;; no per-module stubs. Modes:
 ;;;
-;;;     bin/shard_eval run tools/lowbuild/lowbuild.shard <mod.build path>
+;;;     lowbuild pinlib ENTRY [x86]   — re-founded build entry: loads the
+;;;         entry's closure AT RUNTIME (meta/invoke), constructs the Target
+;;;         compile-context, calls the standard symbol
+;;;         `build_mods : Target -> (List PinMod)` across the meta-level
+;;;         boundary, derives ARTIFACT bindings positionally from each
+;;;         PinMod's claims (index pre+K), and renders the wire
+;;;     lowbuild lib SRC OUT [x86]    — (lib ...) decl: plan derived from
+;;;         the decl + the generated cert file
+;;;     lowbuild elf SRC OUT          — the lib ELF image leg
+;;;     lowbuild binelf SRC OUT       — the bin ELF + engine-vector leg
 ;;;
-;;; ONE driver for every gated module — no per-module stubs. It loads the
-;;; mod.build's import closure AT RUNTIME (meta/invoke: kernel-as-a-module),
-;;; constructs the Target compile-context, calls `build : Target -> Plan`
-;;; across the meta-level boundary, decodes the returned Plan value, and
-;;; renders the wire formats at the boundary:
-;;;   ARTIFACT/MOD/CASE/MEMCASE lines on stdout — the V8 differ's grammar
-;;;   (examples/wasm_diff.mjs), byte-compatible with the retired
-;;;   main()-rendering mod.build form.
-;;; The Target ctor's QName comes from the LOADED closure's own typedefs
-;;; (ctor_qn) — the driver never spells vocabulary paths by hand. Decode is
-;;; whole-or-nothing: a stuck term or shape mismatch anywhere fails LOUDLY
-;;; (exit 1), never renders a truncated plan.
-;;;
-;;; v1 Target is fixed here: wasm, 65536, 32 — the values every current
-;;; build hardcoded. Argv-selectable targets arrive when a second ISA does.
+;;; Wire: ARTIFACT/MOD/CASE/MEMCASE lines (the V8 differ's grammar,
+;;; examples/wasm_diff.mjs) or the XMOD/XCASE/XMEMCASE x86 forms
+;;; (examples/x86_diff.c). The Target ctor's QName comes from the LOADED
+;;; closure's own typedefs (ctor_qn) — the driver never spells vocabulary
+;;; paths by hand. Decode is whole-or-nothing: a stuck term or shape
+;;; mismatch anywhere fails LOUDLY (exit 1), never renders a truncated
+;;; plan. The old-era mode (`lowbuild ENTRY [x86]` over a `build : Target
+;;; -> Plan` fn) retired 2026-07-11 with the last script-era entries.
 
 (import "../../kernel/stdlib.shard")
 (import "../../kernel/term.shard")
@@ -53,7 +56,7 @@
 (use (:: models x86 elf EVec))
 
 ;; ---------------------------------------------------------------------------
-;; decoding — Plan value (Expr) -> native plan structures, whole-or-nothing
+;; decoding — vector values (Expr) -> native PVec, whole-or-nothing
 ;; ---------------------------------------------------------------------------
 
 ;; a Ctor node with this local name yields its args
@@ -146,114 +149,6 @@
         (match (dc_vecs rest)
           (None None)
           ((Some vs) (Some (Cons v vs)))))))))
-
-(fn dc_art ((e Expr)) (Option PArt)
-  (match (dc_ctor (quote PA) e)
-    ((Some
-       (Cons
-         nm
-         (Cons cert (Cons cf (Cons model (Cons k (Cons cal (Cons ext Nil))))))))
-     (match (expr_ints nm)
-       ((Some nv)
-        (match (expr_ints cert)
-          ((Some certv)
-           (match (expr_ints cf)
-             ((Some cfv)
-              (match (expr_ints model)
-                ((Some modelv)
-                 (match (expr_int k)
-                   ((Some kv)
-                    (match (expr_ints cal)
-                      ((Some calv)
-                       (match (expr_ints ext)
-                         ((Some extv)
-                          (Some (PA nv certv cfv modelv kv calv extv)))
-                         (_ None)))
-                      (_ None)))
-                   (_ None)))
-                (_ None)))
-             (_ None)))
-          (_ None)))
-       (_ None)))
-    (_ None)))
-
-(fn dc_arts ((es (List Expr))) (Option (List PArt))
-  (measure (struct es))
-  (match es
-    (Nil (Some Nil))
-    ((Cons e rest)
-     (match (dc_art e)
-       (None None)
-       ((Some a)
-        (match (dc_arts rest)
-          (None None)
-          ((Some as_) (Some (Cons a as_)))))))))
-
-(fn dc_mod_lib ((e Expr)) (Option PMod)
-  (match (dc_ctor (quote PLib) e)
-    ((Some (Cons nm (Cons bytes (Cons arts (Cons vecs Nil)))))
-     (match (expr_ints nm)
-       ((Some nv)
-        (match (expr_ints bytes)
-          ((Some bv)
-           (match (expr_list arts)
-             ((Some aes)
-              (match (dc_arts aes)
-                ((Some av)
-                 (match (expr_list vecs)
-                   ((Some ves)
-                    (match (dc_vecs ves)
-                      ((Some vv) (Some (PLib nv bv av vv)))
-                      (_ None)))
-                   (_ None)))
-                (_ None)))
-             (_ None)))
-          (_ None)))
-       (_ None)))
-    (_ None)))
-
-(fn dc_mod ((e Expr)) (Option PMod)
-  (match (dc_ctor (quote PM) e)
-    ((Some (Cons nm (Cons bytes (Cons arts (Cons vecs Nil)))))
-     (match (expr_ints nm)
-       ((Some nv)
-        (match (expr_ints bytes)
-          ((Some bv)
-           (match (expr_list arts)
-             ((Some aes)
-              (match (dc_arts aes)
-                ((Some av)
-                 (match (expr_list vecs)
-                   ((Some ves)
-                    (match (dc_vecs ves)
-                      ((Some vv) (Some (PM nv bv av vv)))
-                      (_ None)))
-                   (_ None)))
-                (_ None)))
-             (_ None)))
-          (_ None)))
-       (_ None)))
-    (_ (dc_mod_lib e))))
-
-(fn dc_mods ((es (List Expr))) (Option (List PMod))
-  (measure (struct es))
-  (match es
-    (Nil (Some Nil))
-    ((Cons e rest)
-     (match (dc_mod e)
-       (None None)
-       ((Some m)
-        (match (dc_mods rest)
-          (None None)
-          ((Some ms) (Some (Cons m ms)))))))))
-
-(fn dc_plan ((e Expr)) (Option (List PMod))
-  (match (dc_ctor (quote MkPlan) e)
-    ((Some (Cons mods Nil))
-     (match (expr_list mods)
-       ((Some mes) (dc_mods mes))
-       (_ None)))
-    (_ None)))
 
 ;; ---------------------------------------------------------------------------
 ;; rendering — native plan structures -> the wire lines
@@ -2499,53 +2394,13 @@
       tq
       (Cons (SymLit (quote wasm)) (Cons (IntLit 65536) (Cons (IntLit 32) Nil))))))
 
-(fn drive ((m Module) (xisa Bool) (w World)) World
-  (match (ctor_qn m (quote MkTarget))
-    (None
-      (fail
-        "loaded closure has no Target vocabulary (meta/plan not imported?)"
-        w))
-    ((Some tq)
-     (match (invoke m (quote build) (Cons (target_val tq xisa) Nil))
-       (None (fail "no unique `build` fn in the loaded closure" w))
-       ((Some pv)
-        (match (dc_plan pv)
-          (None
-            (fail
-              "build's result does not decode as a Plan (stuck term or shape mismatch)"
-              w))
-          ((Some mods)
-           (if xisa
-             (match (xplan_lines mods)
-               (None
-                 (fail
-                   "x86 plan outside the XCASE/XMEMCASE grammar (wasm memory image, >3 args, or nonzero export)"
-                   w))
-               ((Some ls) (exit 0 (write ls w))))
-             (match (plan_lines mods)
-               (None
-                 (fail
-                   "wasm plan carries an x86 memory vector (PXV) -- build it with ISA x86"
-                   w))
-               ((Some ls) (exit 0 (write ls w))))))))))))
-
-(fn run_isa ((bpath (List Int)) (xisa Bool) (w World)) World
-  (match (load_run_module bpath w)
-    ((Pair om w2)
-     (match om
-       (None (fail "could not load/parse the mod.build closure" w2))
-       ((Some m) (drive m xisa w2))))))
-
 (fn main ((w World)) World
   (match (get_args w)
     ((Pair args w1)
      (match args
-       ((Cons bpath Nil) (run_isa bpath False w1))
-       ((Cons bpath (Cons isa Nil))
-        (if (ceq bpath "pinlib") (run_pinlib isa False w1)
-        (if (ceq isa "wasm") (run_isa bpath False w1)
-        (if (ceq isa "x86") (run_isa bpath True w1)
-        (fail "unknown ISA (wasm | x86)" w1)))))
+       ((Cons mode (Cons epath Nil))
+        (if (ceq mode "pinlib") (run_pinlib epath False w1)
+        (fail "unknown 2-arg mode (pinlib ENTRY)" w1)))
        ((Cons mode (Cons srcp (Cons outp Nil)))
         (if (ceq mode "lib") (run_lib srcp outp w1)
         (if (ceq mode "elf") (run_elf srcp outp w1)
@@ -2564,5 +2419,5 @@
           (fail "unknown 4-arg mode (lib SRC OUT ISA)" w1)))
        (_
          (fail
-           "usage: lowbuild <mod.build path> [wasm | x86] | lowbuild lib SRC OUT"
+           "usage: lowbuild pinlib ENTRY [x86] | lib SRC OUT [x86] | elf SRC OUT | binelf SRC OUT"
            w1))))))

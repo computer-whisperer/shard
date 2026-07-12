@@ -712,6 +712,36 @@ default mode (`lowbuild ENTRY [x86]` over a `build` fn) has ZERO
 callers — retiring it (drive/run_isa + the Plan decoders that only
 it uses) is a follow-up residual.
 
+**Rung 2, slice 9 — the old-era mode retired; the flagged entry
+defects fixed (2026-07-11).** The delete-old-code half of the
+re-founding:
+
+- **tools/lowbuild sheds the old-era mode.** `drive`/`run_isa` and
+  the six Plan decoders only they used (dc_art/dc_arts/dc_mod_lib/
+  dc_mod/dc_mods/dc_plan) are DELETED; the 1-arg and 2-arg-ISA main
+  arms die with them (the 2-arg form is now `pinlib ENTRY` alone);
+  header + usage respelled as the PLAN DERIVER with its four live
+  modes (pinlib/lib/elf/binelf). Entries that render their own Plan
+  no longer exist anywhere, so the machinery that consumed them no
+  longer exists either. dc_vec/dc_strs, target_val, ctor_qn, and
+  both wire renderers stay — the live modes share them.
+- **The xnat totality FAIL (five x86 entries): fixed by adopting
+  the proven idiom.** The bare `(measure i)` self-call never
+  carried the witnesses the measure gate verifies; the repo's own
+  fnat_go (models/wasm) is the same fuel-from-Int loop with
+  verify-don't-search `by arith` witnesses on an accumulator shape.
+  xnat is now that pair (xnat_go + wrapper), value-identical —
+  every derived plan byte-stable.
+- **The eapp use-clause (x86div/x86intloop): added.** Check-mode
+  resolution now matches what run-mode glob resolution always did.
+
+All nine x86 entries + the four wasm entries + std/mem + std/str
+now check 0 failed — the build-entry population is kernel-clean,
+not just driver-green. Driver 41 products green 1m42; corpus
+FAIL-set identical. Rung 2 closes here: entries are content-only,
+the deriver speaks only the new charter, and no drift-prone
+packaging survives anywhere in the tree.
+
 ## 12. Non-goals, stated once
 
 No config dialect — profiles are shard values. No distinguished
