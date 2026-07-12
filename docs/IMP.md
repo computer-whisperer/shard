@@ -817,6 +817,20 @@ lemma first-try:
   (opaque fns do not ground-compute).
 - Gates: fast-engine 244/0; driver 52 green; corpus FAIL-set
   unchanged at 57; V8 173/0; silicon 82/0.
+- **THE SCHEDULE-WINDOW WELD (isha_sched_window), landed same day**:
+  copy 16 words from the source + extend 48 at the frontier, and the
+  64-word window reads back as EXACTLY the spec's schedule shape —
+  srev_acc (sched_ext (srev_acc (wlist m src 16) Nil) 48) Nil — over
+  the source words, premise (le (+ src 64) b) only. Proof exactly as
+  analyzed (glue → count/frontier alignment haves → bridge →
+  int_of_nat alignment → the double-srev mirror → copy readback).
+  NEW GOTCHA: ground Nat REPRESENTATIONS can diverge — (S^ 64 Z)
+  normalizes to the raw S-tower while wn_add's evaluation PACKS its
+  ground result; a one-sided compute leaves TOWER = 64 and refl
+  refuses. Ground-Nat equality haves must (compute both) so both
+  sides normalize through the same path.
+- Gates: fast-engine 247/0; driver 52 green; corpus FAIL-set
+  unchanged at 57; V8 173/0; silicon 82/0.
 
 ## 7. Non-goals, stated once
 
