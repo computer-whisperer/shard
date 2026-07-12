@@ -233,6 +233,118 @@
         ((IRotr w a k) None)
         ((ILoad a) None)))))
 
+;; the direct ISet patterns: the x86gen shapes (in-place / mov+bin /
+;; load-scratch / immediate shifts / the rotation composition). None =
+;; outside the pattern tier; ix_stmts falls back to the GENERAL path
+;; (compile the expression into RAX via ix_res, deposit into the home)
+(fn ix_set ((d Reg) (i Int) (e IExp) (it (List XInstr))) (Option (List XInstr))
+  (match e
+    ((IConst n) (Some (Cons (XMovRI d n) it)))
+    ((ILoc j)
+     (match (ix_home j)
+       (None None)
+       ((Some r) (Some (Cons (XMovRR d r) it)))))
+    ((IBin o a b)
+     (match o
+       (IShl
+         (match b
+           ((IConst k)
+            (if (le 0 k)
+              (if (le k 63)
+                (match a
+                  ((ILoc j)
+                   (match (ix_home j)
+                     (None None)
+                     ((Some r)
+                      (if (int_eq j i) (Some (Cons (XShlI d k) it))
+                      (Some (Cons (XMovRR d r) (Cons (XShlI d k) it)))))))
+                  (_ None))
+                None)
+              None))
+           (_ None)))
+       (IShr
+         (match b
+           ((IConst k)
+            (if (le 0 k)
+              (if (le k 63)
+                (match a
+                  ((ILoc j)
+                   (match (ix_home j)
+                     (None None)
+                     ((Some r)
+                      (if (int_eq j i) (Some (Cons (XShrI d k) it))
+                      (Some (Cons (XMovRR d r) (Cons (XShrI d k) it)))))))
+                  (_ None))
+                None)
+              None))
+           (_ None)))
+       (_
+         (match (ix_op o)
+           (None None)
+           ((Some xo)
+            (match a
+              ((ILoc j)
+               (if (int_eq j i)
+                 (match b
+                   ((ILoad ae)
+                    (match ae
+                      ((ILoc aj)
+                       (match (ix_home aj)
+                         (None None)
+                         ((Some ar)
+                          (Some
+                            (Cons
+                              (XLoad8 RAX (AReg ar))
+                              (Cons (XBin xo d (SReg RAX)) it))))))
+                      ((IConst n) None)
+                      ((IBin o2 x y) None)
+                      ((IWrap w x) None)
+                      ((IRotr w x y) None)
+                      ((ILoad x) None)))
+                   (_
+                     (match (ix_src b)
+                       (None None)
+                       ((Some bs) (Some (Cons (XBin xo d bs) it))))))
+               (if (ix_uses b i) None
+               (match (ix_home j)
+                 (None None)
+                 ((Some r)
+                  (match (ix_src b)
+                    (None None)
+                    ((Some bs)
+                     (Some (Cons (XMovRR d r) (Cons (XBin xo d bs) it))))))))))
+              ((IConst n) None)
+              ((IBin o2 x y) None)
+              ((IWrap w x) None)
+              ((IRotr w x y) None)
+              ((ILoad x) None)))))))
+    ((IWrap w a) None)
+    ((IRotr w ra rk)
+     (if (int_eq w 32)
+       (match rk
+         ((IConst kc)
+          (match ra
+            ((ILoc j)
+             (match (ix_home j)
+               (None None)
+               ((Some r)
+                (if (int_eq j i) (Some (ix_app (ix_rot d kc) it))
+                (Some (Cons (XMovRR d r) (ix_app (ix_rot d kc) it)))))))
+            (_ None)))
+         (_ None))
+       None))
+    ((ILoad ae)
+     (match ae
+       ((ILoc aj)
+        (match (ix_home aj)
+          (None None)
+          ((Some ar) (Some (Cons (XLoad8 d (AReg ar)) it)))))
+       ((IConst n) None)
+       ((IBin o2 x y) None)
+       ((IWrap w x) None)
+       ((IRotr w x y) None)
+       ((ILoad x) None)))))
+
 ;; the statement tier: one structural walk (the to_wasm shape); the
 ;; ISet patterns are the shapes x86gen emits — in-place when the dst
 ;; local is the left operand, mov+bin otherwise (fenced against the
@@ -250,115 +362,12 @@
            (match (ix_home i)
              (None None)
              ((Some d)
-              (match e
-                ((IConst n) (Some (Cons (XMovRI d n) it)))
-                ((ILoc j)
-                 (match (ix_home j)
-                   (None None)
-                   ((Some r) (Some (Cons (XMovRR d r) it)))))
-                ((IBin o a b)
-                 (match o
-                   (IShl
-                     (match b
-                       ((IConst k)
-                        (if (le 0 k)
-                          (if (le k 63)
-                            (match a
-                              ((ILoc j)
-                               (match (ix_home j)
-                                 (None None)
-                                 ((Some r)
-                                  (if (int_eq j i) (Some (Cons (XShlI d k) it))
-                                  (Some
-                                    (Cons (XMovRR d r) (Cons (XShlI d k) it)))))))
-                              (_ None))
-                            None)
-                          None))
-                       (_ None)))
-                   (IShr
-                     (match b
-                       ((IConst k)
-                        (if (le 0 k)
-                          (if (le k 63)
-                            (match a
-                              ((ILoc j)
-                               (match (ix_home j)
-                                 (None None)
-                                 ((Some r)
-                                  (if (int_eq j i) (Some (Cons (XShrI d k) it))
-                                  (Some
-                                    (Cons (XMovRR d r) (Cons (XShrI d k) it)))))))
-                              (_ None))
-                            None)
-                          None))
-                       (_ None)))
-                   (_
-                     (match (ix_op o)
-                       (None None)
-                       ((Some xo)
-                        (match a
-                          ((ILoc j)
-                           (if (int_eq j i)
-                             (match b
-                               ((ILoad ae)
-                                (match ae
-                                  ((ILoc aj)
-                                   (match (ix_home aj)
-                                     (None None)
-                                     ((Some ar)
-                                      (Some
-                                        (Cons
-                                          (XLoad8 RAX (AReg ar))
-                                          (Cons (XBin xo d (SReg RAX)) it))))))
-                                  ((IConst n) None)
-                                  ((IBin o2 x y) None)
-                                  ((IWrap w x) None)
-                                  ((IRotr w x y) None)
-                                  ((ILoad x) None)))
-                               (_
-                                 (match (ix_src b)
-                                   (None None)
-                                   ((Some bs) (Some (Cons (XBin xo d bs) it))))))
-                           (if (ix_uses b i) None
-                           (match (ix_home j)
-                             (None None)
-                             ((Some r)
-                              (match (ix_src b)
-                                (None None)
-                                ((Some bs)
-                                 (Some
-                                   (Cons (XMovRR d r) (Cons (XBin xo d bs) it))))))))))
-                          ((IConst n) None)
-                          ((IBin o2 x y) None)
-                          ((IWrap w x) None)
-                          ((IRotr w x y) None)
-                          ((ILoad x) None)))))))
-                ((IWrap w a) None)
-                ((IRotr w ra rk)
-                 (if (int_eq w 32)
-                   (match rk
-                     ((IConst kc)
-                      (match ra
-                        ((ILoc j)
-                         (match (ix_home j)
-                           (None None)
-                           ((Some r)
-                            (if (int_eq j i) (Some (ix_app (ix_rot d kc) it))
-                            (Some (Cons (XMovRR d r) (ix_app (ix_rot d kc) it)))))))
-                        (_ None)))
-                     (_ None))
-                   None))
-                ((ILoad ae)
-                 (match ae
-                   ((ILoc aj)
-                    (match (ix_home aj)
-                      (None None)
-                      ((Some ar) (Some (Cons (XLoad8 d (AReg ar)) it)))))
-                   ((IConst n) None)
-                   ((IBin o2 x y) None)
-                   ((IWrap w x) None)
-                   ((IRotr w x y) None)
-                   ((ILoad x) None)))))))
+              (match (ix_set d i e it)
+                ((Some r) (Some r))
+                (None
+                  (match (ix_res e)
+                    (None None)
+                    ((Some is) (Some (ix_app is (Cons (XMovRR d RAX) it))))))))))
           ((IStore ae ve)
            (match ae
              ((ILoc aj)

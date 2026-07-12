@@ -1,0 +1,117 @@
+;;; std/sha256/sha256.imp.shard — the module's IMP DIALECT SIBLING
+;;; (docs/IMP.md rung I2b): the sha word kit. This file is std/sha256
+;;; growing an imp spelling — the manual spelling target the dialect
+;;; exists for — and it lives IN the module directory because the
+;;; alignment claims speak about the impl's PRIVATE word fns
+;;; (rotr32/sha_ch/…), which the public surface deliberately does not
+;;; expose (the .wasm.shard/.x86.shard sibling convention).
+;;;
+;;; The kit: IExp BUILDERS, one per spec word fn, parametric over the
+;;; source LOCAL INDEX — the vocabulary the round twin (rung I2c)
+;;; composes its statements from — plus per-fn ALIGNMENT PINS proving
+;;; each builder's iexp value IS the spec fn's value. The pins are
+;;; nearly refl-grade by design: IRotr's band-spelled containment is
+;;; the spec's own m32 idiom, so both sides compute to the same
+;;; shift-or-shift-under-mask tree. Any spelling drift between the
+;;; builders and the spec fails HERE, not deep inside the round
+;;; induction.
+
+(import "../../kernel/stdlib.shard")
+(import "sha256.shard")
+(use (:: std sha256 sha256 *))
+(import "../../std/mem")
+(use (:: std mem *))
+(import "../../models/imp/imp.shard")
+(use (:: models imp imp *))
+
+;; ---- the builders ---------------------------------------------------------------
+
+;; rotate-right of a local within 32 bits
+(fn ie_rotr32 ((i Int) (k Int)) IExp (IRotr 32 (ILoc i) (IConst k)))
+
+;; the 32-bit mask (the spec's m32; band is exact on every machine)
+(fn ie_m32 ((e IExp)) IExp (IBin IAnd e (IConst 4294967295)))
+
+;; Ch(x,y,z) = (x AND y) XOR (NOT x AND z); NOT is xor with all-ones
+(fn ie_ch ((x Int) (y Int) (z Int)) IExp
+  (IBin
+    IXor
+    (IBin IAnd (ILoc x) (ILoc y))
+    (IBin IAnd (IBin IXor (ILoc x) (IConst 4294967295)) (ILoc z))))
+
+;; Maj(x,y,z) = (x AND y) XOR (x AND z) XOR (y AND z)
+(fn ie_maj ((x Int) (y Int) (z Int)) IExp
+  (IBin
+    IXor
+    (IBin IAnd (ILoc x) (ILoc y))
+    (IBin IXor (IBin IAnd (ILoc x) (ILoc z)) (IBin IAnd (ILoc y) (ILoc z)))))
+
+;; Σ0(x) = ROTR2 XOR ROTR13 XOR ROTR22
+(fn ie_bsig0 ((i Int)) IExp
+  (IBin IXor (ie_rotr32 i 2) (IBin IXor (ie_rotr32 i 13) (ie_rotr32 i 22))))
+
+;; Σ1(x) = ROTR6 XOR ROTR11 XOR ROTR25
+(fn ie_bsig1 ((i Int)) IExp
+  (IBin IXor (ie_rotr32 i 6) (IBin IXor (ie_rotr32 i 11) (ie_rotr32 i 25))))
+
+;; σ0(x) = ROTR7 XOR ROTR18 XOR SHR3
+(fn ie_ssig0 ((i Int)) IExp
+  (IBin
+    IXor
+    (ie_rotr32 i 7)
+    (IBin IXor (ie_rotr32 i 18) (IBin IShr (ILoc i) (IConst 3)))))
+
+;; σ1(x) = ROTR17 XOR ROTR19 XOR SHR10
+(fn ie_ssig1 ((i Int)) IExp
+  (IBin
+    IXor
+    (ie_rotr32 i 17)
+    (IBin IXor (ie_rotr32 i 19) (IBin IShr (ILoc i) (IConst 10)))))
+
+;; ---- the alignment pins ----------------------------------------------------------
+;; Each builder's iexp value = the spec fn's value, for locals holding
+;; the inputs. Memory is quantified and untouched (pure word ops).
+
+(claim ie_rotr32_ok
+  (goal ((x Int) (k Int) (m Mem)) ()
+    (= (iexp (ie_rotr32 0 7) (Cons x Nil) m 0) (Some (rotr32 x 7))))
+  (steps ((compute both)) refl))
+
+(claim ie_m32_ok
+  (goal ((x Int) (m Mem)) ()
+    (= (iexp (ie_m32 (ILoc 0)) (Cons x Nil) m 0) (Some (m32 x))))
+  (steps ((compute both)) refl))
+
+(claim ie_ch_ok
+  (goal ((x Int) (y Int) (z Int) (m Mem)) ()
+    (=
+      (iexp (ie_ch 0 1 2) (Cons x (Cons y (Cons z Nil))) m 0)
+      (Some (sha_ch x y z))))
+  (steps ((compute both)) refl))
+
+(claim ie_maj_ok
+  (goal ((x Int) (y Int) (z Int) (m Mem)) ()
+    (=
+      (iexp (ie_maj 0 1 2) (Cons x (Cons y (Cons z Nil))) m 0)
+      (Some (sha_maj x y z))))
+  (steps ((compute both)) refl))
+
+(claim ie_bsig0_ok
+  (goal ((x Int) (m Mem)) ()
+    (= (iexp (ie_bsig0 0) (Cons x Nil) m 0) (Some (bsig0 x))))
+  (steps ((compute both)) refl))
+
+(claim ie_bsig1_ok
+  (goal ((x Int) (m Mem)) ()
+    (= (iexp (ie_bsig1 0) (Cons x Nil) m 0) (Some (bsig1 x))))
+  (steps ((compute both)) refl))
+
+(claim ie_ssig0_ok
+  (goal ((x Int) (m Mem)) ()
+    (= (iexp (ie_ssig0 0) (Cons x Nil) m 0) (Some (ssig0 x))))
+  (steps ((compute both)) refl))
+
+(claim ie_ssig1_ok
+  (goal ((x Int) (m Mem)) ()
+    (= (iexp (ie_ssig1 0) (Cons x Nil) m 0) (Some (ssig1 x))))
+  (steps ((compute both)) refl))

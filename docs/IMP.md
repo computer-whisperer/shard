@@ -510,6 +510,42 @@ one slice, both differentials green:
 - Gates: no new files (all edits to existing corpus targets); driver
   51 green; corpus FAIL-set unchanged at 57.
 
+**I2b — the sha word kit (2026-07-12).** std/sha256 grows its imp
+spelling — the manual-spelling-target vision made concrete:
+
+- **std/sha256/sha256.imp.shard** — the module's imp dialect SIBLING
+  (the .wasm.shard/.x86.shard convention; in-module residence
+  resolves the privacy question: the impl-file import plus the
+  module use-clause gives a sibling full private visibility, so the
+  public surface stays two fns). Contents: IExp BUILDERS, one per
+  spec word fn (ie_rotr32/ie_m32/ie_ch/ie_maj/ie_bsig0/ie_bsig1/
+  ie_ssig0/ie_ssig1), parametric over source local indices — the
+  vocabulary the round twin composes from — plus per-fn ALIGNMENT
+  PINS. Every pin is (compute both)/refl: IRotr's band-spelled
+  containment IS the spec's m32 idiom, so builder and spec compute
+  to the same tree. Spelling drift now fails at the kit, not deep
+  inside the round induction.
+- **The general-ISet fallback (to_x86)**: the direct patterns moved
+  into ix_set; on pattern refusal ix_stmts compiles the expression
+  into RAX via ix_res and deposits into the home. Statement-position
+  trees up to one R10 level (ch/maj shapes) are now expressible;
+  every existing tie stayed byte-identical (patterns fire first).
+  Pinned end-to-end by the ch-shaped it_chset_fn: the x86 tie's
+  8-instruction literal and an UNPREMISED bridge — the sha word
+  class is pure bitwise, exact on every machine.
+- **Build**: std/sha256/mod.build.shard opens (products-only — the
+  module's 'check imp gate; pinlib/artifact products arrive with
+  I2d/I2e), third entry in build_entries.
+- Gates: driver 52 products green; corpus FAIL-set unchanged at 57.
+- I2c note (recorded at scoping): the round/schedule/block twins and
+  the cancellation cert live in this same sibling file (or a second
+  one beside it); the layout question to resolve at I2c's opening is
+  the round loop's LOCAL BUDGET on x86 — state(8) + counter + temps
+  + running pointers lands at 12–13 against 12 available homes
+  (15 GPRs minus the RAX/R10/R11 scratch trio); the outs are
+  accumulate-t1-in-h's-slot, two-pointer fusion, or a 13th home by
+  reducing scratch pressure.
+
 ## 7. Non-goals, stated once
 
 - imp as a shipped target or public surface — it is an intermediate;
