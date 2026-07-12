@@ -449,6 +449,29 @@ else
   echo "SKIPPED (no bin/shard_eval)"
 fi
 
+# False-equivalence-proof hunter pin (docs/SEARCH.md standing-use #2):
+# the ground battery + the S4a comparator pointed at the std tree's
+# OWN claimed theorems — 13 interface files' requirements + 14
+# in-closure impl files' claims, typed ground enumeration with
+# premise filtering, evaluated by the kernel's own reducer in the
+# open run closure. Pinned at cut: 291 laws — 262 PASS, 0 REFUTED,
+# 0 SYMREFUTED, 0 VACUOUS, 22 STUCK (the 12 word shift laws stick
+# exactly on negative shift amounts — partial-domain prims, 10/10
+# reducible vectors pass; the sha256 class is fuel-bounded, its
+# ground pins already replay as compute claims), 7 SKIP (refined Str,
+# over-cap batteries, the 8-field H8). Sym cross-check: 117 proven,
+# 4 SYMERR (the S4a comparator's ctor-vs-atom refusal on bytes/mem
+# length laws — a recorded S4a question). A ground counterexample
+# against a symbolic proof exits 1 inside the tool (G3); REFUTED
+# lines are FINDINGS (tool exits 0) — any new one changes this
+# output and shows in the corpus diff: investigate before re-pinning.
+echo "=== search: false-equivalence hunter ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/hunt.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
 # Run-mode qualified-dispatch pin (the enc_instr bug): two co-loaded modules
 # define the same-named internal helper; each pick must call its OWN. Also
 # pins the run loop's World-identity threading (the app defines its own

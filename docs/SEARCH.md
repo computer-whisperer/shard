@@ -1154,3 +1154,78 @@ engineering item" the ledger named for the mutable-arena-shaped memo;
 the two-level index and cheaper keys are the known follow-up when a
 d3-scale consumer arrives, and STEPS (the algorithmic quantity) is
 what the pin tracks.
+
+
+### Slice 7 — the FALSE-EQUIVALENCE-PROOF HUNTER (LANDED 2026-07-12)
+
+**The queue's next ruling: standing-use #2 built.** tools/search/
+hunt.shard (+ hunt_obj.shard, the run-mode object closure of all 13
+std modules) points the ground battery and the S4a comparator at the
+kernel's OWN proof outputs: every requirement of the 13 std interface
+files (the proven public surface) and every claim of the 14 in-closure
+impl files (the internal lemma surface, where parlet-class bugs
+historically lived) — 291 claimed theorems, swept end to end in ~77s.
+
+**The machinery** (thin driver over existing components, as ruled):
+goals parse through the kernel's single goal seam (parse_goal_r +
+file_rctx per swept file — the tools/prove precedent); ∀-binders
+enumerate over typed palettes (Int wide/narrow two-tier, Symbol,
+tyvars at Int by the binder_sv license; plain declared data to
+structural depth 2 via the type table, per-field products bounded
+BEFORE they are built); REFINED types are refused (raw base
+enumeration would not respect the predicate — std/str skips are the
+mechanism working); premises FILTER vectors; each active vector's
+sides run through the kernel's own reducer in the open run closure;
+unpremised laws additionally pass the S4a comparator (rules table
+empty). Verdict discipline: fuel-out/off-domain conclusions are
+STUCK (never refuted), tolerated to a cap of 8 per law so
+partial-domain laws still report reducible coverage; ground REFUTED
+against symbolic PROVEN exits 1 (G3 — engine contradiction is a hard
+failure); REFUTED lines are FINDINGS and the tool exits 0, per the
+arc ruling (issues surfaced now are worked after merge).
+
+**THE RESULT — pinned:**
+
+    HUNT TOTAL LAWS 291 PASS 262 REF 0 SYMREF 0 VAC 0 STUCK 22
+      SKIP 7 SYMP 117 SYMU 76 SYME 4 SYMN 94
+
+**Zero refutations.** No false equivalence proof exists in the std
+tree at this battery (up to 4,096 vectors per law, both palettes).
+117 laws decided by BOTH engines with zero disagreements extends the
+G3 record to the real interface surface. What the instrument DID
+surface, recorded as queued questions rather than fixed mid-slice:
+
+- **The S4a comparator's ctor-vs-atom refusal is reachable from real
+  interfaces** (SYME 4: bytes blen_is_len / of_list_len, mem
+  mapval_len / mapu8_len — length laws mixing a data-typed slot walk
+  with atom arithmetic). CpRErr was designed as an invariant guard
+  for the rev task; whether these configurations are legal (comparator
+  incompleteness to extend) or the guard is right and the message
+  wrong is an S4a question for the next consumer.
+- **The 12 word shift laws are partial-domain theorems**: bshl/bshr/
+  bsshr refuse to step at negative shift counts, so u8_shl_val-class
+  goals hold by shared-subterm algebra with NO reduction route at
+  k < 0. All 12 pass every reducible vector (PASS 10 each) and stick
+  on exactly the negative-k rows — ground evaluation cannot decide a
+  theorem there, reported honestly, not a soundness issue.
+- **The sha256 class is out of ground reach by fuel policy** (STUCK
+  at cap; its ground pins already replay as corpus compute claims).
+  The engine follow-up is recorded in the tool header: move the
+  battery onto evm_call_pure (the D3 substrate, fuel-free on total
+  fns) once its per-invocation dispatch rebuild — the ledger's named
+  first engine lever — is fixed. run_expr (small-step substitution,
+  O(steps x term-size), no sharing) prices a 20k-step fuel-out on a
+  sha-sized residual at MINUTES; fuel 2000 with the stuck cap prices
+  the whole sweep at 77s. A first hunter draft SEGFAULTED the
+  compiled engine by materializing H8's 8^8 field product before the
+  battery cap looked at it — the per-field bound inside ge_fields is
+  the fix, and "bound products before building them" is now enumerator
+  law.
+
+**Out of scope, recorded:** target-variant impl files (mem.wasm/
+mem.x86/rng.wasm/str.wasm — their claims cite model closures this
+object root does not carry, ~41 claims), the kernel/facts axiom set
+(already differentially pinned by examples/facts_probe.shard), and
+kernel/meta/models claims (the natural extension: per-tree object
+roots, same driver). The corpus pin (run_corpus.sh) replays the full
+sweep every run; any new REFUTED line changes the pinned output.

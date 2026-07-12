@@ -1,0 +1,810 @@
+;;; tools/search/hunt.shard — the FALSE-EQUIVALENCE-PROOF HUNTER
+;;; (docs/SEARCH.md standing-use #2): the ground battery and the S4a
+;;; comparator pointed at the kernel's OWN proof outputs. Every claimed
+;;; theorem of the std tree — the 13 interface files' requirements (the
+;;; proven public surface) and the in-closure impl files' claims (the
+;;; internal lemma surface, where parlet-class bugs historically lived)
+;;; — is re-tested adversarially:
+;;;
+;;;   GROUND: ∀-binders enumerate over typed palettes (Int/Symbol/tyvar
+;;;   atoms; plain declared data to a structural depth via the type
+;;;   table; REFINED types are skipped — raw base enumeration would not
+;;;   respect the predicate). Premises filter vectors (a vector whose
+;;;   premises don't hold is inactive); on each active vector both goal
+;;;   sides run through the kernel's own reducer in the OPEN run-mode
+;;;   closure. Two ground values that differ = a COUNTEREXAMPLE to a
+;;;   checked proof. Fuel-out / stuck is counted, never refuted.
+;;;
+;;;   SYMBOLIC: unpremised laws also pass through the S4a machine
+;;;   (rules table empty — reduction + congruence + split-in-budget).
+;;;   A symbolic Refuted is a genuine counterexample CLASS; symbolic
+;;;   Proven against a ground REFUTED is a cross-engine contradiction
+;;;   and exits 1 (the G3 discipline: engine disagreement is a hard
+;;;   failure, never a statistic).
+;;;
+;;; FINDINGS ARE DATA: refutations print and are pinned; the tool exits
+;;; 0 (the arc ruling: issues surfaced now are worked after merge). The
+;;; kernel/facts axiom set is NOT swept here — it already rides its own
+;;; ground differential (examples/facts_probe.shard, corpus-pinned).
+;;;
+;;; NOTE this file rides kernel/driver (goal parsing/resolution), whose
+;;; closure carries the known pre-existing kernel/types tc_infer measure
+;;; gap — so like tools/prove and laws.shard it is exercised by its
+;;; pinned RUN output, not as a corpus check target.
+;;;
+;;; RUN IT: bin/shard_eval run tools/search/hunt.shard          (full sweep)
+;;;         bin/shard_eval run tools/search/hunt.shard PATH     (one file)
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/proof.shard")
+(import "../../kernel/reader.shard")
+(import "../../kernel/reduce.shard")
+(import "../../kernel/loader.shard")
+(import "../../kernel/driver.shard")
+(import "../../meta/invoke")
+(import "sym.shard")
+(import "laws.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel proof Goal))
+(use (:: kernel proof Param))
+(use (:: kernel proof Equation))
+(use (:: kernel reader SExpr))
+(use (:: kernel reader Decl))
+(use (:: kernel reader DClaim))
+(use (:: kernel reader DAxiom))
+(use (:: kernel reader DReq))
+(use (:: kernel reader DFul))
+(use (:: kernel reader Claim))
+(use (:: kernel reader claim_name))
+(use (:: kernel reader claim_goal))
+(use (:: kernel reader Req))
+(use (:: kernel reader req_name))
+(use (:: kernel reader req_goal))
+(use (:: kernel reader RCtx))
+(use (:: kernel reader parse_decls))
+(use (:: kernel reduce run_expr))
+(use (:: kernel loader World))
+(use (:: kernel loader read_file))
+(use (:: kernel loader get_args))
+(use (:: kernel loader write))
+(use (:: kernel loader exit))
+(use (:: kernel driver file_rctx))
+(use (:: kernel driver parse_goal_r))
+(use (:: kernel driver module_ctors))
+(use (:: meta invoke load_run_module))
+(use (:: tools search sym inst_fields))
+(use (:: tools search laws fv_sub))
+(use (:: tools search laws law_verdict))
+(use (:: tools search laws LLaw))
+(use (:: tools search laws LVdErr))
+(use (:: tools search laws LVdUndec))
+(use (:: tools search laws LVdRef))
+(use (:: tools search laws LVdProv))
+(use (:: tools search laws lw_budget))
+
+;; ---- engine parameters (task data, pinned with the sweep) -------------------
+
+(fn hx_depth () Int 2)  ; max structural depth of enumerated data values
+
+(fn hx_gfuel () Int 64)  ; uniform fuel for the enumeration SCC
+
+(fn hx_cap () Int 4096)  ; max battery size per law (bigger -> honest SKIP)
+
+;; stuck-conclusion tolerance per law: vectors whose conclusion won't
+;; reduce to ground (fuel-out on a heavy body; a prim off its domain,
+;; e.g. bshl at negative k) are counted and SKIPPED — up to this many,
+;; so partial-domain laws still report their reducible coverage — and
+;; the law exits once the cap is hit (bounding the sha256 class at
+;; cap x fuel steps instead of battery x fuel).
+(fn hx_stuck_cap () Int 8)
+
+;; reducer fuel per goal-side evaluation. DELIBERATELY SMALL: the
+;; ground engine here is run_expr, the small-step substitution
+;; reducer — O(steps x term-size) with no sharing — and on a heavy
+;; body (the sha256 class) the residual grows with fuel, so 20k-step
+;; fuel-outs cost MINUTES per side while every legitimate law in this
+;; sweep settles in at most a few hundred steps. Fuel-out reports
+;; STUCK, never a verdict; the sha-class ground pins are already
+;; corpus-replayed as compute claims. Engine follow-up (recorded in
+;; SEARCH.md §8): move the battery onto evm_call_pure — the D3
+;; ground substrate, fuel-free on total fns — once its per-invocation
+;; dispatch rebuild (the ledger's named first engine lever) is fixed.
+(fn hx_fuel () Int 2000)
+
+;; S4a fuel for the symbolic cross-check, equally small: a heavy body
+;; BLOCKS into a neutral (not a fuel-out), and the comparator's
+;; split-resume then re-evaluates every case leaf concretely through
+;; the SV machine. The pass exists for REFUTATIONS and the G3
+;; contradiction check — few-step work; deep symbolic proofs are the
+;; laws oracle's job, not the hunter's. Fuel-out is an honest SYMU.
+(fn hx_sym_fuel () Int 2000)
+
+;; the WIDE Int palette: signs, zero/one edges, a value past small widths
+(fn hx_ints () (List Expr)
+  (list
+    (IntLit -7)
+    (IntLit -2)
+    (IntLit -1)
+    (IntLit 0)
+    (IntLit 1)
+    (IntLit 2)
+    (IntLit 3)
+    (IntLit 8)))
+
+;; the NARROW retry palette: a law whose wide battery is over cap is
+;; retried here before it is skipped (multi-binder mem/map/bytes laws)
+(fn hx_ints_narrow () (List Expr) (list (IntLit 0) (IntLit 1) (IntLit 2)))
+
+;; ∀-bound TYPE variables instantiate at Int (the binder_sv license:
+;; a law refuted at one instantiation is refuted)
+(fn hx_tyvals () (List Expr) (list (IntLit 0) (IntLit 1) (IntLit 2)))
+
+(fn hx_symvals () (List Expr) (list (SymLit (quote hxa)) (SymLit (quote hxb))))
+
+;; ---- small generic plumbing --------------------------------------------------
+
+(fn (hx_app T) ((a (List T)) (b (List T))) (List T)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (hx_app t b)))))
+
+(fn (hx_len T) ((xs (List T))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons _ t) (+ 1 (hx_len t)))))
+
+(fn hx_tenv ((ps (List Symbol)) (ts (List Type))) (List (Pair Symbol Type))
+  (measure (struct ps))
+  (match ps
+    (Nil Nil)
+    ((Cons p pr)
+     (match ts
+       (Nil Nil)
+       ((Cons t tr) (Cons (Pair p t) (hx_tenv pr tr)))))))
+
+(fn hx_typrim ((q QName) (args (List Type)) (s Symbol)) Bool
+  (match args
+    (Nil (sym_eq (qn_name q) s))
+    ((Cons _ _) False)))
+
+;; ---- ground enumeration: typed values to a structural depth -----------------
+;; The SCC is uniformly fueled (every mutual edge fuel-1 behind the
+;; entry guard — the sym.shard discipline). Depth d only decrements at
+;; a constructor boundary; atoms ignore it. Depth exhaustion is EMPTY
+;; (no values that deep), un-enumerable structure is a SKIP (the whole
+;; law is refused, counted honestly — no silent partial coverage).
+
+(type GeR (GeSkip (List Int)) (GeOk (List Expr)))
+
+(type GfR (GfSkip (List Int)) (GfOk (List (List Expr))))
+
+(fn ge_prod1 ((v Expr) (cs (List (List Expr)))) (List (List Expr))
+  (measure (struct cs))
+  (match cs
+    (Nil Nil)
+    ((Cons c rest) (Cons (Cons v c) (ge_prod1 v rest)))))
+
+(fn ge_prod ((vs (List Expr)) (cs (List (List Expr)))) (List (List Expr))
+  (measure (struct vs))
+  (match vs
+    (Nil Nil)
+    ((Cons v rest) (hx_app (ge_prod1 v cs) (ge_prod rest cs)))))
+
+(fn ge_mk ((cq QName) (combos (List (List Expr)))) (List Expr)
+  (measure (struct combos))
+  (match combos
+    (Nil Nil)
+    ((Cons c rest) (Cons (Ctor cq c) (ge_mk cq rest)))))
+
+(fn ge_ty ((m Module) (pal (List Expr)) (ty Type) (d Int) (fuel Int)) GeR
+  (measure fuel)
+  (if (lt fuel 1) (GeSkip "enum fuel")
+  (match ty
+    ((TVar _) (GeOk (hx_tyvals)))
+    ((TCon q args)
+     (if (hx_typrim q args (quote Int)) (GeOk pal)
+     (if (hx_typrim q args (quote Symbol)) (GeOk (hx_symvals))
+     (match (lookup_typedef q m)
+       (None (GeSkip (append_int "no typedef " (chars_of_sym (qn_name q)))))
+       ((Some td) (ge_td m pal td args d (- fuel 1))))))))))
+
+(fn ge_td
+  ((m Module)
+   (pal (List Expr))
+   (td TypeDef)
+   (args (List Type))
+   (d Int)
+   (fuel Int))
+  GeR
+  (measure fuel)
+  (if (lt fuel 1) (GeSkip "enum fuel")
+  (match td
+    ((TypeDef tq params ctors refi)
+     (match refi
+       ((Some _)
+        (GeSkip (append_int "refined type " (chars_of_sym (qn_name tq)))))
+       (None
+         (match ctors
+           (Nil (GeSkip (append_int "no ctors " (chars_of_sym (qn_name tq)))))
+           ((Cons _ _)
+            (if (lt d 0) (GeOk Nil)
+            (ge_ctors
+              m
+              pal
+              (inst_fields (hx_tenv params args) ctors)
+              d
+              (- fuel 1)))))))))))
+
+(fn ge_ctors
+  ((m Module) (pal (List Expr)) (cds (List CtorDef)) (d Int) (fuel Int))
+  GeR
+  (measure fuel)
+  (if (lt fuel 1) (GeSkip "enum fuel")
+  (match cds
+    (Nil (GeOk Nil))
+    ((Cons (CtorDef cq fts) rest)
+     (match (ge_fields m pal fts (- d 1) (- fuel 1))
+       ((GfSkip msg) (GeSkip msg))
+       ((GfOk combos)
+        (match (ge_ctors m pal rest d (- fuel 1))
+          ((GeSkip msg) (GeSkip msg))
+          ((GeOk more) (GeOk (hx_app (ge_mk cq combos) more))))))))))
+
+;; the per-field PRODUCT is bounded BEFORE it is built (a single wide
+;; ctor — H8's eight Int fields — would otherwise materialize 8^8
+;; exprs before the battery cap ever looks at it)
+(fn ge_fields
+  ((m Module) (pal (List Expr)) (fts (List Type)) (d Int) (fuel Int))
+  GfR
+  (measure fuel)
+  (if (lt fuel 1) (GfSkip "enum fuel")
+  (match fts
+    (Nil (GfOk (Cons Nil Nil)))
+    ((Cons ft rest)
+     (match (ge_ty m pal ft d (- fuel 1))
+       ((GeSkip msg) (GfSkip msg))
+       ((GeOk vs)
+        (match (ge_fields m pal rest d (- fuel 1))
+          ((GfSkip msg) (GfSkip msg))
+          ((GfOk combos)
+           (if (lt (hx_cap) (* (hx_len vs) (hx_len combos)))
+             (GfSkip "type too wide")
+             (GfOk (ge_prod vs combos)))))))))))
+
+;; ---- the battery: binder assignments -----------------------------------------
+
+(type BiR (BiSkip (List Int)) (BiOk (List (Pair Symbol (List Expr)))))
+
+(fn hx_binders ((m Module) (pal (List Expr)) (ps (List Param))) BiR
+  (measure (struct ps))
+  (match ps
+    (Nil (BiOk Nil))
+    ((Cons (Param x ty) rest)
+     (match (ge_ty m pal ty (hx_depth) (hx_gfuel))
+       ((GeSkip msg)
+        (BiSkip (append_int (chars_of_sym x) (append_int ": " msg))))
+       ((GeOk vs)
+        (match vs
+          (Nil (BiSkip (append_int (chars_of_sym x) ": empty enumeration")))
+          ((Cons _ _)
+           (match (hx_binders m pal rest)
+             ((BiSkip msg) (BiSkip msg))
+             ((BiOk bs) (BiOk (Cons (Pair x vs) bs)))))))))))
+
+(fn hx_count ((bs (List (Pair Symbol (List Expr))))) Int
+  (measure (struct bs))
+  (match bs
+    (Nil 1)
+    ((Cons (Pair _ vs) rest) (* (hx_len vs) (hx_count rest)))))
+
+(fn hx_cross1 ((x Symbol) (v Expr) (asgs (List (List (Pair Symbol Expr)))))
+  (List (List (Pair Symbol Expr)))
+  (measure (struct asgs))
+  (match asgs
+    (Nil Nil)
+    ((Cons a rest) (Cons (Cons (Pair x v) a) (hx_cross1 x v rest)))))
+
+(fn hx_cross
+  ((x Symbol) (vs (List Expr)) (asgs (List (List (Pair Symbol Expr)))))
+  (List (List (Pair Symbol Expr)))
+  (measure (struct vs))
+  (match vs
+    (Nil Nil)
+    ((Cons v rest) (hx_app (hx_cross1 x v asgs) (hx_cross x rest asgs)))))
+
+;; a binder-less law expands to ONE empty assignment: the closed
+;; equation is tested once
+(fn hx_expand ((bs (List (Pair Symbol (List Expr)))))
+  (List (List (Pair Symbol Expr)))
+  (measure (struct bs))
+  (match bs
+    (Nil (Cons Nil Nil))
+    ((Cons (Pair x vs) rest) (hx_cross x vs (hx_expand rest)))))
+
+;; ---- ground evaluation of one equation under one assignment -----------------
+
+(fn hx_inst ((asg (List (Pair Symbol Expr))) (e Expr)) Expr
+  (measure (struct asg))
+  (match asg
+    (Nil e)
+    ((Cons (Pair x v) rest) (hx_inst rest (fv_sub x v e)))))
+
+(fn hx_ground ((e Expr)) Bool
+  (measure (struct e))
+  (match e
+    ((IntLit _) True)
+    ((SymLit _) True)
+    ((Ctor _ es) (hx_grounds es))
+    ((FVar _) False)
+    ((BVar _) False)
+    ((Call _ _) False)
+    ((Match _ _) False)
+    ((Let _ _) False)
+    ((If _ _ _) False)))
+
+(fn hx_grounds ((es (List Expr))) Bool
+  (measure (struct es))
+  (match es
+    (Nil True)
+    ((Cons e rest) (if (hx_ground e) (hx_grounds rest) False))))
+
+(type ExR (ExEq) (ExNe Expr Expr) (ExStuck))
+
+(fn hx_eq ((m Module) (asg (List (Pair Symbol Expr))) (eqn Equation)) ExR
+  (match eqn
+    ((Equation l r)
+     (let
+       ((lv (run_expr m (hx_inst asg l) (hx_fuel)))
+        (rv (run_expr m (hx_inst asg r) (hx_fuel))))
+       (if (hx_ground lv)
+         (if (hx_ground rv) (if (expr_eq lv rv) (ExEq) (ExNe lv rv)) (ExStuck))
+         (ExStuck))))))
+
+;; premises gate a vector: all hold -> active; any ground-false ->
+;; filtered; any stuck -> counted apart (never silently active)
+(type PrR (PrAct) (PrFilt) (PrStuck))
+
+(fn hx_prems
+  ((m Module) (asg (List (Pair Symbol Expr))) (prems (List Equation)))
+  PrR
+  (measure (struct prems))
+  (match prems
+    (Nil (PrAct))
+    ((Cons p rest)
+     (match (hx_eq m asg p)
+       ((ExEq) (hx_prems m asg rest))
+       ((ExNe _ _) (PrFilt))
+       ((ExStuck) (PrStuck))))))
+
+;; ---- the per-law ground sweep ------------------------------------------------
+
+;; stuck CONCLUSIONS are tolerated up to hx_stuck_cap and the law
+;; exits once the cap is hit: partial-domain laws (bshl at negative k)
+;; still report their reducible coverage, while the sha256 class is
+;; bounded at cap x fuel steps instead of battery x fuel — paying
+;; |battery| x fuel to learn a body is out of ground reach is the one
+;; cost this tool must never sink.
+(type LawR (LawRef (List (Pair Symbol Expr)) Expr Expr) (LawOk Int Int Int Int))  ; pass, filt, pstuck, cstuck
+
+(fn hx_vecs
+  ((m Module)
+   (prems (List Equation))
+   (concl Equation)
+   (asgs (List (List (Pair Symbol Expr))))
+   (pass Int)
+   (filt Int)
+   (pstuck Int)
+   (cstuck Int))
+  LawR
+  (measure (struct asgs))
+  (match asgs
+    (Nil (LawOk pass filt pstuck cstuck))
+    ((Cons asg rest)
+     (match (hx_prems m asg prems)
+       ((PrFilt) (hx_vecs m prems concl rest pass (+ filt 1) pstuck cstuck))
+       ((PrStuck) (hx_vecs m prems concl rest pass filt (+ pstuck 1) cstuck))
+       ((PrAct)
+        (match (hx_eq m asg concl)
+          ((ExEq) (hx_vecs m prems concl rest (+ pass 1) filt pstuck cstuck))
+          ((ExStuck)
+           (if (le (hx_stuck_cap) (+ cstuck 1))
+             (LawOk pass filt pstuck (+ cstuck 1))
+             (hx_vecs m prems concl rest pass filt pstuck (+ cstuck 1))))
+          ((ExNe lv rv) (LawRef asg lv rv))))))))
+
+(type GrV
+  (GrSkip (List Int))  ; binders not enumerable / battery over cap
+  (GrRef (List (Pair Symbol Expr)) Expr Expr)  ; COUNTEREXAMPLE
+  (GrVac Int Int)  ; zero active vectors (filtered, premise-stuck)
+  (GrStuck Int Int)  ; stuck/fuel-out conclusions (stuck, passes seen)
+  (GrPass Int))  ; all active vectors agree (count)
+
+(fn hx_lawr ((lr LawR)) GrV
+  (match lr
+    ((LawRef asg lv rv) (GrRef asg lv rv))
+    ((LawOk pass filt pstuck cstuck)
+     (if (lt 0 cstuck) (GrStuck cstuck pass)
+     (if (lt 0 pass) (GrPass pass)
+     (GrVac filt pstuck))))))
+
+;; wide palette first; over cap -> the narrow retry; still over -> SKIP
+(fn hx_ground_v
+  ((m Module) (ps (List Param)) (prems (List Equation)) (concl Equation))
+  GrV
+  (match (hx_binders m (hx_ints) ps)
+    ((BiSkip msg) (GrSkip msg))
+    ((BiOk bs)
+     (if (le (hx_count bs) (hx_cap))
+       (hx_lawr (hx_vecs m prems concl (hx_expand bs) 0 0 0 0))
+       (match (hx_binders m (hx_ints_narrow) ps)
+         ((BiSkip msg) (GrSkip msg))
+         ((BiOk nbs)
+          (let ((cnt (hx_count nbs)))
+            (if (le cnt (hx_cap))
+              (hx_lawr (hx_vecs m prems concl (hx_expand nbs) 0 0 0 0))
+              (GrSkip
+                (append_int
+                  "battery "
+                  (append_int (show_int cnt) " over cap (narrow)")))))))))))
+
+;; ---- the symbolic pass (S4a, unpremised laws only) ---------------------------
+
+(type SyV (SyProv) (SyRef) (SyUnd) (SyErr (List Int)) (SyNa))
+
+(fn hx_sym ((m Module) (name Symbol) (g Goal)) SyV
+  (match g
+    ((Goal _ prems _)
+     (match prems
+       ((Cons _ _) (SyNa))
+       (Nil
+         (match
+           (law_verdict
+             m
+             Nil
+             (lw_budget)
+             (hx_sym_fuel)
+             (hx_sym_fuel)
+             (LLaw name g))
+           ((LVdErr msg) (SyErr msg))
+           ((LVdUndec) (SyUnd))
+           ((LVdRef) (SyRef))
+           ((LVdProv _) (SyProv))))))))
+
+;; ---- rendering ----------------------------------------------------------------
+
+(fn ge_show ((e Expr)) (List Int)
+  (measure (struct e))
+  (match e
+    ((IntLit i) (show_int i))
+    ((SymLit s) (chars_of_sym s))
+    ((Ctor q es)
+     (match es
+       (Nil (chars_of_sym (qn_name q)))
+       ((Cons _ _)
+        (append_int
+          "("
+          (append_int (chars_of_sym (qn_name q)) (append_int (ge_shows es) ")"))))))
+    ((FVar _) "?")
+    ((BVar _) "?")
+    ((Call _ _) "?")
+    ((Match _ _) "?")
+    ((Let _ _) "?")
+    ((If _ _ _) "?")))
+
+(fn ge_shows ((es (List Expr))) (List Int)
+  (measure (struct es))
+  (match es
+    (Nil "")
+    ((Cons e rest) (append_int " " (append_int (ge_show e) (ge_shows rest))))))
+
+(fn hx_asg_show ((asg (List (Pair Symbol Expr)))) (List Int)
+  (measure (struct asg))
+  (match asg
+    (Nil "")
+    ((Cons (Pair x v) rest)
+     (append_int
+       " "
+       (append_int
+         (chars_of_sym x)
+         (append_int "=" (append_int (ge_show v) (hx_asg_show rest))))))))
+
+;; ---- verdict counters ----------------------------------------------------------
+;; laws pass ref symref vac stuck skip symp symu syme symn
+
+(type HTot (HTot Int Int Int Int Int Int Int Int Int Int Int))
+
+(fn ht_z () HTot (HTot 0 0 0 0 0 0 0 0 0 0 0))
+
+(fn ht_add ((a HTot) (b HTot)) HTot
+  (match a
+    ((HTot a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11)
+     (match b
+       ((HTot b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11)
+        (HTot
+          (+ a1 b1)
+          (+ a2 b2)
+          (+ a3 b3)
+          (+ a4 b4)
+          (+ a5 b5)
+          (+ a6 b6)
+          (+ a7 b7)
+          (+ a8 b8)
+          (+ a9 b9)
+          (+ a10 b10)
+          (+ a11 b11)))))))
+
+(fn hx_gr_delta ((gv GrV)) HTot
+  (match gv
+    ((GrSkip _) (HTot 1 0 0 0 0 0 1 0 0 0 0))
+    ((GrRef _ _ _) (HTot 1 0 1 0 0 0 0 0 0 0 0))
+    ((GrVac _ _) (HTot 1 0 0 0 1 0 0 0 0 0 0))
+    ((GrStuck _ _) (HTot 1 0 0 0 0 1 0 0 0 0 0))
+    ((GrPass _) (HTot 1 1 0 0 0 0 0 0 0 0 0))))
+
+(fn hx_sym_delta ((sv SyV)) HTot
+  (match sv
+    ((SyProv) (HTot 0 0 0 0 0 0 0 1 0 0 0))
+    ((SyRef) (HTot 0 0 0 1 0 0 0 0 0 0 0))
+    ((SyUnd) (HTot 0 0 0 0 0 0 0 0 1 0 0))
+    ((SyErr _) (HTot 0 0 0 0 0 0 0 0 0 1 0))
+    ((SyNa) (HTot 0 0 0 0 0 0 0 0 0 0 1))))
+
+(fn hx_kv ((k (List Int)) (n Int) (rest (List Int))) (List Int)
+  (append_int k (append_int (show_int n) rest)))
+
+(fn ht_nums ((t HTot)) (List Int)
+  (match t
+    ((HTot laws pass ref symref vac stuck skip symp symu syme symn)
+     (hx_kv
+       " LAWS "
+       laws
+       (hx_kv
+         " PASS "
+         pass
+         (hx_kv
+           " REF "
+           ref
+           (hx_kv
+             " SYMREF "
+             symref
+             (hx_kv
+               " VAC "
+               vac
+               (hx_kv
+                 " STUCK "
+                 stuck
+                 (hx_kv
+                   " SKIP "
+                   skip
+                   (hx_kv
+                     " SYMP "
+                     symp
+                     (hx_kv
+                       " SYMU "
+                       symu
+                       (hx_kv " SYME " syme (hx_kv " SYMN " symn "\n"))))))))))))))
+
+;; ---- per-law report lines -------------------------------------------------------
+
+(fn hx_gr_line ((name Symbol) (gv GrV)) (List Int)
+  (match gv
+    ((GrSkip msg)
+     (append_int
+       "HUNT SKIP "
+       (append_int (chars_of_sym name) (append_int " " (append_int msg "\n")))))
+    ((GrRef asg lv rv)
+     (append_int
+       "HUNT REFUTED "
+       (append_int
+         (chars_of_sym name)
+         (append_int
+           " AT"
+           (append_int
+             (hx_asg_show asg)
+             (append_int
+               " LHS "
+               (append_int
+                 (ge_show lv)
+                 (append_int " RHS " (append_int (ge_show rv) "\n")))))))))
+    ((GrVac filt pstuck)
+     (append_int
+       "HUNT VACUOUS "
+       (append_int
+         (chars_of_sym name)
+         (hx_kv " FILTERED " filt (hx_kv " PSTUCK " pstuck "\n")))))
+    ((GrStuck k pass)
+     (append_int
+       "HUNT STUCK "
+       (append_int (chars_of_sym name) (hx_kv " " k (hx_kv " PASS " pass "\n")))))
+    ((GrPass _) "")))
+
+(fn hx_sym_line ((name Symbol) (sv SyV)) (List Int)
+  (match sv
+    ((SyRef)
+     (append_int "HUNT SYMREFUTED " (append_int (chars_of_sym name) "\n")))
+    ((SyErr msg)
+     (append_int
+       "HUNT SYMERR "
+       (append_int (chars_of_sym name) (append_int " " (append_int msg "\n")))))
+    ((SyProv) "")
+    ((SyUnd) "")
+    ((SyNa) "")))
+
+;; ground counterexample against a symbolic PROOF is an engine
+;; contradiction — the G3 discipline says that's a hard failure
+(fn hx_g3_bad ((gv GrV) (sv SyV)) Bool
+  (match gv
+    ((GrRef _ _ _)
+     (match sv
+       ((SyProv) True)
+       ((SyRef) False)
+       ((SyUnd) False)
+       ((SyErr _) False)
+       ((SyNa) False)))
+    ((GrSkip _) False)
+    ((GrVac _ _) False)
+    ((GrStuck _ _) False)
+    ((GrPass _) False)))
+
+;; ---- one law, end to end ---------------------------------------------------------
+
+(fn hx_law ((m Module) (name Symbol) (g Goal) (w World)) (Pair HTot World)
+  (match g
+    ((Goal ps prems concl)
+     (let ((gv (hx_ground_v m ps prems concl)) (sv (hx_sym m name g)))
+       (if (hx_g3_bad gv sv)
+         (Pair
+           (ht_z)
+           (exit
+             1
+             (write
+               (append_int
+                 "HUNT G3 FAIL: ground refuted, symbolically proven: "
+                 (append_int (chars_of_sym name) "\n"))
+               w)))
+         (Pair
+           (ht_add (hx_gr_delta gv) (hx_sym_delta sv))
+           (write (hx_sym_line name sv) (write (hx_gr_line name gv) w))))))))
+
+;; ---- decl walk: every claimed theorem of a file ----------------------------------
+
+(fn hx_goals ((ds (List Decl))) (List (Pair Symbol SExpr))
+  (measure (struct ds))
+  (match ds
+    (Nil Nil)
+    ((Cons d rest)
+     (match d
+       ((DReq r) (Cons (Pair (req_name r) (req_goal r)) (hx_goals rest)))
+       ((DClaim c) (Cons (Pair (claim_name c) (claim_goal c)) (hx_goals rest)))
+       ((DAxiom _) (hx_goals rest))
+       ((DFul _) (hx_goals rest))))))
+
+(fn hx_laws_loop
+  ((m Module)
+   (path (List Int))
+   (gctx RCtx)
+   (gs (List (Pair Symbol SExpr)))
+   (ft HTot)
+   (w World))
+  (Pair HTot World)
+  (measure (struct gs))
+  (match gs
+    (Nil
+      (Pair
+        ft
+        (write (append_int "HUNT DONE " (append_int path (ht_nums ft))) w)))
+    ((Cons (Pair n gsx) rest)
+     (match (parse_goal_r m gctx gsx)
+       (None
+         (hx_laws_loop
+           m
+           path
+           gctx
+           rest
+           (ht_add ft (HTot 1 0 0 0 0 0 1 0 0 0 0))
+           (write
+             (append_int
+               "HUNT SKIP "
+               (append_int (chars_of_sym n) " goal does not parse here\n"))
+             w)))
+       ((Some g)
+        (match (hx_law m n g w)
+          ((Pair d w2) (hx_laws_loop m path gctx rest (ht_add ft d) w2))))))))
+
+(fn hx_file ((m Module) (path (List Int)) (w World)) (Pair HTot World)
+  (match (read_file path w)
+    ((Pair osrc w2)
+     (match osrc
+       (None
+         (Pair
+           (ht_z)
+           (exit
+             1
+             (write
+               (append_int "HUNT FAIL: cannot read " (append_int path "\n"))
+               w2))))
+       ((Some src)
+        (match (parse_decls src (module_ctors m) False)
+          (None
+            (Pair
+              (ht_z)
+              (exit
+                1
+                (write
+                  (append_int "HUNT FAIL: decl phase " (append_int path "\n"))
+                  w2))))
+          ((Some ds)
+           (let
+             ((w3 (write (append_int "HUNT FILE " (append_int path "\n")) w2)))
+             (hx_laws_loop
+               m
+               path
+               (file_rctx m path src)
+               (hx_goals ds)
+               (ht_z)
+               w3)))))))))
+
+;; ---- the sweep: task data ----------------------------------------------------------
+;; The proven std surface. Interfaces first (requirements — the public
+;; contracts), then the in-closure impl files (claims — the internal
+;; lemma surface). Target-variant impls (mem.wasm/mem.x86/rng.wasm/
+;; str.wasm) cite model closures this object root does not carry; their
+;; claims are OUT OF SCOPE here (recorded in SEARCH.md §8).
+
+(fn hunt_files () (List (List Int))
+  (list
+    "std/arith/mod.req.shard"
+    "std/bits/mod.req.shard"
+    "std/bytes/mod.req.shard"
+    "std/div/mod.req.shard"
+    "std/list/mod.req.shard"
+    "std/map/mod.req.shard"
+    "std/mem/mod.req.shard"
+    "std/nat/mod.req.shard"
+    "std/order/mod.req.shard"
+    "std/rng/mod.req.shard"
+    "std/sha256/mod.req.shard"
+    "std/str/mod.req.shard"
+    "std/word/mod.req.shard"
+    "std/arith/arith.shard"
+    "std/bits/bits.shard"
+    "std/bytes/bytes.shard"
+    "std/div/div.shard"
+    "std/list/list.shard"
+    "std/map/map.shard"
+    "std/mem/mem.shard"
+    "std/nat/nat.shard"
+    "std/rng/rng.shard"
+    "std/sha256/sha256.shard"
+    "std/str/str.shard"
+    "std/str/str.rep.shard"
+    "std/str/utf8.shard"
+    "std/word/word.shard"))
+
+(fn hx_sweep ((m Module) (fs (List (List Int))) (tot HTot) (w World)) World
+  (measure (struct fs))
+  (match fs
+    (Nil (write (append_int "HUNT TOTAL" (ht_nums tot)) w))
+    ((Cons f rest)
+     (match (hx_file m f w)
+       ((Pair ft w2) (hx_sweep m rest (ht_add tot ft) w2))))))
+
+(fn main ((w World)) World
+  (match (load_run_module "tools/search/hunt_obj.shard" w)
+    ((Pair om w2)
+     (match om
+       (None (exit 1 (write "HUNT FAIL: object closure load\n" w2)))
+       ((Some m)
+        (match (get_args w2)
+          ((Pair as w3)
+           (match as
+             (Nil (hx_sweep m (hunt_files) (ht_z) w3))
+             ((Cons p rest)
+              (match rest
+                (Nil (hx_sweep m (Cons p Nil) (ht_z) w3))
+                ((Cons _ _) (exit 2 (write "usage: hunt [FILE]\n" w3)))))))))))))
