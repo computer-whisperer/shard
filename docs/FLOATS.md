@@ -35,6 +35,17 @@ User rulings already on record from the design discussions of
   in the NaN-quotient sense means bit-preservation and
   no-branching-on-payload, NEVER width (guard against misreading;
   see §6).
+- **No numeric type parameters — the Word lesson (2nd-round ruling).**
+  The early Word arc made width a generic type parameter and died
+  quickly: the language wasn't — and still isn't — ready for numeric
+  type parameters affecting resulting types and function behaviors,
+  and the residue is std/word's parallel per-width definitions. The
+  float construction stays VALUE-parametric: format descriptors are
+  ordinary record values in the core, and static format distinction
+  comes from thin per-format opaque surface modules, never from
+  type-level indices (§3a). The arc must not require kernel or
+  type-system growth — this is a standing design constraint, not a
+  preference.
 - **Honest-caveat framing carries over from MEMORY.md**: hardware
   constraints enter through models with 1:1 high/low behavior;
   lowering attaches honest caveats. For floats the caveat surface is
@@ -165,6 +176,76 @@ hardware's truth lives.
 instructions (or short fixup sequences where L3 quirks demand:
 min/max on x86, float→int fixups). The bridge obligations are §4's
 two tiers.
+
+
+## 3a. The parametric construction: format-as-value, types at the surface
+
+How L1's parametricity is realized without numeric type parameters
+(the Word-lesson ruling, rulings block above). Resolves what was
+open decision §13.1.
+
+**The core is value-parametric.** The descriptor is an ordinary
+record value — `(make Fmt EW MW HAS-INF HAS-NAN)` — and every core
+function takes it as its first argument: `(fadd fmt x y)`. The value
+view `(Fin s m e) | (Inf s) | NaN` is ONE format-independent ADT;
+the format enters only through the well-formedness predicate
+`(fwf fmt x)`. Every core theorem quantifies the descriptor with
+`ew ≥ 1, mw ≥ 1`-class premises. Nothing here is new language:
+claims already quantify over ADT values, premises exist, induction
+over m/e is ordinary Int measure work. Precedent: ACL2's RTL corpus
+(formats as value arguments in a logic with no static types at all);
+Flocq's prec/emax are section values with hypotheses, not type
+indices.
+
+**Surfaces are thin per-format opaque modules** (std/f64, std/f32,
+std/bf16, …). Each declares its opaque type via the existing
+`(refine …)` mechanism — the view refined by `(fwf FMT ·)` with FMT
+a ground constant inside the module — and each op is a one-line
+defining equation: `(f32_add x y) = (fadd F32FMT x y)`. Surface
+lemmas are derived from the core theorems by instantiation +
+citation (the defining-equation weaning technique). Consumers get
+statically distinct types (mixing formats is a type error) and
+NEVER see a descriptor. A new format costs about a page. If the
+adapter layer ever grates at format-zoo scale, it is exactly the
+shape a loader expansion (records-arc precedent) or a prove-regen
+pass can generate — named option, not built speculatively.
+
+**Duplication accounting vs the Word residue**: definitions and
+proofs live ONCE in the core; per-format cost is one-line adapters
+plus mechanically-instantiated lemmas. The Word failure duplicated
+the definitions and the proofs per width; this construction
+duplicates neither.
+
+**The three-tier proof ladder** — the value-level design's decisive
+advantage; type-level parametrics has no equivalent retreat:
+
+1. **Fully parametric** (descriptor quantified) — proven once for
+   all formats. Requires the `2^k` algebra kit (symbolic-exponent
+   monotonicity/product laws over std/bits' shl_pow2 layer) — a
+   NAMED R1/R2 infrastructure item; rounding proofs live and die on
+   power-of-two arithmetic.
+2. **Fmt-ground, value-symbolic** — instantiate the descriptor, keep
+   the operands symbolic. Every `2^EW`-flavored obstacle becomes a
+   literal, farkas and compute get traction, and the statement is
+   still exactly the per-format theorem the surface module needs.
+   The workhorse retreat: no theorem is ever hostage to a nasty
+   parametric proof, and retreating changes nothing architecturally.
+3. **Fully ground** — the exhaustive toy-format gates (§10).
+
+The tier-1 bridge theorems (§4) are naturally tier-2 here: only
+f32/f64 have hardware ops, so the lowering-facing proofs are
+fmt-ground from the start.
+
+**Lowering sees no parametricity.** Surface ops are distinct symbols
+with ground descriptors — instruction selection and the §6 layout
+are static, and the descriptor is consumed at proof/build time,
+never surviving to runtime (the WORD fragment's pinned-literal-spine
+precedent, LOWERING.md §6ah).
+
+Out-of-scope note, recorded once: this construction is arguably how
+std/word wants to be refounded someday (value-parametric core over
+(W, S), thin per-width surfaces); the float arc proves the pattern
+first. Not this ledger's scope.
 
 
 ## 4. The bridge: two tiers, one pin
@@ -312,13 +393,14 @@ cheapest.
   consumer.
 - **R1 — L1 parametric model + named instances.** rnd laws
   (monotonicity, idempotence on representables, tie behavior),
-  exhaustive toy-format gates, probe grids on F32/F64 samples. Gate:
-  exhaustive toy pass + corpus diff-clean.
+  exhaustive toy-format gates, probe grids on F32/F64 samples. The
+  `2^k` algebra kit (§3a tier 1) starts here. Gate: exhaustive toy
+  pass + corpus diff-clean.
 - **R2 — L2 bit-level model.** pack/unpack bijection (up to NaN
   class), computable ops ⊑ L1, toy-format exhaustive at the bit
   level. This is the arc's heavy proof rung (the Binary.v analogue).
-- **R3 — surface + literals + hex printing.** Opaque surface types
-  over the L2 representations; exact literal pipeline; `to_bits`
+- **R3 — surface + literals + hex printing.** The thin per-format
+  opaque surface modules per §3a; exact literal pipeline; `to_bits`
   canonicalization per §5.
 - **R4 — wasm lowering.** f32/f64 fragments, tier-1 quotient
   theorems against the wasm model, tier-2 V8 gates (six-gate
@@ -368,11 +450,10 @@ traps.
 
 ## 13. Open decision points
 
-1. **Surface former shape**: type-level parametric former à la
-   `(Word W S)` — `(Float EW MW …)` — vs dir-module instances
-   (std/f32, std/f64, …) over one parametric core. The Word
-   precedent cuts both ways post-revocation; decide at R3 with the
-   generics/BuildCtx story in view.
+1. **Surface former shape** — RESOLVED 2026-07-11 (2nd round): NO
+   type-level former; value-parametric core + thin per-format opaque
+   surface modules. See §3a and the Word-lesson ruling in the
+   rulings block.
 2. **float→Int out-of-range**: saturating (lean) vs checked/partial.
    Ratification decides.
 3. **Dyadic fragment home**: std/float-internal now; std/dyadic
