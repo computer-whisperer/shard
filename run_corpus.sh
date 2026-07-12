@@ -38,6 +38,7 @@ TARGETS=(
   std/rat/rat.shard
   examples/rat_demo.shard
   std/float/float.shard
+  std/float/kit.shard
   examples/float_val_compute.shard
   examples/bits_demo.shard
   std/axiom_scope_rejects.shard
