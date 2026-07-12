@@ -20,13 +20,6 @@ BUILDS=(
   examples/lowbuild_x86loopcall.sh
   examples/lowbuild_x86intloop.sh
   "tools/build/build.sh examples/build_products.shard"
-  "examples/lowbuild_bin_x86.sh examples/arglen_src.shard examples/arglen_x86_out.shard"
-  "examples/lowbuild_bin_x86.sh examples/bytesum_src.shard examples/bytesum_x86_out.shard"
-  "examples/lowbuild_bin_x86.sh examples/echoarg_src.shard examples/echoarg_x86_out.shard"
-  "examples/lowbuild_bin_x86.sh examples/upcase_src.shard examples/upcase_x86_out.shard"
-  "examples/lowbuild_bin_x86.sh examples/parse_src.shard examples/parse_x86_out.shard"
-  "examples/lowbuild_bin_x86.sh examples/add_src.shard examples/add_x86_out.shard"
-  "examples/lowbuild_bin_x86.sh examples/addw_src.shard examples/addw_x86_out.shard"
   "examples/lowbuild_x86div.sh"
   "examples/lowbuild_x86itoa.sh"
 )

@@ -469,6 +469,53 @@ sibling products already ran — per-(stage,inputs) dedup by content
 address is the natural fix and rides D-acct-style digests, not new
 order vocabulary.
 
+**Rung 1, slice 3 — the bin ladder (2026-07-11).** The seven x86 bin
+products join the products file (11 products total); the 212-line
+lowbuild_bin_x86.sh is retired. Two architectural pieces landed with
+it:
+
+- **The plan fixpoint.** A bin's engine vectors (BNOARG/BVEC/BVEC2
+  lines with expected exit + stdout) are DERIVED at build time by
+  lowbuild binelf, so their orders cannot be known statically. The
+  driver's plan phase now emits only orders whose capture file is
+  missing, and the wrapper loops plan→execute until the plan is
+  empty: round 1 runs the static ladder (which lands be.txt), round 2
+  reads be.txt and emits one RUN per vector, round 3 is empty →
+  verify. The same mechanism is capture-level incrementality for
+  free: re-running a failed build inside a kept capture dir re-plans
+  only what's missing.
+- **@file argv tokens.** Engine vectors carry arbitrary-byte
+  arguments (the 300-char MAXLEN pool entry); argv rides
+  space-separated order lines. The executor gained exactly one
+  substitution: a token `@FILE` becomes FILE's contents as ONE
+  argument — byte-moving, content-blind (the driver writes the arg
+  bytes at plan time via write_file). NUL is excluded by execve
+  itself.
+
+The bin verify ladder: regen; schema; kernel ×2 (the BIN acceptance
+line — g_klog generalized to a wanted-prefix parameter); byte tie as
+XMOD/TIE set equality + EFF + manifest (bytetie invoked with SRC for
+the declared effect surface); the SURFACE gate (accepts rc + the
+"(glue-covered)" marker); plan-engine (sieve/cc/CPU); binelf (IMGTIE
+over be.txt — g_imgtie generalized to a capture-tag parameter — plus
+hexbin/chmod); and the engine proper: be.txt re-parsed in verify,
+each vector's captured exit code and stdout compared against
+EXIT/OUT expectations in-process, plus the §49 pool-coverage fence
+(WORLD bins: no-arg leg carries OUT, BVEC2 pool ≥ 5).
+
+Gates: driver green end-to-end (11 products, 2m54 serial — silicon
+vector runs included); negative probe (bin src against wrong OUT)
+fails regen/bytetie/surface/imgtie/hexbin with exit 1;
+lowbuild_all.sh fully green at 17 entries; corpus FAIL set unchanged.
+
+**Promoted to next: cross-product parallelism.** The aggregate's wall
+time doubled (1m27→2m58) because the driver entry serializes what
+were previously concurrent script entries. Orders are product-indexed
+and independent by construction; the wrapper can execute order groups
+(by capture prefix) concurrently without any driver change. That —
+plus the sibling-product dedup note above — is the natural slice 4,
+ahead of rung 2's mod.build re-founding.
+
 ## 12. Non-goals, stated once
 
 No config dialect — profiles are shard values. No distinguished

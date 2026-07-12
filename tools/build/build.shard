@@ -436,37 +436,159 @@
         (list "chmod" "+x" (capf cap i "a.elf")))
       (run_line (capf cap i "run.out") (list (capf cap i "a.elf"))))))
 
-;; None = unsupported kind/target (refuse loudly at the caller)
+;; the bin static ladder (gates 1-5 + binelf materialization) — the
+;; per-vector engine orders are emitted once be.txt exists (round 2)
+(fn orders_bin_x86_static
+  ((i Int)
+   (src (List Int))
+   (out (List Int))
+   (cap (List Int))
+   (ev (List Int))
+   (check (List (List Int))))
+  (List Int)
+  (cat
+    (list
+      (run_line
+        (capf cap i "gen.log")
+        (list ev "run" "tools/x86gen/x86gen.shard" src (capf cap i "raw")))
+      (run_line
+        (capf cap i "fmt")
+        (list ev "run" "tools/shardfmt/shardfmt.shard" (capf cap i "raw")))
+      (run_line
+        (capf cap i "schema.log")
+        (list ev "run" "tools/lowcheck/lowcheck.shard" out))
+      (run_line (capf cap i "kout.log") (append check (Cons out Nil)))
+      (run_line (capf cap i "ksrc.log") (append check (Cons src Nil)))
+      (run_line
+        (capf cap i "acc.log")
+        (list ev "run" "tools/lowcheck/accepts.shard" src out))
+      (run_line
+        (capf cap i "plan.txt")
+        (list ev "run" "tools/lowbuild/lowbuild.shard" "lib" src out "x86"))
+      (run_line
+        (capf cap i "tie.txt")
+        (list ev "run" "tools/bytetie/bytetie.shard" out src))
+      (run_line
+        (capf cap i "man.log")
+        (list
+          ev
+          "run"
+          "tools/lowcheck/manifest.shard"
+          (capf cap i "plan.txt")
+          "models/x86/x86.shard"
+          out))
+      (run_line
+        (capf cap i "cpu_plan.txt")
+        (list "grep" "-v" "^ARTIFACT" (capf cap i "plan.txt")))
+      (run_line
+        (capf cap i "cc.log")
+        (list "cc" "-O2" "-o" (capf cap i "x86_diff") "examples/x86_diff.c"))
+      (run_line
+        (capf cap i "eng.log")
+        (list (capf cap i "x86_diff") (capf cap i "cpu_plan.txt")))
+      (run_line
+        (capf cap i "be.txt")
+        (list ev "run" "tools/lowbuild/lowbuild.shard" "binelf" src out))
+      (run_line
+        (capf cap i "hexbin.log")
+        (list
+          ev
+          "run"
+          "tools/build/build.shard"
+          "hexbin"
+          (capf cap i "be.txt")
+          "ELF"
+          (capf cap i "a.bin")))
+      (run_line
+        (capf cap i "chmod.log")
+        (list "chmod" "+x" (capf cap i "a.bin"))))))
+
+;; bin orders: static ladder + (once be.txt exists) the vector runs
+(fn orders_bin_x86
+  ((i Int)
+   (src (List Int))
+   (out (List Int))
+   (cap (List Int))
+   (ev (List Int))
+   (check (List (List Int)))
+   (w World))
+  (Pair (Option (List Int)) World)
+  (match (read_file (capf cap i "be.txt") w)
+    ((Pair None w1)
+     (Pair (Some (orders_bin_x86_static i src out cap ev check)) w1))
+    ((Pair (Some beb) w1)
+     (match (bvparse beb)
+       (None (Pair None w1))
+       ((Some bvs)
+        (match (vec_orders cap i 0 bvs w1)
+          ((Pair None w2) (Pair None w2))
+          ((Pair (Some vos) w2)
+           (Pair
+             (Some
+               (append_int (orders_bin_x86_static i src out cap ev check) vos))
+             w2))))))))
+
+;; None = unsupported kind/target OR bad derived vectors (refuse loudly)
 (fn orders_bp
-  ((i Int) (b BP) (cap (List Int)) (ev (List Int)) (check (List (List Int))))
-  (Option (List Int))
+  ((i Int)
+   (b BP)
+   (cap (List Int))
+   (ev (List Int))
+   (check (List (List Int)))
+   (w World))
+  (Pair (Option (List Int)) World)
   (match b
     ((BP k t src out)
      (if (sym_eq k (quote lib))
        (if (sym_eq t (quote wasm))
-         (Some (orders_lib_wasm i src out cap ev check))
-       (if (sym_eq t (quote x86)) (Some (orders_lib_x86 i src out cap ev check))
-       (if (sym_eq t (quote x86elf)) (Some (orders_lib_x86elf i src out cap ev))
-       None)))
-       None))))
+         (Pair (Some (orders_lib_wasm i src out cap ev check)) w)
+       (if (sym_eq t (quote x86))
+         (Pair (Some (orders_lib_x86 i src out cap ev check)) w)
+       (if (sym_eq t (quote x86elf))
+         (Pair (Some (orders_lib_x86elf i src out cap ev)) w)
+         (Pair None w))))
+     (if (sym_eq k (quote bin))
+       (if (sym_eq t (quote x86)) (orders_bin_x86 i src out cap ev check w)
+       (Pair None w))
+       (Pair None w))))))
 
 (fn orders_all
   ((i Int)
    (bs (List BP))
    (cap (List Int))
    (ev (List Int))
-   (check (List (List Int))))
-  (Option (List Int))
+   (check (List (List Int)))
+   (w World))
+  (Pair (Option (List Int)) World)
   (measure (struct bs))
   (match bs
-    (Nil (Some ""))
+    (Nil (Pair (Some "") w))
     ((Cons b t)
-     (match (orders_bp i b cap ev check)
-       (None None)
-       ((Some os)
-        (match (orders_all (+ i 1) t cap ev check)
-          (None None)
-          ((Some rest) (Some (append_int os rest)))))))))
+     (match (orders_bp i b cap ev check w)
+       ((Pair None w1) (Pair None w1))
+       ((Pair (Some os) w1)
+        (match (orders_all (+ i 1) t cap ev check w1)
+          ((Pair None w2) (Pair None w2))
+          ((Pair (Some rest) w2) (Pair (Some (append_int os rest)) w2))))))))
+
+;; drop orders whose capture already exists (the plan fixpoint: round 2
+;; adds the vector runs, round 3 emits nothing)
+(fn keep_missing ((ls (List (List Int))) (w World)) (Pair (List Int) World)
+  (measure (struct ls))
+  (match ls
+    (Nil (Pair "" w))
+    ((Cons l t)
+     (match l
+       (Nil (keep_missing t w))
+       ((Cons _ _)
+        (match (tok2 l)
+          (None (keep_missing t w))
+          ((Some capfile)
+           (match (read_file capfile w)
+             ((Pair (Some _) w1) (keep_missing t w1))
+             ((Pair None w1)
+              (match (keep_missing t w1)
+                ((Pair rest w2) (Pair (cat (list l "\n" rest)) w2))))))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; verify — read captures back, judge the ladder
@@ -536,7 +658,7 @@
    (i Int)
    (tag (List Int))
    (gate (List Int))
-   (want_lib Bool)
+   (want_pfx (List Int))
    (w World))
   (Pair (List (List Int)) World)
   (match (rc_gate cap i tag gate w)
@@ -547,10 +669,11 @@
          (match (slurp (capf cap i tag) w1)
            ((Pair logb w2)
             (if (contains (lastn logb) " 0 failed")
-              (if want_lib
-                (if (has_lib_line (blines logb)) (Pair Nil w2)
-                (Pair (Cons (vfail i gate "no LIB acceptance line") Nil) w2))
-                (Pair Nil w2))
+              (match want_pfx
+                (Nil (Pair Nil w2))
+                ((Cons _ _)
+                 (if (has_pfx_line (blines logb) want_pfx) (Pair Nil w2)
+                 (Pair (Cons (vfail i gate "acceptance line missing") Nil) w2))))
               (Pair
                 (Cons
                   (vfail
@@ -560,13 +683,13 @@
                   Nil)
                 w2)))))))))
 
-(fn has_lib_line ((ls (List (List Int)))) Bool
+(fn has_pfx_line ((ls (List (List Int))) (pfx (List Int))) Bool
   (measure (struct ls))
   (match ls
     (Nil False)
-    ((Cons h t) (if (swith h "LIB ") True (has_lib_line t)))))
+    ((Cons h t) (if (swith h pfx) True (has_pfx_line t pfx)))))
 
-;; first "MOD <name> <hex>" line -> Some (Pair name hex)
+;; first "MOD;; first "MOD <name> <hex>" line -> Some (Pair name hex)
 (fn find_mod ((ls (List (List Int)))) (Option (Pair (List Int) (List Int)))
   (measure (struct ls))
   (match ls
@@ -655,9 +778,9 @@
     ((Pair g1 w1)
      (match (rc_gate cap i "schema.log" "schema" w1)
        ((Pair g2 w2)
-        (match (g_klog cap i "kout.log" "kernel(out)" False w2)
+        (match (g_klog cap i "kout.log" "kernel(out)" "" w2)
           ((Pair g3a w3)
-           (match (g_klog cap i "ksrc.log" "kernel(src)" True w3)
+           (match (g_klog cap i "ksrc.log" "kernel(src)" "LIB " w3)
              ((Pair g3b w4)
               (match (rc_gate cap i "acc.log" "accepts" w4)
                 ((Pair g4 w5)
@@ -739,8 +862,9 @@
                 Nil)))))))))))
 
 ;; the ELF image tie: rc gates, then the pure judgment
-(fn g_imgtie ((cap (List Int)) (i Int) (w World)) (Pair (List (List Int)) World)
-  (match (rc_gate cap i "elf.txt" "imgtie(elf)" w)
+(fn g_imgtie ((cap (List Int)) (i Int) (etag (List Int)) (w World))
+  (Pair (List (List Int)) World)
+  (match (rc_gate cap i etag "imgtie(elf)" w)
     ((Pair m1 w1)
      (match m1
        ((Cons _ _) (Pair m1 w1))
@@ -750,7 +874,7 @@
             (match m2
               ((Cons _ _) (Pair m2 w2))
               (Nil
-                (match (slurp (capf cap i "elf.txt") w2)
+                (match (slurp (capf cap i etag) w2)
                   ((Pair elfb w3)
                    (match (slurp (capf cap i "tie.txt") w3)
                      ((Pair tieb w4) (Pair (imgtie_judge i elfb tieb) w4))))))))))))))
@@ -794,7 +918,254 @@
                             ((Pair gotb w5)
                              (Pair (elfrun_judge i elfb gotb) w5))))))))))))))))))
 
+;; ---------------------------------------------------------------------------
+;; bin vectors — the BNOARG/BVEC/BVEC2 grammar of lowbuild binelf
+;; ---------------------------------------------------------------------------
+
+;; one engine vector: decoded args (0..2), expected exit, expected stdout
+(type BV (BV (List (List Int)) Int (List Int)))
+
+;; hex field: "-" = empty bytes
+(fn dh ((h (List Int))) (Option (List Int))
+  (if (ceq h "-") (Some "") (unhex h)))
+
+;; the (EXIT n [OUT h]) tail shared by all three line forms
+(fn bv_tail ((args (List (List Int))) (toks (List (List Int)))) (Option BV)
+  (match toks
+    ((Cons ex (Cons n rest))
+     (if (ceq ex "EXIT")
+       (match (atoi n)
+         (None None)
+         ((Some nv)
+          (match rest
+            (Nil (Some (BV args nv "")))
+            ((Cons ou (Cons h Nil))
+             (if (ceq ou "OUT")
+               (match (dh h)
+                 (None None)
+                 ((Some ob) (Some (BV args nv ob))))
+               None))
+            (_ None))))
+       None))
+    (_ None)))
+
+(fn bv_of_line ((l (List Int))) (Option BV)
+  (match (tokens l)
+    ((Cons k rest)
+     (if (ceq k "BNOARG") (bv_tail Nil rest)
+     (if (ceq k "BVEC")
+       (match rest
+         ((Cons a t)
+          (match (dh a)
+            (None None)
+            ((Some ab) (bv_tail (Cons ab Nil) t))))
+         (_ None))
+     (if (ceq k "BVEC2")
+       (match rest
+         ((Cons a (Cons b t))
+          (match (dh a)
+            (None None)
+            ((Some ab)
+             (match (dh b)
+               (None None)
+               ((Some bb) (bv_tail (Cons ab (Cons bb Nil)) t))))))
+         (_ None))
+       None))))
+    (_ None)))
+
+(fn bvs_of ((ls (List (List Int)))) (Option (List BV))
+  (measure (struct ls))
+  (match ls
+    (Nil (Some Nil))
+    ((Cons h t)
+     (match (bv_of_line h)
+       (None None)
+       ((Some v)
+        (match (bvs_of t)
+          (None None)
+          ((Some vs) (Some (Cons v vs)))))))))
+
+(fn bvapp ((a (List BV)) (b (List BV))) (List BV)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (bvapp t b)))))
+
+;; the vector list in run order: the no-arg leg, BVEC lines, BVEC2 lines
+(fn bvparse ((beb (List Int))) (Option (List BV))
+  (match (bvs_of (lines_pfx (blines beb) "BNOARG "))
+    (None None)
+    ((Some n0)
+     (match (bvs_of (lines_pfx (blines beb) "BVEC "))
+       (None None)
+       ((Some v1)
+        (match (bvs_of (lines_pfx (blines beb) "BVEC2 "))
+          (None None)
+          ((Some v2) (Some (bvapp n0 (bvapp v1 v2))))))))))
+
+(fn llen ((ls (List (List Int)))) Int
+  (measure (struct ls))
+  (match ls
+    (Nil 0)
+    ((Cons _ t) (+ 1 (llen t)))))
+
+;; capture tags for vector k
+(fn vtag ((k Int)) (List Int) (cat (list "v" (show_int k) ".out")))
+
+(fn atag ((k Int) (j Int)) (List Int)
+  (cat (list "v" (show_int k) ".a" (show_int j))))
+
+;; write the arg files for one vector; returns the @file argv tokens
+(fn wargs
+  ((cap (List Int)) (i Int) (k Int) (j Int) (args (List (List Int))) (w World))
+  (Pair (Option (List (List Int))) World)
+  (measure (struct args))
+  (match args
+    (Nil (Pair (Some Nil) w))
+    ((Cons a t)
+     (match (write_file (capf cap i (atag k j)) a w)
+       ((Pair False w1) (Pair None w1))
+       ((Pair True w1)
+        (match (wargs cap i k (+ j 1) t w1)
+          ((Pair None w2) (Pair None w2))
+          ((Pair (Some rest) w2)
+           (Pair (Some (Cons (append_int "@" (capf cap i (atag k j))) rest)) w2))))))))
+
+;; per-vector RUN orders (a.bin executed with @file args)
+(fn vec_orders ((cap (List Int)) (i Int) (k Int) (bvs (List BV)) (w World))
+  (Pair (Option (List Int)) World)
+  (measure (struct bvs))
+  (match bvs
+    (Nil (Pair (Some "") w))
+    ((Cons (BV args _ _) t)
+     (match (wargs cap i k 1 args w)
+       ((Pair None w1) (Pair None w1))
+       ((Pair (Some argv) w1)
+        (match (vec_orders cap i (+ k 1) t w1)
+          ((Pair None w2) (Pair None w2))
+          ((Pair (Some rest) w2)
+           (Pair
+             (Some
+               (append_int
+                 (run_line
+                   (capf cap i (vtag k))
+                   (Cons (capf cap i "a.bin") argv))
+                 rest))
+             w2))))))))
+
+;; pure judgment: the pool-coverage fence (docs/X86.md §49)
+(fn pool_judge ((i Int) (beb (List Int))) (List (List Int))
+  (match (lines_pfx (blines beb) "BVEC2 ")
+    (Nil Nil)
+    ((Cons b2h b2t)
+     (if (has_out_line (Cons b2h b2t))
+       (cat2
+         (match (find_line (blines beb) "BNOARG ")
+           (None (Cons (vfail i "engine" "no BNOARG line") Nil))
+           ((Some nl)
+            (if (contains nl " OUT ") Nil
+            (Cons (vfail i "engine" "pool coverage: no-arg leg lacks OUT") Nil))))
+         (if (le 5 (llen (Cons b2h b2t))) Nil
+         (Cons (vfail i "engine" "pool coverage: BVEC2 pool shrank") Nil)))
+       Nil))))
+
+(fn has_out_line ((ls (List (List Int)))) Bool
+  (measure (struct ls))
+  (match ls
+    (Nil False)
+    ((Cons h t) (if (contains h " OUT ") True (has_out_line t)))))
+
+;; per-vector verify: exit code == EXIT, captured stdout == OUT bytes
+(fn vec_judge ((cap (List Int)) (i Int) (k Int) (bvs (List BV)) (w World))
+  (Pair (List (List Int)) World)
+  (measure (struct bvs))
+  (match bvs
+    (Nil (Pair Nil w))
+    ((Cons (BV _ wantx wanto) t)
+     (match (rc_of cap i (vtag k) w)
+       ((Pair rcv w1)
+        (match (slurp (capf cap i (vtag k)) w1)
+          ((Pair gotb w2)
+           (match (vec_judge cap i (+ k 1) t w2)
+             ((Pair rest w3)
+              (Pair
+                (cat2
+                  (if (int_eq rcv wantx)
+                    (if (ceq gotb wanto) Nil
+                    (Cons
+                      (vfail
+                        i
+                        "engine"
+                        (cat (list "vector " (show_int k) " stdout differs")))
+                      Nil))
+                    (Cons
+                      (vfail
+                        i
+                        "engine"
+                        (cat
+                          (list
+                            "vector "
+                            (show_int k)
+                            " exit "
+                            (show_int rcv)
+                            " expected "
+                            (show_int wantx))))
+                      Nil))
+                  rest)
+                w3))))))))))
+
+;; the surface gate: accepts rc + the glue-covered marker (bin arm)
+(fn g_surface ((cap (List Int)) (i Int) (w World))
+  (Pair (List (List Int)) World)
+  (match (rc_gate cap i "acc.log" "surface" w)
+    ((Pair m1 w1)
+     (match m1
+       ((Cons _ _) (Pair m1 w1))
+       (Nil
+         (match (slurp (capf cap i "acc.log") w1)
+           ((Pair accb w2)
+            (if (contains accb "(glue-covered)") (Pair Nil w2)
+            (Pair
+              (Cons
+                (vfail i "surface" "entry surface exceeds the glue contract")
+                Nil)
+              w2)))))))))
+
+;; the engine gate for a bin: parse be.txt, judge every vector + the pool
+(fn g_binrun ((cap (List Int)) (i Int) (w World)) (Pair (List (List Int)) World)
+  (match (rc_gate cap i "hexbin.log" "binelf(hexbin)" w)
+    ((Pair m1 w1)
+     (match m1
+       ((Cons _ _) (Pair m1 w1))
+       (Nil
+         (match (rc_gate cap i "chmod.log" "binelf(chmod)" w1)
+           ((Pair m2 w2)
+            (match m2
+              ((Cons _ _) (Pair m2 w2))
+              (Nil
+                (match (slurp (capf cap i "be.txt") w2)
+                  ((Pair beb w3)
+                   (match (bvparse beb)
+                     (None
+                       (Pair
+                         (Cons
+                           (vfail i "engine" "be.txt vectors do not parse")
+                           Nil)
+                         w3))
+                     ((Some bvs)
+                      (match bvs
+                        (Nil
+                          (Pair
+                            (Cons
+                              (vfail i "engine" "be.txt has no vectors")
+                              Nil)
+                            w3))
+                        ((Cons _ _)
+                         (match (vec_judge cap i 0 bvs w3)
+                           ((Pair vm w4) (Pair (cat2 (pool_judge i beb) vm) w4))))))))))))))))))
+
 ;; all six gates for one x86 lib product
+
 (fn v_lib_x86
   ((cap (List Int)) (i Int) (src (List Int)) (out (List Int)) (w World))
   (Pair (List (List Int)) World)
@@ -802,9 +1173,9 @@
     ((Pair g1 w1)
      (match (rc_gate cap i "schema.log" "schema" w1)
        ((Pair g2 w2)
-        (match (g_klog cap i "kout.log" "kernel(out)" False w2)
+        (match (g_klog cap i "kout.log" "kernel(out)" "" w2)
           ((Pair g3a w3)
-           (match (g_klog cap i "ksrc.log" "kernel(src)" True w3)
+           (match (g_klog cap i "ksrc.log" "kernel(src)" "LIB " w3)
              ((Pair g3b w4)
               (match (rc_gate cap i "acc.log" "accepts" w4)
                 ((Pair g4 w5)
@@ -835,10 +1206,58 @@
   (Pair (List (List Int)) World)
   (match (g_regen cap i out w)
     ((Pair g1 w1)
-     (match (g_imgtie cap i w1)
+     (match (g_imgtie cap i "elf.txt" w1)
        ((Pair g2 w2)
         (match (g_elfrun cap i w2)
           ((Pair g3 w3) (Pair (cat2 g1 (cat2 g2 g3)) w3))))))))
+
+;; the six bin gates: regen, certs (schema/kernel/tie/manifest/EFF),
+;; surface, plan-engine, binelf (IMGTIE + materialization), engine
+(fn v_bin_x86
+  ((cap (List Int)) (i Int) (src (List Int)) (out (List Int)) (w World))
+  (Pair (List (List Int)) World)
+  (match (g_regen cap i out w)
+    ((Pair g1 w1)
+     (match (rc_gate cap i "schema.log" "schema" w1)
+       ((Pair g2 w2)
+        (match (g_klog cap i "kout.log" "kernel(out)" "" w2)
+          ((Pair g3a w3)
+           (match (g_klog cap i "ksrc.log" "kernel(src)" "BIN " w3)
+             ((Pair g3b w4)
+              (match (g_xtie cap i w4)
+                ((Pair g4 w5)
+                 (match (g_surface cap i w5)
+                   ((Pair g5 w6)
+                    (match
+                      (rc_gate cap i "cpu_plan.txt" "plan-engine(sieve)" w6)
+                      ((Pair g6a w7)
+                       (match (rc_gate cap i "cc.log" "plan-engine(cc)" w7)
+                         ((Pair g6b w8)
+                          (match (rc_gate cap i "eng.log" "plan-engine" w8)
+                            ((Pair g6c w9)
+                             (match (g_imgtie cap i "be.txt" w9)
+                               ((Pair g7 w10)
+                                (match (g_binrun cap i w10)
+                                  ((Pair g8 w11)
+                                   (Pair
+                                     (cat2
+                                       g1
+                                       (cat2
+                                         g2
+                                         (cat2
+                                           g3a
+                                           (cat2
+                                             g3b
+                                             (cat2
+                                               g4
+                                               (cat2
+                                                 g5
+                                                 (cat2
+                                                   g6a
+                                                   (cat2
+                                                     g6b
+                                                     (cat2 g6c (cat2 g7 g8))))))))))
+                                     w11))))))))))))))))))))))))
 
 (fn v_bp ((cap (List Int)) (i Int) (b BP) (w World))
   (Pair (List (List Int)) World)
@@ -849,7 +1268,10 @@
        (if (sym_eq t (quote x86)) (v_lib_x86 cap i src out w)
        (if (sym_eq t (quote x86elf)) (v_lib_x86elf cap i out w)
        (Pair (Cons (vfail i "plan" "unsupported target") Nil) w))))
-       (Pair (Cons (vfail i "plan" "unsupported kind") Nil) w)))))
+     (if (sym_eq k (quote bin))
+       (if (sym_eq t (quote x86)) (v_bin_x86 cap i src out w)
+       (Pair (Cons (vfail i "plan" "unsupported target") Nil) w))
+       (Pair (Cons (vfail i "plan" "unsupported kind") Nil) w))))))
 
 (fn v_all ((cap (List Int)) (i Int) (bs (List BP)) (w World))
   (Pair (List (List Int)) World)
@@ -892,9 +1314,12 @@
     ((Pair None w1)
      (fail "could not load/decode the products file (build_products)" w1))
     ((Pair (Some bs) w1)
-     (match (orders_all 0 bs cap ev check)
-       (None (fail "unsupported kind/target in products (v1: lib wasm)" w1))
-       ((Some os) (exit 0 (write os w1)))))))
+     (match (orders_all 0 bs cap ev check w1)
+       ((Pair None w2)
+        (fail "unsupported kind/target or bad derived vectors" w2))
+       ((Pair (Some os) w2)
+        (match (keep_missing (blines os) w2)
+          ((Pair os2 w3) (exit 0 (write os2 w3)))))))))
 
 (fn run_verify ((prods (List Int)) (cap (List Int)) (w World)) World
   (match (load_products prods w)
