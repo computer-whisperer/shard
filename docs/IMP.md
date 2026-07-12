@@ -672,6 +672,21 @@ composed (every claim closed on the first checker run):
 - REMAINING I2c-2: (c) the extension loop twin + sched_mem + its
   pass/worker, (d) the list bridge to sha_sched (the reversal
   algebra).
+- I2c-2c design note (settled; the idiom pinned by ish_phase_pin):
+  the extension body's σ-trees wrap each loaded word several times
+  across the four store positions, so a monolithic pass lemma would
+  pay ~48 occurrence-chased conversion rewrites — and the walk
+  offers no stick point between a word's last load and its σ
+  statements, so mid-walk folding cannot intervene. The resolution
+  is the CONTINUATION-PHASE IDIOM: split the body at fold points
+  into phase lemmas of the shape istmts(S^N fl, ⟨literal spine ·
+  tail⟩, lc, m) = istmts(S^(N−k) fl, tail, lc′, m′) — the spine
+  written literally with a quantified tail (istmts sticks at the
+  symbolic tail on both sides; fuel steps by exactly the spine
+  length; pinned closing by compute/refl). Each phase folds its own
+  word at single occurrence. This is also the block tier's
+  composition machinery (three sequenced loops = three phase
+  rewrites).
 
 ## 7. Non-goals, stated once
 
