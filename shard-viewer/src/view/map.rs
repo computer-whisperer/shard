@@ -313,14 +313,24 @@ pub(crate) fn canvas(project: &Project, p: &ViewParams, cache: Option<&MapCache>
     // datastructure definitions — the answer to "I'm zoomed into one fn and
     // its types are defined three files away". Overlay, not topology: it
     // follows hover/selection freely without touching the committed plane.
+    // It shares the flow-innards gate: far out, fn slots are name slabs and
+    // the map is being read as a map — a definition card popping up on every
+    // hover sweep is noise there. The deck earns its screen space exactly
+    // when the reading zoom does (zoom ≥ flow_z, the same threshold that
+    // turns the innards on).
     //
     // The stack wrapper is UNCONDITIONAL (blank deck slot when nothing is
-    // focused): a node's `computed_id` is its full tree path, and the
-    // viewport's pan/zoom + fit-takeover state lives under that id. Toggling
-    // the wrapper with hover changed the viewport's path every time the deck
-    // appeared, so the armed Contain policy stopped recognizing the user's
-    // takeover and snapped to fit — hover on/off oscillated the zoom.
-    let deck = shape_deck(project, focus).unwrap_or_else(blank);
+    // focused or the zoom hasn't earned it): a node's `computed_id` is its
+    // full tree path, and the viewport's pan/zoom + fit-takeover state lives
+    // under that id. Toggling the wrapper with hover changed the viewport's
+    // path every time the deck appeared, so the armed Contain policy stopped
+    // recognizing the user's takeover and snapped to fit — hover on/off
+    // oscillated the zoom.
+    let deck = if zoom >= p.flow_z {
+        shape_deck(project, focus).unwrap_or_else(blank)
+    } else {
+        blank()
+    };
     stack([
         viewport,
         row([spacer(), deck])
