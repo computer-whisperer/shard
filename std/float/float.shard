@@ -460,3 +460,282 @@
 (claim frnd_roundtrip_f8e5m2
   (goal () () (= (rt_fmt (fmt_f8e5m2)) True))
   (steps ((compute both)) refl))
+
+;; --- the operations: rnd . exact (rung R1 slice 3) -----------------------------------
+;; Finite arithmetic is DEFINED as frnd of the exact rational result; the
+;; NaN/Inf special-case tables follow IEEE under the canonical-NaN quotient
+;; (FLOATS.md §5: ONE NaN, no sign, no payload). The only finite special
+;; cases are the IEEE zero-sign rules, which the exact value forgets:
+;; same-signed zero sums keep the sign, exact-zero products/quotients carry
+;; the XOR sign. Signed underflow-to-zero and cancellation-to-+0 fall out of
+;; frnd already.
+
+(fn bxorb ((a Bool) (b Bool)) Bool (if a (if b False True) b))
+
+;; negation and absolute value are exact (sign flips on the view; NaN sticks).
+(fn fneg ((x FVal)) FVal
+  (match x
+    ((Fin s m e) (Fin (if s False True) m e))
+    ((FInf s) (FInf (if s False True)))
+    (FNaN FNaN)))
+
+(fn fabs ((x FVal)) FVal
+  (match x
+    ((Fin s m e) (Fin False m e))
+    ((FInf s) (FInf False))
+    (FNaN FNaN)))
+
+;; addition. Inf + Inf of opposite signs is NaN; both-zero sums keep the
+;; sign only when the signs agree ((-0)+(-0) = -0, else +0); everything
+;; else finite is frnd of the exact cross-denominator sum (cancellation of
+;; nonzero operands lands on frnd's exact-zero arm = +0, per IEEE RNE).
+(fn fadd ((f Fmt) (x FVal) (y FVal)) FVal
+  (match x
+    ((Fin s1 m1 e1)
+     (match y
+       ((Fin s2 m2 e2)
+        (if (int_eq m1 0)
+          (if (int_eq m2 0) (Fin (if s1 s2 False) 0 (fmt_emin f))
+          (frnd
+            f
+            (+
+              (* (fval_num f x) (fval_den f y))
+              (* (fval_num f y) (fval_den f x)))
+            (* (fval_den f x) (fval_den f y))))
+          (frnd
+            f
+            (+
+              (* (fval_num f x) (fval_den f y))
+              (* (fval_num f y) (fval_den f x)))
+            (* (fval_den f x) (fval_den f y)))))
+       ((FInf s2) y)
+       (FNaN FNaN)))
+    ((FInf s1)
+     (match y
+       ((Fin s2 m2 e2) x)
+       ((FInf s2) (if (beq s1 s2) x FNaN))
+       (FNaN FNaN)))
+    (FNaN FNaN)))
+
+;; subtraction: x - y = x + (-y), exactly (fneg is exact; the zero-sign and
+;; Inf tables come out IEEE-correct through fadd's).
+(fn fsub ((f Fmt) (x FVal) (y FVal)) FVal (fadd f x (fneg y)))
+
+;; multiplication. Inf * 0 is NaN; Inf otherwise carries the XOR sign; an
+;; exact-zero finite product carries the XOR sign (the value forgets it);
+;; signed underflow-to-zero falls out of frnd.
+(fn fmul ((f Fmt) (x FVal) (y FVal)) FVal
+  (match x
+    ((Fin s1 m1 e1)
+     (match y
+       ((Fin s2 m2 e2)
+        (if (int_eq m1 0) (Fin (bxorb s1 s2) 0 (fmt_emin f))
+        (if (int_eq m2 0) (Fin (bxorb s1 s2) 0 (fmt_emin f))
+        (frnd
+          f
+          (* (fval_num f x) (fval_num f y))
+          (* (fval_den f x) (fval_den f y))))))
+       ((FInf s2) (if (int_eq m1 0) FNaN (FInf (bxorb s1 s2))))
+       (FNaN FNaN)))
+    ((FInf s1)
+     (match y
+       ((Fin s2 m2 e2) (if (int_eq m2 0) FNaN (FInf (bxorb s1 s2))))
+       ((FInf s2) (FInf (bxorb s1 s2)))
+       (FNaN FNaN)))
+    (FNaN FNaN)))
+
+;; division. 0/0 and Inf/Inf are NaN; x/0 diverges through fovf — the
+;; XOR-signed Inf when the format has one, else NaN (the OCP f8e4m3fn rule),
+;; else the clamp; 0/y and finite/Inf are the XOR-signed zero; the finite
+;; quotient sign-normalizes the divisor into the numerator so frnd sees
+;; d > 0. (Caught by the f8e4m3fn exhaustive gate: an unconditional FInf
+;; here is not well-formed for no-inf formats.)
+(fn fdiv ((f Fmt) (x FVal) (y FVal)) FVal
+  (match x
+    ((Fin s1 m1 e1)
+     (match y
+       ((Fin s2 m2 e2)
+        (if (int_eq m2 0) (if (int_eq m1 0) FNaN (fovf f (bxorb s1 s2)))
+        (if (int_eq m1 0) (Fin (bxorb s1 s2) 0 (fmt_emin f))
+        (if (lt (fval_num f y) 0)
+          (frnd
+            f
+            (- 0 (* (fval_num f x) (fval_den f y)))
+            (* (fval_den f x) (- 0 (fval_num f y))))
+          (frnd
+            f
+            (* (fval_num f x) (fval_den f y))
+            (* (fval_den f x) (fval_num f y)))))))
+       ((FInf s2) (Fin (bxorb s1 s2) 0 (fmt_emin f)))
+       (FNaN FNaN)))
+    ((FInf s1)
+     (match y
+       ((Fin s2 m2 e2) (FInf (bxorb s1 s2)))
+       ((FInf s2) FNaN)
+       (FNaN FNaN)))
+    (FNaN FNaN)))
+
+;; --- ground pins: the ops ------------------------------------------------------------
+
+;; exact arithmetic through the rounder.
+(claim fadd_f32_one_one
+  (goal () ()
+    (=
+      (fadd (fmt_f32) (Fin False 8388608 0) (Fin False 8388608 0))
+      (Fin False 8388608 1)))
+  (steps ((compute both)) refl))
+(claim fadd_toy_exact
+  (goal () ()
+    (= (fadd (fmt_toy) (Fin False 4 -1) (Fin False 4 -2)) (Fin False 6 -1)))
+  (steps ((compute both)) refl))
+;; inexact: 1.75 + 0.0625 rounds back down to 1.75 on the toy grid.
+(claim fadd_toy_inexact
+  (goal () ()
+    (= (fadd (fmt_toy) (Fin False 7 0) (Fin False 1 -2)) (Fin False 7 0)))
+  (steps ((compute both)) refl))
+;; cancellation of nonzero operands is +0 (RNE).
+(claim fsub_toy_cancel
+  (goal () ()
+    (= (fsub (fmt_toy) (Fin False 5 0) (Fin False 5 0)) (Fin False 0 -2)))
+  (steps ((compute both)) refl))
+;; the zero-sign table: same-signed zero sums keep the sign, mixed is +0.
+(claim fadd_toy_negzeros
+  (goal () ()
+    (= (fadd (fmt_toy) (Fin True 0 -2) (Fin True 0 -2)) (Fin True 0 -2)))
+  (steps ((compute both)) refl))
+(claim fadd_toy_mixed_zeros
+  (goal () ()
+    (= (fadd (fmt_toy) (Fin False 0 -2) (Fin True 0 -2)) (Fin False 0 -2)))
+  (steps ((compute both)) refl))
+;; Inf tables under the canonical-NaN quotient.
+(claim fadd_toy_inf_fin
+  (goal () () (= (fadd (fmt_toy) (FInf False) (Fin False 4 0)) (FInf False)))
+  (steps ((compute both)) refl))
+(claim fadd_toy_inf_clash
+  (goal () () (= (fadd (fmt_toy) (FInf False) (FInf True)) FNaN))
+  (steps ((compute both)) refl))
+(claim fsub_toy_inf_self
+  (goal () () (= (fsub (fmt_toy) (FInf False) (FInf False)) FNaN))
+  (steps ((compute both)) refl))
+
+;; multiplication: the 1.5 * 1.5 tie lands on the even 2.0.
+(claim fmul_toy_tie
+  (goal () ()
+    (= (fmul (fmt_toy) (Fin False 6 0) (Fin False 6 0)) (Fin False 4 1)))
+  (steps ((compute both)) refl))
+;; exact-zero products carry the XOR sign.
+(claim fmul_toy_zero_sign
+  (goal () ()
+    (= (fmul (fmt_toy) (Fin False 0 -2) (Fin True 4 0)) (Fin True 0 -2)))
+  (steps ((compute both)) refl))
+;; signed underflow-to-zero: (-1/16) * (1/4) is -1/64 -> -0.
+(claim fmul_toy_under_sign
+  (goal () ()
+    (= (fmul (fmt_toy) (Fin True 1 -2) (Fin False 4 -2)) (Fin True 0 -2)))
+  (steps ((compute both)) refl))
+(claim fmul_toy_inf_zero
+  (goal () () (= (fmul (fmt_toy) (FInf False) (Fin False 0 -2)) FNaN))
+  (steps ((compute both)) refl))
+(claim fmul_toy_inf_neg
+  (goal () () (= (fmul (fmt_toy) (FInf False) (Fin True 4 0)) (FInf True)))
+  (steps ((compute both)) refl))
+
+;; division: F32 1/3 through the op equals the frnd pin; the negative-divisor
+;; path sign-normalizes exactly.
+(claim fdiv_f32_third
+  (goal () ()
+    (=
+      (fdiv (fmt_f32) (Fin False 8388608 0) (Fin False 12582912 1))
+      (Fin False 11184811 -2)))
+  (steps ((compute both)) refl))
+(claim fdiv_toy_negdiv
+  (goal () ()
+    (= (fdiv (fmt_toy) (Fin False 4 0) (Fin True 4 1)) (Fin True 4 -1)))
+  (steps ((compute both)) refl))
+(claim fdiv_toy_by_zero
+  (goal () () (= (fdiv (fmt_toy) (Fin True 4 0) (Fin False 0 -2)) (FInf True)))
+  (steps ((compute both)) refl))
+(claim fdiv_toy_zero_zero
+  (goal () () (= (fdiv (fmt_toy) (Fin False 0 -2) (Fin False 0 -2)) FNaN))
+  (steps ((compute both)) refl))
+(claim fdiv_toy_fin_inf
+  (goal () () (= (fdiv (fmt_toy) (Fin True 4 0) (FInf False)) (Fin True 0 -2)))
+  (steps ((compute both)) refl))
+(claim fdiv_toy_inf_inf
+  (goal () () (= (fdiv (fmt_toy) (FInf False) (FInf True)) FNaN))
+  (steps ((compute both)) refl))
+
+;; --- the exhaustive op gates (FLOATS.md §10: every pair, whole formats) --------------
+;; For EVERY pair of well-formed views (finites incl. both zeros, both Infs,
+;; NaN): all four ops produce WELL-FORMED results (the closure sweep — a
+;; rounding bug that ever emits a malformed view fails here), and fadd/fmul
+;; are commutative.
+
+(fn ev_keep ((f Fmt) (s Bool) (m Int) (e Int) (acc (List FVal))) (List FVal)
+  (if (fwf_fin f m e) (Cons (Fin s m e) acc) acc))
+
+(fn ev_row ((f Fmt) (s Bool) (k Int) (e Int) (acc (List FVal))) (List FVal)
+  (measure k (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (le k 0) (if (int_eq k 0) (ev_keep f s 0 e acc) acc)
+  (ev_row f s (- k 1) e (ev_keep f s k e acc))))
+
+(fn ev_rows ((f Fmt) (s Bool) (j Int) (acc (List FVal))) (List FVal)
+  (measure j (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (le j 0)
+    (if (int_eq j 0) (ev_row f s (- (fpow2 (+ (mw_of f) 1)) 1) (fmt_emin f) acc)
+    acc)
+    (ev_rows
+      f
+      s
+      (- j 1)
+      (ev_row f s (- (fpow2 (+ (mw_of f) 1)) 1) (+ (fmt_emin f) j) acc))))
+
+(fn enum_views ((f Fmt)) (List FVal)
+  (let
+    ((base
+       (ev_rows
+         f
+         False
+         (- (fmt_emax f) (fmt_emin f))
+         (ev_rows f True (- (fmt_emax f) (fmt_emin f)) Nil))))
+    (let
+      ((withinf
+         (if (hinf_of f) (Cons (FInf False) (Cons (FInf True) base)) base)))
+      (if (hnan_of f) (Cons FNaN withinf) withinf))))
+
+;; one pair: closure for all four ops, commutativity for add and mul.
+(fn ops_ok1 ((f Fmt) (x FVal) (y FVal)) Bool
+  (if (fwf f (fadd f x y))
+    (if (fval_eqb (fadd f x y) (fadd f y x))
+      (if (fwf f (fsub f x y))
+        (if (fwf f (fmul f x y))
+          (if (fval_eqb (fmul f x y) (fmul f y x)) (fwf f (fdiv f x y)) False)
+          False)
+        False)
+      False)
+    False))
+
+(fn ops_row ((f Fmt) (x FVal) (ys (List FVal))) Bool
+  (measure (struct ys))
+  (match ys
+    (Nil True)
+    ((Cons y rest) (if (ops_ok1 f x y) (ops_row f x rest) False))))
+
+(fn ops_all ((f Fmt) (xs (List FVal)) (ys (List FVal))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil True)
+    ((Cons x rest) (if (ops_row f x ys) (ops_all f rest ys) False))))
+
+(fn ops_gate ((f Fmt)) Bool (let ((vs (enum_views f))) (ops_all f vs vs)))
+
+;; the toy: every pair of its 59 views, all four ops, closed and commutative.
+(claim ops_gate_toy
+  (goal () () (= (ops_gate (fmt_toy)) True))
+  (steps ((compute both)) refl))
+
+;; f8e4m3fn: the FN partition under ops — overflow lands on NaN, never on
+;; the carve-out slot; every pair of its views, closed and commutative.
+(claim ops_gate_f8e4m3fn
+  (goal () () (= (ops_gate (fmt_f8e4m3fn)) True))
+  (steps ((compute both)) refl))
