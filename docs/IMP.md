@@ -410,6 +410,57 @@ inductions land the M×N kill:
   then mechanization into a cert-emitting generator once the proof
   shape has a second target's confirmation.
 
+**I1c — the x86 leg (2026-07-12).** The second target confirms the
+proof shape; rung I1 is complete:
+
+- **The translator (models/imp/to_x86.shard)**: the register machine
+  gets a PATTERN tier, not to_wasm's postorder scheme — imp locals
+  map to their SysV homes (args then extras on rdi rsi rdx rcx r8
+  r9; xargs zeroes the extras' homes, matching imp's zeroed extras;
+  >6 refuses), ISet compiles to the in-place / mov+bin / RAX-load-
+  scratch shapes tools/x86gen emits (mov+bin fenced against the
+  right operand reading the dst), conditions FUSE (CEq/CLtU/CLeU —
+  no comparison materialization), results compile left-spine into
+  RAX with one R10 right-compound level. Same self-contained label
+  encodings, with the fused guard (XBrIf (CEqz home) 1 — wasm's
+  I32Eqz+BrIf pair is one instruction here).
+- **The width story, second target**: (IWrap 64 e) absorbs
+  unpremised (imp_x_add1w64 — x86's native width), IWrap 32 refuses;
+  the mirror image of the wasm leg. The unwrapped bridges carry the
+  SAME premise shapes in THIS machine's modulus — 2^64 where the
+  wasm leg said 2^32, from the same imp twin. Division refuses in
+  v1 (XDivU's rdx:rax preamble is named growth).
+- **The ties**: add1/add/mix reproduce x86gen's literals byte for
+  byte; the sum loop ties EXACTLY against the generated artifact
+  ((imp2x_fn (il_sum_fn)) = (Some (xi_bsum_func)), epilogue
+  included); the fill loop is the generated loop body (cited by
+  name) plus imp's honest XMovRI RAX 0 result — x86gen's Mem-output
+  template leaves rax accidental. sel/clamp2 don't tie (x86gen's
+  templates deposit through the scratch pool; imp spells the extra
+  local) — they ride their own bridges, the wasm-leg clamp2
+  precedent.
+- **The loop worker bridges (ixw_fill/ixw_bsum)**: the same
+  spec-free inductions, against the register machine. The one new
+  ingredient x86 adds — the RAX load-scratch residue in the exit
+  register file — rides the ix_out adapter's ra argument (0 for the
+  storing loop; the loopkit's xlg_last shape for the reading loop,
+  quantified at entry exactly as the generated worker quantifies
+  it, so the IH binds the re-entry scratch by matching).
+  Proof-idiom note: xlg_last must sit in the stopped computes' stop
+  set — left free, the compute unfolds it into a stuck match on the
+  induction variable and the IH's folded spelling never matches.
+- **Bridges + compositions**: xcall_fn_mem = icall_mem
+  (imp_x_fill/imp_x_bsum); xcomp_lp_fill/xcomp_lp_sum and
+  xcomp_lg_add1 end at THE SAME spec fns (lp_fill, lp_sum, lg_add1)
+  the wasm compositions end at — one spec, one imp twin, one imp
+  pin, two silicon-bound targets, and only the imp ⊑ ISA legs were
+  written twice. The M×N kill, demonstrated across the full matrix.
+- Gates: 3 corpus targets, 3 'check products (driver 51); corpus
+  FAIL-set unchanged at 57. Remaining in I1: mechanization into a
+  cert-emitting generator (both targets' proof shapes now
+  stabilized) — scheduled after the flagship rungs exercise the
+  hand era further.
+
 ## 7. Non-goals, stated once
 
 - imp as a shipped target or public surface — it is an intermediate;

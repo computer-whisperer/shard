@@ -1,0 +1,246 @@
+;;; examples/imp_x86_bridge.shard — imp ⊑ x86, the straight-line and
+;;; branching classes (docs/IMP.md rung I1c). The same claim families
+;;; as the wasm leg (examples/imp_wasm_bridge.shard), against the
+;;; register machine:
+;;;
+;;;   TIES     — the translator's output IS the instruction sequence
+;;;              tools/x86gen produced for the same source fns
+;;;              (lowered_xg_add1/add/mix literals): the left-spine +
+;;;              R10 pattern tier reproduces the generated shapes byte
+;;;              for byte. (sel/clamp2 do NOT tie here: x86gen's
+;;;              let/if templates deposit through the scratch pool
+;;;              directly into RAX, while imp spells the extra local —
+;;;              those twins ride their own bridges instead.)
+;;;   BRIDGES  — xcall_fn over the translated func = icall over the
+;;;              imp twin. THE WIDTH STORY, SECOND TARGET: the range
+;;;              premises are 2^64-bounded here (they were 2^32 on the
+;;;              wasm leg — same imp twin, per-machine modulus), and
+;;;              the IWrap-64 twin bridges UNPREMISED — x86's native
+;;;              width absorbs, exactly as wasm absorbed IWrap 32.
+;;;   COMPOSE  — spec ⊑ imp (rung I0) + imp ⊑ x86 (this file) chain
+;;;              into spec ⊑ x86: the SAME spec fn and the SAME imp
+;;;              pin that closed the wasm tower close the x86 tower
+;;;              (xcomp_lg_add1 vs wcomp_lg_add1 — one twin, two
+;;;              targets; the M×N kill at the scalar tier).
+;;;
+;;; PROOF GATES ONLY (DI2): no engine leg exists at imp; the x86
+;;; artifacts these certs describe are gated by the existing x86
+;;; machinery when they ship.
+
+(import "../kernel/stdlib.shard")
+(import "wasmgen_src.shard")
+(use (:: examples wasmgen_src *))
+(import "../models/imp/imp.shard")
+(use (:: models imp imp *))
+(import "../models/x86/x86.shard")
+(use (:: models x86 x86 *))
+(import "../models/imp/to_x86.shard")
+(use (:: models imp to_x86 *))
+(import "imp_scalar.shard")
+(use (:: examples imp_scalar *))
+
+;; --- the ties: translator output = the direct generator's literals -------------
+
+(claim tie_x_add1
+  (goal () ()
+    (=
+      (imp2x_fn (it_add1_fn))
+      (Some (MkXFunc 1 (list (XMovRR RAX RDI) (XBin XAdd RAX (SImm 1)))))))
+  (steps ((compute both)) refl))
+
+(claim tie_x_add
+  (goal () ()
+    (=
+      (imp2x_fn (it_add_fn))
+      (Some (MkXFunc 2 (list (XMovRR RAX RDI) (XBin XAdd RAX (SReg RSI)))))))
+  (steps ((compute both)) refl))
+
+(claim tie_x_mix
+  (goal () ()
+    (=
+      (imp2x_fn (it_mix_fn))
+      (Some
+        (MkXFunc
+          2
+          (list
+            (XMovRR RAX RDI)
+            (XBin XMul RAX (SImm 2))
+            (XMovRR R10 RSI)
+            (XBin XSub R10 (SReg RDI))
+            (XBin XAdd RAX (SReg R10)))))))
+  (steps ((compute both)) refl))
+
+;; --- the bridges: imp ⊑ x86 -----------------------------------------------------
+
+;; unwrapped add: the range premises appear once more, in THIS
+;; machine's modulus (2^64 where the wasm leg said 2^32)
+(claim imp_x_add1
+  (goal ((x Int) (c Nat) (c2 Nat))
+    ((= (le 0 (+ x 1)) True) (= (lt (+ x 1) 18446744073709551616) True))
+    (=
+      (xcall_fn
+        (S^ 6 c)
+        (MkXModule (list (x_of (imp2x_fn (it_add1_fn)))) 0 0)
+        0
+        (list x))
+      (icall (S c2) (it_prog (it_add1_fn)) 0 (list x))))
+  (chain
+    (steps ((compute both)))
+    (rewrite-with
+      (lemma wrap64_id)
+      lr
+      lhs
+      ((inst x (+ x 1)))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    refl))
+
+;; the gate: branch-conditional premises, fused-condition encoding
+(claim imp_x_sel
+  (goal ((x Int) (y Int) (c Nat) (c2 Nat))
+    ((= (if (int_eq x 0) (le 0 (+ y 1)) True) True)
+     (= (if (int_eq x 0) (lt (+ y 1) 18446744073709551616) True) True)
+     (= (if (int_eq x 0) True (le 0 (* y 2))) True)
+     (= (if (int_eq x 0) True (lt (* y 2) 18446744073709551616)) True))
+    (=
+      (xcall_fn
+        (S^ 30 c)
+        (MkXModule (list (x_of (imp2x_fn (it_sel_fn)))) 0 0)
+        0
+        (list x y))
+      (icall (S^ 8 c2) (it_prog (it_sel_fn)) 0 (list x y))))
+  (chain
+    (steps ((compute both)))
+    (case-on (int_eq x 0) Bool
+      ((case True
+         (chain
+           (steps ((rewrite (hyp True) lr both true ()) (compute both)))
+           (have p0 (= (le 0 (+ y 1)) True)
+             (chain
+               (steps
+                 ((rewrite (premise 0) rl rhs true ())
+                  (rewrite (hyp True) lr rhs true ())
+                  (compute rhs)))
+               refl))
+           (have p1 (= (lt (+ y 1) 18446744073709551616) True)
+             (chain
+               (steps
+                 ((rewrite (premise 1) rl rhs true ())
+                  (rewrite (hyp True) lr rhs true ())
+                  (compute rhs)))
+               refl))
+           (have w2 (= (mod (+ y 1) 18446744073709551616) (+ y 1))
+             (rewrite-with
+               (lemma wrap64_id)
+               lr
+               lhs
+               ((inst x (+ y 1)))
+               ((steps ((rewrite (premise p0) lr lhs true ())) refl)
+                (steps ((rewrite (premise p1) lr lhs true ())) refl))
+               refl))
+           (steps ((rewrite (premise w2) lr lhs true ())))
+           refl))
+       (case False
+         (chain
+           (steps ((rewrite (hyp False) lr both true ()) (compute both)))
+           (have p3 (= (le 0 (* y 2)) True)
+             (chain
+               (steps
+                 ((rewrite (premise 2) rl rhs true ())
+                  (rewrite (hyp False) lr rhs true ())
+                  (compute rhs)))
+               refl))
+           (have p4 (= (lt (* y 2) 18446744073709551616) True)
+             (chain
+               (steps
+                 ((rewrite (premise 3) rl rhs true ())
+                  (rewrite (hyp False) lr rhs true ())
+                  (compute rhs)))
+               refl))
+           (have w5 (= (mod (* y 2) 18446744073709551616) (* y 2))
+             (rewrite-with
+               (lemma wrap64_id)
+               lr
+               lhs
+               ((inst x (* y 2)))
+               ((steps ((rewrite (premise p3) lr lhs true ())) refl)
+                (steps ((rewrite (premise p4) lr lhs true ())) refl))
+               refl))
+           (steps ((rewrite (premise w5) lr lhs true ())))
+           refl))))))
+
+;; the nested gate bridges UNPREMISED (literal arms — no residue on
+;; either side), through the fused CLtU conditions
+(claim imp_x_clamp2
+  (goal ((x Int) (c Nat) (c2 Nat)) ()
+    (=
+      (xcall_fn
+        (S^ 32 c)
+        (MkXModule (list (x_of (imp2x_fn (it_clamp2_fn)))) 0 0)
+        0
+        (list x))
+      (icall (S^ 10 c2) (it_prog (it_clamp2_fn)) 0 (list x))))
+  (chain
+    (steps ((compute both)))
+    (case-on (lt x 10) Bool
+      ((case True
+         (chain
+           (steps ((rewrite (hyp True) lr both true ()) (compute both)))
+           refl))
+       (case False
+         (chain
+           (steps ((rewrite (hyp False) lr both true ()) (compute both)))
+           (case-on (lt x 100) Bool
+             ((case True
+                (chain
+                  (steps ((rewrite (hyp True) lr both true ()) (compute both)))
+                  refl))
+              (case False
+                (chain
+                  (steps ((rewrite (hyp False) lr both true ()) (compute both)))
+                  refl))))))))))
+
+;; --- THE NEUTRALITY SHOWCASE, second target --------------------------------------
+;; The wasm leg absorbed IWrap 32 unpremised (imp_w_add1w); x86 absorbs
+;; IWrap 64 — its own native width — by the same unconditional
+;; equation. Each ISA leg absorbs exactly its machine's wrap; the twin
+;; below is the 64-bit sibling of imp_scalar's it_add1w_fn.
+
+(fn it_add1w64_fn () IFn
+  (MkIFn 1 0 Nil (IWrap 64 (IBin IAdd (ILoc 0) (IConst 1)))))
+
+(claim imp_x_add1w64
+  (goal ((x Int) (c Nat) (c2 Nat)) ()
+    (=
+      (xcall_fn
+        (S^ 6 c)
+        (MkXModule (list (x_of (imp2x_fn (it_add1w64_fn)))) 0 0)
+        0
+        (list x))
+      (icall (S c2) (it_prog (it_add1w64_fn)) 0 (list x))))
+  (steps ((compute both)) refl))
+
+;; --- the composition: the factored tower closes on the second target -------------
+
+;; spec ⊑ x86 through the neutral machine — the SAME spec fn (lg_add1)
+;; and the SAME imp pin (imp_lg_add1) that closed the wasm tower
+(claim xcomp_lg_add1
+  (goal ((x Int) (c Nat))
+    ((= (le 0 (+ x 1)) True) (= (lt (+ x 1) 18446744073709551616) True))
+    (=
+      (xcall_fn
+        (S^ 6 c)
+        (MkXModule (list (x_of (imp2x_fn (it_add1_fn)))) 0 0)
+        0
+        (list x))
+      (Some (lg_add1 x))))
+  (chain
+    (rewrite-with
+      (lemma imp_x_add1)
+      lr
+      lhs
+      ((inst c2 Z))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (rewrite-with (lemma imp_lg_add1) lr lhs ((inst c Z)) ())
+    refl))
