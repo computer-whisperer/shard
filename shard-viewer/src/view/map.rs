@@ -68,6 +68,7 @@ pub(crate) fn legend(flow_z: f32) -> El {
         legend_chip(claim_colors(ClaimKind::Claim, false).0, "claim"),
         legend_chip(claim_colors(ClaimKind::Requirement, false).0, "unmet req"),
         legend_chip(type_colors().0, "type"),
+        legend_chip(orphan_colors().0, "orphan fn"),
         legend_chip(tokens::CARD.mix(tokens::ACCENT, 0.3), "impl-heavy box"),
         legend_chip(tokens::CARD.mix(tokens::WARNING, 0.3), "proof-heavy box"),
         spacer(),
@@ -1013,22 +1014,26 @@ fn fn_el(ctx: &RCtx, fn_idx: usize, (w, h): (f32, f32), abs: (f32, f32)) -> El {
     }
     // The slab: the committed footprint with the fn name at a cartographic
     // (screen-constant) size, clamped into the slot; bare when illegible.
-    let name = &ctx.project.fns[fn_idx].name;
-    let chars = name.chars().count().max(1) as f32;
+    let f = &ctx.project.fns[fn_idx];
+    let chars = f.name.chars().count().max(1) as f32;
     let font = (NAME_PX / ctx.zoom).min(h * 0.45).min(w * 0.92 / (chars * MONO_ADV));
     let body: Vec<El> = if font * ctx.zoom >= LEGIBLE_PX {
-        vec![text(name.clone()).mono().semibold().font_size(font).nowrap_text()]
+        vec![text(f.name.clone()).mono().semibold().font_size(font).nowrap_text()]
     } else {
         Vec::new()
     };
+    // The orphan flag stays on at distance — red specks are exactly how a
+    // triage sweep reads a wide map.
+    let (fill, stroke) =
+        if f.is_orphan() { orphan_colors() } else { (tokens::CARD, tokens::BORDER) };
     column(body)
         .align(Align::Center)
         .justify(Justify::Center)
         .width(Size::Fixed(w))
         .height(Size::Fixed(h))
         .radius(7.0)
-        .fill(tokens::CARD)
-        .stroke(tokens::BORDER)
+        .fill(fill)
+        .stroke(stroke)
         .stroke_width(ctx.hairline())
         .key(format!("fn:{fn_idx}"))
         .tooltip(super::methods::node_tip(ctx.project, fn_idx))
@@ -1577,9 +1582,20 @@ fn flow_card(project: &Project, fn_idx: usize, selected: bool) -> El {
         .tooltip(super::methods::node_tip(project, fn_idx));
     if selected {
         card.fill(tokens::CARD.mix(tokens::ACCENT, 0.18)).stroke(tokens::RING)
+    } else if f.is_orphan() {
+        let (fill, stroke) = orphan_colors();
+        card.fill(fill).stroke(stroke)
     } else {
         card.fill(tokens::CARD).stroke(tokens::BORDER)
     }
+}
+
+/// The triage lens carried over from the old Methods overlay: a fn nothing
+/// calls (and no proof reasons about) is a cut candidate, flagged red at any
+/// zoom — on the full card and on the distant slab alike. Fill/stroke only:
+/// cards are committed-measured, so the lens must never touch geometry.
+fn orphan_colors() -> (Color, Color) {
+    (tokens::CARD.mix(tokens::DESTRUCTIVE, 0.30), tokens::DESTRUCTIVE.mix(tokens::BORDER, 0.35))
 }
 
 /// The fn's parameters as a small column of `name  Type` rows, or `None` for a
