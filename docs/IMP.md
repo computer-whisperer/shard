@@ -643,6 +643,36 @@ it):
   readback = sha_sched's srev_acc/sched_ext shape — the reversal
   algebra, pure list work).
 
+**I2c-2b — the word-copy loop (2026-07-12).** words16's machine half,
+end to end — and the first slice where the stabilized machinery just
+composed (every claim closed on the first checker run):
+
+- **Word grain, not byte grain.** The copy loop moves one WORD per
+  iteration: a Horner load (the round tier's proven shape) and a
+  down-walk store that computes EXACTLY wput's mem_set chain. So the
+  pass lemma's memory effect is literally (wput m wp (wget m p2)) —
+  after the guard ladder and the flatten haves, two all-occurrence
+  RL-rewrites through defining-equation lemmas (wget_be, wput_sets)
+  FOLD the machine's computed trees back into the kit's vocabulary,
+  and the worker aligns against the word-grain denotation copy_wmem
+  with no byte-level reasoning anywhere.
+- **The zero-in/zero-out invariant.** The body re-zeroes its three
+  scratch slots at each iteration's end, and the worker states the
+  initial scratch as literal zeros — so the final locals are UNIFORM
+  in k and no iteration-dependent residue selectors exist (the
+  rt_last lesson, resolved by construction; three statements of
+  honest cost, the perf pass's business later).
+- **The readback theorem** (ish_copy_read): reading the copied
+  window gives the source words, premise = source entirely below
+  destination. Rides the 2a kit exactly as designed: head =
+  copy-below framing + the wput/wget ROUNDTRIP (fed by the new
+  wget range lemmas); tail = IH + window-through-wput framing.
+- Gates: fast-engine 142/0 on the sibling; driver 52 products green;
+  corpus FAIL-set unchanged at 57.
+- REMAINING I2c-2: (c) the extension loop twin + sched_mem + its
+  pass/worker, (d) the list bridge to sha_sched (the reversal
+  algebra).
+
 ## 7. Non-goals, stated once
 
 - imp as a shipped target or public surface — it is an intermediate;
