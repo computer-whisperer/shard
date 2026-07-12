@@ -36,14 +36,19 @@
 (import "../../kernel/module.shard")
 (import "../../kernel/proof.shard")
 (import "../../kernel/reader.shard")
+(import "../../kernel/reduce.shard")
 (import "../../kernel/loader.shard")
 (import "../../kernel/driver.shard")
 (import "../../kernel/canon.shard")
 (import "../../meta/sketch")
 (import "../../meta/invoke")
+(import "../../meta/doc")
+(import "../../meta/spell")
+(import "../../meta/format")
 (import "sym.shard")
 (import "rev.shard")
 (import "catalog.shard")
+(import "render_gate.shard")
 (use (:: kernel term *))
 (use (:: kernel module *))
 (use (:: kernel proof Goal))
@@ -59,21 +64,34 @@
 (use (:: kernel reader req_goal))
 (use (:: kernel reader RCtx))
 (use (:: kernel reader parse_decls))
+(use (:: kernel reader build_module_d))
+(use (:: kernel reader BMRes))
+(use (:: kernel reader BMOk))
+(use (:: kernel reader BMFail))
+(use (:: kernel reduce run_expr))
+(use (:: kernel loader resolve_closure))
 (use (:: kernel loader World))
 (use (:: kernel loader read_file))
+(use (:: kernel loader write_file))
 (use (:: kernel loader get_args))
 (use (:: kernel loader write))
 (use (:: kernel loader exit))
 (use (:: kernel driver file_rctx))
 (use (:: kernel driver parse_goal_r))
 (use (:: kernel driver module_ctors))
+(use (:: kernel driver prelude_ctors))
 (use (:: kernel canon cn_e))
 (use (:: kernel canon CViol))
 (use (:: meta sketch *))
 (use (:: meta invoke *))
+(use (:: meta doc *))
+(use (:: meta spell *))
+(use (:: meta format fmt))
+(use (:: meta format bytes_eq))
 (use (:: tools search sym *))
 (use (:: tools search rev *))
 (use (:: tools search catalog *))
+(use (:: tools search render_gate *))
 
 ;; ---- law extraction: the kernel's own goal seam -----------------------------
 
@@ -780,30 +798,540 @@
                                             (append_int l2 (append_int l3 l4)))
                                           w3)))))))))))))))))))))))))))
 
+;; ---- proof rendering: traces -> replayable claims (slice 5, component 3) ----
+;;
+;; A Proven trace renders as kernel proof text over the ARTIFACT's fns:
+;; TrRefl is (steps ((compute both)) refl); a depth-0 TrSplit is
+;; (case-on BINDER TYPE …) whose leaves rewrite the case fact into
+;; both goal sides first. v1 renders exactly the measured fragment
+;; (the component-2 pins): TrSeq and nested splits refuse LOUDLY —
+;; when a task needs them, that refusal is the feature request. The
+;; claims land in the generated artifact, a corpus CHECK TARGET, so
+;; every Proven verdict REPLAYS through bin/shard_check on every
+;; sweep — G4, continuously.
+
+;; monomorphize a law's binder types at Int (the candidates' element
+;; type; the same ∀-tyvar-instantiates-at-Int license the oracle uses)
+(fn ty_mono ((t Type)) Type
+  (measure (struct t))
+  (match t
+    ((TCon q args) (TCon q (tys_mono args)))
+    ((TVar _) (TCon (qn (quote Int)) Nil))))
+
+(fn tys_mono ((ts (List Type))) (List Type)
+  (measure (struct ts))
+  (match ts
+    (Nil Nil)
+    ((Cons t rest) (Cons (ty_mono t) (tys_mono rest)))))
+
+;; goal binders, monomorphized: ((h Int) (t (List Int)))
+(fn pc_binder ((p Param)) Doc
+  (match p
+    ((Param nm ty)
+     (sp_form (DCat (dsym nm) (DCat (sp) (sp_ty (ty_mono ty)))) Nil))))
+
+(fn pc_binder_list ((ps (List Param))) (List Doc)
+  (measure (struct ps))
+  (match ps
+    (Nil Nil)
+    ((Cons p rest) (Cons (pc_binder p) (pc_binder_list rest)))))
+
+(fn pc_binders ((ps (List Param))) Doc
+  (sp_form (sp_tail_first (pc_binder_list ps)) Nil))
+
+;; slot -> goal binder name: the oracle's binder allocation, replayed
+(fn mk_slotenv ((ps (List Param)) (svs (List SV))) (List (Pair Int Symbol))
+  (measure (struct ps))
+  (match ps
+    (Nil Nil)
+    ((Cons (Param nm _) prest)
+     (match svs
+       (Nil Nil)
+       ((Cons v vrest)
+        (match v
+          ((SVData s) (Cons (Pair s nm) (mk_slotenv prest vrest)))
+          (_ (mk_slotenv prest vrest))))))))
+
+(fn se_name ((s Int) (env (List (Pair Int Symbol)))) (Option Symbol)
+  (measure (struct env))
+  (match env
+    (Nil None)
+    ((Cons (Pair k nm) rest) (if (int_eq k s) (Some nm) (se_name s rest)))))
+
+;; case-field binder names k0 k1 … (introduced by a rendered case-on)
+(fn kname ((i Int)) Symbol (sym_of_chars (append_int "k" (show_int i))))
+
+(fn kfields ((fs (List SV)) (i Int)) (List Doc)
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons _ rest) (Cons (dsym (kname i)) (kfields rest (+ i 1))))))
+
+(type PtR (PtRErr (List Int)) (PtROk Doc))
+
+(type PtL (PtLErr (List Int)) (PtLOk (List Doc)))
+
+;; ---- the REPLAY TWIN: check-mode evaluation decides each leaf ---------------
+;; The oracle evaluated in the open RUN closure; replay is CHECK-side,
+;; where std/list's impl sits behind its module surface. The twin is
+;; the object closure loaded CHECK-MODE (interfaces sealed, the
+;; injected candidate open — same-module at replay), reduced by the
+;; kernel's own reducer: where the twin joins a leaf's goal sides,
+;; compute + refl replays; where it does not, the leaf gets THE
+;; SURFACE-DISCIPLINE TAIL — the interface's own defining-equation
+;; lemma (append_nil_left, the D4 rule table's replay-side
+;; counterpart) rewritten in. Zero-site rewrites fail LOUDLY, so the
+;; tail is emitted exactly where the twin demands it.
+
+(fn tw_fuel () Int 100000)
+
+(fn twin_joins ((mc Module) (lhs Expr) (rhs Expr)) Bool
+  (expr_eq (run_expr mc lhs (tw_fuel)) (run_expr mc rhs (tw_fuel))))
+
+;; substitute an expr for a named FVar (goal binders are FVars)
+(fn fv_sub ((x Symbol) (rep Expr) (e Expr)) Expr
+  (measure (struct e))
+  (match e
+    ((FVar y) (if (sym_eq y x) rep e))
+    ((BVar _) e)
+    ((Ctor q es) (Ctor q (fv_subs x rep es)))
+    ((Call q es) (Call q (fv_subs x rep es)))
+    ((Match s arms) (Match (fv_sub x rep s) (fv_sub_arms x rep arms)))
+    ((Let bs body) (Let (fv_subs x rep bs) (fv_sub x rep body)))
+    ((If c t e2) (If (fv_sub x rep c) (fv_sub x rep t) (fv_sub x rep e2)))
+    ((IntLit _) e)
+    ((SymLit _) e)))
+
+(fn fv_subs ((x Symbol) (rep Expr) (es (List Expr))) (List Expr)
+  (measure (struct es))
+  (match es
+    (Nil Nil)
+    ((Cons e rest) (Cons (fv_sub x rep e) (fv_subs x rep rest)))))
+
+(fn fv_sub_arms ((x Symbol) (rep Expr) (arms (List Arm))) (List Arm)
+  (measure (struct arms))
+  (match arms
+    (Nil Nil)
+    ((Cons (Arm p b) rest)
+     (Cons (Arm p (fv_sub x rep b)) (fv_sub_arms x rep rest)))))
+
+;; a case's scrutinee value as an expr: the ctor over fresh FVars
+;; named like the rendered case binders
+(fn kpat_fields ((fs (List SV)) (i Int)) (List Expr)
+  (measure (struct fs))
+  (match fs
+    (Nil Nil)
+    ((Cons _ rest) (Cons (FVar (kname i)) (kpat_fields rest (+ i 1))))))
+
+(fn kpat ((cq QName) (shfs (List SV))) Expr (Ctor cq (kpat_fields shfs 0)))
+
+;; per case: does the twin join the case-substituted goal sides?
+;; False = the leaf needs the tail.
+(fn case_tails
+  ((mc Module) (binder Symbol) (lhs Expr) (rhs Expr) (cases (List TrCase)))
+  (List Bool)
+  (measure (struct cases))
+  (match cases
+    (Nil Nil)
+    ((Cons (TrCase cq shfs _) rest)
+     (Cons
+       (if
+         (twin_joins
+           mc
+           (fv_sub binder (kpat cq shfs) lhs)
+           (fv_sub binder (kpat cq shfs) rhs))
+         False
+         True)
+       (case_tails mc binder lhs rhs rest)))))
+
+(fn pt_tail () Doc
+  (DStr " (rewrite (lemma append_nil_left) lr both true ()) (compute both)"))
+
+(fn pt_leaf ((under Bool) (tail Bool)) Doc
+  (dcat3
+    (if under (DStr "(steps ((rewrite (hyp 0) lr both true ()) (compute both)")
+    (DStr "(steps ((compute both)"))
+    (if tail (pt_tail) (DStr ""))
+    (DStr ") refl)")))
+
+;; the trace, rendered. v1 is the measured fragment: one depth-0
+;; split at most; TrSeq and nested splits refuse loudly (when a task
+;; needs them, that refusal is the feature request). `tails` is
+;; positional per case, from the replay twin; `topt` is the top-level
+;; leaf's own tail flag.
+(fn pt_trace
+  ((env (List (Pair Int Symbol))) (topt Bool) (tails (List Bool)) (t Tr))
+  PtR
+  (measure (struct t))
+  (match t
+    ((TrRefl) (PtROk (pt_leaf False topt)))
+    ((TrSeq _) (PtRErr "render: TrSeq is unrendered (v1)"))
+    ((TrSplit s ty cases)
+     (match ty
+       ((TCon tq _)
+        (match (se_name s env)
+          (None (PtRErr "render: split slot is not a goal binder"))
+          ((Some nm)
+           (match (pt_cases cases tails)
+             ((PtLErr msg) (PtRErr msg))
+             ((PtLOk cds)
+              (PtROk
+                (sp_form
+                  (dcat3
+                    (DStr "case-on ")
+                    (dsym nm)
+                    ;; the proof DSL takes the bare type NAME; the
+                    ;; checker's type gate re-derives the args from
+                    ;; the scrutinee
+                    (DCat (sp) (dsym (qn_name tq))))
+                  (Cons (sp_form (sp_tail_first cds) Nil) Nil))))))))
+       ((TVar _) (PtRErr "render: split on a type-variable slot"))))))
+
+(fn pt_cases ((cases (List TrCase)) (tails (List Bool))) PtL
+  (measure (struct cases))
+  (match cases
+    (Nil (PtLOk Nil))
+    ((Cons (TrCase cq shfs sub) rest)
+     (match sub
+       ((TrRefl)
+        (match (pt_cases rest (bools_tail tails))
+          ((PtLErr msg) (PtLErr msg))
+          ((PtLOk cds)
+           (PtLOk
+             (Cons
+               (sp_form
+                 (DCat (DStr "case ") (dsym (qn_name cq)))
+                 (match shfs
+                   (Nil (Cons (pt_leaf True (bools_head tails)) Nil))
+                   ((Cons _ _)
+                    (Cons
+                      (sp_form (sp_tail_first (kfields shfs 0)) Nil)
+                      (Cons (pt_leaf True (bools_head tails)) Nil)))))
+               cds)))))
+       ((TrSeq _) (PtLErr "render: TrSeq is unrendered (v1)"))
+       ((TrSplit _ _ _) (PtLErr "render: nested splits are unrendered (v1)"))))))
+
+(fn bools_head ((bs (List Bool))) Bool
+  (match bs
+    (Nil False)
+    ((Cons b _) b)))
+
+(fn bools_tail ((bs (List Bool))) (List Bool)
+  (match bs
+    (Nil Nil)
+    ((Cons _ t) t)))
+
+;; one rendered claim: NAME = <subject>_<law>; the goal is the law's
+;; own equation, heads respelled through the table (the subject fn's
+;; entry maps the interface name to the artifact fn). Leaf tails come
+;; from the replay twin, driven by the ORACLE-namespace law (olhs/orhs
+;; cite the injected candidate, which the twin carries open).
+(fn pc_claim
+  ((mc Module)
+   (tbl (List (Pair QName Symbol)))
+   (subject Symbol)
+   (olw LLaw)
+   (dlw LLaw)
+   (tr Tr))
+  PtR
+  (match olw
+    ((LLaw _ (Goal _ _ (Equation olhs orhs)))
+     (match dlw
+       ((LLaw ln (Goal ps _ (Equation lhs rhs)))
+        (match (sp_e tbl 0 lhs)
+          ((SpRErr msg) (PtRErr msg))
+          ((SpROk ld)
+           (match (sp_e tbl 0 rhs)
+             ((SpRErr msg) (PtRErr msg))
+             ((SpROk rd)
+              (match (binders_svs ps (SvSt 0 Nil))
+                ((Pair svs _)
+                 (match (pc_tails mc (mk_slotenv ps svs) olhs orhs tr)
+                   ((PcTErr msg) (PtRErr msg))
+                   ((PcTOk topt tails)
+                    (match (pt_trace (mk_slotenv ps svs) topt tails tr)
+                      ((PtRErr msg) (PtRErr msg))
+                      ((PtROk pd)
+                       (PtROk
+                         (sp_form
+                           (dcat3
+                             (DStr "claim ")
+                             (DStr (chars_of_sym subject))
+                             (DCat (DStr "_") (dsym ln)))
+                           (Cons
+                             (sp_form
+                               (DStr "goal")
+                               (Cons
+                                 (pc_binders ps)
+                                 (Cons
+                                   (DStr "()")
+                                   (Cons
+                                     (sp_form
+                                       (DStr "=")
+                                       (Cons ld (Cons rd Nil)))
+                                     Nil))))
+                             (Cons pd Nil)))))))))))))))))))
+
+;; the twin's per-leaf decisions for one law's trace
+(type PcT (PcTErr (List Int)) (PcTOk Bool (List Bool)))
+
+(fn pc_tails
+  ((mc Module) (env (List (Pair Int Symbol))) (olhs Expr) (orhs Expr) (tr Tr))
+  PcT
+  (match tr
+    ((TrRefl) (PcTOk (if (twin_joins mc olhs orhs) False True) Nil))
+    ((TrSeq _) (PcTErr "render: TrSeq is unrendered (v1)"))
+    ((TrSplit s _ cases)
+     (match (se_name s env)
+       (None (PcTErr "render: split slot is not a goal binder"))
+       ((Some nm) (PcTOk False (case_tails mc nm olhs orhs cases)))))))
+
+;; the emit-scope table for one subject fn's claims (both Nil/Cons
+;; spellings mapped — the goal's and the type table's agree at run
+;; time, and a duplicate entry is harmless)
+(fn pc_tbl ((m Module) (revq QName) (apq QName) (self Symbol))
+  (List (Pair QName Symbol))
+  (Cons
+    (Pair revq self)
+    (Cons
+      (Pair apq (quote append))
+      (Cons
+        (Pair (qn (quote Nil)) (quote Nil))
+        (Cons
+          (Pair (qn (quote Cons)) (quote Cons))
+          (match (ctor_qn m (quote Nil))
+            (None Nil)
+            ((Some nq)
+             (match (ctor_qn m (quote Cons))
+               (None Nil)
+               ((Some cq)
+                (Cons (Pair nq (quote Nil)) (Cons (Pair cq (quote Cons)) Nil)))))))))))
+
+;; ---- the artifact: fns + rendered claims, emitted and regen-gated -----------
+
+(fn llzip ((a (List LLaw)) (b (List LLaw))) (List (Pair LLaw LLaw))
+  (measure (struct a))
+  (match a
+    (Nil Nil)
+    ((Cons x xr)
+     (match b
+       (Nil Nil)
+       ((Cons y yr) (Cons (Pair x y) (llzip xr yr)))))))
+
+(type PcR (PcRErr (List Int)) (PcROk (List Int)))
+
+;; per law: verdict on the ORACLE law (subject remapped to the
+;; injected candidate), claim rendered from the DISPLAY law (subject
+;; respelled to the artifact fn), leaf tails from the replay twin.
+;; Non-Proven verdicts refuse — only proofs enter the artifact.
+(fn pc_claims
+  ((m2 Module)
+   (mc Module)
+   (rules (List NRule))
+   (tbl (List (Pair QName Symbol)))
+   (subject Symbol)
+   (lps (List (Pair LLaw LLaw))))
+  PcR
+  (measure (struct lps))
+  (match lps
+    (Nil (PcROk ""))
+    ((Cons (Pair olw dlw) rest)
+     (match (law_verdict m2 rules (lw_budget) (lw_efuel) (lw_cfuel) olw)
+       ((LVdErr msg) (PcRErr msg))
+       ((LVdUndec) (PcRErr "render: a claim's verdict is not Proven"))
+       ((LVdRef) (PcRErr "render: a claim's verdict is not Proven"))
+       ((LVdProv tr)
+        (match (pc_claim mc tbl subject olw dlw tr)
+          ((PtRErr msg) (PcRErr msg))
+          ((PtROk d)
+           (match (pc_claims m2 mc rules tbl subject rest)
+             ((PcRErr msg) (PcRErr msg))
+             ((PcROk more)
+              (PcROk
+                (append_int
+                  "\n"
+                  (append_int (sp_bytes d) (append_int "\n" more)))))))))))))
+
+(fn synth_claims
+  ((cs (List (Pair Expr Symbol)))
+   (m Module)
+   (mc0 Module)
+   (rules (List NRule))
+   (revq QName)
+   (apq QName)
+   (lps (List (Pair LLaw LLaw))))
+  PcR
+  (measure (struct cs))
+  (match cs
+    (Nil (PcROk ""))
+    ((Cons (Pair c name) rest)
+     (match (extend_fn m (cat_fd c))
+       (None (PcRErr "render: candidate qname bound in the closure"))
+       ((Some m2)
+        (match (extend_fn mc0 (cat_fd c))
+          (None (PcRErr "render: candidate qname bound in the twin"))
+          ((Some mc)
+           (match (pc_claims m2 mc rules (pc_tbl m revq apq name) name lps)
+             ((PcRErr msg) (PcRErr msg))
+             ((PcROk claims)
+              (match (synth_claims rest m mc0 rules revq apq lps)
+                ((PcRErr msg) (PcRErr msg))
+                ((PcROk more) (PcROk (append_int claims more)))))))))))))
+
+(type SyR (SyRErr (List Int)) (SyROk (List Int)))
+
+;; the whole artifact, canonical: header + rendered fns + rendered
+;; claims, through meta/format's fmt
+(fn synth_bytes
+  ((m Module)
+   (mc0 Module)
+   (apq QName)
+   (revq QName)
+   (rlaws (List LLaw))
+   (rules (List NRule)))
+  SyR
+  (match (cat_grammar (rg_rung) apq)
+    ((CatRErr _) (SyRErr "synth: grammar"))
+    ((CatROk es _)
+     (let ((root (hole 0)) (g (Grammar es)))
+       (match
+         (rg_cands (rg_indices) root g m (cat_battery) (vecs_rev (cat_battery)))
+         ((RgCErr msg) (SyRErr msg))
+         ((RgCOk cs)
+          (match (rg_renders_list cs apq)
+            ((RgLErr msg) (SyRErr msg))
+            ((RgLOk fs)
+             (match
+               (synth_claims
+                 cs
+                 m
+                 mc0
+                 rules
+                 revq
+                 apq
+                 (llzip (rm_laws revq (cat_q) rlaws) rlaws))
+               ((PcRErr msg) (SyRErr msg))
+               ((PcROk claims)
+                (match
+                  (fmt
+                    (append_int (rg_header) (append_int (rg_body fs) claims)))
+                  (None (SyRErr "synth: generated text is not formattable"))
+                  ((Some bytes) (SyROk bytes)))))))))))))
+
+;; the replay twin: the object closure loaded CHECK-MODE
+(type TwR (TwRErr (List Int)) (TwROk Module))
+
+(fn load_twin ((w World)) (Pair TwR World)
+  (match (resolve_closure "tools/search/rev_obj.shard" False w)
+    ((Pair srcs w2)
+     (match
+       (build_module_d
+         srcs
+         (Module Nil Nil Nil (FnTrie None Nil) Nil)
+         (prelude_ctors)
+         1)
+       ((BMOk mc) (Pair (TwROk mc) w2))
+       ((BMFail diag) (Pair (TwRErr diag) w2))))))
+
+;; shared front half: rules + rev qname + the rev laws + the twin
+(type SxR (SxRErr (List Int)) (SxROk (List Int)))
+
+(fn synth_go ((m Module) (apq QName) (w World)) (Pair SxR World)
+  (match (mk_rules m)
+    (None (Pair (SxRErr "synth: append/Nil/Cons not in the closure") w))
+    ((Some rules)
+     (match (find_fn (quote rev) m)
+       (None (Pair (SxRErr "synth: no rev in the closure") w))
+       ((Some revfd)
+        (match revfd
+          ((FnDef revq _ _ _)
+           (match
+             (lx_laws
+               m
+               "std/list/mod.req.shard"
+               (Cons (quote rev_nil) (Cons (quote rev_cons) Nil))
+               w)
+             ((Pair lxr w2)
+              (match lxr
+                ((LxRErr msg) (Pair (SxRErr msg) w2))
+                ((LxROk rlaws)
+                 (match (load_twin w2)
+                   ((Pair twr w3)
+                    (match twr
+                      ((TwRErr msg) (Pair (SxRErr msg) w3))
+                      ((TwROk mc0)
+                       (match (synth_bytes m mc0 apq revq rlaws rules)
+                         ((SyRErr msg) (Pair (SxRErr msg) w3))
+                         ((SyROk bytes) (Pair (SxROk bytes) w3))))))))))))))))))
+
+(fn run_emit ((m Module) (apq QName) (w World)) World
+  (match (synth_go m apq w)
+    ((Pair sx w2)
+     (match sx
+       ((SxRErr msg)
+        (exit 1 (write (append_int "SYNTH FAIL " (append_int msg "\n")) w2)))
+       ((SxROk bytes)
+        (match (write_file (rg_path) bytes w2)
+          ((Pair ok w3)
+           (if ok (write "SYNTH EMITTED\n" w3)
+           (exit 1 (write "SYNTH FAIL: write refused\n" w3))))))))))
+
+(fn run_regen ((m Module) (apq QName) (w World)) World
+  (match (synth_go m apq w)
+    ((Pair sx w2)
+     (match sx
+       ((SxRErr msg)
+        (exit 1 (write (append_int "SYNTH FAIL " (append_int msg "\n")) w2)))
+       ((SxROk bytes)
+        (match (read_file (rg_path) w2)
+          ((Pair ob w3)
+           (match ob
+             (None
+               (exit
+                 1
+                 (write "SYNTH FAIL: no committed artifact (run emit)\n" w3)))
+             ((Some committed)
+              (if (bytes_eq bytes committed) (write "SYNTH REGEN OK\n" w3)
+              (exit
+                1
+                (write
+                  "SYNTH FAIL: regenerated bytes differ from the artifact\n"
+                  w3))))))))))))
+
 ;; ---- CLI ---------------------------------------------------------------------
 
-;; args: none -> the pinned suite (self, g3 at rungs 1 and 2, traces);
-;; "self" -> the self-pin alone; "g3 N" -> one rung; "trace" -> traces
+;; args: none -> the pinned suite (self, g3 at rungs 1 and 2, traces,
+;; artifact regen); "self" -> the self-pin alone; "g3 N" -> one rung;
+;; "trace" -> traces; "emit" -> rewrite the generated artifact
 (fn lw_args ((as (List (List Int))) (m Module) (apq QName) (w World)) World
   (match as
-    (Nil (run_trace m apq (run_g3 m apq 2 (run_g3 m apq 1 (run_self m w)))))
+    (Nil
+      (run_regen
+        m
+        apq
+        (run_trace m apq (run_g3 m apq 2 (run_g3 m apq 1 (run_self m w))))))
     ((Cons a rest)
      (if (int_list_eq a "self")
        (match rest
          (Nil (run_self m w))
-         (_ (exit 2 (write "usage: laws [self | g3 N | trace]\n" w))))
+         (_ (exit 2 (write "usage: laws [self | g3 N | trace | emit]\n" w))))
      (if (int_list_eq a "g3")
        (match rest
          ((Cons ds Nil)
           (match (parse_nat ds)
-            (None (exit 2 (write "usage: laws [self | g3 N | trace]\n" w)))
+            (None
+              (exit 2 (write "usage: laws [self | g3 N | trace | emit]\n" w)))
             ((Some d) (run_g3 m apq d w))))
-         (_ (exit 2 (write "usage: laws [self | g3 N | trace]\n" w))))
+         (_ (exit 2 (write "usage: laws [self | g3 N | trace | emit]\n" w))))
      (if (int_list_eq a "trace")
        (match rest
          (Nil (run_trace m apq w))
-         (_ (exit 2 (write "usage: laws [self | g3 N | trace]\n" w))))
-       (exit 2 (write "usage: laws [self | g3 N | trace]\n" w))))))))
+         (_ (exit 2 (write "usage: laws [self | g3 N | trace | emit]\n" w))))
+     (if (int_list_eq a "emit")
+       (match rest
+         (Nil (run_emit m apq w))
+         (_ (exit 2 (write "usage: laws [self | g3 N | trace | emit]\n" w))))
+       (exit 2 (write "usage: laws [self | g3 N | trace | emit]\n" w)))))))))
 
 (fn main ((w World)) World
   (match (load_run_module "tools/search/rev_obj.shard" w)

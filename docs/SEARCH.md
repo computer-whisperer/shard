@@ -928,3 +928,53 @@ comparison order and defers the nesting to the renderer, which
 sequences them innermost-last. For the pinned set every TrSeq
 collapses (tr_seq drops refl members), so the question stays
 theoretical until a richer task exercises it.
+
+
+### Slice 5, component 3 — proof rendering + G4 replay (LANDED 2026-07-11)
+
+**THE EXIT CRITERION'S SYNTHESIS HALF IS MET.** The generated artifact
+(tools/search/gen/rev_synth.shard) now carries four machine-rendered
+CLAIMS — rev_c62 and rev_c347 each proving rev_nil and rev_cons — and
+**all four replay green through bin/shard_check**. Search output is a
+shard program the kernel has checked, not a claim about one; and
+because the artifact is a corpus check TARGET, G4 runs continuously,
+on every sweep, forever.
+
+**What landed in laws.shard (the emit/regen path; render_gate keeps
+the driver-free RELOAD half):**
+
+- **Claim rendering**: goals are the interface's OWN equations —
+  binders monomorphized at Int, heads respelled through the resolver
+  table (rev → the artifact fn), rendered by meta/spell. Proofs render
+  from the component-2 traces: REFL leaves as (steps ((compute both))
+  refl), splits as case-on (the proof DSL takes the bare type NAME;
+  the checker's type gate re-derives the args), under-case leaves
+  rewriting the case fact into both sides first.
+- **THE REPLAY TWIN — the component's real discovery.** The oracle
+  evaluates in the open RUN closure; replay is CHECK-side, where
+  std/list's impl sits behind its module surface (the
+  surface-discipline rule working as designed). rev_c347's Nil case
+  measured it: the oracle joined by evaluation, but replay left
+  `(append Nil (Cons h Nil))` unreduced. The renderer therefore loads
+  a CHECK-MODE twin of the object closure (interfaces sealed, the
+  candidate open — exactly replay's evaluation model), reduces each
+  leaf's case-substituted goal sides with the kernel's own reducer,
+  and emits THE SURFACE-DISCIPLINE TAIL — the interface's own
+  defining-equation lemma (append_nil_left, cited via use scope) —
+  exactly where the twin says evaluation alone will not close.
+  Zero-site rewrites fail LOUDLY (measured — citation resolution is
+  lazy, so the earlier "no-op" reading was wrong), which is why the
+  tail is per-leaf, never uniform.
+- **The D4 certificate categories, realized**: REFL leaves are
+  definitional certificates; tail-bearing leaves are lemma-cited ones
+  — and the CHOOSER is the twin, not a heuristic.
+
+**v1 boundary, loud by construction:** TrSeq and nested splits refuse
+at render; a leaf whose tail needs more than append_nil_left fails at
+G4. Both are feature requests with a measured trigger, not silent
+gaps.
+
+**Open (rolls forward):** the exit criterion's second half — the
+certified catalog BRACKET (the rung-1 "17 clean = exactly 13
+functions" with S4a equivalence proofs + the D5 catalog license) —
+remains; with it, S6 closes and the ladder's next rung is S4b.

@@ -396,6 +396,12 @@ fi
 # verdict leaves behind: std rev/len and rev_c62 join by REFL
 # (compute + refl at render time); rev_c347 needs exactly the case its
 # own body introduced — (SPLIT 0 (Nil REFL) (Cons REFL)).
+# SYNTH REGEN (component 3) re-renders the WHOLE artifact — fns AND
+# claims with proofs rendered from the traces (leaf lemma tails
+# decided by the check-mode replay twin) — and requires byte-identity
+# with the committed gen/rev_synth.shard; `laws emit` re-pins. G4 is
+# continuous: the artifact is a check TARGET, so its rendered proofs
+# replay through bin/shard_check in the sweep above.
 echo "=== search: laws oracle (S4a+S5, G3) ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/laws.shard
@@ -403,15 +409,11 @@ else
   echo "SKIPPED (no bin/shard_eval)"
 fi
 
-# Render round-trip pin (docs/SEARCH.md D11, slice 5): meta/spell's
-# full renderer against the REAL pipeline. REGEN — re-rendering the two
-# law-proven rev candidates (rank 62/347, re-verified by cn_e+battery)
-# reproduces tools/search/gen/rev_synth.shard byte-for-byte; RELOAD —
-# the committed artifact, loaded through the real reader/resolver,
-# yields bodies expr_eq to the unranked candidates. The artifact is
-# also a corpus check TARGET (kernel-checked synthesized source).
-# Re-pin deliberately with `render_gate emit` when the grammar or the
-# renderer changes.
+# Render RELOAD pin (docs/SEARCH.md D11, slice 5): the committed
+# artifact, loaded through the real reader/resolver, yields bodies
+# expr_eq to the unranked candidates (rank 62/347, re-verified by
+# cn_e+battery). The REGEN half lives in the laws suite above (SYNTH
+# REGEN — the full artifact including rendered proofs).
 echo "=== search: render round-trip (D11) ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/render_gate.shard
