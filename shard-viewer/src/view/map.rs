@@ -61,7 +61,7 @@ use std::collections::BTreeMap;
 pub(crate) fn legend(flow_z: f32) -> El {
     row([
         text("map").mono().muted().font_size(SUB_SIZE),
-        text("one committed layout per scope · boxes by imports, fns by calls, claims by citations, types by composition · hover reveals shape use")
+        text("one committed layout per scope · boxes by imports, fns by calls, claims by citations, types by composition · distant edges fade · hover traces a member")
             .muted()
             .font_size(SUB_SIZE),
         legend_chip(claim_colors(ClaimKind::Axiom, false).0, "axiom"),
@@ -577,6 +577,32 @@ fn commit_file(
     m.size
 }
 
+/// Rest-state opacity of a call/citation edge by horizontal reach: full up to
+/// ~a quarter of the file's width, easing to a faint context line by ~60%.
+/// Local structure stays crisp; the long-haul web recedes until a hover
+/// traces it. Same-column return arcs (`back`) are short and semantically
+/// loud — always full.
+fn long_haul_alpha(e: &layout::RoutedEdge, lay_w: f32) -> f32 {
+    if e.back || e.points.len() < 2 {
+        return 1.0;
+    }
+    let (sx, ex) = (e.points[0].0, e.points[e.points.len() - 1].0);
+    let t = (((ex - sx).abs() / lay_w - 0.25) / (0.60 - 0.25)).clamp(0.0, 1.0);
+    let s = t * t * (3.0 - 2.0 * t);
+    1.0 - 0.75 * s
+}
+
+/// Rest-state opacity by fan redundancy: an edge whose endpoint sits in a
+/// big drawn fan fades — the hub's committed position (leftmost of its
+/// dependents) already tells the popularity story, and its thirtieth line
+/// adds ink, not information. Hovering the hub traces the fan at full
+/// strength.
+fn fan_alpha(fan: u32) -> f32 {
+    let t = ((fan as f32 - 8.0) / 16.0).clamp(0.0, 1.0);
+    let s = t * t * (3.0 - 2.0 * t);
+    1.0 - 0.7 * s
+}
+
 /// A box's measured chrome: the size it takes wrapping `(iw, ih)` content
 /// under a header band, and where the content starts inside it. Uses the same
 /// element construction as the render pass, so the two can never disagree.
@@ -797,19 +823,62 @@ fn file_el(
         // left, callees right), so the overlay is dropped. Pure rendering:
         // the routes were committed with the layout and never change.
         //
-        // Within the overlay, [`EdgeClass::Use`] edges (the dense shape-usage
-        // web) draw only when the focus member — hovered, else selected — is
-        // one of their endpoints: correlations are committed maximally, shown
-        // selectively.
+        // Within the overlay, edges tier by attention cost (correlations are
+        // committed maximally, shown selectively):
+        // - the focus member's edges — hovered, else selected — draw at full
+        //   strength whatever their class or reach: hover is the trace gesture;
+        // - [`EdgeClass::Use`] (the dense shape-usage web) draws *only* then;
+        // - composition and claim-subject links are sparse and load-bearing —
+        //   always full;
+        // - the call/citation web fades with horizontal reach (an edge
+        //   crossing most of the file is context, not local structure) and
+        //   with fan redundancy (a hub's thirtieth caller-line repeats what
+        //   its committed leftmost position already says) — a few hundred of
+        //   either at full strength are the gray spaghetti.
         let edge_overlay = if geom.lay.width.min(geom.lay.height) * ctx.zoom >= EDGE_PX {
             let focus_slot = ctx
                 .focus
                 .and_then(|f| members.iter().position(|&m| m == f));
+            let lay_w = geom.lay.width.max(1.0);
+            // Per-slot degree *within the edge's own class* (a fn with many
+            // claims about it hasn't earned a faded call web): the
+            // fan-redundancy signal.
+            let mut flow_deg = vec![0u32; members.len()];
+            let mut cite_deg = vec![0u32; members.len()];
+            for (k, &(a, b)) in geom.ends.iter().enumerate() {
+                match geom.classes.get(k) {
+                    Some(&EdgeClass::Flow) => {
+                        flow_deg[a] += 1;
+                        flow_deg[b] += 1;
+                    }
+                    Some(&EdgeClass::Cite) => {
+                        cite_deg[a] += 1;
+                        cite_deg[b] += 1;
+                    }
+                    _ => {}
+                }
+            }
             edges_asset_filtered(&geom.lay, ctx.hairline(), &geom.classes, |k| {
-                geom.classes.get(k) != Some(&EdgeClass::Use)
-                    || focus_slot.is_some_and(|s| {
-                        geom.ends.get(k).is_some_and(|&(a, b)| a == s || b == s)
-                    })
+                let focused = focus_slot.is_some_and(|s| {
+                    geom.ends.get(k).is_some_and(|&(a, b)| a == s || b == s)
+                });
+                if focused {
+                    return 1.0;
+                }
+                match geom.classes.get(k) {
+                    Some(&EdgeClass::Use) => 0.0,
+                    Some(&EdgeClass::Shape) | Some(&EdgeClass::About) => 1.0,
+                    class => {
+                        let deg: &[u32] = if class == Some(&EdgeClass::Cite) {
+                            &cite_deg
+                        } else {
+                            &flow_deg
+                        };
+                        let fan =
+                            geom.ends.get(k).map_or(0, |&(a, b)| deg[a].max(deg[b]));
+                        long_haul_alpha(&geom.lay.edges[k], lay_w).min(fan_alpha(fan))
+                    }
+                }
             })
         } else {
             VectorAsset::from_paths([0.0, 0.0, geom.lay.width, geom.lay.height], Vec::new())

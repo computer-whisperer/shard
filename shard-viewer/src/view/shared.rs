@@ -144,22 +144,25 @@ pub(crate) fn edges_asset_scaled(lay: &Layout, scale: f32) -> VectorAsset {
 /// [`edges_asset_scaled`] with a per-edge class, index-aligned with the input
 /// `Graph::edges` (as `Layout::edges` is). Missing entries read as [`EdgeClass::Flow`].
 pub(crate) fn edges_asset_classed(lay: &Layout, scale: f32, classes: &[EdgeClass]) -> VectorAsset {
-    edges_asset_filtered(lay, scale, classes, |_| true)
+    edges_asset_filtered(lay, scale, classes, |_| 1.0)
 }
 
-/// [`edges_asset_classed`] drawing only the edges `keep` admits (by edge
-/// index). The Map uses this to split one committed edge set into the
-/// always-drawn base web and the hover-revealed [`EdgeClass::Use`] overlay —
-/// visibility is a render choice; the committed layout keeps every edge.
+/// [`edges_asset_classed`] drawing each edge at the opacity `alpha` returns
+/// for its index (`<= 0` skips it entirely). The Map uses this to tier one
+/// committed edge set: the local web at full strength, long-haul edges faded
+/// to context, the hover-revealed [`EdgeClass::Use`] overlay, and the focused
+/// member's full-strength trace — visibility is a render choice; the
+/// committed layout keeps every edge.
 pub(crate) fn edges_asset_filtered(
     lay: &Layout,
     scale: f32,
     classes: &[EdgeClass],
-    keep: impl Fn(usize) -> bool,
+    alpha: impl Fn(usize) -> f32,
 ) -> VectorAsset {
     let mut paths = Vec::new();
     for (k, e) in lay.edges.iter().enumerate() {
-        if e.points.len() < 2 || !keep(k) {
+        let a = alpha(k);
+        if e.points.len() < 2 || a <= 0.0 {
             continue;
         }
         let class = classes.get(k).copied().unwrap_or(EdgeClass::Flow);
@@ -173,6 +176,7 @@ pub(crate) fn edges_asset_filtered(
             EdgeClass::Shape => tokens::INFO.mix(tokens::MUTED_FOREGROUND, 0.35),
             EdgeClass::Use => tokens::INFO.mix(tokens::MUTED_FOREGROUND, 0.15),
         };
+        let color = if a < 1.0 { color.with_alpha(a) } else { color };
         // The head must point along the spline's ARRIVAL tangent — horizontal
         // for a forward edge (edge_curve forces the port tangent), the last
         // segment for a return arc — not the raw last polyline segment, which
