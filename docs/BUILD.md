@@ -629,6 +629,52 @@ Gates: entries check green (123/140 claims incl. closures); pinlib
 plans verified against the old wire; driver 15 products green 1m07;
 aggregate + corpus pending at record time, confirmed in the commit.
 
+**Rung 2, slice 7 — the wasm fragment migration (2026-07-11).** The
+four fragment-era wasm scripts (lowbuild.sh, _mem, _loop, _call) die;
+their four .build.shard entries are re-founded to `build_mods`; each
+fragment becomes two driver products — a 'regen (generator
+determinism up to canonicalization) plus a 'pinlib (the remaining
+four gates: schema, kernel, tie+manifest, engine):
+
+- **PinMod grows the callee-prefix shape** — `pre` (leading module
+  fns pinned by ANOTHER product's certs; claims pin indices pre+K)
+  and `callees` (the prefix's module note). A linked mem-fragment
+  module [mget, mset, self] declares pre 2, callees "std/mem";
+  leaves declare 0/"". The claim-kind strip generalizes to
+  first-underscore (lowered_/linked_ both derive the source fn
+  name), and `lowbuild pinlib ENTRY [x86]` now selects the ISA model
+  by target (the x86 arm lands with the x86 fragment slice).
+- **BuildProfile grows `aux`** — the auxiliary artifact path ("" =
+  none) for two-file cert sets: regen's aux = the second generator
+  output; pinlib's aux = the portable companion of the linked
+  primary (own schema leg + manifest seat; the linked OUT stays
+  primary — kernel checks its import closure, verified: LINK's
+  check = PORT's obligations + its own; ties cover its module
+  literals). Kinds that have no aux shape refuse a nonempty aux at
+  plan time.
+- **Two-output regen writes REAL BASENAMES** in a per-product
+  capture subdir (mkdir leg). Found by the driver's gates on the
+  first run: the generator derives the linked file's import line and
+  module name from its output FILENAMES, so capture-named outputs
+  produced `(import "15.raw")` — the retired script never hit this
+  because its tmp files carried the committed basenames.
+- **Second canon-tree catch:** the committed loop cert carried
+  pre-canon `(int_of_nat (S k2))` spellings (the same C8 class as
+  slice 5's str finding, opposite direction — the canon std sweep
+  never touched examples/). The committed file is respelled into the
+  canonical tree (machine inductions re-check green, 71/0; the
+  entry's derived plan is byte-stable — pins reference values, not
+  spellings). The plain fragment was already canonical; mem/call had
+  no drift.
+
+Verified: plain and mem derived plans BYTE-IDENTICAL to the old
+wires; call byte-identical; loop differs only by dropping the old
+entry's spurious `callees=none` (the slice-6 str precedent, now
+uniform). Products 15→23, all green 1m13 — the same wall time as 15
+products (group parallelism absorbed the growth). Aggregate at 10
+entries 1m22. Remaining fragment-era scripts: the nine x86 builds
+(next slice — entries are Opus-delegated per the working split).
+
 ## 12. Non-goals, stated once
 
 No config dialect — profiles are shard values. No distinguished

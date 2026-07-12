@@ -2274,33 +2274,43 @@
                               "bin entry cert must carry the glue contract's two Int binders, the payload-Mem shape's one, or the two-arg contract's four"
                               w2))))))))))))))))))
 
-;; ---- the pinlib entry (docs/BUILD.md rung 2): pinned hand twins -------------------
+;; ---- the pinlib entry (docs/BUILD.md rung 2): pinned twins ------------------------
 ;; The build entry exports build_mods : Target -> (List PinMod) — content
-;; only (module name, spec-side bytes, twin file, claim names, curated
-;; vectors). ARTIFACT bindings are derived POSITIONALLY from the claims
-;; list (the full-prefix convention: claim K pins fn index K); the
-;; manifest gate independently verifies every derived index against the
-;; cert file read RAW, so a wrong derivation fails the build.
+;; only (module name, spec-side bytes, cert file, callee-prefix shape,
+;; claim names, curated vectors). ARTIFACT bindings are derived
+;; POSITIONALLY from the claims list (the prefix convention: claim K
+;; pins fn index pre+K); the manifest gate independently verifies every
+;; derived index against the cert file read RAW, so a wrong derivation
+;; fails the build.
 
-;; strip the "lowered_" prefix (the artifact-name convention)
-(fn pl_strip ((c (List Int))) (List Int)
+;; strip the claim-kind prefix through the first '_' (the artifact-name
+;; convention: "lowered_lg_add1" / "linked_mg_swap" -> source fn name)
+(fn pl_strip_go ((c (List Int))) (Option (List Int))
+  (measure (struct c))
   (match c
-    ((Cons
-       108
-       (Cons
-         111
-         (Cons 119 (Cons 101 (Cons 114 (Cons 101 (Cons 100 (Cons 95 rest))))))))
-     rest)
-    (_ c)))
+    (Nil None)
+    ((Cons b t) (if (int_eq b 95) (Some t) (pl_strip_go t)))))
 
-(fn pl_arts ((cf (List Int)) (k Int) (cs (List (List Int)))) (List PArt)
+(fn pl_strip ((c (List Int))) (List Int)
+  (match (pl_strip_go c)
+    (None c)
+    ((Some rest) rest)))
+
+(fn pl_arts
+  ((cf (List Int))
+   (model (List Int))
+   (pre Int)
+   (cal (List Int))
+   (k Int)
+   (cs (List (List Int))))
+  (List PArt)
   (measure (struct cs))
   (match cs
     (Nil Nil)
     ((Cons c t)
      (Cons
-       (PA (pl_strip c) c cf "models/wasm/wasm.shard" k "" "none")
-       (pl_arts cf (+ k 1) t)))))
+       (PA (pl_strip c) c cf model (+ pre k) cal "none")
+       (pl_arts cf model pre cal (+ k 1) t)))))
 
 (fn dc_strs ((es (List Expr))) (Option (List (List Int)))
   (measure (struct es))
@@ -2314,9 +2324,12 @@
           (None None)
           ((Some ss) (Some (Cons s ss)))))))))
 
-(fn dc_pinmod ((e Expr)) (Option PMod)
+(fn dc_pinmod ((model (List Int)) (e Expr)) (Option PMod)
   (match (dc_ctor (quote MkPinMod) e)
-    ((Some (Cons ne (Cons be (Cons cfe (Cons ce (Cons ve Nil))))))
+    ((Some
+       (Cons
+         ne
+         (Cons be (Cons cfe (Cons pe (Cons cale (Cons ce (Cons ve Nil))))))))
      (match (expr_ints ne)
        (None None)
        ((Some nm)
@@ -2326,34 +2339,45 @@
            (match (expr_ints cfe)
              (None None)
              ((Some cf)
-              (match (expr_list ce)
+              (match (expr_int pe)
                 (None None)
-                ((Some ces)
-                 (match (dc_strs ces)
+                ((Some pre)
+                 (match (expr_ints cale)
                    (None None)
-                   ((Some claims)
-                    (match (expr_list ve)
+                   ((Some cal)
+                    (match (expr_list ce)
                       (None None)
-                      ((Some ves)
-                       (match (dc_vecs ves)
+                      ((Some ces)
+                       (match (dc_strs ces)
                          (None None)
-                         ((Some vecs)
-                          (Some (PM nm bytes (pl_arts cf 0 claims) vecs)))))))))))))))))
+                         ((Some claims)
+                          (match (expr_list ve)
+                            (None None)
+                            ((Some ves)
+                             (match (dc_vecs ves)
+                               (None None)
+                               ((Some vecs)
+                                (Some
+                                  (PM
+                                    nm
+                                    bytes
+                                    (pl_arts cf model pre cal 0 claims)
+                                    vecs)))))))))))))))))))))
     (_ None)))
 
-(fn dc_pinmods ((es (List Expr))) (Option (List PMod))
+(fn dc_pinmods ((model (List Int)) (es (List Expr))) (Option (List PMod))
   (measure (struct es))
   (match es
     (Nil (Some Nil))
     ((Cons h t)
-     (match (dc_pinmod h)
+     (match (dc_pinmod model h)
        (None None)
        ((Some m)
-        (match (dc_pinmods t)
+        (match (dc_pinmods model t)
           (None None)
           ((Some ms) (Some (Cons m ms)))))))))
 
-(fn run_pinlib ((epath (List Int)) (w World)) World
+(fn run_pinlib ((epath (List Int)) (xisa Bool) (w World)) World
   (match (load_run_module epath w)
     ((Pair None w1) (fail "could not load/parse the pinlib entry closure" w1))
     ((Pair (Some m) w1)
@@ -2363,13 +2387,16 @@
            "pinlib entry has no Target vocabulary (meta/plan not imported?)"
            w1))
        ((Some tq)
-        (match (invoke m (quote build_mods) (Cons (target_val tq False) Nil))
+        (match (invoke m (quote build_mods) (Cons (target_val tq xisa) Nil))
           (None (fail "no unique `build_mods` fn in the pinlib entry" w1))
           ((Some pv)
            (match (expr_list pv)
              (None (fail "build_mods did not return a list" w1))
              ((Some es)
-              (match (dc_pinmods es)
+              (match
+                (dc_pinmods
+                  (if xisa "models/x86/x86.shard" "models/wasm/wasm.shard")
+                  es)
                 (None (fail "build_mods result does not decode as PinMods" w1))
                 ((Some mods)
                  (match (plan_lines mods)
@@ -2511,7 +2538,7 @@
      (match args
        ((Cons bpath Nil) (run_isa bpath False w1))
        ((Cons bpath (Cons isa Nil))
-        (if (ceq bpath "pinlib") (run_pinlib isa w1)
+        (if (ceq bpath "pinlib") (run_pinlib isa False w1)
         (if (ceq isa "wasm") (run_isa bpath False w1)
         (if (ceq isa "x86") (run_isa bpath True w1)
         (fail "unknown ISA (wasm | x86)" w1)))))
@@ -2519,9 +2546,12 @@
         (if (ceq mode "lib") (run_lib srcp outp w1)
         (if (ceq mode "elf") (run_elf srcp outp w1)
         (if (ceq mode "binelf") (run_binelf srcp outp w1)
-        (fail
-          "unknown 3-arg mode (lib SRC OUT | elf SRC OUT | binelf SRC OUT)"
-          w1)))))
+        (if (ceq mode "pinlib")
+          (if (ceq outp "x86") (run_pinlib srcp True w1)
+          (fail "unknown pinlib ISA (x86)" w1))
+          (fail
+            "unknown 3-arg mode (lib SRC OUT | elf SRC OUT | binelf SRC OUT | pinlib ENTRY x86)"
+            w1))))))
        ((Cons mode (Cons srcp (Cons outp (Cons isa Nil))))
         (if (ceq mode "lib")
           (if (ceq isa "wasm") (run_lib srcp outp w1)

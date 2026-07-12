@@ -1,21 +1,23 @@
-;;; examples/wasmgen_call_src.build.shard — the mod.build ENTRY for the
-;;; CALLS-IN-LOOPS set (docs/LOWERING.md; probe: callloop_probe.shard):
-;;; assembles the artifact set for examples/wasmgen_call_src.shard as a
-;;; native Plan value.
+;;; examples/wasmgen_call_src.build.shard — the BUILD ENTRY for the
+;;; CALLS-IN-LOOPS set (docs/LOWERING.md; probe: callloop_probe.shard)
+;;; under the re-founded charter (docs/BUILD.md §4/§5, rung 2): content
+;;; only. Two pinned modules: cw_put ships as an ordinary mem-fragment
+;;; artifact ([mget, mset, self] — pre 2, linked_cw_put pins f2);
+;;; cw_fill ships the FOUR-slot spine ([mget, mset, cw_put, self] —
+;;; pre 3, lowered_cw_fill pins f3; the loop that CALLS its callee,
+;;; Drop after the call). MEMCASE expected values and readbacks
+;;; computed SPEC-SIDE. The cw_put literal is a local copy (the
+;;; generated files inline MkFunc terms); the BYTETIE gate polices
+;;; drift. cw_fill's Func fn is imported from the generated LINK file
+;;; (the calls-in-loops unit lives there — it regenerates on callee
+;;; edits). ARTIFACT bindings, plan assembly, and wire are DERIVED
+;;; (tools/lowbuild pinlib); the manifest gate verifies the derived
+;;; index bindings against the cert file read raw.
 ;;;
-;;;     (fn build ((t Target)) Plan)     — PURE; the whole interface
+;;;     (fn build_mods ((t Target)) (List PinMod))   — the standard symbol
 ;;;
-;;; Two modules: cw_put ships as an ordinary mem-fragment artifact
-;;; ([mget, mset, self], linked_cw_put over f2); cw_fill ships the FOUR
-;;; slot spine ([mget, mset, cw_put, self], lowered_cw_fill over f3 —
-;;; the loop that CALLS its callee, Drop after the call). MEMCASE
-;;; expected values and readbacks computed SPEC-SIDE. The cw_put literal
-;;; is a local copy (the generated files inline MkFunc terms); the
-;;; BYTETIE gate polices drift. cw_fill's Func fn is imported from the
-;;; generated LINK file (the calls-in-loops unit lives there — it
-;;; regenerates on callee edits).
-;;;
-;;; RUN IT:  bin/shard_eval run tools/lowbuild/lowbuild.shard examples/wasmgen_call_src.build.shard | node examples/wasm_diff.mjs /dev/stdin
+;;; RUN IT:
+;;;   bin/shard_eval run tools/lowbuild/lowbuild.shard pinlib examples/wasmgen_call_src.build.shard
 
 (import "../kernel/stdlib.shard")
 (import "wasmgen_call_src.shard")
@@ -32,6 +34,8 @@
 (use (:: models wasm encode *))
 (import "../meta/plan")
 (use (:: meta plan *))
+(import "../meta/build")
+(use (:: meta build *))
 
 ;; local copy of cw_put's machine literal (bytetie polices drift)
 (fn m_cw_put () Func
@@ -71,70 +75,54 @@
 
 (fn ld ((bs (List Int))) Mem (mload bs 0 (mem_empty)))
 
-;; --- the build entry -------------------------------------------------------------
+;; --- the build entry: content only ------------------------------------------------
 
 (fn vec ((k Int) (args (List Int)) (membytes (List Int)) (v Int) (mf Mem)) PVec
   (PV k args membytes v (mdump 0 (len_nat membytes) mf)))
 
-(fn build ((t Target)) Plan
+(fn build_mods ((t Target)) (List PinMod)
   (match (mem_limit_of t)
     (lim
-      (MkPlan
-        (list
-          (PM
-            "cw_put"
-            (enc_module (MkWModule (list (mget_f) (mset_f) (m_cw_put)) lim))
-            (list
-              (PA
-                "cw_put"
-                "linked_cw_put"
-                "examples/wasmgen_call_link.shard"
-                "models/wasm/wasm.shard"
-                2
-                "std/mem"
-                "none"))
-            (list
-              (vec
-                2
-                (list 1 7)
-                (list 9 9 9 9)
-                7
-                (cw_put (ld (list 9 9 9 9)) 1 7))
-              (vec
-                2
-                (list 0 300)
-                (list 5 5 5)
-                300
-                (cw_put (ld (list 5 5 5)) 0 300))))
-          (PM
-            "cw_fill"
-            (enc_module
-              (MkWModule (list (mget_f) (mset_f) (m_cw_put) (cw_fill_func)) lim))
-            (list
-              (PA
-                "cw_fill"
-                "lowered_cw_fill"
-                "examples/wasmgen_call_link.shard"
-                "models/wasm/wasm.shard"
-                3
-                "std/mem"
-                "none"))
-            (list
-              (vec
-                3
-                (list 1 7 2)
-                (list 9 9 9 9 9 9)
-                0
-                (cw_fill (ld (list 9 9 9 9 9 9)) 1 7 (fnat 2)))
-              (vec
-                3
-                (list 0 300 1)
-                (list 5 5 5)
-                0
-                (cw_fill (ld (list 5 5 5)) 0 300 (fnat 1)))
-              (vec
-                3
-                (list 2 8 0)
-                (list 1 2 3)
-                0
-                (cw_fill (ld (list 1 2 3)) 2 8 (fnat 0))))))))))
+      (list
+        (MkPinMod
+          "cw_put"
+          (enc_module (MkWModule (list (mget_f) (mset_f) (m_cw_put)) lim))
+          "examples/wasmgen_call_link.shard"
+          2
+          "std/mem"
+          (list "linked_cw_put")
+          (list
+            (vec 2 (list 1 7) (list 9 9 9 9) 7 (cw_put (ld (list 9 9 9 9)) 1 7))
+            (vec
+              2
+              (list 0 300)
+              (list 5 5 5)
+              300
+              (cw_put (ld (list 5 5 5)) 0 300))))
+        (MkPinMod
+          "cw_fill"
+          (enc_module
+            (MkWModule (list (mget_f) (mset_f) (m_cw_put) (cw_fill_func)) lim))
+          "examples/wasmgen_call_link.shard"
+          3
+          "std/mem"
+          (list "lowered_cw_fill")
+          (list
+            (vec
+              3
+              (list 1 7 2)
+              (list 9 9 9 9 9 9)
+              0
+              (cw_fill (ld (list 9 9 9 9 9 9)) 1 7 (fnat 2)))
+            (vec
+              3
+              (list 0 300 1)
+              (list 5 5 5)
+              0
+              (cw_fill (ld (list 5 5 5)) 0 300 (fnat 1)))
+            (vec
+              3
+              (list 2 8 0)
+              (list 1 2 3)
+              0
+              (cw_fill (ld (list 1 2 3)) 2 8 (fnat 0)))))))))

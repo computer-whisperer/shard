@@ -6,10 +6,6 @@
 set -u
 cd "$(dirname "$0")/.."
 BUILDS=(
-  examples/lowbuild.sh
-  examples/lowbuild_mem.sh
-  examples/lowbuild_loop.sh
-  examples/lowbuild_call.sh
   examples/lowbuild_x86.sh
   examples/lowbuild_x86loop.sh
   examples/lowbuild_x86mem.sh
