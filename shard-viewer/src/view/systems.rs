@@ -107,9 +107,11 @@ fn build_systems_graph(project: &Project) -> (Graph, Vec<usize>) {
             if let Some(&lj) = local.get(&target)
                 && li != lj
             {
+                // Dependency → dependent (imported → importer): foundations
+                // layer left, arrows point at their users.
                 edges.push(GEdge {
-                    from: EndPoint { node: li, port: 0 },
-                    to: EndPoint { node: lj, port: 0 },
+                    from: EndPoint { node: lj, port: 0 },
+                    to: EndPoint { node: li, port: 0 },
                 });
             }
         }

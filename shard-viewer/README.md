@@ -14,6 +14,11 @@ call-neighborhood, or the whole project. Each view projects that scope down to
 what it needs (the single-file views read its *focus file*; the Map view reads
 the full fn/file sets), so selection is unified rather than per-view.
 
+**The cascade convention**: every dependency graph in the viewer — calls,
+imports, proof citations, claim subjects — reads left→right from
+*dependencies to dependents*. Callees, cited lemmas, and imported files layer
+left; **arrows point at their users**; trust and control build rightward.
+
 **Map** *(experimental — being built)* — the unified view: any scope's fns
 **and proof-layer forms**, grouped by origin **dir ⊃ file** into nested
 bounding boxes, each fn drawn in the Flow form. Pick a file or a directory in
@@ -36,8 +41,8 @@ cards in its file box — kind tag + name + the goal statement. The model
 same-file-first way calls resolve: **citations** (claim → the claims/axioms
 its proof mentions; a fulfills cites its requirement, which is what marks it
 fulfilled) and **subjects** (claim → the fns its `(goal …)` statement
-mentions), and both feed the file's Sugiyama graph — proofs place upstream of
-the lemmas and code they lean on. Colors keep the project-wide convention
+mentions), and both feed the file's Sugiyama graph. Colors keep the
+project-wide convention
 (**amber = proof**, same as the Systems heat): axioms are the loud amber
 (assumed, not proven — the trust roots), plain claims a faint wash,
 requirements **green once fulfilled and red while open** — an unmet
@@ -138,8 +143,8 @@ This is the view the others are converging into — see *Direction*.
   The detail panel shows `lines · calls · callers` and tags orphans. Resolution
   is a short-name heuristic — verify a candidate with grep before cutting.
 
-**Systems** — the project-wide file import dependency graph (each file → the
-files it imports), with a **category heat map**:
+**Systems** — the project-wide file import dependency graph, with a
+**category heat map**:
 
 - Each file node is **tinted by its proof-vs-impl share** — cool for
   implementation-heavy files, warm for proof-heavy ones — and carries a thin

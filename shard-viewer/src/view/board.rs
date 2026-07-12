@@ -51,7 +51,7 @@ pub(crate) fn canvas(project: &Project, file_idx: usize, p: &ViewParams) -> El {
 pub(crate) fn legend() -> El {
     row([
         text("board").mono().muted().font_size(SUB_SIZE),
-        text("each node = a fn in expanded flow form · arrows = calls between fns")
+        text("each node = a fn in expanded flow form · arrows point at callers")
             .muted()
             .font_size(SUB_SIZE),
     ])

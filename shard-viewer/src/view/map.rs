@@ -348,15 +348,17 @@ fn commit_children(
         files_of.push(vec![file]);
     }
 
-    // A child A → B edge when any file in A imports any in-scope file in B.
+    // A child B → A edge when any file in A imports any in-scope file in B:
+    // dependency → dependent, so foundational children layer left and arrows
+    // point at their users.
     let in_scope = |g: usize| by_file.contains_key(&g);
     let mut edges = Vec::new();
     for (i, fa) in files_of.iter().enumerate() {
         for (j, fb) in files_of.iter().enumerate() {
             if i != j && imports_between(project, fa, fb, &in_scope) {
                 edges.push(GEdge {
-                    from: EndPoint { node: i, port: 0 },
-                    to: EndPoint { node: j, port: 0 },
+                    from: EndPoint { node: j, port: 0 },
+                    to: EndPoint { node: i, port: 0 },
                 });
             }
         }
@@ -402,17 +404,19 @@ fn commit_file(
     }
 
     // Intra-file edges between in-scope members (dedup, no self-loops):
-    // fn→fn calls, claim→claim citations, claim→fn subject links. Placement
-    // follows dependency for all three, so proofs sit upstream of the lemmas
-    // and code they lean on, the way callers sit upstream of callees.
+    // fn→fn calls, claim→claim citations, claim→fn subject links. All three
+    // run dependency → dependent — callees, cited lemmas, and subject fns
+    // layer LEFT of their users, so trust and control build rightward and
+    // every arrow points at the thing leaning on its source.
     let mut seen = std::collections::HashSet::new();
     let mut edges = Vec::new();
     let mut classes = Vec::new();
+    // `push(user, used, …)` — the edge is emitted used → user.
     let mut push = |i: usize, j: usize, class: EdgeClass, edges: &mut Vec<GEdge>| {
         if i != j && seen.insert((i, j)) {
             edges.push(GEdge {
-                from: EndPoint { node: i, port: 0 },
-                to: EndPoint { node: j, port: 0 },
+                from: EndPoint { node: j, port: 0 },
+                to: EndPoint { node: i, port: 0 },
             });
             classes.push(class);
         }

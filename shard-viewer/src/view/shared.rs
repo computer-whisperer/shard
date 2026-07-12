@@ -110,15 +110,17 @@ pub(crate) fn edges_asset(lay: &Layout) -> VectorAsset {
 }
 
 /// How an intra-level edge reads: the call/import web, a proof-layer lemma
-/// citation, or a claim→fn subject link. Colors keep the project-wide
-/// convention (Systems view heat): **amber = proof**.
+/// citation, or a claim-subject link. Colors keep the project-wide
+/// convention (Systems view heat): **amber = proof**. All classes run
+/// dependency → dependent (the cascade convention): arrows point at users.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EdgeClass {
-    /// fn → fn call (or dir-level import) — the implementation web.
+    /// callee → caller (or dir-level imported → importer) — the
+    /// implementation web.
     Flow,
-    /// claim → cited claim/axiom — the proof-dependency web.
+    /// cited claim/axiom → citing claim — the proof-dependency web.
     Cite,
-    /// claim → subject fn — where a statement touches down on the code.
+    /// subject fn → claim about it — where a statement touches down on code.
     About,
 }
 

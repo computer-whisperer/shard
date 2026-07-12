@@ -62,9 +62,12 @@ pub(crate) fn build_call_graph(project: &Project, file_idx: usize) -> (Graph, Ve
                 && i != j
                 && seen.insert((i, j))
             {
+                // Edges run dependency → dependent (callee → caller): arrows
+                // point at the user, and layering puts foundations on the
+                // left so the cascade builds rightward.
                 edges.push(GEdge {
-                    from: EndPoint { node: i, port: 0 },
-                    to: EndPoint { node: j, port: 0 },
+                    from: EndPoint { node: j, port: 0 },
+                    to: EndPoint { node: i, port: 0 },
                 });
             }
         }
