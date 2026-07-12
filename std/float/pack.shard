@@ -1,0 +1,306 @@
+;;; std/float/pack.shard — the L2 encoding: pack/unpack between the value
+;;; view and the natural-width bit pattern (rung R2 slice 1 of docs/FLOATS.md
+;;; §10; the layer contract is §3 L2, the memory layout law §6, the NaN
+;;; quotient §5).
+;;;
+;;; The bit pattern of a format (EW, MW) is the Int
+;;;
+;;;     b = s*2^(EW+MW) + eb*2^MW + mb,   eb in [0, 2^EW), mb in [0, 2^MW)
+;;;
+;;; — IEEE field order [ s | exponent | mantissa ], width 1+EW+MW. eb = 0 is
+;;; the bottom row (zero/subnormal, e = emin, hidden bit absent); the top
+;;; encoding row eb = 2^EW - 1 partitions by the format flags exactly as the
+;;; §3 table (IEEE: mant=0 is Inf, else NaN; inf/no-nan: mant=0 only;
+;;; no-inf/nan: mant=max only; no flags: all finite); every other row is
+;;; normal with the hidden bit restored, e = eb - bias.
+;;;
+;;; NaN encodes CANONICALLY (§5): positive, quiet-MSB mantissa, zero payload
+;;; — mb = 2^(MW-1) — for formats with an Inf slot; for FN formats the only
+;;; NaN encoding is the mant=max carve-out, mb = 2^MW - 1. unpack maps EVERY
+;;; NaN encoding (any payload, either sign) to the single model NaN, so
+;;; pack/unpack is bijective exactly UP TO THE NAN CLASS: unpack∘pack = id on
+;;; well-formed views, pack∘unpack = id on non-NaN encodings and collapses
+;;; NaN encodings to the canonical slot. R2.1 pins this by ground compute
+;;; (classic F32/F64 patterns, host-verified; whole-space sweeps on the small
+;;; formats); the parametric bijection theorems are R2.2.
+
+(import "../../kernel/stdlib.shard")
+(import "float.shard")  ; the L1 model: Fmt, FVal, fpow2, bounds, fwf, enum_views
+(use (:: std float float *))  ; type names (Fmt, FVal) for binders — import alone feeds fns only
+
+;; --- the encoding -------------------------------------------------------------------
+
+;; the canonical NaN bit pattern of a format. Meaningless without the HNAN
+;; flag (never cited — fwf gates FNaN on hnan); 0 keeps it total.
+(fn fnan_bits ((f Fmt)) Int
+  (if (hnan_of f)
+    (+
+      (* (- (fpow2 (ew_of f)) 1) (fpow2 (mw_of f)))
+      (if (hinf_of f) (fpow2 (- (mw_of f) 1)) (- (fpow2 (mw_of f)) 1)))
+    0))
+
+;; pack: value view -> bit pattern. The bottom row (m < 2^MW; wf forces
+;; e = emin there) encodes at eb = 0 with mb = m; normal rows at
+;; eb = e + bias with the hidden bit dropped; Inf at the all-ones row with
+;; mb = 0; NaN at the canonical slot. Total on malformed views (garbage,
+;; never cited — theorems premise fwf).
+(fn fpack ((f Fmt) (x FVal)) Int
+  (match x
+    ((Fin s m e)
+     (+
+       (* (if s 1 0) (fpow2 (+ (ew_of f) (mw_of f))))
+       (if (lt m (fpow2 (mw_of f))) m
+       (+ (* (+ e (fmt_bias f)) (fpow2 (mw_of f))) (- m (fpow2 (mw_of f)))))))
+    ((FInf s)
+     (+
+       (* (if s 1 0) (fpow2 (+ (ew_of f) (mw_of f))))
+       (* (- (fpow2 (ew_of f)) 1) (fpow2 (mw_of f)))))
+    (FNaN (fnan_bits f))))
+
+;; unpack: bit pattern -> value view. Fields split by ediv/mod (masked, so
+;; total on any Int with period 2^(2+EW+MW) in the sign); the branch order
+;; mirrors the §3 partition table.
+(fn funpack ((f Fmt) (b Int)) FVal
+  (let
+    ((eb (mod (ediv b (fpow2 (mw_of f))) (fpow2 (ew_of f))))
+     (sb (int_eq (mod (ediv b (fpow2 (+ (ew_of f) (mw_of f)))) 2) 1))
+     (mb (mod b (fpow2 (mw_of f)))))
+    (if (int_eq eb 0) (Fin sb mb (fmt_emin f))
+    (if (int_eq eb (- (fpow2 (ew_of f)) 1))
+      (if (hinf_of f)
+        (if (int_eq mb 0) (FInf sb)
+        (if (hnan_of f) FNaN
+        (Fin sb (+ mb (fpow2 (mw_of f))) (- eb (fmt_bias f)))))
+      (if (hnan_of f)
+        (if (int_eq mb (- (fpow2 (mw_of f)) 1)) FNaN
+        (Fin sb (+ mb (fpow2 (mw_of f))) (- eb (fmt_bias f))))
+        (Fin sb (+ mb (fpow2 (mw_of f))) (- eb (fmt_bias f)))))
+      (Fin sb (+ mb (fpow2 (mw_of f))) (- eb (fmt_bias f)))))))
+
+;; --- ground pins: the classic patterns ------------------------------------------------
+;; Every constant below was pre-verified against host IEEE hardware bit
+;; patterns (struct-level) before landing; the decimal spellings are the hex
+;; classics in the comments.
+
+;; F32 pack: 1.0 = 0x3F800000, -2.0 = 0xC0000000, 0.1 = 0x3DCCCCCD, the
+;; zeros, min subnormal = 0x00000001, min normal = 0x00800000, max finite =
+;; 0x7F7FFFFF, +-Inf = 0x7F800000/0xFF800000, canonical NaN = 0x7FC00000.
+(claim fpack_f32_one
+  (goal () () (= (fpack (fmt_f32) (Fin False 8388608 0)) 1065353216))
+  (steps ((compute both)) refl))
+(claim fpack_f32_negtwo
+  (goal () () (= (fpack (fmt_f32) (Fin True 8388608 1)) 3221225472))
+  (steps ((compute both)) refl))
+(claim fpack_f32_tenth
+  (goal () () (= (fpack (fmt_f32) (Fin False 13421773 -4)) 1036831949))
+  (steps ((compute both)) refl))
+(claim fpack_f32_poszero
+  (goal () () (= (fpack (fmt_f32) (Fin False 0 -126)) 0))
+  (steps ((compute both)) refl))
+(claim fpack_f32_negzero
+  (goal () () (= (fpack (fmt_f32) (Fin True 0 -126)) 2147483648))
+  (steps ((compute both)) refl))
+(claim fpack_f32_submin
+  (goal () () (= (fpack (fmt_f32) (Fin False 1 -126)) 1))
+  (steps ((compute both)) refl))
+(claim fpack_f32_normmin
+  (goal () () (= (fpack (fmt_f32) (Fin False 8388608 -126)) 8388608))
+  (steps ((compute both)) refl))
+(claim fpack_f32_max
+  (goal () () (= (fpack (fmt_f32) (Fin False 16777215 127)) 2139095039))
+  (steps ((compute both)) refl))
+(claim fpack_f32_inf
+  (goal () () (= (fpack (fmt_f32) (FInf False)) 2139095040))
+  (steps ((compute both)) refl))
+(claim fpack_f32_neginf
+  (goal () () (= (fpack (fmt_f32) (FInf True)) 4286578688))
+  (steps ((compute both)) refl))
+(claim fpack_f32_nan
+  (goal () () (= (fpack (fmt_f32) FNaN) 2143289344))
+  (steps ((compute both)) refl))
+
+;; F32 unpack: the NaN CLASS — a payload-carrying encoding (0x7F800001) and
+;; the negative quiet NaN (0xFFC00000) both decode to the model NaN, and
+;; re-packing lands on the canonical slot (the §5 quotient, observed).
+(claim funpack_f32_one
+  (goal () () (= (funpack (fmt_f32) 1065353216) (Fin False 8388608 0)))
+  (steps ((compute both)) refl))
+(claim funpack_f32_snan_payload
+  (goal () () (= (funpack (fmt_f32) 2139095041) FNaN))
+  (steps ((compute both)) refl))
+(claim funpack_f32_negqnan
+  (goal () () (= (funpack (fmt_f32) 4290772992) FNaN))
+  (steps ((compute both)) refl))
+(claim funpack_f32_nan_collapse
+  (goal () () (= (fpack (fmt_f32) (funpack (fmt_f32) 2139095041)) 2143289344))
+  (steps ((compute both)) refl))
+
+;; F64: 1.0 = 0x3FF0000000000000, 0.1 = 0x3FB999999999999A, max finite =
+;; 0x7FEFFFFFFFFFFFFF, +-Inf, canonical NaN = 0x7FF8000000000000, and the
+;; min subnormal decodes from bit pattern 1.
+(claim fpack_f64_one
+  (goal () ()
+    (= (fpack (fmt_f64) (Fin False 4503599627370496 0)) 4607182418800017408))
+  (steps ((compute both)) refl))
+(claim fpack_f64_tenth
+  (goal () ()
+    (= (fpack (fmt_f64) (Fin False 7205759403792794 -4)) 4591870180066957722))
+  (steps ((compute both)) refl))
+(claim fpack_f64_max
+  (goal () ()
+    (= (fpack (fmt_f64) (Fin False 9007199254740991 1023)) 9218868437227405311))
+  (steps ((compute both)) refl))
+(claim fpack_f64_inf
+  (goal () () (= (fpack (fmt_f64) (FInf False)) 9218868437227405312))
+  (steps ((compute both)) refl))
+(claim fpack_f64_neginf
+  (goal () () (= (fpack (fmt_f64) (FInf True)) 18442240474082181120))
+  (steps ((compute both)) refl))
+(claim fpack_f64_nan
+  (goal () () (= (fpack (fmt_f64) FNaN) 9221120237041090560))
+  (steps ((compute both)) refl))
+(claim funpack_f64_submin
+  (goal () () (= (funpack (fmt_f64) 1) (Fin False 1 -1022)))
+  (steps ((compute both)) refl))
+
+;; the 8-bit formats: f8e4m3fn 1.0 = 0x38, its real max 448 = 0x7E, NaN =
+;; the mant=max slot 0x7F (and 0xFF decodes NaN too); f8e5m2 1.0 = 0x3C.
+;; The toy: 1.0 = 12, canonical NaN = 30.
+(claim fpack_f8fn_one
+  (goal () () (= (fpack (fmt_f8e4m3fn) (Fin False 8 0)) 56))
+  (steps ((compute both)) refl))
+(claim fpack_f8fn_max
+  (goal () () (= (fpack (fmt_f8e4m3fn) (Fin False 14 8)) 126))
+  (steps ((compute both)) refl))
+(claim fpack_f8fn_nan
+  (goal () () (= (fpack (fmt_f8e4m3fn) FNaN) 127))
+  (steps ((compute both)) refl))
+(claim funpack_f8fn_negnan
+  (goal () () (= (funpack (fmt_f8e4m3fn) 255) FNaN))
+  (steps ((compute both)) refl))
+(claim fpack_f8e5m2_one
+  (goal () () (= (fpack (fmt_f8e5m2) (Fin False 4 0)) 60))
+  (steps ((compute both)) refl))
+(claim fpack_toy_one
+  (goal () () (= (fpack (fmt_toy) (Fin False 4 0)) 12))
+  (steps ((compute both)) refl))
+(claim fpack_toy_nan
+  (goal () () (= (fpack (fmt_toy) FNaN) 30))
+  (steps ((compute both)) refl))
+
+;; --- the exhaustive bit-level gates (FLOATS.md §10: the whole encoding space) --------
+
+;; one encoding, strictly: unpack must land WELL-FORMED, and a non-NaN view
+;; must re-pack to exactly b (bijection on the non-NaN class). A NaN decode
+;; re-packs to the canonical slot by construction, so the content there is
+;; wf plus the NaN-count pins below (decode must classify NaN on EXACTLY the
+;; IEEE slots).
+(fn pk_ok1 ((f Fmt) (b Int)) Bool
+  (let ((x (funpack f b)))
+    (if (fwf f x)
+      (match x
+        ((Fin s m e) (int_eq (fpack f x) b))
+        ((FInf s) (int_eq (fpack f x) b))
+        (FNaN True))
+      False)))
+
+;; sweep b down to 0 (the whole space when started at 2^(1+EW+MW) - 1).
+(fn pk_walk ((f Fmt) (b Int)) Bool
+  (measure b (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (le b 0) (pk_ok1 f 0) (if (pk_ok1 f b) (pk_walk f (- b 1)) False)))
+
+(fn pk_gate ((f Fmt)) Bool
+  (pk_walk f (- (fpow2 (+ 1 (+ (ew_of f) (mw_of f)))) 1)))
+
+(claim pack_gate_toy
+  (goal () () (= (pk_gate (fmt_toy)) True))
+  (steps ((compute both)) refl))
+(claim pack_gate_f8e4m3fn
+  (goal () () (= (pk_gate (fmt_f8e4m3fn)) True))
+  (steps ((compute both)) refl))
+(claim pack_gate_f8e5m2
+  (goal () () (= (pk_gate (fmt_f8e5m2)) True))
+  (steps ((compute both)) refl))
+
+;; count the NaN encodings in [0, b]: IEEE small formats have nonzero-payload
+;; top rows on both signs (toy/f8e5m2: 3 payloads x 2 signs = 6); f8e4m3fn
+;; has exactly its two carve-out slots 0x7F/0xFF.
+(fn nan_count ((f Fmt) (b Int)) Int
+  (measure b (by arith (list 1 0)) (by arith (list 1 1)))
+  (let
+    ((n
+       (match (funpack f b)
+         ((Fin s m e) 0)
+         ((FInf s) 0)
+         (FNaN 1))))
+    (if (le b 0) n (+ n (nan_count f (- b 1))))))
+
+(claim nan_count_toy
+  (goal () () (= (nan_count (fmt_toy) 63) 6))
+  (steps ((compute both)) refl))
+(claim nan_count_f8e4m3fn
+  (goal () () (= (nan_count (fmt_f8e4m3fn) 255) 2))
+  (steps ((compute both)) refl))
+(claim nan_count_f8e5m2
+  (goal () () (= (nan_count (fmt_f8e5m2) 255) 6))
+  (steps ((compute both)) refl))
+
+;; --- decode∘encode over ALL well-formed views (reusing enum_views) --------------------
+
+;; one view, strictly: pack must land in range [0, 2^(1+EW+MW)) and unpack
+;; back to the view ITSELF — including both zeros (distinct encodings) and
+;; the canonical NaN.
+(fn upk_ok1 ((f Fmt) (x FVal)) Bool
+  (if (le 0 (fpack f x))
+    (if (lt (fpack f x) (fpow2 (+ 1 (+ (ew_of f) (mw_of f)))))
+      (fval_eqb (funpack f (fpack f x)) x)
+      False)
+    False))
+
+(fn upk_all ((f Fmt) (xs (List FVal))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil True)
+    ((Cons x rest) (if (upk_ok1 f x) (upk_all f rest) False))))
+
+(claim unpack_pack_toy
+  (goal () () (= (upk_all (fmt_toy) (enum_views (fmt_toy))) True))
+  (steps ((compute both)) refl))
+(claim unpack_pack_f8e4m3fn
+  (goal () () (= (upk_all (fmt_f8e4m3fn) (enum_views (fmt_f8e4m3fn))) True))
+  (steps ((compute both)) refl))
+(claim unpack_pack_f8e5m2
+  (goal () () (= (upk_all (fmt_f8e5m2) (enum_views (fmt_f8e5m2))) True))
+  (steps ((compute both)) refl))
+
+;; --- sampled bit-level spans on F32/F64 (the R1 probe-grid idiom) ---------------------
+;; pk_ok1 has no skip, so a span is never vacuous. The top spans START above
+;; the Inf slot (0x...80 = 128 encodings into the NaN payloads) and walk down
+;; through Inf and into the top finite row — all three classes in one span;
+;; the one-spans cross the 1.0 row boundary; the bottom spans cover +0 and
+;; the deep subnormals; the negative top span mirrors at sign 1.
+(fn pk_span ((f Fmt) (b Int) (k Int)) Bool
+  (measure k (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (le k 0) True (if (pk_ok1 f b) (pk_span f (- b 1) (- k 1)) False)))
+
+(claim pack_span_f32_bottom
+  (goal () () (= (pk_span (fmt_f32) 512 513) True))
+  (steps ((compute both)) refl))
+(claim pack_span_f32_one
+  (goal () () (= (pk_span (fmt_f32) 1065353344 256) True))
+  (steps ((compute both)) refl))
+(claim pack_span_f32_top
+  (goal () () (= (pk_span (fmt_f32) 2139095168 256) True))
+  (steps ((compute both)) refl))
+(claim pack_span_f32_negtop
+  (goal () () (= (pk_span (fmt_f32) 4286578816 256) True))
+  (steps ((compute both)) refl))
+(claim pack_span_f64_bottom
+  (goal () () (= (pk_span (fmt_f64) 512 513) True))
+  (steps ((compute both)) refl))
+(claim pack_span_f64_one
+  (goal () () (= (pk_span (fmt_f64) 4607182418800017536 256) True))
+  (steps ((compute both)) refl))
+(claim pack_span_f64_top
+  (goal () () (= (pk_span (fmt_f64) 9218868437227405440 256) True))
+  (steps ((compute both)) refl))
