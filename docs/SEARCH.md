@@ -1124,3 +1124,33 @@ instances; the exit criterion was met in slice 5. What remains in
 the arc's queue is by ruling, not ladder: the memo lever, then the
 false-equivalence-proof hunter, with canon-redundancy and the joint
 task behind them.
+
+
+### Slice 6, component 2 — the consulted-choice-set memo (LANDED 2026-07-11)
+
+**S4b's ratified second half.** The arena is now shared across every
+region of a drive; thunks INTERN by (expr, env) so distinct regions
+reach the same nodes; a completed forcing records which holes it
+consulted at which choices, and any later region agreeing on exactly
+that set replays the result without evaluating. A forcing that
+consulted NOTHING is region-independent and updates to a plain
+call-by-need indirection, paid once per drive (test inputs, closure
+values). Blocked forcings record nothing (incomplete evaluations
+never enter the memo).
+
+**Measured against the pinned pre-memo baseline, settlement and
+verdicts BIT-IDENTICAL (regions, forks, found, killed, AGREE):**
+
+    d1: STEPS 896  -> 623    (1.4×)
+    d2: STEPS 29,008 -> 12,651  (2.3×)
+
+Re-evaluation halves at d2 and the leverage compounds with depth
+(the playground's d3 settlements are where the memo pays 1,000×+;
+d2's fork tree is shallow enough that most sharing is within-region).
+**Recorded honestly: wall time ROSE ~30% at these depths** — the
+pure-functional memo/intern probes (assoc walks) cost more per step
+than the steps they save at d2 scale. That is exactly the "real
+engineering item" the ledger named for the mutable-arena-shaped memo;
+the two-level index and cheaper keys are the known follow-up when a
+d3-scale consumer arrives, and STEPS (the algorithmic quantity) is
+what the pin tracks.
