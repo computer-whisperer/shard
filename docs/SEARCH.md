@@ -1276,3 +1276,52 @@ PER FRAGMENT by design (a rule redundant on list-shaped code may be
 load-bearing elsewhere); the lines are input to the canon arc's
 judgement, never deletions from here (canon owns kernel/canon and
 CANON.md).
+
+
+### Ruling + ARC CLOSE (2026-07-12, USER)
+
+**The joint compile⊗exec task is SKIPPED — not adopted.** The
+playground has not closed it: several attempts over hours, no
+success yet. "No reason to adopt yet" (USER). It stays outside the
+repo until the playground demonstrates a working instance; nothing
+here blocks on it.
+
+**The arc is complete and merge-ready.** Every ladder rung S1–S8 and
+every gate G1–G5 has a landed, corpus-pinned instance; the exit
+criterion (slice 5.4's certified bracket) is met; both queued
+standing uses landed as instruments (slice 7 the false-equivalence
+hunter, slice 8 the canon-subsumption census). What merges, by
+accumulation tier:
+
+- **meta/** — sketch (holes, count/unrank/rank — D9/D10 as ratified);
+  spell grown to the full renderer (D11); invoke grown extend_fn (the
+  interface ruling) — durable "stdlib for manipulating shard".
+- **tools/search/** — the instrument suite: search (ground pin),
+  census (G1/G2), catalog (G5), sym (S4a), laws (S5 + traces + synth
+  + bracket), render_gate (D11 reload), superpose (S4b + memo), hunt
+  (standing-use #2), subsume (standing-use #1), rev/rev_obj/hunt_obj
+  plumbing, gen/ artifacts (rev_synth, cat_bracket — both check
+  targets, G4 continuous).
+- **examples/** — sketch_pin, spell_pin (kernel-computed pins).
+- **corpus** — 224 check targets green at the 57-line FAIL baseline
+  (unchanged from cut); 8 search pin sections replay the whole
+  instrument suite every run.
+
+**The post-merge queue, gathered from the slice records:**
+
+1. Contextual-PE evidence for CANON.md (USER-scheduled, in MAIN —
+   see the TODO above; subsume.shard is the standing admission-
+   evidence instrument for whatever the canon arc prices).
+2. The S4a comparator's ctor-vs-atom refusal (4 live SYMERR witnesses
+   pinned by the hunter) — extend or re-message, next S4a consumer.
+3. Hunter engine: move the ground battery onto evm_call_pure once its
+   per-invocation dispatch rebuild (the named first engine lever) is
+   fixed; coverage extensions (per-tree object roots for kernel/meta/
+   models, target-variant claims, refined-type filtered enumeration).
+4. Superpose memo: two-level index when a d3-scale consumer arrives;
+   trie/value-keyed coupling factorization with the first coupled
+   task (separate component, as ruled).
+5. Rebuild-family generative exclusion (per-pin sub-grammar variants)
+   when the residue matters at a deeper rung; NRLia as a rule value
+   with its first consumer task.
+6. The joint compile⊗exec task — deferred per the ruling above.
