@@ -25,8 +25,12 @@
 ;;; formats); the parametric bijection theorems are R2.2.
 
 (import "../../kernel/stdlib.shard")
+(import "../../kernel/facts.shard")  ; div/mod uniqueness + the ring respell axioms
 (import "float.shard")  ; the L1 model: Fmt, FVal, fpow2, bounds, fwf, enum_views
+(import "kit.shard")  ; the 2^k algebra + field-split kit (R2.2 proofs)
+(use (:: kernel facts *))
 (use (:: std float float *))  ; type names (Fmt, FVal) for binders — import alone feeds fns only
+(use (:: std float kit *))
 
 ;; --- the encoding -------------------------------------------------------------------
 
@@ -304,3 +308,699 @@
 (claim pack_span_f64_top
   (goal () () (= (pk_span (fmt_f64) 9218868437227405440 256) True))
   (steps ((compute both)) refl))
+
+
+;; --- the bijection, decode side (rung R2 slice 2): unpack . pack = id -----------------
+;; Parametric (tier 1): for every well-formed view, funpack recovers it from
+;; fpack EXACTLY — including the canonical NaN. The proofs exhibit the
+;; euclidean field decomposition of the packed pattern (ediv_split/mod_split
+;; from the kit), rewrite the fields into funpack's opened body, and decide
+;; the guard chain.
+
+;; Inf: both signs, any format with an Inf slot.
+(claim funpack_fpack_inf
+  (goal ((f Fmt) (s Bool)) ((= (fmt_wf f) True) (= (hinf_of f) True))
+    (= (funpack f (fpack f (FInf s))) (FInf s)))
+  (chain
+    (have hew (= (le 2 (ew_of f)) True)
+      (rewrite-with
+        (lemma fmt_wf_ew)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have hmw (= (le 1 (mw_of f)) True)
+      (rewrite-with
+        (lemma fmt_wf_mw)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have hpe (= (lt 0 (fpow2 (ew_of f))) True)
+      (rewrite-with (lemma fpow2_pos) lr lhs () () refl))
+    (have hpm (= (lt 0 (fpow2 (mw_of f))) True)
+      (rewrite-with (lemma fpow2_pos) lr lhs () () refl))
+    (have hf22 (= (fpow2 2) 4) (steps ((compute lhs)) refl))
+    (have hpe2 (= (le (fpow2 2) (fpow2 (ew_of f))) True)
+      (rewrite-with
+        (lemma fpow2_mono)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hew) lr lhs true ())) refl))
+        refl))
+    (have hpe4 (= (le 4 (fpow2 (ew_of f))) True)
+      (steps
+        ((rewrite (premise hf22) rl lhs true ())
+         (rewrite (premise hpe2) lr lhs true ()))
+        refl))
+    (have hpem
+      (=
+        (fpow2 (+ (ew_of f) (mw_of f)))
+        (* (fpow2 (mw_of f)) (fpow2 (ew_of f))))
+      (chain
+        (rewrite-with
+          (lemma fpow2_split)
+          lr
+          lhs
+          ()
+          ((by arith (list 1 0 0 1 0 0 0 0 0 0))
+           (by arith (list 1 0 0 0 1 0 0 0 0 0))))
+        (steps ((rewrite (lemma mul_comm) lr lhs true ())) refl)))
+    (have hmul
+      (=
+        (le (* (fpow2 (mw_of f)) 1) (* (fpow2 (mw_of f)) (fpow2 (ew_of f))))
+        True)
+      (rewrite-with
+        (lemma mul_le_mono_l)
+        lr
+        lhs
+        ((inst x 1) (inst y (fpow2 (ew_of f))) (inst z (fpow2 (mw_of f))))
+        ((by arith (list 1 0 0 0 0 1 0 0 0 0 0))
+         (by arith (list 1 0 0 0 0 0 1 0 0 0 0)))
+        refl))
+    (have hx1
+      (=
+        (* (- (fpow2 (ew_of f)) 1) (fpow2 (mw_of f)))
+        (- (* (fpow2 (mw_of f)) (fpow2 (ew_of f))) (* (fpow2 (mw_of f)) 1)))
+      (steps
+        ((rewrite (lemma mul_comm) lr lhs true ())
+         (rewrite (lemma mul_sub) lr lhs true ()))
+        refl))
+    (have hx1lo (= (le 0 (* (- (fpow2 (ew_of f)) 1) (fpow2 (mw_of f)))) True)
+      (steps
+        ((rewrite (premise hx1) lr lhs true ()))
+        (by arith (list 1 0 0 0 0 0 0 0 0 0 0 1 0))))
+    (have hx1hi
+      (=
+        (lt
+          (* (- (fpow2 (ew_of f)) 1) (fpow2 (mw_of f)))
+          (fpow2 (+ (ew_of f) (mw_of f))))
+        True)
+      (steps
+        ((rewrite (premise hx1) lr lhs true ())
+         (rewrite (premise hpem) lr lhs true ()))
+        (by arith (list 1 0 0 0 0 0 1 0 0 0 0 0 0 0))))
+    (case-on s Bool
+      ((case True
+         (chain
+           (have hs (= s True)
+             (steps ((rewrite (hyp True) lr lhs true ())) refl))
+           (have hb
+             (=
+               (fpack f (FInf s))
+               (+
+                 (* 1 (fpow2 (+ (ew_of f) (mw_of f))))
+                 (* (- (fpow2 (ew_of f)) 1) (fpow2 (mw_of f)))))
+             (steps
+               ((rewrite (premise hs) lr lhs true ())
+                (unfold fpack lhs)
+                (simp lhs))
+               refl))
+           (have hq1
+             (=
+               (ediv (fpack f (FInf s)) (fpow2 (mw_of f)))
+               (+ (fpow2 (ew_of f)) (- (fpow2 (ew_of f)) 1)))
+             (chain
+               (rewrite-with
+                 (lemma ediv_split)
+                 lr
+                 lhs
+                 ((inst hi (+ (fpow2 (ew_of f)) (- (fpow2 (ew_of f)) 1)))
+                  (inst lo 0))
+                 ((steps
+                    ((rewrite (premise hb) lr lhs true ())
+                     (rewrite (premise hpem) lr lhs true ())
+                     (rewrite (premise hx1) lr lhs true ())
+                     (rewrite (lemma mul_comm) lr rhs true ())
+                     (rewrite (lemma mul_dist) lr rhs true ())
+                     (rewrite (lemma mul_sub) lr rhs true ()))
+                    (by
+                      arith
+                      (list
+                        (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)
+                        (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))))
+                  (steps ((compute lhs)) refl)
+                  (steps ((rewrite (premise hpm) lr lhs true ())) refl)))
+               (steps () refl)))
+           (have hmb (= (mod (fpack f (FInf s)) (fpow2 (mw_of f))) 0)
+             (chain
+               (rewrite-with
+                 (lemma mod_split)
+                 lr
+                 lhs
+                 ((inst hi (+ (fpow2 (ew_of f)) (- (fpow2 (ew_of f)) 1)))
+                  (inst lo 0))
+                 ((steps
+                    ((rewrite (premise hb) lr lhs true ())
+                     (rewrite (premise hpem) lr lhs true ())
+                     (rewrite (premise hx1) lr lhs true ())
+                     (rewrite (lemma mul_comm) lr rhs true ())
+                     (rewrite (lemma mul_dist) lr rhs true ())
+                     (rewrite (lemma mul_sub) lr rhs true ()))
+                    (by
+                      arith
+                      (list
+                        (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)
+                        (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))))
+                  (steps ((compute lhs)) refl)
+                  (steps ((rewrite (premise hpm) lr lhs true ())) refl)))
+               (steps () refl)))
+           (have heb
+             (=
+               (mod
+                 (+ (fpow2 (ew_of f)) (- (fpow2 (ew_of f)) 1))
+                 (fpow2 (ew_of f)))
+               (- (fpow2 (ew_of f)) 1))
+             (chain
+               (rewrite-with
+                 (lemma mod_split)
+                 lr
+                 lhs
+                 ((inst hi 1) (inst lo (- (fpow2 (ew_of f)) 1)))
+                 ((steps
+                    ()
+                    (by
+                      arith
+                      (list
+                        (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)
+                        (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))))
+                  (steps
+                    ()
+                    (by arith (list 1 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+                  (steps
+                    ()
+                    (by arith (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))))
+               (steps () refl)))
+           (have hsd
+             (= (ediv (fpack f (FInf s)) (fpow2 (+ (ew_of f) (mw_of f)))) 1)
+             (chain
+               (rewrite-with
+                 (lemma ediv_split)
+                 lr
+                 lhs
+                 ((inst hi 1)
+                  (inst lo (* (- (fpow2 (ew_of f)) 1) (fpow2 (mw_of f)))))
+                 ((steps ((rewrite (premise hb) lr lhs true ())) refl)
+                  (steps ((rewrite (premise hx1lo) lr lhs true ())) refl)
+                  (steps ((rewrite (premise hx1hi) lr lhs true ())) refl)))
+               (steps () refl)))
+           (have hg2
+             (= (int_eq (- (fpow2 (ew_of f)) 1) (- (fpow2 (ew_of f)) 1)) True)
+             (steps
+               ()
+               (by
+                 arith
+                 (list
+                   (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)
+                   (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))))
+           (case-on (int_eq (- (fpow2 (ew_of f)) 1) 0) Bool
+             ((case True
+                (chain
+                  (have hgx (= (int_eq (- (fpow2 (ew_of f)) 1) 0) True)
+                    (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                  (have hbad (= (le 0 -1) True)
+                    (steps
+                      ()
+                      (by
+                        arith
+                        (list 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 -1))))
+                  (have hff (= False True)
+                    (steps
+                      ((rewrite (premise hbad) rl rhs true ()) (compute rhs))
+                      refl))
+                  (absurd (premise hff))))
+              (case False
+                (chain
+                  (have hg1 (= (int_eq (- (fpow2 (ew_of f)) 1) 0) False)
+                    (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                  (steps
+                    ((rewrite (premise hs) lr rhs true ())
+                     (unfold funpack lhs)
+                     (reduce lhs)
+                     (rewrite (premise hq1) lr lhs true ())
+                     (rewrite (premise hmb) lr lhs true ())
+                     (rewrite (premise hsd) lr lhs true ())
+                     (simp lhs)
+                     (rewrite (premise heb) lr lhs true ())
+                     (rewrite (premise hg1) lr lhs true ())
+                     (rewrite (premise hg2) lr lhs true ())
+                     (rewrite (premise 1) lr lhs true ())
+                     (simp lhs))
+                    refl)))))))
+       (case False
+         (chain
+           (have hs (= s False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (have hb
+             (=
+               (fpack f (FInf s))
+               (+
+                 (* 0 (fpow2 (+ (ew_of f) (mw_of f))))
+                 (* (- (fpow2 (ew_of f)) 1) (fpow2 (mw_of f)))))
+             (steps
+               ((rewrite (premise hs) lr lhs true ())
+                (unfold fpack lhs)
+                (simp lhs))
+               refl))
+           (have hq1
+             (=
+               (ediv (fpack f (FInf s)) (fpow2 (mw_of f)))
+               (- (fpow2 (ew_of f)) 1))
+             (chain
+               (rewrite-with
+                 (lemma ediv_split)
+                 lr
+                 lhs
+                 ((inst hi (- (fpow2 (ew_of f)) 1)) (inst lo 0))
+                 ((steps
+                    ((rewrite (premise hb) lr lhs true ())
+                     (rewrite (premise hx1) lr lhs true ())
+                     (rewrite (premise hx1) lr rhs true ()))
+                    (by
+                      arith
+                      (list
+                        (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)
+                        (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))))
+                  (steps ((compute lhs)) refl)
+                  (steps ((rewrite (premise hpm) lr lhs true ())) refl)))
+               (steps () refl)))
+           (have hmb (= (mod (fpack f (FInf s)) (fpow2 (mw_of f))) 0)
+             (chain
+               (rewrite-with
+                 (lemma mod_split)
+                 lr
+                 lhs
+                 ((inst hi (- (fpow2 (ew_of f)) 1)) (inst lo 0))
+                 ((steps
+                    ((rewrite (premise hb) lr lhs true ())
+                     (rewrite (premise hx1) lr lhs true ())
+                     (rewrite (premise hx1) lr rhs true ()))
+                    (by
+                      arith
+                      (list
+                        (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)
+                        (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))))
+                  (steps ((compute lhs)) refl)
+                  (steps ((rewrite (premise hpm) lr lhs true ())) refl)))
+               (steps () refl)))
+           (have heb
+             (=
+               (mod (- (fpow2 (ew_of f)) 1) (fpow2 (ew_of f)))
+               (- (fpow2 (ew_of f)) 1))
+             (chain
+               (rewrite-with
+                 (lemma mod_split)
+                 lr
+                 lhs
+                 ((inst hi 0) (inst lo (- (fpow2 (ew_of f)) 1)))
+                 ((steps
+                    ()
+                    (by
+                      arith
+                      (list
+                        (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)
+                        (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))))
+                  (steps
+                    ()
+                    (by arith (list 1 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+                  (steps
+                    ()
+                    (by arith (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))))
+               (steps () refl)))
+           (have hsd
+             (= (ediv (fpack f (FInf s)) (fpow2 (+ (ew_of f) (mw_of f)))) 0)
+             (chain
+               (rewrite-with
+                 (lemma ediv_split)
+                 lr
+                 lhs
+                 ((inst hi 0)
+                  (inst lo (* (- (fpow2 (ew_of f)) 1) (fpow2 (mw_of f)))))
+                 ((steps ((rewrite (premise hb) lr lhs true ())) refl)
+                  (steps ((rewrite (premise hx1lo) lr lhs true ())) refl)
+                  (steps ((rewrite (premise hx1hi) lr lhs true ())) refl)))
+               (steps () refl)))
+           (have hg2
+             (= (int_eq (- (fpow2 (ew_of f)) 1) (- (fpow2 (ew_of f)) 1)) True)
+             (steps
+               ()
+               (by
+                 arith
+                 (list
+                   (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)
+                   (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))))
+           (case-on (int_eq (- (fpow2 (ew_of f)) 1) 0) Bool
+             ((case True
+                (chain
+                  (have hgx (= (int_eq (- (fpow2 (ew_of f)) 1) 0) True)
+                    (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                  (have hbad (= (le 0 -1) True)
+                    (steps
+                      ()
+                      (by
+                        arith
+                        (list 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 -1))))
+                  (have hff (= False True)
+                    (steps
+                      ((rewrite (premise hbad) rl rhs true ()) (compute rhs))
+                      refl))
+                  (absurd (premise hff))))
+              (case False
+                (chain
+                  (have hg1 (= (int_eq (- (fpow2 (ew_of f)) 1) 0) False)
+                    (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                  (steps
+                    ((rewrite (premise hs) lr rhs true ())
+                     (unfold funpack lhs)
+                     (reduce lhs)
+                     (rewrite (premise hq1) lr lhs true ())
+                     (rewrite (premise hmb) lr lhs true ())
+                     (rewrite (premise hsd) lr lhs true ())
+                     (simp lhs)
+                     (rewrite (premise heb) lr lhs true ())
+                     (rewrite (premise hg1) lr lhs true ())
+                     (rewrite (premise hg2) lr lhs true ())
+                     (rewrite (premise 1) lr lhs true ())
+                     (simp lhs))
+                    refl)))))))))))
+
+;; NaN: the canonical encoding round-trips, for any format with a NaN slot —
+;; quiet-MSB payload when the format has an Inf slot (IEEE), the mant=max
+;; carve-out when it does not (FN).
+(claim funpack_fpack_nan
+  (goal ((f Fmt)) ((= (fmt_wf f) True) (= (hnan_of f) True))
+    (= (funpack f (fpack f FNaN)) FNaN))
+  (chain
+    (have hew (= (le 2 (ew_of f)) True)
+      (rewrite-with
+        (lemma fmt_wf_ew)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have hmw (= (le 1 (mw_of f)) True)
+      (rewrite-with
+        (lemma fmt_wf_mw)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have hpe (= (lt 0 (fpow2 (ew_of f))) True)
+      (rewrite-with (lemma fpow2_pos) lr lhs () () refl))
+    (have hpm (= (lt 0 (fpow2 (mw_of f))) True)
+      (rewrite-with (lemma fpow2_pos) lr lhs () () refl))
+    (have hf22 (= (fpow2 2) 4) (steps ((compute lhs)) refl))
+    (have hpe2 (= (le (fpow2 2) (fpow2 (ew_of f))) True)
+      (rewrite-with
+        (lemma fpow2_mono)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hew) lr lhs true ())) refl))
+        refl))
+    (have hpe4 (= (le 4 (fpow2 (ew_of f))) True)
+      (steps
+        ((rewrite (premise hf22) rl lhs true ())
+         (rewrite (premise hpe2) lr lhs true ()))
+        refl))
+    (case-on (hinf_of f) Bool
+      ((case True
+         (chain
+           (have hhi (= (hinf_of f) True)
+             (steps ((rewrite (hyp True) lr lhs true ())) refl))
+           (have hb
+             (=
+               (fpack f FNaN)
+               (+
+                 (* (- (fpow2 (ew_of f)) 1) (fpow2 (mw_of f)))
+                 (fpow2 (- (mw_of f) 1))))
+             (steps
+               ((unfold fpack lhs)
+                (reduce lhs)
+                (unfold fnan_bits lhs)
+                (rewrite (premise 1) lr lhs true ())
+                (rewrite (premise hhi) lr lhs true ())
+                (simp lhs))
+               refl))
+           (have hph (= (lt 0 (fpow2 (- (mw_of f) 1))) True)
+             (rewrite-with (lemma fpow2_pos) lr lhs () () refl))
+           (have harg (= (mw_of f) (+ 1 (- (mw_of f) 1)))
+             (steps
+               ()
+               (by
+                 arith
+                 (list
+                   (list 1 0 0 0 0 0 0 0 0 0 0 0 0)
+                   (list 1 0 0 0 0 0 0 0 0 0 0 0 0)))))
+           (have hf21 (= (fpow2 1) 2) (steps ((compute lhs)) refl))
+           (have hph2 (= (fpow2 (mw_of f)) (* 2 (fpow2 (- (mw_of f) 1))))
+             (chain
+               (steps ((rewrite (premise harg) lr lhs true ())))
+               (rewrite-with
+                 (lemma fpow2_split)
+                 lr
+                 lhs
+                 ()
+                 ((by arith (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0))
+                  (by arith (list 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0))))
+               (steps ((rewrite (premise hf21) lr lhs true ())) refl)))
+           (have hq1
+             (= (ediv (fpack f FNaN) (fpow2 (mw_of f))) (- (fpow2 (ew_of f)) 1))
+             (chain
+               (rewrite-with
+                 (lemma ediv_split)
+                 lr
+                 lhs
+                 ((inst hi (- (fpow2 (ew_of f)) 1))
+                  (inst lo (fpow2 (- (mw_of f) 1))))
+                 ((steps ((rewrite (premise hb) lr lhs true ())) refl)
+                  (steps () (by arith (list 1 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0)))
+                  (steps
+                    ((rewrite (premise hph2) lr lhs true ()))
+                    (by arith (list 1 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0)))))
+               (steps () refl)))
+           (have hmb
+             (= (mod (fpack f FNaN) (fpow2 (mw_of f))) (fpow2 (- (mw_of f) 1)))
+             (chain
+               (rewrite-with
+                 (lemma mod_split)
+                 lr
+                 lhs
+                 ((inst hi (- (fpow2 (ew_of f)) 1))
+                  (inst lo (fpow2 (- (mw_of f) 1))))
+                 ((steps ((rewrite (premise hb) lr lhs true ())) refl)
+                  (steps () (by arith (list 1 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0)))
+                  (steps
+                    ((rewrite (premise hph2) lr lhs true ()))
+                    (by arith (list 1 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0)))))
+               (steps () refl)))
+           (have heb
+             (=
+               (mod (- (fpow2 (ew_of f)) 1) (fpow2 (ew_of f)))
+               (- (fpow2 (ew_of f)) 1))
+             (chain
+               (rewrite-with
+                 (lemma mod_split)
+                 lr
+                 lhs
+                 ((inst hi 0) (inst lo (- (fpow2 (ew_of f)) 1)))
+                 ((steps
+                    ()
+                    (by
+                      arith
+                      (list
+                        (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)
+                        (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))))
+                  (steps
+                    ()
+                    (by arith (list 1 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0)))
+                  (steps
+                    ()
+                    (by arith (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))))
+               (steps () refl)))
+           (have hg2
+             (= (int_eq (- (fpow2 (ew_of f)) 1) (- (fpow2 (ew_of f)) 1)) True)
+             (steps
+               ()
+               (by
+                 arith
+                 (list
+                   (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)
+                   (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))))
+           (case-on (int_eq (- (fpow2 (ew_of f)) 1) 0) Bool
+             ((case True
+                (chain
+                  (have hgx (= (int_eq (- (fpow2 (ew_of f)) 1) 0) True)
+                    (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                  (have hbad (= (le 0 -1) True)
+                    (steps
+                      ()
+                      (by
+                        arith
+                        (list 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 -1))))
+                  (have hff (= False True)
+                    (steps
+                      ((rewrite (premise hbad) rl rhs true ()) (compute rhs))
+                      refl))
+                  (absurd (premise hff))))
+              (case False
+                (chain
+                  (have hg1 (= (int_eq (- (fpow2 (ew_of f)) 1) 0) False)
+                    (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                  (case-on (int_eq (fpow2 (- (mw_of f) 1)) 0) Bool
+                    ((case True
+                       (chain
+                         (have hgmx (= (int_eq (fpow2 (- (mw_of f) 1)) 0) True)
+                           (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                         (have hbad2 (= (le 0 -1) True)
+                           (steps
+                             ()
+                             (by
+                               arith
+                               (list 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0
+                                 -1))))
+                         (have hff2 (= False True)
+                           (steps
+                             ((rewrite (premise hbad2) rl rhs true ())
+                              (compute rhs))
+                             refl))
+                         (absurd (premise hff2))))
+                     (case False
+                       (chain
+                         (have hg4 (= (int_eq (fpow2 (- (mw_of f) 1)) 0) False)
+                           (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                         (steps
+                           ((unfold funpack lhs)
+                            (reduce lhs)
+                            (rewrite (premise hq1) lr lhs true ())
+                            (rewrite (premise hmb) lr lhs true ())
+                            (simp lhs)
+                            (rewrite (premise heb) lr lhs true ())
+                            (rewrite (premise hg1) lr lhs true ())
+                            (rewrite (premise hg2) lr lhs true ())
+                            (rewrite (premise hhi) lr lhs true ())
+                            (rewrite (premise hg4) lr lhs true ())
+                            (rewrite (premise 1) lr lhs true ())
+                            (simp lhs))
+                           refl)))))))))))
+       (case False
+         (chain
+           (have hhi (= (hinf_of f) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (have hb
+             (=
+               (fpack f FNaN)
+               (+
+                 (* (- (fpow2 (ew_of f)) 1) (fpow2 (mw_of f)))
+                 (- (fpow2 (mw_of f)) 1)))
+             (steps
+               ((unfold fpack lhs)
+                (reduce lhs)
+                (unfold fnan_bits lhs)
+                (rewrite (premise 1) lr lhs true ())
+                (rewrite (premise hhi) lr lhs true ())
+                (simp lhs))
+               refl))
+           (have hq1
+             (= (ediv (fpack f FNaN) (fpow2 (mw_of f))) (- (fpow2 (ew_of f)) 1))
+             (chain
+               (rewrite-with
+                 (lemma ediv_split)
+                 lr
+                 lhs
+                 ((inst hi (- (fpow2 (ew_of f)) 1))
+                  (inst lo (- (fpow2 (mw_of f)) 1)))
+                 ((steps ((rewrite (premise hb) lr lhs true ())) refl)
+                  (steps () (by arith (list 1 0 0 0 0 0 1 0 0 0 0 0)))
+                  (steps () (by arith (list 1 0 0 0 0 0 0 0 0 0 0 0)))))
+               (steps () refl)))
+           (have hmb
+             (= (mod (fpack f FNaN) (fpow2 (mw_of f))) (- (fpow2 (mw_of f)) 1))
+             (chain
+               (rewrite-with
+                 (lemma mod_split)
+                 lr
+                 lhs
+                 ((inst hi (- (fpow2 (ew_of f)) 1))
+                  (inst lo (- (fpow2 (mw_of f)) 1)))
+                 ((steps ((rewrite (premise hb) lr lhs true ())) refl)
+                  (steps () (by arith (list 1 0 0 0 0 0 1 0 0 0 0 0 0)))
+                  (steps () (by arith (list 1 0 0 0 0 0 0 0 0 0 0 0 0)))))
+               (steps () refl)))
+           (have heb
+             (=
+               (mod (- (fpow2 (ew_of f)) 1) (fpow2 (ew_of f)))
+               (- (fpow2 (ew_of f)) 1))
+             (chain
+               (rewrite-with
+                 (lemma mod_split)
+                 lr
+                 lhs
+                 ((inst hi 0) (inst lo (- (fpow2 (ew_of f)) 1)))
+                 ((steps
+                    ()
+                    (by
+                      arith
+                      (list
+                        (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0)
+                        (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0))))
+                  (steps () (by arith (list 1 0 0 0 0 1 0 0 0 0 0 0 0 0)))
+                  (steps () (by arith (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0)))))
+               (steps () refl)))
+           (have hg2
+             (= (int_eq (- (fpow2 (ew_of f)) 1) (- (fpow2 (ew_of f)) 1)) True)
+             (steps
+               ()
+               (by
+                 arith
+                 (list
+                   (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0)
+                   (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))))
+           (case-on (int_eq (- (fpow2 (ew_of f)) 1) 0) Bool
+             ((case True
+                (chain
+                  (have hgx (= (int_eq (- (fpow2 (ew_of f)) 1) 0) True)
+                    (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                  (have hbad (= (le 0 -1) True)
+                    (steps
+                      ()
+                      (by arith (list 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 -1))))
+                  (have hff (= False True)
+                    (steps
+                      ((rewrite (premise hbad) rl rhs true ()) (compute rhs))
+                      refl))
+                  (absurd (premise hff))))
+              (case False
+                (chain
+                  (have hg1 (= (int_eq (- (fpow2 (ew_of f)) 1) 0) False)
+                    (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                  (have hg4
+                    (=
+                      (int_eq (- (fpow2 (mw_of f)) 1) (- (fpow2 (mw_of f)) 1))
+                      True)
+                    (steps
+                      ()
+                      (by
+                        arith
+                        (list
+                          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)
+                          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))))
+                  (steps
+                    ((unfold funpack lhs)
+                     (reduce lhs)
+                     (rewrite (premise hq1) lr lhs true ())
+                     (rewrite (premise hmb) lr lhs true ())
+                     (simp lhs)
+                     (rewrite (premise heb) lr lhs true ())
+                     (rewrite (premise hg1) lr lhs true ())
+                     (rewrite (premise hg2) lr lhs true ())
+                     (rewrite (premise hhi) lr lhs true ())
+                     (rewrite (premise hg4) lr lhs true ())
+                     (rewrite (premise 1) lr lhs true ())
+                     (simp lhs))
+                    refl)))))))))))
