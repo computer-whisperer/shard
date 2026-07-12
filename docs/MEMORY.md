@@ -1,9 +1,12 @@
 shard memory — MEMORY.md
 ========================
 
-STATUS: DRAFT (2026-07-11) — the scope ledger for object representation
-and memory management under lowering: how shard values become bytes,
-and when bytes that represented one value may be reused for another.
+STATUS: DRAFT (2026-07-11; application-story revision same day — the
+tower now lands at models/imp, see the application ruling in the
+rulings block and docs/IMP.md) — the scope ledger for object
+representation and memory management under lowering: how shard values
+become bytes, and when bytes that represented one value may be reused
+for another.
 This file takes ownership of LOWERING.md §7's uniform-rep questions
 (items 2, 5, 6) and states the heap/stack lifecycle story for every
 native target — the story must survive compiling ANY shard program,
@@ -48,6 +51,18 @@ User rulings already on record from the design discussions of
   success criterion, never an accepted constant; mimicry is the named
   hazard — most plausible-sounding memory designs import an industry
   groove instead of deriving from what shard actually needs.
+- **The application ruling (2026-07-11): the tower lands at
+  models/imp.** A neutral imperative dialect (docs/IMP.md — the
+  ledger for the machine itself) keeps the memory-allocation story
+  minus the ISA-specific quirks and is the natural manual spelling
+  target before the full `.wasm.shard`/`.x86.shard` dialects. This
+  ledger's theorems are stated ONCE against imp (spec ⊑ imp is
+  where cancellations attach); the per-ISA legs (imp ⊑ wasm/x86)
+  are memory-story-free instruction selection. A memory class IS a
+  choice of imp spelling, and the class-assignment surface (D1)
+  steers the spec → imp step from the build profile. The float
+  arc's core model joins imp by citation at fork-merge time
+  (IMP.md rulings block).
 
 
 ## 1. The root problem
@@ -146,6 +161,15 @@ runtime mechanism.** Memory class is a property of the CHOSEN
 REPRESENTATION, declared at the lowering-form layer and verified by
 gates — never inferred by a hidden compiler analysis (§10). A
 program sits wherever its proofs reach, per-decl.
+
+Where the classes get their operational semantics (the application
+ruling, rulings block): each class below is a family of **imp
+spellings** — frame slots and destination windows for `frame`,
+explicit region allocation/death for regions, headered cells and
+count ops for `shared` — and each cancellation theorem is a spec ⊑
+imp obligation, proven once, target-free. The ISA models never see a
+memory class; by imp, every allocation decision is already explicit
+bytes-and-windows.
 
 **Base class — `shared` (counted heap).** Unbounded, genuinely shared
 data. Precise reference counting over headered cells:
@@ -389,6 +413,13 @@ where a cert names bytes. Low-level emit specifics (header encodings,
 frame conventions in machine bytes) land in the target docs at rung
 time — this file stays at the architecture level.
 
+Rung residence after the application ruling: rung 1 (scalars) sits
+below imp and is unchanged. Rungs 2–5 are stated and proven AT imp
+(docs/IMP.md's ladder interleaves: its I0/I1 build the machine and
+the ISA legs; its I2 is this file's rung-2 flagship; the counted
+heap arrives at imp when rung 4 opens). Each flagship is proven once
+at imp and landed per target by the imp ⊑ ISA families.
+
 1. **Scalars (`register`).** The ratified LOWERING.md §7 item 9 plan:
    kernel-inner refined u8/u32/u64; fit obligations discharged from
    source invariants at construction sites. Shared prerequisite of
@@ -458,10 +489,13 @@ time — this file stays at the architecture level.
 ## 11. Open decision points
 
 - **D1 — class-assignment surface.** The principle is ratified
-  (declared, proof-backed, gate-verified); the surface is not: where
-  do class declarations live — per-type in the lib/bin decl (the
-  accepts-family shape), per-binding, or per-decl with percolation?
-  Propose at slice 2 with the frame flagship in hand.
+  (declared, proof-backed, gate-verified), and the application
+  ruling fixes WHAT is assigned: a class assignment selects the imp
+  spelling of the spec → imp step (rulings block; docs/IMP.md §4).
+  The remaining surface question — how assignments are written in
+  the profile (per-type in the decl, per-binding, per-decl with
+  percolation) — resolves at BUILD.md rung 3 jointly with IMP.md
+  I3, with the frame flagship in hand.
 - **D2 — accounting units.** Tier-1 premises in bytes-via-sizeof
   (lean: regen absorbs repricing when layouts change) vs abstract
   cells. Decide with slice 4's first premise.
