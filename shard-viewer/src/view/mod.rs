@@ -4,38 +4,29 @@
 //! tree can be rendered headlessly — to SVG + a lint report — without a GPU or
 //! a window. That headless render is the build-time review loop.
 //!
-//! This module is the **shell** (sidebar / toolbar / pane dispatch); each
-//! visualization *variant* lives in its own file so new experiments stay
-//! isolated and cheap to try:
+//! This module is the **shell** around the one canvas — the sidebar, the
+//! scope-breadcrumb toolbar, and the inspector dispatch:
 //!
-//! - [`methods`] — one file's call graph + triage overlay (and the fn/file
-//!   inspector panels the Map shares).
+//! - [`map`] — THE view: any [`Scope`]'s members (fns, claims, types, file
+//!   docs) on one committed plane, grouped by origin dir ⊃ file.
 //! - [`flow`] — the region-card renderer (fn bodies / proof spines as
-//!   structured LabVIEW-style diagrams), drawn inside the Map's cards.
-//! - [`map`] — the unified view we're growing toward: any [`Scope`]'s fns,
-//!   grouped by origin file/dir, each in expanded flow form.
-//! - [`shared`] — the pan/zoom viewport, laid-out-graph canvas, and edge/legend
-//!   primitives every variant draws with.
+//!   structured LabVIEW-style diagrams) the Map's cards draw their innards
+//!   with.
+//! - [`inspector`] — the [`Sel`]-dispatched detail panels (fn: source +
+//!   docstring + call lists; file: counts + composition + header doc).
+//! - [`highlight`] — the syntax-highlighted source view inside the fn panel.
+//! - [`shared`] — the pan/zoom viewport, the placed-graph canvas, the edge
+//!   vector builders, and the legend atoms.
 
 mod flow;
 mod highlight;
+mod inspector;
 mod map;
-mod methods;
 mod shared;
 
 use crate::model::Project;
 use crate::scope::Scope;
 use damascene_core::prelude::*;
-
-/// Which visualization the canvas is showing.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum ViewMode {
-    /// One file's fns and their intra-file call edges.
-    Methods,
-    /// The unified map: any scope's fns, grouped by origin file/dir, each in
-    /// expanded flow form. The view we're growing toward — still experimental.
-    Map,
-}
 
 /// The inspector selection: the member-shaped cursor the detail panel is
 /// about. Orthogonal to [`Scope`] — a focus *within* the mapped subject. A
@@ -49,10 +40,8 @@ pub enum Sel {
 
 /// Everything the view needs from the running app, snapshotted per frame.
 pub struct ViewParams {
-    pub mode: ViewMode,
-    /// The canvas subject — what set of fns the view is about. The single-file
-    /// views read [`Scope::focus_file`] out of it; the Map view reads the full
-    /// fn/file sets. See [`crate::scope`].
+    /// The canvas subject — what set of members the Map is about. See
+    /// [`crate::scope`].
     pub scope: Scope,
     /// The inspector cursor (highlighted on the canvas, shown in the detail
     /// panel). See [`Sel`].
@@ -135,10 +124,10 @@ pub fn app_root(project: &Project, p: &ViewParams, map_cache: Option<&MapCache>)
     let mut fn_in_panel = None;
     match p.selected {
         Some(Sel::Fn(fni)) => {
-            panes.push(methods::detail_panel(project, fni, p.mode, p.panel_w));
+            panes.push(inspector::detail_panel(project, fni, p.panel_w));
             fn_in_panel = Some(fni);
         }
-        Some(Sel::File(fi)) => panes.push(methods::file_panel(project, fi)),
+        Some(Sel::File(fi)) => panes.push(inspector::file_panel(project, fi)),
         None => {}
     }
     let main = page([row(panes).gap(tokens::SPACE_4).height(Size::Fill(1.0))]);
@@ -148,7 +137,7 @@ pub fn app_root(project: &Project, p: &ViewParams, map_cache: Option<&MapCache>)
     // overlay root (tooltips mount there), and `overlays` adds the modal as a
     // sibling layer painted on top.
     let modal = match (p.source_modal, fn_in_panel) {
-        (true, Some(fni)) => Some(methods::source_modal(project, fni)),
+        (true, Some(fni)) => Some(inspector::source_modal(project, fni)),
         _ => None,
     };
     overlays(main, [modal])
@@ -266,54 +255,106 @@ fn sidebar(project: &Project, p: &ViewParams) -> El {
 }
 
 fn main_pane(project: &Project, p: &ViewParams, map_cache: Option<&MapCache>) -> El {
-    let focus_file = p.scope.focus_file(project);
-    let body = match p.mode {
-        ViewMode::Methods => match focus_file {
-            None => column([text("Select a file to see its call graph.").muted()])
-                .padding(tokens::SPACE_8),
-            Some(fi) => methods::canvas(project, fi, p),
-        },
-        ViewMode::Map => map::canvas(project, p, map_cache),
-    };
-    let mut head = vec![toolbar(project, p)];
-    match p.mode {
-        ViewMode::Methods if focus_file.is_some() => head.push(methods::legend()),
-        ViewMode::Map => head.push(map::legend(p.flow_z)),
-        _ => {}
-    }
-    head.push(body);
-    column(head)
-        .gap(tokens::SPACE_3)
-        .width(Size::Fill(1.0))
-        .height(Size::Fill(1.0))
+    column([
+        toolbar(project, p),
+        map::legend(p.flow_z),
+        map::canvas(project, p, map_cache),
+    ])
+    .gap(tokens::SPACE_3)
+    .width(Size::Fill(1.0))
+    .height(Size::Fill(1.0))
 }
 
+/// The toolbar: the scope breadcrumb (the orientation device that replaced
+/// the mode buttons) plus the camera controls.
 fn toolbar(project: &Project, p: &ViewParams) -> El {
-    let title = match p.mode {
-        ViewMode::Methods => match p.scope.focus_file(project) {
-            Some(fi) => project.files[fi].rel.clone(),
-            None => "shard-viewer".to_string(),
-        },
-        ViewMode::Map => format!("Map · {}", p.scope.label(project)),
-    };
-    let mode_btn = |label: &str, key: &str, active: bool, tip: &str| {
-        let b = button(label).key(key.to_string()).tooltip(tip.to_string());
-        if active { b.selected() } else { b.ghost() }
-    };
-    row([
-        h3(title),
+    let mut items = breadcrumb(project, &p.scope);
+    items.extend([
         spacer(),
-        mode_btn("Map", "mode_map", p.mode == ViewMode::Map, "Any scope's fns, grouped by file/dir, each in flow form (experimental)"),
-        mode_btn("Methods", "mode_methods", p.mode == ViewMode::Methods, "One file's call graph + triage overlay"),
         text(format!("{:.0}%", p.zoom * 100.0))
             .mono()
             .muted()
             .center_text()
             .width(Size::Fixed(52.0))
             .tooltip("Canvas zoom"),
-        button("Fit").key("fit").secondary().tooltip("Frame the whole graph"),
+        button("Fit").key("fit").secondary().tooltip("Frame the whole map"),
         button("Reset view").key("reset").ghost().tooltip("Snap back to 1:1"),
-    ])
-    .gap(tokens::SPACE_2)
-    .padding(tokens::SPACE_2)
+    ]);
+    row(items)
+        .gap(tokens::SPACE_2)
+        .padding(tokens::SPACE_2)
+        .align(Align::Center)
+}
+
+/// The scope breadcrumb: `◆ project ▸ dir ▸ … ▸ file ▸ fn`. Every segment
+/// jumps (fly-or-rescope — the same navigation the sidebar routes through);
+/// the segment the scope is anchored on renders selected, and a fn anchor is
+/// plain text (it's already the subject, not a jump target). Keys are
+/// `crumb*`-prefixed so they never collide with the sidebar's `dir:`/`file:`
+/// buttons for the same targets.
+fn breadcrumb(project: &Project, scope: &Scope) -> Vec<El> {
+    let sep = || text("▸").muted().font_size(SUB_SIZE);
+    let crumb = |label: String, key: String, here: bool, tip: String| {
+        let b = button(label).key(key).tooltip(tip);
+        if here { b.selected() } else { b.ghost() }
+    };
+    let mut out = vec![crumb(
+        "◆ project".to_string(),
+        "crumb".to_string(),
+        *scope == Scope::Project,
+        "Map the whole project".to_string(),
+    )];
+
+    // The cumulative dir chain (`examples/` ▸ `io/`), each link scoping to
+    // its subtree; `terminal` marks the chain's end as the scope's anchor.
+    let dir_chain = |out: &mut Vec<El>, dir_path: &str, terminal: bool| {
+        let mut prefix = String::new();
+        let segs: Vec<&str> = dir_path.split('/').filter(|s| !s.is_empty()).collect();
+        for (k, seg) in segs.iter().enumerate() {
+            if !prefix.is_empty() {
+                prefix.push('/');
+            }
+            prefix.push_str(seg);
+            out.push(sep());
+            out.push(crumb(
+                format!("{seg}/"),
+                format!("crumbdir:{prefix}"),
+                terminal && k + 1 == segs.len(),
+                format!("Scope to everything under {prefix}/"),
+            ));
+        }
+    };
+    // A file link (its dir chain first), `terminal` when the file is the
+    // scope's anchor.
+    let file_link = |out: &mut Vec<El>, i: usize, terminal: bool| {
+        let rel = &project.files[i].rel;
+        let (dir, base) = rel.rsplit_once('/').unwrap_or(("", rel.as_str()));
+        dir_chain(out, dir, false);
+        out.push(sep());
+        out.push(crumb(base.to_string(), format!("crumbfile:{i}"), terminal, rel.clone()));
+    };
+    // A fn anchor: plain text, styled like the map's card titles.
+    let fn_anchor = |out: &mut Vec<El>, label: String| {
+        out.push(sep());
+        out.push(text(label).mono().semibold().font_size(TITLE_SIZE));
+    };
+
+    match scope {
+        Scope::None | Scope::Project => {}
+        Scope::Dir(d) => dir_chain(&mut out, d, true),
+        Scope::File(i) => file_link(&mut out, *i, true),
+        Scope::Fn(g) => {
+            if let Some(f) = project.fns.get(*g) {
+                file_link(&mut out, f.file, false);
+                fn_anchor(&mut out, f.name.clone());
+            }
+        }
+        Scope::CallTree { root, up, down } => {
+            if let Some(f) = project.fns.get(*root) {
+                file_link(&mut out, f.file, false);
+                fn_anchor(&mut out, format!("{} · {up}↑ {down}↓", f.name));
+            }
+        }
+    }
+    out
 }

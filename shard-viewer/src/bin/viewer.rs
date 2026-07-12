@@ -1,22 +1,22 @@
 //! `shard-viewer` — the graphical navigator.
 //!
-//! Two-pane workbench: a sidebar listing every `.shard` file in the project,
-//! and a `viewport()` canvas drawing the selected file's fns as boxes with
-//! their intra-file call edges as arrows. The viewport handles pan (drag the
-//! background) and zoom (wheel toward the cursor) natively. A fn box selects it
-//! and opens a detail panel (source + clickable callers/callees).
+//! The workbench around THE Map: a sidebar listing every `.shard` file in
+//! the project, the scope-breadcrumb toolbar, the committed-plane canvas
+//! (pan and zoom native to the viewport), and the selection-dispatched
+//! inspector panel. Navigation is scope-as-camera: a click flies the
+//! viewport across the committed plane when its target is on it, and
+//! re-scopes the Map when it isn't.
 //!
 //!   shard-viewer [PROJECT_ROOT]   (defaults to the current directory)
 
 use damascene_core::prelude::*;
 use shard_viewer::model::Project;
 use shard_viewer::scope::Scope;
-use shard_viewer::view::{self, CANVAS_KEY, Sel, ViewMode, ViewParams};
+use shard_viewer::view::{self, CANVAS_KEY, Sel, ViewParams};
 
 struct Viewer {
     project: Project,
-    mode: ViewMode,
-    /// The canvas subject (what the view is about). See [`Scope`].
+    /// The canvas subject (what the Map is about). See [`Scope`].
     scope: Scope,
     /// The inspector cursor (fn or file). See [`Sel`].
     selected: Option<Sel>,
@@ -57,15 +57,43 @@ impl Viewer {
         });
     }
 
-    /// Open a file's call graph (the Methods drill-down), framing it.
-    fn open_file(&mut self, i: usize) {
+    /// Scope the Map to one file, framed. The fallback when a file target
+    /// isn't on the current committed plane (and the file inspector's
+    /// "Map this file ▸").
+    fn scope_file(&mut self, i: usize) {
         self.scope = Scope::File(i);
-        self.selected = None;
         self.source_modal = false;
-        self.mode = ViewMode::Methods;
-        // Frame the newly shown graph (the viewport's pan/zoom persists across
-        // rebuilds, so without this the new graph could open off-screen).
+        // Frame the new plane (the viewport's pan/zoom persists across
+        // rebuilds, so without this it could open off-screen).
         self.fit();
+    }
+
+    /// Fly-or-rescope to a dir subtree (sidebar rows + breadcrumb links):
+    /// when the dir's box is on the committed plane, fly the camera there —
+    /// the topology never re-roots under the user. Otherwise scope to it.
+    fn nav_dir(&mut self, dir: &str) {
+        if let Some(r) =
+            view::region_rect(&self.map_cache, &self.scope, view::MapTarget::Dir(dir))
+        {
+            self.fly_to(r);
+        } else {
+            self.scope = Scope::Dir(dir.to_string());
+            self.selected = None;
+            self.fit();
+        }
+    }
+
+    /// Fly-or-rescope to a file, opening its inspector either way — the
+    /// click names the file as the subject, not just a place to look at.
+    fn nav_file(&mut self, i: usize) {
+        self.selected = Some(Sel::File(i));
+        if let Some(r) =
+            view::region_rect(&self.map_cache, &self.scope, view::MapTarget::File(i))
+        {
+            self.fly_to(r);
+        } else {
+            self.scope_file(i);
+        }
     }
 }
 
@@ -95,7 +123,6 @@ impl App for Viewer {
         view::app_root(
             &self.project,
             &ViewParams {
-                mode: self.mode,
                 scope: self.scope.clone(),
                 selected: self.selected,
                 zoom: view.zoom,
@@ -153,32 +180,23 @@ impl App for Viewer {
                 key: CANVAS_KEY.into(),
                 behavior: ViewportBehavior::Instant,
             });
-        } else if event.is_route("mode_methods") {
-            self.mode = ViewMode::Methods;
-            self.fit();
         } else if event.is_route("goto_card") {
-            // "Read this fn large": fly the Map camera to the selected fn's
+            // "Read this fn large": fly the camera to the selected fn's
             // committed flow card (scope-as-camera, like the dir/file cases
-            // below). Off the Map — or when the card isn't on the current
-            // plane — scope the Map to the fn's file instead; the selected
-            // card always draws its innards, so it reads on arrival.
+            // below). When the card isn't on the current plane, scope the
+            // Map to the fn's file instead; the selected card always draws
+            // its innards, so it reads on arrival.
             if let Some(Sel::Fn(g)) = self.selected {
-                if self.mode == ViewMode::Map
-                    && let Some(r) =
-                        view::region_rect(&self.map_cache, &self.scope, view::MapTarget::Fn(g))
+                if let Some(r) =
+                    view::region_rect(&self.map_cache, &self.scope, view::MapTarget::Fn(g))
                 {
                     self.fly_to(r);
                 } else {
-                    self.scope = Scope::File(self.project.fns[g].file);
-                    self.mode = ViewMode::Map;
-                    self.fit();
+                    self.scope_file(self.project.fns[g].file);
                 }
             }
-        } else if event.is_route("mode_map") {
-            self.mode = ViewMode::Map;
-            self.fit();
-        } else if event.is_route("scope_project") {
-            if self.mode == ViewMode::Map && self.scope == Scope::Project {
+        } else if event.is_route("scope_project") || event.is_route("crumb") {
+            if self.scope == Scope::Project {
                 // Already on the project plane: fly home rather than snap.
                 // (A smooth FitContent re-arms the fit policy on arrival.)
                 self.pending.push(ViewportRequest::FitContent {
@@ -187,10 +205,9 @@ impl App for Viewer {
                     behavior: ViewportBehavior::Smooth,
                 });
             } else {
-                // Map the whole project at once (sidebar "Whole project").
+                // Map the whole project at once (sidebar / breadcrumb root).
                 self.scope = Scope::Project;
                 self.selected = None;
-                self.mode = ViewMode::Map;
                 self.fit();
             }
         } else if event.is_route("scope_tree") {
@@ -199,49 +216,25 @@ impl App for Viewer {
             // callers plus the transitive implementation it drives.
             if let Some(Sel::Fn(root)) = self.selected {
                 self.scope = Scope::CallTree { root, up: 1, down: 2 };
-                self.mode = ViewMode::Map;
                 self.fit();
             }
+        } else if let Some(dir) = event.route_suffix("crumbdir") {
+            self.nav_dir(dir);
         } else if let Some(dir) = event.route_suffix("dir") {
-            // Scope-as-camera: when the Map is up and this dir already sits on
-            // the committed plane on screen, fly the camera to its box — the
-            // topology never re-roots under the user. Otherwise fall back to
-            // scoping the canvas to the subtree (a dir spans many files, so it
-            // can only be shown on the Map — switch to it; single-file views
-            // have no anchor for a Dir scope).
-            if self.mode == ViewMode::Map
-                && let Some(r) =
-                    view::region_rect(&self.map_cache, &self.scope, view::MapTarget::Dir(dir))
-            {
-                self.fly_to(r);
-            } else {
-                self.scope = Scope::Dir(dir.to_string());
-                self.selected = None;
-                self.mode = ViewMode::Map;
-                self.fit();
-            }
+            self.nav_dir(dir);
         } else if let Some(i) = event.route_index::<usize>("open")
             && i < self.project.files.len()
         {
-            // Drill from the file inspector into the call graph.
-            self.open_file(i);
+            // The file inspector's "Map this file ▸": scope down to it.
+            self.scope_file(i);
+        } else if let Some(i) = event.route_index::<usize>("crumbfile")
+            && i < self.project.files.len()
+        {
+            self.nav_file(i);
         } else if let Some(i) = event.route_index::<usize>("file")
             && i < self.project.files.len()
         {
-            // Scope-as-camera, same as the dir case: a sidebar file click
-            // while its box is on the Map's plane flies there instead of
-            // tearing the user out into the Methods view.
-            if self.mode == ViewMode::Map
-                && let Some(r) =
-                    view::region_rect(&self.map_cache, &self.scope, view::MapTarget::File(i))
-            {
-                // Also open the file inspector — the click names the file as
-                // the subject of interest, not just a place to look at.
-                self.selected = Some(Sel::File(i));
-                self.fly_to(r);
-            } else {
-                self.open_file(i);
-            }
+            self.nav_file(i);
         } else if let Some(i) = event.route_index::<usize>("filebox")
             && i < self.project.files.len()
         {
@@ -251,23 +244,11 @@ impl App for Viewer {
         } else if let Some(i) = event.route_index::<usize>("fn")
             && i < self.project.fns.len()
         {
-            if self.mode == ViewMode::Map {
-                // In the Map, a fn click selects it *in place* — opening the
-                // detail panel over the same canvas. Don't switch views or
-                // collapse the (possibly multi-file) scope to one file; the
-                // whole point of the Map is to keep the surrounding structure.
-                self.selected = Some(Sel::Fn(i));
-            } else {
-                // Elsewhere, following a cross-file callee/caller switches the
-                // canvas to that fn's file.
-                let file = self.project.fns[i].file;
-                if Some(file) != self.scope.focus_file(&self.project)
-                    || self.mode != ViewMode::Methods
-                {
-                    self.open_file(file);
-                }
-                self.selected = Some(Sel::Fn(i));
-            }
+            // A fn click (card, slab, or a caller/callee chip in the panel)
+            // selects it *in place* — the detail panel opens over the same
+            // canvas and the (possibly multi-file) scope never collapses.
+            // The panel's "Card ▸" is the follow-up that moves the camera.
+            self.selected = Some(Sel::Fn(i));
         }
     }
 
@@ -280,26 +261,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let root = std::env::args().nth(1).unwrap_or_else(|| ".".to_string());
     let project = Project::load(std::path::Path::new(&root))?;
 
-    // Default the canvas to the file with the most fns, so the window opens on
-    // something worth looking at rather than an empty pane.
-    let selected_file = project
-        .files
-        .iter()
-        .enumerate()
-        .filter(|(_, f)| !f.fns.is_empty())
-        .max_by_key(|(_, f)| f.fns.len())
-        .map(|(i, _)| i);
-
-    // Open already framed on the default file's graph.
-    let pending = if selected_file.is_some() {
-        vec![ViewportRequest::FitContent {
-            key: CANVAS_KEY.into(),
-            padding: 32.0,
-            behavior: ViewportBehavior::Instant,
-        }]
-    } else {
-        Vec::new()
-    };
+    // Open on the whole-project map, framed: the front door is the territory
+    // itself, and every navigation from here is a camera move down into it.
+    let pending = vec![ViewportRequest::FitContent {
+        key: CANVAS_KEY.into(),
+        padding: 32.0,
+        behavior: ViewportBehavior::Instant,
+    }];
 
     let viewport_rect = Rect::new(0.0, 0.0, 1280.0, 800.0);
     damascene_winit_wgpu::run(
@@ -307,8 +275,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         viewport_rect,
         Viewer {
             project,
-            mode: ViewMode::Methods,
-            scope: selected_file.map_or(Scope::None, Scope::File),
+            scope: Scope::Project,
             selected: None,
             pending,
             filter: String::new(),

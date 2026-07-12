@@ -1,18 +1,29 @@
-//! `shard-render` — headless verification of the viewer's graph canvas.
+//! `shard-render` — headless verification of the viewer.
 //!
-//! Builds the view tree for one file and renders it to SVG + a lint report
-//! with no GPU or window, so the layout can be *seen* and checked during
-//! development. This is the cheap review loop the damascene docs describe.
+//! Builds the Map's view tree for one spec and renders it to SVG + a lint
+//! report with no GPU or window, so the layout can be *seen* and checked
+//! during development. This is the cheap review loop the damascene docs
+//! describe.
 //!
-//!   shard-render PROJECT_ROOT FILE_SUBSTRING [OUT.svg]
+//!   shard-render PROJECT_ROOT SPEC [OUT.svg]
 //!
-//! FILE_SUBSTRING selects the first file whose relative path contains it
-//! (e.g. `reader` → kernel/reader.shard).
+//! SPEC selects the scope (and panel) to render:
+//!   SUBSTR        map scoped to the first matching file, its most-called
+//!                 fn selected (detail panel exercised)
+//!   map:SUBSTR    map scoped to the file, nothing selected
+//!   map:DIR/      map scoped to a directory subtree
+//!   project       map of the whole project
+//!   fn:NAME       map scoped to one fn (Scope::Fn — "read this fn large")
+//!   tree:NAME     map of the fn's call neighborhood (CallTree)
+//!   inspect:SUBSTR  file scope with the file inspector open
+//!   src:NAME      the source lightbox over the fn's file
+//! SHARD_RENDER_HOVER=fn_name|key simulates hover; SHARD_RENDER_W/H size
+//! the frame.
 
 use damascene_core::prelude::*;
 use shard_viewer::model::Project;
 use shard_viewer::scope::Scope;
-use shard_viewer::view::{self, ViewMode, ViewParams};
+use shard_viewer::view::{self, ViewParams};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
@@ -33,7 +44,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let f = &project.fns[fn_idx];
         println!("opening source lightbox for {} ({})", f.name, project.files[f.file].rel);
         ViewParams {
-            mode: ViewMode::Methods,
             scope: Scope::File(f.file),
             selected: Some(view::Sel::Fn(fn_idx)),
             zoom: 1.0,
@@ -59,7 +69,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let f = &project.fns[fn_idx];
         println!("rendering map scoped to fn {} ({})", f.name, project.files[f.file].rel);
         ViewParams {
-            mode: ViewMode::Map,
             scope: Scope::Fn(fn_idx),
             selected: Some(view::Sel::Fn(fn_idx)),
             zoom: 1.0,
@@ -90,7 +99,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Scope::File(file_idx)
         };
         ViewParams {
-            mode: ViewMode::Map,
             scope,
             selected: None,
             zoom: 1.0,
@@ -114,7 +122,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .ok_or_else(|| format!("no fn named `{fn_name}`"))?;
         println!("rendering map scoped to the call tree of {fn_name}");
         ViewParams {
-            mode: ViewMode::Map,
             scope: Scope::CallTree { root: fn_idx, up: 1, down: 2 },
             selected: Some(view::Sel::Fn(fn_idx)),
             zoom: 1.0,
@@ -132,7 +139,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // `shard-render . project out.svg` maps every fn in the project.
         println!("rendering map scoped to the whole project ({} files)", project.files.len());
         ViewParams {
-            mode: ViewMode::Map,
             scope: Scope::Project,
             selected: None,
             zoom: 1.0,
@@ -157,7 +163,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .ok_or_else(|| format!("no file matching `{file_sub}`"))?;
         println!("rendering file inspector for {}", project.files[file_idx].rel);
         ViewParams {
-            mode: ViewMode::Map,
             scope: Scope::File(file_idx),
             selected: Some(view::Sel::File(file_idx)),
             zoom: 1.0,
@@ -189,7 +194,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .copied()
             .max_by_key(|&fi| project.fns.iter().filter(|g| g.calls.contains(&fi)).count());
         ViewParams {
-            mode: ViewMode::Methods,
             scope: Scope::File(file_idx),
             selected: selected_fn.map(view::Sel::Fn),
             zoom: 1.0,

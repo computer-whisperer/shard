@@ -1036,7 +1036,7 @@ fn fn_el(ctx: &RCtx, fn_idx: usize, (w, h): (f32, f32), abs: (f32, f32)) -> El {
         .stroke(stroke)
         .stroke_width(ctx.hairline())
         .key(format!("fn:{fn_idx}"))
-        .tooltip(super::methods::node_tip(ctx.project, fn_idx))
+        .tooltip(super::inspector::node_tip(ctx.project, fn_idx))
 }
 
 /// One claim slot at its committed footprint, mirroring [`fn_el`]: the full
@@ -1579,7 +1579,7 @@ fn flow_card(project: &Project, fn_idx: usize, selected: bool) -> El {
         .padding(8.0)
         .radius(7.0)
         .key(format!("fn:{fn_idx}"))
-        .tooltip(super::methods::node_tip(project, fn_idx));
+        .tooltip(super::inspector::node_tip(project, fn_idx));
     if selected {
         card.fill(tokens::CARD.mix(tokens::ACCENT, 0.18)).stroke(tokens::RING)
     } else if f.is_orphan() {

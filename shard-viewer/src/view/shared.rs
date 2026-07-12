@@ -1,16 +1,12 @@
-//! Cross-view primitives: the pan/zoom viewport, the laid-out-graph canvas
-//! (edge overlay + absolutely-placed node elements), the edge/arrowhead vector
-//! builders, and the tiny legend atoms. Shared by every visualization variant
-//! so each view file holds only what's unique to it.
+//! Canvas primitives: the pan/zoom viewport, the placed-graph layer (edge
+//! overlay + absolutely-positioned node elements), the edge/arrowhead vector
+//! builders, the legend atoms, and the composition/heat lenses — everything
+//! the Map and the inspector panels draw with but don't own.
 
 use super::{CANVAS_KEY, SUB_SIZE};
 use crate::layout::Layout;
 use damascene_core::prelude::*;
 
-// Low enough that even the densest file (driver.shard ~ 4000×6000 content)
-// fits the frame on `Fit`; FitContent never zooms below the true fit, so this
-// only governs how far the user may manually zoom out.
-const MIN_ZOOM: f32 = 0.04;
 const MAX_ZOOM: f32 = 3.0;
 
 /// A small colored square (an empty box used purely as a swatch).
@@ -62,19 +58,6 @@ pub(crate) fn composition_bar(c: &crate::model::Counts, w: f32, h: f32) -> El {
         .fill(tokens::BORDER) // the uncovered track = comment/blank remainder
 }
 
-/// Wrap a laid-out graph in the pan/zoom viewport: an edge overlay plus the
-/// per-node elements (index-aligned with `lay.nodes`), placed at their content
-/// coordinates via the `El::layout` escape hatch.
-pub(crate) fn graph_canvas(lay: &Layout, node_els: Vec<El>) -> El {
-    graph_canvas_edges(lay, node_els, edges_asset(lay))
-}
-
-/// Like [`graph_canvas`] but with a caller-supplied edge overlay, so views that
-/// style edges by kind (e.g. flow's control vs data) can build their own.
-pub(crate) fn graph_canvas_edges(lay: &Layout, node_els: Vec<El>, edges: VectorAsset) -> El {
-    pan_zoom_viewport(placed_graph(lay, node_els, edges))
-}
-
 /// The absolutely-placed content layer of a laid-out graph: an edge overlay
 /// plus the per-node elements positioned at their content coordinates, in a
 /// `Fixed(width) × Fixed(height)` stack — **without** the pan/zoom viewport.
@@ -109,16 +92,11 @@ pub(crate) fn placed_graph(lay: &Layout, node_els: Vec<El>, edges: VectorAsset) 
         })
 }
 
-/// Wrap `content` in the shared pan/zoom viewport. The content sizes itself
-/// (absolute-positioned graph stack, or a self-sizing nested flow tree); the
-/// `viewport()` bakes the pan/zoom transform into descendant rects + hit-test.
-pub(crate) fn pan_zoom_viewport(content: El) -> El {
-    pan_zoom_viewport_min(content, MIN_ZOOM)
-}
-
-/// [`pan_zoom_viewport`] with a caller-chosen zoom-out floor — the Map derives
-/// it from the committed extent (a project-wide map needs to fit at ~0.005,
-/// where a single small file would zoom out into nothing at that floor).
+/// Wrap `content` in the pan/zoom viewport, with a caller-chosen zoom-out
+/// floor — the Map derives it from the committed extent (a project-wide map
+/// needs to fit at ~0.005, where a single small file would zoom out into
+/// nothing at that floor). The `viewport()` bakes the pan/zoom transform into
+/// descendant rects + hit-test.
 pub(crate) fn pan_zoom_viewport_min(content: El, min_zoom: f32) -> El {
     // No `.fill()` here: the per-node hover envelope brightens the fill of any
     // keyed node, and the viewport must be keyed (for ViewportRequest + state).
@@ -137,10 +115,6 @@ pub(crate) fn pan_zoom_viewport_min(content: El, min_zoom: f32) -> El {
         .pan_bounds(PanBounds::Center)
         .width(Size::Fill(1.0))
         .height(Size::Fill(1.0))
-}
-
-pub(crate) fn edges_asset(lay: &Layout) -> VectorAsset {
-    edges_asset_scaled(lay, 1.0)
 }
 
 /// How an intra-level edge reads: the call/import web, a proof-layer lemma
