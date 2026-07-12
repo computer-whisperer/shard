@@ -787,6 +787,37 @@ every stage-B lemma landed on their first checker runs:
   window ↔ sha_sched's final srev_acc), then the three-loop
   composition via the continuation-phase machinery.
 
+**I2c-3 opening — the window glue (2026-07-12).** The weld vocabulary
+between the workers' windows and the spec's reversal algebra, every
+lemma first-try:
+
+- **wlist_acc** (the upward reader with an explicit tail; the plain
+  reader is its Nil instance) + the SNOC lemma (one more count moves
+  the LAST word into the tail, its address spelled (lg_advk p 4 k)).
+- **THE GLUE (ish_wrev_srev)**: srev_acc of the downward window read
+  IS the upward read — stated with the frontier spelled (lg_advk b 4
+  k) over the BASE as primary variable, which makes the IH bind
+  directly and reduces the pointer algebra to one step-down lemma
+  (ish_advk_m4); the inverse-lemma route the design note anticipated
+  is unnecessary in this orientation.
+- **ish_advk_split**: pointer advance splits over the count sum
+  (lg_advk z s (wn_add a b) = advance twice) — the block tier keeps
+  every frontier in lg_advk vocabulary (copy's exit = ext's entry =
+  (lg_advk b 4 16); the 64-window frontier = the split), so ground
+  instantiation never flattens +4 towers. Z-form unfold lemmas
+  (wn_add_z, ish_advk_z) added — stopped fns don't reduce their own
+  Z-redexes.
+- Weld analysis (recorded for the block tier): at ground counts the
+  mirror direction (wrev = srev of wlist) needs NO new machinery —
+  cite the glue instance as a have, rewrite it backwards under
+  srev_acc, and the double-srev computes away (ground counts walk
+  structurally). The weld theorem is proof-steps-only from the landed
+  kit: wlacc_nil + glue + bridge + copy-readback + double-srev, with
+  int_of_nat at ground counts aligned by succ/zero lemma rewrites
+  (opaque fns do not ground-compute).
+- Gates: fast-engine 244/0; driver 52 green; corpus FAIL-set
+  unchanged at 57; V8 173/0; silicon 82/0.
+
 ## 7. Non-goals, stated once
 
 - imp as a shipped target or public surface — it is an intermediate;

@@ -5080,3 +5080,120 @@
            ((rewrite (premise hsub) lr rhs true ())
             (rewrite (lemma ish_sw_snth) rl rhs true ())))
          refl)))))
+
+;; ---- the window glue (I2c-3 opening) --------------------------------------------------
+;; The rounds worker reads the schedule UPWARD (wlist); the bridge
+;; speaks DOWNWARD (wrev). The glue: reversing the downward read is the
+;; upward read — srev_acc's accumulator walk against a tail-carrying
+;; upward reader, with the frontier spelled (lg_advk b 4 k) so the
+;; induction binds by matching.
+
+;; the upward reader with an explicit tail
+(fn wlist_acc ((m Mem) (p Int) (k Nat) (acc (List Int))) (List Int)
+  (measure (struct k))
+  (match k
+    (Z acc)
+    ((S k2) (Cons (wget m p) (wlist_acc m (+ p 4) k2 acc)))))
+
+(claim wlist_acc_s
+  (goal ((m Mem) (p Int) (k Nat) (acc (List Int))) ()
+    (= (wlist_acc m p (S k) acc) (Cons (wget m p) (wlist_acc m (+ p 4) k acc))))
+  (steps ((unfold wlist_acc lhs) (reduce lhs)) refl))
+
+;; the plain reader is the tail-carrying reader at Nil
+(claim ish_wlacc_nil
+  (goal ((m Mem) (p Int) (k Nat)) () (= (wlist m p k) (wlist_acc m p k Nil)))
+  (induct k
+    ((case Z (steps ((compute both (stop wget))) refl))
+     (case S
+       (k2)
+       (chain
+         (steps ((rewrite (lemma wlist_s) lr lhs true ())))
+         (rewrite-with (lemma wlist_acc_s) lr rhs () ())
+         (rewrite-with (hyp 0) lr lhs () ())
+         refl)))))
+
+;; snoc: one more word on the count moves the LAST word into the tail
+(claim ish_wlacc_snoc
+  (goal ((m Mem) (p Int) (k Nat) (acc (List Int))) ()
+    (=
+      (wlist_acc m p (S k) acc)
+      (wlist_acc m p k (Cons (wget m (lg_advk p 4 k)) acc))))
+  (induct k
+    ((case Z (steps ((compute both (stop wget))) refl))
+     (case S
+       (k2)
+       (chain
+         (rewrite-with (lemma wlist_acc_s) lr lhs () ())
+         (rewrite-with (hyp 0) lr lhs () ())
+         (rewrite-with (lemma wlist_acc_s) lr rhs () ())
+         (steps ((rewrite (lemma lg_advk_s) lr rhs true ())))
+         refl)))))
+
+;; stepping the frontier down one word undoes one advance
+(claim ish_advk_m4
+  (goal ((z Int) (c Nat)) () (= (- (lg_advk (+ z 4) 4 c) 4) (lg_advk z 4 c)))
+  (induct c
+    ((case Z (steps ((compute both)) (by arith (list (list 1) (list 1)))))
+     (case S
+       (c2)
+       (chain
+         (steps ((rewrite (lemma lg_advk_s) lr lhs true ())))
+         (rewrite-with (hyp 0) lr lhs () ())
+         (steps ((rewrite (lemma lg_advk_s) lr rhs true ())))
+         refl)))))
+
+;; the spec reverser's step, exported as a one-step unfolding
+(claim srev_acc_s
+  (goal ((h Int) (t (List Int)) (acc (List Int))) ()
+    (= (srev_acc (Cons h t) acc) (srev_acc t (Cons h acc))))
+  (steps ((unfold srev_acc lhs) (reduce lhs)) refl))
+
+;; THE GLUE: reversing the downward window read IS the upward read
+(claim ish_wrev_srev
+  (goal ((m Mem) (b Int) (k Nat) (acc (List Int))) ()
+    (= (srev_acc (wrev m (lg_advk b 4 k) k) acc) (wlist_acc m b k acc)))
+  (induct k
+    ((case Z (steps ((compute both (stop wget))) refl))
+     (case S
+       (k2)
+       (chain
+         (rewrite-with (lemma wrev_s) lr lhs () ())
+         (steps ((rewrite (lemma lg_advk_s) lr lhs true ())))
+         (have hz (= (- (lg_advk (+ b 4) 4 k2) 4) (lg_advk b 4 k2))
+           (rewrite-with (lemma ish_advk_m4) lr lhs () () refl))
+         (steps ((rewrite (premise hz) lr lhs true ())))
+         (rewrite-with (lemma srev_acc_s) lr lhs () ())
+         (rewrite-with (hyp 0) lr lhs () ())
+         (rewrite-with (lemma ish_wlacc_snoc) rl lhs () ())
+         refl)))))
+
+;; pointer advance splits over the count sum — the block tier's weld
+;; keeps every frontier in lg_advk vocabulary (copy's exit = ext's
+;; entry = (lg_advk b 4 16), the 64-window frontier = the split)
+(claim wn_add_z
+  (goal ((b Nat)) () (= (wn_add Z b) b))
+  (steps ((unfold wn_add lhs) (reduce lhs)) refl))
+
+(claim ish_advk_z
+  (goal ((x Int) (s Int)) () (= (lg_advk x s Z) x))
+  (steps ((unfold lg_advk lhs) (reduce lhs)) refl))
+
+(claim ish_advk_split
+  (goal ((z Int) (s Int) (a Nat) (b Nat)) ()
+    (= (lg_advk z s (wn_add a b)) (lg_advk (lg_advk z s a) s b)))
+  (induct a
+    ((case Z
+       (steps
+         ((rewrite (lemma wn_add_z) lr lhs true ())
+          (rewrite (lemma ish_advk_z) lr rhs true ()))
+         refl))
+     (case S
+       (a2)
+       (chain
+         (steps ((rewrite (lemma wn_add_s) lr lhs true ())))
+         (steps
+           ((rewrite (lemma lg_advk_s) lr lhs true ())
+            (rewrite (lemma lg_advk_s) lr rhs true ())))
+         (rewrite-with (hyp 0) lr lhs () ())
+         refl)))))
