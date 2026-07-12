@@ -675,3 +675,124 @@ whitelist mechanism. One S7-full item is named by this note: the
 SIGNATURE-DRIVEN GRAMMAR BUILDER — scope spec (qnames with types,
 ctor whitelist, root type) → stratified typed grammar; cat_g is its
 prototype with the ilist typing hardcoded.
+
+
+### Interlude — extend_fn (LANDED 2026-07-11, user ruling)
+
+Slice-review ruling: candidate injection must not lean on
+evm_call_pure ignoring a stale FnTrie (an implementation property,
+not a surface guarantee). **meta/invoke grew `extend_fn`** — fn list
+and dispatch trie updated TOGETHER, None on a qname already bound —
+and tools/search's inject/fns_snoc were deleted; all three engines
+consume the surface fn with loud Err paths on collision. Pins
+byte-identical, corpus DIFF-clean. Two other review rulings recorded:
+the rank ordering discipline stands as simplest-first (a backtracking
+ranker is the known fallback if a grammar ever needs it), and
+generation-side filtering is STRICTLY PREFERRED wherever a rule is
+expressible generatively (the slice-3 method is the norm, not an
+optimization).
+
+
+### Slice 4 — S4a + S5: the symbolic evaluator and the laws oracle (LANDED 2026-07-11)
+
+**What landed.**
+
+- **tools/search/sym.shard — the S4a machine** (27/0 as a corpus check
+  target). Value domain SV: ground ints/symbols/ctors + SVSym
+  (Many-class ∀-atom: distinct atoms refute), SVData (undecided ∀-data
+  value, case-splittable through a typed slot), SVNeu (stuck call,
+  same-head/equal-args congruence, never refutes). Strict (CBV)
+  evaluation matching kernel/evm; dispatch = the module's own FnTrie
+  (extend_fn's consistency contract earning its keep), then
+  try_step_prim on ground args, then neutral formation. Case-split
+  shapes come from the module's OWN type table (lookup_typedef +
+  instantiated ctor fields, one shape per ctor in decl order, fresh
+  symbols per field). Three-valued comparison: ground decides,
+  Many-atoms refute by identity, disagreements SPLIT within a
+  depth budget (all cases prove ⇒ Proven; any case refutes ⇒ Refuted;
+  else Undecided), ctor fields refute injectively, neutral args only
+  ever join. Split-resume is pure: substitute the shape into the
+  value tree and RE-CALL every neutral through sv_call (idempotent
+  when still stuck; re-normalizes through the rule table when
+  unstuck).
+- **The two future-arc pins, honored day one:** nothing in sym.shard
+  knows a task vocabulary (type-table shapes, qname heads), and the
+  rewrite table is passed-in DATA — `(NRAppend append Nil Cons)` over
+  the OBJECT module's own qnames is v1's only rule family (the append
+  four applied at neutral-formation time, right-nested Nil-free
+  spines). The lia normalizer is a later VALUE of the same parameter
+  (deliberately deferred: G3 measured it unnecessary at these rungs).
+- **tools/search/laws.shard — the S5 oracle.** Laws come from the REAL
+  interface through the kernel's single goal seam (read_file +
+  parse_decls + parse_goal_r under file_rctx — the tools/prove
+  precedent); premised goals refused (v1). The subject fn is remapped
+  to the candidate; each goal side is wrapped as a synthesized FnDef
+  (extend_fn) so stuckness always converts at a call boundary and
+  resume re-enters through sv_call; ∀-binders instantiate by TYPE
+  (atoms for Int/Symbol/tyvars — the ∀-tyvar-instantiates-at-Int
+  refutation license — depth-0 slots for data). Verdicts compose over
+  the law set: any Refuted refutes, all Proven proves, else Undecided.
+- **Corpus pins (run output; laws.shard rides kernel/driver so, like
+  tools/prove, it is NOT a check target — the known kernel/types
+  tc_infer measure gap lives in that closure):**
+  - **SELF-PIN:** std/list's own rev and len symbolically PROVE their
+    own interface requirements (rev_nil/rev_cons, len_nil/len_cons) —
+    the interface's implementation is the first candidate the oracle
+    judges, and it needs zero splits (congruence + append canon).
+  - **G3 rung 1:** CLEAN 17 / PROVEN 0 / REFUTED 17 / UNDECIDED 0 —
+    rung 1 has no rev spelling (slice 3's catalog), and the oracle
+    fully decided the rung. Sub-second.
+  - **G3 rung 2:** CLEAN 2,345 / PROVEN 2 / REFUTED 2,343 /
+    **UNDECIDED 0** — the two Proven candidates are EXACTLY the
+    catalog's two rev spellings; the symbolic partition equals the
+    ground-battery partition term-for-term with no undecided residue.
+    19s. The impostor problem is dead at this rung: proofs, not
+    tests, and nothing escaped either way. G3 violations (a Proven
+    non-passer, a Refuted passer) are exit-1 failures inside the
+    tool, not statistics.
+
+**Decisions the implementation surfaced (recorded, not relitigated):**
+
+- **Goals carry FVar binders.** parse_goal represents ∀-binder
+  occurrences as (FVar name) — the sequent machinery opens them by
+  name. The oracle lowers them to BVars under the wrapper fn
+  (depth-aware walk: match arms and lets shift by their bind counts).
+- **No cardinality analysis at all** (departure from the playground,
+  licensed by kernel semantics): shard has no uninhabited types, so
+  vacuity is gone; sym-vs-ctor and sym-vs-sym decide by splitting
+  within budget; zero-ctor (opaque) typedefs simply cannot split and
+  stay Undecided. The only cardinality fact used is a constant: Int
+  and Symbol are Many.
+- **Fuel discipline:** the evaluator and comparator are two separate
+  SCCs, each carrying ONE uniform Int measure — every mutual edge
+  passes fuel-1 behind a loud guard (the slice-3 mixed-measure wall
+  dodged by design). Fuel-out is Undecided, NEVER Refuted. Engine
+  parameters (budget 3, fuel 100k) are pinned task data in
+  laws.shard.
+- **D5 licenses deferred to their consumers** (catalog refinement /
+  compiler goals) — G3 at these rungs measured them unnecessary:
+  per-candidate rev/len laws close by congruence + append canon
+  alone, exactly as the ledger's S4a note predicted ("one term, one
+  goal, case-split regions only").
+
+**Gotchas recorded.**
+
+- kernel/driver (and anything importing kernel/checker) exposes the
+  PRE-EXISTING kernel/types tc_infer measure gap under any new check
+  root — keep driver-riding tools out of TARGETS (tools/prove
+  precedent) and keep evaluator-tier tools off the checker import
+  (sym.shard mirrors inst_ctor_fields locally rather than importing
+  the checker closure).
+- C1 prices `(- 0 1)` as a foldable ground call: spell negative
+  literals `-1`.
+- Deep match towers again: build one fn at a time against the
+  reader's per-form paren report.
+
+**Open (rolls forward):** lia canon (NRLia) enters as a rule VALUE
+when a task's laws need stuck arithmetic joined beyond congruence
+(len-shaped goals at deeper rungs); the D5 licenses land with S7
+refinement; D10/D11 unchanged. Next per the ladder: **S6 — proof
+rendering + kernel replay (G4)**, the arc's exit criterion; it will
+grow TRACE RECORDING in this slice's machine (the comparator knows
+its splits and joins; it does not yet write them down) and render
+Proven verdicts as replayable shard proof text.

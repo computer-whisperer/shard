@@ -245,6 +245,7 @@ TARGETS=(
   tools/search/search.shard
   tools/search/census.shard
   tools/search/catalog.shard
+  tools/search/sym.shard
 )
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -373,6 +374,24 @@ fi
 echo "=== search: catalog census (G5) ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/catalog.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# Laws-oracle pin (docs/SEARCH.md S4a+S5, G3): the symbolic evaluator +
+# requirements-as-oracle. SELF: std/list's own rev and len must
+# symbolically PROVE their own interface laws (reduction + congruence +
+# the append canon). G3: over the catalog's cn_e-clean candidates,
+# law verdicts against the ground battery — rung 1: 17 clean, 0 proven,
+# 17 refuted, 0 undecided; rung 2: 2345 clean, 2 proven (exactly the
+# two rev spellings), 2343 refuted, 0 undecided. Any Proven non-passer
+# or Refuted passer exits 1 inside the tool (G3 violations are hard
+# failures, not statistics). laws.shard rides kernel/driver for goal
+# parsing, so like tools/prove it is pinned by RUN output, not checked
+# as a corpus target (the known kernel/types tc_infer measure gap).
+echo "=== search: laws oracle (S4a+S5, G3) ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/laws.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi

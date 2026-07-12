@@ -1,0 +1,660 @@
+;;; tools/search/laws.shard — S5: the LAWS ORACLE (docs/SEARCH.md S5,
+;;; slice 4). Requirements as the search oracle: the ∀-laws of a real
+;;; interface (std/list's OWN rev_nil / rev_cons), parsed through the
+;;; kernel's single goal seam (parse_goal_r + file_rctx — the
+;;; tools/prove precedent), the subject fn remapped to the candidate,
+;;; and the two goal sides compared under the S4a machine (sym.shard).
+;;;
+;;; Verdicts per candidate are three-valued and compose over the law
+;;; set: any Refuted law refutes (a separable counterexample class —
+;;; one symbolic case kills what ground testing kills one value at a
+;;; time); all laws Proven proves; anything else is Undecided (sound
+;;; incompleteness, counted honestly).
+;;;
+;;; G3 — CROSS-ENGINE AGREEMENT (the slice gate): over the catalog's
+;;; cn_e-clean candidates at a rung, law-Proven ⊆ battery rev-passers
+;;; and no rev-passer is law-Refuted — the symbolic and ground
+;;; partitions must be consistent wherever both run. Violations are
+;;; loud FAILures, not statistics.
+;;;
+;;; SELF-PIN: the oracle run with the subject fn UNREMAPPED — std/list's
+;;; own rev (and len) must symbolically PROVE their own requirements
+;;; through reduction + congruence alone. The interface's implementation
+;;; is the first candidate the oracle ever judges.
+;;;
+;;; NOTE this file rides kernel/driver (goal parsing/resolution), whose
+;;; closure carries the known pre-existing kernel/types tc_infer measure
+;;; gap — so like tools/prove it is exercised by its pinned RUN output,
+;;; not as a corpus check target.
+;;;
+;;; RUN IT: bin/shard_eval run tools/search/laws.shard          (self + g3 1 + g3 2)
+;;;         bin/shard_eval run tools/search/laws.shard self     (self-pin only)
+;;;         bin/shard_eval run tools/search/laws.shard g3 N     (one rung)
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/proof.shard")
+(import "../../kernel/reader.shard")
+(import "../../kernel/loader.shard")
+(import "../../kernel/driver.shard")
+(import "../../kernel/canon.shard")
+(import "../../meta/sketch")
+(import "../../meta/invoke")
+(import "sym.shard")
+(import "rev.shard")
+(import "catalog.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel proof Goal))
+(use (:: kernel proof Param))
+(use (:: kernel proof Equation))
+(use (:: kernel reader Decl))
+(use (:: kernel reader DClaim))
+(use (:: kernel reader DAxiom))
+(use (:: kernel reader DReq))
+(use (:: kernel reader DFul))
+(use (:: kernel reader Req))
+(use (:: kernel reader req_name))
+(use (:: kernel reader req_goal))
+(use (:: kernel reader RCtx))
+(use (:: kernel reader parse_decls))
+(use (:: kernel loader World))
+(use (:: kernel loader read_file))
+(use (:: kernel loader get_args))
+(use (:: kernel loader write))
+(use (:: kernel loader exit))
+(use (:: kernel driver file_rctx))
+(use (:: kernel driver parse_goal_r))
+(use (:: kernel driver module_ctors))
+(use (:: kernel canon cn_e))
+(use (:: kernel canon CViol))
+(use (:: meta sketch *))
+(use (:: meta invoke *))
+(use (:: tools search sym *))
+(use (:: tools search rev *))
+(use (:: tools search catalog *))
+
+;; ---- law extraction: the kernel's own goal seam -----------------------------
+
+(type LLaw (LLaw Symbol Goal))
+
+(type LxR (LxRErr (List Int)) (LxROk (List LLaw)))
+
+(fn decls_reqs ((ds (List Decl))) (List Req)
+  (measure (struct ds))
+  (match ds
+    (Nil Nil)
+    ((Cons d rest)
+     (match d
+       ((DClaim _) (decls_reqs rest))
+       ((DAxiom _) (decls_reqs rest))
+       ((DReq r) (Cons r (decls_reqs rest)))
+       ((DFul _) (decls_reqs rest))))))
+
+(fn req_named ((n Symbol) (rs (List Req))) (Option Req)
+  (measure (struct rs))
+  (match rs
+    (Nil None)
+    ((Cons r rest) (if (sym_eq (req_name r) n) (Some r) (req_named n rest)))))
+
+;; the wanted laws, in wanted order — a missing name is loud
+(fn reqs_pick ((names (List Symbol)) (rs (List Req))) (Option (List Req))
+  (measure (struct names))
+  (match names
+    (Nil (Some Nil))
+    ((Cons n rest)
+     (match (req_named n rs)
+       (None None)
+       ((Some r)
+        (match (reqs_pick rest rs)
+          (None None)
+          ((Some picked) (Some (Cons r picked)))))))))
+
+;; parse each requirement's goal against the OBJECT module through the
+;; interface file's own resolution scope; premised goals refused (v1,
+;; playground parity)
+(fn laws_parse ((m Module) (gctx RCtx) (rs (List Req))) LxR
+  (measure (struct rs))
+  (match rs
+    (Nil (LxROk Nil))
+    ((Cons r rest)
+     (match (parse_goal_r m gctx (req_goal r))
+       (None (LxRErr "laws: requirement goal does not parse"))
+       ((Some g)
+        (match g
+          ((Goal _ prems _)
+           (match prems
+             (Nil
+               (match (laws_parse m gctx rest)
+                 ((LxRErr msg) (LxRErr msg))
+                 ((LxROk lws) (LxROk (Cons (LLaw (req_name r) g) lws)))))
+             ((Cons _ _) (LxRErr "laws: premised goals unsupported"))))))))))
+
+(fn lx_laws ((m Module) (path (List Int)) (names (List Symbol)) (w World))
+  (Pair LxR World)
+  (match (read_file path w)
+    ((Pair osrc w2)
+     (match osrc
+       (None (Pair (LxRErr "laws: cannot read the interface file") w2))
+       ((Some src)
+        (match (parse_decls src (module_ctors m) False)
+          (None
+            (Pair (LxRErr "laws: interface does not parse (decl phase)") w2))
+          ((Some ds)
+           (match (reqs_pick names (decls_reqs ds))
+             (None (Pair (LxRErr "laws: a wanted law is missing") w2))
+             ((Some rs) (Pair (laws_parse m (file_rctx m path src) rs) w2))))))))))
+
+;; ---- subject remap: the law cites the interface fn; the candidate answers ---
+
+(fn rm_e ((from QName) (to QName) (e Expr)) Expr
+  (measure (struct e))
+  (match e
+    ((FVar _) e)
+    ((BVar _) e)
+    ((Ctor q es) (Ctor q (rm_es from to es)))
+    ((Call q es) (Call (if (qname_eq q from) to q) (rm_es from to es)))
+    ((Match s arms) (Match (rm_e from to s) (rm_arms from to arms)))
+    ((Let bs body) (Let (rm_es from to bs) (rm_e from to body)))
+    ((If c t e2) (If (rm_e from to c) (rm_e from to t) (rm_e from to e2)))
+    ((IntLit _) e)
+    ((SymLit _) e)))
+
+(fn rm_es ((from QName) (to QName) (es (List Expr))) (List Expr)
+  (measure (struct es))
+  (match es
+    (Nil Nil)
+    ((Cons e rest) (Cons (rm_e from to e) (rm_es from to rest)))))
+
+(fn rm_arms ((from QName) (to QName) (arms (List Arm))) (List Arm)
+  (measure (struct arms))
+  (match arms
+    (Nil Nil)
+    ((Cons (Arm p b) rest)
+     (Cons (Arm p (rm_e from to b)) (rm_arms from to rest)))))
+
+(fn rm_law ((from QName) (to QName) (lw LLaw)) LLaw
+  (match lw
+    ((LLaw n (Goal ps prems (Equation l r)))
+     (LLaw n (Goal ps prems (Equation (rm_e from to l) (rm_e from to r)))))))
+
+(fn rm_laws ((from QName) (to QName) (lws (List LLaw))) (List LLaw)
+  (measure (struct lws))
+  (match lws
+    (Nil Nil)
+    ((Cons lw rest) (Cons (rm_law from to lw) (rm_laws from to rest)))))
+
+;; ---- binder instantiation and goal-side wrappers ----------------------------
+
+;; ∀-binders become symbolic values by TYPE: Many-class atoms (Int,
+;; Symbol, type variables — a ∀-bound tyvar instantiates at Int, so
+;; refutation stays licensed) get SVSym; declared data types get a
+;; depth-0 SVData slot.
+(fn binder_sv ((ty Type) (st SvSt)) (Pair SV SvSt)
+  (if (ty_atomic ty) (st_fresh_sym st) (st_fresh_slot ty 0 st)))
+
+(fn binders_svs ((ps (List Param)) (st SvSt)) (Pair (List SV) SvSt)
+  (measure (struct ps))
+  (match ps
+    (Nil (Pair Nil st))
+    ((Cons (Param _ ty) rest)
+     (match (binder_sv ty st)
+       ((Pair v st2)
+        (match (binders_svs rest st2)
+          ((Pair vs st3) (Pair (Cons v vs) st3))))))))
+
+(fn params_tys ((ps (List Param))) (List Type)
+  (measure (struct ps))
+  (match ps
+    (Nil Nil)
+    ((Cons (Param _ ty) rest) (Cons ty (params_tys rest)))))
+
+;; ---- goal-side lowering: FVar binders -> BVars under the wrapper ------------
+;; parse_goal represents ∀-binder occurrences as (FVar name) — the
+;; sequent machinery opens them by name. The wrapper fn binds them as
+;; params instead, so occurrences lower to BVars: binder k-from-the-END
+;; of the param list is (BVar k) at depth 0, and every inner binding
+;; form (match arms, lets) shifts by its bind count.
+
+(fn pat_binds ((p Pat)) Int
+  (measure (struct p))
+  (match p
+    ((PVar) 1)
+    ((PCtor _ ps) (pats_binds ps))
+    ((PInt _) 0)
+    ((PSym _) 0)))
+
+(fn pats_binds ((ps (List Pat))) Int
+  (measure (struct ps))
+  (match ps
+    (Nil 0)
+    ((Cons p rest) (+ (pat_binds p) (pats_binds rest)))))
+
+;; binder names, innermost (= last param) FIRST — index = BVar at depth 0
+(fn names_rev ((ps (List Param)) (acc (List Symbol))) (List Symbol)
+  (measure (struct ps))
+  (match ps
+    (Nil acc)
+    ((Cons (Param x _) rest) (names_rev rest (Cons x acc)))))
+
+(fn name_pos ((x Symbol) (names (List Symbol)) (i Int)) (Option Int)
+  (measure (struct names))
+  (match names
+    (Nil None)
+    ((Cons n rest) (if (sym_eq x n) (Some i) (name_pos x rest (+ i 1))))))
+
+(fn fv_e ((names (List Symbol)) (depth Int) (e Expr)) Expr
+  (measure (struct e))
+  (match e
+    ((FVar x)
+     (match (name_pos x names 0)
+       (None e)
+       ((Some p) (BVar (+ depth p)))))
+    ((BVar _) e)
+    ((Ctor q es) (Ctor q (fv_es names depth es)))
+    ((Call q es) (Call q (fv_es names depth es)))
+    ((Match s arms) (Match (fv_e names depth s) (fv_arms names depth arms)))
+    ((Let bs body)
+     (Let (fv_es names depth bs) (fv_e names (+ depth (len_exprs bs)) body)))
+    ((If c t e2)
+     (If (fv_e names depth c) (fv_e names depth t) (fv_e names depth e2)))
+    ((IntLit _) e)
+    ((SymLit _) e)))
+
+(fn fv_es ((names (List Symbol)) (depth Int) (es (List Expr))) (List Expr)
+  (measure (struct es))
+  (match es
+    (Nil Nil)
+    ((Cons e rest) (Cons (fv_e names depth e) (fv_es names depth rest)))))
+
+(fn fv_arms ((names (List Symbol)) (depth Int) (arms (List Arm))) (List Arm)
+  (measure (struct arms))
+  (match arms
+    (Nil Nil)
+    ((Cons (Arm p b) rest)
+     (Cons
+       (Arm p (fv_e names (+ depth (pat_binds p)) b))
+       (fv_arms names depth rest)))))
+
+(fn len_exprs ((es (List Expr))) Int
+  (measure (struct es))
+  (match es
+    (Nil 0)
+    ((Cons _ t) (+ 1 (len_exprs t)))))
+
+;; each goal side wrapped as a synthesized fn (extend_fn), so stuckness
+;; always converts to a neutral at a call boundary and split-resume
+;; re-enters through sv_call
+(fn lhs_q () QName (qn (quote srch_lawl)))
+
+(fn rhs_q () QName (qn (quote srch_lawr)))
+
+(fn law_fd ((q QName) (ps (List Param)) (body Expr)) FnDef
+  (FnDef
+    q
+    (params_tys ps)
+    (TVar (quote SrchLaw))
+    (fv_e (names_rev ps Nil) 0 body)))
+
+;; ---- the oracle: one law, one candidate module ------------------------------
+
+(type LVd (LVdErr (List Int)) (LVdUndec) (LVdRef) (LVdProv))
+
+(fn law_verdict
+  ((m2 Module)
+   (rules (List NRule))
+   (budget Int)
+   (efuel Int)
+   (cfuel Int)
+   (lw LLaw))
+  LVd
+  (match lw
+    ((LLaw _ (Goal ps _ (Equation lhs rhs)))
+     (match (binders_svs ps (SvSt 0 Nil))
+       ((Pair svs st)
+        (match (extend_fn m2 (law_fd (lhs_q) ps lhs))
+          (None (LVdErr "laws: lhs wrapper qname bound in the closure"))
+          ((Some ma)
+           (match (extend_fn ma (law_fd (rhs_q) ps rhs))
+             (None (LVdErr "laws: rhs wrapper qname bound in the closure"))
+             ((Some mb)
+              (match (sv_call efuel mb rules (lhs_q) svs)
+                ((EvRErr msg) (LVdErr msg))
+                ((EvROut) (LVdUndec))
+                ((EvRFail) (LVdRef))
+                ((EvRStuck _) (LVdErr "laws: stuck escaped the lhs boundary"))
+                ((EvRVal va)
+                 (match (sv_call efuel mb rules (rhs_q) svs)
+                   ((EvRErr msg) (LVdErr msg))
+                   ((EvROut) (LVdUndec))
+                   ((EvRFail) (LVdRef))
+                   ((EvRStuck _)
+                    (LVdErr "laws: stuck escaped the rhs boundary"))
+                   ((EvRVal vb)
+                    (match (cp_sv cfuel budget efuel mb rules va vb st)
+                      ((CpRErr msg) (LVdErr msg))
+                      ((CpROk vd _)
+                       (match vd
+                         ((VdUndec) (LVdUndec))
+                         ((VdRef) (LVdRef))
+                         ((VdProv) (LVdProv))))))))))))))))))
+
+;; law-set composition: any Refuted refutes; all Proven proves; else
+;; Undecided
+(fn laws_verdict
+  ((m2 Module)
+   (rules (List NRule))
+   (budget Int)
+   (efuel Int)
+   (cfuel Int)
+   (lws (List LLaw)))
+  LVd
+  (measure (struct lws))
+  (match lws
+    (Nil (LVdProv))
+    ((Cons lw rest)
+     (match (law_verdict m2 rules budget efuel cfuel lw)
+       ((LVdErr msg) (LVdErr msg))
+       ((LVdUndec)
+        (match (laws_verdict m2 rules budget efuel cfuel rest)
+          ((LVdErr msg) (LVdErr msg))
+          ((LVdUndec) (LVdUndec))
+          ((LVdRef) (LVdRef))
+          ((LVdProv) (LVdUndec))))
+       ((LVdRef) (LVdRef))
+       ((LVdProv) (laws_verdict m2 rules budget efuel cfuel rest))))))
+
+;; the D4 rule table for this object module: the append four, keyed by
+;; the closure's own qnames
+(fn mk_rules ((m Module)) (Option (List NRule))
+  (match (find_fn (quote append) m)
+    (None None)
+    ((Some apfd)
+     (match apfd
+       ((FnDef apq _ _ _)
+        (match (ctor_qn m (quote Nil))
+          (None None)
+          ((Some nilq)
+           (match (ctor_qn m (quote Cons))
+             (None None)
+             ((Some consq) (Some (Cons (NRAppend apq nilq consq) Nil)))))))))))
+
+;; ---- fixed engine parameters (task data, pinned with the census) ------------
+
+(fn lw_budget () Int 3)
+
+(fn lw_efuel () Int 100000)
+
+(fn lw_cfuel () Int 100000)
+
+;; ---- the self-pin: the interface's own impls prove their own laws -----------
+
+(fn self_names ((subject Symbol)) (List Symbol)
+  (if (sym_eq subject (quote rev))
+    (Cons (quote rev_nil) (Cons (quote rev_cons) Nil))
+    (Cons (quote len_nil) (Cons (quote len_cons) Nil))))
+
+(fn run_self_one ((m Module) (rules (List NRule)) (subject Symbol) (w World))
+  World
+  (match (lx_laws m "std/list/mod.req.shard" (self_names subject) w)
+    ((Pair lx w2)
+     (match lx
+       ((LxRErr msg) (exit 1 (write (append_int "LAWS SELF FAIL " msg) w2)))
+       ((LxROk lws)
+        (match (laws_verdict m rules (lw_budget) (lw_efuel) (lw_cfuel) lws)
+          ((LVdErr msg) (exit 1 (write (append_int "LAWS SELF FAIL " msg) w2)))
+          ((LVdUndec)
+           (exit 1 (write "LAWS SELF FAIL: own impl UNDECIDED\n" w2)))
+          ((LVdRef) (exit 1 (write "LAWS SELF FAIL: own impl REFUTED\n" w2)))
+          ((LVdProv)
+           (write
+             (append_int
+               "LAWS SELF "
+               (append_int (chars_of_sym subject) " PROVEN\n"))
+             w2))))))))
+
+(fn run_self ((m Module) (w World)) World
+  (match (mk_rules m)
+    (None (exit 1 (write "LAWS FAIL: append/Nil/Cons not in the closure\n" w)))
+    ((Some rules)
+     (run_self_one m rules (quote len) (run_self_one m rules (quote rev) w)))))
+
+;; ---- G3: the symbolic partition against the ground battery ------------------
+
+(type G3S (G3SErr (List Int)) (G3SOk Int Int Int Int))  ; clean, proven, refuted, undecided
+
+(fn g3_sweep
+  ((k Int)
+   (total Int)
+   (root Expr)
+   (g Grammar)
+   (m Module)
+   (rules (List NRule))
+   (lws (List LLaw))
+   (ins (List (List Int)))
+   (rvecs (List (List Int)))
+   (clean Int)
+   (prov Int)
+   (ref Int)
+   (undec Int))
+  G3S
+  (measure k)
+  (if (le k 0) (G3SOk clean prov ref undec)
+  (let ((i (- total k)))
+    (match (sk_unrank root g i)
+      ((SkEErr msg) (G3SErr (cz_at "g3 unrank" i msg)))
+      ((SkEOk c)
+       (match (cn_e c m)
+         (Nil
+           (let ((fd (cat_fd c)))
+             (match (extend_fn m fd)
+               (None
+                 (G3SErr
+                   (cz_at "extend" i "candidate qname bound in the closure")))
+               ((Some m2)
+                (match (cat_vec m2 fd ins)
+                  (None
+                    (G3SErr
+                      (cz_at
+                        "g3 battery"
+                        i
+                        "typed candidate stuck (builder bug)")))
+                  ((Some v)
+                   (let ((isrev (vec_eq v rvecs)))
+                     (match
+                       (laws_verdict
+                         m2
+                         rules
+                         (lw_budget)
+                         (lw_efuel)
+                         (lw_cfuel)
+                         lws)
+                       ((LVdErr msg) (G3SErr (cz_at "g3 verdict" i msg)))
+                       ((LVdUndec)
+                        (g3_sweep
+                          (- k 1)
+                          total
+                          root
+                          g
+                          m
+                          rules
+                          lws
+                          ins
+                          rvecs
+                          (+ clean 1)
+                          prov
+                          ref
+                          (+ undec 1)))
+                       ((LVdRef)
+                        (if isrev
+                          (G3SErr
+                            (cz_at
+                              "G3"
+                              i
+                              "a battery rev passer was law-REFUTED"))
+                          (g3_sweep
+                            (- k 1)
+                            total
+                            root
+                            g
+                            m
+                            rules
+                            lws
+                            ins
+                            rvecs
+                            (+ clean 1)
+                            prov
+                            (+ ref 1)
+                            undec)))
+                       ((LVdProv)
+                        (if isrev
+                          (g3_sweep
+                            (- k 1)
+                            total
+                            root
+                            g
+                            m
+                            rules
+                            lws
+                            ins
+                            rvecs
+                            (+ clean 1)
+                            (+ prov 1)
+                            ref
+                            undec)
+                          (G3SErr
+                            (cz_at
+                              "G3"
+                              i
+                              "a law-PROVEN candidate fails the rev battery"))))))))))))
+         ((Cons _ _)
+          (g3_sweep
+            (- k 1)
+            total
+            root
+            g
+            m
+            rules
+            lws
+            ins
+            rvecs
+            clean
+            prov
+            ref
+            undec))))))))
+
+(fn run_g3 ((m Module) (apq QName) (d Int) (w World)) World
+  (match (mk_rules m)
+    (None (exit 1 (write "LAWS FAIL: append/Nil/Cons not in the closure\n" w)))
+    ((Some rules)
+     (match (find_fn (quote rev) m)
+       (None (exit 1 (write "LAWS FAIL: no rev in the closure\n" w)))
+       ((Some revfd)
+        (match revfd
+          ((FnDef revq _ _ _)
+           (match
+             (lx_laws
+               m
+               "std/list/mod.req.shard"
+               (Cons (quote rev_nil) (Cons (quote rev_cons) Nil))
+               w)
+             ((Pair lx w2)
+              (match lx
+                ((LxRErr msg) (exit 1 (write (append_int "LAWS FAIL " msg) w2)))
+                ((LxROk lws0)
+                 (match (cat_grammar d apq)
+                   ((CatRErr msg)
+                    (exit
+                      1
+                      (write
+                        (append_int "LAWS FAIL grammar: " (append_int msg "\n"))
+                        w2)))
+                   ((CatROk es _)
+                    (let ((root (hole 0)) (g (Grammar es)))
+                      (match (sk_count root g)
+                        ((SkCErr msg)
+                         (exit
+                           1
+                           (write
+                             (append_int
+                               "LAWS FAIL count: "
+                               (append_int msg "\n"))
+                             w2)))
+                        ((SkCOk total)
+                         (match
+                           (g3_sweep
+                             total
+                             total
+                             root
+                             g
+                             m
+                             rules
+                             (rm_laws revq (cat_q) lws0)
+                             (cat_battery)
+                             (vecs_rev (cat_battery))
+                             0
+                             0
+                             0
+                             0)
+                           ((G3SErr msg)
+                            (exit 1 (write (append_int "LAWS FAIL " msg) w2)))
+                           ((G3SOk clean prov ref undec)
+                            (write
+                              (append_int
+                                "LAWS rung "
+                                (append_int
+                                  (show_int d)
+                                  (append_int
+                                    "\nCLEAN "
+                                    (append_int
+                                      (show_int clean)
+                                      (append_int
+                                        " PROVEN "
+                                        (append_int
+                                          (show_int prov)
+                                          (append_int
+                                            " REFUTED "
+                                            (append_int
+                                              (show_int ref)
+                                              (append_int
+                                                " UNDECIDED "
+                                                (append_int
+                                                  (show_int undec)
+                                                  "\nG3 OK\n"))))))))))
+                              w2)))))))))))))))))))
+
+;; ---- CLI ---------------------------------------------------------------------
+
+;; args: none -> the pinned suite (self, then g3 at rungs 1 and 2);
+;; "self" -> the self-pin alone; "g3 N" -> one rung
+(fn lw_args ((as (List (List Int))) (m Module) (apq QName) (w World)) World
+  (match as
+    (Nil (run_g3 m apq 2 (run_g3 m apq 1 (run_self m w))))
+    ((Cons a rest)
+     (if (int_list_eq a "self")
+       (match rest
+         (Nil (run_self m w))
+         (_ (exit 2 (write "usage: laws [self | g3 N]\n" w))))
+     (if (int_list_eq a "g3")
+       (match rest
+         ((Cons ds Nil)
+          (match (parse_nat ds)
+            (None (exit 2 (write "usage: laws [self | g3 N]\n" w)))
+            ((Some d) (run_g3 m apq d w))))
+         (_ (exit 2 (write "usage: laws [self | g3 N]\n" w))))
+       (exit 2 (write "usage: laws [self | g3 N]\n" w)))))))
+
+(fn main ((w World)) World
+  (match (load_run_module "tools/search/rev_obj.shard" w)
+    ((Pair om w2)
+     (match om
+       (None (exit 1 (write "LAWS FAIL: object module load\n" w2)))
+       ((Some m)
+        (match (find_fn (quote append) m)
+          (None (exit 1 (write "LAWS FAIL: no append in closure\n" w2)))
+          ((Some apfd)
+           (match apfd
+             ((FnDef apq _ _ _)
+              (match (get_args w2)
+                ((Pair as w3) (lw_args as m apq w3))))))))))))
