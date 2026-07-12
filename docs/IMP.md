@@ -743,6 +743,29 @@ closed on their first checker runs):
 - REMAINING I2c-2: (d) the list bridge to sha_sched (sched_mem's
   readback = the srev_acc/sched_ext shape — the reversal algebra,
   pure list work).
+- I2c-2d design note (settled, unbuilt): the bridge reads the window
+  DOWNWARD from the frontier — wrev m p k = Cons (wget m (- p 4))
+  (wrev m (- p 4) k2) — because the reversed window's head IS the
+  newest word, so one sched_mem step is one Cons, exactly srev_acc's
+  algebra. THE BRIDGE: wrev (sched_mem m p k) (lg_advk p 4 k)
+  (wn_add k W) = sched_ext (wrev m p W) (int_of_nat k), where W is
+  the window count spelled LITERALLY as sixteen nested S around a
+  quantified j (so wrev provably unfolds 16 deep while the tail stays
+  abstract — snth 1/6/14/15 then resolve to wget at p-8/-28/-60/-64,
+  which is sched_w verbatim; the reversed-index mirror i ↦ len-1-i
+  is exactly why sched_ext's 1/6/14/15 meet sched_mem's offsets).
+  Step machinery: a cons-step lemma wrev (wput m p v) (+ p 4) (S c) =
+  Cons v (wrev m p c) — head by the isha_wput_get roundtrip (value
+  bounds only; sched_w is band-masked, bounds via sched_w_fold +
+  band_lo/band_le_r), tail by a downward window-framing lemma
+  (store at/above the frontier is invisible below it, the
+  ish_wlist_wput_above mirror). Counts ride a TRANSPARENT in-sibling
+  wn_add (std/nat is opaque — no add_nat lemmas exist; recursion on
+  the first arg + one succ-commute lemma). sched_ext steps by
+  unfold+reduce per iteration: the (le fuel 0) guard resolves via
+  int_of_nat_succ + a le-flavored lg_ne mirror, the fuel residue
+  (- (+ 1 n) 1) via lg_sub. Fixed-16 is sha-specific and fine: the
+  16-deep spine is written once in one alignment lemma, not per use.
 
 ## 7. Non-goals, stated once
 
