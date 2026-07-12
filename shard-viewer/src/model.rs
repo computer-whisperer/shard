@@ -40,6 +40,10 @@ pub struct FnDef {
     /// Types this fn's signature (param/return types) mentions — the weak
     /// shape dependency (pass-through counts). Disjoint from `shapes`.
     pub sig_types: Vec<usize>,
+    /// The docstring: the contiguous `;;` block directly above the form
+    /// (prefixes stripped, one source line per text line; empty if none).
+    /// First line = the summary. See [`distill_doc`] for what qualifies.
+    pub doc: String,
 }
 
 /// Which proof-layer form a [`ClaimDef`] came from. Together these are the
@@ -80,6 +84,8 @@ pub struct ClaimDef {
     /// Requirement only: a `(fulfills NAME …)` exists somewhere. An
     /// unfulfilled requirement is an open obligation — views draw it loud.
     pub fulfilled: bool,
+    /// The docstring (see [`FnDef::doc`]).
+    pub doc: String,
 }
 
 impl FnDef {
@@ -143,6 +149,8 @@ pub struct TypeDef {
     /// mention (same-file-first, excludes self). `Module` is composed of
     /// `FnDef`s — an edge `FnDef → Module` under the cascade convention.
     pub composed: Vec<usize>,
+    /// The docstring (see [`FnDef::doc`]).
+    pub doc: String,
 }
 
 impl TypeDef {
@@ -277,6 +285,9 @@ pub struct ShardFile {
     /// Line tally by complexity category (the heat-map source).
     pub counts: Counts,
     pub parse_error: Option<String>,
+    /// The file docstring: the `;;;` header block at the top of the file
+    /// (prefixes stripped; empty if none). First line = the summary.
+    pub doc: String,
 }
 
 #[derive(Debug, Default)]
@@ -335,8 +346,10 @@ impl Project {
                 claims: Vec::new(),
                 counts: Counts::default(),
                 parse_error: None,
+                doc: String::new(),
             };
             let src = std::fs::read_to_string(&path)?;
+            file.doc = file_doc(&src);
             // Category tally is independent of the parse, so it stands even for
             // files the structural reader chokes on.
             let forced = if file.rel.ends_with(".auto.shard") { Some(7) } else { None };
@@ -699,9 +712,54 @@ fn collect_refs(e: &Sexpr, params: &BTreeSet<String>, out: &mut BTreeSet<String>
     }
 }
 
-fn extract_file(project: &mut Project, file: &mut ShardFile, forms: Vec<(Sexpr, String)>) {
+/// Distill a form's lead-comment block into its docstring, per the corpus
+/// convention LANGUAGE.md §1 blesses: `;;` lines are the member docs (`;` is
+/// trailing-inline, `;;;` is file/section level). Walking backward from the
+/// form, contiguous `;;` lines are kept; a `;;;` line, a single-`;` line, or
+/// a section banner (`;; ----…`) ends the block — a banner directly above a
+/// fn titles the *section*, not the fn. Prefixes are stripped; the first
+/// line is the summary.
+fn distill_doc(lead_comments: &[String]) -> String {
+    let mut kept: Vec<&str> = Vec::new();
+    for line in lead_comments.iter().rev() {
+        let t = line.trim_start();
+        let body = match t.strip_prefix(";;") {
+            Some(rest) if !rest.starts_with(';') => rest.strip_prefix(' ').unwrap_or(rest),
+            _ => break, // `;` or `;;;` line: not member-doc tier
+        };
+        if body.trim_start().starts_with("----") {
+            break; // section banner
+        }
+        kept.push(body);
+    }
+    kept.reverse();
+    kept.join("\n")
+}
+
+/// The file docstring: the contiguous `;;;` block at the very top of the
+/// file, prefixes stripped.
+fn file_doc(src: &str) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    for line in src.lines() {
+        match line.strip_prefix(";;;") {
+            Some(rest) => out.push(rest.strip_prefix(' ').unwrap_or(rest)),
+            None => break,
+        }
+    }
+    // Trim leading/trailing blank lines the header block may carry.
+    while out.first().is_some_and(|l| l.trim().is_empty()) {
+        out.remove(0);
+    }
+    while out.last().is_some_and(|l| l.trim().is_empty()) {
+        out.pop();
+    }
+    out.join("\n")
+}
+
+fn extract_file(project: &mut Project, file: &mut ShardFile, forms: Vec<sexpr::TopForm>) {
     let file_idx = project.files.len();
-    for (form, src) in forms {
+    for sexpr::TopForm { expr: form, src, lead_comments } in forms {
+        let doc = distill_doc(&lead_comments);
         match form.head() {
             Some("import") => {
                 if let Sexpr::List(items) = &form
@@ -711,7 +769,8 @@ fn extract_file(project: &mut Project, file: &mut ShardFile, forms: Vec<(Sexpr, 
                 }
             }
             Some("fn") => {
-                if let Some(def) = parse_fn(&form, file_idx, false, src) {
+                if let Some(mut def) = parse_fn(&form, file_idx, false, src) {
+                    def.doc = doc;
                     let idx = project.fns.len();
                     file.fns.push(idx);
                     project.fns.push(def);
@@ -722,7 +781,8 @@ fn extract_file(project: &mut Project, file: &mut ShardFile, forms: Vec<(Sexpr, 
                 match items.get(1).and_then(|s| s.as_sym()) {
                     // (sig fn NAME PARAMS RET) — a bodyless signature.
                     Some("fn") => {
-                        if let Some(def) = parse_fn_from(&items[1..], file_idx, true, src) {
+                        if let Some(mut def) = parse_fn_from(&items[1..], file_idx, true, src) {
+                            def.doc = doc;
                             let idx = project.fns.len();
                             file.fns.push(idx);
                             project.fns.push(def);
@@ -740,6 +800,7 @@ fn extract_file(project: &mut Project, file: &mut ShardFile, forms: Vec<(Sexpr, 
                                 file: file_idx,
                                 src,
                                 composed: Vec::new(),
+                                doc,
                             });
                         }
                     }
@@ -747,13 +808,15 @@ fn extract_file(project: &mut Project, file: &mut ShardFile, forms: Vec<(Sexpr, 
                 }
             }
             Some("type") => {
-                if let Some(def) = parse_type(&form, file_idx, src) {
+                if let Some(mut def) = parse_type(&form, file_idx, src) {
+                    def.doc = doc;
                     file.types.push(project.types.len());
                     project.types.push(def);
                 }
             }
             Some("record") => {
-                if let Some(def) = parse_record(&form, file_idx, src) {
+                if let Some(mut def) = parse_record(&form, file_idx, src) {
+                    def.doc = doc;
                     file.types.push(project.types.len());
                     project.types.push(def);
                 }
@@ -782,6 +845,7 @@ fn extract_file(project: &mut Project, file: &mut ShardFile, forms: Vec<(Sexpr, 
                         cites: Vec::new(),
                         about: Vec::new(),
                         fulfilled: false,
+                        doc,
                     });
                 }
             }
@@ -846,7 +910,7 @@ fn parse_type(form: &Sexpr, file: usize, src: String) -> Option<TypeDef> {
             Some(Ctor { name: cname, fields, comment })
         })
         .collect();
-    Some(TypeDef { name, params, kind: TypeKind::Data, ctors, file, src, composed: Vec::new() })
+    Some(TypeDef { name, params, kind: TypeKind::Data, ctors, file, src, composed: Vec::new(), doc: String::new() })
 }
 
 /// Parse a `(record NAME (FIELD TY)…)` definition: one ctor row per field.
@@ -863,7 +927,7 @@ fn parse_record(form: &Sexpr, file: usize, src: String) -> Option<TypeDef> {
             Some(Ctor { name: fname, fields, comment })
         })
         .collect();
-    Some(TypeDef { name, params, kind: TypeKind::Record, ctors, file, src, composed: Vec::new() })
+    Some(TypeDef { name, params, kind: TypeKind::Record, ctors, file, src, composed: Vec::new(), doc: String::new() })
 }
 
 /// Parse a `(fn NAME PARAMS RET BODY...)` form.
@@ -895,6 +959,7 @@ fn parse_fn_from(items: &[Sexpr], file: usize, is_sig: bool, src: String) -> Opt
         proof_refd: false,
         shapes: Vec::new(),
         sig_types: Vec::new(),
+        doc: String::new(),
     })
 }
 
@@ -986,8 +1051,38 @@ mod tests {
     use super::{classify_source, normalize_rel, FnDef};
     use super::{parse_record, parse_type, symbol_tokens, TypeKind};
     use crate::sexpr::{self, Sexpr};
-        fn one_form(src: &str) -> (Sexpr, String) {
-        sexpr::parse_top_spanned(src).unwrap().into_iter().next().unwrap()
+    fn one_form(src: &str) -> (Sexpr, String) {
+        let f = sexpr::parse_top_spanned(src).unwrap().into_iter().next().unwrap();
+        (f.expr, f.src)
+    }
+
+    #[test]
+    fn docstrings_are_contiguous_double_semi_blocks() {
+        use super::{distill_doc, file_doc};
+        let forms = sexpr::parse_top_spanned(concat!(
+            ";;; header line one\n",
+            ";;; header line two\n",
+            "\n",
+            ";; ---- section banner ----\n",
+            ";; Reverses xs onto acc.\n",
+            ";; Tail recursive.\n",
+            "(fn rev (xs acc) T xs)\n",
+            "\n",
+            ";; orphaned by the blank line below\n",
+            "\n",
+            "(fn undoc () T 1)  ; trailing note\n",
+            ";; belongs to three, not to two's trailing line\n",
+            "(fn three () T 2)\n",
+        ))
+        .unwrap();
+        let docs: Vec<String> = forms.iter().map(|f| distill_doc(&f.lead_comments)).collect();
+        assert_eq!(docs[0], "Reverses xs onto acc.\nTail recursive."); // banner excluded
+        assert_eq!(docs[1], ""); // blank line broke the block
+        assert_eq!(docs[2], "belongs to three, not to two's trailing line");
+        assert_eq!(
+            file_doc(";;; header line one\n;;; header line two\n\n(fn f () T 1)"),
+            "header line one\nheader line two"
+        );
     }
 
     #[test]
@@ -1079,6 +1174,7 @@ mod tests {
             proof_refd,
             shapes: vec![],
             sig_types: vec![],
+            doc: String::new(),
         }
     }
 

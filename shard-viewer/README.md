@@ -92,6 +92,19 @@ shows cross-file definitions on the same screen. Hovering a type shows what
 `SHARD_RENDER_HOVER=fn_name` — or a raw member key like `type:7` — to
 simulate the pointer for review renders.)
 
+**Docstrings are harvested, not invented**: the corpus already writes them —
+LANGUAGE.md §1's comment tiers (`;` trailing, `;;` line, `;;;` file header)
+put a `;;` block directly above a good share of fns and claims. The parser
+(`sexpr::TopForm`) carries each top-level form's lead comments; the model
+distills the contiguous `;;` run into `doc` (a `;;;` line, a single-`;`
+line, or a `;; ----` section banner ends the block — a banner titles the
+section, not the fn), and the `;;;` block at the top of a file becomes the
+*file's* doc. Display: every fn/claim/type card carries the doc's first
+line as a muted one-line summary (so it appears exactly at reading zoom,
+where cards draw at all); tooltips and the detail panels carry the full
+block; the Systems file panel and the Map file-box tooltip carry the file
+header. Undocumented members spend no space on absence.
+
 **The proof card** shows each proof's *structure* in the same Flow vocabulary
 the fn cards taught (`proof.rs` lowers the tactic tree into the shared
 `Region` type): case-split tactics (`induct` / `fin-split` / `case-on` /

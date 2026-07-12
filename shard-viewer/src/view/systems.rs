@@ -193,9 +193,15 @@ pub(crate) fn detail_panel(project: &Project, file_idx: usize) -> El {
         .gap(tokens::SPACE_2)
     };
 
-    let items = vec![
+    let mut items = vec![
         row([h3(file_label(&f.rel).0), spacer()]).gap(tokens::SPACE_2),
         text(f.rel.clone()).caption().muted(),
+    ];
+    // The file's `;;;` header block — the author's own account of the file.
+    if !f.doc.is_empty() {
+        items.push(text(f.doc.clone()).font_size(SUB_SIZE).wrap_text());
+    }
+    items.extend(vec![
         button("Open call graph ▸").key(format!("open:{file_idx}")).secondary(),
         separator(),
         text(format!("{} lines · {} fns", c.total(), f.fns.len()))
@@ -218,7 +224,7 @@ pub(crate) fn detail_panel(project: &Project, file_idx: usize) -> El {
         ))
         .caption()
         .muted(),
-    ];
+    ]);
 
     column(items)
         .gap(tokens::SPACE_2)

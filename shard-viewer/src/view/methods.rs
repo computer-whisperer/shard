@@ -154,6 +154,10 @@ pub(crate) fn node_tip(project: &Project, fn_idx: usize) -> String {
     } else if f.proof_refd && f.callers.is_empty() {
         tip.push_str("\nproof subject — reasoned about, not called");
     }
+    if !f.doc.is_empty() {
+        tip.push_str("\n\n");
+        tip.push_str(&f.doc);
+    }
     tip
 }
 
@@ -210,7 +214,7 @@ pub(crate) fn detail_panel(
     }
 
     // Fixed header — identity + triage + nav stay put while the body scrolls.
-    let header = vec![
+    let mut header = vec![
         row([h3(f.name.clone()), spacer()]).gap(tokens::SPACE_2),
         text(format!("({}) → {}", sig.join(" "), f.ret))
             .mono()
@@ -221,8 +225,13 @@ pub(crate) fn detail_panel(
             .caption()
             .muted(),
         text(metrics).caption().muted(),
-        nav_buttons(mode),
     ];
+    // The full docstring — the author's own words outrank any derived metric,
+    // so it sits right under the identity block.
+    if !f.doc.is_empty() {
+        header.push(text(f.doc.clone()).font_size(tokens::TEXT_SM.size).wrap_text());
+    }
+    header.push(nav_buttons(mode));
 
     let src_header = {
         let mut head = vec![

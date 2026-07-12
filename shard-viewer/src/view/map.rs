@@ -912,14 +912,23 @@ fn file_el(
         .stroke(tokens::BORDER)
         .stroke_width(ctx.hairline())
         .radius(8.0)
-        .tooltip(format!(
-            "{} · {} fns · {} claims · {} types · {} lines",
-            f.rel,
-            nfns,
-            nclaims,
-            ntypes,
-            f.counts.total()
-        ))
+        .tooltip({
+            let mut tip = format!(
+                "{} · {} fns · {} claims · {} types · {} lines",
+                f.rel,
+                nfns,
+                nclaims,
+                ntypes,
+                f.counts.total()
+            );
+            // The file's `;;;` header — what the file *is*, in the author's
+            // words (the box band is measure-only chrome; the tooltip is the
+            // file's reading surface on the Map).
+            if !f.doc.is_empty() {
+                tip = format!("{tip}\n\n{}", f.doc);
+            }
+            tip
+        })
 }
 
 /// One fn slot at its committed footprint: flow innards when in view and the
@@ -1025,7 +1034,12 @@ fn claim_tag(c: &ClaimDef) -> (&'static str, Color) {
 
 fn claim_tip(c: &ClaimDef) -> String {
     let (tag, _) = claim_tag(c);
-    format!("{tag} {}\n{}\ncites {} · about {} fns", c.name, c.goal, c.cites.len(), c.about.len())
+    let mut tip =
+        format!("{tag} {}\n{}\ncites {} · about {} fns", c.name, c.goal, c.cites.len(), c.about.len());
+    if !c.doc.is_empty() {
+        tip = format!("{tip}\n\n{}", c.doc);
+    }
+    tip
 }
 
 /// One proof-layer form as an intrinsic card: kind tag + name, the goal
@@ -1049,6 +1063,9 @@ fn claim_card(project: &Project, ci: usize) -> El {
     .gap(tokens::SPACE_2)
     .align(Align::Center);
     let mut parts = vec![title];
+    if let Some(summary) = doc_summary(&c.doc, 52) {
+        parts.push(summary);
+    }
     if !c.goal.is_empty() {
         parts.push(
             text(ellipt(&c.goal, 52)).mono().muted().font_size(SUB_SIZE).nowrap_text(),
@@ -1065,6 +1082,18 @@ fn claim_card(project: &Project, ci: usize) -> El {
         .stroke(stroke)
         .key(format!("claim:{ci}"))
         .tooltip(claim_tip(c))
+}
+
+/// The one-line docstring summary a card carries: the doc's first line,
+/// clipped. `None` for an undocumented member — cards don't spend a row on
+/// absence. Prose (non-mono) and muted, so it reads as commentary beside the
+/// mono code text; the full block lives in the tooltip and detail panel.
+fn doc_summary(doc: &str, max: usize) -> Option<El> {
+    let line = doc.lines().next()?.trim();
+    if line.is_empty() {
+        return None;
+    }
+    Some(text(ellipt(line, max)).muted().font_size(SUB_SIZE).nowrap_text())
 }
 
 /// Truncate to `max` chars with an ellipsis (goal statements can be long).
@@ -1126,13 +1155,17 @@ fn type_tag(kind: TypeKind) -> &'static str {
 }
 
 fn type_tip(t: &TypeDef) -> String {
-    format!(
+    let mut tip = format!(
         "{} {}\n{} ctors · composed of {} types",
         type_tag(t.kind),
         t.name,
         t.ctors.len(),
         t.composed.len()
-    )
+    );
+    if !t.doc.is_empty() {
+        tip = format!("{tip}\n\n{}", t.doc);
+    }
+    tip
 }
 
 /// A datastructure definition as an intrinsic card: kind tag + name (+ type
@@ -1161,6 +1194,9 @@ fn type_card(project: &Project, ti: usize, keyed: bool) -> El {
     .align(Align::Center);
 
     let mut parts = vec![title];
+    if let Some(summary) = doc_summary(&t.doc, 52) {
+        parts.push(summary);
+    }
     if t.kind == TypeKind::Opaque {
         parts.push(text("ctors private to impl").muted().font_size(SUB_SIZE).nowrap_text());
     }
@@ -1385,6 +1421,9 @@ fn flow_card(project: &Project, fn_idx: usize, selected: bool) -> El {
     // reads its wires by their terminals — the signature is first-class, not a
     // count. Omitted for a nullary fn (nothing to list).
     let mut parts = vec![title];
+    if let Some(summary) = doc_summary(&f.doc, 56) {
+        parts.push(summary);
+    }
     if let Some(inputs) = params_block(f) {
         parts.push(inputs);
     }
