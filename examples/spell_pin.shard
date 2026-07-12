@@ -1,0 +1,141 @@
+;;; examples/spell_pin.shard — kernel-computed pins for meta/spell's
+;;; FULL source renderer (docs/SEARCH.md D11, slice 5). Each claim
+;;; computes a rendered spelling inside the checker and compares it to
+;;; the expected source text byte-for-byte: binder naming law (BVar j
+;;; under n binders spells x(n-1-j)), bare nullary ctors, parenthesized
+;;; nullary calls, pattern bind ordinals, parallel-let naming, negative
+;;; literals, quote forms, type spelling, the whole fn form, and the
+;;; loud unmapped-head refusal. The round-trip half of the gate (real
+;;; reader, real resolver) is tools/search/render_gate.shard.
+
+(import "../kernel/stdlib.shard")
+(import "../kernel/term.shard")
+(import "../kernel/module.shard")
+(import "../meta/spell")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: meta spell *))
+
+;; a two-name resolver: f (a call head), Nil/Cons (ctor heads)
+(fn pin_tbl () (List (Pair QName Symbol))
+  (Cons
+    (Pair (qn (quote f)) (quote f))
+    (Cons
+      (Pair (qn (quote Nil)) (quote Nil))
+      (Cons (Pair (qn (quote Cons)) (quote Cons)) Nil))))
+
+(fn pin_r ((r SpR)) (List Int)
+  (match r
+    ((SpRErr msg) msg)
+    ((SpROk d) (sp_bytes d))))
+
+;; the binder naming law: BVar j under n binders spells x(n-1-j)
+(claim spell_bvar_inner
+  (goal () () (= (pin_r (sp_e (pin_tbl) 3 (BVar 0))) "x2"))
+  (steps ((compute both)) refl))
+
+(claim spell_bvar_outer
+  (goal () () (= (pin_r (sp_e (pin_tbl) 3 (BVar 2))) "x0"))
+  (steps ((compute both)) refl))
+
+;; nullary ctor spells BARE; nullary call spells parenthesized
+(claim spell_nullary_ctor
+  (goal () () (= (pin_r (sp_e (pin_tbl) 0 (Ctor (qn (quote Nil)) Nil))) "Nil"))
+  (steps ((compute both)) refl))
+
+(claim spell_nullary_call
+  (goal () () (= (pin_r (sp_e (pin_tbl) 0 (Call (qn (quote f)) Nil))) "(f)"))
+  (steps ((compute both)) refl))
+
+;; negative literals fold to literal spelling (the C1 lesson)
+(claim spell_call_neg
+  (goal () ()
+    (=
+      (pin_r
+        (sp_e
+          (pin_tbl)
+          1
+          (Call (qn (quote f)) (Cons (BVar 0) (Cons (IntLit -1) Nil)))))
+      "(f x0 -1)"))
+  (steps ((compute both)) refl))
+
+;; if + quote form
+(claim spell_if_quote
+  (goal () ()
+    (=
+      (pin_r (sp_e (pin_tbl) 1 (If (BVar 0) (IntLit 1) (SymLit (quote foo)))))
+      "(if x0 1 (quote foo))"))
+  (steps ((compute both)) refl))
+
+;; match: pattern binds count left to right from the current depth;
+;; the Cons-arm body's BVar 1 is the HEAD binder (x1)
+(claim spell_match_binds
+  (goal () ()
+    (=
+      (pin_r
+        (sp_e
+          (pin_tbl)
+          1
+          (Match
+            (BVar 0)
+            (Cons
+              (Arm (PCtor (qn (quote Nil)) Nil) (IntLit 0))
+              (Cons
+                (Arm
+                  (PCtor (qn (quote Cons)) (Cons (PVar) (Cons (PVar) Nil)))
+                  (BVar 1))
+                Nil)))))
+      "(match x0 (Nil 0) ((Cons x1 x2) x1))"))
+  (steps ((compute both)) refl))
+
+;; int pattern
+(claim spell_pat_int
+  (goal () ()
+    (=
+      (pin_r
+        (sp_e (pin_tbl) 1 (Match (BVar 0) (Cons (Arm (PInt 7) (IntLit 1)) Nil))))
+      "(match x0 (7 1))"))
+  (steps ((compute both)) refl))
+
+;; parallel let: binding names are the NEW ordinals; body sees them
+(claim spell_let
+  (goal () ()
+    (=
+      (pin_r
+        (sp_e (pin_tbl) 1 (Let (Cons (IntLit 5) (Cons (BVar 0) Nil)) (BVar 1))))
+      "(let ((x1 5) (x2 x0)) x1)"))
+  (steps ((compute both)) refl))
+
+;; type spelling
+(claim spell_ty
+  (goal () ()
+    (=
+      (sp_bytes
+        (sp_ty (TCon (qn (quote List)) (Cons (TCon (qn (quote Int)) Nil) Nil))))
+      "(List Int)"))
+  (steps ((compute both)) refl))
+
+;; the whole fn form, flat
+(claim spell_fn_form
+  (goal () ()
+    (=
+      (pin_r
+        (sp_fn
+          (pin_tbl)
+          (quote g)
+          (Cons (TCon (qn (quote Int)) Nil) Nil)
+          (TCon (qn (quote Int)) Nil)
+          (Some (sp_meas_struct 0))
+          (BVar 0)))
+      "(fn g ((x0 Int)) Int (measure (struct x0)) x0)"))
+  (steps ((compute both)) refl))
+
+;; an unmapped head refuses LOUDLY, never guesses a spelling
+(claim spell_unmapped
+  (goal () ()
+    (=
+      (pin_r (sp_e (pin_tbl) 0 (Call (qn (quote ghost)) Nil)))
+      "spell: unmapped call ghost"))
+  (steps ((compute both)) refl))
+
+(fn main () Int 0)

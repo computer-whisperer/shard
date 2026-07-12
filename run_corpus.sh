@@ -246,6 +246,9 @@ TARGETS=(
   tools/search/census.shard
   tools/search/catalog.shard
   tools/search/sym.shard
+  examples/spell_pin.shard
+  tools/search/render_gate.shard
+  tools/search/gen/rev_synth.shard
 )
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -392,6 +395,22 @@ fi
 echo "=== search: laws oracle (S4a+S5, G3) ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/laws.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# Render round-trip pin (docs/SEARCH.md D11, slice 5): meta/spell's
+# full renderer against the REAL pipeline. REGEN — re-rendering the two
+# law-proven rev candidates (rank 62/347, re-verified by cn_e+battery)
+# reproduces tools/search/gen/rev_synth.shard byte-for-byte; RELOAD —
+# the committed artifact, loaded through the real reader/resolver,
+# yields bodies expr_eq to the unranked candidates. The artifact is
+# also a corpus check TARGET (kernel-checked synthesized source).
+# Re-pin deliberately with `render_gate emit` when the grammar or the
+# renderer changes.
+echo "=== search: render round-trip (D11) ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/render_gate.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi

@@ -830,3 +830,60 @@ rendering + kernel replay (G4)**, the arc's exit criterion; it will
 grow TRACE RECORDING in this slice's machine (the comparator knows
 its splits and joins; it does not yet write them down) and render
 Proven verdicts as replayable shard proof text.
+
+
+### Slice 5, component 1 — the source renderer (D11 RESOLVED, LANDED 2026-07-11)
+
+First component landed under the living-ledger posture (S6
+decomposed: renderer → trace recording → proof rendering, each
+independently consumable).
+
+**What landed: meta/spell grew the FULL Expr renderer** — the module
+whose header always promised it ("canonical spelling … for programs
+that generate shard"). sp_e/sp_arms/sp_pat/sp_ty/sp_fn over the whole
+term vocabulary, Doc-based like the module's existing pr_e, flat
+layout composed with meta/format's fmt for canonical bytes. The
+contract, pinned in the header and in examples/spell_pin.shard
+(12 kernel-computed claims):
+
+- **binder naming law**: ordinal = env depth at introduction, so
+  BVar j under n binders spells x(n-1-j) — the law xsym's header
+  already stated, now load-bearing; pattern binds count left to
+  right, parallel-let RHSs render at the outer depth;
+- **heads resolve through a caller-supplied qname→symbol table** —
+  the caller owns scope policy, a miss is a loud SpRErr, never a
+  guessed spelling;
+- nullary ctors bare, nullary calls parenthesized, negative literals
+  literal (the C1 lesson).
+
+**tools/search/gen/rev_synth.shard — the first synthesized programs
+to live in the repo as ordinary source.** The two law-Proven rev
+candidates (rank addresses 62 and 347) rendered as rev_c62/rev_c347
+with (measure (struct x0)) clauses, corpus CHECK TARGET (the kernel
+verifies the measures), cn_e-clean by construction. Gated by
+tools/search/render_gate.shard both ways, corpus-pinned: **REGEN**
+(re-render from the grammar → byte-identical to the committed
+artifact — the sidecar discipline; `emit` mode re-pins deliberately)
+and **RELOAD** (the artifact through the real reader/resolver →
+bodies expr_eq to the unranked candidates, self-calls remapped).
+Rank-addressed names carry provenance.
+
+**Worth reading in the artifact:** rev_c347 is the needless-split
+twin — `match x2 (Nil x0) …` where the Nil arm's x0 equals the erased
+expression under the arm hypotheses. That is EXACTLY the playground's
+R3 contextual-PE family, now sitting in our repo as checked source —
+live evidence for the canon flywheel (cross-arc: CANON.md owns any
+rule that would price it).
+
+**Placement notes:** rm_e/rm_es/rm_arms moved from laws.shard to
+rev.shard (shared candidate plumbing — the render gate remaps
+self-calls with the same walker the oracle remaps subjects with).
+render_gate is BOTH a check target (52/0 — no driver import) and a
+run pin; the artifact is a check target.
+
+**Open (rolls forward):** slice 5's remaining components — trace
+recording in the comparator, then proof-text rendering (claims +
+fulfills citing rev_nil/rev_cons over the rendered fns) and G4 kernel
+replay. The renderer's qname policy renders BARE names only; explicit
+(:: path name) head spelling is unneeded until a consumer emits into
+a scope it does not control.
