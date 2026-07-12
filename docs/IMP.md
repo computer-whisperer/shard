@@ -33,6 +33,17 @@ User rulings already on record from the design discussions of
   quotient) are exactly imp→ISA lowering obligations. Neither arc
   blocks the other: imp v1 has no float dependency; float ops join
   imp as a later rung when the fork merges.
+- **The container entry point (2026-07-12).** imp is the natural
+  home for Vec-class primitives — containers that rely on heap
+  behaviors and surface EXPLICIT allocation-fail results. Lowering
+  high-level List onto imp-level Vec is a standard, convenient path
+  for both pins and auto-lowering (§4a).
+- **Decision-point resolutions (2026-07-12):** DI1 — the existing
+  fragment taxonomy verbatim until otherwise needed. DI2 — RESOLVED
+  BY DISSOLUTION: no differential vectors at imp as a build gate;
+  the kernel gate is the gate (§3). DI3 — discovered as the pieces
+  are fit together; stays open. DI4 — as leaned (theorems with the
+  model, generators in tools/).
 
 Standing constraints inherited whole: the ISA-arc discipline (a
 model is an ordinary shard library; composition is citation; ZERO
@@ -140,10 +151,17 @@ Nothing new, by construction:
   byte-tie, manifest, engine). The ISA models remain where hardware
   truth lives.
 - **The only empirical pins stay where they are**: V8 and the
-  on-CPU runner gate the ISA models against reality. imp adds NO new
-  differential surface against the world — its engine leg runs on
-  shard's own evaluator (spec vs imp-model traces on curated
-  vectors), which is a proof-side instrument, not a trust boundary.
+  on-CPU runner gate the ISA models against reality. imp adds NO
+  differential surface at all — and deliberately has no engine gate
+  (DI2 resolution, USER 2026-07-12). The ISA engine legs differ the
+  models against EXTERNAL reality; imp has no external reality — its
+  semantics ARE its shard definitions, so once spec ⊑ imp checks,
+  vectors re-prove nothing, and real vectors already run end to end
+  through the ISA engine legs downstream of any imp-derived
+  artifact. The one legitimate vector use is DEVELOPMENT-TIME: a
+  probe grid validating the machine means what we intended before
+  proofs rest on it (the facts_probe / FLOATS.md toy-format idiom),
+  built once at I0 and corpus-pinned — never a per-product gate.
 
 
 ## 4. The memory-class joint (with MEMORY.md and BUILD.md)
@@ -169,6 +187,42 @@ Nothing new, by construction:
   the profile's variant selection picks per target.
 
 
+## 4a. The container layer: Vec as the entry point
+
+(USER ruling, 2026-07-12.) imp is the natural entry point for
+Vec-class primitives: containers that RELY on heap behaviors —
+growth, reallocation — and surface EXPLICIT allocation-fail results.
+This is MEMORY.md §7's tier-1 story made concrete as a value: no
+ambient OOM premise, no cert conclusion growing an OOM leg — the
+fail leg is in the result type, observed at exactly the call that
+allocated.
+
+- **What Vec is here**: a unique-owned growable region (ptr/len/cap
+  in imp terms) with a readback law — the Vec denotes exactly the
+  List read back from its initialized prefix — and ops whose exact
+  results are the List ops (push/pop/index/iterate), except that
+  allocating ops carry the explicit fail leg. Growth policy
+  (doubling) is an imp-level implementation with an amortized-cost
+  statement, not a hidden runtime service.
+- **The standard dynamic-data path**: List → Vec is THE default
+  lowering for dynamically-sized sequence data, in both authoring
+  modes — a hand pin writes imp Vec ops directly; auto-lowering maps
+  List-typed spec values onto Vec when the class assignment says so.
+  The rep-swap that founded the refinement-lowering vision (linked
+  list → linear memory) becomes a REUSABLE library citizen instead
+  of a per-module construction.
+- **Residence and timing**: the container layer is a library OVER
+  the machine (the analogue of std/mem over bytes), not machine
+  primitives — §2's surface does not grow. Unique-owned Vec enters
+  at the owned-mutation/region rung, no counting needed; SHARED
+  containers wait for the counted-heap rung. Ladder position: I2.5
+  (§6).
+- **Beyond Vec**, the same shape serves the obvious family (string
+  builders; hash tables as the §4-hybrid at region granularity) —
+  each is a readback law plus explicit-fail allocating ops; none is
+  scoped until a consumer names it.
+
+
 ## 5. Authoring and products (with BUILD.md)
 
 The build vocabulary absorbs imp without new concepts:
@@ -183,10 +237,10 @@ The build vocabulary absorbs imp without new concepts:
 - **SYNTHESIZE**: metaprograms emit imp content, never packaging
   (the mod.build charter, verbatim).
 - **Products**: an imp twin gates as a product with target 'imp —
-  schema, kernel, tie against the entry's declared machine values,
-  and the in-shard differential engine leg. PVec is reused for
-  vectors. Details land driver-side at rung I0; expected to be a
-  small slice on the slice-7/8 pattern.
+  schema, kernel, and tie against the entry's declared machine
+  values. PROOF GATES ONLY: no engine leg exists at imp (§3, the
+  DI2 resolution). Details land driver-side at rung I0; expected to
+  be a small slice on the slice-7/8 pattern.
 - **The existing generators are not ripped up preemptively.**
   wasmgen/x86gen keep their direct lowsrc→ISA path; leaf fns may
   keep it forever (a second layer is pure cost for a three-line
@@ -201,11 +255,11 @@ House discipline per rung: ratified scope first, per-slice check-ins,
 corpus pins, byte-tie where a cert names bytes.
 
 - **I0 — the machine.** models/imp v1 (locals/frames, structured
-  control, Mem regions, Int scalars with wrap ops) + the in-shard
-  differential harness + imp twins of the existing straight-line and
-  loop fragments. Gate: spec ⊑ imp certs for those twins check
-  green; differential vectors pass on the model's own eval; corpus
-  diff-clean.
+  control, Mem regions, Int scalars with wrap ops) + the ONE-TIME
+  machine-validation probe grid (§3 — a development instrument,
+  corpus-pinned, not a product gate) + imp twins of the existing
+  straight-line and loop fragments. Gate: spec ⊑ imp certs for
+  those twins check green; corpus diff-clean.
 - **I1 — the ISA legs.** imp ⊑ wasm and imp ⊑ x86 lowering families
   for the I0 fragment classes, generate-and-check, six gates, wasm
   first (width-ordered coverage precedent). Gate: the SAME imp twin
@@ -215,6 +269,11 @@ corpus pins, byte-tie where a cert names bytes.
   region cancellation proven at imp, `./sha256sum` on silicon and
   under V8 from one twin. This is where "proven once, landed twice"
   is demonstrated on a real module.
+- **I2.5 — the container layer.** Unique-owned Vec over imp regions
+  (§4a): the readback law, explicit-fail allocating ops, and the
+  List→Vec default path wired into the class-assignment story.
+  Flagship: a List-consuming module re-repped onto Vec with zero
+  spec change.
 - **I3 — profiles consume it.** BUILD.md rung 3 lands class
   assignment as spec→imp steering (MEMORY.md D1 resolves here),
   variant selection chooses imp-derived vs hand ISA twins.
@@ -241,23 +300,23 @@ restated), the lowsrc→imp front-end absorption, imp-level reuse
   premised wrap ops; the Word residue is not re-created here.
 
 
-## 8. Open decision points
+## 8. Decision points
 
-- **DI1 — fragment grammar granularity.** Does I0 adopt the existing
-  fragment taxonomy (straight-line / loop / mem / calls-in-loops) as
-  imp's fragment classes verbatim, or define imp-native classes and
-  map the existing four onto them? Lean: adopt verbatim for I0–I1
-  (byte-diffable against the landed corpus), revisit when the
-  counted-heap class arrives.
-- **DI2 — the imp twin's vector story.** Curated PVec vectors like
-  pinlib entries, or spec-derived vectors (the source fn applied,
-  slice-7 style)? Lean: spec-derived — imp twins always have a
-  runnable spec sibling by construction.
-- **DI3 — how much frame convention is imp-level.** Extent/ownership
-  structure yes; slot packing and alignment? Lean: imp states sizes
-  and disjointness abstractly; byte-exact packing stays with the ISA
-  docs (MEMORY.md D6), revisited if the imp⊑ISA proofs want more.
-- **DI4 — residence of the lowering families.** models/imp alongside
-  the machine, or tools/-side with the generators? Lean: theorems
-  with the model, generators in tools/, matching the wasm/x86 split
-  today.
+- **DI1 — fragment grammar granularity: RESOLVED (2026-07-12).** The
+  existing fragment taxonomy (straight-line / loop / mem /
+  calls-in-loops) verbatim, until otherwise needed.
+- **DI2 — imp twin vectors: RESOLVED BY DISSOLUTION (2026-07-12).**
+  The question was curated-vs-spec-derived; the user's counter —
+  what would they prove? — dissolves it: no differential vectors at
+  imp as a build gate at all. The kernel gate is the gate; imp has
+  no external reality to differ against, and real vectors run end
+  to end at the ISA engine legs. The development-time
+  machine-validation probe (§3) is the surviving remnant.
+- **DI3 — how much frame convention is imp-level: OPEN,
+  discovery-mode (2026-07-12 ruling).** To be discovered as the
+  pieces are fit together at I0–I2. Standing lean: extent/ownership
+  structure at imp; byte-exact packing with the ISA docs
+  (MEMORY.md D6).
+- **DI4 — residence of the lowering families: RESOLVED
+  (2026-07-12).** As leaned: theorems live with the model,
+  generators in tools/, matching the wasm/x86 split today.
