@@ -313,18 +313,23 @@ pub(crate) fn canvas(project: &Project, p: &ViewParams, cache: Option<&MapCache>
     // datastructure definitions — the answer to "I'm zoomed into one fn and
     // its types are defined three files away". Overlay, not topology: it
     // follows hover/selection freely without touching the committed plane.
-    match shape_deck(project, focus) {
-        Some(deck) => stack([
-            viewport,
-            row([spacer(), deck])
-                .width(Size::Fill(1.0))
-                .align(Align::Start)
-                .padding(tokens::SPACE_4),
-        ])
-        .width(Size::Fill(1.0))
-        .height(Size::Fill(1.0)),
-        None => viewport,
-    }
+    //
+    // The stack wrapper is UNCONDITIONAL (blank deck slot when nothing is
+    // focused): a node's `computed_id` is its full tree path, and the
+    // viewport's pan/zoom + fit-takeover state lives under that id. Toggling
+    // the wrapper with hover changed the viewport's path every time the deck
+    // appeared, so the armed Contain policy stopped recognizing the user's
+    // takeover and snapped to fit — hover on/off oscillated the zoom.
+    let deck = shape_deck(project, focus).unwrap_or_else(blank);
+    stack([
+        viewport,
+        row([spacer(), deck])
+            .width(Size::Fill(1.0))
+            .align(Align::Start)
+            .padding(tokens::SPACE_4),
+    ])
+    .width(Size::Fill(1.0))
+    .height(Size::Fill(1.0))
 }
 
 // ---------------------------------------------------------------------------
@@ -1077,11 +1082,12 @@ fn type_card(project: &Project, ti: usize, keyed: bool) -> El {
         .padding(8.0)
         .radius(7.0)
         .fill(fill)
-        .stroke(stroke)
-        .tooltip(type_tip(t));
+        .stroke(stroke);
     // The deck draws unkeyed copies of cards the plane may also hold — two
-    // Els with one key would collide in hit-test.
-    if keyed { card.key(format!("type:{ti}")) } else { card }
+    // Els with one key would collide in hit-test. Unkeyed nodes are never
+    // hover targets, so the deck variant also drops the tooltip (it would
+    // be dead, and the lint would rightly flag it).
+    if keyed { card.key(format!("type:{ti}")).tooltip(type_tip(t)) } else { card }
 }
 
 /// The screen-space shape deck: the focused member's datastructure
