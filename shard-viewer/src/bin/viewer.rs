@@ -168,6 +168,11 @@ impl App for Viewer {
         } else if event.is_route("filter_clear") {
             self.filter.clear();
             self.selection = Selection::default();
+        } else if event.is_route("panel_close") {
+            // Dismiss the inspector (its ✕). The lightbox rides the selection,
+            // so it closes with it.
+            self.selected = None;
+            self.source_modal = false;
         } else if event.is_route("flowz_down") {
             // Half-octave steps, mirroring how zoom itself is felt.
             self.flow_z = (self.flow_z / std::f32::consts::SQRT_2).max(0.05);

@@ -77,7 +77,7 @@ pub(crate) fn detail_panel(project: &Project, fn_idx: usize, panel_w: f32) -> El
 
     // Fixed header — identity + triage + nav stay put while the body scrolls.
     let mut header = vec![
-        row([h3(f.name.clone()), spacer()]).gap(tokens::SPACE_2),
+        row([h3(f.name.clone()), spacer(), close_button()]).gap(tokens::SPACE_2),
         text(format!("({}) → {}", sig.join(" "), f.ret))
             .mono()
             .muted()
@@ -240,6 +240,12 @@ fn fn_link_list(project: &Project, fns: &[usize], home: usize) -> El {
     column(chips).gap(2.0)
 }
 
+/// The inspector's dismiss button (both panels): clears the selection, which
+/// closes the panel and returns the canvas to full width.
+fn close_button() -> El {
+    button("✕").key("panel_close").ghost().tooltip("Close this panel")
+}
+
 /// The bare file name (no dir, no `.shard`) — a compact cross-file tag.
 fn file_stem(rel: &str) -> &str {
     let file = rel.rsplit('/').next().unwrap_or(rel);
@@ -270,7 +276,7 @@ pub(crate) fn file_panel(project: &Project, file_idx: usize) -> El {
     };
 
     let mut items = vec![
-        row([h3(file_stem(&f.rel).to_string()), spacer()]).gap(tokens::SPACE_2),
+        row([h3(file_stem(&f.rel).to_string()), spacer(), close_button()]).gap(tokens::SPACE_2),
         text(f.rel.clone()).caption().muted(),
     ];
     // The file's `;;;` header block — the author's own account of the file.
