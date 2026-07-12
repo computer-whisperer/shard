@@ -887,3 +887,44 @@ fulfills citing rev_nil/rev_cons over the rendered fns) and G4 kernel
 replay. The renderer's qname policy renders BARE names only; explicit
 (:: path name) head spelling is unneeded until a consumer emits into
 a scope it does not control.
+
+
+### Slice 5, component 2 — trace recording (LANDED 2026-07-11)
+
+**What landed: the S4a comparator writes down its proof skeletons.**
+sym.shard grew the trace vocabulary — `TrRefl` (the sides joined by
+evaluation + congruence alone; renders as compute + refl), `TrSplit`
+(slot id, slot type, one `TrCase` per ctor in declaration order, each
+carrying the ctor and its fresh shape fields so the renderer can bind
+case binders), `TrSeq` (independent sub-comparisons' traces in
+comparison order — ctor fields, neutral args — nested by the
+renderer). CpR/CaR carry the trace; a trace is meaningful for PROVEN
+verdicts only (Refuted/Undecided paths return placeholders no
+consumer may render). laws.shard's `LVdProv` now carries the law's
+trace, and a `trace` mode prints pinned shape lines (part of the
+default corpus suite).
+
+**All eight shape predictions, committed before the run, confirmed
+exactly:**
+
+    TRACE std_rev  rev_nil  REFL        TRACE rev_c62  rev_nil  REFL
+    TRACE std_rev  rev_cons REFL        TRACE rev_c62  rev_cons REFL
+    TRACE std_len  len_nil  REFL        TRACE rev_c347 rev_nil  REFL
+    TRACE std_len  len_cons REFL        TRACE rev_c347 rev_cons (SPLIT 0 (Nil REFL) (Cons REFL))
+
+The needless-split twin needs exactly the case its own body
+introduced, and nothing else in the pinned set needs any case at all —
+the append canon fired only at formation, never load-bearing for a
+join, so every REFL leaf renders as compute + refl with no lemma
+citations. That is the measured basis for the render component's v1
+scope: the split/compute/refl fragment, with G4 replay as the
+tripwire that promotes lemma-citing leaves to a feature the moment a
+task actually needs them.
+
+**Design note (the linearization question, answered by construction):**
+a comparison is a tree of independent sub-joins while a proof is one
+nested sequence of case-ons — TrSeq records the sub-joins in
+comparison order and defers the nesting to the renderer, which
+sequences them innermost-last. For the pinned set every TrSeq
+collapses (tr_seq drops refl members), so the question stays
+theoretical until a richer task exercises it.

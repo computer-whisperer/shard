@@ -658,9 +658,53 @@
 
 (type Vd (VdUndec) (VdRef) (VdProv))
 
-(type CpR (CpRErr (List Int)) (CpROk Vd SvSt))
+;; the comparison TRACE — the proof skeleton a Proven verdict leaves
+;; behind (slice 5, component 2). TrRefl: the sides joined by
+;; evaluation + congruence alone (renders as compute + refl). TrSplit:
+;; a case split on a slot — slot id, slot type, one TrCase per ctor in
+;; declaration order, each carrying the ctor and its fresh shape
+;; fields (the renderer reads the case's binder slots from them).
+;; TrSeq: independent sub-comparisons' traces in comparison order
+;; (ctor fields, neutral args) — the renderer nests them. A trace is
+;; meaningful for a PROVEN verdict only: Refuted/Undecided paths carry
+;; TrRefl placeholders no consumer may render.
+(type Tr (TrRefl) (TrSeq (List Tr)) (TrSplit Int Type (List TrCase)))
 
-(type CaR (CaRErr (List Int)) (CaROk Bool SvSt))
+(type TrCase (TrCase QName (List SV) Tr))
+
+(fn tr_nonrefl ((ts (List Tr))) (List Tr)
+  (measure (struct ts))
+  (match ts
+    (Nil Nil)
+    ((Cons t rest)
+     (match t
+       ((TrRefl) (tr_nonrefl rest))
+       ((TrSeq _) (Cons t (tr_nonrefl rest)))
+       ((TrSplit _ _ _) (Cons t (tr_nonrefl rest)))))))
+
+;; drop refl members; empty -> refl; singleton -> the member itself
+(fn tr_seq ((ts (List Tr))) Tr
+  (let ((ns (tr_nonrefl ts)))
+    (match ns
+      (Nil (TrRefl))
+      ((Cons t Nil) t)
+      ((Cons _ (Cons _ _)) (TrSeq ns)))))
+
+(fn tr_rev ((ts (List Tr)) (acc (List Tr))) (List Tr)
+  (measure (struct ts))
+  (match ts
+    (Nil acc)
+    ((Cons t rest) (tr_rev rest (Cons t acc)))))
+
+(fn trc_rev ((cs (List TrCase)) (acc (List TrCase))) (List TrCase)
+  (measure (struct cs))
+  (match cs
+    (Nil acc)
+    ((Cons c rest) (trc_rev rest (Cons c acc)))))
+
+(type CpR (CpRErr (List Int)) (CpROk Vd Tr SvSt))
+
+(type CaR (CaRErr (List Int)) (CaROk Bool Tr SvSt))
 
 ;; the comparison matrix. Ground-vs-ground decides; Many-class atoms
 ;; refute by identity; data/neutral disagreements SPLIT within budget;
@@ -677,29 +721,29 @@
    (st SvSt))
   CpR
   (measure fuel)
-  (if (lt fuel 1) (CpROk (VdUndec) st)
+  (if (lt fuel 1) (CpROk (VdUndec) (TrRefl) st)
   (match a
     ((SVInt x)
      (match b
-       ((SVInt y) (CpROk (if (int_eq x y) (VdProv) (VdRef)) st))
+       ((SVInt y) (CpROk (if (int_eq x y) (VdProv) (VdRef)) (TrRefl) st))
        ((SVQuote _) (CpRErr "cp: int vs symbol"))
-       ((SVSym _) (CpROk (VdRef) st))
+       ((SVSym _) (CpROk (VdRef) (TrRefl) st))
        ((SVData _) (CpRErr "cp: int vs data value"))
        ((SVCtor _ _) (CpRErr "cp: int vs ctor"))
        ((SVNeu _ _ nb) (cp_split (- fuel 1) budget efuel m rules a b nb st))))
     ((SVQuote x)
      (match b
        ((SVInt _) (CpRErr "cp: symbol vs int"))
-       ((SVQuote y) (CpROk (if (sym_eq x y) (VdProv) (VdRef)) st))
-       ((SVSym _) (CpROk (VdRef) st))
+       ((SVQuote y) (CpROk (if (sym_eq x y) (VdProv) (VdRef)) (TrRefl) st))
+       ((SVSym _) (CpROk (VdRef) (TrRefl) st))
        ((SVData _) (CpRErr "cp: symbol vs data value"))
        ((SVCtor _ _) (CpRErr "cp: symbol vs ctor"))
        ((SVNeu _ _ nb) (cp_split (- fuel 1) budget efuel m rules a b nb st))))
     ((SVSym x)
      (match b
-       ((SVInt _) (CpROk (VdRef) st))
-       ((SVQuote _) (CpROk (VdRef) st))
-       ((SVSym y) (CpROk (if (int_eq x y) (VdProv) (VdRef)) st))
+       ((SVInt _) (CpROk (VdRef) (TrRefl) st))
+       ((SVQuote _) (CpROk (VdRef) (TrRefl) st))
+       ((SVSym y) (CpROk (if (int_eq x y) (VdProv) (VdRef)) (TrRefl) st))
        ((SVData _) (CpRErr "cp: atom vs data value"))
        ((SVCtor _ _) (CpRErr "cp: atom vs ctor"))
        ((SVNeu _ _ nb) (cp_split (- fuel 1) budget efuel m rules a b nb st))))
@@ -709,7 +753,7 @@
        ((SVQuote _) (CpRErr "cp: data value vs symbol"))
        ((SVSym _) (CpRErr "cp: data value vs atom"))
        ((SVData sb)
-        (if (int_eq sa sb) (CpROk (VdProv) st)
+        (if (int_eq sa sb) (CpROk (VdProv) (TrRefl) st)
         (cp_split (- fuel 1) budget efuel m rules a b sa st)))
        ((SVCtor _ _) (cp_split (- fuel 1) budget efuel m rules a b sa st))
        ((SVNeu _ _ nb) (cp_split (- fuel 1) budget efuel m rules a b nb st))))
@@ -721,23 +765,24 @@
        ((SVData sb) (cp_split (- fuel 1) budget efuel m rules a b sb st))
        ((SVCtor qb fb)
         (if (qname_eq qa qb)
-          (cp_fields (- fuel 1) budget efuel m rules fa fb st False)
-          (CpROk (VdRef) st)))
+          (cp_fields (- fuel 1) budget efuel m rules fa fb st False Nil)
+          (CpROk (VdRef) (TrRefl) st)))
        ((SVNeu _ _ nb) (cp_split (- fuel 1) budget efuel m rules a b nb st))))
     ((SVNeu qa aa ba)
      (match b
        ((SVNeu qb ab bb)
         (if (qname_eq qa qb)
-          (match (cp_args (- fuel 1) budget efuel m rules aa ab st)
+          (match (cp_args (- fuel 1) budget efuel m rules aa ab st Nil)
             ((CaRErr msg) (CpRErr msg))
-            ((CaROk ok st2)
-             (if ok (CpROk (VdProv) st2)
+            ((CaROk ok tr st2)
+             (if ok (CpROk (VdProv) tr st2)
              (cp_split (- fuel 1) budget efuel m rules a b (blk2 ba bb) st2))))
           (cp_split (- fuel 1) budget efuel m rules a b (blk2 ba bb) st)))
        (_ (cp_split (- fuel 1) budget efuel m rules a b ba st)))))))
 
 ;; ctor fields: pairwise, three-valued — a refuted field REFUTES the
-;; ctor comparison (constructor injectivity)
+;; ctor comparison (constructor injectivity); sub-traces collect in
+;; comparison order
 (fn cp_fields
   ((fuel Int)
    (budget Int)
@@ -747,14 +792,19 @@
    (xs (List SV))
    (ys (List SV))
    (st SvSt)
-   (undec Bool))
+   (undec Bool)
+   (acc (List Tr)))
   CpR
   (measure fuel)
-  (if (lt fuel 1) (CpROk (VdUndec) st)
+  (if (lt fuel 1) (CpROk (VdUndec) (TrRefl) st)
   (match xs
     (Nil
       (match ys
-        (Nil (CpROk (if undec (VdUndec) (VdProv)) st))
+        (Nil
+          (CpROk
+            (if undec (VdUndec) (VdProv))
+            (if undec (TrRefl) (tr_seq (tr_rev acc Nil)))
+            st))
         ((Cons _ _) (CpRErr "cp_fields: arity"))))
     ((Cons x xr)
      (match ys
@@ -762,17 +812,27 @@
        ((Cons y yr)
         (match (cp_sv (- fuel 1) budget efuel m rules x y st)
           ((CpRErr msg) (CpRErr msg))
-          ((CpROk vd st2)
+          ((CpROk vd tr st2)
            (match vd
              ((VdUndec)
-              (cp_fields (- fuel 1) budget efuel m rules xr yr st2 True))
-             ((VdRef) (CpROk (VdRef) st2))
+              (cp_fields (- fuel 1) budget efuel m rules xr yr st2 True acc))
+             ((VdRef) (CpROk (VdRef) (TrRefl) st2))
              ((VdProv)
-              (cp_fields (- fuel 1) budget efuel m rules xr yr st2 undec)))))))))))
+              (cp_fields
+                (- fuel 1)
+                budget
+                efuel
+                m
+                rules
+                xr
+                yr
+                st2
+                undec
+                (Cons tr acc))))))))))))
 
 ;; neutral args: pairwise, but only an ALL-PROVEN join counts — a
 ;; disagreeing argument never refutes (the head may collapse inputs);
-;; the caller splits instead
+;; the caller splits instead. The trace is meaningful when ok=True.
 (fn cp_args
   ((fuel Int)
    (budget Int)
@@ -781,14 +841,15 @@
    (rules (List NRule))
    (xs (List SV))
    (ys (List SV))
-   (st SvSt))
+   (st SvSt)
+   (acc (List Tr)))
   CaR
   (measure fuel)
-  (if (lt fuel 1) (CaROk False st)
+  (if (lt fuel 1) (CaROk False (TrRefl) st)
   (match xs
     (Nil
       (match ys
-        (Nil (CaROk True st))
+        (Nil (CaROk True (tr_seq (tr_rev acc Nil)) st))
         ((Cons _ _) (CaRErr "cp_args: arity"))))
     ((Cons x xr)
      (match ys
@@ -796,11 +857,12 @@
        ((Cons y yr)
         (match (cp_sv (- fuel 1) budget efuel m rules x y st)
           ((CpRErr msg) (CaRErr msg))
-          ((CpROk vd st2)
+          ((CpROk vd tr st2)
            (match vd
-             ((VdUndec) (CaROk False st2))
-             ((VdRef) (CaROk False st2))
-             ((VdProv) (cp_args (- fuel 1) budget efuel m rules xr yr st2)))))))))))
+             ((VdUndec) (CaROk False (TrRefl) st2))
+             ((VdRef) (CaROk False (TrRefl) st2))
+             ((VdProv)
+              (cp_args (- fuel 1) budget efuel m rules xr yr st2 (Cons tr acc))))))))))))
 
 ;; case-split a slot: one region per ctor shape; ALL must prove, ANY
 ;; refuting case kills the goal (a counterexample class), otherwise
@@ -817,17 +879,17 @@
    (st SvSt))
   CpR
   (measure fuel)
-  (if (lt fuel 1) (CpROk (VdUndec) st)
-  (if (lt s 0) (CpROk (VdUndec) st)
+  (if (lt fuel 1) (CpROk (VdUndec) (TrRefl) st)
+  (if (lt s 0) (CpROk (VdUndec) (TrRefl) st)
   (match (st_slot s st)
     (None (CpRErr "cp_split: unknown slot"))
     ((Some (SSlot ty depth shapes0))
-     (if (le budget depth) (CpROk (VdUndec) st)
+     (if (le budget depth) (CpROk (VdUndec) (TrRefl) st)
      (match shapes0
        (None
          (match (shape_alloc m ty depth st)
            ((ShRErr msg) (CpRErr msg))
-           ((ShRNone) (CpROk (VdUndec) st))
+           ((ShRNone) (CpROk (VdUndec) (TrRefl) st))
            ((ShROk shs st2)
             (cp_shapes
               (- fuel 1)
@@ -838,11 +900,13 @@
               a
               b
               s
+              ty
               shs
               (st_put s (SSlot ty depth (Some shs)) st2)
-              False))))
+              False
+              Nil))))
        ((Some shs)
-        (cp_shapes (- fuel 1) budget efuel m rules a b s shs st False)))))))))
+        (cp_shapes (- fuel 1) budget efuel m rules a b s ty shs st False Nil)))))))))
 
 (fn cp_shapes
   ((fuel Int)
@@ -853,45 +917,96 @@
    (a SV)
    (b SV)
    (s Int)
+   (ty Type)
    (shs (List SV))
    (st SvSt)
-   (undec Bool))
+   (undec Bool)
+   (cases (List TrCase)))
   CpR
   (measure fuel)
-  (if (lt fuel 1) (CpROk (VdUndec) st)
+  (if (lt fuel 1) (CpROk (VdUndec) (TrRefl) st)
   (match shs
-    (Nil (CpROk (if undec (VdUndec) (VdProv)) st))
+    (Nil
+      (CpROk
+        (if undec (VdUndec) (VdProv))
+        (if undec (TrRefl) (TrSplit s ty (trc_rev cases Nil)))
+        st))
     ((Cons sh rest)
-     (match (sv_resume efuel m rules s sh a)
-       ((EvRErr msg) (CpRErr msg))
-       ((EvROut) (cp_shapes (- fuel 1) budget efuel m rules a b s rest st True))
-       ((EvRFail) (CpROk (VdRef) st))
-       ((EvRStuck _) (CpRErr "cp_shapes: stuck escaped a call boundary"))
-       ((EvRVal a2)
-        (match (sv_resume efuel m rules s sh b)
+     (match sh
+       ((SVCtor shq shfs)
+        (match (sv_resume efuel m rules s sh a)
           ((EvRErr msg) (CpRErr msg))
           ((EvROut)
-           (cp_shapes (- fuel 1) budget efuel m rules a b s rest st True))
-          ((EvRFail) (CpROk (VdRef) st))
+           (cp_shapes
+             (- fuel 1)
+             budget
+             efuel
+             m
+             rules
+             a
+             b
+             s
+             ty
+             rest
+             st
+             True
+             cases))
+          ((EvRFail) (CpROk (VdRef) (TrRefl) st))
           ((EvRStuck _) (CpRErr "cp_shapes: stuck escaped a call boundary"))
-          ((EvRVal b2)
-           (match (cp_sv (- fuel 1) budget efuel m rules a2 b2 st)
-             ((CpRErr msg) (CpRErr msg))
-             ((CpROk vd st2)
-              (match vd
-                ((VdUndec)
-                 (cp_shapes (- fuel 1) budget efuel m rules a b s rest st2 True))
-                ((VdRef) (CpROk (VdRef) st2))
-                ((VdProv)
-                 (cp_shapes
-                   (- fuel 1)
-                   budget
-                   efuel
-                   m
-                   rules
-                   a
-                   b
-                   s
-                   rest
-                   st2
-                   undec)))))))))))))
+          ((EvRVal a2)
+           (match (sv_resume efuel m rules s sh b)
+             ((EvRErr msg) (CpRErr msg))
+             ((EvROut)
+              (cp_shapes
+                (- fuel 1)
+                budget
+                efuel
+                m
+                rules
+                a
+                b
+                s
+                ty
+                rest
+                st
+                True
+                cases))
+             ((EvRFail) (CpROk (VdRef) (TrRefl) st))
+             ((EvRStuck _) (CpRErr "cp_shapes: stuck escaped a call boundary"))
+             ((EvRVal b2)
+              (match (cp_sv (- fuel 1) budget efuel m rules a2 b2 st)
+                ((CpRErr msg) (CpRErr msg))
+                ((CpROk vd tr st2)
+                 (match vd
+                   ((VdUndec)
+                    (cp_shapes
+                      (- fuel 1)
+                      budget
+                      efuel
+                      m
+                      rules
+                      a
+                      b
+                      s
+                      ty
+                      rest
+                      st2
+                      True
+                      cases))
+                   ((VdRef) (CpROk (VdRef) (TrRefl) st2))
+                   ((VdProv)
+                    (cp_shapes
+                      (- fuel 1)
+                      budget
+                      efuel
+                      m
+                      rules
+                      a
+                      b
+                      s
+                      ty
+                      rest
+                      st2
+                      undec
+                      (Cons (TrCase shq shfs tr) cases)))))))))))
+       (_ (CpRErr "cp_shapes: malformed shape (non-ctor)")))))))

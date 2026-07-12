@@ -274,7 +274,9 @@
 
 ;; ---- the oracle: one law, one candidate module ------------------------------
 
-(type LVd (LVdErr (List Int)) (LVdUndec) (LVdRef) (LVdProv))
+;; a Proven verdict carries its comparison TRACE (sym.shard Tr — the
+;; proof skeleton the render component consumes)
+(type LVd (LVdErr (List Int)) (LVdUndec) (LVdRef) (LVdProv Tr))
 
 (fn law_verdict
   ((m2 Module)
@@ -309,11 +311,11 @@
                    ((EvRVal vb)
                     (match (cp_sv cfuel budget efuel mb rules va vb st)
                       ((CpRErr msg) (LVdErr msg))
-                      ((CpROk vd _)
+                      ((CpROk vd tr _)
                        (match vd
                          ((VdUndec) (LVdUndec))
                          ((VdRef) (LVdRef))
-                         ((VdProv) (LVdProv))))))))))))))))))
+                         ((VdProv) (LVdProv tr))))))))))))))))))
 
 ;; law-set composition: any Refuted refutes; all Proven proves; else
 ;; Undecided
@@ -327,7 +329,7 @@
   LVd
   (measure (struct lws))
   (match lws
-    (Nil (LVdProv))
+    (Nil (LVdProv (TrRefl)))
     ((Cons lw rest)
      (match (law_verdict m2 rules budget efuel cfuel lw)
        ((LVdErr msg) (LVdErr msg))
@@ -336,9 +338,9 @@
           ((LVdErr msg) (LVdErr msg))
           ((LVdUndec) (LVdUndec))
           ((LVdRef) (LVdRef))
-          ((LVdProv) (LVdUndec))))
+          ((LVdProv _) (LVdUndec))))
        ((LVdRef) (LVdRef))
-       ((LVdProv) (laws_verdict m2 rules budget efuel cfuel rest))))))
+       ((LVdProv _) (laws_verdict m2 rules budget efuel cfuel rest))))))
 
 ;; the D4 rule table for this object module: the append four, keyed by
 ;; the closure's own qnames
@@ -382,7 +384,7 @@
           ((LVdUndec)
            (exit 1 (write "LAWS SELF FAIL: own impl UNDECIDED\n" w2)))
           ((LVdRef) (exit 1 (write "LAWS SELF FAIL: own impl REFUTED\n" w2)))
-          ((LVdProv)
+          ((LVdProv _)
            (write
              (append_int
                "LAWS SELF "
@@ -482,7 +484,7 @@
                             prov
                             (+ ref 1)
                             undec)))
-                       ((LVdProv)
+                       ((LVdProv _)
                         (if isrev
                           (g3_sweep
                             (- k 1)
@@ -599,26 +601,209 @@
                                                   "\nG3 OK\n"))))))))))
                               w2)))))))))))))))))))
 
+;; ---- trace shapes: the pinned proof skeletons (slice 5, component 2) --------
+;;
+;; A Proven verdict's trace, printed as a shape line and pinned in the
+;; corpus: REFL (joined by evaluation + congruence — renders as
+;; compute + refl), (SPLIT slot (Ctor SUB) …) (a case split — renders
+;; as case-on), (SEQ …) (independent sub-joins, nested by the
+;; renderer). The pinned subjects: std/list's own rev and len against
+;; their laws (predicted REFL), and the two rendered candidates —
+;; rev_c62 (predicted REFL: the textbook body unfolds straight into
+;; the law's RHS) and rev_c347 (predicted (SPLIT 0 (Nil REFL)
+;; (Cons REFL)): the needless-split twin needs the case its own body
+;; introduced).
+
+(fn tr_line ((t Tr)) (List Int)
+  (measure (struct t))
+  (match t
+    ((TrRefl) "REFL")
+    ((TrSeq ts) (append_int "(SEQ" (append_int (tr_tail ts) ")")))
+    ((TrSplit s _ cases)
+     (append_int
+       "(SPLIT "
+       (append_int (show_int s) (append_int (trc_tail cases) ")"))))))
+
+(fn tr_tail ((ts (List Tr))) (List Int)
+  (measure (struct ts))
+  (match ts
+    (Nil "")
+    ((Cons t rest) (append_int " " (append_int (tr_line t) (tr_tail rest))))))
+
+(fn trc_tail ((cs (List TrCase))) (List Int)
+  (measure (struct cs))
+  (match cs
+    (Nil "")
+    ((Cons (TrCase cq _ sub) rest)
+     (append_int
+       " ("
+       (append_int
+         (chars_of_sym (qn_name cq))
+         (append_int
+           " "
+           (append_int (tr_line sub) (append_int ")" (trc_tail rest)))))))))
+
+(type TlR (TlRErr (List Int)) (TlROk (List Int)))
+
+;; one TRACE line per law: TRACE <subject> <law> <shape>
+(fn tr_laws
+  ((m2 Module) (rules (List NRule)) (subject (List Int)) (lws (List LLaw)))
+  TlR
+  (measure (struct lws))
+  (match lws
+    (Nil (TlROk ""))
+    ((Cons lw rest)
+     (match lw
+       ((LLaw ln _)
+        (match (law_verdict m2 rules (lw_budget) (lw_efuel) (lw_cfuel) lw)
+          ((LVdErr msg) (TlRErr msg))
+          ((LVdUndec) (tr_lawline m2 rules subject ln "UNDECIDED" rest))
+          ((LVdRef) (tr_lawline m2 rules subject ln "REFUTED" rest))
+          ((LVdProv tr) (tr_lawline m2 rules subject ln (tr_line tr) rest))))))))
+
+(fn tr_lawline
+  ((m2 Module)
+   (rules (List NRule))
+   (subject (List Int))
+   (ln Symbol)
+   (shape (List Int))
+   (rest (List LLaw)))
+  TlR
+  (match (tr_laws m2 rules subject rest)
+    ((TlRErr msg) (TlRErr msg))
+    ((TlROk lines)
+     (TlROk
+       (append_int
+         "TRACE "
+         (append_int
+           subject
+           (append_int
+             " "
+             (append_int
+               (chars_of_sym ln)
+               (append_int " " (append_int shape (append_int "\n" lines)))))))))))
+
+;; a pinned catalog candidate's trace lines (index re-unranked; the
+;; rank addresses are render_gate's pinned task data — 62 and 347)
+(fn tr_cand
+  ((m Module)
+   (rules (List NRule))
+   (root Expr)
+   (g Grammar)
+   (i Int)
+   (subject (List Int))
+   (lws (List LLaw)))
+  TlR
+  (match (sk_unrank root g i)
+    ((SkEErr msg) (TlRErr (cz_at "trace unrank" i msg)))
+    ((SkEOk c)
+     (match (extend_fn m (cat_fd c))
+       (None (TlRErr (cz_at "trace extend" i "candidate qname bound")))
+       ((Some m2) (tr_laws m2 rules subject lws))))))
+
+(fn run_trace ((m Module) (apq QName) (w World)) World
+  (match (mk_rules m)
+    (None (exit 1 (write "LAWS FAIL: append/Nil/Cons not in the closure\n" w)))
+    ((Some rules)
+     (match (find_fn (quote rev) m)
+       (None (exit 1 (write "LAWS FAIL: no rev in the closure\n" w)))
+       ((Some revfd)
+        (match revfd
+          ((FnDef revq _ _ _)
+           (match
+             (lx_laws
+               m
+               "std/list/mod.req.shard"
+               (Cons (quote rev_nil) (Cons (quote rev_cons) Nil))
+               w)
+             ((Pair lxr w2)
+              (match lxr
+                ((LxRErr msg) (exit 1 (write (append_int "LAWS FAIL " msg) w2)))
+                ((LxROk rlaws)
+                 (match
+                   (lx_laws
+                     m
+                     "std/list/mod.req.shard"
+                     (Cons (quote len_nil) (Cons (quote len_cons) Nil))
+                     w2)
+                   ((Pair lxl w3)
+                    (match lxl
+                      ((LxRErr msg)
+                       (exit 1 (write (append_int "LAWS FAIL " msg) w3)))
+                      ((LxROk llaws)
+                       (match (tr_laws m rules "std_rev" rlaws)
+                         ((TlRErr msg)
+                          (exit 1 (write (append_int "LAWS FAIL " msg) w3)))
+                         ((TlROk l1)
+                          (match (tr_laws m rules "std_len" llaws)
+                            ((TlRErr msg)
+                             (exit 1 (write (append_int "LAWS FAIL " msg) w3)))
+                            ((TlROk l2)
+                             (match (cat_grammar 2 apq)
+                               ((CatRErr _)
+                                (exit 1 (write "LAWS FAIL: trace grammar\n" w3)))
+                               ((CatROk es _)
+                                (let ((root (hole 0)) (g (Grammar es)))
+                                  (match
+                                    (tr_cand
+                                      m
+                                      rules
+                                      root
+                                      g
+                                      62
+                                      "rev_c62"
+                                      (rm_laws revq (cat_q) rlaws))
+                                    ((TlRErr msg)
+                                     (exit
+                                       1
+                                       (write (append_int "LAWS FAIL " msg) w3)))
+                                    ((TlROk l3)
+                                     (match
+                                       (tr_cand
+                                         m
+                                         rules
+                                         root
+                                         g
+                                         347
+                                         "rev_c347"
+                                         (rm_laws revq (cat_q) rlaws))
+                                       ((TlRErr msg)
+                                        (exit
+                                          1
+                                          (write
+                                            (append_int "LAWS FAIL " msg)
+                                            w3)))
+                                       ((TlROk l4)
+                                        (write
+                                          (append_int
+                                            l1
+                                            (append_int l2 (append_int l3 l4)))
+                                          w3)))))))))))))))))))))))))))
+
 ;; ---- CLI ---------------------------------------------------------------------
 
-;; args: none -> the pinned suite (self, then g3 at rungs 1 and 2);
-;; "self" -> the self-pin alone; "g3 N" -> one rung
+;; args: none -> the pinned suite (self, g3 at rungs 1 and 2, traces);
+;; "self" -> the self-pin alone; "g3 N" -> one rung; "trace" -> traces
 (fn lw_args ((as (List (List Int))) (m Module) (apq QName) (w World)) World
   (match as
-    (Nil (run_g3 m apq 2 (run_g3 m apq 1 (run_self m w))))
+    (Nil (run_trace m apq (run_g3 m apq 2 (run_g3 m apq 1 (run_self m w)))))
     ((Cons a rest)
      (if (int_list_eq a "self")
        (match rest
          (Nil (run_self m w))
-         (_ (exit 2 (write "usage: laws [self | g3 N]\n" w))))
+         (_ (exit 2 (write "usage: laws [self | g3 N | trace]\n" w))))
      (if (int_list_eq a "g3")
        (match rest
          ((Cons ds Nil)
           (match (parse_nat ds)
-            (None (exit 2 (write "usage: laws [self | g3 N]\n" w)))
+            (None (exit 2 (write "usage: laws [self | g3 N | trace]\n" w)))
             ((Some d) (run_g3 m apq d w))))
-         (_ (exit 2 (write "usage: laws [self | g3 N]\n" w))))
-       (exit 2 (write "usage: laws [self | g3 N]\n" w)))))))
+         (_ (exit 2 (write "usage: laws [self | g3 N | trace]\n" w))))
+     (if (int_list_eq a "trace")
+       (match rest
+         (Nil (run_trace m apq w))
+         (_ (exit 2 (write "usage: laws [self | g3 N | trace]\n" w))))
+       (exit 2 (write "usage: laws [self | g3 N | trace]\n" w))))))))
 
 (fn main ((w World)) World
   (match (load_run_module "tools/search/rev_obj.shard" w)

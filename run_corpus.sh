@@ -392,6 +392,10 @@ fi
 # failures, not statistics). laws.shard rides kernel/driver for goal
 # parsing, so like tools/prove it is pinned by RUN output, not checked
 # as a corpus target (the known kernel/types tc_infer measure gap).
+# TRACE lines (slice 5 component 2) pin the proof SKELETONS a Proven
+# verdict leaves behind: std rev/len and rev_c62 join by REFL
+# (compute + refl at render time); rev_c347 needs exactly the case its
+# own body introduced — (SPLIT 0 (Nil REFL) (Cons REFL)).
 echo "=== search: laws oracle (S4a+S5, G3) ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/laws.shard
