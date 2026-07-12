@@ -1,0 +1,263 @@
+;;; std/rat/rat.shard — the rational number type (slice R0.3, docs/FLOATS.md §2).
+;;;
+;;; Rat is an opaque refined pair over Int: carrier (num, den), canonical form
+;;; den > 0 and gcd(|num|, den) = 1 — the std/str construction pattern (a
+;;; refinement type over a std carrier, zero kernel changes). The ONE total
+;;; constructor is rat_make, a refined-return fn whose obligation is exactly
+;;; the gcd kit's endgame: quotient signs (gcd_quot_num_nonneg /
+;;; gcd_quot_den_pos) + cofactor coprimality (gcd_cofactor_coprime).
+;;;
+;;; Totalization: rat_make n 0 = 0/1 (the canonical zero), documented loudly —
+;;; the kernel euclidean pair's own d=0 posture. A checked wrapper (Option) can
+;;; ride refine_try later if a consumer wants to observe the d=0 case.
+
+(import "../../kernel/stdlib.shard")
+(import "gcd.shard")  ; gcd_nn / iabs + the theorem kit (quotient signs, coprimality)
+(use (:: std rat gcd *))
+
+;; --- the carrier and the canonical-form predicate -----------------------------
+
+(record RatRep (num Int) (den Int))
+
+;; canonical form: positive denominator, gcd-reduced. The gcd of |num| and den
+;; equals 1 — spelled through int_eq so the predicate is an ordinary total
+;; Bool fn (the refinement-predicate requirement).
+(fn rat_ok ((r RatRep)) Bool
+  (if (lt 0 (den_of r)) (int_eq (gcd_nn (iabs (num_of r)) (den_of r)) 1) False))
+
+;; THE type: every inhabitant is a canonical reduced fraction.
+(type Rat (refine RatRep rat_ok))
+
+;; --- elimination doors --------------------------------------------------------
+
+(fn rat_num ((x Rat)) Int (num_of (refine_val x)))
+(fn rat_den ((x Rat)) Int (den_of (refine_val x)))
+
+;; --- the normalizer -----------------------------------------------------------
+
+;; normalize a pair with POSITIVE denominator: divide through by the gcd of
+;; (|n|, d); the numerator's sign is reapplied after computing over |n| so the
+;; quotient facts stay in the kit's nonneg regime.
+(fn rat_norm_pos ((n Int) (d Int)) RatRep
+  (if (le 0 n) (MkRatRep (ediv n (gcd_nn n d)) (ediv d (gcd_nn n d)))
+  (MkRatRep (- 0 (ediv (- 0 n) (gcd_nn (- 0 n) d))) (ediv d (gcd_nn (- 0 n) d)))))
+
+;; the total constructor: sign-normalize the denominator, then reduce.
+;; rat_make n 0 = 0/1 (the canonical zero — the total-fn posture).
+(fn rat_make ((n Int) (d Int)) Rat
+  (if (lt 0 d) (rat_norm_pos n d)
+  (if (lt d 0) (rat_norm_pos (- 0 n) (- 0 d))
+  (MkRatRep 0 1))))
+
+;; --- the normalizer meets the predicate ---------------------------------------
+
+;; for d > 0 the normalizer's output is canonical: the denominator quotient is
+;; positive (gcd_quot_den_pos), the numerator quotient's iabs collapses at its
+;; known sign, and the reduced pair is coprime (gcd_cofactor_coprime).
+(claim rat_norm_pos_ok
+  (goal ((n Int) (d Int)) ((= (lt 0 d) True))
+    (= (rat_ok (rat_norm_pos n d)) True))
+  (case-on (le 0 n) Bool
+    ((case True
+       (chain
+         (have hn (= (le 0 n) True)
+           (steps ((rewrite (hyp True) lr lhs true ())) refl))
+         (have hdp (= (lt 0 (ediv d (gcd_nn n d))) True)
+           (rewrite-with
+             (lemma gcd_quot_den_pos)
+             lr
+             lhs
+             ((inst a n) (inst b d))
+             ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+              (steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+         (have hqn (= (le 0 (ediv n (gcd_nn n d))) True)
+           (rewrite-with
+             (lemma gcd_quot_num_nonneg)
+             lr
+             lhs
+             ((inst a n) (inst b d))
+             ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+              (steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+         (have hia (= (iabs (ediv n (gcd_nn n d))) (ediv n (gcd_nn n d)))
+           (rewrite-with
+             (lemma iabs_nonneg_id)
+             lr
+             lhs
+             ((inst n (ediv n (gcd_nn n d))))
+             ((steps ((rewrite (premise 3) lr lhs true ())) refl))
+             refl))
+         (have hcp (= (gcd_nn (ediv n (gcd_nn n d)) (ediv d (gcd_nn n d))) 1)
+           (rewrite-with
+             (lemma gcd_cofactor_coprime)
+             lr
+             lhs
+             ((inst a n) (inst b d))
+             ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+              (steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+         (steps
+           ((unfold rat_norm_pos lhs)
+            (rewrite (premise 1) lr lhs true ())
+            (simp lhs)
+            (unfold rat_ok lhs)
+            (rewrite (lemma den_of_def) lr lhs true ())
+            (rewrite (lemma num_of_def) lr lhs true ())
+            (rewrite (premise 2) lr lhs true ())
+            (simp lhs)
+            (rewrite (premise 4) lr lhs true ())
+            (rewrite (premise 5) lr lhs true ())
+            (compute lhs))
+           refl)))
+     (case False
+       (chain
+         (have hn (= (le 0 n) False)
+           (steps ((rewrite (hyp False) lr lhs true ())) refl))
+         (have hm (= (le 0 (- 0 n)) True) (steps () (by arith (list 1 0 1))))
+         (have hdp (= (lt 0 (ediv d (gcd_nn (- 0 n) d))) True)
+           (rewrite-with
+             (lemma gcd_quot_den_pos)
+             lr
+             lhs
+             ((inst a (- 0 n)) (inst b d))
+             ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+              (steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+         (have hqn (= (le 0 (ediv (- 0 n) (gcd_nn (- 0 n) d))) True)
+           (rewrite-with
+             (lemma gcd_quot_num_nonneg)
+             lr
+             lhs
+             ((inst a (- 0 n)) (inst b d))
+             ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+              (steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+         (have hia
+           (=
+             (iabs (- 0 (ediv (- 0 n) (gcd_nn (- 0 n) d))))
+             (ediv (- 0 n) (gcd_nn (- 0 n) d)))
+           (rewrite-with
+             (lemma iabs_neg_id)
+             lr
+             lhs
+             ((inst n (ediv (- 0 n) (gcd_nn (- 0 n) d))))
+             ((steps ((rewrite (premise 4) lr lhs true ())) refl))
+             refl))
+         (have hcp
+           (=
+             (gcd_nn
+               (ediv (- 0 n) (gcd_nn (- 0 n) d))
+               (ediv d (gcd_nn (- 0 n) d)))
+             1)
+           (rewrite-with
+             (lemma gcd_cofactor_coprime)
+             lr
+             lhs
+             ((inst a (- 0 n)) (inst b d))
+             ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+              (steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+         (steps
+           ((unfold rat_norm_pos lhs)
+            (rewrite (premise 1) lr lhs true ())
+            (simp lhs)
+            (unfold rat_ok lhs)
+            (rewrite (lemma den_of_def) lr lhs true ())
+            (rewrite (lemma num_of_def) lr lhs true ())
+            (rewrite (premise 3) lr lhs true ())
+            (simp lhs)
+            (rewrite (premise 5) lr lhs true ())
+            (rewrite (premise 6) lr lhs true ())
+            (compute lhs))
+           refl))))))
+
+;; --- the refined-return obligation: rat_make lands in Rat ---------------------
+
+;; NOTE: the rr obligation path (driver rr_files) reads the file with a bare
+;; read_all — no expand_sugar — so `chain` is unavailable HERE (and only here);
+;; the continuations are hand-nested, which is exactly what chain folds to.
+(returns
+  rat_make
+  (case-on (lt 0 d) Bool
+    ((case True
+       (have hd (= (lt 0 d) True)
+         (steps ((rewrite (hyp True) lr lhs true ())) refl)
+         (have hok (= (rat_ok (rat_norm_pos n d)) True)
+           (rewrite-with
+             (lemma rat_norm_pos_ok)
+             lr
+             lhs
+             ((inst n n) (inst d d))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl)
+           (steps
+             ((unfold rat_make lhs)
+              (rewrite (premise 0) lr lhs true ())
+              (simp lhs)
+              (rewrite (premise 1) lr lhs true ()))
+             refl))))
+     (case False
+       (have hd (= (lt 0 d) False)
+         (steps ((rewrite (hyp False) lr lhs true ())) refl)
+         (case-on (lt d 0) Bool
+           ((case True
+              (have hneg (= (lt d 0) True)
+                (steps ((rewrite (hyp True) lr lhs true ())) refl)
+                (have hpos (= (lt 0 (- 0 d)) True)
+                  (steps () (by arith (list 1 0 1)))
+                  (have hok (= (rat_ok (rat_norm_pos (- 0 n) (- 0 d))) True)
+                    (rewrite-with
+                      (lemma rat_norm_pos_ok)
+                      lr
+                      lhs
+                      ((inst n (- 0 n)) (inst d (- 0 d)))
+                      ((steps ((rewrite (premise 2) lr lhs true ())) refl))
+                      refl)
+                    (steps
+                      ((unfold rat_make lhs)
+                       (rewrite (premise 0) lr lhs true ())
+                       (rewrite (premise 1) lr lhs true ())
+                       (simp lhs)
+                       (rewrite (premise 3) lr lhs true ()))
+                      refl)))))
+            (case False
+              (have hneg (= (lt d 0) False)
+                (steps ((rewrite (hyp False) lr lhs true ())) refl)
+                (have hle (= (le 0 d) True)
+                  (steps () (by arith (list 1 0 1)))
+                  (have hge (= (le d 0) True)
+                    (steps () (by arith (list 1 1 0)))
+                    (fin-split
+                      d
+                      (premise 2)
+                      (premise 3)
+                      ((case 0
+                         (steps ((unfold rat_make lhs) (compute lhs)) refl)))))))))))))))
+
+;; --- ground pins ---------------------------------------------------------------
+
+(claim rat_make_2_4_num
+  (goal () () (= (rat_num (rat_make 2 4)) 1))
+  (steps ((compute both)) refl))
+(claim rat_make_2_4_den
+  (goal () () (= (rat_den (rat_make 2 4)) 2))
+  (steps ((compute both)) refl))
+(claim rat_make_negden_num
+  (goal () () (= (rat_num (rat_make 2 -4)) -1))
+  (steps ((compute both)) refl))
+(claim rat_make_negden_den
+  (goal () () (= (rat_den (rat_make 2 -4)) 2))
+  (steps ((compute both)) refl))
+(claim rat_make_negnum
+  (goal () () (= (rat_num (rat_make -6 4)) -3))
+  (steps ((compute both)) refl))
+(claim rat_make_zeroden
+  (goal () () (= (rat_den (rat_make 5 0)) 1))
+  (steps ((compute both)) refl))
+(claim rat_make_zero
+  (goal () () (= (rat_num (rat_make 0 7)) 0))
+  (steps ((compute both)) refl))
+(claim rat_make_whole
+  (goal () () (= (rat_den (rat_make 42 6)) 1))
+  (steps ((compute both)) refl))
