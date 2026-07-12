@@ -535,6 +535,58 @@ baseline); negative probe through the parallel path fails both
 concurrent products with exit 1; corpus untouched by construction
 (no corpus-target file changed).
 
+**Rung 2, slice 5 — driver absorption of the mod.build-era builds
+(2026-07-11).** std/mem and std/str build under the driver; both
+per-module lowbuild.sh scripts are deleted; the corpus's build-pin
+loop swaps the two script entries for ONE driver entry over the full
+products file — which also corpus-gates the lib/bin products for the
+first time. Three small compositional product kinds carry the
+transition, with no vocabulary growth:
+
+- **'check** — a file's kernel obligations are green (std/str's
+  aggregate rep certs). Generally useful, permanent.
+- **'regen** — generator output is byte-identical to the committed
+  artifact. Permanent, and see the contract change below.
+- **'modbuild** — TRANSITIONAL: the entry still renders its own Plan
+  (schema/kernel/tie/manifest/engine absorbed by the driver; the tie
+  generalized to every-MOD-covered-by-some-TIE, hex membership —
+  stronger than std/mem's script, which checked one module of one).
+  This kind dies at the re-founding proper, when pin bindings + the
+  pinlib deriver replace plan-assembly bodies.
+
+**The driver found a real latent defect on first contact.** The
+retired std/str script's regen gate was silently toothless: its
+`diff -q … && echo "REGEN OK"` line cannot fail under `set -e`
+(a failure on the LEFT of `&&` does not exit a bash script), so the
+gate has been swallowing a genuine drift — wasmgen's regenerated
+output no longer matched the committed str.wasm.shard. Root cause of
+the drift itself: the canon std sweep rewrote the committed twin
+(a C8 scrutinee-rebuild respelling, `(int_of_nat (S k2))` →
+`(int_of_nat k)`), and wasmgen does not emit C8-canonical spellings.
+Verified: `canon(shardfmt(wasmgen(src)))` equals the committed file
+byte-for-byte.
+
+**Contract decision (pending user ratification): regen =
+determinism up to canonicalization.** The 'regen ladder gained a
+tools/canon leg (via a transient sibling probe file, since canon
+resolves relative imports); the gate compares the CANONICALIZED
+regeneration against the committed artifact. This is the honest
+contract while committed artifacts live in the canonical tree and
+generators predate the canon rules. The alternative — generators
+emitting canonical spellings directly — is the SEARCH.md
+"three speakers" question (kernel recognizer / tools/canon fixer /
+generators as a third speaker of the C-rules) and belongs to that
+coordination, not this arc. The lib/bin ladders' regen gates do not
+yet carry the canon leg (their outputs are canonical today); lifting
+them to the same contract is the uniformity follow-up.
+
+Gates: driver green (15 products, 1m05); aggregate green at 15
+entries (1m07); corpus FAIL set unchanged with the driver entry now
+INSIDE the corpus's build-pin loop. mod.build.shard files survive
+this slice AS-IS (bodies die at the re-founding); the examples/
+fragment-era scripts (lowbuild.sh, _mem, _loop, _call, the seven
+x86 fragment builds) remain for a later mechanical migration.
+
 ## 12. Non-goals, stated once
 
 No config dialect — profiles are shard values. No distinguished

@@ -147,6 +147,15 @@
 (fn ewith ((hay (List Int)) (suf (List Int))) Bool
   (swith (rint hay Nil) (rint suf Nil)))
 
+;; directory prefix of a path, trailing slash kept ("" when none)
+(fn drop_to_slash ((p (List Int))) (List Int)
+  (measure (struct p))
+  (match p
+    (Nil Nil)
+    ((Cons c t) (if (int_eq c 47) (Cons c t) (drop_to_slash t)))))
+
+(fn dirn ((p (List Int))) (List Int) (rint (drop_to_slash (rint p Nil)) Nil))
+
 ;; the rest after a byte prefix (None when pfx is not a prefix)
 (fn pfx_rest ((l (List Int)) (pfx (List Int))) (Option (List Int))
   (measure (struct pfx))
@@ -199,6 +208,46 @@
      (match (pfx_rest h "TIE ")
        (None (ties_as_xmod t))
        ((Some r) (Cons (append_int "XMOD " r) (ties_as_xmod t)))))))
+
+;; third whitespace token of a line
+(fn tok3 ((l (List Int))) (Option (List Int))
+  (match (tokens l)
+    ((Cons _ (Cons _ (Cons c _))) (Some c))
+    (_ None)))
+
+;; the hex payloads (token 3) of every line in the list
+(fn hexes_of ((ls (List (List Int)))) (List (List Int))
+  (measure (struct ls))
+  (match ls
+    (Nil Nil)
+    ((Cons h t)
+     (match (tok3 h)
+       (None (hexes_of t))
+       ((Some x) (Cons x (hexes_of t)))))))
+
+;; every MOD line's bytes must appear among the TIE bytes
+(fn mods_covered ((i Int) (mods (List (List Int))) (ths (List (List Int))))
+  (List (List Int))
+  (measure (struct mods))
+  (match mods
+    (Nil Nil)
+    ((Cons m t)
+     (match (tok3 m)
+       (None
+         (Cons (vfail i "bytetie" "malformed MOD line") (mods_covered i t ths)))
+       ((Some hx)
+        (if (lmem hx ths) (mods_covered i t ths)
+        (Cons
+          (vfail i "bytetie" "a MOD's bytes match no TIE line")
+          (mods_covered i t ths))))))))
+
+;; pure judgment: the mod.build tie (every shipped module cert-covered)
+(fn modtie_judge ((i Int) (planb (List Int)) (tieb (List Int)))
+  (List (List Int))
+  (match (lines_pfx (blines planb) "MOD ")
+    (Nil (Cons (vfail i "bytetie" "plan has no MOD lines") Nil))
+    ((Cons mh mt)
+     (mods_covered i (Cons mh mt) (hexes_of (lines_pfx (blines tieb) "TIE "))))))
 
 ;; lowercase-hex nibble -> value
 (fn unhexd ((c Int)) (Option Int)
@@ -436,6 +485,76 @@
         (list "chmod" "+x" (capf cap i "a.elf")))
       (run_line (capf cap i "run.out") (list (capf cap i "a.elf"))))))
 
+;; a CHECK product: the file's kernel obligations are green
+(fn orders_check
+  ((i Int) (src (List Int)) (cap (List Int)) (check (List (List Int))))
+  (List Int)
+  (run_line (capf cap i "kout.log") (append check (Cons src Nil))))
+
+;; the canon probe: a transient sibling of OUT so relative imports
+;; resolve (tools/canon needs repo-root-relative, import-resolvable paths)
+(fn probe_path ((i Int) (out (List Int))) (List Int)
+  (cat (list (dirn out) ".regen." (show_int i) ".probe.shard")))
+
+;; a REGEN product: generator output, formatted and CANONICALIZED, is
+;; byte-identical to OUT (determinism up to canonicalization — the
+;; committed artifact lives in the canonical tree; the generator does
+;; not yet emit canonical spellings everywhere)
+(fn orders_regen_wasm
+  ((i Int) (src (List Int)) (out (List Int)) (cap (List Int)) (ev (List Int)))
+  (List Int)
+  (cat
+    (list
+      (run_line
+        (capf cap i "gen.log")
+        (list ev "run" "tools/wasmgen/wasmgen.shard" src (capf cap i "raw")))
+      (run_line
+        (capf cap i "fmt")
+        (list ev "run" "tools/shardfmt/shardfmt.shard" (capf cap i "raw")))
+      (run_line
+        (capf cap i "cp.log")
+        (list "cp" (capf cap i "fmt") (probe_path i out)))
+      (run_line
+        (capf cap i "canon")
+        (list ev "run" "tools/canon/canon.shard" (probe_path i out)))
+      (run_line (capf cap i "rm.log") (list "rm" (probe_path i out))))))
+
+;; a MODBUILD product (transitional, docs/BUILD.md §11 rung 2): the
+;; build entry still renders its own Plan; the driver absorbs gates +
+;; wire. Dies at the re-founding proper.
+(fn orders_modbuild_wasm
+  ((i Int)
+   (src (List Int))
+   (out (List Int))
+   (cap (List Int))
+   (ev (List Int))
+   (check (List (List Int))))
+  (List Int)
+  (cat
+    (list
+      (run_line
+        (capf cap i "schema.log")
+        (list ev "run" "tools/lowcheck/lowcheck.shard" out))
+      (run_line (capf cap i "kout.log") (append check (Cons out Nil)))
+      (run_line
+        (capf cap i "plan.txt")
+        (list ev "run" "tools/lowbuild/lowbuild.shard" src))
+      (run_line
+        (capf cap i "tie.txt")
+        (list ev "run" "tools/bytetie/bytetie.shard" out))
+      (run_line
+        (capf cap i "man.log")
+        (list
+          ev
+          "run"
+          "tools/lowcheck/manifest.shard"
+          (capf cap i "plan.txt")
+          "models/wasm/wasm.shard"
+          out))
+      (run_line
+        (capf cap i "eng.log")
+        (list "node" "examples/wasm_diff.mjs" (capf cap i "plan.txt"))))))
+
 ;; the bin static ladder (gates 1-5 + binelf materialization) — the
 ;; per-vector engine orders are emitted once be.txt exists (round 2)
 (fn orders_bin_x86_static
@@ -550,7 +669,16 @@
      (if (sym_eq k (quote bin))
        (if (sym_eq t (quote x86)) (orders_bin_x86 i src out cap ev check w)
        (Pair None w))
-       (Pair None w))))))
+     (if (sym_eq k (quote check)) (Pair (Some (orders_check i src cap check)) w)
+     (if (sym_eq k (quote regen))
+       (if (sym_eq t (quote wasm))
+         (Pair (Some (orders_regen_wasm i src out cap ev)) w)
+         (Pair None w))
+     (if (sym_eq k (quote modbuild))
+       (if (sym_eq t (quote wasm))
+         (Pair (Some (orders_modbuild_wasm i src out cap ev check)) w)
+         (Pair None w))
+       (Pair None w)))))))))
 
 (fn orders_all
   ((i Int)
@@ -1259,6 +1387,91 @@
                                                      (cat2 g6c (cat2 g7 g8))))))))))
                                      w11))))))))))))))))))))))))
 
+;; verify: a REGEN product (fmt+canon pipeline vs the committed bytes)
+(fn v_regen_canon ((cap (List Int)) (i Int) (out (List Int)) (w World))
+  (Pair (List (List Int)) World)
+  (match (rc_gate cap i "gen.log" "regen(gen)" w)
+    ((Pair g1 w1)
+     (match (rc_gate cap i "fmt" "regen(fmt)" w1)
+       ((Pair g2 w2)
+        (match (rc_gate cap i "cp.log" "regen(cp)" w2)
+          ((Pair g3 w3)
+           (match (rc_gate cap i "canon" "regen(canon)" w3)
+             ((Pair g4 w4)
+              (match (rc_gate cap i "rm.log" "regen(rm)" w4)
+                ((Pair g5 w5)
+                 (match (slurp (capf cap i "canon") w5)
+                   ((Pair cb w6)
+                    (match (slurp out w6)
+                      ((Pair ob w7)
+                       (Pair
+                         (cat2
+                           g1
+                           (cat2
+                             g2
+                             (cat2
+                               g3
+                               (cat2
+                                 g4
+                                 (cat2
+                                   g5
+                                   (if (ceq cb ob) Nil
+                                   (Cons
+                                     (vfail
+                                       i
+                                       "regen"
+                                       "canonicalized output is not byte-identical to OUT")
+                                     Nil)))))))
+                         w7))))))))))))))))
+
+;; judge the tie only when plan+tie both ran green
+(fn tiegate
+  ((g3a (List (List Int)))
+   (g3b (List (List Int)))
+   (i Int)
+   (planb (List Int))
+   (tieb (List Int)))
+  (List (List Int))
+  (match g3a
+    ((Cons _ _) Nil)
+    (Nil
+      (match g3b
+        ((Cons _ _) Nil)
+        (Nil (modtie_judge i planb tieb))))))
+
+;; verify: a MODBUILD product (schema/kernel/tie/manifest/engine)
+(fn v_modbuild_wasm ((cap (List Int)) (i Int) (w World))
+  (Pair (List (List Int)) World)
+  (match (rc_gate cap i "schema.log" "schema" w)
+    ((Pair g1 w1)
+     (match (g_klog cap i "kout.log" "kernel(out)" "" w1)
+       ((Pair g2 w2)
+        (match (rc_gate cap i "plan.txt" "bytetie(plan)" w2)
+          ((Pair g3a w3)
+           (match (rc_gate cap i "tie.txt" "bytetie(tie)" w3)
+             ((Pair g3b w4)
+              (match (rc_gate cap i "man.log" "manifest" w4)
+                ((Pair g3c w5)
+                 (match (slurp (capf cap i "plan.txt") w5)
+                   ((Pair planb w6)
+                    (match (slurp (capf cap i "tie.txt") w6)
+                      ((Pair tieb w7)
+                       (match (rc_gate cap i "eng.log" "engine" w7)
+                         ((Pair g5 w8)
+                          (Pair
+                            (cat2
+                              g1
+                              (cat2
+                                g2
+                                (cat2
+                                  g3a
+                                  (cat2
+                                    g3b
+                                    (cat2
+                                      g3c
+                                      (cat2 (tiegate g3a g3b i planb tieb) g5))))))
+                            w8))))))))))))))))))
+
 (fn v_bp ((cap (List Int)) (i Int) (b BP) (w World))
   (Pair (List (List Int)) World)
   (match b
@@ -1271,7 +1484,10 @@
      (if (sym_eq k (quote bin))
        (if (sym_eq t (quote x86)) (v_bin_x86 cap i src out w)
        (Pair (Cons (vfail i "plan" "unsupported target") Nil) w))
-       (Pair (Cons (vfail i "plan" "unsupported kind") Nil) w))))))
+     (if (sym_eq k (quote check)) (g_klog cap i "kout.log" "kernel" "" w)
+     (if (sym_eq k (quote regen)) (v_regen_canon cap i out w)
+     (if (sym_eq k (quote modbuild)) (v_modbuild_wasm cap i w)
+     (Pair (Cons (vfail i "plan" "unsupported kind") Nil) w)))))))))
 
 (fn v_all ((cap (List Int)) (i Int) (bs (List BP)) (w World))
   (Pair (List (List Int)) World)
