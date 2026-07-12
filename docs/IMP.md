@@ -330,6 +330,39 @@ honest (traps ITrap, fuel None, arity/index None).
   must state loop bodies via `(inline …)` so goals carry the
   literal statement list execution produces.
 
+**I1a — the imp → wasm translator, straight-line class
+(2026-07-12).** The first ISA leg opens hand-proven (the
+pieces-before-wasmgen precedent: the proof shape stabilizes before
+the generator mechanizes it):
+
+- **models/imp/to_wasm.shard** — the bridge file, the one place
+  both models import: expression trees compile postorder to stack
+  code; result-expression-only fns become MkFunc values.
+  Untranslatable forms (statements, ILoad, non-32 widths) refuse
+  with None — no artifact rather than a wrong one.
+- **The ties**: the translator's output is BYTE-IDENTICAL to the
+  instruction sequences wasmgen produced directly for the same
+  source fns (ground equalities against the pinned literals).
+  Factoring the pipeline changed zero bytes.
+- **The bridges (examples/imp_wasm_bridge.shard)**: call_fn over
+  the translated func = icall over the imp twin. The width story
+  landed exactly where §1 said it would: unwrapped exact ops carry
+  range premises HERE (once per target), division carries only its
+  divisor guard (neither side wraps), and the IWrap twin bridges
+  UNPREMISED — imp's explicit wrap and wasm's inherent wrap are the
+  same mod, so dropping the IWrap at translation is unconditionally
+  faithful. That one claim (imp_w_add1w) is the neutrality thesis
+  in a single unpremised equation.
+- **The composition (wcomp_lg_add1)**: spec ⊑ imp (I0) chains with
+  imp ⊑ wasm (this slice) into spec ⊑ wasm in two rewrites — the
+  statement the direct generator's cert makes, reached through the
+  neutral machine. The factored tower closes end to end.
+- Gates: 2 corpus targets, 2 'check products; driver 47 green;
+  corpus FAIL-set unchanged. Remaining in I1: statements + loops
+  (I1b — the IIf/IWhile translation onto Block/Loop/Br and the
+  loop-worker bridge inductions), then the x86 leg (I1c), then
+  mechanization into a cert-emitting generator.
+
 ## 7. Non-goals, stated once
 
 - imp as a shipped target or public surface — it is an intermediate;

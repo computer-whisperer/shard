@@ -1,0 +1,78 @@
+;;; models/imp/to_wasm.shard — the imp → wasm TRANSLATOR, expression
+;;; tier (docs/IMP.md rung I1a): pure value-level lowering from the
+;;; neutral machine to wasm instruction sequences. This is the bridge
+;;; file — the one place that imports BOTH models. Ordinary shard; the
+;;; certs that gate its outputs live with the twins (generate-and-check:
+;;; nothing here is trusted, every translated program is proven).
+;;;
+;;; v1 covers the STRAIGHT-LINE class: expression trees compiled
+;;; postorder to stack code, result-expression-only functions. The
+;;; width story lives exactly here:
+;;;   - exact imp ops map to the wrapping i32 ops, so an UNWRAPPED op
+;;;     is faithful only under range premises — the per-instance
+;;;     bridge certs carry them (the premises deleted at spec ⊑ imp
+;;;     reappear at imp ⊑ wasm, once per target, where they belong);
+;;;   - (IWrap 32 e) translates to the translation of e — wasm's ops
+;;;     already wrap, so the wrapped op is faithful UNCONDITIONALLY.
+;;; Other widths and ILoad refuse (None) until their rungs; statements
+;;; (IIf/ISet/IWhile at rung I1b) refuse likewise. Refusal is loud by
+;;; construction: an untranslatable twin produces no artifact at all.
+
+(import "../../kernel/stdlib.shard")
+(import "imp.shard")
+(use (:: models imp imp *))
+(import "../wasm/wasm.shard")
+(use (:: models wasm wasm *))
+
+(fn iw_app ((a (List Instr)) (b (List Instr))) (List Instr)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (iw_app t b)))))
+
+;; imp ops are exact; the i32 ops wrap — the bridge certs price the gap
+(fn iw_op ((o IOp)) Bop
+  (match o
+    (IAdd BAdd)
+    (ISub BSub)
+    (IMul BMul)
+    (IDiv BDivU)
+    (IRem BRemU)
+    (IAnd BAnd)
+    (IOr BOr)
+    (IXor BXor)
+    (IEq BEq)
+    (ILt BLtU)
+    (ILe BLeU)))
+
+;; postorder stack code for an expression; None = outside the v1 tier
+(fn iw_exp ((e IExp)) (Option (List Instr))
+  (measure (struct e))
+  (match e
+    ((IConst n) (Some (list (I32Const n))))
+    ((ILoc i) (Some (list (LocalGet i))))
+    ((IBin o a b)
+     (match (iw_exp a)
+       (None None)
+       ((Some ia)
+        (match (iw_exp b)
+          (None None)
+          ((Some ib) (Some (iw_app ia (iw_app ib (list (I32Bin (iw_op o)))))))))))
+    ((IWrap w a) (if (int_eq w 32) (iw_exp a) None))
+    ((ILoad _) None)))
+
+;; a result-expression-only function (empty body) -> a wasm Func
+(fn imp2w_fn ((f IFn)) (Option Func)
+  (match (ibody_of f)
+    ((Cons _ _) None)
+    (Nil
+      (match (iw_exp (iresult_of f))
+        (None None)
+        ((Some is) (Some (MkFunc (iparams_of f) (iextra_of f) is)))))))
+
+;; total unwrapper for stating ground bridge goals (the empty Func is
+;; inert: zero params over an empty body traps on any call)
+(fn w_of ((o (Option Func))) Func
+  (match o
+    ((Some f) f)
+    (None (MkFunc 0 0 Nil))))
