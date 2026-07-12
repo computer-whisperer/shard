@@ -11,7 +11,9 @@
 //! Pipeline (left-to-right layering):
 //!   1. SCC condensation + longest-path layering, then an edge-length-minimizing
 //!      balancing pass (cycles share a column; sources/sinks slide toward their
-//!      neighbours so long edges don't spawn needless dummy chains)
+//!      neighbours so long edges don't spawn needless dummy chains), then a
+//!      height cap that splits overfull layers into sub-columns (fan-heavy
+//!      graphs otherwise pile their leaves into one receipt-shaped column)
 //!   2. dummy-node insertion for edges spanning more than one layer
 //!   3. barycenter crossing reduction (iterated up/down sweeps)
 //!   4. priority coordinate assignment (pull nodes toward neighbours, no overlap;
@@ -226,14 +228,29 @@ pub fn layout(graph: &Graph, cfg: &LayoutConfig) -> Layout {
         height: 0.0,
     };
     let gap = cfg.node_gap;
-    let (mut x, mut y, mut shelf_h) = (cfg.margin, cfg.margin, 0.0_f32);
+    let (mut x, mut shelf_y, mut shelf_h) = (cfg.margin, cfg.margin, 0.0_f32);
+    // Within a shelf, short components stack *vertically* into columns bounded
+    // by the shelf height before a new column advances x. Tallest-first order
+    // means the shelf-setter stands alone and everything shorter fills the
+    // space beside it — without this, one dominant component plus a handful of
+    // singletons reads as a giant with a thin trail floating at its top right,
+    // paying width for area that's already there.
+    let (mut col_y, mut col_w) = (cfg.margin, 0.0_f32);
     for &c in &order {
         let (lay, comp, edge_ids) = &placed[c];
+        if col_y > shelf_y && col_y + lay.height > shelf_y + shelf_h {
+            x += col_w + gap;
+            col_y = shelf_y;
+            col_w = 0.0;
+        }
         if x > cfg.margin && x + lay.width > cfg.margin + target_w {
             x = cfg.margin;
-            y += shelf_h + gap;
+            shelf_y += shelf_h + gap;
             shelf_h = 0.0;
+            col_y = shelf_y;
+            col_w = 0.0;
         }
+        let y = col_y;
         for (li, &g) in comp.iter().enumerate() {
             let mut pn = lay.nodes[li].clone();
             pn.x += x;
@@ -255,7 +272,8 @@ pub fn layout(graph: &Graph, cfg: &LayoutConfig) -> Layout {
         out.width = out.width.max(x + lay.width + cfg.margin);
         out.height = out.height.max(y + lay.height + cfg.margin);
         shelf_h = shelf_h.max(lay.height);
-        x += lay.width + gap;
+        col_w = col_w.max(lay.width);
+        col_y += lay.height + gap;
     }
     out
 }
@@ -302,7 +320,9 @@ fn layout_connected(graph: &Graph, cfg: &LayoutConfig) -> Layout {
         return Layout::default();
     }
 
-    let node_layer = assign_layers(n, &node_pairs(&graph.edges));
+    let pairs = node_pairs(&graph.edges);
+    let mut node_layer = assign_layers(n, &pairs);
+    cap_layer_heights(&graph.nodes, &pairs, cfg, &mut node_layer);
     let nlayers = node_layer.iter().copied().max().unwrap_or(0) + 1;
 
     // ---- vertices: real nodes (0..n) + routing dummies (n..) ----
@@ -939,6 +959,122 @@ fn balance_layers(ncomp: usize, cedges: &[(usize, usize)], clayer: &mut [usize])
     }
 }
 
+/// Split overfull layers into consecutive sub-columns so no single column's
+/// stacked height dwarfs the drawing. Longest-path layering piles a fan-heavy
+/// graph's leaves into a handful of enormous columns (kernel/reader.shard:
+/// 75 of 273 nodes in one layer) — a receipt-shaped drawing whose fit zoom is
+/// useless. Splitting a layer is always legal under the cascade convention:
+/// same-layer nodes never have edges between them (SCCs share a layer and move
+/// wholesale; cross-SCC edges strictly increase layer), so sub-columns only
+/// lengthen some edges, never reverse one.
+///
+/// Units whose earliest dependent is *nearest* go in the rightmost sub-column
+/// (their edges stay adjacent); far-feeding units take the left sub-columns
+/// where the extra distance is already amortized by a long edge.
+fn cap_layer_heights(
+    nodes: &[GNode],
+    pairs: &[(usize, usize)],
+    cfg: &LayoutConfig,
+    layer: &mut [usize],
+) {
+    let n = nodes.len();
+    if n < 2 {
+        return;
+    }
+    let mut adj = vec![Vec::new(); n];
+    for &(u, v) in pairs {
+        if u != v {
+            adj[u].push(v);
+        }
+    }
+    let scc = tarjan_scc(n, &adj);
+    let ncomp = scc.iter().copied().max().map(|m| m + 1).unwrap_or(0);
+
+    // Per-SCC unit: members stay together (flat same-column edges depend on it).
+    let mut members: Vec<Vec<usize>> = vec![Vec::new(); ncomp];
+    for (i, &c) in scc.iter().enumerate() {
+        members[c].push(i);
+    }
+    let cell_h = |i: usize| nodes[i].h + cfg.node_gap;
+    let unit_h: Vec<f32> = members.iter().map(|ms| ms.iter().map(|&i| cell_h(i)).sum()).collect();
+    // Earliest dependent layer per unit (usize::MAX for sinks).
+    let mut min_succ = vec![usize::MAX; ncomp];
+    for &(u, v) in pairs {
+        if scc[u] != scc[v] {
+            min_succ[scc[u]] = min_succ[scc[u]].min(layer[v]);
+        }
+    }
+
+    let nlayers = layer.iter().copied().max().unwrap_or(0) + 1;
+    let mut units_of: Vec<Vec<usize>> = vec![Vec::new(); nlayers];
+    for (c, ms) in members.iter().enumerate() {
+        if let Some(&m0) = ms.first() {
+            units_of[layer[m0]].push(c);
+        }
+    }
+
+    // Target column height from the drawing's own area: stacking S_l of nodes
+    // into a column of width w_l, the height that lands the whole thing near
+    // PACK_ASPECT is sqrt(area / aspect). Floored at the tallest unit (a unit
+    // can't split) — one huge flow card shouldn't force splits around it.
+    let stack: Vec<f32> = units_of.iter().map(|us| us.iter().map(|&c| unit_h[c]).sum()).collect();
+    let col_w: Vec<f32> = (0..nlayers)
+        .map(|l| {
+            units_of[l]
+                .iter()
+                .flat_map(|&c| &members[c])
+                .map(|&i| nodes[i].w)
+                .fold(0.0, f32::max)
+                + cfg.layer_gap
+        })
+        .collect();
+    let area: f32 = (0..nlayers).map(|l| stack[l] * col_w[l]).sum();
+    let tallest_unit = unit_h.iter().copied().fold(0.0, f32::max);
+    let target_h = (area / PACK_ASPECT).sqrt().max(tallest_unit);
+
+    // Rebuild layer indices left to right, splitting any layer stacked past
+    // the target (with slack, so borderline layers don't churn).
+    let mut next = 0usize;
+    for l in 0..nlayers {
+        let units = &mut units_of[l];
+        let parts = if stack[l] > target_h * 1.25 {
+            ((stack[l] / target_h).ceil() as usize).clamp(1, units.len().max(1))
+        } else {
+            1
+        };
+        if parts <= 1 {
+            for &c in units.iter() {
+                for &i in &members[c] {
+                    layer[i] = next;
+                }
+            }
+            next += 1;
+            continue;
+        }
+        // Far-feeding units first (left), nearest-dependent units last (right);
+        // sinks (MAX) sort first — their preds are left anyway. Stable, so
+        // equal keys keep unit order (deterministic layouts).
+        units.sort_by(|&a, &b| min_succ[b].cmp(&min_succ[a]));
+        let per = stack[l] / parts as f32;
+        let mut sub = 0usize;
+        let mut acc = 0.0_f32;
+        for &c in units.iter() {
+            if acc >= per && sub + 1 < parts {
+                sub += 1;
+                acc = 0.0;
+            }
+            for &i in &members[c] {
+                layer[i] = next + sub;
+            }
+            acc += unit_h[c];
+        }
+        // `sub` may stop short of `parts - 1` when oversized units overshoot
+        // their chunk; advance by the sub-columns actually used, never leaving
+        // an empty (zero-width, full-gap) column behind.
+        next += sub + 1;
+    }
+}
+
 /// Tarjan's SCC algorithm: a component id per node. The condensation (one node
 /// per component) is a DAG, which makes layering well-defined on cyclic graphs.
 fn tarjan_scc(n: usize, adj: &[Vec<usize>]) -> Vec<usize> {
@@ -1145,6 +1281,61 @@ mod tests {
             let (tx, ty) = l.nodes[e.to.node].in_ports[0];
             assert_eq!(pts[0], (sx, sy), "edge {ei} start not at its out-port");
             assert_eq!(*pts.last().unwrap(), (tx, ty), "edge {ei} end not at its in-port");
+        }
+    }
+
+    #[test]
+    fn overfull_layer_splits_into_subcolumns() {
+        // A 40-leaf fan into one sink: longest-path piles every leaf into one
+        // column ~40 nodes tall. Capping must spread them over sub-columns so
+        // the drawing lands near a screen aspect instead of a receipt.
+        let mut edges = Vec::new();
+        for i in 0..40 {
+            edges.push(edge(i, 40));
+        }
+        let g = Graph { nodes: vec![GNode::simple(120.0, 40.0); 41], edges };
+        let l = layout(&g, &LayoutConfig::default());
+        let aspect = l.width / l.height;
+        assert!((0.4..=4.0).contains(&aspect), "receipt aspect {aspect} ({}x{})", l.width, l.height);
+        // Every leaf still strictly left of the sink (the cascade convention).
+        for i in 0..40 {
+            assert!(
+                l.nodes[i].x + l.nodes[i].w <= l.nodes[40].x,
+                "leaf {i} not left of its dependent"
+            );
+        }
+        // No overlaps.
+        for (i, a) in l.nodes.iter().enumerate() {
+            for b in &l.nodes[i + 1..] {
+                let apart = a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y;
+                assert!(apart, "capped nodes overlap");
+            }
+        }
+    }
+
+    #[test]
+    fn small_components_stack_beside_a_dominant_one() {
+        // One tall component (a 2-chain of tall nodes) plus 20 singletons: the
+        // singletons must stack vertically beside the giant, not trail across
+        // the top in one thin row that pays width for nothing.
+        let mut nodes = vec![GNode::simple(150.0, 2000.0), GNode::simple(150.0, 2000.0)];
+        nodes.extend(std::iter::repeat_with(|| GNode::simple(100.0, 40.0)).take(20));
+        let g = Graph { nodes, edges: vec![edge(0, 1)] };
+        let l = layout(&g, &LayoutConfig::default());
+        // 20 × (40 + gap + sub-margins) ≈ 1700 < 2000: all singletons fit in
+        // ONE column beside the giant — the drawing is giant + a chip column.
+        let giant_w = l.nodes[0].w + l.nodes[1].w + 200.0; // two columns + gaps
+        assert!(
+            l.width < giant_w + 250.0,
+            "singletons should stack in a column, not trail: {}x{}",
+            l.width,
+            l.height
+        );
+        for (i, a) in l.nodes.iter().enumerate() {
+            for b in &l.nodes[i + 1..] {
+                let apart = a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y;
+                assert!(apart, "packed nodes overlap");
+            }
         }
     }
 

@@ -161,7 +161,12 @@ This is the view the others are converging into — see *Direction*.
   (Sugiyama) engine** (`layout.rs`): SCC condensation (cycles share a column) →
   dummy nodes for long edges → barycenter crossing reduction → iterative
   coordinate assignment → port-aware polyline routing. (The Flow view does *not*
-  use this — a nested tree is a different problem; see below.)
+  use this — a nested tree is a different problem; see below.) Two aspect
+  guards keep real shard graphs screen-shaped: overfull layers **split into
+  sub-columns** (fan-heavy files pile dozens of leaf helpers into one rank —
+  legal to split, since same-rank nodes never have edges between them), and
+  disconnected components shelf-pack with short pieces **stacking vertically**
+  beside tall ones instead of trailing across the top.
 - **Pan** by dragging an empty area of the canvas; **zoom** with the mouse wheel
   (toward the cursor). The canvas is damascene's native `viewport()` widget, so
   the transform follows hit-test for free. `Fit` frames the whole graph;
