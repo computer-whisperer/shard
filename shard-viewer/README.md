@@ -54,6 +54,38 @@ alone. Scopes follow suit (`Scope::claims`): file/dir/project scopes carry
 their files' claims, and fn-anchored scopes (`Fn`, `CallTree`) pull in the
 claims *about* their fns from wherever those claims live.
 
+**The shape layer is first-class too**: every `(type …)`, `(record …)`, and
+`(sig type …)` form is a **type card** beside the fn and claim cards — kind
+tag + name (+ type params), then one row per ctor with its field types and
+the author's trailing `;` note when the source carries one (those notes are
+half the definition). Colors extend the convention: **blue = shape**
+(`tokens::INFO`), next to amber = proof. The model (`model.rs::TypeDef`)
+resolves three edge families: **composition** (type → the types its ctor
+fields mention — `Type → CtorDef → TypeDef → Module`), **ctor-use** (type →
+the fns that construct or pattern-match it — the strong dependency: the fn
+breaks if the shape changes), and **sig-use** (type → fns that merely name it
+in a signature — the weak tier). Resolution is same-file-first, then
+*transitively imported* files, then a unique project-wide match — a
+still-ambiguous name is dropped (dozens of example files define their own
+`Bool`; wrong-file answers are worse than none). The premise: **edges
+supported maximally, shown selectively.** Composition edges draw always (the
+web is sparse and load-bearing). Ctor-use edges are *committed* — they inform
+placement, so a file's types layer left of the code that works over them —
+but draw only when the **hovered or selected member** is an endpoint (hover
+is render input, like zoom; the committed plane never hears it). Sig-use
+stays out of the routed graph entirely and lives in the deck:
+
+**The shape deck**: hover (or select) a fn and a screen-space overlay docks
+at the canvas edge listing its types' full definition cards — strong shapes
+first, then signature mentions, each captioned with its home file. This is
+the answer to "I'm zoomed into one fn and its types are defined three files
+away": the committed plane can only draw intra-file edges, but the deck is an
+overlay, exempt from the cartographic rule, so it follows focus freely and
+shows cross-file definitions on the same screen. Hovering a type shows what
+*it* is composed of, wherever those parts live. (Headless: set
+`SHARD_RENDER_HOVER=fn_name` — or a raw member key like `type:7` — to
+simulate the pointer for review renders.)
+
 **The proof card** shows each proof's *structure* in the same Flow vocabulary
 the fn cards taught (`proof.rs` lowers the tactic tree into the shared
 `Region` type): case-split tactics (`induct` / `fin-split` / `case-on` /
@@ -289,7 +321,8 @@ resvg \
 ```
 src/
   sexpr.rs   s-expr reader (paren tree only)
-  model.rs   structural extraction + call-graph resolution (same-file-first)
+  model.rs   structural extraction (fns / claims / types) + edge resolution
+             (calls, citations, composition, shape use — same-file-first)
   scope.rs   the subject selection: a fn / file / dir / call-tree / project
   flow.rs    intra-fn structured model (one fn body -> a region/containment tree)
   layout.rs  layered SCC-aware graph layout (+ weakly-connected components

@@ -43,6 +43,15 @@ fn main() -> std::io::Result<()> {
     println!(
         "imports: {resolved_imports} resolved / {total_imports} raw (in-project dependency edges)"
     );
+    let compose: usize = project.types.iter().map(|t| t.composed.len()).sum();
+    let strong: usize = project.fns.iter().map(|f| f.shapes.len()).sum();
+    let weak: usize = project.fns.iter().map(|f| f.sig_types.len()).sum();
+    println!(
+        "types: {} ({} record, {} opaque) — {compose} composition edges, {strong} ctor-use + {weak} sig-use fn edges",
+        project.types.len(),
+        project.types.iter().filter(|t| t.kind == shard_viewer::model::TypeKind::Record).count(),
+        project.types.iter().filter(|t| t.kind == shard_viewer::model::TypeKind::Opaque).count(),
+    );
 
     // Project-wide line tally by category — mirrors `tools/loc` (a cross-check
     // that the Rust classifier port agrees with the shard tool).

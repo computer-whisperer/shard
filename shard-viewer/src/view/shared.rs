@@ -110,9 +110,10 @@ pub(crate) fn edges_asset(lay: &Layout) -> VectorAsset {
 }
 
 /// How an intra-level edge reads: the call/import web, a proof-layer lemma
-/// citation, or a claim-subject link. Colors keep the project-wide
-/// convention (Systems view heat): **amber = proof**. All classes run
-/// dependency → dependent (the cascade convention): arrows point at users.
+/// citation, a claim-subject link, or the shape layer's composition/usage
+/// webs. Colors keep the project-wide convention (Systems view heat):
+/// **amber = proof**, and now **blue = shape** (`tokens::INFO`). All classes
+/// run dependency → dependent (the cascade convention): arrows point at users.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EdgeClass {
     /// callee → caller (or dir-level imported → importer) — the
@@ -122,6 +123,14 @@ pub(crate) enum EdgeClass {
     Cite,
     /// subject fn → claim about it — where a statement touches down on code.
     About,
+    /// field type → containing type — the datastructure composition web.
+    /// Always drawn (it's sparse and load-bearing).
+    Shape,
+    /// type → fn that constructs/matches it (or merely names it in its
+    /// signature) — the shape-usage web. Dense, so it participates in layout
+    /// but is only *drawn* when a hover/selection reveals it (see the Map's
+    /// reveal overlay).
+    Use,
 }
 
 /// [`edges_asset`] with stroke widths and arrowheads multiplied by `scale`.
@@ -135,9 +144,22 @@ pub(crate) fn edges_asset_scaled(lay: &Layout, scale: f32) -> VectorAsset {
 /// [`edges_asset_scaled`] with a per-edge class, index-aligned with the input
 /// `Graph::edges` (as `Layout::edges` is). Missing entries read as [`EdgeClass::Flow`].
 pub(crate) fn edges_asset_classed(lay: &Layout, scale: f32, classes: &[EdgeClass]) -> VectorAsset {
+    edges_asset_filtered(lay, scale, classes, |_| true)
+}
+
+/// [`edges_asset_classed`] drawing only the edges `keep` admits (by edge
+/// index). The Map uses this to split one committed edge set into the
+/// always-drawn base web and the hover-revealed [`EdgeClass::Use`] overlay —
+/// visibility is a render choice; the committed layout keeps every edge.
+pub(crate) fn edges_asset_filtered(
+    lay: &Layout,
+    scale: f32,
+    classes: &[EdgeClass],
+    keep: impl Fn(usize) -> bool,
+) -> VectorAsset {
     let mut paths = Vec::new();
     for (k, e) in lay.edges.iter().enumerate() {
-        if e.points.len() < 2 {
+        if e.points.len() < 2 || !keep(k) {
             continue;
         }
         let class = classes.get(k).copied().unwrap_or(EdgeClass::Flow);
@@ -148,6 +170,8 @@ pub(crate) fn edges_asset_classed(lay: &Layout, scale: f32, classes: &[EdgeClass
             EdgeClass::Flow => tokens::MUTED_FOREGROUND,
             EdgeClass::Cite => tokens::WARNING.mix(tokens::MUTED_FOREGROUND, 0.25),
             EdgeClass::About => tokens::WARNING.mix(tokens::MUTED_FOREGROUND, 0.7),
+            EdgeClass::Shape => tokens::INFO.mix(tokens::MUTED_FOREGROUND, 0.35),
+            EdgeClass::Use => tokens::INFO.mix(tokens::MUTED_FOREGROUND, 0.15),
         };
         // The head must point along the spline's ARRIVAL tangent — horizontal
         // for a forward edge (edge_curve forces the port tangent), the last

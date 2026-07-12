@@ -45,13 +45,13 @@
 
 use super::flow::render_region;
 use super::shared::{
-    edges_asset_classed, edges_asset_scaled, legend_chip, pan_zoom_viewport_min, placed_graph,
+    edges_asset_filtered, edges_asset_scaled, legend_chip, pan_zoom_viewport_min, placed_graph,
     EdgeClass,
 };
 use super::SUB_SIZE;
 use crate::flow::Region;
 use crate::layout::{self, EndPoint, GEdge, GNode, Graph, Layout};
-use crate::model::{ClaimDef, ClaimKind, FnDef, Project};
+use crate::model::{ClaimDef, ClaimKind, FnDef, Project, TypeDef, TypeKind};
 use crate::scope::Scope;
 use crate::view::ViewParams;
 use damascene_core::layout::intrinsic;
@@ -61,12 +61,13 @@ use std::collections::BTreeMap;
 pub(crate) fn legend(flow_z: f32) -> El {
     row([
         text("map").mono().muted().font_size(SUB_SIZE),
-        text("one committed layout per scope · boxes by imports, fns by calls, claims by citations · zoom reveals detail in place")
+        text("one committed layout per scope · boxes by imports, fns by calls, claims by citations, types by composition · hover reveals shape use")
             .muted()
             .font_size(SUB_SIZE),
         legend_chip(claim_colors(ClaimKind::Axiom, false).0, "axiom"),
         legend_chip(claim_colors(ClaimKind::Claim, false).0, "claim"),
         legend_chip(claim_colors(ClaimKind::Requirement, false).0, "unmet req"),
+        legend_chip(type_colors().0, "type"),
         spacer(),
         text("innards ≥").muted().font_size(SUB_SIZE),
         button("−")
@@ -143,14 +144,36 @@ struct LevelGeom {
     /// Per-edge class, index-aligned with the layout's edges (empty = all
     /// [`EdgeClass::Flow`] — dir levels, whose edges are all imports).
     classes: Vec<EdgeClass>,
+    /// Per-edge slot endpoints `(from, to)`, index-aligned like `classes`
+    /// (empty for dir levels). The render pass needs incidence to reveal a
+    /// focused member's [`EdgeClass::Use`] edges; the routed layout alone
+    /// no longer knows which nodes an edge connects.
+    ends: Vec<(usize, usize)>,
 }
 
-/// One slot in a file box: a fn (flow card) or a proof-layer form (claim
-/// card). Slot order per file = fns in definition order, then claims.
+/// One slot in a file box: a fn (flow card), a proof-layer form (claim
+/// card), or a datastructure definition (type card). Slot order per file =
+/// fns in definition order, then claims, then types.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Member {
     Fn(usize),
     Claim(usize),
+    Type(usize),
+}
+
+impl Member {
+    /// Parse a member's element key ("fn:12" / "claim:3" / "type:7") — the
+    /// bridge from damascene hover readback to the reveal/deck focus.
+    fn from_key(key: &str) -> Option<Member> {
+        let (kind, idx) = key.split_once(':')?;
+        let i: usize = idx.parse().ok()?;
+        match kind {
+            "fn" => Some(Member::Fn(i)),
+            "claim" => Some(Member::Claim(i)),
+            "type" => Some(Member::Type(i)),
+            _ => None,
+        }
+    }
 }
 
 /// The app-owned per-scope cache of committed maps, lent to the pure view.
@@ -182,7 +205,8 @@ pub fn region_rect(cache: &MapCache, plane: &Scope, target: MapTarget) -> Option
 pub(crate) fn canvas(project: &Project, p: &ViewParams, cache: Option<&MapCache>) -> El {
     let fns = p.scope.fns(project);
     let claims = p.scope.claims(project);
-    if fns.is_empty() && claims.is_empty() {
+    let types = p.scope.types(project);
+    if fns.is_empty() && claims.is_empty() && types.is_empty() {
         return column([
             h3("Map"),
             text("Pick a file or directory in the sidebar to scope the map.").muted(),
@@ -193,14 +217,18 @@ pub(crate) fn canvas(project: &Project, p: &ViewParams, cache: Option<&MapCache>
 
     // The in-scope members of each file (a scope may include only some of a
     // file's fns, e.g. a call-tree), keyed by file: fns in definition order,
-    // then the proof-layer forms. A statements-only file (kernel/facts.shard)
-    // gets its box from the claim loop alone.
+    // then the proof-layer forms, then the datastructure definitions. A
+    // statements-only file (kernel/facts.shard) gets its box from the claim
+    // loop alone.
     let mut by_file: BTreeMap<usize, Vec<Member>> = BTreeMap::new();
     for &fi in &fns {
         by_file.entry(project.fns[fi].file).or_default().push(Member::Fn(fi));
     }
     for &ci in &claims {
         by_file.entry(project.claims[ci].file).or_default().push(Member::Claim(ci));
+    }
+    for &ti in &types {
+        by_file.entry(project.types[ti].file).or_default().push(Member::Type(ti));
     }
     // The dir tree over the spanned files — the walk order both passes share.
     let mut root = DirNode::default();
@@ -256,15 +284,47 @@ pub(crate) fn canvas(project: &Project, p: &ViewParams, cache: Option<&MapCache>
         ))
     };
 
-    let rctx =
-        RCtx { project, by_file: &by_file, selected_fn: p.selected_fn, zoom, flow_z: p.flow_z, cull };
+    // The reveal/deck focus: the hovered member (any kind), else the selected
+    // fn. Hover is pure render input — the committed topology can't hear it.
+    let focus = p
+        .hovered
+        .as_deref()
+        .and_then(Member::from_key)
+        .or(p.selected_fn.map(Member::Fn));
+
+    let rctx = RCtx {
+        project,
+        by_file: &by_file,
+        selected_fn: p.selected_fn,
+        focus,
+        zoom,
+        flow_z: p.flow_z,
+        cull,
+    };
     let pad = tokens::SPACE_6;
     let content = row([render_walk(&rctx, com, &root, "", (pad, pad), &[])]).padding(pad);
 
     // Let the user zoom out to just past the fit of *this* scope's extent —
     // a fixed floor either strands a project map half-fitted or lets a small
     // file map zoom out into nothing.
-    pan_zoom_viewport_min(content, (fit * 0.6).clamp(0.0005, 0.04))
+    let viewport = pan_zoom_viewport_min(content, (fit * 0.6).clamp(0.0005, 0.04));
+
+    // The shape deck: a screen-space overlay listing the focused member's
+    // datastructure definitions — the answer to "I'm zoomed into one fn and
+    // its types are defined three files away". Overlay, not topology: it
+    // follows hover/selection freely without touching the committed plane.
+    match shape_deck(project, focus) {
+        Some(deck) => stack([
+            viewport,
+            row([spacer(), deck])
+                .width(Size::Fill(1.0))
+                .align(Align::Start)
+                .padding(tokens::SPACE_4),
+        ])
+        .width(Size::Fill(1.0))
+        .height(Size::Fill(1.0)),
+        None => viewport,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -367,8 +427,10 @@ fn commit_children(
     let cfg = layout::LayoutConfig::for_nodes(&nodes);
     let lay = layout::layout(&Graph { nodes, edges }, &cfg);
     let size = (lay.width, lay.height);
-    out.dirs
-        .insert(path.to_string(), LevelGeom { lay, off: (0.0, 0.0), classes: Vec::new() });
+    out.dirs.insert(
+        path.to_string(),
+        LevelGeom { lay, off: (0.0, 0.0), classes: Vec::new(), ends: Vec::new() },
+    );
     size
 }
 
@@ -388,6 +450,7 @@ fn commit_file(
             let (w, h) = match m {
                 Member::Fn(fi) => intrinsic(&flow_card(project, fi, false)),
                 Member::Claim(ci) => intrinsic(&claim_card(project, ci)),
+                Member::Type(ti) => intrinsic(&type_card(project, ti, true)),
             };
             GNode::simple(w, h)
         })
@@ -396,10 +459,12 @@ fn commit_file(
     // Slot indices per layer, for edge resolution within this file.
     let mut fn_slot: BTreeMap<usize, usize> = BTreeMap::new();
     let mut claim_slot: BTreeMap<usize, usize> = BTreeMap::new();
+    let mut type_slot: BTreeMap<usize, usize> = BTreeMap::new();
     for (i, &m) in members.iter().enumerate() {
         match m {
             Member::Fn(g) => fn_slot.insert(g, i),
             Member::Claim(c) => claim_slot.insert(c, i),
+            Member::Type(t) => type_slot.insert(t, i),
         };
     }
 
@@ -429,6 +494,18 @@ fn commit_file(
                         push(i, j, EdgeClass::Flow, &mut edges);
                     }
                 }
+                // Shape usage: the types this fn constructs/matches layer
+                // left of it, committed as [`EdgeClass::Use`] — informing
+                // placement always, drawn only under a hover/selection
+                // reveal. Only the strong (ctor) tier earns routed edges;
+                // weak signature mentions live in the shape deck alone —
+                // committing them too doubles the dummy load for edges that
+                // say "passes through", not "depends on the shape".
+                for &t in &project.fns[g].shapes {
+                    if let Some(&j) = type_slot.get(&t) {
+                        push(i, j, EdgeClass::Use, &mut edges);
+                    }
+                }
             }
             Member::Claim(c) => {
                 for &cited in &project.claims[c].cites {
@@ -442,13 +519,24 @@ fn commit_file(
                     }
                 }
             }
+            Member::Type(t) => {
+                // Composition: field types layer left of the aggregates
+                // built from them (always drawn — the shape web is sparse).
+                for &dep in &project.types[t].composed {
+                    if let Some(&j) = type_slot.get(&dep) {
+                        push(i, j, EdgeClass::Shape, &mut edges);
+                    }
+                }
+            }
         }
     }
-    let (nfns, nclaims) = (fn_slot.len(), claim_slot.len());
+    let ends: Vec<(usize, usize)> = edges.iter().map(|e| (e.from.node, e.to.node)).collect();
+    let (nfns, nclaims, ntypes) = (fn_slot.len(), claim_slot.len(), type_slot.len());
     let cfg = layout::LayoutConfig::for_nodes(&nodes);
     let lay = layout::layout(&Graph { nodes, edges }, &cfg);
-    let m = box_metrics(|| file_header(project, file, nfns, nclaims), lay.width, lay.height);
-    out.files.insert(file, LevelGeom { lay, off: m.off, classes });
+    let m =
+        box_metrics(|| file_header(project, file, nfns, nclaims, ntypes), lay.width, lay.height);
+    out.files.insert(file, LevelGeom { lay, off: m.off, classes, ends });
     m.size
 }
 
@@ -475,14 +563,20 @@ fn box_metrics(header: impl Fn() -> El, iw: f32, ih: f32) -> BoxMetrics {
 
 /// The header row a file box is sized around (also the committed band height —
 /// the render-pass label may draw bigger *over* the box, never into layout).
-fn file_header(project: &Project, file: usize, nfns: usize, nclaims: usize) -> El {
+fn file_header(project: &Project, file: usize, nfns: usize, nclaims: usize, ntypes: usize) -> El {
     let f = &project.files[file];
     let base = f.rel.rsplit_once('/').map(|(_, b)| b).unwrap_or(&f.rel);
-    let what = match (nfns, nclaims) {
-        (n, 0) => format!("{n} fns"),
-        (0, m) => format!("{m} claims"),
-        (n, m) => format!("{n} fns · {m} claims"),
-    };
+    let mut parts: Vec<String> = Vec::new();
+    if nfns > 0 {
+        parts.push(format!("{nfns} fns"));
+    }
+    if nclaims > 0 {
+        parts.push(format!("{nclaims} claims"));
+    }
+    if ntypes > 0 {
+        parts.push(format!("{ntypes} types"));
+    }
+    let what = parts.join(" · ");
     row([
         text(base.to_string()).mono().semibold().font_size(12.0).nowrap_text(),
         text(what).mono().muted().font_size(SUB_SIZE).nowrap_text(),
@@ -520,6 +614,9 @@ struct RCtx<'a> {
     project: &'a Project,
     by_file: &'a BTreeMap<usize, Vec<Member>>,
     selected_fn: Option<usize>,
+    /// The hover-else-selection member whose shape-usage edges the render
+    /// reveals (see [`EdgeClass::Use`]). Render-only, like zoom.
+    focus: Option<Member>,
     /// Effective zoom — prices every screen-space LOD decision.
     zoom: f32,
     /// Zoom past which fn slots draw their flow innards (user-tunable).
@@ -654,6 +751,7 @@ fn file_el(
                 match m {
                     Member::Fn(g) => fn_el(ctx, g, (n.w, n.h), slot_abs),
                     Member::Claim(c) => claim_el(ctx, c, (n.w, n.h), slot_abs),
+                    Member::Type(t) => type_el(ctx, t, (n.w, n.h), slot_abs),
                 }
             })
             .collect();
@@ -661,8 +759,21 @@ fn file_el(
         // gray mass (placement already encodes the call structure — callers
         // left, callees right), so the overlay is dropped. Pure rendering:
         // the routes were committed with the layout and never change.
+        //
+        // Within the overlay, [`EdgeClass::Use`] edges (the dense shape-usage
+        // web) draw only when the focus member — hovered, else selected — is
+        // one of their endpoints: correlations are committed maximally, shown
+        // selectively.
         let edge_overlay = if geom.lay.width.min(geom.lay.height) * ctx.zoom >= EDGE_PX {
-            edges_asset_classed(&geom.lay, ctx.hairline(), &geom.classes)
+            let focus_slot = ctx
+                .focus
+                .and_then(|f| members.iter().position(|&m| m == f));
+            edges_asset_filtered(&geom.lay, ctx.hairline(), &geom.classes, |k| {
+                geom.classes.get(k) != Some(&EdgeClass::Use)
+                    || focus_slot.is_some_and(|s| {
+                        geom.ends.get(k).is_some_and(|&(a, b)| a == s || b == s)
+                    })
+            })
         } else {
             VectorAsset::from_paths([0.0, 0.0, geom.lay.width, geom.lay.height], Vec::new())
         };
@@ -672,10 +783,11 @@ fn file_el(
     if let Some((lbl, _)) = carto_label(base, FILE_LABEL_PX, ctx.zoom, w, h, abs, shade) {
         layers.push(lbl);
     }
-    let (nfns, nclaims) =
-        members.iter().fold((0, 0), |(a, b), m| match m {
-            Member::Fn(_) => (a + 1, b),
-            Member::Claim(_) => (a, b + 1),
+    let (nfns, nclaims, ntypes) =
+        members.iter().fold((0, 0, 0), |(a, b, c), m| match m {
+            Member::Fn(_) => (a + 1, b, c),
+            Member::Claim(_) => (a, b + 1, c),
+            Member::Type(_) => (a, b, c + 1),
         });
     stack(layers)
         .width(Size::Fixed(w))
@@ -685,10 +797,11 @@ fn file_el(
         .stroke_width(ctx.hairline())
         .radius(8.0)
         .tooltip(format!(
-            "{} · {} fns · {} claims · {} lines",
+            "{} · {} fns · {} claims · {} types · {} lines",
             f.rel,
             nfns,
             nclaims,
+            ntypes,
             f.counts.total()
         ))
 }
@@ -846,6 +959,191 @@ fn ellipt(s: &str, max: usize) -> String {
         let cut: String = s.chars().take(max - 1).collect();
         format!("{cut}…")
     }
+}
+
+/// One type slot at its committed footprint, mirroring [`claim_el`]: the full
+/// definition card past the flow threshold, else a name slab. The blue tint
+/// stays on the slab at any distance — **blue = shape**, the structural
+/// counterpart of the proof layer's amber.
+fn type_el(ctx: &RCtx, ti: usize, (w, h): (f32, f32), abs: (f32, f32)) -> El {
+    if !ctx.in_view(abs.0, abs.1, w, h) {
+        return blank();
+    }
+    if ctx.zoom >= ctx.flow_z {
+        return type_card(ctx.project, ti, true);
+    }
+    let t = &ctx.project.types[ti];
+    let chars = t.name.chars().count().max(1) as f32;
+    let font = (NAME_PX / ctx.zoom).min(h * 0.45).min(w * 0.92 / (chars * MONO_ADV));
+    let body: Vec<El> = if font * ctx.zoom >= LEGIBLE_PX {
+        vec![text(t.name.clone()).mono().semibold().font_size(font).nowrap_text()]
+    } else {
+        Vec::new()
+    };
+    let (fill, stroke) = type_colors();
+    column(body)
+        .align(Align::Center)
+        .justify(Justify::Center)
+        .width(Size::Fixed(w))
+        .height(Size::Fixed(h))
+        .radius(7.0)
+        .fill(fill)
+        .stroke(stroke)
+        .stroke_width(ctx.hairline())
+        .key(format!("type:{ti}"))
+        .tooltip(type_tip(t))
+}
+
+/// The shape-layer card colors `(fill, stroke)` — the blue family
+/// (`tokens::INFO`), keeping amber for proof.
+fn type_colors() -> (Color, Color) {
+    (tokens::CARD.mix(tokens::INFO, 0.10), tokens::INFO.mix(tokens::BORDER, 0.5))
+}
+
+/// The kind tag a type card leads with.
+fn type_tag(kind: TypeKind) -> &'static str {
+    match kind {
+        TypeKind::Data => "type",
+        TypeKind::Record => "record",
+        TypeKind::Opaque => "opaque",
+    }
+}
+
+fn type_tip(t: &TypeDef) -> String {
+    format!(
+        "{} {}\n{} ctors · composed of {} types",
+        type_tag(t.kind),
+        t.name,
+        t.ctors.len(),
+        t.composed.len()
+    )
+}
+
+/// A datastructure definition as an intrinsic card: kind tag + name (+ type
+/// params), then one row per ctor — ctor name, its field types, and the
+/// author's trailing `;` note when the source carries one. A record reads the
+/// same with field names as the rows; an opaque `sig type` is just the head
+/// (its ctors are the module impl's business). Like [`flow_card`] it hugs —
+/// the commit pass measures exactly this construction.
+fn type_card(project: &Project, ti: usize, keyed: bool) -> El {
+    let t = &project.types[ti];
+    let (fill, stroke) = type_colors();
+    let mut head = t.name.clone();
+    if !t.params.is_empty() {
+        head = format!("({} {})", t.name, t.params.join(" "));
+    }
+    let title = row([
+        text(type_tag(t.kind))
+            .mono()
+            .semibold()
+            .font_size(SUB_SIZE)
+            .text_color(tokens::INFO.mix(tokens::MUTED_FOREGROUND, 0.3))
+            .nowrap_text(),
+        text(head).mono().semibold().font_size(super::TITLE_SIZE).nowrap_text().ellipsis(),
+    ])
+    .gap(tokens::SPACE_2)
+    .align(Align::Center);
+
+    let mut parts = vec![title];
+    if t.kind == TypeKind::Opaque {
+        parts.push(text("ctors private to impl").muted().font_size(SUB_SIZE).nowrap_text());
+    }
+    for c in &t.ctors {
+        let mut cells = vec![
+            text(c.name.clone())
+                .mono()
+                .semibold()
+                .font_size(SUB_SIZE)
+                .text_color(tokens::FOREGROUND)
+                .nowrap_text(),
+        ];
+        if !c.fields.is_empty() {
+            cells.push(
+                text(ellipt(&c.fields.join(" "), 46)).mono().muted().font_size(SUB_SIZE).nowrap_text(),
+            );
+        }
+        if !c.comment.is_empty() {
+            cells.push(
+                text(format!("· {}", ellipt(&c.comment, 40)))
+                    .font_size(SUB_SIZE)
+                    .text_color(tokens::MUTED_FOREGROUND.mix(tokens::INFO, 0.25))
+                    .nowrap_text(),
+            );
+        }
+        parts.push(row(cells).gap(tokens::SPACE_2).align(Align::Center));
+    }
+    let card = column(parts)
+        .gap(tokens::SPACE_1)
+        .padding(8.0)
+        .radius(7.0)
+        .fill(fill)
+        .stroke(stroke)
+        .tooltip(type_tip(t));
+    // The deck draws unkeyed copies of cards the plane may also hold — two
+    // Els with one key would collide in hit-test.
+    if keyed { card.key(format!("type:{ti}")) } else { card }
+}
+
+/// The screen-space shape deck: the focused member's datastructure
+/// definitions as compact cards, docked at the canvas edge. This is the only
+/// way to see a shape's composition while zoomed into a fn whose types live
+/// in another file — the committed plane can't show cross-file members, an
+/// overlay can. `None` when the focus has no shapes to show.
+fn shape_deck(project: &Project, focus: Option<Member>) -> Option<El> {
+    let (title, type_ids): (String, Vec<usize>) = match focus? {
+        Member::Fn(g) => {
+            let f = &project.fns[g];
+            let ids: Vec<usize> =
+                f.shapes.iter().chain(&f.sig_types).copied().collect();
+            (f.name.clone(), ids)
+        }
+        // A type's own deck: what it's composed of (its definition is already
+        // under the cursor; its parts may be anywhere).
+        Member::Type(t) => (project.types[t].name.clone(), project.types[t].composed.clone()),
+        Member::Claim(_) => return None,
+    };
+    if type_ids.is_empty() {
+        return None;
+    }
+    const DECK_CAP: usize = 4;
+    let shown = &type_ids[..type_ids.len().min(DECK_CAP)];
+    let mut cards: Vec<El> = vec![
+        row([
+            text("shapes of").muted().font_size(SUB_SIZE).nowrap_text(),
+            text(title).mono().semibold().font_size(SUB_SIZE).nowrap_text().ellipsis(),
+        ])
+        .gap(tokens::SPACE_2),
+    ];
+    for &ti in shown {
+        let home = &project.files[project.types[ti].file].rel;
+        cards.push(
+            column([
+                type_card(project, ti, false),
+                text(home.clone()).muted().font_size(9.0).nowrap_text().ellipsis(),
+            ])
+            .gap(2.0)
+            .align(Align::End),
+        );
+    }
+    if type_ids.len() > shown.len() {
+        cards.push(
+            text(format!("+{} more", type_ids.len() - shown.len()))
+                .muted()
+                .font_size(SUB_SIZE)
+                .nowrap_text(),
+        );
+    }
+    // Unkeyed throughout: the deck is a read-only lens that must never
+    // intercept a pan drag or steal hover from the plane beneath it.
+    Some(
+        column(cards)
+            .gap(tokens::SPACE_2)
+            .padding(tokens::SPACE_3)
+            .radius(8.0)
+            .fill(tokens::BACKGROUND.mix(tokens::CARD, 0.6))
+            .stroke(tokens::INFO.mix(tokens::BORDER, 0.7))
+            .align(Align::End),
+    )
 }
 
 /// A label drawn *over* a box at a screen-constant font, clamped so it stays
@@ -1062,6 +1360,7 @@ mod tests {
             lay: Layout { nodes, edges: Vec::new(), width: 500.0, height: 300.0 },
             off,
             classes: Vec::new(),
+            ends: Vec::new(),
         }
     }
 

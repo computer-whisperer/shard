@@ -88,6 +88,34 @@ impl Scope {
         }
     }
 
+    /// The datastructure definitions in scope (indices into `project.types`),
+    /// the shape counterpart of [`Self::fns`]/[`Self::claims`]. File-anchored
+    /// scopes take every type living in their files; fn-anchored scopes take
+    /// the types their fns construct or match, wherever those types live
+    /// (mirroring how claims-about follow their subject fns).
+    pub fn types(&self, project: &Project) -> Vec<usize> {
+        match self {
+            Scope::None => Vec::new(),
+            Scope::File(i) => {
+                project.files.get(*i).map(|f| f.types.clone()).unwrap_or_default()
+            }
+            Scope::Dir(prefix) => (0..project.types.len())
+                .filter(|&ti| {
+                    dir_contains(prefix, &project.files[project.types[ti].file].rel)
+                })
+                .collect(),
+            Scope::Project => (0..project.types.len()).collect(),
+            Scope::Fn(_) | Scope::CallTree { .. } => {
+                let set: BTreeSet<usize> = self
+                    .fns(project)
+                    .iter()
+                    .flat_map(|&fi| project.fns[fi].shapes.iter().copied())
+                    .collect();
+                set.into_iter().collect()
+            }
+        }
+    }
+
     /// The files this scope spans, ascending — the dir/file boxes the Map view
     /// groups its cards under. Derived from [`Self::fns`] + [`Self::claims`]
     /// so the three agree (a statements-only file like `kernel/facts.shard`
@@ -99,6 +127,7 @@ impl Scope {
                 let mut set: BTreeSet<usize> =
                     self.fns(project).iter().map(|&fi| project.fns[fi].file).collect();
                 set.extend(self.claims(project).iter().map(|&ci| project.claims[ci].file));
+                set.extend(self.types(project).iter().map(|&ti| project.types[ti].file));
                 set.into_iter().collect()
             }
         }

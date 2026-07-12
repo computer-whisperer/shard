@@ -102,6 +102,7 @@ impl App for Viewer {
                 canvas,
                 at_home,
                 flow_z: self.flow_z,
+                hovered: cx.hovered_key().map(str::to_string),
                 filter: self.filter.clone(),
                 selection: self.selection.clone(),
                 source_modal: self.source_modal,

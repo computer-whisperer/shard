@@ -41,6 +41,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             canvas: canvas_estimate(),
             at_home: true,
             flow_z: view::DEFAULT_FLOW_Z,
+            hovered: None,
             filter: String::new(),
             selection: Default::default(),
             source_modal: true,
@@ -64,6 +65,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             canvas: canvas_estimate(),
             at_home: true,
             flow_z: view::DEFAULT_FLOW_Z,
+            hovered: None,
             filter: String::new(),
             selection: Default::default(),
             source_modal: false,
@@ -91,6 +93,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             canvas: canvas_estimate(),
             at_home: true,
             flow_z: view::DEFAULT_FLOW_Z,
+            hovered: None,
             filter: String::new(),
             selection: Default::default(),
             source_modal: false,
@@ -121,6 +124,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             canvas: canvas_estimate(),
             at_home: true,
             flow_z: view::DEFAULT_FLOW_Z,
+            hovered: None,
             filter: String::new(),
             selection: Default::default(),
             source_modal: false,
@@ -144,6 +148,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             canvas: canvas_estimate(),
             at_home: true,
             flow_z: view::DEFAULT_FLOW_Z,
+            hovered: None,
             filter: String::new(),
             selection: Default::default(),
             source_modal: false,
@@ -161,6 +166,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             canvas: canvas_estimate(),
             at_home: true,
             flow_z: view::DEFAULT_FLOW_Z,
+            hovered: None,
             filter: String::new(),
             selection: Default::default(),
             source_modal: false,
@@ -184,6 +190,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             canvas: canvas_estimate(),
             at_home: true,
             flow_z: view::DEFAULT_FLOW_Z,
+            hovered: None,
             filter: String::new(),
             selection: Default::default(),
             source_modal: false,
@@ -215,12 +222,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             canvas: canvas_estimate(),
             at_home: true,
             flow_z: view::DEFAULT_FLOW_Z,
+            hovered: None,
             filter: String::new(),
             selection: Default::default(),
             source_modal: false,
             panel_w: view::DEFAULT_PANEL_W,
         }
     };
+    // SHARD_RENDER_HOVER simulates the pointer resting on a keyed member
+    // ("fn:12", or a bare fn name resolved to its key) so hover-revealed
+    // rendering — the Map's Use-edge reveal and shape deck — can be checked
+    // headlessly, where no real hover exists.
+    let mut params = params;
+    if let Ok(hov) = std::env::var("SHARD_RENDER_HOVER") {
+        params.hovered = if hov.contains(':') {
+            Some(hov)
+        } else {
+            project.fns.iter().position(|f| f.name == hov).map(|i| format!("fn:{i}"))
+        };
+    }
     let mut root_el = view::app_root(&project, &params, None);
     let (vw, vh) = frame_size();
     let viewport = Rect::new(0.0, 0.0, vw, vh);

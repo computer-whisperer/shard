@@ -79,6 +79,10 @@ pub struct ViewParams {
     /// knob: user-tunable live from the Map legend's −/+ controls (app state),
     /// default [`DEFAULT_FLOW_Z`].
     pub flow_z: f32,
+    /// The keyed element under the pointer (damascene hover readback), if
+    /// any — the Map's reveal/deck focus rides on member keys ("fn:12",
+    /// "type:7"). `None` headless. Render input only, like zoom.
+    pub hovered: Option<String>,
     /// Sidebar filter text (case-insensitive substring over file paths).
     pub filter: String,
     /// Text-selection state for the filter input (app-owned, per damascene).

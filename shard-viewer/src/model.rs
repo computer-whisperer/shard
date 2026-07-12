@@ -33,6 +33,13 @@ pub struct FnDef {
     /// calls it. In a proof corpus most "uncalled" fns are proof subjects,
     /// not dead code, so this keeps them out of the orphan set.
     pub proof_refd: bool,
+    /// Types whose ctors this fn constructs or pattern-matches (resolved,
+    /// same-file-first) — the strong shape dependency: the fn breaks if the
+    /// type's shape changes.
+    pub shapes: Vec<usize>,
+    /// Types this fn's signature (param/return types) mentions — the weak
+    /// shape dependency (pass-through counts). Disjoint from `shapes`.
+    pub sig_types: Vec<usize>,
 }
 
 /// Which proof-layer form a [`ClaimDef`] came from. Together these are the
@@ -92,6 +99,56 @@ impl FnDef {
     /// with grep before cutting).
     pub fn is_orphan(&self) -> bool {
         self.callers.is_empty() && !self.proof_refd && !self.is_sig && self.name != "main"
+    }
+}
+
+/// Which datastructure-defining form a [`TypeDef`] came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeKind {
+    /// `(type NAME (CTOR FIELDS…)…)` — a sum-of-products definition.
+    Data,
+    /// `(record NAME (FIELD TY)…)` — loader-expanded product with named fields.
+    Record,
+    /// `(sig type NAME)` — an opaque surface declaration (ctors private to the
+    /// module's impl; the impl's own typedef is its twin).
+    Opaque,
+}
+
+/// One constructor row of a [`TypeDef`] (for a record: one named field).
+#[derive(Debug, Clone)]
+pub struct Ctor {
+    pub name: String,
+    /// Prettied field type forms (for a record row: the single field type).
+    pub fields: Vec<String>,
+    /// Trailing `;` comment on the ctor's source line, if any — shard authors
+    /// annotate ctor fields this way and the note is half the definition.
+    pub comment: String,
+}
+
+/// A datastructure definition — the third member kind beside fns and claims.
+/// Shard programs are shaped by these: the composition web among types and the
+/// construct/match web from types into fns are dependency structure exactly
+/// like calls and citations.
+#[derive(Debug, Clone)]
+pub struct TypeDef {
+    pub name: String,
+    /// Type parameters for a parametric head, e.g. `(type (List T) …)` → `[T]`.
+    pub params: Vec<String>,
+    pub kind: TypeKind,
+    pub ctors: Vec<Ctor>,
+    pub file: usize,
+    /// The verbatim source text of the definition form.
+    pub src: String,
+    /// Resolved composition dependencies: types this type's ctor fields
+    /// mention (same-file-first, excludes self). `Module` is composed of
+    /// `FnDef`s — an edge `FnDef → Module` under the cascade convention.
+    pub composed: Vec<usize>,
+}
+
+impl TypeDef {
+    /// Source line count of the definition form.
+    pub fn src_lines(&self) -> usize {
+        self.src.lines().count().max(1)
     }
 }
 
@@ -215,7 +272,7 @@ pub struct ShardFile {
     /// imports are dropped). This file *depends on* each target.
     pub import_targets: Vec<usize>,
     pub fns: Vec<usize>, // indices into Project::fns
-    pub types: Vec<String>,
+    pub types: Vec<usize>, // indices into Project::types
     pub claims: Vec<usize>, // indices into Project::claims
     /// Line tally by complexity category (the heat-map source).
     pub counts: Counts,
@@ -229,8 +286,13 @@ pub struct Project {
     pub fns: Vec<FnDef>,
     /// Every proof-layer form in the project (see [`ClaimDef`]).
     pub claims: Vec<ClaimDef>,
+    /// Every datastructure definition in the project (see [`TypeDef`]).
+    pub types: Vec<TypeDef>,
     /// fn short-name -> indices (homonyms across files are common in shard).
     pub by_name: HashMap<String, Vec<usize>>,
+    /// Type name -> indices (opaque `sig type` twins share a name with their
+    /// impl typedef, so multi-hit is normal).
+    pub types_by_name: HashMap<String, Vec<usize>>,
     /// Citable claim name -> indices. Fulfills forms are excluded: their name
     /// *refers to* a requirement, it doesn't declare a citable statement.
     pub claims_by_name: HashMap<String, Vec<usize>>,
@@ -290,6 +352,7 @@ impl Project {
         project.resolve_calls();
         project.resolve_claims();
         project.resolve_imports();
+        project.resolve_types(); // after imports: fallback prefers imported files
         // Mark fns reasoned about in proofs so they don't read as dead code.
         for f in &mut project.fns {
             f.proof_refd = project.proof_refs.contains(&f.name);
@@ -322,6 +385,23 @@ impl Project {
         }
     }
 
+    /// Per-file transitive closure of `import_targets` (excluding the file
+    /// itself) — the set of files whose names are plausibly in scope.
+    fn import_closures(&self) -> Vec<BTreeSet<usize>> {
+        (0..self.files.len())
+            .map(|start| {
+                let mut seen = BTreeSet::new();
+                let mut stack = self.files[start].import_targets.clone();
+                while let Some(f) = stack.pop() {
+                    if f != start && seen.insert(f) {
+                        stack.extend(self.files[f].import_targets.iter().copied());
+                    }
+                }
+                seen
+            })
+            .collect()
+    }
+
     fn build_name_index(&mut self) {
         for (i, f) in self.fns.iter().enumerate() {
             self.by_name.entry(f.name.clone()).or_default().push(i);
@@ -330,6 +410,120 @@ impl Project {
             if c.kind != ClaimKind::Fulfills {
                 self.claims_by_name.entry(c.name.clone()).or_default().push(i);
             }
+        }
+        for (i, t) in self.types.iter().enumerate() {
+            self.types_by_name.entry(t.name.clone()).or_default().push(i);
+        }
+    }
+
+    /// Resolve the shape layer's edges: each type's `composed` (types its
+    /// ctor fields mention), each fn's `shapes` (types whose ctors its body
+    /// constructs or matches) and `sig_types` (types its signature mentions).
+    /// Same shallow same-file-first resolution as calls and citations.
+    fn resolve_types(&mut self) {
+        // Ctor name -> defining type indices. A record's "ctor" rows are field
+        // names, not constructors — its make/with sugar goes through the TYPE
+        // name, so records index under their own name (as do refine types).
+        let mut ctor_types: HashMap<String, Vec<usize>> = HashMap::new();
+        for (i, t) in self.types.iter().enumerate() {
+            match t.kind {
+                TypeKind::Data => {
+                    for c in &t.ctors {
+                        if c.name != "refine" {
+                            ctor_types.entry(c.name.clone()).or_default().push(i);
+                        }
+                    }
+                }
+                TypeKind::Record => {
+                    ctor_types.entry(t.name.clone()).or_default().push(i);
+                }
+                TypeKind::Opaque => {}
+            }
+        }
+
+        // Same-file-first, then *transitively* imported files, then a unique
+        // project-wide match. The middle tier (calls don't have it) matters
+        // here: ctor names like `True`/`Cons` exist in dozens of example
+        // files' own `Bool`/`List` types, and stdlib often sits two imports
+        // away (evm -> term -> stdlib). A still-ambiguous fallback is dropped:
+        // for a shape card, no answer beats several wrong-file answers.
+        let reach = self.import_closures();
+        let pick = |cands: &[usize], file: usize, types: &[TypeDef], out: &mut BTreeSet<usize>| {
+            let local: Vec<usize> =
+                cands.iter().copied().filter(|&t| types[t].file == file).collect();
+            if !local.is_empty() {
+                out.extend(local);
+                return;
+            }
+            let imported: Vec<usize> = cands
+                .iter()
+                .copied()
+                .filter(|&t| reach[file].contains(&types[t].file))
+                .collect();
+            if !imported.is_empty() {
+                out.extend(imported);
+                return;
+            }
+            if let [only] = cands {
+                out.insert(*only);
+            }
+        };
+
+        // Composition: symbols in ctor field types, minus the type's own
+        // params and name.
+        for i in 0..self.types.len() {
+            let t = &self.types[i];
+            let skip: BTreeSet<String> =
+                t.params.iter().cloned().chain([t.name.clone()]).collect();
+            let mut deps = BTreeSet::new();
+            for c in &t.ctors {
+                for f in &c.fields {
+                    for tok in symbol_tokens(f) {
+                        if skip.contains(tok) {
+                            continue;
+                        }
+                        if let Some(cands) = self.types_by_name.get(tok) {
+                            pick(cands, t.file, &self.types, &mut deps);
+                        }
+                    }
+                }
+            }
+            deps.remove(&i);
+            self.types[i].composed = deps.into_iter().collect();
+        }
+
+        // Fn shape usage: body refs that name a ctor (strong), signature
+        // tokens that name a type (weak; disjoint from strong).
+        for i in 0..self.fns.len() {
+            let params: BTreeSet<String> =
+                self.fns[i].params.iter().map(|(n, _)| n.clone()).collect();
+            let mut refs = BTreeSet::new();
+            for form in &self.fns[i].body {
+                collect_refs(form, &params, &mut refs);
+            }
+            let file = self.fns[i].file;
+            let mut strong = BTreeSet::new();
+            for r in &refs {
+                if let Some(cands) = ctor_types.get(r) {
+                    pick(cands, file, &self.types, &mut strong);
+                }
+            }
+            let mut weak = BTreeSet::new();
+            let sig: Vec<String> = self.fns[i]
+                .params
+                .iter()
+                .map(|(_, ty)| ty.clone())
+                .chain([self.fns[i].ret.clone()])
+                .collect();
+            for ty in &sig {
+                for tok in symbol_tokens(ty) {
+                    if let Some(cands) = self.types_by_name.get(tok) {
+                        pick(cands, file, &self.types, &mut weak);
+                    }
+                }
+            }
+            self.fns[i].shapes = strong.iter().copied().collect();
+            self.fns[i].sig_types = weak.difference(&strong).copied().collect();
         }
     }
 
@@ -524,21 +718,44 @@ fn extract_file(project: &mut Project, file: &mut ShardFile, forms: Vec<(Sexpr, 
                 }
             }
             Some("sig") => {
-                // (sig fn NAME PARAMS RET) — a bodyless signature.
-                if let Sexpr::List(items) = &form
-                    && items.get(1).and_then(|s| s.as_sym()) == Some("fn")
-                    && let Some(def) = parse_fn_from(&items[1..], file_idx, true, src)
-                {
-                    let idx = project.fns.len();
-                    file.fns.push(idx);
-                    project.fns.push(def);
+                let Sexpr::List(items) = &form else { continue };
+                match items.get(1).and_then(|s| s.as_sym()) {
+                    // (sig fn NAME PARAMS RET) — a bodyless signature.
+                    Some("fn") => {
+                        if let Some(def) = parse_fn_from(&items[1..], file_idx, true, src) {
+                            let idx = project.fns.len();
+                            file.fns.push(idx);
+                            project.fns.push(def);
+                        }
+                    }
+                    // (sig type HEAD) — an opaque type surface declaration.
+                    Some("type") => {
+                        if let Some((name, params)) = type_head(items.get(2)) {
+                            file.types.push(project.types.len());
+                            project.types.push(TypeDef {
+                                name,
+                                params,
+                                kind: TypeKind::Opaque,
+                                ctors: Vec::new(),
+                                file: file_idx,
+                                src,
+                                composed: Vec::new(),
+                            });
+                        }
+                    }
+                    _ => {}
                 }
             }
             Some("type") => {
-                if let Sexpr::List(items) = &form
-                    && let Some(name) = items.get(1).and_then(|s| s.as_sym())
-                {
-                    file.types.push(name.to_string());
+                if let Some(def) = parse_type(&form, file_idx, src) {
+                    file.types.push(project.types.len());
+                    project.types.push(def);
+                }
+            }
+            Some("record") => {
+                if let Some(def) = parse_record(&form, file_idx, src) {
+                    file.types.push(project.types.len());
+                    project.types.push(def);
                 }
             }
             Some(head @ ("claim" | "requirement" | "fulfills" | "axiom")) => {
@@ -573,6 +790,82 @@ fn extract_file(project: &mut Project, file: &mut ShardFile, forms: Vec<(Sexpr, 
     }
 }
 
+
+/// The identifier-shaped tokens of a pretty type string, e.g.
+/// `"(List (Pair Symbol Type))"` → `List, Pair, Symbol, Type`.
+fn symbol_tokens(s: &str) -> impl Iterator<Item = &str> {
+    s.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .filter(|t| !t.is_empty() && !t.chars().next().is_some_and(|c| c.is_ascii_digit()))
+}
+
+/// A typedef head: `NAME` or `(NAME PARAM…)` → (name, params).
+fn type_head(head: Option<&Sexpr>) -> Option<(String, Vec<String>)> {
+    match head? {
+        Sexpr::Sym(n) => Some((n.clone(), Vec::new())),
+        Sexpr::List(items) => {
+            let name = items.first()?.as_sym()?.to_string();
+            let params = items[1..].iter().filter_map(|p| p.as_sym().map(str::to_string)).collect();
+            Some((name, params))
+        }
+        _ => None,
+    }
+}
+
+/// The trailing `; comment` on the source line where `token` first appears
+/// as a word (shard authors annotate ctors/fields this way). Empty if none.
+fn line_comment_for(src: &str, token: &str) -> String {
+    let is_word = |b: Option<u8>| b.is_none_or(|c| !(c.is_ascii_alphanumeric() || c == b'_'));
+    for line in src.lines() {
+        let Some(pos) = line.find(token) else { continue };
+        let bytes = line.as_bytes();
+        if !is_word(pos.checked_sub(1).map(|i| bytes[i]))
+            || !is_word(bytes.get(pos + token.len()).copied())
+        {
+            continue; // substring of a longer word
+        }
+        if let Some(semi) = line.find(';')
+            && semi > pos
+        {
+            return line[semi..].trim_start_matches(';').trim().to_string();
+        }
+    }
+    String::new()
+}
+
+/// Parse a `(type HEAD (CTOR FIELDS…)…)` sum-of-products definition.
+fn parse_type(form: &Sexpr, file: usize, src: String) -> Option<TypeDef> {
+    let items = form.as_list()?;
+    let (name, params) = type_head(items.get(1))?;
+    let ctors = items[2..]
+        .iter()
+        .filter_map(|c| {
+            let ci = c.as_list()?;
+            let cname = ci.first()?.as_sym()?.to_string();
+            let fields = ci[1..].iter().map(pretty).collect();
+            let comment = line_comment_for(&src, &cname);
+            Some(Ctor { name: cname, fields, comment })
+        })
+        .collect();
+    Some(TypeDef { name, params, kind: TypeKind::Data, ctors, file, src, composed: Vec::new() })
+}
+
+/// Parse a `(record NAME (FIELD TY)…)` definition: one ctor row per field.
+fn parse_record(form: &Sexpr, file: usize, src: String) -> Option<TypeDef> {
+    let items = form.as_list()?;
+    let (name, params) = type_head(items.get(1))?;
+    let ctors = items[2..]
+        .iter()
+        .filter_map(|f| {
+            let fi = f.as_list()?;
+            let fname = fi.first()?.as_sym()?.to_string();
+            let fields = fi[1..].iter().map(pretty).collect();
+            let comment = line_comment_for(&src, &fname);
+            Some(Ctor { name: fname, fields, comment })
+        })
+        .collect();
+    Some(TypeDef { name, params, kind: TypeKind::Record, ctors, file, src, composed: Vec::new() })
+}
+
 /// Parse a `(fn NAME PARAMS RET BODY...)` form.
 fn parse_fn(form: &Sexpr, file: usize, is_sig: bool, src: String) -> Option<FnDef> {
     let items = form.as_list()?;
@@ -600,6 +893,8 @@ fn parse_fn_from(items: &[Sexpr], file: usize, is_sig: bool, src: String) -> Opt
         calls: Vec::new(),
         callers: Vec::new(),
         proof_refd: false,
+        shapes: Vec::new(),
+        sig_types: Vec::new(),
     })
 }
 
@@ -689,6 +984,45 @@ fn collect_shard_files(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()
 #[cfg(test)]
 mod tests {
     use super::{classify_source, normalize_rel, FnDef};
+    use super::{parse_record, parse_type, symbol_tokens, TypeKind};
+    use crate::sexpr::{self, Sexpr};
+        fn one_form(src: &str) -> (Sexpr, String) {
+        sexpr::parse_top_spanned(src).unwrap().into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn parse_type_extracts_ctors_params_and_comments() {
+        // Ctor comments live on lines *inside* the form (a comment after the
+        // form's closing paren is outside its span and deliberately not seen).
+        let src = "(type (Res T)\n  (Ok T)\n  (Err Int  ; code, partials\n    (List T)))";
+        let (form, s) = one_form(src);
+        let t = parse_type(&form, 0, s).unwrap();
+        assert_eq!(t.name, "Res");
+        assert_eq!(t.params, vec!["T"]);
+        assert_eq!(t.kind, TypeKind::Data);
+        assert_eq!(t.ctors.len(), 2);
+        assert_eq!(t.ctors[0].name, "Ok");
+        assert_eq!(t.ctors[0].fields, vec!["T"]);
+        assert_eq!(t.ctors[1].fields, vec!["Int", "(List T)"]);
+        assert_eq!(t.ctors[1].comment, "code, partials");
+    }
+
+    #[test]
+    fn parse_record_rows_are_named_fields() {
+        let (form, s) = one_form("(record Rec (a Int) (b (List Bool)))");
+        let t = parse_record(&form, 0, s).unwrap();
+        assert_eq!(t.kind, TypeKind::Record);
+        assert_eq!(t.ctors.len(), 2);
+        assert_eq!(t.ctors[1].name, "b");
+        assert_eq!(t.ctors[1].fields, vec!["(List Bool)"]);
+    }
+
+    #[test]
+    fn symbol_tokens_split_type_strings() {
+        let toks: Vec<&str> = symbol_tokens("(List (Pair Symbol Type))").collect();
+        assert_eq!(toks, vec!["List", "Pair", "Symbol", "Type"]);
+    }
+
 
     #[test]
     fn classify_categories_and_heat() {
@@ -743,6 +1077,8 @@ mod tests {
             calls: vec![],
             callers,
             proof_refd,
+            shapes: vec![],
+            sig_types: vec![],
         }
     }
 
