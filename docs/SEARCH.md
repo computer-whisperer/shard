@@ -1035,3 +1035,40 @@ proving std/list's own rev laws) and the certified d1-equivalent
 bracket. The ladder's remaining rung is S4b (the superposed
 executor); the playground's trie-factored/value-keyed findings are
 recorded above as its likely design-of-record question.
+
+
+### Rulings recorded 2026-07-11 (post-exit-criterion review, USER)
+
+- **S4b builds AS RATIFIED** — the choices-map machine with the
+  consulted-choice-set memo. The playground's value-blindness finding
+  (zero memo hits on coupled tasks; the trie-factored fix) is scoped
+  OUT of S4b's core: coupling factorization and trie-shared narrowing
+  enter as a SEPARATE composition component with the first coupled
+  task. "We are always free to build other engines later."
+- **D10 RESOLVED — engine-side.** Cross-entry correlation lives in
+  S4b's choices map; meta/sketch's grammar vocabulary stays
+  exact-counting (the refusal is load-bearing for every census gate)
+  and does not grow a correlated tier.
+- **Sequencing:** S4b first; the FALSE-EQUIVALENCE-PROOF HUNTER
+  after it; canon-redundancy and the joint task behind those.
+
+
+### TODO — for CANON.md, post-merge (cross-arc evidence, USER-scheduled)
+
+The CONTEXTUAL-PE rule family (the playground's R2/R3): under an
+arm's hypotheses (x ≡ Nil inside the Nil arm), any subterm that can
+take an evaluation step is a redex — canonical means contextually
+normal. Definitional license; subsumes dead-var, decided-control,
+and needless-split rules as special cases. Evidence for the
+flywheel: (1) the playground measured 85% of its post-dialect d2
+space as contextually-provable respelling, and its stack-d4 residual
+fell 8 → 1 under R3; (2) THIS repo holds live exhibits —
+gen/rev_synth.shard's rev_c347 is a needless-split twin committed as
+kernel-checked source (its inner Nil arm's value equals the erased
+expression under the arm hypotheses; the bracket PROVES it equal to
+the textbook spelling), and the rung-2 catalog census tallies 1,039
+rebuild-family members the rule family would price. Whether any of
+this enters the ledger as C-rules is the canon arc's decision (canon
+owns kernel/canon and CANON.md); the census machinery here is ready
+to re-measure whatever it prices. To be taken up in MAIN once this
+arc merges.
