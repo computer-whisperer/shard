@@ -104,6 +104,10 @@ TARGETS=(
   examples/mutual_toy.shard
   examples/record_proto.shard
   examples/record_basic.shard
+  models/imp/imp.shard
+  examples/imp_probe.shard
+  examples/imp_scalar.shard
+  examples/imp_loop.shard
   models/wasm/wasm.shard
   models/wasm/encode.shard
   examples/wasm_smoke.shard

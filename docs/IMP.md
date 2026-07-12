@@ -1,7 +1,8 @@
 shard imp — IMP.md
 ==================
 
-STATUS: DRAFT (2026-07-11) — the scope ledger for **models/imp**, the
+STATUS: RATIFIED (2026-07-12; drafted 2026-07-11) — the scope ledger
+for **models/imp**, the
 neutral imperative dialect: one target-neutral machine model that
 keeps the memory-allocation story and drops the ISA-specific quirks.
 imp is the "common lowering step" docs/ISA.md predicted as the major
@@ -286,6 +287,48 @@ Later, unscheduled: the counted-heap class at imp (MEMORY.md rung 4
 restated), the lowsrc→imp front-end absorption, imp-level reuse
 (Perceus-shaped) once counting exists.
 
+
+## 6a. Rung records
+
+**I0 — the machine (2026-07-12).** models/imp/imp.shard landed:
+IExp/IStmt/IFn/IProg over std/mem's Mem, exact Int ops with the
+premised IWrap, the istmt/iwhile/istmts mutual fuel SCC (one unit
+per entry, the wasm discipline verbatim; iwhile a NAMED member for
+loop workers), icall/icall_mem denotations. All failure modes are
+honest (traps ITrap, fuel None, arity/index None).
+
+- **The probe** (examples/imp_probe.shard, corpus-pinned): 14
+  ground claims — arithmetic, both if arms, loop, memory round-trip
+  and framing, wrap, div, and the four honesty corners (div0, OOB,
+  fuel-out, arity) all None. Memory probes close with std/mem's
+  surface laws; everything else is (compute both).
+- **The twins.** Straight-line (examples/imp_scalar.shard): six
+  representative members incl. branching (case-on) and the divisor
+  premise — all EXACT AND UNPREMISED except division, because imp
+  scalars are unbounded Int; the wasm certs' range premises simply
+  do not exist at imp. One IWrap demonstration pins the premise
+  discipline (premises appear exactly where wrap is used). Loop
+  (examples/imp_loop.shard): lp_fill (store direction) and lp_sum
+  (read direction) with induction workers — the collapse is DIRECT
+  because Mem is the shared substrate (the imp run constructs
+  literally the spec's mem_set/mem_get terms; no byte reasoning, no
+  wrap32 haves — the wasm workers' whole width-residue apparatus
+  has no imp analogue). Fuel rides loopkit's lg_fuel tower inside a
+  constant S^ reservoir; the reservoir is restored by the tower's S
+  each iteration, so the re-entry fuel is exactly the IH's shape.
+- **models/wasm/loopkit reuse**: the Int/Nat lemma kit (lg_fuel,
+  lg_adv, lg_ne, lg_sub, lg_lo1, lg_shift) is wasm-free and served
+  the imp workers verbatim; ONE new lemma (im_lt, the machine's
+  strict store/load guard shape) was needed. imp is now the kit's
+  SECOND SPEAKER — the meta/ graduation law fires; queued, not done
+  mid-rung (moving the file touches wasm cert imports).
+- **Gates**: 4 corpus targets added; 4 'check products (target
+  'imp — proof gates only, per DI2); driver 45 products green;
+  corpus FAIL-set unchanged.
+- Proof-idiom notes for I1: workers must `(unfold iwhile lhs)` once
+  before the stopped compute (the eval_loop precedent), and claims
+  must state loop bodies via `(inline …)` so goals carry the
+  literal statement list execution produces.
 
 ## 7. Non-goals, stated once
 

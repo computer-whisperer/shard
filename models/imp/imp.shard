@@ -1,0 +1,306 @@
+;;; models/imp/imp.shard — THE NEUTRAL IMPERATIVE MACHINE (docs/IMP.md,
+;;; rung I0): one target-neutral imperative model that keeps the
+;;; memory-allocation story and drops the ISA quirks. An ordinary
+;;; shard library in the ISA-arc discipline — types + eval + theorems,
+;;; zero kernel changes; it never ships (terminal targets remain the
+;;; ISA models), and it has NO engine gate (the DI2 resolution: its
+;;; semantics ARE these definitions; spec ⊑ imp is a kernel theorem).
+;;;
+;;; The machine, v1:
+;;;   - locals: named Int slots (indexed; args then zero-initialized
+;;;     extras — the wasm/x86 convention, quirk-free)
+;;;   - structured control: statement sequences, if, while — no
+;;;     branch indices, no labels, no stack discipline
+;;;   - byte memory: std/mem's Mem (the neutral memory both ISA
+;;;     models already consume), byte load/store, bounds-checked
+;;;     against the program's declared memsize (mask-on-read below,
+;;;     honesty above). Region alloc/death ops arrive at rung I2
+;;;     where the cancellation theorems need syntax to attach to.
+;;;   - scalars: unbounded Int (the theoretical-language spirit);
+;;;     ops are EXACT — width exists only as the explicit IWrap op,
+;;;     so premises appear exactly where wrap is used and nowhere
+;;;     else. Comparisons yield 1/0. Division/remainder trap on zero
+;;;     divisors (the honest corner; certs carry divisor premises).
+;;;   - calls: NOT in v1 statements — the I0 fragment classes
+;;;     (straight-line, loop; the mem class collapses into them here
+;;;     because loads/stores are native) never call. The call layer
+;;;     arrives with the calls-in-loops class.
+;;;
+;;; Fuel is the kernel Nat, one unit per SCC entry (depth/iteration
+;;; bound, not a step counter) — the wasm model's discipline
+;;; verbatim. iwhile is a NAMED SCC member so loop workers can state
+;;; equations against a folded (iwhile …) term (the eval_loop
+;;; precedent). iexp is OUTSIDE the fuel SCC: expressions are pure
+;;; and structural; None = trap (bad local, zero divisor, OOB load).
+
+(import "../../kernel/stdlib.shard")  ; List / Option / Bool / Pair / Nat
+(import "../../std/mem")  ; the opaque byte substrate (Mem / mem_get / mem_set)
+(use (:: std mem *))
+
+;; --- the language -------------------------------------------------------------
+
+;; scalar binary ops: exact on Int; comparisons yield 1/0; div/rem
+;; follow the euclidean kernel ops and trap on divisor 0
+(type IOp
+  (IAdd)
+  (ISub)
+  (IMul)
+  (IDiv)
+  (IRem)
+  (IAnd)
+  (IOr)
+  (IXor)
+  (IEq)
+  (ILt)
+  (ILe))
+
+;; expressions: pure reads of locals and memory
+(type IExp
+  (IConst Int)
+  (ILoc Int)
+  (IBin IOp IExp IExp)
+  (IWrap Int IExp)  ; wrap into [0, 2^W) — the ONLY width in the machine
+  (ILoad IExp))  ; byte read at address
+
+;; statements: the structured imperative core
+(type IStmt
+  (ISet Int IExp)  ; local[i] := e
+  (IStore IExp IExp)  ; mem[addr] := byte value
+  (IIf IExp (List IStmt) (List IStmt))  ; 0 = false branch
+  (IWhile IExp (List IStmt)))  ; loop while cond ≠ 0
+
+;; one function: parameter count, zero-initialized extra locals, body,
+;; result expression (evaluated in the final state)
+(record IFn (iparams Int) (iextra Int) (ibody (List IStmt)) (iresult IExp))
+
+;; one program: functions addressed by index + declared memory size in
+;; bytes (loads/stores trap outside it; 0 = no memory)
+(record IProg (ifns (List IFn)) (imemsize Int))
+
+;; --- fuel ----------------------------------------------------------------------
+
+;; ground fuel from an Int count (run/probe ergonomics)
+(fn ifnat_go ((n Int) (acc Nat)) Nat
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt n 1) acc (ifnat_go (- n 1) (S acc))))
+
+(fn ifnat ((n Int)) Nat (ifnat_go n Z))
+
+;; --- small total helpers (outside the fuel SCC) --------------------------------
+
+(fn ib2i ((b Bool)) Int (if b 1 0))
+
+(fn ipow2 ((w Int)) Int
+  (measure w (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt w 1) 1 (* 2 (ipow2 (- w 1)))))
+
+;; local get/set by index; None = out-of-range (negatives fall through)
+(fn ilget ((ls (List Int)) (i Int)) (Option Int)
+  (measure (struct ls))
+  (match ls
+    (Nil None)
+    ((Cons h t) (if (int_eq i 0) (Some h) (ilget t (- i 1))))))
+
+(fn ilset ((ls (List Int)) (i Int) (v Int)) (Option (List Int))
+  (measure (struct ls))
+  (match ls
+    (Nil None)
+    ((Cons h t)
+     (if (int_eq i 0) (Some (Cons v t))
+     (match (ilset t (- i 1) v)
+       (None None)
+       ((Some t2) (Some (Cons h t2))))))))
+
+(fn izeros ((n Int)) (List Int)
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt n 1) Nil (Cons 0 (izeros (- n 1)))))
+
+(fn iapp ((a (List Int)) (b (List Int))) (List Int)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (iapp t b)))))
+
+(fn ilen ((a (List Int))) Int
+  (measure (struct a))
+  (match a
+    (Nil 0)
+    ((Cons _ t) (+ 1 (ilen t)))))
+
+(fn ifn_at ((fs (List IFn)) (i Int)) (Option IFn)
+  (measure (struct fs))
+  (match fs
+    (Nil None)
+    ((Cons f t) (if (int_eq i 0) (Some f) (ifn_at t (- i 1))))))
+
+;; exact op semantics; None = zero divisor
+(fn iop_val ((o IOp) (a Int) (b Int)) (Option Int)
+  (match o
+    (IAdd (Some (+ a b)))
+    (ISub (Some (- a b)))
+    (IMul (Some (* a b)))
+    (IDiv (if (le 1 b) (Some (ediv a b)) None))
+    (IRem (if (le 1 b) (Some (mod a b)) None))
+    (IAnd (Some (band a b)))
+    (IOr (Some (bor a b)))
+    (IXor (Some (bxor a b)))
+    (IEq (Some (ib2i (int_eq a b))))
+    (ILt (Some (ib2i (lt a b))))
+    (ILe (Some (ib2i (le a b))))))
+
+;; --- expression evaluation (pure, structural, fuel-free) -----------------------
+
+;; None = trap: out-of-range local, zero divisor, out-of-bounds load
+(fn iexp ((e IExp) (lc (List Int)) (mem Mem) (msz Int)) (Option Int)
+  (measure (struct e))
+  (match e
+    ((IConst n) (Some n))
+    ((ILoc i) (ilget lc i))
+    ((IBin o a b)
+     (match (iexp a lc mem msz)
+       (None None)
+       ((Some va)
+        (match (iexp b lc mem msz)
+          (None None)
+          ((Some vb) (iop_val o va vb))))))
+    ((IWrap w a)
+     (match (iexp a lc mem msz)
+       (None None)
+       ((Some va) (Some (mod va (ipow2 w))))))
+    ((ILoad a)
+     (match (iexp a lc mem msz)
+       (None None)
+       ((Some ad)
+        (if (le 0 ad) (if (lt ad msz) (Some (mem_get mem ad)) None) None))))))
+
+;; --- statement evaluation (one fuel-countdown SCC) -----------------------------
+
+;; a statement's outcome: locals + memory forward, or a dynamic trap
+(type IOut (INorm (List Int) Mem) (ITrap))
+
+;; Every SCC member burns one fuel unit on entry; None = fuel exhausted
+;; and nothing else (traps are ITrap). Fuel bounds DEPTH plus loop
+;; iterations: istmts hands the same f2 to head and tail, and iwhile
+;; burns one unit per re-entry.
+
+(fn istmt ((fuel Nat) (msz Int) (s IStmt) (lc (List Int)) (mem Mem))
+  (Option IOut)
+  (measure (struct fuel))
+  (match fuel
+    (Z None)
+    ((S f2)
+     (match s
+       ((ISet i e)
+        (match (iexp e lc mem msz)
+          (None (Some ITrap))
+          ((Some v)
+           (match (ilset lc i v)
+             (None (Some ITrap))
+             ((Some lc2) (Some (INorm lc2 mem)))))))
+       ((IStore ae ve)
+        (match (iexp ae lc mem msz)
+          (None (Some ITrap))
+          ((Some ad)
+           (if (le 0 ad)
+             (if (lt ad msz)
+               (match (iexp ve lc mem msz)
+                 (None (Some ITrap))
+                 ((Some v) (Some (INorm lc (mem_set mem ad v)))))
+               (Some ITrap))
+             (Some ITrap)))))
+       ((IIf c tb eb)
+        (match (iexp c lc mem msz)
+          (None (Some ITrap))
+          ((Some cv)
+           (if (int_eq cv 0) (istmts f2 msz eb lc mem)
+           (istmts f2 msz tb lc mem)))))
+       ((IWhile c b) (iwhile f2 msz c b lc mem))))))
+
+;; the loop engine — a NAMED SCC member, not an inline arm, so loop
+;; workers can state and cite loop-level equations against a folded
+;; (iwhile …) term (the eval_loop precedent): induction recurses on
+;; exactly this unit, one fuel per iteration.
+(fn iwhile
+  ((fuel Nat) (msz Int) (c IExp) (b (List IStmt)) (lc (List Int)) (mem Mem))
+  (Option IOut)
+  (measure (struct fuel))
+  (match fuel
+    (Z None)
+    ((S f2)
+     (match (iexp c lc mem msz)
+       (None (Some ITrap))
+       ((Some cv)
+        (if (int_eq cv 0) (Some (INorm lc mem))
+        (match (istmts f2 msz b lc mem)
+          (None None)
+          ((Some out)
+           (match out
+             ((INorm lc2 mem2) (iwhile f2 msz c b lc2 mem2))
+             (ITrap (Some ITrap)))))))))))
+
+(fn istmts ((fuel Nat) (msz Int) (ss (List IStmt)) (lc (List Int)) (mem Mem))
+  (Option IOut)
+  (measure (struct fuel))
+  (match fuel
+    (Z None)
+    ((S f2)
+     (match ss
+       (Nil (Some (INorm lc mem)))
+       ((Cons s t)
+        (match (istmt f2 msz s lc mem)
+          (None None)
+          ((Some out)
+           (match out
+             ((INorm lc2 mem2) (istmts f2 msz t lc2 mem2))
+             (ITrap (Some ITrap))))))))))
+
+;; --- the big-step denotation (the composition boundary) ------------------------
+
+;; Run function k of program p on args (parameter order), starting from
+;; the ZERO memory. Some v = completed with result v; None = fuel out,
+;; trapped, wrong arity, or bad index — piece theorems assert Some, so
+;; conflating failure modes costs nothing at the weld boundary.
+(fn icall ((fuel Nat) (p IProg) (k Int) (args (List Int))) (Option Int)
+  (match (ifn_at (ifns_of p) k)
+    (None None)
+    ((Some f)
+     (if (int_eq (ilen args) (iparams_of f))
+       (match
+         (istmts
+           fuel
+           (imemsize_of p)
+           (ibody_of f)
+           (iapp args (izeros (iextra_of f)))
+           (mem_empty))
+         (None None)
+         ((Some out)
+          (match out
+            ((INorm lc2 mem2) (iexp (iresult_of f) lc2 mem2 (imemsize_of p)))
+            (ITrap None))))
+       None))))
+
+;; The memory-observable denotation: initial memory is a parameter and
+;; the final memory returns alongside the result — the boundary for
+;; in-place pieces (an algorithm whose OUTPUT is memory).
+(fn icall_mem ((fuel Nat) (p IProg) (k Int) (args (List Int)) (mem0 Mem))
+  (Option (Pair Int Mem))
+  (match (ifn_at (ifns_of p) k)
+    (None None)
+    ((Some f)
+     (if (int_eq (ilen args) (iparams_of f))
+       (match
+         (istmts
+           fuel
+           (imemsize_of p)
+           (ibody_of f)
+           (iapp args (izeros (iextra_of f)))
+           mem0)
+         (None None)
+         ((Some out)
+          (match out
+            ((INorm lc2 mem2)
+             (match (iexp (iresult_of f) lc2 mem2 (imemsize_of p))
+               (None None)
+               ((Some v) (Some (Pair v mem2)))))
+            (ITrap None))))
+       None))))
