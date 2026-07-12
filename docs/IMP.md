@@ -832,6 +832,40 @@ lemma first-try:
 - Gates: fast-engine 247/0; driver 52 green; corpus FAIL-set
   unchanged at 57; V8 173/0; silicon 82/0.
 
+**I2c-3 — the byte crossing (2026-07-12).** words16 over the memory's
+byte readback IS the word-window read (ish_words16_read): the message
+block enters the schedule story as bytes (std/mem's mem_read), and
+the copy loop's Horner words are exactly words16's word_be groups.
+
+- The byte count rides a transparent quadrupler (wn_q: four S per
+  word), so mem_read_s peels four bytes per induction step; the
+  premised one-step unfolding words16_s mirrors sched_ext_s.
+- sdrop4_cons: the spec's sdrop checks the list match BEFORE the
+  count guard, so (sdrop 4 spine·TAIL) sticks OPEN on a folded tail —
+  a two-ctor-case lemma (induct, both cases compute) folds it; the
+  same shape will recur for any stake/sdrop/snth-guard-behind-match
+  spec fn meeting a symbolic tail.
+- **REWRITER FINDING (flagged for review): ground packed Nat and Int
+  literals are the SAME ATOM to the rewriter.** A premise rewrite of
+  Int 16 (fuel position) also rewrote a packed Nat 16 inside a
+  Nat-sorted argument, producing the ill-sorted (wn_q (int_of_nat
+  …)) — which the checker then computed without complaint. At
+  minimum a proof-authoring hazard (ground-literal rewrites can cross
+  sorts); possibly a type-gate gap on rewrite results. The ground-16
+  corollary was cut pending a rep-story pin at the block tier;
+  the generic crossing lemma is unaffected (no ground literals).
+- Also confirmed: (S^ k Z) normalizes to the raw S-tower on some
+  paths and to the packed literal on ceval paths — ground-Nat
+  spelling alignment needs compute-both (the weld's gotcha, now seen
+  from both sides).
+- Canon catch: wn_q's Z-arm body spelled the ground Nat as the ctor
+  (C6 requires the literal 0) — the canon_std gate flagged it, and
+  shardfmt does NOT (format ≠ canon); fixed to (Z 0). The corpus
+  FAIL-set diff is the only gate that sees this class.
+- Gates: fast-engine 251/0; driver 52 green; corpus FAIL-set
+  restored to the 57 baseline after the C6 fix; V8 173/0;
+  silicon 82/0.
+
 ## 7. Non-goals, stated once
 
 - imp as a shipped target or public surface — it is an intermediate;

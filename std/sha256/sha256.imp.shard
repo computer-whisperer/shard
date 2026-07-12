@@ -5341,3 +5341,91 @@
           (rewrite (premise 0) lr lhs true ()))
          refl)))
     refl))
+
+;; ---- the byte crossing ----------------------------------------------------------------
+;; words16 over the memory's byte readback IS the word-window read:
+;; the message block enters the schedule story as bytes (mem_read),
+;; and the copy loop's Horner words are exactly words16's word_be
+;; groups. The byte count rides a transparent quadrupler.
+
+(fn wn_q ((k Nat)) Nat
+  (measure (struct k))
+  (match k
+    (Z 0)
+    ((S k2) (S (S (S (S (wn_q k2))))))))
+
+(claim wn_q_s
+  (goal ((k Nat)) () (= (wn_q (S k)) (S (S (S (S (wn_q k)))))))
+  (steps ((unfold wn_q lhs) (reduce lhs)) refl))
+
+;; words16's one-step unfolding at live fuel
+(claim words16_s
+  (goal ((bs (List Int)) (f Int)) ((= (le f 0) False))
+    (=
+      (words16 bs f)
+      (Cons
+        (word_be (snth 0 bs) (snth 1 bs) (snth 2 bs) (snth 3 bs))
+        (words16 (sdrop 4 bs) (- f 1)))))
+  (steps
+    ((unfold words16 lhs) (rewrite (premise 0) lr lhs true ()) (reduce lhs))
+    refl))
+
+;; sdrop 4 over a literal four-head spine lands on the tail (ctor
+;; cases keep the guard-behind-match spelling from sticking open)
+(claim sdrop4_cons
+  (goal ((a Int) (b Int) (c Int) (d Int) (t (List Int))) ()
+    (= (sdrop 4 (Cons a (Cons b (Cons c (Cons d t))))) t))
+  (induct t
+    ((case Nil (steps ((compute both)) refl))
+     (case Cons (h t2) (steps ((compute both)) refl)))))
+
+;; the crossing: word-grouping the byte readback is the word read
+(claim ish_words16_read
+  (goal ((m Mem) (p Int) (k Nat)) ()
+    (= (words16 (mem_read (wn_q k) m p) (int_of_nat k)) (wlist m p k)))
+  (induct k
+    ((case Z
+       (steps
+         ((rewrite (lemma int_of_nat_zero) lr lhs true ())
+          (compute both (stop mem_read)))
+         refl))
+     (case S
+       (k2)
+       (chain
+         (steps
+           ((rewrite (lemma wn_q_s) lr lhs true ())
+            (rewrite (lemma mem_read_s) lr lhs true ())
+            (rewrite (lemma mem_read_s) lr lhs true ())
+            (rewrite (lemma mem_read_s) lr lhs true ())
+            (rewrite (lemma mem_read_s) lr lhs true ())
+            (rewrite (lemma int_of_nat_succ) lr lhs true ())))
+         (have hk2 (= (+ (+ p 1) 1) (+ p 2)) (by arith (list)))
+         (have hk3 (= (+ (+ p 2) 1) (+ p 3)) (by arith (list)))
+         (have hk4 (= (+ (+ p 3) 1) (+ p 4)) (by arith (list)))
+         (steps
+           ((rewrite (premise hk2) lr lhs true ())
+            (rewrite (premise hk3) lr lhs true ())
+            (rewrite (premise hk4) lr lhs true ())))
+         (rewrite-with
+           (lemma words16_s)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma ish_le_ne)
+              lr
+              lhs
+              ()
+              ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+              refl)))
+         (steps
+           ((compute lhs (stop words16 sdrop wget mem_get mem_read wn_q))
+            (rewrite (lemma sdrop4_cons) lr lhs true ())))
+         (have hsub (= (- (+ 1 (int_of_nat k2)) 1) (int_of_nat k2))
+           (rewrite-with (lemma lg_sub) lr lhs () () refl))
+         (steps ((rewrite (premise hsub) lr lhs true ())))
+         (rewrite-with (hyp 0) lr lhs () ())
+         (steps
+           ((rewrite (lemma wget_be) rl lhs true ())
+            (rewrite (lemma wlist_s) lr rhs true ())))
+         refl)))))
