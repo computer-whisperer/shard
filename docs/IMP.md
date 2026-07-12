@@ -602,6 +602,47 @@ resolved at its opening:
   content as a PREMISE, discharged at I2d/I2e by target data
   segments).
 
+**I2c-2a — the write-direction kit (2026-07-12).** The schedule
+tier's law families, landed ahead of its loops (the round tier only
+read; the extension loop writes at the frontier and re-reads below
+it):
+
+- **wput** — the big-endian word store, spelled as EXACTLY the
+  mem_set chain the twin's store block will compute: last byte first
+  at p+3, the value shuttled up by nested >>8 steps. The nesting is
+  deliberate — it keeps the whole roundtrip inside the literal
+  vocabulary (shr8_div/mask_byte), so pow2 never appears on any
+  surface.
+- **ish_be_recomp** — the arithmetic core: the big-endian byte sum
+  of the three-level euclidean quotient chain rebuilds any word
+  below 2^32. The top byte is the third quotient ITSELF (mod_unique
+  at quotient 0) rather than a fourth mod level — that shape keeps
+  every farkas certificate rationally sound (a fourth level forces
+  integer tightening mid-sum, which the certificate calculus
+  correctly rejects). Facts materialize as lemma-fed haves citing
+  the kernel's euclidean characterization (ediv_mod_id/mod_lo/
+  mod_hi), closed by one paired certificate.
+- **isha_wput_get** — the roundtrip: reading back a just-stored
+  in-range word is the identity. get_set_byte/get_set_other resolve
+  the four reads through the four-store chain (six distinct-offset
+  lemmas feed the framing premises); shr8_div and mask_byte convert
+  the byte trees into euclidean vocabulary; ish_be_recomp closes.
+- **ish_wget_set_other / ish_wlist_set_above** — window framing: a
+  store at or above a window's end is invisible to the window's
+  words (per-word from get_set_other ×4; per-window by induction
+  with the stride-4 premise steps).
+- New finding for the arc: the checker's farkas rejection prints the
+  FULL SLOT TABLE (every fact in premise order with its normalized
+  linear form) — certificates are now derivable directly against
+  the table rather than reconstructed from the claim text.
+- Gates: fast-engine 113/0 on the sibling; driver 52 products green;
+  corpus FAIL-set unchanged at 57.
+- REMAINING I2c-2: (b) the words16 copy loop + its worker, (c) the
+  extension loop twin + sched_mem (the memory-level schedule
+  recursion) + its pass/worker, (d) the list bridge (sched_mem's
+  readback = sha_sched's srev_acc/sched_ext shape — the reversal
+  algebra, pure list work).
+
 ## 7. Non-goals, stated once
 
 - imp as a shipped target or public surface — it is an intermediate;

@@ -17,12 +17,16 @@
 ;;; induction.
 
 (import "../../kernel/stdlib.shard")
+(import "../../kernel/facts.shard")
+(use (:: kernel facts *))
 (import "../../std/nat.shard")
 (use (:: std nat *))
 (import "sha256.shard")
 (use (:: std sha256 sha256 *))
 (import "../../std/mem")
 (use (:: std mem *))
+(import "../../std/bits")
+(use (:: std bits *))
 (import "../../models/imp/imp.shard")
 (use (:: models imp imp *))
 (import "../../models/wasm/loopkit.shard")
@@ -943,4 +947,669 @@
               (stop iwhile lg_fuel istmts wget wlist sha_rounds h8_locals
                 rt_last lg_advk h8a ie_ch ie_rotr32))))
          (rewrite-with (lemma ish_rt_shift) lr lhs () ())
+         refl)))))
+
+;; ==== rung I2c-2a: the write-direction kit ==========================================
+;;
+;; The schedule tier WRITES words (the round tier only read), so two
+;; new law families enter: the big-endian store/readback roundtrip and
+;; window framing for wlist. The store is spelled at the literal
+;; vocabulary's grain — nested >>8 steps — so the whole roundtrip
+;; rides shr8_div/mask_byte plus the kernel's euclidean
+;; characterization, with no pow2 on any surface.
+
+;; the BE word store: EXACTLY the mem_set chain the twin's down-walk
+;; store block computes (last byte first at p+3, shuttling v >> 8 up)
+(fn wput ((m Mem) (p Int) (v Int)) Mem
+  (mem_set
+    (mem_set
+      (mem_set (mem_set m (+ p 3) (band v 255)) (+ p 2) (band (bshr v 8) 255))
+      (+ p 1)
+      (band (bshr (bshr v 8) 8) 255))
+    p
+    (band (bshr (bshr (bshr v 8) 8) 8) 255)))
+
+;; ediv by 256 keeps nonnegativity (the shr8_div chaining premise)
+(claim ish_ediv_lo
+  (goal ((n Int)) ((= (le 0 n) True)) (= (le 0 (ediv n 256)) True))
+  (have hid (= n (+ (* 256 (ediv n 256)) (mod n 256)))
+    (rewrite-with
+      (lemma ediv_mod_id)
+      lr
+      lhs
+      ((inst d 256))
+      ((steps ((compute lhs)) refl))
+      refl)
+    (have hhi (= (lt (mod n 256) 256) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl)
+      (by arith (list 256 1 -1 1)))))
+
+;; the three-level euclidean recomposition: the big-endian byte sum of
+;; the quotient chain rebuilds any word below 2^32 (the roundtrip's
+;; arithmetic core, over mod/ediv atoms — mask_byte/shr8_div convert
+;; the machine's band/bshr trees into this vocabulary). The top byte
+;; is the third quotient ITSELF (mod_unique at quotient 0 — no fourth
+;; level exists), which keeps every certificate rationally sound.
+(claim ish_be_recomp
+  (goal ((v Int)) ((= (le 0 v) True) (= (lt v 4294967296) True))
+    (=
+      (+
+        (* (mod (ediv (ediv (ediv v 256) 256) 256) 256) 16777216)
+        (+
+          (* (mod (ediv (ediv v 256) 256) 256) 65536)
+          (+ (* (mod (ediv v 256) 256) 256) (mod v 256))))
+      v))
+  (have h1 (= v (+ (* 256 (ediv v 256)) (mod v 256)))
+    (rewrite-with
+      (lemma ediv_mod_id)
+      lr
+      lhs
+      ((inst d 256))
+      ((steps ((compute lhs)) refl))
+      refl)
+    (have h1lo (= (le 0 (mod v 256)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl)
+      (have h1hi (= (lt (mod v 256) 256) True)
+        (rewrite-with
+          (lemma mod_hi)
+          lr
+          lhs
+          ()
+          ((steps ((compute lhs)) refl))
+          refl)
+        (have h2
+          (=
+            (ediv v 256)
+            (+ (* 256 (ediv (ediv v 256) 256)) (mod (ediv v 256) 256)))
+          (rewrite-with
+            (lemma ediv_mod_id)
+            lr
+            lhs
+            ((inst d 256))
+            ((steps ((compute lhs)) refl))
+            refl)
+          (have h2lo (= (le 0 (mod (ediv v 256) 256)) True)
+            (rewrite-with
+              (lemma mod_lo)
+              lr
+              lhs
+              ()
+              ((steps ((compute lhs)) refl))
+              refl)
+            (have h2hi (= (lt (mod (ediv v 256) 256) 256) True)
+              (rewrite-with
+                (lemma mod_hi)
+                lr
+                lhs
+                ()
+                ((steps ((compute lhs)) refl))
+                refl)
+              (have h3
+                (=
+                  (ediv (ediv v 256) 256)
+                  (+
+                    (* 256 (ediv (ediv (ediv v 256) 256) 256))
+                    (mod (ediv (ediv v 256) 256) 256)))
+                (rewrite-with
+                  (lemma ediv_mod_id)
+                  lr
+                  lhs
+                  ((inst d 256))
+                  ((steps ((compute lhs)) refl))
+                  refl)
+                (have h3lo (= (le 0 (mod (ediv (ediv v 256) 256) 256)) True)
+                  (rewrite-with
+                    (lemma mod_lo)
+                    lr
+                    lhs
+                    ()
+                    ((steps ((compute lhs)) refl))
+                    refl)
+                  (have h3hi (= (lt (mod (ediv (ediv v 256) 256) 256) 256) True)
+                    (rewrite-with
+                      (lemma mod_hi)
+                      lr
+                      lhs
+                      ()
+                      ((steps ((compute lhs)) refl))
+                      refl)
+                    (have he1 (= (le 0 (ediv v 256)) True)
+                      (rewrite-with
+                        (lemma ish_ediv_lo)
+                        lr
+                        lhs
+                        ()
+                        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                        refl)
+                      (have he2 (= (le 0 (ediv (ediv v 256) 256)) True)
+                        (rewrite-with
+                          (lemma ish_ediv_lo)
+                          lr
+                          lhs
+                          ()
+                          ((steps ((rewrite (premise he1) lr lhs true ())) refl))
+                          refl)
+                        (have he3
+                          (= (le 0 (ediv (ediv (ediv v 256) 256) 256)) True)
+                          (rewrite-with
+                            (lemma ish_ediv_lo)
+                            lr
+                            lhs
+                            ()
+                            ((steps
+                               ((rewrite (premise he2) lr lhs true ()))
+                               refl))
+                            refl)
+                          (have he3hi
+                            (= (lt (ediv (ediv (ediv v 256) 256) 256) 256) True)
+                            (by
+                              arith
+                              (list 16777216 0 1 1 1 0 256 256 0 65536 65536 0 0
+                                0 0))
+                            (have hm3
+                              (=
+                                (mod (ediv (ediv (ediv v 256) 256) 256) 256)
+                                (ediv (ediv (ediv v 256) 256) 256))
+                              (rewrite-with
+                                (lemma mod_unique)
+                                lr
+                                lhs
+                                ((inst q 0)
+                                 (inst r (ediv (ediv (ediv v 256) 256) 256)))
+                                ((steps ((compute both)) (by arith (list)))
+                                 (steps
+                                   ((rewrite (premise he3) lr lhs true ()))
+                                   refl)
+                                 (steps
+                                   ((rewrite (premise he3hi) lr lhs true ()))
+                                   refl))
+                                refl)
+                              (chain
+                                (steps ((rewrite (premise hm3) lr lhs true ())))
+                                (by
+                                  arith
+                                  (list
+                                    (list 1 0 0 1 0 0 256 0 0 65536 0 0 0 0 0 0
+                                      0)
+                                    (list 1 0 0 -1 0 0 -256 0 0 -65536 0 0 0 0 0
+                                      0 0)))))))))))))))))))
+
+;; ---- inequality helpers for address resolution -------------------------------------
+
+;; distinct offsets from one base are distinct addresses (the
+;; get_set_other premises, one per offset pair in the store chain)
+(claim ish_ne10
+  (goal ((p Int)) () (= (int_eq (+ p 1) p) False))
+  (by arith (list -1)))
+
+(claim ish_ne20
+  (goal ((p Int)) () (= (int_eq (+ p 2) p) False))
+  (by arith (list -1)))
+
+(claim ish_ne21
+  (goal ((p Int)) () (= (int_eq (+ p 2) (+ p 1)) False))
+  (by arith (list -1)))
+
+(claim ish_ne30
+  (goal ((p Int)) () (= (int_eq (+ p 3) p) False))
+  (by arith (list -1)))
+
+(claim ish_ne31
+  (goal ((p Int)) () (= (int_eq (+ p 3) (+ p 1)) False))
+  (by arith (list -1)))
+
+(claim ish_ne32
+  (goal ((p Int)) () (= (int_eq (+ p 3) (+ p 2)) False))
+  (by arith (list -1)))
+
+;; a strictly-lower address is a different address
+(claim ish_ne_lt
+  (goal ((a Int) (b Int)) ((= (lt a b) True)) (= (int_eq a b) False))
+  (by arith (list 1 1)))
+
+;; ---- byte-shape bounds --------------------------------------------------------------
+
+;; a right shift by 8 keeps nonnegativity
+(claim ish_shr8_lo
+  (goal ((a Int)) ((= (le 0 a) True)) (= (le 0 (bshr a 8)) True))
+  (chain
+    (rewrite-with
+      (lemma shr8_div)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma ish_ediv_lo)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+      refl)))
+
+;; a band against 255 is a byte (the get_set_byte premises)
+(claim ish_byte_lo
+  (goal ((a Int)) ((= (le 0 a) True)) (= (le 0 (band a 255)) True))
+  (rewrite-with
+    (lemma band_lo)
+    lr
+    lhs
+    ()
+    ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+     (steps ((compute lhs)) refl))
+    refl))
+
+(claim ish_byte_hi
+  (goal ((a Int)) ((= (le 0 a) True)) (= (lt (band a 255) 256) True))
+  (have hle (= (le (band a 255) 255) True)
+    (rewrite-with
+      (lemma band_le_r)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl))
+      refl)
+    (by arith (list 1 0 1))))
+
+;; ---- the big-endian roundtrip -------------------------------------------------------
+;; Reading back a just-stored in-range word is the identity — the
+;; write-direction half of the window story. get_set_byte/get_set_other
+;; resolve the four reads through the four-store chain; shr8_div and
+;; mask_byte convert the machine's byte trees into the euclidean
+;; vocabulary; ish_be_recomp closes.
+
+(claim isha_wput_get
+  (goal ((m Mem) (p Int) (v Int)) ((= (le 0 v) True) (= (lt v 4294967296) True))
+    (= (wget (wput m p v) p) v))
+  (have hs1 (= (le 0 (bshr v 8)) True)
+    (rewrite-with
+      (lemma ish_shr8_lo)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+      refl)
+    (have hs2 (= (le 0 (bshr (bshr v 8) 8)) True)
+      (rewrite-with
+        (lemma ish_shr8_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise hs1) lr lhs true ())) refl))
+        refl)
+      (have hs3 (= (le 0 (bshr (bshr (bshr v 8) 8) 8)) True)
+        (rewrite-with
+          (lemma ish_shr8_lo)
+          lr
+          lhs
+          ()
+          ((steps ((rewrite (premise hs2) lr lhs true ())) refl))
+          refl)
+        (have he1 (= (le 0 (ediv v 256)) True)
+          (rewrite-with
+            (lemma ish_ediv_lo)
+            lr
+            lhs
+            ()
+            ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+            refl)
+          (have he2 (= (le 0 (ediv (ediv v 256) 256)) True)
+            (rewrite-with
+              (lemma ish_ediv_lo)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise he1) lr lhs true ())) refl))
+              refl)
+            (have he3 (= (le 0 (ediv (ediv (ediv v 256) 256) 256)) True)
+              (rewrite-with
+                (lemma ish_ediv_lo)
+                lr
+                lhs
+                ()
+                ((steps ((rewrite (premise he2) lr lhs true ())) refl))
+                refl)
+              (chain
+                (steps ((compute lhs)))
+                (rewrite-with
+                  (lemma get_set_byte)
+                  lr
+                  lhs
+                  ()
+                  ((rewrite-with
+                     (lemma ish_byte_lo)
+                     lr
+                     lhs
+                     ()
+                     ((steps ((rewrite (premise hs3) lr lhs true ())) refl))
+                     refl)
+                   (rewrite-with
+                     (lemma ish_byte_hi)
+                     lr
+                     lhs
+                     ()
+                     ((steps ((rewrite (premise hs3) lr lhs true ())) refl))
+                     refl)))
+                (rewrite-with
+                  (lemma get_set_other)
+                  lr
+                  lhs
+                  ()
+                  ((steps ((rewrite (lemma ish_ne10) lr lhs true ())) refl)))
+                (rewrite-with
+                  (lemma get_set_byte)
+                  lr
+                  lhs
+                  ()
+                  ((rewrite-with
+                     (lemma ish_byte_lo)
+                     lr
+                     lhs
+                     ()
+                     ((steps ((rewrite (premise hs2) lr lhs true ())) refl))
+                     refl)
+                   (rewrite-with
+                     (lemma ish_byte_hi)
+                     lr
+                     lhs
+                     ()
+                     ((steps ((rewrite (premise hs2) lr lhs true ())) refl))
+                     refl)))
+                (rewrite-with
+                  (lemma get_set_other)
+                  lr
+                  lhs
+                  ()
+                  ((steps ((rewrite (lemma ish_ne20) lr lhs true ())) refl)))
+                (rewrite-with
+                  (lemma get_set_other)
+                  lr
+                  lhs
+                  ()
+                  ((steps ((rewrite (lemma ish_ne21) lr lhs true ())) refl)))
+                (rewrite-with
+                  (lemma get_set_byte)
+                  lr
+                  lhs
+                  ()
+                  ((rewrite-with
+                     (lemma ish_byte_lo)
+                     lr
+                     lhs
+                     ()
+                     ((steps ((rewrite (premise hs1) lr lhs true ())) refl))
+                     refl)
+                   (rewrite-with
+                     (lemma ish_byte_hi)
+                     lr
+                     lhs
+                     ()
+                     ((steps ((rewrite (premise hs1) lr lhs true ())) refl))
+                     refl)))
+                (rewrite-with
+                  (lemma get_set_other)
+                  lr
+                  lhs
+                  ()
+                  ((steps ((rewrite (lemma ish_ne30) lr lhs true ())) refl)))
+                (rewrite-with
+                  (lemma get_set_other)
+                  lr
+                  lhs
+                  ()
+                  ((steps ((rewrite (lemma ish_ne31) lr lhs true ())) refl)))
+                (rewrite-with
+                  (lemma get_set_other)
+                  lr
+                  lhs
+                  ()
+                  ((steps ((rewrite (lemma ish_ne32) lr lhs true ())) refl)))
+                (rewrite-with
+                  (lemma get_set_byte)
+                  lr
+                  lhs
+                  ()
+                  ((rewrite-with
+                     (lemma ish_byte_lo)
+                     lr
+                     lhs
+                     ()
+                     ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                     refl)
+                   (rewrite-with
+                     (lemma ish_byte_hi)
+                     lr
+                     lhs
+                     ()
+                     ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                     refl)))
+                (rewrite-with
+                  (lemma shr8_div)
+                  lr
+                  lhs
+                  ()
+                  ((steps ((rewrite (premise hs2) lr lhs true ())) refl)))
+                (rewrite-with
+                  (lemma shr8_div)
+                  lr
+                  lhs
+                  ()
+                  ((steps ((rewrite (premise hs1) lr lhs true ())) refl)))
+                (rewrite-with
+                  (lemma shr8_div)
+                  lr
+                  lhs
+                  ()
+                  ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+                (rewrite-with
+                  (lemma shr8_div)
+                  lr
+                  lhs
+                  ()
+                  ((steps ((rewrite (premise hs1) lr lhs true ())) refl)))
+                (rewrite-with
+                  (lemma shr8_div)
+                  lr
+                  lhs
+                  ()
+                  ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+                (rewrite-with
+                  (lemma shr8_div)
+                  lr
+                  lhs
+                  ()
+                  ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+                (rewrite-with
+                  (lemma mask_byte)
+                  lr
+                  lhs
+                  ()
+                  ((steps ((rewrite (premise he3) lr lhs true ())) refl)))
+                (rewrite-with
+                  (lemma mask_byte)
+                  lr
+                  lhs
+                  ()
+                  ((steps ((rewrite (premise he2) lr lhs true ())) refl)))
+                (rewrite-with
+                  (lemma mask_byte)
+                  lr
+                  lhs
+                  ()
+                  ((steps ((rewrite (premise he1) lr lhs true ())) refl)))
+                (rewrite-with
+                  (lemma mask_byte)
+                  lr
+                  lhs
+                  ()
+                  ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+                (rewrite-with
+                  (lemma ish_be_recomp)
+                  lr
+                  lhs
+                  ()
+                  ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                   (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+                refl))))))))
+
+;; ---- window framing -----------------------------------------------------------------
+;; A store at or above a window's end is invisible to the window's
+;; words — the wlist face of get_set_other, the second half of the
+;; write-direction story (the extension loop writes at the frontier
+;; and re-reads only below it).
+
+(claim ish_plt0
+  (goal ((p Int) (b Int)) ((= (lt (+ p 3) b) True)) (= (lt p b) True))
+  (by arith (list 1 1)))
+
+(claim ish_plt1
+  (goal ((p Int) (b Int)) ((= (lt (+ p 3) b) True)) (= (lt (+ p 1) b) True))
+  (by arith (list 1 1)))
+
+(claim ish_plt2
+  (goal ((p Int) (b Int)) ((= (lt (+ p 3) b) True)) (= (lt (+ p 2) b) True))
+  (by arith (list 1 1)))
+
+;; a live window premise puts the head word's last byte below b
+(claim ish_hd3
+  (goal ((p Int) (b Int) (c2 Nat))
+    ((= (le (+ p (* 4 (int_of_nat (S c2)))) b) True)
+     (= (int_of_nat (S c2)) (+ 1 (int_of_nat c2)))
+     (= (le 0 (int_of_nat c2)) True))
+    (= (lt (+ p 3) b) True))
+  (by arith (list 1 1 4 4)))
+
+;; the stride-4 window premise steps to the IH (arbitrary bound)
+(claim ish_w4shift_b
+  (goal ((p Int) (b Int) (c2 Nat))
+    ((= (le (+ p (* 4 (int_of_nat (S c2)))) b) True)
+     (= (int_of_nat (S c2)) (+ 1 (int_of_nat c2))))
+    (= (le (+ (+ p 4) (* 4 (int_of_nat c2))) b) True))
+  (by arith (list 1 1 4)))
+
+;; one word read below a store is untouched
+(claim ish_wget_set_other
+  (goal ((m Mem) (p Int) (b Int) (v Int)) ((= (lt (+ p 3) b) True))
+    (= (wget (mem_set m b v) p) (wget m p)))
+  (chain
+    (steps ((compute both)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((rewrite-with
+            (lemma ish_plt0)
+            lr
+            lhs
+            ()
+            ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+            refl))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((rewrite-with
+            (lemma ish_plt1)
+            lr
+            lhs
+            ()
+            ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+            refl))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((rewrite-with
+            (lemma ish_plt2)
+            lr
+            lhs
+            ()
+            ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+            refl))
+         refl)))
+    (rewrite-with
+      (lemma get_set_other)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ne_lt)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+         refl)))
+    refl))
+
+;; a whole window below a store is untouched
+(claim ish_wlist_set_above
+  (goal ((m Mem) (p Int) (b Int) (v Int) (k Nat))
+    ((= (le (+ p (* 4 (int_of_nat k))) b) True))
+    (= (wlist (mem_set m b v) p k) (wlist m p k)))
+  (induct k
+    ((case Z (steps ((compute both)) refl))
+     (case S
+       (k2)
+       (chain
+         (steps ((rewrite (lemma wlist_s) lr both true ())))
+         (rewrite-with
+           (lemma ish_wget_set_other)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma ish_hd3)
+              lr
+              lhs
+              ((inst c2 k2))
+              ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+               (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+               (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+              refl)))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma ish_w4shift_b)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+               (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl))
+              refl)))
          refl)))))
