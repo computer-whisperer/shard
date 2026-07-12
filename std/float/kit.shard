@@ -1930,3 +1930,3085 @@
                    (simp lhs)
                    (rewrite (premise 3) lr lhs true ()))
                   refl))))))))))
+
+;; --- the row-max and sign helpers (rung R1 slice 4d(ii)) ----------------------------
+;; frnd_pos's target row is imax(elog, emin); the wf-closure walks fwf_fin's
+;; guard chain, so it needs the row's defining equations and both floor
+;; facts, plus the rounded mantissa's sign.
+
+;; x <= y  |-  imax x y = y (the right pick).
+(claim imax_pick_r
+  (goal ((x Int) (y Int)) ((= (le x y) True)) (= (imax x y) y))
+  (steps
+    ((unfold imax lhs) (rewrite (premise 0) lr lhs true ()) (simp lhs))
+    refl))
+
+;; y < x  |-  imax x y = x (the left pick).
+(claim imax_pick_l
+  (goal ((x Int) (y Int)) ((= (le x y) False)) (= (imax x y) x))
+  (steps
+    ((unfold imax lhs) (rewrite (premise 0) lr lhs true ()) (simp lhs))
+    refl))
+
+;; the max dominates its left argument.
+(claim imax_ge_l
+  (goal ((x Int) (y Int)) () (= (le x (imax x y)) True))
+  (case-on (le x y) Bool
+    ((case True
+       (chain
+         (have hc (= (le x y) True)
+           (steps ((rewrite (hyp True) lr lhs true ())) refl))
+         (have hp (= (imax x y) y)
+           (rewrite-with
+             (lemma imax_pick_r)
+             lr
+             lhs
+             ((inst x x) (inst y y))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+         (steps () (by arith (list 1 1 1)))))
+     (case False
+       (chain
+         (have hc (= (le x y) False)
+           (steps ((rewrite (hyp False) lr lhs true ())) refl))
+         (have hp (= (imax x y) x)
+           (rewrite-with
+             (lemma imax_pick_l)
+             lr
+             lhs
+             ((inst x x) (inst y y))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+         (steps () (by arith (list 1 0 1))))))))
+
+;; the max dominates its right argument.
+(claim imax_ge_r
+  (goal ((x Int) (y Int)) () (= (le y (imax x y)) True))
+  (case-on (le x y) Bool
+    ((case True
+       (chain
+         (have hc (= (le x y) True)
+           (steps ((rewrite (hyp True) lr lhs true ())) refl))
+         (have hp (= (imax x y) y)
+           (rewrite-with
+             (lemma imax_pick_r)
+             lr
+             lhs
+             ((inst x x) (inst y y))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+         (steps () (by arith (list 1 0 1)))))
+     (case False
+       (chain
+         (have hc (= (le x y) False)
+           (steps ((rewrite (hyp False) lr lhs true ())) refl))
+         (have hp (= (imax x y) x)
+           (rewrite-with
+             (lemma imax_pick_l)
+             lr
+             lhs
+             ((inst x x) (inst y y))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+             refl))
+         (steps () (by arith (list 1 1 1))))))))
+
+;; monotonicity with the multiplier on the LEFT (the comm respell of
+;; mul_le_mono_r, packaged once — the row scalings all multiply by the
+;; format's power on the left).
+(claim mul_le_mono_l
+  (goal ((x Int) (y Int) (z Int)) ((= (le x y) True) (= (le 0 z) True))
+    (= (le (* z x) (* z y)) True))
+  (chain
+    (have hm (= (le (* x z) (* y z)) True)
+      (rewrite-with
+        (lemma mul_le_mono_r)
+        lr
+        lhs
+        ((inst x x) (inst y y) (inst z z))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have hcx (= (* x z) (* z x))
+      (steps ((rewrite (lemma mul_comm) lr lhs true ())) refl))
+    (have hcy (= (* y z) (* z y))
+      (steps ((rewrite (lemma mul_comm) lr lhs true ())) refl))
+    (steps () (by arith (list 1 0 0 1 1 -1)))))
+
+;; the rounded quotient is nonnegative on nonnegative input.
+(claim rne_div_nonneg
+  (goal ((x Int) (y Int)) ((= (le 0 x) True) (= (lt 0 y) True))
+    (= (le 0 (rne_div x y)) True))
+  (chain
+    (have he (= (le 0 (ediv x y)) True)
+      (rewrite-with
+        (lemma ediv_nonneg)
+        lr
+        lhs
+        ((inst n x) (inst d y))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have hlo (= (le (ediv x y) (rne_div x y)) True)
+      (rewrite-with
+        (lemma rne_div_lo)
+        lr
+        lhs
+        ((inst x x) (inst y y))
+        ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (steps () (by arith (list 1 0 0 1 1)))))
+
+;; --- the rounded mantissa's bounds at a target row (slice 4d(ii)) -------------------
+;; frnd_pos rounds a/d onto row e's mantissa grid (scale by 2^(w-e) at or
+;; below the width, divide by 2^(e-w) above it) and the result always lands
+;; in [0, 2^(w+1)]: the cap because a/d < 2^(elog+1) <= 2^(e+1) (elog_hi),
+;; the floor m >= 2^w — used contrapositively for subnormal forcing —
+;; because a/d >= 2^elog when the row sits at or below elog (elog_lo).
+;; Four spellings: cap/floor at each side of the width.
+
+;; the cap, row at or below the width: elog <= e <= w, 0 <= w  |-
+;;   rne(a * 2^(w-e) / d) <= 2^(w+1).
+(claim mrow_cap_lo
+  (goal ((a Int) (d Int) (w Int) (e Int))
+    ((= (le 1 a) True)
+     (= (le 1 d) True)
+     (= (le (elog a d) e) True)
+     (= (le e w) True)
+     (= (le 0 w) True))
+    (= (le (rne_div (* a (fpow2 (- w e))) d) (fpow2 (+ w 1))) True))
+  (chain
+    (have hehi (= (ge_scaled a d (+ (elog a d) 1)) False)
+      (rewrite-with
+        (lemma elog_hi)
+        lr
+        lhs
+        ((inst a a) (inst d d))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have hzp (= (lt 0 (fpow2 (- w e))) True)
+      (rewrite-with (lemma fpow2_pos) lr lhs ((inst k (- w e))) () refl))
+    (have hd0 (= (lt 0 d) True) (steps () (by arith (list 1 0 1 0 0 0 0 0))))
+    (have hpw1 (= (lt 0 (fpow2 (+ w 1))) True)
+      (rewrite-with (lemma fpow2_pos) lr lhs ((inst k (+ w 1))) () refl))
+    (case-on (le 0 (+ (elog a d) 1)) Bool
+      ((case True
+         (chain
+           (have hk (= (le 0 (+ (elog a d) 1)) True)
+             (steps ((rewrite (hyp True) lr lhs true ())) refl))
+           (have hraw (= (le (* d (fpow2 (+ (elog a d) 1))) a) False)
+             (steps
+               ((rewrite (premise hehi) rl rhs true ())
+                (unfold ge_scaled rhs)
+                (rewrite (premise hk) lr rhs true ())
+                (simp rhs))
+               refl))
+           (have hq (= (le (+ a 1) (* d (fpow2 (+ (elog a d) 1)))) True)
+             (steps () (by arith (list 1 0 0 0 0 0 0 0 0 0 0 1))))
+           (have hz (= (le 0 (fpow2 (- w e))) True)
+             (steps () (by arith (list 1 0 0 0 0 0 0 1 0 0 0 0 0))))
+           (have hm1
+             (=
+               (le
+                 (* (+ a 1) (fpow2 (- w e)))
+                 (* (* d (fpow2 (+ (elog a d) 1))) (fpow2 (- w e))))
+               True)
+             (rewrite-with
+               (lemma mul_le_mono_r)
+               lr
+               lhs
+               ((inst x (+ a 1))
+                (inst y (* d (fpow2 (+ (elog a d) 1))))
+                (inst z (fpow2 (- w e))))
+               ((steps ((rewrite (premise hq) lr lhs true ())) refl)
+                (steps ((rewrite (premise hz) lr lhs true ())) refl))
+               refl))
+           (have hc1 (= (* (+ a 1) (fpow2 (- w e))) (* (fpow2 (- w e)) (+ a 1)))
+             (steps ((rewrite (lemma mul_comm) lr lhs true ())) refl))
+           (have hd1
+             (=
+               (* (fpow2 (- w e)) (+ a 1))
+               (+ (* (fpow2 (- w e)) a) (* (fpow2 (- w e)) 1)))
+             (steps ((rewrite (lemma mul_dist) lr lhs true ())) refl))
+           (have hc2 (= (* (fpow2 (- w e)) a) (* a (fpow2 (- w e))))
+             (steps ((rewrite (lemma mul_comm) lr lhs true ())) refl))
+           (have hsp
+             (=
+               (fpow2 (+ (+ (elog a d) 1) (- w e)))
+               (* (fpow2 (+ (elog a d) 1)) (fpow2 (- w e))))
+             (rewrite-with
+               (lemma fpow2_split)
+               lr
+               lhs
+               ((inst a (+ (elog a d) 1)) (inst b (- w e)))
+               ((steps ((rewrite (premise hk) lr lhs true ())) refl)
+                (by arith (list 1 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+               refl))
+           (have hr2
+             (=
+               (* (* d (fpow2 (+ (elog a d) 1))) (fpow2 (- w e)))
+               (* d (fpow2 (+ (+ (elog a d) 1) (- w e)))))
+             (steps
+               ((rewrite (lemma mul_assoc) lr lhs true ())
+                (rewrite (premise hsp) rl lhs true ()))
+               refl))
+           (have hmono
+             (= (le (fpow2 (+ (+ (elog a d) 1) (- w e))) (fpow2 (+ w 1))) True)
+             (rewrite-with
+               (lemma fpow2_mono)
+               lr
+               lhs
+               ((inst a (+ (+ (elog a d) 1) (- w e))) (inst b (+ w 1)))
+               ((by arith (list 1 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+               refl))
+           (have hmd
+             (=
+               (le
+                 (* d (fpow2 (+ (+ (elog a d) 1) (- w e))))
+                 (* d (fpow2 (+ w 1))))
+               True)
+             (rewrite-with
+               (lemma mul_le_mono_l)
+               lr
+               lhs
+               ((inst x (fpow2 (+ (+ (elog a d) 1) (- w e))))
+                (inst y (fpow2 (+ w 1)))
+                (inst z d))
+               ((steps ((rewrite (premise hmono) lr lhs true ())) refl)
+                (by arith (list 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+               refl))
+           (have hprod (= (lt (* a (fpow2 (- w e))) (* d (fpow2 (+ w 1)))) True)
+             (steps
+               ()
+               (by arith (list 1 0 0 0 0 0 0 1 0 0 0 0 0 0 1 1 1 1 0 -1 0 1))))
+           (rewrite-with
+             (lemma rne_div_lt_cap)
+             lr
+             lhs
+             ((inst x (* a (fpow2 (- w e))))
+              (inst y d)
+              (inst b (fpow2 (+ w 1))))
+             ((steps ((rewrite (premise hd0) lr lhs true ())) refl)
+              (steps ((rewrite (premise hprod) lr lhs true ())) refl))
+             refl)))
+       (case False
+         (chain
+           (have hk (= (le 0 (+ (elog a d) 1)) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (have hraw (= (le d (* a (fpow2 (- 0 (+ (elog a d) 1))))) False)
+             (steps
+               ((rewrite (premise hehi) rl rhs true ())
+                (unfold ge_scaled rhs)
+                (rewrite (premise hk) lr rhs true ())
+                (simp rhs))
+               refl))
+           (have hsp
+             (=
+               (fpow2 (+ (- 0 (+ (elog a d) 1)) (+ w 1)))
+               (* (fpow2 (- 0 (+ (elog a d) 1))) (fpow2 (+ w 1))))
+             (rewrite-with
+               (lemma fpow2_split)
+               lr
+               lhs
+               ((inst a (- 0 (+ (elog a d) 1))) (inst b (+ w 1)))
+               ((by arith (list 1 0 0 0 0 0 0 0 0 0 1 0))
+                (by arith (list 1 0 0 0 0 1 0 0 0 0 0 0)))
+               refl))
+           (have h1
+             (=
+               (le
+                 (* (* a (fpow2 (- 0 (+ (elog a d) 1)))) (fpow2 (+ w 1)))
+                 (* (- d 1) (fpow2 (+ w 1))))
+               True)
+             (rewrite-with
+               (lemma mul_le_mono_r)
+               lr
+               lhs
+               ((inst x (* a (fpow2 (- 0 (+ (elog a d) 1)))))
+                (inst y (- d 1))
+                (inst z (fpow2 (+ w 1))))
+               ((by arith (list 1 0 0 0 0 0 0 0 0 0 0 1 0))
+                (by arith (list 1 0 0 0 0 0 0 0 0 1 0 0 0)))
+               refl))
+           (have hr2l
+             (=
+               (* (* a (fpow2 (- 0 (+ (elog a d) 1)))) (fpow2 (+ w 1)))
+               (* a (fpow2 (+ (- 0 (+ (elog a d) 1)) (+ w 1)))))
+             (steps
+               ((rewrite (lemma mul_assoc) lr lhs true ())
+                (rewrite (premise hsp) rl lhs true ()))
+               refl))
+           (have hbig
+             (=
+               (le (fpow2 (- w e)) (fpow2 (+ (- 0 (+ (elog a d) 1)) (+ w 1))))
+               True)
+             (rewrite-with
+               (lemma fpow2_mono)
+               lr
+               lhs
+               ((inst a (- w e)) (inst b (+ (- 0 (+ (elog a d) 1)) (+ w 1))))
+               ((by arith (list 1 0 0 1 0 0 0 0 0 0 0 0 0 0 0)))
+               refl))
+           (have hma
+             (=
+               (le
+                 (* a (fpow2 (- w e)))
+                 (* a (fpow2 (+ (- 0 (+ (elog a d) 1)) (+ w 1)))))
+               True)
+             (rewrite-with
+               (lemma mul_le_mono_l)
+               lr
+               lhs
+               ((inst x (fpow2 (- w e)))
+                (inst y (fpow2 (+ (- 0 (+ (elog a d) 1)) (+ w 1))))
+                (inst z a))
+               ((steps ((rewrite (premise hbig) lr lhs true ())) refl)
+                (by arith (list 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+               refl))
+           (have hc3 (= (* (- d 1) (fpow2 (+ w 1))) (* (fpow2 (+ w 1)) (- d 1)))
+             (steps ((rewrite (lemma mul_comm) lr lhs true ())) refl))
+           (have hd3
+             (=
+               (* (fpow2 (+ w 1)) (- d 1))
+               (- (* (fpow2 (+ w 1)) d) (* (fpow2 (+ w 1)) 1)))
+             (steps ((rewrite (lemma mul_sub) lr lhs true ())) refl))
+           (have hc4 (= (* (fpow2 (+ w 1)) d) (* d (fpow2 (+ w 1))))
+             (steps ((rewrite (lemma mul_comm) lr lhs true ())) refl))
+           (have hprod (= (lt (* a (fpow2 (- w e))) (* d (fpow2 (+ w 1)))) True)
+             (steps
+               ()
+               (by arith (list 1 0 0 0 0 0 0 0 0 1 0 0 0 1 1 0 1 -1 -1 -1))))
+           (rewrite-with
+             (lemma rne_div_lt_cap)
+             lr
+             lhs
+             ((inst x (* a (fpow2 (- w e))))
+              (inst y d)
+              (inst b (fpow2 (+ w 1))))
+             ((steps ((rewrite (premise hd0) lr lhs true ())) refl)
+              (steps ((rewrite (premise hprod) lr lhs true ())) refl))
+             refl)))))))
+
+;; the cap, row above the width: elog <= e, w < e, 0 <= w  |-
+;;   rne(a / (d * 2^(e-w))) <= 2^(w+1).
+(claim mrow_cap_hi
+  (goal ((a Int) (d Int) (w Int) (e Int))
+    ((= (le 1 a) True)
+     (= (le 1 d) True)
+     (= (le (elog a d) e) True)
+     (= (lt w e) True)
+     (= (le 0 w) True))
+    (= (le (rne_div a (* d (fpow2 (- e w)))) (fpow2 (+ w 1))) True))
+  (chain
+    (have hehi (= (ge_scaled a d (+ (elog a d) 1)) False)
+      (rewrite-with
+        (lemma elog_hi)
+        lr
+        lhs
+        ((inst a a) (inst d d))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have hpe (= (lt 0 (fpow2 (- e w))) True)
+      (rewrite-with (lemma fpow2_pos) lr lhs ((inst k (- e w))) () refl))
+    (have hpw1 (= (lt 0 (fpow2 (+ w 1))) True)
+      (rewrite-with (lemma fpow2_pos) lr lhs ((inst k (+ w 1))) () refl))
+    (have hdd (= (le d (* d (fpow2 (- e w)))) True)
+      (rewrite-with
+        (lemma le_mul_r)
+        lr
+        lhs
+        ((inst x d) (inst y (fpow2 (- e w))))
+        ((by arith (list 1 0 1 0 0 0 0 0 0))
+         (by arith (list 1 0 0 0 0 0 0 1 0)))
+        refl))
+    (have hy0 (= (lt 0 (* d (fpow2 (- e w)))) True)
+      (steps () (by arith (list 1 0 1 0 0 0 0 0 0 1))))
+    (have hsp
+      (= (fpow2 (+ (- e w) (+ w 1))) (* (fpow2 (- e w)) (fpow2 (+ w 1))))
+      (rewrite-with
+        (lemma fpow2_split)
+        lr
+        lhs
+        ((inst a (- e w)) (inst b (+ w 1)))
+        ((by arith (list 1 0 0 0 1 0 0 0 0 0 0))
+         (by arith (list 1 0 0 0 0 1 0 0 0 0 0)))
+        refl))
+    (have hr2
+      (=
+        (* (* d (fpow2 (- e w))) (fpow2 (+ w 1)))
+        (* d (fpow2 (+ (- e w) (+ w 1)))))
+      (steps
+        ((rewrite (lemma mul_assoc) lr lhs true ())
+         (rewrite (premise hsp) rl lhs true ()))
+        refl))
+    (case-on (le 0 (+ (elog a d) 1)) Bool
+      ((case True
+         (chain
+           (have hk (= (le 0 (+ (elog a d) 1)) True)
+             (steps ((rewrite (hyp True) lr lhs true ())) refl))
+           (have hraw (= (le (* d (fpow2 (+ (elog a d) 1))) a) False)
+             (steps
+               ((rewrite (premise hehi) rl rhs true ())
+                (unfold ge_scaled rhs)
+                (rewrite (premise hk) lr rhs true ())
+                (simp rhs))
+               refl))
+           (have hmono
+             (= (le (fpow2 (+ (elog a d) 1)) (fpow2 (+ (- e w) (+ w 1)))) True)
+             (rewrite-with
+               (lemma fpow2_mono)
+               lr
+               lhs
+               ((inst a (+ (elog a d) 1)) (inst b (+ (- e w) (+ w 1))))
+               ((by arith (list 1 0 0 1 0 0 0 0 0 0 0 0 0 0 0)))
+               refl))
+           (have hmd
+             (=
+               (le
+                 (* d (fpow2 (+ (elog a d) 1)))
+                 (* d (fpow2 (+ (- e w) (+ w 1)))))
+               True)
+             (rewrite-with
+               (lemma mul_le_mono_l)
+               lr
+               lhs
+               ((inst x (fpow2 (+ (elog a d) 1)))
+                (inst y (fpow2 (+ (- e w) (+ w 1))))
+                (inst z d))
+               ((steps ((rewrite (premise hmono) lr lhs true ())) refl)
+                (by arith (list 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+               refl))
+           (have hprod (= (lt a (* (* d (fpow2 (- e w))) (fpow2 (+ w 1)))) True)
+             (steps () (by arith (list 1 0 0 0 0 0 0 0 0 0 0 0 1 0 1 0 1))))
+           (rewrite-with
+             (lemma rne_div_lt_cap)
+             lr
+             lhs
+             ((inst x a)
+              (inst y (* d (fpow2 (- e w))))
+              (inst b (fpow2 (+ w 1))))
+             ((steps ((rewrite (premise hy0) lr lhs true ())) refl)
+              (steps ((rewrite (premise hprod) lr lhs true ())) refl))
+             refl)))
+       (case False
+         (chain
+           (have hk (= (le 0 (+ (elog a d) 1)) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (have hraw (= (le d (* a (fpow2 (- 0 (+ (elog a d) 1))))) False)
+             (steps
+               ((rewrite (premise hehi) rl rhs true ())
+                (unfold ge_scaled rhs)
+                (rewrite (premise hk) lr rhs true ())
+                (simp rhs))
+               refl))
+           (have hpk (= (lt 0 (fpow2 (- 0 (+ (elog a d) 1)))) True)
+             (rewrite-with
+               (lemma fpow2_pos)
+               lr
+               lhs
+               ((inst k (- 0 (+ (elog a d) 1))))
+               ()
+               refl))
+           (have hak (= (le a (* a (fpow2 (- 0 (+ (elog a d) 1))))) True)
+             (rewrite-with
+               (lemma le_mul_r)
+               lr
+               lhs
+               ((inst x a) (inst y (fpow2 (- 0 (+ (elog a d) 1)))))
+               ((by arith (list 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0))
+                (by arith (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1)))
+               refl))
+           (have hvv
+             (=
+               (le
+                 (* d (fpow2 (- e w)))
+                 (* (* d (fpow2 (- e w))) (fpow2 (+ w 1))))
+               True)
+             (rewrite-with
+               (lemma le_mul_r)
+               lr
+               lhs
+               ((inst x (* d (fpow2 (- e w)))) (inst y (fpow2 (+ w 1))))
+               ((by arith (list 1 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0))
+                (by arith (list 1 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0)))
+               refl))
+           (have hprod (= (lt a (* (* d (fpow2 (- e w))) (fpow2 (+ w 1)))) True)
+             (steps () (by arith (list 1 0 0 0 0 0 0 0 0 1 0 0 0 0 1 0 1 1))))
+           (rewrite-with
+             (lemma rne_div_lt_cap)
+             lr
+             lhs
+             ((inst x a)
+              (inst y (* d (fpow2 (- e w))))
+              (inst b (fpow2 (+ w 1))))
+             ((steps ((rewrite (premise hy0) lr lhs true ())) refl)
+              (steps ((rewrite (premise hprod) lr lhs true ())) refl))
+             refl)))))))
+
+;; the floor, row at or below the width: e <= elog, e <= w, 0 <= w  |-
+;;   2^w <= rne(a * 2^(w-e) / d) — the row's mantissa reaches normal size
+;;   whenever the row sits at or below the value's magnitude row.
+(claim mrow_floor_lo
+  (goal ((a Int) (d Int) (w Int) (e Int))
+    ((= (le 1 a) True)
+     (= (le 1 d) True)
+     (= (le e (elog a d)) True)
+     (= (le e w) True)
+     (= (le 0 w) True))
+    (= (le (fpow2 w) (rne_div (* a (fpow2 (- w e))) d)) True))
+  (chain
+    (have helo (= (ge_scaled a d (elog a d)) True)
+      (rewrite-with
+        (lemma elog_lo)
+        lr
+        lhs
+        ((inst a a) (inst d d))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have hzp (= (lt 0 (fpow2 (- w e))) True)
+      (rewrite-with (lemma fpow2_pos) lr lhs ((inst k (- w e))) () refl))
+    (have hd0 (= (lt 0 d) True) (steps () (by arith (list 1 0 1 0 0 0 0 0))))
+    (have hz (= (le 0 (fpow2 (- w e))) True)
+      (steps () (by arith (list 1 0 0 0 0 0 0 1 0))))
+    (have ha0 (= (le 0 a) True)
+      (steps () (by arith (list 1 1 0 0 0 0 0 0 0 0))))
+    (case-on (le 0 (elog a d)) Bool
+      ((case True
+         (chain
+           (have hk (= (le 0 (elog a d)) True)
+             (steps ((rewrite (hyp True) lr lhs true ())) refl))
+           (have hraw (= (le (* d (fpow2 (elog a d))) a) True)
+             (steps
+               ((rewrite (premise helo) rl rhs true ())
+                (unfold ge_scaled rhs)
+                (rewrite (premise hk) lr rhs true ())
+                (simp rhs))
+               refl))
+           (have hsp
+             (=
+               (fpow2 (+ (elog a d) (- w e)))
+               (* (fpow2 (elog a d)) (fpow2 (- w e))))
+             (rewrite-with
+               (lemma fpow2_split)
+               lr
+               lhs
+               ((inst a (elog a d)) (inst b (- w e)))
+               ((steps ((rewrite (premise hk) lr lhs true ())) refl)
+                (by arith (list 1 0 0 0 1 0 0 0 0 0 0 0 0)))
+               refl))
+           (have hmono (= (le (fpow2 w) (fpow2 (+ (elog a d) (- w e)))) True)
+             (rewrite-with
+               (lemma fpow2_mono)
+               lr
+               lhs
+               ((inst a w) (inst b (+ (elog a d) (- w e))))
+               ((by arith (list 1 0 0 1 0 0 0 0 0 0 0 0 0 0)))
+               refl))
+           (have hmd
+             (= (le (* d (fpow2 w)) (* d (fpow2 (+ (elog a d) (- w e))))) True)
+             (rewrite-with
+               (lemma mul_le_mono_l)
+               lr
+               lhs
+               ((inst x (fpow2 w))
+                (inst y (fpow2 (+ (elog a d) (- w e))))
+                (inst z d))
+               ((steps ((rewrite (premise hmono) lr lhs true ())) refl)
+                (by arith (list 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0)))
+               refl))
+           (have hr2
+             (=
+               (* (* d (fpow2 (elog a d))) (fpow2 (- w e)))
+               (* d (fpow2 (+ (elog a d) (- w e)))))
+             (steps
+               ((rewrite (lemma mul_assoc) lr lhs true ())
+                (rewrite (premise hsp) rl lhs true ()))
+               refl))
+           (have hm2
+             (=
+               (le
+                 (* (* d (fpow2 (elog a d))) (fpow2 (- w e)))
+                 (* a (fpow2 (- w e))))
+               True)
+             (rewrite-with
+               (lemma mul_le_mono_r)
+               lr
+               lhs
+               ((inst x (* d (fpow2 (elog a d))))
+                (inst y a)
+                (inst z (fpow2 (- w e))))
+               ((steps ((rewrite (premise hraw) lr lhs true ())) refl)
+                (steps ((rewrite (premise hz) lr lhs true ())) refl))
+               refl))
+           (have hfloor (= (le (* d (fpow2 w)) (* a (fpow2 (- w e)))) True)
+             (steps () (by arith (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 1 1))))
+           (rewrite-with
+             (lemma rne_div_ge_floor)
+             lr
+             lhs
+             ((inst x (* a (fpow2 (- w e)))) (inst y d) (inst b (fpow2 w)))
+             ((steps ((rewrite (premise hd0) lr lhs true ())) refl)
+              (steps ((rewrite (premise hfloor) lr lhs true ())) refl))
+             refl)))
+       (case False
+         (chain
+           (have hk (= (le 0 (elog a d)) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (have hraw (= (le d (* a (fpow2 (- 0 (elog a d))))) True)
+             (steps
+               ((rewrite (premise helo) rl rhs true ())
+                (unfold ge_scaled rhs)
+                (rewrite (premise hk) lr rhs true ())
+                (simp rhs))
+               refl))
+           (have hsp
+             (=
+               (fpow2 (+ (- 0 (elog a d)) w))
+               (* (fpow2 (- 0 (elog a d))) (fpow2 w)))
+             (rewrite-with
+               (lemma fpow2_split)
+               lr
+               lhs
+               ((inst a (- 0 (elog a d))) (inst b w))
+               ((by arith (list 1 0 0 0 0 0 0 0 0 0 0 1 0))
+                (by arith (list 1 0 0 0 0 1 0 0 0 0 0 0 0)))
+               refl))
+           (have hzw (= (lt 0 (fpow2 w)) True)
+             (rewrite-with (lemma fpow2_pos) lr lhs ((inst k w)) () refl))
+           (have h1
+             (=
+               (le (* d (fpow2 w)) (* (* a (fpow2 (- 0 (elog a d)))) (fpow2 w)))
+               True)
+             (rewrite-with
+               (lemma mul_le_mono_r)
+               lr
+               lhs
+               ((inst x d)
+                (inst y (* a (fpow2 (- 0 (elog a d)))))
+                (inst z (fpow2 w)))
+               ((steps ((rewrite (premise hraw) lr lhs true ())) refl)
+                (by arith (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 1)))
+               refl))
+           (have hr2
+             (=
+               (* (* a (fpow2 (- 0 (elog a d)))) (fpow2 w))
+               (* a (fpow2 (+ (- 0 (elog a d)) w))))
+             (steps
+               ((rewrite (lemma mul_assoc) lr lhs true ())
+                (rewrite (premise hsp) rl lhs true ()))
+               refl))
+           (have hmono
+             (= (le (fpow2 (+ (- 0 (elog a d)) w)) (fpow2 (- w e))) True)
+             (rewrite-with
+               (lemma fpow2_mono)
+               lr
+               lhs
+               ((inst a (+ (- 0 (elog a d)) w)) (inst b (- w e)))
+               ((by arith (list 1 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+               refl))
+           (have hm2
+             (=
+               (le (* a (fpow2 (+ (- 0 (elog a d)) w))) (* a (fpow2 (- w e))))
+               True)
+             (rewrite-with
+               (lemma mul_le_mono_l)
+               lr
+               lhs
+               ((inst x (fpow2 (+ (- 0 (elog a d)) w)))
+                (inst y (fpow2 (- w e)))
+                (inst z a))
+               ((steps ((rewrite (premise hmono) lr lhs true ())) refl)
+                (steps ((rewrite (premise ha0) lr lhs true ())) refl))
+               refl))
+           (have hfloor (= (le (* d (fpow2 w)) (* a (fpow2 (- w e)))) True)
+             (steps () (by arith (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 -1 0 1))))
+           (rewrite-with
+             (lemma rne_div_ge_floor)
+             lr
+             lhs
+             ((inst x (* a (fpow2 (- w e)))) (inst y d) (inst b (fpow2 w)))
+             ((steps ((rewrite (premise hd0) lr lhs true ())) refl)
+              (steps ((rewrite (premise hfloor) lr lhs true ())) refl))
+             refl)))))))
+
+;; the floor, row above the width: e <= elog, w < e, 0 <= w  |-
+;;   2^w <= rne(a / (d * 2^(e-w))). (The negative-elog fork is vacuous:
+;;   0 <= w < e <= elog.)
+(claim mrow_floor_hi
+  (goal ((a Int) (d Int) (w Int) (e Int))
+    ((= (le 1 a) True)
+     (= (le 1 d) True)
+     (= (le e (elog a d)) True)
+     (= (lt w e) True)
+     (= (le 0 w) True))
+    (= (le (fpow2 w) (rne_div a (* d (fpow2 (- e w))))) True))
+  (chain
+    (have helo (= (ge_scaled a d (elog a d)) True)
+      (rewrite-with
+        (lemma elog_lo)
+        lr
+        lhs
+        ((inst a a) (inst d d))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have hpe (= (lt 0 (fpow2 (- e w))) True)
+      (rewrite-with (lemma fpow2_pos) lr lhs ((inst k (- e w))) () refl))
+    (have hdd (= (le d (* d (fpow2 (- e w)))) True)
+      (rewrite-with
+        (lemma le_mul_r)
+        lr
+        lhs
+        ((inst x d) (inst y (fpow2 (- e w))))
+        ((by arith (list 1 0 1 0 0 0 0 0)) (by arith (list 1 0 0 0 0 0 0 1)))
+        refl))
+    (have hy0 (= (lt 0 (* d (fpow2 (- e w)))) True)
+      (steps () (by arith (list 1 0 1 0 0 0 0 0 1))))
+    (have hsp (= (fpow2 (+ (- e w) w)) (* (fpow2 (- e w)) (fpow2 w)))
+      (rewrite-with
+        (lemma fpow2_split)
+        lr
+        lhs
+        ((inst a (- e w)) (inst b w))
+        ((by arith (list 1 0 0 0 1 0 0 0 0 0))
+         (by arith (list 1 0 0 0 0 1 0 0 0 0)))
+        refl))
+    (have hr2
+      (= (* (* d (fpow2 (- e w))) (fpow2 w)) (* d (fpow2 (+ (- e w) w))))
+      (steps
+        ((rewrite (lemma mul_assoc) lr lhs true ())
+         (rewrite (premise hsp) rl lhs true ()))
+        refl))
+    (case-on (le 0 (elog a d)) Bool
+      ((case True
+         (chain
+           (have hk (= (le 0 (elog a d)) True)
+             (steps ((rewrite (hyp True) lr lhs true ())) refl))
+           (have hraw (= (le (* d (fpow2 (elog a d))) a) True)
+             (steps
+               ((rewrite (premise helo) rl rhs true ())
+                (unfold ge_scaled rhs)
+                (rewrite (premise hk) lr rhs true ())
+                (simp rhs))
+               refl))
+           (have hmono (= (le (fpow2 (+ (- e w) w)) (fpow2 (elog a d))) True)
+             (rewrite-with
+               (lemma fpow2_mono)
+               lr
+               lhs
+               ((inst a (+ (- e w) w)) (inst b (elog a d)))
+               ((by arith (list 1 0 0 1 0 0 0 0 0 0 0 0 0 0)))
+               refl))
+           (have hmd
+             (= (le (* d (fpow2 (+ (- e w) w))) (* d (fpow2 (elog a d)))) True)
+             (rewrite-with
+               (lemma mul_le_mono_l)
+               lr
+               lhs
+               ((inst x (fpow2 (+ (- e w) w)))
+                (inst y (fpow2 (elog a d)))
+                (inst z d))
+               ((steps ((rewrite (premise hmono) lr lhs true ())) refl)
+                (by arith (list 1 0 1 0 0 0 0 0 0 0 0 0 0 0 0)))
+               refl))
+           (have hfloor (= (le (* (* d (fpow2 (- e w))) (fpow2 w)) a) True)
+             (steps () (by arith (list 1 0 0 0 0 0 0 0 0 0 0 -1 0 1 0 1))))
+           (rewrite-with
+             (lemma rne_div_ge_floor)
+             lr
+             lhs
+             ((inst x a) (inst y (* d (fpow2 (- e w)))) (inst b (fpow2 w)))
+             ((steps ((rewrite (premise hy0) lr lhs true ())) refl)
+              (steps ((rewrite (premise hfloor) lr lhs true ())) refl))
+             refl)))
+       (case False
+         (chain
+           (have hk (= (le 0 (elog a d)) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (steps () (by arith (list 0 0 0 1 1 1 0 0 0 0 0 0 1)))))))))
+;; --- THE WF-CLOSURE (rung R1 slice 4d(ii)) ------------------------------------------
+;; frnd always returns a well-formed value: the rounded mantissa lands in
+;; [0, 2^(MW+1)] (mrow_cap_*, rne_div_nonneg), the boundary carry renormalizes
+;; a row up, the target row sits in [emin, emax] by construction and the
+;; overflow guard, a small mantissa forces the bottom row (mrow_floor_*,
+;; contrapositively), and every overflow exit is fovf_wf. This is the theorem
+;; the (refine ...) surface modules (R3a) stand on. Proof shape: the selector
+;; ifs (which mantissa spelling, carry or not) are collapsed by equation
+;; haves rewritten globally — simp is lazy and will not reduce an if inside
+;; an unselected branch.
+
+;; the positive-magnitude core: fmt_wf f, 1 <= a, 1 <= d  |-
+;;   fwf f (frnd_pos f s a d).
+(claim frnd_pos_wf
+  (goal ((f Fmt) (s Bool) (a Int) (d Int))
+    ((= (fmt_wf f) True) (= (le 1 a) True) (= (le 1 d) True))
+    (= (fwf f (frnd_pos f s a d)) True))
+  (chain
+    (have hovwf (= (fwf f (fovf f s)) True)
+      (rewrite-with
+        (lemma fovf_wf)
+        lr
+        lhs
+        ((inst f f) (inst s s))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have hmw1 (= (le 1 (mw_of f)) True)
+      (rewrite-with
+        (lemma fmt_wf_mw)
+        lr
+        lhs
+        ((inst f f))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have hmw0 (= (le 0 (mw_of f)) True)
+      (steps () (by arith (list 1 0 0 0 0 1))))
+    (have hel (= (le (elog a d) (imax (elog a d) (fmt_emin f))) True)
+      (rewrite-with
+        (lemma imax_ge_l)
+        lr
+        lhs
+        ((inst x (elog a d)) (inst y (fmt_emin f)))
+        ()
+        refl))
+    (have hem (= (le (fmt_emin f) (imax (elog a d) (fmt_emin f))) True)
+      (rewrite-with
+        (lemma imax_ge_r)
+        lr
+        lhs
+        ((inst x (elog a d)) (inst y (fmt_emin f)))
+        ()
+        refl))
+    (have hd0 (= (lt 0 d) True) (steps () (by arith (list 1 0 0 1 0 0 0 0 0))))
+    (have ha0 (= (le 0 a) True)
+      (steps () (by arith (list 1 0 1 0 0 0 0 0 0 0))))
+    (have hpw (= (lt 0 (fpow2 (mw_of f))) True)
+      (rewrite-with (lemma fpow2_pos) lr lhs ((inst k (mw_of f))) () refl))
+    (have hpw0 (= (le 0 (fpow2 (mw_of f))) True)
+      (steps () (by arith (list 1 0 0 0 0 0 0 0 0 0 0 1))))
+    (have hpb (= (lt 0 (fpow2 (+ (mw_of f) 1))) True)
+      (rewrite-with (lemma fpow2_pos) lr lhs ((inst k (+ (mw_of f) 1))) () refl))
+    (have hbs (= (fpow2 (+ (mw_of f) 1)) (* 2 (fpow2 (mw_of f))))
+      (rewrite-with
+        (lemma fpow2_s)
+        lr
+        lhs
+        ((inst k (mw_of f)))
+        ((steps ((rewrite (premise hmw0) lr lhs true ())) refl))
+        refl))
+    (case-on (le (imax (elog a d) (fmt_emin f)) (mw_of f)) Bool
+      ((case True
+         (chain
+           (have hg1 (= (le (imax (elog a d) (fmt_emin f)) (mw_of f)) True)
+             (steps ((rewrite (hyp True) lr lhs true ())) refl))
+           (have hmeq
+             (=
+               (if (le (imax (elog a d) (fmt_emin f)) (mw_of f))
+                 (rne_div
+                   (* a (fpow2 (- (mw_of f) (imax (elog a d) (fmt_emin f)))))
+                   d)
+                 (rne_div
+                   a
+                   (* d (fpow2 (- (imax (elog a d) (fmt_emin f)) (mw_of f))))))
+               (rne_div
+                 (* a (fpow2 (- (mw_of f) (imax (elog a d) (fmt_emin f)))))
+                 d))
+             (steps ((rewrite (premise hg1) lr lhs true ()) (simp lhs)) refl))
+           (have hzp
+             (=
+               (lt 0 (fpow2 (- (mw_of f) (imax (elog a d) (fmt_emin f)))))
+               True)
+             (rewrite-with
+               (lemma fpow2_pos)
+               lr
+               lhs
+               ((inst k (- (mw_of f) (imax (elog a d) (fmt_emin f)))))
+               ()
+               refl))
+           (have hxnn
+             (=
+               (le 0 (* a (fpow2 (- (mw_of f) (imax (elog a d) (fmt_emin f))))))
+               True)
+             (rewrite-with
+               (lemma mul_nonneg)
+               lr
+               lhs
+               ((inst a a)
+                (inst b (fpow2 (- (mw_of f) (imax (elog a d) (fmt_emin f))))))
+               ((steps ((rewrite (premise ha0) lr lhs true ())) refl)
+                (by arith (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1)))
+               refl))
+           (have hmn
+             (=
+               (le
+                 0
+                 (rne_div
+                   (* a (fpow2 (- (mw_of f) (imax (elog a d) (fmt_emin f)))))
+                   d))
+               True)
+             (rewrite-with
+               (lemma rne_div_nonneg)
+               lr
+               lhs
+               ((inst
+                  x
+                  (* a (fpow2 (- (mw_of f) (imax (elog a d) (fmt_emin f))))))
+                (inst y d))
+               ((steps ((rewrite (premise hxnn) lr lhs true ())) refl)
+                (steps ((rewrite (premise hd0) lr lhs true ())) refl))
+               refl))
+           (have hcap
+             (=
+               (le
+                 (rne_div
+                   (* a (fpow2 (- (mw_of f) (imax (elog a d) (fmt_emin f)))))
+                   d)
+                 (fpow2 (+ (mw_of f) 1)))
+               True)
+             (rewrite-with
+               (lemma mrow_cap_lo)
+               lr
+               lhs
+               ((inst a a)
+                (inst d d)
+                (inst w (mw_of f))
+                (inst e (imax (elog a d) (fmt_emin f))))
+               ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                (steps ((rewrite (premise 2) lr lhs true ())) refl)
+                (steps ((rewrite (premise hel) lr lhs true ())) refl)
+                (steps ((rewrite (premise hg1) lr lhs true ())) refl)
+                (steps ((rewrite (premise hmw0) lr lhs true ())) refl))
+               refl))
+           (case-on
+             (int_eq
+               (rne_div
+                 (* a (fpow2 (- (mw_of f) (imax (elog a d) (fmt_emin f)))))
+                 d)
+               (fpow2 (+ (mw_of f) 1)))
+             Bool
+             ((case True
+                (chain
+                  (have hcar
+                    (=
+                      (int_eq
+                        (rne_div
+                          (*
+                            a
+                            (fpow2 (- (mw_of f) (imax (elog a d) (fmt_emin f)))))
+                          d)
+                        (fpow2 (+ (mw_of f) 1)))
+                      True)
+                    (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                  (have hec
+                    (=
+                      (if
+                        (int_eq
+                          (rne_div
+                            (*
+                              a
+                              (fpow2
+                                (- (mw_of f) (imax (elog a d) (fmt_emin f)))))
+                            d)
+                          (fpow2 (+ (mw_of f) 1)))
+                        (+ (imax (elog a d) (fmt_emin f)) 1)
+                        (imax (elog a d) (fmt_emin f)))
+                      (+ (imax (elog a d) (fmt_emin f)) 1))
+                    (steps
+                      ((rewrite (premise hcar) lr lhs true ()) (simp lhs))
+                      refl))
+                  (have hmc
+                    (=
+                      (if
+                        (int_eq
+                          (rne_div
+                            (*
+                              a
+                              (fpow2
+                                (- (mw_of f) (imax (elog a d) (fmt_emin f)))))
+                            d)
+                          (fpow2 (+ (mw_of f) 1)))
+                        (fpow2 (mw_of f))
+                        (rne_div
+                          (*
+                            a
+                            (fpow2 (- (mw_of f) (imax (elog a d) (fmt_emin f)))))
+                          d))
+                      (fpow2 (mw_of f)))
+                    (steps
+                      ((rewrite (premise hcar) lr lhs true ()) (simp lhs))
+                      refl))
+                  (have hg2
+                    (= (lt (fpow2 (mw_of f)) (fpow2 (+ (mw_of f) 1))) True)
+                    (steps
+                      ()
+                      (by
+                        arith
+                        (list 1 0 0 0 0 0 0 0 0 0 0 1 0 0 1 0 0 0 0 0 0 0 0 0))))
+                  (have hg3
+                    (=
+                      (le (fmt_emin f) (+ (imax (elog a d) (fmt_emin f)) 1))
+                      True)
+                    (steps
+                      ()
+                      (by
+                        arith
+                        (list 1 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))))
+                  (have hlt5 (= (lt (fpow2 (mw_of f)) (fpow2 (mw_of f))) False)
+                    (steps
+                      ()
+                      (by
+                        arith
+                        (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                          0))))
+                  (case-on
+                    (lt (fmt_emax f) (+ (imax (elog a d) (fmt_emin f)) 1))
+                    Bool
+                    ((case True
+                       (chain
+                         (have hov
+                           (=
+                             (lt
+                               (fmt_emax f)
+                               (+ (imax (elog a d) (fmt_emin f)) 1))
+                             True)
+                           (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                         (steps
+                           ((unfold frnd_pos lhs)
+                            (simp lhs)
+                            (rewrite (premise hmeq) lr lhs true ())
+                            (rewrite (premise hec) lr lhs true ())
+                            (rewrite (premise hmc) lr lhs true ())
+                            (rewrite (premise hov) lr lhs true ())
+                            (simp lhs)
+                            (rewrite (premise hovwf) lr lhs true ()))
+                           refl)))
+                     (case False
+                       (chain
+                         (have hnov
+                           (=
+                             (lt
+                               (fmt_emax f)
+                               (+ (imax (elog a d) (fmt_emin f)) 1))
+                             False)
+                           (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                         (have hg4
+                           (=
+                             (le
+                               (+ (imax (elog a d) (fmt_emin f)) 1)
+                               (fmt_emax f))
+                             True)
+                           (steps
+                             ()
+                             (by
+                               arith
+                               (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                                 0 0 0 0 0 1))))
+                         (case-on
+                           (ftop_ok
+                             f
+                             (fpow2 (mw_of f))
+                             (+ (imax (elog a d) (fmt_emin f)) 1))
+                           Bool
+                           ((case True
+                              (chain
+                                (have htop
+                                  (=
+                                    (ftop_ok
+                                      f
+                                      (fpow2 (mw_of f))
+                                      (+ (imax (elog a d) (fmt_emin f)) 1))
+                                    True)
+                                  (steps
+                                    ((rewrite (hyp True) lr lhs true ()))
+                                    refl))
+                                (steps
+                                  ((unfold frnd_pos lhs)
+                                   (simp lhs)
+                                   (rewrite (premise hmeq) lr lhs true ())
+                                   (rewrite (premise hec) lr lhs true ())
+                                   (rewrite (premise hmc) lr lhs true ())
+                                   (rewrite (premise hnov) lr lhs true ())
+                                   (simp lhs)
+                                   (rewrite (premise htop) lr lhs true ())
+                                   (simp lhs)
+                                   (unfold fwf_fin lhs)
+                                   (rewrite (premise hpw0) lr lhs true ())
+                                   (simp lhs)
+                                   (rewrite (premise hg2) lr lhs true ())
+                                   (simp lhs)
+                                   (rewrite (premise hg3) lr lhs true ())
+                                   (simp lhs)
+                                   (rewrite (premise hg4) lr lhs true ())
+                                   (simp lhs)
+                                   (rewrite (premise hlt5) lr lhs true ())
+                                   (simp lhs)
+                                   (rewrite (premise htop) lr lhs true ()))
+                                  refl)))
+                            (case False
+                              (chain
+                                (have hntop
+                                  (=
+                                    (ftop_ok
+                                      f
+                                      (fpow2 (mw_of f))
+                                      (+ (imax (elog a d) (fmt_emin f)) 1))
+                                    False)
+                                  (steps
+                                    ((rewrite (hyp False) lr lhs true ()))
+                                    refl))
+                                (steps
+                                  ((unfold frnd_pos lhs)
+                                   (simp lhs)
+                                   (rewrite (premise hmeq) lr lhs true ())
+                                   (rewrite (premise hec) lr lhs true ())
+                                   (rewrite (premise hmc) lr lhs true ())
+                                   (rewrite (premise hnov) lr lhs true ())
+                                   (simp lhs)
+                                   (rewrite (premise hntop) lr lhs true ())
+                                   (simp lhs)
+                                   (rewrite (premise hovwf) lr lhs true ()))
+                                  refl)))))))))))
+              (case False
+                (chain
+                  (have hncar
+                    (=
+                      (int_eq
+                        (rne_div
+                          (*
+                            a
+                            (fpow2 (- (mw_of f) (imax (elog a d) (fmt_emin f)))))
+                          d)
+                        (fpow2 (+ (mw_of f) 1)))
+                      False)
+                    (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                  (have hec
+                    (=
+                      (if
+                        (int_eq
+                          (rne_div
+                            (*
+                              a
+                              (fpow2
+                                (- (mw_of f) (imax (elog a d) (fmt_emin f)))))
+                            d)
+                          (fpow2 (+ (mw_of f) 1)))
+                        (+ (imax (elog a d) (fmt_emin f)) 1)
+                        (imax (elog a d) (fmt_emin f)))
+                      (imax (elog a d) (fmt_emin f)))
+                    (steps
+                      ((rewrite (premise hncar) lr lhs true ()) (simp lhs))
+                      refl))
+                  (have hmc
+                    (=
+                      (if
+                        (int_eq
+                          (rne_div
+                            (*
+                              a
+                              (fpow2
+                                (- (mw_of f) (imax (elog a d) (fmt_emin f)))))
+                            d)
+                          (fpow2 (+ (mw_of f) 1)))
+                        (fpow2 (mw_of f))
+                        (rne_div
+                          (*
+                            a
+                            (fpow2 (- (mw_of f) (imax (elog a d) (fmt_emin f)))))
+                          d))
+                      (rne_div
+                        (*
+                          a
+                          (fpow2 (- (mw_of f) (imax (elog a d) (fmt_emin f)))))
+                        d))
+                    (steps
+                      ((rewrite (premise hncar) lr lhs true ()) (simp lhs))
+                      refl))
+                  (case-on
+                    (lt
+                      (rne_div
+                        (*
+                          a
+                          (fpow2 (- (mw_of f) (imax (elog a d) (fmt_emin f)))))
+                        d)
+                      (fpow2 (+ (mw_of f) 1)))
+                    Bool
+                    ((case True
+                       (chain
+                         (have hst
+                           (=
+                             (lt
+                               (rne_div
+                                 (*
+                                   a
+                                   (fpow2
+                                     (-
+                                       (mw_of f)
+                                       (imax (elog a d) (fmt_emin f)))))
+                                 d)
+                               (fpow2 (+ (mw_of f) 1)))
+                             True)
+                           (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                         (case-on
+                           (lt (fmt_emax f) (imax (elog a d) (fmt_emin f)))
+                           Bool
+                           ((case True
+                              (chain
+                                (have hov
+                                  (=
+                                    (lt
+                                      (fmt_emax f)
+                                      (imax (elog a d) (fmt_emin f)))
+                                    True)
+                                  (steps
+                                    ((rewrite (hyp True) lr lhs true ()))
+                                    refl))
+                                (steps
+                                  ((unfold frnd_pos lhs)
+                                   (simp lhs)
+                                   (rewrite (premise hmeq) lr lhs true ())
+                                   (rewrite (premise hec) lr lhs true ())
+                                   (rewrite (premise hmc) lr lhs true ())
+                                   (rewrite (premise hov) lr lhs true ())
+                                   (simp lhs)
+                                   (rewrite (premise hovwf) lr lhs true ()))
+                                  refl)))
+                            (case False
+                              (chain
+                                (have hnov
+                                  (=
+                                    (lt
+                                      (fmt_emax f)
+                                      (imax (elog a d) (fmt_emin f)))
+                                    False)
+                                  (steps
+                                    ((rewrite (hyp False) lr lhs true ()))
+                                    refl))
+                                (have hg4n
+                                  (=
+                                    (le
+                                      (imax (elog a d) (fmt_emin f))
+                                      (fmt_emax f))
+                                    True)
+                                  (steps
+                                    ()
+                                    (by
+                                      arith
+                                      (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                                        0 0 0 0 0 0 0 1))))
+                                (case-on
+                                  (ftop_ok
+                                    f
+                                    (rne_div
+                                      (*
+                                        a
+                                        (fpow2
+                                          (-
+                                            (mw_of f)
+                                            (imax (elog a d) (fmt_emin f)))))
+                                      d)
+                                    (imax (elog a d) (fmt_emin f)))
+                                  Bool
+                                  ((case True
+                                     (chain
+                                       (have htop
+                                         (=
+                                           (ftop_ok
+                                             f
+                                             (rne_div
+                                               (*
+                                                 a
+                                                 (fpow2
+                                                   (-
+                                                     (mw_of f)
+                                                     (imax
+                                                       (elog a d)
+                                                       (fmt_emin f)))))
+                                               d)
+                                             (imax (elog a d) (fmt_emin f)))
+                                           True)
+                                         (steps
+                                           ((rewrite (hyp True) lr lhs true ()))
+                                           refl))
+                                       (case-on
+                                         (lt
+                                           (rne_div
+                                             (*
+                                               a
+                                               (fpow2
+                                                 (-
+                                                   (mw_of f)
+                                                   (imax
+                                                     (elog a d)
+                                                     (fmt_emin f)))))
+                                             d)
+                                           (fpow2 (mw_of f)))
+                                         Bool
+                                         ((case True
+                                            (chain
+                                              (have hsub
+                                                (=
+                                                  (lt
+                                                    (rne_div
+                                                      (*
+                                                        a
+                                                        (fpow2
+                                                          (-
+                                                            (mw_of f)
+                                                            (imax
+                                                              (elog a d)
+                                                              (fmt_emin f)))))
+                                                      d)
+                                                    (fpow2 (mw_of f)))
+                                                  True)
+                                                (steps
+                                                  ((rewrite
+                                                     (hyp True)
+                                                     lr
+                                                     lhs
+                                                     true
+                                                     ()))
+                                                  refl))
+                                              (case-on
+                                                (le (elog a d) (fmt_emin f))
+                                                Bool
+                                                ((case True
+                                                   (chain
+                                                     (have hpk
+                                                       (=
+                                                         (le
+                                                           (elog a d)
+                                                           (fmt_emin f))
+                                                         True)
+                                                       (steps
+                                                         ((rewrite
+                                                            (hyp True)
+                                                            lr
+                                                            lhs
+                                                            true
+                                                            ()))
+                                                         refl))
+                                                     (have hpe
+                                                       (=
+                                                         (imax
+                                                           (elog a d)
+                                                           (fmt_emin f))
+                                                         (fmt_emin f))
+                                                       (rewrite-with
+                                                         (lemma imax_pick_r)
+                                                         lr
+                                                         lhs
+                                                         ((inst x (elog a d))
+                                                          (inst y (fmt_emin f)))
+                                                         ((steps
+                                                            ((rewrite
+                                                               (premise hpk)
+                                                               lr
+                                                               lhs
+                                                               true
+                                                               ()))
+                                                            refl))
+                                                         refl))
+                                                     (have hieq
+                                                       (=
+                                                         (int_eq
+                                                           (imax
+                                                             (elog a d)
+                                                             (fmt_emin f))
+                                                           (fmt_emin f))
+                                                         True)
+                                                       (steps
+                                                         ()
+                                                         (by
+                                                           arith
+                                                           (list
+                                                             (list 1 0 0 0 0 0 0
+                                                               0 0 0 0 0 0 0 0 0
+                                                               0 0 0 0 0 0 0 0 0
+                                                               0 0 0 0 0 -1)
+                                                             (list 1 0 0 0 0 0 0
+                                                               0 0 0 0 0 0 0 0 0
+                                                               0 0 0 0 0 0 0 0 0
+                                                               0 0 0 0 0 1)))))
+                                                     (steps
+                                                       ((unfold frnd_pos lhs)
+                                                        (simp lhs)
+                                                        (rewrite
+                                                          (premise hmeq)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (rewrite
+                                                          (premise hec)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (rewrite
+                                                          (premise hmc)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (rewrite
+                                                          (premise hnov)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (simp lhs)
+                                                        (rewrite
+                                                          (premise htop)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (simp lhs)
+                                                        (unfold fwf_fin lhs)
+                                                        (rewrite
+                                                          (premise hmn)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (simp lhs)
+                                                        (rewrite
+                                                          (premise hst)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (simp lhs)
+                                                        (rewrite
+                                                          (premise hem)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (simp lhs)
+                                                        (rewrite
+                                                          (premise hg4n)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (simp lhs)
+                                                        (rewrite
+                                                          (premise hsub)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (simp lhs)
+                                                        (rewrite
+                                                          (premise hieq)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ()))
+                                                       refl)))
+                                                 (case False
+                                                   (chain
+                                                     (have hnpk
+                                                       (=
+                                                         (le
+                                                           (elog a d)
+                                                           (fmt_emin f))
+                                                         False)
+                                                       (steps
+                                                         ((rewrite
+                                                            (hyp False)
+                                                            lr
+                                                            lhs
+                                                            true
+                                                            ()))
+                                                         refl))
+                                                     (have hpe
+                                                       (=
+                                                         (imax
+                                                           (elog a d)
+                                                           (fmt_emin f))
+                                                         (elog a d))
+                                                       (rewrite-with
+                                                         (lemma imax_pick_l)
+                                                         lr
+                                                         lhs
+                                                         ((inst x (elog a d))
+                                                          (inst y (fmt_emin f)))
+                                                         ((steps
+                                                            ((rewrite
+                                                               (premise hnpk)
+                                                               lr
+                                                               lhs
+                                                               true
+                                                               ()))
+                                                            refl))
+                                                         refl))
+                                                     (have hfl
+                                                       (=
+                                                         (le
+                                                           (fpow2 (mw_of f))
+                                                           (rne_div
+                                                             (*
+                                                               a
+                                                               (fpow2
+                                                                 (-
+                                                                   (mw_of f)
+                                                                   (imax
+                                                                     (elog a d)
+                                                                     (fmt_emin f)))))
+                                                             d))
+                                                         True)
+                                                       (rewrite-with
+                                                         (lemma mrow_floor_lo)
+                                                         lr
+                                                         lhs
+                                                         ((inst a a)
+                                                          (inst d d)
+                                                          (inst w (mw_of f))
+                                                          (inst
+                                                            e
+                                                            (imax
+                                                              (elog a d)
+                                                              (fmt_emin f))))
+                                                         ((steps
+                                                            ((rewrite
+                                                               (premise 1)
+                                                               lr
+                                                               lhs
+                                                               true
+                                                               ()))
+                                                            refl)
+                                                          (steps
+                                                            ((rewrite
+                                                               (premise 2)
+                                                               lr
+                                                               lhs
+                                                               true
+                                                               ()))
+                                                            refl)
+                                                          (by
+                                                            arith
+                                                            (list 1 0 0 0 0 0 0
+                                                              0 0 0 0 0 0 0 0 0
+                                                              0 0 0 0 0 0 0 0 0
+                                                              0 0 0 0 0 -1))
+                                                          (steps
+                                                            ((rewrite
+                                                               (premise hg1)
+                                                               lr
+                                                               lhs
+                                                               true
+                                                               ()))
+                                                            refl)
+                                                          (steps
+                                                            ((rewrite
+                                                               (premise hmw0)
+                                                               lr
+                                                               lhs
+                                                               true
+                                                               ()))
+                                                            refl))
+                                                         refl))
+                                                     (have hieq
+                                                       (=
+                                                         (int_eq
+                                                           (imax
+                                                             (elog a d)
+                                                             (fmt_emin f))
+                                                           (fmt_emin f))
+                                                         True)
+                                                       (steps
+                                                         ()
+                                                         (by
+                                                           arith
+                                                           (list
+                                                             (list 0 0 0 0 0 0 0
+                                                               0 0 0 0 0 0 0 0 0
+                                                               0 0 0 0 0 0 0 0 0
+                                                               0 0 0 1 0 0 1)
+                                                             (list 0 0 0 0 0 0 0
+                                                               0 0 0 0 0 0 0 0 0
+                                                               0 0 0 0 0 0 0 0 0
+                                                               0 0 0 1 0 0 1)))))
+                                                     (steps
+                                                       ((unfold frnd_pos lhs)
+                                                        (simp lhs)
+                                                        (rewrite
+                                                          (premise hmeq)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (rewrite
+                                                          (premise hec)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (rewrite
+                                                          (premise hmc)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (rewrite
+                                                          (premise hnov)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (simp lhs)
+                                                        (rewrite
+                                                          (premise htop)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (simp lhs)
+                                                        (unfold fwf_fin lhs)
+                                                        (rewrite
+                                                          (premise hmn)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (simp lhs)
+                                                        (rewrite
+                                                          (premise hst)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (simp lhs)
+                                                        (rewrite
+                                                          (premise hem)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (simp lhs)
+                                                        (rewrite
+                                                          (premise hg4n)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (simp lhs)
+                                                        (rewrite
+                                                          (premise hsub)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (simp lhs)
+                                                        (rewrite
+                                                          (premise hieq)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ()))
+                                                       refl)))))))
+                                          (case False
+                                            (chain
+                                              (have hnsub
+                                                (=
+                                                  (lt
+                                                    (rne_div
+                                                      (*
+                                                        a
+                                                        (fpow2
+                                                          (-
+                                                            (mw_of f)
+                                                            (imax
+                                                              (elog a d)
+                                                              (fmt_emin f)))))
+                                                      d)
+                                                    (fpow2 (mw_of f)))
+                                                  False)
+                                                (steps
+                                                  ((rewrite
+                                                     (hyp False)
+                                                     lr
+                                                     lhs
+                                                     true
+                                                     ()))
+                                                  refl))
+                                              (steps
+                                                ((unfold frnd_pos lhs)
+                                                 (simp lhs)
+                                                 (rewrite
+                                                   (premise hmeq)
+                                                   lr
+                                                   lhs
+                                                   true
+                                                   ())
+                                                 (rewrite
+                                                   (premise hec)
+                                                   lr
+                                                   lhs
+                                                   true
+                                                   ())
+                                                 (rewrite
+                                                   (premise hmc)
+                                                   lr
+                                                   lhs
+                                                   true
+                                                   ())
+                                                 (rewrite
+                                                   (premise hnov)
+                                                   lr
+                                                   lhs
+                                                   true
+                                                   ())
+                                                 (simp lhs)
+                                                 (rewrite
+                                                   (premise htop)
+                                                   lr
+                                                   lhs
+                                                   true
+                                                   ())
+                                                 (simp lhs)
+                                                 (unfold fwf_fin lhs)
+                                                 (rewrite
+                                                   (premise hmn)
+                                                   lr
+                                                   lhs
+                                                   true
+                                                   ())
+                                                 (simp lhs)
+                                                 (rewrite
+                                                   (premise hst)
+                                                   lr
+                                                   lhs
+                                                   true
+                                                   ())
+                                                 (simp lhs)
+                                                 (rewrite
+                                                   (premise hem)
+                                                   lr
+                                                   lhs
+                                                   true
+                                                   ())
+                                                 (simp lhs)
+                                                 (rewrite
+                                                   (premise hg4n)
+                                                   lr
+                                                   lhs
+                                                   true
+                                                   ())
+                                                 (simp lhs)
+                                                 (rewrite
+                                                   (premise hnsub)
+                                                   lr
+                                                   lhs
+                                                   true
+                                                   ())
+                                                 (simp lhs)
+                                                 (rewrite
+                                                   (premise htop)
+                                                   lr
+                                                   lhs
+                                                   true
+                                                   ()))
+                                                refl)))))))
+                                   (case False
+                                     (chain
+                                       (have hntop
+                                         (=
+                                           (ftop_ok
+                                             f
+                                             (rne_div
+                                               (*
+                                                 a
+                                                 (fpow2
+                                                   (-
+                                                     (mw_of f)
+                                                     (imax
+                                                       (elog a d)
+                                                       (fmt_emin f)))))
+                                               d)
+                                             (imax (elog a d) (fmt_emin f)))
+                                           False)
+                                         (steps
+                                           ((rewrite (hyp False) lr lhs true ()))
+                                           refl))
+                                       (steps
+                                         ((unfold frnd_pos lhs)
+                                          (simp lhs)
+                                          (rewrite
+                                            (premise hmeq)
+                                            lr
+                                            lhs
+                                            true
+                                            ())
+                                          (rewrite (premise hec) lr lhs true ())
+                                          (rewrite (premise hmc) lr lhs true ())
+                                          (rewrite
+                                            (premise hnov)
+                                            lr
+                                            lhs
+                                            true
+                                            ())
+                                          (simp lhs)
+                                          (rewrite
+                                            (premise hntop)
+                                            lr
+                                            lhs
+                                            true
+                                            ())
+                                          (simp lhs)
+                                          (rewrite
+                                            (premise hovwf)
+                                            lr
+                                            lhs
+                                            true
+                                            ()))
+                                         refl)))))))))))
+                     (case False
+                       (chain
+                         (have hnst
+                           (=
+                             (lt
+                               (rne_div
+                                 (*
+                                   a
+                                   (fpow2
+                                     (-
+                                       (mw_of f)
+                                       (imax (elog a d) (fmt_emin f)))))
+                                 d)
+                               (fpow2 (+ (mw_of f) 1)))
+                             False)
+                           (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                         (have hieqc
+                           (=
+                             (int_eq
+                               (rne_div
+                                 (*
+                                   a
+                                   (fpow2
+                                     (-
+                                       (mw_of f)
+                                       (imax (elog a d) (fmt_emin f)))))
+                                 d)
+                               (fpow2 (+ (mw_of f) 1)))
+                             True)
+                           (steps
+                             ()
+                             (by
+                               arith
+                               (list
+                                 (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1
+                                   0 0 0 0)
+                                 (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                                   0 0 0 1)))))
+                         (have hff (= False True)
+                           (steps
+                             ((rewrite (premise hncar) rl lhs true ())
+                              (rewrite (premise hieqc) lr lhs true ()))
+                             refl))
+                         (absurd (premise hff))))))))))))
+       (case False
+         (chain
+           (have hg1 (= (le (imax (elog a d) (fmt_emin f)) (mw_of f)) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (have hgt (= (lt (mw_of f) (imax (elog a d) (fmt_emin f))) True)
+             (steps () (by arith (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1))))
+           (have hmeq
+             (=
+               (if (le (imax (elog a d) (fmt_emin f)) (mw_of f))
+                 (rne_div
+                   (* a (fpow2 (- (mw_of f) (imax (elog a d) (fmt_emin f)))))
+                   d)
+                 (rne_div
+                   a
+                   (* d (fpow2 (- (imax (elog a d) (fmt_emin f)) (mw_of f))))))
+               (rne_div
+                 a
+                 (* d (fpow2 (- (imax (elog a d) (fmt_emin f)) (mw_of f))))))
+             (steps ((rewrite (premise hg1) lr lhs true ()) (simp lhs)) refl))
+           (have hzp
+             (=
+               (lt 0 (fpow2 (- (imax (elog a d) (fmt_emin f)) (mw_of f))))
+               True)
+             (rewrite-with
+               (lemma fpow2_pos)
+               lr
+               lhs
+               ((inst k (- (imax (elog a d) (fmt_emin f)) (mw_of f))))
+               ()
+               refl))
+           (have hddp
+             (=
+               (le d (* d (fpow2 (- (imax (elog a d) (fmt_emin f)) (mw_of f)))))
+               True)
+             (rewrite-with
+               (lemma le_mul_r)
+               lr
+               lhs
+               ((inst x d)
+                (inst y (fpow2 (- (imax (elog a d) (fmt_emin f)) (mw_of f)))))
+               ((by arith (list 1 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))
+                (by arith (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1)))
+               refl))
+           (have hy0
+             (=
+               (lt 0 (* d (fpow2 (- (imax (elog a d) (fmt_emin f)) (mw_of f)))))
+               True)
+             (steps
+               ()
+               (by arith (list 1 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1))))
+           (have hmn
+             (=
+               (le
+                 0
+                 (rne_div
+                   a
+                   (* d (fpow2 (- (imax (elog a d) (fmt_emin f)) (mw_of f))))))
+               True)
+             (rewrite-with
+               (lemma rne_div_nonneg)
+               lr
+               lhs
+               ((inst x a)
+                (inst
+                  y
+                  (* d (fpow2 (- (imax (elog a d) (fmt_emin f)) (mw_of f))))))
+               ((steps ((rewrite (premise ha0) lr lhs true ())) refl)
+                (steps ((rewrite (premise hy0) lr lhs true ())) refl))
+               refl))
+           (have hcap
+             (=
+               (le
+                 (rne_div
+                   a
+                   (* d (fpow2 (- (imax (elog a d) (fmt_emin f)) (mw_of f)))))
+                 (fpow2 (+ (mw_of f) 1)))
+               True)
+             (rewrite-with
+               (lemma mrow_cap_hi)
+               lr
+               lhs
+               ((inst a a)
+                (inst d d)
+                (inst w (mw_of f))
+                (inst e (imax (elog a d) (fmt_emin f))))
+               ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                (steps ((rewrite (premise 2) lr lhs true ())) refl)
+                (steps ((rewrite (premise hel) lr lhs true ())) refl)
+                (steps ((rewrite (premise hgt) lr lhs true ())) refl)
+                (steps ((rewrite (premise hmw0) lr lhs true ())) refl))
+               refl))
+           (case-on
+             (int_eq
+               (rne_div
+                 a
+                 (* d (fpow2 (- (imax (elog a d) (fmt_emin f)) (mw_of f)))))
+               (fpow2 (+ (mw_of f) 1)))
+             Bool
+             ((case True
+                (chain
+                  (have hcar
+                    (=
+                      (int_eq
+                        (rne_div
+                          a
+                          (*
+                            d
+                            (fpow2 (- (imax (elog a d) (fmt_emin f)) (mw_of f)))))
+                        (fpow2 (+ (mw_of f) 1)))
+                      True)
+                    (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                  (have hec
+                    (=
+                      (if
+                        (int_eq
+                          (rne_div
+                            a
+                            (*
+                              d
+                              (fpow2
+                                (- (imax (elog a d) (fmt_emin f)) (mw_of f)))))
+                          (fpow2 (+ (mw_of f) 1)))
+                        (+ (imax (elog a d) (fmt_emin f)) 1)
+                        (imax (elog a d) (fmt_emin f)))
+                      (+ (imax (elog a d) (fmt_emin f)) 1))
+                    (steps
+                      ((rewrite (premise hcar) lr lhs true ()) (simp lhs))
+                      refl))
+                  (have hmc
+                    (=
+                      (if
+                        (int_eq
+                          (rne_div
+                            a
+                            (*
+                              d
+                              (fpow2
+                                (- (imax (elog a d) (fmt_emin f)) (mw_of f)))))
+                          (fpow2 (+ (mw_of f) 1)))
+                        (fpow2 (mw_of f))
+                        (rne_div
+                          a
+                          (*
+                            d
+                            (fpow2 (- (imax (elog a d) (fmt_emin f)) (mw_of f))))))
+                      (fpow2 (mw_of f)))
+                    (steps
+                      ((rewrite (premise hcar) lr lhs true ()) (simp lhs))
+                      refl))
+                  (have hg2
+                    (= (lt (fpow2 (mw_of f)) (fpow2 (+ (mw_of f) 1))) True)
+                    (steps
+                      ()
+                      (by
+                        arith
+                        (list 1 0 0 0 0 0 0 0 0 0 0 1 0 0 1 0 0 0 0 0 0 0 0 0 0
+                          0))))
+                  (have hg3
+                    (=
+                      (le (fmt_emin f) (+ (imax (elog a d) (fmt_emin f)) 1))
+                      True)
+                    (steps
+                      ()
+                      (by
+                        arith
+                        (list 1 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                          0 0))))
+                  (have hlt5 (= (lt (fpow2 (mw_of f)) (fpow2 (mw_of f))) False)
+                    (steps
+                      ()
+                      (by
+                        arith
+                        (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                          0 0 0))))
+                  (case-on
+                    (lt (fmt_emax f) (+ (imax (elog a d) (fmt_emin f)) 1))
+                    Bool
+                    ((case True
+                       (chain
+                         (have hov
+                           (=
+                             (lt
+                               (fmt_emax f)
+                               (+ (imax (elog a d) (fmt_emin f)) 1))
+                             True)
+                           (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                         (steps
+                           ((unfold frnd_pos lhs)
+                            (simp lhs)
+                            (rewrite (premise hmeq) lr lhs true ())
+                            (rewrite (premise hec) lr lhs true ())
+                            (rewrite (premise hmc) lr lhs true ())
+                            (rewrite (premise hov) lr lhs true ())
+                            (simp lhs)
+                            (rewrite (premise hovwf) lr lhs true ()))
+                           refl)))
+                     (case False
+                       (chain
+                         (have hnov
+                           (=
+                             (lt
+                               (fmt_emax f)
+                               (+ (imax (elog a d) (fmt_emin f)) 1))
+                             False)
+                           (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                         (have hg4
+                           (=
+                             (le
+                               (+ (imax (elog a d) (fmt_emin f)) 1)
+                               (fmt_emax f))
+                             True)
+                           (steps
+                             ()
+                             (by
+                               arith
+                               (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                                 0 0 0 0 0 0 0 1))))
+                         (case-on
+                           (ftop_ok
+                             f
+                             (fpow2 (mw_of f))
+                             (+ (imax (elog a d) (fmt_emin f)) 1))
+                           Bool
+                           ((case True
+                              (chain
+                                (have htop
+                                  (=
+                                    (ftop_ok
+                                      f
+                                      (fpow2 (mw_of f))
+                                      (+ (imax (elog a d) (fmt_emin f)) 1))
+                                    True)
+                                  (steps
+                                    ((rewrite (hyp True) lr lhs true ()))
+                                    refl))
+                                (steps
+                                  ((unfold frnd_pos lhs)
+                                   (simp lhs)
+                                   (rewrite (premise hmeq) lr lhs true ())
+                                   (rewrite (premise hec) lr lhs true ())
+                                   (rewrite (premise hmc) lr lhs true ())
+                                   (rewrite (premise hnov) lr lhs true ())
+                                   (simp lhs)
+                                   (rewrite (premise htop) lr lhs true ())
+                                   (simp lhs)
+                                   (unfold fwf_fin lhs)
+                                   (rewrite (premise hpw0) lr lhs true ())
+                                   (simp lhs)
+                                   (rewrite (premise hg2) lr lhs true ())
+                                   (simp lhs)
+                                   (rewrite (premise hg3) lr lhs true ())
+                                   (simp lhs)
+                                   (rewrite (premise hg4) lr lhs true ())
+                                   (simp lhs)
+                                   (rewrite (premise hlt5) lr lhs true ())
+                                   (simp lhs)
+                                   (rewrite (premise htop) lr lhs true ()))
+                                  refl)))
+                            (case False
+                              (chain
+                                (have hntop
+                                  (=
+                                    (ftop_ok
+                                      f
+                                      (fpow2 (mw_of f))
+                                      (+ (imax (elog a d) (fmt_emin f)) 1))
+                                    False)
+                                  (steps
+                                    ((rewrite (hyp False) lr lhs true ()))
+                                    refl))
+                                (steps
+                                  ((unfold frnd_pos lhs)
+                                   (simp lhs)
+                                   (rewrite (premise hmeq) lr lhs true ())
+                                   (rewrite (premise hec) lr lhs true ())
+                                   (rewrite (premise hmc) lr lhs true ())
+                                   (rewrite (premise hnov) lr lhs true ())
+                                   (simp lhs)
+                                   (rewrite (premise hntop) lr lhs true ())
+                                   (simp lhs)
+                                   (rewrite (premise hovwf) lr lhs true ()))
+                                  refl)))))))))))
+              (case False
+                (chain
+                  (have hncar
+                    (=
+                      (int_eq
+                        (rne_div
+                          a
+                          (*
+                            d
+                            (fpow2 (- (imax (elog a d) (fmt_emin f)) (mw_of f)))))
+                        (fpow2 (+ (mw_of f) 1)))
+                      False)
+                    (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                  (have hec
+                    (=
+                      (if
+                        (int_eq
+                          (rne_div
+                            a
+                            (*
+                              d
+                              (fpow2
+                                (- (imax (elog a d) (fmt_emin f)) (mw_of f)))))
+                          (fpow2 (+ (mw_of f) 1)))
+                        (+ (imax (elog a d) (fmt_emin f)) 1)
+                        (imax (elog a d) (fmt_emin f)))
+                      (imax (elog a d) (fmt_emin f)))
+                    (steps
+                      ((rewrite (premise hncar) lr lhs true ()) (simp lhs))
+                      refl))
+                  (have hmc
+                    (=
+                      (if
+                        (int_eq
+                          (rne_div
+                            a
+                            (*
+                              d
+                              (fpow2
+                                (- (imax (elog a d) (fmt_emin f)) (mw_of f)))))
+                          (fpow2 (+ (mw_of f) 1)))
+                        (fpow2 (mw_of f))
+                        (rne_div
+                          a
+                          (*
+                            d
+                            (fpow2 (- (imax (elog a d) (fmt_emin f)) (mw_of f))))))
+                      (rne_div
+                        a
+                        (*
+                          d
+                          (fpow2 (- (imax (elog a d) (fmt_emin f)) (mw_of f))))))
+                    (steps
+                      ((rewrite (premise hncar) lr lhs true ()) (simp lhs))
+                      refl))
+                  (case-on
+                    (lt
+                      (rne_div
+                        a
+                        (*
+                          d
+                          (fpow2 (- (imax (elog a d) (fmt_emin f)) (mw_of f)))))
+                      (fpow2 (+ (mw_of f) 1)))
+                    Bool
+                    ((case True
+                       (chain
+                         (have hst
+                           (=
+                             (lt
+                               (rne_div
+                                 a
+                                 (*
+                                   d
+                                   (fpow2
+                                     (-
+                                       (imax (elog a d) (fmt_emin f))
+                                       (mw_of f)))))
+                               (fpow2 (+ (mw_of f) 1)))
+                             True)
+                           (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                         (case-on
+                           (lt (fmt_emax f) (imax (elog a d) (fmt_emin f)))
+                           Bool
+                           ((case True
+                              (chain
+                                (have hov
+                                  (=
+                                    (lt
+                                      (fmt_emax f)
+                                      (imax (elog a d) (fmt_emin f)))
+                                    True)
+                                  (steps
+                                    ((rewrite (hyp True) lr lhs true ()))
+                                    refl))
+                                (steps
+                                  ((unfold frnd_pos lhs)
+                                   (simp lhs)
+                                   (rewrite (premise hmeq) lr lhs true ())
+                                   (rewrite (premise hec) lr lhs true ())
+                                   (rewrite (premise hmc) lr lhs true ())
+                                   (rewrite (premise hov) lr lhs true ())
+                                   (simp lhs)
+                                   (rewrite (premise hovwf) lr lhs true ()))
+                                  refl)))
+                            (case False
+                              (chain
+                                (have hnov
+                                  (=
+                                    (lt
+                                      (fmt_emax f)
+                                      (imax (elog a d) (fmt_emin f)))
+                                    False)
+                                  (steps
+                                    ((rewrite (hyp False) lr lhs true ()))
+                                    refl))
+                                (have hg4n
+                                  (=
+                                    (le
+                                      (imax (elog a d) (fmt_emin f))
+                                      (fmt_emax f))
+                                    True)
+                                  (steps
+                                    ()
+                                    (by
+                                      arith
+                                      (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                                        0 0 0 0 0 0 0 0 0 1))))
+                                (case-on
+                                  (ftop_ok
+                                    f
+                                    (rne_div
+                                      a
+                                      (*
+                                        d
+                                        (fpow2
+                                          (-
+                                            (imax (elog a d) (fmt_emin f))
+                                            (mw_of f)))))
+                                    (imax (elog a d) (fmt_emin f)))
+                                  Bool
+                                  ((case True
+                                     (chain
+                                       (have htop
+                                         (=
+                                           (ftop_ok
+                                             f
+                                             (rne_div
+                                               a
+                                               (*
+                                                 d
+                                                 (fpow2
+                                                   (-
+                                                     (imax
+                                                       (elog a d)
+                                                       (fmt_emin f))
+                                                     (mw_of f)))))
+                                             (imax (elog a d) (fmt_emin f)))
+                                           True)
+                                         (steps
+                                           ((rewrite (hyp True) lr lhs true ()))
+                                           refl))
+                                       (case-on
+                                         (lt
+                                           (rne_div
+                                             a
+                                             (*
+                                               d
+                                               (fpow2
+                                                 (-
+                                                   (imax
+                                                     (elog a d)
+                                                     (fmt_emin f))
+                                                   (mw_of f)))))
+                                           (fpow2 (mw_of f)))
+                                         Bool
+                                         ((case True
+                                            (chain
+                                              (have hsub
+                                                (=
+                                                  (lt
+                                                    (rne_div
+                                                      a
+                                                      (*
+                                                        d
+                                                        (fpow2
+                                                          (-
+                                                            (imax
+                                                              (elog a d)
+                                                              (fmt_emin f))
+                                                            (mw_of f)))))
+                                                    (fpow2 (mw_of f)))
+                                                  True)
+                                                (steps
+                                                  ((rewrite
+                                                     (hyp True)
+                                                     lr
+                                                     lhs
+                                                     true
+                                                     ()))
+                                                  refl))
+                                              (case-on
+                                                (le (elog a d) (fmt_emin f))
+                                                Bool
+                                                ((case True
+                                                   (chain
+                                                     (have hpk
+                                                       (=
+                                                         (le
+                                                           (elog a d)
+                                                           (fmt_emin f))
+                                                         True)
+                                                       (steps
+                                                         ((rewrite
+                                                            (hyp True)
+                                                            lr
+                                                            lhs
+                                                            true
+                                                            ()))
+                                                         refl))
+                                                     (have hpe
+                                                       (=
+                                                         (imax
+                                                           (elog a d)
+                                                           (fmt_emin f))
+                                                         (fmt_emin f))
+                                                       (rewrite-with
+                                                         (lemma imax_pick_r)
+                                                         lr
+                                                         lhs
+                                                         ((inst x (elog a d))
+                                                          (inst y (fmt_emin f)))
+                                                         ((steps
+                                                            ((rewrite
+                                                               (premise hpk)
+                                                               lr
+                                                               lhs
+                                                               true
+                                                               ()))
+                                                            refl))
+                                                         refl))
+                                                     (have hieq
+                                                       (=
+                                                         (int_eq
+                                                           (imax
+                                                             (elog a d)
+                                                             (fmt_emin f))
+                                                           (fmt_emin f))
+                                                         True)
+                                                       (steps
+                                                         ()
+                                                         (by
+                                                           arith
+                                                           (list
+                                                             (list 1 0 0 0 0 0 0
+                                                               0 0 0 0 0 0 0 0 0
+                                                               0 0 0 0 0 0 0 0 0
+                                                               0 0 0 0 0 0 0 -1)
+                                                             (list 1 0 0 0 0 0 0
+                                                               0 0 0 0 0 0 0 0 0
+                                                               0 0 0 0 0 0 0 0 0
+                                                               0 0 0 0 0 0 0 1)))))
+                                                     (steps
+                                                       ((unfold frnd_pos lhs)
+                                                        (simp lhs)
+                                                        (rewrite
+                                                          (premise hmeq)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (rewrite
+                                                          (premise hec)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (rewrite
+                                                          (premise hmc)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (rewrite
+                                                          (premise hnov)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (simp lhs)
+                                                        (rewrite
+                                                          (premise htop)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (simp lhs)
+                                                        (unfold fwf_fin lhs)
+                                                        (rewrite
+                                                          (premise hmn)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (simp lhs)
+                                                        (rewrite
+                                                          (premise hst)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (simp lhs)
+                                                        (rewrite
+                                                          (premise hem)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (simp lhs)
+                                                        (rewrite
+                                                          (premise hg4n)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (simp lhs)
+                                                        (rewrite
+                                                          (premise hsub)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (simp lhs)
+                                                        (rewrite
+                                                          (premise hieq)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ()))
+                                                       refl)))
+                                                 (case False
+                                                   (chain
+                                                     (have hnpk
+                                                       (=
+                                                         (le
+                                                           (elog a d)
+                                                           (fmt_emin f))
+                                                         False)
+                                                       (steps
+                                                         ((rewrite
+                                                            (hyp False)
+                                                            lr
+                                                            lhs
+                                                            true
+                                                            ()))
+                                                         refl))
+                                                     (have hpe
+                                                       (=
+                                                         (imax
+                                                           (elog a d)
+                                                           (fmt_emin f))
+                                                         (elog a d))
+                                                       (rewrite-with
+                                                         (lemma imax_pick_l)
+                                                         lr
+                                                         lhs
+                                                         ((inst x (elog a d))
+                                                          (inst y (fmt_emin f)))
+                                                         ((steps
+                                                            ((rewrite
+                                                               (premise hnpk)
+                                                               lr
+                                                               lhs
+                                                               true
+                                                               ()))
+                                                            refl))
+                                                         refl))
+                                                     (have hfl
+                                                       (=
+                                                         (le
+                                                           (fpow2 (mw_of f))
+                                                           (rne_div
+                                                             a
+                                                             (*
+                                                               d
+                                                               (fpow2
+                                                                 (-
+                                                                   (imax
+                                                                     (elog a d)
+                                                                     (fmt_emin f))
+                                                                   (mw_of f))))))
+                                                         True)
+                                                       (rewrite-with
+                                                         (lemma mrow_floor_hi)
+                                                         lr
+                                                         lhs
+                                                         ((inst a a)
+                                                          (inst d d)
+                                                          (inst w (mw_of f))
+                                                          (inst
+                                                            e
+                                                            (imax
+                                                              (elog a d)
+                                                              (fmt_emin f))))
+                                                         ((steps
+                                                            ((rewrite
+                                                               (premise 1)
+                                                               lr
+                                                               lhs
+                                                               true
+                                                               ()))
+                                                            refl)
+                                                          (steps
+                                                            ((rewrite
+                                                               (premise 2)
+                                                               lr
+                                                               lhs
+                                                               true
+                                                               ()))
+                                                            refl)
+                                                          (by
+                                                            arith
+                                                            (list 1 0 0 0 0 0 0
+                                                              0 0 0 0 0 0 0 0 0
+                                                              0 0 0 0 0 0 0 0 0
+                                                              0 0 0 0 0 0 0 -1))
+                                                          (steps
+                                                            ((rewrite
+                                                               (premise hgt)
+                                                               lr
+                                                               lhs
+                                                               true
+                                                               ()))
+                                                            refl)
+                                                          (steps
+                                                            ((rewrite
+                                                               (premise hmw0)
+                                                               lr
+                                                               lhs
+                                                               true
+                                                               ()))
+                                                            refl))
+                                                         refl))
+                                                     (have hieq
+                                                       (=
+                                                         (int_eq
+                                                           (imax
+                                                             (elog a d)
+                                                             (fmt_emin f))
+                                                           (fmt_emin f))
+                                                         True)
+                                                       (steps
+                                                         ()
+                                                         (by
+                                                           arith
+                                                           (list
+                                                             (list 0 0 0 0 0 0 0
+                                                               0 0 0 0 0 0 0 0 0
+                                                               0 0 0 0 0 0 0 0 0
+                                                               0 0 0 0 0 1 0 0 1)
+                                                             (list 0 0 0 0 0 0 0
+                                                               0 0 0 0 0 0 0 0 0
+                                                               0 0 0 0 0 0 0 0 0
+                                                               0 0 0 0 0 1 0 0 1)))))
+                                                     (steps
+                                                       ((unfold frnd_pos lhs)
+                                                        (simp lhs)
+                                                        (rewrite
+                                                          (premise hmeq)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (rewrite
+                                                          (premise hec)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (rewrite
+                                                          (premise hmc)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (rewrite
+                                                          (premise hnov)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (simp lhs)
+                                                        (rewrite
+                                                          (premise htop)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (simp lhs)
+                                                        (unfold fwf_fin lhs)
+                                                        (rewrite
+                                                          (premise hmn)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (simp lhs)
+                                                        (rewrite
+                                                          (premise hst)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (simp lhs)
+                                                        (rewrite
+                                                          (premise hem)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (simp lhs)
+                                                        (rewrite
+                                                          (premise hg4n)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (simp lhs)
+                                                        (rewrite
+                                                          (premise hsub)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ())
+                                                        (simp lhs)
+                                                        (rewrite
+                                                          (premise hieq)
+                                                          lr
+                                                          lhs
+                                                          true
+                                                          ()))
+                                                       refl)))))))
+                                          (case False
+                                            (chain
+                                              (have hnsub
+                                                (=
+                                                  (lt
+                                                    (rne_div
+                                                      a
+                                                      (*
+                                                        d
+                                                        (fpow2
+                                                          (-
+                                                            (imax
+                                                              (elog a d)
+                                                              (fmt_emin f))
+                                                            (mw_of f)))))
+                                                    (fpow2 (mw_of f)))
+                                                  False)
+                                                (steps
+                                                  ((rewrite
+                                                     (hyp False)
+                                                     lr
+                                                     lhs
+                                                     true
+                                                     ()))
+                                                  refl))
+                                              (steps
+                                                ((unfold frnd_pos lhs)
+                                                 (simp lhs)
+                                                 (rewrite
+                                                   (premise hmeq)
+                                                   lr
+                                                   lhs
+                                                   true
+                                                   ())
+                                                 (rewrite
+                                                   (premise hec)
+                                                   lr
+                                                   lhs
+                                                   true
+                                                   ())
+                                                 (rewrite
+                                                   (premise hmc)
+                                                   lr
+                                                   lhs
+                                                   true
+                                                   ())
+                                                 (rewrite
+                                                   (premise hnov)
+                                                   lr
+                                                   lhs
+                                                   true
+                                                   ())
+                                                 (simp lhs)
+                                                 (rewrite
+                                                   (premise htop)
+                                                   lr
+                                                   lhs
+                                                   true
+                                                   ())
+                                                 (simp lhs)
+                                                 (unfold fwf_fin lhs)
+                                                 (rewrite
+                                                   (premise hmn)
+                                                   lr
+                                                   lhs
+                                                   true
+                                                   ())
+                                                 (simp lhs)
+                                                 (rewrite
+                                                   (premise hst)
+                                                   lr
+                                                   lhs
+                                                   true
+                                                   ())
+                                                 (simp lhs)
+                                                 (rewrite
+                                                   (premise hem)
+                                                   lr
+                                                   lhs
+                                                   true
+                                                   ())
+                                                 (simp lhs)
+                                                 (rewrite
+                                                   (premise hg4n)
+                                                   lr
+                                                   lhs
+                                                   true
+                                                   ())
+                                                 (simp lhs)
+                                                 (rewrite
+                                                   (premise hnsub)
+                                                   lr
+                                                   lhs
+                                                   true
+                                                   ())
+                                                 (simp lhs)
+                                                 (rewrite
+                                                   (premise htop)
+                                                   lr
+                                                   lhs
+                                                   true
+                                                   ()))
+                                                refl)))))))
+                                   (case False
+                                     (chain
+                                       (have hntop
+                                         (=
+                                           (ftop_ok
+                                             f
+                                             (rne_div
+                                               a
+                                               (*
+                                                 d
+                                                 (fpow2
+                                                   (-
+                                                     (imax
+                                                       (elog a d)
+                                                       (fmt_emin f))
+                                                     (mw_of f)))))
+                                             (imax (elog a d) (fmt_emin f)))
+                                           False)
+                                         (steps
+                                           ((rewrite (hyp False) lr lhs true ()))
+                                           refl))
+                                       (steps
+                                         ((unfold frnd_pos lhs)
+                                          (simp lhs)
+                                          (rewrite
+                                            (premise hmeq)
+                                            lr
+                                            lhs
+                                            true
+                                            ())
+                                          (rewrite (premise hec) lr lhs true ())
+                                          (rewrite (premise hmc) lr lhs true ())
+                                          (rewrite
+                                            (premise hnov)
+                                            lr
+                                            lhs
+                                            true
+                                            ())
+                                          (simp lhs)
+                                          (rewrite
+                                            (premise hntop)
+                                            lr
+                                            lhs
+                                            true
+                                            ())
+                                          (simp lhs)
+                                          (rewrite
+                                            (premise hovwf)
+                                            lr
+                                            lhs
+                                            true
+                                            ()))
+                                         refl)))))))))))
+                     (case False
+                       (chain
+                         (have hnst
+                           (=
+                             (lt
+                               (rne_div
+                                 a
+                                 (*
+                                   d
+                                   (fpow2
+                                     (-
+                                       (imax (elog a d) (fmt_emin f))
+                                       (mw_of f)))))
+                               (fpow2 (+ (mw_of f) 1)))
+                             False)
+                           (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                         (have hieqc
+                           (=
+                             (int_eq
+                               (rne_div
+                                 a
+                                 (*
+                                   d
+                                   (fpow2
+                                     (-
+                                       (imax (elog a d) (fmt_emin f))
+                                       (mw_of f)))))
+                               (fpow2 (+ (mw_of f) 1)))
+                             True)
+                           (steps
+                             ()
+                             (by
+                               arith
+                               (list
+                                 (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                                   0 1 0 0 0 0)
+                                 (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+                                   0 0 0 0 0 1)))))
+                         (have hff (= False True)
+                           (steps
+                             ((rewrite (premise hncar) rl lhs true ())
+                              (rewrite (premise hieqc) lr lhs true ()))
+                             refl))
+                         (absurd (premise hff))))))))))))))))
+
+;; THE closure: frnd is total into well-formed values whenever the divisor is
+;; positive. d <= 0 is refuted by the premise; an exact zero is the bottom-row
+;; +0 (needs emin <= emax); either sign rides frnd_pos_wf.
+(claim frnd_wf
+  (goal ((f Fmt) (n Int) (d Int)) ((= (fmt_wf f) True) (= (lt 0 d) True))
+    (= (fwf f (frnd f n d)) True))
+  (case-on (le d 0) Bool
+    ((case True
+       (chain
+         (have hcd (= (le d 0) True)
+           (steps ((rewrite (hyp True) lr lhs true ())) refl))
+         (have hcz (= (le 0 (- 0 1)) True) (steps () (by arith (list 0 0 1 1))))
+         (have hff (= False True)
+           (steps ((rewrite (premise hcz) rl rhs true ()) (simp rhs)) refl))
+         (absurd (premise hff))))
+     (case False
+       (chain
+         (have hnd (= (le d 0) False)
+           (steps ((rewrite (hyp False) lr lhs true ())) refl))
+         (case-on (int_eq n 0) Bool
+           ((case True
+              (chain
+                (have hz (= (int_eq n 0) True)
+                  (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                (have hpb (= (lt 0 (fpow2 (+ (mw_of f) 1))) True)
+                  (rewrite-with
+                    (lemma fpow2_pos)
+                    lr
+                    lhs
+                    ((inst k (+ (mw_of f) 1)))
+                    ()
+                    refl))
+                (have hle (= (le (fmt_emin f) (fmt_emin f)) True)
+                  (steps () (by arith (list 1 0 0 0 0 0))))
+                (have hmm2 (= (le (fmt_emin f) (fmt_emax f)) True)
+                  (rewrite-with
+                    (lemma fmt_emin_le_emax)
+                    lr
+                    lhs
+                    ((inst f f))
+                    ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+                    refl))
+                (have hpw (= (lt 0 (fpow2 (mw_of f))) True)
+                  (rewrite-with
+                    (lemma fpow2_pos)
+                    lr
+                    lhs
+                    ((inst k (mw_of f)))
+                    ()
+                    refl))
+                (have hie (= (int_eq (fmt_emin f) (fmt_emin f)) True)
+                  (steps
+                    ()
+                    (by
+                      arith
+                      (list (list 1 0 0 0 0 0 0 0 0) (list 1 0 0 0 0 0 0 0 0)))))
+                (steps
+                  ((unfold frnd lhs)
+                   (rewrite (premise hnd) lr lhs true ())
+                   (simp lhs)
+                   (rewrite (premise hz) lr lhs true ())
+                   (simp lhs)
+                   (unfold fwf_fin lhs)
+                   (simp lhs)
+                   (rewrite (premise hpb) lr lhs true ())
+                   (simp lhs)
+                   (rewrite (premise hle) lr lhs true ())
+                   (simp lhs)
+                   (rewrite (premise hmm2) lr lhs true ())
+                   (simp lhs)
+                   (rewrite (premise hpw) lr lhs true ())
+                   (simp lhs)
+                   (rewrite (premise hie) lr lhs true ()))
+                  refl)))
+            (case False
+              (chain
+                (have hnz (= (int_eq n 0) False)
+                  (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                (case-on (lt n 0) Bool
+                  ((case True
+                     (chain
+                       (have hneg (= (lt n 0) True)
+                         (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                       (have ha1 (= (le 1 (- 0 n)) True)
+                         (steps () (by arith (list 1 0 0 0 0 1))))
+                       (have hd1 (= (le 1 d) True)
+                         (steps () (by arith (list 1 0 1 0 0 0 0))))
+                       (have hfw (= (fwf f (frnd_pos f True (- 0 n) d)) True)
+                         (rewrite-with
+                           (lemma frnd_pos_wf)
+                           lr
+                           lhs
+                           ((inst f f)
+                            (inst s True)
+                            (inst a (- 0 n))
+                            (inst d d))
+                           ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                            (steps
+                              ((rewrite (premise ha1) lr lhs true ()))
+                              refl)
+                            (steps
+                              ((rewrite (premise hd1) lr lhs true ()))
+                              refl))
+                           refl))
+                       (steps
+                         ((unfold frnd lhs)
+                          (rewrite (premise hnd) lr lhs true ())
+                          (simp lhs)
+                          (rewrite (premise hnz) lr lhs true ())
+                          (simp lhs)
+                          (rewrite (premise hneg) lr lhs true ())
+                          (rewrite (premise hfw) rl rhs true ())
+                          (simp both))
+                         refl)))
+                   (case False
+                     (chain
+                       (have hnneg (= (lt n 0) False)
+                         (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                       (case-on (lt 0 n) Bool
+                         ((case True
+                            (chain
+                              (have hpos (= (lt 0 n) True)
+                                (steps
+                                  ((rewrite (hyp True) lr lhs true ()))
+                                  refl))
+                              (have ha1 (= (le 1 n) True)
+                                (steps () (by arith (list 1 0 0 0 0 0 1))))
+                              (have hd1 (= (le 1 d) True)
+                                (steps () (by arith (list 1 0 1 0 0 0 0 0))))
+                              (have hfw (= (fwf f (frnd_pos f False n d)) True)
+                                (rewrite-with
+                                  (lemma frnd_pos_wf)
+                                  lr
+                                  lhs
+                                  ((inst f f)
+                                   (inst s False)
+                                   (inst a n)
+                                   (inst d d))
+                                  ((steps
+                                     ((rewrite (premise 0) lr lhs true ()))
+                                     refl)
+                                   (steps
+                                     ((rewrite (premise ha1) lr lhs true ()))
+                                     refl)
+                                   (steps
+                                     ((rewrite (premise hd1) lr lhs true ()))
+                                     refl))
+                                  refl))
+                              (steps
+                                ((unfold frnd lhs)
+                                 (rewrite (premise hnd) lr lhs true ())
+                                 (simp lhs)
+                                 (rewrite (premise hnz) lr lhs true ())
+                                 (simp lhs)
+                                 (rewrite (premise hnneg) lr lhs true ())
+                                 (rewrite (premise hfw) rl rhs true ())
+                                 (simp both))
+                                refl)))
+                          (case False
+                            (chain
+                              (have hnpos (= (lt 0 n) False)
+                                (steps
+                                  ((rewrite (hyp False) lr lhs true ()))
+                                  refl))
+                              (have hie0 (= (int_eq n 0) True)
+                                (steps
+                                  ()
+                                  (by
+                                    arith
+                                    (list
+                                      (list 1 0 0 0 0 0 1)
+                                      (list 1 0 0 0 0 1 0)))))
+                              (have hff (= False True)
+                                (steps
+                                  ((rewrite (premise hnz) rl lhs true ())
+                                   (rewrite (premise hie0) lr lhs true ()))
+                                  refl))
+                              (absurd (premise hff)))))))))))))))))))
