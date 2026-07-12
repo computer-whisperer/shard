@@ -1,9 +1,10 @@
 shard floats — FLOATS.md
 ========================
 
-STATUS: DRAFT (2026-07-11; all §13 open decision points RESOLVED
-same day over three ruling rounds, work begun at R0 with the user's
-go-ahead — awaiting the full ratification read) — the scope ledger
+STATUS: RATIFIED (2026-07-12, user read + sign-off; drafted
+2026-07-11 with all §13 open decision points resolved same day over
+three ruling rounds; R0 landed complete before ratification and
+validated §2 as written) — the scope ledger
 for floating point in shard: how IEEE-754 arithmetic enters the language honestly — exact
 deterministic semantics, no pretense of reals — and how it lowers to
 bare hardware float instructions on every target. This file owns the
