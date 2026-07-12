@@ -238,11 +238,20 @@
 (claim emax_f32
   (goal () () (= (fmt_emax (fmt_f32)) 127))
   (steps ((compute both)) refl))
+(claim emin_f64
+  (goal () () (= (fmt_emin (fmt_f64)) -1022))
+  (steps ((compute both)) refl))
+(claim emax_f64
+  (goal () () (= (fmt_emax (fmt_f64)) 1023))
+  (steps ((compute both)) refl))
 (claim emax_f8e4m3fn
   (goal () () (= (fmt_emax (fmt_f8e4m3fn)) 8))
   (steps ((compute both)) refl))
 (claim wf_f32
   (goal () () (= (fmt_wf (fmt_f32)) True))
+  (steps ((compute both)) refl))
+(claim wf_f64
+  (goal () () (= (fmt_wf (fmt_f64)) True))
   (steps ((compute both)) refl))
 (claim wf_toy
   (goal () () (= (fmt_wf (fmt_toy)) True))
@@ -792,4 +801,192 @@
 ;; representable, the general remainder path throughout.
 (claim frnd_mono_toy_odd
   (goal () () (= (mono_row (fmt_toy) -140 7 280) True))
+  (steps ((compute both)) refl))
+
+;; --- probe grids on F32/F64 samples (FLOATS.md §10: the R1 gate close) ---------------
+;; The real formats are far beyond exhaustive compute, so R1 closes on SAMPLED
+;; grids: strict roundtrip spans at the format corners, hand-computed IEEE
+;; boundary pins (every constant below double-checked against an exact-rational
+;; reference AND host IEEE hardware before landing), the classic inexactness
+;; witnesses, and monotonicity walks across the row crossing at 1.0 and across
+;; zero at half-subnormal granularity. Overflow-crossing monotonicity stays
+;; toy-exhaustive only (mono_row's unit numerator step cannot resolve a
+;; 2^104-ulp grid); the F32/F64 overflow BOUNDARY is pinned by the tie pairs
+;; below instead.
+
+;; one strict probe: the slot must be WELL-FORMED and round-trip. Unlike
+;; rt_one there is no skip — a span landing on a malformed slot fails, so a
+;; span can never pass vacuously off a mistaken row.
+(fn rtp_one ((f Fmt) (s Bool) (m Int) (e Int)) Bool
+  (if (fwf_fin f m e)
+    (fval_eqb
+      (frnd f (fval_num f (Fin s m e)) (fval_den f (Fin s m e)))
+      (Fin s m e))
+    False))
+
+;; sweep k mantissa slots downward from m on row e, strictly.
+(fn rt_span ((f Fmt) (s Bool) (m Int) (e Int) (k Int)) Bool
+  (measure k (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (le k 0) True
+  (if (rtp_one f s m e) (rt_span f s (- m 1) e (- k 1))
+  False)))
+
+;; F32 spans: the deep-subnormal corner (2^149 denominators), the low-normal
+;; edge of the 1.0 row, the top of the top row.
+(claim rt_span_f32_bottom
+  (goal () () (= (rt_span (fmt_f32) False 256 -126 256) True))
+  (steps ((compute both)) refl))
+(claim rt_span_f32_one
+  (goal () () (= (rt_span (fmt_f32) False 8388735 0 128) True))
+  (steps ((compute both)) refl))
+(claim rt_span_f32_top
+  (goal () () (= (rt_span (fmt_f32) True 16777215 127 256) True))
+  (steps ((compute both)) refl))
+;; F64 spans: the same corners at 52-bit mantissas and 2^1074 denominators.
+(claim rt_span_f64_bottom
+  (goal () () (= (rt_span (fmt_f64) False 256 -1022 256) True))
+  (steps ((compute both)) refl))
+(claim rt_span_f64_one
+  (goal () () (= (rt_span (fmt_f64) False 4503599627370623 0 128) True))
+  (steps ((compute both)) refl))
+(claim rt_span_f64_top
+  (goal () () (= (rt_span (fmt_f64) True 9007199254740991 1023 256) True))
+  (steps ((compute both)) refl))
+
+;; F32 boundary pins: 0.1 (the classic 13421773/2^27), the smallest subnormal
+;; and the tie at half of it, the maximal finite, and the overflow tie pair —
+;; (2^25-1)*2^103 is EXACTLY halfway between max finite and 2^128; RNE picks
+;; the even carry side, so the tie itself overflows and one below stays.
+(claim frnd_f32_tenth
+  (goal () () (= (frnd (fmt_f32) 1 10) (Fin False 13421773 -4)))
+  (steps ((compute both)) refl))
+(claim frnd_f32_submin
+  (goal () () (= (frnd (fmt_f32) 1 (fpow2 149)) (Fin False 1 -126)))
+  (steps ((compute both)) refl))
+(claim frnd_f32_submin_tie
+  (goal () () (= (frnd (fmt_f32) 1 (fpow2 150)) (Fin False 0 -126)))
+  (steps ((compute both)) refl))
+(claim frnd_f32_max
+  (goal () ()
+    (= (frnd (fmt_f32) (* 16777215 (fpow2 104)) 1) (Fin False 16777215 127)))
+  (steps ((compute both)) refl))
+(claim frnd_f32_over_tie
+  (goal () () (= (frnd (fmt_f32) (* 33554431 (fpow2 103)) 1) (FInf False)))
+  (steps ((compute both)) refl))
+(claim frnd_f32_below_tie
+  (goal () ()
+    (=
+      (frnd (fmt_f32) (- (* 33554431 (fpow2 103)) 1) 1)
+      (Fin False 16777215 127)))
+  (steps ((compute both)) refl))
+
+;; F64 boundary pins: the same battery at 11/52 — 1/3, 0.1 (note 0.2 and 0.1
+;; share a mantissa, one row apart), 3/10, the subnormal floor and its tie,
+;; the normal/subnormal boundary 2^-1022, the maximal finite, the overflow
+;; tie pair at (2^54-1)*2^970.
+(claim frnd_f64_third
+  (goal () () (= (frnd (fmt_f64) 1 3) (Fin False 6004799503160661 -2)))
+  (steps ((compute both)) refl))
+(claim frnd_f64_tenth
+  (goal () () (= (frnd (fmt_f64) 1 10) (Fin False 7205759403792794 -4)))
+  (steps ((compute both)) refl))
+(claim frnd_f64_fifth
+  (goal () () (= (frnd (fmt_f64) 1 5) (Fin False 7205759403792794 -3)))
+  (steps ((compute both)) refl))
+(claim frnd_f64_threetenths
+  (goal () () (= (frnd (fmt_f64) 3 10) (Fin False 5404319552844595 -2)))
+  (steps ((compute both)) refl))
+(claim frnd_f64_submin
+  (goal () () (= (frnd (fmt_f64) 1 (fpow2 1074)) (Fin False 1 -1022)))
+  (steps ((compute both)) refl))
+(claim frnd_f64_submin_tie
+  (goal () () (= (frnd (fmt_f64) 1 (fpow2 1075)) (Fin False 0 -1022)))
+  (steps ((compute both)) refl))
+(claim frnd_f64_normal_min
+  (goal () ()
+    (= (frnd (fmt_f64) 1 (fpow2 1022)) (Fin False 4503599627370496 -1022)))
+  (steps ((compute both)) refl))
+(claim frnd_f64_max
+  (goal () ()
+    (=
+      (frnd (fmt_f64) (* 9007199254740991 (fpow2 971)) 1)
+      (Fin False 9007199254740991 1023)))
+  (steps ((compute both)) refl))
+(claim frnd_f64_over_tie
+  (goal () ()
+    (= (frnd (fmt_f64) (* 18014398509481983 (fpow2 970)) 1) (FInf False)))
+  (steps ((compute both)) refl))
+(claim frnd_f64_below_tie
+  (goal () ()
+    (=
+      (frnd (fmt_f64) (- (* 18014398509481983 (fpow2 970)) 1) 1)
+      (Fin False 9007199254740991 1023)))
+  (steps ((compute both)) refl))
+
+;; the op probes. THE classic: 0.1 + 0.2 lands one ulp ABOVE the rounding of
+;; 3/10 (the exact sum 21617278211378382/2^56 ties at row -2 and even wins
+;; UP; compare frnd_f64_threetenths).
+(claim fadd_f64_tenth_fifth
+  (goal () ()
+    (=
+      (fadd
+        (fmt_f64)
+        (Fin False 7205759403792794 -4)
+        (Fin False 7205759403792794 -3))
+      (Fin False 5404319552844596 -2)))
+  (steps ((compute both)) refl))
+;; absorption at the F32 mantissa edge: 2^24 + 1 ties back down to 2^24;
+;; 2^24 + 2 is the next representable and lands exactly.
+(claim fadd_f32_absorb
+  (goal () ()
+    (=
+      (fadd (fmt_f32) (Fin False 8388608 24) (Fin False 8388608 0))
+      (Fin False 8388608 24)))
+  (steps ((compute both)) refl))
+(claim fadd_f32_step
+  (goal () ()
+    (=
+      (fadd (fmt_f32) (Fin False 8388608 24) (Fin False 8388608 1))
+      (Fin False 8388609 24)))
+  (steps ((compute both)) refl))
+;; F64 division: 1.0 / 3.0 through the op equals the frnd_f64_third pin.
+(claim fdiv_f64_third
+  (goal () ()
+    (=
+      (fdiv
+        (fmt_f64)
+        (Fin False 4503599627370496 0)
+        (Fin False 6755399441055744 1))
+      (Fin False 6004799503160661 -2)))
+  (steps ((compute both)) refl))
+;; guard-bit behavior at full width: (1 + 2^-52)^2 = 1 + 2^-51 + 2^-104
+;; rounds down on the sub-half guard to 1 + 2^-51.
+(claim fmul_f64_nextone
+  (goal () ()
+    (=
+      (fmul
+        (fmt_f64)
+        (Fin False 4503599627370497 0)
+        (Fin False 4503599627370497 0))
+      (Fin False 4503599627370498 0)))
+  (steps ((compute both)) refl))
+
+;; monotonicity walks on the real formats. The row crossing at 1.0: d = 2^25
+;; (resp. 2^54) is half-ulp granularity below 1.0 and quarter-ulp above, n
+;; spans 80 grid steps each side of the crossing — ulp doubling, ties on both
+;; rows.
+(claim frnd_mono_f32_one
+  (goal () () (= (mono_row (fmt_f32) 33554352 33554432 160) True))
+  (steps ((compute both)) refl))
+(claim frnd_mono_f64_one
+  (goal () ()
+    (= (mono_row (fmt_f64) 18014398509481904 18014398509481984 160) True))
+  (steps ((compute both)) refl))
+;; the zero crossing at half-subnormal steps: signed zeros, subnormal ties,
+;; and the sign fork of frnd on the real formats.
+(claim frnd_mono_f32_zero
+  (goal () () (= (mono_row (fmt_f32) -48 (fpow2 150) 96) True))
+  (steps ((compute both)) refl))
+(claim frnd_mono_f64_zero
+  (goal () () (= (mono_row (fmt_f64) -48 (fpow2 1075) 96) True))
   (steps ((compute both)) refl))
