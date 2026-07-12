@@ -1,8 +1,11 @@
-;;; examples/x86mem_src.build.shard — the mod.build ENTRY for the x86_64
-;;; MEM FRAGMENT (docs/X86.md §15): assembles the artifact set for
-;;; examples/x86mem_src.shard as a native Plan value.
+;;; examples/x86mem_src.build.shard — the BUILD ENTRY for the x86_64
+;;; MEM FRAGMENT (docs/X86.md §15) under the re-founded charter
+;;; (docs/BUILD.md §4/§5, rung 2): content only. ARTIFACT bindings, plan
+;;; assembly, and wire are DERIVED (tools/lowbuild pinlib); the manifest
+;;; gate verifies the derived index bindings against the cert file read
+;;; raw.
 ;;;
-;;;     (fn build ((t Target)) Plan)     — PURE; the whole interface
+;;;     (fn build_mods ((t Target)) (List PinMod))   — the standard symbol
 ;;;
 ;;; Each caller ships as a multi-function IMAGE [get, set, caller] with
 ;;; the caller as the ENTRY (enc_image entry=2 lays it first — the blob
@@ -21,7 +24,8 @@
 ;;; range-agnostic, so the vectors exercise DATA_BASE while the certs
 ;;; cover the model's low range.
 ;;;
-;;; RUN IT:  bin/shard_eval run tools/lowbuild/lowbuild.shard examples/x86mem_src.build.shard x86
+;;; RUN IT:
+;;;   bin/shard_eval run tools/lowbuild/lowbuild.shard pinlib examples/x86mem_src.build.shard x86
 
 (import "../kernel/stdlib.shard")
 (import "x86mem_src.shard")
@@ -41,11 +45,11 @@
 (use (:: models x86 encode eapp))
 (import "../meta/plan")
 (use (:: meta plan *))
+(import "../meta/build")
+(use (:: meta build *))
 
 ;; Nat of a small machine count
-(fn xnat ((i Int)) Nat
-  (measure i)
-  (if (le i 0) Z (S (xnat (- i 1)))))
+(fn xnat ((i Int)) Nat (measure i) (if (le i 0) Z (S (xnat (- i 1)))))
 
 ;; n bytes read out of a spec-side memory at address a
 (fn xdump ((a Int) (n Nat) (m Mem)) (List Int)
@@ -62,12 +66,6 @@
 
 ;; --- the build entry -------------------------------------------------------------
 
-;; the cert pins module index 2 (the caller; get/set are the low prefix);
-;; the wire vectors call the blob entry (f0) — a different notion, the ART
-;; line is filtered out of the CPU replayer's copy
-(fn art ((nm (List Int)) (cert (List Int))) PArt
-  (PA nm cert "examples/x86mem_out.shard" "models/x86/x86.shard" 2 "" "none"))
-
 ;; a read vector: wire export 0, result-only (XCASE), = the source fn at
 ;; byte 0 of the zeroed data page
 (fn rvec ((args (List Int)) (want Int)) PVec (PV 0 args Nil want Nil))
@@ -76,40 +74,38 @@
 (fn svec ((args (List Int)) (addr Int) (n Int) (mf Mem)) PVec
   (PXV 0 args addr 0 (xdump addr (xnat n) mf)))
 
+;; the cert pins module index 2 (the caller; get/set are the low prefix);
+;; the wire vectors call the blob entry (f0) — a different notion, the
+;; ARTIFACT line is derived and filtered out of the CPU replayer's copy
 (fn pmod ((nm (List Int)) (cert (List Int)) (bytes (List Int)) (vs (List PVec)))
-  PMod
-  (PM nm bytes (list (art nm cert)) vs))
+  PinMod
+  (MkPinMod nm bytes "examples/x86mem_out.shard" 2 "" (list cert) vs))
 
 ;; DATA_BASE = 0x40000000
 (fn dbase () Int 1073741824)
 
-(fn build ((t Target)) Plan
-  (MkPlan
-    (list
-      (pmod
-        "xmg_bump"
-        "lowered_xmg_bump"
-        (img (xmg_bump_body) 1)
-        (list
-          (rvec (list (dbase)) (xmg_bump (mem_empty) (dbase)))
-          (rvec (list (+ (dbase) 16)) (xmg_bump (mem_empty) (+ (dbase) 16)))))
-      (pmod
-        "xmg_dbl"
-        "lowered_xmg_dbl"
-        (img (xmg_dbl_body) 1)
-        (list (rvec (list (dbase)) (xmg_dbl (mem_empty) (dbase)))))
-      (pmod
-        "xmg_put"
-        "lowered_xmg_put"
-        (img (xmg_put_body) 2)
-        (list
-          (svec
-            (list (dbase) 65)
-            (dbase)
-            3
-            (xmg_put (mem_empty) (dbase) 65))
-          (svec
-            (list (+ (dbase) 4) 200)
-            (dbase)
-            6
-            (xmg_put (mem_empty) (+ (dbase) 4) 200)))))))
+(fn build_mods ((t Target)) (List PinMod)
+  (list
+    (pmod
+      "xmg_bump"
+      "lowered_xmg_bump"
+      (img (xmg_bump_body) 1)
+      (list
+        (rvec (list (dbase)) (xmg_bump (mem_empty) (dbase)))
+        (rvec (list (+ (dbase) 16)) (xmg_bump (mem_empty) (+ (dbase) 16)))))
+    (pmod
+      "xmg_dbl"
+      "lowered_xmg_dbl"
+      (img (xmg_dbl_body) 1)
+      (list (rvec (list (dbase)) (xmg_dbl (mem_empty) (dbase)))))
+    (pmod
+      "xmg_put"
+      "lowered_xmg_put"
+      (img (xmg_put_body) 2)
+      (list
+        (svec (list (dbase) 65) (dbase) 3 (xmg_put (mem_empty) (dbase) 65))
+        (svec
+          (list (+ (dbase) 4) 200)
+          (dbase)
+          6
+          (xmg_put (mem_empty) (+ (dbase) 4) 200))))))

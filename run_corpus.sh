@@ -377,7 +377,7 @@ fi
 # / KERNEL / BYTETIE (cert↔binary) / ENGINE (V8; the x86 build's engine
 # is the CPU itself) — run end to end. Summary
 # line only; any gate failure changes it and fails the corpus diff.
-for LB in "tools/build/build.sh examples/build_products.shard" examples/lowbuild_x86.sh examples/lowbuild_x86loop.sh examples/lowbuild_x86mem.sh examples/lowbuild_x86call.sh examples/lowbuild_x86chain.sh examples/lowbuild_x86loopcall.sh examples/lowbuild_x86intloop.sh; do
+for LB in "tools/build/build.sh examples/build_products.shard"; do
   echo "=== lowering: $LB ==="
   if [ -x bin/shard_eval ]; then
     if bash $LB > "$TMP/lb.out" 2>&1; then

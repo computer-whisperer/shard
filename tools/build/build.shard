@@ -611,6 +611,28 @@
            aux
            "l"))))))
 
+;; the x86 REGEN product: same contract as the wasm one, x86gen as the
+;; generator (single-output only -- no x86 fragment ships a file pair)
+(fn orders_regen_x86
+  ((i Int) (src (List Int)) (out (List Int)) (cap (List Int)) (ev (List Int)))
+  (List Int)
+  (cat
+    (list
+      (run_line
+        (capf cap i "gen.log")
+        (list ev "run" "tools/x86gen/x86gen.shard" src (capf cap i "raw")))
+      (regen_leg
+        i
+        cap
+        ev
+        (capf cap i "raw")
+        "fmt"
+        "cp.log"
+        "canon"
+        "rm.log"
+        out
+        ""))))
+
 ;; a PINLIB product (docs/BUILD.md §4/§5, the re-founded entry): the
 ;; build entry supplies CONTENT (module value + bytes, pin bindings,
 ;; curated vectors) via build_mods; lowbuild pinlib derives ARTIFACT
@@ -668,6 +690,48 @@
       (run_line
         (capf cap i "eng.log")
         (list "node" "examples/wasm_diff.mjs" (capf cap i "plan.txt"))))))
+
+;; the x86 PINLIB product: the wasm ladder's shape over the x86 model
+;; and the CPU engine (plan rendered by lowbuild pinlib ENTRY x86;
+;; fragment ties carry no EFF line -- the set judgment stands alone)
+(fn orders_pinlib_x86
+  ((i Int)
+   (src (List Int))
+   (out (List Int))
+   (cap (List Int))
+   (ev (List Int))
+   (check (List (List Int))))
+  (List Int)
+  (cat
+    (list
+      (run_line
+        (capf cap i "schema.log")
+        (list ev "run" "tools/lowcheck/lowcheck.shard" out))
+      (run_line (capf cap i "kout.log") (append check (Cons out Nil)))
+      (run_line
+        (capf cap i "plan.txt")
+        (list ev "run" "tools/lowbuild/lowbuild.shard" "pinlib" src "x86"))
+      (run_line
+        (capf cap i "tie.txt")
+        (list ev "run" "tools/bytetie/bytetie.shard" out))
+      (run_line
+        (capf cap i "man.log")
+        (list
+          ev
+          "run"
+          "tools/lowcheck/manifest.shard"
+          (capf cap i "plan.txt")
+          "models/x86/x86.shard"
+          out))
+      (run_line
+        (capf cap i "cpu_plan.txt")
+        (list "grep" "-v" "^ARTIFACT" (capf cap i "plan.txt")))
+      (run_line
+        (capf cap i "cc.log")
+        (list "cc" "-O2" "-o" (capf cap i "x86_diff") "examples/x86_diff.c"))
+      (run_line
+        (capf cap i "eng.log")
+        (list (capf cap i "x86_diff") (capf cap i "cpu_plan.txt"))))))
 
 ;; the bin static ladder (gates 1-5 + binelf materialization) — the
 ;; per-vector engine orders are emitted once be.txt exists (round 2)
@@ -796,11 +860,19 @@
        (if (sym_eq k (quote regen))
          (if (sym_eq t (quote wasm))
            (Pair (Some (orders_regen_wasm i src out aux cap ev)) w)
-           (Pair None w))
+         (if (sym_eq t (quote x86))
+           (match aux
+             (Nil (Pair (Some (orders_regen_x86 i src out cap ev)) w))
+             (_ (Pair None w)))
+           (Pair None w)))
        (if (sym_eq k (quote pinlib))
          (if (sym_eq t (quote wasm))
            (Pair (Some (orders_pinlib_wasm i src out aux cap ev check)) w)
-           (Pair None w))
+         (if (sym_eq t (quote x86))
+           (match aux
+             (Nil (Pair (Some (orders_pinlib_x86 i src out cap ev check)) w))
+             (_ (Pair None w)))
+           (Pair None w)))
          (Pair None w))))))
        (Pair None w)))))
 
@@ -1056,8 +1128,12 @@
      (if (ewith el " OK") Nil
      (Cons (vfail i "percolation" "effect surface not OK") Nil)))))
 
-;; pure judgment: plan XMOD set == tie TIE set, then EFF
-(fn xtie_judge ((i Int) (planb (List Int)) (tieb (List Int))) (List (List Int))
+;; pure judgment: plan XMOD set == tie TIE set; tail = the follow-on
+;; judgment when the sets match (lib/bin certs carry an EFF line;
+;; fragment pinlib ties do not — their tail is Nil)
+(fn xtie_sets
+  ((i Int) (planb (List Int)) (tieb (List Int)) (tail (List (List Int))))
+  (List (List Int))
   (match (lines_pfx (blines planb) "XMOD ")
     (Nil (Cons (vfail i "bytetie" "plan has no XMOD lines") Nil))
     ((Cons xh xt)
@@ -1065,12 +1141,18 @@
        (Nil (Cons (vfail i "bytetie" "tie has no TIE lines") Nil))
        ((Cons th tt)
         (if (lsub (Cons xh xt) (Cons th tt))
-          (if (lsub (Cons th tt) (Cons xh xt)) (eff_judge i tieb)
+          (if (lsub (Cons th tt) (Cons xh xt)) tail
           (Cons (vfail i "bytetie" "TIE set differs from plan XMOD set") Nil))
           (Cons (vfail i "bytetie" "plan XMOD not covered by TIE set") Nil)))))))
 
-;; the x86 byte tie: rc gates, then the pure judgment
-(fn g_xtie ((cap (List Int)) (i Int) (w World)) (Pair (List (List Int)) World)
+;; pure judgment: plan XMOD set == tie TIE set, then EFF
+(fn xtie_judge ((i Int) (planb (List Int)) (tieb (List Int))) (List (List Int))
+  (xtie_sets i planb tieb (eff_judge i tieb)))
+
+;; the x86 byte tie: rc gates, then the pure judgment (eff = whether
+;; the tie must also carry a green EFF percolation line)
+(fn g_xtie ((cap (List Int)) (i Int) (eff Bool) (w World))
+  (Pair (List (List Int)) World)
   (match (rc_gate cap i "plan.txt" "bytetie(plan)" w)
     ((Pair m1 w1)
      (match m1
@@ -1089,7 +1171,11 @@
                        (match (slurp (capf cap i "plan.txt") w3)
                          ((Pair planb w4)
                           (match (slurp (capf cap i "tie.txt") w4)
-                            ((Pair tieb w5) (Pair (xtie_judge i planb tieb) w5))))))))))))))))))
+                            ((Pair tieb w5)
+                             (Pair
+                               (if eff (xtie_judge i planb tieb)
+                               (xtie_sets i planb tieb Nil))
+                               w5))))))))))))))))))
 
 ;; pure judgment: embedded IMG == cert-assembled TIEIMG, then EFF
 (fn imgtie_judge ((i Int) (elfb (List Int)) (tieb (List Int))) (List (List Int))
@@ -1431,7 +1517,7 @@
              ((Pair g3b w4)
               (match (rc_gate cap i "acc.log" "accepts" w4)
                 ((Pair g4 w5)
-                 (match (g_xtie cap i w5)
+                 (match (g_xtie cap i True w5)
                    ((Pair g5 w6)
                     (match (rc_gate cap i "cpu_plan.txt" "engine(sieve)" w6)
                       ((Pair g6a w7)
@@ -1476,7 +1562,7 @@
           ((Pair g3a w3)
            (match (g_klog cap i "ksrc.log" "kernel(src)" "BIN " w3)
              ((Pair g3b w4)
-              (match (g_xtie cap i w4)
+              (match (g_xtie cap i True w4)
                 ((Pair g4 w5)
                  (match (g_surface cap i w5)
                    ((Pair g5 w6)
@@ -1632,6 +1718,26 @@
                                    (cat2 (tiegate g3a g3b i planb tieb) g5))))))
                          w8))))))))))))))))
 
+;; verify: an x86 PINLIB product (schema/kernel/tie-set/manifest +
+;; the CPU engine legs; no EFF line on fragment ties)
+(fn v_pinlib_x86 ((cap (List Int)) (i Int) (w World))
+  (Pair (List (List Int)) World)
+  (match (rc_gate cap i "schema.log" "schema" w)
+    ((Pair g1 w1)
+     (match (g_klog cap i "kout.log" "kernel(out)" "" w1)
+       ((Pair g2 w2)
+        (match (g_xtie cap i False w2)
+          ((Pair g3 w3)
+           (match (rc_gate cap i "cpu_plan.txt" "engine(sieve)" w3)
+             ((Pair g4a w4)
+              (match (rc_gate cap i "cc.log" "engine(cc)" w4)
+                ((Pair g4b w5)
+                 (match (rc_gate cap i "eng.log" "engine" w5)
+                   ((Pair g4c w6)
+                    (Pair
+                      (cat2 g1 (cat2 g2 (cat2 g3 (cat2 g4a (cat2 g4b g4c)))))
+                      w6))))))))))))))
+
 (fn v_bp ((cap (List Int)) (i Int) (b BP) (w World))
   (Pair (List (List Int)) World)
   (match b
@@ -1646,8 +1752,11 @@
        (Pair (Cons (vfail i "plan" "unsupported target") Nil) w))
      (if (sym_eq k (quote check)) (g_klog cap i "kout.log" "kernel" "" w)
      (if (sym_eq k (quote regen)) (v_regen_canon cap i out aux w)
-     (if (sym_eq k (quote pinlib)) (v_pinlib_wasm cap i aux w)
-     (Pair (Cons (vfail i "plan" "unsupported kind") Nil) w)))))))))
+     (if (sym_eq k (quote pinlib))
+       (if (sym_eq t (quote wasm)) (v_pinlib_wasm cap i aux w)
+       (if (sym_eq t (quote x86)) (v_pinlib_x86 cap i w)
+       (Pair (Cons (vfail i "plan" "unsupported target") Nil) w)))
+       (Pair (Cons (vfail i "plan" "unsupported kind") Nil) w)))))))))
 
 (fn v_all ((cap (List Int)) (i Int) (bs (List BP)) (w World))
   (Pair (List (List Int)) World)

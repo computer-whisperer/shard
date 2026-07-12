@@ -675,6 +675,43 @@ products (group parallelism absorbed the growth). Aggregate at 10
 entries 1m22. Remaining fragment-era scripts: the nine x86 builds
 (next slice — entries are Opus-delegated per the working split).
 
+**Rung 2, slice 8 — the x86 fragment migration; the script era ends
+(2026-07-11).** The nine x86 fragment scripts die (lowbuild_x86.sh
++ loop/mem/call/chain/loopcall/intloop/div/itoa), their entries are
+re-founded to `build_mods`, and with the last script entries gone
+lowbuild_all.sh itself DISSOLVES — the aggregate build is now
+exactly one command, `tools/build/build.sh
+examples/build_products.shard`, and the corpus lowering loop runs
+that single entry. 18 scripts at the arc's opening; zero remain.
+
+- All nine were the same single-file shape (SRC/OUT/entry, one
+  x86gen output, XMOD/TIE set gate, CPU engine) — no aux pairs.
+- Driver: 'regen x86 (x86gen + the canon ladder) and 'pinlib x86
+  (the wasm ladder's shape over the x86 model + the CPU engine
+  legs). Fragment ties carry no EFF line, so the x86 byte-tie
+  refactored into `xtie_sets` (pure set equality) with the EFF
+  percolation check as the lib/bin tail — the pinlib judge is the
+  set gate alone, exactly the retired scripts' gate. lowbuild
+  renders pinlib x86 plans through xplan_lines (`pinlib ENTRY x86`).
+- The nine committed x86 certs are ALREADY canonical — the canon
+  legs came back green with no loop-style respell. The canon-drift
+  exposure was a wasm-era artifact.
+- Entry rewrites Opus-delegated (the standing low-level split); all
+  nine derived plans BYTE-IDENTICAL to the old wires, no
+  callees=none drops needed (the x86 entries always passed "").
+- Flagged in passing, PRE-EXISTING in the committed entries (not
+  corpus targets, not driver-gated — entries load in run mode):
+  five entries' local `xnat` helper fails the totality gate
+  (measure site 0), and x86div/x86intloop reference `eapp` without
+  a use-clause (run-mode glob resolution covers it; check-mode
+  flags it). Queue: fix with the old-era lowbuild mode retirement.
+
+41 products all green 1m56. Corpus lowering section = the one
+driver line. With the scripts gone, tools/lowbuild's old-era
+default mode (`lowbuild ENTRY [x86]` over a `build` fn) has ZERO
+callers — retiring it (drive/run_isa + the Plan decoders that only
+it uses) is a follow-up residual.
+
 ## 12. Non-goals, stated once
 
 No config dialect — profiles are shard values. No distinguished
