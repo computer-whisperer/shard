@@ -31,6 +31,154 @@
 ;; worker's mod handles a negative first argument at the first step.
 (fn gcd ((a Int) (b Int)) Int (gcd_nn a (iabs b)))
 
+;; --- divisibility toolkit (slice R0.2) ---------------------------------------
+;; Divisibility is spelled through the euclidean remainder: d | n iff
+;; (mod n d) = 0 (all our divisors are positive). The workhorse is
+;; uniqueness-as-computation: exhibit n = d*q + r linearly, cite mod_unique.
+
+;; d | d*q — the product is its own decomposition (remainder 0).
+(claim mod_mul0
+  (goal ((d Int) (q Int)) ((= (lt 0 d) True)) (= (mod (* d q) d) 0))
+  (rewrite-with
+    (lemma mod_unique)
+    lr
+    lhs
+    ((inst q q) (inst r 0))
+    ((by arith (list (list 1 0) (list 1 0)))
+     (steps ((compute both)) refl)
+     (steps ((rewrite (premise 0) lr lhs true ())) refl))
+    refl))
+
+;; d | d.
+(claim mod_self
+  (goal ((d Int)) ((= (lt 0 d) True)) (= (mod d d) 0))
+  (rewrite-with
+    (lemma mod_unique)
+    lr
+    lhs
+    ((inst q 1) (inst r 0))
+    ((by arith (list (list 1 0) (list 1 0)))
+     (steps ((compute both)) refl)
+     (steps ((rewrite (premise 0) lr lhs true ())) refl))
+    refl))
+
+;; --- multiplication order facts ----------------------------------------------
+;; The linear backend treats symbolic products as opaque atoms, so sign and
+;; monotonicity of products are underivable by farkas alone — but they ARE
+;; theorems: wf-induct on the left factor, one mul_dist respell per step,
+;; literal-coefficient products ((* 0 b), (* 1 b)) read linearly.
+
+;; the one-step peel: a*b = (a-1)*b + b (unconditional; the respell every
+;; product-order proof rides).
+(claim mul_split_l
+  (goal ((a Int) (b Int)) () (= (* a b) (+ (* (- a 1) b) b)))
+  (chain
+    (have h2 (= a (+ (- a 1) 1)) (steps () (by arith (list (list 1) (list 1)))))
+    (have h3 (= (* b (- a 1)) (* (- a 1) b))
+      (steps ((rewrite (lemma mul_comm) lr lhs true ())) refl))
+    (have h4 (= (* b 1) (* 1 b))
+      (steps ((rewrite (lemma mul_comm) lr lhs true ())) refl))
+    (steps
+      ((rewrite (premise 0) lr lhs true ())
+       (rewrite (lemma mul_comm) lr lhs true ())
+       (rewrite (lemma mul_dist) lr lhs true ())
+       (rewrite (premise 1) lr lhs true ())
+       (rewrite (premise 2) lr lhs true ()))
+      (by arith (list (list 1 0 0 0) (list 1 0 0 0))))))
+
+;; 0 <= a, 0 <= b  |-  0 <= a*b.
+(claim mul_nonneg
+  (goal ((a Int) (b Int)) ((= (le 0 a) True) (= (le 0 b) True))
+    (= (le 0 (* a b)) True))
+  (wf-induct a
+    (case-on (le a 0) Bool
+      ((case True
+         (fin-split a (premise 0) (hyp True) ((case 0 (by arith (list 1 0 0))))))
+       (case False
+         (chain
+           (have ha1 (= (le a 0) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (have hih (= (le 0 (* (- a 1) b)) True)
+             (rewrite-with
+               (hyp 1)
+               lr
+               lhs
+               ()
+               ((by arith (list 1 0 0 1))
+                (by arith (list 1 0 1 0))
+                (by arith (list 1 0 0 1))
+                (by arith (list 1 0 0 0)))
+               refl))
+           (have hsp (= (* a b) (+ (* (- a 1) b) b))
+             (steps ((rewrite (lemma mul_split_l) lr lhs true ())) refl))
+           (by arith (list 1 0 1 0 1 1))))))))
+
+;; 0 < a, 0 < b  |-  0 < a*b.
+(claim mul_pos
+  (goal ((a Int) (b Int)) ((= (lt 0 a) True) (= (lt 0 b) True))
+    (= (lt 0 (* a b)) True))
+  (chain
+    (have h0 (= (le 0 (* (- a 1) b)) True)
+      (rewrite-with
+        (lemma mul_nonneg)
+        lr
+        lhs
+        ()
+        ((by arith (list 1 1 0)) (by arith (list 1 0 1)))
+        refl))
+    (have hsp (= (* a b) (+ (* (- a 1) b) b))
+      (steps ((rewrite (lemma mul_split_l) lr lhs true ())) refl))
+    (by arith (list 1 0 1 1 1))))
+
+;; the linear-combination law: d | x, d | y  |-  d | x*k + y. THE workhorse:
+;; substitute the exhibited quotients (x = d*qx, y = d*qy), re-associate, and
+;; the combination is its own euclidean decomposition with remainder 0.
+(claim dvd_lincomb
+  (goal ((d Int) (x Int) (y Int) (k Int))
+    ((= (lt 0 d) True) (= (mod x d) 0) (= (mod y d) 0))
+    (= (mod (+ (* x k) y) d) 0))
+  (chain
+    (have hx0 (= x (+ (* d (ediv x d)) (mod x d)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n x) (inst d d))
+        ((by arith (list 1 1 0 0)))
+        refl))
+    (have hx1 (= x (* d (ediv x d)))
+      (steps
+        ((rewrite (premise 3) lr lhs true ())
+         (rewrite (premise 1) lr lhs true ()))
+        (by arith (list (list 1 0 0 0 0) (list 1 0 0 0 0)))))
+    (have hy0 (= y (+ (* d (ediv y d)) (mod y d)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n y) (inst d d))
+        ((by arith (list 1 1 0 0 0 0)))
+        refl))
+    (have hy1 (= y (* d (ediv y d)))
+      (steps
+        ((rewrite (premise 5) lr lhs true ())
+         (rewrite (premise 2) lr lhs true ()))
+        (by arith (list (list 1 0 0 0 0 0 0) (list 1 0 0 0 0 0 0)))))
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      lhs
+      ((inst q (+ (* (ediv x d) k) (ediv y d))) (inst r 0))
+      ((steps
+         ((rewrite (premise 4) lr lhs true ())
+          (rewrite (premise 6) lr lhs true ())
+          (rewrite (lemma mul_assoc) lr lhs true ())
+          (rewrite (lemma mul_dist) lr rhs true ()))
+         (by arith (list (list 1 0 0 0 0 0 0 0) (list 1 0 0 0 0 0 0 0))))
+       (steps ((compute both)) refl)
+       (steps ((rewrite (premise 0) lr lhs true ())) refl))
+      refl)))
+
 ;; --- ground pins ------------------------------------------------------------
 
 (claim gcd_12_18 (goal () () (= (gcd 12 18) 6)) (steps ((compute both)) refl))
