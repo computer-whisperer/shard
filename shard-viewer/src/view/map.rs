@@ -477,7 +477,9 @@ fn file_graph(project: &Project, members: &[Member]) -> (Graph, Vec<EdgeClass>) 
                 Member::Type(ti) => intrinsic(&type_card(project, ti, true)),
                 Member::Doc(fi) => intrinsic(&filedoc_card(project, fi)),
             };
-            GNode::simple(w, h)
+            // The doc card leads the packing order: the file's own account
+            // takes the top-left slot, where reading starts.
+            GNode { lead: matches!(m, Member::Doc(_)), ..GNode::simple(w, h) }
         })
         .collect();
 

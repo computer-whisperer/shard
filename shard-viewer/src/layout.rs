@@ -42,6 +42,11 @@ pub struct GNode {
     /// `if` / `match` / `let`). Unused by the call-graph view; reserved so the
     /// dataflow view can plug in without an engine rewrite.
     pub sub: Option<Box<Graph>>,
+    /// Pack-order bias: a weakly-connected component containing a lead node
+    /// packs *first* (before tallest-first ordering), so it takes the
+    /// top-left slot of the drawing. The Map's file-doc card rides this —
+    /// the file's own account should be the first thing the eye lands on.
+    pub lead: bool,
 }
 
 impl GNode {
@@ -53,6 +58,7 @@ impl GNode {
             n_in: 1,
             n_out: 1,
             sub: None,
+            lead: false,
         }
     }
 }
@@ -211,12 +217,23 @@ pub fn layout(graph: &Graph, cfg: &LayoutConfig) -> Layout {
 
     // Shelf-pack the component boxes: rows filled left-to-right up to a target
     // width chosen so the packed area lands near PACK_ASPECT (never narrower
-    // than the widest component). Tallest-first keeps shelves dense.
+    // than the widest component). Tallest-first keeps shelves dense; lead
+    // components (see [`GNode::lead`]) jump the order and take the top-left
+    // slot — they pay a thin under-used column, which is the price of a
+    // deterministic reading position.
     let total_area: f32 = placed.iter().map(|(l, _, _)| l.width * l.height).sum();
     let widest = placed.iter().map(|(l, _, _)| l.width).fold(0.0, f32::max);
     let target_w = (total_area * PACK_ASPECT).sqrt().max(widest);
+    let leads: Vec<bool> = placed
+        .iter()
+        .map(|(_, comp, _)| comp.iter().any(|&g| graph.nodes[g].lead))
+        .collect();
     let mut order: Vec<usize> = (0..placed.len()).collect();
-    order.sort_by(|&a, &b| placed[b].0.height.total_cmp(&placed[a].0.height));
+    order.sort_by(|&a, &b| {
+        leads[b]
+            .cmp(&leads[a])
+            .then(placed[b].0.height.total_cmp(&placed[a].0.height))
+    });
 
     let mut out = Layout {
         nodes: vec![PlacedNode::default(); graph.nodes.len()],
@@ -1355,6 +1372,26 @@ mod tests {
             for b in &l.nodes[i + 1..] {
                 let apart = a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y;
                 assert!(apart, "packed nodes overlap");
+            }
+        }
+    }
+
+    #[test]
+    fn lead_component_takes_the_top_left_slot() {
+        // A short lead singleton (the Map's file-doc card) among a tall chain
+        // and a spread of chips: whatever tallest-first would do, the lead
+        // packs first and owns the top-left corner.
+        let mut nodes = vec![GNode::simple(150.0, 2000.0), GNode::simple(150.0, 2000.0)];
+        nodes.extend(std::iter::repeat_with(|| GNode::simple(100.0, 40.0)).take(8));
+        let lead_idx = nodes.len();
+        nodes.push(GNode { lead: true, ..GNode::simple(400.0, 160.0) });
+        let g = Graph { nodes, edges: vec![edge(0, 1)] };
+        let l = layout(&g, &LayoutConfig::default());
+        let doc = &l.nodes[lead_idx];
+        for (i, n) in l.nodes.iter().enumerate() {
+            if i != lead_idx {
+                assert!(doc.x <= n.x + 0.5, "lead not leftmost: {} vs {}", doc.x, n.x);
+                assert!(doc.y <= n.y + 0.5, "lead not topmost: {} vs {}", doc.y, n.y);
             }
         }
     }
