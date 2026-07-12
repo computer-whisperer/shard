@@ -2,7 +2,7 @@
 //! proof-vs-impl category heat map (node tint + composition bar), plus the
 //! per-file breakdown side panel.
 
-use super::shared::{graph_canvas, legend_chip, swatch};
+use super::shared::{composition_bar as bar, graph_canvas, heat_color, legend_chip, swatch};
 use super::{SUB_SIZE, TITLE_SIZE, ViewParams};
 use crate::layout::{self, EndPoint, GEdge, GNode, Graph};
 use crate::model::Project;
@@ -43,39 +43,19 @@ pub(crate) fn legend() -> El {
     .padding(tokens::SPACE_2)
 }
 
-/// Heat tint for a file node: cool (ACCENT) for implementation-heavy files,
-/// warm (WARNING) for proof-heavy ones, blended over CARD so labels stay
-/// readable. Files with no substantive code read neutral (plain CARD).
+/// Heat tint for a file node, blended over CARD so labels stay readable.
+/// Files with no substantive code read neutral (plain CARD).
 fn heat_fill(share: Option<f32>) -> Color {
-    match share {
+    match heat_color(share) {
         None => tokens::CARD,
-        Some(s) => tokens::CARD.mix(tokens::ACCENT.mix(tokens::WARNING, s), 0.4),
+        Some(hc) => tokens::CARD.mix(hc, 0.4),
     }
 }
 
-/// A thin stacked bar showing a file's line composition: implementation, then
-/// proof burden, over a track that shows the comment/blank remainder. `inner_w`
-/// is the available width inside the node's padding.
+/// The node-width composition bar (see [`bar`]); `inner_w` is the available
+/// width inside the node's padding.
 fn composition_bar(c: &crate::model::Counts, inner_w: f32) -> El {
-    let total = c.total().max(1) as f32;
-    let seg = |n: u32, color: Color| -> Option<El> {
-        let w = (n as f32 / total) * inner_w;
-        (w >= 0.5).then(|| {
-            column(Vec::<El>::new())
-                .width(Size::Fixed(w))
-                .height(Size::Fixed(6.0))
-                .fill(color)
-        })
-    };
-    let mut segs = Vec::new();
-    segs.extend(seg(c.impl_lines(), tokens::ACCENT));
-    segs.extend(seg(c.proof_lines(), tokens::WARNING));
-    row(segs)
-        .gap(0.0)
-        .width(Size::Fixed(inner_w))
-        .height(Size::Fixed(6.0))
-        .radius(3.0)
-        .fill(tokens::BORDER) // the uncovered track = comment/blank remainder
+    bar(c, inner_w, 6.0)
 }
 
 /// Build the project-wide import dependency graph (file → files it imports).

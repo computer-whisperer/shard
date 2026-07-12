@@ -11,14 +11,15 @@
 use damascene_core::prelude::*;
 use shard_viewer::model::Project;
 use shard_viewer::scope::Scope;
-use shard_viewer::view::{self, CANVAS_KEY, ViewMode, ViewParams};
+use shard_viewer::view::{self, CANVAS_KEY, Sel, ViewMode, ViewParams};
 
 struct Viewer {
     project: Project,
     mode: ViewMode,
     /// The canvas subject (what the view is about). See [`Scope`].
     scope: Scope,
-    selected_fn: Option<usize>,
+    /// The inspector cursor (fn or file). See [`Sel`].
+    selected: Option<Sel>,
     /// Viewport commands queued from clicks, drained once per frame by the host.
     pending: Vec<ViewportRequest>,
     /// Sidebar filter text + its (app-owned) text-selection state.
@@ -59,7 +60,7 @@ impl Viewer {
     /// Open a file's call graph (the Methods drill-down), framing it.
     fn open_file(&mut self, i: usize) {
         self.scope = Scope::File(i);
-        self.selected_fn = None;
+        self.selected = None;
         self.source_modal = false;
         self.mode = ViewMode::Methods;
         // Frame the newly shown graph (the viewport's pan/zoom persists across
@@ -86,7 +87,7 @@ impl App for Viewer {
         // fit computation — a rough estimate is fine.
         let sidebar_w = cx.user_size(view::SIDEBAR_KEY).unwrap_or(view::DEFAULT_SIDEBAR_W);
         let (win_w, win_h) = cx.viewport().unwrap_or((1280.0, 800.0));
-        let panel = if self.selected_fn.is_some() { panel_w + 16.0 } else { 0.0 };
+        let panel = if self.selected.is_some() { panel_w + 16.0 } else { 0.0 };
         let canvas = (
             (win_w - sidebar_w - 32.0 - panel - 16.0).max(200.0),
             (win_h - 122.0 - 16.0).max(200.0),
@@ -96,7 +97,7 @@ impl App for Viewer {
             &ViewParams {
                 mode: self.mode,
                 scope: self.scope.clone(),
-                selected_fn: self.selected_fn,
+                selected: self.selected,
                 zoom: view.zoom,
                 pan: view.pan,
                 canvas,
@@ -164,7 +165,7 @@ impl App for Viewer {
             // below). Off the Map — or when the card isn't on the current
             // plane — scope the Map to the fn's file instead; the selected
             // card always draws its innards, so it reads on arrival.
-            if let Some(g) = self.selected_fn {
+            if let Some(Sel::Fn(g)) = self.selected {
                 if self.mode == ViewMode::Map
                     && let Some(r) =
                         view::region_rect(&self.map_cache, &self.scope, view::MapTarget::Fn(g))
@@ -191,7 +192,7 @@ impl App for Viewer {
             } else {
                 // Map the whole project at once (sidebar "Whole project").
                 self.scope = Scope::Project;
-                self.selected_fn = None;
+                self.selected = None;
                 self.mode = ViewMode::Map;
                 self.fit();
             }
@@ -199,7 +200,7 @@ impl App for Viewer {
             // Map the selected fn's call neighborhood (detail-panel "Tree ▸").
             // Keep it focused as the tree's root. One up, two down: immediate
             // callers plus the transitive implementation it drives.
-            if let Some(root) = self.selected_fn {
+            if let Some(Sel::Fn(root)) = self.selected {
                 self.scope = Scope::CallTree { root, up: 1, down: 2 };
                 self.mode = ViewMode::Map;
                 self.fit();
@@ -218,7 +219,7 @@ impl App for Viewer {
                 self.fly_to(r);
             } else {
                 self.scope = Scope::Dir(dir.to_string());
-                self.selected_fn = None;
+                self.selected = None;
                 self.mode = ViewMode::Map;
                 self.fit();
             }
@@ -244,10 +245,19 @@ impl App for Viewer {
                 && let Some(r) =
                     view::region_rect(&self.map_cache, &self.scope, view::MapTarget::File(i))
             {
+                // Also open the file inspector — the click names the file as
+                // the subject of interest, not just a place to look at.
+                self.selected = Some(Sel::File(i));
                 self.fly_to(r);
             } else {
                 self.open_file(i);
             }
+        } else if let Some(i) = event.route_index::<usize>("filebox")
+            && i < self.project.files.len()
+        {
+            // A file box's label on the Map: open the file inspector in
+            // place. No camera move — the box is already under the pointer.
+            self.selected = Some(Sel::File(i));
         } else if let Some(i) = event.route_index::<usize>("fn")
             && i < self.project.fns.len()
         {
@@ -256,7 +266,7 @@ impl App for Viewer {
                 // detail panel over the same canvas. Don't switch views or
                 // collapse the (possibly multi-file) scope to one file; the
                 // whole point of the Map is to keep the surrounding structure.
-                self.selected_fn = Some(i);
+                self.selected = Some(Sel::Fn(i));
             } else {
                 // Elsewhere, following a cross-file callee/caller switches the
                 // canvas to that fn's file.
@@ -266,7 +276,7 @@ impl App for Viewer {
                 {
                     self.open_file(file);
                 }
-                self.selected_fn = Some(i);
+                self.selected = Some(Sel::Fn(i));
             }
         }
     }
@@ -309,7 +319,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             project,
             mode: ViewMode::Methods,
             scope: selected_file.map_or(Scope::None, Scope::File),
-            selected_fn: None,
+            selected: None,
             pending,
             filter: String::new(),
             selection: Selection::default(),

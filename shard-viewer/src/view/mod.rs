@@ -41,6 +41,16 @@ pub enum ViewMode {
     Map,
 }
 
+/// The inspector selection: the member-shaped cursor the detail panel is
+/// about. Orthogonal to [`Scope`] — a focus *within* the mapped subject. A
+/// `Fn` selection also highlights its card on the canvas; a `File` selection
+/// opens the file inspector (counts, composition, header doc, imports).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Sel {
+    Fn(usize),
+    File(usize),
+}
+
 /// Everything the view needs from the running app, snapshotted per frame.
 pub struct ViewParams {
     pub mode: ViewMode,
@@ -48,9 +58,9 @@ pub struct ViewParams {
     /// views read [`Scope::focus_file`] out of it; the Map view reads the full
     /// fn/file sets. See [`crate::scope`].
     pub scope: Scope,
-    /// The focused fn cursor (highlighted in the graph, shown in the detail
-    /// panel, charted by Flow). Orthogonal to `scope`: a focus *within* it.
-    pub selected_fn: Option<usize>,
+    /// The inspector cursor (highlighted on the canvas, shown in the detail
+    /// panel). See [`Sel`].
+    pub selected: Option<Sel>,
     /// Current viewport zoom (read back from the runtime). Shown in the
     /// toolbar, and — off home — it prices the Map's screen-space rendering
     /// decisions (what draws inside the committed footprints).
@@ -89,6 +99,17 @@ pub struct ViewParams {
     pub panel_w: f32,
 }
 
+impl ViewParams {
+    /// The selected fn when the selection is fn-shaped — what canvas
+    /// highlights and fn-only affordances key off.
+    pub fn selected_fn(&self) -> Option<usize> {
+        match self.selected {
+            Some(Sel::Fn(i)) => Some(i),
+            _ => None,
+        }
+    }
+}
+
 /// Key of the pan/zoom viewport — also the target of `ViewportRequest`s.
 pub const CANVAS_KEY: &str = "canvas";
 
@@ -117,12 +138,14 @@ pub fn app_root(project: &Project, p: &ViewParams, map_cache: Option<&MapCache>)
     let mut panes = vec![sidebar(project, p), main_pane(project, p, map_cache)];
     let mut fn_in_panel = None;
     match p.mode {
-        ViewMode::Methods | ViewMode::Map => {
-            if let Some(fni) = p.selected_fn {
+        ViewMode::Methods | ViewMode::Map => match p.selected {
+            Some(Sel::Fn(fni)) => {
                 panes.push(methods::detail_panel(project, fni, p.mode, p.panel_w));
                 fn_in_panel = Some(fni);
             }
-        }
+            Some(Sel::File(fi)) => panes.push(systems::detail_panel(project, fi)),
+            None => {}
+        },
         ViewMode::Systems => {
             if let Some(fi) = p.scope.focus_file(project) {
                 panes.push(systems::detail_panel(project, fi));

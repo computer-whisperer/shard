@@ -28,6 +28,40 @@ pub(crate) fn legend_chip(color: Color, label: &str) -> El {
     row([swatch(color, 14.0), text(label).muted().font_size(SUB_SIZE)]).gap(tokens::SPACE_2)
 }
 
+/// The proof-vs-impl heat color for a file: cool (ACCENT) when
+/// implementation-heavy, warm (WARNING) when proof-heavy — the project-wide
+/// **amber = proof** convention. `None` (a file with no substantive code)
+/// stays `None`: it reads neutral, not cold.
+pub(crate) fn heat_color(proof_share: Option<f32>) -> Option<Color> {
+    proof_share.map(|s| tokens::ACCENT.mix(tokens::WARNING, s))
+}
+
+/// A thin stacked bar showing a file's line composition: implementation, then
+/// proof burden, over a track that shows the comment/blank remainder. Sized by
+/// the caller — screen px inside a panel, content-space (zoom-scaled) on the
+/// Map's boxes.
+pub(crate) fn composition_bar(c: &crate::model::Counts, w: f32, h: f32) -> El {
+    let total = c.total().max(1) as f32;
+    let seg = |n: u32, color: Color| -> Option<El> {
+        let sw = (n as f32 / total) * w;
+        (sw >= 0.5).then(|| {
+            column(Vec::<El>::new())
+                .width(Size::Fixed(sw))
+                .height(Size::Fixed(h))
+                .fill(color)
+        })
+    };
+    let mut segs = Vec::new();
+    segs.extend(seg(c.impl_lines(), tokens::ACCENT));
+    segs.extend(seg(c.proof_lines(), tokens::WARNING));
+    row(segs)
+        .gap(0.0)
+        .width(Size::Fixed(w))
+        .height(Size::Fixed(h))
+        .radius(h / 2.0)
+        .fill(tokens::BORDER) // the uncovered track = comment/blank remainder
+}
+
 /// Wrap a laid-out graph in the pan/zoom viewport: an edge overlay plus the
 /// per-node elements (index-aligned with `lay.nodes`), placed at their content
 /// coordinates via the `El::layout` escape hatch.

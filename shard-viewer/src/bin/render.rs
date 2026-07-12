@@ -35,7 +35,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ViewParams {
             mode: ViewMode::Methods,
             scope: Scope::File(f.file),
-            selected_fn: Some(fn_idx),
+            selected: Some(view::Sel::Fn(fn_idx)),
             zoom: 1.0,
             pan: (0.0, 0.0),
             canvas: canvas_estimate(),
@@ -61,7 +61,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ViewParams {
             mode: ViewMode::Map,
             scope: Scope::Fn(fn_idx),
-            selected_fn: Some(fn_idx),
+            selected: Some(view::Sel::Fn(fn_idx)),
             zoom: 1.0,
             pan: (0.0, 0.0),
             canvas: canvas_estimate(),
@@ -92,7 +92,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ViewParams {
             mode: ViewMode::Map,
             scope,
-            selected_fn: None,
+            selected: None,
             zoom: 1.0,
             pan: (0.0, 0.0),
             canvas: canvas_estimate(),
@@ -116,7 +116,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ViewParams {
             mode: ViewMode::Map,
             scope: Scope::CallTree { root: fn_idx, up: 1, down: 2 },
-            selected_fn: Some(fn_idx),
+            selected: Some(view::Sel::Fn(fn_idx)),
             zoom: 1.0,
             pan: (0.0, 0.0),
             canvas: canvas_estimate(),
@@ -134,7 +134,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ViewParams {
             mode: ViewMode::Map,
             scope: Scope::Project,
-            selected_fn: None,
+            selected: None,
             zoom: 1.0,
             pan: (0.0, 0.0),
             canvas: canvas_estimate(),
@@ -158,7 +158,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ViewParams {
             mode: ViewMode::Systems,
             scope: selected_file.map_or(Scope::None, Scope::File),
-            selected_fn: None,
+            selected: None,
             zoom: 1.0,
             pan: (0.0, 0.0),
             canvas: canvas_estimate(),
@@ -190,7 +190,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ViewParams {
             mode: ViewMode::Methods,
             scope: Scope::File(file_idx),
-            selected_fn,
+            selected: selected_fn.map(view::Sel::Fn),
             zoom: 1.0,
             pan: (0.0, 0.0),
             canvas: canvas_estimate(),

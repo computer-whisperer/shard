@@ -20,7 +20,7 @@ pub(crate) fn canvas(project: &Project, file_idx: usize, p: &ViewParams) -> El {
         .nodes
         .iter()
         .enumerate()
-        .map(|(i, pn)| node_box(project, fn_of[i], p.selected_fn, pn.w, pn.h))
+        .map(|(i, pn)| node_box(project, fn_of[i], p.selected_fn(), pn.w, pn.h))
         .collect();
     graph_canvas(&lay, node_els)
 }

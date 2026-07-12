@@ -45,8 +45,8 @@
 
 use super::flow::render_region;
 use super::shared::{
-    edges_asset_filtered, edges_asset_scaled, legend_chip, pan_zoom_viewport_min, placed_graph,
-    EdgeClass,
+    composition_bar, edges_asset_filtered, edges_asset_scaled, heat_color, legend_chip,
+    pan_zoom_viewport_min, placed_graph, EdgeClass,
 };
 use super::SUB_SIZE;
 use crate::flow::Region;
@@ -68,6 +68,8 @@ pub(crate) fn legend(flow_z: f32) -> El {
         legend_chip(claim_colors(ClaimKind::Claim, false).0, "claim"),
         legend_chip(claim_colors(ClaimKind::Requirement, false).0, "unmet req"),
         legend_chip(type_colors().0, "type"),
+        legend_chip(tokens::CARD.mix(tokens::ACCENT, 0.3), "impl-heavy box"),
+        legend_chip(tokens::CARD.mix(tokens::WARNING, 0.3), "proof-heavy box"),
         spacer(),
         text("innards ≥").muted().font_size(SUB_SIZE),
         button("−")
@@ -321,12 +323,12 @@ pub(crate) fn canvas(project: &Project, p: &ViewParams, cache: Option<&MapCache>
         .hovered
         .as_deref()
         .and_then(Member::from_key)
-        .or(p.selected_fn.map(Member::Fn));
+        .or(p.selected_fn().map(Member::Fn));
 
     let rctx = RCtx {
         project,
         by_file: &by_file,
-        selected_fn: p.selected_fn,
+        selected_fn: p.selected_fn(),
         focus,
         zoom,
         flow_z: p.flow_z,
@@ -944,8 +946,16 @@ fn file_el(
         let inner = placed_graph(&geom.lay, slots, edge_overlay);
         layers.push(at(inner, geom.off, geom.lay.width, geom.lay.height, w, h));
     }
-    if let Some((lbl, _)) = carto_label(base, FILE_LABEL_PX, ctx.zoom, w, h, abs, shade) {
-        layers.push(lbl);
+    // The composition bar — the Systems lens carried onto the map's wide
+    // view: impl (cool) then proof (warm) over the comment/blank track,
+    // pinned along the box's bottom edge at a screen-constant height. It
+    // draws in the label-only regime; past CONTENTS_PX the cards and edges
+    // themselves are the composition, and the bar would just underline them.
+    if w.min(h) * ctx.zoom < CONTENTS_PX && w * ctx.zoom >= 36.0 {
+        let bh = (5.0 / ctx.zoom).min(h * 0.10);
+        let inset = bh;
+        let bw = w - 2.0 * inset;
+        layers.push(at(composition_bar(&f.counts, bw, bh), (inset, h - bh - inset), bw, bh, w, h));
     }
     let (nfns, nclaims, ntypes) =
         members.iter().fold((0, 0, 0), |(a, b, c), m| match m {
@@ -954,30 +964,39 @@ fn file_el(
             Member::Type(_) => (a, b, c + 1),
             Member::Doc(_) => (a, b, c),
         });
+    if let Some((lbl, _)) = carto_label(base, FILE_LABEL_PX, ctx.zoom, w, h, abs, shade) {
+        // The label is the file's *handle*: keyed, so hovering it reveals the
+        // file's account (the `;;;` header) and clicking it opens the file
+        // inspector. The box itself stays unkeyed — it must never intercept
+        // a background pan drag, and an unkeyed tooltip would be dead anyway.
+        let mut tip = format!(
+            "{} · {} fns · {} claims · {} types · {} lines",
+            f.rel,
+            nfns,
+            nclaims,
+            ntypes,
+            f.counts.total()
+        );
+        if !f.doc.is_empty() {
+            tip = format!("{tip}\n\n{}", f.doc);
+        }
+        layers.push(lbl.key(format!("filebox:{file}")).tooltip(tip));
+    }
+    // Box fill carries the proof-vs-impl heat (the other Systems lens): warm
+    // boxes are proof-heavy corners of the tree, cool ones implementation.
+    // Constant in zoom — at reading zooms the cards cover most of it anyway.
+    let base_fill = tokens::CARD.mix(tokens::BACKGROUND, 0.4);
+    let fill = match heat_color(f.counts.proof_share()) {
+        Some(hc) => base_fill.mix(hc, 0.22),
+        None => base_fill,
+    };
     stack(layers)
         .width(Size::Fixed(w))
         .height(Size::Fixed(h))
-        .fill(tokens::CARD.mix(tokens::BACKGROUND, 0.4))
+        .fill(fill)
         .stroke(tokens::BORDER)
         .stroke_width(ctx.hairline())
         .radius(8.0)
-        .tooltip({
-            let mut tip = format!(
-                "{} · {} fns · {} claims · {} types · {} lines",
-                f.rel,
-                nfns,
-                nclaims,
-                ntypes,
-                f.counts.total()
-            );
-            // The file's `;;;` header — what the file *is*, in the author's
-            // words (the box band is measure-only chrome; the tooltip is the
-            // file's reading surface on the Map).
-            if !f.doc.is_empty() {
-                tip = format!("{tip}\n\n{}", f.doc);
-            }
-            tip
-        })
 }
 
 /// One fn slot at its committed footprint: flow innards when in view and the
