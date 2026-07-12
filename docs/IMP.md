@@ -915,6 +915,56 @@ the data segment) → the block walk theorem welding the three
 workers via this pin + finish phase lemmas → padding + the digest
 readback.
 
+**I2c-3 — THE BLOCK WALK (2026-07-12).** isha_block_walk: the
+329-statement block body — three loops and every phase between —
+runs end to end at the machine and lands on spec shapes. From
+locals src/wb over any memory (premises: 0 ≤ src, src+64 ≤ wb,
+wb+544 ≤ 65536), the body computes Some(INorm ⟨the rounds output
+through the eight H8 projections, scratch zeroed⟩, (h8add_mem m2
+(+ wb 512) rounds_out)) where m2 = the copy+ext memory and
+rounds_out = sha_rounds over the K/W windows of m2 with the H
+window's words as initial state.
+
+- The relative layout is the flagship's: W at wb, K at wb+256, H at
+  wb+512, message at src below W. wb parks in local 3 (pass-through
+  for copy and ext); every mid-body pointer derives from it by
+  ground arithmetic, and after the rounds loop the advanced kp
+  local IS the H base — the finish walks it with zero re-derivation.
+- The body: setup (park + count) → copy 16 → ext frame resets →
+  ext 48 → pre-rounds phase (wp/kp/H-pointer from the park) →
+  H-load (8 Horner lanes via pointer 10, ish_blk_ld0-7) → counters
+  → rounds 64 → finish (8 lanes: ish_ext_ph_ldt gather reused
+  verbatim + ish_blk_fs0-7 add/wrap/scatter) → 4 zero-resets.
+- h8add_mem: the finish's memory effect as one spec-side fn —
+  eight sequential read-add-wrap-write lanes with the machine's
+  CUMULATIVE address trees, so the walk's two sides meet at one
+  normal form with no flattening.
+- The stuck-record trick: the rounds worker returns locals through
+  h8_locals of a STUCK sha_rounds record — the finish phases need a
+  literal list. The whole proof wraps in a single-ctor case-on of
+  the rounds output; hyp 0 rewrites both sides, h8_locals/rt_last
+  and the RHS projections compute over mk_h8, and the case binders
+  carry the finish.
+- The sequencing pin at scale: one S^400 literal tower; per-loop
+  reshape haves (fuel = 40+16+340 / 88+48+256 / 60+64+174), an
+  lg_fuel ground-collapse have after each loop, phase citations
+  chain by pure tower matching, computes stop istmts only when the
+  next citation is a phase (loops want the peeled iwhile; phases
+  want the folded application).
+- 57 farkas discharges, generated positionally: slots = G + the
+  three goal premises + one row per accumulated cut have (the
+  case-on hypothesis never joins the rows); every discharge is one
+  of two shapes (nonneg-side G+M0+M1, range-side G+M2).
+- (inline …) does NOT nest (documented; reader.shard §expansion) —
+  the block body pastes the three loop bodies literally; the
+  extraction must strip ;;-comments (parenthesized comment
+  fragments read as statements — "missing 3 ')'" from an
+  apostrophe was the tell).
+- The one non-cert failure: the walk's computes evaluated ie_ch/
+  ie_rotr32 IExp-builder calls inside the round body's AST while
+  the worker's pattern keeps them folded — the builders join every
+  walk stop list (the workers' own proofs already did this).
+
 ## 7. Non-goals, stated once
 
 - imp as a shipped target or public surface — it is an intermediate;
