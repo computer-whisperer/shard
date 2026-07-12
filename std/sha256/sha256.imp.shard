@@ -3430,3 +3430,1653 @@
            ((rewrite (lemma sched_mem_s) lr rhs true ())
             (rewrite (lemma lg_advk_s) lr rhs true ())))
          refl)))))
+
+;; ---- the list bridge kit (I2c-2d) ---------------------------------------------------
+;; The bridge reads the window DOWNWARD from the frontier: the reversed
+;; window's head is the newest word, so one sched_mem step is one Cons
+;; -- exactly srev_acc's algebra. Counts ride a transparent in-file
+;; adder (std/nat is opaque; add_nat exports no lemmas).
+
+(fn wn_add ((a Nat) (b Nat)) Nat
+  (measure (struct a))
+  (match a
+    (Z b)
+    ((S a2) (S (wn_add a2 b)))))
+
+(claim wn_add_s
+  (goal ((a Nat) (b Nat)) () (= (wn_add (S a) b) (S (wn_add a b))))
+  (steps ((unfold wn_add lhs) (reduce lhs)) refl))
+
+(claim wn_add_sr
+  (goal ((a Nat) (b Nat)) () (= (wn_add a (S b)) (S (wn_add a b))))
+  (induct a
+    ((case Z (steps ((compute both)) refl))
+     (case S
+       (a2)
+       (chain
+         (steps
+           ((rewrite (lemma wn_add_s) lr lhs true ())
+            (rewrite (lemma wn_add_s) lr rhs true ())))
+         (rewrite-with (hyp 0) lr lhs () ())
+         refl)))))
+
+;; the downward window reader: k words below p, newest first
+(fn wrev ((m Mem) (p Int) (k Nat)) (List Int)
+  (measure (struct k))
+  (match k
+    (Z Nil)
+    ((S k2) (Cons (wget m (- p 4)) (wrev m (- p 4) k2)))))
+
+(claim wrev_s
+  (goal ((m Mem) (p Int) (k Nat)) ()
+    (= (wrev m p (S k)) (Cons (wget m (- p 4)) (wrev m (- p 4) k))))
+  (steps ((unfold wrev lhs) (reduce lhs)) refl))
+
+;; arith helpers for the bridge
+(claim ish_le_refl (goal ((x Int)) () (= (le x x) True)) (by arith (list 1)))
+
+(claim ish_wrev_plt
+  (goal ((p Int) (d Int)) ((= (le p d) True)) (= (lt (+ (- p 4) 3) d) True))
+  (by arith (list 1 1)))
+
+(claim ish_wrev_ple
+  (goal ((p Int) (d Int)) ((= (le p d) True)) (= (le (- p 4) d) True))
+  (by arith (list 1 1)))
+
+(claim ish_lt32
+  (goal ((x Int)) ((= (le x 4294967295) True)) (= (lt x 4294967296) True))
+  (by arith (list 1 1)))
+
+(claim ish_le_ne
+  (goal ((n Int)) ((= (le 0 n) True)) (= (le (+ 1 n) 0) False))
+  (by arith (list 1 1)))
+
+;; ---- stored-value bounds ------------------------------------------------------------
+;; The roundtrip needs 0 <= sched_w < 2^32. The mask gives both once
+;; the sum under it is nonnegative, which walks down the sigma trees:
+;; per-count shift nonnegativity (ground counts keep farkas linear;
+;; shr goes through the euclidean characterization at the ground
+;; power, shl through the ground multiplier).
+
+
+(claim ish_ediv2_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (ediv x 2)) True))
+  (have hid (= x (+ (* 2 (ediv x 2)) (mod x 2)))
+    (rewrite-with
+      (lemma ediv_mod_id)
+      lr
+      lhs
+      ((inst d 2))
+      ((steps ((compute lhs)) refl))
+      refl)
+    (have hhi (= (lt (mod x 2) 2) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((compute lhs)) refl))
+        refl)
+      (by arith (list 2 1 -1 1)))))
+
+(claim ish_shr0_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshr x 0)) True))
+  (chain
+    (rewrite-with
+      (lemma bshr_z)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (steps ((rewrite (premise 0) lr lhs true ())))
+    refl))
+
+(claim ish_shl0_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshl x 0)) True))
+  (chain
+    (rewrite-with
+      (lemma bshl_z)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (steps ((rewrite (premise 0) lr lhs true ())))
+    refl))
+
+(claim ish_shr1_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshr x 1)) True))
+  (chain
+    (have hk (= 1 (+ 0 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshr_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (rewrite-with
+      (lemma ish_shr0_lo)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ediv2_lo)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+         refl)))
+    refl))
+
+(claim ish_shr2_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshr x 2)) True))
+  (chain
+    (have hk (= 2 (+ 1 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshr_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (rewrite-with
+      (lemma ish_shr1_lo)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ediv2_lo)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+         refl)))
+    refl))
+
+(claim ish_shr3_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshr x 3)) True))
+  (chain
+    (have hk (= 3 (+ 2 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshr_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (rewrite-with
+      (lemma ish_shr2_lo)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ediv2_lo)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+         refl)))
+    refl))
+
+(claim ish_shr4_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshr x 4)) True))
+  (chain
+    (have hk (= 4 (+ 3 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshr_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (rewrite-with
+      (lemma ish_shr3_lo)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ediv2_lo)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+         refl)))
+    refl))
+
+(claim ish_shr5_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshr x 5)) True))
+  (chain
+    (have hk (= 5 (+ 4 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshr_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (rewrite-with
+      (lemma ish_shr4_lo)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ediv2_lo)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+         refl)))
+    refl))
+
+(claim ish_shr6_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshr x 6)) True))
+  (chain
+    (have hk (= 6 (+ 5 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshr_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (rewrite-with
+      (lemma ish_shr5_lo)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ediv2_lo)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+         refl)))
+    refl))
+
+(claim ish_shr7_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshr x 7)) True))
+  (chain
+    (have hk (= 7 (+ 6 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshr_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (rewrite-with
+      (lemma ish_shr6_lo)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ediv2_lo)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+         refl)))
+    refl))
+
+(claim ish_shr8_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshr x 8)) True))
+  (chain
+    (have hk (= 8 (+ 7 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshr_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (rewrite-with
+      (lemma ish_shr7_lo)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ediv2_lo)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+         refl)))
+    refl))
+
+(claim ish_shr9_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshr x 9)) True))
+  (chain
+    (have hk (= 9 (+ 8 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshr_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (rewrite-with
+      (lemma ish_shr8_lo)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ediv2_lo)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+         refl)))
+    refl))
+
+(claim ish_shr10_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshr x 10)) True))
+  (chain
+    (have hk (= 10 (+ 9 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshr_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (rewrite-with
+      (lemma ish_shr9_lo)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ediv2_lo)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+         refl)))
+    refl))
+
+(claim ish_shr11_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshr x 11)) True))
+  (chain
+    (have hk (= 11 (+ 10 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshr_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (rewrite-with
+      (lemma ish_shr10_lo)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ediv2_lo)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+         refl)))
+    refl))
+
+(claim ish_shr12_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshr x 12)) True))
+  (chain
+    (have hk (= 12 (+ 11 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshr_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (rewrite-with
+      (lemma ish_shr11_lo)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ediv2_lo)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+         refl)))
+    refl))
+
+(claim ish_shr13_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshr x 13)) True))
+  (chain
+    (have hk (= 13 (+ 12 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshr_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (rewrite-with
+      (lemma ish_shr12_lo)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ediv2_lo)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+         refl)))
+    refl))
+
+(claim ish_shr14_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshr x 14)) True))
+  (chain
+    (have hk (= 14 (+ 13 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshr_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (rewrite-with
+      (lemma ish_shr13_lo)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ediv2_lo)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+         refl)))
+    refl))
+
+(claim ish_shr15_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshr x 15)) True))
+  (chain
+    (have hk (= 15 (+ 14 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshr_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (rewrite-with
+      (lemma ish_shr14_lo)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ediv2_lo)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+         refl)))
+    refl))
+
+(claim ish_shr16_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshr x 16)) True))
+  (chain
+    (have hk (= 16 (+ 15 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshr_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (rewrite-with
+      (lemma ish_shr15_lo)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ediv2_lo)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+         refl)))
+    refl))
+
+(claim ish_shr17_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshr x 17)) True))
+  (chain
+    (have hk (= 17 (+ 16 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshr_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (rewrite-with
+      (lemma ish_shr16_lo)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ediv2_lo)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+         refl)))
+    refl))
+
+(claim ish_shr18_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshr x 18)) True))
+  (chain
+    (have hk (= 18 (+ 17 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshr_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (rewrite-with
+      (lemma ish_shr17_lo)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ediv2_lo)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+         refl)))
+    refl))
+
+(claim ish_shr19_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshr x 19)) True))
+  (chain
+    (have hk (= 19 (+ 18 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshr_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (rewrite-with
+      (lemma ish_shr18_lo)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ediv2_lo)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+         refl)))
+    refl))
+
+(claim ish_shl1_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshl x 1)) True))
+  (chain
+    (have hk (= 1 (+ 0 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshl_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (have hs (= (le 0 (bshl x 0)) True)
+      (rewrite-with
+        (lemma ish_shl0_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl)
+      (by arith (list 1 0 0 2)))))
+
+(claim ish_shl2_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshl x 2)) True))
+  (chain
+    (have hk (= 2 (+ 1 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshl_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (have hs (= (le 0 (bshl x 1)) True)
+      (rewrite-with
+        (lemma ish_shl1_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl)
+      (by arith (list 1 0 0 2)))))
+
+(claim ish_shl3_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshl x 3)) True))
+  (chain
+    (have hk (= 3 (+ 2 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshl_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (have hs (= (le 0 (bshl x 2)) True)
+      (rewrite-with
+        (lemma ish_shl2_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl)
+      (by arith (list 1 0 0 2)))))
+
+(claim ish_shl4_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshl x 4)) True))
+  (chain
+    (have hk (= 4 (+ 3 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshl_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (have hs (= (le 0 (bshl x 3)) True)
+      (rewrite-with
+        (lemma ish_shl3_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl)
+      (by arith (list 1 0 0 2)))))
+
+(claim ish_shl5_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshl x 5)) True))
+  (chain
+    (have hk (= 5 (+ 4 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshl_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (have hs (= (le 0 (bshl x 4)) True)
+      (rewrite-with
+        (lemma ish_shl4_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl)
+      (by arith (list 1 0 0 2)))))
+
+(claim ish_shl6_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshl x 6)) True))
+  (chain
+    (have hk (= 6 (+ 5 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshl_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (have hs (= (le 0 (bshl x 5)) True)
+      (rewrite-with
+        (lemma ish_shl5_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl)
+      (by arith (list 1 0 0 2)))))
+
+(claim ish_shl7_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshl x 7)) True))
+  (chain
+    (have hk (= 7 (+ 6 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshl_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (have hs (= (le 0 (bshl x 6)) True)
+      (rewrite-with
+        (lemma ish_shl6_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl)
+      (by arith (list 1 0 0 2)))))
+
+(claim ish_shl8_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshl x 8)) True))
+  (chain
+    (have hk (= 8 (+ 7 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshl_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (have hs (= (le 0 (bshl x 7)) True)
+      (rewrite-with
+        (lemma ish_shl7_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl)
+      (by arith (list 1 0 0 2)))))
+
+(claim ish_shl9_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshl x 9)) True))
+  (chain
+    (have hk (= 9 (+ 8 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshl_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (have hs (= (le 0 (bshl x 8)) True)
+      (rewrite-with
+        (lemma ish_shl8_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl)
+      (by arith (list 1 0 0 2)))))
+
+(claim ish_shl10_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshl x 10)) True))
+  (chain
+    (have hk (= 10 (+ 9 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshl_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (have hs (= (le 0 (bshl x 9)) True)
+      (rewrite-with
+        (lemma ish_shl9_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl)
+      (by arith (list 1 0 0 2)))))
+
+(claim ish_shl11_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshl x 11)) True))
+  (chain
+    (have hk (= 11 (+ 10 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshl_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (have hs (= (le 0 (bshl x 10)) True)
+      (rewrite-with
+        (lemma ish_shl10_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl)
+      (by arith (list 1 0 0 2)))))
+
+(claim ish_shl12_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshl x 12)) True))
+  (chain
+    (have hk (= 12 (+ 11 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshl_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (have hs (= (le 0 (bshl x 11)) True)
+      (rewrite-with
+        (lemma ish_shl11_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl)
+      (by arith (list 1 0 0 2)))))
+
+(claim ish_shl13_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshl x 13)) True))
+  (chain
+    (have hk (= 13 (+ 12 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshl_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (have hs (= (le 0 (bshl x 12)) True)
+      (rewrite-with
+        (lemma ish_shl12_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl)
+      (by arith (list 1 0 0 2)))))
+
+(claim ish_shl14_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshl x 14)) True))
+  (chain
+    (have hk (= 14 (+ 13 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshl_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (have hs (= (le 0 (bshl x 13)) True)
+      (rewrite-with
+        (lemma ish_shl13_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl)
+      (by arith (list 1 0 0 2)))))
+
+(claim ish_shl15_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshl x 15)) True))
+  (chain
+    (have hk (= 15 (+ 14 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshl_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (have hs (= (le 0 (bshl x 14)) True)
+      (rewrite-with
+        (lemma ish_shl14_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl)
+      (by arith (list 1 0 0 2)))))
+
+(claim ish_shl16_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshl x 16)) True))
+  (chain
+    (have hk (= 16 (+ 15 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshl_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (have hs (= (le 0 (bshl x 15)) True)
+      (rewrite-with
+        (lemma ish_shl15_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl)
+      (by arith (list 1 0 0 2)))))
+
+(claim ish_shl17_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshl x 17)) True))
+  (chain
+    (have hk (= 17 (+ 16 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshl_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (have hs (= (le 0 (bshl x 16)) True)
+      (rewrite-with
+        (lemma ish_shl16_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl)
+      (by arith (list 1 0 0 2)))))
+
+(claim ish_shl18_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshl x 18)) True))
+  (chain
+    (have hk (= 18 (+ 17 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshl_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (have hs (= (le 0 (bshl x 17)) True)
+      (rewrite-with
+        (lemma ish_shl17_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl)
+      (by arith (list 1 0 0 2)))))
+
+(claim ish_shl19_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshl x 19)) True))
+  (chain
+    (have hk (= 19 (+ 18 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshl_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (have hs (= (le 0 (bshl x 18)) True)
+      (rewrite-with
+        (lemma ish_shl18_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl)
+      (by arith (list 1 0 0 2)))))
+
+(claim ish_shl20_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshl x 20)) True))
+  (chain
+    (have hk (= 20 (+ 19 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshl_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (have hs (= (le 0 (bshl x 19)) True)
+      (rewrite-with
+        (lemma ish_shl19_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl)
+      (by arith (list 1 0 0 2)))))
+
+(claim ish_shl21_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshl x 21)) True))
+  (chain
+    (have hk (= 21 (+ 20 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshl_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (have hs (= (le 0 (bshl x 20)) True)
+      (rewrite-with
+        (lemma ish_shl20_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl)
+      (by arith (list 1 0 0 2)))))
+
+(claim ish_shl22_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshl x 22)) True))
+  (chain
+    (have hk (= 22 (+ 21 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshl_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (have hs (= (le 0 (bshl x 21)) True)
+      (rewrite-with
+        (lemma ish_shl21_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl)
+      (by arith (list 1 0 0 2)))))
+
+(claim ish_shl23_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshl x 23)) True))
+  (chain
+    (have hk (= 23 (+ 22 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshl_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (have hs (= (le 0 (bshl x 22)) True)
+      (rewrite-with
+        (lemma ish_shl22_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl)
+      (by arith (list 1 0 0 2)))))
+
+(claim ish_shl24_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshl x 24)) True))
+  (chain
+    (have hk (= 24 (+ 23 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshl_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (have hs (= (le 0 (bshl x 23)) True)
+      (rewrite-with
+        (lemma ish_shl23_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl)
+      (by arith (list 1 0 0 2)))))
+
+(claim ish_shl25_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (bshl x 25)) True))
+  (chain
+    (have hk (= 25 (+ 24 1)) (by arith (list (list 1 0) (list 1 0))))
+    (steps ((rewrite (premise hk) lr lhs true ())))
+    (rewrite-with
+      (lemma bshl_s)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((compute lhs)) refl)))
+    (have hs (= (le 0 (bshl x 24)) True)
+      (rewrite-with
+        (lemma ish_shl24_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl)
+      (by arith (list 1 0 0 2)))))
+
+(claim ish_rotr7_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (rotr32 x 7)) True))
+  (chain
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma band_lo)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma bor_lo)
+         lr
+         lhs
+         ()
+         ((rewrite-with
+            (lemma ish_shr7_lo)
+            lr
+            lhs
+            ()
+            ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+            refl)
+          (rewrite-with
+            (lemma ish_shl25_lo)
+            lr
+            lhs
+            ()
+            ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+            refl))
+         refl)
+       (steps ((compute lhs)) refl)))
+    refl))
+
+(claim ish_rotr18_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (rotr32 x 18)) True))
+  (chain
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma band_lo)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma bor_lo)
+         lr
+         lhs
+         ()
+         ((rewrite-with
+            (lemma ish_shr18_lo)
+            lr
+            lhs
+            ()
+            ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+            refl)
+          (rewrite-with
+            (lemma ish_shl14_lo)
+            lr
+            lhs
+            ()
+            ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+            refl))
+         refl)
+       (steps ((compute lhs)) refl)))
+    refl))
+
+(claim ish_rotr17_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (rotr32 x 17)) True))
+  (chain
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma band_lo)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma bor_lo)
+         lr
+         lhs
+         ()
+         ((rewrite-with
+            (lemma ish_shr17_lo)
+            lr
+            lhs
+            ()
+            ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+            refl)
+          (rewrite-with
+            (lemma ish_shl15_lo)
+            lr
+            lhs
+            ()
+            ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+            refl))
+         refl)
+       (steps ((compute lhs)) refl)))
+    refl))
+
+(claim ish_rotr19_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (rotr32 x 19)) True))
+  (chain
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma band_lo)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma bor_lo)
+         lr
+         lhs
+         ()
+         ((rewrite-with
+            (lemma ish_shr19_lo)
+            lr
+            lhs
+            ()
+            ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+            refl)
+          (rewrite-with
+            (lemma ish_shl13_lo)
+            lr
+            lhs
+            ()
+            ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+            refl))
+         refl)
+       (steps ((compute lhs)) refl)))
+    refl))
+
+(claim ish_ssig0_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (ssig0 x)) True))
+  (chain
+    (steps ((compute lhs (stop rotr32))))
+    (rewrite-with
+      (lemma bxor_lo)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_rotr7_lo)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+         refl)
+       (rewrite-with
+         (lemma bxor_lo)
+         lr
+         lhs
+         ()
+         ((rewrite-with
+            (lemma ish_rotr18_lo)
+            lr
+            lhs
+            ()
+            ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+            refl)
+          (rewrite-with
+            (lemma ish_shr3_lo)
+            lr
+            lhs
+            ()
+            ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+            refl))
+         refl)))
+    refl))
+
+(claim ish_ssig1_lo
+  (goal ((x Int)) ((= (le 0 x) True)) (= (le 0 (ssig1 x)) True))
+  (chain
+    (steps ((compute lhs (stop rotr32))))
+    (rewrite-with
+      (lemma bxor_lo)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_rotr17_lo)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+         refl)
+       (rewrite-with
+         (lemma bxor_lo)
+         lr
+         lhs
+         ()
+         ((rewrite-with
+            (lemma ish_rotr19_lo)
+            lr
+            lhs
+            ()
+            ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+            refl)
+          (rewrite-with
+            (lemma ish_shr10_lo)
+            lr
+            lhs
+            ()
+            ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+            refl))
+         refl)))
+    refl))
+
+(claim ish_swsum_lo
+  (goal ((m Mem) (p Int)) ()
+    (=
+      (le
+        0
+        (+
+          (ssig1 (wget m (- p 8)))
+          (+ (wget m (- p 28)) (+ (ssig0 (wget m (- p 60))) (wget m (- p 64))))))
+      True))
+  (have h1 (= (le 0 (ssig1 (wget m (- p 8)))) True)
+    (rewrite-with
+      (lemma ish_ssig1_lo)
+      lr
+      lhs
+      ()
+      ((rewrite-with (lemma ish_wget_range_lo) lr lhs () () refl))
+      refl)
+    (have h2 (= (le 0 (wget m (- p 28))) True)
+      (rewrite-with (lemma ish_wget_range_lo) lr lhs () () refl)
+      (have h3 (= (le 0 (ssig0 (wget m (- p 60)))) True)
+        (rewrite-with
+          (lemma ish_ssig0_lo)
+          lr
+          lhs
+          ()
+          ((rewrite-with (lemma ish_wget_range_lo) lr lhs () () refl))
+          refl)
+        (have h4 (= (le 0 (wget m (- p 64))) True)
+          (rewrite-with (lemma ish_wget_range_lo) lr lhs () () refl)
+          (by arith (list 1 1 1 1 1)))))))
+
+(claim ish_sw_lo
+  (goal ((m Mem) (p Int)) () (= (le 0 (sched_w m p)) True))
+  (chain
+    (steps ((rewrite (lemma sched_w_fold) lr lhs true ())))
+    (rewrite-with
+      (lemma band_lo)
+      lr
+      lhs
+      ()
+      ((rewrite-with (lemma ish_swsum_lo) lr lhs () () refl)
+       (steps ((compute lhs)) refl)))
+    refl))
+
+(claim ish_sw_hi
+  (goal ((m Mem) (p Int)) () (= (lt (sched_w m p) 4294967296) True))
+  (chain
+    (steps ((rewrite (lemma sched_w_fold) lr lhs true ())))
+    (rewrite-with
+      (lemma ish_lt32)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma band_le_r)
+         lr
+         lhs
+         ()
+         ((rewrite-with (lemma ish_swsum_lo) lr lhs () () refl)
+          (steps ((compute lhs)) refl))
+         refl)))
+    refl))
+
+;; ---- the downward framing and the cons step ------------------------------------------
+
+;; a store at or above the frontier is invisible to the window below it
+(claim ish_wrev_wput_above
+  (goal ((m Mem) (p Int) (d Int) (v Int) (k Nat)) ((= (le p d) True))
+    (= (wrev (wput m d v) p k) (wrev m p k)))
+  (induct k
+    ((case Z (steps ((compute both (stop wput))) refl))
+     (case S
+       (k2)
+       (chain
+         (steps
+           ((rewrite (lemma wrev_s) lr lhs true ())
+            (rewrite (lemma wrev_s) lr rhs true ())))
+         (rewrite-with
+           (lemma ish_wget_wput_other)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma ish_wrev_plt)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+              refl)))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma ish_wrev_ple)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+              refl)))
+         refl)))))
+
+;; one sched_mem step is one Cons on the reversed window: the head is
+;; the roundtripped store, the tail is framed below it
+(claim ish_wrev_put_s
+  (goal ((m Mem) (p Int) (v Int) (k Nat))
+    ((= (le 0 v) True) (= (lt v 4294967296) True))
+    (= (wrev (wput m p v) (+ p 4) (S k)) (Cons v (wrev m p k))))
+  (chain
+    (steps ((rewrite (lemma wrev_s) lr lhs true ())))
+    (have hp (= (- (+ p 4) 4) p) (by arith (list)))
+    (steps ((rewrite (premise hp) lr lhs true ())))
+    (rewrite-with
+      (lemma isha_wput_get)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (rewrite-with
+      (lemma ish_wrev_wput_above)
+      lr
+      lhs
+      ()
+      ((rewrite-with (lemma ish_le_refl) lr lhs () () refl)))
+    refl))
+
+;; ---- the spec-side step and the sigma/snth alignment ---------------------------------
+
+;; sched_ext's one-step unfolding at live fuel
+(claim sched_ext_s
+  (goal ((ws (List Int)) (f Int)) ((= (le f 0) False))
+    (=
+      (sched_ext ws f)
+      (sched_ext
+        (Cons
+          (m32
+            (+
+              (ssig1 (snth 1 ws))
+              (+ (snth 6 ws) (+ (ssig0 (snth 14 ws)) (snth 15 ws)))))
+          ws)
+        (- f 1))))
+  (steps
+    ((unfold sched_ext lhs) (rewrite (premise 0) lr lhs true ()) (reduce lhs))
+    refl))
+
+;; the reversed-index mirror: sched_ext's snth 1/6/14/15 of the
+;; downward window ARE sched_w's reads at p-8/-28/-60/-64 (the window
+;; count is spelled sixteen literal S deep so the reader provably
+;; unfolds; the tail stays abstract)
+(claim ish_sw_snth
+  (goal ((m Mem) (p Int) (j Nat)) ()
+    (=
+      (sched_w m p)
+      (m32
+        (+
+          (ssig1
+            (snth
+              1
+              (wrev
+                m
+                p
+                (S
+                  (S (S (S (S (S (S (S (S (S (S (S (S (S (S (S j)))))))))))))))))))
+          (+
+            (snth
+              6
+              (wrev
+                m
+                p
+                (S
+                  (S (S (S (S (S (S (S (S (S (S (S (S (S (S (S j))))))))))))))))))
+            (+
+              (ssig0
+                (snth
+                  14
+                  (wrev
+                    m
+                    p
+                    (S
+                      (S
+                        (S
+                          (S (S (S (S (S (S (S (S (S (S (S (S (S j)))))))))))))))))))
+              (snth
+                15
+                (wrev
+                  m
+                  p
+                  (S
+                    (S
+                      (S (S (S (S (S (S (S (S (S (S (S (S (S (S j))))))))))))))))))))))))
+  (chain
+    (steps ((compute both (stop wget ssig0 ssig1))))
+    (have hc1 (= (- (- p 4) 4) (- p 8)) (by arith (list)))
+    (have hc2 (= (- (- p 8) 4) (- p 12)) (by arith (list)))
+    (have hc3 (= (- (- p 12) 4) (- p 16)) (by arith (list)))
+    (have hc4 (= (- (- p 16) 4) (- p 20)) (by arith (list)))
+    (have hc5 (= (- (- p 20) 4) (- p 24)) (by arith (list)))
+    (have hc6 (= (- (- p 24) 4) (- p 28)) (by arith (list)))
+    (have hc7 (= (- (- p 28) 4) (- p 32)) (by arith (list)))
+    (have hc8 (= (- (- p 32) 4) (- p 36)) (by arith (list)))
+    (have hc9 (= (- (- p 36) 4) (- p 40)) (by arith (list)))
+    (have hc10 (= (- (- p 40) 4) (- p 44)) (by arith (list)))
+    (have hc11 (= (- (- p 44) 4) (- p 48)) (by arith (list)))
+    (have hc12 (= (- (- p 48) 4) (- p 52)) (by arith (list)))
+    (have hc13 (= (- (- p 52) 4) (- p 56)) (by arith (list)))
+    (have hc14 (= (- (- p 56) 4) (- p 60)) (by arith (list)))
+    (have hc15 (= (- (- p 60) 4) (- p 64)) (by arith (list)))
+    (steps
+      ((rewrite (premise hc1) lr rhs true ())
+       (rewrite (premise hc2) lr rhs true ())
+       (rewrite (premise hc3) lr rhs true ())
+       (rewrite (premise hc4) lr rhs true ())
+       (rewrite (premise hc5) lr rhs true ())
+       (rewrite (premise hc6) lr rhs true ())
+       (rewrite (premise hc7) lr rhs true ())
+       (rewrite (premise hc8) lr rhs true ())
+       (rewrite (premise hc9) lr rhs true ())
+       (rewrite (premise hc10) lr rhs true ())
+       (rewrite (premise hc11) lr rhs true ())
+       (rewrite (premise hc12) lr rhs true ())
+       (rewrite (premise hc13) lr rhs true ())
+       (rewrite (premise hc14) lr rhs true ())
+       (rewrite (premise hc15) lr rhs true ())))
+    refl))
+
+;; ---- the bridge -----------------------------------------------------------------------
+;; sched_mem's readback IS sched_ext: k extension steps at the
+;; frontier, read back newest-first over the full grown window, equal
+;; the spec's reversed-prefix recursion on the initial window. Premise-
+;; free: the denotation level has no bounds story (the machine worker
+;; carries the guards).
+(claim isha_sched_bridge
+  (goal ((m Mem) (p Int) (j Nat) (k Nat)) ()
+    (=
+      (wrev
+        (sched_mem m p k)
+        (lg_advk p 4 k)
+        (wn_add
+          k
+          (S (S (S (S (S (S (S (S (S (S (S (S (S (S (S (S j))))))))))))))))))
+      (sched_ext
+        (wrev
+          m
+          p
+          (S (S (S (S (S (S (S (S (S (S (S (S (S (S (S (S j)))))))))))))))))
+        (int_of_nat k))))
+  (induct k
+    ((case Z
+       (steps
+         ((rewrite (lemma int_of_nat_zero) lr rhs true ())
+          (compute both (stop wrev wget sched_w)))
+         refl))
+     (case S
+       (k2)
+       (chain
+         (steps
+           ((rewrite (lemma sched_mem_s) lr lhs true ())
+            (rewrite (lemma lg_advk_s) lr lhs true ())
+            (rewrite (lemma wn_add_s) lr lhs true ())
+            (rewrite (lemma wn_add_sr) rl lhs true ())))
+         (rewrite-with (hyp 0) lr lhs () ())
+         (rewrite-with
+           (lemma ish_wrev_put_s)
+           lr
+           lhs
+           ()
+           ((rewrite-with (lemma ish_sw_lo) lr lhs () () refl)
+            (rewrite-with (lemma ish_sw_hi) lr lhs () () refl)))
+         (steps ((rewrite (lemma int_of_nat_succ) lr rhs true ())))
+         (rewrite-with
+           (lemma sched_ext_s)
+           lr
+           rhs
+           ()
+           ((rewrite-with
+              (lemma ish_le_ne)
+              lr
+              lhs
+              ()
+              ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+              refl)))
+         (have hsub (= (- (+ 1 (int_of_nat k2)) 1) (int_of_nat k2))
+           (rewrite-with (lemma lg_sub) lr lhs () () refl))
+         (steps
+           ((rewrite (premise hsub) lr rhs true ())
+            (rewrite (lemma ish_sw_snth) rl rhs true ())))
+         refl)))))

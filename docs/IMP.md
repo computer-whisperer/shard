@@ -743,29 +743,49 @@ closed on their first checker runs):
 - REMAINING I2c-2: (d) the list bridge to sha_sched (sched_mem's
   readback = the srev_acc/sched_ext shape — the reversal algebra,
   pure list work).
-- I2c-2d design note (settled, unbuilt): the bridge reads the window
-  DOWNWARD from the frontier — wrev m p k = Cons (wget m (- p 4))
-  (wrev m (- p 4) k2) — because the reversed window's head IS the
-  newest word, so one sched_mem step is one Cons, exactly srev_acc's
-  algebra. THE BRIDGE: wrev (sched_mem m p k) (lg_advk p 4 k)
-  (wn_add k W) = sched_ext (wrev m p W) (int_of_nat k), where W is
-  the window count spelled LITERALLY as sixteen nested S around a
-  quantified j (so wrev provably unfolds 16 deep while the tail stays
-  abstract — snth 1/6/14/15 then resolve to wget at p-8/-28/-60/-64,
-  which is sched_w verbatim; the reversed-index mirror i ↦ len-1-i
-  is exactly why sched_ext's 1/6/14/15 meet sched_mem's offsets).
-  Step machinery: a cons-step lemma wrev (wput m p v) (+ p 4) (S c) =
-  Cons v (wrev m p c) — head by the isha_wput_get roundtrip (value
-  bounds only; sched_w is band-masked, bounds via sched_w_fold +
-  band_lo/band_le_r), tail by a downward window-framing lemma
-  (store at/above the frontier is invisible below it, the
-  ish_wlist_wput_above mirror). Counts ride a TRANSPARENT in-sibling
-  wn_add (std/nat is opaque — no add_nat lemmas exist; recursion on
-  the first arg + one succ-commute lemma). sched_ext steps by
-  unfold+reduce per iteration: the (le fuel 0) guard resolves via
-  int_of_nat_succ + a le-flavored lg_ne mirror, the fuel residue
-  (- (+ 1 n) 1) via lg_sub. Fixed-16 is sha-specific and fine: the
-  16-deep spine is written once in one alignment lemma, not per use.
+**I2c-2d — the list bridge (2026-07-12).** sched_mem's readback IS
+sched_ext — the reversal algebra closed, and the bridge itself plus
+every stage-B lemma landed on their first checker runs:
+
+- **The downward reader.** wrev m p k = Cons (wget m (- p 4)) (wrev m
+  (- p 4) k2): the reversed window's head is the newest word, so one
+  sched_mem step is one Cons — exactly srev_acc's algebra. THE BRIDGE
+  (isha_sched_bridge, PREMISE-FREE — the denotation level has no
+  bounds story; the machine worker carries the guards):
+  wrev (sched_mem m p k) (lg_advk p 4 k) (wn_add k W) =
+  sched_ext (wrev m p W) (int_of_nat k), with W the window count
+  spelled LITERALLY as sixteen nested S around a quantified j — wrev
+  provably unfolds 16 deep while the tail stays abstract, and the
+  17-S tree needed by the induction (window grows) is SYNTACTICALLY
+  both (S W16j) and W16(S j), so the IH binds j := (S j) by matching
+  with zero count algebra beyond one wn_add succ-commute rewrite.
+- **The reversed-index mirror**: sched_ext's snth 1/6/14/15 of the
+  downward window resolve to wget at p−8/−28/−60/−64 — sched_w
+  verbatim (ish_sw_snth; a 15-have flatten cascade normalizes the
+  nested (- (- p 4k) 4) trees).
+- **The cons step** (ish_wrev_put_s): head = the isha_wput_get
+  roundtrip (value bounds only), tail = downward framing
+  (ish_wrev_wput_above, the ish_wlist_wput_above mirror).
+- **The stored-value bounds** (ish_sw_lo/ish_sw_hi, premise-free):
+  band_lo/band_le_r need the masked sum nonnegative, which walks the
+  σ trees down to per-count shift nonnegativity. pow2 is opaque
+  outside std/bits, so the generic shr_pow2/shl_pow2 gateway is
+  unusable at ground counts from a consumer — instead the kernel
+  recurrences (bshr_s/bshl_s + _z) build LADDERS: ish_shr1..19_lo
+  and ish_shl1..25_lo, each rung ~8 lines citing the rung below,
+  with ONE divisor-2 euclidean lemma (ish_ediv2_lo) feeding every
+  shr step. No std/bits surface growth needed.
+- Counts ride a transparent in-sibling wn_add (std/nat is opaque —
+  add_nat exports no lemmas). sched_ext steps by a premised
+  one-step unfolding lemma (sched_ext_s; guard resolved via
+  int_of_nat_succ + ish_le_ne, fuel residue via lg_sub).
+- Gates: fast-engine 235/0 on the sibling; driver 52 products green;
+  corpus FAIL-set unchanged at 57; V8 173/0; silicon 82/0.
+- I2c-2 COMPLETE. REMAINING I2c: I2c-3 block walk + padding + the
+  digest-readback theorem — needs one more list glue (the upward
+  reader wlist as srev of the downward wrev, for the rounds worker's
+  window ↔ sha_sched's final srev_acc), then the three-loop
+  composition via the continuation-phase machinery.
 
 ## 7. Non-goals, stated once
 
