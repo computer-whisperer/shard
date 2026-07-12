@@ -866,6 +866,55 @@ the copy loop's Horner words are exactly words16's word_be groups.
   restored to the 57 baseline after the C6 fix; V8 173/0;
   silicon 82/0.
 
+**I2c-3 — the sequencing pin (2026-07-12).** Machine-level loop
+sequencing validated end to end on a mini-block (ish_blk_seq): two
+copy-loop worker citations + straight-line resets in ONE statement
+spine — the first composition of loop workers inside istmts. The two
+block-tier pins, now settled:
+
+- **PIN A — fuel chaining.** The block runs on ONE literal tower
+  (S^ N d). A loop worker consumes NOTHING from the spine's fuel
+  (istmts hands the same f2 to head and tail), so each loop head
+  needs only its residual tower RE-SPELLED as the worker's
+  (S^ 40 (lg_fuel k slack)) shape — a have proven by compute both
+  (lg_fuel ground-collapses; the slack tower absorbs the excess).
+  The first loop's re-spelling happens UP FRONT on the initial fuel,
+  where it occurs exactly once, so that loop head lands on the
+  worker's shape by construction; later loops re-spell mid-proof at
+  spellings known by construction from the previous have. Nested
+  continuation-fuel spellings CANNOT work — the tail inherits the
+  loop's unconsumed reservoir, so the next loop's lg_fuel node would
+  sit under leftover literal S's and never match.
+- **PIN B — ground rep: PACKED EVERYWHERE.** ceval normalizes the
+  args of STOPPED applications — the probe's first run showed
+  (lg_fuel (S (S Z)) …) packing to (lg_fuel 2 …) inside the stopped
+  node while the locals alignment had introduced the tower spelling;
+  the worker's k then unified inconsistently (packed from fuel,
+  tower from locals) and the citation failed. Resolution: ground
+  counts are SPELLED packed claim-side (C6's source form); towers
+  appear only where structural matching needs them (induction
+  windows). The rep bridge (= (int_of_nat N) (int_of_nat (S^ N Z)))
+  holds by compute both — the arg packs — and feeds the succ-ladder
+  (ish_i1/ish_i2, packed statements; ish_i16/ish_i48 stay
+  tower-spelled for the weld).
+- Count alignment rewrites the FULL 12-local list — a compound
+  pattern with exactly one occurrence — never the bare literal (the
+  byte-crossing rewriter finding stands: packed Nat and Int ground
+  literals are one rewrite atom).
+- Farkas discharge certs must cover ALL premise slots including
+  accumulated cut haves (they join the premise rows in order);
+  non-linear rows (fuel/list equations) take multiplier 0.
+- Worker range premises discharge by ish_iN rewrite + compute
+  (grounding lg_advk inside the subgoal, where nothing is stopped) +
+  premise-rewrite or arith.
+
+Remaining I2c-3 ladder: the block body fn (copy 16 → ext 48 →
+H-load → rounds 64 → h8-add/store finish; bases symbolic with range
+premises, K-window content as a wlist premise discharged at I2e by
+the data segment) → the block walk theorem welding the three
+workers via this pin + finish phase lemmas → padding + the digest
+readback.
+
 ## 7. Non-goals, stated once
 
 - imp as a shipped target or public surface — it is an intermediate;
