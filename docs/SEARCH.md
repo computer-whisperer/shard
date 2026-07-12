@@ -677,6 +677,40 @@ ctor whitelist, root type) → stratified typed grammar; cat_g is its
 prototype with the ilist typing hardcoded.
 
 
+### Posture ruling — this ledger is a LIVING document (USER, 2026-07-11)
+
+Recorded after slice 4: **SEARCH.md is the initial suggestion, open to
+mutation as the arc learns** — not a frozen contract. The unit of
+value is not playground parity (the playground is a SPIKE: it shows
+what is possible and what fits the language, not what must be
+adopted). The unit of value is **components composable into engines,
+plus first-party engines that earn their keep**, judiciated into the
+repo at three admission tiers with three different bars:
+
+- **kernel / CANON.md** — core-language mutations that make
+  frontier-pushing search possible at all; highest bar,
+  census-evidence-driven (the arc's first step, already taken);
+- **meta/** — "stdlib for manipulating shard": the posture is EAGER;
+  durable, surface-disciplined components graduate here (meta/sketch
+  day one; extend_fn; the S4a value machine once a second consumer
+  speaks it, per the hygiene-pass ruling);
+- **tools/** — instruments, useful in any way, and the EASIEST tier
+  to drop later; experiments land here first (D2's clone-first is a
+  special case of this posture).
+
+Program search as a capability has standing uses beyond this arc's
+tasks, three named: **identifying redundancies in canon** (rule
+subsumption as absence proofs over rungs — slice 3's C8⊃R1 discovery
+was a hand-derived instance; the instrument version automates it),
+**finding false equivalence proofs** (adversarial refutation of
+CLAIMED theorems — the comparator and ground battery pointed at the
+kernel's own proof outputs; a zerocase-class bug would light up
+instantly), and **automating compilation of small arbitrary shard
+functions** (the model-fragment note above). Mutations to this ledger
+are recorded in §8 with reasoning; reversals of user rulings still go
+to the user first.
+
+
 ### Interlude — extend_fn (LANDED 2026-07-11, user ruling)
 
 Slice-review ruling: candidate injection must not lean on
