@@ -17,7 +17,9 @@ use damascene_core::prelude::*;
 /// Reused by the Board view, which renders every fn in this same form.
 pub(crate) fn render_region(r: &Region) -> El {
     match r {
-        Region::Frame { kind, detail, branches } => render_frame(*kind, detail, branches),
+        Region::Frame { kind, detail, input, branches } => {
+            render_frame(*kind, detail, input.as_deref(), branches)
+        }
         Region::List { elems, tail } => render_list(elems, tail.as_deref()),
         Region::Op { head, inline, args } => render_op(head, inline, args),
         Region::Seq(steps) => render_seq(steps),
@@ -208,9 +210,17 @@ fn bracket_bar() -> El {
         .radius(2.0)
 }
 
-/// A control structure: a colored keyword band over a body that *contains* its
-/// branches, each headed by its selector chip. Nesting = box enclosure.
-fn render_frame(kind: FrameKind, detail: &str, branches: &[Branch]) -> El {
+/// The estimated height of a frame's keyword band (text + padding) — shared
+/// by [`est`]'s frame arm and the wired-input arrow placement, so the arrow
+/// the renderer draws points where the estimate says the band is.
+const BAND_EST_H: f32 = 26.0;
+
+/// A control structure: a colored keyword band over a body that *contains*
+/// its branches, each headed by its selector chip. Nesting = box enclosure.
+/// A compound subject (`input`) stands to the left and wires into the band —
+/// the frame consumes it the way an op card consumes its operands, instead
+/// of smuggling it into the band as elided text.
+fn render_frame(kind: FrameKind, detail: &str, input: Option<&Region>, branches: &[Branch]) -> El {
     let (accent, fg) = match kind {
         // Branching (a proof case split IS a match — same band, same read).
         FrameKind::Match
@@ -265,10 +275,20 @@ fn render_frame(kind: FrameKind, detail: &str, branches: &[Branch]) -> El {
         column(branches.iter().map(render_branch).collect::<Vec<_>>()).gap(7.0).padding(8.0)
     };
 
-    column([band, body])
-        .fill(tokens::CARD)
-        .stroke(accent)
-        .radius(7.0)
+    let frame = column([band, body]).fill(tokens::CARD).stroke(accent).radius(7.0);
+    match input {
+        None => frame,
+        Some(subject) => {
+            // The subject wires into the *band* — the decision point — so the
+            // row top-aligns and the arrow centers on the band's height.
+            let arrow = column([feed_arrow()])
+                .height(Size::Fixed(BAND_EST_H))
+                .justify(Justify::Center);
+            row([render_region(subject), arrow, frame])
+                .gap(tokens::SPACE_1)
+                .align(Align::Start)
+        }
+    }
 }
 
 /// The frame kinds whose branches are parallel alternatives (a case analysis),
@@ -527,7 +547,7 @@ pub(crate) fn est(r: &Region) -> (f32, f32) {
             }
             (w, h.max(20.0))
         }
-        Region::Frame { kind, detail, branches } => {
+        Region::Frame { kind, detail, input, branches } => {
             let band_w = text_w(kind.keyword(), 7.5) + text_w(detail, 7.0) + 20.0;
             let (body_w, body_h) = if forks(*kind) && branches.len() > 1 {
                 // Shelves of upright cases.
@@ -566,7 +586,16 @@ pub(crate) fn est(r: &Region) -> (f32, f32) {
                 }
                 (w, h)
             };
-            (band_w.max(body_w + 16.0), 26.0 + body_h + 16.0) // band + paddings
+            let fw = band_w.max(body_w + 16.0);
+            let fh = BAND_EST_H + body_h + 16.0; // band + paddings
+            match input {
+                None => (fw, fh),
+                Some(subject) => {
+                    // Mirror the wired-input row: subject + arrow/gaps + frame.
+                    let (iw, ih) = est(subject);
+                    (iw + 26.0 + fw, fh.max(ih))
+                }
+            }
         }
         Region::List { elems, tail } => {
             // header (`list · N`) over galley columns of bracketed elements.

@@ -10,7 +10,7 @@
 //! Unrecognized forms degrade to a generic op card, exactly like unknown
 //! forms in a fn body.
 
-use crate::flow::{Branch, FrameKind, Region};
+use crate::flow::{frame_subject, Branch, FrameKind, Region};
 use crate::model::pretty;
 use crate::sexpr::Sexpr;
 
@@ -163,17 +163,20 @@ fn have_rung(out: &mut Vec<Region>, label: String, goal: &Sexpr, proof: &Sexpr) 
         out.push(Region::Frame {
             kind: FrameKind::Have,
             detail: String::new(),
+            input: None,
             branches: vec![branch],
         });
     }
 }
 
-/// A branching tactic: band = keyword + its subject (the induction variable /
-/// scrutinized expression), branches = the labelled cases. The case list is
-/// recognized structurally (the item whose every element is a `(case …)`),
-/// so premise/type arguments between subject and cases don't matter.
+/// A branching tactic: band = keyword + its subject (an induction variable
+/// stays inline; a scrutinized *expression* — `case-on`'s common shape — is
+/// wired in as a real region, like any frame subject), branches = the
+/// labelled cases. The case list is recognized structurally (the item whose
+/// every element is a `(case …)`), so premise/type arguments between subject
+/// and cases don't matter.
 fn cases_frame(kind: FrameKind, items: &[Sexpr]) -> Region {
-    let detail = items.get(1).map(|s| elide(pretty(s))).unwrap_or_default();
+    let (detail, input) = items.get(1).map(frame_subject).unwrap_or_default();
     let branches = items
         .iter()
         .rev()
@@ -206,17 +209,17 @@ fn cases_frame(kind: FrameKind, items: &[Sexpr]) -> Region {
             Some(Branch { label, region: seq_or_single(body) })
         })
         .collect();
-    Region::Frame { kind, detail, branches }
+    Region::Frame { kind, detail, input, branches }
 }
 
 /// A single-body induction (`wf-induct` / `subterm-induct`): band + body.
 fn body_frame(kind: FrameKind, items: &[Sexpr]) -> Region {
-    let detail = items.get(1).map(|s| elide(pretty(s))).unwrap_or_default();
+    let (detail, input) = items.get(1).map(frame_subject).unwrap_or_default();
     let branches = vec![Branch {
         label: String::new(),
         region: seq_or_single(items.get(2..).unwrap_or(&[])),
     }];
-    Region::Frame { kind, detail, branches }
+    Region::Frame { kind, detail, input, branches }
 }
 
 fn seq_or_single(forms: &[Sexpr]) -> Region {
@@ -316,7 +319,7 @@ mod tests {
 
     fn frame(r: &Region) -> (&FrameKind, &str, &[Branch]) {
         match r {
-            Region::Frame { kind, detail, branches } => (kind, detail.as_str(), branches),
+            Region::Frame { kind, detail, branches, .. } => (kind, detail.as_str(), branches),
             other => panic!("expected a frame, got {other:?}"),
         }
     }

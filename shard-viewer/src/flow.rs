@@ -60,8 +60,14 @@ pub enum Region {
     /// A `match` / `if` / `let` frame containing labelled child branches.
     Frame {
         kind: FrameKind,
-        /// The scrutinee / condition shown in the header (empty for `let`).
+        /// The subject (scrutinee / condition / split expression) when it is
+        /// *simple* — a name or literal shown inline in the band. Empty when
+        /// the subject is compound (see `input`) or absent (`let`).
         detail: String,
+        /// The subject as a real region when it is *compound* — wired into
+        /// the frame by the view exactly like an op's operands, instead of
+        /// being flattened to elided band text.
+        input: Option<Box<Region>>,
         branches: Vec<Branch>,
     },
     /// A `Cons` spine collapsed into a list: `(Cons a (Cons b Nil))` reads as the
@@ -160,7 +166,7 @@ fn lower_list(expr: &Sexpr) -> Region {
 }
 
 fn lower_match(items: &[Sexpr]) -> Region {
-    let detail = items.get(1).map(short).unwrap_or_default();
+    let (detail, input) = items.get(1).map(frame_subject).unwrap_or_default();
     let branches = items[2.min(items.len())..]
         .iter()
         .filter_map(|arm| match arm {
@@ -172,11 +178,11 @@ fn lower_match(items: &[Sexpr]) -> Region {
             _ => None,
         })
         .collect();
-    Region::Frame { kind: FrameKind::Match, detail, branches }
+    Region::Frame { kind: FrameKind::Match, detail, input, branches }
 }
 
 fn lower_if(items: &[Sexpr]) -> Region {
-    let detail = items.get(1).map(short).unwrap_or_default();
+    let (detail, input) = items.get(1).map(frame_subject).unwrap_or_default();
     let mut branches = Vec::new();
     if let Some(then) = items.get(2) {
         branches.push(Branch { label: "then".into(), region: lower(then) });
@@ -184,7 +190,32 @@ fn lower_if(items: &[Sexpr]) -> Region {
     if let Some(els) = items.get(3) {
         branches.push(Branch { label: "else".into(), region: lower(els) });
     }
-    Region::Frame { kind: FrameKind::If, detail, branches }
+    Region::Frame { kind: FrameKind::If, detail, input, branches }
+}
+
+/// Split a frame's subject (match scrutinee / if condition / case-split
+/// expression) the way ops split their operands: a *simple* subject stays
+/// inline in the band; a *compound* one becomes a real region the view wires
+/// into the frame. The band never smuggles computation as elided text.
+/// (Public: the proof lowering uses it for its case-split subjects too.)
+pub fn frame_subject(e: &Sexpr) -> (String, Option<Box<Region>>) {
+    match inline_text(e) {
+        Some(text) => (text, None),
+        None => (String::new(), Some(Box::new(lower(e)))),
+    }
+}
+
+/// The inline (band / op-card) rendering of an expression when it is simple —
+/// a name, a literal, a quoted datum, or a qualified path. `None` for real
+/// computation, which must be shown structurally.
+fn inline_text(e: &Sexpr) -> Option<String> {
+    match e {
+        Sexpr::Sym(s) => Some(s.clone()),
+        Sexpr::Int(_) | Sexpr::Str(_) => Some(lit_text(e)),
+        Sexpr::List(_) if e.head() == Some("quote") => Some(lit_text(e)),
+        Sexpr::List(_) if e.head() == Some("::") => Some(qualified_short(e)),
+        _ => None,
+    }
 }
 
 fn lower_let(items: &[Sexpr]) -> Region {
@@ -203,7 +234,7 @@ fn lower_let(items: &[Sexpr]) -> Region {
     if let Some(body) = items.get(2) {
         branches.push(Branch { label: "in".into(), region: lower(body) });
     }
-    Region::Frame { kind: FrameKind::Let, detail: String::new(), branches }
+    Region::Frame { kind: FrameKind::Let, detail: String::new(), input: None, branches }
 }
 
 fn lower_op(items: &[Sexpr]) -> Region {
@@ -215,20 +246,12 @@ fn lower_op(items: &[Sexpr]) -> Region {
     let mut inline: Vec<String> = Vec::new();
     let mut args: Vec<Region> = Vec::new();
     for arg in &items[1.min(items.len())..] {
-        match arg {
-            Sexpr::Sym(s) => inline.push(s.clone()),
-            Sexpr::Int(_) | Sexpr::Str(_) => inline.push(lit_text(arg)),
-            Sexpr::List(_) if arg.head() == Some("quote") => inline.push(lit_text(arg)),
-            Sexpr::List(_) if arg.head() == Some("::") => inline.push(qualified_short(arg)),
-            _ => args.push(lower(arg)),
+        match inline_text(arg) {
+            Some(text) => inline.push(text),
+            None => args.push(lower(arg)),
         }
     }
     Region::Op { head, inline: elide(inline.join(" "), MAX_INLINE), args }
-}
-
-/// A compact one-line rendering of an expression for an inline scrutinee/cond.
-fn short(e: &Sexpr) -> String {
-    elide(pretty(e), MAX_INLINE)
 }
 
 /// The short (last) name of a `(:: a b … name)` qualified path.
@@ -275,7 +298,7 @@ mod tests {
 
     fn frame(r: &Region) -> (&FrameKind, &str, &[Branch]) {
         match r {
-            Region::Frame { kind, detail, branches } => (kind, detail.as_str(), branches),
+            Region::Frame { kind, detail, branches, .. } => (kind, detail.as_str(), branches),
             _ => panic!("expected a frame, got {r:?}"),
         }
     }
@@ -317,10 +340,38 @@ mod tests {
         ));
         let (kind, detail, branches) = frame(&r);
         assert_eq!(*kind, FrameKind::Match);
-        assert_eq!(detail, "(trim_left line)");
+        assert_eq!(detail, "", "a compound scrutinee never rides the band");
         assert_eq!(branches.len(), 2);
         assert_eq!(branches[0].label, "Nil");
         assert_eq!(branches[1].label, "(Cons th tt)");
+    }
+
+    #[test]
+    fn compound_scrutinee_becomes_a_wired_input_region() {
+        let r = Region::build(&body("(match (trim_left line) (Nil 0))"));
+        let Region::Frame { input: Some(input), detail, .. } = r else {
+            panic!("expected a frame with an input, got {r:?}");
+        };
+        assert_eq!(detail, "");
+        match input.as_ref() {
+            Region::Op { head, inline, .. } => {
+                assert_eq!(head, "trim_left");
+                assert_eq!(inline, "line");
+            }
+            other => panic!("expected the scrutinee as an op region, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn simple_subjects_stay_inline_in_the_band() {
+        let r = Region::build(&body("(match xs (Nil 0))"));
+        let Region::Frame { input, detail, .. } = &r else { panic!("expected frame") };
+        assert!(input.is_none());
+        assert_eq!(detail, "xs");
+        let r = Region::build(&body("(if ok 1 2)"));
+        let Region::Frame { input, detail, .. } = &r else { panic!("expected frame") };
+        assert!(input.is_none());
+        assert_eq!(detail, "ok");
     }
 
     #[test]
