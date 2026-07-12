@@ -1,8 +1,10 @@
 shard floats — FLOATS.md
 ========================
 
-STATUS: DRAFT (2026-07-11) — the scope ledger for floating point in
-shard: how IEEE-754 arithmetic enters the language honestly — exact
+STATUS: DRAFT (2026-07-11; all §13 open decision points RESOLVED
+same day over three ruling rounds, work begun at R0 with the user's
+go-ahead — awaiting the full ratification read) — the scope ledger
+for floating point in shard: how IEEE-754 arithmetic enters the language honestly — exact
 deterministic semantics, no pretense of reals — and how it lowers to
 bare hardware float instructions on every target. This file owns the
 float story end to end: the spec domain (std/rat), the core float
@@ -108,8 +110,11 @@ kernel changes.
   zero semantic axioms. Not built until demanded.
 - The dyadic fragment (m·2^e — closed under add/sub/mul, no gcd,
   normalization is shifting) starts as std/float's internal working
-  representation; graduation to its own module is deferred to the
-  interval arc (§13).
+  representation. RESOLVED 2026-07-11: no std/dyadic until the
+  interval arc — dyadic never appears as a TYPE anywhere in R0–R7
+  (L1 speaks Rat, L2 speaks raw Int pairs), so a module now would
+  have zero consumers; the graduation law (second speaker) fires at
+  the interval arc.
 
 std/rat lands FIRST — the float spec layer states its meaning
 through `val : Fin → Rat`.
@@ -260,9 +265,17 @@ implement the core spec exactly.
 
 **Tier 2 — PIN (differential, at silicon).** The arch model vs the
 actual hardware/engine: TestFloat vectors and probe grids through the
-on-CPU runner for x86, V8 runs for wasm (the engine-of-record). This
-is the platform-externs trust pattern (X86.md §32) and the ONLY
-empirical trust in the tower. Note this is strictly stronger than the
+on-CPU runner for x86, V8 runs for wasm. The authority framing
+(ruling 2026-07-11): the L3 model IS the authority — it's what
+proofs cite; the engine/silicon runs are the differential
+INSTRUMENT that checks the model against reality. V8 is the sole
+gating instrument for wasm through R4; wasmtime may join later as
+advisory defense-in-depth (two instruments agreeing means we modeled
+the spec, not one engine's idiosyncrasy), promoted to gating only if
+it becomes a deployment target. Instruments disagreeing means one
+has a bug: file upstream, gate on the conformant one. This is the
+platform-externs trust pattern (X86.md §32) and the ONLY empirical
+trust in the tower. Note this is strictly stronger than the
 syscall story, where the kernel model is pure pin — for floats,
 everything above the silicon boundary is theorem.
 
@@ -374,10 +387,17 @@ trustworthy bf16 story and lands first.
   later rung and is near-unverified territory globally — a shard
   proof here would be novel work, priced accordingly.
 - **Conversions**: format↔format (exact where widening; rnd where
-  narrowing), Int→float (rnd), float→Int (truncation). Out-of-range
-  float→Int LEANS saturating (the wasm trunc_sat / RISC-V precedent;
-  x86's sentinel needs a fixup branch either way) — ratification
-  decides (§13).
+  narrowing), Int→float (rnd), float→Int (truncation) — RESOLVED
+  2026-07-11, three layers. The core primitive is TOTAL and
+  SATURATING with NaN→0: exactly wasm trunc_sat semantics (also
+  Rust's as-cast convention) — a single instruction on wasm, while
+  x86 pays its fixup branch under ANY convention (the same fixup
+  every wasm engine already emits on x86; we match the industry
+  lowering, not invent overhead). The reasoning surface is a
+  premised theorem — finite + in-range ⇒ exact truncation — so the
+  saturation convention only governs the corner nobody proved
+  anything about. Checked/Option variants are derived two-line
+  wrappers, never the primitive.
 
 
 ## 10. Rungs and gates
@@ -399,13 +419,21 @@ cheapest.
 - **R2 — L2 bit-level model.** pack/unpack bijection (up to NaN
   class), computable ops ⊑ L1, toy-format exhaustive at the bit
   level. This is the arc's heavy proof rung (the Binary.v analogue).
-- **R3 — surface + literals + hex printing.** The thin per-format
-  opaque surface modules per §3a; exact literal pipeline; `to_bits`
-  canonicalization per §5.
+- **R3a — the thin per-format surface modules** (§3a) — a HARD
+  dependency of R4, not a preference: the lowering fragments match
+  the surface symbols, and R4's six-gate consumer decl is written
+  against them. `to_bits` canonicalization per §5 lands here.
+- **R3b — literals + hex printing.** No downstream dependency;
+  floats on consumer pain (interim: gates and probe sources
+  construct values via from_bits). Expected pull-in: alongside R4's
+  consumer demos, the moment hand-written bit constants get old.
 - **R4 — wasm lowering.** f32/f64 fragments, tier-1 quotient
   theorems against the wasm model, tier-2 V8 gates (six-gate
   discipline per the lib arc). wasm first, per width-ordered
-  coverage precedent.
+  coverage precedent. Conversion instructions get heavyweight edge
+  vectors — historically the buggy engine surface (the basic five
+  are single hardware instructions under any JIT and can't
+  realistically diverge; trunc_sat can).
 - **R5 — x86 lowering.** SSE2 scalar fragments + min/max/convert
   fixups, tier-1 theorems against the x86 model, tier-2 TestFloat +
   on-CPU differential gates.
@@ -450,15 +478,21 @@ traps.
 
 ## 13. Open decision points
 
-1. **Surface former shape** — RESOLVED 2026-07-11 (2nd round): NO
-   type-level former; value-parametric core + thin per-format opaque
-   surface modules. See §3a and the Word-lesson ruling in the
-   rulings block.
-2. **float→Int out-of-range**: saturating (lean) vs checked/partial.
-   Ratification decides.
-3. **Dyadic fragment home**: std/float-internal now; std/dyadic
-   graduation decided at the interval arc.
-4. **wasm engine-of-record set**: V8 only now; whether wasmtime joins
-   tier-2 later.
-5. **Rung order flexibility**: R3 (surface/literals) may swap after
-   R4 if the first consumers are lowering-side; consumer-driven.
+ALL RESOLVED 2026-07-11 (three ruling rounds); kept for the record:
+
+1. **Surface former shape** — RESOLVED (2nd round): NO type-level
+   former; value-parametric core + thin per-format opaque surface
+   modules. See §3a and the Word-lesson ruling in the rulings block.
+2. **float→Int out-of-range** — RESOLVED (3rd round): total
+   saturating core primitive, NaN→0 (wasm trunc_sat semantics);
+   premised-exactness theorem; checked variants derived (§9).
+3. **Dyadic fragment home** — RESOLVED (3rd round): no std/dyadic
+   until the interval arc; a dyadic TYPE has zero consumers in
+   R0–R7 (§2).
+4. **wasm engine set** — RESOLVED (3rd round) as a reframing: the L3
+   model is the authority, engines are differential instruments; V8
+   sole gating instrument through R4, wasmtime advisory later (§4).
+5. **Rung order** — RESOLVED (3rd round): R3 split into R3a
+   (surface modules, hard dependency of R4) and R3b
+   (literals/printing, floats on consumer demand); firm ladder
+   R0 → R1 → R2 → R3a → R4 → R5 (§10).
