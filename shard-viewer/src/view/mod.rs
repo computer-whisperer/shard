@@ -11,15 +11,13 @@
 //! - [`methods`] — one file's call graph + triage overlay (and the shared
 //!   per-fn detail panel).
 //! - [`systems`] — the project-wide import graph + proof/impl heat map.
-//! - [`flow`] — one fn body as a structured (LabVIEW-style) region card.
-//! - [`board`] — the call DAG with each node rendered in that expanded flow
-//!   form (reuses `flow::render_region`).
+//! - [`flow`] — the region-card renderer (fn bodies / proof spines as
+//!   structured LabVIEW-style diagrams), drawn inside the Map's cards.
 //! - [`map`] — the unified view we're growing toward: any [`Scope`]'s fns,
 //!   grouped by origin file/dir, each in expanded flow form.
 //! - [`shared`] — the pan/zoom viewport, laid-out-graph canvas, and edge/legend
 //!   primitives every variant draws with.
 
-mod board;
 mod flow;
 mod highlight;
 mod map;
@@ -38,10 +36,6 @@ pub enum ViewMode {
     Methods,
     /// The project-wide file import dependency graph.
     Systems,
-    /// One fn's body as a structured (LabVIEW-style) diagram.
-    Flow,
-    /// One file's call DAG with each fn rendered in expanded flow form.
-    Board,
     /// The unified map: any scope's fns, grouped by origin file/dir, each in
     /// expanded flow form. The view we're growing toward — still experimental.
     Map,
@@ -123,7 +117,7 @@ pub fn app_root(project: &Project, p: &ViewParams, map_cache: Option<&MapCache>)
     let mut panes = vec![sidebar(project, p), main_pane(project, p, map_cache)];
     let mut fn_in_panel = None;
     match p.mode {
-        ViewMode::Methods | ViewMode::Flow | ViewMode::Board | ViewMode::Map => {
+        ViewMode::Methods | ViewMode::Map => {
             if let Some(fni) = p.selected_fn {
                 panes.push(methods::detail_panel(project, fni, p.mode, p.panel_w));
                 fn_in_panel = Some(fni);
@@ -268,24 +262,12 @@ fn main_pane(project: &Project, p: &ViewParams, map_cache: Option<&MapCache>) ->
                 .padding(tokens::SPACE_8),
             Some(fi) => methods::canvas(project, fi, p),
         },
-        ViewMode::Board => match focus_file {
-            None => column([text("Select a file to see its board.").muted()])
-                .padding(tokens::SPACE_8),
-            Some(fi) => board::canvas(project, fi, p),
-        },
-        ViewMode::Flow => match p.selected_fn {
-            None => column([text("Select a fn (in Methods) to chart its body.").muted()])
-                .padding(tokens::SPACE_8),
-            Some(fni) => flow::canvas(project, fni),
-        },
         ViewMode::Map => map::canvas(project, p, map_cache),
     };
     let mut head = vec![toolbar(project, p)];
     match p.mode {
         ViewMode::Methods if focus_file.is_some() => head.push(methods::legend()),
         ViewMode::Systems => head.push(systems::legend()),
-        ViewMode::Board if focus_file.is_some() => head.push(board::legend()),
-        ViewMode::Flow if p.selected_fn.is_some() => head.push(flow::legend()),
         ViewMode::Map => head.push(map::legend(p.flow_z)),
         _ => {}
     }
@@ -303,14 +285,6 @@ fn toolbar(project: &Project, p: &ViewParams) -> El {
             Some(fi) => project.files[fi].rel.clone(),
             None => "shard-viewer".to_string(),
         },
-        ViewMode::Board => match p.scope.focus_file(project) {
-            Some(fi) => format!("{}  ·  board", project.files[fi].rel),
-            None => "Board".to_string(),
-        },
-        ViewMode::Flow => match p.selected_fn {
-            Some(fni) => format!("{}  ·  flow", project.fns[fni].name),
-            None => "Flow".to_string(),
-        },
         ViewMode::Map => format!("Map · {}", p.scope.label(project)),
     };
     let mode_btn = |label: &str, key: &str, active: bool, tip: &str| {
@@ -323,8 +297,6 @@ fn toolbar(project: &Project, p: &ViewParams) -> El {
         mode_btn("Map", "mode_map", p.mode == ViewMode::Map, "Any scope's fns, grouped by file/dir, each in flow form (experimental)"),
         mode_btn("Methods", "mode_methods", p.mode == ViewMode::Methods, "One file's call graph + triage overlay"),
         mode_btn("Systems", "mode_systems", p.mode == ViewMode::Systems, "Project-wide import graph + proof/impl heat map"),
-        mode_btn("Board", "mode_board", p.mode == ViewMode::Board, "This file's call DAG, each fn in expanded flow form"),
-        mode_btn("Flow", "mode_flow", p.mode == ViewMode::Flow, "The selected fn's body as a structured diagram"),
         text(format!("{:.0}%", p.zoom * 100.0))
             .mono()
             .muted()

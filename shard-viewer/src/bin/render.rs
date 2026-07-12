@@ -47,47 +47,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             source_modal: true,
             panel_w: view::DEFAULT_PANEL_W,
         }
-    // `shard-render . flow:FN out.svg` charts one fn body's dataflow diagram.
-    } else if let Some(fn_name) = needle.strip_prefix("flow:") {
+    // `shard-render . fn:NAME out.svg` maps one fn alone (Scope::Fn): its
+    // card plus the claims about it and the types it shapes — the headless
+    // "read this fn large" check (successor of the old flow: spec).
+    } else if let Some(fn_name) = needle.strip_prefix("fn:") {
         let fn_idx = project
             .fns
             .iter()
-            .position(|f| f.name == fn_name && !f.body.is_empty())
-            .ok_or_else(|| format!("no fn with a body named `{fn_name}`"))?;
+            .position(|f| f.name == fn_name)
+            .ok_or_else(|| format!("no fn named `{fn_name}`"))?;
         let f = &project.fns[fn_idx];
-        println!("charting flow of {} ({})", f.name, project.files[f.file].rel);
+        println!("rendering map scoped to fn {} ({})", f.name, project.files[f.file].rel);
         ViewParams {
-            mode: ViewMode::Flow,
-            scope: Scope::File(f.file),
+            mode: ViewMode::Map,
+            scope: Scope::Fn(fn_idx),
             selected_fn: Some(fn_idx),
-            zoom: 1.0,
-            pan: (0.0, 0.0),
-            canvas: canvas_estimate(),
-            at_home: true,
-            flow_z: view::DEFAULT_FLOW_Z,
-            hovered: None,
-            filter: String::new(),
-            selection: Default::default(),
-            source_modal: false,
-            panel_w: view::DEFAULT_PANEL_W,
-        }
-    } else if let Some(file_sub) = needle.strip_prefix("board:") {
-        // `shard-render . board:SUBSTR out.svg` charts a file's call DAG with
-        // each fn rendered in expanded flow form.
-        let file_idx = project
-            .files
-            .iter()
-            .position(|f| f.rel.contains(file_sub))
-            .ok_or_else(|| format!("no file matching `{file_sub}`"))?;
-        println!(
-            "rendering board of {} ({} fns)",
-            project.files[file_idx].rel,
-            project.files[file_idx].fns.len()
-        );
-        ViewParams {
-            mode: ViewMode::Board,
-            scope: Scope::File(file_idx),
-            selected_fn: None,
             zoom: 1.0,
             pan: (0.0, 0.0),
             canvas: canvas_estimate(),

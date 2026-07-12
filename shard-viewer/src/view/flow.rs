@@ -1,48 +1,15 @@
-//! Flow view: one fn body as a structured (LabVIEW-style) diagram. Control
-//! structures are FRAMES that contain their branches; leaf computations are op
-//! cards WIRED to their operands. Rendered as nested elements — containment,
-//! sizing, and text wrapping fall out of the element layout — inside the
-//! pan/zoom viewport. (The Sugiyama engine stays for the call/import graphs.)
+//! The region-card renderer: one fn body (or proof spine) as a structured
+//! (LabVIEW-style) diagram. Control structures are FRAMES that contain their
+//! branches; leaf computations are op cards WIRED to their operands. Rendered
+//! as nested elements — containment, sizing, and text wrapping fall out of the
+//! element layout. (The Sugiyama engine stays for the call/import graphs.)
 //!
-//! [`render_region`] is the reusable fn-card renderer: the Board view drops it
-//! into each node to show every fn in this same expanded form.
+//! [`render_region`] is what the Map's flow cards and claim cards draw their
+//! innards with; [`est`] is its size mirror (the two must agree — see the
+//! est/render agreement notes below).
 
-use super::shared::{legend_chip, pan_zoom_viewport};
-use super::SUB_SIZE;
 use crate::flow::{Branch, FrameKind, Region};
-use crate::model::Project;
 use damascene_core::prelude::*;
-
-/// The Flow-view key.
-pub(crate) fn legend() -> El {
-    row([
-        text("flow").mono().muted().font_size(SUB_SIZE),
-        legend_chip(tokens::INFO, "match / if"),
-        legend_chip(tokens::SUCCESS, "let"),
-        legend_chip(tokens::CARD, "op"),
-        legend_chip(tokens::CARD.mix(tokens::WARNING, 0.32), "var"),
-        legend_chip(tokens::BACKGROUND, "literal"),
-        text("·  frames contain · operands wired in →")
-            .mono()
-            .muted()
-            .font_size(SUB_SIZE),
-    ])
-    .gap(tokens::SPACE_3)
-    .padding(tokens::SPACE_2)
-}
-
-pub(crate) fn canvas(project: &Project, fn_idx: usize) -> El {
-    let f = &project.fns[fn_idx];
-    if f.body.iter().all(|form| form.head() == Some("measure")) {
-        return column([text("This fn has no body to chart (a signature).").muted()])
-            .padding(tokens::SPACE_8);
-    }
-    let region = Region::build(&f.body);
-    // The nested-element tree hugs its own content; a little padding keeps it
-    // off the viewport edges. The viewport frames it (Fit / pan / zoom).
-    let content = row([render_region(&region)]).padding(tokens::SPACE_6);
-    pan_zoom_viewport(content)
-}
 
 /// Render a region as a nested element. Frames contain labelled branches; op
 /// cards wire to their operand sub-regions; vars/lits are leaf pills/tags.

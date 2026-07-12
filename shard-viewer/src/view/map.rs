@@ -149,6 +149,11 @@ struct LevelGeom {
     /// focused member's [`EdgeClass::Use`] edges; the routed layout alone
     /// no longer knows which nodes an edge connects.
     ends: Vec<(usize, usize)>,
+    /// The member behind each slot, index-aligned with the layout's nodes
+    /// (empty for dir levels — their slots are boxes, not members). Makes the
+    /// committed geometry self-describing, so [`region_rect`] can resolve a
+    /// fn's card rect without re-deriving the scope's member gathering.
+    members: Vec<Member>,
 }
 
 /// One slot in a file box: a fn (flow card), a proof-layer form (claim
@@ -190,6 +195,9 @@ pub enum MapTarget<'a> {
     File(usize),
     /// A dir path as [`crate::scope::Scope::Dir`] spells it (no trailing `/`).
     Dir(&'a str),
+    /// One fn's committed flow card (the "read this fn large" gesture — the
+    /// successor of the old standalone Flow view).
+    Fn(usize),
 }
 
 /// The committed rect of a region on an **already-committed** plane, in the
@@ -204,6 +212,15 @@ pub fn region_rect(cache: &MapCache, plane: &Scope, target: MapTarget) -> Option
     match target {
         MapTarget::File(i) => com.file_rects.get(&i).copied(),
         MapTarget::Dir(d) => com.dir_rects.get(&format!("{d}/")).copied(),
+        // A fn's card: its slot inside its file's committed level, made
+        // absolute through the file box's rect + content offset. Searching
+        // every file is fine — the member lists are the scope's own size.
+        MapTarget::Fn(g) => com.files.iter().find_map(|(file, geom)| {
+            let slot = geom.members.iter().position(|&m| m == Member::Fn(g))?;
+            let fr = com.file_rects.get(file)?;
+            let n = &geom.lay.nodes[slot];
+            Some(Rect::new(fr.x + geom.off.0 + n.x, fr.y + geom.off.1 + n.y, n.w, n.h))
+        }),
     }
 }
 
@@ -458,7 +475,13 @@ fn commit_children(
     let size = (lay.width, lay.height);
     out.dirs.insert(
         path.to_string(),
-        LevelGeom { lay, off: (0.0, 0.0), classes: Vec::new(), ends: Vec::new() },
+        LevelGeom {
+            lay,
+            off: (0.0, 0.0),
+            classes: Vec::new(),
+            ends: Vec::new(),
+            members: Vec::new(),
+        },
     );
     size
 }
@@ -606,7 +629,8 @@ fn commit_file(
     let (nfns, nclaims, ntypes) = counts;
     let m =
         box_metrics(|| file_header(project, file, nfns, nclaims, ntypes), lay.width, lay.height);
-    out.files.insert(file, LevelGeom { lay, off: m.off, classes, ends });
+    out.files
+        .insert(file, LevelGeom { lay, off: m.off, classes, ends, members: members.clone() });
     m.size
 }
 
@@ -1611,6 +1635,7 @@ mod tests {
             off,
             classes: Vec::new(),
             ends: Vec::new(),
+            members: Vec::new(),
         }
     }
 
@@ -1620,9 +1645,12 @@ mod tests {
         let mut root = DirNode::default();
         root.insert(&["a"], 7);
         root.insert(&[], 3);
+        // File 7 holds fn 9's card at slot 0 (for the MapTarget::Fn check).
+        let mut fn_level = level(vec![placed(2.0, 3.0, 20.0, 10.0)], (4.0, 10.0));
+        fn_level.members = vec![Member::Fn(9)];
         let mut com = Committed {
             scope: Scope::Project,
-            files: BTreeMap::new(),
+            files: BTreeMap::from([(7, fn_level)]),
             dirs: BTreeMap::from([
                 (
                     String::new(),
@@ -1646,8 +1674,13 @@ mod tests {
         assert_eq!(hit, Some(Rect::new(34.0, 44.0, 300.0, 200.0)));
         let file = region_rect(&cache, &Scope::Project, MapTarget::File(7));
         assert_eq!(file, Some(Rect::new(51.0, 80.0, 60.0, 40.0)));
-        // Misses: a dir not on the plane; a plane not in the cache.
+        // A fn's card: its file's rect + content offset + its slot position.
+        let card = region_rect(&cache, &Scope::Project, MapTarget::Fn(9));
+        assert_eq!(card, Some(Rect::new(57.0, 93.0, 20.0, 10.0)));
+        // Misses: a dir not on the plane; a fn on no committed level; a plane
+        // not in the cache.
         assert_eq!(region_rect(&cache, &Scope::Project, MapTarget::Dir("b")), None);
+        assert_eq!(region_rect(&cache, &Scope::Project, MapTarget::Fn(4)), None);
         assert_eq!(region_rect(&cache, &Scope::Dir("a".into()), MapTarget::File(7)), None);
     }
 

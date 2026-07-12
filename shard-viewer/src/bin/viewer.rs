@@ -158,12 +158,24 @@ impl App for Viewer {
         } else if event.is_route("mode_systems") {
             self.mode = ViewMode::Systems;
             self.fit();
-        } else if event.is_route("mode_board") {
-            self.mode = ViewMode::Board;
-            self.fit();
-        } else if event.is_route("mode_flow") {
-            self.mode = ViewMode::Flow;
-            self.fit();
+        } else if event.is_route("goto_card") {
+            // "Read this fn large": fly the Map camera to the selected fn's
+            // committed flow card (scope-as-camera, like the dir/file cases
+            // below). Off the Map — or when the card isn't on the current
+            // plane — scope the Map to the fn's file instead; the selected
+            // card always draws its innards, so it reads on arrival.
+            if let Some(g) = self.selected_fn {
+                if self.mode == ViewMode::Map
+                    && let Some(r) =
+                        view::region_rect(&self.map_cache, &self.scope, view::MapTarget::Fn(g))
+                {
+                    self.fly_to(r);
+                } else {
+                    self.scope = Scope::File(self.project.fns[g].file);
+                    self.mode = ViewMode::Map;
+                    self.fit();
+                }
+            }
         } else if event.is_route("mode_map") {
             self.mode = ViewMode::Map;
             self.fit();

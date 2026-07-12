@@ -161,17 +161,17 @@ pub(crate) fn node_tip(project: &Project, fn_idx: usize) -> String {
     tip
 }
 
-/// Jump-to-other-view buttons for the selected fn, omitting the current view.
-/// Each reuses an existing toolbar route (the fn / file is already selected, so
-/// the mode switch lands on it), so no new event plumbing is needed.
+/// Jump buttons for the selected fn. "Card ▸" is scope-as-camera: fly the Map
+/// to the fn's committed flow card (large enough to read — the successor of
+/// the old standalone Flow view); the handler falls back to scoping the Map to
+/// the fn's file when the card isn't on the current plane.
 fn nav_buttons(mode: ViewMode) -> El {
-    let mut bs = Vec::new();
-    if mode != ViewMode::Flow {
-        bs.push(button("Flow ▸").key("mode_flow").secondary().tooltip("Chart this fn's body"));
-    }
-    if mode != ViewMode::Board {
-        bs.push(button("Board ▸").key("mode_board").ghost().tooltip("This file's call DAG, expanded"));
-    }
+    let mut bs = vec![
+        button("Card ▸")
+            .key("goto_card")
+            .secondary()
+            .tooltip("Fly the Map to this fn's flow card"),
+    ];
     if mode != ViewMode::Methods {
         bs.push(button("Graph ▸").key("mode_methods").ghost().tooltip("This file's call graph"));
     }
