@@ -252,6 +252,19 @@ TARGETS=(
   std/word/word.shard
   std/nat/nat.shard
   std/sha256/sha256.shard
+  examples/sketch_pin.shard
+  tools/search/rev_obj.shard
+  tools/search/rev.shard
+  tools/search/search.shard
+  tools/search/census.shard
+  tools/search/catalog.shard
+  tools/search/sym.shard
+  examples/spell_pin.shard
+  tools/search/render_gate.shard
+  tools/search/gen/rev_synth.shard
+  tools/search/gen/cat_bracket.shard
+  tools/search/superpose.shard
+  tools/search/subsume.shard
 )
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -335,6 +348,159 @@ fi
 echo "=== invoke: dynamic-invocation probe ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run examples/invoke_probe.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# Ground-search pin (docs/SEARCH.md slice 1): the rev accumulator space,
+# rank-addressed by meta/sketch and settled through the real machine
+# (meta/invoke -> evm_call_pure). Counts and solution sets must match the
+# playground's published measurement record EXACTLY: 108 candidates / 1
+# solution at depth 1, 7788 / 13 at depth 2. Every COUNT / SOL / SOLUTIONS
+# line is diffed; a grammar or addressing change moves them and fails the
+# corpus diff (re-pin deliberately, with the change).
+echo "=== search: ground rev pin ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/search.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# Canonicality census pin (docs/SEARCH.md S9, G1+G2): the dialect rev
+# grammar's candidate set must equal the cn_e-clean subset of the full
+# grammar EXACTLY, censused term-by-term through rank/unrank round-trips
+# (FULL 108 DIALECT 56 CLEAN 56 at d1; 7788/1736/1736 at d2; the 13 full
+# solutions collapse to exactly 1 dialect solution). This is the
+# three-speakers drift alarm: a kernel C-rule change or a generator edit
+# moves these lines and fails the diff — re-pin deliberately, with the
+# change.
+echo "=== search: canonicality census (G1+G2) ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/census.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# Catalog census pin (docs/SEARCH.md S7-lite, G5): the structural list
+# fragment enumerated at rungs 1-2, post-filtered through cn_e, and
+# battery-bucketed by behavior. GEN/CLEAN/BEHAVIORS + the flagged
+# content-family tallies + rev/id spelling counts are the arc's first
+# spellings-per-behavior numbers against the REAL dialect (rung 1:
+# 20/17/13 — the playground's certified "exactly 13"; rung 2:
+# 3395/2345/1068 — behaviors match the playground's 1068, rev = 2
+# spellings). A canon-rule or grammar change moves these lines and
+# fails the diff — re-pin deliberately, with the change.
+echo "=== search: catalog census (G5) ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/catalog.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# Laws-oracle pin (docs/SEARCH.md S4a+S5, G3): the symbolic evaluator +
+# requirements-as-oracle. SELF: std/list's own rev and len must
+# symbolically PROVE their own interface laws (reduction + congruence +
+# the append canon). G3: over the catalog's cn_e-clean candidates,
+# law verdicts against the ground battery — rung 1: 17 clean, 0 proven,
+# 17 refuted, 0 undecided; rung 2: 2345 clean, 2 proven (exactly the
+# two rev spellings), 2343 refuted, 0 undecided. Any Proven non-passer
+# or Refuted passer exits 1 inside the tool (G3 violations are hard
+# failures, not statistics). laws.shard rides kernel/driver for goal
+# parsing, so like tools/prove it is pinned by RUN output, not checked
+# as a corpus target (the known kernel/types tc_infer measure gap).
+# TRACE lines (slice 5 component 2) pin the proof SKELETONS a Proven
+# verdict leaves behind: std rev/len and rev_c62 join by REFL
+# (compute + refl at render time); rev_c347 needs exactly the case its
+# own body introduced — (SPLIT 0 (Nil REFL) (Cons REFL)).
+# SYNTH REGEN (component 3) re-renders the WHOLE artifact — fns AND
+# claims with proofs rendered from the traces (leaf lemma tails
+# decided by the check-mode replay twin) — and requires byte-identity
+# with the committed gen/rev_synth.shard; `laws emit` re-pins. G4 is
+# continuous: the artifact is a check TARGET, so its rendered proofs
+# replay through bin/shard_check in the sweep above.
+# BRACKET REGEN (component 4 — the arc's EXIT CRITERION) does the same
+# for gen/cat_bracket.shard: the CERTIFIED rung-1 bracket — all 17
+# clean candidates as fns over the local bx_append twin (bridged to
+# std/list append by one induct claim), the kernel-computed FLOOR
+# (13 representatives' vectors pairwise distinct) and the four CEILING
+# equivalence claims (three via the D5 catalog license, rendered as
+# induct with (hyp ih) citations). 17 clean = EXACTLY 13 functions,
+# kernel-checked on every sweep; `laws bracket` re-pins.
+echo "=== search: laws oracle (S4a+S5, G3) ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/laws.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# Render RELOAD pin (docs/SEARCH.md D11, slice 5): the committed
+# artifact, loaded through the real reader/resolver, yields bodies
+# expr_eq to the unranked candidates (rank 62/347, re-verified by
+# cn_e+battery). The REGEN half lives in the laws suite above (SYNTH
+# REGEN — the full artifact including rendered proofs).
+echo "=== search: render round-trip (D11) ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/render_gate.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# Superposed-executor pin (docs/SEARCH.md S4b, built AS RATIFIED —
+# named superpose; "narrow" is the bootstrap dialect's name): the
+# choices-map machine settles the rev spaces EXACTLY — d1: 108
+# candidates in 26 regions (8 forks), 1 found; d2: 7,788 in 443
+# regions (133 forks), 13 found. STEPS pins the consulted-choice-set
+# memo's leverage (pre-memo baselines: 896 / 29,008 — the memo halves
+# re-evaluation at d2 and compounds with depth). AGREE extends G3
+# three ways: found coverage == the enumerative solution count, every
+# enumerative solution lies in a found region, and every region
+# representative passes the kernel/evm battery. Any drift exits 1
+# inside the tool.
+echo "=== search: superposed executor (S4b) ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/superpose.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# False-equivalence-proof hunter pin (docs/SEARCH.md standing-use #2):
+# the ground battery + the S4a comparator pointed at the std tree's
+# OWN claimed theorems — 13 interface files' requirements + 14
+# in-closure impl files' claims, typed ground enumeration with
+# premise filtering, evaluated by the kernel's own reducer in the
+# open run closure. Pinned at cut: 291 laws — 262 PASS, 0 REFUTED,
+# 0 SYMREFUTED, 0 VACUOUS, 22 STUCK (the 12 word shift laws stick
+# exactly on negative shift amounts — partial-domain prims, 10/10
+# reducible vectors pass; the sha256 class is fuel-bounded, its
+# ground pins already replay as compute claims), 7 SKIP (refined Str,
+# over-cap batteries, the 8-field H8). Sym cross-check: 117 proven,
+# 4 SYMERR (the S4a comparator's ctor-vs-atom refusal on bytes/mem
+# length laws — a recorded S4a question). A ground counterexample
+# against a symbolic proof exits 1 inside the tool (G3); REFUTED
+# lines are FINDINGS (tool exits 0) — any new one changes this
+# output and shows in the corpus diff: investigate before re-pinning.
+echo "=== search: false-equivalence hunter ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/hunt.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# Canon-subsumption census pin (docs/SEARCH.md standing-use #1): rule
+# subsumption as absence proofs by exhaustion — every candidate of the
+# rev full space (d1/d2) and the catalog rungs (1/2) judged by cn_e,
+# flag sets deduplicated and tallied. Pinned at cut: CLEAN counts
+# match the census/catalog pins exactly (56/1736/17/2345); every rule
+# that fires has UNIQUE witnesses at every rung (no LOCALLY REDUNDANT
+# line, no PAIR ... COVERS line) — the kernel ledger carries no
+# internal redundancy on these fragments; slice 3's C8⊃R1 was
+# kernel-over-playground, not intra-kernel. The instrument re-measures
+# on every sweep: a future rule whose UNIQUE hits 0 across fragments
+# (or a COVERS pair) changes these lines and shows in the corpus diff
+# — evidence for the canon arc, which owns the ledger.
+echo "=== search: canon-subsumption census ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/subsume.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi

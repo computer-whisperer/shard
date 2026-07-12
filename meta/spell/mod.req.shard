@@ -19,10 +19,23 @@
 
 (use (:: kernel term Expr))
 (use (:: kernel term FVar))
+(use (:: kernel term BVar))
+(use (:: kernel term Ctor))
 (use (:: kernel term Call))
+(use (:: kernel term Match))
+(use (:: kernel term Let))
+(use (:: kernel term If))
 (use (:: kernel term IntLit))
+(use (:: kernel term SymLit))
+(use (:: kernel term Arm))
+(use (:: kernel term Pat))
+(use (:: kernel term PVar))
+(use (:: kernel term PCtor))
+(use (:: kernel term PInt))
+(use (:: kernel term PSym))
 (use (:: kernel term QName))
 (use (:: kernel term qn_name))
+(use (:: kernel term qname_eq))
 (use (:: kernel term core_named))
 (use (:: kernel term append_int))
 (use (:: kernel term show_int))
@@ -363,3 +376,252 @@
        (if pol (DCat (cond_wrap rest bound) (DStr " True"))
        (DCat (DStr "True ") (cond_wrap rest bound)))
        (DStr ")")))))
+
+;; ---- the FULL source renderer (docs/SEARCH.md D11) --------------------------
+;;
+;; Expr -> source text, for programs that EMIT programs (search-arc
+;; slice 5; the first consumer renders synthesized candidates). The
+;; contract that makes it honest:
+;;
+;;   - BINDERS are named positionally by xsym: a binder's ordinal is
+;;     the env depth at its introduction, so BVar j under n binders
+;;     spells x(n-1-j) — the same law the header of xsym states.
+;;     Pattern binders count left to right; let bindings likewise
+;;     (parallel let: RHSs render at the OUTER depth).
+;;   - HEADS (Call/Ctor/PCtor qnames) resolve through a CALLER-SUPPLIED
+;;     qname->symbol table: the caller owns scope policy (which bare
+;;     name the target file's imports make resolvable), and a miss is
+;;     a LOUD SpRErr, never a guessed spelling. Type names render bare
+;;     (qn_name) — the caller owns the type scope the same way.
+;;   - nullary ctors spell BARE (canonical dialect); nullary calls
+;;     spell parenthesized.
+;;   - layout is FLAT: compose with meta/format's fmt for canonical
+;;     bytes. The consumer's gate is the ROUND TRIP: emitted text,
+;;     loaded through the real reader, must be expr_eq to the input.
+
+(type SpR (SpRErr (List Int)) (SpROk Doc))
+
+(type SpL (SpLErr (List Int)) (SpLOk (List Doc)))
+
+(type SpP (SpPErr (List Int)) (SpPOk Doc Int))  ; pattern doc, binds consumed
+
+(type SpQ (SpQErr (List Int)) (SpQOk (List Doc) Int))
+
+(fn sp_res ((q QName) (tbl (List (Pair QName Symbol)))) (Option Symbol)
+  (measure (struct tbl))
+  (match tbl
+    (Nil None)
+    ((Cons (Pair k v) rest) (if (qname_eq k q) (Some v) (sp_res q rest)))))
+
+(fn sp_miss ((what (List Int)) (q QName)) (List Int)
+  (append_int "spell: unmapped " (append_int what (chars_of_sym (qn_name q)))))
+
+;; " a1 a2" — one leading space per element
+(fn sp_tail ((ds (List Doc))) Doc
+  (measure (struct ds))
+  (match ds
+    (Nil (DStr ""))
+    ((Cons d rest) (dcat3 (sp) d (sp_tail rest)))))
+
+;; (HEAD a1 a2 …)
+(fn sp_form ((h Doc) (args (List Doc))) Doc
+  (dcat3 (DCat (DStr "(") h) (sp_tail args) (DStr ")")))
+
+(fn count_es ((es (List Expr))) Int
+  (measure (struct es))
+  (match es
+    (Nil 0)
+    ((Cons _ t) (+ 1 (count_es t)))))
+
+(fn sp_e ((tbl (List (Pair QName Symbol))) (n Int) (e Expr)) SpR
+  (measure (struct e))
+  (match e
+    ((FVar s) (SpROk (dsym s)))
+    ((BVar j) (SpROk (dsym (xsym (- (- n 1) j)))))
+    ((Ctor q args)
+     (match (sp_res q tbl)
+       (None (SpRErr (sp_miss "ctor " q)))
+       ((Some nm)
+        (match args
+          (Nil (SpROk (dsym nm)))
+          ((Cons _ _)
+           (match (sp_es tbl n args)
+             ((SpLErr msg) (SpRErr msg))
+             ((SpLOk ds) (SpROk (sp_form (dsym nm) ds)))))))))
+    ((Call q args)
+     (match (sp_res q tbl)
+       (None (SpRErr (sp_miss "call " q)))
+       ((Some nm)
+        (match (sp_es tbl n args)
+          ((SpLErr msg) (SpRErr msg))
+          ((SpLOk ds) (SpROk (sp_form (dsym nm) ds)))))))
+    ((Match s arms)
+     (match (sp_e tbl n s)
+       ((SpRErr msg) (SpRErr msg))
+       ((SpROk sd)
+        (match (sp_arms tbl n arms)
+          ((SpLErr msg) (SpRErr msg))
+          ((SpLOk ads) (SpROk (sp_form (DCat (DStr "match ") sd) ads)))))))
+    ((Let bs body)
+     (match (sp_es tbl n bs)
+       ((SpLErr msg) (SpRErr msg))
+       ((SpLOk rds)
+        (match (sp_e tbl (+ n (count_es bs)) body)
+          ((SpRErr msg) (SpRErr msg))
+          ((SpROk bd)
+           (SpROk
+             (sp_form
+               (DStr "let")
+               (Cons (sp_form (sp_lbind n rds) Nil) (Cons bd Nil)))))))))
+    ((If c t e2)
+     (match (sp_e tbl n c)
+       ((SpRErr msg) (SpRErr msg))
+       ((SpROk cd)
+        (match (sp_e tbl n t)
+          ((SpRErr msg) (SpRErr msg))
+          ((SpROk td)
+           (match (sp_e tbl n e2)
+             ((SpRErr msg) (SpRErr msg))
+             ((SpROk ed)
+              (SpROk (sp_form (DStr "if") (Cons cd (Cons td (Cons ed Nil))))))))))))
+    ((IntLit k) (SpROk (dint k)))
+    ((SymLit s) (SpROk (dcat3 (DStr "(quote ") (dsym s) (DStr ")"))))))
+
+(fn sp_es ((tbl (List (Pair QName Symbol))) (n Int) (es (List Expr))) SpL
+  (measure (struct es))
+  (match es
+    (Nil (SpLOk Nil))
+    ((Cons e rest)
+     (match (sp_e tbl n e)
+       ((SpRErr msg) (SpLErr msg))
+       ((SpROk d)
+        (match (sp_es tbl n rest)
+          ((SpLErr msg) (SpLErr msg))
+          ((SpLOk ds) (SpLOk (Cons d ds)))))))))
+
+;; let bindings "(xN R1) (xN+1 R2)" — names are the NEW ordinals
+(fn sp_lbind ((n Int) (rds (List Doc))) Doc
+  (measure (struct rds))
+  (match rds
+    (Nil (DStr ""))
+    ((Cons d rest)
+     (match rest
+       (Nil (sp_form (DCat (dsym (xsym n)) (DCat (sp) d)) Nil))
+       ((Cons _ _)
+        (dcat3
+          (sp_form (DCat (dsym (xsym n)) (DCat (sp) d)) Nil)
+          (sp)
+          (sp_lbind (+ n 1) rest)))))))
+
+(fn sp_arms ((tbl (List (Pair QName Symbol))) (n Int) (arms (List Arm))) SpL
+  (measure (struct arms))
+  (match arms
+    (Nil (SpLOk Nil))
+    ((Cons (Arm p b) rest)
+     (match (sp_pat tbl n p)
+       ((SpPErr msg) (SpLErr msg))
+       ((SpPOk pd k)
+        (match (sp_e tbl (+ n k) b)
+          ((SpRErr msg) (SpLErr msg))
+          ((SpROk bd)
+           (match (sp_arms tbl n rest)
+             ((SpLErr msg) (SpLErr msg))
+             ((SpLOk ds)
+              (SpLOk (Cons (sp_form (DCat pd (DCat (sp) bd)) Nil) ds)))))))))))
+
+;; base = the ordinal the pattern's FIRST binder takes
+(fn sp_pat ((tbl (List (Pair QName Symbol))) (base Int) (p Pat)) SpP
+  (measure (struct p))
+  (match p
+    ((PVar) (SpPOk (dsym (xsym base)) 1))
+    ((PCtor q ps)
+     (match (sp_res q tbl)
+       (None (SpPErr (sp_miss "pattern ctor " q)))
+       ((Some nm)
+        (match ps
+          (Nil (SpPOk (dsym nm) 0))
+          ((Cons _ _)
+           (match (sp_pats tbl base ps)
+             ((SpQErr msg) (SpPErr msg))
+             ((SpQOk ds k) (SpPOk (sp_form (dsym nm) ds) k))))))))
+    ((PInt k) (SpPOk (dint k) 0))
+    ((PSym s) (SpPOk (dcat3 (DStr "(quote ") (dsym s) (DStr ")")) 0))))
+
+(fn sp_pats ((tbl (List (Pair QName Symbol))) (base Int) (ps (List Pat))) SpQ
+  (measure (struct ps))
+  (match ps
+    (Nil (SpQOk Nil 0))
+    ((Cons p rest)
+     (match (sp_pat tbl base p)
+       ((SpPErr msg) (SpQErr msg))
+       ((SpPOk d k)
+        (match (sp_pats tbl (+ base k) rest)
+          ((SpQErr msg) (SpQErr msg))
+          ((SpQOk ds k2) (SpQOk (Cons d ds) (+ k k2)))))))))
+
+;; ---- types and fn forms ------------------------------------------------------
+
+(fn sp_ty ((t Type)) Doc
+  (measure (struct t))
+  (match t
+    ((TCon q args)
+     (match args
+       (Nil (dsym (qn_name q)))
+       ((Cons _ _) (sp_form (dsym (qn_name q)) (sp_tys args)))))
+    ((TVar s) (dsym s))))
+
+(fn sp_tys ((ts (List Type))) (List Doc)
+  (measure (struct ts))
+  (match ts
+    (Nil Nil)
+    ((Cons t rest) (Cons (sp_ty t) (sp_tys rest)))))
+
+;; ((x0 T0) (x1 T1) …)
+(fn sp_params ((ts (List Type)) (i Int)) (List Doc)
+  (measure (struct ts))
+  (match ts
+    (Nil Nil)
+    ((Cons t rest)
+     (Cons
+       (sp_form (DCat (dsym (xsym i)) (DCat (sp) (sp_ty t))) Nil)
+       (sp_params rest (+ i 1))))))
+
+;; (measure (struct xK))
+(fn sp_meas_struct ((k Int)) Doc
+  (dcat3 (DStr "(measure (struct ") (dsym (xsym k)) (DStr "))")))
+
+;; (fn NAME ((x0 T0) …) RET [MEAS] BODY) — flat; body depth = arity
+(fn sp_fn
+  ((tbl (List (Pair QName Symbol)))
+   (name Symbol)
+   (params (List Type))
+   (ret Type)
+   (meas (Option Doc))
+   (body Expr))
+  SpR
+  (match (sp_e tbl (count_ts params) body)
+    ((SpRErr msg) (SpRErr msg))
+    ((SpROk bd)
+     (SpROk
+       (sp_form
+         (dcat3
+           (DStr "fn ")
+           (dsym name)
+           (DCat (sp) (sp_form (sp_tail_first (sp_params params 0)) Nil)))
+         (Cons
+           (sp_ty ret)
+           (match meas
+             (None (Cons bd Nil))
+             ((Some md) (Cons md (Cons bd Nil))))))))))
+
+;; join docs with single spaces, NO leading space (form interiors)
+(fn sp_tail_first ((ds (List Doc))) Doc
+  (measure (struct ds))
+  (match ds
+    (Nil (DStr ""))
+    ((Cons d rest)
+     (match rest
+       (Nil d)
+       ((Cons _ _) (dcat3 d (sp) (sp_tail_first rest)))))))
+
+(fn sp_bytes ((d Doc)) (List Int) (doc_flat d Nil))

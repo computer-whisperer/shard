@@ -1,0 +1,141 @@
+;;; tools/search — the program-search tool (docs/SEARCH.md; the clone
+;;; that mines meta/ vocabulary, D2). SLICE 1: the GROUND ENGINE —
+;;; enumerate a task's whole candidate space by rank (meta/sketch
+;;; addressing), fill each candidate into a FnDef, inject it into the
+;;; task's object module, and run the I/O battery through the real
+;;; machine (meta/invoke -> kernel/evm evm_call_pure; D3 — no
+;;; engine-private evaluator). Task data lives in rev.shard; the G1/G2
+;;; canonicality census lives in census.shard.
+;;;
+;;; RUN IT: bin/shard_eval run tools/search/search.shard             (d1 + d2)
+;;;         bin/shard_eval run tools/search/search.shard rev N       (depth N)
+;;; Pinned lines: COUNT / SOL <index> / SOLUTIONS (run_corpus.sh).
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/loader.shard")
+(import "../../meta/sketch")
+(import "../../meta/invoke")
+(import "rev.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel loader World))
+(use (:: kernel loader get_args))
+(use (:: kernel loader write))
+(use (:: kernel loader exit))
+(use (:: meta sketch *))
+(use (:: meta invoke *))
+(use (:: tools search rev *))
+
+;; enumerate the whole space: k counts DOWN from total (the measure),
+;; index = total - k; passing indices accumulate reversed
+(type EnR (EnRErr (List Int)) (EnROk (List Int)))
+
+(fn enum_go
+  ((k Int)
+   (total Int)
+   (root Expr)
+   (g Grammar)
+   (m Module)
+   (ts (List (Pair (List Int) (List Int))))
+   (acc (List Int)))
+  EnR
+  (measure k)
+  (if (le k 0) (EnROk (ids_rev acc Nil))
+  (match (sk_unrank root g (- total k))
+    ((SkEErr msg) (EnRErr msg))
+    ((SkEOk body)
+     (let ((fd (cand_fd body)))
+       (match (extend_fn m fd)
+         (None (EnRErr "extend_fn: candidate qname bound in the closure"))
+         ((Some m2)
+          (enum_go
+            (- k 1)
+            total
+            root
+            g
+            m
+            ts
+            (if (run_tests m2 fd ts) (Cons (- total k) acc) acc)))))))))
+
+;; ---- driver --------------------------------------------------------------------
+
+(fn sol_lines ((ixs (List Int))) (List Int)
+  (measure (struct ixs))
+  (match ixs
+    (Nil Nil)
+    ((Cons i t)
+     (append_int
+       "SOL "
+       (append_int (show_int i) (append_int "\n" (sol_lines t)))))))
+
+(fn list_len_i ((xs (List Int))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons _ t) (+ 1 (list_len_i t)))))
+
+;; run the rev task at one depth; write the pinned lines
+(fn run_rev ((m Module) (apq QName) (d Int) (w World)) World
+  (let ((root (rev_sketch)) (g (rev_grammar d apq)))
+    (match (sk_count root g)
+      ((SkCErr msg)
+       (exit
+         1
+         (write (append_int "SEARCH FAIL count: " (append_int msg "\n")) w)))
+      ((SkCOk total)
+       (let
+         ((w2
+            (write
+              (append_int
+                "SEARCH rev DEPTH "
+                (append_int
+                  (show_int d)
+                  (append_int "\nCOUNT " (append_int (show_int total) "\n"))))
+              w)))
+         (match (enum_go total total root g m (rev_tests) Nil)
+           ((EnRErr msg)
+            (exit
+              1
+              (write
+                (append_int "SEARCH FAIL unrank: " (append_int msg "\n"))
+                w2)))
+           ((EnROk sols)
+            (write
+              (append_int
+                (sol_lines sols)
+                (append_int
+                  "SOLUTIONS "
+                  (append_int (show_int (list_len_i sols)) "\n")))
+              w2))))))))
+
+;; ---- CLI -----------------------------------------------------------------------
+
+;; args: none -> the pinned suite (d1 then d2); "rev N" -> depth N
+(fn run_args ((as (List (List Int))) (m Module) (apq QName) (w World)) World
+  (match as
+    (Nil (run_rev m apq 2 (run_rev m apq 1 w)))
+    ((Cons a rest)
+     (if (int_list_eq a "rev")
+       (match rest
+         ((Cons ds Nil)
+          (match (parse_nat ds)
+            (None (exit 2 (write "usage: search [rev N]\n" w)))
+            ((Some d) (run_rev m apq d w))))
+         (_ (exit 2 (write "usage: search [rev N]\n" w))))
+       (exit 2 (write "usage: search [rev N]\n" w))))))
+
+(fn main ((w World)) World
+  (match (load_run_module "tools/search/rev_obj.shard" w)
+    ((Pair om w2)
+     (match om
+       (None (exit 1 (write "SEARCH FAIL: object module load\n" w2)))
+       ((Some m)
+        (match (find_fn (quote append) m)
+          (None (exit 1 (write "SEARCH FAIL: no append in closure\n" w2)))
+          ((Some apfd)
+           (match apfd
+             ((FnDef apq _ _ _)
+              (match (get_args w2)
+                ((Pair as w3) (run_args as m apq w3))))))))))))

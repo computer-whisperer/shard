@@ -1,0 +1,542 @@
+;;; tools/search/catalog.shard — the CATALOG census (docs/SEARCH.md
+;;; S7-lite): enumerate the structural list fragment at a depth rung,
+;;; post-filter through the REAL recognizer, battery-bucket the clean
+;;; set by behavior, and pin the first spellings-per-behavior numbers
+;;; against the real dialect (G5).
+;;;
+;;; THE FRAGMENT: f : (List Int) -> (List Int) over match / Cons / Nil /
+;;; append / structural recursion — no comparisons, no arithmetic, no
+;;; literals; matches at TAIL positions only (body and arm bodies, never
+;;; operands). Typed by construction: Cons's Int slot takes only pin
+;;; heads, recursion (f t) only binders obtained by destructuring —
+;;; every candidate is total. THE FRAGMENT INVARIANT: exactly one
+;;; matchable (unpinned) list var exists on every path — matching pins
+;;; one and destructuring introduces one — so match alternatives are
+;;; always a singleton family (refused loudly if a future fragment
+;;; breaks this).
+;;;
+;;; THE GENERATIVE TIER carries the per-position structural rules:
+;;; leaves = Nil + list vars not pinned Nil (C8 'respell); Cons only
+;;; with a pin-head Int slot; append left = atoms sans Nil (C7
+;;; nil_left/cons/assoc); match scrutinees = unpinned vars (C2/C11),
+;;; arms decl-ordered and exhaustive (C4/C5). THE FILTERED TIER is
+;;; measured, not excluded: the exact rebuild point Cons(h_i, t_i),
+;;; append-right Nil (C7 nil_right), vacuous matches (C10m), and
+;;; contextual redexes through composed pins all reach cn_e and are
+;;; TALLIED per family — the generate -> census -> classify loop
+;;; running against the real ledger. Sub-holes are SHARED across a
+;;; hole's alternatives (exclusive), which is what keeps the builder a
+;;; single self-recursive fn on measure m+e.
+;;;
+;;; Budgets: rung d = match depth d AND expr depth d. A match consumes
+;;; match budget only (arms keep the expr budget); Cons/append consume
+;;; expr budget; leaves and (f t) are atoms. Boundary budgets build
+;;; small DEAD leaf sub-entries (never live, never counted) to keep the
+;;; builder uniform.
+;;;
+;;; RUN IT: bin/shard_eval run tools/search/catalog.shard           (d1 + d2)
+;;;         bin/shard_eval run tools/search/catalog.shard rung N    (rung N)
+;;; Pinned lines: GEN/CLEAN/BEHAVIORS, FLAGGED families, SPELLINGS
+;;; (run_corpus.sh).
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/loader.shard")
+(import "../../kernel/canon.shard")
+(import "../../meta/sketch")
+(import "../../meta/invoke")
+(import "rev.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel loader World))
+(use (:: kernel loader get_args))
+(use (:: kernel loader write))
+(use (:: kernel loader exit))
+(use (:: kernel canon cn_e))
+(use (:: kernel canon CViol))
+(use (:: meta sketch *))
+(use (:: meta invoke *))
+(use (:: tools search rev *))
+
+;; ---- the fragment's binder environment -------------------------------------------
+;;
+;; A list-typed binder: its ABSOLUTE intro position (BVar index at a
+;; position with n binders = n - 1 - abs), whether recursion on it is
+;; licensed (destructured tails), and its pin state. Int binders are
+;; exactly the pins' heads.
+
+(type LPin (LPNone) (LPNil) (LPCons Int Int))
+
+(type LBind (LBind Int Bool LPin))
+
+(fn cat_q () QName (qn (quote srch_catf)))
+
+(fn bv ((n Int) (abs Int)) Expr (BVar (- (- n 1) abs)))
+
+(fn cat_nil () Expr (Ctor (qn (quote Nil)) Nil))
+
+;; leaf list: Nil (unless excluded) + list binders not pinned Nil
+(fn cat_leaves ((env (List LBind)) (n Int) (xnil Bool)) (List Expr)
+  (measure (struct env))
+  (match env
+    (Nil (if xnil Nil (Cons (cat_nil) Nil)))
+    ((Cons (LBind abs _ pin) rest)
+     (let ((tail (cat_leaves rest n xnil)))
+       (match pin
+         ((LPNil) tail)
+         (_ (Cons (bv n abs) tail)))))))
+
+;; (f t) atoms, one per recursion-licensed binder — EXCEPT binders
+;; pinned Nil: any mention of the scrutinee var in its binder-less arm
+;; is C8 'respell (the kernel rule subsuming the playground's mined R1
+;; "no recursion on a pinned-Nil variable"), so the calls are filtered
+;; at generation, position-locally
+(fn cat_fcalls ((env (List LBind)) (n Int)) (List Expr)
+  (measure (struct env))
+  (match env
+    (Nil Nil)
+    ((Cons (LBind abs rec pin) rest)
+     (let ((tail (cat_fcalls rest n)))
+       (if rec
+         (match pin
+           ((LPNil) tail)
+           (_ (Cons (Call (cat_q) (Cons (bv n abs) Nil)) tail)))
+         tail)))))
+
+;; the pin heads (h-abs) of every Cons-pinned binder in scope
+(fn cat_heads ((env (List LBind))) (List Int)
+  (measure (struct env))
+  (match env
+    (Nil Nil)
+    ((Cons (LBind _ _ pin) rest)
+     (match pin
+       ((LPCons h _) (Cons h (cat_heads rest)))
+       (_ (cat_heads rest))))))
+
+;; the unpinned (matchable) binders' abs positions
+(fn cat_scruts ((env (List LBind))) (List Int)
+  (measure (struct env))
+  (match env
+    (Nil Nil)
+    ((Cons (LBind abs _ pin) rest)
+     (match pin
+       ((LPNone) (Cons abs (cat_scruts rest)))
+       (_ (cat_scruts rest))))))
+
+;; pin a binder (by abs position)
+(fn cat_pin ((env (List LBind)) (x Int) (pin LPin)) (List LBind)
+  (measure (struct env))
+  (match env
+    (Nil Nil)
+    ((Cons (LBind abs rec p0) rest)
+     (Cons (LBind abs rec (if (int_eq abs x) pin p0)) (cat_pin rest x pin)))))
+
+;; Cons alternatives: per pin head, Cons(h_i, SHARED full sub-hole)
+(fn cat_conss ((hs (List Int)) (n Int) (sub Int)) (List Expr)
+  (measure (struct hs))
+  (match hs
+    (Nil Nil)
+    ((Cons h rest)
+     (Cons
+       (Ctor (qn (quote Cons)) (Cons (bv n h) (Cons (hole sub) Nil)))
+       (cat_conss rest n sub)))))
+
+;; ---- the grammar builder ----------------------------------------------------------
+
+(type CatR (CatRErr (List Int)) (CatROk (List GEnt) Int))
+
+;; the grammar at one tail position. Children (pre-order after the
+;; entry): append-left atoms at (0,0), the SHARED full operand
+;; sub-grammar at (0, e-1), then the match arms at (m-1, e) — budgets
+;; clamped at the boundary so the builder stays uniform (dead leaf
+;; entries are never referenced by an alternative).
+(fn cat_g
+  ((m Int)
+   (e Int)
+   (xnil Bool)
+   (env (List LBind))
+   (n Int)
+   (apq QName)
+   (next Int))
+  CatR
+  (measure (+ m e))
+  (if (lt m 0) (CatRErr "negative match budget")
+  (if (lt e 0) (CatRErr "negative expr budget")
+  (let ((atoms (append_e (cat_leaves env n xnil) (cat_fcalls env n))))
+    (if (le (+ m e) 0) (CatROk (Cons (GEnt next atoms) Nil) (+ next 1))
+    (match (cat_g 0 0 True env n apq (+ next 1))
+      ((CatRErr msg) (CatRErr msg))
+      ((CatROk esl n1)
+       (match
+         (if (lt 0 e) (cat_g 0 (- e 1) False env n apq n1)
+         (cat_g 0 0 False env n apq n1))
+         ((CatRErr msg) (CatRErr msg))
+         ((CatROk esf n2)
+          (match
+            (if (lt 0 e) (cat_g 0 (- e 1) True env n apq n2)
+            (cat_g 0 0 True env n apq n2))
+            ((CatRErr msg) (CatRErr msg))
+            ((CatROk esg ng)
+             (let
+               ((ealts
+                  (if (lt 0 e)
+                    (append_e
+                      (cat_conss (cat_heads env) n n1)
+                      (Cons
+                        (Call apq (Cons (hole (+ next 1)) (Cons (hole n2) Nil)))
+                        Nil))
+                    Nil)))
+               (match (cat_scruts env)
+                 (Nil
+                   ;; a Nil arm pins the only matchable var and adds none:
+                   ;; no match alternatives here, ever
+                   (CatROk
+                     (Cons
+                       (GEnt next (append_e atoms ealts))
+                       (ents_app esl (ents_app esf esg)))
+                     ng))
+                 ((Cons v vrest)
+                  (match vrest
+                    (Nil
+                      (match
+                        (if (lt 0 m)
+                          (cat_g
+                            (- m 1)
+                            e
+                            False
+                            (cat_pin env v (LPNil))
+                            n
+                            apq
+                            ng)
+                          (cat_g 0 0 False (cat_pin env v (LPNil)) n apq ng))
+                        ((CatRErr msg) (CatRErr msg))
+                        ((CatROk esn n3)
+                         (match
+                           (if (lt 0 m)
+                             (cat_g
+                               (- m 1)
+                               e
+                               False
+                               (Cons
+                                 (LBind (+ n 1) True (LPNone))
+                                 (cat_pin env v (LPCons n (+ n 1))))
+                               (+ n 2)
+                               apq
+                               n3)
+                             (cat_g
+                               0
+                               0
+                               False
+                               (Cons
+                                 (LBind (+ n 1) True (LPNone))
+                                 (cat_pin env v (LPCons n (+ n 1))))
+                               (+ n 2)
+                               apq
+                               n3))
+                           ((CatRErr msg) (CatRErr msg))
+                           ((CatROk esc n4)
+                            (let
+                              ((malts
+                                 (if (lt 0 m)
+                                   (Cons
+                                     (Match
+                                       (bv n v)
+                                       (Cons
+                                         (Arm
+                                           (PCtor (qn (quote Nil)) Nil)
+                                           (hole ng))
+                                         (Cons
+                                           (Arm
+                                             (PCtor
+                                               (qn (quote Cons))
+                                               (Cons (PVar) (Cons (PVar) Nil)))
+                                             (hole n3))
+                                           Nil)))
+                                     Nil)
+                                   Nil)))
+                              (CatROk
+                                (Cons
+                                  (GEnt
+                                    next
+                                    (append_e atoms (append_e ealts malts)))
+                                  (ents_app
+                                    esl
+                                    (ents_app
+                                      esf
+                                      (ents_app esg (ents_app esn esc)))))
+                                n4)))))))
+                    ((Cons _ _)
+                     (CatRErr "fragment invariant: more than one matchable var")))))))))))))))))
+
+;; the whole catalog grammar at rung d: one root hole, param xs = abs 0
+(fn cat_grammar ((d Int) (apq QName)) CatR
+  (match (cat_g d d False (Cons (LBind 0 False (LPNone)) Nil) 1 apq 0)
+    ((CatRErr msg) (CatRErr msg))
+    ((CatROk es nx) (CatROk es nx))))
+
+;; ---- the battery and behavior vectors ---------------------------------------------
+
+;; six inputs of distinct primes, lengths 0..5 (versioned task data)
+(fn cat_battery () (List (List Int))
+  (Cons
+    Nil
+    (Cons
+      (Cons 2 Nil)
+      (Cons
+        (Cons 3 (Cons 5 Nil))
+        (Cons
+          (Cons 7 (Cons 11 (Cons 13 Nil)))
+          (Cons
+            (Cons 17 (Cons 19 (Cons 23 (Cons 29 Nil))))
+            (Cons (Cons 31 (Cons 37 (Cons 41 (Cons 43 (Cons 47 Nil))))) Nil)))))))
+
+(fn ints_rev ((xs (List Int)) (acc (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil acc)
+    ((Cons h t) (ints_rev t (Cons h acc)))))
+
+(fn vecs_rev ((vs (List (List Int)))) (List (List Int))
+  (measure (struct vs))
+  (match vs
+    (Nil Nil)
+    ((Cons v t) (Cons (ints_rev v Nil) (vecs_rev t)))))
+
+;; run the battery; whole-or-nothing (a stuck candidate is a builder
+;; bug in this typed fragment — the caller refuses loudly)
+(fn cat_vec ((m2 Module) (fd FnDef) (ins (List (List Int))))
+  (Option (List (List Int)))
+  (measure (struct ins))
+  (match ins
+    (Nil (Some Nil))
+    ((Cons i rest)
+     (match (invoke_fd m2 fd (Cons (intlist_to_expr i) Nil))
+       (None None)
+       ((Some r)
+        (match (expr_ints r)
+          (None None)
+          ((Some ys)
+           (match (cat_vec m2 fd rest)
+             (None None)
+             ((Some vs) (Some (Cons ys vs)))))))))))
+
+(fn vec_eq ((a (List (List Int))) (b (List (List Int)))) Bool
+  (measure (struct a))
+  (match a
+    (Nil
+      (match b
+        (Nil True)
+        (_ False)))
+    ((Cons x xs)
+     (match b
+       (Nil False)
+       ((Cons y ys) (if (int_list_eq x y) (vec_eq xs ys) False))))))
+
+;; behavior buckets: vector -> spelling count, first-encounter order
+(fn bkt_add ((v (List (List Int))) (bs (List (Pair (List (List Int)) Int))))
+  (List (Pair (List (List Int)) Int))
+  (measure (struct bs))
+  (match bs
+    (Nil (Cons (Pair v 1) Nil))
+    ((Cons (Pair v0 c) rest)
+     (if (vec_eq v0 v) (Cons (Pair v0 (+ c 1)) rest)
+     (Cons (Pair v0 c) (bkt_add v rest))))))
+
+(fn bkt_find ((v (List (List Int))) (bs (List (Pair (List (List Int)) Int))))
+  Int
+  (measure (struct bs))
+  (match bs
+    (Nil 0)
+    ((Cons (Pair v0 c) rest) (if (vec_eq v0 v) c (bkt_find v rest)))))
+
+(fn bkt_len ((bs (List (Pair (List (List Int)) Int)))) Int
+  (measure (struct bs))
+  (match bs
+    (Nil 0)
+    ((Cons _ t) (+ 1 (bkt_len t)))))
+
+;; flagged-family tally: (rule, detail) -> count, first-encounter order
+(fn tly_add ((k Int) (s Symbol) (ts (List (Pair (Pair Int Symbol) Int))))
+  (List (Pair (Pair Int Symbol) Int))
+  (measure (struct ts))
+  (match ts
+    (Nil (Cons (Pair (Pair k s) 1) Nil))
+    ((Cons (Pair (Pair k0 s0) c) rest)
+     (if (if (int_eq k0 k) (sym_eq s0 s) False)
+       (Cons (Pair (Pair k0 s0) (+ c 1)) rest)
+       (Cons (Pair (Pair k0 s0) c) (tly_add k s rest))))))
+
+(fn tly_lines ((ts (List (Pair (Pair Int Symbol) Int)))) (List Int)
+  (measure (struct ts))
+  (match ts
+    (Nil Nil)
+    ((Cons (Pair (Pair k s) c) rest)
+     (append_int
+       "FLAGGED C"
+       (append_int
+         (show_int k)
+         (append_int
+           " "
+           (append_int
+             (chars_of_sym s)
+             (append_int
+               " "
+               (append_int (show_int c) (append_int "\n" (tly_lines rest)))))))))))
+
+;; ---- the sweep ---------------------------------------------------------------------
+
+(type CtS
+  (CtSErr (List Int))
+  (CtSOk
+    Int
+    (List (Pair (Pair Int Symbol) Int))
+    (List (Pair (List (List Int)) Int))))
+
+(fn cat_fd ((body Expr)) FnDef
+  (FnDef (cat_q) (Cons (ty_ilist) Nil) (ty_ilist) body))
+
+(fn cat_sweep
+  ((k Int)
+   (total Int)
+   (root Expr)
+   (g Grammar)
+   (m Module)
+   (ins (List (List Int)))
+   (clean Int)
+   (tly (List (Pair (Pair Int Symbol) Int)))
+   (bks (List (Pair (List (List Int)) Int))))
+  CtS
+  (measure k)
+  (if (le k 0) (CtSOk clean tly bks)
+  (let ((i (- total k)))
+    (match (sk_unrank root g i)
+      ((SkEErr msg) (CtSErr (cz_at "catalog unrank" i msg)))
+      ((SkEOk c)
+       (match (sk_rank root g c)
+         ((SkCErr msg) (CtSErr (cz_at "catalog roundtrip" i msg)))
+         ((SkCOk i2)
+          (if (int_eq i2 i)
+            (match (cn_e c m)
+              (Nil
+                (let ((fd (cat_fd c)))
+                  (match (extend_fn m fd)
+                    (None
+                      (CtSErr
+                        (cz_at
+                          "extend"
+                          i
+                          "candidate qname bound in the closure")))
+                    ((Some m2)
+                     (match (cat_vec m2 fd ins)
+                       (None
+                         (CtSErr
+                           (cz_at
+                             "catalog battery"
+                             i
+                             "typed candidate stuck (builder bug)")))
+                       ((Some v)
+                        (cat_sweep
+                          (- k 1)
+                          total
+                          root
+                          g
+                          m
+                          ins
+                          (+ clean 1)
+                          tly
+                          (bkt_add v bks))))))))
+              ((Cons (CViol kk ss) _)
+               (cat_sweep
+                 (- k 1)
+                 total
+                 root
+                 g
+                 m
+                 ins
+                 clean
+                 (tly_add kk ss tly)
+                 bks)))
+            (CtSErr
+              (cz_at "catalog roundtrip" i "rank disagrees with the index"))))))))))
+
+;; ---- driver --------------------------------------------------------------------------
+
+(fn run_catalog ((m Module) (apq QName) (d Int) (w World)) World
+  (match (cat_grammar d apq)
+    ((CatRErr msg)
+     (exit
+       1
+       (write (append_int "CATALOG FAIL grammar: " (append_int msg "\n")) w)))
+    ((CatROk es _)
+     (let ((root (hole 0)) (g (Grammar es)))
+       (match (sk_count root g)
+         ((SkCErr msg)
+          (exit
+            1
+            (write (append_int "CATALOG FAIL count: " (append_int msg "\n")) w)))
+         ((SkCOk total)
+          (match (cat_sweep total total root g m (cat_battery) 0 Nil Nil)
+            ((CtSErr msg) (exit 1 (write (append_int "CATALOG FAIL " msg) w)))
+            ((CtSOk clean tly bks)
+             (write
+               (append_int
+                 "CATALOG rung "
+                 (append_int
+                   (show_int d)
+                   (append_int
+                     "\nGEN "
+                     (append_int
+                       (show_int total)
+                       (append_int
+                         " CLEAN "
+                         (append_int
+                           (show_int clean)
+                           (append_int
+                             " BEHAVIORS "
+                             (append_int
+                               (show_int (bkt_len bks))
+                               (append_int
+                                 "\n"
+                                 (append_int
+                                   (tly_lines tly)
+                                   (append_int
+                                     "SPELLINGS rev "
+                                     (append_int
+                                       (show_int
+                                         (bkt_find (vecs_rev (cat_battery)) bks))
+                                       (append_int
+                                         " id "
+                                         (append_int
+                                           (show_int
+                                             (bkt_find (cat_battery) bks))
+                                           "\n"))))))))))))))
+               w)))))))))
+
+;; args: none -> the pinned suite (rungs 1 and 2); "rung N" -> rung N
+(fn cat_args ((as (List (List Int))) (m Module) (apq QName) (w World)) World
+  (match as
+    (Nil (run_catalog m apq 2 (run_catalog m apq 1 w)))
+    ((Cons a rest)
+     (if (int_list_eq a "rung")
+       (match rest
+         ((Cons ds Nil)
+          (match (parse_nat ds)
+            (None (exit 2 (write "usage: catalog [rung N]\n" w)))
+            ((Some d) (run_catalog m apq d w))))
+         (_ (exit 2 (write "usage: catalog [rung N]\n" w))))
+       (exit 2 (write "usage: catalog [rung N]\n" w))))))
+
+(fn main ((w World)) World
+  (match (load_run_module "tools/search/rev_obj.shard" w)
+    ((Pair om w2)
+     (match om
+       (None (exit 1 (write "CATALOG FAIL: object module load\n" w2)))
+       ((Some m)
+        (match (find_fn (quote append) m)
+          (None (exit 1 (write "CATALOG FAIL: no append in closure\n" w2)))
+          ((Some apfd)
+           (match apfd
+             ((FnDef apq _ _ _)
+              (match (get_args w2)
+                ((Pair as w3) (cat_args as m apq w3))))))))))))

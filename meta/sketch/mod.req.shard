@@ -1,0 +1,779 @@
+;;; meta/sketch — the TERM-WITH-HOLES vocabulary: partial kernel terms
+;;; and the exact addressing of their candidate spaces (docs/SEARCH.md
+;;; S1). THE LINE: a definition lives here iff it manipulates PARTIAL
+;;; kernel Exprs (hole-headed subterms) or addresses the candidate space
+;;; a grammar induces over them — counting, rank-addressed decoding,
+;;; filling. Nothing here evaluates, checks, proves, or renders.
+;;;
+;;; THE HOLE ENCODING (SEARCH.md D1): a hole is a reserved-head call
+;;; inside the ordinary kernel Expr —
+;;;
+;;;   (Call (:: meta sketch hole) ((IntLit k)))
+;;;
+;;; — so every existing Expr walker, recognizer, and renderer works on
+;;; partial terms unchanged. The reserved head is exactly the qname of
+;;; the `hole` builder below: the name is reserved BY the definition.
+;;; The kernel never checks a sketch; holes are filled before any check.
+;;; A hole-headed call with any other argument shape is a MALFORMED
+;;; sketch: every walker here refuses it loudly (HVBad / *Err), never
+;;; skips it.
+;;;
+;;; SHARING: one hole id at two positions is ONE decision (the
+;;; correlation primitive) — collection dedups, counting multiplies a
+;;; shared hole once, filling substitutes every occurrence.
+;;;
+;;; THE FILL CONTRACT: fill is verbatim substitution — no binder
+;;; shifting. An assignment's Expr is spelled in the binder context of
+;;; the hole's position; sharing an id across positions requires those
+;;; positions to agree on context. (The rev skeleton's per-arm hole
+;;; scopes are the model.)
+;;;
+;;; GRAMMARS: per-hole alternative lists (GEnt), each alternative an
+;;; Expr that may itself contain holes. THE STRATIFICATION LAW: entry
+;;; ids are strictly ascending, and an alternative's holes are strictly
+;;; GREATER than its entry's id — so counting is one reverse fold,
+;;; deciding is one forward fold, closing is one reverse fold, all
+;;; structural (no fuel, no cycle detection: a violation is a loud
+;;; refusal at the pass that notices, and g_wf checks the law whole).
+;;; One hole is owned by at most ONE entry's alternative set; reuse
+;;; across alternatives of the SAME entry is fine (alternatives are
+;;; exclusive), cross-entry sharing is refused (it would correlate
+;;; distinct decisions and break the product counts).
+;;;
+;;; THE ADDRESSING LAW (rank <-> candidate): a sketch's space is the
+;;; product over its distinct holes, ASCENDING id order, of per-hole
+;;; counts; the LAST hole is the least-significant digit. Within a
+;;; hole, alternatives occupy consecutive index intervals in list
+;;; order (leaves-first grammars put leaves at the low indices); an
+;;; alternative's interval decomposes over its distinct sub-holes the
+;;; same way (ascending, last least-significant). Counts are exact
+;;; bignum Int at any rung.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../doc")
+(use (:: kernel term Expr))
+(use (:: kernel term Call))
+(use (:: kernel term Ctor))
+(use (:: kernel term Match))
+(use (:: kernel term Let))
+(use (:: kernel term If))
+(use (:: kernel term IntLit))
+(use (:: kernel term Arm))
+(use (:: kernel term Pat))
+(use (:: kernel term QName))
+(use (:: kernel term expr_eq))
+(use (:: kernel term pat_eq))
+(use (:: kernel term qname_eq))
+(use (:: meta doc sym_list_eq))
+
+;; ---- the reserved head (D1) --------------------------------------------------
+
+(fn hole_path () (List Symbol) (Cons (quote meta) (Cons (quote sketch) Nil)))
+
+(fn hole_qn () QName (QName (hole_path) (quote hole)))
+
+;; build hole k. This fn's own qname IS the reserved head.
+(fn hole ((k Int)) Expr (Call (hole_qn) (Cons (IntLit k) Nil)))
+
+(fn qn_is_hole ((q QName)) Bool
+  (match q
+    ((QName path name)
+     (if (sym_eq name (quote hole)) (sym_list_eq path (hole_path)) False))))
+
+;; the loud pointwise classifier: a well-formed hole, a non-hole, or a
+;; MALFORMED hole-headed call (refused, never skipped)
+(type HoleView (HVHole Int) (HVBad (List Int)) (HVNot))
+
+(fn call_hole_view ((q QName) (as (List Expr))) HoleView
+  (if (qn_is_hole q)
+    (match as
+      ((Cons (IntLit k) Nil) (HVHole k))
+      (_ (HVBad "malformed hole: want (hole K), exactly one IntLit argument")))
+    (HVNot)))
+
+(fn hole_view ((e Expr)) HoleView
+  (match e
+    ((Call q as) (call_hole_view q as))
+    (_ (HVNot))))
+
+(fn is_hole ((e Expr)) Bool
+  (match (hole_view e)
+    ((HVHole _) True)
+    (_ False)))
+
+(fn hole_id ((e Expr)) (Option Int)
+  (match (hole_view e)
+    ((HVHole k) (Some k))
+    (_ None)))
+
+;; ---- sorted id sets ----------------------------------------------------------
+
+(fn ids_insert ((k Int) (ks (List Int))) (List Int)
+  (measure (struct ks))
+  (match ks
+    (Nil (Cons k Nil))
+    ((Cons h t)
+     (if (lt k h) (Cons k ks) (if (int_eq k h) ks (Cons h (ids_insert k t)))))))
+
+(fn ids_member ((k Int) (ks (List Int))) Bool
+  (measure (struct ks))
+  (match ks
+    (Nil False)
+    ((Cons h t) (if (int_eq k h) True (ids_member k t)))))
+
+(fn ids_union ((xs (List Int)) (ks (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil ks)
+    ((Cons h t) (ids_union t (ids_insert h ks)))))
+
+(fn ids_rev ((xs (List Int)) (acc (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil acc)
+    ((Cons h t) (ids_rev t (Cons h acc)))))
+
+;; ---- hole collection: distinct ids, ASCENDING (sharing = one decision) -------
+
+(type SkIds (SkIdsErr (List Int)) (SkIdsOk (List Int)))
+
+(fn holes_e ((e Expr) (acc (List Int))) SkIds
+  (measure (struct e))
+  (match e
+    ((Ctor _ as) (holes_l as acc))
+    ((Call q as)
+     (match (call_hole_view q as)
+       ((HVHole k) (SkIdsOk (ids_insert k acc)))
+       ((HVBad m) (SkIdsErr m))
+       ((HVNot) (holes_l as acc))))
+    ((Match s arms)
+     (match (holes_e s acc)
+       ((SkIdsErr m) (SkIdsErr m))
+       ((SkIdsOk a2) (holes_arms arms a2))))
+    ((Let bs body)
+     (match (holes_l bs acc)
+       ((SkIdsErr m) (SkIdsErr m))
+       ((SkIdsOk a2) (holes_e body a2))))
+    ((If c a b)
+     (match (holes_e c acc)
+       ((SkIdsErr m) (SkIdsErr m))
+       ((SkIdsOk a1)
+        (match (holes_e a a1)
+          ((SkIdsErr m) (SkIdsErr m))
+          ((SkIdsOk a2) (holes_e b a2))))))
+    (_ (SkIdsOk acc))))
+
+(fn holes_l ((es (List Expr)) (acc (List Int))) SkIds
+  (measure (struct es))
+  (match es
+    (Nil (SkIdsOk acc))
+    ((Cons h t)
+     (match (holes_e h acc)
+       ((SkIdsErr m) (SkIdsErr m))
+       ((SkIdsOk a2) (holes_l t a2))))))
+
+(fn holes_arms ((arms (List Arm)) (acc (List Int))) SkIds
+  (measure (struct arms))
+  (match arms
+    (Nil (SkIdsOk acc))
+    ((Cons (Arm _ b) t)
+     (match (holes_e b acc)
+       ((SkIdsErr m) (SkIdsErr m))
+       ((SkIdsOk a2) (holes_arms t a2))))))
+
+(fn sk_holes ((e Expr)) SkIds (holes_e e Nil))
+
+;; ---- closedness: NO hole-headed call anywhere (malformed included) -----------
+
+(fn closed_e ((e Expr)) Bool
+  (measure (struct e))
+  (match e
+    ((Ctor _ as) (closed_l as))
+    ((Call q as) (if (qn_is_hole q) False (closed_l as)))
+    ((Match s arms) (if (closed_e s) (closed_arms arms) False))
+    ((Let bs body) (if (closed_l bs) (closed_e body) False))
+    ((If c a b) (if (closed_e c) (if (closed_e a) (closed_e b) False) False))
+    (_ True)))
+
+(fn closed_l ((es (List Expr))) Bool
+  (measure (struct es))
+  (match es
+    (Nil True)
+    ((Cons h t) (if (closed_e h) (closed_l t) False))))
+
+(fn closed_arms ((arms (List Arm))) Bool
+  (measure (struct arms))
+  (match arms
+    (Nil True)
+    ((Cons (Arm _ b) t) (if (closed_e b) (closed_arms t) False))))
+
+(fn sk_closed ((e Expr)) Bool (closed_e e))
+
+;; ---- fill: verbatim hole substitution (single pass, no recursion into
+;; the substituted value — bottom-up closing is the caller's job) --------------
+
+(type SkE (SkEErr (List Int)) (SkEOk Expr))
+
+(type SkEL (SkELErr (List Int)) (SkELOk (List Expr)))
+
+(type SkEA (SkEAErr (List Int)) (SkEAOk (List Arm)))
+
+(fn asg_find ((k Int) (asg (List (Pair Int Expr)))) (Option Expr)
+  (measure (struct asg))
+  (match asg
+    (Nil None)
+    ((Cons (Pair i v) t) (if (int_eq k i) (Some v) (asg_find k t)))))
+
+(fn fill_e ((e Expr) (asg (List (Pair Int Expr)))) SkE
+  (measure (struct e))
+  (match e
+    ((Ctor c as)
+     (match (fill_l as asg)
+       ((SkELErr m) (SkEErr m))
+       ((SkELOk as2) (SkEOk (Ctor c as2)))))
+    ((Call q as)
+     (match (call_hole_view q as)
+       ((HVHole k)
+        (match (asg_find k asg)
+          (None (SkEOk e))
+          ((Some v) (SkEOk v))))
+       ((HVBad m) (SkEErr m))
+       ((HVNot)
+        (match (fill_l as asg)
+          ((SkELErr m) (SkEErr m))
+          ((SkELOk as2) (SkEOk (Call q as2)))))))
+    ((Match s arms)
+     (match (fill_e s asg)
+       ((SkEErr m) (SkEErr m))
+       ((SkEOk s2)
+        (match (fill_arms arms asg)
+          ((SkEAErr m) (SkEErr m))
+          ((SkEAOk arms2) (SkEOk (Match s2 arms2)))))))
+    ((Let bs body)
+     (match (fill_l bs asg)
+       ((SkELErr m) (SkEErr m))
+       ((SkELOk bs2)
+        (match (fill_e body asg)
+          ((SkEErr m) (SkEErr m))
+          ((SkEOk body2) (SkEOk (Let bs2 body2)))))))
+    ((If c a b)
+     (match (fill_e c asg)
+       ((SkEErr m) (SkEErr m))
+       ((SkEOk c2)
+        (match (fill_e a asg)
+          ((SkEErr m) (SkEErr m))
+          ((SkEOk a2)
+           (match (fill_e b asg)
+             ((SkEErr m) (SkEErr m))
+             ((SkEOk b2) (SkEOk (If c2 a2 b2)))))))))
+    (_ (SkEOk e))))
+
+(fn fill_l ((es (List Expr)) (asg (List (Pair Int Expr)))) SkEL
+  (measure (struct es))
+  (match es
+    (Nil (SkELOk Nil))
+    ((Cons h t)
+     (match (fill_e h asg)
+       ((SkEErr m) (SkELErr m))
+       ((SkEOk h2)
+        (match (fill_l t asg)
+          ((SkELErr m) (SkELErr m))
+          ((SkELOk t2) (SkELOk (Cons h2 t2)))))))))
+
+(fn fill_arms ((arms (List Arm)) (asg (List (Pair Int Expr)))) SkEA
+  (measure (struct arms))
+  (match arms
+    (Nil (SkEAOk Nil))
+    ((Cons (Arm p b) t)
+     (match (fill_e b asg)
+       ((SkEErr m) (SkEAErr m))
+       ((SkEOk b2)
+        (match (fill_arms t asg)
+          ((SkEAErr m) (SkEAErr m))
+          ((SkEAOk t2) (SkEAOk (Cons (Arm p b2) t2)))))))))
+
+(fn sk_fill ((e Expr) (asg (List (Pair Int Expr)))) SkE (fill_e e asg))
+
+;; ---- grammars ----------------------------------------------------------------
+
+;; one hole's alternatives; each alternative may contain holes with
+;; STRICTLY GREATER ids (the stratification law)
+(type GEnt (GEnt Int (List Expr)))
+
+(type Grammar (Grammar (List GEnt)))
+
+(fn ents_rev ((es (List GEnt)) (acc (List GEnt))) (List GEnt)
+  (measure (struct es))
+  (match es
+    (Nil acc)
+    ((Cons h t) (ents_rev t (Cons h acc)))))
+
+(fn ge_ids ((es (List GEnt))) (List Int)
+  (measure (struct es))
+  (match es
+    (Nil Nil)
+    ((Cons (GEnt h _) t) (Cons h (ge_ids t)))))
+
+(fn ids_ascending ((ks (List Int))) Bool
+  (measure (struct ks))
+  (match ks
+    (Nil True)
+    ((Cons a t)
+     (match t
+       (Nil True)
+       ((Cons b _) (if (lt a b) (ids_ascending t) False))))))
+
+;; ---- well-formedness: the stratification law, checked whole ------------------
+
+(type GW (GWErr (List Int)) (GWOk))
+
+(fn refs_check ((hs (List Int)) (h Int) (tids (List Int)) (seen (List Int))) GW
+  (measure (struct hs))
+  (match hs
+    (Nil (GWOk))
+    ((Cons k t)
+     (if (le k h) (GWErr "alternative hole id must exceed its entry id")
+     (if (ids_member k tids)
+       (if (ids_member k seen) (GWErr "hole is owned by two grammar entries")
+       (refs_check t h tids seen))
+       (GWErr "alternative references a hole with no grammar entry"))))))
+
+(fn wf_go ((es (List GEnt)) (tids (List Int)) (seen (List Int))) GW
+  (measure (struct es))
+  (match es
+    (Nil (GWOk))
+    ((Cons (GEnt h alts) rest)
+     (match (holes_l alts Nil)
+       ((SkIdsErr m) (GWErr m))
+       ((SkIdsOk hs)
+        (match (refs_check hs h tids seen)
+          ((GWErr m) (GWErr m))
+          ((GWOk) (wf_go rest tids (ids_union hs seen)))))))))
+
+(fn g_wf ((g Grammar)) GW
+  (match g
+    ((Grammar es)
+     (if (ids_ascending (ge_ids es)) (wf_go es (ge_ids es) Nil)
+     (GWErr "grammar entry ids must be strictly ascending")))))
+
+;; ---- exact counting: one reverse fold over the entries -----------------------
+
+(type SkC (SkCErr (List Int)) (SkCOk Int))
+
+(type GCt (GCtErr (List Int)) (GCtOk (List (Pair Int Int))))
+
+(fn memo_find ((k Int) (memo (List (Pair Int Int)))) (Option Int)
+  (measure (struct memo))
+  (match memo
+    (Nil None)
+    ((Cons (Pair i c) t) (if (int_eq k i) (Some c) (memo_find k t)))))
+
+;; product over distinct holes of memoed counts (a shared hole is ONE factor)
+(fn prod_counts ((hs (List Int)) (memo (List (Pair Int Int)))) SkC
+  (measure (struct hs))
+  (match hs
+    (Nil (SkCOk 1))
+    ((Cons h t)
+     (match (memo_find h memo)
+       (None (SkCErr "count memo is missing a hole (stratification violated)"))
+       ((Some c)
+        (match (prod_counts t memo)
+          ((SkCErr m) (SkCErr m))
+          ((SkCOk p) (SkCOk (* c p)))))))))
+
+(fn alt_size ((a Expr) (memo (List (Pair Int Int)))) SkC
+  (match (holes_e a Nil)
+    ((SkIdsErr m) (SkCErr m))
+    ((SkIdsOk hs) (prod_counts hs memo))))
+
+(fn sum_alts ((alts (List Expr)) (memo (List (Pair Int Int)))) SkC
+  (measure (struct alts))
+  (match alts
+    (Nil (SkCOk 0))
+    ((Cons a t)
+     (match (alt_size a memo)
+       ((SkCErr m) (SkCErr m))
+       ((SkCOk sz)
+        (match (sum_alts t memo)
+          ((SkCErr m) (SkCErr m))
+          ((SkCOk s) (SkCOk (+ sz s)))))))))
+
+(fn counts_go ((rev_es (List GEnt)) (memo (List (Pair Int Int)))) GCt
+  (measure (struct rev_es))
+  (match rev_es
+    (Nil (GCtOk memo))
+    ((Cons (GEnt h alts) rest)
+     (match (sum_alts alts memo)
+       ((SkCErr m) (GCtErr m))
+       ((SkCOk c) (counts_go rest (Cons (Pair h c) memo)))))))
+
+;; per-hole exact counts for every entry, later entries first computed —
+;; the stratification law makes one reverse fold sufficient
+(fn g_counts ((g Grammar)) GCt
+  (match g
+    ((Grammar es) (counts_go (ents_rev es Nil) Nil))))
+
+;; the sketch's whole space: product over its distinct holes
+(fn sk_count ((root Expr) (g Grammar)) SkC
+  (match (g_counts g)
+    ((GCtErr m) (SkCErr m))
+    ((GCtOk memo)
+     (match (holes_e root Nil)
+       ((SkIdsErr m) (SkCErr m))
+       ((SkIdsOk roots) (prod_counts roots memo))))))
+
+;; ---- unrank: index -> closed candidate ----------------------------------------
+
+;; digit split per the addressing law: holes given REVERSED (last =
+;; least-significant digit), each digit = ix mod count
+(type DgR (DgRErr (List Int)) (DgROk (List (Pair Int Int))))
+
+(fn digits_go
+  ((hs_rev (List Int))
+   (memo (List (Pair Int Int)))
+   (ix Int)
+   (acc (List (Pair Int Int))))
+  DgR
+  (measure (struct hs_rev))
+  (match hs_rev
+    (Nil (DgROk acc))
+    ((Cons h t)
+     (match (memo_find h memo)
+       (None (DgRErr "count memo is missing a hole (stratification violated)"))
+       ((Some c)
+        (if (le c 0) (DgRErr "hole with an empty candidate space")
+        (digits_go t memo (ediv ix c) (Cons (Pair h (mod ix c)) acc))))))))
+
+;; alternative selection: consecutive intervals in list order
+(type PkR (PkRErr (List Int)) (PkROk Expr Int))
+
+(fn pick_alt ((alts (List Expr)) (memo (List (Pair Int Int))) (i Int)) PkR
+  (measure (struct alts))
+  (match alts
+    (Nil (PkRErr "alternative index out of range (count drift)"))
+    ((Cons a t)
+     (match (alt_size a memo)
+       ((SkCErr m) (PkRErr m))
+       ((SkCOk sz) (if (lt i sz) (PkROk a i) (pick_alt t memo (- i sz))))))))
+
+;; merge freshly decided digits into the live map; a collision means a
+;; hole reached from two entries (cross-entry sharing) — refused
+(fn live_merge ((ds (List (Pair Int Int))) (live (List (Pair Int Int))))
+  (Option (List (Pair Int Int)))
+  (measure (struct ds))
+  (match ds
+    (Nil (Some live))
+    ((Cons (Pair k d) t)
+     (match (memo_find k live)
+       (None (live_merge t (Cons (Pair k d) live)))
+       ((Some _) None)))))
+
+;; the forward decide pass: each live entry picks its alternative and
+;; hands index digits down to the alternative's own holes
+(type DcR (DcRErr (List Int)) (DcROk (List (Pair Int Expr))))
+
+(fn decide_go
+  ((es (List GEnt))
+   (memo (List (Pair Int Int)))
+   (live (List (Pair Int Int)))
+   (choices (List (Pair Int Expr))))
+  DcR
+  (measure (struct es))
+  (match es
+    (Nil (DcROk choices))
+    ((Cons (GEnt h alts) rest)
+     (match (memo_find h live)
+       (None (decide_go rest memo live choices))
+       ((Some i)
+        (match (pick_alt alts memo i)
+          ((PkRErr m) (DcRErr m))
+          ((PkROk a r)
+           (match (holes_e a Nil)
+             ((SkIdsErr m) (DcRErr m))
+             ((SkIdsOk hs)
+              (match (digits_go (ids_rev hs Nil) memo r Nil)
+                ((DgRErr m) (DcRErr m))
+                ((DgROk ds)
+                 (match (live_merge ds live)
+                   (None (DcRErr "hole is owned by two grammar entries"))
+                   ((Some live2)
+                    (decide_go rest memo live2 (Cons (Pair h a) choices)))))))))))))))
+
+;; the reverse close pass: substitute bottom-up, so every chosen
+;; alternative closes against already-closed deeper holes
+(type ClR (ClRErr (List Int)) (ClROk (List (Pair Int Expr))))
+
+(fn close_go
+  ((rev_es (List GEnt))
+   (choices (List (Pair Int Expr)))
+   (closed (List (Pair Int Expr))))
+  ClR
+  (measure (struct rev_es))
+  (match rev_es
+    (Nil (ClROk closed))
+    ((Cons (GEnt h _) rest)
+     (match (asg_find h choices)
+       (None (close_go rest choices closed))
+       ((Some a)
+        (match (fill_e a closed)
+          ((SkEErr m) (ClRErr m))
+          ((SkEOk v) (close_go rest choices (Cons (Pair h v) closed)))))))))
+
+;; ---- rank: closed candidate -> index (unrank's inverse) -----------------------
+;;
+;; Matching walks a TEMPLATE (an Expr with holes) against a closed
+;; candidate: a hole binds the candidate subtree at its position (a
+;; repeated id must bind expr_eq-equal subtrees — sharing), everything
+;; else must agree exactly. Across a hole's alternatives the FIRST
+;; structural match wins, and there is NO backtracking into a later
+;; alternative when the bound subtree fails deeper — so THE ORDERING
+;; DISCIPLINE for builders: an earlier alternative must never
+;; structurally match a candidate that belongs to a later one. Plain
+;; distinct-head alternatives satisfy it trivially; point-exclusion
+;; splits (Cons(x, B') before Cons(A', B)) must list the
+;; CONCRETE-headed alternative first. rank . unrank = id is what
+;; consumers gate (the census round-trip).
+
+(type MtR (MtRErr (List Int)) (MtRNo) (MtROk (List (Pair Int Expr))))
+
+(fn mt_bind ((k Int) (v Expr) (bs (List (Pair Int Expr)))) MtR
+  (match (asg_find k bs)
+    (None (MtROk (Cons (Pair k v) bs)))
+    ((Some v0) (if (expr_eq v0 v) (MtROk bs) (MtRNo)))))
+
+(fn match_e ((p Expr) (c Expr) (bs (List (Pair Int Expr)))) MtR
+  (measure (struct p))
+  (match p
+    ((Ctor q as)
+     (match c
+       ((Ctor q2 as2) (if (qname_eq q q2) (match_l as as2 bs) (MtRNo)))
+       (_ (MtRNo))))
+    ((Call q as)
+     (match (call_hole_view q as)
+       ((HVHole k) (mt_bind k c bs))
+       ((HVBad m) (MtRErr m))
+       ((HVNot)
+        (match c
+          ((Call q2 as2) (if (qname_eq q q2) (match_l as as2 bs) (MtRNo)))
+          (_ (MtRNo))))))
+    ((Match s arms)
+     (match c
+       ((Match s2 arms2)
+        (match (match_e s s2 bs)
+          ((MtRErr m) (MtRErr m))
+          ((MtRNo) (MtRNo))
+          ((MtROk bs2) (match_arms arms arms2 bs2))))
+       (_ (MtRNo))))
+    ((Let xs body)
+     (match c
+       ((Let xs2 body2)
+        (match (match_l xs xs2 bs)
+          ((MtRErr m) (MtRErr m))
+          ((MtRNo) (MtRNo))
+          ((MtROk bs2) (match_e body body2 bs2))))
+       (_ (MtRNo))))
+    ((If a b d)
+     (match c
+       ((If a2 b2 d2)
+        (match (match_e a a2 bs)
+          ((MtRErr m) (MtRErr m))
+          ((MtRNo) (MtRNo))
+          ((MtROk bs1)
+           (match (match_e b b2 bs1)
+             ((MtRErr m) (MtRErr m))
+             ((MtRNo) (MtRNo))
+             ((MtROk bs2) (match_e d d2 bs2))))))
+       (_ (MtRNo))))
+    (_ (if (expr_eq p c) (MtROk bs) (MtRNo)))))
+
+(fn match_l ((ps (List Expr)) (cs (List Expr)) (bs (List (Pair Int Expr)))) MtR
+  (measure (struct ps))
+  (match ps
+    (Nil
+      (match cs
+        (Nil (MtROk bs))
+        (_ (MtRNo))))
+    ((Cons p pt)
+     (match cs
+       (Nil (MtRNo))
+       ((Cons c ct)
+        (match (match_e p c bs)
+          ((MtRErr m) (MtRErr m))
+          ((MtRNo) (MtRNo))
+          ((MtROk bs2) (match_l pt ct bs2))))))))
+
+(fn match_arms ((ps (List Arm)) (cs (List Arm)) (bs (List (Pair Int Expr)))) MtR
+  (measure (struct ps))
+  (match ps
+    (Nil
+      (match cs
+        (Nil (MtROk bs))
+        (_ (MtRNo))))
+    ((Cons (Arm pp pb) pt)
+     (match cs
+       (Nil (MtRNo))
+       ((Cons (Arm cp cb) ct)
+        (if (pat_eq pp cp)
+          (match (match_e pb cb bs)
+            ((MtRErr m) (MtRErr m))
+            ((MtRNo) (MtRNo))
+            ((MtROk bs2) (match_arms pt ct bs2)))
+          (MtRNo)))))))
+
+;; first alternative matching v: its index offset (sum of the sizes of
+;; the alternatives before it), its template, and its bindings
+(type FaR (FaRErr (List Int)) (FaROk Int Expr (List (Pair Int Expr))))
+
+(fn find_alt
+  ((alts (List Expr)) (memo (List (Pair Int Int))) (v Expr) (off Int))
+  FaR
+  (measure (struct alts))
+  (match alts
+    (Nil (FaRErr "candidate matches no alternative of a live hole"))
+    ((Cons a t)
+     (match (match_e a v Nil)
+       ((MtRErr m) (FaRErr m))
+       ((MtRNo)
+        (match (alt_size a memo)
+          ((SkCErr m) (FaRErr m))
+          ((SkCOk sz) (find_alt t memo v (+ off sz)))))
+       ((MtROk bs) (FaROk off a bs))))))
+
+;; forward pass: live (hole -> bound subtree); choices (hole -> its
+;; matched alternative's offset and template)
+(type RkR (RkRErr (List Int)) (RkROk (List (Pair Int (Pair Int Expr)))))
+
+(fn rk_find ((k Int) (m (List (Pair Int Expr)))) (Option Expr) (asg_find k m))
+
+(fn rk_merge ((ds (List (Pair Int Expr))) (live (List (Pair Int Expr))))
+  (Option (List (Pair Int Expr)))
+  (measure (struct ds))
+  (match ds
+    (Nil (Some live))
+    ((Cons (Pair k v) t)
+     (match (asg_find k live)
+       (None (rk_merge t (Cons (Pair k v) live)))
+       ((Some _) None)))))
+
+(fn rank_decide
+  ((es (List GEnt))
+   (memo (List (Pair Int Int)))
+   (live (List (Pair Int Expr)))
+   (choices (List (Pair Int (Pair Int Expr)))))
+  RkR
+  (measure (struct es))
+  (match es
+    (Nil (RkROk choices))
+    ((Cons (GEnt h alts) rest)
+     (match (rk_find h live)
+       (None (rank_decide rest memo live choices))
+       ((Some v)
+        (match (find_alt alts memo v 0)
+          ((FaRErr m) (RkRErr m))
+          ((FaROk off a bs)
+           (match (rk_merge bs live)
+             (None (RkRErr "hole is owned by two grammar entries"))
+             ((Some live2)
+              (rank_decide rest memo live2 (Cons (Pair h (Pair off a)) choices)))))))))))
+
+;; compose digits over distinct holes ascending (last least-significant)
+(fn digits_compose
+  ((hs (List Int))
+   (dmemo (List (Pair Int Int)))
+   (memo (List (Pair Int Int)))
+   (acc Int))
+  SkC
+  (measure (struct hs))
+  (match hs
+    (Nil (SkCOk acc))
+    ((Cons h t)
+     (match (memo_find h memo)
+       (None (SkCErr "count memo is missing a hole (stratification violated)"))
+       ((Some c)
+        (match (memo_find h dmemo)
+          (None (SkCErr "digit memo is missing a hole (rank drift)"))
+          ((Some d) (digits_compose t dmemo memo (+ (* acc c) d)))))))))
+
+;; reverse pass: each chosen hole's digit = its alternative's offset
+;; composed with the (already-computed) digits of its own sub-holes
+(fn rank_close
+  ((rev_es (List GEnt))
+   (choices (List (Pair Int (Pair Int Expr))))
+   (memo (List (Pair Int Int)))
+   (dmemo (List (Pair Int Int))))
+  GCt
+  (measure (struct rev_es))
+  (match rev_es
+    (Nil (GCtOk dmemo))
+    ((Cons (GEnt h _) rest)
+     (match (rk_choice h choices)
+       (None (rank_close rest choices memo dmemo))
+       ((Some (Pair off a))
+        (match (holes_e a Nil)
+          ((SkIdsErr m) (GCtErr m))
+          ((SkIdsOk hs)
+           (match (digits_compose hs dmemo memo 0)
+             ((SkCErr m) (GCtErr m))
+             ((SkCOk sub)
+              (rank_close rest choices memo (Cons (Pair h (+ off sub)) dmemo)))))))))))
+
+(fn rk_choice ((k Int) (cs (List (Pair Int (Pair Int Expr)))))
+  (Option (Pair Int Expr))
+  (measure (struct cs))
+  (match cs
+    (Nil None)
+    ((Cons (Pair i v) t) (if (int_eq k i) (Some v) (rk_choice k t)))))
+
+;; closed candidate -> its index under the addressing law (loud when the
+;; candidate is not a member of the grammar's space)
+(fn sk_rank ((root Expr) (g Grammar) (cand Expr)) SkC
+  (match (g_counts g)
+    ((GCtErr m) (SkCErr m))
+    ((GCtOk memo)
+     (match (match_e root cand Nil)
+       ((MtRErr m) (SkCErr m))
+       ((MtRNo) (SkCErr "candidate does not match the root sketch"))
+       ((MtROk live0)
+        (match g
+          ((Grammar es)
+           (match (rank_decide es memo live0 Nil)
+             ((RkRErr m) (SkCErr m))
+             ((RkROk choices)
+              (match (rank_close (ents_rev es Nil) choices memo Nil)
+                ((GCtErr m) (SkCErr m))
+                ((GCtOk dmemo)
+                 (match (holes_e root Nil)
+                   ((SkIdsErr m) (SkCErr m))
+                   ((SkIdsOk roots) (digits_compose roots dmemo memo 0))))))))))))))
+
+;; index -> the closed candidate it addresses (range-checked, loud)
+(fn sk_unrank ((root Expr) (g Grammar) (ix Int)) SkE
+  (match (g_counts g)
+    ((GCtErr m) (SkEErr m))
+    ((GCtOk memo)
+     (match (holes_e root Nil)
+       ((SkIdsErr m) (SkEErr m))
+       ((SkIdsOk roots)
+        (match (prod_counts roots memo)
+          ((SkCErr m) (SkEErr m))
+          ((SkCOk total)
+           (if (lt ix 0) (SkEErr "candidate index below zero")
+           (if (le total ix) (SkEErr "candidate index out of range")
+           (match (digits_go (ids_rev roots Nil) memo ix Nil)
+             ((DgRErr m) (SkEErr m))
+             ((DgROk live0)
+              (match g
+                ((Grammar es)
+                 (match (decide_go es memo live0 Nil)
+                   ((DcRErr m) (SkEErr m))
+                   ((DcROk choices)
+                    (match (close_go (ents_rev es Nil) choices Nil)
+                      ((ClRErr m) (SkEErr m))
+                      ((ClROk closed)
+                       (match (fill_e root closed)
+                         ((SkEErr m) (SkEErr m))
+                         ((SkEOk r)
+                          (if (sk_closed r) (SkEOk r)
+                          (SkEErr
+                            "unrank left holes (grammar incomplete for the root)")))))))))))))))))))))

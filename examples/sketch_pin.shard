@@ -1,0 +1,193 @@
+;;; sketch_pin.shard — meta/sketch's corpus pin (docs/SEARCH.md slice 1):
+;;; the addressing law, computed by the kernel. A four-entry toy grammar
+;;; (with in-alternative hole SHARING) pins exact counts, unrank at
+;;; interval edges, the sharing-is-one-decision law at the root, the
+;;; verbatim-fill contract, and the loud refusals (stratification
+;;; violation, cross-entry ownership, malformed hole, out-of-range
+;;; index). The toy node ctor is an undeclared qname on purpose: sketch
+;;; data is never checked or evaluated, only addressed.
+
+(import "../kernel/stdlib.shard")
+(import "../kernel/term.shard")
+(import "../meta/sketch")
+(use (:: kernel term Expr))
+(use (:: kernel term Call))
+(use (:: kernel term Ctor))
+(use (:: kernel term IntLit))
+(use (:: kernel term qn_at))
+(use (:: meta sketch *))
+
+;; a data-only binary node (never evaluated — pure sketch subject matter)
+(fn tnode ((a Expr) (b Expr)) Expr
+  (Ctor (qn_at (Cons (quote toy) Nil) (quote node)) (Cons a (Cons b Nil))))
+
+(fn tlit ((n Int)) Expr (IntLit n))
+
+;; hole 0: [7 | node(h1, h2)]      count 1 + 2*3 = 7
+;; hole 1: [1 | 2]                 count 2
+;; hole 2: [3 | node(h3, h3)]      count 1 + 2 = 3 (shared h3 = ONE factor)
+;; hole 3: [4 | 5]                 count 2
+(fn toy_g () Grammar
+  (Grammar
+    (Cons
+      (GEnt 0 (Cons (tlit 7) (Cons (tnode (hole 1) (hole 2)) Nil)))
+      (Cons
+        (GEnt 1 (Cons (tlit 1) (Cons (tlit 2) Nil)))
+        (Cons
+          (GEnt 2 (Cons (tlit 3) (Cons (tnode (hole 3) (hole 3)) Nil)))
+          (Cons (GEnt 3 (Cons (tlit 4) (Cons (tlit 5) Nil))) Nil))))))
+
+;; the toy grammar satisfies the stratification law whole
+(claim sk_pin_wf
+  (goal () () (= (g_wf (toy_g)) (GWOk)))
+  (steps ((compute both)) refl))
+
+;; exact counts: the whole space of root (hole 0) is 7
+(claim sk_pin_count
+  (goal () () (= (sk_count (hole 0) (toy_g)) (SkCOk 7)))
+  (steps ((compute both)) refl))
+
+;; unrank 0: the first leaf interval
+(claim sk_pin_unrank0
+  (goal () () (= (sk_unrank (hole 0) (toy_g) 0) (SkEOk (tlit 7))))
+  (steps ((compute both)) refl))
+
+;; unrank 1: first point of the builder interval — digits (0, 0)
+(claim sk_pin_unrank1
+  (goal () ()
+    (= (sk_unrank (hole 0) (toy_g) 1) (SkEOk (tnode (tlit 1) (tlit 3)))))
+  (steps ((compute both)) refl))
+
+;; unrank 3: digit split r=2 -> h2 digit 2 (its own builder alternative,
+;; shared h3 decided ONCE at digit 1), h1 digit 0
+(claim sk_pin_unrank3
+  (goal () ()
+    (=
+      (sk_unrank (hole 0) (toy_g) 3)
+      (SkEOk (tnode (tlit 1) (tnode (tlit 5) (tlit 5))))))
+  (steps ((compute both)) refl))
+
+;; unrank 6: the last point of the space
+(claim sk_pin_unrank6
+  (goal () ()
+    (=
+      (sk_unrank (hole 0) (toy_g) 6)
+      (SkEOk (tnode (tlit 2) (tnode (tlit 5) (tlit 5))))))
+  (steps ((compute both)) refl))
+
+;; SHARING AT THE ROOT: two positions of hole 0 = one decision — the
+;; space stays 7 and both positions render the same subtree
+(claim sk_pin_share_count
+  (goal () () (= (sk_count (tnode (hole 0) (hole 0)) (toy_g)) (SkCOk 7)))
+  (steps ((compute both)) refl))
+
+(claim sk_pin_share_unrank
+  (goal () ()
+    (=
+      (sk_unrank (tnode (hole 0) (hole 0)) (toy_g) 1)
+      (SkEOk (tnode (tnode (tlit 1) (tlit 3)) (tnode (tlit 1) (tlit 3))))))
+  (steps ((compute both)) refl))
+
+;; THE FILL CONTRACT: verbatim, single pass — a fill value that is
+;; itself a hole is NOT re-substituted
+(claim sk_pin_fill_verbatim
+  (goal () ()
+    (= (sk_fill (hole 0) (Cons (Pair 0 (hole 1)) Nil)) (SkEOk (hole 1))))
+  (steps ((compute both)) refl))
+
+;; RANK, the inverse: rank . unrank = id at interval edges (first leaf,
+;; first builder point, last point of the space)
+(claim sk_pin_rank0
+  (goal () () (= (sk_rank (hole 0) (toy_g) (tlit 7)) (SkCOk 0)))
+  (steps ((compute both)) refl))
+
+(claim sk_pin_rank3
+  (goal () ()
+    (=
+      (sk_rank (hole 0) (toy_g) (tnode (tlit 1) (tnode (tlit 5) (tlit 5))))
+      (SkCOk 3)))
+  (steps ((compute both)) refl))
+
+(claim sk_pin_rank6
+  (goal () ()
+    (=
+      (sk_rank (hole 0) (toy_g) (tnode (tlit 2) (tnode (tlit 5) (tlit 5))))
+      (SkCOk 6)))
+  (steps ((compute both)) refl))
+
+;; rank under root sharing: both positions carry the SAME subtree back
+;; to the one decision
+(claim sk_pin_share_rank
+  (goal () ()
+    (=
+      (sk_rank
+        (tnode (hole 0) (hole 0))
+        (toy_g)
+        (tnode (tnode (tlit 1) (tlit 3)) (tnode (tlit 1) (tlit 3))))
+      (SkCOk 1)))
+  (steps ((compute both)) refl))
+
+;; a candidate outside the space is refused at its live hole...
+(claim sk_pin_rank_nonmember
+  (goal () ()
+    (=
+      (sk_rank (hole 0) (toy_g) (tlit 9))
+      (SkCErr "candidate matches no alternative of a live hole")))
+  (steps ((compute both)) refl))
+
+;; ...and inconsistent SHARED positions are refused at the root match
+(claim sk_pin_rank_sharebreak
+  (goal () ()
+    (=
+      (sk_rank
+        (tnode (hole 0) (hole 0))
+        (toy_g)
+        (tnode (tlit 7) (tnode (tlit 1) (tlit 3))))
+      (SkCErr "candidate does not match the root sketch")))
+  (steps ((compute both)) refl))
+
+;; REFUSALS, all loud ----------------------------------------------------------
+
+;; a self-referential entry violates stratification: wf refuses...
+(fn toy_bad () Grammar (Grammar (Cons (GEnt 0 (Cons (hole 0) Nil)) Nil)))
+
+(claim sk_pin_bad_wf
+  (goal () ()
+    (= (g_wf (toy_bad)) (GWErr "alternative hole id must exceed its entry id")))
+  (steps ((compute both)) refl))
+
+;; ...and counting refuses on its own (the memo never has the entry)
+(claim sk_pin_bad_count
+  (goal () ()
+    (=
+      (sk_count (hole 0) (toy_bad))
+      (SkCErr "count memo is missing a hole (stratification violated)")))
+  (steps ((compute both)) refl))
+
+;; cross-entry ownership is refused (it would correlate two decisions)
+(fn toy_owned2 () Grammar
+  (Grammar
+    (Cons
+      (GEnt 0 (Cons (tnode (hole 2) (tlit 9)) Nil))
+      (Cons
+        (GEnt 1 (Cons (hole 2) Nil))
+        (Cons (GEnt 2 (Cons (tlit 4) Nil)) Nil)))))
+
+(claim sk_pin_owned2
+  (goal () ()
+    (= (g_wf (toy_owned2)) (GWErr "hole is owned by two grammar entries")))
+  (steps ((compute both)) refl))
+
+;; a malformed hole-headed call is refused, never skipped
+(claim sk_pin_malformed
+  (goal () ()
+    (=
+      (sk_holes (Call (hole_qn) Nil))
+      (SkIdsErr "malformed hole: want (hole K), exactly one IntLit argument")))
+  (steps ((compute both)) refl))
+
+;; the index range is checked, loudly
+(claim sk_pin_range
+  (goal () ()
+    (= (sk_unrank (hole 0) (toy_g) 7) (SkEErr "candidate index out of range")))
+  (steps ((compute both)) refl))
