@@ -34,7 +34,7 @@ TARGETS=(
   examples/axiom_untagged_rejects.shard
   kernel/facts.shard
   std/bits/bits.shard
-  std/rat/gcd.shard
+  std/rat/mod.req/gcd.shard
   std/rat/rat.shard
   examples/bits_demo.shard
   std/axiom_scope_rejects.shard
