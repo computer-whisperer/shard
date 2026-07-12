@@ -110,6 +110,7 @@ TARGETS=(
   examples/imp_loop.shard
   models/imp/to_wasm.shard
   examples/imp_wasm_bridge.shard
+  examples/imp_wasm_loop_bridge.shard
   models/wasm/wasm.shard
   models/wasm/encode.shard
   examples/wasm_smoke.shard

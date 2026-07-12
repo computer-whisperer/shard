@@ -1,22 +1,34 @@
-;;; models/imp/to_wasm.shard — the imp → wasm TRANSLATOR, expression
-;;; tier (docs/IMP.md rung I1a): pure value-level lowering from the
-;;; neutral machine to wasm instruction sequences. This is the bridge
-;;; file — the one place that imports BOTH models. Ordinary shard; the
-;;; certs that gate its outputs live with the twins (generate-and-check:
-;;; nothing here is trusted, every translated program is proven).
+;;; models/imp/to_wasm.shard — the imp → wasm TRANSLATOR (docs/IMP.md
+;;; rungs I1a/I1b): pure value-level lowering from the neutral machine
+;;; to wasm instruction sequences. This is the bridge file — the one
+;;; place that imports BOTH models. Ordinary shard; the certs that
+;;; gate its outputs live with the twins (generate-and-check: nothing
+;;; here is trusted, every translated program is proven).
 ;;;
-;;; v1 covers the STRAIGHT-LINE class: expression trees compiled
-;;; postorder to stack code, result-expression-only functions. The
-;;; width story lives exactly here:
+;;; Coverage (rungs I1a + I1b): expression trees compiled postorder to
+;;; stack code, plus the structured statement tier — assignment, byte
+;;; store, if, while — onto wasm's label discipline. The width story
+;;; lives exactly here:
 ;;;   - exact imp ops map to the wrapping i32 ops, so an UNWRAPPED op
 ;;;     is faithful only under range premises — the per-instance
 ;;;     bridge certs carry them (the premises deleted at spec ⊑ imp
 ;;;     reappear at imp ⊑ wasm, once per target, where they belong);
 ;;;   - (IWrap 32 e) translates to the translation of e — wasm's ops
 ;;;     already wrap, so the wrapped op is faithful UNCONDITIONALLY.
-;;; Other widths and ILoad refuse (None) until their rungs; statements
-;;; (IIf/ISet/IWhile at rung I1b) refuse likewise. Refusal is loud by
-;;; construction: an untranslatable twin produces no artifact at all.
+;;; Non-32 widths refuse (None). Refusal is loud by construction: an
+;;; untranslatable twin produces no artifact at all.
+;;;
+;;; The statement encodings are SELF-CONTAINED label structures — every
+;;; branch an encoding emits targets one of its own blocks, so nesting
+;;; composes without depth adjustment:
+;;;   (IIf c thn els)  -> Block( Block( ⟦c⟧ BrIf 0  ⟦els⟧ Br 1 ) ⟦thn⟧ )
+;;;                       (BrIf 0 exits the inner block into the then
+;;;                       code; the else code's Br 1 skips it)
+;;;   (IWhile c body)  -> Block( Loop( ⟦c⟧ I32Eqz BrIf 1  ⟦body⟧ Br 0 ) )
+;;;                       (exit = BrIf 1 to the Block; Br 0 re-enters
+;;;                       the Loop head)
+;;; These are exactly the shapes tools/wasmgen emits for the same
+;;; source classes — the ties prove the outputs byte-identical.
 
 (import "../../kernel/stdlib.shard")
 (import "imp.shard")
@@ -59,16 +71,81 @@
           (None None)
           ((Some ib) (Some (iw_app ia (iw_app ib (list (I32Bin (iw_op o)))))))))))
     ((IWrap w a) (if (int_eq w 32) (iw_exp a) None))
-    ((ILoad _) None)))
+    ((ILoad a)
+     (match (iw_exp a)
+       (None None)
+       ((Some ia) (Some (iw_app ia (list (I32Load8U)))))))))
 
-;; a result-expression-only function (empty body) -> a wasm Func
+;; the statement tier: one structural walk over the statement list
+;; (recursion descends into IIf branches and IWhile bodies — strict
+;; subterms via nested match)
+(fn iw_stmts ((ss (List IStmt))) (Option (List Instr))
+  (measure (struct ss))
+  (match ss
+    (Nil (Some Nil))
+    ((Cons s t)
+     (match (iw_stmts t)
+       (None None)
+       ((Some it)
+        (match s
+          ((ISet i e)
+           (match (iw_exp e)
+             (None None)
+             ((Some ie) (Some (iw_app ie (Cons (LocalSet i) it))))))
+          ((IStore ae ve)
+           (match (iw_exp ae)
+             (None None)
+             ((Some ia)
+              (match (iw_exp ve)
+                (None None)
+                ((Some iv) (Some (iw_app ia (iw_app iv (Cons (I32Store8) it)))))))))
+          ((IIf c thn els)
+           (match (iw_exp c)
+             (None None)
+             ((Some ic)
+              (match (iw_stmts thn)
+                (None None)
+                ((Some ithn)
+                 (match (iw_stmts els)
+                   (None None)
+                   ((Some iels)
+                    (Some
+                      (Cons
+                        (Block
+                          (Cons
+                            (Block
+                              (iw_app
+                                ic
+                                (Cons (BrIf 0) (iw_app iels (list (Br 1))))))
+                            ithn))
+                        it)))))))))
+          ((IWhile c b)
+           (match (iw_exp c)
+             (None None)
+             ((Some ic)
+              (match (iw_stmts b)
+                (None None)
+                ((Some ib)
+                 (Some
+                   (Cons
+                     (Block
+                       (list
+                         (Loop
+                           (iw_app
+                             ic
+                             (Cons
+                               (I32Eqz)
+                               (Cons (BrIf 1) (iw_app ib (list (Br 0)))))))))
+                     it)))))))))))))
+
+;; a function: translated statements, then the result expression
 (fn imp2w_fn ((f IFn)) (Option Func)
-  (match (ibody_of f)
-    ((Cons _ _) None)
-    (Nil
-      (match (iw_exp (iresult_of f))
-        (None None)
-        ((Some is) (Some (MkFunc (iparams_of f) (iextra_of f) is)))))))
+  (match (iw_stmts (ibody_of f))
+    (None None)
+    ((Some ist)
+     (match (iw_exp (iresult_of f))
+       (None None)
+       ((Some ir) (Some (MkFunc (iparams_of f) (iextra_of f) (iw_app ist ir))))))))
 
 ;; total unwrapper for stating ground bridge goals (the empty Func is
 ;; inert: zero params over an empty body traps on any call)
@@ -76,3 +153,17 @@
   (match o
     ((Some f) f)
     (None (MkFunc 0 0 Nil))))
+
+;; the loop-exit alignment adapter: the IWhile encoding exits its Loop
+;; via BrIf 1, which eval_loop hands back as (OBr 0 …) with the entry
+;; stack untouched — so at the eval_loop/iwhile boundary, imp's INorm
+;; corresponds to (OBr 0 st …) and ITrap to OTrap. The loop worker
+;; bridges (imp ⊑ wasm, per program) state their equations through
+;; this: eval_loop over the translated body = (iw_out st (iwhile …)).
+(fn iw_out ((st (List Int)) (r (Option IOut))) (Option Out)
+  (match r
+    (None None)
+    ((Some o)
+     (match o
+       ((INorm lc m) (Some (OBr 0 st lc m)))
+       (ITrap (Some OTrap))))))

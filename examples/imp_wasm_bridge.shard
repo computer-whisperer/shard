@@ -1,5 +1,5 @@
-;;; examples/imp_wasm_bridge.shard — imp ⊑ wasm, the straight-line
-;;; class (docs/IMP.md rung I1a). Three claim families:
+;;; examples/imp_wasm_bridge.shard — imp ⊑ wasm, the straight-line and
+;;; branching classes (docs/IMP.md rungs I1a/I1b). Three claim families:
 ;;;
 ;;;   TIES     — the translator's output IS the instruction sequence
 ;;;              the direct generator (wasmgen) produced for the same
@@ -71,6 +71,37 @@
     (=
       (imp2w_fn (it_divq_fn))
       (Some (MkFunc 2 0 (list (LocalGet 0) (LocalGet 1) (I32Bin BDivU))))))
+  (steps ((compute both)) refl))
+
+;; the IIf encoding ties byte-identical to the generated gate shape
+;; (the literal is lowered_lg_sel's func in examples/wasmgen_out.shard)
+(claim tie_sel
+  (goal () ()
+    (=
+      (imp2w_fn (it_sel_fn))
+      (Some
+        (MkFunc
+          2
+          1
+          (list
+            (Block
+              (list
+                (Block
+                  (list
+                    (LocalGet 0)
+                    (I32Const 0)
+                    (I32Bin BEq)
+                    (BrIf 0)
+                    (LocalGet 1)
+                    (I32Const 2)
+                    (I32Bin BMul)
+                    (LocalSet 2)
+                    (Br 1)))
+                (LocalGet 1)
+                (I32Const 1)
+                (I32Bin BAdd)
+                (LocalSet 2)))
+            (LocalGet 2))))))
   (steps ((compute both)) refl))
 
 ;; --- the bridges: imp ⊑ wasm ----------------------------------------------------
@@ -175,6 +206,116 @@
         (list x))
       (icall (S c2) (it_prog (it_add1w_fn)) 0 (list x))))
   (steps ((compute both)) refl))
+
+;; the gate: branch-conditional range premises (each branch's wrap
+;; residues are priced only when that branch runs — the direct
+;; generator's premise discipline, lowered_lg_sel)
+(claim imp_w_sel
+  (goal ((x Int) (y Int) (c Nat) (c2 Nat))
+    ((= (if (int_eq x 0) (le 0 (+ y 1)) True) True)
+     (= (if (int_eq x 0) (lt (+ y 1) 4294967296) True) True)
+     (= (if (int_eq x 0) True (le 0 (* y 2))) True)
+     (= (if (int_eq x 0) True (lt (* y 2) 4294967296)) True))
+    (=
+      (call_fn
+        (S^ 35 c)
+        (MkWModule (list (w_of (imp2w_fn (it_sel_fn)))) 0)
+        0
+        (list x y))
+      (icall (S^ 8 c2) (it_prog (it_sel_fn)) 0 (list x y))))
+  (chain
+    (steps ((compute both)))
+    (case-on (int_eq x 0) Bool
+      ((case True
+         (chain
+           (steps ((rewrite (hyp True) lr both true ()) (compute both)))
+           (have p0 (= (le 0 (+ y 1)) True)
+             (chain
+               (steps
+                 ((rewrite (premise 0) rl rhs true ())
+                  (rewrite (hyp True) lr rhs true ())
+                  (compute rhs)))
+               refl))
+           (have p1 (= (lt (+ y 1) 4294967296) True)
+             (chain
+               (steps
+                 ((rewrite (premise 1) rl rhs true ())
+                  (rewrite (hyp True) lr rhs true ())
+                  (compute rhs)))
+               refl))
+           (have w2 (= (mod (+ y 1) 4294967296) (+ y 1))
+             (rewrite-with
+               (lemma wrap32_id)
+               lr
+               lhs
+               ((inst x (+ y 1)))
+               ((steps ((rewrite (premise p0) lr lhs true ())) refl)
+                (steps ((rewrite (premise p1) lr lhs true ())) refl))
+               refl))
+           (steps ((rewrite (premise w2) lr lhs true ())))
+           refl))
+       (case False
+         (chain
+           (steps ((rewrite (hyp False) lr both true ()) (compute both)))
+           (have p3 (= (le 0 (* y 2)) True)
+             (chain
+               (steps
+                 ((rewrite (premise 2) rl rhs true ())
+                  (rewrite (hyp False) lr rhs true ())
+                  (compute rhs)))
+               refl))
+           (have p4 (= (lt (* y 2) 4294967296) True)
+             (chain
+               (steps
+                 ((rewrite (premise 3) rl rhs true ())
+                  (rewrite (hyp False) lr rhs true ())
+                  (compute rhs)))
+               refl))
+           (have w5 (= (mod (* y 2) 4294967296) (* y 2))
+             (rewrite-with
+               (lemma wrap32_id)
+               lr
+               lhs
+               ((inst x (* y 2)))
+               ((steps ((rewrite (premise p3) lr lhs true ())) refl)
+                (steps ((rewrite (premise p4) lr lhs true ())) refl))
+               refl))
+           (steps ((rewrite (premise w5) lr lhs true ())))
+           refl))))))
+
+;; the nested gate bridges UNPREMISED — every branch assigns a literal,
+;; so no wrap residue survives on either side. NOTE this artifact has
+;; no wasmgen counterpart (the generator's clamp2 rides a temp-local
+;; let template): the imp path is certifying a program the direct
+;; generator never saw, on its own chain.
+(claim imp_w_clamp2
+  (goal ((x Int) (c Nat) (c2 Nat)) ()
+    (=
+      (call_fn
+        (S^ 49 c)
+        (MkWModule (list (w_of (imp2w_fn (it_clamp2_fn)))) 0)
+        0
+        (list x))
+      (icall (S^ 10 c2) (it_prog (it_clamp2_fn)) 0 (list x))))
+  (chain
+    (steps ((compute both)))
+    (case-on (lt x 10) Bool
+      ((case True
+         (chain
+           (steps ((rewrite (hyp True) lr both true ()) (compute both)))
+           refl))
+       (case False
+         (chain
+           (steps ((rewrite (hyp False) lr both true ()) (compute both)))
+           (case-on (lt x 100) Bool
+             ((case True
+                (chain
+                  (steps ((rewrite (hyp True) lr both true ()) (compute both)))
+                  refl))
+              (case False
+                (chain
+                  (steps ((rewrite (hyp False) lr both true ()) (compute both)))
+                  refl))))))))))
 
 ;; --- the composition: the factored tower closes ---------------------------------
 

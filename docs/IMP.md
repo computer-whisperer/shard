@@ -363,6 +363,53 @@ the generator mechanizes it):
   loop-worker bridge inductions), then the x86 leg (I1c), then
   mechanization into a cert-emitting generator.
 
+**I1b — statements + loops, the wasm leg (2026-07-12).** The
+translator covers the full v1 statement tier and the loop bridge
+inductions land the M×N kill:
+
+- **The statement tier (to_wasm.shard)**: iw_stmts — one structural
+  walk (the kernel's (struct …) measure accepts nested-match
+  descent, probed before building). ISet→LocalSet,
+  IStore→I32Store8, ILoad→I32Load8U, and the two SELF-CONTAINED
+  label encodings: IIf → Block(Block(⟦c⟧ BrIf 0 ⟦els⟧ Br 1) ⟦thn⟧),
+  IWhile → Block(Loop(⟦c⟧ I32Eqz BrIf 1 ⟦body⟧ Br 0)). Every emitted
+  branch targets the encoding's own blocks, so nesting composes with
+  no depth adjustment. imp2w_fn now takes any v1 body (statements ++
+  result expression); iw_out is the loop-exit alignment adapter
+  (INorm ↔ OBr 0, ITrap ↔ OTrap).
+- **The ties**: tie_sel (imp_wasm_bridge.shard) — the IIf encoding
+  is byte-identical to wasmgen's gate literal; tie_fill/tie_sum
+  (imp_wasm_loop_bridge.shard) — (imp2w_fn (il_*_fn)) = (Some
+  (lp_*_func)), stated against the generated cert file's own named
+  funcs. The IWhile encoding reproduces wasmgen's loop shape byte
+  for byte. (wasmgen's clamp2 rides a temp-local let template, so
+  imp_w_clamp2 instead demonstrates the other face: the imp path
+  certifying, unpremised, an artifact the direct generator never
+  produced.)
+- **THE LOOP WORKER BRIDGES (iww_fill/iww_sum)**: eval_loop over
+  the translated body = (iw_out st (iwhile … over the imp body)),
+  by induction on the counter — and the induction NEVER MENTIONS
+  THE SPEC. The wasm side's whole width-residue apparatus (the
+  wrap32 haves: counter, pointer, accumulator) discharges against
+  the imp machine's exact ops inside the one induction; loopkit +
+  im_lt served verbatim, zero new lemmas. This is the M×N kill
+  made concrete: a new loop program needs its imp worker (spec ⊑
+  imp, target-free) and this bridge (imp ⊑ wasm, spec-free) — no
+  per-program spec ⊑ wasm worker ever again. Proof-idiom note: the
+  workers share ONE slack tail c across both machines' towers so
+  the IH binds fully from the left side; (inline …) resolves
+  against the file's own nullary fns only, so bridge files carry
+  local body copies pinned by tie_*body claims.
+- **The denotation bridges + compositions**: imp_w_fill/imp_w_sum
+  (call_fn_mem = icall_mem, independent slack tails restored, proof
+  = worker rewrite + imp-side worker rewrite both sides);
+  wcomp_lp_fill/wcomp_lp_sum — lowered_lp_*'s exact statements,
+  reached through the neutral machine in two rewrites.
+- Gates: 1 corpus target, 1 'check product (driver 48); corpus
+  FAIL-set unchanged at 57. Remaining in I1: the x86 leg (I1c),
+  then mechanization into a cert-emitting generator once the proof
+  shape has a second target's confirmation.
+
 ## 7. Non-goals, stated once
 
 - imp as a shipped target or public surface — it is an intermediate;
