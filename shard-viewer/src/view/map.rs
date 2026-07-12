@@ -362,7 +362,8 @@ fn commit_children(
         }
     }
     let nodes: Vec<GNode> = sizes.iter().map(|&(w, h)| GNode::simple(w, h)).collect();
-    let lay = layout::layout(&Graph { nodes, edges }, &layout::LayoutConfig::default());
+    let cfg = layout::LayoutConfig::for_nodes(&nodes);
+    let lay = layout::layout(&Graph { nodes, edges }, &cfg);
     let size = (lay.width, lay.height);
     out.dirs
         .insert(path.to_string(), LevelGeom { lay, off: (0.0, 0.0), classes: Vec::new() });
@@ -440,7 +441,8 @@ fn commit_file(
         }
     }
     let (nfns, nclaims) = (fn_slot.len(), claim_slot.len());
-    let lay = layout::layout(&Graph { nodes, edges }, &layout::LayoutConfig::default());
+    let cfg = layout::LayoutConfig::for_nodes(&nodes);
+    let lay = layout::layout(&Graph { nodes, edges }, &cfg);
     let m = box_metrics(|| file_header(project, file, nfns, nclaims), lay.width, lay.height);
     out.files.insert(file, LevelGeom { lay, off: m.off, classes });
     m.size

@@ -91,6 +91,36 @@ impl Default for LayoutConfig {
     }
 }
 
+impl LayoutConfig {
+    /// Gaps that scale with the median node size of the graph being laid out.
+    /// One absolute gap can't serve every level of the Map — 22px between
+    /// 34px name boxes is generous, between 30,000px file boxes it's contact.
+    /// The classic constants are FLOORS (graphs of small nodes — Methods name
+    /// boxes, a file of little claim slabs — keep today's look exactly); the
+    /// proportional term takes over when the children are big, so file boxes
+    /// inside a dir and dirs inside the project earn whitespace visible at
+    /// the zoom that level is actually read at. Margin is box padding, not
+    /// spacing — damped by child count so a level holding one huge child
+    /// hugs it instead of tripling around it.
+    pub fn for_nodes(nodes: &[GNode]) -> LayoutConfig {
+        let med = |mut v: Vec<f32>| -> f32 {
+            if v.is_empty() {
+                return 0.0;
+            }
+            let mid = v.len() / 2;
+            *v.select_nth_unstable_by(mid, |a, b| a.total_cmp(b)).1
+        };
+        let med_w = med(nodes.iter().map(|n| n.w).collect());
+        let med_h = med(nodes.iter().map(|n| n.h).collect());
+        let damp = 1.0 - 1.0 / (nodes.len().max(1) as f32);
+        LayoutConfig {
+            layer_gap: (med_w * 0.35).max(90.0),
+            node_gap: (med_h * 0.35).max(22.0),
+            margin: (med_h * 0.2 * damp).max(40.0),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct PlacedNode {
     pub x: f32,
@@ -374,11 +404,23 @@ fn layout_connected(graph: &Graph, cfg: &LayoutConfig) -> Layout {
         };
     }
 
+    // ---- spread shared ports ----
+    // A single-port node (the call-graph shape) funnels every incoming edge
+    // to one point on its left edge, stacking the arrowheads into a smear at
+    // any real in-degree. Fan the endpoints of such edges along the node
+    // edge instead, ordered by the counterpart's vertical position so the
+    // fan doesn't cross itself at the port. Flat (same-column return) edges
+    // keep their right-side entry and are excluded.
+    let (starts, ends) = spread_ports(graph, &routes.iter().map(|r| r.flat).collect::<Vec<_>>(), &placed);
+
     // ---- route edges ----
     let mut edges: Vec<RoutedEdge> = routes
         .iter()
         .zip(&graph.edges)
-        .map(|(r, e)| route_edge(r.flat, &r.chain, e, &placed, &layer_x, &vlayer, &vy, cfg))
+        .enumerate()
+        .map(|(ei, (r, e))| {
+            route_edge(r.flat, &r.chain, e, &placed, &layer_x, &vlayer, &vy, cfg, starts[ei], ends[ei])
+        })
         .collect();
 
     // Bounds must cover the routed edges too, not just the node rects: flat
@@ -440,6 +482,51 @@ fn port_positions(edge_x: f32, y: f32, h: f32, count: usize) -> Vec<(f32, f32)> 
         .collect()
 }
 
+/// A per-edge endpoint override: `None` keeps the declared port.
+type PortOverrides = Vec<Option<(f32, f32)>>;
+
+/// Per-edge endpoint overrides fanning shared single ports (see the call
+/// site). Returns `(starts, ends)` index-aligned with `graph.edges`.
+fn spread_ports(
+    graph: &Graph,
+    flat: &[bool],
+    placed: &[PlacedNode],
+) -> (PortOverrides, PortOverrides) {
+    let ne = graph.edges.len();
+    let (mut starts, mut ends): (PortOverrides, PortOverrides) = (vec![None; ne], vec![None; ne]);
+    let mut incoming: Vec<Vec<usize>> = vec![Vec::new(); graph.nodes.len()];
+    let mut outgoing: Vec<Vec<usize>> = vec![Vec::new(); graph.nodes.len()];
+    for (ei, e) in graph.edges.iter().enumerate() {
+        if flat[ei] {
+            continue;
+        }
+        incoming[e.to.node].push(ei);
+        outgoing[e.from.node].push(ei);
+    }
+    let mid_y = |i: usize| placed[i].y + placed[i].h / 2.0;
+    for (i, list) in incoming.iter_mut().enumerate() {
+        if graph.nodes[i].n_in != 1 || list.len() < 2 {
+            continue;
+        }
+        list.sort_by(|&a, &b| mid_y(graph.edges[a].from.node).total_cmp(&mid_y(graph.edges[b].from.node)));
+        for (k, &ei) in list.iter().enumerate() {
+            let p = &placed[i];
+            ends[ei] = Some((p.x, p.y + p.h * (k as f32 + 1.0) / (list.len() as f32 + 1.0)));
+        }
+    }
+    for (i, list) in outgoing.iter_mut().enumerate() {
+        if graph.nodes[i].n_out != 1 || list.len() < 2 {
+            continue;
+        }
+        list.sort_by(|&a, &b| mid_y(graph.edges[a].to.node).total_cmp(&mid_y(graph.edges[b].to.node)));
+        for (k, &ei) in list.iter().enumerate() {
+            let p = &placed[i];
+            starts[ei] = Some((p.x + p.w, p.y + p.h * (k as f32 + 1.0) / (list.len() as f32 + 1.0)));
+        }
+    }
+    (starts, ends)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn route_edge(
     flat: bool,
@@ -450,17 +537,21 @@ fn route_edge(
     vlayer: &[usize],
     vy: &[f32],
     cfg: &LayoutConfig,
+    start_override: Option<(f32, f32)>,
+    end_override: Option<(f32, f32)>,
 ) -> RoutedEdge {
     let src = &placed[e.from.node];
     let dst = &placed[e.to.node];
-    let start = *src
-        .out_ports
-        .get(e.from.port)
-        .unwrap_or(&(src.x + src.w, src.y + src.h / 2.0));
-    let end = *dst
-        .in_ports
-        .get(e.to.port)
-        .unwrap_or(&(dst.x, dst.y + dst.h / 2.0));
+    let start = start_override.unwrap_or_else(|| {
+        *src.out_ports
+            .get(e.from.port)
+            .unwrap_or(&(src.x + src.w, src.y + src.h / 2.0))
+    });
+    let end = end_override.unwrap_or_else(|| {
+        *dst.in_ports
+            .get(e.to.port)
+            .unwrap_or(&(dst.x, dst.y + dst.h / 2.0))
+    });
 
     if flat {
         // Same-column edge (mutual recursion): both endpoints share a column, so

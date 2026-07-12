@@ -38,7 +38,7 @@ pub(crate) fn canvas(project: &Project, file_idx: usize, p: &ViewParams) -> El {
             .collect(),
         edges: graph.edges,
     };
-    let lay = layout::layout(&sized, &layout::LayoutConfig::default());
+    let lay = layout::layout(&sized, &layout::LayoutConfig::for_nodes(&sized.nodes));
     let node_els: Vec<El> = lay
         .nodes
         .iter()

@@ -147,11 +147,26 @@ pub(crate) fn edges_asset_classed(lay: &Layout, scale: f32, classes: &[EdgeClass
             EdgeClass::Cite => tokens::WARNING.mix(tokens::MUTED_FOREGROUND, 0.25),
             EdgeClass::About => tokens::WARNING.mix(tokens::MUTED_FOREGROUND, 0.7),
         };
-        paths.push(edge_curve(&e.points, e.back, color, 1.5 * scale));
+        // The head must point along the spline's ARRIVAL tangent — horizontal
+        // for a forward edge (edge_curve forces the port tangent), the last
+        // segment for a return arc — not the raw last polyline segment, which
+        // can be diagonal. And the stroke stops at the head's base rather
+        // than piercing through the triangle to the tip.
         let n = e.points.len();
         let (fx, fy) = e.points[n - 2];
         let (tx, ty) = e.points[n - 1];
-        paths.push(arrowhead_scaled(fx, fy, tx, ty, color, scale));
+        let (ux, uy) = if e.back {
+            let (dx, dy) = (tx - fx, ty - fy);
+            let len = (dx * dx + dy * dy).sqrt().max(0.001);
+            (dx / len, dy / len)
+        } else {
+            (1.0, 0.0)
+        };
+        let head = 9.0 * scale;
+        let mut pts = e.points.clone();
+        pts[n - 1] = (tx - ux * (head - 1.0), ty - uy * (head - 1.0));
+        paths.push(edge_curve(&pts, e.back, color, 1.5 * scale));
+        paths.push(arrowhead_scaled(tx - ux, ty - uy, tx, ty, color, scale));
     }
     VectorAsset::from_paths([0.0, 0.0, lay.width, lay.height], paths)
 }

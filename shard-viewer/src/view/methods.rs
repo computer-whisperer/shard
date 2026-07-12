@@ -15,7 +15,7 @@ pub(crate) fn canvas(project: &Project, file_idx: usize, p: &ViewParams) -> El {
     if graph.nodes.is_empty() {
         return column([text("This file defines no fns.").muted()]).padding(tokens::SPACE_8);
     }
-    let lay = layout::layout(&graph, &layout::LayoutConfig::default());
+    let lay = layout::layout(&graph, &layout::LayoutConfig::for_nodes(&graph.nodes));
     let node_els: Vec<El> = lay
         .nodes
         .iter()

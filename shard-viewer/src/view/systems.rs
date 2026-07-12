@@ -14,7 +14,7 @@ pub(crate) fn canvas(project: &Project, p: &ViewParams) -> El {
     if graph.nodes.is_empty() {
         return column([text("No in-project imports to graph.").muted()]).padding(tokens::SPACE_8);
     }
-    let lay = layout::layout(&graph, &layout::LayoutConfig::default());
+    let lay = layout::layout(&graph, &layout::LayoutConfig::for_nodes(&graph.nodes));
     let node_els: Vec<El> = lay
         .nodes
         .iter()
