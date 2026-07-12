@@ -742,6 +742,37 @@ FAIL-set identical. Rung 2 closes here: entries are content-only,
 the deriver speaks only the new charter, and no drift-prone
 packaging survives anywhere in the tree.
 
+**Rung 2 coda, slice 10 — the two residuals (2026-07-11).**
+
+- **Regen canon-leg uniformity.** The lib (wasm/x86/x86elf) and bin
+  ladders adopt the 'regen products' canon pipeline (gen -> fmt ->
+  probe -> canon -> rm, judged canon-vs-OUT); the byte-identical
+  fmt-vs-OUT gate (g_regen) dies. One contract, every regen surface:
+  determinism up to canonicalization, committed artifacts in the
+  canonical tree. Third canon-tree catch on the first run: the addw
+  bin cert carried `(S^ 20 Z)` where canon spells the packed ground
+  literal `(S^ 20 0)` — respelled in (354/0 re-check green).
+- **D1 residual #2 RESOLVED: repo-scope discovery = COMPOSITION,
+  NOT DISCOVERY.** A products file may declare a second standard
+  symbol, `build_entries : () -> (List (List Int))` — paths of
+  further build entries. The driver loads each as its OWN closure
+  (meta/invoke's find_fn refuses ambiguous local names, so
+  importing entries into one closure was never on the table) and
+  appends its build_products in listed order. std/mem and std/str
+  now own their product lists in their entries (the configuration
+  home doing its job); examples/build_products.shard keeps the
+  examples products and lists the two entries. No filesystem
+  scanning, no name patterns — adding a module to the build is one
+  path in one list. Guards: build_entries is OPTIONAL (absent =
+  none) but ambiguous refuses; nesting refuses loudly at ONE level
+  (an included entry declaring build_entries fails the plan —
+  negative-probed).
+
+Driver 41 products green (composition adds ~0 wall); corpus
+FAIL-set identical. The arc's rung-2 queue is empty; next is
+rung 3 — profiles v1, opened by design exchange (MEMORY.md D1's
+class-assignment surface lands there).
+
 ## 12. Non-goals, stated once
 
 No config dialect — profiles are shard values. No distinguished

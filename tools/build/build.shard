@@ -333,16 +333,93 @@
           (None None)
           ((Some bs) (Some (Cons b bs)))))))))
 
+(fn bp_append ((a (List BP)) (b (List BP))) (List BP)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (bp_append t b)))))
+
+;; a loaded module's own product list (the standard symbol)
+(fn bps_of ((m Module)) (Option (List BP))
+  (match (invoke m (quote build_products) Nil)
+    (None None)
+    ((Some pv)
+     (match (expr_list pv)
+       (None None)
+       ((Some es) (dc_bps es))))))
+
+(fn fns_cnt ((name Symbol) (fds (List FnDef))) Int
+  (measure (struct fds))
+  (match fds
+    (Nil 0)
+    ((Cons (FnDef q _ _ _) t)
+     (if (sym_eq (qn_name q) name) (+ 1 (fns_cnt name t)) (fns_cnt name t)))))
+
+(fn mod_fds ((m Module)) (List FnDef)
+  (match m
+    ((Module _ fds _ _ _) fds)))
+
+(fn dc_paths ((es (List Expr))) (Option (List (List Int)))
+  (measure (struct es))
+  (match es
+    (Nil (Some Nil))
+    ((Cons h t)
+     (match (expr_ints h)
+       (None None)
+       ((Some pp)
+        (match (dc_paths t)
+          (None None)
+          ((Some ps) (Some (Cons pp ps)))))))))
+
+;; the further build entries a products file includes (build_entries —
+;; the D1 repo-scope answer: composition, not discovery. OPTIONAL:
+;; absent = no includes; ambiguous or undecodable = None, refuse loudly.
+(fn entries_of ((m Module)) (Option (List (List Int)))
+  (match (fns_cnt (quote build_entries) (mod_fds m))
+    (0 (Some Nil))
+    (1
+      (match (invoke m (quote build_entries) Nil)
+        (None None)
+        ((Some pv)
+         (match (expr_list pv)
+           (None None)
+           ((Some es) (dc_paths es))))))
+    (_ None)))
+
+;; load each included entry (its OWN closure — no namespace merging) and
+;; append its products in listed order. ONE level: an included entry
+;; declaring build_entries of its own refuses loudly (no silent nesting).
+(fn load_included ((paths (List (List Int))) (w World))
+  (Pair (Option (List BP)) World)
+  (measure (struct paths))
+  (match paths
+    (Nil (Pair (Some Nil) w))
+    ((Cons pp t)
+     (match (load_run_module pp w)
+       ((Pair None w1) (Pair None w1))
+       ((Pair (Some m) w1)
+        (if (int_eq (fns_cnt (quote build_entries) (mod_fds m)) 0)
+          (match (bps_of m)
+            (None (Pair None w1))
+            ((Some bs)
+             (match (load_included t w1)
+               ((Pair None w2) (Pair None w2))
+               ((Pair (Some rest) w2) (Pair (Some (bp_append bs rest)) w2)))))
+          (Pair None w1)))))))
+
 (fn load_products ((p (List Int)) (w World)) (Pair (Option (List BP)) World)
   (match (load_run_module p w)
     ((Pair None w1) (Pair None w1))
     ((Pair (Some m) w1)
-     (match (invoke m (quote build_products) Nil)
+     (match (bps_of m)
        (None (Pair None w1))
-       ((Some pv)
-        (match (expr_list pv)
+       ((Some own)
+        (match (entries_of m)
           (None (Pair None w1))
-          ((Some es) (Pair (dc_bps es) w1))))))))
+          ((Some paths)
+           (match (load_included paths w1)
+             ((Pair None w2) (Pair None w2))
+             ((Pair (Some more) w2) (Pair (Some (bp_append own more)) w2))))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; plan — emit RUN orders
@@ -375,9 +452,17 @@
       (run_line
         (capf cap i "gen.log")
         (list ev "run" "tools/wasmgen/wasmgen.shard" src (capf cap i "raw")))
-      (run_line
-        (capf cap i "fmt")
-        (list ev "run" "tools/shardfmt/shardfmt.shard" (capf cap i "raw")))
+      (regen_leg
+        i
+        cap
+        ev
+        (capf cap i "raw")
+        "fmt"
+        "cp.log"
+        "canon"
+        "rm.log"
+        out
+        "")
       (run_line
         (capf cap i "schema.log")
         (list ev "run" "tools/lowcheck/lowcheck.shard" out))
@@ -425,9 +510,17 @@
       (run_line
         (capf cap i "gen.log")
         (list ev "run" "tools/x86gen/x86gen.shard" src (capf cap i "raw")))
-      (run_line
-        (capf cap i "fmt")
-        (list ev "run" "tools/shardfmt/shardfmt.shard" (capf cap i "raw")))
+      (regen_leg
+        i
+        cap
+        ev
+        (capf cap i "raw")
+        "fmt"
+        "cp.log"
+        "canon"
+        "rm.log"
+        out
+        "")
       (run_line
         (capf cap i "schema.log")
         (list ev "run" "tools/lowcheck/lowcheck.shard" out))
@@ -473,9 +566,17 @@
       (run_line
         (capf cap i "gen.log")
         (list ev "run" "tools/x86gen/x86gen.shard" src (capf cap i "raw")))
-      (run_line
-        (capf cap i "fmt")
-        (list ev "run" "tools/shardfmt/shardfmt.shard" (capf cap i "raw")))
+      (regen_leg
+        i
+        cap
+        ev
+        (capf cap i "raw")
+        "fmt"
+        "cp.log"
+        "canon"
+        "rm.log"
+        out
+        "")
       (run_line
         (capf cap i "elf.txt")
         (list ev "run" "tools/lowbuild/lowbuild.shard" "elf" src out))
@@ -748,9 +849,17 @@
       (run_line
         (capf cap i "gen.log")
         (list ev "run" "tools/x86gen/x86gen.shard" src (capf cap i "raw")))
-      (run_line
-        (capf cap i "fmt")
-        (list ev "run" "tools/shardfmt/shardfmt.shard" (capf cap i "raw")))
+      (regen_leg
+        i
+        cap
+        ev
+        (capf cap i "raw")
+        "fmt"
+        "cp.log"
+        "canon"
+        "rm.log"
+        out
+        "")
       (run_line
         (capf cap i "schema.log")
         (list ev "run" "tools/lowcheck/lowcheck.shard" out))
@@ -949,34 +1058,6 @@
          Nil)
        w1)))))
 
-;; gate 1: regen — generated+formatted bytes == shipped OUT bytes
-(fn g_regen ((cap (List Int)) (i Int) (out (List Int)) (w World))
-  (Pair (List (List Int)) World)
-  (match (rc_gate cap i "gen.log" "regen(gen)" w)
-    ((Pair m1 w1)
-     (match (rc_gate cap i "fmt" "regen(fmt)" w1)
-       ((Pair m2 w2)
-        (match m1
-          ((Cons _ _) (Pair m1 w2))
-          (Nil
-            (match m2
-              ((Cons _ _) (Pair m2 w2))
-              (Nil
-                (match (slurp (capf cap i "fmt") w2)
-                  ((Pair genb w3)
-                   (match (slurp out w3)
-                     ((Pair outb w4)
-                      (if (ceq genb outb) (Pair Nil w4)
-                      (Pair
-                        (Cons
-                          (vfail
-                            i
-                            "regen"
-                            "generated output is not byte-identical to OUT")
-                          Nil)
-                        w4)))))))))))))))
-
-;; kernel-gate log judgment: rc 0 + " 0 failed" tail (+ optional LIB line)
 (fn g_klog
   ((cap (List Int))
    (i Int)
@@ -1098,7 +1179,7 @@
 (fn v_lib_wasm
   ((cap (List Int)) (i Int) (src (List Int)) (out (List Int)) (w World))
   (Pair (List (List Int)) World)
-  (match (g_regen cap i out w)
+  (match (v_regen_canon cap i out "" w)
     ((Pair g1 w1)
      (match (rc_gate cap i "schema.log" "schema" w1)
        ((Pair g2 w2)
@@ -1507,7 +1588,7 @@
 (fn v_lib_x86
   ((cap (List Int)) (i Int) (src (List Int)) (out (List Int)) (w World))
   (Pair (List (List Int)) World)
-  (match (g_regen cap i out w)
+  (match (v_regen_canon cap i out "" w)
     ((Pair g1 w1)
      (match (rc_gate cap i "schema.log" "schema" w1)
        ((Pair g2 w2)
@@ -1542,7 +1623,7 @@
 ;; the three ELF gates for one x86elf lib product
 (fn v_lib_x86elf ((cap (List Int)) (i Int) (out (List Int)) (w World))
   (Pair (List (List Int)) World)
-  (match (g_regen cap i out w)
+  (match (v_regen_canon cap i out "" w)
     ((Pair g1 w1)
      (match (g_imgtie cap i "elf.txt" w1)
        ((Pair g2 w2)
@@ -1554,7 +1635,7 @@
 (fn v_bin_x86
   ((cap (List Int)) (i Int) (src (List Int)) (out (List Int)) (w World))
   (Pair (List (List Int)) World)
-  (match (g_regen cap i out w)
+  (match (v_regen_canon cap i out "" w)
     ((Pair g1 w1)
      (match (rc_gate cap i "schema.log" "schema" w1)
        ((Pair g2 w2)
