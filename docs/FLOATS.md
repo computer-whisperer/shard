@@ -410,7 +410,15 @@ the bit patterns. Cheap, mechanical, catches spec bugs where they are
 cheapest.
 
 - **R0 — std/rat + kit.** §2. Gate: corpus diff-clean; kit demo
-  consumer.
+  consumer. **LANDED 2026-07-12** (through 26b70b4 + the interface
+  lift): gcd + full theorem kit (divides pair, homogeneity, cofactor
+  coprimality, universal property, Bezout-free Euclid), the opaque
+  Rat (refined record pair, rat_make's canonicality a discharged
+  refined-return obligation), full op set routed through the
+  constructor, canonical-representation UNIQUENESS lifted to the
+  interface as cross-multiplication completeness (rat_cross_num/
+  rat_cross_den), consumer demo examples/rat_demo.shard. Corpus
+  57-stable throughout.
 - **R1 — L1 parametric model + named instances.** rnd laws
   (monotonicity, idempotence on representables, tie behavior),
   exhaustive toy-format gates, probe grids on F32/F64 samples. The

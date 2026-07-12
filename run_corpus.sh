@@ -36,6 +36,7 @@ TARGETS=(
   std/bits/bits.shard
   std/rat/mod.req/gcd.shard
   std/rat/rat.shard
+  examples/rat_demo.shard
   examples/bits_demo.shard
   std/axiom_scope_rejects.shard
   examples/ledger_dep/ledger_dep.shard
