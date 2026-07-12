@@ -30,19 +30,35 @@ while :; do
   "$EVAL" run tools/build/build.shard plan "$PRODUCTS" "$TMP" "$EVAL" $CHECK > "$TMP/orders.txt" \
     || { echo "build.sh: plan refused:" >&2; cat "$TMP/orders.txt" >&2; exit 1; }
   [ -s "$TMP/orders.txt" ] || break
+  # partition this round's orders by PRODUCT (the <i>. capture prefix):
+  # groups are independent by construction and run CONCURRENTLY; order
+  # within a group is preserved (in-product dependencies). The barrier
+  # per round is required — the next plan round reads this round's
+  # captures. This concurrency is wrapper scaffolding: it dissolves
+  # into shard's own parallelism scheme when that arc lands.
+  rm -f "$TMP"/g*.orders
   while read -r tag cap args; do
     [ "$tag" = RUN ] || { echo "build.sh: bad order line: $tag $cap"; exit 2; }
-    newargs=()
-    for tok in $args; do
-      case "$tok" in
-        @*) f=${tok#@}; a=$(cat "$f"; printf x); newargs+=("${a%x}");;
-        *)  newargs+=("$tok");;
-      esac
-    done
-    rc=0
-    "${newargs[@]}" > "$cap" 2>&1 || rc=$?
-    echo "$rc" > "$cap.rc"
+    b=$(basename "$cap")
+    printf '%s\n' "$tag $cap $args" >> "$TMP/g${b%%.*}.orders"
   done < "$TMP/orders.txt"
+  for g in "$TMP"/g*.orders; do
+    (
+      while read -r tag cap args; do
+        newargs=()
+        for tok in $args; do
+          case "$tok" in
+            @*) f=${tok#@}; a=$(cat "$f"; printf x); newargs+=("${a%x}");;
+            *)  newargs+=("$tok");;
+          esac
+        done
+        rc=0
+        "${newargs[@]}" > "$cap" 2>&1 || rc=$?
+        echo "$rc" > "$cap.rc"
+      done < "$g"
+    ) &
+  done
+  wait
 done
 vrc=0
 "$EVAL" run tools/build/build.shard verify "$PRODUCTS" "$TMP" || vrc=$?

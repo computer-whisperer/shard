@@ -516,6 +516,25 @@ and independent by construction; the wrapper can execute order groups
 plus the sibling-product dedup note above — is the natural slice 4,
 ahead of rung 2's mod.build re-founding.
 
+**Rung 1, slice 4 — the parallel executor (2026-07-11).** Scoped by a
+user ruling: near-term speedup is welcome, but a TRUE parallelism
+scheme for shard is coming within weeks — so wrapper concurrency is
+admitted only because it adds no design surface, and it is
+**scaffolding with a named dissolution path**: when shard's own
+parallelism arc lands, the executor's concurrency dissolves into it.
+What changed: the wrapper partitions each round's orders by product
+(the `<i>.` capture prefix) and runs the groups concurrently —
+order preserved within a group (in-product dependencies), a barrier
+per round (the fixpoint needs this round's captures). Order grammar,
+driver, and verify untouched; ~15 lines of shell. The
+sibling-product stage dedup half of the original slice sketch IS
+design surface (capture-naming semantics) and is DEFERRED to the
+content-addressed incrementality story. Gates: 11 products
+2m54→1m03; the aggregate 2m58→1m17 (under the pre-driver 1m27
+baseline); negative probe through the parallel path fails both
+concurrent products with exit 1; corpus untouched by construction
+(no corpus-target file changed).
+
 ## 12. Non-goals, stated once
 
 No config dialect — profiles are shard values. No distinguished
