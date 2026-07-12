@@ -152,13 +152,18 @@ struct LevelGeom {
 }
 
 /// One slot in a file box: a fn (flow card), a proof-layer form (claim
-/// card), or a datastructure definition (type card). Slot order per file =
-/// fns in definition order, then claims, then types.
+/// card), a datastructure definition (type card), or the file's own
+/// `;;;`-header docstring (one prose card per documented file). Slot order
+/// per file = fns in definition order, then claims, then types, then the
+/// doc card.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Member {
     Fn(usize),
     Claim(usize),
     Type(usize),
+    /// The file's `;;;` header as a card (the index is the *file*). No
+    /// edges — it describes the whole box, not any member.
+    Doc(usize),
 }
 
 impl Member {
@@ -229,6 +234,15 @@ pub(crate) fn canvas(project: &Project, p: &ViewParams, cache: Option<&MapCache>
     }
     for &ti in &types {
         by_file.entry(project.types[ti].file).or_default().push(Member::Type(ti));
+    }
+    // A documented file also carries its `;;;` header as a member card — the
+    // author's account of the module, committed into the file's layout like
+    // any other card (file boxes usually have the slack, and it's the single
+    // most informative card a box can spend it on).
+    for (&file, members) in by_file.iter_mut() {
+        if !project.files[file].doc.is_empty() {
+            members.push(Member::Doc(file));
+        }
     }
     // The dir tree over the spanned files — the walk order both passes share.
     let mut root = DirNode::default();
@@ -461,6 +475,7 @@ fn file_graph(project: &Project, members: &[Member]) -> (Graph, Vec<EdgeClass>) 
                 Member::Fn(fi) => intrinsic(&flow_card(project, fi, false)),
                 Member::Claim(ci) => intrinsic(&claim_card(project, ci)),
                 Member::Type(ti) => intrinsic(&type_card(project, ti, true)),
+                Member::Doc(fi) => intrinsic(&filedoc_card(project, fi)),
             };
             GNode::simple(w, h)
         })
@@ -475,6 +490,7 @@ fn file_graph(project: &Project, members: &[Member]) -> (Graph, Vec<EdgeClass>) 
             Member::Fn(g) => fn_slot.insert(g, i),
             Member::Claim(c) => claim_slot.insert(c, i),
             Member::Type(t) => type_slot.insert(t, i),
+            Member::Doc(_) => None, // edge-less; no slot map needed
         };
     }
 
@@ -538,6 +554,7 @@ fn file_graph(project: &Project, members: &[Member]) -> (Graph, Vec<EdgeClass>) 
                     }
                 }
             }
+            Member::Doc(_) => {}
         }
     }
     (Graph { nodes, edges }, classes)
@@ -550,10 +567,13 @@ fn file_graph(project: &Project, members: &[Member]) -> (Graph, Vec<EdgeClass>) 
 #[doc(hidden)]
 pub fn debug_file_graph(project: &Project, file: usize) -> Graph {
     let f = &project.files[file];
-    let members: Vec<Member> = (f.fns.iter().map(|&g| Member::Fn(g)))
+    let mut members: Vec<Member> = (f.fns.iter().map(|&g| Member::Fn(g)))
         .chain(f.claims.iter().map(|&c| Member::Claim(c)))
         .chain(f.types.iter().map(|&t| Member::Type(t)))
         .collect();
+    if !f.doc.is_empty() {
+        members.push(Member::Doc(file));
+    }
     file_graph(project, &members).0
 }
 
@@ -573,6 +593,7 @@ fn commit_file(
             Member::Fn(_) => counts.0 += 1,
             Member::Claim(_) => counts.1 += 1,
             Member::Type(_) => counts.2 += 1,
+            Member::Doc(_) => {}
         }
     }
     let (graph, classes) = file_graph(project, members);
@@ -825,6 +846,7 @@ fn file_el(
                     Member::Fn(g) => fn_el(ctx, g, (n.w, n.h), slot_abs),
                     Member::Claim(c) => claim_el(ctx, c, (n.w, n.h), slot_abs),
                     Member::Type(t) => type_el(ctx, t, (n.w, n.h), slot_abs),
+                    Member::Doc(fi) => doc_el(ctx, fi, (n.w, n.h), slot_abs),
                 }
             })
             .collect();
@@ -904,6 +926,7 @@ fn file_el(
             Member::Fn(_) => (a + 1, b, c),
             Member::Claim(_) => (a, b + 1, c),
             Member::Type(_) => (a, b, c + 1),
+            Member::Doc(_) => (a, b, c),
         });
     stack(layers)
         .width(Size::Fixed(w))
@@ -1237,6 +1260,75 @@ fn type_card(project: &Project, ti: usize, keyed: bool) -> El {
     if keyed { card.key(format!("type:{ti}")).tooltip(type_tip(t)) } else { card }
 }
 
+/// One file-doc slot at its committed footprint: the full header card at
+/// reading zoom, else a quiet slab carrying the summary line while it's
+/// legible. Unkeyed throughout — prose isn't a navigation target, so the
+/// card stays hover-transparent (background pan works through it).
+fn doc_el(ctx: &RCtx, file: usize, (w, h): (f32, f32), abs: (f32, f32)) -> El {
+    if !ctx.in_view(abs.0, abs.1, w, h) {
+        return blank();
+    }
+    if ctx.zoom >= ctx.flow_z {
+        return filedoc_card(ctx.project, file);
+    }
+    let f = &ctx.project.files[file];
+    let summary = f.doc.lines().next().unwrap_or_default().trim();
+    let chars = summary.chars().count().max(1) as f32;
+    let font = (NAME_PX / ctx.zoom).min(h * 0.45).min(w * 0.92 / (chars * MONO_ADV));
+    let body: Vec<El> = if font * ctx.zoom >= LEGIBLE_PX {
+        vec![text(summary.to_string()).muted().font_size(font).nowrap_text()]
+    } else {
+        Vec::new()
+    };
+    column(body)
+        .align(Align::Center)
+        .justify(Justify::Center)
+        .width(Size::Fixed(w))
+        .height(Size::Fixed(h))
+        .radius(7.0)
+        .fill(tokens::BACKGROUND.mix(tokens::CARD, 0.5))
+        .stroke(tokens::BORDER.mix(tokens::BACKGROUND, 0.4))
+        .stroke_width(ctx.hairline())
+}
+
+/// The file's `;;;` header as a prose card — the author's account of the
+/// module, spending the box's free space on the most informative thing it
+/// can hold. Leads with a `;;;` marker (the corpus's own syntax) and the
+/// file's basename; the body keeps the author's line breaks (headers are
+/// already hand-formatted to a comment column).
+fn filedoc_card(project: &Project, file: usize) -> El {
+    let f = &project.files[file];
+    let base = f.rel.rsplit_once('/').map(|(_, b)| b).unwrap_or(&f.rel);
+    let title = row([
+        text(";;;")
+            .mono()
+            .semibold()
+            .font_size(SUB_SIZE)
+            .text_color(tokens::MUTED_FOREGROUND)
+            .nowrap_text(),
+        text(base.to_string())
+            .mono()
+            .semibold()
+            .font_size(super::TITLE_SIZE)
+            .nowrap_text()
+            .ellipsis(),
+    ])
+    .gap(tokens::SPACE_2)
+    .align(Align::Center);
+    let mut parts = vec![title];
+    for line in f.doc.lines() {
+        // Keep blank lines as paragraph breaks (an empty text measures away).
+        let shown = if line.trim().is_empty() { " ".to_string() } else { ellipt(line, 88) };
+        parts.push(text(shown).muted().font_size(SUB_SIZE).nowrap_text());
+    }
+    column(parts)
+        .gap(2.0)
+        .padding(8.0)
+        .radius(7.0)
+        .fill(tokens::BACKGROUND.mix(tokens::CARD, 0.5))
+        .stroke(tokens::BORDER.mix(tokens::BACKGROUND, 0.4))
+}
+
 /// The screen-space shape deck: the focused member's datastructure
 /// definitions as compact cards, docked at the canvas edge. This is the only
 /// way to see a shape's composition while zoomed into a fn whose types live
@@ -1253,7 +1345,7 @@ fn shape_deck(project: &Project, focus: Option<Member>) -> Option<El> {
         // A type's own deck: what it's composed of (its definition is already
         // under the cursor; its parts may be anywhere).
         Member::Type(t) => (project.types[t].name.clone(), project.types[t].composed.clone()),
-        Member::Claim(_) => return None,
+        Member::Claim(_) | Member::Doc(_) => return None,
     };
     if type_ids.is_empty() {
         return None;

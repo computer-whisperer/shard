@@ -103,7 +103,12 @@ section, not the fn), and the `;;;` block at the top of a file becomes the
 line as a muted one-line summary (so it appears exactly at reading zoom,
 where cards draw at all); tooltips and the detail panels carry the full
 block; the Systems file panel and the Map file-box tooltip carry the file
-header. Undocumented members spend no space on absence.
+header. A documented file additionally commits a **file-doc card** — its
+whole `;;;` header as a prose card (`;;;` marker + basename title, the
+author's own line breaks) placed in the file box like any member; it has
+no edges, so the component packer slots it into the box's free space. It
+is unkeyed (hover-transparent) and slabs down like every card when far
+out. Undocumented members spend no space on absence.
 
 **The proof card** shows each proof's *structure* in the same Flow vocabulary
 the fn cards taught (`proof.rs` lowers the tactic tree into the shared
