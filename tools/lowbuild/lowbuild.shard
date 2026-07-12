@@ -2274,6 +2274,108 @@
                               "bin entry cert must carry the glue contract's two Int binders, the payload-Mem shape's one, or the two-arg contract's four"
                               w2))))))))))))))))))
 
+;; ---- the pinlib entry (docs/BUILD.md rung 2): pinned hand twins -------------------
+;; The build entry exports build_mods : Target -> (List PinMod) — content
+;; only (module name, spec-side bytes, twin file, claim names, curated
+;; vectors). ARTIFACT bindings are derived POSITIONALLY from the claims
+;; list (the full-prefix convention: claim K pins fn index K); the
+;; manifest gate independently verifies every derived index against the
+;; cert file read RAW, so a wrong derivation fails the build.
+
+;; strip the "lowered_" prefix (the artifact-name convention)
+(fn pl_strip ((c (List Int))) (List Int)
+  (match c
+    ((Cons
+       108
+       (Cons
+         111
+         (Cons 119 (Cons 101 (Cons 114 (Cons 101 (Cons 100 (Cons 95 rest))))))))
+     rest)
+    (_ c)))
+
+(fn pl_arts ((cf (List Int)) (k Int) (cs (List (List Int)))) (List PArt)
+  (measure (struct cs))
+  (match cs
+    (Nil Nil)
+    ((Cons c t)
+     (Cons
+       (PA (pl_strip c) c cf "models/wasm/wasm.shard" k "" "none")
+       (pl_arts cf (+ k 1) t)))))
+
+(fn dc_strs ((es (List Expr))) (Option (List (List Int)))
+  (measure (struct es))
+  (match es
+    (Nil (Some Nil))
+    ((Cons h t)
+     (match (expr_ints h)
+       (None None)
+       ((Some s)
+        (match (dc_strs t)
+          (None None)
+          ((Some ss) (Some (Cons s ss)))))))))
+
+(fn dc_pinmod ((e Expr)) (Option PMod)
+  (match (dc_ctor (quote MkPinMod) e)
+    ((Some (Cons ne (Cons be (Cons cfe (Cons ce (Cons ve Nil))))))
+     (match (expr_ints ne)
+       (None None)
+       ((Some nm)
+        (match (expr_ints be)
+          (None None)
+          ((Some bytes)
+           (match (expr_ints cfe)
+             (None None)
+             ((Some cf)
+              (match (expr_list ce)
+                (None None)
+                ((Some ces)
+                 (match (dc_strs ces)
+                   (None None)
+                   ((Some claims)
+                    (match (expr_list ve)
+                      (None None)
+                      ((Some ves)
+                       (match (dc_vecs ves)
+                         (None None)
+                         ((Some vecs)
+                          (Some (PM nm bytes (pl_arts cf 0 claims) vecs)))))))))))))))))
+    (_ None)))
+
+(fn dc_pinmods ((es (List Expr))) (Option (List PMod))
+  (measure (struct es))
+  (match es
+    (Nil (Some Nil))
+    ((Cons h t)
+     (match (dc_pinmod h)
+       (None None)
+       ((Some m)
+        (match (dc_pinmods t)
+          (None None)
+          ((Some ms) (Some (Cons m ms)))))))))
+
+(fn run_pinlib ((epath (List Int)) (w World)) World
+  (match (load_run_module epath w)
+    ((Pair None w1) (fail "could not load/parse the pinlib entry closure" w1))
+    ((Pair (Some m) w1)
+     (match (ctor_qn m (quote MkTarget))
+       (None
+         (fail
+           "pinlib entry has no Target vocabulary (meta/plan not imported?)"
+           w1))
+       ((Some tq)
+        (match (invoke m (quote build_mods) (Cons (target_val tq False) Nil))
+          (None (fail "no unique `build_mods` fn in the pinlib entry" w1))
+          ((Some pv)
+           (match (expr_list pv)
+             (None (fail "build_mods did not return a list" w1))
+             ((Some es)
+              (match (dc_pinmods es)
+                (None (fail "build_mods result does not decode as PinMods" w1))
+                ((Some mods)
+                 (match (plan_lines mods)
+                   (None (fail "pinlib plan did not render" w1))
+                   ((Some ls) (exit 0 (write ls w1)))))))))))))))
+
 ;; ---- the lib entry ----------------------------------------------------------------
 
 (fn run_lib ((srcp (List Int)) (outp (List Int)) (w World)) World
@@ -2409,9 +2511,10 @@
      (match args
        ((Cons bpath Nil) (run_isa bpath False w1))
        ((Cons bpath (Cons isa Nil))
+        (if (ceq bpath "pinlib") (run_pinlib isa w1)
         (if (ceq isa "wasm") (run_isa bpath False w1)
         (if (ceq isa "x86") (run_isa bpath True w1)
-        (fail "unknown ISA (wasm | x86)" w1))))
+        (fail "unknown ISA (wasm | x86)" w1)))))
        ((Cons mode (Cons srcp (Cons outp Nil)))
         (if (ceq mode "lib") (run_lib srcp outp w1)
         (if (ceq mode "elf") (run_elf srcp outp w1)

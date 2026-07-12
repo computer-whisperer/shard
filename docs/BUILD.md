@@ -587,6 +587,48 @@ this slice AS-IS (bodies die at the re-founding); the examples/
 fragment-era scripts (lowbuild.sh, _mem, _loop, _call, the seven
 x86 fragment builds) remain for a later mechanical migration.
 
+**Rung 2, slice 6 — the re-founding proper (2026-07-11).** Both
+mod.build.shard entries are rewritten to the new charter, and the
+transitional 'modbuild kind is renamed out of existence ('pinlib):
+
+- **meta/build grows PinMod** — name, spec-side encoded bytes (the
+  meta/plan pre-encoded law: the driver never imports target
+  encoders), the pinned twin file, claim names in module-index
+  order, curated vectors. meta/build now imports meta/plan (config
+  vocabulary referencing plan vocabulary — the layering is
+  deliberate: entries RETURN plan-adjacent content).
+- **tools/lowbuild grows `pinlib ENTRY`** — loads the entry, invokes
+  the standard symbol, and derives every ARTIFACT binding
+  POSITIONALLY from the claims list (the full-prefix convention:
+  claim K pins fn index K). No raw cert parsing in the deriver: the
+  manifest gate already verifies every derived index against the
+  cert file read RAW, so a wrong derivation fails the build — PCC
+  discipline, reused instead of duplicated.
+- **The entries shed exactly their packaging.** What remains is
+  content: the module value + spec-side encoding, the pin binding,
+  the curated vectors (mem: 5; str: 6, spec-side sc_copy/sc_eq).
+  What died: the art builders, the PM/MkPlan assembly, every
+  hand-maintained cert/certfile/model/index cross-reference — the
+  drift-prone bookkeeping the entries can no longer misstate.
+  Verified: mem's derived plan is BYTE-IDENTICAL to the old hand
+  wire; str's differs only where uniform derivation FIXED the old
+  entry's inconsistency (a spurious `callees=none` dropped).
+
+**D1 residual RESOLVED on real cases: role-named standard symbols.**
+`build_products : () -> (List BuildProfile)` for product lists;
+`build_mods : Target -> (List PinMod)` for a module's pinned
+artifacts. Named, role-specific entry points won over one omnibus
+`build()` — the omnibus form is what made the original mod.build
+verbose, and the ruling's `bin_helloworld_wasm()` sketch survives as
+free-form helper fns behind the standard symbols. Repo-scope product
+discovery (the other D1 residual) stays open: examples/
+build_products.shard remains the single aggregator until a consumer
+demands per-module product declarations.
+
+Gates: entries check green (123/140 claims incl. closures); pinlib
+plans verified against the old wire; driver 15 products green 1m07;
+aggregate + corpus pending at record time, confirmed in the commit.
+
 ## 12. Non-goals, stated once
 
 No config dialect — profiles are shard values. No distinguished
