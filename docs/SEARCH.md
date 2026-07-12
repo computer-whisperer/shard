@@ -978,3 +978,60 @@ gaps.
 certified catalog BRACKET (the rung-1 "17 clean = exactly 13
 functions" with S4a equivalence proofs + the D5 catalog license) —
 remains; with it, S6 closes and the ladder's next rung is S4b.
+
+
+### Slice 5, component 4 — the certified bracket (LANDED 2026-07-11): THE EXIT CRITERION IS MET
+
+**gen/cat_bracket.shard replays 6/6 through bin/shard_check: 17 clean
+rung-1 candidates = EXACTLY 13 functions, kernel-certified on every
+corpus sweep.** Measured first (the throwaway probe): 4 multi-member
+buckets; one pair (append xs xs vs its match twin) proves by a plain
+split, the other three (recursive identity ≡ xs; the always-Nil
+family) are the induction-hard family — and representatives must be
+the MINIMAL bucket members (proofs close member → leaf; the reversed
+direction leaves residue no budget closes).
+
+**What landed:**
+
+- **D5 license (ii) as a rule VALUE** (sym.shard `NRIh p q min`): a
+  stuck call (p X) over a split-allocated slot (id ≥ min — goal
+  binders sit below, split shapes above, so the subterm condition is
+  an integer compare) evaluates as (q X). The rule-table-as-data pin
+  pays again: the license is an entry, not a machine change, and no
+  other oracle run sees it.
+- **The equivalence mode is zero new machinery**: a synthesized law
+  ∀xs. f xs = g xs (both candidates injected via extend_fn, the rep's
+  self-calls remapped) drives the SAME law_verdict/trace/render path.
+- **Induct rendering + the simp/compute discipline (two measured
+  kernel-reducer facts):** check-side compute unfolds SAME-MODULE
+  recursive calls one level into stuck-match residuals — destroying
+  the (hyp ih) rewrite site — while simp's head-gate keeps stuck
+  calls AS CALLS (the word-former gotcha, now load-bearing); but simp
+  strands bare-body unfolds (the identity fn) that compute closes. So
+  an ih leaf is exactly `(simp both) (rewrite (hyp ih) lr both true
+  ()) (compute both)`, and the ih simulation in the leaf detector
+  runs on the RAW substituted sides (a reduced residual buries
+  p-sites under stuck matches the rendered simp never creates).
+- **The bx_append twin**: the candidates' vocabulary cites std/list
+  append — SEALED at check, so neither the floor's ground vectors nor
+  eq leaves would reduce. The artifact carries bx_append (same body,
+  same-module, open) with ONE bridging claim (bx_append ≡ append,
+  induct over the interface's own defining equations); rendered
+  candidates and the replay twin speak bx_append; the oracle keeps
+  std append. The floor then closes as ONE computational claim:
+  `(bd_uniq (bracket_vectors)) = True` — the kernel evaluates all 13
+  representatives over the battery and checks pairwise distinctness
+  itself.
+
+**The certified statement, in claims:** bx_append_eq (the bridge) +
+bracket_floor (distinctness ⇒ ≥13) + four ceiling claims (members ≡
+minimal reps ⇒ ≤13), each rendered from oracle traces and none
+hand-written. BRACKET REGEN pins byte-identical re-emission in the
+laws suite.
+
+**S6 CLOSES.** Both exit-criterion artifacts land as corpus-pinned,
+kernel-checked source: a law-certified synthesis (rev_c62/rev_c347
+proving std/list's own rev laws) and the certified d1-equivalent
+bracket. The ladder's remaining rung is S4b (the superposed
+executor); the playground's trie-factored/value-keyed findings are
+recorded above as its likely design-of-record question.

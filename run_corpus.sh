@@ -249,6 +249,7 @@ TARGETS=(
   examples/spell_pin.shard
   tools/search/render_gate.shard
   tools/search/gen/rev_synth.shard
+  tools/search/gen/cat_bracket.shard
 )
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -402,6 +403,14 @@ fi
 # with the committed gen/rev_synth.shard; `laws emit` re-pins. G4 is
 # continuous: the artifact is a check TARGET, so its rendered proofs
 # replay through bin/shard_check in the sweep above.
+# BRACKET REGEN (component 4 — the arc's EXIT CRITERION) does the same
+# for gen/cat_bracket.shard: the CERTIFIED rung-1 bracket — all 17
+# clean candidates as fns over the local bx_append twin (bridged to
+# std/list append by one induct claim), the kernel-computed FLOOR
+# (13 representatives' vectors pairwise distinct) and the four CEILING
+# equivalence claims (three via the D5 catalog license, rendered as
+# induct with (hyp ih) citations). 17 clean = EXACTLY 13 functions,
+# kernel-checked on every sweep; `laws bracket` re-pins.
 echo "=== search: laws oracle (S4a+S5, G3) ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/laws.shard

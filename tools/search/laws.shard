@@ -925,76 +925,134 @@
 
 (fn kpat ((cq QName) (shfs (List SV))) Expr (Ctor cq (kpat_fields shfs 0)))
 
-;; per case: does the twin join the case-substituted goal sides?
-;; False = the leaf needs the tail.
-(fn case_tails
-  ((mc Module) (binder Symbol) (lhs Expr) (rhs Expr) (cases (List TrCase)))
-  (List Bool)
+;; per-leaf render flags: cite the induction hypothesis?, then the
+;; surface-discipline lemma tail?
+(type LFl (LFl Bool Bool))
+
+;; does the expr contain a call to q anywhere?
+(fn has_callq ((p QName) (e Expr)) Bool
+  (measure (struct e))
+  (match e
+    ((FVar _) False)
+    ((BVar _) False)
+    ((Ctor _ es) (has_callqs p es))
+    ((Call q es) (if (qname_eq q p) True (has_callqs p es)))
+    ((Match s arms) (if (has_callq p s) True (has_callq_arms p arms)))
+    ((Let bs body) (if (has_callqs p bs) True (has_callq p body)))
+    ((If c t e2)
+     (if (has_callq p c) True (if (has_callq p t) True (has_callq p e2))))
+    ((IntLit _) False)
+    ((SymLit _) False)))
+
+(fn has_callqs ((p QName) (es (List Expr))) Bool
+  (measure (struct es))
+  (match es
+    (Nil False)
+    ((Cons e rest) (if (has_callq p e) True (has_callqs p rest)))))
+
+(fn has_callq_arms ((p QName) (arms (List Arm))) Bool
+  (measure (struct arms))
+  (match arms
+    (Nil False)
+    ((Cons (Arm _ b) rest) (if (has_callq p b) True (has_callq_arms p rest)))))
+
+;; THE THREE-STAGE LEAF DETECTOR, over the replay twin:
+;;   1. the twin joins the sides -> no steps beyond compute;
+;;   2. unjoined and the residue still carries calls to the licensed
+;;      pair -> the induction hypothesis rewrites them (simulated at
+;;      expr level by the p->q head remap, then re-reduced to decide
+;;      whether the lemma tail is ALSO needed);
+;;   3. unjoined with no licensed calls -> the lemma tail alone.
+(fn lf_detect
+  ((mc Module) (ih (Option (Pair QName QName))) (lhs Expr) (rhs Expr))
+  LFl
+  (let ((n1 (run_expr mc lhs (tw_fuel))) (n2 (run_expr mc rhs (tw_fuel))))
+    (if (expr_eq n1 n2) (LFl False False)
+    (match ih
+      (None (LFl False True))
+      ((Some (Pair p q))
+       (if (if (has_callq p n1) True (has_callq p n2))
+         ;; the ih simulation runs on the RAW substituted sides (the
+         ;; p->q remap before any reduction) — a reduced residual may
+         ;; bury p-sites under stuck matches the rendered simp never
+         ;; creates
+         (if (twin_joins mc (rm_e p q lhs) (rm_e p q rhs)) (LFl True False)
+         (LFl True True))
+         (LFl False True)))))))
+
+(fn case_flags
+  ((mc Module)
+   (ih (Option (Pair QName QName)))
+   (binder Symbol)
+   (lhs Expr)
+   (rhs Expr)
+   (cases (List TrCase)))
+  (List LFl)
   (measure (struct cases))
   (match cases
     (Nil Nil)
     ((Cons (TrCase cq shfs _) rest)
      (Cons
-       (if
-         (twin_joins
-           mc
-           (fv_sub binder (kpat cq shfs) lhs)
-           (fv_sub binder (kpat cq shfs) rhs))
-         False
-         True)
-       (case_tails mc binder lhs rhs rest)))))
+       (lf_detect
+         mc
+         ih
+         (fv_sub binder (kpat cq shfs) lhs)
+         (fv_sub binder (kpat cq shfs) rhs))
+       (case_flags mc ih binder lhs rhs rest)))))
 
 (fn pt_tail () Doc
   (DStr " (rewrite (lemma append_nil_left) lr both true ()) (compute both)"))
 
-(fn pt_leaf ((under Bool) (tail Bool)) Doc
-  (dcat3
-    (if under (DStr "(steps ((rewrite (hyp 0) lr both true ()) (compute both)")
-    (DStr "(steps ((compute both)"))
-    (if tail (pt_tail) (DStr ""))
-    (DStr ") refl)")))
+;; a leaf under induct: the case is SUBSTITUTED into the goal (no
+;; case-fact rewrite needed). An ih-citing leaf reduces by SIMP — the
+;; head-gate keeps a stuck recursive call AS A CALL, so the ih's
+;; rewrite site survives (compute would unfold it into a stuck match
+;; and destroy the site — measured). Leaves without an ih keep
+;; compute. The optional surface-discipline tail follows either way.
+(fn pt_leaf ((fl LFl)) Doc
+  (match fl
+    ((LFl ihf tailf)
+     (dcat3
+       (if ihf
+         (DStr
+           "(steps ((simp both) (rewrite (hyp ih) lr both true ()) (compute both)")
+         (DStr "(steps ((compute both)"))
+       (if tailf (pt_tail) (DStr ""))
+       (DStr ") refl)")))))
 
 ;; the trace, rendered. v1 is the measured fragment: one depth-0
-;; split at most; TrSeq and nested splits refuse loudly (when a task
-;; needs them, that refusal is the feature request). `tails` is
-;; positional per case, from the replay twin; `topt` is the top-level
-;; leaf's own tail flag.
+;; split at most, rendered as INDUCT on the goal binder (induct
+;; substitutes each case into the goal and supplies (hyp ih) in the
+;; recursive cases; a split that cites no ih is just exhaustive
+;; cases). TrSeq and nested splits refuse loudly. `flags` is
+;; positional per case; `top` is the splitless leaf's own flags.
 (fn pt_trace
-  ((env (List (Pair Int Symbol))) (topt Bool) (tails (List Bool)) (t Tr))
+  ((env (List (Pair Int Symbol))) (top LFl) (flags (List LFl)) (t Tr))
   PtR
   (measure (struct t))
   (match t
-    ((TrRefl) (PtROk (pt_leaf False topt)))
+    ((TrRefl) (PtROk (pt_leaf top)))
     ((TrSeq _) (PtRErr "render: TrSeq is unrendered (v1)"))
-    ((TrSplit s ty cases)
-     (match ty
-       ((TCon tq _)
-        (match (se_name s env)
-          (None (PtRErr "render: split slot is not a goal binder"))
-          ((Some nm)
-           (match (pt_cases cases tails)
-             ((PtLErr msg) (PtRErr msg))
-             ((PtLOk cds)
-              (PtROk
-                (sp_form
-                  (dcat3
-                    (DStr "case-on ")
-                    (dsym nm)
-                    ;; the proof DSL takes the bare type NAME; the
-                    ;; checker's type gate re-derives the args from
-                    ;; the scrutinee
-                    (DCat (sp) (dsym (qn_name tq))))
-                  (Cons (sp_form (sp_tail_first cds) Nil) Nil))))))))
-       ((TVar _) (PtRErr "render: split on a type-variable slot"))))))
+    ((TrSplit s _ cases)
+     (match (se_name s env)
+       (None (PtRErr "render: split slot is not a goal binder"))
+       ((Some nm)
+        (match (pt_cases cases flags)
+          ((PtLErr msg) (PtRErr msg))
+          ((PtLOk cds)
+           (PtROk
+             (sp_form
+               (DCat (DStr "induct ") (dsym nm))
+               (Cons (sp_form (sp_tail_first cds) Nil) Nil))))))))))
 
-(fn pt_cases ((cases (List TrCase)) (tails (List Bool))) PtL
+(fn pt_cases ((cases (List TrCase)) (flags (List LFl))) PtL
   (measure (struct cases))
   (match cases
     (Nil (PtLOk Nil))
     ((Cons (TrCase cq shfs sub) rest)
      (match sub
        ((TrRefl)
-        (match (pt_cases rest (bools_tail tails))
+        (match (pt_cases rest (lfl_tail flags))
           ((PtLErr msg) (PtLErr msg))
           ((PtLOk cds)
            (PtLOk
@@ -1002,22 +1060,22 @@
                (sp_form
                  (DCat (DStr "case ") (dsym (qn_name cq)))
                  (match shfs
-                   (Nil (Cons (pt_leaf True (bools_head tails)) Nil))
+                   (Nil (Cons (pt_leaf (lfl_head flags)) Nil))
                    ((Cons _ _)
                     (Cons
                       (sp_form (sp_tail_first (kfields shfs 0)) Nil)
-                      (Cons (pt_leaf True (bools_head tails)) Nil)))))
+                      (Cons (pt_leaf (lfl_head flags)) Nil)))))
                cds)))))
        ((TrSeq _) (PtLErr "render: TrSeq is unrendered (v1)"))
        ((TrSplit _ _ _) (PtLErr "render: nested splits are unrendered (v1)"))))))
 
-(fn bools_head ((bs (List Bool))) Bool
-  (match bs
-    (Nil False)
-    ((Cons b _) b)))
+(fn lfl_head ((fs (List LFl))) LFl
+  (match fs
+    (Nil (LFl False False))
+    ((Cons f _) f)))
 
-(fn bools_tail ((bs (List Bool))) (List Bool)
-  (match bs
+(fn lfl_tail ((fs (List LFl))) (List LFl)
+  (match fs
     (Nil Nil)
     ((Cons _ t) t)))
 
@@ -1028,6 +1086,7 @@
 ;; cite the injected candidate, which the twin carries open).
 (fn pc_claim
   ((mc Module)
+   (ih (Option (Pair QName QName)))
    (tbl (List (Pair QName Symbol)))
    (subject Symbol)
    (olw LLaw)
@@ -1046,10 +1105,10 @@
              ((SpROk rd)
               (match (binders_svs ps (SvSt 0 Nil))
                 ((Pair svs _)
-                 (match (pc_tails mc (mk_slotenv ps svs) olhs orhs tr)
+                 (match (pc_flags mc ih (mk_slotenv ps svs) olhs orhs tr)
                    ((PcTErr msg) (PtRErr msg))
-                   ((PcTOk topt tails)
-                    (match (pt_trace (mk_slotenv ps svs) topt tails tr)
+                   ((PcTOk top flags)
+                    (match (pt_trace (mk_slotenv ps svs) top flags tr)
                       ((PtRErr msg) (PtRErr msg))
                       ((PtROk pd)
                        (PtROk
@@ -1073,18 +1132,28 @@
                              (Cons pd Nil)))))))))))))))))))
 
 ;; the twin's per-leaf decisions for one law's trace
-(type PcT (PcTErr (List Int)) (PcTOk Bool (List Bool)))
+(type PcT (PcTErr (List Int)) (PcTOk LFl (List LFl)))
 
-(fn pc_tails
-  ((mc Module) (env (List (Pair Int Symbol))) (olhs Expr) (orhs Expr) (tr Tr))
+(fn pc_flags
+  ((mc Module)
+   (ih (Option (Pair QName QName)))
+   (env (List (Pair Int Symbol)))
+   (olhs Expr)
+   (orhs Expr)
+   (tr Tr))
   PcT
   (match tr
-    ((TrRefl) (PcTOk (if (twin_joins mc olhs orhs) False True) Nil))
+    ((TrRefl)
+     ;; a splitless leaf has no induction hypothesis in scope: an ih
+     ;; verdict here is a machine bug, refused loudly
+     (match (lf_detect mc None olhs orhs)
+       ((LFl _ tailf) (PcTOk (LFl False tailf) Nil))))
     ((TrSeq _) (PcTErr "render: TrSeq is unrendered (v1)"))
     ((TrSplit s _ cases)
      (match (se_name s env)
        (None (PcTErr "render: split slot is not a goal binder"))
-       ((Some nm) (PcTOk False (case_tails mc nm olhs orhs cases)))))))
+       ((Some nm)
+        (PcTOk (LFl False False) (case_flags mc ih nm olhs orhs cases)))))))
 
 ;; the emit-scope table for one subject fn's claims (both Nil/Cons
 ;; spellings mapped — the goal's and the type table's agree at run
@@ -1141,7 +1210,7 @@
        ((LVdUndec) (PcRErr "render: a claim's verdict is not Proven"))
        ((LVdRef) (PcRErr "render: a claim's verdict is not Proven"))
        ((LVdProv tr)
-        (match (pc_claim mc tbl subject olw dlw tr)
+        (match (pc_claim mc None tbl subject olw dlw tr)
           ((PtRErr msg) (PcRErr msg))
           ((PtROk d)
            (match (pc_claims m2 mc rules tbl subject rest)
@@ -1298,40 +1367,539 @@
                   "SYNTH FAIL: regenerated bytes differ from the artifact\n"
                   w3))))))))))))
 
+;; ---- the CERTIFIED CATALOG BRACKET (slice 5, component 4) -------------------
+;;
+;; The rung-1 census said "17 clean = 13 behaviors" by battery
+;; bucketing. This section CERTIFIES it: a second generated artifact
+;; (gen/cat_bracket.shard) carries all 17 candidates as fns, one
+;; kernel-computed FLOOR claim (the 13 bucket representatives'
+;; battery vectors are pairwise distinct — distinct vectors witness
+;; distinct functions), and one CEILING claim per non-representative
+;; member (∀xs. member xs = rep xs, proven by induct with the D5
+;; catalog license driving the oracle and (hyp ih) citations in the
+;; render). Representatives are the MINIMAL bucket members (measured:
+;; proofs close member -> leaf, not member -> member). The artifact
+;; is a corpus check target: the whole bracket replays through
+;; bin/shard_check on every sweep.
+
+(fn bx_rung () Int 1)
+
+(fn bx_path () (List Int) "tools/search/gen/cat_bracket.shard")
+
+(fn bxname ((i Int)) Symbol (sym_of_chars (append_int "cat1_c" (show_int i))))
+
+(fn catg_q () QName (qn (quote srch_catg)))
+
+(fn ints_snoc ((xs (List Int)) (x Int)) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil (Cons x Nil))
+    ((Cons h t) (Cons h (ints_snoc t x)))))
+
+;; buckets: (vector, members ASCENDING — head = rep = minimal index)
+(fn bx_add
+  ((v (List (List Int)))
+   (i Int)
+   (bs (List (Pair (List (List Int)) (List Int)))))
+  (List (Pair (List (List Int)) (List Int)))
+  (measure (struct bs))
+  (match bs
+    (Nil (Cons (Pair v (Cons i Nil)) Nil))
+    ((Cons (Pair bv is) rest)
+     (if (vec_eq v bv) (Cons (Pair bv (ints_snoc is i)) rest)
+     (Cons (Pair bv is) (bx_add v i rest))))))
+
+(type BxS
+  (BxSErr (List Int))
+  (BxSOk (List (Pair (List (List Int)) (List Int))) (List Int)))
+
+(fn bx_sweep
+  ((k Int)
+   (total Int)
+   (root Expr)
+   (g Grammar)
+   (m Module)
+   (ins (List (List Int)))
+   (bs (List (Pair (List (List Int)) (List Int))))
+   (clean (List Int)))
+  BxS
+  (measure k)
+  (if (le k 0) (BxSOk bs clean)
+  (let ((i (- total k)))
+    (match (sk_unrank root g i)
+      ((SkEErr msg) (BxSErr (cz_at "bracket unrank" i msg)))
+      ((SkEOk c)
+       (match (cn_e c m)
+         (Nil
+           (match (extend_fn m (cat_fd c))
+             (None (BxSErr (cz_at "bracket extend" i "candidate qname bound")))
+             ((Some m2)
+              (match (cat_vec m2 (cat_fd c) ins)
+                (None (BxSErr (cz_at "bracket battery" i "candidate stuck")))
+                ((Some v)
+                 (bx_sweep
+                   (- k 1)
+                   total
+                   root
+                   g
+                   m
+                   ins
+                   (bx_add v i bs)
+                   (ints_snoc clean i)))))))
+         ((Cons _ _) (bx_sweep (- k 1) total root g m ins bs clean))))))))
+
+;; a bracket fn: append respelled to the local twin
+(fn bx_fn ((name Symbol) (apq QName) (c Expr)) RgR
+  (match
+    (sp_fn
+      (Cons
+        (Pair (cat_q) name)
+        (Cons
+          (Pair apq (quote bx_append))
+          (Cons
+            (Pair (qn (quote Nil)) (quote Nil))
+            (Cons (Pair (qn (quote Cons)) (quote Cons)) Nil))))
+      name
+      (Cons (ty_ilist) Nil)
+      (ty_ilist)
+      (Some (sp_meas_struct 0))
+      c)
+    ((SpRErr msg) (RgRErr msg))
+    ((SpROk d) (RgROk (sp_bytes d)))))
+
+;; every clean candidate as an artifact fn, ascending rank order
+(fn bx_fns ((is (List Int)) (root Expr) (g Grammar) (apq QName)) RgL
+  (measure (struct is))
+  (match is
+    (Nil (RgLOk Nil))
+    ((Cons i rest)
+     (match (sk_unrank root g i)
+       ((SkEErr msg) (RgLErr msg))
+       ((SkEOk c)
+        (match (bx_fn (bxname i) apq c)
+          ((RgRErr msg) (RgLErr msg))
+          ((RgROk f)
+           (match (bx_fns rest root g apq)
+             ((RgLErr msg) (RgLErr msg))
+             ((RgLOk fs) (RgLOk (Cons f fs)))))))))))
+
+;; the equivalence law ∀xs. f xs = g xs, over given heads
+(fn bx_eqlaw ((nm Symbol) (fq QName) (gq QName)) LLaw
+  (LLaw
+    nm
+    (Goal
+      (Cons (Param (quote xs) (ty_ilist)) Nil)
+      Nil
+      (Equation
+        (Call fq (Cons (FVar (quote xs)) Nil))
+        (Call gq (Cons (FVar (quote xs)) Nil))))))
+
+;; one ceiling claim: member mi provably equals rep ri. The ORACLE
+;; module keeps std append (open in its RUN closure); the TWIN gets
+;; the bx_append-respelled bodies plus bx_append itself — exactly the
+;; artifact's replay closure.
+(fn bx_pair
+  ((m Module)
+   (mc0 Module)
+   (rules0 (List NRule))
+   (apq QName)
+   (root Expr)
+   (g Grammar)
+   (mi Int)
+   (ri Int))
+  PcR
+  (match (sk_unrank root g mi)
+    ((SkEErr msg) (PcRErr msg))
+    ((SkEOk cm)
+     (match (sk_unrank root g ri)
+       ((SkEErr msg) (PcRErr msg))
+       ((SkEOk cr)
+        (let
+          ((gfd
+             (FnDef
+               (catg_q)
+               (Cons (ty_ilist) Nil)
+               (ty_ilist)
+               (rm_e (cat_q) (catg_q) cr)))
+           (gfdt
+             (FnDef
+               (catg_q)
+               (Cons (ty_ilist) Nil)
+               (ty_ilist)
+               (rm_e apq (bxq) (rm_e (cat_q) (catg_q) cr))))
+           (lnm (sym_of_chars (append_int "eq_" (chars_of_sym (bxname ri))))))
+          (match (extend_fn m (cat_fd cm))
+            (None (PcRErr "bracket: candidate qname bound"))
+            ((Some ma)
+             (match (extend_fn ma gfd)
+               (None (PcRErr "bracket: rep qname bound"))
+               ((Some m2)
+                (match (extend_fn mc0 (bx_fd))
+                  (None (PcRErr "bracket: bx_append bound in the twin"))
+                  ((Some mcb)
+                   (match (extend_fn mcb (cat_fd (rm_e apq (bxq) cm)))
+                     (None
+                       (PcRErr "bracket: candidate qname bound in the twin"))
+                     ((Some mca)
+                      (match (extend_fn mca gfdt)
+                        (None (PcRErr "bracket: rep qname bound in the twin"))
+                        ((Some mc2)
+                         (match
+                           (law_verdict
+                             m2
+                             (Cons (NRIh (cat_q) (catg_q) 1) rules0)
+                             (lw_budget)
+                             (lw_efuel)
+                             (lw_cfuel)
+                             (bx_eqlaw lnm (cat_q) (catg_q)))
+                           ((LVdErr msg) (PcRErr msg))
+                           ((LVdUndec)
+                            (PcRErr "bracket: a pair's verdict is not Proven"))
+                           ((LVdRef)
+                            (PcRErr "bracket: a pair's verdict is not Proven"))
+                           ((LVdProv tr)
+                            (match
+                              (pc_claim
+                                mc2
+                                (Some (Pair (cat_q) (catg_q)))
+                                (Cons
+                                  (Pair (qn (bxname mi)) (bxname mi))
+                                  (Cons (Pair (qn (bxname ri)) (bxname ri)) Nil))
+                                (bxname mi)
+                                (bx_eqlaw lnm (cat_q) (catg_q))
+                                (bx_eqlaw lnm (qn (bxname mi)) (qn (bxname ri)))
+                                tr)
+                              ((PtRErr msg) (PcRErr msg))
+                              ((PtROk d)
+                               (PcROk
+                                 (append_int
+                                   "\n"
+                                   (append_int (sp_bytes d) "\n")))))))))))))))))))))))
+
+;; ceiling claims across all multi-member buckets
+(fn bx_eqs
+  ((m Module)
+   (mc0 Module)
+   (rules0 (List NRule))
+   (apq QName)
+   (root Expr)
+   (g Grammar)
+   (bs (List (Pair (List (List Int)) (List Int)))))
+  PcR
+  (measure (struct bs))
+  (match bs
+    (Nil (PcROk ""))
+    ((Cons (Pair _ is) rest)
+     (match is
+       (Nil (bx_eqs m mc0 rules0 apq root g rest))
+       ((Cons rep others)
+        (match (bx_eqs_members m mc0 rules0 apq root g rep others)
+          ((PcRErr msg) (PcRErr msg))
+          ((PcROk claims)
+           (match (bx_eqs m mc0 rules0 apq root g rest)
+             ((PcRErr msg) (PcRErr msg))
+             ((PcROk more) (PcROk (append_int claims more)))))))))))
+
+(fn bx_eqs_members
+  ((m Module)
+   (mc0 Module)
+   (rules0 (List NRule))
+   (apq QName)
+   (root Expr)
+   (g Grammar)
+   (rep Int)
+   (ms (List Int)))
+  PcR
+  (measure (struct ms))
+  (match ms
+    (Nil (PcROk ""))
+    ((Cons mi rest)
+     (match (bx_pair m mc0 rules0 apq root g mi rep)
+       ((PcRErr msg) (PcRErr msg))
+       ((PcROk claim)
+        (match (bx_eqs_members m mc0 rules0 apq root g rep rest)
+          ((PcRErr msg) (PcRErr msg))
+          ((PcROk more) (PcROk (append_int claim more)))))))))
+
+;; ---- the local append twin -----------------------------------------------------
+;; The candidates' task vocabulary cites std/list append, whose impl
+;; is SEALED at check — ground compute cannot cross it, so neither the
+;; floor's vectors nor the eq leaves would reduce. The artifact
+;; therefore carries bx_append — the same body, SAME-MODULE (open at
+;; check) — with ONE bridging claim proving bx_append ≡ append from
+;; the interface's own defining equations. Rendered candidates and the
+;; replay twin both speak bx_append; the oracle keeps std append (its
+;; RUN closure is open — same values either way).
+
+(fn bxq () QName (qn (quote bx_append)))
+
+(fn bx_fd () FnDef
+  (FnDef
+    (bxq)
+    (Cons (ty_ilist) (Cons (ty_ilist) Nil))
+    (ty_ilist)
+    (Match
+      (BVar 1)
+      (Cons
+        (Arm (PCtor (qn (quote Nil)) Nil) (BVar 0))
+        (Cons
+          (Arm
+            (PCtor (qn (quote Cons)) (Cons (PVar) (Cons (PVar) Nil)))
+            (Ctor
+              (qn (quote Cons))
+              (Cons
+                (BVar 1)
+                (Cons (Call (bxq) (Cons (BVar 0) (Cons (BVar 2) Nil))) Nil))))
+          Nil)))))
+
+(fn bx_append_text () (List Int)
+  (append_int
+    "\n(fn bx_append ((x0 (List Int)) (x1 (List Int))) (List Int)\n  (measure (struct x0))\n  (match x0\n    (Nil x1)\n    ((Cons x2 x3) (Cons x2 (bx_append x3 x1)))))\n"
+    "\n(claim bx_append_eq\n  (goal ((a (List Int)) (b (List Int))) () (= (bx_append a b) (append a b)))\n  (induct a\n    ((case Nil\n       (steps\n         ((compute both)\n          (rewrite (lemma append_nil_left) lr both true ())\n          (compute both))\n         refl))\n     (case Cons\n       (k0 k1)\n       (steps\n         ((simp both)\n          (rewrite (lemma append_cons) lr both true ())\n          (rewrite (hyp ih) lr both true ())\n          (simp both))\n         refl)))))\n"))
+
+;; ---- the floor: representatives' vectors, pairwise distinct -----------------
+
+;; fixed scaffold: vector equality and uniqueness, computed by the
+;; kernel at replay
+(fn bx_scaffold () (List Int)
+  (append_int
+    "\n(fn bd_leq ((a (List Int)) (b (List Int))) Bool\n  (measure (struct a))\n  (match a\n    (Nil\n      (match b\n        (Nil True)\n        ((Cons _ _) False)))\n    ((Cons x xs)\n     (match b\n       (Nil False)\n       ((Cons y ys) (if (int_eq x y) (bd_leq xs ys) False))))))\n"
+    (append_int
+      "\n(fn bd_veq ((a (List (List Int))) (b (List (List Int)))) Bool\n  (measure (struct a))\n  (match a\n    (Nil\n      (match b\n        (Nil True)\n        ((Cons _ _) False)))\n    ((Cons x xs)\n     (match b\n       (Nil False)\n       ((Cons y ys) (if (bd_leq x y) (bd_veq xs ys) False))))))\n"
+      (append_int
+        "\n(fn bd_vin ((v (List (List Int))) (vs (List (List (List Int))))) Bool\n  (measure (struct vs))\n  (match vs\n    (Nil False)\n    ((Cons w ws) (if (bd_veq v w) True (bd_vin v ws)))))\n"
+        "\n(fn bd_uniq ((vs (List (List (List Int))))) Bool\n  (measure (struct vs))\n  (match vs\n    (Nil True)\n    ((Cons v ws) (if (bd_vin v ws) False (bd_uniq ws)))))\n"))))
+
+;; a rep's battery vector as source: (Cons (cat1_cR IN0) (Cons … Nil))
+(fn bx_vec_calls ((r Int) (ins (List (List Int)))) SpR
+  (measure (struct ins))
+  (match ins
+    (Nil (SpROk (dsym (quote Nil))))
+    ((Cons i rest)
+     (match
+       (sp_e
+         (Cons
+           (Pair (qn (bxname r)) (bxname r))
+           (Cons
+             (Pair (qn (quote Nil)) (quote Nil))
+             (Cons (Pair (qn (quote Cons)) (quote Cons)) Nil)))
+         0
+         (Call (qn (bxname r)) (Cons (intlist_to_expr i) Nil)))
+       ((SpRErr msg) (SpRErr msg))
+       ((SpROk cd)
+        (match (bx_vec_calls r rest)
+          ((SpRErr msg) (SpRErr msg))
+          ((SpROk restd)
+           (SpROk (sp_form (DStr "Cons") (Cons cd (Cons restd Nil)))))))))))
+
+(fn bx_vectors ((reps (List Int)) (ins (List (List Int)))) SpR
+  (measure (struct reps))
+  (match reps
+    (Nil (SpROk (dsym (quote Nil))))
+    ((Cons r rest)
+     (match (bx_vec_calls r ins)
+       ((SpRErr msg) (SpRErr msg))
+       ((SpROk vd)
+        (match (bx_vectors rest ins)
+          ((SpRErr msg) (SpRErr msg))
+          ((SpROk restd)
+           (SpROk (sp_form (DStr "Cons") (Cons vd (Cons restd Nil)))))))))))
+
+(fn bx_reps ((bs (List (Pair (List (List Int)) (List Int))))) (List Int)
+  (measure (struct bs))
+  (match bs
+    (Nil Nil)
+    ((Cons (Pair _ is) rest)
+     (match is
+       (Nil (bx_reps rest))
+       ((Cons rep _) (Cons rep (bx_reps rest)))))))
+
+(fn bx_floor ((reps (List Int)) (ins (List (List Int)))) SpR
+  (match (bx_vectors reps ins)
+    ((SpRErr msg) (SpRErr msg))
+    ((SpROk vd)
+     (SpROk
+       (dcat3
+         (DStr "\n(fn bracket_vectors () (List (List (List Int)))\n  ")
+         vd
+         (DStr
+           ")\n\n(claim bracket_floor\n  (goal () () (= (bd_uniq (bracket_vectors)) True))\n  (steps ((compute both)) refl))\n"))))))
+
+(fn bx_header () (List Int)
+  (append_int
+    ";;; tools/search/gen/cat_bracket.shard -- GENERATED by tools/search/\n"
+    (append_int
+      ";;; laws.shard (bracket mode); DO NOT EDIT. Regen-gated byte-identical\n"
+      (append_int
+        ";;; in run_corpus.sh. THE CERTIFIED CATALOG BRACKET at rung 1: all 17\n"
+        (append_int
+          ";;; cn_e-clean candidates as fns (rank-addressed names); the FLOOR (the\n"
+          (append_int
+            ";;; 13 bucket representatives' battery vectors are pairwise distinct —\n"
+            (append_int
+              ";;; one kernel-computed claim) and the CEILING (each non-representative\n"
+              (append_int
+                ";;; provably equals its bucket's minimal member — induct proofs with\n"
+                (append_int
+                  ";;; (hyp ih) citations, rendered from the S4a oracle's traces under\n"
+                  (append_int
+                    ";;; the D5 catalog license). 17 clean = EXACTLY 13 functions, checked\n"
+                    (append_int
+                      ";;; by the kernel on every corpus sweep.\n"
+                      (append_int
+                        "\n"
+                        (append_int
+                          "(import \"../../../kernel/stdlib.shard\")\n"
+                          (append_int
+                            "(import \"../../../std/list\")\n"
+                            (append_int
+                              "\n"
+                              (append_int
+                                "(use (:: std list append))\n"
+                                ";; interface lemma for the rendered proofs' surface-\n;; discipline tail (citations resolve via use scope)\n(use (:: std list append_nil_left))\n(use (:: std list append_cons))\n"))))))))))))))))
+
+(fn bx_bytes ((m Module) (mc0 Module) (apq QName) (rules0 (List NRule))) SyR
+  (match (cat_grammar (bx_rung) apq)
+    ((CatRErr _) (SyRErr "bracket: grammar"))
+    ((CatROk es _)
+     (let ((root (hole 0)) (g (Grammar es)))
+       (match (sk_count root g)
+         ((SkCErr msg) (SyRErr msg))
+         ((SkCOk total)
+          (match (bx_sweep total total root g m (cat_battery) Nil Nil)
+            ((BxSErr msg) (SyRErr msg))
+            ((BxSOk bs clean)
+             (match (bx_fns clean root g apq)
+               ((RgLErr msg) (SyRErr msg))
+               ((RgLOk fs)
+                (match (bx_floor (bx_reps bs) (cat_battery))
+                  ((SpRErr msg) (SyRErr msg))
+                  ((SpROk floord)
+                   (match (bx_eqs m mc0 rules0 apq root g bs)
+                     ((PcRErr msg) (SyRErr msg))
+                     ((PcROk eqs)
+                      (match
+                        (fmt
+                          (append_int
+                            (bx_header)
+                            (append_int
+                              (rg_body fs)
+                              (append_int
+                                (bx_append_text)
+                                (append_int
+                                  (bx_scaffold)
+                                  (append_int (sp_bytes floord) eqs))))))
+                        (None
+                          (SyRErr "bracket: generated text is not formattable"))
+                        ((Some bytes) (SyROk bytes)))))))))))))))))
+
+(fn bracket_go ((m Module) (apq QName) (w World)) (Pair SxR World)
+  (match (mk_rules m)
+    (None (Pair (SxRErr "bracket: append/Nil/Cons not in the closure") w))
+    ((Some rules)
+     (match (load_twin w)
+       ((Pair twr w2)
+        (match twr
+          ((TwRErr msg) (Pair (SxRErr msg) w2))
+          ((TwROk mc0)
+           (match (bx_bytes m mc0 apq rules)
+             ((SyRErr msg) (Pair (SxRErr msg) w2))
+             ((SyROk bytes) (Pair (SxROk bytes) w2))))))))))
+
+(fn run_bracket_emit ((m Module) (apq QName) (w World)) World
+  (match (bracket_go m apq w)
+    ((Pair sx w2)
+     (match sx
+       ((SxRErr msg)
+        (exit 1 (write (append_int "BRACKET FAIL " (append_int msg "\n")) w2)))
+       ((SxROk bytes)
+        (match (write_file (bx_path) bytes w2)
+          ((Pair ok w3)
+           (if ok (write "BRACKET EMITTED\n" w3)
+           (exit 1 (write "BRACKET FAIL: write refused\n" w3))))))))))
+
+(fn run_bracket_regen ((m Module) (apq QName) (w World)) World
+  (match (bracket_go m apq w)
+    ((Pair sx w2)
+     (match sx
+       ((SxRErr msg)
+        (exit 1 (write (append_int "BRACKET FAIL " (append_int msg "\n")) w2)))
+       ((SxROk bytes)
+        (match (read_file (bx_path) w2)
+          ((Pair ob w3)
+           (match ob
+             (None
+               (exit
+                 1
+                 (write
+                   "BRACKET FAIL: no committed artifact (run bracket)\n"
+                   w3)))
+             ((Some committed)
+              (if (bytes_eq bytes committed) (write "BRACKET REGEN OK\n" w3)
+              (exit
+                1
+                (write
+                  "BRACKET FAIL: regenerated bytes differ from the artifact\n"
+                  w3))))))))))))
+
 ;; ---- CLI ---------------------------------------------------------------------
 
 ;; args: none -> the pinned suite (self, g3 at rungs 1 and 2, traces,
-;; artifact regen); "self" -> the self-pin alone; "g3 N" -> one rung;
-;; "trace" -> traces; "emit" -> rewrite the generated artifact
+;; both artifact regens); "self" -> the self-pin alone; "g3 N" -> one
+;; rung; "trace" -> traces; "emit" / "bracket" -> rewrite an artifact
 (fn lw_args ((as (List (List Int))) (m Module) (apq QName) (w World)) World
   (match as
     (Nil
-      (run_regen
+      (run_bracket_regen
         m
         apq
-        (run_trace m apq (run_g3 m apq 2 (run_g3 m apq 1 (run_self m w))))))
+        (run_regen
+          m
+          apq
+          (run_trace m apq (run_g3 m apq 2 (run_g3 m apq 1 (run_self m w)))))))
     ((Cons a rest)
      (if (int_list_eq a "self")
        (match rest
          (Nil (run_self m w))
-         (_ (exit 2 (write "usage: laws [self | g3 N | trace | emit]\n" w))))
+         (_
+           (exit
+             2
+             (write "usage: laws [self | g3 N | trace | emit | bracket]\n" w))))
      (if (int_list_eq a "g3")
        (match rest
          ((Cons ds Nil)
           (match (parse_nat ds)
             (None
-              (exit 2 (write "usage: laws [self | g3 N | trace | emit]\n" w)))
+              (exit
+                2
+                (write "usage: laws [self | g3 N | trace | emit | bracket]\n" w)))
             ((Some d) (run_g3 m apq d w))))
-         (_ (exit 2 (write "usage: laws [self | g3 N | trace | emit]\n" w))))
+         (_
+           (exit
+             2
+             (write "usage: laws [self | g3 N | trace | emit | bracket]\n" w))))
      (if (int_list_eq a "trace")
        (match rest
          (Nil (run_trace m apq w))
-         (_ (exit 2 (write "usage: laws [self | g3 N | trace | emit]\n" w))))
+         (_
+           (exit
+             2
+             (write "usage: laws [self | g3 N | trace | emit | bracket]\n" w))))
      (if (int_list_eq a "emit")
        (match rest
          (Nil (run_emit m apq w))
-         (_ (exit 2 (write "usage: laws [self | g3 N | trace | emit]\n" w))))
-       (exit 2 (write "usage: laws [self | g3 N | trace | emit]\n" w)))))))))
+         (_
+           (exit
+             2
+             (write "usage: laws [self | g3 N | trace | emit | bracket]\n" w))))
+     (if (int_list_eq a "bracket")
+       (match rest
+         (Nil (run_bracket_emit m apq w))
+         (_
+           (exit
+             2
+             (write "usage: laws [self | g3 N | trace | emit | bracket]\n" w))))
+       (exit 2 (write "usage: laws [self | g3 N | trace | emit | bracket]\n" w))))))))))
 
 (fn main ((w World)) World
   (match (load_run_module "tools/search/rev_obj.shard" w)

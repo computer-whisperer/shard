@@ -35,8 +35,9 @@
 ;;;     ground engine G3 gates against.
 ;;;   - fuel exhaustion is EvROut, mapped to Undecided by consumers —
 ;;;     NEVER Refuted (sound incompleteness, reported).
-;;;   - the D5 induction licenses are NOT in this file; they land
-;;;     with their consumers (catalog refinement, compiler goals).
+;;;   - D5 license (ii), the catalog license, is the NRIh rule value
+;;;     (see NRule); license (i), the compiler-arc license, lands
+;;;     with its consumer (compiler goals).
 ;;;
 ;;; Type confusion (an int meeting a data value, a ctor pattern on an
 ;;; int) is a loud Err — well-typed goals cannot produce it, so it
@@ -72,8 +73,20 @@
   (SVCtor QName (List SV))  ; ctor value (fields are values)
   (SVNeu QName (List SV) Int))  ; stuck call: head, arg values, blocker slot
 
-;; the D4 rule table — passed-in data, never baked in
-(type NRule (NRAppend QName QName QName))  ; append, Nil, Cons qnames
+;; the D4 rule table — passed-in data, never baked in.
+;; NRAppend: the append four (formation-time canon).
+;; NRIh: THE D5 CATALOG LICENSE (license ii) — for an equality goal
+;; ∀xs. p xs = q xs, a stuck call (p X) whose subject X is an
+;; undecided slot ALLOCATED BY CASE-SPLITTING (slot id >= the min
+;; field — goal binders take the ids below it, split shapes all the
+;; ids above) EVALUATES as (q X) instead: X is a strict subterm of
+;; the goal binder, so the citation is strong structural induction —
+;; the hypothesis, never the goal proving itself. One direction only
+;; (p -> q); a search heuristic whose rendered proof faces the
+;; kernel's own induct form, G4 the judge.
+(type NRule
+  (NRAppend QName QName QName)  ; append, Nil, Cons qnames
+  (NRIh QName QName Int))  ; p, q, min split-slot id
 
 ;; evaluator results (Err first: guard-style matching is decl order)
 (type EvR
@@ -154,7 +167,19 @@
     (Nil None)
     ((Cons r rest)
      (match r
-       ((NRAppend apq _ _) (if (qname_eq apq q) (Some r) (nr_find q rest)))))))
+       ((NRAppend apq _ _) (if (qname_eq apq q) (Some r) (nr_find q rest)))
+       ((NRIh _ _ _) (nr_find q rest))))))
+
+;; the catalog license's (q, min) for head p, if licensed
+(fn nr_ih ((p QName) (rules (List NRule))) (Option (Pair QName Int))
+  (measure (struct rules))
+  (match rules
+    (Nil None)
+    ((Cons r rest)
+     (match r
+       ((NRAppend _ _ _) (nr_ih p rest))
+       ((NRIh ip iq imin)
+        (if (qname_eq ip p) (Some (Pair iq imin)) (nr_ih p rest)))))))
 
 ;; ---- ground codecs (mutual structural walks) -------------------------------
 
@@ -511,6 +536,29 @@
 
 ;; neutral formation: the rule table's chance to normalize
 (fn sv_form
+  ((fuel Int)
+   (m Module)
+   (rules (List NRule))
+   (q QName)
+   (args (List SV))
+   (s Int))
+  EvR
+  (measure fuel)
+  (if (lt fuel 1) (EvROut)
+  (match (nr_ih q rules)
+    (None (sv_form_plain (- fuel 1) m rules q args s))
+    ((Some (Pair iq imin))
+     ;; the catalog license: a licensed head over a SPLIT-ALLOCATED
+     ;; slot (id >= imin — a strict subterm of the goal binder)
+     ;; evaluates as its partner: the induction hypothesis, applied
+     ;; at formation
+     (match args
+       ((Cons (SVData ds) Nil)
+        (if (le imin ds) (sv_call (- fuel 1) m rules iq args)
+        (sv_form_plain (- fuel 1) m rules q args s)))
+       (_ (sv_form_plain (- fuel 1) m rules q args s)))))))
+
+(fn sv_form_plain
   ((fuel Int)
    (m Module)
    (rules (List NRule))
