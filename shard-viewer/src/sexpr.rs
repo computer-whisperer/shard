@@ -58,16 +58,26 @@ impl std::fmt::Display for ParseError {
 
 /// Parse a whole source file into its sequence of top-level forms.
 pub fn parse_top(src: &str) -> Result<Vec<Sexpr>, ParseError> {
-    Ok(parse_top_spanned(src)?
-        .into_iter()
-        .map(|(e, _)| e)
-        .collect())
+    Ok(parse_top_spanned(src)?.into_iter().map(|f| f.expr).collect())
 }
 
-/// Like [`parse_top`], but pairs each top-level form with the exact source
-/// text it was parsed from (verbatim, comments between forms excluded). Used to
-/// show a fn's real source in the viewer.
-pub fn parse_top_spanned(src: &str) -> Result<Vec<(Sexpr, String)>, ParseError> {
+/// A parsed top-level form: the expr, the exact source text it was parsed
+/// from (verbatim, comments between forms excluded), and the run of
+/// full-line comments sitting directly above it.
+pub struct TopForm {
+    pub expr: Sexpr,
+    pub src: String,
+    /// Verbatim comment lines (`;` included) from the contiguous comment
+    /// block immediately above the form: a blank line resets the block, and
+    /// a trailing comment on the *previous form's* closing line is excluded.
+    /// Purely syntactic — which lines count as a docstring is the caller's
+    /// policy (see `model::distill_doc`).
+    pub lead_comments: Vec<String>,
+}
+
+/// Like [`parse_top`], but as [`TopForm`]s — source spans + lead comments.
+/// Used to show a fn's real source in the viewer and to harvest docstrings.
+pub fn parse_top_spanned(src: &str) -> Result<Vec<TopForm>, ParseError> {
     let mut p = Parser {
         chars: src.chars().collect(),
         pos: 0,
@@ -75,14 +85,50 @@ pub fn parse_top_spanned(src: &str) -> Result<Vec<(Sexpr, String)>, ParseError> 
     };
     let mut forms = Vec::new();
     loop {
-        p.skip_trivia();
+        // Walk the trivia between forms by line, collecting comment lines.
+        // `same_line` is true while we're still on the line the previous
+        // form ended on — a trailing comment there belongs to that form,
+        // not to the next one.
+        let mut pending: Vec<String> = Vec::new();
+        let mut line_had_comment = false;
+        let mut same_line = !forms.is_empty();
+        loop {
+            match p.peek() {
+                Some('\n') => {
+                    if !line_had_comment && !same_line {
+                        pending.clear(); // blank line breaks the block
+                    }
+                    line_had_comment = false;
+                    same_line = false;
+                    p.bump();
+                }
+                Some(';') => {
+                    let mut text = String::new();
+                    while let Some(c) = p.peek() {
+                        if c == '\n' {
+                            break;
+                        }
+                        text.push(c);
+                        p.bump();
+                    }
+                    if !same_line {
+                        pending.push(text);
+                        line_had_comment = true;
+                    }
+                }
+                Some(c) if c.is_whitespace() => {
+                    p.bump();
+                }
+                _ => break,
+            }
+        }
         if p.pos >= p.chars.len() {
             break;
         }
         let start = p.pos;
         let expr = p.read_expr()?;
         let text: String = p.chars[start..p.pos].iter().collect();
-        forms.push((expr, text));
+        forms.push(TopForm { expr, src: text, lead_comments: pending });
     }
     Ok(forms)
 }

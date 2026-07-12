@@ -7,6 +7,7 @@
 pub mod flow;
 pub mod layout;
 pub mod model;
+pub mod proof;
 pub mod scope;
 pub mod sexpr;
 pub mod view;

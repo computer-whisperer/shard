@@ -11,13 +11,18 @@
 //! Pipeline (left-to-right layering):
 //!   1. SCC condensation + longest-path layering, then an edge-length-minimizing
 //!      balancing pass (cycles share a column; sources/sinks slide toward their
-//!      neighbours so long edges don't spawn needless dummy chains)
-//!   2. dummy-node insertion for edges spanning more than one layer
+//!      neighbours so long edges don't spawn needless dummy chains), then a
+//!      height cap that splits overfull layers into sub-columns (fan-heavy
+//!      graphs otherwise pile their leaves into one receipt-shaped column)
+//!   2. dummy-node insertion for edges spanning more than one layer — for the
+//!      *ordering* phase only
 //!   3. barycenter crossing reduction (iterated up/down sweeps)
-//!   4. priority coordinate assignment (pull nodes toward neighbours, no overlap;
-//!      dummies take a thin gap and win ties so long-edge chains run straight)
-//!   5. port resolution + polyline edge routing, then a bounds pass that re-homes
-//!      the whole drawing — edges included — into a positive box
+//!   4. priority coordinate assignment over the cards alone (pull toward graph
+//!      neighbours, no overlap), column-anchored after every sweep so the
+//!      sweeps' sheared/staircase fixpoints can't survive; edges never reserve
+//!      vertical slots (they draw *under* the card layer)
+//!   5. port resolution + direct port-to-port edge routing, then a bounds pass
+//!      that re-homes the whole drawing — edges included — into a positive box
 //!
 //! [ports]: GNode::n_in
 
@@ -37,6 +42,11 @@ pub struct GNode {
     /// `if` / `match` / `let`). Unused by the call-graph view; reserved so the
     /// dataflow view can plug in without an engine rewrite.
     pub sub: Option<Box<Graph>>,
+    /// Pack-order bias: a weakly-connected component containing a lead node
+    /// packs *first* (before tallest-first ordering), so it takes the
+    /// top-left slot of the drawing. The Map's file-doc card rides this —
+    /// the file's own account should be the first thing the eye lands on.
+    pub lead: bool,
 }
 
 impl GNode {
@@ -48,6 +58,7 @@ impl GNode {
             n_in: 1,
             n_out: 1,
             sub: None,
+            lead: false,
         }
     }
 }
@@ -91,6 +102,36 @@ impl Default for LayoutConfig {
     }
 }
 
+impl LayoutConfig {
+    /// Gaps that scale with the median node size of the graph being laid out.
+    /// One absolute gap can't serve every level of the Map — 22px between
+    /// 34px name boxes is generous, between 30,000px file boxes it's contact.
+    /// The classic constants are FLOORS (graphs of small nodes — Methods name
+    /// boxes, a file of little claim slabs — keep today's look exactly); the
+    /// proportional term takes over when the children are big, so file boxes
+    /// inside a dir and dirs inside the project earn whitespace visible at
+    /// the zoom that level is actually read at. Margin is box padding, not
+    /// spacing — damped by child count so a level holding one huge child
+    /// hugs it instead of tripling around it.
+    pub fn for_nodes(nodes: &[GNode]) -> LayoutConfig {
+        let med = |mut v: Vec<f32>| -> f32 {
+            if v.is_empty() {
+                return 0.0;
+            }
+            let mid = v.len() / 2;
+            *v.select_nth_unstable_by(mid, |a, b| a.total_cmp(b)).1
+        };
+        let med_w = med(nodes.iter().map(|n| n.w).collect());
+        let med_h = med(nodes.iter().map(|n| n.h).collect());
+        let damp = 1.0 - 1.0 / (nodes.len().max(1) as f32);
+        LayoutConfig {
+            layer_gap: (med_w * 0.35).max(90.0),
+            node_gap: (med_h * 0.35).max(22.0),
+            margin: (med_h * 0.2 * damp).max(40.0),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct PlacedNode {
     pub x: f32,
@@ -124,38 +165,193 @@ pub struct Layout {
     pub height: f32,
 }
 
-const DUMMY_H: f32 = 8.0;
-/// Vertical breathing room reserved beside a routing dummy. Far smaller than
-/// `node_gap`: dummies are 1px-thin waypoints, and long-edge-heavy call graphs
-/// spawn more dummies than real nodes, so charging each a full node gap is what
-/// inflated tall files to a ~10000px strip.
-const DUMMY_GAP: f32 = 5.0;
 const CROSSING_SWEEPS: usize = 8;
 const COORD_SWEEPS: usize = 6;
 
+/// Aspect the component-packing pass steers the overall drawing toward
+/// (screen-shaped). Layering itself is left-to-right; a graph of many weakly
+/// connected pieces would otherwise stack them all into layer 0 — one enormous
+/// column whose fit zoom is uselessly small.
+const PACK_ASPECT: f32 = 1.6;
+
 /// Lay out `graph`. The result's `nodes`/`edges` are index-aligned with the
 /// input so callers can map placement back to their own data.
+///
+/// The graph's weakly-connected components are laid out independently and
+/// shelf-packed toward [`PACK_ASPECT`]; a connected graph takes the layered
+/// pipeline directly.
 pub fn layout(graph: &Graph, cfg: &LayoutConfig) -> Layout {
+    let comps = components(graph);
+    if comps.len() <= 1 {
+        return layout_connected(graph, cfg);
+    }
+
+    // Lay each component out with a slim margin (the pack gap spaces them; the
+    // real margin goes around the packed whole), tracking which original node /
+    // edge indices each sub-layout speaks about.
+    let sub_cfg = LayoutConfig { margin: cfg.node_gap * 0.5, ..*cfg };
+    let mut comp_of: Vec<usize> = vec![0; graph.nodes.len()];
+    let mut node_of: Vec<usize> = vec![0; graph.nodes.len()]; // orig node -> comp-local idx
+    for (c, comp) in comps.iter().enumerate() {
+        for (li, &g) in comp.iter().enumerate() {
+            comp_of[g] = c;
+            node_of[g] = li;
+        }
+    }
+    let mut placed: Vec<(Layout, Vec<usize>, Vec<usize>)> = Vec::with_capacity(comps.len());
+    for (c, comp) in comps.iter().enumerate() {
+        let mut edge_ids = Vec::new();
+        let mut edges = Vec::new();
+        for (ei, e) in graph.edges.iter().enumerate() {
+            if comp_of[e.from.node] == c {
+                edge_ids.push(ei);
+                edges.push(GEdge {
+                    from: EndPoint { node: node_of[e.from.node], port: e.from.port },
+                    to: EndPoint { node: node_of[e.to.node], port: e.to.port },
+                });
+            }
+        }
+        let nodes = comp.iter().map(|&g| graph.nodes[g].clone()).collect();
+        placed.push((layout_connected(&Graph { nodes, edges }, &sub_cfg), comp.clone(), edge_ids));
+    }
+
+    // Shelf-pack the component boxes: rows filled left-to-right up to a target
+    // width chosen so the packed area lands near PACK_ASPECT (never narrower
+    // than the widest component). Tallest-first keeps shelves dense; lead
+    // components (see [`GNode::lead`]) jump the order and take the top-left
+    // slot — they pay a thin under-used column, which is the price of a
+    // deterministic reading position.
+    let total_area: f32 = placed.iter().map(|(l, _, _)| l.width * l.height).sum();
+    let widest = placed.iter().map(|(l, _, _)| l.width).fold(0.0, f32::max);
+    let target_w = (total_area * PACK_ASPECT).sqrt().max(widest);
+    let leads: Vec<bool> = placed
+        .iter()
+        .map(|(_, comp, _)| comp.iter().any(|&g| graph.nodes[g].lead))
+        .collect();
+    let mut order: Vec<usize> = (0..placed.len()).collect();
+    order.sort_by(|&a, &b| {
+        leads[b]
+            .cmp(&leads[a])
+            .then(placed[b].0.height.total_cmp(&placed[a].0.height))
+    });
+
+    let mut out = Layout {
+        nodes: vec![PlacedNode::default(); graph.nodes.len()],
+        edges: vec![RoutedEdge { points: Vec::new(), back: false }; graph.edges.len()],
+        width: 0.0,
+        height: 0.0,
+    };
+    let gap = cfg.node_gap;
+    let (mut x, mut shelf_y, mut shelf_h) = (cfg.margin, cfg.margin, 0.0_f32);
+    // Within a shelf, short components stack *vertically* into columns bounded
+    // by the shelf height before a new column advances x. Tallest-first order
+    // means the shelf-setter stands alone and everything shorter fills the
+    // space beside it — without this, one dominant component plus a handful of
+    // singletons reads as a giant with a thin trail floating at its top right,
+    // paying width for area that's already there.
+    let (mut col_y, mut col_w) = (cfg.margin, 0.0_f32);
+    for &c in &order {
+        let (lay, comp, edge_ids) = &placed[c];
+        if col_y > shelf_y && col_y + lay.height > shelf_y + shelf_h {
+            x += col_w + gap;
+            col_y = shelf_y;
+            col_w = 0.0;
+        }
+        if x > cfg.margin && x + lay.width > cfg.margin + target_w {
+            x = cfg.margin;
+            shelf_y += shelf_h + gap;
+            shelf_h = 0.0;
+            col_y = shelf_y;
+            col_w = 0.0;
+        }
+        let y = col_y;
+        for (li, &g) in comp.iter().enumerate() {
+            let mut pn = lay.nodes[li].clone();
+            pn.x += x;
+            pn.y += y;
+            for p in pn.in_ports.iter_mut().chain(pn.out_ports.iter_mut()) {
+                p.0 += x;
+                p.1 += y;
+            }
+            out.nodes[g] = pn;
+        }
+        for (li, &ei) in edge_ids.iter().enumerate() {
+            let mut re = lay.edges[li].clone();
+            for p in &mut re.points {
+                p.0 += x;
+                p.1 += y;
+            }
+            out.edges[ei] = re;
+        }
+        out.width = out.width.max(x + lay.width + cfg.margin);
+        out.height = out.height.max(y + lay.height + cfg.margin);
+        shelf_h = shelf_h.max(lay.height);
+        col_w = col_w.max(lay.width);
+        col_y += lay.height + gap;
+    }
+    out
+}
+
+/// The graph's weakly-connected components (each a sorted list of node ids),
+/// in first-seen order.
+fn components(graph: &Graph) -> Vec<Vec<usize>> {
+    let n = graph.nodes.len();
+    let mut adj = vec![Vec::new(); n];
+    for e in &graph.edges {
+        adj[e.from.node].push(e.to.node);
+        adj[e.to.node].push(e.from.node);
+    }
+    let mut comp = vec![usize::MAX; n];
+    let mut out: Vec<Vec<usize>> = Vec::new();
+    for start in 0..n {
+        if comp[start] != usize::MAX {
+            continue;
+        }
+        let c = out.len();
+        let mut members = vec![start];
+        comp[start] = c;
+        let mut stack = vec![start];
+        while let Some(v) = stack.pop() {
+            for &w in &adj[v] {
+                if comp[w] == usize::MAX {
+                    comp[w] = c;
+                    members.push(w);
+                    stack.push(w);
+                }
+            }
+        }
+        members.sort_unstable();
+        out.push(members);
+    }
+    out
+}
+
+/// The layered pipeline over one weakly-connected graph (the historical
+/// `layout` body; [`layout`] wraps it with component packing).
+fn layout_connected(graph: &Graph, cfg: &LayoutConfig) -> Layout {
     let n = graph.nodes.len();
     if n == 0 {
         return Layout::default();
     }
 
-    let node_layer = assign_layers(n, &node_pairs(&graph.edges));
+    let pairs = node_pairs(&graph.edges);
+    let mut node_layer = assign_layers(n, &pairs);
+    cap_layer_heights(&graph.nodes, &pairs, cfg, &mut node_layer);
     let nlayers = node_layer.iter().copied().max().unwrap_or(0) + 1;
 
     // ---- vertices: real nodes (0..n) + routing dummies (n..) ----
+    // Dummies exist for *ordering only* (crossing reduction sees long edges
+    // pass through intermediate columns); coordinates and routing ignore
+    // them — edges draw under the card layer (see `placed_graph`), so chains
+    // don't reserve vertical slots between cards. Sharing one stack used to
+    // fence low-priority cards thousands of px from their neighbours (the
+    // stranded-satellite artifact) and charge every column a dummy tax.
     let mut vlayer: Vec<usize> = node_layer.clone();
-    let mut vh: Vec<f32> = graph.nodes.iter().map(|nd| nd.h).collect();
-    let mut vw: Vec<f32> = graph.nodes.iter().map(|nd| nd.w).collect();
+    let vh: Vec<f32> = graph.nodes.iter().map(|nd| nd.h).collect();
 
-    // Per-edge routing chain of vertex ids (source .. dummies .. target), and
-    // the consecutive-layer links that the ordering/coordinate phases consume.
-    struct Route {
-        chain: Vec<usize>,
-        flat: bool,
-    }
-    let mut routes: Vec<Route> = Vec::with_capacity(graph.edges.len());
+    // Per-edge flat flag (same-column SCC edge), and the consecutive-layer
+    // links the ordering phase consumes.
+    let mut flats: Vec<bool> = Vec::with_capacity(graph.edges.len());
     let mut links: Vec<(usize, usize)> = Vec::new(); // (upper-layer vertex, lower-layer vertex)
 
     for e in &graph.edges {
@@ -164,10 +360,7 @@ pub fn layout(graph: &Graph, cfg: &LayoutConfig) -> Layout {
         if la == lb {
             // Intra-SCC (same column) edge — routed directly, kept out of the
             // layered ordering machinery.
-            routes.push(Route {
-                chain: vec![a, b],
-                flat: true,
-            });
+            flats.push(true);
             continue;
         }
         // SCC condensation guarantees la < lb for cross-component edges, but we
@@ -178,8 +371,6 @@ pub fn layout(graph: &Graph, cfg: &LayoutConfig) -> Layout {
             .map(|l| {
                 let d = vlayer.len();
                 vlayer.push(l);
-                vh.push(DUMMY_H);
-                vw.push(0.0);
                 d
             })
             .collect();
@@ -196,7 +387,7 @@ pub fn layout(graph: &Graph, cfg: &LayoutConfig) -> Layout {
                 links.push((v, u));
             }
         }
-        routes.push(Route { chain, flat: false });
+        flats.push(false);
     }
 
     let nv = vlayer.len();
@@ -205,7 +396,7 @@ pub fn layout(graph: &Graph, cfg: &LayoutConfig) -> Layout {
         layers[vlayer[v]].push(v);
     }
 
-    // Up/down adjacency between adjacent layers (for ordering + coordinates).
+    // Up/down adjacency between adjacent layers (for ordering).
     let mut up = vec![Vec::new(); nv];
     let mut down = vec![Vec::new(); nv];
     for &(u, v) in &links {
@@ -217,8 +408,8 @@ pub fn layout(graph: &Graph, cfg: &LayoutConfig) -> Layout {
 
     // ---- X: one column per layer, width = widest node in the layer ----
     let mut layer_w = vec![0.0_f32; nlayers];
-    for v in 0..nv {
-        layer_w[vlayer[v]] = layer_w[vlayer[v]].max(vw[v]);
+    for i in 0..n {
+        layer_w[node_layer[i]] = layer_w[node_layer[i]].max(graph.nodes[i].w);
     }
     let mut layer_x = vec![0.0_f32; nlayers];
     let mut acc = cfg.margin;
@@ -227,7 +418,7 @@ pub fn layout(graph: &Graph, cfg: &LayoutConfig) -> Layout {
         acc += layer_w[l] + cfg.layer_gap;
     }
 
-    let vy = assign_y(&layers, &up, &down, &vh, n, cfg);
+    let vy = assign_y(&layers, &graph.edges, &vh, n, cfg);
 
     // ---- assemble placed nodes ----
     let mut placed = vec![PlacedNode::default(); n];
@@ -243,11 +434,21 @@ pub fn layout(graph: &Graph, cfg: &LayoutConfig) -> Layout {
         };
     }
 
+    // ---- spread shared ports ----
+    // A single-port node (the call-graph shape) funnels every incoming edge
+    // to one point on its left edge, stacking the arrowheads into a smear at
+    // any real in-degree. Fan the endpoints of such edges along the node
+    // edge instead, ordered by the counterpart's vertical position so the
+    // fan doesn't cross itself at the port. Flat (same-column return) edges
+    // keep their right-side entry and are excluded.
+    let (starts, ends) = spread_ports(graph, &flats, &placed);
+
     // ---- route edges ----
-    let mut edges: Vec<RoutedEdge> = routes
+    let mut edges: Vec<RoutedEdge> = flats
         .iter()
         .zip(&graph.edges)
-        .map(|(r, e)| route_edge(r.flat, &r.chain, e, &placed, &layer_x, &vlayer, &vy, cfg))
+        .enumerate()
+        .map(|(ei, (&flat, e))| route_edge(flat, e, &placed, cfg, starts[ei], ends[ei]))
         .collect();
 
     // Bounds must cover the routed edges too, not just the node rects: flat
@@ -309,27 +510,71 @@ fn port_positions(edge_x: f32, y: f32, h: f32, count: usize) -> Vec<(f32, f32)> 
         .collect()
 }
 
-#[allow(clippy::too_many_arguments)]
+/// A per-edge endpoint override: `None` keeps the declared port.
+type PortOverrides = Vec<Option<(f32, f32)>>;
+
+/// Per-edge endpoint overrides fanning shared single ports (see the call
+/// site). Returns `(starts, ends)` index-aligned with `graph.edges`.
+fn spread_ports(
+    graph: &Graph,
+    flat: &[bool],
+    placed: &[PlacedNode],
+) -> (PortOverrides, PortOverrides) {
+    let ne = graph.edges.len();
+    let (mut starts, mut ends): (PortOverrides, PortOverrides) = (vec![None; ne], vec![None; ne]);
+    let mut incoming: Vec<Vec<usize>> = vec![Vec::new(); graph.nodes.len()];
+    let mut outgoing: Vec<Vec<usize>> = vec![Vec::new(); graph.nodes.len()];
+    for (ei, e) in graph.edges.iter().enumerate() {
+        if flat[ei] {
+            continue;
+        }
+        incoming[e.to.node].push(ei);
+        outgoing[e.from.node].push(ei);
+    }
+    let mid_y = |i: usize| placed[i].y + placed[i].h / 2.0;
+    for (i, list) in incoming.iter_mut().enumerate() {
+        if graph.nodes[i].n_in != 1 || list.len() < 2 {
+            continue;
+        }
+        list.sort_by(|&a, &b| mid_y(graph.edges[a].from.node).total_cmp(&mid_y(graph.edges[b].from.node)));
+        for (k, &ei) in list.iter().enumerate() {
+            let p = &placed[i];
+            ends[ei] = Some((p.x, p.y + p.h * (k as f32 + 1.0) / (list.len() as f32 + 1.0)));
+        }
+    }
+    for (i, list) in outgoing.iter_mut().enumerate() {
+        if graph.nodes[i].n_out != 1 || list.len() < 2 {
+            continue;
+        }
+        list.sort_by(|&a, &b| mid_y(graph.edges[a].to.node).total_cmp(&mid_y(graph.edges[b].to.node)));
+        for (k, &ei) in list.iter().enumerate() {
+            let p = &placed[i];
+            starts[ei] = Some((p.x + p.w, p.y + p.h * (k as f32 + 1.0) / (list.len() as f32 + 1.0)));
+        }
+    }
+    (starts, ends)
+}
+
 fn route_edge(
     flat: bool,
-    chain: &[usize],
     e: &GEdge,
     placed: &[PlacedNode],
-    layer_x: &[f32],
-    vlayer: &[usize],
-    vy: &[f32],
     cfg: &LayoutConfig,
+    start_override: Option<(f32, f32)>,
+    end_override: Option<(f32, f32)>,
 ) -> RoutedEdge {
     let src = &placed[e.from.node];
     let dst = &placed[e.to.node];
-    let start = *src
-        .out_ports
-        .get(e.from.port)
-        .unwrap_or(&(src.x + src.w, src.y + src.h / 2.0));
-    let end = *dst
-        .in_ports
-        .get(e.to.port)
-        .unwrap_or(&(dst.x, dst.y + dst.h / 2.0));
+    let start = start_override.unwrap_or_else(|| {
+        *src.out_ports
+            .get(e.from.port)
+            .unwrap_or(&(src.x + src.w, src.y + src.h / 2.0))
+    });
+    let end = end_override.unwrap_or_else(|| {
+        *dst.in_ports
+            .get(e.to.port)
+            .unwrap_or(&(dst.x, dst.y + dst.h / 2.0))
+    });
 
     if flat {
         // Same-column edge (mutual recursion): both endpoints share a column, so
@@ -344,13 +589,12 @@ fn route_edge(
         };
     }
 
-    let mut points = vec![start];
-    for &d in &chain[1..chain.len() - 1] {
-        // Thread the gap just left of the dummy's column.
-        points.push((layer_x[vlayer[d]] - cfg.layer_gap * 0.5, vy[d] + DUMMY_H / 2.0));
-    }
-    points.push(end);
-    RoutedEdge { points, back: false }
+    // Cross-column edge: a direct port-to-port curve (the renderer's spline
+    // leaves and arrives horizontally). Long edges pass *under* intermediate
+    // cards — the node layer draws over the edge overlay — which keeps their
+    // geometry minimal instead of threading swoopy waypoint chains through
+    // every gap they cross.
+    RoutedEdge { points: vec![start, end], back: false }
 }
 
 /// Reduce edge crossings by iterated barycenter ordering, keeping the best.
@@ -430,54 +674,61 @@ fn count_crossings(layers: &[Vec<usize>], down: &[Vec<usize>], pos: &[usize]) ->
     total
 }
 
-/// Iterative coordinate assignment: pull each vertex toward the mean centre of
-/// its neighbours while keeping layer order and a minimum gap (no overlap).
-/// `n` is the real-node count; vertices `>= n` are routing dummies, which get a
-/// much smaller vertical gap (see [`DUMMY_GAP`]) and a higher placement priority
-/// so long-edge chains run straight instead of bowing.
+/// Iterative coordinate assignment over the *real* nodes: pull each card
+/// toward the mean centre of its graph neighbours while keeping layer order
+/// and a minimum gap (no overlap). Routing dummies never enter — edges draw
+/// under the card layer, so chains don't reserve vertical slots. (They used
+/// to, at max priority: a card ordered below a wall of straightened chain
+/// tracks could be fenced thousands of px from its neighbours.)
 fn assign_y(
     layers: &[Vec<usize>],
-    up: &[Vec<usize>],
-    down: &[Vec<usize>],
+    edges: &[GEdge],
     vh: &[f32],
     n: usize,
     cfg: &LayoutConfig,
 ) -> Vec<f32> {
-    let nv: usize = layers.iter().map(|l| l.len()).sum();
-    let mut vy = vec![0.0_f32; nv];
-    // Min gap *below* vertex v: thin for dummies (and below dummies), so a layer
-    // packed with routing waypoints stays compact.
-    let gap_below = |v: usize| if v >= n { DUMMY_GAP } else { cfg.node_gap };
-    // Placement priority: dummies win (straighten long edges), then by degree.
-    let prio = |v: usize| -> usize {
-        if v >= n {
-            usize::MAX
-        } else {
-            up[v].len() + down[v].len()
+    // Per-layer card lists, in crossing-reduced order.
+    let real_layers: Vec<Vec<usize>> = layers
+        .iter()
+        .map(|l| l.iter().copied().filter(|&v| v < n).collect())
+        .collect();
+    // Direction-agnostic card adjacency straight from the graph edges — a
+    // long edge pulls its endpoints toward each other directly (no chain
+    // mediation), and flat (same-column SCC) edges keep cycle members close.
+    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for e in edges {
+        let (a, b) = (e.from.node, e.to.node);
+        if a != b {
+            adj[a].push(b);
+            adj[b].push(a);
         }
-    };
+    }
+
+    let mut vy = vec![0.0_f32; n];
+    let prio = |v: usize| adj[v].len();
 
     // Initial top-down stack within each layer.
-    for layer in layers {
+    for layer in &real_layers {
         let mut y = cfg.margin;
         for &v in layer {
             vy[v] = y;
-            y += vh[v] + gap_below(v);
+            y += vh[v] + cfg.node_gap;
         }
     }
 
     for it in 0..COORD_SWEEPS {
         let order: Vec<usize> = if it % 2 == 0 {
-            (0..layers.len()).collect()
+            (0..real_layers.len()).collect()
         } else {
-            (0..layers.len()).rev().collect()
+            (0..real_layers.len()).rev().collect()
         };
         for l in order {
-            place_layer_priority(&layers[l], up, down, vh, &mut vy, &gap_below, &prio);
+            place_layer_priority(&real_layers[l], &adj, vh, &mut vy, cfg.node_gap, &prio);
         }
+        align_columns(&real_layers, vh, &mut vy);
     }
 
-    // Normalise so the topmost vertex sits at the margin.
+    // Normalise so the topmost card sits at the margin.
     let min_y = vy.iter().copied().fold(f32::INFINITY, f32::min);
     if min_y.is_finite() {
         let shift = cfg.margin - min_y;
@@ -488,40 +739,68 @@ fn assign_y(
     vy
 }
 
-/// Place one layer's vertices at their neighbour barycentres using the priority
-/// method: process high-priority vertices first and let them push lower-priority
-/// neighbours aside (never higher ones), keeping left-to-right order and the
-/// per-vertex minimum gaps. Dummies have max priority, so long-edge chains end
-/// up vertically aligned (straight) rather than bowed by averaging.
+/// Re-center every column (rigid per-layer shift) so its height-weighted mean
+/// of card centers sits on the global mean. Barycenter sweeps have a soft
+/// mode: any configuration where each column rests at the average of its
+/// neighbours is a fixpoint, including sheared ones — which is exactly the
+/// "condensed diagonal staircase" (and the Λ/V mountains) dense files showed,
+/// wasting up to half the drawing height on drift. Anchoring after every
+/// sweep removes the mode while the sweep keeps re-optimising the *relative*
+/// placement under the anchor; a rigid shift preserves within-column order
+/// and gaps, and the routing pass runs later, so edges stay consistent.
+fn align_columns(layers: &[Vec<usize>], vh: &[f32], vy: &mut [f32]) {
+    let mut shifts: Vec<(f32, f32)> = Vec::with_capacity(layers.len()); // (weight, mean)
+    for layer in layers {
+        let (mut w, mut sum) = (0.0_f32, 0.0_f32);
+        for &v in layer {
+            w += vh[v];
+            sum += (vy[v] + vh[v] / 2.0) * vh[v];
+        }
+        shifts.push(if w > 0.0 { (w, sum / w) } else { (0.0, 0.0) });
+    }
+    let total_w: f32 = shifts.iter().map(|s| s.0).sum();
+    if total_w <= 0.0 {
+        return;
+    }
+    let global = shifts.iter().map(|s| s.0 * s.1).sum::<f32>() / total_w;
+    for (layer, &(w, mean)) in layers.iter().zip(&shifts) {
+        if w <= 0.0 {
+            continue;
+        }
+        let d = global - mean;
+        for &v in layer {
+            vy[v] += d;
+        }
+    }
+}
+
+/// Place one layer's cards at their neighbour barycentres using the priority
+/// method: process high-priority (high-degree) cards first and let them push
+/// lower-priority neighbours aside (never higher ones), keeping top-to-bottom
+/// order and the minimum gap.
 fn place_layer_priority(
     layer: &[usize],
-    up: &[Vec<usize>],
-    down: &[Vec<usize>],
+    adj: &[Vec<usize>],
     vh: &[f32],
     vy: &mut [f32],
-    gap_below: &impl Fn(usize) -> f32,
+    gap: f32,
     prio: &impl Fn(usize) -> usize,
 ) {
     let desired = |v: usize, vy: &[f32]| -> f32 {
-        let ns = up[v].len() + down[v].len();
-        if ns == 0 {
+        if adj[v].is_empty() {
             return vy[v];
         }
-        let sum: f32 = up[v]
-            .iter()
-            .chain(&down[v])
-            .map(|&u| vy[u] + vh[u] / 2.0)
-            .sum();
-        sum / ns as f32 - vh[v] / 2.0
+        let sum: f32 = adj[v].iter().map(|&u| vy[u] + vh[u] / 2.0).sum();
+        sum / adj[v].len() as f32 - vh[v] / 2.0
     };
 
     // Minimum top-of-`layer[j]` given `layer[i]` sits at y (i < j): stack the
-    // intervening vertices with their gaps.
+    // intervening cards with their gaps.
     let min_top_after = |i: usize, yi: f32| -> Vec<f32> {
         let mut tops = vec![0.0_f32; layer.len()];
         let mut run = yi;
         for j in (i + 1)..layer.len() {
-            run += vh[layer[j - 1]] + gap_below(layer[j - 1]);
+            run += vh[layer[j - 1]] + gap;
             tops[j] = run;
         }
         tops
@@ -531,7 +810,7 @@ fn place_layer_priority(
         let mut tops = vec![0.0_f32; layer.len()];
         let mut run = yi;
         for j in (0..i).rev() {
-            run -= vh[layer[j]] + gap_below(layer[j]);
+            run -= vh[layer[j]] + gap;
             tops[j] = run;
         }
         tops
@@ -573,7 +852,7 @@ fn place_layer_priority(
         // Push lower/equal-priority neighbours out of the way to keep order+gap.
         let mut run = y;
         for j in (i + 1)..layer.len() {
-            run += vh[layer[j - 1]] + gap_below(layer[j - 1]);
+            run += vh[layer[j - 1]] + gap;
             if vy[layer[j]] < run {
                 vy[layer[j]] = run;
             } else {
@@ -582,7 +861,7 @@ fn place_layer_priority(
         }
         let mut run = y;
         for j in (0..i).rev() {
-            run -= vh[layer[j]] + gap_below(layer[j]);
+            run -= vh[layer[j]] + gap;
             if vy[layer[j]] > run {
                 vy[layer[j]] = run;
             } else {
@@ -714,6 +993,122 @@ fn balance_layers(ncomp: usize, cedges: &[(usize, usize)], clayer: &mut [usize])
         used.iter().enumerate().map(|(i, &l)| (l, i)).collect();
     for l in clayer.iter_mut() {
         *l = remap[l];
+    }
+}
+
+/// Split overfull layers into consecutive sub-columns so no single column's
+/// stacked height dwarfs the drawing. Longest-path layering piles a fan-heavy
+/// graph's leaves into a handful of enormous columns (kernel/reader.shard:
+/// 75 of 273 nodes in one layer) — a receipt-shaped drawing whose fit zoom is
+/// useless. Splitting a layer is always legal under the cascade convention:
+/// same-layer nodes never have edges between them (SCCs share a layer and move
+/// wholesale; cross-SCC edges strictly increase layer), so sub-columns only
+/// lengthen some edges, never reverse one.
+///
+/// Units whose earliest dependent is *nearest* go in the rightmost sub-column
+/// (their edges stay adjacent); far-feeding units take the left sub-columns
+/// where the extra distance is already amortized by a long edge.
+fn cap_layer_heights(
+    nodes: &[GNode],
+    pairs: &[(usize, usize)],
+    cfg: &LayoutConfig,
+    layer: &mut [usize],
+) {
+    let n = nodes.len();
+    if n < 2 {
+        return;
+    }
+    let mut adj = vec![Vec::new(); n];
+    for &(u, v) in pairs {
+        if u != v {
+            adj[u].push(v);
+        }
+    }
+    let scc = tarjan_scc(n, &adj);
+    let ncomp = scc.iter().copied().max().map(|m| m + 1).unwrap_or(0);
+
+    // Per-SCC unit: members stay together (flat same-column edges depend on it).
+    let mut members: Vec<Vec<usize>> = vec![Vec::new(); ncomp];
+    for (i, &c) in scc.iter().enumerate() {
+        members[c].push(i);
+    }
+    let cell_h = |i: usize| nodes[i].h + cfg.node_gap;
+    let unit_h: Vec<f32> = members.iter().map(|ms| ms.iter().map(|&i| cell_h(i)).sum()).collect();
+    // Earliest dependent layer per unit (usize::MAX for sinks).
+    let mut min_succ = vec![usize::MAX; ncomp];
+    for &(u, v) in pairs {
+        if scc[u] != scc[v] {
+            min_succ[scc[u]] = min_succ[scc[u]].min(layer[v]);
+        }
+    }
+
+    let nlayers = layer.iter().copied().max().unwrap_or(0) + 1;
+    let mut units_of: Vec<Vec<usize>> = vec![Vec::new(); nlayers];
+    for (c, ms) in members.iter().enumerate() {
+        if let Some(&m0) = ms.first() {
+            units_of[layer[m0]].push(c);
+        }
+    }
+
+    // Target column height from the drawing's own area: stacking S_l of nodes
+    // into a column of width w_l, the height that lands the whole thing near
+    // PACK_ASPECT is sqrt(area / aspect). Floored at the tallest unit (a unit
+    // can't split) — one huge flow card shouldn't force splits around it.
+    let stack: Vec<f32> = units_of.iter().map(|us| us.iter().map(|&c| unit_h[c]).sum()).collect();
+    let col_w: Vec<f32> = (0..nlayers)
+        .map(|l| {
+            units_of[l]
+                .iter()
+                .flat_map(|&c| &members[c])
+                .map(|&i| nodes[i].w)
+                .fold(0.0, f32::max)
+                + cfg.layer_gap
+        })
+        .collect();
+    let area: f32 = (0..nlayers).map(|l| stack[l] * col_w[l]).sum();
+    let tallest_unit = unit_h.iter().copied().fold(0.0, f32::max);
+    let target_h = (area / PACK_ASPECT).sqrt().max(tallest_unit);
+
+    // Rebuild layer indices left to right, splitting any layer stacked past
+    // the target (with slack, so borderline layers don't churn).
+    let mut next = 0usize;
+    for l in 0..nlayers {
+        let units = &mut units_of[l];
+        let parts = if stack[l] > target_h * 1.25 {
+            ((stack[l] / target_h).ceil() as usize).clamp(1, units.len().max(1))
+        } else {
+            1
+        };
+        if parts <= 1 {
+            for &c in units.iter() {
+                for &i in &members[c] {
+                    layer[i] = next;
+                }
+            }
+            next += 1;
+            continue;
+        }
+        // Far-feeding units first (left), nearest-dependent units last (right);
+        // sinks (MAX) sort first — their preds are left anyway. Stable, so
+        // equal keys keep unit order (deterministic layouts).
+        units.sort_by(|&a, &b| min_succ[b].cmp(&min_succ[a]));
+        let per = stack[l] / parts as f32;
+        let mut sub = 0usize;
+        let mut acc = 0.0_f32;
+        for &c in units.iter() {
+            if acc >= per && sub + 1 < parts {
+                sub += 1;
+                acc = 0.0;
+            }
+            for &i in &members[c] {
+                layer[i] = next + sub;
+            }
+            acc += unit_h[c];
+        }
+        // `sub` may stop short of `parts - 1` when oversized units overshoot
+        // their chunk; advance by the sub-columns actually used, never leaving
+        // an empty (zero-width, full-gap) column behind.
+        next += sub + 1;
     }
 }
 
@@ -881,6 +1276,122 @@ mod tests {
                     l.width,
                     l.height
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn disconnected_components_pack_toward_screen_aspect() {
+        // 24 isolated nodes: without component packing they all share layer 0 —
+        // one 24-node column. Packed, the drawing should land near PACK_ASPECT,
+        // not degenerate into a strip in either direction.
+        let g = Graph { nodes: vec![GNode::simple(120.0, 40.0); 24], edges: Vec::new() };
+        let l = layout(&g, &LayoutConfig::default());
+        let aspect = l.width / l.height;
+        assert!((0.5..=4.0).contains(&aspect), "degenerate aspect {aspect} ({}x{})", l.width, l.height);
+        // Placement stays index-aligned and inside bounds, and no two nodes
+        // overlap (packing must not stack shelves onto each other).
+        for (i, a) in l.nodes.iter().enumerate() {
+            assert!(a.x >= 0.0 && a.y >= 0.0 && a.x + a.w <= l.width && a.y + a.h <= l.height);
+            for b in &l.nodes[i + 1..] {
+                let apart = a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y;
+                assert!(apart, "packed nodes overlap");
+            }
+        }
+    }
+
+    #[test]
+    fn component_packing_keeps_edges_aligned_and_local() {
+        // Two components — a 3-chain and a 2-chain — plus an isolated node.
+        // Edges must come back index-aligned, with each polyline connecting its
+        // own endpoints' placed ports (never bridging components).
+        let g = Graph {
+            nodes: vec![GNode::simple(100.0, 36.0); 6],
+            edges: vec![edge(0, 1), edge(1, 2), edge(3, 4)],
+        };
+        let l = layout(&g, &LayoutConfig::default());
+        assert_eq!(l.edges.len(), 3);
+        for (ei, e) in g.edges.iter().enumerate() {
+            let pts = &l.edges[ei].points;
+            assert!(pts.len() >= 2, "edge {ei} unrouted");
+            let (sx, sy) = l.nodes[e.from.node].out_ports[0];
+            let (tx, ty) = l.nodes[e.to.node].in_ports[0];
+            assert_eq!(pts[0], (sx, sy), "edge {ei} start not at its out-port");
+            assert_eq!(*pts.last().unwrap(), (tx, ty), "edge {ei} end not at its in-port");
+        }
+    }
+
+    #[test]
+    fn overfull_layer_splits_into_subcolumns() {
+        // A 40-leaf fan into one sink: longest-path piles every leaf into one
+        // column ~40 nodes tall. Capping must spread them over sub-columns so
+        // the drawing lands near a screen aspect instead of a receipt.
+        let mut edges = Vec::new();
+        for i in 0..40 {
+            edges.push(edge(i, 40));
+        }
+        let g = Graph { nodes: vec![GNode::simple(120.0, 40.0); 41], edges };
+        let l = layout(&g, &LayoutConfig::default());
+        let aspect = l.width / l.height;
+        assert!((0.4..=4.0).contains(&aspect), "receipt aspect {aspect} ({}x{})", l.width, l.height);
+        // Every leaf still strictly left of the sink (the cascade convention).
+        for i in 0..40 {
+            assert!(
+                l.nodes[i].x + l.nodes[i].w <= l.nodes[40].x,
+                "leaf {i} not left of its dependent"
+            );
+        }
+        // No overlaps.
+        for (i, a) in l.nodes.iter().enumerate() {
+            for b in &l.nodes[i + 1..] {
+                let apart = a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y;
+                assert!(apart, "capped nodes overlap");
+            }
+        }
+    }
+
+    #[test]
+    fn small_components_stack_beside_a_dominant_one() {
+        // One tall component (a 2-chain of tall nodes) plus 20 singletons: the
+        // singletons must stack vertically beside the giant, not trail across
+        // the top in one thin row that pays width for nothing.
+        let mut nodes = vec![GNode::simple(150.0, 2000.0), GNode::simple(150.0, 2000.0)];
+        nodes.extend(std::iter::repeat_with(|| GNode::simple(100.0, 40.0)).take(20));
+        let g = Graph { nodes, edges: vec![edge(0, 1)] };
+        let l = layout(&g, &LayoutConfig::default());
+        // 20 × (40 + gap + sub-margins) ≈ 1700 < 2000: all singletons fit in
+        // ONE column beside the giant — the drawing is giant + a chip column.
+        let giant_w = l.nodes[0].w + l.nodes[1].w + 200.0; // two columns + gaps
+        assert!(
+            l.width < giant_w + 250.0,
+            "singletons should stack in a column, not trail: {}x{}",
+            l.width,
+            l.height
+        );
+        for (i, a) in l.nodes.iter().enumerate() {
+            for b in &l.nodes[i + 1..] {
+                let apart = a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y;
+                assert!(apart, "packed nodes overlap");
+            }
+        }
+    }
+
+    #[test]
+    fn lead_component_takes_the_top_left_slot() {
+        // A short lead singleton (the Map's file-doc card) among a tall chain
+        // and a spread of chips: whatever tallest-first would do, the lead
+        // packs first and owns the top-left corner.
+        let mut nodes = vec![GNode::simple(150.0, 2000.0), GNode::simple(150.0, 2000.0)];
+        nodes.extend(std::iter::repeat_with(|| GNode::simple(100.0, 40.0)).take(8));
+        let lead_idx = nodes.len();
+        nodes.push(GNode { lead: true, ..GNode::simple(400.0, 160.0) });
+        let g = Graph { nodes, edges: vec![edge(0, 1)] };
+        let l = layout(&g, &LayoutConfig::default());
+        let doc = &l.nodes[lead_idx];
+        for (i, n) in l.nodes.iter().enumerate() {
+            if i != lead_idx {
+                assert!(doc.x <= n.x + 0.5, "lead not leftmost: {} vs {}", doc.x, n.x);
+                assert!(doc.y <= n.y + 0.5, "lead not topmost: {} vs {}", doc.y, n.y);
             }
         }
     }

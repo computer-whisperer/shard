@@ -2,194 +2,249 @@
 
 A graphical navigator for shard source. It parses a shard project itself (a
 lightweight structural s-expr reader — *not* the kernel elaborator, and with no
-coupling to `rust_bootstrap`) and draws its **methods** as a call-graph flow
-chart, built on the [damascene](https://github.com/computer-whisperer/damascene)
-UI library.
+coupling to `rust_bootstrap`) and draws it as **one map**: every fn, claim,
+type, and file-doc in scope, grouped by origin **dir ⊃ file** into nested
+bounding boxes on a single committed plane. Built on the
+[damascene](https://github.com/computer-whisperer/damascene) UI library.
 
-> **Dependency note:** this points at a local damascene checkout via a path
-> dependency — it needs fixes not yet in a crates.io release: wheel-zoom
-> yielding to `block_pointer` overlays (so the source lightbox scrolls) and
-> `viewport()` laying `Hug` content at full intrinsic (so tall flow diagrams
-> aren't clamped). Switch back to a crates.io version once a release ships both.
+## The shape of the app
 
-## Status
+There is **one view**. The application state is two values plus a camera:
 
-Five views, toggled in the toolbar. The **subject** a view is about — its
-*scope* — is one value (`scope.rs`): a fn, a file, a directory subtree, a fn's
-call-neighborhood, or the whole project. Each view projects that scope down to
-what it needs (the single-file views read its *focus file*; the Map view reads
-the full fn/file sets), so selection is unified rather than per-view.
+- **Scope** (`scope.rs`) — what set of members the plane is about: one fn, a
+  file, a directory subtree, a fn's call-neighborhood, or the whole project.
+  Each scope commits its own layout, cached (`MapCache`, LRU).
+- **Sel** (`view/mod.rs`) — the inspector cursor: a fn (detail panel: source,
+  docstring, call lists) or a file (breakdown panel: counts, composition,
+  header doc, imports). Orthogonal to scope — a focus *within* it.
+- The **camera** does the rest: clicking a dir, file, or fn whose box is on
+  the current plane flies the viewport to it; targets not on the plane
+  re-scope. The toolbar is a clickable **scope breadcrumb**
+  (`◆ project ▸ kernel/ ▸ reader.shard ▸ rd_form`) — the orientation device.
 
-**Map** *(experimental — being built)* — the unified view: any scope's fns,
-grouped by origin **dir ⊃ file** into nested bounding boxes, each fn drawn in
-the Flow form. Pick a file or a directory in the sidebar to scope it. The layout
-is a **recursive graph-placement** pass mirroring the program's own tree, and at
-*every* level it is **link-based**: inside a file box the fns are placed by the
-file's intra-file **call graph**, and inside a dir box the child file/subdir
-boxes are placed by the **import DAG** among them (aggregated — a subdir imports
-another when any of its files do). Each level is sized bottom-up by the
-*measured* intrinsic size of the level below (`layout::intrinsic`): a card
-measures itself, a file box measures its laid-out call graph, a dir box measures
-its laid-out import graph — so the engine always has real sizes and there is
-**no estimation** (contrast the Board's `est()`). The interface/implementation
-split reads at a glance: a `mod.req.shard` of signature-only cards sits beside
-the `.shard` that implements them, with an import arrow between. The whole tree
-is placed without a viewport (`shared::placed_graph`); only the outermost result
-is wrapped in one pan/zoom viewport. The per-level router is Sugiyama
-(`layout.rs`) for now — swappable per scale, since each level is one layout call.
-This is the view the others are converging into — see *Direction*.
+The viewer began as five separate views (Methods / Systems / Flow / Board /
+Map); the Map subsumed their topology and their lenses one by one, and the
+others were deleted. What survived of them: the triage overlay (orphan flags
+on cards), the Systems heat + composition lenses (on file boxes), the per-fn
+and per-file panels (the inspector), and the region-card renderer (the Map's
+card innards).
 
-**Methods** — one file's call graph, with a **triage overlay**:
+**The cascade convention**: every dependency graph in the viewer — calls,
+imports, proof citations, claim subjects, type composition — reads left→right
+from *dependencies to dependents*. Callees, cited lemmas, and imported files
+layer left; **arrows point at their users**; trust and control build
+rightward.
 
-- The sidebar is a **scope picker**: a **`◆ Whole project`** entry at the top
-  (maps every fn at once), then every `.shard` file grouped under a clickable
-  **directory header** (`▸ dir/ (N)` — selecting it scopes the Map to the whole
-  subtree); files show as basenames with their fn count, and selecting one scopes
-  to that file. A **filter box** narrows the list (case-insensitive substring,
-  with a `shown/total` count), and files that fail to parse are flagged (`⚠`, the
-  error on hover). **Drag the sidebar's right edge** to widen it when paths get
-  cramped (`user_resizable`, 220–620px — the runtime keeps the width). A selected
-  fn's detail panel also offers **`Tree ▸`** — scope the Map to that fn's call
-  neighborhood (`CallTree`: one caller level up, two callee levels down).
-- The canvas draws the selected file's fns as boxes (name + `N args → Ret`)
-  with intra-file call edges as curved arrows.
-- **Triage colors/sizes** encode the dead-code / complexity signal: a node is
-  **red** when it's an *orphan* — nothing in the project calls it, it isn't
-  reasoned about in any claim/fulfills/requirement, and it isn't an entry
-  point (a cut candidate); **warm/orange** scales with call degree (hubs stand
-  out from leaves); and node **height** grows with the fn's source-line count.
-  The detail panel shows `lines · calls · callers` and tags orphans. Resolution
-  is a short-name heuristic — verify a candidate with grep before cutting.
+## One committed topology per scope (the cartographic rule)
 
-**Systems** — the project-wide file import dependency graph (each file → the
-files it imports), with a **category heat map**:
+The layout is a pure function of `(project, scope)` — zoom, selection, and
+the pointer never move anything. Every fn owns a footprint sized for its full
+flow card, laid out once (`view/map/commit.rs`); zooming only changes *what
+is drawn inside* the fixed footprints, the way a map reveals streets and
+labels as you approach while no city ever moves. Rendering
+(`view/map/els.rs`) is priced in **screen px** per frame:
 
-- Each file node is **tinted by its proof-vs-impl share** — cool for
-  implementation-heavy files, warm for proof-heavy ones — and carries a thin
-  **composition bar** (implementation · proof burden · comment/blank track), so
-  you can read a large tree's verification weight at a glance.
-- Lines are classified into shard-specific categories (impl / measure / proof /
-  reqproof / req / sidecar / comment / blank) by the same column-0-head-atom
-  state machine as `tools/loc` — the Rust port is verified byte-identical to
-  that shard tool across the corpus.
-- **Click a file node** to open its **breakdown panel** (per-category line
-  counts + import in/out degree); the panel's **Open call graph ▸** button
-  drills into the file's Methods view.
-- Layout (for the call/import graphs) is a generic, semantics-agnostic **layered
-  (Sugiyama) engine** (`layout.rs`): SCC condensation (cycles share a column) →
-  dummy nodes for long edges → barycenter crossing reduction → iterative
-  coordinate assignment → port-aware polyline routing. (The Flow view does *not*
-  use this — a nested tree is a different problem; see below.)
-- **Pan** by dragging an empty area of the canvas; **zoom** with the mouse wheel
-  (toward the cursor). The canvas is damascene's native `viewport()` widget, so
-  the transform follows hit-test for free. `Fit` frames the whole graph;
-  `Reset view` snaps to 1:1. The graph auto-fits when you switch files.
-- Click a fn box to open a **detail panel**: a fixed header (signature, triage
-  metrics, view-jump buttons) over a **scrolling body** that holds the fn's real
-  source text and the clickable **Calls** / **Called by** lists (so a fn with
-  many calls/callers doesn't overflow the panel). The source is
-  **syntax-highlighted** (a small s-expr tokenizer — blue special forms, amber
-  constructors/types, green strings, muted comments/parens) and
-  **line-numbered**, and long lines **wrap** (manually, at a monospace character
-  budget) so nothing clips off the right edge. The panel is **resizable** —
-  drag its left edge (`user_resizable`, 320–820px) and the source re-wraps to
-  the new width (the live width is read back from the runtime and fed into the
-  wrap budget). For a wide or long body (e.g. `driver.shard::run_decls`, 378
-  lines) the **Expand ⤢** button additionally opens a **source lightbox** — a
-  large centered modal showing the whole source at a much wider wrap budget,
-  scrollable, over a dismiss scrim (click outside or **Close**). Cross-file
-  links are tagged with
-  their file (e.g. `main · check` vs `main · eval`) so homonym targets are
-  distinguishable; clicking one navigates there, switching the canvas as needed.
-  **Flow ▸ / Board ▸ / Graph ▸** buttons jump the selected fn between views.
-  Hover any node for its full signature, home file, and triage metrics.
+- a fn slot draws its flow innards when in view and past the flow threshold
+  (`innards ≥` in the legend, user-tunable; the selected fn always — so
+  selecting highlights in place, nothing reflows), else a slab with the fn
+  name at a **screen-constant (cartographic) font** clamped into the slot;
+- file/dir boxes draw their contents only past ~48px on screen and carry
+  their names as cartographic labels over the box (child labels yield to an
+  ancestor's label that still overhangs them — country names before city
+  names);
+- a file's edge overlay gates at ~140px on screen; box strokes and edge
+  splines draw at **hairline (screen-constant) weight**;
+- everything outside the (unprojected) viewport is culled per frame.
 
-**Flow** — one fn body as a **structured (LabVIEW-style)** diagram, so s-expr
-nesting becomes box *enclosure* instead of parenthesis-counting. Select a fn (in
-Methods), then hit **Flow**. It's a containment hybrid:
+While the viewport is *at home* (armed `FitPolicy`, or headless) the
+effective zoom is computed exactly from the committed extent — which no
+longer depends on zoom, so no fit⇄extent feedback loop can exist.
 
-- **Control structures** (`match` / `if` / `let`) are **frames** that physically
-  *contain* their branches. A blue keyword band (green for `let`) heads the
-  frame over its scrutinee/condition; inside, each arm / branch / body is a child
-  region headed by a blue **selector chip** (`Nil`, `then`, a binding name).
-  Nesting depth = box enclosure — a deeply nested `match`/`if` reads as nested
-  rectangles, not a sprawl of wires.
-- **Leaf computations** are **op cards**: the function name is the bold hero,
-  *simple* operands (vars / literals) sit inline, and *compound* operands (nested
-  applications) are gathered on a **full-height connector bar** to the left and
-  fed into the op by a single arrow (data flows left→right, LabVIEW-style). So
-  `(int_eq th 59)` is one card; `(head_code (head_atom line))` is two, the inner
-  feeding the outer.
-- **`Cons` spines collapse into lists.** A constructor chain like
-  `(Cons a (Cons b (Cons c Nil)))` is *data construction*, not computation, so it
-  reads as one **`list · N`** box (a bracket bar down a column of element
-  regions) instead of three nested `Cons` cards. A non-`Nil` terminator
-  (`(Cons x rest)`) shows as a trailing `⋯ rest` row. This is what tames the
-  deeply right-nested s-expr builders that pervade the kernel (e.g.
-  `driver.shard::rr_goal_s`, which otherwise sprawls into a row of tiny cards).
-- **Variables** are warm amber **pills** (data inputs); **literals** are dim mono
-  **tags** (constants). The `(measure …)` totality clause is skipped (annotation,
-  not logic).
+**Scope-as-camera (fly-to navigation)**: clicking a sidebar/breadcrumb dir or
+file whose box is already on the committed plane flies the camera to it
+(`ViewportRequest::FrameRect`, smooth van Wijk–Nuij zoom-out/translate/
+zoom-in) instead of re-rooting the layout — from `Whole project` you navigate
+the entire codebase on one unchanging plane, and spatial memory holds: kernel
+is always *over there*. The fn panel's **Card ▸** flies to that fn's
+committed card ("read this fn large"); **Tree ▸** re-scopes to its call
+neighborhood. Clicking `◆ project` again flies home. Targets not on the
+current plane fall back to a scope switch + instant fit. (Until the next
+damascene release, `FrameRect` rides a temporary `[patch.crates-io]` onto the
+local damascene main checkout — see Cargo.toml.)
 
-This is laid out *not* by the Sugiyama engine (which stays for the call/import
-graphs) but as **nested damascene elements** — containment, sizing, and text
-wrapping fall out of the element layout; only the intra-op operand wires are
-drawn. The model (`flow.rs`) lowers the fn body into a **region tree** (frames
-with labelled branches; ops with operand sub-regions); the view renders it into
-the pan/zoom viewport. Today `match` scrutinees and `if` conditions are shown
-inline in the band (not expanded into op cards) — the obvious next knob.
+## The layers on the plane
 
-**Board** *(experimental)* — one file's **call DAG with each node rendered in the
-Flow form**: instead of a name box, every fn appears as its full expanded flow
-card, and the call arrows wire whole fn bodies together. You read both a fn's
-internal structure *and* where its calls go at once. It reuses the same Sugiyama
-layout as Methods, but the engine needs sizes up front while a flow card's true
-size is intrinsic — so v1 *estimates* each card's size from its region tree
-(`board.rs::est`). Large fns therefore make large nodes (pan/zoom copes);
-tightening this (measured sizes, clamped thumbnails) is the next iteration. The
-view files are split per-variant (`src/view/`) precisely so these are cheap to
-try.
+**Placement is link-based at every level**: inside a file box the members are
+placed by the file's intra-file **call graph** (plus the proof and shape edge
+families below); inside a dir box the child file/subdir boxes are placed by
+the **import DAG** among them (aggregated — a subdir imports another when any
+of its files do). Each level is sized bottom-up by the *measured* intrinsic
+size of the level below — a card measures itself, a file box measures its
+laid-out graph — so the engine always has real sizes and there is no
+estimation.
 
-## Direction
+**The proof layer is first-class**: every `(claim …)`, `(axiom …)`,
+`(requirement …)`, and `(fulfills …)` form is a **claim card** beside the fn
+cards in its file box. The model resolves **citations** (claim → the
+claims/axioms its proof mentions; a fulfills cites its requirement, which is
+what marks it fulfilled) and **subjects** (claim → the fns its goal mentions),
+and both feed the file's graph. **Amber = proof**: axioms are the loud amber
+(assumed, not proven — the trust roots), plain claims a faint wash,
+requirements **green once fulfilled and red while open**. The kind tint stays
+on the slab at any distance, so the wide view reads *where the proof mass and
+the assumptions live*. A statements-only file (`kernel/facts.shard`) earns
+its box from its claims alone. Fn-anchored scopes pull in the claims *about*
+their fns from wherever those claims live.
 
-The **Map** view is where the others are heading: one unified canvas that
-renders any *scope* (one fn → a file → a dir → a call-neighborhood → the whole
-project), with fns grouped by origin file/dir into bounding boxes and call usage
-traced between them. The point is to iterate *one* view instead of four, and to
-support richer module-level reading at a glance.
+**The proof card** shows each proof's *structure* in the same Flow vocabulary
+the fn cards use (`proof.rs` lowers the tactic tree into the shared `Region`
+type): case-split tactics are blue frames with case-selector chips (a case
+split *is* a match), `have`/`chain` are green frames binding named facts (a
+`have` *is* a let of facts), step ladders are railed columns where a lemma
+rewrite makes the **lemma name the bold hero** and checker food (directions,
+positions, farkas coefficients) is dropped. Proof footprints are committed
+like everything else, so proof *size on the plane* is an honest complexity
+signal.
 
-The intended layout is **recursive and compositional**, mirroring the program's
-own containment tree (`dir ⊃ file ⊃ fn ⊃ body`): each level lays out its
-children in its own frame and reports an intrinsic size plus the ports it
-imports/exports; the module tree is laid out against the declared import DAG;
-function-usage wires are routed last, bundled along those import edges. Sugiyama
-(`layout.rs`) survives as *one* intra-level router, swappable per scale rather
-than being the view itself. Stable, identity-anchored placement (so the map is a
-thing you learn, not a fresh diagram each time) and a proof/requirement lens are
-later experiments. Methods/Board/Flow stay as-is until Map subsumes them — at
-which point the plain name box is just a *collapsed* flow card.
+**The shape layer**: every `(type …)`, `(record …)`, and `(sig type …)` form
+is a **type card** — kind tag + name, one row per ctor with field types and
+the author's trailing `;` note. **Blue = shape**, beside amber = proof. Three
+edge families, resolved same-file-first, then transitively-imported, then
+unique-project-wide (ambiguous names dropped): **composition** (field type →
+aggregate; always drawn — sparse and load-bearing), **ctor-use** (type → fns
+that construct/match it; committed so shapes layer left of the code over
+them, drawn only under a hover/selection reveal), and **sig-use** (weak tier;
+deck-only). The premise: **edges supported maximally, shown selectively.**
 
-This is being built additively: Map is a fifth tab, and the existing four are
-untouched while it grows.
+**Edge attention tiers**: the focus member's edges always draw at full
+strength (hover is the *trace* gesture). At rest, a call/citation edge fades
+by **horizontal reach** (crossing most of the file = context, not local
+structure) and by **fan redundancy** (a hub's thirtieth caller-line repeats
+what its committed leftmost position already says) — counted within the
+edge's own class, so a much-cited lemma keeps its crisp call web.
+
+**The shape deck**: hover (or select) a fn and a screen-space overlay docks
+at the canvas edge listing its types' full definition cards, each captioned
+with its home file — the answer to "I'm zoomed into one fn and its types are
+defined three files away". The committed plane can only draw intra-file
+edges; the deck is an overlay, exempt from the cartographic rule, so it
+follows focus freely. Hovering a type shows what *it* is composed of. It
+shares the flow-innards zoom gate (far out, the map is being read as a map).
+
+**Docstrings are harvested, not invented**: the corpus already writes them —
+LANGUAGE.md §1's comment tiers (`;` trailing, `;;` line, `;;;` file header).
+The parser (`sexpr::TopForm`) carries each top-level form's lead comments;
+the model distills the contiguous `;;` run into `doc` (a `;;;` line, a
+single-`;` line, or a `;; ----` banner ends the block), and the `;;;` block
+at the top of a file becomes the *file's* doc. Every fn/claim/type card
+carries the doc's first line as a muted one-line summary; tooltips and the
+inspector panels carry the full block. A documented file additionally
+commits a **file-doc card** — its whole `;;;` header as a prose card, placed
+like any member but flagged as the packing **lead** so it takes the box's
+top-left slot, where reading starts. Undocumented members spend no space on
+absence.
+
+**The lenses** (carried over from the deleted views):
+
+- **Orphan triage**: a fn nothing calls (and no proof reasons about, and that
+  isn't an entry point) flags **red** — on its card and on its distant slab,
+  so a wide sweep reads cut candidates as red specks. Resolution is a
+  short-name heuristic — verify with grep before cutting.
+- **Proof/impl heat**: each file box's fill is tinted by its proof-vs-impl
+  share — cool implementation, warm proof — and in the label-only regime the
+  box carries a thin **composition bar** (impl · proof · comment/blank track)
+  along its bottom edge at screen-constant height. Line categories (impl /
+  measure / proof / reqproof / req / sidecar / comment / blank) come from the
+  same column-0-head-atom state machine as `tools/loc` — verified
+  byte-identical to that shard tool across the corpus.
+
+**Blocks, not receipts (reshaping)**: proofs and fn bodies are almost pure
+sequence-and-fork, and rendering both dimensions vertically produced cards
+many screens tall. The vertical shapes reshape toward a target aspect
+(`view/flow.rs`): fork tactics lay their cases **side by side** (shelf-
+wrapped), and tall vertical runs — step ladders, list elements, operand
+stacks — wrap into balanced **galley columns** read down-then-right, a `↳`
+marker heading each continuation. Fn-body `match`/`if` arms and binding
+stacks keep the vertical read (arm order is code order). The partitions are
+pure in the region tree, so the committed topology stays deterministic.
+
+## The workbench
+
+- The **sidebar** is the scope picker: `◆ Whole project` on top, then every
+  `.shard` file grouped under clickable directory headers; a filter box
+  narrows the list; parse failures are flagged (`⚠`, error on hover). Drag
+  its right edge to widen (220–620px).
+- The **fn inspector** (click any fn card/slab): fixed header (signature,
+  triage metrics, docstring, **Card ▸ / Tree ▸**) over a scrolling body with
+  the fn's **syntax-highlighted, line-numbered, wrapped source** and
+  clickable **Calls / Called by** lists (cross-file targets tagged with their
+  file stem). The panel is resizable (drag its left edge, 320–820px; the
+  source re-wraps). **Expand ⤢** opens the **source lightbox** — a large
+  modal for wide/long bodies (`driver.shard::run_decls`).
+- The **file inspector** (click a file's box label, or a sidebar file): the
+  file's `;;;` header, per-category line counts, composition bar, import
+  in/out degree, and **Map this file ▸** to scope down to it.
+- **Pan** by dragging empty canvas; **zoom** with the wheel (toward the
+  cursor). `Fit` frames the plane; `Reset view` snaps to 1:1.
+
+## The flow form (inside fn cards)
+
+S-expr nesting becomes box *enclosure* instead of parenthesis-counting:
+
+- **Control structures** (`match` / `if` / `let`) are **frames** that
+  physically contain their branches, headed by a blue keyword band (green for
+  `let`) and blue **selector chips** per arm.
+- **Leaf computations** are **op cards**: the fn name bold, simple operands
+  inline, compound operands gathered on a full-height connector bar and fed
+  in by one arrow (data flows left→right, LabVIEW-style).
+- **`Cons` spines collapse into `list · N` boxes** (data construction, not
+  computation) — this tames the deeply right-nested s-expr builders that
+  pervade the kernel. A non-`Nil` terminator shows as a trailing `⋯ rest`.
+- **Variables** are warm pills; **literals** dim mono tags; `(measure …)`
+  clauses are skipped (annotation, not logic).
+
+This is laid out as **nested damascene elements** (`view/flow.rs`) —
+containment, sizing, and wrapping fall out of element layout. The Sugiyama
+engine is *not* involved inside a card.
+
+## The layout engine
+
+The per-level router (`layout.rs`) is a generic, semantics-agnostic layered
+(Sugiyama) engine: SCC condensation (cycles share a column) → dummy nodes for
+long edges (**ordering only**) → barycenter crossing reduction → iterative
+coordinate assignment over the cards alone → direct port-to-port routing.
+Coordinate sweeps are **column-anchored**: after every sweep each column is
+rigidly re-centered on the global height-weighted mean, because barycenter
+iteration is otherwise indifferent to shear — any staircase where each column
+rests at its neighbours' average is a fixpoint. **Edges draw under the card
+layer** and route as near-straight curves; routing dummies don't reserve
+vertical slots between cards. Two aspect guards keep real shard graphs
+screen-shaped: overfull layers **split into sub-columns**, and disconnected
+components shelf-pack with short pieces stacking vertically beside tall ones
+(a **lead** component — the file-doc card — packs first, top-left). The
+whole tree is placed without a viewport (`shared::placed_graph`); only the
+outermost result is wrapped in one pan/zoom viewport. The router is
+swappable per scale, since each level is one layout call.
 
 ## Binaries
 
 | Bin | What it does |
 |---|---|
-| `shard-viewer [ROOT]` | The GUI (native window via `damascene-winit-wgpu`). Defaults to the most fn-dense file. |
-| `shard-graph [ROOT] [FN]` | Text dump of the extracted model: per-file counts, a project-wide **lines-by-category tally** (mirrors `tools/loc`), the most-called fns, a **cut-candidate (orphan) list**, or one fn's callers/callees. No GUI deps. |
-| `shard-render ROOT FILE_SUBSTRING [OUT.svg]` | Headless render of one file's graph to SVG + a lint report. No GPU/window. Use `systems` for the import graph, `flow:FN_NAME` for a fn's dataflow diagram, `board:FILE_SUBSTRING` for the expanded call-DAG board, or `map:FILE_SUBSTRING` for the unified Map scoped to that file (`map:DIR/` with a trailing slash scopes to a whole directory subtree, `tree:FN_NAME` to a fn's call neighborhood, `project` to every fn in the project). |
+| `shard-viewer [ROOT]` | The GUI (native window via `damascene-winit-wgpu`). Opens on the whole-project map, fitted. |
+| `shard-graph [ROOT] [FN]` | Text dump of the extracted model: per-file counts, a project-wide lines-by-category tally (mirrors `tools/loc`), most-called fns, a cut-candidate (orphan) list, or one fn's callers/callees. No GUI deps. |
+| `shard-render ROOT SPEC [OUT.svg]` | Headless render to SVG + a lint report. No GPU/window. Specs: `SUBSTR` (file map, most-called fn selected) · `map:SUBSTR` (file map, nothing selected) · `map:DIR/` (directory subtree) · `project` (everything) · `fn:NAME` (one fn's map — "read this fn large") · `tree:NAME` (call neighborhood) · `inspect:SUBSTR` (file inspector open) · `src:NAME` (source lightbox). `SHARD_RENDER_HOVER=fn_name` (or a raw key like `type:7`) simulates hover; `SHARD_RENDER_W/H` size the frame. |
+| `diag [ROOT] [FILE]` | Layout diagnostics over the true committed topology (layer histograms, column stats, edge spans). |
 
 `ROOT` defaults to the current directory; run from a shard checkout.
 
 ## Headless review loop
 
-`shard-render` is the cheap build-time way to *see* the graph without a window.
-To rasterize the SVG with the same fonts damascene bundles (so labels render),
-point `resvg` at the font files in your damascene checkout:
+`shard-render` is the cheap build-time way to *see* the map without a window.
+To rasterize the SVG with the same fonts damascene bundles (so labels
+render), point `resvg` at the font files in your damascene checkout:
 
 ```bash
-shard-render . calc/calc.shard /tmp/g.svg
+shard-render . map:calc/calc.shard /tmp/g.svg
 D=~/workspace/damascene/damascene.main
 resvg \
   --use-font-file "$D/crates/damascene-fonts-inter/fonts/InterVariable.ttf" \
@@ -201,18 +256,26 @@ resvg \
 
 ```
 src/
-  sexpr.rs   s-expr reader (paren tree only)
-  model.rs   structural extraction + call-graph resolution (same-file-first)
+  sexpr.rs   s-expr reader (paren tree + lead-comment capture)
+  model.rs   structural extraction (fns / claims / types / docs) + edge
+             resolution (calls, citations, composition, shape use)
   scope.rs   the subject selection: a fn / file / dir / call-tree / project
-  flow.rs    intra-fn structured model (one fn body -> a region/containment tree)
-  layout.rs  layered SCC-aware graph layout
-  view/      damascene view tree (pure: project state -> El), one file per variant
-    mod.rs     shell: sidebar scope-picker / toolbar / pane dispatch + ViewMode
-    shared.rs  pan/zoom viewport, laid-out-graph canvas, edge + legend primitives
-    methods.rs call graph + triage overlay (+ the shared per-fn detail panel)
-    systems.rs import graph + proof/impl heat map (+ its breakdown panel)
-    flow.rs    one fn body as a region card (render_region, reused by board/map)
-    board.rs   the call DAG with each node in expanded flow form
-    map.rs     the unified scope view (recursive graph placement: calls + imports)
-  bin/       viewer.rs (GUI) · graph.rs (text) · render.rs (headless SVG)
+  flow.rs    intra-fn structured model (one fn body -> a region tree)
+  proof.rs   proof-form lowering (tactic tree -> the same region vocabulary)
+  layout.rs  layered SCC-aware graph layout (+ shelf-packed components,
+             column anchoring, sub-column splitting, lead-first packing)
+  view/      damascene view tree (pure: project state -> El)
+    mod.rs       shell: sidebar / scope breadcrumb / inspector dispatch (Sel)
+    shared.rs    pan/zoom viewport, placed-graph layer, edge vectors, lenses
+    inspector.rs the fn detail panel + file breakdown panel + card tips
+    highlight.rs syntax-highlighted source view
+    flow.rs      the region-card renderer (fn bodies + proof spines)
+    map/         THE view
+      mod.rs       committed types, cache + region index, canvas, legend
+      commit.rs    commit pass: scope -> geometry (pure, cached)
+      els.rs       render pass: boxes, slots, labels, edge tiers (screen-priced)
+      cards.rs     the intrinsic member cards + colors + tips
+      deck.rs      the screen-space shape deck overlay
+  bin/       viewer.rs (GUI) · graph.rs (text) · render.rs (headless SVG) ·
+             diag.rs (layout diagnostics)
 ```
