@@ -37,6 +37,8 @@ TARGETS=(
   std/rat/mod.req/gcd.shard
   std/rat/rat.shard
   examples/rat_demo.shard
+  std/float/float.shard
+  examples/float_val_compute.shard
   examples/bits_demo.shard
   std/axiom_scope_rejects.shard
   examples/ledger_dep/ledger_dep.shard
