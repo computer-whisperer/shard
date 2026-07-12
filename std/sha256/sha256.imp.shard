@@ -2370,3 +2370,1063 @@
         m)
       (istmts (S^ 3 fl) 65536 rest (list 7 7 xc) m)))
   (steps ((compute both)) refl))
+
+;; the composition probe: two phase rewrites chain — the second citation
+;; must match the S^ residue fuel the first one leaves behind
+(claim ish_phase_comp
+  (goal ((xa Int) (xb Int) (xc Int) (m Mem) (fl Nat)) ()
+    (=
+      (istmts
+        (S^ 7 fl)
+        65536
+        (Cons
+          (ISet 0 (IConst 7))
+          (Cons
+            (ISet 1 (ILoc 0))
+            (Cons (ISet 0 (IConst 7)) (Cons (ISet 1 (ILoc 0)) Nil))))
+        (list xa xb xc)
+        m)
+      (Some (INorm (list 7 7 xc) m))))
+  (chain
+    (steps ((compute lhs (stop istmts))))
+    (rewrite-with (lemma ish_phase_pin) lr lhs () ())
+    (steps ((compute lhs (stop istmts))))
+    (rewrite-with (lemma ish_phase_pin) lr lhs () ())
+    (steps ((compute lhs)))
+    refl))
+
+;; ---- the extension tier (I2c-2c) ---------------------------------------------------
+;; The schedule-extension loop: each iteration computes one new word
+;; from the four words below the write frontier (byte offsets -8, -28,
+;; -60, -64 = W[t-2], W[t-7], W[t-15], W[t-16]) and stores it AT the
+;; frontier. The accumulator builds right-to-left, so the finished tree
+;; IS the spec's association — no re-association anywhere. The pass
+;; lemma is COMPOSED from phase lemmas (the continuation-phase idiom):
+;; each Horner load folds its own word inside its own phase, before the
+;; sigma statements wrap it.
+
+;; the word-level extension step: exactly sched_ext's word recurrence,
+;; read through the memory window ending at p
+(fn sched_w ((m Mem) (p Int)) Int
+  (m32
+    (+
+      (ssig1 (wget m (- p 8)))
+      (+ (wget m (- p 28)) (+ (ssig0 (wget m (- p 60))) (wget m (- p 64)))))))
+
+;; the memory-level schedule recursion: k new words at stride 4
+(fn sched_mem ((m Mem) (p Int) (k Nat)) Mem
+  (measure (struct k))
+  (match k
+    (Z m)
+    ((S k2) (sched_mem (wput m p (sched_w m p)) (+ p 4) k2))))
+
+(claim sched_mem_s
+  (goal ((m Mem) (p Int) (k Nat)) ()
+    (= (sched_mem m p (S k)) (sched_mem (wput m p (sched_w m p)) (+ p 4) k)))
+  (steps ((unfold sched_mem lhs) (reduce lhs)) refl))
+
+;; the fold lemma: sched_w's unfolded spelling (cited right-to-left,
+;; folding the machine's accumulated tree back into the denotation)
+(claim sched_w_fold
+  (goal ((m Mem) (p Int)) ()
+    (=
+      (sched_w m p)
+      (band
+        (+
+          (ssig1 (wget m (- p 8)))
+          (+ (wget m (- p 28)) (+ (ssig0 (wget m (- p 60))) (wget m (- p 64)))))
+        4294967295)))
+  (steps ((compute lhs (stop wget ssig0 ssig1))) refl))
+
+;; load-guard bounds at the walk's offset trees (all from the worker's
+;; frontier premises: 64 <= wp and wp + 4 <= 65536)
+(claim ish_xlo64
+  (goal ((w Int)) ((= (le 64 w) True)) (= (le 0 (- w 64)) True))
+  (by arith (list 1 1)))
+
+(claim ish_xhi64
+  (goal ((w Int)) ((= (le (+ w 4) 65536) True))
+    (= (le (+ (- w 64) 4) 65536) True))
+  (by arith (list 1 1)))
+
+(claim ish_xlo60
+  (goal ((w Int)) ((= (le 64 w) True)) (= (le 0 (- w 60)) True))
+  (by arith (list 1 1)))
+
+(claim ish_xhi60
+  (goal ((w Int)) ((= (le (+ w 4) 65536) True))
+    (= (le (+ (- w 60) 4) 65536) True))
+  (by arith (list 1 1)))
+
+(claim ish_xlo28
+  (goal ((w Int)) ((= (le 64 w) True)) (= (le 0 (- w 28)) True))
+  (by arith (list 1 1)))
+
+(claim ish_xhi28
+  (goal ((w Int)) ((= (le (+ w 4) 65536) True))
+    (= (le (+ (- w 28) 4) 65536) True))
+  (by arith (list 1 1)))
+
+(claim ish_xlo8
+  (goal ((w Int)) ((= (le 64 w) True)) (= (le 0 (- w 8)) True))
+  (by arith (list 1 1)))
+
+(claim ish_xhi8
+  (goal ((w Int)) ((= (le (+ w 4) 65536) True))
+    (= (le (+ (- w 8) 4) 65536) True))
+  (by arith (list 1 1)))
+
+(claim ish_ext_wlo
+  (goal ((w Int)) ((= (le 64 w) True)) (= (le 0 w) True))
+  (by arith (list 1 1)))
+
+;; the worker induction's frontier step
+(claim ish_ext_wstep
+  (goal ((w Int)) ((= (le 64 w) True)) (= (le 64 (+ w 4)) True))
+  (by arith (list 1 1)))
+
+;; ---- the phase lemmas ---------------------------------------------------------------
+;; Each phase: a literal statement spine over a quantified tail, fuel
+;; k+5 -> 5 (one unit per statement, the 5-slack window slides). The
+;; load phases carry the two bounds premises and fold their word; the
+;; others close by compute alone.
+
+;; phase: the window pointer drops to the lowest read offset
+(claim ish_ext_ph_ptr
+  (goal
+    ((acc Int)
+     (u Int)
+     (sp Int)
+     (x3 Int)
+     (x4 Int)
+     (x5 Int)
+     (x6 Int)
+     (x7 Int)
+     (p2 Int)
+     (wp Int)
+     (n Int)
+     (t Int)
+     (rest (List IStmt))
+     (m Mem)
+     (fl Nat))
+    ()
+    (=
+      (istmts
+        (S^ 6 fl)
+        65536
+        (Cons (ISet 8 (IBin ISub (ILoc 9) (IConst 64))) rest)
+        (list acc u sp x3 x4 x5 x6 x7 p2 wp n t)
+        m)
+      (istmts
+        (S^ 5 fl)
+        65536
+        rest
+        (list acc u sp x3 x4 x5 x6 x7 (- wp 64) wp n t)
+        m)))
+  (steps ((compute both)) refl))
+
+;; phase: Horner load into the accumulator (W[t-16])
+(claim ish_ext_ph_lda
+  (goal
+    ((acc Int)
+     (u Int)
+     (sp Int)
+     (x3 Int)
+     (x4 Int)
+     (x5 Int)
+     (x6 Int)
+     (x7 Int)
+     (p2 Int)
+     (wp Int)
+     (n Int)
+     (t Int)
+     (rest (List IStmt))
+     (m Mem)
+     (fl Nat))
+    ((= (le 0 p2) True) (= (le (+ p2 4) 65536) True))
+    (=
+      (istmts
+        (S^ 16 fl)
+        65536
+        (Cons
+          (ISet 0 (ILoad (ILoc 8)))
+          (Cons
+            (ISet 8 (IBin IAdd (ILoc 8) (IConst 1)))
+            (Cons
+              (ISet 0 (IBin IMul (ILoc 0) (IConst 256)))
+              (Cons
+                (ISet 0 (IBin IAdd (ILoc 0) (ILoad (ILoc 8))))
+                (Cons
+                  (ISet 8 (IBin IAdd (ILoc 8) (IConst 1)))
+                  (Cons
+                    (ISet 0 (IBin IMul (ILoc 0) (IConst 256)))
+                    (Cons
+                      (ISet 0 (IBin IAdd (ILoc 0) (ILoad (ILoc 8))))
+                      (Cons
+                        (ISet 8 (IBin IAdd (ILoc 8) (IConst 1)))
+                        (Cons
+                          (ISet 0 (IBin IMul (ILoc 0) (IConst 256)))
+                          (Cons
+                            (ISet 0 (IBin IAdd (ILoc 0) (ILoad (ILoc 8))))
+                            (Cons (ISet 8 (IBin IAdd (ILoc 8) (IConst 1))) rest)))))))))))
+        (list acc u sp x3 x4 x5 x6 x7 p2 wp n t)
+        m)
+      (istmts
+        (S^ 5 fl)
+        65536
+        rest
+        (list (wget m p2) u sp x3 x4 x5 x6 x7 (+ p2 4) wp n t)
+        m)))
+  (chain
+    (steps ((compute lhs) (rewrite (premise 0) lr lhs true ()) (compute lhs)))
+    (rewrite-with
+      (lemma ish_hi0)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma lg_lo1)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma ish_hi1)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma ish_lo2)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma ish_hi2)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma ish_lo3)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma ish_hi3)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    (have hk4 (= (+ (+ (+ (+ p2 1) 1) 1) 1) (+ p2 4)) (by arith (list)))
+    (have hk3 (= (+ (+ (+ p2 1) 1) 1) (+ p2 3)) (by arith (list)))
+    (have hk2 (= (+ (+ p2 1) 1) (+ p2 2)) (by arith (list)))
+    (steps
+      ((rewrite (premise hk4) lr lhs true ())
+       (rewrite (premise hk3) lr lhs true ())
+       (rewrite (premise hk2) lr lhs true ())))
+    (steps
+      ((rewrite (lemma ish_be) lr lhs true ())
+       (rewrite (lemma wget_be) rl lhs true ())
+       (compute rhs (stop wget))))
+    refl))
+
+;; phase: Horner load into the shuttle (W[t-15], W[t-7], W[t-2])
+(claim ish_ext_ph_ldt
+  (goal
+    ((acc Int)
+     (u Int)
+     (sp Int)
+     (x3 Int)
+     (x4 Int)
+     (x5 Int)
+     (x6 Int)
+     (x7 Int)
+     (p2 Int)
+     (wp Int)
+     (n Int)
+     (t Int)
+     (rest (List IStmt))
+     (m Mem)
+     (fl Nat))
+    ((= (le 0 p2) True) (= (le (+ p2 4) 65536) True))
+    (=
+      (istmts
+        (S^ 16 fl)
+        65536
+        (Cons
+          (ISet 11 (ILoad (ILoc 8)))
+          (Cons
+            (ISet 8 (IBin IAdd (ILoc 8) (IConst 1)))
+            (Cons
+              (ISet 11 (IBin IMul (ILoc 11) (IConst 256)))
+              (Cons
+                (ISet 11 (IBin IAdd (ILoc 11) (ILoad (ILoc 8))))
+                (Cons
+                  (ISet 8 (IBin IAdd (ILoc 8) (IConst 1)))
+                  (Cons
+                    (ISet 11 (IBin IMul (ILoc 11) (IConst 256)))
+                    (Cons
+                      (ISet 11 (IBin IAdd (ILoc 11) (ILoad (ILoc 8))))
+                      (Cons
+                        (ISet 8 (IBin IAdd (ILoc 8) (IConst 1)))
+                        (Cons
+                          (ISet 11 (IBin IMul (ILoc 11) (IConst 256)))
+                          (Cons
+                            (ISet 11 (IBin IAdd (ILoc 11) (ILoad (ILoc 8))))
+                            (Cons (ISet 8 (IBin IAdd (ILoc 8) (IConst 1))) rest)))))))))))
+        (list acc u sp x3 x4 x5 x6 x7 p2 wp n t)
+        m)
+      (istmts
+        (S^ 5 fl)
+        65536
+        rest
+        (list acc u sp x3 x4 x5 x6 x7 (+ p2 4) wp n (wget m p2))
+        m)))
+  (chain
+    (steps ((compute lhs) (rewrite (premise 0) lr lhs true ()) (compute lhs)))
+    (rewrite-with
+      (lemma ish_hi0)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma lg_lo1)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma ish_hi1)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma ish_lo2)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma ish_hi2)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma ish_lo3)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma ish_hi3)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    (have hk4 (= (+ (+ (+ (+ p2 1) 1) 1) 1) (+ p2 4)) (by arith (list)))
+    (have hk3 (= (+ (+ (+ p2 1) 1) 1) (+ p2 3)) (by arith (list)))
+    (have hk2 (= (+ (+ p2 1) 1) (+ p2 2)) (by arith (list)))
+    (steps
+      ((rewrite (premise hk4) lr lhs true ())
+       (rewrite (premise hk3) lr lhs true ())
+       (rewrite (premise hk2) lr lhs true ())))
+    (steps
+      ((rewrite (lemma ish_be) lr lhs true ())
+       (rewrite (lemma wget_be) rl lhs true ())
+       (compute rhs (stop wget))))
+    refl))
+
+;; phase: sigma0 of the shuttle, summed onto the accumulator, then the
+;; pointer jumps to W[t-7]
+(claim ish_ext_ph_sg0
+  (goal
+    ((acc Int)
+     (u Int)
+     (sp Int)
+     (x3 Int)
+     (x4 Int)
+     (x5 Int)
+     (x6 Int)
+     (x7 Int)
+     (p2 Int)
+     (wp Int)
+     (n Int)
+     (t Int)
+     (rest (List IStmt))
+     (m Mem)
+     (fl Nat))
+    ()
+    (=
+      (istmts
+        (S^ 10 fl)
+        65536
+        (Cons
+          (ISet 1 (IBin IShr (ILoc 11) (IConst 3)))
+          (Cons
+            (ISet 1 (IBin IXor (IRotr 32 (ILoc 11) (IConst 18)) (ILoc 1)))
+            (Cons
+              (ISet 1 (IBin IXor (IRotr 32 (ILoc 11) (IConst 7)) (ILoc 1)))
+              (Cons
+                (ISet 0 (IBin IAdd (ILoc 1) (ILoc 0)))
+                (Cons (ISet 8 (IBin IAdd (ILoc 8) (IConst 28))) rest)))))
+        (list acc u sp x3 x4 x5 x6 x7 p2 wp n t)
+        m)
+      (istmts
+        (S^ 5 fl)
+        65536
+        rest
+        (list (+ (ssig0 t) acc) (ssig0 t) sp x3 x4 x5 x6 x7 (+ p2 28) wp n t)
+        m)))
+  (steps ((compute both)) refl))
+
+;; phase: the shuttle word summed onto the accumulator (W[t-7]), then
+;; the pointer jumps to W[t-2]
+(claim ish_ext_ph_add
+  (goal
+    ((acc Int)
+     (u Int)
+     (sp Int)
+     (x3 Int)
+     (x4 Int)
+     (x5 Int)
+     (x6 Int)
+     (x7 Int)
+     (p2 Int)
+     (wp Int)
+     (n Int)
+     (t Int)
+     (rest (List IStmt))
+     (m Mem)
+     (fl Nat))
+    ()
+    (=
+      (istmts
+        (S^ 7 fl)
+        65536
+        (Cons
+          (ISet 0 (IBin IAdd (ILoc 11) (ILoc 0)))
+          (Cons (ISet 8 (IBin IAdd (ILoc 8) (IConst 16))) rest))
+        (list acc u sp x3 x4 x5 x6 x7 p2 wp n t)
+        m)
+      (istmts
+        (S^ 5 fl)
+        65536
+        rest
+        (list (+ t acc) u sp x3 x4 x5 x6 x7 (+ p2 16) wp n t)
+        m)))
+  (steps ((compute both)) refl))
+
+;; phase: sigma1 of the shuttle, summed on, and the 32-bit mask — the
+;; accumulator finishes as the spec's masked word tree
+(claim ish_ext_ph_sg1
+  (goal
+    ((acc Int)
+     (u Int)
+     (sp Int)
+     (x3 Int)
+     (x4 Int)
+     (x5 Int)
+     (x6 Int)
+     (x7 Int)
+     (p2 Int)
+     (wp Int)
+     (n Int)
+     (t Int)
+     (rest (List IStmt))
+     (m Mem)
+     (fl Nat))
+    ()
+    (=
+      (istmts
+        (S^ 10 fl)
+        65536
+        (Cons
+          (ISet 1 (IBin IShr (ILoc 11) (IConst 10)))
+          (Cons
+            (ISet 1 (IBin IXor (IRotr 32 (ILoc 11) (IConst 19)) (ILoc 1)))
+            (Cons
+              (ISet 1 (IBin IXor (IRotr 32 (ILoc 11) (IConst 17)) (ILoc 1)))
+              (Cons
+                (ISet 0 (IBin IAdd (ILoc 1) (ILoc 0)))
+                (Cons (ISet 0 (IBin IAnd (ILoc 0) (IConst 4294967295))) rest)))))
+        (list acc u sp x3 x4 x5 x6 x7 p2 wp n t)
+        m)
+      (istmts
+        (S^ 5 fl)
+        65536
+        rest
+        (list
+          (band (+ (ssig1 t) acc) 4294967295)
+          (ssig1 t)
+          sp
+          x3
+          x4
+          x5
+          x6
+          x7
+          p2
+          wp
+          n
+          t)
+        m)))
+  (steps ((compute both)) refl))
+
+;; phase: the down-walk store of the accumulator at the frontier — the
+;; memory effect folds to wput; the shuttle slots keep their dead
+;; shifted residues (the zero phase kills them next)
+(claim ish_ext_ph_st
+  (goal
+    ((acc Int)
+     (u Int)
+     (sp Int)
+     (x3 Int)
+     (x4 Int)
+     (x5 Int)
+     (x6 Int)
+     (x7 Int)
+     (p2 Int)
+     (wp Int)
+     (n Int)
+     (t Int)
+     (rest (List IStmt))
+     (m Mem)
+     (fl Nat))
+    ((= (le 0 wp) True) (= (le (+ wp 4) 65536) True))
+    (=
+      (istmts
+        (S^ 20 fl)
+        65536
+        (Cons
+          (ISet 2 (IBin IAdd (ILoc 9) (IConst 3)))
+          (Cons
+            (ISet 1 (IBin IAnd (ILoc 0) (IConst 255)))
+            (Cons
+              (IStore (ILoc 2) (ILoc 1))
+              (Cons
+                (ISet 2 (IBin ISub (ILoc 2) (IConst 1)))
+                (Cons
+                  (ISet 0 (IBin IShr (ILoc 0) (IConst 8)))
+                  (Cons
+                    (ISet 1 (IBin IAnd (ILoc 0) (IConst 255)))
+                    (Cons
+                      (IStore (ILoc 2) (ILoc 1))
+                      (Cons
+                        (ISet 2 (IBin ISub (ILoc 2) (IConst 1)))
+                        (Cons
+                          (ISet 0 (IBin IShr (ILoc 0) (IConst 8)))
+                          (Cons
+                            (ISet 1 (IBin IAnd (ILoc 0) (IConst 255)))
+                            (Cons
+                              (IStore (ILoc 2) (ILoc 1))
+                              (Cons
+                                (ISet 2 (IBin ISub (ILoc 2) (IConst 1)))
+                                (Cons
+                                  (ISet 0 (IBin IShr (ILoc 0) (IConst 8)))
+                                  (Cons
+                                    (ISet 1 (IBin IAnd (ILoc 0) (IConst 255)))
+                                    (Cons (IStore (ILoc 2) (ILoc 1)) rest)))))))))))))))
+        (list acc u sp x3 x4 x5 x6 x7 p2 wp n t)
+        m)
+      (istmts
+        (S^ 5 fl)
+        65536
+        rest
+        (list
+          (bshr (bshr (bshr acc 8) 8) 8)
+          (band (bshr (bshr (bshr acc 8) 8) 8) 255)
+          wp
+          x3
+          x4
+          x5
+          x6
+          x7
+          p2
+          wp
+          n
+          t)
+        (wput m wp acc))))
+  (chain
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma ish_slo3)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma ish_shi3)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma ish_slo2)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma ish_shi2)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma ish_slo1)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma ish_shi1)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma ish_slo0)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    (rewrite-with
+      (lemma ish_shi0)
+      lr
+      lhs
+      ()
+      ((steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (steps ((compute lhs)))
+    (have hd1 (= (- (+ wp 3) 1) (+ wp 2)) (by arith (list)))
+    (have hd2 (= (- (+ wp 2) 1) (+ wp 1)) (by arith (list)))
+    (have hd3 (= (- (+ wp 1) 1) wp) (by arith (list)))
+    (steps
+      ((rewrite (premise hd1) lr lhs true ())
+       (rewrite (premise hd2) lr lhs true ())
+       (rewrite (premise hd3) lr lhs true ())))
+    (steps
+      ((rewrite (lemma wput_sets) rl lhs true ()) (compute rhs (stop wput))))
+    refl))
+
+;; phase: the frontier advances, the scratch re-zeroes (zero-in/
+;; zero-out), the counter drops
+(claim ish_ext_ph_fin
+  (goal
+    ((acc Int)
+     (u Int)
+     (sp Int)
+     (x3 Int)
+     (x4 Int)
+     (x5 Int)
+     (x6 Int)
+     (x7 Int)
+     (p2 Int)
+     (wp Int)
+     (n Int)
+     (t Int)
+     (rest (List IStmt))
+     (m Mem)
+     (fl Nat))
+    ()
+    (=
+      (istmts
+        (S^ 12 fl)
+        65536
+        (Cons
+          (ISet 9 (IBin IAdd (ILoc 9) (IConst 4)))
+          (Cons
+            (ISet 0 (IConst 0))
+            (Cons
+              (ISet 1 (IConst 0))
+              (Cons
+                (ISet 2 (IConst 0))
+                (Cons
+                  (ISet 8 (IConst 0))
+                  (Cons
+                    (ISet 11 (IConst 0))
+                    (Cons (ISet 10 (IBin ISub (ILoc 10) (IConst 1))) rest)))))))
+        (list acc u sp x3 x4 x5 x6 x7 p2 wp n t)
+        m)
+      (istmts
+        (S^ 5 fl)
+        65536
+        rest
+        (list 0 0 0 x3 x4 x5 x6 x7 0 (+ wp 4) (- n 1) 0)
+        m)))
+  (steps ((compute both)) refl))
+
+;; ---- the extension body -------------------------------------------------------------
+;; One schedule-extension iteration, 79 statements: the phase spines in
+;; order (pointer drop, W[t-16] into acc, W[t-15] into t, sigma0+sum+
+;; jump, W[t-7] into t, sum+jump, W[t-2] into t, sigma1+sum+mask, the
+;; down-walk store at the frontier, advance/re-zero/count).
+
+(fn isha_ext_body () (List IStmt)
+  (list
+    ;; the window pointer drops to W[t-16]
+    (ISet 8 (IBin ISub (ILoc 9) (IConst 64)))
+    ;; W[t-16]: Horner walk into the accumulator
+    (ISet 0 (ILoad (ILoc 8)))
+    (ISet 8 (IBin IAdd (ILoc 8) (IConst 1)))
+    (ISet 0 (IBin IMul (ILoc 0) (IConst 256)))
+    (ISet 0 (IBin IAdd (ILoc 0) (ILoad (ILoc 8))))
+    (ISet 8 (IBin IAdd (ILoc 8) (IConst 1)))
+    (ISet 0 (IBin IMul (ILoc 0) (IConst 256)))
+    (ISet 0 (IBin IAdd (ILoc 0) (ILoad (ILoc 8))))
+    (ISet 8 (IBin IAdd (ILoc 8) (IConst 1)))
+    (ISet 0 (IBin IMul (ILoc 0) (IConst 256)))
+    (ISet 0 (IBin IAdd (ILoc 0) (ILoad (ILoc 8))))
+    (ISet 8 (IBin IAdd (ILoc 8) (IConst 1)))
+    ;; W[t-15]: Horner walk into the shuttle (adjacent — no jump)
+    (ISet 11 (ILoad (ILoc 8)))
+    (ISet 8 (IBin IAdd (ILoc 8) (IConst 1)))
+    (ISet 11 (IBin IMul (ILoc 11) (IConst 256)))
+    (ISet 11 (IBin IAdd (ILoc 11) (ILoad (ILoc 8))))
+    (ISet 8 (IBin IAdd (ILoc 8) (IConst 1)))
+    (ISet 11 (IBin IMul (ILoc 11) (IConst 256)))
+    (ISet 11 (IBin IAdd (ILoc 11) (ILoad (ILoc 8))))
+    (ISet 8 (IBin IAdd (ILoc 8) (IConst 1)))
+    (ISet 11 (IBin IMul (ILoc 11) (IConst 256)))
+    (ISet 11 (IBin IAdd (ILoc 11) (ILoad (ILoc 8))))
+    (ISet 8 (IBin IAdd (ILoc 8) (IConst 1)))
+    ;; sigma0(t) right-nested in u, summed on, pointer jumps to W[t-7]
+    (ISet 1 (IBin IShr (ILoc 11) (IConst 3)))
+    (ISet 1 (IBin IXor (IRotr 32 (ILoc 11) (IConst 18)) (ILoc 1)))
+    (ISet 1 (IBin IXor (IRotr 32 (ILoc 11) (IConst 7)) (ILoc 1)))
+    (ISet 0 (IBin IAdd (ILoc 1) (ILoc 0)))
+    (ISet 8 (IBin IAdd (ILoc 8) (IConst 28)))
+    ;; W[t-7]: Horner walk into the shuttle
+    (ISet 11 (ILoad (ILoc 8)))
+    (ISet 8 (IBin IAdd (ILoc 8) (IConst 1)))
+    (ISet 11 (IBin IMul (ILoc 11) (IConst 256)))
+    (ISet 11 (IBin IAdd (ILoc 11) (ILoad (ILoc 8))))
+    (ISet 8 (IBin IAdd (ILoc 8) (IConst 1)))
+    (ISet 11 (IBin IMul (ILoc 11) (IConst 256)))
+    (ISet 11 (IBin IAdd (ILoc 11) (ILoad (ILoc 8))))
+    (ISet 8 (IBin IAdd (ILoc 8) (IConst 1)))
+    (ISet 11 (IBin IMul (ILoc 11) (IConst 256)))
+    (ISet 11 (IBin IAdd (ILoc 11) (ILoad (ILoc 8))))
+    (ISet 8 (IBin IAdd (ILoc 8) (IConst 1)))
+    ;; summed on, pointer jumps to W[t-2]
+    (ISet 0 (IBin IAdd (ILoc 11) (ILoc 0)))
+    (ISet 8 (IBin IAdd (ILoc 8) (IConst 16)))
+    ;; W[t-2]: Horner walk into the shuttle
+    (ISet 11 (ILoad (ILoc 8)))
+    (ISet 8 (IBin IAdd (ILoc 8) (IConst 1)))
+    (ISet 11 (IBin IMul (ILoc 11) (IConst 256)))
+    (ISet 11 (IBin IAdd (ILoc 11) (ILoad (ILoc 8))))
+    (ISet 8 (IBin IAdd (ILoc 8) (IConst 1)))
+    (ISet 11 (IBin IMul (ILoc 11) (IConst 256)))
+    (ISet 11 (IBin IAdd (ILoc 11) (ILoad (ILoc 8))))
+    (ISet 8 (IBin IAdd (ILoc 8) (IConst 1)))
+    (ISet 11 (IBin IMul (ILoc 11) (IConst 256)))
+    (ISet 11 (IBin IAdd (ILoc 11) (ILoad (ILoc 8))))
+    (ISet 8 (IBin IAdd (ILoc 8) (IConst 1)))
+    ;; sigma1(t) right-nested in u, summed on, masked to 32 bits
+    (ISet 1 (IBin IShr (ILoc 11) (IConst 10)))
+    (ISet 1 (IBin IXor (IRotr 32 (ILoc 11) (IConst 19)) (ILoc 1)))
+    (ISet 1 (IBin IXor (IRotr 32 (ILoc 11) (IConst 17)) (ILoc 1)))
+    (ISet 0 (IBin IAdd (ILoc 1) (ILoc 0)))
+    (ISet 0 (IBin IAnd (ILoc 0) (IConst 4294967295)))
+    ;; the down-walk store at the frontier (wput's chain)
+    (ISet 2 (IBin IAdd (ILoc 9) (IConst 3)))
+    (ISet 1 (IBin IAnd (ILoc 0) (IConst 255)))
+    (IStore (ILoc 2) (ILoc 1))
+    (ISet 2 (IBin ISub (ILoc 2) (IConst 1)))
+    (ISet 0 (IBin IShr (ILoc 0) (IConst 8)))
+    (ISet 1 (IBin IAnd (ILoc 0) (IConst 255)))
+    (IStore (ILoc 2) (ILoc 1))
+    (ISet 2 (IBin ISub (ILoc 2) (IConst 1)))
+    (ISet 0 (IBin IShr (ILoc 0) (IConst 8)))
+    (ISet 1 (IBin IAnd (ILoc 0) (IConst 255)))
+    (IStore (ILoc 2) (ILoc 1))
+    (ISet 2 (IBin ISub (ILoc 2) (IConst 1)))
+    (ISet 0 (IBin IShr (ILoc 0) (IConst 8)))
+    (ISet 1 (IBin IAnd (ILoc 0) (IConst 255)))
+    (IStore (ILoc 2) (ILoc 1))
+    ;; frontier forward, scratch re-zeroed, counter down
+    (ISet 9 (IBin IAdd (ILoc 9) (IConst 4)))
+    (ISet 0 (IConst 0))
+    (ISet 1 (IConst 0))
+    (ISet 2 (IConst 0))
+    (ISet 8 (IConst 0))
+    (ISet 11 (IConst 0))
+    (ISet 10 (IBin ISub (ILoc 10) (IConst 1)))))
+
+;; ---- the extension pass lemma -------------------------------------------------------
+;; One body run: the new word (sched_w of the original memory at the
+;; frontier) lands at the frontier, the frontier advances by 4, the
+;; counter drops, all scratch re-zeroes. The proof is TEN PHASE
+;; REWRITES chained on the folded istmts application, with pointer
+;; flattens and word folds applied between phases (plain rewrites — the
+;; goal stays a folded application, never an open match).
+
+(claim isha_ext_pass
+  (goal
+    ((acc Int)
+     (u Int)
+     (sp Int)
+     (x3 Int)
+     (x4 Int)
+     (x5 Int)
+     (x6 Int)
+     (x7 Int)
+     (p2 Int)
+     (wp Int)
+     (n Int)
+     (t Int)
+     (m Mem)
+     (fl Nat))
+    ((= (le 64 wp) True) (= (le (+ wp 4) 65536) True))
+    (=
+      (istmts
+        (S^ 84 fl)
+        65536
+        (inline isha_ext_body)
+        (list acc u sp x3 x4 x5 x6 x7 p2 wp n t)
+        m)
+      (Some
+        (INorm
+          (list 0 0 0 x3 x4 x5 x6 x7 0 (+ wp 4) (- n 1) 0)
+          (wput m wp (sched_w m wp))))))
+  (chain
+    (steps ((compute lhs (stop istmts))))
+    (steps ((rewrite (lemma ish_ext_ph_ptr) lr lhs true ())))
+    (rewrite-with
+      (lemma ish_ext_ph_lda)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_xlo64)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+         refl)
+       (rewrite-with
+         (lemma ish_xhi64)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+         refl)))
+    (have hf1 (= (+ (- wp 64) 4) (- wp 60)) (by arith (list)))
+    (steps ((rewrite (premise hf1) lr lhs true ())))
+    (rewrite-with
+      (lemma ish_ext_ph_ldt)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_xlo60)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+         refl)
+       (rewrite-with
+         (lemma ish_xhi60)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+         refl)))
+    (steps ((rewrite (lemma ish_ext_ph_sg0) lr lhs true ())))
+    (have hf2 (= (+ (+ (- wp 60) 4) 28) (- wp 28)) (by arith (list)))
+    (steps ((rewrite (premise hf2) lr lhs true ())))
+    (rewrite-with
+      (lemma ish_ext_ph_ldt)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_xlo28)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+         refl)
+       (rewrite-with
+         (lemma ish_xhi28)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+         refl)))
+    (steps ((rewrite (lemma ish_ext_ph_add) lr lhs true ())))
+    (have hf3 (= (+ (+ (- wp 28) 4) 16) (- wp 8)) (by arith (list)))
+    (steps ((rewrite (premise hf3) lr lhs true ())))
+    (rewrite-with
+      (lemma ish_ext_ph_ldt)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_xlo8)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+         refl)
+       (rewrite-with
+         (lemma ish_xhi8)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+         refl)))
+    (steps ((rewrite (lemma ish_ext_ph_sg1) lr lhs true ())))
+    (rewrite-with
+      (lemma ish_ext_ph_st)
+      lr
+      lhs
+      ()
+      ((rewrite-with
+         (lemma ish_ext_wlo)
+         lr
+         lhs
+         ()
+         ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+         refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+    (steps ((rewrite (lemma ish_ext_ph_fin) lr lhs true ())))
+    (steps
+      ((compute lhs (stop wget wput ssig0 ssig1))
+       (rewrite (lemma sched_w_fold) rl lhs true ())))
+    refl))
+
+;; ---- the extension worker -----------------------------------------------------------
+;; k new schedule words at the frontier: the loop IS sched_mem. The
+;; frontier premise (64 <= wp) keeps the whole read window in bounds;
+;; the write premise covers all k stores. Scratch rides zero-in/
+;; zero-out.
+
+(claim isha_ext_w
+  (goal
+    ((x3 Int)
+     (x4 Int)
+     (x5 Int)
+     (x6 Int)
+     (x7 Int)
+     (wp Int)
+     (m Mem)
+     (c Nat)
+     (k Nat))
+    ((= (le 64 wp) True) (= (le (+ wp (* 4 (int_of_nat k))) 65536) True))
+    (=
+      (iwhile
+        (S^ 88 (lg_fuel k c))
+        65536
+        (ILoc 10)
+        (inline isha_ext_body)
+        (list 0 0 0 x3 x4 x5 x6 x7 0 wp (int_of_nat k) 0)
+        m)
+      (Some
+        (INorm
+          (list 0 0 0 x3 x4 x5 x6 x7 0 (lg_advk wp 4 k) 0 0)
+          (sched_mem m wp k)))))
+  (induct k
+    ((case Z
+       (steps
+         ((rewrite (lemma int_of_nat_zero) lr lhs true ())
+          (compute both (stop wget wput)))
+         refl))
+     (case S
+       (k2)
+       (chain
+         (steps
+           ((unfold lg_fuel lhs)
+            (reduce lhs)
+            (unfold iwhile lhs)
+            (rewrite (lemma int_of_nat_succ) lr lhs true ())
+            (compute
+              lhs
+              (stop iwhile lg_fuel istmts wget wput sched_w sched_mem lg_advk))))
+         (rewrite-with
+           (lemma lg_ne)
+           lr
+           lhs
+           ()
+           ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
+         (steps
+           ((compute
+              lhs
+              (stop iwhile lg_fuel istmts wget wput sched_w sched_mem lg_advk))))
+         (rewrite-with
+           (lemma isha_ext_pass)
+           lr
+           lhs
+           ()
+           ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+            (rewrite-with
+              (lemma ish_w4hi)
+              lr
+              lhs
+              ((inst c2 k2))
+              ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+               (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
+               (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl))
+              refl)))
+         (steps
+           ((compute
+              lhs
+              (stop iwhile lg_fuel istmts wget wput sched_w sched_mem lg_advk))))
+         (have hsub (= (- (+ 1 (int_of_nat k2)) 1) (int_of_nat k2))
+           (rewrite-with (lemma lg_sub) lr lhs () () refl))
+         (steps
+           ((rewrite (premise hsub) lr lhs true ())
+            (compute
+              lhs
+              (stop iwhile lg_fuel istmts wget wput sched_w sched_mem lg_advk))))
+         (rewrite-with
+           (hyp 0)
+           lr
+           lhs
+           ()
+           ((rewrite-with
+              (lemma ish_ext_wstep)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+              refl)
+            (rewrite-with
+              (lemma ish_w4shift)
+              lr
+              lhs
+              ()
+              ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+               (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl))
+              refl)))
+         (steps
+           ((rewrite (lemma sched_mem_s) lr rhs true ())
+            (rewrite (lemma lg_advk_s) lr rhs true ())))
+         refl)))))

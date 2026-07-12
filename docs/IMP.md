@@ -688,6 +688,62 @@ composed (every claim closed on the first checker run):
   composition machinery (three sequenced loops = three phase
   rewrites).
 
+**I2c-2c — the extension loop (2026-07-12).** The schedule-extension
+twin, built exactly to the design note — the continuation-phase idiom's
+first full outing, and it composed perfectly (the pass and worker both
+closed on their first checker runs):
+
+- **The composition probe** (ish_phase_comp): before building, two
+  chained pin-rewrites validated the one mechanism the pin alone had
+  not — a phase citation matching the S^ residue fuel a previous phase
+  rewrite leaves behind. The rewrite result lands already
+  tower-normalized, so phases chain with no fuel restatement.
+- **Denotations**: sched_w = sched_ext's word recurrence read through
+  the memory window ending at p (σ1(W[t−2]) + (W[t−7] + (σ0(W[t−15]) +
+  W[t−16])), masked); sched_mem = the stride-4 store recursion. The
+  fold lemma sched_w_fold states the unfolded band-spelled tree (σ and
+  wget spellings kept folded via compute-with-stops), cited
+  right-to-left once at the pass's end.
+- **The body** (isha_ext_body, 79 statements): pointer drop to
+  wp−64; four Horner loads (W[t−16] into the accumulator, the rest
+  through the shuttle — W[t−15] adjacent for free, jumps +28/+16 to
+  W[t−7]/W[t−2]); σ trees right-nested in u; THE ACCUMULATOR BUILDS
+  RIGHT-TO-LEFT, so the finished tree IS the spec's association (zero
+  re-association — the round tier needed four linear identities, the
+  extension loop needs none beyond Horner→BE per word); the down-walk
+  store at the frontier; advance/re-zero/count. Raw IRotr ctors, no
+  builder fns — the spine is pure constructors, so no fold/unfold
+  ambiguity exists at phase-match time.
+- **Eight phase lemmas** (fuel k+5 → 5, the slack window slides):
+  ptr / load-into-acc / load-into-shuttle (REUSED ×3 at three offsets)
+  / σ0+sum+jump / sum+jump / σ1+sum+mask / store / fin. Load phases
+  carry generic bounds premises discharged at the pass level by
+  offset-tree lemmas (ish_xlo64…ish_xhi8, all cert (1 1)); σ phases
+  state (ssig0 t)/(ssig1 t) folded and close by compute both — the
+  band-spelling thesis again, iexp's IRotr tree = the spec's rotr32
+  unfolded, refl-grade.
+- **The pass** (isha_ext_pass): ten phase rewrites chained on the
+  folded istmts application, three pointer flattens between loads,
+  one sched_w fold at the end. Memory effect = (wput m wp (sched_w m
+  wp)) — reads before the write, from the original memory, exactly
+  sched_mem's step.
+- **The worker** (isha_ext_w): the loop IS sched_mem, by the copy
+  worker's induction verbatim (frontier premise 64 ≤ wp stepped by
+  ish_ext_wstep; write premise by ish_w4shift; fuel 88 = pass 84 + 4).
+- **NEW PROOF GOTCHA (the slice's one debug):** rewrite-with does NOT
+  rewrite under match-branch binders; plain rewrite does. A phase
+  stuck at its symbolic tail is an OPEN match, so in-phase folds
+  (ish_be, wget_be, wput_sets) must be plain all-occurrence rewrites —
+  premise-free lemmas bind by matching there just fine. Guard
+  discharges are unaffected (guards stick in scrutinee position, where
+  rewrite-with works). At the PASS level the goal stays a folded
+  istmts application, so both forms work between phases.
+- Gates: fast-engine 166/0 on the sibling; driver 52 products green;
+  corpus FAIL-set unchanged at 57.
+- REMAINING I2c-2: (d) the list bridge to sha_sched (sched_mem's
+  readback = the srev_acc/sched_ext shape — the reversal algebra,
+  pure list work).
+
 ## 7. Non-goals, stated once
 
 - imp as a shipped target or public surface — it is an intermediate;
