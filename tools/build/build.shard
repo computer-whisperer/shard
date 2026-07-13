@@ -734,6 +734,44 @@
         out
         ""))))
 
+;; drop the first n elements
+(fn dropn ((n Int) (xs (List Int))) (List Int)
+  (measure (struct xs))
+  (if (le n 0) xs
+  (match xs
+    (Nil Nil)
+    ((Cons _ t) (dropn (- n 1) t)))))
+
+;; OUT with its ".shard" suffix swapped for ".raw" — the impgen raw
+;; landing spot. Forced to be OUT's sibling under this exact name: the
+;; generated header stamps the regen command (raw path included), so
+;; any other spelling fails the byte compare by construction.
+(fn raw_of ((out (List Int))) (List Int)
+  (cat (list (rint (dropn 6 (rint out Nil)) Nil) ".raw")))
+
+;; an IMPGEN product: tools/impgen regenerates OUT (ISA-leg certs) from
+;; the imp pin file SRC on target tt ("wasm"/"x86") — a third generator
+;; in the derive slot (docs/IMP.md §5; derive holds no privilege, so a
+;; new generator is just a new kind over the same regen ladder). Same
+;; contract as 'regen: determinism up to canonicalization. The raw is
+;; generated at raw_of(out) (see above) and removed once the fmt leg
+;; has read it.
+(fn orders_impgen
+  ((i Int)
+   (src (List Int))
+   (out (List Int))
+   (tt (List Int))
+   (cap (List Int))
+   (ev (List Int)))
+  (List Int)
+  (cat
+    (list
+      (run_line
+        (capf cap i "gen.log")
+        (list ev "run" "tools/impgen/impgen.shard" src tt (raw_of out)))
+      (regen_leg i cap ev (raw_of out) "fmt" "cp.log" "canon" "rm.log" out "")
+      (run_line (capf cap i "rmraw.log") (list "rm" (raw_of out))))))
+
 ;; a PINLIB product (docs/BUILD.md §4/§5, the re-founded entry): the
 ;; build entry supplies CONTENT (module value + bytes, pin bindings,
 ;; curated vectors) via build_mods; lowbuild pinlib derives ARTIFACT
@@ -974,6 +1012,14 @@
              (Nil (Pair (Some (orders_regen_x86 i src out cap ev)) w))
              (_ (Pair None w)))
            (Pair None w)))
+       (if (sym_eq k (quote impgen))
+         (if (ewith out ".shard")
+           (if (sym_eq t (quote wasm))
+             (Pair (Some (orders_impgen i src out "wasm" cap ev)) w)
+           (if (sym_eq t (quote x86))
+             (Pair (Some (orders_impgen i src out "x86" cap ev)) w)
+             (Pair None w)))
+           (Pair None w))
        (if (sym_eq k (quote pinlib))
          (if (sym_eq t (quote wasm))
            (Pair (Some (orders_pinlib_wasm i src out aux cap ev check)) w)
@@ -982,7 +1028,7 @@
              (Nil (Pair (Some (orders_pinlib_x86 i src out cap ev check)) w))
              (_ (Pair None w)))
            (Pair None w)))
-         (Pair None w))))))
+         (Pair None w)))))))
        (Pair None w)))))
 
 (fn orders_all
@@ -1738,6 +1784,14 @@
                 (v_regen_leg cap i "fmtl" "cpl.log" "canonl" "rml.log" aux w3)
                 ((Pair g3 w4) (Pair (cat2 g0 (cat2 g1 (cat2 g2 g3))) w4))))))))))))
 
+;; verify: an IMPGEN product — the regen ladder + the raw-removal leg
+(fn v_impgen ((cap (List Int)) (i Int) (out (List Int)) (w World))
+  (Pair (List (List Int)) World)
+  (match (v_regen_canon cap i out "" w)
+    ((Pair g1 w1)
+     (match (rc_gate cap i "rmraw.log" "regen(rmraw)" w1)
+       ((Pair g2 w2) (Pair (cat2 g1 g2) w2))))))
+
 ;; judge the tie only when plan+tie both ran green
 (fn tiegate
   ((g3a (List (List Int)))
@@ -1833,11 +1887,12 @@
        (Pair (Cons (vfail i "plan" "unsupported target") Nil) w))
      (if (sym_eq k (quote check)) (g_klog cap i "kout.log" "kernel" "" w)
      (if (sym_eq k (quote regen)) (v_regen_canon cap i out aux w)
+     (if (sym_eq k (quote impgen)) (v_impgen cap i out w)
      (if (sym_eq k (quote pinlib))
        (if (sym_eq t (quote wasm)) (v_pinlib_wasm cap i aux w)
        (if (sym_eq t (quote x86)) (v_pinlib_x86 cap i w)
        (Pair (Cons (vfail i "plan" "unsupported target") Nil) w)))
-       (Pair (Cons (vfail i "plan" "unsupported kind") Nil) w)))))))))
+       (Pair (Cons (vfail i "plan" "unsupported kind") Nil) w))))))))))
 
 (fn v_all ((cap (List Int)) (i Int) (bs (List BP)) (w World))
   (Pair (List (List Int)) World)

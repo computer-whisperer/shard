@@ -773,6 +773,24 @@ FAIL-set identical. The arc's rung-2 queue is empty; next is
 rung 3 — profiles v1, opened by design exchange (MEMORY.md D1's
 class-assignment surface lands there).
 
+**Rung 2 addendum — a third generator in the derive slot (2026-07-13,
+the imp arc's I2d-2b).** tools/impgen (imp pin file → ISA-leg certs,
+docs/IMP.md I2d) joins wasmgen/x86gen in the derive slot: new kind
+**'impgen** on targets 'wasm/'x86 over the unchanged regen ladder
+(determinism up to canonicalization). A new kind, not a new target,
+because 'regen selects its generator by target and impgen shares both
+targets with the ISA generators — the first time two generators
+produce artifacts for one target, and the §12 rule ("no privileged
+generators") resolves it cheaply: a generator is just a kind over the
+shared ladder. One wrinkle worth recording: impgen's generated header
+stamps its own regen command, raw path included, so the raw is
+generated at OUT's `.shard`→`.raw` sibling spelling — capture-dir
+naming would fail the byte compare by construction (the slice-7
+basename lesson, now stamped INTO the artifact) — with a gated rm leg
+cleaning it once the fmt leg has read it. The four impgen outputs
+enter examples/build_products.shard as 'impgen + 'check pairs
+(products 52→60, the kernel gate riding the imp-tower 'check norm).
+
 ## 12. Non-goals, stated once
 
 No config dialect — profiles are shard values. No distinguished

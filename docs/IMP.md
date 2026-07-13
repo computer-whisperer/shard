@@ -1095,6 +1095,27 @@ discipline).
   recognizer and the phase/fold machinery grow there), build DERIVE
   integration.
 
+**I2d-2b — build DERIVE integration: impgen enters the derive slot
+(2026-07-13).** The four generated cert files are driver products —
+the small slice §5 predicted, pulled ahead of I2d-3 because it closes
+the regen-is-canon contract on the whole impgen surface cheaply. The
+driver grew kind **'impgen** (targets 'wasm/'x86): the standard regen
+ladder (determinism up to canonicalization) with tools/impgen as the
+generator. A new KIND rather than a new target because 'regen selects
+its generator BY target and impgen shares both targets with
+wasmgen/x86gen — a second generator per target forces the kind axis
+(derive holds no privilege; a new generator is just a new kind over
+the same ladder). One mechanical constraint shaped the orders: the
+generated header stamps the regen command (raw path included), so the
+raw MUST be generated at OUT's `.shard`→`.raw` sibling spelling —
+capture-dir naming fails the byte compare by construction — and a
+gated rm leg cleans it after the fmt leg reads it. Each output also
+gates as a 'check product (the imp-tower norm: the aggregate
+kernel-gates what it regen-gates). Products 52→60 in
+examples/build_products.shard as 'impgen+'check pairs, all green;
+corpus FAIL-set unchanged at 57. Remaining in I2d: I2d-3 per the
+record above.
+
 ## 7. Non-goals, stated once
 
 - imp as a shipped target or public surface — it is an intermediate;
