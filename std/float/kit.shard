@@ -24,6 +24,8 @@
 (use (:: std rat gcd mul_nonneg))
 (use (:: std rat gcd pos_factor_pos))
 (use (:: std rat gcd mul_neg_l))
+(use (:: std rat gcd mul_pos))
+(use (:: std rat gcd mod_scale))
 (use (:: std bits pow2))
 (use (:: std bits pow2_z))
 (use (:: std bits pow2_s))
@@ -5070,3 +5072,636 @@
        (steps ((rewrite (premise 1) lr lhs true ())) refl)
        (steps ((rewrite (premise 2) lr lhs true ())) refl)))
     (steps () refl)))
+
+;; --- the dyadic rounding kit (rung R2.3 infrastructure) -------------------------------
+;; fgrs (std/float/grs.shard) rounds a dyadic m*2^e by bit examination; its
+;; equality against frnd_pos decomposes onto: rne_div dissolving at divisor 1,
+;; euclidean homogeneity (a common positive factor cancels out of ediv and
+;; rne_div — the mod half is L0's mod_scale), and the target row read off the
+;; bit length agreeing with elog on dyadics (the ge_scaled test always passes
+;; when one side's mantissa is minimal, by ibits_lo).
+
+;; RNE at divisor 1 is the identity.
+(claim rne_div_one
+  (goal ((x Int)) () (= (rne_div x 1) x))
+  (chain
+    (have hlo (= (le 0 (mod x 1)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ((inst n x) (inst d 1))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hhi (= (lt (mod x 1) 1) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ((inst n x) (inst d 1))
+        ((steps ((compute lhs)) refl))
+        refl))
+    (have hm0 (= (mod x 1) 0)
+      (steps () (by arith (list (list 1 0 1) (list 1 1 0)))))
+    (have he (= (ediv x 1) x)
+      (rewrite-with
+        (lemma div_unique)
+        lr
+        lhs
+        ((inst n x) (inst d 1) (inst q x) (inst r 0))
+        ((steps () (by arith (list (list 1 0 0 0) (list 1 0 0 0))))
+         (steps ((compute lhs)) refl)
+         (steps ((compute lhs)) refl))
+        refl))
+    (steps
+      ((unfold rne_div lhs)
+       (rewrite (premise hm0) lr lhs true ())
+       (simp lhs)
+       (rewrite (premise he) lr lhs true ()))
+      refl)))
+
+;; euclidean homogeneity, quotient half: 0 < c, 0 < b  |-
+;; (c*a) div (c*b) = a div b. The scaled decomposition is exhibited from
+;; ediv_mod_id times c; the scaled remainder's range rides mul_nonneg and
+;; mul_le_mono_l (c*r <= c*(b-1) = c*b - c < c*b).
+(claim ediv_scale
+  (goal ((c Int) (a Int) (b Int)) ((= (lt 0 c) True) (= (lt 0 b) True))
+    (= (ediv (* c a) (* c b)) (ediv a b)))
+  (chain
+    (have hid (= a (+ (* b (ediv a b)) (mod a b)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n a) (inst d b))
+        ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have hexp (= (* c a) (+ (* (* c b) (ediv a b)) (* c (mod a b))))
+      (steps
+        ((rewrite (premise 2) lr lhs true ())
+         (rewrite (lemma mul_dist) lr lhs true ())
+         (rewrite (lemma mul_assoc) rl lhs true ()))
+        refl))
+    (have hr0 (= (le 0 (* c (mod a b))) True)
+      (rewrite-with
+        (lemma mul_nonneg)
+        lr
+        lhs
+        ((inst a c) (inst b (mod a b)))
+        ((by arith (list 1 1 0 0 0))
+         (rewrite-with
+           (lemma mod_lo)
+           lr
+           lhs
+           ((inst n a) (inst d b))
+           ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+           refl))
+        refl))
+    (have hrb (= (lt (* c (mod a b)) (* c b)) True)
+      (chain
+        (have hmh (= (lt (mod a b) b) True)
+          (rewrite-with
+            (lemma mod_hi)
+            lr
+            lhs
+            ((inst n a) (inst d b))
+            ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+            refl))
+        (have hmono (= (le (* c (mod a b)) (* c (- b 1))) True)
+          (rewrite-with
+            (lemma mul_le_mono_l)
+            lr
+            lhs
+            ((inst x (mod a b)) (inst y (- b 1)) (inst z c))
+            ((by arith (list 1 0 0 0 0 0 1)) (by arith (list 1 1 0 0 0 0 0)))
+            refl))
+        (have hms (= (* c (- b 1)) (- (* c b) (* c 1)))
+          (rewrite-with
+            (lemma mul_sub)
+            lr
+            lhs
+            ((inst a c) (inst b b) (inst c 1))
+            ()
+            refl))
+        (steps () (by arith (list 1 1 0 0 0 0 0 1 -1)))))
+    (rewrite-with
+      (lemma div_unique)
+      lr
+      lhs
+      ((inst n (* c a))
+       (inst d (* c b))
+       (inst q (ediv a b))
+       (inst r (* c (mod a b))))
+      ((steps ((rewrite (premise 3) lr lhs true ())) refl)
+       (steps ((rewrite (premise 4) lr lhs true ())) refl)
+       (steps ((rewrite (premise 5) lr lhs true ())) refl)))
+    (steps () refl)))
+
+;; euclidean homogeneity, RNE: 0 < c, 0 < y  |-
+;; RNE((c*x)/(c*y)) = RNE(x/y). Both remainder comparisons scale by c
+;; (mul_le_mono_l both ways), and the quotients agree by ediv_scale — so
+;; every branch of the two rne_div bodies aligns.
+(claim rne_div_scale
+  (goal ((c Int) (x Int) (y Int)) ((= (lt 0 c) True) (= (lt 0 y) True))
+    (= (rne_div (* c x) (* c y)) (rne_div x y)))
+  (chain
+    (have hms (= (mod (* c x) (* c y)) (* c (mod x y)))
+      (rewrite-with
+        (lemma mod_scale)
+        lr
+        lhs
+        ((inst k c) (inst a x) (inst b y))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have hds (= (ediv (* c x) (* c y)) (ediv x y))
+      (rewrite-with
+        (lemma ediv_scale)
+        lr
+        lhs
+        ((inst c c) (inst a x) (inst b y))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have hswap (= (* 2 (* c (mod x y))) (* c (* 2 (mod x y))))
+      (chain
+        (rewrite-with
+          (lemma mul_assoc)
+          rl
+          lhs
+          ((inst a 2) (inst b c) (inst c (mod x y)))
+          ())
+        (rewrite-with
+          (lemma mul_assoc)
+          rl
+          rhs
+          ((inst a c) (inst b 2) (inst c (mod x y)))
+          ())
+        (rewrite-with (lemma mul_comm) lr rhs ((inst a c) (inst b 2)) ())
+        (steps () refl)))
+    (case-on (lt (* 2 (mod x y)) y) Bool
+      ((case True
+         (chain
+           (have hcT (= (lt (* 2 (mod x y)) y) True)
+             (steps ((rewrite (hyp True) lr lhs true ())) refl))
+           (have hmono (= (le (* c (* 2 (mod x y))) (* c (- y 1))) True)
+             (rewrite-with
+               (lemma mul_le_mono_l)
+               lr
+               lhs
+               ((inst x (* 2 (mod x y))) (inst y (- y 1)) (inst z c))
+               ((by arith (list 1 0 0 0 0 0 1)) (by arith (list 1 1 0 0 0 0 0)))
+               refl))
+           (have hsub (= (* c (- y 1)) (- (* c y) (* c 1)))
+             (rewrite-with
+               (lemma mul_sub)
+               lr
+               lhs
+               ((inst a c) (inst b y) (inst c 1))
+               ()
+               refl))
+           (have hgl (= (lt (* 2 (* c (mod x y))) (* c y)) True)
+             (steps () (by arith (list 1 1 0 0 0 -1 0 1 -1))))
+           (steps
+             ((unfold rne_div lhs)
+              (unfold rne_div rhs)
+              (rewrite (premise hms) lr lhs true ())
+              (rewrite (premise hds) lr lhs true ())
+              (rewrite (premise hgl) lr lhs true ())
+              (rewrite (premise hcT) lr rhs true ())
+              (simp both))
+             refl)))
+       (case False
+         (chain
+           (have hcF (= (lt (* 2 (mod x y)) y) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (have hmono2 (= (le (* c y) (* c (* 2 (mod x y)))) True)
+             (rewrite-with
+               (lemma mul_le_mono_l)
+               lr
+               lhs
+               ((inst x y) (inst y (* 2 (mod x y))) (inst z c))
+               ((by arith (list 1 0 0 0 0 0 1)) (by arith (list 1 1 0 0 0 0 0)))
+               refl))
+           (have hgf (= (lt (* 2 (* c (mod x y))) (* c y)) False)
+             (steps () (by arith (list 1 0 0 0 0 1 0 1))))
+           (case-on (lt y (* 2 (mod x y))) Bool
+             ((case True
+                (chain
+                  (have hdT (= (lt y (* 2 (mod x y))) True)
+                    (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                  (have hmono3 (= (le (* c (+ y 1)) (* c (* 2 (mod x y)))) True)
+                    (rewrite-with
+                      (lemma mul_le_mono_l)
+                      lr
+                      lhs
+                      ((inst x (+ y 1)) (inst y (* 2 (mod x y))) (inst z c))
+                      ((by arith (list 1 0 0 0 0 0 0 0 0 1))
+                       (by arith (list 1 1 0 0 0 0 0 0 0 0)))
+                      refl))
+                  (have hdist (= (* c (+ y 1)) (+ (* c y) (* c 1)))
+                    (rewrite-with
+                      (lemma mul_dist)
+                      lr
+                      lhs
+                      ((inst a c) (inst b y) (inst c 1))
+                      ()
+                      refl))
+                  (have hg2t (= (lt (* c y) (* 2 (* c (mod x y)))) True)
+                    (steps () (by arith (list 1 1 0 0 0 1 0 0 0 0 1 1))))
+                  (steps
+                    ((unfold rne_div lhs)
+                     (unfold rne_div rhs)
+                     (rewrite (premise hms) lr lhs true ())
+                     (rewrite (premise hds) lr lhs true ())
+                     (rewrite (premise hgf) lr lhs true ())
+                     (rewrite (premise hg2t) lr lhs true ())
+                     (rewrite (premise hcF) lr rhs true ())
+                     (rewrite (premise hdT) lr rhs true ())
+                     (simp both))
+                    refl)))
+              (case False
+                (chain
+                  (have hdF (= (lt y (* 2 (mod x y))) False)
+                    (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                  (have hmono4 (= (le (* c (* 2 (mod x y))) (* c y)) True)
+                    (rewrite-with
+                      (lemma mul_le_mono_l)
+                      lr
+                      lhs
+                      ((inst x (* 2 (mod x y))) (inst y y) (inst z c))
+                      ((by arith (list 1 0 0 0 0 0 0 0 0 1))
+                       (by arith (list 1 1 0 0 0 0 0 0 0 0)))
+                      refl))
+                  (have hg2f (= (lt (* c y) (* 2 (* c (mod x y)))) False)
+                    (steps () (by arith (list 1 0 0 0 0 -1 0 0 0 0 1))))
+                  (steps
+                    ((unfold rne_div lhs)
+                     (unfold rne_div rhs)
+                     (rewrite (premise hms) lr lhs true ())
+                     (rewrite (premise hds) lr lhs true ())
+                     (rewrite (premise hgf) lr lhs true ())
+                     (rewrite (premise hg2f) lr lhs true ())
+                     (rewrite (premise hcF) lr rhs true ())
+                     (rewrite (premise hdF) lr rhs true ())
+                     (simp both))
+                    refl)))))))))))
+
+;; bit length shifts: 1 <= m, 0 <= j  |-  ibits(m * 2^j) = ibits m + j.
+;; Induction on j: the step peels one doubling (m*2^j = (m*2^(j-1))*2, and
+;; ibits of a positive double is one more — the halving recursion undone).
+(claim ibits_mul_pow2
+  (goal ((m Int) (j Int)) ((= (le 1 m) True) (= (le 0 j) True))
+    (= (ibits (* m (fpow2 j))) (+ (ibits m) j)))
+  (wf-induct j
+    (case-on (le j 0) Bool
+      ((case True
+         (chain
+           (have hj (= (le j 0) True)
+             (steps ((rewrite (hyp True) lr lhs true ())) refl))
+           (have h1 (= (fpow2 j) 1)
+             (rewrite-with
+               (lemma fpow2_le0)
+               lr
+               lhs
+               ((inst k j))
+               ((steps ((rewrite (premise 2) lr lhs true ())) refl))
+               refl))
+           (have harg (= (* m (fpow2 j)) m)
+             (steps
+               ((rewrite (premise 3) lr lhs true ()))
+               (by arith (list (list 1 0 0 0 0) (list 1 0 0 0 0)))))
+           (steps
+             ((rewrite (premise 4) lr lhs true ()))
+             (by arith (list (list 1 0 1 0 0 0) (list 1 0 0 1 0 0))))))
+       (case False
+         (chain
+           (have hjf (= (le j 0) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (have hsp (= (fpow2 j) (* 2 (fpow2 (- j 1))))
+             (rewrite-with
+               (lemma fpow2_unfold_pos)
+               lr
+               lhs
+               ((inst k j))
+               ((by arith (list 1 0 0 1)))
+               refl))
+           (have hp (= (lt 0 (fpow2 (- j 1))) True)
+             (rewrite-with (lemma fpow2_pos) lr lhs ((inst k (- j 1))) () refl))
+           (have hm1 (= (le 1 (* m (fpow2 (- j 1)))) True)
+             (chain
+               (have hmp (= (lt 0 (* m (fpow2 (- j 1)))) True)
+                 (rewrite-with
+                   (lemma mul_pos)
+                   lr
+                   lhs
+                   ((inst a m) (inst b (fpow2 (- j 1))))
+                   ((by arith (list 1 1 0 0 0 0))
+                    (steps ((rewrite (premise 4) lr lhs true ())) refl))
+                   refl))
+               (steps () (by arith (list 1 0 0 0 0 0 1)))))
+           (have harg (= (* m (fpow2 j)) (* (* m (fpow2 (- j 1))) 2))
+             (chain
+               (rewrite-with
+                 (lemma mul_comm)
+                 lr
+                 rhs
+                 ((inst a (* m (fpow2 (- j 1)))) (inst b 2))
+                 ())
+               (rewrite-with
+                 (lemma mul_assoc)
+                 rl
+                 rhs
+                 ((inst a 2) (inst b m) (inst c (fpow2 (- j 1))))
+                 ())
+               (rewrite-with (lemma mul_comm) lr rhs ((inst a 2) (inst b m)) ())
+               (rewrite-with
+                 (lemma mul_assoc)
+                 lr
+                 rhs
+                 ((inst a m) (inst b 2) (inst c (fpow2 (- j 1))))
+                 ())
+               (steps ((rewrite (premise 3) lr lhs true ())) refl)))
+           (have hqe
+             (= (ediv (* (* m (fpow2 (- j 1))) 2) 2) (* m (fpow2 (- j 1))))
+             (rewrite-with
+               (lemma div_unique)
+               lr
+               lhs
+               ((inst n (* (* m (fpow2 (- j 1))) 2))
+                (inst d 2)
+                (inst q (* m (fpow2 (- j 1))))
+                (inst r 0))
+               ((steps
+                  ()
+                  (by
+                    arith
+                    (list (list 1 0 0 0 0 0 0 0) (list 1 0 0 0 0 0 0 0))))
+                (steps ((compute lhs)) refl)
+                (steps ((compute lhs)) refl))
+               refl))
+           (have hstep
+             (=
+               (ibits (* (* m (fpow2 (- j 1))) 2))
+               (+ 1 (ibits (* m (fpow2 (- j 1))))))
+             (chain
+               (have hgz (= (le (* (* m (fpow2 (- j 1))) 2) 0) False)
+                 (steps () (by arith (list 1 0 0 0 0 0 2 0 0))))
+               (steps
+                 ((unfold ibits lhs)
+                  (rewrite (premise 8) lr lhs true ())
+                  (simp lhs)
+                  (rewrite (premise 7) lr lhs true ()))
+                 refl)))
+           (have hih (= (ibits (* m (fpow2 (- j 1)))) (+ (ibits m) (- j 1)))
+             (rewrite-with
+               (hyp 1)
+               lr
+               lhs
+               ()
+               ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                (steps () (by arith (list 1 0 0 1 0 0 0 0 0 0)))
+                (steps () (by arith (list 1 0 0 1 0 0 0 0 0 0)))
+                (steps () (by arith (list 1 0 0 0 0 0 0 0 0 0))))
+               refl))
+           (steps
+             ((rewrite (premise 6) lr lhs true ())
+              (rewrite (premise 8) lr lhs true ())
+              (rewrite (premise 9) lr lhs true ()))
+             (by
+               arith
+               (list (list 1 0 0 0 0 0 0 0 0 0 0) (list 1 0 0 0 0 0 0 0 0 0 0))))))))))
+
+;; elog of a left-shifted dyadic: 1 <= m, 0 <= e  |-
+;; elog(m * 2^e, 1) = e + ibits m - 1. The ge_scaled probe at the bit-length
+;; difference always passes here — the divisor's mantissa is minimal — so the
+;; first branch is exact; ibits_lo supplies the comparison.
+(claim elog_shl
+  (goal ((m Int) (e Int)) ((= (le 1 m) True) (= (le 0 e) True))
+    (= (elog (* m (fpow2 e)) 1) (+ e (- (ibits m) 1))))
+  (chain
+    (have hib1 (= (ibits 1) 1) (steps ((compute lhs)) refl))
+    (have hia (= (ibits (* m (fpow2 e))) (+ (ibits m) e))
+      (rewrite-with
+        (lemma ibits_mul_pow2)
+        lr
+        lhs
+        ((inst m m) (inst j e))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have hibp (= (le 1 (ibits m)) True)
+      (rewrite-with
+        (lemma ibits_pos)
+        lr
+        lhs
+        ((inst n m))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have hK (= (le 0 (- (+ (ibits m) e) 1)) True)
+      (steps () (by arith (list 1 0 1 0 0 1))))
+    (have hlo (= (le (fpow2 (- (ibits m) 1)) m) True)
+      (rewrite-with
+        (lemma ibits_lo)
+        lr
+        lhs
+        ((inst n m))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have hmono
+      (= (le (* (fpow2 (- (ibits m) 1)) (fpow2 e)) (* m (fpow2 e))) True)
+      (rewrite-with
+        (lemma mul_le_mono_r)
+        lr
+        lhs
+        ((inst x (fpow2 (- (ibits m) 1))) (inst y m) (inst z (fpow2 e)))
+        ((steps ((rewrite (premise hlo) lr lhs true ())) refl)
+         (chain
+           (have hp (= (lt 0 (fpow2 e)) True)
+             (rewrite-with (lemma fpow2_pos) lr lhs ((inst k e)) () refl))
+           (steps () (by arith (list 1 0 0 0 0 0 0 0 1)))))
+        refl))
+    (have hexp (= (- (+ (ibits m) e) 1) (+ (- (ibits m) 1) e))
+      (steps
+        ()
+        (by arith (list (list 1 0 0 0 0 0 0 0 0) (list 1 0 0 0 0 0 0 0 0)))))
+    (have hsp
+      (= (fpow2 (+ (- (ibits m) 1) e)) (* (fpow2 (- (ibits m) 1)) (fpow2 e)))
+      (rewrite-with
+        (lemma fpow2_split)
+        lr
+        lhs
+        ((inst a (- (ibits m) 1)) (inst b e))
+        ((by arith (list 1 0 0 0 0 1 0 0 0 0))
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have hgs (= (ge_scaled (* m (fpow2 e)) 1 (- (+ (ibits m) e) 1)) True)
+      (chain
+        (have h1f
+          (= (* 1 (fpow2 (- (+ (ibits m) e) 1))) (fpow2 (- (+ (ibits m) e) 1)))
+          (steps
+            ()
+            (by
+              arith
+              (list (list 1 0 0 0 0 0 0 0 0 0 0) (list 1 0 0 0 0 0 0 0 0 0 0)))))
+        (steps
+          ((unfold ge_scaled lhs)
+           (rewrite (premise hK) lr lhs true ())
+           (simp lhs)
+           (rewrite (premise h1f) lr lhs true ())
+           (rewrite (premise hexp) lr lhs true ())
+           (rewrite (premise hsp) lr lhs true ())
+           (rewrite (premise hmono) lr lhs true ()))
+          refl)))
+    (steps
+      ((unfold elog lhs)
+       (rewrite (premise hia) lr lhs true ())
+       (rewrite (premise hib1) lr lhs true ())
+       (rewrite (premise hgs) lr lhs true ())
+       (simp lhs))
+      (by
+        arith
+        (list (list 1 0 0 0 0 0 0 0 0 0 0 0) (list 1 0 0 0 0 0 0 0 0 0 0 0))))))
+
+;; elog against a power-of-two divisor: 1 <= m, 0 <= j  |-
+;; elog(m, 2^j) = ibits m - 1 - j. Same shape: the probe passes in both
+;; exponent-sign arms, riding ibits_lo through fpow2_split.
+(claim elog_shr
+  (goal ((m Int) (j Int)) ((= (le 1 m) True) (= (le 0 j) True))
+    (= (elog m (fpow2 j)) (- (- (ibits m) 1) j)))
+  (chain
+    (have hib1 (= (ibits 1) 1) (steps ((compute lhs)) refl))
+    (have h1j (= (* 1 (fpow2 j)) (fpow2 j))
+      (steps () (by arith (list (list 1 0 0 0) (list 1 0 0 0)))))
+    (have hibj (= (ibits (* 1 (fpow2 j))) (+ (ibits 1) j))
+      (rewrite-with
+        (lemma ibits_mul_pow2)
+        lr
+        lhs
+        ((inst m 1) (inst j j))
+        ((steps ((compute lhs)) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have hibj2 (= (ibits (fpow2 j)) (+ 1 j))
+      (steps
+        ((rewrite (premise h1j) rl lhs true ())
+         (rewrite (premise hibj) lr lhs true ())
+         (rewrite (premise hib1) lr lhs true ()))
+        refl))
+    (have hibp (= (le 1 (ibits m)) True)
+      (rewrite-with
+        (lemma ibits_pos)
+        lr
+        lhs
+        ((inst n m))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have hlo (= (le (fpow2 (- (ibits m) 1)) m) True)
+      (rewrite-with
+        (lemma ibits_lo)
+        lr
+        lhs
+        ((inst n m))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have hgs (= (ge_scaled m (fpow2 j) (- (ibits m) (+ 1 j))) True)
+      (case-on (le 0 (- (ibits m) (+ 1 j))) Bool
+        ((case True
+           (chain
+             (have hkT (= (le 0 (- (ibits m) (+ 1 j))) True)
+               (steps ((rewrite (hyp True) lr lhs true ())) refl))
+             (have hspl
+               (=
+                 (fpow2 (+ j (- (ibits m) (+ 1 j))))
+                 (* (fpow2 j) (fpow2 (- (ibits m) (+ 1 j)))))
+               (rewrite-with
+                 (lemma fpow2_split)
+                 lr
+                 lhs
+                 ((inst a j) (inst b (- (ibits m) (+ 1 j))))
+                 ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                  (steps ((rewrite (premise hkT) lr lhs true ())) refl))
+                 refl))
+             (have hexp2 (= (+ j (- (ibits m) (+ 1 j))) (- (ibits m) 1))
+               (steps
+                 ()
+                 (by
+                   arith
+                   (list
+                     (list 1 0 0 0 0 0 0 0 0 0 0)
+                     (list 1 0 0 0 0 0 0 0 0 0 0)))))
+             (steps
+               ((unfold ge_scaled lhs)
+                (rewrite (premise hkT) lr lhs true ())
+                (simp lhs)
+                (rewrite (premise hspl) rl lhs true ())
+                (rewrite (premise hexp2) lr lhs true ())
+                (rewrite (premise hlo) lr lhs true ()))
+               refl)))
+         (case False
+           (chain
+             (have hkF (= (le 0 (- (ibits m) (+ 1 j))) False)
+               (steps ((rewrite (hyp False) lr lhs true ())) refl))
+             (have hexp3 (= (+ (- (ibits m) 1) (- 0 (- (ibits m) (+ 1 j)))) j)
+               (steps
+                 ()
+                 (by
+                   arith
+                   (list
+                     (list 1 0 0 0 0 0 0 0 0 0 0)
+                     (list 1 0 0 0 0 0 0 0 0 0 0)))))
+             (have hje
+               (=
+                 (fpow2 j)
+                 (* (fpow2 (- (ibits m) 1)) (fpow2 (- 0 (- (ibits m) (+ 1 j))))))
+               (chain
+                 (rewrite-with
+                   (lemma fpow2_split)
+                   rl
+                   rhs
+                   ((inst a (- (ibits m) 1))
+                    (inst b (- 0 (- (ibits m) (+ 1 j)))))
+                   ((by arith (list 1 0 0 0 0 0 0 1 0 0 0))
+                    (by arith (list 1 0 0 0 0 0 0 0 0 1 0))))
+                 (steps ((rewrite (premise hexp3) lr rhs true ())) refl)))
+             (have hmono2
+               (=
+                 (le
+                   (*
+                     (fpow2 (- (ibits m) 1))
+                     (fpow2 (- 0 (- (ibits m) (+ 1 j)))))
+                   (* m (fpow2 (- 0 (- (ibits m) (+ 1 j))))))
+                 True)
+               (rewrite-with
+                 (lemma mul_le_mono_r)
+                 lr
+                 lhs
+                 ((inst x (fpow2 (- (ibits m) 1)))
+                  (inst y m)
+                  (inst z (fpow2 (- 0 (- (ibits m) (+ 1 j))))))
+                 ((steps ((rewrite (premise hlo) lr lhs true ())) refl)
+                  (chain
+                    (have hp2
+                      (= (lt 0 (fpow2 (- 0 (- (ibits m) (+ 1 j))))) True)
+                      (rewrite-with
+                        (lemma fpow2_pos)
+                        lr
+                        lhs
+                        ((inst k (- 0 (- (ibits m) (+ 1 j)))))
+                        ()
+                        refl))
+                    (steps () (by arith (list 1 0 0 0 0 0 0 0 0 0 0 0 1)))))
+                 refl))
+             (steps
+               ((unfold ge_scaled lhs)
+                (rewrite (premise hkF) lr lhs true ())
+                (simp lhs)
+                (rewrite (premise hje) lr lhs true ())
+                (rewrite (premise hmono2) lr lhs true ()))
+               refl))))))
+    (steps
+      ((unfold elog lhs)
+       (rewrite (premise hibj2) lr lhs true ())
+       (rewrite (premise hgs) lr lhs true ())
+       (simp lhs))
+      (by arith (list (list 1 0 0 0 0 0 0 0 0 0) (list 1 0 0 0 0 0 0 0 0 0))))))
