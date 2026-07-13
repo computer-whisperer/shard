@@ -41,6 +41,7 @@ TARGETS=(
   std/float/kit.shard
   std/float/pack.shard
   std/float/grs.shard
+  std/float/ops2.shard
   examples/float_val_compute.shard
   examples/bits_demo.shard
   std/axiom_scope_rejects.shard
