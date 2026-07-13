@@ -60,6 +60,7 @@
 (use (:: kernel term qn_mod))
 (use (:: kernel term qname_eq))
 (use (:: kernel term sym_path_eq))
+(use (:: kernel term expr_eq))
 (use (:: kernel term append_int))
 (use (:: kernel module Module))
 (use (:: kernel module FnDef))
@@ -383,6 +384,443 @@
        1)))
     (_ 1)))
 
+;; --- the symbolic walk: events in evaluation order -------------------------------
+;; The bridge's premise discipline: walk the pin's statements and result
+;; with a SYMBOLIC local state (params = x0…, extras = 0), emitting one
+;; event per machine-width residue in evaluation order — a wrap pair per
+;; exact-op node whose value survives symbolically (ground subtrees
+;; compute away, so they carry no residue), a divisor guard per
+;; symbolic divisor. Branches fork the walk (continuation folded into
+;; both arms); an event's PATH prefixes its premises condition-relative
+;; (the §6j hygiene, meta/spell's cond_wrap).
+
+(fn pq ((s Symbol)) QName (QName Nil s))
+
+(fn sc2 ((s Symbol) (a Expr) (b Expr)) Expr (Call (pq s) (Cons a (Cons b Nil))))
+
+;; value-position spelling of an exact op (comparisons refuse upstream)
+(fn op_sym ((o IOp)) Symbol
+  (match o
+    (IAdd (quote +))
+    (ISub (quote -))
+    (IMul (quote *))
+    (IDiv (quote ediv))
+    (IRem (quote mod))
+    (IAnd (quote band))
+    (IOr (quote bor))
+    (IXor (quote bxor))
+    (IShl (quote bshl))
+    (IShr (quote bshr))
+    (IEq (quote int_eq))
+    (ILt (quote lt))
+    (ILe (quote le))))
+
+(fn is_cmp ((o IOp)) Bool
+  (match o
+    (IEq True)
+    (ILt True)
+    (ILe True)
+    (_ False)))
+
+(fn is_wrapop ((o IOp)) Bool
+  (match o
+    (IAdd True)
+    (ISub True)
+    (IMul True)
+    (_ False)))
+
+(fn has_fv ((e Expr)) Bool
+  (measure (struct e))
+  (match e
+    ((FVar _) True)
+    ((Call _ args) (has_fv_l args))
+    ((Ctor _ args) (has_fv_l args))
+    (_ False)))
+
+(fn has_fv_l ((es (List Expr))) Bool
+  (measure (struct es))
+  (match es
+    (Nil False)
+    ((Cons h t) (if (has_fv h) True (has_fv_l t)))))
+
+;; symbolic locals: params x0…, extras literal 0 (count down, prepend —
+;; the last prepended binder is x0, so the order comes out ascending)
+(fn st_params_go ((p Int) (acc (List Expr))) (List Expr)
+  (measure p (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt p 1) acc (st_params_go (- p 1) (Cons (FVar (xsym (- p 1))) acc))))
+
+(fn st_params ((p Int)) (List Expr) (st_params_go p Nil))
+
+(fn st_zeros ((x Int)) (List Expr)
+  (measure x (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt x 1) Nil (Cons (IntLit 0) (st_zeros (- x 1)))))
+
+(fn st_app ((a (List Expr)) (b (List Expr))) (List Expr)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (st_app t b)))))
+
+(fn st_init ((p Int) (x Int)) (List Expr) (st_app (st_params p) (st_zeros x)))
+
+(fn st_get ((st (List Expr)) (i Int)) (Option Expr)
+  (measure (struct st))
+  (match st
+    (Nil None)
+    ((Cons h t) (if (int_eq i 0) (Some h) (st_get t (- i 1))))))
+
+(fn st_set ((st (List Expr)) (i Int) (v Expr)) (Option (List Expr))
+  (measure (struct st))
+  (match st
+    (Nil None)
+    ((Cons h t)
+     (if (int_eq i 0) (Some (Cons v t))
+     (match (st_set t (- i 1) v)
+       (None None)
+       ((Some t2) (Some (Cons h t2))))))))
+
+;; events: a wrap pair or a divisor guard, condition-relative via path
+(type EvK (KWrap) (KGuard))
+
+(record Ev (evk EvK) (evp (List (Pair Expr Bool))) (evx Expr))
+
+;; expression walk result: symbolic value + events (eval order), or the
+;; v1-scope refusal reason
+(type XR (XOk Expr (List Ev)) (XRf (List Int)))
+
+(fn ev_app ((a (List Ev)) (b (List Ev))) (List Ev)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (ev_app t b)))))
+
+;; the walk: md = the target modulus; x86 flags the rotation premise
+;; and div refusal mirror; absorb suppresses the ROOT op's wrap event
+;; (an IWrap of native width directly above it prices the containment)
+(fn se_exp
+  ((x86 Bool)
+   (md Int)
+   (e IExp)
+   (st (List Expr))
+   (pth (List (Pair Expr Bool)))
+   (absorb Bool))
+  XR
+  (measure (struct e))
+  (match e
+    ((IConst n)
+     (if (le 0 n)
+       (if (lt n md) (XOk (IntLit n) Nil)
+       (XRf "constant outside the machine width"))
+       (XRf "negative constant (the machine wraps it)")))
+    ((ILoc i)
+     (match (st_get st i)
+       (None (XRf "local index out of range"))
+       ((Some v) (XOk v Nil))))
+    ((IBin o a b)
+     (if (is_cmp o) (XRf "comparison in value position (v1)")
+     (match (se_exp x86 md a st pth False)
+       ((XRf m) (XRf m))
+       ((XOk va evs_a)
+        (match (se_exp x86 md b st pth False)
+          ((XRf m) (XRf m))
+          ((XOk vb evs_b)
+           (match o
+             (IDiv
+               (if x86 (XRf "division (to_x86 refuses; unreachable)")
+               (match vb
+                 ((IntLit _) (XOk (sc2 (quote ediv) va vb) (ev_app evs_a evs_b)))
+                 (_
+                   (XOk
+                     (sc2 (quote ediv) va vb)
+                     (ev_app
+                       evs_a
+                       (ev_app evs_b (Cons (MkEv KGuard pth vb) Nil))))))))
+             (IRem
+               (if x86 (XRf "remainder (to_x86 refuses; unreachable)")
+               (match vb
+                 ((IntLit _) (XOk (sc2 (quote mod) va vb) (ev_app evs_a evs_b)))
+                 (_
+                   (XOk
+                     (sc2 (quote mod) va vb)
+                     (ev_app
+                       evs_a
+                       (ev_app evs_b (Cons (MkEv KGuard pth vb) Nil))))))))
+             (IShl
+               (match vb
+                 ((IntLit k)
+                  (if (le 0 k)
+                    (if (lt k (if x86 64 32))
+                      (if absorb (XOk (sc2 (quote bshl) va (IntLit k)) evs_a)
+                      (if (has_fv va)
+                        (XOk
+                          (sc2 (quote bshl) va (IntLit k))
+                          (ev_app
+                            evs_a
+                            (Cons
+                              (MkEv
+                                KWrap
+                                pth
+                                (sc2 (quote bshl) va (IntLit k)))
+                              Nil)))
+                      (XOk (sc2 (quote bshl) va (IntLit k)) evs_a)))
+                      (XRf "shift count at or past the machine count mask (v1)"))
+                    (XRf "negative shift count")))
+                 (_ (XRf "symbolic shift count (v1)"))))
+             (IShr
+               (match vb
+                 ((IntLit k)
+                  (if (le 0 k)
+                    (if (lt k (if x86 64 32))
+                      (XOk (sc2 (quote bshr) va (IntLit k)) evs_a)
+                      (XRf "shift count at or past the machine count mask (v1)"))
+                    (XRf "negative shift count")))
+                 (_ (XRf "symbolic shift count (v1)"))))
+             (_
+               (if (is_wrapop o)
+                 (if absorb (XOk (sc2 (op_sym o) va vb) (ev_app evs_a evs_b))
+                 (if (has_fv (sc2 (op_sym o) va vb))
+                   (XOk
+                     (sc2 (op_sym o) va vb)
+                     (ev_app
+                       evs_a
+                       (ev_app
+                         evs_b
+                         (Cons (MkEv KWrap pth (sc2 (op_sym o) va vb)) Nil))))
+                 (XOk (sc2 (op_sym o) va vb) (ev_app evs_a evs_b))))
+                 (XOk (sc2 (op_sym o) va vb) (ev_app evs_a evs_b)))))))))))
+    ((IWrap w a)
+     (if (int_eq w (if x86 64 32))
+       (match (se_exp x86 md a st pth True)
+         ((XRf m) (XRf m))
+         ((XOk va evs) (XOk (sc2 (quote mod) va (IntLit md)) evs)))
+       (XRf "off-width wrap (the translator refuses; unreachable)")))
+    ((IRotr w a k)
+     (if (int_eq w 32)
+       (match k
+         ((IConst kc)
+          (match (se_exp x86 md a st pth False)
+            ((XRf m) (XRf m))
+            ((XOk va evs)
+             (if x86
+               (if (has_fv va)
+                 (XOk
+                   (rot_val va kc)
+                   (ev_app
+                     evs
+                     (Cons
+                       (MkEv
+                         KWrap
+                         pth
+                         (sc2 (quote bshl) va (IntLit (- 32 (mod kc 32)))))
+                       Nil)))
+                 (XOk (rot_val va kc) evs))
+               (XOk (rot_val va kc) evs)))))
+         (_ (XRf "symbolic rotation count (v1)")))
+       (XRf "off-width rotation (the translator refuses; unreachable)")))
+    ((ILoad _) (XRf "memory (the loop/mem tier)"))))
+
+;; the band-spelled rotation value (the machine residue's exact tree)
+(fn rot_val ((va Expr) (kc Int)) Expr
+  (sc2
+    (quote band)
+    (sc2
+      (quote bor)
+      (sc2 (quote bshr) va (IntLit (mod kc 32)))
+      (sc2 (quote bshl) va (IntLit (- 32 (mod kc 32)))))
+    (IntLit 4294967295)))
+
+;; the branch tree the proof mirrors
+(type BT (BTLeaf) (BTBr Expr BT BT))
+
+;; statements walk result
+(type SR (SROk BT (List Ev)) (SRf (List Int)))
+
+;; total statement count (branch bodies included) — the walk's fuel
+;; bound: continuation folding consumes each original statement at most
+;; once along any one chain
+(fn isz_stmts ((ss (List IStmt))) Int
+  (measure (struct ss))
+  (match ss
+    (Nil 0)
+    ((Cons s t)
+     (match s
+       ((ISet _ _) (+ 1 (isz_stmts t)))
+       ((IStore _ _) (+ 1 (isz_stmts t)))
+       ((IIf _ tb eb) (+ 1 (+ (isz_stmts tb) (+ (isz_stmts eb) (isz_stmts t)))))
+       ((IWhile _ b) (+ 1 (+ (isz_stmts b) (isz_stmts t))))))))
+
+;; statements + result, continuation folded into branch arms so every
+;; leaf is a complete run; conditions must be comparison-headed and
+;; event-free (the no-arith-in-conditions fence). Fueled: folding is
+;; not structural, and the size bound above makes underflow unreachable
+(fn se_stmts
+  ((fuel Int)
+   (x86 Bool)
+   (md Int)
+   (ss (List IStmt))
+   (res IExp)
+   (st (List Expr))
+   (pth (List (Pair Expr Bool))))
+  SR
+  (measure
+    fuel
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1)))
+  (if (lt fuel 1) (SRf "walk fuel underflow (internal)")
+  (match ss
+    (Nil
+      (match (se_exp x86 md res st pth False)
+        ((XRf m) (SRf m))
+        ((XOk _ evs) (SROk BTLeaf evs))))
+    ((Cons s t)
+     (match s
+       ((ISet i e)
+        (match (se_exp x86 md e st pth False)
+          ((XRf m) (SRf m))
+          ((XOk v evs)
+           (match (st_set st i v)
+             (None (SRf "local index out of range"))
+             ((Some st2)
+              (match (se_stmts (- fuel 1) x86 md t res st2 pth)
+                ((SRf m) (SRf m))
+                ((SROk bt evs_t) (SROk bt (ev_app evs evs_t)))))))))
+       ((IStore _ _) (SRf "memory (the loop/mem tier)"))
+       ((IWhile _ _) (SRf "loops (the loop tier)"))
+       ((IIf c tb eb)
+        (match c
+          ((IBin o a b)
+           (if (is_cmp o)
+             (match (se_exp x86 md a st pth False)
+               ((XRf m) (SRf m))
+               ((XOk va evs_a)
+                (match evs_a
+                  ((Cons _ _) (SRf "arith residue in a condition (v1)"))
+                  (Nil
+                    (match (se_exp x86 md b st pth False)
+                      ((XRf m) (SRf m))
+                      ((XOk vb evs_b)
+                       (match evs_b
+                         ((Cons _ _) (SRf "arith residue in a condition (v1)"))
+                         (Nil
+                           (match
+                             (se_stmts
+                               (- fuel 1)
+                               x86
+                               md
+                               (stmt_app tb t)
+                               res
+                               st
+                               (path_snoc pth (sc2 (op_sym o) va vb) True))
+                             ((SRf m) (SRf m))
+                             ((SROk btt evs_t)
+                              (match
+                                (se_stmts
+                                  (- fuel 1)
+                                  x86
+                                  md
+                                  (stmt_app eb t)
+                                  res
+                                  st
+                                  (path_snoc pth (sc2 (op_sym o) va vb) False))
+                                ((SRf m) (SRf m))
+                                ((SROk btf evs_f)
+                                 (SROk
+                                   (BTBr (sc2 (op_sym o) va vb) btt btf)
+                                   (ev_app evs_t evs_f))))))))))))))
+             (SRf "non-comparison branch condition (v1)")))
+          (_ (SRf "non-comparison branch condition (v1)")))))))))
+
+(fn stmt_app ((a (List IStmt)) (b (List IStmt))) (List IStmt)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (stmt_app t b)))))
+
+(fn path_snoc
+  ((p (List (Pair Expr Bool))) (c Expr) (pol Bool))
+  (List (Pair Expr Bool))
+  (measure (struct p))
+  (match p
+    (Nil (Cons (Pair c pol) Nil))
+    ((Cons h t) (Cons h (path_snoc t c pol)))))
+
+;; --- event dedup and premise indexing ---------------------------------------------
+
+(fn path_eq ((a (List (Pair Expr Bool))) (b (List (Pair Expr Bool)))) Bool
+  (measure (struct a))
+  (match a
+    (Nil
+      (match b
+        (Nil True)
+        ((Cons _ _) False)))
+    ((Cons (Pair ca pa) ta)
+     (match b
+       (Nil False)
+       ((Cons (Pair cb pb) tb)
+        (if (expr_eq ca cb)
+          (if (match pa
+                (True (match pb (True True) (False False)))
+                (False (match pb (True False) (False True))))
+            (path_eq ta tb)
+            False)
+          False))))))
+
+(fn evk_eq ((a EvK) (b EvK)) Bool
+  (match a
+    (KWrap (match b (KWrap True) (KGuard False)))
+    (KGuard (match b (KWrap False) (KGuard True)))))
+
+(fn ev_seen ((l (List Ev)) (e Ev)) Bool
+  (measure (struct l))
+  (match l
+    (Nil False)
+    ((Cons h t)
+     (if (evk_eq (evk_of h) (evk_of e))
+       (if (expr_eq (evx_of h) (evx_of e))
+         (if (path_eq (evp_of h) (evp_of e)) True (ev_seen t e))
+         (ev_seen t e))
+       (ev_seen t e)))))
+
+(fn ev_dedup_go ((l (List Ev)) (seen (List Ev))) (List Ev)
+  (measure (struct l))
+  (match l
+    (Nil Nil)
+    ((Cons h t)
+     (if (ev_seen seen h) (ev_dedup_go t seen)
+     (Cons h (ev_dedup_go t (Cons h seen)))))))
+
+(fn ev_dedup ((l (List Ev))) (List Ev) (ev_dedup_go l Nil))
+
+;; each event with its FIRST premise slot (wraps take two, guards one)
+(fn ev_index ((l (List Ev)) (i Int)) (List (Pair Ev Int))
+  (measure (struct l))
+  (match l
+    (Nil Nil)
+    ((Cons h t)
+     (Cons
+       (Pair h i)
+       (ev_index
+         t
+         (match (evk_of h)
+           (KWrap (+ i 2))
+           (KGuard (+ i 1))))))))
+
+;; events whose path is exactly p
+(fn evs_at
+  ((l (List (Pair Ev Int))) (p (List (Pair Expr Bool))))
+  (List (Pair Ev Int))
+  (measure (struct l))
+  (match l
+    (Nil Nil)
+    ((Cons (Pair e i) t)
+     (if (path_eq (evp_of e) p)
+       (Cons (Pair e i) (evs_at t p))
+       (evs_at t p)))))
+
 ;; --- the tie claim ---------------------------------------------------------------
 
 (fn d_tie
@@ -403,6 +841,300 @@
       (DStr (nl))
       (DStr (nl)))))
 
+;; --- bridge emission ---------------------------------------------------------------
+
+;; goal binders: (x0 Int) … then the two fuel tails
+(fn d_binds_go ((n Int) (acc Doc)) Doc
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt n 1) acc
+  (d_binds_go
+    (- n 1)
+    (DCat (dcat3 (DStr "(x") (dint (- n 1)) (DStr " Int) ")) acc))))
+
+(fn d_binds ((n Int)) Doc (d_binds_go n (DStr "(c Nat) (c2 Nat)")))
+
+;; call args: (list x0 x1 …), Nil when the pin takes no params
+(fn d_args_go ((n Int) (acc Doc)) Doc
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt n 1) acc (d_args_go (- n 1) (dcat3 (DStr " x") (dint (- n 1)) acc))))
+
+(fn d_args ((n Int)) Doc
+  (if (lt n 1) (DStr "Nil")
+  (dcat3 (DStr "(list") (d_args_go n (DStr "")) (DStr ")"))))
+
+(fn d_lt_bound ((x Expr) (md Int)) Doc
+  (dcat3 (dcat3 (DStr "(lt ") (pr_e x) (sp)) (dint md) (DStr ")")))
+
+;; one premise: the bound condition-wrapped along the event's path
+(fn d_prem_one ((p (List (Pair Expr Bool))) (bound Doc)) Doc
+  (dcat3 (DStr "(= ") (cond_wrap p bound) (DStr " True)")))
+
+(fn d_prems ((l (List (Pair Ev Int))) (md Int)) Doc
+  (measure (struct l))
+  (match l
+    (Nil (DStr ""))
+    ((Cons (Pair e _) t)
+     (match (evk_of e)
+       (KWrap
+         (dcat3
+           (dcat3
+             (d_prem_one (evp_of e) (bnd_le0 (pr_e (evx_of e))))
+             (sp)
+             (d_prem_one (evp_of e) (d_lt_bound (evx_of e) md)))
+           (sp)
+           (d_prems t md)))
+       (KGuard
+         (dcat3
+           (d_prem_one (evp_of e) (bnd_ge1 (pr_e (evx_of e))))
+           (sp)
+           (d_prems t md)))))))
+
+;; the goal equation, per target
+(fn d_lhs
+  ((x86 Bool) (trans (List Int)) (pin Symbol) (ff Int) (args Doc))
+  Doc
+  (dconc
+    (list
+      (DStr (if x86 "(xcall_fn (S^ " "(call_fn (S^ "))
+      (dint ff)
+      (DStr " c) (")
+      (DStr (if x86 "MkXModule (list (x_of (" "MkWModule (list (w_of ("))
+      (DStr trans)
+      (DStr " (")
+      (dsym pin)
+      (DStr (if x86 ")))) 0 0) 0 " ")))) 0) 0 "))
+      args
+      (DStr ")"))))
+
+(fn d_rhs ((pin Symbol) (gg Int) (args Doc)) Doc
+  (dconc
+    (list
+      (DStr "(icall (S^ ")
+      (dint gg)
+      (DStr " c2) (it_prog (")
+      (dsym pin)
+      (DStr ")) 0 ")
+      args
+      (DStr ")"))))
+
+;; v1 discharge-scope fence: guards must be unconditional, wraps at
+;; most one condition deep (the imp_w_sel shape)
+(fn plen ((p (List (Pair Expr Bool)))) Int
+  (measure (struct p))
+  (match p
+    (Nil 0)
+    ((Cons _ t) (+ 1 (plen t)))))
+
+(fn evs_ok ((l (List Ev))) (Option (List Int))
+  (measure (struct l))
+  (match l
+    (Nil None)
+    ((Cons h t)
+     (match (evk_of h)
+       (KGuard
+         (match (evp_of h)
+           (Nil (evs_ok t))
+           ((Cons _ _) (Some "conditional divisor guard (v1)"))))
+       (KWrap
+         (if (lt 1 (plen (evp_of h)))
+           (Some "width residue under nested branches (v1)")
+           (evs_ok t)))))))
+
+;; the polarity's hyp spelling
+(fn d_pol ((pol Bool)) Doc (DStr (if pol "True" "False")))
+
+;; discharge items for the events at one path; the have counter is
+;; global across the claim (the hand files' p0/p1/w2 naming)
+(fn emit_evs
+  ((l (List (Pair Ev Int))) (md Int) (wlem (List Int)) (ctr Int))
+  (Pair Doc Int)
+  (measure (struct l))
+  (match l
+    (Nil (Pair (DStr "") ctr))
+    ((Cons (Pair e i) t)
+     (match (evk_of e)
+       (KGuard
+         (match (emit_evs t md wlem ctr)
+           ((Pair rest c2)
+            (Pair
+              (dcat3
+                (dcat3
+                  (DStr "(steps ((rewrite (premise ")
+                  (dint i)
+                  (DStr ") lr both true ()) (compute both))) "))
+                rest
+                (DStr ""))
+              c2))))
+       (KWrap
+         (match (evp_of e)
+           (Nil
+             (match (emit_evs t md wlem (+ ctr 1))
+               ((Pair rest c2)
+                (Pair
+                  (DCat
+                    (dconc
+                      (list
+                        (DStr "(have w")
+                        (dint ctr)
+                        (DStr " (= (mod ")
+                        (pr_e (evx_of e))
+                        (DStr " ")
+                        (dint md)
+                        (DStr ") ")
+                        (pr_e (evx_of e))
+                        (DStr ") (rewrite-with (lemma ")
+                        (DStr wlem)
+                        (DStr ") lr lhs ((inst x ")
+                        (pr_e (evx_of e))
+                        (DStr ")) ((steps ((rewrite (premise ")
+                        (dint i)
+                        (DStr ") lr lhs true ())) refl) (steps ((rewrite (premise ")
+                        (dint (+ i 1))
+                        (DStr ") lr lhs true ())) refl)) refl)) (steps ((rewrite (premise w")
+                        (dint ctr)
+                        (DStr ") lr lhs true ()))) ")))
+                    rest)
+                  c2))))
+           ((Cons (Pair _ pol) _)
+            (match (emit_evs t md wlem (+ ctr 3))
+              ((Pair rest c2)
+               (Pair
+                 (DCat
+                   (dconc
+                     (list
+                       (DStr "(have p")
+                       (dint ctr)
+                       (DStr " (= ")
+                       (bnd_le0 (pr_e (evx_of e)))
+                       (DStr " True) (chain (steps ((rewrite (premise ")
+                       (dint i)
+                       (DStr ") rl rhs true ()) (rewrite (hyp ")
+                       (d_pol pol)
+                       (DStr ") lr rhs true ()) (compute rhs))) refl)) ")
+                       (DStr "(have p")
+                       (dint (+ ctr 1))
+                       (DStr " (= ")
+                       (d_lt_bound (evx_of e) md)
+                       (DStr " True) (chain (steps ((rewrite (premise ")
+                       (dint (+ i 1))
+                       (DStr ") rl rhs true ()) (rewrite (hyp ")
+                       (d_pol pol)
+                       (DStr ") lr rhs true ()) (compute rhs))) refl)) ")
+                       (DStr "(have w")
+                       (dint (+ ctr 2))
+                       (DStr " (= (mod ")
+                       (pr_e (evx_of e))
+                       (DStr " ")
+                       (dint md)
+                       (DStr ") ")
+                       (pr_e (evx_of e))
+                       (DStr ") (rewrite-with (lemma ")
+                       (DStr wlem)
+                       (DStr ") lr lhs ((inst x ")
+                       (pr_e (evx_of e))
+                       (DStr ")) ((steps ((rewrite (premise p")
+                       (dint ctr)
+                       (DStr ") lr lhs true ())) refl) (steps ((rewrite (premise p")
+                       (dint (+ ctr 1))
+                       (DStr ") lr lhs true ())) refl)) refl)) ")
+                       (DStr "(steps ((rewrite (premise w")
+                       (dint (+ ctr 2))
+                       (DStr ") lr lhs true ()))) ")))
+                   rest)
+                 c2))))))))))
+
+;; the proof tree: per node, discharge this path's events, then either
+;; close the leaf or case-on the branch condition (arms re-enter with
+;; the hyp rewrite + compute, the hand files' arm template)
+(fn emit_tree
+  ((bt BT)
+   (evl (List (Pair Ev Int)))
+   (md Int)
+   (wlem (List Int))
+   (p (List (Pair Expr Bool)))
+   (ctr Int))
+  (Pair Doc Int)
+  (measure (struct bt))
+  (match (emit_evs (evs_at evl p) md wlem ctr)
+    ((Pair items c1)
+     (match bt
+       (BTLeaf (Pair (DCat items (DStr "refl")) c1))
+       ((BTBr c tb fb)
+        (match (emit_tree tb evl md wlem (path_snoc p c True) c1)
+          ((Pair tdoc c2)
+           (match (emit_tree fb evl md wlem (path_snoc p c False) c2)
+             ((Pair fdoc c3)
+              (Pair
+                (DCat
+                  items
+                  (dconc
+                    (list
+                      (DStr "(case-on ")
+                      (pr_e c)
+                      (DStr " Bool ((case True (chain (steps ((rewrite (hyp True) lr both true ()) (compute both))) ")
+                      tdoc
+                      (DStr ")) (case False (chain (steps ((rewrite (hyp False) lr both true ()) (compute both))) ")
+                      fdoc
+                      (DStr "))))"))))
+                c3))))))))))
+
+;; the whole bridge claim
+(fn d_bridge
+  ((brpre (List Int))
+   (nm (List Int))
+   (pin Symbol)
+   (x86 Bool)
+   (md Int)
+   (wlem (List Int))
+   (trans (List Int))
+   (nparams Int)
+   (ff Int)
+   (gg Int)
+   (bt BT)
+   (evl (List (Pair Ev Int))))
+  Doc
+  (dconc
+    (list
+      (DStr "(claim ")
+      (DStr brpre)
+      (DStr nm)
+      (DStr " (goal (")
+      (d_binds nparams)
+      (DStr ") (")
+      (d_prems evl md)
+      (DStr ") (= ")
+      (d_lhs x86 trans pin ff (d_args nparams))
+      (DStr " ")
+      (d_rhs pin gg (d_args nparams))
+      (DStr ")) ")
+      (match evl
+        (Nil
+          (match bt
+            (BTLeaf (DStr "(steps ((compute both)) refl)"))
+            ((BTBr _ _ _)
+             (match (emit_tree bt evl md wlem Nil 0)
+               ((Pair pdoc _)
+                (dcat3 (DStr "(chain (steps ((compute both))) ") pdoc (DStr ")")))))))
+        ((Cons _ _)
+         (match (emit_tree bt evl md wlem Nil 0)
+           ((Pair pdoc _)
+            (dcat3 (DStr "(chain (steps ((compute both))) ") pdoc (DStr ")"))))))
+      (DStr ")")
+      (DStr (nl))
+      (DStr (nl)))))
+
+;; a bridge the v1 walk declines: the tie stands alone, honestly noted
+(fn d_note ((pin Symbol) (why (List Int))) Doc
+  (dconc
+    (list
+      (DStr ";; ")
+      (dsym pin)
+      (DStr ": tie only (v1 bridge scope: ")
+      (DStr why)
+      (DStr ")")
+      (DStr (nl))
+      (DStr (nl)))))
+
 ;; --- per-pin emission ------------------------------------------------------------
 
 ;; a refused pin's honest record in the output
@@ -419,14 +1151,84 @@
 
 (type ERes (EOk Doc) (EErr (List Int)))
 
+(fn last_e ((es (List Expr))) (Option Expr)
+  (measure (struct es))
+  (match es
+    (Nil None)
+    ((Cons h Nil) (Some h))
+    ((Cons _ t) (last_e t))))
+
+;; the pin's bridge: fuel from the two cost walks, premises and proof
+;; from the symbolic walk; a v1-scope decline leaves the tie standing
+;; with an honest note
+(fn gen_bridge
+  ((brpre (List Int))
+   (trans (List Int))
+   (x86 Bool)
+   (md Int)
+   (wlem (List Int))
+   (pin Symbol)
+   (gv Expr)
+   (tv Expr))
+  ERes
+  (match (rf_fn gv)
+    (None (EErr (append_int "pin does not reify: " (chars_of_sym pin))))
+    ((Some ifn)
+     (match (ec_is tv (quote Some))
+       (None (EErr "translated value is not Some (internal)"))
+       ((Some sargs)
+        (match sargs
+          ((Cons fexp Nil)
+           (match fexp
+             ((Ctor _ margs)
+              (match (last_e margs)
+                (None (EErr "translated func has no body (internal)"))
+                ((Some instrs)
+                 (match
+                   (se_stmts
+                     (+ (isz_stmts (ibody_of ifn)) 2)
+                     x86
+                     md
+                     (ibody_of ifn)
+                     (iresult_of ifn)
+                     (st_init (iparams_of ifn) (iextra_of ifn))
+                     Nil)
+                   ((SRf why) (EOk (d_note pin why)))
+                   ((SROk bt evs)
+                    (match (evs_ok (ev_dedup evs))
+                      ((Some why) (EOk (d_note pin why)))
+                      (None
+                        (EOk
+                          (d_bridge
+                            brpre
+                            (pin_nm pin)
+                            pin
+                            x86
+                            md
+                            wlem
+                            trans
+                            (iparams_of ifn)
+                            (+ (tcost instrs) 4)
+                            (+ (gcost (ibody_of ifn)) 4)
+                            bt
+                            (ev_index (ev_dedup evs) 0))))))))))
+             (_ (EErr "translated value shape (internal)"))))
+          (_ (EErr "translated value shape (internal)"))))))))
+
 ;; one pin, one target: evaluate the pin in the SOURCE module, run the
-;; translator on the value in the TRANSLATOR module, spell the tie
+;; translator on the value in the TRANSLATOR module, spell the tie and
+;; (when it_prog exists and the walk accepts) the bridge
 (fn gen_pin
   ((msrc Module)
    (mtr Module)
    (trans Symbol)
    (tiepre (List Int))
+   (brpre (List Int))
    (tname (List Int))
+   (x86 Bool)
+   (md Int)
+   (wlem (List Int))
+   (hasprog Bool)
    (pin Symbol))
   ERes
   (match (invoke msrc pin Nil)
@@ -442,24 +1244,48 @@
             (match (sp_e (harvest tv) 0 tv)
               ((SpRErr msg) (EErr msg))
               ((SpROk vdoc)
-               (EOk (d_tie tiepre (pin_nm pin) (chars_of_sym trans) pin vdoc)))))))))))
+               (if hasprog
+                 (match
+                   (gen_bridge
+                     brpre
+                     (chars_of_sym trans)
+                     x86
+                     md
+                     wlem
+                     pin
+                     gv
+                     tv)
+                   ((EErr msg) (EErr msg))
+                   ((EOk bdoc)
+                    (EOk
+                      (DCat
+                        (d_tie tiepre (pin_nm pin) (chars_of_sym trans) pin vdoc)
+                        bdoc))))
+                 (EOk
+                   (d_tie tiepre (pin_nm pin) (chars_of_sym trans) pin vdoc))))))))))))
 
 (fn gen_pins
   ((msrc Module)
    (mtr Module)
    (trans Symbol)
    (tiepre (List Int))
+   (brpre (List Int))
    (tname (List Int))
+   (x86 Bool)
+   (md Int)
+   (wlem (List Int))
+   (hasprog Bool)
    (pins (List Symbol)))
   ERes
   (measure (struct pins))
   (match pins
     (Nil (EOk (DStr "")))
     ((Cons p rest)
-     (match (gen_pin msrc mtr trans tiepre tname p)
+     (match (gen_pin msrc mtr trans tiepre brpre tname x86 md wlem hasprog p)
        ((EErr msg) (EErr msg))
        ((EOk d)
-        (match (gen_pins msrc mtr trans tiepre tname rest)
+        (match
+          (gen_pins msrc mtr trans tiepre brpre tname x86 md wlem hasprog rest)
           ((EErr msg) (EErr msg))
           ((EOk ds) (EOk (DCat d ds)))))))))
 
@@ -543,6 +1369,10 @@
    (modelpath (List Int))
    (transpath (List Int))
    (tiepre (List Int))
+   (brpre (List Int))
+   (x86 Bool)
+   (md Int)
+   (wlem (List Int))
    (w World))
   World
   (match (load_run_module src w)
@@ -556,7 +1386,21 @@
            (match (pins_of fns (split_slash (until_dot src) Nil))
              (Nil (ig_refuse (append_int "no imp pins in " src) w2))
              ((Cons p prest)
-              (match (gen_pins msrc mtr trans tiepre tname (Cons p prest))
+              (match
+                (gen_pins
+                  msrc
+                  mtr
+                  trans
+                  tiepre
+                  brpre
+                  tname
+                  x86
+                  md
+                  wlem
+                  (match (find_fn (quote it_prog) msrc)
+                    (None False)
+                    ((Some _) True))
+                  (Cons p prest))
                 ((EErr msg) (ig_refuse msg w2))
                 ((EOk body)
                  (match
@@ -587,6 +1431,10 @@
             "models/wasm/wasm.shard"
             "models/imp/to_wasm.shard"
             "tie_"
+            "imp_w_"
+            False
+            4294967296
+            "wrap32_id"
             w1)
         (if (ceq tname "x86")
           (ig_emit
@@ -597,6 +1445,10 @@
             "models/x86/x86.shard"
             "models/imp/to_x86.shard"
             "tie_x_"
+            "imp_x_"
+            True
+            18446744073709551616
+            "wrap64_id"
             w1)
         (ig_refuse (append_int "unknown target " tname) w1))))
        (_ (ig_refuse "usage: impgen SRC TARGET OUT" w1))))))

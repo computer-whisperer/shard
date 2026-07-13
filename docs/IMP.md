@@ -1003,6 +1003,44 @@ window's words as initial state.
   the worker's pattern keeps them folded — the builders join every
   walk stop list (the workers' own proofs already did this).
 
+**I2d-1 — impgen: the scalar/branch tier mechanized (2026-07-12).**
+tools/impgen lands as standing infrastructure (the redirection's next
+slice): for every nullary IFn pin in a target file, the generator
+emits the per-target TIE and BRIDGE certs mechanically — the shapes
+the I1 hand era stabilized, now stamped by code.
+
+- THE FACTORING: the translators stay the single source of
+  translation truth — impgen LOADS models/imp/to_wasm / to_x86
+  through meta/invoke (the kernel as a loading library) and RUNS
+  them on the pin values; the tie literal is the spelled result
+  (meta/spell's sp_e over a qname table harvested from the value
+  itself). Nothing about translation is re-derived in the tool.
+- The generator owns the CERT TEXT: the premise discipline (wrap
+  pairs per exact-op node in evaluation order; operands without a
+  free variable compute away and are priced free; divisor guards;
+  §6j condition-relative premises via cond_wrap), the fuel towers
+  (depth bounds computed structurally — all three machines hand the
+  same reservoir to head and tail, so cost is a max — plus slack;
+  surplus fuel rides the symbolic tail), and the proof skeletons
+  (compute both; wrap-event haves citing wrap32_id/wrap64_id;
+  case-on trees mirroring the pin's IIf structure with the hand
+  files' arm template and p/w have naming).
+- Validation: examples/impgen_wasm_out.shard (11 ties + 11 bridges —
+  including shl4 and chset legs the hand era never priced) and
+  examples/impgen_x86_out.shard (9 + 9; divq/add1w honestly refused
+  by the translator; imp_x_mix and the wrap64-shl-leg imp_x_rotr7
+  are new coverage). Every generated claim passed the kernel
+  FIRST-TRY; the generated imp_w_sel is the hand claim up to binder
+  naming and fuel padding. Regen is byte-identical on both targets;
+  both files are corpus targets.
+- V1 scope fences (a decline leaves the tie standing plus an honest
+  note): IWhile/ILoad/IStore (the loop/mem tier), comparisons in
+  value position, symbolic shift/rotate counts, conditional divisor
+  guards, premise-carrying ops under nested branches.
+- NEXT: I2d-2 the loop tier (mechanize the iww_*/ixw_*
+  worker-induction shapes), I2d-3 the sha256 legs (ix_home 6→12 +
+  the K-window data segments), build DERIVE integration.
+
 ## 7. Non-goals, stated once
 
 - imp as a shipped target or public surface — it is an intermediate;

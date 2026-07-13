@@ -114,6 +114,8 @@ TARGETS=(
   models/imp/to_x86.shard
   examples/imp_x86_bridge.shard
   examples/imp_x86_loop_bridge.shard
+  examples/impgen_wasm_out.shard
+  examples/impgen_x86_out.shard
   std/sha256/sha256.imp.shard
   models/wasm/wasm.shard
   models/wasm/encode.shard
