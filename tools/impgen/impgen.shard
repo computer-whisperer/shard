@@ -1,0 +1,602 @@
+;;; tools/impgen/impgen.shard — the imp ⊑ ISA LEG GENERATOR (docs/IMP.md
+;;; rung I2d): for every imp pin in the target file, emit the per-target
+;;; tie and bridge certs that the I1 hand era priced — the translator's
+;;; output as a ground literal (TIE), and the machine ⊑ imp alignment
+;;; with the width story priced in that machine's modulus (BRIDGE).
+;;;
+;;; THE FACTORING: the translators (models/imp/to_wasm, to_x86) are
+;;; ordinary in-language values — this tool LOADS them through the
+;;; kernel (meta/invoke) and RUNS them on the pin values; nothing about
+;;; translation is re-derived here. What the generator owns is the
+;;; CERT TEXT: the premise discipline (wrap pairs per exact-op node in
+;;; evaluation order, divisor guards, condition-relative premises per
+;;; branch — the §6j hygiene), the fuel towers (depth bounds computed
+;;; structurally, + slack), and the proof skeletons (compute both;
+;;; wrap-event haves citing wrap32_id/wrap64_id; case-on trees
+;;; mirroring the pin's branch structure — the shapes stabilized by
+;;; examples/imp_wasm_bridge.shard and examples/imp_x86_bridge.shard).
+;;;
+;;; PIN CONVENTION: a pin is a NULLARY fn returning IFn, defined in the
+;;; target file (it_<nm>_fn naming gives claims tie_<nm> / imp_w_<nm>;
+;;; other names pass through whole). Bridges additionally need the
+;;; one-fn program wrapper `it_prog` in the target file; without it the
+;;; tool emits ties only. A pin the target's translator REFUSES (width
+;;; mismatch, off-pattern shape) gets a comment line, not an error —
+;;; refusal-by-None is the translator's contract and the leg simply
+;;; does not exist on that target.
+;;;
+;;; V1 SCOPE (the scalar/branch tier): straight-line expressions and
+;;; IIf trees with comparison-headed conditions. Premise-carrying ops
+;;; under one condition level (the imp_w_sel shape); deeper nesting is
+;;; supported only premise-free (the imp_w_clamp2 shape). IWhile,
+;;; ILoad, IStore, and conditional divisor guards REFUSE loudly — they
+;;; arrive with the loop/mem tier.
+;;;
+;;; RUN IT:  bin/shard_eval run tools/impgen/impgen.shard SRC TARGET OUT.raw
+;;;          (TARGET = wasm | x86; OUT must be a sibling of SRC), then
+;;;          shardfmt OUT.raw -> the committed cert file.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/loader.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../meta/doc")
+(import "../../meta/spell")
+(import "../../meta/invoke")
+(import "../../models/imp/imp.shard")
+
+(use (:: kernel loader World))
+(use (:: kernel loader get_args))
+(use (:: kernel loader write))
+(use (:: kernel loader write_file))
+(use (:: kernel loader exit))
+(use (:: kernel term Expr))
+(use (:: kernel term FVar))
+(use (:: kernel term Ctor))
+(use (:: kernel term Call))
+(use (:: kernel term IntLit))
+(use (:: kernel term QName))
+(use (:: kernel term qn_name))
+(use (:: kernel term qn_mod))
+(use (:: kernel term qname_eq))
+(use (:: kernel term sym_path_eq))
+(use (:: kernel term append_int))
+(use (:: kernel module Module))
+(use (:: kernel module FnDef))
+(use (:: kernel module Type))
+(use (:: kernel module TCon))
+(use (:: meta doc *))
+(use (:: meta spell *))
+(use (:: meta invoke *))
+(use (:: models imp imp *))
+
+;; --- small utils ----------------------------------------------------------------
+
+(fn ceq ((a (List Int)) (b (List Int))) Bool
+  (measure (struct a))
+  (match a
+    (Nil
+      (match b
+        (Nil True)
+        ((Cons _ _) False)))
+    ((Cons x xs)
+     (match b
+       (Nil False)
+       ((Cons y ys) (if (int_eq x y) (ceq xs ys) False))))))
+
+(fn imax ((a Int) (b Int)) Int (if (lt a b) b a))
+
+(fn starts_with ((pre (List Int)) (s (List Int))) Bool
+  (measure (struct pre))
+  (match pre
+    (Nil True)
+    ((Cons p pt)
+     (match s
+       (Nil False)
+       ((Cons c ct) (if (int_eq p c) (starts_with pt ct) False))))))
+
+(fn drop_len ((pre (List Int)) (s (List Int))) (List Int)
+  (measure (struct pre))
+  (match pre
+    (Nil s)
+    ((Cons _ pt)
+     (match s
+       (Nil Nil)
+       ((Cons _ ct) (drop_len pt ct))))))
+
+(fn strip_pre ((pre (List Int)) (s (List Int))) (List Int)
+  (if (starts_with pre s) (drop_len pre s) s))
+
+(fn rev_int_go ((s (List Int)) (acc (List Int))) (List Int)
+  (measure (struct s))
+  (match s
+    (Nil acc)
+    ((Cons h t) (rev_int_go t (Cons h acc)))))
+
+(fn rev_int ((s (List Int))) (List Int) (rev_int_go s Nil))
+
+(fn strip_suf ((suf (List Int)) (s (List Int))) (List Int)
+  (rev_int (strip_pre (rev_int suf) (rev_int s))))
+
+;; pin fn name -> claim stem: it_<nm>_fn -> <nm> (either half optional)
+(fn pin_nm ((s Symbol)) (List Int)
+  (strip_suf "_fn" (strip_pre "it_" (chars_of_sym s))))
+
+;; --- ground-value views (evm results are Ctor/IntLit trees) ---------------------
+
+;; a ctor node with this LOCAL name (basename match: the values come
+;; from the loaded models, whose paths are canonical — within the imp /
+;; wasm / x86 / prelude vocabulary basenames are unambiguous)
+(fn ec_is ((e Expr) (s Symbol)) (Option (List Expr))
+  (match e
+    ((Ctor q args) (if (sym_eq (qn_name q) s) (Some args) None))
+    (_ None)))
+
+(fn e_int ((e Expr)) (Option Int)
+  (match e
+    ((IntLit n) (Some n))
+    (_ None)))
+
+;; --- the spell table: harvest ctor qnames from the value itself -----------------
+;; Every ctor spells as its basename; the generated file's glob uses
+;; make each basename resolvable. Harvesting from the value (instead of
+;; hand-spelled paths) keeps the table honest by construction. One
+;; structural walk (ctor args descend inline — subterms of the head).
+
+(fn tbl_has ((t (List (Pair QName Symbol))) (q QName)) Bool
+  (measure (struct t))
+  (match t
+    (Nil False)
+    ((Cons (Pair k _) rest) (if (qname_eq k q) True (tbl_has rest q)))))
+
+(fn harvest_l ((es (List Expr)) (t (List (Pair QName Symbol))))
+  (List (Pair QName Symbol))
+  (measure (struct es))
+  (match es
+    (Nil t)
+    ((Cons h rest)
+     (match h
+       ((Ctor q args)
+        (harvest_l
+          rest
+          (harvest_l args (if (tbl_has t q) t (Cons (Pair q (qn_name q)) t)))))
+       (_ (harvest_l rest t))))))
+
+(fn harvest ((e Expr)) (List (Pair QName Symbol)) (harvest_l (Cons e Nil) Nil))
+
+;; --- reify: ground imp value Exprs -> native models/imp values ------------------
+;; Loud None on anything outside the imp grammar (an internal error:
+;; the pin evaluated to a non-IFn or the grammar grew without this
+;; tool growing with it).
+
+(fn rf_op ((e Expr)) (Option IOp)
+  (match e
+    ((Ctor q _)
+     (if (sym_eq (qn_name q) (quote IAdd)) (Some IAdd)
+     (if (sym_eq (qn_name q) (quote ISub)) (Some ISub)
+     (if (sym_eq (qn_name q) (quote IMul)) (Some IMul)
+     (if (sym_eq (qn_name q) (quote IDiv)) (Some IDiv)
+     (if (sym_eq (qn_name q) (quote IRem)) (Some IRem)
+     (if (sym_eq (qn_name q) (quote IAnd)) (Some IAnd)
+     (if (sym_eq (qn_name q) (quote IOr)) (Some IOr)
+     (if (sym_eq (qn_name q) (quote IXor)) (Some IXor)
+     (if (sym_eq (qn_name q) (quote IShl)) (Some IShl)
+     (if (sym_eq (qn_name q) (quote IShr)) (Some IShr)
+     (if (sym_eq (qn_name q) (quote IEq)) (Some IEq)
+     (if (sym_eq (qn_name q) (quote ILt)) (Some ILt)
+     (if (sym_eq (qn_name q) (quote ILe)) (Some ILe)
+     None))))))))))))))
+    (_ None)))
+
+(fn rf_exp ((e Expr)) (Option IExp)
+  (measure (struct e))
+  (match e
+    ((Ctor q args)
+     (if (sym_eq (qn_name q) (quote IConst))
+       (match args
+         ((Cons a Nil)
+          (match (e_int a)
+            (None None)
+            ((Some n) (Some (IConst n)))))
+         (_ None))
+     (if (sym_eq (qn_name q) (quote ILoc))
+       (match args
+         ((Cons a Nil)
+          (match (e_int a)
+            (None None)
+            ((Some n) (Some (ILoc n)))))
+         (_ None))
+     (if (sym_eq (qn_name q) (quote IBin))
+       (match args
+         ((Cons o (Cons a (Cons b Nil)))
+          (match (rf_op o)
+            (None None)
+            ((Some io)
+             (match (rf_exp a)
+               (None None)
+               ((Some ia)
+                (match (rf_exp b)
+                  (None None)
+                  ((Some ib) (Some (IBin io ia ib)))))))))
+         (_ None))
+     (if (sym_eq (qn_name q) (quote IWrap))
+       (match args
+         ((Cons w (Cons a Nil))
+          (match (e_int w)
+            (None None)
+            ((Some wn)
+             (match (rf_exp a)
+               (None None)
+               ((Some ia) (Some (IWrap wn ia)))))))
+         (_ None))
+     (if (sym_eq (qn_name q) (quote IRotr))
+       (match args
+         ((Cons w (Cons a (Cons k Nil)))
+          (match (e_int w)
+            (None None)
+            ((Some wn)
+             (match (rf_exp a)
+               (None None)
+               ((Some ia)
+                (match (rf_exp k)
+                  (None None)
+                  ((Some ik) (Some (IRotr wn ia ik)))))))))
+         (_ None))
+     (if (sym_eq (qn_name q) (quote ILoad))
+       (match args
+         ((Cons a Nil)
+          (match (rf_exp a)
+            (None None)
+            ((Some ia) (Some (ILoad ia)))))
+         (_ None))
+       None)))))))
+    (_ None)))
+
+;; one structural walk (the ix_stmts shape: statement dispatch inlined
+;; at the Cons head, so the recursion is a single (struct e) descent)
+(fn rf_stmts ((e Expr)) (Option (List IStmt))
+  (measure (struct e))
+  (match e
+    ((Ctor q args)
+     (if (sym_eq (qn_name q) (quote Nil)) (Some Nil)
+     (if (sym_eq (qn_name q) (quote Cons))
+       (match args
+         ((Cons h (Cons t Nil))
+          (match (rf_stmts t)
+            (None None)
+            ((Some rest)
+             (match h
+               ((Ctor hq hargs)
+                (if (sym_eq (qn_name hq) (quote ISet))
+                  (match hargs
+                    ((Cons i (Cons ex Nil))
+                     (match (e_int i)
+                       (None None)
+                       ((Some n)
+                        (match (rf_exp ex)
+                          (None None)
+                          ((Some ie) (Some (Cons (ISet n ie) rest)))))))
+                    (_ None))
+                (if (sym_eq (qn_name hq) (quote IStore))
+                  (match hargs
+                    ((Cons a (Cons v Nil))
+                     (match (rf_exp a)
+                       (None None)
+                       ((Some ia)
+                        (match (rf_exp v)
+                          (None None)
+                          ((Some iv) (Some (Cons (IStore ia iv) rest)))))))
+                    (_ None))
+                (if (sym_eq (qn_name hq) (quote IIf))
+                  (match hargs
+                    ((Cons c (Cons tb (Cons eb Nil)))
+                     (match (rf_exp c)
+                       (None None)
+                       ((Some ic)
+                        (match (rf_stmts tb)
+                          (None None)
+                          ((Some itb)
+                           (match (rf_stmts eb)
+                             (None None)
+                             ((Some ieb)
+                              (Some (Cons (IIf ic itb ieb) rest)))))))))
+                    (_ None))
+                (if (sym_eq (qn_name hq) (quote IWhile))
+                  (match hargs
+                    ((Cons c (Cons b Nil))
+                     (match (rf_exp c)
+                       (None None)
+                       ((Some ic)
+                        (match (rf_stmts b)
+                          (None None)
+                          ((Some ib) (Some (Cons (IWhile ic ib) rest)))))))
+                    (_ None))
+                  None)))))
+               (_ None)))))
+         (_ None))
+       None)))
+    (_ None)))
+
+(fn rf_fn ((e Expr)) (Option IFn)
+  (match (ec_is e (quote MkIFn))
+    (None None)
+    ((Some args)
+     (match args
+       ((Cons p (Cons x (Cons b (Cons r Nil))))
+        (match (e_int p)
+          (None None)
+          ((Some pn)
+           (match (e_int x)
+             (None None)
+             ((Some xn)
+              (match (rf_stmts b)
+                (None None)
+                ((Some bs)
+                 (match (rf_exp r)
+                   (None None)
+                   ((Some re) (Some (MkIFn pn xn bs re)))))))))))
+       (_ None)))))
+
+;; --- fuel: depth bounds, computed structurally, + slack -------------------------
+
+;; imp side: istmts/istmt/iwhile burn one per ENTRY and hand the same
+;; reservoir to head and tail — fuel bounds depth, so cost is a max
+;; (upper bounds, validated by the kernel check of the emitted certs)
+(fn gcost ((ss (List IStmt))) Int
+  (measure (struct ss))
+  (match ss
+    (Nil 1)
+    ((Cons s t)
+     (match s
+       ((ISet _ _) (+ 1 (imax 2 (gcost t))))
+       ((IStore _ _) (+ 1 (imax 2 (gcost t))))
+       ((IIf _ tb eb)
+        (+ 1 (imax (+ 2 (imax (gcost tb) (gcost eb))) (gcost t))))
+       ((IWhile _ _) (+ 1 (imax 2 (gcost t))))))))
+
+;; machine side: the same depth discipline over the TRANSLATED ground
+;; value (a Cons spine; Block/Loop/XBlock/XLoop nest) — one generic
+;; walk, nesting recognized by basename
+(fn tc_nest ((s Symbol)) Bool
+  (if (sym_eq s (quote Block)) True
+  (if (sym_eq s (quote Loop)) True
+  (if (sym_eq s (quote XBlock)) True
+  (sym_eq s (quote XLoop))))))
+
+(fn tcost ((e Expr)) Int
+  (measure (struct e))
+  (match e
+    ((Ctor q args)
+     (if (sym_eq (qn_name q) (quote Nil)) 1
+     (if (sym_eq (qn_name q) (quote Cons))
+       (match args
+         ((Cons h (Cons t Nil))
+          (match h
+            ((Ctor hq hargs)
+             (if (tc_nest (qn_name hq))
+               (match hargs
+                 ((Cons b Nil) (+ 1 (imax (+ 2 (tcost b)) (tcost t))))
+                 (_ (+ 1 (imax 2 (tcost t)))))
+               (+ 1 (imax 2 (tcost t)))))
+            (_ (+ 1 (imax 2 (tcost t))))))
+         (_ 1))
+       1)))
+    (_ 1)))
+
+;; --- the tie claim ---------------------------------------------------------------
+
+(fn d_tie
+  ((tiepre (List Int)) (nm (List Int)) (trans (List Int)) (pin Symbol) (v Doc))
+  Doc
+  (dconc
+    (list
+      (DStr "(claim ")
+      (DStr tiepre)
+      (DStr nm)
+      (DStr " (goal () () (= (")
+      (DStr trans)
+      (DStr " (")
+      (dsym pin)
+      (DStr ")) ")
+      v
+      (DStr ")) (steps ((compute both)) refl))")
+      (DStr (nl))
+      (DStr (nl)))))
+
+;; --- per-pin emission ------------------------------------------------------------
+
+;; a refused pin's honest record in the output
+(fn d_refused ((pin Symbol) (tname (List Int))) Doc
+  (dconc
+    (list
+      (DStr ";; ")
+      (dsym pin)
+      (DStr ": no ")
+      (DStr tname)
+      (DStr " leg (the translator refused this pin)")
+      (DStr (nl))
+      (DStr (nl)))))
+
+(type ERes (EOk Doc) (EErr (List Int)))
+
+;; one pin, one target: evaluate the pin in the SOURCE module, run the
+;; translator on the value in the TRANSLATOR module, spell the tie
+(fn gen_pin
+  ((msrc Module)
+   (mtr Module)
+   (trans Symbol)
+   (tiepre (List Int))
+   (tname (List Int))
+   (pin Symbol))
+  ERes
+  (match (invoke msrc pin Nil)
+    (None (EErr (append_int "pin does not evaluate: " (chars_of_sym pin))))
+    ((Some gv)
+     (match (invoke mtr trans (Cons gv Nil))
+       (None
+         (EErr (append_int "translator invoke failed on " (chars_of_sym pin))))
+       ((Some tv)
+        (match (ec_is tv (quote None))
+          ((Some _) (EOk (d_refused pin tname)))
+          (None
+            (match (sp_e (harvest tv) 0 tv)
+              ((SpRErr msg) (EErr msg))
+              ((SpROk vdoc)
+               (EOk (d_tie tiepre (pin_nm pin) (chars_of_sym trans) pin vdoc)))))))))))
+
+(fn gen_pins
+  ((msrc Module)
+   (mtr Module)
+   (trans Symbol)
+   (tiepre (List Int))
+   (tname (List Int))
+   (pins (List Symbol)))
+  ERes
+  (measure (struct pins))
+  (match pins
+    (Nil (EOk (DStr "")))
+    ((Cons p rest)
+     (match (gen_pin msrc mtr trans tiepre tname p)
+       ((EErr msg) (EErr msg))
+       ((EOk d)
+        (match (gen_pins msrc mtr trans tiepre tname rest)
+          ((EErr msg) (EErr msg))
+          ((EOk ds) (EOk (DCat d ds)))))))))
+
+;; --- pin enumeration --------------------------------------------------------------
+
+;; nullary fns returning IFn, defined in the target file's own module
+(fn is_ifn_ty ((t Type)) Bool
+  (match t
+    ((TCon q args)
+     (match args
+       (Nil (sym_eq (qn_name q) (quote IFn)))
+       ((Cons _ _) False)))
+    (_ False)))
+
+(fn pins_of ((fns (List FnDef)) (mp (List Symbol))) (List Symbol)
+  (measure (struct fns))
+  (match fns
+    (Nil Nil)
+    ((Cons f rest)
+     (match f
+       ((FnDef q ts rt _)
+        (match ts
+          ((Cons _ _) (pins_of rest mp))
+          (Nil
+            (if (is_ifn_ty rt)
+              (if (sym_path_eq (qn_mod q) mp)
+                (Cons (qn_name q) (pins_of rest mp))
+                (pins_of rest mp))
+              (pins_of rest mp)))))))))
+
+;; --- the generated file header -----------------------------------------------------
+
+;; imports: kernel stdlib + the pin SOURCE (sibling by basename) + the
+;; imp model + the target model + the translator, repo-root relative
+;; through the OUT path's updots climb
+(fn ig_header
+  ((src (List Int))
+   (tname (List Int))
+   (out (List Int))
+   (modelpath (List Int))
+   (transpath (List Int)))
+  Doc
+  (dconc
+    (list
+      (DStr ";;; GENERATED by tools/impgen (the imp -> ISA leg generator, docs/IMP.md I2d) --")
+      (DStr (nl))
+      (DStr ";;; DO NOT EDIT; regenerate:")
+      (DStr (nl))
+      (DStr ";;;   bin/shard_eval run tools/impgen/impgen.shard ")
+      (DStr src)
+      (DStr " ")
+      (DStr tname)
+      (DStr " ")
+      (DStr out)
+      (DStr ", then shardfmt.")
+      (DStr (nl))
+      (dimport (append_int (updots out) "kernel/stdlib.shard"))
+      (dimport (basename_go src Nil))
+      (dimport (append_int (updots out) "models/imp/imp.shard"))
+      (dimport (append_int (updots out) modelpath))
+      (dimport (append_int (updots out) transpath))
+      (use_of src)
+      (use_of "models/imp/imp.shard")
+      (use_of modelpath)
+      (use_of transpath)
+      (DStr (nl)))))
+
+;; --- driver -----------------------------------------------------------------------
+
+(fn ig_fail ((msg (List Int)) (w World)) World
+  (exit 2 (write (append_int "error: " (append_int msg (nl))) w)))
+
+(fn ig_refuse ((msg (List Int)) (w World)) World
+  (exit 1 (write (append_int "refused: " (append_int msg (nl))) w)))
+
+(fn ig_emit
+  ((src (List Int))
+   (tname (List Int))
+   (out (List Int))
+   (trans Symbol)
+   (modelpath (List Int))
+   (transpath (List Int))
+   (tiepre (List Int))
+   (w World))
+  World
+  (match (load_run_module src w)
+    ((Pair None w1) (ig_fail (append_int "cannot load " src) w1))
+    ((Pair (Some msrc) w1)
+     (match (load_run_module transpath w1)
+       ((Pair None w2) (ig_fail (append_int "cannot load " transpath) w2))
+       ((Pair (Some mtr) w2)
+        (match msrc
+          ((Module _ fns _ _ _)
+           (match (pins_of fns (split_slash (until_dot src) Nil))
+             (Nil (ig_refuse (append_int "no imp pins in " src) w2))
+             ((Cons p prest)
+              (match (gen_pins msrc mtr trans tiepre tname (Cons p prest))
+                ((EErr msg) (ig_refuse msg w2))
+                ((EOk body)
+                 (match
+                   (write_file
+                     out
+                     (doc_flat
+                       (DCat (ig_header src tname out modelpath transpath) body)
+                       Nil)
+                     w2)
+                   ((Pair ok w3)
+                    (if ok
+                      (exit
+                        0
+                        (write (append_int "wrote " (append_int out (nl))) w3))
+                      (ig_fail (append_int "cannot write " out) w3)))))))))))))))
+
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Pair args w1)
+     (match args
+       ((Cons src (Cons tname (Cons out Nil)))
+        (if (ceq tname "wasm")
+          (ig_emit
+            src
+            tname
+            out
+            (quote imp2w_fn)
+            "models/wasm/wasm.shard"
+            "models/imp/to_wasm.shard"
+            "tie_"
+            w1)
+        (if (ceq tname "x86")
+          (ig_emit
+            src
+            tname
+            out
+            (quote imp2x_fn)
+            "models/x86/x86.shard"
+            "models/imp/to_x86.shard"
+            "tie_x_"
+            w1)
+        (ig_refuse (append_int "unknown target " tname) w1))))
+       (_ (ig_refuse "usage: impgen SRC TARGET OUT" w1))))))
