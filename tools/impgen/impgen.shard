@@ -28,9 +28,28 @@
 ;;; V1 SCOPE (the scalar/branch tier): straight-line expressions and
 ;;; IIf trees with comparison-headed conditions. Premise-carrying ops
 ;;; under one condition level (the imp_w_sel shape); deeper nesting is
-;;; supported only premise-free (the imp_w_clamp2 shape). IWhile,
-;;; ILoad, IStore, and conditional divisor guards REFUSE loudly — they
-;;; arrive with the loop/mem tier.
+;;; supported only premise-free (the imp_w_clamp2 shape). Conditional
+;;; divisor guards and straight-line IStore/ILoad REFUSE loudly.
+;;;
+;;; LOOP TIER (docs/IMP.md I2d-2): a pin whose body is exactly one
+;;; counting IWhile over (ILoc c) in the two hand-validated shapes
+;;;   fill: [ (IStore (ILoc p) (ILoc v)) ; p += 1 ; c -= 1 ]
+;;;   sum:  [ (ISet a (a + ILoad (ILoc p))) ; p += 1 ; c -= 1 ]
+;;; (distinct param locals, no extras, params <= 6, result IConst/ILoc)
+;;; gets a WORKER — the machine loop aligned with iwhile by induction
+;;; on the counter, the iww_*/ixw_* shapes, discharging against the
+;;; target loopkit — and, when the source file provides the joints, a
+;;; DENOTATION BRIDGE (call_fn_mem = icall_mem). The bridge's joints,
+;;; all discovered, none re-derived: the IFn -> IProg wrapper (by
+;;; signature), the imp-side meeting lemma imw_<stem> (by a textual scan
+;;; of the source — the claim roster is check-only; <stem> tries the
+;;; pin stem, then the stem past its first underscore), and the guard lemma im_lt visible from the
+;;; source. CONTRACT with the meeting lemma: it is stated at
+;;; (S^ (gcost body + 5) (lg_fuel k c)) with premises
+;;; [le 0 ptr; le (+ ptr (int_of_nat k)) 65536] in that order, and the
+;;; wrapper's memsize is the loopkit's 65536 (checked; a different
+;;; size declines the bridge). Loops outside the family decline to
+;;; tie-plus-note, the scalar tier's honest-fence discipline.
 ;;;
 ;;; RUN IT:  bin/shard_eval run tools/impgen/impgen.shard SRC TARGET OUT.raw
 ;;;          (TARGET = wasm | x86; OUT must be a sibling of SRC), then
@@ -47,6 +66,7 @@
 
 (use (:: kernel loader World))
 (use (:: kernel loader get_args))
+(use (:: kernel loader read_file))
 (use (:: kernel loader write))
 (use (:: kernel loader write_file))
 (use (:: kernel loader exit))
@@ -689,7 +709,7 @@
                 ((SRf m) (SRf m))
                 ((SROk bt evs_t) (SROk bt (ev_app evs evs_t)))))))))
        ((IStore _ _) (SRf "memory (the loop/mem tier)"))
-       ((IWhile _ _) (SRf "loops (the loop tier)"))
+       ((IWhile _ _) (SRf "loop shape outside the counting-loop family (v1)"))
        ((IIf c tb eb)
         (match c
           ((IBin o a b)
@@ -906,12 +926,14 @@
       args
       (DStr ")"))))
 
-(fn d_rhs ((pin Symbol) (gg Int) (args Doc)) Doc
+(fn d_rhs ((wrapnm (List Int)) (pin Symbol) (gg Int) (args Doc)) Doc
   (dconc
     (list
       (DStr "(icall (S^ ")
       (dint gg)
-      (DStr " c2) (it_prog (")
+      (DStr " c2) (")
+      (DStr wrapnm)
+      (DStr " (")
       (dsym pin)
       (DStr ")) 0 ")
       args
@@ -1087,6 +1109,7 @@
    (md Int)
    (wlem (List Int))
    (trans (List Int))
+   (wrapnm (List Int))
    (nparams Int)
    (ff Int)
    (gg Int)
@@ -1105,7 +1128,7 @@
       (DStr ") (= ")
       (d_lhs x86 trans pin ff (d_args nparams))
       (DStr " ")
-      (d_rhs pin gg (d_args nparams))
+      (d_rhs wrapnm pin gg (d_args nparams))
       (DStr ")) ")
       (match evl
         (Nil
@@ -1134,6 +1157,922 @@
       (DStr ")")
       (DStr (nl))
       (DStr (nl)))))
+
+;; --- the loop tier (docs/IMP.md I2d-2) ---------------------------------------------
+;; The counting-loop worker + denotation bridge, mechanizing the hand
+;; iww_*/ixw_* induction template. Recognition is EXACT (the two
+;; hand-validated statement sequences); everything else declines.
+
+(type LRole (LRFill Int) (LRSum Int))
+
+(record LShape (lsp Int) (lsc Int) (lsn Int) (lsrole LRole) (lsbs (List IStmt)))
+
+(fn is_sum ((sh LShape)) Bool
+  (match (lsrole_of sh)
+    ((LRFill _) False)
+    ((LRSum _) True)))
+
+;; premise slots: lo(ptr) = 0 always; hi(ptr) = 1 (fill) / 2 (sum);
+;; sum adds lo(acc) = 1 and hi(acc) = 3
+(fn lp_hp ((sh LShape)) Int
+  (match (lsrole_of sh)
+    ((LRFill _) 1)
+    ((LRSum _) 2)))
+
+;; ISet i (IBin IAdd (ILoc i) (IConst 1)) -> i
+(fn lp_inc ((s IStmt)) (Option Int)
+  (match s
+    ((ISet i e)
+     (match e
+       ((IBin o a b)
+        (match o
+          (IAdd
+            (match a
+              ((ILoc j)
+               (match b
+                 ((IConst n)
+                  (if (int_eq n 1) (if (int_eq i j) (Some i) None) None))
+                 (_ None)))
+              (_ None)))
+          (_ None)))
+       (_ None)))
+    (_ None)))
+
+;; ISet i (IBin ISub (ILoc i) (IConst 1)) -> i
+(fn lp_dec ((s IStmt)) (Option Int)
+  (match s
+    ((ISet i e)
+     (match e
+       ((IBin o a b)
+        (match o
+          (ISub
+            (match a
+              ((ILoc j)
+               (match b
+                 ((IConst n)
+                  (if (int_eq n 1) (if (int_eq i j) (Some i) None) None))
+                 (_ None)))
+              (_ None)))
+          (_ None)))
+       (_ None)))
+    (_ None)))
+
+;; result expressions the final computes close over
+(fn lp_res_ok ((e IExp) (n Int)) Bool
+  (match e
+    ((IConst _) True)
+    ((ILoc i) (if (le 0 i) (lt i n) False))
+    (_ False)))
+
+(fn lp_distinct3 ((a Int) (b Int) (c Int)) Bool
+  (if (int_eq a b) False (if (int_eq a c) False (if (int_eq b c) False True))))
+
+(fn lp_all_lt ((n Int) (xs (List Int))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil True)
+    ((Cons h t) (if (le 0 h) (if (lt h n) (lp_all_lt n t) False) False))))
+
+;; the first body statement classifies the shape
+(fn lp_s1 ((s1 IStmt) (p Int) (c Int) (n Int) (bs (List IStmt)))
+  (Option LShape)
+  (match s1
+    ((IStore ae ve)
+     (match ae
+       ((ILoc p2)
+        (match ve
+          ((ILoc v)
+           (if (int_eq p p2)
+             (if (lp_distinct3 p c v)
+               (if (lp_all_lt n (Cons p (Cons c (Cons v Nil))))
+                 (Some (MkLShape p c n (LRFill v) bs))
+                 None)
+               None)
+             None))
+          (_ None)))
+       (_ None)))
+    ((ISet a e1)
+     (match e1
+       ((IBin o aa bb)
+        (match o
+          (IAdd
+            (match aa
+              ((ILoc a2)
+               (match bb
+                 ((ILoad pe)
+                  (match pe
+                    ((ILoc p2)
+                     (if (int_eq a a2)
+                       (if (int_eq p p2)
+                         (if (lp_distinct3 p c a)
+                           (if (lp_all_lt n (Cons p (Cons c (Cons a Nil))))
+                             (Some (MkLShape p c n (LRSum a) bs))
+                             None)
+                           None)
+                         None)
+                       None))
+                    (_ None)))
+                 (_ None)))
+              (_ None)))
+          (_ None)))
+       (_ None)))
+    (_ None)))
+
+(fn lp_rec ((f IFn)) (Option LShape)
+  (if (int_eq (iextra_of f) 0)
+    (if (le (iparams_of f) 6)
+      (if (lp_res_ok (iresult_of f) (iparams_of f))
+        (match (ibody_of f)
+          ((Cons w wr)
+           (match wr
+             (Nil
+               (match w
+                 ((IWhile ce bs)
+                  (match ce
+                    ((ILoc c)
+                     (match bs
+                       ((Cons s1 (Cons s2 (Cons s3 Nil)))
+                        (match (lp_inc s2)
+                          (None None)
+                          ((Some p)
+                           (match (lp_dec s3)
+                             (None None)
+                             ((Some c2)
+                              (if (int_eq c c2)
+                                (lp_s1 s1 p c (iparams_of f) bs)
+                                None))))))
+                       (_ None)))
+                    (_ None)))
+                 (_ None)))
+             (_ None)))
+          (_ None))
+        None)
+      None)
+    None))
+
+;; the IWhile's body list, as the VALUE Expr subterm (for spelling)
+(fn gv_wbody ((gv Expr)) (Option Expr)
+  (match (ec_is gv (quote MkIFn))
+    (None None)
+    ((Some args)
+     (match args
+       ((Cons _ (Cons _ (Cons b (Cons _ Nil))))
+        (match b
+          ((Ctor q1 bargs)
+           (if (sym_eq (qn_name q1) (quote Cons))
+             (match bargs
+               ((Cons wh (Cons _ Nil))
+                (match wh
+                  ((Ctor q2 wargs)
+                   (if (sym_eq (qn_name q2) (quote IWhile))
+                     (match wargs
+                       ((Cons _ (Cons bs Nil)) (Some bs))
+                       (_ None))
+                     None))
+                  (_ None)))
+               (_ None))
+             None))
+          (_ None)))
+       (_ None)))))
+
+;; the translated loop's instruction list:
+;; func body = Cons (Block (list (Loop L))) epilogue -> L
+(fn ex_loop_body ((x86 Bool) (fexp Expr)) (Option Expr)
+  (match fexp
+    ((Ctor _ margs)
+     (match (last_e margs)
+       (None None)
+       ((Some body)
+        (match body
+          ((Ctor qc cargs)
+           (if (sym_eq (qn_name qc) (quote Cons))
+             (match cargs
+               ((Cons blk (Cons _ Nil))
+                (match blk
+                  ((Ctor qb bargs)
+                   (if (sym_eq (qn_name qb) (if x86 (quote XBlock) (quote Block)))
+                     (match bargs
+                       ((Cons inner Nil)
+                        (match inner
+                          ((Ctor qi iargs)
+                           (if (sym_eq (qn_name qi) (quote Cons))
+                             (match iargs
+                               ((Cons lp (Cons _ Nil))
+                                (match lp
+                                  ((Ctor ql largs)
+                                   (if
+                                     (sym_eq
+                                       (qn_name ql)
+                                       (if x86 (quote XLoop) (quote Loop)))
+                                     (match largs
+                                       ((Cons l Nil) (Some l))
+                                       (_ None))
+                                     None))
+                                  (_ None)))
+                               (_ None))
+                             None))
+                          (_ None)))
+                       (_ None))
+                     None))
+                  (_ None)))
+               (_ None))
+             None))
+          (_ None)))))
+    (_ None)))
+
+;; --- bridge-joint discovery ---------------------------------------------------
+
+(fn is_ty1 ((t Type) (s Symbol)) Bool
+  (match t
+    ((TCon q as)
+     (match as
+       (Nil (sym_eq (qn_name q) s))
+       ((Cons _ _) False)))
+    (_ False)))
+
+;; the IFn -> IProg wrapper defined in the source module, by signature
+(fn find_wrap ((fns (List FnDef)) (mp (List Symbol))) (Option Symbol)
+  (measure (struct fns))
+  (match fns
+    (Nil None)
+    ((Cons f rest)
+     (match f
+       ((FnDef q ts rt _)
+        (match ts
+          ((Cons t1 tr)
+           (match tr
+             (Nil
+               (if (is_ty1 t1 (quote IFn))
+                 (if (is_ty1 rt (quote IProg))
+                   (if (sym_path_eq (qn_mod q) mp)
+                     (Some (qn_name q))
+                     (find_wrap rest mp))
+                   (find_wrap rest mp))
+                 (find_wrap rest mp)))
+             ((Cons _ _) (find_wrap rest mp))))
+          (Nil (find_wrap rest mp))))))))
+
+;; drop through the first underscore (the whole tail if none)
+(fn after_us ((s (List Int))) (List Int)
+  (measure (struct s))
+  (match s
+    (Nil Nil)
+    ((Cons h t) (if (int_eq h 95) t (after_us t)))))
+
+;; The claim roster is CHECK-ONLY (run-mode parse skips claims), so the
+;; meeting lemma is discovered by a textual scan of the source file: the
+;; form head "(claim imw_<stem>" at a whitespace boundary. A false
+;; positive fails loudly when the generated file is kernel-checked; a
+;; false negative just leaves the worker standing alone.
+(fn txt_ws ((c Int)) Bool
+  (if (int_eq c 32) True (if (int_eq c 10) True (int_eq c 9))))
+
+(fn txt_at ((needle (List Int)) (hay (List Int))) Bool
+  (measure (struct needle))
+  (match needle
+    (Nil
+      (match hay
+        (Nil True)
+        ((Cons h _) (txt_ws h))))
+    ((Cons nc nt)
+     (match hay
+       (Nil False)
+       ((Cons hc ht) (if (int_eq nc hc) (txt_at nt ht) False))))))
+
+(fn txt_has ((needle (List Int)) (hay (List Int))) Bool
+  (measure (struct hay))
+  (if (txt_at needle hay) True
+  (match hay
+    (Nil False)
+    ((Cons _ t) (txt_has needle t)))))
+
+;; the imp-side meeting lemma's name, if the source text declares it
+(fn find_mw ((srctxt (List Int)) (stem (List Int))) (Option (List Int))
+  (if (txt_has (append_int "(claim imw_" stem) srctxt)
+    (Some (append_int "imw_" stem))
+    (if (txt_has (append_int "(claim imw_" (after_us stem)) srctxt)
+      (Some (append_int "imw_" (after_us stem)))
+      None)))
+
+;; the wrapper's memsize (the MkIProg literal's second field)
+(fn lp_msz ((msrc Module) (wrap Symbol) (gv Expr)) (Option Int)
+  (match (invoke msrc wrap (Cons gv Nil))
+    (None None)
+    ((Some pv)
+     (match (ec_is pv (quote MkIProg))
+       (None None)
+       ((Some pargs)
+        (match pargs
+          ((Cons _ (Cons msz Nil)) (e_int msz))
+          (_ None)))))))
+
+;; --- loop-tier doc pieces -------------------------------------------------------
+
+(fn d_xi ((i Int)) Doc (DCat (DStr "x") (dint i)))
+
+;; the locals list (list x0 x1 (int_of_nat k)) — counter spelled through k
+(fn d_lgo ((j Int) (cidx Int) (acc Doc)) Doc
+  (measure j (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt j 1) acc
+  (d_lgo
+    (- j 1)
+    cidx
+    (DCat
+      (DCat
+        (DStr " ")
+        (if (int_eq (- j 1) cidx) (DStr "(int_of_nat k)") (d_xi (- j 1))))
+      acc))))
+
+(fn d_largs ((n Int) (cidx Int)) Doc
+  (dcat3 (DStr "(list") (d_lgo n cidx (DStr "")) (DStr ")")))
+
+;; worker binders: (x<i> Int) for every param except the counter
+(fn d_wbx_go ((j Int) (cidx Int) (acc Doc)) Doc
+  (measure j (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt j 1) acc
+  (d_wbx_go
+    (- j 1)
+    cidx
+    (if (int_eq (- j 1) cidx) acc
+    (DCat (dcat3 (DStr "(x") (dint (- j 1)) (DStr " Int) ")) acc)))))
+
+;; SysV homes in Regs field order: field index -> local (or -1)
+(fn d_reg_loc ((pos Int)) Int
+  (if (int_eq pos 1) 3
+  (if (int_eq pos 2) 2
+  (if (int_eq pos 5) 1
+  (if (int_eq pos 6) 0
+  (if (int_eq pos 7) 4
+  (if (int_eq pos 8) 5
+  (- 0 1))))))))
+
+(fn d_reg_item ((pos Int) (n Int) (cidx Int) (ra Doc)) Doc
+  (if (int_eq pos 0) ra
+  (if (lt (d_reg_loc pos) 0) (DStr "0")
+  (if (lt (d_reg_loc pos) n)
+    (if (int_eq (d_reg_loc pos) cidx)
+      (DStr "(int_of_nat k)")
+      (d_xi (d_reg_loc pos)))
+    (DStr "0")))))
+
+(fn d_regs_go ((cnt Int) (n Int) (cidx Int) (ra Doc)) Doc
+  (measure cnt (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt cnt 1) (DStr "")
+  (DCat
+    (DCat (DStr " ") (d_reg_item (- 15 cnt) n cidx ra))
+    (d_regs_go (- cnt 1) n cidx ra))))
+
+(fn d_mkregs ((n Int) (cidx Int) (ra Doc)) Doc
+  (dcat3 (DStr "(MkRegs") (d_regs_go 15 n cidx ra) (DStr ")")))
+
+(fn d_lprem_lo ((i Int)) Doc
+  (dconc (list (DStr "(= (le 0 x") (dint i) (DStr ") True)"))))
+
+(fn d_lprem_hi ((i Int)) Doc
+  (dconc
+    (list (DStr "(= (le (+ x") (dint i) (DStr " (int_of_nat k)) 65536) True)"))))
+
+(fn d_lprem_acc ((i Int) (md Int)) Doc
+  (dconc
+    (list
+      (DStr "(= (le (+ x")
+      (dint i)
+      (DStr " (* 256 (int_of_nat k))) ")
+      (dint md)
+      (DStr ") True)"))))
+
+(fn d_lprems ((sh LShape) (md Int)) Doc
+  (match (lsrole_of sh)
+    ((LRFill _)
+     (dcat3 (d_lprem_lo (lsp_of sh)) (sp) (d_lprem_hi (lsp_of sh))))
+    ((LRSum a)
+     (dconc
+       (list
+         (d_lprem_lo (lsp_of sh))
+         (sp)
+         (d_lprem_lo a)
+         (sp)
+         (d_lprem_hi (lsp_of sh))
+         (sp)
+         (d_lprem_acc a md))))))
+
+;; discharge atoms (the hand files' exact spellings)
+(fn d_dprem ((i Int)) Doc
+  (dconc
+    (list
+      (DStr "(steps ((rewrite (premise ")
+      (dint i)
+      (DStr ") lr lhs true ())) refl)"))))
+
+(fn d_dsucc () Doc
+  (DStr "(steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)"))
+
+(fn d_dnn () Doc
+  (DStr "(rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)"))
+
+(fn d_dcompb () Doc (DStr "(steps ((compute both)) refl)"))
+
+(fn d_dgetlo () Doc (DStr "(rewrite-with (lemma get_lo) lr lhs () () refl)"))
+
+(fn d_dgethi () Doc (DStr "(rewrite-with (lemma get_hi) lr lhs () () refl)"))
+
+(fn d_d3 ((i Int)) Doc
+  (dconc (list (d_dprem i) (sp) (d_dsucc) (sp) (d_dnn))))
+
+(fn d_stops ((x86 Bool)) Doc
+  (DStr
+    (if x86
+      "(stop xeval_loop iwhile xlg_fuel lg_fuel ix_out xlg_last)"
+      "(stop eval_loop iwhile lg_fuel iw_out)")))
+
+(fn d_km_inst ((x86 Bool) (p Int)) Doc
+  (dconc
+    (list
+      (DStr "((inst a x")
+      (dint p)
+      (DStr ") (inst c k2)")
+      (DStr (if x86 " (inst w 65536) (inst l 0)" ""))
+      (DStr ")"))))
+
+(fn d_km_dis ((x86 Bool) (hp Int)) Doc
+  (if x86
+    (dconc
+      (list
+        (d_dprem hp)
+        (sp)
+        (d_dsucc)
+        (sp)
+        (d_dprem 0)
+        (sp)
+        (d_dcompb)
+        (sp)
+        (d_dcompb)))
+    (dconc (list (d_dprem hp) (sp) (d_dsucc) (sp) (d_dprem 0)))))
+
+;; wrap bounds for the pointer increment
+(fn d_hw0_dis ((x86 Bool) (hp Int)) Doc
+  (if x86
+    (dconc
+      (list
+        (DStr "(rewrite-with (lemma xlg_lo0) lr lhs ((inst l 0)) (")
+        (d_dprem 0)
+        (sp)
+        (d_dcompb)
+        (DStr ") refl) (rewrite-with (lemma xlg_64) lr lhs ((inst w 65536)) ((rewrite-with (lemma xlg_a1_ms) lr lhs ((inst c k2)) (")
+        (d_d3 hp)
+        (DStr ") refl) ")
+        (d_dcompb)
+        (DStr ") refl)")))
+    (dconc
+      (list
+        (DStr "(rewrite-with (lemma lg_lo1) lr lhs () (")
+        (d_dprem 0)
+        (DStr ") refl) (rewrite-with (lemma lg_32) lr lhs () ((rewrite-with (lemma lg_a1_ms) lr lhs ((inst c k2)) (")
+        (d_d3 hp)
+        (DStr ") refl)) refl)")))))
+
+;; the accumulator's wrap identity (sum shape only)
+(fn d_hwa ((x86 Bool) (p Int) (a Int) (md Int) (wlem (List Int))) Doc
+  (dconc
+    (list
+      (DStr "(have hwa (= (mod (+ x")
+      (dint a)
+      (DStr " (mem_get m0 x")
+      (dint p)
+      (DStr ")) ")
+      (dint md)
+      (DStr ") (+ x")
+      (dint a)
+      (DStr " (mem_get m0 x")
+      (dint p)
+      (DStr "))) (rewrite-with (lemma ")
+      (DStr wlem)
+      (DStr ") lr lhs ((inst x (+ x")
+      (dint a)
+      (DStr " (mem_get m0 x")
+      (dint p)
+      (DStr ")))) ((rewrite-with (lemma ")
+      (DStr (if x86 "xlg_sum_lo" "lg_sum_lo"))
+      (DStr ") lr lhs () (")
+      (d_dprem 1)
+      (sp)
+      (d_dgetlo)
+      (DStr ") refl) (rewrite-with (lemma ")
+      (DStr (if x86 "xlg_sum_64" "lg_sum_32"))
+      (DStr ") lr lhs ((inst c k2)) (")
+      (d_dprem 3)
+      (sp)
+      (d_dsucc)
+      (sp)
+      (d_dgethi)
+      (sp)
+      (d_dnn)
+      (DStr ") refl)) refl)) (steps ((rewrite (premise hwa) lr lhs true ()))) "))))
+
+;; the induction hypothesis, premises re-established at the stepped state
+(fn d_ih ((x86 Bool) (sh LShape)) Doc
+  (match (lsrole_of sh)
+    ((LRFill _)
+     (dconc
+       (list
+         (DStr "(rewrite-with (hyp 0) lr lhs () ((rewrite-with (lemma ")
+         (DStr (if x86 "xlg_lo1" "lg_lo1"))
+         (DStr ") lr lhs () (")
+         (d_dprem 0)
+         (DStr ") refl) (rewrite-with (lemma ")
+         (DStr (if x86 "xlg_shift" "lg_shift"))
+         (DStr ") lr lhs () (")
+         (d_dprem 1)
+         (sp)
+         (d_dsucc)
+         (DStr ") refl))) "))))
+    ((LRSum _)
+     (dconc
+       (list
+         (DStr "(rewrite-with (hyp 0) lr lhs () ((rewrite-with (lemma ")
+         (DStr (if x86 "xlg_lo1" "lg_lo1"))
+         (DStr ") lr lhs () (")
+         (d_dprem 0)
+         (DStr ") refl) (rewrite-with (lemma ")
+         (DStr (if x86 "xlg_sum_lo" "lg_sum_lo"))
+         (DStr ") lr lhs () (")
+         (d_dprem 1)
+         (sp)
+         (d_dgetlo)
+         (DStr ") refl) (rewrite-with (lemma ")
+         (DStr (if x86 "xlg_shift" "lg_shift"))
+         (DStr ") lr lhs () (")
+         (d_dprem 2)
+         (sp)
+         (d_dsucc)
+         (DStr ") refl) (rewrite-with (lemma ")
+         (DStr (if x86 "xlg_sum_shift" "lg_sum_shift"))
+         (DStr ") lr lhs () (")
+         (d_dprem 3)
+         (sp)
+         (d_dsucc)
+         (sp)
+         (d_dgethi)
+         (DStr ") refl))) "))))))
+
+;; the S case: the hand template, indices spliced
+(fn d_schain ((x86 Bool) (sh LShape) (md Int) (wlem (List Int))) Doc
+  (dconc
+    (list
+      (DStr "(steps ((unfold ")
+      (DStr (if x86 "xlg_fuel" "lg_fuel"))
+      (DStr " lhs) (reduce lhs) (unfold lg_fuel rhs) (reduce rhs) (unfold ")
+      (DStr (if x86 "xeval_loop" "eval_loop"))
+      (DStr " lhs) (unfold iwhile rhs) (rewrite (lemma int_of_nat_succ) lr both true ()) (compute both ")
+      (d_stops x86)
+      (DStr "))) (rewrite-with (lemma ")
+      (DStr (if x86 "xlg_ne" "lg_ne"))
+      (DStr ") lr lhs () (")
+      (d_dnn)
+      (DStr ")) (rewrite-with (lemma lg_ne) lr rhs () (")
+      (d_dnn)
+      (DStr ")) (steps ((compute both ")
+      (d_stops x86)
+      (DStr ") (rewrite (premise 0) lr both true ()) (compute both ")
+      (d_stops x86)
+      (DStr "))) (rewrite-with (lemma ")
+      (DStr (if x86 "xlg_a1_ms" "lg_a1_ms"))
+      (DStr ") lr lhs ((inst c k2)) (")
+      (d_d3 (lp_hp sh))
+      (DStr ")) (rewrite-with (lemma im_lt) lr rhs ((inst c k2)) (")
+      (d_d3 (lp_hp sh))
+      (DStr ")) (steps ((compute both ")
+      (d_stops x86)
+      (DStr "))) (have hsub (= (- (+ 1 (int_of_nat k2)) 1) (int_of_nat k2)) (rewrite-with (lemma ")
+      (DStr (if x86 "xlg_sub" "lg_sub"))
+      (DStr ") lr lhs () () refl)) (steps ((rewrite (premise hsub) lr both true ()) (compute both ")
+      (d_stops x86)
+      (DStr "))) (have hwk (= (mod (int_of_nat k2) ")
+      (dint md)
+      (DStr ") (int_of_nat k2)) (rewrite-with (lemma ")
+      (DStr wlem)
+      (DStr ") lr lhs ((inst x (int_of_nat k2))) (")
+      (d_dnn)
+      (DStr " (rewrite-with (lemma ")
+      (DStr (if x86 "xlg_kM" "lg_kM"))
+      (DStr ") lr lhs ")
+      (d_km_inst x86 (lsp_of sh))
+      (DStr " (")
+      (d_km_dis x86 (lp_hp sh))
+      (DStr ") refl)) refl)) (steps ((rewrite (premise hwk) lr lhs true ()))) (have hw0 (= (mod (+ x")
+      (dint (lsp_of sh))
+      (DStr " 1) ")
+      (dint md)
+      (DStr ") (+ x")
+      (dint (lsp_of sh))
+      (DStr " 1)) (rewrite-with (lemma ")
+      (DStr wlem)
+      (DStr ") lr lhs ((inst x (+ x")
+      (dint (lsp_of sh))
+      (DStr " 1))) (")
+      (d_hw0_dis x86 (lp_hp sh))
+      (DStr ") refl)) (steps ((rewrite (premise hw0) lr lhs true ()))) ")
+      (match (lsrole_of sh)
+        ((LRFill _) (DStr ""))
+        ((LRSum a) (d_hwa x86 (lsp_of sh) a md wlem)))
+      (if x86
+        (if (is_sum sh)
+          (DStr "(steps ((unfold xlg_last rhs) (reduce rhs))) ")
+          (DStr ""))
+        (DStr ""))
+      (d_ih x86 sh)
+      (DStr "refl"))))
+
+;; the worker claim: machine loop = adapter of iwhile, induction on k
+(fn d_worker
+  ((x86 Bool)
+   (sh LShape)
+   (md Int)
+   (wlem (List Int))
+   (stem (List Int))
+   (fw Int)
+   (fi Int)
+   (fdoc Doc)
+   (lbdoc Doc)
+   (ibdoc Doc))
+  Doc
+  (dconc
+    (list
+      (DStr "(claim ")
+      (DStr (if x86 "ixw_" "iww_"))
+      (DStr stem)
+      (DStr " (goal (")
+      (if x86 (if (is_sum sh) (DStr "(ra Int) ") (DStr "")) (DStr ""))
+      (d_wbx_go
+        (lsn_of sh)
+        (lsc_of sh)
+        (if x86
+          (DStr "(m0 Mem) (c Nat) (k Nat) (restfs (List XFunc))")
+          (DStr "(st (List Int)) (m0 Mem) (c Nat) (k Nat) (restfs (List Func))")))
+      (DStr ") (")
+      (d_lprems sh md)
+      (DStr ") (= ")
+      (if x86
+        (dconc
+          (list
+            (DStr "(xeval_loop (S^ ")
+            (dint fw)
+            (DStr " (xlg_fuel k c)) (MkXModule (Cons ")
+            fdoc
+            (DStr " restfs) 0 65536) ")
+            lbdoc
+            (DStr " ")
+            (d_mkregs
+              (lsn_of sh)
+              (lsc_of sh)
+              (if (is_sum sh) (DStr "ra") (DStr "0")))
+            (DStr " m0)")))
+        (dconc
+          (list
+            (DStr "(eval_loop (S^ ")
+            (dint fw)
+            (DStr " (lg_fuel k c)) (MkWModule (Cons ")
+            fdoc
+            (DStr " restfs) 65536) ")
+            lbdoc
+            (DStr " ")
+            (d_largs (lsn_of sh) (lsc_of sh))
+            (DStr " st m0)"))))
+      (DStr " ")
+      (if x86
+        (dcat3
+          (DStr "(ix_out ")
+          (if (is_sum sh)
+            (dconc
+              (list (DStr "(xlg_last m0 x") (dint (lsp_of sh)) (DStr " ra k)")))
+            (DStr "0"))
+          (DStr " "))
+        (DStr "(iw_out st "))
+      (dconc
+        (list
+          (DStr "(iwhile (S^ ")
+          (dint fi)
+          (DStr " (lg_fuel k c)) 65536 (ILoc ")
+          (dint (lsc_of sh))
+          (DStr ") ")
+          ibdoc
+          (DStr " ")
+          (d_largs (lsn_of sh) (lsc_of sh))
+          (DStr " m0)")))
+      (DStr "))) (induct k ((case Z (steps ((rewrite (lemma int_of_nat_zero) lr both true ()) (compute both)) refl)) (case S (k2) (chain ")
+      (d_schain x86 sh md wlem)
+      (DStr ")))))")
+      (DStr (nl))
+      (DStr (nl)))))
+
+;; the worker's premises, discharged one for one in the bridge
+(fn d_lbr_dis ((sh LShape)) Doc
+  (match (lsrole_of sh)
+    ((LRFill _) (dcat3 (d_dprem 0) (sp) (d_dprem 1)))
+    ((LRSum _)
+     (dconc
+       (list
+         (d_dprem 0)
+         (sp)
+         (d_dprem 1)
+         (sp)
+         (d_dprem 2)
+         (sp)
+         (d_dprem 3))))))
+
+;; the denotation bridge: call boundary = call boundary, through the
+;; worker and the imp-side meeting lemma (both sides, fuel-independent)
+(fn d_lbridge
+  ((x86 Bool)
+   (sh LShape)
+   (md Int)
+   (stem (List Int))
+   (brpre (List Int))
+   (trans (List Int))
+   (pin Symbol)
+   (wrapnm (List Int))
+   (mw (List Int))
+   (fwb Int)
+   (fib Int))
+  Doc
+  (dconc
+    (list
+      (DStr "(claim ")
+      (DStr brpre)
+      (DStr stem)
+      (DStr " (goal (")
+      (d_wbx_go
+        (lsn_of sh)
+        (lsc_of sh)
+        (DStr "(m0 Mem) (c Nat) (c2 Nat) (k Nat)"))
+      (DStr ") (")
+      (d_lprems sh md)
+      (DStr ") (= ")
+      (if x86
+        (dconc
+          (list
+            (DStr "(xcall_fn_mem (S^ ")
+            (dint fwb)
+            (DStr " (xlg_fuel k c)) (MkXModule (list (x_of (")
+            (DStr trans)
+            (DStr " (")
+            (dsym pin)
+            (DStr ")))) 0 65536) 0 ")
+            (d_largs (lsn_of sh) (lsc_of sh))
+            (DStr " m0)")))
+        (dconc
+          (list
+            (DStr "(call_fn_mem (S^ ")
+            (dint fwb)
+            (DStr " (lg_fuel k c)) (MkWModule (list (w_of (")
+            (DStr trans)
+            (DStr " (")
+            (dsym pin)
+            (DStr ")))) 65536) 0 ")
+            (d_largs (lsn_of sh) (lsc_of sh))
+            (DStr " m0)"))))
+      (DStr " (icall_mem (S^ ")
+      (dint fib)
+      (DStr " (lg_fuel k c2)) (")
+      (DStr wrapnm)
+      (DStr " (")
+      (dsym pin)
+      (DStr ")) 0 ")
+      (d_largs (lsn_of sh) (lsc_of sh))
+      (DStr " m0))) (chain (steps ((compute both ")
+      (d_stops x86)
+      (DStr "))) (rewrite-with (lemma ")
+      (DStr (if x86 "ixw_" "iww_"))
+      (DStr stem)
+      (DStr ") lr lhs () (")
+      (d_lbr_dis sh)
+      (DStr ")) (rewrite-with (lemma ")
+      (DStr mw)
+      (DStr ") lr lhs () (")
+      (d_dprem 0)
+      (sp)
+      (d_dprem (lp_hp sh))
+      (DStr ")) (rewrite-with (lemma ")
+      (DStr mw)
+      (DStr ") lr rhs () (")
+      (d_dprem 0)
+      (sp)
+      (d_dprem (lp_hp sh))
+      (DStr ")) (steps ((compute both))) refl))")
+      (DStr (nl))
+      (DStr (nl)))))
+
+;; a recognized loop whose bridge joints are missing: the worker stands
+(fn d_lwnote ((pin Symbol) (why (List Int))) Doc
+  (dconc
+    (list
+      (DStr ";; ")
+      (dsym pin)
+      (DStr ": worker only (")
+      (DStr why)
+      (DStr ")")
+      (DStr (nl))
+      (DStr (nl)))))
+
+;; the loop pin's cert set: worker always; bridge when the joints exist
+(fn gen_loop
+  ((brpre (List Int))
+   (trans (List Int))
+   (x86 Bool)
+   (md Int)
+   (wlem (List Int))
+   (pin Symbol)
+   (gv Expr)
+   (tv Expr)
+   (sh LShape)
+   (msrc Module)
+   (srctxt (List Int))
+   (wrap (Option Symbol)))
+  ERes
+  (match (ec_is tv (quote Some))
+    (None (EErr "translated value is not Some (internal)"))
+    ((Some sargs)
+     (match sargs
+       ((Cons fexp Nil)
+        (match (ex_loop_body x86 fexp)
+          (None (EErr "translated loop shape (internal)"))
+          ((Some lb)
+           (match (gv_wbody gv)
+             (None (EErr "pin loop body shape (internal)"))
+             ((Some ib)
+              (match (sp_e (harvest tv) 0 fexp)
+                ((SpRErr m) (EErr m))
+                ((SpROk fdoc)
+                 (match (sp_e (harvest tv) 0 lb)
+                   ((SpRErr m) (EErr m))
+                   ((SpROk lbdoc)
+                    (match (sp_e (harvest gv) 0 ib)
+                      ((SpRErr m) (EErr m))
+                      ((SpROk ibdoc)
+                       (EOk
+                         (DCat
+                           (d_worker
+                             x86
+                             sh
+                             md
+                             wlem
+                             (pin_nm pin)
+                             (+ (tcost lb) 4)
+                             (+ (gcost (lsbs_of sh)) 5)
+                             fdoc
+                             lbdoc
+                             ibdoc)
+                           (match wrap
+                             (None
+                               (d_lwnote
+                                 pin
+                                 "no IFn -> IProg wrapper in the source: no bridge"))
+                             ((Some wnm)
+                              (match (find_mw srctxt (pin_nm pin))
+                                (None
+                                  (d_lwnote
+                                    pin
+                                    "no imw_ meeting lemma in the source: no bridge"))
+                                ((Some mw)
+                                 (match (lp_msz msrc wnm gv)
+                                   (None
+                                     (d_lwnote
+                                       pin
+                                       "wrapper does not evaluate to MkIProg (internal)"))
+                                   ((Some msz)
+                                    (if (int_eq msz 65536)
+                                      (d_lbridge
+                                        x86
+                                        sh
+                                        md
+                                        (pin_nm pin)
+                                        brpre
+                                        trans
+                                        pin
+                                        (chars_of_sym wnm)
+                                        mw
+                                        (+ (+ (tcost lb) 4) 4)
+                                        (+ (+ (gcost (lsbs_of sh)) 5) 2))
+                                      (d_lwnote
+                                        pin
+                                        "wrapper memsize is not 65536 (the loopkit constants): no bridge")))))))))))))))))))))
+       (_ (EErr "translated value shape (internal)"))))))
+
+;; does any pin in the file carry a recognized loop? (header imports)
+(fn any_loop ((msrc Module) (pins (List Symbol))) Bool
+  (measure (struct pins))
+  (match pins
+    (Nil False)
+    ((Cons p rest)
+     (match (invoke msrc p Nil)
+       (None (any_loop msrc rest))
+       ((Some gv)
+        (match (rf_fn gv)
+          (None (any_loop msrc rest))
+          ((Some ifn)
+           (match (lp_rec ifn)
+             ((Some _) True)
+             (None (any_loop msrc rest))))))))))
 
 ;; --- per-pin emission ------------------------------------------------------------
 
@@ -1167,6 +2106,7 @@
    (x86 Bool)
    (md Int)
    (wlem (List Int))
+   (wrapnm (List Int))
    (pin Symbol)
    (gv Expr)
    (tv Expr))
@@ -1207,6 +2147,7 @@
                             md
                             wlem
                             trans
+                            wrapnm
                             (iparams_of ifn)
                             (+ (tcost instrs) 4)
                             (+ (gcost (ibody_of ifn)) 4)
@@ -1216,8 +2157,9 @@
           (_ (EErr "translated value shape (internal)"))))))))
 
 ;; one pin, one target: evaluate the pin in the SOURCE module, run the
-;; translator on the value in the TRANSLATOR module, spell the tie and
-;; (when it_prog exists and the walk accepts) the bridge
+;; translator on the value in the TRANSLATOR module, spell the tie,
+;; then the loop tier (recognized shapes) or the scalar bridge (when
+;; the wrapper exists and the walk accepts)
 (fn gen_pin
   ((msrc Module)
    (mtr Module)
@@ -1228,7 +2170,8 @@
    (x86 Bool)
    (md Int)
    (wlem (List Int))
-   (hasprog Bool)
+   (srctxt (List Int))
+   (wrap (Option Symbol))
    (pin Symbol))
   ERes
   (match (invoke msrc pin Nil)
@@ -1244,25 +2187,70 @@
             (match (sp_e (harvest tv) 0 tv)
               ((SpRErr msg) (EErr msg))
               ((SpROk vdoc)
-               (if hasprog
-                 (match
-                   (gen_bridge
-                     brpre
-                     (chars_of_sym trans)
-                     x86
-                     md
-                     wlem
-                     pin
-                     gv
-                     tv)
-                   ((EErr msg) (EErr msg))
-                   ((EOk bdoc)
-                    (EOk
-                      (DCat
-                        (d_tie tiepre (pin_nm pin) (chars_of_sym trans) pin vdoc)
-                        bdoc))))
-                 (EOk
-                   (d_tie tiepre (pin_nm pin) (chars_of_sym trans) pin vdoc))))))))))))
+               (match (rf_fn gv)
+                 (None
+                   (EErr (append_int "pin does not reify: " (chars_of_sym pin))))
+                 ((Some ifn)
+                  (match (lp_rec ifn)
+                    ((Some sh)
+                     (match
+                       (gen_loop
+                         brpre
+                         (chars_of_sym trans)
+                         x86
+                         md
+                         wlem
+                         pin
+                         gv
+                         tv
+                         sh
+                         msrc
+                         srctxt
+                         wrap)
+                       ((EErr msg) (EErr msg))
+                       ((EOk ldoc)
+                        (EOk
+                          (DCat
+                            (d_tie
+                              tiepre
+                              (pin_nm pin)
+                              (chars_of_sym trans)
+                              pin
+                              vdoc)
+                            ldoc)))))
+                    (None
+                      (match wrap
+                        (None
+                          (EOk
+                            (d_tie
+                              tiepre
+                              (pin_nm pin)
+                              (chars_of_sym trans)
+                              pin
+                              vdoc)))
+                        ((Some wnm)
+                         (match
+                           (gen_bridge
+                             brpre
+                             (chars_of_sym trans)
+                             x86
+                             md
+                             wlem
+                             (chars_of_sym wnm)
+                             pin
+                             gv
+                             tv)
+                           ((EErr msg) (EErr msg))
+                           ((EOk bdoc)
+                            (EOk
+                              (DCat
+                                (d_tie
+                                  tiepre
+                                  (pin_nm pin)
+                                  (chars_of_sym trans)
+                                  pin
+                                  vdoc)
+                                bdoc)))))))))))))))))))
 
 (fn gen_pins
   ((msrc Module)
@@ -1274,18 +2262,19 @@
    (x86 Bool)
    (md Int)
    (wlem (List Int))
-   (hasprog Bool)
+   (srctxt (List Int))
+   (wrap (Option Symbol))
    (pins (List Symbol)))
   ERes
   (measure (struct pins))
   (match pins
     (Nil (EOk (DStr "")))
     ((Cons p rest)
-     (match (gen_pin msrc mtr trans tiepre brpre tname x86 md wlem hasprog p)
+     (match (gen_pin msrc mtr trans tiepre brpre tname x86 md wlem srctxt wrap p)
        ((EErr msg) (EErr msg))
        ((EOk d)
         (match
-          (gen_pins msrc mtr trans tiepre brpre tname x86 md wlem hasprog rest)
+          (gen_pins msrc mtr trans tiepre brpre tname x86 md wlem srctxt wrap rest)
           ((EErr msg) (EErr msg))
           ((EOk ds) (EOk (DCat d ds)))))))))
 
@@ -1326,7 +2315,9 @@
    (tname (List Int))
    (out (List Int))
    (modelpath (List Int))
-   (transpath (List Int)))
+   (transpath (List Int))
+   (loopful Bool)
+   (x86 Bool))
   Doc
   (dconc
     (list
@@ -1347,10 +2338,28 @@
       (dimport (append_int (updots out) "models/imp/imp.shard"))
       (dimport (append_int (updots out) modelpath))
       (dimport (append_int (updots out) transpath))
+      (if loopful
+        (dconc
+          (list
+            (dimport (append_int (updots out) "std/nat.shard"))
+            (dimport (append_int (updots out) "std/mem"))
+            (dimport (append_int (updots out) "models/wasm/loopkit.shard"))
+            (if x86
+              (dimport (append_int (updots out) "models/x86/loopkit.shard"))
+              (DStr ""))))
+        (DStr ""))
       (use_of src)
       (use_of "models/imp/imp.shard")
       (use_of modelpath)
       (use_of transpath)
+      (if loopful
+        (dconc
+          (list
+            (use_of "std/nat.shard")
+            (use_of "std/mem")
+            (use_of "models/wasm/loopkit.shard")
+            (if x86 (use_of "models/x86/loopkit.shard") (DStr ""))))
+        (DStr ""))
       (DStr (nl)))))
 
 ;; --- driver -----------------------------------------------------------------------
@@ -1381,41 +2390,53 @@
      (match (load_run_module transpath w1)
        ((Pair None w2) (ig_fail (append_int "cannot load " transpath) w2))
        ((Pair (Some mtr) w2)
-        (match msrc
-          ((Module _ fns _ _ _)
-           (match (pins_of fns (split_slash (until_dot src) Nil))
-             (Nil (ig_refuse (append_int "no imp pins in " src) w2))
-             ((Cons p prest)
-              (match
-                (gen_pins
-                  msrc
-                  mtr
-                  trans
-                  tiepre
-                  brpre
-                  tname
-                  x86
-                  md
-                  wlem
-                  (match (find_fn (quote it_prog) msrc)
-                    (None False)
-                    ((Some _) True))
-                  (Cons p prest))
-                ((EErr msg) (ig_refuse msg w2))
-                ((EOk body)
+        (match (read_file src w2)
+          ((Pair osrc w3)
+           (match msrc
+             ((Module _ fns _ _ _)
+              (match (pins_of fns (split_slash (until_dot src) Nil))
+                (Nil (ig_refuse (append_int "no imp pins in " src) w3))
+                ((Cons p prest)
                  (match
-                   (write_file
-                     out
-                     (doc_flat
-                       (DCat (ig_header src tname out modelpath transpath) body)
-                       Nil)
-                     w2)
-                   ((Pair ok w3)
-                    (if ok
-                      (exit
-                        0
-                        (write (append_int "wrote " (append_int out (nl))) w3))
-                      (ig_fail (append_int "cannot write " out) w3)))))))))))))))
+                   (gen_pins
+                     msrc
+                     mtr
+                     trans
+                     tiepre
+                     brpre
+                     tname
+                     x86
+                     md
+                     wlem
+                     (match osrc
+                       (None Nil)
+                       ((Some txt) txt))
+                     (find_wrap fns (split_slash (until_dot src) Nil))
+                     (Cons p prest))
+                   ((EErr msg) (ig_refuse msg w3))
+                   ((EOk body)
+                    (match
+                      (write_file
+                        out
+                        (doc_flat
+                          (DCat
+                            (ig_header
+                              src
+                              tname
+                              out
+                              modelpath
+                              transpath
+                              (any_loop msrc (Cons p prest))
+                              x86)
+                            body)
+                          Nil)
+                        w3)
+                      ((Pair ok w4)
+                       (if ok
+                         (exit
+                           0
+                           (write (append_int "wrote " (append_int out (nl))) w4))
+                         (ig_fail (append_int "cannot write " out) w4)))))))))))))))))
 
 (fn main ((w World)) World
   (match (get_args w)

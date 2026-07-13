@@ -1041,6 +1041,60 @@ the I1 hand era stabilized, now stamped by code.
   worker-induction shapes), I2d-3 the sha256 legs (ix_home 6→12 +
   the K-window data segments), build DERIVE integration.
 
+**I2d-2 — impgen: the loop tier mechanized (2026-07-12).** The
+counting-loop WORKER (the iww_*/ixw_* induction template — the M×N
+kill's per-program machine-vs-machine leg) and the DENOTATION BRIDGE
+(call_fn_mem/xcall_fn_mem = icall_mem) are now generated. Recognition
+is EXACT and honest: a pin whose body is one IWhile over (ILoc c)
+with one of the two hand-validated statement sequences — fill
+`[mem[p] := v; p += 1; c -= 1]`, sum `[a += mem[p]; p += 1; c -= 1]`
+— with distinct param locals, no extras, and an IConst/ILoc result;
+everything else declines to tie-plus-note (the scalar tier's fence
+discipline).
+
+- The worker synthesizes: the premise family from the shape (pointer
+  lo/hi bounds; the sum shape adds the k-scaled byte-accumulator
+  invariant at the target modulus), the machine module/loop-body
+  literals from the RUN translation (sp_e-spelled, zero re-derivation),
+  the x86 register file as the MkRegs literal over the SysV homes
+  (counter spelled through `(int_of_nat k)`), the read-loop scratch
+  residue as the loopkit's `xlg_last` with a quantified `ra`, and the
+  hand S-case chain verbatim with indices spliced — fuel unfolds,
+  lg_ne/im_lt guard deciders, the hsub counter collapse, the
+  hwk/hw0(/hwa) wrap-identity haves, and the IH with per-premise
+  preservation discharges. Every discharge cites the target loopkit
+  GENERICALLY (lg_*/xlg_* + im_lt); no new lemma is generated, ever.
+- The bridge's joints are DISCOVERED, none re-derived: the
+  IFn→IProg wrapper by signature scan (this also generalized the
+  scalar tier's hardcoded `it_prog`), the imp-side meeting lemma
+  `imw_<stem>` by a textual scan of the source file (the claim
+  roster is CHECK-ONLY — run-mode parse skips claims; a false
+  positive fails loudly at kernel time), and the wrapper memsize
+  checked = 65536 (the loopkit's constants). Missing joints leave
+  the worker standing with an honest note. CONTRACT: the meeting
+  lemma is stated at `(S^ (gcost body + 5) (lg_fuel k c))` with
+  premises `[le 0 ptr; le (+ ptr (int_of_nat k)) 65536]` in that
+  order — both hand imw_* already are.
+- Fuel: the machine-side reservoir is tcost(loop body)+4 and needs
+  only to be sufficient (the per-iteration burn is exactly the entry
+  unit, restored by the lg_fuel tower's S, so the IH shape returns
+  at ANY constant ≥ the body depth); the imp side must match the
+  meeting lemma's spelling exactly, hence the contract above. Bridge
+  entries peel exactly 4 (machine: seq+instr(Block)+seq+instr(Loop))
+  and 2 (imp: istmts+istmt).
+- Validation: examples/impgen_wasm_loop_out.shard and
+  examples/impgen_x86_loop_out.shard — per target 2 ties + 2 workers
+  + 2 denotation bridges over il_fill_fn/il_sum_fn, ALL TWELVE
+  kernel-green FIRST-TRY; the generated claims are the hand
+  iww_*/ixw_*/imp_w_*/imp_x_* up to binder naming and fuel padding.
+  Regen byte-identical both targets; the committed scalar outputs
+  regenerate byte-identical under the extended tool; both loop files
+  are corpus targets.
+- NEXT: I2d-3 the sha256 legs (ix_home 6→12 + the K-window data
+  segments; the sha loop bodies exceed the v1 loop family — the
+  recognizer and the phase/fold machinery grow there), build DERIVE
+  integration.
+
 ## 7. Non-goals, stated once
 
 - imp as a shipped target or public surface — it is an intermediate;
