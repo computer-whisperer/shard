@@ -277,13 +277,15 @@ authority for its area:
 | [BOUNDARIES.md](docs/BOUNDARIES.md) | modeling external systems; extern + axiom |
 | [ISA.md](docs/ISA.md) | machine models as libraries; target architecture |
 | [LOWERING.md](docs/LOWERING.md) | the lowering-form paradigm: statements, certs, gates |
+| [IMP.md](docs/IMP.md) | the neutral imperative dialect: spec ⊑ imp ⊑ wasm/x86 |
 | [X86.md](docs/X86.md) | the x86-64 target: emitter → bin ladder → World on silicon |
 | [CANON.md](docs/CANON.md) | the canonical dialect: rules, census, content addressing |
 | [TCB.md](docs/TCB.md) | the trust story: exactly what is trusted, and why |
 | [MEMORY.md](docs/MEMORY.md) | representation + memory management (draft) |
-| [SEARCH.md](docs/SEARCH.md) | program search over shard terms (fork in progress) |
+| [BUILD.md](docs/BUILD.md) | the build layer: products, profiles, PIN/DERIVE/SYNTHESIZE |
+| [SEARCH.md](docs/SEARCH.md) | program search over shard terms (arc complete, merged) |
 | [REVISIT.md](docs/REVISIT.md) | the design-decision ledger: choice + revisit-when |
-| [M3-V1-VS-V2.md](docs/M3-V1-VS-V2.md) | v1 vs v2 proof-effort comparison (history) |
+| [archive/M3-V1-VS-V2.md](docs/archive/M3-V1-VS-V2.md) | v1 vs v2 proof-effort comparison (history) |
 | [archive/TRANSFER.md](docs/archive/TRANSFER.md) | the founding premise and v1→v2 mandate |
 
 ## Live arcs

@@ -109,7 +109,9 @@ Two consequences worth stating outright:
   the temporary native chain that compiles the dev-loop engines
   (`bin/shard_check`, `bin/shard_eval`) — never the soundness authority,
   and retired when the certifying pipeline compiles the evaluator itself
-  (the flagship, `LOWERING.md` §7).
+  (the coverage arc's flagship: spec ⊑ imp ⊑ ISA through the neutral
+  imperative dialect and the counted heap — `IMP.md`, `MEMORY.md` rung 4;
+  the cert form is `LOWERING.md`'s).
 - **Performant representations need zero kernel or compiler features.**
   A packed string, an in-place buffer algorithm, an arena: each is a
   *lower-level shard program* (over the `Word`/`Bytes`/`Mem` vocabulary —
@@ -215,8 +217,9 @@ There is **no full→narrow lowering** and **no certificate scheme** — narrow 
 not a compilation target, it is the floor we bootstrap from. The Rust in
 `rust_bootstrap/` is **scaffolding, not the destination**: it hosts shard only
 until shard can compile itself, at which point the whole directory is deleted
-and shard stands alone. The eventual compile story is full shard straight to a
-machine target (§3).
+and shard stands alone. The eventual compile story is full shard through the
+neutral imperative dialect to a machine target — spec ⊑ imp ⊑ wasm/x86, with
+the memory story attached once at imp (`IMP.md`, `MEMORY.md`; §3).
 
 **Self-hosting status.** The front-end has moved into shard: the s-expression
 reader and module parser (`kernel/reader.shard`) are validated byte-for-byte
@@ -239,7 +242,8 @@ compiled to native binaries (`bin/shard_check`, `bin/shard_eval`) by the
 temporary native chain — stamp-guarded against source drift and never the
 soundness authority (authoritative runs use the Rust interpreter path
 explicitly). The remaining cord-cutter is the certifying shard→machine
-compile of the evaluator itself (the flagship arc, `LOWERING.md` §7), at
+compile of the evaluator itself (the coverage arc's flagship — `IMP.md`,
+`MEMORY.md` rung 4, with `LOWERING.md` supplying the cert form), at
 which point `rust_bootstrap/` and the temporary chain are both deleted.
 
 
@@ -428,9 +432,10 @@ Flagged so we don't paint ourselves into a corner:
   `REFINEMENT.md` — structural invariants as types.
 - `BOUNDARIES.md` — modeling external systems (extern + axiom; the direct-style
   World/extern I/O the `eval` runner realizes).
-- `ISA.md` / `LOWERING.md` / `X86.md` / `CANON.md` / `MEMORY.md` /
-  `SEARCH.md` — the arc ledgers: targets-as-libraries, the lowering form,
-  the x86 rung, the canonical dialect, memory/representation, program
-  search.
+- `ISA.md` / `LOWERING.md` / `IMP.md` / `X86.md` / `CANON.md` /
+  `MEMORY.md` / `SEARCH.md` — the arc ledgers: targets-as-libraries, the
+  lowering form, the neutral imperative dialect (the common lowering
+  step), the x86 rung, the canonical dialect, memory/representation,
+  program search.
 - `REVISIT.md` — the design-decision ledger: every choice and when to revisit.
 - `archive/TRANSFER.md` — the v1→v2 handoff: premise, lessons, what changed.

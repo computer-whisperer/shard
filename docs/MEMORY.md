@@ -63,6 +63,18 @@ User rulings already on record from the design discussions of
   steers the spec → imp step from the build profile. The float
   arc's core model joins imp by citation at fork-merge time
   (IMP.md rulings block).
+- **The coverage inversion (2026-07-12, re-adjudication ruling).**
+  Rung 4 — the counted heap plus the GENERIC spec → imp translator
+  (the uniform-representation compiler) — is pulled forward as the
+  COVERAGE SPINE: it is what closes "basic function across the
+  entire language," and every other class degrades INTO it (§1's
+  graceful-degradation argument applied to the schedule). Rungs
+  2/3/5 become per-decl performance upgrades layered on the total
+  story; the frame flagship (rung 2, sha256) completes but no longer
+  gates coverage. Cert families are GENERATED from day one — the
+  sha256 sibling (11k hand-proof lines for one module) is the
+  measurement that hand certs do not scale past the flagship. The
+  lowering-induced-failure surface is D8, opened the same day.
 
 
 ## 1. The root problem
@@ -420,6 +432,17 @@ the ISA legs; its I2 is this file's rung-2 flagship; the counted
 heap arrives at imp when rung 4 opens). Each flagship is proven once
 at imp and landed per target by the imp ⊑ ISA families.
 
+SCHEDULE REVISION (2026-07-12, the coverage inversion — rulings
+block): the ladder below remains the CLASS structure, but the build
+order inverts — rung 4 opens as the next arc after IMP.md's I2d/I2e
+(the uniform-rep compiler over imp, certs generated from day one;
+IMP.md's redirection block is the arc record), with rung 1's scalar
+policy folded into its opening pins and rungs 3/5 landing afterward
+as measured per-decl upgrades. The full-gap pathfinder milestone:
+examples/calc as a proven (bin …) on silicon through the generic
+path (strings, lists, ADTs, recursion — the key types crossing the
+entire gap).
+
 1. **Scalars (`register`).** The ratified LOWERING.md §7 item 9 plan:
    kernel-inner refined u8/u32/u64; fit obligations discharged from
    source invariants at construction sites. Shared prerequisite of
@@ -512,7 +535,40 @@ at imp and landed per target by the imp ⊑ ISA families.
   measurements demand a bulk tier.
 - **D6 — header and tag scheme.** Emit-level; decided at rung 4 time
   in the target docs, not here.
-- **D7 — budgeted-twin timing.** Build the transform at slice 4 (it
-  is a shard→shard transform, independent of targets) or defer until
-  the eval flagship needs it? Lean: defer; the tier-1/tier-2 story
-  covers everything before the flagship.
+- **D7 — budgeted-twin timing.** PARTIALLY RESOLVED by the coverage
+  inversion (2026-07-12): the twin's THEOREM SHAPE
+  (`Done v ⟹ v = pure(args)`) is promoted into D8's Done-or-Fail
+  default cert conclusion for the checked coverage tier — realized as
+  checks in GENERATED imp, not a source-level transform. A separate
+  source-level twin artifact stays deferred as before.
+- **D8 — the controlled-failure surface (OPENED 2026-07-12; direction
+  under design, resolves early in the coverage arc).**
+  Lowering-induced partiality (word overflow, OOM, stack depth) —
+  conditions that do not exist in high-level shard and develop as a
+  consequence of implementing it on hardware — becomes CONTROLLED
+  FAILURE by default: generated imp threads an explicit fail leg
+  (checked ops + the checked allocator), the cert conclusion is
+  Done-or-Fail — `run = Done (SPEC args) ∨ Fail(family)` with the
+  fail families honest — and the requirement surface grows an
+  `except` clause at the artifact boundary (the bin contract states
+  the observable fallback: v1 = abort-with-diagnostic, with emitted
+  World effects a PREFIX of the spec's). Enforcement is the accepts
+  ratchet's twin: an artifact's fail families must be covered by its
+  declared except clause in both directions, or the build fails —
+  the proof system makes the escape hatch mandatory (the disjunction
+  cannot be eliminated without either a premise or the clause). The
+  three-tier resolution ladder per condition: DISSOLVE (explicit
+  U32/refined types in source — no check, no clause), GUARANTEE
+  (accepts premise — check elided, caller obliged), HANDLE (except
+  clause — check emitted, fallback certified). Checks are the
+  degradation default and proofs DELETE them — the cancellation-tower
+  pattern applied to partiality. Non-mimic precedent for the theorem
+  shape: CakeML's compiler theorem (behaves-as-source OR terminates
+  early with a resource error). Open sub-questions: the except
+  clause's grammar and family granularity; the machine-level Fail
+  value (imp needs a reasoned fail distinct from ITrap and from fuel
+  None); the stack family's v1 mechanism (depth counter = fuel made
+  real, vs the frame class's discharge-by-construction); app-defined
+  fallback handlers (deliberately OUT for v1 — a handler runs in a
+  resource-compromised state; apps wanting specific behavior take the
+  dissolve tier).

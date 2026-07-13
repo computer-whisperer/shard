@@ -417,6 +417,12 @@ coincide with wasm's shape is an open question, not a commitment. Present
 focus: generic tooling and libraries for processing/reprocessing that the
 refinement dance requires — the composable kit, not target count.
 
+**Realized (2026-07-12):** the common lowering step named above landed as
+**`models/imp`**, the neutral imperative dialect (`IMP.md`) — its
+intermediate form is neither target's shape, and the memory story
+attaches once at imp (`MEMORY.md`). spec ⊑ imp ⊑ wasm/x86 is the plan of
+record; this file's §1–§4 architecture is unchanged by it.
+
 **Sequencing decided:** Nat former first (self-contained, fence-respecting
 kernel work that removes a known wall before it is hit), then the `Mem` arc.
 

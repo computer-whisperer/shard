@@ -125,9 +125,9 @@ checker) re-establishes a fresh engine by construction and by gate:
 ## Lifetime
 
 The chain is TEMPORARY (compiler-chain arc). The long-term engine is
-the proven lowering pipeline (LOWERING.md, X86.md): shard→shard
-refinement with certificates, where the emitted artifact's trust is a
-theorem, not a differential. This document governs until that pipeline
+the proven lowering pipeline (LOWERING.md, IMP.md, X86.md): shard→shard
+refinement with certificates through the neutral imperative dialect,
+where the emitted artifact's trust is a theorem, not a differential. This document governs until that pipeline
 replaces the bootstrap chain; the principle — the executing engine is
 never the soundness authority, the reviewed sources and the authority
 interpreter are — survives the replacement unchanged.

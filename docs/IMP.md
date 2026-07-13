@@ -287,6 +287,44 @@ Later, unscheduled: the counted-heap class at imp (MEMORY.md rung 4
 restated), the lowsrc→imp front-end absorption, imp-level reuse
 (Perceus-shaped) once counting exists.
 
+**REDIRECTION (2026-07-12, user-ratified re-adjudication).** The
+"later, unscheduled" line above is superseded: the COVERAGE ARC is the
+spine. After I2d/I2e close the flagship, the next arc is the
+UNIFORM-REPRESENTATION COMPILER over imp — the generic, TOTAL
+spec → imp translation for arbitrary first-order shard (ctor = counted
+cell alloc, match = tag dispatch + field loads, call = icall, tail
+recursion = IWhile, non-tail = real calls on the models' structured
+call mechanisms), with MEMORY.md rung 4's counted heap pulled forward
+as its runtime and EVERY cert family generated from day one: per-TYPE
+readback lemmas from the type declaration (the records-arc precedent),
+per-CONSTRUCT heap-invariant lemmas proven once, per-FN certs = one
+induction along the fn's own totality measure — the measure clause
+every shard fn already carries is the induction skeleton, precomputed
+by the language itself. Consequences, all ratified:
+
+- **I2d (impgen) is promoted to standing infrastructure** and is the
+  next slice: the imp ⊑ ISA legs are generated for the closed imp
+  construct set, absorbing the fragment ladder's proof kit (WrapK,
+  fuel algebra, clobber sets, the window kit). The standing rule
+  extends the no-oneoff-generators ruling: NO PROOF FAMILY GETS A
+  THIRD HAND INSTANCE — probe twice, then the generator ships with
+  the family. The sha256 sibling (11k hand lines) is the measurement
+  that priced this.
+- **I2.5 (containers) and I3 (profiles) leave the critical path** —
+  they land with or after the coverage arc, consumer-driven.
+- **wasmgen/x86gen freeze at their landed extent** (kept green; the
+  §5 absorption license is exercised now rather than after fragment
+  parity — new coverage arrives only through imp, and the direct
+  spec→ISA path stops growing).
+- **The full-gap pathfinder milestone: examples/calc** as a proven
+  (bin …) on silicon through the generic path — strings, lists, ADTs,
+  recursion crossing the whole gap in one artifact.
+- **The controlled-failure surface (MEMORY.md D8)** — overflow/OOM/
+  stack as a Done-or-Fail cert conclusion plus a requirements-level
+  `except` clause — is OPEN and resolves early in the coverage arc;
+  imp's machine grows a reasoned Fail value (distinct from ITrap and
+  fuel None) when it lands.
+
 
 ## 6a. Rung records
 

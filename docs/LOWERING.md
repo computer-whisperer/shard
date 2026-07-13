@@ -1992,8 +1992,16 @@ arcs draw from.
 3. ~~The footprint/framing lemma shape~~ RESOLVED by P1. Remaining
    tail (fragment growth): the above-footprint pointwise twin, and
    emitting the observational companions mechanically.
-4. OPEN (decide when a consumer appears): trap-conditional variant, or
-   do premises + interpreted fallback cover the roadmap?
+4. RE-OPENED 2026-07-12 (the coverage re-adjudication) — the consumer
+   appeared: the uniform-rep coverage tier (IMP.md redirection block).
+   Direction: a **Done-or-Fail conclusion** — STRONGER than the
+   trap-conditional weakening contemplated here: failure is an
+   observable value with a certified fallback, the budgeted-twin
+   theorem shape made the default for checked artifacts — plus a
+   requirements-level `except` clause at the artifact boundary.
+   Premises stay as the check-eliding optimization and the embedded
+   tier (total-under-premises is unchanged for leaf/fragment certs).
+   Design ledgered at MEMORY.md D8.
 5. OPEN (uniform-rep arc, v2): cross-rep conversion glue — certified
    adapter pieces between the uniform rep and hand-rolled reps.
 6. OPEN (likely yes, confirm during the RS fragment): is one scalar +

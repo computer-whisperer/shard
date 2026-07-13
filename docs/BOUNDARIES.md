@@ -28,6 +28,11 @@ generalized to all foreign contact.
 
 ## Two mechanisms
 
+> Historical spelling note (2026-07-12): the examples below predate the
+> `Bytes` former revocation (issue #15) — read `Bytes` as `std/bytes`'
+> opaque type (byte payloads at the wire are `(List Int)`). The
+> mechanisms themselves are unchanged.
+
 ### (A) Effect-as-data
 
 A program that "does I/O" actually returns a value of some `Action`
@@ -272,8 +277,9 @@ tag on the axiom entry.
 - **Runtime linkage** between extern names and native Rust functions —
   *now ships* (out of the kernel: the World effect handler in
   `bin/eval.rs`; proofs never interpret externs).
-- **Audit ledger tool.** Easy once the data shapes are stable; just
-  hasn't been written.
+- **Audit ledger tool.** LANDED (trust-hardening arc): the per-bin
+  trust LEDGER block — kind-tagged axioms, upstream-granted split,
+  dead-trust flags. See `TCB.md`.
 - **Bridging-axiom distinction.** Tag on `Axiom` entries; not needed
   for v2.
 

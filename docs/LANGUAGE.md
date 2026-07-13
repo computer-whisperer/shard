@@ -924,8 +924,9 @@ hypothesis (`examples/contract_demo.shard`):
 **There is no full→narrow lowering, and no certificate scheme.** Narrow
 is not a compilation target; it is the floor the system is bootstrapped
 from. The engine interprets full shard directly today, and the eventual
-compile story is **full shard straight to a machine target** (wasm,
-x86) — see `docs/OVERVIEW.md`.
+compile story is **full shard through the neutral imperative dialect
+(`models/imp`) to a machine target** (wasm, x86) — see
+`docs/OVERVIEW.md` and `docs/IMP.md`.
 
 ### Two constraints that govern what `full` may add
 
