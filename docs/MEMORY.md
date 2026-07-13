@@ -541,34 +541,110 @@ entire gap).
   default cert conclusion for the checked coverage tier — realized as
   checks in GENERATED imp, not a source-level transform. A separate
   source-level twin artifact stays deferred as before.
-- **D8 — the controlled-failure surface (OPENED 2026-07-12; direction
-  under design, resolves early in the coverage arc).**
-  Lowering-induced partiality (word overflow, OOM, stack depth) —
-  conditions that do not exist in high-level shard and develop as a
-  consequence of implementing it on hardware — becomes CONTROLLED
-  FAILURE by default: generated imp threads an explicit fail leg
-  (checked ops + the checked allocator), the cert conclusion is
+- **D8 — the controlled-failure surface and the ARTIFACT CLAIM
+  (OPENED 2026-07-12; scope EXPANDED the same day — direction
+  ratified, formal spellings resolve early in the coverage arc).**
+
+  **The gap.** Three claims were conflated by the informal reading
+  "BIN MET": (1) the requirements hold of SPEC `main` — what the
+  checker proves; (2) the artifact refines spec `main` — the
+  lowering cert; (3) the artifact satisfies the requirements.
+  Claim 3 unqualified is UNPROVABLE IN PRINCIPLE: finite hardware
+  cannot unconditionally realize unbounded semantics —
+  lowering-induced partiality (word overflow, OOM, stack depth:
+  conditions that do not exist in high-level shard) means any real
+  run satisfies spec-stated requirements only up to resource
+  exhaustion. Status audit: nothing false is emitted at runtime
+  today (a killed run emits a genuine prefix of spec observables;
+  fail-stop CHECKING is sound — resource exhaustion cannot forge a
+  verdict, only fail to produce one; the C path's fail-stop is
+  empirical, not proven). The lie lived only in the claim language,
+  caught before the build story froze it into code. High-level
+  shard stays UNTAINTED: no bounded Int, no heap-fail path — the
+  fix is entirely at the artifact boundary.
+
+  **The resolution — three artifact claim forms**, spelled in
+  bin.shard's ledger (`trusts` / `requires` / `except` = the
+  complete trust surface a reviewer audits), with the unqualified
+  fourth form unwritable by the gate:
+  1. UNCONDITIONAL — `bin ⊨ R`. Legal only when the fail-family
+     residue is empty (every family dissolved: types, proofs,
+     frame class). The landed embedded tier is already here — no
+     heap, reserved stack, word-typed data.
+  2. CONDITIONAL — `bin ⊨ R given A`: resource axioms entering
+     `trusts` ("the machine grants ≥ N bytes", "the run performs
+     < 2^63 effects"), reviewable like any bolt, surfacing in every
+     consumer's transitive trust ledger.
+  3. DISJUNCTIVE — `bin ⊨ R except E`: the except clause — the
+     coverage tier's default.
+  Verdict lines carry the form (`MET (spec)` vs `MET (artifact:
+  unconditional | given: … | except: …)`) — a BUILD-story
+  obligation at claim-unification time; a bare "MET" is never an
+  artifact verdict.
+
+  **Requirements stay spec-level and UNEDITED** — failure is not in
+  their vocabulary and must not taint tier-1. The weakening is
+  applied ONCE, uniformly, in the artifact-satisfaction theorem:
+  machine run = Done (observables equal spec's; every requirement
+  transfers verbatim) ∨ Fail(f ∈ declared families) with
+  observables a STRICT PREFIX of spec's effect sequence followed by
+  the fallback signature. Snake3 is the worked example:
+  `frames_are_screens` is prefix-closed and survives Fail outright;
+  the clock is GHOST (erased observables generate no checks);
+  `io_input_moves`' lockstep walk survives as
+  prefix-of-a-satisfying-run; a formalized exit-0 is deliberately
+  overridden — the exit code IS the Done/Fail discriminator. PIN:
+  fallback observables must be DISJOINT from every contracted
+  observable except the exit code (v1 abort = stderr diagnostic +
+  reserved nonzero exit; contracts do not observe stderr).
+
+  **Mechanics.** Generated imp threads an explicit fail leg
+  (checked ops + the checked allocator); the cert conclusion is
   Done-or-Fail — `run = Done (SPEC args) ∨ Fail(family)` with the
-  fail families honest — and the requirement surface grows an
-  `except` clause at the artifact boundary (the bin contract states
-  the observable fallback: v1 = abort-with-diagnostic, with emitted
-  World effects a PREFIX of the spec's). Enforcement is the accepts
-  ratchet's twin: an artifact's fail families must be covered by its
-  declared except clause in both directions, or the build fails —
-  the proof system makes the escape hatch mandatory (the disjunction
-  cannot be eliminated without either a premise or the clause). The
-  three-tier resolution ladder per condition: DISSOLVE (explicit
-  U32/refined types in source — no check, no clause), GUARANTEE
-  (accepts premise — check elided, caller obliged), HANDLE (except
+  families honest. Enforcement is the accepts ratchet's twin: fail
+  families vs the declared except clause, both directions, or the
+  build fails — the proof system makes the escape hatch mandatory
+  (the disjunction cannot be eliminated without either a premise or
+  the clause). The per-condition ladder: DISSOLVE (explicit
+  U32/refined types in source — no check, no clause) / GUARANTEE
+  (accepts premise — check elided, caller obliged) / HANDLE (except
   clause — check emitted, fallback certified). Checks are the
-  degradation default and proofs DELETE them — the cancellation-tower
-  pattern applied to partiality. Non-mimic precedent for the theorem
-  shape: CakeML's compiler theorem (behaves-as-source OR terminates
-  early with a resource error). Open sub-questions: the except
-  clause's grammar and family granularity; the machine-level Fail
-  value (imp needs a reasoned fail distinct from ITrap and from fuel
-  None); the stack family's v1 mechanism (depth counter = fuel made
-  real, vs the frame class's discharge-by-construction); app-defined
-  fallback handlers (deliberately OUT for v1 — a handler runs in a
-  resource-compromised state; apps wanting specific behavior take the
-  dissolve tier).
+  degradation default and proofs DELETE them — the
+  cancellation-tower pattern applied to partiality. Snake3's walk
+  shows the economics: rng = Word (dissolved by type),
+  positions/lengths bounded by the invariants the game already
+  proves for its own requirements (dissolved by proof — the
+  check-deleters come free), fuel a ground literal, clock ghost;
+  honest residue = `(except abort (oom))`. Non-mimic precedent:
+  CakeML's compiler theorem (behaves-as-source OR terminates early
+  with a resource error), stated at exactly this top-level spot.
+
+  **Engine runs are OUTSIDE artifact claims**: shard_eval and the C
+  path are spec-semantics interpreters under an unbounded-resource
+  assumption, fail-stop, never the soundness authority — no
+  artifact claim attaches to an engine run (the playable `eval run
+  snake.shard` was a spec demonstration, not a satisfied contract).
+  The artifact claim attaches for the first time when the binary
+  exists through the verified path, carrying one of the three
+  forms.
+
+  Open sub-questions (resolve in-arc, with generated cert shapes in
+  hand): the formal observation relation for machine runs (syscall
+  trace → contract observables with the Fail projection — the
+  W-rung differential layer's extension); the imp machine's
+  reasoned Fail value (distinct from ITrap and from fuel None —
+  family payload?); effect-atomicity granularity for the prefix
+  theorem (the write shim's retry loop is the case to check); the
+  stack family's v1 mechanism (depth counter = fuel made real, vs
+  the frame class's discharge-by-construction); the resource-axiom
+  vocabulary and whether the conditional form ships in v1 or waits
+  for a consumer; family granularity beyond the closed v1 set
+  {overflow, oom, stack}; app-defined fallback handlers
+  (deliberately OUT for v1 — a handler runs in a
+  resource-compromised state; apps wanting specific behavior take
+  the dissolve tier). NOTE: the except clause extends the `(bin …)`
+  grammar — kernel growth through canon-owned files, an ordinary
+  high-bar slice done deliberately when the coverage arc reaches
+  it. The calc pathfinder genuinely exercises the overflow family
+  (user-supplied arithmetic is unbounded by design), so the
+  milestone forces D8's resolution honestly.
