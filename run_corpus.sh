@@ -106,19 +106,6 @@ TARGETS=(
   examples/record_basic.shard
   models/imp/imp.shard
   examples/imp_probe.shard
-  examples/imp_scalar.shard
-  examples/imp_loop.shard
-  models/imp/to_wasm.shard
-  examples/imp_wasm_bridge.shard
-  examples/imp_wasm_loop_bridge.shard
-  models/imp/to_x86.shard
-  examples/imp_x86_bridge.shard
-  examples/imp_x86_loop_bridge.shard
-  examples/impgen_wasm_out.shard
-  examples/impgen_x86_out.shard
-  examples/impgen_wasm_loop_out.shard
-  examples/impgen_x86_loop_out.shard
-  std/sha256/sha256.imp.shard
   models/wasm/wasm.shard
   models/wasm/encode.shard
   examples/wasm_smoke.shard

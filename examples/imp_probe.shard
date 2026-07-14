@@ -1,14 +1,18 @@
 ;;; examples/imp_probe.shard — the ONE-TIME machine-validation probe for
-;;; models/imp (docs/IMP.md §3, rung I0): ground differential claims
-;;; checking that the machine means what we intended, before proofs
-;;; rest on it (the facts_probe / FLOATS toy-format idiom). This is a
-;;; DEVELOPMENT INSTRUMENT, corpus-pinned so the machine's meaning
-;;; cannot drift silently — it is NOT a build gate (the DI2 resolution:
-;;; imp has no engine leg; the kernel gate is the gate).
+;;; models/imp (docs/IMP.md §3, rung I0; re-validated for the v2 typed
+;;; machine, §2a): ground differential claims checking that the machine
+;;; means what we intended, before proofs rest on it (the facts_probe /
+;;; FLOATS toy-format idiom). This is a DEVELOPMENT INSTRUMENT,
+;;; corpus-pinned so the machine's meaning cannot drift silently — it
+;;; is NOT a build gate (the DI2 resolution: imp has no engine leg; the
+;;; kernel gate is the gate).
 ;;;
 ;;; Claims observe scalars only: memory effects are read back through
 ;;; ILoad inside the probed programs, so every expected value is a
-;;; ground Int and (compute both) closes every goal.
+;;; ground Int and (compute both) closes every goal. The v2 additions
+;;; probe the kind story: op-result wrapping, entry banding, the
+;;; explicit conversions, the shift-count exclusion, and the
+;;; well-kinded gate's accept/reject line.
 
 (import "../kernel/stdlib.shard")
 (import "../std/mem")
@@ -16,67 +20,69 @@
 (import "../models/imp/imp.shard")
 (use (:: models imp imp *))
 
-;; --- probe programs ------------------------------------------------------------
+;; --- probe programs -------------------------------------------------------------
 
 ;; fn 0: (x y) -> x*2 + (y - x)   [locals, ISet, IBin, result exp]
 (fn ip_arith_fn () IFn
   (MkIFn
-    2
-    1
+    (list U32 U32)
+    (list U32)
     (list
       (ISet
         2
         (IBin
+          U32
           IAdd
-          (IBin IMul (ILoc 0) (IConst 2))
-          (IBin ISub (ILoc 1) (ILoc 0)))))
-    (ILoc 2)))
+          (IBin U32 IMul (ILoc 0) (IConst 2))
+          (IBin U32 ISub (ILoc 1) (ILoc 0)))))
+    (ILoc 2)
+    U32))
 
 ;; fn 0: (x) -> if x < 10 then 1 else 0   [IIf, comparison]
 (fn ip_gate_fn () IFn
   (MkIFn
-    1
-    1
+    (list U32)
+    (list U32)
     (list
       (IIf
-        (IBin ILt (ILoc 0) (IConst 10))
+        (IBin U32 ILt (ILoc 0) (IConst 10))
         (list (ISet 1 (IConst 1)))
         (list (ISet 1 (IConst 0)))))
-    (ILoc 1)))
+    (ILoc 1)
+    U32))
 
 ;; fn 0: (n) -> sum 1..n by countdown   [IWhile, accumulator]
 (fn ip_sum_fn () IFn
   (MkIFn
-    1
-    1
+    (list U32)
+    (list U32)
     (list
       (IWhile
-        (IBin ILt (IConst 0) (ILoc 0))
+        (IBin U32 ILt (IConst 0) (ILoc 0))
         (list
-          (ISet 1 (IBin IAdd (ILoc 1) (ILoc 0)))
-          (ISet 0 (IBin ISub (ILoc 0) (IConst 1))))))
-    (ILoc 1)))
+          (ISet 1 (IBin U32 IAdd (ILoc 1) (ILoc 0)))
+          (ISet 0 (IBin U32 ISub (ILoc 0) (IConst 1))))))
+    (ILoc 1)
+    U32))
 
 ;; fn 0: () -> store 7 at 5, load 5   [IStore + ILoad, same address]
 (fn ip_memrw_fn () IFn
-  (MkIFn 0 0 (list (IStore (IConst 5) (IConst 7))) (ILoad (IConst 5))))
+  (MkIFn Nil Nil (list (IStore (IConst 5) (IConst 7))) (ILoad (IConst 5)) U8))
 
 ;; fn 0: () -> store 7 at 5, load 6   [the framing direction]
 (fn ip_memfr_fn () IFn
-  (MkIFn 0 0 (list (IStore (IConst 5) (IConst 7))) (ILoad (IConst 6))))
-
-;; fn 0: (x) -> wrap8 x   [IWrap]
-(fn ip_wrap_fn () IFn (MkIFn 1 0 Nil (IWrap 8 (ILoc 0))))
+  (MkIFn Nil Nil (list (IStore (IConst 5) (IConst 7))) (ILoad (IConst 6)) U8))
 
 ;; fn 0: (a b) -> a / b   [IDiv; zero divisor traps]
-(fn ip_div_fn () IFn (MkIFn 2 0 Nil (IBin IDiv (ILoc 0) (ILoc 1))))
+(fn ip_div_fn () IFn
+  (MkIFn (list U32 U32) Nil Nil (IBin U32 IDiv (ILoc 0) (ILoc 1)) U32))
 
 ;; fn 0: () -> load at 64 with memsize 64   [OOB traps]
-(fn ip_oob_fn () IFn (MkIFn 0 0 Nil (ILoad (IConst 64))))
+(fn ip_oob_fn () IFn (MkIFn Nil Nil Nil (ILoad (IConst 64)) U8))
 
 (fn ip1 ((f IFn)) IProg (MkIProg (list f) 64))
 
-;; --- the probes ----------------------------------------------------------------
+;; --- the probes -----------------------------------------------------------------
 
 (claim ipb_arith
   (goal () ()
@@ -128,10 +134,6 @@
     (rewrite-with (lemma get_empty) lr lhs () ())
     refl))
 
-(claim ipb_wrap
-  (goal () () (= (icall (ifnat 10) (ip1 (ip_wrap_fn)) 0 (list 300)) (Some 44)))
-  (steps ((compute both)) refl))
-
 (claim ipb_div
   (goal () () (= (icall (ifnat 10) (ip1 (ip_div_fn)) 0 (list 100 7)) (Some 14)))
   (steps ((compute both)) refl))
@@ -153,15 +155,19 @@
   (goal () () (= (icall (ifnat 10) (ip1 (ip_arith_fn)) 0 (list 3)) None))
   (steps ((compute both)) refl))
 
-;; ---- rung I2a: the shift/rotate vocabulary -------------------------------------
+;; ---- the shift/rotate vocabulary (rung I2a; counts re-fenced at v2) -------------
 
-;; (a k) -> a << k / a >> k  [exact; negative count traps]
-(fn ip_shl_fn () IFn (MkIFn 2 0 Nil (IBin IShl (ILoc 0) (ILoc 1))))
+;; (a k) -> a << k / a >> k  [wrapped to the node kind; counts outside
+;; [0, width) trap — the v2 exclusion of the divergent machine masks]
+(fn ip_shl_fn () IFn
+  (MkIFn (list U32 U32) Nil Nil (IBin U32 IShl (ILoc 0) (ILoc 1)) U32))
 
-(fn ip_shr_fn () IFn (MkIFn 2 0 Nil (IBin IShr (ILoc 0) (ILoc 1))))
+(fn ip_shr_fn () IFn
+  (MkIFn (list U32 U32) Nil Nil (IBin U32 IShr (ILoc 0) (ILoc 1)) U32))
 
-;; (a k) -> rotr32(a, k)  [band-spelled containment]
-(fn ip_rotr_fn () IFn (MkIFn 2 0 Nil (IRotr 32 (ILoc 0) (ILoc 1))))
+;; (a k) -> rotr32(a, k)  [band-spelled containment; count mod width]
+(fn ip_rotr_fn () IFn
+  (MkIFn (list U32 U32) Nil Nil (IRotr U32 (ILoc 0) (ILoc 1)) U32))
 
 (claim ipb_shl
   (goal () () (= (icall (ifnat 10) (ip1 (ip_shl_fn)) 0 (list 5 3)) (Some 40)))
@@ -179,7 +185,144 @@
       (Some 3221225472)))
   (steps ((compute both)) refl))
 
-;; honesty: a negative shift count traps
+;; honesty: a negative count and an at-width count both trap (wasm
+;; would mask mod 32, x86 mod 64 — imp excludes the divergence)
 (claim ipb_shl_neg
   (goal () () (= (icall (ifnat 10) (ip1 (ip_shl_fn)) 0 (list 5 -1)) None))
+  (steps ((compute both)) refl))
+
+(claim ipb_shl_wide
+  (goal () () (= (icall (ifnat 10) (ip1 (ip_shl_fn)) 0 (list 5 32)) None))
+  (steps ((compute both)) refl))
+
+;; ---- the v2 kind story ----------------------------------------------------------
+
+;; (x y) -> x + y at U32   [op-result wrapping]
+(fn ip_add32_fn () IFn
+  (MkIFn (list U32 U32) Nil Nil (IBin U32 IAdd (ILoc 0) (ILoc 1)) U32))
+
+;; (x y) -> x - y at U32   [euclidean mod = the unsigned wrap]
+(fn ip_sub32_fn () IFn
+  (MkIFn (list U32 U32) Nil Nil (IBin U32 ISub (ILoc 0) (ILoc 1)) U32))
+
+;; (x y) -> x + y at U64
+(fn ip_add64_fn () IFn
+  (MkIFn (list U64 U64) Nil Nil (IBin U64 IAdd (ILoc 0) (ILoc 1)) U64))
+
+;; (x) -> x   [U8 param: entry banding is the observable]
+(fn ip_id8_fn () IFn (MkIFn (list U8) Nil Nil (ILoc 0) U8))
+
+;; (x) -> ext8→32 x   [zero-extension = value identity]
+(fn ip_ext_fn () IFn (MkIFn (list U8) Nil Nil (IExt U8 U32 (ILoc 0)) U32))
+
+;; (x) -> trunc32→8 x   [mask-narrow; the v1 IWrap demonstration's heir]
+(fn ip_trunc_fn () IFn (MkIFn (list U32) Nil Nil (ITrunc U32 U8 (ILoc 0)) U8))
+
+;; the add wraps: (2^32 - 1) + 1 = 0
+(claim ipb_add32_wrap
+  (goal () ()
+    (= (icall (ifnat 10) (ip1 (ip_add32_fn)) 0 (list 4294967295 1)) (Some 0)))
+  (steps ((compute both)) refl))
+
+;; the sub wraps below zero: 0 - 1 = 2^32 - 1
+(claim ipb_sub32_wrap
+  (goal () ()
+    (= (icall (ifnat 10) (ip1 (ip_sub32_fn)) 0 (list 0 1)) (Some 4294967295)))
+  (steps ((compute both)) refl))
+
+;; U64 wraps at ITS width: (2^64 - 1) + 1 = 0 — same twin vocabulary,
+;; different crystallized kind (the capability doctrine's value side)
+(claim ipb_add64_wrap
+  (goal () ()
+    (=
+      (icall (ifnat 10) (ip1 (ip_add64_fn)) 0 (list 18446744073709551615 1))
+      (Some 0)))
+  (steps ((compute both)) refl))
+
+;; entry banding: an out-of-band argument reaches a U8 param as its
+;; band residue (unrepresentability mirrored as banding, not error)
+(claim ipb_band_entry
+  (goal () () (= (icall (ifnat 10) (ip1 (ip_id8_fn)) 0 (list 300)) (Some 44)))
+  (steps ((compute both)) refl))
+
+;; zero-extension is the identity on the value
+(claim ipb_ext
+  (goal () () (= (icall (ifnat 10) (ip1 (ip_ext_fn)) 0 (list 200)) (Some 200)))
+  (steps ((compute both)) refl))
+
+;; mask-narrowing truncates: 300 mod 256 = 44 (via U32 entry, so the
+;; ITrunc node itself does the work)
+(claim ipb_trunc
+  (goal () () (= (icall (ifnat 10) (ip1 (ip_trunc_fn)) 0 (list 300)) (Some 44)))
+  (steps ((compute both)) refl))
+
+;; ---- the well-kinded gate -------------------------------------------------------
+
+;; rejects, each pinning one rule of the §2a membership predicate
+
+;; U8 arithmetic is excluded (load/store/compare/convert only)
+(fn ipw_u8arith_fn () IFn
+  (MkIFn (list U8 U8) Nil Nil (IBin U8 IAdd (ILoc 0) (ILoc 1)) U8))
+
+;; constants must sit in band at their use site
+(fn ipw_oobconst_fn () IFn
+  (MkIFn (list U8) Nil (list (ISet 0 (IConst 300))) (ILoc 0) U8))
+
+;; operand kinds must agree with the node kind
+(fn ipw_mixk_fn () IFn
+  (MkIFn (list U32 U64) Nil Nil (IBin U32 IAdd (ILoc 0) (ILoc 1)) U32))
+
+;; ground shift counts must be below width
+(fn ipw_shlbig_fn () IFn
+  (MkIFn (list U32) Nil Nil (IBin U32 IShl (ILoc 0) (IConst 32)) U32))
+
+(claim ipw_arith
+  (goal () () (= (wk_fn (ip_arith_fn)) True))
+  (steps ((compute both)) refl))
+
+(claim ipw_gate
+  (goal () () (= (wk_fn (ip_gate_fn)) True))
+  (steps ((compute both)) refl))
+
+(claim ipw_sum
+  (goal () () (= (wk_fn (ip_sum_fn)) True))
+  (steps ((compute both)) refl))
+
+(claim ipw_memrw
+  (goal () () (= (wk_fn (ip_memrw_fn)) True))
+  (steps ((compute both)) refl))
+
+(claim ipw_ext
+  (goal () () (= (wk_fn (ip_ext_fn)) True))
+  (steps ((compute both)) refl))
+
+(claim ipw_trunc
+  (goal () () (= (wk_fn (ip_trunc_fn)) True))
+  (steps ((compute both)) refl))
+
+(claim ipw_u8arith
+  (goal () () (= (wk_fn (ipw_u8arith_fn)) False))
+  (steps ((compute both)) refl))
+
+(claim ipw_oobconst
+  (goal () () (= (wk_fn (ipw_oobconst_fn)) False))
+  (steps ((compute both)) refl))
+
+(claim ipw_mixk
+  (goal () () (= (wk_fn (ipw_mixk_fn)) False))
+  (steps ((compute both)) refl))
+
+(claim ipw_shlbig
+  (goal () () (= (wk_fn (ipw_shlbig_fn)) False))
+  (steps ((compute both)) refl))
+
+;; symbolic shift/rotate counts refuse at the v1 gate (named growth
+;; behind a guard story) — the eval-level probes above still pin
+;; their runtime semantics
+(claim ipw_shlsym
+  (goal () () (= (wk_fn (ip_shl_fn)) False))
+  (steps ((compute both)) refl))
+
+(claim ipw_rotrsym
+  (goal () () (= (wk_fn (ip_rotr_fn)) False))
   (steps ((compute both)) refl))

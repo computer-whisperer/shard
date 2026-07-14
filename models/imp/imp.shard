@@ -1,55 +1,113 @@
 ;;; models/imp/imp.shard — THE NEUTRAL IMPERATIVE MACHINE (docs/IMP.md,
-;;; rung I0): one target-neutral imperative model that keeps the
+;;; rungs I0 + §2a): one target-neutral imperative model that keeps the
 ;;; memory-allocation story and drops the ISA quirks. An ordinary
 ;;; shard library in the ISA-arc discipline — types + eval + theorems,
 ;;; zero kernel changes; it never ships (terminal targets remain the
 ;;; ISA models), and it has NO engine gate (the DI2 resolution: its
 ;;; semantics ARE these definitions; spec ⊑ imp is a kernel theorem).
 ;;;
-;;; The machine, v1:
-;;;   - locals: named Int slots (indexed; args then zero-initialized
-;;;     extras — the wasm/x86 convention, quirk-free)
+;;; The machine, v2 (the typed-machine re-adjudication, IMP.md §2a):
+;;;   - locals: named slots of CRYSTALLIZED SCALAR KIND (U8/U32/U64 —
+;;;     value-level ctor tags, never type parameters; args then
+;;;     zero-initialized extras). Every op node carries its kind and
+;;;     WRAPS ITS RESULT to that kind, so a well-kinded program's
+;;;     locals are in-band by construction and the machine-vs-imp
+;;;     alignment relation is program-independent BY TYPE — the v1
+;;;     unbounded-Int story (exact ops + explicit IWrap points) is
+;;;     superseded; its per-program range invariants have no v2
+;;;     analogue. Conversions are explicit (IExt zero-extends — the
+;;;     value identity at this level; ITrunc mask-narrows). Kind
+;;;     semantics are TARGET-INDEPENDENT; which kinds a target
+;;;     supports is that target's declared capability set (§2a).
 ;;;   - structured control: statement sequences, if, while — no
 ;;;     branch indices, no labels, no stack discipline
 ;;;   - byte memory: std/mem's Mem (the neutral memory both ISA
-;;;     models already consume), byte load/store, bounds-checked
-;;;     against the program's declared memsize (mask-on-read below,
-;;;     honesty above). Rung I2's zero-heap flagship uses STATICALLY
-;;;     CARVED WINDOWS of this memory — the region cancellation is a
-;;;     cert shape (scratch quantified arbitrary, outputs framed
-;;;     disjoint), not machine syntax (ruling 2026-07-12); dynamic
-;;;     region alloc/death ops arrive with MEMORY.md rung 3+ where
-;;;     regions actually nest and die mid-run.
-;;;   - scalars: unbounded Int (the theoretical-language spirit);
-;;;     ops are EXACT — width exists only at the explicit
-;;;     width-parametric ops (IWrap's mod containment; IRotr's band
-;;;     containment), so premises appear exactly where width is used
-;;;     and nowhere else. Comparisons yield 1/0. Division/remainder
-;;;     trap on zero divisors, shifts on negative counts (the honest
-;;;     corners; certs carry the premises).
-;;;   - calls: NOT in v1 statements — the I0 fragment classes
-;;;     (straight-line, loop; the mem class collapses into them here
-;;;     because loads/stores are native) never call. The call layer
-;;;     arrives with the calls-in-loops class.
+;;;     models already consume), byte load/store (loads yield U8;
+;;;     addresses are U32 INDEXES into the model's own memory),
+;;;     bounds-checked against the program's declared memsize
+;;;     (mask-on-read below, honesty above). Rung I2's zero-heap
+;;;     flagship uses STATICALLY CARVED WINDOWS of this memory — the
+;;;     region cancellation is a cert shape, not machine syntax
+;;;     (ruling 2026-07-12); dynamic region alloc/death ops arrive
+;;;     with MEMORY.md rung 3+.
+;;;   - honest corners: comparisons yield 1/0; division/remainder
+;;;     trap on zero divisors; shift counts trap outside [0, width)
+;;;     (wasm masks counts mod 32 and x86 mod 64 — exactly the class
+;;;     of per-target quirk imp excludes rather than parameterizes;
+;;;     rotate counts are uniform mod-width on both machines and stay
+;;;     masked). Wrapping is the total default; checked-op variants
+;;;     arrive with MEMORY.md D8's reasoned Fail value.
+;;;   - calls: NOT in v1 statements — the I0 fragment classes never
+;;;     call. The call layer arrives with the calls-in-loops class.
+;;;     Call-boundary args are BANDED to their parameter kinds on
+;;;     entry: a machine register IS its width, so an out-of-band
+;;;     argument is unrepresentable there, and the model mirrors
+;;;     unrepresentability as banding, not as an error.
+;;;
+;;; The WELL-KINDED GATE (wk_fn, bottom of file) is the membership
+;;; predicate the §2a doctrine names: operand kinds agree, constants
+;;; sit in band, conversions are explicit and strictly directional,
+;;; shift/rotate counts are ground and in range, U8 is
+;;; load/store/compare/convert only. imp ⊑ ISA generation is total
+;;; over well-kinded programs; wk failure is a loud refusal.
 ;;;
 ;;; Fuel is the kernel Nat, one unit per SCC entry (depth/iteration
 ;;; bound, not a step counter) — the wasm model's discipline
 ;;; verbatim. iwhile is a NAMED SCC member so loop workers can state
 ;;; equations against a folded (iwhile …) term (the eval_loop
 ;;; precedent). iexp is OUTSIDE the fuel SCC: expressions are pure
-;;; and structural; None = trap (bad local, zero divisor, OOB load).
+;;; and structural; None = trap (bad local, zero divisor, bad shift
+;;; count, OOB load).
 
 (import "../../kernel/stdlib.shard")  ; List / Option / Bool / Pair / Nat
 (import "../../std/mem")  ; the opaque byte substrate (Mem / mem_get / mem_set)
 (use (:: std mem *))
 
-;; --- the language -------------------------------------------------------------
+;; --- the kinds ------------------------------------------------------------------
 
-;; scalar binary ops: exact on Int; comparisons yield 1/0; div/rem
-;; follow the euclidean kernel ops and trap on divisor 0; shifts are
-;; the exact kernel prims (bshl/bshr — value·2^k / ⌊value/2^k⌋ on
-;; nonneg counts) and trap on a negative count (rung I2a: the sha256
-;; consumer arrived — the vocabulary both ISA models grew the same day)
+;; crystallized scalar kinds — value-level ctor tags (IMP.md §2a);
+;; unsigned first, signed variants are named growth behind a consumer
+(type IKind (U8) (U32) (U64))
+
+;; width in bits
+(fn ikw ((k IKind)) Int
+  (match k
+    (U8 8)
+    (U32 32)
+    (U64 64)))
+
+;; the band modulus 2^width (ground literals — C6's source form)
+(fn ikmod ((k IKind)) Int
+  (match k
+    (U8 256)
+    (U32 4294967296)
+    (U64 18446744073709551616)))
+
+(fn ikeq ((a IKind) (b IKind)) Bool
+  (match a
+    (U8
+      (match b
+        (U8 True)
+        (U32 False)
+        (U64 False)))
+    (U32
+      (match b
+        (U8 False)
+        (U32 True)
+        (U64 False)))
+    (U64
+      (match b
+        (U8 False)
+        (U32 False)
+        (U64 True)))))
+
+;; --- the language ---------------------------------------------------------------
+
+;; scalar binary ops: add/sub/mul wrap to the node's kind; div/rem
+;; follow the euclidean kernel ops and trap on divisor 0 (in-band
+;; operands give in-band results — no wrap needed); the bit ops are
+;; band-closed; shifts trap on counts outside [0, width);
+;; comparisons yield 1/0
 (type IOp
   (IAdd)
   (ISub)
@@ -65,31 +123,44 @@
   (ILt)
   (ILe))
 
-;; expressions: pure reads of locals and memory
+;; expressions: pure reads of locals and memory; every op node
+;; carries its kind explicitly (refl-grade syntactic alignment — the
+;; band-spelling lesson); atoms take their kinds from context (locals
+;; from the signature, constants checked in band at their use site)
 (type IExp
   (IConst Int)
   (ILoc Int)
-  (IBin IOp IExp IExp)
-  (IWrap Int IExp)  ; wrap into [0, 2^W) — width as a value (mod spelling)
-  (IRotr Int IExp IExp)  ; rotate-right within width W (band spelling — §I2a)
-  (ILoad IExp))  ; byte read at address
+  (IBin IKind IOp IExp IExp)
+  (IRotr IKind IExp IExp)  ; rotate-right within the kind's width (band spelling)
+  (IExt IKind IKind IExp)  ; zero-extend from-kind → to-kind (value identity here)
+  (ITrunc IKind IKind IExp)  ; mask-narrow from-kind → to-kind
+  (ILoad IExp))  ; byte read (U8) at a U32 address
 
 ;; statements: the structured imperative core
 (type IStmt
-  (ISet Int IExp)  ; local[i] := e
-  (IStore IExp IExp)  ; mem[addr] := byte value
-  (IIf IExp (List IStmt) (List IStmt))  ; 0 = false branch
+  (ISet Int IExp)  ; local[i] := e (at local i's declared kind)
+  (IStore IExp IExp)  ; mem[addr] := byte value (addr U32, value U8)
+  (IIf IExp (List IStmt) (List IStmt))  ; 0 = False branch
   (IWhile IExp (List IStmt)))  ; loop while cond ≠ 0
 
-;; one function: parameter count, zero-initialized extra locals, body,
-;; result expression (evaluated in the final state)
-(record IFn (iparams Int) (iextra Int) (ibody (List IStmt)) (iresult IExp))
+;; one function: parameter kinds (arity = length; args banded on
+;; entry), zero-initialized extra locals with their kinds, body,
+;; result expression (evaluated in the final state) and its kind
+(record
+  IFn
+  (ikparams (List IKind))
+  (ikextra (List IKind))
+  (ibody (List IStmt))
+  (iresult IExp)
+  (irkind IKind))
 
 ;; one program: functions addressed by index + declared memory size in
-;; bytes (loads/stores trap outside it; 0 = no memory)
+;; bytes (loads/stores trap outside it; 0 = no memory) — memsize is
+;; the twin's declared parameter, bounded per target by that target's
+;; capability set (§2a)
 (record IProg (ifns (List IFn)) (imemsize Int))
 
-;; --- fuel ----------------------------------------------------------------------
+;; --- fuel -----------------------------------------------------------------------
 
 ;; ground fuel from an Int count (run/probe ergonomics)
 (fn ifnat_go ((n Int) (acc Nat)) Nat
@@ -98,13 +169,9 @@
 
 (fn ifnat ((n Int)) Nat (ifnat_go n Z))
 
-;; --- small total helpers (outside the fuel SCC) --------------------------------
+;; --- small total helpers (outside the fuel SCC) ---------------------------------
 
 (fn ib2i ((b Bool)) Int (if b 1 0))
-
-(fn ipow2 ((w Int)) Int
-  (measure w (by arith (list 1 0)) (by arith (list 1 1)))
-  (if (lt w 1) 1 (* 2 (ipow2 (- w 1)))))
 
 ;; local get/set by index; None = out-of-range (negatives fall through)
 (fn ilget ((ls (List Int)) (i Int)) (Option Int)
@@ -139,71 +206,114 @@
     (Nil 0)
     ((Cons _ t) (+ 1 (ilen t)))))
 
+;; kind-list mirrors of the Int-list helpers
+(fn ikat ((ks (List IKind)) (i Int)) (Option IKind)
+  (measure (struct ks))
+  (match ks
+    (Nil None)
+    ((Cons h t) (if (int_eq i 0) (Some h) (ikat t (- i 1))))))
+
+(fn ikn ((ks (List IKind))) Int
+  (measure (struct ks))
+  (match ks
+    (Nil 0)
+    ((Cons _ t) (+ 1 (ikn t)))))
+
+(fn ikapp ((a (List IKind)) (b (List IKind))) (List IKind)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (ikapp t b)))))
+
+;; band the call-boundary args to their parameter kinds (entry
+;; banding: a machine register IS its width — out-of-band arguments
+;; are unrepresentable there, and the model mirrors that as banding)
+(fn iband_args ((ks (List IKind)) (vs (List Int))) (List Int)
+  (measure (struct ks))
+  (match ks
+    (Nil Nil)
+    ((Cons k kt)
+     (match vs
+       (Nil Nil)
+       ((Cons v vt) (Cons (mod v (ikmod k)) (iband_args kt vt)))))))
+
 (fn ifn_at ((fs (List IFn)) (i Int)) (Option IFn)
   (measure (struct fs))
   (match fs
     (Nil None)
     ((Cons f t) (if (int_eq i 0) (Some f) (ifn_at t (- i 1))))))
 
-;; exact op semantics; None = zero divisor
-(fn iop_val ((o IOp) (a Int) (b Int)) (Option Int)
+;; op semantics at a kind: add/sub/mul wrap (euclidean mod = the
+;; unsigned two's-complement wrap), div/rem/bit ops are band-closed
+;; on in-band operands, shifts trap outside [0, width), comparisons
+;; yield 1/0; None = zero divisor or bad shift count
+(fn iop_val ((k IKind) (o IOp) (a Int) (b Int)) (Option Int)
   (match o
-    (IAdd (Some (+ a b)))
-    (ISub (Some (- a b)))
-    (IMul (Some (* a b)))
+    (IAdd (Some (mod (+ a b) (ikmod k))))
+    (ISub (Some (mod (- a b) (ikmod k))))
+    (IMul (Some (mod (* a b) (ikmod k))))
     (IDiv (if (le 1 b) (Some (ediv a b)) None))
     (IRem (if (le 1 b) (Some (mod a b)) None))
     (IAnd (Some (band a b)))
     (IOr (Some (bor a b)))
     (IXor (Some (bxor a b)))
-    (IShl (if (le 0 b) (Some (bshl a b)) None))
-    (IShr (if (le 0 b) (Some (bshr a b)) None))
+    (IShl
+      (if (le 0 b) (if (lt b (ikw k)) (Some (mod (bshl a b) (ikmod k))) None)
+      None))
+    (IShr (if (le 0 b) (if (lt b (ikw k)) (Some (bshr a b)) None) None))
     (IEq (Some (ib2i (int_eq a b))))
     (ILt (Some (ib2i (lt a b))))
     (ILe (Some (ib2i (le a b))))))
 
-;; --- expression evaluation (pure, structural, fuel-free) -----------------------
+;; --- expression evaluation (pure, structural, fuel-free) ------------------------
 
-;; None = trap: out-of-range local, zero divisor, out-of-bounds load
+;; None = trap: out-of-range local, zero divisor, bad shift count,
+;; out-of-bounds load
 (fn iexp ((e IExp) (lc (List Int)) (mem Mem) (msz Int)) (Option Int)
   (measure (struct e))
   (match e
     ((IConst n) (Some n))
     ((ILoc i) (ilget lc i))
-    ((IBin o a b)
+    ((IBin k o a b)
      (match (iexp a lc mem msz)
        (None None)
        ((Some va)
         (match (iexp b lc mem msz)
           (None None)
-          ((Some vb) (iop_val o va vb))))))
-    ((IWrap w a)
-     (match (iexp a lc mem msz)
-       (None None)
-       ((Some va) (Some (mod va (ipow2 w))))))
-    ;; rotate-right within W bits, count taken mod W; containment is
-    ;; BAND-spelled (the bit-op idiom — matches the sha-class specs'
-    ;; own mask spelling, so rotation aligns syntactically at every
-    ;; tier; wrap/mod stays the ARITHMETIC idiom). W <= 0 traps.
-    ((IRotr w a k)
-     (if (le w 0) None
+          ((Some vb) (iop_val k o va vb))))))
+    ;; rotate-right within the kind's width, count taken mod width
+    ;; (uniform on both machines, unlike shift counts); containment
+    ;; is BAND-spelled (the bit-op idiom — matches the sha-class
+    ;; specs' own mask spelling, so rotation aligns syntactically at
+    ;; every tier; wrap/mod stays the ARITHMETIC idiom)
+    ((IRotr k a c)
      (match (iexp a lc mem msz)
        (None None)
        ((Some va)
-        (match (iexp k lc mem msz)
+        (match (iexp c lc mem msz)
           (None None)
-          ((Some vk)
+          ((Some vc)
            (Some
              (band
-               (bor (bshr va (mod vk w)) (bshl va (- w (mod vk w))))
-               (- (ipow2 w) 1)))))))))
+               (bor
+                 (bshr va (mod vc (ikw k)))
+                 (bshl va (- (ikw k) (mod vc (ikw k)))))
+               (- (ikmod k) 1))))))))
+    ;; zero-extension of an in-band value is the identity at this
+    ;; level — the node exists for kind bookkeeping and as the
+    ;; translator's instruction point
+    ((IExt _ _ a) (iexp a lc mem msz))
+    ((ITrunc _ kt a)
+     (match (iexp a lc mem msz)
+       (None None)
+       ((Some va) (Some (mod va (ikmod kt))))))
     ((ILoad a)
      (match (iexp a lc mem msz)
        (None None)
        ((Some ad)
         (if (le 0 ad) (if (lt ad msz) (Some (mem_get mem ad)) None) None))))))
 
-;; --- statement evaluation (one fuel-countdown SCC) -----------------------------
+;; --- statement evaluation (one fuel-countdown SCC) ------------------------------
 
 ;; a statement's outcome: locals + memory forward, or a dynamic trap
 (type IOut (INorm (List Int) Mem) (ITrap))
@@ -284,23 +394,26 @@
              ((INorm lc2 mem2) (istmts f2 msz t lc2 mem2))
              (ITrap (Some ITrap))))))))))
 
-;; --- the big-step denotation (the composition boundary) ------------------------
+;; --- the big-step denotation (the composition boundary) -------------------------
 
-;; Run function k of program p on args (parameter order), starting from
-;; the ZERO memory. Some v = completed with result v; None = fuel out,
-;; trapped, wrong arity, or bad index — piece theorems assert Some, so
-;; conflating failure modes costs nothing at the weld boundary.
+;; Run function k of program p on args (parameter order, banded to
+;; the parameter kinds on entry), starting from the ZERO memory.
+;; Some v = completed with result v; None = fuel out, trapped, wrong
+;; arity, or bad index — piece theorems assert Some, so conflating
+;; failure modes costs nothing at the weld boundary.
 (fn icall ((fuel Nat) (p IProg) (k Int) (args (List Int))) (Option Int)
   (match (ifn_at (ifns_of p) k)
     (None None)
     ((Some f)
-     (if (int_eq (ilen args) (iparams_of f))
+     (if (int_eq (ilen args) (ikn (ikparams_of f)))
        (match
          (istmts
            fuel
            (imemsize_of p)
            (ibody_of f)
-           (iapp args (izeros (iextra_of f)))
+           (iapp
+             (iband_args (ikparams_of f) args)
+             (izeros (ikn (ikextra_of f))))
            (mem_empty))
          (None None)
          ((Some out)
@@ -317,13 +430,15 @@
   (match (ifn_at (ifns_of p) k)
     (None None)
     ((Some f)
-     (if (int_eq (ilen args) (iparams_of f))
+     (if (int_eq (ilen args) (ikn (ikparams_of f)))
        (match
          (istmts
            fuel
            (imemsize_of p)
            (ibody_of f)
-           (iapp args (izeros (iextra_of f)))
+           (iapp
+             (iband_args (ikparams_of f) args)
+             (izeros (ikn (ikextra_of f))))
            mem0)
          (None None)
          ((Some out)
@@ -334,3 +449,133 @@
                ((Some v) (Some (Pair v mem2)))))
             (ITrap None))))
        None))))
+
+;; --- the well-kinded gate (IMP.md §2a) ------------------------------------------
+
+;; Shift/rotate counts must be GROUND and inside [0, width) in v1 of
+;; the gate — symbolic counts are named growth behind a guard story.
+(fn ick_count ((e IExp) (k IKind)) Bool
+  (match e
+    ((IConst n) (if (le 0 n) (lt n (ikw k)) False))
+    ((ILoc _) False)
+    ((IBin _ _ _ _) False)
+    ((IRotr _ _ _) False)
+    ((IExt _ _ _) False)
+    ((ITrunc _ _ _) False)
+    ((ILoad _) False)))
+
+;; comparisons are the one op family U8 admits (U8 is
+;; load/store/compare/convert only in v1 — no U8 arithmetic)
+(fn iop_cmp ((o IOp)) Bool
+  (match o
+    (IAdd False)
+    (ISub False)
+    (IMul False)
+    (IDiv False)
+    (IRem False)
+    (IAnd False)
+    (IOr False)
+    (IXor False)
+    (IShl False)
+    (IShr False)
+    (IEq True)
+    (ILt True)
+    (ILe True)))
+
+(fn iop_shift ((o IOp)) Bool
+  (match o
+    (IAdd False)
+    (ISub False)
+    (IMul False)
+    (IDiv False)
+    (IRem False)
+    (IAnd False)
+    (IOr False)
+    (IXor False)
+    (IShl True)
+    (IShr True)
+    (IEq False)
+    (ILt False)
+    (ILe False)))
+
+;; e is well-kinded AT kind k under the locals environment: constants
+;; sit in band at their use site; locals carry their declared kinds;
+;; op nodes must agree with the expected kind and their operands
+;; check at the node's kind; conversions are strictly directional
+(fn ikchk ((env (List IKind)) (e IExp) (k IKind)) Bool
+  (measure (struct e))
+  (match e
+    ((IConst n) (if (le 0 n) (lt n (ikmod k)) False))
+    ((ILoc i)
+     (match (ikat env i)
+       (None False)
+       ((Some k2) (ikeq k2 k))))
+    ((IBin k2 o a b)
+     (if (ikeq k2 k)
+       (if (if (ikeq k2 U8) (iop_cmp o) True)
+         (if (ikchk env a k2)
+           (if (iop_shift o) (ick_count b k2) (ikchk env b k2))
+           False)
+         False)
+       False))
+    ((IRotr k2 a c)
+     (if (ikeq k2 k)
+       (if (ikeq k2 U8) False (if (ikchk env a k2) (ick_count c k2) False))
+       False))
+    ((IExt kf kt a)
+     (if (ikeq kt k) (if (lt (ikw kf) (ikw kt)) (ikchk env a kf) False) False))
+    ((ITrunc kf kt a)
+     (if (ikeq kt k) (if (lt (ikw kt) (ikw kf)) (ikchk env a kf) False) False))
+    ((ILoad a) (if (ikeq k U8) (ikchk env a U32) False))))
+
+;; the kind an expression announces on its own (no recursion — the
+;; node tag or the signature): conditions must announce a kind, so a
+;; bare-constant condition is not well-kinded (it is a degenerate
+;; always/never branch)
+(fn iksyn ((env (List IKind)) (e IExp)) (Option IKind)
+  (match e
+    ((IConst _) None)
+    ((ILoc i) (ikat env i))
+    ((IBin k _ _ _) (Some k))
+    ((IRotr k _ _) (Some k))
+    ((IExt _ kt _) (Some kt))
+    ((ITrunc _ kt _) (Some kt))
+    ((ILoad _) (Some U8))))
+
+;; statements: sets check at the target local's kind; stores take a
+;; U32 address and a U8 value; conditions check at their announced
+;; kind; bodies recurse
+(fn iwk_stmts ((env (List IKind)) (ss (List IStmt))) Bool
+  (measure (struct ss))
+  (match ss
+    (Nil True)
+    ((Cons s t)
+     (if
+       (match s
+         ((ISet i e)
+          (match (ikat env i)
+            (None False)
+            ((Some k) (ikchk env e k))))
+         ((IStore ae ve) (if (ikchk env ae U32) (ikchk env ve U8) False))
+         ((IIf c tb eb)
+          (match (iksyn env c)
+            (None False)
+            ((Some ck)
+             (if (ikchk env c ck)
+               (if (iwk_stmts env tb) (iwk_stmts env eb) False)
+               False))))
+         ((IWhile c b)
+          (match (iksyn env c)
+            (None False)
+            ((Some ck) (if (ikchk env c ck) (iwk_stmts env b) False)))))
+       (iwk_stmts env t)
+       False))))
+
+;; THE MEMBERSHIP PREDICATE: every well-kinded fn gets generated
+;; imp ⊑ ISA legs unconditionally on targets whose capability set
+;; covers its kinds — wk failure is a loud refusal, never a wrong
+;; artifact
+(fn wk_fn ((f IFn)) Bool
+  (if (iwk_stmts (ikapp (ikparams_of f) (ikextra_of f)) (ibody_of f))
+    (ikchk (ikapp (ikparams_of f) (ikextra_of f)) (iresult_of f) (irkind_of f))
+    False))

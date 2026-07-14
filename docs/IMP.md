@@ -1260,6 +1260,60 @@ examples/build_products.shard as 'impgen+'check pairs, all green;
 corpus FAIL-set unchanged at 57. Remaining in I2d: I2d-3 per the
 record above.
 
+**V2-1 — the typed machine (2026-07-14).** The §2a migration ladder's
+first slice: models/imp/imp.shard reworked to crystallized scalar
+kinds, delete-first.
+
+- **The machine**: IKind (U8/U32/U64 value ctors) + ikw/ikmod;
+  IBin/IRotr carry their kind and WRAP RESULTS to it (add/sub/mul by
+  euclidean mod — the unsigned two's-complement wrap; div/rem/bit
+  ops band-closed on in-band operands); IWrap DELETED (and ipow2
+  with it — ikmod is ground literals); explicit IExt (value identity
+  at this level) and ITrunc (mask-narrow); shift counts trap outside
+  [0, width) — at-width counts now trap where v1 allowed them,
+  because wasm masks counts mod 32 and x86 mod 64 (rotate counts
+  stay masked: that masking IS uniform across machines). IFn
+  signatures carry per-local kinds (ikparams/ikextra lists +
+  irkind); icall/icall_mem BAND ARGS to parameter kinds on entry
+  (a machine register IS its width — unrepresentability mirrored as
+  banding, not error).
+- **The gate**: wk_fn — ikchk (constants in band at their use site,
+  operand kinds agree with the node, conversions strictly
+  directional, U8 admits only compare among the ops, ground
+  shift/rotate counts below width) + iksyn (conditions must announce
+  a kind — bare-constant conditions refuse) + iwk_stmts (sets at the
+  target local's kind, stores U32-address/U8-value). Symbolic
+  shift/rotate counts refuse at the v1 gate (named growth behind a
+  guard story).
+- **The probe grid re-validated** (examples/imp_probe.shard): the
+  carried v1 probes keep their expected values verbatim — in-band
+  programs mean what they meant (the IWrap probe becomes the ITrunc
+  heir ipb_trunc) — plus the v2 additions: U32/U64 add-wrap and
+  sub-wrap at each kind's own modulus, entry banding observed
+  through a U8 param, IExt identity, at-width shift trap, and
+  twelve wk_fn accept/reject pins (one per gate rule, including the
+  symbolic-count refusals). 87/0 on the fast engine, every claim
+  (compute both) except the two std/mem surface-law chains,
+  unchanged in shape from v1.
+- **The prune (delete-first, gates honest)**: the v1 consumer
+  surface is retired from the tree and the gates until each
+  migration slice re-lands it — deleted: to_wasm.shard,
+  to_x86.shard, imp_scalar/imp_loop twins, the four bridges, the
+  four impgen outputs, tools/impgen (the recognizer-era tool; the
+  rebuild is the structural walk). The sha sibling STAYS in-tree as
+  migration source, unregistered (std/sha256/mod.build.shard's
+  product list emptied with a migration note). Corpus targets 266 →
+  253; driver products 60 → 43.
+- Gates: machine + probe green on the fast engine (52/0, 87/0);
+  driver 43 products all green; corpus FAIL-set unchanged at the
+  57-line baseline (deleted targets exit the run, they do not
+  redden it).
+- NEXT (the §2a ladder): the translators re-land kind-directed
+  (to_wasm with the i64 vocabulary growth, to_x86 with non-REX.W
+  32-bit forms + ix_home 6→12; encodings/vectors Opus-delegated) +
+  the scalar tier re-lands, then the loop tier, then the sha
+  sibling, then impgen as the structural walk over wk programs.
+
 ## 7. Non-goals, stated once
 
 - imp as a shipped target or public surface — it is an intermediate;
