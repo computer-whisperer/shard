@@ -1,7 +1,8 @@
 shard imp — IMP.md
 ==================
 
-STATUS: RATIFIED (2026-07-12; drafted 2026-07-11) — the scope ledger
+STATUS: RATIFIED (2026-07-12; drafted 2026-07-11; §2a typed-machine
+amendment ratified 2026-07-14) — the scope ledger
 for **models/imp**, the
 neutral imperative dialect: one target-neutral machine model that
 keeps the memory-allocation story and drops the ISA-specific quirks.
@@ -45,6 +46,18 @@ User rulings already on record from the design discussions of
   the kernel gate is the gate (§3). DI3 — discovered as the pieces
   are fit together; stays open. DI4 — as leaned (theorems with the
   model, generators in tools/).
+- **The typed-machine re-adjudication (2026-07-14).** The refined
+  premise: manually-written imp twins are FIRST-CLASS refinement
+  inputs — a custom imp refinement of a high-level module must be
+  refinable to every accepted target with 100% coverage, exactly
+  like compiler-emitted imp. Consequence: v1's unbounded-Int
+  scalar story is superseded by crystallized scalar kinds (§2a) —
+  explicit kind tags on op nodes plus the well-kinded gate; U8
+  restricted to load/store/compare/convert in v1; addresses = U32
+  indexes with a declared memsize, realized per target as
+  base+offset; the CAPABILITY-SET doctrine replaces
+  width-parametricity; the landed tiers migrate (the sha sibling
+  included, not frozen).
 
 Standing constraints inherited whole: the ISA-arc discipline (a
 model is an ordinary shard library; composition is citation; ZERO
@@ -120,7 +133,9 @@ everything that is one ISA's quirk:
   fragment's Int-binder style (LOWERING.md §6ah). One imp twin
   serves both a 32- and 64-bit target; the descriptor is consumed at
   proof/build time (the pinned-literal-spine precedent), never at
-  runtime.
+  runtime. [SUPERSEDED 2026-07-14 — the v2 re-adjudication
+  crystallizes scalar kinds at imp; see §2a. Kept as the story the
+  v1 rung records were built against.]
 - **(post-float-merge) Float ops by citation.** `(fadd fmt x y)`
   etc. cite std/float's L1/L2 core semantics directly; the NaN
   observation quotient (FLOATS.md §5) is the model-boundary law, and
@@ -135,6 +150,121 @@ everything that is one ISA's quirk:
 - Block/br indices, encodings, relocation, anything ELF/wasm-binary.
 - An imp interpreter that ships. The model's eval exists for proofs
   and differential gates and dissolves like every harness.
+
+
+## 2a. The machine v2 — crystallized scalar kinds (ratified 2026-07-14)
+
+User-initiated re-adjudication. The refined premise: hand-written
+imp twins are first-class refinement inputs — whoever writes a
+custom imp refinement of a high-level module must get generated
+imp ⊑ ISA legs with 100% coverage, exactly like compiler-emitted
+imp. The v1 scalar story fails that premise at the root: unbounded
+Int locals are the SOLE source of program-dependence in the
+machine-vs-imp alignment relation. Wherever a twin uses exact ops,
+"machine local = imp local" holds only under range facts; range
+facts across loops are per-program invariants; and impgen's
+recognizer tiers existed to synthesize those invariants from
+memorized body shapes — a closed-family mechanism that can never
+be total. The evidence was already in this file: the IWrap bridge
+is UNPREMISED (imp_w_add1w — imp's explicit wrap and the machine's
+inherent wrap are the same mod), while the unwrapped I1 bridges
+carry the same premise families PER TARGET in each machine's
+modulus (I1c: "2^64 where the wasm leg said 2^32") — the width
+decision paid N times downstream of the layer whose purpose is to
+force lowering decisions once. Type crystallization belongs at imp
+alongside layout; v1 commonized the layout half and left the type
+half out.
+
+- **The kind set.** A closed value-level vocabulary: U8, U32, U64
+  — unsigned first, matching the machines' unsigned story; signed
+  variants are named growth behind a consumer. Kinds are ordinary
+  ctor tags consumed by eval and the translators as VALUES, never
+  type parameters — the Word-former lesson and the
+  value-parametric ruling (FLOATS.md §3a) are complied with, not
+  revisited.
+- **Attachment and the gate.** Every IFn signature declares each
+  local's kind; every op node carries its kind explicitly —
+  (IBin U32 IAdd a b) — because refl-grade syntactic alignment is
+  what pays (the band-spelling lesson). A structural WELL-KINDED
+  predicate (wk_fn) joins the 'imp product gate: operand kinds
+  agree, constants sit in band, conversions are explicit, shift
+  counts are below width.
+- **Op semantics.** Every arithmetic op wraps to its kind; the
+  machine invariant is that every local holds an in-band value of
+  its declared kind. IWrap DISSOLVES (every op is a wrap point);
+  IRotr's width parameter becomes its kind; the band-mask idiom
+  (the sha sibling's m32 spelling) becomes redundant. Conversions
+  are explicit nodes — IExt (zero-extend up) and ITrunc
+  (mask-narrow down) — the crystallization points, proof-visible.
+  U8 is load/store/compare/convert only in v1 (no U8 arithmetic;
+  convert to U32 first). Shift counts at or above width are
+  EXCLUDED (well-kinded for constants, guarded for symbolic):
+  wasm masks counts mod 32 and x86 mod 64, so an out-of-range
+  count is precisely the class of per-target quirk imp exists to
+  exclude rather than parameterize. Wrapping is the total
+  default; checked variants (trap/Fail on overflow) arrive with
+  MEMORY.md D8's reasoned Fail value — this rework does not
+  entangle with D8.
+- **Memory and addresses.** Byte grain stays the primitive (ILoad
+  yields U8); word-grain accessors remain the named perf rung and
+  take LE per the mem-arc precedent when they land. Addresses
+  never enter imp as machine pointers: an imp address is an INDEX
+  into the model's own memory, held in an ordinary U32 local,
+  with memsize a DECLARED parameter of the twin (the hardcoded
+  65536 retires). The target leg realizes index → address as
+  base + zero-extended offset — wasm linear memory literally is
+  this, and the x86 leg gains the base-register convention.
+- **The capability doctrine (replaces v1 width-parametricity).**
+  imp kind semantics are target-independent; what varies per
+  target is which kinds it supports, never what an op means. Each
+  target model declares a CAPABILITY SET (native kinds,
+  addressable region bound, op residue such as division); the
+  acceptance gate is per (twin, target): accept iff the twin's
+  declared needs fit the target's capabilities, refusals loud and
+  naming the missing capability. U8/U32 plus U32 indexes form the
+  portable core — native or free on every real platform (wasm
+  i32; x86_64's 32-bit operand forms zero-extend results, so U32
+  is maskless-native there). U64 is native on BOTH current
+  targets (wasm has i64; the local model grows the vocabulary). A
+  genuinely 32-bit future target refuses U64 twins in v1; a
+  proven pair-arithmetic emulation rung is additive growth behind
+  a consumer. A new target ships as: ISA model + per-kind op
+  lowerings + capability declaration; existing twins that fit run
+  unchanged. This is what makes the future target set safely
+  unbounded — the kind lattice is the negotiation interface, and
+  set inclusion at the gate replaces semantic parameters inside
+  the machine.
+- **What v2 buys.** The alignment relation "machine local = imp
+  local" is exact and program-independent BY TYPE. The
+  bridge-side width-residue apparatus — wrap32/wrap64 haves,
+  per-modulus range premise families, the k-scaled accumulator
+  invariants that forced impgen into shape recognition —
+  dissolves; generated proofs reduce to the structural walk plus
+  guards plus fuel, total over well-kinded imp by construction,
+  hand-written twins included. The fit obligations relocate to
+  spec ⊑ imp, stated ONCE (MEMORY.md rung 1's refined scalars are
+  the source-side supply line), instead of once per target.
+  imp ⊑ ISA becomes width-story-free the way it was already
+  memory-story-free (§1).
+- **Consumer growth and migration.** The wasm model grows the i64
+  op vocabulary; the x86 model grows non-REX.W 32-bit forms —
+  encodings and differential vectors Opus-delegated per the
+  standing split; ix_home 6 → 12 is orthogonal and still wanted.
+  Migration is delete-first, file by file, corpus green
+  throughout: machine + wk gate + re-validated probe grid →
+  translators + the scalar tier re-landed → the loop tier → the
+  sha sibling (masks dissolve into kinds; the continuation-phase
+  machinery survives untouched — it is fuel/spine structure,
+  width-free) → impgen rebuilt as the structural walk over
+  well-kinded imp (the recognizer tiers retire, their generated
+  files regenerated under the rebuilt tool). The coverage arc
+  opens on the typed model.
+- **Named-later growth, all consumer-gated:** signed kinds, U16,
+  wide-mul high halves, word-grain accessors, U64 indexes for
+  huge-memory targets, 32-bit-target U64 emulation. The
+  uniform-rep compiler's default kind for unrefined source Int
+  (U64 + D8 checked ops vs the heap tier) is a coverage-arc
+  opening pin, not resolved here.
 
 
 ## 3. The trust story
@@ -324,6 +454,20 @@ by the language itself. Consequences, all ratified:
   `except` clause — is OPEN and resolves early in the coverage arc;
   imp's machine grows a reasoned Fail value (distinct from ITrap and
   fuel None) when it lands.
+
+**RE-SEQUENCING (2026-07-14, with the §2a re-adjudication).** I2d-3
+as previously scoped (recognizer + phase-machinery growth to absorb
+the sha bodies) is CANCELLED: shape recognition synthesizes loop
+invariants from memorized body shapes and can never be total over
+hand-written imp — and §2a removes the need, since the invariants
+existed only because v1 scalars could leave band. The next work is
+the v2 migration ladder (§2a), then impgen rebuilt as the
+structural walk over well-kinded imp; the sha ISA legs — the
+original I2d-3 deliverable — then fall out of the rebuilt generator
+run over the migrated sibling, with no recognizers anywhere. I2e
+(the bins) follows the migration; the coverage arc opens on the
+typed model. The landed impgen tiers stay green until their
+migration slice retires them.
 
 
 ## 6a. Rung records
@@ -1125,8 +1269,11 @@ record above.
 - A general optimizer at imp level — rep choices are declared and
   proven, never discovered by a hidden pass (MEMORY.md §10's
   no-hidden-liveness rule applies to imp verbatim).
-- Per-width imp twin families — width is value-parametric with
-  premised wrap ops; the Word residue is not re-created here.
+- Per-width imp twin families — a twin fixes its kinds (§2a) and
+  runs wherever capability gates accept it; the Word residue
+  (type-parameter families) is not re-created — kinds are a closed
+  value-level tag set. [v1 wording — "width is value-parametric
+  with premised wrap ops" — superseded 2026-07-14 by §2a.]
 
 
 ## 8. Decision points
