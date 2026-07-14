@@ -1557,6 +1557,63 @@ v1 scalars.
   continuation-phase machinery survives untouched), then impgen
   rebuilt as the structural walk over well-kinded imp.
 
+**V2-4 — the sha sibling migration (2026-07-14).** The 11k-line
+flagship twin (std/sha256/sha256.imp.shard) migrates to crystallized
+kinds — the ladder's stress test of the §2a claim that hand-written
+twins re-land without structural loss, and the largest single v2
+slice: 349 claims, every machine-facing tier re-proven.
+
+- **What dissolved, what appeared.** All 26 explicit m32 mask
+  statements are GONE (every wrapping op is a mask point now), and
+  the byte-store mask+shuttle pairs fused into direct
+  (ITrunc U32 U8 …) stores — the conversion node IS the byte mask,
+  and the stored trees are wput's chain verbatim. In exchange the
+  machine wraps EVERY arithmetic op via mod while the spec masks via
+  band only where FIPS masks — the band/mod seam the v1
+  band-spelling thesis never had to cross. It is paid ONCE, in a
+  conversion kit at the top of the sibling: the mask/mod bridge at
+  the 32-bit window (mask_pow2 grounded through a pow2-32 ladder),
+  euclidean flatten congruences (mod_unique against exhibited
+  decompositions), the in-band collapse, pointer/counter collapse
+  shapes at the walks' literal trees, and the wrapped-Horner unwrap
+  (ish_bem — premise-free and mem-facing, so every pass cites it
+  with one plain all-occurrence rewrite).
+- **The claim statements survived; the proofs grew conversions.**
+  Pass/worker/phase statements are v1's up to premises: pointer
+  walks collapse wraps as they appear (the guard-lemma idiom, one
+  tiny premised lemma per tree shape), Horner loads unwrap to v1's
+  exact trees, and the masked sums convert by per-shape composites
+  (ish_t1c/t2c/e2c for the round tier's T1/T2/e' chains, ish_swc at
+  the extension's sched_w fold) — after which the v1 rewrite chains
+  (ish_be, ish_sum5/sum3, the wget_be/wput_sets folds) fire
+  VERBATIM. The continuation-phase machinery carried over untouched
+  as §2a predicted; σ/sum/jump phases state the machine's wrapped
+  trees and stay compute-both refl-grade; only spine fuels shifted
+  where mask statements left (sg1 10→9, the store phase 20→16, the
+  finish lanes 22→17). The block walk's fuel-reshape algebra and all
+  57 positional farkas certs survived unchanged — the collapse work
+  lives inside the cited lemmas, never at the walk.
+- **The relocated fit story, sha-sized.** The round pass/worker now
+  carry the in-band premises the v2 doctrine prices at spec ⊑ imp:
+  eight state nonnegs plus the counter range, discharged in the
+  worker by two computed-round projection bounds (ish_ra_lo/re_lo,
+  fed by an extended shift ladder — shr to 25, shl to 30, the six
+  Σ-rotation trees the σ-only v1 ladder never needed) and at the
+  block walk by wget's premise-free range lemmas. Counter caps
+  derive from the pointer-window premises (ish_kle), the V2-3 cap
+  pattern verbatim.
+- **h8add_mem respells mod-style** (machine-facing, like the fs
+  lanes that build it); the future digest tier pays its band
+  conversion where the h-values are concrete wget words. The four
+  bodies are pinned WELL-KINDED (ish_wk_* in the 12-slot U32 frame)
+  — the rebuilt impgen's structural walk consumes them directly.
+- **Registration restored**: the corpus target and the module's
+  'check imp product return (driver 52); corpus FAIL-set unchanged
+  at the 57 baseline.
+- NEXT: impgen rebuilt as the structural walk over well-kinded imp
+  (the recognizer tiers retire; the sha ISA legs fall out of the
+  rebuilt generator over this sibling), then I2e (./sha256sum).
+
 ## 7. Non-goals, stated once
 
 - imp as a shipped target or public surface — it is an intermediate;

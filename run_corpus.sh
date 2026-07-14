@@ -251,6 +251,7 @@ TARGETS=(
   std/word/word.shard
   std/nat/nat.shard
   std/sha256/sha256.shard
+  std/sha256/sha256.imp.shard
   examples/sketch_pin.shard
   tools/search/rev_obj.shard
   tools/search/rev.shard
