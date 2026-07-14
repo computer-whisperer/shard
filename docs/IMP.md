@@ -1314,6 +1314,49 @@ kinds, delete-first.
   the scalar tier re-lands, then the loop tier, then the sha
   sibling, then impgen as the structural walk over wk programs.
 
+**V2-2a — the wasm leg, kind-directed (2026-07-14).** The translator
+and the scalar tier re-land on the typed machine, and the §2a thesis
+is now a checked artifact: EVERY imp ⊑ wasm bridge in the re-landed
+file is UNPREMISED. Every claim in all three files passed first-try.
+
+- **to_wasm.shard rebuilt**: imp2w_fn checks wk_fn FIRST (the
+  membership gate made code), then kind-directed selection — U8/U32
+  ops onto the wrapping i32 ops (whose wrap IS imp's op-result mod),
+  IRotr U32 onto the band-spelled i32.rotr, IExt-below-32 a no-op,
+  ITrunc U32→U8 the And-255 emission (imp's ITrunc was amended
+  BAND-spelled to match — the bit-op idiom, the sha specs' own mask
+  spelling; arithmetic wrap stays mod). U64 anywhere REFUSES pending
+  the i64 vocabulary — the capability doctrine's honest fence,
+  pinned by tie_addq_refuses = None. Statement encodings verbatim
+  (kinds change zero emitted bytes for the U32 class: the v1 tie
+  literals re-tie byte-identical).
+- **The bridge statement**: call_fn is fed through iband_args — the
+  alignment relation made syntax; icall bands identically inside.
+  Consequence: imp_w_mix (v1: six range premises, three
+  wrap-identity haves) is now `compute both; refl` with ZERO
+  premises; imp_w_sel's four conditional premises dissolve into a
+  case split on the shared banded scrutinee; even imp_w_divq's
+  divisor premise dissolves (both machines guard the banded divisor
+  — div0 is None = None, a case split, not a premise).
+- **imp_scalar.shard re-landed**: eleven twins (the six v1 members +
+  shr3/shl4/rotr7/chset + conversion twins it_tob/it_ext + the U64
+  it_addq) with per-kind wrap-identity lemmas
+  (iwrap8_id/iwrap32_id/iwrap64_id — the v1 fin-split proof survived
+  modulus substitution verbatim at 256 and 2^64) and spec ⊑ imp
+  certs carrying the FIT PREMISES — args and exact intermediates in
+  band, discharged by the wrap lemmas. This is the v1 bridge-premise
+  apparatus RELOCATED to the target-free half, stated once
+  (imp_lg_addq states it in 2^64 — same twin vocabulary, its own
+  modulus). wcomp_lg_add1 re-closes the tower: unpremised bridge +
+  fit-premised imp cert = spec ⊑ wasm in two rewrites.
+- Gates: fast engine 84/0 (to_wasm), 68/0 (imp_scalar), 120/0
+  (bridge); driver 46 products green; corpus FAIL-set unchanged at
+  the 57 baseline (256 targets).
+- REMAINING V2-2: (b) the x86 leg — non-REX.W 32-bit forms + ix_home
+  6→12 in the x86 model (encodings/vectors Opus-delegated), to_x86
+  rebuilt kind-directed, the x86 bridges re-landed; (c) the i64
+  capability — the wasm model's i64 vocabulary + the U64 legs.
+
 ## 7. Non-goals, stated once
 
 - imp as a shipped target or public surface — it is an intermediate;
