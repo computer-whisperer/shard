@@ -1487,6 +1487,76 @@ pinned from both sides.
   machine (i64.eqz and the U64 while guards arrive here). Then the
   sha sibling migration, impgen rebuilt as the structural walk.
 
+**V2-3 — the loop tier (2026-07-14).** The loop fragment class
+re-lands on the typed machine, and the §2a dissolution is
+demonstrated exactly where it was priced: in the loop workers, whose
+per-target accumulator apparatus was the original evidence against
+v1 scalars.
+
+- **Model growth**: wasm gains I64Eqz (the i32-valued zero test,
+  opcode 0x50; Fable-side per the I2a precedent) — the named
+  consumer of the V2-2c refusal, and the reason it waited: a WHILE
+  guard is a NEGATED test, so i64.eqz IS the U64 guard emission
+  (iw_wcond ends every guard in the kind-directed eqz; IF-position
+  non-comparison U64 conditions still refuse — the positive
+  truthiness test would need a double eqz and has no consumer). The
+  V8 differential grew 280 → 287 agree, 0 disagree; the eqz vectors
+  include the 2^32 operand — low half zero, so an i32.eqz-of-wrap
+  confusion answers 1 where i64.eqz must answer 0 — and a live-param
+  variant. x86: xargs grows 6 → 12 (positions 6-11 onto the
+  callee-saved rbx rbp r12-r15, the §2a home file) — ix_out's
+  consumer, rebuilding a full locals list as the loop-exit register
+  file; no encoding surface (silicon differential unchanged, 112/0).
+- **Translator growth**: to_wasm's while tier moves the zero test
+  into the condition (iw_wcond — U32-class emissions byte-identical,
+  every loop tie re-ties); to_x86's ISet byte-load pattern unwraps
+  the explicit IExt around ILoad (v2's crystallization point in the
+  sum body — a no-op on this machine, XLoad8 zero-extends into the
+  full register).
+- **examples/imp_loop.shard re-lands kinded**: fill at (U32 address,
+  U8 value, U32 counter), sum with the explicit (IExt U8 U32 (ILoad
+  …)) read, and the NEW U64 doubling twin — spec lq_dbl is
+  BAND-spelled (the sha m32 idiom at 2^64), and its bare-local U64
+  guard is the i64.eqz consumer on wasm and the kind-agnostic CEqz
+  on x86. THE RELOCATED FIT APPARATUS: the sum worker's accumulator
+  premises (nonneg + the k-scaled invariant) and the wrap-collapse
+  haves now live at spec ⊑ imp, once — imw_sum carries the v1 WASM
+  worker's premise family at 2^32, imw_fill/imw_dblq grow the
+  counter/pointer collapses, and the icall pins carry the
+  args-in-band premises (entry banding), collapsed through the new
+  cap lemmas (il_kM/il_dM from the pointer-range pair; il_kdec the
+  U64 counter step-down — the dblq family's one fit premise is the
+  counter cap itself, since no pointer premise exists to imply it).
+- **THE DISSOLUTION AT THE BRIDGES**: iww_sum and ixw_bsum carry the
+  pointer pair ONLY — v1 carried four premises plus the hwa
+  accumulator collapse and the lg_sum_*/get_* citations, PER TARGET
+  in each machine's modulus; v2's machines wrap the accumulator
+  exactly as imp does, so the accumulated value rides the IH's
+  quantifier as the shared mod term and the whole apparatus is gone
+  from both legs. The remaining premises are the memory story (store/
+  load guards + the counter cap), and the IH-shape collapses they
+  drive are now the SAME 2^32 haves on both targets (v1's x86 leg
+  restated them at 2^64) — one discharge vocabulary,
+  iwrap32_id/iwrap64_id from the scalar tier serving both legs.
+- **Ties**: the wasm fill/sum twins re-tie BYTE-IDENTICAL against
+  wasmgen_loop_out's generated funcs (kinds + the explicit IExt
+  change zero emitted bytes); the x86 ties are new XBin32 literals
+  (the byte-identity-to-x86gen story ends for the U32 loop class,
+  exactly the V2-2b scalar precedent); the dblq twin ties literal on
+  both targets — loop artifacts no direct generator ever made, with
+  the first i64-bodied IWhile encoding. Denotation bridges feed the
+  machines through iband_args (the v2 statement shape); the
+  compositions close spec ⊑ wasm and spec ⊑ x86 at the same spec
+  fns, the U64 tier included (wcomp_lq_dblq/xcomp_lq_dblq).
+- Gates: fast engine 99/0 (imp_loop), 172/0 (wasm loop bridge),
+  441/0 (x86 loop bridge), every existing consumer re-checked green
+  — EVERY CLAIM FIRST-TRY AGAIN; V8 287/0; silicon 112/0; +3 corpus
+  targets (261), +3 'check imp products (driver 51); corpus FAIL-set
+  unchanged at the 57 baseline.
+- NEXT: the sha sibling migration (masks dissolve into kinds; the
+  continuation-phase machinery survives untouched), then impgen
+  rebuilt as the structural walk over well-kinded imp.
+
 ## 7. Non-goals, stated once
 
 - imp as a shipped target or public surface — it is an intermediate;

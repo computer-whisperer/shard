@@ -111,6 +111,9 @@ TARGETS=(
   examples/imp_wasm_bridge.shard
   models/imp/to_x86.shard
   examples/imp_x86_bridge.shard
+  examples/imp_loop.shard
+  examples/imp_wasm_loop_bridge.shard
+  examples/imp_x86_loop_bridge.shard
   models/wasm/wasm.shard
   models/wasm/encode.shard
   examples/wasm_smoke.shard

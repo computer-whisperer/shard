@@ -35,7 +35,10 @@
 ;;; two scoped refusals (loud None, named growth): ITrunc U64→U8 (the
 ;;; two-step wrap+mask emission is not band-spelled — it waits for a
 ;;; band-absorption story or a dedicated emission) and non-comparison
-;;; U64 conditions (i64.eqz enters with its loop-tier consumer).
+;;; U64 conditions in IF position (the positive truthiness test would
+;;; need a double eqz; no consumer). In WHILE position U64 guards are
+;;; native (V2-3): the guard test is NEGATED, so i64.eqz IS the test —
+;;; iw_wcond emits the kind-directed zero test and BrIf exits on it.
 ;;;
 ;;; The statement encodings are SELF-CONTAINED label structures — every
 ;;; branch an encoding emits targets one of its own blocks, so nesting
@@ -43,9 +46,10 @@
 ;;;   (IIf c thn els)  -> Block( Block( ⟦c⟧ BrIf 0  ⟦els⟧ Br 1 ) ⟦thn⟧ )
 ;;;                       (BrIf 0 exits the inner block into the then
 ;;;                       code; the else code's Br 1 skips it)
-;;;   (IWhile c body)  -> Block( Loop( ⟦c⟧ I32Eqz BrIf 1  ⟦body⟧ Br 0 ) )
+;;;   (IWhile c body)  -> Block( Loop( ⟦c⟧ eqz BrIf 1  ⟦body⟧ Br 0 ) )
 ;;;                       (exit = BrIf 1 to the Block; Br 0 re-enters
-;;;                       the Loop head)
+;;;                       the Loop head; eqz is kind-directed —
+;;;                       i32.eqz below U64, i64.eqz at it)
 ;;; These are exactly the shapes tools/wasmgen emits for the same
 ;;; source classes — the ties prove the outputs byte-identical.
 
@@ -179,8 +183,9 @@
        ((Some ia) (Some (iw_app ia (list (I32Load8U)))))))))
 
 ;; a non-comparison condition: i32-typed exactly when its announced
-;; kind is — non-comparison U64 conditions refuse until i64.eqz
-;; arrives with its loop-tier consumer (named growth)
+;; kind is — non-comparison U64 conditions refuse in IF position (a
+;; positive i32 truthiness test would need a double eqz; named growth
+;; behind a consumer). In WHILE position they are native — see iw_wcond.
 (fn iw_cond_gen ((env (List IKind)) (c IExp)) (Option (List Instr))
   (match (iksyn env c)
     (None None)
@@ -211,6 +216,45 @@
     ((IExt kf kt a) (iw_cond_gen env c))
     ((ITrunc kf kt a) (iw_cond_gen env c))
     ((ILoad a) (iw_cond_gen env c))))
+
+;; a non-comparison WHILE guard: the expression at its announced kind,
+;; followed by the kind-directed zero test — i64.eqz is the one
+;; instruction whose consumer is exactly this position (V2-3)
+(fn iw_wcond_gen ((env (List IKind)) (c IExp)) (Option (List Instr))
+  (match (iksyn env c)
+    (None None)
+    ((Some ck)
+     (match (iw_exp c ck)
+       (None None)
+       ((Some ic)
+        (match ck
+          (U8 (Some (iw_app ic (list (I32Eqz)))))
+          (U32 (Some (iw_app ic (list (I32Eqz)))))
+          (U64 (Some (iw_app ic (list (I64Eqz)))))))))))
+
+;; a WHILE guard, translated to its NEGATED i32 test (the IWhile
+;; encoding exits on guard = 0): comparison-headed guards fuse and
+;; negate through i32.eqz (their value is i32 at every kind — the
+;; iw_cond shape plus the negation), everything else announces its
+;; kind and rides the kind-directed zero test
+(fn iw_wcond ((env (List IKind)) (c IExp)) (Option (List Instr))
+  (match c
+    ((IBin k2 o a b)
+     (if (iop_cmp o)
+       (match (iw_exp a k2)
+         (None None)
+         ((Some ia)
+          (match (iw_exp b k2)
+            (None None)
+            ((Some ib)
+             (Some (iw_app ia (iw_app ib (list (iw_bin k2 o) (I32Eqz)))))))))
+       (iw_wcond_gen env c)))
+    ((IConst n) (iw_wcond_gen env c))
+    ((ILoc i) (iw_wcond_gen env c))
+    ((IRotr k2 a c2) (iw_wcond_gen env c))
+    ((IExt kf kt a) (iw_wcond_gen env c))
+    ((ITrunc kf kt a) (iw_wcond_gen env c))
+    ((ILoad a) (iw_wcond_gen env c))))
 
 ;; the statement tier: one structural walk over the statement list
 ;; (recursion descends into IIf branches and IWhile bodies — strict
@@ -260,9 +304,9 @@
                             ithn))
                         it)))))))))
           ((IWhile c b)
-           (match (iw_cond env c)
+           (match (iw_wcond env c)
              (None None)
-             ((Some ic)
+             ((Some icz)
               (match (iw_stmts env b)
                 (None None)
                 ((Some ib)
@@ -272,10 +316,8 @@
                        (list
                          (Loop
                            (iw_app
-                             ic
-                             (Cons
-                               (I32Eqz)
-                               (Cons (BrIf 1) (iw_app ib (list (Br 0)))))))))
+                             icz
+                             (Cons (BrIf 1) (iw_app ib (list (Br 0))))))))
                      it)))))))))))))
 
 ;; a function: THE GATE FIRST (only well-kinded fns translate — the
