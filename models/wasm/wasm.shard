@@ -10,7 +10,11 @@
 ;;;     arithmetic op (`wrap32`). No std/word: the interpreter must REDUCE in
 ;;;     consumer proofs, and opaque word ops only cite. Comparisons are
 ;;;     unsigned (Eqz/Eq/LtU); signed views ride the word arc's shifted-mod
-;;;     trick when a piece needs them.
+;;;     trick when a piece needs them. The i64 tier (imp §2a rung V2-2c)
+;;;     rides the SAME untyped-Int stack — i64 values are Ints in [0, 2^64),
+;;;     wrapped by `wrap64` — and WELL-TYPED programs (imp's wk gate, or the
+;;;     differential's hand-typed vectors) never mix the tiers on one value;
+;;;     the model does not re-check what wasm validation checks.
 ;;;   - Nat is STRUCTURAL (Peano Nat, not Int) and burns on EVERY step, so
 ;;;     the whole mutual eval SCC is one (struct fuel) measure. Structural
 ;;;     fuel is what keeps symbolic-value proofs compute-closable: an S
@@ -101,6 +105,15 @@
   (I32Const Int)
   (I32Bin Bop)
   (I32Eqz)
+  ;; the i64 tier (V2-2c): the value ops imp's U64 kind lowers to.
+  ;; i64 comparisons are i32-VALUED in real wasm (value-level
+  ;; identical here); the conversions are the crystallization points —
+  ;; extension is the value identity on this untyped stack, wrap takes
+  ;; the low 32 BAND-spelled (the trunc idiom, imp's ITrunc spelling).
+  (I64Const Int)
+  (I64Bin Bop)
+  (I64ExtendI32U)
+  (I32WrapI64)
   (LocalGet Int)
   (LocalSet Int)
   (I32Load)
@@ -160,6 +173,9 @@
 
 ;; wrap to i32: euclidean mod, so negatives land in [0, 2^32) too.
 (fn wrap32 ((x Int)) Int (mod x 4294967296))
+
+;; wrap to i64: the same euclidean story at the wider width.
+(fn wrap64 ((x Int)) Int (mod x 18446744073709551616))
 
 (fn b2i ((b Bool)) Int (if b 1 0))
 
@@ -223,6 +239,43 @@
       (Some
         (band (bor (bshr a (mod b 32)) (bshl a (- 32 (mod b 32)))) 4294967295)))))
 
+;; the i64 view of the same operator set (imp §2a rung V2-2c — the
+;; U64 capability): identical shapes at the wider width. wrap64
+;; arithmetic, guarded division, band-closed bitwise, shift counts
+;; mod 64, rotr BAND-spelled at the 64-bit mask (the bit-op idiom,
+;; matching imp's IRotr at U64). Comparisons yield the same 1/0 the
+;; i32 family yields — i64 comparisons produce i32 values in real
+;; wasm, which on this untyped stack is no distinction at all. Engine
+;; conformance rides the V8 differential like every op here.
+(fn bop64_val ((o Bop) (a Int) (b Int)) (Option Int)
+  (match o
+    (BAdd (Some (wrap64 (+ a b))))
+    (BSub (Some (wrap64 (- a b))))
+    (BMul (Some (wrap64 (* a b))))
+    (BEq (Some (b2i (int_eq a b))))
+    (BNe (Some (if (int_eq a b) 0 1)))
+    (BLtU (Some (b2i (lt a b))))
+    (BLeU (Some (b2i (le a b))))
+    (BGtU (Some (b2i (lt b a))))
+    (BGeU (Some (b2i (le b a))))
+    (BDivU (if (le 1 b) (Some (ediv a b)) None))
+    (BRemU (if (le 1 b) (Some (mod a b)) None))
+    (BAnd (Some (band a b)))
+    (BOr (Some (bor a b)))
+    (BXor (Some (bxor a b)))
+    (BShl (Some (wrap64 (bshl a (mod b 64)))))
+    (BShrU (Some (bshr a (mod b 64))))
+    ;; the complement leg is DOUBLE-modded: the kernel shift prims
+    ;; reduce only for counts in [0, 64), and (- 64 (mod b 64)) hits
+    ;; exactly 64 at rotate-count ≡ 0 — the outer mod keeps the leg
+    ;; in-domain (bshl a 0 = a; bor a a = a: the identity rotation).
+    ;; The 32-bit BRotr never trips this (its complement maxes at 32).
+    (BRotr
+      (Some
+        (band
+          (bor (bshr a (mod b 64)) (bshl a (mod (- 64 (mod b 64)) 64)))
+          18446744073709551615)))))
+
 ;; pop two, apply, push. None = stack underflow or a trapping op
 ;; (division by zero) — OTrap at the caller either way.
 (fn do_bin ((o Bop) (st (List Int))) (Option (List Int))
@@ -233,6 +286,18 @@
        (Nil None)
        ((Cons a r)
         (match (bop_val o a b)
+          (None None)
+          ((Some v) (Some (Cons v r)))))))))
+
+;; the i64 sibling of do_bin.
+(fn do_bin64 ((o Bop) (st (List Int))) (Option (List Int))
+  (match st
+    (Nil None)
+    ((Cons b st1)
+     (match st1
+       (Nil None)
+       ((Cons a r)
+        (match (bop64_val o a b)
           (None None)
           ((Some v) (Some (Cons v r)))))))))
 
@@ -313,6 +378,21 @@
          (match st
            (Nil (Some OTrap))
            ((Cons a r) (Some (ONorm (Cons (b2i (int_eq a 0)) r) lc mem)))))
+       ((I64Const c) (Some (ONorm (Cons (wrap64 c) st) lc mem)))
+       ((I64Bin o)
+        (match (do_bin64 o st)
+          (None (Some OTrap))
+          ((Some st2) (Some (ONorm st2 lc mem)))))
+       ;; zero-extending an in-range i32 is the identity on the
+       ;; untyped stack; wrapping to i32 takes the low 32, BAND-spelled
+       (I64ExtendI32U
+         (match st
+           (Nil (Some OTrap))
+           ((Cons a r) (Some (ONorm (Cons a r) lc mem)))))
+       (I32WrapI64
+         (match st
+           (Nil (Some OTrap))
+           ((Cons a r) (Some (ONorm (Cons (band a 4294967295) r) lc mem)))))
        ((LocalGet k)
         (match (lget lc k)
           (None (Some OTrap))

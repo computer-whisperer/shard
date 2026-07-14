@@ -187,14 +187,43 @@
 
 (fn it_ext_fn () IFn (MkIFn (list U8) Nil Nil (IExt U8 U32 (ILoc 0)) U32))
 
-;; the U64 twin — same vocabulary, different crystallized kind (today
-;; it refuses on wasm: the capability doctrine's honest fence)
+;; the U64 twin — same vocabulary, different crystallized kind; native
+;; on both targets since the wasm i64 tier landed (V2-2c)
 (fn it_addq_fn () IFn
   (MkIFn (list U64 U64) Nil Nil (IBin U64 IAdd (ILoc 0) (ILoc 1)) U64))
 
-;; the downward conversion out of U64 (refuses on wasm with the rest
-;; of the U64 tier; on x86 it is the zero-extending 32-bit mov)
+;; the downward conversion out of U64 — the zero-extending 32-bit mov
+;; on x86, the band-spelled i32.wrap_i64 on wasm
 (fn it_tow_fn () IFn (MkIFn (list U64) Nil Nil (ITrunc U64 U32 (ILoc 0)) U32))
+
+;; the upward conversion into U64 — on wasm the one conversion that
+;; emits a real instruction (i64.extend_i32_u); on x86 a no-op
+(fn it_extq_fn () IFn (MkIFn (list U32) Nil Nil (IExt U32 U64 (ILoc 0)) U64))
+
+;; the direct U64→U8 narrowing — x86's And-255 serves any source
+;; width; wasm refuses it (no single band-spelled emission there —
+;; named growth): the conversion asymmetry
+(fn it_tobq_fn () IFn (MkIFn (list U64) Nil Nil (ITrunc U64 U8 (ILoc 0)) U8))
+
+;; the U64 rotation — native on wasm (i64.rotr, band-spelled both
+;; sides); x86 refuses it (the 32-bit composition does not scale to
+;; the width that IS the register): the rotate asymmetry
+(fn it_rotrq_fn () IFn
+  (MkIFn (list U64) Nil Nil (IRotr U64 (ILoc 0) (IConst 7)) U64))
+
+;; the U64 gate: the branching twin at the wide kind — pins fused
+;; U64 conditions on both targets
+(fn it_selq_fn () IFn
+  (MkIFn
+    (list U64 U64)
+    (list U64)
+    (list
+      (IIf
+        (IBin U64 IEq (ILoc 0) (IConst 0))
+        (list (ISet 2 (IBin U64 IAdd (ILoc 1) (IConst 1))))
+        (list (ISet 2 (IBin U64 IMul (ILoc 1) (IConst 2))))))
+    (ILoc 2)
+    U64))
 
 ;; the wide twin: seven locals — the first consumer of the x86 home
 ;; file past the six SysV argument registers (body local 6 lives in a
@@ -741,6 +770,159 @@
         refl))
     (steps ((rewrite (premise hx) lr lhs true ())))
     refl))
+
+;; the upward conversion into U64: the value identity, in-band at U32
+(claim imp_lg_extq
+  (goal ((x Int) (c Nat)) ((= (le 0 x) True) (= (lt x 4294967296) True))
+    (= (icall (S c) (it_prog (it_extq_fn)) 0 (list x)) (Some x)))
+  (chain
+    (steps ((compute lhs)))
+    (have hx (= (mod x 4294967296) x)
+      (rewrite-with
+        (lemma iwrap32_id)
+        lr
+        lhs
+        ((inst x x))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise hx) lr lhs true ())))
+    refl))
+
+;; the direct U64→U8 narrowing: the machine's band at the byte kind
+(claim imp_lg_tobq
+  (goal ((x Int) (c Nat))
+    ((= (le 0 x) True) (= (lt x 18446744073709551616) True))
+    (= (icall (S c) (it_prog (it_tobq_fn)) 0 (list x)) (Some (band x 255))))
+  (chain
+    (steps ((compute lhs)))
+    (have hx (= (mod x 18446744073709551616) x)
+      (rewrite-with
+        (lemma iwrap64_id)
+        lr
+        lhs
+        ((inst x x))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise hx) lr lhs true ())))
+    refl))
+
+;; the U64 rotation: the band-spelled containment at the wide width
+(claim imp_lg_rotrq
+  (goal ((x Int) (c Nat))
+    ((= (le 0 x) True) (= (lt x 18446744073709551616) True))
+    (=
+      (icall (S c) (it_prog (it_rotrq_fn)) 0 (list x))
+      (Some (band (bor (bshr x 7) (bshl x 57)) 18446744073709551615))))
+  (chain
+    (steps ((compute lhs)))
+    (have hx (= (mod x 18446744073709551616) x)
+      (rewrite-with
+        (lemma iwrap64_id)
+        lr
+        lhs
+        ((inst x x))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise hx) lr lhs true ())))
+    refl))
+
+;; the U64 gate: branch-conditional fit premises at the wide kind —
+;; the §6j discipline, kind-substituted
+(claim imp_lg_selq
+  (goal ((x Int) (y Int) (c Nat))
+    ((= (le 0 x) True)
+     (= (lt x 18446744073709551616) True)
+     (= (le 0 y) True)
+     (= (lt y 18446744073709551616) True)
+     (= (if (int_eq x 0) (le 0 (+ y 1)) True) True)
+     (= (if (int_eq x 0) (lt (+ y 1) 18446744073709551616) True) True)
+     (= (if (int_eq x 0) True (le 0 (* y 2))) True)
+     (= (if (int_eq x 0) True (lt (* y 2) 18446744073709551616)) True))
+    (=
+      (icall (S^ 8 c) (it_prog (it_selq_fn)) 0 (list x y))
+      (Some (if (int_eq x 0) (+ y 1) (* y 2)))))
+  (chain
+    (steps ((compute lhs)))
+    (have hx (= (mod x 18446744073709551616) x)
+      (rewrite-with
+        (lemma iwrap64_id)
+        lr
+        lhs
+        ((inst x x))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise hx) lr both true ())))
+    (have hy (= (mod y 18446744073709551616) y)
+      (rewrite-with
+        (lemma iwrap64_id)
+        lr
+        lhs
+        ((inst x y))
+        ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+         (steps ((rewrite (premise 3) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise hy) lr both true ())))
+    (case-on (int_eq x 0) Bool
+      ((case True
+         (chain
+           (steps ((rewrite (hyp True) lr both true ()) (compute both)))
+           (have p0 (= (le 0 (+ y 1)) True)
+             (chain
+               (steps
+                 ((rewrite (premise 4) rl rhs true ())
+                  (rewrite (hyp True) lr rhs true ())
+                  (compute rhs)))
+               refl))
+           (have p1 (= (lt (+ y 1) 18446744073709551616) True)
+             (chain
+               (steps
+                 ((rewrite (premise 5) rl rhs true ())
+                  (rewrite (hyp True) lr rhs true ())
+                  (compute rhs)))
+               refl))
+           (have w2 (= (mod (+ y 1) 18446744073709551616) (+ y 1))
+             (rewrite-with
+               (lemma iwrap64_id)
+               lr
+               lhs
+               ((inst x (+ y 1)))
+               ((steps ((rewrite (premise p0) lr lhs true ())) refl)
+                (steps ((rewrite (premise p1) lr lhs true ())) refl))
+               refl))
+           (steps ((rewrite (premise w2) lr lhs true ())))
+           refl))
+       (case False
+         (chain
+           (steps ((rewrite (hyp False) lr both true ()) (compute both)))
+           (have p3 (= (le 0 (* y 2)) True)
+             (chain
+               (steps
+                 ((rewrite (premise 6) rl rhs true ())
+                  (rewrite (hyp False) lr rhs true ())
+                  (compute rhs)))
+               refl))
+           (have p4 (= (lt (* y 2) 18446744073709551616) True)
+             (chain
+               (steps
+                 ((rewrite (premise 7) rl rhs true ())
+                  (rewrite (hyp False) lr rhs true ())
+                  (compute rhs)))
+               refl))
+           (have w5 (= (mod (* y 2) 18446744073709551616) (* y 2))
+             (rewrite-with
+               (lemma iwrap64_id)
+               lr
+               lhs
+               ((inst x (* y 2)))
+               ((steps ((rewrite (premise p3) lr lhs true ())) refl)
+                (steps ((rewrite (premise p4) lr lhs true ())) refl))
+               refl))
+           (steps ((rewrite (premise w5) lr lhs true ())))
+           refl))))))
 
 ;; the wide twin: same add cert shape, through a callee-saved home
 (claim imp_lg_wide

@@ -10,19 +10,32 @@
 ;;; (imp2w_fn checks wk_fn first — the §2a membership gate made code)
 ;;; and is then KIND-DIRECTED instruction selection with a
 ;;; program-independent alignment: U8/U32 ops lower onto the wrapping
-;;; i32 ops, whose wrap IS imp's op-result wrap (same mod), whose
-;;; rotate IS imp's band-spelled rotate, and whose trunc emission
-;;; (And-mask) IS imp's band-spelled ITrunc — so the per-instance
-;;; bridge certs are UNPREMISED: both machines band the call-boundary
-;;; args identically (the bridge statement feeds call_fn through
-;;; iband_args, exactly what icall does internally) and then compute
-;;; the same values at every step. The v1 range-premise apparatus has
-;;; no v2 analogue; fit obligations live at spec ⊑ imp, once.
+;;; i32 ops and U64 ops onto the i64 family (each family's wrap IS
+;;; imp's op-result wrap at that kind, its rotate IS imp's
+;;; band-spelled rotate, and the trunc emissions — the And-mask and
+;;; the band-spelled i32.wrap_i64 — ARE imp's band-spelled ITrunc), so
+;;; the per-instance bridge certs are UNPREMISED: both machines band
+;;; the call-boundary args identically (the bridge statement feeds
+;;; call_fn through iband_args, exactly what icall does internally)
+;;; and then compute the same values at every step. The v1
+;;; range-premise apparatus has no v2 analogue; fit obligations live
+;;; at spec ⊑ imp, once.
 ;;;
-;;; CAPABILITY SET (this target, today): kinds U8/U32. U64 REFUSES
-;;; (None) until the wasm model grows its i64 vocabulary — the §2a
-;;; capability doctrine: refusal is loud, a twin using U64 simply has
-;;; no wasm leg yet. Non-32 rotate widths refuse likewise.
+;;; Expressions translate AT AN EXPECTED KIND (the ikchk discipline):
+;;; constants and op selection are kind-directed from context, and the
+;;; emitted code's wasm VALUE TYPE is the kind's type (U8/U32 → i32,
+;;; U64 → i64) — well-kinded imp translates to type-correct wasm by
+;;; construction. The one seam: comparisons produce i32 at EVERY kind
+;;; (the machine's comparison type), so value-position U64 comparisons
+;;; re-widen through i64.extend_i32_u, while comparison-headed
+;;; CONDITIONS emit the comparison directly into BrIf (the fused
+;;; shape — the x86 leg's condition fusion, same move).
+;;;
+;;; CAPABILITY SET (this target, today): the full {U8, U32, U64}, with
+;;; two scoped refusals (loud None, named growth): ITrunc U64→U8 (the
+;;; two-step wrap+mask emission is not band-spelled — it waits for a
+;;; band-absorption story or a dedicated emission) and non-comparison
+;;; U64 conditions (i64.eqz enters with its loop-tier consumer).
 ;;;
 ;;; The statement encodings are SELF-CONTAINED label structures — every
 ;;; branch an encoding emits targets one of its own blocks, so nesting
@@ -48,15 +61,9 @@
     (Nil b)
     ((Cons h t) (Cons h (iw_app t b)))))
 
-;; the kinds inside this target's capability set (i32-representable)
-(fn iw_k32 ((k IKind)) Bool
-  (match k
-    (U8 True)
-    (U32 True)
-    (U64 False)))
-
-;; imp ops map onto the i32 ops kind-for-kind: the i32 wrap is imp's
-;; op-result wrap, the guards match, the comparisons match
+;; imp ops map onto the machine ops kind-for-kind: each family's wrap
+;; is imp's op-result wrap at its kind, the guards match, the
+;; comparisons match
 (fn iw_op ((o IOp)) Bop
   (match o
     (IAdd BAdd)
@@ -73,89 +80,173 @@
     (ILt BLtU)
     (ILe BLeU)))
 
-;; postorder stack code for an expression; None = outside this
-;; target's capability set (U64 anywhere, pending the i64 vocabulary)
-(fn iw_exp ((e IExp)) (Option (List Instr))
+;; the binary instruction at a kind: U8/U32 ride the i32 family, U64
+;; the i64 family
+(fn iw_bin ((k IKind) (o IOp)) Instr
+  (match k
+    (U8 (I32Bin (iw_op o)))
+    (U32 (I32Bin (iw_op o)))
+    (U64 (I64Bin (iw_op o)))))
+
+;; the op emission at a kind: comparisons produce i32 at every kind
+;; (the machine's comparison type), so at U64 the value position
+;; re-widens through i64.extend_i32_u — everything else is one
+;; instruction
+(fn iw_opins ((k IKind) (o IOp)) (List Instr)
+  (if (iop_cmp o)
+    (match k
+      (U8 (list (iw_bin k o)))
+      (U32 (list (iw_bin k o)))
+      (U64 (list (iw_bin k o) (I64ExtendI32U))))
+    (list (iw_bin k o))))
+
+;; postorder stack code for an expression AT AN EXPECTED KIND (the
+;; ikchk discipline: atoms take their kinds from context); None =
+;; outside this target's capability set
+(fn iw_exp ((e IExp) (k IKind)) (Option (List Instr))
   (measure (struct e))
   (match e
-    ((IConst n) (Some (list (I32Const n))))
-    ((ILoc i) (Some (list (LocalGet i))))
-    ((IBin k o a b)
-     (if (iw_k32 k)
-       (match (iw_exp a)
-         (None None)
-         ((Some ia)
-          (match (iw_exp b)
-            (None None)
-            ((Some ib) (Some (iw_app ia (iw_app ib (list (I32Bin (iw_op o))))))))))
-       None))
-    ;; the 32-bit rotation maps to the native i32.rotr — both sides
-    ;; band-spell containment, so the bridge is refl-grade
-    ((IRotr k a c)
+    ((IConst n)
      (match k
+       (U8 (Some (list (I32Const n))))
+       (U32 (Some (list (I32Const n))))
+       (U64 (Some (list (I64Const n))))))
+    ((ILoc i) (Some (list (LocalGet i))))
+    ((IBin k2 o a b)
+     (match (iw_exp a k2)
+       (None None)
+       ((Some ia)
+        (match (iw_exp b k2)
+          (None None)
+          ((Some ib) (Some (iw_app ia (iw_app ib (iw_opins k2 o)))))))))
+    ;; rotation maps to the native rotr at its kind — both sides
+    ;; band-spell containment, so the bridge is refl-grade
+    ((IRotr k2 a c)
+     (match k2
        (U8 None)
        (U32
-         (match (iw_exp a)
+         (match (iw_exp a U32)
            (None None)
            ((Some ia)
-            (match (iw_exp c)
+            (match (iw_exp c U32)
               (None None)
               ((Some ic) (Some (iw_app ia (iw_app ic (list (I32Bin BRotr))))))))))
-       (U64 None)))
+       (U64
+         (match (iw_exp a U64)
+           (None None)
+           ((Some ia)
+            (match (iw_exp c U64)
+              (None None)
+              ((Some ic) (Some (iw_app ia (iw_app ic (list (I64Bin BRotr))))))))))))
     ;; zero-extension inside the i32 band is a no-op (U8 values are
-    ;; already i32 values); extension INTO U64 waits on the capability
-    ((IExt _ kt a) (if (iw_k32 kt) (iw_exp a) None))
-    ;; mask-narrowing to U8 emits the And-mask — the same band imp's
-    ;; ITrunc computes; narrowing FROM U64 waits on the capability
+    ;; already i32 values); extension into U64 is the real instruction
+    ;; (i64.extend_i32_u — the value identity in the model)
+    ((IExt kf kt a)
+     (match (iw_exp a kf)
+       (None None)
+       ((Some ia)
+        (match kt
+          (U8 None)
+          (U32 (Some ia))
+          (U64
+            (match kf
+              (U8 (Some (iw_app ia (list (I64ExtendI32U)))))
+              (U32 (Some (iw_app ia (list (I64ExtendI32U)))))
+              (U64 None)))))))
+    ;; mask-narrowing: to U8 the And-mask, out of U64 the band-spelled
+    ;; i32.wrap_i64 — the same bands imp's ITrunc computes. The direct
+    ;; U64→U8 narrowing REFUSES (no single band-spelled emission —
+    ;; named growth)
     ((ITrunc kf kt a)
-     (match kf
-       (U8 None)
-       (U32
-         (match kt
-           (U8
-             (match (iw_exp a)
-               (None None)
-               ((Some ia)
-                (Some (iw_app ia (list (I32Const 255) (I32Bin BAnd)))))))
-           (U32 None)
-           (U64 None)))
-       (U64 None)))
+     (match (iw_exp a kf)
+       (None None)
+       ((Some ia)
+        (match kf
+          (U8 None)
+          (U32
+            (match kt
+              (U8 (Some (iw_app ia (list (I32Const 255) (I32Bin BAnd)))))
+              (U32 None)
+              (U64 None)))
+          (U64
+            (match kt
+              (U8 None)
+              (U32 (Some (iw_app ia (list (I32WrapI64)))))
+              (U64 None)))))))
     ((ILoad a)
-     (match (iw_exp a)
+     (match (iw_exp a U32)
        (None None)
        ((Some ia) (Some (iw_app ia (list (I32Load8U)))))))))
 
+;; a non-comparison condition: i32-typed exactly when its announced
+;; kind is — non-comparison U64 conditions refuse until i64.eqz
+;; arrives with its loop-tier consumer (named growth)
+(fn iw_cond_gen ((env (List IKind)) (c IExp)) (Option (List Instr))
+  (match (iksyn env c)
+    (None None)
+    ((Some ck)
+     (match ck
+       (U8 (iw_exp c ck))
+       (U32 (iw_exp c ck))
+       (U64 None)))))
+
+;; a condition, translated to the i32-typed test BrIf consumes:
+;; comparison-headed conditions emit the comparison DIRECTLY (it is
+;; already i32 at every kind — the fused shape, the x86 leg's
+;; condition fusion), everything else announces its kind
+(fn iw_cond ((env (List IKind)) (c IExp)) (Option (List Instr))
+  (match c
+    ((IBin k2 o a b)
+     (if (iop_cmp o)
+       (match (iw_exp a k2)
+         (None None)
+         ((Some ia)
+          (match (iw_exp b k2)
+            (None None)
+            ((Some ib) (Some (iw_app ia (iw_app ib (list (iw_bin k2 o)))))))))
+       (iw_cond_gen env c)))
+    ((IConst n) (iw_cond_gen env c))
+    ((ILoc i) (iw_cond_gen env c))
+    ((IRotr k2 a c2) (iw_cond_gen env c))
+    ((IExt kf kt a) (iw_cond_gen env c))
+    ((ITrunc kf kt a) (iw_cond_gen env c))
+    ((ILoad a) (iw_cond_gen env c))))
+
 ;; the statement tier: one structural walk over the statement list
 ;; (recursion descends into IIf branches and IWhile bodies — strict
-;; subterms via nested match)
-(fn iw_stmts ((ss (List IStmt))) (Option (List Instr))
+;; subterms via nested match); the kind environment supplies each
+;; set's target kind and each condition's announced kind
+(fn iw_stmts ((env (List IKind)) (ss (List IStmt))) (Option (List Instr))
   (measure (struct ss))
   (match ss
     (Nil (Some Nil))
     ((Cons s t)
-     (match (iw_stmts t)
+     (match (iw_stmts env t)
        (None None)
        ((Some it)
         (match s
           ((ISet i e)
-           (match (iw_exp e)
+           (match (ikat env i)
              (None None)
-             ((Some ie) (Some (iw_app ie (Cons (LocalSet i) it))))))
+             ((Some k)
+              (match (iw_exp e k)
+                (None None)
+                ((Some ie) (Some (iw_app ie (Cons (LocalSet i) it))))))))
           ((IStore ae ve)
-           (match (iw_exp ae)
+           (match (iw_exp ae U32)
              (None None)
              ((Some ia)
-              (match (iw_exp ve)
+              (match (iw_exp ve U8)
                 (None None)
                 ((Some iv) (Some (iw_app ia (iw_app iv (Cons (I32Store8) it)))))))))
           ((IIf c thn els)
-           (match (iw_exp c)
+           (match (iw_cond env c)
              (None None)
              ((Some ic)
-              (match (iw_stmts thn)
+              (match (iw_stmts env thn)
                 (None None)
                 ((Some ithn)
-                 (match (iw_stmts els)
+                 (match (iw_stmts env els)
                    (None None)
                    ((Some iels)
                     (Some
@@ -169,10 +260,10 @@
                             ithn))
                         it)))))))))
           ((IWhile c b)
-           (match (iw_exp c)
+           (match (iw_cond env c)
              (None None)
              ((Some ic)
-              (match (iw_stmts b)
+              (match (iw_stmts env b)
                 (None None)
                 ((Some ib)
                  (Some
@@ -188,13 +279,14 @@
                      it)))))))))))))
 
 ;; a function: THE GATE FIRST (only well-kinded fns translate — the
-;; §2a membership predicate), then translated statements + result
+;; §2a membership predicate), then translated statements + result at
+;; the declared result kind
 (fn imp2w_fn ((f IFn)) (Option Func)
   (if (wk_fn f)
-    (match (iw_stmts (ibody_of f))
+    (match (iw_stmts (ikapp (ikparams_of f) (ikextra_of f)) (ibody_of f))
       (None None)
       ((Some ist)
-       (match (iw_exp (iresult_of f))
+       (match (iw_exp (iresult_of f) (irkind_of f))
          (None None)
          ((Some ir)
           (Some

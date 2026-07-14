@@ -80,6 +80,86 @@
       (+ 128 (mod (ediv sv 2097152) 128))
       (mod (ediv sv 268435456) 128)))))))
 
+;; the signed view of a u64 bit pattern.
+(fn s64 ((v Int)) Int
+  (if (lt v 9223372036854775808) v (- v 18446744073709551616)))
+
+;; signed LEB128 of a signed value in [-2^63, 2^63), minimal width —
+;; the sleb ladder at ten levels (i64.const immediates). Same chunk
+;; algebra: euclidean mod/ediv give exactly the two's-complement
+;; seven-bit chunks, and each rung's range guarantee makes its final
+;; chunk carry the right sign bit.
+(fn sleb64 ((sv Int)) (List Int)
+  (if (sfits sv -64 64) (list (mod sv 128))
+  (if (sfits sv -8192 8192) (list (+ 128 (mod sv 128)) (mod (ediv sv 128) 128))
+  (if (sfits sv -1048576 1048576)
+    (list
+      (+ 128 (mod sv 128))
+      (+ 128 (mod (ediv sv 128) 128))
+      (mod (ediv sv 16384) 128))
+  (if (sfits sv -134217728 134217728)
+    (list
+      (+ 128 (mod sv 128))
+      (+ 128 (mod (ediv sv 128) 128))
+      (+ 128 (mod (ediv sv 16384) 128))
+      (mod (ediv sv 2097152) 128))
+  (if (sfits sv -17179869184 17179869184)
+    (list
+      (+ 128 (mod sv 128))
+      (+ 128 (mod (ediv sv 128) 128))
+      (+ 128 (mod (ediv sv 16384) 128))
+      (+ 128 (mod (ediv sv 2097152) 128))
+      (mod (ediv sv 268435456) 128))
+  (if (sfits sv -2199023255552 2199023255552)
+    (list
+      (+ 128 (mod sv 128))
+      (+ 128 (mod (ediv sv 128) 128))
+      (+ 128 (mod (ediv sv 16384) 128))
+      (+ 128 (mod (ediv sv 2097152) 128))
+      (+ 128 (mod (ediv sv 268435456) 128))
+      (mod (ediv sv 34359738368) 128))
+  (if (sfits sv -281474976710656 281474976710656)
+    (list
+      (+ 128 (mod sv 128))
+      (+ 128 (mod (ediv sv 128) 128))
+      (+ 128 (mod (ediv sv 16384) 128))
+      (+ 128 (mod (ediv sv 2097152) 128))
+      (+ 128 (mod (ediv sv 268435456) 128))
+      (+ 128 (mod (ediv sv 34359738368) 128))
+      (mod (ediv sv 4398046511104) 128))
+  (if (sfits sv -36028797018963968 36028797018963968)
+    (list
+      (+ 128 (mod sv 128))
+      (+ 128 (mod (ediv sv 128) 128))
+      (+ 128 (mod (ediv sv 16384) 128))
+      (+ 128 (mod (ediv sv 2097152) 128))
+      (+ 128 (mod (ediv sv 268435456) 128))
+      (+ 128 (mod (ediv sv 34359738368) 128))
+      (+ 128 (mod (ediv sv 4398046511104) 128))
+      (mod (ediv sv 562949953421312) 128))
+  (if (sfits sv -4611686018427387904 4611686018427387904)
+    (list
+      (+ 128 (mod sv 128))
+      (+ 128 (mod (ediv sv 128) 128))
+      (+ 128 (mod (ediv sv 16384) 128))
+      (+ 128 (mod (ediv sv 2097152) 128))
+      (+ 128 (mod (ediv sv 268435456) 128))
+      (+ 128 (mod (ediv sv 34359738368) 128))
+      (+ 128 (mod (ediv sv 4398046511104) 128))
+      (+ 128 (mod (ediv sv 562949953421312) 128))
+      (mod (ediv sv 72057594037927936) 128))
+    (list
+      (+ 128 (mod sv 128))
+      (+ 128 (mod (ediv sv 128) 128))
+      (+ 128 (mod (ediv sv 16384) 128))
+      (+ 128 (mod (ediv sv 2097152) 128))
+      (+ 128 (mod (ediv sv 268435456) 128))
+      (+ 128 (mod (ediv sv 34359738368) 128))
+      (+ 128 (mod (ediv sv 4398046511104) 128))
+      (+ 128 (mod (ediv sv 562949953421312) 128))
+      (+ 128 (mod (ediv sv 72057594037927936) 128))
+      (mod (ediv sv 9223372036854775808) 128))))))))))))
+
 ;; decimal digits of n in [0, 10^10) — export names f0..fN.
 (fn dec ((n Int)) (List Int)
   (if (lt n 10) (list (+ 48 n))
@@ -129,12 +209,37 @@
     (BShrU 118)
     (BRotr 120)))
 
+;; the i64 opcode page.
+(fn enc_bop64 ((o Bop)) Int
+  (match o
+    (BAdd 124)
+    (BSub 125)
+    (BMul 126)
+    (BEq 81)
+    (BNe 82)
+    (BLtU 84)
+    (BLeU 88)
+    (BGtU 86)
+    (BGeU 90)
+    (BDivU 128)
+    (BRemU 130)
+    (BAnd 131)
+    (BOr 132)
+    (BXor 133)
+    (BShl 134)
+    (BShrU 136)
+    (BRotr 138)))
+
 (fn enc_instr ((i Instr)) (List Int)
   (measure (struct i))
   (match i
     ((I32Const c) (Cons 65 (sleb (s32 (wrap32 c)))))
     ((I32Bin o) (list (enc_bop o)))
     (I32Eqz (list 69))
+    ((I64Const c) (Cons 66 (sleb64 (s64 (wrap64 c)))))
+    ((I64Bin o) (list (enc_bop64 o)))
+    (I64ExtendI32U (list 173))
+    (I32WrapI64 (list 167))
     ((LocalGet k) (Cons 32 (uleb k)))
     ((LocalSet k) (Cons 33 (uleb k)))
     ;; memory ops carry align+offset immediates; the model has neither, so

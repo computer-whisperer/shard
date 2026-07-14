@@ -179,12 +179,62 @@
   (steps ((compute both)) refl))
 
 ;; the U64 twin rides the 64-bit forms natively — the full {U8,U32,
-;; U64} capability set, where wasm today refuses this twin
+;; U64} capability set (and since V2-2c the wasm leg carries it too,
+;; on the i64 vocabulary)
 (claim xtie_addq
   (goal () ()
     (=
       (imp2x_fn (it_addq_fn))
       (Some (MkXFunc 2 (list (XMovRR RAX RDI) (XBin XAdd RAX (SReg RSI)))))))
+  (steps ((compute both)) refl))
+
+;; the upward conversion is transparent here (values are already
+;; zero-extended) — the same literal as the U8 ext, where wasm emits
+;; its one real conversion instruction
+(claim xtie_extq
+  (goal () ()
+    (= (imp2x_fn (it_extq_fn)) (Some (MkXFunc 1 (list (XMovRR RAX RDI))))))
+  (steps ((compute both)) refl))
+
+;; And-255 serves any source width — the direct U64→U8 narrowing that
+;; wasm refuses is one instruction here: the conversion asymmetry's
+;; other face
+(claim xtie_tobq
+  (goal () ()
+    (=
+      (imp2x_fn (it_tobq_fn))
+      (Some (MkXFunc 1 (list (XMovRR RAX RDI) (XBin XAnd RAX (SImm 255)))))))
+  (steps ((compute both)) refl))
+
+;; the U64 rotation refuses here (the 32-bit shr/shl/or/and
+;; composition does not scale to the width that IS the register) —
+;; wasm carries it natively: the rotate asymmetry, pinned from both
+;; sides like division's
+(claim xtie_rotrq_refuses
+  (goal () () (= (imp2x_fn (it_rotrq_fn)) None))
+  (steps ((compute both)) refl))
+
+;; the U64 gate: the fused condition is kind-agnostic (CEq compares
+;; the full register), the branch bodies ride the 64-bit forms
+(claim xtie_selq
+  (goal () ()
+    (=
+      (imp2x_fn (it_selq_fn))
+      (Some
+        (MkXFunc
+          2
+          (list
+            (XBlock
+              (list
+                (XBlock
+                  (list
+                    (XBrIf (CEq RDI (SImm 0)) 0)
+                    (XMovRR RDX RSI)
+                    (XBin XMul RDX (SImm 2))
+                    (XBr 1)))
+                (XMovRR RDX RSI)
+                (XBin XAdd RDX (SImm 1))))
+            (XMovRR RAX RDX))))))
   (steps ((compute both)) refl))
 
 ;; the ix_home 6→12 pin: body local 6 lands in the first callee-saved
@@ -364,6 +414,53 @@
         (iband_args (list U64 U64) (list x y)))
       (icall (S c2) (it_prog (it_addq_fn)) 0 (list x y))))
   (steps ((compute both)) refl))
+
+;; the conversion bridges at the U64 boundary: transparency and the
+;; And-mask, refl like their U32-class siblings
+(claim imp_x_extq
+  (goal ((x Int) (c Nat) (c2 Nat)) ()
+    (=
+      (xcall_fn
+        (S^ 6 c)
+        (MkXModule (list (x_of (imp2x_fn (it_extq_fn)))) 0 0)
+        0
+        (iband_args (list U32) (list x)))
+      (icall (S c2) (it_prog (it_extq_fn)) 0 (list x))))
+  (steps ((compute both)) refl))
+
+(claim imp_x_tobq
+  (goal ((x Int) (c Nat) (c2 Nat)) ()
+    (=
+      (xcall_fn
+        (S^ 6 c)
+        (MkXModule (list (x_of (imp2x_fn (it_tobq_fn)))) 0 0)
+        0
+        (iband_args (list U64) (list x)))
+      (icall (S c2) (it_prog (it_tobq_fn)) 0 (list x))))
+  (steps ((compute both)) refl))
+
+;; the U64 gate: the case split on the banded scrutinee at 2^64 —
+;; the imp_x_sel story at the wide kind, zero premises
+(claim imp_x_selq
+  (goal ((x Int) (y Int) (c Nat) (c2 Nat)) ()
+    (=
+      (xcall_fn
+        (S^ 30 c)
+        (MkXModule (list (x_of (imp2x_fn (it_selq_fn)))) 0 0)
+        0
+        (iband_args (list U64 U64) (list x y)))
+      (icall (S^ 8 c2) (it_prog (it_selq_fn)) 0 (list x y))))
+  (chain
+    (steps ((compute both)))
+    (case-on (int_eq (mod x 18446744073709551616) 0) Bool
+      ((case True
+         (chain
+           (steps ((rewrite (hyp True) lr both true ()) (compute both)))
+           refl))
+       (case False
+         (chain
+           (steps ((rewrite (hyp False) lr both true ()) (compute both)))
+           refl))))))
 
 ;; the wide twin: local 6 in RBX, zero at entry on both machines
 (claim imp_x_wide

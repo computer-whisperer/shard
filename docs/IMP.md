@@ -1411,6 +1411,82 @@ both sides).
 - REMAINING V2-2: (c) the i64 capability — the wasm model's i64
   vocabulary + the U64 legs on wasm. Then the loop tier (V2-3).
 
+**V2-2c — the wasm i64 capability (2026-07-14).** The wasm leg joins
+x86 at the full {U8, U32, U64} capability set; V2-2 is complete, and
+every capability asymmetry between the two current targets is now
+pinned from both sides.
+
+- **Model growth (wasm.shard — wasm encodings are Fable-side per the
+  I2a precedent; only x86 byte-emit rides the Opus split)**: four
+  ADDITIVE Instr ctors on the same untyped-Int stack. (I64Const c) /
+  (I64Bin Bop) with bop64_val mirroring bop_val at the wider width —
+  wrap64 arithmetic, guarded division, band-closed bitwise, shift
+  counts mod 64, rotr band-spelled at the 64-bit mask; I64ExtendI32U
+  (the value identity); I32WrapI64 (low 32, BAND-spelled — the trunc
+  idiom, the XMovRR32 precedent). encode.shard grows the i64 opcode
+  page and the ten-level sleb64 ladder.
+- **A LATENT TOTALITY BUG found and fixed in BOTH models**: the
+  kernel shift prims reduce only for counts in [0, 64), and the
+  rotate spelling's complement leg (- w (mod c w)) hits exactly 64
+  at 64-bit rotate-count ≡ 0 — so imp's own V2-1 IRotr at U64 (and
+  the first draft of the wasm i64 rotr) STUCK on rotate-by-0 instead
+  of answering. Both spellings now DOUBLE-MOD the complement leg
+  ((mod (- w (mod c w)) w) — bshl by 0 is the identity rotation),
+  which ground-collapses identically at every nonzero count; the
+  probe grid pins the corner (ipb_rotrq0/ipb_rotrq, 87→89). The
+  32-bit rotates never trip the fence (complement ≤ 32) and are
+  untouched.
+- **The differential grew 173 → 280 agree, 0 disagree**: the i64
+  tier never crosses the module boundary (functype/locals stay
+  all-i32) — operands enter as I64Const immediates, results leave
+  through i32.wrap_i64 (low half direct, high half through shr-32),
+  comparisons return their i32 directly. Vectors cover the wrap and
+  carry witnesses, count-mod-64 boundaries (count 32 must SHIFT —
+  the divergence-from-32 witness — and count 64 must mask to 0),
+  the 2^63 signed-comparison frontier, equal-low-half inequality,
+  zero-divisor traps, the extend/wrap conversions against a live
+  param, the count≡0 rotate, and every sleb64 rung including the
+  deep negatives.
+- **to_wasm rebuilt kind-directed at the expression level**: iw_exp
+  translates AT AN EXPECTED KIND (the ikchk discipline — constants
+  and op selection are kind-directed from context), so well-kinded
+  imp translates to type-correct wasm by construction; the U8/U32
+  emissions are byte-identical to their V2-2a selves (every existing
+  tie re-tied). The one type seam — comparisons produce i32 at every
+  kind — resolves twice: value-position U64 comparisons re-widen
+  through i64.extend_i32_u, and comparison-headed CONDITIONS emit
+  the comparison directly into BrIf (the fused shape, the x86 leg's
+  condition-fusion move; byte-identical for the U32 class).
+- **The new twins pin the whole capability matrix**: it_addq's wasm
+  leg lands (tie_addq_refuses retires) and it_tow gains its wasm
+  side; it_extq pins the one conversion that emits a real
+  instruction on wasm (a no-op on x86); it_selq pins fused U64
+  conditions on BOTH targets (i64 compare into BrIf; kind-agnostic
+  CEq on the full register); it_rotrq is NATIVE on wasm and refuses
+  on x86 (the rotate asymmetry — the mirror image of the old addq
+  story); it_tobq is one instruction on x86 (And-255 serves any
+  source width) and refuses on wasm (no single band-spelled
+  emission). Every bridge UNPREMISED, same iband_args statement
+  shape, every claim in every file FIRST-TRY.
+- **Scoped refusals, all loud, all named growth**: wasm — the direct
+  U64→U8 narrowing (tie_tobq_refuses; needs a band-absorption story
+  or a dedicated emission) and non-comparison U64 conditions
+  (i64.eqz enters with its loop-tier consumer); x86 — the U64
+  rotation (xtie_rotrq_refuses). Typed FUNCTION BOUNDARIES at the
+  binary encoder (i64 params/results/locals in functype and
+  localdecl) are named growth behind the first shipping U64 wasm
+  artifact — the kernel-level bridges need no encoding, and the
+  differential's vector boundaries are deliberately all-i32.
+- Gates: fast engine 32/0 (wasm model), 32/0 (encode), 52/0 (imp),
+  89/0 (probe), 84/0 (to_wasm), 74/0 (imp_scalar), 136/0 (wasm
+  bridge), 412/0 (x86 bridge), 274/0 (diff plan); V8 280/0; no new
+  files, no product-list changes (driver 48, corpus 258); corpus
+  FAIL-set unchanged at the 57 baseline.
+- NEXT: V2-3 the loop tier — xargs 6→12 (ix_out's consumer), the
+  loopkit re-land, the loop twins + worker bridges on the typed
+  machine (i64.eqz and the U64 while guards arrive here). Then the
+  sha sibling migration, impgen rebuilt as the structural walk.
+
 ## 7. Non-goals, stated once
 
 - imp as a shipped target or public surface — it is an intermediate;
