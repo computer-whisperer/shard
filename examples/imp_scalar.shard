@@ -192,6 +192,21 @@
 (fn it_addq_fn () IFn
   (MkIFn (list U64 U64) Nil Nil (IBin U64 IAdd (ILoc 0) (ILoc 1)) U64))
 
+;; the downward conversion out of U64 (refuses on wasm with the rest
+;; of the U64 tier; on x86 it is the zero-extending 32-bit mov)
+(fn it_tow_fn () IFn (MkIFn (list U64) Nil Nil (ITrunc U64 U32 (ILoc 0)) U32))
+
+;; the wide twin: seven locals — the first consumer of the x86 home
+;; file past the six SysV argument registers (body local 6 lives in a
+;; callee-saved home)
+(fn it_wide_fn () IFn
+  (MkIFn
+    (list U32 U32)
+    (list U32 U32 U32 U32 U32)
+    (list (ISet 6 (IBin U32 IAdd (ILoc 0) (ILoc 1))))
+    (ILoc 6)
+    U32))
+
 ;; --- the certs: spec ⊑ imp, fit premises once ------------------------------------
 
 (claim imp_lg_add1
@@ -697,6 +712,71 @@
     (have hr (= (mod (+ x y) 18446744073709551616) (+ x y))
       (rewrite-with
         (lemma iwrap64_id)
+        lr
+        lhs
+        ((inst x (+ x y)))
+        ((steps ((rewrite (premise 4) lr lhs true ())) refl)
+         (steps ((rewrite (premise 5) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise hr) lr lhs true ())))
+    refl))
+
+;; the downward conversion: the machine's band at the narrower kind
+(claim imp_lg_tow
+  (goal ((x Int) (c Nat))
+    ((= (le 0 x) True) (= (lt x 18446744073709551616) True))
+    (=
+      (icall (S c) (it_prog (it_tow_fn)) 0 (list x))
+      (Some (band x 4294967295))))
+  (chain
+    (steps ((compute lhs)))
+    (have hx (= (mod x 18446744073709551616) x)
+      (rewrite-with
+        (lemma iwrap64_id)
+        lr
+        lhs
+        ((inst x x))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise hx) lr lhs true ())))
+    refl))
+
+;; the wide twin: same add cert shape, through a callee-saved home
+(claim imp_lg_wide
+  (goal ((x Int) (y Int) (c Nat))
+    ((= (le 0 x) True)
+     (= (lt x 4294967296) True)
+     (= (le 0 y) True)
+     (= (lt y 4294967296) True)
+     (= (le 0 (+ x y)) True)
+     (= (lt (+ x y) 4294967296) True))
+    (= (icall (S^ 8 c) (it_prog (it_wide_fn)) 0 (list x y)) (Some (+ x y))))
+  (chain
+    (steps ((compute lhs)))
+    (have hx (= (mod x 4294967296) x)
+      (rewrite-with
+        (lemma iwrap32_id)
+        lr
+        lhs
+        ((inst x x))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise hx) lr lhs true ())))
+    (have hy (= (mod y 4294967296) y)
+      (rewrite-with
+        (lemma iwrap32_id)
+        lr
+        lhs
+        ((inst x y))
+        ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+         (steps ((rewrite (premise 3) lr lhs true ())) refl))
+        refl))
+    (steps ((rewrite (premise hy) lr lhs true ())))
+    (have hr (= (mod (+ x y) 4294967296) (+ x y))
+      (rewrite-with
+        (lemma iwrap32_id)
         lr
         lhs
         ((inst x (+ x y)))

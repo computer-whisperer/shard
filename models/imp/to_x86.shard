@@ -1,0 +1,573 @@
+;;; models/imp/to_x86.shard — the imp → x86_64 TRANSLATOR (docs/IMP.md
+;;; rung I1c; reworked kind-directed at V2, §2a): pure value-level
+;;; lowering from the neutral machine to x86 instruction values. The
+;;; second ISA leg — the one other place that imports both models.
+;;; Ordinary shard; the certs that gate its outputs live with the
+;;; twins (generate-and-check: nothing here is trusted, every
+;;; translated program is proven).
+;;;
+;;; THE V2 CONTRACT (the to_wasm mirror): translation is gated on the
+;;; well-kinded predicate (imp2x_fn checks wk_fn first), then
+;;; KIND-DIRECTED instruction selection with a program-independent
+;;; alignment. This target's capability set is {U8, U32, U64} — all
+;;; three kinds are native:
+;;;   - U64 arith/shifts ride the 64-bit forms (their wrap64 IS imp's
+;;;     op-result wrap at U64);
+;;;   - U32 arith rides the 32-bit operand forms (XBin32/XShlI32 —
+;;;     results zero-extend, so U32 is maskless-native; their mod-2^32
+;;;     IS imp's op-result wrap at U32);
+;;;   - bitwise ops and shr ride the 64-bit forms AT EVERY KIND
+;;;     (band-closed / cannot grow on in-band values — the model
+;;;     semantics are syntactically imp's exact ops);
+;;;   - IExt is a no-op (values are zero-extended already; 8→32, 8→64
+;;;     and 32→64 alike); ITrunc→U8 is the And-255 mask and
+;;;     ITrunc U64→U32 is the zero-extending XMovRR32 — both
+;;;     band-spelled on both sides.
+;;; The per-instance bridge certs are UNPREMISED (the wasm-leg
+;;; discipline: the bridge statement feeds xcall_fn through
+;;; iband_args, exactly what icall does internally), with ONE scoped
+;;; exception: the IRotr composition's left-shift leg wraps at 2^64
+;;; mid-tree, so the rotation twin TIES here but its bridge waits for
+;;; the native 32-bit rotate instruction (named growth — on wasm the
+;;; rotation bridge is already refl).
+;;;
+;;; The register machine keeps the v1 PATTERN tier: imp locals map to
+;;; homes (SysV args rdi rsi rdx rcx r8 r9 for locals 0-5, then the
+;;; callee-saved rbx rbp r12 r13 r14 r15 for body locals 6-11 — the
+;;; §2a ix_home 6→12 growth; params stay <= 6, the SysV boundary),
+;;; statements compile to the x86gen in-place shapes, and result
+;;; expressions compile left-spine into RAX with one R10
+;;; right-compound level. RAX doubles as the load scratch; no imp
+;;; local ever maps to RAX, R10, or R11.
+;;;
+;;; The control encodings are the SELF-CONTAINED label structures of
+;;; the wasm leg, with x86's fused conditions (no comparison
+;;; materialization — Cond is what jcc sees):
+;;;   (IIf c thn els)  -> XBlock( XBlock( XBrIf ⟦c⟧ 0  ⟦els⟧ XBr 1 )
+;;;                       ⟦thn⟧ )
+;;;   (IWhile (ILoc i) b) -> XBlock( XLoop( XBrIf (CEqz home_i) 1
+;;;                          ⟦b⟧ XBr 0 ) )
+;;; Refusal is loud by construction (None = no artifact): division
+;;; (the XDivU compound needs the rdx:rax preamble — named growth),
+;;; comparison ops in value position (fused conditions only), while
+;;; conditions other than a bare local, deeper right-compounds.
+
+(import "../../kernel/stdlib.shard")
+(import "imp.shard")
+(use (:: models imp imp *))
+(import "../x86/x86.shard")
+(use (:: models x86 x86 *))
+
+(fn ix_app ((a (List XInstr)) (b (List XInstr))) (List XInstr)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (ix_app t b)))))
+
+;; the home of an imp local: SysV argument order for locals 0-5, the
+;; callee-saved file for body locals 6-11 (§2a); None past twelve
+(fn ix_home ((i Int)) (Option Reg)
+  (if (int_eq i 0) (Some RDI)
+  (if (int_eq i 1) (Some RSI)
+  (if (int_eq i 2) (Some RDX)
+  (if (int_eq i 3) (Some RCX)
+  (if (int_eq i 4) (Some R8)
+  (if (int_eq i 5) (Some R9)
+  (if (int_eq i 6) (Some RBX)
+  (if (int_eq i 7) (Some RBP)
+  (if (int_eq i 8) (Some R12)
+  (if (int_eq i 9) (Some R13)
+  (if (int_eq i 10) (Some R14)
+  (if (int_eq i 11) (Some R15)
+  None)))))))))))))
+
+;; the kind-directed binary instruction: wrapping arith picks its
+;; width form (XBin32 at U32, XBin at U64); the band-closed bitwise
+;; trio rides the 64-bit forms at every kind; div/rem/comparisons/
+;; shifts refuse here (compound / fused-condition-only / dedicated
+;; count patterns)
+(fn ix_binop ((k IKind) (o IOp) (d Reg) (s Src)) (Option XInstr)
+  (match k
+    (U8 None)
+    (U32
+      (match o
+        (IAdd (Some (XBin32 XAdd d s)))
+        (ISub (Some (XBin32 XSub d s)))
+        (IMul (Some (XBin32 XMul d s)))
+        (IDiv None)
+        (IRem None)
+        (IAnd (Some (XBin XAnd d s)))
+        (IOr (Some (XBin XOr d s)))
+        (IXor (Some (XBin XXor d s)))
+        (IShl None)
+        (IShr None)
+        (IEq None)
+        (ILt None)
+        (ILe None)))
+    (U64
+      (match o
+        (IAdd (Some (XBin XAdd d s)))
+        (ISub (Some (XBin XSub d s)))
+        (IMul (Some (XBin XMul d s)))
+        (IDiv None)
+        (IRem None)
+        (IAnd (Some (XBin XAnd d s)))
+        (IOr (Some (XBin XOr d s)))
+        (IXor (Some (XBin XXor d s)))
+        (IShl None)
+        (IShr None)
+        (IEq None)
+        (ILt None)
+        (ILe None)))))
+
+;; immediate-count shifts, width-form by kind (shr needs no 32-bit
+;; twin: it cannot grow an in-band value)
+(fn ix_shl ((k IKind) (d Reg) (n Int)) (Option XInstr)
+  (match k
+    (U8 None)
+    (U32 (Some (XShlI32 d n)))
+    (U64 (Some (XShlI d n)))))
+
+(fn ix_shr ((k IKind) (d Reg) (n Int)) (Option XInstr)
+  (match k
+    (U8 None)
+    (U32 (Some (XShrI d n)))
+    (U64 (Some (XShrI d n)))))
+
+;; atoms as source operands; zero-extension is transparent (the value
+;; IS its extension on this machine)
+(fn ix_src ((e IExp)) (Option Src)
+  (measure (struct e))
+  (match e
+    ((IConst n) (Some (SImm n)))
+    ((ILoc i)
+     (match (ix_home i)
+       (None None)
+       ((Some r) (Some (SReg r)))))
+    ((IBin k o a b) None)
+    ((IRotr k a c) None)
+    ((IExt _ _ a) (ix_src a))
+    ((ITrunc _ _ a) None)
+    ((ILoad a) None)))
+
+;; does an atom read local i (the mov+bin clobber fence; compounds are
+;; conservatively True — they fall to the general path anyway)
+(fn ix_uses ((e IExp) (i Int)) Bool
+  (match e
+    ((ILoc j) (int_eq j i))
+    ((IConst n) False)
+    ((IBin k o a b) True)
+    ((IRotr k a c) True)
+    ((IExt _ _ a) True)
+    ((ITrunc _ _ a) True)
+    ((ILoad a) True)))
+
+;; rotate-right a register by a ground count within 32 bits: the
+;; shr/shl/or/and composition (no 32-bit-view rotate instruction yet;
+;; the single-instruction ror rung is named growth). R11 is the
+;; composition's scratch — no imp local ever maps to it. The
+;; left-shift leg wraps at 2^64 mid-tree, which imp's band-spelled
+;; IRotr does not spell — so rotation TIES here but its bridge waits
+;; for the native instruction (see the header).
+(fn ix_rot ((d Reg) (k Int)) (List XInstr)
+  (list
+    (XMovRR R11 d)
+    (XShrI d (mod k 32))
+    (XShlI R11 (- 32 (mod k 32)))
+    (XBin XOr d (SReg R11))
+    (XBin XAnd d (SImm 4294967295))))
+
+;; fused branch conditions: comparison of a local against an atom —
+;; kind-agnostic (in-band values compare exactly at every kind)
+(fn ix_cond ((e IExp)) (Option Cond)
+  (match e
+    ((IBin k o a b)
+     (match a
+       ((ILoc i)
+        (match (ix_home i)
+          (None None)
+          ((Some r)
+           (match (ix_src b)
+             (None None)
+             ((Some s)
+              (match o
+                (IEq (Some (CEq r s)))
+                (ILt (Some (CLtU r s)))
+                (ILe (Some (CLeU r s)))
+                (IAdd None)
+                (ISub None)
+                (IMul None)
+                (IDiv None)
+                (IRem None)
+                (IAnd None)
+                (IOr None)
+                (IXor None)
+                (IShl None)
+                (IShr None)))))))
+       ((IConst n) None)
+       ((IBin k2 o2 x y) None)
+       ((IRotr k2 x y) None)
+       ((IExt _ _ x) None)
+       ((ITrunc _ _ x) None)
+       ((ILoad x) None)))
+    ((IConst n) None)
+    ((ILoc i) None)
+    ((IRotr k a c) None)
+    ((IExt _ _ a) None)
+    ((ITrunc _ _ a) None)
+    ((ILoad a) None)))
+
+;; compile an expression into an accumulator register, LEFT-SPINE ONLY
+;; (atoms on the right); conversions append their instruction (IExt
+;; none, ITrunc the mask/mov32)
+(fn ix_acc ((dst Reg) (e IExp)) (Option (List XInstr))
+  (measure (struct e))
+  (match e
+    ((IConst n) (Some (list (XMovRI dst n))))
+    ((ILoc i)
+     (match (ix_home i)
+       (None None)
+       ((Some r) (Some (list (XMovRR dst r))))))
+    ((IBin k o a b)
+     (match o
+       (IShl
+         (match b
+           ((IConst n)
+            (if (le 0 n)
+              (if (lt n (ikw k))
+                (match (ix_shl k dst n)
+                  (None None)
+                  ((Some si)
+                   (match (ix_acc dst a)
+                     (None None)
+                     ((Some ia) (Some (ix_app ia (list si)))))))
+                None)
+              None))
+           (_ None)))
+       (IShr
+         (match b
+           ((IConst n)
+            (if (le 0 n)
+              (if (lt n (ikw k))
+                (match (ix_shr k dst n)
+                  (None None)
+                  ((Some si)
+                   (match (ix_acc dst a)
+                     (None None)
+                     ((Some ia) (Some (ix_app ia (list si)))))))
+                None)
+              None))
+           (_ None)))
+       (_
+         (match (ix_src b)
+           (None None)
+           ((Some bs)
+            (match (ix_binop k o dst bs)
+              (None None)
+              ((Some bi)
+               (match (ix_acc dst a)
+                 (None None)
+                 ((Some ia) (Some (ix_app ia (list bi))))))))))))
+    ((IRotr k a c)
+     (match k
+       (U8 None)
+       (U32
+         (match c
+           ((IConst kc)
+            (match (ix_acc dst a)
+              (None None)
+              ((Some ia) (Some (ix_app ia (ix_rot dst kc))))))
+           (_ None)))
+       (U64 None)))
+    ((IExt _ _ a) (ix_acc dst a))
+    ((ITrunc kf kt a)
+     (match (ix_acc dst a)
+       (None None)
+       ((Some ia)
+        (match kt
+          (U8 (Some (ix_app ia (list (XBin XAnd dst (SImm 255))))))
+          (U32
+            (match kf
+              (U8 None)
+              (U32 None)
+              (U64 (Some (ix_app ia (list (XMovRR32 dst dst)))))))
+          (U64 None)))))
+    ((ILoad a) None)))
+
+;; the result expression into RAX; one right-compound level rides R10
+;; (the x86gen temp convention — evaluation order matches iexp's
+;; left-then-right)
+(fn ix_res ((e IExp)) (Option (List XInstr))
+  (match (ix_acc RAX e)
+    ((Some is) (Some is))
+    (None
+      (match e
+        ((IBin k o a b)
+         (match (ix_binop k o RAX (SReg R10))
+           (None None)
+           ((Some bi)
+            (match (ix_acc RAX a)
+              (None None)
+              ((Some ia)
+               (match (ix_acc R10 b)
+                 (None None)
+                 ((Some ib) (Some (ix_app ia (ix_app ib (list bi)))))))))))
+        ((IConst n) None)
+        ((ILoc i) None)
+        ((IRotr k a c) None)
+        ((IExt _ _ a) None)
+        ((ITrunc _ _ a) None)
+        ((ILoad a) None)))))
+
+;; the direct ISet patterns: the x86gen shapes (in-place / mov+bin /
+;; load-scratch / immediate shifts / the rotation composition). None =
+;; outside the pattern tier; ix_stmts falls back to the GENERAL path
+;; (compile the expression into RAX via ix_res, deposit into the home)
+(fn ix_set ((d Reg) (i Int) (e IExp) (it (List XInstr))) (Option (List XInstr))
+  (match e
+    ((IConst n) (Some (Cons (XMovRI d n) it)))
+    ((ILoc j)
+     (match (ix_home j)
+       (None None)
+       ((Some r) (Some (Cons (XMovRR d r) it)))))
+    ((IBin k o a b)
+     (match o
+       (IShl
+         (match b
+           ((IConst n)
+            (if (le 0 n)
+              (if (lt n (ikw k))
+                (match (ix_shl k d n)
+                  (None None)
+                  ((Some si)
+                   (match a
+                     ((ILoc j)
+                      (match (ix_home j)
+                        (None None)
+                        ((Some r)
+                         (if (int_eq j i) (Some (Cons si it))
+                         (Some (Cons (XMovRR d r) (Cons si it)))))))
+                     (_ None))))
+                None)
+              None))
+           (_ None)))
+       (IShr
+         (match b
+           ((IConst n)
+            (if (le 0 n)
+              (if (lt n (ikw k))
+                (match (ix_shr k d n)
+                  (None None)
+                  ((Some si)
+                   (match a
+                     ((ILoc j)
+                      (match (ix_home j)
+                        (None None)
+                        ((Some r)
+                         (if (int_eq j i) (Some (Cons si it))
+                         (Some (Cons (XMovRR d r) (Cons si it)))))))
+                     (_ None))))
+                None)
+              None))
+           (_ None)))
+       (_
+         (match a
+           ((ILoc j)
+            (if (int_eq j i)
+              (match b
+                ((ILoad ae)
+                 (match ae
+                   ((ILoc aj)
+                    (match (ix_home aj)
+                      (None None)
+                      ((Some ar)
+                       (match (ix_binop k o d (SReg RAX))
+                         (None None)
+                         ((Some bi)
+                          (Some (Cons (XLoad8 RAX (AReg ar)) (Cons bi it))))))))
+                   ((IConst n) None)
+                   ((IBin k2 o2 x y) None)
+                   ((IRotr k2 x y) None)
+                   ((IExt _ _ x) None)
+                   ((ITrunc _ _ x) None)
+                   ((ILoad x) None)))
+                (_
+                  (match (ix_src b)
+                    (None None)
+                    ((Some bs)
+                     (match (ix_binop k o d bs)
+                       (None None)
+                       ((Some bi) (Some (Cons bi it))))))))
+            (if (ix_uses b i) None
+            (match (ix_home j)
+              (None None)
+              ((Some r)
+               (match (ix_src b)
+                 (None None)
+                 ((Some bs)
+                  (match (ix_binop k o d bs)
+                    (None None)
+                    ((Some bi) (Some (Cons (XMovRR d r) (Cons bi it))))))))))))
+           ((IConst n) None)
+           ((IBin k2 o2 x y) None)
+           ((IRotr k2 x y) None)
+           ((IExt _ _ x) None)
+           ((ITrunc _ _ x) None)
+           ((ILoad x) None)))))
+    ((IRotr k ra rk)
+     (match k
+       (U8 None)
+       (U32
+         (match rk
+           ((IConst kc)
+            (match ra
+              ((ILoc j)
+               (match (ix_home j)
+                 (None None)
+                 ((Some r)
+                  (if (int_eq j i) (Some (ix_app (ix_rot d kc) it))
+                  (Some (Cons (XMovRR d r) (ix_app (ix_rot d kc) it)))))))
+              (_ None)))
+           (_ None)))
+       (U64 None)))
+    ((IExt _ _ a) None)
+    ((ITrunc _ _ a) None)
+    ((ILoad ae)
+     (match ae
+       ((ILoc aj)
+        (match (ix_home aj)
+          (None None)
+          ((Some ar) (Some (Cons (XLoad8 d (AReg ar)) it)))))
+       ((IConst n) None)
+       ((IBin k2 o2 x y) None)
+       ((IRotr k2 x y) None)
+       ((IExt _ _ x) None)
+       ((ITrunc _ _ x) None)
+       ((ILoad x) None)))))
+
+;; the statement tier: one structural walk (the to_wasm shape); the
+;; ISet patterns are the shapes x86gen emits — in-place when the dst
+;; local is the left operand, mov+bin otherwise (fenced against the
+;; right operand reading the dst), RAX-scratch for a byte load
+(fn ix_stmts ((ss (List IStmt))) (Option (List XInstr))
+  (measure (struct ss))
+  (match ss
+    (Nil (Some Nil))
+    ((Cons s t)
+     (match (ix_stmts t)
+       (None None)
+       ((Some it)
+        (match s
+          ((ISet i e)
+           (match (ix_home i)
+             (None None)
+             ((Some d)
+              (match (ix_set d i e it)
+                ((Some r) (Some r))
+                (None
+                  (match (ix_res e)
+                    (None None)
+                    ((Some is) (Some (ix_app is (Cons (XMovRR d RAX) it))))))))))
+          ((IStore ae ve)
+           (match ae
+             ((ILoc aj)
+              (match (ix_home aj)
+                (None None)
+                ((Some ar)
+                 (match (ix_src ve)
+                   (None None)
+                   ((Some vs) (Some (Cons (XStore8 (AReg ar) vs) it)))))))
+             ((IConst n) None)
+             ((IBin k2 o2 x y) None)
+             ((IRotr k2 x y) None)
+             ((IExt _ _ x) None)
+             ((ITrunc _ _ x) None)
+             ((ILoad x) None)))
+          ((IIf c thn els)
+           (match (ix_cond c)
+             (None None)
+             ((Some xc)
+              (match (ix_stmts thn)
+                (None None)
+                ((Some ithn)
+                 (match (ix_stmts els)
+                   (None None)
+                   ((Some iels)
+                    (Some
+                      (Cons
+                        (XBlock
+                          (Cons
+                            (XBlock
+                              (Cons (XBrIf xc 0) (ix_app iels (list (XBr 1)))))
+                            ithn))
+                        it)))))))))
+          ((IWhile c b)
+           (match c
+             ((ILoc ci)
+              (match (ix_home ci)
+                (None None)
+                ((Some cr)
+                 (match (ix_stmts b)
+                   (None None)
+                   ((Some ib)
+                    (Some
+                      (Cons
+                        (XBlock
+                          (list
+                            (XLoop
+                              (Cons
+                                (XBrIf (CEqz cr) 1)
+                                (ix_app ib (list (XBr 0)))))))
+                        it)))))))
+             ((IConst n) None)
+             ((IBin k2 o2 x y) None)
+             ((IRotr k2 x y) None)
+             ((IExt _ _ x) None)
+             ((ITrunc _ _ x) None)
+             ((ILoad x) None)))))))))
+
+;; a function: THE GATE FIRST (only well-kinded fns translate), then
+;; the boundary limits — params <= 6 (the SysV boundary carries at
+;; most six) and locals <= 12 (the §2a home file) — then translated
+;; statements + the result into RAX. Extra locals start zero: the
+;; callee-saved homes hold zero in the xcall_fn boundary's fresh
+;; register file, matching imp's zero-initialized extras.
+(fn imp2x_fn ((f IFn)) (Option XFunc)
+  (if (wk_fn f)
+    (if (le (ikn (ikparams_of f)) 6)
+      (if (le (+ (ikn (ikparams_of f)) (ikn (ikextra_of f))) 12)
+        (match (ix_stmts (ibody_of f))
+          (None None)
+          ((Some ist)
+           (match (ix_res (iresult_of f))
+             (None None)
+             ((Some ir) (Some (MkXFunc (ikn (ikparams_of f)) (ix_app ist ir)))))))
+        None)
+      None)
+    None))
+
+;; total unwrapper for stating ground bridge goals
+(fn x_of ((o (Option XFunc))) XFunc
+  (match o
+    ((Some f) f)
+    (None (MkXFunc 0 Nil))))
+
+;; the loop-exit alignment adapter: the IWhile encoding exits its
+;; XLoop via XBrIf _ 1, which xeval_loop hands back as (XBrk 0 …) — so
+;; at the xeval_loop/iwhile boundary, imp's INorm corresponds to
+;; (XBrk 0 regs …) where regs = the locals in their SysV homes (xargs
+;; rebuilds exactly that record) with rax = the x86-only scratch
+;; residue, passed explicitly (0 for loops that never load; the
+;; loopkit's xlg_last shape for loops that do). ITrap ↔ XTrap.
+;; (xargs carries six homes today; its 12-home extension lands with
+;; the loop tier, this adapter's only consumer.)
+(fn ix_out ((ra Int) (r (Option IOut))) (Option XOut)
+  (match r
+    (None None)
+    ((Some o)
+     (match o
+       ((INorm ls m)
+        (match (xargs ls)
+          (None None)
+          ((Some rs) (Some (XBrk 0 (with_rax ra rs) m)))))
+       (ITrap (Some XTrap))))))

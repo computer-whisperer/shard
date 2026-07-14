@@ -1,0 +1,406 @@
+;;; examples/imp_x86_bridge.shard — imp ⊑ x86, the straight-line and
+;;; branching classes (docs/IMP.md rung I1c; re-landed on the v2 typed
+;;; machine, §2a). The same claim families as the wasm leg:
+;;;
+;;;   TIES     — the translator's output pinned as ground literals.
+;;;              The v2 U32 class emits the 32-bit operand forms
+;;;              (XBin32/XShlI32), so the U32 ties are NEW literals —
+;;;              the byte-identity-to-x86gen story ends for this class
+;;;              (the frozen direct generator emits 64-bit ops for
+;;;              what are now U32 twins; its artifacts stay green on
+;;;              their own chain). The U64 twin ties to exactly the
+;;;              old 64-bit add shape, and the bitwise chset tie is
+;;;              byte-identical to its v1 self (bitwise stays on the
+;;;              64-bit forms at every kind). Division REFUSES
+;;;              (tie_divq_refuses — the XDivU compound preamble is
+;;;              named growth), and it_wide pins the ix_home 6→12
+;;;              growth: body local 6 lands in RBX.
+;;;   BRIDGES  — xcall_fn over the translated func = icall over the
+;;;              imp twin, fed through iband_args: UNPREMISED, the
+;;;              wasm-leg discipline — the same twins, the SAME
+;;;              statement shape, the second target. The v1 x86 leg's
+;;;              2^64-modulus premise families are gone the same way
+;;;              the wasm leg's 2^32 ones went. ONE SCOPED EXCEPTION:
+;;;              the rotation twin ties but does not bridge here —
+;;;              its shr/shl/or/and composition wraps the shl leg at
+;;;              2^64 mid-tree, which imp's band-spelled IRotr does
+;;;              not spell; the bridge arrives with the native 32-bit
+;;;              rotate instruction (named growth; the wasm rotation
+;;;              bridge is already refl).
+;;;   COMPOSE  — xcomp_lg_add1: the SAME spec fn and the SAME imp
+;;;              cert that closed the wasm tower close the x86 tower
+;;;              (one twin, two targets — the M×N kill on the typed
+;;;              machine).
+;;;
+;;; PROOF GATES ONLY (DI2): no engine leg exists at imp; the x86
+;;; artifacts these certs describe are gated by the existing x86
+;;; machinery when they ship.
+
+(import "../kernel/stdlib.shard")
+(import "wasmgen_src.shard")
+(use (:: examples wasmgen_src *))
+(import "../models/imp/imp.shard")
+(use (:: models imp imp *))
+(import "../models/x86/x86.shard")
+(use (:: models x86 x86 *))
+(import "../models/imp/to_x86.shard")
+(use (:: models imp to_x86 *))
+(import "imp_scalar.shard")
+(use (:: examples imp_scalar *))
+
+;; --- the ties --------------------------------------------------------------------
+
+(claim xtie_add1
+  (goal () ()
+    (=
+      (imp2x_fn (it_add1_fn))
+      (Some (MkXFunc 1 (list (XMovRR RAX RDI) (XBin32 XAdd RAX (SImm 1)))))))
+  (steps ((compute both)) refl))
+
+(claim xtie_add
+  (goal () ()
+    (=
+      (imp2x_fn (it_add_fn))
+      (Some (MkXFunc 2 (list (XMovRR RAX RDI) (XBin32 XAdd RAX (SReg RSI)))))))
+  (steps ((compute both)) refl))
+
+(claim xtie_mix
+  (goal () ()
+    (=
+      (imp2x_fn (it_mix_fn))
+      (Some
+        (MkXFunc
+          2
+          (list
+            (XMovRR RAX RDI)
+            (XBin32 XMul RAX (SImm 2))
+            (XMovRR R10 RSI)
+            (XBin32 XSub R10 (SReg RDI))
+            (XBin32 XAdd RAX (SReg R10)))))))
+  (steps ((compute both)) refl))
+
+;; division refuses: the XDivU compound's rdx:rax preamble is named
+;; growth — no artifact rather than a wrong one
+(claim xtie_divq_refuses
+  (goal () () (= (imp2x_fn (it_divq_fn)) None))
+  (steps ((compute both)) refl))
+
+(claim xtie_sel
+  (goal () ()
+    (=
+      (imp2x_fn (it_sel_fn))
+      (Some
+        (MkXFunc
+          2
+          (list
+            (XBlock
+              (list
+                (XBlock
+                  (list
+                    (XBrIf (CEq RDI (SImm 0)) 0)
+                    (XMovRR RDX RSI)
+                    (XBin32 XMul RDX (SImm 2))
+                    (XBr 1)))
+                (XMovRR RDX RSI)
+                (XBin32 XAdd RDX (SImm 1))))
+            (XMovRR RAX RDX))))))
+  (steps ((compute both)) refl))
+
+(claim xtie_shr3
+  (goal () ()
+    (=
+      (imp2x_fn (it_shr3_fn))
+      (Some (MkXFunc 1 (list (XMovRR RAX RDI) (XShrI RAX 3))))))
+  (steps ((compute both)) refl))
+
+(claim xtie_shl4
+  (goal () ()
+    (=
+      (imp2x_fn (it_shl4_fn))
+      (Some (MkXFunc 1 (list (XMovRR RAX RDI) (XShlI32 RAX 4))))))
+  (steps ((compute both)) refl))
+
+;; rotation ties (the composition through R11); its bridge waits for
+;; the native 32-bit rotate — see the header
+(claim xtie_rotr7
+  (goal () ()
+    (=
+      (imp2x_fn (it_rotr7_fn))
+      (Some
+        (MkXFunc
+          1
+          (list
+            (XMovRR RAX RDI)
+            (XMovRR R11 RAX)
+            (XShrI RAX 7)
+            (XShlI R11 25)
+            (XBin XOr RAX (SReg R11))
+            (XBin XAnd RAX (SImm 4294967295)))))))
+  (steps ((compute both)) refl))
+
+;; the bitwise tree stays on the 64-bit forms at every kind — this
+;; literal is byte-identical to its v1 self
+(claim xtie_chset
+  (goal () ()
+    (=
+      (imp2x_fn (it_chset_fn))
+      (Some
+        (MkXFunc
+          3
+          (list
+            (XMovRR RAX RDI)
+            (XBin XAnd RAX (SReg RSI))
+            (XMovRR R10 RDI)
+            (XBin XXor R10 (SImm 4294967295))
+            (XBin XAnd R10 (SReg RDX))
+            (XBin XXor RAX (SReg R10))
+            (XMovRR RCX RAX)
+            (XMovRR RAX RCX))))))
+  (steps ((compute both)) refl))
+
+(claim xtie_tob
+  (goal () ()
+    (=
+      (imp2x_fn (it_tob_fn))
+      (Some (MkXFunc 1 (list (XMovRR RAX RDI) (XBin XAnd RAX (SImm 255)))))))
+  (steps ((compute both)) refl))
+
+(claim xtie_ext
+  (goal () ()
+    (= (imp2x_fn (it_ext_fn)) (Some (MkXFunc 1 (list (XMovRR RAX RDI))))))
+  (steps ((compute both)) refl))
+
+;; trunc64→32 is the zero-extending 32-bit mov — one instruction
+(claim xtie_tow
+  (goal () ()
+    (=
+      (imp2x_fn (it_tow_fn))
+      (Some (MkXFunc 1 (list (XMovRR RAX RDI) (XMovRR32 RAX RAX))))))
+  (steps ((compute both)) refl))
+
+;; the U64 twin rides the 64-bit forms natively — the full {U8,U32,
+;; U64} capability set, where wasm today refuses this twin
+(claim xtie_addq
+  (goal () ()
+    (=
+      (imp2x_fn (it_addq_fn))
+      (Some (MkXFunc 2 (list (XMovRR RAX RDI) (XBin XAdd RAX (SReg RSI)))))))
+  (steps ((compute both)) refl))
+
+;; the ix_home 6→12 pin: body local 6 lands in the first callee-saved
+;; home (RBX), zero-initialized by the boundary's fresh register file
+(claim xtie_wide
+  (goal () ()
+    (=
+      (imp2x_fn (it_wide_fn))
+      (Some
+        (MkXFunc
+          2
+          (list (XMovRR RBX RDI) (XBin32 XAdd RBX (SReg RSI)) (XMovRR RAX RBX))))))
+  (steps ((compute both)) refl))
+
+;; --- the bridges: imp ⊑ x86, ALL UNPREMISED --------------------------------------
+
+(claim imp_x_add1
+  (goal ((x Int) (c Nat) (c2 Nat)) ()
+    (=
+      (xcall_fn
+        (S^ 6 c)
+        (MkXModule (list (x_of (imp2x_fn (it_add1_fn)))) 0 0)
+        0
+        (iband_args (list U32) (list x)))
+      (icall (S c2) (it_prog (it_add1_fn)) 0 (list x))))
+  (steps ((compute both)) refl))
+
+(claim imp_x_add
+  (goal ((x Int) (y Int) (c Nat) (c2 Nat)) ()
+    (=
+      (xcall_fn
+        (S^ 6 c)
+        (MkXModule (list (x_of (imp2x_fn (it_add_fn)))) 0 0)
+        0
+        (iband_args (list U32 U32) (list x y)))
+      (icall (S c2) (it_prog (it_add_fn)) 0 (list x y))))
+  (steps ((compute both)) refl))
+
+;; the v1 x86 mix bridge carried the same premise families as the
+;; wasm one, in 2^64 — gone the same way
+(claim imp_x_mix
+  (goal ((x Int) (y Int) (c Nat) (c2 Nat)) ()
+    (=
+      (xcall_fn
+        (S^ 12 c)
+        (MkXModule (list (x_of (imp2x_fn (it_mix_fn)))) 0 0)
+        0
+        (iband_args (list U32 U32) (list x y)))
+      (icall (S c2) (it_prog (it_mix_fn)) 0 (list x y))))
+  (steps ((compute both)) refl))
+
+(claim imp_x_sel
+  (goal ((x Int) (y Int) (c Nat) (c2 Nat)) ()
+    (=
+      (xcall_fn
+        (S^ 30 c)
+        (MkXModule (list (x_of (imp2x_fn (it_sel_fn)))) 0 0)
+        0
+        (iband_args (list U32 U32) (list x y)))
+      (icall (S^ 8 c2) (it_prog (it_sel_fn)) 0 (list x y))))
+  (chain
+    (steps ((compute both)))
+    (case-on (int_eq (mod x 4294967296) 0) Bool
+      ((case True
+         (chain
+           (steps ((rewrite (hyp True) lr both true ()) (compute both)))
+           refl))
+       (case False
+         (chain
+           (steps ((rewrite (hyp False) lr both true ()) (compute both)))
+           refl))))))
+
+(claim imp_x_clamp2
+  (goal ((x Int) (c Nat) (c2 Nat)) ()
+    (=
+      (xcall_fn
+        (S^ 32 c)
+        (MkXModule (list (x_of (imp2x_fn (it_clamp2_fn)))) 0 0)
+        0
+        (iband_args (list U32) (list x)))
+      (icall (S^ 10 c2) (it_prog (it_clamp2_fn)) 0 (list x))))
+  (chain
+    (steps ((compute both)))
+    (case-on (lt (mod x 4294967296) 10) Bool
+      ((case True
+         (chain
+           (steps ((rewrite (hyp True) lr both true ()) (compute both)))
+           refl))
+       (case False
+         (chain
+           (steps ((rewrite (hyp False) lr both true ()) (compute both)))
+           (case-on (lt (mod x 4294967296) 100) Bool
+             ((case True
+                (chain
+                  (steps ((rewrite (hyp True) lr both true ()) (compute both)))
+                  refl))
+              (case False
+                (chain
+                  (steps ((rewrite (hyp False) lr both true ()) (compute both)))
+                  refl))))))))))
+
+(claim imp_x_shr3
+  (goal ((x Int) (c Nat) (c2 Nat)) ()
+    (=
+      (xcall_fn
+        (S^ 6 c)
+        (MkXModule (list (x_of (imp2x_fn (it_shr3_fn)))) 0 0)
+        0
+        (iband_args (list U32) (list x)))
+      (icall (S c2) (it_prog (it_shr3_fn)) 0 (list x))))
+  (steps ((compute both)) refl))
+
+(claim imp_x_shl4
+  (goal ((x Int) (c Nat) (c2 Nat)) ()
+    (=
+      (xcall_fn
+        (S^ 6 c)
+        (MkXModule (list (x_of (imp2x_fn (it_shl4_fn)))) 0 0)
+        0
+        (iband_args (list U32) (list x)))
+      (icall (S c2) (it_prog (it_shl4_fn)) 0 (list x))))
+  (steps ((compute both)) refl))
+
+(claim imp_x_chset
+  (goal ((x Int) (y Int) (z Int) (c Nat) (c2 Nat)) ()
+    (=
+      (xcall_fn
+        (S^ 18 c)
+        (MkXModule (list (x_of (imp2x_fn (it_chset_fn)))) 0 0)
+        0
+        (iband_args (list U32 U32 U32) (list x y z)))
+      (icall (S^ 8 c2) (it_prog (it_chset_fn)) 0 (list x y z))))
+  (steps ((compute both)) refl))
+
+(claim imp_x_tob
+  (goal ((x Int) (c Nat) (c2 Nat)) ()
+    (=
+      (xcall_fn
+        (S^ 6 c)
+        (MkXModule (list (x_of (imp2x_fn (it_tob_fn)))) 0 0)
+        0
+        (iband_args (list U32) (list x)))
+      (icall (S c2) (it_prog (it_tob_fn)) 0 (list x))))
+  (steps ((compute both)) refl))
+
+(claim imp_x_ext
+  (goal ((x Int) (c Nat) (c2 Nat)) ()
+    (=
+      (xcall_fn
+        (S^ 6 c)
+        (MkXModule (list (x_of (imp2x_fn (it_ext_fn)))) 0 0)
+        0
+        (iband_args (list U8) (list x)))
+      (icall (S c2) (it_prog (it_ext_fn)) 0 (list x))))
+  (steps ((compute both)) refl))
+
+(claim imp_x_tow
+  (goal ((x Int) (c Nat) (c2 Nat)) ()
+    (=
+      (xcall_fn
+        (S^ 6 c)
+        (MkXModule (list (x_of (imp2x_fn (it_tow_fn)))) 0 0)
+        0
+        (iband_args (list U64) (list x)))
+      (icall (S c2) (it_prog (it_tow_fn)) 0 (list x))))
+  (steps ((compute both)) refl))
+
+;; the U64 leg: both sides wrap at 2^64 — the same one-equation
+;; neutrality the U32 class shows at 2^32
+(claim imp_x_addq
+  (goal ((x Int) (y Int) (c Nat) (c2 Nat)) ()
+    (=
+      (xcall_fn
+        (S^ 6 c)
+        (MkXModule (list (x_of (imp2x_fn (it_addq_fn)))) 0 0)
+        0
+        (iband_args (list U64 U64) (list x y)))
+      (icall (S c2) (it_prog (it_addq_fn)) 0 (list x y))))
+  (steps ((compute both)) refl))
+
+;; the wide twin: local 6 in RBX, zero at entry on both machines
+(claim imp_x_wide
+  (goal ((x Int) (y Int) (c Nat) (c2 Nat)) ()
+    (=
+      (xcall_fn
+        (S^ 8 c)
+        (MkXModule (list (x_of (imp2x_fn (it_wide_fn)))) 0 0)
+        0
+        (iband_args (list U32 U32) (list x y)))
+      (icall (S^ 8 c2) (it_prog (it_wide_fn)) 0 (list x y))))
+  (steps ((compute both)) refl))
+
+;; --- the composition: the same tower, second target ------------------------------
+
+(claim xcomp_lg_add1
+  (goal ((x Int) (c Nat))
+    ((= (le 0 x) True)
+     (= (lt x 4294967296) True)
+     (= (le 0 (+ x 1)) True)
+     (= (lt (+ x 1) 4294967296) True))
+    (=
+      (xcall_fn
+        (S^ 6 c)
+        (MkXModule (list (x_of (imp2x_fn (it_add1_fn)))) 0 0)
+        0
+        (iband_args (list U32) (list x)))
+      (Some (lg_add1 x))))
+  (chain
+    (rewrite-with (lemma imp_x_add1) lr lhs ((inst c2 Z)) ())
+    (rewrite-with
+      (lemma imp_lg_add1)
+      lr
+      lhs
+      ((inst c Z))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 2) lr lhs true ())) refl)
+       (steps ((rewrite (premise 3) lr lhs true ())) refl)))
+    refl))

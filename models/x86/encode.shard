@@ -162,6 +162,51 @@
           (list (+ 72 (rhi nd)) 129 (+ 192 (+ (* 8 (bin_ri_ext o2)) (rlo nd))))
           (le4 v))))))
 
+;; --- 32-bit operand forms (no REX.W; §2a's zero-extending U32 path) ----------
+;;
+;; The 64-bit arms with the REX.W bit dropped: SAME opcodes, but a REX prefix
+;; is emitted ONLY when a register needs REX.R/REX.B (r8–r15). With no
+;; extension bits there is NO prefix at all — bare 32-bit operand size (a lone
+;; 0x40 would be a distinct, wasteful encoding). rex32 builds that optional
+;; prefix from the reg-field (hr) and r/m-field (hb) high bits.
+(fn rex32 ((hr Int) (hb Int)) (List Int)
+  (let ((b (+ (* 4 hr) hb))) (if (int_eq b 0) Nil (list (+ 64 b)))))
+
+;; dst OP= src (register source), 32-bit. MR direction for the arith/bitwise
+;; five (reg=src, r/m=dst); XMul is 0F AF /r RM (reg=dst, r/m=src) — enc_bin_rr's
+;; opcode choices with the W bit dropped.
+(fn enc_bin_rr32 ((o XBop) (d Reg) (s Reg)) (List Int)
+  (let ((nd (reg_num d)))
+    (let ((ns (reg_num s)))
+      (match o
+        (XMul
+          (eapp
+            (rex32 (rhi nd) (rhi ns))
+            (list 15 175 (+ 192 (+ (* 8 (rlo nd)) (rlo ns))))))
+        (o2
+          (eapp
+            (rex32 (rhi ns) (rhi nd))
+            (list (bin_rr_op o2) (+ 192 (+ (* 8 (rlo ns)) (rlo nd))))))))))
+
+;; dst OP= imm32, 32-bit. 0x81 /ext id for the arith/bitwise five (reg field =
+;; opcode extension, so only REX.B tracks dst's high bit); XMul via 0x69 /r id
+;; (reg = r/m = dst) — enc_bin_ri's opcode choices with the W bit dropped.
+(fn enc_bin_ri32 ((o XBop) (d Reg) (v Int)) (List Int)
+  (let ((nd (reg_num d)))
+    (match o
+      (XMul
+        (eapp
+          (eapp
+            (rex32 (rhi nd) (rhi nd))
+            (list 105 (+ 192 (+ (* 8 (rlo nd)) (rlo nd)))))
+          (le4 v)))
+      (o2
+        (eapp
+          (eapp
+            (rex32 0 (rhi nd))
+            (list 129 (+ 192 (+ (* 8 (bin_ri_ext o2)) (rlo nd)))))
+          (le4 v))))))
+
 (fn enc_simple ((i XInstr)) (List Int)
   (match i
     ((XMovRI r v)
@@ -191,6 +236,26 @@
     ((XShrI d k)
      (let ((n (reg_num d)))
        (list (+ 72 (rhi n)) 193 (+ 232 (rlo n)) (mod k 256))))
+    ;; 32-bit operand forms (no REX.W; results zero-extend). Bytes mirror the
+    ;; 64-bit arms above with the W bit dropped and the REX prefix elided when
+    ;; no register needs extension (rex32).
+    ((XBin32 o d s)
+     (match s
+       ((SReg sr) (enc_bin_rr32 o d sr))
+       ((SImm v) (enc_bin_ri32 o d v))))
+    ;; shl r/m32, imm8 — C1 /4 ib, mod=11 (ModRM 0xE0|r); only REX.B tracks the
+    ;; high register bit. The CPU masks a 32-bit shift count to 5 bits, so the
+    ;; raw imm8 (mod k 256) reproduces the model's (mod k 32) for every k.
+    ((XShlI32 d k)
+     (let ((n (reg_num d)))
+       (eapp (rex32 0 (rhi n)) (list 193 (+ 224 (rlo n)) (mod k 256)))))
+    ;; mov r32, r32 — 89 /r MR (reg=src, r/m=dst), the zero-extending truncate.
+    ((XMovRR32 d s)
+     (let ((nd (reg_num d)))
+       (let ((ns (reg_num s)))
+         (eapp
+           (rex32 (rhi ns) (rhi nd))
+           (list 137 (+ 192 (+ (* 8 (rlo ns)) (rlo nd))))))))
     ;; div r64 (REX.W + F7 /6, mod=11): the compound rdx:rax unsigned divide;
     ;; the operand is the r/m field so only REX.B tracks the high register bit
     ;; (like enc_test_r's single-operand REX). ModRM = 0xC0 | (6<<3) | (r&7).

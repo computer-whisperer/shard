@@ -218,6 +218,22 @@
     (XOr (bor a b))
     (XXor (bxor a b))))
 
+;; the 32-bit operand forms' semantics (IMP.md §2a — U32's
+;; maskless-native path): results zero-extend into the full register
+;; (the x86_64 32-bit-op rule). Arithmetic is congruence-honest at
+;; mod 2^32 — the low-half sum IS the full-register sum mod 2^32, so
+;; no operand truncation is spelled (mod stays the arithmetic idiom);
+;; the bitwise trio truncates its result (bitwise commutes with
+;; truncation; band stays the bit idiom).
+(fn xbop32_val ((o XBop) (a Int) (b Int)) Int
+  (match o
+    (XAdd (mod (+ a b) 4294967296))
+    (XSub (mod (- a b) 4294967296))
+    (XMul (mod (* a b) 4294967296))
+    (XAnd (band (band a b) 4294967295))
+    (XOr (band (bor a b) 4294967295))
+    (XXor (band (bxor a b) 4294967295))))
+
 (fn xsrc ((rs Regs) (s Src)) Int
   (match s
     ((SReg r) (rget rs r))
@@ -248,6 +264,15 @@
   ;; count to 6 bits — spelled (mod k 64) in the semantics.
   (XShlI Reg Int)
   (XShrI Reg Int)
+  ;; 32-bit operand forms (no REX.W; results zero-extend — §2a's
+  ;; maskless-native U32 path): the arith/shl wrap at 2^32 where the
+  ;; 64-bit forms wrap at 2^64, and the 32-bit mov IS the
+  ;; truncate-to-32 (band-spelled, imp's ITrunc idiom). The 64-bit
+  ;; forms serve U32 bitwise/shr directly (band-closed / cannot grow
+  ;; on in-band values), so no 32-bit twins of those are needed.
+  (XBin32 XBop Reg Src)
+  (XShlI32 Reg Int)
+  (XMovRR32 Reg Reg)
   (XDivU Reg)
   (XLoad8 Reg Addr)
   (XStore8 Addr Src)
@@ -312,6 +337,16 @@
         (Some (XNorm (rset rs d (wrap64 (bshl (rget rs d) (mod k 64)))) mem)))
        ((XShrI d k)
         (Some (XNorm (rset rs d (bshr (rget rs d) (mod k 64))) mem)))
+       ((XBin32 o d s)
+        (Some (XNorm (rset rs d (xbop32_val o (rget rs d) (xsrc rs s))) mem)))
+       ;; shl32: the count masks to 5 bits (hardware); the result is
+       ;; congruence-honest at mod 2^32 (shifting is multiplication)
+       ((XShlI32 d k)
+        (Some
+          (XNorm (rset rs d (mod (bshl (rget rs d) (mod k 32)) 4294967296)) mem)))
+       ;; mov r32, r32 zero-extends: the one-instruction truncate-to-32
+       ((XMovRR32 d s)
+        (Some (XNorm (rset rs d (band (rget rs s) 4294967295)) mem)))
        ;; the compound unsigned divide (DIV r/m64, one machine instruction;
        ;; NO immediate form exists — the divisor rides a register): the
        ;; 128-bit dividend rdx:rax by the operand; quot -> rax, rem -> rdx.

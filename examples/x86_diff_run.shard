@@ -200,6 +200,80 @@
 
 (fn shr_f ((k Int)) XFunc (MkXFunc 1 (list (XMovRR RAX RDI) (XShrI RAX k))))
 
+;; --- 32-bit operand forms (the U32 zero-extending tier) ----------------------
+;; The 32-bit ops zero-extend into the full register, so the SysV result (rax)
+;; reads back with its high half zero. Args arrive in the full 64-bit register;
+;; a garbage-high argument witnesses the congruence-honest truncation (the
+;; model reads the WHOLE register and reduces mod 2^32, the CPU reads the low
+;; half — they must agree). result in rax.
+
+;; add32/sub32/mul32(a,b) = (a OP b) mod 2^32  (register source; MR / 0F AF RM)
+(fn add32_f () XFunc
+  (MkXFunc 2 (list (XMovRR RAX RDI) (XBin32 XAdd RAX (SReg RSI)))))
+
+(fn sub32_f () XFunc
+  (MkXFunc 2 (list (XMovRR RAX RDI) (XBin32 XSub RAX (SReg RSI)))))
+
+(fn mul32_f () XFunc
+  (MkXFunc 2 (list (XMovRR RAX RDI) (XBin32 XMul RAX (SReg RSI)))))
+
+;; the imm32 arm (0x81 /ext id): add/sub/and/or/xor with a baked immediate,
+;; imul via 0x69 /r id
+(fn addi32_f ((k Int)) XFunc
+  (MkXFunc 1 (list (XMovRR RAX RDI) (XBin32 XAdd RAX (SImm k)))))
+
+(fn subi32_f ((k Int)) XFunc
+  (MkXFunc 1 (list (XMovRR RAX RDI) (XBin32 XSub RAX (SImm k)))))
+
+(fn muli32_f ((k Int)) XFunc
+  (MkXFunc 1 (list (XMovRR RAX RDI) (XBin32 XMul RAX (SImm k)))))
+
+(fn and32_f ((k Int)) XFunc
+  (MkXFunc 1 (list (XMovRR RAX RDI) (XBin32 XAnd RAX (SImm k)))))
+
+(fn or32_f ((k Int)) XFunc
+  (MkXFunc 1 (list (XMovRR RAX RDI) (XBin32 XOr RAX (SImm k)))))
+
+(fn xor32_f ((k Int)) XFunc
+  (MkXFunc 1 (list (XMovRR RAX RDI) (XBin32 XXor RAX (SImm k)))))
+
+;; shl32(x) = (x << (k mod 32)) mod 2^32 — count masks to 5 bits (C1 /4 ib)
+(fn shl32_f ((k Int)) XFunc (MkXFunc 1 (list (XMovRR RAX RDI) (XShlI32 RAX k))))
+
+;; mov32(x) = x & 0xFFFFFFFF — the one-instruction zero-extending truncate
+(fn mov32_f () XFunc (MkXFunc 1 (list (XMovRR32 RAX RDI))))
+
+;; mixed 64/32 on ONE register: a 64-bit add lifts rax above 2^32, then a
+;; 32-bit add discards that high half (eax = 5 + 1 = 6, zero-extends)
+(fn mix_f () XFunc
+  (MkXFunc
+    0
+    (list
+      (XMovRI RAX 4294967296)
+      (XBin XAdd RAX (SImm 5))
+      (XBin32 XAdd RAX (SImm 1)))))
+
+;; --- r8–r15 operand witnesses (REX.R/REX.B WITHOUT REX.W) --------------------
+;; garbage materialized in a high register, a 32-bit op on it, result moved to
+;; rax with a 64-bit mov (which preserves the already-zero-extended value).
+
+;; mov32 through r8 (source in reg field -> REX.R): eax = low32(r8)
+(fn movr8_f () XFunc (MkXFunc 1 (list (XMovRR R8 RDI) (XMovRR32 RAX R8))))
+
+;; add32 in r8 with r9 source (REX.R + REX.B, no W)
+(fn addr8_f () XFunc
+  (MkXFunc
+    2
+    (list
+      (XMovRR R8 RDI)
+      (XMovRR R9 RSI)
+      (XBin32 XAdd R8 (SReg R9))
+      (XMovRR RAX R8))))
+
+;; shl32 in r10 (REX.B, no W)
+(fn shlr10_f ((k Int)) XFunc
+  (MkXFunc 1 (list (XMovRR R10 RDI) (XShlI32 R10 k) (XMovRR RAX R10))))
+
 ;; register modules have no memory; memory modules bound [DATA_BASE, +0x10000)
 (fn mreg ((f XFunc)) XModule (MkXModule (Cons f Nil) 0 0))
 
@@ -436,6 +510,60 @@
       (shblock "shr7" (shr_f 7))
       (shblock "shr25" (shr_f 25))
       (shblock "shr63" (shr_f 63))
-      (shblock "shr65" (shr_f 65)))))
+      (shblock "shr65" (shr_f 65))
+      ;; --- 32-bit operand forms (the U32 zero-extending tier) --------------
+      ;; add32/sub32/mul32 wrap witnesses + garbage-high congruence probes
+      (mod_line "add32" (add32_f))
+      (xcase "add32" (mreg (add32_f)) (list 4294967295 1) 20)
+      (xcase "add32" (mreg (add32_f)) (list 4294967296 4294967296) 20)
+      (xcase "add32" (mreg (add32_f)) (list 4886718345 5) 20)
+      (mod_line "sub32" (sub32_f))
+      (xcase "sub32" (mreg (sub32_f)) (list 0 1) 20)
+      (xcase "sub32" (mreg (sub32_f)) (list 5 4886718345) 20)
+      (mod_line "mul32" (mul32_f))
+      (xcase "mul32" (mreg (mul32_f)) (list 4294967295 4294967295) 20)
+      (xcase "mul32" (mreg (mul32_f)) (list 65536 65536) 20)
+      (xcase "mul32" (mreg (mul32_f)) (list 4294967299 8589934597) 20)
+      ;; the imm32 arm (0x81 /ext id; imul 0x69 /r id)
+      (mod_line "muli32" (muli32_f 65536))
+      (xcase "muli32" (mreg (muli32_f 65536)) (list 65536) 20)
+      (xcase "muli32" (mreg (muli32_f 65536)) (list 3) 20)
+      (mod_line "addi32" (addi32_f 1))
+      (xcase "addi32" (mreg (addi32_f 1)) (list 4294967295) 20)
+      (xcase "addi32" (mreg (addi32_f 1)) (list 4886718345) 20)
+      (mod_line "subi32" (subi32_f 1))
+      (xcase "subi32" (mreg (subi32_f 1)) (list 0) 20)
+      (xcase "subi32" (mreg (subi32_f 1)) (list 4294967296) 20)
+      (mod_line "and32" (and32_f 252645135))
+      (xcase "and32" (mreg (and32_f 252645135)) (list 4886718345) 20)
+      (mod_line "or32" (or32_f 4026531840))
+      (xcase "or32" (mreg (or32_f 4026531840)) (list 4294967551) 20)
+      (mod_line "xor32" (xor32_f 4294967295))
+      (xcase "xor32" (mreg (xor32_f 4294967295)) (list 4886718345) 20)
+      ;; shl32: count-masking (33 -> 1) + wrap + garbage-high congruence
+      (mod_line "shl32c1" (shl32_f 1))
+      (xcase "shl32c1" (mreg (shl32_f 1)) (list 5) 20)
+      (xcase "shl32c1" (mreg (shl32_f 1)) (list 2147483648) 20)
+      (xcase "shl32c1" (mreg (shl32_f 1)) (list 4294967295) 20)
+      (mod_line "shl32c4" (shl32_f 4))
+      (xcase "shl32c4" (mreg (shl32_f 4)) (list 4294967551) 20)
+      (mod_line "shl32c33" (shl32_f 33))
+      (xcase "shl32c33" (mreg (shl32_f 33)) (list 1) 20)
+      (xcase "shl32c33" (mreg (shl32_f 33)) (list 5) 20)
+      ;; XMovRR32: zero-extension of a garbage-high source
+      (mod_line "mov32" (mov32_f))
+      (xcase "mov32" (mreg (mov32_f)) (list 4886718345) 20)
+      (xcase "mov32" (mreg (mov32_f)) (list 4294967296) 20)
+      ;; mixed 64/32 on one register
+      (mod_line "mix" (mix_f))
+      (xcase "mix" (mreg (mix_f)) (list) 20)
+      ;; r8–r15 witnesses (REX.R/REX.B without REX.W)
+      (mod_line "movr8" (movr8_f))
+      (xcase "movr8" (mreg (movr8_f)) (list 4886718345) 20)
+      (mod_line "addr8" (addr8_f))
+      (xcase "addr8" (mreg (addr8_f)) (list 4294967295 1) 20)
+      (xcase "addr8" (mreg (addr8_f)) (list 4886718345 8589934597) 20)
+      (mod_line "shlr10" (shlr10_f 1))
+      (xcase "shlr10" (mreg (shlr10_f 1)) (list 2147483648) 20))))
 
 (fn main ((w World)) World (exit 0 (write (emit) w)))

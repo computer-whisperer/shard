@@ -1357,6 +1357,60 @@ file is UNPREMISED. Every claim in all three files passed first-try.
   rebuilt kind-directed, the x86 bridges re-landed; (c) the i64
   capability — the wasm model's i64 vocabulary + the U64 legs.
 
+**V2-2b — the x86 leg, kind-directed (2026-07-14).** The second
+target confirms the v2 thesis: the x86 bridges are UNPREMISED by the
+same iband_args statement shape, and this target's capability set is
+the full {U8, U32, U64} from day one (U64 is native where wasm still
+refuses it — the doctrine's first two-target asymmetry, pinned from
+both sides).
+
+- **Model growth (x86.shard — semantics Fable-side, encodings +
+  silicon vectors Opus-delegated per the standing split)**: three
+  ADDITIVE ctors. (XBin32 op d s) — the 32-bit operand forms;
+  arithmetic is congruence-honest at mod 2^32 with NO operand
+  truncation spelled (the low-half sum IS the full-register sum mod
+  2^32), bitwise truncates its result; results zero-extend (the
+  x86_64 rule, U32's maskless-native path). (XShlI32 d k) — count
+  masked mod 32, result mod 2^32. (XMovRR32 d s) — the
+  zero-extending 32-bit mov, band-spelled: the one-instruction
+  truncate-to-32.
+- **The width-form selection law (to_x86 rebuilt)**: wrapping arith
+  picks its form by kind (XBin32 at U32, XBin at U64); the
+  band-closed bitwise trio and shr ride the 64-bit forms AT EVERY
+  KIND (they are syntactically imp's exact ops — the chset tie is
+  byte-identical to its v1 self); IShl picks XShlI32/XShlI; IExt is
+  a no-op at every widening pair; ITrunc→U8 is And-255, ITrunc
+  U64→U32 is XMovRR32. imp2x_fn gates on wk_fn first, params ≤ 6
+  (the SysV boundary), locals ≤ 12 — **ix_home 6→12**: body locals
+  6-11 in the callee-saved file (rbx rbp r12-r15), zero at entry in
+  the boundary's fresh register file = imp's zero-init (xargs needs
+  no change until the loop tier's ix_out). Pinned by the it_wide
+  twin (7 locals, local 6 in RBX) — tie + unpremised bridge + imp
+  cert.
+- **The U32 tie literals are NEW** (XBin32 forms): the
+  byte-identity-to-x86gen story ends for the U32 class — the frozen
+  direct generator emits 64-bit ops for what are now U32 twins; its
+  own artifacts stay green on their own chain. Division still
+  refuses (xtie_divq_refuses; the rdx:rax preamble is named
+  growth). New conversion twins: it_tow (ITrunc U64→U32; wasm
+  refuses it with the U64 tier) rides XMovRR32.
+- **The one scoped non-refl**: the IRotr composition's left-shift
+  leg wraps at 2^64 mid-tree, which imp's band-spelled IRotr does
+  not spell — the rotation twin TIES on x86 but its bridge waits
+  for the native 32-bit rotate instruction (named growth; the wasm
+  rotation bridge is already refl). Every OTHER bridge:
+  compute-both refl or a bare case split on the banded scrutinee.
+  xcomp_lg_add1 closes the same spec through the same imp cert on
+  the second target — the M×N kill on the typed machine.
+- Gates: fast engine 355/0 (to_x86), 70/0 (imp_scalar + tow/wide),
+  401/0 (x86 bridge) — every claim first-try; driver 48 products
+  green; corpus FAIL-set unchanged at the 57 baseline (258
+  targets); silicon differential green over the grown vector set
+  (the Opus-delegated encode.shard arms + wrap/truncation/
+  count-mask witnesses).
+- REMAINING V2-2: (c) the i64 capability — the wasm model's i64
+  vocabulary + the U64 legs on wasm. Then the loop tier (V2-3).
+
 ## 7. Non-goals, stated once
 
 - imp as a shipped target or public surface — it is an intermediate;
