@@ -1614,6 +1614,95 @@ slice: 349 claims, every machine-facing tier re-proven.
   (the recognizer tiers retire; the sha ISA legs fall out of the
   rebuilt generator over this sibling), then I2e (./sha256sum).
 
+**V2-5 — impgen rebuilt: the structural walk over well-kinded imp
+(2026-07-14).** The recognizer era ends. Four commits: the probe, the
+translator growth it required, and the two generated tiers.
+
+- **The probe (examples/iwg_probe.shard, kept as the form's pin).**
+  The loop tier's statement form, kernel-validated by hand before the
+  generator stamped it: the GENERIC Some-conditional worker. NO
+  per-program premises — locals fully symbolic, the iteration count a
+  GHOST in the fuel shape (imp side `(S^B (lg_fuel k 0))`, tail zero
+  so exhaustion is contradictory; machine side keeps the slack tail),
+  ONE premise: the imp loop run LANDS (`= (Some o)`). Proof leaves:
+  EXIT (guard dies, both machines exit, the premise pins o), TRAP
+  (bound tests case-on'd on the shared banded scrutinee; the
+  machine's le-(+1) spelling bridged by integer-tight KEYED-ROWS
+  arith haves — the QoL pair's first consumer), ABSURD (fuel death
+  under the premise, `(absurd …)` on the computed None = Some), STEP
+  (the premise TRANSPORTS one iteration through the same case facts;
+  the IH fires with `(inst o o)`). Both engines burn exactly one
+  tower unit per iteration (same reservoir to head and tail), so
+  lockstep holds at matched ghost towers. The v1 workers'
+  hwk/hw0/accumulator preservation apparatus has no analogue — with
+  no premises there is nothing to preserve.
+- **V2-5a — the zero-scratch loop-boundary invariant (to_x86
+  growth).** The x86 while tier emits Z(body) — one `XMovRI r 0` per
+  scratch register (RAX/R10/R11) the emitted body WRITES — at loop
+  entry and before the back-edge: scratch is 0 at every loop
+  boundary, the exit register file is exactly `(xargs locals)`, and
+  workers state entry/exit scratch as literal 0. The xlg_last residue
+  selector (a closed form that exists only for recognized families)
+  retires: ixw_bsum drops its ra binder and its unfold dance;
+  xtie_bsum pins the new emission; scratch-free bodies (fill/dblq)
+  emit nothing and stay byte-stable. Dead-store elimination is a perf
+  rung. No encoding surface.
+- **V2-5b — the scalar/branch tier.** tools/impgen re-lands at ~1.4k
+  lines (was 2.5k): premise events, condition-relative paths, Ev
+  dedup, and loop recognition are GONE. The walk mirrors iexp/iop_val
+  exactly — params enter BANDED (the statement feeds iband_args), op
+  results wrap to their node's kind — and a bridge is the case-on
+  tree over shared banded scrutinees (branch conditions, div/rem
+  guards; every False guard arm a trap leaf, both denotations None).
+  Statements UNPREMISED; the factoring unchanged (translators loaded
+  via meta/invoke and RUN; sp_e ties; wrapper by signature, its
+  memsize DISCOVERED by running it). x86 rotation bridges fence
+  tie-only (the V2-2b scoped non-refl). Outputs regenerate
+  byte-identical at the sibling raw path; the generated files are
+  RICHER than the v1 outs (U64 tier, ext/trunc/tob/tow legs) with
+  zero premises anywhere. Every generated claim green:
+  impgen_wasm_out 142/0, impgen_x86_out 410/0.
+- **V2-5c — the loop tier.** The probe form, stamped structurally:
+  per single-IWhile pin the tool emits body-copy fns, the generic
+  worker (B = the loop body's EXACT istmts need, so the base case
+  dies at the last statement's entry and only the earlier statements'
+  splits fire; hyp citations positional, computed per depth), and the
+  Some-CONDITIONAL denotation — a plain `call_fn_mem = icall_mem`
+  equality premised only on the imp run landing, proof = case-on the
+  banded iwhile term (None arm absurd), the worker citation, case-on
+  the outcome, and exit-locals spine exposure to the result local's
+  depth (Nil arms close: both machines trap on short lists). fill/
+  sum/dblq: every wasm claim green (140/0), every x86 tie + worker
+  green (432/0 — the zero-scratch invariant delivering literal-0
+  IH re-entry). The four outs are corpus targets and 'impgen+'check
+  driver product pairs again (the I2d-2b DERIVE contract unchanged).
+- **The named x86 joint: il_wlen.** The x86 loop DENOTATIONS emit
+  worker-plus-note for now: ix_out rebuilds the register file via
+  `(xargs lc2)`, which needs the exit-locals ARITY to compute, and
+  the impossible-length case arms want iwhile LENGTH PRESERVATION —
+  an honest imp-side model fact (il_wlen + the istmts/istmt/ilset
+  chain + ilen_nonneg), to be proved ONCE in models/imp and cited by
+  the generated refutations, never synthesized per program. The wasm
+  leg needs nothing (iw_out carries the locals list opaquely).
+- **Fences (note-and-tie, all named growth):** loop bodies with
+  branches or nested loops (every sha loop body is straight-line),
+  comparison while-guards (to_x86 already refuses them), results
+  other than IConst/ILoc, stores whose VALUE walk carries splits
+  (machine and imp order value-vs-bounds differently), comparisons in
+  value position, multi-statement bodies around a loop (the sha
+  statement-level tier is the next rung).
+- **The contract change, recorded:** generated loop bridges are
+  Some-conditional; the I2d-2 meeting-lemma premise contract
+  (pointer-window order) is SUPERSEDED — a composition instantiates
+  the meeting lemma's slack tail at Z and feeds the Some fact
+  directly (ground Nat packing aligns the `lg_fuel k 0` spelling
+  under compute). Hand bridge files stand as regression pins.
+- NEXT: il_wlen + the x86 denotation flip, then the sha legs — the
+  generated statement-level (istmts ≈ eval_seq) bridges over the
+  sibling's wk-pinned bodies (the walk machinery is
+  statement-generic; the denotation tier is what specializes), then
+  I2e (./sha256sum).
+
 ## 7. Non-goals, stated once
 
 - imp as a shipped target or public surface — it is an intermediate;

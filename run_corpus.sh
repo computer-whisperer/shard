@@ -127,6 +127,11 @@ TARGETS=(
   examples/imp_loop.shard
   examples/imp_wasm_loop_bridge.shard
   examples/imp_x86_loop_bridge.shard
+  examples/impgen_wasm_out.shard
+  examples/impgen_x86_out.shard
+  examples/impgen_wasm_loop_out.shard
+  examples/impgen_x86_loop_out.shard
+  examples/iwg_probe.shard
   models/wasm/wasm.shard
   models/wasm/encode.shard
   examples/wasm_smoke.shard
