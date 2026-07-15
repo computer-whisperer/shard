@@ -131,6 +131,9 @@ TARGETS=(
   examples/impgen_x86_out.shard
   examples/impgen_wasm_loop_out.shard
   examples/impgen_x86_loop_out.shard
+  examples/imp_mixed.shard
+  examples/impgen_wasm_mixed_out.shard
+  examples/impgen_x86_mixed_out.shard
   examples/iwg_probe.shard
   examples/sqw_probe.shard
   examples/sqx_probe.shard

@@ -1835,6 +1835,124 @@ growth, then the tier + the generated outs.
   fuel chaining machine-side), the x86 rotation decision (native ror
   = the round/ext x86 unlock), then I2e (./sha256sum).
 
+**V2-5e-4 — the mixed tier: the block leg, COMPOSITIONAL (segments
+around counting loops at seq grain).** impgen's fourth bridge tier;
+the sha block body gets its generated wasm leg. Two designs were
+built; the first is a recorded dead end with a measured wall.
+
+- **The monolithic dead end (measured, then replaced).** The first
+  leg emission told the whole block as ONE claim: per-statement
+  segment peels, loop-head blocks, exit spines — one 800KB proof,
+  237 case-ons on a single spine. It was UNCHECKABLE: the fast
+  engine heap-exhausts its 64GB reserve ~50min in. Bisection
+  (truncate-the-spine series) measured LINEAR RSS accumulation
+  ~90-330MB per case-on level: per-step allocation churn scales
+  with the goal (the whole-block machine code + 12 sha-scale locals
+  carried through ~2000 steps), and the non-moving GC's high-water
+  mark never comes back down. Probe-scale greenness (K=2, ~30-instr
+  bodies) said nothing about engine capacity at sha scale (K=64,
+  ~1500 instrs). The claim FORM was fine; the PROOF SHAPE was not.
+- **The compositional leg (user-ruled option A; landed).** The
+  public claim is UNCHANGED — the statement-tier form verbatim over
+  the whole body. The proof decomposes at PIECE grain: the body
+  slices into flat SEGMENTS and LOOP PIECES (a loop piece = the
+  maximal trailing const-set run + its IWhile — the counter rides
+  with its loop, so the ground count is restored by a CONCRETE set
+  over the previous piece's exposed case-vars). Between pieces the
+  states are OPAQUE case variables; goals stay piece-sized. The
+  three legs of the decomposition:
+  - `ist_seam` (models/imp/to_wasm.shard, proven once): the imp
+    append seam — istmts over (isapp A B) at (lg_fuel (istn A)
+    (S f)) equals ist_cont of the standalone A-run, flat-A-premised
+    (ISet/IStore never touch the reservoir past the peel; loops
+    never cross a seam), standalone tail quantified so segment
+    lemmas align by slack instantiation. Rides lg_snoc (loopkit):
+    lg_fuel k (S c) = S (lg_fuel k c).
+  - **Open-spine segment lemmas** (generated, `sqs_<nm>_s<b>`): the
+    machine walk of a segment's instrs followed by ANY tail rw =
+    `es_scont` (iw_out's sibling at open-tail code grain) of the
+    standalone imp run. Machine code as a Cons-spine ending in the
+    variable rw — the worker-locals trick at code grain — so NO
+    machine append law is needed. Fuel (S^ kW (S f)): eval_instr
+    peels its own S; the adapter continues at (S f). Proof = the
+    statement-tier split spine (honest mem guards, keyed-rows
+    hlt/hle pairs) with es_scont stopped on mid computes, open at
+    trap leaves and the final leaf. Segments are CAPPED (~24 stmts)
+    — per-split churn grows with the accumulated state, so big
+    segments split into adjacent MxPS pieces (the composition
+    handles seg-seg boundaries identically).
+  - **Per-segment machine chunks by INVOKE**: the emitter evaluates
+    (iw_stmts ks segstmts) through the translator module per
+    segment — the translator cuts its own chunks; no spine-position
+    arithmetic (the q=2 const-run at the sha rounds loop broke the
+    positional cut and was the bug that forced this).
+  - **The composition CHAIN** (`cmp_<nm>_b<N>`, boundary 0 = the
+    public `imp_w_<nm>`): one statement-tier-form lemma per piece
+    boundary, emitted deepest-first, each proving ITS piece and
+    citing the next boundary's lemma at the exit leaf. (A single
+    nested composition claim was built first and checked green,
+    but nested ~500 deep — shardfmt is quadratic in nesting depth,
+    319s/115MB — so the chain replaced it; nesting stays
+    piece-deep.) Chain citations need `(inst c2 c2)` — the cited
+    lemma's imp fuel appears only on its RHS, a dangling pivot —
+    plus a boundary-stopped compute after the rewrite so iw_sout
+    unfolds to the match form the goal carries. Per segment piece —
+    isapp respell-have + fuel reshape-have + ist_seam cite (inst g)
+    + segment-lemma cite + ONE case-on of the SHARED standalone
+    istmts run (None/ITrap conflate through the adapters) +
+    il_slen arity exposure of the INorm case-vars; per loop piece —
+    concrete peel compute (walkers OPEN, loop machinery + rest fns
+    stopped) + the packed int_of_nat ladder + counter respell +
+    per-side reshape haves ((S^ (gm−q−2) c2) = (S^ Bw (lg_fuel K
+    (S^ si c2))), machine at fm−2q−4 respelled with Aw = wlen+4
+    OUTSIDE — the worker's own machine tower, so the cite matches)
+    + the counter-tied worker cite + ONE case-on of the SHARED
+    iwhile + il_wlen exposure. Machine tails fold behind
+    gb_<nm>_r<b>_w rest fns (empty rests spell Nil); the machs
+    stream advances only on LOOP pieces (segments consume the msls
+    stream). Fuels A/G from per-loop MAX constraints; reshape
+    haves absorb any oversupply. Boundary computes stop BOTH
+    walkers (istmts, eval_seq) + adapters; loop-peel computes
+    leave walkers open — the stop-set split (cstop/pstop/lstop)
+    is load-bearing.
+  - **The flat list spelling** (`spl_e`): shardfmt indents a Cons
+    spine one level per element — quadratic bytes in list length
+    (the ~1500-instr block tie alone formatted to 50MB). All
+    closed (Nil-terminated) code lists in generated files —
+    ties, gb fn bodies, worker bodies, rest fns — now spell as the
+    flat `(list …)` sugar (the same term after desugar;
+    proof-neutral; canon preserves it). Open spines (the segment
+    lemmas' variable-tail trick) keep Cons spelling — they are
+    capped at ~30 elements. The block tie: 50MB → 63KB.
+- **The counter-tied workers, tie, and wid twin are UNCHANGED from
+  the monolithic build** (they were never the problem — all green
+  at MB-scale from the start).
+- **Measured**: the sha wasm out (tie + wid + 3 workers + 13 capped
+  segment lemmas + the 15-lemma composition chain) checks 430/0 in
+  6s at 645MB peak — against the monolithic 64GB trap at ~50min.
+  The committed artifact is 11MB formatted (1.2MB raw; the residue
+  is case-ladder indentation — the cmp exposure ladders ~4.4MB,
+  segment lemmas ~2.3MB, the rounds-loop worker ~1.3MB — a fmt
+  depth cost, not a spelling one; fmt runs 31s). The dev pin
+  (examples/imp_mixed.shard → impgen_wasm_mixed_out) mirrors
+  examples/sqmc_probe.shard (the hand-proven blueprint, corpus pin)
+  at 120/0 / 4MB / 204ms.
+- **Dispatch**: has_while + lp_pieces-fits → loop tier; has_while
+  otherwise → mixed; memful straight-line → statement tier; memless
+  → scalar. x86 → tie + honest note (the sha block refuses at the
+  ext body's IRotr with the V2-2b rotation message; the native
+  32-bit rotate = the approved next slice).
+- Outputs: std/sha256/impgen_{wasm,x86}_out.shard regenerate
+  deterministically; all four pre-existing example outs re-landed
+  under the flat list spelling (ties respelled — proof-neutral,
+  the same claims); the imp_mixed pins registered as impgen DERIVE
+  products + corpus targets; probes sqmw/sqm2/sqmc ride the
+  corpus.
+- NEXT: the native x86 rotate slice (model growth approved
+  2026-07-15 — unlocks the round/ext/block x86 legs), then I2e
+  (./sha256sum: weld = hand block walk ∘ imp_w_shblock).
+
+
 ## 7. Non-goals, stated once
 
 - imp as a shipped target or public surface — it is an intermediate;
