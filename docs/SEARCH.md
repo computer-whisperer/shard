@@ -1494,6 +1494,49 @@ engine-level rejections.  Changing that policy would change only the probe.
 This cross-model result is the important scope test: neither general search
 component contains an imp or Wasm name.
 
+The same engine now reproduces the calculator search from
+`~/workspace/mlx86`, this time over the real Shard x86_64 model.  Inspection of
+the historical source matters: despite the calculator name and a four-arm
+switch, its checked-in `op` was fixed to zero.  The actual benchmark was
+therefore byte addition over forty deterministic `(a,b)` pairs.  A 512-byte
+x86 genome ran with zeroed registers against bytes `a`, `b`, `op`, and `o` at
+addresses 0 through 3.
+
+`typed_x86_calculator.shard` transcribes the old LCG and all forty pairs, while
+moving the search boundary to the current model's ordinary SysV entry
+registers.  Its bare-item scope is the whole ISA configuration: generic list
+constructors; `XMovRR`/`XBin`; `RAX`/`RDI`/`RSI`; `SReg`; and
+`XAdd`/`XSub`.  No x86 name was added to `typed_expr` or `typed_grammar`:
+
+    depth 4; generated 7,318; accepted 757; rejected 6,561
+    13 behaviors; 8 solutions
+    BEST 383 = [XMovRR RAX RDI, XBin XAdd RAX (SReg RSI)]
+
+The task admits exactly the programs of length at most two.  Its 757 accepted
+members are `1 + 27 + 27^2`; the deeper ragged grammar edge is rejected before
+the forty-case observer.  The eight solutions are useful census evidence in
+miniature: move-vs-add-from-zero and whether the sum is first accumulated in
+`RAX`, `RDI`, or `RSI` are gauge spellings of the same behavior.  The minimum
+rank chooses the expected `mov rax,rdi; add rax,rsi` representative.
+
+`gen/x86_calculator_refinement.shard` is the G4 half.  It proves the searched
+body computes `wrap64(a+b)` for arbitrary integers and separately replays the
+old ABI as a six-instruction load/add/store program from a zero register file,
+with input bytes at addresses 0/1 and output at 3.  The old encoding had
+absolute 32-bit addresses; the current x86_64 model deliberately has
+register-indirect addressing, so the faithful witness materializes pointers 1
+and 3.  The memory proof closes through `std/mem`'s public framing theorems,
+not its representation.
+
+This also exposes the next honest boundary.  Direct reflected scope is enough
+for the compact register program, while exhaustively enumerating the six-step
+memory spelling from a broad flat ISA scope would be combinatorial theater.
+`TgEnv` already has the right generic mechanism—named zones and routed
+slots—but `typed_expr` still lacks the reflected task codec noted below.  That
+codec, or a narrowing executor consuming the same zones, is the general route
+to searching the faithful long form without installing a calculator template
+set in the engine.
+
 The candidate need not be an ADT program.  `typed_shard_call.shard` exposes
 the ordinary Shard function `lg_add1`, `True`/`False`, and the generic `If`
 rule.  Its 24 closed expressions execute normally through the probe; the

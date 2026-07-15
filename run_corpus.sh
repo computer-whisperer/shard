@@ -319,8 +319,10 @@ TARGETS=(
   tools/search/tasks/typed_imp_mix.shard
   tools/search/tasks/typed_shard_call.shard
   tools/search/tasks/typed_wasm_add1.shard
+  tools/search/tasks/typed_x86_calculator.shard
   tools/search/gen/imp_add1_refinement.shard
   tools/search/gen/imp_mix_refinement.shard
+  tools/search/gen/x86_calculator_refinement.shard
 )
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -470,6 +472,16 @@ fi
 echo "=== search: native Shard call/if scope pin ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/typed_expr.shard tools/search/tasks/typed_shard_call.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# Portability/flex pin: the unchanged reflected engine searches the current
+# x86 model over the exact forty-pair battery from the old mlx86 calculator.
+# Its bare-item task scope is the entire ISA configuration.
+echo "=== search: typed x86 calculator pin ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/typed_expr.shard tools/search/tasks/typed_x86_calculator.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
