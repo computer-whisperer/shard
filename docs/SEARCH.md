@@ -1838,9 +1838,21 @@ three two-member domains under a semantic query that demands none of them:
 
 Thus grammar vocabulary that cannot contain a residual redex remains a true
 don't-care, while an unavoidable checked redex kills the full hole domain.
-The current implementation performs this consensus on demand; compiling and
-memoizing the unconditional `(rule state, grammar hole)` results is the next
-scaling step for repeated checks across many regions.
+`ms_prepare` now amortizes the stable part of this analysis.  It extracts every
+non-variable pattern state from the selected residual rules and classifies that
+state against every complete grammar-hole domain.  Only unconditional
+`Yes`/`No` results are retained in `MsPrepared`; blocked results are omitted
+because descendant assignments may refine them.  Facts are indexed first by
+grammar hole, so a recursive check scans only that hole's pattern row rather
+than the complete preparation table.  SUPERPOSE prepares once at
+the public drive boundary and reuses those facts throughout its recursive
+region loop.  The generic probe compiles 12 such facts and checks that direct
+and prepared classification agree on clear, redex, and mixed domains.
+
+Whole-subtree consensus is still assembled on demand from those match facts.
+A further compiled layer could cache unconditional subtree `Clear`/`Redex`
+verdicts or build the complete blocked-hole decision DAG; unlike match facts,
+that layer must preserve rule order, common citations, and dependency choices.
 
 `typed_observer_conjunctive.shard` is the non-ISA end-to-end pin.  Its candidate
 is simply `Trio Tagged Tagged Tagged`, with independent `Keep`/`Noise` choices.
