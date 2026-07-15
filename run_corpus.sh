@@ -293,6 +293,7 @@ TARGETS=(
   meta/invoke/prepared.shard
   meta/census/mod.req.shard
   meta/rewrite/mod.req.shard
+  meta/search/mod.req.shard
   tools/search/rev_obj.shard
   tools/search/rev.shard
   tools/search/search.shard
@@ -312,6 +313,7 @@ TARGETS=(
   tools/search/theorem_scope.shard
   tools/search/profile_census.shard
   tools/search/rewrite_probe.shard
+  tools/search/constraint_probe.shard
   tools/search/typed_rule_probe.shard
   tools/search/tasks/imp_add1.shard
   tools/search/tasks/imp_mix.shard
@@ -324,6 +326,7 @@ TARGETS=(
   tools/search/tasks/typed_append_value.shard
   tools/search/tasks/observer_model.shard
   tools/search/tasks/typed_observer_value.shard
+  tools/search/tasks/typed_observer_conjunctive.shard
   tools/search/gen/imp_add1_refinement.shard
   tools/search/gen/imp_mix_refinement.shard
   tools/search/gen/x86_calculator_refinement.shard
@@ -470,6 +473,19 @@ if [ -x bin/shard_eval ]; then
   # removes Leaf(Noise 1) only at the candidate root: Wrap(Leaf(Noise 1))
   # remains in the three-member quotient because congruence was not proved.
   bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_observer_value.shard audit
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+echo "=== search: residual theorem-constraint pin ==="
+if [ -x bin/shard_eval ]; then
+  # A coupled two-child observer law cannot be weakened into independent
+  # formation exclusions. The graduated constraint layer classifies open,
+  # redex, clean, and root-scoped regions; then both search engines agree that
+  # exactly one two-member subtree of the eight generic ADT candidates is
+  # theorem-redundant.
+  bin/shard_eval run tools/search/constraint_probe.shard
+  bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_observer_conjunctive.shard audit
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi

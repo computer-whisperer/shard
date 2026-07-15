@@ -1,0 +1,134 @@
+;;; Standalone regression for meta/search's residual theorem constraints.
+;;; The rule has two conjunctive child discriminators, so exact formation
+;;; refuses it and the lossless partition retains it.  The same residual rule
+;;; then blocks on an undecided grammar hole, detects a whole redex region,
+;;; distinguishes a clean region, and respects everywhere-vs-root proof scope.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/loader.shard")
+(import "../../meta/sketch")
+(import "../../meta/rewrite")
+(import "../../meta/search")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel loader World))
+(use (:: kernel loader write))
+(use (:: kernel loader exit))
+(use (:: meta sketch *))
+(use (:: meta rewrite *))
+(use (:: meta search *))
+
+(fn msp_q ((name Symbol)) QName
+  (QName (list (quote tools) (quote search) (quote constraint_probe)) name))
+
+(fn msp_one ((head Symbol) (value Int)) Expr
+  (Ctor (msp_q head) (Cons (IntLit value) Nil)))
+
+(fn msp_pair ((left Expr) (right Expr)) Expr
+  (Ctor (msp_q (quote Pair)) (list left right)))
+
+(fn msp_wrap ((inner Expr)) Expr
+  (Ctor (msp_q (quote Wrap)) (Cons inner Nil)))
+
+(fn msp_fail ((msg (List Int)) (w World)) World
+  (exit
+    1
+    (write (append_int "META-SEARCH-CONSTRAINT-PROBE FAIL " (append_int msg "\n")) w)))
+
+(fn msp_rule () TrsRuleR
+  (trs_rule
+    (msp_q (quote conjunctive))
+    (list (TCon (qn (quote Int)) Nil) (TCon (qn (quote Int)) Nil))
+    (msp_pair
+      (Ctor (msp_q (quote F)) (Cons (BVar 1) Nil))
+      (Ctor (msp_q (quote G)) (Cons (BVar 0) Nil)))
+    (msp_pair (BVar 1) (BVar 0))))
+
+(fn msp_grammar () Grammar
+  (Grammar
+    (list
+      (GEnt 0 (list (msp_one (quote F) 1) (msp_one (quote H) 1)))
+      (GEnt 1 (list (msp_one (quote G) 2) (msp_one (quote H) 2))))))
+
+(fn msp_root () Expr (msp_wrap (msp_pair (hole 0) (hole 1))))
+(fn msp_inner () Expr (msp_pair (hole 0) (hole 1)))
+
+(fn msp_redex_assignment () (List (Pair Int Int))
+  (list (Pair 0 0) (Pair 1 0)))
+
+(fn msp_clean_assignment () (List (Pair Int Int))
+  (list (Pair 0 0) (Pair 1 1)))
+
+(fn msp_root_scope
+  ((residual TrsProfile) (grammar Grammar) (rule_name QName) (w World))
+  World
+  (match (trs_root_profile (trs_profile_rules residual))
+    ((TrsRootProfileErr msg) (msp_fail msg w))
+    ((TrsRootProfileOk root_profile)
+     (match (ms_plan (trs_empty_profile) root_profile)
+       ((MsPlanErr msg) (msp_fail msg w))
+       ((MsPlanOk root_plan)
+        (match (ms_check 1000 root_plan grammar (msp_redex_assignment) (msp_root))
+          ((MsClear)
+           (match
+             (ms_check 1000 root_plan grammar (msp_redex_assignment) (msp_inner))
+             ((MsRedex q)
+              (if (qname_eq q rule_name)
+                (write
+                  "META-SEARCH-CONSTRAINT-PROBE PARTITION BLOCK REDUX CLEAN ROOT-SCOPED OK\n"
+                  w)
+                (msp_fail "root redex citation" w)))
+             (_ (msp_fail "root profile missed candidate-root redex" w))))
+          (_ (msp_fail "root profile leaked below Wrap" w))))))))
+
+(fn msp_everywhere
+  ((residual TrsProfile) (grammar Grammar) (rule_name QName) (w World))
+  World
+  (match (ms_plan residual (trs_empty_root_profile))
+    ((MsPlanErr msg) (msp_fail msg w))
+    ((MsPlanOk plan)
+     (match (ms_check 1000 plan grammar Nil (msp_root))
+       ((MsBlocked hole_id)
+        (if (int_eq hole_id 0)
+          (match
+            (ms_check 1000 plan grammar (msp_redex_assignment) (msp_root))
+            ((MsRedex q)
+             (if (qname_eq q rule_name)
+               (match
+                 (ms_check 1000 plan grammar (msp_clean_assignment) (msp_root))
+                 ((MsClear) (msp_root_scope residual grammar rule_name w))
+                 (_ (msp_fail "clean region was not clean" w)))
+               (msp_fail "everywhere redex citation" w)))
+            (_ (msp_fail "assigned redex region was not rejected" w)))
+          (msp_fail "unexpected first blocked hole" w)))
+       (_ (msp_fail "open conjunctive pattern did not block" w))))))
+
+(fn msp_partition ((profile TrsProfile) (rule_name QName) (w World)) World
+  (match (trs_formation profile)
+    ((TrsFormationOk _) (msp_fail "strict formation admitted conjunction" w))
+    ((TrsFormationErr _)
+     (match (trs_partition_formation profile)
+       ((TrsProfileFormationErr msg) (msp_fail msg w))
+       ((TrsProfileFormationOk projected)
+        (let
+          ((formation (trs_profile_formation projected))
+           (residual (trs_profile_residual projected)))
+          (if (trs_formation_is_empty formation)
+            (if (int_eq (ms_rule_count (trs_profile_rules residual)) 1)
+              (let ((grammar (msp_grammar)))
+                (match (g_wf grammar)
+                  ((GWErr msg) (msp_fail msg w))
+                  ((GWOk) (msp_everywhere residual grammar rule_name w))))
+              (msp_fail "partition residual count" w))
+            (msp_fail "partition approximated conjunctive rule" w))))))))
+
+(fn main ((w World)) World
+  (match (msp_rule)
+    ((TrsRuleErr msg) (msp_fail msg w))
+    ((TrsRuleOk rule)
+     (match (trs_profile (Cons rule Nil))
+       ((TrsProfileErr msg) (msp_fail msg w))
+       ((TrsProfileOk profile)
+        (msp_partition profile (trs_rule_name rule) w))))))

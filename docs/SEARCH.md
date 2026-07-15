@@ -1489,10 +1489,10 @@ A task may now also expose the optional, explicit
 names and imports do not grant them automatically.  The dynamic runner loads
 the task's CHECK closure, resolves the ordered names through that root file's
 real `RCtx`, admits only proven claims or granted requirements, compiles their
-typed equations through `meta/rewrite`, and projects the exact separable
-formation fragment into `TeSpace`.  Failure at scope, evidence, profile
-validation, or formation projection is fatal; absence of the function means
-an empty profile.
+typed equations through `meta/rewrite`, and partitions them without loss.  The
+exact separable fragment shapes `TeSpace`; valid deep or conjunctive rules are
+retained as residual search constraints.  Failure at scope, evidence, or
+profile validation is fatal; absence of the function means an empty profile.
 
 `tools/search/typed_rule_probe.shard` is the first binder regression.  A
 polymorphic `Let` template adds an `Int` BVar only to its body hole.  With
@@ -1521,6 +1521,10 @@ whole consistent subspace; holes untouched by a passing query remain
 don't-cares.  Singleton grammar entries are transparent in evaluation,
 consistent-subspace counting, and region templates, so fixed routed
 skeletons do not manufacture one-way branches or hide descendant choices.
+Residual checked reductions are classified over that same partial assignment.
+A definite redex kills its whole consistent subspace; a blocked constraint is
+allowed to wait while the semantic query tries to reject a still larger
+region, and demands its own hole only after the query passes.
 
 Every run requires exact `FOUND + KILLED = TOTAL`, validates one eager,
 kernel-typed representative per passing region against the full probe, and
@@ -1808,15 +1812,45 @@ for ISA refinement laws: the observer can be an interpreter, refinement
 relation encoded as an exact result, or another task-specific semantic map,
 without putting an ISA name in the engine.
 
+The lossless second tier now lives in `meta/search`.  Partitioning a complete
+profile leaves separable rules in `TrsFormationPlan` and preserves every other
+validated rule, in order, as an `MsPlan`.  `ms_check` interprets a grammar
+sketch plus partial choice assignment and returns `Clear`, `Blocked hole`, or
+`Redex citation`; ordinary rules scan every subterm while `TrsRootProfile`
+rules remain candidate-root-only.  The matcher consumes the current
+left-linear algebraic `TrsRule` fragment, so it does not invent an independent
+hole approximation for coupled patterns.
+
+`typed_observer_conjunctive.shard` is the non-ISA end-to-end pin.  Its candidate
+is simply `Trio Tagged Tagged Tagged`, with independent `Keep`/`Noise` choices.
+The checked observer theorem has two simultaneous child discriminators:
+
+    Trio(Noise a, Noise b, rest)  ~observe~  Trio(Keep a, Keep b, rest)
+
+Independent child exclusions would incorrectly remove the two mixed terms.
+Formation therefore removes none, while one residual rule removes exactly the
+two-member all-Noise-prefix subtree without demanding `rest`:
+
+    RAW/TOTAL 8; DEFERRED RULES 1
+    FOUND 6; KILLED 2; CONSTRAINT KILLED 2
+    exhaustive agreement: accepted 6; constrained 2; solutions 6
+
+This is the same engine contract as append or the calculator: a reflected
+environment and hole language, checked reductions with explicit application
+domains, and an observation/refinement target.  The example happens to be a
+tiny datatype so the exact settlement is easy to audit.
+
 The remaining differences are proof and constraint tiers rather than
 list-search versus machine-search engines:
 
 - candidate equality supplies unrestricted congruence; observer equality is
   initially root-only and needs checked contextual/congruence closure before it
   may descend;
-- shallow separable redexes compile directly to hole exclusions; deep patterns
-  require a regular-tree-automaton product, and repeated-variable patterns need
-  relational state rather than independent hole filters;
+- shallow separable redexes compile directly to hole exclusions; left-linear
+  deep and conjunctive patterns now prune exact partial regions as residual
+  constraints.  A regular-tree-automaton grammar product could move more of
+  that work into quotient formation, while repeated-variable patterns still
+  need equality-aware relational state;
 - partial, effectful, or fuel-bounded interpreters need conditions or a
   refinement theorem that says when the observation is stable; and
 - a useful orientation must stay inside the selected grammar and cost budget,
@@ -1827,9 +1861,10 @@ and hole language, an explicit observation/refinement boundary, checked
 reduction profiles with their application domains, a pre-miner, quotient-first
 grammar construction, and lazy semantic narrowing.  The next general mining
 step is to bucket terms by exact observer behavior, propose oriented schemas,
-and submit the resulting observer equations to the checker; deeper and
-nonlinear discoveries then wait for the corresponding generic constraint tier
-instead of being installed as unsound shallow filters.
+and submit the resulting observer equations to the checker; deeper left-linear
+discoveries can immediately enter the residual tier, while nonlinear
+discoveries wait for equality-aware matching instead of being installed as
+unsound shallow filters.
 
 `profile_census.shard` is the reusable measurement join over this mechanism.
 It accepts the same reflected heads, atoms, binders, result type, depth, and
@@ -1853,7 +1888,9 @@ relying on a universal hand ranking.
 
 Two boundaries remain.  Arbitrary `TgRule` templates are loudly refused by the
 formation-aware path because their multi-level static structure needs the full
-regular-tree automaton product; ordinary typed grammar behavior is unchanged.
+regular-tree automaton product; checked rewrite profiles can nevertheless
+retain such left-linear structure as exact residual constraints after grammar
+construction.  Ordinary typed grammar behavior is unchanged.
 Symbolic neutral formation now accepts the same profile through `NRTrs`, with
 generic left-linear `Ctor`/`Call`/literal matching and ordinary symbolic RHS
 evaluation.  The full laws driver now loads that profile from its own checked

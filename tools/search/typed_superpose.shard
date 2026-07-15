@@ -6,8 +6,9 @@
 ;;; subspace and unconsulted holes in a passing region are don't-cares.
 ;;; Exhaustive enumeration is available only as an agreement audit.
 ;;; Optional explicit congruence and observer-root profiles are authenticated
-;;; against the task's CHECK closure and projected into generation-time
-;;; formation filters; licensed redex spellings never enter the ranked space.
+;;; against the task's CHECK closure. Separable rules become generation-time
+;;; formation filters; deeper or conjunctive rules remain exact partial-region
+;;; constraints and can prune whole ranked subspaces lazily.
 ;;;
 ;;; RUN IT:
 ;;;   bin/shard_eval run tools/search/typed_superpose.shard TASK.shard
@@ -23,6 +24,7 @@
 (import "../../meta/invoke")
 (import "../../meta/invoke/prepared.shard")
 (import "../../meta/rewrite")
+(import "../../meta/search/mod.req.shard")
 (import "../../meta/spell")
 (import "typed_expr.shard")
 (import "superpose.shard")
@@ -38,6 +40,7 @@
 (use (:: meta invoke *))
 (use (:: meta invoke prepared *))
 (use (:: meta rewrite *))
+(use (:: meta search *))
 (use (:: meta spell *))
 (use (:: tools search typed_expr *))
 (use (:: tools search superpose *))
@@ -54,6 +57,7 @@
 (fn ts_reps_gate
   ((root Expr)
    (grammar Grammar)
+   (constraints MsPlan)
    (m Module)
    (want Type)
    (ctx InvokeCtx)
@@ -69,30 +73,40 @@
      (match (su_rep grammar asg root 1000000)
        (None (TsRepErr "representative fill failed"))
        ((Some candidate)
-        (match (te_typecheck m want candidate)
-          ((TeTcErr msg) (TsRepErr (append_int "representative type: " msg)))
-          ((TeTcOk)
-           (match (te_observe ctx probe candidate)
-             ((TeObsErr msg)
-              (TsRepErr (append_int "representative probe: " msg)))
-             ((TeObsReject) (TsRepErr "representative is rejected"))
-             ((TeObsOk key)
-              (if (expr_eq key target)
-                (match (sk_rank root grammar candidate)
-                  ((SkCErr msg)
-                   (TsRepErr (append_int "representative rank: " msg)))
-                  ((SkCOk rank)
-                   (ts_reps_gate
-                     root
-                     grammar
-                     m
-                     want
-                     ctx
-                     probe
-                     target
-                     rest
-                     (if (lt best 0) rank (if (lt rank best) rank best)))))
-                (TsRepErr "representative observation differs")))))))))))
+        (match (ms_check 1000000 constraints grammar Nil candidate)
+          ((MsErr msg)
+           (TsRepErr (append_int "representative constraint: " msg)))
+          ((MsBlocked _)
+           (TsRepErr "representative constraint remained blocked"))
+          ((MsRedex _) (TsRepErr "representative has a residual redex"))
+          ((MsClear)
+           (match (te_typecheck m want candidate)
+             ((TeTcErr msg)
+              (TsRepErr (append_int "representative type: " msg)))
+             ((TeTcOk)
+              (match (te_observe ctx probe candidate)
+                ((TeObsErr msg)
+                 (TsRepErr (append_int "representative probe: " msg)))
+                ((TeObsReject) (TsRepErr "representative is rejected"))
+                ((TeObsOk key)
+                 (if (expr_eq key target)
+                   (match (sk_rank root grammar candidate)
+                     ((SkCErr msg)
+                      (TsRepErr (append_int "representative rank: " msg)))
+                     ((SkCOk rank)
+                      (ts_reps_gate
+                        root
+                        grammar
+                        constraints
+                        m
+                        want
+                        ctx
+                        probe
+                        target
+                        rest
+                        (if (lt best 0) rank
+                        (if (lt rank best) rank best)))))
+                   (TsRepErr "representative observation differs")))))))))))))
 
 (type TsCandR (TsCandErr (List Int)) (TsCandOk Int Expr))
 
@@ -118,6 +132,7 @@
 (fn ts_witness_gate
   ((root Expr)
    (grammar Grammar)
+   (constraints MsPlan)
    (m Module)
    (want Type)
    (ctx InvokeCtx)
@@ -129,17 +144,23 @@
   (match (ts_witness_candidate root grammar witness)
     ((TsCandErr msg) (TsWitnessErr msg))
     ((TsCandOk rank candidate)
-     (match (te_typecheck m want candidate)
-       ((TeTcErr msg) (TsWitnessErr (append_int "witness type: " msg)))
-       ((TeTcOk)
-        (match (te_observe ctx probe candidate)
-          ((TeObsErr msg) (TsWitnessErr (append_int "witness probe: " msg)))
-          ((TeObsReject) (TsWitnessErr "witness is rejected"))
-          ((TeObsOk key)
-           (if (expr_eq key target)
-             (if (su_covered grammar root sols candidate) (TsWitnessOk rank)
-             (TsWitnessErr "witness escaped every passing region"))
-             (TsWitnessErr "witness observation differs")))))))))
+     (match (ms_check 1000000 constraints grammar Nil candidate)
+       ((MsErr msg) (TsWitnessErr (append_int "witness constraint: " msg)))
+       ((MsBlocked _) (TsWitnessErr "witness constraint remained blocked"))
+       ((MsRedex _) (TsWitnessErr "witness has a residual redex"))
+       ((MsClear)
+        (match (te_typecheck m want candidate)
+          ((TeTcErr msg) (TsWitnessErr (append_int "witness type: " msg)))
+          ((TeTcOk)
+           (match (te_observe ctx probe candidate)
+             ((TeObsErr msg)
+              (TsWitnessErr (append_int "witness probe: " msg)))
+             ((TeObsReject) (TsWitnessErr "witness is rejected"))
+             ((TeObsOk key)
+              (if (expr_eq key target)
+                (if (su_covered grammar root sols candidate) (TsWitnessOk rank)
+                (TsWitnessErr "witness escaped every passing region"))
+                (TsWitnessErr "witness observation differs")))))))))))
 
 ;; ---- optional exhaustive agreement audit ----------------------------------
 
@@ -163,7 +184,7 @@
 (type TsAuditR
   (TsAuditErr (List Int))
   (TsAuditSkip)
-  (TsAuditOk Int Int Int Int))
+  (TsAuditOk Int Int Int Int Int))
 
 (fn ts_audit
   ((enabled Bool)
@@ -171,6 +192,7 @@
    (found Int)
    (root Expr)
    (grammar Grammar)
+   (constraints MsPlan)
    (m Module)
    (want Type)
    (ctx InvokeCtx)
@@ -181,27 +203,33 @@
   TsAuditR
   (if enabled
     (match
-      (te_sweep total total root grammar m want ctx screen probe target Nil 0 0
-        0 Nil)
+      (te_sweep total total root grammar constraints m want ctx screen probe
+        target Nil 0 0 0 0 Nil)
       ((TeSweepErr msg) (TsAuditErr msg))
-      ((TeSweepOk _ accepted rejected screened ranks)
+      ((TeSweepOk _ accepted rejected screened constrained ranks)
        (if (int_eq found (te_int_len ranks))
          (match (ts_solution_coverage root grammar sols ranks)
            ((Some msg) (TsAuditErr msg))
-           (None (TsAuditOk accepted rejected screened (te_int_len ranks))))
+           (None
+             (TsAuditOk
+               accepted rejected screened constrained (te_int_len ranks))))
          (TsAuditErr "passing coverage disagrees with exhaustive solutions"))))
     (TsAuditSkip)))
 
 ;; ---- report ----------------------------------------------------------------
 
-(type TsPressure (TsPressure Int Int Int))
-  ; congruence rule count, observer-root rule count, raw grammar count
+(type TsPressure (TsPressure Int Int MsPlan Int))
+  ; congruence rule count, observer-root rule count, residual plan, raw count
+
+(fn ts_pressure_constraints ((pressure TsPressure)) MsPlan
+  (match pressure
+    ((TsPressure _ _ constraints _) constraints)))
 
 (fn ts_audit_report ((audit TsAuditR)) (List Int)
   (match audit
     ((TsAuditErr msg) (append_int "AUDIT FAIL " (append_int msg "\n")))
     ((TsAuditSkip) "AUDIT SKIPPED\n")
-    ((TsAuditOk accepted rejected screened solutions)
+    ((TsAuditOk accepted rejected screened constrained solutions)
      (te_cat
        (list
          "AUDIT ENUMERATIVE AGREEMENT OK ACCEPTED "
@@ -210,6 +238,8 @@
          (show_int rejected)
          " SCREENED "
          (show_int screened)
+         " CONSTRAINED "
+         (show_int constrained)
          " SOLUTIONS "
          (show_int solutions)
          "\n")))))
@@ -221,6 +251,7 @@
    (total Int)
    (found Int)
    (killed Int)
+   (constraint_killed Int)
    (regions Int)
    (forks Int)
    (steps Int)
@@ -230,7 +261,7 @@
    (audit TsAuditR))
   (List Int)
   (match pressure
-    ((TsPressure canon_rules observer_rules raw)
+    ((TsPressure canon_rules observer_rules constraints raw)
      (te_cat
        (list
          "SUPERPOSED-SEARCH "
@@ -243,6 +274,8 @@
          (show_int canon_rules)
          "\nOBSERVER RULES "
          (show_int observer_rules)
+         "\nDEFERRED RULES "
+         (show_int (ms_plan_rule_count constraints))
          "\nRAW "
          (show_int raw)
          "\nREMOVED "
@@ -253,6 +286,8 @@
          (show_int found)
          "\nKILLED "
          (show_int killed)
+         "\nCONSTRAINT KILLED "
+         (show_int constraint_killed)
          "\nREGIONS "
          (show_int regions)
          "\nFORKS "
@@ -287,6 +322,7 @@
    (total Int)
    (found Int)
    (killed Int)
+   (constraint_killed Int)
    (regions Int)
    (forks Int)
    (steps Int)
@@ -298,16 +334,16 @@
    (w World))
   World
   (match
-    (ts_audit audit_enabled total found root grammar m want ctx screen probe
-      target sols)
+    (ts_audit audit_enabled total found root grammar
+      (ts_pressure_constraints pressure) m want ctx screen probe target sols)
     ((TsAuditErr msg) (ts_fail (append_int "audit: " msg) w))
     (audit
       (match (te_best table root grammar (Cons best_rank Nil))
         ((TeBestErr msg) (ts_fail (append_int "best: " msg) w))
         ((TeBestOk best)
          (write
-           (ts_report path depth holes total found killed regions forks steps
-             best witness_rank pressure audit)
+           (ts_report path depth holes total found killed constraint_killed
+             regions forks steps best witness_rank pressure audit)
            w))))))
 
 (fn ts_finish_witness
@@ -327,6 +363,7 @@
    (total Int)
    (found Int)
    (killed Int)
+   (constraint_killed Int)
    (regions Int)
    (forks Int)
    (steps Int)
@@ -336,12 +373,14 @@
    (audit_enabled Bool)
    (w World))
   World
-  (match (ts_witness_gate root grammar m want ctx probe target witness sols)
+  (match
+    (ts_witness_gate root grammar (ts_pressure_constraints pressure) m want
+      ctx probe target witness sols)
     ((TsWitnessErr msg) (ts_fail msg w))
     ((TsWitnessOk witness_rank)
      (ts_finish_audit path m want ctx screen probe target table depth holes root
-       grammar total found killed regions forks steps sols best_rank
-       witness_rank pressure audit_enabled w))))
+       grammar total found killed constraint_killed regions forks steps sols
+       best_rank witness_rank pressure audit_enabled w))))
 
 (fn ts_finish
   ((path (List Int))
@@ -365,14 +404,16 @@
   World
   (match drive
     ((SuSErr msg) (ts_fail msg w))
-    ((SuSOk found killed regions forks steps sols)
+    ((SuSOk found killed constraint_killed regions forks steps sols)
      (if (int_eq (+ found killed) total)
-       (match (ts_reps_gate root grammar m want ctx probe target sols -1)
+       (match
+         (ts_reps_gate root grammar (ts_pressure_constraints pressure) m want
+           ctx probe target sols -1)
          ((TsRepErr msg) (ts_fail msg w))
          ((TsRepOk best_rank)
           (ts_finish_witness path m want ctx screen probe target witness table
-            depth holes root grammar total found killed regions forks steps sols
-            best_rank pressure audit_enabled w)))
+            depth holes root grammar total found killed constraint_killed regions
+            forks steps sols best_rank pressure audit_enabled w)))
        (ts_fail
          (te_cat
            (list
@@ -438,12 +479,14 @@
            (qn (quote __typed_superpose_data_candidate))
            root
            root
+           (ts_pressure_constraints pressure)
            query
            expected
            grammar
            memo
            (sa_new)
            (Cons Nil Nil)
+           0
            0
            0
            0
@@ -474,7 +517,7 @@
           ((SkCErr msg) (ts_fail (append_int "count: " msg) w))
           ((SkCOk total)
            (match pressure
-             ((TsPressure canon_rules observer_rules raw)
+             ((TsPressure canon_rules observer_rules constraints raw)
               (ts_drive_counted
                 path
                 m
@@ -494,6 +537,7 @@
                 (TsPressure
                   canon_rules
                   observer_rules
+                  constraints
                   (if (lt raw 0) total raw))
                 audit
                 w))))))))))
@@ -520,6 +564,7 @@
    (scope RCtx)
    (cfg TeCfg)
    (plan TrsFormationPlan)
+   (constraints MsPlan)
    (canon_rules Int)
    (observer_rules Int)
    (raw_total Int)
@@ -538,7 +583,7 @@
        target
        witness
        space
-       (TsPressure canon_rules observer_rules raw_total)
+       (TsPressure canon_rules observer_rules constraints raw_total)
        audit
        w))))
 
@@ -560,14 +605,15 @@
   (let ((scope (te_import_ctx m path src)))
     (match reductions
       ((TeReductions
-         (TeCanon _ formation canon_rules)
-         (TeObserved _ root_formation observer_rules))
+         (TeCanon _ formation _ canon_rules)
+         (TeObserved _ root_formation _ observer_rules)
+         constraints)
        (let
          ((rules (+ canon_rules observer_rules))
           (plan (trs_formation_plan formation root_formation)))
        (if (lt rules 1)
          (ts_with_filtered path m audit ctx screen probe want target witness
-           scope cfg plan canon_rules observer_rules -1 w)
+           scope cfg plan constraints canon_rules observer_rules -1 w)
          (match (te_make_space m want scope cfg)
            ((TeSpaceErr msg) (ts_fail (append_int "raw: " msg) w))
            ((TeSpaceOk raw_space)
@@ -575,8 +621,8 @@
               ((TsCountErr msg) (ts_fail (append_int "raw count: " msg) w))
               ((TsCountOk raw_total)
                (ts_with_filtered path m audit ctx screen probe want target
-                 witness scope cfg plan canon_rules observer_rules raw_total
-                 w)))))))))))
+                 witness scope cfg plan constraints canon_rules observer_rules
+                 raw_total w)))))))))))
 
 (fn ts_with_target
   ((path (List Int))

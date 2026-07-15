@@ -16,7 +16,8 @@
 ;;; structural Expr equality is the exact behavior key.  Probe None is a
 ;;; semantic-domain rejection, not a grammar failure.  Every generated member
 ;;; first passes kernel/types tc_infer at the inferred candidate type, so a
-;;; rejection cannot hide signature-builder drift.
+;;; rejection cannot hide signature-builder drift. Constraint-killed members
+;;; are counted separately before screen/probe evaluation.
 ;;;
 ;;; Why EXPLICIT bare-item scope: a task normally imports broad libraries for
 ;;; its oracle.  Module aliases remain available to oracle code but do not add
@@ -60,6 +61,7 @@
 (import "../../meta/invoke")
 (import "../../meta/invoke/prepared.shard")
 (import "../../meta/rewrite")
+(import "../../meta/search/mod.req.shard")
 (import "../../meta/spell")
 (import "checked_profile.shard")
 (import "typed_grammar.shard")
@@ -76,6 +78,7 @@
 (use (:: meta invoke *))
 (use (:: meta invoke prepared *))
 (use (:: meta rewrite *))
+(use (:: meta search *))
 (use (:: meta spell *))
 (use (:: tools search checked_profile *))
 (use (:: tools search typed_grammar *))
@@ -513,39 +516,61 @@
     (Nil 0)
     ((Cons _ rest) (+ 1 (te_symbol_len rest)))))
 
-(type TeCanon (TeCanon TrsProfile TrsFormation Int))  ; authenticated profile, formation, rule count
+(type TeCanon
+  (TeCanon TrsProfile TrsFormation TrsProfile Int))
+  ; authenticated profile, exact separable formation, residual, total count
 
 (type TeCanonR (TeCanonErr (List Int)) (TeCanonOk TeCanon))
 
 (type TeObserved
-  (TeObserved TrsRootProfile TrsFormation Int))
-  ; authenticated exact-observer profile, root formation, rule count
+  (TeObserved TrsRootProfile TrsFormation TrsRootProfile Int))
+  ; authenticated observer profile, root formation, residual, total count
 
 (type TeObservedR
   (TeObservedErr (List Int))
   (TeObservedOk TeObserved))
 
-(type TeReductions (TeReductions TeCanon TeObserved))
+(type TeReductions (TeReductions TeCanon TeObserved MsPlan))
 
 (type TeReductionsR
   (TeReductionsErr (List Int))
   (TeReductionsOk TeReductions))
 
 (fn te_canon_from_profile ((profile TrsProfile) (rules Int)) TeCanonR
-  (match (trs_formation profile)
-    ((TrsFormationErr msg) (TeCanonErr msg))
-    ((TrsFormationOk formation) (TeCanonOk (TeCanon profile formation rules)))))
+  (match (trs_partition_formation profile)
+    ((TrsProfileFormationErr msg) (TeCanonErr msg))
+    ((TrsProfileFormationOk projected)
+     (TeCanonOk
+       (TeCanon
+         profile
+         (trs_profile_formation projected)
+         (trs_profile_residual projected)
+         rules)))))
 
 (fn te_observed_from_profile ((profile TrsRootProfile) (rules Int)) TeObservedR
-  (match (trs_root_formation profile)
-    ((TrsFormationErr msg) (TeObservedErr msg))
-    ((TrsFormationOk formation)
-     (TeObservedOk (TeObserved profile formation rules)))))
+  (match (trs_partition_root_formation profile)
+    ((TrsRootFormationErr msg) (TeObservedErr msg))
+    ((TrsRootFormationOk projected)
+     (TeObservedOk
+       (TeObserved
+         profile
+         (trs_root_formation_value projected)
+         (trs_root_residual projected)
+         rules)))))
 
 (fn te_empty_reductions () TeReductions
   (TeReductions
-    (TeCanon (trs_empty_profile) (trs_empty_formation) 0)
-    (TeObserved (trs_empty_root_profile) (trs_empty_formation) 0)))
+    (TeCanon
+      (trs_empty_profile)
+      (trs_empty_formation)
+      (trs_empty_profile)
+      0)
+    (TeObserved
+      (trs_empty_root_profile)
+      (trs_empty_formation)
+      (trs_empty_root_profile)
+      0)
+    (ms_empty_plan)))
 
 (fn te_reductions_from_checked
   ((checked TgCheckedReductions) (canon_rules Int) (observer_rules Int))
@@ -557,7 +582,16 @@
        ((TeCanonOk c)
         (match (te_observed_from_profile observed observer_rules)
           ((TeObservedErr msg) (TeReductionsErr msg))
-          ((TeObservedOk o) (TeReductionsOk (TeReductions c o)))))))))
+          ((TeObservedOk o)
+           (match c
+             ((TeCanon _ _ canon_residual _)
+              (match o
+                ((TeObserved _ _ observer_residual _)
+                 (match (ms_plan canon_residual observer_residual)
+                   ((MsPlanErr msg) (TeReductionsErr msg))
+                   ((MsPlanOk constraints)
+                    (TeReductionsOk
+                      (TeReductions c o constraints)))))))))))))))
 
 (fn te_load_some_reductions
   ((path (List Int))
@@ -605,7 +639,14 @@
   (Pair TeCanonR World)
   (match names
     (Nil
-      (Pair (TeCanonOk (TeCanon (trs_empty_profile) (trs_empty_formation) 0)) w))
+      (Pair
+        (TeCanonOk
+          (TeCanon
+            (trs_empty_profile)
+            (trs_empty_formation)
+            (trs_empty_profile)
+            0))
+        w))
     ((Cons _ _)
      (match (tg_load_checked_profile path names w)
        ((Pair result w2)
@@ -734,7 +775,8 @@
 
 (type TeSweepR
   (TeSweepErr (List Int))
-  (TeSweepOk (List TeBucket) Int Int Int (List Int)))  ; buckets, accept, reject, screened, sols
+  (TeSweepOk (List TeBucket) Int Int Int Int (List Int)))
+  ; buckets, accepted, rejected, screened, constraint-killed, solutions
 
 (fn te_at ((phase (List Int)) (rank Int) (msg (List Int))) (List Int)
   (append_int
@@ -746,6 +788,7 @@
    (total Int)
    (root Expr)
    (grammar Grammar)
+   (constraints MsPlan)
    (m Module)
    (want Type)
    (ctx InvokeCtx)
@@ -756,6 +799,7 @@
    (accepted Int)
    (rejected Int)
    (screened Int)
+   (constrained Int)
    (solutions (List Int)))
   TeSweepR
   (measure
@@ -763,9 +807,14 @@
     (by arith (list 1 0))
     (by arith (list 1 1))
     (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
     (by arith (list 1 1)))
   (if (le k 0)
-    (TeSweepOk buckets accepted rejected screened (te_int_rev solutions Nil))
+    (TeSweepOk
+      buckets accepted rejected screened constrained (te_int_rev solutions Nil))
     (let ((rank (- total k)))
       (match (sk_unrank root grammar rank)
         ((SkEErr msg) (TeSweepErr (te_at "unrank" rank msg)))
@@ -777,14 +826,21 @@
               (match (te_typecheck m want candidate)
                 ((TeTcErr msg) (TeSweepErr (te_at "type" rank msg)))
                 ((TeTcOk)
-                 (match (te_screen_run ctx screen candidate)
-                   ((TeScreenErr msg) (TeSweepErr (te_at "screen" rank msg)))
-                   ((TeScreenDrop)
+                 (match (ms_check 1000000 constraints grammar Nil candidate)
+                   ((MsErr msg) (TeSweepErr (te_at "constraint" rank msg)))
+                   ((MsBlocked _)
+                    (TeSweepErr
+                      (te_at
+                        "constraint"
+                        rank
+                        "closed candidate remained blocked")))
+                   ((MsRedex _)
                     (te_sweep
                       (- k 1)
                       total
                       root
                       grammar
+                      constraints
                       m
                       want
                       ctx
@@ -794,17 +850,20 @@
                       buckets
                       accepted
                       rejected
-                      (+ screened 1)
+                      screened
+                      (+ constrained 1)
                       solutions))
-                   ((TeScreenPass)
-                    (match (te_observe ctx probe candidate)
-                      ((TeObsErr msg) (TeSweepErr (te_at "probe" rank msg)))
-                      ((TeObsReject)
+                   ((MsClear)
+                    (match (te_screen_run ctx screen candidate)
+                      ((TeScreenErr msg)
+                       (TeSweepErr (te_at "screen" rank msg)))
+                      ((TeScreenDrop)
                        (te_sweep
                          (- k 1)
                          total
                          root
                          grammar
+                         constraints
                          m
                          want
                          ctx
@@ -813,27 +872,53 @@
                          target
                          buckets
                          accepted
-                         (+ rejected 1)
-                         screened
-                         solutions))
-                      ((TeObsOk key)
-                       (te_sweep
-                         (- k 1)
-                         total
-                         root
-                         grammar
-                         m
-                         want
-                         ctx
-                         screen
-                         probe
-                         target
-                         (te_bucket_add key rank buckets)
-                         (+ accepted 1)
                          rejected
-                         screened
-                         (if (expr_eq key target) (Cons rank solutions)
-                         solutions))))))))
+                         (+ screened 1)
+                         constrained
+                         solutions))
+                      ((TeScreenPass)
+                       (match (te_observe ctx probe candidate)
+                         ((TeObsErr msg)
+                          (TeSweepErr (te_at "probe" rank msg)))
+                         ((TeObsReject)
+                          (te_sweep
+                            (- k 1)
+                            total
+                            root
+                            grammar
+                            constraints
+                            m
+                            want
+                            ctx
+                            screen
+                            probe
+                            target
+                            buckets
+                            accepted
+                            (+ rejected 1)
+                            screened
+                            constrained
+                            solutions))
+                         ((TeObsOk key)
+                          (te_sweep
+                            (- k 1)
+                            total
+                            root
+                            grammar
+                            constraints
+                            m
+                            want
+                            ctx
+                            screen
+                            probe
+                            target
+                            (te_bucket_add key rank buckets)
+                            (+ accepted 1)
+                            rejected
+                            screened
+                            constrained
+                            (if (expr_eq key target) (Cons rank solutions)
+                            solutions))))))))))
               (TeSweepErr (te_at "roundtrip" rank "rank disagrees"))))))))))
 
 ;; ---- witness and reporting --------------------------------------------------
@@ -959,11 +1044,13 @@
    (holes Int)
    (canon_rules Int)
    (observer_rules Int)
+   (deferred_rules Int)
    (raw_total Int)
    (total Int)
    (accepted Int)
    (rejected Int)
    (screened Int)
+   (constrained Int)
    (behaviors Int)
    (best (List Int))
    (solutions Int)
@@ -981,6 +1068,8 @@
       (show_int canon_rules)
       "\nOBSERVER RULES "
       (show_int observer_rules)
+      "\nDEFERRED RULES "
+      (show_int deferred_rules)
       "\nRAW "
       (show_int raw_total)
       "\nREMOVED "
@@ -993,6 +1082,8 @@
       (show_int rejected)
       "\nSCREENED "
       (show_int screened)
+      "\nCONSTRAINT KILLED "
+      (show_int constrained)
       "\nBEHAVIORS "
       (show_int behaviors)
       "\n"
@@ -1101,6 +1192,7 @@
    (depth Int)
    (root Expr)
    (grammar Grammar)
+   (constraints MsPlan)
    (holes Int)
    (canon_rules Int)
    (observer_rules Int)
@@ -1111,10 +1203,10 @@
     ((SkCErr msg) (te_fail (append_int "count: " msg) w))
     ((SkCOk total)
      (match
-       (te_sweep total total root grammar m want ictx screen probe target Nil 0
-         0 0 Nil)
+       (te_sweep total total root grammar constraints m want ictx screen probe
+         target Nil 0 0 0 0 Nil)
        ((TeSweepErr msg) (te_fail msg w))
-       ((TeSweepOk buckets accepted rejected screened solutions)
+       ((TeSweepOk buckets accepted rejected screened constrained solutions)
         (match
           (te_witness root grammar m want ictx screen probe target witness
             solutions)
@@ -1130,11 +1222,13 @@
                   holes
                   canon_rules
                   observer_rules
+                  (ms_plan_rule_count constraints)
                   (if (lt raw_total 0) total raw_total)
                   total
                   accepted
                   rejected
                   screened
+                  constrained
                   (te_bucket_len buckets)
                   best
                   (te_int_len solutions)
@@ -1153,6 +1247,7 @@
    (scope RCtx)
    (cfg TeCfg)
    (plan TrsFormationPlan)
+   (constraints MsPlan)
    (canon_rules Int)
    (observer_rules Int)
    (raw_total Int)
@@ -1162,7 +1257,7 @@
     ((TeSpaceErr msg) (te_fail msg w))
     ((TeSpaceOk (TeSpace table depth root grammar holes))
      (te_run_space path m want ictx screen probe target witness table depth root
-       grammar holes canon_rules observer_rules raw_total w))))
+       grammar constraints holes canon_rules observer_rules raw_total w))))
 
 (type TeCountR (TeCountErr (List Int)) (TeCountOk Int))
 
@@ -1189,14 +1284,15 @@
   World
   (match reductions
     ((TeReductions
-       (TeCanon _ formation canon_rules)
-       (TeObserved _ root_formation observer_rules))
+       (TeCanon _ formation _ canon_rules)
+       (TeObserved _ root_formation _ observer_rules)
+       constraints)
      (let
        ((rules (+ canon_rules observer_rules))
         (plan (trs_formation_plan formation root_formation)))
      (if (lt rules 1)
        (te_build_filtered path m want ictx screen probe target witness scope cfg
-         plan canon_rules observer_rules -1 w)
+         plan constraints canon_rules observer_rules -1 w)
        (match (te_make_space m want scope cfg)
          ((TeSpaceErr msg) (te_fail (append_int "raw: " msg) w))
          ((TeSpaceOk raw_space)
@@ -1204,7 +1300,8 @@
             ((TeCountErr msg) (te_fail (append_int "raw count: " msg) w))
             ((TeCountOk raw_total)
              (te_build_filtered path m want ictx screen probe target witness
-               scope cfg plan canon_rules observer_rules raw_total w))))))))))
+               scope cfg plan constraints canon_rules observer_rules raw_total
+               w))))))))))
 
 (fn te_search_ready
   ((path (List Int))

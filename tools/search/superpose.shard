@@ -45,6 +45,7 @@
 (import "../../kernel/reduce.shard")
 (import "../../meta/sketch")
 (import "../../meta/invoke")
+(import "../../meta/search/mod.req.shard")
 (import "rev.shard")
 (import "search.shard")
 (use (:: kernel term *))
@@ -56,6 +57,7 @@
 (use (:: kernel loader exit))
 (use (:: meta sketch *))
 (use (:: meta invoke *))
+(use (:: meta search *))
 (use (:: tools search rev *))
 (use (:: tools search search *))
 
@@ -1143,16 +1145,22 @@
 
 (type SuS
   (SuSErr (List Int))
-  (SuSOk Int Int Int Int Int (List (List (Pair Int Int)))))
+  (SuSOk Int Int Int Int Int Int (List (List (Pair Int Int)))))
+  ; found, killed, constraint-killed, regions, forks, steps, passing regions
 
 ;; Generic branch-and-prune drive.  `candidate` is used only for exact
 ;; consistent-subspace counting; `query` is what the lazy evaluator executes.
+;; Residual checked constraints run first. A definite redex kills the whole
+;; consistent region. A blocked constraint does not steal demand from the
+;; semantic query: failure may still kill the larger region immediately. Only
+;; when the query passes does the constraint's demanded hole become the fork.
 (fn su_drive_query
   ((fuel Int)
    (m Module)
    (candq QName)
    (body Expr)
    (candidate Expr)
+   (constraints MsPlan)
    (query Expr)
    (want Expr)
    (g Grammar)
@@ -1161,6 +1169,7 @@
    (jobs (List (List (Pair Int Int))))
    (found Int)
    (killed Int)
+   (constrained Int)
    (regions Int)
    (forks Int)
    (sols (List (List (Pair Int Int)))))
@@ -1168,74 +1177,61 @@
   (measure fuel)
   (if (lt fuel 1) (SuSErr "superpose: generic drive fuel exhausted")
   (match jobs
-    (Nil (SuSOk found killed regions forks (sa_steps ar) sols))
+    (Nil (SuSOk found killed constrained regions forks (sa_steps ar) sols))
     ((Cons asg rest)
-     (match (su_query (su_efuel) m candq body g asg ar query want)
-       ((SuTErr msg) (SuSErr msg))
-       ((SuTOut) (SuSErr "superpose: generic evaluation fuel exhausted"))
-       ((SuTBlocked h ar2)
-        (match (su_alts g h)
-          (None (SuSErr "superpose: generic query blocked on unknown hole"))
-          ((Some alts)
-           (su_drive_query
-             (- fuel 1)
-             m
-             candq
-             body
-             candidate
-             query
-             want
-             g
-             memo
-             ar2
-             (su_fork asg h (- (alts_len alts) 1) rest)
-             found
-             killed
-             regions
-             (+ forks 1)
-             sols))))
-       ((SuTFail ar2)
+     (match (ms_check 1000000 constraints g asg candidate)
+       ((MsErr msg) (SuSErr msg))
+       ((MsRedex _)
         (match (cc_expr g memo asg candidate 1000000)
           ((CcRErr msg) (SuSErr msg))
           ((CcROk n)
            (su_drive_query
-             (- fuel 1)
-             m
-             candq
-             body
-             candidate
-             query
-             want
-             g
-             memo
-             ar2
-             rest
-             found
-             (+ killed n)
-             (+ regions 1)
-             forks
+             (- fuel 1) m candq body candidate constraints query want g memo ar
+             rest found (+ killed n) (+ constrained n) (+ regions 1) forks
              sols))))
-       ((SuTPass ar2)
-        (match (cc_expr g memo asg candidate 1000000)
-          ((CcRErr msg) (SuSErr msg))
-          ((CcROk n)
-           (su_drive_query
-             (- fuel 1)
-             m
-             candq
-             body
-             candidate
-             query
-             want
-             g
-             memo
-             ar2
-             rest
-             (+ found n)
-             killed
-             (+ regions 1)
-             forks
-             (Cons asg sols))))))))))
+       (constraint_verdict
+        (match (su_query (su_efuel) m candq body g asg ar query want)
+          ((SuTErr msg) (SuSErr msg))
+          ((SuTOut) (SuSErr "superpose: generic evaluation fuel exhausted"))
+          ((SuTBlocked h ar2)
+           (match (su_alts g h)
+             (None (SuSErr "superpose: generic query blocked on unknown hole"))
+             ((Some alts)
+              (su_drive_query
+                (- fuel 1) m candq body candidate constraints query want g memo
+                ar2 (su_fork asg h (- (alts_len alts) 1) rest) found killed
+                constrained regions (+ forks 1) sols))))
+          ((SuTFail ar2)
+           (match (cc_expr g memo asg candidate 1000000)
+             ((CcRErr msg) (SuSErr msg))
+             ((CcROk n)
+              (su_drive_query
+                (- fuel 1) m candq body candidate constraints query want g memo
+                ar2 rest found (+ killed n) constrained (+ regions 1) forks
+                sols))))
+          ((SuTPass ar2)
+           (match constraint_verdict
+             ((MsBlocked h)
+              (match (su_alts g h)
+                (None
+                  (SuSErr
+                    "superpose: residual constraint blocked on unknown hole"))
+                ((Some alts)
+                 (su_drive_query
+                   (- fuel 1) m candq body candidate constraints query want g
+                   memo ar2 (su_fork asg h (- (alts_len alts) 1) rest) found
+                   killed constrained regions (+ forks 1) sols))))
+             ((MsClear)
+              (match (cc_expr g memo asg candidate 1000000)
+                ((CcRErr msg) (SuSErr msg))
+                ((CcROk n)
+                 (su_drive_query
+                   (- fuel 1) m candq body candidate constraints query want g
+                   memo ar2 rest (+ found n) killed constrained (+ regions 1)
+                   forks (Cons asg sols)))))
+             ((MsErr msg) (SuSErr msg))
+             ((MsRedex _)
+              (SuSErr "superpose: inconsistent residual verdict")))))))))))
 
 (fn su_drive
   ((fuel Int)
@@ -1256,7 +1252,7 @@
   (measure fuel)
   (if (lt fuel 1) (SuSErr "superpose: drive fuel exhausted")
   (match jobs
-    (Nil (SuSOk found killed regions forks (sa_steps ar) sols))
+    (Nil (SuSOk found killed 0 regions forks (sa_steps ar) sols))
     ((Cons asg rest)
      (match (su_tests (su_efuel) m candq body g asg ar ts)
        ((SuTErr msg) (SuSErr msg))
@@ -1599,7 +1595,7 @@
              (exit
                1
                (write (append_int "SUPERPOSE FAIL " (append_int msg "\n")) w)))
-            ((SuSOk found killed regions forks steps sols)
+            ((SuSOk found killed _ regions forks steps sols)
              (if (int_eq (+ found killed) total)
                (match (enum_go total total body g m ts Nil)
                  ((EnRErr msg)

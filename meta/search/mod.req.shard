@@ -1,0 +1,438 @@
+;;; meta/search — exact reduction constraints over term-with-holes spaces.
+;;;
+;;; This is the composition layer between meta/rewrite's authenticated-domain
+;;; profiles and meta/sketch's exact candidate spaces.  A checked rule that is
+;;; separable belongs in grammar formation; a valid rule that is deep or
+;;; conjunctive remains here as a residual constraint.  It is never weakened
+;;; into independent hole exclusions.
+;;;
+;;; `ms_check` classifies one partial-choice region as:
+;;;   CLEAR       no residual redex can occur in the represented candidate;
+;;;   BLOCKED h   deciding grammar hole h is necessary to settle that fact;
+;;;   REDEX q     every candidate in the region has the cited redex;
+;;;   ERR         malformed grammar/sketch/profile plumbing.
+;;;
+;;; Ordinary TrsProfile rules are searched at every candidate subterm.
+;;; TrsRootProfile rules are matched only at the whole candidate root.  This
+;;; preserves the proof-domain distinction even while both kinds share the
+;;; same partial-pattern machinery.
+;;;
+;;; V1 consumes meta/rewrite's left-linear algebraic rules.  Consequently a
+;;; BVar is an unconstrained pattern metavariable and never demands a hole.
+;;; Repeated-variable/correlation constraints require an equality-aware match
+;;; environment and remain a later, explicit extension.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../sketch")
+(import "../rewrite")
+(use (:: kernel term *))
+(use (:: meta sketch *))
+(use (:: meta rewrite *))
+
+;; ---- validated residual plan ----------------------------------------------
+
+(type MsPlan (MsPlan TrsProfile TrsRootProfile))
+
+(type MsPlanR (MsPlanErr (List Int)) (MsPlanOk MsPlan))
+
+(fn ms_plan ((everywhere TrsProfile) (root TrsRootProfile)) MsPlanR
+  (match (trs_profile (trs_profile_rules everywhere))
+    ((TrsProfileErr msg) (MsPlanErr msg))
+    ((TrsProfileOk checked)
+     (match (trs_root_profile (trs_root_profile_rules root))
+       ((TrsRootProfileErr msg) (MsPlanErr msg))
+       ((TrsRootProfileOk checked_root)
+        (MsPlanOk (MsPlan checked checked_root)))))))
+
+(fn ms_empty_plan () MsPlan
+  (MsPlan (trs_empty_profile) (trs_empty_root_profile)))
+
+(fn ms_rules_empty ((rules (List TrsRule))) Bool
+  (match rules
+    (Nil True)
+    ((Cons _ _) False)))
+
+(fn ms_plan_is_empty ((plan MsPlan)) Bool
+  (match plan
+    ((MsPlan everywhere root)
+     (if (ms_rules_empty (trs_profile_rules everywhere))
+       (ms_rules_empty (trs_root_profile_rules root))
+       False))))
+
+(fn ms_rule_count ((rules (List TrsRule))) Int
+  (measure (struct rules))
+  (match rules
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (ms_rule_count rest)))))
+
+(fn ms_plan_rule_count ((plan MsPlan)) Int
+  (match plan
+    ((MsPlan everywhere root)
+     (+
+       (ms_rule_count (trs_profile_rules everywhere))
+       (ms_rule_count (trs_root_profile_rules root))))))
+
+;; ---- grammar choice view ---------------------------------------------------
+
+(fn ms_choice ((asg (List (Pair Int Int))) (hole_id Int)) Int
+  (measure (struct asg))
+  (match asg
+    (Nil -1)
+    ((Cons (Pair id choice) rest)
+     (if (int_eq id hole_id) choice (ms_choice rest hole_id)))))
+
+(fn ms_alts_go ((entries (List GEnt)) (hole_id Int)) (Option (List Expr))
+  (measure (struct entries))
+  (match entries
+    (Nil None)
+    ((Cons (GEnt id alts) rest)
+     (if (int_eq id hole_id) (Some alts) (ms_alts_go rest hole_id)))))
+
+(fn ms_alts ((grammar Grammar) (hole_id Int)) (Option (List Expr))
+  (match grammar
+    ((Grammar entries) (ms_alts_go entries hole_id))))
+
+(fn ms_alt_at ((alts (List Expr)) (index Int)) (Option Expr)
+  (measure (struct alts))
+  (match alts
+    (Nil None)
+    ((Cons alt rest)
+     (if (le index 0) (Some alt) (ms_alt_at rest (- index 1))))))
+
+(type MsSelect
+  (MsSelectErr (List Int))
+  (MsSelectOpen Int)
+  (MsSelectExpr Expr))
+
+(fn ms_select ((grammar Grammar) (asg (List (Pair Int Int))) (hole_id Int))
+  MsSelect
+  (match (ms_alts grammar hole_id)
+    (None (MsSelectErr "constraint references an unknown grammar hole"))
+    ((Some alts)
+     (let ((choice (ms_choice asg hole_id)))
+       (if (lt choice 0)
+         (match alts
+           (Nil (MsSelectErr "constraint reached an empty grammar entry"))
+           ((Cons only Nil) (MsSelectExpr only))
+           ((Cons _ (Cons _ _)) (MsSelectOpen hole_id)))
+         (match (ms_alt_at alts choice)
+           (None (MsSelectErr "constraint choice is outside grammar entry"))
+           ((Some selected) (MsSelectExpr selected))))))))
+
+;; ---- partial left-linear pattern matching ---------------------------------
+
+(type MsMatch
+  (MsMatchErr (List Int))
+  (MsMatchNo)
+  (MsMatchBlocked Int)
+  (MsMatchYes))
+
+(fn ms_block_first ((prior (Option Int)) (hole_id Int)) (Option Int)
+  (match prior
+    (None (Some hole_id))
+    ((Some existing) (Some existing))))
+
+(fn ms_match_done ((blocked (Option Int))) MsMatch
+  (match blocked
+    (None (MsMatchYes))
+    ((Some hole_id) (MsMatchBlocked hole_id))))
+
+(fn ms_match
+  ((fuel Int)
+   (grammar Grammar)
+   (asg (List (Pair Int Int)))
+   (pattern Expr)
+   (candidate Expr))
+  MsMatch
+  (measure fuel)
+  (if (lt fuel 1) (MsMatchErr "constraint pattern-match fuel exhausted")
+  (match (hole_view candidate)
+    ((HVBad msg) (MsMatchErr msg))
+    ((HVHole hole_id)
+     (match pattern
+       ((BVar _) (MsMatchYes))
+       (_
+         (match (ms_select grammar asg hole_id)
+           ((MsSelectErr msg) (MsMatchErr msg))
+           ((MsSelectOpen blocked) (MsMatchBlocked blocked))
+           ((MsSelectExpr selected)
+            (ms_match (- fuel 1) grammar asg pattern selected))))))
+    ((HVNot)
+     (match pattern
+       ((FVar _) (MsMatchErr "constraint pattern contains FVar"))
+       ((BVar _) (MsMatchYes))
+       ((Ctor q args)
+        (match candidate
+          ((Ctor q2 args2)
+           (if (qname_eq q q2)
+             (ms_match_list (- fuel 1) grammar asg args args2 None)
+             (MsMatchNo)))
+          (_ (MsMatchNo))))
+       ((Call q args)
+        (match candidate
+          ((Call q2 args2)
+           (if (qname_eq q q2)
+             (ms_match_list (- fuel 1) grammar asg args args2 None)
+             (MsMatchNo)))
+          (_ (MsMatchNo))))
+       ((If c t e)
+        (match candidate
+          ((If c2 t2 e2)
+           (ms_match_list
+             (- fuel 1)
+             grammar
+             asg
+             (list c t e)
+             (list c2 t2 e2)
+             None))
+          (_ (MsMatchNo))))
+       ((Match _ _) (MsMatchErr "constraint pattern contains Match"))
+       ((Let _ _) (MsMatchErr "constraint pattern contains Let"))
+       ((IntLit n)
+        (match candidate
+          ((IntLit m) (if (int_eq n m) (MsMatchYes) (MsMatchNo)))
+          (_ (MsMatchNo))))
+       ((SymLit s)
+        (match candidate
+          ((SymLit t) (if (sym_eq s t) (MsMatchYes) (MsMatchNo)))
+          (_ (MsMatchNo)))))))))
+
+(fn ms_match_list
+  ((fuel Int)
+   (grammar Grammar)
+   (asg (List (Pair Int Int)))
+   (patterns (List Expr))
+   (candidates (List Expr))
+   (blocked (Option Int)))
+  MsMatch
+  (measure fuel)
+  (if (lt fuel 1) (MsMatchErr "constraint list-match fuel exhausted")
+  (match patterns
+    (Nil
+      (match candidates
+        (Nil (ms_match_done blocked))
+        ((Cons _ _) (MsMatchNo))))
+    ((Cons pattern rest)
+     (match candidates
+       (Nil (MsMatchNo))
+       ((Cons candidate more)
+        (match (ms_match (- fuel 1) grammar asg pattern candidate)
+          ((MsMatchErr msg) (MsMatchErr msg))
+          ((MsMatchNo) (MsMatchNo))
+          ((MsMatchYes)
+           (ms_match_list
+             (- fuel 1) grammar asg rest more blocked))
+          ((MsMatchBlocked hole_id)
+           (ms_match_list
+             (- fuel 1)
+             grammar
+             asg
+             rest
+             more
+             (ms_block_first blocked hole_id))))))))))
+
+;; ---- region redex classification ------------------------------------------
+
+(type MsVerdict
+  (MsErr (List Int))
+  (MsClear)
+  (MsBlocked Int)
+  (MsRedex QName))
+
+(fn ms_merge ((left MsVerdict) (right MsVerdict)) MsVerdict
+  (match left
+    ((MsErr msg) (MsErr msg))
+    ((MsRedex q) (MsRedex q))
+    ((MsClear) right)
+    ((MsBlocked hole_id)
+     (match right
+       ((MsErr msg) (MsErr msg))
+       ((MsRedex q) (MsRedex q))
+       (_ (MsBlocked hole_id))))))
+
+(fn ms_rules_root
+  ((fuel Int)
+   (grammar Grammar)
+   (asg (List (Pair Int Int)))
+   (rules (List TrsRule))
+   (candidate Expr)
+   (blocked (Option Int)))
+  MsVerdict
+  (measure fuel)
+  (if (lt fuel 1) (MsErr "constraint rule scan fuel exhausted")
+  (match rules
+    (Nil
+      (match blocked
+        (None (MsClear))
+        ((Some hole_id) (MsBlocked hole_id))))
+    ((Cons rule rest)
+     (match (ms_match (- fuel 1) grammar asg (trs_rule_lhs rule) candidate)
+       ((MsMatchErr msg) (MsErr msg))
+       ((MsMatchYes) (MsRedex (trs_rule_name rule)))
+       ((MsMatchNo)
+        (ms_rules_root (- fuel 1) grammar asg rest candidate blocked))
+       ((MsMatchBlocked hole_id)
+        (ms_rules_root
+          (- fuel 1)
+          grammar
+          asg
+          rest
+          candidate
+          (ms_block_first blocked hole_id))))))))
+
+(type MsNode
+  (MsNodeErr (List Int))
+  (MsNodeOpen Int)
+  (MsNodeExpr Expr))
+
+(fn ms_node
+  ((fuel Int) (grammar Grammar) (asg (List (Pair Int Int))) (candidate Expr))
+  MsNode
+  (measure fuel)
+  (if (lt fuel 1) (MsNodeErr "constraint node-view fuel exhausted")
+  (match (hole_view candidate)
+    ((HVBad msg) (MsNodeErr msg))
+    ((HVNot) (MsNodeExpr candidate))
+    ((HVHole hole_id)
+     (match (ms_select grammar asg hole_id)
+       ((MsSelectErr msg) (MsNodeErr msg))
+       ((MsSelectOpen blocked) (MsNodeOpen blocked))
+       ((MsSelectExpr selected)
+        (ms_node (- fuel 1) grammar asg selected)))))))
+
+(fn ms_anywhere
+  ((fuel Int)
+   (grammar Grammar)
+   (asg (List (Pair Int Int)))
+   (rules (List TrsRule))
+   (candidate Expr))
+  MsVerdict
+  (measure fuel)
+  (if (lt fuel 1) (MsErr "constraint tree scan fuel exhausted")
+  (match (ms_node (- fuel 1) grammar asg candidate)
+    ((MsNodeErr msg) (MsErr msg))
+    ((MsNodeOpen hole_id) (MsBlocked hole_id))
+    ((MsNodeExpr node)
+     (let ((root (ms_rules_root (- fuel 1) grammar asg rules node None)))
+       (match root
+         ((MsErr msg) (MsErr msg))
+         ((MsRedex q) (MsRedex q))
+         (_ (ms_children (- fuel 1) grammar asg rules node root))))))))
+
+(fn ms_children
+  ((fuel Int)
+   (grammar Grammar)
+   (asg (List (Pair Int Int)))
+   (rules (List TrsRule))
+   (candidate Expr)
+   (prior MsVerdict))
+  MsVerdict
+  (measure fuel)
+  (if (lt fuel 1) (MsErr "constraint child scan fuel exhausted")
+  (match candidate
+    ((Ctor _ args) (ms_anywhere_list (- fuel 1) grammar asg rules args prior))
+    ((Call _ args) (ms_anywhere_list (- fuel 1) grammar asg rules args prior))
+    ((If c t e)
+     (ms_anywhere_list (- fuel 1) grammar asg rules (list c t e) prior))
+    ((Match scrut arms)
+     (let ((with_scrut (ms_merge prior (ms_anywhere (- fuel 1) grammar asg rules scrut))))
+       (match with_scrut
+         ((MsErr msg) (MsErr msg))
+         ((MsRedex q) (MsRedex q))
+         (_ (ms_anywhere_arms (- fuel 1) grammar asg rules arms with_scrut)))))
+    ((Let bindings body)
+     (let
+       ((with_bindings
+          (ms_anywhere_list
+            (- fuel 1) grammar asg rules bindings prior)))
+       (match with_bindings
+         ((MsErr msg) (MsErr msg))
+         ((MsRedex q) (MsRedex q))
+         (_
+           (ms_merge
+             with_bindings
+             (ms_anywhere (- fuel 1) grammar asg rules body))))))
+    (_ prior))))
+
+(fn ms_anywhere_list
+  ((fuel Int)
+   (grammar Grammar)
+   (asg (List (Pair Int Int)))
+   (rules (List TrsRule))
+   (candidates (List Expr))
+   (prior MsVerdict))
+  MsVerdict
+  (measure fuel)
+  (if (lt fuel 1) (MsErr "constraint term-list scan fuel exhausted")
+  (match candidates
+    (Nil prior)
+    ((Cons candidate rest)
+     (let
+       ((next
+          (ms_merge
+            prior
+            (ms_anywhere (- fuel 1) grammar asg rules candidate))))
+       (match next
+         ((MsErr msg) (MsErr msg))
+         ((MsRedex q) (MsRedex q))
+         (_
+           (ms_anywhere_list
+             (- fuel 1) grammar asg rules rest next))))))))
+
+(fn ms_anywhere_arms
+  ((fuel Int)
+   (grammar Grammar)
+   (asg (List (Pair Int Int)))
+   (rules (List TrsRule))
+   (arms (List Arm))
+   (prior MsVerdict))
+  MsVerdict
+  (measure fuel)
+  (if (lt fuel 1) (MsErr "constraint arm scan fuel exhausted")
+  (match arms
+    (Nil prior)
+    ((Cons (Arm _ body) rest)
+     (let
+       ((next
+          (ms_merge prior (ms_anywhere (- fuel 1) grammar asg rules body))))
+       (match next
+         ((MsErr msg) (MsErr msg))
+         ((MsRedex q) (MsRedex q))
+         (_
+           (ms_anywhere_arms
+             (- fuel 1) grammar asg rules rest next))))))))
+
+(fn ms_check
+  ((fuel Int)
+   (plan MsPlan)
+   (grammar Grammar)
+   (asg (List (Pair Int Int)))
+   (candidate Expr))
+  MsVerdict
+  (measure fuel)
+  (if (lt fuel 1) (MsErr "constraint plan fuel exhausted")
+  (match plan
+    ((MsPlan everywhere root)
+     (let
+       ((everywhere_rules (trs_profile_rules everywhere))
+        (root_rules (trs_root_profile_rules root)))
+       (let
+         ((below
+            (if (ms_rules_empty everywhere_rules) (MsClear)
+            (ms_anywhere
+              (- fuel 1) grammar asg everywhere_rules candidate))))
+         (match below
+           ((MsErr msg) (MsErr msg))
+           ((MsRedex q) (MsRedex q))
+           (_
+             (ms_merge
+               below
+               (if (ms_rules_empty root_rules) (MsClear)
+               (ms_rules_root
+                 (- fuel 1)
+                 grammar
+                 asg
+                 root_rules
+                 candidate
+                 None)))))))))))
