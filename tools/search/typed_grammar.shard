@@ -81,12 +81,36 @@
 ;; monomorphic rules when a child-only type is intentionally unconstrained.
 (type TgRule (TgRule Int Type Expr (List TgSlot)))
 
+;; A reflected head route overrides the named environment for one argument.
+;; Unmentioned arguments inherit their parent zone.  The key is the real
+;; resolved head plus its zero-based argument index: no nominal field names or
+;; ISA cases enter the builder.
+(type TgRoute (TgRoute TgHead Int Symbol))
+
 ;; A named hole environment is the complete production policy at holes routed
 ;; to that name.  tg_build is the one-environment convenience wrapper;
 ;; tg_build_env exposes this full form to library consumers.
-(type TgZone (TgZone Symbol (List TgHead) (List TgAtom) (List TgRule)))
+(type TgZone
+  (TgZone Symbol (List TgHead) (List TgAtom) (List TgRule) (List TgRoute)))
 
 (type TgEnv (TgEnv (List TgZone)))
+
+;; Dynamic consumers cannot safely manufacture loader-assigned QNames.  This
+;; surface codec names only items in the task's explicit bare-item scope; the
+;; resolver below turns them into TgHead/TgRoute values through the real RCtx.
+(type TgScopeHead (TgScopeCtor Symbol) (TgScopeCall Symbol))
+
+(type TgScopeRoute (TgScopeRoute TgScopeHead Int Symbol))
+
+(type TgScopeZone
+  (TgScopeZone
+    Symbol
+    (List TgScopeHead)
+    (List Int)
+    (List Symbol)
+    (List TgScopeRoute)))
+
+(type TgScopeEnv (TgScopeEnv Symbol (List TgScopeZone)))  ; root zone, zones
 
 (fn tg_default_zone () Symbol (quote expression))
 
@@ -484,6 +508,124 @@
 (fn tg_scope_table ((ctx RCtx)) (List (Pair QName Symbol))
   (tg_scope_table_go (rc_env ctx) Nil Nil))
 
+;; ---- dynamic scope codec: surface policy -> resolved TgEnv -----------------
+
+(fn tg_scope_qname ((surface Symbol) (env (List (Pair Symbol (List Symbol)))))
+  (Option QName)
+  (measure (struct env))
+  (match env
+    (Nil None)
+    ((Cons (Pair name path) rest)
+     (if (sym_eq surface name) (Some (QName path name))
+     (tg_scope_qname surface rest)))))
+
+(type TgScopeHeadR (TgScopeHeadErr (List Int)) (TgScopeHeadOk TgHead))
+
+(fn tg_resolve_scope_head ((m Module) (ctx RCtx) (head TgScopeHead))
+  TgScopeHeadR
+  (match head
+    ((TgScopeCtor surface)
+     (match (tg_scope_qname surface (rc_env ctx))
+       (None (TgScopeHeadErr "scoped ctor is absent from bare-item use scope"))
+       ((Some q)
+        (match (tg_find_ctor q m)
+          (None (TgScopeHeadErr "scoped ctor name does not resolve to a ctor"))
+          ((Some _) (TgScopeHeadOk (TgCtor q)))))))
+    ((TgScopeCall surface)
+     (match (tg_scope_qname surface (rc_env ctx))
+       (None (TgScopeHeadErr "scoped call is absent from bare-item use scope"))
+       ((Some q)
+        (match (tg_find_call q m)
+          (None (TgScopeHeadErr "scoped call name does not resolve to a fn"))
+          ((Some _) (TgScopeHeadOk (TgCall q)))))))))
+
+(type TgScopeHeadsR (TgScopeHeadsErr (List Int)) (TgScopeHeadsOk (List TgHead)))
+
+(fn tg_resolve_scope_heads ((m Module) (ctx RCtx) (heads (List TgScopeHead)))
+  TgScopeHeadsR
+  (measure (struct heads))
+  (match heads
+    (Nil (TgScopeHeadsOk Nil))
+    ((Cons head rest)
+     (match (tg_resolve_scope_head m ctx head)
+       ((TgScopeHeadErr msg) (TgScopeHeadsErr msg))
+       ((TgScopeHeadOk resolved)
+        (match (tg_resolve_scope_heads m ctx rest)
+          ((TgScopeHeadsErr msg) (TgScopeHeadsErr msg))
+          ((TgScopeHeadsOk tail) (TgScopeHeadsOk (Cons resolved tail)))))))))
+
+(type TgScopeRoutesR
+  (TgScopeRoutesErr (List Int))
+  (TgScopeRoutesOk (List TgRoute)))
+
+(fn tg_resolve_scope_routes ((m Module) (ctx RCtx) (routes (List TgScopeRoute)))
+  TgScopeRoutesR
+  (measure (struct routes))
+  (match routes
+    (Nil (TgScopeRoutesOk Nil))
+    ((Cons (TgScopeRoute head index zone) rest)
+     (match (tg_resolve_scope_head m ctx head)
+       ((TgScopeHeadErr msg) (TgScopeRoutesErr msg))
+       ((TgScopeHeadOk resolved)
+        (match (tg_resolve_scope_routes m ctx rest)
+          ((TgScopeRoutesErr msg) (TgScopeRoutesErr msg))
+          ((TgScopeRoutesOk tail)
+           (TgScopeRoutesOk (Cons (TgRoute resolved index zone) tail)))))))))
+
+(fn tg_scope_int_atoms ((xs (List Int))) (List TgAtom)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons x rest)
+     (Cons
+       (TgAtom (TCon (qn (quote Int)) Nil) (IntLit x))
+       (tg_scope_int_atoms rest)))))
+
+(fn tg_scope_sym_atoms ((xs (List Symbol))) (List TgAtom)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons x rest)
+     (Cons
+       (TgAtom (TCon (qn (quote Symbol)) Nil) (SymLit x))
+       (tg_scope_sym_atoms rest)))))
+
+(type TgScopeZonesR (TgScopeZonesErr (List Int)) (TgScopeZonesOk (List TgZone)))
+
+(fn tg_resolve_scope_zones ((m Module) (ctx RCtx) (zones (List TgScopeZone)))
+  TgScopeZonesR
+  (measure (struct zones))
+  (match zones
+    (Nil (TgScopeZonesOk Nil))
+    ((Cons (TgScopeZone name heads ints syms routes) rest)
+     (match (tg_resolve_scope_heads m ctx heads)
+       ((TgScopeHeadsErr msg) (TgScopeZonesErr msg))
+       ((TgScopeHeadsOk resolved_heads)
+        (match (tg_resolve_scope_routes m ctx routes)
+          ((TgScopeRoutesErr msg) (TgScopeZonesErr msg))
+          ((TgScopeRoutesOk resolved_routes)
+           (match (tg_resolve_scope_zones m ctx rest)
+             ((TgScopeZonesErr msg) (TgScopeZonesErr msg))
+             ((TgScopeZonesOk tail)
+              (TgScopeZonesOk
+                (Cons
+                  (TgZone
+                    name
+                    resolved_heads
+                    (tg_app (tg_scope_int_atoms ints) (tg_scope_sym_atoms syms))
+                    Nil
+                    resolved_routes)
+                  tail)))))))))))
+
+(type TgScopeR (TgScopeErr (List Int)) (TgScopeOk TgEnv Symbol))
+
+(fn tg_resolve_scope_env ((m Module) (ctx RCtx) (spec TgScopeEnv)) TgScopeR
+  (match spec
+    ((TgScopeEnv root zones)
+     (match (tg_resolve_scope_zones m ctx zones)
+       ((TgScopeZonesErr msg) (TgScopeErr msg))
+       ((TgScopeZonesOk resolved) (TgScopeOk (TgEnv resolved) root))))))
+
 ;; ---- work-list grammar construction ----------------------------------------
 
 ;; `binders` is the kernel/types BVar environment: innermost first. `forbids`
@@ -493,11 +635,24 @@
 
 (type TgSlots (TgSlots (List Expr) (List TgTask) Int))
 
+(fn tg_route_zone
+  ((head TgHead) (index Int) (routes (List TgRoute)) (ambient Symbol))
+  Symbol
+  (measure (struct routes))
+  (match routes
+    (Nil ambient)
+    ((Cons (TgRoute rh ri zone) rest)
+     (if (tg_head_eq head rh)
+       (if (int_eq index ri) zone (tg_route_zone head index rest ambient))
+       (tg_route_zone head index rest ambient)))))
+
 (fn tg_slots
   ((tys (List Type))
    (binders (List Type))
    (depth Int)
    (zone Symbol)
+   (head TgHead)
+   (routes (List TgRoute))
    (formation TrsFormation)
    (parent TrsShape)
    (index Int)
@@ -513,6 +668,8 @@
          binders
          depth
          zone
+         head
+         routes
          formation
          parent
          (+ index 1)
@@ -526,7 +683,7 @@
               ty
               binders
               depth
-              zone
+              (tg_route_zone head index routes zone)
               (trs_arg_forbids formation parent index))
             tasks)
           nx))))))
@@ -669,6 +826,7 @@
 (fn tg_heads_alts
   ((m Module)
    (heads (List TgHead))
+   (routes (List TgRoute))
    (want Type)
    (binders (List Type))
    (depth Int)
@@ -685,20 +843,21 @@
     ((Cons h rest)
      (match (tg_head_sig m h want)
        ((TgSigNo)
-        (tg_heads_alts m rest want binders depth zone formation forbids next
-          alts tasks))
+        (tg_heads_alts m rest routes want binders depth zone formation forbids
+          next alts tasks))
        ((TgSigOk params)
         (let ((shape (tg_head_shape h (tg_types_len params))))
           (if
             (if (trs_shape_mem shape forbids) True
             (trs_forbids_root formation shape))
-            (tg_heads_alts m rest want binders depth zone formation forbids next
-              alts tasks)
+            (tg_heads_alts m rest routes want binders depth zone formation
+              forbids next alts tasks)
             (match params
               (Nil
                 (tg_heads_alts
                   m
                   rest
+                  routes
                   want
                   binders
                   depth
@@ -710,14 +869,16 @@
                   tasks))
               ((Cons _ _)
                (if (le depth 0)
-                 (tg_heads_alts m rest want binders depth zone formation forbids
-                   next alts tasks)
+                 (tg_heads_alts m rest routes want binders depth zone formation
+                   forbids next alts tasks)
                  (match
                    (tg_slots
                      params
                      binders
                      (- depth 1)
                      zone
+                     h
+                     routes
                      formation
                      shape
                      0
@@ -726,6 +887,7 @@
                     (tg_heads_alts
                       m
                       rest
+                      routes
                       want
                       binders
                       depth
@@ -744,7 +906,7 @@
     (Nil None)
     ((Cons zone rest)
      (match zone
-       ((TgZone zname _ _ _)
+       ((TgZone zname _ _ _ _)
         (if (sym_eq name zname) (Some zone) (tg_zone_find name rest)))))))
 
 (fn tg_slot_route_ok ((slot TgSlot) (zones (List TgZone))) Bool
@@ -769,6 +931,51 @@
     ((Cons (TgRule _ _ _ slots) rest)
      (if (tg_slot_routes_ok slots zones) (tg_rule_routes_ok rest zones) False))))
 
+(fn tg_route_key_mem ((head TgHead) (index Int) (routes (List TgRoute))) Bool
+  (measure (struct routes))
+  (match routes
+    (Nil False)
+    ((Cons (TgRoute rh ri _) rest)
+     (if (tg_head_eq head rh)
+       (if (int_eq index ri) True (tg_route_key_mem head index rest))
+       (tg_route_key_mem head index rest)))))
+
+(fn tg_routes_ok
+  ((routes (List TgRoute)) (heads (List TgHead)) (zones (List TgZone)))
+  Bool
+  (measure (struct routes))
+  (match routes
+    (Nil True)
+    ((Cons (TgRoute head index zone) rest)
+     (if (lt index 0) False
+     (if (tg_head_mem head heads)
+       (match (tg_zone_find zone zones)
+         (None False)
+         ((Some _)
+          (if (tg_route_key_mem head index rest) False
+          (tg_routes_ok rest heads zones))))
+       False)))))
+
+(fn tg_head_arity ((m Module) (head TgHead)) (Option Int)
+  (match head
+    ((TgCtor q)
+     (match (tg_find_ctor q m)
+       (None None)
+       ((Some (Pair _ (CtorDef _ fields))) (Some (tg_types_len fields)))))
+    ((TgCall q)
+     (match (tg_find_call q m)
+       (None None)
+       ((Some (Pair params _)) (Some (tg_types_len params)))))))
+
+(fn tg_route_arities_ok ((m Module) (routes (List TgRoute))) Bool
+  (measure (struct routes))
+  (match routes
+    (Nil True)
+    ((Cons (TgRoute head index _) rest)
+     (match (tg_head_arity m head)
+       (None False)
+       ((Some arity) (if (lt index arity) (tg_route_arities_ok m rest) False))))))
+
 (fn tg_env_zone ((env TgEnv) (name Symbol)) (Option TgZone)
   (match env
     ((TgEnv zones) (tg_zone_find name zones))))
@@ -780,14 +987,14 @@
     ((TgTask id want binders depth zone_name forbids)
      (match (tg_env_zone env zone_name)
        (None (TgOneErr "typed hole names a missing environment"))
-       ((Some (TgZone _ heads atoms rules))
+       ((Some (TgZone _ heads atoms rules routes))
         (let
           ((base
              (tg_app
                (tg_atoms atoms want formation forbids)
                (tg_vars binders want 0))))
           (match
-            (tg_heads_alts m heads want binders depth zone_name formation
+            (tg_heads_alts m heads routes want binders depth zone_name formation
               forbids next base Nil)
             ((TgHeadsR head_alts head_tasks nx)
              (match
@@ -830,7 +1037,8 @@
 (type TgEnvR (TgEnvErr (List Int)) (TgEnvOk TgEnv))
 
 (fn tg_prepare_zones
-  ((pending (List TgZone))
+  ((m Module)
+   (pending (List TgZone))
    (all (List TgZone))
    (seen (List Symbol))
    (acc (List TgZone)))
@@ -838,30 +1046,37 @@
   (measure (struct pending))
   (match pending
     (Nil (TgEnvOk (TgEnv acc)))
-    ((Cons (TgZone name heads atoms rules) rest)
+    ((Cons (TgZone name heads atoms rules routes) rest)
      (if (tg_sym_mem name seen) (TgEnvErr "duplicate typed-hole environment")
      (match (tg_rules_wf rules)
        ((TgRuleWfErr msg) (TgEnvErr msg))
        ((TgRuleWfOk)
-        (if (tg_rule_routes_ok rules all)
+        (if
+          (if (tg_rule_routes_ok rules all)
+            (if (tg_routes_ok routes heads all) (tg_route_arities_ok m routes)
+            False)
+            False)
           (tg_prepare_zones
+            m
             rest
             all
             (Cons name seen)
             (tg_app
               acc
-              (Cons (TgZone name (tg_heads_unique heads) atoms rules) Nil)))
-          (TgEnvErr "typed rule routes to a missing environment"))))))))
+              (Cons
+                (TgZone name (tg_heads_unique heads) atoms rules routes)
+                Nil)))
+          (TgEnvErr "typed head/slot route is invalid"))))))))
 
-(fn tg_prepare_env ((env TgEnv)) TgEnvR
+(fn tg_prepare_env ((m Module) (env TgEnv)) TgEnvR
   (match env
-    ((TgEnv zones) (tg_prepare_zones zones zones Nil Nil))))
+    ((TgEnv zones) (tg_prepare_zones m zones zones Nil Nil))))
 
 (fn tg_zones_have_rules ((zones (List TgZone))) Bool
   (measure (struct zones))
   (match zones
     (Nil False)
-    ((Cons (TgZone _ _ _ rules) rest)
+    ((Cons (TgZone _ _ _ rules _) rest)
      (match rules
        (Nil (tg_zones_have_rules rest))
        ((Cons _ _) True)))))
@@ -883,7 +1098,7 @@
   (if (if (trs_formation_is_empty formation) False (tg_env_has_rules env))
     (TgBuildErr
       "formation-aware typed grammar does not yet admit template rules")
-    (match (tg_prepare_env env)
+    (match (tg_prepare_env m env)
       ((TgEnvErr msg) (TgBuildErr msg))
       ((TgEnvOk ready)
        (match (tg_env_zone ready root_zone)
@@ -936,7 +1151,7 @@
   TgBuildR
   (tg_build_env_formation
     m
-    (TgEnv (Cons (TgZone (tg_default_zone) heads atoms Nil) Nil))
+    (TgEnv (Cons (TgZone (tg_default_zone) heads atoms Nil Nil) Nil))
     binders
     want
     depth
@@ -956,7 +1171,7 @@
   (let ((all_rules (tg_app rules (tg_form_rules forms))))
     (tg_build_env
       m
-      (TgEnv (Cons (TgZone (tg_default_zone) heads atoms all_rules) Nil))
+      (TgEnv (Cons (TgZone (tg_default_zone) heads atoms all_rules Nil) Nil))
       binders
       want
       depth

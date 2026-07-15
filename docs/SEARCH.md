@@ -1457,10 +1457,23 @@ Type is not the whole hole property.  `ILoc 0` and `IConst 0` both contain an
 surface therefore takes named `TgZone`s, each with its own reflected heads,
 atoms, and rules.  Ordinary `TgSlot` children inherit their zone;
 `TgSlotIn` routes a child to another named zone while retaining its true
-kernel type and binder environment.  The old `tg_build` call is a
-single-zone convenience wrapper.  This gives field roles, lvalue/rvalue
-contexts, pattern-only syntax, or restricted operand classes a common
-mechanism without inventing nominal pseudo-types or ISA cases in the engine.
+kernel type and binder environment.  A `TgRoute` does the same for an
+argument of an ordinary reflected constructor/call head, keyed by the full
+head QName and zero-based argument index.  The old `tg_build` call is a
+single-zone convenience wrapper.  This gives field roles, fixed structural
+skeletons, lvalue/rvalue contexts, pattern-only syntax, or restricted operand
+classes a common mechanism without inventing nominal pseudo-types or ISA
+cases in the engine.
+
+Dynamic tasks expose the same facility as a `search_environment : () ->
+TgScopeEnv`.  The transport deliberately contains local symbols rather than
+fabricated QNames: `typed_expr` resolves every `TgScopeCtor`/`TgScopeCall`
+against the task's explicit bare-item `use` scope, verifies that it denotes a
+real constructor/function in the loaded module, and only then builds the
+internal typed environment.  Named routes are validated for existing zones,
+heads, argument indices, and duplicate keys before grammar construction.
+Consequently changing from x86 to Wasm—or to an application ADT—changes the
+task context and environment value, not an engine-side ISA table.
 
 `tools/search/typed_rule_probe.shard` is the first binder regression.  A
 polymorphic `Let` template adds an `Int` BVar only to its body hole.  With
@@ -1472,7 +1485,12 @@ rejected before construction, as is any slot routed to a missing zone.
 `tools/search/typed_expr.shard` is the first dynamic task consumer.  It
 infers Candidate and opaque Observation from the task's protocol, derives
 heads from the root file's actual use scope, and independently runs every
-closed candidate through `kernel/types.tc_infer` before observation.  The
+closed candidate through `kernel/types.tc_infer` before observation.  A task
+may additionally provide `search_screen : Candidate -> Bool`; this typed,
+optional discriminator runs before the expensive opaque probe and is counted
+separately from semantic-domain rejection.  The selected witness still must
+pass the screen, match the complete target observation, round-trip through
+rank/unrank, and occur in the final solution set.  The
 generic imp task deliberately admits all `Int` atoms at both `ILoc` and
 `IConst`; the imp kind checker supplies the semantic distinction:
 
@@ -1502,19 +1520,21 @@ therefore byte addition over forty deterministic `(a,b)` pairs.  A 512-byte
 x86 genome ran with zeroed registers against bytes `a`, `b`, `op`, and `o` at
 addresses 0 through 3.
 
-`typed_x86_calculator.shard` transcribes the old LCG and all forty pairs, while
-moving the search boundary to the current model's ordinary SysV entry
-registers.  Its bare-item scope is the whole ISA configuration: generic list
-constructors; `XMovRR`/`XBin`; `RAX`/`RDI`/`RSI`; `SReg`; and
-`XAdd`/`XSub`.  No x86 name was added to `typed_expr` or `typed_grammar`:
+`typed_x86_calculator.shard` transcribes the old LCG and all forty addition
+pairs, while moving the search boundary to the current model's ordinary SysV
+entry registers.  Its `TgScopeEnv` routes an exact two-cell instruction list
+and operand roles through the bare-item x86 scope; the semantic choices remain
+the move/binop/register/operator heads.  No x86 name was added to
+`typed_expr` or `typed_grammar`:
 
-    depth 4; generated 7,318; accepted 757; rejected 6,561
+    depth 4; generated/accepted 729; rejected/screened 0
     13 behaviors; 8 solutions
-    BEST 383 = [XMovRR RAX RDI, XBin XAdd RAX (SReg RSI)]
+    BEST 38 = [XMovRR RAX RDI, XBin XAdd RAX (SReg RSI)]
 
-The task admits exactly the programs of length at most two.  Its 757 accepted
-members are `1 + 27 + 27^2`; the deeper ragged grammar edge is rejected before
-the forty-case observer.  The eight solutions are useful census evidence in
+The earlier flat scope generated 7,318 trees and rejected 6,561 merely to
+recover the 757 length-at-most-two programs.  Routing expresses the intended
+structural domain directly: no ragged tail is generated, and the full 729 are
+typed and observable.  The eight solutions are useful census evidence in
 miniature: move-vs-add-from-zero and whether the sum is first accumulated in
 `RAX`, `RDI`, or `RSI` are gauge spellings of the same behavior.  The minimum
 rank chooses the expected `mov rax,rdi; add rax,rsi` representative.
@@ -1528,14 +1548,26 @@ register-indirect addressing, so the faithful witness materializes pointers 1
 and 3.  The memory proof closes through `std/mem`'s public framing theorems,
 not its representation.
 
-This also exposes the next honest boundary.  Direct reflected scope is enough
-for the compact register program, while exhaustively enumerating the six-step
-memory spelling from a broad flat ISA scope would be combinatorial theater.
-`TgEnv` already has the right generic mechanism—named zones and routed
-slots—but `typed_expr` still lacks the reflected task codec noted below.  That
-codec, or a narrowing executor consuming the same zones, is the general route
-to searching the faithful long form without installing a calculator template
-set in the engine.
+`typed_x86_calculator4.shard` then restores the switch that was present in the
+mlx86 source but disabled at the sample site: opcode 0/1/2/3 selects unsigned
+byte add/sub/mul/div over the same forty deterministic rows.  Its environment
+is an actual structured x86 program—nested `XBlock`/`XBrIf`/`XBr` control,
+register moves, `XBin`, and `XDivU`—with only three selector literals and
+three arithmetic heads left as semantic holes.  This is environment
+composition, not an encoded calculator production set:
+
+    depth 40; holes 90; generated 1,728 = 4^3 * 3^3
+    screened 1,722; accepted 6; rejected 0; 1 complete behavior
+    6 solutions; BEST/WITNESS 183
+
+Four historical rows, one per opcode and each discriminating all four
+arithmetic outcomes, form the cheap `search_screen`; survivors are still
+observed on all forty rows.  The six solutions are precisely the `3!` gauge
+symmetry of permuting the add/sub/mul tests while keeping division as the
+default.  `gen/x86_calculator4_refinement.shard` fixes the rank-183 instruction
+tree, proves its add/sub/mul arms for arbitrary integers, replays the guarded
+division arm, proves identity with the task witness, and kernel-checks the
+complete forty-row historical contract.
 
 The candidate need not be an ADT program.  `typed_shard_call.shard` exposes
 the ordinary Shard function `lg_add1`, `True`/`False`, and the generic `If`
@@ -1563,14 +1595,14 @@ checked typed-grammar invariant or make exhaustive per-member typechecking a
 small-corpus audit mode while always rechecking selected/refinement-bound
 candidates.
 
-Two boundaries remain explicit.  The dynamic `typed_expr` protocol currently
-exposes reflected heads, atoms, and the built-in rule presets; arbitrary
-`TgRule` values are available to library consumers but do not yet have a
-stable reflected task-file codec.  That codec should preserve full kernel
-`Type`/`Expr` identity instead of growing a symbol-name pseudo-ISA.  Also,
-`meta/sketch` rank requires ordered alternatives not to overlap structurally.
-The exhaustive consumer gates `rank(unrank(i)) = i`, but a future public rule
-codec should diagnose obvious overlapping template shapes before a sweep.
+Two boundaries remain explicit.  `TgScopeEnv` now transports reflected
+constructor/call heads, atoms, named zones, and argument routes, but arbitrary
+`TgRule` templates still do not have a stable dynamic task-file codec.  That
+future codec must preserve full kernel `Type`/`Expr` identity instead of
+growing a symbol-name pseudo-ISA.  Also, `meta/sketch` rank requires ordered
+alternatives not to overlap structurally.  The exhaustive consumer gates
+`rank(unrank(i)) = i`, but a future public rule codec should diagnose obvious
+overlapping template shapes before a sweep.
 
 ### Theorem scope and canonicalization pressure
 

@@ -320,9 +320,11 @@ TARGETS=(
   tools/search/tasks/typed_shard_call.shard
   tools/search/tasks/typed_wasm_add1.shard
   tools/search/tasks/typed_x86_calculator.shard
+  tools/search/tasks/typed_x86_calculator4.shard
   tools/search/gen/imp_add1_refinement.shard
   tools/search/gen/imp_mix_refinement.shard
   tools/search/gen/x86_calculator_refinement.shard
+  tools/search/gen/x86_calculator4_refinement.shard
 )
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -476,12 +478,21 @@ else
   echo "SKIPPED (no bin/shard_eval)"
 fi
 
-# Portability/flex pin: the unchanged reflected engine searches the current
-# x86 model over the exact forty-pair battery from the old mlx86 calculator.
-# Its bare-item task scope is the entire ISA configuration.
+# Portability/flex pins: the reflected engine searches the current x86 model
+# over the old mlx86 calculator battery.  The first task retains the checked-in
+# addition-only sample site; the second restores the source's complete
+# add/sub/mul/div switch and uses the generic routed task environment plus a
+# typed early discriminator before its complete forty-row observation.
 echo "=== search: typed x86 calculator pin ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/typed_expr.shard tools/search/tasks/typed_x86_calculator.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+echo "=== search: typed x86 four-operation calculator pin ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/typed_expr.shard tools/search/tasks/typed_x86_calculator4.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi

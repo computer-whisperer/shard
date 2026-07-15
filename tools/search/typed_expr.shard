@@ -33,6 +33,7 @@
 ;;;   search_ints    : () -> List Int
 ;;;   search_symbols : () -> List Symbol
 ;;;   search_depth   : () -> Int
+;;;   search_screen  : Candidate -> Bool       ; optional cheap discriminator
 ;;;   search_probe   : Candidate -> Option Observation
 ;;;   search_target  : () -> Observation
 ;;;   search_witness      : () -> Candidate  ; data/program-value tasks
@@ -204,9 +205,174 @@
              ((Cons _ _)
               (TeSigErr "search_probe must take exactly one argument"))))))))))
 
-(type TeCfgR (TeCfgErr (List Int)) (TeCfgOk Int (List TgAtom) TeFormCfg))
+;; ---- reflected named-zone codec --------------------------------------------
 
-(fn te_config ((ctx InvokeCtx) (m Module)) TeCfgR
+(record
+  TeScopeTags
+  (scope_env_tag QName)
+  (scope_zone_tag QName)
+  (scope_route_tag QName)
+  (scope_ctor_tag QName)
+  (scope_call_tag QName))
+
+(fn te_scope_tags4 ((m Module) (qe QName) (qz QName) (qr QName) (qc QName))
+  (Option TeScopeTags)
+  (match (ctor_qn m (quote TgScopeCall))
+    (None None)
+    ((Some qf) (Some (MkTeScopeTags qe qz qr qc qf)))))
+
+(fn te_scope_tags3 ((m Module) (qe QName) (qz QName) (qr QName))
+  (Option TeScopeTags)
+  (match (ctor_qn m (quote TgScopeCtor))
+    (None None)
+    ((Some qc) (te_scope_tags4 m qe qz qr qc))))
+
+(fn te_scope_tags2 ((m Module) (qe QName) (qz QName)) (Option TeScopeTags)
+  (match (ctor_qn m (quote TgScopeRoute))
+    (None None)
+    ((Some qr) (te_scope_tags3 m qe qz qr))))
+
+(fn te_scope_tags1 ((m Module) (qe QName)) (Option TeScopeTags)
+  (match (ctor_qn m (quote TgScopeZone))
+    (None None)
+    ((Some qz) (te_scope_tags2 m qe qz))))
+
+(fn te_scope_tags ((m Module)) (Option TeScopeTags)
+  (match (ctor_qn m (quote TgScopeEnv))
+    (None None)
+    ((Some qe) (te_scope_tags1 m qe))))
+
+(fn te_tag_args ((tag QName) (e Expr)) (Option (List Expr))
+  (match e
+    ((Ctor q args) (if (qname_eq q tag) (Some args) None))
+    (_ None)))
+
+(type TeScopeHeadDR (TeScopeHeadDErr (List Int)) (TeScopeHeadDOk TgScopeHead))
+
+(fn te_scope_head_decode ((tags TeScopeTags) (e Expr)) TeScopeHeadDR
+  (match (te_tag_args (scope_ctor_tag_of tags) e)
+    ((Some (Cons (SymLit name) Nil)) (TeScopeHeadDOk (TgScopeCtor name)))
+    ((Some _) (TeScopeHeadDErr "TgScopeCtor payload"))
+    (None
+      (match (te_tag_args (scope_call_tag_of tags) e)
+        ((Some (Cons (SymLit name) Nil)) (TeScopeHeadDOk (TgScopeCall name)))
+        ((Some _) (TeScopeHeadDErr "TgScopeCall payload"))
+        (None (TeScopeHeadDErr "scope head is not TgScopeCtor/TgScopeCall"))))))
+
+(type TeScopeHeadsDR
+  (TeScopeHeadsDErr (List Int))
+  (TeScopeHeadsDOk (List TgScopeHead)))
+
+(fn te_scope_heads_decode ((tags TeScopeTags) (es (List Expr))) TeScopeHeadsDR
+  (measure (struct es))
+  (match es
+    (Nil (TeScopeHeadsDOk Nil))
+    ((Cons e rest)
+     (match (te_scope_head_decode tags e)
+       ((TeScopeHeadDErr msg) (TeScopeHeadsDErr msg))
+       ((TeScopeHeadDOk head)
+        (match (te_scope_heads_decode tags rest)
+          ((TeScopeHeadsDErr msg) (TeScopeHeadsDErr msg))
+          ((TeScopeHeadsDOk tail) (TeScopeHeadsDOk (Cons head tail)))))))))
+
+(type TeScopeRouteDR
+  (TeScopeRouteDErr (List Int))
+  (TeScopeRouteDOk TgScopeRoute))
+
+(fn te_scope_route_decode ((tags TeScopeTags) (e Expr)) TeScopeRouteDR
+  (match (te_tag_args (scope_route_tag_of tags) e)
+    ((Some (Cons he (Cons (IntLit index) (Cons (SymLit zone) Nil))))
+     (match (te_scope_head_decode tags he)
+       ((TeScopeHeadDErr msg) (TeScopeRouteDErr msg))
+       ((TeScopeHeadDOk head) (TeScopeRouteDOk (TgScopeRoute head index zone)))))
+    ((Some _) (TeScopeRouteDErr "TgScopeRoute payload"))
+    (None (TeScopeRouteDErr "scope route is not TgScopeRoute"))))
+
+(type TeScopeRoutesDR
+  (TeScopeRoutesDErr (List Int))
+  (TeScopeRoutesDOk (List TgScopeRoute)))
+
+(fn te_scope_routes_decode ((tags TeScopeTags) (es (List Expr))) TeScopeRoutesDR
+  (measure (struct es))
+  (match es
+    (Nil (TeScopeRoutesDOk Nil))
+    ((Cons e rest)
+     (match (te_scope_route_decode tags e)
+       ((TeScopeRouteDErr msg) (TeScopeRoutesDErr msg))
+       ((TeScopeRouteDOk route)
+        (match (te_scope_routes_decode tags rest)
+          ((TeScopeRoutesDErr msg) (TeScopeRoutesDErr msg))
+          ((TeScopeRoutesDOk tail) (TeScopeRoutesDOk (Cons route tail)))))))))
+
+(type TeScopeZoneDR (TeScopeZoneDErr (List Int)) (TeScopeZoneDOk TgScopeZone))
+
+(fn te_scope_zone_decode ((tags TeScopeTags) (e Expr)) TeScopeZoneDR
+  (match (te_tag_args (scope_zone_tag_of tags) e)
+    ((Some (Cons (SymLit name) (Cons he (Cons ie (Cons se (Cons re Nil))))))
+     (match (expr_list he)
+       (None (TeScopeZoneDErr "TgScopeZone heads is not a List"))
+       ((Some hes)
+        (match (te_scope_heads_decode tags hes)
+          ((TeScopeHeadsDErr msg) (TeScopeZoneDErr msg))
+          ((TeScopeHeadsDOk heads)
+           (match (expr_ints ie)
+             (None (TeScopeZoneDErr "TgScopeZone ints is not a List Int"))
+             ((Some ints)
+              (match (te_symbols se)
+                (None
+                  (TeScopeZoneDErr "TgScopeZone symbols is not a List Symbol"))
+                ((Some syms)
+                 (match (expr_list re)
+                   (None (TeScopeZoneDErr "TgScopeZone routes is not a List"))
+                   ((Some res)
+                    (match (te_scope_routes_decode tags res)
+                      ((TeScopeRoutesDErr msg) (TeScopeZoneDErr msg))
+                      ((TeScopeRoutesDOk routes)
+                       (TeScopeZoneDOk
+                         (TgScopeZone name heads ints syms routes)))))))))))))))
+    ((Some _) (TeScopeZoneDErr "TgScopeZone payload"))
+    (None (TeScopeZoneDErr "scope zone is not TgScopeZone"))))
+
+(type TeScopeZonesDR
+  (TeScopeZonesDErr (List Int))
+  (TeScopeZonesDOk (List TgScopeZone)))
+
+(fn te_scope_zones_decode ((tags TeScopeTags) (es (List Expr))) TeScopeZonesDR
+  (measure (struct es))
+  (match es
+    (Nil (TeScopeZonesDOk Nil))
+    ((Cons e rest)
+     (match (te_scope_zone_decode tags e)
+       ((TeScopeZoneDErr msg) (TeScopeZonesDErr msg))
+       ((TeScopeZoneDOk zone)
+        (match (te_scope_zones_decode tags rest)
+          ((TeScopeZonesDErr msg) (TeScopeZonesDErr msg))
+          ((TeScopeZonesDOk tail) (TeScopeZonesDOk (Cons zone tail)))))))))
+
+(type TeScopeEnvDR (TeScopeEnvDErr (List Int)) (TeScopeEnvDOk TgScopeEnv))
+
+(fn te_scope_env_decode ((m Module) (e Expr)) TeScopeEnvDR
+  (match (te_scope_tags m)
+    (None (TeScopeEnvDErr "scope codec constructors are absent"))
+    ((Some tags)
+     (match (te_tag_args (scope_env_tag_of tags) e)
+       ((Some (Cons (SymLit root) (Cons ze Nil)))
+        (match (expr_list ze)
+          (None (TeScopeEnvDErr "TgScopeEnv zones is not a List"))
+          ((Some zes)
+           (match (te_scope_zones_decode tags zes)
+             ((TeScopeZonesDErr msg) (TeScopeEnvDErr msg))
+             ((TeScopeZonesDOk zones) (TeScopeEnvDOk (TgScopeEnv root zones)))))))
+       ((Some _) (TeScopeEnvDErr "TgScopeEnv payload"))
+       (None (TeScopeEnvDErr "search_environment is not TgScopeEnv"))))))
+
+(type TeCfg
+  (TeCfgFlat Int (List TgAtom) TeFormCfg)
+  (TeCfgScoped Int TgScopeEnv))
+
+(type TeCfgR (TeCfgErr (List Int)) (TeCfgOk TeCfg))
+
+(fn te_flat_config ((ctx InvokeCtx) (m Module)) TeCfgR
   (match (te_call0 ctx m (quote search_depth))
     (None (TeCfgErr "missing/failed search_depth"))
     ((Some de)
@@ -233,9 +399,39 @@
                          ((TeFormsErr msg) (TeCfgErr msg))
                          ((TeFormsOk forms)
                           (TeCfgOk
-                            depth
-                            (tg_app (te_int_atoms ints) (te_sym_atoms syms))
-                            forms)))))))))))))))))))
+                            (TeCfgFlat
+                              depth
+                              (tg_app (te_int_atoms ints) (te_sym_atoms syms))
+                              forms))))))))))))))))))))
+
+(fn te_scoped_value ((m Module) (depth Int) (value Expr)) TeCfgR
+  (match (te_scope_env_decode m value)
+    ((TeScopeEnvDErr msg) (TeCfgErr msg))
+    ((TeScopeEnvDOk spec) (TeCfgOk (TeCfgScoped depth spec)))))
+
+(fn te_scoped_fd ((ctx InvokeCtx) (m Module) (depth Int) (fd FnDef)) TeCfgR
+  (match fd
+    ((FnDef _ params _ _)
+     (match params
+       ((Cons _ _) (TeCfgErr "search_environment must take no arguments"))
+       (Nil
+         (match (invoke_fd_ctx ctx fd Nil)
+           (None (TeCfgErr "search_environment invocation failed"))
+           ((Some value) (te_scoped_value m depth value))))))))
+
+(fn te_config_depth ((ctx InvokeCtx) (m Module) (depth Int)) TeCfgR
+  (if (lt depth 0) (TeCfgErr "negative search_depth")
+  (match (find_fn (quote search_environment) m)
+    (None (te_flat_config ctx m))
+    ((Some fd) (te_scoped_fd ctx m depth fd)))))
+
+(fn te_config ((ctx InvokeCtx) (m Module)) TeCfgR
+  (match (te_call0 ctx m (quote search_depth))
+    (None (TeCfgErr "missing/failed search_depth"))
+    ((Some de)
+     (match (expr_int de)
+       (None (TeCfgErr "search_depth is not Int"))
+       ((Some depth) (te_config_depth ctx m depth))))))
 
 ;; ---- root file's candidate scope -------------------------------------------
 
@@ -259,6 +455,40 @@
     ((TcErr msg) (TeTcErr msg))))
 
 ;; ---- opaque observations ----------------------------------------------------
+
+(type TeScreen (TeNoScreen) (TeScreenFd FnDef))
+
+(type TeScreenSigR (TeScreenSigErr (List Int)) (TeScreenSigOk TeScreen))
+
+(fn te_screen_fd_sig ((fd FnDef) (cand Type)) TeScreenSigR
+  (match fd
+    ((FnDef _ params ret _)
+     (match params
+       ((Cons got Nil)
+        (if (type_eq got cand)
+          (if (type_eq ret (TCon (qn (quote Bool)) Nil))
+            (TeScreenSigOk (TeScreenFd fd))
+            (TeScreenSigErr "search_screen must return Bool"))
+          (TeScreenSigErr "search_screen parameter disagrees with search_probe")))
+       (_ (TeScreenSigErr "search_screen must take exactly one argument"))))))
+
+(fn te_screen_sig ((m Module) (cand Type)) TeScreenSigR
+  (match (find_fn (quote search_screen) m)
+    (None (TeScreenSigOk (TeNoScreen)))
+    ((Some fd) (te_screen_fd_sig fd cand))))
+
+(type TeScreenR (TeScreenErr (List Int)) (TeScreenDrop) (TeScreenPass))
+
+(fn te_screen_run ((ctx InvokeCtx) (screen TeScreen) (candidate Expr)) TeScreenR
+  (match screen
+    ((TeNoScreen) (TeScreenPass))
+    ((TeScreenFd fd)
+     (match (invoke_fd_ctx ctx fd (Cons candidate Nil))
+       (None (TeScreenErr "search_screen invocation failed"))
+       ((Some value)
+        (match (expr_bool value)
+          (None (TeScreenErr "search_screen result is not Bool"))
+          ((Some keep) (if keep (TeScreenPass) (TeScreenDrop)))))))))
 
 (type TeObsR (TeObsErr (List Int)) (TeObsReject) (TeObsOk Expr))
 
@@ -323,7 +553,7 @@
 
 (type TeSweepR
   (TeSweepErr (List Int))
-  (TeSweepOk (List TeBucket) Int Int (List Int)))  ; buckets, accept, reject, sols
+  (TeSweepOk (List TeBucket) Int Int Int (List Int)))  ; buckets, accept, reject, screened, sols
 
 (fn te_at ((phase (List Int)) (rank Int) (msg (List Int))) (List Int)
   (append_int
@@ -338,11 +568,13 @@
    (m Module)
    (want Type)
    (ctx InvokeCtx)
+   (screen TeScreen)
    (probe FnDef)
    (target Expr)
    (buckets (List TeBucket))
    (accepted Int)
    (rejected Int)
+   (screened Int)
    (solutions (List Int)))
   TeSweepR
   (measure
@@ -351,51 +583,77 @@
     (by arith (list 1 1))
     (by arith (list 1 0))
     (by arith (list 1 1)))
-  (if (le k 0) (TeSweepOk buckets accepted rejected (te_int_rev solutions Nil))
-  (let ((rank (- total k)))
-    (match (sk_unrank root grammar rank)
-      ((SkEErr msg) (TeSweepErr (te_at "unrank" rank msg)))
-      ((SkEOk candidate)
-       (match (sk_rank root grammar candidate)
-         ((SkCErr msg) (TeSweepErr (te_at "rank" rank msg)))
-         ((SkCOk rank2)
-          (if (int_eq rank rank2)
-            (match (te_typecheck m want candidate)
-              ((TeTcErr msg) (TeSweepErr (te_at "type" rank msg)))
-              ((TeTcOk)
-               (match (te_observe ctx probe candidate)
-                 ((TeObsErr msg) (TeSweepErr (te_at "probe" rank msg)))
-                 ((TeObsReject)
-                  (te_sweep
-                    (- k 1)
-                    total
-                    root
-                    grammar
-                    m
-                    want
-                    ctx
-                    probe
-                    target
-                    buckets
-                    accepted
-                    (+ rejected 1)
-                    solutions))
-                 ((TeObsOk key)
-                  (te_sweep
-                    (- k 1)
-                    total
-                    root
-                    grammar
-                    m
-                    want
-                    ctx
-                    probe
-                    target
-                    (te_bucket_add key rank buckets)
-                    (+ accepted 1)
-                    rejected
-                    (if (expr_eq key target) (Cons rank solutions) solutions))))))
-            (TeSweepErr (te_at "roundtrip" rank "rank disagrees"))))))))))
+  (if (le k 0)
+    (TeSweepOk buckets accepted rejected screened (te_int_rev solutions Nil))
+    (let ((rank (- total k)))
+      (match (sk_unrank root grammar rank)
+        ((SkEErr msg) (TeSweepErr (te_at "unrank" rank msg)))
+        ((SkEOk candidate)
+         (match (sk_rank root grammar candidate)
+           ((SkCErr msg) (TeSweepErr (te_at "rank" rank msg)))
+           ((SkCOk rank2)
+            (if (int_eq rank rank2)
+              (match (te_typecheck m want candidate)
+                ((TeTcErr msg) (TeSweepErr (te_at "type" rank msg)))
+                ((TeTcOk)
+                 (match (te_screen_run ctx screen candidate)
+                   ((TeScreenErr msg) (TeSweepErr (te_at "screen" rank msg)))
+                   ((TeScreenDrop)
+                    (te_sweep
+                      (- k 1)
+                      total
+                      root
+                      grammar
+                      m
+                      want
+                      ctx
+                      screen
+                      probe
+                      target
+                      buckets
+                      accepted
+                      rejected
+                      (+ screened 1)
+                      solutions))
+                   ((TeScreenPass)
+                    (match (te_observe ctx probe candidate)
+                      ((TeObsErr msg) (TeSweepErr (te_at "probe" rank msg)))
+                      ((TeObsReject)
+                       (te_sweep
+                         (- k 1)
+                         total
+                         root
+                         grammar
+                         m
+                         want
+                         ctx
+                         screen
+                         probe
+                         target
+                         buckets
+                         accepted
+                         (+ rejected 1)
+                         screened
+                         solutions))
+                      ((TeObsOk key)
+                       (te_sweep
+                         (- k 1)
+                         total
+                         root
+                         grammar
+                         m
+                         want
+                         ctx
+                         screen
+                         probe
+                         target
+                         (te_bucket_add key rank buckets)
+                         (+ accepted 1)
+                         rejected
+                         screened
+                         (if (expr_eq key target) (Cons rank solutions)
+                         solutions))))))))
+              (TeSweepErr (te_at "roundtrip" rank "rank disagrees"))))))))))
 
 ;; ---- witness and reporting --------------------------------------------------
 
@@ -425,6 +683,7 @@
    (m Module)
    (want Type)
    (ctx InvokeCtx)
+   (screen TeScreen)
    (probe FnDef)
    (target Expr)
    (rank Int)
@@ -440,15 +699,20 @@
           (match (te_typecheck m want witness)
             ((TeTcErr msg) (TeWitnessErr (append_int "witness type: " msg)))
             ((TeTcOk)
-             (match (te_observe ctx probe witness)
-               ((TeObsErr msg)
-                (TeWitnessErr (append_int "witness probe: " msg)))
-               ((TeObsReject) (TeWitnessErr "witness is rejected"))
-               ((TeObsOk key)
-                (if (expr_eq key target)
-                  (if (te_int_mem rank solutions) (TeWitnessOk rank)
-                  (TeWitnessErr "witness rank absent from solution set"))
-                  (TeWitnessErr "witness observation differs from target"))))))
+             (match (te_screen_run ctx screen witness)
+               ((TeScreenErr msg)
+                (TeWitnessErr (append_int "witness screen: " msg)))
+               ((TeScreenDrop) (TeWitnessErr "witness is screened out"))
+               ((TeScreenPass)
+                (match (te_observe ctx probe witness)
+                  ((TeObsErr msg)
+                   (TeWitnessErr (append_int "witness probe: " msg)))
+                  ((TeObsReject) (TeWitnessErr "witness is rejected"))
+                  ((TeObsOk key)
+                   (if (expr_eq key target)
+                     (if (te_int_mem rank solutions) (TeWitnessOk rank)
+                     (TeWitnessErr "witness rank absent from solution set"))
+                     (TeWitnessErr "witness observation differs from target"))))))))
           (TeWitnessErr "witness rank/unrank disagrees")))))))
 
 (fn te_witness
@@ -457,6 +721,7 @@
    (m Module)
    (want Type)
    (ctx InvokeCtx)
+   (screen TeScreen)
    (probe FnDef)
    (target Expr)
    (witness TeWitness)
@@ -471,10 +736,11 @@
           ((SkEErr msg) (TeWitnessErr (append_int "witness unrank: " msg)))
           ((SkEOk value2)
            (if (expr_eq value value2)
-             (te_witness_at root grammar m want ctx probe target rank solutions)
+             (te_witness_at root grammar m want ctx screen probe target rank
+               solutions)
              (TeWitnessErr "witness rank/unrank disagrees")))))))
     ((TeWitnessRank rank)
-     (te_witness_at root grammar m want ctx probe target rank solutions))))
+     (te_witness_at root grammar m want ctx screen probe target rank solutions))))
 
 (type TeBestR (TeBestErr (List Int)) (TeBestOk (List Int)))
 
@@ -513,6 +779,7 @@
    (total Int)
    (accepted Int)
    (rejected Int)
+   (screened Int)
    (behaviors Int)
    (best (List Int))
    (solutions Int)
@@ -532,6 +799,8 @@
       (show_int accepted)
       "\nREJECTED "
       (show_int rejected)
+      "\nSCREENED "
+      (show_int screened)
       "\nBEHAVIORS "
       (show_int behaviors)
       "\n"
@@ -552,6 +821,7 @@
    (m Module)
    (want Type)
    (ictx InvokeCtx)
+   (screen TeScreen)
    (probe FnDef)
    (target Expr)
    (witness TeWitness)
@@ -566,11 +836,13 @@
     ((SkCErr msg) (te_fail (append_int "count: " msg) w))
     ((SkCOk total)
      (match
-       (te_sweep total total root grammar m want ictx probe target Nil 0 0 Nil)
+       (te_sweep total total root grammar m want ictx screen probe target Nil 0
+         0 0 Nil)
        ((TeSweepErr msg) (te_fail msg w))
-       ((TeSweepOk buckets accepted rejected solutions)
+       ((TeSweepOk buckets accepted rejected screened solutions)
         (match
-          (te_witness root grammar m want ictx probe target witness solutions)
+          (te_witness root grammar m want ictx screen probe target witness
+            solutions)
           ((TeWitnessErr msg) (te_fail msg w))
           ((TeWitnessOk witness_rank)
            (match (te_best table root grammar solutions)
@@ -584,6 +856,7 @@
                   total
                   accepted
                   rejected
+                  screened
                   (te_bucket_len buckets)
                   best
                   (te_int_len solutions)
@@ -595,25 +868,48 @@
    (m Module)
    (want Type)
    (ictx InvokeCtx)
+   (screen TeScreen)
    (probe FnDef)
    (target Expr)
    (witness TeWitness)
    (scope RCtx)
-   (depth Int)
-   (atoms (List TgAtom))
-   (forms TeFormCfg)
+   (cfg TeCfg)
    (w World))
   World
-  (match forms
-    ((TeFormCfg ctors calls ifs)
-     (let
-       ((heads (tg_scope_heads m scope ctors calls))
-        (table (tg_scope_table scope)))
-       (match (tg_build m heads atoms Nil Nil want depth (TgForms ifs))
-         ((TgBuildErr msg) (te_fail (append_int "grammar: " msg) w))
-         ((TgBuildOk root grammar holes)
-          (te_run_space path m want ictx probe target witness table depth root
-            grammar holes w)))))))
+  (match cfg
+    ((TeCfgFlat depth atoms forms)
+     (match forms
+       ((TeFormCfg ctors calls ifs)
+        (let
+          ((heads (tg_scope_heads m scope ctors calls))
+           (table (tg_scope_table scope)))
+          (match (tg_build m heads atoms Nil Nil want depth (TgForms ifs))
+            ((TgBuildErr msg) (te_fail (append_int "grammar: " msg) w))
+            ((TgBuildOk root grammar holes)
+             (te_run_space path m want ictx screen probe target witness table
+               depth root grammar holes w)))))))
+    ((TeCfgScoped depth spec)
+     (match (tg_resolve_scope_env m scope spec)
+       ((TgScopeErr msg) (te_fail (append_int "scope: " msg) w))
+       ((TgScopeOk env root_zone)
+        (match (tg_build_env m env Nil want depth root_zone)
+          ((TgBuildErr msg) (te_fail (append_int "grammar: " msg) w))
+          ((TgBuildOk root grammar holes)
+           (te_run_space
+             path
+             m
+             want
+             ictx
+             screen
+             probe
+             target
+             witness
+             (tg_scope_table scope)
+             depth
+             root
+             grammar
+             holes
+             w))))))))
 
 (fn te_search
   ((path (List Int))
@@ -628,16 +924,19 @@
     ((TeSigOk probe target_fd witness_mode want _)
      (match cfg
        ((TeCfgErr msg) (te_fail (append_int "config: " msg) w))
-       ((TeCfgOk depth atoms forms)
+       ((TeCfgOk search_cfg)
         (let ((ictx (prepare_invoke m)) (scope (te_import_ctx m path src)))
-          (match (invoke_fd_ctx ictx target_fd Nil)
-            (None (te_fail "target invocation" w))
-            ((Some target)
-             (match (te_load_witness ictx witness_mode)
-               ((TeWitnessLoadErr msg) (te_fail msg w))
-               ((TeWitnessLoadOk witness)
-                (te_build_space path m want ictx probe target witness scope
-                  depth atoms forms w)))))))))))
+          (match (te_screen_sig m want)
+            ((TeScreenSigErr msg) (te_fail (append_int "protocol: " msg) w))
+            ((TeScreenSigOk screen)
+             (match (invoke_fd_ctx ictx target_fd Nil)
+               (None (te_fail "target invocation" w))
+               ((Some target)
+                (match (te_load_witness ictx witness_mode)
+                  ((TeWitnessLoadErr msg) (te_fail msg w))
+                  ((TeWitnessLoadOk witness)
+                   (te_build_space path m want ictx screen probe target witness
+                     scope search_cfg w)))))))))))))
 (fn main ((w World)) World
   (match (get_args w)
     ((Pair args w1)

@@ -15,6 +15,8 @@
 
 (import "../../../kernel/stdlib.shard")
 (import "../../../models/x86/x86.shard")
+(import "../typed_grammar.shard")
+(use (:: tools search typed_grammar *))
 
 ;; Generic program spine.
 (use (:: core List))
@@ -44,10 +46,75 @@
 
 (fn search_symbols () (List Symbol) Nil)
 
-;; XBin's Src child adds one constructor level beyond XMovRR.  Depth four
-;; admits the two-instruction witness.  Longer sequences generated at the
-;; ragged edge are rejected by the task's semantic-domain policy below.
+;; XBin's Src child adds one constructor level beyond XMovRR.  The routed
+;; sequence zones below admit exactly two instructions, so depth four now
+;; counts the useful product directly rather than generating longer tails and
+;; rejecting them after construction.
 (fn search_depth () Int 4)
+
+(fn calc_scope_ctor ((name Symbol)) TgScopeHead (TgScopeCtor name))
+
+(fn calc_scope_route ((head Symbol) (index Int) (zone Symbol)) TgScopeRoute
+  (TgScopeRoute (calc_scope_ctor head) index zone))
+
+(fn calc_instr_zone ((name Symbol)) TgScopeZone
+  (TgScopeZone
+    name
+    (list (calc_scope_ctor (quote XMovRR)) (calc_scope_ctor (quote XBin)))
+    Nil
+    Nil
+    (list
+      (calc_scope_route (quote XMovRR) 0 (quote register))
+      (calc_scope_route (quote XMovRR) 1 (quote register))
+      (calc_scope_route (quote XBin) 0 (quote operation))
+      (calc_scope_route (quote XBin) 1 (quote register))
+      (calc_scope_route (quote XBin) 2 (quote source)))))
+
+(fn calc_seq_zone ((name Symbol) (instruction Symbol) (tail Symbol)) TgScopeZone
+  (TgScopeZone
+    name
+    (list (calc_scope_ctor (quote Cons)))
+    Nil
+    Nil
+    (list
+      (calc_scope_route (quote Cons) 0 instruction)
+      (calc_scope_route (quote Cons) 1 tail))))
+
+(fn search_environment () TgScopeEnv
+  (TgScopeEnv
+    (quote sequence0)
+    (list
+      (calc_seq_zone (quote sequence0) (quote instruction0) (quote sequence1))
+      (calc_seq_zone (quote sequence1) (quote instruction1) (quote sequence2))
+      (TgScopeZone
+        (quote sequence2)
+        (list (calc_scope_ctor (quote Nil)))
+        Nil
+        Nil
+        Nil)
+      (calc_instr_zone (quote instruction0))
+      (calc_instr_zone (quote instruction1))
+      (TgScopeZone
+        (quote register)
+        (list
+          (calc_scope_ctor (quote RAX))
+          (calc_scope_ctor (quote RDI))
+          (calc_scope_ctor (quote RSI)))
+        Nil
+        Nil
+        Nil)
+      (TgScopeZone
+        (quote operation)
+        (list (calc_scope_ctor (quote XAdd)) (calc_scope_ctor (quote XSub)))
+        Nil
+        Nil
+        Nil)
+      (TgScopeZone
+        (quote source)
+        (list (calc_scope_ctor (quote SReg)))
+        Nil
+        Nil
+        (list (calc_scope_route (quote SReg) 0 (quote register)))))))
 
 ;; mlx86's fast_rand_seeded, transcribed literally.  The historical seeds here
 ;; are small enough that the C signed-int multiplication never overflowed.
@@ -84,14 +151,8 @@
     ((S n2)
      (Cons (Some (+ (mlx86_a i) (mlx86_b i))) (search_target_go (+ i 1) n2)))))
 
-(fn search_len ((body (List XInstr))) Int
-  (measure (struct body))
-  (match body
-    (Nil 0)
-    ((Cons _ rest) (+ 1 (search_len rest)))))
-
 (fn search_probe ((body (List XInstr))) (Option (List (Option Int)))
-  (if (le (search_len body) 2) (Some (search_observe body)) None))
+  (Some (search_observe body)))
 
 (fn search_target () (List (Option Int))
   (search_target_go 0 ((:: x86 xfnat) 40)))

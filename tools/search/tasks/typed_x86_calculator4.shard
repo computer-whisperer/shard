@@ -1,0 +1,285 @@
+;;; The intended four-operation mlx86 calculator: op 0/1/2/3 selects byte
+;;; add/sub/mul/div.  This keeps the historical forty deterministic triples,
+;;; now using `% 4` at the commented selector site, and searches an actual
+;;; structured x86 program rather than a host-language case table.
+;;;
+;;; The task supplies only a TgScopeEnv.  Fixed structural heads describe the
+;;; reducible three-test dispatch shape; routed semantic holes choose each
+;;; comparison literal from {0,1,2,3} and each arithmetic leaf from
+;;; {add,sub,mul}.  Thus the exact space is 4^3 * 3^3 = 1,728 x86 programs.
+;;; All QNames are resolved from the explicit bare-item scope below.
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../models/x86/x86.shard")
+(import "../typed_grammar.shard")
+(use (:: tools search typed_grammar *))
+
+;; Candidate structure and x86 vocabulary.
+(use (:: core List))
+(use (:: core Nil))
+(use (:: core Cons))
+(use (:: models x86 x86 XInstr))
+(use (:: models x86 x86 Reg))
+(use (:: models x86 x86 Src))
+(use (:: models x86 x86 Cond))
+(use (:: models x86 x86 XBop))
+(use (:: models x86 x86 XBlock))
+(use (:: models x86 x86 XBrIf))
+(use (:: models x86 x86 XBr))
+(use (:: models x86 x86 CEq))
+(use (:: models x86 x86 SImm))
+(use (:: models x86 x86 SReg))
+(use (:: models x86 x86 XMovRR))
+(use (:: models x86 x86 XMovRI))
+(use (:: models x86 x86 XBin))
+(use (:: models x86 x86 XDivU))
+(use (:: models x86 x86 RAX))
+(use (:: models x86 x86 RDX))
+(use (:: models x86 x86 RDI))
+(use (:: models x86 x86 RSI))
+(use (:: models x86 x86 XAdd))
+(use (:: models x86 x86 XSub))
+(use (:: models x86 x86 XMul))
+
+(use (:: models x86 x86) as x86)
+
+(fn c4h ((name Symbol)) TgScopeHead (TgScopeCtor name))
+
+(fn c4r ((head Symbol) (index Int) (zone Symbol)) TgScopeRoute
+  (TgScopeRoute (c4h head) index zone))
+
+(fn c4z0 ((name Symbol) (head Symbol)) TgScopeZone
+  (TgScopeZone name (list (c4h head)) Nil Nil Nil))
+
+;; One exact Cons cell.  Its element and tail route independently, which is
+;; the generic fixed-sequence mechanism—not an x86/list special case.
+(fn c4seq ((name Symbol) (element Symbol) (tail Symbol)) TgScopeZone
+  (TgScopeZone
+    name
+    (list (c4h (quote Cons)))
+    Nil
+    Nil
+    (list (c4r (quote Cons) 0 element) (c4r (quote Cons) 1 tail))))
+
+(fn c4block ((name Symbol) (body Symbol)) TgScopeZone
+  (TgScopeZone
+    name
+    (list (c4h (quote XBlock)))
+    Nil
+    Nil
+    (list (c4r (quote XBlock) 0 body))))
+
+(fn c4_environment_zones () (List TgScopeZone)
+  (list
+    ;; root = [outer0]
+    (c4seq (quote root) (quote outer0) (quote nil))
+    ;; if op==? then arithmetic0 else outer1
+    (c4block (quote outer0) (quote o0s0))
+    (c4seq (quote o0s0) (quote inner0) (quote o0s1))
+    (c4seq (quote o0s1) (quote move) (quote o0s2))
+    (c4seq (quote o0s2) (quote arithmetic) (quote nil))
+    (c4block (quote inner0) (quote i0s0))
+    (c4seq (quote i0s0) (quote brif) (quote i0s1))
+    (c4seq (quote i0s1) (quote outer1) (quote i0s2))
+    (c4seq (quote i0s2) (quote br1) (quote nil))
+    ;; if op==? then arithmetic1 else outer2
+    (c4block (quote outer1) (quote o1s0))
+    (c4seq (quote o1s0) (quote inner1) (quote o1s1))
+    (c4seq (quote o1s1) (quote move) (quote o1s2))
+    (c4seq (quote o1s2) (quote arithmetic) (quote nil))
+    (c4block (quote inner1) (quote i1s0))
+    (c4seq (quote i1s0) (quote brif) (quote i1s1))
+    (c4seq (quote i1s1) (quote outer2) (quote i1s2))
+    (c4seq (quote i1s2) (quote br1) (quote nil))
+    ;; if op==? then arithmetic2 else divide
+    (c4block (quote outer2) (quote o2s0))
+    (c4seq (quote o2s0) (quote inner2) (quote o2s1))
+    (c4seq (quote o2s1) (quote move) (quote o2s2))
+    (c4seq (quote o2s2) (quote arithmetic) (quote nil))
+    (c4block (quote inner2) (quote i2s0))
+    (c4seq (quote i2s0) (quote brif) (quote i2s1))
+    (c4seq (quote i2s1) (quote move) (quote i2s2))
+    (c4seq (quote i2s2) (quote zero_rdx) (quote i2s3))
+    (c4seq (quote i2s3) (quote divide) (quote i2s4))
+    (c4seq (quote i2s4) (quote br1) (quote nil))
+    ;; exact list terminator
+    (c4z0 (quote nil) (quote Nil))
+    ;; branch: XBrIf (CEq RDX (SImm selector)) 0
+    (TgScopeZone
+      (quote brif)
+      (list (c4h (quote XBrIf)))
+      Nil
+      Nil
+      (list
+        (c4r (quote XBrIf) 0 (quote condition))
+        (c4r (quote XBrIf) 1 (quote zero))))
+    (TgScopeZone
+      (quote condition)
+      (list (c4h (quote CEq)))
+      Nil
+      Nil
+      (list
+        (c4r (quote CEq) 0 (quote rdx))
+        (c4r (quote CEq) 1 (quote selector_src))))
+    (TgScopeZone
+      (quote selector_src)
+      (list (c4h (quote SImm)))
+      Nil
+      Nil
+      (list (c4r (quote SImm) 0 (quote selector))))
+    ;; leaf setup/result operations
+    (TgScopeZone
+      (quote move)
+      (list (c4h (quote XMovRR)))
+      Nil
+      Nil
+      (list
+        (c4r (quote XMovRR) 0 (quote rax))
+        (c4r (quote XMovRR) 1 (quote rdi))))
+    (TgScopeZone
+      (quote arithmetic)
+      (list (c4h (quote XBin)))
+      Nil
+      Nil
+      (list
+        (c4r (quote XBin) 0 (quote operation))
+        (c4r (quote XBin) 1 (quote rax))
+        (c4r (quote XBin) 2 (quote rsi_src))))
+    (TgScopeZone
+      (quote rsi_src)
+      (list (c4h (quote SReg)))
+      Nil
+      Nil
+      (list (c4r (quote SReg) 0 (quote rsi))))
+    (TgScopeZone
+      (quote zero_rdx)
+      (list (c4h (quote XMovRI)))
+      Nil
+      Nil
+      (list
+        (c4r (quote XMovRI) 0 (quote rdx))
+        (c4r (quote XMovRI) 1 (quote zero))))
+    (TgScopeZone
+      (quote divide)
+      (list (c4h (quote XDivU)))
+      Nil
+      Nil
+      (list (c4r (quote XDivU) 0 (quote rsi))))
+    (TgScopeZone
+      (quote br1)
+      (list (c4h (quote XBr)))
+      Nil
+      Nil
+      (list (c4r (quote XBr) 0 (quote one))))
+    ;; semantic choices and singleton operand roles
+    (TgScopeZone (quote selector) Nil (list 0 1 2 3) Nil Nil)
+    (TgScopeZone
+      (quote operation)
+      (list (c4h (quote XAdd)) (c4h (quote XSub)) (c4h (quote XMul)))
+      Nil
+      Nil
+      Nil)
+    (TgScopeZone (quote zero) Nil (list 0) Nil Nil)
+    (TgScopeZone (quote one) Nil (list 1) Nil Nil)
+    (c4z0 (quote rax) (quote RAX))
+    (c4z0 (quote rdx) (quote RDX))
+    (c4z0 (quote rdi) (quote RDI))
+    (c4z0 (quote rsi) (quote RSI))))
+
+(fn search_environment () TgScopeEnv
+  (TgScopeEnv (quote root) (c4_environment_zones)))
+
+;; Plenty for the deepest fixed branch; depth no longer changes the language
+;; once every routed path reaches its singleton/semantic-choice leaf.
+(fn search_depth () Int 40)
+
+(fn mlx86_rand ((seed Int)) Int
+  (mod (ediv (+ (* 214013 seed) 2531011) 65536) 32768))
+
+(fn mlx86_a ((i Int)) Int (mod (mlx86_rand (+ i 100)) 100))
+
+(fn mlx86_b ((i Int)) Int (mod (mlx86_rand (+ i 300)) 100))
+
+(fn mlx86_op ((i Int)) Int (mod (mlx86_rand (+ i 500)) 4))
+
+(fn calc4_result ((a Int) (b Int) (op Int)) Int
+  (if (int_eq op 0) (mod (+ a b) 256)
+  (if (int_eq op 1) (mod (- a b) 256)
+  (if (int_eq op 2) (mod (* a b) 256)
+  (ediv a b)))))
+
+(fn search_run ((body (List XInstr)) (a Int) (b Int) (op Int)) (Option Int)
+  (match
+    ((:: x86 xcall_fn)
+     ((:: x86 xfnat) 100)
+     ((:: x86 MkXModule) (list ((:: x86 MkXFunc) 3 body)) 0 0)
+     0
+     (list a b op))
+    (None None)
+    ((Some value) (Some (mod value 256)))))
+
+(fn search_observe_go ((body (List XInstr)) (i Int) (n Nat)) (List (Option Int))
+  (measure (struct n))
+  (match n
+    (Z Nil)
+    ((S n2)
+     (Cons
+       (search_run body (mlx86_a i) (mlx86_b i) (mlx86_op i))
+       (search_observe_go body (+ i 1) n2)))))
+
+(fn search_target_go ((i Int) (n Nat)) (List (Option Int))
+  (measure (struct n))
+  (match n
+    (Z Nil)
+    ((S n2)
+     (Cons
+       (Some (calc4_result (mlx86_a i) (mlx86_b i) (mlx86_op i)))
+       (search_target_go (+ i 1) n2)))))
+
+;; Four high-information historical rows cover all four opcodes.  Each row's
+;; expected operation is distinct from the other three arithmetic results, so
+;; this cheap screen rejects a wrong dispatch/operator assignment before the
+;; engine pays for the complete forty-row behavior vector.
+(fn c4_case_ok ((body (List XInstr)) (i Int)) Bool
+  (match (search_run body (mlx86_a i) (mlx86_b i) (mlx86_op i))
+    (None False)
+    ((Some got)
+     (int_eq got (calc4_result (mlx86_a i) (mlx86_b i) (mlx86_op i))))))
+
+(fn search_screen ((body (List XInstr))) Bool
+  (if (c4_case_ok body 0)
+    (if (c4_case_ok body 1) (if (c4_case_ok body 2) (c4_case_ok body 4) False)
+    False)
+    False))
+
+(fn search_probe ((body (List XInstr))) (Option (List (Option Int)))
+  (Some (search_observe_go body 0 ((:: x86 xfnat) 40))))
+
+(fn search_target () (List (Option Int))
+  (search_target_go 0 ((:: x86 xfnat) 40)))
+
+(fn c4_cat ((xs (List XInstr)) (ys (List XInstr))) (List XInstr)
+  (measure (struct xs))
+  (match xs
+    (Nil ys)
+    ((Cons x rest) (Cons x (c4_cat rest ys)))))
+
+(fn c4_if ((selector Int) (yes XBop) (no (List XInstr))) XInstr
+  (XBlock
+    (list
+      (XBlock
+        (Cons (XBrIf (CEq RDX (SImm selector)) 0) (c4_cat no (list (XBr 1)))))
+      (XMovRR RAX RDI)
+      (XBin yes RAX (SReg RSI)))))
+
+(fn search_witness () (List XInstr)
+  (list
+    (c4_if
+      0
+      XAdd
+      (list
+        (c4_if
+          1
+          XSub
+          (list
+            (c4_if 2 XMul (list (XMovRR RAX RDI) (XMovRI RDX 0) (XDivU RSI)))))))))
