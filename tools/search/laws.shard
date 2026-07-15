@@ -38,6 +38,7 @@
 ;;;         bin/shard_eval run tools/search/laws.shard mine N   (collision proofs)
 ;;;         bin/shard_eval run tools/search/laws.shard show N MEMBER REP
 ;;;         bin/shard_eval run tools/search/laws.shard front N MEMBER REP
+;;;         bin/shard_eval run tools/search/laws.shard range N REP
 
 (import "../../kernel/stdlib.shard")
 (import "../../kernel/term.shard")
@@ -53,7 +54,9 @@
 (import "../../meta/doc")
 (import "../../meta/spell")
 (import "../../meta/format")
+(import "../../meta/census")
 (import "sym.shard")
+(import "frontier.shard")
 (import "checked_profile.shard")
 (import "rev.shard")
 (import "catalog.shard")
@@ -97,7 +100,9 @@
 (use (:: meta spell *))
 (use (:: meta format fmt))
 (use (:: meta format bytes_eq))
+(use (:: meta census *))
 (use (:: tools search sym *))
+(use (:: tools search frontier *))
 (use (:: tools search checked_profile *))
 (use (:: tools search rev *))
 (use (:: tools search catalog *))
@@ -1726,9 +1731,21 @@
 
 (type MnEdge (MnEdge Int Int))  ; member rank, representative rank
 
-(type MnStats (MnStats Int Int Int Int Int Int (List MnEdge) (List MnEdge)))
+(type MnStats
+  (MnStats
+    Int
+    Int
+    Int
+    Int
+    Int
+    Int
+    (List MnEdge)
+    (List MnEdge)
+    KcCensus
+    KcCensus))
 ;; proven, refuted, undecided; permutation/other/missing frontiers; first
-;; refuted examples, first undecided examples
+;; refuted examples, first undecided examples; exact residual signatures;
+;; smaller append-atom commutation bases
 
 (type MnR (MnRErr (List Int)) (MnROk MnStats))
 
@@ -1740,6 +1757,49 @@
 
 (fn mn_keep ((e MnEdge) (es (List MnEdge))) (List MnEdge)
   (if (lt (mn_edge_len es) 6) (Cons e es) es))
+
+(fn mn_front_roles ((apq QName)) (List FcRole)
+  (list (FcRole apq 0) (FcRole (cat_q) 1) (FcRole (catg_q) 2)))
+
+;; One proof edge represents one removable spelling in the current
+;; star-to-representative queue, hence weight 1.  Missing residuals stay in the
+;; verdict accounting but cannot enter the exact structural census.
+(fn mn_front_add
+  ((apq QName) (member Int) (front (Option (Pair SV SV))) (census KcCensus))
+  KcR
+  (match front
+    (None (KcOk census))
+    ((Some (Pair lhs rhs))
+     (kc_add (fc_signature (mn_front_roles apq) lhs rhs) 1 member 6 census))))
+
+(fn mn_keys_add ((keys (List (List Int))) (member Int) (census KcCensus)) KcR
+  (measure (struct keys))
+  (match keys
+    (Nil (KcOk census))
+    ((Cons key rest)
+     (match (kc_add key 1 member 8 census)
+       ((KcErr msg) (KcErr msg))
+       ((KcOk census2) (mn_keys_add rest member census2))))))
+
+(fn mn_basis_add
+  ((apq QName) (member Int) (front (Option (Pair SV SV))) (census KcCensus))
+  KcR
+  (match front
+    (None (KcOk census))
+    ((Some (Pair lhs rhs))
+     (mn_keys_add
+       (fc_commutation_keys apq (mn_front_roles apq) lhs rhs)
+       member
+       census))))
+
+(fn mn_key_count ((keys (List (List Int)))) Int
+  (measure (struct keys))
+  (match keys
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (mn_key_count rest)))))
+
+(fn mn_front_name ((class Int)) (List Int)
+  (if (int_eq class 1) "PERMUTATION" (if (int_eq class 2) "OTHER" "MISSING")))
 
 (fn mn_pair
   ((m Module) (rules0 (List NRule)) (root Expr) (g Grammar) (mi Int) (ri Int))
@@ -1786,7 +1846,8 @@
     (Nil (MnROk stats))
     ((Cons mi rest)
      (match stats
-       ((MnStats proven refuted undecided perms others missing refs undecs)
+       ((MnStats proven refuted undecided perms others missing refs undecs
+          fronts bases)
         (match (mn_pair m rules0 root g mi rep)
           ((LVdErr msg) (MnRErr (cz_at "mine pair" mi msg)))
           ((LVdProv _)
@@ -1806,7 +1867,9 @@
                others
                missing
                refs
-               undecs)))
+               undecs
+               fronts
+               bases)))
           ((LVdRef)
            (mn_members
              m
@@ -1824,26 +1887,36 @@
                others
                missing
                (mn_keep (MnEdge mi rep) refs)
-               undecs)))
+               undecs
+               fronts
+               bases)))
           ((LVdUndec front)
            (let ((fc (mn_front_class apq front)))
-             (mn_members
-               m
-               rules0
-               apq
-               root
-               g
-               rep
-               rest
-               (MnStats
-                 proven
-                 refuted
-                 (+ undecided 1)
-                 (if (int_eq fc 1) (+ perms 1) perms)
-                 (if (int_eq fc 2) (+ others 1) others)
-                 (if (int_eq fc 0) (+ missing 1) missing)
-                 refs
-                 (mn_keep (MnEdge mi rep) undecs)))))))))))
+             (match (mn_front_add apq mi front fronts)
+               ((KcErr msg) (MnRErr msg))
+               ((KcOk fronts2)
+                (match (mn_basis_add apq rep front bases)
+                  ((KcErr msg) (MnRErr msg))
+                  ((KcOk bases2)
+                   (mn_members
+                     m
+                     rules0
+                     apq
+                     root
+                     g
+                     rep
+                     rest
+                     (MnStats
+                       proven
+                       refuted
+                       (+ undecided 1)
+                       (if (int_eq fc 1) (+ perms 1) perms)
+                       (if (int_eq fc 2) (+ others 1) others)
+                       (if (int_eq fc 0) (+ missing 1) missing)
+                       refs
+                       (mn_keep (MnEdge mi rep) undecs)
+                       fronts2
+                       bases2))))))))))))))
 
 (fn mn_buckets
   ((m Module)
@@ -1897,9 +1970,73 @@
 (fn mn_num ((label (List Int)) (n Int) (tail (List Int))) (List Int)
   (append_int label (append_int (show_int n) tail)))
 
+(fn mn_sample_text ((xs (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil "]")
+    ((Cons x rest)
+     (match rest
+       (Nil (append_int (show_int x) "]"))
+       ((Cons _ _)
+        (append_int (show_int x) (append_int "," (mn_sample_text rest))))))))
+
+(fn mn_rank_lines ((kind (List Int)) (rank Int) (bs (List KcBucket))) (List Int)
+  (measure (struct bs))
+  (match bs
+    (Nil Nil)
+    ((Cons b rest)
+     (append_int
+       kind
+       (mn_num
+         " rank "
+         rank
+         (mn_num
+           " SUPPORT "
+           (kc_support b)
+           (mn_num
+             " MASS "
+             (kc_mass b)
+             (mn_num
+               " FIRST "
+               (kc_first b)
+               (append_int
+                 " SAMPLES ["
+                 (append_int
+                   (mn_sample_text (kc_samples b))
+                   (append_int
+                     "\nKEY "
+                     (append_int
+                       (kc_key b)
+                       (append_int "\n" (mn_rank_lines kind (+ rank 1) rest))))))))))))))
+
+(fn mn_aux_report ((census KcCensus)) (List Int)
+  (mn_num
+    "AUXILIARY SIGNATURES "
+    (kc_bucket_count census)
+    (mn_num
+      " SUPPORT "
+      (kc_total_support census)
+      (mn_num
+        " MASS "
+        (kc_total_mass census)
+        (append_int "\n" (mn_rank_lines "AUX" 1 (kc_ranked census)))))))
+
+(fn mn_basis_report ((census KcCensus)) (List Int)
+  (mn_num
+    "COMMUTATION BASES "
+    (kc_bucket_count census)
+    (mn_num
+      " SUPPORT "
+      (kc_total_support census)
+      (mn_num
+        " MASS "
+        (kc_total_mass census)
+        (append_int "\n" (mn_rank_lines "COMMUTE" 1 (kc_ranked census)))))))
+
 (fn mn_report ((d Int) (nc Int) (nb Int) (stats MnStats)) (List Int)
   (match stats
-    ((MnStats proven refuted undecided perms others missing refs undecs)
+    ((MnStats proven refuted undecided perms others missing refs undecs fronts
+       bases)
      (mn_num
        "MINE rung "
        d
@@ -1934,7 +2071,11 @@
                            "\n"
                            (append_int
                              (mn_edge_lines "REFUTED" refs)
-                             (mn_edge_lines "UNDECIDED" undecs))))))))))))))))
+                             (append_int
+                               (mn_edge_lines "UNDECIDED" undecs)
+                               (append_int
+                                 (mn_aux_report fronts)
+                                 (mn_basis_report bases))))))))))))))))))
 
 (fn mn_finish
   ((d Int)
@@ -1945,10 +2086,16 @@
   World
   (let ((nb (mn_bucket_len bs)) (nc (mn_int_len clean)))
     (match stats
-      ((MnStats proven refuted undecided perms others missing _ _)
+      ((MnStats proven refuted undecided perms others missing _ _ fronts bases)
        (if (int_eq (+ proven (+ refuted undecided)) (- nc nb))
          (if (int_eq (+ perms (+ others missing)) undecided)
-           (write (mn_report d nc nb stats) w)
+           (if (int_eq (kc_total_support fronts) (+ perms others))
+             (if (int_eq (kc_total_mass fronts) (+ perms others))
+               (if (if (lt 0 perms) (lt 0 (kc_total_support bases)) True)
+                 (write (mn_report d nc nb stats) w)
+                 (exit 1 (write "MINE FAIL: permutation basis missing\n" w)))
+               (exit 1 (write "MINE FAIL: frontier mass accounting\n" w)))
+             (exit 1 (write "MINE FAIL: signature support accounting\n" w)))
            (exit 1 (write "MINE FAIL: frontier accounting\n" w)))
          (exit 1 (write "MINE FAIL: edge accounting\n" w)))))))
 
@@ -1965,9 +2112,86 @@
             ((BxSErr msg) (exit 1 (write (append_int "MINE FAIL " msg) w)))
             ((BxSOk bs clean)
              (match
-               (mn_buckets m rules0 apq root g bs (MnStats 0 0 0 0 0 0 Nil Nil))
+               (mn_buckets
+                 m
+                 rules0
+                 apq
+                 root
+                 g
+                 bs
+                 (MnStats 0 0 0 0 0 0 Nil Nil (kc_empty) (kc_empty)))
                ((MnRErr msg) (exit 1 (write (append_int "MINE FAIL " msg) w)))
                ((MnROk stats) (mn_finish d bs clean stats w)))))))))))
+
+;; The commutation-basis census above specializes to this typed range law for
+;; a unary List function `f`: adjacent recursive results at a nonempty list and
+;; its tail commute under append.  `range` runs the existing oracle on that
+;; smaller conjecture without granting it an IH or feeding it into canon.  Its
+;; verdict measures the next proof capability honestly.
+(fn mn_range_law ((apq QName) (fq QName)) LLaw
+  (let ((h (FVar (quote h))) (t (FVar (quote t))))
+    (let
+      ((ft (Call fq (Cons t Nil)))
+       (fcons
+         (Call fq (Cons (Ctor (qn (quote Cons)) (Cons h (Cons t Nil))) Nil))))
+      (LLaw
+        (quote range_commute)
+        (Goal
+          (Cons
+            (Param (quote h) (TCon (qn (quote Int)) Nil))
+            (Cons (Param (quote t) (ty_ilist)) Nil))
+          Nil
+          (Equation
+            (Call apq (Cons fcons (Cons ft Nil)))
+            (Call apq (Cons ft (Cons fcons Nil)))))))))
+
+(fn run_mine_range
+  ((m Module) (apq QName) (rules0 (List NRule)) (d Int) (rep Int) (w World))
+  World
+  (match (cat_grammar d apq)
+    ((CatRErr msg) (exit 1 (write (append_int "MINE RANGE FAIL " msg) w)))
+    ((CatROk es _)
+     (let ((root (hole 0)) (g (Grammar es)))
+       (match (sk_unrank root g rep)
+         ((SkEErr msg) (exit 1 (write (append_int "MINE RANGE FAIL " msg) w)))
+         ((SkEOk cr)
+          (match (extend_fn m (cat_fd cr))
+            (None (exit 1 (write "MINE RANGE FAIL: candidate qname bound\n" w)))
+            ((Some m2)
+             (match
+               (law_verdict
+                 m2
+                 rules0
+                 (lw_budget)
+                 (lw_efuel)
+                 (lw_cfuel)
+                 (mn_range_law apq (cat_q)))
+               ((LVdErr msg)
+                (exit 1 (write (append_int "MINE RANGE FAIL " msg) w)))
+               ((LVdRef) (write "MINE-RANGE REFUTED\n" w))
+               ((LVdProv _) (write "MINE-RANGE PROVEN\n" w))
+               ((LVdUndec front)
+                (match front
+                  (None (write "MINE-RANGE UNDECIDED NO-RESIDUAL\n" w))
+                  ((Some (Pair lhs rhs))
+                   (write
+                     (append_int
+                       "MINE-RANGE UNDECIDED FRONTIER "
+                       (append_int
+                         (mn_front_name
+                           (mn_front_class apq (Some (Pair lhs rhs))))
+                         (append_int
+                           " "
+                           (mn_num
+                             "COMMUTATION-BASES "
+                             (mn_key_count
+                               (fc_commutation_keys
+                                 apq
+                                 (mn_front_roles apq)
+                                 lhs
+                                 rhs))
+                             "\n"))))
+                     w)))))))))))))
 
 (fn run_mine_show
   ((m Module) (apq QName) (d Int) (member Int) (rep Int) (w World))
@@ -2291,7 +2515,8 @@
 ;; args: none -> the pinned suite (self, g3 at rungs 1 and 2, traces,
 ;; both artifact regens); "self" -> the self-pin alone; "g3 N" -> one
 ;; rung; "mine N" -> behavior-collision proof census; "show" renders a pair;
-;; "front" prints its first exact symbolic residual; "trace" -> traces;
+;; "front" prints its first exact symbolic residual; "range N REP" probes the
+;; mined range-commutation law; "trace" -> traces;
 ;; "emit" / "bracket" -> rewrite an artifact
 (fn lw_args
   ((as (List (List Int))) (m Module) (apq QName) (rules (List NRule)) (w World))
@@ -2398,11 +2623,21 @@
                   (None (exit 2 (write "usage: laws front N MEMBER REP\n" w)))
                   ((Some rep) (run_mine_front m apq rules d member rep w))))))))
          (_ (exit 2 (write "usage: laws front N MEMBER REP\n" w))))
+     (if (int_list_eq a "range")
+       (match rest
+         ((Cons ds (Cons rs Nil))
+          (match (parse_nat ds)
+            (None (exit 2 (write "usage: laws range N REP\n" w)))
+            ((Some d)
+             (match (parse_nat rs)
+               (None (exit 2 (write "usage: laws range N REP\n" w)))
+               ((Some rep) (run_mine_range m apq rules d rep w))))))
+         (_ (exit 2 (write "usage: laws range N REP\n" w))))
        (exit
          2
          (write
-           "usage: laws [self | g3 N | mine N | show/front N MEMBER REP | trace | emit | bracket]\n"
-           w)))))))))))))
+           "usage: laws [self | g3 N | mine N | show/front N MEMBER REP | range N REP | trace | emit | bracket]\n"
+           w))))))))))))))
 
 (fn main ((w World)) World
   (match

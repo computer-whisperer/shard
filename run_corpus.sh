@@ -291,6 +291,7 @@ TARGETS=(
   std/sha256/sha256.weld.shard
   examples/sketch_pin.shard
   meta/invoke/prepared.shard
+  meta/census/mod.req.shard
   meta/rewrite/mod.req.shard
   tools/search/rev_obj.shard
   tools/search/rev.shard
@@ -299,6 +300,7 @@ TARGETS=(
   tools/search/catalog.shard
   tools/search/catalog_pressure.shard
   tools/search/sym.shard
+  tools/search/frontier.shard
   examples/spell_pin.shard
   tools/search/render_gate.shard
   tools/search/gen/rev_synth.shard
@@ -575,12 +577,18 @@ fi
 # structural induction + append normalization proves 1,242, refutes none,
 # and leaves 35 explicit auxiliary-lemma candidates; retained symbolic
 # residuals classify all 35 as append-spine permutations (other/missing 0).
+# Exact alpha-stable grouping then collapses them to five residual signatures
+# with support 7 each; relative-order analysis finds one smaller commutation
+# basis with support 35. `range` materializes that basis as a typed law for a
+# representative and pins the honest next boundary: still Undecided with one
+# permutation basis (derived-relation induction is not yet licensed).
 # This also pins partially-decided strict-subterm provenance: losing it drops
 # hundreds of these proofs while leaving ordinary G3 tests green.
 echo "=== search: behavior-collision proof census ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/laws.shard mine 1
   bin/shard_eval run tools/search/laws.shard mine 2
+  bin/shard_eval run tools/search/laws.shard range 2 295
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi

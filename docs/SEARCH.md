@@ -1769,6 +1769,43 @@ component is therefore conditional/range theorem discovery from recurring
 stuck equations—not an unsound global commutativity rule and not another
 task-specific template.
 
+That component now has its first complete census.  `meta/census` is the
+general exact weighted-key substrate: it records support, prospective mass,
+first occurrence, bounded distinct exemplars, and a deterministic
+mass/support/first ranking.  `tools/search/frontier.shard` supplies the
+search-specific structural keys: full QNames except for caller-declared head
+roles, separate alpha-renaming for universal atoms and data slots, and
+orientation-independent residual equations.  Mining accumulates these keys
+during the existing proof pass, so no second 1,277-edge oracle sweep is needed.
+
+At rung 2 the result is highly regular:
+
+    AUXILIARY SIGNATURES 5 SUPPORT 35 MASS 35
+    AUX rank 1..5:       SUPPORT 7 MASS 7 each
+    COMMUTATION BASES 1 SUPPORT 35 MASS 35
+
+The second line of analysis is deliberately diagnostic.  It flattens only an
+already-classified append permutation, finds pairs of distinct atoms whose
+relative order changes, and ranks the smaller commutation basis; it neither
+changes a verdict nor installs a rewrite.  All five exact residual contexts
+reduce to one typed candidate schema (where `f` is the bucket representative):
+
+    append (f (Cons h t)) (f t) = append (f t) (f (Cons h t))
+
+`laws.shard range N REP` materializes that schema as an ordinary `LLaw` and
+runs the same symbolic oracle.  Representative 295 (and the other sampled
+owners) is honestly still `Undecided`, with one permutation/commutation basis:
+
+    MINE-RANGE UNDECIDED FRONTIER PERMUTATION COMMUTATION-BASES 1
+
+This rules out “just census the residuals” as the next step and makes the proof
+gap precise.  More case budget merely expands the same permutation.  The
+needed general facility is induction over a derived relation or range
+invariant, so that the smaller commutation theorem can be assumed on strict
+subterms and then replayed as a checked auxiliary claim.  Only after such a
+claim proves may parent edges be retried or a profile-pressure experiment be
+considered; observational support 35 is ranking evidence, not a canon license.
+
 ### Soundness boundary and next experiment
 
 Observation selects candidates; it does not prove refinement.  G4 is closed
@@ -1777,16 +1814,18 @@ render its chosen `IExp` into an owned proof artifact, nor does it synthesize
 the spec⊑imp proof for an arbitrary task.  The task's certified witness is a
 temporary gate, not a claim that search has solved proof discovery.
 
-The next scaling experiment should mine the rung-2 catalog's collided buckets
-into a proof queue and feed accepted, ratified rules through the now-shared
-profile path.  The append four already provide the baseline: exact
-raw-normal-form cross-checking in grammar formation and generic symbolic RHS
-re-entry from one checked profile.  New mined lemmas will show which additional
-rules actually dominate this fragment.  The theorem quotient is proof-licensed
-and task-independent; the observational quotient is battery-relative.  Keeping
-those identities separate lets them compose without mistaking test equivalence
-for theorem equality.  Then rerun the gauge and join censuses under the expanded
-profile and measure the marginal reduction attributable to each rule.
+The next proof experiment should give `LLaw` a general derived-relation
+induction path: nominate a structural parameter, generalize the remaining
+parameters, retain the root relation as an IH schema, and permit an application
+only when provenance proves the nominated argument is a strict subterm.  The
+range-commutation candidate is the first regression target.  If it proves, the
+engine should retry its 35 dependent parent edges and render the accepted
+auxiliary claim for kernel replay.  Only a typed, well-oriented theorem that
+survives that path may be considered by the shared profile-pressure census.
+The theorem quotient remains proof-licensed and task-independent; the
+observational quotient remains battery-relative.  Keeping those identities
+separate lets them compose without mistaking test equivalence for theorem
+equality.
 
 ### Playground transfer: contextual generation pressure
 
