@@ -1,0 +1,2161 @@
+;;; std/float/grs.shard — the L2 rounding core: guard/round/sticky (rung R2
+;;; slice 3 of docs/FLOATS.md §10; the layer contract is §3 L2). L1's frnd
+;;; decides RNE by comparing twice the remainder of a general integer
+;;; division against the divisor (rne_div on the scaled rational n/d); the
+;;; bit-level model rounds a DYADIC m*2^e by bit examination instead: the
+;;; quotient's low neighbour bits — guard g (the first bit shifted out) and
+;;; sticky st (the OR of the rest, here the remainder below the guard) —
+;;; decide the increment:
+;;;
+;;;     g = 0            ->  down (q)
+;;;     g = 1, st > 0    ->  up (q + 1)
+;;;     g = 1, st = 0    ->  tie: to even (q + q mod 2)
+;;;
+;;; fshr_rne is that primitive (an exact left shift when k <= 0); fgrs picks
+;;; the target row from the BIT LENGTH of m (etop = e + ibits m - 1, floored
+;;; at emin — gradual underflow), shifts onto the row's mantissa grid, and
+;;; then carries/classifies EXACTLY as frnd_pos does — the tail mirrors
+;;; frnd_pos verbatim, so the R2.3 equality theorems reduce to row equality
+;;; plus mantissa equality. Boolean guards are spelled (le _ 0), never
+;;; int_eq: both case-on directions stay linear for farkas (g and st are
+;;; nonneg by construction).
+;;;
+;;; The theorems fgrs_frnd_pos_shl/_shr close the rung: fgrs f s m e equals
+;;; frnd_pos on the dyadic's rational spelling (m*2^e over 1 when e >= 0,
+;;; m over 2^j when e = -j), parametrically in the format. Ahead of them,
+;;; the §10 derisking gates: whole-rectangle differential sweeps of fgrs
+;;; against frnd_pos on toy/f8e4m3fn/f8e5m2 (boxes crossing subnormal
+;;; forcing, both tie directions, carry renorm, and overflow) plus F32/F64
+;;; boundary pins pre-verified against an exact reference.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/facts.shard")  ; div/mod range + uniqueness + ring respells
+(import "float.shard")  ; the L1 model: Fmt, FVal, fpow2, ibits, imax, frnd_pos
+(import "kit.shard")  ; the 2^k algebra + rne_div laws + field-split kit
+(use (:: kernel facts *))
+(use (:: std float float *))  ; type names (Fmt, FVal) for binders — import alone feeds fns only
+(use (:: std float kit *))
+
+;; --- the GRS primitive ----------------------------------------------------------------
+
+;; shift-right with round-to-nearest-even: fshr_rne m k = RNE(m / 2^k) for
+;; m >= 0 (k <= 0 is the exact left shift m*2^-k). q is the truncated
+;; quotient; g the guard bit (the top bit of the k shifted out); st the
+;; sticky remainder below it (spelled mod-of-mod so the euclidean split
+;; g*2^(k-1) + st of the remainder is direct). Proven = rne_div at 2^k
+;; divisors (fshr_rne_rne below).
+(fn fshr_rne ((m Int) (k Int)) Int
+  (if (le k 0) (* m (fpow2 (- 0 k)))
+  (let
+    ((q (ediv m (fpow2 k)))
+     (g (ediv (mod m (fpow2 k)) (fpow2 (- k 1))))
+     (st (mod (mod m (fpow2 k)) (fpow2 (- k 1)))))
+    (+ q (if (le g 0) 0 (if (le st 0) (mod q 2) 1))))))
+
+;; round the positive dyadic m*2^e (m >= 1) at sign s: the target row is
+;; read off the bit length (m*2^e lands in [2^etop, 2^(etop+1)) for
+;; etop = e + ibits m - 1), floored at emin; the shift onto the row's
+;; mantissa grid is erow - MW - e; then the carry renorm and the overflow
+;; classification mirror frnd_pos verbatim. m = 0 is garbage-in (a non-wf
+;; view off the bottom row), as it is for frnd_pos — L2 ops route zeros
+;; around the rounder exactly as frnd does.
+(fn fgrs ((f Fmt) (s Bool) (m Int) (e Int)) FVal
+  (let ((erow (imax (+ e (- (ibits m) 1)) (fmt_emin f))))
+    (let ((mr (fshr_rne m (- (- erow (mw_of f)) e))))
+      (let
+        ((ec (if (int_eq mr (fpow2 (+ (mw_of f) 1))) (+ erow 1) erow))
+         (mc (if (int_eq mr (fpow2 (+ (mw_of f) 1))) (fpow2 (mw_of f)) mr)))
+        (if (lt (fmt_emax f) ec) (fovf f s)
+        (if (ftop_ok f mc ec) (Fin s mc ec)
+        (fovf f s)))))))
+
+;; --- differential gates: fgrs against the L1 rounder (§10 derisking) -------------------
+
+;; one dyadic, both spellings: fgrs must agree with frnd_pos on the
+;; rational reading of m*2^e.
+(fn grs_ok1 ((f Fmt) (s Bool) (m Int) (e Int)) Bool
+  (fval_eqb
+    (fgrs f s m e)
+    (if (le 0 e) (frnd_pos f s (* m (fpow2 e)) 1)
+    (frnd_pos f s m (fpow2 (- 0 e))))))
+
+;; sweep m down to 1 at a fixed e, both signs.
+(fn grs_row ((f Fmt) (m Int) (e Int)) Bool
+  (measure m (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (le m 0) True
+  (if (grs_ok1 f False m e)
+    (if (grs_ok1 f True m e) (grs_row f (- m 1) e) False)
+    False)))
+
+;; sweep n rows downward from e, each a full m-row.
+(fn grs_grid ((f Fmt) (mhi Int) (e Int) (n Int)) Bool
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (le n 0) True
+  (if (grs_row f mhi e) (grs_grid f mhi (- e 1) (- n 1))
+  False)))
+
+;; the boxes: m in [1, 2^(MW+3)], e from emax+2 down past emin-MW-3 — every
+;; row from overflow through the normals into subnormal forcing and below
+;; half the smallest subnormal, with shifts k <= 0 (exact) through deep GRS
+;; extraction, both tie directions, carry renorm, and the overflow ties.
+(claim grs_gate_toy
+  (goal () () (= (grs_grid (fmt_toy) 32 5 13) True))
+  (steps ((compute both)) refl))
+(claim grs_gate_f8e4m3fn
+  (goal () () (= (grs_grid (fmt_f8e4m3fn) 64 10 23) True))
+  (steps ((compute both)) refl))
+(claim grs_gate_f8e5m2
+  (goal () () (= (grs_grid (fmt_f8e5m2) 32 17 37) True))
+  (steps ((compute both)) refl))
+
+;; --- F32/F64 boundary pins (pre-verified against the exact reference) ------------------
+
+;; an exact small dyadic: 3*2^-2 = 0.75 = 1.5 * 2^-1.
+(claim grs_f32_threequarter
+  (goal () () (= (fgrs (fmt_f32) False 3 -2) (Fin False 12582912 -1)))
+  (steps ((compute both)) refl))
+
+;; the classic absorption tie: 2^24+1 halves onto the row-24 grid and the
+;; tie lands on the EVEN quotient 2^23; 2^24+3 ties on an odd quotient and
+;; rounds away.
+(claim grs_f32_tie_even_down
+  (goal () () (= (fgrs (fmt_f32) False 16777217 0) (Fin False 8388608 24)))
+  (steps ((compute both)) refl))
+(claim grs_f32_tie_odd_up
+  (goal () () (= (fgrs (fmt_f32) False 16777219 0) (Fin False 8388610 24)))
+  (steps ((compute both)) refl))
+
+;; a full carry: (2^25-1)/2 = 2^24 - 1/2 ties up into 2^24 — the all-ones
+;; mantissa increments to 2^(MW+1) and renormalizes one row up.
+(claim grs_f32_carry_renorm
+  (goal () () (= (fgrs (fmt_f32) False 33554431 -1) (Fin False 8388608 24)))
+  (steps ((compute both)) refl))
+
+;; the overflow tie (the R1 boundary pin, GRS side): (2^25-1)*2^103 ties up
+;; through the carry past emax and classifies to Inf.
+(claim grs_f32_overflow_tie
+  (goal () () (= (fgrs (fmt_f32) False 33554431 103) (FInf False)))
+  (steps ((compute both)) refl))
+
+;; subnormal forcing: 2^-150 is exactly half the smallest subnormal — the
+;; tie at quotient 0 stays at +0; 3*2^-151 is three quarters of an ulp and
+;; rounds up to the smallest subnormal.
+(claim grs_f32_half_ulp_to_zero
+  (goal () () (= (fgrs (fmt_f32) False 1 -150) (Fin False 0 -126)))
+  (steps ((compute both)) refl))
+(claim grs_f32_sub_round_up
+  (goal () () (= (fgrs (fmt_f32) False 3 -151) (Fin False 1 -126)))
+  (steps ((compute both)) refl))
+
+;; F64: the same absorption tie one word up, and the max finite staying put
+;; (no spurious overflow at the top row).
+(claim grs_f64_tie_even_down
+  (goal () ()
+    (=
+      (fgrs (fmt_f64) False 9007199254740993 0)
+      (Fin False 4503599627370496 53)))
+  (steps ((compute both)) refl))
+(claim grs_f64_max_finite
+  (goal () ()
+    (=
+      (fgrs (fmt_f64) False 9007199254740991 971)
+      (Fin False 9007199254740991 1023)))
+  (steps ((compute both)) refl))
+
+;; --- the decision lemma: GRS extraction IS rne_div at a 2^k divisor --------------------
+;; The remainder splits R = g*2^(k-1) + st with st < 2^(k-1) and g <= 1, so
+;; the three RNE comparisons of 2R against 2^k = 2*2^(k-1) are decided by g
+;; and st alone: g = 0 -> below (down), g = 1 & st > 0 -> above (up),
+;; g = 1 & st = 0 -> exact tie. Both boolean guards are (le _ 0), so each
+;; case-on direction stays a linear row.
+(claim fshr_rne_rne
+  (goal ((m Int) (k Int)) ((= (le 0 m) True) (= (le 1 k) True))
+    (= (fshr_rne m k) (rne_div m (fpow2 k))))
+  (chain
+    (have hkf (= (le k 0) False) (steps () (by arith (list 1 0 1))))
+    (have hkp (= (lt 0 (fpow2 k)) True)
+      (rewrite-with (lemma fpow2_pos) lr lhs ((inst k k)) () refl))
+    (have hhp (= (lt 0 (fpow2 (- k 1))) True)
+      (rewrite-with (lemma fpow2_pos) lr lhs ((inst k (- k 1))) () refl))
+    (have hks (= (fpow2 k) (* 2 (fpow2 (- k 1))))
+      (rewrite-with
+        (lemma fpow2_unfold_pos)
+        lr
+        lhs
+        ((inst k k))
+        ((by arith (list 1 0 1 0 0 0)))
+        refl))
+    (have hmQR (= m (+ (* (fpow2 k) (ediv m (fpow2 k))) (mod m (fpow2 k))))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n m) (inst d (fpow2 k)))
+        ((steps ((rewrite (premise hkp) lr lhs true ())) refl))
+        refl))
+    (have hRlo (= (le 0 (mod m (fpow2 k))) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ((inst n m) (inst d (fpow2 k)))
+        ((steps ((rewrite (premise hkp) lr lhs true ())) refl))
+        refl))
+    (have hRhi (= (lt (mod m (fpow2 k)) (fpow2 k)) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ((inst n m) (inst d (fpow2 k)))
+        ((steps ((rewrite (premise hkp) lr lhs true ())) refl))
+        refl))
+    (have hRG
+      (=
+        (mod m (fpow2 k))
+        (+
+          (* (fpow2 (- k 1)) (ediv (mod m (fpow2 k)) (fpow2 (- k 1))))
+          (mod (mod m (fpow2 k)) (fpow2 (- k 1)))))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n (mod m (fpow2 k))) (inst d (fpow2 (- k 1))))
+        ((steps ((rewrite (premise hhp) lr lhs true ())) refl))
+        refl))
+    (have hSTlo (= (le 0 (mod (mod m (fpow2 k)) (fpow2 (- k 1)))) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ((inst n (mod m (fpow2 k))) (inst d (fpow2 (- k 1))))
+        ((steps ((rewrite (premise hhp) lr lhs true ())) refl))
+        refl))
+    (have hSThi
+      (= (lt (mod (mod m (fpow2 k)) (fpow2 (- k 1))) (fpow2 (- k 1))) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ((inst n (mod m (fpow2 k))) (inst d (fpow2 (- k 1))))
+        ((steps ((rewrite (premise hhp) lr lhs true ())) refl))
+        refl))
+    (have hGlo (= (le 0 (ediv (mod m (fpow2 k)) (fpow2 (- k 1)))) True)
+      (rewrite-with
+        (lemma ediv_nonneg)
+        lr
+        lhs
+        ((inst n (mod m (fpow2 k))) (inst d (fpow2 (- k 1))))
+        ((steps ((rewrite (premise hRlo) lr lhs true ())) refl)
+         (steps ((rewrite (premise hhp) lr lhs true ())) refl))
+        refl))
+    (case-on (le (ediv (mod m (fpow2 k)) (fpow2 (- k 1))) 1) Bool
+      ((case True
+         (chain
+           (have hg1 (= (le (ediv (mod m (fpow2 k)) (fpow2 (- k 1))) 1) True)
+             (steps ((rewrite (hyp True) lr lhs true ())) refl))
+           (case-on (le (ediv (mod m (fpow2 k)) (fpow2 (- k 1))) 0) Bool
+             ((case True
+                (chain
+                  (have hgz
+                    (= (le (ediv (mod m (fpow2 k)) (fpow2 (- k 1))) 0) True)
+                    (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                  (have hg0 (= (ediv (mod m (fpow2 k)) (fpow2 (- k 1))) 0)
+                    (steps
+                      ()
+                      (by
+                        arith
+                        (list
+                          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1)
+                          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0)))))
+                  (have hp0
+                    (=
+                      (*
+                        (fpow2 (- k 1))
+                        (ediv (mod m (fpow2 k)) (fpow2 (- k 1))))
+                      0)
+                    (steps
+                      ((rewrite (premise hg0) lr lhs true ()))
+                      (by
+                        arith
+                        (list
+                          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)
+                          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))))
+                  (have hc1 (= (lt (* 2 (mod m (fpow2 k))) (fpow2 k)) True)
+                    (steps
+                      ()
+                      (by arith (list 1 0 0 0 0 0 1 0 0 0 -2 0 2 0 0 0 0 -2))))
+                  (have hup
+                    (=
+                      (if (le (ediv (mod m (fpow2 k)) (fpow2 (- k 1))) 0) 0
+                      (if (le (mod (mod m (fpow2 k)) (fpow2 (- k 1))) 0)
+                        (mod (ediv m (fpow2 k)) 2)
+                        1))
+                      0)
+                    (steps
+                      ((rewrite (premise hgz) lr lhs true ()) (simp lhs))
+                      refl))
+                  (steps
+                    ((unfold fshr_rne lhs)
+                     (rewrite (premise hkf) lr lhs true ())
+                     (simp lhs)
+                     (reduce lhs)
+                     (rewrite (premise hup) lr lhs true ())
+                     (unfold rne_div rhs)
+                     (rewrite (premise hc1) lr rhs true ())
+                     (simp rhs))
+                    (by
+                      arith
+                      (list
+                        (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)
+                        (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))))))
+              (case False
+                (chain
+                  (have hgnz
+                    (= (le (ediv (mod m (fpow2 k)) (fpow2 (- k 1))) 0) False)
+                    (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                  (have hg1e (= (ediv (mod m (fpow2 k)) (fpow2 (- k 1))) 1)
+                    (steps
+                      ()
+                      (by
+                        arith
+                        (list
+                          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0)
+                          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1)))))
+                  (have hp1
+                    (=
+                      (*
+                        (fpow2 (- k 1))
+                        (ediv (mod m (fpow2 k)) (fpow2 (- k 1))))
+                      (fpow2 (- k 1)))
+                    (steps
+                      ((rewrite (premise hg1e) lr lhs true ()))
+                      (by
+                        arith
+                        (list
+                          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)
+                          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))))
+                  (case-on (le (mod (mod m (fpow2 k)) (fpow2 (- k 1))) 0) Bool
+                    ((case True
+                       (chain
+                         (have hstz
+                           (=
+                             (le (mod (mod m (fpow2 k)) (fpow2 (- k 1))) 0)
+                             True)
+                           (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                         (have hst0
+                           (= (mod (mod m (fpow2 k)) (fpow2 (- k 1))) 0)
+                           (steps
+                             ()
+                             (by
+                               arith
+                               (list
+                                 (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1)
+                                 (list 1 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0)))))
+                         (have hc1f
+                           (= (lt (* 2 (mod m (fpow2 k))) (fpow2 k)) False)
+                           (steps
+                             ()
+                             (by
+                               arith
+                               (list 1 0 0 0 0 0 -1 0 0 0 2 0 0 0 0 0 0 2 0 2))))
+                         (have hc2f
+                           (= (lt (fpow2 k) (* 2 (mod m (fpow2 k)))) False)
+                           (steps
+                             ()
+                             (by
+                               arith
+                               (list 1 0 0 0 0 0 1 0 0 0 -2 0 0 0 0 0 0 -2 0 -2
+                                 0))))
+                         (have hup
+                           (=
+                             (if (le (ediv (mod m (fpow2 k)) (fpow2 (- k 1))) 0)
+                               0
+                             (if (le (mod (mod m (fpow2 k)) (fpow2 (- k 1))) 0)
+                               (mod (ediv m (fpow2 k)) 2)
+                               1))
+                             (mod (ediv m (fpow2 k)) 2))
+                           (steps
+                             ((rewrite (premise hgnz) lr lhs true ())
+                              (rewrite (premise hstz) lr lhs true ())
+                              (simp lhs))
+                             refl))
+                         (steps
+                           ((unfold fshr_rne lhs)
+                            (rewrite (premise hkf) lr lhs true ())
+                            (simp lhs)
+                            (reduce lhs)
+                            (rewrite (premise hup) lr lhs true ())
+                            (unfold rne_div rhs)
+                            (rewrite (premise hc1f) lr rhs true ())
+                            (rewrite (premise hc2f) lr rhs true ())
+                            (simp rhs))
+                           refl)))
+                     (case False
+                       (chain
+                         (have hstnz
+                           (=
+                             (le (mod (mod m (fpow2 k)) (fpow2 (- k 1))) 0)
+                             False)
+                           (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                         (have hc1f
+                           (= (lt (* 2 (mod m (fpow2 k))) (fpow2 k)) False)
+                           (steps
+                             ()
+                             (by
+                               arith
+                               (list 1 0 0 0 0 0 -1 0 0 0 2 2 0 0 0 0 0 2 0))))
+                         (have hc2t
+                           (= (lt (fpow2 k) (* 2 (mod m (fpow2 k)))) True)
+                           (steps
+                             ()
+                             (by
+                               arith
+                               (list 1 0 0 0 0 0 -1 0 0 0 2 0 0 0 0 0 0 2 2 0))))
+                         (have hup
+                           (=
+                             (if (le (ediv (mod m (fpow2 k)) (fpow2 (- k 1))) 0)
+                               0
+                             (if (le (mod (mod m (fpow2 k)) (fpow2 (- k 1))) 0)
+                               (mod (ediv m (fpow2 k)) 2)
+                               1))
+                             1)
+                           (steps
+                             ((rewrite (premise hgnz) lr lhs true ())
+                              (rewrite (premise hstnz) lr lhs true ())
+                              (simp lhs))
+                             refl))
+                         (steps
+                           ((unfold fshr_rne lhs)
+                            (rewrite (premise hkf) lr lhs true ())
+                            (simp lhs)
+                            (reduce lhs)
+                            (rewrite (premise hup) lr lhs true ())
+                            (unfold rne_div rhs)
+                            (rewrite (premise hc1f) lr rhs true ())
+                            (rewrite (premise hc2t) lr rhs true ())
+                            (simp rhs))
+                           refl)))))))))))
+       (case False
+         (chain
+           (have hg2 (= (le (ediv (mod m (fpow2 k)) (fpow2 (- k 1))) 1) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (have hmono
+             (=
+               (le
+                 (* 2 (fpow2 (- k 1)))
+                 (* (fpow2 (- k 1)) (ediv (mod m (fpow2 k)) (fpow2 (- k 1)))))
+               True)
+             (chain
+               (rewrite-with
+                 (lemma mul_comm)
+                 lr
+                 lhs
+                 ((inst a (fpow2 (- k 1)))
+                  (inst b (ediv (mod m (fpow2 k)) (fpow2 (- k 1)))))
+                 ())
+               (rewrite-with
+                 (lemma mul_le_mono_r)
+                 lr
+                 lhs
+                 ((inst x 2)
+                  (inst y (ediv (mod m (fpow2 k)) (fpow2 (- k 1))))
+                  (inst z (fpow2 (- k 1))))
+                 ((by arith (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 1))
+                  (by arith (list 1 0 0 0 0 1 0 0 0 0 0 0 0 0 0))))
+               (steps () refl)))
+           (have hbad (= (le 0 -1) True)
+             (steps () (by arith (list 0 0 0 0 0 0 -1 0 0 1 1 1 0 0 0 1))))
+           (have hff (= False True)
+             (steps
+               ((rewrite (premise hbad) rl rhs true ()) (compute rhs))
+               refl))
+           (absurd (premise hff))))))))
+
+;; --- the R2.3 equality, left-shift side: e >= 0 -----------------------------------------
+;; fgrs f s m e = frnd_pos f s (m*2^e) 1. elog_shl aligns the target rows;
+;; then per branch: an exact placement (rne_div_one / rne_div_exact via the
+;; euclidean split at the literal decomposition) or the GRS extraction
+;; (fshr_rne_rne after cancelling the common 2^e by rne_div_scale). The
+;; carry/classify tails are syntactically identical once the mantissas are
+;; rewritten to a common spelling.
+(claim fgrs_frnd_pos_shl
+  (goal ((f Fmt) (s Bool) (m Int) (e Int)) ((= (le 1 m) True) (= (le 0 e) True))
+    (= (fgrs f s m e) (frnd_pos f s (* m (fpow2 e)) 1)))
+  (chain
+    (have helog (= (elog (* m (fpow2 e)) 1) (+ e (- (ibits m) 1)))
+      (rewrite-with
+        (lemma elog_shl)
+        lr
+        lhs
+        ((inst m m) (inst e e))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (case-on (le (imax (+ e (- (ibits m) 1)) (fmt_emin f)) (mw_of f)) Bool
+      ((case True
+         (chain
+           (have hgrow
+             (= (le (imax (+ e (- (ibits m) 1)) (fmt_emin f)) (mw_of f)) True)
+             (steps ((rewrite (hyp True) lr lhs true ())) refl))
+           (case-on
+             (le
+               (- (- (imax (+ e (- (ibits m) 1)) (fmt_emin f)) (mw_of f)) e)
+               0)
+             Bool
+             ((case True
+                (chain
+                  (have hgk
+                    (=
+                      (le
+                        (-
+                          (-
+                            (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                            (mw_of f))
+                          e)
+                        0)
+                      True)
+                    (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                  (have hmr
+                    (=
+                      (fshr_rne
+                        m
+                        (-
+                          (-
+                            (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                            (mw_of f))
+                          e))
+                      (*
+                        m
+                        (fpow2
+                          (-
+                            0
+                            (-
+                              (-
+                                (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                                (mw_of f))
+                              e)))))
+                    (steps
+                      ((unfold fshr_rne lhs)
+                       (rewrite (premise hgk) lr lhs true ())
+                       (simp lhs))
+                      refl))
+                  (have hE
+                    (=
+                      (-
+                        0
+                        (-
+                          (-
+                            (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                            (mw_of f))
+                          e))
+                      (+
+                        e
+                        (- (mw_of f) (imax (+ e (- (ibits m) 1)) (fmt_emin f)))))
+                    (steps
+                      ()
+                      (by
+                        arith
+                        (list (list 1 0 0 0 0 0 0) (list 1 0 0 0 0 0 0)))))
+                  (have hsp2
+                    (=
+                      (fpow2
+                        (+
+                          e
+                          (-
+                            (mw_of f)
+                            (imax (+ e (- (ibits m) 1)) (fmt_emin f)))))
+                      (*
+                        (fpow2 e)
+                        (fpow2
+                          (-
+                            (mw_of f)
+                            (imax (+ e (- (ibits m) 1)) (fmt_emin f))))))
+                    (rewrite-with
+                      (lemma fpow2_split)
+                      lr
+                      lhs
+                      ((inst a e)
+                       (inst
+                         b
+                         (- (mw_of f) (imax (+ e (- (ibits m) 1)) (fmt_emin f)))))
+                      ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                       (by arith (list 1 0 0 0 1 0 0 0)))
+                      refl))
+                  (have hassoc
+                    (=
+                      (*
+                        m
+                        (*
+                          (fpow2 e)
+                          (fpow2
+                            (-
+                              (mw_of f)
+                              (imax (+ e (- (ibits m) 1)) (fmt_emin f))))))
+                      (*
+                        (* m (fpow2 e))
+                        (fpow2
+                          (-
+                            (mw_of f)
+                            (imax (+ e (- (ibits m) 1)) (fmt_emin f))))))
+                    (chain
+                      (rewrite-with
+                        (lemma mul_assoc)
+                        rl
+                        lhs
+                        ((inst a m)
+                         (inst b (fpow2 e))
+                         (inst
+                           c
+                           (fpow2
+                             (-
+                               (mw_of f)
+                               (imax (+ e (- (ibits m) 1)) (fmt_emin f))))))
+                        ())
+                      (steps () refl)))
+                  (have hmw
+                    (=
+                      (rne_div
+                        (*
+                          (* m (fpow2 e))
+                          (fpow2
+                            (-
+                              (mw_of f)
+                              (imax (+ e (- (ibits m) 1)) (fmt_emin f)))))
+                        1)
+                      (*
+                        m
+                        (fpow2
+                          (-
+                            0
+                            (-
+                              (-
+                                (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                                (mw_of f))
+                              e)))))
+                    (chain
+                      (rewrite-with
+                        (lemma rne_div_one)
+                        lr
+                        lhs
+                        ((inst
+                           x
+                           (*
+                             (* m (fpow2 e))
+                             (fpow2
+                               (-
+                                 (mw_of f)
+                                 (imax (+ e (- (ibits m) 1)) (fmt_emin f)))))))
+                        ())
+                      (steps
+                        ((rewrite (premise hassoc) rl lhs true ())
+                         (rewrite (premise hsp2) rl lhs true ())
+                         (rewrite (premise hE) rl lhs true ()))
+                        refl)))
+                  (have hmsel
+                    (=
+                      (if
+                        (le (imax (+ e (- (ibits m) 1)) (fmt_emin f)) (mw_of f))
+                        (rne_div
+                          (*
+                            (* m (fpow2 e))
+                            (fpow2
+                              (-
+                                (mw_of f)
+                                (imax (+ e (- (ibits m) 1)) (fmt_emin f)))))
+                          1)
+                        (rne_div
+                          (* m (fpow2 e))
+                          (*
+                            1
+                            (fpow2
+                              (-
+                                (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                                (mw_of f))))))
+                      (*
+                        m
+                        (fpow2
+                          (-
+                            0
+                            (-
+                              (-
+                                (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                                (mw_of f))
+                              e)))))
+                    (steps
+                      ((rewrite (premise hgrow) lr lhs true ())
+                       (simp lhs)
+                       (rewrite (premise hmw) lr lhs true ()))
+                      refl))
+                  (steps
+                    ((unfold fgrs lhs)
+                     (reduce lhs)
+                     (unfold frnd_pos rhs)
+                     (reduce rhs)
+                     (rewrite (premise helog) lr rhs true ())
+                     (rewrite (premise hmr) lr lhs true ())
+                     (rewrite (premise hmsel) lr rhs true ()))
+                    refl)))
+              (case False
+                (chain
+                  (have hgkf
+                    (=
+                      (le
+                        (-
+                          (-
+                            (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                            (mw_of f))
+                          e)
+                        0)
+                      False)
+                    (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                  (have hbad (= (le 0 -1) True)
+                    (steps () (by arith (list 0 0 1 0 1 1))))
+                  (have hff (= False True)
+                    (steps
+                      ((rewrite (premise hbad) rl rhs true ()) (compute rhs))
+                      refl))
+                  (absurd (premise hff))))))))
+       (case False
+         (chain
+           (have hgrowf
+             (= (le (imax (+ e (- (ibits m) 1)) (fmt_emin f)) (mw_of f)) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (case-on
+             (le
+               (- (- (imax (+ e (- (ibits m) 1)) (fmt_emin f)) (mw_of f)) e)
+               0)
+             Bool
+             ((case True
+                (chain
+                  (have hgk
+                    (=
+                      (le
+                        (-
+                          (-
+                            (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                            (mw_of f))
+                          e)
+                        0)
+                      True)
+                    (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                  (have hmr
+                    (=
+                      (fshr_rne
+                        m
+                        (-
+                          (-
+                            (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                            (mw_of f))
+                          e))
+                      (*
+                        m
+                        (fpow2
+                          (-
+                            0
+                            (-
+                              (-
+                                (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                                (mw_of f))
+                              e)))))
+                    (steps
+                      ((unfold fshr_rne lhs)
+                       (rewrite (premise hgk) lr lhs true ())
+                       (simp lhs))
+                      refl))
+                  (have h1x
+                    (=
+                      (*
+                        1
+                        (fpow2
+                          (-
+                            (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                            (mw_of f))))
+                      (fpow2
+                        (- (imax (+ e (- (ibits m) 1)) (fmt_emin f)) (mw_of f))))
+                    (steps
+                      ()
+                      (by
+                        arith
+                        (list (list 1 0 0 0 0 0 0) (list 1 0 0 0 0 0 0)))))
+                  (have hsp3
+                    (=
+                      (fpow2 e)
+                      (*
+                        (fpow2
+                          (-
+                            0
+                            (-
+                              (-
+                                (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                                (mw_of f))
+                              e)))
+                        (fpow2
+                          (-
+                            (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                            (mw_of f)))))
+                    (chain
+                      (have hE2sum
+                        (=
+                          (+
+                            (-
+                              0
+                              (-
+                                (-
+                                  (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                                  (mw_of f))
+                                e))
+                            (-
+                              (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                              (mw_of f)))
+                          e)
+                        (steps
+                          ()
+                          (by
+                            arith
+                            (list (list 1 0 0 0 0 0 0 0) (list 1 0 0 0 0 0 0 0)))))
+                      (rewrite-with
+                        (lemma fpow2_split)
+                        rl
+                        rhs
+                        ((inst
+                           a
+                           (-
+                             0
+                             (-
+                               (-
+                                 (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                                 (mw_of f))
+                               e)))
+                         (inst
+                           b
+                           (-
+                             (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                             (mw_of f))))
+                        ((by arith (list 1 0 0 0 0 1 0 0 0))
+                         (by arith (list 1 0 0 0 1 0 0 0 0))))
+                      (steps ((rewrite (premise hE2sum) lr rhs true ())) refl)))
+                  (have hnum
+                    (=
+                      (* m (fpow2 e))
+                      (*
+                        (*
+                          m
+                          (fpow2
+                            (-
+                              0
+                              (-
+                                (-
+                                  (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                                  (mw_of f))
+                                e))))
+                        (fpow2
+                          (-
+                            (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                            (mw_of f)))))
+                    (chain
+                      (rewrite-with
+                        (lemma mul_assoc)
+                        lr
+                        rhs
+                        ((inst a m)
+                         (inst
+                           b
+                           (fpow2
+                             (-
+                               0
+                               (-
+                                 (-
+                                   (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                                   (mw_of f))
+                                 e))))
+                         (inst
+                           c
+                           (fpow2
+                             (-
+                               (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                               (mw_of f)))))
+                        ())
+                      (steps ((rewrite (premise hsp3) rl rhs true ())) refl)))
+                  (have hdp
+                    (=
+                      (lt
+                        0
+                        (fpow2
+                          (-
+                            (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                            (mw_of f))))
+                      True)
+                    (rewrite-with
+                      (lemma fpow2_pos)
+                      lr
+                      lhs
+                      ((inst
+                         k
+                         (- (imax (+ e (- (ibits m) 1)) (fmt_emin f)) (mw_of f))))
+                      ()
+                      refl))
+                  (have hmod0
+                    (=
+                      (mod
+                        (* m (fpow2 e))
+                        (fpow2
+                          (-
+                            (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                            (mw_of f))))
+                      0)
+                    (rewrite-with
+                      (lemma mod_split)
+                      lr
+                      lhs
+                      ((inst n (* m (fpow2 e)))
+                       (inst
+                         hi
+                         (*
+                           m
+                           (fpow2
+                             (-
+                               0
+                               (-
+                                 (-
+                                   (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                                   (mw_of f))
+                                 e)))))
+                       (inst lo 0)
+                       (inst
+                         k
+                         (- (imax (+ e (- (ibits m) 1)) (fmt_emin f)) (mw_of f))))
+                      ((steps
+                         ((rewrite (premise hnum) lr lhs true ()))
+                         (by
+                           arith
+                           (list
+                             (list 1 0 0 0 0 0 0 0 0 0 0)
+                             (list 1 0 0 0 0 0 0 0 0 0 0))))
+                       (steps ((compute lhs)) refl)
+                       (steps ((rewrite (premise hdp) lr lhs true ())) refl))
+                      refl))
+                  (have hqe2
+                    (=
+                      (ediv
+                        (* m (fpow2 e))
+                        (fpow2
+                          (-
+                            (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                            (mw_of f))))
+                      (*
+                        m
+                        (fpow2
+                          (-
+                            0
+                            (-
+                              (-
+                                (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                                (mw_of f))
+                              e)))))
+                    (rewrite-with
+                      (lemma ediv_split)
+                      lr
+                      lhs
+                      ((inst n (* m (fpow2 e)))
+                       (inst
+                         hi
+                         (*
+                           m
+                           (fpow2
+                             (-
+                               0
+                               (-
+                                 (-
+                                   (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                                   (mw_of f))
+                                 e)))))
+                       (inst lo 0)
+                       (inst
+                         k
+                         (- (imax (+ e (- (ibits m) 1)) (fmt_emin f)) (mw_of f))))
+                      ((steps
+                         ((rewrite (premise hnum) lr lhs true ()))
+                         (by
+                           arith
+                           (list
+                             (list 1 0 0 0 0 0 0 0 0 0 0 0)
+                             (list 1 0 0 0 0 0 0 0 0 0 0 0))))
+                       (steps ((compute lhs)) refl)
+                       (steps ((rewrite (premise hdp) lr lhs true ())) refl))
+                      refl))
+                  (have hrne_ex
+                    (=
+                      (rne_div
+                        (* m (fpow2 e))
+                        (fpow2
+                          (-
+                            (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                            (mw_of f))))
+                      (ediv
+                        (* m (fpow2 e))
+                        (fpow2
+                          (-
+                            (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                            (mw_of f)))))
+                    (rewrite-with
+                      (lemma rne_div_exact)
+                      lr
+                      lhs
+                      ((inst x (* m (fpow2 e)))
+                       (inst
+                         y
+                         (fpow2
+                           (-
+                             (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                             (mw_of f)))))
+                      ((steps ((rewrite (premise hdp) lr lhs true ())) refl)
+                       (steps ((rewrite (premise hmod0) lr lhs true ())) refl))
+                      refl))
+                  (have hmw
+                    (=
+                      (rne_div
+                        (* m (fpow2 e))
+                        (*
+                          1
+                          (fpow2
+                            (-
+                              (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                              (mw_of f)))))
+                      (*
+                        m
+                        (fpow2
+                          (-
+                            0
+                            (-
+                              (-
+                                (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                                (mw_of f))
+                              e)))))
+                    (steps
+                      ((rewrite (premise h1x) lr lhs true ())
+                       (rewrite (premise hrne_ex) lr lhs true ())
+                       (rewrite (premise hqe2) lr lhs true ()))
+                      refl))
+                  (have hmsel
+                    (=
+                      (if
+                        (le (imax (+ e (- (ibits m) 1)) (fmt_emin f)) (mw_of f))
+                        (rne_div
+                          (*
+                            (* m (fpow2 e))
+                            (fpow2
+                              (-
+                                (mw_of f)
+                                (imax (+ e (- (ibits m) 1)) (fmt_emin f)))))
+                          1)
+                        (rne_div
+                          (* m (fpow2 e))
+                          (*
+                            1
+                            (fpow2
+                              (-
+                                (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                                (mw_of f))))))
+                      (*
+                        m
+                        (fpow2
+                          (-
+                            0
+                            (-
+                              (-
+                                (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                                (mw_of f))
+                              e)))))
+                    (steps
+                      ((rewrite (premise hgrowf) lr lhs true ())
+                       (simp lhs)
+                       (rewrite (premise hmw) lr lhs true ()))
+                      refl))
+                  (steps
+                    ((unfold fgrs lhs)
+                     (reduce lhs)
+                     (unfold frnd_pos rhs)
+                     (reduce rhs)
+                     (rewrite (premise helog) lr rhs true ())
+                     (rewrite (premise hmr) lr lhs true ())
+                     (rewrite (premise hmsel) lr rhs true ()))
+                    refl)))
+              (case False
+                (chain
+                  (have hgkf
+                    (=
+                      (le
+                        (-
+                          (-
+                            (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                            (mw_of f))
+                          e)
+                        0)
+                      False)
+                    (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                  (have hmr
+                    (=
+                      (fshr_rne
+                        m
+                        (-
+                          (-
+                            (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                            (mw_of f))
+                          e))
+                      (rne_div
+                        m
+                        (fpow2
+                          (-
+                            (-
+                              (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                              (mw_of f))
+                            e))))
+                    (rewrite-with
+                      (lemma fshr_rne_rne)
+                      lr
+                      lhs
+                      ((inst m m)
+                       (inst
+                         k
+                         (-
+                           (-
+                             (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                             (mw_of f))
+                           e)))
+                      ((by arith (list 1 1 0 0 0 0))
+                       (by arith (list 1 0 0 0 0 1)))
+                      refl))
+                  (have h1x
+                    (=
+                      (*
+                        1
+                        (fpow2
+                          (-
+                            (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                            (mw_of f))))
+                      (fpow2
+                        (- (imax (+ e (- (ibits m) 1)) (fmt_emin f)) (mw_of f))))
+                    (steps
+                      ()
+                      (by
+                        arith
+                        (list (list 1 0 0 0 0 0 0) (list 1 0 0 0 0 0 0)))))
+                  (have hcomm (= (* m (fpow2 e)) (* (fpow2 e) m))
+                    (chain
+                      (rewrite-with
+                        (lemma mul_comm)
+                        lr
+                        lhs
+                        ((inst a m) (inst b (fpow2 e)))
+                        ())
+                      (steps () refl)))
+                  (have hsp4
+                    (=
+                      (fpow2
+                        (- (imax (+ e (- (ibits m) 1)) (fmt_emin f)) (mw_of f)))
+                      (*
+                        (fpow2 e)
+                        (fpow2
+                          (-
+                            (-
+                              (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                              (mw_of f))
+                            e))))
+                    (chain
+                      (have hE3sum
+                        (=
+                          (+
+                            e
+                            (-
+                              (-
+                                (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                                (mw_of f))
+                              e))
+                          (-
+                            (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                            (mw_of f)))
+                        (steps
+                          ()
+                          (by
+                            arith
+                            (list
+                              (list 1 0 0 0 0 0 0 0 0)
+                              (list 1 0 0 0 0 0 0 0 0)))))
+                      (rewrite-with
+                        (lemma fpow2_split)
+                        rl
+                        rhs
+                        ((inst a e)
+                         (inst
+                           b
+                           (-
+                             (-
+                               (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                               (mw_of f))
+                             e)))
+                        ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                         (by arith (list 1 0 0 0 0 1 0 0 0 0))))
+                      (steps ((rewrite (premise hE3sum) lr rhs true ())) refl)))
+                  (have hscale
+                    (=
+                      (rne_div
+                        (* (fpow2 e) m)
+                        (*
+                          (fpow2 e)
+                          (fpow2
+                            (-
+                              (-
+                                (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                                (mw_of f))
+                              e))))
+                      (rne_div
+                        m
+                        (fpow2
+                          (-
+                            (-
+                              (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                              (mw_of f))
+                            e))))
+                    (rewrite-with
+                      (lemma rne_div_scale)
+                      lr
+                      lhs
+                      ((inst c (fpow2 e))
+                       (inst x m)
+                       (inst
+                         y
+                         (fpow2
+                           (-
+                             (-
+                               (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                               (mw_of f))
+                             e))))
+                      ((rewrite-with
+                         (lemma fpow2_pos)
+                         lr
+                         lhs
+                         ((inst k e))
+                         ()
+                         refl)
+                       (rewrite-with
+                         (lemma fpow2_pos)
+                         lr
+                         lhs
+                         ((inst
+                            k
+                            (-
+                              (-
+                                (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                                (mw_of f))
+                              e)))
+                         ()
+                         refl))
+                      refl))
+                  (have hmw
+                    (=
+                      (rne_div
+                        (* m (fpow2 e))
+                        (*
+                          1
+                          (fpow2
+                            (-
+                              (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                              (mw_of f)))))
+                      (rne_div
+                        m
+                        (fpow2
+                          (-
+                            (-
+                              (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                              (mw_of f))
+                            e))))
+                    (steps
+                      ((rewrite (premise h1x) lr lhs true ())
+                       (rewrite (premise hcomm) lr lhs true ())
+                       (rewrite (premise hsp4) lr lhs true ())
+                       (rewrite (premise hscale) lr lhs true ()))
+                      refl))
+                  (have hmsel
+                    (=
+                      (if
+                        (le (imax (+ e (- (ibits m) 1)) (fmt_emin f)) (mw_of f))
+                        (rne_div
+                          (*
+                            (* m (fpow2 e))
+                            (fpow2
+                              (-
+                                (mw_of f)
+                                (imax (+ e (- (ibits m) 1)) (fmt_emin f)))))
+                          1)
+                        (rne_div
+                          (* m (fpow2 e))
+                          (*
+                            1
+                            (fpow2
+                              (-
+                                (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                                (mw_of f))))))
+                      (rne_div
+                        m
+                        (fpow2
+                          (-
+                            (-
+                              (imax (+ e (- (ibits m) 1)) (fmt_emin f))
+                              (mw_of f))
+                            e))))
+                    (steps
+                      ((rewrite (premise hgrowf) lr lhs true ())
+                       (simp lhs)
+                       (rewrite (premise hmw) lr lhs true ()))
+                      refl))
+                  (steps
+                    ((unfold fgrs lhs)
+                     (reduce lhs)
+                     (unfold frnd_pos rhs)
+                     (reduce rhs)
+                     (rewrite (premise helog) lr rhs true ())
+                     (rewrite (premise hmr) lr lhs true ())
+                     (rewrite (premise hmsel) lr rhs true ()))
+                    refl)))))))))))
+
+;; --- the R2.3 equality, right-shift side: e = -j <= 0 -----------------------------------
+;; fgrs f s m (-j) = frnd_pos f s m 2^j. elog_shr aligns the rows; the
+;; L1 branch on erow <= MW splits against the GRS shift sign into three
+;; live arms: exact placement (the euclidean split at divisor 2^j), the
+;; scaled GRS (common factor 2^(MW-erow) cancelled by rne_div_scale), and
+;; the deep arm where the L1 divisor product folds to 2^k directly.
+(claim fgrs_frnd_pos_shr
+  (goal ((f Fmt) (s Bool) (m Int) (j Int)) ((= (le 1 m) True) (= (le 0 j) True))
+    (= (fgrs f s m (- 0 j)) (frnd_pos f s m (fpow2 j))))
+  (chain
+    (have helog (= (elog m (fpow2 j)) (- (- (ibits m) 1) j))
+      (rewrite-with
+        (lemma elog_shr)
+        lr
+        lhs
+        ((inst m m) (inst j j))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have hexp (= (- (- (ibits m) 1) j) (+ (- 0 j) (- (ibits m) 1)))
+      (steps () (by arith (list (list 1 0 0 0) (list 1 0 0 0)))))
+    (case-on (le (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f)) (mw_of f)) Bool
+      ((case True
+         (chain
+           (have hgrow
+             (=
+               (le (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f)) (mw_of f))
+               True)
+             (steps ((rewrite (hyp True) lr lhs true ())) refl))
+           (case-on
+             (le
+               (-
+                 (- (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f)) (mw_of f))
+                 (- 0 j))
+               0)
+             Bool
+             ((case True
+                (chain
+                  (have hgk
+                    (=
+                      (le
+                        (-
+                          (-
+                            (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                            (mw_of f))
+                          (- 0 j))
+                        0)
+                      True)
+                    (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                  (have hmr
+                    (=
+                      (fshr_rne
+                        m
+                        (-
+                          (-
+                            (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                            (mw_of f))
+                          (- 0 j)))
+                      (*
+                        m
+                        (fpow2
+                          (-
+                            0
+                            (-
+                              (-
+                                (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                                (mw_of f))
+                              (- 0 j))))))
+                    (steps
+                      ((unfold fshr_rne lhs)
+                       (rewrite (premise hgk) lr lhs true ())
+                       (simp lhs))
+                      refl))
+                  (have hsp5
+                    (=
+                      (fpow2
+                        (-
+                          (mw_of f)
+                          (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))))
+                      (*
+                        (fpow2
+                          (-
+                            0
+                            (-
+                              (-
+                                (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                                (mw_of f))
+                              (- 0 j))))
+                        (fpow2 j)))
+                    (chain
+                      (have hE4sum
+                        (=
+                          (+
+                            (-
+                              0
+                              (-
+                                (-
+                                  (imax
+                                    (+ (- 0 j) (- (ibits m) 1))
+                                    (fmt_emin f))
+                                  (mw_of f))
+                                (- 0 j)))
+                            j)
+                          (-
+                            (mw_of f)
+                            (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))))
+                        (steps
+                          ()
+                          (by
+                            arith
+                            (list (list 1 0 0 0 0 0 0 0) (list 1 0 0 0 0 0 0 0)))))
+                      (rewrite-with
+                        (lemma fpow2_split)
+                        rl
+                        rhs
+                        ((inst
+                           a
+                           (-
+                             0
+                             (-
+                               (-
+                                 (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                                 (mw_of f))
+                               (- 0 j))))
+                         (inst b j))
+                        ((by arith (list 1 0 0 0 0 0 1 0 0))
+                         (steps ((rewrite (premise 1) lr lhs true ())) refl)))
+                      (steps ((rewrite (premise hE4sum) lr rhs true ())) refl)))
+                  (have hnum
+                    (=
+                      (*
+                        m
+                        (fpow2
+                          (-
+                            (mw_of f)
+                            (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f)))))
+                      (*
+                        (*
+                          m
+                          (fpow2
+                            (-
+                              0
+                              (-
+                                (-
+                                  (imax
+                                    (+ (- 0 j) (- (ibits m) 1))
+                                    (fmt_emin f))
+                                  (mw_of f))
+                                (- 0 j)))))
+                        (fpow2 j)))
+                    (chain
+                      (rewrite-with
+                        (lemma mul_assoc)
+                        lr
+                        rhs
+                        ((inst a m)
+                         (inst
+                           b
+                           (fpow2
+                             (-
+                               0
+                               (-
+                                 (-
+                                   (imax
+                                     (+ (- 0 j) (- (ibits m) 1))
+                                     (fmt_emin f))
+                                   (mw_of f))
+                                 (- 0 j)))))
+                         (inst c (fpow2 j)))
+                        ())
+                      (steps ((rewrite (premise hsp5) rl rhs true ())) refl)))
+                  (have hdp (= (lt 0 (fpow2 j)) True)
+                    (rewrite-with (lemma fpow2_pos) lr lhs ((inst k j)) () refl))
+                  (have hmod0
+                    (=
+                      (mod
+                        (*
+                          m
+                          (fpow2
+                            (-
+                              (mw_of f)
+                              (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f)))))
+                        (fpow2 j))
+                      0)
+                    (rewrite-with
+                      (lemma mod_split)
+                      lr
+                      lhs
+                      ((inst
+                         n
+                         (*
+                           m
+                           (fpow2
+                             (-
+                               (mw_of f)
+                               (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))))))
+                       (inst
+                         hi
+                         (*
+                           m
+                           (fpow2
+                             (-
+                               0
+                               (-
+                                 (-
+                                   (imax
+                                     (+ (- 0 j) (- (ibits m) 1))
+                                     (fmt_emin f))
+                                   (mw_of f))
+                                 (- 0 j))))))
+                       (inst lo 0)
+                       (inst k j))
+                      ((steps
+                         ((rewrite (premise hnum) lr lhs true ()))
+                         (by
+                           arith
+                           (list
+                             (list 1 0 0 0 0 0 0 0 0 0 0)
+                             (list 1 0 0 0 0 0 0 0 0 0 0))))
+                       (steps ((compute lhs)) refl)
+                       (steps ((rewrite (premise hdp) lr lhs true ())) refl))
+                      refl))
+                  (have hqe2
+                    (=
+                      (ediv
+                        (*
+                          m
+                          (fpow2
+                            (-
+                              (mw_of f)
+                              (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f)))))
+                        (fpow2 j))
+                      (*
+                        m
+                        (fpow2
+                          (-
+                            0
+                            (-
+                              (-
+                                (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                                (mw_of f))
+                              (- 0 j))))))
+                    (rewrite-with
+                      (lemma ediv_split)
+                      lr
+                      lhs
+                      ((inst
+                         n
+                         (*
+                           m
+                           (fpow2
+                             (-
+                               (mw_of f)
+                               (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))))))
+                       (inst
+                         hi
+                         (*
+                           m
+                           (fpow2
+                             (-
+                               0
+                               (-
+                                 (-
+                                   (imax
+                                     (+ (- 0 j) (- (ibits m) 1))
+                                     (fmt_emin f))
+                                   (mw_of f))
+                                 (- 0 j))))))
+                       (inst lo 0)
+                       (inst k j))
+                      ((steps
+                         ((rewrite (premise hnum) lr lhs true ()))
+                         (by
+                           arith
+                           (list
+                             (list 1 0 0 0 0 0 0 0 0 0 0 0)
+                             (list 1 0 0 0 0 0 0 0 0 0 0 0))))
+                       (steps ((compute lhs)) refl)
+                       (steps ((rewrite (premise hdp) lr lhs true ())) refl))
+                      refl))
+                  (have hrne_ex
+                    (=
+                      (rne_div
+                        (*
+                          m
+                          (fpow2
+                            (-
+                              (mw_of f)
+                              (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f)))))
+                        (fpow2 j))
+                      (ediv
+                        (*
+                          m
+                          (fpow2
+                            (-
+                              (mw_of f)
+                              (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f)))))
+                        (fpow2 j)))
+                    (rewrite-with
+                      (lemma rne_div_exact)
+                      lr
+                      lhs
+                      ((inst
+                         x
+                         (*
+                           m
+                           (fpow2
+                             (-
+                               (mw_of f)
+                               (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))))))
+                       (inst y (fpow2 j)))
+                      ((steps ((rewrite (premise hdp) lr lhs true ())) refl)
+                       (steps ((rewrite (premise hmod0) lr lhs true ())) refl))
+                      refl))
+                  (have hmw
+                    (=
+                      (rne_div
+                        (*
+                          m
+                          (fpow2
+                            (-
+                              (mw_of f)
+                              (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f)))))
+                        (fpow2 j))
+                      (*
+                        m
+                        (fpow2
+                          (-
+                            0
+                            (-
+                              (-
+                                (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                                (mw_of f))
+                              (- 0 j))))))
+                    (steps
+                      ((rewrite (premise hrne_ex) lr lhs true ())
+                       (rewrite (premise hqe2) lr lhs true ()))
+                      refl))
+                  (have hmsel
+                    (=
+                      (if
+                        (le
+                          (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                          (mw_of f))
+                        (rne_div
+                          (*
+                            m
+                            (fpow2
+                              (-
+                                (mw_of f)
+                                (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f)))))
+                          (fpow2 j))
+                        (rne_div
+                          m
+                          (*
+                            (fpow2 j)
+                            (fpow2
+                              (-
+                                (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                                (mw_of f))))))
+                      (*
+                        m
+                        (fpow2
+                          (-
+                            0
+                            (-
+                              (-
+                                (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                                (mw_of f))
+                              (- 0 j))))))
+                    (steps
+                      ((rewrite (premise hgrow) lr lhs true ())
+                       (simp lhs)
+                       (rewrite (premise hmw) lr lhs true ()))
+                      refl))
+                  (steps
+                    ((unfold fgrs lhs)
+                     (reduce lhs)
+                     (unfold frnd_pos rhs)
+                     (reduce rhs)
+                     (rewrite (premise helog) lr rhs true ())
+                     (rewrite (premise hexp) lr rhs true ())
+                     (rewrite (premise hmr) lr lhs true ())
+                     (rewrite (premise hmsel) lr rhs true ()))
+                    refl)))
+              (case False
+                (chain
+                  (have hgkf
+                    (=
+                      (le
+                        (-
+                          (-
+                            (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                            (mw_of f))
+                          (- 0 j))
+                        0)
+                      False)
+                    (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                  (have hmr
+                    (=
+                      (fshr_rne
+                        m
+                        (-
+                          (-
+                            (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                            (mw_of f))
+                          (- 0 j)))
+                      (rne_div
+                        m
+                        (fpow2
+                          (-
+                            (-
+                              (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                              (mw_of f))
+                            (- 0 j)))))
+                    (rewrite-with
+                      (lemma fshr_rne_rne)
+                      lr
+                      lhs
+                      ((inst m m)
+                       (inst
+                         k
+                         (-
+                           (-
+                             (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                             (mw_of f))
+                           (- 0 j))))
+                      ((by arith (list 1 1 0 0 0 0 0))
+                       (by arith (list 1 0 0 0 0 0 1)))
+                      refl))
+                  (have hcomm2
+                    (=
+                      (*
+                        m
+                        (fpow2
+                          (-
+                            (mw_of f)
+                            (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f)))))
+                      (*
+                        (fpow2
+                          (-
+                            (mw_of f)
+                            (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))))
+                        m))
+                    (chain
+                      (rewrite-with
+                        (lemma mul_comm)
+                        lr
+                        lhs
+                        ((inst a m)
+                         (inst
+                           b
+                           (fpow2
+                             (-
+                               (mw_of f)
+                               (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))))))
+                        ())
+                      (steps () refl)))
+                  (have hsp6
+                    (=
+                      (fpow2 j)
+                      (*
+                        (fpow2
+                          (-
+                            (mw_of f)
+                            (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))))
+                        (fpow2
+                          (-
+                            (-
+                              (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                              (mw_of f))
+                            (- 0 j)))))
+                    (chain
+                      (have hE5sum
+                        (=
+                          (+
+                            (-
+                              (mw_of f)
+                              (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f)))
+                            (-
+                              (-
+                                (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                                (mw_of f))
+                              (- 0 j)))
+                          j)
+                        (steps
+                          ()
+                          (by
+                            arith
+                            (list
+                              (list 1 0 0 0 0 0 0 0 0)
+                              (list 1 0 0 0 0 0 0 0 0)))))
+                      (rewrite-with
+                        (lemma fpow2_split)
+                        rl
+                        rhs
+                        ((inst
+                           a
+                           (-
+                             (mw_of f)
+                             (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))))
+                         (inst
+                           b
+                           (-
+                             (-
+                               (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                               (mw_of f))
+                             (- 0 j))))
+                        ((by arith (list 1 0 0 0 0 1 0 0 0 0))
+                         (by arith (list 1 0 0 0 0 0 1 0 0 0))))
+                      (steps ((rewrite (premise hE5sum) lr rhs true ())) refl)))
+                  (have hscale2
+                    (=
+                      (rne_div
+                        (*
+                          (fpow2
+                            (-
+                              (mw_of f)
+                              (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))))
+                          m)
+                        (*
+                          (fpow2
+                            (-
+                              (mw_of f)
+                              (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))))
+                          (fpow2
+                            (-
+                              (-
+                                (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                                (mw_of f))
+                              (- 0 j)))))
+                      (rne_div
+                        m
+                        (fpow2
+                          (-
+                            (-
+                              (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                              (mw_of f))
+                            (- 0 j)))))
+                    (rewrite-with
+                      (lemma rne_div_scale)
+                      lr
+                      lhs
+                      ((inst
+                         c
+                         (fpow2
+                           (-
+                             (mw_of f)
+                             (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f)))))
+                       (inst x m)
+                       (inst
+                         y
+                         (fpow2
+                           (-
+                             (-
+                               (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                               (mw_of f))
+                             (- 0 j)))))
+                      ((rewrite-with
+                         (lemma fpow2_pos)
+                         lr
+                         lhs
+                         ((inst
+                            k
+                            (-
+                              (mw_of f)
+                              (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f)))))
+                         ()
+                         refl)
+                       (rewrite-with
+                         (lemma fpow2_pos)
+                         lr
+                         lhs
+                         ((inst
+                            k
+                            (-
+                              (-
+                                (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                                (mw_of f))
+                              (- 0 j))))
+                         ()
+                         refl))
+                      refl))
+                  (have hmw
+                    (=
+                      (rne_div
+                        (*
+                          m
+                          (fpow2
+                            (-
+                              (mw_of f)
+                              (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f)))))
+                        (fpow2 j))
+                      (rne_div
+                        m
+                        (fpow2
+                          (-
+                            (-
+                              (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                              (mw_of f))
+                            (- 0 j)))))
+                    (steps
+                      ((rewrite (premise hcomm2) lr lhs true ())
+                       (rewrite (premise hsp6) lr lhs true ())
+                       (rewrite (premise hscale2) lr lhs true ()))
+                      refl))
+                  (have hmsel
+                    (=
+                      (if
+                        (le
+                          (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                          (mw_of f))
+                        (rne_div
+                          (*
+                            m
+                            (fpow2
+                              (-
+                                (mw_of f)
+                                (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f)))))
+                          (fpow2 j))
+                        (rne_div
+                          m
+                          (*
+                            (fpow2 j)
+                            (fpow2
+                              (-
+                                (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                                (mw_of f))))))
+                      (rne_div
+                        m
+                        (fpow2
+                          (-
+                            (-
+                              (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                              (mw_of f))
+                            (- 0 j)))))
+                    (steps
+                      ((rewrite (premise hgrow) lr lhs true ())
+                       (simp lhs)
+                       (rewrite (premise hmw) lr lhs true ()))
+                      refl))
+                  (steps
+                    ((unfold fgrs lhs)
+                     (reduce lhs)
+                     (unfold frnd_pos rhs)
+                     (reduce rhs)
+                     (rewrite (premise helog) lr rhs true ())
+                     (rewrite (premise hexp) lr rhs true ())
+                     (rewrite (premise hmr) lr lhs true ())
+                     (rewrite (premise hmsel) lr rhs true ()))
+                    refl)))))))
+       (case False
+         (chain
+           (have hgrowf
+             (=
+               (le (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f)) (mw_of f))
+               False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (case-on
+             (le
+               (-
+                 (- (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f)) (mw_of f))
+                 (- 0 j))
+               0)
+             Bool
+             ((case True
+                (chain
+                  (have hgk
+                    (=
+                      (le
+                        (-
+                          (-
+                            (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                            (mw_of f))
+                          (- 0 j))
+                        0)
+                      True)
+                    (steps ((rewrite (hyp True) lr lhs true ())) refl))
+                  (have hbad (= (le 0 -1) True)
+                    (steps () (by arith (list 0 0 1 0 0 1 1))))
+                  (have hff (= False True)
+                    (steps
+                      ((rewrite (premise hbad) rl rhs true ()) (compute rhs))
+                      refl))
+                  (absurd (premise hff))))
+              (case False
+                (chain
+                  (have hgkf
+                    (=
+                      (le
+                        (-
+                          (-
+                            (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                            (mw_of f))
+                          (- 0 j))
+                        0)
+                      False)
+                    (steps ((rewrite (hyp False) lr lhs true ())) refl))
+                  (have hmr
+                    (=
+                      (fshr_rne
+                        m
+                        (-
+                          (-
+                            (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                            (mw_of f))
+                          (- 0 j)))
+                      (rne_div
+                        m
+                        (fpow2
+                          (-
+                            (-
+                              (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                              (mw_of f))
+                            (- 0 j)))))
+                    (rewrite-with
+                      (lemma fshr_rne_rne)
+                      lr
+                      lhs
+                      ((inst m m)
+                       (inst
+                         k
+                         (-
+                           (-
+                             (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                             (mw_of f))
+                           (- 0 j))))
+                      ((by arith (list 1 1 0 0 0 0 0))
+                       (by arith (list 1 0 0 0 0 0 1)))
+                      refl))
+                  (have hsp7
+                    (=
+                      (*
+                        (fpow2 j)
+                        (fpow2
+                          (-
+                            (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                            (mw_of f))))
+                      (fpow2
+                        (-
+                          (-
+                            (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                            (mw_of f))
+                          (- 0 j))))
+                    (chain
+                      (have hE6sum
+                        (=
+                          (+
+                            j
+                            (-
+                              (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                              (mw_of f)))
+                          (-
+                            (-
+                              (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                              (mw_of f))
+                            (- 0 j)))
+                        (steps
+                          ()
+                          (by
+                            arith
+                            (list
+                              (list 1 0 0 0 0 0 0 0 0)
+                              (list 1 0 0 0 0 0 0 0 0)))))
+                      (rewrite-with
+                        (lemma fpow2_split)
+                        rl
+                        lhs
+                        ((inst a j)
+                         (inst
+                           b
+                           (-
+                             (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                             (mw_of f))))
+                        ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+                         (by arith (list 1 0 0 0 0 1 0 0 0))))
+                      (steps ((rewrite (premise hE6sum) lr lhs true ())) refl)))
+                  (have hmw
+                    (=
+                      (rne_div
+                        m
+                        (*
+                          (fpow2 j)
+                          (fpow2
+                            (-
+                              (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                              (mw_of f)))))
+                      (rne_div
+                        m
+                        (fpow2
+                          (-
+                            (-
+                              (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                              (mw_of f))
+                            (- 0 j)))))
+                    (steps ((rewrite (premise hsp7) lr lhs true ())) refl))
+                  (have hmsel
+                    (=
+                      (if
+                        (le
+                          (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                          (mw_of f))
+                        (rne_div
+                          (*
+                            m
+                            (fpow2
+                              (-
+                                (mw_of f)
+                                (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f)))))
+                          (fpow2 j))
+                        (rne_div
+                          m
+                          (*
+                            (fpow2 j)
+                            (fpow2
+                              (-
+                                (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                                (mw_of f))))))
+                      (rne_div
+                        m
+                        (fpow2
+                          (-
+                            (-
+                              (imax (+ (- 0 j) (- (ibits m) 1)) (fmt_emin f))
+                              (mw_of f))
+                            (- 0 j)))))
+                    (steps
+                      ((rewrite (premise hgrowf) lr lhs true ())
+                       (simp lhs)
+                       (rewrite (premise hmw) lr lhs true ()))
+                      refl))
+                  (steps
+                    ((unfold fgrs lhs)
+                     (reduce lhs)
+                     (unfold frnd_pos rhs)
+                     (reduce rhs)
+                     (rewrite (premise helog) lr rhs true ())
+                     (rewrite (premise hexp) lr rhs true ())
+                     (rewrite (premise hmr) lr lhs true ())
+                     (rewrite (premise hmsel) lr rhs true ()))
+                    refl)))))))))))

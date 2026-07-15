@@ -1,0 +1,1965 @@
+;;; std/rat/gcd.shard — greatest common divisor over Int (euclidean).
+;;;
+;;; Slice R0.1 of the floats arc (docs/FLOATS.md §2): std/rat's canonical
+;;; representatives are gcd-reduced pairs, so the normalization engine lands
+;;; first as a sibling helper module (the std/str : utf8.shard shape).
+;;; Recursion is the euclidean descent gcd(a,b) = gcd(b, a mod b) on the
+;;; kernel's euclidean pair (ediv/mod, remainder always in [0, |b|)); the
+;;; nonneg-Int measure is the second argument, whose descent obligations are
+;;; exactly kernel/facts' mod_lo/mod_hi at the guard's 0 < b path condition.
+;;;
+;;; This slice: the functions + ground pins. The theorem kit (gcd divides
+;;; both arguments, positivity, cofactor coprimality — what rat_make's
+;;; refined-return obligation will cite) is slice R0.2.
+
+(import "../../../kernel/stdlib.shard")  ; Int / Bool / le / lt / mod
+(import "../../../kernel/facts.shard")  ; mod_lo / mod_hi — the measure's range axioms
+(use (:: kernel facts *))
+
+;; absolute value (no stdlib abs; the sign fork is farkas-friendly).
+(fn iabs ((n Int)) Int (if (le 0 n) n (- 0 n)))
+
+;; euclidean worker: descends on the second argument. For b <= 0 the answer
+;; is |a| (so gcd_nn a 0 = |a|, the gcd identity element); for b > 0 the
+;; euclidean step recurses on (b, a mod b) with 0 <= (mod a b) < b giving
+;; both measure obligations from mod_lo/mod_hi.
+(fn gcd_nn ((a Int) (b Int)) Int
+  (measure
+    b
+    (rewrite-with
+      (lemma mod_hi)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (list 1 1))))
+      refl)
+    (rewrite-with
+      (lemma mod_lo)
+      lr
+      lhs
+      ()
+      ((steps () (by arith (list 1 1))))
+      refl))
+  (if (le b 0) (iabs a) (gcd_nn b (mod a b))))
+
+;; gcd over all of Int: normalize the descent argument's sign once; the
+;; worker's mod handles a negative first argument at the first step.
+(fn gcd ((a Int) (b Int)) Int (gcd_nn a (iabs b)))
+
+;; --- divisibility toolkit (slice R0.2) ---------------------------------------
+;; Divisibility is spelled through the euclidean remainder: d | n iff
+;; (mod n d) = 0 (all our divisors are positive). The workhorse is
+;; uniqueness-as-computation: exhibit n = d*q + r linearly, cite mod_unique.
+
+;; d | d*q — the product is its own decomposition (remainder 0).
+(claim mod_mul0
+  (goal ((d Int) (q Int)) ((= (lt 0 d) True)) (= (mod (* d q) d) 0))
+  (rewrite-with
+    (lemma mod_unique)
+    lr
+    lhs
+    ((inst q q) (inst r 0))
+    ((by arith (list (list 1 0) (list 1 0)))
+     (steps ((compute both)) refl)
+     (steps ((rewrite (premise 0) lr lhs true ())) refl))
+    refl))
+
+;; d | d.
+(claim mod_self
+  (goal ((d Int)) ((= (lt 0 d) True)) (= (mod d d) 0))
+  (rewrite-with
+    (lemma mod_unique)
+    lr
+    lhs
+    ((inst q 1) (inst r 0))
+    ((by arith (list (list 1 0) (list 1 0)))
+     (steps ((compute both)) refl)
+     (steps ((rewrite (premise 0) lr lhs true ())) refl))
+    refl))
+
+;; --- multiplication order facts ----------------------------------------------
+;; The linear backend treats symbolic products as opaque atoms, so sign and
+;; monotonicity of products are underivable by farkas alone — but they ARE
+;; theorems: wf-induct on the left factor, one mul_dist respell per step,
+;; literal-coefficient products ((* 0 b), (* 1 b)) read linearly.
+
+;; the one-step peel: a*b = (a-1)*b + b (unconditional; the respell every
+;; product-order proof rides).
+(claim mul_split_l
+  (goal ((a Int) (b Int)) () (= (* a b) (+ (* (- a 1) b) b)))
+  (chain
+    (have h2 (= a (+ (- a 1) 1)) (steps () (by arith (list (list 1) (list 1)))))
+    (have h3 (= (* b (- a 1)) (* (- a 1) b))
+      (steps ((rewrite (lemma mul_comm) lr lhs true ())) refl))
+    (have h4 (= (* b 1) (* 1 b))
+      (steps ((rewrite (lemma mul_comm) lr lhs true ())) refl))
+    (steps
+      ((rewrite (premise 0) lr lhs true ())
+       (rewrite (lemma mul_comm) lr lhs true ())
+       (rewrite (lemma mul_dist) lr lhs true ())
+       (rewrite (premise 1) lr lhs true ())
+       (rewrite (premise 2) lr lhs true ()))
+      (by arith (list (list 1 0 0 0) (list 1 0 0 0))))))
+
+;; 0 <= a, 0 <= b  |-  0 <= a*b.
+(claim mul_nonneg
+  (goal ((a Int) (b Int)) ((= (le 0 a) True) (= (le 0 b) True))
+    (= (le 0 (* a b)) True))
+  (wf-induct a
+    (case-on (le a 0) Bool
+      ((case True
+         (fin-split a (premise 0) (hyp True) ((case 0 (by arith (list 1 0 0))))))
+       (case False
+         (chain
+           (have ha1 (= (le a 0) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (have hih (= (le 0 (* (- a 1) b)) True)
+             (rewrite-with
+               (hyp 1)
+               lr
+               lhs
+               ()
+               ((by arith (list 1 0 0 1))
+                (by arith (list 1 0 1 0))
+                (by arith (list 1 0 0 1))
+                (by arith (list 1 0 0 0)))
+               refl))
+           (have hsp (= (* a b) (+ (* (- a 1) b) b))
+             (steps ((rewrite (lemma mul_split_l) lr lhs true ())) refl))
+           (by arith (list 1 0 1 0 1 1))))))))
+
+;; 0 < a, 0 < b  |-  0 < a*b.
+(claim mul_pos
+  (goal ((a Int) (b Int)) ((= (lt 0 a) True) (= (lt 0 b) True))
+    (= (lt 0 (* a b)) True))
+  (chain
+    (have h0 (= (le 0 (* (- a 1) b)) True)
+      (rewrite-with
+        (lemma mul_nonneg)
+        lr
+        lhs
+        ()
+        ((by arith (list 1 1 0)) (by arith (list 1 0 1)))
+        refl))
+    (have hsp (= (* a b) (+ (* (- a 1) b) b))
+      (steps ((rewrite (lemma mul_split_l) lr lhs true ())) refl))
+    (by arith (list 1 0 1 1 1))))
+
+;; the linear-combination law: d | x, d | y  |-  d | x*k + y. THE workhorse:
+;; substitute the exhibited quotients (x = d*qx, y = d*qy), re-associate, and
+;; the combination is its own euclidean decomposition with remainder 0.
+(claim dvd_lincomb
+  (goal ((d Int) (x Int) (y Int) (k Int))
+    ((= (lt 0 d) True) (= (mod x d) 0) (= (mod y d) 0))
+    (= (mod (+ (* x k) y) d) 0))
+  (chain
+    (have hx0 (= x (+ (* d (ediv x d)) (mod x d)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n x) (inst d d))
+        ((by arith (list 1 1 0 0)))
+        refl))
+    (have hx1 (= x (* d (ediv x d)))
+      (steps
+        ((rewrite (premise 3) lr lhs true ())
+         (rewrite (premise 1) lr lhs true ()))
+        (by arith (list (list 1 0 0 0 0) (list 1 0 0 0 0)))))
+    (have hy0 (= y (+ (* d (ediv y d)) (mod y d)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n y) (inst d d))
+        ((by arith (list 1 1 0 0 0 0)))
+        refl))
+    (have hy1 (= y (* d (ediv y d)))
+      (steps
+        ((rewrite (premise 5) lr lhs true ())
+         (rewrite (premise 2) lr lhs true ()))
+        (by arith (list (list 1 0 0 0 0 0 0) (list 1 0 0 0 0 0 0)))))
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      lhs
+      ((inst q (+ (* (ediv x d) k) (ediv y d))) (inst r 0))
+      ((steps
+         ((rewrite (premise 4) lr lhs true ())
+          (rewrite (premise 6) lr lhs true ())
+          (rewrite (lemma mul_assoc) lr lhs true ())
+          (rewrite (lemma mul_dist) lr rhs true ()))
+         (by arith (list (list 1 0 0 0 0 0 0 0) (list 1 0 0 0 0 0 0 0))))
+       (steps ((compute both)) refl)
+       (steps ((rewrite (premise 0) lr lhs true ())) refl))
+      refl)))
+
+;; positive-factor sign cancellation: 0 < g, 0 <= g*q  |-  0 <= q. The False
+;; fork exhibits g*(-q) > 0 and collapses g*q + g*(-q) = g*0 = 0 — the
+;; distributivity respell done ONCE, so downstream quotient-sign facts are
+;; single citations.
+(claim pos_factor_nonneg
+  (goal ((g Int) (q Int)) ((= (lt 0 g) True) (= (le 0 (* g q)) True))
+    (= (le 0 q) True))
+  (case-on (le 0 q) Bool
+    ((case True (steps ((rewrite (hyp True) lr lhs true ())) refl))
+     (case False
+       (chain
+         (have hq (= (le 0 q) False)
+           (steps ((rewrite (hyp False) lr lhs true ())) refl))
+         (have hnq (= (lt 0 (- 0 q)) True) (steps () (by arith (list 1 0 0 1))))
+         (have hmp (= (lt 0 (* g (- 0 q))) True)
+           (rewrite-with
+             (lemma mul_pos)
+             lr
+             lhs
+             ()
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+              (steps ((rewrite (premise 3) lr lhs true ())) refl))
+             refl))
+         (have hz (= (+ q (- 0 q)) 0)
+           (steps () (by arith (list (list 1 0 0 0 0 0) (list 1 0 0 0 0 0)))))
+         (have hga (= (* g (+ q (- 0 q))) (+ (* g q) (* g (- 0 q))))
+           (steps ((rewrite (lemma mul_dist) lr lhs true ())) refl))
+         (have hg0 (= (* g (+ q (- 0 q))) (* g 0))
+           (steps ((rewrite (premise 5) lr lhs true ())) refl))
+         (have hgz (= (* g 0) (* 0 g))
+           (steps ((rewrite (lemma mul_comm) lr lhs true ())) refl))
+         (steps () (by arith (list 0 0 1 0 0 1 0 1 -1 -1))))))))
+
+;; euclidean homogeneity: 0 < k, 0 < b  |-  (k*a) mod (k*b) = k*(a mod b).
+;; The scaled decomposition k*a = (k*b)*(a ediv b) + k*(a mod b) is exhibited
+;; from ediv_mod_id times k; its ranges ride mul_nonneg/mul_pos. The route to
+;; cofactor coprimality (gcd_scale next) rides this.
+(claim mod_scale
+  (goal ((k Int) (a Int) (b Int)) ((= (lt 0 k) True) (= (lt 0 b) True))
+    (= (mod (* k a) (* k b)) (* k (mod a b))))
+  (chain
+    (have hae (= a (+ (* b (ediv a b)) (mod a b)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n a) (inst d b))
+        ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have hml (= (le 0 (mod a b)) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have hmh (= (lt (mod a b) b) True)
+      (rewrite-with
+        (lemma mod_hi)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have hb2 (= (+ (mod a b) (- b (mod a b))) b)
+      (steps () (by arith (list (list 1 0 0 0 0 0) (list 1 0 0 0 0 0)))))
+    (have hdist
+      (=
+        (* k (+ (mod a b) (- b (mod a b))))
+        (+ (* k (mod a b)) (* k (- b (mod a b)))))
+      (steps ((rewrite (lemma mul_dist) lr lhs true ())) refl))
+    (have hkb (= (* k b) (+ (* k (mod a b)) (* k (- b (mod a b)))))
+      (steps
+        ((rewrite (premise 5) rl lhs true ())
+         (rewrite (premise 6) lr lhs true ()))
+        refl))
+    (have hbm (= (lt 0 (- b (mod a b))) True)
+      (steps () (by arith (list 1 0 0 0 0 1 0 0 0))))
+    (have hpos (= (lt 0 (* k (- b (mod a b)))) True)
+      (rewrite-with
+        (lemma mul_pos)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 8) lr lhs true ())) refl))
+        refl))
+    (rewrite-with
+      (lemma mod_unique)
+      lr
+      lhs
+      ((inst q (ediv a b)) (inst r (* k (mod a b))))
+      ((steps
+         ((rewrite (premise 2) lr lhs true ())
+          (rewrite (lemma mul_dist) lr lhs true ())
+          (rewrite (lemma mul_assoc) rl lhs true ()))
+         refl)
+       (rewrite-with
+         (lemma mul_nonneg)
+         lr
+         lhs
+         ()
+         ((by arith (list 1 1 0 0 0 0 0 0 0 0 0))
+          (steps ((rewrite (premise 3) lr lhs true ())) refl))
+         refl)
+       (steps () (by arith (list 1 0 0 0 0 0 0 0 1 0 1))))
+      refl)))
+
+;; --- the gcd facts (wf-induct along the euclidean descent) ---------------------
+
+;; 0 <= a, 0 < b  |-  0 < gcd_nn a b. The recursion is opened by hand (unfold +
+;; guard rewrite + simp); the mod = 0 exit computes down to b itself, the
+;; mod > 0 path is the IH at (b, mod a b).
+(claim gcd_nn_pos
+  (goal ((a Int) (b Int)) ((= (le 0 a) True) (= (lt 0 b) True))
+    (= (lt 0 (gcd_nn a b)) True))
+  (wf-induct b
+    (chain
+      (have hb (= (le b 0) False) (steps () (by arith (list 1 0 1))))
+      (have hb0 (= (le 0 b) True) (steps () (by arith (list 1 0 1 0))))
+      (case-on (le (mod a b) 0) Bool
+        ((case True
+           (steps
+             ((unfold gcd_nn lhs)
+              (rewrite (premise 2) lr lhs true ())
+              (simp lhs)
+              (unfold gcd_nn lhs)
+              (rewrite (hyp True) lr lhs true ())
+              (simp lhs)
+              (unfold iabs lhs)
+              (rewrite (premise 3) lr lhs true ())
+              (simp lhs)
+              (rewrite (premise 1) lr lhs true ()))
+             refl))
+         (case False
+           (chain
+             (have hm (= (le (mod a b) 0) False)
+               (steps ((rewrite (hyp False) lr lhs true ())) refl))
+             (have hgi (= (lt 0 (gcd_nn b (mod a b))) True)
+               (rewrite-with
+                 (hyp 1)
+                 lr
+                 lhs
+                 ()
+                 ((by arith (list 1 0 1 0 0 0))
+                  (by arith (list 1 0 0 0 0 1))
+                  (rewrite-with
+                    (lemma mod_lo)
+                    lr
+                    lhs
+                    ()
+                    ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+                    refl)
+                  (rewrite-with
+                    (lemma mod_hi)
+                    lr
+                    lhs
+                    ()
+                    ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+                    refl))
+                 refl))
+             (steps
+               ((unfold gcd_nn lhs)
+                (rewrite (premise 2) lr lhs true ())
+                (simp lhs)
+                (rewrite (premise 5) lr lhs true ()))
+               refl))))))))
+
+;; the divides pair, sum-encoded to avoid mutual induction: both remainders
+;; are nonneg (mod_lo at the positive gcd), so their sum vanishing IS the
+;; conjunction. The step splits the IH sum back into its two zero halves,
+;; carries b's divisibility directly, and rebuilds a's from the euclidean
+;; identity via dvd_lincomb.
+(claim gcd_nn_dvd_sum
+  (goal ((a Int) (b Int)) ((= (le 0 a) True) (= (lt 0 b) True))
+    (= (+ (mod a (gcd_nn a b)) (mod b (gcd_nn a b))) 0))
+  (wf-induct b
+    (chain
+      (have hb (= (le b 0) False) (steps () (by arith (list 1 0 1))))
+      (have hb0 (= (le 0 b) True) (steps () (by arith (list 1 0 1 0))))
+      (case-on (le (mod a b) 0) Bool
+        ((case True
+           (chain
+             (have hgb (= (gcd_nn a b) b)
+               (steps
+                 ((unfold gcd_nn lhs)
+                  (rewrite (premise 2) lr lhs true ())
+                  (simp lhs)
+                  (unfold gcd_nn lhs)
+                  (rewrite (hyp True) lr lhs true ())
+                  (simp lhs)
+                  (unfold iabs lhs)
+                  (rewrite (premise 3) lr lhs true ())
+                  (simp lhs))
+                 refl))
+             (have hct (= (le (mod a b) 0) True)
+               (steps ((rewrite (hyp True) lr lhs true ())) refl))
+             (have hml (= (le 0 (mod a b)) True)
+               (rewrite-with
+                 (lemma mod_lo)
+                 lr
+                 lhs
+                 ()
+                 ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+                 refl))
+             (have hms (= (mod b b) 0)
+               (rewrite-with
+                 (lemma mod_self)
+                 lr
+                 lhs
+                 ()
+                 ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+                 refl))
+             (steps
+               ((rewrite (premise 4) lr lhs true ())
+                (rewrite (premise 7) lr lhs true ()))
+               (by
+                 arith
+                 (list (list 1 0 0 0 0 0 1 0 0) (list 1 0 0 0 0 0 0 1 0))))))
+         (case False
+           (chain
+             (have hm (= (le (mod a b) 0) False)
+               (steps ((rewrite (hyp False) lr lhs true ())) refl))
+             (have hmp (= (lt 0 (mod a b)) True)
+               (steps () (by arith (list 1 0 0 0 0 1))))
+             (have hgg (= (gcd_nn a b) (gcd_nn b (mod a b)))
+               (steps
+                 ((unfold gcd_nn lhs)
+                  (rewrite (premise 2) lr lhs true ())
+                  (simp lhs))
+                 refl))
+             (have hgp (= (lt 0 (gcd_nn b (mod a b))) True)
+               (rewrite-with
+                 (lemma gcd_nn_pos)
+                 lr
+                 lhs
+                 ()
+                 ((steps ((rewrite (premise 3) lr lhs true ())) refl)
+                  (steps ((rewrite (premise 5) lr lhs true ())) refl))
+                 refl))
+             (have hsum
+               (=
+                 (+
+                   (mod b (gcd_nn b (mod a b)))
+                   (mod (mod a b) (gcd_nn b (mod a b))))
+                 0)
+               (rewrite-with
+                 (hyp 1)
+                 lr
+                 lhs
+                 ()
+                 ((steps ((rewrite (premise 3) lr lhs true ())) refl)
+                  (steps ((rewrite (premise 5) lr lhs true ())) refl)
+                  (rewrite-with
+                    (lemma mod_lo)
+                    lr
+                    lhs
+                    ()
+                    ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+                    refl)
+                  (rewrite-with
+                    (lemma mod_hi)
+                    lr
+                    lhs
+                    ()
+                    ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+                    refl))
+                 refl))
+             (have hml1 (= (le 0 (mod b (gcd_nn b (mod a b)))) True)
+               (rewrite-with
+                 (lemma mod_lo)
+                 lr
+                 lhs
+                 ()
+                 ((steps ((rewrite (premise 7) lr lhs true ())) refl))
+                 refl))
+             (have hml2 (= (le 0 (mod (mod a b) (gcd_nn b (mod a b)))) True)
+               (rewrite-with
+                 (lemma mod_lo)
+                 lr
+                 lhs
+                 ()
+                 ((steps ((rewrite (premise 7) lr lhs true ())) refl))
+                 refl))
+             (have hbd (= (mod b (gcd_nn b (mod a b))) 0)
+               (steps
+                 ()
+                 (by
+                   arith
+                   (list
+                     (list 1 0 0 0 0 0 0 0 0 -1 0 1)
+                     (list 1 0 0 0 0 0 0 0 0 0 1 0)))))
+             (have hrd (= (mod (mod a b) (gcd_nn b (mod a b))) 0)
+               (steps
+                 ()
+                 (by
+                   arith
+                   (list
+                     (list 1 0 0 0 0 0 0 0 0 -1 1 0 0)
+                     (list 1 0 0 0 0 0 0 0 0 0 0 1 0)))))
+             (have hae (= a (+ (* b (ediv a b)) (mod a b)))
+               (rewrite-with
+                 (lemma ediv_mod_id)
+                 lr
+                 lhs
+                 ((inst n a) (inst d b))
+                 ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+                 refl))
+             (have had
+               (= (mod (+ (* b (ediv a b)) (mod a b)) (gcd_nn b (mod a b))) 0)
+               (rewrite-with
+                 (lemma dvd_lincomb)
+                 lr
+                 lhs
+                 ()
+                 ((steps ((rewrite (premise 7) lr lhs true ())) refl)
+                  (steps ((rewrite (premise 11) lr lhs true ())) refl)
+                  (steps ((rewrite (premise 12) lr lhs true ())) refl))
+                 refl))
+             (steps
+               ((rewrite (premise 6) lr lhs true ())
+                (rewrite (premise 13) lr lhs (at 0) ())
+                (rewrite (premise 14) lr lhs true ())
+                (rewrite (premise 11) lr lhs true ())
+                (compute lhs))
+               refl))))))))
+
+;; g = gcd_nn a b divides b: extract the second half of the sum.
+(claim gcd_nn_dvd_r
+  (goal ((a Int) (b Int)) ((= (le 0 a) True) (= (lt 0 b) True))
+    (= (mod b (gcd_nn a b)) 0))
+  (chain
+    (have hsum (= (+ (mod a (gcd_nn a b)) (mod b (gcd_nn a b))) 0)
+      (rewrite-with
+        (lemma gcd_nn_dvd_sum)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have hgp (= (lt 0 (gcd_nn a b)) True)
+      (rewrite-with
+        (lemma gcd_nn_pos)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have hml1 (= (le 0 (mod a (gcd_nn a b))) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 3) lr lhs true ())) refl))
+        refl))
+    (have hml2 (= (le 0 (mod b (gcd_nn a b))) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 3) lr lhs true ())) refl))
+        refl))
+    (steps () (by arith (list (list 1 0 0 -1 0 1 0) (list 1 0 0 0 0 0 1))))))
+
+;; g = gcd_nn a b divides a: extract the first half.
+(claim gcd_nn_dvd_l
+  (goal ((a Int) (b Int)) ((= (le 0 a) True) (= (lt 0 b) True))
+    (= (mod a (gcd_nn a b)) 0))
+  (chain
+    (have hsum (= (+ (mod a (gcd_nn a b)) (mod b (gcd_nn a b))) 0)
+      (rewrite-with
+        (lemma gcd_nn_dvd_sum)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have hgp (= (lt 0 (gcd_nn a b)) True)
+      (rewrite-with
+        (lemma gcd_nn_pos)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have hml1 (= (le 0 (mod a (gcd_nn a b))) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 3) lr lhs true ())) refl))
+        refl))
+    (have hml2 (= (le 0 (mod b (gcd_nn a b))) True)
+      (rewrite-with
+        (lemma mod_lo)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 3) lr lhs true ())) refl))
+        refl))
+    (steps () (by arith (list (list 1 0 0 -1 0 0 1) (list 1 0 0 0 0 1 0))))))
+
+;; --- gcd homogeneity + cofactor coprimality (slice R0.2c(ii)) -----------------
+
+;; gcd scales: 0 < k, 0 <= a, 0 <= b  |-  gcd_nn (k*a) (k*b) = k * gcd_nn a b.
+;; wf-induct along the descent riding mod_scale (the scaled euclidean step IS
+;; the euclidean step of the scaled pair); the base b = 0 collapses both sides
+;; to k*a through iabs at nonneg arguments.
+(claim gcd_scale
+  (goal ((k Int) (a Int) (b Int))
+    ((= (lt 0 k) True) (= (le 0 a) True) (= (le 0 b) True))
+    (= (gcd_nn (* k a) (* k b)) (* k (gcd_nn a b))))
+  (wf-induct b
+    (case-on (le b 0) Bool
+      ((case True
+         (fin-split
+           b
+           (premise 2)
+           (hyp True)
+           ((case 0
+              (chain
+                (have hk0 (= (* k 0) 0)
+                  (steps
+                    ((rewrite (lemma mul_comm) lr lhs true ()))
+                    (by arith (list (list 1 0 0 0) (list 1 0 0 0)))))
+                (have hka (= (le 0 (* k a)) True)
+                  (rewrite-with
+                    (lemma mul_nonneg)
+                    lr
+                    lhs
+                    ()
+                    ((by arith (list 1 1 0 0 0))
+                     (steps ((rewrite (premise 1) lr lhs true ())) refl))
+                    refl))
+                (steps
+                  ((rewrite (premise 3) lr lhs true ())
+                   (unfold gcd_nn lhs)
+                   (simp lhs)
+                   (unfold iabs lhs)
+                   (rewrite (premise 4) lr lhs true ())
+                   (simp lhs)
+                   (unfold gcd_nn rhs)
+                   (simp rhs)
+                   (unfold iabs rhs)
+                   (rewrite (premise 1) lr rhs true ())
+                   (simp rhs))
+                  refl))))))
+       (case False
+         (chain
+           (have hbf (= (le b 0) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (have hbp (= (lt 0 b) True) (steps () (by arith (list 1 0 0 0 1))))
+           (have hkb (= (lt 0 (* k b)) True)
+             (rewrite-with
+               (lemma mul_pos)
+               lr
+               lhs
+               ()
+               ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                (steps ((rewrite (premise 4) lr lhs true ())) refl))
+               refl))
+           (have hkbf (= (le (* k b) 0) False)
+             (steps () (by arith (list 1 0 0 0 0 0 1))))
+           (have hml (= (le 0 (mod a b)) True)
+             (rewrite-with
+               (lemma mod_lo)
+               lr
+               lhs
+               ()
+               ((steps ((rewrite (premise 4) lr lhs true ())) refl))
+               refl))
+           (have hmh (= (lt (mod a b) b) True)
+             (rewrite-with
+               (lemma mod_hi)
+               lr
+               lhs
+               ()
+               ((steps ((rewrite (premise 4) lr lhs true ())) refl))
+               refl))
+           (have hms (= (mod (* k a) (* k b)) (* k (mod a b)))
+             (rewrite-with
+               (lemma mod_scale)
+               lr
+               lhs
+               ()
+               ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                (steps ((rewrite (premise 4) lr lhs true ())) refl))
+               refl))
+           (have hih
+             (= (gcd_nn (* k b) (* k (mod a b))) (* k (gcd_nn b (mod a b))))
+             (rewrite-with
+               (hyp 1)
+               lr
+               lhs
+               ()
+               ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                (steps ((rewrite (premise 2) lr lhs true ())) refl)
+                (steps ((rewrite (premise 7) lr lhs true ())) refl)
+                (steps ((rewrite (premise 7) lr lhs true ())) refl)
+                (steps ((rewrite (premise 8) lr lhs true ())) refl))
+               refl))
+           (steps
+             ((unfold gcd_nn lhs)
+              (rewrite (premise 6) lr lhs true ())
+              (simp lhs)
+              (rewrite (premise 9) lr lhs true ())
+              (rewrite (premise 10) lr lhs true ())
+              (unfold gcd_nn rhs)
+              (rewrite (premise 3) lr rhs true ())
+              (simp rhs))
+             refl)))))))
+
+;; the reduced pair is coprime: with g = gcd_nn a b (positive), a = g*qa and
+;; b = g*qb from the divides pair, homogeneity collapses gcd_nn (g*qa) (g*qb)
+;; = g * gcd_nn qa qb, so g = g*c where c = gcd_nn qa qb; cancelling the
+;; positive g (pos_factor_nonneg twice, on g*(c-1) >= 0 and g*(1-c) >= 0)
+;; forces c = 1. This is exactly rat_make's refined-return obligation shape.
+(claim gcd_cofactor_coprime
+  (goal ((a Int) (b Int)) ((= (le 0 a) True) (= (lt 0 b) True))
+    (= (gcd_nn (ediv a (gcd_nn a b)) (ediv b (gcd_nn a b))) 1))
+  (chain
+    (have hgp (= (lt 0 (gcd_nn a b)) True)
+      (rewrite-with
+        (lemma gcd_nn_pos)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have hda (= (mod a (gcd_nn a b)) 0)
+      (rewrite-with
+        (lemma gcd_nn_dvd_l)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have hdb (= (mod b (gcd_nn a b)) 0)
+      (rewrite-with
+        (lemma gcd_nn_dvd_r)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have hae
+      (= a (+ (* (gcd_nn a b) (ediv a (gcd_nn a b))) (mod a (gcd_nn a b))))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n a) (inst d (gcd_nn a b)))
+        ((steps ((rewrite (premise 2) lr lhs true ())) refl))
+        refl))
+    (have ha1 (= a (* (gcd_nn a b) (ediv a (gcd_nn a b))))
+      (steps
+        ((rewrite (premise 5) lr lhs true ())
+         (rewrite (premise 3) lr lhs true ()))
+        (by arith (list (list 1 0 0 0 0 0 0) (list 1 0 0 0 0 0 0)))))
+    (have hbe
+      (= b (+ (* (gcd_nn a b) (ediv b (gcd_nn a b))) (mod b (gcd_nn a b))))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n b) (inst d (gcd_nn a b)))
+        ((steps ((rewrite (premise 2) lr lhs true ())) refl))
+        refl))
+    (have hb1 (= b (* (gcd_nn a b) (ediv b (gcd_nn a b))))
+      (steps
+        ((rewrite (premise 7) lr lhs true ())
+         (rewrite (premise 4) lr lhs true ()))
+        (by arith (list (list 1 0 0 0 0 0 0 0 0) (list 1 0 0 0 0 0 0 0 0)))))
+    (have hqa0 (= (le 0 (* (gcd_nn a b) (ediv a (gcd_nn a b)))) True)
+      (steps
+        ((rewrite (premise 6) rl lhs true ())
+         (rewrite (premise 0) lr lhs true ()))
+        refl))
+    (have hqa (= (le 0 (ediv a (gcd_nn a b))) True)
+      (rewrite-with
+        (lemma pos_factor_nonneg)
+        lr
+        lhs
+        ((inst g (gcd_nn a b)) (inst q (ediv a (gcd_nn a b))))
+        ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+         (steps ((rewrite (premise 9) lr lhs true ())) refl))
+        refl))
+    (have hqb0 (= (le 0 (* (gcd_nn a b) (ediv b (gcd_nn a b)))) True)
+      (steps
+        ((rewrite (premise 8) rl lhs true ()))
+        (by arith (list 1 0 1 0 0 0 0 0 0 0 0))))
+    (have hqb (= (le 0 (ediv b (gcd_nn a b))) True)
+      (rewrite-with
+        (lemma pos_factor_nonneg)
+        lr
+        lhs
+        ((inst g (gcd_nn a b)) (inst q (ediv b (gcd_nn a b))))
+        ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+         (steps ((rewrite (premise 11) lr lhs true ())) refl))
+        refl))
+    (have hsc
+      (=
+        (gcd_nn
+          (* (gcd_nn a b) (ediv a (gcd_nn a b)))
+          (* (gcd_nn a b) (ediv b (gcd_nn a b))))
+        (* (gcd_nn a b) (gcd_nn (ediv a (gcd_nn a b)) (ediv b (gcd_nn a b)))))
+      (rewrite-with
+        (lemma gcd_scale)
+        lr
+        lhs
+        ((inst k (gcd_nn a b))
+         (inst a (ediv a (gcd_nn a b)))
+         (inst b (ediv b (gcd_nn a b))))
+        ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+         (steps ((rewrite (premise 10) lr lhs true ())) refl)
+         (steps ((rewrite (premise 12) lr lhs true ())) refl))
+        refl))
+    (have hgc
+      (=
+        (gcd_nn a b)
+        (* (gcd_nn a b) (gcd_nn (ediv a (gcd_nn a b)) (ediv b (gcd_nn a b)))))
+      (steps
+        ((rewrite (premise 13) rl rhs true ())
+         (rewrite (premise 6) rl rhs true ())
+         (rewrite (premise 8) rl rhs true ()))
+        refl))
+    (have hx1e
+      (=
+        (+ (- (gcd_nn (ediv a (gcd_nn a b)) (ediv b (gcd_nn a b))) 1) 1)
+        (gcd_nn (ediv a (gcd_nn a b)) (ediv b (gcd_nn a b))))
+      (steps
+        ()
+        (by
+          arith
+          (list
+            (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)
+            (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))))
+    (have hd1
+      (=
+        (*
+          (gcd_nn a b)
+          (+ (- (gcd_nn (ediv a (gcd_nn a b)) (ediv b (gcd_nn a b))) 1) 1))
+        (+
+          (*
+            (gcd_nn a b)
+            (- (gcd_nn (ediv a (gcd_nn a b)) (ediv b (gcd_nn a b))) 1))
+          (* (gcd_nn a b) 1)))
+      (steps ((rewrite (lemma mul_dist) lr lhs true ())) refl))
+    (have hd1c
+      (=
+        (*
+          (gcd_nn a b)
+          (+ (- (gcd_nn (ediv a (gcd_nn a b)) (ediv b (gcd_nn a b))) 1) 1))
+        (* (gcd_nn a b) (gcd_nn (ediv a (gcd_nn a b)) (ediv b (gcd_nn a b)))))
+      (steps ((rewrite (premise 15) lr lhs true ())) refl))
+    (have hp1
+      (=
+        (le
+          0
+          (*
+            (gcd_nn a b)
+            (- (gcd_nn (ediv a (gcd_nn a b)) (ediv b (gcd_nn a b))) 1)))
+        True)
+      (steps () (by arith (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -1 0 -1 1))))
+    (have hc1
+      (= (le 0 (- (gcd_nn (ediv a (gcd_nn a b)) (ediv b (gcd_nn a b))) 1)) True)
+      (rewrite-with
+        (lemma pos_factor_nonneg)
+        lr
+        lhs
+        ((inst g (gcd_nn a b))
+         (inst q (- (gcd_nn (ediv a (gcd_nn a b)) (ediv b (gcd_nn a b))) 1)))
+        ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+         (steps ((rewrite (premise 18) lr lhs true ())) refl))
+        refl))
+    (have hx2e
+      (=
+        (+
+          (- 1 (gcd_nn (ediv a (gcd_nn a b)) (ediv b (gcd_nn a b))))
+          (gcd_nn (ediv a (gcd_nn a b)) (ediv b (gcd_nn a b))))
+        1)
+      (steps
+        ()
+        (by
+          arith
+          (list
+            (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)
+            (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))))
+    (have hd2
+      (=
+        (*
+          (gcd_nn a b)
+          (+
+            (- 1 (gcd_nn (ediv a (gcd_nn a b)) (ediv b (gcd_nn a b))))
+            (gcd_nn (ediv a (gcd_nn a b)) (ediv b (gcd_nn a b)))))
+        (+
+          (*
+            (gcd_nn a b)
+            (- 1 (gcd_nn (ediv a (gcd_nn a b)) (ediv b (gcd_nn a b)))))
+          (* (gcd_nn a b) (gcd_nn (ediv a (gcd_nn a b)) (ediv b (gcd_nn a b))))))
+      (steps ((rewrite (lemma mul_dist) lr lhs true ())) refl))
+    (have hd2c
+      (=
+        (*
+          (gcd_nn a b)
+          (+
+            (- 1 (gcd_nn (ediv a (gcd_nn a b)) (ediv b (gcd_nn a b))))
+            (gcd_nn (ediv a (gcd_nn a b)) (ediv b (gcd_nn a b)))))
+        (* (gcd_nn a b) 1))
+      (steps ((rewrite (premise 20) lr lhs true ())) refl))
+    (have hp2
+      (=
+        (le
+          0
+          (*
+            (gcd_nn a b)
+            (- 1 (gcd_nn (ediv a (gcd_nn a b)) (ediv b (gcd_nn a b))))))
+        True)
+      (steps
+        ()
+        (by arith (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 -1 1))))
+    (have hc2
+      (= (le 0 (- 1 (gcd_nn (ediv a (gcd_nn a b)) (ediv b (gcd_nn a b))))) True)
+      (rewrite-with
+        (lemma pos_factor_nonneg)
+        lr
+        lhs
+        ((inst g (gcd_nn a b))
+         (inst q (- 1 (gcd_nn (ediv a (gcd_nn a b)) (ediv b (gcd_nn a b))))))
+        ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+         (steps ((rewrite (premise 23) lr lhs true ())) refl))
+        refl))
+    (steps
+      ()
+      (by
+        arith
+        (list
+          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1)
+          (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0))))))
+
+;; --- normalization support (slice R0.3a) --------------------------------------
+;; The facts rat_make's refined-return obligation cites, packaged as single
+;; citations: quotient signs for the reduced pair, the strict twin of
+;; pos_factor_nonneg, and the iabs collapses at known sign.
+
+;; strict positive-factor cancellation: 0 < g, 0 < g*q  |-  0 < q. Mirror of
+;; pos_factor_nonneg with the strictness moved to the product premise.
+(claim pos_factor_pos
+  (goal ((g Int) (q Int)) ((= (lt 0 g) True) (= (lt 0 (* g q)) True))
+    (= (lt 0 q) True))
+  (case-on (lt 0 q) Bool
+    ((case True (steps ((rewrite (hyp True) lr lhs true ())) refl))
+     (case False
+       (chain
+         (have hq (= (lt 0 q) False)
+           (steps ((rewrite (hyp False) lr lhs true ())) refl))
+         (have hnq (= (le 0 (- 0 q)) True) (steps () (by arith (list 1 0 0 1))))
+         (have hmp (= (le 0 (* g (- 0 q))) True)
+           (rewrite-with
+             (lemma mul_nonneg)
+             lr
+             lhs
+             ()
+             ((by arith (list 1 1 0 0 0))
+              (steps ((rewrite (premise 3) lr lhs true ())) refl))
+             refl))
+         (have hz (= (+ q (- 0 q)) 0)
+           (steps () (by arith (list (list 1 0 0 0 0 0) (list 1 0 0 0 0 0)))))
+         (have hga (= (* g (+ q (- 0 q))) (+ (* g q) (* g (- 0 q))))
+           (steps ((rewrite (lemma mul_dist) lr lhs true ())) refl))
+         (have hg0 (= (* g (+ q (- 0 q))) (* g 0))
+           (steps ((rewrite (premise 5) lr lhs true ())) refl))
+         (steps () (by arith (list 0 0 1 0 0 1 0 1 -1))))))))
+
+;; the reduced numerator is nonneg (for nonneg a): 0 <= a ediv gcd_nn a b.
+(claim gcd_quot_num_nonneg
+  (goal ((a Int) (b Int)) ((= (le 0 a) True) (= (lt 0 b) True))
+    (= (le 0 (ediv a (gcd_nn a b))) True))
+  (chain
+    (have hgp (= (lt 0 (gcd_nn a b)) True)
+      (rewrite-with
+        (lemma gcd_nn_pos)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have hda (= (mod a (gcd_nn a b)) 0)
+      (rewrite-with
+        (lemma gcd_nn_dvd_l)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have hae
+      (= a (+ (* (gcd_nn a b) (ediv a (gcd_nn a b))) (mod a (gcd_nn a b))))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n a) (inst d (gcd_nn a b)))
+        ((steps ((rewrite (premise 2) lr lhs true ())) refl))
+        refl))
+    (have ha1 (= a (* (gcd_nn a b) (ediv a (gcd_nn a b))))
+      (steps
+        ((rewrite (premise 4) lr lhs true ())
+         (rewrite (premise 3) lr lhs true ()))
+        (by arith (list (list 1 0 0 0 0 0) (list 1 0 0 0 0 0)))))
+    (have hqa0 (= (le 0 (* (gcd_nn a b) (ediv a (gcd_nn a b)))) True)
+      (steps
+        ((rewrite (premise 5) rl lhs true ())
+         (rewrite (premise 0) lr lhs true ()))
+        refl))
+    (rewrite-with
+      (lemma pos_factor_nonneg)
+      lr
+      lhs
+      ((inst g (gcd_nn a b)) (inst q (ediv a (gcd_nn a b))))
+      ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+       (steps ((rewrite (premise 6) lr lhs true ())) refl))
+      refl)))
+
+;; the reduced denominator is POSITIVE: 0 < b ediv gcd_nn a b.
+(claim gcd_quot_den_pos
+  (goal ((a Int) (b Int)) ((= (le 0 a) True) (= (lt 0 b) True))
+    (= (lt 0 (ediv b (gcd_nn a b))) True))
+  (chain
+    (have hgp (= (lt 0 (gcd_nn a b)) True)
+      (rewrite-with
+        (lemma gcd_nn_pos)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have hdb (= (mod b (gcd_nn a b)) 0)
+      (rewrite-with
+        (lemma gcd_nn_dvd_r)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have hbe
+      (= b (+ (* (gcd_nn a b) (ediv b (gcd_nn a b))) (mod b (gcd_nn a b))))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n b) (inst d (gcd_nn a b)))
+        ((steps ((rewrite (premise 2) lr lhs true ())) refl))
+        refl))
+    (have hb1 (= b (* (gcd_nn a b) (ediv b (gcd_nn a b))))
+      (steps
+        ((rewrite (premise 4) lr lhs true ())
+         (rewrite (premise 3) lr lhs true ()))
+        (by arith (list (list 1 0 0 0 0 0) (list 1 0 0 0 0 0)))))
+    (have hqb0 (= (lt 0 (* (gcd_nn a b) (ediv b (gcd_nn a b)))) True)
+      (steps
+        ((rewrite (premise 5) rl lhs true ())
+         (rewrite (premise 1) lr lhs true ()))
+        refl))
+    (rewrite-with
+      (lemma pos_factor_pos)
+      lr
+      lhs
+      ((inst g (gcd_nn a b)) (inst q (ediv b (gcd_nn a b))))
+      ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+       (steps ((rewrite (premise 6) lr lhs true ())) refl))
+      refl)))
+
+;; iabs collapses at known sign.
+(claim iabs_nonneg_id
+  (goal ((n Int)) ((= (le 0 n) True)) (= (iabs n) n))
+  (steps
+    ((unfold iabs lhs) (rewrite (premise 0) lr lhs true ()) (simp lhs))
+    refl))
+
+(claim iabs_neg_id
+  (goal ((n Int)) ((= (le 0 n) True)) (= (iabs (- 0 n)) n))
+  (case-on (le 0 (- 0 n)) Bool
+    ((case True
+       (chain
+         (have hg (= (le 0 (- 0 n)) True)
+           (steps ((rewrite (hyp True) lr lhs true ())) refl))
+         (steps
+           ((unfold iabs lhs) (rewrite (premise 1) lr lhs true ()) (simp lhs))
+           (by arith (list (list 1 2 0) (list 1 0 2))))))
+     (case False
+       (chain
+         (have hg (= (le 0 (- 0 n)) False)
+           (steps ((rewrite (hyp False) lr lhs true ())) refl))
+         (steps
+           ((unfold iabs lhs) (rewrite (premise 1) lr lhs true ()) (simp lhs))
+           (by arith (list (list 1 0 0) (list 1 0 0)))))))))
+
+;; --- the divisibility tier (slice R0.4b) ----------------------------------------
+;; What canonical-representation uniqueness rides: positive-factor cancellation,
+;; divisor ordering/antisymmetry, divisibility closed under mod, the gcd
+;; UNIVERSAL property (d | a, d | b => d | gcd), and Euclid's lemma — proven
+;; Bezout-free from homogeneity (gcd_scale) + the universal property.
+
+;; cancel a positive factor from an equality: 0 < g, g*x = g*y  |-  x = y.
+;; The gcd_cofactor_coprime endgame, packaged: two pos_factor_nonneg cites on
+;; g*(x-y) >= 0 and g*(y-x) >= 0 via the dist respell.
+(claim pos_factor_cancel
+  (goal ((g Int) (x Int) (y Int)) ((= (lt 0 g) True) (= (* g x) (* g y)))
+    (= x y))
+  (chain
+    (have h1 (= (+ (- x y) y) x)
+      (steps () (by arith (list (list 1 0 0) (list 1 0 0)))))
+    (have h2 (= (* g (+ (- x y) y)) (+ (* g (- x y)) (* g y)))
+      (steps ((rewrite (lemma mul_dist) lr lhs true ())) refl))
+    (have h3 (= (* g (+ (- x y) y)) (* g x))
+      (steps ((rewrite (premise 2) lr lhs true ())) refl))
+    (have h4 (= (le 0 (* g (- x y))) True)
+      (steps () (by arith (list 1 0 1 0 -1 1))))
+    (have h5 (= (le 0 (- x y)) True)
+      (rewrite-with
+        (lemma pos_factor_nonneg)
+        lr
+        lhs
+        ((inst g g) (inst q (- x y)))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 5) lr lhs true ())) refl))
+        refl))
+    (have h6 (= (+ (- y x) x) y)
+      (steps () (by arith (list (list 1 0 0 0 0 0 0) (list 1 0 0 0 0 0 0)))))
+    (have h7 (= (* g (+ (- y x) x)) (+ (* g (- y x)) (* g x)))
+      (steps ((rewrite (lemma mul_dist) lr lhs true ())) refl))
+    (have h8 (= (* g (+ (- y x) x)) (* g y))
+      (steps ((rewrite (premise 7) lr lhs true ())) refl))
+    (have h9 (= (le 0 (* g (- y x))) True)
+      (steps () (by arith (list 1 0 -1 0 0 0 0 0 0 -1 1))))
+    (have h10 (= (le 0 (- y x)) True)
+      (rewrite-with
+        (lemma pos_factor_nonneg)
+        lr
+        lhs
+        ((inst g g) (inst q (- y x)))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 10) lr lhs true ())) refl))
+        refl))
+    (steps
+      ()
+      (by
+        arith
+        (list (list 1 0 0 0 0 0 0 0 0 0 0 0 1) (list 1 0 0 0 0 0 0 1 0 0 0 0 0))))))
+
+;; a positive divisor is bounded by its positive multiple: a | b  |-  a <= b.
+(claim dvd_le
+  (goal ((a Int) (b Int)) ((= (lt 0 a) True) (= (lt 0 b) True) (= (mod b a) 0))
+    (= (le a b) True))
+  (chain
+    (have h1 (= b (+ (* a (ediv b a)) (mod b a)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n b) (inst d a))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have h2 (= b (* a (ediv b a)))
+      (steps
+        ((rewrite (premise 3) lr lhs true ())
+         (rewrite (premise 2) lr lhs true ()))
+        (by arith (list (list 1 0 0 0 0) (list 1 0 0 0 0)))))
+    (have h3 (= (lt 0 (* a (ediv b a))) True)
+      (steps
+        ((rewrite (premise 4) rl lhs true ())
+         (rewrite (premise 1) lr lhs true ()))
+        refl))
+    (have h4 (= (lt 0 (ediv b a)) True)
+      (rewrite-with
+        (lemma pos_factor_pos)
+        lr
+        lhs
+        ((inst g a) (inst q (ediv b a)))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 5) lr lhs true ())) refl))
+        refl))
+    (have h5 (= (+ (- (ediv b a) 1) 1) (ediv b a))
+      (steps () (by arith (list (list 1 0 0 0 0 0 0 0) (list 1 0 0 0 0 0 0 0)))))
+    (have h6 (= (* a (+ (- (ediv b a) 1) 1)) (+ (* a (- (ediv b a) 1)) (* a 1)))
+      (steps ((rewrite (lemma mul_dist) lr lhs true ())) refl))
+    (have h7 (= (* a (+ (- (ediv b a) 1) 1)) (* a (ediv b a)))
+      (steps ((rewrite (premise 7) lr lhs true ())) refl))
+    (have h8 (= (le 0 (* a (- (ediv b a) 1))) True)
+      (rewrite-with
+        (lemma mul_nonneg)
+        lr
+        lhs
+        ()
+        ((by arith (list 1 1 0 0 0 0 0 0 0 0 0))
+         (by arith (list 1 0 0 0 0 0 0 1 0 0 0)))
+        refl))
+    (steps () (by arith (list 1 0 0 0 0 1 0 0 0 1 -1 1)))))
+
+;; mutual positive divisors are equal.
+(claim dvd_antisym
+  (goal ((a Int) (b Int))
+    ((= (lt 0 a) True) (= (lt 0 b) True) (= (mod b a) 0) (= (mod a b) 0))
+    (= a b))
+  (chain
+    (have h1 (= (le a b) True)
+      (rewrite-with
+        (lemma dvd_le)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl)
+         (steps ((rewrite (premise 2) lr lhs true ())) refl))
+        refl))
+    (have h2 (= (le b a) True)
+      (rewrite-with
+        (lemma dvd_le)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+         (steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 3) lr lhs true ())) refl))
+        refl))
+    (steps () (by arith (list (list 1 0 0 0 0 1 0) (list 1 0 0 0 0 0 1))))))
+
+;; divisibility survives the euclidean step: d | a, d | b  |-  d | (a mod b).
+;; The remainder is the linear combination b*(-q) + a (dvd_lincomb), exhibited
+;; through the negation respell b*(-q) = -(b*q).
+(claim dvd_mod
+  (goal ((d Int) (a Int) (b Int))
+    ((= (lt 0 d) True) (= (lt 0 b) True) (= (mod a d) 0) (= (mod b d) 0))
+    (= (mod (mod a b) d) 0))
+  (chain
+    (have h1 (= a (+ (* b (ediv a b)) (mod a b)))
+      (rewrite-with
+        (lemma ediv_mod_id)
+        lr
+        lhs
+        ((inst n a) (inst d b))
+        ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have h2 (= (+ (ediv a b) (- 0 (ediv a b))) 0)
+      (steps () (by arith (list (list 1 0 0 0 0 0) (list 1 0 0 0 0 0)))))
+    (have h3
+      (=
+        (* b (+ (ediv a b) (- 0 (ediv a b))))
+        (+ (* b (ediv a b)) (* b (- 0 (ediv a b)))))
+      (steps ((rewrite (lemma mul_dist) lr lhs true ())) refl))
+    (have h4 (= (* b (+ (ediv a b) (- 0 (ediv a b)))) (* b 0))
+      (steps ((rewrite (premise 5) lr lhs true ())) refl))
+    (have h5 (= (mod (+ (* b (- 0 (ediv a b))) a) d) 0)
+      (rewrite-with
+        (lemma dvd_lincomb)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 3) lr lhs true ())) refl)
+         (steps ((rewrite (premise 2) lr lhs true ())) refl))
+        refl))
+    (have h6 (= (mod a b) (+ (* b (- 0 (ediv a b))) a))
+      (steps
+        ()
+        (by
+          arith
+          (list (list 1 0 0 0 0 1 0 -1 1 0) (list 1 0 0 0 0 -1 0 1 -1 0)))))
+    (steps
+      ((rewrite (premise 9) lr lhs true ())
+       (rewrite (premise 8) lr lhs true ()))
+      refl)))
+
+;; THE UNIVERSAL PROPERTY: a common divisor divides the gcd. wf-induct along
+;; the descent; the step is dvd_mod, the base collapses to d | a.
+(claim gcd_nn_greatest
+  (goal ((d Int) (a Int) (b Int))
+    ((= (lt 0 d) True)
+     (= (le 0 a) True)
+     (= (le 0 b) True)
+     (= (mod a d) 0)
+     (= (mod b d) 0))
+    (= (mod (gcd_nn a b) d) 0))
+  (wf-induct b
+    (case-on (le b 0) Bool
+      ((case True
+         (fin-split
+           b
+           (premise 2)
+           (hyp True)
+           ((case 0
+              (steps
+                ((unfold gcd_nn lhs)
+                 (simp lhs)
+                 (unfold iabs lhs)
+                 (rewrite (premise 1) lr lhs true ())
+                 (simp lhs)
+                 (rewrite (premise 3) lr lhs true ()))
+                refl)))))
+       (case False
+         (chain
+           (have hbf (= (le b 0) False)
+             (steps ((rewrite (hyp False) lr lhs true ())) refl))
+           (have hbp (= (lt 0 b) True)
+             (steps () (by arith (list 1 0 0 0 0 0 1))))
+           (have hml (= (le 0 (mod a b)) True)
+             (rewrite-with
+               (lemma mod_lo)
+               lr
+               lhs
+               ()
+               ((steps ((rewrite (premise 6) lr lhs true ())) refl))
+               refl))
+           (have hmh (= (lt (mod a b) b) True)
+             (rewrite-with
+               (lemma mod_hi)
+               lr
+               lhs
+               ()
+               ((steps ((rewrite (premise 6) lr lhs true ())) refl))
+               refl))
+           (have hdm (= (mod (mod a b) d) 0)
+             (rewrite-with
+               (lemma dvd_mod)
+               lr
+               lhs
+               ()
+               ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                (steps ((rewrite (premise 6) lr lhs true ())) refl)
+                (steps ((rewrite (premise 3) lr lhs true ())) refl)
+                (steps ((rewrite (premise 4) lr lhs true ())) refl))
+               refl))
+           (have hgg (= (gcd_nn a b) (gcd_nn b (mod a b)))
+             (steps
+               ((unfold gcd_nn lhs)
+                (rewrite (premise 5) lr lhs true ())
+                (simp lhs))
+               refl))
+           (have hih (= (mod (gcd_nn b (mod a b)) d) 0)
+             (rewrite-with
+               (hyp 1)
+               lr
+               lhs
+               ()
+               ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+                (by arith (list 1 0 0 0 0 0 0 1 0 0 0 0))
+                (steps ((rewrite (premise 7) lr lhs true ())) refl)
+                (steps ((rewrite (premise 4) lr lhs true ())) refl)
+                (steps ((rewrite (premise 9) lr lhs true ())) refl)
+                (steps ((rewrite (premise 7) lr lhs true ())) refl)
+                (steps ((rewrite (premise 8) lr lhs true ())) refl))
+               refl))
+           (steps
+             ((rewrite (premise 10) lr lhs true ())
+              (rewrite (premise 11) lr lhs true ()))
+             refl)))))))
+
+;; EUCLID'S LEMMA, Bezout-free: gcd(n, d) = 1, d | c*n  |-  d | c.
+;; d divides both c*n (premise) and c*d, hence their gcd — which homogeneity
+;; collapses to c * gcd(n, d) = c.
+(claim coprime_dvd
+  (goal ((d Int) (n Int) (c Int))
+    ((= (lt 0 d) True)
+     (= (le 0 n) True)
+     (= (lt 0 c) True)
+     (= (gcd_nn n d) 1)
+     (= (mod (* c n) d) 0))
+    (= (mod c d) 0))
+  (chain
+    (have h1 (= (gcd_nn (* c n) (* c d)) (* c (gcd_nn n d)))
+      (rewrite-with
+        (lemma gcd_scale)
+        lr
+        lhs
+        ((inst k c) (inst a n) (inst b d))
+        ((steps ((rewrite (premise 2) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl)
+         (by arith (list 1 1 0 0 0 0)))
+        refl))
+    (have h2 (= (gcd_nn (* c n) (* c d)) c)
+      (steps
+        ((rewrite (premise 5) lr lhs true ())
+         (rewrite (premise 3) lr lhs true ()))
+        (by arith (list (list 1 0 0 0 0 0 0) (list 1 0 0 0 0 0 0)))))
+    (have h3a (= (* c d) (* d c))
+      (steps ((rewrite (lemma mul_comm) lr lhs true ())) refl))
+    (have h3b (= (mod (* d c) d) 0)
+      (rewrite-with
+        (lemma mod_mul0)
+        lr
+        lhs
+        ((inst d d) (inst q c))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have h3c (= (mod (* c d) d) 0)
+      (steps
+        ((rewrite (premise 7) lr lhs true ())
+         (rewrite (premise 8) lr lhs true ()))
+        refl))
+    (have h4 (= (le 0 (* c n)) True)
+      (rewrite-with
+        (lemma mul_nonneg)
+        lr
+        lhs
+        ()
+        ((by arith (list 1 0 0 1 0 0 0 0 0 0 0))
+         (steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have h5 (= (le 0 (* c d)) True)
+      (rewrite-with
+        (lemma mul_nonneg)
+        lr
+        lhs
+        ()
+        ((by arith (list 1 0 0 1 0 0 0 0 0 0 0 0))
+         (by arith (list 1 1 0 0 0 0 0 0 0 0 0 0)))
+        refl))
+    (have h6 (= (mod (gcd_nn (* c n) (* c d)) d) 0)
+      (rewrite-with
+        (lemma gcd_nn_greatest)
+        lr
+        lhs
+        ()
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 10) lr lhs true ())) refl)
+         (steps ((rewrite (premise 11) lr lhs true ())) refl)
+         (steps ((rewrite (premise 4) lr lhs true ())) refl)
+         (steps ((rewrite (premise 9) lr lhs true ())) refl))
+        refl))
+    (steps
+      ((rewrite (premise 6) rl lhs true ())
+       (rewrite (premise 12) lr lhs true ()))
+      refl)))
+
+;; --- canonical-representation uniqueness (nonneg numerators) -------------------
+;; Cross-equal reduced fractions are IDENTICAL: n1/d1 = n2/d2 (as cross-products)
+;; with both pairs gcd-reduced and dens positive forces n1 = n2, d1 = d2.
+;; d1 | d2 by Euclid (d1 divides d2*n1 = n2*d1 and gcd(n1, d1) = 1), symmetric,
+;; antisymmetry; then cancel the common den. The signed wrapper lives with Rat.
+
+(claim rat_unique_nn_den
+  (goal ((n1 Int) (d1 Int) (n2 Int) (d2 Int))
+    ((= (lt 0 d1) True)
+     (= (lt 0 d2) True)
+     (= (le 0 n1) True)
+     (= (le 0 n2) True)
+     (= (gcd_nn n1 d1) 1)
+     (= (gcd_nn n2 d2) 1)
+     (= (* n1 d2) (* n2 d1)))
+    (= d1 d2))
+  (chain
+    (have ha1 (= (mod (* d1 n2) d1) 0)
+      (rewrite-with
+        (lemma mod_mul0)
+        lr
+        lhs
+        ((inst d d1) (inst q n2))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl))
+        refl))
+    (have ha2 (= (* d2 n1) (* d1 n2))
+      (steps
+        ((rewrite (lemma mul_comm) lr lhs true ())
+         (rewrite (premise 6) lr lhs true ())
+         (rewrite (lemma mul_comm) lr lhs true ()))
+        refl))
+    (have ha3 (= (mod (* d2 n1) d1) 0)
+      (steps
+        ((rewrite (premise 8) lr lhs true ())
+         (rewrite (premise 7) lr lhs true ()))
+        refl))
+    (have hd12 (= (mod d2 d1) 0)
+      (rewrite-with
+        (lemma coprime_dvd)
+        lr
+        lhs
+        ((inst d d1) (inst n n1) (inst c d2))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 2) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl)
+         (steps ((rewrite (premise 4) lr lhs true ())) refl)
+         (steps ((rewrite (premise 9) lr lhs true ())) refl))
+        refl))
+    (have hb1 (= (mod (* d2 n1) d2) 0)
+      (rewrite-with
+        (lemma mod_mul0)
+        lr
+        lhs
+        ((inst d d2) (inst q n1))
+        ((steps ((rewrite (premise 1) lr lhs true ())) refl))
+        refl))
+    (have hb2 (= (* d1 n2) (* d2 n1))
+      (steps
+        ((rewrite (lemma mul_comm) lr lhs true ())
+         (rewrite (premise 6) rl lhs true ())
+         (rewrite (lemma mul_comm) lr lhs true ()))
+        refl))
+    (have hb3 (= (mod (* d1 n2) d2) 0)
+      (steps
+        ((rewrite (premise 12) lr lhs true ())
+         (rewrite (premise 11) lr lhs true ()))
+        refl))
+    (have hd21 (= (mod d1 d2) 0)
+      (rewrite-with
+        (lemma coprime_dvd)
+        lr
+        lhs
+        ((inst d d2) (inst n n2) (inst c d1))
+        ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+         (steps ((rewrite (premise 3) lr lhs true ())) refl)
+         (steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 5) lr lhs true ())) refl)
+         (steps ((rewrite (premise 13) lr lhs true ())) refl))
+        refl))
+    (rewrite-with
+      (lemma dvd_antisym)
+      lr
+      lhs
+      ((inst a d1) (inst b d2))
+      ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+       (steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 10) lr lhs true ())) refl)
+       (steps ((rewrite (premise 14) lr lhs true ())) refl))
+      refl)))
+
+(claim rat_unique_nn_num
+  (goal ((n1 Int) (d1 Int) (n2 Int) (d2 Int))
+    ((= (lt 0 d1) True)
+     (= (lt 0 d2) True)
+     (= (le 0 n1) True)
+     (= (le 0 n2) True)
+     (= (gcd_nn n1 d1) 1)
+     (= (gcd_nn n2 d2) 1)
+     (= (* n1 d2) (* n2 d1)))
+    (= n1 n2))
+  (chain
+    (have h1 (= d1 d2)
+      (rewrite-with
+        (lemma rat_unique_nn_den)
+        lr
+        lhs
+        ((inst n1 n1) (inst d1 d1) (inst n2 n2) (inst d2 d2))
+        ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+         (steps ((rewrite (premise 1) lr lhs true ())) refl)
+         (steps ((rewrite (premise 2) lr lhs true ())) refl)
+         (steps ((rewrite (premise 3) lr lhs true ())) refl)
+         (steps ((rewrite (premise 4) lr lhs true ())) refl)
+         (steps ((rewrite (premise 5) lr lhs true ())) refl)
+         (steps ((rewrite (premise 6) lr lhs true ())) refl))
+        refl))
+    (have h2 (= (* d2 n1) (* d2 n2))
+      (steps
+        ((rewrite (lemma mul_comm) lr lhs true ())
+         (rewrite (premise 6) lr lhs true ())
+         (rewrite (premise 7) lr lhs true ())
+         (rewrite (lemma mul_comm) lr lhs true ()))
+        refl))
+    (rewrite-with
+      (lemma pos_factor_cancel)
+      lr
+      lhs
+      ((inst g d2) (inst x n1) (inst y n2))
+      ((steps ((rewrite (premise 1) lr lhs true ())) refl)
+       (steps ((rewrite (premise 8) lr lhs true ())) refl))
+      refl)))
+
+;; --- canonical-representation uniqueness, signed -------------------------------
+;; The Rat-facing form: numerator signs free, reduction premises through iabs
+;; (exactly what rat_reduced grants). The sign fork transports the cross
+;; equation through mul_neg_l — negation-in-a-product as a SYNTACTIC rewrite —
+;; and lands both arms on the nonneg theorems.
+
+;; (-a)*b = -(a*b): the negation respell, packaged once so sign transport is
+;; a plain premise-free step-rewrite.
+(claim mul_neg_l
+  (goal ((a Int) (b Int)) () (= (* (- 0 a) b) (- 0 (* a b))))
+  (chain
+    (have h1 (= (* (- 0 a) b) (* b (- 0 a)))
+      (steps ((rewrite (lemma mul_comm) lr lhs true ())) refl))
+    (have h2 (= (+ a (- 0 a)) 0)
+      (steps () (by arith (list (list 1 0) (list 1 0)))))
+    (have h3 (= (* b (+ a (- 0 a))) (+ (* b a) (* b (- 0 a))))
+      (steps ((rewrite (lemma mul_dist) lr lhs true ())) refl))
+    (have h4 (= (* b (+ a (- 0 a))) (* b 0))
+      (steps ((rewrite (premise 1) lr lhs true ())) refl))
+    (have h5 (= (* b a) (* a b))
+      (steps ((rewrite (lemma mul_comm) lr lhs true ())) refl))
+    (steps () (by arith (list (list 1 -1 0 1 -1 1) (list 1 1 0 -1 1 -1))))))
+
+(claim rat_unique_den
+  (goal ((n1 Int) (d1 Int) (n2 Int) (d2 Int))
+    ((= (lt 0 d1) True)
+     (= (lt 0 d2) True)
+     (= (gcd_nn (iabs n1) d1) 1)
+     (= (gcd_nn (iabs n2) d2) 1)
+     (= (* n1 d2) (* n2 d1)))
+    (= d1 d2))
+  (case-on (le 0 n1) Bool
+    ((case True
+       (chain
+         (have h1 (= (le 0 n1) True)
+           (steps ((rewrite (hyp True) lr lhs true ())) refl))
+         (have ht1 (= (le 0 (* n1 d2)) True)
+           (rewrite-with
+             (lemma mul_nonneg)
+             lr
+             lhs
+             ()
+             ((steps ((rewrite (premise 5) lr lhs true ())) refl)
+              (by arith (list 1 0 1 0 0 0 0)))
+             refl))
+         (have ht2 (= (le 0 (* n2 d1)) True)
+           (steps
+             ((rewrite (premise 4) rl lhs true ())
+              (rewrite (premise 6) lr lhs true ()))
+             refl))
+         (have ht3 (= (* d1 n2) (* n2 d1))
+           (steps ((rewrite (lemma mul_comm) lr lhs true ())) refl))
+         (have ht4 (= (le 0 (* d1 n2)) True)
+           (steps
+             ((rewrite (premise 8) lr lhs true ())
+              (rewrite (premise 7) lr lhs true ()))
+             refl))
+         (have ht5 (= (le 0 n2) True)
+           (rewrite-with
+             (lemma pos_factor_nonneg)
+             lr
+             lhs
+             ((inst g d1) (inst q n2))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+              (steps ((rewrite (premise 9) lr lhs true ())) refl))
+             refl))
+         (have hi1 (= (iabs n1) n1)
+           (rewrite-with
+             (lemma iabs_nonneg_id)
+             lr
+             lhs
+             ((inst n n1))
+             ((steps ((rewrite (premise 5) lr lhs true ())) refl))
+             refl))
+         (have hi2 (= (iabs n2) n2)
+           (rewrite-with
+             (lemma iabs_nonneg_id)
+             lr
+             lhs
+             ((inst n n2))
+             ((steps ((rewrite (premise 10) lr lhs true ())) refl))
+             refl))
+         (have hg1 (= (gcd_nn n1 d1) 1)
+           (steps
+             ((rewrite (premise 11) rl lhs true ())
+              (rewrite (premise 2) lr lhs true ()))
+             refl))
+         (have hg2 (= (gcd_nn n2 d2) 1)
+           (steps
+             ((rewrite (premise 12) rl lhs true ())
+              (rewrite (premise 3) lr lhs true ()))
+             refl))
+         (rewrite-with
+           (lemma rat_unique_nn_den)
+           lr
+           lhs
+           ((inst n1 n1) (inst d1 d1) (inst n2 n2) (inst d2 d2))
+           ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+            (steps ((rewrite (premise 1) lr lhs true ())) refl)
+            (steps ((rewrite (premise 5) lr lhs true ())) refl)
+            (steps ((rewrite (premise 10) lr lhs true ())) refl)
+            (steps ((rewrite (premise 13) lr lhs true ())) refl)
+            (steps ((rewrite (premise 14) lr lhs true ())) refl)
+            (steps ((rewrite (premise 4) lr lhs true ())) refl))
+           refl)))
+     (case False
+       (chain
+         (have h1 (= (le 0 n1) False)
+           (steps ((rewrite (hyp False) lr lhs true ())) refl))
+         (have hm1 (= (lt 0 (- 0 n1)) True)
+           (steps () (by arith (list 1 0 0 0 0 0 1))))
+         (have hs1 (= (lt 0 (* (- 0 n1) d2)) True)
+           (rewrite-with
+             (lemma mul_pos)
+             lr
+             lhs
+             ()
+             ((steps ((rewrite (premise 6) lr lhs true ())) refl)
+              (steps ((rewrite (premise 1) lr lhs true ())) refl))
+             refl))
+         (have hs2 (= (lt 0 (- 0 (* n1 d2))) True)
+           (steps
+             ((rewrite (lemma mul_neg_l) rl lhs true ())
+              (rewrite (premise 7) lr lhs true ()))
+             refl))
+         (have hs3 (= (lt 0 (- 0 (* n2 d1))) True)
+           (steps
+             ((rewrite (premise 4) rl lhs true ())
+              (rewrite (premise 8) lr lhs true ()))
+             refl))
+         (have hs4 (= (lt 0 (* (- 0 n2) d1)) True)
+           (steps
+             ((rewrite (lemma mul_neg_l) lr lhs true ())
+              (rewrite (premise 9) lr lhs true ()))
+             refl))
+         (have hs5 (= (* d1 (- 0 n2)) (* (- 0 n2) d1))
+           (steps ((rewrite (lemma mul_comm) lr lhs true ())) refl))
+         (have hs6 (= (lt 0 (* d1 (- 0 n2))) True)
+           (steps
+             ((rewrite (premise 11) lr lhs true ())
+              (rewrite (premise 10) lr lhs true ()))
+             refl))
+         (have hs7 (= (lt 0 (- 0 n2)) True)
+           (rewrite-with
+             (lemma pos_factor_pos)
+             lr
+             lhs
+             ((inst g d1) (inst q (- 0 n2)))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+              (steps ((rewrite (premise 12) lr lhs true ())) refl))
+             refl))
+         (have hn2 (= (le 0 n2) False)
+           (steps () (by arith (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 1))))
+         (have hm1b (= (le 0 (- 0 n1)) True)
+           (steps () (by arith (list 1 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0))))
+         (have hm2b (= (le 0 (- 0 n2)) True)
+           (steps () (by arith (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0))))
+         (have hi1 (= (iabs n1) (- 0 n1))
+           (steps
+             ((unfold iabs lhs) (rewrite (premise 5) lr lhs true ()) (simp lhs))
+             refl))
+         (have hi2 (= (iabs n2) (- 0 n2))
+           (steps
+             ((unfold iabs lhs)
+              (rewrite (premise 14) lr lhs true ())
+              (simp lhs))
+             refl))
+         (have hg1 (= (gcd_nn (- 0 n1) d1) 1)
+           (steps
+             ((rewrite (premise 17) rl lhs true ())
+              (rewrite (premise 2) lr lhs true ()))
+             refl))
+         (have hg2 (= (gcd_nn (- 0 n2) d2) 1)
+           (steps
+             ((rewrite (premise 18) rl lhs true ())
+              (rewrite (premise 3) lr lhs true ()))
+             refl))
+         (have hx (= (* (- 0 n1) d2) (* (- 0 n2) d1))
+           (steps
+             ((rewrite (lemma mul_neg_l) lr lhs true ())
+              (rewrite (premise 4) lr lhs true ())
+              (rewrite (lemma mul_neg_l) lr rhs true ()))
+             refl))
+         (rewrite-with
+           (lemma rat_unique_nn_den)
+           lr
+           lhs
+           ((inst n1 (- 0 n1)) (inst d1 d1) (inst n2 (- 0 n2)) (inst d2 d2))
+           ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+            (steps ((rewrite (premise 1) lr lhs true ())) refl)
+            (steps ((rewrite (premise 15) lr lhs true ())) refl)
+            (steps ((rewrite (premise 16) lr lhs true ())) refl)
+            (steps ((rewrite (premise 19) lr lhs true ())) refl)
+            (steps ((rewrite (premise 20) lr lhs true ())) refl)
+            (steps ((rewrite (premise 21) lr lhs true ())) refl))
+           refl))))))
+
+(claim rat_unique_num
+  (goal ((n1 Int) (d1 Int) (n2 Int) (d2 Int))
+    ((= (lt 0 d1) True)
+     (= (lt 0 d2) True)
+     (= (gcd_nn (iabs n1) d1) 1)
+     (= (gcd_nn (iabs n2) d2) 1)
+     (= (* n1 d2) (* n2 d1)))
+    (= n1 n2))
+  (case-on (le 0 n1) Bool
+    ((case True
+       (chain
+         (have h1 (= (le 0 n1) True)
+           (steps ((rewrite (hyp True) lr lhs true ())) refl))
+         (have ht1 (= (le 0 (* n1 d2)) True)
+           (rewrite-with
+             (lemma mul_nonneg)
+             lr
+             lhs
+             ()
+             ((steps ((rewrite (premise 5) lr lhs true ())) refl)
+              (by arith (list 1 0 1 0 0 0 0)))
+             refl))
+         (have ht2 (= (le 0 (* n2 d1)) True)
+           (steps
+             ((rewrite (premise 4) rl lhs true ())
+              (rewrite (premise 6) lr lhs true ()))
+             refl))
+         (have ht3 (= (* d1 n2) (* n2 d1))
+           (steps ((rewrite (lemma mul_comm) lr lhs true ())) refl))
+         (have ht4 (= (le 0 (* d1 n2)) True)
+           (steps
+             ((rewrite (premise 8) lr lhs true ())
+              (rewrite (premise 7) lr lhs true ()))
+             refl))
+         (have ht5 (= (le 0 n2) True)
+           (rewrite-with
+             (lemma pos_factor_nonneg)
+             lr
+             lhs
+             ((inst g d1) (inst q n2))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+              (steps ((rewrite (premise 9) lr lhs true ())) refl))
+             refl))
+         (have hi1 (= (iabs n1) n1)
+           (rewrite-with
+             (lemma iabs_nonneg_id)
+             lr
+             lhs
+             ((inst n n1))
+             ((steps ((rewrite (premise 5) lr lhs true ())) refl))
+             refl))
+         (have hi2 (= (iabs n2) n2)
+           (rewrite-with
+             (lemma iabs_nonneg_id)
+             lr
+             lhs
+             ((inst n n2))
+             ((steps ((rewrite (premise 10) lr lhs true ())) refl))
+             refl))
+         (have hg1 (= (gcd_nn n1 d1) 1)
+           (steps
+             ((rewrite (premise 11) rl lhs true ())
+              (rewrite (premise 2) lr lhs true ()))
+             refl))
+         (have hg2 (= (gcd_nn n2 d2) 1)
+           (steps
+             ((rewrite (premise 12) rl lhs true ())
+              (rewrite (premise 3) lr lhs true ()))
+             refl))
+         (rewrite-with
+           (lemma rat_unique_nn_num)
+           lr
+           lhs
+           ((inst n1 n1) (inst d1 d1) (inst n2 n2) (inst d2 d2))
+           ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+            (steps ((rewrite (premise 1) lr lhs true ())) refl)
+            (steps ((rewrite (premise 5) lr lhs true ())) refl)
+            (steps ((rewrite (premise 10) lr lhs true ())) refl)
+            (steps ((rewrite (premise 13) lr lhs true ())) refl)
+            (steps ((rewrite (premise 14) lr lhs true ())) refl)
+            (steps ((rewrite (premise 4) lr lhs true ())) refl))
+           refl)))
+     (case False
+       (chain
+         (have h1 (= (le 0 n1) False)
+           (steps ((rewrite (hyp False) lr lhs true ())) refl))
+         (have hm1 (= (lt 0 (- 0 n1)) True)
+           (steps () (by arith (list 1 0 0 0 0 0 1))))
+         (have hs1 (= (lt 0 (* (- 0 n1) d2)) True)
+           (rewrite-with
+             (lemma mul_pos)
+             lr
+             lhs
+             ()
+             ((steps ((rewrite (premise 6) lr lhs true ())) refl)
+              (steps ((rewrite (premise 1) lr lhs true ())) refl))
+             refl))
+         (have hs2 (= (lt 0 (- 0 (* n1 d2))) True)
+           (steps
+             ((rewrite (lemma mul_neg_l) rl lhs true ())
+              (rewrite (premise 7) lr lhs true ()))
+             refl))
+         (have hs3 (= (lt 0 (- 0 (* n2 d1))) True)
+           (steps
+             ((rewrite (premise 4) rl lhs true ())
+              (rewrite (premise 8) lr lhs true ()))
+             refl))
+         (have hs4 (= (lt 0 (* (- 0 n2) d1)) True)
+           (steps
+             ((rewrite (lemma mul_neg_l) lr lhs true ())
+              (rewrite (premise 9) lr lhs true ()))
+             refl))
+         (have hs5 (= (* d1 (- 0 n2)) (* (- 0 n2) d1))
+           (steps ((rewrite (lemma mul_comm) lr lhs true ())) refl))
+         (have hs6 (= (lt 0 (* d1 (- 0 n2))) True)
+           (steps
+             ((rewrite (premise 11) lr lhs true ())
+              (rewrite (premise 10) lr lhs true ()))
+             refl))
+         (have hs7 (= (lt 0 (- 0 n2)) True)
+           (rewrite-with
+             (lemma pos_factor_pos)
+             lr
+             lhs
+             ((inst g d1) (inst q (- 0 n2)))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+              (steps ((rewrite (premise 12) lr lhs true ())) refl))
+             refl))
+         (have hn2 (= (le 0 n2) False)
+           (steps () (by arith (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 1))))
+         (have hm1b (= (le 0 (- 0 n1)) True)
+           (steps () (by arith (list 1 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0))))
+         (have hm2b (= (le 0 (- 0 n2)) True)
+           (steps () (by arith (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0))))
+         (have hi1 (= (iabs n1) (- 0 n1))
+           (steps
+             ((unfold iabs lhs) (rewrite (premise 5) lr lhs true ()) (simp lhs))
+             refl))
+         (have hi2 (= (iabs n2) (- 0 n2))
+           (steps
+             ((unfold iabs lhs)
+              (rewrite (premise 14) lr lhs true ())
+              (simp lhs))
+             refl))
+         (have hg1 (= (gcd_nn (- 0 n1) d1) 1)
+           (steps
+             ((rewrite (premise 17) rl lhs true ())
+              (rewrite (premise 2) lr lhs true ()))
+             refl))
+         (have hg2 (= (gcd_nn (- 0 n2) d2) 1)
+           (steps
+             ((rewrite (premise 18) rl lhs true ())
+              (rewrite (premise 3) lr lhs true ()))
+             refl))
+         (have hx (= (* (- 0 n1) d2) (* (- 0 n2) d1))
+           (steps
+             ((rewrite (lemma mul_neg_l) lr lhs true ())
+              (rewrite (premise 4) lr lhs true ())
+              (rewrite (lemma mul_neg_l) lr rhs true ()))
+             refl))
+         (have hq (= (- 0 n1) (- 0 n2))
+           (rewrite-with
+             (lemma rat_unique_nn_num)
+             lr
+             lhs
+             ((inst n1 (- 0 n1)) (inst d1 d1) (inst n2 (- 0 n2)) (inst d2 d2))
+             ((steps ((rewrite (premise 0) lr lhs true ())) refl)
+              (steps ((rewrite (premise 1) lr lhs true ())) refl)
+              (steps ((rewrite (premise 15) lr lhs true ())) refl)
+              (steps ((rewrite (premise 16) lr lhs true ())) refl)
+              (steps ((rewrite (premise 19) lr lhs true ())) refl)
+              (steps ((rewrite (premise 20) lr lhs true ())) refl)
+              (steps ((rewrite (premise 21) lr lhs true ())) refl))
+             refl))
+         (steps
+           ()
+           (by
+             arith
+             (list
+               (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1)
+               (list 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -1)))))))))
+
+;; --- ground pins ------------------------------------------------------------
+
+(claim gcd_12_18 (goal () () (= (gcd 12 18) 6)) (steps ((compute both)) refl))
+(claim gcd_18_12 (goal () () (= (gcd 18 12) 6)) (steps ((compute both)) refl))
+(claim gcd_0_5 (goal () () (= (gcd 0 5) 5)) (steps ((compute both)) refl))
+(claim gcd_5_0 (goal () () (= (gcd 5 0) 5)) (steps ((compute both)) refl))
+(claim gcd_neg_a (goal () () (= (gcd -12 18) 6)) (steps ((compute both)) refl))
+(claim gcd_neg_b (goal () () (= (gcd 12 -18) 6)) (steps ((compute both)) refl))
+(claim gcd_coprime (goal () () (= (gcd 7 13) 1)) (steps ((compute both)) refl))
+(claim gcd_0_0 (goal () () (= (gcd 0 0) 0)) (steps ((compute both)) refl))

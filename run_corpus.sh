@@ -34,6 +34,15 @@ TARGETS=(
   examples/axiom_untagged_rejects.shard
   kernel/facts.shard
   std/bits/bits.shard
+  std/rat/mod.req/gcd.shard
+  std/rat/rat.shard
+  examples/rat_demo.shard
+  std/float/float.shard
+  std/float/kit.shard
+  std/float/pack.shard
+  std/float/grs.shard
+  std/float/ops2.shard
+  examples/float_val_compute.shard
   examples/bits_demo.shard
   std/axiom_scope_rejects.shard
   examples/ledger_dep/ledger_dep.shard

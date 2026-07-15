@@ -1,0 +1,992 @@
+;;; std/float/float.shard — the core parametric float model, L1 statics
+;;; (rung R1 slice 1 of docs/FLOATS.md §3/§3a).
+;;;
+;;; A format is an ordinary record VALUE — (make Fmt EW MW HINF HNAN) — and
+;;; every core fn takes it as its first argument (the no-numeric-type-params
+;;; ruling: value-parametric core, thin per-format opaque surfaces at R3a).
+;;; The value view is ONE format-independent ADT
+;;;
+;;;     (Fin s m e) | (FInf s) | FNaN
+;;;
+;;; in integral-significand form: a finite value is (-1)^s * m * 2^(e - MW)
+;;; with m in [0, 2^(MW+1)) and e the IEEE (unbiased) exponent; m < 2^MW
+;;; forces e = emin (zero/subnormals live only on the bottom row), which
+;;; makes representation UNIQUE up to the sign of zero. The format enters
+;;; only through the well-formedness predicate (fwf f x) and the derived
+;;; bounds; bias = 2^(EW-1) - 1 always (non-standard-bias formats are named
+;;; exclusions, FLOATS.md §3).
+;;;
+;;; The max-exponent-row partition (FLOATS.md §3): with both flags (IEEE)
+;;; the top row is entirely Inf/NaN, so emax = bias; any other flag combo
+;;; extends finite values one row higher (emax = bias + 1) minus the flag's
+;;; carve-outs — mant=0 is Inf when HINF, mant=max is NaN when HNAN.
+;;;
+;;; Powers of two are spelled fpow2 — a LOCAL computable tower. The kernel
+;;; bshl primitive reduces only for shifts < 64 (reduce.shard's cap), and the
+;;; model's denominators reach 2^149 (F32 subnormals) and 2^1074 (F64);
+;;; std/bits' pow2 is interface-opaque. fpow2 computes at any height (bignum
+;;; engines are exact); the bridge lemma into std/bits' pow2 fact family
+;;; arrives with the 2^k algebra kit (R1 infrastructure).
+;;;
+;;; The exact value is exposed as the INT pair fval_num/fval_den (numerator,
+;;; positive power-of-two denominator, not reduced); val : Fin -> Rat is the
+;;; claim-level spelling (rat_make (fval_num f x) (fval_den f x)). No fn in
+;;; this module returns Rat: a Rat-returning fn becomes a refined-return fn
+;;; the moment a closure contains the rat IMPL (the rr gate is closure-wide),
+;;; and its obligation is undischargeable from the interface side — while a
+;;; Rat-typed TERM inside a claim carries no obligation. Int-pair core +
+;;; claim-level rat is therefore the honest shape, and it makes the exact
+;;; value computable in EVERY closure. The rat_make bridge is pinned by
+;;; examples/float_val_compute.shard (the utf8_compute pattern).
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/facts.shard")  ; ediv/mod range facts — ibits' measure cites
+(use (:: kernel facts *))
+
+;; --- the power tower --------------------------------------------------------------
+
+;; 2^k for k >= 0 (and 1 below zero — total). Local so the model COMPUTES:
+;; the bshl prim caps shifts below 64 and std/bits' pow2 is interface-opaque.
+(fn fpow2 ((k Int)) Int (measure k) (if (le k 0) 1 (* 2 (fpow2 (- k 1)))))
+
+;; --- the format descriptor ------------------------------------------------------
+
+(record Fmt (ew Int) (mw Int) (hinf Bool) (hnan Bool))
+
+;; a format is well-formed when both widths are populated. EW >= 2: at
+;; EW = 1 the bias is 0 and emin = 1 lands ABOVE emax on IEEE flag combos
+;; — not even zero is representable (every real format has EW >= 3), and
+;; the frnd wf-closure theorem needs emin <= emax.
+(fn fmt_wf ((f Fmt)) Bool (if (le 2 (ew_of f)) (le 1 (mw_of f)) False))
+
+;; bias = 2^(EW-1) - 1, always.
+(fn fmt_bias ((f Fmt)) Int (- (fpow2 (- (ew_of f) 1)) 1))
+
+;; the bottom finite exponent row: emin = 1 - bias.
+(fn fmt_emin ((f Fmt)) Int (- 1 (fmt_bias f)))
+
+;; the top finite exponent row: bias for IEEE formats (both flags — the top
+;; encoding row is entirely Inf/NaN), bias + 1 otherwise (finite values
+;; extend into the top row, minus the carve-outs below).
+(fn fmt_emax ((f Fmt)) Int
+  (if (hinf_of f) (if (hnan_of f) (fmt_bias f) (+ (fmt_bias f) 1))
+  (+ (fmt_bias f) 1)))
+
+;; --- the value view -------------------------------------------------------------
+
+(type FVal (Fin Bool Int Int) (FInf Bool) (FNaN))
+
+;; the top-row carve-outs for a NORMAL mantissa (only the extended row
+;; e = bias + 1 is constrained; reachable only when emax = bias + 1):
+;; HINF claims mant=0 (m = 2^MW) for Inf, HNAN claims mant=max
+;; (m = 2^(MW+1) - 1) for NaN.
+(fn ftop_ok ((f Fmt) (m Int) (e Int)) Bool
+  (if (int_eq e (+ (fmt_bias f) 1))
+    (if (hinf_of f) (if (int_eq m (fpow2 (mw_of f))) False True)
+    (if (hnan_of f) (if (int_eq m (- (fpow2 (+ (mw_of f) 1)) 1)) False True)
+    True))
+    True))
+
+;; finite well-formedness: m in [0, 2^(MW+1)), e in [emin, emax], zero and
+;; subnormals (m < 2^MW) only on the bottom row, top-row carve-outs by flag.
+(fn fwf_fin ((f Fmt) (m Int) (e Int)) Bool
+  (if (le 0 m)
+    (if (lt m (fpow2 (+ (mw_of f) 1)))
+      (if (le (fmt_emin f) e)
+        (if (le e (fmt_emax f))
+          (if (lt m (fpow2 (mw_of f))) (int_eq e (fmt_emin f)) (ftop_ok f m e))
+          False)
+        False)
+      False)
+    False))
+
+;; value well-formedness at a format: the shape gate for the (refine …)
+;; surfaces (R3a) and the premise every core theorem carries.
+(fn fwf ((f Fmt) (x FVal)) Bool
+  (match x
+    ((Fin s m e) (fwf_fin f m e))
+    ((FInf s) (hinf_of f))
+    (FNaN (hnan_of f))))
+
+;; --- the exact value: val = fval_num / fval_den ------------------------------------
+
+;; the exact dyadic value of a finite view is (-1)^s * m * 2^(e - MW), carried
+;; as an Int pair: numerator (sign-applied, power folded in when e >= MW) over
+;; a positive power-of-two denominator (when e < MW). Not reduced — the
+;; claim-level spelling (rat_make (fval_num f x) (fval_den f x)) normalizes.
+;; Non-finite views map to 0/1 — never cited; every val theorem is premised
+;; on a Fin shape.
+(fn fval_num ((f Fmt) (x FVal)) Int
+  (match x
+    ((Fin s m e)
+     (if (le (mw_of f) e) (* (if s (- 0 m) m) (fpow2 (- e (mw_of f))))
+     (if s (- 0 m)
+     m)))
+    ((FInf s) 0)
+    (FNaN 0)))
+
+(fn fval_den ((f Fmt) (x FVal)) Int
+  (match x
+    ((Fin s m e) (if (le (mw_of f) e) 1 (fpow2 (- (mw_of f) e))))
+    ((FInf s) 1)
+    (FNaN 1)))
+
+;; --- rounding: round-to-nearest-even (rung R1 slice 2) ------------------------------
+;; frnd rounds an exact rational n/d (d > 0) to the nearest representable of
+;; the format under RNE: round-as-if-unbounded, then classify — overflow (a
+;; result row above emax, or a result landing ON a top-row carve-out slot)
+;; goes to Inf when the format has one, else NaN, else clamps to the maximal
+;; finite (the no-inf/no-nan toy combo). Gradual underflow falls out of
+;; clamping the target row at emin: tiny values round on the subnormal grid,
+;; and below half its spacing round to (signed) zero. This is the L1 SPEC —
+;; brute-force integer clarity; the guard/round/sticky efficiency spelling is
+;; L2's job, proven against this.
+
+;; bit length: ibits n = ceil(log2(n+1)) — 0 for n <= 0, else one per halving.
+;; (Named ibits, not blen — std/bytes owns that name for byte length.)
+(fn ibits ((n Int)) Int
+  (measure
+    n
+    (div-facts n 2 q (by arith (list 2 1 1 1 0 -2)))
+    (div-facts n 2 q (by arith (list 2 1 -1 0 1 2))))
+  (if (le n 0) 0 (+ 1 (ibits (ediv n 2)))))
+
+(fn imax ((x Int) (y Int)) Int (if (le x y) y x))
+
+;; is a/d >= 2^k?  (a, d >= 1; k any sign — scale whichever side is positive.)
+(fn ge_scaled ((a Int) (d Int) (k Int)) Bool
+  (if (le 0 k) (le (* d (fpow2 k)) a) (le d (* a (fpow2 (- 0 k))))))
+
+;; floor(log2(a/d)) for a, d >= 1: the bit-length difference is off by at
+;; most one; one scaled comparison decides.
+(fn elog ((a Int) (d Int)) Int
+  (if (ge_scaled a d (- (ibits a) (ibits d))) (- (ibits a) (ibits d))
+  (- (- (ibits a) (ibits d)) 1)))
+
+;; round-to-nearest-even integer division: RNE(x/y) for x >= 0, y >= 1.
+;; Compare twice the remainder against the divisor; ties go to the even
+;; quotient.
+(fn rne_div ((x Int) (y Int)) Int
+  (if (lt (* 2 (mod x y)) y) (ediv x y)
+  (if (lt y (* 2 (mod x y))) (+ (ediv x y) 1)
+  (+ (ediv x y) (mod (ediv x y) 2)))))
+
+;; the overflow result, by flag: Inf when the format has one, else NaN, else
+;; the maximal finite (clamp — the (no-inf, no-nan) combo has nothing else).
+(fn fovf ((f Fmt) (s Bool)) FVal
+  (if (hinf_of f) (FInf s)
+  (if (hnan_of f) FNaN
+  (Fin s (- (fpow2 (+ (mw_of f) 1)) 1) (fmt_emax f)))))
+
+;; round a POSITIVE magnitude a/d (a, d >= 1) at sign s: pick the target row
+;; (elog, floored at emin — gradual underflow), scale to the row's mantissa
+;; grid and RNE; a full carry (m = 2^(MW+1)) renormalizes one row up; then
+;; classify overflow — past emax, or landing ON a top-row carve-out slot
+;; (ftop_ok covers all four flag combos uniformly: the Inf slot for
+;; (inf,no-nan), the NaN slot for (no-inf,nan)).
+(fn frnd_pos ((f Fmt) (s Bool) (a Int) (d Int)) FVal
+  (let ((erow (imax (elog a d) (fmt_emin f))))
+    (let
+      ((m
+         (if (le erow (mw_of f)) (rne_div (* a (fpow2 (- (mw_of f) erow))) d)
+         (rne_div a (* d (fpow2 (- erow (mw_of f))))))))
+      (let
+        ((ec (if (int_eq m (fpow2 (+ (mw_of f) 1))) (+ erow 1) erow))
+         (mc (if (int_eq m (fpow2 (+ (mw_of f) 1))) (fpow2 (mw_of f)) m)))
+        (if (lt (fmt_emax f) ec) (fovf f s)
+        (if (ftop_ok f mc ec) (Fin s mc ec)
+        (fovf f s)))))))
+
+;; THE rounding function: RNE of the exact rational n/d at format f. d <= 0
+;; is malformed (never cited — theorems premise 0 < d; NaN keeps it total);
+;; an exact zero rounds to +0; the sign otherwise rides the magnitude.
+(fn frnd ((f Fmt) (n Int) (d Int)) FVal
+  (if (le d 0) FNaN
+  (if (int_eq n 0) (Fin False 0 (fmt_emin f))
+  (if (lt n 0) (frnd_pos f True (- 0 n) d)
+  (frnd_pos f False n d)))))
+
+;; --- named instances (FLOATS.md §3) ----------------------------------------------
+
+(fn fmt_f64 () Fmt (MkFmt 11 52 True True))
+(fn fmt_f32 () Fmt (MkFmt 8 23 True True))
+(fn fmt_f16 () Fmt (MkFmt 5 10 True True))
+(fn fmt_bf16 () Fmt (MkFmt 8 7 True True))
+(fn fmt_f8e5m2 () Fmt (MkFmt 5 2 True True))
+(fn fmt_f8e4m3fn () Fmt (MkFmt 4 3 False True))
+
+;; the exhaustive-gate toy (§10): 1+3+2 bits, 64 encodings.
+(fn fmt_toy () Fmt (MkFmt 3 2 True True))
+
+;; --- ground pins: derived bounds ---------------------------------------------------
+
+(claim bias_f32
+  (goal () () (= (fmt_bias (fmt_f32)) 127))
+  (steps ((compute both)) refl))
+(claim bias_f64
+  (goal () () (= (fmt_bias (fmt_f64)) 1023))
+  (steps ((compute both)) refl))
+(claim bias_bf16
+  (goal () () (= (fmt_bias (fmt_bf16)) 127))
+  (steps ((compute both)) refl))
+(claim bias_f8e4m3fn
+  (goal () () (= (fmt_bias (fmt_f8e4m3fn)) 7))
+  (steps ((compute both)) refl))
+(claim emin_f32
+  (goal () () (= (fmt_emin (fmt_f32)) -126))
+  (steps ((compute both)) refl))
+(claim emax_f32
+  (goal () () (= (fmt_emax (fmt_f32)) 127))
+  (steps ((compute both)) refl))
+(claim emin_f64
+  (goal () () (= (fmt_emin (fmt_f64)) -1022))
+  (steps ((compute both)) refl))
+(claim emax_f64
+  (goal () () (= (fmt_emax (fmt_f64)) 1023))
+  (steps ((compute both)) refl))
+(claim emax_f8e4m3fn
+  (goal () () (= (fmt_emax (fmt_f8e4m3fn)) 8))
+  (steps ((compute both)) refl))
+(claim wf_f32
+  (goal () () (= (fmt_wf (fmt_f32)) True))
+  (steps ((compute both)) refl))
+(claim wf_f64
+  (goal () () (= (fmt_wf (fmt_f64)) True))
+  (steps ((compute both)) refl))
+(claim wf_toy
+  (goal () () (= (fmt_wf (fmt_toy)) True))
+  (steps ((compute both)) refl))
+
+;; --- ground pins: the shape gate ----------------------------------------------------
+
+;; F32 1.0 = (Fin + 2^23 0).
+(claim fwf_f32_one
+  (goal () () (= (fwf (fmt_f32) (Fin False 8388608 0)) True))
+  (steps ((compute both)) refl))
+;; the smallest F32 subnormal.
+(claim fwf_f32_submin
+  (goal () () (= (fwf (fmt_f32) (Fin False 1 -126)) True))
+  (steps ((compute both)) refl))
+;; a subnormal mantissa off the bottom row is malformed (uniqueness).
+(claim fwf_f32_sub_off
+  (goal () () (= (fwf (fmt_f32) (Fin False 1 0)) False))
+  (steps ((compute both)) refl))
+;; exponent above emax is malformed.
+(claim fwf_f32_over
+  (goal () () (= (fwf (fmt_f32) (Fin False 8388608 128)) False))
+  (steps ((compute both)) refl))
+;; mantissa at 2^(MW+1) is malformed (carry not renormalized).
+(claim fwf_f32_mtop
+  (goal () () (= (fwf (fmt_f32) (Fin False 16777216 0)) False))
+  (steps ((compute both)) refl))
+;; both zeros are well-formed (IEEE signed zero).
+(claim fwf_f32_poszero
+  (goal () () (= (fwf (fmt_f32) (Fin False 0 -126)) True))
+  (steps ((compute both)) refl))
+(claim fwf_f32_negzero
+  (goal () () (= (fwf (fmt_f32) (Fin True 0 -126)) True))
+  (steps ((compute both)) refl))
+;; Inf/NaN follow the flags.
+(claim fwf_f32_inf
+  (goal () () (= (fwf (fmt_f32) (FInf False)) True))
+  (steps ((compute both)) refl))
+(claim fwf_f8fn_inf
+  (goal () () (= (fwf (fmt_f8e4m3fn) (FInf False)) False))
+  (steps ((compute both)) refl))
+(claim fwf_f32_nan
+  (goal () () (= (fwf (fmt_f32) FNaN) True))
+  (steps ((compute both)) refl))
+
+;; --- ground pins: the max-exponent-row partition ------------------------------------
+
+;; f8e4m3fn (no-inf, nan): the top row is finite except mant=max — its real
+;; maximum 448 = 14 * 2^(8-3) sits at (m 14, e 8); (m 15, e 8) is the NaN
+;; carve-out. The partition table, observed.
+(claim fwf_f8fn_max
+  (goal () () (= (fwf (fmt_f8e4m3fn) (Fin False 14 8)) True))
+  (steps ((compute both)) refl))
+(claim fwf_f8fn_nan_slot
+  (goal () () (= (fwf (fmt_f8e4m3fn) (Fin False 15 8)) False))
+  (steps ((compute both)) refl))
+;; IEEE toy: nothing finite above bias.
+(claim fwf_toy_top
+  (goal () () (= (fwf (fmt_toy) (Fin False 4 4)) False))
+  (steps ((compute both)) refl))
+(claim fwf_toy_max
+  (goal () () (= (fwf (fmt_toy) (Fin False 7 3)) True))
+  (steps ((compute both)) refl))
+
+;; --- ground pins: rounding ----------------------------------------------------------
+
+;; exact representables round to themselves.
+(claim frnd_f32_one
+  (goal () () (= (frnd (fmt_f32) 1 1) (Fin False 8388608 0)))
+  (steps ((compute both)) refl))
+(claim frnd_toy_threehalf
+  (goal () () (= (frnd (fmt_toy) 3 2) (Fin False 6 0)))
+  (steps ((compute both)) refl))
+(claim frnd_zero
+  (goal () () (= (frnd (fmt_toy) 0 7) (Fin False 0 -2)))
+  (steps ((compute both)) refl))
+
+;; nearest, not a tie: 1.0625 -> 1.0; 1.1875 -> 1.25 (toy grid step 1/4).
+(claim frnd_toy_near_down
+  (goal () () (= (frnd (fmt_toy) 17 16) (Fin False 4 0)))
+  (steps ((compute both)) refl))
+(claim frnd_toy_near_up
+  (goal () () (= (frnd (fmt_toy) 19 16) (Fin False 5 0)))
+  (steps ((compute both)) refl))
+
+;; THE TIE PINS: 1.125 sits between 1.0 (m=4, even) and 1.25 (m=5) -> even
+;; wins DOWN; 1.375 between 1.25 (m=5) and 1.5 (m=6, even) -> even wins UP.
+(claim frnd_toy_tie_down
+  (goal () () (= (frnd (fmt_toy) 9 8) (Fin False 4 0)))
+  (steps ((compute both)) refl))
+(claim frnd_toy_tie_up
+  (goal () () (= (frnd (fmt_toy) 11 8) (Fin False 6 0)))
+  (steps ((compute both)) refl))
+
+;; the sign rides the magnitude.
+(claim frnd_toy_neg
+  (goal () () (= (frnd (fmt_toy) -3 2) (Fin True 6 0)))
+  (steps ((compute both)) refl))
+
+;; gradual underflow: the smallest toy subnormal is 1/16; half of it is a
+;; tie against zero (m=0 even) -> +0; 3/32 ties between m=1 and m=2 -> even.
+(claim frnd_toy_submin
+  (goal () () (= (frnd (fmt_toy) 1 16) (Fin False 1 -2)))
+  (steps ((compute both)) refl))
+(claim frnd_toy_under_tie
+  (goal () () (= (frnd (fmt_toy) 1 32) (Fin False 0 -2)))
+  (steps ((compute both)) refl))
+(claim frnd_toy_under_tie_up
+  (goal () () (= (frnd (fmt_toy) 3 32) (Fin False 2 -2)))
+  (steps ((compute both)) refl))
+;; a tiny NEGATIVE rounds to MINUS zero (IEEE signed zero).
+(claim frnd_toy_negzero
+  (goal () () (= (frnd (fmt_toy) -1 32) (Fin True 0 -2)))
+  (steps ((compute both)) refl))
+
+;; overflow, IEEE flags: toy max finite is 14 (m=7, e=3); 14.5 still rounds
+;; down to it, 15 ties up into the next row (16 has the even mantissa) and
+;; overflows to Inf per round-as-if-unbounded.
+(claim frnd_toy_max
+  (goal () () (= (frnd (fmt_toy) 29 2) (Fin False 7 3)))
+  (steps ((compute both)) refl))
+(claim frnd_toy_over_tie
+  (goal () () (= (frnd (fmt_toy) 15 1) (FInf False)))
+  (steps ((compute both)) refl))
+(claim frnd_toy_over
+  (goal () () (= (frnd (fmt_toy) 99 1) (FInf False)))
+  (steps ((compute both)) refl))
+(claim frnd_toy_over_neg
+  (goal () () (= (frnd (fmt_toy) -99 1) (FInf True)))
+  (steps ((compute both)) refl))
+
+;; overflow, no-inf flags (f8e4m3fn): 464 ties to the even 448 (the real
+;; saturation boundary); 470 rounds onto the NaN carve-out slot -> NaN.
+(claim frnd_f8fn_max
+  (goal () () (= (frnd (fmt_f8e4m3fn) 448 1) (Fin False 14 8)))
+  (steps ((compute both)) refl))
+(claim frnd_f8fn_boundary_tie
+  (goal () () (= (frnd (fmt_f8e4m3fn) 464 1) (Fin False 14 8)))
+  (steps ((compute both)) refl))
+(claim frnd_f8fn_over_nan
+  (goal () () (= (frnd (fmt_f8e4m3fn) 470 1) FNaN))
+  (steps ((compute both)) refl))
+(claim frnd_f8fn_far_over
+  (goal () () (= (frnd (fmt_f8e4m3fn) 100000 1) FNaN))
+  (steps ((compute both)) refl))
+
+;; a wide-range sanity: 1/3 at F32 is the classic 11184811 / 2^25 (the
+;; repeating-bit pattern rounds up on the guard).
+(claim frnd_f32_third
+  (goal () () (= (frnd (fmt_f32) 1 3) (Fin False 11184811 -2)))
+  (steps ((compute both)) refl))
+
+;; --- the exhaustive roundtrip gate (the derisking idiom, FLOATS.md §10) --------------
+;; Idempotence on representables, ground-exhaustive: EVERY well-formed nonzero
+;; finite view of a format satisfies frnd (fval x) = x. (Zeros are skipped:
+;; rounding the exact rational 0 yields +0 by IEEE convention, so -0 does not
+;; round-trip through its VALUE — the view keeps it, the value forgets it.)
+
+(fn beq ((a Bool) (b Bool)) Bool (if a b (if b False True)))
+
+(fn fval_eqb ((x FVal) (y FVal)) Bool
+  (match x
+    ((Fin s m e)
+     (match y
+       ((Fin s2 m2 e2)
+        (if (beq s s2) (if (int_eq m m2) (int_eq e e2) False) False))
+       ((FInf s2) False)
+       (FNaN False)))
+    ((FInf s)
+     (match y
+       ((Fin s2 m2 e2) False)
+       ((FInf s2) (beq s s2))
+       (FNaN False)))
+    (FNaN
+      (match y
+        ((Fin s2 m2 e2) False)
+        ((FInf s2) False)
+        (FNaN True)))))
+
+;; one probe: well-formed nonzero views must round-trip; everything else skips.
+(fn rt_one ((f Fmt) (s Bool) (m Int) (e Int)) Bool
+  (if (int_eq m 0) True
+  (if (fwf_fin f m e)
+    (fval_eqb
+      (frnd f (fval_num f (Fin s m e)) (fval_den f (Fin s m e)))
+      (Fin s m e))
+    True)))
+
+;; sweep m = k down to 1 on row e.
+(fn rt_row ((f Fmt) (s Bool) (k Int) (e Int)) Bool
+  (measure k (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (le k 0) True (if (rt_one f s k e) (rt_row f s (- k 1) e) False)))
+
+;; sweep rows e = emin + j down to emin, full mantissa range each.
+(fn rt_rows ((f Fmt) (s Bool) (j Int)) Bool
+  (measure j (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (le j 0)
+    (if (int_eq j 0) (rt_row f s (- (fpow2 (+ (mw_of f) 1)) 1) (fmt_emin f))
+    True)
+  (if (rt_row f s (- (fpow2 (+ (mw_of f) 1)) 1) (+ (fmt_emin f) j))
+    (rt_rows f s (- j 1))
+    False)))
+
+;; both signs, all rows: the whole finite format.
+(fn rt_fmt ((f Fmt)) Bool
+  (if (rt_rows f False (- (fmt_emax f) (fmt_emin f)))
+    (rt_rows f True (- (fmt_emax f) (fmt_emin f)))
+    False))
+
+;; the gates: the toy (64 encodings), f8e4m3fn (the FN partition incl. the
+;; NaN carve-out row), f8e5m2 (IEEE flags at 8 bits).
+(claim frnd_roundtrip_toy
+  (goal () () (= (rt_fmt (fmt_toy)) True))
+  (steps ((compute both)) refl))
+(claim frnd_roundtrip_f8e4m3fn
+  (goal () () (= (rt_fmt (fmt_f8e4m3fn)) True))
+  (steps ((compute both)) refl))
+(claim frnd_roundtrip_f8e5m2
+  (goal () () (= (rt_fmt (fmt_f8e5m2)) True))
+  (steps ((compute both)) refl))
+
+;; --- the operations: rnd . exact (rung R1 slice 3) -----------------------------------
+;; Finite arithmetic is DEFINED as frnd of the exact rational result; the
+;; NaN/Inf special-case tables follow IEEE under the canonical-NaN quotient
+;; (FLOATS.md §5: ONE NaN, no sign, no payload). The only finite special
+;; cases are the IEEE zero-sign rules, which the exact value forgets:
+;; same-signed zero sums keep the sign, exact-zero products/quotients carry
+;; the XOR sign. Signed underflow-to-zero and cancellation-to-+0 fall out of
+;; frnd already.
+
+(fn bxorb ((a Bool) (b Bool)) Bool (if a (if b False True) b))
+
+;; negation and absolute value are exact (sign flips on the view; NaN sticks).
+(fn fneg ((x FVal)) FVal
+  (match x
+    ((Fin s m e) (Fin (if s False True) m e))
+    ((FInf s) (FInf (if s False True)))
+    (FNaN FNaN)))
+
+(fn fabs ((x FVal)) FVal
+  (match x
+    ((Fin s m e) (Fin False m e))
+    ((FInf s) (FInf False))
+    (FNaN FNaN)))
+
+;; addition. Inf + Inf of opposite signs is NaN; both-zero sums keep the
+;; sign only when the signs agree ((-0)+(-0) = -0, else +0); everything
+;; else finite is frnd of the exact cross-denominator sum (cancellation of
+;; nonzero operands lands on frnd's exact-zero arm = +0, per IEEE RNE).
+(fn fadd ((f Fmt) (x FVal) (y FVal)) FVal
+  (match x
+    ((Fin s1 m1 e1)
+     (match y
+       ((Fin s2 m2 e2)
+        (if (int_eq m1 0)
+          (if (int_eq m2 0) (Fin (if s1 s2 False) 0 (fmt_emin f))
+          (frnd
+            f
+            (+
+              (* (fval_num f x) (fval_den f y))
+              (* (fval_num f y) (fval_den f x)))
+            (* (fval_den f x) (fval_den f y))))
+          (frnd
+            f
+            (+
+              (* (fval_num f x) (fval_den f y))
+              (* (fval_num f y) (fval_den f x)))
+            (* (fval_den f x) (fval_den f y)))))
+       ((FInf s2) y)
+       (FNaN FNaN)))
+    ((FInf s1)
+     (match y
+       ((Fin s2 m2 e2) x)
+       ((FInf s2) (if (beq s1 s2) x FNaN))
+       (FNaN FNaN)))
+    (FNaN FNaN)))
+
+;; subtraction: x - y = x + (-y), exactly (fneg is exact; the zero-sign and
+;; Inf tables come out IEEE-correct through fadd's).
+(fn fsub ((f Fmt) (x FVal) (y FVal)) FVal (fadd f x (fneg y)))
+
+;; multiplication. Inf * 0 is NaN; Inf otherwise carries the XOR sign; an
+;; exact-zero finite product carries the XOR sign (the value forgets it);
+;; signed underflow-to-zero falls out of frnd.
+(fn fmul ((f Fmt) (x FVal) (y FVal)) FVal
+  (match x
+    ((Fin s1 m1 e1)
+     (match y
+       ((Fin s2 m2 e2)
+        (if (int_eq m1 0) (Fin (bxorb s1 s2) 0 (fmt_emin f))
+        (if (int_eq m2 0) (Fin (bxorb s1 s2) 0 (fmt_emin f))
+        (frnd
+          f
+          (* (fval_num f x) (fval_num f y))
+          (* (fval_den f x) (fval_den f y))))))
+       ((FInf s2) (if (int_eq m1 0) FNaN (FInf (bxorb s1 s2))))
+       (FNaN FNaN)))
+    ((FInf s1)
+     (match y
+       ((Fin s2 m2 e2) (if (int_eq m2 0) FNaN (FInf (bxorb s1 s2))))
+       ((FInf s2) (FInf (bxorb s1 s2)))
+       (FNaN FNaN)))
+    (FNaN FNaN)))
+
+;; division. 0/0 and Inf/Inf are NaN; x/0 diverges through fovf — the
+;; XOR-signed Inf when the format has one, else NaN (the OCP f8e4m3fn rule),
+;; else the clamp; 0/y and finite/Inf are the XOR-signed zero; the finite
+;; quotient sign-normalizes the divisor into the numerator so frnd sees
+;; d > 0. (Caught by the f8e4m3fn exhaustive gate: an unconditional FInf
+;; here is not well-formed for no-inf formats.)
+(fn fdiv ((f Fmt) (x FVal) (y FVal)) FVal
+  (match x
+    ((Fin s1 m1 e1)
+     (match y
+       ((Fin s2 m2 e2)
+        (if (int_eq m2 0) (if (int_eq m1 0) FNaN (fovf f (bxorb s1 s2)))
+        (if (int_eq m1 0) (Fin (bxorb s1 s2) 0 (fmt_emin f))
+        (if (lt (fval_num f y) 0)
+          (frnd
+            f
+            (- 0 (* (fval_num f x) (fval_den f y)))
+            (* (fval_den f x) (- 0 (fval_num f y))))
+          (frnd
+            f
+            (* (fval_num f x) (fval_den f y))
+            (* (fval_den f x) (fval_num f y)))))))
+       ((FInf s2) (Fin (bxorb s1 s2) 0 (fmt_emin f)))
+       (FNaN FNaN)))
+    ((FInf s1)
+     (match y
+       ((Fin s2 m2 e2) (FInf (bxorb s1 s2)))
+       ((FInf s2) FNaN)
+       (FNaN FNaN)))
+    (FNaN FNaN)))
+
+;; --- ground pins: the ops ------------------------------------------------------------
+
+;; exact arithmetic through the rounder.
+(claim fadd_f32_one_one
+  (goal () ()
+    (=
+      (fadd (fmt_f32) (Fin False 8388608 0) (Fin False 8388608 0))
+      (Fin False 8388608 1)))
+  (steps ((compute both)) refl))
+(claim fadd_toy_exact
+  (goal () ()
+    (= (fadd (fmt_toy) (Fin False 4 -1) (Fin False 4 -2)) (Fin False 6 -1)))
+  (steps ((compute both)) refl))
+;; inexact: 1.75 + 0.0625 rounds back down to 1.75 on the toy grid.
+(claim fadd_toy_inexact
+  (goal () ()
+    (= (fadd (fmt_toy) (Fin False 7 0) (Fin False 1 -2)) (Fin False 7 0)))
+  (steps ((compute both)) refl))
+;; cancellation of nonzero operands is +0 (RNE).
+(claim fsub_toy_cancel
+  (goal () ()
+    (= (fsub (fmt_toy) (Fin False 5 0) (Fin False 5 0)) (Fin False 0 -2)))
+  (steps ((compute both)) refl))
+;; the zero-sign table: same-signed zero sums keep the sign, mixed is +0.
+(claim fadd_toy_negzeros
+  (goal () ()
+    (= (fadd (fmt_toy) (Fin True 0 -2) (Fin True 0 -2)) (Fin True 0 -2)))
+  (steps ((compute both)) refl))
+(claim fadd_toy_mixed_zeros
+  (goal () ()
+    (= (fadd (fmt_toy) (Fin False 0 -2) (Fin True 0 -2)) (Fin False 0 -2)))
+  (steps ((compute both)) refl))
+;; Inf tables under the canonical-NaN quotient.
+(claim fadd_toy_inf_fin
+  (goal () () (= (fadd (fmt_toy) (FInf False) (Fin False 4 0)) (FInf False)))
+  (steps ((compute both)) refl))
+(claim fadd_toy_inf_clash
+  (goal () () (= (fadd (fmt_toy) (FInf False) (FInf True)) FNaN))
+  (steps ((compute both)) refl))
+(claim fsub_toy_inf_self
+  (goal () () (= (fsub (fmt_toy) (FInf False) (FInf False)) FNaN))
+  (steps ((compute both)) refl))
+
+;; multiplication: the 1.5 * 1.5 tie lands on the even 2.0.
+(claim fmul_toy_tie
+  (goal () ()
+    (= (fmul (fmt_toy) (Fin False 6 0) (Fin False 6 0)) (Fin False 4 1)))
+  (steps ((compute both)) refl))
+;; exact-zero products carry the XOR sign.
+(claim fmul_toy_zero_sign
+  (goal () ()
+    (= (fmul (fmt_toy) (Fin False 0 -2) (Fin True 4 0)) (Fin True 0 -2)))
+  (steps ((compute both)) refl))
+;; signed underflow-to-zero: (-1/16) * (1/4) is -1/64 -> -0.
+(claim fmul_toy_under_sign
+  (goal () ()
+    (= (fmul (fmt_toy) (Fin True 1 -2) (Fin False 4 -2)) (Fin True 0 -2)))
+  (steps ((compute both)) refl))
+(claim fmul_toy_inf_zero
+  (goal () () (= (fmul (fmt_toy) (FInf False) (Fin False 0 -2)) FNaN))
+  (steps ((compute both)) refl))
+(claim fmul_toy_inf_neg
+  (goal () () (= (fmul (fmt_toy) (FInf False) (Fin True 4 0)) (FInf True)))
+  (steps ((compute both)) refl))
+
+;; division: F32 1/3 through the op equals the frnd pin; the negative-divisor
+;; path sign-normalizes exactly.
+(claim fdiv_f32_third
+  (goal () ()
+    (=
+      (fdiv (fmt_f32) (Fin False 8388608 0) (Fin False 12582912 1))
+      (Fin False 11184811 -2)))
+  (steps ((compute both)) refl))
+(claim fdiv_toy_negdiv
+  (goal () ()
+    (= (fdiv (fmt_toy) (Fin False 4 0) (Fin True 4 1)) (Fin True 4 -1)))
+  (steps ((compute both)) refl))
+(claim fdiv_toy_by_zero
+  (goal () () (= (fdiv (fmt_toy) (Fin True 4 0) (Fin False 0 -2)) (FInf True)))
+  (steps ((compute both)) refl))
+(claim fdiv_toy_zero_zero
+  (goal () () (= (fdiv (fmt_toy) (Fin False 0 -2) (Fin False 0 -2)) FNaN))
+  (steps ((compute both)) refl))
+(claim fdiv_toy_fin_inf
+  (goal () () (= (fdiv (fmt_toy) (Fin True 4 0) (FInf False)) (Fin True 0 -2)))
+  (steps ((compute both)) refl))
+(claim fdiv_toy_inf_inf
+  (goal () () (= (fdiv (fmt_toy) (FInf False) (FInf True)) FNaN))
+  (steps ((compute both)) refl))
+
+;; --- the exhaustive op gates (FLOATS.md §10: every pair, whole formats) --------------
+;; For EVERY pair of well-formed views (finites incl. both zeros, both Infs,
+;; NaN): all four ops produce WELL-FORMED results (the closure sweep — a
+;; rounding bug that ever emits a malformed view fails here), and fadd/fmul
+;; are commutative.
+
+(fn ev_keep ((f Fmt) (s Bool) (m Int) (e Int) (acc (List FVal))) (List FVal)
+  (if (fwf_fin f m e) (Cons (Fin s m e) acc) acc))
+
+(fn ev_row ((f Fmt) (s Bool) (k Int) (e Int) (acc (List FVal))) (List FVal)
+  (measure k (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (le k 0) (if (int_eq k 0) (ev_keep f s 0 e acc) acc)
+  (ev_row f s (- k 1) e (ev_keep f s k e acc))))
+
+(fn ev_rows ((f Fmt) (s Bool) (j Int) (acc (List FVal))) (List FVal)
+  (measure j (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (le j 0)
+    (if (int_eq j 0) (ev_row f s (- (fpow2 (+ (mw_of f) 1)) 1) (fmt_emin f) acc)
+    acc)
+    (ev_rows
+      f
+      s
+      (- j 1)
+      (ev_row f s (- (fpow2 (+ (mw_of f) 1)) 1) (+ (fmt_emin f) j) acc))))
+
+(fn enum_views ((f Fmt)) (List FVal)
+  (let
+    ((base
+       (ev_rows
+         f
+         False
+         (- (fmt_emax f) (fmt_emin f))
+         (ev_rows f True (- (fmt_emax f) (fmt_emin f)) Nil))))
+    (let
+      ((withinf
+         (if (hinf_of f) (Cons (FInf False) (Cons (FInf True) base)) base)))
+      (if (hnan_of f) (Cons FNaN withinf) withinf))))
+
+;; one pair: closure for all four ops, commutativity for add and mul.
+(fn ops_ok1 ((f Fmt) (x FVal) (y FVal)) Bool
+  (if (fwf f (fadd f x y))
+    (if (fval_eqb (fadd f x y) (fadd f y x))
+      (if (fwf f (fsub f x y))
+        (if (fwf f (fmul f x y))
+          (if (fval_eqb (fmul f x y) (fmul f y x)) (fwf f (fdiv f x y)) False)
+          False)
+        False)
+      False)
+    False))
+
+(fn ops_row ((f Fmt) (x FVal) (ys (List FVal))) Bool
+  (measure (struct ys))
+  (match ys
+    (Nil True)
+    ((Cons y rest) (if (ops_ok1 f x y) (ops_row f x rest) False))))
+
+(fn ops_all ((f Fmt) (xs (List FVal)) (ys (List FVal))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil True)
+    ((Cons x rest) (if (ops_row f x ys) (ops_all f rest ys) False))))
+
+(fn ops_gate ((f Fmt)) Bool (let ((vs (enum_views f))) (ops_all f vs vs)))
+
+;; the toy: every pair of its 59 views, all four ops, closed and commutative.
+(claim ops_gate_toy
+  (goal () () (= (ops_gate (fmt_toy)) True))
+  (steps ((compute both)) refl))
+
+;; f8e4m3fn: the FN partition under ops — overflow lands on NaN, never on
+;; the carve-out slot; every pair of its views, closed and commutative.
+(claim ops_gate_f8e4m3fn
+  (goal () () (= (ops_gate (fmt_f8e4m3fn)) True))
+  (steps ((compute both)) refl))
+
+;; --- the monotonicity gate (rung R1 slice 4d: rnd laws, FLOATS.md §10) ---------------
+;; frnd is monotone, ground-exhaustive on a dyadic grid: walking consecutive
+;; rationals n/d upward never decreases the rounded VALUE. The grid spans
+;; -Inf overflow through the subnormal range, zero, and out the +Inf top, at
+;; half-a-subnormal-step granularity (d = 32 on the toy: ties included) and
+;; again at an odd denominator (d = 7: never exactly representable, the
+;; general rne_div path).
+
+;; exact-value order on views: -Inf below everything, +Inf above everything,
+;; NaN compares False (the gate must fail loudly if a NaN ever appears),
+;; finite by cross-multiplication (denominators are positive).
+(fn fle_val ((f Fmt) (x FVal) (y FVal)) Bool
+  (match x
+    ((Fin s m e)
+     (match y
+       ((Fin s2 m2 e2)
+        (le (* (fval_num f x) (fval_den f y)) (* (fval_num f y) (fval_den f x))))
+       ((FInf s2) (if s2 False True))
+       (FNaN False)))
+    ((FInf s)
+     (if s
+       (match y
+         ((Fin s2 m2 e2) True)
+         ((FInf s2) True)
+         (FNaN False))
+       (match y
+         ((Fin s2 m2 e2) False)
+         ((FInf s2) (if s2 False True))
+         (FNaN False))))
+    (FNaN False)))
+
+;; walk k steps upward from n/d, checking each adjacent rounded pair.
+(fn mono_row ((f Fmt) (n Int) (d Int) (k Int)) Bool
+  (measure k (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (le k 0) True
+  (if (fle_val f (frnd f n d) (frnd f (+ n 1) d)) (mono_row f (+ n 1) d (- k 1))
+  False)))
+
+;; the toy at d = 32: n in [-600, 600] spans +-18.75 — through -Inf overflow,
+;; the whole finite range at half-subnormal steps (every tie), and out the
+;; +Inf top.
+(claim frnd_mono_toy
+  (goal () () (= (mono_row (fmt_toy) -600 32 1200) True))
+  (steps ((compute both)) refl))
+
+;; the toy at d = 7: n in [-140, 140] spans +-20 — no grid point is exactly
+;; representable, the general remainder path throughout.
+(claim frnd_mono_toy_odd
+  (goal () () (= (mono_row (fmt_toy) -140 7 280) True))
+  (steps ((compute both)) refl))
+
+;; --- probe grids on F32/F64 samples (FLOATS.md §10: the R1 gate close) ---------------
+;; The real formats are far beyond exhaustive compute, so R1 closes on SAMPLED
+;; grids: strict roundtrip spans at the format corners, hand-computed IEEE
+;; boundary pins (every constant below double-checked against an exact-rational
+;; reference AND host IEEE hardware before landing), the classic inexactness
+;; witnesses, and monotonicity walks across the row crossing at 1.0 and across
+;; zero at half-subnormal granularity. Overflow-crossing monotonicity stays
+;; toy-exhaustive only (mono_row's unit numerator step cannot resolve a
+;; 2^104-ulp grid); the F32/F64 overflow BOUNDARY is pinned by the tie pairs
+;; below instead.
+
+;; one strict probe: the slot must be WELL-FORMED and round-trip. Unlike
+;; rt_one there is no skip — a span landing on a malformed slot fails, so a
+;; span can never pass vacuously off a mistaken row.
+(fn rtp_one ((f Fmt) (s Bool) (m Int) (e Int)) Bool
+  (if (fwf_fin f m e)
+    (fval_eqb
+      (frnd f (fval_num f (Fin s m e)) (fval_den f (Fin s m e)))
+      (Fin s m e))
+    False))
+
+;; sweep k mantissa slots downward from m on row e, strictly.
+(fn rt_span ((f Fmt) (s Bool) (m Int) (e Int) (k Int)) Bool
+  (measure k (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (le k 0) True
+  (if (rtp_one f s m e) (rt_span f s (- m 1) e (- k 1))
+  False)))
+
+;; F32 spans: the deep-subnormal corner (2^149 denominators), the low-normal
+;; edge of the 1.0 row, the top of the top row.
+(claim rt_span_f32_bottom
+  (goal () () (= (rt_span (fmt_f32) False 256 -126 256) True))
+  (steps ((compute both)) refl))
+(claim rt_span_f32_one
+  (goal () () (= (rt_span (fmt_f32) False 8388735 0 128) True))
+  (steps ((compute both)) refl))
+(claim rt_span_f32_top
+  (goal () () (= (rt_span (fmt_f32) True 16777215 127 256) True))
+  (steps ((compute both)) refl))
+;; F64 spans: the same corners at 52-bit mantissas and 2^1074 denominators.
+(claim rt_span_f64_bottom
+  (goal () () (= (rt_span (fmt_f64) False 256 -1022 256) True))
+  (steps ((compute both)) refl))
+(claim rt_span_f64_one
+  (goal () () (= (rt_span (fmt_f64) False 4503599627370623 0 128) True))
+  (steps ((compute both)) refl))
+(claim rt_span_f64_top
+  (goal () () (= (rt_span (fmt_f64) True 9007199254740991 1023 256) True))
+  (steps ((compute both)) refl))
+
+;; F32 boundary pins: 0.1 (the classic 13421773/2^27), the smallest subnormal
+;; and the tie at half of it, the maximal finite, and the overflow tie pair —
+;; (2^25-1)*2^103 is EXACTLY halfway between max finite and 2^128; RNE picks
+;; the even carry side, so the tie itself overflows and one below stays.
+(claim frnd_f32_tenth
+  (goal () () (= (frnd (fmt_f32) 1 10) (Fin False 13421773 -4)))
+  (steps ((compute both)) refl))
+(claim frnd_f32_submin
+  (goal () () (= (frnd (fmt_f32) 1 (fpow2 149)) (Fin False 1 -126)))
+  (steps ((compute both)) refl))
+(claim frnd_f32_submin_tie
+  (goal () () (= (frnd (fmt_f32) 1 (fpow2 150)) (Fin False 0 -126)))
+  (steps ((compute both)) refl))
+(claim frnd_f32_max
+  (goal () ()
+    (= (frnd (fmt_f32) (* 16777215 (fpow2 104)) 1) (Fin False 16777215 127)))
+  (steps ((compute both)) refl))
+(claim frnd_f32_over_tie
+  (goal () () (= (frnd (fmt_f32) (* 33554431 (fpow2 103)) 1) (FInf False)))
+  (steps ((compute both)) refl))
+(claim frnd_f32_below_tie
+  (goal () ()
+    (=
+      (frnd (fmt_f32) (- (* 33554431 (fpow2 103)) 1) 1)
+      (Fin False 16777215 127)))
+  (steps ((compute both)) refl))
+
+;; F64 boundary pins: the same battery at 11/52 — 1/3, 0.1 (note 0.2 and 0.1
+;; share a mantissa, one row apart), 3/10, the subnormal floor and its tie,
+;; the normal/subnormal boundary 2^-1022, the maximal finite, the overflow
+;; tie pair at (2^54-1)*2^970.
+(claim frnd_f64_third
+  (goal () () (= (frnd (fmt_f64) 1 3) (Fin False 6004799503160661 -2)))
+  (steps ((compute both)) refl))
+(claim frnd_f64_tenth
+  (goal () () (= (frnd (fmt_f64) 1 10) (Fin False 7205759403792794 -4)))
+  (steps ((compute both)) refl))
+(claim frnd_f64_fifth
+  (goal () () (= (frnd (fmt_f64) 1 5) (Fin False 7205759403792794 -3)))
+  (steps ((compute both)) refl))
+(claim frnd_f64_threetenths
+  (goal () () (= (frnd (fmt_f64) 3 10) (Fin False 5404319552844595 -2)))
+  (steps ((compute both)) refl))
+(claim frnd_f64_submin
+  (goal () () (= (frnd (fmt_f64) 1 (fpow2 1074)) (Fin False 1 -1022)))
+  (steps ((compute both)) refl))
+(claim frnd_f64_submin_tie
+  (goal () () (= (frnd (fmt_f64) 1 (fpow2 1075)) (Fin False 0 -1022)))
+  (steps ((compute both)) refl))
+(claim frnd_f64_normal_min
+  (goal () ()
+    (= (frnd (fmt_f64) 1 (fpow2 1022)) (Fin False 4503599627370496 -1022)))
+  (steps ((compute both)) refl))
+(claim frnd_f64_max
+  (goal () ()
+    (=
+      (frnd (fmt_f64) (* 9007199254740991 (fpow2 971)) 1)
+      (Fin False 9007199254740991 1023)))
+  (steps ((compute both)) refl))
+(claim frnd_f64_over_tie
+  (goal () ()
+    (= (frnd (fmt_f64) (* 18014398509481983 (fpow2 970)) 1) (FInf False)))
+  (steps ((compute both)) refl))
+(claim frnd_f64_below_tie
+  (goal () ()
+    (=
+      (frnd (fmt_f64) (- (* 18014398509481983 (fpow2 970)) 1) 1)
+      (Fin False 9007199254740991 1023)))
+  (steps ((compute both)) refl))
+
+;; the op probes. THE classic: 0.1 + 0.2 lands one ulp ABOVE the rounding of
+;; 3/10 (the exact sum 21617278211378382/2^56 ties at row -2 and even wins
+;; UP; compare frnd_f64_threetenths).
+(claim fadd_f64_tenth_fifth
+  (goal () ()
+    (=
+      (fadd
+        (fmt_f64)
+        (Fin False 7205759403792794 -4)
+        (Fin False 7205759403792794 -3))
+      (Fin False 5404319552844596 -2)))
+  (steps ((compute both)) refl))
+;; absorption at the F32 mantissa edge: 2^24 + 1 ties back down to 2^24;
+;; 2^24 + 2 is the next representable and lands exactly.
+(claim fadd_f32_absorb
+  (goal () ()
+    (=
+      (fadd (fmt_f32) (Fin False 8388608 24) (Fin False 8388608 0))
+      (Fin False 8388608 24)))
+  (steps ((compute both)) refl))
+(claim fadd_f32_step
+  (goal () ()
+    (=
+      (fadd (fmt_f32) (Fin False 8388608 24) (Fin False 8388608 1))
+      (Fin False 8388609 24)))
+  (steps ((compute both)) refl))
+;; F64 division: 1.0 / 3.0 through the op equals the frnd_f64_third pin.
+(claim fdiv_f64_third
+  (goal () ()
+    (=
+      (fdiv
+        (fmt_f64)
+        (Fin False 4503599627370496 0)
+        (Fin False 6755399441055744 1))
+      (Fin False 6004799503160661 -2)))
+  (steps ((compute both)) refl))
+;; guard-bit behavior at full width: (1 + 2^-52)^2 = 1 + 2^-51 + 2^-104
+;; rounds down on the sub-half guard to 1 + 2^-51.
+(claim fmul_f64_nextone
+  (goal () ()
+    (=
+      (fmul
+        (fmt_f64)
+        (Fin False 4503599627370497 0)
+        (Fin False 4503599627370497 0))
+      (Fin False 4503599627370498 0)))
+  (steps ((compute both)) refl))
+
+;; monotonicity walks on the real formats. The row crossing at 1.0: d = 2^25
+;; (resp. 2^54) is half-ulp granularity below 1.0 and quarter-ulp above, n
+;; spans 80 grid steps each side of the crossing — ulp doubling, ties on both
+;; rows.
+(claim frnd_mono_f32_one
+  (goal () () (= (mono_row (fmt_f32) 33554352 33554432 160) True))
+  (steps ((compute both)) refl))
+(claim frnd_mono_f64_one
+  (goal () ()
+    (= (mono_row (fmt_f64) 18014398509481904 18014398509481984 160) True))
+  (steps ((compute both)) refl))
+;; the zero crossing at half-subnormal steps: signed zeros, subnormal ties,
+;; and the sign fork of frnd on the real formats.
+(claim frnd_mono_f32_zero
+  (goal () () (= (mono_row (fmt_f32) -48 (fpow2 150) 96) True))
+  (steps ((compute both)) refl))
+(claim frnd_mono_f64_zero
+  (goal () () (= (mono_row (fmt_f64) -48 (fpow2 1075) 96) True))
+  (steps ((compute both)) refl))
