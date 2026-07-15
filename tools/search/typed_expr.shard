@@ -1,7 +1,9 @@
-;;; tools/search/typed_expr.shard — ENVIRONMENT-DRIVEN TYPED EXPRESSION SEARCH.
+;;; tools/search/typed_expr.shard — ENVIRONMENT-DRIVEN TYPED EXPRESSION CENSUS.
 ;;;
-;;; This is the first consumer of typed_grammar.shard.  It intentionally keeps
-;;; generation and observation separate:
+;;; This is the first consumer of typed_grammar.shard.  It exhaustively visits
+;;; every complete member, making it the behavior-census and agreement-baseline
+;;; companion to typed_superpose.shard's branch-and-prune search.  It
+;;; intentionally keeps generation and observation separate:
 ;;;
 ;;;   generation = the task file's EXPLICIT bare-item `use` scope, filtered by
 ;;;                search_forms and reflected signatures;
@@ -33,7 +35,7 @@
 ;;;   search_ints    : () -> List Int
 ;;;   search_symbols : () -> List Symbol
 ;;;   search_depth   : () -> Int
-;;;   search_screen  : Candidate -> Bool       ; optional cheap discriminator
+;;;   search_screen  : Candidate -> Bool       ; optional census accelerator
 ;;;   search_probe   : Candidate -> Option Observation
 ;;;   search_target  : () -> Observation
 ;;;   search_witness      : () -> Candidate  ; data/program-value tasks
@@ -816,6 +818,48 @@
 (fn te_fail ((msg (List Int)) (w World)) World
   (exit 1 (write (append_int "TYPED-SEARCH FAIL " (append_int msg "\n")) w)))
 
+;; One reflected search space, shared by exhaustive census and superposition.
+;; Keeping this boundary first-class prevents task loading, scope routing, and
+;; grammar construction from drifting between search strategies.
+(type TeSpace (TeSpace (List (Pair QName Symbol)) Int Expr Grammar Int))  ; spelling table, depth, root, grammar, hole count
+
+(type TeSpaceR (TeSpaceErr (List Int)) (TeSpaceOk TeSpace))
+
+(fn te_make_flat_space
+  ((m Module)
+   (want Type)
+   (scope RCtx)
+   (depth Int)
+   (atoms (List TgAtom))
+   (forms TeFormCfg))
+  TeSpaceR
+  (match forms
+    ((TeFormCfg ctors calls ifs)
+     (let
+       ((heads (tg_scope_heads m scope ctors calls))
+        (table (tg_scope_table scope)))
+       (match (tg_build m heads atoms Nil Nil want depth (TgForms ifs))
+         ((TgBuildErr msg) (TeSpaceErr (append_int "grammar: " msg)))
+         ((TgBuildOk root grammar holes)
+          (TeSpaceOk (TeSpace table depth root grammar holes))))))))
+
+(fn te_make_scoped_space
+  ((m Module) (want Type) (scope RCtx) (depth Int) (spec TgScopeEnv))
+  TeSpaceR
+  (match (tg_resolve_scope_env m scope spec)
+    ((TgScopeErr msg) (TeSpaceErr (append_int "scope: " msg)))
+    ((TgScopeOk env root_zone)
+     (match (tg_build_env m env Nil want depth root_zone)
+       ((TgBuildErr msg) (TeSpaceErr (append_int "grammar: " msg)))
+       ((TgBuildOk root grammar holes)
+        (TeSpaceOk (TeSpace (tg_scope_table scope) depth root grammar holes)))))))
+
+(fn te_make_space ((m Module) (want Type) (scope RCtx) (cfg TeCfg)) TeSpaceR
+  (match cfg
+    ((TeCfgFlat depth atoms forms)
+     (te_make_flat_space m want scope depth atoms forms))
+    ((TeCfgScoped depth spec) (te_make_scoped_space m want scope depth spec))))
+
 (fn te_run_space
   ((path (List Int))
    (m Module)
@@ -876,40 +920,11 @@
    (cfg TeCfg)
    (w World))
   World
-  (match cfg
-    ((TeCfgFlat depth atoms forms)
-     (match forms
-       ((TeFormCfg ctors calls ifs)
-        (let
-          ((heads (tg_scope_heads m scope ctors calls))
-           (table (tg_scope_table scope)))
-          (match (tg_build m heads atoms Nil Nil want depth (TgForms ifs))
-            ((TgBuildErr msg) (te_fail (append_int "grammar: " msg) w))
-            ((TgBuildOk root grammar holes)
-             (te_run_space path m want ictx screen probe target witness table
-               depth root grammar holes w)))))))
-    ((TeCfgScoped depth spec)
-     (match (tg_resolve_scope_env m scope spec)
-       ((TgScopeErr msg) (te_fail (append_int "scope: " msg) w))
-       ((TgScopeOk env root_zone)
-        (match (tg_build_env m env Nil want depth root_zone)
-          ((TgBuildErr msg) (te_fail (append_int "grammar: " msg) w))
-          ((TgBuildOk root grammar holes)
-           (te_run_space
-             path
-             m
-             want
-             ictx
-             screen
-             probe
-             target
-             witness
-             (tg_scope_table scope)
-             depth
-             root
-             grammar
-             holes
-             w))))))))
+  (match (te_make_space m want scope cfg)
+    ((TeSpaceErr msg) (te_fail msg w))
+    ((TeSpaceOk (TeSpace table depth root grammar holes))
+     (te_run_space path m want ictx screen probe target witness table depth root
+       grammar holes w))))
 
 (fn te_search
   ((path (List Int))

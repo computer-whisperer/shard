@@ -1126,14 +1126,23 @@ partially-filled template — match_e reused verbatim); every found
 region's representative (don't-cares at alternative 0) passes the
 kernel/evm battery.
 
+**General task seam (LANDED 2026-07-15).**  The lazy evaluator was
+already vocabulary-independent; only this first rev test adapter was
+specialized.  `su_expect_expr` now compares arbitrary ground Shard values
+lazily, and `su_drive_query` executes an arbitrary query containing the root
+sketch while retaining exact consistent-subspace settlement.  The dynamic
+`typed_superpose` adapter connects that seam to the reflected/routed `TeSpace`.
+On the full mlx86 four-operation task it settles 1,728 candidates as 140
+terminal regions and 63 demanded-choice forks, finding the same six ranks as
+the exhaustive census.  The optional census audit agrees exactly.  No x86,
+Wasm, imp, or task constructor occurs in the executor.
+
 **Design notes.** Call-by-need vs the kernel's call-by-value: for the
 total, grammar-typed fragments searched here the results agree
 (totality), and the AGREE gate polices it empirically — recorded,
-not assumed. The consulted-choice-set MEMO (cross-region thunk
-sharing, the ratified second half of S4b's core) is the next lever
-INSIDE this component: v1 runs per-region arenas, correctness gated
-first; the fork counts above are the baseline it will be measured
-against.
+not assumed. The consulted-choice-set memo and shared arena are described in
+component 2 below; region/fork counts remain the stable algorithmic baseline
+independent of that evaluation-work optimization.
 
 **THE LADDER IS COMPLETE.** S1–S8 and every gate G1–G5 have landed
 instances; the exit criterion was met in slice 5. What remains in
@@ -1482,17 +1491,43 @@ it has exactly five members; the witness
 `(Let (0) (BVar 0))` is rank 4 and round-trips.  A zero-cost recursive rule is
 rejected before construction, as is any slot routed to a missing zone.
 
-`tools/search/typed_expr.shard` is the first dynamic task consumer.  It
+`tools/search/typed_expr.shard` is the exhaustive dynamic census consumer.  It
 infers Candidate and opaque Observation from the task's protocol, derives
 heads from the root file's actual use scope, and independently runs every
 closed candidate through `kernel/types.tc_infer` before observation.  A task
 may additionally provide `search_screen : Candidate -> Bool`; this typed,
-optional discriminator runs before the expensive opaque probe and is counted
-separately from semantic-domain rejection.  The selected witness still must
-pass the screen, match the complete target observation, round-trip through
-rank/unrank, and occur in the final solution set.  The
-generic imp task deliberately admits all `Int` atoms at both `ILoc` and
-`IConst`; the imp kind checker supplies the semantic distinction:
+optional **census accelerator** runs before the expensive opaque probe and is
+counted separately from semantic-domain rejection.  The selected witness
+still must pass the screen, match the complete target observation,
+round-trip through rank/unrank, and occur in the final solution set.
+
+`tools/search/typed_superpose.shard` consumes exactly the same first-class
+`TeSpace`—the same reflected scope, routes, root sketch, grammar, and rank
+space—but uses S4b SUPERPOSE as the search algorithm.  It evaluates
+`search_probe(root-sketch)` under a partial assignment, forks only at the
+first demanded open hole, and compares the resulting arbitrary Shard value
+to `Some(search_target())` lazily from left to right.  A mismatch kills the
+whole consistent subspace; holes untouched by a passing query remain
+don't-cares.  Singleton grammar entries are transparent in evaluation,
+consistent-subspace counting, and region templates, so fixed routed
+skeletons do not manufacture one-way branches or hide descendant choices.
+
+Every run requires exact `FOUND + KILLED = TOTAL`, validates one eager,
+kernel-typed representative per passing region against the full probe, and
+requires the task witness to belong to a passing region.  An explicit
+`audit` argument adds `typed_expr`'s complete sweep afterward and proves that
+every enumerative solution is region-covered and that the two solution
+counts agree.  `search_screen` is used only inside that optional audit; it is
+never consulted by the branch-and-prune drive.  On the small generic imp task
+the audit records:
+
+    total 114; found 2; killed 112; regions 80; forks 59
+    exhaustive agreement: accepted 52; rejected 62; solutions 2
+    BEST/WITNESS 10
+
+The generic imp task deliberately admits all `Int` atoms at both `ILoc` and
+`IConst`; the imp kind checker supplies the semantic distinction.  Its
+exhaustive behavior census remains:
 
     typed_imp_add1: depth 2; generated 114; accepted 52; rejected 62
     17 behaviors; 2 solutions
@@ -1527,8 +1562,8 @@ and operand roles through the bare-item x86 scope; the semantic choices remain
 the move/binop/register/operator heads.  No x86 name was added to
 `typed_expr` or `typed_grammar`:
 
-    depth 4; generated/accepted 729; rejected/screened 0
-    13 behaviors; 8 solutions
+    depth 4; total 729; found 8; killed 721
+    197 terminal regions; 109 demanded-choice forks
     BEST 38 = [XMovRR RAX RDI, XBin XAdd RAX (SReg RSI)]
 
 The earlier flat scope generated 7,318 trees and rejected 6,561 merely to
@@ -1556,16 +1591,19 @@ register moves, `XBin`, and `XDivU`—with only three selector literals and
 three arithmetic heads left as semantic holes.  This is environment
 composition, not an encoded calculator production set:
 
-    depth 40; holes 90; generated 1,728 = 4^3 * 3^3
-    screened 1,722; accepted 6; rejected 0; 1 complete behavior
-    6 solutions; BEST/WITNESS 183
+    depth 40; holes 90; total 1,728 = 4^3 * 3^3
+    found 6; killed 1,722; 140 terminal regions; 63 demanded-choice forks
+    6 solutions; BEST/WITNESS 183; exact settlement and eager gates OK
 
-Four historical rows, one per opcode and each discriminating all four
-arithmetic outcomes, form the cheap `search_screen`; survivors are still
-observed on all forty rows.  The six solutions are precisely the `3!` gauge
-symmetry of permuting the add/sub/mul tests while keeping division as the
-default.  `gen/x86_calculator4_refinement.shard` fixes the rank-183 instruction
-tree, proves its add/sub/mul arms for arbitrary integers, replays the guarded
+The actual search narrows directly against all forty rows and never calls
+`search_screen`.  A separate `audit` run then reproduced the old census
+exactly—1,722 screened, six accepted, zero rejected—and proved its six ranks
+are covered by the passing regions.  The four high-information historical
+rows remain useful only as that enumerative audit's accelerator.  The six
+solutions are precisely the `3!` gauge symmetry of permuting the add/sub/mul
+tests while keeping division as the default.
+`gen/x86_calculator4_refinement.shard` fixes the rank-183 instruction tree,
+proves its add/sub/mul arms for arbitrary integers, replays the guarded
 division arm, proves identity with the task witness, and kernel-checks the
 complete forty-row historical contract.
 

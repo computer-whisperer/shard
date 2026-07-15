@@ -430,7 +430,8 @@ fi
 # over imp expressions and parametric Wasm instruction lists.  typed_expr is
 # an executable pin rather than a checker target because its independent
 # candidate gate imports kernel/types, whose tc_infer/tc_arms mutual-recursion
-# measure gap is a known pre-existing checker failure.
+# measure gap is a known pre-existing checker failure.  typed_superpose imports
+# the same independent gate and is executable-pinned for the same reason.
 echo "=== search: graduated meta rewrite profile pin ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/rewrite_probe.shard
@@ -459,7 +460,9 @@ fi
 
 echo "=== search: general typed imp scope pin ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/typed_expr.shard tools/search/tasks/typed_imp_add1.shard
+  # The audit proves the narrowing regions agree with all 114 enumerated
+  # members while keeping enumeration visibly separate from the search path.
+  bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_imp_add1.shard audit
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
@@ -481,18 +484,18 @@ fi
 # Portability/flex pins: the reflected engine searches the current x86 model
 # over the old mlx86 calculator battery.  The first task retains the checked-in
 # addition-only sample site; the second restores the source's complete
-# add/sub/mul/div switch and uses the generic routed task environment plus a
-# typed early discriminator before its complete forty-row observation.
+# add/sub/mul/div switch and uses the generic routed task environment.  Both
+# are searched by demanded-hole superposition against the complete probe.
 echo "=== search: typed x86 calculator pin ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/typed_expr.shard tools/search/tasks/typed_x86_calculator.shard
+  bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_x86_calculator.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
 
 echo "=== search: typed x86 four-operation calculator pin ==="
 if [ -x bin/shard_eval ]; then
-  bin/shard_eval run tools/search/typed_expr.shard tools/search/tasks/typed_x86_calculator4.shard
+  bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_x86_calculator4.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi

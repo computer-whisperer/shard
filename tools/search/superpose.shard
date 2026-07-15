@@ -431,9 +431,18 @@
   (if (lt fuel 1) (CcRErr "consistent: fuel")
   (let ((a (ch_get asg h)))
     (if (lt a 0)
-      (match (memo_find h memo)
-        (None (CcRErr "consistent: hole missing from the count memo"))
-        ((Some n) (CcROk n)))
+      ;; A singleton entry is not a choice boundary.  Descendant holes may
+      ;; already be assigned even though this parent was entered
+      ;; transparently, so recurse and retain those constraints.
+      (match (su_alts g h)
+        (None (CcRErr "consistent: unknown hole"))
+        ((Some alts)
+         (match alts
+           ((Cons ae Nil) (cc_expr g memo asg ae (- fuel 1)))
+           (_
+             (match (memo_find h memo)
+               (None (CcRErr "consistent: hole missing from the count memo"))
+               ((Some n) (CcROk n)))))))
       (match (su_alts g h)
         (None (CcRErr "consistent: unknown hole"))
         ((Some alts)
@@ -526,16 +535,30 @@
     (match (hole_view e)
       ((HVHole h)
        ;; a HOLE: assigned -> evaluate the chosen alternative in THIS
-       ;; env (the fill contract's frame); unassigned -> block
+       ;; env (the fill contract's frame); an unassigned singleton is
+       ;; deterministic and can be entered without a branch or consultation;
+       ;; any genuinely open choice blocks.
        (let ((c (ch_get asg h)))
-         (if (lt c 0) (SuRBlocked h a)
          (match (su_alts g h)
            (None (SuRErr "superpose: unknown hole"))
            ((Some alts)
-            (match (alt_nth alts c)
-              (None (SuRErr "superpose: alternative out of range"))
-              ((Some ae)
-               (su_eval (- fuel 1) m candq body g asg (sa_consult a h c) env ae))))))))
+            (if (lt c 0)
+              (match alts
+                ((Cons ae Nil) (su_eval (- fuel 1) m candq body g asg a env ae))
+                (_ (SuRBlocked h a)))
+              (match (alt_nth alts c)
+                (None (SuRErr "superpose: alternative out of range"))
+                ((Some ae)
+                 (su_eval
+                   (- fuel 1)
+                   m
+                   candq
+                   body
+                   g
+                   asg
+                   (sa_consult a h c)
+                   env
+                   ae))))))))
       ((HVBad msg) (SuRErr msg))
       ((HVNot)
        (match e
@@ -1006,6 +1029,103 @@
        ((SuTFail a2) (SuTFail a2))
        ((SuTPass a2) (su_tests (- fuel 1) m candq body g asg a2 rest)))))))
 
+;; Generic value comparison for dynamic tasks.  `want` is an already-invoked
+;; ground Shard value; the candidate side stays lazy.  Constructor fields are
+;; compared left-to-right, so the first differing observation blocks only on
+;; the holes needed to expose that difference and then kills the whole region.
+(fn su_expect_expr
+  ((fuel Int)
+   (m Module)
+   (candq QName)
+   (body Expr)
+   (g Grammar)
+   (asg (List (Pair Int Int)))
+   (a SuA)
+   (r Int)
+   (want Expr))
+  SuT
+  (measure fuel)
+  (if (lt fuel 1) (SuTOut)
+  (match (su_whnf (- fuel 1) m candq body g asg a r)
+    ((SuRErr msg) (SuTErr msg))
+    ((SuROut) (SuTOut))
+    ((SuRBlocked h a2) (SuTBlocked h a2))
+    ((SuRFail a2) (SuTFail a2))
+    ((SuRVal v a2)
+     (match (sa_get a2 v)
+       (None (SuTErr "superpose: dangling generic result"))
+       ((Some got)
+        (match want
+          ((IntLit w)
+           (match got
+             ((SuInt x) (if (int_eq x w) (SuTPass a2) (SuTFail a2)))
+             (_ (SuTFail a2))))
+          ((SymLit w)
+           (match got
+             ((SuQuote x) (if (sym_eq x w) (SuTPass a2) (SuTFail a2)))
+             (_ (SuTFail a2))))
+          ((Ctor wq wes)
+           (match got
+             ((SuCtor gq ges)
+              (if (qname_eq gq wq)
+                (su_expect_exprs (- fuel 1) m candq body g asg a2 ges wes)
+                (SuTFail a2)))
+             (_ (SuTFail a2))))
+          (_ (SuTErr "superpose: generic target is not a ground value")))))))))
+
+(fn su_expect_exprs
+  ((fuel Int)
+   (m Module)
+   (candq QName)
+   (body Expr)
+   (g Grammar)
+   (asg (List (Pair Int Int)))
+   (a SuA)
+   (got (List Int))
+   (want (List Expr)))
+  SuT
+  (measure fuel)
+  (if (lt fuel 1) (SuTOut)
+  (match got
+    (Nil
+      (match want
+        (Nil (SuTPass a))
+        ((Cons _ _) (SuTFail a))))
+    ((Cons r rest)
+     (match want
+       (Nil (SuTFail a))
+       ((Cons w wrest)
+        (match (su_expect_expr (- fuel 1) m candq body g asg a r w)
+          ((SuTErr msg) (SuTErr msg))
+          ((SuTOut) (SuTOut))
+          ((SuTBlocked h a2) (SuTBlocked h a2))
+          ((SuTFail a2) (SuTFail a2))
+          ((SuTPass a2)
+           (su_expect_exprs (- fuel 1) m candq body g asg a2 rest wrest)))))))))
+
+;; Evaluate an arbitrary task query containing the candidate sketch and compare
+;; its value lazily with the target.  `candq`/`body` retain the recursive-body
+;; substitution seam used by rev; data-program tasks pass an unbound candq.
+(fn su_query
+  ((fuel Int)
+   (m Module)
+   (candq QName)
+   (body Expr)
+   (g Grammar)
+   (asg (List (Pair Int Int)))
+   (a SuA)
+   (query Expr)
+   (want Expr))
+  SuT
+  (measure fuel)
+  (if (lt fuel 1) (SuTOut)
+  (match (su_eval (- fuel 1) m candq body g asg a Nil query)
+    ((SuRErr msg) (SuTErr msg))
+    ((SuROut) (SuTOut))
+    ((SuRBlocked h a2) (SuTBlocked h a2))
+    ((SuRFail a2) (SuTFail a2))
+    ((SuRVal r a2) (su_expect_expr (- fuel 1) m candq body g asg a2 r want)))))
+
 ;; ---- the region loop -----------------------------------------------------------
 
 (fn su_efuel () Int 200000)
@@ -1024,6 +1144,98 @@
 (type SuS
   (SuSErr (List Int))
   (SuSOk Int Int Int Int Int (List (List (Pair Int Int)))))
+
+;; Generic branch-and-prune drive.  `candidate` is used only for exact
+;; consistent-subspace counting; `query` is what the lazy evaluator executes.
+(fn su_drive_query
+  ((fuel Int)
+   (m Module)
+   (candq QName)
+   (body Expr)
+   (candidate Expr)
+   (query Expr)
+   (want Expr)
+   (g Grammar)
+   (memo (List (Pair Int Int)))
+   (ar SuA)
+   (jobs (List (List (Pair Int Int))))
+   (found Int)
+   (killed Int)
+   (regions Int)
+   (forks Int)
+   (sols (List (List (Pair Int Int)))))
+  SuS
+  (measure fuel)
+  (if (lt fuel 1) (SuSErr "superpose: generic drive fuel exhausted")
+  (match jobs
+    (Nil (SuSOk found killed regions forks (sa_steps ar) sols))
+    ((Cons asg rest)
+     (match (su_query (su_efuel) m candq body g asg ar query want)
+       ((SuTErr msg) (SuSErr msg))
+       ((SuTOut) (SuSErr "superpose: generic evaluation fuel exhausted"))
+       ((SuTBlocked h ar2)
+        (match (su_alts g h)
+          (None (SuSErr "superpose: generic query blocked on unknown hole"))
+          ((Some alts)
+           (su_drive_query
+             (- fuel 1)
+             m
+             candq
+             body
+             candidate
+             query
+             want
+             g
+             memo
+             ar2
+             (su_fork asg h (- (alts_len alts) 1) rest)
+             found
+             killed
+             regions
+             (+ forks 1)
+             sols))))
+       ((SuTFail ar2)
+        (match (cc_expr g memo asg candidate 1000000)
+          ((CcRErr msg) (SuSErr msg))
+          ((CcROk n)
+           (su_drive_query
+             (- fuel 1)
+             m
+             candq
+             body
+             candidate
+             query
+             want
+             g
+             memo
+             ar2
+             rest
+             found
+             (+ killed n)
+             (+ regions 1)
+             forks
+             sols))))
+       ((SuTPass ar2)
+        (match (cc_expr g memo asg candidate 1000000)
+          ((CcRErr msg) (SuSErr msg))
+          ((CcROk n)
+           (su_drive_query
+             (- fuel 1)
+             m
+             candq
+             body
+             candidate
+             query
+             want
+             g
+             memo
+             ar2
+             rest
+             (+ found n)
+             killed
+             (+ regions 1)
+             forks
+             (Cons asg sols))))))))))
 
 (fn su_drive
   ((fuel Int)
@@ -1119,13 +1331,21 @@
   (match (hole_view e)
     ((HVHole h)
      (let ((c (ch_get asg h)))
-       (if (lt c 0) (Some e)
-       (match (su_alts g h)
-         (None None)
-         ((Some alts)
-          (match (alt_nth alts c)
-            (None None)
-            ((Some ae) (su_tpl g asg ae (- fuel 1)))))))))
+       (if (lt c 0)
+         ;; Keep genuinely open choices as template holes, but expand a
+         ;; deterministic wrapper so assignments below it remain visible.
+         (match (su_alts g h)
+           (None None)
+           ((Some alts)
+            (match alts
+              ((Cons ae Nil) (su_tpl g asg ae (- fuel 1)))
+              (_ (Some e)))))
+         (match (su_alts g h)
+           (None None)
+           ((Some alts)
+            (match (alt_nth alts c)
+              (None None)
+              ((Some ae) (su_tpl g asg ae (- fuel 1)))))))))
     ((HVBad _) None)
     ((HVNot)
      (match e

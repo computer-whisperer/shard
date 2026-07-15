@@ -1,0 +1,578 @@
+;;; tools/search/typed_superpose.shard — typed task search by SUPERPOSITION.
+;;;
+;;; This consumes typed_expr's reflected TeSpace, but searches it by evaluating
+;;; `search_probe(root-sketch)` under partial assignments.  Evaluation forks
+;;; only when it demands an open hole; a mismatch kills the whole consistent
+;;; subspace and unconsulted holes in a passing region are don't-cares.
+;;; Exhaustive enumeration is available only as an agreement audit.
+;;;
+;;; RUN IT:
+;;;   bin/shard_eval run tools/search/typed_superpose.shard TASK.shard
+;;;   bin/shard_eval run tools/search/typed_superpose.shard TASK.shard audit
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/reader.shard")
+(import "../../kernel/types.shard")
+(import "../../kernel/loader.shard")
+(import "../../meta/sketch")
+(import "../../meta/invoke")
+(import "../../meta/invoke/prepared.shard")
+(import "../../meta/spell")
+(import "typed_expr.shard")
+(import "superpose.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel loader World))
+(use (:: kernel loader read_file))
+(use (:: kernel loader get_args))
+(use (:: kernel loader write))
+(use (:: kernel loader exit))
+(use (:: meta sketch *))
+(use (:: meta invoke *))
+(use (:: meta invoke prepared *))
+(use (:: meta spell *))
+(use (:: tools search typed_expr *))
+(use (:: tools search superpose *))
+
+(fn ts_fail ((msg (List Int)) (w World)) World
+  (exit
+    1
+    (write (append_int "SUPERPOSED-SEARCH FAIL " (append_int msg "\n")) w)))
+
+;; ---- independent gates over passing regions -------------------------------
+
+(type TsRepR (TsRepErr (List Int)) (TsRepOk Int))
+
+(fn ts_reps_gate
+  ((root Expr)
+   (grammar Grammar)
+   (m Module)
+   (want Type)
+   (ctx InvokeCtx)
+   (probe FnDef)
+   (target Expr)
+   (sols (List (List (Pair Int Int))))
+   (best Int))
+  TsRepR
+  (measure (struct sols))
+  (match sols
+    (Nil (if (lt best 0) (TsRepErr "no passing region") (TsRepOk best)))
+    ((Cons asg rest)
+     (match (su_rep grammar asg root 1000000)
+       (None (TsRepErr "representative fill failed"))
+       ((Some candidate)
+        (match (te_typecheck m want candidate)
+          ((TeTcErr msg) (TsRepErr (append_int "representative type: " msg)))
+          ((TeTcOk)
+           (match (te_observe ctx probe candidate)
+             ((TeObsErr msg)
+              (TsRepErr (append_int "representative probe: " msg)))
+             ((TeObsReject) (TsRepErr "representative is rejected"))
+             ((TeObsOk key)
+              (if (expr_eq key target)
+                (match (sk_rank root grammar candidate)
+                  ((SkCErr msg)
+                   (TsRepErr (append_int "representative rank: " msg)))
+                  ((SkCOk rank)
+                   (ts_reps_gate
+                     root
+                     grammar
+                     m
+                     want
+                     ctx
+                     probe
+                     target
+                     rest
+                     (if (lt best 0) rank (if (lt rank best) rank best)))))
+                (TsRepErr "representative observation differs")))))))))))
+
+(type TsCandR (TsCandErr (List Int)) (TsCandOk Int Expr))
+
+(fn ts_witness_candidate ((root Expr) (grammar Grammar) (witness TeWitness))
+  TsCandR
+  (match witness
+    ((TeWitnessValue value)
+     (match (sk_rank root grammar value)
+       ((SkCErr msg) (TsCandErr (append_int "witness rank: " msg)))
+       ((SkCOk rank)
+        (match (sk_unrank root grammar rank)
+          ((SkEErr msg) (TsCandErr (append_int "witness unrank: " msg)))
+          ((SkEOk value2)
+           (if (expr_eq value value2) (TsCandOk rank value)
+           (TsCandErr "witness rank/unrank disagrees")))))))
+    ((TeWitnessRank rank)
+     (match (sk_unrank root grammar rank)
+       ((SkEErr msg) (TsCandErr (append_int "witness unrank: " msg)))
+       ((SkEOk value) (TsCandOk rank value))))))
+
+(type TsWitnessR (TsWitnessErr (List Int)) (TsWitnessOk Int))
+
+(fn ts_witness_gate
+  ((root Expr)
+   (grammar Grammar)
+   (m Module)
+   (want Type)
+   (ctx InvokeCtx)
+   (probe FnDef)
+   (target Expr)
+   (witness TeWitness)
+   (sols (List (List (Pair Int Int)))))
+  TsWitnessR
+  (match (ts_witness_candidate root grammar witness)
+    ((TsCandErr msg) (TsWitnessErr msg))
+    ((TsCandOk rank candidate)
+     (match (te_typecheck m want candidate)
+       ((TeTcErr msg) (TsWitnessErr (append_int "witness type: " msg)))
+       ((TeTcOk)
+        (match (te_observe ctx probe candidate)
+          ((TeObsErr msg) (TsWitnessErr (append_int "witness probe: " msg)))
+          ((TeObsReject) (TsWitnessErr "witness is rejected"))
+          ((TeObsOk key)
+           (if (expr_eq key target)
+             (if (su_covered grammar root sols candidate) (TsWitnessOk rank)
+             (TsWitnessErr "witness escaped every passing region"))
+             (TsWitnessErr "witness observation differs")))))))))
+
+;; ---- optional exhaustive agreement audit ----------------------------------
+
+(fn ts_solution_coverage
+  ((root Expr)
+   (grammar Grammar)
+   (sols (List (List (Pair Int Int))))
+   (ranks (List Int)))
+  (Option (List Int))
+  (measure (struct ranks))
+  (match ranks
+    (Nil None)
+    ((Cons rank rest)
+     (match (sk_unrank root grammar rank)
+       ((SkEErr msg) (Some (append_int "audit unrank: " msg)))
+       ((SkEOk candidate)
+        (if (su_covered grammar root sols candidate)
+          (ts_solution_coverage root grammar sols rest)
+          (Some "audit solution escaped every passing region")))))))
+
+(type TsAuditR
+  (TsAuditErr (List Int))
+  (TsAuditSkip)
+  (TsAuditOk Int Int Int Int))
+
+(fn ts_audit
+  ((enabled Bool)
+   (total Int)
+   (found Int)
+   (root Expr)
+   (grammar Grammar)
+   (m Module)
+   (want Type)
+   (ctx InvokeCtx)
+   (screen TeScreen)
+   (probe FnDef)
+   (target Expr)
+   (sols (List (List (Pair Int Int)))))
+  TsAuditR
+  (if enabled
+    (match
+      (te_sweep total total root grammar m want ctx screen probe target Nil 0 0
+        0 Nil)
+      ((TeSweepErr msg) (TsAuditErr msg))
+      ((TeSweepOk _ accepted rejected screened ranks)
+       (if (int_eq found (te_int_len ranks))
+         (match (ts_solution_coverage root grammar sols ranks)
+           ((Some msg) (TsAuditErr msg))
+           (None (TsAuditOk accepted rejected screened (te_int_len ranks))))
+         (TsAuditErr "passing coverage disagrees with exhaustive solutions"))))
+    (TsAuditSkip)))
+
+;; ---- report ----------------------------------------------------------------
+
+(fn ts_audit_report ((audit TsAuditR)) (List Int)
+  (match audit
+    ((TsAuditErr msg) (append_int "AUDIT FAIL " (append_int msg "\n")))
+    ((TsAuditSkip) "AUDIT SKIPPED\n")
+    ((TsAuditOk accepted rejected screened solutions)
+     (te_cat
+       (list
+         "AUDIT ENUMERATIVE AGREEMENT OK ACCEPTED "
+         (show_int accepted)
+         " REJECTED "
+         (show_int rejected)
+         " SCREENED "
+         (show_int screened)
+         " SOLUTIONS "
+         (show_int solutions)
+         "\n")))))
+
+(fn ts_report
+  ((path (List Int))
+   (depth Int)
+   (holes Int)
+   (total Int)
+   (found Int)
+   (killed Int)
+   (regions Int)
+   (forks Int)
+   (steps Int)
+   (best (List Int))
+   (witness Int)
+   (audit TsAuditR))
+  (List Int)
+  (te_cat
+    (list
+      "SUPERPOSED-SEARCH "
+      path
+      "\nDEPTH "
+      (show_int depth)
+      "\nHOLES "
+      (show_int holes)
+      "\nTOTAL "
+      (show_int total)
+      "\nFOUND "
+      (show_int found)
+      "\nKILLED "
+      (show_int killed)
+      "\nREGIONS "
+      (show_int regions)
+      "\nFORKS "
+      (show_int forks)
+      "\nSTEPS "
+      (show_int steps)
+      "\n"
+      best
+      "SOLUTIONS "
+      (show_int found)
+      "\nWITNESS "
+      (show_int witness)
+      "\n"
+      (ts_audit_report audit)
+      "GATES OK\n")))
+
+;; ---- finish gates ----------------------------------------------------------
+
+(fn ts_finish_audit
+  ((path (List Int))
+   (m Module)
+   (want Type)
+   (ctx InvokeCtx)
+   (screen TeScreen)
+   (probe FnDef)
+   (target Expr)
+   (table (List (Pair QName Symbol)))
+   (depth Int)
+   (holes Int)
+   (root Expr)
+   (grammar Grammar)
+   (total Int)
+   (found Int)
+   (killed Int)
+   (regions Int)
+   (forks Int)
+   (steps Int)
+   (sols (List (List (Pair Int Int))))
+   (best_rank Int)
+   (witness_rank Int)
+   (audit_enabled Bool)
+   (w World))
+  World
+  (match
+    (ts_audit audit_enabled total found root grammar m want ctx screen probe
+      target sols)
+    ((TsAuditErr msg) (ts_fail (append_int "audit: " msg) w))
+    (audit
+      (match (te_best table root grammar (Cons best_rank Nil))
+        ((TeBestErr msg) (ts_fail (append_int "best: " msg) w))
+        ((TeBestOk best)
+         (write
+           (ts_report path depth holes total found killed regions forks steps
+             best witness_rank audit)
+           w))))))
+
+(fn ts_finish_witness
+  ((path (List Int))
+   (m Module)
+   (want Type)
+   (ctx InvokeCtx)
+   (screen TeScreen)
+   (probe FnDef)
+   (target Expr)
+   (witness TeWitness)
+   (table (List (Pair QName Symbol)))
+   (depth Int)
+   (holes Int)
+   (root Expr)
+   (grammar Grammar)
+   (total Int)
+   (found Int)
+   (killed Int)
+   (regions Int)
+   (forks Int)
+   (steps Int)
+   (sols (List (List (Pair Int Int))))
+   (best_rank Int)
+   (audit_enabled Bool)
+   (w World))
+  World
+  (match (ts_witness_gate root grammar m want ctx probe target witness sols)
+    ((TsWitnessErr msg) (ts_fail msg w))
+    ((TsWitnessOk witness_rank)
+     (ts_finish_audit path m want ctx screen probe target table depth holes root
+       grammar total found killed regions forks steps sols best_rank
+       witness_rank audit_enabled w))))
+
+(fn ts_finish
+  ((path (List Int))
+   (m Module)
+   (want Type)
+   (ctx InvokeCtx)
+   (screen TeScreen)
+   (probe FnDef)
+   (target Expr)
+   (witness TeWitness)
+   (table (List (Pair QName Symbol)))
+   (depth Int)
+   (holes Int)
+   (root Expr)
+   (grammar Grammar)
+   (total Int)
+   (audit_enabled Bool)
+   (drive SuS)
+   (w World))
+  World
+  (match drive
+    ((SuSErr msg) (ts_fail msg w))
+    ((SuSOk found killed regions forks steps sols)
+     (if (int_eq (+ found killed) total)
+       (match (ts_reps_gate root grammar m want ctx probe target sols -1)
+         ((TsRepErr msg) (ts_fail msg w))
+         ((TsRepOk best_rank)
+          (ts_finish_witness path m want ctx screen probe target witness table
+            depth holes root grammar total found killed regions forks steps sols
+            best_rank audit_enabled w)))
+       (ts_fail
+         (te_cat
+           (list
+             "found + killed != total: found "
+             (show_int found)
+             " killed "
+             (show_int killed)
+             " total "
+             (show_int total)
+             " regions "
+             (show_int regions)
+             " forks "
+             (show_int forks)))
+         w)))))
+
+;; ---- generic typed/superposed drive ---------------------------------------
+
+(fn ts_drive_counted
+  ((path (List Int))
+   (m Module)
+   (want Type)
+   (ctx InvokeCtx)
+   (screen TeScreen)
+   (probe FnDef)
+   (target Expr)
+   (witness TeWitness)
+   (table (List (Pair QName Symbol)))
+   (depth Int)
+   (holes Int)
+   (root Expr)
+   (grammar Grammar)
+   (memo (List (Pair Int Int)))
+   (total Int)
+   (audit Bool)
+   (w World))
+  World
+  (match probe
+    ((FnDef probeq _ _ _)
+     (let
+       ((query (Call probeq (Cons root Nil)))
+        (expected (Ctor (qn (quote Some)) (Cons target Nil))))
+       (ts_finish
+         path
+         m
+         want
+         ctx
+         screen
+         probe
+         target
+         witness
+         table
+         depth
+         holes
+         root
+         grammar
+         total
+         audit
+         (su_drive_query
+           (+ (* 8 total) 1024)
+           m
+           (qn (quote __typed_superpose_data_candidate))
+           root
+           root
+           query
+           expected
+           grammar
+           memo
+           (sa_new)
+           (Cons Nil Nil)
+           0
+           0
+           0
+           0
+           Nil)
+         w)))))
+
+(fn ts_drive_space
+  ((path (List Int))
+   (m Module)
+   (want Type)
+   (ctx InvokeCtx)
+   (screen TeScreen)
+   (probe FnDef)
+   (target Expr)
+   (witness TeWitness)
+   (space TeSpace)
+   (audit Bool)
+   (w World))
+  World
+  (match space
+    ((TeSpace table depth root grammar holes)
+     (match (g_counts grammar)
+       ((GCtErr msg) (ts_fail (append_int "counts: " msg) w))
+       ((GCtOk memo)
+        (match (sk_count root grammar)
+          ((SkCErr msg) (ts_fail (append_int "count: " msg) w))
+          ((SkCOk total)
+           (ts_drive_counted path m want ctx screen probe target witness table
+             depth holes root grammar memo total audit w))))))))
+
+(fn ts_with_witness
+  ((path (List Int))
+   (src (List Int))
+   (m Module)
+   (audit Bool)
+   (ctx InvokeCtx)
+   (screen TeScreen)
+   (probe FnDef)
+   (want Type)
+   (target Expr)
+   (witness TeWitness)
+   (cfg TeCfg)
+   (w World))
+  World
+  (match (te_make_space m want (te_import_ctx m path src) cfg)
+    ((TeSpaceErr msg) (ts_fail msg w))
+    ((TeSpaceOk space)
+     (ts_drive_space path m want ctx screen probe target witness space audit w))))
+
+(fn ts_with_target
+  ((path (List Int))
+   (src (List Int))
+   (m Module)
+   (audit Bool)
+   (ctx InvokeCtx)
+   (screen TeScreen)
+   (probe FnDef)
+   (want Type)
+   (target Expr)
+   (witness_mode TeWitnessFd)
+   (cfg TeCfg)
+   (w World))
+  World
+  (match (te_load_witness ctx witness_mode)
+    ((TeWitnessLoadErr msg) (ts_fail msg w))
+    ((TeWitnessLoadOk witness)
+     (ts_with_witness path src m audit ctx screen probe want target witness cfg
+       w))))
+
+(fn ts_with_screen
+  ((path (List Int))
+   (src (List Int))
+   (m Module)
+   (audit Bool)
+   (ctx InvokeCtx)
+   (probe FnDef)
+   (target_fd FnDef)
+   (witness_mode TeWitnessFd)
+   (want Type)
+   (cfg TeCfg)
+   (screen TeScreen)
+   (w World))
+  World
+  (match (invoke_fd_ctx ctx target_fd Nil)
+    (None (ts_fail "target invocation" w))
+    ((Some target)
+     (ts_with_target path src m audit ctx screen probe want target witness_mode
+       cfg w))))
+
+(fn ts_with_config
+  ((path (List Int))
+   (src (List Int))
+   (m Module)
+   (audit Bool)
+   (ctx InvokeCtx)
+   (probe FnDef)
+   (target_fd FnDef)
+   (witness_mode TeWitnessFd)
+   (want Type)
+   (cfg TeCfg)
+   (w World))
+  World
+  (match (te_screen_sig m want)
+    ((TeScreenSigErr msg) (ts_fail (append_int "protocol: " msg) w))
+    ((TeScreenSigOk screen)
+     (ts_with_screen path src m audit ctx probe target_fd witness_mode want cfg
+       screen w))))
+
+(fn ts_search
+  ((path (List Int)) (src (List Int)) (m Module) (audit Bool) (w World))
+  World
+  (match (te_protocol m)
+    ((TeSigErr msg) (ts_fail (append_int "protocol: " msg) w))
+    ((TeSigOk probe target_fd witness_mode want _)
+     (let ((ctx (prepare_invoke m)))
+       (match (te_config ctx m)
+         ((TeCfgErr msg) (ts_fail (append_int "config: " msg) w))
+         ((TeCfgOk cfg)
+          (ts_with_config path src m audit ctx probe target_fd witness_mode want
+            cfg w)))))))
+
+(fn ts_bytes_eq ((a (List Int)) (b (List Int))) Bool
+  (measure (struct a))
+  (match a
+    (Nil
+      (match b
+        (Nil True)
+        ((Cons _ _) False)))
+    ((Cons x xs)
+     (match b
+       (Nil False)
+       ((Cons y ys) (if (int_eq x y) (ts_bytes_eq xs ys) False))))))
+
+(fn ts_loaded ((path (List Int)) (audit Bool) (m Module) (w World)) World
+  (match (read_file path w)
+    ((Pair osrc w2)
+     (match osrc
+       (None (ts_fail "task source read" w2))
+       ((Some src) (ts_search path src m audit w2))))))
+
+(fn ts_load ((path (List Int)) (audit Bool) (w World)) World
+  (match (load_run_module path w)
+    ((Pair om w2)
+     (match om
+       (None (ts_fail "task module load" w2))
+       ((Some m) (ts_loaded path audit m w2))))))
+
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Pair args w1)
+     (match args
+       ((Cons path Nil) (ts_load path False w1))
+       ((Cons path (Cons mode Nil))
+        (if (ts_bytes_eq mode "audit") (ts_load path True w1)
+        (exit 2 (write "usage: typed_superpose TASK.shard [audit]\n" w1))))
+       (_ (exit 2 (write "usage: typed_superpose TASK.shard [audit]\n" w1)))))))
