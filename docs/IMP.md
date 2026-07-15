@@ -1703,6 +1703,63 @@ translator growth it required, and the two generated tiers.
   statement-generic; the denotation tier is what specializes), then
   I2e (./sha256sum).
 
+**V2-5e — il_wlen landed, the x86 denotation flip (the loop tier is
+FULL on both targets).** Two commits: the model fact, then the
+consumer.
+
+- **The length-preservation family (models/imp/imp.shard grows its
+  first claims).** The statement engines never change the locals
+  arity. Stated EXTRACTOR-STYLE: total unwrappers `ollen`/`iolen`
+  read a length out of a result Option (defaulting to n on
+  None/ITrap), so every lemma is an UNPREMISED equation — no
+  constructor inversion at consumers, no premised claims; a consumer
+  rewrites its in-scope hyp into the extractor term and computes.
+- **The mutual-SCC knot resolves with zero mutual citation.** The
+  wrapper equivalences `il_s2s`/`il_w2s` spell one statement (a loop)
+  as its singleton list at fuel+2 — the extra units feed exactly the
+  peels and the Nil tail (case-on + computes, NO induction). That
+  makes `il_slen` (istmts) the ONE induction: subterm-induct on fuel
+  (strong IH along the structural subterm order — its first use on a
+  Nat), statement dispatch INLINED, the IWhile arm reaching the
+  loop's self-recursion by rewriting `(iwhile f4 …)` to its il_w2s
+  spelling at `(S (S f4))`, strictly below `fuel = (S (S (S f4)))`.
+  `il_s1len`/`il_wlen` then fall out one-directionally.
+- **Kernel empirics (probed first, then spent):** subterm-induct
+  accepts a Nat subject; `(below)` chases case-on hyp equations to
+  depth 2 (vars AND ctor terms) but NOT depth 3 — a deep cite either
+  folds the fuel spelling back up before citing (exit/tail arms) or
+  rewrites the below-obligation fully syntactic inside the
+  rewrite-with DISCHARGE sub-proof (`((steps ((rewrite (hyp F) lr
+  lhs true ()) …) (below))`) — the discharge runs in the same
+  sequent, so hyp indices carry over.
+- **The flip (impgen's x86 leg emits full denotations).** lp_spine
+  splits by target: the x86 walker (`lpx_spine`) case-ons the exit
+  locals to the twin's FULL ARITY nl2 (ix_out's xargs rebuild needs
+  the whole register file — wasm still stops at the result depth).
+  Arms: Nil BELOW the result local → the imp result extraction
+  computes None, absurd against the Some premise; Nil at/above it →
+  refl (xargs zero-fills the missing homes and the result home is
+  filled — the vacuous arms are TRUE, not just unreachable); Nil at
+  depth nl2 → the true exit (xargs grounds to the register file);
+  Cons at depth nl2 → the overlong tail, refuted by il_wlen +
+  ilen_nonneg: three transport haves (hbad via the lemma, hlen via
+  compute, hg chaining them — the lemma-across-computation dance),
+  the spine-expanded length (hs, an unfold/reduce ladder), and a
+  farkas absurd whose cert is CONSTANT across programs —
+  `(rows (goal 1) (hg -1) (hs 1) (hnn 1))`, since NL2 − nl2 − 1 = −1
+  at every arity. `(absurd …)` closes on `(le 0 0) = False` directly
+  (absurd simps both sides; ground calls reduce, True/False clash).
+- Gates: imp.shard 59/0 + all 15 importers re-checked green;
+  the regenerated x86 loop out 442/0 — EVERY generated denotation
+  (fill/sum/dblq incl. sum's absurd-flavor arms and the U64 tier)
+  first-try after one hand probe; regen deterministic at the sibling
+  raw path; wasm + scalar outs BYTE-STABLE under the modified tool;
+  driver 60 green; corpus FAIL-set identical.
+- NEXT: the sha statement-level legs (istmts ≈ eval_seq bridges over
+  the sibling's ish_wk_* pinned bodies, both targets; phase-structured
+  emission is the named mitigation if whole-body kernel time bites),
+  then I2e (./sha256sum).
+
 ## 7. Non-goals, stated once
 
 - imp as a shipped target or public surface — it is an intermediate;

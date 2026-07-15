@@ -1655,6 +1655,134 @@
      (dconc
        (list (DStr "(list") (lp_banded_go pks 0) (lp_zeros_go nx) (DStr ")"))))))
 
+;; --- the x86 exit-spine walker (the il_wlen consumer) -----------------------------
+
+;; ix_out rebuilds the exit register file via xargs, whose computation
+;; needs the exit-locals SPINE to the twin's FULL arity — so the x86
+;; INorm arm case-ons all nl2+1 levels (wasm's iw_out carries locals
+;; opaquely and stops at the result local's depth). Arms:
+;;   Nil below the result local  -> the imp result extraction traps,
+;;                                  contradicting the Some premise
+;;   Nil at/above it             -> refl (xargs zero-fills the missing
+;;                                  homes; the result home is filled)
+;;   Nil at depth nl2            -> the true exit (xargs grounds)
+;;   Cons at depth nl2           -> overlong tail, refuted via il_wlen
+;;                                  + ilen_nonneg farkas (cert constant:
+;;                                  NL2 - nl2 - 1 = -1 at every arity)
+
+;; the case-on scrutinee at depth v
+(fn lpx_scrut ((v Int)) Doc
+  (if (int_eq v 0) (DStr "lc2") (dcat3 (DStr "r") (dint (- v 1)) (DStr ""))))
+
+;; spine rewrites (hyp j) down to (hyp 0), on the given side
+(fn lpx_sprw ((j Int) (side (List Int))) Doc
+  (measure (+ j 1) (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt j 0)
+    (DStr "")
+    (dconc
+      (list
+        (DStr " (rewrite (hyp ")
+        (dint j)
+        (DStr ") lr ")
+        (DStr side)
+        (DStr " true ())")
+        (lpx_sprw (- j 1) side)))))
+
+;; right-nested (+ 1 (+ 1 ... (ilen rN))) with n +1-levels
+(fn lpx_sum ((n Int) (rn Doc)) Doc
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt n 1)
+    (dcat3 (DStr "(ilen ") rn (DStr ")"))
+    (dcat3 (DStr "(+ 1 ") (lpx_sum (- n 1) rn) (DStr ")"))))
+
+;; n unfold/reduce pairs peeling ilen down a concrete spine
+(fn lpx_unf ((n Int)) Doc
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt n 1)
+    (DStr "")
+    (dcat3 (DStr " (unfold ilen lhs) (reduce lhs)") (DStr "") (lpx_unf (- n 1)))))
+
+;; the absurd-flavor Nil arm at depth v: rebuild the premise's imp run
+;; through the case-on hyps until the result extraction computes None
+(fn lpx_nilabs ((v Int) (dstops Doc) (stops2 Doc)) Doc
+  (dconc
+    (list
+      (DStr
+        "(chain (have hn (= None (Some r)) (steps ((rewrite (premise 0) rl rhs true ()) (compute rhs ")
+      dstops
+      (DStr ") (rewrite (hyp ")
+      (dint (+ v 2))
+      (DStr ") lr rhs true ()) (compute rhs ")
+      stops2
+      (DStr ") (rewrite (hyp ")
+      (dint (+ v 1))
+      (DStr ") lr rhs true ()) (compute rhs ")
+      stops2
+      (DStr ")")
+      (lpx_sprw v "rhs")
+      (DStr " (compute rhs)) refl)) (absurd (premise hn)))"))))
+
+;; the refl-flavor Nil arm (and the depth-nl2 true exit)
+(fn lpx_nilref () Doc
+  (DStr
+    "(chain (steps ((rewrite (hyp 0) lr both true ()) (compute both))) refl)"))
+
+;; the overlong-tail refutation arm at depth nl2 (binders e<nl2> r<nl2>)
+(fn lpx_ref ((nl2 Int) (entry Doc)) Doc
+  (let ((rn (dcat3 (DStr "r") (dint nl2) (DStr ""))))
+    (dconc
+      (list
+        (DStr "(chain (have hbad (= (iolen (ilen ")
+        entry
+        (DStr ") (Some (INorm lc2 m2))) ")
+        (dint nl2)
+        (DStr ") (chain (steps ((rewrite (hyp ")
+        (dint (+ nl2 1))
+        (DStr ") rl lhs true ()) (rewrite (hyp ")
+        (dint (+ nl2 2))
+        (DStr
+          ") rl lhs true ()))) (rewrite-with (lemma il_wlen) lr lhs () ()) (steps ((compute lhs))) refl)) (have hlen (= (iolen (ilen ")
+        entry
+        (DStr
+          ") (Some (INorm lc2 m2))) (ilen lc2)) (steps ((compute both)) refl)) (have hg (= (ilen lc2) ")
+        (dint nl2)
+        (DStr
+          ") (steps ((rewrite (premise hlen) rl lhs true ()) (rewrite (premise hbad) lr lhs true ())) refl)) (have hs (= (ilen lc2) ")
+        (lpx_sum (+ nl2 1) rn)
+        (DStr ") (steps (")
+        (lpx_sprw nl2 "lhs")
+        (lpx_unf (+ nl2 1))
+        (DStr ") refl)) (have hnn (= (le 0 (ilen ")
+        rn
+        (DStr
+          ")) True) (chain (rewrite-with (lemma ilen_nonneg) lr lhs () ()) refl)) (have hff (= (le 0 0) False) (steps () (by arith (rows (goal 1) (hg -1) (hs 1) (hnn 1))))) (absurd (premise hff)))")))))
+
+;; the walker: case-on levels 0..nl2
+(fn lpx_spine
+  ((v Int) (nl2 Int) (rdepth Int) (dstops Doc) (stops2 Doc) (entry Doc))
+  Doc
+  (measure (- (+ nl2 1) v) (by arith (list 1 0)) (by arith (list 1 1)))
+  (dconc
+    (list
+      (DStr "(case-on ")
+      (lpx_scrut v)
+      (DStr " List ((case Nil ")
+      (if (lt v rdepth) (lpx_nilabs v dstops stops2) (lpx_nilref))
+      (DStr ") (case Cons (e")
+      (dint v)
+      (DStr " r")
+      (dint v)
+      (DStr ") ")
+      (if (lt v nl2)
+        (dconc
+          (list
+            (DStr
+              "(chain (steps ((rewrite (hyp 0) lr both true ()) (compute both))) ")
+            (lpx_spine (+ v 1) nl2 rdepth dstops stops2 entry)
+            (DStr ")")))
+        (lpx_ref nl2 entry))
+      (DStr ")))"))))
+
 ;; --- the loop-pin generator -------------------------------------------------------
 
 (fn lp_gen
@@ -1807,6 +1935,9 @@
                           (sc2 (quote int_eq) (FVar (xsym gi)) (IntLit 0)))
                         0))
                     (mstop (DStr (if x86 "(stop xlg_fuel)" "(stop lg_fuel)")))
+                    (stops2
+                      (DStr
+                        (if x86 "(stop lg_fuel xlg_fuel)" "(stop lg_fuel)")))
                     (mfuel (DStr (if x86 "xlg_fuel" "lg_fuel")))
                     (mloop (DStr (if x86 "xeval_loop" "eval_loop"))))
                    (let
@@ -1875,7 +2006,8 @@
                               (dint msz)
                               (DStr ")")))))
                       (fscope (gsp_snoc_all guard (gs_index fsplits 1)))
-                      (bscope (gsp_snoc_all guard (gs_index bsplits 1))))
+                      (bscope (gsp_snoc_all guard (gs_index bsplits 1)))
+                      (entry (lp_banded (ikparams_of ifn) (- nl2 np))))
                      (let
                        ((worker
                          (dconc
@@ -1965,7 +2097,7 @@
                               (DStr " (inline gb_")
                               (DStr nm)
                               (DStr "_i) ")
-                              (lp_banded (ikparams_of ifn) (- nl2 np))
+                              entry
                               (DStr " m0)"))))
                         (dstops
                           (DStr
@@ -2012,31 +2144,27 @@
                                (DStr (if x86 "ixwg_" "iwg_"))
                                (DStr nm)
                                (DStr
-                                 ") lr lhs ((inst o o)) ((steps ((rewrite (hyp 0) lr lhs true ())) refl))) (steps ((rewrite (hyp 0) lr rhs true ()) (compute both (stop lg_fuel)))) (case-on o IOut ((case INorm (lc2 m2) (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both))) ")
-                               (lp_spine rdepth 0)
+                                 ") lr lhs ((inst o o)) ((steps ((rewrite (hyp 0) lr lhs true ())) refl))) (steps ((rewrite (hyp 0) lr rhs true ()) (compute both ")
+                               stops2
+                               (DStr
+                                 "))) (case-on o IOut ((case INorm (lc2 m2) (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both))) ")
+                               (if x86
+                                 (lpx_spine 0 nl2 rdepth dstops stops2 entry)
+                                 (lp_spine rdepth 0))
                                (DStr
                                  ")) (case ITrap (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both))) refl)))))))))")
                                (DStr ")")
                                (DStr (nl))
                                (DStr (nl))))))
-                         (let
-                           ((denot
-                             (if x86
-                               (dcat3
-                                 (DStr ";; ")
-                                 (dsym pin)
-                                 (DStr
-                                   ": worker only (the x86 denotation pends il_wlen -- ix_out's xargs rebuild needs the exit-locals arity; the iwhile length-preservation lemma is the named joint)"))
-                               denot0)))
-                           (EOk
-                             (dconc
-                               (list
-                                 gbi
-                                 gbw
-                                 worker
-                                 denot
-                                 (DStr (nl))
-                                 (DStr (nl)))))))))))))))))))))
+                         (EOk
+                           (dconc
+                             (list
+                               gbi
+                               gbw
+                               worker
+                               denot0
+                               (DStr (nl))
+                               (DStr (nl))))))))))))))))))))
 
 ;; prepend one element (the guard) to an indexed split list
 (fn gsp_snoc_all
