@@ -321,6 +321,7 @@ TARGETS=(
   tools/search/tasks/typed_wasm_add1.shard
   tools/search/tasks/typed_x86_calculator.shard
   tools/search/tasks/typed_x86_calculator4.shard
+  tools/search/tasks/typed_append_value.shard
   tools/search/gen/imp_add1_refinement.shard
   tools/search/gen/imp_mix_refinement.shard
   tools/search/gen/x86_calculator_refinement.shard
@@ -447,6 +448,16 @@ if [ -x bin/shard_eval ]; then
   # endpoint. The identical generic profile also rewrites symbolic neutrals and
   # re-enters on nested calls produced by a theorem RHS.
   bin/shard_eval run tools/search/theorem_scope_probe.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+echo "=== search: theorem-filtered dynamic superposition pin ==="
+if [ -x bin/shard_eval ]; then
+  # Four checked append requirements quotient 210,066,388,900 raw depth-5
+  # expressions to 63 normal forms before narrowing; the audit enumerates only
+  # that filtered rank space and agrees on its unique target.
+  bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_append_value.shard audit
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi

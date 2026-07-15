@@ -5,6 +5,9 @@
 ;;; only when it demands an open hole; a mismatch kills the whole consistent
 ;;; subspace and unconsulted holes in a passing region are don't-cares.
 ;;; Exhaustive enumeration is available only as an agreement audit.
+;;; An optional explicit `search_canon_profile` is authenticated against the
+;;; task's CHECK closure and projected into generation-time formation filters;
+;;; theorem-redex spellings never enter the ranked search space.
 ;;;
 ;;; RUN IT:
 ;;;   bin/shard_eval run tools/search/typed_superpose.shard TASK.shard
@@ -19,11 +22,13 @@
 (import "../../meta/sketch")
 (import "../../meta/invoke")
 (import "../../meta/invoke/prepared.shard")
+(import "../../meta/rewrite")
 (import "../../meta/spell")
 (import "typed_expr.shard")
 (import "superpose.shard")
 (use (:: kernel term *))
 (use (:: kernel module *))
+(use (:: kernel reader RCtx))
 (use (:: kernel loader World))
 (use (:: kernel loader read_file))
 (use (:: kernel loader get_args))
@@ -32,6 +37,7 @@
 (use (:: meta sketch *))
 (use (:: meta invoke *))
 (use (:: meta invoke prepared *))
+(use (:: meta rewrite *))
 (use (:: meta spell *))
 (use (:: tools search typed_expr *))
 (use (:: tools search superpose *))
@@ -188,6 +194,8 @@
 
 ;; ---- report ----------------------------------------------------------------
 
+(type TsPressure (TsPressure Int Int))  ; checked rule count, raw grammar count
+
 (fn ts_audit_report ((audit TsAuditR)) (List Int)
   (match audit
     ((TsAuditErr msg) (append_int "AUDIT FAIL " (append_int msg "\n")))
@@ -217,37 +225,46 @@
    (steps Int)
    (best (List Int))
    (witness Int)
+   (pressure TsPressure)
    (audit TsAuditR))
   (List Int)
-  (te_cat
-    (list
-      "SUPERPOSED-SEARCH "
-      path
-      "\nDEPTH "
-      (show_int depth)
-      "\nHOLES "
-      (show_int holes)
-      "\nTOTAL "
-      (show_int total)
-      "\nFOUND "
-      (show_int found)
-      "\nKILLED "
-      (show_int killed)
-      "\nREGIONS "
-      (show_int regions)
-      "\nFORKS "
-      (show_int forks)
-      "\nSTEPS "
-      (show_int steps)
-      "\n"
-      best
-      "SOLUTIONS "
-      (show_int found)
-      "\nWITNESS "
-      (show_int witness)
-      "\n"
-      (ts_audit_report audit)
-      "GATES OK\n")))
+  (match pressure
+    ((TsPressure rules raw)
+     (te_cat
+       (list
+         "SUPERPOSED-SEARCH "
+         path
+         "\nDEPTH "
+         (show_int depth)
+         "\nHOLES "
+         (show_int holes)
+         "\nCANON RULES "
+         (show_int rules)
+         "\nRAW "
+         (show_int raw)
+         "\nREMOVED "
+         (show_int (- raw total))
+         "\nTOTAL "
+         (show_int total)
+         "\nFOUND "
+         (show_int found)
+         "\nKILLED "
+         (show_int killed)
+         "\nREGIONS "
+         (show_int regions)
+         "\nFORKS "
+         (show_int forks)
+         "\nSTEPS "
+         (show_int steps)
+         "\n"
+         best
+         "SOLUTIONS "
+         (show_int found)
+         "\nWITNESS "
+         (show_int witness)
+         "\n"
+         (ts_audit_report audit)
+         "GATES OK\n")))))
 
 ;; ---- finish gates ----------------------------------------------------------
 
@@ -273,6 +290,7 @@
    (sols (List (List (Pair Int Int))))
    (best_rank Int)
    (witness_rank Int)
+   (pressure TsPressure)
    (audit_enabled Bool)
    (w World))
   World
@@ -286,7 +304,7 @@
         ((TeBestOk best)
          (write
            (ts_report path depth holes total found killed regions forks steps
-             best witness_rank audit)
+             best witness_rank pressure audit)
            w))))))
 
 (fn ts_finish_witness
@@ -311,6 +329,7 @@
    (steps Int)
    (sols (List (List (Pair Int Int))))
    (best_rank Int)
+   (pressure TsPressure)
    (audit_enabled Bool)
    (w World))
   World
@@ -319,7 +338,7 @@
     ((TsWitnessOk witness_rank)
      (ts_finish_audit path m want ctx screen probe target table depth holes root
        grammar total found killed regions forks steps sols best_rank
-       witness_rank audit_enabled w))))
+       witness_rank pressure audit_enabled w))))
 
 (fn ts_finish
   ((path (List Int))
@@ -336,6 +355,7 @@
    (root Expr)
    (grammar Grammar)
    (total Int)
+   (pressure TsPressure)
    (audit_enabled Bool)
    (drive SuS)
    (w World))
@@ -349,7 +369,7 @@
          ((TsRepOk best_rank)
           (ts_finish_witness path m want ctx screen probe target witness table
             depth holes root grammar total found killed regions forks steps sols
-            best_rank audit_enabled w)))
+            best_rank pressure audit_enabled w)))
        (ts_fail
          (te_cat
            (list
@@ -383,6 +403,7 @@
    (grammar Grammar)
    (memo (List (Pair Int Int)))
    (total Int)
+   (pressure TsPressure)
    (audit Bool)
    (w World))
   World
@@ -406,6 +427,7 @@
          root
          grammar
          total
+         pressure
          audit
          (su_drive_query
            (+ (* 8 total) 1024)
@@ -436,6 +458,7 @@
    (target Expr)
    (witness TeWitness)
    (space TeSpace)
+   (pressure TsPressure)
    (audit Bool)
    (w World))
   World
@@ -447,8 +470,70 @@
         (match (sk_count root grammar)
           ((SkCErr msg) (ts_fail (append_int "count: " msg) w))
           ((SkCOk total)
-           (ts_drive_counted path m want ctx screen probe target witness table
-             depth holes root grammar memo total audit w))))))))
+           (match pressure
+             ((TsPressure rules raw)
+              (ts_drive_counted
+                path
+                m
+                want
+                ctx
+                screen
+                probe
+                target
+                witness
+                table
+                depth
+                holes
+                root
+                grammar
+                memo
+                total
+                (TsPressure rules (if (lt raw 0) total raw))
+                audit
+                w))))))))))
+
+(type TsCountR (TsCountErr (List Int)) (TsCountOk Int))
+
+(fn ts_space_count ((space TeSpace)) TsCountR
+  (match space
+    ((TeSpace _ _ root grammar _)
+     (match (sk_count root grammar)
+       ((SkCErr msg) (TsCountErr msg))
+       ((SkCOk total) (TsCountOk total))))))
+
+(fn ts_with_filtered
+  ((path (List Int))
+   (m Module)
+   (audit Bool)
+   (ctx InvokeCtx)
+   (screen TeScreen)
+   (probe FnDef)
+   (want Type)
+   (target Expr)
+   (witness TeWitness)
+   (scope RCtx)
+   (cfg TeCfg)
+   (formation TrsFormation)
+   (rules Int)
+   (raw_total Int)
+   (w World))
+  World
+  (match (te_make_space_formation m want scope cfg formation)
+    ((TeSpaceErr msg) (ts_fail msg w))
+    ((TeSpaceOk space)
+     (ts_drive_space
+       path
+       m
+       want
+       ctx
+       screen
+       probe
+       target
+       witness
+       space
+       (TsPressure rules raw_total)
+       audit
+       w))))
 
 (fn ts_with_witness
   ((path (List Int))
@@ -462,12 +547,23 @@
    (target Expr)
    (witness TeWitness)
    (cfg TeCfg)
+   (canon TeCanon)
    (w World))
   World
-  (match (te_make_space m want (te_import_ctx m path src) cfg)
-    ((TeSpaceErr msg) (ts_fail msg w))
-    ((TeSpaceOk space)
-     (ts_drive_space path m want ctx screen probe target witness space audit w))))
+  (let ((scope (te_import_ctx m path src)))
+    (match canon
+      ((TeCanon _ formation rules)
+       (if (lt rules 1)
+         (ts_with_filtered path m audit ctx screen probe want target witness
+           scope cfg formation rules -1 w)
+         (match (te_make_space m want scope cfg)
+           ((TeSpaceErr msg) (ts_fail (append_int "raw: " msg) w))
+           ((TeSpaceOk raw_space)
+            (match (ts_space_count raw_space)
+              ((TsCountErr msg) (ts_fail (append_int "raw count: " msg) w))
+              ((TsCountOk raw_total)
+               (ts_with_filtered path m audit ctx screen probe want target
+                 witness scope cfg formation rules raw_total w))))))))))
 
 (fn ts_with_target
   ((path (List Int))
@@ -481,13 +577,14 @@
    (target Expr)
    (witness_mode TeWitnessFd)
    (cfg TeCfg)
+   (canon TeCanon)
    (w World))
   World
   (match (te_load_witness ctx witness_mode)
     ((TeWitnessLoadErr msg) (ts_fail msg w))
     ((TeWitnessLoadOk witness)
      (ts_with_witness path src m audit ctx screen probe want target witness cfg
-       w))))
+       canon w))))
 
 (fn ts_with_screen
   ((path (List Int))
@@ -501,13 +598,14 @@
    (want Type)
    (cfg TeCfg)
    (screen TeScreen)
+   (canon TeCanon)
    (w World))
   World
   (match (invoke_fd_ctx ctx target_fd Nil)
     (None (ts_fail "target invocation" w))
     ((Some target)
      (ts_with_target path src m audit ctx screen probe want target witness_mode
-       cfg w))))
+       cfg canon w))))
 
 (fn ts_with_config
   ((path (List Int))
@@ -520,13 +618,36 @@
    (witness_mode TeWitnessFd)
    (want Type)
    (cfg TeCfg)
+   (canon TeCanon)
    (w World))
   World
   (match (te_screen_sig m want)
     ((TeScreenSigErr msg) (ts_fail (append_int "protocol: " msg) w))
     ((TeScreenSigOk screen)
      (ts_with_screen path src m audit ctx probe target_fd witness_mode want cfg
-       screen w))))
+       screen canon w))))
+
+(fn ts_with_canon
+  ((path (List Int))
+   (src (List Int))
+   (m Module)
+   (audit Bool)
+   (ctx InvokeCtx)
+   (probe FnDef)
+   (target_fd FnDef)
+   (witness_mode TeWitnessFd)
+   (want Type)
+   (cfg TeCfg)
+   (names (List Symbol))
+   (w World))
+  World
+  (match (te_load_canon path names w)
+    ((Pair result w2)
+     (match result
+       ((TeCanonErr msg) (ts_fail (append_int "canon: " msg) w2))
+       ((TeCanonOk canon)
+        (ts_with_config path src m audit ctx probe target_fd witness_mode want
+          cfg canon w2))))))
 
 (fn ts_search
   ((path (List Int)) (src (List Int)) (m Module) (audit Bool) (w World))
@@ -538,8 +659,11 @@
        (match (te_config ctx m)
          ((TeCfgErr msg) (ts_fail (append_int "config: " msg) w))
          ((TeCfgOk cfg)
-          (ts_with_config path src m audit ctx probe target_fd witness_mode want
-            cfg w)))))))
+          (match (te_canon_names ctx m)
+            ((TeCanonNamesErr msg) (ts_fail (append_int "protocol: " msg) w))
+            ((TeCanonNamesOk names)
+             (ts_with_canon path src m audit ctx probe target_fd witness_mode
+               want cfg names w)))))))))
 
 (fn ts_bytes_eq ((a (List Int)) (b (List Int))) Bool
   (measure (struct a))

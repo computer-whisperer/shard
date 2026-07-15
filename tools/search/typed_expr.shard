@@ -35,6 +35,7 @@
 ;;;   search_ints    : () -> List Int
 ;;;   search_symbols : () -> List Symbol
 ;;;   search_depth   : () -> Int
+;;;   search_canon_profile : () -> List Symbol  ; optional checked equations
 ;;;   search_screen  : Candidate -> Bool       ; optional census accelerator
 ;;;   search_probe   : Candidate -> Option Observation
 ;;;   search_target  : () -> Observation
@@ -54,7 +55,9 @@
 (import "../../meta/sketch")
 (import "../../meta/invoke")
 (import "../../meta/invoke/prepared.shard")
+(import "../../meta/rewrite")
 (import "../../meta/spell")
+(import "checked_profile.shard")
 (import "typed_grammar.shard")
 (use (:: kernel term *))
 (use (:: kernel module *))
@@ -68,7 +71,9 @@
 (use (:: meta sketch *))
 (use (:: meta invoke *))
 (use (:: meta invoke prepared *))
+(use (:: meta rewrite *))
 (use (:: meta spell *))
+(use (:: tools search checked_profile *))
 (use (:: tools search typed_grammar *))
 
 ;; ---- task configuration -----------------------------------------------------
@@ -435,6 +440,66 @@
        (None (TeCfgErr "search_depth is not Int"))
        ((Some depth) (te_config_depth ctx m depth))))))
 
+;; ---- explicit theorem-backed formation profile ----------------------------
+
+;; Canon selection is explicit and ordered.  Absence means no theorem
+;; quotient; a task cannot acquire every theorem in an imported closure by
+;; accident.  Authenticity is checked later against the task's CHECK closure.
+(type TeCanonNamesR (TeCanonNamesErr (List Int)) (TeCanonNamesOk (List Symbol)))
+
+(fn te_canon_names_ty () Type
+  (TCon (qn (quote List)) (Cons (TCon (qn (quote Symbol)) Nil) Nil)))
+
+(fn te_canon_names_fd ((ctx InvokeCtx) (fd FnDef)) TeCanonNamesR
+  (match fd
+    ((FnDef _ params ret _)
+     (match params
+       ((Cons _ _)
+        (TeCanonNamesErr "search_canon_profile must take no arguments"))
+       (Nil
+         (if (type_eq ret (te_canon_names_ty))
+           (match (invoke_fd_ctx ctx fd Nil)
+             (None (TeCanonNamesErr "search_canon_profile invocation failed"))
+             ((Some value)
+              (match (te_symbols value)
+                (None
+                  (TeCanonNamesErr "search_canon_profile is not a List Symbol"))
+                ((Some names) (TeCanonNamesOk names)))))
+           (TeCanonNamesErr "search_canon_profile must return List Symbol")))))))
+
+(fn te_canon_names ((ctx InvokeCtx) (m Module)) TeCanonNamesR
+  (match (find_fn (quote search_canon_profile) m)
+    (None (TeCanonNamesOk Nil))
+    ((Some fd) (te_canon_names_fd ctx fd))))
+
+(fn te_symbol_len ((xs (List Symbol))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (te_symbol_len rest)))))
+
+(type TeCanon (TeCanon TrsProfile TrsFormation Int))  ; authenticated profile, formation, rule count
+
+(type TeCanonR (TeCanonErr (List Int)) (TeCanonOk TeCanon))
+
+(fn te_canon_from_profile ((profile TrsProfile) (rules Int)) TeCanonR
+  (match (trs_formation profile)
+    ((TrsFormationErr msg) (TeCanonErr msg))
+    ((TrsFormationOk formation) (TeCanonOk (TeCanon profile formation rules)))))
+
+(fn te_load_canon ((path (List Int)) (names (List Symbol)) (w World))
+  (Pair TeCanonR World)
+  (match names
+    (Nil
+      (Pair (TeCanonOk (TeCanon (trs_empty_profile) (trs_empty_formation) 0)) w))
+    ((Cons _ _)
+     (match (tg_load_checked_profile path names w)
+       ((Pair result w2)
+        (match result
+          ((TgCheckedProfileErr msg) (Pair (TeCanonErr msg) w2))
+          ((TgCheckedProfileOk profile)
+           (Pair (te_canon_from_profile profile (te_symbol_len names)) w2))))))))
+
 ;; ---- root file's candidate scope -------------------------------------------
 
 ;; Only explicit bare item uses become candidate heads.  Module aliases stay
@@ -778,6 +843,8 @@
   ((path (List Int))
    (depth Int)
    (holes Int)
+   (canon_rules Int)
+   (raw_total Int)
    (total Int)
    (accepted Int)
    (rejected Int)
@@ -795,6 +862,12 @@
       (show_int depth)
       "\nHOLES "
       (show_int holes)
+      "\nCANON RULES "
+      (show_int canon_rules)
+      "\nRAW "
+      (show_int raw_total)
+      "\nREMOVED "
+      (show_int (- raw_total total))
       "\nGENERATED "
       (show_int total)
       "\nACCEPTED "
@@ -831,34 +904,62 @@
    (scope RCtx)
    (depth Int)
    (atoms (List TgAtom))
-   (forms TeFormCfg))
+   (forms TeFormCfg)
+   (formation TrsFormation))
   TeSpaceR
   (match forms
     ((TeFormCfg ctors calls ifs)
      (let
        ((heads (tg_scope_heads m scope ctors calls))
         (table (tg_scope_table scope)))
-       (match (tg_build m heads atoms Nil Nil want depth (TgForms ifs))
+       (match
+         (tg_build_env_formation
+           m
+           (TgEnv
+             (Cons
+               (TgZone
+                 (tg_default_zone)
+                 heads
+                 atoms
+                 (tg_form_rules (TgForms ifs))
+                 Nil)
+               Nil))
+           Nil
+           want
+           depth
+           (tg_default_zone)
+           formation)
          ((TgBuildErr msg) (TeSpaceErr (append_int "grammar: " msg)))
          ((TgBuildOk root grammar holes)
           (TeSpaceOk (TeSpace table depth root grammar holes))))))))
 
 (fn te_make_scoped_space
-  ((m Module) (want Type) (scope RCtx) (depth Int) (spec TgScopeEnv))
+  ((m Module)
+   (want Type)
+   (scope RCtx)
+   (depth Int)
+   (spec TgScopeEnv)
+   (formation TrsFormation))
   TeSpaceR
   (match (tg_resolve_scope_env m scope spec)
     ((TgScopeErr msg) (TeSpaceErr (append_int "scope: " msg)))
     ((TgScopeOk env root_zone)
-     (match (tg_build_env m env Nil want depth root_zone)
+     (match (tg_build_env_formation m env Nil want depth root_zone formation)
        ((TgBuildErr msg) (TeSpaceErr (append_int "grammar: " msg)))
        ((TgBuildOk root grammar holes)
         (TeSpaceOk (TeSpace (tg_scope_table scope) depth root grammar holes)))))))
 
-(fn te_make_space ((m Module) (want Type) (scope RCtx) (cfg TeCfg)) TeSpaceR
+(fn te_make_space_formation
+  ((m Module) (want Type) (scope RCtx) (cfg TeCfg) (formation TrsFormation))
+  TeSpaceR
   (match cfg
     ((TeCfgFlat depth atoms forms)
-     (te_make_flat_space m want scope depth atoms forms))
-    ((TeCfgScoped depth spec) (te_make_scoped_space m want scope depth spec))))
+     (te_make_flat_space m want scope depth atoms forms formation))
+    ((TeCfgScoped depth spec)
+     (te_make_scoped_space m want scope depth spec formation))))
+
+(fn te_make_space ((m Module) (want Type) (scope RCtx) (cfg TeCfg)) TeSpaceR
+  (te_make_space_formation m want scope cfg (trs_empty_formation)))
 
 (fn te_run_space
   ((path (List Int))
@@ -874,6 +975,8 @@
    (root Expr)
    (grammar Grammar)
    (holes Int)
+   (canon_rules Int)
+   (raw_total Int)
    (w World))
   World
   (match (sk_count root grammar)
@@ -897,6 +1000,8 @@
                   path
                   depth
                   holes
+                  canon_rules
+                  (if (lt raw_total 0) total raw_total)
                   total
                   accepted
                   rejected
@@ -906,6 +1011,37 @@
                   (te_int_len solutions)
                   witness_rank)
                 w))))))))))
+
+(fn te_build_filtered
+  ((path (List Int))
+   (m Module)
+   (want Type)
+   (ictx InvokeCtx)
+   (screen TeScreen)
+   (probe FnDef)
+   (target Expr)
+   (witness TeWitness)
+   (scope RCtx)
+   (cfg TeCfg)
+   (formation TrsFormation)
+   (canon_rules Int)
+   (raw_total Int)
+   (w World))
+  World
+  (match (te_make_space_formation m want scope cfg formation)
+    ((TeSpaceErr msg) (te_fail msg w))
+    ((TeSpaceOk (TeSpace table depth root grammar holes))
+     (te_run_space path m want ictx screen probe target witness table depth root
+       grammar holes canon_rules raw_total w))))
+
+(type TeCountR (TeCountErr (List Int)) (TeCountOk Int))
+
+(fn te_space_count ((space TeSpace)) TeCountR
+  (match space
+    ((TeSpace _ _ root grammar _)
+     (match (sk_count root grammar)
+       ((SkCErr msg) (TeCountErr msg))
+       ((SkCOk total) (TeCountOk total))))))
 
 (fn te_build_space
   ((path (List Int))
@@ -918,13 +1054,68 @@
    (witness TeWitness)
    (scope RCtx)
    (cfg TeCfg)
+   (canon TeCanon)
    (w World))
   World
-  (match (te_make_space m want scope cfg)
-    ((TeSpaceErr msg) (te_fail msg w))
-    ((TeSpaceOk (TeSpace table depth root grammar holes))
-     (te_run_space path m want ictx screen probe target witness table depth root
-       grammar holes w))))
+  (match canon
+    ((TeCanon _ formation rules)
+     (if (lt rules 1)
+       (te_build_filtered path m want ictx screen probe target witness scope cfg
+         formation rules -1 w)
+       (match (te_make_space m want scope cfg)
+         ((TeSpaceErr msg) (te_fail (append_int "raw: " msg) w))
+         ((TeSpaceOk raw_space)
+          (match (te_space_count raw_space)
+            ((TeCountErr msg) (te_fail (append_int "raw count: " msg) w))
+            ((TeCountOk raw_total)
+             (te_build_filtered path m want ictx screen probe target witness
+               scope cfg formation rules raw_total w)))))))))
+
+(fn te_search_ready
+  ((path (List Int))
+   (m Module)
+   (want Type)
+   (ictx InvokeCtx)
+   (scope RCtx)
+   (probe FnDef)
+   (target_fd FnDef)
+   (witness_mode TeWitnessFd)
+   (search_cfg TeCfg)
+   (canon TeCanon)
+   (w World))
+  World
+  (match (te_screen_sig m want)
+    ((TeScreenSigErr msg) (te_fail (append_int "protocol: " msg) w))
+    ((TeScreenSigOk screen)
+     (match (invoke_fd_ctx ictx target_fd Nil)
+       (None (te_fail "target invocation" w))
+       ((Some target)
+        (match (te_load_witness ictx witness_mode)
+          ((TeWitnessLoadErr msg) (te_fail msg w))
+          ((TeWitnessLoadOk witness)
+           (te_build_space path m want ictx screen probe target witness scope
+             search_cfg canon w))))))))
+
+(fn te_search_canon
+  ((path (List Int))
+   (m Module)
+   (want Type)
+   (ictx InvokeCtx)
+   (scope RCtx)
+   (probe FnDef)
+   (target_fd FnDef)
+   (witness_mode TeWitnessFd)
+   (search_cfg TeCfg)
+   (names (List Symbol))
+   (w World))
+  World
+  (match (te_load_canon path names w)
+    ((Pair result w2)
+     (match result
+       ((TeCanonErr msg) (te_fail (append_int "canon: " msg) w2))
+       ((TeCanonOk canon)
+        (te_search_ready path m want ictx scope probe target_fd witness_mode
+          search_cfg canon w2))))))
 
 (fn te_search
   ((path (List Int))
@@ -941,17 +1132,11 @@
        ((TeCfgErr msg) (te_fail (append_int "config: " msg) w))
        ((TeCfgOk search_cfg)
         (let ((ictx (prepare_invoke m)) (scope (te_import_ctx m path src)))
-          (match (te_screen_sig m want)
-            ((TeScreenSigErr msg) (te_fail (append_int "protocol: " msg) w))
-            ((TeScreenSigOk screen)
-             (match (invoke_fd_ctx ictx target_fd Nil)
-               (None (te_fail "target invocation" w))
-               ((Some target)
-                (match (te_load_witness ictx witness_mode)
-                  ((TeWitnessLoadErr msg) (te_fail msg w))
-                  ((TeWitnessLoadOk witness)
-                   (te_build_space path m want ictx screen probe target witness
-                     scope search_cfg w)))))))))))))
+          (match (te_canon_names ictx m)
+            ((TeCanonNamesErr msg) (te_fail (append_int "protocol: " msg) w))
+            ((TeCanonNamesOk names)
+             (te_search_canon path m want ictx scope probe target_fd
+               witness_mode search_cfg names w)))))))))
 (fn main ((w World)) World
   (match (get_args w)
     ((Pair args w1)

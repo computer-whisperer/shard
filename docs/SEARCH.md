@@ -1484,6 +1484,16 @@ heads, argument indices, and duplicate keys before grammar construction.
 Consequently changing from x86 to Wasm—or to an application ADT—changes the
 task context and environment value, not an engine-side ISA table.
 
+A task may now also expose the optional, explicit
+`search_canon_profile : () -> List Symbol`.  These are not trusted rewrite
+names and imports do not grant them automatically.  The dynamic runner loads
+the task's CHECK closure, resolves the ordered names through that root file's
+real `RCtx`, admits only proven claims or granted requirements, compiles their
+typed equations through `meta/rewrite`, and projects the exact separable
+formation fragment into `TeSpace`.  Failure at scope, evidence, profile
+validation, or formation projection is fatal; absence of the function means
+an empty profile.
+
 `tools/search/typed_rule_probe.shard` is the first binder regression.  A
 polymorphic `Let` template adds an `Int` BVar only to its body hole.  With
 root/body atoms `{0,1}`, an RHS routed to the `{0}` literal zone, and depth one
@@ -1524,6 +1534,21 @@ the audit records:
     total 114; found 2; killed 112; regions 80; forks 59
     exhaustive agreement: accepted 52; rejected 62; solutions 2
     BEST/WITNESS 10
+
+The first dynamic theorem-filtered task searches ordinary closed Shard list
+expressions over `Nil`, `Cons`, bit literals, and the real `std/list append` at
+depth five.  Its four selected append requirements are authenticated from the
+task scope and remove theorem-redex spellings before rank construction:
+
+    CANON RULES 4
+    RAW 210,066,388,900; REMOVED 210,066,388,837; TOTAL 63
+    FOUND 1; KILLED 62; REGIONS 6; FORKS 8; STEPS 72
+    BEST/WITNESS 17 = [0, 1]
+
+The optional exhaustive audit visits only the 63-member quotient and agrees
+on its unique solution.  This is the intended composition: theorem-backed
+formation pressure first, then lazy semantic narrowing—not a 210-billion-term
+filtering sweep.
 
 The generic imp task deliberately admits all `Int` atoms at both `ILoc` and
 `IConst`; the imp kind checker supplies the semantic distinction.  Its
@@ -1744,6 +1769,13 @@ rank/unrank checks establish:
 - the formation grammar has those same 31 members, each normal and rankable in
   the raw grammar; and
 - 212 theorem-redex spellings never enter the quotient grammar.
+
+This path is now a normal dynamic-search input rather than only a probe API.
+`search_canon_profile` selects the checked equations, and both the exhaustive
+typed census and the superposed runner build through
+`tg_build_env_formation`.  The superposed report counts the unfiltered grammar
+without enumerating it and prints checked rule count, raw count, removed
+spellings, and filtered total before its region metrics.
 
 `profile_census.shard` is the reusable measurement join over this mechanism.
 It accepts the same reflected heads, atoms, binders, result type, depth, and
