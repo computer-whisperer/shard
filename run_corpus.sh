@@ -314,6 +314,7 @@ TARGETS=(
   tools/search/profile_census.shard
   tools/search/rewrite_probe.shard
   tools/search/constraint_probe.shard
+  tools/search/constraint_superpose_probe.shard
   tools/search/typed_rule_probe.shard
   tools/search/tasks/imp_add1.shard
   tools/search/tasks/imp_mix.shard
@@ -485,6 +486,7 @@ if [ -x bin/shard_eval ]; then
   # exactly one two-member subtree of the eight generic ADT candidates is
   # theorem-redundant.
   bin/shard_eval run tools/search/constraint_probe.shard
+  bin/shard_eval run tools/search/constraint_superpose_probe.shard
   bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_observer_conjunctive.shard audit
 else
   echo "SKIPPED (no bin/shard_eval)"

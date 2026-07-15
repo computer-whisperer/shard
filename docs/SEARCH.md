@@ -1821,6 +1821,27 @@ rules remain candidate-root-only.  The matcher consumes the current
 left-linear algebraic `TrsRule` fragment, so it does not invent an independent
 hole approximation for coupled patterns.
 
+An unassigned multi-alternative hole is no longer automatically a demand.
+`meta/search` interprets every alternative under the current partial assignment
+and promotes only unanimous facts: all clear becomes `Clear`, and all reducible
+becomes `Redex` only when one citation is valid across the complete domain.
+Mixed results, different citations, or a blocked descendant remain `Blocked`
+on the outer hole, preserving disjoint region accounting.  The fold stops as
+soon as disagreement is established; singleton holes remain transparent.
+
+`constraint_superpose_probe.shard` measures the resulting lazy behavior on
+three two-member domains under a semantic query that demands none of them:
+
+    all clear:  FOUND 2, REGIONS 1, FORKS 0
+    all redex:  KILLED 2, CONSTRAINT KILLED 2, REGIONS 1, FORKS 0
+    mixed:      FOUND 1, KILLED 1, REGIONS 2, FORKS 1
+
+Thus grammar vocabulary that cannot contain a residual redex remains a true
+don't-care, while an unavoidable checked redex kills the full hole domain.
+The current implementation performs this consensus on demand; compiling and
+memoizing the unconditional `(rule state, grammar hole)` results is the next
+scaling step for repeated checks across many regions.
+
 `typed_observer_conjunctive.shard` is the non-ISA end-to-end pin.  Its candidate
 is simply `Trio Tagged Tagged Tagged`, with independent `Keep`/`Noise` choices.
 The checked observer theorem has two simultaneous child discriminators:

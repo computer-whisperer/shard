@@ -1,0 +1,146 @@
+;;; Integration pin: grammar-alternative consensus inside lazy SUPERPOSE.
+;;;
+;;; The shared residual rule and grammar come from constraint_probe.  Three
+;;; two-member hole domains exercise the exact outcomes before a constant-pass
+;;; semantic query:
+;;;   - all alternatives are clear: one passing region, no fork;
+;;;   - all alternatives have the same redex: one killed region, no fork;
+;;;   - one clear and one redex: fork once and settle one member each way.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/loader.shard")
+(import "../../meta/sketch")
+(import "../../meta/rewrite")
+(import "../../meta/search")
+(import "constraint_probe.shard")
+(import "superpose.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel loader World))
+(use (:: kernel loader write))
+(use (:: kernel loader exit))
+(use (:: meta sketch *))
+(use (:: meta rewrite *))
+(use (:: meta search *))
+(use (:: tools search constraint_probe *))
+(use (:: tools search superpose *))
+
+(fn csp_fail ((msg (List Int)) (w World)) World
+  (exit
+    1
+    (write
+      (append_int "META-SEARCH-SUPERPOSE-PROBE FAIL " (append_int msg "\n"))
+      w)))
+
+(fn csp_empty_module () Module
+  (Module Nil Nil Nil (FnTrie None Nil) Nil))
+
+(fn csp_drive
+  ((candidate Expr)
+   (plan MsPlan)
+   (grammar Grammar)
+   (memo (List (Pair Int Int))))
+  SuS
+  (su_drive_query
+    1000
+    (csp_empty_module)
+    (msp_q (quote candidate))
+    candidate
+    candidate
+    plan
+    (IntLit 0)
+    (IntLit 0)
+    grammar
+    memo
+    (sa_new)
+    (Cons Nil Nil)
+    0
+    0
+    0
+    0
+    0
+    Nil))
+
+(fn csp_mixed
+  ((plan MsPlan) (grammar Grammar) (memo (List (Pair Int Int))) (w World))
+  World
+  (match (csp_drive (hole 4) plan grammar memo)
+    ((SuSOk found killed constrained regions forks _ _)
+     (if (int_eq found 1)
+       (if (int_eq killed 1)
+         (if (int_eq constrained 1)
+           (if (int_eq regions 2)
+             (if (int_eq forks 1)
+               (write
+                 "META-SEARCH-SUPERPOSE-PROBE CLEAR 2 REDUX 2 MIXED 1+1 FORKS 0/0/1 OK\n"
+                 w)
+               (csp_fail "mixed fork count" w))
+             (csp_fail "mixed region count" w))
+           (csp_fail "mixed constraint-killed count" w))
+         (csp_fail "mixed killed count" w))
+       (csp_fail "mixed found count" w)))
+    ((SuSErr msg) (csp_fail msg w))))
+
+(fn csp_redex
+  ((plan MsPlan) (grammar Grammar) (memo (List (Pair Int Int))) (w World))
+  World
+  (match (csp_drive (hole 3) plan grammar memo)
+    ((SuSOk found killed constrained regions forks _ _)
+     (if (int_eq found 0)
+       (if (int_eq killed 2)
+         (if (int_eq constrained 2)
+           (if (int_eq regions 1)
+             (if (int_eq forks 0)
+               (csp_mixed plan grammar memo w)
+               (csp_fail "redex fork count" w))
+             (csp_fail "redex region count" w))
+           (csp_fail "redex constraint-killed count" w))
+         (csp_fail "redex killed count" w))
+       (csp_fail "redex found count" w)))
+    ((SuSErr msg) (csp_fail msg w))))
+
+(fn csp_clear
+  ((plan MsPlan) (grammar Grammar) (memo (List (Pair Int Int))) (w World))
+  World
+  (match (csp_drive (hole 2) plan grammar memo)
+    ((SuSOk found killed constrained regions forks _ _)
+     (if (int_eq found 2)
+       (if (int_eq killed 0)
+         (if (int_eq constrained 0)
+           (if (int_eq regions 1)
+             (if (int_eq forks 0)
+               (csp_redex plan grammar memo w)
+               (csp_fail "clear fork count" w))
+             (csp_fail "clear region count" w))
+           (csp_fail "clear constraint-killed count" w))
+         (csp_fail "clear killed count" w))
+       (csp_fail "clear found count" w)))
+    ((SuSErr msg) (csp_fail msg w))))
+
+(fn csp_profile ((grammar Grammar) (memo (List (Pair Int Int))) (w World)) World
+  (match (msp_rule)
+    ((TrsRuleErr msg) (csp_fail msg w))
+    ((TrsRuleOk rule)
+     (match (trs_profile (Cons rule Nil))
+       ((TrsProfileErr msg) (csp_fail msg w))
+       ((TrsProfileOk profile)
+        (match (trs_partition_formation profile)
+          ((TrsProfileFormationErr msg) (csp_fail msg w))
+          ((TrsProfileFormationOk projected)
+           (match
+             (ms_plan
+               (trs_profile_residual projected)
+               (trs_empty_root_profile))
+             ((MsPlanErr msg) (csp_fail msg w))
+             ((MsPlanOk plan) (csp_clear plan grammar memo w))))))))))
+
+(fn main ((w World)) World
+  (let ((grammar (msp_grammar)))
+    (match (g_wf grammar)
+      ((GWErr msg) (csp_fail msg w))
+      ((GWOk)
+       (match (g_counts grammar)
+         ((GCtErr msg) (csp_fail msg w))
+         ((GCtOk memo) (csp_profile grammar memo w)))))))

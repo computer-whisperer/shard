@@ -11,6 +11,11 @@
 ;;;   BLOCKED h   deciding grammar hole h is necessary to settle that fact;
 ;;;   REDEX q     every candidate in the region has the cited redex;
 ;;;   ERR         malformed grammar/sketch/profile plumbing.
+;;; At an unassigned multi-alternative hole, the classifier checks the whole
+;;; alternative domain. It returns CLEAR when every alternative is clear and
+;;; REDEX only when every alternative has the same cited redex; disagreement
+;;; or a descendant block remains BLOCKED on the outer hole. This unanimous
+;;; rule is exact and keeps irrelevant syntax choices lazy.
 ;;;
 ;;; Ordinary TrsProfile rules are searched at every candidate subterm.
 ;;; TrsRootProfile rules are matched only at the whole candidate root.  This
@@ -102,7 +107,7 @@
 
 (type MsSelect
   (MsSelectErr (List Int))
-  (MsSelectOpen Int)
+  (MsSelectOpen Int (List Expr))
   (MsSelectExpr Expr))
 
 (fn ms_select ((grammar Grammar) (asg (List (Pair Int Int))) (hole_id Int))
@@ -115,7 +120,7 @@
          (match alts
            (Nil (MsSelectErr "constraint reached an empty grammar entry"))
            ((Cons only Nil) (MsSelectExpr only))
-           ((Cons _ (Cons _ _)) (MsSelectOpen hole_id)))
+           ((Cons _ (Cons _ _)) (MsSelectOpen hole_id alts)))
          (match (ms_alt_at alts choice)
            (None (MsSelectErr "constraint choice is outside grammar entry"))
            ((Some selected) (MsSelectExpr selected))))))))
@@ -128,6 +133,11 @@
   (MsMatchBlocked Int)
   (MsMatchYes))
 
+(type MsMatchAgree
+  (MsMatchAgreeStart)
+  (MsMatchAgreeNo)
+  (MsMatchAgreeYes))
+
 (fn ms_block_first ((prior (Option Int)) (hole_id Int)) (Option Int)
   (match prior
     (None (Some hole_id))
@@ -137,6 +147,56 @@
   (match blocked
     (None (MsMatchYes))
     ((Some hole_id) (MsMatchBlocked hole_id))))
+
+;; Classify an unassigned hole without choosing an alternative.  Only a
+;; unanimous result is promoted; a mixed or internally blocked domain still
+;; demands the outer hole, preserving disjoint region accounting.
+(fn ms_match_alts
+  ((fuel Int)
+   (grammar Grammar)
+   (asg (List (Pair Int Int)))
+   (pattern Expr)
+   (alts (List Expr))
+   (hole_id Int)
+   (agree MsMatchAgree))
+  MsMatch
+  (measure fuel)
+  (if (lt fuel 1) (MsMatchErr "constraint alternative-match fuel exhausted")
+  (match alts
+    (Nil
+      (match agree
+        ((MsMatchAgreeStart)
+         (MsMatchErr "constraint reached an empty alternative domain"))
+        ((MsMatchAgreeNo) (MsMatchNo))
+        ((MsMatchAgreeYes) (MsMatchYes))))
+    ((Cons alt rest)
+     (match (ms_match (- fuel 1) grammar asg pattern alt)
+       ((MsMatchErr msg) (MsMatchErr msg))
+       ((MsMatchBlocked _) (MsMatchBlocked hole_id))
+       ((MsMatchNo)
+        (match agree
+          ((MsMatchAgreeYes) (MsMatchBlocked hole_id))
+          (_
+            (ms_match_alts
+              (- fuel 1)
+              grammar
+              asg
+              pattern
+              rest
+              hole_id
+              (MsMatchAgreeNo)))))
+       ((MsMatchYes)
+        (match agree
+          ((MsMatchAgreeNo) (MsMatchBlocked hole_id))
+          (_
+            (ms_match_alts
+              (- fuel 1)
+              grammar
+              asg
+              pattern
+              rest
+              hole_id
+              (MsMatchAgreeYes))))))))))
 
 (fn ms_match
   ((fuel Int)
@@ -155,7 +215,15 @@
        (_
          (match (ms_select grammar asg hole_id)
            ((MsSelectErr msg) (MsMatchErr msg))
-           ((MsSelectOpen blocked) (MsMatchBlocked blocked))
+           ((MsSelectOpen blocked alts)
+            (ms_match_alts
+              (- fuel 1)
+              grammar
+              asg
+              pattern
+              alts
+              blocked
+              (MsMatchAgreeStart)))
            ((MsSelectExpr selected)
             (ms_match (- fuel 1) grammar asg pattern selected))))))
     ((HVNot)
@@ -283,7 +351,7 @@
 
 (type MsNode
   (MsNodeErr (List Int))
-  (MsNodeOpen Int)
+  (MsNodeOpen Int (List Expr))
   (MsNodeExpr Expr))
 
 (fn ms_node
@@ -297,9 +365,75 @@
     ((HVHole hole_id)
      (match (ms_select grammar asg hole_id)
        ((MsSelectErr msg) (MsNodeErr msg))
-       ((MsSelectOpen blocked) (MsNodeOpen blocked))
+       ((MsSelectOpen blocked alts) (MsNodeOpen blocked alts))
        ((MsSelectExpr selected)
         (ms_node (- fuel 1) grammar asg selected)))))))
+
+(type MsVerdictAgree
+  (MsVerdictAgreeStart)
+  (MsVerdictAgreeClear)
+  (MsVerdictAgreeRedex QName))
+
+;; Whole-subtree consensus for an unassigned grammar hole.  Different redex
+;; citations are kept blocked: every alternative is reducible, but `MsRedex q`
+;; promises one citation valid across the complete represented region.
+(fn ms_anywhere_alts
+  ((fuel Int)
+   (grammar Grammar)
+   (asg (List (Pair Int Int)))
+   (rules (List TrsRule))
+   (alts (List Expr))
+   (hole_id Int)
+   (agree MsVerdictAgree))
+  MsVerdict
+  (measure fuel)
+  (if (lt fuel 1) (MsErr "constraint alternative-scan fuel exhausted")
+  (match alts
+    (Nil
+      (match agree
+        ((MsVerdictAgreeStart)
+         (MsErr "constraint reached an empty alternative domain"))
+        ((MsVerdictAgreeClear) (MsClear))
+        ((MsVerdictAgreeRedex q) (MsRedex q))))
+    ((Cons alt rest)
+     (match (ms_anywhere (- fuel 1) grammar asg rules alt)
+       ((MsErr msg) (MsErr msg))
+       ((MsBlocked _) (MsBlocked hole_id))
+       ((MsClear)
+        (match agree
+          ((MsVerdictAgreeRedex _) (MsBlocked hole_id))
+          (_
+            (ms_anywhere_alts
+              (- fuel 1)
+              grammar
+              asg
+              rules
+              rest
+              hole_id
+              (MsVerdictAgreeClear)))))
+       ((MsRedex q)
+        (match agree
+          ((MsVerdictAgreeClear) (MsBlocked hole_id))
+          ((MsVerdictAgreeRedex prior)
+           (if (qname_eq prior q)
+             (ms_anywhere_alts
+               (- fuel 1)
+               grammar
+               asg
+               rules
+               rest
+               hole_id
+               agree)
+             (MsBlocked hole_id)))
+          ((MsVerdictAgreeStart)
+           (ms_anywhere_alts
+             (- fuel 1)
+             grammar
+             asg
+             rules
+             rest
+             hole_id
+             (MsVerdictAgreeRedex q))))))))))
 
 (fn ms_anywhere
   ((fuel Int)
@@ -312,7 +446,15 @@
   (if (lt fuel 1) (MsErr "constraint tree scan fuel exhausted")
   (match (ms_node (- fuel 1) grammar asg candidate)
     ((MsNodeErr msg) (MsErr msg))
-    ((MsNodeOpen hole_id) (MsBlocked hole_id))
+    ((MsNodeOpen hole_id alts)
+     (ms_anywhere_alts
+       (- fuel 1)
+       grammar
+       asg
+       rules
+       alts
+       hole_id
+       (MsVerdictAgreeStart)))
     ((MsNodeExpr node)
      (let ((root (ms_rules_root (- fuel 1) grammar asg rules node None)))
        (match root

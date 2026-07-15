@@ -2,7 +2,8 @@
 ;;; The rule has two conjunctive child discriminators, so exact formation
 ;;; refuses it and the lossless partition retains it.  The same residual rule
 ;;; then blocks on an undecided grammar hole, detects a whole redex region,
-;;; distinguishes a clean region, and respects everywhere-vs-root proof scope.
+;;; distinguishes a clean region, proves unanimous alternative domains without
+;;; choosing them, and respects everywhere-vs-root proof scope.
 
 (import "../../kernel/stdlib.shard")
 (import "../../kernel/term.shard")
@@ -50,7 +51,18 @@
   (Grammar
     (list
       (GEnt 0 (list (msp_one (quote F) 1) (msp_one (quote H) 1)))
-      (GEnt 1 (list (msp_one (quote G) 2) (msp_one (quote H) 2))))))
+      (GEnt 1 (list (msp_one (quote G) 2) (msp_one (quote H) 2)))
+      (GEnt 2 (list (msp_one (quote H) 3) (msp_one (quote J) 3)))
+      (GEnt
+        3
+        (list
+          (msp_pair (msp_one (quote F) 4) (msp_one (quote G) 5))
+          (msp_pair (msp_one (quote F) 6) (msp_one (quote G) 7))))
+      (GEnt
+        4
+        (list
+          (msp_pair (msp_one (quote F) 8) (msp_one (quote G) 9))
+          (msp_one (quote H) 10))))))
 
 (fn msp_root () Expr (msp_wrap (msp_pair (hole 0) (hole 1))))
 (fn msp_inner () Expr (msp_pair (hole 0) (hole 1)))
@@ -60,6 +72,26 @@
 
 (fn msp_clean_assignment () (List (Pair Int Int))
   (list (Pair 0 0) (Pair 1 1)))
+
+(fn msp_consensus_root
+  ((root_plan MsPlan) (grammar Grammar) (rule_name QName) (w World))
+  World
+  (match (ms_check 1000 root_plan grammar Nil (hole 2))
+    ((MsClear)
+     (match (ms_check 1000 root_plan grammar Nil (hole 3))
+       ((MsRedex q)
+        (if (qname_eq q rule_name)
+          (match (ms_check 1000 root_plan grammar Nil (hole 4))
+            ((MsBlocked hole_id)
+             (if (int_eq hole_id 4)
+               (write
+                 "META-SEARCH-CONSTRAINT-PROBE PARTITION BLOCK REDUX CLEAN ALT-CLEAR ALT-REDEX ALT-MIXED ROOT-SCOPED OK\n"
+                 w)
+               (msp_fail "root consensus blocked on wrong hole" w)))
+            (_ (msp_fail "root mixed alternative domain did not block" w)))
+          (msp_fail "root alternative redex citation" w)))
+       (_ (msp_fail "root all-redex alternative domain was not reduced" w))))
+    (_ (msp_fail "root all-clear alternative domain was not clear" w))))
 
 (fn msp_root_scope
   ((residual TrsProfile) (grammar Grammar) (rule_name QName) (w World))
@@ -76,9 +108,7 @@
              (ms_check 1000 root_plan grammar (msp_redex_assignment) (msp_inner))
              ((MsRedex q)
               (if (qname_eq q rule_name)
-                (write
-                  "META-SEARCH-CONSTRAINT-PROBE PARTITION BLOCK REDUX CLEAN ROOT-SCOPED OK\n"
-                  w)
+                (msp_consensus_root root_plan grammar rule_name w)
                 (msp_fail "root redex citation" w)))
              (_ (msp_fail "root profile missed candidate-root redex" w))))
           (_ (msp_fail "root profile leaked below Wrap" w))))))))
@@ -98,12 +128,36 @@
              (if (qname_eq q rule_name)
                (match
                  (ms_check 1000 plan grammar (msp_clean_assignment) (msp_root))
-                 ((MsClear) (msp_root_scope residual grammar rule_name w))
+                 ((MsClear)
+                  (msp_consensus_everywhere
+                    plan residual grammar rule_name w))
                  (_ (msp_fail "clean region was not clean" w)))
                (msp_fail "everywhere redex citation" w)))
             (_ (msp_fail "assigned redex region was not rejected" w)))
           (msp_fail "unexpected first blocked hole" w)))
        (_ (msp_fail "open conjunctive pattern did not block" w))))))
+
+(fn msp_consensus_everywhere
+  ((plan MsPlan)
+   (residual TrsProfile)
+   (grammar Grammar)
+   (rule_name QName)
+   (w World))
+  World
+  (match (ms_check 1000 plan grammar Nil (msp_wrap (hole 2)))
+    ((MsClear)
+     (match (ms_check 1000 plan grammar Nil (msp_wrap (hole 3)))
+       ((MsRedex q)
+        (if (qname_eq q rule_name)
+          (match (ms_check 1000 plan grammar Nil (msp_wrap (hole 4)))
+            ((MsBlocked hole_id)
+             (if (int_eq hole_id 4)
+               (msp_root_scope residual grammar rule_name w)
+               (msp_fail "tree consensus blocked on wrong hole" w)))
+            (_ (msp_fail "tree mixed alternative domain did not block" w)))
+          (msp_fail "tree alternative redex citation" w)))
+       (_ (msp_fail "tree all-redex alternative domain was not reduced" w))))
+    (_ (msp_fail "tree all-clear alternative domain was not clear" w))))
 
 (fn msp_partition ((profile TrsProfile) (rule_name QName) (w World)) World
   (match (trs_formation profile)
