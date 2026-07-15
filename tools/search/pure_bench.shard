@@ -1,0 +1,67 @@
+;;; Executable pure-Shard benchmark suite.
+;;;
+;;; Runs the playground's insertion-sort completeness floor, sorted-list merge,
+;;; and expression-ADT calculator through the current generic SUPERPOSE engine.
+;;; The runtime object module is loaded as data; constructor and function
+;;; identities are discovered from that closure rather than hand-spelled.
+;;;
+;;; RUN: bin/shard_eval run tools/search/pure_bench.shard
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/loader.shard")
+(import "../../meta/invoke")
+(import "pure_program.shard")
+(import "pure_tasks.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel loader World))
+(use (:: kernel loader write))
+(use (:: kernel loader exit))
+(use (:: meta invoke *))
+(use (:: tools search pure_program *))
+(use (:: tools search pure_tasks *))
+
+(fn pb_fail ((msg (List Int)) (w World)) World
+  (exit 1 (write (append_int "PURE-SHARD FAIL " (append_int msg "\n")) w)))
+
+(fn pb_run_all ((m Module) (tasks (List PsTask)) (w World)) World
+  (measure (struct tasks))
+  (match tasks
+    (Nil w)
+    ((Cons task rest)
+     (match (ps_run m task)
+       ((PsRunErr msg) (pb_fail msg w))
+       ((PsRunOk report) (pb_run_all m rest (write report w)))))))
+
+(fn pb_with_heads ((m Module) (appendq QName) (w World)) World
+  (match (ctor_qn m (quote PNum))
+    (None (pb_fail "missing PNum constructor" w))
+    ((Some num)
+     (match (ctor_qn m (quote PPlus))
+       (None (pb_fail "missing PPlus constructor" w))
+       ((Some plus)
+        (match (ctor_qn m (quote PTimes))
+          (None (pb_fail "missing PTimes constructor" w))
+          ((Some times)
+           (match (ctor_qn m (quote PMax))
+             (None (pb_fail "missing PMax constructor" w))
+             ((Some max)
+              (let ((heads (PtCalcHeads num plus times max)))
+                (pb_run_all
+                  m
+                  (list
+                    (pt_sort_task 0 appendq)
+                    (pt_sort_task 1 appendq)
+                    (pt_merge_task appendq)
+                    (pt_calc_task 1 heads))
+                  w)))))))))))
+
+(fn main ((w World)) World
+  (match (load_run_module "tools/search/tasks/pure_program_obj.shard" w)
+    ((Pair None w2) (pb_fail "object module load" w2))
+    ((Pair (Some m) w2)
+     (match (find_fn (quote append) m)
+       (None (pb_fail "object module has no append" w2))
+       ((Some (FnDef appendq _ _ _)) (pb_with_heads m appendq w2))))))

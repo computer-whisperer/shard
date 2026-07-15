@@ -1539,6 +1539,44 @@ the audit records:
     exhaustive agreement: accepted 52; rejected 62; solutions 2
     BEST/WITNESS 10
 
+### Pure Shard function-body benchmarks
+
+`tools/search/pure_program.shard` opens the same lazy engine to ordinary
+recursive Shard definitions.  A `PsTask` supplies a candidate QName and
+signature, a kernel `Expr` body containing grammar holes, and one closed
+observation query.  Recursive calls to the synthetic QName re-enter the body
+inside SUPERPOSE, so the query can force just enough of a candidate to reject
+an entire consistent subtree.  The protocol is independent of any ISA and is
+also more general than the closed-value dynamic task protocol: the searched
+artifact is a function body with parameters, binders, matches, and structural
+recursion.
+
+Passing regions have a deliberately independent backstop.  The runner fills
+one representative, injects its `FnDef` into the real loaded object module,
+checks the body against the declared parameter/result types with
+`kernel/types`, and repeats the whole closed query through `meta/invoke`.
+Untyped grammars may construct malformed intermediate data; if a ground call
+then has no reduction (for example `le(Int, Nil)`), SUPERPOSE rejects that
+candidate region instead of treating the stuck program as an engine fault.
+The type/invocation gate prevents such a region from ever being accepted.
+
+`tools/search/pure_tasks.shard` now ports three exact playground questions,
+retaining their duplicate-rich full grammars rather than baking in the later
+dialects.  `pure_bench.shard` pins the complete counts and known witnesses:
+
+    insertion sort d0: total 9,072; found 0; regions 157; steps 1,672
+    insertion sort d1: total 1,533,168; found 8; regions 1,517; steps 17,167
+    sorted-list merge d1: total 5,263,380; found 4; regions 1,562; steps 30,070
+    PExpr evaluator d1: total 10,077,696; found 200; regions 1,792; steps 11,314
+
+The depth-0 insertion result is an exact absence certificate over its grammar.
+Merge adds nested pattern matching and two different structurally decreasing
+recursive calls; the evaluator adds tree recursion and arbitrary ADT
+constructors.  Together with the existing `rev` task, these provide a pure
+Shard progression on which theorem-backed formation pressure, stronger test
+batteries, and proof-producing refinement can be developed without an ISA
+encoding obscuring the result.
+
 The first dynamic theorem-filtered task searches ordinary closed Shard list
 expressions over `Nil`, `Cons`, bit literals, and the real `std/list append` at
 depth five.  Its four selected append requirements are authenticated from the

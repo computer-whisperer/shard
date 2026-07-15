@@ -1,0 +1,221 @@
+;;; Reusable runner for synthesis of ordinary Shard function bodies.
+;;;
+;;; Unlike typed_superpose's closed-value protocol, a PsTask supplies a
+;;; candidate FnDef signature, a body sketch, and a closed observation query.
+;;; SUPERPOSE intercepts recursive calls to the synthetic candidate QName,
+;;; evaluates the complete query lazily, and partitions the exact grammar
+;;; space.  Every passing region is independently represented, kernel-typed,
+;;; injected into the real object closure, and rerun through meta/invoke.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/types.shard")
+(import "../../meta/sketch")
+(import "../../meta/invoke")
+(import "../../meta/search")
+(import "superpose.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel types *))
+(use (:: meta sketch *))
+(use (:: meta invoke *))
+(use (:: meta search *))
+(use (:: tools search superpose *))
+
+(type PsTask
+  (PsTask
+    (List Int)                       ; display name
+    QName                            ; synthetic candidate QName
+    QName                            ; synthetic closed probe QName
+    (List Type) Type                 ; candidate params/result
+    Expr Grammar                     ; candidate body/grammar
+    Type Expr Expr                   ; query result type/query/target
+    (Option Expr)                    ; known witness body; None for absence
+    Int Int))                        ; expected total/solutions
+
+(type PsGateR (PsGateErr (List Int)) (PsGateOk))
+
+(fn (ps_rev T) ((xs (List T)) (acc (List T))) (List T)
+  (measure (struct xs))
+  (match xs
+    (Nil acc)
+    ((Cons h t) (ps_rev t (Cons h acc)))))
+
+(fn ps_type_gate
+  ((m Module) (params (List Type)) (ret Type) (body Expr)) PsGateR
+  (match (tc_infer m (Tc 0 Nil) Nil (ps_rev params Nil) body)
+    ((TcErr msg) (PsGateErr msg))
+    ((TcOk tc got)
+     (match (tc_unify got ret tc)
+       (None (PsGateErr (tc_mismatch "candidate result" got ret tc)))
+       ((Some _) (PsGateOk))))))
+
+(fn ps_observe
+  ((m Module)
+   (candq QName)
+   (probeq QName)
+   (params (List Type))
+   (ret Type)
+   (body Expr)
+   (query_ty Type)
+   (query Expr)
+   (want Expr))
+  PsGateR
+  (let
+    ((candidate (FnDef candq params ret body))
+     (probe (FnDef probeq Nil query_ty query)))
+    (match (extend_fn m candidate)
+      (None (PsGateErr "candidate QName is already bound"))
+      ((Some m2)
+       (match (ps_type_gate m2 params ret body)
+         ((PsGateErr msg) (PsGateErr msg))
+         ((PsGateOk)
+          (match (extend_fn m2 probe)
+            (None (PsGateErr "probe QName is already bound"))
+            ((Some m3)
+             (match (invoke_fd m3 probe Nil)
+               (None (PsGateErr "representative probe did not evaluate"))
+               ((Some got)
+                (if (expr_eq got want) (PsGateOk)
+                (PsGateErr "representative disagrees with target"))))))))))))
+
+(fn ps_representatives
+  ((m Module)
+   (candq QName)
+   (probeq QName)
+   (params (List Type))
+   (ret Type)
+   (body Expr)
+   (grammar Grammar)
+   (query_ty Type)
+   (query Expr)
+   (want Expr)
+   (regions (List (List (Pair Int Int)))))
+  PsGateR
+  (measure (struct regions))
+  (match regions
+    (Nil (PsGateOk))
+    ((Cons asg rest)
+     (match (su_rep grammar asg body 1000000)
+       (None (PsGateErr "passing region has no representative"))
+       ((Some candidate)
+        (match
+          (ps_observe
+            m candq probeq params ret candidate query_ty query want)
+          ((PsGateErr msg) (PsGateErr msg))
+          ((PsGateOk)
+           (ps_representatives
+             m candq probeq params ret body grammar query_ty query want
+             rest))))))))
+
+(fn ps_cat ((parts (List (List Int)))) (List Int)
+  (measure (struct parts))
+  (match parts
+    (Nil Nil)
+    ((Cons part rest) (append_int part (ps_cat rest)))))
+
+(fn ps_report
+  ((name (List Int))
+   (total Int)
+   (found Int)
+   (killed Int)
+   (regions Int)
+   (forks Int)
+   (steps Int)
+   (rank Int))
+  (List Int)
+  (ps_cat
+    (list
+      "PURE-SHARD "
+      name
+      "\nTOTAL "
+      (show_int total)
+      " FOUND "
+      (show_int found)
+      " KILLED "
+      (show_int killed)
+      " REGIONS "
+      (show_int regions)
+      " FORKS "
+      (show_int forks)
+      " STEPS "
+      (show_int steps)
+      "\nWITNESS "
+      (show_int rank)
+      " REPRESENTATIVES-TYPED GATES OK\n")))
+
+(type PsRunR (PsRunErr (List Int)) (PsRunOk (List Int)))
+
+(fn ps_run ((m Module) (task PsTask)) PsRunR
+  (match task
+    ((PsTask
+       name candq probeq params ret body grammar query_ty query want witness
+       expected_total expected_found)
+     (match (g_wf grammar)
+       ((GWErr msg) (PsRunErr msg))
+       ((GWOk)
+        (match (g_counts grammar)
+          ((GCtErr msg) (PsRunErr msg))
+          ((GCtOk memo)
+           (match (sk_count body grammar)
+             ((SkCErr msg) (PsRunErr msg))
+             ((SkCOk total)
+              (if (int_eq total expected_total)
+                (match
+                  (su_drive_query
+                    (+ (* 8 total) 4096)
+                    m
+                    candq
+                    body
+                    body
+                    (ms_empty_plan)
+                    query
+                    want
+                    grammar
+                    memo
+                    (sa_new)
+                    (Cons Nil Nil)
+                    0
+                    0
+                    0
+                    0
+                    0
+                    Nil)
+                  ((SuSErr msg) (PsRunErr msg))
+                  ((SuSOk found killed constrained regions forks steps sols)
+                   (if (int_eq constrained 0)
+                     (if (int_eq (+ found killed) total)
+                       (if (int_eq found expected_found)
+                         (match
+                           (ps_representatives
+                             m candq probeq params ret body grammar query_ty
+                             query want sols)
+                           ((PsGateErr msg) (PsRunErr msg))
+                           ((PsGateOk)
+                            (match witness
+                              (None
+                               (if (int_eq found 0)
+                                 (PsRunOk
+                                   (ps_report
+                                     name total found killed regions forks
+                                     steps -1))
+                                 (PsRunErr
+                                   "nonempty solution set has no witness")))
+                              ((Some witness_body)
+                               (match (sk_rank body grammar witness_body)
+                                 ((SkCErr msg) (PsRunErr msg))
+                                 ((SkCOk rank)
+                                  (if
+                                    (su_covered
+                                      grammar body sols witness_body)
+                                    (PsRunOk
+                                      (ps_report
+                                        name total found killed regions forks
+                                        steps rank))
+                                    (PsRunErr
+                                      "known witness escaped passing regions"))))))))
+                         (PsRunErr "solution count drift"))
+                       (PsRunErr "found + killed does not equal total"))
+                     (PsRunErr "empty constraint plan killed candidates"))))
+                (PsRunErr "candidate count drift")))))))))))

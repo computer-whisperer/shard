@@ -1,0 +1,555 @@
+;;; Pure-Shard benchmark sketches ported from shard_search_playground.
+;;;
+;;; These are function bodies in the kernel Expr language, not instruction
+;;; encodings.  The two initial ports deliberately retain the playground's
+;;; full, untyped hole vocabularies and exact candidate counts:
+;;;
+;;;   insertion sort d0/d1: 9,072 / 1,533,168 candidates, 0 / 8 solutions;
+;;;   sorted-list merge d1: 5,263,380 candidates, 4 solutions;
+;;;   PExpr calculator d1: 10,077,696 candidates, 200 solutions.
+;;;
+;;; The duplicate-rich full grammars are useful baselines for later checked
+;;; theorem and dialect pressure.  Recursive-call leaves mention only strict
+;;; structural subterms, so every generated recursive body is total by
+;;; construction even when an expression is type-wrong.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../meta/sketch")
+(import "../../meta/invoke")
+(import "pure_program.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: meta sketch *))
+(use (:: meta invoke *))
+(use (:: tools search pure_program *))
+
+(type PtCalcHeads
+  (PtCalcHeads QName QName QName QName))  ; Num, Plus, Times, Max
+
+(fn (pt_app T) ((a (List T)) (b (List T))) (List T)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (pt_app t b)))))
+
+(fn pt_int_ty () Type (TCon (qn (quote Int)) Nil))
+(fn pt_bool_ty () Type (TCon (qn (quote Bool)) Nil))
+(fn pt_list_ty ((element Type)) Type
+  (TCon (qn (quote List)) (Cons element Nil)))
+(fn pt_ilist_ty () Type (pt_list_ty (pt_int_ty)))
+(fn pt_pexpr_ty () Type
+  (TCon
+    (QName
+      (list (quote tools) (quote search) (quote tasks) (quote pure_program_obj))
+      (quote PExpr))
+    Nil))
+
+(fn pt_synth_q ((name Symbol)) QName
+  (qn_at (list (quote tools) (quote search) (quote generated)) name))
+
+(fn pt_sort_candq () QName (pt_synth_q (quote pure_insert_candidate)))
+(fn pt_sort_probeq () QName (pt_synth_q (quote pure_insert_probe)))
+(fn pt_merge_candq () QName (pt_synth_q (quote pure_merge_candidate)))
+(fn pt_merge_probeq () QName (pt_synth_q (quote pure_merge_probe)))
+(fn pt_calc_candq () QName (pt_synth_q (quote pure_calc_candidate)))
+(fn pt_calc_probeq () QName (pt_synth_q (quote pure_calc_probe)))
+
+;; Full list-expression grammar: leaves plus Cons and append over four fresh
+;; depth-(d-1) child grammars.  S(d) = L + 2*S(d-1)^2.
+(fn pt_list_g
+  ((d Int) (next Int) (leaves (List Expr)) (appendq QName))
+  (Pair (List GEnt) Int)
+  (measure d)
+  (if (le d 0)
+    (Pair (Cons (GEnt next leaves) Nil) (+ next 1))
+    (match (pt_list_g (- d 1) (+ next 1) leaves appendq)
+      ((Pair es1 n1)
+       (match (pt_list_g (- d 1) n1 leaves appendq)
+         ((Pair es2 n2)
+          (match (pt_list_g (- d 1) n2 leaves appendq)
+            ((Pair es3 n3)
+             (match (pt_list_g (- d 1) n3 leaves appendq)
+               ((Pair es4 n4)
+                (let
+                  ((alts
+                     (pt_app
+                       leaves
+                       (list
+                         (Ctor
+                           (qn (quote Cons))
+                           (list (hole (+ next 1)) (hole n1)))
+                         (Call appendq (list (hole n2) (hole n3)))))))
+                  (Pair
+                    (Cons
+                      (GEnt next alts)
+                      (pt_app es1 (pt_app es2 (pt_app es3 es4))))
+                    n4))))))))))))
+
+;; Three comparisons, each with two independent {x,h} argument holes.
+(fn pt_sort_cond_g ((next Int)) (Pair (List GEnt) Int)
+  (let
+    ((args (list (BVar 3) (BVar 1))))
+    (Pair
+      (list
+        (GEnt
+          next
+          (list
+            (Call (qn (quote le)) (list (hole (+ next 1)) (hole (+ next 2))))
+            (Call (qn (quote lt)) (list (hole (+ next 3)) (hole (+ next 4))))
+            (Call
+              (qn (quote int_eq))
+              (list (hole (+ next 5)) (hole (+ next 6))))))
+        (GEnt (+ next 1) args)
+        (GEnt (+ next 2) args)
+        (GEnt (+ next 3) args)
+        (GEnt (+ next 4) args)
+        (GEnt (+ next 5) args)
+        (GEnt (+ next 6) args))
+      (+ next 7))))
+
+(fn pt_sort_fold ((candq QName) (xs (List Int))) Expr
+  (measure (struct xs))
+  (match xs
+    (Nil (Ctor (qn (quote Nil)) Nil))
+    ((Cons h t) (Call candq (list (IntLit h) (pt_sort_fold candq t))))))
+
+(fn pt_sort_query_go ((candq QName) (tests (List (List Int)))) (List Expr)
+  (measure (struct tests))
+  (match tests
+    (Nil Nil)
+    ((Cons xs rest)
+     (Cons (pt_sort_fold candq xs) (pt_sort_query_go candq rest)))))
+
+(fn pt_intlists_expr ((xss (List (List Int)))) (List Expr)
+  (measure (struct xss))
+  (match xss
+    (Nil Nil)
+    ((Cons xs rest) (Cons (intlist_to_expr xs) (pt_intlists_expr rest)))))
+
+(fn pt_sort_inputs () (List (List Int))
+  (list Nil (list 7) (list 2 1) (list 3 1 2) (list 1 3 2 3) (list 9 -1 4 0)))
+
+(fn pt_sort_outputs () (List (List Int))
+  (list Nil (list 7) (list 1 2) (list 1 2 3) (list 1 2 3 3) (list -1 0 4 9)))
+
+(fn pt_sort_witness ((candq QName)) Expr
+  (Match
+    (BVar 0)
+    (list
+      (Arm
+        (PCtor (qn (quote Nil)) Nil)
+        (Ctor (qn (quote Cons)) (list (BVar 1) (Ctor (qn (quote Nil)) Nil))))
+      (Arm
+        (PCtor (qn (quote Cons)) (list (PVar) (PVar)))
+        (If
+          (Call (qn (quote le)) (list (BVar 3) (BVar 1)))
+          (Ctor (qn (quote Cons)) (list (BVar 3) (BVar 2)))
+          (Ctor
+            (qn (quote Cons))
+            (list (BVar 1) (Call candq (list (BVar 3) (BVar 0))))))))))
+
+(fn pt_sort_task ((depth Int) (appendq QName)) PsTask
+  (let
+    ((candq (pt_sort_candq))
+     (nil_leaves (list (BVar 1) (BVar 0) (Ctor (qn (quote Nil)) Nil)))
+     (branch_leaves
+       (list
+         (BVar 3)
+         (BVar 1)
+         (BVar 0)
+         (BVar 2)
+         (Ctor (qn (quote Nil)) Nil)
+         (Call (pt_sort_candq) (list (BVar 3) (BVar 0))))))
+    (match (pt_list_g 1 0 nil_leaves appendq)
+      ((Pair nil_entries after_nil)
+       (match (pt_sort_cond_g after_nil)
+         ((Pair cond_entries after_cond)
+          (match (pt_list_g depth after_cond branch_leaves appendq)
+            ((Pair then_entries after_then)
+             (match (pt_list_g depth after_then branch_leaves appendq)
+               ((Pair else_entries _)
+                (let
+                  ((body
+                     (Match
+                       (BVar 0)
+                       (list
+                         (Arm (PCtor (qn (quote Nil)) Nil) (hole 0))
+                         (Arm
+                           (PCtor (qn (quote Cons)) (list (PVar) (PVar)))
+                           (If
+                             (hole after_nil)
+                             (hole after_cond)
+                             (hole after_then))))))
+                   (grammar
+                     (Grammar
+                       (pt_app
+                         nil_entries
+                         (pt_app
+                           cond_entries
+                           (pt_app then_entries else_entries)))))
+                   (query
+                     (list_expr
+                       (pt_sort_query_go candq (pt_sort_inputs))))
+                   (want (list_expr (pt_intlists_expr (pt_sort_outputs))))
+                   (total (if (int_eq depth 0) 9072 1533168))
+                   (found (if (int_eq depth 0) 0 8))
+                   (name
+                     (if (int_eq depth 0)
+                       "INSERT-SORT FULL DEPTH 0 ABSENCE"
+                       "INSERT-SORT FULL DEPTH 1")))
+                  (PsTask
+                    name
+                    candq
+                    (pt_sort_probeq)
+                    (list (pt_int_ty) (pt_ilist_ty))
+                    (pt_ilist_ty)
+                    body
+                    grammar
+                    (pt_list_ty (pt_ilist_ty))
+                    query
+                    want
+                    (if (int_eq depth 0)
+                      None
+                      (Some (pt_sort_witness candq)))
+                    total
+                    found))))))))))))
+
+;; Nested-match merge is the next playground rung: two independently
+;; decreasing recursive calls share a branch grammar.  At depth 1 its full
+;; grammar is 3 * 5 * 12 * 171^2 = 5,263,380 programs.
+(fn pt_merge_query_go
+  ((candq QName) (tests (List (Pair (List Int) (List Int)))))
+  (List Expr)
+  (measure (struct tests))
+  (match tests
+    (Nil Nil)
+    ((Cons (Pair xs ys) rest)
+     (Cons
+       (Call candq (list (intlist_to_expr xs) (intlist_to_expr ys)))
+       (pt_merge_query_go candq rest)))))
+
+(fn pt_merge_inputs () (List (Pair (List Int) (List Int)))
+  (list
+    (Pair Nil Nil)
+    (Pair (list 1) Nil)
+    (Pair Nil (list 2))
+    (Pair (list 1 3) (list 2 4))
+    (Pair (list 2) (list 1 3))
+    (Pair (list 1 2) (list 2 3))
+    (Pair (list 5 6) (list 1 2))
+    (Pair (list 1 1) (list 1))))
+
+(fn pt_merge_outputs () (List (List Int))
+  (list
+    Nil
+    (list 1)
+    (list 2)
+    (list 1 2 3 4)
+    (list 1 2 3)
+    (list 1 2 2 3)
+    (list 1 2 5 6)
+    (list 1 1 1)))
+
+(fn pt_merge_witness ((candq QName)) Expr
+  (Match
+    (BVar 1)
+    (list
+      (Arm (PCtor (qn (quote Nil)) Nil) (BVar 0))
+      (Arm
+        (PCtor (qn (quote Cons)) (list (PVar) (PVar)))
+        (Match
+          (BVar 2)
+          (list
+            (Arm (PCtor (qn (quote Nil)) Nil) (BVar 3))
+            (Arm
+              (PCtor (qn (quote Cons)) (list (PVar) (PVar)))
+              (If
+                (Call (qn (quote le)) (list (BVar 3) (BVar 1)))
+                (Ctor
+                  (qn (quote Cons))
+                  (list
+                    (BVar 3)
+                    (Call candq (list (BVar 2) (BVar 4)))))
+                (Ctor
+                  (qn (quote Cons))
+                  (list
+                    (BVar 1)
+                    (Call candq (list (BVar 5) (BVar 0)))))))))))))
+
+(fn pt_merge_task ((appendq QName)) PsTask
+  (let
+    ((candq (pt_merge_candq))
+     (a_leaves
+       (list (BVar 0) (BVar 1) (Ctor (qn (quote Nil)) Nil)))
+     (b_leaves
+       (list
+         (BVar 3)
+         (BVar 1)
+         (BVar 0)
+         (BVar 2)
+         (Ctor (qn (quote Nil)) Nil)))
+     (branch_leaves
+       (list
+         (BVar 3)
+         (BVar 1)
+         (BVar 2)
+         (BVar 0)
+         (BVar 5)
+         (BVar 4)
+         (Ctor (qn (quote Nil)) Nil)
+         (Call (pt_merge_candq) (list (BVar 2) (BVar 4)))
+         (Call (pt_merge_candq) (list (BVar 5) (BVar 0))))))
+    (match (pt_list_g 0 0 a_leaves appendq)
+      ((Pair a_entries after_a)
+       (match (pt_list_g 0 after_a b_leaves appendq)
+         ((Pair b_entries after_b)
+          (match (pt_sort_cond_g after_b)
+            ((Pair cond_entries after_cond)
+             (match (pt_list_g 1 after_cond branch_leaves appendq)
+               ((Pair then_entries after_then)
+                (match (pt_list_g 1 after_then branch_leaves appendq)
+                  ((Pair else_entries _)
+                   (let
+                     ((body
+                        (Match
+                          (BVar 1)
+                          (list
+                            (Arm (PCtor (qn (quote Nil)) Nil) (hole 0))
+                            (Arm
+                              (PCtor
+                                (qn (quote Cons))
+                                (list (PVar) (PVar)))
+                              (Match
+                                (BVar 2)
+                                (list
+                                  (Arm
+                                    (PCtor (qn (quote Nil)) Nil)
+                                    (hole after_a))
+                                  (Arm
+                                    (PCtor
+                                      (qn (quote Cons))
+                                      (list (PVar) (PVar)))
+                                    (If
+                                      (hole after_b)
+                                      (hole after_cond)
+                                      (hole after_then)))))))))
+                      (grammar
+                        (Grammar
+                          (pt_app
+                            a_entries
+                            (pt_app
+                              b_entries
+                              (pt_app
+                                cond_entries
+                                (pt_app then_entries else_entries))))))
+                      (query
+                        (list_expr
+                          (pt_merge_query_go candq (pt_merge_inputs))))
+                      (want
+                        (list_expr
+                          (pt_intlists_expr (pt_merge_outputs)))))
+                     (PsTask
+                       "SORTED-LIST MERGE FULL DEPTH 1"
+                       candq
+                       (pt_merge_probeq)
+                       (list (pt_ilist_ty) (pt_ilist_ty))
+                       (pt_ilist_ty)
+                       body
+                       grammar
+                       (pt_list_ty (pt_ilist_ty))
+                       query
+                       want
+                       (Some (pt_merge_witness candq))
+                       5263380
+                       4))))))))))))))
+
+;; Full calculator ring grammar: leaves plus + and * over four fresh child
+;; grammars.  R(0)=4 and R(1)=36, reproducing the playground's full space.
+(fn pt_ring_g ((d Int) (next Int) (leaves (List Expr)))
+  (Pair (List GEnt) Int)
+  (measure d)
+  (if (le d 0)
+    (Pair (Cons (GEnt next leaves) Nil) (+ next 1))
+    (match (pt_ring_g (- d 1) (+ next 1) leaves)
+      ((Pair es1 n1)
+       (match (pt_ring_g (- d 1) n1 leaves)
+         ((Pair es2 n2)
+          (match (pt_ring_g (- d 1) n2 leaves)
+            ((Pair es3 n3)
+             (match (pt_ring_g (- d 1) n3 leaves)
+               ((Pair es4 n4)
+                (let
+                  ((alts
+                     (pt_app
+                       leaves
+                       (list
+                         (Call
+                           (qn (quote +))
+                           (list (hole (+ next 1)) (hole n1)))
+                         (Call
+                           (qn (quote *))
+                           (list (hole n2) (hole n3)))))))
+                  (Pair
+                    (Cons
+                      (GEnt next alts)
+                      (pt_app es1 (pt_app es2 (pt_app es3 es4))))
+                    n4))))))))))))
+
+(fn pt_pnum ((heads PtCalcHeads) (n Int)) Expr
+  (match heads ((PtCalcHeads num _ _ _) (Ctor num (Cons (IntLit n) Nil)))))
+(fn pt_pplus ((heads PtCalcHeads) (a Expr) (b Expr)) Expr
+  (match heads ((PtCalcHeads _ plus _ _) (Ctor plus (list a b)))))
+(fn pt_ptimes ((heads PtCalcHeads) (a Expr) (b Expr)) Expr
+  (match heads ((PtCalcHeads _ _ times _) (Ctor times (list a b)))))
+(fn pt_pmax ((heads PtCalcHeads) (a Expr) (b Expr)) Expr
+  (match heads ((PtCalcHeads _ _ _ max) (Ctor max (list a b)))))
+
+(fn pt_calc_inputs ((h PtCalcHeads)) (List Expr)
+  (list
+    (pt_pnum h 7)
+    (pt_pnum h -3)
+    (pt_pplus h (pt_pnum h 2) (pt_pnum h 3))
+    (pt_ptimes h (pt_pnum h 2) (pt_pnum h 3))
+    (pt_pplus h (pt_pnum h 0) (pt_pnum h 9))
+    (pt_ptimes h (pt_pnum h 1) (pt_pnum h 5))
+    (pt_ptimes h (pt_pnum h 0) (pt_pnum h 3))
+    (pt_pmax h (pt_pnum h 2) (pt_pnum h 7))
+    (pt_pmax h (pt_pnum h 7) (pt_pnum h 2))
+    (pt_pmax h (pt_pnum h -1) (pt_pnum h -5))
+    (pt_pplus h (pt_ptimes h (pt_pnum h 2) (pt_pnum h 3)) (pt_pnum h 4))
+    (pt_pmax
+      h
+      (pt_pplus h (pt_pnum h 1) (pt_pnum h 1))
+      (pt_ptimes h (pt_pnum h 1) (pt_pnum h 3)))
+    (pt_ptimes
+      h
+      (pt_pplus h (pt_pnum h 1) (pt_pnum h 2))
+      (pt_pplus h (pt_pnum h 3) (pt_pnum h 1)))))
+
+(fn pt_calc_calls ((candq QName) (inputs (List Expr))) (List Expr)
+  (measure (struct inputs))
+  (match inputs
+    (Nil Nil)
+    ((Cons input rest)
+     (Cons (Call candq (Cons input Nil)) (pt_calc_calls candq rest)))))
+
+(fn pt_calc_witness ((heads PtCalcHeads) (candq QName)) Expr
+  (match heads
+    ((PtCalcHeads num plus times max)
+     (Match
+       (BVar 0)
+       (list
+         (Arm (PCtor num (Cons (PVar) Nil)) (BVar 0))
+         (Arm
+           (PCtor plus (list (PVar) (PVar)))
+           (Call
+             (qn (quote +))
+             (list
+               (Call candq (Cons (BVar 1) Nil))
+               (Call candq (Cons (BVar 0) Nil)))))
+         (Arm
+           (PCtor times (list (PVar) (PVar)))
+           (Call
+             (qn (quote *))
+             (list
+               (Call candq (Cons (BVar 1) Nil))
+               (Call candq (Cons (BVar 0) Nil)))))
+         (Arm
+           (PCtor max (list (PVar) (PVar)))
+           (If
+             (Call
+               (qn (quote lt))
+               (list
+                 (Call candq (Cons (BVar 1) Nil))
+                 (Call candq (Cons (BVar 0) Nil))))
+             (Call candq (Cons (BVar 0) Nil))
+             (Call candq (Cons (BVar 1) Nil)))))))))
+
+(fn pt_calc_task ((depth Int) (heads PtCalcHeads)) PsTask
+  (let
+    ((candq (pt_calc_candq))
+     (ring_leaves
+       (list
+         (IntLit 0)
+         (IntLit 1)
+         (Call (pt_calc_candq) (Cons (BVar 1) Nil))
+         (Call (pt_calc_candq) (Cons (BVar 0) Nil)))))
+    (match heads
+      ((PtCalcHeads num plus times max)
+       (match (pt_ring_g depth 1 ring_leaves)
+         ((Pair plus_entries after_plus)
+          (match (pt_ring_g depth after_plus ring_leaves)
+            ((Pair times_entries after_times)
+             (let
+               ((cond_id after_times)
+                (cond_entries
+                  (Cons
+                    (GEnt
+                      after_times
+                      (list
+                        (Call
+                          (qn (quote lt))
+                          (list
+                            (Call candq (Cons (BVar 1) Nil))
+                            (Call candq (Cons (BVar 0) Nil))))
+                        (Call
+                          (qn (quote lt))
+                          (list
+                            (Call candq (Cons (BVar 0) Nil))
+                            (Call candq (Cons (BVar 1) Nil))))))
+                    Nil)))
+               (match (pt_ring_g depth (+ cond_id 1) ring_leaves)
+                 ((Pair hi_entries after_hi)
+                  (match (pt_ring_g depth after_hi ring_leaves)
+                    ((Pair lo_entries _)
+                     (let
+                       ((body
+                          (Match
+                            (BVar 0)
+                            (list
+                              (Arm (PCtor num (Cons (PVar) Nil)) (hole 0))
+                              (Arm
+                                (PCtor plus (list (PVar) (PVar)))
+                                (hole 1))
+                              (Arm
+                                (PCtor times (list (PVar) (PVar)))
+                                (hole after_plus))
+                              (Arm
+                                (PCtor max (list (PVar) (PVar)))
+                                (If
+                                  (hole cond_id)
+                                  (hole (+ cond_id 1))
+                                  (hole after_hi))))))
+                        (grammar
+                          (Grammar
+                            (Cons
+                              (GEnt 0 (list (BVar 0) (IntLit 0) (IntLit 1)))
+                              (pt_app
+                                plus_entries
+                                (pt_app
+                                  times_entries
+                                  (pt_app
+                                    cond_entries
+                                    (pt_app hi_entries lo_entries)))))))
+                        (query
+                          (list_expr
+                            (pt_calc_calls candq (pt_calc_inputs heads))))
+                        (want
+                          (intlist_to_expr
+                            (list 7 -3 5 6 9 5 0 7 7 -1 10 3 12))))
+                       (PsTask
+                         "PEXPR-CALCULATOR FULL DEPTH 1"
+                         candq
+                         (pt_calc_probeq)
+                         (Cons (pt_pexpr_ty) Nil)
+                         (pt_int_ty)
+                         body
+                         grammar
+                         (pt_list_ty (pt_int_ty))
+                         query
+                         want
+                         (Some (pt_calc_witness heads candq))
+                         10077696
+                         200)))))))))))))))

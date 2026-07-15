@@ -295,6 +295,7 @@ TARGETS=(
   meta/rewrite/mod.req.shard
   meta/search/mod.req.shard
   tools/search/rev_obj.shard
+  tools/search/tasks/pure_program_obj.shard
   tools/search/rev.shard
   tools/search/search.shard
   tools/search/census.shard
@@ -537,6 +538,18 @@ fi
 echo "=== search: typed x86 four-operation calculator pin ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_x86_calculator4.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# Pure Shard function-body pins. These retain the playground's full grammars
+# and exact solution floors while SUPERPOSE settles them by demanded holes.
+# The executable imports kernel/types for an independent representative gate,
+# so (like typed_superpose above) it is not a checker target until the known
+# tc_infer/tc_arms mutual-recursion measure gap is closed.
+echo "=== search: pure Shard function-body benchmarks ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/pure_bench.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
