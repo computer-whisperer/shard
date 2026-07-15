@@ -1,0 +1,1354 @@
+;;; tools/impgen/impgen.shard -- the imp -> ISA LEG GENERATOR, v2: the
+;;; STRUCTURAL WALK over well-kinded imp (docs/IMP.md 2a; rung V2-5).
+;;; For every imp pin in the target file, emit the per-target TIE and
+;;; BRIDGE certs. The v1 recognizer/premise machinery is GONE: v2's
+;;; crystallized kinds make the alignment relation program-independent
+;;; by type, so a bridge is the walk's case-on tree over the shared
+;;; banded scrutinees (branch conditions, div guards) with compute-both
+;;; leaves -- no premises, no wrap events, no invariant synthesis.
+;;;
+;;; THE FACTORING (unchanged from I2d): the translators are the single
+;;; source of translation truth -- this tool LOADS models/imp/to_wasm /
+;;; to_x86 through the kernel (meta/invoke) and RUNS them on the pin
+;;; values; the tie literal is the spelled result (meta/spell's sp_e
+;;; over a qname table harvested from the value itself). Nothing about
+;;; translation is re-derived here.
+;;;
+;;; PIN CONVENTION: a pin is a NULLARY fn returning IFn, defined in the
+;;; target file (it_<nm>_fn naming gives claims tie_<nm> / imp_w_<nm>;
+;;; other names pass through whole). Bridges additionally need the
+;;; IFn -> IProg wrapper (found by SIGNATURE); the wrapper's declared
+;;; memsize is discovered by running it (never assumed). A pin the
+;;; translator REFUSES gets a comment line, not an error. Loop pins
+;;; (any IWhile in the body) note-and-tie in this tier; the generic
+;;; Some-conditional loop tier is the next rung of V2-5.
+;;;
+;;; V2 BRIDGE STATEMENT: unpremised --
+;;;   call_fn (S^ff c) (module of the translated pin) 0
+;;;     (iband_args KINDS args)  =  icall (S^gg c2) (WRAP (PIN)) 0 args
+;;; and the proof is (compute both) plus the walk's case-on tree, each
+;;; arm (rewrite (hyp _)) + (compute both), every leaf refl. Guard
+;;; splits put the trap on the False arm -- both machines trap by type,
+;;; and the denotations conflate trap to None on both sides.
+;;;
+;;; RUN IT:  bin/shard_eval run tools/impgen/impgen.shard SRC TARGET OUT.raw
+;;;          (TARGET = wasm | x86; OUT must be a sibling of SRC), then
+;;;          shardfmt OUT.raw -> the committed cert file.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/loader.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../meta/doc")
+(import "../../meta/spell")
+(import "../../meta/invoke")
+(import "../../models/imp/imp.shard")
+
+(use (:: kernel loader World))
+(use (:: kernel loader get_args))
+(use (:: kernel loader read_file))
+(use (:: kernel loader write))
+(use (:: kernel loader write_file))
+(use (:: kernel loader exit))
+(use (:: kernel term Expr))
+(use (:: kernel term FVar))
+(use (:: kernel term Ctor))
+(use (:: kernel term Call))
+(use (:: kernel term IntLit))
+(use (:: kernel term QName))
+(use (:: kernel term qn_name))
+(use (:: kernel term qn_mod))
+(use (:: kernel term qname_eq))
+(use (:: kernel term sym_path_eq))
+(use (:: kernel term expr_eq))
+(use (:: kernel term append_int))
+(use (:: kernel module Module))
+(use (:: kernel module FnDef))
+(use (:: kernel module Type))
+(use (:: kernel module TCon))
+(use (:: meta doc *))
+(use (:: meta spell *))
+(use (:: meta invoke *))
+(use (:: models imp imp *))
+
+;; --- small utils ----------------------------------------------------------------
+
+(fn ceq ((a (List Int)) (b (List Int))) Bool
+  (measure (struct a))
+  (match a
+    (Nil
+      (match b
+        (Nil True)
+        ((Cons _ _) False)))
+    ((Cons x xs)
+     (match b
+       (Nil False)
+       ((Cons y ys) (if (int_eq x y) (ceq xs ys) False))))))
+
+(fn imax ((a Int) (b Int)) Int (if (lt a b) b a))
+
+(fn starts_with ((pre (List Int)) (s (List Int))) Bool
+  (measure (struct pre))
+  (match pre
+    (Nil True)
+    ((Cons p pt)
+     (match s
+       (Nil False)
+       ((Cons c ct) (if (int_eq p c) (starts_with pt ct) False))))))
+
+(fn drop_len ((pre (List Int)) (s (List Int))) (List Int)
+  (measure (struct pre))
+  (match pre
+    (Nil s)
+    ((Cons _ pt)
+     (match s
+       (Nil Nil)
+       ((Cons _ ct) (drop_len pt ct))))))
+
+(fn strip_pre ((pre (List Int)) (s (List Int))) (List Int)
+  (if (starts_with pre s) (drop_len pre s) s))
+
+(fn rev_int_go ((s (List Int)) (acc (List Int))) (List Int)
+  (measure (struct s))
+  (match s
+    (Nil acc)
+    ((Cons h t) (rev_int_go t (Cons h acc)))))
+
+(fn rev_int ((s (List Int))) (List Int) (rev_int_go s Nil))
+
+(fn strip_suf ((suf (List Int)) (s (List Int))) (List Int)
+  (rev_int (strip_pre (rev_int suf) (rev_int s))))
+
+;; pin fn name -> claim stem: it_<nm>_fn -> <nm> (either half optional)
+(fn pin_nm ((s Symbol)) (List Int)
+  (strip_suf "_fn" (strip_pre "it_" (chars_of_sym s))))
+
+;; --- ground-value views (evm results are Ctor/IntLit trees) ---------------------
+
+;; a ctor node with this LOCAL name (basename match: the values come
+;; from the loaded models, whose paths are canonical — within the imp /
+;; wasm / x86 / prelude vocabulary basenames are unambiguous)
+(fn ec_is ((e Expr) (s Symbol)) (Option (List Expr))
+  (match e
+    ((Ctor q args) (if (sym_eq (qn_name q) s) (Some args) None))
+    (_ None)))
+
+(fn e_int ((e Expr)) (Option Int)
+  (match e
+    ((IntLit n) (Some n))
+    (_ None)))
+
+;; --- the spell table: harvest ctor qnames from the value itself -----------------
+;; Every ctor spells as its basename; the generated file's glob uses
+;; make each basename resolvable. Harvesting from the value (instead of
+;; hand-spelled paths) keeps the table honest by construction. One
+;; structural walk (ctor args descend inline — subterms of the head).
+
+(fn tbl_has ((t (List (Pair QName Symbol))) (q QName)) Bool
+  (measure (struct t))
+  (match t
+    (Nil False)
+    ((Cons (Pair k _) rest) (if (qname_eq k q) True (tbl_has rest q)))))
+
+(fn harvest_l ((es (List Expr)) (t (List (Pair QName Symbol))))
+  (List (Pair QName Symbol))
+  (measure (struct es))
+  (match es
+    (Nil t)
+    ((Cons h rest)
+     (match h
+       ((Ctor q args)
+        (harvest_l
+          rest
+          (harvest_l args (if (tbl_has t q) t (Cons (Pair q (qn_name q)) t)))))
+       (_ (harvest_l rest t))))))
+
+(fn harvest ((e Expr)) (List (Pair QName Symbol)) (harvest_l (Cons e Nil) Nil))
+
+;; --- reify: ground imp value Exprs -> native models/imp values ------------------
+;; Loud None on anything outside the imp grammar (an internal error:
+;; the pin evaluated to a non-IFn or the grammar grew without this
+;; tool growing with it).
+
+(fn rf_op ((e Expr)) (Option IOp)
+  (match e
+    ((Ctor q _)
+     (if (sym_eq (qn_name q) (quote IAdd)) (Some IAdd)
+     (if (sym_eq (qn_name q) (quote ISub)) (Some ISub)
+     (if (sym_eq (qn_name q) (quote IMul)) (Some IMul)
+     (if (sym_eq (qn_name q) (quote IDiv)) (Some IDiv)
+     (if (sym_eq (qn_name q) (quote IRem)) (Some IRem)
+     (if (sym_eq (qn_name q) (quote IAnd)) (Some IAnd)
+     (if (sym_eq (qn_name q) (quote IOr)) (Some IOr)
+     (if (sym_eq (qn_name q) (quote IXor)) (Some IXor)
+     (if (sym_eq (qn_name q) (quote IShl)) (Some IShl)
+     (if (sym_eq (qn_name q) (quote IShr)) (Some IShr)
+     (if (sym_eq (qn_name q) (quote IEq)) (Some IEq)
+     (if (sym_eq (qn_name q) (quote ILt)) (Some ILt)
+     (if (sym_eq (qn_name q) (quote ILe)) (Some ILe)
+     None))))))))))))))
+    (_ None)))
+
+(fn rf_kind ((e Expr)) (Option IKind)
+  (match e
+    ((Ctor q _)
+     (if (sym_eq (qn_name q) (quote U8)) (Some U8)
+     (if (sym_eq (qn_name q) (quote U32)) (Some U32)
+     (if (sym_eq (qn_name q) (quote U64)) (Some U64)
+     None))))
+    (_ None)))
+
+(fn rf_kinds ((e Expr)) (Option (List IKind))
+  (measure (struct e))
+  (match e
+    ((Ctor q args)
+     (if (sym_eq (qn_name q) (quote Nil)) (Some Nil)
+     (if (sym_eq (qn_name q) (quote Cons))
+       (match args
+         ((Cons h (Cons t Nil))
+          (match (rf_kind h)
+            (None None)
+            ((Some k)
+             (match (rf_kinds t)
+               (None None)
+               ((Some ks) (Some (Cons k ks)))))))
+         (_ None))
+       None)))
+    (_ None)))
+
+(fn rf_exp ((e Expr)) (Option IExp)
+  (measure (struct e))
+  (match e
+    ((Ctor q args)
+     (if (sym_eq (qn_name q) (quote IConst))
+       (match args
+         ((Cons a Nil)
+          (match (e_int a)
+            (None None)
+            ((Some n) (Some (IConst n)))))
+         (_ None))
+     (if (sym_eq (qn_name q) (quote ILoc))
+       (match args
+         ((Cons a Nil)
+          (match (e_int a)
+            (None None)
+            ((Some n) (Some (ILoc n)))))
+         (_ None))
+     (if (sym_eq (qn_name q) (quote IBin))
+       (match args
+         ((Cons kk (Cons o (Cons a (Cons b Nil))))
+          (match (rf_kind kk)
+            (None None)
+            ((Some ik)
+             (match (rf_op o)
+               (None None)
+               ((Some io)
+                (match (rf_exp a)
+                  (None None)
+                  ((Some ia)
+                   (match (rf_exp b)
+                     (None None)
+                     ((Some ib) (Some (IBin ik io ia ib)))))))))))
+         (_ None))
+     (if (sym_eq (qn_name q) (quote IRotr))
+       (match args
+         ((Cons kk (Cons a (Cons k Nil)))
+          (match (rf_kind kk)
+            (None None)
+            ((Some ik)
+             (match (rf_exp a)
+               (None None)
+               ((Some ia)
+                (match (rf_exp k)
+                  (None None)
+                  ((Some ic) (Some (IRotr ik ia ic)))))))))
+         (_ None))
+     (if (sym_eq (qn_name q) (quote IExt))
+       (match args
+         ((Cons kf (Cons kt (Cons a Nil)))
+          (match (rf_kind kf)
+            (None None)
+            ((Some ikf)
+             (match (rf_kind kt)
+               (None None)
+               ((Some ikt)
+                (match (rf_exp a)
+                  (None None)
+                  ((Some ia) (Some (IExt ikf ikt ia)))))))))
+         (_ None))
+     (if (sym_eq (qn_name q) (quote ITrunc))
+       (match args
+         ((Cons kf (Cons kt (Cons a Nil)))
+          (match (rf_kind kf)
+            (None None)
+            ((Some ikf)
+             (match (rf_kind kt)
+               (None None)
+               ((Some ikt)
+                (match (rf_exp a)
+                  (None None)
+                  ((Some ia) (Some (ITrunc ikf ikt ia)))))))))
+         (_ None))
+     (if (sym_eq (qn_name q) (quote ILoad))
+       (match args
+         ((Cons a Nil)
+          (match (rf_exp a)
+            (None None)
+            ((Some ia) (Some (ILoad ia)))))
+         (_ None))
+       None))))))))
+    (_ None)))
+
+;; one structural walk (the ix_stmts shape: statement dispatch inlined
+;; at the Cons head, so the recursion is a single (struct e) descent)
+(fn rf_stmts ((e Expr)) (Option (List IStmt))
+  (measure (struct e))
+  (match e
+    ((Ctor q args)
+     (if (sym_eq (qn_name q) (quote Nil)) (Some Nil)
+     (if (sym_eq (qn_name q) (quote Cons))
+       (match args
+         ((Cons h (Cons t Nil))
+          (match (rf_stmts t)
+            (None None)
+            ((Some rest)
+             (match h
+               ((Ctor hq hargs)
+                (if (sym_eq (qn_name hq) (quote ISet))
+                  (match hargs
+                    ((Cons i (Cons ex Nil))
+                     (match (e_int i)
+                       (None None)
+                       ((Some n)
+                        (match (rf_exp ex)
+                          (None None)
+                          ((Some ie) (Some (Cons (ISet n ie) rest)))))))
+                    (_ None))
+                (if (sym_eq (qn_name hq) (quote IStore))
+                  (match hargs
+                    ((Cons a (Cons v Nil))
+                     (match (rf_exp a)
+                       (None None)
+                       ((Some ia)
+                        (match (rf_exp v)
+                          (None None)
+                          ((Some iv) (Some (Cons (IStore ia iv) rest)))))))
+                    (_ None))
+                (if (sym_eq (qn_name hq) (quote IIf))
+                  (match hargs
+                    ((Cons c (Cons tb (Cons eb Nil)))
+                     (match (rf_exp c)
+                       (None None)
+                       ((Some ic)
+                        (match (rf_stmts tb)
+                          (None None)
+                          ((Some itb)
+                           (match (rf_stmts eb)
+                             (None None)
+                             ((Some ieb)
+                              (Some (Cons (IIf ic itb ieb) rest)))))))))
+                    (_ None))
+                (if (sym_eq (qn_name hq) (quote IWhile))
+                  (match hargs
+                    ((Cons c (Cons b Nil))
+                     (match (rf_exp c)
+                       (None None)
+                       ((Some ic)
+                        (match (rf_stmts b)
+                          (None None)
+                          ((Some ib) (Some (Cons (IWhile ic ib) rest)))))))
+                    (_ None))
+                  None)))))
+               (_ None)))))
+         (_ None))
+       None)))
+    (_ None)))
+
+(fn rf_fn ((e Expr)) (Option IFn)
+  (match (ec_is e (quote MkIFn))
+    (None None)
+    ((Some args)
+     (match args
+       ((Cons p (Cons x (Cons b (Cons r (Cons rk Nil)))))
+        (match (rf_kinds p)
+          (None None)
+          ((Some pks)
+           (match (rf_kinds x)
+             (None None)
+             ((Some xks)
+              (match (rf_stmts b)
+                (None None)
+                ((Some bs)
+                 (match (rf_exp r)
+                   (None None)
+                   ((Some re)
+                    (match (rf_kind rk)
+                      (None None)
+                      ((Some rkk) (Some (MkIFn pks xks bs re rkk)))))))))))))
+       (_ None)))))
+
+;; --- fuel: depth bounds, computed structurally, + slack -------------------------
+
+;; imp side: istmts/istmt/iwhile burn one per ENTRY and hand the same
+;; reservoir to head and tail — fuel bounds depth, so cost is a max
+;; (upper bounds, validated by the kernel check of the emitted certs)
+(fn gcost ((ss (List IStmt))) Int
+  (measure (struct ss))
+  (match ss
+    (Nil 1)
+    ((Cons s t)
+     (match s
+       ((ISet _ _) (+ 1 (imax 2 (gcost t))))
+       ((IStore _ _) (+ 1 (imax 2 (gcost t))))
+       ((IIf _ tb eb)
+        (+ 1 (imax (+ 2 (imax (gcost tb) (gcost eb))) (gcost t))))
+       ((IWhile _ _) (+ 1 (imax 2 (gcost t))))))))
+
+;; machine side: the same depth discipline over the TRANSLATED ground
+;; value (a Cons spine; Block/Loop/XBlock/XLoop nest) — one generic
+;; walk, nesting recognized by basename
+(fn tc_nest ((s Symbol)) Bool
+  (if (sym_eq s (quote Block)) True
+  (if (sym_eq s (quote Loop)) True
+  (if (sym_eq s (quote XBlock)) True
+  (sym_eq s (quote XLoop))))))
+
+(fn tcost ((e Expr)) Int
+  (measure (struct e))
+  (match e
+    ((Ctor q args)
+     (if (sym_eq (qn_name q) (quote Nil)) 1
+     (if (sym_eq (qn_name q) (quote Cons))
+       (match args
+         ((Cons h (Cons t Nil))
+          (match h
+            ((Ctor hq hargs)
+             (if (tc_nest (qn_name hq))
+               (match hargs
+                 ((Cons b Nil) (+ 1 (imax (+ 2 (tcost b)) (tcost t))))
+                 (_ (+ 1 (imax 2 (tcost t)))))
+               (+ 1 (imax 2 (tcost t)))))
+            (_ (+ 1 (imax 2 (tcost t))))))
+         (_ 1))
+       1)))
+    (_ 1)))
+
+;; --- the symbolic walk: events in evaluation order -------------------------------
+;; The bridge's premise discipline: walk the pin's statements and result
+;; with a SYMBOLIC local state (params = x0…, extras = 0), emitting one
+;; event per machine-width residue in evaluation order — a wrap pair per
+;; exact-op node whose value survives symbolically (ground subtrees
+;; compute away, so they carry no residue), a divisor guard per
+;; symbolic divisor. Branches fork the walk (continuation folded into
+;; both arms); an event's PATH prefixes its premises condition-relative
+;; (the §6j hygiene, meta/spell's cond_wrap).
+
+(fn pq ((s Symbol)) QName (QName Nil s))
+
+(fn sc2 ((s Symbol) (a Expr) (b Expr)) Expr (Call (pq s) (Cons a (Cons b Nil))))
+
+;; value-position spelling of an exact op (comparisons refuse upstream)
+(fn op_sym ((o IOp)) Symbol
+  (match o
+    (IAdd (quote +))
+    (ISub (quote -))
+    (IMul (quote *))
+    (IDiv (quote ediv))
+    (IRem (quote mod))
+    (IAnd (quote band))
+    (IOr (quote bor))
+    (IXor (quote bxor))
+    (IShl (quote bshl))
+    (IShr (quote bshr))
+    (IEq (quote int_eq))
+    (ILt (quote lt))
+    (ILe (quote le))))
+
+(fn is_cmp ((o IOp)) Bool
+  (match o
+    (IEq True)
+    (ILt True)
+    (ILe True)
+    (_ False)))
+
+(fn is_wrapop ((o IOp)) Bool
+  (match o
+    (IAdd True)
+    (ISub True)
+    (IMul True)
+    (_ False)))
+
+(fn has_fv ((e Expr)) Bool
+  (measure (struct e))
+  (match e
+    ((FVar _) True)
+    ((Call _ args) (has_fv_l args))
+    ((Ctor _ args) (has_fv_l args))
+    (_ False)))
+
+(fn has_fv_l ((es (List Expr))) Bool
+  (measure (struct es))
+  (match es
+    (Nil False)
+    ((Cons h t) (if (has_fv h) True (has_fv_l t)))))
+
+;; symbolic locals: params x0…, extras literal 0 (count down, prepend —
+;; the last prepended binder is x0, so the order comes out ascending)
+(fn st_params_go ((p Int) (acc (List Expr))) (List Expr)
+  (measure p (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt p 1) acc (st_params_go (- p 1) (Cons (FVar (xsym (- p 1))) acc))))
+
+(fn st_params ((p Int)) (List Expr) (st_params_go p Nil))
+
+(fn st_zeros ((x Int)) (List Expr)
+  (measure x (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt x 1) Nil (Cons (IntLit 0) (st_zeros (- x 1)))))
+
+(fn st_app ((a (List Expr)) (b (List Expr))) (List Expr)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (st_app t b)))))
+
+(fn st_init ((p Int) (x Int)) (List Expr) (st_app (st_params p) (st_zeros x)))
+
+(fn st_get ((st (List Expr)) (i Int)) (Option Expr)
+  (measure (struct st))
+  (match st
+    (Nil None)
+    ((Cons h t) (if (int_eq i 0) (Some h) (st_get t (- i 1))))))
+
+(fn st_set ((st (List Expr)) (i Int) (v Expr)) (Option (List Expr))
+  (measure (struct st))
+  (match st
+    (Nil None)
+    ((Cons h t)
+     (if (int_eq i 0) (Some (Cons v t))
+     (match (st_set t (- i 1) v)
+       (None None)
+       ((Some t2) (Some (Cons h t2))))))))
+
+;; v2 symbolic entry state: params BANDED to their kinds (the walk's
+;; leaves are the banded trees the statement's iband_args produces),
+;; extras literal 0
+(fn st_binit_go ((ks (List IKind)) (i Int)) (List Expr)
+  (measure (struct ks))
+  (match ks
+    (Nil Nil)
+    ((Cons k kt)
+     (Cons
+       (sc2 (quote mod) (FVar (xsym i)) (IntLit (ikmod k)))
+       (st_binit_go kt (+ i 1))))))
+
+(fn st_binit ((pks (List IKind)) (xks (List IKind))) (List Expr)
+  (st_app (st_binit_go pks 0) (st_zeros (ikn xks))))
+
+;; --- the v2 symbolic walk: banded values + split points --------------------------
+;; The walk mirrors iexp/iop_val EXACTLY (the emitted scrutinees must
+;; be the stuck terms compute leaves): params enter BANDED (the
+;; statement feeds iband_args), op results wrap to their node's kind,
+;; bit ops are band-closed, conversions band-narrow. What v1 collected
+;; as premise events is now a list of GUARD SCRUTINEES -- each becomes
+;; a case-on whose False arm is a trap leaf.
+
+;; walk result: symbolic value + guard scrutinees in evaluation order
+(type XR (XOk Expr (List Expr)) (XRf (List Int)))
+
+(fn ga_app ((a (List Expr)) (b (List Expr))) (List Expr)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (ga_app t b)))))
+
+;; the collapsed band-spelled rotation tree: the model's double-modded
+;; complement ground-collapses under compute at ground counts, so the
+;; walk emits the collapsed spelling directly
+(fn rot_val ((va Expr) (w Int) (md Int) (kc Int)) Expr
+  (sc2
+    (quote band)
+    (sc2
+      (quote bor)
+      (sc2 (quote bshr) va (IntLit (mod kc w)))
+      (sc2 (quote bshl) va (IntLit (mod (- w (mod kc w)) w))))
+    (IntLit (- md 1))))
+
+(fn se_exp ((x86 Bool) (e IExp) (st (List Expr))) XR
+  (measure (struct e))
+  (match e
+    ((IConst n) (XOk (IntLit n) Nil))
+    ((ILoc i)
+     (match (st_get st i)
+       (None (XRf "local index out of range"))
+       ((Some v) (XOk v Nil))))
+    ((IBin k o a b)
+     (if (is_cmp o) (XRf "comparison in value position (no pin consumer)")
+     (match (se_exp x86 a st)
+       ((XRf m) (XRf m))
+       ((XOk va ga)
+        (match (se_exp x86 b st)
+          ((XRf m) (XRf m))
+          ((XOk vb gb)
+           (match o
+             (IDiv
+               (if x86 (XRf "division (to_x86 refuses; unreachable)")
+               (match vb
+                 ((IntLit _) (XOk (sc2 (quote ediv) va vb) (ga_app ga gb)))
+                 (_
+                   (XOk
+                     (sc2 (quote ediv) va vb)
+                     (ga_app
+                       ga
+                       (ga_app
+                         gb
+                         (Cons (sc2 (quote le) (IntLit 1) vb) Nil))))))))
+             (IRem
+               (if x86 (XRf "remainder (to_x86 refuses; unreachable)")
+               (match vb
+                 ((IntLit _) (XOk (sc2 (quote mod) va vb) (ga_app ga gb)))
+                 (_
+                   (XOk
+                     (sc2 (quote mod) va vb)
+                     (ga_app
+                       ga
+                       (ga_app
+                         gb
+                         (Cons (sc2 (quote le) (IntLit 1) vb) Nil))))))))
+             (IShl
+               (match vb
+                 ((IntLit kc)
+                  (XOk
+                    (sc2
+                      (quote mod)
+                      (sc2 (quote bshl) va (IntLit kc))
+                      (IntLit (ikmod k)))
+                    (ga_app ga gb)))
+                 (_ (XRf "symbolic shift count (wk refuses; unreachable)"))))
+             (IShr
+               (match vb
+                 ((IntLit kc)
+                  (XOk (sc2 (quote bshr) va (IntLit kc)) (ga_app ga gb)))
+                 (_ (XRf "symbolic shift count (wk refuses; unreachable)"))))
+             (IAnd (XOk (sc2 (quote band) va vb) (ga_app ga gb)))
+             (IOr (XOk (sc2 (quote bor) va vb) (ga_app ga gb)))
+             (IXor (XOk (sc2 (quote bxor) va vb) (ga_app ga gb)))
+             (_
+               (XOk
+                 (sc2
+                   (quote mod)
+                   (sc2 (op_sym o) va vb)
+                   (IntLit (ikmod k)))
+                 (ga_app ga gb))))))))))
+    ((IRotr k a c)
+     (if x86
+       (XRf
+         "x86 rotation bridge (the ix_rot shl leg wraps 2^64 mid-tree; native rotate = named growth -- V2-2b)")
+     (match c
+       ((IConst kc)
+        (match (se_exp x86 a st)
+          ((XRf m) (XRf m))
+          ((XOk va ga) (XOk (rot_val va (ikw k) (ikmod k) kc) ga))))
+       (_ (XRf "symbolic rotation count (wk refuses; unreachable)")))))
+    ((IExt _ _ a) (se_exp x86 a st))
+    ((ITrunc _ kt a)
+     (match (se_exp x86 a st)
+       ((XRf m) (XRf m))
+       ((XOk va ga)
+        (XOk (sc2 (quote band) va (IntLit (- (ikmod kt) 1))) ga))))
+    ((ILoad _)
+     (XRf "memory in a straight-line pin (the loop tier's denotations carry mem)"))))
+
+;; the branch tree the proof mirrors
+(type BT (BTLeaf) (BTBr Expr BT BT))
+
+;; statements walk result: the case-on tree the proof mirrors
+(type SR (SROk BT) (SRf (List Int)))
+
+;; wrap a statement's guard splits around the continuation tree: the
+;; False arm of every guard is a trap leaf (both machines trap by
+;; type; the denotations conflate trap to None on both sides)
+(fn bt_guards ((gs (List Expr)) (bt BT)) BT
+  (measure (struct gs))
+  (match gs
+    (Nil bt)
+    ((Cons g t) (BTBr g (bt_guards t bt) BTLeaf))))
+
+;; a condition's split spec: CSplit scrut guards flipped (flipped =
+;; the True arm selects the ELSE branch -- imp's istmt tests the
+;; condition VALUE against zero, so a non-comparison condition splits
+;; on (int_eq cv 0)); CFollow z = ground condition, walk the known arm
+(type CSpec (CSplit Expr (List Expr) Bool) (CFollow Bool) (CBad (List Int)))
+
+(fn se_cond_val ((x86 Bool) (c IExp) (st (List Expr))) CSpec
+  (match (se_exp x86 c st)
+    ((XRf m) (CBad m))
+    ((XOk cv gs)
+     (match cv
+       ((IntLit n) (CFollow (int_eq n 0)))
+       (_ (CSplit (sc2 (quote int_eq) cv (IntLit 0)) gs True))))))
+
+(fn se_cond ((x86 Bool) (c IExp) (st (List Expr))) CSpec
+  (match c
+    ((IBin _ o a b)
+     (if (is_cmp o)
+       (match (se_exp x86 a st)
+         ((XRf m) (CBad m))
+         ((XOk va ga)
+          (match (se_exp x86 b st)
+            ((XRf m) (CBad m))
+            ((XOk vb gb)
+             (CSplit (sc2 (op_sym o) va vb) (ga_app ga gb) False)))))
+       (se_cond_val x86 c st)))
+    (_ (se_cond_val x86 c st))))
+
+;; total statement count (branch bodies included) — the walk's fuel
+;; bound: continuation folding consumes each original statement at most
+;; once along any one chain
+(fn isz_stmts ((ss (List IStmt))) Int
+  (measure (struct ss))
+  (match ss
+    (Nil 0)
+    ((Cons s t)
+     (match s
+       ((ISet _ _) (+ 1 (isz_stmts t)))
+       ((IStore _ _) (+ 1 (isz_stmts t)))
+       ((IIf _ tb eb) (+ 1 (+ (isz_stmts tb) (+ (isz_stmts eb) (isz_stmts t)))))
+       ((IWhile _ b) (+ 1 (+ (isz_stmts b) (isz_stmts t))))))))
+
+;; statements + result, continuation folded into branch arms so every
+;; leaf is a complete run; conditions must be comparison-headed and
+;; event-free (the no-arith-in-conditions fence). Fueled: folding is
+;; not structural, and the size bound above makes underflow unreachable
+(fn se_stmts
+  ((fuel Int) (x86 Bool) (ss (List IStmt)) (res IExp) (st (List Expr)))
+  SR
+  (measure
+    fuel
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1)))
+  (if (lt fuel 1) (SRf "walk fuel underflow (internal)")
+  (match ss
+    (Nil
+      (match (se_exp x86 res st)
+        ((XRf m) (SRf m))
+        ((XOk _ gs) (SROk (bt_guards gs BTLeaf)))))
+    ((Cons s t)
+     (match s
+       ((ISet i e)
+        (match (se_exp x86 e st)
+          ((XRf m) (SRf m))
+          ((XOk v gs)
+           (match (st_set st i v)
+             (None (SRf "local index out of range"))
+             ((Some st2)
+              (match (se_stmts (- fuel 1) x86 t res st2)
+                ((SRf m) (SRf m))
+                ((SROk bt) (SROk (bt_guards gs bt)))))))))
+       ((IStore _ _)
+        (SRf "memory in a straight-line pin (the loop tier's denotations carry mem)"))
+       ((IWhile _ _) (SRf "loop pin (the generic loop tier)"))
+       ((IIf c tb eb)
+        (match (se_cond x86 c st)
+          ((CBad m) (SRf m))
+          ((CFollow z)
+           (se_stmts (- fuel 1) x86 (stmt_app (if z eb tb) t) res st))
+          ((CSplit scrut gs flip)
+           (match (se_stmts (- fuel 1) x86 (stmt_app tb t) res st)
+             ((SRf m) (SRf m))
+             ((SROk btt)
+              (match (se_stmts (- fuel 1) x86 (stmt_app eb t) res st)
+                ((SRf m) (SRf m))
+                ((SROk btf)
+                 (SROk
+                   (bt_guards
+                     gs
+                     (if flip (BTBr scrut btf btt)
+                     (BTBr scrut btt btf))))))))))))))))
+
+(fn stmt_app ((a (List IStmt)) (b (List IStmt))) (List IStmt)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (stmt_app t b)))))
+
+;; --- the tie claim ---------------------------------------------------------------
+
+(fn d_tie
+  ((tiepre (List Int)) (nm (List Int)) (trans (List Int)) (pin Symbol) (v Doc))
+  Doc
+  (dconc
+    (list
+      (DStr "(claim ")
+      (DStr tiepre)
+      (DStr nm)
+      (DStr " (goal () () (= (")
+      (DStr trans)
+      (DStr " (")
+      (dsym pin)
+      (DStr ")) ")
+      v
+      (DStr ")) (steps ((compute both)) refl))")
+      (DStr (nl))
+      (DStr (nl)))))
+
+;; goal binders: (x0 Int) … then the two fuel tails
+(fn d_binds_go ((n Int) (acc Doc)) Doc
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt n 1) acc
+  (d_binds_go
+    (- n 1)
+    (DCat (dcat3 (DStr "(x") (dint (- n 1)) (DStr " Int) ")) acc))))
+
+(fn d_binds ((n Int)) Doc (d_binds_go n (DStr "(c Nat) (c2 Nat)")))
+
+;; call args: (list x0 x1 …), Nil when the pin takes no params
+(fn d_args_go ((n Int) (acc Doc)) Doc
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt n 1) acc (d_args_go (- n 1) (dcat3 (DStr " x") (dint (- n 1)) acc))))
+
+(fn d_args ((n Int)) Doc
+  (if (lt n 1) (DStr "Nil")
+  (dcat3 (DStr "(list") (d_args_go n (DStr "")) (DStr ")"))))
+
+;; --- the v2 goal equation ---------------------------------------------------------
+
+;; the pin's parameter kinds, spelled
+(fn d_kind1 ((k IKind)) Doc
+  (match k
+    (U8 (DStr "U8"))
+    (U32 (DStr "U32"))
+    (U64 (DStr "U64"))))
+
+(fn d_kinds_go ((ks (List IKind))) Doc
+  (measure (struct ks))
+  (match ks
+    (Nil (DStr ""))
+    ((Cons k t) (dcat3 (sp) (d_kind1 k) (d_kinds_go t)))))
+
+(fn d_kinds ((ks (List IKind))) Doc
+  (match ks
+    (Nil (DStr "Nil"))
+    ((Cons _ _) (dcat3 (DStr "(list") (d_kinds_go ks) (DStr ")")))))
+
+;; machine side: the banded entry (iband_args -- the v2 alignment
+;; relation made syntax); the module's memsize is the wrapper's
+;; declared size, discovered by running the wrapper
+(fn d_lhs
+  ((x86 Bool)
+   (trans (List Int))
+   (pin Symbol)
+   (ff Int)
+   (msz Int)
+   (ks Doc)
+   (args Doc))
+  Doc
+  (dconc
+    (list
+      (DStr (if x86 "(xcall_fn (S^ " "(call_fn (S^ "))
+      (dint ff)
+      (DStr " c) (")
+      (DStr (if x86 "MkXModule (list (x_of (" "MkWModule (list (w_of ("))
+      (DStr trans)
+      (DStr " (")
+      (dsym pin)
+      (DStr (if x86 ")))) 0 " ")))) "))
+      (dint msz)
+      (DStr ") 0 (iband_args ")
+      ks
+      (DStr " ")
+      args
+      (DStr "))"))))
+
+(fn d_rhs ((wrapnm (List Int)) (pin Symbol) (gg Int) (args Doc)) Doc
+  (dconc
+    (list
+      (DStr "(icall (S^ ")
+      (dint gg)
+      (DStr " c2) (")
+      (DStr wrapnm)
+      (DStr " (")
+      (dsym pin)
+      (DStr ")) 0 ")
+      args
+      (DStr ")"))))
+
+;; the case-on tree: every arm rewrites its own hypothesis and
+;; recomputes; leaves are refl (trap leaves included -- both
+;; denotations are None there)
+(fn emit_tree ((bt BT)) Doc
+  (measure (struct bt))
+  (match bt
+    (BTLeaf (DStr "refl"))
+    ((BTBr c tb fb)
+     (dconc
+       (list
+         (DStr "(case-on ")
+         (pr_e c)
+         (DStr
+           " Bool ((case True (chain (steps ((rewrite (hyp True) lr both true ()) (compute both))) ")
+         (emit_tree tb)
+         (DStr
+           ")) (case False (chain (steps ((rewrite (hyp False) lr both true ()) (compute both))) ")
+         (emit_tree fb)
+         (DStr "))))"))))))
+
+;; the whole bridge claim: UNPREMISED (the v2 thesis)
+(fn d_bridge
+  ((brpre (List Int))
+   (nm (List Int))
+   (pin Symbol)
+   (x86 Bool)
+   (trans (List Int))
+   (wrapnm (List Int))
+   (nparams Int)
+   (ff Int)
+   (gg Int)
+   (msz Int)
+   (ks Doc)
+   (bt BT))
+  Doc
+  (dconc
+    (list
+      (DStr "(claim ")
+      (DStr brpre)
+      (DStr nm)
+      (DStr " (goal (")
+      (d_binds nparams)
+      (DStr ") () (= ")
+      (d_lhs x86 trans pin ff msz ks (d_args nparams))
+      (DStr " ")
+      (d_rhs wrapnm pin gg (d_args nparams))
+      (DStr ")) ")
+      (match bt
+        (BTLeaf (DStr "(steps ((compute both)) refl)"))
+        ((BTBr _ _ _)
+         (dcat3
+           (DStr "(chain (steps ((compute both))) ")
+           (emit_tree bt)
+           (DStr ")"))))
+      (DStr ")")
+      (DStr (nl))
+      (DStr (nl)))))
+
+;; a bridge the v1 walk declines: the tie stands alone, honestly noted
+(fn d_note ((pin Symbol) (why (List Int))) Doc
+  (dconc
+    (list
+      (DStr ";; ")
+      (dsym pin)
+      (DStr ": tie only (bridge scope: ")
+      (DStr why)
+      (DStr ")")
+      (DStr (nl))
+      (DStr (nl)))))
+
+;; --- bridge-joint discovery ---------------------------------------------------
+
+(fn is_ty1 ((t Type) (s Symbol)) Bool
+  (match t
+    ((TCon q as)
+     (match as
+       (Nil (sym_eq (qn_name q) s))
+       ((Cons _ _) False)))
+    (_ False)))
+
+;; the IFn -> IProg wrapper defined in the source module, by signature
+(fn find_wrap ((fns (List FnDef)) (mp (List Symbol))) (Option Symbol)
+  (measure (struct fns))
+  (match fns
+    (Nil None)
+    ((Cons f rest)
+     (match f
+       ((FnDef q ts rt _)
+        (match ts
+          ((Cons t1 tr)
+           (match tr
+             (Nil
+               (if (is_ty1 t1 (quote IFn))
+                 (if (is_ty1 rt (quote IProg))
+                   (if (sym_path_eq (qn_mod q) mp)
+                     (Some (qn_name q))
+                     (find_wrap rest mp))
+                   (find_wrap rest mp))
+                 (find_wrap rest mp)))
+             ((Cons _ _) (find_wrap rest mp))))
+          (Nil (find_wrap rest mp))))))))
+
+;; drop through the first underscore (the whole tail if none)
+;; --- per-pin emission ------------------------------------------------------------
+
+;; a refused pin's honest record in the output
+(fn d_refused ((pin Symbol) (tname (List Int))) Doc
+  (dconc
+    (list
+      (DStr ";; ")
+      (dsym pin)
+      (DStr ": no ")
+      (DStr tname)
+      (DStr " leg (the translator refused this pin)")
+      (DStr (nl))
+      (DStr (nl)))))
+
+(type ERes (EOk Doc) (EErr (List Int)))
+
+(fn last_e ((es (List Expr))) (Option Expr)
+  (measure (struct es))
+  (match es
+    (Nil None)
+    ((Cons h Nil) (Some h))
+    ((Cons _ t) (last_e t))))
+
+;; the pin's bridge: fuel from the two cost walks, premises and proof
+;; from the symbolic walk; a v1-scope decline leaves the tie standing
+;; with an honest note
+;; any IWhile anywhere in a body (nested branches included)
+(fn has_while ((ss (List IStmt))) Bool
+  (measure (struct ss))
+  (match ss
+    (Nil False)
+    ((Cons s t)
+     (match s
+       ((IWhile _ _) True)
+       ((IIf _ tb eb)
+        (if (has_while tb) True
+        (if (has_while eb) True
+        (has_while t))))
+       (_ (has_while t))))))
+
+;; the wrapper's declared memsize, discovered by RUNNING the wrapper
+;; on the pin value (never assumed)
+(fn wrap_msz ((msrc Module) (wrap Symbol) (gv Expr)) (Option Int)
+  (match (invoke msrc wrap (Cons gv Nil))
+    (None None)
+    ((Some pv)
+     (match (ec_is pv (quote MkIProg))
+       (None None)
+       ((Some pargs)
+        (match pargs
+          ((Cons _ (Cons ms Nil)) (e_int ms))
+          (_ None)))))))
+
+(fn gen_bridge
+  ((brpre (List Int))
+   (trans (List Int))
+   (x86 Bool)
+   (wrapnm (List Int))
+   (msz Int)
+   (pin Symbol)
+   (ifn IFn)
+   (tv Expr))
+  ERes
+  (match (ec_is tv (quote Some))
+    (None (EErr "translated value is not Some (internal)"))
+    ((Some sargs)
+     (match sargs
+       ((Cons fexp Nil)
+        (match fexp
+          ((Ctor _ margs)
+           (match (last_e margs)
+             (None (EErr "translated func has no body (internal)"))
+             ((Some instrs)
+              (match
+                (se_stmts
+                  (+ (isz_stmts (ibody_of ifn)) 2)
+                  x86
+                  (ibody_of ifn)
+                  (iresult_of ifn)
+                  (st_binit (ikparams_of ifn) (ikextra_of ifn)))
+                ((SRf why) (EOk (d_note pin why)))
+                ((SROk bt)
+                 (EOk
+                   (d_bridge
+                     brpre
+                     (pin_nm pin)
+                     pin
+                     x86
+                     trans
+                     wrapnm
+                     (ikn (ikparams_of ifn))
+                     (+ (tcost instrs) 4)
+                     (+ (gcost (ibody_of ifn)) 4)
+                     msz
+                     (d_kinds (ikparams_of ifn))
+                     bt)))))))
+          (_ (EErr "translated value shape (internal)"))))
+       (_ (EErr "translated value shape (internal)"))))))
+
+;; one pin, one target: evaluate the pin in the SOURCE module, run the
+;; translator on the value in the TRANSLATOR module, spell the tie,
+;; then the scalar bridge (when the wrapper exists and the walk
+;; accepts); loop pins note-and-tie in this tier
+(fn gen_pin
+  ((msrc Module)
+   (mtr Module)
+   (trans Symbol)
+   (tiepre (List Int))
+   (brpre (List Int))
+   (tname (List Int))
+   (x86 Bool)
+   (wrap (Option Symbol))
+   (pin Symbol))
+  ERes
+  (match (invoke msrc pin Nil)
+    (None (EErr (append_int "pin does not evaluate: " (chars_of_sym pin))))
+    ((Some gv)
+     (match (invoke mtr trans (Cons gv Nil))
+       (None
+         (EErr (append_int "translator invoke failed on " (chars_of_sym pin))))
+       ((Some tv)
+        (match (ec_is tv (quote None))
+          ((Some _) (EOk (d_refused pin tname)))
+          (None
+            (match (sp_e (harvest tv) 0 tv)
+              ((SpRErr msg) (EErr msg))
+              ((SpROk vdoc)
+               (match (rf_fn gv)
+                 (None
+                   (EErr (append_int "pin does not reify: " (chars_of_sym pin))))
+                 ((Some ifn)
+                  (if (has_while (ibody_of ifn))
+                    (EOk
+                      (DCat
+                        (d_tie
+                          tiepre
+                          (pin_nm pin)
+                          (chars_of_sym trans)
+                          pin
+                          vdoc)
+                        (d_note pin "loop pin (the generic loop tier)")))
+                  (match wrap
+                    (None
+                      (EOk
+                        (d_tie
+                          tiepre
+                          (pin_nm pin)
+                          (chars_of_sym trans)
+                          pin
+                          vdoc)))
+                    ((Some wnm)
+                     (match (wrap_msz msrc wnm gv)
+                       (None
+                         (EErr "wrapper does not yield an IProg (internal)"))
+                       ((Some msz)
+                        (match
+                          (gen_bridge
+                            brpre
+                            (chars_of_sym trans)
+                            x86
+                            (chars_of_sym wnm)
+                            msz
+                            pin
+                            ifn
+                            tv)
+                          ((EErr msg) (EErr msg))
+                          ((EOk bdoc)
+                           (EOk
+                             (DCat
+                               (d_tie
+                                 tiepre
+                                 (pin_nm pin)
+                                 (chars_of_sym trans)
+                                 pin
+                                 vdoc)
+                               bdoc))))))))))))))))))))
+
+(fn gen_pins
+  ((msrc Module)
+   (mtr Module)
+   (trans Symbol)
+   (tiepre (List Int))
+   (brpre (List Int))
+   (tname (List Int))
+   (x86 Bool)
+   (wrap (Option Symbol))
+   (pins (List Symbol)))
+  ERes
+  (measure (struct pins))
+  (match pins
+    (Nil (EOk (DStr "")))
+    ((Cons p rest)
+     (match (gen_pin msrc mtr trans tiepre brpre tname x86 wrap p)
+       ((EErr msg) (EErr msg))
+       ((EOk d)
+        (match (gen_pins msrc mtr trans tiepre brpre tname x86 wrap rest)
+          ((EErr msg) (EErr msg))
+          ((EOk ds) (EOk (DCat d ds)))))))))
+
+;; --- pin enumeration --------------------------------------------------------------
+
+;; nullary fns returning IFn, defined in the target file's own module
+(fn is_ifn_ty ((t Type)) Bool
+  (match t
+    ((TCon q args)
+     (match args
+       (Nil (sym_eq (qn_name q) (quote IFn)))
+       ((Cons _ _) False)))
+    (_ False)))
+
+(fn pins_of ((fns (List FnDef)) (mp (List Symbol))) (List Symbol)
+  (measure (struct fns))
+  (match fns
+    (Nil Nil)
+    ((Cons f rest)
+     (match f
+       ((FnDef q ts rt _)
+        (match ts
+          ((Cons _ _) (pins_of rest mp))
+          (Nil
+            (if (is_ifn_ty rt)
+              (if (sym_path_eq (qn_mod q) mp)
+                (Cons (qn_name q) (pins_of rest mp))
+                (pins_of rest mp))
+              (pins_of rest mp)))))))))
+
+;; --- the generated file header -----------------------------------------------------
+
+;; imports: kernel stdlib + the pin SOURCE (sibling by basename) + the
+;; imp model + the target model + the translator, repo-root relative
+;; through the OUT path's updots climb
+(fn ig_header
+  ((src (List Int))
+   (tname (List Int))
+   (out (List Int))
+   (modelpath (List Int))
+   (transpath (List Int))
+   (loopful Bool)
+   (x86 Bool))
+  Doc
+  (dconc
+    (list
+      (DStr ";;; GENERATED by tools/impgen (the imp -> ISA leg generator, docs/IMP.md V2-5) --")
+      (DStr (nl))
+      (DStr ";;; DO NOT EDIT; regenerate:")
+      (DStr (nl))
+      (DStr ";;;   bin/shard_eval run tools/impgen/impgen.shard ")
+      (DStr src)
+      (DStr " ")
+      (DStr tname)
+      (DStr " ")
+      (DStr out)
+      (DStr ", then shardfmt.")
+      (DStr (nl))
+      (dimport (append_int (updots out) "kernel/stdlib.shard"))
+      (dimport (basename_go src Nil))
+      (dimport (append_int (updots out) "models/imp/imp.shard"))
+      (dimport (append_int (updots out) modelpath))
+      (dimport (append_int (updots out) transpath))
+      (if loopful
+        (dconc
+          (list
+            (dimport (append_int (updots out) "std/nat.shard"))
+            (dimport (append_int (updots out) "std/mem"))
+            (dimport (append_int (updots out) "models/wasm/loopkit.shard"))
+            (if x86
+              (dimport (append_int (updots out) "models/x86/loopkit.shard"))
+              (DStr ""))))
+        (DStr ""))
+      (use_of src)
+      (use_of "models/imp/imp.shard")
+      (use_of modelpath)
+      (use_of transpath)
+      (if loopful
+        (dconc
+          (list
+            (use_of "std/nat.shard")
+            (use_of "std/mem")
+            (use_of "models/wasm/loopkit.shard")
+            (if x86 (use_of "models/x86/loopkit.shard") (DStr ""))))
+        (DStr ""))
+      (DStr (nl)))))
+
+(fn ig_fail ((msg (List Int)) (w World)) World
+  (exit 2 (write (append_int "error: " (append_int msg (nl))) w)))
+
+(fn ig_refuse ((msg (List Int)) (w World)) World
+  (exit 1 (write (append_int "refused: " (append_int msg (nl))) w)))
+
+(fn ig_emit
+  ((src (List Int))
+   (tname (List Int))
+   (out (List Int))
+   (trans Symbol)
+   (modelpath (List Int))
+   (transpath (List Int))
+   (tiepre (List Int))
+   (brpre (List Int))
+   (x86 Bool)
+   (w World))
+  World
+  (match (load_run_module src w)
+    ((Pair None w1) (ig_fail (append_int "cannot load " src) w1))
+    ((Pair (Some msrc) w1)
+     (match (load_run_module transpath w1)
+       ((Pair None w2) (ig_fail (append_int "cannot load " transpath) w2))
+       ((Pair (Some mtr) w2)
+        (match msrc
+          ((Module _ fns _ _ _)
+           (match (pins_of fns (split_slash (until_dot src) Nil))
+             (Nil (ig_refuse (append_int "no imp pins in " src) w2))
+             ((Cons p prest)
+              (match
+                (gen_pins
+                  msrc
+                  mtr
+                  trans
+                  tiepre
+                  brpre
+                  tname
+                  x86
+                  (find_wrap fns (split_slash (until_dot src) Nil))
+                  (Cons p prest))
+                ((EErr msg) (ig_refuse msg w2))
+                ((EOk body)
+                 (match
+                   (write_file
+                     out
+                     (doc_flat
+                       (DCat
+                         (ig_header src tname out modelpath transpath False x86)
+                         body)
+                       Nil)
+                     w2)
+                   ((Pair ok w3)
+                    (if ok
+                      (exit
+                        0
+                        (write (append_int "wrote " (append_int out (nl))) w3))
+                      (ig_fail (append_int "cannot write " out) w3)))))))))))))))
+
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Pair args w1)
+     (match args
+       ((Cons src (Cons tname (Cons out Nil)))
+        (if (ceq tname "wasm")
+          (ig_emit
+            src
+            tname
+            out
+            (quote imp2w_fn)
+            "models/wasm/wasm.shard"
+            "models/imp/to_wasm.shard"
+            "tie_"
+            "imp_w_"
+            False
+            w1)
+        (if (ceq tname "x86")
+          (ig_emit
+            src
+            tname
+            out
+            (quote imp2x_fn)
+            "models/x86/x86.shard"
+            "models/imp/to_x86.shard"
+            "tie_x_"
+            "imp_x_"
+            True
+            w1)
+        (ig_refuse (append_int "unknown target " tname) w1))))
+       (_ (ig_refuse "usage: impgen SRC TARGET OUT" w1))))))
