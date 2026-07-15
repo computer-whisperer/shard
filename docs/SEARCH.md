@@ -1849,10 +1849,15 @@ the public drive boundary and reuses those facts throughout its recursive
 region loop.  The generic probe compiles 12 such facts and checks that direct
 and prepared classification agree on clear, redex, and mixed domains.
 
-Whole-subtree consensus is still assembled on demand from those match facts.
-A further compiled layer could cache unconditional subtree `Clear`/`Redex`
-verdicts or build the complete blocked-hole decision DAG; unlike match facts,
-that layer must preserve rule order, common citations, and dependency choices.
+Preparation now composes those match facts one step further as well.  For each
+grammar hole it runs the complete rule-ordered classifier once and retains an
+unconditional whole-tree `Clear` or common-citation `Redex`; candidate-root
+observer facts are compiled into a separate table so their proof domain cannot
+leak below the root.  The probe obtains four whole-tree and four root-only
+facts.  Its mixed domain produces neither, remains blocked, and is still
+settled lazily after refinement.  A later compiled layer could preserve those
+blocked dependencies as a decision DAG rather than rerunning them, but it must
+keep rule order, common citations, and the exact demanded-hole choice.
 
 `typed_observer_conjunctive.shard` is the non-ISA end-to-end pin.  Its candidate
 is simply `Trio Tagged Tagged Tagged`, with independent `Keep`/`Noise` choices.

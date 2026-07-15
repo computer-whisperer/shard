@@ -18,9 +18,11 @@
 ;;; rule is exact and keeps irrelevant syntax choices lazy.
 ;;; `ms_prepare` performs the assignment-independent portion once per grammar:
 ;;; every stable pattern/hole Yes or No becomes a reusable `MsMatchFact`.
-;;; Blocked outcomes are deliberately not cached because later assignments may
-;;; refine them. `ms_check_prepared` and the direct `ms_check` have identical
-;;; verdict semantics.
+;;; It then composes those facts into stable whole-tree and candidate-root
+;;; Clear/Redex verdicts, keeping the two proof domains separate. Blocked
+;;; outcomes are deliberately not cached because later assignments may refine
+;;; them. `ms_check_prepared` and the direct `ms_check` have identical verdict
+;;; semantics.
 ;;;
 ;;; Ordinary TrsProfile rules are searched at every candidate subterm.
 ;;; TrsRootProfile rules are matched only at the whole candidate root.  This
@@ -365,6 +367,34 @@
   (MsBlocked Int)
   (MsRedex QName))
 
+;; Stable whole-domain verdicts can be reused under every refinement of a
+;; partial assignment.  Blocked is intentionally absent: it names a decision
+;; that descendants may already have made.
+(type MsStableVerdict
+  (MsStableClear)
+  (MsStableRedex QName))
+
+(type MsVerdictFact (MsVerdictFact Int MsStableVerdict))
+
+(fn ms_verdict_fact
+  ((facts (List MsVerdictFact)) (hole_id Int)) (Option MsStableVerdict)
+  (measure (struct facts))
+  (match facts
+    (Nil None)
+    ((Cons (MsVerdictFact cached_hole verdict) rest)
+     (if (int_eq hole_id cached_hole) (Some verdict)
+     (ms_verdict_fact rest hole_id)))))
+
+(fn ms_stable_verdict ((verdict MsStableVerdict)) MsVerdict
+  (match verdict
+    ((MsStableClear) (MsClear))
+    ((MsStableRedex q) (MsRedex q))))
+
+(fn ms_verdict_fact_put
+  ((facts (List MsVerdictFact)) (hole_id Int) (verdict MsStableVerdict))
+  (List MsVerdictFact)
+  (Cons (MsVerdictFact hole_id verdict) facts))
+
 (fn ms_merge ((left MsVerdict) (right MsVerdict)) MsVerdict
   (match left
     ((MsErr msg) (MsErr msg))
@@ -430,6 +460,26 @@
        ((MsSelectExpr selected)
         (ms_node (- fuel 1) grammar asg selected)))))))
 
+(fn ms_rules_root_cached
+  ((fuel Int)
+   (facts (List MsHoleFacts))
+   (root_facts (List MsVerdictFact))
+   (grammar Grammar)
+   (asg (List (Pair Int Int)))
+   (rules (List TrsRule))
+   (candidate Expr))
+  MsVerdict
+  (match (ms_node (- fuel 1) grammar asg candidate)
+    ((MsNodeErr msg) (MsErr msg))
+    ((MsNodeOpen hole_id _)
+     (match (ms_verdict_fact root_facts hole_id)
+       ((Some verdict) (ms_stable_verdict verdict))
+       (None
+        (ms_rules_root
+          (- fuel 1) facts grammar asg rules (hole hole_id) None))))
+    ((MsNodeExpr node)
+     (ms_rules_root (- fuel 1) facts grammar asg rules node None))))
+
 (type MsVerdictAgree
   (MsVerdictAgreeStart)
   (MsVerdictAgreeClear)
@@ -441,6 +491,7 @@
 (fn ms_anywhere_alts
   ((fuel Int)
    (facts (List MsHoleFacts))
+   (tree_facts (List MsVerdictFact))
    (grammar Grammar)
    (asg (List (Pair Int Int)))
    (rules (List TrsRule))
@@ -458,7 +509,7 @@
         ((MsVerdictAgreeClear) (MsClear))
         ((MsVerdictAgreeRedex q) (MsRedex q))))
     ((Cons alt rest)
-     (match (ms_anywhere (- fuel 1) facts grammar asg rules alt)
+     (match (ms_anywhere (- fuel 1) facts tree_facts grammar asg rules alt)
        ((MsErr msg) (MsErr msg))
        ((MsBlocked _) (MsBlocked hole_id))
        ((MsClear)
@@ -468,6 +519,7 @@
             (ms_anywhere_alts
               (- fuel 1)
               facts
+              tree_facts
               grammar
               asg
               rules
@@ -482,6 +534,7 @@
              (ms_anywhere_alts
                (- fuel 1)
                facts
+               tree_facts
                grammar
                asg
                rules
@@ -493,6 +546,7 @@
            (ms_anywhere_alts
              (- fuel 1)
              facts
+             tree_facts
              grammar
              asg
              rules
@@ -503,6 +557,7 @@
 (fn ms_anywhere
   ((fuel Int)
    (facts (List MsHoleFacts))
+   (tree_facts (List MsVerdictFact))
    (grammar Grammar)
    (asg (List (Pair Int Int)))
    (rules (List TrsRule))
@@ -513,15 +568,19 @@
   (match (ms_node (- fuel 1) grammar asg candidate)
     ((MsNodeErr msg) (MsErr msg))
     ((MsNodeOpen hole_id alts)
-     (ms_anywhere_alts
-       (- fuel 1)
-       facts
-       grammar
-       asg
-       rules
-       alts
-       hole_id
-       (MsVerdictAgreeStart)))
+     (match (ms_verdict_fact tree_facts hole_id)
+       ((Some verdict) (ms_stable_verdict verdict))
+       (None
+        (ms_anywhere_alts
+          (- fuel 1)
+          facts
+          tree_facts
+          grammar
+          asg
+          rules
+          alts
+          hole_id
+          (MsVerdictAgreeStart)))))
     ((MsNodeExpr node)
      (let
        ((root
@@ -532,11 +591,12 @@
          ((MsRedex q) (MsRedex q))
          (_
            (ms_children
-             (- fuel 1) facts grammar asg rules node root))))))))
+             (- fuel 1) facts tree_facts grammar asg rules node root))))))))
 
 (fn ms_children
   ((fuel Int)
    (facts (List MsHoleFacts))
+   (tree_facts (List MsVerdictFact))
    (grammar Grammar)
    (asg (List (Pair Int Int)))
    (rules (List TrsRule))
@@ -547,41 +607,46 @@
   (if (lt fuel 1) (MsErr "constraint child scan fuel exhausted")
   (match candidate
     ((Ctor _ args)
-     (ms_anywhere_list (- fuel 1) facts grammar asg rules args prior))
+     (ms_anywhere_list
+       (- fuel 1) facts tree_facts grammar asg rules args prior))
     ((Call _ args)
-     (ms_anywhere_list (- fuel 1) facts grammar asg rules args prior))
+     (ms_anywhere_list
+       (- fuel 1) facts tree_facts grammar asg rules args prior))
     ((If c t e)
      (ms_anywhere_list
-       (- fuel 1) facts grammar asg rules (list c t e) prior))
+       (- fuel 1) facts tree_facts grammar asg rules (list c t e) prior))
     ((Match scrut arms)
      (let
        ((with_scrut
           (ms_merge
             prior
-            (ms_anywhere (- fuel 1) facts grammar asg rules scrut))))
+            (ms_anywhere
+              (- fuel 1) facts tree_facts grammar asg rules scrut))))
        (match with_scrut
          ((MsErr msg) (MsErr msg))
          ((MsRedex q) (MsRedex q))
          (_
            (ms_anywhere_arms
-             (- fuel 1) facts grammar asg rules arms with_scrut)))))
+             (- fuel 1) facts tree_facts grammar asg rules arms with_scrut)))))
     ((Let bindings body)
      (let
        ((with_bindings
           (ms_anywhere_list
-            (- fuel 1) facts grammar asg rules bindings prior)))
+            (- fuel 1) facts tree_facts grammar asg rules bindings prior)))
        (match with_bindings
          ((MsErr msg) (MsErr msg))
          ((MsRedex q) (MsRedex q))
          (_
            (ms_merge
              with_bindings
-             (ms_anywhere (- fuel 1) facts grammar asg rules body))))))
+             (ms_anywhere
+               (- fuel 1) facts tree_facts grammar asg rules body))))))
     (_ prior))))
 
 (fn ms_anywhere_list
   ((fuel Int)
    (facts (List MsHoleFacts))
+   (tree_facts (List MsVerdictFact))
    (grammar Grammar)
    (asg (List (Pair Int Int)))
    (rules (List TrsRule))
@@ -597,17 +662,19 @@
        ((next
           (ms_merge
             prior
-            (ms_anywhere (- fuel 1) facts grammar asg rules candidate))))
+            (ms_anywhere
+              (- fuel 1) facts tree_facts grammar asg rules candidate))))
        (match next
          ((MsErr msg) (MsErr msg))
          ((MsRedex q) (MsRedex q))
          (_
            (ms_anywhere_list
-             (- fuel 1) facts grammar asg rules rest next))))))))
+             (- fuel 1) facts tree_facts grammar asg rules rest next))))))))
 
 (fn ms_anywhere_arms
   ((fuel Int)
    (facts (List MsHoleFacts))
+   (tree_facts (List MsVerdictFact))
    (grammar Grammar)
    (asg (List (Pair Int Int)))
    (rules (List TrsRule))
@@ -623,13 +690,14 @@
        ((next
           (ms_merge
             prior
-            (ms_anywhere (- fuel 1) facts grammar asg rules body))))
+            (ms_anywhere
+              (- fuel 1) facts tree_facts grammar asg rules body))))
        (match next
          ((MsErr msg) (MsErr msg))
          ((MsRedex q) (MsRedex q))
          (_
            (ms_anywhere_arms
-             (- fuel 1) facts grammar asg rules rest next))))))))
+             (- fuel 1) facts tree_facts grammar asg rules rest next))))))))
 
 ;; ---- grammar-specific preparation -----------------------------------------
 
@@ -735,8 +803,89 @@
        ((MsFactsOk more)
         (ms_compile_patterns match_fuel grammar entries rest more))))))
 
+(type MsVerdictFactsR
+  (MsVerdictFactsErr (List Int))
+  (MsVerdictFactsOk (List MsVerdictFact)))
+
+(fn ms_compile_anywhere_holes
+  ((fuel Int)
+   (match_facts (List MsHoleFacts))
+   (grammar Grammar)
+   (rules (List TrsRule))
+   (entries (List GEnt))
+   (tree_facts (List MsVerdictFact)))
+  MsVerdictFactsR
+  (measure (struct entries))
+  (match entries
+    (Nil (MsVerdictFactsOk tree_facts))
+    ((Cons (GEnt hole_id _) rest)
+     (match
+       (ms_anywhere
+         fuel match_facts tree_facts grammar Nil rules (hole hole_id))
+       ((MsErr msg) (MsVerdictFactsErr msg))
+       ((MsBlocked _)
+        (ms_compile_anywhere_holes
+          fuel match_facts grammar rules rest tree_facts))
+       ((MsClear)
+        (ms_compile_anywhere_holes
+          fuel
+          match_facts
+          grammar
+          rules
+          rest
+          (ms_verdict_fact_put tree_facts hole_id (MsStableClear))))
+       ((MsRedex q)
+        (ms_compile_anywhere_holes
+          fuel
+          match_facts
+          grammar
+          rules
+          rest
+          (ms_verdict_fact_put tree_facts hole_id (MsStableRedex q))))))))
+
+(fn ms_compile_root_holes
+  ((fuel Int)
+   (match_facts (List MsHoleFacts))
+   (grammar Grammar)
+   (rules (List TrsRule))
+   (entries (List GEnt))
+   (root_facts (List MsVerdictFact)))
+  MsVerdictFactsR
+  (measure (struct entries))
+  (match entries
+    (Nil (MsVerdictFactsOk root_facts))
+    ((Cons (GEnt hole_id _) rest)
+     (match
+       (ms_rules_root_cached
+         fuel match_facts root_facts grammar Nil rules (hole hole_id))
+       ((MsErr msg) (MsVerdictFactsErr msg))
+       ((MsBlocked _)
+        (ms_compile_root_holes
+          fuel match_facts grammar rules rest root_facts))
+       ((MsClear)
+        (ms_compile_root_holes
+          fuel
+          match_facts
+          grammar
+          rules
+          rest
+          (ms_verdict_fact_put root_facts hole_id (MsStableClear))))
+       ((MsRedex q)
+        (ms_compile_root_holes
+          fuel
+          match_facts
+          grammar
+          rules
+          rest
+          (ms_verdict_fact_put root_facts hole_id (MsStableRedex q))))))))
+
 (type MsPrepared
-  (MsPrepared MsPlan Grammar (List MsHoleFacts)))
+  (MsPrepared
+    MsPlan
+    Grammar
+    (List MsHoleFacts)
+    (List MsVerdictFact)
+    (List MsVerdictFact)))
 
 (type MsPrepareR
   (MsPrepareErr (List Int))
@@ -755,9 +904,23 @@
     ((Cons (MsHoleFacts _ row) rest)
      (+ (ms_match_fact_count row) (ms_fact_count rest)))))
 
+(fn ms_verdict_fact_count ((facts (List MsVerdictFact))) Int
+  (measure (struct facts))
+  (match facts
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (ms_verdict_fact_count rest)))))
+
 (fn ms_prepared_fact_count ((prepared MsPrepared)) Int
   (match prepared
-    ((MsPrepared _ _ facts) (ms_fact_count facts))))
+    ((MsPrepared _ _ facts _ _) (ms_fact_count facts))))
+
+(fn ms_prepared_anywhere_fact_count ((prepared MsPrepared)) Int
+  (match prepared
+    ((MsPrepared _ _ _ facts _) (ms_verdict_fact_count facts))))
+
+(fn ms_prepared_root_fact_count ((prepared MsPrepared)) Int
+  (match prepared
+    ((MsPrepared _ _ _ _ facts) (ms_verdict_fact_count facts))))
 
 (fn ms_prepare ((match_fuel Int) (plan MsPlan) (grammar Grammar)) MsPrepareR
   (match plan
@@ -784,14 +947,48 @@
                     match_fuel grammar entries patterns Nil)
                   ((MsFactsErr msg) (MsPrepareErr msg))
                   ((MsFactsOk facts)
-                   (MsPrepareOk
-                     (MsPrepared checked grammar facts))))))))))))))
+                   (let
+                     ((everywhere_rules (trs_profile_rules everywhere))
+                      (root_rules (trs_root_profile_rules root)))
+                     (match
+                       (if (ms_rules_empty everywhere_rules)
+                         (MsVerdictFactsOk Nil)
+                         (ms_compile_anywhere_holes
+                           match_fuel
+                           facts
+                           grammar
+                           everywhere_rules
+                           entries
+                           Nil))
+                       ((MsVerdictFactsErr msg) (MsPrepareErr msg))
+                       ((MsVerdictFactsOk tree_facts)
+                        (match
+                          (if (ms_rules_empty root_rules)
+                            (MsVerdictFactsOk Nil)
+                            (ms_compile_root_holes
+                              match_fuel
+                              facts
+                              grammar
+                              root_rules
+                              entries
+                              Nil))
+                          ((MsVerdictFactsErr msg) (MsPrepareErr msg))
+                          ((MsVerdictFactsOk root_facts)
+                           (MsPrepareOk
+                             (MsPrepared
+                               checked
+                               grammar
+                               facts
+                               tree_facts
+                               root_facts)))))))))))))))))))
 
 ;; ---- prepared and direct checking -----------------------------------------
 
 (fn ms_check_facts
   ((fuel Int)
    (facts (List MsHoleFacts))
+   (tree_facts (List MsVerdictFact))
+   (root_facts (List MsVerdictFact))
    (plan MsPlan)
    (grammar Grammar)
    (asg (List (Pair Int Int)))
@@ -810,6 +1007,7 @@
             (ms_anywhere
               (- fuel 1)
               facts
+              tree_facts
               grammar
               asg
               everywhere_rules
@@ -821,14 +1019,14 @@
              (ms_merge
                below
                (if (ms_rules_empty root_rules) (MsClear)
-               (ms_rules_root
+               (ms_rules_root_cached
                  (- fuel 1)
                  facts
+                 root_facts
                  grammar
                  asg
                  root_rules
-                 candidate
-                 None)))))))))))
+                 candidate)))))))))))
 
 (fn ms_check
   ((fuel Int)
@@ -837,7 +1035,7 @@
    (asg (List (Pair Int Int)))
    (candidate Expr))
   MsVerdict
-  (ms_check_facts fuel Nil plan grammar asg candidate))
+  (ms_check_facts fuel Nil Nil Nil plan grammar asg candidate))
 
 (fn ms_check_prepared
   ((fuel Int)
@@ -846,5 +1044,6 @@
    (candidate Expr))
   MsVerdict
   (match prepared
-    ((MsPrepared plan grammar facts)
-     (ms_check_facts fuel facts plan grammar asg candidate))))
+    ((MsPrepared plan grammar facts tree_facts root_facts)
+     (ms_check_facts
+       fuel facts tree_facts root_facts plan grammar asg candidate))))
