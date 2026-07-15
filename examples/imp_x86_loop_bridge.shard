@@ -65,6 +65,9 @@
     (XBin32 XSub RDX (SImm 1))
     (XBr 0)))
 
+;; the sum body under the V2-5 zero-scratch loop-boundary invariant:
+;; the dirtied RAX re-zeroes before the back-edge, so scratch is 0 at
+;; every loop boundary and the xlg_last residue selector is gone
 (fn brx_bsum () (List XInstr)
   (list
     (XBrIf (CEqz RDX) 1)
@@ -72,6 +75,7 @@
     (XBin32 XAdd RSI (SReg RAX))
     (XBin32 XAdd RDI (SImm 1))
     (XBin32 XSub RDX (SImm 1))
+    (XMovRI RAX 0)
     (XBr 0)))
 
 (fn brx_dblq () (List XInstr)
@@ -113,7 +117,12 @@
     (=
       (imp2x_fn (il_sum_fn))
       (Some
-        (MkXFunc 3 (list (XBlock (list (XLoop (brx_bsum)))) (XMovRR RAX RSI))))))
+        (MkXFunc
+          3
+          (list
+            (XMovRI RAX 0)
+            (XBlock (list (XLoop (brx_bsum))))
+            (XMovRR RAX RSI))))))
   (steps ((compute both)) refl))
 
 (claim xtie_dblq
@@ -296,8 +305,7 @@
 ;; --- the sum worker bridge: the scratch residue, accumulator apparatus GONE -----
 
 (claim ixw_bsum
-  (goal
-    ((ra Int) (p Int) (acc Int) (m0 Mem) (c Nat) (k Nat) (restfs (List XFunc)))
+  (goal ((p Int) (acc Int) (m0 Mem) (c Nat) (k Nat) (restfs (List XFunc)))
     ((= (le 0 p) True) (= (le (+ p (int_of_nat k)) 65536) True))
     (=
       (xeval_loop
@@ -306,15 +314,18 @@
           (Cons
             (MkXFunc
               3
-              (list (XBlock (list (XLoop (inline brx_bsum)))) (XMovRR RAX RSI)))
+              (list
+                (XMovRI RAX 0)
+                (XBlock (list (XLoop (inline brx_bsum))))
+                (XMovRR RAX RSI)))
             restfs)
           0
           65536)
         (inline brx_bsum)
-        (MkRegs ra 0 (int_of_nat k) 0 0 acc p 0 0 0 0 0 0 0 0)
+        (MkRegs 0 0 (int_of_nat k) 0 0 acc p 0 0 0 0 0 0 0 0)
         m0)
       (ix_out
-        (xlg_last m0 p ra k)
+        0
         (iwhile
           (S^ 10 (lg_fuel k c))
           65536
@@ -338,9 +349,7 @@
             (unfold xeval_loop lhs)
             (unfold iwhile rhs)
             (rewrite (lemma int_of_nat_succ) lr both true ())
-            (compute
-              both
-              (stop xeval_loop iwhile xlg_fuel lg_fuel ix_out xlg_last))))
+            (compute both (stop xeval_loop iwhile xlg_fuel lg_fuel ix_out))))
          (rewrite-with
            (lemma xlg_ne)
            lr
@@ -354,13 +363,9 @@
            ()
            ((rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
          (steps
-           ((compute
-              both
-              (stop xeval_loop iwhile xlg_fuel lg_fuel ix_out xlg_last))
+           ((compute both (stop xeval_loop iwhile xlg_fuel lg_fuel ix_out))
             (rewrite (premise 0) lr both true ())
-            (compute
-              both
-              (stop xeval_loop iwhile xlg_fuel lg_fuel ix_out xlg_last))))
+            (compute both (stop xeval_loop iwhile xlg_fuel lg_fuel ix_out))))
          (rewrite-with
            (lemma xlg_a1_ms)
            lr
@@ -378,16 +383,12 @@
             (steps ((rewrite (lemma int_of_nat_succ) lr lhs true ())) refl)
             (rewrite-with (lemma int_of_nat_nonneg) lr lhs () () refl)))
          (steps
-           ((compute
-              both
-              (stop xeval_loop iwhile xlg_fuel lg_fuel ix_out xlg_last))))
+           ((compute both (stop xeval_loop iwhile xlg_fuel lg_fuel ix_out))))
          (have hsub (= (- (+ 1 (int_of_nat k2)) 1) (int_of_nat k2))
            (rewrite-with (lemma xlg_sub) lr lhs () () refl))
          (steps
            ((rewrite (premise hsub) lr both true ())
-            (compute
-              both
-              (stop xeval_loop iwhile xlg_fuel lg_fuel ix_out xlg_last))))
+            (compute both (stop xeval_loop iwhile xlg_fuel lg_fuel ix_out))))
          (have hwk (= (mod (int_of_nat k2) 4294967296) (int_of_nat k2))
            (rewrite-with
              (lemma iwrap32_id)
@@ -438,7 +439,6 @@
                 refl))
              refl))
          (steps ((rewrite (premise hw0) lr both true ())))
-         (steps ((unfold xlg_last rhs) (reduce rhs)))
          (rewrite-with
            (hyp 0)
            lr
@@ -649,7 +649,7 @@
      (= (le (+ acc (* 256 (int_of_nat k))) 4294967296) True))
     (=
       (xcall_fn_mem
-        (S^ 14 (xlg_fuel k c))
+        (S^ 15 (xlg_fuel k c))
         (MkXModule (list (x_of (imp2x_fn (il_sum_fn)))) 0 65536)
         0
         (iband_args (list U32 U32 U32) (list p acc (int_of_nat k)))
@@ -661,8 +661,7 @@
         (list p acc (int_of_nat k))
         m0)))
   (chain
-    (steps
-      ((compute both (stop xeval_loop iwhile xlg_fuel lg_fuel ix_out xlg_last))))
+    (steps ((compute both (stop xeval_loop iwhile xlg_fuel lg_fuel ix_out))))
     (have hbp (= (mod p 4294967296) p)
       (rewrite-with
         (lemma iwrap32_id)
@@ -829,7 +828,7 @@
      (= (le (+ acc (* 256 (int_of_nat k))) 4294967296) True))
     (=
       (xcall_fn_mem
-        (S^ 14 (xlg_fuel k c))
+        (S^ 15 (xlg_fuel k c))
         (MkXModule (list (x_of (imp2x_fn (il_sum_fn)))) 0 65536)
         0
         (iband_args (list U32 U32 U32) (list p acc (int_of_nat k)))

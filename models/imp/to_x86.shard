@@ -45,8 +45,17 @@
 ;;; materialization — Cond is what jcc sees):
 ;;;   (IIf c thn els)  -> XBlock( XBlock( XBrIf ⟦c⟧ 0  ⟦els⟧ XBr 1 )
 ;;;                       ⟦thn⟧ )
-;;;   (IWhile (ILoc i) b) -> XBlock( XLoop( XBrIf (CEqz home_i) 1
-;;;                          ⟦b⟧ XBr 0 ) )
+;;;   (IWhile (ILoc i) b) -> Z(⟦b⟧)  XBlock( XLoop( XBrIf (CEqz home_i) 1
+;;;                          ⟦b⟧ Z(⟦b⟧) XBr 0 ) )
+;;; where Z(is) zeroes each scratch register (RAX, R10, R11) that is
+;;; WRITTEN anywhere in is — THE ZERO-SCRATCH LOOP-BOUNDARY INVARIANT
+;;; (V2-5): scratch is 0 at every loop boundary (entry, back-edge,
+;;; exit), so the loop-exit register file is exactly (xargs locals)
+;;; and generated loop workers state entry/exit scratch as literal 0 —
+;;; residues resolve by construction (the I2c-2b zero-in/zero-out
+;;; lesson, translator-side); no closed residue form (the xlg_last
+;;; selector) is ever needed. Scratch-free bodies emit no zeroing
+;;; (fill/dblq byte-stable). Dead-store elimination is a perf rung.
 ;;; Refusal is loud by construction (None = no artifact): division
 ;;; (the XDivU compound needs the rdx:rax preamble — named growth),
 ;;; the U64 rotation (the 32-bit composition's algebra does not scale
@@ -493,6 +502,58 @@
 ;; ISet patterns are the shapes x86gen emits — in-place when the dst
 ;; local is the left operand, mov+bin otherwise (fenced against the
 ;; right operand reading the dst), RAX-scratch for a byte load
+;; --- the zero-scratch loop-boundary scan ----------------------------------------
+
+;; scratch tags for the write scan: RAX 0, R10 10, R11 11; every
+;; other register (the homes) -1 — homes mirror imp locals and are
+;; never zeroed
+(fn ix_rtag ((r Reg)) Int
+  (match r
+    (RAX 0)
+    (R10 10)
+    (R11 11)
+    (_ -1)))
+
+;; does the emitted list WRITE the scratch register tagged t?
+;; Descends into nested XBlock/XLoop bodies (conservative for inner
+;; loops, which re-zero their own dirt — a redundant zero of a
+;; zero is harmless; a missed write is not). XDivU writes rdx:rax;
+;; XCall clobbers caller-saved — neither is emitted by ix_stmts in
+;; v1, both answer conservatively.
+(fn ix_dwl ((is (List XInstr)) (t Int)) Bool
+  (measure (struct is))
+  (match is
+    (Nil False)
+    ((Cons i tl)
+     (match i
+       ((XMovRI d _) (if (int_eq (ix_rtag d) t) True (ix_dwl tl t)))
+       ((XMovRR d _) (if (int_eq (ix_rtag d) t) True (ix_dwl tl t)))
+       ((XBin _ d _) (if (int_eq (ix_rtag d) t) True (ix_dwl tl t)))
+       ((XShlI d _) (if (int_eq (ix_rtag d) t) True (ix_dwl tl t)))
+       ((XShrI d _) (if (int_eq (ix_rtag d) t) True (ix_dwl tl t)))
+       ((XBin32 _ d _) (if (int_eq (ix_rtag d) t) True (ix_dwl tl t)))
+       ((XShlI32 d _) (if (int_eq (ix_rtag d) t) True (ix_dwl tl t)))
+       ((XMovRR32 d _) (if (int_eq (ix_rtag d) t) True (ix_dwl tl t)))
+       ((XDivU _) (if (int_eq t 0) True (ix_dwl tl t)))
+       ((XLoad8 d _) (if (int_eq (ix_rtag d) t) True (ix_dwl tl t)))
+       ((XStore8 _ _) (ix_dwl tl t))
+       ((XBlock b) (if (ix_dwl b t) True (ix_dwl tl t)))
+       ((XLoop b) (if (ix_dwl b t) True (ix_dwl tl t)))
+       ((XBr _) (ix_dwl tl t))
+       ((XBrIf _ _) (ix_dwl tl t))
+       ((XCall _) True)
+       (XRet (ix_dwl tl t))
+       (XSyscall (ix_dwl tl t))))))
+
+;; the zeroing sequence for a loop body: one XMovRI 0 per dirtied
+;; scratch register, RAX R10 R11 order
+(fn ix_zs ((ib (List XInstr))) (List XInstr)
+  (ix_app
+    (if (ix_dwl ib 0) (list (XMovRI RAX 0)) Nil)
+    (ix_app
+      (if (ix_dwl ib 10) (list (XMovRI R10 0)) Nil)
+      (if (ix_dwl ib 11) (list (XMovRI R11 0)) Nil))))
+
 (fn ix_stmts ((ss (List IStmt))) (Option (List XInstr))
   (measure (struct ss))
   (match ss
@@ -555,14 +616,16 @@
                    (None None)
                    ((Some ib)
                     (Some
-                      (Cons
-                        (XBlock
-                          (list
-                            (XLoop
-                              (Cons
-                                (XBrIf (CEqz cr) 1)
-                                (ix_app ib (list (XBr 0)))))))
-                        it)))))))
+                      (ix_app
+                        (ix_zs ib)
+                        (Cons
+                          (XBlock
+                            (list
+                              (XLoop
+                                (Cons
+                                  (XBrIf (CEqz cr) 1)
+                                  (ix_app ib (ix_app (ix_zs ib) (list (XBr 0))))))))
+                          it))))))))
              ((IConst n) None)
              ((IBin k2 o2 x y) None)
              ((IRotr k2 x y) None)
