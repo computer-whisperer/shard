@@ -25,8 +25,7 @@
 (use (:: meta invoke *))
 (use (:: tools search pure_program *))
 
-(type PtCalcHeads
-  (PtCalcHeads QName QName QName QName))  ; Num, Plus, Times, Max
+(type PtCalcHeads (PtCalcHeads QName QName QName QName))  ; Num, Plus, Times, Max
 
 (fn (pt_app T) ((a (List T)) (b (List T))) (List T)
   (measure (struct a))
@@ -58,39 +57,36 @@
 
 ;; Full list-expression grammar: leaves plus Cons and append over four fresh
 ;; depth-(d-1) child grammars.  S(d) = L + 2*S(d-1)^2.
-(fn pt_list_g
-  ((d Int) (next Int) (leaves (List Expr)) (appendq QName))
+(fn pt_list_g ((d Int) (next Int) (leaves (List Expr)) (appendq QName))
   (Pair (List GEnt) Int)
   (measure d)
-  (if (le d 0)
-    (Pair (Cons (GEnt next leaves) Nil) (+ next 1))
-    (match (pt_list_g (- d 1) (+ next 1) leaves appendq)
-      ((Pair es1 n1)
-       (match (pt_list_g (- d 1) n1 leaves appendq)
-         ((Pair es2 n2)
-          (match (pt_list_g (- d 1) n2 leaves appendq)
-            ((Pair es3 n3)
-             (match (pt_list_g (- d 1) n3 leaves appendq)
-               ((Pair es4 n4)
-                (let
-                  ((alts
-                     (pt_app
-                       leaves
-                       (list
-                         (Ctor
-                           (qn (quote Cons))
-                           (list (hole (+ next 1)) (hole n1)))
-                         (Call appendq (list (hole n2) (hole n3)))))))
-                  (Pair
-                    (Cons
-                      (GEnt next alts)
-                      (pt_app es1 (pt_app es2 (pt_app es3 es4))))
-                    n4))))))))))))
+  (if (le d 0) (Pair (Cons (GEnt next leaves) Nil) (+ next 1))
+  (match (pt_list_g (- d 1) (+ next 1) leaves appendq)
+    ((Pair es1 n1)
+     (match (pt_list_g (- d 1) n1 leaves appendq)
+       ((Pair es2 n2)
+        (match (pt_list_g (- d 1) n2 leaves appendq)
+          ((Pair es3 n3)
+           (match (pt_list_g (- d 1) n3 leaves appendq)
+             ((Pair es4 n4)
+              (let
+                ((alts
+                   (pt_app
+                     leaves
+                     (list
+                       (Ctor
+                         (qn (quote Cons))
+                         (list (hole (+ next 1)) (hole n1)))
+                       (Call appendq (list (hole n2) (hole n3)))))))
+                (Pair
+                  (Cons
+                    (GEnt next alts)
+                    (pt_app es1 (pt_app es2 (pt_app es3 es4))))
+                  n4))))))))))))
 
 ;; Three comparisons, each with two independent {x,h} argument holes.
 (fn pt_sort_cond_g ((next Int)) (Pair (List GEnt) Int)
-  (let
-    ((args (list (BVar 3) (BVar 1))))
+  (let ((args (list (BVar 3) (BVar 1))))
     (Pair
       (list
         (GEnt
@@ -150,7 +146,14 @@
             (qn (quote Cons))
             (list (BVar 1) (Call candq (list (BVar 3) (BVar 0))))))))))
 
-(fn pt_sort_task ((depth Int) (appendq QName)) PsTask
+(fn pt_sort_task_pin
+  ((depth Int)
+   (appendq QName)
+   (name (List Int))
+   (total Int)
+   (found Int)
+   (witness (Option Expr)))
+  PsTask
   (let
     ((candq (pt_sort_candq))
      (nil_leaves (list (BVar 1) (BVar 0) (Ctor (qn (quote Nil)) Nil)))
@@ -189,16 +192,8 @@
                          (pt_app
                            cond_entries
                            (pt_app then_entries else_entries)))))
-                   (query
-                     (list_expr
-                       (pt_sort_query_go candq (pt_sort_inputs))))
-                   (want (list_expr (pt_intlists_expr (pt_sort_outputs))))
-                   (total (if (int_eq depth 0) 9072 1533168))
-                   (found (if (int_eq depth 0) 0 8))
-                   (name
-                     (if (int_eq depth 0)
-                       "INSERT-SORT FULL DEPTH 0 ABSENCE"
-                       "INSERT-SORT FULL DEPTH 1")))
+                   (query (list_expr (pt_sort_query_go candq (pt_sort_inputs))))
+                   (want (list_expr (pt_intlists_expr (pt_sort_outputs)))))
                   (PsTask
                     name
                     candq
@@ -210,11 +205,37 @@
                     (pt_list_ty (pt_ilist_ty))
                     query
                     want
-                    (if (int_eq depth 0)
-                      None
-                      (Some (pt_sort_witness candq)))
+                    witness
                     total
                     found))))))))))))
+
+(fn pt_sort_task ((depth Int) (appendq QName)) PsTask
+  (if (int_eq depth 0)
+    (pt_sort_task_pin 0 appendq "INSERT-SORT FULL DEPTH 0 ABSENCE" 9072 0 None)
+    (pt_sort_task_pin
+      1
+      appendq
+      "INSERT-SORT FULL DEPTH 1"
+      1533168
+      8
+      (Some (pt_sort_witness (pt_sort_candq))))))
+
+(fn pt_sort_theorem_task ((depth Int) (appendq QName)) PsTask
+  (if (int_eq depth 2)
+    (pt_sort_task_pin
+      2
+      appendq
+      "INSERT-SORT FULL DEPTH 2 + CHECKED APPEND PROFILE"
+      37347981552
+      32
+      (Some (pt_sort_witness (pt_sort_candq))))
+    (pt_sort_task_pin
+      3
+      appendq
+      "INSERT-SORT FULL DEPTH 3 + CHECKED APPEND PROFILE"
+      22140821944106047728
+      48
+      (Some (pt_sort_witness (pt_sort_candq))))))
 
 ;; Nested-match merge is the next playground rung: two independently
 ;; decreasing recursive calls share a branch grammar.  At depth 1 its full
@@ -269,27 +290,17 @@
                 (Call (qn (quote le)) (list (BVar 3) (BVar 1)))
                 (Ctor
                   (qn (quote Cons))
-                  (list
-                    (BVar 3)
-                    (Call candq (list (BVar 2) (BVar 4)))))
+                  (list (BVar 3) (Call candq (list (BVar 2) (BVar 4)))))
                 (Ctor
                   (qn (quote Cons))
-                  (list
-                    (BVar 1)
-                    (Call candq (list (BVar 5) (BVar 0)))))))))))))
+                  (list (BVar 1) (Call candq (list (BVar 5) (BVar 0)))))))))))))
 
 (fn pt_merge_task ((appendq QName)) PsTask
   (let
     ((candq (pt_merge_candq))
-     (a_leaves
-       (list (BVar 0) (BVar 1) (Ctor (qn (quote Nil)) Nil)))
+     (a_leaves (list (BVar 0) (BVar 1) (Ctor (qn (quote Nil)) Nil)))
      (b_leaves
-       (list
-         (BVar 3)
-         (BVar 1)
-         (BVar 0)
-         (BVar 2)
-         (Ctor (qn (quote Nil)) Nil)))
+       (list (BVar 3) (BVar 1) (BVar 0) (BVar 2) (Ctor (qn (quote Nil)) Nil)))
      (branch_leaves
        (list
          (BVar 3)
@@ -318,9 +329,7 @@
                           (list
                             (Arm (PCtor (qn (quote Nil)) Nil) (hole 0))
                             (Arm
-                              (PCtor
-                                (qn (quote Cons))
-                                (list (PVar) (PVar)))
+                              (PCtor (qn (quote Cons)) (list (PVar) (PVar)))
                               (Match
                                 (BVar 2)
                                 (list
@@ -345,11 +354,8 @@
                                 cond_entries
                                 (pt_app then_entries else_entries))))))
                       (query
-                        (list_expr
-                          (pt_merge_query_go candq (pt_merge_inputs))))
-                      (want
-                        (list_expr
-                          (pt_intlists_expr (pt_merge_outputs)))))
+                        (list_expr (pt_merge_query_go candq (pt_merge_inputs))))
+                      (want (list_expr (pt_intlists_expr (pt_merge_outputs)))))
                      (PsTask
                        "SORTED-LIST MERGE FULL DEPTH 1"
                        candq
@@ -367,44 +373,42 @@
 
 ;; Full calculator ring grammar: leaves plus + and * over four fresh child
 ;; grammars.  R(0)=4 and R(1)=36, reproducing the playground's full space.
-(fn pt_ring_g ((d Int) (next Int) (leaves (List Expr)))
-  (Pair (List GEnt) Int)
+(fn pt_ring_g ((d Int) (next Int) (leaves (List Expr))) (Pair (List GEnt) Int)
   (measure d)
-  (if (le d 0)
-    (Pair (Cons (GEnt next leaves) Nil) (+ next 1))
-    (match (pt_ring_g (- d 1) (+ next 1) leaves)
-      ((Pair es1 n1)
-       (match (pt_ring_g (- d 1) n1 leaves)
-         ((Pair es2 n2)
-          (match (pt_ring_g (- d 1) n2 leaves)
-            ((Pair es3 n3)
-             (match (pt_ring_g (- d 1) n3 leaves)
-               ((Pair es4 n4)
-                (let
-                  ((alts
-                     (pt_app
-                       leaves
-                       (list
-                         (Call
-                           (qn (quote +))
-                           (list (hole (+ next 1)) (hole n1)))
-                         (Call
-                           (qn (quote *))
-                           (list (hole n2) (hole n3)))))))
-                  (Pair
-                    (Cons
-                      (GEnt next alts)
-                      (pt_app es1 (pt_app es2 (pt_app es3 es4))))
-                    n4))))))))))))
+  (if (le d 0) (Pair (Cons (GEnt next leaves) Nil) (+ next 1))
+  (match (pt_ring_g (- d 1) (+ next 1) leaves)
+    ((Pair es1 n1)
+     (match (pt_ring_g (- d 1) n1 leaves)
+       ((Pair es2 n2)
+        (match (pt_ring_g (- d 1) n2 leaves)
+          ((Pair es3 n3)
+           (match (pt_ring_g (- d 1) n3 leaves)
+             ((Pair es4 n4)
+              (let
+                ((alts
+                   (pt_app
+                     leaves
+                     (list
+                       (Call (qn (quote +)) (list (hole (+ next 1)) (hole n1)))
+                       (Call (qn (quote *)) (list (hole n2) (hole n3)))))))
+                (Pair
+                  (Cons
+                    (GEnt next alts)
+                    (pt_app es1 (pt_app es2 (pt_app es3 es4))))
+                  n4))))))))))))
 
 (fn pt_pnum ((heads PtCalcHeads) (n Int)) Expr
-  (match heads ((PtCalcHeads num _ _ _) (Ctor num (Cons (IntLit n) Nil)))))
+  (match heads
+    ((PtCalcHeads num _ _ _) (Ctor num (Cons (IntLit n) Nil)))))
 (fn pt_pplus ((heads PtCalcHeads) (a Expr) (b Expr)) Expr
-  (match heads ((PtCalcHeads _ plus _ _) (Ctor plus (list a b)))))
+  (match heads
+    ((PtCalcHeads _ plus _ _) (Ctor plus (list a b)))))
 (fn pt_ptimes ((heads PtCalcHeads) (a Expr) (b Expr)) Expr
-  (match heads ((PtCalcHeads _ _ times _) (Ctor times (list a b)))))
+  (match heads
+    ((PtCalcHeads _ _ times _) (Ctor times (list a b)))))
 (fn pt_pmax ((heads PtCalcHeads) (a Expr) (b Expr)) Expr
-  (match heads ((PtCalcHeads _ _ _ max) (Ctor max (list a b)))))
+  (match heads
+    ((PtCalcHeads _ _ _ max) (Ctor max (list a b)))))
 
 (fn pt_calc_inputs ((h PtCalcHeads)) (List Expr)
   (list
@@ -510,9 +514,7 @@
                             (BVar 0)
                             (list
                               (Arm (PCtor num (Cons (PVar) Nil)) (hole 0))
-                              (Arm
-                                (PCtor plus (list (PVar) (PVar)))
-                                (hole 1))
+                              (Arm (PCtor plus (list (PVar) (PVar))) (hole 1))
                               (Arm
                                 (PCtor times (list (PVar) (PVar)))
                                 (hole after_plus))
@@ -537,8 +539,7 @@
                           (list_expr
                             (pt_calc_calls candq (pt_calc_inputs heads))))
                         (want
-                          (intlist_to_expr
-                            (list 7 -3 5 6 9 5 0 7 7 -1 10 3 12))))
+                          (intlist_to_expr (list 7 -3 5 6 9 5 0 7 7 -1 10 3 12))))
                        (PsTask
                          "PEXPR-CALCULATOR FULL DEPTH 1"
                          candq

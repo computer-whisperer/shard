@@ -31,10 +31,9 @@
 ;;;     (assigned -> its alternative's sub-holes, unassigned -> the
 ;;;     entry's subspace from the sk_count memo).
 ;;;
-;;; The consulted-choice-set MEMO (cross-region thunk sharing — the
-;;; ratified second half of S4b's core) is the next lever INSIDE this
-;;; component; v1 lands the machine with per-region arenas, gated for
-;;; correctness first. Recorded, not silent.
+;;; The consulted-choice-set memo and shared arena carry forcing results
+;;; across regions.  Exact persistent indexes keep node and thunk lookup from
+;;; degenerating into graph-sized association-list scans.
 ;;;
 ;;; RUN IT: bin/shard_eval run tools/search/superpose.shard        (d1 + d2 pins)
 ;;;         bin/shard_eval run tools/search/superpose.shard rev N  (depth N)
@@ -110,22 +109,27 @@
 
 (type SuRow (SuRow (List Int) (List (Pair Int Int)) SuMR))
 
-(type SuMe (SuMe (List Int) (List SuRow)))
+(type SuRowBr (SuRowLeaf) (SuRowNode (Option (List SuRow)) SuRowBr SuRowBr))
+
+(type SuMe (SuMe (List Int) SuRowBr))
+
+;; Exact persistent indexes for the two arena tables that grow with the
+;; narrowing graph.  The original association lists made each memo/thunk
+;; lookup linear in the number of graph nodes, which dominates deeper search
+;; even when theorem pressure has already made the semantic frontier small.
+(type SuMmBr (SuMmLeaf) (SuMmNode (Option (List SuMe)) SuMmBr SuMmBr))
+
+(type SuTcRow (SuTcRow Int (List Int) Int))  ; expr id, exact env, node id
+
+(type SuTcBr (SuTcLeaf) (SuTcNode (Option (List SuTcRow)) SuTcBr SuTcBr))
 
 ;; next id, node trie, eval steps, memo (node -> entries),
 ;; expr-intern table, thunk cache (expr id -> env -> node),
 ;; the CURRENT forcing's consulted (hole, choice) set
 (type SuA
-  (SuA
-    Int
-    SuBr
-    Int
-    (List (Pair Int (List SuMe)))
-    (List (Pair Expr Int))
-    (List (Pair Int (List (Pair (List Int) Int))))
-    (List (Pair Int Int))))
+  (SuA Int SuBr Int SuMmBr (List (Pair Expr Int)) SuTcBr (List (Pair Int Int))))
 
-(fn sa_new () SuA (SuA 0 (SuBLeaf) 0 Nil Nil Nil Nil))
+(fn sa_new () SuA (SuA 0 (SuBLeaf) 0 (SuMmLeaf) Nil (SuTcLeaf) Nil))
 
 (fn sa_alloc ((a SuA) (n Node)) (Pair Int SuA)
   (match a
@@ -147,6 +151,14 @@
 (fn sa_steps ((a SuA)) Int
   (match a
     ((SuA _ _ k _ _ _ _) k)))
+
+(fn sa_nodes ((a SuA)) Int
+  (match a
+    ((SuA sz _ _ _ _ _ _) sz)))
+
+(fn sa_exprs ((a SuA)) Int
+  (match a
+    ((SuA _ _ _ _ te _ _) (te_len te))))
 
 ;; record a hole consultation (dedup by hole id)
 (fn cs_add ((cs (List (Pair Int Int))) (h Int) (c Int)) (List (Pair Int Int))
@@ -182,7 +194,7 @@
   (match a
     ((SuA _ _ _ _ _ _ cs) cs)))
 
-(fn sa_mm ((a SuA)) (List (Pair Int (List SuMe)))
+(fn sa_mm ((a SuA)) SuMmBr
   (match a
     ((SuA _ _ _ mm _ _ _) mm)))
 
@@ -200,35 +212,75 @@
     (Nil 0)
     ((Cons _ t) (+ 1 (te_len t)))))
 
-(fn tc_find
-  ((tc (List (Pair Int (List (Pair (List Int) Int)))))
-   (eid Int)
-   (env (List Int)))
-  (Option Int)
-  (measure (struct tc))
-  (match tc
-    (Nil None)
-    ((Cons (Pair k rows) rest)
-     (if (int_eq k eid) (tc_rows rows env) (tc_find rest eid env)))))
+(fn tc_hash_go ((env (List Int)) (acc Int)) Int
+  (measure (struct env))
+  (match env
+    (Nil acc)
+    ((Cons h rest) (tc_hash_go rest (mod (+ (* acc 65599) (+ h 1)) 2147483647)))))
 
-(fn tc_rows ((rows (List (Pair (List Int) Int))) (env (List Int))) (Option Int)
+(fn tc_key ((eid Int) (env (List Int))) Int
+  (mod (+ (* (+ eid 1) 1000003) (tc_hash_go env 17)) 2147483647))
+
+(fn tcb_get ((t SuTcBr) (j Int) (fuel Int)) (Option (List SuTcRow))
+  (measure fuel)
+  (if (lt fuel 1) None
+  (match t
+    ((SuTcLeaf) None)
+    ((SuTcNode v l r)
+     (if (le j 1) v
+     (if (int_eq (mod j 2) 0) (tcb_get l (ediv j 2) (- fuel 1))
+     (tcb_get r (ediv j 2) (- fuel 1))))))))
+
+(fn tcb_set ((t SuTcBr) (j Int) (rows (List SuTcRow)) (fuel Int)) SuTcBr
+  (measure fuel)
+  (if (lt fuel 1) t
+  (match t
+    ((SuTcLeaf)
+     (if (le j 1) (SuTcNode (Some rows) (SuTcLeaf) (SuTcLeaf))
+     (if (int_eq (mod j 2) 0)
+       (SuTcNode
+         None
+         (tcb_set (SuTcLeaf) (ediv j 2) rows (- fuel 1))
+         (SuTcLeaf))
+       (SuTcNode
+         None
+         (SuTcLeaf)
+         (tcb_set (SuTcLeaf) (ediv j 2) rows (- fuel 1))))))
+    ((SuTcNode v l r)
+     (if (le j 1) (SuTcNode (Some rows) l r)
+     (if (int_eq (mod j 2) 0)
+       (SuTcNode v (tcb_set l (ediv j 2) rows (- fuel 1)) r)
+       (SuTcNode v l (tcb_set r (ediv j 2) rows (- fuel 1)))))))))
+
+(fn tc_rows ((rows (List SuTcRow)) (eid Int) (env (List Int))) (Option Int)
   (measure (struct rows))
   (match rows
     (Nil None)
-    ((Cons (Pair k r) rest) (if (ilist_eq k env) (Some r) (tc_rows rest env)))))
+    ((Cons (SuTcRow e k r) rest)
+     (if (int_eq e eid) (if (ilist_eq k env) (Some r) (tc_rows rest eid env))
+     (tc_rows rest eid env)))))
 
-(fn tc_put
-  ((tc (List (Pair Int (List (Pair (List Int) Int)))))
-   (eid Int)
-   (env (List Int))
-   (r Int))
-  (List (Pair Int (List (Pair (List Int) Int))))
-  (measure (struct tc))
-  (match tc
-    (Nil (Cons (Pair eid (Cons (Pair env r) Nil)) Nil))
-    ((Cons (Pair k rows) rest)
-     (if (int_eq k eid) (Cons (Pair k (Cons (Pair env r) rows)) rest)
-     (Cons (Pair k rows) (tc_put rest eid env r))))))
+(fn tc_rows_put ((rows (List SuTcRow)) (eid Int) (env (List Int)) (r Int))
+  (List SuTcRow)
+  (measure (struct rows))
+  (match rows
+    (Nil (Cons (SuTcRow eid env r) Nil))
+    ((Cons (SuTcRow e k old) rest)
+     (if (int_eq e eid)
+       (if (ilist_eq k env) (Cons (SuTcRow e k r) rest)
+       (Cons (SuTcRow e k old) (tc_rows_put rest eid env r)))
+       (Cons (SuTcRow e k old) (tc_rows_put rest eid env r))))))
+
+(fn tc_find ((tc SuTcBr) (eid Int) (env (List Int))) (Option Int)
+  (match (tcb_get tc (+ (tc_key eid env) 1) 64)
+    (None None)
+    ((Some rows) (tc_rows rows eid env))))
+
+(fn tc_put ((tc SuTcBr) (eid Int) (env (List Int)) (r Int)) SuTcBr
+  (let ((key (tc_key eid env)))
+    (match (tcb_get tc (+ key 1) 64)
+      (None (tcb_set tc (+ key 1) (Cons (SuTcRow eid env r) Nil) 64))
+      ((Some rows) (tcb_set tc (+ key 1) (tc_rows_put rows eid env r) 64)))))
 
 (fn ilist_eq ((a (List Int)) (b (List Int))) Bool
   (measure (struct a))
@@ -271,20 +323,38 @@
 
 ;; ---- the memo ----------------------------------------------------------------
 
-(fn mm_find ((mm (List (Pair Int (List SuMe)))) (r Int)) (List SuMe)
-  (measure (struct mm))
-  (match mm
-    (Nil Nil)
-    ((Cons (Pair k es) rest) (if (int_eq k r) es (mm_find rest r)))))
+(fn mmb_get ((t SuMmBr) (j Int) (fuel Int)) (Option (List SuMe))
+  (measure fuel)
+  (if (lt fuel 1) None
+  (match t
+    ((SuMmLeaf) None)
+    ((SuMmNode v l r)
+     (if (le j 1) v
+     (if (int_eq (mod j 2) 0) (mmb_get l (ediv j 2) (- fuel 1))
+     (mmb_get r (ediv j 2) (- fuel 1))))))))
 
-(fn mm_put ((mm (List (Pair Int (List SuMe)))) (r Int) (es (List SuMe)))
-  (List (Pair Int (List SuMe)))
-  (measure (struct mm))
-  (match mm
-    (Nil (Cons (Pair r es) Nil))
-    ((Cons (Pair k old) rest)
-     (if (int_eq k r) (Cons (Pair k es) rest)
-     (Cons (Pair k old) (mm_put rest r es))))))
+(fn mmb_set ((t SuMmBr) (j Int) (es (List SuMe)) (fuel Int)) SuMmBr
+  (measure fuel)
+  (if (lt fuel 1) t
+  (match t
+    ((SuMmLeaf)
+     (if (le j 1) (SuMmNode (Some es) (SuMmLeaf) (SuMmLeaf))
+     (if (int_eq (mod j 2) 0)
+       (SuMmNode None (mmb_set (SuMmLeaf) (ediv j 2) es (- fuel 1)) (SuMmLeaf))
+       (SuMmNode None (SuMmLeaf) (mmb_set (SuMmLeaf) (ediv j 2) es (- fuel 1))))))
+    ((SuMmNode v l r)
+     (if (le j 1) (SuMmNode (Some es) l r)
+     (if (int_eq (mod j 2) 0)
+       (SuMmNode v (mmb_set l (ediv j 2) es (- fuel 1)) r)
+       (SuMmNode v l (mmb_set r (ediv j 2) es (- fuel 1)))))))))
+
+(fn mm_find ((mm SuMmBr) (r Int)) (List SuMe)
+  (match (mmb_get mm (+ r 1) 64)
+    (None Nil)
+    ((Some es) es)))
+
+(fn mm_put ((mm SuMmBr) (r Int) (es (List SuMe))) SuMmBr
+  (mmb_set mm (+ r 1) es 64))
 
 ;; the choices the current assignment gives a hole set (None: one is
 ;; unassigned, so no entry over that set can apply)
@@ -313,27 +383,84 @@
           (None (mp_probe rest asg))
           ((Some (SuRow _ cons res)) (MpHit res cons))))))))
 
-(fn mp_rows ((rows (List SuRow)) (key (List Int))) (Option SuRow)
+(fn mr_hash_go ((key (List Int)) (acc Int)) Int
+  (measure (struct key))
+  (match key
+    (Nil acc)
+    ((Cons h rest) (mr_hash_go rest (mod (+ (* acc 65599) (+ h 1)) 2147483647)))))
+
+(fn srb_get ((t SuRowBr) (j Int) (fuel Int)) (Option (List SuRow))
+  (measure fuel)
+  (if (lt fuel 1) None
+  (match t
+    ((SuRowLeaf) None)
+    ((SuRowNode v l r)
+     (if (le j 1) v
+     (if (int_eq (mod j 2) 0) (srb_get l (ediv j 2) (- fuel 1))
+     (srb_get r (ediv j 2) (- fuel 1))))))))
+
+(fn srb_set ((t SuRowBr) (j Int) (rows (List SuRow)) (fuel Int)) SuRowBr
+  (measure fuel)
+  (if (lt fuel 1) t
+  (match t
+    ((SuRowLeaf)
+     (if (le j 1) (SuRowNode (Some rows) (SuRowLeaf) (SuRowLeaf))
+     (if (int_eq (mod j 2) 0)
+       (SuRowNode
+         None
+         (srb_set (SuRowLeaf) (ediv j 2) rows (- fuel 1))
+         (SuRowLeaf))
+       (SuRowNode
+         None
+         (SuRowLeaf)
+         (srb_set (SuRowLeaf) (ediv j 2) rows (- fuel 1))))))
+    ((SuRowNode v l r)
+     (if (le j 1) (SuRowNode (Some rows) l r)
+     (if (int_eq (mod j 2) 0)
+       (SuRowNode v (srb_set l (ediv j 2) rows (- fuel 1)) r)
+       (SuRowNode v l (srb_set r (ediv j 2) rows (- fuel 1)))))))))
+
+(fn mp_rows_bucket ((rows (List SuRow)) (key (List Int))) (Option SuRow)
   (measure (struct rows))
   (match rows
     (Nil None)
     ((Cons row rest)
      (match row
-       ((SuRow k _ _) (if (ilist_eq k key) (Some row) (mp_rows rest key)))))))
+       ((SuRow k _ _)
+        (if (ilist_eq k key) (Some row) (mp_rows_bucket rest key)))))))
+
+(fn mp_rows ((rows SuRowBr) (key (List Int))) (Option SuRow)
+  (match (srb_get rows (+ (mr_hash_go key 17) 1) 64)
+    (None None)
+    ((Some bucket) (mp_rows_bucket bucket key))))
+
+(fn srb_put ((rows SuRowBr) (key (List Int)) (row SuRow)) SuRowBr
+  (let ((j (+ (mr_hash_go key 17) 1)))
+    (match (srb_get rows j 64)
+      (None (srb_set rows j (Cons row Nil) 64))
+      ((Some bucket) (srb_set rows j (Cons row bucket) 64)))))
+
+(fn me_record
+  ((es (List SuMe))
+   (hs (List Int))
+   (key (List Int))
+   (cons (List (Pair Int Int)))
+   (res SuMR))
+  (List SuMe)
+  (measure (struct es))
+  (match es
+    (Nil (Cons (SuMe hs (srb_put (SuRowLeaf) key (SuRow key cons res))) Nil))
+    ((Cons (SuMe old_hs rows) rest)
+     (if (ilist_eq hs old_hs)
+       (Cons (SuMe old_hs (srb_put rows key (SuRow key cons res))) rest)
+       (Cons (SuMe old_hs rows) (me_record rest hs key cons res))))))
 
 ;; record a completed forcing under its consulted set
 (fn mm_record ((a SuA) (r Int) (cons (List (Pair Int Int))) (res SuMR)) SuA
   (match a
     ((SuA sz t k mm te tc cs)
      (let ((hs (cs_holes cons)) (key (cs_choices cons)) (es (mm_find mm r)))
-       (SuA
-         sz
-         t
-         k
-         (mm_put mm r (Cons (SuMe hs (Cons (SuRow key cons res) Nil)) es))
-         te
-         tc
-         cs)))))
+       (SuA sz t k (mm_put mm r (me_record es hs key cons res)) te tc cs)))))
 
 (fn cs_holes ((cons (List (Pair Int Int)))) (List Int)
   (measure (struct cons))
@@ -1148,8 +1275,47 @@
 
 (type SuS
   (SuSErr (List Int))
+  (SuSBudget Int Int Int Int Int Int Int Int (List (List (Pair Int Int))))
   (SuSOk Int Int Int Int Int Int (List (List (Pair Int Int)))))
-  ; found, killed, constraint-killed, regions, forks, steps, passing regions
+; budget: found, killed, constraint-killed, regions, forks, steps,
+;         nodes, expressions, passing regions
+; ok:     found, killed, constraint-killed, regions, forks, steps,
+;         passing regions
+
+(fn su_cat ((parts (List (List Int)))) (List Int)
+  (measure (struct parts))
+  (match parts
+    (Nil Nil)
+    ((Cons h rest) (append_int h (su_cat rest)))))
+
+(fn su_budget_report
+  ((found Int)
+   (killed Int)
+   (constrained Int)
+   (regions Int)
+   (forks Int)
+   (steps Int)
+   (nodes Int)
+   (exprs Int))
+  (List Int)
+  (su_cat
+    (list
+      "superpose: drive budget exhausted; found "
+      (show_int found)
+      " killed "
+      (show_int killed)
+      " constraint-killed "
+      (show_int constrained)
+      " regions "
+      (show_int regions)
+      " forks "
+      (show_int forks)
+      " steps "
+      (show_int steps)
+      " nodes "
+      (show_int nodes)
+      " exprs "
+      (show_int exprs))))
 
 ;; Generic branch-and-prune drive.  `candidate` is used only for exact
 ;; consistent-subspace counting; `query` is what the lazy evaluator executes.
@@ -1180,63 +1346,149 @@
    (sols (List (List (Pair Int Int)))))
   SuS
   (measure fuel)
-  (if (lt fuel 1) (SuSErr "superpose: generic drive fuel exhausted")
-  (match jobs
-    (Nil (SuSOk found killed constrained regions forks (sa_steps ar) sols))
-    ((Cons asg rest)
-     (match (ms_check_prepared 1000000 prepared asg candidate)
-       ((MsErr msg) (SuSErr msg))
-       ((MsRedex _)
-        (match (cc_expr g memo asg candidate 1000000)
-          ((CcRErr msg) (SuSErr msg))
-          ((CcROk n)
-           (su_drive_query_prepared
-             (- fuel 1) m candq body candidate prepared query want g memo ar
-             rest found (+ killed n) (+ constrained n) (+ regions 1) forks
-             sols))))
-       (constraint_verdict
-        (match (su_query (su_efuel) m candq body g asg ar query want)
-          ((SuTErr msg) (SuSErr msg))
-          ((SuTOut) (SuSErr "superpose: generic evaluation fuel exhausted"))
-          ((SuTBlocked h ar2)
-           (match (su_alts g h)
-             (None (SuSErr "superpose: generic query blocked on unknown hole"))
-             ((Some alts)
-              (su_drive_query_prepared
-                (- fuel 1) m candq body candidate prepared query want g memo
-                ar2 (su_fork asg h (- (alts_len alts) 1) rest) found killed
-                constrained regions (+ forks 1) sols))))
-          ((SuTFail ar2)
-           (match (cc_expr g memo asg candidate 1000000)
-             ((CcRErr msg) (SuSErr msg))
-             ((CcROk n)
-              (su_drive_query_prepared
-                (- fuel 1) m candq body candidate prepared query want g memo
-                ar2 rest found (+ killed n) constrained (+ regions 1) forks
-                sols))))
-          ((SuTPass ar2)
-           (match constraint_verdict
-             ((MsBlocked h)
+  (if (lt fuel 1)
+    (SuSBudget
+      found
+      killed
+      constrained
+      regions
+      forks
+      (sa_steps ar)
+      (sa_nodes ar)
+      (sa_exprs ar)
+      sols)
+    (match jobs
+      (Nil (SuSOk found killed constrained regions forks (sa_steps ar) sols))
+      ((Cons asg rest)
+       (match (ms_check_prepared 1000000 prepared asg candidate)
+         ((MsErr msg) (SuSErr msg))
+         ((MsRedex _)
+          (match (cc_expr g memo asg candidate 1000000)
+            ((CcRErr msg) (SuSErr msg))
+            ((CcROk n)
+             (su_drive_query_prepared
+               (- fuel 1)
+               m
+               candq
+               body
+               candidate
+               prepared
+               query
+               want
+               g
+               memo
+               ar
+               rest
+               found
+               (+ killed n)
+               (+ constrained n)
+               (+ regions 1)
+               forks
+               sols))))
+         (constraint_verdict
+           (match (su_query (su_efuel) m candq body g asg ar query want)
+             ((SuTErr msg) (SuSErr msg))
+             ((SuTOut) (SuSErr "superpose: generic evaluation fuel exhausted"))
+             ((SuTBlocked h ar2)
               (match (su_alts g h)
                 (None
-                  (SuSErr
-                    "superpose: residual constraint blocked on unknown hole"))
+                  (SuSErr "superpose: generic query blocked on unknown hole"))
                 ((Some alts)
                  (su_drive_query_prepared
-                   (- fuel 1) m candq body candidate prepared query want g
-                   memo ar2 (su_fork asg h (- (alts_len alts) 1) rest) found
-                   killed constrained regions (+ forks 1) sols))))
-             ((MsClear)
+                   (- fuel 1)
+                   m
+                   candq
+                   body
+                   candidate
+                   prepared
+                   query
+                   want
+                   g
+                   memo
+                   ar2
+                   (su_fork asg h (- (alts_len alts) 1) rest)
+                   found
+                   killed
+                   constrained
+                   regions
+                   (+ forks 1)
+                   sols))))
+             ((SuTFail ar2)
               (match (cc_expr g memo asg candidate 1000000)
                 ((CcRErr msg) (SuSErr msg))
                 ((CcROk n)
                  (su_drive_query_prepared
-                   (- fuel 1) m candq body candidate prepared query want g
-                   memo ar2 rest (+ found n) killed constrained (+ regions 1)
-                   forks (Cons asg sols)))))
-             ((MsErr msg) (SuSErr msg))
-             ((MsRedex _)
-              (SuSErr "superpose: inconsistent residual verdict")))))))))))
+                   (- fuel 1)
+                   m
+                   candq
+                   body
+                   candidate
+                   prepared
+                   query
+                   want
+                   g
+                   memo
+                   ar2
+                   rest
+                   found
+                   (+ killed n)
+                   constrained
+                   (+ regions 1)
+                   forks
+                   sols))))
+             ((SuTPass ar2)
+              (match constraint_verdict
+                ((MsBlocked h)
+                 (match (su_alts g h)
+                   (None
+                     (SuSErr
+                       "superpose: residual constraint blocked on unknown hole"))
+                   ((Some alts)
+                    (su_drive_query_prepared
+                      (- fuel 1)
+                      m
+                      candq
+                      body
+                      candidate
+                      prepared
+                      query
+                      want
+                      g
+                      memo
+                      ar2
+                      (su_fork asg h (- (alts_len alts) 1) rest)
+                      found
+                      killed
+                      constrained
+                      regions
+                      (+ forks 1)
+                      sols))))
+                ((MsClear)
+                 (match (cc_expr g memo asg candidate 1000000)
+                   ((CcRErr msg) (SuSErr msg))
+                   ((CcROk n)
+                    (su_drive_query_prepared
+                      (- fuel 1)
+                      m
+                      candq
+                      body
+                      candidate
+                      prepared
+                      query
+                      want
+                      g
+                      memo
+                      ar2
+                      rest
+                      (+ found n)
+                      killed
+                      constrained
+                      (+ regions 1)
+                      forks
+                      (Cons asg sols)))))
+                ((MsErr msg) (SuSErr msg))
+                ((MsRedex _)
+                 (SuSErr "superpose: inconsistent residual verdict")))))))))))
 
 (fn su_drive_query
   ((fuel Int)
@@ -1262,25 +1514,8 @@
     ((MsPrepareErr msg)
      (SuSErr (append_int "superpose: constraint preparation: " msg)))
     ((MsPrepareOk prepared)
-     (su_drive_query_prepared
-       fuel
-       m
-       candq
-       body
-       candidate
-       prepared
-       query
-       want
-       g
-       memo
-       ar
-       jobs
-       found
-       killed
-       constrained
-       regions
-       forks
-       sols))))
+     (su_drive_query_prepared fuel m candq body candidate prepared query want g
+       memo ar jobs found killed constrained regions forks sols))))
 
 (fn su_drive
   ((fuel Int)
@@ -1299,70 +1534,80 @@
    (sols (List (List (Pair Int Int)))))
   SuS
   (measure fuel)
-  (if (lt fuel 1) (SuSErr "superpose: drive fuel exhausted")
-  (match jobs
-    (Nil (SuSOk found killed 0 regions forks (sa_steps ar) sols))
-    ((Cons asg rest)
-     (match (su_tests (su_efuel) m candq body g asg ar ts)
-       ((SuTErr msg) (SuSErr msg))
-       ((SuTOut) (SuSErr "superpose: evaluation fuel exhausted"))
-       ((SuTBlocked h ar2)
-        (match (su_alts g h)
-          (None (SuSErr "superpose: blocked on an unknown hole"))
-          ((Some alts)
-           (su_drive
-             (- fuel 1)
-             m
-             candq
-             body
-             g
-             memo
-             ts
-             ar2
-             (su_fork asg h (- (alts_len alts) 1) rest)
-             found
-             killed
-             regions
-             (+ forks 1)
-             sols))))
-       ((SuTFail ar2)
-        (match (cc_expr g memo asg body 1000000)
-          ((CcRErr msg) (SuSErr msg))
-          ((CcROk n)
-           (su_drive
-             (- fuel 1)
-             m
-             candq
-             body
-             g
-             memo
-             ts
-             ar2
-             rest
-             found
-             (+ killed n)
-             (+ regions 1)
-             forks
-             sols))))
-       ((SuTPass ar2)
-        (match (cc_expr g memo asg body 1000000)
-          ((CcRErr msg) (SuSErr msg))
-          ((CcROk n)
-           (su_drive
-             (- fuel 1)
-             m
-             candq
-             body
-             g
-             memo
-             ts
-             ar2
-             rest
-             (+ found n)
-             killed
-             (+ regions 1)
-             forks
-             (Cons asg sols))))))))))
+  (if (lt fuel 1)
+    (SuSBudget
+      found
+      killed
+      0
+      regions
+      forks
+      (sa_steps ar)
+      (sa_nodes ar)
+      (sa_exprs ar)
+      sols)
+    (match jobs
+      (Nil (SuSOk found killed 0 regions forks (sa_steps ar) sols))
+      ((Cons asg rest)
+       (match (su_tests (su_efuel) m candq body g asg ar ts)
+         ((SuTErr msg) (SuSErr msg))
+         ((SuTOut) (SuSErr "superpose: evaluation fuel exhausted"))
+         ((SuTBlocked h ar2)
+          (match (su_alts g h)
+            (None (SuSErr "superpose: blocked on an unknown hole"))
+            ((Some alts)
+             (su_drive
+               (- fuel 1)
+               m
+               candq
+               body
+               g
+               memo
+               ts
+               ar2
+               (su_fork asg h (- (alts_len alts) 1) rest)
+               found
+               killed
+               regions
+               (+ forks 1)
+               sols))))
+         ((SuTFail ar2)
+          (match (cc_expr g memo asg body 1000000)
+            ((CcRErr msg) (SuSErr msg))
+            ((CcROk n)
+             (su_drive
+               (- fuel 1)
+               m
+               candq
+               body
+               g
+               memo
+               ts
+               ar2
+               rest
+               found
+               (+ killed n)
+               (+ regions 1)
+               forks
+               sols))))
+         ((SuTPass ar2)
+          (match (cc_expr g memo asg body 1000000)
+            ((CcRErr msg) (SuSErr msg))
+            ((CcROk n)
+             (su_drive
+               (- fuel 1)
+               m
+               candq
+               body
+               g
+               memo
+               ts
+               ar2
+               rest
+               (+ found n)
+               killed
+               (+ regions 1)
+               forks
+               (Cons asg sols))))))))))
 
 ;; ---- region membership + representatives (the AGREE gate) ---------------------
 
@@ -1644,6 +1889,18 @@
              (exit
                1
                (write (append_int "SUPERPOSE FAIL " (append_int msg "\n")) w)))
+            ((SuSBudget found killed constrained regions forks steps nodes exprs
+               _)
+             (exit
+               1
+               (write
+                 (append_int
+                   "SUPERPOSE BUDGET "
+                   (append_int
+                     (su_budget_report found killed constrained regions forks
+                       steps nodes exprs)
+                     "\n"))
+                 w)))
             ((SuSOk found killed _ regions forks steps sols)
              (if (int_eq (+ found killed) total)
                (match (enum_go total total body g m ts Nil)

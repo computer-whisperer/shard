@@ -1577,6 +1577,63 @@ Shard progression on which theorem-backed formation pressure, stronger test
 batteries, and proof-producing refinement can be developed without an ISA
 encoding obscuring the result.
 
+#### Checked formation pressure on supplied grammars
+
+`meta/search` now gives already-supplied program grammars the same
+quotient-first path that reflected grammar builders use.  The general
+`ms_filter_formation(root, grammar, formation)` pass walks arbitrary static
+`Match`/`Let`/`If`/constructor/call skeletons, intersects each reachable hole
+with the separable root/argument constraints derived by `meta/rewrite`, and
+returns another ordinary `Expr` + `Grammar`.  It neither knows nor encodes
+append, lists, or the benchmark dialect.
+
+Hole identity remains semantic.  Repeated occurrences under the same
+formation state stay one shared choice; if one hole is demanded under two
+incompatible formation states, v1 refuses loudly instead of cloning away the
+correlation or unsafely unioning constraints.  After filtering, `g_wf` and
+the exact grammar counter run again.  Non-separable checked rules remain in
+the residual `MsPlan` and can still prune partial regions during SUPERPOSE.
+
+`tools/search/pure_deep.shard` exercises the complete path:
+
+1. load four append requirements from the checked object-module closure;
+2. compile and partition the profile into formation and residual pieces;
+3. apply formation to the full, task-supplied insertion-sort grammar;
+4. run lazy semantic settlement over only the quotient; and
+5. independently type and invoke one representative per passing region.
+
+The full depth-2 result reproduces the playground quotient and solution floor
+without an append-specific task grammar:
+
+    raw 37,347,981,552; removed 32,878,101,552; quotient 4,469,880,000
+    found 32; killed 4,469,879,968; regions 28,721; forks 5,969
+    Shard evaluator steps 165,629; playground evaluator steps 38,994
+
+Thus theorem formation removes 88.0% of the spellings and cuts the full
+playground search from 999,108 to 38,994 evaluator steps; the current Shard
+executor pays about 4.25x more evaluator steps on the same canonical problem,
+while retaining exact coverage and the same 32 solutions.
+
+Depth 3 validates the harder scale without making a long interpreter run a
+default gate.  The checked profile maps 22,140,821,944,106,047,728 raw terms
+to exactly 104,277,392,481,024,192 canonical terms.  A 5,000-job probe settles
+26,612,572,263,529,286 of them (25.5%) in 4,138 terminal regions, 862 forks,
+and 38,420 evaluator steps.  Budget exhaustion is a first-class partial
+census, not an error: `SETTLED + PENDING = TOTAL`, and every settled region is
+still counted exactly.
+
+    bin/shard_eval run tools/search/pure_deep.shard               # full d2
+    bin/shard_eval run tools/search/pure_deep.shard 3             # full d3
+    bin/shard_eval run tools/search/pure_deep.shard probe 3 5000  # bounded d3
+
+The shared executor tables also now match their intended asymptotics more
+closely: node-result and `(expression, environment)` indexes are persistent
+tries, and result rows sharing one consulted-hole signature are grouped and
+indexed by their exact choice key.  Hashes select buckets only; full
+environment/choice equality remains authoritative.  This removes accidental
+linear scans as the narrowing graph grows, while the stable region/fork/step
+counts remain unchanged.
+
 The first dynamic theorem-filtered task searches ordinary closed Shard list
 expressions over `Nil`, `Cons`, bit literals, and the real `std/list append` at
 depth five.  Its four selected append requirements are authenticated from the

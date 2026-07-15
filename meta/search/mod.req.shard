@@ -42,6 +42,267 @@
 (use (:: meta sketch *))
 (use (:: meta rewrite *))
 
+;; ---- quotient-first filtering for supplied grammars -----------------------
+;;
+;; Reflected grammars can consult TrsFormation while they are built.  Search
+;; over an already-supplied function-body sketch needs the same pressure
+;; without rebuilding the task in a second grammar language.  The pass below
+;; intersects an existing stratified Grammar with the exact separable
+;; formation fragment:
+;;
+;;   * globally forbidden roots remove an alternative at its first static
+;;     rooted node;
+;;   * parent/argument clauses become root-shape filters on the child hole;
+;;   * static templates (Match/Let/If and constructor/call spines) are walked,
+;;     so a hole may sit below an arbitrary fixed body skeleton.
+;;
+;; A shared hole is still one decision.  If two occurrences demand different
+;; formation states, silently cloning it would destroy equality correlation
+;; and unioning the states could over-prune exclusive alternatives.  V1
+;; therefore refuses that grammar loudly.  Equal-state sharing is preserved.
+
+(fn msf_shapes_subset ((xs (List TrsShape)) (ys (List TrsShape))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil True)
+    ((Cons x rest) (if (trs_shape_mem x ys) (msf_shapes_subset rest ys) False))))
+
+(fn msf_shapes_eq ((xs (List TrsShape)) (ys (List TrsShape))) Bool
+  (if (msf_shapes_subset xs ys) (msf_shapes_subset ys xs) False))
+
+(fn msf_ctx_find ((id Int) (ctx (List (Pair Int (List TrsShape)))))
+  (Option (List TrsShape))
+  (measure (struct ctx))
+  (match ctx
+    (Nil None)
+    ((Cons (Pair k shapes) rest)
+     (if (int_eq id k) (Some shapes) (msf_ctx_find id rest)))))
+
+(type MsfCtxR
+  (MsfCtxErr (List Int))
+  (MsfCtxOk (List (Pair Int (List TrsShape)))))
+
+(fn msf_ctx_put
+  ((id Int) (shapes (List TrsShape)) (ctx (List (Pair Int (List TrsShape)))))
+  MsfCtxR
+  (match (msf_ctx_find id ctx)
+    (None (MsfCtxOk (Cons (Pair id shapes) ctx)))
+    ((Some prior)
+     (if (msf_shapes_eq prior shapes) (MsfCtxOk ctx)
+     (MsfCtxErr "shared hole has incompatible formation contexts")))))
+
+(type MsfScanR
+  (MsfScanErr (List Int))
+  (MsfScanDrop)
+  (MsfScanKeep (List (Pair Int (List TrsShape)))))
+
+(fn msf_scan_plain
+  ((fuel Int)
+   (formation TrsFormation)
+   (es (List Expr))
+   (ctx (List (Pair Int (List TrsShape)))))
+  MsfScanR
+  (measure fuel)
+  (if (lt fuel 1) (MsfScanErr "formation scan fuel exhausted")
+  (match es
+    (Nil (MsfScanKeep ctx))
+    ((Cons e rest)
+     (match (msf_scan (- fuel 1) formation Nil e ctx)
+       ((MsfScanErr msg) (MsfScanErr msg))
+       ((MsfScanDrop) (MsfScanDrop))
+       ((MsfScanKeep ctx2) (msf_scan_plain (- fuel 1) formation rest ctx2)))))))
+
+(fn msf_scan_args
+  ((fuel Int)
+   (formation TrsFormation)
+   (parent TrsShape)
+   (index Int)
+   (es (List Expr))
+   (ctx (List (Pair Int (List TrsShape)))))
+  MsfScanR
+  (measure fuel)
+  (if (lt fuel 1) (MsfScanErr "formation argument scan fuel exhausted")
+  (match es
+    (Nil (MsfScanKeep ctx))
+    ((Cons e rest)
+     (match
+       (msf_scan
+         (- fuel 1)
+         formation
+         (trs_arg_forbids formation parent index)
+         e
+         ctx)
+       ((MsfScanErr msg) (MsfScanErr msg))
+       ((MsfScanDrop) (MsfScanDrop))
+       ((MsfScanKeep ctx2)
+        (msf_scan_args (- fuel 1) formation parent (+ index 1) rest ctx2)))))))
+
+(fn msf_scan_arms
+  ((fuel Int)
+   (formation TrsFormation)
+   (arms (List Arm))
+   (ctx (List (Pair Int (List TrsShape)))))
+  MsfScanR
+  (measure fuel)
+  (if (lt fuel 1) (MsfScanErr "formation arm scan fuel exhausted")
+  (match arms
+    (Nil (MsfScanKeep ctx))
+    ((Cons (Arm _ body) rest)
+     (match (msf_scan (- fuel 1) formation Nil body ctx)
+       ((MsfScanErr msg) (MsfScanErr msg))
+       ((MsfScanDrop) (MsfScanDrop))
+       ((MsfScanKeep ctx2) (msf_scan_arms (- fuel 1) formation rest ctx2)))))))
+
+(fn msf_scan_match
+  ((fuel Int)
+   (formation TrsFormation)
+   (scrut Expr)
+   (arms (List Arm))
+   (ctx (List (Pair Int (List TrsShape)))))
+  MsfScanR
+  (measure fuel)
+  (if (lt fuel 1) (MsfScanErr "formation match scan fuel exhausted")
+  (match (msf_scan (- fuel 1) formation Nil scrut ctx)
+    ((MsfScanErr msg) (MsfScanErr msg))
+    ((MsfScanDrop) (MsfScanDrop))
+    ((MsfScanKeep ctx2) (msf_scan_arms (- fuel 1) formation arms ctx2)))))
+
+(fn msf_scan_let
+  ((fuel Int)
+   (formation TrsFormation)
+   (binds (List Expr))
+   (body Expr)
+   (ctx (List (Pair Int (List TrsShape)))))
+  MsfScanR
+  (measure fuel)
+  (if (lt fuel 1) (MsfScanErr "formation let scan fuel exhausted")
+  (match (msf_scan_plain (- fuel 1) formation binds ctx)
+    ((MsfScanErr msg) (MsfScanErr msg))
+    ((MsfScanDrop) (MsfScanDrop))
+    ((MsfScanKeep ctx2) (msf_scan (- fuel 1) formation Nil body ctx2)))))
+
+(fn msf_scan_node
+  ((fuel Int)
+   (formation TrsFormation)
+   (shape TrsShape)
+   (e Expr)
+   (ctx (List (Pair Int (List TrsShape)))))
+  MsfScanR
+  (measure fuel)
+  (if (lt fuel 1) (MsfScanErr "formation node scan fuel exhausted")
+  (match e
+    ((Ctor _ args) (msf_scan_args (- fuel 1) formation shape 0 args ctx))
+    ((Call _ args) (msf_scan_args (- fuel 1) formation shape 0 args ctx))
+    ((If c t e2) (msf_scan_args (- fuel 1) formation shape 0 (list c t e2) ctx))
+    (_ (MsfScanKeep ctx)))))
+
+(fn msf_scan
+  ((fuel Int)
+   (formation TrsFormation)
+   (inherited (List TrsShape))
+   (e Expr)
+   (ctx (List (Pair Int (List TrsShape)))))
+  MsfScanR
+  (measure fuel)
+  (if (lt fuel 1) (MsfScanErr "formation expression scan fuel exhausted")
+  (match (hole_view e)
+    ((HVBad msg) (MsfScanErr msg))
+    ((HVHole id)
+     (match (msf_ctx_put id inherited ctx)
+       ((MsfCtxErr msg) (MsfScanErr msg))
+       ((MsfCtxOk ctx2) (MsfScanKeep ctx2))))
+    ((HVNot)
+     (match (trs_expr_shape e)
+       ((Some shape)
+        (if (trs_shape_mem shape inherited) (MsfScanDrop)
+        (if (trs_forbids_root formation shape) (MsfScanDrop)
+        (msf_scan_node (- fuel 1) formation shape e ctx))))
+       (None
+         (match e
+           ((Match scrut arms)
+            (msf_scan_match (- fuel 1) formation scrut arms ctx))
+           ((Let binds body) (msf_scan_let (- fuel 1) formation binds body ctx))
+           (_ (MsfScanKeep ctx)))))))))
+
+(type MsfAltsR
+  (MsfAltsErr (List Int))
+  (MsfAltsOk (List Expr) (List (Pair Int (List TrsShape)))))
+
+(fn msf_filter_alts
+  ((formation TrsFormation)
+   (inherited (List TrsShape))
+   (alts (List Expr))
+   (ctx (List (Pair Int (List TrsShape)))))
+  MsfAltsR
+  (measure (struct alts))
+  (match alts
+    (Nil (MsfAltsOk Nil ctx))
+    ((Cons alt rest)
+     (match (msf_scan 1000000 formation inherited alt ctx)
+       ((MsfScanErr msg) (MsfAltsErr msg))
+       ((MsfScanDrop) (msf_filter_alts formation inherited rest ctx))
+       ((MsfScanKeep ctx2)
+        (match (msf_filter_alts formation inherited rest ctx2)
+          ((MsfAltsErr msg) (MsfAltsErr msg))
+          ((MsfAltsOk kept ctx3) (MsfAltsOk (Cons alt kept) ctx3))))))))
+
+(type MsfEntriesR
+  (MsfEntriesErr (List Int))
+  (MsfEntriesOk (List GEnt) (List (Pair Int (List TrsShape)))))
+
+(fn msf_filter_entries
+  ((formation TrsFormation)
+   (entries (List GEnt))
+   (ctx (List (Pair Int (List TrsShape)))))
+  MsfEntriesR
+  (measure (struct entries))
+  (match entries
+    (Nil (MsfEntriesOk Nil ctx))
+    ((Cons (GEnt id alts) rest)
+     (match (msf_ctx_find id ctx)
+       (None
+         (match (msf_filter_entries formation rest ctx)
+           ((MsfEntriesErr msg) (MsfEntriesErr msg))
+           ((MsfEntriesOk kept ctx2)
+            (MsfEntriesOk (Cons (GEnt id alts) kept) ctx2))))
+       ((Some inherited)
+        (match (msf_filter_alts formation inherited alts ctx)
+          ((MsfAltsErr msg) (MsfEntriesErr msg))
+          ((MsfAltsOk alts2 ctx2)
+           (match (msf_filter_entries formation rest ctx2)
+             ((MsfEntriesErr msg) (MsfEntriesErr msg))
+             ((MsfEntriesOk kept ctx3)
+              (MsfEntriesOk (Cons (GEnt id alts2) kept) ctx3))))))))))
+
+(type MsFormationFilterR
+  (MsFormationFilterErr (List Int))
+  (MsFormationFilterEmpty)
+  (MsFormationFilterOk Expr Grammar))
+
+(fn ms_filter_formation ((root Expr) (grammar Grammar) (formation TrsFormation))
+  MsFormationFilterR
+  (match (g_wf grammar)
+    ((GWErr msg) (MsFormationFilterErr msg))
+    ((GWOk)
+     (match (msf_scan 1000000 formation Nil root Nil)
+       ((MsfScanErr msg) (MsFormationFilterErr msg))
+       ((MsfScanDrop) (MsFormationFilterEmpty))
+       ((MsfScanKeep ctx)
+        (match grammar
+          ((Grammar entries)
+           (match (msf_filter_entries formation entries ctx)
+             ((MsfEntriesErr msg) (MsFormationFilterErr msg))
+             ((MsfEntriesOk entries2 _)
+              (let ((filtered (Grammar entries2)))
+                (match (g_wf filtered)
+                  ((GWErr msg) (MsFormationFilterErr msg))
+                  ((GWOk)
+                   (match (sk_count root filtered)
+                     ((SkCErr msg) (MsFormationFilterErr msg))
+                     ((SkCOk total)
+                      (if (le total 0) (MsFormationFilterEmpty)
+                      (MsFormationFilterOk root filtered))))))))))))))))
+
 ;; ---- validated residual plan ----------------------------------------------
 
 (type MsPlan (MsPlan TrsProfile TrsRootProfile))
@@ -109,8 +370,7 @@
   (measure (struct alts))
   (match alts
     (Nil None)
-    ((Cons alt rest)
-     (if (le index 0) (Some alt) (ms_alt_at rest (- index 1))))))
+    ((Cons alt rest) (if (le index 0) (Some alt) (ms_alt_at rest (- index 1))))))
 
 (type MsSelect
   (MsSelectErr (List Int))
@@ -154,8 +414,8 @@
      (if (expr_eq pattern cached) (Some result)
      (ms_match_fact_row rest pattern)))))
 
-(fn ms_match_fact
-  ((facts (List MsHoleFacts)) (pattern Expr) (hole_id Int)) (Option Bool)
+(fn ms_match_fact ((facts (List MsHoleFacts)) (pattern Expr) (hole_id Int))
+  (Option Bool)
   (measure (struct facts))
   (match facts
     (Nil None)
@@ -169,9 +429,7 @@
   (measure (struct facts))
   (match facts
     (Nil
-      (Cons
-        (MsHoleFacts hole_id (Cons (MsMatchFact pattern result) Nil))
-        Nil))
+      (Cons (MsHoleFacts hole_id (Cons (MsMatchFact pattern result) Nil)) Nil))
     ((Cons (MsHoleFacts cached_hole row) rest)
      (if (int_eq hole_id cached_hole)
        (Cons
@@ -181,10 +439,7 @@
          (MsHoleFacts cached_hole row)
          (ms_match_fact_put rest pattern hole_id result))))))
 
-(type MsMatchAgree
-  (MsMatchAgreeStart)
-  (MsMatchAgreeNo)
-  (MsMatchAgreeYes))
+(type MsMatchAgree (MsMatchAgreeStart) (MsMatchAgreeNo) (MsMatchAgreeYes))
 
 (fn ms_block_first ((prior (Option Int)) (hole_id Int)) (Option Int)
   (match prior
@@ -347,8 +602,7 @@
           ((MsMatchErr msg) (MsMatchErr msg))
           ((MsMatchNo) (MsMatchNo))
           ((MsMatchYes)
-           (ms_match_list
-             (- fuel 1) facts grammar asg rest more blocked))
+           (ms_match_list (- fuel 1) facts grammar asg rest more blocked))
           ((MsMatchBlocked hole_id)
            (ms_match_list
              (- fuel 1)
@@ -361,23 +615,17 @@
 
 ;; ---- region redex classification ------------------------------------------
 
-(type MsVerdict
-  (MsErr (List Int))
-  (MsClear)
-  (MsBlocked Int)
-  (MsRedex QName))
+(type MsVerdict (MsErr (List Int)) (MsClear) (MsBlocked Int) (MsRedex QName))
 
 ;; Stable whole-domain verdicts can be reused under every refinement of a
 ;; partial assignment.  Blocked is intentionally absent: it names a decision
 ;; that descendants may already have made.
-(type MsStableVerdict
-  (MsStableClear)
-  (MsStableRedex QName))
+(type MsStableVerdict (MsStableClear) (MsStableRedex QName))
 
 (type MsVerdictFact (MsVerdictFact Int MsStableVerdict))
 
-(fn ms_verdict_fact
-  ((facts (List MsVerdictFact)) (hole_id Int)) (Option MsStableVerdict)
+(fn ms_verdict_fact ((facts (List MsVerdictFact)) (hole_id Int))
+  (Option MsStableVerdict)
   (measure (struct facts))
   (match facts
     (Nil None)
@@ -428,8 +676,7 @@
        ((MsMatchErr msg) (MsErr msg))
        ((MsMatchYes) (MsRedex (trs_rule_name rule)))
        ((MsMatchNo)
-        (ms_rules_root
-          (- fuel 1) facts grammar asg rest candidate blocked))
+        (ms_rules_root (- fuel 1) facts grammar asg rest candidate blocked))
        ((MsMatchBlocked hole_id)
         (ms_rules_root
           (- fuel 1)
@@ -457,8 +704,7 @@
      (match (ms_select grammar asg hole_id)
        ((MsSelectErr msg) (MsNodeErr msg))
        ((MsSelectOpen blocked alts) (MsNodeOpen blocked alts))
-       ((MsSelectExpr selected)
-        (ms_node (- fuel 1) grammar asg selected)))))))
+       ((MsSelectExpr selected) (ms_node (- fuel 1) grammar asg selected)))))))
 
 (fn ms_rules_root_cached
   ((fuel Int)
@@ -475,8 +721,7 @@
      (match (ms_verdict_fact root_facts hole_id)
        ((Some verdict) (ms_stable_verdict verdict))
        (None
-        (ms_rules_root
-          (- fuel 1) facts grammar asg rules (hole hole_id) None))))
+         (ms_rules_root (- fuel 1) facts grammar asg rules (hole hole_id) None))))
     ((MsNodeExpr node)
      (ms_rules_root (- fuel 1) facts grammar asg rules node None))))
 
@@ -571,27 +816,23 @@
      (match (ms_verdict_fact tree_facts hole_id)
        ((Some verdict) (ms_stable_verdict verdict))
        (None
-        (ms_anywhere_alts
-          (- fuel 1)
-          facts
-          tree_facts
-          grammar
-          asg
-          rules
-          alts
-          hole_id
-          (MsVerdictAgreeStart)))))
+         (ms_anywhere_alts
+           (- fuel 1)
+           facts
+           tree_facts
+           grammar
+           asg
+           rules
+           alts
+           hole_id
+           (MsVerdictAgreeStart)))))
     ((MsNodeExpr node)
-     (let
-       ((root
-          (ms_rules_root
-            (- fuel 1) facts grammar asg rules node None)))
+     (let ((root (ms_rules_root (- fuel 1) facts grammar asg rules node None)))
        (match root
          ((MsErr msg) (MsErr msg))
          ((MsRedex q) (MsRedex q))
          (_
-           (ms_children
-             (- fuel 1) facts tree_facts grammar asg rules node root))))))))
+           (ms_children (- fuel 1) facts tree_facts grammar asg rules node root))))))))
 
 (fn ms_children
   ((fuel Int)
@@ -607,40 +848,57 @@
   (if (lt fuel 1) (MsErr "constraint child scan fuel exhausted")
   (match candidate
     ((Ctor _ args)
-     (ms_anywhere_list
-       (- fuel 1) facts tree_facts grammar asg rules args prior))
+     (ms_anywhere_list (- fuel 1) facts tree_facts grammar asg rules args prior))
     ((Call _ args)
-     (ms_anywhere_list
-       (- fuel 1) facts tree_facts grammar asg rules args prior))
+     (ms_anywhere_list (- fuel 1) facts tree_facts grammar asg rules args prior))
     ((If c t e)
      (ms_anywhere_list
-       (- fuel 1) facts tree_facts grammar asg rules (list c t e) prior))
+       (- fuel 1)
+       facts
+       tree_facts
+       grammar
+       asg
+       rules
+       (list c t e)
+       prior))
     ((Match scrut arms)
      (let
        ((with_scrut
           (ms_merge
             prior
-            (ms_anywhere
-              (- fuel 1) facts tree_facts grammar asg rules scrut))))
+            (ms_anywhere (- fuel 1) facts tree_facts grammar asg rules scrut))))
        (match with_scrut
          ((MsErr msg) (MsErr msg))
          ((MsRedex q) (MsRedex q))
          (_
            (ms_anywhere_arms
-             (- fuel 1) facts tree_facts grammar asg rules arms with_scrut)))))
+             (- fuel 1)
+             facts
+             tree_facts
+             grammar
+             asg
+             rules
+             arms
+             with_scrut)))))
     ((Let bindings body)
      (let
        ((with_bindings
           (ms_anywhere_list
-            (- fuel 1) facts tree_facts grammar asg rules bindings prior)))
+            (- fuel 1)
+            facts
+            tree_facts
+            grammar
+            asg
+            rules
+            bindings
+            prior)))
        (match with_bindings
          ((MsErr msg) (MsErr msg))
          ((MsRedex q) (MsRedex q))
          (_
            (ms_merge
              with_bindings
-             (ms_anywhere
-               (- fuel 1) facts tree_facts grammar asg rules body))))))
+             (ms_anywhere (- fuel 1) facts tree_facts grammar asg rules body))))))
     (_ prior))))
 
 (fn ms_anywhere_list
@@ -663,13 +921,26 @@
           (ms_merge
             prior
             (ms_anywhere
-              (- fuel 1) facts tree_facts grammar asg rules candidate))))
+              (- fuel 1)
+              facts
+              tree_facts
+              grammar
+              asg
+              rules
+              candidate))))
        (match next
          ((MsErr msg) (MsErr msg))
          ((MsRedex q) (MsRedex q))
          (_
            (ms_anywhere_list
-             (- fuel 1) facts tree_facts grammar asg rules rest next))))))))
+             (- fuel 1)
+             facts
+             tree_facts
+             grammar
+             asg
+             rules
+             rest
+             next))))))))
 
 (fn ms_anywhere_arms
   ((fuel Int)
@@ -690,14 +961,20 @@
        ((next
           (ms_merge
             prior
-            (ms_anywhere
-              (- fuel 1) facts tree_facts grammar asg rules body))))
+            (ms_anywhere (- fuel 1) facts tree_facts grammar asg rules body))))
        (match next
          ((MsErr msg) (MsErr msg))
          ((MsRedex q) (MsRedex q))
          (_
            (ms_anywhere_arms
-             (- fuel 1) facts tree_facts grammar asg rules rest next))))))))
+             (- fuel 1)
+             facts
+             tree_facts
+             grammar
+             asg
+             rules
+             rest
+             next))))))))
 
 ;; ---- grammar-specific preparation -----------------------------------------
 
@@ -711,27 +988,27 @@
 (fn ms_pattern_add ((pattern Expr) (patterns (List Expr))) (List Expr)
   (if (ms_pattern_mem pattern patterns) patterns (Cons pattern patterns)))
 
-(fn ms_patterns_expr
-  ((fuel Int) (pattern Expr) (patterns (List Expr))) (List Expr)
+(fn ms_patterns_expr ((fuel Int) (pattern Expr) (patterns (List Expr)))
+  (List Expr)
   (measure fuel)
   (if (lt fuel 1) patterns
   (match pattern
     ((BVar _) patterns)
     ((Ctor _ args)
-     (ms_patterns_list
-       (- fuel 1) args (ms_pattern_add pattern patterns)))
+     (ms_patterns_list (- fuel 1) args (ms_pattern_add pattern patterns)))
     ((Call _ args)
-     (ms_patterns_list
-       (- fuel 1) args (ms_pattern_add pattern patterns)))
+     (ms_patterns_list (- fuel 1) args (ms_pattern_add pattern patterns)))
     ((If c t e)
      (ms_patterns_list
-       (- fuel 1) (list c t e) (ms_pattern_add pattern patterns)))
+       (- fuel 1)
+       (list c t e)
+       (ms_pattern_add pattern patterns)))
     ((IntLit _) (ms_pattern_add pattern patterns))
     ((SymLit _) (ms_pattern_add pattern patterns))
     (_ patterns))))
 
-(fn ms_patterns_list
-  ((fuel Int) (items (List Expr)) (patterns (List Expr))) (List Expr)
+(fn ms_patterns_list ((fuel Int) (items (List Expr)) (patterns (List Expr)))
+  (List Expr)
   (measure fuel)
   (if (lt fuel 1) patterns
   (match items
@@ -742,8 +1019,8 @@
        rest
        (ms_patterns_expr (- fuel 1) item patterns))))))
 
-(fn ms_patterns_rules
-  ((fuel Int) (rules (List TrsRule)) (patterns (List Expr))) (List Expr)
+(fn ms_patterns_rules ((fuel Int) (rules (List TrsRule)) (patterns (List Expr)))
+  (List Expr)
   (measure (struct rules))
   (match rules
     (Nil patterns)
@@ -753,9 +1030,7 @@
        rest
        (ms_patterns_expr fuel (trs_rule_lhs rule) patterns)))))
 
-(type MsFactsR
-  (MsFactsErr (List Int))
-  (MsFactsOk (List MsHoleFacts)))
+(type MsFactsR (MsFactsErr (List Int)) (MsFactsOk (List MsHoleFacts)))
 
 (fn ms_compile_holes
   ((match_fuel Int)
@@ -821,11 +1096,17 @@
     ((Cons (GEnt hole_id _) rest)
      (match
        (ms_anywhere
-         fuel match_facts tree_facts grammar Nil rules (hole hole_id))
+         fuel
+         match_facts
+         tree_facts
+         grammar
+         Nil
+         rules
+         (hole hole_id))
        ((MsErr msg) (MsVerdictFactsErr msg))
        ((MsBlocked _)
-        (ms_compile_anywhere_holes
-          fuel match_facts grammar rules rest tree_facts))
+        (ms_compile_anywhere_holes fuel match_facts grammar rules rest
+          tree_facts))
        ((MsClear)
         (ms_compile_anywhere_holes
           fuel
@@ -857,11 +1138,16 @@
     ((Cons (GEnt hole_id _) rest)
      (match
        (ms_rules_root_cached
-         fuel match_facts root_facts grammar Nil rules (hole hole_id))
+         fuel
+         match_facts
+         root_facts
+         grammar
+         Nil
+         rules
+         (hole hole_id))
        ((MsErr msg) (MsVerdictFactsErr msg))
        ((MsBlocked _)
-        (ms_compile_root_holes
-          fuel match_facts grammar rules rest root_facts))
+        (ms_compile_root_holes fuel match_facts grammar rules rest root_facts))
        ((MsClear)
         (ms_compile_root_holes
           fuel
@@ -887,9 +1173,7 @@
     (List MsVerdictFact)
     (List MsVerdictFact)))
 
-(type MsPrepareR
-  (MsPrepareErr (List Int))
-  (MsPrepareOk MsPrepared))
+(type MsPrepareR (MsPrepareErr (List Int)) (MsPrepareOk MsPrepared))
 
 (fn ms_match_fact_count ((row (List MsMatchFact))) Int
   (measure (struct row))
@@ -943,8 +1227,7 @@
              (match grammar
                ((Grammar entries)
                 (match
-                  (ms_compile_patterns
-                    match_fuel grammar entries patterns Nil)
+                  (ms_compile_patterns match_fuel grammar entries patterns Nil)
                   ((MsFactsErr msg) (MsPrepareErr msg))
                   ((MsFactsOk facts)
                    (let
@@ -953,33 +1236,18 @@
                      (match
                        (if (ms_rules_empty everywhere_rules)
                          (MsVerdictFactsOk Nil)
-                         (ms_compile_anywhere_holes
-                           match_fuel
-                           facts
-                           grammar
-                           everywhere_rules
-                           entries
-                           Nil))
+                         (ms_compile_anywhere_holes match_fuel facts grammar
+                           everywhere_rules entries Nil))
                        ((MsVerdictFactsErr msg) (MsPrepareErr msg))
                        ((MsVerdictFactsOk tree_facts)
                         (match
-                          (if (ms_rules_empty root_rules)
-                            (MsVerdictFactsOk Nil)
-                            (ms_compile_root_holes
-                              match_fuel
-                              facts
-                              grammar
-                              root_rules
-                              entries
-                              Nil))
+                          (if (ms_rules_empty root_rules) (MsVerdictFactsOk Nil)
+                          (ms_compile_root_holes match_fuel facts grammar
+                            root_rules entries Nil))
                           ((MsVerdictFactsErr msg) (MsPrepareErr msg))
                           ((MsVerdictFactsOk root_facts)
                            (MsPrepareOk
-                             (MsPrepared
-                               checked
-                               grammar
-                               facts
-                               tree_facts
+                             (MsPrepared checked grammar facts tree_facts
                                root_facts)))))))))))))))))))
 
 ;; ---- prepared and direct checking -----------------------------------------
@@ -1045,5 +1313,4 @@
   MsVerdict
   (match prepared
     ((MsPrepared plan grammar facts tree_facts root_facts)
-     (ms_check_facts
-       fuel facts tree_facts root_facts plan grammar asg candidate))))
+     (ms_check_facts fuel facts tree_facts root_facts plan grammar asg candidate))))

@@ -13,6 +13,7 @@
 (import "../../kernel/types.shard")
 (import "../../meta/sketch")
 (import "../../meta/invoke")
+(import "../../meta/rewrite")
 (import "../../meta/search")
 (import "superpose.shard")
 (use (:: kernel term *))
@@ -20,19 +21,53 @@
 (use (:: kernel types *))
 (use (:: meta sketch *))
 (use (:: meta invoke *))
+(use (:: meta rewrite *))
 (use (:: meta search *))
 (use (:: tools search superpose *))
 
 (type PsTask
   (PsTask
-    (List Int)                       ; display name
-    QName                            ; synthetic candidate QName
-    QName                            ; synthetic closed probe QName
-    (List Type) Type                 ; candidate params/result
-    Expr Grammar                     ; candidate body/grammar
-    Type Expr Expr                   ; query result type/query/target
-    (Option Expr)                    ; known witness body; None for absence
-    Int Int))                        ; expected total/solutions
+    (List Int)  ; display name
+    QName  ; synthetic candidate QName
+    QName  ; synthetic closed probe QName
+    (List Type)
+    Type  ; candidate params/result
+    Expr
+    Grammar  ; candidate body/grammar
+    Type
+    Expr
+    Expr  ; query result type/query/target
+    (Option Expr)  ; known witness body; None for absence
+    Int
+    Int))  ; expected total/solutions
+
+(type PsFormationR
+  (PsFormationErr (List Int))
+  (PsFormationEmpty)
+  (PsFormationOk PsTask Int))  ; filtered task, raw count
+
+(fn ps_apply_formation
+  ((task PsTask) (formation TrsFormation) (expected_total Int))
+  PsFormationR
+  (match task
+    ((PsTask name candq probeq params ret body grammar query_ty query want
+       witness _ expected_found)
+     (match (sk_count body grammar)
+       ((SkCErr msg) (PsFormationErr msg))
+       ((SkCOk raw)
+        (match (ms_filter_formation body grammar formation)
+          ((MsFormationFilterErr msg) (PsFormationErr msg))
+          ((MsFormationFilterEmpty) (PsFormationEmpty))
+          ((MsFormationFilterOk body2 grammar2)
+           (match (sk_count body2 grammar2)
+             ((SkCErr msg) (PsFormationErr msg))
+             ((SkCOk total)
+              (if (int_eq total expected_total)
+                (PsFormationOk
+                  (PsTask name candq probeq params ret body2 grammar2 query_ty
+                    query want witness total expected_found)
+                  raw)
+                (PsFormationErr "formation-filtered count drift")))))))))))
 
 (type PsGateR (PsGateErr (List Int)) (PsGateOk))
 
@@ -42,8 +77,8 @@
     (Nil acc)
     ((Cons h t) (ps_rev t (Cons h acc)))))
 
-(fn ps_type_gate
-  ((m Module) (params (List Type)) (ret Type) (body Expr)) PsGateR
+(fn ps_type_gate ((m Module) (params (List Type)) (ret Type) (body Expr))
+  PsGateR
   (match (tc_infer m (Tc 0 Nil) Nil (ps_rev params Nil) body)
     ((TcErr msg) (PsGateErr msg))
     ((TcOk tc got)
@@ -80,6 +115,14 @@
                 (if (expr_eq got want) (PsGateOk)
                 (PsGateErr "representative disagrees with target"))))))))))))
 
+(fn ps_constraint_gate ((plan MsPlan) (grammar Grammar) (candidate Expr))
+  PsGateR
+  (match (ms_check 1000000 plan grammar Nil candidate)
+    ((MsErr msg) (PsGateErr msg))
+    ((MsBlocked _) (PsGateErr "complete candidate left a blocked reduction"))
+    ((MsRedex _) (PsGateErr "candidate violates the reduction profile"))
+    ((MsClear) (PsGateOk))))
+
 (fn ps_representatives
   ((m Module)
    (candq QName)
@@ -88,6 +131,7 @@
    (ret Type)
    (body Expr)
    (grammar Grammar)
+   (plan MsPlan)
    (query_ty Type)
    (query Expr)
    (want Expr)
@@ -100,14 +144,15 @@
      (match (su_rep grammar asg body 1000000)
        (None (PsGateErr "passing region has no representative"))
        ((Some candidate)
-        (match
-          (ps_observe
-            m candq probeq params ret candidate query_ty query want)
+        (match (ps_constraint_gate plan grammar candidate)
           ((PsGateErr msg) (PsGateErr msg))
           ((PsGateOk)
-           (ps_representatives
-             m candq probeq params ret body grammar query_ty query want
-             rest))))))))
+           (match
+             (ps_observe m candq probeq params ret candidate query_ty query want)
+             ((PsGateErr msg) (PsGateErr msg))
+             ((PsGateOk)
+              (ps_representatives m candq probeq params ret body grammar plan
+                query_ty query want rest))))))))))
 
 (fn ps_cat ((parts (List (List Int)))) (List Int)
   (measure (struct parts))
@@ -117,9 +162,13 @@
 
 (fn ps_report
   ((name (List Int))
+   (raw Int)
    (total Int)
    (found Int)
    (killed Int)
+   (constrained Int)
+   (profile_rules Int)
+   (residual_rules Int)
    (regions Int)
    (forks Int)
    (steps Int)
@@ -129,12 +178,22 @@
     (list
       "PURE-SHARD "
       name
-      "\nTOTAL "
+      "\nRAW "
+      (show_int raw)
+      " REMOVED "
+      (show_int (- raw total))
+      " TOTAL "
       (show_int total)
       " FOUND "
       (show_int found)
       " KILLED "
       (show_int killed)
+      " CONSTRAINT-KILLED "
+      (show_int constrained)
+      " PROFILE-RULES "
+      (show_int profile_rules)
+      " RESIDUAL-RULES "
+      (show_int residual_rules)
       " REGIONS "
       (show_int regions)
       " FORKS "
@@ -145,13 +204,195 @@
       (show_int rank)
       " REPRESENTATIVES-TYPED GATES OK\n")))
 
-(type PsRunR (PsRunErr (List Int)) (PsRunOk (List Int)))
+(fn ps_budget_report
+  ((name (List Int))
+   (raw Int)
+   (total Int)
+   (found Int)
+   (killed Int)
+   (constrained Int)
+   (profile_rules Int)
+   (residual_rules Int)
+   (regions Int)
+   (forks Int)
+   (steps Int)
+   (nodes Int)
+   (exprs Int))
+  (List Int)
+  (let ((settled (+ found killed)))
+    (ps_cat
+      (list
+        "PURE-SHARD "
+        name
+        " BUDGET\nRAW "
+        (show_int raw)
+        " REMOVED "
+        (show_int (- raw total))
+        " TOTAL "
+        (show_int total)
+        " SETTLED "
+        (show_int settled)
+        " PENDING "
+        (show_int (- total settled))
+        " FOUND "
+        (show_int found)
+        " KILLED "
+        (show_int killed)
+        " CONSTRAINT-KILLED "
+        (show_int constrained)
+        " PROFILE-RULES "
+        (show_int profile_rules)
+        " RESIDUAL-RULES "
+        (show_int residual_rules)
+        " REGIONS "
+        (show_int regions)
+        " FORKS "
+        (show_int forks)
+        " STEPS "
+        (show_int steps)
+        " NODES "
+        (show_int nodes)
+        " EXPRS "
+        (show_int exprs)
+        "\nPARTIAL EXACT-COVERAGE REPRESENTATIVES-TYPED GATES OK\n"))))
 
-(fn ps_run ((m Module) (task PsTask)) PsRunR
+(type PsRunR
+  (PsRunErr (List Int))
+  (PsRunBudget (List Int))
+  (PsRunOk (List Int)))
+
+(fn ps_witness_finish
+  ((body Expr)
+   (grammar Grammar)
+   (plan MsPlan)
+   (witness (Option Expr))
+   (found Int)
+   (sols (List (List (Pair Int Int))))
+   (name (List Int))
+   (raw Int)
+   (total Int)
+   (profile_rules Int)
+   (killed Int)
+   (constrained Int)
+   (regions Int)
+   (forks Int)
+   (steps Int))
+  PsRunR
+  (match witness
+    (None
+      (if (int_eq found 0)
+        (PsRunOk
+          (ps_report
+            name
+            raw
+            total
+            found
+            killed
+            constrained
+            profile_rules
+            (ms_plan_rule_count plan)
+            regions
+            forks
+            steps
+            -1))
+        (PsRunErr "nonempty solution set has no witness")))
+    ((Some witness_body)
+     (match (ps_constraint_gate plan grammar witness_body)
+       ((PsGateErr msg) (PsRunErr msg))
+       ((PsGateOk)
+        (match (sk_rank body grammar witness_body)
+          ((SkCErr msg) (PsRunErr msg))
+          ((SkCOk rank)
+           (if (su_covered grammar body sols witness_body)
+             (PsRunOk
+               (ps_report
+                 name
+                 raw
+                 total
+                 found
+                 killed
+                 constrained
+                 profile_rules
+                 (ms_plan_rule_count plan)
+                 regions
+                 forks
+                 steps
+                 rank))
+             (PsRunErr "known witness escaped passing regions")))))))))
+
+(fn ps_finish
+  ((m Module)
+   (candq QName)
+   (probeq QName)
+   (params (List Type))
+   (ret Type)
+   (body Expr)
+   (grammar Grammar)
+   (plan MsPlan)
+   (query_ty Type)
+   (query Expr)
+   (want Expr)
+   (witness (Option Expr))
+   (expected_found Int)
+   (expected_constrained Int)
+   (name (List Int))
+   (raw Int)
+   (total Int)
+   (profile_rules Int)
+   (drive SuS))
+  PsRunR
+  (match drive
+    ((SuSErr msg) (PsRunErr msg))
+    ((SuSBudget found killed constrained regions forks steps nodes exprs sols)
+     (if (le (+ found killed) total)
+       (match
+         (ps_representatives m candq probeq params ret body grammar plan
+           query_ty query want sols)
+         ((PsGateErr msg) (PsRunErr msg))
+         ((PsGateOk)
+          (PsRunBudget
+            (ps_budget_report
+              name
+              raw
+              total
+              found
+              killed
+              constrained
+              profile_rules
+              (ms_plan_rule_count plan)
+              regions
+              forks
+              steps
+              nodes
+              exprs))))
+       (PsRunErr "budgeted found + killed exceeds total")))
+    ((SuSOk found killed constrained regions forks steps sols)
+     (if (int_eq (+ found killed) total)
+       (if (int_eq constrained expected_constrained)
+         (if (int_eq found expected_found)
+           (match
+             (ps_representatives m candq probeq params ret body grammar plan
+               query_ty query want sols)
+             ((PsGateErr msg) (PsRunErr msg))
+             ((PsGateOk)
+              (ps_witness_finish body grammar plan witness found sols name raw
+                total profile_rules killed constrained regions forks steps)))
+           (PsRunErr "solution count drift"))
+         (PsRunErr "constraint-killed count drift"))
+       (PsRunErr "found + killed does not equal total")))))
+
+(fn ps_run_plan_stats_fuel
+  ((m Module)
+   (task PsTask)
+   (plan MsPlan)
+   (expected_constrained Int)
+   (raw Int)
+   (profile_rules Int)
+   (drive_fuel Int))
+  PsRunR
   (match task
-    ((PsTask
-       name candq probeq params ret body grammar query_ty query want witness
-       expected_total expected_found)
+    ((PsTask name candq probeq params ret body grammar query_ty query want
+       witness expected_total expected_found)
      (match (g_wf grammar)
        ((GWErr msg) (PsRunErr msg))
        ((GWOk)
@@ -162,14 +403,32 @@
              ((SkCErr msg) (PsRunErr msg))
              ((SkCOk total)
               (if (int_eq total expected_total)
-                (match
+                (ps_finish
+                  m
+                  candq
+                  probeq
+                  params
+                  ret
+                  body
+                  grammar
+                  plan
+                  query_ty
+                  query
+                  want
+                  witness
+                  expected_found
+                  expected_constrained
+                  name
+                  raw
+                  total
+                  profile_rules
                   (su_drive_query
-                    (+ (* 8 total) 4096)
+                    drive_fuel
                     m
                     candq
                     body
                     body
-                    (ms_empty_plan)
+                    plan
                     query
                     want
                     grammar
@@ -181,41 +440,40 @@
                     0
                     0
                     0
-                    Nil)
-                  ((SuSErr msg) (PsRunErr msg))
-                  ((SuSOk found killed constrained regions forks steps sols)
-                   (if (int_eq constrained 0)
-                     (if (int_eq (+ found killed) total)
-                       (if (int_eq found expected_found)
-                         (match
-                           (ps_representatives
-                             m candq probeq params ret body grammar query_ty
-                             query want sols)
-                           ((PsGateErr msg) (PsRunErr msg))
-                           ((PsGateOk)
-                            (match witness
-                              (None
-                               (if (int_eq found 0)
-                                 (PsRunOk
-                                   (ps_report
-                                     name total found killed regions forks
-                                     steps -1))
-                                 (PsRunErr
-                                   "nonempty solution set has no witness")))
-                              ((Some witness_body)
-                               (match (sk_rank body grammar witness_body)
-                                 ((SkCErr msg) (PsRunErr msg))
-                                 ((SkCOk rank)
-                                  (if
-                                    (su_covered
-                                      grammar body sols witness_body)
-                                    (PsRunOk
-                                      (ps_report
-                                        name total found killed regions forks
-                                        steps rank))
-                                    (PsRunErr
-                                      "known witness escaped passing regions"))))))))
-                         (PsRunErr "solution count drift"))
-                       (PsRunErr "found + killed does not equal total"))
-                     (PsRunErr "empty constraint plan killed candidates"))))
+                    Nil))
                 (PsRunErr "candidate count drift")))))))))))
+
+(fn ps_run_plan_stats
+  ((m Module)
+   (task PsTask)
+   (plan MsPlan)
+   (expected_constrained Int)
+   (raw Int)
+   (profile_rules Int))
+  PsRunR
+  (match task
+    ((PsTask _ _ _ _ _ _ _ _ _ _ _ expected_total _)
+     (ps_run_plan_stats_fuel
+       m
+       task
+       plan
+       expected_constrained
+       raw
+       profile_rules
+       (+ (* 8 expected_total) 4096)))))
+
+(fn ps_run_plan
+  ((m Module) (task PsTask) (plan MsPlan) (expected_constrained Int))
+  PsRunR
+  (match task
+    ((PsTask _ _ _ _ _ _ _ _ _ _ _ expected_total _)
+     (ps_run_plan_stats
+       m
+       task
+       plan
+       expected_constrained
+       expected_total
+       (ms_plan_rule_count plan)))))
+
+(fn ps_run ((m Module) (task PsTask)) PsRunR
+  (ps_run_plan m task (ms_empty_plan) 0))

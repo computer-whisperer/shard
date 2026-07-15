@@ -554,6 +554,16 @@ else
   echo "SKIPPED (no bin/shard_eval)"
 fi
 
+# Checked theorem formation over a supplied pure-Shard grammar.  The bounded
+# depth-3 run pins the 10^17-member quotient and an exact partial census without
+# making the much longer complete interpreter run a routine corpus cost.
+echo "=== search: pure Shard checked-formation depth-3 probe ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/pure_deep.shard probe 3 5000
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
 # Ground-search pin (docs/SEARCH.md slice 1): the rev accumulator space,
 # rank-addressed by meta/sketch and settled through the real machine
 # (meta/invoke -> evm_call_pure). Counts and solution sets must match the
