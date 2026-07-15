@@ -132,6 +132,8 @@ TARGETS=(
   examples/impgen_wasm_loop_out.shard
   examples/impgen_x86_loop_out.shard
   examples/iwg_probe.shard
+  examples/sqw_probe.shard
+  examples/sqx_probe.shard
   models/wasm/wasm.shard
   models/wasm/encode.shard
   examples/wasm_smoke.shard
@@ -270,6 +272,8 @@ TARGETS=(
   std/nat/nat.shard
   std/sha256/sha256.shard
   std/sha256/sha256.imp.shard
+  std/sha256/impgen_wasm_out.shard
+  std/sha256/impgen_x86_out.shard
   examples/sketch_pin.shard
   tools/search/rev_obj.shard
   tools/search/rev.shard

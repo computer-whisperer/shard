@@ -1760,6 +1760,81 @@ consumer.
   emission is the named mitigation if whole-body kernel time bites),
   then I2e (./sha256sum).
 
+**V2-5e-3 — the statement tier: the straight-line sha legs (the trio
+chunk).** impgen grows its third bridge tier; the sha round/copy/ext
+bodies get generated seq-grain legs. Two commits: the translator
+growth, then the tier + the generated outs.
+
+- **The translator growth (probe-diagnosed, additive-only).** Across
+  all four pinned sha bodies the v2 x86 pattern tier refused exactly
+  TWO shapes: the bare ext-load `(ISet i (IExt U8 _ (ILoad (ILoc
+  j))))` (every Horner walk's opening byte) and the ITrunc byte store
+  `(IStore (ILoc a) (ITrunc U32 U8 v))`. Growth: the ext-load joins
+  ix_set's pattern tier (XLoad8 zero-extends — the ext dissolves);
+  a non-src store value takes the general path (ix_res into RAX,
+  XStore8 (SReg RAX)) — XStore8 stores the register RAW, so the
+  And-mask ix_acc appends MATERIALIZES imp's byte band and the stored
+  trees align by construction. All four bodies now translate on both
+  targets; every existing generated out is regen-byte-identical (the
+  growth touched only previously-None arms).
+- **The seq seam.** to_x86 `ix_sstmts` = the SEALED statement-sequence
+  entry: translated chunk + zero-scratch seal (`ix_zs` over the
+  chunk's own emission), so a straight-line chunk ENTERS and EXITS at
+  scratch zero and seq-grain facts compose at `(xargs locals)`
+  register files on both ends — the V2-5a loop-boundary invariant in
+  sequence position. Adapters: `iw_sout` (INorm ↔ ONorm at the ENTRY
+  stack — inline code has no labels; statements are stack-neutral)
+  and `ix_sout` (INorm ↔ XNorm∘xargs, NO residue argument — the seal
+  resolves scratch by construction, ix_out's `ra` dance has no
+  seq-grain analog).
+- **The claim form (probe-validated FIRST-TRY on both targets before
+  the generator was written — examples/sqw_probe/sqx_probe, kept as
+  corpus pins):** UNPREMISED, the v2 thesis at statement grain —
+  `(eval_seq (S^A c) (MkWModule restfs MSZ) INSTRS locals st m) =
+  (iw_sout st (istmts (S^G c2) MSZ BODY locals m))` (x86: xeval_seq
+  at the MkRegs literal entry, ix_sout, MkXModule restfs 0 MSZ).
+  Locals fully symbolic, stack/module/fuel tails quantified; fuels
+  ground towers (G = gcost+4, A = tcost+4 — both engines are linear
+  in a straight-line body, no ghost counts, no fuel-death case). The
+  proof is the walk's split spine with compute-both leaves: shared
+  low-bound guards case-on directly (both engines stick on the SAME
+  banded tree); mem-hi guards case-on the IMP spelling (lt a MSZ) and
+  bridge to the machine spelling (le (+ a 1) MSZ) by a keyed-rows
+  have-pair AT THE ARM'S POLARITY (the hlt-lift + integer-tight cert,
+  both directions (rows (goal 1) (hltN 1))); every False arm is a
+  compute-closed trap leaf (both machines trap; the adapters
+  conflate). Splits DEDUP by scrutinee (all-occurrence rewrites
+  resolve every duplicate at its first split).
+- **The tier in impgen.** gen_pin now dispatches by shape: loops →
+  the loop tier, memful straight-line → the statement tier (sq_pin),
+  memless → the scalar fn-grain tier. The statement tier reuses the
+  loop tier's lw_stmts walk VERBATIM (raw symbolic locals, symbolic
+  memory) — only the emission differs; its ties pin the seq
+  translation itself (`iw_stmts` at the pin's kind env / the sealed
+  `ix_sstmts`), not imp2w/x_fn (no call boundary — the SysV param
+  limit does not apply, so the 12-slot pins are fine). Pin carrier:
+  nullary IFn fns in the sibling (it_shround/shcopy/shext_fn, 12×U32
+  params, extras Nil, result unused) + one IProg wrapper announcing
+  memsize 65536.
+- **The x86 rotation fence stands (V2-2b):** round/ext x86 legs are
+  tie-plus-note (the ix_rot shl leg wraps 2^64 mid-tree; imp's band
+  IRotr doesn't spell it). The named growth that unlocks them is the
+  native 32-bit rotate instruction (model + encoding, byte-emit
+  Opus-delegated) — a user decision point, not a momentum fix.
+- Outputs: std/sha256/impgen_{wasm,x86}_out.shard (in-module
+  residence — the pins are private; OUT must be SRC's sibling). wasm:
+  3 ties + 3 FULL bridges (round 16 splits / copy 16 / ext 32; the
+  ext spine re-walks a 306-instruction body per arm and checks fine —
+  the phase-emission mitigation stays unspent). x86: 3 ties + the
+  copy bridge + 2 rotation notes. EVERY generated claim kernel-green
+  FIRST TRY (394/0 + 663/0); regen deterministic; the four
+  pre-existing outs byte-stable; driver 64 green (4 new products);
+  corpus grows 4 targets (2 outs + 2 probes), FAIL-set identical.
+- NEXT: the mixed tier (the block body: seq segments chained around
+  generic-worker citations at the three embedded IWhiles — PIN-A
+  fuel chaining machine-side), the x86 rotation decision (native ror
+  = the round/ext x86 unlock), then I2e (./sha256sum).
+
 ## 7. Non-goals, stated once
 
 - imp as a shipped target or public surface — it is an intermediate;

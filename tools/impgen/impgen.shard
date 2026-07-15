@@ -2190,6 +2190,362 @@
     (Nil (DStr "Nil"))
     ((Cons _ _) (dcat3 (DStr "(list") (d_exprlist_go es) (DStr ")")))))
 
+;; --- the statement tier: seq-grain legs for memful straight-line pins --------------
+;; A pin whose body is straight-line but touches memory (the sha
+;; bodies) bridges at STATEMENT grain: machine seq run = seq adapter
+;; of the imp statement run, UNPREMISED (probe-validated form,
+;; examples/sqw_probe/sqx_probe). The walk is the loop tier's lw_stmts
+;; verbatim (raw symbolic locals + symbolic memory); the proof is the
+;; split spine with compute-both leaves -- shared low-bound guards
+;; case-on directly, mem-hi guards case-on the imp spelling (lt a MSZ)
+;; and bridge to the machine spelling (le (+ a 1) MSZ) by a keyed-rows
+;; have-pair at the arm's polarity. Trap arms close by computation on
+;; both sides (both machines trap; the adapters conflate). The x86 leg
+;; states the SEALED translation (ix_sstmts): the chunk exits at
+;; scratch zero, so the exit register file is exactly (xargs locals)
+;; through ix_sout.
+
+;; any memory op in a straight-line body (the dispatch key)
+(fn hm_exp ((e IExp)) Bool
+  (measure (struct e))
+  (match e
+    ((IConst _) False)
+    ((ILoc _) False)
+    ((IBin _ _ a b) (if (hm_exp a) True (hm_exp b)))
+    ((IRotr _ a c) (if (hm_exp a) True (hm_exp c)))
+    ((IExt _ _ a) (hm_exp a))
+    ((ITrunc _ _ a) (hm_exp a))
+    ((ILoad _) True)))
+
+(fn has_mem ((ss (List IStmt))) Bool
+  (measure (struct ss))
+  (match ss
+    (Nil False)
+    ((Cons s t)
+     (match s
+       ((ISet _ e) (if (hm_exp e) True (has_mem t)))
+       ((IStore _ _) True)
+       ((IIf _ tb eb)
+        (if (has_mem tb) True
+        (if (has_mem eb) True
+        (has_mem t))))
+       ((IWhile _ b) (if (has_mem b) True (has_mem t)))))))
+
+;; append two ground Cons-spine Exprs (the kind env for the iw_stmts
+;; invoke: params ++ extras, reusing the value's own canonical qnames)
+(fn e_app_spine ((a Expr) (b Expr)) Expr
+  (measure (struct a))
+  (match a
+    ((Ctor q args)
+     (if (sym_eq (qn_name q) (quote Nil)) b
+     (if (sym_eq (qn_name q) (quote Cons))
+       (match args
+         ((Cons h (Cons t Nil))
+          (Ctor q (Cons h (Cons (e_app_spine t b) Nil))))
+         (_ a))
+       a)))
+    (_ a)))
+
+;; split identity (dedup key): same variant, same scrutinee tree. An
+;; all-occurrence rewrite resolves every duplicate of a scrutinee at
+;; its first split, so later duplicates are dropped, not re-split.
+(fn gs_eq ((a GSplit) (b GSplit)) Bool
+  (match a
+    ((GShared e1)
+     (match b
+       ((GShared e2) (expr_eq e1 e2))
+       ((GMemHi _) False)))
+    ((GMemHi e1)
+     (match b
+       ((GShared _) False)
+       ((GMemHi e2) (expr_eq e1 e2))))))
+
+(fn gs_seen ((seen (List GSplit)) (g GSplit)) Bool
+  (measure (struct seen))
+  (match seen
+    (Nil False)
+    ((Cons h t) (if (gs_eq h g) True (gs_seen t g)))))
+
+(fn gs_dedup ((seen (List GSplit)) (gs (List GSplit))) (List GSplit)
+  (measure (struct gs))
+  (match gs
+    (Nil Nil)
+    ((Cons g t)
+     (if (gs_seen seen g)
+       (gs_dedup seen t)
+       (Cons g (gs_dedup (Cons g seen) t))))))
+
+;; the mem-hi bridge at one polarity: lift the case hyp into a have
+;; (case hyps never join farkas rows), derive the machine spelling by
+;; the integer-tight cert, then resolve the imp side by the hyp and
+;; the machine side by the have
+(fn sq_mh ((i Int) (a Expr) (msz Int) (pol (List Int))) Doc
+  (dconc
+    (list
+      (DStr "(have hlt")
+      (dint i)
+      (DStr " (= (lt ")
+      (pr_e a)
+      (DStr " ")
+      (dint msz)
+      (DStr ") ")
+      (DStr pol)
+      (DStr ") (steps ((rewrite (hyp 0) lr lhs true ())) refl)) (have hle")
+      (dint i)
+      (DStr " (= (le (+ ")
+      (pr_e a)
+      (DStr " 1) ")
+      (dint msz)
+      (DStr ") ")
+      (DStr pol)
+      (DStr ") (steps () (by arith (rows (goal 1) (hlt")
+      (dint i)
+      (DStr " 1))))) (steps ((rewrite (hyp 0) lr rhs true ()) (rewrite (premise hle")
+      (dint i)
+      (DStr ") lr lhs true ()) (compute both)))"))))
+
+;; the split spine: every False arm is a compute-closed trap leaf, the
+;; final True leaf is refl (both sides fully ground under the resolved
+;; guards)
+(fn sq_spine ((gs (List GSplit)) (i Int) (msz Int)) Doc
+  (measure (struct gs))
+  (match gs
+    (Nil (DStr "refl"))
+    ((Cons g t)
+     (match g
+       ((GShared e)
+        (dconc
+          (list
+            (DStr "(case-on ")
+            (pr_e e)
+            (DStr
+              " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both))) ")
+            (sq_spine t (+ i 1) msz)
+            (DStr
+              ")) (case False (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both))) refl))))"))))
+       ((GMemHi a)
+        (dconc
+          (list
+            (DStr "(case-on (lt ")
+            (pr_e a)
+            (DStr " ")
+            (dint msz)
+            (DStr ") Bool ((case True (chain ")
+            (sq_mh i a msz "True")
+            (DStr " ")
+            (sq_spine t (+ i 1) msz)
+            (DStr ")) (case False (chain ")
+            (sq_mh i a msz "False")
+            (DStr " refl))))"))))))))
+
+;; the statement-tier tie: the seq translation product itself
+;; (iw_stmts at the pin's kind env / the SEALED ix_sstmts)
+(fn d_sqtie
+  ((tiepre (List Int)) (nm (List Int)) (x86 Bool) (pin Symbol) (ks Doc) (v Doc))
+  Doc
+  (dconc
+    (list
+      (DStr "(claim ")
+      (DStr tiepre)
+      (DStr nm)
+      (DStr " (goal () () (= ")
+      (if x86
+        (dcat3 (DStr "(ix_sstmts (ibody_of (") (dsym pin) (DStr ")))"))
+        (dconc
+          (list
+            (DStr "(iw_stmts ")
+            ks
+            (DStr " (ibody_of (")
+            (dsym pin)
+            (DStr ")))"))))
+      (DStr " ")
+      v
+      (DStr ")) (steps ((compute both)) refl))")
+      (DStr (nl))
+      (DStr (nl)))))
+
+;; the seq-grain bridge claim
+(fn sq_emit
+  ((brpre (List Int))
+   (x86 Bool)
+   (msz Int)
+   (pin Symbol)
+   (ifn IFn)
+   (bodyE Expr)
+   (instrsE Expr)
+   (splits (List GSplit)))
+  ERes
+  (match (sp_e (harvest bodyE) 0 bodyE)
+    ((SpRErr m) (EErr m))
+    ((SpROk ibodydoc)
+     (match (sp_e (harvest instrsE) 0 instrsE)
+       ((SpRErr m) (EErr m))
+       ((SpROk wbodydoc)
+        (let
+          ((nm (pin_nm pin))
+           (nl (+ (ikn (ikparams_of ifn)) (ikn (ikextra_of ifn))))
+           (gg (+ (gcost (ibody_of ifn)) 4))
+           (aa (+ (tcost instrsE) 4))
+           (ds (gs_dedup Nil splits)))
+          (let
+            ((gbi
+              (dconc
+                (list
+                  (DStr "(fn gb_")
+                  (DStr nm)
+                  (DStr "_i () (List IStmt) ")
+                  ibodydoc
+                  (DStr ")")
+                  (DStr (nl))
+                  (DStr (nl)))))
+             (gbw
+               (dconc
+                 (list
+                   (DStr "(fn gb_")
+                   (DStr nm)
+                   (DStr (if x86 "_x () (List XInstr) " "_w () (List Instr) "))
+                   wbodydoc
+                   (DStr ")")
+                   (DStr (nl))
+                   (DStr (nl))))))
+            (EOk
+              (dconc
+                (list
+                  gbi
+                  gbw
+                  (DStr "(claim ")
+                  (DStr brpre)
+                  (DStr nm)
+                  (DStr " (goal (")
+                  (d_binds_go
+                    nl
+                    (DStr
+                      (if x86
+                        "(m Mem) (c Nat) (c2 Nat) (restfs (List XFunc))"
+                        "(st (List Int)) (m Mem) (c Nat) (c2 Nat) (restfs (List Func))")))
+                  (DStr ") () (= (")
+                  (DStr (if x86 "xeval_seq (S^ " "eval_seq (S^ "))
+                  (dint aa)
+                  (DStr (if x86 " c) (MkXModule restfs 0 " " c) (MkWModule restfs "))
+                  (dint msz)
+                  (DStr ") (inline gb_")
+                  (DStr nm)
+                  (DStr (if x86 "_x) " "_w) "))
+                  (if x86
+                    (lp_regsdoc nl)
+                    (dcat3 (d_args nl) (DStr " st") (DStr "")))
+                  (DStr " m) (")
+                  (DStr (if x86 "ix_sout " "iw_sout st "))
+                  (DStr "(istmts (S^ ")
+                  (dint gg)
+                  (DStr " c2) ")
+                  (dint msz)
+                  (DStr " (inline gb_")
+                  (DStr nm)
+                  (DStr "_i) ")
+                  (d_args nl)
+                  (DStr " m)))) (chain (steps ((compute both))) ")
+                  (sq_spine ds 1 msz)
+                  (DStr "))")
+                  (DStr (nl))
+                  (DStr (nl))))))))))))
+
+;; one statement pin, one target: run the SEQ translator on the pin's
+;; body value, spell the tie, then the bridge (wrapper-gated: the
+;; declared memsize comes from the IProg wrapper). Walk refusals
+;; (rotation on x86, branches) leave the tie standing with the honest
+;; note.
+(fn sq_pin
+  ((msrc Module)
+   (mtr Module)
+   (tiepre (List Int))
+   (brpre (List Int))
+   (tname (List Int))
+   (x86 Bool)
+   (wrap (Option Symbol))
+   (pin Symbol)
+   (gv Expr)
+   (ifn IFn))
+  ERes
+  (match (ec_is gv (quote MkIFn))
+    (None (EErr "pin value shape (internal)"))
+    ((Some margs)
+     (match margs
+       ((Cons pksE (Cons xksE (Cons bodyE _)))
+        (match
+          (if x86
+            (invoke mtr (quote ix_sstmts) (Cons bodyE Nil))
+            (invoke
+              mtr
+              (quote iw_stmts)
+              (Cons (e_app_spine pksE xksE) (Cons bodyE Nil))))
+          (None
+            (EErr
+              (append_int
+                "statement translator invoke failed on "
+                (chars_of_sym pin))))
+          ((Some tv)
+           (match (ec_is tv (quote None))
+             ((Some _) (EOk (d_refused pin tname)))
+             (None
+               (match (ec_is tv (quote Some))
+                 (None (EErr "translated value is not Some (internal)"))
+                 ((Some sargs)
+                  (match sargs
+                    ((Cons instrsE Nil)
+                     (match (sp_e (harvest tv) 0 tv)
+                       ((SpRErr m) (EErr m))
+                       ((SpROk vdoc)
+                        (let
+                          ((tie
+                            (d_sqtie
+                              tiepre
+                              (pin_nm pin)
+                              x86
+                              pin
+                              (d_kinds (ikapp (ikparams_of ifn) (ikextra_of ifn)))
+                              vdoc)))
+                          (match wrap
+                            (None
+                              (EOk
+                                (DCat
+                                  tie
+                                  (d_note
+                                    pin
+                                    "statement pin without an IProg wrapper"))))
+                            ((Some wnm)
+                             (match (wrap_msz msrc wnm gv)
+                               (None
+                                 (EErr
+                                   "wrapper does not yield an IProg (internal)"))
+                               ((Some msz)
+                                (match
+                                  (lw_stmts
+                                    (+ (isz_stmts (ibody_of ifn)) 2)
+                                    x86
+                                    msz
+                                    (ibody_of ifn)
+                                    (st_params
+                                      (+ (ikn (ikparams_of ifn))
+                                         (ikn (ikextra_of ifn))))
+                                    (FVar (quote m)))
+                                  ((LSRf why) (EOk (DCat tie (d_note pin why))))
+                                  ((LSOk splits _ _)
+                                   (match
+                                     (sq_emit
+                                       brpre
+                                       x86
+                                       msz
+                                       pin
+                                       ifn
+                                       bodyE
+                                       instrsE
+                                       splits)
+                                     ((EErr msg) (EErr msg))
+                                     ((EOk bdoc) (EOk (DCat tie bdoc))))))))))))))
+                    (_ (EErr "translated value shape (internal)"))))))))))
+       (_ (EErr "pin value shape (internal)"))))))
+
 ;; --- per-pin emission ------------------------------------------------------------
 
 ;; a refused pin's honest record in the output
@@ -2289,10 +2645,10 @@
           (_ (EErr "translated value shape (internal)"))))
        (_ (EErr "translated value shape (internal)"))))))
 
-;; one pin, one target: evaluate the pin in the SOURCE module, run the
-;; translator on the value in the TRANSLATOR module, spell the tie,
-;; then the scalar bridge (when the wrapper exists and the walk
-;; accepts); loop pins note-and-tie in this tier
+;; one pin, one target: evaluate the pin in the SOURCE module, reify,
+;; and dispatch by tier -- loops to the loop tier, memful straight-line
+;; bodies to the statement tier, memless straight-line to the scalar
+;; (fn-grain) tier
 (fn gen_pin
   ((msrc Module)
    (mtr Module)
@@ -2307,21 +2663,41 @@
   (match (invoke msrc pin Nil)
     (None (EErr (append_int "pin does not evaluate: " (chars_of_sym pin))))
     ((Some gv)
-     (match (invoke mtr trans (Cons gv Nil))
+     (match (rf_fn gv)
+       (None (EErr (append_int "pin does not reify: " (chars_of_sym pin))))
+       ((Some ifn)
+        (if (has_while (ibody_of ifn))
+          (gen_fn_pin msrc mtr trans tiepre brpre tname x86 wrap pin gv ifn)
+        (if (has_mem (ibody_of ifn))
+          (sq_pin msrc mtr tiepre brpre tname x86 wrap pin gv ifn)
+          (gen_fn_pin msrc mtr trans tiepre brpre tname x86 wrap pin gv ifn))))))))
+
+;; the fn-grain flow (loop + scalar tiers): run the FUNCTION translator
+;; on the pin value, spell the tie, then the per-tier bridge
+(fn gen_fn_pin
+  ((msrc Module)
+   (mtr Module)
+   (trans Symbol)
+   (tiepre (List Int))
+   (brpre (List Int))
+   (tname (List Int))
+   (x86 Bool)
+   (wrap (Option Symbol))
+   (pin Symbol)
+   (gv Expr)
+   (ifn IFn))
+  ERes
+  (match (invoke mtr trans (Cons gv Nil))
+    (None
+      (EErr (append_int "translator invoke failed on " (chars_of_sym pin))))
+    ((Some tv)
+     (match (ec_is tv (quote None))
+       ((Some _) (EOk (d_refused pin tname)))
        (None
-         (EErr (append_int "translator invoke failed on " (chars_of_sym pin))))
-       ((Some tv)
-        (match (ec_is tv (quote None))
-          ((Some _) (EOk (d_refused pin tname)))
-          (None
-            (match (sp_e (harvest tv) 0 tv)
-              ((SpRErr msg) (EErr msg))
-              ((SpROk vdoc)
-               (match (rf_fn gv)
-                 (None
-                   (EErr (append_int "pin does not reify: " (chars_of_sym pin))))
-                 ((Some ifn)
-                  (if (has_while (ibody_of ifn))
+         (match (sp_e (harvest tv) 0 tv)
+           ((SpRErr msg) (EErr msg))
+           ((SpROk vdoc)
+            (if (has_while (ibody_of ifn))
                     (match wrap
                       (None
                         (EOk
@@ -2394,7 +2770,7 @@
                                  (chars_of_sym trans)
                                  pin
                                  vdoc)
-                               bdoc))))))))))))))))))))
+                               bdoc))))))))))))))))
 
 (fn gen_pins
   ((msrc Module)
@@ -2431,6 +2807,21 @@
           (None (any_loop msrc rest))
           ((Some ifn)
            (if (has_while (ibody_of ifn)) True (any_loop msrc rest)))))))))
+
+;; does any pin touch memory? (the header's std/mem import gate — the
+;; statement tier's Mem binders need the type in scope)
+(fn any_mem ((msrc Module) (pins (List Symbol))) Bool
+  (measure (struct pins))
+  (match pins
+    (Nil False)
+    ((Cons p rest)
+     (match (invoke msrc p Nil)
+       (None (any_mem msrc rest))
+       ((Some gv)
+        (match (rf_fn gv)
+          (None (any_mem msrc rest))
+          ((Some ifn)
+           (if (has_mem (ibody_of ifn)) True (any_mem msrc rest)))))))))
 
 ;; --- pin enumeration --------------------------------------------------------------
 
@@ -2471,6 +2862,7 @@
    (modelpath (List Int))
    (transpath (List Int))
    (loopful Bool)
+   (memful Bool)
    (x86 Bool))
   Doc
   (dconc
@@ -2501,7 +2893,7 @@
             (if x86
               (dimport (append_int (updots out) "models/x86/loopkit.shard"))
               (DStr ""))))
-        (DStr ""))
+        (if memful (dimport (append_int (updots out) "std/mem")) (DStr "")))
       (use_of src)
       (use_of "models/imp/imp.shard")
       (use_of modelpath)
@@ -2513,7 +2905,7 @@
             (use_of "std/mem")
             (use_of "models/wasm/loopkit.shard")
             (if x86 (use_of "models/x86/loopkit.shard") (DStr ""))))
-        (DStr ""))
+        (if memful (use_of "std/mem") (DStr "")))
       (DStr (nl)))))
 
 (fn ig_fail ((msg (List Int)) (w World)) World
@@ -2570,6 +2962,7 @@
                            modelpath
                            transpath
                            (any_loop msrc (Cons p prest))
+                           (any_mem msrc (Cons p prest))
                            x86)
                          body)
                        Nil)
