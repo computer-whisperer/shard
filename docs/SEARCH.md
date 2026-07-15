@@ -1751,3 +1751,42 @@ and task-independent; the observational quotient is battery-relative.  Keeping
 those identities separate lets them compose without mistaking test equivalence
 for theorem equality.  Then rerun the gauge and join censuses under the expanded
 profile and measure the marginal reduction attributable to each rule.
+
+### Playground transfer: contextual generation pressure
+
+`catalog_pressure.shard` makes the playground's first mined generative rule an
+explicit ablation of the current catalog builder.  `CatPolicy` is an ordinary
+Shard value whose first control governs recursive calls on binders pinned to
+`Nil`; the ordinary `cat_grammar` API selects the safe default.  The experiment
+counts the policy-off space, proves every production candidate ranks into it,
+and sweeps the production space once.  Each candidate is then placed in three
+nested layers:
+production, no C8 violation, and fully `cn_e`-clean.  The complete behavior-key
+sets—not only their cardinalities—must agree between all three terminating
+layers:
+
+    rung 1: R1-OFF-GEN 20 / PIN-SAFE 20 / C8-NORMAL 19 / CANON 17
+            BEHAVIORS 13 / 13 / 13 EXACT
+            SPELLINGS C8-NORMAL rev 0 / id 3; CANON rev 0 / id 2
+    rung 2: R1-OFF-GEN 9435 / PIN-SAFE 3395 / C8-NORMAL 2356 / CANON 2345
+            BEHAVIORS 1068 / 1068 / 1068 EXACT
+            SPELLINGS C8-NORMAL rev 2 / id 6; CANON rev 2 / id 4
+
+The exact transferred junction is the playground's post-R1 result:
+**2,356 forms, 1,068 behaviors, and 2 / 6 rev / id spellings**.  The current
+engine exposes its pressure more finely: pin-aware formation first avoids 6,040
+policy-off members, C8's
+remaining rebuild discipline removes 1,039 spellings without losing a sampled
+behavior, and the newer C10 vacuous-match pressure removes 11 more, again with
+the behavior set unchanged.  At rung 1, C8-normal also reproduces the old
+`19 programs = exactly 13 behaviors` catalog boundary before C10 tightens it to
+17 spellings.
+
+`R1-OFF-GEN` is deliberately not called `RAW`: the playground's raw twin also
+disabled append orientation, pin-normal-form, and match-order constraints and
+therefore measured 150 and 69,567,550 forms at depths 1 and 2.  This ablation
+isolates one causal policy.  It also does not execute the policy-off members,
+some of which contain the very nonterminating `f(Nil)` recursion R1 excludes;
+their count is a generation-pressure measurement, while behavior equality is
+asserted only across the production/C8/canon layers that the current fragment
+declares total.

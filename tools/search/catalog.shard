@@ -70,6 +70,19 @@
 
 (type LBind (LBind Int Bool LPin))
 
+;; Tool-tier formation policy. Keep it as an ordinary Shard value so future
+;; catalog ablations compose here instead of growing positional Bool flags.
+(type CatPolicy (CatPolicy Bool))
+; exclude recursive calls on binders pinned Nil
+
+(fn cat_policy_default () CatPolicy (CatPolicy True))
+
+(fn cat_policy_r1_off () CatPolicy (CatPolicy False))
+
+(fn cat_policy_pin_safe ((policy CatPolicy)) Bool
+  (match policy
+    ((CatPolicy pin_safe) pin_safe)))
+
 (fn cat_q () QName (qn (quote srch_catf)))
 
 (fn bv ((n Int) (abs Int)) Expr (BVar (- (- n 1) abs)))
@@ -92,16 +105,18 @@
 ;; is C8 'respell (the kernel rule subsuming the playground's mined R1
 ;; "no recursion on a pinned-Nil variable"), so the calls are filtered
 ;; at generation, position-locally
-(fn cat_fcalls ((env (List LBind)) (n Int)) (List Expr)
+(fn cat_fcalls ((env (List LBind)) (n Int) (policy CatPolicy)) (List Expr)
   (measure (struct env))
   (match env
     (Nil Nil)
     ((Cons (LBind abs rec pin) rest)
-     (let ((tail (cat_fcalls rest n)))
+     (let ((tail (cat_fcalls rest n policy)))
        (if rec
-         (match pin
-           ((LPNil) tail)
-           (_ (Cons (Call (cat_q) (Cons (bv n abs) Nil)) tail)))
+         (if (cat_policy_pin_safe policy)
+           (match pin
+             ((LPNil) tail)
+             (_ (Cons (Call (cat_q) (Cons (bv n abs) Nil)) tail)))
+           (Cons (Call (cat_q) (Cons (bv n abs) Nil)) tail))
          tail)))))
 
 ;; the pin heads (h-abs) of every Cons-pinned binder in scope
@@ -155,6 +170,7 @@
   ((m Int)
    (e Int)
    (xnil Bool)
+   (policy CatPolicy)
    (env (List LBind))
    (n Int)
    (apq QName)
@@ -163,19 +179,19 @@
   (measure (+ m e))
   (if (lt m 0) (CatRErr "negative match budget")
   (if (lt e 0) (CatRErr "negative expr budget")
-  (let ((atoms (append_e (cat_leaves env n xnil) (cat_fcalls env n))))
+  (let ((atoms (append_e (cat_leaves env n xnil) (cat_fcalls env n policy))))
     (if (le (+ m e) 0) (CatROk (Cons (GEnt next atoms) Nil) (+ next 1))
-    (match (cat_g 0 0 True env n apq (+ next 1))
+    (match (cat_g 0 0 True policy env n apq (+ next 1))
       ((CatRErr msg) (CatRErr msg))
       ((CatROk esl n1)
        (match
-         (if (lt 0 e) (cat_g 0 (- e 1) False env n apq n1)
-         (cat_g 0 0 False env n apq n1))
+         (if (lt 0 e) (cat_g 0 (- e 1) False policy env n apq n1)
+         (cat_g 0 0 False policy env n apq n1))
          ((CatRErr msg) (CatRErr msg))
          ((CatROk esf n2)
           (match
-            (if (lt 0 e) (cat_g 0 (- e 1) True env n apq n2)
-            (cat_g 0 0 True env n apq n2))
+            (if (lt 0 e) (cat_g 0 (- e 1) True policy env n apq n2)
+            (cat_g 0 0 True policy env n apq n2))
             ((CatRErr msg) (CatRErr msg))
             ((CatROk esg ng)
              (let
@@ -205,11 +221,20 @@
                             (- m 1)
                             e
                             False
+                            policy
                             (cat_pin env v (LPNil))
                             n
                             apq
                             ng)
-                          (cat_g 0 0 False (cat_pin env v (LPNil)) n apq ng))
+                          (cat_g
+                            0
+                            0
+                            False
+                            policy
+                            (cat_pin env v (LPNil))
+                            n
+                            apq
+                            ng))
                         ((CatRErr msg) (CatRErr msg))
                         ((CatROk esn n3)
                          (match
@@ -218,6 +243,7 @@
                                (- m 1)
                                e
                                False
+                               policy
                                (Cons
                                  (LBind (+ n 1) True (LPNone))
                                  (cat_pin env v (LPCons n (+ n 1))))
@@ -228,6 +254,7 @@
                                0
                                0
                                False
+                               policy
                                (Cons
                                  (LBind (+ n 1) True (LPNone))
                                  (cat_pin env v (LPCons n (+ n 1))))
@@ -269,11 +296,16 @@
                     ((Cons _ _)
                      (CatRErr "fragment invariant: more than one matchable var")))))))))))))))))
 
-;; the whole catalog grammar at rung d: one root hole, param xs = abs 0
-(fn cat_grammar ((d Int) (apq QName)) CatR
-  (match (cat_g d d False (Cons (LBind 0 False (LPNone)) Nil) 1 apq 0)
+;; the whole catalog grammar at rung d: one root hole, param xs = abs 0.
+;; cat_policy_r1_off is an ablation surface for measuring the mined R1 family;
+;; production consumers keep the safe default wrapper below.
+(fn cat_grammar_policy ((d Int) (apq QName) (policy CatPolicy)) CatR
+  (match (cat_g d d False policy (Cons (LBind 0 False (LPNone)) Nil) 1 apq 0)
     ((CatRErr msg) (CatRErr msg))
     ((CatROk es nx) (CatROk es nx))))
+
+(fn cat_grammar ((d Int) (apq QName)) CatR
+  (cat_grammar_policy d apq (cat_policy_default)))
 
 ;; ---- the battery and behavior vectors ---------------------------------------------
 

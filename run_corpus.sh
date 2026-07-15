@@ -297,6 +297,7 @@ TARGETS=(
   tools/search/search.shard
   tools/search/census.shard
   tools/search/catalog.shard
+  tools/search/catalog_pressure.shard
   tools/search/sym.shard
   examples/spell_pin.shard
   tools/search/render_gate.shard
@@ -512,6 +513,19 @@ fi
 echo "=== search: catalog census (G5) ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/catalog.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# Playground-transfer pin: ablate the catalog's mined R1 generation policy,
+# then compare the production, C8-normal, and fully canonical behavior-key
+# sets exactly. Rung 2: 9435/3395/2356/2345 forms; every terminating layer
+# retains the same 1068 sampled behaviors. In particular 2356/1068 reproduces
+# the playground's post-R1 endpoint, including rev/id spellings 2/6, against
+# the newer kernel ledger (whose full-canon rev/id endpoint is 2/4).
+echo "=== search: catalog pressure (playground R1 transfer) ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/catalog_pressure.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi

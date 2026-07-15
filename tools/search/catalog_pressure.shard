@@ -1,0 +1,327 @@
+;;; tools/search/catalog_pressure.shard — reproduce the playground's
+;;; context-sensitive catalog pressure against the current grammar and REAL
+;;; kernel canon ledger.
+;;;
+;;; The R1-off grammar differs by one policy control: it admits recursive calls
+;;; on a binder known (through an enclosing match arm) to be Nil. The production
+;;; grammar excludes those calls while it is formed. We count both spaces, then
+;;; sweep the terminating production space once and measure two further nested
+;;; quotients: candidates with no C8 violation, and fully cn_e-clean candidates.
+;;; Every stage is battery-bucketed and the behavior-key sets are compared
+;;; exactly—not merely by count.
+;;;
+;;; This is deliberately a tool-tier ablation. The reusable mechanism is the
+;;; ordinary Shard CatPolicy value in catalog.shard; no playground rule is added
+;;; to kernel/canon, whose C8 contextual pin discipline remains the authority.
+;;; R1-OFF-GEN is NOT the playground's fully unrestricted RAW twin (which also
+;;; turns off append, pin-normal-form, and match-order constraints).
+;;;
+;;; RUN IT: bin/shard_eval run tools/search/catalog_pressure.shard
+;;;         bin/shard_eval run tools/search/catalog_pressure.shard rung N
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/loader.shard")
+(import "../../kernel/canon.shard")
+(import "../../meta/sketch")
+(import "../../meta/invoke")
+(import "rev.shard")
+(import "catalog.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel loader World))
+(use (:: kernel loader get_args))
+(use (:: kernel loader write))
+(use (:: kernel loader exit))
+(use (:: kernel loader int_list_eq))
+(use (:: kernel canon cn_e))
+(use (:: kernel canon CViol))
+(use (:: meta sketch *))
+(use (:: meta invoke extend_fn))
+(use (:: meta invoke find_fn))
+(use (:: meta invoke load_run_module))
+(use (:: tools search rev parse_nat))
+(use (:: tools search rev cz_at))
+(use (:: tools search catalog *))
+
+;; Bucket-key set equality. Bucket counts are intentionally ignored here: the
+;; question is whether a quotient loses an observed behavior, not whether it
+;; changes that behavior's spelling multiplicity.
+(fn cp_bkt_has ((v (List (List Int))) (bs (List (Pair (List (List Int)) Int))))
+  Bool
+  (measure (struct bs))
+  (match bs
+    (Nil False)
+    ((Cons (Pair v0 _) rest) (if (vec_eq v0 v) True (cp_bkt_has v rest)))))
+
+(fn cp_bkt_subset
+  ((a (List (Pair (List (List Int)) Int)))
+   (b (List (Pair (List (List Int)) Int))))
+  Bool
+  (measure (struct a))
+  (match a
+    (Nil True)
+    ((Cons (Pair v _) rest) (if (cp_bkt_has v b) (cp_bkt_subset rest b) False))))
+
+(fn cp_bkt_same
+  ((a (List (Pair (List (List Int)) Int)))
+   (b (List (Pair (List (List Int)) Int))))
+  Bool
+  (if (int_eq (bkt_len a) (bkt_len b)) (cp_bkt_subset a b) False))
+
+(fn cp_has_rule ((rule Int) (vs (List CViol))) Bool
+  (measure (struct vs))
+  (match vs
+    (Nil False)
+    ((Cons (CViol k _) rest) (if (int_eq rule k) True (cp_has_rule rule rest)))))
+
+;; This fragment is expected to leave only the measured C8 rebuild and C10
+;; vacuous-match residue after its generative tier. Refuse if ledger drift
+;; introduces another family instead of quietly folding it into "canon".
+(fn cp_known_residue ((vs (List CViol))) Bool
+  (measure (struct vs))
+  (match vs
+    (Nil True)
+    ((Cons (CViol k _) rest)
+     (if (if (int_eq k 8) True (int_eq k 10)) (cp_known_residue rest) False))))
+
+(type CpS
+  (CpSErr (List Int))
+  (CpSOk
+    Int
+    Int
+    (List (Pair (List (List Int)) Int))
+    (List (Pair (List (List Int)) Int))
+    (List (Pair (List (List Int)) Int))))
+; C8-normal count, canon count, production/C8/canon behavior buckets
+
+(fn cp_sweep
+  ((k Int)
+   (total Int)
+   (root Expr)
+   (gp Grammar)
+   (gr Grammar)
+   (m Module)
+   (ins (List (List Int)))
+   (c8n Int)
+   (canon Int)
+   (bp (List (Pair (List (List Int)) Int)))
+   (b8 (List (Pair (List (List Int)) Int)))
+   (bc (List (Pair (List (List Int)) Int))))
+  CpS
+  (measure k)
+  (if (le k 0) (CpSOk c8n canon bp b8 bc)
+  (let ((i (- total k)))
+    (match (sk_unrank root gp i)
+      ((SkEErr msg) (CpSErr (cz_at "production unrank" i msg)))
+      ((SkEOk c)
+       (match (sk_rank root gp c)
+         ((SkCErr msg) (CpSErr (cz_at "production roundtrip" i msg)))
+         ((SkCOk i2)
+          (if (int_eq i i2)
+            (match (sk_rank root gr c)
+              ((SkCErr msg) (CpSErr (cz_at "R1-off membership" i msg)))
+              ((SkCOk ir)
+               (match (sk_unrank root gr ir)
+                 ((SkEErr msg) (CpSErr (cz_at "R1-off unrank" i msg)))
+                 ((SkEOk c2)
+                  (if (expr_eq c c2)
+                    (let ((vs (cn_e c m)) (fd (cat_fd c)))
+                      (if (cp_known_residue vs)
+                        (match (extend_fn m fd)
+                          (None
+                            (CpSErr
+                              (cz_at
+                                "extend"
+                                i
+                                "candidate qname bound in the closure")))
+                          ((Some m2)
+                           (match (cat_vec m2 fd ins)
+                             (None
+                               (CpSErr
+                                 (cz_at
+                                   "battery"
+                                   i
+                                   "production candidate stuck")))
+                             ((Some v)
+                              (let
+                                ((is8 (if (cp_has_rule 8 vs) False True))
+                                 (isc
+                                   (match vs
+                                     (Nil True)
+                                     (_ False))))
+                                (if (lt 0 k)
+                                  (cp_sweep
+                                    (- k 1)
+                                    total
+                                    root
+                                    gp
+                                    gr
+                                    m
+                                    ins
+                                    (+ c8n (if is8 1 0))
+                                    (+ canon (if isc 1 0))
+                                    (bkt_add v bp)
+                                    (if is8 (bkt_add v b8) b8)
+                                    (if isc (bkt_add v bc) bc))
+                                  (CpSErr "impossible nonpositive sweep")))))))
+                        (CpSErr (cz_at "residue" i "unexpected canon rule"))))
+                    (CpSErr
+                      (cz_at
+                        "R1-off roundtrip"
+                        i
+                        "R1-off unrank disagrees with production candidate")))))))
+            (CpSErr (cz_at "production roundtrip" i "rank disagrees"))))))))))
+
+(fn cp_counts_line ((d Int) (raw Int) (prod Int) (c8n Int) (canon Int))
+  (List Int)
+  (append_int
+    "CATALOG-PRESSURE rung "
+    (append_int
+      (show_int d)
+      (append_int
+        "\nR1-OFF-GEN "
+        (append_int
+          (show_int raw)
+          (append_int
+            " PIN-SAFE "
+            (append_int
+              (show_int prod)
+              (append_int
+                " C8-NORMAL "
+                (append_int
+                  (show_int c8n)
+                  (append_int " CANON " (append_int (show_int canon) "\n")))))))))))
+
+(fn cp_beh_line
+  ((bp (List (Pair (List (List Int)) Int)))
+   (b8 (List (Pair (List (List Int)) Int)))
+   (bc (List (Pair (List (List Int)) Int))))
+  (List Int)
+  (append_int
+    "BEHAVIORS PIN-SAFE "
+    (append_int
+      (show_int (bkt_len bp))
+      (append_int
+        " C8-NORMAL "
+        (append_int
+          (show_int (bkt_len b8))
+          (append_int " CANON " (append_int (show_int (bkt_len bc)) " EXACT\n")))))))
+
+(fn cp_spell_line
+  ((b8 (List (Pair (List (List Int)) Int)))
+   (bc (List (Pair (List (List Int)) Int))))
+  (List Int)
+  (let ((ins (cat_battery)))
+    (append_int
+      "SPELLINGS C8-NORMAL rev "
+      (append_int
+        (show_int (bkt_find (vecs_rev ins) b8))
+        (append_int
+          " id "
+          (append_int
+            (show_int (bkt_find ins b8))
+            (append_int
+              " CANON rev "
+              (append_int
+                (show_int (bkt_find (vecs_rev ins) bc))
+                (append_int
+                  " id "
+                  (append_int (show_int (bkt_find ins bc)) "\n"))))))))))
+
+(fn cp_report
+  ((d Int)
+   (raw Int)
+   (prod Int)
+   (c8n Int)
+   (canon Int)
+   (bp (List (Pair (List (List Int)) Int)))
+   (b8 (List (Pair (List (List Int)) Int)))
+   (bc (List (Pair (List (List Int)) Int)))
+   (w World))
+  World
+  (if (if (cp_bkt_same bp b8) (cp_bkt_same b8 bc) False)
+    (write
+      (append_int
+        (cp_counts_line d raw prod c8n canon)
+        (append_int (cp_beh_line bp b8 bc) (cp_spell_line b8 bc)))
+      w)
+    (exit 1 (write "CATALOG-PRESSURE FAIL: behavior-key sets differ\n" w))))
+
+(fn run_pressure ((m Module) (apq QName) (d Int) (w World)) World
+  (match (cat_grammar_policy d apq (cat_policy_r1_off))
+    ((CatRErr msg)
+     (exit
+       1
+       (write (append_int "CATALOG-PRESSURE FAIL R1-off grammar: " msg) w)))
+    ((CatROk er _)
+     (match (cat_grammar_policy d apq (cat_policy_default))
+       ((CatRErr msg)
+        (exit
+          1
+          (write
+            (append_int "CATALOG-PRESSURE FAIL production grammar: " msg)
+            w)))
+       ((CatROk ep _)
+        (let ((root (hole 0)) (gr (Grammar er)) (gp (Grammar ep)))
+          (match (sk_count root gr)
+            ((SkCErr msg)
+             (exit
+               1
+               (write (append_int "CATALOG-PRESSURE FAIL R1-off count: " msg) w)))
+            ((SkCOk raw)
+             (match (sk_count root gp)
+               ((SkCErr msg)
+                (exit
+                  1
+                  (write
+                    (append_int "CATALOG-PRESSURE FAIL production count: " msg)
+                    w)))
+               ((SkCOk prod)
+                (match
+                  (cp_sweep
+                    prod
+                    prod
+                    root
+                    gp
+                    gr
+                    m
+                    (cat_battery)
+                    0
+                    0
+                    Nil
+                    Nil
+                    Nil)
+                  ((CpSErr msg)
+                   (exit 1 (write (append_int "CATALOG-PRESSURE FAIL " msg) w)))
+                  ((CpSOk c8n canon bp b8 bc)
+                   (cp_report d raw prod c8n canon bp b8 bc w)))))))))))))
+
+(fn cp_args ((as (List (List Int))) (m Module) (apq QName) (w World)) World
+  (match as
+    (Nil (run_pressure m apq 2 (run_pressure m apq 1 w)))
+    ((Cons a rest)
+     (if (int_list_eq a "rung")
+       (match rest
+         ((Cons ds Nil)
+          (match (parse_nat ds)
+            (None (exit 2 (write "usage: catalog_pressure [rung N]\n" w)))
+            ((Some d) (run_pressure m apq d w))))
+         (_ (exit 2 (write "usage: catalog_pressure [rung N]\n" w))))
+       (exit 2 (write "usage: catalog_pressure [rung N]\n" w))))))
+
+(fn main ((w World)) World
+  (match (load_run_module "tools/search/rev_obj.shard" w)
+    ((Pair om w2)
+     (match om
+       (None (exit 1 (write "CATALOG-PRESSURE FAIL: object module load\n" w2)))
+       ((Some m)
+        (match (find_fn (quote append) m)
+          (None
+            (exit 1 (write "CATALOG-PRESSURE FAIL: no append in closure\n" w2)))
+          ((Some apfd)
+           (match apfd
+             ((FnDef apq _ _ _)
+              (match (get_args w2)
+                ((Pair as w3) (cp_args as m apq w3))))))))))))
