@@ -225,23 +225,25 @@
 
     ((Below) (do_below m seq))
 
-    ((RewriteWith er dir side insts premise_proofs rest)
+    ((RewriteWith er dir side occ insts premise_proofs rest)
      ;; Conditional rewrite. Cited equation may have ∀-binders AND
      ;; non-empty premises:
      ;;   1. Resolve er → cited Goal.
      ;;   2. Open its ∀-binders to fresh FVars (names = pat_vars).
      ;;   3. Match the (opened) conclusion against the chosen Side
-     ;;      of the goal eq via apply_rewrite_with_env. The match
-     ;;      yields a binding env over pat_vars AND the rewritten
-     ;;      equation.
+     ;;      of the goal eq via apply_rewrite_with_occ. The FIRST
+     ;;      match yields the ONE binding env over pat_vars; under
+     ;;      OccAll/OccAt the closed equation is then re-applied at
+     ;;      the requested sites (see apply_rewrite_with_occ).
      ;;   4. For each cited premise (also opened), substitute the
-     ;;      env and discharge with the corresponding sub-proof.
+     ;;      env and discharge with the corresponding sub-proof —
+     ;;      once, whatever the occurrence selector.
      ;;   5. If all premises discharge, continue with `rest` on the
      ;;      rewritten sequent.
      ;;
-     ;; v2 limitations (documented in REVISIT):
-     ;;   - single match site only (no all-occurrences variant).
-     ;;   - Both selector picks lhs match first, falls back to rhs.
+     ;; Remaining limitation: ONE instantiation per citation (multi-
+     ;; env would need per-site obligation sets); Both under OccFirst
+     ;; picks lhs match first, falls back to rhs.
      ;; Insts pre-instantiate cited ∀-binders before the match, same
      ;; mechanism as Rewrite's Inst path (slice 32).
      (match (resolve_eq er seq th)
@@ -260,8 +262,8 @@
                     (match seq
                       ((Sequent s_params s_hyps s_premises goal_eq)
                        (match
-                         (apply_rewrite_with_env pat_var_names opened_eq dir
-                           side goal_eq)
+                         (apply_rewrite_with_occ pat_var_names opened_eq dir
+                           side occ goal_eq)
                          (None False)
                          ((Some (Pair env new_eq))
                           ;; TYPE GATE: the citation's bindings (insts +
@@ -892,10 +894,11 @@
 ;; equation's premises and dispatch each as a sub-sequent. Plain
 ;; rewrite_first discards the env after using it to subst repl.
 ;;
-;; First-occurrence only; no `all_occ` variant. Multi-match would
-;; require carrying a List Env (different match sites can bind the
-;; same pat_var differently) — out of scope for v2; documented in
-;; REVISIT.md, "RewriteWith — single-match only".
+;; First-occurrence only BY DESIGN: different match sites can bind the
+;; same pat_var differently, and RewriteWith discharges ONE obligation
+;; set. apply_rewrite_with_occ builds the `all`/(at K) selectors on top
+;; by closing the cited equation with THIS fn's first-match env and
+;; re-applying it through the plain-path apply_rewrite.
 ;; ---------------------------------------------------------------------------
 
 (fn rewrite_first_with_env
@@ -1057,6 +1060,47 @@
             (match (rewrite_first_with_env pat_vars pat repl gr)
               ((Some (Pair env gr2)) (Some (Pair env (Equation gl gr2))))
               (None None)))))))))
+
+;; ---------------------------------------------------------------------------
+;; apply_rewrite_with_occ: RewriteWith's occurrence dispatch.
+;;   OccFirst — apply_rewrite_with_env verbatim (the historical semantics).
+;;   OccAll / OccAt — the first match still determines the ONE binding env
+;;   (so premise obligations discharge exactly once); the cited equation is
+;;   then CLOSED by that env and re-applied through the plain-path
+;;   apply_rewrite, so `all`/(at K) count the match sites of the fully-
+;;   instantiated conclusion. A site that would need a DIFFERENT
+;;   instantiation is simply not matched — multi-env rewrites stay out
+;;   (cite again for the other instantiation).
+;; ---------------------------------------------------------------------------
+
+(fn close_eq_with_env ((env Env) (eq Equation)) Equation
+  (match eq
+    ((Equation l r) (Equation (subst env l) (subst env r)))))
+
+(fn apply_rewrite_with_occ
+  ((pat_vars (List Symbol))
+   (cited Equation)
+   (dir Dir)
+   (side Side)
+   (occ Occ)
+   (goal_eq Equation))
+  (Option (Pair Env Equation))
+  (match occ
+    ((OccFirst) (apply_rewrite_with_env pat_vars cited dir side goal_eq))
+    (_
+      (match (apply_rewrite_with_env pat_vars cited dir side goal_eq)
+        (None None)
+        ((Some (Pair env _))
+         (match
+           (apply_rewrite
+             Nil
+             (close_eq_with_env env cited)
+             dir
+             side
+             occ
+             goal_eq)
+           (None None)
+           ((Some (Pair _ eq2)) (Some (Pair env eq2)))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; check_premise_proofs: dispatch one sub-proof per cited-equation

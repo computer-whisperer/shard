@@ -260,6 +260,124 @@
           ((DsLErr e) (DsLErr e))
           ((DsLOk t2) (DsLOk (Cons h2 t2)))))))))
 
+;; ---------------------------------------------------------------------------
+;; Keyed cert rows. Inside a (by THEORY PAYLOAD) payload, a
+;;   (rows (KEY MULT) …)
+;; form expands to the positional multiplier list `(list G M0 … M_{pc-1})`
+;; the theory backends read (slot 0 = the goal multiplier, slot k+1 =
+;; premise k). KEY = `goal` (the G slot), a named premise (a have's name;
+;; `goal` is reserved and shadows any premise so named), or a premise index
+;; literal; MULT = an int literal. Unmentioned rows emit 0, so a keyed cert
+;; is stable under premise insertion AND append — the positional list is
+;; not. A malformed, unknown, out-of-range, or duplicated key is a LOUD
+;; error: a (rows …) inside a cert is always ours, never the parser's
+;; (contrast ds_proof's pass-through default for unknown forms).
+;; ---------------------------------------------------------------------------
+
+;; one row key resolved to its payload slot, or the error text.
+(type DsSlotRes (DsSlotOk Int) (DsSlotErr (List Int)))
+;; accumulated keyed rows (slot → multiplier), or the error text.
+(type DsRowsRes (DsRowsOk (List (Pair Int Int))) (DsRowsErr (List Int)))
+
+(fn ds_row_slot ((pc Int) (pn (List (Pair Symbol Int))) (keyS SExpr)) DsSlotRes
+  (match keyS
+    ((SSym nm)
+     (if (sym_eq nm (quote goal)) (DsSlotOk 0)
+     (match (pn_pos nm pn)
+       ((Some k) (DsSlotOk (+ k 1)))
+       (None
+         (DsSlotErr
+           (append_int
+             "rows: unbound premise name: "
+             (append_int (chars_of_sym nm) (ds_scope_note (ds_pn_names pn)))))))))
+    ((SInt k)
+     (if (lt k 0) (DsSlotErr "rows: negative premise index")
+     (if (lt k pc) (DsSlotOk (+ k 1))
+     (DsSlotErr
+       (append_int
+         "rows: premise index out of range: "
+         (append_int
+           (show_int k)
+           (append_int " (premises in scope: " (append_int (show_int pc) ")"))))))))
+    (_ (DsSlotErr "rows: bad key -- expect goal, a premise name, or an index"))))
+
+(fn ds_slot_seen ((k Int) (rows (List (Pair Int Int)))) Bool
+  (measure (struct rows))
+  (match rows
+    (Nil False)
+    ((Cons (Pair k2 _) t) (if (int_eq k k2) True (ds_slot_seen k t)))))
+
+(fn ds_rows_acc
+  ((pc Int)
+   (pn (List (Pair Symbol Int)))
+   (acc (List (Pair Int Int)))
+   (rs (List SExpr)))
+  DsRowsRes
+  (measure (struct rs))
+  (match rs
+    (Nil (DsRowsOk acc))
+    ((Cons rowS rest)
+     (match rowS
+       ((SList (Cons keyS (Cons (SInt mult) Nil)))
+        (match (ds_row_slot pc pn keyS)
+          ((DsSlotOk slot)
+           (if (ds_slot_seen slot acc)
+             (DsRowsErr "rows: duplicate key (two rows land on one slot)")
+             (ds_rows_acc pc pn (Cons (Pair slot mult) acc) rest)))
+          ((DsSlotErr e) (DsRowsErr e))))
+       (_ (DsRowsErr "rows: bad row -- expect (KEY MULT), MULT an int literal"))))))
+
+(fn ds_slot_val ((k Int) (rows (List (Pair Int Int)))) Int
+  (measure (struct rows))
+  (match rows
+    (Nil 0)
+    ((Cons (Pair k2 m) t) (if (int_eq k k2) m (ds_slot_val k t)))))
+
+;; emit slots k..n-1 as int literals; 0 where no row landed.
+(fn ds_rows_emit ((k Int) (n Int) (rows (List (Pair Int Int)))) (List SExpr)
+  (measure (- n k) (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt k n) (Cons (SInt (ds_slot_val k rows)) (ds_rows_emit (+ k 1) n rows))
+  Nil))
+
+;; walk a by-payload, expanding every (rows …) at any depth (the two-sided
+;; equality cert is `(list (rows …) (rows …))`); everything else rebuilt as
+;; found.
+(fn ds_payload ((pc Int) (pn (List (Pair Symbol Int))) (s SExpr)) DsRes
+  (measure (struct s))
+  (match s
+    ((SList (Cons (SSym h) items))
+     (if (sym_eq h (quote rows))
+       (match items
+         (Nil (DsErr "rows: empty -- give at least one (KEY MULT) row"))
+         (_
+           (match (ds_rows_acc pc pn Nil items)
+             ((DsRowsOk rows)
+              (DsOk
+                (SList
+                  (Cons (SSym (quote list)) (ds_rows_emit 0 (+ pc 1) rows)))))
+             ((DsRowsErr e) (DsErr e)))))
+       (match (ds_payloads pc pn items)
+         ((DsLErr e) (DsErr e))
+         ((DsLOk items2) (DsOk (SList (Cons (SSym h) items2)))))))
+    ((SList items)
+     (match (ds_payloads pc pn items)
+       ((DsLErr e) (DsErr e))
+       ((DsLOk items2) (DsOk (SList items2)))))
+    (_ (DsOk s))))
+
+(fn ds_payloads ((pc Int) (pn (List (Pair Symbol Int))) (ss (List SExpr)))
+  DsLRes
+  (measure (struct ss))
+  (match ss
+    (Nil (DsLOk Nil))
+    ((Cons h t)
+     (match (ds_payload pc pn h)
+       ((DsErr e) (DsLErr e))
+       ((DsOk h2)
+        (match (ds_payloads pc pn t)
+          ((DsLErr e) (DsLErr e))
+          ((DsLOk t2) (DsLOk (Cons h2 t2)))))))))
+
 (fn ds_proof
   ((m Module)
    (ps (List Param))
@@ -363,6 +481,42 @@
          (_ (DsOk s)))
      (if (sym_eq h (quote rewrite-with))
        (match args
+         ;; 7-arg form: occurrence selector after SIDE, carried through
+         ;; unchanged (it is positional data, never a name).
+         ((Cons
+            refS
+            (Cons
+              dirS
+              (Cons
+                sideS
+                (Cons occS (Cons instsS (Cons subsS (Cons contS Nil)))))))
+          (match (ds_ref stk pn refS)
+            ((DsErr e) (DsErr e))
+            ((DsOk r2)
+             (match subsS
+               ((SList subs)
+                (match (ds_proofs m ps stk pc pn subs)
+                  ((DsLErr e) (DsErr e))
+                  ((DsLOk subs2)
+                   (match (ds_proof m ps stk pc pn contS)
+                     ((DsErr e) (DsErr e))
+                     ((DsOk cont2)
+                      (DsOk
+                        (SList
+                          (Cons
+                            (SSym h)
+                            (Cons
+                              r2
+                              (Cons
+                                dirS
+                                (Cons
+                                  sideS
+                                  (Cons
+                                    occS
+                                    (Cons
+                                      instsS
+                                      (Cons (SList subs2) (Cons cont2 Nil)))))))))))))))
+               (_ (DsOk s))))))
          ((Cons
             refS
             (Cons dirS (Cons sideS (Cons instsS (Cons subsS (Cons contS Nil))))))
@@ -460,7 +614,15 @@
                        (Cons (SSym h) (Cons r2 (Cons namesS (Cons sub2 Nil)))))))))
                (_ (DsOk s))))))
          (_ (DsOk s)))
-       (DsOk s))))))))))))))  ; refl/admit/below/by/inspect & unknown forms
+     (if (sym_eq h (quote by))
+       ;; keyed cert rows: expand (rows …) in the payload against the
+       ;; premise context AT THIS POINT (pc/pn — same numbering the
+       ;; backends read). args = (THEORY PAYLOAD…); the theory symbol is
+       ;; an atom, untouched by the walk.
+       (match (ds_payloads pc pn args)
+         ((DsLErr e) (DsErr e))
+         ((DsLOk args2) (DsOk (SList (Cons (SSym h) args2)))))
+       (DsOk s)))))))))))))))  ; refl/admit/below/inspect & unknown forms
     (_ (DsOk s))))
 
 ;; induct cases: each appends its IH entries before the sub-proof.

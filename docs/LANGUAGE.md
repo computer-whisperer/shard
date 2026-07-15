@@ -762,7 +762,8 @@ recovered from the target file or the same-module `mod.req.shard`
 | `(fin-split VAR LO HI (CASE…))`              | `FinSplit`  | bounded-Int enumeration: `LO`/`HI` cite range premises for `VAR`; one `(case INT PROOF)` per value |
 | `(div-facts TERM D Q PROOF)`                 | `DivFacts`  | inject the Euclidean triple for `TERM` at literal divisor `D` (`n = D·Q + mod n D`, mod ranges), with quotient `Q` a fresh ∀-param — `fin-split Q` then supplies the integrality step the rational Farkas side cannot (see `std/bytes/bytes.shard`'s `mod_byte_id` for the mod-elimination idiom) |
 | `(inject EQREF (NAME…) PROOF)`               | `Inject`    | constructor injectivity — the converse of `absurd`'s no-confusion half: `EQREF` must resolve closed with both sides Ctor-headed by the SAME ctor **as spelled** (no normalization — `have`/`compute` the fact into ctor form first); appends the fieldwise equations `(= aᵢ bᵢ)` as the LAST premises, one per `NAME` in field order (`_` = counted hole, not registered; cite the rest via `(premise NAME)`). The name count is pinned into the certificate and checked against the ctor's arity — a miscount is a loud kernel rejection |
-| `(rewrite-with EQREF DIR SIDE (INST…) (PROOF…) PROOF)` | `RewriteWith` | rewrite by a cited equation whose own premises are discharged by the sub-`PROOF`s, then continue |
+| `(rewrite-with EQREF DIR SIDE (INST…) (PROOF…) PROOF)` | `RewriteWith` | rewrite by a cited equation whose own premises are discharged by the sub-`PROOF`s, then continue — first match site (the canonical spelling) |
+| `(rewrite-with EQREF DIR SIDE OCC (INST…) (PROOF…) PROOF)` | `RewriteWith` | same with the occurrence selector after `SIDE` (`true` all / `false` first / `(at K)`, the `rewrite` step's `OCC`). The FIRST match fixes the ONE binding env and the premise obligations discharge once; `true`/`(at K)` then re-apply the equation **closed by that env**, so the selector counts sites of the fully-instantiated conclusion, and a site needing a different instantiation is not matched — cite again for it. Kills the cite-N-times-with-identical-insts pattern. Pin: `examples/rewrite_with_occ.shard` |
 | `(absurd EQREF)`                             | `Absurd`    | close the goal from a contradictory hypothesis                 |
 | `(by THEORY PAYLOAD)`                         | `ByTheory`  | discharge via a decision procedure (§10.7)                     |
 | `(chain F1 … FINAL)`                         | —           | reader-level sugar (§3, "Flat proof chains"): each `Fi` is a continuation-taking form above (`steps`/`rewrite-with`/`have`/`div-facts`/`refine-fact`/`inject`) written *without* its trailing PROOF; the rest of the chain is folded in as that argument and `FINAL` closes — sequential proofs without the nesting pyramid |
@@ -854,6 +855,20 @@ multiplies the negated goal, `Mk` premise `k`; an equality conclusion
 premises take nonnegative multipliers; equality premises take either
 sign. An EMPTY `(list)` selects the decision side — deterministic
 procedures, no search, premises ignored except by the reflect scan.
+
+**Keyed rows.** A multiplier list may instead be spelled
+`(rows (KEY MULT) …)` — anywhere a positional list appears, including
+either side of the two-sided cert: `KEY` is `goal` (the `G` slot), a
+named premise (a have's name; `goal` is reserved and shadows any premise
+so named), or a premise index literal; `MULT` an int literal; unmentioned
+rows are 0. The loader's desugar pass (`ds_payload`) expands rows to the
+positional list against the premise context **at that point**, so a keyed
+cert survives premise insertion and append unshifted — the positional
+spelling shifts every downstream multiplier. Unknown, duplicate,
+out-of-range, or malformed keys are LOUD desugar errors (a `rows` inside
+a cert is always ours, never passed through). Works wherever proofs are
+desugared: claim/fulfills bodies and measure-clause certs alike. Pins:
+`examples/cert_rows.shard`, `examples/cert_rows_rejects.shard`.
 
 > History: until 2026-07 these were five backend names
 > (`lia`/`eqdec`/`reflect`/`ord`/`farkas`) over the same polynomial

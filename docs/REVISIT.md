@@ -612,13 +612,21 @@ is where to start when planning v3.
       consulted only if lhs has no match.
     - Non-Nil `(List Inst)` was rejected (`False`).
 - **Updated (slice 32):** Insts pre-instantiation now works in both
-  Rewrite and RewriteWith. The single-match-only restriction
-  remains; see "Insts pre-instantiation" below for the Insts
-  mechanism.
-- **Revisit when:** a real proof needs to rewrite multiple
-  occurrences of a conditional pattern in one step (rare in
-  practice — most authoring threads the rewrite into a Steps
-  prefix).
+  Rewrite and RewriteWith.
+- **RESOLVED (2026-07-14, the V2-4 retro QoL pair):** RewriteWith
+  carries an `Occ` (optional 7-arg surface, after SIDE; the 6-arg
+  spelling = `OccFirst`, zero corpus churn). The FIRST match still
+  determines the ONE binding env and the obligations discharge once
+  (`apply_rewrite_with_occ`); `true`/`(at K)` re-apply the equation
+  CLOSED by that env through the plain-path `apply_rewrite`, so the
+  selector counts sites of the fully-instantiated conclusion.
+  Multi-env (per-site obligation sets) stays out — a site needing a
+  different instantiation is cited again. Trigger: the sha-sibling
+  migration cited `ish_t1c`/`ish_sum5`-shaped lemmas 3× with
+  identical monster insts. Pin: `examples/rewrite_with_occ.shard`.
+- **Revisit when:** a real proof needs genuinely different
+  instantiations of one citation across sites in one step (that is
+  the multi-env cert shape, deliberately deferred).
 
 ### Insts pre-instantiation (slice 32)
 - **Chose (slice 32):** an `(Inst NAME EXPR)` in a Rewrite or

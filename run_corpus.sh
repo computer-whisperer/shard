@@ -54,6 +54,10 @@ TARGETS=(
   examples/inject_rejects.shard
   examples/rewrite_at.shard
   examples/rewrite_at_rejects.shard
+  examples/cert_rows.shard
+  examples/cert_rows_rejects.shard
+  examples/rewrite_with_occ.shard
+  examples/rewrite_with_occ_rejects.shard
   examples/prove_cond_mine.shard
   examples/homonym_dispatch.shard
   examples/runhom_run.shard

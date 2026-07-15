@@ -1972,6 +1972,38 @@ defining equations).
   algorithm-drift guard (the ground pins lost in the std/word
   migration): the engine replays concrete draws against the very fns.
 
+### 6ai. The composition-stability law (2026-07-14)
+
+Ratified from the sha-sibling v2 migration (imp V2-4, `6ea1da6` — the
+largest proof-lattice churn to date: an 11k-line file's machine
+semantics changed under ~300 claims). The migration stayed mechanical
+for one architectural reason, now the standing law for every
+composition-heavy proof file:
+
+> **A composition-level proof (a walk, a pass assembly, anything citing
+> many lemmas positionally) must only ever see statements whose premise
+> lists are STABLE. When a citation needs a new obligation, the
+> obligation goes INSIDE the cited lemma, premised there — never as a
+> new premise or walk-level have at the composition.**
+
+Positional citations (`(premise K)`) and positional cert rows are
+row-indexed over premises-plus-accumulated-haves: one insertion at the
+composition level shifts every downstream reference and every
+subsequent cert's row list. In V2-4 the block walk's 57 positional
+farkas certs and its fuel-reshape haves survived byte-identical
+*because* every band/mod collapse lived inside the cited lemmas
+(`ish_t1c`-shaped conversions), not at the walk. The corollary for
+statement design: claim statements are interfaces — keep their premise
+lists append-only, and prefer paying a conversion inside a proof to
+respelling a statement other proofs cite.
+
+Two proof forms landed the same day take the residual sting out of the
+positional rows this law protects (both LANGUAGE.md §10):
+`(rows (KEY MULT) …)` keyed cert rows (insertion-stable farkas/arith
+certs; `examples/cert_rows.shard`) and the `rewrite-with` occurrence
+selector (one premised citation rewrites all sites of one
+instantiation; `examples/rewrite_with_occ.shard`).
+
 ## 7. Open questions — triaged at ratification (2026-07-04)
 
 None of these block the ratified form; they are the backlog the next
