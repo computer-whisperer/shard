@@ -4,7 +4,8 @@ shard floats — FLOATS.md
 STATUS: RATIFIED (2026-07-12, user read + sign-off; drafted
 2026-07-11 with all §13 open decision points resolved same day over
 three ruling rounds; R0 landed complete before ratification and
-validated §2 as written) — the scope ledger
+validated §2 as written; §4a/§10 imp-seam amendment RATIFIED
+2026-07-14, user read + sign-off) — the scope ledger
 for floating point in shard: how IEEE-754 arithmetic enters the language honestly — exact
 deterministic semantics, no pretense of reals — and how it lowers to
 bare hardware float instructions on every target. This file owns the
@@ -181,7 +182,9 @@ hardware's truth lives.
 **L4 — lowering fragments.** Model calls are replaced by single
 instructions (or short fixup sequences where L3 quirks demand:
 min/max on x86, float→int fixups). The bridge obligations are §4's
-two tiers.
+two tiers. [AMENDED 2026-07-14 — the fragments attach to models/imp,
+not spec→ISA directly; see §4a. Kept as the story R0–R2 were built
+against.]
 
 
 ## 3a. The parametric construction: format-as-value, types at the surface
@@ -285,6 +288,53 @@ deterministic profile is not what engines implement), tier-2 gating
 compares under the same NaN-class quotient — which is exactly what
 makes the gate valid on any conforming engine regardless of payload
 behavior.
+
+
+## 4a. Amendment (RATIFIED 2026-07-14): the lowering seam re-homes
+through imp
+
+Between this ledger's ratification and the R2 close, the lowering
+project re-adjudicated its spine (docs/IMP.md, ratified 2026-07-12;
+§2a typed-machine amendment 2026-07-14): models/imp is the one
+common lowering step — spec ⊑ imp ⊑ wasm/x86 — and wasmgen/x86gen
+are FROZEN at their landed extent ("new coverage arrives only
+through imp, and the direct spec→ISA path stops growing"). R4/R5 as
+written (§3 L4, §10) are spelled in exactly that frozen paradigm.
+This amendment restates the seam. It changes NOTHING landed — R0–R2
+sit entirely below it — and nothing about what must be proven; only
+where the proofs attach.
+
+- **The joint was already ratified from the imp side.** IMP.md's
+  preamble ruling (2026-07-12): float ops enter imp BY CITATION of
+  std/float core ops — `(fadd fmt x y)` with the ground descriptor
+  — and "FLOATS.md's tier-1 bridge theorems (core ⊑ arch up to the
+  NaN quotient) are exactly imp→ISA lowering obligations." IMP.md
+  §6 schedules this as rung I4 (post-float-merge), sharing this
+  ledger's GEMM flagship.
+- **What re-homes.** L4's fragments stop being spec→ISA
+  attachments: the per-arch obligation (§4 tier 1 —
+  decode(arch_op) ≡ core_op up to the §5 quotient, fixup sequences
+  where L3 quirks demand) becomes the content of the imp ⊑ wasm
+  and imp ⊑ x86 float legs, expected to land through the rebuilt
+  impgen as per-kind op lowerings rather than a hand fragment
+  family (IMP.md's no-third-hand-instance rule). The theorem
+  statements are unchanged; the attachment point moves.
+- **What this ledger still owns, unchanged**: the core model and
+  its theorems (L0–L2); L3 — the ISA models' honest float ops
+  remain the legs' codomain and the quirk home, §8's state law
+  included; the §5 NaN observation quotient (IMP.md adopts it
+  verbatim as the model-boundary law, and the
+  never-branch-on-payload invariant now binds imp fragments); and
+  §4 tier 2 — the differential instruments (V8, TestFloat, the
+  on-CPU runner) and the authority framing are untouched by the
+  re-homing.
+- **What IMP.md owns**: the machine shape of float entry. Whether
+  F32/F64 join §2a's crystallized kind lattice — the natural
+  reading: capability-set entries (wasm native f32/f64, x86 SSE2
+  scalar), from_bits/to_bits as explicit conversion nodes between
+  U32/U64 and the float kinds — is I4-rung design, decided there.
+  This ledger supplies the semantics to cite and the obligations
+  to discharge; it does not legislate imp's syntax.
 
 
 ## 5. Determinism: the NaN observation quotient
@@ -432,6 +482,9 @@ cheapest.
   dependency of R4, not a preference: the lowering fragments match
   the surface symbols, and R4's six-gate consumer decl is written
   against them. `to_bits` canonicalization per §5 lands here.
+  [Rationale AMENDED 2026-07-14 — under §4a the surfaces' defining
+  equations are the spec ⊑ imp entry instead; still sequenced
+  before the lowering rung. See the close-out block below.]
 - **R3b — literals + hex printing.** No downstream dependency;
   floats on consumer pain (interim: gates and probe sources
   construct values via from_bits). Expected pull-in: alongside R4's
@@ -442,10 +495,15 @@ cheapest.
   coverage precedent. Conversion instructions get heavyweight edge
   vectors — historically the buggy engine surface (the basic five
   are single hardware instructions under any JIT and can't
-  realistically diverge; trunc_sat can).
+  realistically diverge; trunc_sat can). [SUPERSEDED as spelled
+  2026-07-14 — re-homed as the IMP.md I4 wasm leg; see §4a. Kept
+  as the obligation inventory: the edge-vector emphasis and the V8
+  gates carry over verbatim.]
 - **R5 — x86 lowering.** SSE2 scalar fragments + min/max/convert
   fixups, tier-1 theorems against the x86 model, tier-2 TestFloat +
-  on-CPU differential gates.
+  on-CPU differential gates. [SUPERSEDED as spelled 2026-07-14 —
+  re-homed as the IMP.md I4 x86 leg; see §4a. The fixup content
+  and tier-2 instruments carry over verbatim.]
 - **R6 — fma.** In-model from R1; this rung is the FMA3 fragment +
   wasm software path parity gate.
 - **R7 — narrow formats.** Certified wide-compute per §7 + packed
@@ -453,7 +511,33 @@ cheapest.
 
 Flagship candidate for the arc: a dot-product / small-GEMM kernel in
 BF16-in, F32-accumulate — exercises §6 packing, §7 certification,
-and both targets from one decl.
+and both targets from one decl. (Now shared: IMP.md §6 names it as
+rung I4's layout flagship.)
+
+**CLOSE-OUT SCHEDULING (RATIFIED 2026-07-14, with the §4a
+amendment).** The floats fork merges at R2-complete
+plus this amendment: the fork's content sits entirely below the
+lowering seam, nothing on main touches std/float, and nothing
+remaining is fork-shaped. The rest of the ladder re-sequences onto
+main, post-merge:
+
+- **R3a, R3b — post-merge std work on main.** Pure std/float +
+  surface-module rungs with no imp interaction. R3a keeps its
+  place before the lowering rung — surfaces are the consumer
+  interface (static format distinction), their defining equations
+  are the spec-side entry to spec ⊑ imp, and `to_bits`
+  canonicalization lands there.
+- **R4/R5 — restated as the IMP.md I4 joint**: float capability in
+  the machine + the imp ⊑ ISA float legs, sequenced behind imp's
+  v2 migration and the impgen rebuild per IMP.md's 2026-07-14
+  re-sequencing. wasm still first (width-ordered coverage
+  precedent); tier-2 gating unchanged.
+- **R6, R7 — unchanged in order**, entering through the same imp
+  seam when their turns come.
+
+Merging also closes a dangling reference: main's ratified IMP.md
+cites FLOATS.md §3a/§5/§8, which exist only on this fork until the
+merge.
 
 
 ## 11. Future named arcs (not this ledger's scope)
@@ -487,7 +571,8 @@ traps.
 
 ## 13. Open decision points
 
-ALL RESOLVED 2026-07-11 (three ruling rounds); kept for the record:
+ALL RESOLVED (1–5: 2026-07-11, three ruling rounds; 6: the
+2026-07-14 amendment); kept for the record:
 
 1. **Surface former shape** — RESOLVED (2nd round): NO type-level
    former; value-parametric core + thin per-format opaque surface
@@ -505,3 +590,9 @@ ALL RESOLVED 2026-07-11 (three ruling rounds); kept for the record:
    (surface modules, hard dependency of R4) and R3b
    (literals/printing, floats on consumer demand); firm ladder
    R0 → R1 → R2 → R3a → R4 → R5 (§10).
+6. **The lowering seam** — AMENDED, RATIFIED 2026-07-14: the
+   direct spec→ISA fragment path froze under IMP.md's
+   redirection; R4/R5 re-home as the imp ⊑ ISA float legs
+   (IMP.md rung I4), the fork merges at R2-complete, and R3a/R3b
+   move post-merge onto main. Landed content unaffected (§4a;
+   §10 close-out block).
