@@ -1,0 +1,308 @@
+;;; tools/search/profile_census.shard — exact marginal pressure for a checked
+;;; ordered rewrite profile over a generic typed expression grammar.
+;;;
+;;; Given the same reflected heads/atoms/binders/result/depth that configure
+;;; typed_grammar, this library builds the raw space once, then grows a
+;;; TrsProfile one rule at a time through meta/rewrite's validated profile
+;;; builder.  For every prefix it:
+;;;   - projects the exact separable formation constraints;
+;;;   - builds and exactly counts the quotient-first grammar; and
+;;;   - under the selected audit policy, sweeps raw terms for profile normality
+;;;     and proves every formed term is a rankable member of that raw subset.
+;;; Equal cardinality closes exact set equality at audited prefixes.  Endpoint
+;;; mode audits only the selected full profile; Every mode audits each prefix
+;;; for small reference rungs.  Rows retain the ordered rule QName, resulting
+;;; form count, marginal reduction, and whether that prefix was audited.
+;;; Proof/provenance remains the caller's job; theorem_scope is the first caller
+;;; and supplies checked TrsRules.
+;;;
+;;; This is tool-tier census machinery, not a theorem namespace and not a
+;;; task-specific ISA table.  The reusable profile construction and formation
+;;; mechanisms live in meta/rewrite; this application composes them with
+;;; meta/sketch through typed_grammar.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../meta/sketch")
+(import "../../meta/rewrite")
+(import "typed_grammar.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: meta sketch *))
+(use (:: meta rewrite *))
+(use (:: tools search typed_grammar *))
+
+(type PcAudit (PcAuditEvery) (PcAuditEndpoint))
+
+(type PcRow (PcBase Int Bool) (PcRule QName Int Int Bool))
+; base forms/audited; or added rule, resulting forms, marginal, audited
+
+(type PcCensus (PcCensus Int (List PcRow)))
+; raw forms, cumulative-prefix rows including PcBase first
+
+(type PcR (PcErr (List Int)) (PcOk PcCensus))
+
+(fn pc_rows_reverse ((rows (List PcRow)) (acc (List PcRow))) (List PcRow)
+  (measure (struct rows))
+  (match rows
+    (Nil acc)
+    ((Cons row rest) (pc_rows_reverse rest (Cons row acc)))))
+
+(type PcRawR (PcRawErr (List Int)) (PcRawOk Int))
+
+(fn pc_raw_sweep
+  ((k Int)
+   (total Int)
+   (root Expr)
+   (grammar Grammar)
+   (profile TrsProfile)
+   (normal Int))
+  PcRawR
+  (measure k)
+  (if (le k 0) (PcRawOk normal)
+  (let ((rank (- total k)))
+    (match (sk_unrank root grammar rank)
+      ((SkEErr msg) (PcRawErr msg))
+      ((SkEOk candidate)
+       (match (sk_rank root grammar candidate)
+         ((SkCErr msg) (PcRawErr msg))
+         ((SkCOk rank2)
+          (if (int_eq rank rank2)
+            (match (trs_normal profile candidate)
+              ((TrsNormalErr msg) (PcRawErr msg))
+              ((TrsNormalOk clean)
+               (if (lt 0 k)
+                 (pc_raw_sweep
+                   (- k 1)
+                   total
+                   root
+                   grammar
+                   profile
+                   (+ normal (if clean 1 0)))
+                 (PcRawErr "impossible nonpositive raw sweep"))))
+            (PcRawErr "raw grammar rank roundtrip")))))))))
+
+(type PcFormR (PcFormErr (List Int)) (PcFormOk))
+
+(fn pc_formed_sweep
+  ((k Int)
+   (total Int)
+   (root Expr)
+   (grammar Grammar)
+   (raw_root Expr)
+   (raw_grammar Grammar)
+   (profile TrsProfile))
+  PcFormR
+  (measure k)
+  (if (le k 0) (PcFormOk)
+  (let ((rank (- total k)))
+    (match (sk_unrank root grammar rank)
+      ((SkEErr msg) (PcFormErr msg))
+      ((SkEOk candidate)
+       (match (sk_rank root grammar candidate)
+         ((SkCErr msg) (PcFormErr msg))
+         ((SkCOk rank2)
+          (if (int_eq rank rank2)
+            (match (trs_normal profile candidate)
+              ((TrsNormalErr msg) (PcFormErr msg))
+              ((TrsNormalOk clean)
+               (if clean
+                 (match (sk_rank raw_root raw_grammar candidate)
+                   ((SkCErr msg) (PcFormErr msg))
+                   ((SkCOk raw_rank)
+                    (match (sk_unrank raw_root raw_grammar raw_rank)
+                      ((SkEErr msg) (PcFormErr msg))
+                      ((SkEOk candidate2)
+                       (if (expr_eq candidate candidate2)
+                         (if (lt 0 k)
+                           (pc_formed_sweep
+                             (- k 1)
+                             total
+                             root
+                             grammar
+                             raw_root
+                             raw_grammar
+                             profile)
+                           (PcFormErr "impossible nonpositive formed sweep"))
+                         (PcFormErr "raw grammar roundtrip"))))))
+                 (PcFormErr "formation grammar emitted a profile redex"))))
+            (PcFormErr "formation grammar rank roundtrip")))))))))
+
+(type PcCountR (PcCountErr (List Int)) (PcCountOk Int))
+
+(fn pc_formation_count
+  ((m Module)
+   (heads (List TgHead))
+   (atoms (List TgAtom))
+   (binders (List Type))
+   (want Type)
+   (depth Int)
+   (profile TrsProfile))
+  PcCountR
+  (match (trs_formation profile)
+    ((TrsFormationErr msg) (PcCountErr msg))
+    ((TrsFormationOk formation)
+     (match (tg_build_formation m heads atoms binders want depth formation)
+       ((TgBuildErr msg) (PcCountErr msg))
+       ((TgBuildOk root grammar _)
+        (match (sk_count root grammar)
+          ((SkCErr msg) (PcCountErr msg))
+          ((SkCOk formed) (PcCountOk formed))))))))
+
+(fn pc_count
+  ((m Module)
+   (heads (List TgHead))
+   (atoms (List TgAtom))
+   (binders (List Type))
+   (want Type)
+   (depth Int)
+   (raw_root Expr)
+   (raw_grammar Grammar)
+   (raw_count Int)
+   (profile TrsProfile))
+  PcCountR
+  (match (trs_formation profile)
+    ((TrsFormationErr msg) (PcCountErr msg))
+    ((TrsFormationOk formation)
+     (match (tg_build_formation m heads atoms binders want depth formation)
+       ((TgBuildErr msg) (PcCountErr msg))
+       ((TgBuildOk root grammar _)
+        (match (sk_count root grammar)
+          ((SkCErr msg) (PcCountErr msg))
+          ((SkCOk formed)
+           (match
+             (pc_raw_sweep raw_count raw_count raw_root raw_grammar profile 0)
+             ((PcRawErr msg) (PcCountErr msg))
+             ((PcRawOk normal)
+              (if (int_eq formed normal)
+                (match
+                  (pc_formed_sweep formed formed root grammar raw_root
+                    raw_grammar profile)
+                  ((PcFormErr msg) (PcCountErr msg))
+                  ((PcFormOk) (PcCountOk formed)))
+                (PcCountErr
+                  "formation count differs from raw profile-normal count")))))))))))
+
+(fn pc_rules
+  ((m Module)
+   (heads (List TgHead))
+   (atoms (List TgAtom))
+   (binders (List Type))
+   (want Type)
+   (depth Int)
+   (raw_root Expr)
+   (raw_grammar Grammar)
+   (raw_count Int)
+   (pending (List TrsRule))
+   (audit PcAudit)
+   (profile TrsProfile)
+   (previous Int)
+   (rev_rows (List PcRow)))
+  PcR
+  (measure (struct pending))
+  (match pending
+    (Nil (PcOk (PcCensus raw_count (pc_rows_reverse rev_rows Nil))))
+    ((Cons rule rest)
+     (match (trs_profile_snoc profile rule)
+       ((TrsProfileErr msg) (PcErr msg))
+       ((TrsProfileOk next_profile)
+        (let
+          ((audited
+             (match audit
+               ((PcAuditEvery) True)
+               ((PcAuditEndpoint)
+                (match rest
+                  (Nil True)
+                  (_ False))))))
+          (match
+            (if audited
+              (pc_count m heads atoms binders want depth raw_root raw_grammar
+                raw_count next_profile)
+              (pc_formation_count m heads atoms binders want depth next_profile))
+            ((PcCountErr msg) (PcErr msg))
+            ((PcCountOk count)
+             (if (le count previous)
+               (pc_rules
+                 m
+                 heads
+                 atoms
+                 binders
+                 want
+                 depth
+                 raw_root
+                 raw_grammar
+                 raw_count
+                 rest
+                 audit
+                 next_profile
+                 count
+                 (Cons
+                   (PcRule
+                     (trs_rule_name rule)
+                     count
+                     (- previous count)
+                     audited)
+                   rev_rows))
+               (PcErr "profile prefix increased the exact normal-form space"))))))))))
+
+(fn pc_census_with
+  ((m Module)
+   (heads (List TgHead))
+   (atoms (List TgAtom))
+   (binders (List Type))
+   (want Type)
+   (depth Int)
+   (rules (List TrsRule))
+   (audit PcAudit))
+  PcR
+  (match (tg_build m heads atoms Nil binders want depth (TgForms False))
+    ((TgBuildErr msg) (PcErr msg))
+    ((TgBuildOk raw_root raw_grammar _)
+     (match (sk_count raw_root raw_grammar)
+       ((SkCErr msg) (PcErr msg))
+       ((SkCOk raw_count)
+        (let
+          ((base_audited
+             (match audit
+               ((PcAuditEvery) True)
+               ((PcAuditEndpoint)
+                (match rules
+                  (Nil True)
+                  (_ False)))))
+           (empty (trs_empty_profile)))
+          (match
+            (if base_audited
+              (pc_count m heads atoms binders want depth raw_root raw_grammar
+                raw_count empty)
+              (pc_formation_count m heads atoms binders want depth empty))
+            ((PcCountErr msg) (PcErr msg))
+            ((PcCountOk base)
+             (if (int_eq base raw_count)
+               (pc_rules
+                 m
+                 heads
+                 atoms
+                 binders
+                 want
+                 depth
+                 raw_root
+                 raw_grammar
+                 raw_count
+                 rules
+                 audit
+                 empty
+                 base
+                 (Cons (PcBase base base_audited) Nil))
+               (PcErr "empty profile changed the raw grammar"))))))))))
+
+(fn pc_census
+  ((m Module)
+   (heads (List TgHead))
+   (atoms (List TgAtom))
+   (binders (List Type))
+   (want Type)
+   (depth Int)
+   (rules (List TrsRule)))
+  PcR
+  (pc_census_with m heads atoms binders want depth rules (PcAuditEndpoint)))

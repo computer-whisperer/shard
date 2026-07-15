@@ -13,6 +13,9 @@
 ;;; generic symbolic neutral normalizer, including evaluation of a rule RHS
 ;;; which constructs a nested call.  This pins the first real proof-base ->
 ;;; graduated mechanism -> quotient-first and symbolic consumer chain.
+;;; The generic profile census also grows the checked rule list cumulatively:
+;;; every depth-2 prefix is exhaustively audited, and the harder 59,295-term
+;;; depth-3 space is counted per prefix with its 94-term endpoint audited.
 
 (import "../../kernel/stdlib.shard")
 (import "../../kernel/term.shard")
@@ -27,6 +30,7 @@
 (import "typed_grammar.shard")
 (import "theorem_scope.shard")
 (import "checked_profile.shard")
+(import "profile_census.shard")
 (use (:: kernel term *))
 (use (:: kernel module *))
 (use (:: kernel reader *))
@@ -39,6 +43,7 @@
 (use (:: tools search typed_grammar *))
 (use (:: tools search theorem_scope *))
 (use (:: tools search checked_profile *))
+(use (:: tools search profile_census *))
 
 (fn tsp_path () (List Int) "tools/search/tasks/theorem_scope_append.shard")
 
@@ -280,7 +285,7 @@
         False))
       False)))
 
-(fn tsp_formation_space
+(fn tsp_formation_checked
   ((m Module)
    (ctx RCtx)
    (th Theory)
@@ -366,6 +371,133 @@
                             w)))))))))))))
        (tsp_fail "append formation root arity" w)))
     (_ (tsp_fail "append formation root shape" w))))
+
+(fn tsp_pressure_last ((rows (List PcRow)) (prior Int)) Int
+  (measure (struct rows))
+  (match rows
+    (Nil prior)
+    ((Cons row rest)
+     (match row
+       ((PcBase count _) (tsp_pressure_last rest count))
+       ((PcRule _ count _ _) (tsp_pressure_last rest count))))))
+
+(fn tsp_pressure_suffix ((audited Bool)) (List Int)
+  (if audited " AUDITED\n" " COUNT\n"))
+
+(fn tsp_pressure_write ((depth Int) (rows (List PcRow)) (w World)) World
+  (measure (struct rows))
+  (match rows
+    (Nil w)
+    ((Cons row rest)
+     (match row
+       ((PcBase count audited)
+        (tsp_pressure_write
+          depth
+          rest
+          (write
+            (append_int
+              "THEOREM-PRESSURE depth "
+              (append_int
+                (show_int depth)
+                (append_int
+                  " BASE FORMS "
+                  (append_int (show_int count) (tsp_pressure_suffix audited)))))
+            w)))
+       ((PcRule q count marginal audited)
+        (tsp_pressure_write
+          depth
+          rest
+          (write
+            (append_int
+              "THEOREM-PRESSURE depth "
+              (append_int
+                (show_int depth)
+                (append_int
+                  " +"
+                  (append_int
+                    (chars_of_sym (qn_name q))
+                    (append_int
+                      " FORMS "
+                      (append_int
+                        (show_int count)
+                        (append_int
+                          " MARGINAL "
+                          (append_int
+                            (show_int marginal)
+                            (tsp_pressure_suffix audited)))))))))
+            w)))))))
+
+;; Run the generic prefix census before the full-profile regression.  The
+;; checked scope selected the rules; profile_census only composes their
+;; validated TrsRules with the reflected typed grammar.
+(fn tsp_formation_space
+  ((m Module)
+   (ctx RCtx)
+   (th Theory)
+   (srcs (List SrcEntry))
+   (profile TrsProfile)
+   (formation TrsFormation)
+   (append_shape TrsShape)
+   (w World))
+  World
+  (match append_shape
+    ((TrsCallShape apq arity)
+     (if (int_eq arity 2)
+       (let
+         ((int_ty (TCon (qn (quote Int)) Nil))
+          (list_ty
+            (TCon (qn (quote List)) (Cons (TCon (qn (quote Int)) Nil) Nil)))
+          (heads
+            (list
+              (TgCtor (qn (quote Nil)))
+              (TgCtor (qn (quote Cons)))
+              (TgCall apq))))
+         (match
+           (pc_census_with
+             m
+             heads
+             Nil
+             (list list_ty list_ty int_ty)
+             list_ty
+             2
+             (trs_profile_rules profile)
+             (PcAuditEvery))
+           ((PcErr msg) (tsp_fail (append_int "profile census: " msg) w))
+           ((PcOk (PcCensus raw rows))
+            (if (int_eq raw 243)
+              (if (int_eq (tsp_pressure_last rows -1) 31)
+                (match
+                  (pc_census
+                    m
+                    heads
+                    Nil
+                    (list list_ty list_ty int_ty)
+                    list_ty
+                    3
+                    (trs_profile_rules profile))
+                  ((PcErr msg)
+                   (tsp_fail (append_int "profile census depth 3: " msg) w))
+                  ((PcOk (PcCensus raw3 rows3))
+                   (if (lt raw raw3)
+                     (if (lt (tsp_pressure_last rows3 -1) raw3)
+                       (tsp_formation_checked
+                         m
+                         ctx
+                         th
+                         srcs
+                         profile
+                         formation
+                         append_shape
+                         (tsp_pressure_write
+                           3
+                           rows3
+                           (tsp_pressure_write 2 rows w)))
+                       (tsp_fail "profile census depth 3 removed nothing" w))
+                     (tsp_fail "profile census depth 3 raw count" w))))
+                (tsp_fail "profile census full count" w))
+              (tsp_fail "profile census raw count" w)))))
+       (tsp_fail "profile census append arity" w)))
+    (_ (tsp_fail "profile census append shape" w))))
 
 (fn tsp_meta_profile
   ((m Module)

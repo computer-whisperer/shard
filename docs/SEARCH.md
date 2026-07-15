@@ -1565,6 +1565,19 @@ The same run now precedes that line with the quotient-first formation pin:
 
     THEOREM-FORMATION APPEND 4 RAW 243 CANON 31 REDUNDANT 212 EXACT
 
+It now also runs a generated cumulative-profile census before that full-profile
+pin.  At depth 2 every prefix is exhaustively audited against the raw normal
+subset; at depth 3 intermediate prefixes are exact formation-grammar counts and
+the selected full profile receives the exhaustive audit:
+
+    depth 2: 243 -> 147 (-96) -> 111 (-36) -> 39 (-72) -> 31 (-8)
+    depth 3: 59295 -> 21612 (-37683) -> 10992 (-10620)
+                   -> 120 (-10872) -> 94 (-26, AUDITED)
+
+The order is the explicit reviewed profile order: nil-left, cons, association,
+nil-right.  Marginals are therefore cumulative and may reflect overlap with
+earlier rules; they are not an order-independent property of an equation.
+
 It then feeds that identical checked `TrsProfile` to symbolic neutral
 formation—without constructing `NRAppend`—and pins both a capture/substitution
 rewrite and a constructor-producing RHS whose nested call re-enters the same
@@ -1582,6 +1595,9 @@ engine supplies root application, deterministic preorder rewriting through
 ordinary subject binding forms, normality testing, and fuel-bounded normal
 forms with an honest exhaustion result.  It does not authenticate equations,
 infer subject types, or claim orientation, termination, or confluence.
+`trs_empty_profile` and `trs_profile_snoc` now provide validated construction
+for generated cumulative or ablated profile families without manipulating the
+transparent profile constructor at consumers.
 
 `tg_compile_canon` is the narrow join: after `theorem_scope` authenticates an
 explicit checked license list, it compiles that list into the generic profile.
@@ -1615,6 +1631,26 @@ rank/unrank checks establish:
 - the formation grammar has those same 31 members, each normal and rankable in
   the raw grammar; and
 - 212 theorem-redex spellings never enter the quotient grammar.
+
+`profile_census.shard` is the reusable measurement join over this mechanism.
+It accepts the same reflected heads, atoms, binders, result type, depth, and
+ordered `TrsRule` list as the generic typed grammar—not an append-specific ISA
+table.  For each cumulative prefix it projects formation constraints, builds
+the quotient-first grammar, and reports exact count and marginal reduction.
+`PcAuditEvery` additionally enumerates raw terms and proves every formed term
+ranks back into the raw normal subset at every prefix; `PcAuditEndpoint` pays
+that cost only for the selected full profile.  This distinction mattered at
+the first harder rung: auditing every depth-3 prefix ran for 8.5 minutes
+without finishing, while endpoint audit completed the full census in
+3m19s on the same compiled evaluator.
+
+The result is already useful profile-selection evidence.  The full checked
+append profile removes 59,201 of 59,295 depth-3 terms, a roughly 631x reduction
+before enumeration.  Nil-left dominates both rungs; association narrowly
+overtakes cons at depth 3; nil-right remains small but uniquely useful.  The
+ordering is stable here, while the changed marginal magnitudes demonstrate why
+the engine should measure rules in the actual scope and hole policy instead of
+relying on a universal hand ranking.
 
 Two boundaries remain.  Arbitrary `TgRule` templates are loudly refused by the
 formation-aware path because their multi-level static structure needs the full

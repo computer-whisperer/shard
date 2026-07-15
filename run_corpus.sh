@@ -308,6 +308,7 @@ TARGETS=(
   tools/search/imp_expr.shard
   tools/search/typed_grammar.shard
   tools/search/theorem_scope.shard
+  tools/search/profile_census.shard
   tools/search/rewrite_probe.shard
   tools/search/typed_rule_probe.shard
   tools/search/tasks/imp_add1.shard
@@ -433,11 +434,11 @@ fi
 
 echo "=== search: theorem-scoped canon license pin ==="
 if [ -x bin/shard_eval ]; then
-  # Checked append licenses generate four separable formation clauses; their
-  # typed depth-2 grammar is exactly raw 243 -> normal 31, removing 212
-  # theorem-redex spellings before rank-addressed enumeration.  The identical
-  # generic profile also rewrites symbolic neutrals and re-enters on nested
-  # calls produced by a theorem RHS.
+  # Checked append licenses generate four separable formation clauses. The
+  # generic prefix census audits every depth-2 profile (243 -> 31) and counts
+  # the harder depth-3 prefixes (59295 -> 94), exhaustively auditing the selected
+  # endpoint. The identical generic profile also rewrites symbolic neutrals and
+  # re-enters on nested calls produced by a theorem RHS.
   bin/shard_eval run tools/search/theorem_scope_probe.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
