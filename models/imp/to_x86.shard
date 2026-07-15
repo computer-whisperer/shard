@@ -483,7 +483,31 @@
               (_ None)))
            (_ None)))
        (U64 None)))
-    ((IExt _ _ a) None)
+    ;; the v2 bare byte load: (IExt U8 wider (ILoad …)) as the whole
+    ;; right-hand side — XLoad8 zero-extends into the full register,
+    ;; so the ext dissolves and the emission is the bare load shape
+    ;; (the in-place IBin arm's ext-load operand pattern, statement
+    ;; position; the sha Horner walks open every word with it)
+    ((IExt _ _ a)
+     (match a
+       ((ILoad ae)
+        (match ae
+          ((ILoc aj)
+           (match (ix_home aj)
+             (None None)
+             ((Some ar) (Some (Cons (XLoad8 d (AReg ar)) it)))))
+          ((IConst n) None)
+          ((IBin k2 o2 x y) None)
+          ((IRotr k2 x y) None)
+          ((IExt _ _ x) None)
+          ((ITrunc _ _ x) None)
+          ((ILoad x) None)))
+       ((IConst n) None)
+       ((ILoc j) None)
+       ((IBin k2 o2 x y) None)
+       ((IRotr k2 x y) None)
+       ((IExt _ _ x) None)
+       ((ITrunc _ _ x) None)))
     ((ITrunc _ _ a) None)
     ((ILoad ae)
      (match ae
@@ -573,6 +597,13 @@
                   (match (ix_res e)
                     (None None)
                     ((Some is) (Some (ix_app is (Cons (XMovRR d RAX) it))))))))))
+          ;; a store value outside the src atoms (the sha ITrunc byte
+          ;; stores) takes the general path: compile it into RAX and
+          ;; store the register. XStore8 stores the source register
+          ;; RAW (byte truncation is observational, mask-on-read), so
+          ;; an ITrunc value must MATERIALIZE its band in RAX for the
+          ;; stored trees to align with imp's — the And-mask ix_acc
+          ;; appends is that materialization, not dead code.
           ((IStore ae ve)
            (match ae
              ((ILoc aj)
@@ -580,8 +611,13 @@
                 (None None)
                 ((Some ar)
                  (match (ix_src ve)
-                   (None None)
-                   ((Some vs) (Some (Cons (XStore8 (AReg ar) vs) it)))))))
+                   ((Some vs) (Some (Cons (XStore8 (AReg ar) vs) it)))
+                   (None
+                     (match (ix_res ve)
+                       (None None)
+                       ((Some is)
+                        (Some
+                          (ix_app is (Cons (XStore8 (AReg ar) (SReg RAX)) it))))))))))
              ((IConst n) None)
              ((IBin k2 o2 x y) None)
              ((IRotr k2 x y) None)
@@ -633,6 +669,19 @@
              ((ITrunc _ _ x) None)
              ((ILoad x) None)))))))))
 
+;; the SEALED statement-sequence entry — the statement tier's
+;; translation boundary: the translated statements followed by the
+;; zero-scratch seal (one XMovRI 0 per scratch register the chunk
+;; dirtied), so a straight-line chunk ENTERS and EXITS at scratch
+;; zero and seq-grain facts compose at (xargs locals) register files
+;; on both ends. The V2-5a loop-boundary invariant in sequence
+;; position: residues resolve BY CONSTRUCTION where the values are
+;; dead, never by per-program closed forms.
+(fn ix_sstmts ((ss (List IStmt))) (Option (List XInstr))
+  (match (ix_stmts ss)
+    (None None)
+    ((Some is) (Some (ix_app is (ix_zs is))))))
+
 ;; a function: THE GATE FIRST (only well-kinded fns translate), then
 ;; the boundary limits — params <= 6 (the SysV boundary carries at
 ;; most six) and locals <= 12 (the §2a home file) — then translated
@@ -677,4 +726,21 @@
         (match (xargs ls)
           (None None)
           ((Some rs) (Some (XBrk 0 (with_rax ra rs) m)))))
+       (ITrap (Some XTrap))))))
+
+;; the SEQ-grain alignment adapter (the statement tier): a SEALED
+;; straight-line chunk (ix_sstmts) completes normally — no label
+;; exits — with every dirtied scratch register re-zeroed, so imp's
+;; INorm corresponds to (XNorm (xargs locals) mem) EXACTLY: no
+;; residue argument (the seal resolves it by construction, the
+;; ix_out ra dance has no seq-grain analog). ITrap ↔ XTrap.
+(fn ix_sout ((r (Option IOut))) (Option XOut)
+  (match r
+    (None None)
+    ((Some o)
+     (match o
+       ((INorm ls m)
+        (match (xargs ls)
+          (None None)
+          ((Some rs) (Some (XNorm rs m)))))
        (ITrap (Some XTrap))))))
