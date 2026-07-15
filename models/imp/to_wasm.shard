@@ -58,6 +58,10 @@
 (use (:: models imp imp *))
 (import "../wasm/wasm.shard")
 (use (:: models wasm wasm *))
+(import "../wasm/loopkit.shard")
+(use (:: models wasm loopkit *))
+(import "../../std/mem")
+(use (:: std mem *))
 
 (fn iw_app ((a (List Instr)) (b (List Instr))) (List Instr)
   (measure (struct a))
@@ -371,3 +375,289 @@
      (match o
        ((INorm lc m) (Some (ONorm st lc m)))
        (ITrap (Some OTrap))))))
+
+;; --- the compositional-leg seam family (docs/IMP.md V2-5e-4) ----------------
+;; Straight-line segments compose at seq grain: the imp walk over an
+;; appended flat prefix equals the standalone prefix run continued
+;; into the tail (ist_seam, exact-fuel, flat = ISet/IStore only), and
+;; the machine walk of a translated segment dispatches through
+;; es_scont (iw_out's sibling at open-tail code grain). Loops never
+;; cross a seam -- the counter-tied workers own them.
+;; statement-list append
+(fn isapp ((a (List IStmt)) (b (List IStmt))) (List IStmt)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons s t) (Cons s (isapp t b)))))
+
+;; statement-list length as fuel (a Nat, so lg_fuel can eat it)
+(fn istn ((a (List IStmt))) Nat
+  (measure (struct a))
+  (match a
+    (Nil Z)
+    ((Cons s t) (S (istn t)))))
+
+;; flat = straight-line: only ISet/IStore (no reservoir use past the peel)
+(fn ist_flat ((a (List IStmt))) Bool
+  (measure (struct a))
+  (match a
+    (Nil True)
+    ((Cons s t)
+     (match s
+       ((ISet i e) (ist_flat t))
+       ((IStore ae ve) (ist_flat t))
+       ((IIf c tb eb) False)
+       ((IWhile c b) False)))))
+
+;; the continuation adapter: istmts' own dispatch over a prefix output
+(fn ist_cont ((f Nat) (msz Int) (b (List IStmt)) (r (Option IOut)))
+  (Option IOut)
+  (match r
+    (None None)
+    ((Some out)
+     (match out
+       ((INorm lc2 m2) (istmts f msz b lc2 m2))
+       (ITrap (Some ITrap))))))
+
+;; the machine-side segment continuation adapter: dispatch the imp
+;; segment run's output into the machine walk of the remaining code
+;; (iw_out's sibling at sequence grain; traps conflate)
+(fn es_scont
+  ((f Nat) (wm WModule) (rest (List Instr)) (st (List Int)) (r (Option IOut)))
+  (Option Out)
+  (match r
+    (None None)
+    ((Some out)
+     (match out
+       ((INorm lc2 m2) (eval_seq f wm rest lc2 st m2))
+       (ITrap (Some OTrap))))))
+
+(claim ist_seam
+  (goal
+    ((a (List IStmt))
+     (b (List IStmt))
+     (f Nat)
+     (g Nat)
+     (msz Int)
+     (lc (List Int))
+     (m Mem))
+    ((= (ist_flat a) True))
+    (=
+      (istmts (lg_fuel (istn a) (S f)) msz (isapp a b) lc m)
+      (ist_cont
+        (S f)
+        msz
+        b
+        (istmts (lg_fuel (istn a) (S g)) msz a lc m))))
+  (induct a
+    ((case Nil
+       (steps
+         ((compute both (stop istmts))
+          (unfold istmts rhs)
+          (reduce rhs)
+          (compute both (stop istmts)))
+         refl))
+     (case Cons
+       (s t)
+       (case-on s IStmt
+         ((case ISet
+            (i e)
+            (chain
+              (steps
+                ((rewrite (hyp 0) lr both true ())
+                 (unfold istn lhs)
+                 (reduce lhs)
+                 (unfold istn rhs)
+                 (reduce rhs)
+                 (unfold isapp lhs)
+                 (reduce lhs)
+                 (unfold lg_fuel lhs)
+                 (reduce lhs)
+                 (unfold lg_fuel rhs)
+                 (reduce rhs)
+                 (unfold istmts lhs)
+                 (reduce lhs)
+                 (unfold istmts rhs)
+                 (reduce rhs)))
+              (have hfa
+                (= (lg_fuel (istn t) (S f)) (S (lg_fuel (istn t) f)))
+                (rewrite-with (lemma lg_snoc) lr lhs () () refl))
+              (have hga
+                (= (lg_fuel (istn t) (S g)) (S (lg_fuel (istn t) g)))
+                (rewrite-with (lemma lg_snoc) lr lhs () () refl))
+              (steps
+                ((rewrite (premise hfa) lr lhs false ())
+                 (rewrite (premise hga) lr rhs false ())
+                 (unfold istmt lhs)
+                 (reduce lhs)
+                 (unfold istmt rhs)
+                 (reduce rhs)))
+              (case-on (iexp e lc m msz) Option
+                ((case None
+                   (steps
+                     ((rewrite (hyp 0) lr both true ())
+                      (compute both (stop istmts lg_fuel istn isapp)))
+                     refl))
+                 (case Some
+                   (v)
+                   (chain
+                     (steps
+                       ((rewrite (hyp 0) lr both true ())
+                        (compute both (stop istmts lg_fuel istn isapp ilset ist_cont))))
+                     (case-on (ilset lc i v) Option
+                       ((case None
+                          (steps
+                            ((rewrite (hyp 0) lr both true ())
+                             (compute both (stop istmts lg_fuel istn isapp)))
+                            refl))
+                        (case Some
+                          (lc2)
+                          (chain
+                            (steps
+                              ((rewrite (hyp 0) lr both true ())
+                               (compute both
+                                 (stop istmts lg_fuel istn isapp ist_cont))))
+                            (have hflt (= (ist_flat t) True)
+                              (chain
+                                (steps
+                                  ((rewrite (premise 0) rl rhs true ())
+                                   (rewrite (hyp 2) lr rhs true ())
+                                   (unfold ist_flat rhs)
+                                   (reduce rhs)))
+                                refl))
+                            (rewrite-with
+                              (hyp 3)
+                              lr
+                              lhs
+                              ((inst g g))
+                              ((steps
+                                 ((rewrite (premise hflt) lr lhs true ()))
+                                 refl)))
+                            refl))))))))))
+          (case IStore
+            (ae ve)
+            (chain
+              (steps
+                ((rewrite (hyp 0) lr both true ())
+                 (unfold istn lhs)
+                 (reduce lhs)
+                 (unfold istn rhs)
+                 (reduce rhs)
+                 (unfold isapp lhs)
+                 (reduce lhs)
+                 (unfold lg_fuel lhs)
+                 (reduce lhs)
+                 (unfold lg_fuel rhs)
+                 (reduce rhs)
+                 (unfold istmts lhs)
+                 (reduce lhs)
+                 (unfold istmts rhs)
+                 (reduce rhs)))
+              (have hfa
+                (= (lg_fuel (istn t) (S f)) (S (lg_fuel (istn t) f)))
+                (rewrite-with (lemma lg_snoc) lr lhs () () refl))
+              (have hga
+                (= (lg_fuel (istn t) (S g)) (S (lg_fuel (istn t) g)))
+                (rewrite-with (lemma lg_snoc) lr lhs () () refl))
+              (steps
+                ((rewrite (premise hfa) lr lhs false ())
+                 (rewrite (premise hga) lr rhs false ())
+                 (unfold istmt lhs)
+                 (reduce lhs)
+                 (unfold istmt rhs)
+                 (reduce rhs)))
+              (case-on (iexp ae lc m msz) Option
+                ((case None
+                   (steps
+                     ((rewrite (hyp 0) lr both true ())
+                      (compute both (stop istmts lg_fuel istn isapp)))
+                     refl))
+                 (case Some
+                   (ad)
+                   (chain
+                     (steps
+                       ((rewrite (hyp 0) lr both true ())
+                        (compute both (stop istmts lg_fuel istn isapp ist_cont iexp))))
+                     (case-on (le 0 ad) Bool
+                       ((case True
+                          (chain
+                            (steps
+                              ((rewrite (hyp 0) lr both true ())
+                               (compute both
+                                 (stop istmts lg_fuel istn isapp ist_cont iexp))))
+                            (case-on (lt ad msz) Bool
+                              ((case True
+                                 (chain
+                                   (steps
+                                     ((rewrite (hyp 0) lr both true ())
+                                      (compute both
+                                        (stop istmts lg_fuel istn isapp ist_cont iexp))))
+                                   (case-on (iexp ve lc m msz) Option
+                                     ((case None
+                                        (steps
+                                          ((rewrite (hyp 0) lr both true ())
+                                           (compute both
+                                             (stop istmts lg_fuel istn
+                                               isapp)))
+                                          refl))
+                                      (case Some
+                                        (v)
+                                        (chain
+                                          (steps
+                                            ((rewrite (hyp 0) lr both true ())
+                                             (compute both
+                                               (stop istmts lg_fuel istn
+                                                 isapp ist_cont))))
+                                          (have hflt (= (ist_flat t) True)
+                                            (chain
+                                              (steps
+                                                ((rewrite (premise 0) rl rhs
+                                                   true ())
+                                                 (rewrite (hyp 4) lr rhs
+                                                   true ())
+                                                 (unfold ist_flat rhs)
+                                                 (reduce rhs)))
+                                              refl))
+                                          (rewrite-with
+                                            (hyp 5)
+                                            lr
+                                            lhs
+                                            ((inst g g))
+                                            ((steps
+                                               ((rewrite (premise hflt) lr
+                                                  lhs true ()))
+                                               refl)))
+                                          refl))))))
+                               (case False
+                                 (steps
+                                   ((rewrite (hyp 0) lr both true ())
+                                    (compute both
+                                      (stop istmts lg_fuel istn isapp)))
+                                   refl))))))
+                        (case False
+                          (steps
+                            ((rewrite (hyp 0) lr both true ())
+                             (compute both (stop istmts lg_fuel istn isapp)))
+                            refl))))))))))
+          (case IIf
+            (c0 tb eb)
+            (chain
+              (have hff (= True False)
+                (chain
+                  (steps
+                    ((rewrite (premise 0) rl lhs true ())
+                     (rewrite (hyp 0) lr lhs true ())
+                     (compute lhs)))
+                  refl))
+              (absurd (premise hff))))
+          (case IWhile
+            (c0 bd)
+            (chain
+              (have hff (= True False)
+                (chain
+                  (steps
+                    ((rewrite (premise 0) rl lhs true ())
+                     (rewrite (hyp 0) lr lhs true ())
+                     (compute lhs)))
+                  refl))
+              (absurd (premise hff))))))))))

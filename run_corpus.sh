@@ -134,6 +134,9 @@ TARGETS=(
   examples/iwg_probe.shard
   examples/sqw_probe.shard
   examples/sqx_probe.shard
+  examples/sqmw_probe.shard
+  examples/sqm2_probe.shard
+  examples/sqmc_probe.shard
   models/wasm/wasm.shard
   models/wasm/encode.shard
   examples/wasm_smoke.shard
