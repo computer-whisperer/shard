@@ -1,0 +1,587 @@
+;;; tools/search/imp_expr.shard — typed MODEL-EXPRESSION SEARCH, first
+;;; model-fragment-search spike (docs/SEARCH.md, "MODEL-FRAGMENT SEARCH").
+;;;
+;;; Search imp IExp values as DATA.  The engine knows the imp expression
+;;; constructors, but nothing about the function being refined.  A task module
+;;; supplies a small, uniform surface:
+;;;
+;;;   search_local_kinds : () -> List IKind
+;;;   search_result_kind : () -> IKind
+;;;   search_constants   : () -> List Int
+;;;   search_ops         : () -> List IOp
+;;;   search_depth       : () -> Int
+;;;   search_probe       : IExp -> Option (List (Option Int))
+;;;   search_target      : () -> List (Option Int)
+;;;   search_witness     : () -> IExp
+;;;
+;;; The grammar is signature-driven for the straight-line, same-kind IBin
+;;; fragment: in-scope locals whose kind equals the result kind, task constants,
+;;; and the whitelisted ops.  Every generated member is checked by search_probe
+;;; (normally ikchk followed by iexp); None is generator drift, not a filtered
+;;; candidate.  The observation itself remains opaque to the engine: examples
+;;; today, requirements/symbolic execution tomorrow.
+;;;
+;;; Exactness gates per member: rank(unrank(i)) = i, wf, and total observation
+;;; decoding.  The behavior census keeps full vectors (no digest caveat at these
+;;; small rungs).  The task's witness must rank into the grammar, round-trip, and
+;;; occur in the solution set; its separate checked artifact supplies G4.
+;;;
+;;; RUN IT:
+;;;   bin/shard_eval run tools/search/imp_expr.shard TASK.shard
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/loader.shard")
+(import "../../meta/sketch")
+(import "../../meta/invoke")
+(import "../../meta/invoke/prepared.shard")
+(import "../../meta/spell")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel loader World))
+(use (:: kernel loader get_args))
+(use (:: kernel loader write))
+(use (:: kernel loader exit))
+(use (:: meta sketch *))
+(use (:: meta invoke *))
+(use (:: meta invoke prepared *))
+(use (:: meta spell *))
+
+;; ---- task configuration -----------------------------------------------------
+
+(type IsCfg
+  (IsCfg
+    (List Expr)  ; local IKind values, in imp local order
+    Expr  ; result IKind value
+    (List Int)  ; constants
+    (List Expr)  ; IOp values
+    Int  ; expression depth
+    (List IsVal)  ; target observation vector
+    Expr))  ; known-certified witness
+
+(type IsCR (IsCErr (List Int)) (IsCOk IsCfg))
+
+(type IsVal (IsNone) (IsInt Int))
+
+(type IsVR (IsVErr (List Int)) (IsVOk IsVal))
+
+(fn is_value ((e Expr)) IsVR
+  (match e
+    ((Ctor q args)
+     (if (core_named q (quote None))
+       (match args
+         (Nil (IsVOk IsNone))
+         (_ (IsVErr "None arity")))
+     (if (core_named q (quote Some))
+       (match args
+         ((Cons v Nil)
+          (match (expr_int v)
+            (None (IsVErr "Some payload is not Int"))
+            ((Some n) (IsVOk (IsInt n)))))
+         (_ (IsVErr "Some arity")))
+       (IsVErr "observation cell is not Option"))))
+    (_ (IsVErr "observation cell is not a ctor"))))
+
+(type IsVL (IsVLErr (List Int)) (IsVLOk (List IsVal)))
+
+(fn is_values ((es (List Expr))) IsVL
+  (measure (struct es))
+  (match es
+    (Nil (IsVLOk Nil))
+    ((Cons e rest)
+     (match (is_value e)
+       ((IsVErr msg) (IsVLErr msg))
+       ((IsVOk v)
+        (match (is_values rest)
+          ((IsVLErr msg) (IsVLErr msg))
+          ((IsVLOk vs) (IsVLOk (Cons v vs)))))))))
+
+(fn is_value_list ((e Expr)) IsVL
+  (match (expr_list e)
+    (None (IsVLErr "observation is not a List"))
+    ((Some es) (is_values es))))
+
+(fn is_call0 ((m Module) (name Symbol)) (Option Expr) (invoke m name Nil))
+
+(fn is_config ((m Module)) IsCR
+  (match (is_call0 m (quote search_local_kinds))
+    (None (IsCErr "missing/failed search_local_kinds"))
+    ((Some kse)
+     (match (expr_list kse)
+       (None (IsCErr "search_local_kinds is not a List"))
+       ((Some ks)
+        (match (is_call0 m (quote search_result_kind))
+          (None (IsCErr "missing/failed search_result_kind"))
+          ((Some rk)
+           (match (is_call0 m (quote search_constants))
+             (None (IsCErr "missing/failed search_constants"))
+             ((Some cse)
+              (match (expr_ints cse)
+                (None (IsCErr "search_constants is not a List Int"))
+                ((Some cs)
+                 (match (is_call0 m (quote search_ops))
+                   (None (IsCErr "missing/failed search_ops"))
+                   ((Some ose)
+                    (match (expr_list ose)
+                      (None (IsCErr "search_ops is not a List"))
+                      ((Some ops)
+                       (match (is_call0 m (quote search_depth))
+                         (None (IsCErr "missing/failed search_depth"))
+                         ((Some de)
+                          (match (expr_int de)
+                            (None (IsCErr "search_depth is not Int"))
+                            ((Some d)
+                             (if (lt d 0) (IsCErr "negative search_depth")
+                             (match (is_call0 m (quote search_target))
+                               (None (IsCErr "missing/failed search_target"))
+                               ((Some te)
+                                (match (is_value_list te)
+                                  ((IsVLErr msg) (IsCErr msg))
+                                  ((IsVLOk target)
+                                   (match (is_call0 m (quote search_witness))
+                                     (None
+                                       (IsCErr "missing/failed search_witness"))
+                                     ((Some witness)
+                                      (IsCOk
+                                        (IsCfg ks rk cs ops d target witness))))))))))))))))))))))))))))
+
+;; ---- signature-driven IExp grammar -----------------------------------------
+
+(fn is_app_e ((a (List Expr)) (b (List Expr))) (List Expr)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (is_app_e t b)))))
+
+(fn is_app_g ((a (List GEnt)) (b (List GEnt))) (List GEnt)
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (is_app_g t b)))))
+
+;; locals are admitted from the signature, not from task-specific names
+(fn is_locals ((ks (List Expr)) (want Expr) (qloc QName) (i Int)) (List Expr)
+  (measure (struct ks))
+  (match ks
+    (Nil Nil)
+    ((Cons k rest)
+     (let ((tail (is_locals rest want qloc (+ i 1))))
+       (if (expr_eq k want) (Cons (Ctor qloc (Cons (IntLit i) Nil)) tail) tail)))))
+
+(fn is_consts ((cs (List Int)) (qconst QName)) (List Expr)
+  (measure (struct cs))
+  (match cs
+    (Nil Nil)
+    ((Cons c rest)
+     (Cons (Ctor qconst (Cons (IntLit c) Nil)) (is_consts rest qconst)))))
+
+;; one IBin alternative per whitelisted op; both operands share the same
+;; pair of child grammar entries because alternatives are exclusive
+(fn is_bins ((ops (List Expr)) (qbin QName) (kind Expr) (lh Int) (rh Int))
+  (List Expr)
+  (measure (struct ops))
+  (match ops
+    (Nil Nil)
+    ((Cons op rest)
+     (Cons
+       (Ctor qbin (Cons kind (Cons op (Cons (hole lh) (Cons (hole rh) Nil)))))
+       (is_bins rest qbin kind lh rh)))))
+
+(type IsGR (IsGErr (List Int)) (IsGOk (List GEnt) Int))
+
+;; returns entries rooted at `next`, plus the next free id
+(fn is_grammar_go
+  ((d Int)
+   (next Int)
+   (leaves (List Expr))
+   (ops (List Expr))
+   (qbin QName)
+   (kind Expr))
+  IsGR
+  (measure d)
+  (if (le d 0) (IsGOk (Cons (GEnt next leaves) Nil) (+ next 1))
+  (match (is_grammar_go (- d 1) (+ next 1) leaves ops qbin kind)
+    ((IsGErr msg) (IsGErr msg))
+    ((IsGOk les n1)
+     (match (is_grammar_go (- d 1) n1 leaves ops qbin kind)
+       ((IsGErr msg) (IsGErr msg))
+       ((IsGOk res n2)
+        (IsGOk
+          (Cons
+            (GEnt next (is_app_e leaves (is_bins ops qbin kind (+ next 1) n1)))
+            (is_app_g les res))
+          n2)))))))
+
+(fn is_grammar ((m Module) (cfg IsCfg)) IsGR
+  (match cfg
+    ((IsCfg ks rk cs ops d _ _)
+     (match (ctor_qn m (quote ILoc))
+       (None (IsGErr "IExp ctor ILoc not in task closure"))
+       ((Some qloc)
+        (match (ctor_qn m (quote IConst))
+          (None (IsGErr "IExp ctor IConst not in task closure"))
+          ((Some qconst)
+           (match (ctor_qn m (quote IBin))
+             (None (IsGErr "IExp ctor IBin not in task closure"))
+             ((Some qbin)
+              (let
+                ((leaves
+                   (is_app_e (is_locals ks rk qloc 0) (is_consts cs qconst))))
+                (match leaves
+                  (Nil (IsGErr "grammar has no typed leaves"))
+                  ((Cons _ _) (is_grammar_go d 0 leaves ops qbin rk)))))))))))))
+
+;; ---- observations and exact behavior census --------------------------------
+
+(fn is_val_eq ((a IsVal) (b IsVal)) Bool
+  (match a
+    (IsNone
+      (match b
+        (IsNone True)
+        ((IsInt _) False)))
+    ((IsInt x)
+     (match b
+       (IsNone False)
+       ((IsInt y) (int_eq x y))))))
+
+(fn is_vec_eq ((a (List IsVal)) (b (List IsVal))) Bool
+  (measure (struct a))
+  (match a
+    (Nil
+      (match b
+        (Nil True)
+        ((Cons _ _) False)))
+    ((Cons x xs)
+     (match b
+       (Nil False)
+       ((Cons y ys) (if (is_val_eq x y) (is_vec_eq xs ys) False))))))
+
+(type IsObs (IsObsErr (List Int)) (IsObsReject) (IsObsOk (List IsVal)))
+
+(fn is_probe_value ((e Expr)) IsObs
+  (match e
+    ((Ctor q args)
+     (if (core_named q (quote None))
+       (match args
+         (Nil IsObsReject)
+         (_ (IsObsErr "search_probe None arity")))
+     (if (core_named q (quote Some))
+       (match args
+         ((Cons v Nil)
+          (match (is_value_list v)
+            ((IsVLErr msg) (IsObsErr msg))
+            ((IsVLOk vs) (IsObsOk vs))))
+         (_ (IsObsErr "search_probe Some arity")))
+       (IsObsErr "search_probe result is not Option"))))
+    (_ (IsObsErr "search_probe result is not a ctor"))))
+
+(fn is_observe ((ctx InvokeCtx) (fd FnDef) (candidate Expr)) IsObs
+  (match (invoke_fd_ctx ctx fd (Cons candidate Nil))
+    (None (IsObsErr "missing/failed search_probe"))
+    ((Some e) (is_probe_value e))))
+
+;; Exact behavior map.  The first spike used a list, making a full census
+;; quadratic in the number of distinct vectors.  Lexicographic ordering keeps
+;; full vectors as keys (no digest/collision caveat) while making the normal
+;; census logarithmic in its behavior-class count.
+(fn is_val_cmp ((a IsVal) (b IsVal)) Int
+  (match a
+    (IsNone
+      (match b
+        (IsNone 0)
+        ((IsInt _) -1)))
+    ((IsInt x)
+     (match b
+       (IsNone 1)
+       ((IsInt y) (if (lt x y) -1 (if (lt y x) 1 0)))))))
+
+(fn is_vec_cmp ((a (List IsVal)) (b (List IsVal))) Int
+  (measure (struct a))
+  (match a
+    (Nil
+      (match b
+        (Nil 0)
+        ((Cons _ _) -1)))
+    ((Cons x xs)
+     (match b
+       (Nil 1)
+       ((Cons y ys)
+        (let ((c (is_val_cmp x y))) (if (int_eq c 0) (is_vec_cmp xs ys) c)))))))
+
+(type IsTree (IsEmpty) (IsNode (List IsVal) Int Int IsTree IsTree))  ; key, spellings, min rank
+
+(fn is_tree_add ((key (List IsVal)) (rank Int) (t IsTree)) IsTree
+  (measure (struct t))
+  (match t
+    (IsEmpty (IsNode key 1 rank IsEmpty IsEmpty))
+    ((IsNode k n r lo hi)
+     (let ((c (is_vec_cmp key k)))
+       (if (lt c 0) (IsNode k n r (is_tree_add key rank lo) hi)
+       (if (lt 0 c) (IsNode k n r lo (is_tree_add key rank hi))
+       (IsNode k (+ n 1) (if (lt rank r) rank r) lo hi)))))))
+
+(fn is_tree_len ((t IsTree)) Int
+  (measure (struct t))
+  (match t
+    (IsEmpty 0)
+    ((IsNode _ _ _ lo hi) (+ 1 (+ (is_tree_len lo) (is_tree_len hi))))))
+
+(fn is_ints_rev ((xs (List Int)) (acc (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil acc)
+    ((Cons h t) (is_ints_rev t (Cons h acc)))))
+
+(fn is_ints_len ((xs (List Int))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons _ t) (+ 1 (is_ints_len t)))))
+
+(fn is_int_mem ((x Int) (xs (List Int))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil False)
+    ((Cons h t) (if (int_eq x h) True (is_int_mem x t)))))
+
+(fn is_at ((what (List Int)) (i Int) (msg (List Int))) (List Int)
+  (append_int
+    what
+    (append_int " at " (append_int (show_int i) (append_int ": " msg)))))
+
+(type IsSweep (IsSweepErr (List Int)) (IsSweepOk IsTree (List Int)))
+
+(fn is_sweep
+  ((k Int)
+   (total Int)
+   (root Expr)
+   (g Grammar)
+   (ctx InvokeCtx)
+   (probe_fd FnDef)
+   (target (List IsVal))
+   (buckets IsTree)
+   (solutions (List Int)))
+  IsSweep
+  (measure k)
+  (if (le k 0) (IsSweepOk buckets (is_ints_rev solutions Nil))
+  (let ((i (- total k)))
+    (match (sk_unrank root g i)
+      ((SkEErr msg) (IsSweepErr (is_at "unrank" i msg)))
+      ((SkEOk candidate)
+       (match (sk_rank root g candidate)
+         ((SkCErr msg) (IsSweepErr (is_at "rank" i msg)))
+         ((SkCOk i2)
+          (if (int_eq i i2)
+            (match (is_observe ctx probe_fd candidate)
+              ((IsObsErr msg) (IsSweepErr (is_at "probe" i msg)))
+              (IsObsReject
+                (IsSweepErr
+                  (is_at "G1" i "signature grammar produced a non-wf IExp")))
+              ((IsObsOk key)
+               (is_sweep
+                 (- k 1)
+                 total
+                 root
+                 g
+                 ctx
+                 probe_fd
+                 target
+                 (is_tree_add key i buckets)
+                 (if (is_vec_eq key target) (Cons i solutions) solutions))))
+            (IsSweepErr (is_at "roundtrip" i "rank disagrees"))))))))))
+
+;; ---- canonical spelling -----------------------------------------------------
+
+(fn is_spell_names () (List Symbol)
+  (list
+    (quote ILoc)
+    (quote IConst)
+    (quote IBin)
+    (quote U8)
+    (quote U32)
+    (quote U64)
+    (quote IAdd)
+    (quote ISub)
+    (quote IMul)
+    (quote IDiv)
+    (quote IRem)
+    (quote IAnd)
+    (quote IOr)
+    (quote IXor)
+    (quote IShl)
+    (quote IShr)
+    (quote IEq)
+    (quote ILt)
+    (quote ILe)))
+
+(type IsTbl (IsTblErr (List Int)) (IsTblOk (List (Pair QName Symbol))))
+
+(fn is_spell_table ((m Module) (names (List Symbol))) IsTbl
+  (measure (struct names))
+  (match names
+    (Nil (IsTblOk Nil))
+    ((Cons name rest)
+     (match (ctor_qn m name)
+       (None
+         (IsTblErr (append_int "spell: missing imp ctor " (chars_of_sym name))))
+       ((Some q)
+        (match (is_spell_table m rest)
+          ((IsTblErr msg) (IsTblErr msg))
+          ((IsTblOk tbl) (IsTblOk (Cons (Pair q name) tbl)))))))))
+
+(type IsLines (IsLinesErr (List Int)) (IsLinesOk (List Int)))
+
+(fn is_best_line ((m Module) (root Expr) (g Grammar) (sols (List Int))) IsLines
+  (match sols
+    (Nil (IsLinesErr "no observational solution"))
+    ((Cons i _)
+     (match (sk_unrank root g i)
+       ((SkEErr msg) (IsLinesErr (is_at "solution unrank" i msg)))
+       ((SkEOk e)
+        (match (is_spell_table m (is_spell_names))
+          ((IsTblErr msg) (IsLinesErr msg))
+          ((IsTblOk tbl)
+           (match (sp_e tbl 0 e)
+             ((SpRErr msg) (IsLinesErr msg))
+             ((SpROk d)
+              (IsLinesOk
+                (append_int
+                  "BEST "
+                  (append_int
+                    (show_int i)
+                    (append_int " " (append_int (sp_bytes d) "\n"))))))))))))))
+
+;; ---- driver -----------------------------------------------------------------
+
+(fn is_run ((path (List Int)) (m Module) (cfg IsCfg) (w World)) World
+  (let ((ctx (prepare_invoke m)))
+    (match (find_fn (quote search_probe) m)
+      (None
+        (exit 1 (write "IMP-SEARCH FAIL missing/ambiguous search_probe\n" w)))
+      ((Some probe_fd)
+       (match (is_grammar m cfg)
+         ((IsGErr msg)
+          (exit
+            1
+            (write
+              (append_int "IMP-SEARCH FAIL grammar: " (append_int msg "\n"))
+              w)))
+         ((IsGOk ents _)
+          (let ((root (hole 0)) (g (Grammar ents)))
+            (match (sk_count root g)
+              ((SkCErr msg)
+               (exit
+                 1
+                 (write
+                   (append_int "IMP-SEARCH FAIL count: " (append_int msg "\n"))
+                   w)))
+              ((SkCOk total)
+               (match cfg
+                 ((IsCfg _ _ _ _ d target witness)
+                  (match
+                    (is_sweep total total root g ctx probe_fd target IsEmpty Nil)
+                    ((IsSweepErr msg)
+                     (exit
+                       1
+                       (write
+                         (append_int "IMP-SEARCH FAIL " (append_int msg "\n"))
+                         w)))
+                    ((IsSweepOk buckets sols)
+                     (match (sk_rank root g witness)
+                       ((SkCErr msg)
+                        (exit
+                          1
+                          (write
+                            (append_int
+                              "IMP-SEARCH FAIL witness rank: "
+                              (append_int msg "\n"))
+                            w)))
+                       ((SkCOk wi)
+                        (match (sk_unrank root g wi)
+                          ((SkEErr msg)
+                           (exit
+                             1
+                             (write
+                               (append_int
+                                 "IMP-SEARCH FAIL witness unrank: "
+                                 (append_int msg "\n"))
+                               w)))
+                          ((SkEOk w2)
+                           (if (expr_eq witness w2)
+                             (if (is_int_mem wi sols)
+                               (match (is_best_line m root g sols)
+                                 ((IsLinesErr msg)
+                                  (exit
+                                    1
+                                    (write
+                                      (append_int
+                                        "IMP-SEARCH FAIL "
+                                        (append_int msg "\n"))
+                                      w)))
+                                 ((IsLinesOk lines)
+                                  (write
+                                    (append_int
+                                      "IMP-SEARCH "
+                                      (append_int
+                                        path
+                                        (append_int
+                                          "\nDEPTH "
+                                          (append_int
+                                            (show_int d)
+                                            (append_int
+                                              "\nCOUNT "
+                                              (append_int
+                                                (show_int total)
+                                                (append_int
+                                                  "\nBEHAVIORS "
+                                                  (append_int
+                                                    (show_int
+                                                      (is_tree_len buckets))
+                                                    (append_int
+                                                      "\n"
+                                                      (append_int
+                                                        lines
+                                                        (append_int
+                                                          "SOLUTIONS "
+                                                          (append_int
+                                                            (show_int
+                                                              (is_ints_len sols))
+                                                            (append_int
+                                                              "\nWITNESS "
+                                                              (append_int
+                                                                (show_int wi)
+                                                                "\nGATES OK\n"))))))))))))))
+                                    w)))
+                               (exit
+                                 1
+                                 (write
+                                   "IMP-SEARCH FAIL witness is not a solution\n"
+                                   w)))
+                             (exit
+                               1
+                               (write
+                                 "IMP-SEARCH FAIL witness roundtrip disagrees\n"
+                                 w))))))))))))))))))))
+
+(fn main ((w World)) World
+  (match (get_args w)
+    ((Pair as w2)
+     (match as
+       ((Cons path Nil)
+        (match (load_run_module path w2)
+          ((Pair om w3)
+           (match om
+             (None (exit 1 (write "IMP-SEARCH FAIL task module load\n" w3)))
+             ((Some m)
+              (match (is_config m)
+                ((IsCErr msg)
+                 (exit
+                   1
+                   (write
+                     (append_int
+                       "IMP-SEARCH FAIL config: "
+                       (append_int msg "\n"))
+                     w3)))
+                ((IsCOk cfg) (is_run path m cfg w3))))))))
+       (_ (exit 2 (write "usage: imp_expr TASK.shard\n" w2)))))))

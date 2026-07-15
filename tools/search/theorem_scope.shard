@@ -1,0 +1,233 @@
+;;; tools/search/theorem_scope.shard — CHECKED, SCOPE-BOUND CANON LICENSES.
+;;;
+;;; Program search must not grow a second theorem namespace.  A requested
+;;; canonicalization rule is resolved through the same RCtx that controls the
+;;; candidate vocabulary, then joined to the kernel driver's accumulated
+;;; Theory by full QName.  The Goal is already parsed, resolved, typechecked,
+;;; and closed by the driver; its binder types and equation are therefore the
+;;; only rule payload exposed here.
+;;;
+;;; This layer deliberately does NOT turn every theorem in scope into a rule.
+;;; A caller supplies an ordered, reviewed profile of bare names.  It also does
+;;; not claim termination or confluence: those are properties of the whole
+;;; oriented profile and remain a separate ratification gate (CANON.md §6).
+;;; Premise-bearing goals are refused in v1 because applying one would require
+;;; a proof of the premise at every rewrite site.
+;;;
+;;; Theory records imported interface requirements as Axiom entries in a
+;;; consumer closure: they are upstream-proven contracts, admitted at that
+;;; boundary.  The closure's SrcEntry/Decl stream distinguishes their internal
+;;; `granted` kind from an upstream or authored axiom.  Capture preserves that
+;;; distinction and refuses every Axiom entry that is not a granted requirement.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/reader.shard")
+(import "../../kernel/proof.shard")
+(import "../../meta/rewrite")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel reader *))
+(use (:: kernel proof *))
+(use (:: meta rewrite *))
+
+(type TgLawEvidence (TgLawProven) (TgLawGrantedRequirement))
+
+;; The oriented equation is always left-to-right. Params retain the Goal's
+;; introduction order; BVars in lhs/rhs retain the kernel's locally-nameless
+;; convention (BVar 0 is the last Param).
+(type TgCanonLicense
+  (TgCanonLicense QName (List Param) Expr Expr TgLawEvidence))
+
+(type TgCanonProfileR
+  (TgCanonProfileErr Symbol (List Int))
+  (TgCanonProfileOk (List TgCanonLicense)))
+
+(type TgTheoryHit (TgTheoryProven Goal) (TgTheoryAxiom Goal))
+
+(fn tg_claim_qname_mem ((q QName) (items (List (Pair Symbol (List Symbol)))))
+  Bool
+  (measure (struct items))
+  (match items
+    (Nil False)
+    ((Cons (Pair name path) rest)
+     (if (qname_eq q (QName path name)) True (tg_claim_qname_mem q rest)))))
+
+;; Module's final field is exactly the resolver-visible item table for
+;; claim/requirement/axiom declarations.  Checking this before Theory lookup
+;; prevents an out-of-scope theory entry from being selected by spelling.
+(fn tg_claim_item ((m Module) (q QName)) Bool
+  (tg_claim_qname_mem q (module_claims m)))
+
+(fn tg_theory_find ((q QName) (th Theory)) (Option TgTheoryHit)
+  (measure (struct th))
+  (match th
+    ((TheoryEmpty) None)
+    ((TheoryCons entry rest)
+     (match entry
+       ((Proven eq eg)
+        (if (qname_eq q eq) (Some (TgTheoryProven eg)) (tg_theory_find q rest)))
+       ((Axiom eq eg)
+        (if (qname_eq q eq) (Some (TgTheoryAxiom eg)) (tg_theory_find q rest)))))))
+
+;; Recover the driver's internal axiom kind for one exact declaration.  Most
+;; importantly, collect_decls rewrites a requirement in a granted interface to
+;; DAxiom(kind=granted), while an interface's authored axiom becomes
+;; DAxiom(kind=upstream).  Theory's Axiom constructor alone cannot tell these
+;; apart, so canon capture must consult this stream as well.
+(fn tg_decl_axiom_kind ((name Symbol) (ds (List Decl))) (Option Symbol)
+  (measure (struct ds))
+  (match ds
+    (Nil None)
+    ((Cons d rest)
+     (match d
+       ((DAxiom a)
+        (if (sym_eq name (ax_name a)) (Some (ax_kind a))
+        (tg_decl_axiom_kind name rest)))
+       (_ (tg_decl_axiom_kind name rest))))))
+
+(fn tg_axiom_kind ((q QName) (ctors (List Symbol)) (srcs (List SrcEntry)))
+  (Option Symbol)
+  (measure (struct srcs))
+  (match srcs
+    (Nil None)
+    ((Cons (SrcEntry path granted src) rest)
+     (if (sym_path_eq (qn_mod q) (module_path_of path))
+       (match (parse_decls src ctors granted)
+         (None (tg_axiom_kind q ctors rest))
+         ((Some ds)
+          (match (tg_decl_axiom_kind (qn_name q) ds)
+            (None (tg_axiom_kind q ctors rest))
+            ((Some kind) (Some kind)))))
+       (tg_axiom_kind q ctors rest)))))
+
+(fn tg_license_q ((l TgCanonLicense)) QName
+  (match l
+    ((TgCanonLicense q _ _ _ _) q)))
+
+(fn tg_license_mem ((q QName) (ls (List TgCanonLicense))) Bool
+  (measure (struct ls))
+  (match ls
+    (Nil False)
+    ((Cons l rest)
+     (if (qname_eq q (tg_license_q l)) True (tg_license_mem q rest)))))
+
+(fn tg_license_snoc ((ls (List TgCanonLicense)) (l TgCanonLicense))
+  (List TgCanonLicense)
+  (measure (struct ls))
+  (match ls
+    (Nil (Cons l Nil))
+    ((Cons h rest) (Cons h (tg_license_snoc rest l)))))
+
+(type TgOneLicenseR
+  (TgOneLicenseErr (List Int))
+  (TgOneLicenseOk TgCanonLicense))
+
+(fn tg_license_goal ((q QName) (goal Goal) (evidence TgLawEvidence))
+  TgOneLicenseR
+  (match goal
+    ((Goal params premises (Equation lhs rhs))
+     (match premises
+       (Nil (TgOneLicenseOk (TgCanonLicense q params lhs rhs evidence)))
+       (_ (TgOneLicenseErr "premise-bearing theorem is not a v1 canon rule"))))))
+
+(fn tg_one_license ((m Module) (th Theory) (srcs (List SrcEntry)) (q QName))
+  TgOneLicenseR
+  (match (tg_theory_find q th)
+    (None
+      (TgOneLicenseErr "rule is in item scope but absent from checked Theory"))
+    ((Some hit)
+     (match hit
+       ((TgTheoryProven goal) (tg_license_goal q goal (TgLawProven)))
+       ((TgTheoryAxiom goal)
+        (match (tg_axiom_kind q (typedef_ctors (module_typedefs m)) srcs)
+          ((Some kind)
+           (if (sym_eq kind (quote granted))
+             (tg_license_goal q goal (TgLawGrantedRequirement))
+             (TgOneLicenseErr
+               "canon rules require a proven claim or granted requirement")))
+          (None
+            (TgOneLicenseErr
+              "canon rules require a proven claim or granted requirement"))))))))
+
+(fn tg_capture_canon_go
+  ((m Module)
+   (ctx RCtx)
+   (th Theory)
+   (srcs (List SrcEntry))
+   (names (List Symbol))
+   (acc (List TgCanonLicense)))
+  TgCanonProfileR
+  (measure (struct names))
+  (match names
+    (Nil (TgCanonProfileOk acc))
+    ((Cons name rest)
+     (let ((q (rhead (qn name) ctx)))
+       (if (tg_claim_item m q)
+         (if (tg_license_mem q acc)
+           (TgCanonProfileErr name "duplicate canon rule")
+           (match (tg_one_license m th srcs q)
+             ((TgOneLicenseErr msg) (TgCanonProfileErr name msg))
+             ((TgOneLicenseOk license)
+              (tg_capture_canon_go
+                m
+                ctx
+                th
+                srcs
+                rest
+                (tg_license_snoc acc license)))))
+         (TgCanonProfileErr name "canon rule is not a claim item in scope"))))))
+
+;; Capture an EXPLICIT ordered profile.  An empty profile is valid and applies
+;; no theorem quotient.  The output order is the requested orientation order.
+(fn tg_capture_canon
+  ((m Module)
+   (ctx RCtx)
+   (th Theory)
+   (srcs (List SrcEntry))
+   (names (List Symbol)))
+  TgCanonProfileR
+  (tg_capture_canon_go m ctx th srcs names Nil))
+
+;; ---- graduation join: checked licenses -> generic meta rewrite profile ----
+;;
+;; theorem_scope owns authenticity and scope; meta/rewrite owns only the
+;; proof-agnostic equation mechanism.  Compilation preserves profile order,
+;; binder types, full citation QName, and left-to-right orientation.  The meta
+;; validator then enforces its algebraic/left-linear v1 fragment.  Neither
+;; layer silently claims termination or confluence.
+
+(type TgCanonCompileR
+  (TgCanonCompileErr (List Int))
+  (TgCanonCompileOk TrsProfile))
+
+(type TgCanonRulesR
+  (TgCanonRulesErr (List Int))
+  (TgCanonRulesOk (List TrsRule)))
+
+(fn tg_param_types ((ps (List Param))) (List Type)
+  (measure (struct ps))
+  (match ps
+    (Nil Nil)
+    ((Cons (Param _ ty) rest) (Cons ty (tg_param_types rest)))))
+
+(fn tg_compile_rules ((licenses (List TgCanonLicense))) TgCanonRulesR
+  (measure (struct licenses))
+  (match licenses
+    (Nil (TgCanonRulesOk Nil))
+    ((Cons (TgCanonLicense q params lhs rhs _) rest)
+     (match (trs_rule q (tg_param_types params) lhs rhs)
+       ((TrsRuleErr msg) (TgCanonRulesErr msg))
+       ((TrsRuleOk rule)
+        (match (tg_compile_rules rest)
+          ((TgCanonRulesErr msg) (TgCanonRulesErr msg))
+          ((TgCanonRulesOk rules) (TgCanonRulesOk (Cons rule rules)))))))))
+
+(fn tg_compile_canon ((licenses (List TgCanonLicense))) TgCanonCompileR
+  (match (tg_compile_rules licenses)
+    ((TgCanonRulesErr msg) (TgCanonCompileErr msg))
+    ((TgCanonRulesOk rules)
+     (match (trs_profile rules)
+       ((TrsProfileErr msg) (TgCanonCompileErr msg))
+       ((TrsProfileOk profile) (TgCanonCompileOk profile))))))

@@ -76,6 +76,7 @@ TARGETS=(
   meta/shape/mod.req.shard
   meta/proof/mod.req.shard
   meta/forms/mod.req.shard
+  meta/rewrite/mod.req.shard
   tools/lowbuild/lowbuild.shard
 )
 # Argv selection: `./gate_sweep.sh FILE...` gates only those targets — the

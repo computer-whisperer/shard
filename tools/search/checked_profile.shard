@@ -1,0 +1,110 @@
+;;; checked_profile.shard — load an authentic theorem profile from a CHECK
+;;; closure.  This is the IO/driver shell around theorem_scope's pure join:
+;;;
+;;;   root path + explicit ordered names
+;;;     -> exact root RCtx × checked Theory × declaration provenance
+;;;     -> validated meta/rewrite TrsProfile
+;;;
+;;; Keeping closure loading here lets search/census applications share the
+;;; same profile-generation path without moving World or driver machinery into
+;;; meta/rewrite.  The requested names still resolve through the root file's
+;;; strict item scope; imports do not implicitly authorize theorem use.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/reader.shard")
+(import "../../kernel/proof.shard")
+(import "../../kernel/loader.shard")
+(import "../../kernel/driver.shard")
+(import "../../meta/rewrite")
+(import "theorem_scope.shard")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel reader *))
+(use (:: kernel proof *))
+(use (:: kernel loader *))
+(use (:: kernel driver *))
+(use (:: meta rewrite *))
+(use (:: tools search theorem_scope *))
+
+(type TgCheckedScope (TgCheckedScope Module RCtx Theory (List SrcEntry)))
+
+(type TgCheckedScopeR
+  (TgCheckedScopeErr (List Int))
+  (TgCheckedScopeOk TgCheckedScope))
+
+(type TgCheckedProfileR
+  (TgCheckedProfileErr (List Int))
+  (TgCheckedProfileOk TrsProfile))
+
+(fn tg_src_at ((path (List Int)) (srcs (List SrcEntry))) (Option SrcEntry)
+  (measure (struct srcs))
+  (match srcs
+    (Nil None)
+    ((Cons src rest)
+     (match src
+       ((SrcEntry src_path _ _)
+        (if (int_list_eq path src_path) (Some src) (tg_src_at path rest)))))))
+
+(fn tg_scope_from_module
+  ((path (List Int))
+   (m Module)
+   (srcs (List SrcEntry))
+   (sidecars (List (Pair Symbol (List Int)))))
+  TgCheckedScopeR
+  (match
+    (run_srcs
+      m
+      srcs
+      (module_ctors m)
+      sidecars
+      (RunState TheoryEmpty Nil Nil Nil)
+      (quote __no_trace__)
+      (quote __all__)
+      1)
+    ((RunState th _ _ _)
+     (match (tg_src_at path srcs)
+       (None
+         (TgCheckedScopeErr "checked profile: root source absent from closure"))
+       ((Some (SrcEntry src_path _ src))
+        (TgCheckedScopeOk (TgCheckedScope m (file_rctx m src_path src) th srcs)))))))
+
+(fn tg_load_checked_scope ((path (List Int)) (w World))
+  (Pair TgCheckedScopeR World)
+  (match (resolve_closure path False w)
+    ((Pair srcs w1)
+     (match srcs
+       (Nil (Pair (TgCheckedScopeErr "checked profile: empty closure") w1))
+       (_
+         (match (read_sidecars srcs w1)
+           ((Pair sidecars w2)
+            (match
+              (build_module_d
+                srcs
+                (Module Nil Nil Nil (FnTrie None Nil) Nil)
+                (prelude_ctors)
+                1)
+              ((BMFail msg) (Pair (TgCheckedScopeErr msg) w2))
+              ((BMOk m) (Pair (tg_scope_from_module path m srcs sidecars) w2))))))))))
+
+(fn tg_checked_profile ((scope TgCheckedScope) (names (List Symbol)))
+  TgCheckedProfileR
+  (match scope
+    ((TgCheckedScope m ctx th srcs)
+     (match (tg_capture_canon m ctx th srcs names)
+       ((TgCanonProfileErr name msg)
+        (TgCheckedProfileErr
+          (append_int (chars_of_sym name) (append_int ": " msg))))
+       ((TgCanonProfileOk licenses)
+        (match (tg_compile_canon licenses)
+          ((TgCanonCompileErr msg) (TgCheckedProfileErr msg))
+          ((TgCanonCompileOk profile) (TgCheckedProfileOk profile))))))))
+
+(fn tg_load_checked_profile ((path (List Int)) (names (List Symbol)) (w World))
+  (Pair TgCheckedProfileR World)
+  (match (tg_load_checked_scope path w)
+    ((Pair scope_result w2)
+     (match scope_result
+       ((TgCheckedScopeErr msg) (Pair (TgCheckedProfileErr msg) w2))
+       ((TgCheckedScopeOk scope) (Pair (tg_checked_profile scope names) w2))))))

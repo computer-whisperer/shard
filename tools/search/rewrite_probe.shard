@@ -1,0 +1,148 @@
+;;; Ground regression for meta/rewrite's reusable first-order TRS.  Search and
+;;; theorem_scope are deliberately absent: this proves the graduated component
+;;; stands alone as meta vocabulary.  It pins validation, ordered preorder
+;;; rewriting below a Match binder, exact formation projection, normal forms,
+;;; and honest fuel exhaustion.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/loader.shard")
+(import "../../meta/rewrite")
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel loader *))
+(use (:: meta rewrite *))
+
+(fn mrp_ty () Type (TCon (qn (quote Int)) Nil))
+
+(fn mrp_q ((name Symbol)) QName
+  (QName (list (quote tools) (quote search) (quote rewrite_probe)) name))
+
+(fn mrp_fail ((msg (List Int)) (w World)) World
+  (exit
+    1
+    (write (append_int "META-REWRITE-PROBE FAIL " (append_int msg "\n")) w)))
+
+(fn mrp_rule ((name Symbol) (from Symbol) (to Symbol)) TrsRuleR
+  (trs_rule
+    (mrp_q name)
+    (Cons (mrp_ty) Nil)
+    (Call (mrp_q from) (Cons (BVar 0) Nil))
+    (Call (mrp_q to) (Cons (BVar 0) Nil))))
+
+(fn mrp_duplicate ((w World)) World
+  (match (mrp_rule (quote duplicate) (quote f) (quote g))
+    ((TrsRuleErr msg) (mrp_fail msg w))
+    ((TrsRuleOk rule)
+     (match (trs_profile (Cons rule (Cons rule Nil)))
+       ((TrsProfileOk _) (mrp_fail "duplicate profile name admitted" w))
+       ((TrsProfileErr _)
+        (write
+          "META-REWRITE-PROBE VALIDATED FORMATION PREORDER BINDER-SAFE NF2 FUEL-OUT OK\n"
+          w))))))
+
+(fn mrp_nonseparable ((w World)) World
+  (match
+    (trs_rule
+      (mrp_q (quote conjunctive))
+      (list (mrp_ty) (mrp_ty))
+      (Call
+        (mrp_q (quote pair))
+        (list
+          (Call (mrp_q (quote f)) (Cons (BVar 1) Nil))
+          (Call (mrp_q (quote g)) (Cons (BVar 0) Nil))))
+      (BVar 0))
+    ((TrsRuleErr msg) (mrp_fail msg w))
+    ((TrsRuleOk rule)
+     (match (trs_profile (Cons rule Nil))
+       ((TrsProfileErr msg) (mrp_fail msg w))
+       ((TrsProfileOk profile)
+        (match (trs_formation profile)
+          ((TrsFormationOk _)
+           (mrp_fail "conjunctive formation rule admitted" w))
+          ((TrsFormationErr _) (mrp_duplicate w))))))))
+
+(fn mrp_invalid ((w World)) World
+  (match
+    (trs_rule
+      (mrp_q (quote nonlinear))
+      (Cons (mrp_ty) Nil)
+      (Call (mrp_q (quote pair)) (Cons (BVar 0) (Cons (BVar 0) Nil)))
+      (BVar 0))
+    ((TrsRuleOk _) (mrp_fail "nonlinear lhs admitted" w))
+    ((TrsRuleErr _)
+     (match
+       (trs_rule
+         (mrp_q (quote unbound))
+         (Cons (mrp_ty) (Cons (mrp_ty) Nil))
+         (Call (mrp_q (quote f)) (Cons (BVar 0) Nil))
+         (BVar 1))
+       ((TrsRuleOk _) (mrp_fail "rhs-only variable admitted" w))
+       ((TrsRuleErr _) (mrp_nonseparable w))))))
+
+(fn mrp_formation_ok ((profile TrsProfile)) Bool
+  (match (trs_formation profile)
+    ((TrsFormationErr _) False)
+    ((TrsFormationOk formation)
+     (if (trs_forbids_root formation (TrsCallShape (mrp_q (quote f)) 1))
+       (trs_forbids_root formation (TrsCallShape (mrp_q (quote g)) 1))
+       False))))
+
+(fn mrp_cycle ((rfg TrsRule) (rgf TrsRule) (w World)) World
+  (match (trs_profile (Cons rfg (Cons rgf Nil)))
+    ((TrsProfileErr msg) (mrp_fail msg w))
+    ((TrsProfileOk profile)
+     (let ((start (Call (mrp_q (quote f)) (Cons (IntLit 7) Nil))))
+       (match (trs_nf 2 profile start)
+         ((TrsNfErr msg) (mrp_fail msg w))
+         ((TrsNfOk _ _) (mrp_fail "cycle reported normal" w))
+         ((TrsNfOut out steps)
+          (if (expr_eq out start)
+            (if (int_eq steps 2) (mrp_invalid w)
+            (mrp_fail "cycle step count" w))
+            (mrp_fail "cycle residual" w))))))))
+
+(fn mrp_normal ((rfg TrsRule) (rgh TrsRule) (w World)) World
+  (match (trs_profile (Cons rfg (Cons rgh Nil)))
+    ((TrsProfileErr msg) (mrp_fail msg w))
+    ((TrsProfileOk profile)
+     (if (mrp_formation_ok profile)
+       (let
+         ((subject
+            (Match
+              (BVar 0)
+              (Cons
+                (Arm (PVar) (Call (mrp_q (quote f)) (Cons (BVar 0) Nil)))
+                Nil)))
+          (expected
+            (Match
+              (BVar 0)
+              (Cons
+                (Arm (PVar) (Call (mrp_q (quote h)) (Cons (BVar 0) Nil)))
+                Nil))))
+         (match (trs_nf 8 profile subject)
+           ((TrsNfErr msg) (mrp_fail msg w))
+           ((TrsNfOut _ _) (mrp_fail "normalizing profile exhausted" w))
+           ((TrsNfOk out steps)
+            (if (expr_eq out expected)
+              (if (int_eq steps 2)
+                (match (trs_normal profile out)
+                  ((TrsNormalErr msg) (mrp_fail msg w))
+                  ((TrsNormalOk normal)
+                   (if normal
+                     (match (mrp_rule (quote gf) (quote g) (quote f))
+                       ((TrsRuleErr msg) (mrp_fail msg w))
+                       ((TrsRuleOk rgf) (mrp_cycle rfg rgf w)))
+                     (mrp_fail "normal-form predicate" w))))
+                (mrp_fail "normal-form step count" w))
+              (mrp_fail "binder rewrite result" w)))))
+       (mrp_fail "formation projection" w)))))
+
+(fn main ((w World)) World
+  (match (mrp_rule (quote fg) (quote f) (quote g))
+    ((TrsRuleErr msg) (mrp_fail msg w))
+    ((TrsRuleOk rfg)
+     (match (mrp_rule (quote gh) (quote g) (quote h))
+       ((TrsRuleErr msg) (mrp_fail msg w))
+       ((TrsRuleOk rgh) (mrp_normal rfg rgh w))))))

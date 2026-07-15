@@ -1,0 +1,684 @@
+;;; meta/rewrite — ORDERED FIRST-ORDER REWRITE PROFILES over kernel Expr.
+;;;
+;;; This is the reusable mechanism below theorem-guided canon, partial
+;;; evaluation, synthesis pruning, and source-to-source compilation.  It knows
+;;; how to validate and apply equations; it deliberately does NOT decide that
+;;; an equation is true or that an orientation is canonical.  Those are the
+;;; caller's proof/provenance and profile-ratification responsibilities.
+;;;
+;;; A rule carries its citation QName, typed parameter list, and oriented
+;;; lhs/rhs.  Goal parameters remain locally nameless: BVar k in a rule is a
+;;; metavariable, while a BVar captured from the subject is ordinary syntax.
+;;; V1 is the premise-free algebraic fragment: Ctor/Call/If/literals and
+;;; parameter BVars; Match/Let/FVar are refused in rules.  LHSs are rooted and
+;;; left-linear, and every RHS variable must occur on the LHS.  These guards
+;;; make matching deterministic and replacement capture-safe even below
+;;; subject binders.
+;;; Parameter types are retained for typed consumers, audits, and downstream
+;;; grammar products.  This structural engine does not infer a subject's type;
+;;; callers must supply already-checked terms when type preservation matters.
+;;;
+;;; Profiles are ordered.  `trs_step` uses the first rule at the first
+;;; preorder site and never enters a replacement during the same step.
+;;; `trs_nf` repeats that operation behind explicit fuel, returning Out rather
+;;; than pretending termination.  Confluence, termination, and choice of
+;;; orientation remain visible profile-level gates.
+;;;
+;;; `trs_formation` projects the exact separable LHS fragment used by
+;;; quotient-first typed grammars: a rule may forbid its whole root or one
+;;; shallow child-root shape.  Deep or conjunctive discriminators are refused
+;;; rather than approximated; they require a full regular-tree product.
+;;;
+;;; Pure vocabulary: every definition is transparent; rewrite.shard is the
+;;; run-mode stub.  The component graduated once checked theorem capture made
+;;; a proof-producing consumer boundary concrete.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(use (:: kernel term *))
+(use (:: kernel module Type))
+
+;; ---- rule/profile values ----------------------------------------------------
+
+(type TrsRule (TrsRule QName (List Type) Expr Expr))
+
+(type TrsRuleR (TrsRuleErr (List Int)) (TrsRuleOk TrsRule))
+
+(type TrsProfile (TrsProfile (List TrsRule)))
+
+(type TrsProfileR (TrsProfileErr (List Int)) (TrsProfileOk TrsProfile))
+
+(fn trs_rule_name ((r TrsRule)) QName
+  (match r
+    ((TrsRule q _ _ _) q)))
+
+(fn trs_rule_types ((r TrsRule)) (List Type)
+  (match r
+    ((TrsRule _ ts _ _) ts)))
+
+(fn trs_rule_lhs ((r TrsRule)) Expr
+  (match r
+    ((TrsRule _ _ lhs _) lhs)))
+
+(fn trs_rule_rhs ((r TrsRule)) Expr
+  (match r
+    ((TrsRule _ _ _ rhs) rhs)))
+
+(fn trs_profile_rules ((p TrsProfile)) (List TrsRule)
+  (match p
+    ((TrsProfile rs) rs)))
+
+(fn trs_len_types ((ts (List Type))) Int
+  (measure (struct ts))
+  (match ts
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (trs_len_types rest)))))
+
+(fn trs_int_mem ((x Int) (xs (List Int))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil False)
+    ((Cons h rest) (if (int_eq x h) True (trs_int_mem x rest)))))
+
+;; ---- rule validation --------------------------------------------------------
+
+(type TrsVarsR (TrsVarsErr (List Int)) (TrsVarsOk (List Int)))
+
+;; LHS scan: collect parameter indices, refusing nonlinear or non-algebraic
+;; patterns. `seen` order is immaterial; it is only a deterministic set.
+(fn trs_lhs_vars ((e Expr) (arity Int) (seen (List Int))) TrsVarsR
+  (measure (struct e))
+  (match e
+    ((FVar _) (TrsVarsErr "rewrite lhs cannot contain FVar"))
+    ((BVar k)
+     (if (lt k 0) (TrsVarsErr "negative rewrite parameter index")
+     (if (le arity k) (TrsVarsErr "rewrite parameter index out of range")
+     (if (trs_int_mem k seen) (TrsVarsErr "rewrite lhs is not left-linear")
+     (TrsVarsOk (Cons k seen))))))
+    ((Ctor _ args) (trs_lhs_vars_list args arity seen))
+    ((Call _ args) (trs_lhs_vars_list args arity seen))
+    ((If c t e2)
+     (match (trs_lhs_vars c arity seen)
+       ((TrsVarsErr msg) (TrsVarsErr msg))
+       ((TrsVarsOk s1)
+        (match (trs_lhs_vars t arity s1)
+          ((TrsVarsErr msg) (TrsVarsErr msg))
+          ((TrsVarsOk s2) (trs_lhs_vars e2 arity s2))))))
+    ((Match _ _) (TrsVarsErr "rewrite lhs cannot contain Match"))
+    ((Let _ _) (TrsVarsErr "rewrite lhs cannot contain Let"))
+    ((IntLit _) (TrsVarsOk seen))
+    ((SymLit _) (TrsVarsOk seen))))
+
+(fn trs_lhs_vars_list ((es (List Expr)) (arity Int) (seen (List Int))) TrsVarsR
+  (measure (struct es))
+  (match es
+    (Nil (TrsVarsOk seen))
+    ((Cons e rest)
+     (match (trs_lhs_vars e arity seen)
+       ((TrsVarsErr msg) (TrsVarsErr msg))
+       ((TrsVarsOk s2) (trs_lhs_vars_list rest arity s2))))))
+
+;; RHS scan: variables may repeat, but must be in range and bound by the LHS.
+(fn trs_rhs_vars ((e Expr) (arity Int) (lhsvars (List Int))) TrsVarsR
+  (measure (struct e))
+  (match e
+    ((FVar _) (TrsVarsErr "rewrite rhs cannot contain FVar"))
+    ((BVar k)
+     (if (lt k 0) (TrsVarsErr "negative rewrite parameter index")
+     (if (le arity k) (TrsVarsErr "rewrite parameter index out of range")
+     (if (trs_int_mem k lhsvars) (TrsVarsOk lhsvars)
+     (TrsVarsErr "rewrite rhs variable is absent from lhs")))))
+    ((Ctor _ args) (trs_rhs_vars_list args arity lhsvars))
+    ((Call _ args) (trs_rhs_vars_list args arity lhsvars))
+    ((If c t e2)
+     (match (trs_rhs_vars c arity lhsvars)
+       ((TrsVarsErr msg) (TrsVarsErr msg))
+       ((TrsVarsOk _)
+        (match (trs_rhs_vars t arity lhsvars)
+          ((TrsVarsErr msg) (TrsVarsErr msg))
+          ((TrsVarsOk _) (trs_rhs_vars e2 arity lhsvars))))))
+    ((Match _ _) (TrsVarsErr "rewrite rhs cannot contain Match"))
+    ((Let _ _) (TrsVarsErr "rewrite rhs cannot contain Let"))
+    ((IntLit _) (TrsVarsOk lhsvars))
+    ((SymLit _) (TrsVarsOk lhsvars))))
+
+(fn trs_rhs_vars_list ((es (List Expr)) (arity Int) (lhsvars (List Int)))
+  TrsVarsR
+  (measure (struct es))
+  (match es
+    (Nil (TrsVarsOk lhsvars))
+    ((Cons e rest)
+     (match (trs_rhs_vars e arity lhsvars)
+       ((TrsVarsErr msg) (TrsVarsErr msg))
+       ((TrsVarsOk _) (trs_rhs_vars_list rest arity lhsvars))))))
+
+(fn trs_rooted ((e Expr)) Bool
+  (match e
+    ((BVar _) False)
+    ((FVar _) False)
+    ((Match _ _) False)
+    ((Let _ _) False)
+    (_ True)))
+
+(fn trs_rule ((name QName) (types (List Type)) (lhs Expr) (rhs Expr)) TrsRuleR
+  (let ((arity (trs_len_types types)))
+    (if (trs_rooted lhs)
+      (if (expr_eq lhs rhs) (TrsRuleErr "rewrite rule is reflexive")
+      (match (trs_lhs_vars lhs arity Nil)
+        ((TrsVarsErr msg) (TrsRuleErr msg))
+        ((TrsVarsOk lhsvars)
+         (match (trs_rhs_vars rhs arity lhsvars)
+           ((TrsVarsErr msg) (TrsRuleErr msg))
+           ((TrsVarsOk _) (TrsRuleOk (TrsRule name types lhs rhs)))))))
+      (TrsRuleErr "rewrite lhs must have a nonbinding root"))))
+
+(fn trs_rule_name_mem ((q QName) (rs (List TrsRule))) Bool
+  (measure (struct rs))
+  (match rs
+    (Nil False)
+    ((Cons r rest)
+     (if (qname_eq q (trs_rule_name r)) True (trs_rule_name_mem q rest)))))
+
+(fn trs_profile_go ((pending (List TrsRule)) (seen (List TrsRule))) TrsProfileR
+  (measure (struct pending))
+  (match pending
+    (Nil (TrsProfileOk (TrsProfile (trs_rules_reverse seen Nil))))
+    ((Cons r rest)
+     (if (trs_rule_name_mem (trs_rule_name r) seen)
+       (TrsProfileErr "duplicate rewrite rule name")
+       (trs_profile_go rest (Cons r seen))))))
+
+(fn trs_rules_reverse ((rs (List TrsRule)) (acc (List TrsRule))) (List TrsRule)
+  (measure (struct rs))
+  (match rs
+    (Nil acc)
+    ((Cons r rest) (trs_rules_reverse rest (Cons r acc)))))
+
+(fn trs_profile ((rules (List TrsRule))) TrsProfileR (trs_profile_go rules Nil))
+
+;; ---- exact separable formation projection ----------------------------------
+;;
+;; The first quotient-first consumer is a typed grammar.  A useful exact
+;; fragment can be projected without embedding a particular grammar or ISA:
+;;
+;;   f x y          -> ...   forbids the whole root f
+;;   f (g a b) y    -> ...   forbids root g at f's argument 0
+;;
+;; The discriminator must be shallow (all of its children are rule
+;; metavariables), and a rule may have at most one discriminator.  Two
+;; discriminators describe a conjunction; independently forbidding both would
+;; over-prune, so that case is refused until a full tree-automaton product is
+;; available.  Root shapes retain arity so this projection is exact even over
+;; untyped or malformed Expr producers.
+
+(type TrsShape
+  (TrsCtorShape QName Int)
+  (TrsCallShape QName Int)
+  (TrsIfShape)
+  (TrsIntShape Int)
+  (TrsSymShape Symbol))
+
+(fn trs_expr_len ((es (List Expr))) Int
+  (measure (struct es))
+  (match es
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (trs_expr_len rest)))))
+
+(fn trs_shape_eq ((a TrsShape) (b TrsShape)) Bool
+  (match a
+    ((TrsCtorShape aq an)
+     (match b
+       ((TrsCtorShape bq bn) (if (qname_eq aq bq) (int_eq an bn) False))
+       (_ False)))
+    ((TrsCallShape aq an)
+     (match b
+       ((TrsCallShape bq bn) (if (qname_eq aq bq) (int_eq an bn) False))
+       (_ False)))
+    ((TrsIfShape)
+     (match b
+       ((TrsIfShape) True)
+       (_ False)))
+    ((TrsIntShape n)
+     (match b
+       ((TrsIntShape m) (int_eq n m))
+       (_ False)))
+    ((TrsSymShape s)
+     (match b
+       ((TrsSymShape t) (sym_eq s t))
+       (_ False)))))
+
+(fn trs_shape_mem ((shape TrsShape) (shapes (List TrsShape))) Bool
+  (measure (struct shapes))
+  (match shapes
+    (Nil False)
+    ((Cons head rest)
+     (if (trs_shape_eq shape head) True (trs_shape_mem shape rest)))))
+
+(fn trs_shape_add ((shape TrsShape) (shapes (List TrsShape))) (List TrsShape)
+  (if (trs_shape_mem shape shapes) shapes (Cons shape shapes)))
+
+(fn trs_expr_shape ((e Expr)) (Option TrsShape)
+  (match e
+    ((Ctor q args) (Some (TrsCtorShape q (trs_expr_len args))))
+    ((Call q args) (Some (TrsCallShape q (trs_expr_len args))))
+    ((If _ _ _) (Some (TrsIfShape)))
+    ((IntLit n) (Some (TrsIntShape n)))
+    ((SymLit s) (Some (TrsSymShape s)))
+    (_ None)))
+
+(fn trs_all_bvars ((es (List Expr))) Bool
+  (measure (struct es))
+  (match es
+    (Nil True)
+    ((Cons e rest)
+     (match e
+       ((BVar _) (trs_all_bvars rest))
+       (_ False)))))
+
+;; A shallow discriminator denotes exactly one root shape: its arguments are
+;; unconstrained metavariables.  Literals and nullary heads qualify directly.
+(fn trs_discriminator_shape ((e Expr)) (Option TrsShape)
+  (match e
+    ((Ctor _ args) (if (trs_all_bvars args) (trs_expr_shape e) None))
+    ((Call _ args) (if (trs_all_bvars args) (trs_expr_shape e) None))
+    ((If c t e2) (if (trs_all_bvars (list c t e2)) (trs_expr_shape e) None))
+    ((IntLit _) (trs_expr_shape e))
+    ((SymLit _) (trs_expr_shape e))
+    (_ None)))
+
+(fn trs_lhs_children ((e Expr)) (List Expr)
+  (match e
+    ((Ctor _ args) args)
+    ((Call _ args) args)
+    ((If c t e2) (list c t e2))
+    (_ Nil)))
+
+(type TrsDiscR (TrsDiscErr (List Int)) (TrsDiscOk (Option (Pair Int TrsShape))))
+
+(fn trs_discriminator
+  ((args (List Expr)) (index Int) (found (Option (Pair Int TrsShape))))
+  TrsDiscR
+  (measure (struct args))
+  (match args
+    (Nil (TrsDiscOk found))
+    ((Cons arg rest)
+     (match arg
+       ((BVar _) (trs_discriminator rest (+ index 1) found))
+       (_
+         (match (trs_discriminator_shape arg)
+           (None
+             (TrsDiscErr
+               "formation discriminator must be a shallow rooted pattern"))
+           ((Some shape)
+            (match found
+              (None
+                (trs_discriminator rest (+ index 1) (Some (Pair index shape))))
+              ((Some _)
+               (TrsDiscErr
+                 "formation rule has multiple conjunctive discriminators"))))))))))
+
+(type TrsFormClause
+  (TrsForbidRoot QName TrsShape)
+  (TrsForbidArg QName TrsShape Int TrsShape))
+
+(type TrsFormation (TrsFormation (List TrsFormClause)))
+
+(type TrsFormationR (TrsFormationErr (List Int)) (TrsFormationOk TrsFormation))
+
+(type TrsFormOneR (TrsFormOneErr (List Int)) (TrsFormOneOk TrsFormClause))
+
+(fn trs_formation_rule ((rule TrsRule)) TrsFormOneR
+  (match rule
+    ((TrsRule name types lhs rhs)
+     ;; Revalidate because data constructors are transparent meta vocabulary.
+     (match (trs_rule name types lhs rhs)
+       ((TrsRuleErr msg) (TrsFormOneErr msg))
+       ((TrsRuleOk _)
+        (match (trs_expr_shape lhs)
+          (None (TrsFormOneErr "formation rule has unsupported lhs root"))
+          ((Some root)
+           (match (trs_discriminator (trs_lhs_children lhs) 0 None)
+             ((TrsDiscErr msg) (TrsFormOneErr msg))
+             ((TrsDiscOk disc)
+              (match disc
+                (None (TrsFormOneOk (TrsForbidRoot name root)))
+                ((Some (Pair index child))
+                 (TrsFormOneOk (TrsForbidArg name root index child)))))))))))))
+
+(fn trs_form_reverse ((clauses (List TrsFormClause)) (acc (List TrsFormClause)))
+  (List TrsFormClause)
+  (measure (struct clauses))
+  (match clauses
+    (Nil acc)
+    ((Cons clause rest) (trs_form_reverse rest (Cons clause acc)))))
+
+(fn trs_formation_go ((rules (List TrsRule)) (rev_clauses (List TrsFormClause)))
+  TrsFormationR
+  (measure (struct rules))
+  (match rules
+    (Nil (TrsFormationOk (TrsFormation (trs_form_reverse rev_clauses Nil))))
+    ((Cons rule rest)
+     (match (trs_formation_rule rule)
+       ((TrsFormOneErr msg) (TrsFormationErr msg))
+       ((TrsFormOneOk clause) (trs_formation_go rest (Cons clause rev_clauses)))))))
+
+(fn trs_formation ((profile TrsProfile)) TrsFormationR
+  (match profile
+    ((TrsProfile rules)
+     ;; Revalidate profile identity/order as well as each individual rule.
+     (match (trs_profile rules)
+       ((TrsProfileErr msg) (TrsFormationErr msg))
+       ((TrsProfileOk _) (trs_formation_go rules Nil))))))
+
+(fn trs_empty_formation () TrsFormation (TrsFormation Nil))
+
+(fn trs_formation_is_empty ((formation TrsFormation)) Bool
+  (match formation
+    ((TrsFormation clauses)
+     (match clauses
+       (Nil True)
+       ((Cons _ _) False)))))
+
+(fn trs_formation_clauses ((formation TrsFormation)) (List TrsFormClause)
+  (match formation
+    ((TrsFormation clauses) clauses)))
+
+(fn trs_forbids_root_go ((clauses (List TrsFormClause)) (root TrsShape)) Bool
+  (measure (struct clauses))
+  (match clauses
+    (Nil False)
+    ((Cons clause rest)
+     (match clause
+       ((TrsForbidRoot _ shape)
+        (if (trs_shape_eq root shape) True (trs_forbids_root_go rest root)))
+       ((TrsForbidArg _ _ _ _) (trs_forbids_root_go rest root))))))
+
+(fn trs_forbids_root ((formation TrsFormation) (root TrsShape)) Bool
+  (match formation
+    ((TrsFormation clauses) (trs_forbids_root_go clauses root))))
+
+(fn trs_arg_forbids_go
+  ((clauses (List TrsFormClause))
+   (root TrsShape)
+   (index Int)
+   (acc (List TrsShape)))
+  (List TrsShape)
+  (measure (struct clauses))
+  (match clauses
+    (Nil acc)
+    ((Cons clause rest)
+     (match clause
+       ((TrsForbidRoot _ _) (trs_arg_forbids_go rest root index acc))
+       ((TrsForbidArg _ parent arg child)
+        (trs_arg_forbids_go
+          rest
+          root
+          index
+          (if (trs_shape_eq root parent)
+            (if (int_eq index arg) (trs_shape_add child acc) acc)
+            acc)))))))
+
+(fn trs_arg_forbids ((formation TrsFormation) (root TrsShape) (index Int))
+  (List TrsShape)
+  (match formation
+    ((TrsFormation clauses) (trs_arg_forbids_go clauses root index Nil))))
+
+;; ---- structural matching and instantiation ---------------------------------
+
+(type TrsEnv (TrsEmpty) (TrsBind Int Expr TrsEnv))
+
+(fn trs_env_get ((k Int) (env TrsEnv)) (Option Expr)
+  (measure (struct env))
+  (match env
+    ((TrsEmpty) None)
+    ((TrsBind j v rest) (if (int_eq k j) (Some v) (trs_env_get k rest)))))
+
+(fn trs_match ((pat Expr) (cand Expr) (env TrsEnv)) (Option TrsEnv)
+  (measure (struct pat))
+  (match pat
+    ((FVar x)
+     (match cand
+       ((FVar y) (if (sym_eq x y) (Some env) None))
+       (_ None)))
+    ((BVar k)
+     (match (trs_env_get k env)
+       (None (Some (TrsBind k cand env)))
+       ((Some prior) (if (expr_eq prior cand) (Some env) None))))
+    ((Ctor q args)
+     (match cand
+       ((Ctor q2 args2)
+        (if (qname_eq q q2) (trs_match_list args args2 env) None))
+       (_ None)))
+    ((Call q args)
+     (match cand
+       ((Call q2 args2)
+        (if (qname_eq q q2) (trs_match_list args args2 env) None))
+       (_ None)))
+    ((If c t e2)
+     (match cand
+       ((If c2 t2 e3)
+        (match (trs_match c c2 env)
+          (None None)
+          ((Some e1)
+           (match (trs_match t t2 e1)
+             (None None)
+             ((Some e4) (trs_match e2 e3 e4))))))
+       (_ None)))
+    ((Match _ _) None)
+    ((Let _ _) None)
+    ((IntLit n)
+     (match cand
+       ((IntLit m) (if (int_eq n m) (Some env) None))
+       (_ None)))
+    ((SymLit s)
+     (match cand
+       ((SymLit t) (if (sym_eq s t) (Some env) None))
+       (_ None)))))
+
+(fn trs_match_list ((ps (List Expr)) (cs (List Expr)) (env TrsEnv))
+  (Option TrsEnv)
+  (measure (struct ps))
+  (match ps
+    (Nil
+      (match cs
+        (Nil (Some env))
+        (_ None)))
+    ((Cons p prest)
+     (match cs
+       (Nil None)
+       ((Cons c crest)
+        (match (trs_match p c env)
+          (None None)
+          ((Some env2) (trs_match_list prest crest env2))))))))
+
+(type TrsInstR (TrsInstErr (List Int)) (TrsInstOk Expr))
+
+(type TrsInstListR (TrsInstListErr (List Int)) (TrsInstListOk (List Expr)))
+
+(fn trs_inst ((tmpl Expr) (env TrsEnv)) TrsInstR
+  (measure (struct tmpl))
+  (match tmpl
+    ((FVar _) (TrsInstErr "rewrite replacement contains FVar"))
+    ((BVar k)
+     (match (trs_env_get k env)
+       (None (TrsInstErr "rewrite replacement variable is unbound"))
+       ((Some v) (TrsInstOk v))))
+    ((Ctor q args)
+     (match (trs_inst_list args env)
+       ((TrsInstListErr msg) (TrsInstErr msg))
+       ((TrsInstListOk args2) (TrsInstOk (Ctor q args2)))))
+    ((Call q args)
+     (match (trs_inst_list args env)
+       ((TrsInstListErr msg) (TrsInstErr msg))
+       ((TrsInstListOk args2) (TrsInstOk (Call q args2)))))
+    ((If c t e2)
+     (match (trs_inst c env)
+       ((TrsInstErr msg) (TrsInstErr msg))
+       ((TrsInstOk c2)
+        (match (trs_inst t env)
+          ((TrsInstErr msg) (TrsInstErr msg))
+          ((TrsInstOk t2)
+           (match (trs_inst e2 env)
+             ((TrsInstErr msg) (TrsInstErr msg))
+             ((TrsInstOk e3) (TrsInstOk (If c2 t2 e3)))))))))
+    ((Match _ _) (TrsInstErr "rewrite replacement contains Match"))
+    ((Let _ _) (TrsInstErr "rewrite replacement contains Let"))
+    ((IntLit n) (TrsInstOk (IntLit n)))
+    ((SymLit s) (TrsInstOk (SymLit s)))))
+
+(fn trs_inst_list ((es (List Expr)) (env TrsEnv)) TrsInstListR
+  (measure (struct es))
+  (match es
+    (Nil (TrsInstListOk Nil))
+    ((Cons e rest)
+     (match (trs_inst e env)
+       ((TrsInstErr msg) (TrsInstListErr msg))
+       ((TrsInstOk e2)
+        (match (trs_inst_list rest env)
+          ((TrsInstListErr msg) (TrsInstListErr msg))
+          ((TrsInstListOk rest2) (TrsInstListOk (Cons e2 rest2)))))))))
+
+;; ---- ordered root application ----------------------------------------------
+
+(type TrsRootR (TrsRootErr (List Int)) (TrsRootNo) (TrsRootYes QName Expr))
+
+(fn trs_apply_rule ((r TrsRule) (e Expr)) TrsRootR
+  (match r
+    ((TrsRule name _ lhs rhs)
+     (match (trs_match lhs e (TrsEmpty))
+       (None (TrsRootNo))
+       ((Some env)
+        (match (trs_inst rhs env)
+          ((TrsInstErr msg) (TrsRootErr msg))
+          ((TrsInstOk e2) (TrsRootYes name e2))))))))
+
+(fn trs_root_rules ((rules (List TrsRule)) (e Expr)) TrsRootR
+  (measure (struct rules))
+  (match rules
+    (Nil (TrsRootNo))
+    ((Cons r rest)
+     (match (trs_apply_rule r e)
+       ((TrsRootErr msg) (TrsRootErr msg))
+       ((TrsRootNo) (trs_root_rules rest e))
+       ((TrsRootYes name e2) (TrsRootYes name e2))))))
+
+(fn trs_root ((profile TrsProfile) (e Expr)) TrsRootR
+  (trs_root_rules (trs_profile_rules profile) e))
+
+;; ---- one preorder rewrite ---------------------------------------------------
+
+(type TrsStepR (TrsStepErr (List Int)) (TrsStepNo) (TrsStepYes QName Expr))
+
+(type TrsStepListR
+  (TrsStepListErr (List Int))
+  (TrsStepListNo)
+  (TrsStepListYes QName (List Expr)))
+
+(type TrsStepArmsR
+  (TrsStepArmsErr (List Int))
+  (TrsStepArmsNo)
+  (TrsStepArmsYes QName (List Arm)))
+
+(fn trs_step ((profile TrsProfile) (e Expr)) TrsStepR
+  (measure (struct e))
+  (match (trs_root profile e)
+    ((TrsRootErr msg) (TrsStepErr msg))
+    ((TrsRootYes name e2) (TrsStepYes name e2))
+    ((TrsRootNo)
+     (match e
+       ((Ctor q args)
+        (match (trs_step_list profile args)
+          ((TrsStepListErr msg) (TrsStepErr msg))
+          ((TrsStepListNo) (TrsStepNo))
+          ((TrsStepListYes name args2) (TrsStepYes name (Ctor q args2)))))
+       ((Call q args)
+        (match (trs_step_list profile args)
+          ((TrsStepListErr msg) (TrsStepErr msg))
+          ((TrsStepListNo) (TrsStepNo))
+          ((TrsStepListYes name args2) (TrsStepYes name (Call q args2)))))
+       ((If c t e2)
+        (match (trs_step profile c)
+          ((TrsStepErr msg) (TrsStepErr msg))
+          ((TrsStepYes name c2) (TrsStepYes name (If c2 t e2)))
+          ((TrsStepNo)
+           (match (trs_step profile t)
+             ((TrsStepErr msg) (TrsStepErr msg))
+             ((TrsStepYes name t2) (TrsStepYes name (If c t2 e2)))
+             ((TrsStepNo)
+              (match (trs_step profile e2)
+                ((TrsStepErr msg) (TrsStepErr msg))
+                ((TrsStepNo) (TrsStepNo))
+                ((TrsStepYes name e3) (TrsStepYes name (If c t e3)))))))))
+       ((Let bs body)
+        (match (trs_step_list profile bs)
+          ((TrsStepListErr msg) (TrsStepErr msg))
+          ((TrsStepListYes name bs2) (TrsStepYes name (Let bs2 body)))
+          ((TrsStepListNo)
+           (match (trs_step profile body)
+             ((TrsStepErr msg) (TrsStepErr msg))
+             ((TrsStepNo) (TrsStepNo))
+             ((TrsStepYes name body2) (TrsStepYes name (Let bs body2)))))))
+       ((Match scrut arms)
+        (match (trs_step profile scrut)
+          ((TrsStepErr msg) (TrsStepErr msg))
+          ((TrsStepYes name scrut2) (TrsStepYes name (Match scrut2 arms)))
+          ((TrsStepNo)
+           (match (trs_step_arms profile arms)
+             ((TrsStepArmsErr msg) (TrsStepErr msg))
+             ((TrsStepArmsNo) (TrsStepNo))
+             ((TrsStepArmsYes name arms2) (TrsStepYes name (Match scrut arms2)))))))
+       (_ (TrsStepNo))))))
+
+(fn trs_step_list ((profile TrsProfile) (es (List Expr))) TrsStepListR
+  (measure (struct es))
+  (match es
+    (Nil (TrsStepListNo))
+    ((Cons e rest)
+     (match (trs_step profile e)
+       ((TrsStepErr msg) (TrsStepListErr msg))
+       ((TrsStepYes name e2) (TrsStepListYes name (Cons e2 rest)))
+       ((TrsStepNo)
+        (match (trs_step_list profile rest)
+          ((TrsStepListErr msg) (TrsStepListErr msg))
+          ((TrsStepListNo) (TrsStepListNo))
+          ((TrsStepListYes name rest2) (TrsStepListYes name (Cons e rest2)))))))))
+
+(fn trs_step_arms ((profile TrsProfile) (arms (List Arm))) TrsStepArmsR
+  (measure (struct arms))
+  (match arms
+    (Nil (TrsStepArmsNo))
+    ((Cons (Arm p body) rest)
+     (match (trs_step profile body)
+       ((TrsStepErr msg) (TrsStepArmsErr msg))
+       ((TrsStepYes name body2) (TrsStepArmsYes name (Cons (Arm p body2) rest)))
+       ((TrsStepNo)
+        (match (trs_step_arms profile rest)
+          ((TrsStepArmsErr msg) (TrsStepArmsErr msg))
+          ((TrsStepArmsNo) (TrsStepArmsNo))
+          ((TrsStepArmsYes name rest2)
+           (TrsStepArmsYes name (Cons (Arm p body) rest2)))))))))
+
+;; ---- normality and fuel-bounded normalization -------------------------------
+
+(type TrsNormalR (TrsNormalErr (List Int)) (TrsNormalOk Bool))
+
+(fn trs_normal ((profile TrsProfile) (e Expr)) TrsNormalR
+  (match (trs_step profile e)
+    ((TrsStepErr msg) (TrsNormalErr msg))
+    ((TrsStepNo) (TrsNormalOk True))
+    ((TrsStepYes _ _) (TrsNormalOk False))))
+
+(type TrsNfR (TrsNfErr (List Int)) (TrsNfOut Expr Int) (TrsNfOk Expr Int))
+
+(fn trs_nf ((fuel Int) (profile TrsProfile) (e Expr)) TrsNfR
+  (measure fuel (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt fuel 1) (TrsNfOut e 0)
+  (match (trs_step profile e)
+    ((TrsStepErr msg) (TrsNfErr msg))
+    ((TrsStepNo) (TrsNfOk e 0))
+    ((TrsStepYes _ e2)
+     (match (trs_nf (- fuel 1) profile e2)
+       ((TrsNfErr msg) (TrsNfErr msg))
+       ((TrsNfOut out n) (TrsNfOut out (+ n 1)))
+       ((TrsNfOk out n) (TrsNfOk out (+ n 1))))))))

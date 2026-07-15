@@ -1,0 +1,62 @@
+;;; meta/invoke/prepared.shard — RETAINED PURE INVOCATION for batteries,
+;;; censuses, and search.  The ordinary meta/invoke API is deliberately a
+;;; one-shot convenience surface; evm_call_pure therefore rebuilds the
+;;; closure's name index, effect analysis, and translated function table on
+;;; each call.  High-throughput clients pay that immutable preparation once
+;;; and retain this context across calls.
+;;;
+;;; This lives beside (rather than inside) mod.req.shard because the public
+;;; invocation boundary is stated only in kernel term/module vocabulary.
+;;; Pulling EVM's internal table types into that interface creates a kernel
+;;; import cycle for checker-hosted consumers.  Clients opt into the deeper
+;;; dependency explicitly by importing this file.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/module.shard")
+(import "../../kernel/evm.shard")
+(import "../../meta/invoke")
+(use (:: kernel term Expr))
+(use (:: kernel term Call))
+(use (:: kernel module Module))
+(use (:: kernel module FnDef))
+(use (:: kernel module FnTrie))
+(use (:: kernel module build_fn_trie))
+(use (:: kernel evm *))
+(use (:: meta invoke find_fn))
+
+(type InvokeCtx (InvokeCtx Module FnTrie BTab FnTab))
+
+(fn prepare_invoke ((m Module)) InvokeCtx
+  (match m
+    ((Module _ fns _ _ _)
+     (let ((ixt (build_fn_trie (ix_fndefs fns 0))))
+       (let ((eff (build_efftab fns ixt)))
+         (InvokeCtx m ixt eff (build_fntab fns ixt eff)))))))
+
+(fn invoke_ctx ((ctx InvokeCtx) (name Symbol) (args (List Expr))) (Option Expr)
+  (match ctx
+    ((InvokeCtx m ixt eff tab)
+     (match (find_fn name m)
+       (None None)
+       ((Some fd)
+        (match fd
+          ((FnDef q params _ _)
+           (if (arity_ok args params)
+             (match (tr2_expr (Call q args) ixt eff)
+               ((TrP p) (Some (evp tab Nil p)))
+               ((TrE _) None))
+             None))))))))
+
+;; Same retained machine, with function lookup hoisted by the caller as well.
+;; Search loops normally call a fixed oracle thousands of times.
+(fn invoke_fd_ctx ((ctx InvokeCtx) (fd FnDef) (args (List Expr))) (Option Expr)
+  (match ctx
+    ((InvokeCtx _ ixt eff tab)
+     (match fd
+       ((FnDef q params _ _)
+        (if (arity_ok args params)
+          (match (tr2_expr (Call q args) ixt eff)
+            ((TrP p) (Some (evp tab Nil p)))
+            ((TrE _) None))
+          None))))))

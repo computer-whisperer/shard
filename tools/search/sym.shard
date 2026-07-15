@@ -17,10 +17,11 @@
 ;;; case-split shapes come from the MODULE'S OWN type table
 ;;; (lookup_typedef + inst_ctor_fields); neutral heads are qnames;
 ;;; nothing here knows a task vocabulary. The rewrite table is
-;;; passed-in DATA (NRule): v1 carries the append four (std/list's
-;;; proven requirements, applied at neutral-formation time) keyed by
-;;; the object module's own append/Nil/Cons qnames. The lia normalizer
-;;; (D4's second family) is a later VALUE of the same parameter.
+;;; passed-in DATA (NRule): NRTrs applies meta/rewrite's generic ordered
+;;; profile at neutral-formation time, while NRAppend preserves compatibility
+;;; for callers that still provide the original std/list qname triple.
+;;; The object module still supplies every qname and evaluation meaning. The
+;;; lia normalizer (D4's second family) is a later VALUE of the same parameter.
 ;;;
 ;;; Simplifications vs the playground reference, licensed by kernel
 ;;; semantics:
@@ -59,9 +60,11 @@
 (import "../../kernel/term.shard")
 (import "../../kernel/module.shard")
 (import "../../kernel/reduce.shard")
+(import "../../meta/rewrite")
 (use (:: kernel term *))
 (use (:: kernel module *))
 (use (:: kernel reduce try_step_prim))
+(use (:: meta rewrite *))
 
 ;; ---- the value domain ------------------------------------------------------
 
@@ -70,22 +73,74 @@
   (SVQuote Symbol)  ; ground symbol literal
   (SVSym Int)  ; ∀-atom, Many-class: identity compare, distinct REFUTES
   (SVData Int)  ; undecided ∀-data value: slot index
-  (SVCtor QName (List SV))  ; ctor value (fields are values)
+  ;; origin is the split slot whose value this constructor refines, or -1
+  ;; for an ordinary computed/ground constructor.  Keeping that provenance
+  ;; lets structural IH survive a slot becoming partially decided.
+  (SVCtor QName (List SV) Int)  ; ctor value, fields, split origin
   (SVNeu QName (List SV) Int))  ; stuck call: head, arg values, blocker slot
 
+(fn sv_eq ((a SV) (b SV)) Bool
+  (measure (struct a))
+  (match a
+    ((SVInt x)
+     (match b
+       ((SVInt y) (int_eq x y))
+       (_ False)))
+    ((SVQuote x)
+     (match b
+       ((SVQuote y) (sym_eq x y))
+       (_ False)))
+    ((SVSym x)
+     (match b
+       ((SVSym y) (int_eq x y))
+       (_ False)))
+    ((SVData x)
+     (match b
+       ((SVData y) (int_eq x y))
+       (_ False)))
+    ((SVCtor q fields origin)
+     (match b
+       ((SVCtor q2 fields2 origin2)
+        (if (qname_eq q q2)
+          (if (int_eq origin origin2) (svs_eq fields fields2) False)
+          False))
+       (_ False)))
+    ((SVNeu q args blocker)
+     (match b
+       ((SVNeu q2 args2 blocker2)
+        (if (qname_eq q q2)
+          (if (int_eq blocker blocker2) (svs_eq args args2) False)
+          False))
+       (_ False)))))
+
+(fn svs_eq ((xs (List SV)) (ys (List SV))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil
+      (match ys
+        (Nil True)
+        ((Cons _ _) False)))
+    ((Cons x rest)
+     (match ys
+       (Nil False)
+       ((Cons y more) (if (sv_eq x y) (svs_eq rest more) False))))))
+
 ;; the D4 rule table — passed-in data, never baked in.
-;; NRAppend: the append four (formation-time canon).
+;; NRAppend: compatibility route for the append four (formation-time canon).
+;; NRTrs: the first generic algebraic profile, authenticated and selected by
+;; its caller; theorem_scope is the checked producer used by the live probe.
 ;; NRIh: THE D5 CATALOG LICENSE (license ii) — for an equality goal
-;; ∀xs. p xs = q xs, a stuck call (p X) whose subject X is an
-;; undecided slot ALLOCATED BY CASE-SPLITTING (slot id >= the min
-;; field — goal binders take the ids below it, split shapes all the
-;; ids above) EVALUATES as (q X) instead: X is a strict subterm of
+;; ∀xs. p xs = q xs, a stuck call (p X) whose subject X is a slot
+;; ALLOCATED BY CASE-SPLITTING or its partially decided constructor shape
+;; (slot id >= the min field — goal binders take the ids below it, split
+;; shapes all the ids above) EVALUATES as (q X) instead: X is a strict subterm of
 ;; the goal binder, so the citation is strong structural induction —
 ;; the hypothesis, never the goal proving itself. One direction only
 ;; (p -> q); a search heuristic whose rendered proof faces the
 ;; kernel's own induct form, G4 the judge.
 (type NRule
   (NRAppend QName QName QName)  ; append, Nil, Cons qnames
+  (NRTrs TrsProfile)  ; generic checked/profiled first-order rewrites
   (NRIh QName QName Int))  ; p, q, min split-slot id
 
 ;; evaluator results (Err first: guard-style matching is decl order)
@@ -149,7 +204,7 @@
     ((SVQuote _) -1)
     ((SVSym _) -1)
     ((SVData s) s)
-    ((SVCtor _ _) -1)
+    ((SVCtor _ _ _) -1)
     ((SVNeu _ _ b) b)))
 
 (fn svs_blocker ((vs (List SV))) Int
@@ -168,7 +223,18 @@
     ((Cons r rest)
      (match r
        ((NRAppend apq _ _) (if (qname_eq apq q) (Some r) (nr_find q rest)))
+       ((NRTrs _) (nr_find q rest))
        ((NRIh _ _ _) (nr_find q rest))))))
+
+(fn nr_trs ((rules (List NRule))) (Option TrsProfile)
+  (measure (struct rules))
+  (match rules
+    (Nil None)
+    ((Cons rule rest)
+     (match rule
+       ((NRAppend _ _ _) (nr_trs rest))
+       ((NRTrs profile) (Some profile))
+       ((NRIh _ _ _) (nr_trs rest))))))
 
 ;; the catalog license's (q, min) for head p, if licensed
 (fn nr_ih ((p QName) (rules (List NRule))) (Option (Pair QName Int))
@@ -178,6 +244,7 @@
     ((Cons r rest)
      (match r
        ((NRAppend _ _ _) (nr_ih p rest))
+       ((NRTrs _) (nr_ih p rest))
        ((NRIh ip iq imin)
         (if (qname_eq ip p) (Some (Pair iq imin)) (nr_ih p rest)))))))
 
@@ -191,7 +258,7 @@
     ((SVQuote s) (Some (SymLit s)))
     ((SVSym _) None)
     ((SVData _) None)
-    ((SVCtor q fs)
+    ((SVCtor q fs _)
      (match (svs_exprs fs)
        (None None)
        ((Some es) (Some (Ctor q es)))))
@@ -218,7 +285,7 @@
     ((Ctor q es)
      (match (exprs_svs es)
        (None None)
-       ((Some vs) (Some (SVCtor q vs)))))
+       ((Some vs) (Some (SVCtor q vs -1)))))
     ((Call _ _) None)
     ((Match _ _) None)
     ((Let _ _) None)
@@ -244,12 +311,13 @@
 ;; ctor in declaration order, allocated on first split)
 (type SSlot (SSlot Type Int (Option (List SV))))
 
-;; next fresh SVSym id, slot table (index = allocation order)
-(type SvSt (SvSt Int (List SSlot)))
+;; next fresh SVSym id, slot table (index = allocation order), and the first
+;; exact residual equation that exhausted symbolic case refinement
+(type SvSt (SvSt Int (List SSlot) (Option (Pair SV SV))))
 
 (fn st_fresh_sym ((st SvSt)) (Pair SV SvSt)
   (match st
-    ((SvSt n slots) (Pair (SVSym n) (SvSt (+ n 1) slots)))))
+    ((SvSt n slots front) (Pair (SVSym n) (SvSt (+ n 1) slots front)))))
 
 (fn slots_len ((ss (List SSlot))) Int
   (measure (struct ss))
@@ -265,10 +333,10 @@
 
 (fn st_fresh_slot ((ty Type) (depth Int) (st SvSt)) (Pair SV SvSt)
   (match st
-    ((SvSt n slots)
+    ((SvSt n slots front)
      (Pair
        (SVData (slots_len slots))
-       (SvSt n (slots_snoc slots (SSlot ty depth None)))))))
+       (SvSt n (slots_snoc slots (SSlot ty depth None)) front)))))
 
 (fn slot_get ((i Int) (ss (List SSlot))) (Option SSlot)
   (measure (struct ss))
@@ -284,11 +352,41 @@
 
 (fn st_slot ((i Int) (st SvSt)) (Option SSlot)
   (match st
-    ((SvSt _ slots) (slot_get i slots))))
+    ((SvSt _ slots _) (slot_get i slots))))
 
 (fn st_put ((i Int) (s2 SSlot) (st SvSt)) SvSt
   (match st
-    ((SvSt n slots) (SvSt n (slot_put i s2 slots)))))
+    ((SvSt n slots front) (SvSt n (slot_put i s2 slots) front))))
+
+(fn st_front ((st SvSt)) (Option (Pair SV SV))
+  (match st
+    ((SvSt _ _ front) front)))
+
+;; Keep the first frontier deterministically.  Comparison may continue after
+;; one undecided field/branch in case a later field refutes the whole goal.
+(fn st_note_front ((a SV) (b SV) (st SvSt)) SvSt
+  (match st
+    ((SvSt n slots front)
+     (match front
+       (None (SvSt n slots (Some (Pair a b))))
+       ((Some _) st)))))
+
+;; Argument comparison is speculative when same-head neutral congruence
+;; fails: the caller can still refine the neutral's blocker.  Preserve any
+;; allocated shapes but restore the frontier that existed before the probe.
+(fn st_restore_front ((before SvSt) (after SvSt)) SvSt
+  (match before
+    ((SvSt _ _ front)
+     (match after
+       ((SvSt n slots _) (SvSt n slots front))))))
+
+;; Mark the root constructor chosen for a split slot.  Shapes are stored
+;; unmarked in SvSt because the same allocation is reused across branches;
+;; provenance belongs to the branch-local replacement value.
+(fn sv_at_slot ((slot Int) (v SV)) SV
+  (match v
+    ((SVCtor q fs _) (SVCtor q fs slot))
+    (_ v)))
 
 ;; Int/Symbol/tyvar: Many-class atoms — fresh SVSym, never split
 (fn ty_atomic ((t Type)) Bool
@@ -322,7 +420,7 @@
      (match (fields_svs ftys depth st)
        ((Pair fs st2)
         (match (shapes_of rest depth st2)
-          ((Pair shs st3) (Pair (Cons (SVCtor cq fs) shs) st3))))))))
+          ((Pair shs st3) (Pair (Cons (SVCtor cq fs -1) shs) st3))))))))
 
 ;; substitute a type-arg instantiation into every ctor's field types
 ;; (mirrors kernel/checker's inst_ctor_fields; local so this tool's
@@ -375,7 +473,7 @@
        ((SVQuote _) (MtPErr "pm: ctor pattern on a symbol"))
        ((SVSym _) (MtPErr "pm: ctor pattern on an Int-class atom"))
        ((SVData s) (MtPStuck s))
-       ((SVCtor cq fs) (if (qname_eq q cq) (pm_pats ps fs) (MtPNo)))
+       ((SVCtor cq fs _) (if (qname_eq q cq) (pm_pats ps fs) (MtPNo)))
        ((SVNeu _ _ b) (MtPStuck b))))
     ((PInt n)
      (match v
@@ -383,7 +481,7 @@
        ((SVQuote _) (MtPErr "pm: int pattern on a symbol"))
        ((SVSym _) (MtPStuck -1))
        ((SVData _) (MtPErr "pm: int pattern on a data value"))
-       ((SVCtor _ _) (MtPErr "pm: int pattern on a ctor"))
+       ((SVCtor _ _ _) (MtPErr "pm: int pattern on a ctor"))
        ((SVNeu _ _ b) (MtPStuck b))))
     ((PSym sy)
      (match v
@@ -391,7 +489,7 @@
        ((SVQuote x) (if (sym_eq sy x) (MtPOk Nil) (MtPNo)))
        ((SVSym _) (MtPStuck -1))
        ((SVData _) (MtPErr "pm: symbol pattern on a data value"))
-       ((SVCtor _ _) (MtPErr "pm: symbol pattern on a ctor"))
+       ((SVCtor _ _ _) (MtPErr "pm: symbol pattern on a ctor"))
        ((SVNeu _ _ b) (MtPStuck b))))))
 
 (fn pm_pats ((ps (List Pat)) (vs (List SV))) MtP
@@ -438,7 +536,7 @@
        ((EvLOut) (EvROut))
        ((EvLFail) (EvRFail))
        ((EvLStuck s) (EvRStuck s))
-       ((EvLVals vs) (EvRVal (SVCtor q vs)))))
+       ((EvLVals vs) (EvRVal (SVCtor q vs -1)))))
     ((Call q args)
      (match (sv_evals (- fuel 1) m rules env args)
        ((EvLErr msg) (EvRErr msg))
@@ -472,7 +570,7 @@
           ((SVQuote _) (EvRErr "sv_eval: if on a symbol"))
           ((SVSym _) (EvRStuck -1))
           ((SVData s) (EvRStuck s))
-          ((SVCtor cq _)
+          ((SVCtor cq _ _)
            (if (sym_eq (qn_name cq) (quote True))
              (sv_eval (- fuel 1) m rules env t)
            (if (sym_eq (qn_name cq) (quote False))
@@ -543,7 +641,16 @@
    (args (List SV))
    (s Int))
   EvR
-  (measure fuel)
+  (measure
+    fuel
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1)))
   (if (lt fuel 1) (EvROut)
   (match (nr_ih q rules)
     (None (sv_form_plain (- fuel 1) m rules q args s))
@@ -553,10 +660,154 @@
      ;; evaluates as its partner: the induction hypothesis, applied
      ;; at formation
      (match args
-       ((Cons (SVData ds) Nil)
-        (if (le imin ds) (sv_call (- fuel 1) m rules iq args)
+       ((Cons x Nil)
+        (if (sv_ih_arg imin x) (sv_call (- fuel 1) m rules iq args)
         (sv_form_plain (- fuel 1) m rules q args s)))
        (_ (sv_form_plain (- fuel 1) m rules q args s)))))))
+
+;; A strict-subterm IH applies both before a child slot is split (SVData)
+;; and after it has acquired a constructor shape.  The latter carries the
+;; originating slot explicitly; ordinary constructors use origin -1.
+(fn sv_ih_arg ((imin Int) (v SV)) Bool
+  (match v
+    ((SVInt _) False)
+    ((SVQuote _) False)
+    ((SVSym _) False)
+    ((SVData ds) (le imin ds))
+    ((SVCtor _ _ origin) (le imin origin))
+    ((SVNeu _ _ _) False)))
+
+;; ---- generic profile application at symbolic neutral formation -------------
+;;
+;; Rule BVars capture symbolic values. Ctor/Call patterns match SVCtor/SVNeu;
+;; literals match their ground symbolic values. A successful match is rebuilt
+;; as the rule-binder environment and the ordinary symbolic evaluator executes
+;; the RHS, so nested calls re-enter this same profile. Binding forms and If
+;; have no symbolic value constructor and are refused at this consumer boundary.
+
+(type SnEnv (SnEmpty) (SnBind Int SV SnEnv))
+
+(fn sn_get ((index Int) (env SnEnv)) (Option SV)
+  (measure (struct env))
+  (match env
+    ((SnEmpty) None)
+    ((SnBind prior value rest)
+     (if (int_eq index prior) (Some value) (sn_get index rest)))))
+
+(type SnMatchR (SnMatchErr (List Int)) (SnMatchNo) (SnMatchOk SnEnv))
+
+(fn sn_match ((pattern Expr) (value SV) (env SnEnv)) SnMatchR
+  (measure (struct pattern))
+  (match pattern
+    ((FVar _) (SnMatchErr "symbolic rewrite pattern contains FVar"))
+    ((BVar index)
+     (match (sn_get index env)
+       (None (SnMatchOk (SnBind index value env)))
+       ((Some _) (SnMatchErr "symbolic rewrite pattern is not left-linear"))))
+    ((Ctor q args)
+     (match value
+       ((SVCtor q2 fields _)
+        (if (qname_eq q q2) (sn_match_list args fields env) (SnMatchNo)))
+       (_ (SnMatchNo))))
+    ((Call q args)
+     (match value
+       ((SVNeu q2 values _)
+        (if (qname_eq q q2) (sn_match_list args values env) (SnMatchNo)))
+       (_ (SnMatchNo))))
+    ((If _ _ _) (SnMatchErr "symbolic rewrite pattern contains If"))
+    ((Match _ _) (SnMatchErr "symbolic rewrite pattern contains Match"))
+    ((Let _ _) (SnMatchErr "symbolic rewrite pattern contains Let"))
+    ((IntLit n)
+     (match value
+       ((SVInt m) (if (int_eq n m) (SnMatchOk env) (SnMatchNo)))
+       (_ (SnMatchNo))))
+    ((SymLit s)
+     (match value
+       ((SVQuote t) (if (sym_eq s t) (SnMatchOk env) (SnMatchNo)))
+       (_ (SnMatchNo))))))
+
+(fn sn_match_list ((patterns (List Expr)) (values (List SV)) (env SnEnv))
+  SnMatchR
+  (measure (struct patterns))
+  (match patterns
+    (Nil
+      (match values
+        (Nil (SnMatchOk env))
+        ((Cons _ _) (SnMatchNo))))
+    ((Cons pattern rest)
+     (match values
+       (Nil (SnMatchNo))
+       ((Cons value more)
+        (match (sn_match pattern value env)
+          ((SnMatchErr msg) (SnMatchErr msg))
+          ((SnMatchNo) (SnMatchNo))
+          ((SnMatchOk env2) (sn_match_list rest more env2))))))))
+
+(type SnArgsR (SnArgsErr (List Int)) (SnArgsOk (List SV)))
+
+(fn sn_args ((index Int) (arity Int) (env SnEnv)) SnArgsR
+  (measure (- arity index) (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (le arity index) (SnArgsOk Nil)
+  (match (sn_get index env)
+    (None (SnArgsErr "symbolic rewrite replacement variable is unbound"))
+    ((Some value)
+     (match (sn_args (+ index 1) arity env)
+       ((SnArgsErr msg) (SnArgsErr msg))
+       ((SnArgsOk rest) (SnArgsOk (Cons value rest))))))))
+
+(fn sn_rules
+  ((fuel Int)
+   (m Module)
+   (all_rules (List NRule))
+   (rules (List TrsRule))
+   (candidate SV)
+   (q QName)
+   (args (List SV))
+   (blocker Int))
+  EvR
+  (measure
+    fuel
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1)))
+  (if (lt fuel 1) (EvROut)
+  (match rules
+    (Nil (EvRVal (SVNeu q args blocker)))
+    ((Cons rule rest)
+     (match rule
+       ((TrsRule _ types lhs rhs)
+        (match (sn_match lhs candidate (SnEmpty))
+          ((SnMatchErr msg) (EvRErr msg))
+          ((SnMatchNo)
+           (sn_rules (- fuel 1) m all_rules rest candidate q args blocker))
+          ((SnMatchOk env)
+           (match (sn_args 0 (len_types types) env)
+             ((SnArgsErr msg) (EvRErr msg))
+             ((SnArgsOk values) (sv_eval (- fuel 1) m all_rules values rhs)))))))))))
+
+(fn sv_trs_form
+  ((fuel Int)
+   (m Module)
+   (rules (List NRule))
+   (profile TrsProfile)
+   (q QName)
+   (args (List SV))
+   (blocker Int))
+  EvR
+  (measure fuel (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt fuel 1) (EvROut)
+  (match profile
+    ((TrsProfile profile_rules)
+     (sn_rules
+       (- fuel 1)
+       m
+       rules
+       profile_rules
+       (SVNeu q args blocker)
+       q
+       args
+       blocker)))))
 
 (fn sv_form_plain
   ((fuel Int)
@@ -566,19 +817,22 @@
    (args (List SV))
    (s Int))
   EvR
-  (measure fuel)
+  (measure fuel (by arith (list 1 0)) (by arith (list 1 1)))
   (if (lt fuel 1) (EvROut)
-  (match (nr_find q rules)
-    (None (EvRVal (SVNeu q args s)))
-    ((Some r)
-     (match args
-       ((Cons x (Cons y Nil)) (sv_capp (- fuel 1) m rules r x y s))
-       (_ (EvRErr "sv_form: append rule on a non-binary call")))))))
+  (match (nr_trs rules)
+    ((Some profile) (sv_trs_form (- fuel 1) m rules profile q args s))
+    (None
+      (match (nr_find q rules)
+        (None (EvRVal (SVNeu q args s)))
+        ((Some r)
+         (match args
+           ((Cons x (Cons y Nil)) (sv_capp (- fuel 1) m rules r x y s))
+           (_ (EvRErr "sv_form: append rule on a non-binary call")))))))))
 
 ;; append_nil_right at an atom head — licensed by SV class (see header)
 (fn sv_cnr ((apq QName) (nilq QName) (x SV) (y SV)) EvR
   (match y
-    ((SVCtor cq _)
+    ((SVCtor cq _ _)
      (if (qname_eq cq nilq) (EvRVal x)
      (EvRVal (SVNeu apq (Cons x (Cons y Nil)) (sv_blocker x)))))
     (_ (EvRVal (SVNeu apq (Cons x (Cons y Nil)) (sv_blocker x))))))
@@ -599,7 +853,7 @@
        ((SVQuote _) (EvRErr "canon append: symbol operand"))
        ((SVSym _) (EvRErr "canon append: Int-class atom operand"))
        ((SVData _) (sv_cnr apq nilq x y))
-       ((SVCtor cq fs)
+       ((SVCtor cq fs _)
         (if (qname_eq cq nilq) (EvRVal y)
         (if (qname_eq cq consq)
           (match fs
@@ -609,7 +863,8 @@
                ((EvROut) (EvROut))
                ((EvRFail) (EvRFail))
                ((EvRStuck s2) (EvRStuck s2))
-               ((EvRVal rest) (EvRVal (SVCtor consq (Cons h (Cons rest Nil)))))))
+               ((EvRVal rest)
+                (EvRVal (SVCtor consq (Cons h (Cons rest Nil)) -1)))))
             (_ (EvRErr "canon append: malformed Cons")))
           (EvRErr "canon append: non-list ctor operand"))))
        ((SVNeu hq hargs _)
@@ -623,7 +878,8 @@
                ((EvRStuck s2) (EvRStuck s2))
                ((EvRVal inner) (sv_capp (- fuel 1) m rules r a inner s))))
             (_ (EvRErr "canon append: malformed append neutral")))
-          (sv_cnr apq nilq x y))))))))
+          (sv_cnr apq nilq x y)))))
+    (_ (EvRErr "sv_capp: non-append rule")))))
 
 ;; first-match arm walk; a stuck pattern position STOPS the walk (a
 ;; later arm may only fire if this one misses — the kernel matcher's
@@ -661,13 +917,13 @@
     ((SVQuote _) (EvRVal v))
     ((SVSym _) (EvRVal v))
     ((SVData s) (if (int_eq s slot) (EvRVal rep) (EvRVal v)))
-    ((SVCtor q fs)
+    ((SVCtor q fs origin)
      (match (sv_resumes (- fuel 1) m rules slot rep fs)
        ((EvLErr msg) (EvRErr msg))
        ((EvLOut) (EvROut))
        ((EvLFail) (EvRFail))
        ((EvLStuck s) (EvRStuck s))
-       ((EvLVals vs) (EvRVal (SVCtor q vs)))))
+       ((EvLVals vs) (EvRVal (SVCtor q vs origin)))))
     ((SVNeu q nargs _)
      (match (sv_resumes (- fuel 1) m rules slot rep nargs)
        ((EvLErr msg) (EvRErr msg))
@@ -769,7 +1025,7 @@
    (st SvSt))
   CpR
   (measure fuel)
-  (if (lt fuel 1) (CpROk (VdUndec) (TrRefl) st)
+  (if (lt fuel 1) (CpROk (VdUndec) (TrRefl) (st_note_front a b st))
   (match a
     ((SVInt x)
      (match b
@@ -777,7 +1033,7 @@
        ((SVQuote _) (CpRErr "cp: int vs symbol"))
        ((SVSym _) (CpROk (VdRef) (TrRefl) st))
        ((SVData _) (CpRErr "cp: int vs data value"))
-       ((SVCtor _ _) (CpRErr "cp: int vs ctor"))
+       ((SVCtor _ _ _) (CpRErr "cp: int vs ctor"))
        ((SVNeu _ _ nb) (cp_split (- fuel 1) budget efuel m rules a b nb st))))
     ((SVQuote x)
      (match b
@@ -785,7 +1041,7 @@
        ((SVQuote y) (CpROk (if (sym_eq x y) (VdProv) (VdRef)) (TrRefl) st))
        ((SVSym _) (CpROk (VdRef) (TrRefl) st))
        ((SVData _) (CpRErr "cp: symbol vs data value"))
-       ((SVCtor _ _) (CpRErr "cp: symbol vs ctor"))
+       ((SVCtor _ _ _) (CpRErr "cp: symbol vs ctor"))
        ((SVNeu _ _ nb) (cp_split (- fuel 1) budget efuel m rules a b nb st))))
     ((SVSym x)
      (match b
@@ -793,7 +1049,7 @@
        ((SVQuote _) (CpROk (VdRef) (TrRefl) st))
        ((SVSym y) (CpROk (if (int_eq x y) (VdProv) (VdRef)) (TrRefl) st))
        ((SVData _) (CpRErr "cp: atom vs data value"))
-       ((SVCtor _ _) (CpRErr "cp: atom vs ctor"))
+       ((SVCtor _ _ _) (CpRErr "cp: atom vs ctor"))
        ((SVNeu _ _ nb) (cp_split (- fuel 1) budget efuel m rules a b nb st))))
     ((SVData sa)
      (match b
@@ -803,15 +1059,15 @@
        ((SVData sb)
         (if (int_eq sa sb) (CpROk (VdProv) (TrRefl) st)
         (cp_split (- fuel 1) budget efuel m rules a b sa st)))
-       ((SVCtor _ _) (cp_split (- fuel 1) budget efuel m rules a b sa st))
+       ((SVCtor _ _ _) (cp_split (- fuel 1) budget efuel m rules a b sa st))
        ((SVNeu _ _ nb) (cp_split (- fuel 1) budget efuel m rules a b nb st))))
-    ((SVCtor qa fa)
+    ((SVCtor qa fa _)
      (match b
        ((SVInt _) (CpRErr "cp: ctor vs int"))
        ((SVQuote _) (CpRErr "cp: ctor vs symbol"))
        ((SVSym _) (CpRErr "cp: ctor vs atom"))
        ((SVData sb) (cp_split (- fuel 1) budget efuel m rules a b sb st))
-       ((SVCtor qb fb)
+       ((SVCtor qb fb _)
         (if (qname_eq qa qb)
           (cp_fields (- fuel 1) budget efuel m rules fa fb st False Nil)
           (CpROk (VdRef) (TrRefl) st)))
@@ -824,7 +1080,16 @@
             ((CaRErr msg) (CpRErr msg))
             ((CaROk ok tr st2)
              (if ok (CpROk (VdProv) tr st2)
-             (cp_split (- fuel 1) budget efuel m rules a b (blk2 ba bb) st2))))
+             (cp_split
+               (- fuel 1)
+               budget
+               efuel
+               m
+               rules
+               a
+               b
+               (blk2 ba bb)
+               (st_restore_front st st2)))))
           (cp_split (- fuel 1) budget efuel m rules a b (blk2 ba bb) st)))
        (_ (cp_split (- fuel 1) budget efuel m rules a b ba st)))))))
 
@@ -927,17 +1192,17 @@
    (st SvSt))
   CpR
   (measure fuel)
-  (if (lt fuel 1) (CpROk (VdUndec) (TrRefl) st)
-  (if (lt s 0) (CpROk (VdUndec) (TrRefl) st)
+  (if (lt fuel 1) (CpROk (VdUndec) (TrRefl) (st_note_front a b st))
+  (if (lt s 0) (CpROk (VdUndec) (TrRefl) (st_note_front a b st))
   (match (st_slot s st)
     (None (CpRErr "cp_split: unknown slot"))
     ((Some (SSlot ty depth shapes0))
-     (if (le budget depth) (CpROk (VdUndec) (TrRefl) st)
+     (if (le budget depth) (CpROk (VdUndec) (TrRefl) (st_note_front a b st))
      (match shapes0
        (None
          (match (shape_alloc m ty depth st)
            ((ShRErr msg) (CpRErr msg))
-           ((ShRNone) (CpROk (VdUndec) (TrRefl) st))
+           ((ShRNone) (CpROk (VdUndec) (TrRefl) (st_note_front a b st)))
            ((ShROk shs st2)
             (cp_shapes
               (- fuel 1)
@@ -981,8 +1246,8 @@
         st))
     ((Cons sh rest)
      (match sh
-       ((SVCtor shq shfs)
-        (match (sv_resume efuel m rules s sh a)
+       ((SVCtor shq shfs _)
+        (match (sv_resume efuel m rules s (sv_at_slot s sh) a)
           ((EvRErr msg) (CpRErr msg))
           ((EvROut)
            (cp_shapes
@@ -1002,7 +1267,7 @@
           ((EvRFail) (CpROk (VdRef) (TrRefl) st))
           ((EvRStuck _) (CpRErr "cp_shapes: stuck escaped a call boundary"))
           ((EvRVal a2)
-           (match (sv_resume efuel m rules s sh b)
+           (match (sv_resume efuel m rules s (sv_at_slot s sh) b)
              ((EvRErr msg) (CpRErr msg))
              ((EvROut)
               (cp_shapes
