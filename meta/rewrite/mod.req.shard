@@ -49,6 +49,19 @@
 
 (type TrsProfileR (TrsProfileErr (List Int)) (TrsProfileOk TrsProfile))
 
+;; A root profile is deliberately a different type from an ordinary rewrite
+;; profile.  Its rules are licensed only for the whole subject presented by a
+;; consumer (most importantly, a searched program under a checked observer),
+;; never below arbitrary subject constructors.  Keeping that distinction in
+;; the reusable vocabulary prevents an observational equality from being
+;; passed accidentally to `trs_step` or symbolic neutral formation as though
+;; it were a congruence theorem of the candidate datatype.
+(type TrsRootProfile (TrsRootProfile (List TrsRule)))
+
+(type TrsRootProfileR
+  (TrsRootProfileErr (List Int))
+  (TrsRootProfileOk TrsRootProfile))
+
 (fn trs_rule_name ((r TrsRule)) QName
   (match r
     ((TrsRule q _ _ _) q)))
@@ -197,11 +210,23 @@
 
 (fn trs_profile ((rules (List TrsRule))) TrsProfileR (trs_profile_go rules Nil))
 
+(fn trs_root_profile ((rules (List TrsRule))) TrsRootProfileR
+  (match (trs_profile rules)
+    ((TrsProfileErr msg) (TrsRootProfileErr msg))
+    ((TrsProfileOk (TrsProfile checked))
+     (TrsRootProfileOk (TrsRootProfile checked)))))
+
 ;; Validated profile construction for consumers that generate cumulative or
 ;; ablated profile families.  Keeping this operation here avoids transparent
 ;; constructor manipulation and preserves rule order while re-running the
 ;; profile identity gate at every step.
 (fn trs_empty_profile () TrsProfile (TrsProfile Nil))
+
+(fn trs_empty_root_profile () TrsRootProfile (TrsRootProfile Nil))
+
+(fn trs_root_profile_rules ((profile TrsRootProfile)) (List TrsRule)
+  (match profile
+    ((TrsRootProfile rules) rules)))
 
 (fn trs_rules_snoc ((rules (List TrsRule)) (rule TrsRule)) (List TrsRule)
   (measure (struct rules))
@@ -387,7 +412,48 @@
        ((TrsProfileErr msg) (TrsFormationErr msg))
        ((TrsProfileOk _) (trs_formation_go rules Nil))))))
 
+;; Root-only reductions use the same exact pattern projection, but their
+;; separate profile type records that the resulting clauses may be consulted
+;; only while constructing the root candidate and its immediate discriminant
+;; holes.  `meta/rewrite` remains proof-agnostic; theorem_scope is the checked
+;; producer that decides whether a theorem earns this weaker license.
+(fn trs_root_formation ((profile TrsRootProfile)) TrsFormationR
+  (match profile
+    ((TrsRootProfile rules)
+     (match (trs_root_profile rules)
+       ((TrsRootProfileErr msg) (TrsFormationErr msg))
+       ((TrsRootProfileOk _) (trs_formation_go rules Nil))))))
+
 (fn trs_empty_formation () TrsFormation (TrsFormation Nil))
+
+;; Formation has two scopes. `everywhere` is the ordinary congruence profile;
+;; `root` is an observer/refinement profile and must be consumed exactly once.
+;; Grammar builders carry root-derived child exclusions into those children,
+;; but do not recursively re-apply the root profile there.
+(type TrsFormationPlan
+  (TrsFormationPlan TrsFormation TrsFormation))  ; everywhere, root-only
+
+(fn trs_formation_plan
+  ((everywhere TrsFormation) (root TrsFormation)) TrsFormationPlan
+  (TrsFormationPlan everywhere root))
+
+(fn trs_empty_formation_plan () TrsFormationPlan
+  (TrsFormationPlan (trs_empty_formation) (trs_empty_formation)))
+
+(fn trs_plan_everywhere ((plan TrsFormationPlan)) TrsFormation
+  (match plan
+    ((TrsFormationPlan everywhere _) everywhere)))
+
+(fn trs_plan_root ((plan TrsFormationPlan)) TrsFormation
+  (match plan
+    ((TrsFormationPlan _ root) root)))
+
+(fn trs_plan_is_empty ((plan TrsFormationPlan)) Bool
+  (match plan
+    ((TrsFormationPlan everywhere root)
+     (if (trs_formation_is_empty everywhere)
+       (trs_formation_is_empty root)
+       False))))
 
 (fn trs_formation_is_empty ((formation TrsFormation)) Bool
   (match formation

@@ -36,6 +36,10 @@
 ;;;   search_symbols : () -> List Symbol
 ;;;   search_depth   : () -> Int
 ;;;   search_canon_profile : () -> List Symbol  ; optional checked equations
+;;;   search_observer_profile : () -> List Symbol ; optional checked laws
+;;;       Each law must have the exact premise-free shape
+;;;       search_probe(candidate_lhs) = search_probe(candidate_rhs).  Unlike a
+;;;       canon equation it is licensed only at the whole candidate root.
 ;;;   search_screen  : Candidate -> Bool       ; optional census accelerator
 ;;;   search_probe   : Candidate -> Option Observation
 ;;;   search_target  : () -> Observation
@@ -472,6 +476,37 @@
     (None (TeCanonNamesOk Nil))
     ((Some fd) (te_canon_names_fd ctx fd))))
 
+(type TeObserverNamesR
+  (TeObserverNamesErr (List Int))
+  (TeObserverNamesOk (List Symbol)))
+
+(fn te_observer_names_fd ((ctx InvokeCtx) (fd FnDef)) TeObserverNamesR
+  (match fd
+    ((FnDef _ params ret _)
+     (match params
+       ((Cons _ _)
+        (TeObserverNamesErr
+          "search_observer_profile must take no arguments"))
+       (Nil
+        (if (type_eq ret (te_canon_names_ty))
+          (match (invoke_fd_ctx ctx fd Nil)
+            (None
+              (TeObserverNamesErr
+                "search_observer_profile invocation failed"))
+            ((Some value)
+             (match (te_symbols value)
+               (None
+                 (TeObserverNamesErr
+                   "search_observer_profile is not a List Symbol"))
+               ((Some names) (TeObserverNamesOk names)))))
+          (TeObserverNamesErr
+            "search_observer_profile must return List Symbol")))))))
+
+(fn te_observer_names ((ctx InvokeCtx) (m Module)) TeObserverNamesR
+  (match (find_fn (quote search_observer_profile) m)
+    (None (TeObserverNamesOk Nil))
+    ((Some fd) (te_observer_names_fd ctx fd))))
+
 (fn te_symbol_len ((xs (List Symbol))) Int
   (measure (struct xs))
   (match xs
@@ -482,10 +517,89 @@
 
 (type TeCanonR (TeCanonErr (List Int)) (TeCanonOk TeCanon))
 
+(type TeObserved
+  (TeObserved TrsRootProfile TrsFormation Int))
+  ; authenticated exact-observer profile, root formation, rule count
+
+(type TeObservedR
+  (TeObservedErr (List Int))
+  (TeObservedOk TeObserved))
+
+(type TeReductions (TeReductions TeCanon TeObserved))
+
+(type TeReductionsR
+  (TeReductionsErr (List Int))
+  (TeReductionsOk TeReductions))
+
 (fn te_canon_from_profile ((profile TrsProfile) (rules Int)) TeCanonR
   (match (trs_formation profile)
     ((TrsFormationErr msg) (TeCanonErr msg))
     ((TrsFormationOk formation) (TeCanonOk (TeCanon profile formation rules)))))
+
+(fn te_observed_from_profile ((profile TrsRootProfile) (rules Int)) TeObservedR
+  (match (trs_root_formation profile)
+    ((TrsFormationErr msg) (TeObservedErr msg))
+    ((TrsFormationOk formation)
+     (TeObservedOk (TeObserved profile formation rules)))))
+
+(fn te_empty_reductions () TeReductions
+  (TeReductions
+    (TeCanon (trs_empty_profile) (trs_empty_formation) 0)
+    (TeObserved (trs_empty_root_profile) (trs_empty_formation) 0)))
+
+(fn te_reductions_from_checked
+  ((checked TgCheckedReductions) (canon_rules Int) (observer_rules Int))
+  TeReductionsR
+  (match checked
+    ((TgCheckedReductions canon observed)
+     (match (te_canon_from_profile canon canon_rules)
+       ((TeCanonErr msg) (TeReductionsErr msg))
+       ((TeCanonOk c)
+        (match (te_observed_from_profile observed observer_rules)
+          ((TeObservedErr msg) (TeReductionsErr msg))
+          ((TeObservedOk o) (TeReductionsOk (TeReductions c o)))))))))
+
+(fn te_load_some_reductions
+  ((path (List Int))
+   (observer QName)
+   (canon_names (List Symbol))
+   (observer_names (List Symbol))
+   (w World))
+  (Pair TeReductionsR World)
+  (match (tg_load_checked_scope path w)
+    ((Pair scope_result w2)
+     (match scope_result
+       ((TgCheckedScopeErr msg) (Pair (TeReductionsErr msg) w2))
+       ((TgCheckedScopeOk scope)
+        (match (tg_checked_reductions scope observer canon_names observer_names)
+          ((TgCheckedReductionsErr msg) (Pair (TeReductionsErr msg) w2))
+          ((TgCheckedReductionsOk checked)
+           (Pair
+             (te_reductions_from_checked
+               checked
+               (te_symbol_len canon_names)
+               (te_symbol_len observer_names))
+             w2))))))))
+
+(fn te_reduction_names_present
+  ((canon_names (List Symbol)) (observer_names (List Symbol))) Bool
+  (match canon_names
+    (Nil
+      (match observer_names
+        (Nil False)
+        ((Cons _ _) True)))
+    ((Cons _ _) True)))
+
+(fn te_load_reductions
+  ((path (List Int))
+   (observer QName)
+   (canon_names (List Symbol))
+   (observer_names (List Symbol))
+   (w World))
+  (Pair TeReductionsR World)
+  (if (te_reduction_names_present canon_names observer_names)
+    (te_load_some_reductions path observer canon_names observer_names w)
+    (Pair (TeReductionsOk (te_empty_reductions)) w)))
 
 (fn te_load_canon ((path (List Int)) (names (List Symbol)) (w World))
   (Pair TeCanonR World)
@@ -844,6 +958,7 @@
    (depth Int)
    (holes Int)
    (canon_rules Int)
+   (observer_rules Int)
    (raw_total Int)
    (total Int)
    (accepted Int)
@@ -864,6 +979,8 @@
       (show_int holes)
       "\nCANON RULES "
       (show_int canon_rules)
+      "\nOBSERVER RULES "
+      (show_int observer_rules)
       "\nRAW "
       (show_int raw_total)
       "\nREMOVED "
@@ -898,14 +1015,14 @@
 
 (type TeSpaceR (TeSpaceErr (List Int)) (TeSpaceOk TeSpace))
 
-(fn te_make_flat_space
+(fn te_make_flat_space_plan
   ((m Module)
    (want Type)
    (scope RCtx)
    (depth Int)
    (atoms (List TgAtom))
    (forms TeFormCfg)
-   (formation TrsFormation))
+   (plan TrsFormationPlan))
   TeSpaceR
   (match forms
     ((TeFormCfg ctors calls ifs)
@@ -913,7 +1030,7 @@
        ((heads (tg_scope_heads m scope ctors calls))
         (table (tg_scope_table scope)))
        (match
-         (tg_build_env_formation
+         (tg_build_env_plan
            m
            (TgEnv
              (Cons
@@ -928,35 +1045,45 @@
            want
            depth
            (tg_default_zone)
-           formation)
+           plan)
          ((TgBuildErr msg) (TeSpaceErr (append_int "grammar: " msg)))
          ((TgBuildOk root grammar holes)
           (TeSpaceOk (TeSpace table depth root grammar holes))))))))
 
-(fn te_make_scoped_space
+(fn te_make_scoped_space_plan
   ((m Module)
    (want Type)
    (scope RCtx)
    (depth Int)
    (spec TgScopeEnv)
-   (formation TrsFormation))
+   (plan TrsFormationPlan))
   TeSpaceR
   (match (tg_resolve_scope_env m scope spec)
     ((TgScopeErr msg) (TeSpaceErr (append_int "scope: " msg)))
     ((TgScopeOk env root_zone)
-     (match (tg_build_env_formation m env Nil want depth root_zone formation)
+     (match (tg_build_env_plan m env Nil want depth root_zone plan)
        ((TgBuildErr msg) (TeSpaceErr (append_int "grammar: " msg)))
        ((TgBuildOk root grammar holes)
         (TeSpaceOk (TeSpace (tg_scope_table scope) depth root grammar holes)))))))
 
-(fn te_make_space_formation
-  ((m Module) (want Type) (scope RCtx) (cfg TeCfg) (formation TrsFormation))
+(fn te_make_space_plan
+  ((m Module) (want Type) (scope RCtx) (cfg TeCfg) (plan TrsFormationPlan))
   TeSpaceR
   (match cfg
     ((TeCfgFlat depth atoms forms)
-     (te_make_flat_space m want scope depth atoms forms formation))
+     (te_make_flat_space_plan m want scope depth atoms forms plan))
     ((TeCfgScoped depth spec)
-     (te_make_scoped_space m want scope depth spec formation))))
+     (te_make_scoped_space_plan m want scope depth spec plan))))
+
+(fn te_make_space_formation
+  ((m Module) (want Type) (scope RCtx) (cfg TeCfg) (formation TrsFormation))
+  TeSpaceR
+  (te_make_space_plan
+    m
+    want
+    scope
+    cfg
+    (trs_formation_plan formation (trs_empty_formation))))
 
 (fn te_make_space ((m Module) (want Type) (scope RCtx) (cfg TeCfg)) TeSpaceR
   (te_make_space_formation m want scope cfg (trs_empty_formation)))
@@ -976,6 +1103,7 @@
    (grammar Grammar)
    (holes Int)
    (canon_rules Int)
+   (observer_rules Int)
    (raw_total Int)
    (w World))
   World
@@ -1001,6 +1129,7 @@
                   depth
                   holes
                   canon_rules
+                  observer_rules
                   (if (lt raw_total 0) total raw_total)
                   total
                   accepted
@@ -1023,16 +1152,17 @@
    (witness TeWitness)
    (scope RCtx)
    (cfg TeCfg)
-   (formation TrsFormation)
+   (plan TrsFormationPlan)
    (canon_rules Int)
+   (observer_rules Int)
    (raw_total Int)
    (w World))
   World
-  (match (te_make_space_formation m want scope cfg formation)
+  (match (te_make_space_plan m want scope cfg plan)
     ((TeSpaceErr msg) (te_fail msg w))
     ((TeSpaceOk (TeSpace table depth root grammar holes))
      (te_run_space path m want ictx screen probe target witness table depth root
-       grammar holes canon_rules raw_total w))))
+       grammar holes canon_rules observer_rules raw_total w))))
 
 (type TeCountR (TeCountErr (List Int)) (TeCountOk Int))
 
@@ -1054,14 +1184,19 @@
    (witness TeWitness)
    (scope RCtx)
    (cfg TeCfg)
-   (canon TeCanon)
+   (reductions TeReductions)
    (w World))
   World
-  (match canon
-    ((TeCanon _ formation rules)
+  (match reductions
+    ((TeReductions
+       (TeCanon _ formation canon_rules)
+       (TeObserved _ root_formation observer_rules))
+     (let
+       ((rules (+ canon_rules observer_rules))
+        (plan (trs_formation_plan formation root_formation)))
      (if (lt rules 1)
        (te_build_filtered path m want ictx screen probe target witness scope cfg
-         formation rules -1 w)
+         plan canon_rules observer_rules -1 w)
        (match (te_make_space m want scope cfg)
          ((TeSpaceErr msg) (te_fail (append_int "raw: " msg) w))
          ((TeSpaceOk raw_space)
@@ -1069,7 +1204,7 @@
             ((TeCountErr msg) (te_fail (append_int "raw count: " msg) w))
             ((TeCountOk raw_total)
              (te_build_filtered path m want ictx screen probe target witness
-               scope cfg formation rules raw_total w)))))))))
+               scope cfg plan canon_rules observer_rules raw_total w))))))))))
 
 (fn te_search_ready
   ((path (List Int))
@@ -1081,7 +1216,7 @@
    (target_fd FnDef)
    (witness_mode TeWitnessFd)
    (search_cfg TeCfg)
-   (canon TeCanon)
+   (reductions TeReductions)
    (w World))
   World
   (match (te_screen_sig m want)
@@ -1094,9 +1229,13 @@
           ((TeWitnessLoadErr msg) (te_fail msg w))
           ((TeWitnessLoadOk witness)
            (te_build_space path m want ictx screen probe target witness scope
-             search_cfg canon w))))))))
+             search_cfg reductions w))))))))
 
-(fn te_search_canon
+(fn te_probe_qname ((probe FnDef)) QName
+  (match probe
+    ((FnDef q _ _ _) q)))
+
+(fn te_search_reductions
   ((path (List Int))
    (m Module)
    (want Type)
@@ -1106,16 +1245,23 @@
    (target_fd FnDef)
    (witness_mode TeWitnessFd)
    (search_cfg TeCfg)
-   (names (List Symbol))
+   (canon_names (List Symbol))
+   (observer_names (List Symbol))
    (w World))
   World
-  (match (te_load_canon path names w)
+  (match
+    (te_load_reductions
+      path
+      (te_probe_qname probe)
+      canon_names
+      observer_names
+      w)
     ((Pair result w2)
      (match result
-       ((TeCanonErr msg) (te_fail (append_int "canon: " msg) w2))
-       ((TeCanonOk canon)
+       ((TeReductionsErr msg) (te_fail (append_int "reductions: " msg) w2))
+       ((TeReductionsOk reductions)
         (te_search_ready path m want ictx scope probe target_fd witness_mode
-          search_cfg canon w2))))))
+          search_cfg reductions w2))))))
 
 (fn te_search
   ((path (List Int))
@@ -1134,9 +1280,13 @@
         (let ((ictx (prepare_invoke m)) (scope (te_import_ctx m path src)))
           (match (te_canon_names ictx m)
             ((TeCanonNamesErr msg) (te_fail (append_int "protocol: " msg) w))
-            ((TeCanonNamesOk names)
-             (te_search_canon path m want ictx scope probe target_fd
-               witness_mode search_cfg names w)))))))))
+            ((TeCanonNamesOk canon_names)
+             (match (te_observer_names ictx m)
+               ((TeObserverNamesErr msg)
+                (te_fail (append_int "protocol: " msg) w))
+               ((TeObserverNamesOk observer_names)
+                (te_search_reductions path m want ictx scope probe target_fd
+                  witness_mode search_cfg canon_names observer_names w)))))))))))
 (fn main ((w World)) World
   (match (get_args w)
     ((Pair args w1)

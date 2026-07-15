@@ -1,4 +1,4 @@
-;;; tools/search/theorem_scope.shard — CHECKED, SCOPE-BOUND CANON LICENSES.
+;;; tools/search/theorem_scope.shard — CHECKED, SCOPE-BOUND REDUCTION LICENSES.
 ;;;
 ;;; Program search must not grow a second theorem namespace.  A requested
 ;;; canonicalization rule is resolved through the same RCtx that controls the
@@ -13,6 +13,11 @@
 ;;; oriented profile and remain a separate ratification gate (CANON.md §6).
 ;;; Premise-bearing goals are refused in v1 because applying one would require
 ;;; a proof of the premise at every rewrite site.
+;;;
+;;; Candidate equalities and observer equalities deliberately compile to
+;;; different profile types.  The former have ordinary congruence pressure;
+;;; the latter have the exact shape O(lhs) = O(rhs) and are licensed only at
+;;; the whole candidate root searched through that same O.
 ;;;
 ;;; Theory records imported interface requirements as Axiom entries in a
 ;;; consumer closure: they are upstream-proven contracts, admitted at that
@@ -124,6 +129,10 @@
   (TgOneLicenseErr (List Int))
   (TgOneLicenseOk TgCanonLicense))
 
+(type TgCheckedGoalR
+  (TgCheckedGoalErr (List Int))
+  (TgCheckedGoalOk Goal TgLawEvidence))
+
 (fn tg_license_goal ((q QName) (goal Goal) (evidence TgLawEvidence))
   TgOneLicenseR
   (match goal
@@ -132,24 +141,30 @@
        (Nil (TgOneLicenseOk (TgCanonLicense q params lhs rhs evidence)))
        (_ (TgOneLicenseErr "premise-bearing theorem is not a v1 canon rule"))))))
 
-(fn tg_one_license ((m Module) (th Theory) (srcs (List SrcEntry)) (q QName))
-  TgOneLicenseR
+(fn tg_checked_goal ((m Module) (th Theory) (srcs (List SrcEntry)) (q QName))
+  TgCheckedGoalR
   (match (tg_theory_find q th)
     (None
-      (TgOneLicenseErr "rule is in item scope but absent from checked Theory"))
+      (TgCheckedGoalErr "rule is in item scope but absent from checked Theory"))
     ((Some hit)
      (match hit
-       ((TgTheoryProven goal) (tg_license_goal q goal (TgLawProven)))
+       ((TgTheoryProven goal) (TgCheckedGoalOk goal (TgLawProven)))
        ((TgTheoryAxiom goal)
         (match (tg_axiom_kind q (typedef_ctors (module_typedefs m)) srcs)
           ((Some kind)
            (if (sym_eq kind (quote granted))
-             (tg_license_goal q goal (TgLawGrantedRequirement))
-             (TgOneLicenseErr
-               "canon rules require a proven claim or granted requirement")))
+             (TgCheckedGoalOk goal (TgLawGrantedRequirement))
+             (TgCheckedGoalErr
+               "reduction rules require a proven claim or granted requirement")))
           (None
-            (TgOneLicenseErr
-              "canon rules require a proven claim or granted requirement"))))))))
+            (TgCheckedGoalErr
+              "reduction rules require a proven claim or granted requirement"))))))))
+
+(fn tg_one_license ((m Module) (th Theory) (srcs (List SrcEntry)) (q QName))
+  TgOneLicenseR
+  (match (tg_checked_goal m th srcs q)
+    ((TgCheckedGoalErr msg) (TgOneLicenseErr msg))
+    ((TgCheckedGoalOk goal evidence) (tg_license_goal q goal evidence))))
 
 (fn tg_capture_canon_go
   ((m Module)
@@ -189,6 +204,145 @@
    (names (List Symbol)))
   TgCanonProfileR
   (tg_capture_canon_go m ctx th srcs names Nil))
+
+;; ---- observer-scoped reduction licenses -----------------------------------
+;;
+;; A candidate datatype need not identify programs that have equal behavior.
+;; For an exact unary observer O, a checked theorem
+;;
+;;     O candidate_lhs = O candidate_rhs
+;;
+;; licenses a reduction only at the whole candidate root searched through O.
+;; It does NOT license rewriting candidate_lhs below an arbitrary constructor.
+;; The stripped candidate patterns therefore compile to TrsRootProfile rather
+;; than TrsProfile.  This is the generic bridge for interpreted ADTs (ISA
+;; programs, plans, circuits, query trees) without claiming that distinct data
+;; constructors are propositionally equal.
+
+(type TgObserverLicense
+  (TgObserverLicense QName QName (List Param) Expr Expr TgLawEvidence))
+  ; citation, exact observer, params, candidate lhs/rhs, provenance
+
+(type TgObserverProfileR
+  (TgObserverProfileErr Symbol (List Int))
+  (TgObserverProfileOk (List TgObserverLicense)))
+
+(type TgOneObserverR
+  (TgOneObserverErr (List Int))
+  (TgOneObserverOk TgObserverLicense))
+
+(fn tg_unary_observer_arg ((observer QName) (e Expr)) (Option Expr)
+  (match e
+    ((Call q args)
+     (if (qname_eq q observer)
+       (match args
+         ((Cons candidate Nil) (Some candidate))
+         (_ None))
+       None))
+    (_ None)))
+
+(fn tg_observer_goal
+  ((q QName) (observer QName) (goal Goal) (evidence TgLawEvidence))
+  TgOneObserverR
+  (match goal
+    ((Goal params premises (Equation lhs rhs))
+     (match premises
+       ((Cons _ _)
+        (TgOneObserverErr
+          "premise-bearing theorem is not a v1 observer reduction"))
+       (Nil
+        (match (tg_unary_observer_arg observer lhs)
+          (None
+            (TgOneObserverErr
+              "observer reduction lhs is not the exact unary observer"))
+          ((Some candidate_lhs)
+           (match (tg_unary_observer_arg observer rhs)
+             (None
+               (TgOneObserverErr
+                 "observer reduction rhs is not the exact unary observer"))
+             ((Some candidate_rhs)
+              (TgOneObserverOk
+                (TgObserverLicense
+                  q
+                  observer
+                  params
+                  candidate_lhs
+                  candidate_rhs
+                  evidence)))))))))))
+
+(fn tg_one_observer
+  ((m Module)
+   (th Theory)
+   (srcs (List SrcEntry))
+   (q QName)
+   (observer QName))
+  TgOneObserverR
+  (match (tg_checked_goal m th srcs q)
+    ((TgCheckedGoalErr msg) (TgOneObserverErr msg))
+    ((TgCheckedGoalOk goal evidence)
+     (tg_observer_goal q observer goal evidence))))
+
+(fn tg_observer_q ((license TgObserverLicense)) QName
+  (match license
+    ((TgObserverLicense q _ _ _ _ _) q)))
+
+(fn tg_observer_mem ((q QName) (licenses (List TgObserverLicense))) Bool
+  (measure (struct licenses))
+  (match licenses
+    (Nil False)
+    ((Cons license rest)
+     (if (qname_eq q (tg_observer_q license)) True
+     (tg_observer_mem q rest)))))
+
+(fn tg_observer_snoc
+  ((licenses (List TgObserverLicense)) (license TgObserverLicense))
+  (List TgObserverLicense)
+  (measure (struct licenses))
+  (match licenses
+    (Nil (Cons license Nil))
+    ((Cons head rest) (Cons head (tg_observer_snoc rest license)))))
+
+(fn tg_capture_observer_go
+  ((m Module)
+   (ctx RCtx)
+   (th Theory)
+   (srcs (List SrcEntry))
+   (observer QName)
+   (names (List Symbol))
+   (acc (List TgObserverLicense)))
+  TgObserverProfileR
+  (measure (struct names))
+  (match names
+    (Nil (TgObserverProfileOk acc))
+    ((Cons name rest)
+     (let ((q (rhead (qn name) ctx)))
+       (if (tg_claim_item m q)
+         (if (tg_observer_mem q acc)
+           (TgObserverProfileErr name "duplicate observer reduction")
+           (match (tg_one_observer m th srcs q observer)
+             ((TgOneObserverErr msg) (TgObserverProfileErr name msg))
+             ((TgOneObserverOk license)
+              (tg_capture_observer_go
+                m
+                ctx
+                th
+                srcs
+                observer
+                rest
+                (tg_observer_snoc acc license)))))
+         (TgObserverProfileErr
+           name
+           "observer reduction is not a claim item in scope"))))))
+
+(fn tg_capture_observer
+  ((m Module)
+   (ctx RCtx)
+   (th Theory)
+   (srcs (List SrcEntry))
+   (observer QName)
+   (names (List Symbol)))
+  TgObserverProfileR
+  (tg_capture_observer_go m ctx th srcs observer names Nil))
 
 ;; ---- graduation join: checked licenses -> generic meta rewrite profile ----
 ;;
@@ -231,3 +385,34 @@
      (match (trs_profile rules)
        ((TrsProfileErr msg) (TgCanonCompileErr msg))
        ((TrsProfileOk profile) (TgCanonCompileOk profile))))))
+
+(type TgObserverCompileR
+  (TgObserverCompileErr (List Int))
+  (TgObserverCompileOk TrsRootProfile))
+
+(type TgObserverRulesR
+  (TgObserverRulesErr (List Int))
+  (TgObserverRulesOk (List TrsRule)))
+
+(fn tg_compile_observer_rules ((licenses (List TgObserverLicense)))
+  TgObserverRulesR
+  (measure (struct licenses))
+  (match licenses
+    (Nil (TgObserverRulesOk Nil))
+    ((Cons (TgObserverLicense q _ params lhs rhs _) rest)
+     (match (trs_rule q (tg_param_types params) lhs rhs)
+       ((TrsRuleErr msg) (TgObserverRulesErr msg))
+       ((TrsRuleOk rule)
+        (match (tg_compile_observer_rules rest)
+          ((TgObserverRulesErr msg) (TgObserverRulesErr msg))
+          ((TgObserverRulesOk rules)
+           (TgObserverRulesOk (Cons rule rules)))))))))
+
+(fn tg_compile_observer ((licenses (List TgObserverLicense)))
+  TgObserverCompileR
+  (match (tg_compile_observer_rules licenses)
+    ((TgObserverRulesErr msg) (TgObserverCompileErr msg))
+    ((TgObserverRulesOk rules)
+     (match (trs_root_profile rules)
+       ((TrsRootProfileErr msg) (TgObserverCompileErr msg))
+       ((TrsRootProfileOk profile) (TgObserverCompileOk profile))))))

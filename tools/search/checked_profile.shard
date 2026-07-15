@@ -1,9 +1,9 @@
-;;; checked_profile.shard — load an authentic theorem profile from a CHECK
+;;; checked_profile.shard — load authentic reduction profiles from a CHECK
 ;;; closure.  This is the IO/driver shell around theorem_scope's pure join:
 ;;;
 ;;;   root path + explicit ordered names
 ;;;     -> exact root RCtx × checked Theory × declaration provenance
-;;;     -> validated meta/rewrite TrsProfile
+;;;     -> validated congruence TrsProfile and/or observer TrsRootProfile
 ;;;
 ;;; Keeping closure loading here lets search/census applications share the
 ;;; same profile-generation path without moving World or driver machinery into
@@ -37,6 +37,17 @@
 (type TgCheckedProfileR
   (TgCheckedProfileErr (List Int))
   (TgCheckedProfileOk TrsProfile))
+
+(type TgCheckedObserverProfileR
+  (TgCheckedObserverProfileErr (List Int))
+  (TgCheckedObserverProfileOk TrsRootProfile))
+
+(type TgCheckedReductions
+  (TgCheckedReductions TrsProfile TrsRootProfile))
+
+(type TgCheckedReductionsR
+  (TgCheckedReductionsErr (List Int))
+  (TgCheckedReductionsOk TgCheckedReductions))
 
 (fn tg_src_at ((path (List Int)) (srcs (List SrcEntry))) (Option SrcEntry)
   (measure (struct srcs))
@@ -100,6 +111,38 @@
         (match (tg_compile_canon licenses)
           ((TgCanonCompileErr msg) (TgCheckedProfileErr msg))
           ((TgCanonCompileOk profile) (TgCheckedProfileOk profile))))))))
+
+(fn tg_checked_observer_profile
+  ((scope TgCheckedScope) (observer QName) (names (List Symbol)))
+  TgCheckedObserverProfileR
+  (match scope
+    ((TgCheckedScope m ctx th srcs)
+     (match (tg_capture_observer m ctx th srcs observer names)
+       ((TgObserverProfileErr name msg)
+        (TgCheckedObserverProfileErr
+          (append_int (chars_of_sym name) (append_int ": " msg))))
+       ((TgObserverProfileOk licenses)
+        (match (tg_compile_observer licenses)
+          ((TgObserverCompileErr msg) (TgCheckedObserverProfileErr msg))
+          ((TgObserverCompileOk profile)
+           (TgCheckedObserverProfileOk profile))))))))
+
+;; One checked closure fuels both theorem classes. This is the normal search
+;; join: congruence rules become an ordinary TrsProfile; exact-observer laws
+;; become a root-only profile that cannot leak into recursive rewriting.
+(fn tg_checked_reductions
+  ((scope TgCheckedScope)
+   (observer QName)
+   (canon_names (List Symbol))
+   (observer_names (List Symbol)))
+  TgCheckedReductionsR
+  (match (tg_checked_profile scope canon_names)
+    ((TgCheckedProfileErr msg) (TgCheckedReductionsErr msg))
+    ((TgCheckedProfileOk canon)
+     (match (tg_checked_observer_profile scope observer observer_names)
+       ((TgCheckedObserverProfileErr msg) (TgCheckedReductionsErr msg))
+       ((TgCheckedObserverProfileOk observed)
+        (TgCheckedReductionsOk (TgCheckedReductions canon observed)))))))
 
 (fn tg_load_checked_profile ((path (List Int)) (names (List Symbol)) (w World))
   (Pair TgCheckedProfileR World)

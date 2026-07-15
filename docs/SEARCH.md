@@ -1777,6 +1777,60 @@ typed census and the superposed runner build through
 without enumerating it and prints checked rule count, raw count, removed
 spellings, and filtered total before its region metrics.
 
+An observational program law is categorically different from an ordinary
+term equality, but it is not a different search engine.  If the checker has
+proved only
+
+    search_probe(candidate_lhs) = search_probe(candidate_rhs)
+
+then replacing `candidate_lhs` below an arbitrary candidate constructor is
+unsound: that constructor need not preserve the observer's equivalence.
+`search_observer_profile : () -> List Symbol` therefore captures exactly this
+premise-free, unary-observer theorem shape through the same checked scope and
+provenance path.  The common observer call is removed only after the theorem
+has been authenticated.  Its candidate equation compiles to a distinct
+`TrsRootProfile`, not a `TrsProfile`; the types prevent passing an observational
+law to the recursive rewriter by accident.
+
+`TrsFormationPlan` combines the two licensed pressures.  Ordinary congruence
+formation applies at every generated node.  Root-profile formation is consumed
+exactly once at the whole candidate, although its shallow argument exclusions
+still constrain that root's child holes.  The dynamic runners load both
+profiles from one checked closure and report `CANON RULES` and `OBSERVER RULES`
+separately.  `typed_observer_value.shard` pins the distinction on a generic ADT:
+
+    CANON RULES 0; OBSERVER RULES 1
+    RAW 4; REMOVED 1; TOTAL 3
+
+The law removes `Leaf(Noise 1)` in favor of `Leaf(Keep 1)`, while
+`Wrap(Leaf(Noise 1))` deliberately remains.  This is the reusable foundation
+for ISA refinement laws: the observer can be an interpreter, refinement
+relation encoded as an exact result, or another task-specific semantic map,
+without putting an ISA name in the engine.
+
+The remaining differences are proof and constraint tiers rather than
+list-search versus machine-search engines:
+
+- candidate equality supplies unrestricted congruence; observer equality is
+  initially root-only and needs checked contextual/congruence closure before it
+  may descend;
+- shallow separable redexes compile directly to hole exclusions; deep patterns
+  require a regular-tree-automaton product, and repeated-variable patterns need
+  relational state rather than independent hole filters;
+- partial, effectful, or fuel-bounded interpreters need conditions or a
+  refinement theorem that says when the observation is stable; and
+- a useful orientation must stay inside the selected grammar and cost budget,
+  or provide an explicit representability certificate.
+
+Consequently the general target remains one pipeline: reflected environment
+and hole language, an explicit observation/refinement boundary, checked
+reduction profiles with their application domains, a pre-miner, quotient-first
+grammar construction, and lazy semantic narrowing.  The next general mining
+step is to bucket terms by exact observer behavior, propose oriented schemas,
+and submit the resulting observer equations to the checker; deeper and
+nonlinear discoveries then wait for the corresponding generic constraint tier
+instead of being installed as unsound shallow filters.
+
 `profile_census.shard` is the reusable measurement join over this mechanism.
 It accepts the same reflected heads, atoms, binders, result type, depth, and
 ordered `TrsRule` list as the generic typed grammar—not an append-specific ISA

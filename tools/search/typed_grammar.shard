@@ -628,10 +628,14 @@
 
 ;; ---- work-list grammar construction ----------------------------------------
 
-;; `binders` is the kernel/types BVar environment: innermost first. `forbids`
-;; is the exact set of root shapes disallowed at this hole by its parent's
-;; separable formation clauses.
-(type TgTask (TgTask Int Type (List Type) Int Symbol (List TrsShape)))  ; id, type, binders, depth, zone, forbids
+;; `binders` is the kernel/types BVar environment: innermost first. `once` is
+;; a root-scoped formation consulted at THIS hole only. Its derived argument
+;; exclusions enter the immediate child tasks through `forbids`, but the
+;; profile itself is not recursively re-applied. Ordinary `formation` remains
+;; active at every node and therefore requires congruence-valid equations.
+(type TgTask
+  (TgTask Int Type (List Type) Int Symbol TrsFormation (List TrsShape)))
+  ; id, type, binders, depth, zone, once, inherited forbids
 
 (type TgSlots (TgSlots (List Expr) (List TgTask) Int))
 
@@ -654,6 +658,7 @@
    (head TgHead)
    (routes (List TgRoute))
    (formation TrsFormation)
+   (once TrsFormation)
    (parent TrsShape)
    (index Int)
    (next Int))
@@ -671,6 +676,7 @@
          head
          routes
          formation
+         once
          parent
          (+ index 1)
          (+ next 1))
@@ -684,7 +690,10 @@
               binders
               depth
               (tg_route_zone head index routes zone)
-              (trs_arg_forbids formation parent index))
+              (trs_empty_formation)
+              (tg_app
+                (trs_arg_forbids formation parent index)
+                (trs_arg_forbids once parent index)))
             tasks)
           nx))))))
 
@@ -724,6 +733,7 @@
               (tg_app (type_subst_list subst (tg_slot_binders slot)) ambient)
               depth
               (tg_slot_zone slot ambient_zone)
+              (trs_empty_formation)
               Nil)
             tasks)
           nx))))))
@@ -784,28 +794,33 @@
        (if (type_eq ty want) (Cons (BVar i) tail) tail)))))
 
 (fn tg_expr_allowed
-  ((formation TrsFormation) (forbids (List TrsShape)) (e Expr))
+  ((formation TrsFormation)
+   (once TrsFormation)
+   (forbids (List TrsShape))
+   (e Expr))
   Bool
   (match (trs_expr_shape e)
     (None True)
     ((Some shape)
      (if (trs_shape_mem shape forbids) False
      (if (trs_forbids_root formation shape) False
-     True)))))
+     (if (trs_forbids_root once shape) False
+     True))))))
 
 (fn tg_atoms
   ((atoms (List TgAtom))
    (want Type)
    (formation TrsFormation)
+   (once TrsFormation)
    (forbids (List TrsShape)))
   (List Expr)
   (measure (struct atoms))
   (match atoms
     (Nil Nil)
     ((Cons (TgAtom ty e) rest)
-     (let ((tail (tg_atoms rest want formation forbids)))
+     (let ((tail (tg_atoms rest want formation once forbids)))
        (if (type_eq ty want)
-         (if (tg_expr_allowed formation forbids e)
+         (if (tg_expr_allowed formation once forbids e)
            (if (tg_expr_mem e tail) tail (Cons e tail))
            tail)
          tail)))))
@@ -832,6 +847,7 @@
    (depth Int)
    (zone Symbol)
    (formation TrsFormation)
+   (once TrsFormation)
    (forbids (List TrsShape))
    (next Int)
    (alts (List Expr))
@@ -843,14 +859,15 @@
     ((Cons h rest)
      (match (tg_head_sig m h want)
        ((TgSigNo)
-        (tg_heads_alts m rest routes want binders depth zone formation forbids
-          next alts tasks))
+        (tg_heads_alts m rest routes want binders depth zone formation once
+          forbids next alts tasks))
        ((TgSigOk params)
         (let ((shape (tg_head_shape h (tg_types_len params))))
           (if
             (if (trs_shape_mem shape forbids) True
-            (trs_forbids_root formation shape))
-            (tg_heads_alts m rest routes want binders depth zone formation
+            (if (trs_forbids_root formation shape) True
+            (trs_forbids_root once shape)))
+            (tg_heads_alts m rest routes want binders depth zone formation once
               forbids next alts tasks)
             (match params
               (Nil
@@ -863,6 +880,7 @@
                   depth
                   zone
                   formation
+                  once
                   forbids
                   next
                   (tg_alt_add (tg_apply h Nil) alts)
@@ -870,7 +888,7 @@
               ((Cons _ _)
                (if (le depth 0)
                  (tg_heads_alts m rest routes want binders depth zone formation
-                   forbids next alts tasks)
+                   once forbids next alts tasks)
                  (match
                    (tg_slots
                      params
@@ -880,6 +898,7 @@
                      h
                      routes
                      formation
+                     once
                      shape
                      0
                      next)
@@ -893,6 +912,7 @@
                       depth
                       zone
                       formation
+                      once
                       forbids
                       nx
                       (tg_alt_add (tg_apply h args) alts)
@@ -984,18 +1004,18 @@
   ((m Module) (env TgEnv) (formation TrsFormation) (task TgTask) (next Int))
   TgOneR
   (match task
-    ((TgTask id want binders depth zone_name forbids)
+    ((TgTask id want binders depth zone_name once forbids)
      (match (tg_env_zone env zone_name)
        (None (TgOneErr "typed hole names a missing environment"))
        ((Some (TgZone _ heads atoms rules routes))
         (let
           ((base
              (tg_app
-               (tg_atoms atoms want formation forbids)
+               (tg_atoms atoms want formation once forbids)
                (tg_vars binders want 0))))
           (match
             (tg_heads_alts m heads routes want binders depth zone_name formation
-              forbids next base Nil)
+              once forbids next base Nil)
             ((TgHeadsR head_alts head_tasks nx)
              (match
                (tg_rules_alts rules want binders zone_name depth nx head_alts
@@ -1085,6 +1105,52 @@
   (match env
     ((TgEnv zones) (tg_zones_have_rules zones))))
 
+(fn tg_build_env_plan
+  ((m Module)
+   (env TgEnv)
+   (binders (List Type))
+   (want Type)
+   (depth Int)
+   (root_zone Symbol)
+   (plan TrsFormationPlan))
+  TgBuildR
+  (match plan
+    ((TrsFormationPlan formation root_formation)
+     (if (lt depth 0) (TgBuildErr "negative typed-grammar depth")
+     (if (if (trs_plan_is_empty plan) False (tg_env_has_rules env))
+       (TgBuildErr
+         "formation-aware typed grammar does not yet admit template rules")
+       (match (tg_prepare_env m env)
+         ((TgEnvErr msg) (TgBuildErr msg))
+         ((TgEnvOk ready)
+          (match (tg_env_zone ready root_zone)
+            (None (TgBuildErr "missing root typed-hole environment"))
+            ((Some _)
+             (match
+               (tg_loop
+                 m
+                 ready
+                 formation
+                 (Cons
+                   (TgTask
+                     0
+                     want
+                     binders
+                     depth
+                     root_zone
+                     root_formation
+                     Nil)
+                   Nil)
+                 1
+                 Nil
+                 (tg_build_fuel))
+               ((TgLoopErr msg) (TgBuildErr msg))
+               ((TgLoopOk entries nx)
+                (let ((g (Grammar entries)) (root (hole 0)))
+                  (match (g_wf g)
+                    ((GWErr msg) (TgBuildErr msg))
+                    ((GWOk) (TgBuildOk root g nx)))))))))))))))
+
 (fn tg_build_env_formation
   ((m Module)
    (env TgEnv)
@@ -1094,31 +1160,14 @@
    (root_zone Symbol)
    (formation TrsFormation))
   TgBuildR
-  (if (lt depth 0) (TgBuildErr "negative typed-grammar depth")
-  (if (if (trs_formation_is_empty formation) False (tg_env_has_rules env))
-    (TgBuildErr
-      "formation-aware typed grammar does not yet admit template rules")
-    (match (tg_prepare_env m env)
-      ((TgEnvErr msg) (TgBuildErr msg))
-      ((TgEnvOk ready)
-       (match (tg_env_zone ready root_zone)
-         (None (TgBuildErr "missing root typed-hole environment"))
-         ((Some _)
-          (match
-            (tg_loop
-              m
-              ready
-              formation
-              (Cons (TgTask 0 want binders depth root_zone Nil) Nil)
-              1
-              Nil
-              (tg_build_fuel))
-            ((TgLoopErr msg) (TgBuildErr msg))
-            ((TgLoopOk entries nx)
-             (let ((g (Grammar entries)) (root (hole 0)))
-               (match (g_wf g)
-                 ((GWErr msg) (TgBuildErr msg))
-                 ((GWOk) (TgBuildOk root g nx)))))))))))))
+  (tg_build_env_plan
+    m
+    env
+    binders
+    want
+    depth
+    root_zone
+    (trs_formation_plan formation (trs_empty_formation))))
 
 (fn tg_build_env
   ((m Module)

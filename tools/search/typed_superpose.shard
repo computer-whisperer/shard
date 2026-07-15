@@ -5,9 +5,9 @@
 ;;; only when it demands an open hole; a mismatch kills the whole consistent
 ;;; subspace and unconsulted holes in a passing region are don't-cares.
 ;;; Exhaustive enumeration is available only as an agreement audit.
-;;; An optional explicit `search_canon_profile` is authenticated against the
-;;; task's CHECK closure and projected into generation-time formation filters;
-;;; theorem-redex spellings never enter the ranked search space.
+;;; Optional explicit congruence and observer-root profiles are authenticated
+;;; against the task's CHECK closure and projected into generation-time
+;;; formation filters; licensed redex spellings never enter the ranked space.
 ;;;
 ;;; RUN IT:
 ;;;   bin/shard_eval run tools/search/typed_superpose.shard TASK.shard
@@ -194,7 +194,8 @@
 
 ;; ---- report ----------------------------------------------------------------
 
-(type TsPressure (TsPressure Int Int))  ; checked rule count, raw grammar count
+(type TsPressure (TsPressure Int Int Int))
+  ; congruence rule count, observer-root rule count, raw grammar count
 
 (fn ts_audit_report ((audit TsAuditR)) (List Int)
   (match audit
@@ -229,7 +230,7 @@
    (audit TsAuditR))
   (List Int)
   (match pressure
-    ((TsPressure rules raw)
+    ((TsPressure canon_rules observer_rules raw)
      (te_cat
        (list
          "SUPERPOSED-SEARCH "
@@ -239,7 +240,9 @@
          "\nHOLES "
          (show_int holes)
          "\nCANON RULES "
-         (show_int rules)
+         (show_int canon_rules)
+         "\nOBSERVER RULES "
+         (show_int observer_rules)
          "\nRAW "
          (show_int raw)
          "\nREMOVED "
@@ -471,7 +474,7 @@
           ((SkCErr msg) (ts_fail (append_int "count: " msg) w))
           ((SkCOk total)
            (match pressure
-             ((TsPressure rules raw)
+             ((TsPressure canon_rules observer_rules raw)
               (ts_drive_counted
                 path
                 m
@@ -488,7 +491,10 @@
                 grammar
                 memo
                 total
-                (TsPressure rules (if (lt raw 0) total raw))
+                (TsPressure
+                  canon_rules
+                  observer_rules
+                  (if (lt raw 0) total raw))
                 audit
                 w))))))))))
 
@@ -513,12 +519,13 @@
    (witness TeWitness)
    (scope RCtx)
    (cfg TeCfg)
-   (formation TrsFormation)
-   (rules Int)
+   (plan TrsFormationPlan)
+   (canon_rules Int)
+   (observer_rules Int)
    (raw_total Int)
    (w World))
   World
-  (match (te_make_space_formation m want scope cfg formation)
+  (match (te_make_space_plan m want scope cfg plan)
     ((TeSpaceErr msg) (ts_fail msg w))
     ((TeSpaceOk space)
      (ts_drive_space
@@ -531,7 +538,7 @@
        target
        witness
        space
-       (TsPressure rules raw_total)
+       (TsPressure canon_rules observer_rules raw_total)
        audit
        w))))
 
@@ -547,15 +554,20 @@
    (target Expr)
    (witness TeWitness)
    (cfg TeCfg)
-   (canon TeCanon)
+   (reductions TeReductions)
    (w World))
   World
   (let ((scope (te_import_ctx m path src)))
-    (match canon
-      ((TeCanon _ formation rules)
+    (match reductions
+      ((TeReductions
+         (TeCanon _ formation canon_rules)
+         (TeObserved _ root_formation observer_rules))
+       (let
+         ((rules (+ canon_rules observer_rules))
+          (plan (trs_formation_plan formation root_formation)))
        (if (lt rules 1)
          (ts_with_filtered path m audit ctx screen probe want target witness
-           scope cfg formation rules -1 w)
+           scope cfg plan canon_rules observer_rules -1 w)
          (match (te_make_space m want scope cfg)
            ((TeSpaceErr msg) (ts_fail (append_int "raw: " msg) w))
            ((TeSpaceOk raw_space)
@@ -563,7 +575,8 @@
               ((TsCountErr msg) (ts_fail (append_int "raw count: " msg) w))
               ((TsCountOk raw_total)
                (ts_with_filtered path m audit ctx screen probe want target
-                 witness scope cfg formation rules raw_total w))))))))))
+                 witness scope cfg plan canon_rules observer_rules raw_total
+                 w)))))))))))
 
 (fn ts_with_target
   ((path (List Int))
@@ -577,14 +590,14 @@
    (target Expr)
    (witness_mode TeWitnessFd)
    (cfg TeCfg)
-   (canon TeCanon)
+   (reductions TeReductions)
    (w World))
   World
   (match (te_load_witness ctx witness_mode)
     ((TeWitnessLoadErr msg) (ts_fail msg w))
     ((TeWitnessLoadOk witness)
      (ts_with_witness path src m audit ctx screen probe want target witness cfg
-       canon w))))
+       reductions w))))
 
 (fn ts_with_screen
   ((path (List Int))
@@ -598,14 +611,14 @@
    (want Type)
    (cfg TeCfg)
    (screen TeScreen)
-   (canon TeCanon)
+   (reductions TeReductions)
    (w World))
   World
   (match (invoke_fd_ctx ctx target_fd Nil)
     (None (ts_fail "target invocation" w))
     ((Some target)
      (ts_with_target path src m audit ctx screen probe want target witness_mode
-       cfg canon w))))
+       cfg reductions w))))
 
 (fn ts_with_config
   ((path (List Int))
@@ -618,16 +631,16 @@
    (witness_mode TeWitnessFd)
    (want Type)
    (cfg TeCfg)
-   (canon TeCanon)
+   (reductions TeReductions)
    (w World))
   World
   (match (te_screen_sig m want)
     ((TeScreenSigErr msg) (ts_fail (append_int "protocol: " msg) w))
     ((TeScreenSigOk screen)
      (ts_with_screen path src m audit ctx probe target_fd witness_mode want cfg
-       screen canon w))))
+       screen reductions w))))
 
-(fn ts_with_canon
+(fn ts_with_reductions
   ((path (List Int))
    (src (List Int))
    (m Module)
@@ -638,16 +651,23 @@
    (witness_mode TeWitnessFd)
    (want Type)
    (cfg TeCfg)
-   (names (List Symbol))
+   (canon_names (List Symbol))
+   (observer_names (List Symbol))
    (w World))
   World
-  (match (te_load_canon path names w)
+  (match
+    (te_load_reductions
+      path
+      (te_probe_qname probe)
+      canon_names
+      observer_names
+      w)
     ((Pair result w2)
      (match result
-       ((TeCanonErr msg) (ts_fail (append_int "canon: " msg) w2))
-       ((TeCanonOk canon)
+       ((TeReductionsErr msg) (ts_fail (append_int "reductions: " msg) w2))
+       ((TeReductionsOk reductions)
         (ts_with_config path src m audit ctx probe target_fd witness_mode want
-          cfg canon w2))))))
+          cfg reductions w2))))))
 
 (fn ts_search
   ((path (List Int)) (src (List Int)) (m Module) (audit Bool) (w World))
@@ -661,9 +681,13 @@
          ((TeCfgOk cfg)
           (match (te_canon_names ctx m)
             ((TeCanonNamesErr msg) (ts_fail (append_int "protocol: " msg) w))
-            ((TeCanonNamesOk names)
-             (ts_with_canon path src m audit ctx probe target_fd witness_mode
-               want cfg names w)))))))))
+            ((TeCanonNamesOk canon_names)
+             (match (te_observer_names ctx m)
+               ((TeObserverNamesErr msg)
+                (ts_fail (append_int "protocol: " msg) w))
+               ((TeObserverNamesOk observer_names)
+                (ts_with_reductions path src m audit ctx probe target_fd
+                  witness_mode want cfg canon_names observer_names w)))))))))))
 
 (fn ts_bytes_eq ((a (List Int)) (b (List Int))) Bool
   (measure (struct a))

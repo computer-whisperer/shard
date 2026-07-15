@@ -322,6 +322,8 @@ TARGETS=(
   tools/search/tasks/typed_x86_calculator.shard
   tools/search/tasks/typed_x86_calculator4.shard
   tools/search/tasks/typed_append_value.shard
+  tools/search/tasks/observer_model.shard
+  tools/search/tasks/typed_observer_value.shard
   tools/search/gen/imp_add1_refinement.shard
   tools/search/gen/imp_mix_refinement.shard
   tools/search/gen/x86_calculator_refinement.shard
@@ -458,6 +460,16 @@ if [ -x bin/shard_eval ]; then
   # expressions to 63 normal forms before narrowing; the audit enumerates only
   # that filtered rank space and agrees on its unique target.
   bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_append_value.shard audit
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+echo "=== search: checked observer-root reduction pin ==="
+if [ -x bin/shard_eval ]; then
+  # The checked law equates observations rather than candidate values. It
+  # removes Leaf(Noise 1) only at the candidate root: Wrap(Leaf(Noise 1))
+  # remains in the three-member quotient because congruence was not proved.
+  bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_observer_value.shard audit
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
