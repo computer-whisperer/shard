@@ -2516,14 +2516,12 @@ targets, BRANCHLESS — the DATA-AS-DATA decision stays unforced.**
   pre-existing content (diffs purely additive); weld 942/0.
 - NEXT: I2e-3 (the pure blocks-loop artifact) per the composition
   ruling, then I2e-4 (the bin).
-**IF-1 — the branch tier, wasm leg (2026-07-16; the imp-if-tier fork;
-two commits: IF-1a the foundation, IF-1b the emission).** impgen's
-coverage grows past sha's silhouette to the first branch class:
-top-level `IIf` with straight-line arms in a mixed body, generated
-FULL on wasm; the x86 leg stays an honest tie+note ("top-level branch
-(x86 branch leg = named growth)" — rung 1b, per-arm polarity-premised
-sub-lemmas over the quantified-residue machinery, user-ruled against
-translator arm seals).
+**IF-1 — the branch tier (2026-07-16; the imp-if-tier fork; four
+commits: IF-1a the foundation, IF-1b the wasm emission, IF-1c-a the
+x86 blueprint, IF-1c-b the x86 emission).** impgen's coverage grows
+past sha's silhouette to the first branch class: top-level `IIf` with
+straight-line comparison-headed branches in a mixed body, generated
+FULL on BOTH targets.
 
 - **IF-1a — ist_seam1 + the blueprint.** models/imp grows the
   SINGLETON seam: `istmts` over `(Cons s b)` at tied fuel =
@@ -2591,13 +2589,62 @@ translator arm seals).
   EIGHT pre-existing outs (examples scalar/loop/mixed ×2 targets +
   the two sha outs) regenerate byte-identical under the extended
   tool.
-- Gates: driver 74 products green; corpus FAIL-set == baseline-65.
-- NEXT (the fork's ladder): rung 1b the x86 branch leg (per-arm
-  premised sub-lemmas — a fixed xm_scont residue binder set cannot
-  serve two arms; the polarity premise discharges from the chain's
-  case fact; READ the search-arc calculator4 refinement first), rung
-  2 branch-in-loop-body (the sha-adjacent fence), rung 3 nested
-  branches — assess, fence loudly if not taken.
+- Gates (IF-1a/1b): driver 74 products green; corpus FAIL-set ==
+  baseline-65.
+- **IF-1c — the x86 leg (blueprint + emission).** The 1b design note
+  ("per-arm polarity-premised sub-lemmas") DISSOLVED on contact with
+  V2-7's recorded finding: an x86 sub-lemma's conclusion must SPELL
+  its scratch residues, and a branch has NO seal on either side
+  (ix_cjoin seals flat-flat neighbors only), so the then arm's store
+  dirt — the band tree in RAX — rides out of the branch unspellable
+  at any conclusion point. The branch therefore walks INLINE in its
+  chain lemma, the loop-leg precedent, and no new adapter species
+  exists: ONE case-on of the shared raw-operand comparison scrutinee
+  (iop_val compares unwrapped, xcond compares rget — both sides stick
+  on the same inner cmp term), walked at the LEG'S IN-FLIGHT state
+  (not fresh locals — the x86 chain does not re-bind at a branch),
+  and each polarity arm carries its own tail text (arm guards, worker
+  cite, il_wlen exposure, next-boundary cite) to the SAME cite
+  targets. The measured keys (examples/sqbx_probe.shard, 388/0, the
+  hand blueprint): fuel towers are ARM-INDEPENDENT on both sides —
+  xeval_seq and istmts both hand continuations the same reservoir
+  (depth budgets, not step counts) — so the V2-8 chain arithmetic
+  carries over verbatim with the branch counted as 1 machine element
+  / 1 imp statement, and imp-side cites keep `(inst c2 c2)` at zero
+  offsets; JOINS BIND BY MATCHING — the arms park different RAX trees
+  (band tree vs 0) and the next boundary's za binder absorbs both,
+  its fuel binder any machine surplus (the user-ruled
+  quantified-residue lean, realized without translator changes).
+  Emission: `MxPB` carries its source `IIf` (the x86 leg re-walks
+  cond + arms at the leg state); the leg grammar GLUES branches
+  (mxx_legs: no seal → no cut; a branch leg = [flat?] branch [flat?]
+  ending at a loop or the terminal seal); mxx_segm folds the piece
+  list; mxx_ag adds conservative node-count headroom for the nested
+  arm walks (oversupply safe — machine binds by matching, imp derives
+  by subtraction); mxx_bleg emits the leg (prefix guard spine → the
+  branch case-on → per-arm suffix spines and tails, arm tails
+  identical text modulo walked locals/memory). GUARD DEDUP IS
+  PER-REGION (prefix / then-path / else-path, never across the
+  branch): an arm's guard occurrences only MATERIALIZE after the
+  polarity case-on resolves, so an earlier textually-equal guard's
+  rewrite cannot discharge them — found live by it_ift's else-arm
+  store sharing guards with the entry store; repeated case-ons are
+  sound (an inconsistent duplicate closes by conflated traps); arm
+  spine indices offset past the prefix so hlt/hle names never shadow.
+  v1 fences (note-grade, mxx_legck): "adjacent branches share an
+  unsealed span (named growth)" (>1 branch per leg — 2^K tail text),
+  "branch leg ending at a mid-flat seal point (named growth)" (the
+  per-arm ist_seam composition, unbuilt). Fixture: it_ifm_fn grew a
+  tail segment so its branch leg cites a next boundary PER ARM; outs
+  impgen_x86_if_out 414/0 (full legs — the mid-chain pin green FIRST
+  TRY, the terminal pin after the dedup-scope fix) and
+  impgen_wasm_if_out 125/0; both deterministic + canon-stable; all
+  six pre-existing example outs byte-identical (sha's regen legs
+  driver-verified).
+- NEXT (the fork's ladder): rung 2 branch-in-loop-body (the
+  sha-adjacent fence: lw_stmts refuses nested control in loop
+  bodies), rung 3 nested branches + the IF-1c fences (adjacent
+  branches, mid-leg branch) — assess, fence loudly if not taken.
 
 **I2e-3a — THE BLOCKS LOOP, wasm leg (2026-07-16): a counted loop
 CALLS the generated block k times; the composition ruling's icall
