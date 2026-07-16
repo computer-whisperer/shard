@@ -1,0 +1,85 @@
+;;; examples/weld_probe.shard — the I2e-1 SPELLING-BRIDGE PROBE: a
+;;; walk lemma is stated over an (inline …)-spliced SOURCE body
+;;; (builder calls unexpanded — the sibling's isha_block_walk
+;;; spelling), but weld consumers meet the same statement list as its
+;;; evaluated NORMAL FORM (the generated outs' spelling: builders
+;;; unfolded, rest-fn calls flattened). This probe measures, at toy
+;;; scale, which citation shapes cross that gap:
+;;;
+;;;   MEASURED (2026-07-16): the direct citation does NOT apply — the
+;;;   rewriter matches syntactically, never modulo computation (a
+;;;   source-spelled lemma pattern cannot see an NF-spelled goal).
+;;;   The weld therefore carries BOTH spellings as local nullary fns
+;;;   and crosses between them by compute-both bridge equations
+;;;   (everything in a body position is closed ground data, so both
+;;;   istmts applications meet at the shared normal form under a
+;;;   stopped compute) — pw_bridge is that move, and pw_use_nf pins
+;;;   the full consumer recipe: bridge RL first, then the walk.
+;;;
+;;; The verdict feeds std/sha256's weld file (I2e-1); this file stays
+;;; as the pinned record of the measurement.
+
+(import "../kernel/stdlib.shard")
+(import "../models/imp/imp.shard")
+(import "../std/mem")
+
+(use (:: models imp imp *))
+
+(use (:: std mem *))
+
+;; the toy builder (the ie_ch/ie_rotr32 stand-in): source bodies call
+;; it, evaluated bodies carry its unfolded tree
+(fn pw_b ((i Int)) IExp (IBin U32 IAdd (ILoc i) (IConst 1)))
+
+;; the source body: one builder-called statement + one literal one
+(fn pw_body () (List IStmt)
+  (list (ISet 0 (pw_b 0)) (ISet 1 (IBin U32 IAdd (ILoc 1) (ILoc 0)))))
+
+;; the NF body: the same list as the evaluator leaves it (builder
+;; unfolded) — the generated-out spelling
+(fn pw_nfbody () (List IStmt)
+  (list
+    (ISet 0 (IBin U32 IAdd (ILoc 0) (IConst 1)))
+    (ISet 1 (IBin U32 IAdd (ILoc 1) (ILoc 0)))))
+
+;; the walk lemma, stated at the SOURCE spelling (isha_block_walk's
+;; shape: inline splice, builder calls in the term)
+(claim pw_walk
+  (goal ((x0 Int) (x1 Int) (m Mem) (d Nat)) ()
+    (=
+      (istmts (S^ 6 d) 65536 (inline pw_body) (list x0 x1) m)
+      (Some
+        (INorm
+          (list
+            (mod (+ x0 1) 4294967296)
+            (mod (+ x1 (mod (+ x0 1) 4294967296)) 4294967296))
+          m))))
+  (steps ((compute both (stop mod))) refl))
+
+;; the spelling bridge (the fallback the weld can always use): both
+;; bodies are closed ground data, so istmts applications over them
+;; meet at the shared normal form under compute-both
+(claim pw_bridge
+  (goal ((x0 Int) (x1 Int) (m Mem) (d Nat)) ()
+    (=
+      (istmts (S^ 6 d) 65536 (inline pw_body) (list x0 x1) m)
+      (istmts (S^ 6 d) 65536 (inline pw_nfbody) (list x0 x1) m)))
+  (steps ((compute both (stop istmts))) refl))
+
+;; THE CONSUMER RECIPE (the measured direct citation fails — see the
+;; header): fold the NF spelling back to the source spelling through
+;; the bridge (RL), then the walk lemma applies.
+(claim pw_use_nf
+  (goal ((x0 Int) (x1 Int) (m Mem) (d Nat)) ()
+    (=
+      (istmts (S^ 6 d) 65536 (inline pw_nfbody) (list x0 x1) m)
+      (Some
+        (INorm
+          (list
+            (mod (+ x0 1) 4294967296)
+            (mod (+ x1 (mod (+ x0 1) 4294967296)) 4294967296))
+          m))))
+  (steps
+    ((rewrite (lemma pw_bridge) rl lhs true ())
+     (rewrite (lemma pw_walk) lr lhs true ()))
+    refl))

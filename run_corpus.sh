@@ -141,6 +141,7 @@ TARGETS=(
   examples/sqm2_probe.shard
   examples/sqmc_probe.shard
   examples/sqxc_probe.shard
+  examples/weld_probe.shard
   models/wasm/wasm.shard
   models/wasm/encode.shard
   examples/wasm_smoke.shard
@@ -281,6 +282,7 @@ TARGETS=(
   std/sha256/sha256.imp.shard
   std/sha256/impgen_wasm_out.shard
   std/sha256/impgen_x86_out.shard
+  std/sha256/sha256.weld.shard
   examples/sketch_pin.shard
   tools/search/rev_obj.shard
   tools/search/rev.shard

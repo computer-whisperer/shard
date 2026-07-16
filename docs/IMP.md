@@ -2228,6 +2228,52 @@ boundaries, and the x86 chain factoring rides them.
 - NEXT: I2e (./sha256sum — weld = hand block walk ∘ imp_w_shblock;
   both block legs now stand FULL).
 
+**I2e-1 — THE BLOCK WELD (2026-07-16): one compression block's
+MACHINE code lands on spec shapes, both targets.**
+std/sha256/sha256.weld.shard composes the generated ISA legs with the
+hand walk: `shw_wblock` (eval_seq of the wasm block code from any
+stack/locals frame at the walk's layout = ONorm of the named output
+value) and `shw_xblock` (xeval_seq of the x86 block code from the
+layout realized as the SysV register file = XNorm through xargs' home
+mapping), each premised exactly on the walk's three layout facts
+(0 ≤ src, src+64 ≤ wb, wb+544 ≤ 65536). File checks 801/0; both weld
+claims green on the first structurally-complete draft.
+
+- **The named output value**: shw_sm (the schedule memory =
+  sched_mem ∘ copy_wmem), shw_r (the rounds output over H/K/W window
+  reads), shw_locals (the eight projections + re-zeroed pointers),
+  shw_mem (h8add_mem at the H window) — spelled exactly as
+  isha_block_walk's RHS trees and folded into the weld statements by
+  defining-equation RL rewrites, so the I2e driver composition speaks
+  four calls instead of ~300-line trees.
+- **The spelling-bridge measurement (examples/weld_probe.shard,
+  corpus-pinned)**: the rewriter matches SYNTACTICALLY, never modulo
+  computation — a walk lemma stated over the sibling's SOURCE
+  spelling (builder calls) cannot be cited on a goal holding the same
+  body's NORMAL FORM (the wasm out's flat spelling) or the x86 out's
+  chunk-chain spelling. Since every body position is closed ground
+  data, the weld carries byte-copies of all three spellings as local
+  nullary fns ((inline …) is file-local — the I1b bridge-file
+  precedent) and crosses by compute-both bridge equations that meet
+  at the shared normal form under (stop istmts). The probe pins the
+  consumer recipe: bridge RL first, then the walk cites.
+- **The composition chain** (both targets, symmetric): unfold the
+  out's nullary code fn (exposes the spliced-source term the out
+  claim's LHS pattern needs) → cite imp_w/imp_x_shblock with
+  (inst c2 (S^ 103 d)) — the dangling-pivot fuel alignment,
+  (S^ 297 (S^ 103 d)) IS (S^ 400 d) as a tree → spelling bridge RL →
+  cite isha_block_walk with the three premises discharged from the
+  weld's own → fold the output vocabulary RL → one stopped compute
+  reduces the exit adapter (x86: shw_locals stays UNFOLDED there —
+  xargs needs the literal list structure to reduce; the projections
+  ride folded behind stops) → refl.
+- Registration: weld = 'check imp product (driver 70) + corpus
+  target; probe = corpus target.
+- NEXT: I2e-2 (padding + digest readback + K/H window init — the
+  K-window wlist premise discharges by computation once an init twin
+  writes sha_k into the K window), then the driver composition
+  (blocks loop at World grain) and the (bin …).
+
 
 ## 7. Non-goals, stated once
 
