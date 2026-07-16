@@ -2412,6 +2412,58 @@ first real scaling failure of the generated-proof layer:
   mixed tier), I2e-2d (digest-hex), then I2e-3 per the composition
   ruling.
 
+**I2e-2c — THE PADDING ARTIFACT (2026-07-16): sha_pad lands on both
+targets through the existing mixed tier, zero generator growth.** The
+pad body (std/sha256/sha256.imp.shard `ipd_body`, pin `it_shpad_fn`,
+5 locals src/n/t/z/l with l at U64) appends sha_pad's suffix in
+place; the design keeps every loop count ground:
+
+- **The always-72 zero fill.** The zero span `(55−n) mod 64` is at
+  most 63, so the body unconditionally zero-fills the ground 72-byte
+  maximum pad span at src+n and lets the 0x80 mark and the eight
+  length bytes overwrite their positions — the loop is a ground-count
+  counting loop (const-set counter, band-decrement), exactly the
+  mixed tier's existing species; a symbolic-count loop head would
+  have been real emitter growth for one consumer. Surplus zeros land
+  either under the length field or above the padded region, below
+  the caller's bound; the readback never sees them.
+- **Vocabulary choices forced by the targets**: `mod 64` respells as
+  `band 63` (IRem refuses on the x86 leg; bridged to the spec's mod
+  by `ish_zf` via mask_pow2 at k=6); the bit length computes at U64
+  (8·n exact under the 64KiB bound, so the stored byte trees align
+  with len_be's shifts refl-grade); byte narrowing spells the
+  two-step `(ITrunc U32 U8 (ITrunc U64 U32 …))` — the direct U64→U8
+  trunc is a scoped wasm refusal, and the double band bridges to the
+  spec's single `band 255` by `ish_bb` (mask conversions + one
+  mod-of-divisor collapse). New general lemma `ish_shr_lo`
+  (shr-nonneg at any count, wf-induct over bshr_s + ish_ediv2_lo)
+  replaced what would otherwise have been 37 more ladder rungs.
+- **The sibling kit** (+35 claims, 434/0): `pad_zmem` + framing
+  (below/hi/window-below/aligned-zeros-read), the zero-fill
+  pass+worker (isha_copy_w's mirror at stride 1), `ipd_mem` +
+  the `ipd_*` fold vocabulary (defining-equation RL folds keep the
+  walk's trees compact — the I2c-2b fold-back idiom), the full-body
+  hand walk `isha_pad_walk` at (S^ 120 d), THE READBACK
+  `ish_pad_read` — the padded window over `ipd_mem` reads back as
+  `sha_pad` of the message window, counts entering as Nats (wn, wz
+  tied to the spec's mod-64 spelling by an equation premise) — and
+  `ish_pad_hi` (persistence above the span, the composition's
+  framing fact).
+- **The weld runs** (sha256.weld.shard 909/0): `shp_wpad`/`shp_xpad`
+  land the machine legs on `ipd_mem` on both targets. The pin body
+  is its own normal form, so the wasm leg needs NO spelling bridge
+  (the walk cites directly on the generated body — first time);
+  the x86 out spells its body with a rest-fn cut, bridged by
+  `shp_xbridge` (compute-both under stopped istmts, the I2e-1
+  species).
+- Generated legs: wasm `imp_w_shpad` (chain of 2 boundaries + worker
+  + 2 segment lemmas), x86 `imp_x_shpad` (loop-exit-cut chain);
+  regen byte-identical on both targets including all pre-existing
+  content.
+- NEXT: I2e-2d (digest-hex — the nibble table, where the DATA-AS-DATA
+  decision owed to the user first bites), then I2e-3 per the
+  composition ruling.
+
 
 ## 7. Non-goals, stated once
 
