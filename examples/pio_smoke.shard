@@ -7,7 +7,9 @@
 
 (import "../kernel/stdlib.shard")  ; List / Option / Pair
 (import "../models/pio/pio.shard")
+(import "../models/pio/encode.shard")
 (use (:: models pio pio *))
+(use (:: models pio encode *))
 
 ;; A one-output-pin config over the given program: wrap over [0, wtop],
 ;; side_count sc on pin 0, clock divisor cdiv. Everything else is the
@@ -127,4 +129,99 @@
 
 (claim smoke_rev_alt
   (goal () () (= (rev_bits 2863311530) 1431655765))
+  (steps ((compute both)) refl))
+
+;; --- encode: word values and the dec-after-enc round trip --------------------------
+
+;; SET PINS, 1 = 0xE001.
+(claim smoke_enc_set
+  (goal () () (= (enc_ins (sq_cfg) (seti 1)) (Some 57345)))
+  (steps ((compute both)) refl))
+
+(claim smoke_dec_set
+  (goal () () (= (dec_ins (sq_cfg) 57345) (Some (seti 1))))
+  (steps ((compute both)) refl))
+
+;; One representative of every instruction family (incl. an IRQ NEXT
+;; target and the 32-spelled-as-0 bit count), through enc_prog then
+;; dec_prog: the identity.
+(fn rt_prog () (List PSlot)
+  (list
+    (PS (MkPIns (PJmp JXDec 5) None 3))
+    (PS (MkPIns (PWait 1 (WtIrq (IxRel 3))) None 0))
+    (PS (MkPIns (PWait 0 (WtJmpPin 2)) None 0))
+    (PS (MkPIns (PIn ISPins 32) None 0))
+    (PS (MkPIns (POut ODPindirs 16) None 1))
+    (PS (MkPIns (PPush 1 1) None 0))
+    (PS (MkPIns (PPull 0 0) None 0))
+    (PS (MkPIns (PMov MDIsr MOReverse MSOsr) None 0))
+    (PS (MkPIns (PIrq 0 1 (IxNext 2)) None 0))
+    (PS (MkPIns (PSet SDPindirs 31) None 0))))
+
+(claim smoke_roundtrip
+  (goal () ()
+    (=
+      (match (enc_prog (sq_cfg) (rt_prog))
+        (None Nil)
+        ((Some ws) (dec_prog (sq_cfg) ws)))
+      (rt_prog)))
+  (steps ((compute both)) refl))
+
+;; ... and under an optional side-set (side_count 2, side_en): both the
+;; asserted and the opted-out spellings survive.
+(fn se_cfg () PCfg
+  (MkPCfg
+    (list (PS (nopi)))
+    0
+    0
+    2
+    1
+    0
+    0
+    0
+    0
+    0
+    0
+    1
+    0
+    1
+    0
+    0
+    32
+    32
+    1
+    1
+    1
+    0
+    0
+    0
+    0
+    4
+    4))
+
+(fn se_prog () (List PSlot)
+  (list
+    (PS (MkPIns (PMov MDY MONone MSY) (Some 1) 5))
+    (PS (MkPIns (PMov MDY MONone MSY) None 7))))
+
+(claim smoke_roundtrip_side_en
+  (goal () ()
+    (=
+      (match (enc_prog (se_cfg) (se_prog))
+        (None Nil)
+        ((Some ws) (dec_prog (se_cfg) ws)))
+      (se_prog)))
+  (steps ((compute both)) refl))
+
+;; Fenced encodings decode to None: OUT EXEC, WAIT src-3 idx>3, MOV<->RXFIFO.
+(claim smoke_dec_out_exec
+  (goal () () (= (dec_ins (sq_cfg) 24800) None))
+  (steps ((compute both)) refl))
+
+(claim smoke_dec_wait_res
+  (goal () () (= (dec_ins (sq_cfg) 8292) None))
+  (steps ((compute both)) refl))
+
+(claim smoke_dec_movrx
+  (goal () () (= (dec_ins (sq_cfg) 32784) None))
   (steps ((compute both)) refl))

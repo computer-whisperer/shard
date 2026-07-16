@@ -1,0 +1,344 @@
+;;; models/pio/encode.shard — PInstr <-> 16-bit word (docs/PIO.md §4).
+;;;
+;;; Both directions are CONFIG-INDEXED: the delay/side-set split of word
+;;; bits [12:8] depends on side_count/side_en, exactly as real assembly's
+;;; .side_set directive does. Encoding is partial ((Option Int) — None on
+;;; values a real assembler would reject: out-of-range fields, a side-set
+;;; that doesn't fit the configured width). Decoding is partial the other
+;;; way: reserved encodings and v1-fenced features (OUT/MOV PC+EXEC,
+;;; MOV<->RXFIFO, WAIT src-3 idx>3, IRQ bit 7) return None — the model
+;;; never guesses at undefined behavior. dec_prog maps undecodable words
+;;; to PSOff slots, which is the vector gate's ingestion semantics:
+;;; executing one ends the trace (the clean-prefix leg).
+;;;
+;;; The round-trip direction that is claimed: dec after enc is the
+;;; identity (ground-pinned in examples/pio_smoke.shard's encode section;
+;;; the symbolic law family arrives with its first consumer). The other
+;;; direction is NOT claimed — decode canonicalizes don't-care bits
+;;; (PUSH/PULL low bits, side-set data under a clear enable), so
+;;; encode(decode(w)) may differ from w off the canonical image.
+
+(import "pio.shard")
+(use (:: models pio pio *))
+
+;; --- field helpers -----------------------------------------------------------------
+
+;; flag in {0,1}?
+(fn is_flag ((v Int)) Int (if (int_eq v 0) 1 (if (int_eq v 1) 1 0)))
+
+;; v in [0, 2^n)?
+(fn fits ((v Int) (n Int)) Int (if (le 0 v) (if (lt v (bshl 1 n)) 1 0) 0))
+
+;; --- the delay/side-set field [12:8] -------------------------------------------------
+
+;; Encode (side, delay) under the config's split. None when the delay
+;; overflows its remaining bits or the side value doesn't fit (including
+;; a Some side with side_count 0, and a required-but-missing side when
+;; side_en is off and side_count > 0 — real pioasm's "side required").
+(fn enc_side_delay ((cfg PCfg) (ss (Option Int)) (delay Int)) (Option Int)
+  (let ((db (- 5 (side_count_of cfg))) (sc (side_count_of cfg)))
+    (if (int_eq (fits delay db) 0) None
+    (match ss
+      (None
+        (if (int_eq sc 0) (Some delay)
+        (if (int_eq (side_en_of cfg) 1) (Some delay)
+        None)))
+      ((Some v)
+       (if (int_eq sc 0) None
+       (if (int_eq (side_en_of cfg) 1)
+         (if (int_eq (fits v (- sc 1)) 1)
+           (Some (bor (bshl (bor (bshl 1 (- sc 1)) v) db) delay))
+           None)
+       (if (int_eq (fits v sc) 1) (Some (bor (bshl v db) delay))
+       None))))))))
+
+;; Decode the field. Total (every 5-bit value means something under every
+;; config): a clear enable bit yields None side and DROPS the data bits —
+;; the hardware ignores them, so decode canonicalizes.
+(fn dec_side_delay ((cfg PCfg) (dss Int)) (Pair (Option Int) Int)
+  (let ((sc (side_count_of cfg)) (db (- 5 (side_count_of cfg))))
+    (if (int_eq sc 0) (Pair None (band dss 31))
+    (let ((raw (bshr dss db)) (delay (band dss (bit_lo db))))
+      (if (int_eq (side_en_of cfg) 1)
+        (if (int_eq (bit_at raw (- sc 1)) 1)
+          (Pair (Some (band raw (bit_lo (- sc 1)))) delay)
+          (Pair None delay))
+        (Pair (Some raw) delay))))))
+
+;; --- sub-field codes ------------------------------------------------------------------
+
+(fn enc_jmpcond ((c JmpCond)) Int
+  (match c
+    (JAlways 0)
+    (JXZero 1)
+    (JXDec 2)
+    (JYZero 3)
+    (JYDec 4)
+    (JXNeY 5)
+    (JPin 6)
+    (JOsrNE 7)))
+
+(fn dec_jmpcond ((c Int)) JmpCond
+  (match c
+    (0 JAlways)
+    (1 JXZero)
+    (2 JXDec)
+    (3 JYZero)
+    (4 JYDec)
+    (5 JXNeY)
+    (6 JPin)
+    (_ JOsrNE)))
+
+;; IRQ index: RP2350 IdxMode in bits [4:3], flag in [2:0].
+(fn enc_irqix ((ix IrqIx)) (Option Int)
+  (match ix
+    ((IxThis n) (if (int_eq (fits n 3) 1) (Some n) None))
+    ((IxRel n) (if (int_eq (fits n 3) 1) (Some (bor 16 n)) None))
+    ((IxPrev n) (if (int_eq (fits n 3) 1) (Some (bor 8 n)) None))
+    ((IxNext n) (if (int_eq (fits n 3) 1) (Some (bor 24 n)) None))))
+
+(fn dec_irqix ((idx Int)) IrqIx
+  (match (band (bshr idx 3) 3)
+    (0 (IxThis (band idx 7)))
+    (1 (IxPrev (band idx 7)))
+    (2 (IxRel (band idx 7)))
+    (_ (IxNext (band idx 7)))))
+
+(fn enc_insrc ((s InSrc)) Int
+  (match s
+    (ISPins 0)
+    (ISX 1)
+    (ISY 2)
+    (ISNull 3)
+    (ISIsr 6)
+    (ISOsr 7)))
+
+(fn enc_outdst ((d OutDst)) Int
+  (match d
+    (ODPins 0)
+    (ODX 1)
+    (ODY 2)
+    (ODNull 3)
+    (ODPindirs 4)
+    (ODIsr 6)))
+
+(fn enc_movdst ((d MovDst)) Int
+  (match d
+    (MDPins 0)
+    (MDX 1)
+    (MDY 2)
+    (MDPindirs 3)
+    (MDIsr 6)
+    (MDOsr 7)))
+
+(fn enc_movop ((o MovOp)) Int
+  (match o
+    (MONone 0)
+    (MOInvert 1)
+    (MOReverse 2)))
+
+(fn enc_movsrc ((s MovSrc)) Int
+  (match s
+    (MSPins 0)
+    (MSX 1)
+    (MSY 2)
+    (MSNull 3)
+    (MSStatus 5)
+    (MSIsr 6)
+    (MSOsr 7)))
+
+(fn enc_setdst ((d SetDst)) Int
+  (match d
+    (SDPins 0)
+    (SDX 1)
+    (SDY 2)
+    (SDPindirs 4)))
+
+;; bit count: 1..32, encoded with 32 as 00000.
+(fn enc_bc ((bc Int)) (Option Int)
+  (if (le 1 bc) (if (le bc 32) (Some (band bc 31)) None) None))
+
+(fn dec_bc ((b Int)) Int (if (int_eq b 0) 32 b))
+
+;; --- instruction operand (bits [7:0]) + opcode ----------------------------------------
+
+;; (Pair opcode operand), or None when a field is out of range.
+(fn enc_op ((op PInstr)) (Option (Pair Int Int))
+  (match op
+    ((PJmp c a)
+     (if (int_eq (fits a 5) 1) (Some (Pair 0 (bor (bshl (enc_jmpcond c) 5) a)))
+     None))
+    ((PWait pol tgt)
+     (if (int_eq (is_flag pol) 0) None
+     (match tgt
+       ((WtGpio idx)
+        (if (int_eq (fits idx 5) 1) (Some (Pair 1 (bor (bshl pol 7) idx))) None))
+       ((WtPin idx)
+        (if (int_eq (fits idx 5) 1)
+          (Some (Pair 1 (bor (bshl pol 7) (bor 32 idx))))
+          None))
+       ((WtIrq ix)
+        (match (enc_irqix ix)
+          (None None)
+          ((Some i5) (Some (Pair 1 (bor (bshl pol 7) (bor 64 i5)))))))
+       ((WtJmpPin idx)
+        (if (int_eq (fits idx 2) 1)
+          (Some (Pair 1 (bor (bshl pol 7) (bor 96 idx))))
+          None)))))
+    ((PIn s bc)
+     (match (enc_bc bc)
+       (None None)
+       ((Some b) (Some (Pair 2 (bor (bshl (enc_insrc s) 5) b))))))
+    ((POut d bc)
+     (match (enc_bc bc)
+       (None None)
+       ((Some b) (Some (Pair 3 (bor (bshl (enc_outdst d) 5) b))))))
+    ((PPush iff blk)
+     (if (int_eq (is_flag iff) 1)
+       (if (int_eq (is_flag blk) 1)
+         (Some (Pair 4 (bor (bshl iff 6) (bshl blk 5))))
+         None)
+       None))
+    ((PPull ife blk)
+     (if (int_eq (is_flag ife) 1)
+       (if (int_eq (is_flag blk) 1)
+         (Some (Pair 4 (bor 128 (bor (bshl ife 6) (bshl blk 5)))))
+         None)
+       None))
+    ((PMov d o s)
+     (Some
+       (Pair
+         5
+         (bor
+           (bshl (enc_movdst d) 5)
+           (bor (bshl (enc_movop o) 3) (enc_movsrc s))))))
+    ((PIrq clr wt ix)
+     (if (int_eq (is_flag clr) 1)
+       (if (int_eq (is_flag wt) 1)
+         (match (enc_irqix ix)
+           (None None)
+           ((Some i5) (Some (Pair 6 (bor (bshl clr 6) (bor (bshl wt 5) i5))))))
+         None)
+       None))
+    ((PSet d v)
+     (if (int_eq (fits v 5) 1) (Some (Pair 7 (bor (bshl (enc_setdst d) 5) v)))
+     None))))
+
+;; operand → PInstr, per opcode. None = reserved or v1-fenced.
+(fn dec_op ((opcode Int) (lo8 Int)) (Option PInstr)
+  (match opcode
+    (0 (Some (PJmp (dec_jmpcond (band (bshr lo8 5) 7)) (band lo8 31))))
+    (1
+      (let ((pol (bit_at lo8 7)) (idx (band lo8 31)))
+        (match (band (bshr lo8 5) 3)
+          (0 (Some (PWait pol (WtGpio idx))))
+          (1 (Some (PWait pol (WtPin idx))))
+          (2 (Some (PWait pol (WtIrq (dec_irqix idx)))))
+          (_ (if (le idx 3) (Some (PWait pol (WtJmpPin idx))) None)))))
+    (2
+      (match (band (bshr lo8 5) 7)
+        (0 (Some (PIn ISPins (dec_bc (band lo8 31)))))
+        (1 (Some (PIn ISX (dec_bc (band lo8 31)))))
+        (2 (Some (PIn ISY (dec_bc (band lo8 31)))))
+        (3 (Some (PIn ISNull (dec_bc (band lo8 31)))))
+        (6 (Some (PIn ISIsr (dec_bc (band lo8 31)))))
+        (7 (Some (PIn ISOsr (dec_bc (band lo8 31)))))
+        (_ None)))
+    (3
+      (match (band (bshr lo8 5) 7)
+        (0 (Some (POut ODPins (dec_bc (band lo8 31)))))
+        (1 (Some (POut ODX (dec_bc (band lo8 31)))))
+        (2 (Some (POut ODY (dec_bc (band lo8 31)))))
+        (3 (Some (POut ODNull (dec_bc (band lo8 31)))))
+        (4 (Some (POut ODPindirs (dec_bc (band lo8 31)))))
+        (6 (Some (POut ODIsr (dec_bc (band lo8 31)))))
+        (_ None)))  ; 5 = PC, 7 = EXEC: v1-fenced
+    (4
+      (if (int_eq (band lo8 16) 16) None  ; MOV<->RXFIFO: v1-fenced
+      (if (int_eq (bit_at lo8 7) 1) (Some (PPull (bit_at lo8 6) (bit_at lo8 5)))
+      (Some (PPush (bit_at lo8 6) (bit_at lo8 5))))))
+    (5
+      (if (int_eq (band (bshr lo8 3) 3) 3) None  ; reserved op
+      (if (int_eq (band lo8 7) 4) None  ; reserved source
+      (let
+        ((mop
+           (match (band (bshr lo8 3) 3)
+             (0 MONone)
+             (1 MOInvert)
+             (_ MOReverse)))
+         (msrc
+           (match (band lo8 7)
+             (0 MSPins)
+             (1 MSX)
+             (2 MSY)
+             (3 MSNull)
+             (5 MSStatus)
+             (6 MSIsr)
+             (_ MSOsr))))
+        (match (band (bshr lo8 5) 7)
+          (0 (Some (PMov MDPins mop msrc)))
+          (1 (Some (PMov MDX mop msrc)))
+          (2 (Some (PMov MDY mop msrc)))
+          (3 (Some (PMov MDPindirs mop msrc)))
+          (6 (Some (PMov MDIsr mop msrc)))
+          (7 (Some (PMov MDOsr mop msrc)))
+          (_ None))))))  ; 4 = EXEC, 5 = PC: v1-fenced
+    (6
+      (if (int_eq (bit_at lo8 7) 1) None  ; undefined encoding
+      (Some (PIrq (bit_at lo8 6) (bit_at lo8 5) (dec_irqix (band lo8 31))))))
+    (_
+      (match (band (bshr lo8 5) 7)
+        (0 (Some (PSet SDPins (band lo8 31))))
+        (1 (Some (PSet SDX (band lo8 31))))
+        (2 (Some (PSet SDY (band lo8 31))))
+        (4 (Some (PSet SDPindirs (band lo8 31))))
+        (_ None)))))
+
+;; --- whole instructions and programs ---------------------------------------------------
+
+(fn enc_ins ((cfg PCfg) (i PIns)) (Option Int)
+  (match (enc_op (pi_op_of i))
+    (None None)
+    ((Some p)
+     (match p
+       ((Pair opc operand)
+        (match (enc_side_delay cfg (pi_side_of i) (pi_delay_of i))
+          (None None)
+          ((Some dss) (Some (bor (bshl opc 13) (bor (bshl dss 8) operand))))))))))
+
+(fn dec_ins ((cfg PCfg) (w Int)) (Option PIns)
+  (match (dec_op (band (bshr w 13) 7) (band w 255))
+    (None None)
+    ((Some op)
+     (match (dec_side_delay cfg (band (bshr w 8) 31))
+       ((Pair ss delay) (Some (MkPIns op ss delay)))))))
+
+;; Program ingestion: undecodable words become PSOff slots (executing one
+;; ends the run — the vector gate's clean-prefix semantics). Total.
+(fn dec_prog ((cfg PCfg) (ws (List Int))) (List PSlot)
+  (measure (struct ws))
+  (match ws
+    (Nil Nil)
+    ((Cons w t)
+     (Cons
+       (match (dec_ins cfg w)
+         (None PSOff)
+         ((Some i) (PS i)))
+       (dec_prog cfg t)))))
+
+;; Program emission: any PSOff (or unencodable field) poisons the whole
+;; program — an artifact with off-fragment slots has no faithful word form.
+(fn enc_prog ((cfg PCfg) (ps (List PSlot))) (Option (List Int))
+  (measure (struct ps))
+  (match ps
+    (Nil (Some Nil))
+    ((Cons s t)
+     (match s
+       ((PS i)
+        (match (enc_ins cfg i)
+          (None None)
+          ((Some w)
+           (match (enc_prog cfg t)
+             (None None)
+             ((Some ws) (Some (Cons w ws)))))))
+       (PSOff None)))))

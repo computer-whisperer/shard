@@ -338,6 +338,7 @@ TARGETS=(
   tools/search/gen/x86_calculator_refinement.shard
   tools/search/gen/x86_calculator4_refinement.shard
   models/pio/pio.shard
+  models/pio/encode.shard
   examples/pio_smoke.shard
 )
 TMP=$(mktemp -d)
