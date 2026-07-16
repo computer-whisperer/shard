@@ -26,10 +26,10 @@
 ;;;   - holes are meta/sketch's own reserved-head calls; the grammar
 ;;;     IS the hole table (D10 ruling: correlation lives HERE, in the
 ;;;     choices map — the grammar vocabulary stays exact-counting);
-;;;   - counting rides the grammar: a partial assignment's
-;;;     consistent-count is the product over reachable holes of
-;;;     (assigned -> its alternative's sub-holes, unassigned -> the
-;;;     entry's subspace from the sk_count memo).
+;;;   - jobs are meta/sketch `SkRegion`s over the unchanged Grammar: fixed
+;;;     choices feed evaluation, forbidden choices stay out of evaluator memo
+;;;     keys, forks visit only allowed alternatives, and exact settlement uses
+;;;     `sk_region_count` (including restrictions below nested alternatives).
 ;;;
 ;;; The consulted-choice-set memo and shared arena carry forcing results
 ;;; across regions.  Exact persistent indexes keep node and thunk lookup from
@@ -1314,21 +1314,40 @@
 
 (fn su_efuel () Int 200000)
 
-;; push one job per alternative of the demanded hole
+;; Push one job per still-allowed alternative of the demanded hole.  Fixed
+;; choices remain the evaluator's ordinary positive assignment map; forbidden
+;; choices stay in the region and never contaminate consulted-choice memo keys.
+(type SuForkR (SuForkErr (List Int)) (SuForkOk (List SkRegion)))
+
 (fn su_fork
-  ((asg (List (Pair Int Int)))
+  ((grammar Grammar)
+   (region SkRegion)
    (h Int)
    (k Int)
-   (jobs (List (List (Pair Int Int)))))
-  (List (List (Pair Int Int)))
+   (jobs (List SkRegion)))
+  SuForkR
   (measure k)
-  (if (lt k 1) (if (lt k 0) jobs (Cons (ch_set asg h 0) jobs))
-  (su_fork asg h (- k 1) (Cons (ch_set asg h k) jobs))))
+  (if (lt k 1)
+    (if (lt k 0) (SuForkOk jobs)
+    (match (sk_region_choose grammar region h 0)
+      ((SkRegionEditErr msg) (SuForkErr msg))
+      ((SkRegionEditEmpty) (SuForkOk jobs))
+      ((SkRegionEditOk child) (SuForkOk (Cons child jobs)))))
+  (match (sk_region_choose grammar region h k)
+    ((SkRegionEditErr msg) (SuForkErr msg))
+    ((SkRegionEditEmpty) (su_fork grammar region h (- k 1) jobs))
+    ((SkRegionEditOk child)
+     (su_fork grammar region h (- k 1) (Cons child jobs))))))
+
+(fn su_region_count ((root Expr) (grammar Grammar) (region SkRegion)) CcR
+  (match (sk_region_count root grammar region)
+    ((SkCErr msg) (CcRErr msg))
+    ((SkCOk count) (CcROk count))))
 
 (type SuS
   (SuSErr (List Int))
-  (SuSBudget Int Int Int Int Int Int Int Int (List (List (Pair Int Int))))
-  (SuSOk Int Int Int Int Int Int (List (List (Pair Int Int)))))
+  (SuSBudget Int Int Int Int Int Int Int Int (List SkRegion))
+  (SuSOk Int Int Int Int Int Int (List SkRegion)))
 ; budget: found, killed, constraint-killed, regions, forks, steps,
 ;         nodes, expressions, passing regions
 ; ok:     found, killed, constraint-killed, regions, forks, steps,
@@ -1369,8 +1388,9 @@
       " exprs "
       (show_int exprs))))
 
-;; Generic branch-and-prune drive.  `candidate` is used only for exact
-;; consistent-subspace counting; `query` is what the lazy evaluator executes.
+;; Generic branch-and-prune drive.  `candidate` is used for exact restricted
+;; region counting and theorem matching; `query` is what the lazy evaluator
+;; executes.
 ;; Residual checked constraints run first. A definite redex kills the whole
 ;; consistent region. A blocked constraint does not steal demand from the
 ;; semantic query: failure may still kill the larger region immediately. Only
@@ -1389,13 +1409,13 @@
    (g SuG)
    (memo (List (Pair Int Int)))
    (ar SuA)
-   (jobs (List (List (Pair Int Int))))
+   (jobs (List SkRegion))
    (found Int)
    (killed Int)
    (constrained Int)
    (regions Int)
    (forks Int)
-   (sols (List (List (Pair Int Int)))))
+   (sols (List SkRegion)))
   SuS
   (measure fuel)
   (if (lt fuel 1)
@@ -1411,11 +1431,12 @@
       sols)
     (match jobs
       (Nil (SuSOk found killed constrained regions forks (sa_steps ar) sols))
-      ((Cons asg rest)
-       (match (ms_check_prepared 1000000 prepared asg candidate)
+      ((Cons region rest)
+       (let ((asg (sk_region_choices region)))
+       (match (ms_check_prepared_region 1000000 prepared region candidate)
          ((MsErr msg) (SuSErr msg))
          ((MsRedex _)
-          (match (cc_expr (sug_raw g) memo asg candidate 1000000)
+          (match (su_region_count candidate (sug_raw g) region)
             ((CcRErr msg) (SuSErr msg))
             ((CcROk n)
              (su_drive_query_prepared
@@ -1446,27 +1467,32 @@
                 (None
                   (SuSErr "superpose: generic query blocked on unknown hole"))
                 ((Some alts)
-                 (su_drive_query_prepared
-                   (- fuel 1)
-                   m
-                   candq
-                   body
-                   candidate
-                   prepared
-                   query
-                   want
-                   g
-                   memo
-                   ar2
-                   (su_fork asg h (- (alts_len alts) 1) rest)
-                   found
-                   killed
-                   constrained
-                   regions
-                   (+ forks 1)
-                   sols))))
+                 (match
+                   (su_fork
+                     (sug_raw g) region h (- (alts_len alts) 1) rest)
+                   ((SuForkErr msg) (SuSErr msg))
+                   ((SuForkOk jobs2)
+                    (su_drive_query_prepared
+                      (- fuel 1)
+                      m
+                      candq
+                      body
+                      candidate
+                      prepared
+                      query
+                      want
+                      g
+                      memo
+                      ar2
+                      jobs2
+                      found
+                      killed
+                      constrained
+                      regions
+                      (+ forks 1)
+                      sols))))))
              ((SuTFail ar2)
-              (match (cc_expr (sug_raw g) memo asg candidate 1000000)
+              (match (su_region_count candidate (sug_raw g) region)
                 ((CcRErr msg) (SuSErr msg))
                 ((CcROk n)
                  (su_drive_query_prepared
@@ -1496,27 +1522,32 @@
                      (SuSErr
                        "superpose: residual constraint blocked on unknown hole"))
                    ((Some alts)
-                    (su_drive_query_prepared
-                      (- fuel 1)
-                      m
-                      candq
-                      body
-                      candidate
-                      prepared
-                      query
-                      want
-                      g
-                      memo
-                      ar2
-                      (su_fork asg h (- (alts_len alts) 1) rest)
-                      found
-                      killed
-                      constrained
-                      regions
-                      (+ forks 1)
-                      sols))))
+                    (match
+                      (su_fork
+                        (sug_raw g) region h (- (alts_len alts) 1) rest)
+                      ((SuForkErr msg) (SuSErr msg))
+                      ((SuForkOk jobs2)
+                       (su_drive_query_prepared
+                         (- fuel 1)
+                         m
+                         candq
+                         body
+                         candidate
+                         prepared
+                         query
+                         want
+                         g
+                         memo
+                         ar2
+                         jobs2
+                         found
+                         killed
+                         constrained
+                         regions
+                         (+ forks 1)
+                         sols))))))
                 ((MsClear)
-                 (match (cc_expr (sug_raw g) memo asg candidate 1000000)
+                 (match (su_region_count candidate (sug_raw g) region)
                    ((CcRErr msg) (SuSErr msg))
                    ((CcROk n)
                     (su_drive_query_prepared
@@ -1537,10 +1568,10 @@
                       constrained
                       (+ regions 1)
                       forks
-                      (Cons asg sols)))))
+                      (Cons region sols)))))
                 ((MsErr msg) (SuSErr msg))
                 ((MsRedex _)
-                 (SuSErr "superpose: inconsistent residual verdict")))))))))))
+                 (SuSErr "superpose: inconsistent residual verdict"))))))))))))
 
 (fn su_drive_query
   ((fuel Int)
@@ -1554,13 +1585,13 @@
    (g Grammar)
    (memo (List (Pair Int Int)))
    (ar SuA)
-   (jobs (List (List (Pair Int Int))))
+   (jobs (List SkRegion))
    (found Int)
    (killed Int)
    (constrained Int)
    (regions Int)
    (forks Int)
-   (sols (List (List (Pair Int Int)))))
+   (sols (List SkRegion)))
   SuS
   (match (ms_prepare 1000000 constraints g)
     ((MsPrepareErr msg)
@@ -1595,12 +1626,12 @@
    (memo (List (Pair Int Int)))
    (ts (List (Pair (List Int) (List Int))))
    (ar SuA)
-   (jobs (List (List (Pair Int Int))))
+   (jobs (List SkRegion))
    (found Int)
    (killed Int)
    (regions Int)
    (forks Int)
-   (sols (List (List (Pair Int Int)))))
+   (sols (List SkRegion)))
   SuS
   (measure fuel)
   (if (lt fuel 1)
@@ -1616,7 +1647,8 @@
       sols)
     (match jobs
       (Nil (SuSOk found killed 0 regions forks (sa_steps ar) sols))
-      ((Cons asg rest)
+      ((Cons region rest)
+       (let ((asg (sk_region_choices region)))
        (match (su_tests (su_efuel) m candq body g asg ar ts)
          ((SuTErr msg) (SuSErr msg))
          ((SuTOut) (SuSErr "superpose: evaluation fuel exhausted"))
@@ -1624,23 +1656,27 @@
           (match (sug_alts g h)
             (None (SuSErr "superpose: blocked on an unknown hole"))
             ((Some alts)
-             (su_drive
-               (- fuel 1)
-               m
-               candq
-               body
-               g
-               memo
-               ts
-               ar2
-               (su_fork asg h (- (alts_len alts) 1) rest)
-               found
-               killed
-               regions
-               (+ forks 1)
-               sols))))
+             (match
+               (su_fork (sug_raw g) region h (- (alts_len alts) 1) rest)
+               ((SuForkErr msg) (SuSErr msg))
+               ((SuForkOk jobs2)
+                (su_drive
+                  (- fuel 1)
+                  m
+                  candq
+                  body
+                  g
+                  memo
+                  ts
+                  ar2
+                  jobs2
+                  found
+                  killed
+                  regions
+                  (+ forks 1)
+                  sols))))))
          ((SuTFail ar2)
-          (match (cc_expr (sug_raw g) memo asg body 1000000)
+          (match (su_region_count body (sug_raw g) region)
             ((CcRErr msg) (SuSErr msg))
             ((CcROk n)
              (su_drive
@@ -1659,7 +1695,7 @@
                forks
                sols))))
          ((SuTPass ar2)
-          (match (cc_expr (sug_raw g) memo asg body 1000000)
+          (match (su_region_count body (sug_raw g) region)
             ((CcRErr msg) (SuSErr msg))
             ((CcROk n)
              (su_drive
@@ -1676,7 +1712,7 @@
                killed
                (+ regions 1)
                forks
-               (Cons asg sols))))))))))
+               (Cons region sols)))))))))))
 
 ;; ---- region membership + representatives (the AGREE gate) ---------------------
 
@@ -1870,22 +1906,32 @@
        ((MtRNo) False)
        ((MtROk _) True)))))
 
+;; Exact region gates use meta/sketch's restricted addressing.  Keep the
+;; assignment-template helpers above as compatibility/debugging vocabulary;
+;; they cannot express forbidden choices by themselves.
+(fn su_region_rep
+  ((g Grammar) (region SkRegion) (body Expr)) (Option Expr)
+  (match (sk_region_unrank body g region 0)
+    ((SkEErr _) None)
+    ((SkEOk candidate) (Some candidate))))
+
 ;; every enumerative solution lies in some found region
 (fn su_covered
-  ((g Grammar) (body Expr) (sols (List (List (Pair Int Int)))) (c Expr))
+  ((g Grammar) (body Expr) (sols (List SkRegion)) (c Expr))
   Bool
   (measure (struct sols))
   (match sols
     (Nil False)
-    ((Cons asg rest)
-     (if (su_member g asg body c) True (su_covered g body rest c)))))
+    ((Cons region rest)
+     (if (sk_region_member body g region c) True
+     (su_covered g body rest c)))))
 
 (fn su_agree
   ((root Expr)
    (g Grammar)
    (m Module)
    (body Expr)
-   (sols (List (List (Pair Int Int))))
+   (sols (List SkRegion))
    (ixs (List Int))
    (ts (List (Pair (List Int) (List Int)))))
   (Option (List Int))
@@ -1904,14 +1950,14 @@
   ((g Grammar)
    (m Module)
    (body Expr)
-   (sols (List (List (Pair Int Int))))
+   (sols (List SkRegion))
    (ts (List (Pair (List Int) (List Int)))))
   (Option (List Int))
   (measure (struct sols))
   (match sols
     (Nil None)
-    ((Cons asg rest)
-     (match (su_rep g asg body 100000)
+    ((Cons region rest)
+     (match (su_region_rep g region body)
        (None (Some "agree: representative fill failed"))
        ((Some c)
         (match (extend_fn m (cand_fd c))
@@ -1948,7 +1994,7 @@
               memo
               ts
               (sa_new)
-              (Cons Nil Nil)
+              (Cons (sk_empty_region) Nil)
               0
               0
               0

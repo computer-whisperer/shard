@@ -36,11 +36,12 @@
 
 (fn csp_empty_module () Module (Module Nil Nil Nil (FnTrie None Nil) Nil))
 
-(fn csp_drive
+(fn csp_drive_region
   ((candidate Expr)
    (plan MsPlan)
    (grammar Grammar)
-   (memo (List (Pair Int Int))))
+   (memo (List (Pair Int Int)))
+   (region SkRegion))
   SuS
   (su_drive_query
     1000
@@ -54,13 +55,78 @@
     grammar
     memo
     (sa_new)
-    (Cons Nil Nil)
+    (Cons region Nil)
     0
     0
     0
     0
     0
     Nil))
+
+(fn csp_drive
+  ((candidate Expr)
+   (plan MsPlan)
+   (grammar Grammar)
+   (memo (List (Pair Int Int))))
+  SuS
+  (csp_drive_region candidate plan grammar memo (sk_empty_region)))
+
+(fn csp_restricted_redex
+  ((plan MsPlan)
+   (grammar Grammar)
+   (memo (List (Pair Int Int)))
+   (clear_region SkRegion)
+   (w World))
+  World
+  (match (csp_drive_region (hole 4) plan grammar memo clear_region)
+    ((SuSOk found killed constrained regions forks _ _)
+     (if (int_eq found 1)
+       (if (int_eq killed 0)
+         (if (int_eq constrained 0)
+           (if (int_eq regions 1)
+             (if (int_eq forks 0)
+               (match (sk_region_forbid grammar (sk_empty_region) 4 1)
+                 ((SkRegionEditErr msg) (csp_fail msg w))
+                 ((SkRegionEditEmpty)
+                  (csp_fail "redex exclusion was empty" w))
+                 ((SkRegionEditOk redex_region)
+                  (match
+                    (csp_drive_region
+                      (hole 4) plan grammar memo redex_region)
+                    ((SuSOk found2 killed2 constrained2 regions2 forks2 _ _)
+                     (if (int_eq found2 0)
+                       (if (int_eq killed2 1)
+                         (if (int_eq constrained2 1)
+                           (if (int_eq regions2 1)
+                             (if (int_eq forks2 0)
+                               (write
+                                 "META-SEARCH-SUPERPOSE-PROBE CLEAR 2 REDUX 2 MIXED 1+1 FORKS 0/0/1 RESTRICTED CLEAR/REDUX 1/1 OK\n"
+                                 w)
+                               (csp_fail "restricted redex fork count" w))
+                             (csp_fail "restricted redex region count" w))
+                           (csp_fail "restricted redex constraint count" w))
+                         (csp_fail "restricted redex killed count" w))
+                       (csp_fail "restricted redex found count" w)))
+                    ((SuSErr msg) (csp_fail msg w))
+                    ((SuSBudget _ _ _ _ _ _ _ _ _)
+                     (csp_fail "restricted redex budget" w)))))
+             (csp_fail "restricted clear fork count" w))
+           (csp_fail "restricted clear region count" w))
+         (csp_fail "restricted clear constraint count" w))
+       (csp_fail "restricted clear killed count" w))
+     (csp_fail "restricted clear found count" w)))
+    ((SuSErr msg) (csp_fail msg w))
+    ((SuSBudget _ _ _ _ _ _ _ _ _)
+     (csp_fail "restricted clear budget" w))))
+
+(fn csp_restricted
+  ((plan MsPlan) (grammar Grammar) (memo (List (Pair Int Int))) (w World))
+  World
+  (match (sk_region_forbid grammar (sk_empty_region) 4 0)
+    ((SkRegionEditErr msg) (csp_fail msg w))
+    ((SkRegionEditEmpty) (csp_fail "clear exclusion was empty" w))
+    ((SkRegionEditOk clear_region)
+     (csp_restricted_redex plan grammar memo clear_region w))))
 
 (fn csp_mixed
   ((plan MsPlan) (grammar Grammar) (memo (List (Pair Int Int))) (w World))
@@ -72,9 +138,7 @@
          (if (int_eq constrained 1)
            (if (int_eq regions 2)
              (if (int_eq forks 1)
-               (write
-                 "META-SEARCH-SUPERPOSE-PROBE CLEAR 2 REDUX 2 MIXED 1+1 FORKS 0/0/1 OK\n"
-                 w)
+               (csp_restricted plan grammar memo w)
                (csp_fail "mixed fork count" w))
              (csp_fail "mixed region count" w))
            (csp_fail "mixed constraint-killed count" w))

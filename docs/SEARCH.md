@@ -1839,11 +1839,20 @@ right choice is forbidden, Redex when the unequal right choice is forbidden,
 in both direct and prepared modes.  Ordinary assignment-only search retains
 the exact x86 control report (`742 / 372 / 25312`).
 
-Two seams remain before this changes the x86 frontier automatically: the
-nonlinear matcher must describe a conditional redex as a choice cube, and
-SUPERPOSE jobs must carry `SkRegion` so cube subtraction can retain the lazy
-complement.  The exact region algebra, counting, and theorem-consumer path no
-longer need to be invented inside that driver refactor.
+SUPERPOSE jobs now carry `SkRegion` end to end.  Fixed choices alone feed the
+lazy evaluator and its consulted-choice memo; forks skip forbidden choices;
+theorem checking sees the complete region; killed and passing subspaces use
+`sk_region_count`; passing-region membership and representatives use restricted
+rank/unrank.  The mixed residual-rule integration probe starts the driver from
+each non-contiguous singleton remainder and pins clear/redex settlement as
+`1/1` with no fork.  The ordinary rev, pure-program, calculator, and x86 paths
+retain their exact controls; in particular the transition window remains
+`742 / 372 / 25312` with 264 constraint-killed programs.
+
+One semantic seam remains before this changes the x86 frontier automatically:
+the nonlinear matcher must describe a conditional redex as a choice cube (or
+an exact finite partition).  The scheduler can now subtract that cube and keep
+its lazy complement without changing grammar identities or evaluator caches.
 
 `std/order` supplies checked `lt a a = False` and `int_eq a a = True` claims.
 They are selected by name from the same object closure as the append and order
