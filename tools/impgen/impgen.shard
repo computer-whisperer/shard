@@ -1233,7 +1233,7 @@
                       mem3))))))))))
        ((IIf _ _ _)
         (LSRf
-          "branch inside a loop body (straight-line bodies only; named growth)"))
+          "nested or repeated branch (straight-line arms; one branch per loop body; named growth)"))
        ((IWhile _ _) (LSRf "nested loop (named growth)")))))))
 
 ;; drop the last statement (the base case's fuel death point: at
@@ -2630,6 +2630,14 @@
 ;; x86 emission (named growth; rotating bodies refuse in the walk with
 ;; the honest V2-2b note).
 
+;; the loop-body branch payload (IF-2): the shared raw comparison
+;; scrutinee at the walked post-prefix state + the per-REGION deduped
+;; splits (then / else; the prefix region rides the wsplits field).
+;; Regions never dedup across the polarity case-on — arm guard
+;; occurrences materialize only after the polarity resolves (the
+;; IF-1c law, blueprint-validated inside the worker by sqblw/sqblx).
+(type LBr (MkLBr Expr (List GSplit) (List GSplit)))
+
 (type MxLp
   (MkMxLp
     Int  ;; gi — the counter slot
@@ -2638,7 +2646,8 @@
     (List IStmt)  ;; lbody — the loop body, reified
     (List Expr)  ;; hlocals — walked locals at the loop head
     Expr  ;; hmem — walked memory at the loop head
-    (List GSplit)  ;; wsplits — the worker's per-iteration splits
+    (List GSplit)  ;; wsplits — the worker's per-iteration splits (the prefix region when a branch is present)
+    (Option LBr)  ;; lbr — the loop-body branch payload (IF-2)
     Int))  ;; pi — imp spine position
 
 (type MxEv (MxSp GSplit) (MxL MxLp))
@@ -2653,7 +2662,14 @@
 ;; body, body Expr, per-iteration splits).
 (type MxPc
   (MxPS (List IStmt) (List Expr))
-  (MxPL Int Int (List IStmt) Expr (List GSplit) (List (Pair Int Int)))
+  (MxPL
+    Int
+    Int
+    (List IStmt)
+    Expr
+    (List GSplit)
+    (Option LBr)
+    (List (Pair Int Int)))
   (MxPB IStmt Expr Expr Bool (List GSplit) (List GSplit) Int))
 (type MxPR (MxPOk (List MxPc)) (MxPRf (List Int)))
 
@@ -2681,6 +2697,141 @@
   (match sl
     (Nil 8)
     ((Cons h _) (+ (* 2 (mxb_count h)) 4))))
+
+;; --- the loop-body region walk (IF-2) ----------------------------------
+;; A loop body holding at most ONE top-level IIf: the prefix walks at
+;; the loop-head state, the shared raw comparison scrutinee is taken
+;; at the post-prefix state (mxc_br's constraints: comparison-headed,
+;; guard-free operands), and EACH ARM walks arm-stmts ++ post-tail
+;; from the post-prefix state — per-region deduped splits and a
+;; per-arm post-state, the counter's trailing band-decrement checked
+;; on BOTH. A second IIf lands in the post-tail walk and bubbles
+;; lw_stmts's own named refusal.
+
+(fn lwb_split ((ss (List IStmt)))
+  (Option (Pair (List IStmt) (Pair IStmt (List IStmt))))
+  (measure (struct ss))
+  (match ss
+    (Nil None)
+    ((Cons s t)
+     (match s
+       ((IIf _ _ _) (Some (Pair Nil (Pair s t))))
+       (_
+         (match (lwb_split t)
+           (None None)
+           ((Some (Pair pre (Pair br post)))
+            (Some (Pair (Cons s pre) (Pair br post))))))))))
+
+(type LWBR
+  (LWBOk (List GSplit) (Option LBr) (List Expr) (List Expr))
+  (LWBRf (List Int)))
+
+;; the trailing band-decrement shape at the counter slot
+(fn lwb_dec ((gi Int) (lc (List Expr))) Bool
+  (match (st_get lc gi)
+    (None False)
+    ((Some pv)
+     (expr_eq
+       pv
+       (sc2
+         (quote mod)
+         (sc2
+           (quote -)
+           (sc2
+             (quote +)
+             (IntLit 1)
+             (Call (pq (quote int_of_nat)) (Cons (FVar (quote k2)) Nil)))
+           (IntLit 1))
+         (IntLit 4294967296))))))
+
+(fn lwb_walk
+  ((x86 Bool) (msz Int) (gi Int) (lbody (List IStmt)) (wst (List Expr)))
+  LWBR
+  (match (lwb_split lbody)
+    (None
+      (match
+        (lw_stmts (+ (isz_stmts lbody) 2) x86 msz lbody wst (FVar (quote m)))
+        ((LSRf why) (LWBRf why))
+        ((LSOk wsplits postlc _)
+         (if (lwb_dec gi postlc)
+           (LWBOk (gs_dedup Nil wsplits) None postlc postlc)
+           (LWBRf
+             "loop counter is not a trailing band-decrement (named growth)")))))
+    ((Some (Pair pre (Pair br post)))
+     (match br
+       ((IIf cnd tb eb)
+        (match (lw_stmts (+ (isz_stmts pre) 2) x86 msz pre wst (FVar (quote m)))
+          ((LSRf why) (LWBRf why))
+          ((LSOk gspre sta mema)
+           (match cnd
+             ((IBin _ o ca cb)
+              (if (is_cmp o)
+                (match (lw_exp x86 msz ca sta mema)
+                  ((LXRf m2) (LWBRf m2))
+                  ((LXOk va ga)
+                   (match (lw_exp x86 msz cb sta mema)
+                     ((LXRf m2) (LWBRf m2))
+                     ((LXOk vb gb)
+                      (match (gs_app ga gb)
+                        ((Cons _ _)
+                         (LWBRf
+                           "loop-body branch condition carries guards (named growth)"))
+                        (Nil
+                          (match
+                            (lw_stmts (+ (isz_stmts tb) 2) x86 msz tb sta mema)
+                            ((LSRf m2) (LWBRf m2))
+                            ((LSOk gst stt memt)
+                             (match
+                               (lw_stmts
+                                 (+ (isz_stmts post) 2)
+                                 x86
+                                 msz
+                                 post
+                                 stt
+                                 memt)
+                               ((LSRf m2) (LWBRf m2))
+                               ((LSOk gstp sttp _)
+                                (match
+                                  (lw_stmts
+                                    (+ (isz_stmts eb) 2)
+                                    x86
+                                    msz
+                                    eb
+                                    sta
+                                    mema)
+                                  ((LSRf m2) (LWBRf m2))
+                                  ((LSOk gse ste meme)
+                                   (match
+                                     (lw_stmts
+                                       (+ (isz_stmts post) 2)
+                                       x86
+                                       msz
+                                       post
+                                       ste
+                                       meme)
+                                     ((LSRf m2) (LWBRf m2))
+                                     ((LSOk gsep step2 _)
+                                      (if (lwb_dec gi sttp)
+                                        (if (lwb_dec gi step2)
+                                          (LWBOk
+                                            (gs_dedup Nil gspre)
+                                            (Some
+                                              (MkLBr
+                                                (sc2 (op_sym o) va vb)
+                                                (gs_dedup Nil (gs_app gst gstp))
+                                                (gs_dedup Nil (gs_app gse gsep))))
+                                            sttp
+                                            step2)
+                                          (LWBRf
+                                            "loop counter is not a trailing band-decrement (named growth)"))
+                                        (LWBRf
+                                          "loop counter is not a trailing band-decrement (named growth)"))))))))))))))))
+                (LWBRf
+                  "non-comparison loop-body branch condition (named growth)")))
+             (_
+               (LWBRf
+                 "non-comparison loop-body branch condition (named growth)"))))))
+       (_ (LWBRf "loop-body walk shape (internal)"))))))
 
 ;; validate one top-level branch and build its piece: comparison-headed
 ;; condition only (both machines stick on the SAME raw-operand
@@ -2779,37 +2930,10 @@
                      (Call (pq (quote int_of_nat)) (Cons (FVar (quote k2)) Nil))))
                  (None (MxPRf "counter slot out of range (internal)"))
                  ((Some wst)
-                  (match
-                    (lw_stmts
-                      (+ (isz_stmts lbody) 2)
-                      x86
-                      msz
-                      lbody
-                      wst
-                      (FVar (quote m)))
-                    ((LSRf why) (MxPRf why))
-                    ((LSOk wsplits postlc _)
-                     (match (st_get postlc gi)
-                       (None (MxPRf "counter slot out of range (internal)"))
-                       ((Some pv)
-                        (if
-                          (expr_eq
-                            pv
-                            (sc2
-                              (quote mod)
-                              (sc2
-                                (quote -)
-                                (sc2
-                                  (quote +)
-                                  (IntLit 1)
-                                  (Call
-                                    (pq (quote int_of_nat))
-                                    (Cons (FVar (quote k2)) Nil)))
-                                (IntLit 1))
-                              (IntLit 4294967296)))
-                          (MxPOk (Cons (MxPL gi kg lbody lbE wsplits Nil) Nil))
-                          (MxPRf
-                            "loop counter is not a trailing band-decrement (named growth)")))))))))
+                  (match (lwb_walk x86 msz gi lbody wst)
+                    ((LWBRf why) (MxPRf why))
+                    ((LWBOk wsplits lbr _ _)
+                     (MxPOk (Cons (MxPL gi kg lbody lbE wsplits lbr Nil) Nil)))))))
               (_ (MxPRf "loop Expr shape (internal)")))))))
        (_ (MxPRf "non-U32 loop counter (named growth)"))))))
 
@@ -2875,14 +2999,16 @@
                        (match lps
                          ((Cons lp0 _)
                           (match lp0
-                            ((MxPL g2 k2 lb2 le2 ws2 _)
+                            ((MxPL g2 k2 lb2 le2 ws2 br2 _)
                              (match
                                (mxc_slice (- fuel 1) x86 msz t tE Nil Nil nl ks)
                                ((MxPRf m2) (MxPRf m2))
                                ((MxPOk more)
                                 (let
                                   ((tail
-                                     (Cons (MxPL g2 k2 lb2 le2 ws2 csets) more)))
+                                     (Cons
+                                       (MxPL g2 k2 lb2 le2 ws2 br2 csets)
+                                       more)))
                                   (match rp
                                     (Nil (MxPOk tail))
                                     (_
@@ -3060,7 +3186,7 @@
                       (None None)
                       ((Some more) (Some (Cons ch more)))))))
                 (_ None)))))))
-       ((MxPL _ _ _ _ _ _) (mxc_chunks rest mtr ksE))))))
+       ((MxPL _ _ _ _ _ _ _) (mxc_chunks rest mtr ksE))))))
 
 ;; the whole-claim fuels: continuation positions are depth-flavored
 ;; (segments consume their instr/stmt counts; loop pieces consume 3
@@ -3105,10 +3231,10 @@
              (+ ci 1)
              (imax am (+ cm (+ (mxb_k sl) 2)))
              (imax ai (+ ci (+ gsub 2)))))))
-       ((MxPL _ kg lbody _ _ csets)
+       ((MxPL _ kg lbody _ _ _ csets)
         (match machs
           (Nil (Pair (imax am (+ cm 8)) (imax ai (+ ci 8))))
-          ((Cons (Pair _ (Pair wlen _)) hrest)
+          ((Cons (Pair _ (Pair _ wcode)) hrest)
            (let ((q (mxc_clen csets)))
              (mxc_ag
                rest
@@ -3116,7 +3242,9 @@
                hrest
                (+ cm (+ (* 2 q) 1))
                (+ ci (+ q 1))
-               (imax am (+ (+ (+ cm (+ (* 2 q) 4)) (+ wlen 4)) (+ kg 1)))
+               (imax
+                 am
+                 (+ (+ (+ cm (+ (* 2 q) 4)) (+ (tcost wcode) 2)) (+ kg 1)))
                (imax ai (+ (+ (+ ci (+ q 2)) (+ (gcost lbody) 5)) (+ kg 1))))))))))))
 
 ;; print an Expr list as a ground (Cons ... Nil) spine, or with an
@@ -3613,7 +3741,7 @@
    (cont Doc))
   Doc
   (let
-    ((aw (+ wlen 4))
+    ((aw (+ (tcost lcode) 2))
      (q (mxc_clen csets))
      (kd (dcat3 (DStr "(int_of_nat ") (dint kg) (DStr ")"))))
     (let
@@ -3872,7 +4000,7 @@
              ")) (case ITrap (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
            lstop
            (DStr ")) refl))))))))"))))
-      ((MxPL gi kg lbody lbE wsplits csets)
+      ((MxPL gi kg lbody lbE wsplits _ csets)
        (match mach
          ((Pair _ (Pair wlen lcodeE))
           (let
@@ -3982,7 +4110,7 @@
                   (match pc
                     ((MxPS _ _) d)
                     ((MxPB _ _ _ _ _ _ _) d)
-                    ((MxPL _ _ _ _ _ _) (+ d 1)))
+                    ((MxPL _ _ _ _ _ _ _) (+ d 1)))
                   nr)
                 (DStr "(claim ")
                 nmdoc
@@ -4050,7 +4178,7 @@
      (match msls
        (Nil (Pair (Pair fm gm) (Pair Nil 0)))
        ((Cons _ mrest) (Pair (Pair (- fm 1) (- gm 1)) (Pair mrest 0)))))
-    ((MxPL _ _ _ _ _ csets)
+    ((MxPL _ _ _ _ _ _ csets)
      (let ((q (mxc_clen csets)))
        (Pair (Pair (- fm (+ (* 2 q) 1)) (- gm (+ q 1))) (Pair msls (- 0 1)))))))
 
@@ -4180,61 +4308,30 @@
                                        (MxRf
                                          "counter slot out of range (internal)"))
                                      ((Some wst)
-                                      (match
-                                        (lw_stmts
-                                          (+ (isz_stmts lbody) 2)
-                                          x86
-                                          msz
-                                          lbody
-                                          wst
-                                          (FVar (quote m)))
-                                        ((LSRf why) (MxRf why))
-                                        ((LSOk wsplits postlc _)
-                                         (match (st_get postlc gi)
-                                           (None
-                                             (MxRf
-                                               "counter slot out of range (internal)"))
-                                           ((Some pv)
-                                            (if
-                                              (expr_eq
-                                                pv
-                                                (sc2
-                                                  (quote mod)
-                                                  (sc2
-                                                    (quote -)
-                                                    (sc2
-                                                      (quote +)
-                                                      (IntLit 1)
-                                                      (Call
-                                                        (pq (quote int_of_nat))
-                                                        (Cons
-                                                          (FVar (quote k2))
-                                                          Nil)))
-                                                    (IntLit 1))
-                                                  (IntLit 4294967296)))
-                                              (match
-                                                (mx_walk
-                                                  (- fuel 1)
-                                                  x86
-                                                  msz
-                                                  t
-                                                  tE
-                                                  (mx_fresh d 0 nl)
-                                                  (FVar (mxs1 "mm" d))
-                                                  (+ p 1)
-                                                  (+ d 1)
-                                                  nl
-                                                  ks)
-                                                ((MxRf m2) (MxRf m2))
-                                                ((MxOk evs)
-                                                 (MxOk
-                                                   (Cons
-                                                     (MxL
-                                                       (MkMxLp gi kg lbE lbody
-                                                         st mem wsplits p))
-                                                     evs))))
-                                              (MxRf
-                                                "loop counter is not a trailing band-decrement (named growth)")))))))))
+                                      (match (lwb_walk x86 msz gi lbody wst)
+                                        ((LWBRf why) (MxRf why))
+                                        ((LWBOk wsplits lbr _ _)
+                                         (match
+                                           (mx_walk
+                                             (- fuel 1)
+                                             x86
+                                             msz
+                                             t
+                                             tE
+                                             (mx_fresh d 0 nl)
+                                             (FVar (mxs1 "mm" d))
+                                             (+ p 1)
+                                             (+ d 1)
+                                             nl
+                                             ks)
+                                           ((MxRf m2) (MxRf m2))
+                                           ((MxOk evs)
+                                            (MxOk
+                                              (Cons
+                                                (MxL
+                                                  (MkMxLp gi kg lbE lbody st mem
+                                                    wsplits lbr p))
+                                                evs)))))))))
                                   (_ (MxRf "loop Expr shape (internal)")))))))
                           (_
                             (MxRf
@@ -4426,6 +4523,45 @@
       (DStr
         ") lr lhs ((inst c2 c2)) ((steps ((rewrite (premise hcap) lr lhs true ())) refl))) refl"))))
 
+;; the loop-body branch case-on (IF-2): ONE case-on of the shared raw
+;; comparison scrutinee inside the induct step; both arms LIVE (no
+;; trap closer) -- each rewrites the polarity into both sides, walks
+;; its own region's splits (indices offset past the prefix so hlt/hle
+;; names stay distinct; the arms are separate scopes and may reuse
+;; each other's), and cites the IH at its own hyp depth
+;; (1 + prefix + region). p = the prefix split count.
+(fn mxw_brcase
+  ((scrut Expr)
+   (tgs (List GSplit))
+   (egs (List GSplit))
+   (p Int)
+   (msz Int)
+   (widnm Doc))
+  Doc
+  (dconc
+    (list
+      (DStr "(case-on ")
+      (pr_e scrut)
+      (DStr
+        " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
+      (mx_wstop)
+      (DStr "))) ")
+      (mxw_spine
+        tgs
+        (+ p 1)
+        msz
+        (mxw_tail widnm (+ (+ p 1) (ilen_gs (gs_index tgs 0)))))
+      (DStr
+        ")) (case False (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
+      (mx_wstop)
+      (DStr "))) ")
+      (mxw_spine
+        egs
+        (+ p 1)
+        msz
+        (mxw_tail widnm (+ (+ p 1) (ilen_gs (gs_index egs 0)))))
+      (DStr "))))"))))
+
 ;; one counter-tied worker claim + its body-copy fns
 (fn mxw_emit
   ((nm (List Int))
@@ -4437,7 +4573,7 @@
    (wcodeE Expr))
   ERes
   (match lp
-    ((MkMxLp gi _ lbodyE lbody _ _ wsplits _)
+    ((MkMxLp gi _ lbodyE lbody _ _ wsplits lbr _)
      (match (spl_e lbodyE)
        ((SpRErr m) (EErr m))
        ((SpROk lbdoc)
@@ -4446,7 +4582,7 @@
           ((SpROk wcdoc)
            (let
              ((bw (+ (gcost lbody) 5))
-              (aw (+ wlen 4))
+              (aw (+ (tcost wcodeE) 2))
               (ds (gs_dedup Nil wsplits))
               (locs (mxw_locs_go 0 nl gi (DStr "(int_of_nat k)"))))
              (EOk
@@ -4514,9 +4650,19 @@
                      ds
                      1
                      msz
-                     (mxw_tail
-                       (dcat3 (DStr "sqm_wid_") (DStr nm) (DStr ""))
-                       (ilen_gs (gs_index ds 0))))
+                     (match lbr
+                       (None
+                         (mxw_tail
+                           (dcat3 (DStr "sqm_wid_") (DStr nm) (DStr ""))
+                           (ilen_gs (gs_index ds 0))))
+                       ((Some (MkLBr scrut tgs egs))
+                        (mxw_brcase
+                          scrut
+                          tgs
+                          egs
+                          (ilen_gs (gs_index ds 0))
+                          msz
+                          (dcat3 (DStr "sqm_wid_") (DStr nm) (DStr ""))))))
                    (DStr ")))))")
                    (DStr (nl))
                    (DStr (nl)))))))))))))
@@ -4570,11 +4716,11 @@
 
 (fn mxlp_body ((lp MxLp)) (List IStmt)
   (match lp
-    ((MkMxLp _ _ _ lbody _ _ _ _) lbody)))
+    ((MkMxLp _ _ _ lbody _ _ _ _ _) lbody)))
 
 (fn mxlp_kg ((lp MxLp)) Int
   (match lp
-    ((MkMxLp _ kg _ _ _ _ _ _) kg)))
+    ((MkMxLp _ kg _ _ _ _ _ _ _) kg)))
 
 ;; all workers, in loop order
 (fn mxw_all
@@ -4760,7 +4906,7 @@
                       (mxc_lst (Cons sE Nil)))
                     (mxc_brlemma nm b nl msz gsub sl scrutE flip tgs egs)
                     more))))))))
-       ((MxPL _ _ _ _ _ _) (mxc_sfl rest msls nm nl msz (+ b 1)))))))
+       ((MxPL _ _ _ _ _ _ _) (mxc_sfl rest msls nm nl msz (+ b 1)))))))
 
 ;; one open-tail BRANCH sub-lemma (the sqbw_probe blueprint): machine
 ;; walk of the branch chunk over ANY tail rw = es_scont of the
@@ -4896,7 +5042,7 @@
                     (mxc_drop els 1)
                     nm
                     (+ b 1)))))))
-          ((MxPL _ _ _ _ _ csets)
+          ((MxPL _ _ _ _ _ _ csets)
            (let ((q (mxc_clen csets)))
              (dconc
                (list
@@ -5265,7 +5411,7 @@
                       (None None)
                       ((Some more) (Some (Cons (Pair ch Nil) more)))))))
                 (_ None)))))))
-       ((MxPL _ _ _ _ _ _) (mxx_chunks rest mtr))))))
+       ((MxPL _ _ _ _ _ _ _) (mxx_chunks rest mtr))))))
 
 ;; the register-file doc: scratch fields take the given docs; home
 ;; fields take kd at the counter, the const-run's ground value at a
@@ -5371,10 +5517,46 @@
             (DStr " refl))))"))))))))
 
 ;; one counter-tied x86 worker: body-copy fns + the claim (probe shape)
+;; the x86 twin of mxw_brcase (identical structure, x86 stops); the
+;; loop's own ix_zs seal re-zeroes the arm dirt before the back-edge,
+;; so the header register state is arm-independent and the per-arm IH
+;; cites bind by matching -- the seal IS the join.
+(fn mxxw_brcase
+  ((scrut Expr)
+   (tgs (List GSplit))
+   (egs (List GSplit))
+   (p Int)
+   (msz Int)
+   (widnm Doc))
+  Doc
+  (dconc
+    (list
+      (DStr "(case-on ")
+      (pr_e scrut)
+      (DStr
+        " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
+      (mxx_wstop)
+      (DStr "))) ")
+      (mxxw_spine
+        tgs
+        (+ p 1)
+        msz
+        (mxw_tail widnm (+ (+ p 1) (ilen_gs (gs_index tgs 0)))))
+      (DStr
+        ")) (case False (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
+      (mxx_wstop)
+      (DStr "))) ")
+      (mxxw_spine
+        egs
+        (+ p 1)
+        msz
+        (mxw_tail widnm (+ (+ p 1) (ilen_gs (gs_index egs 0)))))
+      (DStr "))))"))))
+
 (fn mxxw_emit ((nm (List Int)) (d Int) (nl Int) (msz Int) (lp MxLp) (li MxXLi))
   ERes
   (match lp
-    ((MkMxLp gi _ lbodyE lbody _ _ wsplits _)
+    ((MkMxLp gi _ lbodyE lbody _ _ wsplits lbr _)
      (match li
        ((MkMxXLi _ wlen wcodeE sa sb sc)
         (match (spl_e lbodyE)
@@ -5385,7 +5567,7 @@
              ((SpROk wcdoc)
               (let
                 ((bw (+ (gcost lbody) 5))
-                 (aw (+ wlen 4))
+                 (aw (+ (tcost wcodeE) 2))
                  (ds (gs_dedup Nil wsplits))
                  (sad (if sa (DStr "za") (DStr "0")))
                  (sbd (if sb (DStr "zb") (DStr "0")))
@@ -5482,9 +5664,19 @@
                           ds
                           1
                           msz
-                          (mxw_tail
-                            (dcat3 (DStr "sqm_wid_") (DStr nm) (DStr ""))
-                            (ilen_gs (gs_index ds 0))))
+                          (match lbr
+                            (None
+                              (mxw_tail
+                                (dcat3 (DStr "sqm_wid_") (DStr nm) (DStr ""))
+                                (ilen_gs (gs_index ds 0))))
+                            ((Some (MkLBr scrut tgs egs))
+                             (mxxw_brcase
+                               scrut
+                               tgs
+                               egs
+                               (ilen_gs (gs_index ds 0))
+                               msz
+                               (dcat3 (DStr "sqm_wid_") (DStr nm) (DStr ""))))))
                         (DStr ")))))")
                         (DStr (nl))
                         (DStr (nl))))))))))))))))
@@ -5547,7 +5739,7 @@
     (Nil Nil)
     ((Cons pc t)
      (match pc
-       ((MxPL _ _ _ _ _ _) (Cons (Pair Nil (Some pc)) (mxx_legs t)))
+       ((MxPL _ _ _ _ _ _ _) (Cons (Pair Nil (Some pc)) (mxx_legs t)))
        ;; a branch has no seal on either side: it GLUES into the leg
        ;; that follows it (through the next loop / flat run / end)
        ((MxPB _ _ _ _ _ _ _)
@@ -5560,7 +5752,7 @@
           (Nil (Cons (Pair (Cons (MxPS a e) Nil) None) Nil))
           ((Cons pc2 t2)
            (match pc2
-             ((MxPL _ _ _ _ _ _)
+             ((MxPL _ _ _ _ _ _ _)
               (Cons (Pair (Cons (MxPS a e) Nil) (Some pc2)) (mxx_legs t2)))
              ((MxPS _ _) (Cons (Pair (Cons (MxPS a e) Nil) None) (mxx_legs t)))
              ;; flat followed by a branch: no seal between them either
@@ -5611,7 +5803,7 @@
            (match (mxx_segm rest mrest)
              ((Pair (Pair w2 (Pair z2 t2)) mout)
               (Pair (Pair (+ 1 w2) (Pair z2 (+ 1 t2))) mout))))))
-       ((MxPL _ _ _ _ _ _) (Pair (Pair 0 (Pair 0 0)) msls))))))
+       ((MxPL _ _ _ _ _ _ _) (Pair (Pair 0 (Pair 0 0)) msls))))))
 
 ;; the leg's own statement list: segment stmts then the const-run
 (fn mxx_segstmts ((segs (List MxPc))) (List IStmt)
@@ -5622,7 +5814,7 @@
      (match pc
        ((MxPS segst _) (isapp2 segst (mxx_segstmts t)))
        ((MxPB _ _ _ _ _ _ _) (mxx_segstmts t))
-       ((MxPL _ _ _ _ _ _) (mxx_segstmts t))))))
+       ((MxPL _ _ _ _ _ _ _) (mxx_segstmts t))))))
 
 (fn isapp2 ((a (List IStmt)) (b (List IStmt))) (List IStmt)
   (measure (struct a))
@@ -5679,10 +5871,10 @@
                (mxx_ag rest lis msls2 (+ cm (+ w z)) (+ ci tn) am ai))))
           ((Some pc)
            (match pc
-             ((MxPL _ kg lbody _ _ csets)
+             ((MxPL _ kg lbody _ _ _ csets)
               (match lis
                 (Nil (Pair (imax am (+ cm 8)) (imax ai (+ ci 8))))
-                ((Cons (MkMxXLi zlen wlen _ _ _ _) lrest)
+                ((Cons (MkMxXLi zlen _ wcode _ _ _) lrest)
                  (let ((q (mxc_clen csets)))
                    (mxx_ag
                      rest
@@ -5695,7 +5887,7 @@
                        (+
                          (+
                            (+ (+ (+ cm w) (mxx_sgpad segs)) (+ (+ q zlen) 4))
-                           (+ wlen 4))
+                           (+ (tcost wcode) 2))
                          (+ kg 1)))
                      (imax
                        ai
@@ -5780,7 +5972,7 @@
                   (+ b 1)))))
             ((Some pc)
              (match pc
-               ((MxPL _ _ _ _ _ csets)
+               ((MxPL _ _ _ _ _ _ csets)
                 (match lis
                   (Nil (DStr ""))
                   ((Cons (MkMxXLi zlen _ _ _ _ _) lrest)
@@ -5981,7 +6173,7 @@
     (Nil (DStr ""))
     ((Cons pc _)
      (match pc
-       ((MxPL _ _ _ _ _ _) (DStr ""))
+       ((MxPL _ _ _ _ _ _ _) (DStr ""))
        ((MxPS _ segE)
         (match msls
           (Nil (DStr ""))
@@ -6175,7 +6367,7 @@
    (yi Int)
    (q Int)
    (zlen Int)
-   (wlen Int)
+   (aw Int)
    (bw Int)
    (locdoc Doc)
    (memdoc Doc)
@@ -6183,7 +6375,7 @@
    (cst Doc)
    (cont Doc))
   Doc
-  (let ((aw (+ wlen 4)) (kd (dcat3 (DStr "(int_of_nat ") (dint kg) (DStr ")"))))
+  (let ((kd (dcat3 (DStr "(int_of_nat ") (dint kg) (DStr ")"))))
     (let ((sm (- (- xm aw) kg)) (si (- (- yi bw) kg)))
       (dconc
         (list
@@ -6528,10 +6720,10 @@
                                           (DStr (nl))))))))))
                             ((Some pc)
                              (match pc
-                               ((MxPL gi kg lbody _ _ csets)
+                               ((MxPL gi kg lbody _ _ _ csets)
                                 (match li
                                   (None (DStr ""))
-                                  ((Some (MkMxXLi zlen wlen _ _ _ _))
+                                  ((Some (MkMxXLi zlen _ wcode _ _ _))
                                    (let
                                      ((q (mxc_clen csets))
                                       (bw (+ (gcost lbody) 5))
@@ -6636,7 +6828,7 @@
                                                       yi
                                                       q
                                                       zlen
-                                                      wlen
+                                                      (+ (tcost wcode) 2)
                                                       bw
                                                       locdocT
                                                       memdocT
@@ -6681,7 +6873,7 @@
                                                       yi
                                                       q
                                                       zlen
-                                                      wlen
+                                                      (+ (tcost wcode) 2)
                                                       bw
                                                       locdocE
                                                       memdocE
@@ -6895,7 +7087,7 @@
                          (_ (DStr ""))))
                      ((Some pc)
                       (match pc
-                        ((MxPL _ _ _ _ _ csets)
+                        ((MxPL _ _ _ _ _ _ csets)
                          (match lis
                            (Nil (DStr ""))
                            ((Cons li lrest)
@@ -7034,10 +7226,10 @@
                                (DStr (nl)))))))))
                   ((Some pc)
                    (match pc
-                     ((MxPL gi kg lbody _ _ csets)
+                     ((MxPL gi kg lbody _ _ _ csets)
                       (match lis
                         (Nil (DStr ""))
-                        ((Cons (MkMxXLi zlen wlen _ _ _ _) lrest)
+                        ((Cons (MkMxXLi zlen _ wcode _ _ _) lrest)
                          (let
                            ((q (mxc_clen csets))
                             (bw (+ (gcost lbody) 5))
@@ -7155,7 +7347,7 @@
                                             yi
                                             q
                                             zlen
-                                            wlen
+                                            (+ (tcost wcode) 2)
                                             bw
                                             locdoc
                                             memdoc

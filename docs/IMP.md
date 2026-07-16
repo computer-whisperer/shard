@@ -2879,6 +2879,87 @@ memory-effect pipe IS the spec, both targets.**
   (thin World main, slurp ≤ cap, controlled-failure leg, NIST
   vectors, gates).
 
+**IF-2 — branch-in-loop-body (2026-07-16; the imp-if-tier fork; two
+commits: IF-2a the blueprints, IF-2b the emission).** The
+sha-adjacent fence falls: counting loops whose BODY holds one
+top-level `IIf` (comparison-headed, straight-line arms, stores
+allowed anywhere), generated FULL on BOTH targets. No translator or
+model changes — both loop-body translators already ride the
+IIf-capable statement translators, and `ix_dwl` sees through nested
+`XBlock`s.
+
+- **IF-2a — the blueprints** (examples/sqblw_probe.shard 117/0 +
+  examples/sqblx_probe.shard 410/0, full pins, assembled from
+  flat-twin scaffolds with the branchy loop swapped in). The new
+  mechanism is the WORKER: inside the induct step, ONE case-on of
+  the shared raw comparison scrutinee (both machines stick on it
+  after the entry walk), then each polarity arm rewrites `(hyp 0)`
+  into both sides, walks its own region's guard case-ons, rides the
+  shared body tail, and cites the IH at its own hyp depth with
+  `(inst c2 c2)` — the induct generalizes locals and mem, so the
+  per-arm cites bind by matching. On x86 the loop's own `ix_zs` seal
+  re-zeroes the union of arm dirt before the back-edge, so the
+  header register state is arm-independent in scratch — THE SEAL IS
+  THE JOIN. The IF-1c dedup law holds inside the worker: guard
+  regions (body prefix / then / else) dedup independently, never
+  across the polarity case-on (arm occurrences materialize only
+  after the polarity resolves); duplicate case-ons close by
+  conflated traps.
+- **Fuel.** Towers are depth budgets: one iteration burns exactly
+  one `lg_fuel` S at the header on both sides regardless of arm, so
+  the V2-5 chain arithmetic carries over. The machine slack must
+  price the branch NESTING: `aw = tcost(loopcode) + 2`, which equals
+  the old `wlen + 4` on flat bodies (all eight pre-existing outs
+  byte-identical) and grows with nesting (the pure loop tier already
+  priced by tcost; the mixed tier now does at all six sites —
+  mxw/mxxw_emit, mxc/mxx_ag, mxc/mxx_lhead). `bw = gcost(body) + 5`
+  was already branch-aware. Chain consequences, blueprint-measured:
+  the imp-side boundary towers grow with bw down the chain; the wasm
+  machine towers are UNCHANGED (the worker's machine surplus is
+  absorbed by its own fuel binder — the reshape have may carry an
+  inner `S^k`); the x86 leg's machine claim grows with aw and the
+  terminal boundary cite absorbs the surplus by matching (only imp
+  `c2` is pinned).
+- **IF-2b — the emission.** The loop-body walk factors into
+  `lwb_walk` (shared by the slicer's `mxc_loop` and the event
+  walker's `mx_walk`): split at the first top-level `IIf`, walk the
+  prefix at the loop-head state, take the scrutinee at the
+  post-prefix state (mxc_br's constraints verbatim: `is_cmp`-headed,
+  guard-free operands), walk each arm ++ post-tail per arm, dedup
+  per-REGION, and check the trailing band-decrement on BOTH per-arm
+  post-states. The payload rides `(Option LBr)` through
+  `MxPL`/`MkMxLp`; `mxw_brcase`/`mxxw_brcase` emit the worker's
+  branch case-on (arm spine indices offset past the prefix so
+  hlt/hle names stay distinct; arms are separate scopes). The
+  generated pin-1 worker is byte-identical to the hand-proven
+  blueprint worker (modulo names); the generated chain derives
+  tighter machine towers than the twin-based probes (exact `S^1`
+  inner), both shapes valid.
+- **Fixture** examples/imp_ifl.shard: `it_ifl_fn` = the blueprint
+  program verbatim; `it_ifl2_fn` = the full region structure (body
+  prefix WITH store guards, banded `IEq` scrutinee, guard-free then
+  arm, else arm DUPLICATING the prefix guards — the conflated-trap
+  closure exercised inside the worker). Outs:
+  impgen_wasm_ifl_out.shard 123/0, impgen_x86_ifl_out.shard 416/0,
+  both FULL first-run, deterministic, canon-stable. Registered:
+  build_products +5 (driver 74→79), run_corpus +5 (2 probes at
+  IF-2a, fixture + 2 outs at IF-2b).
+- **Fences that moved inward** (named, loud): lw_stmts's IIf refusal
+  now reads "nested or repeated branch (straight-line arms; one
+  branch per loop body; named growth)" — it fires for a branch
+  inside a branch arm and for a second branch per loop body; the
+  walker adds "loop-body branch condition carries guards" and
+  "non-comparison loop-body branch condition". A branchy loop body
+  in a store-free pin still routes to the PURE loop tier and refuses
+  there (mixed-tier entry needs mem or a top-level branch) — a
+  dispatch seam, not a soundness gap.
+- NEXT (the fork's ladder): rung 3 nested branches + the IF-1c
+  fences (adjacent branches in one unsealed span, branch leg ending
+  at a mid-flat seal point, branch-with-loop-arms) — assess, fence
+  loudly if not taken; the pure-tier dispatch seam above is a
+  candidate small rung (route branchy store-free loop pins to the
+  mixed tier).
+
 
 ## 7. Non-goals, stated once
 
