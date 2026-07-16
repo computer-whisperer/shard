@@ -1,0 +1,246 @@
+;;; Kernel-replayed witnesses for typed_pio_dme.shard (docs/PIO.md P4): the
+;;; DME reproduction gates, checked by the kernel instead of mlx-pio's
+;;; scorer.  The transplanted dme_spec_ref winner is replayed exactly on
+;;; BOTH corpora — the locked 278-cycle train battery and the held-out
+;;; validation battery (mlx-pio's dme_validate qualifies a champion only
+;;; when train AND held-out are both exact; here each is one ground claim).
+;;; The gauge twin found by the search (jmp 6 [0] for jmp 7 [1] — a
+;;; harmless re-drive of the held level in place of the idle delay cycle)
+;;; is replayed on both corpora too: it is a real DME encoder, not an
+;;; overfit.
+;;;
+;;; Beyond the locked window, the drain story is pinned: a 340-cycle run
+;;; covers all twenty data cells (last edge at 307) and parks the machine
+;;; on the drained-FIFO OUT stall.  pio_final pins the exact park state,
+;;; and dme_park_hold proves the park is a FIXED POINT — the pin holds its
+;;; level for EVERY stimulus budget (the P3 wf-induct machinery, one
+;;; phase).  Goldens are the reference's own traces on this model
+;;; (datasheet-true: every edge sits +1 cycle after mlx-pio's emulator,
+;;; the initial autopull refill bubble — PIO.md §5 rows 6-7, measured).
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../models/pio/pio.shard")
+(use (:: models pio pio *))
+
+;; Search winner from tools/search/tasks/typed_pio_dme.shard
+;; (= search_witness): pio_superopt's dme_spec_ref, transplanted.
+(fn dme_winner () (List PIns)
+  (list
+    (MkPIns (POut ODX 1) None 0)
+    (MkPIns (PMov MDY MOInvert MSY) None 0)
+    (MkPIns (PMov MDPins MOInvert MSY) None 5)
+    (MkPIns (PJmp JXDec 5) None 0)
+    (MkPIns (PJmp JAlways 7) None 1)
+    (MkPIns (PMov MDY MOInvert MSY) None 0)
+    (MkPIns (PMov MDPins MOInvert MSY) None 0)
+    (MkPIns (PMov MDPins MOInvert MSY) None 4)))
+
+;; The search's other survivor (census: exactly two of 4,608): the bit-0
+;; path re-drives the held level through slot 6 instead of idling a delay
+;; cycle.  Cycle-for-cycle identical on any data — a gauge spelling.
+(fn dme_gauge () (List PIns)
+  (list
+    (MkPIns (POut ODX 1) None 0)
+    (MkPIns (PMov MDY MOInvert MSY) None 0)
+    (MkPIns (PMov MDPins MOInvert MSY) None 5)
+    (MkPIns (PJmp JXDec 5) None 0)
+    (MkPIns (PJmp JAlways 6) None 0)
+    (MkPIns (PMov MDY MOInvert MSY) None 0)
+    (MkPIns (PMov MDPins MOInvert MSY) None 0)
+    (MkPIns (PMov MDPins MOInvert MSY) None 4)))
+
+(fn dme_code ((body (List PIns))) (List PSlot)
+  (measure (struct body))
+  (match body
+    (Nil Nil)
+    ((Cons i rest) (Cons (PS i) (dme_code rest)))))
+
+;; The transplanted dme_cfg (task file's construction, verbatim): one TX
+;; pin, OUT window pin 0, wrap over the eight slots, AUTOPULL threshold 5.
+(fn dme_cfg ((body (List PIns))) PCfg
+  (MkPCfg (dme_code body) 7 0 0 0 0 0 0 0 0 0 1 0 1 0 1 32 5 1 1 1 0 0 0 0 4 4))
+
+(fn dmec () PCfg (dme_cfg (dme_winner)))
+
+;; mlx-pio's dme_corpus and its held-out dme_validation_corpus (4B/5B
+;; codes, LSB-first; disjoint sets).
+(fn dme_train () (List Int) (list 30 10 21 9))
+
+(fn dme_heldout () (List Int) (list 18 22 27 15))
+
+(fn dme_st0 ((ins (List Int))) PSt (with_tx ins (with_dir_l 1 (pst_new))))
+
+;; The all-zero stimulus; doubles as the all-low waveform spec in
+;; dme_park_hold (the parked pin drives 0).
+(fn dme_stim ((n Int)) (List Int)
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt n 1) Nil (Cons 0 (dme_stim (- n 1)))))
+
+;; pin-0 level per cycle (bit 0 of the composed pad word).
+(fn wave_bits ((obs (List (Pair Int Int)))) (List Int)
+  (measure (struct obs))
+  (match obs
+    (Nil Nil)
+    ((Cons o rest)
+     (match o
+       ((Pair levels dirs) (Cons (band levels 1) (wave_bits rest)))))))
+
+;; One-cell distribution (the P3 idiom): peel an observation while the
+;; tail's wave_bits stays a FOLDED call.
+(claim wave_bits_cons
+  (goal ((l Int) (d Int) (r (List (Pair Int Int)))) ()
+    (= (wave_bits (Cons (Pair l d) r)) (Cons (band l 1) (wave_bits r))))
+  (steps ((compute both)) refl))
+
+;; --- the reproduction gates: exact replay on both corpora --------------------------
+
+;; The locked train battery (mlx-pio's dme_golden window, DME_CYCLES=278).
+(claim dme_winner_battery
+  (goal () ()
+    (=
+      (wave_bits (pio_run (dmec) (dme_st0 (dme_train)) 0 (dme_stim 278)))
+      (list 1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0
+        0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1
+        1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0
+        0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0
+        0 0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1
+        1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1
+        1 1 1 1 1 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0
+        0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 1 1)))
+  (steps ((compute both)) refl))
+
+;; The held-out validation battery — dme_validate's second zero.
+(claim dme_winner_heldout
+  (goal () ()
+    (=
+      (wave_bits (pio_run (dmec) (dme_st0 (dme_heldout)) 0 (dme_stim 278)))
+      (list 1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0
+        0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 1 1
+        1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0
+        0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 0 0 0
+        0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0
+        0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0 0 0
+        0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0
+        0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0)))
+  (steps ((compute both)) refl))
+
+;; The gauge twin passes the same two gates: a genuine DME encoder.
+(claim dme_gauge_battery
+  (goal () ()
+    (=
+      (wave_bits
+        (pio_run (dme_cfg (dme_gauge)) (dme_st0 (dme_train)) 0 (dme_stim 278)))
+      (list 1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0
+        0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1
+        1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0
+        0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0
+        0 0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1
+        1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1
+        1 1 1 1 1 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0
+        0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 1 1)))
+  (steps ((compute both)) refl))
+
+(claim dme_gauge_heldout
+  (goal () ()
+    (=
+      (wave_bits
+        (pio_run (dme_cfg (dme_gauge)) (dme_st0 (dme_heldout)) 0 (dme_stim 278)))
+      (list 1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0
+        0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 1 1
+        1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0
+        0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 0 0 0
+        0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0
+        0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0 0 0
+        0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0
+        0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0)))
+  (steps ((compute both)) refl))
+
+;; --- the drain: all twenty cells, then the machine parks ---------------------------
+
+;; 340 cycles covers the full train corpus (last edge at cycle 307) plus
+;; the constant park tail.
+(claim dme_drain
+  (goal () ()
+    (=
+      (wave_bits (pio_run (dmec) (dme_st0 (dme_train)) 0 (dme_stim 340)))
+      (list 1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0
+        0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1
+        1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0
+        0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0
+        0 0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1
+        1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1
+        1 1 1 1 1 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0
+        0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 1 1 1
+        1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+        0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))
+  (steps ((compute both)) refl))
+
+;; The drained-FIFO park state: pc back on the OUT, OSR spent (count 5 at
+;; threshold 5), TX empty, StPull; X carries the dead wrapped decrement of
+;; the final 0 bit (divergence-register row 1 — reloaded before any use),
+;; Y ends all-ones (31 toggles), the pin latch holds the final low.
+(fn dme_park () PSt
+  (MkPSt 0 4294967295 4294967295 0 0 0 5 0 StPull 0 4294967294 1 0 Nil Nil))
+
+(claim dme_park_pin
+  (goal () ()
+    (= (pio_final (dmec) (dme_st0 (dme_train)) 0 (dme_stim 340)) (dme_park)))
+  (steps ((compute both)) refl))
+
+;; One parked cycle: emit the held level, stay parked.
+(claim dme_park_step
+  (goal ((rest (List Int))) ()
+    (=
+      (pio_run (dmec) (dme_park) 0 (Cons 0 rest))
+      (Cons (Pair 0 1) (pio_run (dmec) (dme_park) 0 rest))))
+  (steps ((compute both)) refl))
+
+(claim dme_pred_nonneg
+  (goal ((n Int)) ((= (lt n 1) False)) (= (le 0 (- n 1)) True))
+  (by arith (list 1 1)))
+
+;; The park is a fixed point: the pin holds low for EVERY stimulus budget.
+;; (The all-zero stimulus list doubles as the all-low expected waveform.)
+(claim dme_park_hold
+  (goal ((n Int)) ()
+    (= (wave_bits (pio_run (dmec) (dme_park) 0 (dme_stim n))) (dme_stim n)))
+  (wf-induct n
+    (case-on (lt n 1) Bool
+      ((case True
+         (steps
+           ((unfold dme_stim lhs)
+            (rewrite (hyp 0) lr lhs true ())
+            (reduce lhs)
+            (compute lhs)
+            (unfold dme_stim rhs)
+            (rewrite (hyp 0) lr rhs true ())
+            (reduce rhs))
+           refl))
+       (case False
+         (chain
+           (have zeq (= (dme_stim n) (Cons 0 (dme_stim (- n 1))))
+             (steps
+               ((unfold dme_stim lhs)
+                (rewrite (hyp 0) lr lhs true ())
+                (reduce lhs))
+               refl))
+           (steps
+             ((rewrite (premise zeq) lr lhs true ())
+              (rewrite (lemma dme_park_step) lr lhs true ())
+              (rewrite (lemma wave_bits_cons) lr lhs true ())
+              (compute lhs (stop wave_bits pio_run dmec dme_park dme_stim))
+              (rewrite (premise zeq) lr rhs true ())))
+           (rewrite-with
+             (hyp 1)
+             lr
+             lhs
+             ()
+             ((rewrite-with
+                (lemma dme_pred_nonneg)
+                lr
+                lhs
+                ((inst n n))
+                ((steps ((rewrite (hyp 0) lr lhs true ())) refl))
+                refl)
+              (by arith (list)))
+             refl)))))))

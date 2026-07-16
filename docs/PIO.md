@@ -137,7 +137,7 @@ all verified in primary text, with corpus attribution:
 | 4 | `OUT ISR, n` | sets input shift counter := n | leaves it | 0 |
 | 5 | `WAIT` src 3 | RP2350 JMPPIN (idx ≤ 3); idx > 3 reserved | no-op for all idx | 13 vectors execute **reserved** idx>3 words → prefix-gated; valid JMPPIN is never exercised |
 | 6 | autopush shape | shift first, push at threshold, **stall the IN** on full RX (§3.5.4.1) | defers the stall to the next IN's pre-check | 0 trace divergence (events fire ×7) |
-| 7 | autopull shape | OUT at threshold refills-and-**stalls**; background refill on non-OUT cycles; PULL no-ops on full OSR (§3.5.4.2) | refills-and-executes same cycle; no background refill; no PULL no-op | 0 trace divergence (events fire) |
+| 7 | autopull shape | OUT at threshold refills-and-**stalls**; background refill on non-OUT cycles; PULL no-ops on full OSR (§3.5.4.2) | refills-and-executes same cycle; no background refill; no PULL no-op | 0 in corpus; **DME discriminates it (P4)**: the first OUT finds an empty OSR and the refill bubble shifts every edge **+1 cycle** vs the oracle (twin-measured, both corpora — a constant phase shift, identical edge structure) |
 | 8 | `OUT PINS/PINDIRS` window | writes the full `out_count` window, zero-padded | clips to min(out_count, bitcount) | 0 (out_count ≡ 1 in corpus) |
 | 9 | IRQ index modes | RP2350 IdxMode [4:3]: this/PREV/REL/NEXT | RP2040-style bit-4 rel; bit 3 silently dropped | 0 under quiet-neighbor |
 
@@ -187,9 +187,31 @@ Any drift from this classification is a FAIL. The driver contract
   records the measured proof shape) plus ground battery/spec/gauge-twin
   pins. Both files are corpus targets; the engine run is a corpus pin
   (expected census in the pin's comment).
-- **P4 [DECIDED]** — the DME reproduction: mlx-pio's `DmeSpec` battery
-  transplanted (their `fixtures.rs` reference programs and golden waveforms),
-  searched over the PIO scope, winner proven.
+- **P4 [LANDED 2026-07-16]** — the DME reproduction:
+  `tools/search/tasks/typed_pio_dme.shard` transplants mlx-pio's locked
+  benchmark — the reference is `dme_spec_ref` (pio_superopt's 8-instruction
+  spec-shaped compression seed: 16-cycle cell, autopull threshold 5), the
+  train corpus is `dme_corpus` under the locked 278-cycle window, and the
+  golden is the reference's own trace on THIS model (their `dme_golden`
+  pattern; datasheet-true — every edge sits +1 cycle after their emulator's,
+  the row-7 refill-bubble measurement above). On the calculator4 composition
+  pattern the eight slot ROLES are fixed (consume / toggle / drive / branch /
+  skip / toggle / drive / drive) and the search owns the timing and wiring:
+  drive delays, branch condition + target, skip target + balance delay,
+  drive polarity. Census: TOTAL 4,608, FOUND 2, KILLED 4,606 (531 regions,
+  ~2m40s): the reference (WITNESS, rank 854) and the `jmp 6 [0]` gauge twin
+  (BEST, rank 834) — the bit-0 path re-drives the held level through slot 6
+  instead of idling a delay cycle, cycle-identical on any data. The G4 half,
+  `tools/search/gen/pio_dme_refinement.shard` (~0.3s), kernel-checks the
+  reproduction gates: exact 278-cycle replay on the train battery AND on the
+  held-out `dme_validation_corpus` (mlx-pio's `dme_validate` both-zero gate)
+  for BOTH survivors, the 340-cycle drain, the exact drained-FIFO park state
+  (via `pio_final`, the run-final companion added to the model at this
+  rung), and `dme_park_hold`: the park is a fixed point — the pin holds its
+  level for every stimulus budget. Deferred as named growth: the certifier
+  oracle (phase-free DP waveform alignment) is not transplanted, and
+  window-composition lemmas (`pio_run` over appended stimuli) would
+  formalize the golden-plus-constant-tail extension.
 - **[FUTURE]** — bench certification (hardware-captured vectors adjudicating
   deltas 5–7 and the excluded 3); the 2-SM product machine (mlx-pio's
   statable-but-unproven flagship `2-SM-pair ≡ 1-SM-TX` becomes provable

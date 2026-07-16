@@ -1,0 +1,306 @@
+;;; The DME reproduction (docs/PIO.md P4): mlx-pio's locked benchmark — a
+;;; differential-Manchester (biphase-mark) TX encoder — searched over the PIO
+;;; scope.  The transplanted reference is pio_superopt's dme_spec_ref (the
+;;; 8-instruction spec-shaped compression seed: 16-cycle cell, autopull at
+;;; threshold 5, boundary edge every cell, mid-bit edge iff the data bit is
+;;; 1); the training corpus is their dme_corpus (four 4B/5B codes, LSB-first)
+;;; under their locked 278-cycle capture window.  The golden waveform is the
+;;; reference's own trace on THIS model (their dme_golden pattern:
+;;; self-consistent oracle) — datasheet-true, which shifts every edge +1
+;;; cycle vs their emulator: the FIRST out finds an empty OSR and takes the
+;;; datasheet's refill-and-stall bubble (PIO.md §5 rows 6-7, now measured).
+;;;
+;;; On the calculator4 precedent this is environment composition, not a raw
+;;; program sweep: the eight slots' ROLES are fixed (consume bit / toggle Y /
+;;; drive / branch / skip / toggle / drive / drive) and the search owns the
+;;; TIMING AND WIRING — the three drive delays' load-bearing two, the branch
+;;; condition and target, the skip target and its balance delay, and the
+;;; drive polarity: 6 * 16 * 12 * 4 = 4,608 programs.  Exactly TWO survive:
+;;; the reference (jmp 7 [1] on the bit-0 path) and its gauge twin jmp 6 [0]
+;;; — a harmless re-drive of the held level through slot 6 in place of the
+;;; idle delay cycle, cycle-for-cycle identical on any data.  Both are real
+;;; DME encoders (the companion G4 artifact pins both on the held-out
+;;; corpus); minimum rank picks one, the witness is the reference.
+;;;
+;;; The companion G4 artifact (tools/search/gen/pio_dme_refinement.shard)
+;;; kernel-checks the reproduction gates: the winner's full train battery,
+;;; the held-out validation battery (mlx-pio's dme_validate both-zero gate),
+;;; the drained-FIFO park, and the park's fixed-point theorem.
+
+(import "../../../kernel/stdlib.shard")
+(import "../../../models/pio/pio.shard")
+(import "../typed_grammar.shard")
+(use (:: tools search typed_grammar *))
+
+;; Generic program spine.
+(use (:: core List))
+(use (:: core Nil))
+(use (:: core Cons))
+(use (:: core None))
+
+;; Candidate PIO scope.
+(use (:: models pio pio PIns))
+(use (:: models pio pio MkPIns))
+(use (:: models pio pio PInstr))
+(use (:: models pio pio POut))
+(use (:: models pio pio OutDst))
+(use (:: models pio pio ODX))
+(use (:: models pio pio PMov))
+(use (:: models pio pio MovDst))
+(use (:: models pio pio MDY))
+(use (:: models pio pio MDPins))
+(use (:: models pio pio MovOp))
+(use (:: models pio pio MOInvert))
+(use (:: models pio pio MONone))
+(use (:: models pio pio MovSrc))
+(use (:: models pio pio MSY))
+(use (:: models pio pio PJmp))
+(use (:: models pio pio JmpCond))
+(use (:: models pio pio JAlways))
+(use (:: models pio pio JXDec))
+(use (:: models pio pio JXZero))
+(use (:: models pio pio JYDec))
+(use (:: models pio pio JOsrNE))
+(use (:: models pio pio PSlot))
+(use (:: models pio pio PCfg))
+(use (:: models pio pio PSt))
+
+;; The full model is oracle-only: qualified names do not become productions.
+(use (:: models pio pio) as pio)
+
+(fn search_forms () (List Symbol) (list (quote ctor)))
+
+(fn search_ints () (List Int) Nil)
+
+(fn search_symbols () (List Symbol) Nil)
+
+;; Routed zones fix the shape; depth covers the deepest routed path
+;; (eighth Cons > MkPIns > PMov > head).
+(fn search_depth () Int 12)
+
+(fn dme_ctor ((name Symbol)) TgScopeHead (TgScopeCtor name))
+
+(fn dme_route ((head Symbol) (index Int) (zone Symbol)) TgScopeRoute
+  (TgScopeRoute (dme_ctor head) index zone))
+
+(fn dme_seq ((name Symbol) (instruction Symbol) (tail Symbol)) TgScopeZone
+  (TgScopeZone
+    name
+    (list (dme_ctor (quote Cons)))
+    Nil
+    Nil
+    (list
+      (dme_route (quote Cons) 0 instruction)
+      (dme_route (quote Cons) 1 tail))))
+
+;; One program slot: MkPIns with the given op zone and delay zone; side-set
+;; is pinned None throughout (the reference uses none).
+(fn dme_ins ((name Symbol) (op Symbol) (delay Symbol)) TgScopeZone
+  (TgScopeZone
+    name
+    (list (dme_ctor (quote MkPIns)))
+    Nil
+    Nil
+    (list
+      (dme_route (quote MkPIns) 0 op)
+      (dme_route (quote MkPIns) 1 (quote sideset))
+      (dme_route (quote MkPIns) 2 delay))))
+
+(fn dme_one ((name Symbol) (head Symbol)) TgScopeZone
+  (TgScopeZone name (list (dme_ctor head)) Nil Nil Nil))
+
+(fn search_environment () TgScopeEnv
+  (TgScopeEnv
+    (quote sequence0)
+    (list
+      (dme_seq (quote sequence0) (quote ins0) (quote sequence1))
+      (dme_seq (quote sequence1) (quote ins1) (quote sequence2))
+      (dme_seq (quote sequence2) (quote ins2) (quote sequence3))
+      (dme_seq (quote sequence3) (quote ins3) (quote sequence4))
+      (dme_seq (quote sequence4) (quote ins4) (quote sequence5))
+      (dme_seq (quote sequence5) (quote ins1) (quote sequence6))
+      (dme_seq (quote sequence6) (quote ins6) (quote sequence7))
+      (dme_seq (quote sequence7) (quote ins7) (quote sequence8))
+      (dme_one (quote sequence8) (quote Nil))
+      ;; slot roles: consume / toggle / drive / branch / skip / toggle /
+      ;; drive / drive (slot 5 reuses the slot-1 zone).
+      (dme_ins (quote ins0) (quote consume_op) (quote zero))
+      (dme_ins (quote ins1) (quote ytoggle_op) (quote zero))
+      (dme_ins (quote ins2) (quote drive2_op) (quote first_half))
+      (dme_ins (quote ins3) (quote branch_op) (quote zero))
+      (dme_ins (quote ins4) (quote skip_op) (quote balance))
+      (dme_ins (quote ins6) (quote drive_op) (quote zero))
+      (dme_ins (quote ins7) (quote drive_op) (quote second_half))
+      (TgScopeZone
+        (quote consume_op)
+        (list (dme_ctor (quote POut)))
+        Nil
+        Nil
+        (list
+          (dme_route (quote POut) 0 (quote odx))
+          (dme_route (quote POut) 1 (quote one))))
+      (TgScopeZone
+        (quote ytoggle_op)
+        (list (dme_ctor (quote PMov)))
+        Nil
+        Nil
+        (list
+          (dme_route (quote PMov) 0 (quote mdy))
+          (dme_route (quote PMov) 1 (quote minv))
+          (dme_route (quote PMov) 2 (quote msy))))
+      (TgScopeZone
+        (quote drive2_op)
+        (list (dme_ctor (quote PMov)))
+        Nil
+        Nil
+        (list
+          (dme_route (quote PMov) 0 (quote mdpins))
+          (dme_route (quote PMov) 1 (quote polarity))
+          (dme_route (quote PMov) 2 (quote msy))))
+      (TgScopeZone
+        (quote drive_op)
+        (list (dme_ctor (quote PMov)))
+        Nil
+        Nil
+        (list
+          (dme_route (quote PMov) 0 (quote mdpins))
+          (dme_route (quote PMov) 1 (quote minv))
+          (dme_route (quote PMov) 2 (quote msy))))
+      (TgScopeZone
+        (quote branch_op)
+        (list (dme_ctor (quote PJmp)))
+        Nil
+        Nil
+        (list
+          (dme_route (quote PJmp) 0 (quote branch))
+          (dme_route (quote PJmp) 1 (quote branch_target))))
+      (TgScopeZone
+        (quote skip_op)
+        (list (dme_ctor (quote PJmp)))
+        Nil
+        Nil
+        (list
+          (dme_route (quote PJmp) 0 (quote always))
+          (dme_route (quote PJmp) 1 (quote skip_target))))
+      (TgScopeZone
+        (quote branch)
+        (list
+          (dme_ctor (quote JXDec))
+          (dme_ctor (quote JXZero))
+          (dme_ctor (quote JYDec))
+          (dme_ctor (quote JOsrNE)))
+        Nil
+        Nil
+        Nil)
+      (dme_one (quote always) (quote JAlways))
+      (dme_one (quote odx) (quote ODX))
+      (dme_one (quote mdy) (quote MDY))
+      (dme_one (quote mdpins) (quote MDPins))
+      (dme_one (quote minv) (quote MOInvert))
+      (dme_one (quote msy) (quote MSY))
+      (TgScopeZone
+        (quote polarity)
+        (list (dme_ctor (quote MOInvert)) (dme_ctor (quote MONone)))
+        Nil
+        Nil
+        Nil)
+      (dme_one (quote sideset) (quote None))
+      (TgScopeZone (quote one) Nil (list 1) Nil Nil)
+      (TgScopeZone (quote zero) Nil (list 0) Nil Nil)
+      (TgScopeZone (quote first_half) Nil (list 4 5 6) Nil Nil)
+      (TgScopeZone (quote balance) Nil (list 0 1 2 3) Nil Nil)
+      (TgScopeZone (quote branch_target) Nil (list 4 5 6 7) Nil Nil)
+      (TgScopeZone (quote skip_target) Nil (list 5 6 7) Nil Nil)
+      (TgScopeZone (quote second_half) Nil (list 2 3 4 5) Nil Nil))))
+
+;; --- the observer: pio_run over the locked 278-cycle train battery -------------
+
+(fn dme_code ((body (List PIns))) (List PSlot)
+  (measure (struct body))
+  (match body
+    (Nil Nil)
+    ((Cons i rest) (Cons ((:: pio PS) i) (dme_code rest)))))
+
+;; The transplanted dme_cfg: one TX pin (pin 0), OUT window pin 0, wrap over
+;; the eight slots, AUTOPULL at threshold 5, shift right, full divider speed.
+(fn dme_cfg ((body (List PIns))) PCfg
+  ((:: pio MkPCfg)
+   (dme_code body)
+   7
+   0
+   0
+   0
+   0
+   0
+   0
+   0
+   0
+   0
+   1
+   0
+   1
+   0
+   1
+   32
+   5
+   1
+   1
+   1
+   0
+   0
+   0
+   0
+   4
+   4))
+
+;; TX preloaded with dme_corpus (0x1E 0x0A 0x15 0x09 — codes 0,4,3,1;
+;; LSB-first bits 01111/01010/10101/10010); pin 0 preset as an output.
+(fn dme_st0 () PSt
+  ((:: pio with_tx)
+   (list 30 10 21 9)
+   ((:: pio with_dir_l) 1 ((:: pio pst_new)))))
+
+(fn dme_stim ((n Int)) (List Int)
+  (measure n (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (lt n 1) Nil (Cons 0 (dme_stim (- n 1)))))
+
+;; pin-0 level per cycle (bit 0 of the composed pad word).
+(fn wave_bits ((obs (List (Pair Int Int)))) (List Int)
+  (measure (struct obs))
+  (match obs
+    (Nil Nil)
+    ((Cons o rest)
+     (match o
+       ((Pair levels dirs) (Cons (band levels 1) (wave_bits rest)))))))
+
+(fn search_observe ((body (List PIns))) (List Int)
+  (wave_bits ((:: pio pio_run) (dme_cfg body) (dme_st0) 0 (dme_stim 278))))
+
+(fn search_probe ((body (List PIns))) (Option (List Int))
+  (Some (search_observe body)))
+
+;; The golden: the transplanted reference's own 278-cycle trace on this
+;; model (datasheet-true; +1 cycle vs mlx-pio's emulator from the initial
+;; autopull refill bubble).
+(fn search_target () (List Int)
+  (list 1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1
+    1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1
+    1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1
+    1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1
+    1 1 1 1 1 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 0
+    0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
+    1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 0 0 0 0 0
+    0 0 0 0 0 0 0 0 0 0 0 1 1 1))
+
+;; dme_spec_ref, transplanted: out X,1 / mov Y,!Y / mov pins,!Y [5] /
+;; jmp X--,5 / jmp 7 [1] / mov Y,!Y / mov pins,!Y / mov pins,!Y [4].
+(fn search_witness () (List PIns)
+  (list
+    (MkPIns (POut ODX 1) None 0)
+    (MkPIns (PMov MDY MOInvert MSY) None 0)
+    (MkPIns (PMov MDPins MOInvert MSY) None 5)
+    (MkPIns (PJmp JXDec 5) None 0)
+    (MkPIns (PJmp JAlways 7) None 1)
+    (MkPIns (PMov MDY MOInvert MSY) None 0)
+    (MkPIns (PMov MDPins MOInvert MSY) None 0)
+    (MkPIns (PMov MDPins MOInvert MSY) None 4)))

@@ -344,6 +344,8 @@ TARGETS=(
   examples/pio_vecgate.shard
   tools/search/tasks/typed_pio_square.shard
   tools/search/gen/pio_square_refinement.shard
+  tools/search/tasks/typed_pio_dme.shard
+  tools/search/gen/pio_dme_refinement.shard
 )
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -603,6 +605,17 @@ fi
 echo "=== search: typed pio square-wave pin ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_pio_square.shard
+else
+  echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# The PIO DME reproduction (docs/PIO.md P4): mlx-pio's locked benchmark over
+# the fixed-role dme_spec_ref skeleton with timing/wiring holes.  Expected
+# census: TOTAL 4608, FOUND 2 — the jmp-6[0] re-drive gauge twin at BEST 834,
+# the transplanted reference at WITNESS 854.  (~2m40s single-thread.)
+echo "=== search: typed pio dme pin ==="
+if [ -x bin/shard_eval ]; then
+  bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_pio_dme.shard
 else
   echo "SKIPPED (no bin/shard_eval)"
 fi
