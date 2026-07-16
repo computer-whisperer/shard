@@ -14,11 +14,13 @@
 ;;; assigned an accidental mining meaning.  Repeated mismatch pairs receive
 ;;; the same BVar, which is the ordinary Plotkin anti-unification construction.
 ;;;
-;;; `au_distinct_guards` is observational metadata, not a theorem.  Given a
-;;; schema and its concrete supporting equations it reports variable pairs
-;;; whose matched values differ in every support.  A consumer may use those
-;;; pairs to propose conditional theorems or to replay a finite census, but
-;;; must not install them as proof licenses.
+;;; `au_guard_sets` is observational metadata, not a theorem.  Given a schema
+;;; and its concrete supporting equations it reports a structural baseline
+;;; plus alternate low-complexity affine domains over Int-valued roles.  A
+;;; consumer must replay every domain over its complete census and may use the
+;;; survivors to propose conditional theorems, but must not install them as
+;;; proof licenses.  `au_distinct_guards` remains as the small compatibility
+;;; API for clients which only need the structural baseline.
 ;;;
 ;;; The optional `meta/antiunify/typed.shard` companion recovers the type of
 ;;; every generalized role from checked concrete equations.  Keeping the
@@ -50,6 +52,25 @@
 (type AuDistinct (AuDistinct Int Int))
 
 (type AuDistinctR (AuDistinctErr (List Int)) (AuDistinctOk (List AuDistinct)))
+
+;; Empirical guards are finite-census metadata, never proof licenses.  An
+;; affine value stores a normalized equation
+;;
+;;   sum (coefficient * rule-variable) = constant
+;;
+;; with terms ordered by increasing variable index and the first coefficient
+;; positive.  Inference currently bounds coefficients to {-1,1}; the general
+;; representation lets checked-theorem normalization compare equivalent
+;; addition/subtraction spellings directly.
+(type AuAffine (AuAffine (List (Pair Int Int)) Int))
+
+(type AuGuard
+  (AuGuardDistinct Int Int)
+  (AuGuardAffine AuAffine))
+
+(type AuGuardSetsR
+  (AuGuardSetsErr (List Int))
+  (AuGuardSetsOk (List (List AuGuard))))
 
 (type AuMismatch (AuMismatch Expr Expr Int))
 
@@ -274,6 +295,252 @@
           (None (AuDistinctErr "schema does not cover every support"))
           ((Some envs) (AuDistinctOk (au_distinct_pairs 0 (- arity 1) envs)))))))))
 
+;; ---- bounded empirical affine guards -------------------------------------
+
+(fn au_env_var_int ((index Int) (env TrsEnv)) (Option Int)
+  (match (trs_env_get index env)
+    ((Some (IntLit value)) (Some value))
+    (_ None)))
+
+(fn au_env_var_int_all ((index Int) (envs (List TrsEnv))) Bool
+  (measure (struct envs))
+  (match envs
+    (Nil True)
+    ((Cons env rest)
+     (match (au_env_var_int index env)
+       (None False)
+       ((Some _) (au_env_var_int_all index rest))))))
+
+(fn au_int_indices
+  ((index Int) (remaining Int) (envs (List TrsEnv))) (List Int)
+  (measure remaining (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (le remaining 0) Nil
+  (let ((rest (au_int_indices (+ index 1) (- remaining 1) envs)))
+    (if (au_env_var_int_all index envs) (Cons index rest) rest))))
+
+(fn au_affine_value_go
+  ((terms (List (Pair Int Int))) (env TrsEnv) (acc Int)) (Option Int)
+  (measure (struct terms))
+  (match terms
+    (Nil (Some acc))
+    ((Cons (Pair index coefficient) rest)
+     (match (au_env_var_int index env)
+       (None None)
+       ((Some value)
+        (au_affine_value_go
+          rest env (+ acc (* coefficient value))))))))
+
+(fn au_affine_value ((terms (List (Pair Int Int))) (env TrsEnv)) (Option Int)
+  (au_affine_value_go terms env 0))
+
+(fn au_affine_rest_equal
+  ((terms (List (Pair Int Int))) (constant Int) (envs (List TrsEnv))) Bool
+  (measure (struct envs))
+  (match envs
+    (Nil True)
+    ((Cons env rest)
+     (match (au_affine_value terms env)
+       (None False)
+       ((Some value)
+        (if (int_eq value constant)
+          (au_affine_rest_equal terms constant rest)
+          False))))))
+
+(fn au_affine_from_terms
+  ((terms (List (Pair Int Int))) (envs (List TrsEnv))) (Option AuGuard)
+  (match envs
+    (Nil None)
+    ((Cons first rest)
+     (match (au_affine_value terms first)
+       (None None)
+       ((Some constant)
+        (if (au_affine_rest_equal terms constant rest)
+          (Some (AuGuardAffine (AuAffine terms constant)))
+          None))))))
+
+(fn au_guard_append ((left (List AuGuard)) (right (List AuGuard)))
+  (List AuGuard)
+  (measure (struct left))
+  (match left
+    (Nil right)
+    ((Cons guard rest) (Cons guard (au_guard_append rest right)))))
+
+(fn au_term_snoc
+  ((terms (List (Pair Int Int))) (term (Pair Int Int)))
+  (List (Pair Int Int))
+  (measure (struct terms))
+  (match terms
+    (Nil (Cons term Nil))
+    ((Cons head rest) (Cons head (au_term_snoc rest term)))))
+
+;; Enumerate normalized unit-coefficient relations over the Int-valued schema
+;; variables.  The first selected coefficient is fixed positive to remove the
+;; sign-dual duplicate.  `max_terms` is a structural complexity bound, not an
+;; ISA property; callers choose how much relational vocabulary to pre-mine.
+(fn au_affine_choices
+  ((indices (List Int))
+   (max_terms Int)
+   (seen Bool)
+   (terms (List (Pair Int Int)))
+   (envs (List TrsEnv)))
+  (List AuGuard)
+  (measure (struct indices))
+  (match indices
+    (Nil
+      (if seen
+        (match (au_affine_from_terms terms envs)
+          (None Nil)
+          ((Some guard) (Cons guard Nil)))
+        Nil))
+    ((Cons index rest)
+     (let
+       ((skipped (au_affine_choices rest max_terms seen terms envs)))
+       (if (le max_terms 0) skipped
+       (let
+         ((positive
+            (au_affine_choices
+              rest
+              (- max_terms 1)
+              True
+              (au_term_snoc terms (Pair index 1))
+              envs)))
+         (if seen
+           (au_guard_append
+             positive
+             (au_guard_append
+               (au_affine_choices
+                 rest
+                 (- max_terms 1)
+                 True
+                 (au_term_snoc terms (Pair index (- 0 1)))
+                 envs)
+               skipped))
+           (au_guard_append positive skipped))))))))
+
+(fn au_wrap_distinct ((guards (List AuDistinct))) (List AuGuard)
+  (measure (struct guards))
+  (match guards
+    (Nil Nil)
+    ((Cons (AuDistinct left right) rest)
+     (Cons (AuGuardDistinct left right) (au_wrap_distinct rest)))))
+
+(fn au_guard_sets_affine
+  ((distinct (List AuGuard)) (affine (List AuGuard)))
+  (List (List AuGuard))
+  (measure (struct affine))
+  (match affine
+    (Nil Nil)
+    ((Cons guard rest)
+     (Cons
+       (Cons guard distinct)
+       (au_guard_sets_affine distinct rest)))))
+
+;; The baseline structural family remains first.  Every inferred affine
+;; relation then forms a separate alternative family atop that baseline; the
+;; consumer must replay each family over its complete census before retaining
+;; it.  This avoids treating unrelated two-support coincidences as one giant
+;; conjunction.
+(fn au_guard_sets
+  ((max_terms Int) (schema AuSchema) (concretes (List AuEquation)))
+  AuGuardSetsR
+  (match schema
+    ((AuSchema eq arity)
+     (match concretes
+       (Nil (AuGuardSetsErr "guard inference needs support"))
+       ((Cons _ _)
+        (match (au_envs eq concretes)
+          (None (AuGuardSetsErr "schema does not cover every support"))
+          ((Some envs)
+           (let
+             ((distinct
+                (au_wrap_distinct
+                  (au_distinct_pairs 0 (- arity 1) envs))))
+             (let
+               ((affine
+                  (au_affine_choices
+                    (au_int_indices 0 arity envs)
+                    max_terms
+                    False
+                    Nil
+                    envs)))
+               (AuGuardSetsOk
+                 (Cons distinct (au_guard_sets_affine distinct affine))))))))))))
+
+(fn au_affine_terms_eq
+  ((left (List (Pair Int Int))) (right (List (Pair Int Int)))) Bool
+  (measure (struct left))
+  (match left
+    (Nil
+      (match right
+        (Nil True)
+        ((Cons _ _) False)))
+    ((Cons (Pair left_index left_coefficient) rest)
+     (match right
+       (Nil False)
+       ((Cons (Pair right_index right_coefficient) more)
+        (if (int_eq left_index right_index)
+          (if (int_eq left_coefficient right_coefficient)
+            (au_affine_terms_eq rest more)
+            False)
+          False))))))
+
+(fn au_affine_eq ((left AuAffine) (right AuAffine)) Bool
+  (match left
+    ((AuAffine left_terms left_constant)
+     (match right
+       ((AuAffine right_terms right_constant)
+        (if (int_eq left_constant right_constant)
+          (au_affine_terms_eq left_terms right_terms)
+          False))))))
+
+(fn au_guard_eq ((left AuGuard) (right AuGuard)) Bool
+  (match left
+    ((AuGuardDistinct left_a left_b)
+     (match right
+       ((AuGuardDistinct right_a right_b)
+        (if (int_eq left_a right_a) (int_eq left_b right_b) False))
+       (_ False)))
+    ((AuGuardAffine left_affine)
+     (match right
+       ((AuGuardAffine right_affine) (au_affine_eq left_affine right_affine))
+       (_ False)))))
+
+(fn au_guard_list_eq ((left (List AuGuard)) (right (List AuGuard))) Bool
+  (measure (struct left))
+  (match left
+    (Nil
+      (match right
+        (Nil True)
+        ((Cons _ _) False)))
+    ((Cons guard rest)
+     (match right
+       (Nil False)
+       ((Cons guard2 more)
+        (if (au_guard_eq guard guard2)
+          (au_guard_list_eq rest more)
+          False))))))
+
+(fn au_guard_holds ((env TrsEnv) (guard AuGuard)) Bool
+  (match guard
+    ((AuGuardDistinct left right)
+     (match (trs_env_get left env)
+       (None False)
+       ((Some left_value)
+        (match (trs_env_get right env)
+          (None False)
+          ((Some right_value) (if (expr_eq left_value right_value) False True))))))
+    ((AuGuardAffine (AuAffine terms constant))
+     (match (au_affine_value terms env)
+       (None False)
+       ((Some value) (int_eq value constant))))))
+
+(fn au_guards_hold ((env TrsEnv) (guards (List AuGuard))) Bool
+  (measure (struct guards))
+  (match guards
+    (Nil True)
+    ((Cons guard rest)
+     (if (au_guard_holds env guard) (au_guards_hold env rest) False))))
+
 ;; ---- authenticated-rule coverage ------------------------------------------
 ;;
 ;; A mined schema and a checked theorem need not introduce their binders in
@@ -296,13 +563,14 @@
 (fn au_index_pair_eq ((a Int) (b Int) (x Int) (y Int)) Bool
   (if (int_eq a x) (int_eq b y) (if (int_eq a y) (int_eq b x) False)))
 
-(fn au_distinct_mem ((left Int) (right Int) (guards (List AuDistinct))) Bool
+(fn au_distinct_mem ((left Int) (right Int) (guards (List AuGuard))) Bool
   (measure (struct guards))
   (match guards
     (Nil False)
-    ((Cons (AuDistinct a b) rest)
+    ((Cons (AuGuardDistinct a b) rest)
      (if (au_index_pair_eq left right a b) True
-     (au_distinct_mem left right rest)))))
+     (au_distinct_mem left right rest)))
+    ((Cons (AuGuardAffine _) rest) (au_distinct_mem left right rest))))
 
 (fn au_rule_var_sources_schema
   ((schema_types (List Type))
@@ -479,7 +747,7 @@
         (- remaining 1))))))
 
 (fn au_rule_guard_covered
-  ((env TrsEnv) (proposal_guards (List AuDistinct)) (left Int) (right Int))
+  ((env TrsEnv) (proposal_guards (List AuGuard)) (left Int) (right Int))
   Bool
   (match (trs_env_get left env)
     (None False)
@@ -506,9 +774,123 @@
                     False)
                   False))))))))))
 
+(type AuPoly (AuPoly (List (Pair Int Int)) Int))
+
+(fn au_coeff_add
+  ((index Int) (coefficient Int) (terms (List (Pair Int Int))))
+  (List (Pair Int Int))
+  (measure (struct terms))
+  (if (int_eq coefficient 0) terms
+  (match terms
+    (Nil (Cons (Pair index coefficient) Nil))
+    ((Cons (Pair prior prior_coefficient) rest)
+     (if (int_eq index prior)
+       (let ((combined (+ coefficient prior_coefficient)))
+         (if (int_eq combined 0) rest
+           (Cons (Pair prior combined) rest)))
+     (if (lt index prior)
+       (Cons (Pair index coefficient) terms)
+       (Cons
+         (Pair prior prior_coefficient)
+         (au_coeff_add index coefficient rest))))))))
+
+(fn au_coeff_merge
+  ((from (List (Pair Int Int))) (into (List (Pair Int Int))))
+  (List (Pair Int Int))
+  (measure (struct from))
+  (match from
+    (Nil into)
+    ((Cons (Pair index coefficient) rest)
+     (au_coeff_merge rest (au_coeff_add index coefficient into)))))
+
+(fn au_coeff_scale
+  ((factor Int) (terms (List (Pair Int Int)))) (List (Pair Int Int))
+  (measure (struct terms))
+  (match terms
+    (Nil Nil)
+    ((Cons (Pair index coefficient) rest)
+     (Cons
+       (Pair index (* factor coefficient))
+       (au_coeff_scale factor rest)))))
+
+(fn au_poly_add ((left AuPoly) (right AuPoly)) AuPoly
+  (match left
+    ((AuPoly left_terms left_constant)
+     (match right
+       ((AuPoly right_terms right_constant)
+        (AuPoly
+          (au_coeff_merge left_terms right_terms)
+          (+ left_constant right_constant)))))))
+
+(fn au_poly_neg ((poly AuPoly)) AuPoly
+  (match poly
+    ((AuPoly terms constant)
+     (AuPoly (au_coeff_scale (- 0 1) terms) (- 0 constant)))))
+
+(fn au_rule_int_poly ((env TrsEnv) (expr TrsIntExpr)) (Option AuPoly)
+  (measure (struct expr))
+  (match expr
+    ((TrsIntLit value) (Some (AuPoly Nil value)))
+    ((TrsIntVar index)
+     (match (trs_env_get index env)
+       ((Some (BVar schema_index))
+        (Some (AuPoly (Cons (Pair schema_index 1) Nil) 0)))
+       ((Some (IntLit value)) (Some (AuPoly Nil value)))
+       (_ None)))
+    ((TrsIntAdd left right)
+     (match (au_rule_int_poly env left)
+       (None None)
+       ((Some left_poly)
+        (match (au_rule_int_poly env right)
+          (None None)
+          ((Some right_poly) (Some (au_poly_add left_poly right_poly)))))))
+    ((TrsIntSub left right)
+     (match (au_rule_int_poly env left)
+       (None None)
+       ((Some left_poly)
+        (match (au_rule_int_poly env right)
+          (None None)
+          ((Some right_poly)
+           (Some (au_poly_add left_poly (au_poly_neg right_poly))))))))))
+
+(fn au_affine_mem ((wanted AuAffine) (guards (List AuGuard))) Bool
+  (measure (struct guards))
+  (match guards
+    (Nil False)
+    ((Cons (AuGuardDistinct _ _) rest) (au_affine_mem wanted rest))
+    ((Cons (AuGuardAffine affine) rest)
+     (if (au_affine_eq wanted affine) True (au_affine_mem wanted rest)))))
+
+(fn au_rule_int_guard_covered
+  ((env TrsEnv)
+   (proposal_guards (List AuGuard))
+   (left TrsIntExpr)
+   (right TrsIntExpr))
+  Bool
+  (match (au_rule_int_poly env left)
+    (None False)
+    ((Some left_poly)
+     (match (au_rule_int_poly env right)
+       (None False)
+       ((Some right_poly)
+        (match (au_poly_add left_poly (au_poly_neg right_poly))
+          ((AuPoly terms constant)
+           (match terms
+             (Nil (int_eq constant 0))
+             ((Cons (Pair _ first_coefficient) _)
+              (if (lt first_coefficient 0)
+                (au_affine_mem
+                  (AuAffine
+                    (au_coeff_scale (- 0 1) terms)
+                    constant)
+                  proposal_guards)
+                (au_affine_mem
+                  (AuAffine terms (- 0 constant))
+                  proposal_guards)))))))))))
+
 (fn au_rule_guards_covered
   ((env TrsEnv)
-   (proposal_guards (List AuDistinct))
+   (proposal_guards (List AuGuard))
    (rule_guards (List TrsGuard)))
   Bool
   (measure (struct rule_guards))
@@ -518,14 +900,14 @@
      (if (au_rule_guard_covered env proposal_guards left right)
        (au_rule_guards_covered env proposal_guards rest)
        False))
-    ;; The current miner proposes only structural disequality evidence.  An
-    ;; arithmetic theorem is usable by search, but cannot cover a mined schema
-    ;; until the proposal itself carries an authenticated affine relation.
-    ((Cons (TrsIntEq _ _) _) False)))
+    ((Cons (TrsIntEq left right) rest)
+     (if (au_rule_int_guard_covered env proposal_guards left right)
+       (au_rule_guards_covered env proposal_guards rest)
+       False))))
 
 (fn au_conditioned_rule_covers
   ((typed AuTypedSchema)
-   (proposal_guards (List AuDistinct))
+   (proposal_guards (List AuGuard))
    (conditioned TrsConditionedRule))
   Bool
   (match typed
@@ -556,7 +938,7 @@
 ;; entailment for everything the fragment actually observes.
 (fn au_conditioned_rule_fragment_covers
   ((typed AuTypedSchema)
-   (proposal_guards (List AuDistinct))
+   (proposal_guards (List AuGuard))
    (conditioned TrsConditionedRule))
   Bool
   (match typed
@@ -614,7 +996,7 @@
 (fn au_spine_rule_covers
   ((fuel Int)
    (typed AuTypedSchema)
-   (proposal_guards (List AuDistinct))
+   (proposal_guards (List AuGuard))
    (item TrsSpineRule))
   Bool
   (measure fuel (by arith (list 1 0)) (by arith (list 1 1)))

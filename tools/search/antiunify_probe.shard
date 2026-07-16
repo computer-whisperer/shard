@@ -88,7 +88,7 @@
 
 (fn aup_spine_coverage
   ((typed AuTypedSchema)
-   (proposal_guards (List AuDistinct))
+   (proposal_guards (List AuGuard))
    (conditioned TrsConditionedRule)
    (w World))
   World
@@ -174,7 +174,7 @@
            (list int_type symbol_type symbol_type)
            (aup_f (BVar 1) (aup_f (BVar 0) (aup_atom (quote Z))))
            (aup_g (BVar 0))))
-       (proposal_guards (list (AuDistinct 0 1)))
+       (proposal_guards (list (AuGuardDistinct 0 1)))
        (rule_guards (list (TrsDistinct disc 1 0))))
       (if
         (au_conditioned_rule_covers
@@ -233,7 +233,7 @@
            (list int_type symbol_type symbol_type symbol_type)
            (aup_f (BVar 1) (aup_f (BVar 0) (BVar 2)))
            (aup_g (BVar 0))))
-       (proposal_guards (list (AuDistinct 0 1)))
+       (proposal_guards (list (AuGuardDistinct 0 1)))
        (rule_guards (list (TrsDistinct disc 1 0))))
       (if
         (au_conditioned_rule_covers
@@ -289,6 +289,98 @@
                 (_ (aup_fail "typed role list has the wrong arity\n" w2)))
               (aup_fail "typed schema has the wrong arity\n" w2)))))))))
 
+(fn aup_five ((a Expr) (b Expr) (c Expr) (d Expr) (e Expr)) Expr
+  (Ctor (qn (quote Five)) (list a b c d e)))
+
+(fn aup_affine_equation ((a Int) (b Int) (c Int) (d Int) (e Int)) AuEquation
+  (AuEquation
+    (aup_five (IntLit a) (IntLit b) (IntLit c) (IntLit d) (IntLit e))
+    (aup_g (IntLit a))))
+
+(fn aup_affine_set_find
+  ((wanted AuAffine) (sets (List (List AuGuard)))) (Option (List AuGuard))
+  (measure (struct sets))
+  (match sets
+    (Nil None)
+    ((Cons guards rest)
+     (if (au_affine_mem wanted guards)
+       (Some guards)
+       (aup_affine_set_find wanted rest)))))
+
+(fn aup_affine ((w World)) World
+  (let
+    ((int_type (TCon (qn (quote Int)) Nil))
+     (lhs (aup_five (BVar 0) (BVar 1) (BVar 2) (BVar 3) (BVar 4)))
+     (rhs (aup_g (BVar 0)))
+     (wanted
+       (AuAffine
+         (list
+           (Pair 0 1)
+           (Pair 1 1)
+           (Pair 2 (- 0 1))
+           (Pair 3 (- 0 1))
+           (Pair 4 (- 0 1)))
+         1)))
+    (let
+      ((schema (AuSchema (AuEquation lhs rhs) 5))
+       (one (aup_affine_equation 9 4 1 3 8))
+       (two (aup_affine_equation 12 5 2 4 10))
+       (counterexample (aup_affine_equation 9 4 1 3 7)))
+      (match (au_guard_sets 5 schema (list one two))
+        ((AuGuardSetsErr msg) (aup_fail msg w))
+        ((AuGuardSetsOk sets)
+         (match sets
+           (Nil (aup_fail "affine inference omitted its baseline family\n" w))
+           ((Cons baseline _)
+            (match (aup_affine_set_find wanted sets)
+              (None (aup_fail "missing five-variable affine relation\n" w))
+              ((Some guards)
+               (match (trs_match lhs (au_lhs counterexample) (TrsEmpty))
+                 (None (aup_fail "affine counterexample did not match schema\n" w))
+                 ((Some counter_env)
+                  (if (au_guards_hold counter_env guards)
+                    (aup_fail "affine guard accepted a counterexample\n" w)
+                    (let
+                      ((typed
+                         (AuTypedSchema
+                           schema
+                           (list int_type int_type int_type int_type int_type)))
+                       (rule
+                         (TrsRule
+                           (qn (quote affine_probe_rule))
+                           (list int_type int_type int_type int_type int_type)
+                           (aup_five
+                             (BVar 4)
+                             (BVar 2)
+                             (BVar 0)
+                             (BVar 3)
+                             (BVar 1))
+                           (aup_g (BVar 4))))
+                       (rule_guards
+                         (list
+                           (TrsIntEq
+                             (TrsIntAdd (TrsIntVar 4) (TrsIntVar 2))
+                             (TrsIntAdd
+                               (TrsIntVar 0)
+                               (TrsIntAdd
+                                 (TrsIntVar 3)
+                                 (TrsIntAdd
+                                   (TrsIntVar 1)
+                                   (TrsIntLit 1))))))))
+                      (if
+                        (au_conditioned_rule_covers
+                          typed guards (TrsConditionedRule rule rule_guards))
+                        (if
+                          (au_conditioned_rule_covers
+                            typed baseline (TrsConditionedRule rule rule_guards))
+                          (aup_fail
+                            "affine theorem was covered without its relation\n"
+                            w)
+                          (aup_typed w))
+                        (aup_fail
+                          "checked affine theorem did not cover mined relation\n"
+                          w)))))))))))))))
+
 (fn aup_guard ((w World)) World
   (let
     ((a (aup_atom (quote A))) (b (aup_atom (quote B))) (z (aup_atom (quote Z))))
@@ -300,7 +392,7 @@
            ((AuDistinctErr msg) (aup_fail msg w))
            ((AuDistinctOk guards)
             (match guards
-              ((Cons (AuDistinct 0 1) Nil) (aup_typed w))
+              ((Cons (AuDistinct 0 1) Nil) (aup_affine w))
               (_ (aup_fail "missing exact separated-role guard\n" w))))))))))
 
 (fn aup_shared ((w World)) World

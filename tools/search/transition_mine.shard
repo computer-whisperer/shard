@@ -339,13 +339,7 @@
                 more))))
          more)))))
 
-(fn tm_distinct_eq ((a AuDistinct) (b AuDistinct)) Bool
-  (match a
-    ((AuDistinct ai aj)
-     (match b
-       ((AuDistinct bi bj) (if (int_eq ai bi) (int_eq aj bj) False))))))
-
-(fn tm_distinct_list_eq ((as (List AuDistinct)) (bs (List AuDistinct))) Bool
+(fn tm_guard_list_eq ((as (List AuGuard)) (bs (List AuGuard))) Bool
   (measure (struct as))
   (match as
     (Nil
@@ -356,19 +350,10 @@
      (match bs
        (Nil False)
        ((Cons b rest2)
-        (if (tm_distinct_eq a b) (tm_distinct_list_eq rest rest2) False))))))
+        (if (au_guard_eq a b) (tm_guard_list_eq rest rest2) False))))))
 
-(fn tm_guards_hold ((env TrsEnv) (guards (List AuDistinct))) Bool
-  (measure (struct guards))
-  (match guards
-    (Nil True)
-    ((Cons (AuDistinct a b) rest)
-     (match (trs_env_get a env)
-       (None False)
-       ((Some av)
-        (match (trs_env_get b env)
-          (None False)
-          ((Some bv) (if (expr_eq av bv) False (tm_guards_hold env rest)))))))))
+(fn tm_guards_hold ((env TrsEnv) (guards (List AuGuard))) Bool
+  (au_guards_hold env guards))
 
 (fn tm_member_expr_find ((wanted Expr) (members (List TmMember)))
   (Option TmMember)
@@ -384,7 +369,7 @@
 (fn tm_validate_schema
   ((lhs Expr)
    (rhs Expr)
-   (guards (List AuDistinct))
+   (guards (List AuGuard))
    (all (List TmMember))
    (remaining (List TmMember))
    (matched Int))
@@ -430,7 +415,7 @@
        ((TrsRuleErr _) False)
        ((TrsRuleOk _) True)))))
 
-(type TmProposal (TmProposal AuTypedSchema (List AuDistinct) Int Int Int))
+(type TmProposal (TmProposal AuTypedSchema (List AuGuard) Int Int Int))
 ; typed schema, empirical guards, exact matched lhs count, seed ranks
 
 (fn tm_proposal_eq ((a TmProposal) (b TmProposal)) Bool
@@ -446,7 +431,7 @@
         (if (int_eq aa ba)
           (if (type_eq_list at bt)
             (if (expr_eq al bl)
-              (if (expr_eq ar br) (tm_distinct_list_eq ag bg) False)
+              (if (expr_eq ar br) (tm_guard_list_eq ag bg) False)
               False)
             False)
           False))))))
@@ -511,7 +496,7 @@
   (match edge
     ((TmEdge _ rank _) rank)))
 
-(type TmSeed (TmSeed AuSchema (List AuDistinct) AuEquation AuEquation Int Int))
+(type TmSeed (TmSeed AuSchema (List AuGuard) AuEquation AuEquation Int Int))
 ; unique untyped schema+guards, two concrete supports, seed ranks
 
 (type TmPairMode (TmGaugePairs) (TmOrbitPairs) (TmAllPairs))
@@ -820,7 +805,37 @@
     (Nil Nil)
     ((Cons edge rest) (Cons (tm_edge_equation edge) (tm_edge_equations rest)))))
 
-(type TmGaugeSeedR (TmGaugeSeedNo) (TmGaugeSeedYes TmSeed))
+(fn tm_seed_guard_sets
+  ((schema AuSchema)
+   (left AuEquation)
+   (right AuEquation)
+   (left_rank Int)
+   (right_rank Int)
+   (sets (List (List AuGuard))))
+  (List TmSeed)
+  (measure (struct sets))
+  (match sets
+    (Nil Nil)
+    ((Cons guards rest)
+     (Cons
+       (TmSeed schema guards left right left_rank right_rank)
+       (tm_seed_guard_sets
+         schema left right left_rank right_rank rest)))))
+
+(fn tm_seed_insert_many
+  ((incoming (List TmSeed)) (items (List TmSeed))) (List TmSeed)
+  (measure (struct incoming))
+  (match incoming
+    (Nil items)
+    ((Cons seed rest)
+     (tm_seed_insert_many rest (tm_seed_insert seed items)))))
+
+;; Six unit-coefficient terms cover useful relations such as two inputs equal
+;; three outputs plus an offset without making affine discovery unbounded.
+;; The limit belongs to the generic empirical language, not to an ISA.
+(fn tm_affine_max_terms () Int 6)
+
+(type TmGaugeSeedR (TmGaugeSeedNo) (TmGaugeSeedYes (List TmSeed)))
 
 (fn tm_gauge_seed_build
   ((first TmEdge) (second TmEdge) (edges (List TmEdge)) (varying (List Expr)))
@@ -829,17 +844,21 @@
     ((TmAbsSchemaErr _) (TmGaugeSeedNo))
     ((TmAbsSchemaOk schema)
      (if (tm_schema_well_formed schema)
-       (match (au_distinct_guards schema (tm_edge_equations edges))
-         ((AuDistinctErr _) (TmGaugeSeedNo))
-         ((AuDistinctOk guards)
+       (match
+         (au_guard_sets
+           (tm_affine_max_terms)
+           schema
+           (tm_edge_equations edges))
+         ((AuGuardSetsErr _) (TmGaugeSeedNo))
+         ((AuGuardSetsOk guard_sets)
           (TmGaugeSeedYes
-            (TmSeed
+            (tm_seed_guard_sets
               schema
-              guards
               (tm_edge_equation first)
               (tm_edge_equation second)
               (tm_edge_rank first)
-              (tm_edge_rank second)))))
+              (tm_edge_rank second)
+              guard_sets))))
        (TmGaugeSeedNo)))))
 
 (fn tm_gauge_seed ((orbit TmGaugeOrbit)) TmGaugeSeedR
@@ -862,7 +881,8 @@
     ((Cons orbit rest)
      (match (tm_gauge_seed orbit)
        ((TmGaugeSeedNo) (tm_gauge_seeds rest seeds))
-       ((TmGaugeSeedYes seed) (tm_gauge_seeds rest (tm_seed_insert seed seeds)))))))
+       ((TmGaugeSeedYes found)
+        (tm_gauge_seeds rest (tm_seed_insert_many found seeds)))))))
 
 (fn tm_seed_eq ((a TmSeed) (b TmSeed)) Bool
   (match a
@@ -871,7 +891,7 @@
        ((TmSeed (AuSchema (AuEquation bl br) ba) bg _ _ _ _)
         (if (int_eq aa ba)
           (if (expr_eq al bl)
-            (if (expr_eq ar br) (tm_distinct_list_eq ag bg) False)
+            (if (expr_eq ar br) (tm_guard_list_eq ag bg) False)
             False)
           False))))))
 
@@ -892,20 +912,22 @@
       ((AuSchemaErr _) seeds)
       ((AuSchemaOk schema)
        (if (tm_schema_well_formed schema)
+         ;; Pair modes are intentionally structural.  Affine coincidences need
+         ;; whole-orbit support before they become candidate families; the
+         ;; default gauge mode supplies that stronger evidence above.
          (match
-           (au_distinct_guards
-             schema
-             (list (tm_edge_equation a) (tm_edge_equation b)))
-           ((AuDistinctErr _) seeds)
-           ((AuDistinctOk guards)
-            (tm_seed_insert
-              (TmSeed
+           (au_guard_sets
+             0 schema (list (tm_edge_equation a) (tm_edge_equation b)))
+           ((AuGuardSetsErr _) seeds)
+           ((AuGuardSetsOk guard_sets)
+            (tm_seed_insert_many
+              (tm_seed_guard_sets
                 schema
-                guards
                 (tm_edge_equation a)
                 (tm_edge_equation b)
                 (tm_edge_rank a)
-                (tm_edge_rank b))
+                (tm_edge_rank b)
+                guard_sets)
               seeds)))
          seeds)))
     seeds))
@@ -1078,20 +1100,53 @@
 (fn tm_meta_name ((arity Int) (index Int)) (List Int)
   (append_int "x" (show_int (- (- arity 1) index))))
 
-(fn tm_distinct_lines ((arity Int) (guards (List AuDistinct))) (List Int)
+(fn tm_affine_terms_lines
+  ((arity Int) (terms (List (Pair Int Int))) (first Bool)) (List Int)
+  (measure (struct terms))
+  (match terms
+    (Nil "")
+    ((Cons (Pair index coefficient) rest)
+     (tm_cat
+       (list
+         (if first
+           (if (int_eq coefficient (- 0 1)) "-"
+           (if (int_eq coefficient 1) "" (show_int coefficient)))
+           (if (int_eq coefficient (- 0 1)) " - "
+           (if (int_eq coefficient 1) " + "
+             (if (lt coefficient 0)
+               (append_int " " (show_int coefficient))
+               (append_int " + " (show_int coefficient))))))
+         (if
+           (if (int_eq coefficient 1) True
+           (int_eq coefficient (- 0 1)))
+           ""
+           "*")
+         (tm_meta_name arity index)
+         (tm_affine_terms_lines arity rest False))))))
+
+(fn tm_guard_lines ((arity Int) (guards (List AuGuard))) (List Int)
   (measure (struct guards))
   (match guards
     (Nil "")
-    ((Cons (AuDistinct a b) rest)
+    ((Cons (AuGuardDistinct a b) rest)
      (tm_cat
        (list
          " "
          (tm_meta_name arity a)
          " != "
          (tm_meta_name arity b)
-         (tm_distinct_lines arity rest))))))
+         (tm_guard_lines arity rest))))
+    ((Cons (AuGuardAffine (AuAffine terms constant)) rest)
+     (tm_cat
+       (list
+         " ["
+         (tm_affine_terms_lines arity terms True)
+         " = "
+         (show_int constant)
+         "]"
+         (tm_guard_lines arity rest))))))
 
-(fn tm_has_guards ((guards (List AuDistinct))) Bool
+(fn tm_has_guards ((guards (List AuGuard))) Bool
   (match guards
     (Nil False)
     ((Cons _ _) True)))
@@ -1159,7 +1214,7 @@
                  (tm_cat
                    (list
                      "    EMPIRICAL-GUARDS"
-                     (tm_distinct_lines arity guards)
+                     (tm_guard_lines arity guards)
                      "\n"))
                  "")
                (tm_auth_status

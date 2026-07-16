@@ -501,6 +501,10 @@ if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/guard_probe.shard
   bin/shard_eval run tools/search/affine_guard_probe.shard
   bin/shard_eval run tools/search/antiunify_probe.shard
+  # Empirical affine families are inferred from orbit support and each is
+  # replayed independently; a two-support coincidence must fail on the full
+  # transition corpus before it can reach theorem classification.
+  bin/shard_eval run tools/search/transition_affine_probe.shard
   bin/shard_eval run tools/search/constraint_superpose_probe.shard
   bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/typed_observer_conjunctive.shard audit
 else

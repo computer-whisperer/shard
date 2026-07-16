@@ -2636,6 +2636,17 @@ pairing.  The latter modes are conjecture-expansion tools, not the scalable
 default.  None of the 111 replayed schemas is a search license until a checked
 theorem authenticates it.
 
+Whole-orbit support now also drives a bounded relational pre-mining pass for
+Int-valued roles.  `meta/antiunify` enumerates normalized affine invariants
+with unit coefficients and at most six terms.  The structural disequalities
+remain one baseline guard family; each affine invariant becomes a separate
+alternative family atop that baseline.  They are deliberately not conjoined:
+two observations can imply many unrelated arithmetic coincidences, and a
+large conjunction would overfit while appearing selective.  Every alternative
+is instead replayed against the complete accepted corpus by the same exact-key
+validator used for structural schemas.  Pairwise diagnostic modes retain
+structural guards only because two-example arithmetic evidence is too weak.
+
 The miner now closes that classification loop through the same checked profile
 loader as `typed_expr`.  It retains the application domain of each rule
 (`everywhere`, root observer, or authenticated spine) and compares proposals
@@ -2918,7 +2929,24 @@ three cited singleton reductions plus three coalesced clear rows:
 This is the intended delay-alphabet scaling shape for PIO-style cycle
 conservation: theorem count is independent of the literal alphabet, and
 unreachable combinations disappear when the relation is intersected with the
-task's actual grammar region.  The transition miner remains conservative for
-now: its proposal evidence describes structural disequality only, so it will
-not report an affine-guarded theorem as covering a proposal until mined
-schemas themselves carry authenticated arithmetic relations.
+task's actual grammar region.
+
+The transition miner now completes the other half of that join.  It discovers
+stable unit-coefficient affine relations from the complete support of each
+whole gauge orbit, emits each relation as an empirical proposal domain, and
+revalidates that domain over the full census before classification.  The
+theorem classifier symbolically normalizes `TrsIntEq` through the proposal's
+alpha-renaming and requires the exact empirical relation; structural guards
+cannot accidentally authenticate arithmetic.  As everywhere else in the
+miner, surviving evidence is still not a search license—only a checked
+conditioned rule can cross that boundary.
+
+`transition_affine_probe.shard` pins the evidence discipline with two supports
+that imply both a useful five-variable conservation relation and an accidental
+four-variable coincidence.  Both are pre-mined; complete-census replay keeps
+the useful guarded family with support two and rejects the coincidence on a
+third member.  `antiunify_probe.shard` separately checks that an alpha-matched
+checked affine theorem covers the first family, while the same theorem cannot
+be justified by the structural baseline alone.  The established 820-member
+x86 rung has no Int-valued generalized roles and remains unchanged at 111
+unique schemas and 111 validated proposals.
