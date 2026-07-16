@@ -340,6 +340,8 @@ TARGETS=(
   models/pio/pio.shard
   models/pio/encode.shard
   examples/pio_smoke.shard
+  examples/pio_vecrun.shard
+  examples/pio_vecgate.shard
 )
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -381,6 +383,23 @@ if [ -x bin/shard_eval ]; then
   fi
 else
   echo "SKIPPED (no bin/shard_eval)"
+fi
+
+# PIO vector-data regen pin: the committed generated data file must be
+# byte-identical to gen_vectors.py's output re-formatted (docs/PIO.md §6 —
+# the gate claim already fails loudly on semantic drift; this catches
+# silent drift of the data itself).
+echo "=== pio: regen pio_vectors_data ==="
+if [ -x bin/shard_eval ] && command -v python3 >/dev/null; then
+  python3 tools/piovec/gen_vectors.py > "$TMP/piovec.raw" 2>/dev/null
+  bin/shard_eval run tools/shardfmt/shardfmt.shard "$TMP/piovec.raw" > "$TMP/piovec.fmt" 2>/dev/null
+  if diff -q "$TMP/piovec.fmt" examples/pio_vectors_data.shard >/dev/null; then
+    echo "REGEN OK (byte-identical)"
+  else
+    echo "REGEN DRIFT: generated vector data differs from examples/pio_vectors_data.shard"
+  fi
+else
+  echo "SKIPPED (no bin/shard_eval or python3)"
 fi
 
 # Nat-former RUN pin: ground construction/packing, view matching, deep
