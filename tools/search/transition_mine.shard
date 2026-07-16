@@ -20,6 +20,7 @@
 (import "../../meta/antiunify")
 (import "../../meta/antiunify/typed.shard")
 (import "../../meta/rewrite")
+(import "../../meta/search/mod.req.shard")
 (import "../../meta/invoke")
 (import "../../meta/invoke/prepared.shard")
 (import "../../meta/sketch")
@@ -37,11 +38,52 @@
 (use (:: meta antiunify *))
 (use (:: meta antiunify typed *))
 (use (:: meta rewrite *))
+(use (:: meta search *))
 (use (:: meta invoke *))
 (use (:: meta invoke prepared *))
 (use (:: meta sketch *))
 (use (:: meta spell *))
 (use (:: tools search typed_expr *))
+
+(type TmAuthDomain (TmAuthEverywhere) (TmAuthRoot) (TmAuthSpine))
+
+(type TmAuthRule (TmAuthRule TmAuthDomain TrsConditionedRule))
+
+(fn tm_auth_append ((xs (List TmAuthRule)) (ys (List TmAuthRule)))
+  (List TmAuthRule)
+  (measure (struct xs))
+  (match xs
+    (Nil ys)
+    ((Cons x rest) (Cons x (tm_auth_append rest ys)))))
+
+(fn tm_auth_plain ((domain TmAuthDomain) (rules (List TrsRule)))
+  (List TmAuthRule)
+  (measure (struct rules))
+  (match rules
+    (Nil Nil)
+    ((Cons rule rest)
+     (Cons
+       (TmAuthRule domain (TrsConditionedRule rule Nil))
+       (tm_auth_plain domain rest)))))
+
+(fn tm_auth_spine ((rules (List TrsSpineRule))) (List TmAuthRule)
+  (measure (struct rules))
+  (match rules
+    (Nil Nil)
+    ((Cons (TrsSpineRule _ conditioned) rest)
+     (Cons (TmAuthRule (TmAuthSpine) conditioned) (tm_auth_spine rest)))))
+
+(fn tm_auth_reductions ((reductions TeReductions)) (List TmAuthRule)
+  (match reductions
+    ((TeReductions
+       (TeCanon canon _ _ _)
+       (TeObserved observed _ _ _)
+       (MsPlan _ _ spine))
+     (tm_auth_append
+       (tm_auth_plain (TmAuthEverywhere) (trs_profile_rules canon))
+       (tm_auth_append
+         (tm_auth_plain (TmAuthRoot) (trs_root_profile_rules observed))
+         (tm_auth_spine (trs_spine_profile_rules spine)))))))
 
 (type TmMember (TmMember Int Expr (List Int)))  ; rank, candidate, exact key
 
@@ -941,6 +983,78 @@
     (Nil 0)
     ((Cons _ rest) (+ 1 (tm_proposal_count rest)))))
 
+(fn tm_auth_find ((proposal TmProposal) (rules (List TmAuthRule)))
+  (Option TmAuthRule)
+  (measure (struct rules))
+  (match rules
+    (Nil None)
+    ((Cons auth rest)
+     (match proposal
+       ((TmProposal typed guards _ _ _)
+        (match auth
+          ((TmAuthRule _ conditioned)
+           (if (au_conditioned_rule_covers typed guards conditioned) (Some auth)
+           (tm_auth_find proposal rest)))))))))
+
+(fn tm_authenticated_count
+  ((proposals (List TmProposal)) (rules (List TmAuthRule)))
+  Int
+  (measure (struct proposals))
+  (match proposals
+    (Nil 0)
+    ((Cons proposal rest)
+     (+
+       (match (tm_auth_find proposal rules)
+         (None 0)
+         ((Some _) 1))
+       (tm_authenticated_count rest rules)))))
+
+(fn tm_authenticated_proposals
+  ((proposals (List TmProposal)) (rules (List TmAuthRule)))
+  (List TmProposal)
+  (measure (struct proposals))
+  (match proposals
+    (Nil Nil)
+    ((Cons proposal rest)
+     (let ((more (tm_authenticated_proposals rest rules)))
+       (match (tm_auth_find proposal rules)
+         (None more)
+         ((Some _) (Cons proposal more)))))))
+
+(fn tm_worklist_proposals
+  ((proposals (List TmProposal)) (rules (List TmAuthRule)))
+  (List TmProposal)
+  (measure (struct proposals))
+  (match proposals
+    (Nil Nil)
+    ((Cons proposal rest)
+     (let ((more (tm_worklist_proposals rest rules)))
+       (match (tm_auth_find proposal rules)
+         (None (Cons proposal more))
+         ((Some _) more))))))
+
+(fn tm_auth_domain_name ((domain TmAuthDomain)) (List Int)
+  (match domain
+    ((TmAuthEverywhere) "everywhere")
+    ((TmAuthRoot) "root")
+    ((TmAuthSpine) "spine")))
+
+(fn tm_auth_rule_name ((conditioned TrsConditionedRule)) (List Int)
+  (match conditioned
+    ((TrsConditionedRule (TrsRule name _ _ _) _) (chars_of_sym (qn_name name)))))
+
+(fn tm_auth_status ((proposal TmProposal) (rules (List TmAuthRule))) (List Int)
+  (match (tm_auth_find proposal rules)
+    (None "    PROOF-WORKLIST\n")
+    ((Some (TmAuthRule domain conditioned))
+     (tm_cat
+       (list
+         "    AUTHENTICATED "
+         (tm_auth_domain_name domain)
+         " "
+         (tm_auth_rule_name conditioned)
+         "\n")))))
+
 (fn tm_meta_name ((arity Int) (index Int)) (List Int)
   (append_int "x" (show_int (- (- arity 1) index))))
 
@@ -978,7 +1092,8 @@
 (fn tm_proposal_lines
   ((remaining Int)
    (table (List (Pair QName Symbol)))
-   (proposals (List TmProposal)))
+   (proposals (List TmProposal))
+   (rules (List TmAuthRule)))
   (List Int)
   (measure (struct proposals))
   (if (le remaining 0) Nil
@@ -993,10 +1108,10 @@
          b)
        rest)
      (match (sp_e table arity lhs)
-       ((SpRErr _) (tm_proposal_lines remaining table rest))
+       ((SpRErr _) (tm_proposal_lines remaining table rest rules))
        ((SpROk ldoc)
         (match (sp_e table arity rhs)
-          ((SpRErr _) (tm_proposal_lines remaining table rest))
+          ((SpRErr _) (tm_proposal_lines remaining table rest rules))
           ((SpROk rdoc)
            (tm_cat
              (list
@@ -1027,7 +1142,15 @@
                      (tm_distinct_lines arity guards)
                      "\n"))
                  "")
-               (tm_proposal_lines (- remaining 1) table rest)))))))))))
+               (tm_auth_status
+                 (TmProposal
+                   (AuTypedSchema (AuSchema (AuEquation lhs rhs) arity) types)
+                   guards
+                   support
+                   a
+                   b)
+                 rules)
+               (tm_proposal_lines (- remaining 1) table rest rules)))))))))))
 
 (fn tm_sample_lines
   ((table (List (Pair QName Symbol)))
@@ -1105,44 +1228,60 @@
    (accepted Int)
    (rejected Int)
    (census KcCensus)
-   (members (List TmMember)))
+   (members (List TmMember))
+   (rules (List TmAuthRule)))
   (List Int)
   (match (tm_stats (kc_buckets census) 0 0 0)
     ((TmStats collided excess maximum)
      (let ((edges (tm_edges (kc_buckets census) members)))
        (let ((seeds (tm_mined_seeds mode edges)))
          (let ((proposals (tm_validate_seeds m seeds members Nil)))
-           (tm_cat
-             (list
-               "TRANSITION-CENSUS "
-               path
-               "\n"
-               "PAIR-MODE "
-               (tm_pair_mode_name mode)
-               "\n"
-               "TOTAL "
-               (show_int total)
-               " ACCEPTED "
-               (show_int accepted)
-               " REJECTED "
-               (show_int rejected)
-               " BEHAVIORS "
-               (show_int (kc_bucket_count census))
-               " COLLIDED-BUCKETS "
-               (show_int collided)
-               " EXCESS "
-               (show_int excess)
-               " MAX-BUCKET "
-               (show_int maximum)
-               " UNIQUE-SCHEMAS "
-               (show_int (tm_seed_count seeds))
-               " VALIDATED-PROPOSALS "
-               (show_int (tm_proposal_count proposals))
-               "\nTOP COLLISIONS\n"
-               (tm_bucket_lines 8 table root grammar (kc_ranked census))
-               "MINED BASIS (complete-census replay)\n"
-               (tm_proposal_lines 8 table proposals)
-               "EXACT KEYS; MINED SCHEMAS ARE PROPOSALS, NOT LICENSES\n"))))))))
+           (let ((authenticated (tm_authenticated_count proposals rules)))
+             (tm_cat
+               (list
+                 "TRANSITION-CENSUS "
+                 path
+                 "\n"
+                 "PAIR-MODE "
+                 (tm_pair_mode_name mode)
+                 "\n"
+                 "TOTAL "
+                 (show_int total)
+                 " ACCEPTED "
+                 (show_int accepted)
+                 " REJECTED "
+                 (show_int rejected)
+                 " BEHAVIORS "
+                 (show_int (kc_bucket_count census))
+                 " COLLIDED-BUCKETS "
+                 (show_int collided)
+                 " EXCESS "
+                 (show_int excess)
+                 " MAX-BUCKET "
+                 (show_int maximum)
+                 " UNIQUE-SCHEMAS "
+                 (show_int (tm_seed_count seeds))
+                 " VALIDATED-PROPOSALS "
+                 (show_int (tm_proposal_count proposals))
+                 " AUTHENTICATED "
+                 (show_int authenticated)
+                 " PROOF-WORKLIST "
+                 (show_int (- (tm_proposal_count proposals) authenticated))
+                 "\nTOP COLLISIONS\n"
+                 (tm_bucket_lines 8 table root grammar (kc_ranked census))
+                 "AUTHENTICATED BASIS\n"
+                 (tm_proposal_lines
+                   8
+                   table
+                   (tm_authenticated_proposals proposals rules)
+                   rules)
+                 "PROOF WORKLIST (complete-census replay)\n"
+                 (tm_proposal_lines
+                   8
+                   table
+                   (tm_worklist_proposals proposals rules)
+                   rules)
+                 "EXACT KEYS; ONLY AUTHENTICATED SCHEMAS ARE LICENSES\n")))))))))
 
 (fn tm_space
   ((path (List Int))
@@ -1153,6 +1292,7 @@
    (probe FnDef)
    (scope RCtx)
    (cfg TeCfg)
+   (rules (List TmAuthRule))
    (w World))
   World
   (match (te_make_space m want scope cfg)
@@ -1182,7 +1322,27 @@
           ((TmSweepOk census accepted rejected members)
            (write
              (tm_report path mode m table root grammar total accepted rejected
-               census members)
+               census members rules)
+             w))))))))
+
+(fn tm_load_reductions
+  ((path (List Int)) (m Module) (ctx InvokeCtx) (probe FnDef) (w World))
+  (Pair TeReductionsR World)
+  (match (te_canon_names ctx m)
+    ((TeCanonNamesErr msg) (Pair (TeReductionsErr msg) w))
+    ((TeCanonNamesOk canon_names)
+     (match (te_observer_names ctx m)
+       ((TeObserverNamesErr msg) (Pair (TeReductionsErr msg) w))
+       ((TeObserverNamesOk observer_names)
+        (match (te_spine_cfg ctx m)
+          ((TeSpineCfgErr msg) (Pair (TeReductionsErr msg) w))
+          ((TeSpineCfgOk spine_cfg)
+           (te_load_reductions
+             path
+             (te_probe_qname probe)
+             canon_names
+             observer_names
+             spine_cfg
              w))))))))
 
 (fn tm_ready
@@ -1201,16 +1361,23 @@
            ((TeCfgErr msg)
             (exit 1 (write (append_int "TRANSITION-MINE FAIL config: " msg) w)))
            ((TeCfgOk cfg)
-            (tm_space
-              path
-              mode
-              m
-              want
-              ctx
-              probe
-              (te_import_ctx m path src)
-              cfg
-              w)))
+            (match (tm_load_reductions path m ctx probe w)
+              ((Pair (TeReductionsErr msg) w2)
+               (exit
+                 1
+                 (write (append_int "TRANSITION-MINE FAIL reductions: " msg) w2)))
+              ((Pair (TeReductionsOk reductions) w2)
+               (tm_space
+                 path
+                 mode
+                 m
+                 want
+                 ctx
+                 probe
+                 (te_import_ctx m path src)
+                 cfg
+                 (tm_auth_reductions reductions)
+                 w2)))))
          (exit
            1
            (write

@@ -31,6 +31,7 @@
 (import "../rewrite")
 (use (:: kernel term *))
 (use (:: kernel module Type))
+(use (:: kernel module type_eq))
 (use (:: meta rewrite *))
 
 (type AuEquation (AuEquation Expr Expr))
@@ -272,3 +273,194 @@
         (match (au_envs eq concretes)
           (None (AuDistinctErr "schema does not cover every support"))
           ((Some envs) (AuDistinctOk (au_distinct_pairs 0 (- arity 1) envs)))))))))
+
+;; ---- authenticated-rule coverage ------------------------------------------
+;;
+;; A mined schema and a checked theorem need not introduce their binders in
+;; the same order.  Match the schema against the theorem equation, require a
+;; type-preserving bijection between their BVars, and then ensure that every
+;; theorem guard is entailed by the proposal's empirical guard domain.  The
+;; caller remains responsible for supplying only authenticated rules and for
+;; respecting their root/spine/everywhere application domain.
+
+(fn au_type_at ((types (List Type)) (index Int)) (Option Type)
+  (measure (struct types))
+  (match types
+    (Nil None)
+    ((Cons ty rest)
+     (if (int_eq index 0) (Some ty) (au_type_at rest (- index 1))))))
+
+(fn au_bvar_type ((types (List Type)) (index Int)) (Option Type)
+  (au_type_at types (- (- (trs_len_types types) 1) index)))
+
+(fn au_index_pair_eq ((a Int) (b Int) (x Int) (y Int)) Bool
+  (if (int_eq a x) (int_eq b y) (if (int_eq a y) (int_eq b x) False)))
+
+(fn au_distinct_mem ((left Int) (right Int) (guards (List AuDistinct))) Bool
+  (measure (struct guards))
+  (match guards
+    (Nil False)
+    ((Cons (AuDistinct a b) rest)
+     (if (au_index_pair_eq left right a b) True
+     (au_distinct_mem left right rest)))))
+
+(fn au_rule_var_sources_schema
+  ((schema_types (List Type))
+   (rule_types (List Type))
+   (env TrsEnv)
+   (schema_index Int)
+   (rule_index Int)
+   (remaining Int))
+  Bool
+  (measure
+    remaining
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1)))
+  (if (le remaining 0) False
+  (match (trs_env_get rule_index env)
+    ((Some (BVar target))
+     (if (int_eq target schema_index)
+       (match (au_bvar_type schema_types schema_index)
+         (None False)
+         ((Some schema_type)
+          (match (au_bvar_type rule_types rule_index)
+            (None False)
+            ((Some rule_type) (type_eq schema_type rule_type)))))
+       (au_rule_var_sources_schema
+         schema_types
+         rule_types
+         env
+         schema_index
+         (+ rule_index 1)
+         (- remaining 1))))
+    (_
+      (au_rule_var_sources_schema
+        schema_types
+        rule_types
+        env
+        schema_index
+        (+ rule_index 1)
+        (- remaining 1))))))
+
+(fn au_schema_vars_covered
+  ((schema_types (List Type))
+   (rule_types (List Type))
+   (env TrsEnv)
+   (schema_index Int)
+   (remaining Int))
+  Bool
+  (measure remaining (by arith (list 1 0)) (by arith (list 1 1)))
+  (if (le remaining 0) True
+  (if
+    (au_rule_var_sources_schema
+      schema_types
+      rule_types
+      env
+      schema_index
+      0
+      (trs_len_types rule_types))
+    (au_schema_vars_covered
+      schema_types
+      rule_types
+      env
+      (+ schema_index 1)
+      (- remaining 1))
+    False)))
+
+(fn au_rule_bindings_typed
+  ((schema_types (List Type))
+   (rule_types (List Type))
+   (env TrsEnv)
+   (rule_index Int)
+   (remaining Int))
+  Bool
+  (measure
+    remaining
+    (by arith (list 1 0))
+    (by arith (list 1 1))
+    (by arith (list 1 0))
+    (by arith (list 1 1)))
+  (if (le remaining 0) True
+  (match (trs_env_get rule_index env)
+    ((Some (BVar schema_index))
+     (match (au_bvar_type schema_types schema_index)
+       (None False)
+       ((Some schema_type)
+        (match (au_bvar_type rule_types rule_index)
+          (None False)
+          ((Some rule_type)
+           (if (type_eq schema_type rule_type)
+             (au_rule_bindings_typed
+               schema_types
+               rule_types
+               env
+               (+ rule_index 1)
+               (- remaining 1))
+             False))))))
+    (_
+      (au_rule_bindings_typed
+        schema_types
+        rule_types
+        env
+        (+ rule_index 1)
+        (- remaining 1))))))
+
+(fn au_rule_guard_covered
+  ((env TrsEnv) (proposal_guards (List AuDistinct)) (left Int) (right Int))
+  Bool
+  (match (trs_env_get left env)
+    (None False)
+    ((Some left_value)
+     (match (trs_env_get right env)
+       (None False)
+       ((Some right_value)
+        (match left_value
+          ((BVar a)
+           (match right_value
+             ((BVar b) (au_distinct_mem a b proposal_guards))
+             (_ False)))
+          (_
+            (match right_value
+              ((BVar _) False)
+              (_ (if (expr_eq left_value right_value) False True))))))))))
+
+(fn au_rule_guards_covered
+  ((env TrsEnv)
+   (proposal_guards (List AuDistinct))
+   (rule_guards (List TrsGuard)))
+  Bool
+  (measure (struct rule_guards))
+  (match rule_guards
+    (Nil True)
+    ((Cons (TrsDistinct _ left right) rest)
+     (if (au_rule_guard_covered env proposal_guards left right)
+       (au_rule_guards_covered env proposal_guards rest)
+       False))))
+
+(fn au_conditioned_rule_covers
+  ((typed AuTypedSchema)
+   (proposal_guards (List AuDistinct))
+   (conditioned TrsConditionedRule))
+  Bool
+  (match typed
+    ((AuTypedSchema (AuSchema schema arity) schema_types)
+     (match conditioned
+       ((TrsConditionedRule (TrsRule _ rule_types lhs rhs) rule_guards)
+        (if (int_eq arity (trs_len_types schema_types))
+          (match (au_match_equation (AuEquation lhs rhs) schema)
+            (None False)
+            ((Some env)
+             (if (au_schema_vars_covered schema_types rule_types env 0 arity)
+               (if
+                 (au_rule_bindings_typed
+                   schema_types
+                   rule_types
+                   env
+                   0
+                   (trs_len_types rule_types))
+                 (au_rule_guards_covered env proposal_guards rule_guards)
+                 False)
+               False)))
+          False))))))

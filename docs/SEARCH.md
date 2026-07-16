@@ -2541,6 +2541,31 @@ pairing.  The latter modes are conjecture-expansion tools, not the scalable
 default.  None of the 111 replayed schemas is a search license until a checked
 theorem authenticates it.
 
+The miner now closes that classification loop through the same checked profile
+loader as `typed_expr`.  It retains the application domain of each rule
+(`everywhere`, root observer, or authenticated spine) and compares proposals
+with `TrsConditionedRule` values, never theorem names.  Coverage is
+alpha-invariant and type-aware.  More importantly, it is a theorem-domain
+*superset* test: a general checked rule may instantiate an extra tail binder to
+the proposal's `Nil`, and an unused stripped prefix binder is harmless.  Every
+mined metavariable must still have a type-correct theorem source, and every
+theorem guard must hold throughout the proposal's empirical guard domain.
+The regression additionally refuses binder-type drift and refuses using a
+guarded theorem for an unguarded proposal.
+
+On the proof-bearing x86 task, the existing checked absorber profile covers
+four finite orbit schemas:
+
+    VALIDATED-PROPOSALS 111; AUTHENTICATED 4; PROOF-WORKLIST 107
+
+Three are distinct-register absorber windows at different concrete tails,
+authenticated by `xtw_xor_self_absorbs_distinct`; the equal-register orbit is
+authenticated by the unconditional `xtw_xor_self_absorbs_spine`.  The report
+prints these under `AUTHENTICATED BASIS` with citation and domain.  The
+double-XOR cancellation remains first under `PROOF WORKLIST`, correctly
+reflecting that its full-state theorem exists but its observer-prefix invariant
+closure is not yet a checked spine license.
+
 #### Checked structural-spine closure
 
 The contextual gap is now closed for a deliberately small, general structural

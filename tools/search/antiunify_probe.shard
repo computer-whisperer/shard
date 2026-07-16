@@ -10,6 +10,7 @@
 (import "../../meta/antiunify")
 (import "../../meta/antiunify/typed.shard")
 (import "../../meta/invoke")
+(import "../../meta/rewrite")
 (use (:: kernel term *))
 (use (:: kernel loader World))
 (use (:: kernel loader write))
@@ -20,6 +21,7 @@
 (use (:: meta antiunify *))
 (use (:: meta antiunify typed *))
 (use (:: meta invoke load_run_module))
+(use (:: meta rewrite *))
 
 (fn aup_atom ((name Symbol)) Expr (Ctor (qn name) Nil))
 
@@ -41,6 +43,61 @@
 
 (fn aup_fixture_ctor ((name Symbol) (args (List Expr))) Expr
   (Ctor (aup_fixture_q name) args))
+
+(fn aup_coverage ((w World)) World
+  (let
+    ((int_type (TCon (qn (quote Int)) Nil))
+     (symbol_type (TCon (qn (quote Symbol)) Nil))
+     (disc (qn (quote probe_disc)))
+     (rule_name (qn (quote probe_rule))))
+    (let
+      ((typed
+         (AuTypedSchema
+           (AuSchema
+             (AuEquation
+               (aup_f (BVar 0) (aup_f (BVar 1) (aup_atom (quote Z))))
+               (aup_g (BVar 1)))
+             2)
+           (list symbol_type int_type)))
+       (rule
+         (TrsRule
+           rule_name
+           (list int_type symbol_type int_type symbol_type)
+           (aup_f (BVar 1) (aup_f (BVar 0) (BVar 2)))
+           (aup_g (BVar 0))))
+       (bad_type_rule
+         (TrsRule
+           rule_name
+           (list int_type symbol_type symbol_type symbol_type)
+           (aup_f (BVar 1) (aup_f (BVar 0) (BVar 2)))
+           (aup_g (BVar 0))))
+       (proposal_guards (list (AuDistinct 0 1)))
+       (rule_guards (list (TrsDistinct disc 1 0))))
+      (if
+        (au_conditioned_rule_covers
+          typed
+          proposal_guards
+          (TrsConditionedRule rule rule_guards))
+        (if
+          (au_conditioned_rule_covers
+            typed
+            proposal_guards
+            (TrsConditionedRule rule Nil))
+          (if
+            (au_conditioned_rule_covers
+              typed
+              Nil
+              (TrsConditionedRule rule rule_guards))
+            (aup_fail "guarded theorem covered an unguarded proposal\n" w)
+            (if
+              (au_conditioned_rule_covers
+                typed
+                proposal_guards
+                (TrsConditionedRule bad_type_rule rule_guards))
+              (aup_fail "coverage ignored binder types\n" w)
+              (write "ANTIUNIFY-PROBE OK\n" w)))
+          (aup_fail "unguarded theorem did not cover guarded proposal\n" w))
+        (aup_fail "alpha-renamed guarded rule did not cover schema\n" w)))))
 
 (fn aup_typed ((w World)) World
   (match (load_run_module "tools/search/tasks/antiunify_typed_fixture.shard" w)
@@ -65,7 +122,7 @@
               (match types
                 ((Cons ty Nil)
                  (if (type_eq ty (TCon (aup_fixture_q (quote AupAtom)) Nil))
-                   (write "ANTIUNIFY-PROBE OK\n" w2)
+                   (aup_coverage w2)
                    (aup_fail "typed role has the wrong type\n" w2)))
                 (_ (aup_fail "typed role list has the wrong arity\n" w2)))
               (aup_fail "typed schema has the wrong arity\n" w2)))))))))
