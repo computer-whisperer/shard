@@ -1,0 +1,1581 @@
+;;; proofdiag — the proof-DSL mirror diagnoser (tools/explain's deep half).
+;;;
+;;; The kernel's proof parser (kernel/proof_reader.shard) is Option-shaped:
+;;; every malformed step, wrong-arity form, or bad token collapses to one
+;;; report line — "could not parse proof (proof DSL)". This module walks the
+;;; SAME grammar as a VALIDATOR: it never builds a Proof, it only descends
+;;; and reports the first violation with a breadcrumb path (which case,
+;;; which step) and an expected-vs-got message, plus did-you-mean over the
+;;; closure's keyword/name pools.
+;;;
+;;; ALIGNMENT DISCIPLINE: the mirror runs strictly AFTER the kernel path and
+;;; only explains — the kernel verdict stands regardless. Two guards keep
+;;; the mirror honest: (1) input is the kernel's OWN ds_proof output (the
+;;; named-citation desugar is never mirrored, it is reused — a DsErr already
+;;; carries a good kernel message and the mirror stays silent); (2) the
+;;; --pin mode (explain.shard) parses every claim of a file through BOTH the
+;;; kernel parse_proof and this validator and reports any accept/reject
+;;; disagreement, and a proof the validator accepts where the kernel refused
+;;; renders as "the explainer may be out of date", never as a guess.
+
+(import "../../kernel/stdlib.shard")  ; List / Option / Bool / Pair
+(import "../../kernel/term.shard")  ; append_int / show_int / chars_of_sym
+(import "../../kernel/module.shard")  ; Module / TypeDef / CtorDef accessors
+(import "../../kernel/proof.shard")  ; Goal / Param / Equation
+(import "../../kernel/reader.shard")  ; SExpr / read_all / elaborate / parse_type
+(import "../../kernel/proof_reader.shard")  ; parse_goal / parse_proof / goal_tparams
+(import "../../kernel/desugar.shard")  ; ds_proof / DsRes — the REAL desugar pass
+(use (:: kernel stdlib *))
+(use (:: kernel term *))
+(use (:: kernel module *))
+(use (:: kernel proof *))
+(use (:: kernel reader *))
+(use (:: kernel proof_reader *))
+(use (:: kernel desugar *))
+
+;; ===========================================================================
+;; the generic byte/suggestion kit (shared with explain.shard, which imports
+;; this module)
+;; ===========================================================================
+
+(fn ex_len ((xs (List Int))) Int
+  (measure (struct xs))
+  (match xs
+    (Nil 0)
+    ((Cons _ r) (+ 1 (ex_len r)))))
+
+(fn ex_eq ((a (List Int)) (b (List Int))) Bool
+  (measure (struct a))
+  (match a
+    (Nil
+      (match b
+        (Nil True)
+        (_ False)))
+    ((Cons x ar)
+     (match b
+       (Nil False)
+       ((Cons y br) (if (int_eq x y) (ex_eq ar br) False))))))
+
+(fn ex_drop ((n Int) (xs (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons _ r) (if (le n 0) xs (ex_drop (- n 1) r)))))
+
+(fn append_ll ((a (List (List Int))) (b (List (List Int)))) (List (List Int))
+  (measure (struct a))
+  (match a
+    (Nil b)
+    ((Cons h t) (Cons h (append_ll t b)))))
+
+(fn ex_rev_ll ((xs (List (List Int))) (acc (List (List Int)))) (List (List Int))
+  (measure (struct xs))
+  (match xs
+    (Nil acc)
+    ((Cons h t) (ex_rev_ll t (Cons h acc)))))
+
+(fn ex_lines_go ((bs (List Int)) (cur (List Int)) (acc (List (List Int))))
+  (List (List Int))
+  (measure (struct bs))
+  (match bs
+    (Nil (ex_rev_ll (Cons (rev_i cur Nil) acc) Nil))
+    ((Cons c r)
+     (if (int_eq c 10) (ex_lines_go r Nil (Cons (rev_i cur Nil) acc))
+     (ex_lines_go r (Cons c cur) acc)))))
+
+(fn ex_lines ((bs (List Int))) (List (List Int)) (ex_lines_go bs Nil Nil))
+
+;; suffix after the first occurrence of `pat`, if any.
+(fn ex_find ((pat (List Int)) (xs (List Int))) (Option (List Int))
+  (measure (struct xs))
+  (if (starts_with_x pat xs) (Some (ex_drop (ex_len pat) xs))
+  (match xs
+    (Nil None)
+    ((Cons _ r) (ex_find pat r)))))
+
+;; loader.shard has starts_with; this module does not import loader, so the
+;; kit carries its own spelling (explain.shard uses this one everywhere).
+(fn starts_with_x ((pre (List Int)) (xs (List Int))) Bool
+  (measure (struct pre))
+  (match pre
+    (Nil True)
+    ((Cons p pr)
+     (match xs
+       (Nil False)
+       ((Cons x xr) (if (int_eq p x) (starts_with_x pr xr) False))))))
+
+(fn ex_until_sp ((xs (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons c r) (if (int_eq c 32) Nil (Cons c (ex_until_sp r))))))
+
+(fn ex_after_sp ((xs (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons c r) (if (int_eq c 32) r (ex_after_sp r)))))
+
+(fn ex_until_colon ((xs (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons c r) (if (int_eq c 58) Nil (Cons c (ex_until_colon r))))))
+
+(fn ex_has_name ((n (List Int)) (xs (List (List Int)))) Bool
+  (measure (struct xs))
+  (match xs
+    (Nil False)
+    ((Cons h r) (if (ex_eq n h) True (ex_has_name n r)))))
+
+(fn ex_dedup_ll ((xs (List (List Int))) (seen (List (List Int))))
+  (List (List Int))
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons h r)
+     (if (ex_has_name h seen) (ex_dedup_ll r seen)
+     (Cons h (ex_dedup_ll r (Cons h seen)))))))
+
+(fn ex_join ((xs (List (List Int)))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons h r)
+     (match r
+       (Nil h)
+       (_ (append_int h (append_int ", " (ex_join r))))))))
+
+(fn ex_min2 ((a Int) (b Int)) Int (if (lt a b) a b))
+
+(fn ex_min3 ((a Int) (b Int) (c Int)) Int (ex_min2 a (ex_min2 b c)))
+
+(fn ex_row0 ((b (List Int)) (j Int)) (List Int)
+  (measure (struct b))
+  (match b
+    (Nil (Cons j Nil))
+    ((Cons _ r) (Cons j (ex_row0 r (+ j 1))))))
+
+(fn ex_last ((xs (List Int)) (d Int)) Int
+  (measure (struct xs))
+  (match xs
+    (Nil d)
+    ((Cons h r) (ex_last r h))))
+
+;; one DP row: prev is the row for the previous char of `a` (len(b)+1 wide,
+;; head = the diagonal), `left` is the new row's last computed entry.
+(fn ex_step ((b (List Int)) (prev (List Int)) (ca Int) (left Int)) (List Int)
+  (measure (struct b))
+  (match b
+    (Nil Nil)
+    ((Cons cb br)
+     (match prev
+       (Nil Nil)
+       ((Cons pd pr)
+        (match pr
+          (Nil Nil)
+          ((Cons pj _)
+           (let
+             ((v (ex_min3 (+ pj 1) (+ left 1) (+ pd (if (int_eq ca cb) 0 1)))))
+             (Cons v (ex_step br pr ca v))))))))))
+
+(fn ex_lev_go ((a (List Int)) (b (List Int)) (prev (List Int)) (i Int)) Int
+  (measure (struct a))
+  (match a
+    (Nil (ex_last prev 0))
+    ((Cons ca ar) (ex_lev_go ar b (Cons i (ex_step b prev ca i)) (+ i 1)))))
+
+(fn ex_lev ((a (List Int)) (b (List Int))) Int (ex_lev_go a b (ex_row0 b 0) 1))
+
+(fn ex_insc ((c Int) (xs (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil (Cons c Nil))
+    ((Cons h r) (if (le c h) (Cons c xs) (Cons h (ex_insc c r))))))
+
+(fn ex_sortc ((xs (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons h r) (ex_insc h (ex_sortc r)))))
+
+;; near-miss score: same chars reordered = 0 (the transposition typo);
+;; else Levenshtein, admitted at d <= 2 and d < len (never suggest a name
+;; sharing no structure). None = not a candidate.
+(fn ex_score ((n (List Int)) (c (List Int))) (Option Int)
+  (if (ex_eq n c) None
+  (if (ex_eq (ex_sortc n) (ex_sortc c)) (Some 0)
+  (let ((d (ex_lev n c)))
+    (if (le d 2) (if (lt d (ex_len n)) (Some d) None) None)))))
+
+(fn ex_cands ((n (List Int)) (pool (List (List Int))))
+  (List (Pair Int (List Int)))
+  (measure (struct pool))
+  (match pool
+    (Nil Nil)
+    ((Cons c r)
+     (match (ex_score n c)
+       (None (ex_cands n r))
+       ((Some s) (Cons (Pair s c) (ex_cands n r)))))))
+
+(fn ex_ins_sc ((p (Pair Int (List Int))) (xs (List (Pair Int (List Int)))))
+  (List (Pair Int (List Int)))
+  (measure (struct xs))
+  (match xs
+    (Nil (Cons p Nil))
+    ((Cons h r)
+     (match p
+       ((Pair s _)
+        (match h
+          ((Pair hs _) (if (lt s hs) (Cons p xs) (Cons h (ex_ins_sc p r))))))))))
+
+(fn ex_sort_sc ((xs (List (Pair Int (List Int))))) (List (Pair Int (List Int)))
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons h r) (ex_ins_sc h (ex_sort_sc r)))))
+
+(fn ex_take_names
+  ((xs (List (Pair Int (List Int)))) (seen (List (List Int))) (k Int))
+  (List (List Int))
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons (Pair _ c) r)
+     (if (le k 0) Nil
+     (if (ex_has_name c seen) (ex_take_names r seen k)
+     (Cons c (ex_take_names r (Cons c seen) (- k 1))))))))
+
+(fn ex_suggest ((n (List Int)) (pool (List (List Int)))) (List (List Int))
+  (ex_take_names (ex_sort_sc (ex_cands n pool)) Nil 3))
+
+(fn ex_sugg_str ((n (List Int)) (pool (List (List Int)))) (List Int)
+  (match (ex_suggest n pool)
+    (Nil Nil)
+    (cs (append_int " — did you mean: " (append_int (ex_join cs) "?")))))
+
+;; the reader's ctor/binder discrimination (sym_capitalized): a bare pattern
+;; symbol starting A-Z must be a constructor; lowercase binds.
+(fn ex_cap ((n (List Int))) Bool
+  (match n
+    (Nil False)
+    ((Cons c _) (if (le 65 c) (le c 90) False))))
+
+;; ===========================================================================
+;; sexpr rendering for messages (truncated — a message names a form, the
+;; source file is where the author reads it in full)
+;; ===========================================================================
+
+(fn pd_take ((n Int) (xs (List Int))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons c r) (if (le n 0) Nil (Cons c (pd_take (- n 1) r))))))
+
+(fn pd_trunc ((bs (List Int))) (List Int)
+  (if (le (ex_len bs) 64) bs (append_int (pd_take 61 bs) "...")))
+
+(fn pd_show ((s SExpr)) (List Int)
+  (measure (struct s))
+  (match s
+    ((SInt n) (show_int n))
+    ((SSym n) (chars_of_sym n))
+    ((SStr _) "\"...\"")
+    ((SList items) (append_int "(" (append_int (pd_show_l items) ")")))))
+
+(fn pd_show_l ((xs (List SExpr))) (List Int)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons h r)
+     (match r
+       (Nil (pd_show h))
+       (_ (append_int (pd_show h) (append_int " " (pd_show_l r))))))))
+
+(fn pd_got ((s SExpr)) (List Int)
+  (append_int " — got " (pd_trunc (pd_show s))))
+
+;; ===========================================================================
+;; validator context + result
+;; ===========================================================================
+
+;; ctor SYMBOLS ride along for elaborate; the char pools feed did-you-mean.
+(type PdCtx
+  (PdCtx
+    (List Symbol)  ; ctor symbols (elaborate's set)
+    (List (List Int))  ; ctor names
+    (List (List Int))  ; type names
+    (List (List Int))  ; fn names
+    (List (List Int))  ; lemma (claim/axiom) names
+    (List (List Int))))  ; value names in scope: goal binders + case fields
+
+(type PdR (PdOk) (PdFail (List Int) (List Int)))  ; breadcrumb path, message
+
+(fn pd_ctx_syms ((c PdCtx)) (List Symbol)
+  (match c
+    ((PdCtx s _ _ _ _ _) s)))
+
+(fn pd_ctx_ctors ((c PdCtx)) (List (List Int))
+  (match c
+    ((PdCtx _ ct _ _ _ _) ct)))
+
+(fn pd_ctx_types ((c PdCtx)) (List (List Int))
+  (match c
+    ((PdCtx _ _ ty _ _ _) ty)))
+
+(fn pd_ctx_fns ((c PdCtx)) (List (List Int))
+  (match c
+    ((PdCtx _ _ _ f _ _) f)))
+
+(fn pd_ctx_lemmas ((c PdCtx)) (List (List Int))
+  (match c
+    ((PdCtx _ _ _ _ l _) l)))
+
+(fn pd_ctx_vars ((c PdCtx)) (List (List Int))
+  (match c
+    ((PdCtx _ _ _ _ _ v) v)))
+
+(fn pd_ctx_add_var ((n (List Int)) (c PdCtx)) PdCtx
+  (match c
+    ((PdCtx s ct ty f l v) (PdCtx s ct ty f l (Cons n v)))))
+
+(fn pd_ctx_add_syms ((ns (List Symbol)) (c PdCtx)) PdCtx
+  (measure (struct ns))
+  (match ns
+    (Nil c)
+    ((Cons n r) (pd_ctx_add_syms r (pd_ctx_add_var (chars_of_sym n) c)))))
+
+;; breadcrumb: "PATH -> SEG"
+(fn pd_at ((path (List Int)) (seg (List Int))) (List Int)
+  (append_int path (append_int " -> " seg)))
+
+(fn pd_at_idx ((path (List Int)) (what (List Int)) (i Int)) (List Int)
+  (pd_at path (append_int what (append_int " " (show_int i)))))
+
+;; ===========================================================================
+;; keyword pools
+;; ===========================================================================
+
+(fn pd_proof_heads () (List (List Int))
+  (list
+    "steps"
+    "induct"
+    "case-on"
+    "wf-induct"
+    "subterm-induct"
+    "fin-split"
+    "absurd"
+    "by"
+    "have"
+    "div-facts"
+    "rewrite-with"
+    "refine-fact"
+    "inject"
+    "refl"
+    "admit"
+    "below"))
+
+(fn pd_step_heads () (List (List Int))
+  (list "unfold" "rewrite" "compute" "simp" "reduce" "inspect"))
+
+(fn pd_is_head ((h Symbol) (pool (List (List Int)))) Bool
+  (ex_has_name (chars_of_sym h) pool))
+
+;; ===========================================================================
+;; token validators
+;; ===========================================================================
+
+(fn pd_side ((s SExpr) (path (List Int)) (slot (List Int))) PdR
+  (match s
+    ((SSym n)
+     (if (sym_eq n (quote lhs)) PdOk
+     (if (sym_eq n (quote rhs)) PdOk
+     (if (sym_eq n (quote both)) PdOk
+     (PdFail
+       path
+       (append_int
+         slot
+         (append_int
+           " must be lhs / rhs / both"
+           (append_int
+             (pd_got s)
+             (ex_sugg_str (chars_of_sym n) (list "lhs" "rhs" "both"))))))))))
+    (_
+      (PdFail
+        path
+        (append_int slot (append_int " must be lhs / rhs / both" (pd_got s)))))))
+
+(fn pd_dir ((s SExpr) (path (List Int))) PdR
+  (match s
+    ((SSym n)
+     (if (sym_eq n (quote lr)) PdOk
+     (if (sym_eq n (quote rl)) PdOk
+     (PdFail
+       path
+       (append_int
+         "direction must be lr (rewrite left-to-right) or rl"
+         (pd_got s))))))
+    (_
+      (PdFail
+        path
+        (append_int
+          "direction must be lr (rewrite left-to-right) or rl"
+          (pd_got s))))))
+
+(fn pd_occ ((s SExpr) (path (List Int))) PdR
+  (match s
+    ((SSym n)
+     (if (sym_eq n (quote true)) PdOk
+     (if (sym_eq n (quote false)) PdOk
+     (PdFail
+       path
+       (append_int
+         "occurrence selector must be true (all sites) / false (first site) / (at K)"
+         (pd_got s))))))
+    ((SList (Cons (SSym h) (Cons (SInt k) Nil)))
+     (if (sym_eq h (quote at))
+       (if (lt k 0)
+         (PdFail path "(at K): K must be a nonnegative 0-based site index")
+         PdOk)
+       (PdFail
+         path
+         (append_int
+           "occurrence selector must be true / false / (at K)"
+           (pd_got s)))))
+    ((SInt k)
+     (PdFail
+       path
+       (append_int
+         "a bare integer is not an occurrence selector — write (at "
+         (append_int (show_int k) ")"))))
+    (_
+      (PdFail
+        path
+        (append_int
+          "occurrence selector must be true / false / (at K)"
+          (pd_got s))))))
+
+;; a qname slot: bare symbol or (:: SEG ... NAME); `pool`+`what` drive the
+;; advisory basename check (Nil pool = shape check only).
+(fn pd_qname_in
+  ((s SExpr) (path (List Int)) (what (List Int)) (pool (List (List Int))))
+  PdR
+  (match s
+    ((SSym n)
+     (match pool
+       (Nil PdOk)
+       (_
+         (if (ex_has_name (chars_of_sym n) pool) PdOk
+         (PdFail
+           path
+           (append_int
+             what
+             (append_int
+               " "
+               (append_int
+                 (chars_of_sym n)
+                 (append_int
+                   " is not in the closure"
+                   (ex_sugg_str (chars_of_sym n) pool))))))))))
+    ((SList (Cons (SSym h) _))
+     (if (sym_eq h (quote ::)) PdOk
+     (PdFail
+       path
+       (append_int
+         what
+         (append_int " must be a name or (:: SEG ... NAME)" (pd_got s))))))
+    (_
+      (PdFail
+        path
+        (append_int
+          what
+          (append_int " must be a name or (:: SEG ... NAME)" (pd_got s)))))))
+
+;; citations, post-desugar: (hyp N) / (premise N) / (lemma NAME). The classic
+;; miss is a bare lemma name — say exactly how to spell it.
+(fn pd_eqref_hyp ((argS SExpr) (path (List Int))) PdR
+  (match argS
+    ((SInt k)
+     (if (lt k 0) (PdFail path "(hyp K): K must be a nonnegative index") PdOk))
+    (_
+      (PdFail
+        path
+        (append_int
+          "(hyp X): X must be an index or a bound hyp name"
+          (pd_got argS))))))
+
+(fn pd_eqref_premise ((argS SExpr) (path (List Int))) PdR
+  (match argS
+    ((SInt k)
+     (if (lt k 0) (PdFail path "(premise K): K must be a nonnegative index")
+     PdOk))
+    (_
+      (PdFail
+        path
+        (append_int
+          "(premise X): X must be an index or a premise name"
+          (pd_got argS))))))
+
+(fn pd_eqref_lemma ((argS SExpr) (ctx PdCtx) (path (List Int))) PdR
+  (match argS
+    ((SSym n)
+     (if (ex_has_name (chars_of_sym n) (pd_ctx_lemmas ctx)) PdOk
+     (PdFail
+       path
+       (append_int
+         "(lemma "
+         (append_int
+           (chars_of_sym n)
+           (append_int
+             "): not a claim/axiom name in the closure"
+             (ex_sugg_str (chars_of_sym n) (pd_ctx_lemmas ctx))))))))
+    ((SList (Cons (SSym q) _))
+     (if (sym_eq q (quote ::)) PdOk
+     (PdFail
+       path
+       (append_int
+         "(lemma X): X must be a name or (:: SEG ... NAME)"
+         (pd_got argS)))))
+    (_
+      (PdFail
+        path
+        (append_int
+          "(lemma X): X must be a name or (:: SEG ... NAME)"
+          (pd_got argS))))))
+
+;; a bare symbol in citation position is THE classic miss — say how to
+;; spell it, and whether the name even exists as a lemma.
+(fn pd_eqref_bare ((n Symbol) (ctx PdCtx) (path (List Int))) PdR
+  (PdFail
+    path
+    (append_int
+      "citations are forms — (hyp N) / (premise NAME-or-N) / (lemma NAME); got bare "
+      (append_int
+        (chars_of_sym n)
+        (if (ex_has_name (chars_of_sym n) (pd_ctx_lemmas ctx))
+          (append_int " — write (lemma " (append_int (chars_of_sym n) ")"))
+          (ex_sugg_str (chars_of_sym n) (pd_ctx_lemmas ctx)))))))
+
+(fn pd_eqref ((s SExpr) (ctx PdCtx) (path (List Int))) PdR
+  (match s
+    ((SSym n) (pd_eqref_bare n ctx path))
+    ((SList (Cons (SSym h) (Cons argS Nil)))
+     (if (sym_eq h (quote hyp)) (pd_eqref_hyp argS path)
+     (if (sym_eq h (quote premise)) (pd_eqref_premise argS path)
+     (if (sym_eq h (quote lemma)) (pd_eqref_lemma argS ctx path)
+     (PdFail
+       path
+       (append_int
+         "citation head must be hyp / premise / lemma"
+         (append_int
+           (pd_got s)
+           (ex_sugg_str (chars_of_sym h) (list "hyp" "premise" "lemma")))))))))
+    (_
+      (PdFail
+        path
+        (append_int
+          "citation must be (hyp N) / (premise N) / (lemma NAME)"
+          (pd_got s))))))
+
+;; ===========================================================================
+;; object-term embeds: elaborate is the authority; on refusal, hunt for the
+;; likely cause (a capitalized head that is not a constructor).
+;; ===========================================================================
+
+(fn pd_bad_caps ((s SExpr) (ctx PdCtx)) (List (List Int))
+  (measure (struct s))
+  (match s
+    ((SSym n)
+     (let ((cs (chars_of_sym n)))
+       (if (ex_cap cs)
+         (if (ex_has_name cs (pd_ctx_ctors ctx)) Nil
+         (if (ex_has_name cs (pd_ctx_vars ctx)) Nil
+         (Cons cs Nil)))
+         Nil)))
+    ((SList items) (pd_bad_caps_l items ctx))
+    (_ Nil)))
+
+(fn pd_bad_caps_l ((xs (List SExpr)) (ctx PdCtx)) (List (List Int))
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons h r) (append_ll (pd_bad_caps h ctx) (pd_bad_caps_l r ctx)))))
+
+(fn pd_caps_note ((bads (List (List Int))) (ctx PdCtx)) (List Int)
+  (match bads
+    (Nil Nil)
+    ((Cons h _)
+     (append_int
+       " — "
+       (append_int
+         h
+         (append_int
+           " is capitalized but is not a constructor in scope"
+           (ex_sugg_str h (pd_ctx_ctors ctx))))))))
+
+(fn pd_term ((s SExpr) (ctx PdCtx) (path (List Int)) (what (List Int))) PdR
+  (match (elaborate s (pd_ctx_syms ctx) Nil)
+    ((Some _) PdOk)
+    (None
+      (PdFail
+        path
+        (append_int
+          what
+          (append_int
+            " does not elaborate (object language)"
+            (append_int
+              (pd_got s)
+              (pd_caps_note (ex_dedup_ll (pd_bad_caps s ctx) Nil) ctx))))))))
+
+(fn pd_eq ((s SExpr) (ctx PdCtx) (path (List Int)) (what (List Int))) PdR
+  (match s
+    ((SList (Cons (SSym h) (Cons lS (Cons rS Nil))))
+     (if (sym_eq h (quote =))
+       (match (pd_term lS ctx path (append_int what " lhs"))
+         ((PdFail p m) (PdFail p m))
+         (PdOk (pd_term rS ctx path (append_int what " rhs"))))
+       (PdFail
+         path
+         (append_int what (append_int " must be (= LHS RHS)" (pd_got s))))))
+    (_
+      (PdFail
+        path
+        (append_int what (append_int " must be (= LHS RHS)" (pd_got s)))))))
+
+;; ===========================================================================
+;; steps
+;; ===========================================================================
+
+(fn pd_insts ((ss (List SExpr)) (ctx PdCtx) (path (List Int)) (i Int)) PdR
+  (measure (struct ss))
+  (match ss
+    (Nil PdOk)
+    ((Cons h t)
+     (match h
+       ((SList (Cons (SSym ih) (Cons (SSym _) (Cons tS Nil))))
+        (if (sym_eq ih (quote inst))
+          (match (pd_term tS ctx (pd_at_idx path "inst" i) "instantiation term")
+            ((PdFail p m) (PdFail p m))
+            (PdOk (pd_insts t ctx path (+ i 1))))
+          (PdFail
+            (pd_at_idx path "inst" i)
+            (append_int "each instantiation is (inst NAME TERM)" (pd_got h)))))
+       (_
+         (PdFail
+           (pd_at_idx path "inst" i)
+           (append_int "each instantiation is (inst NAME TERM)" (pd_got h))))))))
+
+;; the (SIDE) / (SIDE (stop FN ...)) tail shared by compute and simp.
+(fn pd_side_stops
+  ((args (List SExpr)) (ctx PdCtx) (path (List Int)) (head (List Int)))
+  PdR
+  (match args
+    ((Cons sideS Nil) (pd_side sideS path "side"))
+    ((Cons sideS (Cons stopS Nil))
+     (match (pd_side sideS path "side")
+       ((PdFail p m) (PdFail p m))
+       (PdOk
+         (match stopS
+           ((SList (Cons (SSym sh) names))
+            (if (sym_eq sh (quote stop))
+              (match names
+                (Nil
+                  (PdFail
+                    path
+                    "(stop) with no names would silently be the unfenced form — name the stop fns or drop it"))
+                (_ PdOk))
+              (PdFail
+                path
+                (append_int
+                  "the second argument must be (stop FN ...)"
+                  (pd_got stopS)))))
+           (_
+             (PdFail
+               path
+               (append_int
+                 "the second argument must be (stop FN ...)"
+                 (pd_got stopS))))))))
+    (_
+      (PdFail
+        path
+        (append_int
+          head
+          " takes (SIDE) or (SIDE (stop FN ...)) — wrong number of arguments")))))
+
+(fn pd_step_form ((h Symbol) (args (List SExpr)) (ctx PdCtx) (path (List Int)))
+  PdR
+  (if (sym_eq h (quote unfold))
+    (match args
+      ((Cons fnS (Cons sideS Nil))
+       (match (pd_qname_in fnS path "unfold target" (pd_ctx_fns ctx))
+         ((PdFail p m) (PdFail p m))
+         (PdOk (pd_side sideS path "side"))))
+      (_
+        (PdFail
+          path
+          "unfold takes (unfold FN SIDE) — wrong number of arguments")))
+  (if (sym_eq h (quote rewrite))
+    (match args
+      ((Cons refS (Cons dirS (Cons sideS (Cons occS (Cons instsS Nil)))))
+       (match (pd_eqref refS ctx path)
+         ((PdFail p m) (PdFail p m))
+         (PdOk
+           (match (pd_dir dirS path)
+             ((PdFail p m) (PdFail p m))
+             (PdOk
+               (match (pd_side sideS path "side")
+                 ((PdFail p m) (PdFail p m))
+                 (PdOk
+                   (match (pd_occ occS path)
+                     ((PdFail p m) (PdFail p m))
+                     (PdOk
+                       (match instsS
+                         ((SList instL) (pd_insts instL ctx path 1))
+                         (_
+                           (PdFail
+                             path
+                             (append_int
+                               "the instantiation slot must be a list — () when empty"
+                               (pd_got instsS))))))))))))))
+      (_
+        (PdFail
+          path
+          "rewrite takes (rewrite EQREF DIR SIDE OCC (INST ...)) — wrong number of arguments (OCC = true / false / (at K))")))
+  (if (sym_eq h (quote compute)) (pd_side_stops args ctx path "compute")
+  (if (sym_eq h (quote simp)) (pd_side_stops args ctx path "simp")
+  (if (sym_eq h (quote reduce))
+    (match args
+      ((Cons sideS Nil) (pd_side sideS path "side"))
+      (_
+        (PdFail path "reduce takes (reduce SIDE) — wrong number of arguments")))
+  (if (sym_eq h (quote inspect))
+    (match args
+      (Nil PdOk)
+      (_ (PdFail path "inspect takes no arguments")))
+    (PdFail
+      path
+      (append_int
+        "unknown step "
+        (append_int
+          (pd_trunc (chars_of_sym h))
+          (if (pd_is_head h (pd_proof_heads))
+            " — this is a PROOF form, not a step; it belongs after the step list, as the continuation"
+            (ex_sugg_str (chars_of_sym h) (pd_step_heads)))))))))))))
+
+(fn pd_steps ((ss (List SExpr)) (ctx PdCtx) (path (List Int)) (i Int)) PdR
+  (measure (struct ss))
+  (match ss
+    (Nil PdOk)
+    ((Cons h t)
+     (match
+       (match h
+         ((SList (Cons (SSym sh) sargs))
+          (pd_step_form sh sargs ctx (pd_at_idx path "step" i)))
+         (_
+           (PdFail
+             (pd_at_idx path "step" i)
+             (append_int
+               "a step is a (KEYWORD ...) form — unfold / rewrite / compute / simp / reduce / inspect"
+               (pd_got h)))))
+       ((PdFail p m) (PdFail p m))
+       (PdOk (pd_steps t ctx path (+ i 1)))))))
+
+;; ===========================================================================
+;; the proof walk (mirrors parse_proof's grammar; extraction by direct match
+;; so (struct s) closes the recursion — the proof_reader style)
+;; ===========================================================================
+
+(fn pd_case_fields ((fieldsS SExpr) (path (List Int))) PdR
+  (match fieldsS
+    ((SList items) (pd_field_syms_ok items path))
+    (_
+      (PdFail
+        path
+        (append_int "case fields must be a list of bare names" (pd_got fieldsS))))))
+
+(fn pd_field_syms_ok ((xs (List SExpr)) (path (List Int))) PdR
+  (measure (struct xs))
+  (match xs
+    (Nil PdOk)
+    ((Cons (SSym _) t) (pd_field_syms_ok t path))
+    ((Cons h _)
+     (PdFail path (append_int "case fields must be bare names" (pd_got h))))))
+
+(fn pd_field_names ((fieldsS SExpr)) (List Symbol)
+  (match fieldsS
+    ((SList items) (pd_sym_list items))
+    (_ Nil)))
+
+(fn pd_case_tag ((ctorS SExpr)) (List Int)
+  (append_int "case " (pd_trunc (pd_show ctorS))))
+
+(fn pd_sym_list ((xs (List SExpr))) (List Symbol)
+  (measure (struct xs))
+  (match xs
+    (Nil Nil)
+    ((Cons (SSym n) t) (Cons n (pd_sym_list t)))
+    ((Cons _ t) (pd_sym_list t))))
+
+(fn pd_proof ((s SExpr) (ctx PdCtx) (path (List Int))) PdR
+  (measure (struct s))
+  (match s
+    ((SSym n)
+     (if (sym_eq n (quote refl)) PdOk
+     (if (sym_eq n (quote admit)) PdOk
+     (if (sym_eq n (quote below)) PdOk
+     (PdFail
+       path
+       (append_int
+         "bare symbol "
+         (append_int
+           (chars_of_sym n)
+           (append_int
+             " is not a proof — expected refl / admit / below, or a proof form"
+             (ex_sugg_str (chars_of_sym n) (pd_proof_heads))))))))))
+    ((SList (Cons (SSym h) args))
+     (if (sym_eq h (quote steps))
+       (match args
+         ((Cons stepsS (Cons contS Nil))
+          (match stepsS
+            ((SList stepL)
+             (match (pd_steps stepL ctx path 1)
+               ((PdFail p m) (PdFail p m))
+               (PdOk (pd_proof contS ctx (pd_at path "steps continuation")))))
+            (_
+              (PdFail
+                path
+                (append_int
+                  "the step slot must be a list of steps"
+                  (pd_got stepsS))))))
+         (_
+           (PdFail
+             path
+             "steps takes (steps (STEP ...) CONTINUATION) — wrong number of arguments (a lone step list is missing its closer: refl, or another proof)")))
+     (if (sym_eq h (quote induct))
+       (match args
+         ((Cons (SSym var) (Cons casesS Nil))
+          (if (ex_has_name (chars_of_sym var) (pd_ctx_vars ctx))
+            (match casesS
+              ((SList caseL) (pd_cases caseL ctx path))
+              (_
+                (PdFail
+                  path
+                  (append_int
+                    "induct cases must be a list of (case ...)"
+                    (pd_got casesS)))))
+            (PdFail
+              path
+              (append_int
+                "induct variable "
+                (append_int
+                  (chars_of_sym var)
+                  (append_int
+                    " is not a goal binder — in scope: "
+                    (append_int
+                      (ex_join (pd_ctx_vars ctx))
+                      (ex_sugg_str (chars_of_sym var) (pd_ctx_vars ctx)))))))))
+         (_
+           (PdFail
+             path
+             "induct takes (induct VAR ((case ...) ...)) — wrong number of arguments")))
+     (if (sym_eq h (quote case-on))
+       (match args
+         ((Cons termS (Cons tyS (Cons casesS Nil)))
+          (match (pd_qname_in tyS path "case-on type" (pd_ctx_types ctx))
+            ((PdFail p m) (PdFail p m))
+            (PdOk
+              (match (pd_term termS ctx path "case-on scrutinee")
+                ((PdFail p m) (PdFail p m))
+                (PdOk
+                  (match casesS
+                    ((SList caseL) (pd_cases caseL ctx path))
+                    (_
+                      (PdFail
+                        path
+                        (append_int
+                          "case-on cases must be a list of (case ...)"
+                          (pd_got casesS))))))))))
+         (_
+           (PdFail
+             path
+             "case-on takes (case-on TERM TYPE ((case ...) ...)) — wrong number of arguments")))
+     (if (sym_eq h (quote wf-induct))
+       (match args
+         ((Cons measureS (Cons subS Nil))
+          (match (pd_term measureS ctx path "wf-induct measure")
+            ((PdFail p m) (PdFail p m))
+            (PdOk (pd_proof subS ctx (pd_at path "wf-induct body")))))
+         (_
+           (PdFail
+             path
+             "wf-induct takes (wf-induct MEASURE PROOF) — wrong number of arguments")))
+     (if (sym_eq h (quote subterm-induct))
+       (match args
+         ((Cons (SSym var) (Cons subS Nil))
+          (if (ex_has_name (chars_of_sym var) (pd_ctx_vars ctx))
+            (pd_proof subS ctx (pd_at path "subterm-induct body"))
+            (PdFail
+              path
+              (append_int
+                "subterm-induct variable "
+                (append_int
+                  (chars_of_sym var)
+                  (append_int
+                    " is not a goal binder — in scope: "
+                    (ex_join (pd_ctx_vars ctx))))))))
+         (_
+           (PdFail
+             path
+             "subterm-induct takes (subterm-induct VAR PROOF) — wrong number of arguments")))
+     (if (sym_eq h (quote fin-split))
+       (match args
+         ((Cons (SSym var) (Cons loS (Cons hiS (Cons casesS Nil))))
+          (if (ex_has_name (chars_of_sym var) (pd_ctx_vars ctx))
+            (match (pd_eqref loS ctx (pd_at path "fin-split lo bound"))
+              ((PdFail p m) (PdFail p m))
+              (PdOk
+                (match (pd_eqref hiS ctx (pd_at path "fin-split hi bound"))
+                  ((PdFail p m) (PdFail p m))
+                  (PdOk
+                    (match casesS
+                      ((SList caseL) (pd_fincases caseL ctx path))
+                      (_
+                        (PdFail
+                          path
+                          (append_int
+                            "fin-split cases must be a list of (case INT PROOF)"
+                            (pd_got casesS)))))))))
+            (PdFail
+              path
+              (append_int
+                "fin-split variable "
+                (append_int
+                  (chars_of_sym var)
+                  (append_int
+                    " is not in scope — binders + introduced names: "
+                    (ex_join (pd_ctx_vars ctx))))))))
+         (_
+           (PdFail
+             path
+             "fin-split takes (fin-split VAR LO HI ((case INT PROOF) ...)) — LO/HI are range-premise citations")))
+     (if (sym_eq h (quote absurd))
+       (match args
+         ((Cons refS Nil) (pd_eqref refS ctx (pd_at path "absurd citation")))
+         (_
+           (PdFail
+             path
+             "absurd takes (absurd EQREF) — wrong number of arguments")))
+     (if (sym_eq h (quote by))
+       (match args
+         ((Cons (SSym _) (Cons _ Nil)) PdOk)
+         (_
+           (PdFail
+             path
+             "by takes (by THEORY PAYLOAD) — e.g. (by arith (list ...)), (by lia (list))")))
+     (if (sym_eq h (quote have))
+       (match args
+         ((Cons eqS (Cons peS (Cons prS Nil)))
+          (match (pd_eq eqS ctx (pd_at path "have equation") "the cut")
+            ((PdFail p m) (PdFail p m))
+            (PdOk
+              (match (pd_proof peS ctx (pd_at path "have justification"))
+                ((PdFail p m) (PdFail p m))
+                (PdOk (pd_proof prS ctx (pd_at path "have continuation")))))))
+         (_
+           (PdFail
+             path
+             "have takes (have EQ PROOF PROOF) or the named (have NAME EQ PROOF PROOF) — wrong number of arguments")))
+     (if (sym_eq h (quote div-facts))
+       (match args
+         ((Cons termS (Cons dS (Cons qS (Cons subS Nil))))
+          (match dS
+            ((SInt _)
+             (match qS
+               ((SSym q)
+                (match (pd_term termS ctx path "div-facts dividend")
+                  ((PdFail p m) (PdFail p m))
+                  (PdOk
+                    (pd_proof
+                      subS
+                      (pd_ctx_add_var (chars_of_sym q) ctx)
+                      (pd_at path "div-facts body")))))
+               (_
+                 (PdFail
+                   path
+                   (append_int
+                     "div-facts quotient must be a fresh bare name"
+                     (pd_got qS))))))
+            (_
+              (PdFail
+                path
+                (append_int
+                  "div-facts divisor must be an integer literal"
+                  (pd_got dS))))))
+         (_
+           (PdFail
+             path
+             "div-facts takes (div-facts TERM D QNAME PROOF) — wrong number of arguments")))
+     (if (sym_eq h (quote rewrite-with)) (pd_rewrite_with args ctx path)
+     (if (sym_eq h (quote refine-fact))
+       (match args
+         ((Cons (SSym _) (Cons exprS (Cons subS Nil)))
+          (match (pd_term exprS ctx path "refine-fact carrier")
+            ((PdFail p m) (PdFail p m))
+            (PdOk (pd_proof subS ctx (pd_at path "refine-fact body")))))
+         (_
+           (PdFail
+             path
+             "refine-fact takes (refine-fact RTYPE EXPR PROOF) — wrong number of arguments")))
+     (if (sym_eq h (quote inject))
+       (match args
+         ((Cons refS (Cons namesS (Cons subS Nil)))
+          (match (pd_eqref refS ctx (pd_at path "inject citation"))
+            ((PdFail p m) (PdFail p m))
+            (PdOk
+              (match namesS
+                ((SList nameL)
+                 (match (pd_field_syms_ok nameL (pd_at path "inject names"))
+                   ((PdFail p m) (PdFail p m))
+                   (PdOk
+                     (pd_proof
+                       subS
+                       (pd_ctx_add_syms (pd_sym_list nameL) ctx)
+                       (pd_at path "inject body")))))
+                (_
+                  (PdFail
+                    path
+                    (append_int
+                      "inject names must be a list of bare names (`_` allowed)"
+                      (pd_got namesS))))))))
+         (_
+           (PdFail
+             path
+             "inject takes (inject EQREF (NAME ...) PROOF) — wrong number of arguments")))
+     (if (sym_eq h (quote refl))
+       (match args
+         (Nil PdOk)
+         (_ (PdFail path "refl takes no arguments")))
+     (if (sym_eq h (quote admit))
+       (match args
+         (Nil PdOk)
+         (_ (PdFail path "admit takes no arguments")))
+     (if (sym_eq h (quote below))
+       (match args
+         (Nil PdOk)
+         (_ (PdFail path "below takes no arguments")))
+       (PdFail
+         path
+         (append_int
+           "unknown proof form "
+           (append_int
+             (pd_trunc (chars_of_sym h))
+             (if (pd_is_head h (pd_step_heads))
+               " — this is a STEP; steps go inside (steps (STEP ...) CONTINUATION)"
+               (ex_sugg_str (chars_of_sym h) (pd_proof_heads)))))))))))))))))))))))
+    ((SList (Cons badhead _))
+     (PdFail
+       path
+       (append_int "a proof form must start with a keyword" (pd_got badhead))))
+    (_ (PdFail path (append_int "this is not a proof" (pd_got s))))))
+
+;; rewrite-with, 6-arg (occurrence = first) or 7-arg (explicit OCC) spelling.
+(fn pd_rewrite_with ((args (List SExpr)) (ctx PdCtx) (path (List Int))) PdR
+  (measure (struct args))
+  (match args
+    ((Cons
+       refS
+       (Cons
+         dirS
+         (Cons sideS (Cons occS (Cons instsS (Cons subsS (Cons contS Nil)))))))
+     (match (pd_eqref refS ctx (pd_at path "rewrite-with citation"))
+       ((PdFail p m) (PdFail p m))
+       (PdOk
+         (match (pd_dir dirS path)
+           ((PdFail p m) (PdFail p m))
+           (PdOk
+             (match (pd_side sideS path "side")
+               ((PdFail p m) (PdFail p m))
+               (PdOk
+                 (match (pd_occ occS path)
+                   ((PdFail p m) (PdFail p m))
+                   (PdOk
+                     (match instsS
+                       ((SList instL)
+                        (match (pd_insts instL ctx path 1)
+                          ((PdFail p m) (PdFail p m))
+                          (PdOk
+                            (match subsS
+                              ((SList subL)
+                               (match
+                                 (pd_proofs
+                                   subL
+                                   ctx
+                                   (pd_at path "rewrite-with obligation")
+                                   1)
+                                 ((PdFail p m) (PdFail p m))
+                                 (PdOk
+                                   (pd_proof
+                                     contS
+                                     ctx
+                                     (pd_at path "rewrite-with continuation")))))
+                              (_
+                                (PdFail
+                                  path
+                                  (append_int
+                                    "the obligation slot must be a list of proofs — () when the cited lemma has no premises"
+                                    (pd_got subsS))))))))
+                       (_
+                         (PdFail
+                           path
+                           (append_int
+                             "the instantiation slot must be a list — () when empty"
+                             (pd_got instsS))))))))))))))
+    ((Cons
+       refS
+       (Cons dirS (Cons sideS (Cons instsS (Cons subsS (Cons contS Nil))))))
+     (match (pd_eqref refS ctx (pd_at path "rewrite-with citation"))
+       ((PdFail p m) (PdFail p m))
+       (PdOk
+         (match (pd_dir dirS path)
+           ((PdFail p m) (PdFail p m))
+           (PdOk
+             (match (pd_side sideS path "side")
+               ((PdFail p m) (PdFail p m))
+               (PdOk
+                 (match instsS
+                   ((SList instL)
+                    (match (pd_insts instL ctx path 1)
+                      ((PdFail p m) (PdFail p m))
+                      (PdOk
+                        (match subsS
+                          ((SList subL)
+                           (match
+                             (pd_proofs
+                               subL
+                               ctx
+                               (pd_at path "rewrite-with obligation")
+                               1)
+                             ((PdFail p m) (PdFail p m))
+                             (PdOk
+                               (pd_proof
+                                 contS
+                                 ctx
+                                 (pd_at path "rewrite-with continuation")))))
+                          (_
+                            (PdFail
+                              path
+                              (append_int
+                                "the obligation slot must be a list of proofs — () when the cited lemma has no premises"
+                                (pd_got subsS))))))))
+                   (_
+                     (PdFail
+                       path
+                       (append_int
+                         "the instantiation slot must be a list — () when empty"
+                         (pd_got instsS))))))))))))
+    (_
+      (PdFail
+        path
+        "rewrite-with takes 6 or 7 arguments — (rewrite-with EQREF DIR SIDE [OCC] (INST ...) (PROOF ...) CONTINUATION)"))))
+
+(fn pd_proofs ((ss (List SExpr)) (ctx PdCtx) (path (List Int)) (i Int)) PdR
+  (measure (struct ss))
+  (match ss
+    (Nil PdOk)
+    ((Cons h t)
+     (match (pd_proof h ctx (pd_at_idx path "item" i))
+       ((PdFail p m) (PdFail p m))
+       (PdOk (pd_proofs t ctx path (+ i 1)))))))
+
+(fn pd_cases ((ss (List SExpr)) (ctx PdCtx) (path (List Int))) PdR
+  (measure (struct ss))
+  (match ss
+    (Nil PdOk)
+    ((Cons c t)
+     (match
+       (match c
+         ((SList (Cons (SSym ch) cargs))
+          (if (sym_eq ch (quote case))
+            (match cargs
+              ((Cons ctorS (Cons subS Nil))
+               (match
+                 (pd_qname_in
+                   ctorS
+                   (pd_at path "case")
+                   "case constructor"
+                   (pd_ctx_ctors ctx))
+                 ((PdFail p m) (PdFail p m))
+                 (PdOk (pd_proof subS ctx (pd_at path (pd_case_tag ctorS))))))
+              ((Cons ctorS (Cons fieldsS (Cons subS Nil)))
+               (match
+                 (pd_qname_in
+                   ctorS
+                   (pd_at path "case")
+                   "case constructor"
+                   (pd_ctx_ctors ctx))
+                 ((PdFail p m) (PdFail p m))
+                 (PdOk
+                   (match
+                     (pd_case_fields fieldsS (pd_at path (pd_case_tag ctorS)))
+                     ((PdFail p m) (PdFail p m))
+                     (PdOk
+                       (pd_proof
+                         subS
+                         (pd_ctx_add_syms (pd_field_names fieldsS) ctx)
+                         (pd_at path (pd_case_tag ctorS))))))))
+              (_
+                (PdFail
+                  (pd_at path "case")
+                  "a case is (case CTOR PROOF) or (case CTOR (FIELD ...) PROOF)")))
+            (PdFail
+              path
+              (append_int "expected a (case ...) form here" (pd_got c)))))
+         (_
+           (PdFail
+             path
+             (append_int "expected a (case ...) form here" (pd_got c)))))
+       ((PdFail p m) (PdFail p m))
+       (PdOk (pd_cases t ctx path))))))
+
+(fn pd_fincases ((ss (List SExpr)) (ctx PdCtx) (path (List Int))) PdR
+  (measure (struct ss))
+  (match ss
+    (Nil PdOk)
+    ((Cons c t)
+     (match
+       (match c
+         ((SList (Cons (SSym ch) (Cons (SInt v) (Cons subS Nil))))
+          (if (sym_eq ch (quote case))
+            (pd_proof subS ctx (pd_at path (append_int "case " (show_int v))))
+            (PdFail
+              path
+              (append_int "a fin-split case is (case INT PROOF)" (pd_got c)))))
+         (_
+           (PdFail
+             path
+             (append_int "a fin-split case is (case INT PROOF)" (pd_got c)))))
+       ((PdFail p m) (PdFail p m))
+       (PdOk (pd_fincases t ctx path))))))
+
+;; ===========================================================================
+;; goal validator — for "could not parse goal" failures
+;; ===========================================================================
+
+(fn pd_binders
+  ((ss (List SExpr)) (ctx PdCtx) (tps (List Symbol)) (path (List Int)))
+  PdR
+  (measure (struct ss))
+  (match ss
+    (Nil PdOk)
+    ((Cons b t)
+     (match b
+       ((SList (Cons (SSym _) (Cons tyS Nil)))
+        (match (parse_type tyS tps)
+          ((Some _) (pd_binders t ctx tps path))
+          (None
+            (PdFail
+              path
+              (append_int
+                "binder type does not parse"
+                (append_int
+                  (pd_got b)
+                  (pd_caps_note
+                    (ex_dedup_ll (pd_bad_caps tyS ctx) Nil)
+                    (pd_ctx_retype ctx))))))))
+       (_ (PdFail path (append_int "each binder is (NAME TYPE)" (pd_got b))))))))
+
+;; for binder-type suggestions the interesting pool is TYPE names, so swap
+;; it into the ctor slot pd_caps_note reads.
+(fn pd_ctx_retype ((c PdCtx)) PdCtx
+  (match c
+    ((PdCtx s ct ty f l v) (PdCtx s ty ty f l v))))
+
+(fn pd_eqs ((ss (List SExpr)) (ctx PdCtx) (path (List Int)) (i Int)) PdR
+  (measure (struct ss))
+  (match ss
+    (Nil PdOk)
+    ((Cons h t)
+     (match (pd_eq h ctx (pd_at_idx path "premise" i) "each premise")
+       ((PdFail p m) (PdFail p m))
+       (PdOk (pd_eqs t ctx path (+ i 1)))))))
+
+(fn pd_goal ((s SExpr) (ctx PdCtx) (tsyms (List Symbol)) (path (List Int))) PdR
+  (match s
+    ((SList (Cons (SSym h) (Cons bindersS (Cons premsS (Cons conclS Nil)))))
+     (if (sym_eq h (quote goal))
+       (match bindersS
+         ((SList binderL)
+          (match
+            (pd_binders
+              binderL
+              ctx
+              (goal_tparams binderL tsyms)
+              (pd_at path "binders"))
+            ((PdFail p m) (PdFail p m))
+            (PdOk
+              (match premsS
+                ((SList premL)
+                 (match (pd_eqs premL ctx path 0)
+                   ((PdFail p m) (PdFail p m))
+                   (PdOk
+                     (pd_eq
+                       conclS
+                       ctx
+                       (pd_at path "conclusion")
+                       "the conclusion"))))
+                (_
+                  (PdFail
+                    path
+                    (append_int
+                      "the premise slot must be a list — () when empty"
+                      (pd_got premsS))))))))
+         (_
+           (PdFail
+             path
+             (append_int
+               "the binder slot must be a list — () when empty"
+               (pd_got bindersS)))))
+       (PdFail
+         path
+         (append_int
+           "a goal is (goal (BINDER ...) (PREMISE ...) (= L R))"
+           (pd_got s)))))
+    (_
+      (PdFail
+        path
+        (append_int
+          "a goal is (goal (BINDER ...) (PREMISE ...) (= L R))"
+          (pd_got s))))))
+
+;; ===========================================================================
+;; context assembly from the built Module (mirrors driver.shard's tiny
+;; accessors: module_ctors / module_type_names / goal_params /
+;; goal_premise_count — redefined locally so this tool does not import the
+;; whole driver)
+;; ===========================================================================
+
+(fn pd_syms_chars ((ss (List Symbol)) (acc (List (List Int)))) (List (List Int))
+  (measure (struct ss))
+  (match ss
+    (Nil acc)
+    ((Cons s r) (pd_syms_chars r (Cons (chars_of_sym s) acc)))))
+
+(fn pd_fn_names ((fs (List FnDef)) (acc (List (List Int)))) (List (List Int))
+  (measure (struct fs))
+  (match fs
+    (Nil acc)
+    ((Cons (FnDef q _ _ _) r)
+     (pd_fn_names r (Cons (chars_of_sym (qn_name q)) acc)))))
+
+(fn pd_ext_names ((es (List ExternDef)) (acc (List (List Int))))
+  (List (List Int))
+  (measure (struct es))
+  (match es
+    (Nil acc)
+    ((Cons (ExternDef q _ _) r)
+     (pd_ext_names r (Cons (chars_of_sym (qn_name q)) acc)))))
+
+(fn pd_claim_names
+  ((cs (List (Pair Symbol (List Symbol)))) (acc (List (List Int))))
+  (List (List Int))
+  (measure (struct cs))
+  (match cs
+    (Nil acc)
+    ((Cons (Pair n _) r) (pd_claim_names r (Cons (chars_of_sym n) acc)))))
+
+(fn pd_param_names ((ps (List Param)) (acc (List (List Int)))) (List (List Int))
+  (measure (struct ps))
+  (match ps
+    (Nil acc)
+    ((Cons (Param n _) r) (pd_param_names r (Cons (chars_of_sym n) acc)))))
+
+(fn pd_eqs_len ((es (List Equation))) Int
+  (measure (struct es))
+  (match es
+    (Nil 0)
+    ((Cons _ t) (+ 1 (pd_eqs_len t)))))
+
+;; the type-name SYMBOL list (Int/Symbol + typedef names) for goal_tparams —
+;; the same composition as driver.shard's module_type_names.
+(fn pd_tsyms_of ((m Module)) (List Symbol)
+  (match m
+    ((Module tds _ _ _ _)
+     (Cons (quote Int) (Cons (quote Symbol) (typedef_names tds))))))
+
+(fn pd_ctx_of ((m Module) (g (Option Goal))) PdCtx
+  (match m
+    ((Module tds fns exts _ claims)
+     (PdCtx
+       (typedef_ctors tds)
+       (pd_syms_chars (typedef_ctors tds) Nil)
+       (Cons "Int" (Cons "Symbol" (pd_syms_chars (typedef_names tds) Nil)))
+       (pd_ext_names exts (pd_fn_names fns Nil))
+       (pd_claim_names claims Nil)
+       (match g
+         (None Nil)
+         ((Some gg)
+          (match gg
+            ((Goal ps _ _) (pd_param_names ps Nil)))))))))
+
+;; ===========================================================================
+;; per-claim entry: diagnose one (claim NAME GOAL PROOF) form against the
+;; built module. Returns output lines; Nil = nothing to say.
+;; ===========================================================================
+
+(fn pd_is_auto ((s SExpr)) Bool
+  (match s
+    ((SSym n) (sym_eq n (quote auto)))
+    ((SList (Cons (SSym n) _)) (sym_eq n (quote auto)))
+    (_ False)))
+
+(fn pd_fail_lines ((name (List Int)) (r PdR)) (List (List Int))
+  (match r
+    (PdOk
+      (Cons
+        (append_int
+          name
+          ": the mirror parser accepts this proof but the kernel refused it — the explainer is out of date (please report)")
+        Nil))
+    ((PdFail path msg)
+     (Cons
+       (append_int name (append_int ": at " (append_int path ":")))
+       (Cons (append_int "  " msg) Nil)))))
+
+;; goal params + premise count read from the RAW goal form (binder names and
+;; premise list length only — enough for ds_proof when parse_goal succeeds
+;; upstream of us).
+(fn pd_diag_proof ((m Module) (name (List Int)) (goalS SExpr) (proofS SExpr))
+  (List (List Int))
+  (match
+    (parse_goal
+      goalS
+      (typedef_ctors (pd_m_tds m))
+      (Cons (quote Int) (Cons (quote Symbol) (typedef_names (pd_m_tds m)))))
+    (None
+      ;; the goal itself is broken — diagnose it instead (the kernel report
+      ;; said "could not parse proof" only when the goal parsed, so this
+      ;; branch serves the goal-failure findings).
+      (pd_fail_lines
+        name
+        (pd_goal goalS (pd_ctx_of m None) (pd_tsyms_of m) "goal")))
+    ((Some g)
+     (if (pd_is_auto proofS) Nil
+     (match
+       (ds_proof m (pd_g_params g) Nil (pd_eqs_len (pd_g_prems g)) Nil proofS)
+       ((DsErr _) Nil)  ; the kernel already printed the desugar message
+       ((DsOk s2)
+        (pd_fail_lines name (pd_proof s2 (pd_ctx_of m (Some g)) "proof"))))))))
+
+(fn pd_diag_goal ((m Module) (name (List Int)) (goalS SExpr)) (List (List Int))
+  (pd_fail_lines name (pd_goal goalS (pd_ctx_of m None) (pd_tsyms_of m) "goal")))
+
+(fn pd_m_tds ((m Module)) (List TypeDef)
+  (match m
+    ((Module tds _ _ _ _) tds)))
+
+(fn pd_g_params ((g Goal)) (List Param)
+  (match g
+    ((Goal ps _ _) ps)))
+
+(fn pd_g_prems ((g Goal)) (List Equation)
+  (match g
+    ((Goal _ prems _) prems)))
+
+;; the kernel-parse twin for the --pin mode: does parse_proof accept s2?
+(fn pd_kernel_accepts ((m Module) (g Goal) (proofS SExpr)) (Option Bool)
+  (match (ds_proof m (pd_g_params g) Nil (pd_eqs_len (pd_g_prems g)) Nil proofS)
+    ((DsErr _) None)
+    ((DsOk s2)
+     (match
+       (parse_proof
+         s2
+         (typedef_ctors (pd_m_tds m))
+         (Cons (quote Int) (Cons (quote Symbol) (typedef_names (pd_m_tds m)))))
+       (None (Some False))
+       ((Some _) (Some True))))))
+
+(fn pd_mirror_accepts ((m Module) (g Goal) (proofS SExpr)) (Option Bool)
+  (match (ds_proof m (pd_g_params g) Nil (pd_eqs_len (pd_g_prems g)) Nil proofS)
+    ((DsErr _) None)
+    ((DsOk s2)
+     (match (pd_proof s2 (pd_ctx_of m (Some g)) "proof")
+       (PdOk (Some True))
+       ((PdFail _ _) (Some False))))))
+
+(fn pd_mirror_msg ((m Module) (g Goal) (proofS SExpr)) (List Int)
+  (match (ds_proof m (pd_g_params g) Nil (pd_eqs_len (pd_g_prems g)) Nil proofS)
+    ((DsErr e) e)
+    ((DsOk s2)
+     (match (pd_proof s2 (pd_ctx_of m (Some g)) "proof")
+       (PdOk "(mirror accepts)")
+       ((PdFail path msg)
+        (append_int "at " (append_int path (append_int ": " msg))))))))
+
+;; ===========================================================================
+;; the --pin mode: parse every claim through BOTH the kernel parse_proof and
+;; the mirror; any accept/reject disagreement is a drift alarm. Returns
+;; (mismatch count, report lines).
+;; ===========================================================================
+
+(fn pd_bool_eq ((a Bool) (b Bool)) Bool (if a b (if b False True)))
+
+(fn pd_pin_go
+  ((m Module) (forms (List SExpr)) (n Int) (k Int) (acc (List (List Int))))
+  (Pair Int (List (List Int)))
+  (measure (struct forms))
+  (match forms
+    (Nil
+      (Pair
+        k
+        (ex_rev_ll
+          (Cons
+            (append_int
+              "PIN "
+              (append_int
+                (show_int n)
+                (append_int
+                  " proofs compared, "
+                  (append_int (show_int k) " mismatch(es)"))))
+            acc)
+          Nil)))
+    ((Cons f rest)
+     (match f
+       ((SList
+          (Cons (SSym h) (Cons (SSym name) (Cons goalS (Cons proofS Nil)))))
+        (if (sym_eq h (quote claim))
+          (if (pd_is_auto proofS) (pd_pin_go m rest n k acc)
+          (match (parse_goal goalS (typedef_ctors (pd_m_tds m)) (pd_tsyms_of m))
+            (None (pd_pin_go m rest n k acc))
+            ((Some g)
+             (match (pd_kernel_accepts m g proofS)
+               (None (pd_pin_go m rest n k acc))
+               ((Some kb)
+                (match (pd_mirror_accepts m g proofS)
+                  (None (pd_pin_go m rest n k acc))
+                  ((Some mb)
+                   (if (pd_bool_eq kb mb) (pd_pin_go m rest (+ n 1) k acc)
+                   (pd_pin_go
+                     m
+                     rest
+                     (+ n 1)
+                     (+ k 1)
+                     (Cons
+                       (if kb
+                         (append_int
+                           "PIN MISMATCH "
+                           (append_int
+                             (chars_of_sym name)
+                             (append_int
+                               ": mirror REJECTS a kernel-accepted proof — "
+                               (pd_mirror_msg m g proofS))))
+                         (append_int
+                           "PIN NOTE "
+                           (append_int
+                             (chars_of_sym name)
+                             ": mirror accepts a kernel-refused proof (mirror out of date)")))
+                       acc))))))))))
+          (pd_pin_go m rest n k acc)))
+       (_ (pd_pin_go m rest n k acc))))))
+
+(fn pd_pin_forms ((m Module) (forms (List SExpr))) (Pair Int (List (List Int)))
+  (pd_pin_go m forms 0 0 Nil))
