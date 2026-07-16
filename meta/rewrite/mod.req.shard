@@ -41,6 +41,10 @@
 (import "../../kernel/module.shard")
 (use (:: kernel term *))
 (use (:: kernel module Type))
+(use (:: kernel module Module))
+(use (:: kernel module FnDef))
+(use (:: kernel module trie_lookup))
+(use (:: kernel module type_eq))
 
 ;; ---- rule/profile values ----------------------------------------------------
 
@@ -65,6 +69,30 @@
   (TrsRootProfileErr (List Int))
   (TrsRootProfileOk TrsRootProfile))
 
+;; A spine profile is a third, deliberately restricted proof domain.  Each
+;; rule may be tested at the root and then only below one repeated constructor
+;; child.  `context` names the transparent function whose checked structural
+;; body authenticated that path; `ctor` and `child` are the inspected path.
+;;
+;; This is weaker than ordinary congruence and stronger than root-only
+;; observation.  It is the right license for checked laws of the form
+;;
+;;   O (context prefix lhs) = O (context prefix rhs)
+;;
+;; where context is an inspected right action/fold.  Keeping the domain in the
+;; rule value makes it impossible to feed the equation to unrestricted
+;; `trs_step` accidentally.
+(type TrsSpine (TrsSpine QName QName Int))
+  ; transparent context function, repeated constructor, recursive child index
+
+(type TrsSpineRule (TrsSpineRule TrsSpine TrsRule))
+
+(type TrsSpineProfile (TrsSpineProfile (List TrsSpineRule)))
+
+(type TrsSpineProfileR
+  (TrsSpineProfileErr (List Int))
+  (TrsSpineProfileOk TrsSpineProfile))
+
 (fn trs_rule_name ((r TrsRule)) QName
   (match r
     ((TrsRule q _ _ _) q)))
@@ -84,6 +112,201 @@
 (fn trs_profile_rules ((p TrsProfile)) (List TrsRule)
   (match p
     ((TrsProfile rs) rs)))
+
+(fn trs_spine_context ((spine TrsSpine)) QName
+  (match spine
+    ((TrsSpine context _ _) context)))
+
+(fn trs_spine_ctor ((spine TrsSpine)) QName
+  (match spine
+    ((TrsSpine _ ctor _) ctor)))
+
+(fn trs_spine_child ((spine TrsSpine)) Int
+  (match spine
+    ((TrsSpine _ _ child) child)))
+
+(fn trs_spine_rule_domain ((item TrsSpineRule)) TrsSpine
+  (match item
+    ((TrsSpineRule spine _) spine)))
+
+(fn trs_spine_rule_value ((item TrsSpineRule)) TrsRule
+  (match item
+    ((TrsSpineRule _ rule) rule)))
+
+(fn trs_spine_profile_rules ((profile TrsSpineProfile))
+  (List TrsSpineRule)
+  (match profile
+    ((TrsSpineProfile rules) rules)))
+
+;; ---- inspected structural contexts ---------------------------------------
+;;
+;; The pure recognizer lives with the proof-domain vocabulary rather than in
+;; any search application.  It derives a repeated-constructor path from a
+;; transparent binary right action.  V1 accepts exactly one nullary base arm
+;; and one first-order constructor rebuild with one recursive field.  Richer
+;; folds can extend this result type without teaching consumers about List or
+;; any ISA program representation.
+
+(type TrsSpineInspectR
+  (TrsSpineInspectErr (List Int))
+  (TrsSpineInspectOk TrsSpine))
+
+(type TrsSpineArm
+  (TrsSpineArmBase)
+  (TrsSpineArmStep QName Int))
+
+(type TrsSpineArmR
+  (TrsSpineArmErr (List Int))
+  (TrsSpineArmOk TrsSpineArm))
+
+(fn trs_pvars_count ((ps (List Pat))) (Option Int)
+  (measure (struct ps))
+  (match ps
+    (Nil (Some 0))
+    ((Cons p rest)
+     (match p
+       ((PVar)
+        (match (trs_pvars_count rest)
+          (None None)
+          ((Some n) (Some (+ 1 n)))))
+       (_ None)))))
+
+(fn trs_spine_arg
+  ((context QName) (width Int) (index Int) (arg Expr)) (Option Bool)
+  (let ((field (BVar (- (- width 1) index))))
+    (if (expr_eq arg field) (Some False)
+    (match arg
+      ((Call q args)
+       (if (qname_eq q context)
+         (match args
+           ((Cons child (Cons suffix Nil))
+            (if (expr_eq child field)
+              (if (expr_eq suffix (BVar width)) (Some True) None)
+              None))
+           (_ None))
+         None))
+      (_ None)))))
+
+(type TrsSpineArgsR
+  (TrsSpineArgsErr (List Int))
+  (TrsSpineArgsOk (Option Int)))
+
+(fn trs_spine_args
+  ((context QName)
+   (width Int)
+   (args (List Expr))
+   (index Int)
+   (recursive (Option Int)))
+  TrsSpineArgsR
+  (measure (struct args))
+  (match args
+    (Nil
+      (if (int_eq index width)
+        (TrsSpineArgsOk recursive)
+        (TrsSpineArgsErr "spine rebuild has too few constructor fields")))
+    ((Cons arg rest)
+     (if (le width index)
+       (TrsSpineArgsErr "spine rebuild has too many constructor fields")
+     (match (trs_spine_arg context width index arg)
+       (None
+         (TrsSpineArgsErr
+           "spine rebuild does not preserve a pattern field exactly"))
+       ((Some is_recursive)
+        (if is_recursive
+          (match recursive
+            ((Some _)
+             (TrsSpineArgsErr "spine rebuild has multiple recursive fields"))
+            (None
+              (trs_spine_args context width rest (+ index 1) (Some index))))
+          (trs_spine_args context width rest (+ index 1) recursive))))))))
+
+(fn trs_spine_arm ((context QName) (arm Arm)) TrsSpineArmR
+  (match arm
+    ((Arm pat body)
+     (match pat
+       ((PCtor _ Nil)
+        (if (expr_eq body (BVar 0))
+          (TrsSpineArmOk (TrsSpineArmBase))
+          (TrsSpineArmErr "spine base arm does not return the suffix")))
+       ((PCtor ctor fields)
+        (match (trs_pvars_count fields)
+          (None
+            (TrsSpineArmErr
+              "spine recursive constructor pattern is not first-order"))
+          ((Some width)
+           (if (lt width 1)
+             (TrsSpineArmErr "spine recursive constructor has no fields")
+           (match body
+             ((Ctor rebuilt args)
+              (if (qname_eq ctor rebuilt)
+                (match (trs_spine_args context width args 0 None)
+                  ((TrsSpineArgsErr msg) (TrsSpineArmErr msg))
+                  ((TrsSpineArgsOk None)
+                   (TrsSpineArmErr "spine constructor arm does not recurse"))
+                  ((TrsSpineArgsOk (Some child))
+                   (TrsSpineArmOk (TrsSpineArmStep ctor child))))
+                (TrsSpineArmErr
+                  "spine constructor arm changes the constructor")))
+             (_
+               (TrsSpineArmErr
+                 "spine constructor arm does not rebuild its constructor")))))))
+       (_ (TrsSpineArmErr "spine function arm is not a constructor arm"))))))
+
+(fn trs_spine_pair
+  ((context QName) (left Arm) (right Arm)) TrsSpineInspectR
+  (match (trs_spine_arm context left)
+    ((TrsSpineArmErr msg) (TrsSpineInspectErr msg))
+    ((TrsSpineArmOk l)
+     (match (trs_spine_arm context right)
+       ((TrsSpineArmErr msg) (TrsSpineInspectErr msg))
+       ((TrsSpineArmOk r)
+        (match l
+          ((TrsSpineArmBase)
+           (match r
+             ((TrsSpineArmStep ctor child)
+              (TrsSpineInspectOk (TrsSpine context ctor child)))
+             (_
+               (TrsSpineInspectErr
+                 "spine function needs one base and one recursive arm"))))
+          ((TrsSpineArmStep ctor child)
+           (match r
+             ((TrsSpineArmBase)
+              (TrsSpineInspectOk (TrsSpine context ctor child)))
+             (_
+               (TrsSpineInspectErr
+                 "spine function needs one base and one recursive arm"))))))))))
+
+(fn trs_inspect_spine ((m Module) (context QName)) TrsSpineInspectR
+  (match m
+    ((Module _ _ _ trie _)
+     (match (trie_lookup context trie)
+       (None (TrsSpineInspectErr "spine context function is absent"))
+       ((Some (FnDef q params ret body))
+        (if (qname_eq q context)
+          (match params
+            ((Cons prefix (Cons suffix Nil))
+             (if (type_eq prefix suffix)
+               (if (type_eq suffix ret)
+                 (match body
+                   ((Match scrut arms)
+                    (if (expr_eq scrut (BVar 1))
+                      (match arms
+                        ((Cons left (Cons right Nil))
+                         (trs_spine_pair context left right))
+                        (_
+                          (TrsSpineInspectErr
+                            "spine function needs exactly two arms")))
+                      (TrsSpineInspectErr
+                        "spine function does not inspect its first argument")))
+                   (_
+                     (TrsSpineInspectErr
+                       "spine function body is not a structural match")))
+                 (TrsSpineInspectErr
+                   "spine context result differs from its suffix type"))
+               (TrsSpineInspectErr
+                 "spine context arguments have different types")))
+            (_ (TrsSpineInspectErr "spine context is not binary")))
+          (TrsSpineInspectErr "spine context lookup changed QName")))))))
 
 (fn trs_len_types ((ts (List Type))) Int
   (measure (struct ts))
@@ -227,6 +450,54 @@
     ((TrsProfileOk (TrsProfile checked))
      (TrsRootProfileOk (TrsRootProfile checked)))))
 
+(fn trs_spine_rule_name_mem
+  ((q QName) (items (List TrsSpineRule))) Bool
+  (measure (struct items))
+  (match items
+    (Nil False)
+    ((Cons (TrsSpineRule _ rule) rest)
+     (if (qname_eq q (trs_rule_name rule)) True
+     (trs_spine_rule_name_mem q rest)))))
+
+(fn trs_spine_rules_reverse
+  ((items (List TrsSpineRule)) (acc (List TrsSpineRule)))
+  (List TrsSpineRule)
+  (measure (struct items))
+  (match items
+    (Nil acc)
+    ((Cons item rest) (trs_spine_rules_reverse rest (Cons item acc)))))
+
+(fn trs_spine_profile_go
+  ((pending (List TrsSpineRule)) (seen (List TrsSpineRule)))
+  TrsSpineProfileR
+  (measure (struct pending))
+  (match pending
+    (Nil
+      (TrsSpineProfileOk
+        (TrsSpineProfile (trs_spine_rules_reverse seen Nil))))
+    ((Cons (TrsSpineRule spine rule) rest)
+     (match spine
+       ((TrsSpine context ctor child)
+        (if (lt child 0)
+          (TrsSpineProfileErr "spine child index is negative")
+        (match rule
+          ((TrsRule name types lhs rhs)
+           (match (trs_rule name types lhs rhs)
+             ((TrsRuleErr msg) (TrsSpineProfileErr msg))
+             ((TrsRuleOk checked)
+              (if (trs_spine_rule_name_mem name seen)
+                (TrsSpineProfileErr "duplicate spine rule name")
+                (trs_spine_profile_go
+                  rest
+                  (Cons
+                    (TrsSpineRule
+                      (TrsSpine context ctor child)
+                      checked)
+                    seen)))))))))))))
+
+(fn trs_spine_profile ((rules (List TrsSpineRule))) TrsSpineProfileR
+  (trs_spine_profile_go rules Nil))
+
 ;; Validated profile construction for consumers that generate cumulative or
 ;; ablated profile families.  Keeping this operation here avoids transparent
 ;; constructor manipulation and preserves rule order while re-running the
@@ -234,6 +505,8 @@
 (fn trs_empty_profile () TrsProfile (TrsProfile Nil))
 
 (fn trs_empty_root_profile () TrsRootProfile (TrsRootProfile Nil))
+
+(fn trs_empty_spine_profile () TrsSpineProfile (TrsSpineProfile Nil))
 
 (fn trs_root_profile_rules ((profile TrsRootProfile)) (List TrsRule)
   (match profile

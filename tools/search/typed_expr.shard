@@ -41,6 +41,12 @@
 ;;;       Each law must have the exact premise-free shape
 ;;;       search_probe(candidate_lhs) = search_probe(candidate_rhs).  Unlike a
 ;;;       canon equation it is licensed only at the whole candidate root.
+;;;   search_spine_context : () -> Symbol          ; optional transparent fold
+;;;   search_spine_profile : () -> List Symbol     ; optional checked laws
+;;;       Each law must have shape
+;;;       search_probe(context prefix lhs) =
+;;;       search_probe(context prefix rhs).  The context body is inspected and
+;;;       the local law is licensed only along its derived constructor spine.
 ;;;   search_screen  : Candidate -> Bool       ; optional census accelerator
 ;;;   search_probe   : Candidate -> Option Observation
 ;;;   search_target  : () -> Observation
@@ -510,6 +516,64 @@
     (None (TeObserverNamesOk Nil))
     ((Some fd) (te_observer_names_fd ctx fd))))
 
+(type TeSpineCfg
+  (TeSpineNone)
+  (TeSpineSome Symbol (List Symbol)))
+
+(type TeSpineCfgR
+  (TeSpineCfgErr (List Int))
+  (TeSpineCfgOk TeSpineCfg))
+
+(fn te_spine_context_fd ((ctx InvokeCtx) (fd FnDef)) (Option Symbol)
+  (match fd
+    ((FnDef _ params ret _)
+     (match params
+       ((Cons _ _) None)
+       (Nil
+         (if (type_eq ret (TCon (qn (quote Symbol)) Nil))
+           (match (invoke_fd_ctx ctx fd Nil)
+             ((Some (SymLit name)) (Some name))
+             (_ None))
+           None))))))
+
+(fn te_spine_names_fd ((ctx InvokeCtx) (fd FnDef)) (Option (List Symbol))
+  (match fd
+    ((FnDef _ params ret _)
+     (match params
+       ((Cons _ _) None)
+       (Nil
+         (if (type_eq ret (te_canon_names_ty))
+           (match (invoke_fd_ctx ctx fd Nil)
+             (None None)
+             ((Some value) (te_symbols value)))
+           None))))))
+
+(fn te_spine_cfg ((ctx InvokeCtx) (m Module)) TeSpineCfgR
+  (match (find_fn (quote search_spine_context) m)
+    (None
+      (match (find_fn (quote search_spine_profile) m)
+        (None (TeSpineCfgOk (TeSpineNone)))
+        ((Some _)
+         (TeSpineCfgErr
+           "search_spine_profile requires search_spine_context"))))
+    ((Some context_fd)
+     (match (find_fn (quote search_spine_profile) m)
+       (None
+         (TeSpineCfgErr
+           "search_spine_context requires search_spine_profile"))
+       ((Some names_fd)
+        (match (te_spine_context_fd ctx context_fd)
+          (None
+            (TeSpineCfgErr
+              "search_spine_context must return one Symbol"))
+          ((Some context)
+           (match (te_spine_names_fd ctx names_fd)
+             (None
+               (TeSpineCfgErr
+                 "search_spine_profile must return List Symbol"))
+             ((Some names)
+              (TeSpineCfgOk (TeSpineSome context names)))))))))))
+
 (fn te_symbol_len ((xs (List Symbol))) Int
   (measure (struct xs))
   (match xs
@@ -576,7 +640,7 @@
   ((checked TgCheckedReductions) (canon_rules Int) (observer_rules Int))
   TeReductionsR
   (match checked
-    ((TgCheckedReductions canon observed)
+    ((TgCheckedReductions canon observed spine)
      (match (te_canon_from_profile canon canon_rules)
        ((TeCanonErr msg) (TeReductionsErr msg))
        ((TeCanonOk c)
@@ -587,7 +651,8 @@
              ((TeCanon _ _ canon_residual _)
               (match o
                 ((TeObserved _ _ observer_residual _)
-                 (match (ms_plan canon_residual observer_residual)
+                 (match
+                   (ms_plan_spine canon_residual observer_residual spine)
                    ((MsPlanErr msg) (TeReductionsErr msg))
                    ((MsPlanOk constraints)
                     (TeReductionsOk
@@ -598,6 +663,7 @@
    (observer QName)
    (canon_names (List Symbol))
    (observer_names (List Symbol))
+   (spine_cfg TeSpineCfg)
    (w World))
   (Pair TeReductionsR World)
   (match (tg_load_checked_scope path w)
@@ -605,7 +671,14 @@
      (match scope_result
        ((TgCheckedScopeErr msg) (Pair (TeReductionsErr msg) w2))
        ((TgCheckedScopeOk scope)
-        (match (tg_checked_reductions scope observer canon_names observer_names)
+        (match
+          (match spine_cfg
+            ((TeSpineNone)
+             (tg_checked_reductions
+               scope observer canon_names observer_names))
+            ((TeSpineSome context spine_names)
+             (tg_checked_spine_reductions
+               scope observer canon_names observer_names context spine_names)))
           ((TgCheckedReductionsErr msg) (Pair (TeReductionsErr msg) w2))
           ((TgCheckedReductionsOk checked)
            (Pair
@@ -616,11 +689,19 @@
              w2))))))))
 
 (fn te_reduction_names_present
-  ((canon_names (List Symbol)) (observer_names (List Symbol))) Bool
+  ((canon_names (List Symbol))
+   (observer_names (List Symbol))
+   (spine_cfg TeSpineCfg)) Bool
   (match canon_names
     (Nil
       (match observer_names
-        (Nil False)
+        (Nil
+          (match spine_cfg
+            ((TeSpineNone) False)
+            ((TeSpineSome _ names)
+             (match names
+               (Nil False)
+               ((Cons _ _) True)))))
         ((Cons _ _) True)))
     ((Cons _ _) True)))
 
@@ -629,10 +710,12 @@
    (observer QName)
    (canon_names (List Symbol))
    (observer_names (List Symbol))
+   (spine_cfg TeSpineCfg)
    (w World))
   (Pair TeReductionsR World)
-  (if (te_reduction_names_present canon_names observer_names)
-    (te_load_some_reductions path observer canon_names observer_names w)
+  (if (te_reduction_names_present canon_names observer_names spine_cfg)
+    (te_load_some_reductions
+      path observer canon_names observer_names spine_cfg w)
     (Pair (TeReductionsOk (te_empty_reductions)) w)))
 
 (fn te_load_canon ((path (List Int)) (names (List Symbol)) (w World))
@@ -1044,6 +1127,7 @@
    (holes Int)
    (canon_rules Int)
    (observer_rules Int)
+   (spine_rules Int)
    (deferred_rules Int)
    (raw_total Int)
    (total Int)
@@ -1068,6 +1152,8 @@
       (show_int canon_rules)
       "\nOBSERVER RULES "
       (show_int observer_rules)
+      "\nSPINE RULES "
+      (show_int spine_rules)
       "\nDEFERRED RULES "
       (show_int deferred_rules)
       "\nRAW "
@@ -1222,6 +1308,7 @@
                   holes
                   canon_rules
                   observer_rules
+                  (ms_plan_spine_rule_count constraints)
                   (ms_plan_rule_count constraints)
                   (if (lt raw_total 0) total raw_total)
                   total
@@ -1344,6 +1431,7 @@
    (search_cfg TeCfg)
    (canon_names (List Symbol))
    (observer_names (List Symbol))
+   (spine_cfg TeSpineCfg)
    (w World))
   World
   (match
@@ -1352,6 +1440,7 @@
       (te_probe_qname probe)
       canon_names
       observer_names
+      spine_cfg
       w)
     ((Pair result w2)
      (match result
@@ -1382,8 +1471,13 @@
                ((TeObserverNamesErr msg)
                 (te_fail (append_int "protocol: " msg) w))
                ((TeObserverNamesOk observer_names)
-                (te_search_reductions path m want ictx scope probe target_fd
-                  witness_mode search_cfg canon_names observer_names w)))))))))))
+                (match (te_spine_cfg ictx m)
+                  ((TeSpineCfgErr msg)
+                   (te_fail (append_int "protocol: " msg) w))
+                  ((TeSpineCfgOk spine_cfg)
+                   (te_search_reductions path m want ictx scope probe target_fd
+                     witness_mode search_cfg canon_names observer_names
+                     spine_cfg w)))))))))))))
 (fn main ((w World)) World
   (match (get_args w)
     ((Pair args w1)

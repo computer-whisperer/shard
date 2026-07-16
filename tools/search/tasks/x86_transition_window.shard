@@ -8,11 +8,17 @@
 ;;; checked schema extraction.
 
 (import "../../../kernel/stdlib.shard")
+(import "../../../kernel/facts.shard")
 (import "../../../models/x86/x86.shard")
 (import "../../../models/x86/peephole.shard")
+(import "../../../std/bits")
 (import "../../../std/mem")
 (import "../typed_grammar.shard")
 (use (:: tools search typed_grammar *))
+(use (:: kernel facts mod_lo))
+(use (:: std bits bxor_self))
+(use (:: models x86 peephole rget_rset_same))
+(use (:: models x86 peephole rset_shadow))
 (use (:: models x86 peephole xseq_xor_self_absorbs))
 
 ;; Generic program spine.
@@ -51,7 +57,7 @@
 (fn search_forms () (List Symbol) (list (quote ctor)))
 (fn search_ints () (List Int) Nil)
 (fn search_symbols () (List Symbol) Nil)
-(fn search_depth () Int 4)
+(fn search_depth () Int 5)
 
 (fn xtw_ctor ((name Symbol)) TgScopeHead (TgScopeCtor name))
 
@@ -74,8 +80,9 @@
     (list
       (xtw_seq_zone (quote sequence0) (quote instruction0) (quote sequence1))
       (xtw_seq_zone (quote sequence1) (quote instruction1) (quote sequence2))
+      (xtw_seq_zone (quote sequence2) (quote instruction2) (quote sequence3))
       (TgScopeZone
-        (quote sequence2)
+        (quote sequence3)
         (list (xtw_ctor (quote Nil)))
         Nil
         Nil
@@ -91,6 +98,15 @@
           (xtw_route (quote XBin) 2 (quote source))))
       (TgScopeZone
         (quote instruction1)
+        (list (xtw_ctor (quote XBin)))
+        Nil
+        Nil
+        (list
+          (xtw_route (quote XBin) 0 (quote operation))
+          (xtw_route (quote XBin) 1 (quote register))
+          (xtw_route (quote XBin) 2 (quote source))))
+      (TgScopeZone
+        (quote instruction2)
         (list (xtw_ctor (quote XBin)))
         Nil
         Nil
@@ -138,6 +154,225 @@
 
 (fn xtw_module () ((:: x86 XModule))
   ((:: x86 MkXModule) Nil 0 0))
+
+;; Transparent right action used to authenticate contextual sequence laws.
+;; theorem_scope derives the Cons/tail path from this body; the task never
+;; states that path as configuration data.
+(fn xtw_plug
+  ((prefix (List XInstr)) (suffix (List XInstr))) (List XInstr)
+  (measure (struct prefix))
+  (match prefix
+    (Nil suffix)
+    ((Cons head tail) (Cons head (xtw_plug tail suffix)))))
+
+;; A total transition projection for the searched XOR-register fragment.  It
+;; agrees with the corresponding x86 instruction arm on valid machine states;
+;; wrapping inputs makes the local algebra unconditional even for arbitrary
+;; prefixes quantified by contextual theorems.  Non-fragment instructions are
+;; observational no-ops and are absent from the reflected candidate scope.
+(fn xtw_sem_step
+  ((instruction XInstr) (rs ((:: x86 Regs)))) ((:: x86 Regs))
+  (match instruction
+    ((XBin XXor d (SReg s))
+     ((:: x86 rset)
+       rs
+       d
+       (bxor
+         ((:: x86 wrap64) ((:: x86 rget) rs d))
+         ((:: x86 wrap64) ((:: x86 rget) rs s)))))
+    (_ rs)))
+
+(fn xtw_sem_run
+  ((body (List XInstr)) (rs ((:: x86 Regs)))) ((:: x86 Regs))
+  (measure (struct body))
+  (match body
+    (Nil rs)
+    ((Cons instruction rest)
+     (xtw_sem_run rest (xtw_sem_step instruction rs)))))
+
+(fn xtw_sem_observe
+  ((body (List XInstr)) (files (List ((:: x86 Regs))))) (List Int)
+  (measure (struct files))
+  (match files
+    (Nil Nil)
+    ((Cons rs rest)
+     (xtw_app
+       (xtw_regs_key (xtw_sem_run body rs))
+       (xtw_sem_observe body rest)))))
+
+(claim xtw_wrap_nonneg
+  (goal ((x Int)) () (= (le 0 ((:: x86 wrap64) x)) True))
+  (chain
+    (steps ((unfold (:: x86 wrap64) lhs)))
+    (rewrite-with
+      (lemma mod_lo)
+      lr
+      lhs
+      ()
+      ((steps ((compute both)) refl))
+      refl)))
+
+;; The local state transformer is equal before either common continuation is
+;; run.  This is the algebraic kernel later closed under an inspected prefix.
+(claim xtw_sem_xor_self_state
+  (goal
+    ((rs ((:: x86 Regs))) (d Reg) (s Reg))
+    ()
+    (=
+      (xtw_sem_step
+        (XBin XXor d (SReg d))
+        (xtw_sem_step (XBin XXor d (SReg s)) rs))
+      (xtw_sem_step (XBin XXor d (SReg d)) rs)))
+  (chain
+    (have hleft
+      (=
+        (bxor
+          ((:: x86 wrap64)
+            (bxor
+              ((:: x86 wrap64) ((:: x86 rget) rs d))
+              ((:: x86 wrap64) ((:: x86 rget) rs s))))
+          ((:: x86 wrap64)
+            (bxor
+              ((:: x86 wrap64) ((:: x86 rget) rs d))
+              ((:: x86 wrap64) ((:: x86 rget) rs s)))))
+        0)
+      (rewrite-with
+        (lemma bxor_self)
+        lr
+        lhs
+        ((inst a
+           ((:: x86 wrap64)
+             (bxor
+               ((:: x86 wrap64) ((:: x86 rget) rs d))
+               ((:: x86 wrap64) ((:: x86 rget) rs s))))))
+        ((steps
+           ((rewrite (lemma xtw_wrap_nonneg) lr lhs true ()))
+           refl))
+        refl))
+    (have hright
+      (=
+        (bxor
+          ((:: x86 wrap64) ((:: x86 rget) rs d))
+          ((:: x86 wrap64) ((:: x86 rget) rs d)))
+        0)
+      (rewrite-with
+        (lemma bxor_self)
+        lr
+        lhs
+        ((inst a ((:: x86 wrap64) ((:: x86 rget) rs d))))
+        ((steps
+           ((rewrite (lemma xtw_wrap_nonneg) lr lhs true ()))
+           refl))
+        refl))
+    (steps
+      ((unfold xtw_sem_step both)
+       (compute both (stop (:: x86 rget) (:: x86 rset) bxor
+         (:: x86 wrap64)))
+       (rewrite (lemma rget_rset_same) lr lhs true ())
+       (rewrite (premise hleft) lr lhs true ())
+       (rewrite (lemma rset_shadow) lr lhs true ())
+       (rewrite (premise hright) lr rhs true ()))
+      refl)))
+
+(claim xtw_sem_xor_self_tail
+  (goal
+    ((tail (List XInstr)) (rs ((:: x86 Regs))) (d Reg) (s Reg))
+    ()
+    (=
+      (xtw_sem_run
+        (Cons (XBin XXor d (SReg s))
+          (Cons (XBin XXor d (SReg d)) tail))
+        rs)
+      (xtw_sem_run (Cons (XBin XXor d (SReg d)) tail) rs)))
+  (steps
+    ((unfold xtw_sem_run both)
+     (reduce both)
+     (unfold xtw_sem_run lhs)
+     (reduce lhs)
+     (rewrite (lemma xtw_sem_xor_self_state) lr lhs true ()))
+    refl))
+
+(claim xtw_sem_xor_self_context
+  (goal
+    ((prefix (List XInstr))
+     (tail (List XInstr))
+     (rs ((:: x86 Regs)))
+     (d Reg)
+     (s Reg))
+    ()
+    (=
+      (xtw_sem_run
+        (xtw_plug
+          prefix
+          (Cons (XBin XXor d (SReg s))
+            (Cons (XBin XXor d (SReg d)) tail)))
+        rs)
+      (xtw_sem_run
+        (xtw_plug prefix (Cons (XBin XXor d (SReg d)) tail))
+        rs)))
+  (induct prefix
+     ((case Nil
+       (steps
+         ((unfold xtw_plug both)
+          (reduce both)
+          (rewrite (lemma xtw_sem_xor_self_tail) lr lhs true ()))
+         refl))
+     (case Cons
+       (head rest)
+       (steps
+         ((simp both)
+          (rewrite (hyp ih) lr lhs true ()))
+         refl)))))
+
+(claim xtw_sem_xor_self_observe
+  (goal
+    ((prefix (List XInstr))
+     (tail (List XInstr))
+     (files (List ((:: x86 Regs))))
+     (d Reg)
+     (s Reg))
+    ()
+    (=
+      (xtw_sem_observe
+        (xtw_plug
+          prefix
+          (Cons (XBin XXor d (SReg s))
+            (Cons (XBin XXor d (SReg d)) tail)))
+        files)
+      (xtw_sem_observe
+        (xtw_plug prefix (Cons (XBin XXor d (SReg d)) tail))
+        files)))
+  (induct files
+    ((case Nil (steps ((simp both)) refl))
+     (case Cons
+       (rs rest)
+       (steps
+         ((unfold xtw_sem_observe both)
+          (reduce both)
+          (rewrite (lemma xtw_sem_xor_self_context) lr lhs true ())
+          (rewrite (hyp ih) lr lhs true ()))
+         refl)))))
+
+(claim xtw_sem_xor_self_observe_root
+  (goal
+    ((files (List ((:: x86 Regs)))) (d Reg) (s Reg))
+    ()
+    (=
+      (xtw_sem_observe
+        (Cons (XBin XXor d (SReg s))
+          (Cons (XBin XXor d (SReg d)) Nil))
+        files)
+      (xtw_sem_observe (Cons (XBin XXor d (SReg d)) Nil) files)))
+  (induct files
+    ((case Nil (steps ((simp both)) refl))
+     (case Cons
+       (rs rest)
+       (steps
+         ((unfold xtw_sem_observe both)
+          (reduce both)
+          (rewrite (lemma xtw_sem_xor_self_tail) lr lhs true ())
+          (rewrite (hyp ih) lr lhs true ()))
+         refl)))))
 
 ;; Fuel tracks structural sequence cost.  This makes cost-changing transition
 ;; theorems compositional instead of asserting false same-fuel equality at the
@@ -379,72 +614,46 @@
       (search_probe
         (list (XBin XXor d (SReg s)) (XBin XXor d (SReg d))))
       (search_probe (list (XBin XXor d (SReg d))))))
-  (chain
-    (have h0
-      (=
-        (xtw_eval
-          (list (XBin XXor d (SReg s)) (XBin XXor d (SReg d)))
-          (xtw_regs 0 0 0))
-        (xtw_eval (list (XBin XXor d (SReg d))) (xtw_regs 0 0 0)))
-      (rewrite-with
-        (lemma xtw_eval_xor_self_absorbs) lr lhs ()
-        ((steps ((compute lhs)) refl)
-         (steps ((compute lhs)) refl)
-         (steps ((compute lhs)) refl))
-        refl))
-    (have h1
-      (=
-        (xtw_eval
-          (list (XBin XXor d (SReg s)) (XBin XXor d (SReg d)))
-          (xtw_regs 1 2 4))
-        (xtw_eval (list (XBin XXor d (SReg d))) (xtw_regs 1 2 4)))
-      (rewrite-with
-        (lemma xtw_eval_xor_self_absorbs) lr lhs ()
-        ((steps ((compute lhs)) refl)
-         (steps ((compute lhs)) refl)
-         (steps ((compute lhs)) refl))
-        refl))
-    (have h2
-      (=
-        (xtw_eval
-          (list (XBin XXor d (SReg s)) (XBin XXor d (SReg d)))
-          (xtw_regs 3 5 6))
-        (xtw_eval (list (XBin XXor d (SReg d))) (xtw_regs 3 5 6)))
-      (rewrite-with
-        (lemma xtw_eval_xor_self_absorbs) lr lhs ()
-        ((steps ((compute lhs)) refl)
-         (steps ((compute lhs)) refl)
-         (steps ((compute lhs)) refl))
-        refl))
-    (have h3
-      (=
-        (xtw_eval
-          (list (XBin XXor d (SReg s)) (XBin XXor d (SReg d)))
-          (xtw_regs 170 85 255))
-        (xtw_eval (list (XBin XXor d (SReg d))) (xtw_regs 170 85 255)))
-      (rewrite-with
-        (lemma xtw_eval_xor_self_absorbs) lr lhs ()
-        ((steps ((compute lhs)) refl)
-         (steps ((compute lhs)) refl)
-         (steps ((compute lhs)) refl))
-        refl))
-    (steps
-      ((unfold search_probe both)
-       (unfold xtw_observe both)
-       (compute both (stop xtw_eval xtw_regs))
-       (rewrite (premise h0) lr lhs true ())
-       (rewrite (premise h1) lr lhs true ())
-       (rewrite (premise h2) lr lhs true ())
-       (rewrite (premise h3) lr lhs true ()))
-      refl)))
+  (steps
+    ((unfold search_probe both)
+     (rewrite (lemma xtw_sem_xor_self_observe_root) lr lhs true ()))
+    refl))
+
+;; The same local law with arbitrary prefix and tail is the checked spine
+;; license.  Its candidate equation retains `tail` as a rule metavariable, so
+;; the engine can find the two-instruction window anywhere in a longer body.
+(claim xtw_xor_self_absorbs_spine
+  (goal
+    ((prefix (List XInstr))
+     (tail (List XInstr))
+     (d Reg)
+     (s Reg))
+    ()
+    (=
+      (search_probe
+        (xtw_plug
+          prefix
+          (Cons (XBin XXor d (SReg s))
+            (Cons (XBin XXor d (SReg d)) tail))))
+      (search_probe
+        (xtw_plug prefix (Cons (XBin XXor d (SReg d)) tail)))))
+  (steps
+    ((unfold search_probe both)
+     (rewrite (lemma xtw_sem_xor_self_observe) lr lhs true ()))
+    refl))
 
 (fn search_observer_profile () (List Symbol)
-  (list (quote xtw_xor_self_absorbs)))
+  Nil)
+
+(fn search_spine_context () Symbol (quote xtw_plug))
+
+(fn search_spine_profile () (List Symbol)
+  (list (quote xtw_xor_self_absorbs_spine)))
 
 (fn search_probe ((body (List XInstr))) (Option (List Int))
-  (Some (xtw_observe body (xtw_files))))
+  (Some (xtw_sem_observe body (xtw_files))))
 
 ;; Required by the ordinary typed task protocol. Mining uses every behavior,
 ;; while this harmless target/witness pins the empty transformer spelling.
-(fn search_target () (List Int) (xtw_observe Nil (xtw_files)))
+(fn search_target () (List Int) (xtw_sem_observe Nil (xtw_files)))
 (fn search_witness () (List XInstr) Nil)

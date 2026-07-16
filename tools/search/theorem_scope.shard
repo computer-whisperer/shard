@@ -416,3 +416,259 @@
      (match (trs_root_profile rules)
        ((TrsRootProfileErr msg) (TgObserverCompileErr msg))
        ((TrsRootProfileOk profile) (TgObserverCompileOk profile))))))
+
+;; ---- observer-scoped structural-spine licenses ---------------------------
+;;
+;; Root observation does not justify arbitrary congruence, but a theorem may
+;; quantify the exact prefix context in which a local reduction is valid:
+;;
+;;   O (plug prefix lhs) = O (plug prefix rhs)
+;;
+;; This section accepts that stronger theorem only after inspecting `plug`'s
+;; checked FnDef.  V1 recognizes a transparent binary right action with one
+;; nullary base arm and one first-order constructor arm:
+;;
+;;   plug prefix suffix =
+;;     match prefix with Leaf -> suffix
+;;                     | C fields -> C fields[child := plug child suffix]
+;;
+;; The constructor and recursive child are derived from the body.  Neither
+;; theorem names nor candidate/ISA constructors can assert the spine.
+
+(fn tg_param_count ((ps (List Param))) Int
+  (measure (struct ps))
+  (match ps
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (tg_param_count rest)))))
+
+(fn tg_bvar_occurs ((needle Int) (e Expr)) Bool
+  (measure (struct e))
+  (match e
+    ((BVar k) (int_eq needle k))
+    ((Ctor _ args) (tg_bvar_occurs_list needle args))
+    ((Call _ args) (tg_bvar_occurs_list needle args))
+    ((Match scrut arms)
+     (if (tg_bvar_occurs needle scrut) True
+     (tg_bvar_occurs_arms needle arms)))
+    ((Let bindings body)
+     (if (tg_bvar_occurs_list needle bindings) True
+     (tg_bvar_occurs needle body)))
+    ((If c t e2)
+     (if (tg_bvar_occurs needle c) True
+     (if (tg_bvar_occurs needle t) True (tg_bvar_occurs needle e2))))
+    (_ False)))
+
+(fn tg_bvar_occurs_list ((needle Int) (es (List Expr))) Bool
+  (measure (struct es))
+  (match es
+    (Nil False)
+    ((Cons e rest)
+     (if (tg_bvar_occurs needle e) True
+     (tg_bvar_occurs_list needle rest)))))
+
+(fn tg_bvar_occurs_arms ((needle Int) (arms (List Arm))) Bool
+  (measure (struct arms))
+  (match arms
+    (Nil False)
+    ((Cons (Arm _ body) rest)
+     (if (tg_bvar_occurs needle body) True
+     (tg_bvar_occurs_arms needle rest)))))
+
+(fn tg_context_args ((context QName) (e Expr))
+  (Option (Pair Expr Expr))
+  (match e
+    ((Call q args)
+     (if (qname_eq q context)
+       (match args
+         ((Cons prefix (Cons local Nil)) (Some (Pair prefix local)))
+         (_ None))
+       None))
+    (_ None)))
+
+(type TgSpineObserverLicense
+  (TgSpineObserverLicense
+    QName QName TrsSpine (List Param) Expr Expr TgLawEvidence))
+  ; citation, exact observer, inspected spine, params, local lhs/rhs, evidence
+
+(type TgSpineObserverProfileR
+  (TgSpineObserverProfileErr Symbol (List Int))
+  (TgSpineObserverProfileOk (List TgSpineObserverLicense)))
+
+(type TgOneSpineObserverR
+  (TgOneSpineObserverErr (List Int))
+  (TgOneSpineObserverOk TgSpineObserverLicense))
+
+(fn tg_spine_observer_goal
+  ((q QName)
+   (observer QName)
+   (spine TrsSpine)
+   (goal Goal)
+   (evidence TgLawEvidence))
+  TgOneSpineObserverR
+  (match goal
+    ((Goal params premises (Equation lhs rhs))
+     (match premises
+       ((Cons _ _)
+        (TgOneSpineObserverErr
+          "premise-bearing theorem is not a v1 spine reduction"))
+       (Nil
+        (match (tg_unary_observer_arg observer lhs)
+          (None
+            (TgOneSpineObserverErr
+              "spine reduction lhs is not the exact unary observer"))
+          ((Some contextual_lhs)
+           (match (tg_unary_observer_arg observer rhs)
+             (None
+               (TgOneSpineObserverErr
+                 "spine reduction rhs is not the exact unary observer"))
+             ((Some contextual_rhs)
+              (match spine
+                ((TrsSpine context _ _)
+                 (match (tg_context_args context contextual_lhs)
+                   (None
+                     (TgOneSpineObserverErr
+                       "spine lhs does not use the inspected context"))
+                   ((Some (Pair prefix local_lhs))
+                    (match (tg_context_args context contextual_rhs)
+                      (None
+                        (TgOneSpineObserverErr
+                          "spine rhs does not use the inspected context"))
+                      ((Some (Pair prefix2 local_rhs))
+                       (if (expr_eq prefix prefix2)
+                         (match prefix
+                           ((BVar index)
+                            (if (lt index 0)
+                              (TgOneSpineObserverErr
+                                "spine prefix parameter index is negative")
+                            (if (le (tg_param_count params) index)
+                              (TgOneSpineObserverErr
+                                "spine prefix parameter is out of range")
+                            (if (tg_bvar_occurs index local_lhs)
+                              (TgOneSpineObserverErr
+                                "spine prefix is correlated with the local lhs")
+                            (if (tg_bvar_occurs index local_rhs)
+                              (TgOneSpineObserverErr
+                                "spine prefix is correlated with the local rhs")
+                              (TgOneSpineObserverOk
+                                (TgSpineObserverLicense
+                                  q observer spine params local_lhs local_rhs
+                                  evidence)))))))
+                           (_
+                             (TgOneSpineObserverErr
+                               "spine prefix is not a theorem parameter")))
+                         (TgOneSpineObserverErr
+                           "spine theorem uses different prefixes")))))))))))))))))
+
+(fn tg_spine_observer_q ((license TgSpineObserverLicense)) QName
+  (match license
+    ((TgSpineObserverLicense q _ _ _ _ _ _) q)))
+
+(fn tg_spine_observer_mem
+  ((q QName) (licenses (List TgSpineObserverLicense))) Bool
+  (measure (struct licenses))
+  (match licenses
+    (Nil False)
+    ((Cons license rest)
+     (if (qname_eq q (tg_spine_observer_q license)) True
+     (tg_spine_observer_mem q rest)))))
+
+(fn tg_spine_observer_snoc
+  ((licenses (List TgSpineObserverLicense))
+   (license TgSpineObserverLicense))
+  (List TgSpineObserverLicense)
+  (measure (struct licenses))
+  (match licenses
+    (Nil (Cons license Nil))
+    ((Cons head rest)
+     (Cons head (tg_spine_observer_snoc rest license)))))
+
+(fn tg_one_spine_observer
+  ((m Module)
+   (th Theory)
+   (srcs (List SrcEntry))
+   (q QName)
+   (observer QName)
+   (spine TrsSpine))
+  TgOneSpineObserverR
+  (match (tg_checked_goal m th srcs q)
+    ((TgCheckedGoalErr msg) (TgOneSpineObserverErr msg))
+    ((TgCheckedGoalOk goal evidence)
+     (tg_spine_observer_goal q observer spine goal evidence))))
+
+(fn tg_capture_spine_observer_go
+  ((m Module)
+   (ctx RCtx)
+   (th Theory)
+   (srcs (List SrcEntry))
+   (observer QName)
+   (spine TrsSpine)
+   (names (List Symbol))
+   (acc (List TgSpineObserverLicense)))
+  TgSpineObserverProfileR
+  (measure (struct names))
+  (match names
+    (Nil (TgSpineObserverProfileOk acc))
+    ((Cons name rest)
+     (let ((q (rhead (qn name) ctx)))
+       (if (tg_claim_item m q)
+         (if (tg_spine_observer_mem q acc)
+           (TgSpineObserverProfileErr name "duplicate spine reduction")
+           (match (tg_one_spine_observer m th srcs q observer spine)
+             ((TgOneSpineObserverErr msg)
+              (TgSpineObserverProfileErr name msg))
+             ((TgOneSpineObserverOk license)
+              (tg_capture_spine_observer_go
+                m ctx th srcs observer spine rest
+                (tg_spine_observer_snoc acc license)))))
+         (TgSpineObserverProfileErr
+           name "spine reduction is not a claim item in scope"))))))
+
+(fn tg_capture_spine_observer
+  ((m Module)
+   (ctx RCtx)
+   (th Theory)
+   (srcs (List SrcEntry))
+   (observer QName)
+   (context Symbol)
+   (names (List Symbol)))
+  TgSpineObserverProfileR
+  (let ((context_q (rhead (qn context) ctx)))
+    (match (trs_inspect_spine m context_q)
+      ((TrsSpineInspectErr msg)
+       (TgSpineObserverProfileErr context msg))
+      ((TrsSpineInspectOk spine)
+       (tg_capture_spine_observer_go
+         m ctx th srcs observer spine names Nil)))))
+
+(type TgSpineObserverCompileR
+  (TgSpineObserverCompileErr (List Int))
+  (TgSpineObserverCompileOk TrsSpineProfile))
+
+(type TgSpineObserverRulesR
+  (TgSpineObserverRulesErr (List Int))
+  (TgSpineObserverRulesOk (List TrsSpineRule)))
+
+(fn tg_compile_spine_observer_rules
+  ((licenses (List TgSpineObserverLicense))) TgSpineObserverRulesR
+  (measure (struct licenses))
+  (match licenses
+    (Nil (TgSpineObserverRulesOk Nil))
+    ((Cons (TgSpineObserverLicense q _ spine params lhs rhs _) rest)
+     (match (trs_rule q (tg_param_types params) lhs rhs)
+       ((TrsRuleErr msg) (TgSpineObserverRulesErr msg))
+       ((TrsRuleOk rule)
+        (match (tg_compile_spine_observer_rules rest)
+          ((TgSpineObserverRulesErr msg) (TgSpineObserverRulesErr msg))
+          ((TgSpineObserverRulesOk rules)
+           (TgSpineObserverRulesOk
+             (Cons (TrsSpineRule spine rule) rules)))))))))
+
+(fn tg_compile_spine_observer
+  ((licenses (List TgSpineObserverLicense))) TgSpineObserverCompileR
+  (match (tg_compile_spine_observer_rules licenses)
+    ((TgSpineObserverRulesErr msg) (TgSpineObserverCompileErr msg))
+    ((TgSpineObserverRulesOk rules)
+     (match (trs_spine_profile rules)
+       ((TrsSpineProfileErr msg) (TgSpineObserverCompileErr msg))
+       ((TrsSpineProfileOk profile)
+        (TgSpineObserverCompileOk profile))))))

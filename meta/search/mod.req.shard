@@ -25,9 +25,10 @@
 ;;; semantics.
 ;;;
 ;;; Ordinary TrsProfile rules are searched at every candidate subterm.
-;;; TrsRootProfile rules are matched only at the whole candidate root.  This
-;;; preserves the proof-domain distinction even while both kinds share the
-;;; same partial-pattern machinery.
+;;; TrsRootProfile rules are matched only at the whole candidate root.
+;;; TrsSpineProfile rules are matched at the root and only down their
+;;; authenticated repeated-constructor child.  This preserves all three proof
+;;; domains even while they share the same partial-pattern machinery.
 ;;;
 ;;; Left-linear rules use the prepared wildcard matcher.  A nonlinear rule is
 ;;; retained as a residual constraint and uses a binding environment: its
@@ -307,21 +308,35 @@
 
 ;; ---- validated residual plan ----------------------------------------------
 
-(type MsPlan (MsPlan TrsProfile TrsRootProfile))
+(type MsPlan (MsPlan TrsProfile TrsRootProfile TrsSpineProfile))
 
 (type MsPlanR (MsPlanErr (List Int)) (MsPlanOk MsPlan))
 
-(fn ms_plan ((everywhere TrsProfile) (root TrsRootProfile)) MsPlanR
+(fn ms_plan_spine
+  ((everywhere TrsProfile)
+   (root TrsRootProfile)
+   (spine TrsSpineProfile))
+  MsPlanR
   (match (trs_profile (trs_profile_rules everywhere))
     ((TrsProfileErr msg) (MsPlanErr msg))
     ((TrsProfileOk checked)
      (match (trs_root_profile (trs_root_profile_rules root))
        ((TrsRootProfileErr msg) (MsPlanErr msg))
        ((TrsRootProfileOk checked_root)
-        (MsPlanOk (MsPlan checked checked_root)))))))
+        (match (trs_spine_profile (trs_spine_profile_rules spine))
+          ((TrsSpineProfileErr msg) (MsPlanErr msg))
+          ((TrsSpineProfileOk checked_spine)
+           (MsPlanOk (MsPlan checked checked_root checked_spine)))))))))
+
+;; Compatibility constructor for the original two domains.
+(fn ms_plan ((everywhere TrsProfile) (root TrsRootProfile)) MsPlanR
+  (ms_plan_spine everywhere root (trs_empty_spine_profile)))
 
 (fn ms_empty_plan () MsPlan
-  (MsPlan (trs_empty_profile) (trs_empty_root_profile)))
+  (MsPlan
+    (trs_empty_profile)
+    (trs_empty_root_profile)
+    (trs_empty_spine_profile)))
 
 (fn ms_rules_empty ((rules (List TrsRule))) Bool
   (match rules
@@ -330,9 +345,13 @@
 
 (fn ms_plan_is_empty ((plan MsPlan)) Bool
   (match plan
-    ((MsPlan everywhere root)
+    ((MsPlan everywhere root spine)
      (if (ms_rules_empty (trs_profile_rules everywhere))
-       (ms_rules_empty (trs_root_profile_rules root))
+       (if (ms_rules_empty (trs_root_profile_rules root))
+         (match (trs_spine_profile_rules spine)
+           (Nil True)
+           ((Cons _ _) False))
+         False)
        False))))
 
 (fn ms_rule_count ((rules (List TrsRule))) Int
@@ -343,10 +362,30 @@
 
 (fn ms_plan_rule_count ((plan MsPlan)) Int
   (match plan
-    ((MsPlan everywhere root)
+    ((MsPlan everywhere root spine)
      (+
-       (ms_rule_count (trs_profile_rules everywhere))
-       (ms_rule_count (trs_root_profile_rules root))))))
+       (+
+         (ms_rule_count (trs_profile_rules everywhere))
+         (ms_rule_count (trs_root_profile_rules root)))
+       (ms_spine_rule_count (trs_spine_profile_rules spine))))))
+
+(fn ms_plan_spine_rule_count ((plan MsPlan)) Int
+  (match plan
+    ((MsPlan _ _ spine)
+     (ms_spine_rule_count (trs_spine_profile_rules spine)))))
+
+(fn ms_spine_rule_count ((items (List TrsSpineRule))) Int
+  (measure (struct items))
+  (match items
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (ms_spine_rule_count rest)))))
+
+(fn ms_spine_plain_rules ((items (List TrsSpineRule))) (List TrsRule)
+  (measure (struct items))
+  (match items
+    (Nil Nil)
+    ((Cons (TrsSpineRule _ rule) rest)
+     (Cons rule (ms_spine_plain_rules rest)))))
 
 ;; ---- grammar choice view ---------------------------------------------------
 
@@ -1023,6 +1062,126 @@
   (MsVerdictAgreeClear)
   (MsVerdictAgreeRedex QName))
 
+;; ---- authenticated-spine scan --------------------------------------------
+;;
+;; One item owns both its local rule and its traversal domain.  Unlike the
+;; everywhere scanner, recursion can enter only the constructor/child pair
+;; carried by the checked spine license.  An open grammar hole is treated as
+;; one exact region: only unanimous Clear or same-citation Redex results are
+;; promoted, otherwise the region remains Blocked on that hole.
+
+(fn ms_spine_item_alts
+  ((fuel Int)
+   (facts (List MsHoleFacts))
+   (grammar Grammar)
+   (asg (List (Pair Int Int)))
+   (item TrsSpineRule)
+   (alts (List Expr))
+   (hole_id Int)
+   (agree MsVerdictAgree))
+  MsVerdict
+  (measure fuel)
+  (if (lt fuel 1) (MsErr "constraint spine alternative fuel exhausted")
+  (match alts
+    (Nil
+      (match agree
+        ((MsVerdictAgreeStart)
+         (MsErr "constraint spine reached an empty alternative domain"))
+        ((MsVerdictAgreeClear) (MsClear))
+        ((MsVerdictAgreeRedex q) (MsRedex q))))
+    ((Cons alt rest)
+     (match (ms_spine_item (- fuel 1) facts grammar asg item alt)
+       ((MsErr msg) (MsErr msg))
+       ((MsBlocked _) (MsBlocked hole_id))
+       ((MsClear)
+        (match agree
+          ((MsVerdictAgreeRedex _) (MsBlocked hole_id))
+          (_
+            (ms_spine_item_alts
+              (- fuel 1) facts grammar asg item rest hole_id
+              (MsVerdictAgreeClear)))))
+       ((MsRedex q)
+        (match agree
+          ((MsVerdictAgreeClear) (MsBlocked hole_id))
+          ((MsVerdictAgreeRedex prior)
+           (if (qname_eq prior q)
+             (ms_spine_item_alts
+               (- fuel 1) facts grammar asg item rest hole_id agree)
+             (MsBlocked hole_id)))
+          ((MsVerdictAgreeStart)
+           (ms_spine_item_alts
+             (- fuel 1) facts grammar asg item rest hole_id
+             (MsVerdictAgreeRedex q))))))))))
+
+(fn ms_spine_item
+  ((fuel Int)
+   (facts (List MsHoleFacts))
+   (grammar Grammar)
+   (asg (List (Pair Int Int)))
+   (item TrsSpineRule)
+   (candidate Expr))
+  MsVerdict
+  (measure fuel)
+  (if (lt fuel 1) (MsErr "constraint spine scan fuel exhausted")
+  (match (ms_node (- fuel 1) grammar asg candidate)
+    ((MsNodeErr msg) (MsErr msg))
+    ((MsNodeOpen hole_id alts)
+     (ms_spine_item_alts
+       (- fuel 1) facts grammar asg item alts hole_id
+       (MsVerdictAgreeStart)))
+    ((MsNodeExpr node)
+     (match item
+       ((TrsSpineRule (TrsSpine _ ctor child) rule)
+        (let
+          ((root
+             (ms_rules_root
+               (- fuel 1) facts grammar asg (Cons rule Nil) node None)))
+          (match root
+            ((MsErr msg) (MsErr msg))
+            ((MsRedex q) (MsRedex q))
+            (_
+              (match node
+                ((Ctor q args)
+                 (if (qname_eq q ctor)
+                   (match (nth_opt args child)
+                     (None
+                       (MsErr
+                         "authenticated spine child is outside constructor"))
+                     ((Some tail)
+                      (ms_merge
+                        root
+                        (ms_spine_item
+                          (- fuel 1) facts grammar asg item tail))))
+                   root))
+                (_ root)))))))))))
+
+(fn ms_spines
+  ((fuel Int)
+   (facts (List MsHoleFacts))
+   (grammar Grammar)
+   (asg (List (Pair Int Int)))
+   (items (List TrsSpineRule))
+   (candidate Expr)
+   (prior MsVerdict))
+  MsVerdict
+  (measure fuel)
+  (if (lt fuel 1) (MsErr "constraint spine profile fuel exhausted")
+  (match items
+    (Nil prior)
+    ((Cons item rest)
+     (let
+       ((next
+          (ms_merge
+            prior
+            (ms_spine_item
+              (- fuel 1) facts grammar asg item candidate))))
+       (match next
+         ((MsErr msg) (MsErr msg))
+         ((MsRedex q) (MsRedex q))
+         (_
+           (ms_spines
+             (- fuel 1) facts grammar asg rest candidate next))))))))
+
 ;; Whole-subtree consensus for an unassigned grammar hole.  Different redex
 ;; citations are kept blocked: every alternative is reducible, but `MsRedex q`
 ;; promises one citation valid across the complete represented region.
@@ -1503,8 +1662,8 @@
 
 (fn ms_prepare ((match_fuel Int) (plan MsPlan) (grammar Grammar)) MsPrepareR
   (match plan
-    ((MsPlan everywhere root)
-     (match (ms_plan everywhere root)
+    ((MsPlan everywhere root spine)
+     (match (ms_plan_spine everywhere root spine)
        ((MsPlanErr msg) (MsPrepareErr msg))
        ((MsPlanOk checked)
         (match (g_wf grammar)
@@ -1514,11 +1673,14 @@
              ((patterns
                 (ms_patterns_rules
                   match_fuel
-                  (trs_root_profile_rules root)
+                  (ms_spine_plain_rules (trs_spine_profile_rules spine))
                   (ms_patterns_rules
                     match_fuel
-                    (trs_profile_rules everywhere)
-                    Nil))))
+                    (trs_root_profile_rules root)
+                    (ms_patterns_rules
+                      match_fuel
+                      (trs_profile_rules everywhere)
+                      Nil)))))
              (match grammar
                ((Grammar entries)
                 (match
@@ -1560,10 +1722,11 @@
   (measure fuel)
   (if (lt fuel 1) (MsErr "constraint plan fuel exhausted")
   (match plan
-    ((MsPlan everywhere root)
+    ((MsPlan everywhere root spine)
      (let
        ((everywhere_rules (trs_profile_rules everywhere))
-        (root_rules (trs_root_profile_rules root)))
+        (root_rules (trs_root_profile_rules root))
+        (spine_rules (trs_spine_profile_rules spine)))
        (let
          ((below
             (if (ms_rules_empty everywhere_rules) (MsClear)
@@ -1579,17 +1742,31 @@
            ((MsErr msg) (MsErr msg))
            ((MsRedex q) (MsRedex q))
            (_
-             (ms_merge
-               below
-               (if (ms_rules_empty root_rules) (MsClear)
-               (ms_rules_root_cached
-                 (- fuel 1)
-                 facts
-                 root_facts
-                 grammar
-                 asg
-                 root_rules
-                 candidate)))))))))))
+             (let
+               ((with_spine
+                  (ms_spines
+                    (- fuel 1)
+                    facts
+                    grammar
+                    asg
+                    spine_rules
+                    candidate
+                    below)))
+               (match with_spine
+                 ((MsErr msg) (MsErr msg))
+                 ((MsRedex q) (MsRedex q))
+                 (_
+                   (ms_merge
+                     with_spine
+                     (if (ms_rules_empty root_rules) (MsClear)
+                     (ms_rules_root_cached
+                       (- fuel 1)
+                       facts
+                       root_facts
+                       grammar
+                       asg
+                       root_rules
+                       candidate))))))))))))))
 
 (fn ms_check
   ((fuel Int)

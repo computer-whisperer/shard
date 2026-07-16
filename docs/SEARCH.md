@@ -2482,12 +2482,82 @@ nevertheless real narrowing pressure: all nine instances are rejected by the
 checked theorem before semantic acceptance, including the three literal
 double-self-XOR programs.
 
-Two general gaps are now sharply separated.  First, empirical disequality
-guards need a checked conditional-rule representation and a lazy premise
-evaluator before the six-member cancellation schema can enter pressure.
-Second, applying semantic window laws below arbitrary sequence prefixes needs
-a checked contextual/spine closure, not promotion of observer equality to
-unrestricted term congruence.  Fuel-normalized sequence observers and the
-shifted model theorem supply the semantic side of that closure; the remaining
-work is to represent and authenticate its application domain in the shared
-rewrite/search vocabulary.
+The 91-program figures above record the initial depth-4/two-instruction mining
+configuration.  The task has since grown to the depth-5 experiment described
+below; the earlier tables remain the baseline that produced the proposal.
+
+#### Checked structural-spine closure
+
+The contextual gap is now closed for a deliberately small, general structural
+fragment.  `meta/rewrite` has three distinct equation domains:
+
+* `TrsProfile`: ordinary candidate equality, valid below every constructor;
+* `TrsRootProfile`: exact observer equality, valid only for the whole program;
+* `TrsSpineProfile`: contextual observer equality, valid at the root and then
+  only down one authenticated repeated-constructor child.
+
+A spine path is not configuration data.  The reusable `trs_inspect_spine`
+examines a transparent binary `FnDef` and accepts exactly a structural right
+action with one base arm and one constructor arm:
+
+    plug prefix suffix =
+      match prefix with
+        Leaf       -> suffix
+        C fields   -> C fields[child := plug child suffix]
+
+It derives the context QName, constructor QName, and recursive child index
+from the locally-nameless body.  A regression derives `Cons/1` from an
+append-shaped function and refuses a function which recurses in two fields.
+The recognizer is in `meta/`; checked Theory/provenance joining remains in
+`tools/search/theorem_scope.shard`.
+
+The checked theorem shape is:
+
+    search_probe (plug prefix lhs) = search_probe (plug prefix rhs)
+
+`prefix` must be an otherwise-unused theorem parameter.  Capture refuses a
+fixed prefix, different prefixes on the two sides, premise-bearing laws, and
+the subtle correlated case where the prefix parameter occurs again inside the
+local lhs or rhs.  The stripped local equation retains other parameters such
+as a sequence `tail`, allowing a window law to match in the middle of a
+program.  Tasks select the transparent context and ordered laws through the
+optional `search_spine_context` and `search_spine_profile` functions.
+
+`meta/search` validates all three domains in one `MsPlan`.  Existing two-domain
+callers still use `ms_plan`; `ms_plan_spine` adds the third profile.  Its
+partial matcher uses the existing left-linear cache and nonlinear equality
+environment, treats an unassigned grammar hole by exact consensus, and enters
+only the inspected constructor child.  It never upgrades observer equality to
+unrestricted congruence.
+
+The x86 transition task now contains a transparent `xtw_plug` and a proven
+prefix-and-tail law for the mined XOR/self-XOR schema.  The contextual proof
+factors through a total transition projection for the searched register-XOR
+fragment; the earlier `xeval_seq` theorem remains the full-model semantic
+kernel for the original root experiment.  The contextual theorem is
+premise-free and is checked before capture:
+
+    probe (prefix ++ [xor d,s; xor d,d] ++ tail)
+      = probe (prefix ++ [xor d,d] ++ tail)
+
+At depth 5 the explicit scope contains every length-zero-through-three
+sequence: `1 + 9 + 81 + 729 = 820` programs.  The spine rule removes 162:
+
+    root window:       9 + 81 = 90
+    one-step prefix:       81
+    overlap:                9
+    union:          90 + 81 - 9 = 162
+
+Thus 72 reductions are genuinely new contextual pressure which no root-only
+profile can see.  Enumerative and lazy runs agree exactly:
+
+    TYPED: SPINE RULES 1; RAW 820; ACCEPTED 658; CONSTRAINT KILLED 162
+    SUPERPOSED: SPINE RULES 1; REGIONS 772; FORKS 387; CONSTRAINT KILLED 162
+    AUDIT accepted 658; constrained 162; exhaustive agreement OK
+
+`REMOVED` is still zero: a nonlinear variable-length window is residual
+pressure, not a separable formation clause.  The next independent gap remains
+checked conditional rules for the mined `d != s` cancellation schema.  The
+next spine-specific refinements are stable whole-hole verdict caching and a
+multi-arm/multi-spine inspector for recursive datatypes with more than one
+structural branch.
