@@ -2140,6 +2140,94 @@ imp_mixed's program):
   (./sha256sum — weld = hand block walk ∘ imp_w_shblock; the wasm
   block leg carries it meanwhile).
 
+**V2-8 — translator seal-points: the sha block x86 leg goes FULL
+(2026-07-15/16; two commits: V2-8a the foundation, V2-8b the
+emission).** The user-ruled unlock (option (a) of the V2-7 fence): the
+translator gives long straight-line code scratch-clean state-reset
+boundaries, and the x86 chain factoring rides them.
+
+- **V2-8a — the chunk grid + the blueprint.** to_x86 grows
+  ix_chunks/ix_capq/ix_cjoin/ix_cstmts: a top-level statement list
+  chunks into maximal flat runs of at most 24 statements (const-set
+  runs never straddle a cut — the mixed tier's loop pieces pop them
+  off a chunk tail; loops/branches are singleton chunks; loop bodies
+  are NOT chunked — the V2-5a entry/back-edge seals already
+  discipline them, and mid-body seals would cost every iteration).
+  Between two consecutive FLAT chunks the emission inserts the
+  leading chunk's own ix_zs, so straight-line code crosses a
+  scratch-clean boundary at least every 24 statements (~0.1% sha
+  cost; bodies whose runs stay within the cap emit byte-identically).
+  The append seam family (isapp/istn/ist_flat/ist_cont/ist_seam)
+  relocated from to_wasm to models/imp — it is target-neutral and
+  both legs now cite it. xs_scont = the seq-grain continuation
+  adapter. examples/sqxc_probe.shard grew the validated blueprint:
+  sqxc_sl1 (the open-tail seal-point sub-lemma — a 26-stmt body
+  chunks 24+2, the sub-lemma walks chunk 1 THROUGH ITS SEAL and hands
+  ANY tail rw to xs_scont) + sqxc_lscomp (ist_seam splits the imp
+  side at the seal point, the sub-lemma cite rewrites the machine
+  side, ONE case-on of the SHARED standalone run absorbs every
+  outcome, il_slen exposes the segment exit, the tail walks inline).
+- **V2-8b — the emission; the V2-7 finding re-measured.** The first
+  V2-8b attempt cut the chain at chunk boundaries and let each
+  mid-flat lemma WALK its chunk inline, citing the next boundary at
+  the walked tail — and failed exactly as the V2-7 record warned: an
+  open-walker compute past the folded rest-fn call leaves match
+  residue no lemma can cite, and a clean call-grain park exists only
+  where a STUCK SCRUTINEE freezes the continuation arm (the stopped
+  iwhile at loop exits; the opaque exposed run at seal points). So a
+  mid-flat leg never walks its machine side at all: the walk lives in
+  the leg's OPEN-TAIL sub-lemma (sqs_x_<nm>_c<B>: the chunk's instrs
+  through its seal over ANY tail rw = xm_scont of the standalone imp
+  run; unpremised; splits from the chunk's own lw_stmts walk at fresh
+  locals), and the chain lemma only composes — machine-side-only
+  opener, hsp (the folded rest-fn call = isapp of the closed chunk fn
+  and the NEXT folded rest call: no spelled spines anywhere),
+  hfg/ist_seam/hfb at exact fuel counts, the sub-lemma cite, the
+  shared-run case-on, il_slen exposure (mxc_exit reused verbatim,
+  Doc-parametric), and the next boundary cited at the parked leaf,
+  where the xeval_seq stop keeps the machine side at the folded call.
+- **xm_scont** (to_x86) = xs_scont carrying the three scratch
+  residues (ix_mout's seq-grain sibling; xs_scont = xm_scont at zero
+  residues): a chunk's seal re-zeroes exactly what the chunk wrote —
+  those slots continue at 0 — while scratch the chunk never touches
+  PASSES THROUGH and the residue restores it at the continuation's
+  register file. Residues are read off the model's own ix_zs answer
+  (mxx_zflags scans the invoked seal — the seal IS the dirt set) and
+  bind BY MATCHING at cite sites, never by spelling.
+- **Leg grammar** (tools/impgen): boundary lemmas at every interior
+  seal AND every loop exit; rest fns cut at both. The chunk before a
+  loop stays IN the loop's lemma (no seal separates them — its dirt
+  rides into the loop construct and ix_mout restores it), so loop
+  legs are V2-7 VERBATIM, and the entire V2-7 fuel arithmetic
+  survives with seal-aware widths (mxx_segm counts interior seals;
+  every formula holds with the new W). mxx_chunks invokes ix_stmts
+  AND ix_zs per chunk (the model answers; the slicer's mxc_capq and
+  the translator's ix_capq deliberately spell the same cap
+  discipline). Single-chunk pins emit byte-identically to V2-7 — the
+  imx dev pin is byte-stable.
+- **Dev fixture**: it_imxl_fn (examples/imp_mixed.shard) = two
+  26-stmt spans crossing the seal grid. Covers: the b=0 scratch-clean
+  sub-lemma; the b≥1 sub-lemma entered with a band tree riding za
+  (the pre-loop chunk's unsealed store dirt rides the dirt-free loop
+  — the pass-through witness at seal grain); the loop leg whose chunk
+  is not the span head; the ground leg behind the terminal seal. x86
+  out 421/0; wasm out 132/0 (the wasm emitter generates the new pin
+  through its own capped factoring, untouched).
+- **THE WALL FALLS**: the sha block x86 leg generates FULL — tie +
+  wid twins + 3 counter-tied workers + 13 rest fns + 10 seal-point
+  sub-lemmas + 14 boundary lemmas (cmp_x_shblock_b13..b1 +
+  imp_x_shblock) — and the whole sha x86 out checks 721/0 at ~1.2GB
+  peak RSS, against V2-7's measured >66GB for the single-lemma finish
+  leg alone. The interior seals also shrink the STATEMENT-tier
+  bridges (shext measured 3.4GB in V2-7; the whole regenerated file
+  now peaks under half that) — a seal kills the accumulated scratch
+  trees mid-walk. The mxx_maxspan fence is DELETED; no tie+note path
+  remains in the x86 mixed tier.
+- Gates: all other outs byte-stable at canonical raw paths; driver 69
+  green; corpus FAIL-set == baseline-65.
+- NEXT: I2e (./sha256sum — weld = hand block walk ∘ imp_w_shblock;
+  both block legs now stand FULL).
+
 
 ## 7. Non-goals, stated once
 

@@ -4673,17 +4673,20 @@
                     (_ (EErr "translated value shape (internal)"))))))))))
        (_ (EErr "pin value shape (internal)"))))))
 
-;; --- the x86 mixed tier (V2-7): loop-head cuts, inline segment walks -----
+;; --- the x86 mixed tier (V2-7, seal-point cuts V2-8): ---------------------
 ;; The wasm composition factors segments into standalone lemmas joined
-;; by ist_seam/es_scont; that factoring cannot cross to the register
-;; machine without the generator learning machine semantics (a segment
-;; lemma's continuation must RECONSTRUCT the register file, and the
-;; scratch registers carry concrete trees between pieces that only the
-;; checker should compute). The x86 leg instead cuts its chain at LOOP
-;; HEADS: each lemma owns one loop piece plus the flat tail up to the
-;; next loop head, walks the tail INLINE by the statement-tier split
-;; spine (scratch states stay concrete all the way), and cites the
-;; next boundary lemma over opaque exposed locals. Scratch discipline
+;; by ist_seam/es_scont; V2-7 measured that an x86 chain lemma cannot
+;; reset its walked state mid-span (goal size x steps, the capacity
+;; wall) and that a segment lemma's continuation must RECONSTRUCT the
+;; register file. The V2-8 translator seal points resolve both: the
+;; chain cuts at every chunk seal AND every loop, and the mid-flat
+;; legs carry open-tail sub-lemmas (sqs_x_*) whose xm_scont adapter
+;; rebuilds the register file FROM THE SEAL -- 0 where the chunk's
+;; seal re-zeroes, a pass-through residue where it never writes; the
+;; scratch trees that ride between pieces bind by matching, never by
+;; spelling. Loop legs walk their final chunk inline exactly as V2-7
+;; (the chunk's dirt rides into the loop construct, ix_mout restores
+;; it) and expose by il_wlen. Scratch discipline
 ;; (probe: examples/sqxc_probe.shard): boundary lemmas quantify
 ;; exactly the FULL body's seal-set registers (the terminal ix_zs
 ;; zeroes them before the final XNorm) and spell 0 elsewhere; workers
@@ -4810,8 +4813,13 @@
              (Some rest)))
           (_ (Some rest))))))))
 
-;; per-SEGMENT machine chunks by invoking ix_stmts on each segment
-(fn mxx_chunks ((pcs (List MxPc)) (mtr Module)) (Option (List (List Expr)))
+;; per-CHUNK machine translation + seal, both by INVOKE (the model
+;; answers: ix_stmts for the chunk's instrs, ix_zs for the seal the
+;; translator inserts after it -- V2-8's interior seal points; the
+;; slicer's segments ARE the translator's chunk grid, mxc_capq and
+;; ix_capq deliberately spell the same cap discipline)
+(fn mxx_chunks ((pcs (List MxPc)) (mtr Module))
+  (Option (List (Pair (List Expr) (List Expr))))
   (measure (struct pcs))
   (match pcs
     (Nil (Some Nil))
@@ -4829,9 +4837,15 @@
                  (match (lpe_spine chE)
                    (None None)
                    ((Some ch)
-                    (match (mxx_chunks rest mtr)
+                    (match (invoke mtr (quote ix_zs) (Cons chE Nil))
                       (None None)
-                      ((Some more) (Some (Cons ch more)))))))
+                      ((Some zv)
+                       (match (lpe_spine zv)
+                         (None None)
+                         ((Some zl)
+                          (match (mxx_chunks rest mtr)
+                            (None None)
+                            ((Some more) (Some (Cons (Pair ch zl) more)))))))))))
                 (_ None)))))))
        ((MxPL _ _ _ _ _ _) (mxx_chunks rest mtr))))))
 
@@ -5092,44 +5106,48 @@
                 ((EErr m) (EErr m))
                 ((EOk rest) (EOk (DCat wd rest)))))))))))))
 
-;; --- leg grammar: one lemma per [segments + loop], boundary AFTER the
-;; loop (the exposure leaf's continuation arm holds the next boundary's
-;; FOLDED call, protected by the walker stops -- an open-walker tail
-;; walk would leave match residue no folded statement can cite). The
-;; counter respell happens at INSTRUCTION grain BEFORE the walk
-;; ((XMovRI reg K) / (ISet gi (IConst K)) respelled to the
+;; --- leg grammar: chunk-grain cuts (V2-8). A boundary lemma sits
+;; after EVERY translator chunk seal AND after every loop, so each
+;; lemma's state is bounded by one capped chunk and RESETS at every
+;; cut to fresh binders (the reset the V2-7 capacity wall demanded;
+;; the wasm capped factoring gets it the same way). A chunk followed
+;; by a loop stays IN the loop's lemma (no seal separates them -- its
+;; scratch dirt rides into the loop construct and ix_mout restores
+;; it), so loop legs keep the V2-7 shape verbatim: walk the chunk +
+;; const-run inline, cite the counter-tied worker, expose by il_wlen,
+;; cite the next boundary at the leaf. A MID-FLAT leg never walks its
+;; machine side at all: the walk lives in the leg's open-tail
+;; sub-lemma (sqs_x_*, braked by the opaque tail), and the chain
+;; lemma composes -- ist_seam splits the imp side at the seal point,
+;; the sub-lemma cite rewrites the machine side, il_slen exposes the
+;; shared standalone run, and the next boundary is cited at the
+;; parked leaf, where the machine side sits at the FOLDED rest-fn
+;; call under the xeval_seq stop (an inline walk would overshoot the
+;; brake into match residue -- the V2-7 finding, re-measured here).
+;; The counter respell happens at INSTRUCTION grain BEFORE the loop
+;; walk ((XMovRI reg K) / (ISet gi (IConst K)) respelled to the
 ;; (int_of_nat K) payload at first occurrence -- single in the subject
 ;; because deeper legs are folded behind their rest fns), so the walk
 ;; itself carries the worker's counter spelling into the stuck loop
 ;; term and the cite binds everything by matching. Scrutinees and the
 ;; exposure entry spell from the leg's own lw_stmts walk state.
 
-(fn mxx_segrun ((pcs (List MxPc))) (Pair (List MxPc) (List MxPc))
+(fn mxx_legs ((pcs (List MxPc))) (List (Pair (List MxPc) (Option MxPc)))
   (measure (struct pcs))
   (match pcs
-    (Nil (Pair Nil Nil))
+    (Nil Nil)
     ((Cons pc t)
      (match pc
-       ((MxPS a b)
-        (match (mxx_segrun t)
-          ((Pair segs rest) (Pair (Cons (MxPS a b) segs) rest))))
-       ((MxPL _ _ _ _ _ _) (Pair Nil (Cons pc t)))))))
-
-(fn mxx_legs ((fuel Int) (pcs (List MxPc)))
-  (Option (List (Pair (List MxPc) (Option MxPc))))
-  (measure fuel (by arith (list 1 0)) (by arith (list 1 1)))
-  (if (lt fuel 1) None
-  (match (mxx_segrun pcs)
-    ((Pair segs rest)
-     (match rest
-       (Nil
-         (match segs
-           (Nil (Some Nil))
-           ((Cons _ _) (Some (Cons (Pair segs None) Nil)))))
-       ((Cons lp t)
-        (match (mxx_legs (- fuel 1) t)
-          (None None)
-          ((Some more) (Some (Cons (Pair segs (Some lp)) more))))))))))
+       ((MxPL _ _ _ _ _ _) (Cons (Pair Nil (Some pc)) (mxx_legs t)))
+       ((MxPS a e)
+        (match t
+          (Nil (Cons (Pair (Cons (MxPS a e) Nil) None) Nil))
+          ((Cons pc2 t2)
+           (match pc2
+             ((MxPL _ _ _ _ _ _)
+              (Cons (Pair (Cons (MxPS a e) Nil) (Some pc2)) (mxx_legs t2)))
+             ((MxPS _ _)
+              (Cons (Pair (Cons (MxPS a e) Nil) None) (mxx_legs t)))))))))))
 
 (fn mxx_nlg ((l (List (Pair (List MxPc) (Option MxPc))))) Int
   (measure (struct l))
@@ -5137,22 +5155,23 @@
     (Nil 0)
     ((Cons _ t) (+ 1 (mxx_nlg t)))))
 
-;; segment-run metrics over the chunk stream
-(fn mxx_segm ((segs (List MxPc)) (msls (List (List Expr))))
-  (Pair (Pair Int Int) (List (List Expr)))
-  (measure (struct segs))
+;; the leg's chunk metrics from the invoked stream: (machine width,
+;; (seal width, stmt count)); a chunkless leg passes msls through
+(fn mxx_segm
+  ((segs (List MxPc)) (msls (List (Pair (List Expr) (List Expr)))))
+  (Pair (Pair Int (Pair Int Int)) (List (Pair (List Expr) (List Expr))))
   (match segs
-    (Nil (Pair (Pair 0 0) msls))
-    ((Cons pc t)
+    (Nil (Pair (Pair 0 (Pair 0 0)) msls))
+    ((Cons pc _)
      (match pc
        ((MxPS segst _)
         (match msls
-          (Nil (Pair (Pair 0 0) Nil))
-          ((Cons sl mrest)
-           (match (mxx_segm t mrest)
-             ((Pair (Pair wsum tsum) mfin)
-              (Pair (Pair (+ (ilen_e sl) wsum) (+ (isz_top segst) tsum)) mfin))))))
-       ((MxPL _ _ _ _ _ _) (Pair (Pair 0 0) msls))))))
+          (Nil (Pair (Pair 0 (Pair 0 0)) Nil))
+          ((Cons (Pair sl zl) mrest)
+           (Pair
+             (Pair (ilen_e sl) (Pair (ilen_e zl) (isz_top segst)))
+             mrest))))
+       ((MxPL _ _ _ _ _ _) (Pair (Pair 0 (Pair 0 0)) msls))))))
 
 ;; the leg's own statement list: segment stmts then the const-run
 (fn mxx_segstmts ((segs (List MxPc))) (List IStmt)
@@ -5176,11 +5195,13 @@
     (Nil Nil)
     ((Cons (Pair si v) t) (Cons (ISet si (IConst v)) (mxx_csetstmts t)))))
 
-;; whole-claim fuels at leg grain (MAX constraint per loop)
+;; whole-claim fuels at leg grain (MAX constraint per loop); mid-flat
+;; legs consume their chunk + its seal exactly (the cite alignment
+;; needs the chain arithmetic exact at every boundary)
 (fn mxx_ag
   ((legs (List (Pair (List MxPc) (Option MxPc))))
    (lis (List MxXLi))
-   (msls (List (List Expr)))
+   (msls (List (Pair (List Expr) (List Expr))))
    (cm Int)
    (ci Int)
    (am Int)
@@ -5191,9 +5212,13 @@
     (Nil (Pair (imax am (+ cm 8)) (imax ai (+ ci 8))))
     ((Cons (Pair segs olp) rest)
      (match (mxx_segm segs msls)
-       ((Pair (Pair wsum tsum) msls2)
+       ((Pair (Pair w (Pair z tn)) msls2)
         (match olp
-          (None (Pair (imax am (+ (+ cm wsum) 8)) (imax ai (+ (+ ci tsum) 8))))
+          (None
+            (match rest
+              (Nil (Pair (imax am (+ (+ cm w) 8)) (imax ai (+ (+ ci tn) 8))))
+              ((Cons _ _)
+               (mxx_ag rest lis msls2 (+ cm (+ w z)) (+ ci tn) am ai))))
           ((Some pc)
            (match pc
              ((MxPL _ kg lbody _ _ csets)
@@ -5205,14 +5230,14 @@
                      rest
                      lrest
                      msls2
-                     (+ (+ cm wsum) (+ (+ q zlen) 1))
-                     (+ (+ ci tsum) (+ q 1))
+                     (+ (+ cm w) (+ (+ q zlen) 1))
+                     (+ (+ ci tn) (+ q 1))
                      (imax
                        am
-                       (+ (+ (+ (+ cm wsum) (+ (+ q zlen) 4)) (+ wlen 4)) (+ kg 1)))
+                       (+ (+ (+ (+ cm w) (+ (+ q zlen) 4)) (+ wlen 4)) (+ kg 1)))
                      (imax
                        ai
-                       (+ (+ (+ (+ ci tsum) (+ q 2)) (+ (gcost lbody) 5)) (+ kg 1))))))))
+                       (+ (+ (+ (+ ci tn) (+ q 2)) (+ (gcost lbody) 5)) (+ kg 1))))))))
              (_ (Pair (imax am (+ cm 8)) (imax ai (+ ci 8))))))))))))
 
 ;; --- rest fns: cuts AFTER each loop; spines brake at the next call --------
@@ -5253,7 +5278,7 @@
 (fn mxx_rests
   ((legs (List (Pair (List MxPc) (Option MxPc))))
    (lis (List MxXLi))
-   (msls (List (List Expr)))
+   (msls (List (Pair (List Expr) (List Expr))))
    (nm (List Int))
    (ssE (List Expr))
    (els (List Expr))
@@ -5266,14 +5291,27 @@
     (Nil (DStr ""))
     ((Cons (Pair segs olp) rest)
      (match (mxx_segm segs msls)
-       ((Pair (Pair wsum tsum) msls2)
+       ((Pair (Pair w (Pair z tn)) msls2)
         (let
           ((lastp
              (match rest
                (Nil True)
                ((Cons _ _) False))))
           (match olp
-            (None (mxx_rest1 nm b ssE els ip mp tsum wsum True))
+            (None
+              (if lastp (mxx_rest1 nm b ssE els ip mp tn w True)
+              (DCat
+                (mxx_rest1 nm b ssE els ip mp tn (+ w z) False)
+                (mxx_rests
+                  rest
+                  lis
+                  msls2
+                  nm
+                  ssE
+                  els
+                  (+ ip tn)
+                  (+ mp (+ w z))
+                  (+ b 1)))))
             ((Some pc)
              (match pc
                ((MxPL _ _ _ _ _ csets)
@@ -5283,8 +5321,8 @@
                    (let
                      ((q (mxc_clen csets)))
                      (let
-                       ((ki (+ tsum (+ q 1)))
-                        (kw (+ wsum (+ (+ q zlen) 1))))
+                       ((ki (+ tn (+ q 1)))
+                        (kw (+ w (+ (+ q zlen) 1))))
                        (DCat
                          (mxx_rest1 nm b ssE els ip mp ki kw lastp)
                          (mxx_rests
@@ -5383,6 +5421,275 @@
 
 (fn mxx_locdoc ((lc (List Expr)) (gi Int) (kd Doc)) Doc
   (dconc (list (DStr "(list") (mxx_locdoc_go lc 0 gi kd) (DStr ")"))))
+
+;; --- seal-point segment sub-lemmas (V2-8) --------------------------------
+;; A mid-flat leg's machine walk lives in an OPEN-TAIL sub-lemma (the
+;; opaque tail rw brakes the walker at the boundary; an inline chain
+;; walk would overshoot the folded rest-fn call into match residue --
+;; the V2-7 finding, re-measured here). The sub-lemma states: the
+;; chunk's instrs THROUGH ITS SEAL over ANY tail = xm_scont of the
+;; standalone imp run, with scratch residues read off the seal (0
+;; where the seal re-zeroes, the entry binder where the chunk never
+;; writes -- the model's ix_zs answer IS the dirt set).
+
+(fn mxx_zmov ((e Expr) (rn Symbol)) Bool
+  (match e
+    ((Ctor q args)
+     (if (sym_eq (qn_name q) (quote XMovRI))
+       (match args
+         ((Cons r _)
+          (match r
+            ((Ctor rq _) (sym_eq (qn_name rq) rn))
+            (_ False)))
+         (_ False))
+       False))
+    (_ False)))
+
+(fn mxx_zhas ((zl (List Expr)) (rn Symbol)) Bool
+  (measure (struct zl))
+  (match zl
+    (Nil False)
+    ((Cons h t) (if (mxx_zmov h rn) True (mxx_zhas t rn)))))
+
+(fn mxx_zflags ((zl (List Expr))) (Pair Bool (Pair Bool Bool))
+  (Pair
+    (mxx_zhas zl (quote RAX))
+    (Pair (mxx_zhas zl (quote R10)) (mxx_zhas zl (quote R11)))))
+
+;; the sub-lemma split spine: mid computes brake at (stop xm_scont);
+;; the final arm and the trap arms compute open, so both sides
+;; converge on the braked-tail residue / the trap
+(fn mxxs_spine ((gs (List GSplit)) (i Int) (msz Int)) Doc
+  (measure (struct gs))
+  (match gs
+    (Nil (DStr "refl"))
+    ((Cons g t)
+     (match g
+       ((GShared e)
+        (dconc
+          (list
+            (DStr "(case-on ")
+            (pr_e e)
+            (match t
+              (Nil
+                (DStr
+                  " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both))) "))
+              ((Cons _ _)
+               (DStr
+                 " Bool ((case True (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both (stop xm_scont)))) ")))
+            (mxxs_spine t (+ i 1) msz)
+            (DStr
+              ")) (case False (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both))) refl))))"))))
+       ((GMemHi a)
+        (dconc
+          (list
+            (DStr "(case-on (lt ")
+            (pr_e a)
+            (DStr " ")
+            (dint msz)
+            (DStr ") Bool ((case True (chain ")
+            (mxw_mh
+              i
+              a
+              msz
+              "True"
+              (match t
+                (Nil (DStr ""))
+                ((Cons _ _) (DStr "(stop xm_scont)"))))
+            (DStr " ")
+            (mxxs_spine t (+ i 1) msz)
+            (DStr ")) (case False (chain ")
+            (mxw_mh i a msz "False" (DStr ""))
+            (DStr " refl))))"))))))))
+
+;; one seal-point sub-lemma: the chunk fn + the open-tail claim.
+;; UNPREMISED; splits from the chunk's own walk at fresh locals.
+(fn mxx_seg1
+  ((nm (List Int))
+   (b Int)
+   (nl Int)
+   (msz Int)
+   (tn Int)
+   (segs (List MxPc))
+   (msls (List (Pair (List Expr) (List Expr))))
+   (gs (List GSplit)))
+  Doc
+  (match segs
+    (Nil (DStr ""))
+    ((Cons pc _)
+     (match pc
+       ((MxPL _ _ _ _ _ _) (DStr ""))
+       ((MxPS _ segE)
+        (match msls
+          (Nil (DStr ""))
+          ((Cons (Pair sl zl) _)
+           (match (mxx_zflags zl)
+             ((Pair da (Pair db dc))
+              (let
+                ((cnm
+                   (dconc
+                     (list (DStr "gb_") (DStr nm) (DStr "_c") (dint b) (DStr "_i")))))
+                (dconc
+                  (list
+                    (DStr "(fn ")
+                    cnm
+                    (DStr " () (List IStmt) ")
+                    (mxc_lst segE)
+                    (DStr ")")
+                    (DStr (nl))
+                    (DStr (nl))
+                    (DStr "(claim sqs_x_")
+                    (DStr nm)
+                    (DStr "_c")
+                    (dint b)
+                    (DStr " (goal (")
+                    (d_binds_go
+                      nl
+                      (DStr
+                        "(za Int) (zb Int) (zc Int) (rw (List XInstr)) (m Mem) (f Nat) (g Nat) (restfs (List XFunc))"))
+                    (DStr ") () (= (xeval_seq (S^ ")
+                    (dint (+ (ilen_e sl) (ilen_e zl)))
+                    (DStr " (S f)) (MkXModule restfs 0 ")
+                    (dint msz)
+                    (DStr ") ")
+                    (mxx_spn (st_app sl zl) (DStr "rw"))
+                    (DStr " ")
+                    (mxx_regs
+                      nl
+                      (- 0 1)
+                      (DStr "")
+                      (DStr "x")
+                      Nil
+                      (DStr "za")
+                      (DStr "zb")
+                      (DStr "zc"))
+                    (DStr " m) (xm_scont ")
+                    (if da (DStr "0") (DStr "za"))
+                    (DStr " ")
+                    (if db (DStr "0") (DStr "zb"))
+                    (DStr " ")
+                    (if dc (DStr "0") (DStr "zc"))
+                    (DStr " (S f) (MkXModule restfs 0 ")
+                    (dint msz)
+                    (DStr ") rw (istmts (S^ ")
+                    (dint tn)
+                    (DStr " (S g)) ")
+                    (dint msz)
+                    (DStr " (inline ")
+                    cnm
+                    (DStr ") ")
+                    (d_args nl)
+                    (match gs
+                      (Nil (DStr " m)))) (chain (steps ((compute both))) "))
+                      ((Cons _ _)
+                       (DStr
+                         " m)))) (chain (steps ((compute both (stop xm_scont)))) ")))
+                    (mxxs_spine gs 1 msz)
+                    (DStr "))")
+                    (DStr (nl))
+                    (DStr (nl))))))))))))))
+
+;; the seal-point composition (one mid-flat leg's chain-lemma body):
+;; ist_seam splits the imp side at the seal point, the sub-lemma cite
+;; rewrites the machine side, ONE case-on of the shared standalone
+;; run absorbs every outcome, il_slen exposes the segment exit, and
+;; cont fires at the exposed leaf -- where the machine side sits
+;; parked at the folded rest-fn call (the xeval_seq stop keeps it at
+;; call grain; nothing here ever walks the machine side)
+(fn mxx_cstep
+  ((nm (List Int))
+   (b Int)
+   (nl Int)
+   (msz Int)
+   (tn Int)
+   (gm Int)
+   (cst Doc)
+   (lst Doc)
+   (cont Doc))
+  Doc
+  (let
+    ((cnm
+       (dconc (list (DStr "gb_") (DStr nm) (DStr "_c") (dint b) (DStr "_i"))))
+     (subj
+       (if (int_eq b 0)
+         (dconc (list (DStr "(inline gb_") (DStr nm) (DStr "_i)")))
+         (dconc (list (DStr "(") (mxc_rnm nm b "_i") (DStr ")")))))
+     (tail (dconc (list (DStr "(") (mxc_rnm nm (+ b 1) "_i") (DStr ")")))))
+    (dconc
+      (list
+        (DStr "(have hsp")
+        (dint b)
+        (DStr " (= ")
+        subj
+        (DStr " (isapp (inline ")
+        cnm
+        (DStr ") ")
+        tail
+        (DStr ")) (steps ((compute both)) refl)) (steps ((rewrite (premise hsp")
+        (dint b)
+        (DStr ") lr rhs true ()))) (have hfg")
+        (dint b)
+        (DStr " (= (S^ ")
+        (dint gm)
+        (DStr " c2) (lg_fuel (istn (inline ")
+        cnm
+        (DStr ")) (S (S^ ")
+        (dint (- (- gm tn) 1))
+        (DStr
+          " c2)))) (steps ((compute both)) refl)) (steps ((rewrite (premise hfg")
+        (dint b)
+        (DStr
+          ") lr rhs true ()))) (rewrite-with (lemma ist_seam) lr rhs ((inst g c2)) ((steps ((compute lhs)) refl))) (have hfb")
+        (dint b)
+        (DStr " (= (lg_fuel (istn (inline ")
+        cnm
+        (DStr ")) (S c2)) (S^ ")
+        (dint tn)
+        (DStr
+          " (S c2))) (steps ((compute both)) refl)) (steps ((rewrite (premise hfb")
+        (dint b)
+        (DStr ") lr rhs true ()))) (rewrite-with (lemma sqs_x_")
+        (DStr nm)
+        (DStr "_c")
+        (dint b)
+        (DStr ") lr lhs ((inst g c2)) ()) (case-on (istmts (S^ ")
+        (dint tn)
+        (DStr " (S c2)) ")
+        (dint msz)
+        (DStr " (inline ")
+        cnm
+        (DStr ") ")
+        (d_args nl)
+        (DStr
+          " m) Option ((case None (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
+        lst
+        (DStr "))) refl)) (case Some (oc")
+        (dint b)
+        (DStr ") (chain (steps ((rewrite (hyp 0) lr both true ()))) (case-on oc")
+        (dint b)
+        (DStr " IOut ((case INorm (ec")
+        (dint b)
+        (DStr " mc")
+        (dint b)
+        (DStr ") (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
+        cst
+        (DStr "))) ")
+        (mxc_exit
+          (d_args nl)
+          (dcat3 (DStr "ec") (dint b) (DStr ""))
+          (dcat3 (DStr "mc") (dint b) (DStr ""))
+          0
+          nl
+          (dcat3 (DStr "ec") (dint b) (DStr ""))
+          cont
+          (DStr "il_slen")
+          cst
+          (dcat3 (DStr "ec") (dint b) (DStr "_"))
+          (dcat3 (DStr "rc") (dint b) (DStr "_")))
+        (DStr
+          ")) (case ITrap (chain (steps ((rewrite (hyp 0) lr both true ()) (compute both ")
+        lst
+        (DStr "))) refl))))))))")))))
 
 ;; one loop-leg block after the pre-walk respells: the walk compute,
 ;; the fuel reshapes, the worker citation, the shared-iwhile case-on
@@ -5525,7 +5832,7 @@
 (fn mxx_lems
   ((legs (List (Pair (List MxPc) (Option MxPc))))
    (lis (List MxXLi))
-   (msls (List (List Expr)))
+   (msls (List (Pair (List Expr) (List Expr))))
    (brpre (List Int))
    (nm (List Int))
    (nl Int)
@@ -5567,6 +5874,13 @@
               (DStr " lhs) (reduce lhs) (unfold ")
               (mxc_rnm nm b "_i")
               (DStr " rhs) (reduce rhs))) ")))))
+        (mopener
+          (if (int_eq b 0) (DStr "")
+          (dconc
+            (list
+              (DStr "(steps ((unfold ")
+              (mxc_rnm nm b "_x")
+              (DStr " lhs) (reduce lhs))) ")))))
         (zad (if fsa (DStr "za") (DStr "0")))
         (zbd (if fsb (DStr "zb") (DStr "0")))
         (zcd (if fsc (DStr "zc") (DStr "0"))))
@@ -5609,40 +5923,67 @@
                 codei
                 (DStr " ")
                 (d_args nl)
-                (DStr " m)))) (chain ")
-                opener))))
+                (DStr " m)))) (chain ")))))
          (match (mxx_segm segs msls)
-           ((Pair (Pair wsum tsum) msls2)
+           ((Pair (Pair w (Pair z tn)) msls2)
             (match olp
               (None
-                ;; the final leg: closed tail, walk to ground
-                (match
-                  (lw_stmts
-                    (+ (isz_stmts (mxx_segstmts segs)) 2)
-                    True
-                    msz
-                    (mxx_segstmts segs)
-                    (st_params nl)
-                    (FVar (quote m)))
-                  ((LSRf _) (DStr ""))
-                  ((LSOk gs _ _)
-                   (dconc
-                     (list
-                       headdoc
-                       (DStr "(steps ((compute both ")
-                       pst
-                       (DStr "))) ")
-                       (mxx_spine
-                         (gs_dedup Nil gs)
-                         1
-                         msz
-                         pst
-                         lst
-                         (DStr
-                           "(steps ((compute both (stop lg_fuel int_of_nat)))) refl"))
-                       (DStr "))")
-                       (DStr (nl))
-                       (DStr (nl)))))))
+                ;; a flat leg. Last: walk the chunk (+ the terminal
+                ;; seal) to ground. Mid (V2-8): the chunk ends at its
+                ;; seal point -- emit the open-tail sub-lemma (the
+                ;; machine walk lives THERE) and compose by ist_seam +
+                ;; il_slen; the machine side of the chain lemma is
+                ;; never walked, so it parks at the folded rest-fn
+                ;; call for the next boundary's cite.
+                (let
+                  ((lastp
+                     (match rest
+                       (Nil True)
+                       ((Cons _ _) False))))
+                  (match
+                    (lw_stmts
+                      (+ (isz_stmts (mxx_segstmts segs)) 2)
+                      True
+                      msz
+                      (mxx_segstmts segs)
+                      (st_params nl)
+                      (FVar (quote m)))
+                    ((LSRf _) (DStr ""))
+                    ((LSOk gs _ _)
+                     (if lastp
+                       (dconc
+                         (list
+                           headdoc
+                           opener
+                           (DStr "(steps ((compute both ")
+                           pst
+                           (DStr "))) ")
+                           (mxx_spine
+                             (gs_dedup Nil gs)
+                             1
+                             msz
+                             pst
+                             lst
+                             (DStr
+                               "(steps ((compute both (stop lg_fuel int_of_nat)))) refl"))
+                           (DStr "))")
+                           (DStr (nl))
+                           (DStr (nl))))
+                       (dconc
+                         (list
+                           (mxx_lems
+                             rest lis msls2 brpre nm nl msz
+                             (- fm (+ w z)) (- gm tn) (+ b 1) d nr fsa fsb
+                             fsc)
+                           (mxx_seg1 nm b nl msz tn segs msls (gs_dedup Nil gs))
+                           headdoc
+                           mopener
+                           (mxx_cstep
+                             nm b nl msz tn gm cst lst
+                             (mxx_cite nm (+ b 1) cst))
+                           (DStr "))")
+                           (DStr (nl))
+                           (DStr (nl)))))))))
               ((Some pc)
                (match pc
                  ((MxPL gi kg lbody _ _ csets)
@@ -5665,10 +6006,10 @@
                          ((LSRf _) (DStr ""))
                          ((LSOk gs postlc postmem)
                           (let
-                            ((fm2 (- (- fm (+ wsum (+ (+ q zlen) 1))) 0))
-                             (gm2 (- gm (+ tsum (+ q 1))))
-                             (xm (- (- fm (+ wsum (+ q zlen))) 4))
-                             (yi (- (- gm (+ tsum q)) 2))
+                            ((fm2 (- (- fm (+ w (+ (+ q zlen) 1))) 0))
+                             (gm2 (- gm (+ tn (+ q 1))))
+                             (xm (- (- fm (+ w (+ q zlen))) 4))
+                             (yi (- (- gm (+ tn q)) 2))
                              (kd
                                (dcat3
                                  (DStr "(int_of_nat ")
@@ -5730,6 +6071,7 @@
                                       (- fm2 0) gm2 (+ b 1) (+ d 1) nr fsa fsb
                                       fsc)
                                     headdoc
+                                    opener
                                     respell
                                     (DStr "(steps ((compute both ")
                                     pst
@@ -5776,27 +6118,10 @@
                  (_ (DStr "")))))))))))))
 
 
-;; the x86 chain walks each leg's straight-line span in ONE lemma, so
-;; per-lemma churn grows with the span (goal size x steps -- the mem
-;; chain and walked trees renormalize at every split). Measured on the
-;; sha block finish (~150 stmts, 32 byte-stores): >57GB against the
-;; engine's 64GB reserve, where the 79-stmt shext bridge costs 3.4GB.
-;; The wasm factoring survives sha scale because its CAPPED segment
-;; lemmas RESET the walked state at every boundary; an x86 mid-segment
-;; reset needs scratch-clean cut points (translator seal-points --
-;; named growth pending a ruling). Until then, pins whose legs exceed
-;; the span budget decline to tie + note.
-(fn mxx_maxspan ((legs (List (Pair (List MxPc) (Option MxPc))))) Int
-  (measure (struct legs))
-  (match legs
-    (Nil 0)
-    ((Cons (Pair segs _) rest)
-     (imax (isz_stmts (mxx_segstmts segs)) (mxx_maxspan rest)))))
-
 (type SqxR (SqxOk Doc) (SqxNote (List Int)) (SqxErr (List Int)))
 
-;; the x86 mixed-tier emission: wid twin, per-loop workers, rest fns,
-;; the loop-exit chain
+;; the x86 mixed-tier emission: wid twins, per-loop workers, rest fns
+;; cut at chunk seals and loop exits, the boundary chain
 (fn sqx_emit
   ((brpre (List Int))
    (msz Int)
@@ -5849,30 +6174,25 @@
                               (None
                                 (SqxErr "per-segment translation invoke (internal)"))
                               ((Some msls)
-                               (match (mxx_legs (+ (isz_pcs pcs) 2) pcs)
-                                 (None (SqxErr "leg grouping (internal)"))
-                                 ((Some legs)
-                                  (if (lt 96 (mxx_maxspan legs))
-                                    (SqxNote
-                                      "x86 chain capacity: a straight-line span exceeds the per-lemma churn budget (state-reset boundaries = named growth)")
-                                  (match (mxx_ag legs lis msls 0 0 0 0)
-                                    ((Pair aa gg)
-                                     (match (mxxw_all evs lis nm nl msz 1)
-                                       ((EErr m) (SqxErr m))
-                                       ((EOk workers)
-                                        (SqxOk
-                                          (dconc
-                                            (list
-                                              (mxx_rests
-                                                legs lis msls nm ssE els 0 0 0)
-                                              (mx_wid nm)
-                                              (mx_wid64 nm)
-                                              workers
-                                              (mxx_lems
-                                                legs lis msls brpre nm nl
-                                                msz aa gg 0 0
-                                                (- (mxx_nlg legs) 1)
-                                                fsa fsb fsc)))))))))))))))))))))))))))))))
+                               (let ((legs (mxx_legs pcs)))
+                                 (match (mxx_ag legs lis msls 0 0 0 0)
+                                   ((Pair aa gg)
+                                    (match (mxxw_all evs lis nm nl msz 1)
+                                      ((EErr m) (SqxErr m))
+                                      ((EOk workers)
+                                       (SqxOk
+                                         (dconc
+                                           (list
+                                             (mxx_rests
+                                               legs lis msls nm ssE els 0 0 0)
+                                             (mx_wid nm)
+                                             (mx_wid64 nm)
+                                             workers
+                                             (mxx_lems
+                                               legs lis msls brpre nm nl
+                                               msz aa gg 0 0
+                                               (- (mxx_nlg legs) 1)
+                                               fsa fsb fsc)))))))))))))))))))))))))))))
 
 ;; --- per-pin emission ------------------------------------------------------------
 
