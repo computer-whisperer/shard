@@ -1,0 +1,155 @@
+;;; Regression for exact restricted Grammar regions.
+;;;
+;;; A two-hole, three-choice product has nine derivations. Subtracting the
+;;; choice cube h0=1,h1=2 must retain the hit as one original-id region and
+;;; return the disjoint complement h0!=1 | (h0=1,h1!=2), with counts 1 + 6 + 2.
+
+(import "../../kernel/stdlib.shard")
+(import "../../kernel/term.shard")
+(import "../../kernel/loader.shard")
+(import "../../meta/sketch")
+(use (:: kernel term *))
+(use (:: kernel loader World))
+(use (:: kernel loader write))
+(use (:: kernel loader exit))
+(use (:: meta sketch *))
+
+(fn srp_q ((name Symbol)) QName
+  (QName (list (quote tools) (quote search) (quote region_probe)) name))
+
+(fn srp_atom ((value Int)) Expr
+  (Ctor (srp_q (quote Atom)) (Cons (IntLit value) Nil)))
+
+(fn srp_pair ((left Expr) (right Expr)) Expr
+  (Ctor (srp_q (quote Pair)) (list left right)))
+
+(fn srp_grammar () Grammar
+  (Grammar
+    (list
+      (GEnt 0 (list (srp_atom 0) (srp_atom 1) (srp_atom 2)))
+      (GEnt 1 (list (srp_atom 0) (srp_atom 1) (srp_atom 2))))))
+
+(fn srp_nested_grammar () Grammar
+  (Grammar
+    (list
+      (GEnt
+        0
+        (list
+          (srp_atom 0)
+          (Ctor (srp_q (quote Wrap)) (Cons (hole 1) Nil))))
+      (GEnt 1 (list (srp_atom 0) (srp_atom 1) (srp_atom 2))))))
+
+(fn srp_fail ((msg (List Int)) (w World)) World
+  (exit
+    1
+    (write (append_int "REGION-PROBE FAIL " (append_int msg "\n")) w)))
+
+(fn srp_count ((root Expr) (grammar Grammar) (region SkRegion)) (Option Int)
+  (match (sk_region_count root grammar region)
+    ((SkCErr _) None)
+    ((SkCOk count) (Some count))))
+
+(fn srp_sum_regions
+  ((root Expr) (grammar Grammar) (regions (List SkRegion)) (acc Int))
+  (Option Int)
+  (measure (struct regions))
+  (match regions
+    (Nil (Some acc))
+    ((Cons region rest)
+     (match (srp_count root grammar region)
+       (None None)
+       ((Some count) (srp_sum_regions root grammar rest (+ acc count)))))))
+
+(fn srp_complement_shape ((regions (List SkRegion))) Bool
+  (match regions
+    ((Cons first (Cons second Nil))
+     (if (skr_forbidden 0 1 first)
+       (match (skr_choice 0 first)
+         ((Some _) False)
+         (None
+          (match (skr_choice 0 second)
+            ((Some choice)
+             (if (int_eq choice 1) (skr_forbidden 1 2 second) False))
+            (None False))))
+       False))
+    (_ False)))
+
+(fn srp_nested ((w World)) World
+  (let ((grammar (srp_nested_grammar)) (root (hole 0)))
+    (match (sk_region_forbid grammar (sk_empty_region) 1 1)
+      ((SkRegionEditErr msg) (srp_fail msg w))
+      ((SkRegionEditEmpty) (srp_fail "nested child exclusion was empty" w))
+      ((SkRegionEditOk restricted)
+       (match (srp_count root grammar restricted)
+         ((Some count)
+          (if (int_eq count 3)
+            (match (sk_region_choose grammar restricted 0 1)
+              ((SkRegionEditErr msg) (srp_fail msg w))
+              ((SkRegionEditEmpty) (srp_fail "nested parent choice was empty" w))
+              ((SkRegionEditOk wrapped)
+               (match (srp_count root grammar wrapped)
+                 ((Some wrapped_count)
+                  (if (int_eq wrapped_count 2)
+                    (write
+                      "REGION-PROBE RAW-9 HIT-1 COMPLEMENT-6+2 EMPTY-0 NESTED-4>3>2 ORIGINAL-IDS OK\n"
+                      w)
+                    (srp_fail "nested selected count" w)))
+                 (None (srp_fail "nested selected region count" w)))))
+            (srp_fail "nested restricted count" w)))
+         (None (srp_fail "nested region count" w)))))))
+
+(fn srp_empty_exclusion
+  ((root Expr) (grammar Grammar) (region SkRegion) (w World)) World
+  (match (sk_region_forbid grammar region 0 0)
+    ((SkRegionEditErr msg) (srp_fail msg w))
+    ((SkRegionEditEmpty) (srp_fail "first exclusion was empty" w))
+    ((SkRegionEditOk r1)
+     (match (sk_region_forbid grammar r1 0 1)
+       ((SkRegionEditErr msg) (srp_fail msg w))
+       ((SkRegionEditEmpty) (srp_fail "second exclusion was empty" w))
+       ((SkRegionEditOk r2)
+        (match (sk_region_forbid grammar r2 0 2)
+          ((SkRegionEditErr msg) (srp_fail msg w))
+          ((SkRegionEditEmpty) (srp_fail "third exclusion was empty" w))
+          ((SkRegionEditOk empty)
+           (match (srp_count root grammar empty)
+             ((Some count)
+              (if (int_eq count 0)
+                (srp_nested w)
+                (srp_fail "all choices excluded but count was nonzero" w)))
+             (None (srp_fail "empty-region count" w))))))))))
+
+(fn srp_run ((root Expr) (grammar Grammar) (w World)) World
+  (let ((whole (sk_empty_region)))
+    (match (srp_count root grammar whole)
+      ((Some raw)
+       (if (int_eq raw 9)
+         (match
+           (sk_region_subtract_cube
+             grammar whole (list (Pair 0 1) (Pair 1 2)))
+           ((SkRegionSubtractErr msg) (srp_fail msg w))
+           ((SkRegionSubtractOk hit complement)
+            (match hit
+              (None (srp_fail "choice cube had no hit" w))
+              ((Some hit_region)
+               (match (srp_count root grammar hit_region)
+                 ((Some hit_count)
+                  (if (int_eq hit_count 1)
+                    (if (srp_complement_shape complement)
+                      (match (srp_sum_regions root grammar complement 0)
+                        ((Some kept)
+                         (if (int_eq kept 8)
+                           (srp_empty_exclusion root grammar whole w)
+                           (srp_fail "complement count" w)))
+                        (None (srp_fail "complement region count" w)))
+                      (srp_fail "complement was not the disjoint prefix split" w))
+                    (srp_fail "cube hit count" w)))
+                 (None (srp_fail "cube hit region count" w)))))))
+         (srp_fail "raw region count" w)))
+      (None (srp_fail "raw count" w)))))
+
+(fn main ((w World)) World
+  (let ((grammar (srp_grammar)) (root (srp_pair (hole 0) (hole 1))))
+    (match (g_wf grammar)
+      ((GWErr msg) (srp_fail msg w))
+      ((GWOk) (srp_run root grammar w)))))

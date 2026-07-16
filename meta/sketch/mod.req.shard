@@ -747,6 +747,270 @@
                    ((SkIdsErr m) (SkCErr m))
                    ((SkIdsOk roots) (digits_compose roots dmemo memo 0))))))))))))))
 
+;; ---- exact restricted regions ---------------------------------------------
+;;
+;; A narrowing job normally fixes some grammar choices. Relational pressure
+;; also needs the dual operation: retain the original hole identity while
+;; excluding one or more choices. `SkRegion` records both over the unchanged
+;; Grammar DAG. This is deliberately below any rewrite/search policy.
+;;
+;; Exact counting is the ordinary reverse grammar fold with each entry's
+;; alternatives restricted before summation. No grammar nodes are cloned, so
+;; evaluators and their memos continue to use the original stable hole ids.
+;;
+;; `sk_region_subtract_cube` subtracts a conjunction of required choices as a
+;; disjoint sum of products. For cube [h=a, k=b], the complement is
+;;
+;;   h!=a  |  (h=a, k!=b)
+;;
+;; and the optional hit is the final h=a,k=b region.
+
+(type SkRegion
+  (SkRegion
+    (List (Pair Int Int))
+    (List (Pair Int Int))))
+  ; fixed hole -> alternative index, forbidden hole -> alternative index
+
+(fn sk_empty_region () SkRegion (SkRegion Nil Nil))
+
+(fn sk_region_choices ((region SkRegion)) (List (Pair Int Int))
+  (match region
+    ((SkRegion choices _) choices)))
+
+(fn sk_region_forbids ((region SkRegion)) (List (Pair Int Int))
+  (match region
+    ((SkRegion _ forbids) forbids)))
+
+(fn skr_pair_mem ((hole_id Int) (choice Int) (pairs (List (Pair Int Int)))) Bool
+  (measure (struct pairs))
+  (match pairs
+    (Nil False)
+    ((Cons (Pair h c) rest)
+     (if (int_eq hole_id h)
+       (if (int_eq choice c) True (skr_pair_mem hole_id choice rest))
+       (skr_pair_mem hole_id choice rest)))))
+
+(fn skr_hole_mem ((hole_id Int) (pairs (List (Pair Int Int)))) Bool
+  (measure (struct pairs))
+  (match pairs
+    (Nil False)
+    ((Cons (Pair h _) rest)
+     (if (int_eq hole_id h) True (skr_hole_mem hole_id rest)))))
+
+(fn skr_choice ((hole_id Int) (region SkRegion)) (Option Int)
+  (match region
+    ((SkRegion choices _) (memo_find hole_id choices))))
+
+(fn skr_forbidden ((hole_id Int) (choice Int) (region SkRegion)) Bool
+  (match region
+    ((SkRegion _ forbids) (skr_pair_mem hole_id choice forbids))))
+
+(fn skr_alts_len ((alts (List Expr))) Int
+  (measure (struct alts))
+  (match alts
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (skr_alts_len rest)))))
+
+(fn skr_choice_valid ((choice Int) (alts (List Expr))) Bool
+  (if (lt choice 0) False (lt choice (skr_alts_len alts))))
+
+(fn skr_entry_alts ((entries (List GEnt)) (hole_id Int)) (Option (List Expr))
+  (measure (struct entries))
+  (match entries
+    (Nil None)
+    ((Cons (GEnt h alts) rest)
+     (if (int_eq hole_id h) (Some alts) (skr_entry_alts rest hole_id)))))
+
+(fn skr_pairs_wf
+  ((entries (List GEnt))
+   (pairs (List (Pair Int Int)))
+   (unique_holes Bool)
+   (seen (List (Pair Int Int))))
+  (Option (List Int))
+  (measure (struct pairs))
+  (match pairs
+    (Nil None)
+    ((Cons (Pair hole_id choice) rest)
+     (if (if unique_holes (skr_hole_mem hole_id seen) False)
+       (Some "region fixes one hole more than once")
+       (match (skr_entry_alts entries hole_id)
+         (None (Some "region references an unknown grammar hole"))
+         ((Some alts)
+          (if (skr_choice_valid choice alts)
+            (skr_pairs_wf
+              entries rest unique_holes (Cons (Pair hole_id choice) seen))
+            (Some "region choice is outside its grammar entry"))))))))
+
+(type SkRegionWfR (SkRegionWfErr (List Int)) (SkRegionWfOk))
+
+(fn sk_region_wf ((grammar Grammar) (region SkRegion)) SkRegionWfR
+  (match grammar
+    ((Grammar entries)
+     (match region
+       ((SkRegion choices forbids)
+        (match (skr_pairs_wf entries choices True Nil)
+          ((Some msg) (SkRegionWfErr msg))
+          (None
+            (match (skr_pairs_wf entries forbids False Nil)
+              ((Some msg) (SkRegionWfErr msg))
+              (None (SkRegionWfOk))))))))))
+
+(fn skr_sum_region_alts
+  ((hole_id Int)
+   (index Int)
+   (alts (List Expr))
+   (memo (List (Pair Int Int)))
+   (region SkRegion))
+  SkC
+  (measure (struct alts))
+  (match alts
+    (Nil (SkCOk 0))
+    ((Cons alt rest)
+     (match (skr_choice hole_id region)
+       ((Some chosen)
+        (if (int_eq index chosen)
+          (if (skr_forbidden hole_id index region) (SkCOk 0)
+          (alt_size alt memo))
+          (skr_sum_region_alts hole_id (+ index 1) rest memo region)))
+       (None
+        (match
+          (if (skr_forbidden hole_id index region) (SkCOk 0)
+          (alt_size alt memo))
+          ((SkCErr msg) (SkCErr msg))
+          ((SkCOk here)
+           (match
+             (skr_sum_region_alts hole_id (+ index 1) rest memo region)
+             ((SkCErr msg) (SkCErr msg))
+             ((SkCOk tail) (SkCOk (+ here tail)))))))))))
+
+(fn skr_counts_go
+  ((rev_entries (List GEnt))
+   (region SkRegion)
+   (memo (List (Pair Int Int))))
+  GCt
+  (measure (struct rev_entries))
+  (match rev_entries
+    (Nil (GCtOk memo))
+    ((Cons (GEnt hole_id alts) rest)
+     (match (skr_sum_region_alts hole_id 0 alts memo region)
+       ((SkCErr msg) (GCtErr msg))
+       ((SkCOk count)
+        (skr_counts_go rest region (Cons (Pair hole_id count) memo)))))))
+
+(fn sk_region_count ((root Expr) (grammar Grammar) (region SkRegion)) SkC
+  (match (g_wf grammar)
+    ((GWErr msg) (SkCErr msg))
+    ((GWOk)
+     (match (sk_region_wf grammar region)
+       ((SkRegionWfErr msg) (SkCErr msg))
+       ((SkRegionWfOk)
+        (match grammar
+          ((Grammar entries)
+           (match (skr_counts_go (ents_rev entries Nil) region Nil)
+             ((GCtErr msg) (SkCErr msg))
+             ((GCtOk memo)
+              (match (holes_e root Nil)
+                ((SkIdsErr msg) (SkCErr msg))
+                ((SkIdsOk roots) (prod_counts roots memo))))))))))))
+
+(type SkRegionEditR
+  (SkRegionEditErr (List Int))
+  (SkRegionEditEmpty)
+  (SkRegionEditOk SkRegion))
+
+(fn sk_region_choose
+  ((grammar Grammar) (region SkRegion) (hole_id Int) (choice Int))
+  SkRegionEditR
+  (match grammar
+    ((Grammar entries)
+     (match (skr_entry_alts entries hole_id)
+       (None (SkRegionEditErr "region choice references an unknown hole"))
+       ((Some alts)
+        (if (skr_choice_valid choice alts)
+          (match (skr_choice hole_id region)
+            ((Some prior)
+             (if (int_eq prior choice) (SkRegionEditOk region)
+             (SkRegionEditEmpty)))
+            (None
+             (if (skr_forbidden hole_id choice region) (SkRegionEditEmpty)
+             (match region
+               ((SkRegion choices forbids)
+                (SkRegionEditOk
+                  (SkRegion (Cons (Pair hole_id choice) choices) forbids)))))))
+          (SkRegionEditErr "region choice is outside its grammar entry")))))))
+
+(fn skr_forbid_known ((region SkRegion) (hole_id Int) (choice Int))
+  SkRegionEditR
+  (match (skr_choice hole_id region)
+    ((Some prior)
+     (if (int_eq prior choice) (SkRegionEditEmpty) (SkRegionEditOk region)))
+    (None
+     (if (skr_forbidden hole_id choice region) (SkRegionEditOk region)
+     (match region
+       ((SkRegion choices forbids)
+        (SkRegionEditOk
+          (SkRegion choices (Cons (Pair hole_id choice) forbids)))))))))
+
+(fn sk_region_forbid
+  ((grammar Grammar) (region SkRegion) (hole_id Int) (choice Int))
+  SkRegionEditR
+  (match grammar
+    ((Grammar entries)
+     (match (skr_entry_alts entries hole_id)
+       (None (SkRegionEditErr "region exclusion references an unknown hole"))
+       ((Some alts)
+        (if (skr_choice_valid choice alts)
+          (skr_forbid_known region hole_id choice)
+          (SkRegionEditErr
+            "region exclusion is outside its grammar entry")))))))
+
+(fn skr_regions_reverse
+  ((regions (List SkRegion)) (acc (List SkRegion))) (List SkRegion)
+  (measure (struct regions))
+  (match regions
+    (Nil acc)
+    ((Cons region rest) (skr_regions_reverse rest (Cons region acc)))))
+
+(type SkRegionSubtractR
+  (SkRegionSubtractErr (List Int))
+  (SkRegionSubtractOk (Option SkRegion) (List SkRegion)))
+  ; exact cube hit, disjoint complement regions
+
+(fn skr_subtract_cube_go
+  ((grammar Grammar)
+   (prefix SkRegion)
+   (cube (List (Pair Int Int)))
+   (rev_complement (List SkRegion)))
+  SkRegionSubtractR
+  (measure (struct cube))
+  (match cube
+    (Nil
+      (SkRegionSubtractOk
+        (Some prefix)
+        (skr_regions_reverse rev_complement Nil)))
+    ((Cons (Pair hole_id choice) rest)
+     (match (sk_region_choose grammar prefix hole_id choice)
+       ((SkRegionEditErr msg) (SkRegionSubtractErr msg))
+       ((SkRegionEditEmpty)
+        (SkRegionSubtractOk
+          None
+          (skr_regions_reverse (Cons prefix rev_complement) Nil)))
+       ((SkRegionEditOk hit_prefix)
+        (match (sk_region_forbid grammar prefix hole_id choice)
+          ((SkRegionEditErr msg) (SkRegionSubtractErr msg))
+          ((SkRegionEditEmpty)
+           (skr_subtract_cube_go grammar hit_prefix rest rev_complement))
+          ((SkRegionEditOk miss_branch)
+           (skr_subtract_cube_go
+             grammar hit_prefix rest (Cons miss_branch rev_complement)))))))))
+
+(fn sk_region_subtract_cube
+  ((grammar Grammar) (region SkRegion) (cube (List (Pair Int Int))))
+  SkRegionSubtractR
+  (match (sk_region_wf grammar region)
+    ((SkRegionWfErr msg) (SkRegionSubtractErr msg))
+    ((SkRegionWfOk) (skr_subtract_cube_go grammar region cube Nil))))
+
 ;; index -> the closed candidate it addresses (range-checked, loud)
 (fn sk_unrank ((root Expr) (g Grammar) (ix Int)) SkE
   (match (g_counts g)

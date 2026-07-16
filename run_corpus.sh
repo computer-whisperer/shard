@@ -290,6 +290,7 @@ TARGETS=(
   std/sha256/impgen_x86_out.shard
   std/sha256/sha256.weld.shard
   examples/sketch_pin.shard
+  meta/sketch/mod.req.shard
   meta/invoke/prepared.shard
   meta/census/mod.req.shard
   meta/rewrite/mod.req.shard
@@ -316,6 +317,7 @@ TARGETS=(
   tools/search/rewrite_probe.shard
   tools/search/constraint_probe.shard
   tools/search/nonlinear_constraint_probe.shard
+  tools/search/region_probe.shard
   tools/search/nonlinear_symbolic_probe.shard
   tools/search/constraint_superpose_probe.shard
   tools/search/typed_rule_probe.shard
@@ -491,6 +493,7 @@ if [ -x bin/shard_eval ]; then
   # equality across concrete, partial-grammar, prepared, and symbolic values.
   bin/shard_eval run tools/search/constraint_probe.shard
   bin/shard_eval run tools/search/nonlinear_constraint_probe.shard
+  bin/shard_eval run tools/search/region_probe.shard
   bin/shard_eval run tools/search/nonlinear_symbolic_probe.shard
   # Contextual sequence pressure keeps its checked traversal, conditional
   # guard, prepared-cache, and mined-schema contraction boundaries generic.

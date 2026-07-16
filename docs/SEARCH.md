@@ -1809,6 +1809,27 @@ frontier the schedule moves slightly to `4125 / 875 / 41735` while settling
 928,781 more candidates.  This is useful early classification, not the missing
 diagonal representation, and its extra linear scan cost remains visible.
 
+The original-id region vocabulary is now in `meta/sketch`, below the search
+policy.  `SkRegion` combines fixed grammar choices with forbidden choices;
+`sk_region_count` performs the exact reverse grammar fold under both, and
+`sk_region_subtract_cube` subtracts a conjunction without cloning a grammar.
+For the nine-member product `Pair(h0,h1)`, subtracting `h0=1,h1=2` yields one
+hit and the disjoint complement
+
+    h0 != 1                  count 6
+    h0  = 1, h1 != 2         count 2
+
+`region_probe.shard` pins `RAW 9 = HIT 1 + COMPLEMENT 6+2`, all over the
+original hole ids, plus the zero count obtained by forbidding every choice of
+one hole.  A nested unequal-weight grammar also pins `4 -> 3 -> 2`: excluding
+one of a child hole's three choices updates its parent's recursive alternative,
+then fixing that parent to the recursive alternative preserves the exact child
+count.  This is intentionally a foundation rather than a reported search win:
+the nonlinear matcher does not yet emit a redex choice cube, and
+SUPERPOSE jobs do not yet carry `SkRegion`.  Those two seams are the next
+integration step; the exact region algebra and counting no longer need to be
+invented inside the engine.
+
 `std/order` supplies checked `lt a a = False` and `int_eq a a = True` claims.
 They are selected by name from the same object closure as the append and order
 laws—there is no comparison-specific table in the engine.  On the complete
