@@ -133,7 +133,66 @@
           (ncp_regions_each_count space grammar rest want)
           False))))))
 
-(fn ncp_partition ((grammar Grammar) (w World)) World
+(fn ncp_cited_len ((regions (List MsCitedRegion))) Int
+  (measure (struct regions))
+  (match regions
+    (Nil 0)
+    ((Cons _ rest) (+ 1 (ncp_cited_len rest)))))
+
+(fn ncp_cited_count
+  ((space Expr)
+   (grammar Grammar)
+   (regions (List MsCitedRegion))
+   (acc Int))
+  (Option Int)
+  (measure (struct regions))
+  (match regions
+    (Nil (Some acc))
+    ((Cons (MsCitedRegion _ region) rest)
+     (match (sk_region_count space grammar region)
+       ((SkCErr _) None)
+       ((SkCOk count)
+        (ncp_cited_count space grammar rest (+ acc count)))))))
+
+(fn ncp_cited_name
+  ((name QName) (regions (List MsCitedRegion))) Bool
+  (measure (struct regions))
+  (match regions
+    (Nil True)
+    ((Cons (MsCitedRegion cited _) rest)
+     (if (qname_eq name cited) (ncp_cited_name name rest) False))))
+
+(fn ncp_plan_partition
+  ((prepared MsPrepared) (grammar Grammar) (rule_name QName) (w World)) World
+  (let ((space (ncp_pair (hole 0) (hole 1))))
+    (match
+      (ms_partition_prepared 1000 prepared (sk_empty_region) space)
+      ((MsPlanPartitionErr msg) (ncp_fail msg w))
+      ((MsPlanPartitionOk redex clear forks)
+       (match (ncp_cited_count space grammar redex 0)
+         (None (ncp_fail "plan redex partition count" w))
+         ((Some redex_count)
+          (match (ncp_regions_count space grammar clear 0)
+            (None (ncp_fail "plan clear partition count" w))
+            ((Some clear_count)
+             (if (int_eq redex_count 3)
+               (if (int_eq clear_count 6)
+                 (if (int_eq (ncp_cited_len redex) 3)
+                   (if (int_eq (ncp_regions_len clear) 3)
+                     (if (int_eq forks 4)
+                       (if (ncp_cited_name rule_name redex)
+                         (if (ncp_regions_each_count space grammar clear 2)
+                           (ncp_late grammar w)
+                           (ncp_fail "plan clear rows were not coalesced" w))
+                         (ncp_fail "plan partition citation" w))
+                       (ncp_fail "plan partition fork count" w))
+                     (ncp_fail "plan clear region count" w))
+                   (ncp_fail "plan redex region count" w))
+                 (ncp_fail "plan clear coverage" w))
+               (ncp_fail "plan redex coverage" w))))))))))
+
+(fn ncp_partition
+  ((prepared MsPrepared) (grammar Grammar) (rule_name QName) (w World)) World
   (let ((space (ncp_pair (hole 0) (hole 1))))
     (match
       (ms_equal_partition
@@ -153,7 +212,8 @@
                      (if (int_eq forks 4)
                        (if (ncp_regions_each_count space grammar equal 1)
                          (if (ncp_regions_each_count space grammar unequal 2)
-                           (ncp_late grammar w)
+                           (ncp_plan_partition
+                             prepared grammar rule_name w)
                            (ncp_fail "unequal rows were not coalesced" w))
                          (ncp_fail "equal cubes were not exact" w))
                        (ncp_fail "equality partition fork count" w))
@@ -191,9 +251,9 @@
                    ((MsRedex q)
                     (if (qname_eq q rule_name)
                       (ncp_partition
-                        grammar
+                        prepared grammar rule_name
                         (write
-                          "META-SEARCH-NONLINEAR-PROBE RESIDUAL DISJOINT-CLEAR SHARED-EQUAL BLOCK-0/1 EQUAL-REDEX UNEQUAL-CLEAR RELAXED-PREPARED-3 REGION-EQ/NE PARTITION EQ3+NE6 IN 3+3/F4 OK\n"
+                          "META-SEARCH-NONLINEAR-PROBE RESIDUAL DISJOINT-CLEAR SHARED-EQUAL BLOCK-0/1 EQUAL-REDEX UNEQUAL-CLEAR RELAXED-PREPARED-3 REGION-EQ/NE PARTITION EQ3+NE6 IN 3+3/F4 PLAN-CITED OK\n"
                           w))
                       (ncp_fail "prepared equal region citation" w)))
                    (_ (ncp_fail "prepared equal restricted region" w))))))))

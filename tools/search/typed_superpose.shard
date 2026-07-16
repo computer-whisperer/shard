@@ -469,6 +469,37 @@
 
 ;; ---- generic typed/superposed drive ---------------------------------------
 
+(type TsOrderR (TsOrderErr (List Int)) (TsOrderOk Bool))
+
+(fn ts_theorem_first ((ctx InvokeCtx) (m Module)) TsOrderR
+  (match (find_fn (quote search_narrowing_strategy) m)
+    (None (TsOrderOk False))
+    ((Some fd)
+     (match fd
+       ((FnDef _ params ret _)
+        (match params
+          ((Cons _ _)
+           (TsOrderErr "search_narrowing_strategy must take no arguments"))
+          (Nil
+           (if (type_eq ret (TCon (qn (quote Symbol)) Nil))
+             (match (invoke_fd_ctx ctx fd Nil)
+               (None
+                (TsOrderErr "search_narrowing_strategy invocation failed"))
+               ((Some value)
+                (match value
+                  ((SymLit strategy)
+                   (if (sym_eq strategy (quote semantic_first))
+                     (TsOrderOk False)
+                   (if (sym_eq strategy (quote theorem_first))
+                     (TsOrderOk True)
+                     (TsOrderErr
+                       "unknown search_narrowing_strategy"))))
+                  (_
+                    (TsOrderErr
+                      "search_narrowing_strategy did not return Symbol")))))
+             (TsOrderErr
+               "search_narrowing_strategy must return Symbol")))))))))
+
 (fn ts_drive_counted
   ((path (List Int))
    (m Module)
@@ -494,43 +525,47 @@
      (let
        ((query (Call probeq (Cons root Nil)))
         (expected (Ctor (qn (quote Some)) (Cons target Nil))))
-       (ts_finish
-         path
-         m
-         want
-         ctx
-         screen
-         probe
-         target
-         witness
-         table
-         depth
-         holes
-         root
-         grammar
-         total
-         pressure
-         audit
-         (su_drive_query
-           (+ (* 8 total) 1024)
-           m
-           (qn (quote __typed_superpose_data_candidate))
-           root
-           root
-           (ts_pressure_constraints pressure)
-           query
-           expected
-           grammar
-           memo
-           (sa_new)
-           (Cons (sk_empty_region) Nil)
-           0
-           0
-           0
-           0
-           0
-           Nil)
-         w)))))
+       (match (ts_theorem_first ctx m)
+         ((TsOrderErr msg) (ts_fail msg w))
+         ((TsOrderOk theorem_first)
+          (ts_finish
+            path
+            m
+            want
+            ctx
+            screen
+            probe
+            target
+            witness
+            table
+            depth
+            holes
+            root
+            grammar
+            total
+            pressure
+            audit
+            (su_drive_query_ordered
+              theorem_first
+              (+ (* 8 total) 1024)
+              m
+              (qn (quote __typed_superpose_data_candidate))
+              root
+              root
+              (ts_pressure_constraints pressure)
+              query
+              expected
+              grammar
+              memo
+              (sa_new)
+              (Cons (sk_empty_region) Nil)
+              0
+              0
+              0
+              0
+              0
+              Nil)
+            w)))))))
 
 (fn ts_drive_space
   ((path (List Int))

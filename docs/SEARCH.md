@@ -1837,7 +1837,7 @@ alternatives, and a one-member remainder becomes transparent.  The nonlinear
 probe fixes its left atom and then proves the theorem Clear when the equal
 right choice is forbidden, Redex when the unequal right choice is forbidden,
 in both direct and prepared modes.  Ordinary assignment-only search retains
-the exact x86 control report (`742 / 372 / 25312`).
+the exact semantic-first x86 control report (`742 / 372 / 25312`).
 
 SUPERPOSE jobs now carry `SkRegion` end to end.  Fixed choices alone feed the
 lazy evaluator and its consulted-choice memo; forks skip forbidden choices;
@@ -1845,14 +1845,8 @@ theorem checking sees the complete region; killed and passing subspaces use
 `sk_region_count`; passing-region membership and representatives use restricted
 rank/unrank.  The mixed residual-rule integration probe starts the driver from
 each non-contiguous singleton remainder and pins clear/redex settlement as
-`1/1` with no fork.  The ordinary rev, pure-program, calculator, and x86 paths
-retain their exact controls; in particular the transition window remains
-`742 / 372 / 25312` with 264 constraint-killed programs.
-
-One semantic seam remains before this changes the x86 frontier automatically:
-the nonlinear matcher must describe a conditional redex as a choice cube (or
-an exact finite partition).  The scheduler can now subtract that cube and keep
-its lazy complement without changing grammar identities or evaluator caches.
+`1/1` with no fork.  The ordinary rev, pure-program, calculator, and default
+semantic-first paths retain their exact controls.
 
 The first general relational partition is now available as
 `ms_equal_partition`.  It repeatedly applies the same partial structural
@@ -1866,8 +1860,28 @@ boundaries), rather than nine ground cases.  The nonlinear probe pins exact
 coverage, region counts, and per-region cardinalities.  This is deliberately
 equality vocabulary rather than an x86 transform table; distinctness premises
 consume the unequal side, while repeated pattern variables consume the equal
-side.  The remaining integration is to lift a rule match into those relation
-partitions and attach its checked citation to the redex side.
+side.
+
+`ms_partition_prepared` lifts the same operation to a complete prepared theorem
+plan.  It groups redex alternatives only when their checked theorem citation
+agrees, groups the Clear complement independently, and keeps still-blocked
+children as fixed pending jobs.  The nonlinear probe now pins both the raw
+equality partition and the cited plan partition at `EQ 3 + NE 6` in `3+3`
+regions and four split boundaries.  SUPERPOSE can consume that partition in a
+general theorem-first mode: cited redex regions settle before evaluation, and
+only the exact Clear complement reaches behavioral narrowing.  Typed tasks opt
+in with `search_narrowing_strategy = theorem_first`; semantic-first remains the
+default because a behavioral failure can sometimes kill a broader parent than
+any theorem partition.
+
+The x86 transition census now opts into theorem-first scheduling.  Its exact
+264-program checked quotient and exhaustive agreement are unchanged, while
+terminal regions fall from 742 to 625 and evaluator steps from 25,312 to
+23,267.  Relational split boundaries rise from 372 to 411: the current finite
+partition spends 39 additional theorem-side decisions to obtain 117 fewer
+terminal regions.  This is the first actual engine-level gain from the
+original-id negative-region representation, and it applies to any prepared
+Shard theorem plan rather than to XOR syntax.
 
 `std/order` supplies checked `lt a a = False` and `int_eq a a = True` claims.
 They are selected by name from the same object closure as the append and order
@@ -2809,13 +2823,15 @@ profile removes `162 + 108 - 6 = 264` distinct candidates.  Enumerative and
 lazy paths agree exactly:
 
     SPINE RULES 3; RAW 820; ACCEPTED 556; CONSTRAINT KILLED 264
-    SUPERPOSED: REGIONS 742; FORKS 372; STEPS 25312
+    SEMANTIC-FIRST: REGIONS 742; FORKS 372; STEPS 25312
+    THEOREM-FIRST: REGIONS 625; FORKS 411; STEPS 23267
     AUDIT accepted 556; constrained 264; exhaustive agreement OK
 
-Thus one mined guarded family adds 102 unique reductions and trims another 30
-regions / 15 forks from the branch-and-prune tree.  It remains residual
-pressure (`REMOVED 0`): correlated variable-length window formation is a
-separate relational-grammar problem.
+Thus one mined guarded family adds 102 unique reductions.  The theorem-first
+partition exposes that quotient before behavioral narrowing without cloning
+the grammar (`REMOVED 0` still denotes formation-time removal); correlated
+variable-length window formation remains a separate relational-grammar
+problem.
 
 The nonlinear linear-relaxation and equality-domain consensus leave this
 particular report exactly unchanged (`742 / 372 / 25312`).  That is the

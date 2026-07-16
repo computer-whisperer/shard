@@ -2380,6 +2380,221 @@
           (ms_region_asg region)
           candidate)))))))
 
+;; ---- prepared-plan partitions -------------------------------------------
+;;
+;; Lift exact finite relation partitioning from structural equality to a whole
+;; prepared theorem plan.  Redex choices are grouped only when their checked
+;; citation agrees; clear choices form the dual remainder.  A child that still
+;; blocks remains a fixed pending job.  The result is an exact disjoint cover
+;; of the input region and can therefore be consumed directly by a narrowing
+;; scheduler after its semantic query has passed on the unsplit parent.
+
+(type MsCitedRegion (MsCitedRegion QName SkRegion))
+(type MsCitedChoices (MsCitedChoices QName (List Int)))
+
+(fn mspp_add_cited_choice
+  ((name QName) (choice Int) (groups (List MsCitedChoices)))
+  (List MsCitedChoices)
+  (measure (struct groups))
+  (match groups
+    (Nil (Cons (MsCitedChoices name (Cons choice Nil)) Nil))
+    ((Cons (MsCitedChoices prior choices) rest)
+     (if (qname_eq name prior)
+       (Cons (MsCitedChoices prior (Cons choice choices)) rest)
+       (Cons
+         (MsCitedChoices prior choices)
+         (mspp_add_cited_choice name choice rest))))))
+
+(fn mspp_cited_append
+  ((left (List MsCitedRegion)) (right (List MsCitedRegion)))
+  (List MsCitedRegion)
+  (measure (struct left))
+  (match left
+    (Nil right)
+    ((Cons head rest) (Cons head (mspp_cited_append rest right)))))
+
+(type MsPlanChoicesR
+  (MsPlanChoicesErr (List Int))
+  (MsPlanChoicesOk
+    (List MsCitedChoices)
+    (List Int)
+    (List SkRegion)))
+  ; cited redex choices, stable clear choices, still-blocked fixed children
+
+(fn mspp_classify_choices
+  ((fuel Int)
+   (prepared MsPrepared)
+   (grammar Grammar)
+   (candidate Expr)
+   (region SkRegion)
+   (hole_id Int)
+   (index Int)
+   (alts (List Expr))
+   (redex (List MsCitedChoices))
+   (clear (List Int))
+   (pending (List SkRegion)))
+  MsPlanChoicesR
+  (measure (struct alts))
+  (match alts
+    (Nil (MsPlanChoicesOk redex clear pending))
+    ((Cons _ rest)
+     (match (sk_region_choose grammar region hole_id index)
+       ((SkRegionEditErr msg) (MsPlanChoicesErr msg))
+       ((SkRegionEditEmpty)
+        (mspp_classify_choices
+          fuel prepared grammar candidate region hole_id (+ index 1) rest
+          redex clear pending))
+       ((SkRegionEditOk child)
+        (match (sk_region_count candidate grammar child)
+          ((SkCErr msg) (MsPlanChoicesErr msg))
+          ((SkCOk count)
+           (if (le count 0)
+             (mspp_classify_choices
+               fuel prepared grammar candidate region hole_id (+ index 1) rest
+               redex clear pending)
+           (match
+             (ms_check_prepared_region fuel prepared child candidate)
+             ((MsErr msg) (MsPlanChoicesErr msg))
+             ((MsRedex name)
+              (mspp_classify_choices
+                fuel prepared grammar candidate region hole_id (+ index 1) rest
+                (mspp_add_cited_choice name index redex) clear pending))
+             ((MsClear)
+              (mspp_classify_choices
+                fuel prepared grammar candidate region hole_id (+ index 1) rest
+                redex (Cons index clear) pending))
+             ((MsBlocked _)
+              (mspp_classify_choices
+                fuel prepared grammar candidate region hole_id (+ index 1) rest
+                redex clear (Cons child pending))))))))))))
+
+(type MsCitedBuildR
+  (MsCitedBuildErr (List Int))
+  (MsCitedBuildOk (List MsCitedRegion)))
+
+(fn mspp_build_cited
+  ((grammar Grammar)
+   (region SkRegion)
+   (hole_id Int)
+   (alts (List Expr))
+   (groups (List MsCitedChoices))
+   (acc (List MsCitedRegion)))
+  MsCitedBuildR
+  (measure (struct groups))
+  (match groups
+    (Nil (MsCitedBuildOk acc))
+    ((Cons (MsCitedChoices name choices) rest)
+     (match (mse_restrict_choices grammar region hole_id alts choices)
+       ((MsEqRestrictErr msg) (MsCitedBuildErr msg))
+       ((MsEqRestrictNone)
+        (MsCitedBuildErr "cited choice class produced an empty region"))
+       ((MsEqRestrictSome redex_region)
+        (mspp_build_cited
+          grammar region hole_id alts rest
+          (Cons (MsCitedRegion name redex_region) acc)))))))
+
+(type MsPlanPartitionR
+  (MsPlanPartitionErr (List Int))
+  (MsPlanPartitionOk (List MsCitedRegion) (List SkRegion) Int))
+  ; cited redex regions, clear regions, relational split boundaries
+
+(fn mspp_partition_go
+  ((fuel Int)
+   (prepared MsPrepared)
+   (grammar Grammar)
+   (candidate Expr)
+   (jobs (List SkRegion))
+   (redex (List MsCitedRegion))
+   (clear (List SkRegion))
+   (forks Int))
+  MsPlanPartitionR
+  (measure fuel)
+  (if (lt fuel 1) (MsPlanPartitionErr "plan partition fuel exhausted")
+  (match jobs
+    (Nil (MsPlanPartitionOk redex clear forks))
+    ((Cons region rest)
+     (match (sk_region_count candidate grammar region)
+       ((SkCErr msg) (MsPlanPartitionErr msg))
+       ((SkCOk count)
+        (if (le count 0)
+          (mspp_partition_go
+            (- fuel 1) prepared grammar candidate rest redex clear forks)
+        (match (ms_check_prepared_region fuel prepared region candidate)
+          ((MsErr msg) (MsPlanPartitionErr msg))
+          ((MsRedex name)
+           (mspp_partition_go
+             (- fuel 1) prepared grammar candidate rest
+             (Cons (MsCitedRegion name region) redex) clear forks))
+          ((MsClear)
+           (mspp_partition_go
+             (- fuel 1) prepared grammar candidate rest
+             redex (Cons region clear) forks))
+          ((MsBlocked hole_id)
+           (match (ms_alts grammar hole_id)
+             (None (MsPlanPartitionErr "plan partition references unknown hole"))
+             ((Some alts)
+              (match
+                (mspp_classify_choices
+                  (- fuel 1)
+                  prepared
+                  grammar
+                  candidate
+                  region
+                  hole_id
+                  0
+                  alts
+                  Nil
+                  Nil
+                  Nil)
+                ((MsPlanChoicesErr msg) (MsPlanPartitionErr msg))
+                ((MsPlanChoicesOk redex_choices clear_choices pending)
+                 (match
+                   (mspp_build_cited
+                     grammar region hole_id alts redex_choices Nil)
+                   ((MsCitedBuildErr msg) (MsPlanPartitionErr msg))
+                   ((MsCitedBuildOk redex_here)
+                    (match
+                      (mse_restrict_choices
+                        grammar region hole_id alts clear_choices)
+                      ((MsEqRestrictErr msg) (MsPlanPartitionErr msg))
+                      ((MsEqRestrictNone)
+                       (mspp_partition_go
+                         (- fuel 1)
+                         prepared
+                         grammar
+                         candidate
+                         (mse_regions_append pending rest)
+                         (mspp_cited_append redex_here redex)
+                         clear
+                         (+ forks 1)))
+                      ((MsEqRestrictSome clear_here)
+                       (mspp_partition_go
+                         (- fuel 1)
+                         prepared
+                         grammar
+                         candidate
+                         (mse_regions_append pending rest)
+                         (mspp_cited_append redex_here redex)
+                         (Cons clear_here clear)
+                         (+ forks 1)))))))))))))))))))
+
+(fn ms_partition_prepared
+  ((fuel Int)
+   (prepared MsPrepared)
+   (region SkRegion)
+   (candidate Expr))
+  MsPlanPartitionR
+  (match prepared
+    ((MsPrepared _ grammar _ _ _ _)
+     (match (g_wf grammar)
+       ((GWErr msg) (MsPlanPartitionErr msg))
+       ((GWOk)
+        (match (sk_region_wf grammar region)
+          ((SkRegionWfErr msg) (MsPlanPartitionErr msg))
+          ((SkRegionWfOk)
+           (mspp_partition_go
+             fuel prepared grammar candidate (Cons region Nil) Nil Nil 0))))))))
+
 ;; ---- contextual constructor-arm formation ---------------------------------
 ;;
 ;; A constructor match gives its arm a definitional equation.  For a nullary

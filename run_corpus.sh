@@ -557,7 +557,8 @@ fi
 
 # Checked multi-instruction transition pressure: three observer-spine laws
 # remove 264 of 820 XOR programs, including guarded cancellation under a
-# nonempty prefix.  Audit exhaustively compares lazy narrowing with enumeration.
+# nonempty prefix.  The task opts into generic theorem-first region partition;
+# audit exhaustively compares the resulting lazy narrowing with enumeration.
 echo "=== search: checked x86 transition-window narrowing ==="
 if [ -x bin/shard_eval ]; then
   bin/shard_eval run tools/search/typed_superpose.shard tools/search/tasks/x86_transition_window.shard audit

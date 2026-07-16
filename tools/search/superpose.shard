@@ -1344,6 +1344,58 @@
     ((SkCErr msg) (CcRErr msg))
     ((SkCOk count) (CcROk count))))
 
+(type SuPartitionCountR
+  (SuPartitionCountErr (List Int))
+  (SuPartitionCountOk Int Int Int (List SkRegion)))
+  ; redex count, clear count, terminal regions, passing regions
+
+(fn su_count_partition_clear
+  ((candidate Expr)
+   (grammar Grammar)
+   (clear (List SkRegion))
+   (redex_count Int)
+   (clear_count Int)
+   (terminals Int)
+   (sols (List SkRegion)))
+  SuPartitionCountR
+  (measure (struct clear))
+  (match clear
+    (Nil (SuPartitionCountOk redex_count clear_count terminals sols))
+    ((Cons region rest)
+     (match (sk_region_count candidate grammar region)
+       ((SkCErr msg) (SuPartitionCountErr msg))
+       ((SkCOk count)
+        (su_count_partition_clear
+          candidate
+          grammar
+          rest
+          redex_count
+          (+ clear_count count)
+          (+ terminals 1)
+          (Cons region sols)))))))
+
+(fn su_count_partition
+  ((candidate Expr)
+   (grammar Grammar)
+   (redex (List MsCitedRegion))
+   (clear (List SkRegion))
+   (redex_count Int)
+   (terminals Int)
+   (sols (List SkRegion)))
+  SuPartitionCountR
+  (measure (struct redex))
+  (match redex
+    (Nil
+      (su_count_partition_clear
+        candidate grammar clear redex_count 0 terminals sols))
+    ((Cons (MsCitedRegion _ region) rest)
+     (match (sk_region_count candidate grammar region)
+       ((SkCErr msg) (SuPartitionCountErr msg))
+       ((SkCOk count)
+        (su_count_partition
+          candidate grammar rest clear (+ redex_count count)
+          (+ terminals 1) sols))))))
+
 (type SuS
   (SuSErr (List Int))
   (SuSBudget Int Int Int Int Int Int Int Int (List SkRegion))
@@ -1517,16 +1569,20 @@
              ((SuTPass ar2)
               (match constraint_verdict
                 ((MsBlocked h)
-                 (match (sug_alts g h)
-                   (None
-                     (SuSErr
-                       "superpose: residual constraint blocked on unknown hole"))
-                   ((Some alts)
+                 ;; The semantic query passed without demanding the theorem's
+                 ;; blocked choice.  Every refinement therefore preserves that
+                 ;; pass.  Finish the theorem-only relation tree now, coalescing
+                 ;; equal verdict classes into exact restricted regions.
+                 (match
+                   (ms_partition_prepared 1000000 prepared region candidate)
+                   ((MsPlanPartitionErr msg) (SuSErr msg))
+                   ((MsPlanPartitionOk redex clear partition_forks)
                     (match
-                      (su_fork
-                        (sug_raw g) region h (- (alts_len alts) 1) rest)
-                      ((SuForkErr msg) (SuSErr msg))
-                      ((SuForkOk jobs2)
+                      (su_count_partition
+                        candidate (sug_raw g) redex clear 0 0 sols)
+                      ((SuPartitionCountErr msg) (SuSErr msg))
+                      ((SuPartitionCountOk
+                         redex_count clear_count terminals sols2)
                        (su_drive_query_prepared
                          (- fuel 1)
                          m
@@ -1539,13 +1595,13 @@
                          g
                          memo
                          ar2
-                         jobs2
-                         found
-                         killed
-                         constrained
-                         regions
-                         (+ forks 1)
-                         sols))))))
+                         rest
+                         (+ found clear_count)
+                         (+ killed redex_count)
+                         (+ constrained redex_count)
+                         (+ regions terminals)
+                         (+ forks partition_forks)
+                         sols2))))))
                 ((MsClear)
                  (match (su_region_count candidate (sug_raw g) region)
                    ((CcRErr msg) (SuSErr msg))
@@ -1616,6 +1672,138 @@
        regions
        forks
        sols))))
+
+;; Optional theorem-first scheduling.  It is intentionally a mode, not the
+;; universal default: a semantic failure can sometimes kill a broader region
+;; than any theorem partition.  This prepass is useful for canonical-census and
+;; refinement workloads where quotient pressure itself is the object being
+;; measured.  It partitions each incoming job completely, settles cited redex
+;; regions, then runs the ordinary lazy evaluator only over the exact clear
+;; complement.
+
+(fn su_regions_append
+  ((left (List SkRegion)) (right (List SkRegion))) (List SkRegion)
+  (measure (struct left))
+  (match left
+    (Nil right)
+    ((Cons head rest) (Cons head (su_regions_append rest right)))))
+
+(type SuPrepartitionR
+  (SuPrepartitionErr (List Int))
+  (SuPrepartitionOk (List SkRegion) Int Int Int))
+  ; clear jobs, redex candidates, redex terminal regions, split boundaries
+
+(fn su_prepartition_jobs
+  ((fuel Int)
+   (prepared MsPrepared)
+   (candidate Expr)
+   (grammar Grammar)
+   (jobs (List SkRegion))
+   (clear_jobs (List SkRegion))
+   (redex_count Int)
+   (redex_regions Int)
+   (forks Int))
+  SuPrepartitionR
+  (measure fuel)
+  (if (lt fuel 1) (SuPrepartitionErr "theorem-first prepartition fuel exhausted")
+  (match jobs
+    (Nil (SuPrepartitionOk clear_jobs redex_count redex_regions forks))
+    ((Cons region rest)
+     (match (ms_partition_prepared fuel prepared region candidate)
+       ((MsPlanPartitionErr msg) (SuPrepartitionErr msg))
+       ((MsPlanPartitionOk redex clear partition_forks)
+        (match
+          (su_count_partition candidate grammar redex Nil 0 0 Nil)
+          ((SuPartitionCountErr msg) (SuPrepartitionErr msg))
+          ((SuPartitionCountOk here _ terminals _)
+           (su_prepartition_jobs
+             (- fuel 1)
+             prepared
+             candidate
+             grammar
+             rest
+             (su_regions_append clear clear_jobs)
+             (+ redex_count here)
+             (+ redex_regions terminals)
+             (+ forks partition_forks))))))))))
+
+(fn su_drive_query_theorem_first
+  ((fuel Int)
+   (m Module)
+   (candq QName)
+   (body Expr)
+   (candidate Expr)
+   (constraints MsPlan)
+   (query Expr)
+   (want Expr)
+   (g Grammar)
+   (memo (List (Pair Int Int)))
+   (ar SuA)
+   (jobs (List SkRegion))
+   (found Int)
+   (killed Int)
+   (constrained Int)
+   (regions Int)
+   (forks Int)
+   (sols (List SkRegion)))
+  SuS
+  (match (ms_prepare 1000000 constraints g)
+    ((MsPrepareErr msg)
+     (SuSErr (append_int "superpose: constraint preparation: " msg)))
+    ((MsPrepareOk prepared)
+     (match
+       (su_prepartition_jobs
+         fuel prepared candidate g jobs Nil 0 0 0)
+       ((SuPrepartitionErr msg) (SuSErr msg))
+       ((SuPrepartitionOk clear_jobs redex_count redex_regions split_forks)
+        (su_drive_query_prepared
+          fuel
+          m
+          candq
+          body
+          candidate
+          prepared
+          query
+          want
+          (sug_compile g)
+          memo
+          ar
+          clear_jobs
+          found
+          (+ killed redex_count)
+          (+ constrained redex_count)
+          (+ regions redex_regions)
+          (+ forks split_forks)
+          sols))))))
+
+(fn su_drive_query_ordered
+  ((theorem_first Bool)
+   (fuel Int)
+   (m Module)
+   (candq QName)
+   (body Expr)
+   (candidate Expr)
+   (constraints MsPlan)
+   (query Expr)
+   (want Expr)
+   (g Grammar)
+   (memo (List (Pair Int Int)))
+   (ar SuA)
+   (jobs (List SkRegion))
+   (found Int)
+   (killed Int)
+   (constrained Int)
+   (regions Int)
+   (forks Int)
+   (sols (List SkRegion)))
+  SuS
+  (if theorem_first
+    (su_drive_query_theorem_first
+      fuel m candq body candidate constraints query want g memo ar jobs
+      found killed constrained regions forks sols)
+    (su_drive_query
+      fuel m candq body candidate constraints query want g memo ar jobs
+      found killed constrained regions forks sols)))
 
 (fn su_drive
   ((fuel Int)
